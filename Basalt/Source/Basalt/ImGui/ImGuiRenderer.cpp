@@ -177,7 +177,7 @@ namespace Basalt {
 		if (!m_VertexBuffer || m_VertexBuffer->getDesc().byteSize < vertexBytes)
 		{
 			nvrhi::BufferDesc desc;
-			desc.byteSize = std::max<uint64_t>(vertexBytes + 5000 * sizeof(ImDrawVert), 64 * 1024);
+			desc.byteSize = std::max<uint64_t>(vertexBytes + 5000 * sizeof(ImDrawVert), uint64_t{ 64 } * 1024);
 			desc.debugName = "ImGuiVertexBuffer";
 			desc.isVertexBuffer = true;
 			desc.initialState = nvrhi::ResourceStates::VertexBuffer;
@@ -188,7 +188,7 @@ namespace Basalt {
 		if (!m_IndexBuffer || m_IndexBuffer->getDesc().byteSize < indexBytes)
 		{
 			nvrhi::BufferDesc desc;
-			desc.byteSize = std::max<uint64_t>(indexBytes + 10000 * sizeof(ImDrawIdx), 64 * 1024);
+			desc.byteSize = std::max<uint64_t>(indexBytes + 10000 * sizeof(ImDrawIdx), uint64_t{ 64 } * 1024);
 			desc.debugName = "ImGuiIndexBuffer";
 			desc.isIndexBuffer = true;
 			desc.initialState = nvrhi::ResourceStates::IndexBuffer;

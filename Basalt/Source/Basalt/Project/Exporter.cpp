@@ -183,7 +183,7 @@ namespace Basalt {
 #endif
 
 		result.Success = true;
-		result.ExecutablePath = executable;
+		result.ExecutablePath = std::move(executable);
 		result.FileCount = CountFiles(output);
 		BS_CORE_INFO("Exporter: exported '{}' to '{}' ({} files)", config.Name, output.string(), result.FileCount);
 		return result;

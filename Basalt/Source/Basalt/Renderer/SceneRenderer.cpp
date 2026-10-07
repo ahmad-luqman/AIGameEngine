@@ -434,7 +434,7 @@ namespace Basalt {
 			scale = 0.1f + 0.9f * scale * scale;
 			impl.SsaoConstants.Kernel[i] = glm::vec4(sample * scale, 0.0f);
 		}
-		std::array<uint8_t, 16 * 4> noise{};
+		std::array<uint8_t, size_t{ 16 } * 4> noise{};
 		for (size_t i = 0; i < 16; i++)
 		{
 			noise[i * 4 + 0] = static_cast<uint8_t>(unit(random) * 255.0f);
@@ -906,8 +906,8 @@ namespace Basalt {
 		std::vector<Frustum> cascadeFrusta;
 		if (shadowsActive)
 		{
-			for (uint32_t cascade = 0; cascade < MaxCascades; cascade++)
-				cascadeFrusta.emplace_back(view.CascadeViewProjection[cascade]);
+			for (const glm::mat4& cascadeViewProjection : view.CascadeViewProjection)
+				cascadeFrusta.emplace_back(cascadeViewProjection);
 		}
 		std::vector<GpuDrawData>& draws = impl.Draws;
 		std::vector<GpuMaterialData>& materials = impl.Materials;
@@ -1188,7 +1188,9 @@ namespace Basalt {
 			if (item.Blend && item.WorldBounds.IsValid())
 				transparent.push_back(&item);
 		}
-		std::sort(transparent.begin(), transparent.end(), [](const DrawItem* a, const DrawItem* b) { return a->ViewDepth > b->ViewDepth; });
+		// Stable: items at equal depth keep submission order, so a scene always renders the same image.
+		// NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order): ordered by depth, not by address.
+		std::stable_sort(transparent.begin(), transparent.end(), [](const DrawItem* a, const DrawItem* b) { return a->ViewDepth > b->ViewDepth; });
 		for (const DrawItem* item : transparent)
 		{
 			drawItem(*item, impl.TransparentPipeline[item->DoubleSided ? 1 : 0], impl.LightingFramebuffer, 0, true);

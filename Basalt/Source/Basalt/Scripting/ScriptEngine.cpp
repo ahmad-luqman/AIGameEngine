@@ -73,7 +73,7 @@ namespace Basalt {
 			return result.get<sol::table>();
 		}
 
-		sol::object ConvertProperty(sol::state_view lua, const sol::object& defaultValue, const nlohmann::json& value)
+		sol::object ConvertProperty(const sol::state_view& lua, const sol::object& defaultValue, const nlohmann::json& value)
 		{
 			// Keep vector-typed properties as vectors when overridden from JSON arrays.
 			if (value.is_array() && value.size() == 3 && defaultValue.is<glm::vec3>())

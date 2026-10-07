@@ -36,7 +36,7 @@ namespace {
 		const uint8_t pixel[4] = { static_cast<uint8_t>(rgba >> 24), static_cast<uint8_t>(rgba >> 16), static_cast<uint8_t>(rgba >> 8), static_cast<uint8_t>(rgba) };
 		uint8_t pixels[16];
 		for (int i = 0; i < 4; i++)
-			std::memcpy(pixels + i * 4, pixel, 4);
+			std::memcpy(pixels + static_cast<ptrdiff_t>(i) * 4, pixel, 4);
 		std::string png;
 		stbi_write_png_to_func([](void* context, void* data, int size) { static_cast<std::string*>(context)->append(static_cast<const char*>(data), static_cast<size_t>(size)); }, &png, 2, 2, 4, pixels, 8);
 		return png;

@@ -101,7 +101,7 @@ namespace Basalt {
 
 		const ma_uint32 channels = ma_engine_get_channels(engine);
 		ma_uint64 remaining = static_cast<ma_uint64>(seconds * static_cast<float>(ma_engine_get_sample_rate(engine)));
-		std::vector<float> scratch(1024 * channels);
+		std::vector<float> scratch(static_cast<size_t>(channels) * 1024);
 		while (remaining > 0)
 		{
 			const ma_uint64 frames = std::min<ma_uint64>(remaining, 1024);

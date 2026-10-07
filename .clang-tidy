@@ -1,0 +1,31 @@
+# Static analysis for Basalt's own code (enabled with -DBASALT_CLANG_TIDY=ON; third-party code is not checked).
+# Disabled checks and why:
+#   bugprone-easily-swappable-parameters    flags most math and rendering signatures (x, y, width, height).
+#   bugprone-narrowing-conversions          float/int conversions in math code are deliberate and pervasive.
+#   bugprone-signed-bitwise                 ImGui flags are ints by API design; int masks in loops are harmless.
+#   bugprone-exception-escape               flags every function that touches EnTT/sol2/Jolt containers;
+#                                           exceptions are caught at module boundaries instead (AGENTS.md).
+#   bugprone-throwing-static-initialization fires on glm/std objects that only throw on allocation failure.
+#   bugprone-random-generator-seed          constant seeds are required: runs must be deterministic.
+#   performance-enum-size                   enum storage size is irrelevant for our enums.
+#   performance-no-int-to-ptr               ImGui texture IDs are integers cast to pointers by API design.
+#   performance-avoid-endl                  the CLI writes protocol lines that must be flushed immediately.
+Checks: >
+  -*,
+  bugprone-*,
+  performance-*,
+  modernize-use-override,
+  modernize-use-nullptr,
+  modernize-use-emplace,
+  modernize-loop-convert,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-signed-bitwise,
+  -bugprone-exception-escape,
+  -bugprone-throwing-static-initialization,
+  -bugprone-random-generator-seed,
+  -performance-enum-size,
+  -performance-no-int-to-ptr,
+  -performance-avoid-endl
+WarningsAsErrors: '*'
+HeaderFilterRegex: '.*/(Basalt|Basalt-Editor|Basalt-Runtime|Basalt-CLI|Tests)/Source/.*'

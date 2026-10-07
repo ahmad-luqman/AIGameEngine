@@ -8,6 +8,7 @@
 #include "Basalt/Renderer/GraphicsDevice.h"
 #include "Basalt/Renderer/VulkanLoader.h"
 
+#include <ranges>
 #include <system_error>
 
 namespace Basalt {
@@ -126,11 +127,11 @@ namespace Basalt {
 
 		const bool wasIterating = m_IteratingLayers;
 		m_IteratingLayers = true;
-		for (auto it = m_LayerStack.rbegin(); it != m_LayerStack.rend(); ++it)
+		for (Layer* layer : std::views::reverse(m_LayerStack))
 		{
 			if (event.Handled)
 				break;
-			(*it)->OnEvent(event);
+			layer->OnEvent(event);
 		}
 		m_IteratingLayers = wasIterating;
 	}

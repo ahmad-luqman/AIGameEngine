@@ -62,6 +62,7 @@ TEST_SUITE("Audio")
 		auto& loopSource = looping.AddComponent<AudioSourceComponent>();
 		loopSource.Clip = "Assets/Audio/Beep.wav";
 		loopSource.Loop = true;
+		// A clip that fails to load must be reported, not crash: miniaudio 0.11.25 read freed memory here (ASan job).
 		Entity broken = scene.CreateEntity("Broken");
 		broken.AddComponent<AudioSourceComponent>().Clip = "Assets/Audio/Missing.wav";
 		scene.CreateEntity("Listener").AddComponent<AudioListenerComponent>();

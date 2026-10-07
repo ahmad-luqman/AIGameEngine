@@ -4,6 +4,8 @@
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
 
+#include <cmath>
+
 using namespace Basalt;
 
 namespace {
@@ -30,7 +32,7 @@ namespace {
 
 	void Simulate(Scene& scene, float seconds)
 	{
-		const int frames = static_cast<int>(seconds / Step + 0.5f);
+		const int frames = static_cast<int>(std::lround(seconds / Step));
 		for (int i = 0; i < frames; i++)
 			scene.OnUpdate(Step);
 	}
@@ -183,11 +185,13 @@ TEST_SUITE("Physics")
 			Scene scene;
 			CreateGround(scene);
 			std::vector<Entity> boxes;
+			boxes.reserve(5);
 			for (int i = 0; i < 5; i++)
 				boxes.push_back(CreateBox(scene, { 0.3f * i, 2.0f + 1.1f * i, 0.1f * i }));
 			scene.OnSimulationStart();
 			Simulate(scene, 2.0f);
 			std::vector<glm::vec3> positions;
+			positions.reserve(boxes.size());
 			for (Entity box : boxes)
 				positions.push_back(box.GetTransform().Translation);
 			scene.OnSimulationStop();

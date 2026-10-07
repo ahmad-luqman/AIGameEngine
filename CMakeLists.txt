@@ -29,6 +29,8 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
+include(Sanitizers)
+include(Coverage)
 include(Dependencies)
 include(CompilerWarnings)
 include(Shaders)

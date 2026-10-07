@@ -154,7 +154,8 @@ namespace Basalt {
 				const size_t decodedSize = payload.size() / 4 * 3 - padding;
 				void* decoded = nullptr;
 				cgltf_options options = {};
-				if (cgltf_load_buffer_base64(&options, decodedSize, payload.data(), &decoded) != cgltf_result_success)
+				// cgltf reads exactly 4 * ceil(decodedSize / 3) characters, which the size check above guarantees exist.
+				if (cgltf_load_buffer_base64(&options, decodedSize, payload.data(), &decoded) != cgltf_result_success) // NOLINT(bugprone-suspicious-stringview-data-usage)
 					return {};
 				const auto* bytes = static_cast<const uint8_t*>(decoded);
 				std::vector<uint8_t> result(bytes, bytes + decodedSize);

@@ -14,6 +14,16 @@ description: Build Basalt, run its unit tests and format check, and verify rende
    ```
    The log must contain `validation enabled` and no `[Vulkan]` / `[nvrhi]` error lines.
 4. Release build sanity check for larger changes: `scripts/build.sh Release`.
+5. Test groups are labelled: `ctest --test-dir build -L unit|integration|gpu|format` (or `-LE` to exclude).
+
+Extra checks (each one is also a CI job; run locally when touching memory handling or before big commits):
+- Sanitizers: `cmake -S . -B build-asan -G Ninja -DBASALT_SANITIZE="address;undefined" -DBASALT_CHECK_FORMAT=OFF`,
+  build, then `ctest --test-dir build-asan -LE "gpu|format"`. Fix reports in Basalt code; only third-party
+  reports go into `cmake/sanitizers/*.supp`.
+- clang-tidy: configure with `-DBASALT_CLANG_TIDY=ON` (checks in `.clang-tidy`); findings fail the build.
+  Fix them, or `NOLINT(check-name)` with a reason when the check is wrong.
+- Coverage: `scripts/coverage.sh` (Clang) prints a per-file summary and writes
+  `build-coverage/coverage/html/index.html`. Use it to find untested code; it is not a gate.
 
 Failure handling:
 - A compiler warning is an error — fix the code, never silence the warning.

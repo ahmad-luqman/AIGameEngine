@@ -59,7 +59,7 @@ namespace Basalt {
 		if (!m_VertexBuffer || m_VertexBuffer->getDesc().byteSize < bytes)
 		{
 			nvrhi::BufferDesc desc;
-			desc.byteSize = std::max<size_t>(bytes * 2, 64 * 1024);
+			desc.byteSize = std::max<size_t>(bytes * 2, size_t{ 64 } * 1024);
 			desc.isVertexBuffer = true;
 			desc.debugName = "DebugLines";
 			desc.initialState = nvrhi::ResourceStates::VertexBuffer;

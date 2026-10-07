@@ -62,19 +62,19 @@ namespace Basalt {
 
 #if defined(BS_PLATFORM_WINDOWS)
 			candidates.push_back((exeDir / "vulkan-1.dll").string());
-			candidates.push_back("vulkan-1.dll");
+			candidates.emplace_back("vulkan-1.dll");
 #elif defined(BS_PLATFORM_MACOS)
 			candidates.push_back((exeDir / "libvulkan.1.dylib").string());
 			candidates.push_back((exeDir / "../Frameworks/libvulkan.1.dylib").string());
-			candidates.push_back("libvulkan.1.dylib");
+			candidates.emplace_back("libvulkan.1.dylib");
 			if (const auto sdk = Platform::GetEnvVar("VULKAN_SDK"))
 				candidates.push_back((std::filesystem::path(*sdk) / "lib/libvulkan.1.dylib").string());
-			candidates.push_back("/opt/homebrew/lib/libvulkan.1.dylib");
-			candidates.push_back("/usr/local/lib/libvulkan.1.dylib");
+			candidates.emplace_back("/opt/homebrew/lib/libvulkan.1.dylib");
+			candidates.emplace_back("/usr/local/lib/libvulkan.1.dylib");
 #else
 			candidates.push_back((exeDir / "libvulkan.so.1").string());
-			candidates.push_back("libvulkan.so.1");
-			candidates.push_back("libvulkan.so");
+			candidates.emplace_back("libvulkan.so.1");
+			candidates.emplace_back("libvulkan.so");
 #endif
 			return candidates;
 		}

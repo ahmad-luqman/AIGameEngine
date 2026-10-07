@@ -41,3 +41,16 @@ endif()
 # Sample games built entirely through the automation API; their gameplay checks run headless.
 add_test(NAME SampleTetris
 	COMMAND BasaltCLI --project "${PROJECT_SOURCE_DIR}/Samples/Tetris" batch "${PROJECT_SOURCE_DIR}/Samples/Tetris/test_game.json")
+
+# Labels let CI jobs pick test groups (ctest -L gpu, ctest -LE "gpu|format").
+set_tests_properties(BasaltTests PROPERTIES LABELS unit)
+set_tests_properties(FeatureTest SampleTetris PROPERTIES LABELS integration)
+if(TEST CodeFormat)
+	set_tests_properties(CodeFormat PROPERTIES LABELS format)
+endif()
+if(TEST FeatureTestRender)
+	set_tests_properties(FeatureTestRender PROPERTIES LABELS gpu)
+endif()
+if(BASALT_SANITIZE)
+	set_property(TEST BasaltTests FeatureTest SampleTetris APPEND PROPERTY ENVIRONMENT ${BASALT_SANITIZER_ENVIRONMENT})
+endif()

@@ -3,6 +3,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <cmath>
 
 namespace Basalt {
 
@@ -15,7 +16,8 @@ namespace Basalt {
 		ImU32 ToColor(const glm::vec4& color)
 		{
 			const glm::vec4 clamped = glm::clamp(color, glm::vec4(0.0f), glm::vec4(1.0f));
-			return IM_COL32(static_cast<int>(clamped.r * 255.0f + 0.5f), static_cast<int>(clamped.g * 255.0f + 0.5f), static_cast<int>(clamped.b * 255.0f + 0.5f), static_cast<int>(clamped.a * 255.0f + 0.5f));
+			const auto channel = [](float value) { return static_cast<int>(std::lround(value * 255.0f)); };
+			return IM_COL32(channel(clamped.r), channel(clamped.g), channel(clamped.b), channel(clamped.a));
 		}
 
 		void Push(UIDrawCommand command)

@@ -99,11 +99,12 @@ FetchContent_Declare(imguizmo
 	GIT_TAG 18cef5e031d8c6973d80284c67f60549fafd78c1
 	SOURCE_SUBDIR _BasaltNoCMake)
 
+# dev branch after 0.11.25 (bug fixes only): 0.11.25 reads a freed resource-manager node whenever a
+# sound fails to load (found by ASan). Move back to a release tag once 0.11.26 ships.
 FetchContent_Declare(miniaudio
 	SYSTEM
 	GIT_REPOSITORY https://github.com/mackron/miniaudio.git
-	GIT_TAG 0.11.25
-	GIT_SHALLOW TRUE
+	GIT_TAG 78c8a43a5f99980fa4cbf34ac5720c3f77073c4d
 	SOURCE_SUBDIR _BasaltNoCMake)
 
 FetchContent_Declare(cgltf

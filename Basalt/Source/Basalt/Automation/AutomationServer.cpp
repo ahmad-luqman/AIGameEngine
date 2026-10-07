@@ -174,7 +174,7 @@ namespace Basalt {
 	void AutomationServer::ServeClient(intptr_t clientHandle)
 	{
 		const SocketHandle client = ToSocket(clientHandle);
-		constexpr size_t MaxLineBytes = 64 * 1024 * 1024;
+		constexpr size_t MaxLineBytes = size_t{ 64 } * 1024 * 1024;
 		std::string buffer;
 		char chunk[4096];
 

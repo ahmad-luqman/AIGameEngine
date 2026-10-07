@@ -1,6 +1,7 @@
 #include "Basalt/Core/LayerStack.h"
 
 #include <algorithm>
+#include <ranges>
 
 namespace Basalt {
 
@@ -49,10 +50,10 @@ namespace Basalt {
 
 	void LayerStack::Clear()
 	{
-		for (auto it = m_Layers.rbegin(); it != m_Layers.rend(); ++it)
+		for (Layer* layer : std::views::reverse(m_Layers))
 		{
-			(*it)->OnDetach();
-			delete *it;
+			layer->OnDetach();
+			delete layer;
 		}
 		m_Layers.clear();
 		m_LayerInsertIndex = 0;

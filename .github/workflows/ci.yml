@@ -51,7 +51,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build/_deps
-          key: deps-${{ runner.os }}-${{ matrix.config }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+          key: deps-plain-${{ runner.os }}-${{ matrix.config }}-${{ hashFiles('cmake/Dependencies.cmake') }}
 
       - name: Configure
         shell: bash
@@ -65,3 +65,105 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  # AddressSanitizer + UndefinedBehaviorSanitizer over every headless test. All code, third-party
+  # included, is instrumented (cmake/Sanitizers.cmake).
+  sanitizers:
+    name: ubuntu-24.04 / ASan+UBSan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build glslc libvulkan1 clang \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libwayland-dev libxkbcommon-dev wayland-protocols
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-asan-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            "-DBASALT_SANITIZE=address;undefined" -DBASALT_CHECK_FORMAT=OFF
+
+      - name: Build
+        run: cmake --build build -- -k 0
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -LE "gpu|format"
+
+  # clang-tidy runs as part of the compile of Basalt's own targets; any finding fails the build (.clang-tidy).
+  clang-tidy:
+    name: ubuntu-24.04 / clang-tidy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build glslc libvulkan1 clang clang-tidy \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libwayland-dev libxkbcommon-dev wayland-protocols
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-tidy-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DBASALT_CLANG_TIDY=ON
+
+      - name: Build
+        run: cmake --build build -- -k 0
+
+  # Source-based coverage of the headless tests. Informational only: the summary is shown on the run
+  # page and the HTML report is uploaded as an artifact.
+  coverage:
+    name: ubuntu-24.04 / coverage
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build glslc libvulkan1 clang llvm \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libwayland-dev libxkbcommon-dev wayland-protocols
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: build-coverage/_deps
+          key: deps-coverage-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+
+      - name: Coverage
+        run: scripts/coverage.sh
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo '## Code coverage (headless tests)'
+            echo '```'
+            cat build-coverage/coverage/summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: build-coverage/coverage/html

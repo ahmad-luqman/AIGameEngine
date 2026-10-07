@@ -42,23 +42,12 @@ passes today).
   document how to update them (`scripts/update_golden.sh`).
 - Done when: deliberately breaking a shader convention fails the test.
 
-### Sanitizers and static analysis in CI — S
-- Add an ASan + UBSan job (clang, Linux, Debug) running `BasaltTests`, the feature test and Tetris.
-- Add `clang-tidy` with a curated check list (bugprone-*, performance-*, a subset of modernize-*) and
-  fail on new warnings.
-- Done when: both jobs are green and required on `main`.
-
 ### Fuzz the untrusted inputs — M
 Scenes, prefabs, projects, glTF files, images and automation requests all come from outside the engine.
 The strict JSON readers and cgltf wrappers should never crash or assert on bad input.
 - libFuzzer targets for `SceneSerializer` (scene + prefab), `MeshImporter`, `TextureSource`,
   `CommandRegistry::Execute` and `LuaJson`; seed corpora from the test data.
 - Run each target for a short time in CI, and longer runs locally or nightly.
-
-### Code coverage report — S
-Generate llvm-cov / gcovr coverage in one CI job and publish the summary. Coverage is a guide for where
-tests are thin, not a hard gate. Known thin areas: **Audio** (1 test case), the editor panels, and the
-TCP server's error paths.
 
 ### Determinism and replay tests — M
 Physics and scripting are deterministic by design (fixed step, sorted contacts, seeded random), but only

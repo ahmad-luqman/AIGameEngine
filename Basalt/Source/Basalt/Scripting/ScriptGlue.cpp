@@ -45,7 +45,7 @@ namespace Basalt {
 			return *context.SceneContext;
 		}
 
-		sol::object MakeEntity(sol::state_view lua, ScriptContext& context, Entity entity)
+		sol::object MakeEntity(const sol::state_view& lua, ScriptContext& context, Entity entity)
 		{
 			if (!entity)
 				return sol::lua_nil;
@@ -234,7 +234,7 @@ namespace Basalt {
 		void RegisterScene(sol::state& lua, ScriptContext& context)
 		{
 			sol::table scene = lua.create_named_table("Scene");
-			scene["CreateEntity"] = [&context](sol::this_state state, sol::optional<std::string> name) {
+			scene["CreateEntity"] = [&context](sol::this_state state, const sol::optional<std::string>& name) {
 				return MakeEntity(state, context, RequireScene(context).CreateEntity(name.value_or("Entity")));
 			};
 			scene["FindEntityByName"] = [&context](sol::this_state state, const std::string& name) {
@@ -352,7 +352,7 @@ namespace Basalt {
 			debug["DrawSphere"] = [defaultColor](const glm::vec3& center, float radius, sol::optional<glm::vec4> color) { DebugDraw::Sphere(center, radius, color.value_or(defaultColor)); };
 
 			sol::table ui = lua.create_named_table("UI");
-			ui["Text"] = [](const std::string& text, float x, float y, sol::optional<float> size, sol::optional<glm::vec4> color, sol::optional<std::string> align) {
+			ui["Text"] = [](const std::string& text, float x, float y, sol::optional<float> size, sol::optional<glm::vec4> color, const sol::optional<std::string>& align) {
 				UIAlign alignment = UIAlign::Left;
 				const std::string alignName = align.value_or("Left");
 				if (alignName == "Center")

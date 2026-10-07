@@ -72,7 +72,7 @@ namespace Basalt {
 							float sum = 0.0f;
 							for (size_t texel : texels)
 								sum += toLinear[pixels[texel + c]];
-							destination[c] = toSRGB[static_cast<size_t>(std::clamp(sum * 0.25f, 0.0f, 1.0f) * static_cast<float>(LinearTableSize - 1) + 0.5f)];
+							destination[c] = toSRGB[static_cast<size_t>(std::lround(std::clamp(sum * 0.25f, 0.0f, 1.0f) * static_cast<float>(LinearTableSize - 1)))];
 						}
 						else
 						{

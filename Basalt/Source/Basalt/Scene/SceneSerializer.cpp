@@ -5,6 +5,7 @@
 #include "Basalt/Scene/ComponentRegistry.h"
 #include "Basalt/Scene/Scene.h"
 
+#include <ranges>
 #include <set>
 #include <unordered_map>
 
@@ -261,7 +262,7 @@ namespace Basalt {
 
 				if (!SceneSerializer::DeserializeEntityComponents(entity, entityData, outError))
 				{
-					outError = context + " ('" + name + "'): " + outError;
+					outError = std::string(context).append(" ('").append(name).append("'): ").append(outError);
 					return false;
 				}
 				parentLinks.emplace_back(entity, parentID);
@@ -459,10 +460,10 @@ namespace Basalt {
 		std::vector<Entity> created;
 		if (!CreateEntities(scene, entities, true, parent, created, outError))
 		{
-			for (auto it = created.rbegin(); it != created.rend(); ++it)
+			for (Entity entity : std::views::reverse(created))
 			{
-				if (it->IsValid())
-					scene.DestroyEntity(*it);
+				if (entity.IsValid())
+					scene.DestroyEntity(entity);
 			}
 			return {};
 		}

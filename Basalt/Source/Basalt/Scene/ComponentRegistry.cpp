@@ -583,7 +583,7 @@ namespace Basalt {
 				}
 				CameraComponent camera = entity.GetComponent<CameraComponent>();
 				ApplyFields(camera, value);
-				entity.AddOrReplaceComponent<CameraComponent>(std::move(camera));
+				entity.AddOrReplaceComponent<CameraComponent>(camera);
 				return true;
 			};
 			return info;
