@@ -1,0 +1,18 @@
+# Build output
+/build*/
+/out/
+/cmake-build-*/
+/Dist/
+
+# IDE / OS
+.vs/
+.vscode/
+.idea/
+*.user
+.DS_Store
+compile_commands.json
+.cache/
+
+# Editor runtime state
+imgui.ini
+*.log

@@ -1,0 +1,116 @@
+# AGENTS.md — Basalt Engine Development Guide
+
+Basalt is a production-grade 3D game engine (C++20, CMake, Vulkan via nvrhi) for Windows, macOS and
+Linux. This file is the source of truth for how to work in this repository. Read it fully before
+changing code. Task-specific procedures live in `.claude/skills/*/SKILL.md`.
+
+## Repository layout
+
+| Path | Contents |
+|------|----------|
+| `Basalt/Source/Basalt/` | Engine static library (`Basalt`). One folder per module (see below). |
+| `Basalt/Shaders/` | GLSL shaders, compiled to SPIR-V at build time and **embedded** in the binary. `Include/*.glsl` are shared headers. |
+| `Basalt-Editor/` | Editor executable (`BasaltEditor`): ImGui UI, gizmos, automation server. Never shipped. |
+| `Basalt-Runtime/` | Runtime executable (`BasaltRuntime`): plays an exported game. No editing code. |
+| `Basalt-CLI/` | Headless command-line tool (`basalt`): project/scene authoring, validation, export. |
+| `Tests/` | doctest unit tests (`BasaltTests`) + test data. Headless only — no window, no GPU. |
+| `cmake/` | Dependency pins (`Dependencies.cmake`), warnings, shader embedding, format check. |
+| `scripts/` | `build.sh`, `test.sh`, `format.sh`. |
+
+Engine modules (`Basalt/Source/Basalt/<Module>/`): `Core` (application, window, input, log, file
+system), `Events`, `Renderer`, `ImGui`, `Scene` (ECS, components, serialization), `Asset`,
+`Physics` (Jolt), `Audio` (miniaudio), `Scripting` (Lua 5.4 + sol2), `Project`, `Automation`.
+
+## Building and testing
+
+```bash
+scripts/build.sh            # Debug build into build/
+scripts/build.sh Release    # build-release/
+scripts/test.sh             # build + ctest (unit tests, format check, ...)
+./build/bin/BasaltTests     # run unit tests directly; add -tc="*name*" to filter
+```
+
+- Requirements: CMake ≥ 3.24, Ninja, a C++20 compiler, `glslc` (Vulkan SDK or shaderc), a Vulkan 1.3
+  runtime (MoltenVK on macOS). All third-party code is fetched by CMake at pinned versions.
+- Build configurations: `Debug` (asserts, validation), `Release` (optimized, asserts on),
+  `Dist` (shipping: no asserts — defines `BS_DIST`).
+- Warnings are errors (`BASALT_WARNINGS_AS_ERRORS=ON`). Do not disable warnings to make code compile.
+- **macOS + Homebrew:** the Vulkan validation layer only loads when
+  `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib` is set. Without it the engine logs a warning and runs
+  without validation. Always set it when testing rendering changes.
+
+## Code style (Hazel conventions)
+
+Formatting is enforced by `.clang-format` (tabs, Allman braces for classes/functions/control flow,
+namespace braces on the same line, namespace contents indented). Run `scripts/format.sh` before every
+commit; the `CodeFormat` test fails on unformatted code.
+
+Naming:
+
+| Kind | Style | Example |
+|------|-------|---------|
+| Classes, structs, enums, namespaces, functions, member functions | PascalCase | `class SceneRenderer`, `void OnUpdate()` |
+| Source files | PascalCase, named after the main type | `SceneRenderer.h/.cpp` |
+| Local variables and parameters | camelCase | `float deltaTime` |
+| Private/protected member variables | `m_` + PascalCase | `m_FrameIndex` |
+| Static variables (class or file scope) | `s_` + PascalCase | `s_Instance` |
+| Public struct data members (plain data, specs, components) | PascalCase, no prefix | `TransformComponent::Translation` |
+| Enum values (`enum class`) | PascalCase | `LogLevel::Warn` |
+| Macros | `BS_` + UPPER_SNAKE | `BS_CORE_ASSERT` |
+| Compile-time constants | PascalCase | `constexpr uint32_t MaxLights = 16;` |
+
+Other rules:
+
+- `#pragma once` in every header. Include order: own header first (in .cpp), then `Basalt/...`
+  headers, then third-party, then standard library, separated by blank lines.
+- Engine includes use the full path from `Basalt/Source`: `#include "Basalt/Core/Log.h"`.
+- Ownership: `Scope<T>` (unique) / `Ref<T>` (shared) from `Basalt/Core/Base.h`; raw pointers are
+  non-owning. GPU objects use nvrhi handles (`nvrhi::TextureHandle`, ...).
+- No exceptions across module boundaries. Fallible operations return `bool`/`std::optional`/a result
+  struct and log the reason with `BS_CORE_ERROR`. Third-party exceptions (vulkan.hpp, nlohmann::json,
+  sol2) are caught at the boundary that calls them.
+- Asserts (`BS_CORE_ASSERT`) are for programmer errors only and vanish in Dist. Anything that can
+  happen with bad user data (missing files, malformed scenes, script errors) must be handled and
+  reported, never asserted.
+- Logging: `BS_CORE_*` inside the engine, `BS_*` in applications/game code. Every message also lands
+  in `Log::GetHistory()` (editor console, automation API).
+- Comments explain *why*, not *what*. Every public class has a short comment stating its responsibility.
+
+## Rendering conventions
+
+- All rendering goes through nvrhi. Never call Vulkan directly outside `Renderer/GraphicsDevice.cpp`
+  and `Renderer/VulkanLoader.cpp`, and never include `<vulkan/vulkan.hpp>` directly — use
+  `Basalt/Renderer/VulkanHeaders.h`.
+- The device requires Vulkan 1.3 (dynamic rendering, synchronization2, timeline semaphores). Stay within
+  features MoltenVK supports: no geometry shaders, no tessellation, no ray tracing.
+- **Shader binding convention:** every `nvrhi::BindingLayoutDesc` sets
+  `bindingOffsets = ZeroBindingOffsets` (`Basalt/Renderer/ShaderUtils.h`), so GLSL
+  `layout(set = S, binding = N)` equals nvrhi slot `N` for every resource type. Within one binding
+  layout every slot number must be unique across resource types (a texture and a sampler cannot both
+  use slot 0). A mismatch renders black without any validation error.
+- Shaders are GLSL 450 in `Basalt/Shaders`, compiled with `glslc --target-env=vulkan1.3 -Werror`, and
+  looked up by file name: `CreateEmbeddedShader(device, "ImGui.vert", nvrhi::ShaderType::Vertex)`.
+- The swapchain is UNORM: the final pass writes display-referred (tonemapped, sRGB-encoded) color.
+
+## Testing rules
+
+- Every feature ships with unit tests in `Tests/Source/<Module>Tests.cpp`. Tests must be headless and
+  deterministic (fixed timesteps, no wall-clock dependence, no network).
+- New engine behaviour that is reachable from Lua or the automation API must also be exercised by the
+  feature test scene (`Tests/Data/FeatureTest`), which is run headless by `ctest`.
+- Bug fixes come with a regression test.
+- Rendering changes: run the editor or runtime with validation enabled and confirm zero validation
+  errors (`GraphicsDevice::GetValidationErrorCount()`).
+
+## Commit workflow
+
+1. `scripts/format.sh` and `scripts/test.sh` — everything green.
+2. Review the diff (use the code-review skill/agent): style compliance, error handling, tests present.
+3. Commit with a descriptive message (imperative mood, `Module: summary` subject line). Push to
+   `origin main` (https://github.com/ahmad-luqman/AIGameEngine).
+
+## Dependencies
+
+All third-party libraries are pinned in `cmake/Dependencies.cmake` to an exact tag or commit. To
+upgrade one, change the pin, rebuild from a clean build directory, and run the full test suite.
+Never vendor modified third-party code into the repository.
