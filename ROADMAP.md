@@ -24,14 +24,6 @@ Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or mor
 These close the gap between "works on the developer's machine" and "production-grade". Do them before
 adding features.
 
-### Run the GPU tests in CI with a software Vulkan driver — M
-CI runners have no GPU, so `FeatureTestRender` never runs there and the renderer is untested on Linux and
-Windows. Mesa's **lavapipe** (`mesa-vulkan-drivers` on Ubuntu 24.04) is a conformant CPU Vulkan 1.3
-driver and runs in GitHub Actions; the Windows Vulkan SDK can also be paired with SwiftShader.
-- Install lavapipe and `vulkan-validationlayers` on the Ubuntu job, build with `BASALT_GPU_TESTS=ON`,
-  and run the runtime headless (`--frames`, `--screenshot`) with `--require-validation`.
-- Done when: the Ubuntu CI job renders the feature scene with zero validation errors.
-
 ### Golden-image comparison — M
 The GPU test catches validation errors but not wrong pictures (a flipped shadow or a black SSAO buffer
 passes today).
