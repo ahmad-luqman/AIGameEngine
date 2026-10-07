@@ -35,3 +35,7 @@ build/bin/basalt --project Samples/Tetris project.export '{"output": "Dist/Tetri
 - [ROADMAP.md](ROADMAP.md) — planned work and known gaps
 - [.claude/skills/basalt-make-game](.claude/skills/basalt-make-game/SKILL.md) — building a game as an AI agent
 - [Samples/Tetris](Samples/Tetris) — a game built entirely through the automation API
+
+## License
+
+MIT — see [LICENSE](LICENSE). Third-party libraries fetched at build time keep their own licenses.
