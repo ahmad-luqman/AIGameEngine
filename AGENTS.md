@@ -154,6 +154,7 @@ Other rules:
   `python3 scripts/generate_docs.py` after changing commands or components.
 - Skills in `.claude/skills/`: build/test, code review, make-game (AI workflow), add-component,
   debug-rendering.
+- `ROADMAP.md`: prioritized list of missing features and verification work. Remove an item when it ships.
 
 ## Commit workflow
 
