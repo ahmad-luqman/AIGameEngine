@@ -1,0 +1,1 @@
+{"command": "entity.create", "params": {"name": "Tetris", "components": {"Script": {"Script": "Assets/Scripts/Tetris.lua"}}}}

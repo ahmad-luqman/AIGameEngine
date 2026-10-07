@@ -1,0 +1,1 @@
+{"id": "falling", "command": "lua.exec", "params": {"code": "local t = Scene.FindEntityByName('Tetris'):GetScript(); assert(t.PieceY < 17, 'piece did not fall'); return t.PieceY"}}

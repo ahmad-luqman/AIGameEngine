@@ -5,6 +5,7 @@
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
 #include <Basalt/Scene/SceneSerializer.h>
+#include <Basalt/Scripting/LuaJson.h>
 #include <Basalt/Scripting/ScriptEngine.h>
 
 #include "TestUtils.h"
@@ -310,6 +311,25 @@ TEST_SUITE("Scripting")
 		CHECK(result.find("boom") != std::string::npos);
 		CHECK_FALSE(scene.GetScriptEngine()->ExecuteString("dofile('x.lua')", result));
 		scene.OnRuntimeStop();
+	}
+
+	// Regression (FuzzLuaJson): JsonToLua(null) returned a nil object without a Lua state, and LuaToJson
+	// dereferenced that null state.
+	TEST_CASE("JSON values round-trip through Lua, including null")
+	{
+		sol::state lua;
+		const nlohmann::json values[] = { nullptr, true, 42, -7.5, "text", nlohmann::json::array({ 1, 2, 3 }), { { "a", { { "b", nullptr } } } } };
+		for (const nlohmann::json& value : values)
+		{
+			const sol::object object = JsonToLua(lua, value);
+			CHECK(object.lua_state() != nullptr);
+			const nlohmann::json back = LuaToJson(object);
+			if (value.is_object())
+				CHECK(back["a"].is_object()); // Lua tables drop nil members, so {"b": null} becomes {}
+			else
+				CHECK(back == value);
+		}
+		CHECK(LuaToJson(sol::object()).is_null());
 	}
 
 	// Regression: Lua 5.4 seeds math.random from the clock, so two runs of the same game diverged.

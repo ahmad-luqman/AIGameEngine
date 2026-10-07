@@ -1,0 +1,1 @@
+{"id": "mouse-up", "command": "input.mouse", "params": {"position": [330, 250], "button": "Left", "down": false}}

@@ -1,0 +1,1 @@
+{"id": "image-same", "command": "image.compare", "params": {"actual": "Assets/Textures/Checker.png", "reference": "Assets/Textures/Checker.png", "assertMatch": true}}

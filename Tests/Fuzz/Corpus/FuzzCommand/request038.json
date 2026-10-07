@@ -1,0 +1,1 @@
+{"id": "restart-down", "command": "input.key", "params": {"key": "R", "down": true}}

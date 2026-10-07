@@ -1,0 +1,1 @@
+{"id": "rotate-down", "command": "input.key", "params": {"key": "Up", "down": true}}

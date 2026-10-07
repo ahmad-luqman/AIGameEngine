@@ -17,6 +17,10 @@ namespace Basalt {
 		{
 			if (depth > MaxDepth)
 				throw std::runtime_error("value is nested too deeply (or contains a cycle)");
+			// A default-constructed object (sol::lua_nil) has no Lua state; asking it for its type would
+			// dereference a null lua_State (found by FuzzLuaJson).
+			if (!value.lua_state())
+				return nullptr;
 
 			switch (value.get_type())
 			{
@@ -118,7 +122,7 @@ namespace Basalt {
 		{
 			case nlohmann::json::value_t::null:
 			case nlohmann::json::value_t::discarded:
-				return sol::lua_nil;
+				return sol::make_object(lua, sol::lua_nil);
 			case nlohmann::json::value_t::boolean:
 				return sol::make_object(lua, value.get<bool>());
 			case nlohmann::json::value_t::number_integer:
@@ -146,7 +150,7 @@ namespace Basalt {
 			case nlohmann::json::value_t::binary:
 				break;
 		}
-		return sol::lua_nil;
+		return sol::make_object(lua, sol::lua_nil);
 	}
 
 	nlohmann::json LuaToJson(const sol::object& value)

@@ -68,7 +68,9 @@ scripts/test.sh             # build + ctest (unit tests, format check, ...)
   `Dist` (shipping: no asserts — defines `BS_DIST`).
 - Warnings are errors (`BASALT_WARNINGS_AS_ERRORS=ON`). Do not disable warnings to make code compile.
 - CI also runs ASan+UBSan (`-DBASALT_SANITIZE="address;undefined"`), clang-tidy (`-DBASALT_CLANG_TIDY=ON`,
-  checks in `.clang-tidy`) and a coverage report (`scripts/coverage.sh`). Tests carry ctest labels
+  checks in `.clang-tidy`), a coverage report (`scripts/coverage.sh`) and libFuzzer targets for every
+  untrusted input (`scripts/fuzz.sh`, `Tests/Fuzz/`; nightly long runs). Parse untrusted JSON with
+  `ParseJson` and read floats with `JsonToFloat` (`Basalt/Core/JsonUtils.h`). Tests carry ctest labels
   (`unit`, `integration`, `gpu`, `format`) for `ctest -L/-LE`. Details: the basalt-build-test skill.
 - **macOS + Homebrew:** the Vulkan validation layer only loads when
   `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib` is set. Without it the engine logs a warning and runs

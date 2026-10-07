@@ -224,3 +224,34 @@ jobs:
           name: lavapipe-screenshots
           path: build/Tests/Golden/*.png
           if-no-files-found: warn
+
+  # Short libFuzzer run of every target on each push (scripts/fuzz.sh); longer runs happen nightly
+  # (fuzz-nightly.yml). Crash inputs are uploaded so they can be reproduced locally.
+  fuzz:
+    name: ubuntu-24.04 / fuzz
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build glslc libvulkan1 clang \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libwayland-dev libxkbcommon-dev wayland-protocols
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: build-fuzz/_deps
+          key: deps-fuzz-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+
+      - name: Fuzz (60 s per target)
+        run: scripts/fuzz.sh 60
+
+      - name: Upload crash inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes
+          path: build-fuzz/crashes

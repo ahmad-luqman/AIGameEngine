@@ -1,0 +1,1 @@
+{"command": "entity.create", "params": {"name": "Sun", "components": {"Transform": {"Rotation": [-35, 25, 0]}, "DirectionalLight": {"Intensity": 2.5, "ShadowSoftness": 1.5}}}}

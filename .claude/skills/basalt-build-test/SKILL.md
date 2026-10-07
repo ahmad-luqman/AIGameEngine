@@ -27,6 +27,11 @@ Extra checks (each one is also a CI job; run locally when touching memory handli
   reports go into `cmake/sanitizers/*.supp`.
 - clang-tidy: configure with `-DBASALT_CLANG_TIDY=ON` (checks in `.clang-tidy`); findings fail the build.
   Fix them, or `NOLINT(check-name)` with a reason when the check is wrong.
+- Fuzzing: `scripts/fuzz.sh [seconds] [target]` builds the libFuzzer targets in `Tests/Fuzz/` (Clang;
+  on macOS Homebrew LLVM) and runs each one. Run it after touching a parser or loader. A crash input lands
+  in `build-fuzz/crashes/<Target>/`: reproduce with `build-fuzz/bin/<Target> <file>`, turn it into a
+  regression test, then fix. New file formats or entry points get a target and seed files in
+  `Tests/Fuzz/Corpus/`.
 - Coverage: `scripts/coverage.sh` (Clang) prints a per-file summary and writes
   `build-coverage/coverage/html/index.html`. Use it to find untested code; it is not a gate.
 

@@ -1,0 +1,1 @@
+{"command": "scene.settings", "params": {"Renderer": {"Exposure": 1.0, "Tonemapper": "AgX", "ShadowDistance": 80}}}

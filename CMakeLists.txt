@@ -51,3 +51,7 @@ if(BASALT_BUILD_TESTS)
 	enable_testing()
 	add_subdirectory(Tests)
 endif()
+
+if(BASALT_FUZZ)
+	add_subdirectory(Tests/Fuzz)
+endif()

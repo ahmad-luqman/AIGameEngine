@@ -1,0 +1,1 @@
+{"id": "locked", "command": "lua.exec", "params": {"code": "local t = Scene.FindEntityByName('Tetris'):GetScript(); assert(t:FilledCells() == 4, 'expected 4 locked cells, got ' .. t:FilledCells()); assert(t.Score > 0, 'hard drop did not score'); return t.Score"}}

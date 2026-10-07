@@ -1,0 +1,87 @@
+{
+	"Format": "BasaltScene",
+	"Version": 1,
+	"Name": "FeatureTest",
+	"Renderer": { "Exposure": 0.8, "Tonemapper": "ACES", "SSAOEnabled": true, "ShadowsEnabled": true, "ShadowDistance": 40 },
+	"Physics": { "Gravity": [0, -9.81, 0], "FixedTimestep": 0.016666668, "MaxStepsPerFrame": 8 },
+	"Entities": [
+		{ "ID": 100, "Name": "FeatureTestDriver", "Components": {
+			"Script": { "Script": "Assets/Scripts/FeatureTest.lua", "Properties": { "Duration": 4.5, "Note": "from scene", "Offset": [1, 2, 3] } } } },
+
+		{ "ID": 1, "Name": "MainCamera", "Components": {
+			"Transform": { "Translation": [0, 6, 14], "Rotation": [-20, 0, 0] },
+			"Camera": { "FOV": 55, "Near": 0.1, "Far": 300, "Primary": true },
+			"AudioListener": { "Active": true } } },
+		{ "ID": 2, "Name": "OrthoCamera", "Components": {
+			"Transform": { "Translation": [0, 20, 0], "Rotation": [-90, 0, 0] },
+			"Camera": { "Projection": "Orthographic", "OrthoSize": 30, "OrthoNear": -50, "OrthoFar": 50, "Primary": false, "FixedAspectRatio": true } } },
+
+		{ "ID": 3, "Name": "Sun", "Components": {
+			"Transform": { "Rotation": [-50, 35, 0] },
+			"DirectionalLight": { "Color": [1, 0.95, 0.88], "Intensity": 3.0, "CastShadows": true, "ShadowSoftness": 1.0 } } },
+		{ "ID": 4, "Name": "Sky", "Components": {
+			"SkyLight": { "EnvironmentMap": "Assets/Environments/Sky.hdr", "Intensity": 0.45, "Rotation": 30, "ShowBackground": true } } },
+		{ "ID": 5, "Name": "Lamp", "Components": {
+			"Transform": { "Translation": [-3, 1.5, 3] },
+			"PointLight": { "Color": [1, 0.6, 0.3], "Intensity": 20, "Radius": 8 } } },
+		{ "ID": 6, "Name": "Spot", "Components": {
+			"Transform": { "Translation": [4, 5, 4], "Rotation": [-60, 0, 0] },
+			"SpotLight": { "Color": [0.4, 0.6, 1], "Intensity": 60, "Range": 12, "InnerConeAngle": 15, "OuterConeAngle": 25 } } },
+
+		{ "ID": 10, "Name": "Ground", "Components": {
+			"Transform": { "Scale": [40, 1, 40] },
+			"Mesh": { "Mesh": "builtin://Plane" },
+			"Material": { "AlbedoColor": [0.55, 0.55, 0.55, 1], "Roughness": 0.85 },
+			"RigidBody": { "Type": "Static", "Friction": 0.8 },
+			"BoxCollider": { "HalfExtents": [0.5, 0.5, 0.5], "Offset": [0, -0.5, 0] } } },
+
+		{ "ID": 11, "Name": "Ball", "Components": {
+			"Transform": { "Translation": [3, 7, 0] },
+			"Mesh": { "Mesh": "builtin://Sphere" },
+			"Material": { "AlbedoColor": [0.95, 0.95, 0.95, 1], "Metallic": 1.0, "Roughness": 0.15 },
+			"RigidBody": { "Type": "Dynamic", "Mass": 2, "Restitution": 0.1 },
+			"SphereCollider": { "Radius": 0.5 },
+			"Script": { "Script": "Assets/Scripts/Probe.lua" } } },
+		{ "ID": 12, "Name": "Zone", "Components": {
+			"Transform": { "Translation": [3, 3, 0] },
+			"RigidBody": { "Type": "Static", "IsTrigger": true },
+			"BoxCollider": { "HalfExtents": [1, 1, 1] } } },
+		{ "ID": 13, "Name": "Crate", "Components": {
+			"Transform": { "Translation": [-6, 1, -3] },
+			"Mesh": { "Mesh": "builtin://Cube" },
+			"Material": { "AlbedoMap": "Assets/Textures/Checker.png", "NormalMap": "Assets/Textures/FlatNormal.png", "Roughness": 0.7 },
+			"RigidBody": { "Type": "Dynamic", "Mass": 2, "GravityFactor": 0, "LinearDamping": 0, "AngularDamping": 0 },
+			"BoxCollider": {} } },
+		{ "ID": 14, "Name": "Turntable", "Components": {
+			"Transform": { "Translation": [6, 0.25, -4], "Scale": [3, 0.5, 3] },
+			"Mesh": { "Mesh": "builtin://Cylinder" },
+			"Material": { "AlbedoColor": [0.3, 0.7, 0.4, 1], "EmissiveColor": [0, 0.2, 0], "EmissiveIntensity": 1 },
+			"RigidBody": { "Type": "Kinematic" },
+			"CapsuleCollider": { "Radius": 0.5, "HalfHeight": 0.1 },
+			"Script": { "Script": "Assets/Scripts/Spinner.lua", "Properties": { "Speed": 2.0, "Label": "turntable" } } } },
+		{ "ID": 15, "Name": "Pillar", "Components": {
+			"Transform": { "Translation": [-3, 1, -6] },
+			"Mesh": { "Mesh": "builtin://Capsule" },
+			"RigidBody": { "Type": "Static", "Layer": 2, "CollisionMask": 65535 },
+			"CapsuleCollider": {} } },
+		{ "ID": 16, "Name": "Pillar", "Components": {
+			"Transform": { "Translation": [3, 1, -6] },
+			"Mesh": { "Mesh": "builtin://Capsule" },
+			"RigidBody": { "Type": "Static" },
+			"CapsuleCollider": {} } },
+		{ "ID": 17, "Name": "ImportedModel", "Components": {
+			"Transform": { "Translation": [0, 0.5, 3] } } },
+		{ "ID": 18, "Name": "TexturedCube", "Parent": 17, "Components": {
+			"Mesh": { "Mesh": "Assets/Models/TexturedCube.glb", "MeshIndex": 0, "CastShadows": true } } },
+		{ "ID": 19, "Name": "Glass", "Components": {
+			"Transform": { "Translation": [-1.5, 0.5, 4.5] },
+			"Mesh": { "Mesh": "builtin://Cube", "CastShadows": false },
+			"Material": { "AlbedoColor": [0.4, 0.8, 1.0, 0.35], "Roughness": 0.05 } } },
+		{ "ID": 21, "Name": "PrefabInstanceMarker", "Components": {
+			"Transform": { "Translation": [8, 0, 6] },
+			"Prefab": { "Prefab": "Assets/Prefabs/Projectile.bprefab" } } },
+		{ "ID": 20, "Name": "Speaker", "Components": {
+			"Transform": { "Translation": [0, 1, 0] },
+			"AudioSource": { "Clip": "Assets/Audio/Beep.wav", "Volume": 0.5, "Pitch": 1.0, "Loop": false, "PlayOnStart": true, "Spatial": true, "MinDistance": 1, "MaxDistance": 30 } } }
+	]
+}

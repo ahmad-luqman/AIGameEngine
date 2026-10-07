@@ -75,6 +75,32 @@ namespace Basalt {
 			return true;
 		}
 
+		// glTF requires accessor data to be aligned to its component size (spec 3.6.2.4). cgltf_validate reads
+		// index data before checking that, through misaligned pointers (undefined behaviour, found by
+		// FuzzGltf), so non-conforming files are rejected first.
+		bool CheckAccessorAlignment(const cgltf_data* data, const std::filesystem::path& path, std::string& outError)
+		{
+			auto aligned = [](const cgltf_buffer_view* view, cgltf_size offset, cgltf_size size) { return !view || size == 0 || (view->offset + offset) % size == 0; };
+			for (cgltf_size i = 0; i < data->accessors_count; i++)
+			{
+				const cgltf_accessor& accessor = data->accessors[i];
+				const cgltf_size componentSize = cgltf_component_size(accessor.component_type);
+				bool ok = aligned(accessor.buffer_view, accessor.offset, componentSize) && (componentSize == 0 || accessor.stride % componentSize == 0);
+				if (accessor.is_sparse)
+				{
+					const cgltf_accessor_sparse& sparse = accessor.sparse;
+					ok = ok && aligned(sparse.indices_buffer_view, sparse.indices_byte_offset, cgltf_component_size(sparse.indices_component_type)) &&
+						 aligned(sparse.values_buffer_view, sparse.values_byte_offset, componentSize);
+				}
+				if (!ok)
+				{
+					outError = path.filename().string() + ": accessor " + std::to_string(i) + " is not aligned to its component size";
+					return false;
+				}
+			}
+			return true;
+		}
+
 		GltfData LoadGltfData(const std::filesystem::path& path, std::string& outError)
 		{
 			const std::string pathString = path.string();
@@ -103,6 +129,8 @@ namespace Basalt {
 				outError = path.filename().string() + ": cannot load buffers (" + ResultToString(result) + ")";
 				return nullptr;
 			}
+			if (!CheckAccessorAlignment(data.get(), path, outError))
+				return nullptr;
 			result = cgltf_validate(data.get());
 			if (result != cgltf_result_success)
 			{

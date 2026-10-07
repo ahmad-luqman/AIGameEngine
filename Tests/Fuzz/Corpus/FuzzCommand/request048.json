@@ -1,0 +1,1 @@
+{"command": "entity.create", "params": {"name": "Sky", "components": {"SkyLight": {"Intensity": 0.6}}}}

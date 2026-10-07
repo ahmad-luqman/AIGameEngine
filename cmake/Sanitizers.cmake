@@ -19,6 +19,17 @@ if(BASALT_SANITIZE)
 	message(STATUS "Basalt: sanitizers enabled: ${basaltSanitizers}")
 endif()
 
+# Fuzzing (Tests/Fuzz): every target gets libFuzzer's coverage instrumentation, and the fuzz executables
+# link libFuzzer itself. Combine with BASALT_SANITIZE="address;undefined" so bugs crash immediately.
+option(BASALT_FUZZ "Build the libFuzzer targets in Tests/Fuzz (Clang only)" OFF)
+if(BASALT_FUZZ)
+	if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+		message(FATAL_ERROR "BASALT_FUZZ needs Clang (libFuzzer); on macOS use Homebrew LLVM's clang")
+	endif()
+	add_compile_options(-fsanitize=fuzzer-no-link)
+	message(STATUS "Basalt: fuzz targets enabled")
+endif()
+
 # Environment for ctest so sanitizer runs behave the same locally and on CI. Suppression files hold
 # known third-party reports only; Basalt code is fixed, never suppressed.
 set(basaltDetectLeaks 1)

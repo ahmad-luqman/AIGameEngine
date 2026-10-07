@@ -1,0 +1,1 @@
+{"id": "state", "command": "lua.exec", "params": {"code": "local t = Scene.FindEntityByName('Tetris'):GetScript(); assert(not t.GameOver, 'unexpected game over'); assert(t:FilledCells() % 4 == 0 and t:FilledCells() > 4, 'pieces did not stack: ' .. t:FilledCells()); return 'score=' .. t.Score .. ' filled=' .. t:FilledCells()"}}

@@ -24,13 +24,6 @@ Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or mor
 These close the gap between "works on the developer's machine" and "production-grade". Do them before
 adding features.
 
-### Fuzz the untrusted inputs — M
-Scenes, prefabs, projects, glTF files, images and automation requests all come from outside the engine.
-The strict JSON readers and cgltf wrappers should never crash or assert on bad input.
-- libFuzzer targets for `SceneSerializer` (scene + prefab), `MeshImporter`, `TextureSource`,
-  `CommandRegistry::Execute` and `LuaJson`; seed corpora from the test data.
-- Run each target for a short time in CI, and longer runs locally or nightly.
-
 ### Cross-platform physics determinism — S
 Replays (`replay.*`, `scene.hash`) are bit-exact on one machine, and script/game logic is portable
 (`Basalt::Random`, see `Samples/Tetris/test_replay.json`). Physics is not yet portable across platforms:

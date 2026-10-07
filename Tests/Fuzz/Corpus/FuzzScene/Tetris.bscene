@@ -1,0 +1,164 @@
+{
+	"Entities": [
+	 {
+	  "Components": {
+	   "Script": {
+	    "Properties": {},
+	    "Script": "Assets/Scripts/Tetris.lua"
+	   },
+	   "Transform": {
+	    "Rotation": [
+	     0.0,
+	     -0.0,
+	     0.0
+	    ],
+	    "Scale": [
+	     1.0,
+	     1.0,
+	     1.0
+	    ],
+	    "Translation": [
+	     0.0,
+	     0.0,
+	     0.0
+	    ]
+	   }
+	  },
+	  "ID": 1080723900157719812,
+	  "Name": "Tetris",
+	  "Parent": 0
+	 },
+	 {
+	  "Components": {
+	   "AudioListener": {
+	    "Active": true
+	   },
+	   "Camera": {
+	    "FOV": 45.0,
+	    "Far": 200.0,
+	    "FixedAspectRatio": false,
+	    "Near": 0.5,
+	    "OrthoFar": 100.0,
+	    "OrthoNear": -100.0,
+	    "OrthoSize": 10.0,
+	    "Primary": true,
+	    "Projection": "Perspective"
+	   },
+	   "Transform": {
+	    "Rotation": [
+	     0.0,
+	     -0.0,
+	     0.0
+	    ],
+	    "Scale": [
+	     1.0,
+	     1.0,
+	     1.0
+	    ],
+	    "Translation": [
+	     8.0,
+	     9.5,
+	     31
+	    ]
+	   }
+	  },
+	  "ID": 12227279875174708284,
+	  "Name": "Camera",
+	  "Parent": 0
+	 },
+	 {
+	  "Components": {
+	   "DirectionalLight": {
+	    "CastShadows": true,
+	    "Color": [
+	     1.0,
+	     1.0,
+	     1.0
+	    ],
+	    "Intensity": 2.5,
+	    "ShadowSoftness": 1.5
+	   },
+	   "Transform": {
+	    "Rotation": [
+	     -35.0,
+	     25.000009536743164,
+	     -5.23029200394376e-07
+	    ],
+	    "Scale": [
+	     1.0,
+	     1.0,
+	     1.0
+	    ],
+	    "Translation": [
+	     0.0,
+	     0.0,
+	     0.0
+	    ]
+	   }
+	  },
+	  "ID": 2260783742867374569,
+	  "Name": "Sun",
+	  "Parent": 0
+	 },
+	 {
+	  "Components": {
+	   "SkyLight": {
+	    "EnvironmentMap": "",
+	    "Intensity": 0.6000000238418579,
+	    "Rotation": 0.0,
+	    "ShowBackground": true
+	   },
+	   "Transform": {
+	    "Rotation": [
+	     0.0,
+	     -0.0,
+	     0.0
+	    ],
+	    "Scale": [
+	     1.0,
+	     1.0,
+	     1.0
+	    ],
+	    "Translation": [
+	     0.0,
+	     0.0,
+	     0.0
+	    ]
+	   }
+	  },
+	  "ID": 3103231143618567692,
+	  "Name": "Sky",
+	  "Parent": 0
+	 }
+	],
+	"Format": "BasaltScene",
+	"Name": "Tetris",
+	"Physics": {
+	 "FixedTimestep": 0.01666666753590107,
+	 "Gravity": [
+	  0.0,
+	  -9.8100004196167,
+	  0.0
+	 ],
+	 "MaxStepsPerFrame": 8
+	},
+	"Renderer": {
+	 "AmbientColor": [
+	  0.029999999329447746,
+	  0.029999999329447746,
+	  0.03500000014901161
+	 ],
+	 "CascadeSplitLambda": 0.8500000238418579,
+	 "Exposure": 1.0,
+	 "SSAOBias": 0.02500000037252903,
+	 "SSAOEnabled": true,
+	 "SSAOIntensity": 1.0,
+	 "SSAORadius": 0.5,
+	 "ShadowBias": 0.001500000013038516,
+	 "ShadowDistance": 80.0,
+	 "ShadowNormalBias": 0.019999999552965164,
+	 "ShadowsEnabled": true,
+	 "Tonemapper": "AgX"
+	},
+	"Version": 1
+}

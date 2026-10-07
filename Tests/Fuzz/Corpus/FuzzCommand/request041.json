@@ -1,0 +1,1 @@
+{"id": "reset", "command": "lua.exec", "params": {"code": "local t = Scene.FindEntityByName('Tetris'):GetScript(); assert(t.Score == 0 and t:FilledCells() == 0 and not t.GameOver, 'restart did not reset'); return 'reset ok'"}}

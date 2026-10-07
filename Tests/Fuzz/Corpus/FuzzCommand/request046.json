@@ -1,0 +1,1 @@
+{"command": "entity.create", "params": {"name": "Camera", "components": {"Transform": {"Translation": [8.0, 9.5, 31]}, "Camera": {"FOV": 45, "Near": 0.5, "Far": 200}, "AudioListener": {}}}}

@@ -300,6 +300,28 @@ TEST_SUITE("Assets")
 		AssetManager::Clear();
 	}
 
+	// Regression (FuzzGltf): cgltf_validate read 16-bit indices through a misaligned pointer when an accessor's
+	// byte offset was odd. The glTF spec forbids that, so such files are rejected before validation.
+	TEST_CASE("glTF accessors must be aligned to their component size")
+	{
+		BasaltTest::TempProject project("GltfAlignment");
+		const std::string buffer = MakeQuadBuffer() + std::string(4, '\0');
+		nlohmann::json gltf = MakeGltfJson({ { "byteLength", buffer.size() }, { "uri", "data:application/octet-stream;base64," + Base64(buffer.data(), buffer.size()) } }, nlohmann::json::array());
+		gltf.erase("textures");
+		gltf["materials"][0]["pbrMetallicRoughness"].erase("baseColorTexture");
+		gltf["materials"][0].erase("normalTexture");
+		gltf["images"] = nlohmann::json::array();
+		project.WriteFile("Assets/Models/Aligned.gltf", gltf.dump());
+		gltf["accessors"][2]["byteOffset"] = 1; // uint16 indices starting at an odd address
+		project.WriteFile("Assets/Models/Misaligned.gltf", gltf.dump());
+
+		AssetManager::Clear();
+		CHECK_MESSAGE(AssetManager::GetMesh("Assets/Models/Aligned.gltf"), AssetManager::GetError("Assets/Models/Aligned.gltf"));
+		CHECK_FALSE(AssetManager::GetMesh("Assets/Models/Misaligned.gltf"));
+		CHECK(AssetManager::GetError("Assets/Models/Misaligned.gltf").find("not aligned") != std::string::npos);
+		AssetManager::Clear();
+	}
+
 	// Regression: a 4-byte header could claim a gigantic image and make stb_image allocate gigabytes.
 	TEST_CASE("Images larger than the dimension limit are rejected before allocating")
 	{

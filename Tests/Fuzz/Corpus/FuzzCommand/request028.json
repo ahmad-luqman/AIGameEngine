@@ -1,0 +1,1 @@
+{"id": "at-wall", "command": "lua.exec", "params": {"code": "local t = Scene.FindEntityByName('Tetris'):GetScript(); assert(t:PieceLeft() == 0, 'piece not at the left wall: ' .. t:PieceLeft()); return t:PieceLeft()"}}
