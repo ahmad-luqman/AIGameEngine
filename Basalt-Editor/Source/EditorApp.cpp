@@ -19,7 +19,7 @@ namespace Basalt {
 	// BasaltEditor [--project <dir>] [--port <n> | --no-server]
 	Application* CreateApplication(ApplicationCommandLineArgs args)
 	{
-		const CommandLine commandLine(args.Count, args.Args, { "project", "port" });
+		const CommandLine commandLine(args.Count, args.Args, { "project", "port", "gpu" });
 		for (const std::string& error : commandLine.GetErrors())
 			BS_CORE_ERROR("{}", error);
 
@@ -38,6 +38,7 @@ namespace Basalt {
 		ApplicationSpecification specification;
 		specification.Name = "Basalt Editor";
 		specification.CommandLineArgs = args;
+		specification.GpuSelector = commandLine.GetValue("gpu").value_or("");
 		specification.EnableImGui = true;
 		specification.StartMaximized = true;
 		return new EditorApplication(specification, options);

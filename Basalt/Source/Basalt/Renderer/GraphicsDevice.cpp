@@ -2,6 +2,7 @@
 
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Window.h"
+#include "Basalt/Renderer/DeviceSelection.h"
 #include "Basalt/Renderer/VulkanHeaders.h"
 #include "Basalt/Renderer/VulkanLoader.h"
 
@@ -11,6 +12,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <optional>
 #include <queue>
 #include <unordered_set>
 #include <vector>
@@ -95,6 +97,54 @@ namespace Basalt {
 				default:
 					return nvrhi::Format::UNKNOWN;
 			}
+		}
+
+	}
+
+	namespace {
+
+		PhysicalDeviceKind ToDeviceKind(vk::PhysicalDeviceType type)
+		{
+			switch (type)
+			{
+				case vk::PhysicalDeviceType::eDiscreteGpu:
+					return PhysicalDeviceKind::Discrete;
+				case vk::PhysicalDeviceType::eIntegratedGpu:
+					return PhysicalDeviceKind::Integrated;
+				case vk::PhysicalDeviceType::eVirtualGpu:
+					return PhysicalDeviceKind::Virtual;
+				case vk::PhysicalDeviceType::eCpu:
+					return PhysicalDeviceKind::Cpu;
+				default:
+					return PhysicalDeviceKind::Other;
+			}
+		}
+
+		// Returns a queue family with graphics + compute (and presentation to `surface`, when one is
+		// given), or UINT32_MAX when the device lacks a feature Basalt requires.
+		uint32_t FindQueueFamily(vk::PhysicalDevice device, const vk::PhysicalDeviceProperties& properties, vk::SurfaceKHR surface)
+		{
+			if (properties.apiVersion < RequiredApiVersion)
+				return UINT32_MAX;
+
+			if (surface && !HasExtension(device.enumerateDeviceExtensionProperties(), VK_KHR_SWAPCHAIN_EXTENSION_NAME))
+				return UINT32_MAX;
+
+			const auto features = device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan12Features, vk::PhysicalDeviceVulkan13Features>();
+			const auto& features12 = features.get<vk::PhysicalDeviceVulkan12Features>();
+			const auto& features13 = features.get<vk::PhysicalDeviceVulkan13Features>();
+			if (!features12.timelineSemaphore || !features13.dynamicRendering || !features13.synchronization2)
+				return UINT32_MAX;
+
+			const auto families = device.getQueueFamilyProperties();
+			for (uint32_t i = 0; i < families.size(); i++)
+			{
+				const bool graphics = static_cast<bool>(families[i].queueFlags & vk::QueueFlagBits::eGraphics);
+				const bool compute = static_cast<bool>(families[i].queueFlags & vk::QueueFlagBits::eCompute);
+				if (graphics && compute && (!surface || device.getSurfaceSupportKHR(i, surface)))
+					return i;
+			}
+			return UINT32_MAX;
 		}
 
 	}
@@ -298,57 +348,34 @@ namespace Basalt {
 		impl.Surface = surface;
 
 		// --- Physical device --------------------------------------------------------------------
-		int bestScore = -1;
-		for (vk::PhysicalDevice candidate : impl.Instance.enumeratePhysicalDevices())
+		// Every device is listed (with its index for --gpu) so a log shows what could have been chosen.
+		const std::vector<vk::PhysicalDevice> physicalDevices = impl.Instance.enumeratePhysicalDevices();
+		std::vector<PhysicalDeviceInfo> deviceInfos;
+		std::vector<uint32_t> queueFamilies;
+		for (size_t index = 0; index < physicalDevices.size(); index++)
 		{
+			const vk::PhysicalDevice candidate = physicalDevices[index];
 			const vk::PhysicalDeviceProperties properties = candidate.getProperties();
-			if (properties.apiVersion < RequiredApiVersion)
-				continue;
-
-			const auto extensions = candidate.enumerateDeviceExtensionProperties();
-			if (!HasExtension(extensions, VK_KHR_SWAPCHAIN_EXTENSION_NAME))
-				continue;
-
-			const auto features = candidate.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan12Features, vk::PhysicalDeviceVulkan13Features>();
-			const auto& features12 = features.get<vk::PhysicalDeviceVulkan12Features>();
-			const auto& features13 = features.get<vk::PhysicalDeviceVulkan13Features>();
-			if (!features12.timelineSemaphore || !features13.dynamicRendering || !features13.synchronization2)
-				continue;
-
-			uint32_t queueFamily = UINT32_MAX;
-			const auto queueFamilies = candidate.getQueueFamilyProperties();
-			for (uint32_t i = 0; i < queueFamilies.size(); i++)
-			{
-				const bool graphics = static_cast<bool>(queueFamilies[i].queueFlags & vk::QueueFlagBits::eGraphics);
-				const bool compute = static_cast<bool>(queueFamilies[i].queueFlags & vk::QueueFlagBits::eCompute);
-				if (graphics && compute && candidate.getSurfaceSupportKHR(i, impl.Surface))
-				{
-					queueFamily = i;
-					break;
-				}
-			}
-			if (queueFamily == UINT32_MAX)
-				continue;
-
-			int score = 1;
-			if (properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu)
-				score += 1000;
-			else if (properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu)
-				score += 100;
-
-			if (score > bestScore)
-			{
-				bestScore = score;
-				impl.PhysicalDevice = candidate;
-				impl.GraphicsQueueFamily = queueFamily;
-			}
+			PhysicalDeviceInfo& info = deviceInfos.emplace_back();
+			info.Name = properties.deviceName.data();
+			info.Kind = ToDeviceKind(properties.deviceType);
+			const uint32_t queueFamily = FindQueueFamily(candidate, properties, impl.Surface);
+			queueFamilies.push_back(queueFamily);
+			info.Suitable = queueFamily != UINT32_MAX;
+			BS_CORE_INFO("GraphicsDevice: GPU {}: {} ({}, Vulkan {}.{}, driver 0x{:x}){}", index, info.Name, ToString(info.Kind),
+						 VK_API_VERSION_MAJOR(properties.apiVersion), VK_API_VERSION_MINOR(properties.apiVersion), properties.driverVersion,
+						 info.Suitable ? "" : " - unsuitable");
 		}
 
-		if (!impl.PhysicalDevice)
+		std::string selectionError;
+		const std::optional<size_t> selected = SelectPhysicalDevice(deviceInfos, m_Specification.DeviceSelector, selectionError);
+		if (!selected)
 		{
-			BS_CORE_ERROR("GraphicsDevice: no GPU supports Vulkan 1.3 with dynamic rendering, synchronization2 and timeline semaphores");
+			BS_CORE_ERROR("GraphicsDevice: {}", selectionError);
 			return false;
 		}
+		impl.PhysicalDevice = physicalDevices[*selected];
+		impl.GraphicsQueueFamily = queueFamilies[*selected];
 
 		const vk::PhysicalDeviceProperties deviceProperties = impl.PhysicalDevice.getProperties();
 		m_AdapterName = deviceProperties.deviceName.data();

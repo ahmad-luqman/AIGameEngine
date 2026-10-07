@@ -59,6 +59,7 @@ namespace Basalt {
 		deviceSpecification.ApplicationName = m_Specification.Name;
 		deviceSpecification.EnableValidation = m_Specification.EnableValidation;
 		deviceSpecification.VSync = m_Specification.VSync;
+		deviceSpecification.DeviceSelector = m_Specification.GpuSelector;
 		m_GraphicsDevice = GraphicsDevice::Create(*m_Window, deviceSpecification);
 		if (!m_GraphicsDevice)
 			return;

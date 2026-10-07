@@ -19,6 +19,8 @@ namespace Basalt {
 		bool VSync = true;
 		uint32_t MaxFramesInFlight = 2;
 		uint32_t SwapchainImageCount = 3;
+		// Which GPU to use (--gpu); empty picks automatically. See SelectPhysicalDevice for the forms.
+		std::string DeviceSelector;
 	};
 
 	// Owns the Vulkan instance, device and swapchain and exposes them through nvrhi.

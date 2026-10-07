@@ -20,7 +20,7 @@ namespace Basalt {
 
 	Application* CreateApplication(ApplicationCommandLineArgs args)
 	{
-		const CommandLine commandLine(args.Count, args.Args, { "project", "scene", "frames", "screenshot", "width", "height", "debug-view" });
+		const CommandLine commandLine(args.Count, args.Args, { "project", "scene", "frames", "screenshot", "width", "height", "debug-view", "gpu" });
 		for (const std::string& error : commandLine.GetErrors())
 			BS_CORE_ERROR("{}", error);
 
@@ -50,11 +50,16 @@ namespace Basalt {
 		else if (debugView == "Depth")
 			options.DebugView = RendererDebugView::Depth;
 		else if (debugView != "None")
-			BS_CORE_WARN("Unknown --debug-view '{}' (valid: None, SSAO, Normals, Depth)", debugView);
+		{
+			// An error, not a warning: a typo would otherwise silently test the lit image instead.
+			BS_CORE_CRITICAL("Unknown --debug-view '{}' (valid: None, SSAO, Normals, Depth)", debugView);
+			return nullptr;
+		}
 
 		ApplicationSpecification specification;
 		specification.Name = project->GetConfig().Name;
 		specification.CommandLineArgs = args;
+		specification.GpuSelector = commandLine.GetValue("gpu").value_or("");
 		auto readSize = [&](const char* name, uint32_t fallback) {
 			if (!commandLine.GetValue(name))
 				return fallback;

@@ -36,6 +36,8 @@ namespace Basalt {
 		bool StartMaximized = false;
 		bool VSync = true;
 		bool EnableImGui = false;
+		// GPU to render with (--gpu): empty chooses automatically. See SelectPhysicalDevice.
+		std::string GpuSelector;
 
 		// No window, no GPU: layers only receive OnUpdate. Used by the CLI and automated tests.
 		bool Headless = false;
