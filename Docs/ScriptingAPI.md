@@ -53,6 +53,9 @@ return Player
 
 `Math.Pi`, `Math.Radians(deg)`, `Math.Degrees(rad)`, `Math.Clamp(v, min, max)`, `Math.Lerp(a, b, t)`,
 `Math.Sign(v)`, `Math.Seed(n)`, `Math.Random()` (0..1), `Math.Random(min, max)`, `Math.RandomInt(min, max)`.
+Random numbers are deterministic: each play session starts from the same seed and produces the same
+sequence on every platform. Lua's `math.random`/`math.randomseed` use the same generator (standard Lua
+seeds them from the clock), so replays and automated tests reproduce exactly.
 The random generator is deterministic; seed it for reproducible games and tests.
 
 ## Entity

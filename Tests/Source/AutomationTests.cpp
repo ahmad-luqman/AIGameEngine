@@ -135,6 +135,76 @@ TEST_SUITE("Automation")
 		CHECK(RunError(registry, session, "input.key", { { "key", "NotAKey" } }).find("unknown key") != std::string::npos);
 		Input::Reset();
 	}
+
+	TEST_CASE("State hash ignores entity UUIDs but tracks every state change")
+	{
+		CommandRegistry registry;
+		AutomationSession session;
+		const json a = Run(registry, session, "entity.create", { { "name", "A" } });
+		Run(registry, session, "entity.create", { { "name", "B" }, { "parent", a["id"] } });
+		const std::string hash = Run(registry, session, "scene.hash")["hash"];
+		CHECK(hash.size() == 16);
+
+		// The same hierarchy rebuilt in a fresh session gets new UUIDs but the same hash.
+		AutomationSession other;
+		const json otherA = Run(registry, other, "entity.create", { { "name", "A" } });
+		Run(registry, other, "entity.create", { { "name", "B" }, { "parent", otherA["id"] } });
+		CHECK(otherA["id"] != a["id"]);
+		CHECK(Run(registry, other, "scene.hash")["hash"] == hash);
+
+		Run(registry, other, "component.set", { { "entity", "B" }, { "component", "Transform" }, { "data", { { "Translation", { 0.0, 1e-6, 0.0 } } } } });
+		CHECK(Run(registry, other, "scene.hash")["hash"] != hash);
+	}
+
+	TEST_CASE("Recorded input replays to the same state")
+	{
+		BasaltTest::TempProject temp("AutomationReplay");
+		CommandRegistry registry;
+		AutomationSession session;
+		// Moves on key presses and spawns an entity (with a random UUID) on every jump.
+		Run(registry, session, "asset.write", { { "path", "Assets/Scripts/Mover.lua" }, { "content", R"(
+			local M = {}
+			function M:OnUpdate(dt)
+				if Input.IsKeyDown("Right") then self.Entity.Translation = self.Entity.Translation + Vec3(dt, 0, 0) end
+				if Input.IsKeyPressed("Space") then Scene.CreateEntity("Spark").Translation = self.Entity.Translation + Vec3(0, Math.Random(), 0) end
+			end
+			return M
+		)" } });
+		Run(registry, session, "entity.create", { { "name", "Mover" }, { "components", { { "Script", { { "Script", "Assets/Scripts/Mover.lua" } } } } } });
+
+		Run(registry, session, "replay.record_start");
+		Run(registry, session, "play.start");
+		Run(registry, session, "input.key", { { "key", "Right" }, { "down", true } });
+		Run(registry, session, "play.step", { { "frames", 10 } });
+		Run(registry, session, "input.key", { { "key", "Space" }, { "down", true } });
+		Run(registry, session, "play.step", { { "frames", 1 } });
+		Run(registry, session, "input.key", { { "key", "Space" }, { "down", false } });
+		Run(registry, session, "input.key", { { "key", "Right" }, { "down", false } });
+		const json live = Run(registry, session, "play.step", { { "frames", 5 }, { "hash", true } });
+		const json saved = Run(registry, session, "replay.record_stop", { { "path", "Replays/Test.breplay" } });
+		CHECK(saved["events"] == 4);
+		CHECK(saved["frames"] == 16);
+
+		const json first = Run(registry, session, "replay.run", { { "path", "Replays/Test.breplay" }, { "assertHash", true } });
+		CHECK(first["stateHash"] == live["stateHash"]);
+		CHECK(first["frame"] == 16);
+		CHECK(Run(registry, session, "entity.list", { { "nameContains", "Spark" } })["entities"].size() == 1);
+		const json second = Run(registry, session, "replay.run", { { "path", "Replays/Test.breplay" }, { "assertHash", true } });
+		CHECK(second["stateHash"] == first["stateHash"]);
+
+		// Stopping before the jump ends in a different state (the hash covers scene content, not the frame
+		// counter: frames where nothing changes hash equally), and cannot be checked against the recorded hash.
+		const json shorter = Run(registry, session, "replay.run", { { "path", "Replays/Test.breplay" }, { "frames", 5 } });
+		CHECK(shorter["frame"] == 5);
+		CHECK(shorter["stateHash"] != live["stateHash"]);
+		CHECK(RunError(registry, session, "replay.run", { { "path", "Replays/Test.breplay" }, { "frames", 5 }, { "assertHash", true } }).find("full recorded length") != std::string::npos);
+
+		temp.WriteFile("Replays/Bad.breplay", R"({ "Format": "Other" })");
+		CHECK(RunError(registry, session, "replay.run", { { "path", "Replays/Bad.breplay" } }).find("not a Basalt replay") != std::string::npos);
+		CHECK(RunError(registry, session, "replay.record_stop", { { "path", "Replays/X.breplay" } }).find("not recording") != std::string::npos);
+		Run(registry, session, "play.stop");
+		Input::Reset();
+	}
 }
 
 #include <Basalt/Automation/AutomationServer.h>

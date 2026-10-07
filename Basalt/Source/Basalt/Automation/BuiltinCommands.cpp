@@ -167,6 +167,33 @@ namespace Basalt {
 			registry.Register({ std::move(name), std::move(description), std::move(parameters), std::move(handler) });
 		}
 
+		void ApplyKeyInput(const json& params)
+		{
+			const std::string name = RequireString(params, "key");
+			const auto key = KeyCodeFromString(name);
+			if (!key)
+				throw CommandError("unknown key '" + name + "'");
+			Input::SetKeyState(*key, OptionalBool(params, "down", true));
+		}
+
+		void ApplyMouseInput(const json& params)
+		{
+			if (auto position = params.find("position"); position != params.end())
+			{
+				if (!position->is_array() || position->size() != 2 || !(*position)[0].is_number() || !(*position)[1].is_number())
+					throw CommandError("'position' must be [x, y]");
+				Input::SetMousePosition({ (*position)[0].get<float>(), (*position)[1].get<float>() });
+			}
+			if (params.contains("button"))
+			{
+				const std::string name = RequireString(params, "button");
+				const auto button = MouseCodeFromString(name);
+				if (!button)
+					throw CommandError("unknown mouse button '" + name + "'");
+				Input::SetMouseButtonState(*button, OptionalBool(params, "down", true));
+			}
+		}
+
 		// --- Command groups -------------------------------------------------------------------------
 
 		void RegisterGeneral(CommandRegistry& registry)
@@ -315,6 +342,10 @@ namespace Basalt {
 				session.SetScenePath(path);
 				session.ClearDirty();
 				return json{ { "path", path } };
+			});
+
+			Add(registry, "scene.hash", "Hash of the current scene state (the play copy while playing); equal states give equal hashes, whatever the entity UUIDs.", {}, [](AutomationSession& session, const json&) {
+				return json{ { "hash", SceneSerializer::ComputeStateHash(RequireScene(session)) } };
 			});
 
 			Add(registry, "scene.get", "Returns the whole open scene as JSON (same format as .bscene files).", {}, [](AutomationSession& session, const json&) {
@@ -614,7 +645,7 @@ namespace Basalt {
 				return json{ { "playing", false } };
 			});
 
-			Add(registry, "play.step", "Advances play mode by N fixed frames (default dt 1/60) and reports script errors.", { { "frames", "integer (default 1)" }, { "dt", "number, seconds per frame" }, { "assertNoErrors", "bool: fail the command if any script error occurred" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "play.step", "Advances play mode by N fixed frames (default dt 1/60) and reports script errors.", { { "frames", "integer (default 1)" }, { "dt", "number, seconds per frame" }, { "assertNoErrors", "bool: fail the command if any script error occurred" }, { "hash", "bool: also return stateHash (see scene.hash)" } }, [](AutomationSession& session, const json& params) {
 				if (!session.IsPlaying())
 					throw CommandError("not playing (use play.start)");
 				const uint32_t frames = static_cast<uint32_t>(OptionalInteger(params, "frames", 1, 1, 100000));
@@ -630,33 +661,96 @@ namespace Basalt {
 				json errors = scene.GetScriptEngine() ? json(scene.GetScriptEngine()->GetErrors()) : json::array();
 				if (OptionalBool(params, "assertNoErrors", false) && !errors.empty())
 					throw CommandError("script errors: " + errors.dump());
-				return json{ { "time", scene.GetTime() }, { "frame", scene.GetFrameCount() }, { "scriptErrors", errors }, { "quitRequested", scene.IsQuitRequested() } };
+				json result = { { "time", scene.GetTime() }, { "frame", scene.GetFrameCount() }, { "scriptErrors", errors }, { "quitRequested", scene.IsQuitRequested() } };
+				if (OptionalBool(params, "hash", false))
+					result["stateHash"] = SceneSerializer::ComputeStateHash(scene);
+				return result;
 			});
 
-			Add(registry, "input.key", "Sets a key's state for play mode (e.g. {key: 'Space', down: true}).", { { "key", "string key name" }, { "down", "bool" } }, [](AutomationSession&, const json& params) {
-				const std::string name = RequireString(params, "key");
-				const auto key = KeyCodeFromString(name);
-				if (!key)
-					throw CommandError("unknown key '" + name + "'");
-				Input::SetKeyState(*key, OptionalBool(params, "down", true));
+			Add(registry, "replay.record_start", "Starts recording input.key/input.mouse commands with the play frame they arrive on.", {}, [](AutomationSession& session, const json&) {
+				session.StartRecording();
+				return json{ { "recording", true } };
+			});
+
+			Add(registry, "replay.record_stop", "Stops recording and writes the replay file (project-relative path, e.g. 'Replays/run.breplay').", { { "path", "string" } }, [](AutomationSession& session, const json& params) {
+				RequireProject();
+				const std::string path = ProjectRelative(RequireString(params, "path"));
+				if (!session.IsRecording())
+					throw CommandError("not recording (use replay.record_start)");
+				const uint64_t frames = session.IsPlaying() ? RequireScene(session).GetFrameCount() : 0;
+				const json events = session.StopRecording();
+				json replay = { { "Format", "BasaltReplay" }, { "Version", 1 }, { "Frames", frames }, { "Events", events } };
+				// The recorded run's final state: replay.run with assertHash checks a replay reproduces it.
+				if (session.IsPlaying())
+					replay["StateHash"] = SceneSerializer::ComputeStateHash(RequireScene(session));
+				if (!FileSystem::WriteTextFile(Project::ResolvePath(path), replay.dump(1, '\t')))
+					throw CommandError("cannot write '" + path + "'");
+				return json{ { "path", path }, { "events", events.size() }, { "frames", frames } };
+			});
+
+			Add(registry, "replay.run", "Restarts play from the edit scene, re-applies a replay's inputs on their frames, and returns the state hash. Play keeps running afterwards for inspection.",
+				{ { "path", "string, replay file" }, { "frames", "integer, default: the recorded length" }, { "assertNoErrors", "bool" }, { "assertHash", "bool: fail unless the final state hash equals the recorded one" } }, [](AutomationSession& session, const json& params) {
+					RequireProject();
+					const std::string path = ProjectRelative(RequireString(params, "path"));
+					const auto text = FileSystem::ReadTextFile(Project::ResolvePath(path));
+					if (!text)
+						throw CommandError("cannot read '" + path + "'");
+					const json replay = json::parse(*text, nullptr, false);
+					if (!replay.is_object() || replay.value("Format", "") != "BasaltReplay" || !replay.contains("Events") || !replay["Events"].is_array())
+						throw CommandError("'" + path + "' is not a Basalt replay file");
+					const int64_t recorded = replay.value("Frames", int64_t{ 0 });
+					const uint32_t frames = static_cast<uint32_t>(OptionalInteger(params, "frames", recorded, 0, 10000000));
+
+					session.StopPlay(); // also resets input
+					std::string error;
+					if (!session.StartPlay(error))
+						throw CommandError(error);
+					const json& events = replay["Events"];
+					size_t next = 0;
+					for (uint32_t frame = 0; frame <= frames; frame++)
+					{
+						// Events recorded at frame N were applied before the update that produced frame N + 1.
+						for (; next < events.size() && events[next].value("frame", uint64_t{ 0 }) <= frame; next++)
+						{
+							const json& event = events[next];
+							const std::string command = event.value("command", "");
+							const json eventParams = event.value("params", json::object());
+							if (command == "input.key")
+								ApplyKeyInput(eventParams);
+							else if (command == "input.mouse")
+								ApplyMouseInput(eventParams);
+							else
+								throw CommandError("replay event " + std::to_string(next) + " has unknown command '" + command + "'");
+						}
+						if (frame < frames)
+							session.Step(1, 1.0f / 60.0f);
+					}
+
+					Scene& scene = RequireScene(session);
+					json errors = scene.GetScriptEngine() ? json(scene.GetScriptEngine()->GetErrors()) : json::array();
+					if (OptionalBool(params, "assertNoErrors", false) && !errors.empty())
+						throw CommandError("script errors: " + errors.dump());
+					const std::string hash = SceneSerializer::ComputeStateHash(scene);
+					const std::string recordedHash = replay.value("StateHash", "");
+					if (OptionalBool(params, "assertHash", false))
+					{
+						if (recordedHash.empty() || frames != static_cast<uint32_t>(recorded))
+							throw CommandError("assertHash needs the full recorded length of a replay that stored a StateHash");
+						if (hash != recordedHash)
+							throw CommandError("replay diverged: state hash " + hash + ", recorded " + recordedHash);
+					}
+					return json{ { "frame", scene.GetFrameCount() }, { "stateHash", hash }, { "recordedHash", recordedHash }, { "scriptErrors", errors } };
+				});
+
+			Add(registry, "input.key", "Sets a key's state for play mode (e.g. {key: 'Space', down: true}). Recorded while replay recording is on.", { { "key", "string key name" }, { "down", "bool" } }, [](AutomationSession& session, const json& params) {
+				ApplyKeyInput(params);
+				session.RecordInput("input.key", params);
 				return json::object();
 			});
 
-			Add(registry, "input.mouse", "Sets mouse position and/or a button state for play mode.", { { "position", "[x, y]" }, { "button", "string (Left, Right, Middle)" }, { "down", "bool" } }, [](AutomationSession&, const json& params) {
-				if (auto position = params.find("position"); position != params.end())
-				{
-					if (!position->is_array() || position->size() != 2 || !(*position)[0].is_number() || !(*position)[1].is_number())
-						throw CommandError("'position' must be [x, y]");
-					Input::SetMousePosition({ (*position)[0].get<float>(), (*position)[1].get<float>() });
-				}
-				if (params.contains("button"))
-				{
-					const std::string name = RequireString(params, "button");
-					const auto button = MouseCodeFromString(name);
-					if (!button)
-						throw CommandError("unknown mouse button '" + name + "'");
-					Input::SetMouseButtonState(*button, OptionalBool(params, "down", true));
-				}
+			Add(registry, "input.mouse", "Sets mouse position and/or a button state for play mode. Recorded while replay recording is on.", { { "position", "[x, y]" }, { "button", "string (Left, Right, Middle)" }, { "down", "bool" } }, [](AutomationSession& session, const json& params) {
+				ApplyMouseInput(params);
+				session.RecordInput("input.mouse", params);
 				return json::object();
 			});
 

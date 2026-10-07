@@ -517,4 +517,49 @@ namespace Basalt {
 		return root;
 	}
 
+	namespace {
+
+		// Replaces every number that is a known entity UUID (IDs, parents, entity references in components
+		// and script properties) with a stable index. A random 64-bit UUID colliding with a real value is
+		// not a practical concern.
+		void CanonicalizeIds(nlohmann::json& value, const std::unordered_map<uint64_t, uint64_t>& indices)
+		{
+			if (value.is_number_unsigned() || value.is_number_integer())
+			{
+				const auto it = indices.find(value.get<uint64_t>());
+				if (it != indices.end())
+					value = "#" + std::to_string(it->second);
+			}
+			else if (value.is_structured())
+			{
+				for (nlohmann::json& child : value)
+					CanonicalizeIds(child, indices);
+			}
+		}
+
+	}
+
+	std::string SceneSerializer::ComputeStateHash(Scene& scene)
+	{
+		nlohmann::json data = SerializeScene(scene);
+		std::unordered_map<uint64_t, uint64_t> indices;
+		for (const nlohmann::json& entity : data["Entities"])
+			indices.emplace(entity["ID"].get<uint64_t>(), indices.size() + 1);
+		CanonicalizeIds(data, indices);
+
+		// FNV-1a over the compact dump: object keys are sorted and floats print with round-trip precision,
+		// so equal states give equal text.
+		uint64_t hash = 14695981039346656037ull;
+		for (const char c : data.dump())
+		{
+			hash ^= static_cast<unsigned char>(c);
+			hash *= 1099511628211ull;
+		}
+		static constexpr char Digits[] = "0123456789abcdef";
+		std::string text(16, '0');
+		for (int i = 15; i >= 0; i--, hash >>= 4)
+			text[static_cast<size_t>(i)] = Digits[hash & 0xF];
+		return text;
+	}
+
 }

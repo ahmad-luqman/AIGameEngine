@@ -173,7 +173,7 @@ Compares a PNG with a reference image within a tolerance; optionally writes a di
 
 ### `input.key`
 
-Sets a key's state for play mode (e.g. {key: 'Space', down: true}).
+Sets a key's state for play mode (e.g. {key: 'Space', down: true}). Recorded while replay recording is on.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -182,7 +182,7 @@ Sets a key's state for play mode (e.g. {key: 'Space', down: true}).
 
 ### `input.mouse`
 
-Sets mouse position and/or a button state for play mode.
+Sets mouse position and/or a button state for play mode. Recorded while replay recording is on.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -226,6 +226,7 @@ Advances play mode by N fixed frames (default dt 1/60) and reports script errors
 | `assertNoErrors` | bool: fail the command if any script error occurred |
 | `dt` | number, seconds per frame |
 | `frames` | integer (default 1) |
+| `hash` | bool: also return stateHash (see scene.hash) |
 
 ### `play.stop`
 
@@ -307,11 +308,40 @@ Renders the current scene from its primary camera to a PNG (editor / GPU hosts o
 | `path` | string, output .png |
 | `width` | integer |
 
+## replay
+
+### `replay.record_start`
+
+Starts recording input.key/input.mouse commands with the play frame they arrive on.
+
+### `replay.record_stop`
+
+Stops recording and writes the replay file (project-relative path, e.g. 'Replays/run.breplay').
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `path` | string |
+
+### `replay.run`
+
+Restarts play from the edit scene, re-applies a replay's inputs on their frames, and returns the state hash. Play keeps running afterwards for inspection.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `assertHash` | bool: fail unless the final state hash equals the recorded one |
+| `assertNoErrors` | bool |
+| `frames` | integer, default: the recorded length |
+| `path` | string, replay file |
+
 ## scene
 
 ### `scene.get`
 
 Returns the whole open scene as JSON (same format as .bscene files).
+
+### `scene.hash`
+
+Hash of the current scene state (the play copy while playing); equal states give equal hashes, whatever the entity UUIDs.
 
 ### `scene.info`
 

@@ -31,12 +31,11 @@ The strict JSON readers and cgltf wrappers should never crash or assert on bad i
   `CommandRegistry::Execute` and `LuaJson`; seed corpora from the test data.
 - Run each target for a short time in CI, and longer runs locally or nightly.
 
-### Determinism and replay tests — M
-Physics and scripting are deterministic by design (fixed step, sorted contacts, seeded random), but only
-spot-checked.
-- Record an input stream (`input.key`/`input.mouse` per frame) during play, replay it twice, and compare
-  the scene state hash after N frames. Add the hash as a `play.step` result field.
-- Done when: Tetris replays to the same board on all three platforms.
+### Cross-platform physics determinism — S
+Replays (`replay.*`, `scene.hash`) are bit-exact on one machine, and script/game logic is portable
+(`Basalt::Random`, see `Samples/Tetris/test_replay.json`). Physics is not yet portable across platforms:
+enable Jolt's `CROSS_PLATFORM_DETERMINISTIC` (some performance cost) and add a physics-heavy replay whose
+`StateHash` is asserted on all three CI platforms.
 
 ### Real-GPU smoke tests on Windows and Linux — S (manual) / M (automated)
 Lavapipe does not catch driver-specific bugs. Before a release, run the runtime with validation on at

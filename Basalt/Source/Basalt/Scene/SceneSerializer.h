@@ -43,6 +43,11 @@ namespace Basalt {
 		static Entity InstantiatePrefab(Scene& scene, const std::filesystem::path& absolutePath, const std::string& prefabPath, Entity parent, std::string& outError);
 
 		static nlohmann::json SerializeEntity(Entity entity);
+
+		// 64-bit hash (16 hex digits) of the serialized scene state, for determinism and replay checks.
+		// Entity UUIDs (random for runtime spawns) are replaced by hierarchy-order indices wherever they
+		// appear, so two runs that reach the same state hash equally.
+		static std::string ComputeStateHash(Scene& scene);
 		// Applies an entity object's "Name" and "Components" to an existing entity.
 		static bool DeserializeEntityComponents(Entity entity, const nlohmann::json& data, std::string& outError);
 	};

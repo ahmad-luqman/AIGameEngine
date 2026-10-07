@@ -80,13 +80,17 @@ endif()
 # Sample games built entirely through the automation API; their gameplay checks run headless.
 add_test(NAME SampleTetris
 	COMMAND BasaltCLI --project "${PROJECT_SOURCE_DIR}/Samples/Tetris" batch "${PROJECT_SOURCE_DIR}/Samples/Tetris/test_game.json")
+# Determinism: a recorded session must replay to the identical state (same machine), and the committed
+# replay must end on the same board on every platform (Samples/Tetris/test_replay.json).
+add_test(NAME SampleTetrisReplay
+	COMMAND BasaltCLI --project "${PROJECT_SOURCE_DIR}/Samples/Tetris" batch "${PROJECT_SOURCE_DIR}/Samples/Tetris/test_replay.json")
 
 # Labels let CI jobs pick test groups (ctest -L gpu, ctest -LE "gpu|format").
 set_tests_properties(BasaltTests PROPERTIES LABELS unit)
-set_tests_properties(FeatureTest SampleTetris PROPERTIES LABELS integration)
+set_tests_properties(FeatureTest SampleTetris SampleTetrisReplay PROPERTIES LABELS integration)
 if(TEST CodeFormat)
 	set_tests_properties(CodeFormat PROPERTIES LABELS format)
 endif()
 if(BASALT_SANITIZE)
-	set_property(TEST BasaltTests FeatureTest SampleTetris APPEND PROPERTY ENVIRONMENT ${BASALT_SANITIZER_ENVIRONMENT})
+	set_property(TEST BasaltTests FeatureTest SampleTetris SampleTetrisReplay APPEND PROPERTY ENVIRONMENT ${BASALT_SANITIZER_ENVIRONMENT})
 endif()

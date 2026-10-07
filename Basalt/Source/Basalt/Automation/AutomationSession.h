@@ -45,6 +45,15 @@ namespace Basalt {
 		// Advances the play scene by whole fixed frames (deterministic).
 		void Step(uint32_t frames, float frameTime);
 
+		// --- Input recording (replays) ---------------------------------------------------------------
+		// While recording, input commands are stored with the play frame they arrived on, so replaying
+		// them on the same frames of a fresh play session reproduces the run.
+		void StartRecording() { m_Recording = nlohmann::json::array(); }
+		bool IsRecording() const { return m_Recording.is_array(); }
+		void RecordInput(const std::string& command, const nlohmann::json& params);
+		// Returns the recorded events and stops recording.
+		nlohmann::json StopRecording();
+
 		// --- Host capabilities ----------------------------------------------------------------------
 		// Renders the current scene to a PNG. Unset in headless hosts.
 		std::function<bool(const std::filesystem::path& path, uint32_t width, uint32_t height, std::string& outError)> Screenshot;
@@ -60,6 +69,8 @@ namespace Basalt {
 		std::string m_ScenePath;
 		UUID m_Selection = 0;
 		bool m_Dirty = false;
+		// Array of { "frame", "command", "params" } while recording, null otherwise.
+		nlohmann::json m_Recording;
 	};
 
 }

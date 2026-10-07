@@ -59,6 +59,21 @@ namespace Basalt {
 		return IsPlaying() && m_Scene->GetState() == SceneState::Simulate;
 	}
 
+	void AutomationSession::RecordInput(const std::string& command, const nlohmann::json& params)
+	{
+		if (!IsRecording())
+			return;
+		const uint64_t frame = IsPlaying() ? m_Scene->GetFrameCount() : 0;
+		m_Recording.push_back({ { "frame", frame }, { "command", command }, { "params", params } });
+	}
+
+	nlohmann::json AutomationSession::StopRecording()
+	{
+		nlohmann::json events = IsRecording() ? std::move(m_Recording) : nlohmann::json::array();
+		m_Recording = nullptr;
+		return events;
+	}
+
 	void AutomationSession::Step(uint32_t frames, float frameTime)
 	{
 		if (!IsPlaying())
