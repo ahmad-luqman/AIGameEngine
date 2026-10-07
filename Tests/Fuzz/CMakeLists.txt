@@ -4,6 +4,6 @@
 foreach(target FuzzScene FuzzTexture FuzzGltf FuzzCommand FuzzLuaJson)
 	add_executable(${target} ${target}.cpp FuzzCommon.h)
 	basalt_set_warnings(${target})
-	target_link_libraries(${target} PRIVATE Basalt)
+	target_link_libraries(${target} PRIVATE Basalt BasaltStb)
 	target_link_options(${target} PRIVATE -fsanitize=fuzzer)
 endforeach()
