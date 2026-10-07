@@ -36,9 +36,15 @@ namespace Basalt {
 	{
 		if (request.is_array())
 		{
+			// One level of batching only: nested arrays would recurse once per level of untrusted input.
 			nlohmann::json responses = nlohmann::json::array();
 			for (const nlohmann::json& item : request)
-				responses.push_back(HandleRequest(session, item));
+			{
+				if (item.is_array())
+					responses.push_back({ { "ok", false }, { "error", "batches cannot be nested" } });
+				else
+					responses.push_back(HandleRequest(session, item));
+			}
 			return responses;
 		}
 

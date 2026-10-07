@@ -268,6 +268,48 @@ TEST_SUITE("Assets")
 		CHECK(AssetManager::IsMeshFile("Ship.GLB"));
 	}
 
+	// Regression: external URIs in a glTF were resolved without checks, so a model could make the engine
+	// read any file (absolute paths, '..' escapes, file: URIs).
+	TEST_CASE("glTF external files must stay inside the project")
+	{
+		BasaltTest::TempProject project("GltfSandbox");
+		const std::string png = MakePng(0xFF0000FF);
+		project.WriteFile("Assets/Textures/ok.png", png);
+		project.WriteFile("Assets/Models/sub/ok.png", png);
+		const std::string buffer = MakeQuadBuffer();
+		const nlohmann::json embedded = { { "byteLength", buffer.size() }, { "uri", "data:application/octet-stream;base64," + Base64(buffer.data(), buffer.size()) } };
+
+		auto load = [&](const std::string& name, const nlohmann::json& bufferJson, const std::string& imageUri) {
+			project.WriteFile("Assets/Models/" + name, MakeGltfJson(bufferJson, { { { "uri", imageUri } }, { { "uri", imageUri } } }).dump());
+			AssetManager::Clear();
+			return AssetManager::GetMesh("Assets/Models/" + name) != nullptr;
+		};
+
+		// Relative paths anywhere inside the project are fine, including '..' that stays inside.
+		CHECK(load("A.gltf", embedded, "sub/ok.png"));
+		CHECK(load("B.gltf", embedded, "../Textures/ok.png"));
+		CHECK(load("C.gltf", embedded, "sub%2Fok.png")); // percent-encoded
+
+		CHECK_FALSE(load("D.gltf", embedded, "../../../../../../../../etc/hosts"));
+		CHECK(AssetManager::GetError("Assets/Models/D.gltf").find("outside the project") != std::string::npos);
+		CHECK_FALSE(load("E.gltf", embedded, "/etc/hosts"));
+		CHECK_FALSE(load("F.gltf", embedded, "file:///etc/hosts"));
+		CHECK_FALSE(load("G.gltf", embedded, "C:/Windows/win.ini"));
+		CHECK_FALSE(load("H.gltf", embedded, "..%2F..%2F..%2F..%2F..%2F..%2Fetc%2Fhosts"));
+		CHECK_FALSE(load("I.gltf", { { "byteLength", buffer.size() }, { "uri", "../../../../../../../../etc/hosts" } }, "sub/ok.png"));
+		AssetManager::Clear();
+	}
+
+	// Regression: a 4-byte header could claim a gigantic image and make stb_image allocate gigabytes.
+	TEST_CASE("Images larger than the dimension limit are rejected before allocating")
+	{
+		// Minimal TGA header (uncompressed true-color) claiming 65535 x 65535 pixels, with no pixel data.
+		const uint8_t header[18] = { 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 32, 8 };
+		std::string error;
+		CHECK_FALSE(TextureSource::LoadFromMemory(header, sizeof(header), error));
+		CHECK_FALSE(error.empty());
+	}
+
 	TEST_CASE("CompareImages measures per-pixel differences against a tolerance")
 	{
 		// 10x10 gray image; tests change individual pixels to probe the thresholds.

@@ -115,7 +115,14 @@ namespace Basalt {
 
 		// Re-parents child under parent (an invalid parent makes it a root). With keepWorldTransform the
 		// child's local transform is adjusted so it does not move. Returns false if it would create a cycle.
+		// Fails (returning false) on cycles and when the hierarchy would exceed MaxHierarchyDepth levels.
 		bool SetParent(Entity child, Entity parent, bool keepWorldTransform = true);
+		// Bounds every recursive hierarchy walk (serialization, the editor tree, ...), so a malicious or
+		// broken scene file cannot overflow the stack. Far deeper than any real scene needs.
+		static constexpr uint32_t MaxHierarchyDepth = 256;
+		// Number of ancestors (0 for a root) and number of levels below the entity (0 for a leaf).
+		uint32_t GetDepth(Entity entity);
+		uint32_t GetSubtreeHeight(Entity entity);
 		bool IsDescendantOf(Entity entity, Entity ancestor);
 		glm::mat4 GetWorldTransform(Entity entity);
 		void SetWorldTransform(Entity entity, const glm::mat4& transform);

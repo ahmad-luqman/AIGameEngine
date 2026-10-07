@@ -236,6 +236,60 @@ TEST_SUITE("Regressions")
 		CHECK(error.find("invalid parent") != std::string::npos);
 	}
 
+	// Regression (found while preparing the fuzzers): JSON numbers beyond float range were converted with
+	// get<float>(), which is undefined behaviour and put infinities into scenes.
+	TEST_CASE("Numbers outside float range are rejected, not converted")
+	{
+		std::string error;
+		Scene scene;
+		const nlohmann::json hugeTranslation = { { "Entities", { { { "ID", 1 }, { "Components", { { "Transform", { { "Translation", { 1e300, 0.0, 0.0 } } } } } } } } } };
+		CHECK_FALSE(SceneSerializer::DeserializeScene(scene, hugeTranslation, error));
+		CHECK(error.find("float range") != std::string::npos);
+
+		Scene settings;
+		CHECK_FALSE(SceneSerializer::DeserializeScene(settings, { { "Renderer", { { "Exposure", -1e39 } } } }, error));
+		CHECK(error.find("float range") != std::string::npos);
+		CHECK_FALSE(SceneSerializer::DeserializeScene(settings, { { "Physics", { { "Gravity", { 0.0, -1e40, 0.0 } } } } }, error));
+
+		// Largest finite float still loads.
+		Scene edge;
+		const nlohmann::json maxFloat = { { "Entities", { { { "ID", 1 }, { "Components", { { "Transform", { { "Translation", { 3.4028234663852886e38, 0.0, 0.0 } } } } } } } } } };
+		REQUIRE_MESSAGE(SceneSerializer::DeserializeScene(edge, maxFloat, error), error);
+	}
+
+	// Regression: hierarchy walks are recursive, so an arbitrarily deep parent chain in a scene file could
+	// overflow the stack. SetParent now caps the depth.
+	TEST_CASE("Hierarchies deeper than MaxHierarchyDepth are rejected")
+	{
+		Scene scene;
+		Entity parent = scene.CreateEntity("Level0");
+		for (uint32_t level = 1; level <= Scene::MaxHierarchyDepth; level++)
+		{
+			Entity child = scene.CreateEntity("Level" + std::to_string(level));
+			REQUIRE(scene.SetParent(child, parent, false));
+			parent = child;
+		}
+		CHECK(scene.GetDepth(parent) == Scene::MaxHierarchyDepth);
+		Entity tooDeep = scene.CreateEntity("TooDeep");
+		CHECK_FALSE(scene.SetParent(tooDeep, parent, false));
+		CHECK(tooDeep.GetParent() == Entity());
+
+		// Attaching a subtree counts its height too: a 2-level subtree does not fit under level 255.
+		Entity subtree = scene.CreateEntity("Subtree");
+		REQUIRE(scene.SetParent(scene.CreateEntity("Leaf"), subtree, false));
+		CHECK(scene.GetSubtreeHeight(subtree) == 1);
+		CHECK_FALSE(scene.SetParent(subtree, parent.GetParent(), false));
+
+		// The same chain in a scene file fails to load with a clear error instead of crashing later.
+		nlohmann::json entities = nlohmann::json::array();
+		for (uint64_t id = 1; id <= 1000; id++)
+			entities.push_back({ { "ID", id }, { "Parent", id - 1 } });
+		Scene loaded;
+		std::string error;
+		CHECK_FALSE(SceneSerializer::DeserializeScene(loaded, { { "Entities", entities } }, error));
+		CHECK(error.find("deeper than") != std::string::npos);
+	}
+
 	TEST_CASE("Camera components reject degenerate projections")
 	{
 		Scene scene;

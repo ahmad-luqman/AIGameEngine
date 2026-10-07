@@ -48,6 +48,33 @@ namespace Basalt {
 			}
 		}
 
+		bool IsDataUri(const char* uri);
+
+		// glTF files are untrusted: an external buffer or image URI may only name a file inside the active
+		// project (or, without one, inside the glTF's own folder). Absolute paths, URI schemes and '..'
+		// escapes are rejected, so a model cannot make the engine read arbitrary files.
+		bool CheckExternalUri(const char* uri, const std::filesystem::path& gltfPath, std::string& outError)
+		{
+			if (!uri || IsDataUri(uri))
+				return true;
+			std::string decoded = uri;
+			cgltf_decode_uri(decoded.data());
+			decoded.resize(std::strlen(decoded.c_str()));
+
+			const std::filesystem::path relative(decoded);
+			const bool hasScheme = decoded.find(':') != std::string::npos;
+			const bool rooted = relative.has_root_path() || decoded.starts_with('/') || decoded.starts_with('\\');
+			const std::filesystem::path root = Project::GetActive() ? Project::GetActive()->GetDirectory() : gltfPath.parent_path();
+			const std::filesystem::path resolved = (gltfPath.parent_path() / relative).lexically_normal();
+			const std::filesystem::path inside = resolved.lexically_relative(root.lexically_normal());
+			if (hasScheme || rooted || decoded.empty() || inside.empty() || *inside.begin() == "..")
+			{
+				outError = gltfPath.filename().string() + ": external file '" + decoded + "' is outside the project";
+				return false;
+			}
+			return true;
+		}
+
 		GltfData LoadGltfData(const std::filesystem::path& path, std::string& outError)
 		{
 			const std::string pathString = path.string();
@@ -59,6 +86,16 @@ namespace Basalt {
 			{
 				outError = path.filename().string() + ": " + ResultToString(result);
 				return nullptr;
+			}
+			for (cgltf_size i = 0; i < data->buffers_count; i++)
+			{
+				if (!CheckExternalUri(data->buffers[i].uri, path, outError))
+					return nullptr;
+			}
+			for (cgltf_size i = 0; i < data->images_count; i++)
+			{
+				if (!CheckExternalUri(data->images[i].uri, path, outError))
+					return nullptr;
 			}
 			result = cgltf_load_buffers(&options, data.get(), pathString.c_str());
 			if (result != cgltf_result_success)

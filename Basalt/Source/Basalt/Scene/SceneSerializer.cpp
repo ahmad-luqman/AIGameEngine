@@ -1,6 +1,7 @@
 #include "Basalt/Scene/SceneSerializer.h"
 
 #include "Basalt/Core/FileSystem.h"
+#include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Scene/ComponentRegistry.h"
 #include "Basalt/Scene/Scene.h"
@@ -46,9 +47,8 @@ namespace Basalt {
 				const json* element = Find(key);
 				if (!element)
 					return true;
-				if (!element->is_number())
-					return Fail(key, "must be a number", outError);
-				value = element->get<float>();
+				if (!JsonToFloat(*element, value))
+					return Fail(key, "must be a number in float range", outError);
 				return true;
 			}
 
@@ -105,9 +105,10 @@ namespace Basalt {
 				const json* element = Find(key);
 				if (!element)
 					return true;
-				if (!element->is_array() || element->size() != 3 || !(*element)[0].is_number() || !(*element)[1].is_number() || !(*element)[2].is_number())
-					return Fail(key, "must be an array of 3 numbers", outError);
-				value = { (*element)[0].get<float>(), (*element)[1].get<float>(), (*element)[2].get<float>() };
+				glm::vec3 parsed;
+				if (!element->is_array() || element->size() != 3 || !JsonToFloat((*element)[0], parsed.x) || !JsonToFloat((*element)[1], parsed.y) || !JsonToFloat((*element)[2], parsed.z))
+					return Fail(key, "must be an array of 3 numbers in float range", outError);
+				value = parsed;
 				return true;
 			}
 
@@ -286,7 +287,7 @@ namespace Basalt {
 				}
 				if (!scene.SetParent(entity, parent, false))
 				{
-					outError = "entity '" + entity.GetName() + "' has an invalid parent (cycle or self-reference)";
+					outError = "entity '" + entity.GetName() + "' has an invalid parent (cycle, self-reference, or hierarchy deeper than " + std::to_string(Scene::MaxHierarchyDepth) + " levels)";
 					return false;
 				}
 			}
@@ -429,7 +430,7 @@ namespace Basalt {
 			return nullptr;
 		}
 
-		json data = json::parse(*text, nullptr, false);
+		json data = ParseJson(*text);
 		if (data.is_discarded())
 		{
 			outError = "'" + path.string() + "' is not valid JSON";
@@ -500,7 +501,7 @@ namespace Basalt {
 			outError = "cannot read prefab '" + prefabPath + "'";
 			return {};
 		}
-		json data = json::parse(*text, nullptr, false);
+		json data = ParseJson(*text);
 		if (data.is_discarded() || !data.is_object() || !data.contains("Entities"))
 		{
 			outError = "prefab '" + prefabPath + "' is not a valid prefab file";

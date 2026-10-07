@@ -18,6 +18,7 @@
 #include "Basalt/Automation/CommandRegistry.h"
 #include "Basalt/Core/CommandLine.h"
 #include "Basalt/Core/FileSystem.h"
+#include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
 
 #include <iostream>
@@ -118,7 +119,7 @@ int main(int argc, char** argv)
 		{
 			if (line.empty())
 				continue;
-			const nlohmann::json request = nlohmann::json::parse(line, nullptr, false);
+			const nlohmann::json request = ParseJson(line);
 			const nlohmann::json response = request.is_discarded() ? nlohmann::json{ { "ok", false }, { "error", "invalid JSON" } } : run(request);
 			std::cout << response.dump() << std::endl;
 		}
@@ -140,7 +141,7 @@ int main(int argc, char** argv)
 			std::cerr << "basalt: cannot read '" << positional[1] << "'\n";
 			return 2;
 		}
-		const nlohmann::json requests = nlohmann::json::parse(text, nullptr, false);
+		const nlohmann::json requests = ParseJson(text);
 		if (requests.is_discarded())
 		{
 			std::cerr << "basalt: batch input is not valid JSON\n";
@@ -153,7 +154,7 @@ int main(int argc, char** argv)
 		nlohmann::json params = nlohmann::json::object();
 		if (positional.size() >= 2)
 		{
-			params = nlohmann::json::parse(positional[1], nullptr, false);
+			params = ParseJson(positional[1]);
 			if (params.is_discarded() || !params.is_object())
 			{
 				std::cerr << "basalt: params must be a JSON object, e.g. '{\"name\": \"Player\"}'\n";

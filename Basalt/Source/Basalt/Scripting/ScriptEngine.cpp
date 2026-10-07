@@ -1,6 +1,7 @@
 #include "Basalt/Scripting/ScriptEngine.h"
 
 #include "Basalt/Core/FileSystem.h"
+#include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Scene/Entity.h"
@@ -75,13 +76,17 @@ namespace Basalt {
 
 		sol::object ConvertProperty(const sol::state_view& lua, const sol::object& defaultValue, const nlohmann::json& value)
 		{
-			// Keep vector-typed properties as vectors when overridden from JSON arrays.
-			if (value.is_array() && value.size() == 3 && defaultValue.is<glm::vec3>())
-				return sol::make_object(lua, glm::vec3(value[0].get<float>(), value[1].get<float>(), value[2].get<float>()));
-			if (value.is_array() && value.size() == 2 && defaultValue.is<glm::vec2>())
-				return sol::make_object(lua, glm::vec2(value[0].get<float>(), value[1].get<float>()));
-			if (value.is_array() && value.size() == 4 && defaultValue.is<glm::vec4>())
-				return sol::make_object(lua, glm::vec4(value[0].get<float>(), value[1].get<float>(), value[2].get<float>(), value[3].get<float>()));
+			// Keep vector-typed properties as vectors when overridden from JSON arrays of numbers.
+			float components[4] = {};
+			bool numeric = value.is_array() && value.size() <= 4;
+			for (size_t i = 0; numeric && i < value.size(); i++)
+				numeric = JsonToFloat(value[i], components[i]);
+			if (numeric && value.size() == 3 && defaultValue.is<glm::vec3>())
+				return sol::make_object(lua, glm::vec3(components[0], components[1], components[2]));
+			if (numeric && value.size() == 2 && defaultValue.is<glm::vec2>())
+				return sol::make_object(lua, glm::vec2(components[0], components[1]));
+			if (numeric && value.size() == 4 && defaultValue.is<glm::vec4>())
+				return sol::make_object(lua, glm::vec4(components[0], components[1], components[2], components[3]));
 			return JsonToLua(lua, value);
 		}
 

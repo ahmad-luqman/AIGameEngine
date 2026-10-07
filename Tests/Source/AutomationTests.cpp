@@ -50,6 +50,31 @@ TEST_SUITE("Automation")
 		CHECK(RunError(registry, session, "entity.create", { { "name", 5 } }).find("must be a string") != std::string::npos);
 	}
 
+	// Regression: nested batches recursed once per nesting level, so deep input could overflow the stack.
+	TEST_CASE("Nested batches are rejected without recursion")
+	{
+		CommandRegistry registry;
+		AutomationSession session;
+		// Built by moving (copying a json value is itself recursive); parsed requests are depth-limited by
+		// ParseJson, but HandleRequest must not depend on that.
+		json deep = json::array();
+		deep.push_back({ { "command", "help" } });
+		for (int i = 0; i < 100000; i++)
+		{
+			json wrapper = json::array();
+			wrapper.push_back(std::move(deep));
+			deep = std::move(wrapper);
+		}
+		json batch = json::array();
+		batch.push_back(std::move(deep));
+		batch.push_back({ { "command", "scene.hash" } });
+		const json responses = registry.HandleRequest(session, batch);
+		REQUIRE(responses.size() == 2);
+		CHECK(responses[0]["ok"] == false);
+		CHECK(responses[0]["error"] == "batches cannot be nested");
+		CHECK(responses[1]["ok"] == true);
+	}
+
 	TEST_CASE("Build, save, reopen and export a project through commands")
 	{
 		BasaltTest::TempProject temp("AutomationProject");

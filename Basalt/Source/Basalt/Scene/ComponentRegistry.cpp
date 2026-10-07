@@ -1,5 +1,6 @@
 #include "Basalt/Scene/ComponentRegistry.h"
 
+#include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Scene/Entity.h"
 
 #include <glm/gtc/type_ptr.hpp>
@@ -112,7 +113,8 @@ namespace Basalt {
 			{
 				if (!element.is_number())
 					throw std::runtime_error(std::string("field '") + name + "' must be a number");
-				value = element.get<float>();
+				if (!JsonToFloat(element, value))
+					throw std::runtime_error(std::string("field '") + name + "' is out of range for a float");
 			}
 
 			static void Read(const char* name, const json& element, uint32_t& value)
@@ -153,9 +155,8 @@ namespace Basalt {
 					throw std::runtime_error(std::string("field '") + name + "' must be an array of " + std::to_string(L) + " numbers");
 				for (glm::length_t i = 0; i < L; i++)
 				{
-					if (!element[static_cast<size_t>(i)].is_number())
-						throw std::runtime_error(std::string("field '") + name + "' must contain only numbers");
-					value[i] = element[static_cast<size_t>(i)].get<float>();
+					if (!JsonToFloat(element[static_cast<size_t>(i)], value[i]))
+						throw std::runtime_error(std::string("field '") + name + "' must contain only numbers in float range");
 				}
 			}
 

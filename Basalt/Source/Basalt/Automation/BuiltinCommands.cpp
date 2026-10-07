@@ -5,6 +5,7 @@
 #include "Basalt/Automation/CommandRegistry.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Input.h"
+#include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Project/Exporter.h"
 #include "Basalt/Project/Project.h"
@@ -180,9 +181,10 @@ namespace Basalt {
 		{
 			if (auto position = params.find("position"); position != params.end())
 			{
-				if (!position->is_array() || position->size() != 2 || !(*position)[0].is_number() || !(*position)[1].is_number())
+				glm::vec2 mouse;
+				if (!position->is_array() || position->size() != 2 || !JsonToFloat((*position)[0], mouse.x) || !JsonToFloat((*position)[1], mouse.y))
 					throw CommandError("'position' must be [x, y]");
-				Input::SetMousePosition({ (*position)[0].get<float>(), (*position)[1].get<float>() });
+				Input::SetMousePosition(mouse);
 			}
 			if (params.contains("button"))
 			{
@@ -652,9 +654,8 @@ namespace Basalt {
 				float dt = 1.0f / 60.0f;
 				if (auto it = params.find("dt"); it != params.end())
 				{
-					if (!it->is_number() || it->get<float>() <= 0.0f || it->get<float>() > 0.25f)
+					if (!JsonToFloat(*it, dt) || dt <= 0.0f || dt > 0.25f)
 						throw CommandError("'dt' must be a number in (0, 0.25]");
-					dt = it->get<float>();
 				}
 				session.Step(frames, dt);
 				Scene& scene = RequireScene(session);
@@ -695,7 +696,7 @@ namespace Basalt {
 					const auto text = FileSystem::ReadTextFile(Project::ResolvePath(path));
 					if (!text)
 						throw CommandError("cannot read '" + path + "'");
-					const json replay = json::parse(*text, nullptr, false);
+					const json replay = ParseJson(*text);
 					if (!replay.is_object() || replay.value("Format", "") != "BasaltReplay" || !replay.contains("Events") || !replay["Events"].is_array())
 						throw CommandError("'" + path + "' is not a Basalt replay file");
 					const int64_t recorded = replay.value("Frames", int64_t{ 0 });

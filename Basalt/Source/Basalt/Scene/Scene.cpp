@@ -307,6 +307,33 @@ namespace Basalt {
 		return false;
 	}
 
+	uint32_t Scene::GetDepth(Entity entity)
+	{
+		uint32_t depth = 0;
+		for (Entity parent = entity.GetParent(); parent; parent = parent.GetParent())
+			depth++;
+		return depth;
+	}
+
+	uint32_t Scene::GetSubtreeHeight(Entity entity)
+	{
+		// Iterative on purpose: this runs before the depth limit is known to hold.
+		uint32_t height = 0;
+		std::vector<std::pair<Entity, uint32_t>> stack = { { entity, 0u } };
+		while (!stack.empty())
+		{
+			const auto [current, level] = stack.back();
+			stack.pop_back();
+			height = std::max(height, level);
+			for (UUID child : current.GetComponent<RelationshipComponent>().Children)
+			{
+				if (Entity childEntity = GetEntityByUUID(child))
+					stack.emplace_back(childEntity, level + 1);
+			}
+		}
+		return height;
+	}
+
 	bool Scene::SetParent(Entity child, Entity parent, bool keepWorldTransform)
 	{
 		if (!child)
@@ -314,6 +341,11 @@ namespace Basalt {
 		if (parent && (parent == child || IsDescendantOf(parent, child)))
 		{
 			BS_CORE_WARN("Scene: cannot parent '{}' to '{}': it would create a cycle", child.GetName(), parent.GetName());
+			return false;
+		}
+		if (parent && GetDepth(parent) + 1 + GetSubtreeHeight(child) > MaxHierarchyDepth)
+		{
+			BS_CORE_WARN("Scene: cannot parent '{}' to '{}': the hierarchy would be deeper than {} levels", child.GetName(), parent.GetName(), MaxHierarchyDepth);
 			return false;
 		}
 

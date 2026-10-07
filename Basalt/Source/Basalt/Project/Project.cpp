@@ -1,6 +1,7 @@
 #include "Basalt/Project/Project.h"
 
 #include "Basalt/Core/FileSystem.h"
+#include "Basalt/Core/JsonUtils.h"
 
 #include <nlohmann/json.hpp>
 
@@ -57,7 +58,7 @@ namespace Basalt {
 			return nullptr;
 		}
 
-		const nlohmann::json data = nlohmann::json::parse(*text, nullptr, false);
+		const nlohmann::json data = ParseJson(*text);
 		if (data.is_discarded() || !data.is_object())
 		{
 			outError = "'" + filePath.string() + "' is not valid JSON";

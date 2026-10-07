@@ -2,6 +2,7 @@
 
 #include <Basalt/Core/FileSystem.h>
 #include <Basalt/Core/Input.h>
+#include <Basalt/Core/JsonUtils.h>
 #include <Basalt/Core/KeyCodes.h>
 #include <Basalt/Core/LayerStack.h>
 #include <Basalt/Core/Log.h>
@@ -299,5 +300,18 @@ TEST_SUITE("Core")
 		CHECK(commandLine.GetPositional()[0] == "scene.bscene");
 		REQUIRE(commandLine.GetErrors().size() == 1);
 		CHECK(commandLine.GetErrors()[0].find("screenshot") != std::string::npos);
+	}
+
+	// Regression: untrusted JSON (automation requests, scene files) could nest deeply enough to overflow
+	// the stack when copied or dumped.
+	TEST_CASE("ParseJson rejects syntax errors and excessive nesting")
+	{
+		CHECK(ParseJson(R"({"a": [1, 2, {"b": true}]})")["a"][2]["b"] == true);
+		CHECK(ParseJson("{ broken").is_discarded());
+
+		auto nested = [](int depth) { return std::string(static_cast<size_t>(depth), '[') + std::string(static_cast<size_t>(depth), ']'); };
+		CHECK_FALSE(ParseJson(nested(MaxJsonDepth)).is_discarded());
+		CHECK(ParseJson(nested(MaxJsonDepth + 1)).is_discarded());
+		CHECK(ParseJson(nested(1000000)).is_discarded());
 	}
 }

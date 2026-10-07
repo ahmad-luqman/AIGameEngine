@@ -5,6 +5,7 @@
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Core/Application.h"
 #include "Basalt/Core/Input.h"
+#include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/ImGui/ImGuiLayer.h"
 #include "Basalt/Project/Project.h"
@@ -159,7 +160,7 @@ namespace Basalt {
 	std::string EditorLayer::HandleAutomationRequest(const std::string& request)
 	{
 		// Runs on the server thread: hand the request to the main thread and wait for the answer.
-		const nlohmann::json parsed = nlohmann::json::parse(request, nullptr, false);
+		const nlohmann::json parsed = ParseJson(request);
 		if (parsed.is_discarded())
 			return R"({"ok":false,"error":"invalid JSON"})";
 
