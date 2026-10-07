@@ -63,7 +63,7 @@ namespace Basalt {
 			for (size_t i = 0; i < all.size(); i++)
 				all[i] = i;
 
-			std::optional<size_t> chosen;
+			size_t chosen = 0;
 			if (std::all_of(selector.begin(), selector.end(), [](unsigned char c) { return std::isdigit(c) != 0; }))
 			{
 				size_t index = 0;
@@ -93,9 +93,9 @@ namespace Basalt {
 				chosen = matches.front();
 			}
 
-			if (!devices[*chosen].Suitable)
+			if (!devices[chosen].Suitable)
 			{
-				outError = "--gpu selects '" + devices[*chosen].Name + "', which lacks Vulkan 1.3 dynamic rendering, synchronization2, timeline semaphores or a usable queue";
+				outError = "--gpu selects '" + devices[chosen].Name + "', which lacks Vulkan 1.3 dynamic rendering, synchronization2, timeline semaphores or a usable queue";
 				return std::nullopt;
 			}
 			return chosen;
