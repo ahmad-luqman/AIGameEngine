@@ -41,6 +41,7 @@ namespace Basalt {
 			BS_CORE_WARN("--frames must be an integer");
 		options.MaxFrames = static_cast<uint64_t>(std::max<int64_t>(commandLine.GetInteger("frames").value_or(0), 0));
 		options.ScreenshotPath = commandLine.GetValue("screenshot").value_or("");
+		options.RequireValidation = commandLine.HasFlag("require-validation");
 		const std::string debugView = commandLine.GetValue("debug-view").value_or("None");
 		if (debugView == "SSAO")
 			options.DebugView = RendererDebugView::SSAO;
@@ -69,6 +70,8 @@ namespace Basalt {
 		specification.WindowHeight = readSize("height", project->GetConfig().WindowHeight);
 		specification.VSync = !commandLine.HasFlag("no-vsync");
 		specification.Headless = commandLine.HasFlag("headless");
+		// ImGui draws the game's screen-space UI (UI.Text / UI.Rect); there are no ImGui windows.
+		specification.EnableImGui = true;
 		// Deterministic frames for automated runs (screenshots, tests).
 		if (options.MaxFrames > 0)
 			specification.FixedTimestep = 1.0f / 60.0f;

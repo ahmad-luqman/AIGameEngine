@@ -64,6 +64,8 @@ namespace Basalt {
 		// Returns the process exit code.
 		int Run();
 		void Close();
+		// Process exit code returned by Run() (default 0). Lets layers report failures (e.g. validation errors).
+		void SetExitCode(int exitCode) { m_ExitCode = exitCode; }
 
 		// Takes ownership. Pushes made from layer callbacks take effect at the start of the next frame.
 		void PushLayer(Layer* layer);
@@ -101,6 +103,7 @@ namespace Basalt {
 		bool m_Initialized = false;
 		bool m_IteratingLayers = false;
 		bool m_Running = true;
+		int m_ExitCode = 0;
 		uint64_t m_FrameCount = 0;
 		float m_Time = 0.0f;
 

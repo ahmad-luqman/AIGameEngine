@@ -2,10 +2,12 @@
 
 #include "Basalt/Core/Application.h"
 #include "Basalt/Project/Project.h"
+#include "Basalt/Renderer/GameUI.h"
 #include "Basalt/Renderer/GraphicsDevice.h"
 #include "Basalt/Renderer/RenderUtils.h"
 #include "Basalt/Scene/SceneSerializer.h"
 
+#include <imgui.h>
 #include <nvrhi/utils.h>
 
 namespace Basalt {
@@ -32,6 +34,7 @@ namespace Basalt {
 		if (!m_Scene)
 		{
 			BS_CORE_CRITICAL("Runtime: {}", error);
+			application.SetExitCode(1);
 			application.Close();
 			return;
 		}
@@ -73,6 +76,12 @@ namespace Basalt {
 			Application::Get().Close();
 	}
 
+	void RuntimeLayer::OnImGuiRender()
+	{
+		const ImGuiIO& io = ImGui::GetIO();
+		GameUI::Draw(ImGui::GetForegroundDrawList(), { 0.0f, 0.0f }, { io.DisplaySize.x, io.DisplaySize.y });
+	}
+
 	void RuntimeLayer::OnRender()
 	{
 		Application& application = Application::Get();
@@ -82,6 +91,7 @@ namespace Basalt {
 
 		const uint32_t width = device->GetBackBufferWidth();
 		const uint32_t height = device->GetBackBufferHeight();
+		GameUI::SetViewportSize({ static_cast<float>(width), static_cast<float>(height) });
 		m_Scene->OnViewportResize(width, height);
 		m_Renderer->SetViewportSize(width, height);
 
@@ -104,13 +114,33 @@ namespace Basalt {
 
 		if (m_Options.MaxFrames > 0 && m_Frame >= m_Options.MaxFrames)
 		{
-			if (!m_Options.ScreenshotPath.empty() && camera)
+			// Automated runs (--frames) report problems through the exit code, decided before Run() returns.
+			if (device->GetValidationErrorCount() > 0)
 			{
-				std::string error;
-				if (SaveScreenshot(*m_Renderer, m_Options.ScreenshotPath, error))
-					BS_CORE_INFO("Runtime: screenshot saved to '{}'", m_Options.ScreenshotPath);
-				else
-					BS_CORE_ERROR("Runtime: {}", error);
+				BS_CORE_ERROR("Runtime: {} GPU validation error(s) occurred", device->GetValidationErrorCount());
+				application.SetExitCode(3);
+			}
+			else if (m_Options.RequireValidation && !device->IsValidationActive())
+			{
+				BS_CORE_ERROR("Runtime: --require-validation given but the Vulkan validation layer is not active");
+				application.SetExitCode(5);
+			}
+			if (!m_Options.ScreenshotPath.empty())
+			{
+				// Captured right before present, so the image includes the game UI drawn after the scene.
+				const std::string path = m_Options.ScreenshotPath;
+				device->RequestBackBufferCapture([path](const std::vector<uint8_t>& pixels, uint32_t captureWidth, uint32_t captureHeight) {
+					std::string error;
+					if (WritePng(path, pixels, captureWidth, captureHeight, error))
+					{
+						BS_CORE_INFO("Runtime: screenshot saved to '{}'", path);
+					}
+					else
+					{
+						BS_CORE_ERROR("Runtime: {}", error);
+						Application::Get().SetExitCode(4);
+					}
+				});
 			}
 			application.Close();
 		}

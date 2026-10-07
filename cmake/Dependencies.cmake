@@ -220,6 +220,9 @@ target_include_directories(BasaltCgltf SYSTEM INTERFACE "${cgltf_SOURCE_DIR}")
 add_library(BasaltStb INTERFACE)
 target_include_directories(BasaltStb SYSTEM INTERFACE "${stb_SOURCE_DIR}")
 
+# nvrhi's Vulkan backend uses nvrhi's common code; express that so static link order is correct on GNU ld.
+target_link_libraries(nvrhi_vk PUBLIC nvrhi)
+
 # The Vulkan loader is opened dynamically at runtime (vulkan.hpp dynamic dispatch), so nothing links against it;
 # Basalt only needs the Vulkan::Headers target.
 

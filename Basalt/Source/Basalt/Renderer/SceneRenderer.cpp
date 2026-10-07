@@ -655,9 +655,11 @@ namespace Basalt {
 		GpuDirectionalLight sun{};
 		sun.Direction = glm::vec4(0.0f, -1.0f, 0.0f, 0.0f);
 		{
+			// One directional light (the first) is supported.
 			auto view = scene.GetAllEntitiesWith<DirectionalLightComponent>();
-			for (entt::entity handle : view)
+			if (auto it = view.begin(); it != view.end())
 			{
+				const entt::entity handle = *it;
 				Entity entity(handle, &scene);
 				const auto& light = view.get<DirectionalLightComponent>(handle);
 				const glm::mat4 world = scene.GetWorldTransform(entity);
@@ -666,7 +668,6 @@ namespace Basalt {
 				sun.Color = glm::vec4(light.Color * light.Intensity, (light.CastShadows && settings.ShadowsEnabled) ? 1.0f : 0.0f);
 				sun.ShadowParams = glm::vec4(settings.ShadowBias, settings.ShadowNormalBias, light.ShadowSoftness, static_cast<float>(MaxCascades));
 				m_Statistics.Lights++;
-				break; // one directional light (the first) is supported
 			}
 		}
 
@@ -702,11 +703,8 @@ namespace Basalt {
 		const SkyLightComponent* skyLight = nullptr;
 		{
 			auto view = scene.GetAllEntitiesWith<SkyLightComponent>();
-			for (entt::entity handle : view)
-			{
-				skyLight = &view.get<SkyLightComponent>(handle);
-				break;
-			}
+			if (auto it = view.begin(); it != view.end())
+				skyLight = &view.get<SkyLightComponent>(*it);
 		}
 		const std::string environmentKey = skyLight ? skyLight->EnvironmentMap : std::string();
 		Ref<TextureSource> environmentSource = environmentKey.empty() ? nullptr : AssetManager::GetTexture(environmentKey);

@@ -13,13 +13,45 @@ changing code. Task-specific procedures live in `.claude/skills/*/SKILL.md`.
 | `Basalt-Editor/` | Editor executable (`BasaltEditor`): ImGui UI, gizmos, automation server. Never shipped. |
 | `Basalt-Runtime/` | Runtime executable (`BasaltRuntime`): plays an exported game. No editing code. |
 | `Basalt-CLI/` | Headless command-line tool (`basalt`): project/scene authoring, validation, export. |
-| `Tests/` | doctest unit tests (`BasaltTests`) + test data. Headless only — no window, no GPU. |
+| `Tests/` | doctest unit tests (`BasaltTests`, headless), the feature-test project, and an optional GPU render test. |
+| `Samples/` | Example games built through the automation API (e.g. `Samples/Tetris`), tested by ctest. |
 | `cmake/` | Dependency pins (`Dependencies.cmake`), warnings, shader embedding, format check. |
 | `scripts/` | `build.sh`, `test.sh`, `format.sh`. |
 
 Engine modules (`Basalt/Source/Basalt/<Module>/`): `Core` (application, window, input, log, file
-system), `Events`, `Renderer`, `ImGui`, `Scene` (ECS, components, serialization), `Asset`,
-`Physics` (Jolt), `Audio` (miniaudio), `Scripting` (Lua 5.4 + sol2), `Project`, `Automation`.
+system, command line), `Events`, `Math`, `Renderer` (device, scene renderer, IBL, debug lines),
+`ImGui`, `Scene` (EnTT scene, components, component registry, serialization), `Asset` (glTF, images,
+primitives, asset cache), `Physics` (Jolt), `Audio` (miniaudio), `Scripting` (Lua 5.4 + sol2),
+`Project` (project files, exporter), `Automation` (command API, session, TCP server).
+
+Other directories: `Docs/` (scripting API, generated command/component references), `Tests/Data/FeatureTest`
+(the project that exercises every feature).
+
+## Architecture
+
+- **One data path.** Components are plain structs. `ComponentRegistry` gives each a strict JSON reader/
+  writer that every consumer shares: scene and prefab files, Lua `GetComponent/SetComponent`, the
+  automation commands and the editor inspector. Adding a component = one registry entry (see the
+  `basalt-add-component` skill).
+- **Runtime state lives in systems.** `PhysicsWorld`, `ScriptEngine` and `AudioSystem` exist only while a
+  scene plays and key their state by entity UUID; they react to EnTT component signals.
+- **Play mode runs a copy.** `Scene::Copy` duplicates the edit scene (same UUIDs) for play/simulate;
+  stopping discards it.
+- **Automation first.** `CommandRegistry` (Automation/BuiltinCommands.cpp) is the API for tools and AI
+  agents. The editor performs its edits through the same commands, so the GUI cannot do anything the
+  API cannot. Hosts: `basalt` CLI (headless) and the editor's TCP server (127.0.0.1:7420, adds
+  `editor.*` commands and screenshots). Docs: Docs/AutomationCommands.md (generated).
+- **Headless core.** Everything except Renderer/ImGui/Window runs without a GPU; unit tests, the CLI and
+  the feature test rely on that.
+
+## Applications
+
+| Binary | Purpose |
+|--------|---------|
+| `BasaltEditor [--project P] [--port N\|--no-server]` | Editor GUI + automation server |
+| `BasaltRuntime [--project P] [--scene S] [--width W --height H] [--frames N [--screenshot out.png] [--require-validation]] [--debug-view V] [--no-vsync]` | Plays the project's start scene; exported games are this binary renamed |
+| `basalt [--project P] [--scene S] [--no-save] [--verbose] <command> [json] \| batch <file> \| serve` | Headless automation CLI |
+| `BasaltTests` | Unit tests |
 
 ## Building and testing
 
@@ -105,10 +137,22 @@ Other rules:
 - Every feature ships with unit tests in `Tests/Source/<Module>Tests.cpp`. Tests must be headless and
   deterministic (fixed timesteps, no wall-clock dependence, no network).
 - New engine behaviour that is reachable from Lua or the automation API must also be exercised by the
-  feature test scene (`Tests/Data/FeatureTest`), which is run headless by `ctest`.
+  feature test (`Tests/Data/FeatureTest`: scene `Assets/Scenes/FeatureTest.bscene`, driver
+  `Assets/Scripts/FeatureTest.lua`, run by ctest through `basalt batch FeatureTest.batch.json`). Add a
+  `Check(...)` for every new API function and put every new component in the scene.
+- GPU tests (`FeatureTestRender`) run locally via `scripts/test.sh` (not on CI): they render the feature
+  scene with validation enabled and fail on any validation error.
 - Bug fixes come with a regression test.
 - Rendering changes: run the editor or runtime with validation enabled and confirm zero validation
   errors (`GraphicsDevice::GetValidationErrorCount()`).
+
+## Documentation
+
+- Lua API: `Docs/ScriptingAPI.md` (update with every binding change).
+- `Docs/AutomationCommands.md` and `Docs/Components.md` are generated: run
+  `python3 scripts/generate_docs.py` after changing commands or components.
+- Skills in `.claude/skills/`: build/test, code review, make-game (AI workflow), add-component,
+  debug-rendering.
 
 ## Commit workflow
 

@@ -94,6 +94,8 @@ namespace Basalt {
 			std::string ScriptPath;
 			sol::table Self;
 			bool Failed = false;
+			// OnCreate has been called. OnDestroy is only called on created instances.
+			bool Created = false;
 		};
 
 		// Declared before Lua so it outlives lua_close(): __gc metamethods may still call bindings.
@@ -167,8 +169,23 @@ namespace Basalt {
 			ScriptEngine::Impl::Instance instance = std::move(it->second);
 			impl.Instances.erase(it);
 			impl.Order.erase(std::remove(impl.Order.begin(), impl.Order.end(), id), impl.Order.end());
-			if (!instance.Failed)
+			if (instance.Created && !instance.Failed)
 				Invoke(engine, instance.Self, "OnDestroy");
+		}
+
+		// Calls OnCreate once on an instance that exists, has not been created, and whose entity still has
+		// its script and is not about to be destroyed.
+		static void StartInstance(ScriptEngine& engine, UUID id)
+		{
+			ScriptEngine::Impl& impl = *engine.m_Impl;
+			auto it = impl.Instances.find(id);
+			if (it == impl.Instances.end() || it->second.Created || it->second.Failed)
+				return;
+			Entity entity = engine.m_Scene->GetEntityByUUID(id);
+			if (!entity || engine.m_Scene->IsEntityPendingDestruction(entity) || !entity.HasComponent<ScriptComponent>())
+				return;
+			it->second.Created = true;
+			Call(engine, id, "OnCreate");
 		}
 	};
 
@@ -208,9 +225,28 @@ namespace Basalt {
 
 	void ScriptEngine::EnsureInstance(Entity entity)
 	{
+		if (CreateInstance(entity))
+			ScriptEngineAccess::StartInstance(*this, entity.GetUUID());
+	}
+
+	void ScriptEngine::EnsureInstances(const std::vector<Entity>& entities)
+	{
+		// Two phases so every new instance exists (and is reachable through GetScript) before any OnCreate.
+		std::vector<UUID> created;
+		for (Entity entity : entities)
+		{
+			if (entity && entity.HasComponent<ScriptComponent>() && CreateInstance(entity))
+				created.push_back(entity.GetUUID());
+		}
+		for (UUID uuid : created)
+			ScriptEngineAccess::StartInstance(*this, uuid);
+	}
+
+	bool ScriptEngine::CreateInstance(Entity entity)
+	{
 		Impl& impl = *m_Impl;
 		if (!entity)
-			return;
+			return false;
 		const UUID uuid = entity.GetUUID();
 		impl.Pending.erase(uuid);
 
@@ -219,7 +255,7 @@ namespace Basalt {
 		if (!liveComponent)
 		{
 			ScriptEngineAccess::Teardown(*this, uuid);
-			return;
+			return false;
 		}
 		const ScriptComponent componentCopy = *liveComponent;
 		const ScriptComponent* component = &componentCopy;
@@ -228,26 +264,26 @@ namespace Basalt {
 		if (existing != impl.Instances.end())
 		{
 			if (existing->second.ScriptPath == component->Script)
-				return;
+				return false;
 			// Script changed: tear down the old instance.
 			ScriptEngineAccess::Teardown(*this, uuid);
 		}
 		if (component->Script.empty() || !entity.IsValid())
-			return;
+			return false;
 
 		// Load (or reuse) the class.
 		auto classIt = impl.Classes.find(component->Script);
 		if (classIt == impl.Classes.end())
 		{
 			if (impl.FailedClasses.contains(component->Script))
-				return;
+				return false;
 			std::string error;
 			auto scriptClass = LoadScriptClass(impl.Lua, component->Script, error);
 			if (!scriptClass)
 			{
 				impl.FailedClasses.insert(component->Script);
 				ReportError(error);
-				return;
+				return false;
 			}
 			classIt = impl.Classes.emplace(component->Script, *scriptClass).first;
 		}
@@ -299,7 +335,7 @@ namespace Basalt {
 		impl.Instances[uuid] = std::move(instance);
 		impl.Order.push_back(uuid);
 
-		ScriptEngineAccess::Call(*this, uuid, "OnCreate");
+		return true;
 	}
 
 	bool ScriptEngine::HasInstance(Entity entity) const
@@ -329,11 +365,8 @@ namespace Basalt {
 		Impl& impl = *m_Impl;
 		impl.Started = true;
 		impl.Pending.clear();
-		for (Entity entity : m_Scene->GetAllEntitiesOrdered())
-		{
-			if (entity.HasComponent<ScriptComponent>())
-				EnsureInstance(entity);
-		}
+		// Every instance exists before the first OnCreate runs (scripts can reach each other in OnCreate).
+		EnsureInstances(m_Scene->GetAllEntitiesOrdered());
 	}
 
 	void ScriptEngine::Update(Timestep ts)

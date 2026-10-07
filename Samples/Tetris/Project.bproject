@@ -1,0 +1,8 @@
+{
+	"Format": "BasaltProject",
+	"Fullscreen": false,
+	"Name": "Tetris",
+	"StartScene": "Assets/Scenes/Tetris.bscene",
+	"WindowHeight": 1000,
+	"WindowWidth": 900
+}

@@ -16,6 +16,8 @@ namespace Basalt {
 		// When non-zero: run this many frames, optionally save a screenshot, then exit.
 		uint64_t MaxFrames = 0;
 		std::string ScreenshotPath;
+		// Fail (exit code 5) when GPU validation is not active, so validation-based tests cannot pass vacuously.
+		bool RequireValidation = false;
 		RendererDebugView DebugView = RendererDebugView::None;
 	};
 
@@ -30,6 +32,7 @@ namespace Basalt {
 		void OnDetach() override;
 		void OnUpdate(Timestep ts) override;
 		void OnRender() override;
+		void OnImGuiRender() override;
 
 	private:
 		RuntimeOptions m_Options;

@@ -91,3 +91,32 @@ TEST_SUITE("RenderMath")
 		AssetManager::Clear();
 	}
 }
+
+#include <Basalt/Renderer/GameUI.h>
+#include <Basalt/Scene/Scene.h>
+
+TEST_SUITE("RenderMath")
+{
+	TEST_CASE("GameUI collects commands per scene update and maps the 1080-unit canvas")
+	{
+		GameUI::BeginFrame();
+		GameUI::Text("Score", { 10.0f, 20.0f }, 1000.0f, glm::vec4(1.0f), UIAlign::Center);
+		GameUI::Rect({ 0.0f, 0.0f }, { 100.0f, 50.0f }, glm::vec4(0.0f, 0.0f, 0.0f, 0.5f));
+		const std::vector<UIDrawCommand> commands = GameUI::GetCommands();
+		REQUIRE(commands.size() == 2);
+		CHECK(commands[0].Type == UIDrawCommand::Kind::Text);
+		CHECK(commands[0].FontSize == 512.0f); // clamped
+		CHECK(commands[0].Align == UIAlign::Center);
+		CHECK(commands[1].Size == glm::vec2(100.0f, 50.0f));
+
+		CHECK(GameUI::GetCanvasSize({ 1920.0f, 1080.0f }) == glm::vec2(1920.0f, 1080.0f));
+		CHECK(GameUI::GetCanvasSize({ 800.0f, 800.0f }) == glm::vec2(1080.0f, 1080.0f));
+
+		// A scene update starts a new UI frame.
+		Scene scene;
+		scene.OnRuntimeStart();
+		scene.OnUpdate(1.0f / 60.0f);
+		CHECK(GameUI::GetCommandCount() == 0);
+		scene.OnRuntimeStop();
+	}
+}

@@ -6,6 +6,7 @@
 #include "Basalt/Physics/PhysicsWorld.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/DebugDraw.h"
+#include "Basalt/Renderer/GameUI.h"
 #include "Basalt/Scene/ComponentRegistry.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
@@ -273,15 +274,15 @@ namespace Basalt {
 					root.GetTransform().Translation = *position;
 				if (context.Engine)
 				{
-					std::vector<Entity> stack = { root };
-					while (!stack.empty())
-					{
-						Entity entity = stack.back();
-						stack.pop_back();
-						context.Engine->EnsureInstance(entity);
+					// Root first, then descendants depth-first.
+					std::vector<Entity> tree;
+					std::function<void(Entity)> collect = [&](Entity entity) {
+						tree.push_back(entity);
 						for (Entity child : entity.GetChildren())
-							stack.push_back(child);
-					}
+							collect(child);
+					};
+					collect(root);
+					context.Engine->EnsureInstances(tree);
 				}
 				return MakeEntity(state, context, root);
 			};
@@ -349,6 +350,21 @@ namespace Basalt {
 				DebugDraw::Box(glm::translate(glm::mat4(1.0f), center), halfExtents, color.value_or(defaultColor));
 			};
 			debug["DrawSphere"] = [defaultColor](const glm::vec3& center, float radius, sol::optional<glm::vec4> color) { DebugDraw::Sphere(center, radius, color.value_or(defaultColor)); };
+
+			sol::table ui = lua.create_named_table("UI");
+			ui["Text"] = [](const std::string& text, float x, float y, sol::optional<float> size, sol::optional<glm::vec4> color, sol::optional<std::string> align) {
+				UIAlign alignment = UIAlign::Left;
+				const std::string alignName = align.value_or("Left");
+				if (alignName == "Center")
+					alignment = UIAlign::Center;
+				else if (alignName == "Right")
+					alignment = UIAlign::Right;
+				else if (alignName != "Left")
+					throw std::runtime_error("UI.Text align must be 'Left', 'Center' or 'Right'");
+				GameUI::Text(text, { x, y }, size.value_or(32.0f), color.value_or(glm::vec4(1.0f)), alignment);
+			};
+			ui["Rect"] = [](float x, float y, float width, float height, sol::optional<glm::vec4> color) { GameUI::Rect({ x, y }, { width, height }, color.value_or(glm::vec4(0.0f, 0.0f, 0.0f, 0.5f))); };
+			ui["GetSize"] = []() { return GameUI::GetCanvasSize(GameUI::GetViewportSize()); };
 
 			sol::table game = lua.create_named_table("Game");
 			game["Quit"] = [&context]() { RequireScene(context).RequestQuit(); };

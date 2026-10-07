@@ -434,6 +434,7 @@ namespace Basalt {
 			return false;
 		}
 
+		m_ValidationActive = validationEnabled;
 		BS_CORE_INFO("GraphicsDevice: {} (Vulkan {}.{}.{}){}", m_AdapterName,
 					 VK_API_VERSION_MAJOR(deviceProperties.apiVersion), VK_API_VERSION_MINOR(deviceProperties.apiVersion), VK_API_VERSION_PATCH(deviceProperties.apiVersion),
 					 validationEnabled ? ", validation enabled" : "");

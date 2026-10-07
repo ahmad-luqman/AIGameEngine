@@ -18,3 +18,26 @@ option(BASALT_CHECK_FORMAT "Register the clang-format check as a test" ON)
 if(BASALT_CHECK_FORMAT AND BASALT_CLANG_FORMAT)
 	add_test(NAME CodeFormat COMMAND "${CMAKE_COMMAND}" -DCLANG_FORMAT=${BASALT_CLANG_FORMAT} -DSOURCE_DIR=${PROJECT_SOURCE_DIR} -P "${PROJECT_SOURCE_DIR}/cmake/CheckFormat.cmake")
 endif()
+
+# Feature test: plays Tests/Data/FeatureTest headlessly through the basalt CLI. The scene uses every
+# component and its Lua driver exercises the entire scripting API (see FeatureTest.lua).
+add_test(NAME FeatureTest
+	COMMAND BasaltCLI --project "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest" batch "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest/FeatureTest.batch.json")
+
+# GPU tests need a Vulkan device (off on CI). They render the feature scene through the runtime with
+# validation enabled; any Vulkan/nvrhi validation error fails the test.
+option(BASALT_GPU_TESTS "Register tests that need a GPU" OFF)
+if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
+	# --require-validation makes the test fail if the validation layer could not be loaded.
+	add_test(NAME FeatureTestRender
+		COMMAND BasaltRuntime --project "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest" --frames 90 --width 1280 --height 720
+			--require-validation --screenshot "${CMAKE_CURRENT_BINARY_DIR}/FeatureTestRender.png")
+	if(APPLE)
+		# Homebrew's validation layer manifest names its library without a path (Apple silicon and Intel prefixes).
+		set_tests_properties(FeatureTestRender PROPERTIES ENVIRONMENT "DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib:/usr/local/lib")
+	endif()
+endif()
+
+# Sample games built entirely through the automation API; their gameplay checks run headless.
+add_test(NAME SampleTetris
+	COMMAND BasaltCLI --project "${PROJECT_SOURCE_DIR}/Samples/Tetris" batch "${PROJECT_SOURCE_DIR}/Samples/Tetris/test_game.json")

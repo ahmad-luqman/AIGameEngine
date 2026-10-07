@@ -9,6 +9,7 @@
 #include "Basalt/ImGui/ImGuiLayer.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/DebugDraw.h"
+#include "Basalt/Renderer/GameUI.h"
 #include "Basalt/Renderer/GraphicsDevice.h"
 #include "Basalt/Renderer/RenderUtils.h"
 #include "Basalt/Scene/ComponentRegistry.h"
@@ -784,6 +785,9 @@ namespace Basalt {
 
 		if (m_Renderer && m_Renderer->GetOutputTexture())
 			ImGui::Image(ImTextureRef(reinterpret_cast<ImTextureID>(m_Renderer->GetOutputTexture())), available);
+		GameUI::SetViewportSize({ available.x, available.y });
+		if (m_Session.IsPlaying() && !m_Session.IsSimulating())
+			GameUI::Draw(ImGui::GetWindowDrawList(), { cursor.x, cursor.y }, { available.x, available.y });
 
 		if (ImGui::BeginDragDropTarget())
 		{

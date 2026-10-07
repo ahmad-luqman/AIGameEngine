@@ -4,6 +4,7 @@
 #include "Basalt/Core/Log.h"
 #include "Basalt/Physics/PhysicsWorld.h"
 #include "Basalt/Renderer/DebugDraw.h"
+#include "Basalt/Renderer/GameUI.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scripting/ScriptEngine.h"
 
@@ -462,8 +463,9 @@ namespace Basalt {
 			m_StepFrames--;
 		}
 
-		// Debug lines describe the current frame only.
+		// Debug lines and game UI describe the current frame only.
 		DebugDraw::Clear();
+		GameUI::BeginFrame();
 
 		m_DeferDestruction++;
 		if (m_State == SceneState::Play)

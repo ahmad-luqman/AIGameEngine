@@ -563,11 +563,13 @@ namespace Basalt {
 				}
 				if (session.IsPlaying() && scene.GetScriptEngine())
 				{
+					std::vector<Entity> tree;
 					for (Entity entity : scene.GetAllEntitiesOrdered())
 					{
 						if (entity == root || scene.IsDescendantOf(entity, root))
-							scene.GetScriptEngine()->EnsureInstance(entity);
+							tree.push_back(entity);
 					}
+					scene.GetScriptEngine()->EnsureInstances(tree);
 				}
 				MarkEdited(session);
 				return EntitySummary(root);
@@ -597,7 +599,7 @@ namespace Basalt {
 				return json{ { "playing", false } };
 			});
 
-			Add(registry, "play.step", "Advances play mode by N fixed frames (default dt 1/60) and reports script errors.", { { "frames", "integer (default 1)" }, { "dt", "number, seconds per frame" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "play.step", "Advances play mode by N fixed frames (default dt 1/60) and reports script errors.", { { "frames", "integer (default 1)" }, { "dt", "number, seconds per frame" }, { "assertNoErrors", "bool: fail the command if any script error occurred" } }, [](AutomationSession& session, const json& params) {
 				if (!session.IsPlaying())
 					throw CommandError("not playing (use play.start)");
 				const uint32_t frames = static_cast<uint32_t>(OptionalInteger(params, "frames", 1, 1, 100000));
@@ -611,6 +613,8 @@ namespace Basalt {
 				session.Step(frames, dt);
 				Scene& scene = RequireScene(session);
 				json errors = scene.GetScriptEngine() ? json(scene.GetScriptEngine()->GetErrors()) : json::array();
+				if (OptionalBool(params, "assertNoErrors", false) && !errors.empty())
+					throw CommandError("script errors: " + errors.dump());
 				return json{ { "time", scene.GetTime() }, { "frame", scene.GetFrameCount() }, { "scriptErrors", errors }, { "quitRequested", scene.IsQuitRequested() } };
 			});
 

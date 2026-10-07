@@ -1,0 +1,12 @@
+[
+	{ "id": "open", "command": "scene.open", "params": { "path": "Assets/Scenes/FeatureTest.bscene" } },
+	{ "id": "key", "command": "input.key", "params": { "key": "Space", "down": true } },
+	{ "id": "mouse", "command": "input.mouse", "params": { "position": [320, 240], "button": "Left", "down": true } },
+	{ "id": "play", "command": "play.start" },
+	{ "id": "press-frame", "command": "play.step", "params": { "frames": 1, "assertNoErrors": true } },
+	{ "id": "key-up", "command": "input.key", "params": { "key": "Space", "down": false } },
+	{ "id": "mouse-up", "command": "input.mouse", "params": { "position": [330, 250], "button": "Left", "down": false } },
+	{ "id": "run", "command": "play.step", "params": { "frames": 169, "assertNoErrors": true } },
+	{ "id": "report", "command": "lua.exec", "params": { "code": "FeatureTest.Report()" } },
+	{ "id": "stop", "command": "play.stop" }
+]

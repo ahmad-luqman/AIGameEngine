@@ -101,7 +101,13 @@ namespace Basalt {
 		}
 
 		int reuse = 1;
+#if defined(BS_PLATFORM_WINDOWS)
+		// On Windows SO_REUSEADDR would let another process bind (hijack) the same port; demand exclusivity.
+		setsockopt(listenSocket, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+#else
+		// Allows restarting the editor immediately while old connections linger in TIME_WAIT.
 		setsockopt(listenSocket, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+#endif
 #if defined(BS_PLATFORM_MACOS)
 		setsockopt(listenSocket, SOL_SOCKET, SO_NOSIGPIPE, &reuse, sizeof(reuse));
 #endif

@@ -191,7 +191,7 @@ namespace Basalt {
 
 		if (m_GraphicsDevice)
 			m_GraphicsDevice->WaitIdle();
-		return 0;
+		return m_ExitCode;
 	}
 
 	bool Application::OnWindowClose(WindowCloseEvent& event)

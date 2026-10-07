@@ -1,0 +1,14 @@
+{
+	"Format": "BasaltPrefab",
+	"Version": 1,
+	"Entities": [
+		{ "ID": 1, "Name": "Projectile", "Parent": 0, "Components": {
+			"Transform": { "Scale": [0.3, 0.3, 0.3] },
+			"Mesh": { "Mesh": "builtin://Sphere" },
+			"Material": { "AlbedoColor": [1, 0.3, 0.1, 1], "EmissiveColor": [1, 0.3, 0.1], "EmissiveIntensity": 4 },
+			"RigidBody": { "Type": "Dynamic", "Mass": 0.5 },
+			"SphereCollider": { "Radius": 0.5 },
+			"Script": { "Script": "Assets/Scripts/Projectile.lua", "Properties": { "Lifetime": 1.0 } } } },
+		{ "ID": 2, "Name": "Trail", "Parent": 1, "Components": { "PointLight": { "Color": [1, 0.4, 0.1], "Intensity": 3, "Radius": 3 } } }
+	]
+}

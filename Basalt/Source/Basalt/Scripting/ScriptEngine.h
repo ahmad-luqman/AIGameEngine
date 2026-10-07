@@ -39,7 +39,8 @@ namespace Basalt {
 		ScriptEngine(const ScriptEngine&) = delete;
 		ScriptEngine& operator=(const ScriptEngine&) = delete;
 
-		// Instantiates every ScriptComponent and calls OnCreate, in hierarchy order.
+		// Instantiates every ScriptComponent, then calls OnCreate on each in hierarchy order (all instances
+		// exist before the first OnCreate runs).
 		void Start();
 		void Update(Timestep ts);
 		void LateUpdate(Timestep ts);
@@ -52,6 +53,9 @@ namespace Basalt {
 		// Creates the entity's script instance now (and calls OnCreate) if it has a ScriptComponent and no
 		// instance yet. Used after spawning entities so they are initialized immediately.
 		void EnsureInstance(Entity entity);
+		// Like EnsureInstance for a group (e.g. a spawned prefab): all instances are created first, then
+		// OnCreate is called on each in order.
+		void EnsureInstances(const std::vector<Entity>& entities);
 		bool HasInstance(Entity entity) const;
 		// A field of the entity's script instance (self.<name>) converted to JSON.
 		std::optional<nlohmann::json> GetInstanceField(Entity entity, const std::string& name) const;
@@ -67,6 +71,8 @@ namespace Basalt {
 		static std::optional<nlohmann::json> LoadScriptProperties(const std::string& scriptPath, std::string& outError);
 
 	private:
+		// Creates the instance (properties applied) without calling OnCreate. False if none was created.
+		bool CreateInstance(Entity entity);
 		void ReportError(const std::string& message);
 
 	private:

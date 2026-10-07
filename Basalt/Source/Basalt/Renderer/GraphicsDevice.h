@@ -61,6 +61,8 @@ namespace Basalt {
 		uint64_t GetFrameIndex() const { return m_FrameIndex; }
 		// Number of errors reported by the Vulkan validation layers or nvrhi since creation.
 		uint32_t GetValidationErrorCount() const;
+		// True when the Khronos validation layer is active (it may be requested but unavailable).
+		bool IsValidationActive() const { return m_ValidationActive; }
 
 	private:
 		struct Impl;
@@ -87,6 +89,7 @@ namespace Basalt {
 		uint64_t m_FrameIndex = 0;
 		std::string m_AdapterName;
 		bool m_SwapchainDirty = false;
+		bool m_ValidationActive = false;
 		CaptureCallback m_PendingCapture;
 	};
 

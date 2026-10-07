@@ -274,3 +274,67 @@ TEST_SUITE("Regressions")
 		scene.OnRuntimeStop();
 	}
 }
+
+#include <Basalt/Core/Application.h>
+
+TEST_SUITE("Regressions")
+{
+	TEST_CASE("Script lifecycle: instances see each other in OnCreate; no OnDestroy without OnCreate; OnCreate once")
+	{
+		BasaltTest::TempProject project("RegressionLifecycle");
+		const std::string reader = project.WriteFile("Assets/Scripts/Reader.lua", R"(
+			local R = {}
+			function R:OnCreate()
+				local other = Scene.FindEntityByName("Target"):GetScript()
+				self.SawTarget = other ~= nil and other.Value == 42
+				Scene.Destroy(Scene.FindEntityByName("Victim"))
+				Scene.FindEntityByName("Swapped"):AddComponent("Script", { Script = "Assets/Scripts/Counter.lua" })
+			end
+			return R
+		)");
+		project.WriteFile("Assets/Scripts/Target.lua", "local T = {} T.Properties = { Value = 42 } return T");
+		project.WriteFile("Assets/Scripts/Tracked.lua", R"(
+			local T = {}
+			function T:OnCreate() Created = (Created or 0) + 1 end
+			function T:OnDestroy() Destroyed = (Destroyed or 0) + 1 end
+			return T
+		)");
+		project.WriteFile("Assets/Scripts/Counter.lua", R"(
+			local C = {}
+			function C:OnCreate() CounterCreates = (CounterCreates or 0) + 1 end
+			return C
+		)");
+
+		Scene scene;
+		Entity readerEntity = AddScripted(scene, "Reader", reader);
+		AddScripted(scene, "Target", "Assets/Scripts/Target.lua");
+		AddScripted(scene, "Victim", "Assets/Scripts/Tracked.lua");
+		AddScripted(scene, "Swapped", "Assets/Scripts/Tracked.lua");
+
+		scene.OnRuntimeStart();
+		ScriptEngine& engine = *scene.GetScriptEngine();
+		CHECK(Field(scene, readerEntity, "SawTarget") == true);
+		CHECK_FALSE(scene.FindEntityByName("Victim"));
+
+		std::string result;
+		// Victim was destroyed before its OnCreate: neither callback ran. Swapped's original script never
+		// started either; its replacement started exactly once.
+		REQUIRE(engine.ExecuteString("tostring(Created) .. ',' .. tostring(Destroyed) .. ',' .. tostring(CounterCreates)", result));
+		CHECK(result == "nil,nil,1");
+		scene.OnUpdate(Step);
+		REQUIRE(engine.ExecuteString("tostring(CounterCreates)", result));
+		CHECK(result == "1");
+		CHECK(engine.GetErrors().empty());
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Application::SetExitCode is returned by Run")
+	{
+		ApplicationSpecification specification;
+		specification.Headless = true;
+		specification.MaxFrames = 1;
+		Application application(specification);
+		application.SetExitCode(7);
+		CHECK(application.Run() == 7);
+	}
+}

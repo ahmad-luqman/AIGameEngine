@@ -1,0 +1,16 @@
+[
+	{ "command": "script.check", "params": { "path": "Assets/Scripts/Tetris.lua" } },
+	{ "command": "scene.new", "params": { "name": "Tetris", "empty": true } },
+	{ "command": "entity.create", "params": { "name": "Tetris", "components": { "Script": { "Script": "Assets/Scripts/Tetris.lua" } } } },
+	{ "command": "entity.create", "params": { "name": "Camera", "components": {
+		"Transform": { "Translation": [8.0, 9.5, 31] },
+		"Camera": { "FOV": 45, "Near": 0.5, "Far": 200 },
+		"AudioListener": {} } } },
+	{ "command": "entity.create", "params": { "name": "Sun", "components": {
+		"Transform": { "Rotation": [-35, 25, 0] },
+		"DirectionalLight": { "Intensity": 2.5, "ShadowSoftness": 1.5 } } } },
+	{ "command": "entity.create", "params": { "name": "Sky", "components": { "SkyLight": { "Intensity": 0.6 } } } },
+	{ "command": "scene.settings", "params": { "Renderer": { "Exposure": 1.0, "Tonemapper": "AgX", "ShadowDistance": 80 } } },
+	{ "command": "scene.save", "params": { "path": "Assets/Scenes/Tetris.bscene" } },
+	{ "command": "project.set", "params": { "startScene": "Assets/Scenes/Tetris.bscene", "windowWidth": 900, "windowHeight": 1000 } }
+]
