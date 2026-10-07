@@ -31,9 +31,10 @@ enable Jolt's `CROSS_PLATFORM_DETERMINISTIC` (some performance cost) and add a p
 `StateHash` is asserted on all three CI platforms.
 
 ### Real-GPU smoke tests on Windows and Linux — S (manual) / M (automated)
-Lavapipe does not catch driver-specific bugs. Before a release, run the runtime with validation on at
-least one NVIDIA, one AMD and one Intel GPU. Optionally add a self-hosted runner. Record results in a
-`Docs/TestedHardware.md` table.
+Lavapipe does not catch driver-specific bugs. The procedure and results table are in
+`Docs/TestedHardware.md` (`--offscreen`, `--gpu`, golden comparison, interactive checklist). Remaining:
+run it on at least one NVIDIA, one AMD (e.g. AWS g4ad) and one Intel GPU, on Windows and native Linux, and
+fill in the table. Optionally add an on-demand self-hosted GPU runner later.
 
 ---
 

@@ -33,6 +33,7 @@ build/bin/basalt --project Samples/Tetris project.export '{"output": "Dist/Tetri
 - [Docs/ScriptingAPI.md](Docs/ScriptingAPI.md) — Lua API
 - [Docs/AutomationCommands.md](Docs/AutomationCommands.md), [Docs/Components.md](Docs/Components.md) — generated references
 - [ROADMAP.md](ROADMAP.md) — planned work and known gaps
+- [Docs/TestedHardware.md](Docs/TestedHardware.md) — real-GPU smoke test procedure and results
 - [.claude/skills/basalt-make-game](.claude/skills/basalt-make-game/SKILL.md) — building a game as an AI agent
 - [Samples/Tetris](Samples/Tetris) — a game built entirely through the automation API
 
