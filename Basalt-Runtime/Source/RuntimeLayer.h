@@ -33,6 +33,7 @@ namespace Basalt {
 		void OnUpdate(Timestep ts) override;
 		void OnRender() override;
 		void OnImGuiRender() override;
+		void OnRunFinished() override;
 
 	private:
 		RuntimeOptions m_Options;

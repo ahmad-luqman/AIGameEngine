@@ -187,7 +187,28 @@ namespace Basalt {
 		Scope<GraphicsDevice> device(new GraphicsDevice(specification));
 		try
 		{
-			if (!device->Initialize(window))
+			if (!device->Initialize(&window, 0, 0))
+				return nullptr;
+		}
+		catch (const std::exception& e)
+		{
+			BS_CORE_ERROR("GraphicsDevice: initialization failed: {}", e.what());
+			return nullptr;
+		}
+		return device;
+	}
+
+	Scope<GraphicsDevice> GraphicsDevice::CreateOffscreen(uint32_t width, uint32_t height, const GraphicsDeviceSpecification& specification)
+	{
+		if (width == 0 || height == 0)
+		{
+			BS_CORE_ERROR("GraphicsDevice: offscreen size must be non-zero (got {}x{})", width, height);
+			return nullptr;
+		}
+		Scope<GraphicsDevice> device(new GraphicsDevice(specification));
+		try
+		{
+			if (!device->Initialize(nullptr, width, height))
 				return nullptr;
 		}
 		catch (const std::exception& e)
@@ -237,10 +258,10 @@ namespace Basalt {
 			impl.Instance.destroy();
 	}
 
-	bool GraphicsDevice::Initialize(Window& window)
+	bool GraphicsDevice::Initialize(Window* window, uint32_t width, uint32_t height)
 	{
 		Impl& impl = *m_Impl;
-		m_Window = &window;
+		m_Window = window;
 
 		if (!VulkanLoader::IsLoaded())
 		{
@@ -259,14 +280,19 @@ namespace Basalt {
 		const auto availableExtensions = vk::enumerateInstanceExtensionProperties();
 		const auto availableLayers = vk::enumerateInstanceLayerProperties();
 
-		uint32_t glfwExtensionCount = 0;
-		const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
-		if (!glfwExtensions)
+		// Surface extensions are only needed to present; an offscreen device must also work where no
+		// window system exists at all (headless CI machines).
+		if (window)
 		{
-			BS_CORE_ERROR("GraphicsDevice: GLFW reports no Vulkan surface support");
-			return false;
+			uint32_t glfwExtensionCount = 0;
+			const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
+			if (!glfwExtensions)
+			{
+				BS_CORE_ERROR("GraphicsDevice: GLFW reports no Vulkan surface support");
+				return false;
+			}
+			impl.InstanceExtensions.assign(glfwExtensions, glfwExtensions + glfwExtensionCount);
 		}
-		impl.InstanceExtensions.assign(glfwExtensions, glfwExtensions + glfwExtensionCount);
 
 		vk::InstanceCreateFlags instanceFlags = {};
 		if (HasExtension(availableExtensions, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME))
@@ -339,13 +365,16 @@ namespace Basalt {
 		}
 
 		// --- Surface ----------------------------------------------------------------------------
-		VkSurfaceKHR surface = VK_NULL_HANDLE;
-		if (glfwCreateWindowSurface(impl.Instance, window.GetNativeWindow(), nullptr, &surface) != VK_SUCCESS)
+		if (window)
 		{
-			BS_CORE_ERROR("GraphicsDevice: failed to create window surface");
-			return false;
+			VkSurfaceKHR surface = VK_NULL_HANDLE;
+			if (glfwCreateWindowSurface(impl.Instance, window->GetNativeWindow(), nullptr, &surface) != VK_SUCCESS)
+			{
+				BS_CORE_ERROR("GraphicsDevice: failed to create window surface");
+				return false;
+			}
+			impl.Surface = surface;
 		}
-		impl.Surface = surface;
 
 		// --- Physical device --------------------------------------------------------------------
 		// Every device is listed (with its index for --gpu) so a log shows what could have been chosen.
@@ -382,7 +411,8 @@ namespace Basalt {
 
 		// --- Logical device ---------------------------------------------------------------------
 		const auto deviceExtensions = impl.PhysicalDevice.enumerateDeviceExtensionProperties();
-		impl.DeviceExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+		if (window)
+			impl.DeviceExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 		if (HasExtension(deviceExtensions, "VK_KHR_portability_subset"))
 			impl.DeviceExtensions.push_back("VK_KHR_portability_subset");
 
@@ -455,16 +485,21 @@ namespace Basalt {
 
 		impl.BarrierCommandList = m_NvrhiDevice->createCommandList();
 
-		if (!CreateSwapchain())
+		if (window && !CreateSwapchain())
 		{
 			BS_CORE_ERROR("GraphicsDevice: could not create the swapchain (window framebuffer size is zero or the surface is unusable)");
 			return false;
 		}
+		if (!window && !CreateOffscreenTargets(width, height))
+		{
+			BS_CORE_ERROR("GraphicsDevice: could not create {}x{} offscreen render targets", width, height);
+			return false;
+		}
 
 		m_ValidationActive = validationEnabled;
-		BS_CORE_INFO("GraphicsDevice: {} (Vulkan {}.{}.{}){}", m_AdapterName,
+		BS_CORE_INFO("GraphicsDevice: {} (Vulkan {}.{}.{}){}{}", m_AdapterName,
 					 VK_API_VERSION_MAJOR(deviceProperties.apiVersion), VK_API_VERSION_MINOR(deviceProperties.apiVersion), VK_API_VERSION_PATCH(deviceProperties.apiVersion),
-					 validationEnabled ? ", validation enabled" : "");
+					 validationEnabled ? ", validation enabled" : "", window ? "" : ", offscreen");
 		return true;
 	}
 
@@ -582,6 +617,36 @@ namespace Basalt {
 		return true;
 	}
 
+	bool GraphicsDevice::CreateOffscreenTargets(uint32_t width, uint32_t height)
+	{
+		Impl& impl = *m_Impl;
+		m_BackBufferFormat = nvrhi::Format::RGBA8_UNORM;
+		m_BackBufferWidth = width;
+		m_BackBufferHeight = height;
+
+		// One target per frame in flight, like swapchain images: the CPU can record frame N+1 while the
+		// GPU still renders frame N. Between frames they rest in CopySource, ready for a capture.
+		for (uint32_t i = 0; i < std::max(m_Specification.MaxFramesInFlight, 1u); i++)
+		{
+			nvrhi::TextureDesc textureDesc;
+			textureDesc.width = width;
+			textureDesc.height = height;
+			textureDesc.format = m_BackBufferFormat;
+			textureDesc.debugName = "OffscreenBackBuffer";
+			textureDesc.initialState = nvrhi::ResourceStates::CopySource;
+			textureDesc.keepInitialState = true;
+			textureDesc.isRenderTarget = true;
+
+			nvrhi::TextureHandle texture = m_NvrhiDevice->createTexture(textureDesc);
+			if (!texture)
+				return false;
+			impl.BackBuffers.push_back(texture);
+			impl.Framebuffers.push_back(m_NvrhiDevice->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(texture)));
+		}
+		m_SwapchainIndex = 0;
+		return true;
+	}
+
 	void GraphicsDevice::DestroySwapchain()
 	{
 		Impl& impl = *m_Impl;
@@ -628,6 +693,10 @@ namespace Basalt {
 	bool GraphicsDevice::BeginFrame()
 	{
 		Impl& impl = *m_Impl;
+		// Offscreen targets rotate in Present(); there is nothing to acquire.
+		if (IsOffscreen())
+			return !impl.BackBuffers.empty();
+
 		if (!RecreateSwapchainIfNeeded())
 			return false;
 
@@ -662,7 +731,6 @@ namespace Basalt {
 	void GraphicsDevice::Present()
 	{
 		Impl& impl = *m_Impl;
-		const vk::Semaphore presentSemaphore = impl.PresentSemaphores[m_SwapchainIndex];
 
 		if (m_PendingCapture)
 		{
@@ -706,27 +774,35 @@ namespace Basalt {
 			}
 		}
 
-		// The signal is attached to the next submission; an empty command list guarantees there is one.
-		impl.VulkanDevice->queueSignalSemaphore(nvrhi::CommandQueue::Graphics, presentSemaphore, 0);
-		impl.BarrierCommandList->open();
-		impl.BarrierCommandList->close();
-		m_NvrhiDevice->executeCommandList(impl.BarrierCommandList);
+		if (IsOffscreen())
+		{
+			m_SwapchainIndex = (m_SwapchainIndex + 1) % static_cast<uint32_t>(impl.BackBuffers.size());
+		}
+		else
+		{
+			// The signal is attached to the next submission; an empty command list guarantees there is one.
+			const vk::Semaphore presentSemaphore = impl.PresentSemaphores[m_SwapchainIndex];
+			impl.VulkanDevice->queueSignalSemaphore(nvrhi::CommandQueue::Graphics, presentSemaphore, 0);
+			impl.BarrierCommandList->open();
+			impl.BarrierCommandList->close();
+			m_NvrhiDevice->executeCommandList(impl.BarrierCommandList);
 
-		VkSemaphore waitSemaphore = presentSemaphore;
-		VkSwapchainKHR swapchain = impl.Swapchain;
-		VkPresentInfoKHR presentInfo = {};
-		presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-		presentInfo.waitSemaphoreCount = 1;
-		presentInfo.pWaitSemaphores = &waitSemaphore;
-		presentInfo.swapchainCount = 1;
-		presentInfo.pSwapchains = &swapchain;
-		presentInfo.pImageIndices = &m_SwapchainIndex;
+			VkSemaphore waitSemaphore = presentSemaphore;
+			VkSwapchainKHR swapchain = impl.Swapchain;
+			VkPresentInfoKHR presentInfo = {};
+			presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+			presentInfo.waitSemaphoreCount = 1;
+			presentInfo.pWaitSemaphores = &waitSemaphore;
+			presentInfo.swapchainCount = 1;
+			presentInfo.pSwapchains = &swapchain;
+			presentInfo.pImageIndices = &m_SwapchainIndex;
 
-		const VkResult result = VULKAN_HPP_DEFAULT_DISPATCHER.vkQueuePresentKHR(impl.GraphicsQueue, &presentInfo);
-		if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
-			m_SwapchainDirty = true;
-		else if (result != VK_SUCCESS)
-			BS_CORE_ERROR("GraphicsDevice: vkQueuePresentKHR failed ({})", static_cast<int>(result));
+			const VkResult result = VULKAN_HPP_DEFAULT_DISPATCHER.vkQueuePresentKHR(impl.GraphicsQueue, &presentInfo);
+			if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
+				m_SwapchainDirty = true;
+			else if (result != VK_SUCCESS)
+				BS_CORE_ERROR("GraphicsDevice: vkQueuePresentKHR failed ({})", static_cast<int>(result));
+		}
 
 		// Bound the CPU to MaxFramesInFlight frames ahead of the GPU.
 		while (impl.FramesInFlight.size() >= m_Specification.MaxFramesInFlight)

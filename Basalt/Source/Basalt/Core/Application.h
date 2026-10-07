@@ -41,6 +41,9 @@ namespace Basalt {
 
 		// No window, no GPU: layers only receive OnUpdate. Used by the CLI and automated tests.
 		bool Headless = false;
+		// GPU but no window: renders WindowWidth x WindowHeight into images that are never presented
+		// (screenshots, GPU tests on machines without a display server). There is no input either.
+		bool Offscreen = false;
 		// GPU validation (Vulkan layers + nvrhi validation). Defaults on outside Dist builds.
 #if defined(BS_DIST)
 		bool EnableValidation = false;
@@ -81,6 +84,7 @@ namespace Basalt {
 		bool IsHeadless() const { return m_Specification.Headless; }
 		// True once construction succeeded; Run() returns an error immediately otherwise.
 		bool IsInitialized() const { return m_Initialized; }
+		// Null when the application is headless or offscreen.
 		Window* GetWindow() const { return m_Window.get(); }
 		GraphicsDevice* GetGraphicsDevice() const { return m_GraphicsDevice.get(); }
 		ImGuiLayer* GetImGuiLayer() const { return m_ImGuiLayer; }

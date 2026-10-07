@@ -114,17 +114,7 @@ namespace Basalt {
 
 		if (m_Options.MaxFrames > 0 && m_Frame >= m_Options.MaxFrames)
 		{
-			// Automated runs (--frames) report problems through the exit code, decided before Run() returns.
-			if (device->GetValidationErrorCount() > 0)
-			{
-				BS_CORE_ERROR("Runtime: {} GPU validation error(s) occurred", device->GetValidationErrorCount());
-				application.SetExitCode(3);
-			}
-			else if (m_Options.RequireValidation && !device->IsValidationActive())
-			{
-				BS_CORE_ERROR("Runtime: --require-validation given but the Vulkan validation layer is not active");
-				application.SetExitCode(5);
-			}
+			// Validation is checked in OnRunFinished, after this frame and its capture have executed.
 			if (!m_Options.ScreenshotPath.empty())
 			{
 				// Captured right before present, so the image includes the game UI drawn after the scene.
@@ -143,6 +133,24 @@ namespace Basalt {
 				});
 			}
 			application.Close();
+		}
+	}
+
+	void RuntimeLayer::OnRunFinished()
+	{
+		// Automated runs (--frames) report problems through the exit code.
+		const GraphicsDevice* device = Application::Get().GetGraphicsDevice();
+		if (m_Options.MaxFrames == 0 || !device)
+			return;
+		if (device->GetValidationErrorCount() > 0)
+		{
+			BS_CORE_ERROR("Runtime: {} GPU validation error(s) occurred", device->GetValidationErrorCount());
+			Application::Get().SetExitCode(3);
+		}
+		else if (m_Options.RequireValidation && !device->IsValidationActive())
+		{
+			BS_CORE_ERROR("Runtime: --require-validation given but the Vulkan validation layer is not active");
+			Application::Get().SetExitCode(5);
 		}
 	}
 

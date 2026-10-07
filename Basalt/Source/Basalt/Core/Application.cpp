@@ -45,22 +45,29 @@ namespace Basalt {
 		if (!VulkanLoader::Load())
 			return;
 
-		WindowSpecification windowSpecification;
-		windowSpecification.Title = m_Specification.Name;
-		windowSpecification.Width = m_Specification.WindowWidth;
-		windowSpecification.Height = m_Specification.WindowHeight;
-		windowSpecification.StartMaximized = m_Specification.StartMaximized;
-		m_Window = CreateScope<Window>(windowSpecification);
-		if (!m_Window->IsValid())
-			return;
-		m_Window->SetEventCallback(BS_BIND_EVENT_FN(Application::OnEvent));
-
 		GraphicsDeviceSpecification deviceSpecification;
 		deviceSpecification.ApplicationName = m_Specification.Name;
 		deviceSpecification.EnableValidation = m_Specification.EnableValidation;
 		deviceSpecification.VSync = m_Specification.VSync;
 		deviceSpecification.DeviceSelector = m_Specification.GpuSelector;
-		m_GraphicsDevice = GraphicsDevice::Create(*m_Window, deviceSpecification);
+
+		if (m_Specification.Offscreen)
+		{
+			m_GraphicsDevice = GraphicsDevice::CreateOffscreen(m_Specification.WindowWidth, m_Specification.WindowHeight, deviceSpecification);
+		}
+		else
+		{
+			WindowSpecification windowSpecification;
+			windowSpecification.Title = m_Specification.Name;
+			windowSpecification.Width = m_Specification.WindowWidth;
+			windowSpecification.Height = m_Specification.WindowHeight;
+			windowSpecification.StartMaximized = m_Specification.StartMaximized;
+			m_Window = CreateScope<Window>(windowSpecification);
+			if (!m_Window->IsValid())
+				return;
+			m_Window->SetEventCallback(BS_BIND_EVENT_FN(Application::OnEvent));
+			m_GraphicsDevice = GraphicsDevice::Create(*m_Window, deviceSpecification);
+		}
 		if (!m_GraphicsDevice)
 			return;
 
@@ -193,6 +200,8 @@ namespace Basalt {
 
 		if (m_GraphicsDevice)
 			m_GraphicsDevice->WaitIdle();
+		for (Layer* layer : m_LayerStack)
+			layer->OnRunFinished();
 		return m_ExitCode;
 	}
 

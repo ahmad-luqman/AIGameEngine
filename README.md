@@ -22,7 +22,7 @@ macOS with Homebrew: Vulkan validation layers load only with `DYLD_FALLBACK_LIBR
 ```bash
 build/bin/BasaltEditor --project Samples/Tetris          # editor (automation server on 127.0.0.1:7420)
 build/bin/BasaltRuntime --project Samples/Tetris         # play a project
-build/bin/BasaltRuntime --project P --frames 60 --screenshot shot.png
+build/bin/BasaltRuntime --project P --frames 60 --offscreen --screenshot shot.png
 build/bin/basalt help                                    # automation API from the command line
 build/bin/basalt --project Samples/Tetris project.export '{"output": "Dist/Tetris"}'
 ```

@@ -24,17 +24,25 @@ endif()
 add_test(NAME FeatureTest
 	COMMAND BasaltCLI --project "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest" batch "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest/FeatureTest.batch.json")
 
-# GPU tests need a Vulkan device (off on CI). They render the feature scene through the runtime with
-# validation enabled; any Vulkan/nvrhi validation error fails the test.
+# GPU tests need a Vulkan device (a real GPU, or lavapipe on CI). They render the feature scene through the
+# runtime with validation enabled; any Vulkan/nvrhi validation error fails the test. --offscreen needs no
+# window or display server; --require-validation fails the test if the validation layer could not be loaded.
 option(BASALT_GPU_TESTS "Register tests that need a GPU" OFF)
 if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
-	# --require-validation makes the test fail if the validation layer could not be loaded.
+	set(basaltRenderArgs --project "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest" --frames 90 --width 1280 --height 720 --require-validation)
 	add_test(NAME FeatureTestRender
-		COMMAND BasaltRuntime --project "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest" --frames 90 --width 1280 --height 720
-			--require-validation --screenshot "${CMAKE_CURRENT_BINARY_DIR}/FeatureTestRender.png")
+		COMMAND BasaltRuntime ${basaltRenderArgs} --offscreen --screenshot "${CMAKE_CURRENT_BINARY_DIR}/FeatureTestRender.png")
+	set(basaltGpuTests FeatureTestRender)
+	# The window + swapchain path needs a display, so it only runs on developer machines.
+	if(NOT DEFINED ENV{CI})
+		add_test(NAME FeatureTestRenderWindowed
+			COMMAND BasaltRuntime ${basaltRenderArgs} --screenshot "${CMAKE_CURRENT_BINARY_DIR}/FeatureTestRenderWindowed.png")
+		list(APPEND basaltGpuTests FeatureTestRenderWindowed)
+	endif()
+	set_tests_properties(${basaltGpuTests} PROPERTIES LABELS gpu)
 	if(APPLE)
 		# Homebrew's validation layer manifest names its library without a path (Apple silicon and Intel prefixes).
-		set_tests_properties(FeatureTestRender PROPERTIES ENVIRONMENT "DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib:/usr/local/lib")
+		set_tests_properties(${basaltGpuTests} PROPERTIES ENVIRONMENT "DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib:/usr/local/lib")
 	endif()
 endif()
 
@@ -47,9 +55,6 @@ set_tests_properties(BasaltTests PROPERTIES LABELS unit)
 set_tests_properties(FeatureTest SampleTetris PROPERTIES LABELS integration)
 if(TEST CodeFormat)
 	set_tests_properties(CodeFormat PROPERTIES LABELS format)
-endif()
-if(TEST FeatureTestRender)
-	set_tests_properties(FeatureTestRender PROPERTIES LABELS gpu)
 endif()
 if(BASALT_SANITIZE)
 	set_property(TEST BasaltTests FeatureTest SampleTetris APPEND PROPERTY ENVIRONMENT ${BASALT_SANITIZER_ENVIRONMENT})

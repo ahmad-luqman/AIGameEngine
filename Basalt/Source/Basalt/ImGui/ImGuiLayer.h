@@ -31,6 +31,7 @@ namespace Basalt {
 		ImGuiRenderer m_Renderer;
 		bool m_BlockEvents = true;
 		bool m_Initialized = false;
+		bool m_HasPlatformBackend = false;
 	};
 
 }

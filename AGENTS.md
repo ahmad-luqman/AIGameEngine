@@ -48,8 +48,8 @@ Other directories: `Docs/` (scripting API, generated command/component reference
 
 | Binary | Purpose |
 |--------|---------|
-| `BasaltEditor [--project P] [--port N\|--no-server]` | Editor GUI + automation server |
-| `BasaltRuntime [--project P] [--scene S] [--width W --height H] [--frames N [--screenshot out.png] [--require-validation]] [--debug-view V] [--no-vsync]` | Plays the project's start scene; exported games are this binary renamed |
+| `BasaltEditor [--project P] [--port N\|--no-server] [--gpu G]` | Editor GUI + automation server |
+| `BasaltRuntime [--project P] [--scene S] [--width W --height H] [--frames N [--screenshot out.png] [--require-validation]] [--offscreen] [--debug-view V] [--gpu G] [--no-vsync]` | Plays the project's start scene; exported games are this binary renamed |
 | `basalt [--project P] [--scene S] [--no-save] [--verbose] <command> [json] \| batch <file> \| serve` | Headless automation CLI |
 | `BasaltTests` | Unit tests |
 
@@ -143,9 +143,13 @@ Other rules:
   feature test (`Tests/Data/FeatureTest`: scene `Assets/Scenes/FeatureTest.bscene`, driver
   `Assets/Scripts/FeatureTest.lua`, run by ctest through `basalt batch FeatureTest.batch.json`). Add a
   `Check(...)` for every new API function and put every new component in the scene.
-- GPU tests (`FeatureTestRender`) are registered by `scripts/build.sh` unless `CI` is set: they render the
-  feature scene and fail on any validation error — and also when the Khronos validation layer is not
-  installed (`--require-validation`). Install the Vulkan SDK (or Homebrew `vulkan-validationlayers`).
+- GPU tests (label `gpu`) are registered by `scripts/build.sh` unless `CI` is set (CI registers them
+  explicitly in its lavapipe job): they render the feature scene and fail on any validation error — and
+  also when the Khronos validation layer is not installed (`--require-validation`). Install the Vulkan
+  SDK (or Homebrew `vulkan-validationlayers`). `FeatureTestRender` runs `--offscreen` (no window or display
+  server needed); `FeatureTestRenderWindowed` covers the swapchain path on developer machines.
+- `--offscreen` renders into device-owned images instead of a window; `--gpu <index|name>` picks the
+  GPU (indices and names are logged as `GPU N:` at startup; a name must match exactly one device).
 - Bug fixes come with a regression test.
 - Rendering changes: run the editor or runtime with validation enabled and confirm zero validation
   errors (`GraphicsDevice::GetValidationErrorCount()`).

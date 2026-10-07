@@ -25,12 +25,16 @@ namespace Basalt {
 
 	// Owns the Vulkan instance, device and swapchain and exposes them through nvrhi.
 	// Frame protocol: BeginFrame() -> record/submit nvrhi command lists -> Present().
+	// An offscreen device has no window or swapchain: it renders into device-owned images that
+	// Present() only captures, so GPU tests run without a display server (CI, cloud GPUs).
 	class GraphicsDevice
 	{
 	public:
 		// Returns nullptr (after logging the reason) if no suitable Vulkan device is available.
 		// VulkanLoader::Load() must have succeeded before the window was created.
 		static Scope<GraphicsDevice> Create(Window& window, const GraphicsDeviceSpecification& specification);
+		// Same, without a window: back buffers are width x height RGBA8 images that are never presented.
+		static Scope<GraphicsDevice> CreateOffscreen(uint32_t width, uint32_t height, const GraphicsDeviceSpecification& specification);
 		~GraphicsDevice();
 
 		GraphicsDevice(const GraphicsDevice&) = delete;
@@ -49,6 +53,7 @@ namespace Basalt {
 		using CaptureCallback = std::function<void(const std::vector<uint8_t>& rgba, uint32_t width, uint32_t height)>;
 		void RequestBackBufferCapture(CaptureCallback callback) { m_PendingCapture = std::move(callback); }
 		bool IsVSync() const { return m_Specification.VSync; }
+		bool IsOffscreen() const { return m_Window == nullptr; }
 
 		nvrhi::IDevice* GetDevice() const { return m_NvrhiDevice; }
 		nvrhi::ITexture* GetCurrentBackBuffer() const;
@@ -71,8 +76,10 @@ namespace Basalt {
 
 		explicit GraphicsDevice(const GraphicsDeviceSpecification& specification);
 
-		bool Initialize(Window& window);
+		// `window` is null for an offscreen device, which then uses width x height.
+		bool Initialize(Window* window, uint32_t width, uint32_t height);
 		bool CreateSwapchain();
+		bool CreateOffscreenTargets(uint32_t width, uint32_t height);
 		void DestroySwapchain();
 		bool RecreateSwapchainIfNeeded();
 

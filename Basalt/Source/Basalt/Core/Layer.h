@@ -25,6 +25,9 @@ namespace Basalt {
 		virtual void OnRender() {}
 		virtual void OnImGuiRender() {}
 		virtual void OnEvent(Event& event) {}
+		// Called once after the main loop ends, with the GPU idle, before Run() returns: the last frame
+		// (including a capture) has fully executed, and Application::SetExitCode still takes effect.
+		virtual void OnRunFinished() {}
 
 		const std::string& GetName() const { return m_DebugName; }
 

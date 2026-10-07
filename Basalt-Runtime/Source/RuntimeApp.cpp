@@ -75,6 +75,12 @@ namespace Basalt {
 		specification.WindowHeight = readSize("height", project->GetConfig().WindowHeight);
 		specification.VSync = !commandLine.HasFlag("no-vsync");
 		specification.Headless = commandLine.HasFlag("headless");
+		specification.Offscreen = commandLine.HasFlag("offscreen");
+		if (specification.Headless && specification.Offscreen)
+		{
+			BS_CORE_CRITICAL("--headless (no GPU) and --offscreen (GPU, no window) cannot be combined");
+			return nullptr;
+		}
 		// ImGui draws the game's screen-space UI (UI.Text / UI.Rect); there are no ImGui windows.
 		specification.EnableImGui = true;
 		// Deterministic frames for automated runs (screenshots, tests).

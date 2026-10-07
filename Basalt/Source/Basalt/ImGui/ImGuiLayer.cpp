@@ -35,8 +35,10 @@ namespace Basalt {
 		style.FontSizeBase = 15.0f;
 
 		Application& application = Application::Get();
-		GLFWwindow* window = application.GetWindow()->GetNativeWindow();
-		if (!ImGui_ImplGlfw_InitForOther(window, true))
+		// Offscreen applications have no window: there is no platform backend, and Begin() feeds the
+		// display size itself. Drawing (the game UI) works the same.
+		m_HasPlatformBackend = application.GetWindow() != nullptr;
+		if (m_HasPlatformBackend && !ImGui_ImplGlfw_InitForOther(application.GetWindow()->GetNativeWindow(), true))
 		{
 			BS_CORE_ERROR("ImGuiLayer: GLFW backend initialization failed");
 			return;
@@ -45,7 +47,8 @@ namespace Basalt {
 		if (!m_Renderer.Init(application.GetGraphicsDevice()->GetDevice()))
 		{
 			BS_CORE_ERROR("ImGuiLayer: renderer backend initialization failed");
-			ImGui_ImplGlfw_Shutdown();
+			if (m_HasPlatformBackend)
+				ImGui_ImplGlfw_Shutdown();
 			return;
 		}
 		m_Initialized = true;
@@ -56,7 +59,8 @@ namespace Basalt {
 		if (m_Initialized)
 		{
 			m_Renderer.Shutdown();
-			ImGui_ImplGlfw_Shutdown();
+			if (m_HasPlatformBackend)
+				ImGui_ImplGlfw_Shutdown();
 			m_Initialized = false;
 		}
 		ImGui::DestroyContext();
@@ -78,7 +82,19 @@ namespace Basalt {
 	{
 		if (!m_Initialized)
 			return;
-		ImGui_ImplGlfw_NewFrame();
+		if (m_HasPlatformBackend)
+		{
+			ImGui_ImplGlfw_NewFrame();
+		}
+		else
+		{
+			const GraphicsDevice* device = Application::Get().GetGraphicsDevice();
+			ImGuiIO& io = ImGui::GetIO();
+			io.DisplaySize = ImVec2(static_cast<float>(device->GetBackBufferWidth()), static_cast<float>(device->GetBackBufferHeight()));
+			io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
+			// Offscreen runs are fixed-step captures; ImGui only needs a positive frame time.
+			io.DeltaTime = 1.0f / 60.0f;
+		}
 		ImGui::NewFrame();
 		ImGuizmo::BeginFrame();
 	}
