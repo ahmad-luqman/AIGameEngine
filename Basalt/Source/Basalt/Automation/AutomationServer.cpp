@@ -46,7 +46,7 @@ namespace Basalt {
 			FD_SET(socket, &set);
 			timeval timeout;
 			timeout.tv_sec = timeoutMilliseconds / 1000;
-			timeout.tv_usec = (timeoutMilliseconds % 1000) * 1000;
+			timeout.tv_usec = static_cast<decltype(timeout.tv_usec)>(timeoutMilliseconds % 1000) * 1000;
 			return select(static_cast<int>(socket) + 1, &set, nullptr, nullptr, &timeout);
 		}
 
