@@ -25,14 +25,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies (Linux)
-        timeout-minutes: 10
+        timeout-minutes: 20
         if: runner.os == 'Linux'
         run: |
-          echo 'Acquire::Retries "3"; Acquire::http::Timeout "20"; Acquire::https::Timeout "20";' | sudo tee /etc/apt/apt.conf.d/99-ci-timeouts
-          sudo apt-get update
-          sudo apt-get install -y ninja-build glslc libvulkan1 \
-            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
-            libwayland-dev libxkbcommon-dev wayland-protocols
+          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
       - name: Install dependencies (macOS)
         timeout-minutes: 10
@@ -85,13 +81,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        timeout-minutes: 10
+        timeout-minutes: 20
         run: |
-          echo 'Acquire::Retries "3"; Acquire::http::Timeout "20"; Acquire::https::Timeout "20";' | sudo tee /etc/apt/apt.conf.d/99-ci-timeouts
-          sudo apt-get update
-          sudo apt-get install -y ninja-build glslc libvulkan1 clang \
-            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
-            libwayland-dev libxkbcommon-dev wayland-protocols
+          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 clang libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
       - name: Cache dependencies
         uses: actions/cache@v4
@@ -120,13 +112,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        timeout-minutes: 10
+        timeout-minutes: 20
         run: |
-          echo 'Acquire::Retries "3"; Acquire::http::Timeout "20"; Acquire::https::Timeout "20";' | sudo tee /etc/apt/apt.conf.d/99-ci-timeouts
-          sudo apt-get update
-          sudo apt-get install -y ninja-build glslc libvulkan1 clang clang-tidy \
-            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
-            libwayland-dev libxkbcommon-dev wayland-protocols
+          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 clang clang-tidy libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
       - name: Cache dependencies
         uses: actions/cache@v4
@@ -152,13 +140,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        timeout-minutes: 10
+        timeout-minutes: 20
         run: |
-          echo 'Acquire::Retries "3"; Acquire::http::Timeout "20"; Acquire::https::Timeout "20";' | sudo tee /etc/apt/apt.conf.d/99-ci-timeouts
-          sudo apt-get update
-          sudo apt-get install -y ninja-build glslc libvulkan1 clang llvm \
-            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
-            libwayland-dev libxkbcommon-dev wayland-protocols
+          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 clang llvm libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
       - name: Cache dependencies
         uses: actions/cache@v4
@@ -196,13 +180,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        timeout-minutes: 10
+        timeout-minutes: 20
         run: |
-          echo 'Acquire::Retries "3"; Acquire::http::Timeout "20"; Acquire::https::Timeout "20";' | sudo tee /etc/apt/apt.conf.d/99-ci-timeouts
-          sudo apt-get update
-          sudo apt-get install -y ninja-build glslc libvulkan1 mesa-vulkan-drivers vulkan-validationlayers vulkan-tools \
-            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
-            libwayland-dev libxkbcommon-dev wayland-protocols
+          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 mesa-vulkan-drivers vulkan-validationlayers vulkan-tools libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
       # Load only lavapipe, so the run never depends on what else the runner image installs. The manifest's
       # file name differs between Mesa packages, so find it instead of hard-coding it.
@@ -251,13 +231,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        timeout-minutes: 10
+        timeout-minutes: 20
         run: |
-          echo 'Acquire::Retries "3"; Acquire::http::Timeout "20"; Acquire::https::Timeout "20";' | sudo tee /etc/apt/apt.conf.d/99-ci-timeouts
-          sudo apt-get update
-          sudo apt-get install -y ninja-build glslc libvulkan1 clang \
-            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
-            libwayland-dev libxkbcommon-dev wayland-protocols
+          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 clang libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
       - name: Cache dependencies
         uses: actions/cache@v4
