@@ -209,6 +209,24 @@ namespace Basalt {
 								 return nlohmann::json{ { "position", { position.x, position.y, position.z } }, { "target", { target.x, target.y, target.z } } };
 							 } });
 
+		m_Commands.Register({ "editor.undo", "Undoes the last edit to the scene (edit mode only).", {}, [this](AutomationSession& session, const nlohmann::json&) {
+								 if (session.IsPlaying())
+									 throw CommandError("undo is not available while playing");
+								 if (!m_History.CanUndo())
+									 throw CommandError("nothing to undo");
+								 Undo();
+								 return nlohmann::json{ { "canUndo", m_History.CanUndo() }, { "canRedo", m_History.CanRedo() } };
+							 } });
+
+		m_Commands.Register({ "editor.redo", "Redoes the last undone edit (edit mode only).", {}, [this](AutomationSession& session, const nlohmann::json&) {
+								 if (session.IsPlaying())
+									 throw CommandError("redo is not available while playing");
+								 if (!m_History.CanRedo())
+									 throw CommandError("nothing to redo");
+								 Redo();
+								 return nlohmann::json{ { "canUndo", m_History.CanUndo() }, { "canRedo", m_History.CanRedo() } };
+							 } });
+
 		m_Commands.Register({ "editor.window_screenshot", "Captures the whole editor window (all panels) to a PNG at the end of the current frame.", { { "path", "string, .png" } }, [](AutomationSession&, const nlohmann::json& params) {
 								 if (!params.contains("path") || !params["path"].is_string())
 									 throw CommandError("missing parameter 'path'");

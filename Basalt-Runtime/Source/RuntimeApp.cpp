@@ -75,6 +75,16 @@ namespace Basalt {
 		// Deterministic frames for automated runs (screenshots, tests).
 		if (options.MaxFrames > 0)
 			specification.FixedTimestep = 1.0f / 60.0f;
+		if (specification.Headless)
+		{
+			// Without a GPU nothing renders: the application loop itself enforces the frame cap.
+			specification.MaxFrames = options.MaxFrames;
+			if (!options.ScreenshotPath.empty())
+			{
+				BS_CORE_ERROR("--screenshot needs a GPU and cannot be combined with --headless");
+				return nullptr;
+			}
+		}
 		return new RuntimeApplication(specification, options);
 	}
 

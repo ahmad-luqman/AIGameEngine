@@ -80,6 +80,9 @@ namespace Basalt {
 				outError = "cannot copy Vulkan libraries: " + error.message();
 				return false;
 			}
+			// Package-manager files are often read-only; keep exports overwritable by later exports.
+			for (const char* library : { "libvulkan.1.dylib", "libMoltenVK.dylib" })
+				std::filesystem::permissions(output / library, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write | std::filesystem::perms::group_read | std::filesystem::perms::others_read, std::filesystem::perm_options::replace, error);
 
 			// The ICD manifest path is relative to the manifest file itself.
 			const std::string manifest = R"({ "file_format_version": "1.0.0", "ICD": { "library_path": "../../libMoltenVK.dylib", "api_version": "1.3.0", "is_portability_driver": true } })";

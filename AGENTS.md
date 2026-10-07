@@ -140,8 +140,9 @@ Other rules:
   feature test (`Tests/Data/FeatureTest`: scene `Assets/Scenes/FeatureTest.bscene`, driver
   `Assets/Scripts/FeatureTest.lua`, run by ctest through `basalt batch FeatureTest.batch.json`). Add a
   `Check(...)` for every new API function and put every new component in the scene.
-- GPU tests (`FeatureTestRender`) run locally via `scripts/test.sh` (not on CI): they render the feature
-  scene with validation enabled and fail on any validation error.
+- GPU tests (`FeatureTestRender`) are registered by `scripts/build.sh` unless `CI` is set: they render the
+  feature scene and fail on any validation error — and also when the Khronos validation layer is not
+  installed (`--require-validation`). Install the Vulkan SDK (or Homebrew `vulkan-validationlayers`).
 - Bug fixes come with a regression test.
 - Rendering changes: run the editor or runtime with validation enabled and confirm zero validation
   errors (`GraphicsDevice::GetValidationErrorCount()`).
