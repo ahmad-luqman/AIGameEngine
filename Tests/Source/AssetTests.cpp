@@ -275,7 +275,7 @@ TEST_SUITE("Assets")
 			TextureSource image;
 			image.Width = 10;
 			image.Height = 10;
-			image.Pixels.assign(10 * 10 * 4, value);
+			image.Pixels.assign(size_t{ 10 } * 10 * 4, value);
 			return image;
 		};
 		const TextureSource reference = makeImage(100);
@@ -322,7 +322,7 @@ TEST_SUITE("Assets")
 		TextureSource a;
 		a.Width = 4;
 		a.Height = 4;
-		a.Pixels.assign(4 * 4 * 4, 0);
+		a.Pixels.assign(size_t{ 4 } * 4 * 4, 0);
 		TextureSource b = a;
 		b.Width = 2;
 		b.Height = 8;
