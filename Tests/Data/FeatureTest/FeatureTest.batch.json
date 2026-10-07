@@ -8,5 +8,7 @@
 	{ "id": "mouse-up", "command": "input.mouse", "params": { "position": [330, 250], "button": "Left", "down": false } },
 	{ "id": "run", "command": "play.step", "params": { "frames": 169, "assertNoErrors": true } },
 	{ "id": "report", "command": "lua.exec", "params": { "code": "FeatureTest.Report()" } },
-	{ "id": "stop", "command": "play.stop" }
+	{ "id": "stop", "command": "play.stop" },
+	{ "id": "image-same", "command": "image.compare", "params": { "actual": "Assets/Textures/Checker.png", "reference": "Assets/Textures/Checker.png", "assertMatch": true } },
+	{ "id": "image-differs", "command": "image.compare", "params": { "actual": "Assets/Textures/Checker.png", "reference": "Assets/Textures/FlatNormal.png" } }
 ]

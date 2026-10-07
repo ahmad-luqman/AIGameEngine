@@ -30,9 +30,40 @@ add_test(NAME FeatureTest
 option(BASALT_GPU_TESTS "Register tests that need a GPU" OFF)
 if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	set(basaltRenderArgs --project "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest" --frames 90 --width 1280 --height 720 --require-validation)
-	add_test(NAME FeatureTestRender
-		COMMAND BasaltRuntime ${basaltRenderArgs} --offscreen --screenshot "${CMAKE_CURRENT_BINARY_DIR}/FeatureTestRender.png")
-	set(basaltGpuTests FeatureTestRender)
+
+	# Golden images: each debug view is rendered offscreen, then compared with the reference for this driver
+	# family (Tests/Data/Golden/<driver>/). References differ per driver (rasterization and filtering are
+	# not bit-exact across implementations); a missing reference skips the comparison. Update them with
+	# scripts/update_golden.sh after checking the new images by eye.
+	set(basaltDefaultGoldenDriver "")
+	if(APPLE)
+		set(basaltDefaultGoldenDriver moltenvk)
+	endif()
+	set(BASALT_GOLDEN_DRIVER "${basaltDefaultGoldenDriver}" CACHE STRING "Reference image set in Tests/Data/Golden to compare GPU renders with (empty: no comparison)")
+	set(basaltGoldenOutput "${CMAKE_CURRENT_BINARY_DIR}/Golden")
+	file(MAKE_DIRECTORY "${basaltGoldenOutput}")
+
+	set(basaltGpuTests "")
+	foreach(view Lit SSAO Normals Depth)
+		set(debugView ${view})
+		set(renderTest FeatureTestRender_${view})
+		if(view STREQUAL "Lit")
+			set(debugView None)
+			set(renderTest FeatureTestRender)
+		endif()
+		add_test(NAME ${renderTest}
+			COMMAND BasaltRuntime ${basaltRenderArgs} --offscreen --debug-view ${debugView} --screenshot "${basaltGoldenOutput}/FeatureTest_${view}.png")
+		set_tests_properties(${renderTest} PROPERTIES FIXTURES_SETUP Render${view})
+		list(APPEND basaltGpuTests ${renderTest})
+
+		if(BASALT_GOLDEN_DRIVER)
+			set(reference "${CMAKE_CURRENT_SOURCE_DIR}/Data/Golden/${BASALT_GOLDEN_DRIVER}/FeatureTest_${view}.png")
+			add_test(NAME FeatureTestGolden_${view}
+				COMMAND BasaltCLI image.compare "{\"actual\": \"${basaltGoldenOutput}/FeatureTest_${view}.png\", \"reference\": \"${reference}\", \"diff\": \"${basaltGoldenOutput}/FeatureTest_${view}.diff.png\", \"assertMatch\": true}")
+			set_tests_properties(FeatureTestGolden_${view} PROPERTIES FIXTURES_REQUIRED Render${view} SKIP_REGULAR_EXPRESSION "reference image not found")
+			list(APPEND basaltGpuTests FeatureTestGolden_${view})
+		endif()
+	endforeach()
 	# The window + swapchain path needs a display, so it only runs on developer machines.
 	if(NOT DEFINED ENV{CI})
 		add_test(NAME FeatureTestRenderWindowed

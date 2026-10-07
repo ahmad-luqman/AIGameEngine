@@ -154,6 +154,21 @@ Returns local and world transforms of an entity.
 
 Lists every command with its description and parameters.
 
+## image
+
+### `image.compare`
+
+Compares a PNG with a reference image within a tolerance; optionally writes a diff image and fails on mismatch.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `actual` | string, image path (relative paths are project-relative) |
+| `assertMatch` | bool, default false |
+| `diff` | string, output .png, optional |
+| `maxPercent` | number, default 0.5 |
+| `pixelThreshold` | integer 0-255, default 8 |
+| `reference` | string, image path |
+
 ## input
 
 ### `input.key`

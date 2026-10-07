@@ -1,10 +1,7 @@
 #include "Basalt/Renderer/RenderUtils.h"
 
-#include "Basalt/Core/FileSystem.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
-
-#include <stb_image_write.h>
 
 namespace Basalt {
 
@@ -46,24 +43,6 @@ namespace Basalt {
 		}
 
 		return WritePng(path, pixels, width, height, outError);
-	}
-
-	bool WritePng(const std::filesystem::path& path, const std::vector<uint8_t>& rgba, uint32_t width, uint32_t height, std::string& outError)
-	{
-		if (rgba.size() < static_cast<size_t>(width) * height * 4)
-		{
-			outError = "pixel buffer is too small";
-			return false;
-		}
-		std::string png;
-		const int ok = stbi_write_png_to_func([](void* context, void* data, int size) { static_cast<std::string*>(context)->append(static_cast<const char*>(data), static_cast<size_t>(size)); },
-											  &png, static_cast<int>(width), static_cast<int>(height), 4, rgba.data(), static_cast<int>(width * 4));
-		if (!ok || !FileSystem::WriteBinaryFile(path, png.data(), png.size()))
-		{
-			outError = "could not write '" + path.string() + "'";
-			return false;
-		}
-		return true;
 	}
 
 }

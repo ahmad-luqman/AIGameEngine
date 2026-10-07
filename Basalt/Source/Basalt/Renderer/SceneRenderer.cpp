@@ -424,12 +424,17 @@ namespace Basalt {
 			impl.ShadowFramebuffers[cascade] = device->createFramebuffer(nvrhi::FramebufferDesc().setDepthAttachment(impl.ShadowMap, nvrhi::TextureSubresourceSet(0, 1, cascade, 1)));
 
 		// SSAO kernel: hemisphere samples concentrated near the origin; 4x4 rotation noise.
+		// mt19937's output is specified exactly, but std::uniform_real_distribution is not (and argument
+		// evaluation order varies by compiler), so values are drawn in statement order with a fixed
+		// conversion: every platform gets the same kernel and therefore the same image.
 		std::mt19937 random(1337u);
-		std::uniform_real_distribution<float> unit(0.0f, 1.0f);
+		auto unit = [&random]() { return static_cast<float>(random() >> 8) * (1.0f / 16777216.0f); };
 		for (uint32_t i = 0; i < SSAOKernelSize; i++)
 		{
-			glm::vec3 sample(unit(random) * 2.0f - 1.0f, unit(random) * 2.0f - 1.0f, unit(random));
-			sample = glm::normalize(sample) * unit(random);
+			const float x = unit() * 2.0f - 1.0f;
+			const float y = unit() * 2.0f - 1.0f;
+			const float z = unit();
+			glm::vec3 sample = glm::normalize(glm::vec3(x, y, z)) * unit();
 			float scale = static_cast<float>(i) / static_cast<float>(SSAOKernelSize);
 			scale = 0.1f + 0.9f * scale * scale;
 			impl.SsaoConstants.Kernel[i] = glm::vec4(sample * scale, 0.0f);
@@ -437,8 +442,8 @@ namespace Basalt {
 		std::array<uint8_t, size_t{ 16 } * 4> noise{};
 		for (size_t i = 0; i < 16; i++)
 		{
-			noise[i * 4 + 0] = static_cast<uint8_t>(unit(random) * 255.0f);
-			noise[i * 4 + 1] = static_cast<uint8_t>(unit(random) * 255.0f);
+			noise[i * 4 + 0] = static_cast<uint8_t>(unit() * 255.0f);
+			noise[i * 4 + 1] = static_cast<uint8_t>(unit() * 255.0f);
 			noise[i * 4 + 3] = 255;
 		}
 		nvrhi::TextureDesc noiseDesc;

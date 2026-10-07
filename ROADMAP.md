@@ -24,16 +24,6 @@ Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or mor
 These close the gap between "works on the developer's machine" and "production-grade". Do them before
 adding features.
 
-### Golden-image comparison — M
-The GPU test catches validation errors but not wrong pictures (a flipped shadow or a black SSAO buffer
-passes today).
-- Store reference PNGs per debug view (`Lit`, `SSAO`, `Normals`, `Depth`) for the feature scene, compare
-  with a perceptual tolerance (per-pixel delta + percentage threshold, as FLIP-style metrics do), and
-  write a diff image on failure.
-- Keep separate references per driver (lavapipe vs. MoltenVK) or use a tolerance loose enough for both;
-  document how to update them (`scripts/update_golden.sh`).
-- Done when: deliberately breaking a shader convention fails the test.
-
 ### Fuzz the untrusted inputs — M
 Scenes, prefabs, projects, glTF files, images and automation requests all come from outside the engine.
 The strict JSON readers and cgltf wrappers should never crash or assert on bad input.

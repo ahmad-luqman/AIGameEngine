@@ -1,6 +1,8 @@
 #include <doctest/doctest.h>
 
 #include <Basalt/Asset/AssetManager.h>
+#include <Basalt/Asset/ImageUtils.h>
+#include <Basalt/Asset/TextureSource.h>
 #include <Basalt/Asset/MeshImporter.h>
 #include <Basalt/Scene/Scene.h>
 
@@ -264,5 +266,73 @@ TEST_SUITE("Assets")
 		CHECK(scripts[0] == "Assets/Scripts/A.lua");
 		CHECK(AssetManager::IsTextureFile("x.HDR"));
 		CHECK(AssetManager::IsMeshFile("Ship.GLB"));
+	}
+
+	TEST_CASE("CompareImages measures per-pixel differences against a tolerance")
+	{
+		// 10x10 gray image; tests change individual pixels to probe the thresholds.
+		auto makeImage = [](uint8_t value) {
+			TextureSource image;
+			image.Width = 10;
+			image.Height = 10;
+			image.Pixels.assign(10 * 10 * 4, value);
+			return image;
+		};
+		const TextureSource reference = makeImage(100);
+
+		ImageCompareOptions options;
+		options.PixelThreshold = 8;
+		options.MaxDifferingPercent = 1.0;
+
+		ImageCompareResult same = CompareImages(reference, reference, options, true);
+		CHECK(same.SizeMatches);
+		CHECK(same.Matches);
+		CHECK(same.MaxDelta == 0);
+		CHECK(same.DifferingPercent == 0.0);
+		REQUIRE(same.DiffImage.size() == 10 * 10 * 4);
+		CHECK(same.DiffImage[0] == 0);
+
+		// A delta equal to the threshold does not count; one above it does.
+		TextureSource image = makeImage(100);
+		image.Pixels[0] = 108;
+		CHECK(CompareImages(image, reference, options, false).DifferingPercent == 0.0);
+		image.Pixels[0] = 109;
+		ImageCompareResult onePixel = CompareImages(image, reference, options, true);
+		CHECK(onePixel.MaxDelta == 9);
+		CHECK(onePixel.DifferingPercent == doctest::Approx(1.0));
+		CHECK(onePixel.Matches); // exactly at MaxDifferingPercent
+		CHECK(onePixel.DiffImage[0] == 255);
+		CHECK(onePixel.DiffImage[1] == 0); // differing pixels are red
+
+		// A second differing pixel exceeds 1% of 100 pixels.
+		image.Pixels[4 + 2] = 0;
+		ImageCompareResult twoPixels = CompareImages(image, reference, options, false);
+		CHECK(twoPixels.DifferingPercent == doctest::Approx(2.0));
+		CHECK_FALSE(twoPixels.Matches);
+		CHECK(twoPixels.MeanDelta == doctest::Approx((9.0 + 100.0) / 100.0));
+
+		// Alpha is ignored: captures are opaque, but a reference may have been saved with alpha.
+		TextureSource alpha = makeImage(100);
+		alpha.Pixels[3] = 0;
+		CHECK(CompareImages(alpha, reference, options, false).MaxDelta == 0);
+	}
+
+	TEST_CASE("CompareImages never matches images of different sizes")
+	{
+		TextureSource a;
+		a.Width = 4;
+		a.Height = 4;
+		a.Pixels.assign(4 * 4 * 4, 0);
+		TextureSource b = a;
+		b.Width = 2;
+		b.Height = 8;
+		const ImageCompareResult result = CompareImages(a, b, {}, true);
+		CHECK_FALSE(result.SizeMatches);
+		CHECK_FALSE(result.Matches);
+		CHECK(result.DiffImage.empty());
+
+		TextureSource hdr = a;
+		hdr.Format = TextureFormat::RGBA32F;
+		CHECK_FALSE(CompareImages(hdr, a, {}, false).Matches);
 	}
 }

@@ -186,8 +186,10 @@ jobs:
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
             libwayland-dev libxkbcommon-dev wayland-protocols
 
+      # Diagnostic only (vulkaninfo also probes window-system support, which a runner lacks); the GPU
+      # tests log every device and fail clearly when none is usable.
       - name: Vulkan device
-        run: vulkaninfo --summary
+        run: vulkaninfo --summary || true
 
       - name: Cache dependencies
         uses: actions/cache@v4
@@ -196,7 +198,7 @@ jobs:
           key: deps-plain-${{ runner.os }}-Release-${{ hashFiles('cmake/Dependencies.cmake') }}
 
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBASALT_GPU_TESTS=ON -DBASALT_CHECK_FORMAT=OFF
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBASALT_GPU_TESTS=ON -DBASALT_GOLDEN_DRIVER=lavapipe -DBASALT_CHECK_FORMAT=OFF
 
       - name: Build
         run: cmake --build build -- -k 0
@@ -209,5 +211,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: lavapipe-screenshots
-          path: build/Tests/*.png
+          path: build/Tests/Golden/*.png
           if-no-files-found: warn

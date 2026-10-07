@@ -1,4 +1,6 @@
 #include "Basalt/Asset/AssetManager.h"
+#include "Basalt/Asset/ImageUtils.h"
+#include "Basalt/Asset/TextureSource.h"
 #include "Basalt/Automation/AutomationSession.h"
 #include "Basalt/Automation/CommandRegistry.h"
 #include "Basalt/Core/FileSystem.h"
@@ -58,6 +60,19 @@ namespace Basalt {
 				throw CommandError(std::string("parameter '") + name + "' must be an integer");
 			const int64_t value = it->get<int64_t>();
 			if (value < min || value > max)
+				throw CommandError(std::string("parameter '") + name + "' must be in [" + std::to_string(min) + ", " + std::to_string(max) + "]");
+			return value;
+		}
+
+		double OptionalNumber(const json& params, const char* name, double fallback, double min, double max)
+		{
+			auto it = params.find(name);
+			if (it == params.end() || it->is_null())
+				return fallback;
+			if (!it->is_number())
+				throw CommandError(std::string("parameter '") + name + "' must be a number");
+			const double value = it->get<double>();
+			if (!(value >= min && value <= max))
 				throw CommandError(std::string("parameter '") + name + "' must be in [" + std::to_string(min) + ", " + std::to_string(max) + "]");
 			return value;
 		}
@@ -666,6 +681,47 @@ namespace Basalt {
 					throw CommandError(error);
 				return json{ { "path", path } };
 			});
+
+			// Headless, so tests and agents can check renders from any host (golden-image tests use it).
+			Add(registry, "image.compare", "Compares a PNG with a reference image within a tolerance; optionally writes a diff image and fails on mismatch.",
+				{ { "actual", "string, image path (relative paths are project-relative)" }, { "reference", "string, image path" }, { "diff", "string, output .png, optional" }, { "pixelThreshold", "integer 0-255, default 8" }, { "maxPercent", "number, default 0.5" }, { "assertMatch", "bool, default false" } },
+				[](AutomationSession&, const json& params) {
+					const std::filesystem::path actualPath = Project::ResolvePath(RequireString(params, "actual"));
+					const std::filesystem::path referencePath = Project::ResolvePath(RequireString(params, "reference"));
+					ImageCompareOptions options;
+					options.PixelThreshold = static_cast<uint8_t>(OptionalInteger(params, "pixelThreshold", options.PixelThreshold, 0, 255));
+					options.MaxDifferingPercent = OptionalNumber(params, "maxPercent", options.MaxDifferingPercent, 0.0, 100.0);
+					const std::string diffParam = OptionalString(params, "diff");
+					const std::filesystem::path diffPath = diffParam.empty() ? std::filesystem::path() : Project::ResolvePath(diffParam);
+
+					std::string error;
+					// The wording is stable: the golden-image ctests skip (not fail) on a missing reference.
+					if (!std::filesystem::exists(referencePath))
+						throw CommandError("reference image not found: '" + referencePath.string() + "'");
+					Ref<TextureSource> reference = TextureSource::LoadFromFile(referencePath, error);
+					if (!reference)
+						throw CommandError("cannot load reference image: " + error);
+					Ref<TextureSource> actual = TextureSource::LoadFromFile(actualPath, error);
+					if (!actual)
+						throw CommandError("cannot load image: " + error);
+
+					ImageCompareResult result = CompareImages(*actual, *reference, options, !diffPath.empty());
+					if (!diffPath.empty() && result.SizeMatches && !WritePng(diffPath, result.DiffImage, result.Width, result.Height, error))
+						throw CommandError(error);
+
+					json response = {
+						{ "matches", result.Matches },
+						{ "sizeMatches", result.SizeMatches },
+						{ "size", { actual->Width, actual->Height } },
+						{ "referenceSize", { reference->Width, reference->Height } },
+						{ "maxDelta", result.MaxDelta },
+						{ "meanDelta", result.MeanDelta },
+						{ "differingPercent", result.DifferingPercent },
+					};
+					if (OptionalBool(params, "assertMatch", false) && !result.Matches)
+						throw CommandError("images differ: " + response.dump());
+					return response;
+				});
 		}
 
 	}

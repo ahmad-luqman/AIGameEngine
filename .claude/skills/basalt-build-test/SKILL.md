@@ -14,7 +14,12 @@ description: Build Basalt, run its unit tests and format check, and verify rende
    ```
    The log must contain `validation enabled` and no `[Vulkan]` / `[nvrhi]` error lines.
 4. Release build sanity check for larger changes: `scripts/build.sh Release`.
-5. Test groups are labelled: `ctest --test-dir build -L unit|integration|gpu|format` (or `-LE` to exclude).
+5. Rendering changes: `ctest --test-dir build -L gpu` renders every debug view offscreen and compares it
+   with `Tests/Data/Golden/<driver>/` (`moltenvk` on macOS, `lavapipe` on CI). If a change is meant to alter
+   the image, look at the new renders and the `*.diff.png` files in `build/Tests/Golden/`, then run
+   `scripts/update_golden.sh` and commit the new references. Never update references to silence a failure
+   you have not looked at.
+6. Test groups are labelled: `ctest --test-dir build -L unit|integration|gpu|format` (or `-LE` to exclude).
 
 Extra checks (each one is also a CI job; run locally when touching memory handling or before big commits):
 - Sanitizers: `cmake -S . -B build-asan -G Ninja -DBASALT_SANITIZE="address;undefined" -DBASALT_CHECK_FORMAT=OFF`,
