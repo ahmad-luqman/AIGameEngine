@@ -30,6 +30,13 @@ namespace Basalt {
 				outError = stbi_failure_reason() ? stbi_failure_reason() : "unknown decode error";
 				return nullptr;
 			}
+			if (width <= 0 || height <= 0)
+			{
+				// stb_image accepts a Radiance header with a zero size and still returns a buffer.
+				stbi_image_free(pixels);
+				outError = "image has no pixels";
+				return nullptr;
+			}
 			texture->Format = TextureFormat::RGBA32F;
 			texture->Pixels.resize(static_cast<size_t>(width) * height * 16);
 			std::memcpy(texture->Pixels.data(), pixels, texture->Pixels.size());
@@ -41,6 +48,12 @@ namespace Basalt {
 			if (!pixels)
 			{
 				outError = stbi_failure_reason() ? stbi_failure_reason() : "unknown decode error";
+				return nullptr;
+			}
+			if (width <= 0 || height <= 0)
+			{
+				stbi_image_free(pixels);
+				outError = "image has no pixels";
 				return nullptr;
 			}
 			texture->Format = TextureFormat::RGBA8;
