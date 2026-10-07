@@ -59,3 +59,11 @@ basalt_embed_shaders(Basalt
 	SOURCES ${BASALT_SHADER_SOURCES})
 
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/Source" FILES ${BASALT_SOURCES})
+
+# stb_image calls memcpy(NULL, src, 0) when a PNG's first IDAT chunk is empty (valid PNG; unfixed upstream).
+# Copying zero bytes touches no memory, but glibc declares memcpy's pointers non-null, so UBSan's
+# nonnull-attribute check would abort fuzzing and sanitizer runs on any such image. Only stb's translation
+# unit is exempt; a null pointer with a non-zero size would still be caught by ASan as an invalid write.
+if(BASALT_SANITIZE OR BASALT_FUZZ)
+	set_source_files_properties(Source/Basalt/Asset/StbImplementation.cpp PROPERTIES COMPILE_OPTIONS -fno-sanitize=nonnull-attribute)
+endif()

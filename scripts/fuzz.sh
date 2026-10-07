@@ -36,7 +36,7 @@ for target in FuzzScene FuzzTexture FuzzGltf FuzzCommand FuzzLuaJson; do
 	echo "=== $target (${seconds}s)"
 	# The seed directory is read-only input; new findings go into the build-local corpus.
 	if ! "$buildDir/bin/$target" "$corpus" "Tests/Fuzz/Corpus/$target" -max_total_time="$seconds" -timeout=10 -rss_limit_mb=4096 \
-		-artifact_prefix="$crashes/" -print_final_stats=1 2>&1 | grep -E "^(#[0-9]+ +DONE|stat::number_of_executed_units|==[0-9]+==ERROR|SUMMARY|artifact_prefix|Test unit written)"; then
+		-artifact_prefix="$crashes/" -print_final_stats=1 2>&1 | grep -E "^(#[0-9]+ +DONE|stat::number_of_executed_units|==[0-9]+==ERROR|SUMMARY|artifact_prefix|Test unit written)|runtime error|^ +#[0-9] "; then
 		:
 	fi
 	if compgen -G "$crashes/*" > /dev/null; then
