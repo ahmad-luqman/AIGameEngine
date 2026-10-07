@@ -495,6 +495,84 @@ TEST_SUITE("Assets")
 		CHECK(error == "image has no pixels");
 	}
 
+	// Regression (FuzzTexture): a BMP with height INT32_MIN made stb_image evaluate abs(INT32_MIN), which
+	// overflows. Rejected before decoding; other heights (including negative, top-down BMPs) still load.
+	TEST_CASE("BMP headers with an unrepresentable height are rejected")
+	{
+		static const uint8_t intMinHeight[] = {
+			0x42,
+			0x4D,
+			0x46,
+			0x00,
+			0x00,
+			0x00,
+			0x00,
+			0x00,
+			0x00,
+			0x36,
+			0x00,
+			0x00,
+			0x00,
+			0x00,
+			0x28,
+			0x00,
+			0x00,
+			0x00,
+			0x00,
+			0x00,
+			0x00,
+			0x00,
+			0x00,
+			0x00,
+			0x00,
+			0x80,
+			0x01,
+			0x00,
+			0x00,
+			0x00,
+			0x00,
+			0x00,
+			0x00,
+			0x00,
+			0x00,
+			0xFF,
+			0xFF,
+			0xFF,
+			0xFF,
+			0xFF,
+		};
+		std::string error;
+		CHECK_FALSE(TextureSource::LoadFromMemory(intMinHeight, sizeof(intMinHeight), error));
+		CHECK(error == "invalid BMP height");
+
+		// A valid 2x2 top-down BMP (negative height) is unaffected.
+		std::vector<uint8_t> bmp = { 'B', 'M' };
+		auto put32 = [&bmp](uint32_t value) {
+			for (int i = 0; i < 4; i++)
+				bmp.push_back(static_cast<uint8_t>(value >> (8 * i)));
+		};
+		auto put16 = [&bmp](uint16_t value) {
+			bmp.push_back(static_cast<uint8_t>(value));
+			bmp.push_back(static_cast<uint8_t>(value >> 8));
+		};
+		put32(14 + 40 + 16);
+		put32(0);
+		put32(14 + 40);
+		put32(40);
+		put32(2);
+		put32(static_cast<uint32_t>(-2));
+		put16(1);
+		put16(32);
+		for (int i = 0; i < 6; i++)
+			put32(0);
+		for (int i = 0; i < 16; i++)
+			bmp.push_back(0x80);
+		Ref<TextureSource> image = TextureSource::LoadFromMemory(bmp.data(), bmp.size(), error);
+		REQUIRE_MESSAGE(image, error);
+		CHECK(image->Width == 2);
+		CHECK(image->Height == 2);
+	}
+
 	TEST_CASE("CompareImages measures per-pixel differences against a tolerance")
 	{
 		// 10x10 gray image; tests change individual pixels to probe the thresholds.

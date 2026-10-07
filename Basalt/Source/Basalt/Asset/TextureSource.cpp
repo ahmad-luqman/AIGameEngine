@@ -8,11 +8,34 @@
 
 namespace Basalt {
 
+	namespace {
+
+		// stb_image computes abs() of a BMP's signed 32-bit height, which overflows (undefined behaviour) for
+		// INT32_MIN; found by FuzzTexture and still present upstream. No valid image has that height.
+		bool HasInvalidBmpHeight(const uint8_t* data, size_t size)
+		{
+			if (size < 26 || data[0] != 'B' || data[1] != 'M')
+				return false;
+			const uint32_t headerSize = static_cast<uint32_t>(data[14]) | (static_cast<uint32_t>(data[15]) << 8) | (static_cast<uint32_t>(data[16]) << 16) | (static_cast<uint32_t>(data[17]) << 24);
+			if (headerSize == 12) // BITMAPCOREHEADER: 16-bit dimensions, no overflow possible
+				return false;
+			const uint32_t height = static_cast<uint32_t>(data[22]) | (static_cast<uint32_t>(data[23]) << 8) | (static_cast<uint32_t>(data[24]) << 16) | (static_cast<uint32_t>(data[25]) << 24);
+			return height == 0x80000000u;
+		}
+
+	}
+
 	Ref<TextureSource> TextureSource::LoadFromMemory(const uint8_t* data, size_t size, std::string& outError)
 	{
 		if (!data || size == 0 || size > static_cast<size_t>(INT32_MAX))
 		{
 			outError = "empty or oversized image data";
+			return nullptr;
+		}
+
+		if (HasInvalidBmpHeight(data, size))
+		{
+			outError = "invalid BMP height";
 			return nullptr;
 		}
 
