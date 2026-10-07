@@ -19,7 +19,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
+        timeout-minutes: 10
         run: |
+          echo 'Acquire::Retries "3"; Acquire::http::Timeout "20"; Acquire::https::Timeout "20";' | sudo tee /etc/apt/apt.conf.d/99-ci-timeouts
           sudo apt-get update
           sudo apt-get install -y ninja-build glslc libvulkan1 clang \
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
