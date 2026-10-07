@@ -178,9 +178,6 @@ jobs:
   gpu-lavapipe:
     name: ubuntu-24.04 / GPU tests (lavapipe)
     runs-on: ubuntu-24.04
-    env:
-      # Load only lavapipe, so the run never depends on what else the runner image installs.
-      VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
     steps:
       - uses: actions/checkout@v4
 
@@ -190,6 +187,15 @@ jobs:
           sudo apt-get install -y ninja-build glslc libvulkan1 mesa-vulkan-drivers vulkan-validationlayers vulkan-tools \
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
             libwayland-dev libxkbcommon-dev wayland-protocols
+
+      # Load only lavapipe, so the run never depends on what else the runner image installs. The manifest's
+      # file name differs between Mesa packages, so find it instead of hard-coding it.
+      - name: Select lavapipe
+        run: |
+          ls /usr/share/vulkan/icd.d/
+          manifest=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)
+          test -n "$manifest"
+          echo "VK_DRIVER_FILES=$manifest" >> "$GITHUB_ENV"
 
       # Diagnostic only (vulkaninfo also probes window-system support, which a runner lacks); the GPU
       # tests log every device and fail clearly when none is usable.
