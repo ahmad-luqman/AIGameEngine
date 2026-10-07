@@ -7,6 +7,7 @@
 #include "Basalt/Renderer/ShaderUtils.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
+#include "Basalt/Math/Random.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -16,7 +17,6 @@
 #include <array>
 #include <cstring>
 #include <map>
-#include <random>
 
 namespace Basalt {
 
@@ -424,11 +424,10 @@ namespace Basalt {
 			impl.ShadowFramebuffers[cascade] = device->createFramebuffer(nvrhi::FramebufferDesc().setDepthAttachment(impl.ShadowMap, nvrhi::TextureSubresourceSet(0, 1, cascade, 1)));
 
 		// SSAO kernel: hemisphere samples concentrated near the origin; 4x4 rotation noise.
-		// mt19937's output is specified exactly, but std::uniform_real_distribution is not (and argument
-		// evaluation order varies by compiler), so values are drawn in statement order with a fixed
-		// conversion: every platform gets the same kernel and therefore the same image.
-		std::mt19937 random(1337u);
-		auto unit = [&random]() { return static_cast<float>(random() >> 8) * (1.0f / 16777216.0f); };
+		// Basalt::Random is identical on every platform, and values are drawn in statement order (argument
+		// evaluation order varies by compiler), so every platform builds the same kernel and image.
+		Random random(1337u);
+		auto unit = [&random]() { return random.Float(); };
 		for (uint32_t i = 0; i < SSAOKernelSize; i++)
 		{
 			const float x = unit() * 2.0f - 1.0f;

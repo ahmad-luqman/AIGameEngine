@@ -83,6 +83,13 @@ local function TestMath()
 	Check("Math.RandomInt range", r >= 3 and r <= 5)
 	local f = Math.Random(-2, -1)
 	Check("Math.Random(min, max) range", f >= -2 and f <= -1)
+	-- Lua's math.random shares the engine generator, so it is deterministic too (Lua seeds it from the clock).
+	math.randomseed(7)
+	local a, b, c = math.random(), math.random(10), math.random(-3, 3)
+	math.randomseed(7)
+	Check("math.random is deterministic", math.random() == a and math.random(10) == b and math.random(-3, 3) == c)
+	Check("math.random ranges", a >= 0 and a < 1 and b >= 1 and b <= 10 and c >= -3 and c <= 3 and math.type(b) == "integer")
+	Check("math.random empty interval errors", not pcall(math.random, -1))
 end
 
 local function TestEntities(self)

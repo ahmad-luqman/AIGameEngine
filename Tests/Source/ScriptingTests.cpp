@@ -312,6 +312,22 @@ TEST_SUITE("Scripting")
 		scene.OnRuntimeStop();
 	}
 
+	// Regression: Lua 5.4 seeds math.random from the clock, so two runs of the same game diverged.
+	TEST_CASE("Lua math.random gives the same sequence in every play session")
+	{
+		auto sequence = []() {
+			Scene scene;
+			scene.OnRuntimeStart();
+			std::string result;
+			REQUIRE(scene.GetScriptEngine()->ExecuteString("local t = {} for i = 1, 8 do t[i] = math.random(1000) end return table.concat(t, ',') .. ';' .. Math.RandomInt(1, 1000)", result));
+			scene.OnRuntimeStop();
+			return result;
+		};
+		const std::string first = sequence();
+		CHECK_FALSE(first.empty());
+		CHECK(sequence() == first);
+	}
+
 	TEST_CASE("Scripts added at runtime start on the next update; require loads project modules")
 	{
 		BasaltTest::TempProject project("ScriptRuntimeAdd");

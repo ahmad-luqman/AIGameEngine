@@ -18,6 +18,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/quaternion.hpp>
 
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 
@@ -127,11 +128,29 @@ namespace Basalt {
 			math["Lerp"] = [](float a, float b, float t) { return a + (b - a) * t; };
 			math["Sign"] = [](float value) { return value > 0.0f ? 1.0f : (value < 0.0f ? -1.0f : 0.0f); };
 			// Deterministic generator; Math.Seed makes runs reproducible.
-			math["Seed"] = [&context](uint32_t seed) { context.Random.seed(seed); };
-			math["Random"] = sol::overload(
-				[&context]() { return std::uniform_real_distribution<float>(0.0f, 1.0f)(context.Random); },
-				[&context](float min, float max) { return std::uniform_real_distribution<float>(std::min(min, max), std::max(min, max))(context.Random); });
-			math["RandomInt"] = [&context](int64_t min, int64_t max) { return std::uniform_int_distribution<int64_t>(std::min(min, max), std::max(min, max))(context.Random); };
+			math["Seed"] = [&context](uint32_t seed) { context.Rng.Seed(seed); };
+			math["Random"] = sol::overload([&context]() { return context.Rng.Float(); }, [&context](float min, float max) { return context.Rng.Range(min, max); });
+			math["RandomInt"] = [&context](int64_t min, int64_t max) { return context.Rng.Int(min, max); };
+
+			// Lua's own math.random is seeded from the clock at startup, which would make any script that
+			// uses it nondeterministic; it shares the engine generator instead (same results as Lua's API
+			// shape: random(), random(m) in [1, m], random(m, n) in [m, n]).
+			sol::table luaMath = lua["math"];
+			luaMath["random"] = sol::overload(
+				[&context]() { return static_cast<double>(context.Rng.Float()); },
+				[&context](int64_t max) {
+					if (max == 0)
+						return context.Rng.Int(std::numeric_limits<int64_t>::min(), std::numeric_limits<int64_t>::max());
+					if (max < 1)
+						throw std::runtime_error("bad argument #1 to 'random' (interval is empty)");
+					return context.Rng.Int(1, max);
+				},
+				[&context](int64_t min, int64_t max) {
+					if (min > max)
+						throw std::runtime_error("bad argument #2 to 'random' (interval is empty)");
+					return context.Rng.Int(min, max);
+				});
+			luaMath["randomseed"] = [&context](sol::optional<int64_t> seed) { context.Rng.Seed(static_cast<uint32_t>(seed.value_or(Random::DefaultSeed))); };
 		}
 
 		void RegisterEntity(sol::state& lua, ScriptContext& context)

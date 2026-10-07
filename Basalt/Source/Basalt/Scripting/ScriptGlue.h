@@ -1,11 +1,11 @@
 #pragma once
 
 #include "Basalt/Core/UUID.h"
+#include "Basalt/Math/Random.h"
 
 #include <sol/sol.hpp>
 
 #include <functional>
-#include <random>
 
 namespace Basalt {
 
@@ -34,7 +34,8 @@ namespace Basalt {
 		// Returns the script instance table of an entity, or nil.
 		std::function<sol::object(UUID)> GetInstance;
 		float DeltaTime = 0.0f;
-		std::mt19937 Random{ 0x8A5A17u };
+		// Backs Math.Random* and Lua's math.random: seeded and identical on every platform.
+		Random Rng;
 	};
 
 	// Registers the complete Basalt Lua API (see Docs/ScriptingAPI.md) into the state.
