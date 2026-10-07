@@ -102,20 +102,13 @@ namespace Basalt {
 	void Input::OnEvent(Event& event)
 	{
 		EventDispatcher dispatcher(event);
-		dispatcher.Dispatch<KeyPressedEvent>([](KeyPressedEvent& e)
-											 { SetKeyState(e.GetKeyCode(), true); return false; });
-		dispatcher.Dispatch<KeyReleasedEvent>([](KeyReleasedEvent& e)
-											  { SetKeyState(e.GetKeyCode(), false); return false; });
-		dispatcher.Dispatch<MouseButtonPressedEvent>([](MouseButtonPressedEvent& e)
-													 { SetMouseButtonState(e.GetMouseButton(), true); return false; });
-		dispatcher.Dispatch<MouseButtonReleasedEvent>([](MouseButtonReleasedEvent& e)
-													  { SetMouseButtonState(e.GetMouseButton(), false); return false; });
-		dispatcher.Dispatch<MouseMovedEvent>([](MouseMovedEvent& e)
-											 { SetMousePosition({ e.GetX(), e.GetY() }); return false; });
-		dispatcher.Dispatch<MouseScrolledEvent>([](MouseScrolledEvent& e)
-												{ AddMouseScroll({ e.GetXOffset(), e.GetYOffset() }); return false; });
-		dispatcher.Dispatch<WindowLostFocusEvent>([](WindowLostFocusEvent&)
-												  { Reset(); return false; });
+		dispatcher.Dispatch<KeyPressedEvent>([](KeyPressedEvent& e) { SetKeyState(e.GetKeyCode(), true); return false; });
+		dispatcher.Dispatch<KeyReleasedEvent>([](KeyReleasedEvent& e) { SetKeyState(e.GetKeyCode(), false); return false; });
+		dispatcher.Dispatch<MouseButtonPressedEvent>([](MouseButtonPressedEvent& e) { SetMouseButtonState(e.GetMouseButton(), true); return false; });
+		dispatcher.Dispatch<MouseButtonReleasedEvent>([](MouseButtonReleasedEvent& e) { SetMouseButtonState(e.GetMouseButton(), false); return false; });
+		dispatcher.Dispatch<MouseMovedEvent>([](MouseMovedEvent& e) { SetMousePosition({ e.GetX(), e.GetY() }); return false; });
+		dispatcher.Dispatch<MouseScrolledEvent>([](MouseScrolledEvent& e) { AddMouseScroll({ e.GetXOffset(), e.GetYOffset() }); return false; });
+		dispatcher.Dispatch<WindowLostFocusEvent>([](WindowLostFocusEvent&) { Reset(); return false; });
 	}
 
 	void Input::EndFrame()

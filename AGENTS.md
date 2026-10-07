@@ -30,7 +30,7 @@ scripts/test.sh             # build + ctest (unit tests, format check, ...)
 ./build/bin/BasaltTests     # run unit tests directly; add -tc="*name*" to filter
 ```
 
-- Requirements: CMake ≥ 3.24, Ninja, a C++20 compiler, `glslc` (Vulkan SDK or shaderc), a Vulkan 1.3
+- Requirements: CMake ≥ 3.25, Ninja, a C++20 compiler, `glslc` (Vulkan SDK or shaderc), a Vulkan 1.3
   runtime (MoltenVK on macOS). All third-party code is fetched by CMake at pinned versions.
 - Build configurations: `Debug` (asserts, validation), `Release` (optimized, asserts on),
   `Dist` (shipping: no asserts — defines `BS_DIST`).
@@ -88,7 +88,15 @@ Other rules:
   `layout(set = S, binding = N)` equals nvrhi slot `N` for every resource type. Within one binding
   layout every slot number must be unique across resource types (a texture and a sampler cannot both
   use slot 0). A mismatch renders black without any validation error.
-- Shaders are GLSL 450 in `Basalt/Shaders`, compiled with `glslc --target-env=vulkan1.3 -Werror`, and
+- **Clip space is +Y up (D3D convention), depth 0..1.** nvrhi's Vulkan backend flips the viewport, so
+  projection matrices must *not* be Y-flipped, fullscreen passes map `ndc.y = 1 - 2 * uv.y`, and texture
+  UV (0,0) is the top-left texel. Shadow/SSAO lookups convert with `uv = (ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5)`.
+  Meshes wind counter-clockwise (front faces). Use the renderer's debug views (`--debug-view` on the
+  runtime, View > Debug View in the editor) when something looks wrong.
+- Binding layouts set `registerSpace = N` with `registerSpaceIsDescriptorSet = true`, so GLSL `set = N`
+  matches. Push constants occupy a constant-buffer register in nvrhi: use `PushConstantSlot` in layouts that
+  also contain constant buffers.
+- Shaders are GLSL 450 in `Basalt/Shaders`, compiled with `glslc --target-env=vulkan1.2 -Werror`, and
   looked up by file name: `CreateEmbeddedShader(device, "ImGui.vert", nvrhi::ShaderType::Vertex)`.
 - The swapchain is UNORM: the final pass writes display-referred (tonemapped, sRGB-encoded) color.
 

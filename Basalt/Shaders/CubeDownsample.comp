@@ -1,0 +1,23 @@
+#version 450
+
+// Generates one cube mip level by averaging 2x2 texels of the previous level (all six faces).
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform texture2DArray u_Source;
+layout(set = 0, binding = 1) uniform sampler u_PointSampler;
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2DArray u_Destination;
+
+void main()
+{
+	ivec3 id = ivec3(gl_GlobalInvocationID);
+	ivec2 size = imageSize(u_Destination).xy;
+	if (id.x >= size.x || id.y >= size.y)
+		return;
+
+	ivec2 source = id.xy * 2;
+	vec4 color = texelFetch(sampler2DArray(u_Source, u_PointSampler), ivec3(source, id.z), 0)
+		+ texelFetch(sampler2DArray(u_Source, u_PointSampler), ivec3(source + ivec2(1, 0), id.z), 0)
+		+ texelFetch(sampler2DArray(u_Source, u_PointSampler), ivec3(source + ivec2(0, 1), id.z), 0)
+		+ texelFetch(sampler2DArray(u_Source, u_PointSampler), ivec3(source + ivec2(1, 1), id.z), 0);
+	imageStore(u_Destination, id, color * 0.25);
+}

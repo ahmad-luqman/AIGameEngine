@@ -16,3 +16,7 @@ compile_commands.json
 # Editor runtime state
 imgui.ini
 *.log
+
+# Editor swap/backup files
+*.swp
+*~

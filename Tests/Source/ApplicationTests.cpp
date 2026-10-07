@@ -62,8 +62,7 @@ TEST_SUITE("Application")
 		Application application(specification);
 
 		int executed = 0;
-		std::thread worker([&]
-						   {
+		std::thread worker([&] {
 			application.SubmitToMainThread([&] { executed++; });
 			application.SubmitToMainThread([&] {
 				executed++;

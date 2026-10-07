@@ -4,7 +4,10 @@ file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/So
 
 add_executable(BasaltTests ${TEST_SOURCES})
 basalt_set_warnings(BasaltTests)
-target_link_libraries(BasaltTests PRIVATE Basalt doctest::doctest)
+target_link_libraries(BasaltTests PRIVATE Basalt doctest::doctest BasaltStb)
+if(WIN32)
+	target_link_libraries(BasaltTests PRIVATE ws2_32)
+endif()
 target_compile_definitions(BasaltTests PRIVATE BASALT_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Data")
 
 add_test(NAME BasaltTests COMMAND BasaltTests --reporters=console --no-intro=true WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")

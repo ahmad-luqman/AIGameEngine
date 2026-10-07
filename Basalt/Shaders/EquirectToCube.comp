@@ -1,0 +1,22 @@
+#version 450
+#include "CubeMap.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform texture2D u_Equirect;
+layout(set = 0, binding = 1) uniform sampler u_LinearSampler;
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2DArray u_Cube;
+
+void main()
+{
+	ivec3 id = ivec3(gl_GlobalInvocationID);
+	ivec2 size = imageSize(u_Cube).xy;
+	if (id.x >= size.x || id.y >= size.y)
+		return;
+
+	vec3 direction = CubeDirection(uint(id.z), (vec2(id.xy) + 0.5) / vec2(size));
+	vec2 uv = vec2(atan(direction.z, direction.x) / (2.0 * PI) + 0.5, acos(clamp(direction.y, -1.0, 1.0)) / PI);
+	vec3 color = textureLod(sampler2D(u_Equirect, u_LinearSampler), uv, 0.0).rgb;
+	// Clamp extreme values (sun pixels) to keep prefiltering free of fireflies.
+	imageStore(u_Cube, id, vec4(min(color, vec3(64000.0)), 1.0));
+}

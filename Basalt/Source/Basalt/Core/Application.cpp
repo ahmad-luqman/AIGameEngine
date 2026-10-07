@@ -1,5 +1,6 @@
 #include "Basalt/Core/Application.h"
 
+#include "Basalt/Audio/AudioEngine.h"
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Input.h"
 #include "Basalt/Core/Timer.h"
@@ -31,6 +32,8 @@ namespace Basalt {
 				return;
 			}
 		}
+
+		AudioEngine::Init(m_Specification.Headless);
 
 		if (m_Specification.Headless)
 		{
@@ -81,6 +84,7 @@ namespace Basalt {
 		m_GraphicsDevice.reset();
 		m_Window.reset();
 		VulkanLoader::Unload();
+		AudioEngine::Shutdown();
 
 		s_Instance = nullptr;
 	}
@@ -89,8 +93,7 @@ namespace Basalt {
 	{
 		// Layers may push layers from their callbacks; mutating the stack mid-iteration is not allowed.
 		if (m_IteratingLayers)
-			SubmitToMainThread([this, layer]()
-							   { m_LayerStack.PushLayer(layer); });
+			SubmitToMainThread([this, layer]() { m_LayerStack.PushLayer(layer); });
 		else
 			m_LayerStack.PushLayer(layer);
 	}
@@ -98,8 +101,7 @@ namespace Basalt {
 	void Application::PushOverlay(Layer* overlay)
 	{
 		if (m_IteratingLayers)
-			SubmitToMainThread([this, overlay]()
-							   { m_LayerStack.PushOverlay(overlay); });
+			SubmitToMainThread([this, overlay]() { m_LayerStack.PushOverlay(overlay); });
 		else
 			m_LayerStack.PushOverlay(overlay);
 	}

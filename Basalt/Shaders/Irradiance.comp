@@ -1,0 +1,38 @@
+#version 450
+#include "CubeMap.glsl"
+
+// Cosine-weighted hemisphere convolution of the environment (diffuse irradiance).
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform textureCube u_Environment;
+layout(set = 0, binding = 1) uniform sampler u_LinearSampler;
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2DArray u_Irradiance;
+
+void main()
+{
+	ivec3 id = ivec3(gl_GlobalInvocationID);
+	ivec2 size = imageSize(u_Irradiance).xy;
+	if (id.x >= size.x || id.y >= size.y)
+		return;
+
+	vec3 N = CubeDirection(uint(id.z), (vec2(id.xy) + 0.5) / vec2(size));
+	vec3 up = abs(N.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+	vec3 right = normalize(cross(up, N));
+	up = cross(N, right);
+
+	const float sampleDelta = 0.025;
+	vec3 irradiance = vec3(0.0);
+	float sampleCount = 0.0;
+	for (float phi = 0.0; phi < 2.0 * PI; phi += sampleDelta)
+	{
+		for (float theta = 0.0; theta < 0.5 * PI; theta += sampleDelta)
+		{
+			vec3 tangentSample = vec3(sin(theta) * cos(phi), sin(theta) * sin(phi), cos(theta));
+			vec3 sampleVector = tangentSample.x * right + tangentSample.y * up + tangentSample.z * N;
+			// Sample a low mip: the convolution is a wide blur anyway and this avoids aliasing.
+			irradiance += textureLod(samplerCube(u_Environment, u_LinearSampler), sampleVector, 3.0).rgb * cos(theta) * sin(theta);
+			sampleCount += 1.0;
+		}
+	}
+	imageStore(u_Irradiance, id, vec4(PI * irradiance / sampleCount, 1.0));
+}

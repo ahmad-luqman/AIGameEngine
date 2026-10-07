@@ -1,0 +1,8 @@
+{
+	"Format": "BasaltProject",
+	"Name": "FeatureTest",
+	"StartScene": "Assets/Scenes/RenderTest.bscene",
+	"WindowWidth": 1280,
+	"WindowHeight": 720,
+	"Fullscreen": false
+}

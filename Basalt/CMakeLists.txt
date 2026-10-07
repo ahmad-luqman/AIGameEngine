@@ -20,7 +20,10 @@ target_compile_definitions(Basalt
 		SOL_ALL_SAFETIES_ON=1
 		$<$<CONFIG:Debug>:BS_DEBUG>
 		$<$<CONFIG:Release>:BS_RELEASE>
-		$<$<CONFIG:Dist>:BS_DIST>)
+		$<$<CONFIG:Dist>:BS_DIST>
+		# windows.h must not define min/max macros (they break std::min/std::clamp).
+		$<$<PLATFORM_ID:Windows>:NOMINMAX>
+		$<$<PLATFORM_ID:Windows>:WIN32_LEAN_AND_MEAN>)
 
 target_link_libraries(Basalt
 	PUBLIC
@@ -41,6 +44,10 @@ target_link_libraries(Basalt
 		BasaltMiniaudio
 		BasaltCgltf
 		BasaltStb)
+
+if(WIN32)
+	target_link_libraries(Basalt PRIVATE ws2_32)
+endif()
 
 file(GLOB BASALT_SHADER_SOURCES CONFIGURE_DEPENDS
 	"${CMAKE_CURRENT_SOURCE_DIR}/Shaders/*.vert"

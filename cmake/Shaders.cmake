@@ -29,7 +29,7 @@ function(basalt_embed_shaders target)
 
 		add_custom_command(
 			OUTPUT "${output}"
-			COMMAND "${BASALT_GLSLC}" --target-env=vulkan1.3 -O -Werror -mfmt=c
+			COMMAND "${BASALT_GLSLC}" --target-env=vulkan1.2 -O -Werror -mfmt=c
 				-I "${ARG_INCLUDE_DIR}" "${source}" -o "${output}"
 			DEPENDS "${source}" ${includeDeps}
 			COMMENT "Compiling shader ${fileName}"

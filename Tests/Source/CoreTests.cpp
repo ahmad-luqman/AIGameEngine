@@ -180,13 +180,11 @@ TEST_SUITE("Core")
 
 		EventDispatcher dispatcher(resize);
 		bool keyCalled = false;
-		CHECK_FALSE(dispatcher.Dispatch<KeyPressedEvent>([&](KeyPressedEvent&)
-														 { keyCalled = true; return true; }));
+		CHECK_FALSE(dispatcher.Dispatch<KeyPressedEvent>([&](KeyPressedEvent&) { keyCalled = true; return true; }));
 		CHECK_FALSE(keyCalled);
 
 		uint32_t width = 0;
-		CHECK(dispatcher.Dispatch<WindowResizeEvent>([&](WindowResizeEvent& e)
-													 { width = e.GetWidth(); return true; }));
+		CHECK(dispatcher.Dispatch<WindowResizeEvent>([&](WindowResizeEvent& e) { width = e.GetWidth(); return true; }));
 		CHECK(width == 800);
 		CHECK(resize.Handled);
 	}
@@ -280,5 +278,26 @@ TEST_SUITE("Core")
 		CHECK_FALSE(FileSystem::Exists(occupied.string() + ".tmp"));
 
 		std::filesystem::remove_all(directory);
+	}
+}
+
+#include <Basalt/Core/CommandLine.h>
+
+TEST_SUITE("Core")
+{
+	TEST_CASE("CommandLine parses flags, values, positionals and errors")
+	{
+		const char* argv[] = { "app", "--project", "Game", "--headless", "scene.bscene", "--frames=10", "--width", "abc", "--screenshot" };
+		const CommandLine commandLine(9, argv, { "project", "frames", "width", "screenshot" });
+		CHECK(commandLine.GetValue("project") == "Game");
+		CHECK(commandLine.HasFlag("headless"));
+		CHECK_FALSE(commandLine.HasFlag("project"));
+		CHECK(commandLine.GetInteger("frames") == 10);
+		CHECK_FALSE(commandLine.GetInteger("width").has_value());
+		CHECK_FALSE(commandLine.GetValue("missing").has_value());
+		REQUIRE(commandLine.GetPositional().size() == 1);
+		CHECK(commandLine.GetPositional()[0] == "scene.bscene");
+		REQUIRE(commandLine.GetErrors().size() == 1);
+		CHECK(commandLine.GetErrors()[0].find("screenshot") != std::string::npos);
 	}
 }

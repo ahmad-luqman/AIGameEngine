@@ -17,52 +17,62 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 # ---------------------------------------------------------------------------------------------
 
 FetchContent_Declare(glfw
+	SYSTEM
 	GIT_REPOSITORY https://github.com/glfw/glfw.git
 	GIT_TAG 3.4
 	GIT_SHALLOW TRUE)
 
 FetchContent_Declare(glm
+	SYSTEM
 	GIT_REPOSITORY https://github.com/g-truc/glm.git
 	GIT_TAG 1.0.3
 	GIT_SHALLOW TRUE)
 
 # Vulkan headers are pinned here and shared with nvrhi so every platform compiles against the same API version.
 FetchContent_Declare(VulkanHeaders
+	SYSTEM
 	GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
 	GIT_TAG v1.4.352
 	GIT_SHALLOW TRUE)
 
 FetchContent_Declare(nvrhi
+	SYSTEM
 	GIT_REPOSITORY https://github.com/NVIDIA-RTX/NVRHI.git
 	GIT_TAG 6b96fb03e07539f08327aea76c56d55f1de9d906)
 
 FetchContent_Declare(spdlog
+	SYSTEM
 	GIT_REPOSITORY https://github.com/gabime/spdlog.git
 	GIT_TAG v1.17.0
 	GIT_SHALLOW TRUE)
 
 FetchContent_Declare(entt
+	SYSTEM
 	GIT_REPOSITORY https://github.com/skypjack/entt.git
 	GIT_TAG v3.16.0
 	GIT_SHALLOW TRUE)
 
 FetchContent_Declare(json
+	SYSTEM
 	GIT_REPOSITORY https://github.com/nlohmann/json.git
 	GIT_TAG v3.12.0
 	GIT_SHALLOW TRUE)
 
 FetchContent_Declare(jolt
+	SYSTEM
 	GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git
 	GIT_TAG v5.6.0
 	GIT_SHALLOW TRUE
 	SOURCE_SUBDIR Build)
 
 FetchContent_Declare(sol2
+	SYSTEM
 	GIT_REPOSITORY https://github.com/ThePhD/sol2.git
 	GIT_TAG v3.5.0
 	GIT_SHALLOW TRUE)
 
 FetchContent_Declare(doctest
+	SYSTEM
 	GIT_REPOSITORY https://github.com/doctest/doctest.git
 	GIT_TAG v2.5.3
 	GIT_SHALLOW TRUE)
@@ -70,35 +80,41 @@ FetchContent_Declare(doctest
 # Sources without a usable CMake project: populated only, targets defined below.
 # SOURCE_SUBDIR points at a directory that does not exist so FetchContent never calls add_subdirectory.
 FetchContent_Declare(lua
+	SYSTEM
 	GIT_REPOSITORY https://github.com/lua/lua.git
 	GIT_TAG v5.4.9
 	GIT_SHALLOW TRUE
 	SOURCE_SUBDIR _BasaltNoCMake)
 
 FetchContent_Declare(imgui
+	SYSTEM
 	GIT_REPOSITORY https://github.com/ocornut/imgui.git
 	GIT_TAG v1.92.9-docking
 	GIT_SHALLOW TRUE
 	SOURCE_SUBDIR _BasaltNoCMake)
 
 FetchContent_Declare(imguizmo
+	SYSTEM
 	GIT_REPOSITORY https://github.com/CedricGuillemet/ImGuizmo.git
 	GIT_TAG 18cef5e031d8c6973d80284c67f60549fafd78c1
 	SOURCE_SUBDIR _BasaltNoCMake)
 
 FetchContent_Declare(miniaudio
+	SYSTEM
 	GIT_REPOSITORY https://github.com/mackron/miniaudio.git
 	GIT_TAG 0.11.25
 	GIT_SHALLOW TRUE
 	SOURCE_SUBDIR _BasaltNoCMake)
 
 FetchContent_Declare(cgltf
+	SYSTEM
 	GIT_REPOSITORY https://github.com/jkuhlmann/cgltf.git
 	GIT_TAG v1.15
 	GIT_SHALLOW TRUE
 	SOURCE_SUBDIR _BasaltNoCMake)
 
 FetchContent_Declare(stb
+	SYSTEM
 	GIT_REPOSITORY https://github.com/nothings/stb.git
 	GIT_TAG 2c980bb59875b0d32144a71867fbdebb2f77cd20
 	SOURCE_SUBDIR _BasaltNoCMake)
@@ -187,7 +203,8 @@ add_library(BasaltImGui STATIC
 	"${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp")
 target_include_directories(BasaltImGui SYSTEM PUBLIC "${imgui_SOURCE_DIR}" "${imgui_SOURCE_DIR}/backends" "${imgui_SOURCE_DIR}/misc/cpp")
 target_link_libraries(BasaltImGui PUBLIC glfw)
-target_compile_definitions(BasaltImGui PUBLIC IMGUI_DEFINE_MATH_OPERATORS)
+# GLFW must not pull in OpenGL headers (Basalt is Vulkan-only; GL headers are absent on CI images).
+target_compile_definitions(BasaltImGui PUBLIC IMGUI_DEFINE_MATH_OPERATORS GLFW_INCLUDE_NONE)
 
 add_library(BasaltImGuizmo STATIC "${imguizmo_SOURCE_DIR}/src/ImGuizmo.cpp")
 target_include_directories(BasaltImGuizmo SYSTEM PUBLIC "${imguizmo_SOURCE_DIR}/src")

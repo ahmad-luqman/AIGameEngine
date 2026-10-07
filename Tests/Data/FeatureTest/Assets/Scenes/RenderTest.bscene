@@ -1,0 +1,38 @@
+{
+	"Format": "BasaltScene",
+	"Version": 1,
+	"Name": "RenderTest",
+	"Renderer": { "Exposure": 1.0, "Tonemapper": "ACES", "SSAOEnabled": true },
+	"Entities": [
+		{ "ID": 1, "Name": "Camera", "Components": {
+			"Transform": { "Translation": [0, 3, 9], "Rotation": [-15, 0, 0] },
+			"Camera": { "FOV": 50, "Near": 0.1, "Far": 200 } } },
+		{ "ID": 2, "Name": "Sun", "Components": {
+			"Transform": { "Rotation": [-45, 30, 0] },
+			"DirectionalLight": { "Color": [1, 0.95, 0.9], "Intensity": 3.0, "ShadowSoftness": 1.0 } } },
+		{ "ID": 3, "Name": "Sky", "Components": { "SkyLight": { "Intensity": 1.0 } } },
+		{ "ID": 4, "Name": "Ground", "Components": {
+			"Transform": { "Scale": [20, 1, 20] },
+			"Mesh": { "Mesh": "builtin://Plane" },
+			"Material": { "AlbedoColor": [0.6, 0.6, 0.6, 1], "Roughness": 0.9 } } },
+		{ "ID": 5, "Name": "Cube", "Components": {
+			"Transform": { "Translation": [-2.5, 0.5, 0], "Rotation": [0, 30, 0] },
+			"Mesh": { "Mesh": "builtin://Cube" },
+			"Material": { "AlbedoColor": [0.8, 0.2, 0.15, 1], "Roughness": 0.4 } } },
+		{ "ID": 6, "Name": "GoldSphere", "Components": {
+			"Transform": { "Translation": [0, 1, 0], "Scale": [2, 2, 2] },
+			"Mesh": { "Mesh": "builtin://Sphere" },
+			"Material": { "AlbedoColor": [1.0, 0.78, 0.34, 1], "Metallic": 1.0, "Roughness": 0.25 } } },
+		{ "ID": 7, "Name": "Capsule", "Components": {
+			"Transform": { "Translation": [2.5, 1, 0] },
+			"Mesh": { "Mesh": "builtin://Capsule" },
+			"Material": { "AlbedoColor": [0.2, 0.4, 0.9, 1], "Roughness": 0.6 } } },
+		{ "ID": 8, "Name": "Lamp", "Components": {
+			"Transform": { "Translation": [1.5, 0.6, 2] },
+			"PointLight": { "Color": [1, 0.5, 0.2], "Intensity": 15, "Radius": 6 } } },
+		{ "ID": 9, "Name": "Glass", "Components": {
+			"Transform": { "Translation": [1, 0.5, 2.5], "Scale": [0.8, 0.8, 0.8] },
+			"Mesh": { "Mesh": "builtin://Cylinder" },
+			"Material": { "AlbedoColor": [0.3, 0.9, 0.5, 0.4], "Roughness": 0.1 } } }
+	]
+}

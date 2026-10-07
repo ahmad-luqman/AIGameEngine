@@ -69,15 +69,13 @@ namespace Basalt {
 		bool HasExtension(const std::vector<vk::ExtensionProperties>& extensions, const char* name)
 		{
 			return std::any_of(extensions.begin(), extensions.end(),
-							   [name](const vk::ExtensionProperties& ext)
-							   { return std::strcmp(ext.extensionName, name) == 0; });
+							   [name](const vk::ExtensionProperties& ext) { return std::strcmp(ext.extensionName, name) == 0; });
 		}
 
 		bool HasLayer(const std::vector<vk::LayerProperties>& layers, const char* name)
 		{
 			return std::any_of(layers.begin(), layers.end(),
-							   [name](const vk::LayerProperties& layer)
-							   { return std::strcmp(layer.layerName, name) == 0; });
+							   [name](const vk::LayerProperties& layer) { return std::strcmp(layer.layerName, name) == 0; });
 		}
 
 		nvrhi::Format ToNvrhiFormat(vk::Format format)
@@ -474,8 +472,7 @@ namespace Basalt {
 		vk::PresentModeKHR presentMode = vk::PresentModeKHR::eFifo;
 		if (!m_Specification.VSync)
 		{
-			auto supports = [&](vk::PresentModeKHR mode)
-			{ return std::find(presentModes.begin(), presentModes.end(), mode) != presentModes.end(); };
+			auto supports = [&](vk::PresentModeKHR mode) { return std::find(presentModes.begin(), presentModes.end(), mode) != presentModes.end(); };
 			if (supports(vk::PresentModeKHR::eMailbox))
 				presentMode = vk::PresentModeKHR::eMailbox;
 			else if (supports(vk::PresentModeKHR::eImmediate))
@@ -638,6 +635,48 @@ namespace Basalt {
 	{
 		Impl& impl = *m_Impl;
 		const vk::Semaphore presentSemaphore = impl.PresentSemaphores[m_SwapchainIndex];
+
+		if (m_PendingCapture)
+		{
+			CaptureCallback callback = std::move(m_PendingCapture);
+			m_PendingCapture = nullptr;
+			nvrhi::ITexture* backBuffer = GetCurrentBackBuffer();
+			nvrhi::TextureDesc desc = backBuffer->getDesc();
+			desc.isRenderTarget = false;
+			desc.initialState = nvrhi::ResourceStates::CopyDest;
+			desc.keepInitialState = true;
+			desc.debugName = "BackBufferCapture";
+			nvrhi::StagingTextureHandle staging = m_NvrhiDevice->createStagingTexture(desc, nvrhi::CpuAccessMode::Read);
+			if (staging)
+			{
+				impl.BarrierCommandList->open();
+				impl.BarrierCommandList->copyTexture(staging, nvrhi::TextureSlice(), backBuffer, nvrhi::TextureSlice());
+				impl.BarrierCommandList->close();
+				m_NvrhiDevice->executeCommandList(impl.BarrierCommandList);
+				m_NvrhiDevice->waitForIdle();
+				size_t rowPitch = 0;
+				const auto* data = static_cast<const uint8_t*>(m_NvrhiDevice->mapStagingTexture(staging, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &rowPitch));
+				if (data)
+				{
+					const bool bgra = desc.format == nvrhi::Format::BGRA8_UNORM || desc.format == nvrhi::Format::SBGRA8_UNORM;
+					std::vector<uint8_t> pixels(static_cast<size_t>(desc.width) * desc.height * 4);
+					for (uint32_t y = 0; y < desc.height; y++)
+					{
+						const uint8_t* row = data + y * rowPitch;
+						for (uint32_t x = 0; x < desc.width; x++)
+						{
+							uint8_t* out = pixels.data() + (static_cast<size_t>(y) * desc.width + x) * 4;
+							out[0] = row[x * 4 + (bgra ? 2 : 0)];
+							out[1] = row[x * 4 + 1];
+							out[2] = row[x * 4 + (bgra ? 0 : 2)];
+							out[3] = 255;
+						}
+					}
+					m_NvrhiDevice->unmapStagingTexture(staging);
+					callback(pixels, desc.width, desc.height);
+				}
+			}
+		}
 
 		// The signal is attached to the next submission; an empty command list guarantees there is one.
 		impl.VulkanDevice->queueSignalSemaphore(nvrhi::CommandQueue::Graphics, presentSemaphore, 0);

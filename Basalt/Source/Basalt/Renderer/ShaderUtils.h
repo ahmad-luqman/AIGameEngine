@@ -10,6 +10,10 @@ namespace Basalt {
 	// Returns nullptr and logs if the blob does not exist.
 	nvrhi::ShaderHandle CreateEmbeddedShader(nvrhi::IDevice* device, std::string_view name, nvrhi::ShaderType type);
 
+	// Push constants in nvrhi occupy a constant-buffer register; use this slot for them in layouts that
+	// also contain ConstantBuffer items.
+	inline constexpr uint32_t PushConstantSlot = 31;
+
 	// Binding layout descriptors use these offsets so GLSL "binding = N" equals the nvrhi slot N for
 	// every resource type. See AGENTS.md ("Shader binding convention").
 	inline constexpr nvrhi::VulkanBindingOffsets ZeroBindingOffsets = nvrhi::VulkanBindingOffsets()

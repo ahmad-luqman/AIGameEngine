@@ -1,0 +1,37 @@
+#version 450
+#include "CubeMap.glsl"
+
+// Simple physically-plausible-looking sky gradient used when no environment map is set.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2DArray u_Cube;
+
+layout(push_constant) uniform SkyPush
+{
+	vec4 ZenithColor;
+	vec4 HorizonColor;
+	vec4 GroundColor;
+	vec4 SunDirection;  // xyz: direction towards the sun, w: sun intensity
+} u_Push;
+
+void main()
+{
+	ivec3 id = ivec3(gl_GlobalInvocationID);
+	ivec2 size = imageSize(u_Cube).xy;
+	if (id.x >= size.x || id.y >= size.y)
+		return;
+
+	vec3 direction = CubeDirection(uint(id.z), (vec2(id.xy) + 0.5) / vec2(size));
+	float y = direction.y;
+	vec3 color;
+	if (y >= 0.0)
+		color = mix(u_Push.HorizonColor.rgb, u_Push.ZenithColor.rgb, pow(y, 0.45));
+	else
+		color = mix(u_Push.HorizonColor.rgb, u_Push.GroundColor.rgb, pow(-y, 0.35));
+
+	// Soft sun glow keeps the IBL directional instead of perfectly uniform.
+	vec3 sun = normalize(u_Push.SunDirection.xyz);
+	float sunAmount = max(dot(direction, sun), 0.0);
+	color += vec3(1.0, 0.9, 0.75) * (pow(sunAmount, 256.0) * u_Push.SunDirection.w + pow(sunAmount, 8.0) * 0.15);
+	imageStore(u_Cube, id, vec4(color, 1.0));
+}

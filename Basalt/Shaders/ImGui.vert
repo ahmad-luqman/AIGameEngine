@@ -17,5 +17,7 @@ void main()
 {
 	v_TexCoord = a_TexCoord;
 	v_Color = a_Color;
-	gl_Position = vec4(a_Position * u_Push.Scale + u_Push.Translate, 0.0, 1.0);
+	// ImGui positions grow downwards; clip space is +Y up.
+	vec2 position = a_Position * u_Push.Scale + u_Push.Translate;
+	gl_Position = vec4(position.x, -position.y, 0.0, 1.0);
 }

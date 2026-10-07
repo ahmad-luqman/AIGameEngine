@@ -1,0 +1,66 @@
+#version 450
+#include "CubeMap.glsl"
+
+// GGX-prefiltered specular environment for one mip level (split-sum approximation).
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform textureCube u_Environment;
+layout(set = 0, binding = 1) uniform sampler u_LinearSampler;
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2DArray u_Prefiltered;
+
+layout(push_constant) uniform PrefilterPush
+{
+	float Roughness;
+	float EnvironmentResolution;
+} u_Push;
+
+float DistributionGGX(float NdotH, float roughness)
+{
+	float a = roughness * roughness;
+	float a2 = a * a;
+	float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
+	return a2 / (PI * d * d);
+}
+
+void main()
+{
+	ivec3 id = ivec3(gl_GlobalInvocationID);
+	ivec2 size = imageSize(u_Prefiltered).xy;
+	if (id.x >= size.x || id.y >= size.y)
+		return;
+
+	vec3 N = CubeDirection(uint(id.z), (vec2(id.xy) + 0.5) / vec2(size));
+	vec3 V = N;
+	float roughness = u_Push.Roughness;
+
+	if (roughness < 0.001)
+	{
+		imageStore(u_Prefiltered, id, vec4(textureLod(samplerCube(u_Environment, u_LinearSampler), N, 0.0).rgb, 1.0));
+		return;
+	}
+
+	const uint sampleCount = 512u;
+	vec3 color = vec3(0.0);
+	float totalWeight = 0.0;
+	for (uint i = 0u; i < sampleCount; i++)
+	{
+		vec2 xi = Hammersley(i, sampleCount);
+		vec3 H = ImportanceSampleGGX(xi, N, roughness);
+		vec3 L = normalize(2.0 * dot(V, H) * H - V);
+		float NdotL = dot(N, L);
+		if (NdotL <= 0.0)
+			continue;
+
+		// Sample a mip matching the sample's solid angle (removes fireflies from bright spots).
+		float NdotH = max(dot(N, H), 0.0);
+		float HdotV = max(dot(H, V), 0.0);
+		float pdf = DistributionGGX(NdotH, roughness) * NdotH / (4.0 * HdotV) + 1e-4;
+		float texelSolidAngle = 4.0 * PI / (6.0 * u_Push.EnvironmentResolution * u_Push.EnvironmentResolution);
+		float sampleSolidAngle = 1.0 / (float(sampleCount) * pdf + 1e-4);
+		float mip = 0.5 * log2(sampleSolidAngle / texelSolidAngle);
+
+		color += textureLod(samplerCube(u_Environment, u_LinearSampler), L, max(mip, 0.0)).rgb * NdotL;
+		totalWeight += NdotL;
+	}
+	imageStore(u_Prefiltered, id, vec4(color / max(totalWeight, 1e-4), 1.0));
+}

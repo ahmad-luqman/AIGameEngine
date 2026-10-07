@@ -4,8 +4,9 @@
 
 #include <nvrhi/nvrhi.h>
 
-#include <atomic>
+#include <functional>
 #include <string>
+#include <vector>
 
 namespace Basalt {
 
@@ -40,6 +41,11 @@ namespace Basalt {
 		void WaitIdle();
 
 		void SetVSync(bool enabled);
+
+		// Reads the back buffer back right before the next Present (after all UI is drawn) and calls the
+		// callback with RGBA8 pixels, top row first. Waits for the GPU; meant for tools and automation.
+		using CaptureCallback = std::function<void(const std::vector<uint8_t>& rgba, uint32_t width, uint32_t height)>;
+		void RequestBackBufferCapture(CaptureCallback callback) { m_PendingCapture = std::move(callback); }
 		bool IsVSync() const { return m_Specification.VSync; }
 
 		nvrhi::IDevice* GetDevice() const { return m_NvrhiDevice; }
@@ -81,6 +87,7 @@ namespace Basalt {
 		uint64_t m_FrameIndex = 0;
 		std::string m_AdapterName;
 		bool m_SwapchainDirty = false;
+		CaptureCallback m_PendingCapture;
 	};
 
 }

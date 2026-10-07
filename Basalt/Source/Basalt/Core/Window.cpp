@@ -59,8 +59,7 @@ namespace Basalt {
 
 		glfwSetWindowUserPointer(m_Window, &m_Data);
 
-		glfwSetWindowSizeCallback(m_Window, [](GLFWwindow* window, int newWidth, int newHeight)
-								  {
+		glfwSetWindowSizeCallback(m_Window, [](GLFWwindow* window, int newWidth, int newHeight) {
 			WindowData& data = *static_cast<WindowData*>(glfwGetWindowUserPointer(window));
 			data.Width = static_cast<uint32_t>(newWidth);
 			data.Height = static_cast<uint32_t>(newHeight);
@@ -68,15 +67,13 @@ namespace Basalt {
 			if (data.EventCallback)
 				data.EventCallback(event); });
 
-		glfwSetWindowCloseCallback(m_Window, [](GLFWwindow* window)
-								   {
+		glfwSetWindowCloseCallback(m_Window, [](GLFWwindow* window) {
 			WindowData& data = *static_cast<WindowData*>(glfwGetWindowUserPointer(window));
 			WindowCloseEvent event;
 			if (data.EventCallback)
 				data.EventCallback(event); });
 
-		glfwSetWindowFocusCallback(m_Window, [](GLFWwindow* window, int focused)
-								   {
+		glfwSetWindowFocusCallback(m_Window, [](GLFWwindow* window, int focused) {
 			WindowData& data = *static_cast<WindowData*>(glfwGetWindowUserPointer(window));
 			if (!data.EventCallback)
 				return;
@@ -91,8 +88,7 @@ namespace Basalt {
 				data.EventCallback(event);
 			} });
 
-		glfwSetKeyCallback(m_Window, [](GLFWwindow* window, int key, int scancode, int action, int mods)
-						   {
+		glfwSetKeyCallback(m_Window, [](GLFWwindow* window, int key, int scancode, int action, int mods) {
 			WindowData& data = *static_cast<WindowData*>(glfwGetWindowUserPointer(window));
 			if (!data.EventCallback || key < 0)
 				return;
@@ -121,15 +117,13 @@ namespace Basalt {
 					break;
 			} });
 
-		glfwSetCharCallback(m_Window, [](GLFWwindow* window, unsigned int codepoint)
-							{
+		glfwSetCharCallback(m_Window, [](GLFWwindow* window, unsigned int codepoint) {
 			WindowData& data = *static_cast<WindowData*>(glfwGetWindowUserPointer(window));
 			KeyTypedEvent event(codepoint);
 			if (data.EventCallback)
 				data.EventCallback(event); });
 
-		glfwSetMouseButtonCallback(m_Window, [](GLFWwindow* window, int button, int action, int mods)
-								   {
+		glfwSetMouseButtonCallback(m_Window, [](GLFWwindow* window, int button, int action, int mods) {
 			WindowData& data = *static_cast<WindowData*>(glfwGetWindowUserPointer(window));
 			if (!data.EventCallback || button < 0 || button >= static_cast<int>(MouseButtonCount))
 				return;
@@ -145,22 +139,19 @@ namespace Basalt {
 				data.EventCallback(event);
 			} });
 
-		glfwSetScrollCallback(m_Window, [](GLFWwindow* window, double xOffset, double yOffset)
-							  {
+		glfwSetScrollCallback(m_Window, [](GLFWwindow* window, double xOffset, double yOffset) {
 			WindowData& data = *static_cast<WindowData*>(glfwGetWindowUserPointer(window));
 			MouseScrolledEvent event(static_cast<float>(xOffset), static_cast<float>(yOffset));
 			if (data.EventCallback)
 				data.EventCallback(event); });
 
-		glfwSetCursorPosCallback(m_Window, [](GLFWwindow* window, double x, double y)
-								 {
+		glfwSetCursorPosCallback(m_Window, [](GLFWwindow* window, double x, double y) {
 			WindowData& data = *static_cast<WindowData*>(glfwGetWindowUserPointer(window));
 			MouseMovedEvent event(static_cast<float>(x), static_cast<float>(y));
 			if (data.EventCallback)
 				data.EventCallback(event); });
 
-		glfwSetDropCallback(m_Window, [](GLFWwindow* window, int count, const char** paths)
-							{
+		glfwSetDropCallback(m_Window, [](GLFWwindow* window, int count, const char** paths) {
 			WindowData& data = *static_cast<WindowData*>(glfwGetWindowUserPointer(window));
 			std::vector<std::filesystem::path> droppedPaths;
 			droppedPaths.reserve(static_cast<size_t>(count));

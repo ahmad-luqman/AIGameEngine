@@ -7,8 +7,6 @@
 #include <system_error>
 
 #if defined(BS_PLATFORM_WINDOWS)
-	#define WIN32_LEAN_AND_MEAN
-	#define NOMINMAX
 	#include <windows.h>
 #elif defined(BS_PLATFORM_MACOS)
 	#include <mach-o/dyld.h>
