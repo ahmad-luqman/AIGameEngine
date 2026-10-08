@@ -96,6 +96,17 @@ TEST_SUITE("Automation")
 		CHECK(Run(registry, session, "component.get", { { "entity", player["id"] }, { "component", "RigidBody" } })["Mass"] == 70.0);
 		CHECK(RunError(registry, session, "component.set", { { "entity", "Player" }, { "component", "RigidBody" }, { "data", { { "Mas", 1 } } } }).find("unknown field") != std::string::npos);
 		CHECK(RunError(registry, session, "component.remove", { { "entity", "Player" }, { "component", "Transform" } }).find("cannot be removed") != std::string::npos);
+
+		// Entity reference fields accept names as well as IDs; files keep the ID.
+		const json joint = Run(registry, session, "component.set", { { "entity", "Gun" }, { "component", "Joint" }, { "data", { { "ConnectedEntity", "Player" } } } });
+		CHECK(joint["ConnectedEntity"] == player["id"]);
+		const json door = Run(registry, session, "entity.create", { { "name", "Door" }, { "components", { { "Joint", { { "Type", "Hinge" }, { "ConnectedEntity", "Player" } } } } } });
+		CHECK(Run(registry, session, "component.get", { { "entity", door["id"] }, { "component", "Joint" } })["ConnectedEntity"] == player["id"]);
+		CHECK(RunError(registry, session, "component.set", { { "entity", "Gun" }, { "component", "Joint" }, { "data", { { "ConnectedEntity", "Nobody" } } } }).find("no entity named") != std::string::npos);
+		const size_t entityCount = Run(registry, session, "entity.list")["entities"].size();
+		CHECK(RunError(registry, session, "entity.create", { { "name", "Orphan" }, { "components", { { "Joint", { { "ConnectedEntity", "Nobody" } } } } } }).find("no entity named") != std::string::npos);
+		CHECK(Run(registry, session, "entity.list")["entities"].size() == entityCount);
+		Run(registry, session, "entity.destroy", { { "entity", "Door" } });
 		CHECK(RunError(registry, session, "entity.get", { { "entity", "Nobody" } }).find("no entity named") != std::string::npos);
 		CHECK(RunError(registry, session, "entity.set_parent", { { "entity", "Player" }, { "parent", "Gun" } }).find("descendants") != std::string::npos);
 
