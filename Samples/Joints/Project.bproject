@@ -1,0 +1,8 @@
+{
+	"Format": "BasaltProject",
+	"Fullscreen": false,
+	"Name": "Joints",
+	"StartScene": "Assets/Scenes/Joints.bscene",
+	"WindowHeight": 900,
+	"WindowWidth": 1600
+}
