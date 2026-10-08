@@ -1,0 +1,2200 @@
+{
+	"Entities": [
+		{
+			"Components": {
+				"AudioListener": {
+					"Active": true
+				},
+				"Camera": {
+					"FOV": 50.0,
+					"Far": 200.0,
+					"FixedAspectRatio": false,
+					"Near": 0.10000000149011612,
+					"OrthoFar": 100.0,
+					"OrthoNear": -100.0,
+					"OrthoSize": 10.0,
+					"Primary": true,
+					"Projection": "Perspective"
+				},
+				"Transform": {
+					"Rotation": [
+						-12.0,
+						0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						1.0,
+						6.0,
+						17.0
+					]
+				}
+			},
+			"ID": 2774874881067894741,
+			"Name": "Camera",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"DirectionalLight": {
+					"CastShadows": true,
+					"Color": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Intensity": 3.0,
+					"ShadowSoftness": 1.5
+				},
+				"Transform": {
+					"Rotation": [
+						-45.0,
+						30.00000762939453,
+						1.0351715218348545e-06
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						0.0,
+						0.0
+					]
+				}
+			},
+			"ID": 2571868249086530897,
+			"Name": "Sun",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"SkyLight": {
+					"EnvironmentMap": "",
+					"Intensity": 0.699999988079071,
+					"Rotation": 0.0,
+					"ShowBackground": true
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						0.0,
+						0.0
+					]
+				}
+			},
+			"ID": 15742897323529870599,
+			"Name": "Sky",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"Script": {
+					"Properties": {},
+					"Script": "Assets/Scripts/Director.lua"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						0.0,
+						0.0
+					]
+				}
+			},
+			"ID": 10228580463821028952,
+			"Name": "Director",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.3499999940395355,
+						0.3700000047683716,
+						0.4000000059604645,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.8999999761581421
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.05000000074505806,
+					"CollisionMask": 4294967295,
+					"FixedRotation": false,
+					"Friction": 0.5,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": 0,
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						40.0,
+						1.0,
+						16.0
+					],
+					"Translation": [
+						0.0,
+						-0.5,
+						0.0
+					]
+				}
+			},
+			"ID": 182296990133257390,
+			"Name": "Ground",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.30000001192092896,
+						0.20000000298023224,
+						0.10000000149011612,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.5
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.05000000074505806,
+					"CollisionMask": 4294967295,
+					"FixedRotation": false,
+					"Friction": 0.5,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": 0,
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.20000000298023224,
+						2.4000000953674316,
+						0.20000000298023224
+					],
+					"Translation": [
+						-9.100000381469727,
+						1.2000000476837158,
+						0.0
+					]
+				}
+			},
+			"ID": 5101730724364736315,
+			"Name": "DoorPost",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"Joint": {
+					"Anchor": [
+						-0.5,
+						0.0,
+						0.0
+					],
+					"Axis": [
+						0.0,
+						1.0,
+						0.0
+					],
+					"BreakForce": 0.0,
+					"BreakTorque": 0.0,
+					"ConnectedAnchor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"ConnectedEntity": 5101730724364736315,
+					"EnableCollision": false,
+					"LimitMax": 100.0,
+					"LimitMin": -5.0,
+					"MotorMaxForce": 400.0,
+					"MotorMode": "Position",
+					"MotorTarget": 0.0,
+					"Type": "Hinge",
+					"UseLimits": true
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.75,
+						0.5,
+						0.25,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.5
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.05000000074505806,
+					"CollisionMask": 4294967295,
+					"FixedRotation": false,
+					"Friction": 0.5,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": 0,
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 5.0,
+					"Restitution": 0.0,
+					"Type": "Dynamic"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.7999999523162842,
+						2.200000047683716,
+						0.10000000149011612
+					],
+					"Translation": [
+						-8.100000381469727,
+						1.149999976158142,
+						0.0
+					]
+				}
+			},
+			"ID": 4191396463113242113,
+			"Name": "Door",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.20000000298023224,
+						0.20000000298023224,
+						0.2199999988079071,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 1.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.4000000059604645
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.05000000074505806,
+					"CollisionMask": 4294967295,
+					"FixedRotation": false,
+					"Friction": 0.5,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": 0,
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.399999976158142,
+						0.20000000298023224,
+						1.399999976158142
+					],
+					"Translation": [
+						-4.5,
+						0.10000000149011612,
+						0.0
+					]
+				}
+			},
+			"ID": 14474349420307742211,
+			"Name": "PistonBase",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"Joint": {
+					"Anchor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"Axis": [
+						0.0,
+						1.0,
+						0.0
+					],
+					"BreakForce": 0.0,
+					"BreakTorque": 0.0,
+					"ConnectedAnchor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"ConnectedEntity": 14474349420307742211,
+					"EnableCollision": false,
+					"LimitMax": 2.200000047683716,
+					"LimitMin": 0.0,
+					"MotorMaxForce": 300.0,
+					"MotorMode": "Position",
+					"MotorTarget": 1.0,
+					"Type": "Slider",
+					"UseLimits": true
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.8500000238418579,
+						0.20000000298023224,
+						0.15000000596046448,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 1.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.30000001192092896
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.05000000074505806,
+					"CollisionMask": 4294967295,
+					"FixedRotation": false,
+					"Friction": 0.5,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": 0,
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 2.0,
+					"Restitution": 0.0,
+					"Type": "Dynamic"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						0.4000000059604645,
+						1.0
+					],
+					"Translation": [
+						-4.5,
+						0.5,
+						0.0
+					]
+				}
+			},
+			"ID": 13205228110604667714,
+			"Name": "Piston",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"Material": {
+					"AlbedoColor": [
+						0.8999999761581421,
+						0.8999999761581421,
+						0.8999999761581421,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 1.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.20000000298023224
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Sphere",
+					"MeshIndex": 0
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.25,
+						0.25,
+						0.25
+					],
+					"Translation": [
+						-1.0,
+						7.0,
+						0.0
+					]
+				}
+			},
+			"ID": 11008832551576456850,
+			"Name": "ChainHook",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"Joint": {
+					"Anchor": [
+						-0.625,
+						0.0,
+						0.0
+					],
+					"Axis": [
+						0.0,
+						1.0,
+						0.0
+					],
+					"BreakForce": 0.0,
+					"BreakTorque": 0.0,
+					"ConnectedAnchor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"ConnectedEntity": 0,
+					"EnableCollision": false,
+					"LimitMax": 0.0,
+					"LimitMin": 0.0,
+					"MotorMaxForce": 1000.0,
+					"MotorMode": "Off",
+					"MotorTarget": 0.0,
+					"Type": "Point",
+					"UseLimits": false
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.8500000238418579,
+						0.75,
+						0.30000001192092896,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 1.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.25
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Sphere",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.05000000074505806,
+					"CollisionMask": 4294967295,
+					"FixedRotation": false,
+					"Friction": 0.5,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": 0,
+					"LinearDamping": 0.10000000149011612,
+					"Mass": 0.5,
+					"Restitution": 0.0,
+					"Type": "Dynamic"
+				},
+				"SphereCollider": {
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"Radius": 0.5
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.4000000059604645,
+						0.4000000059604645,
+						0.4000000059604645
+					],
+					"Translation": [
+						-0.5,
+						7.0,
+						0.0
+					]
+				}
+			},
+			"ID": 2314254848583152782,
+			"Name": "Link0",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"Joint": {
+					"Anchor": [
+						-0.625,
+						0.0,
+						0.0
+					],
+					"Axis": [
+						0.0,
+						1.0,
+						0.0
+					],
+					"BreakForce": 0.0,
+					"BreakTorque": 0.0,
+					"ConnectedAnchor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"ConnectedEntity": 2314254848583152782,
+					"EnableCollision": false,
+					"LimitMax": 0.0,
+					"LimitMin": 0.0,
+					"MotorMaxForce": 1000.0,
+					"MotorMode": "Off",
+					"MotorTarget": 0.0,
+					"Type": "Point",
+					"UseLimits": false
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.8500000238418579,
+						0.75,
+						0.30000001192092896,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 1.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.25
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Sphere",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.05000000074505806,
+					"CollisionMask": 4294967295,
+					"FixedRotation": false,
+					"Friction": 0.5,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": 0,
+					"LinearDamping": 0.10000000149011612,
+					"Mass": 0.5,
+					"Restitution": 0.0,
+					"Type": "Dynamic"
+				},
+				"SphereCollider": {
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"Radius": 0.5
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.4000000059604645,
+						0.4000000059604645,
+						0.4000000059604645
+					],
+					"Translation": [
+						0.0,
+						7.0,
+						0.0
+					]
+				}
+			},
+			"ID": 3030674178698185544,
+			"Name": "Link1",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"Joint": {
+					"Anchor": [
+						-0.625,
+						0.0,
+						0.0
+					],
+					"Axis": [
+						0.0,
+						1.0,
+						0.0
+					],
+					"BreakForce": 0.0,
+					"BreakTorque": 0.0,
+					"ConnectedAnchor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"ConnectedEntity": 3030674178698185544,
+					"EnableCollision": false,
+					"LimitMax": 0.0,
+					"LimitMin": 0.0,
+					"MotorMaxForce": 1000.0,
+					"MotorMode": "Off",
+					"MotorTarget": 0.0,
+					"Type": "Point",
+					"UseLimits": false
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.8500000238418579,
+						0.75,
+						0.30000001192092896,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 1.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.25
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Sphere",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.05000000074505806,
+					"CollisionMask": 4294967295,
+					"FixedRotation": false,
+					"Friction": 0.5,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": 0,
+					"LinearDamping": 0.10000000149011612,
+					"Mass": 0.5,
+					"Restitution": 0.0,
+					"Type": "Dynamic"
+				},
+				"SphereCollider": {
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"Radius": 0.5
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.4000000059604645,
+						0.4000000059604645,
+						0.4000000059604645
+					],
+					"Translation": [
+						0.5,
+						7.0,
+						0.0
+					]
+				}
+			},
+			"ID": 74343217129568172,
+			"Name": "Link2",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"Joint": {
+					"Anchor": [
+						-0.625,
+						0.0,
+						0.0
+					],
+					"Axis": [
+						0.0,
+						1.0,
+						0.0
+					],
+					"BreakForce": 0.0,
+					"BreakTorque": 0.0,
+					"ConnectedAnchor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"ConnectedEntity": 74343217129568172,
+					"EnableCollision": false,
+					"LimitMax": 0.0,
+					"LimitMin": 0.0,
+					"MotorMaxForce": 1000.0,
+					"MotorMode": "Off",
+					"MotorTarget": 0.0,
+					"Type": "Point",
+					"UseLimits": false
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.8500000238418579,
+						0.75,
+						0.30000001192092896,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 1.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.25
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Sphere",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.05000000074505806,
+					"CollisionMask": 4294967295,
+					"FixedRotation": false,
+					"Friction": 0.5,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": 0,
+					"LinearDamping": 0.10000000149011612,
+					"Mass": 0.5,
+					"Restitution": 0.0,
+					"Type": "Dynamic"
+				},
+				"SphereCollider": {
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"Radius": 0.5
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.4000000059604645,
+						0.4000000059604645,
+						0.4000000059604645
+					],
+					"Translation": [
+						1.0,
+						7.0,
+						0.0
+					]
+				}
+			},
+			"ID": 15146334682636840009,
+			"Name": "Link3",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"Joint": {
+					"Anchor": [
+						-0.625,
+						0.0,
+						0.0
+					],
+					"Axis": [
+						0.0,
+						1.0,
+						0.0
+					],
+					"BreakForce": 0.0,
+					"BreakTorque": 0.0,
+					"ConnectedAnchor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"ConnectedEntity": 15146334682636840009,
+					"EnableCollision": false,
+					"LimitMax": 0.0,
+					"LimitMin": 0.0,
+					"MotorMaxForce": 1000.0,
+					"MotorMode": "Off",
+					"MotorTarget": 0.0,
+					"Type": "Point",
+					"UseLimits": false
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.8500000238418579,
+						0.75,
+						0.30000001192092896,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 1.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.25
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Sphere",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.05000000074505806,
+					"CollisionMask": 4294967295,
+					"FixedRotation": false,
+					"Friction": 0.5,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": 0,
+					"LinearDamping": 0.10000000149011612,
+					"Mass": 0.5,
+					"Restitution": 0.0,
+					"Type": "Dynamic"
+				},
+				"SphereCollider": {
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"Radius": 0.5
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.4000000059604645,
+						0.4000000059604645,
+						0.4000000059604645
+					],
+					"Translation": [
+						1.5,
+						7.0,
+						0.0
+					]
+				}
+			},
+			"ID": 8167025200911526838,
+			"Name": "Link4",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"Joint": {
+					"Anchor": [
+						-0.625,
+						0.0,
+						0.0
+					],
+					"Axis": [
+						0.0,
+						1.0,
+						0.0
+					],
+					"BreakForce": 0.0,
+					"BreakTorque": 0.0,
+					"ConnectedAnchor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"ConnectedEntity": 8167025200911526838,
+					"EnableCollision": false,
+					"LimitMax": 0.0,
+					"LimitMin": 0.0,
+					"MotorMaxForce": 1000.0,
+					"MotorMode": "Off",
+					"MotorTarget": 0.0,
+					"Type": "Point",
+					"UseLimits": false
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.8500000238418579,
+						0.75,
+						0.30000001192092896,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 1.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.25
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Sphere",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.05000000074505806,
+					"CollisionMask": 4294967295,
+					"FixedRotation": false,
+					"Friction": 0.5,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": 0,
+					"LinearDamping": 0.10000000149011612,
+					"Mass": 0.5,
+					"Restitution": 0.0,
+					"Type": "Dynamic"
+				},
+				"SphereCollider": {
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"Radius": 0.5
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.4000000059604645,
+						0.4000000059604645,
+						0.4000000059604645
+					],
+					"Translation": [
+						2.0,
+						7.0,
+						0.0
+					]
+				}
+			},
+			"ID": 14071434565742386678,
+			"Name": "Link5",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"Joint": {
+					"Anchor": [
+						-0.625,
+						0.0,
+						0.0
+					],
+					"Axis": [
+						0.0,
+						1.0,
+						0.0
+					],
+					"BreakForce": 0.0,
+					"BreakTorque": 0.0,
+					"ConnectedAnchor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"ConnectedEntity": 14071434565742386678,
+					"EnableCollision": false,
+					"LimitMax": 0.0,
+					"LimitMin": 0.0,
+					"MotorMaxForce": 1000.0,
+					"MotorMode": "Off",
+					"MotorTarget": 0.0,
+					"Type": "Point",
+					"UseLimits": false
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.8500000238418579,
+						0.75,
+						0.30000001192092896,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 1.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.25
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Sphere",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.05000000074505806,
+					"CollisionMask": 4294967295,
+					"FixedRotation": false,
+					"Friction": 0.5,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": 0,
+					"LinearDamping": 0.10000000149011612,
+					"Mass": 0.5,
+					"Restitution": 0.0,
+					"Type": "Dynamic"
+				},
+				"SphereCollider": {
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"Radius": 0.5
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.4000000059604645,
+						0.4000000059604645,
+						0.4000000059604645
+					],
+					"Translation": [
+						2.5,
+						7.0,
+						0.0
+					]
+				}
+			},
+			"ID": 9750759044630951640,
+			"Name": "Link6",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"Joint": {
+					"Anchor": [
+						-0.625,
+						0.0,
+						0.0
+					],
+					"Axis": [
+						0.0,
+						1.0,
+						0.0
+					],
+					"BreakForce": 0.0,
+					"BreakTorque": 0.0,
+					"ConnectedAnchor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"ConnectedEntity": 9750759044630951640,
+					"EnableCollision": false,
+					"LimitMax": 0.0,
+					"LimitMin": 0.0,
+					"MotorMaxForce": 1000.0,
+					"MotorMode": "Off",
+					"MotorTarget": 0.0,
+					"Type": "Point",
+					"UseLimits": false
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.8500000238418579,
+						0.75,
+						0.30000001192092896,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 1.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.25
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Sphere",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.05000000074505806,
+					"CollisionMask": 4294967295,
+					"FixedRotation": false,
+					"Friction": 0.5,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": 0,
+					"LinearDamping": 0.10000000149011612,
+					"Mass": 0.5,
+					"Restitution": 0.0,
+					"Type": "Dynamic"
+				},
+				"SphereCollider": {
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"Radius": 0.5
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.4000000059604645,
+						0.4000000059604645,
+						0.4000000059604645
+					],
+					"Translation": [
+						3.0,
+						7.0,
+						0.0
+					]
+				}
+			},
+			"ID": 6564384098640908977,
+			"Name": "Link7",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"Material": {
+					"AlbedoColor": [
+						0.8999999761581421,
+						0.8999999761581421,
+						0.8999999761581421,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 1.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.20000000298023224
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Sphere",
+					"MeshIndex": 0
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.30000001192092896,
+						0.30000001192092896,
+						0.30000001192092896
+					],
+					"Translation": [
+						7.0,
+						8.0,
+						0.0
+					]
+				}
+			},
+			"ID": 12644972372534492732,
+			"Name": "BallHook",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"Joint": {
+					"Anchor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"Axis": [
+						0.0,
+						1.0,
+						0.0
+					],
+					"BreakForce": 0.0,
+					"BreakTorque": 0.0,
+					"ConnectedAnchor": [
+						7.0,
+						8.0,
+						0.0
+					],
+					"ConnectedEntity": 0,
+					"EnableCollision": false,
+					"LimitMax": 0.0,
+					"LimitMin": 0.0,
+					"MotorMaxForce": 1000.0,
+					"MotorMode": "Off",
+					"MotorTarget": 0.0,
+					"Type": "Distance",
+					"UseLimits": false
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.10000000149011612,
+						0.10000000149011612,
+						0.11999999731779099,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 1.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.3499999940395355
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Sphere",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.0,
+					"CollisionMask": 4294967295,
+					"FixedRotation": false,
+					"Friction": 0.5,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": 0,
+					"LinearDamping": 0.0,
+					"Mass": 40.0,
+					"Restitution": 0.0,
+					"Type": "Dynamic"
+				},
+				"SphereCollider": {
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"Radius": 0.5
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.2999999523162842,
+						1.2999999523162842,
+						1.2999999523162842
+					],
+					"Translation": [
+						3.200000047683716,
+						8.0,
+						0.0
+					]
+				}
+			},
+			"ID": 12327341813045700913,
+			"Name": "WreckingBall",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.20000000298023224,
+						0.5,
+						0.8500000238418579,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.5
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.05000000074505806,
+					"CollisionMask": 4294967295,
+					"FixedRotation": false,
+					"Friction": 0.6000000238418579,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": 0,
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 3.0,
+					"Restitution": 0.0,
+					"Type": "Dynamic"
+				},
+				"Script": {
+					"Properties": {},
+					"Script": "Assets/Scripts/Weld.lua"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						7.400000095367432,
+						0.5,
+						0.0
+					]
+				}
+			},
+			"ID": 14663453249791594679,
+			"Name": "Block0",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"Joint": {
+					"Anchor": [
+						0.0,
+						-0.5,
+						0.0
+					],
+					"Axis": [
+						0.0,
+						1.0,
+						0.0
+					],
+					"BreakForce": 400.0,
+					"BreakTorque": 300.0,
+					"ConnectedAnchor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"ConnectedEntity": 14663453249791594679,
+					"EnableCollision": false,
+					"LimitMax": 0.0,
+					"LimitMin": 0.0,
+					"MotorMaxForce": 1000.0,
+					"MotorMode": "Off",
+					"MotorTarget": 0.0,
+					"Type": "Fixed",
+					"UseLimits": false
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.3199999928474426,
+						0.5,
+						0.75,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.5
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.05000000074505806,
+					"CollisionMask": 4294967295,
+					"FixedRotation": false,
+					"Friction": 0.6000000238418579,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": 0,
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 3.0,
+					"Restitution": 0.0,
+					"Type": "Dynamic"
+				},
+				"Script": {
+					"Properties": {},
+					"Script": "Assets/Scripts/Weld.lua"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						7.400000095367432,
+						1.5,
+						0.0
+					]
+				}
+			},
+			"ID": 16914566242499166025,
+			"Name": "Block1",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"Joint": {
+					"Anchor": [
+						0.0,
+						-0.5,
+						0.0
+					],
+					"Axis": [
+						0.0,
+						1.0,
+						0.0
+					],
+					"BreakForce": 400.0,
+					"BreakTorque": 300.0,
+					"ConnectedAnchor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"ConnectedEntity": 16914566242499166025,
+					"EnableCollision": false,
+					"LimitMax": 0.0,
+					"LimitMin": 0.0,
+					"MotorMaxForce": 1000.0,
+					"MotorMode": "Off",
+					"MotorTarget": 0.0,
+					"Type": "Fixed",
+					"UseLimits": false
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.4399999976158142,
+						0.5,
+						0.6499999761581421,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.5
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.05000000074505806,
+					"CollisionMask": 4294967295,
+					"FixedRotation": false,
+					"Friction": 0.6000000238418579,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": 0,
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 3.0,
+					"Restitution": 0.0,
+					"Type": "Dynamic"
+				},
+				"Script": {
+					"Properties": {},
+					"Script": "Assets/Scripts/Weld.lua"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						7.400000095367432,
+						2.5,
+						0.0
+					]
+				}
+			},
+			"ID": 14848484691471422925,
+			"Name": "Block2",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"Joint": {
+					"Anchor": [
+						0.0,
+						-0.5,
+						0.0
+					],
+					"Axis": [
+						0.0,
+						1.0,
+						0.0
+					],
+					"BreakForce": 400.0,
+					"BreakTorque": 300.0,
+					"ConnectedAnchor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"ConnectedEntity": 14848484691471422925,
+					"EnableCollision": false,
+					"LimitMax": 0.0,
+					"LimitMin": 0.0,
+					"MotorMaxForce": 1000.0,
+					"MotorMode": "Off",
+					"MotorTarget": 0.0,
+					"Type": "Fixed",
+					"UseLimits": false
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.5600000023841858,
+						0.5,
+						0.550000011920929,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.5
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.05000000074505806,
+					"CollisionMask": 4294967295,
+					"FixedRotation": false,
+					"Friction": 0.6000000238418579,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": 0,
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 3.0,
+					"Restitution": 0.0,
+					"Type": "Dynamic"
+				},
+				"Script": {
+					"Properties": {},
+					"Script": "Assets/Scripts/Weld.lua"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						7.400000095367432,
+						3.5,
+						0.0
+					]
+				}
+			},
+			"ID": 9919830467870730747,
+			"Name": "Block3",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"Joint": {
+					"Anchor": [
+						0.0,
+						-0.5,
+						0.0
+					],
+					"Axis": [
+						0.0,
+						1.0,
+						0.0
+					],
+					"BreakForce": 400.0,
+					"BreakTorque": 300.0,
+					"ConnectedAnchor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"ConnectedEntity": 9919830467870730747,
+					"EnableCollision": false,
+					"LimitMax": 0.0,
+					"LimitMin": 0.0,
+					"MotorMaxForce": 1000.0,
+					"MotorMode": "Off",
+					"MotorTarget": 0.0,
+					"Type": "Fixed",
+					"UseLimits": false
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.6800000071525574,
+						0.5,
+						0.44999998807907104,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.5
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.05000000074505806,
+					"CollisionMask": 4294967295,
+					"FixedRotation": false,
+					"Friction": 0.6000000238418579,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": 0,
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 3.0,
+					"Restitution": 0.0,
+					"Type": "Dynamic"
+				},
+				"Script": {
+					"Properties": {},
+					"Script": "Assets/Scripts/Weld.lua"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						7.400000095367432,
+						4.5,
+						0.0
+					]
+				}
+			},
+			"ID": 10186255497207242832,
+			"Name": "Block4",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"Joint": {
+					"Anchor": [
+						0.0,
+						-0.5,
+						0.0
+					],
+					"Axis": [
+						0.0,
+						1.0,
+						0.0
+					],
+					"BreakForce": 400.0,
+					"BreakTorque": 300.0,
+					"ConnectedAnchor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"ConnectedEntity": 10186255497207242832,
+					"EnableCollision": false,
+					"LimitMax": 0.0,
+					"LimitMin": 0.0,
+					"MotorMaxForce": 1000.0,
+					"MotorMode": "Off",
+					"MotorTarget": 0.0,
+					"Type": "Fixed",
+					"UseLimits": false
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.800000011920929,
+						0.5,
+						0.3499999940395355,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.5
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.05000000074505806,
+					"CollisionMask": 4294967295,
+					"FixedRotation": false,
+					"Friction": 0.6000000238418579,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": 0,
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 3.0,
+					"Restitution": 0.0,
+					"Type": "Dynamic"
+				},
+				"Script": {
+					"Properties": {},
+					"Script": "Assets/Scripts/Weld.lua"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						7.400000095367432,
+						5.5,
+						0.0
+					]
+				}
+			},
+			"ID": 6374205342374598774,
+			"Name": "Block5",
+			"Parent": 0
+		}
+	],
+	"Format": "BasaltScene",
+	"Name": "Joints",
+	"Physics": {
+		"FixedTimestep": 0.01666666753590107,
+		"Gravity": [
+			0.0,
+			-9.8100004196167,
+			0.0
+		],
+		"MaxStepsPerFrame": 8
+	},
+	"Renderer": {
+		"AmbientColor": [
+			0.029999999329447746,
+			0.029999999329447746,
+			0.03500000014901161
+		],
+		"CascadeSplitLambda": 0.8500000238418579,
+		"Exposure": 1.0,
+		"SSAOBias": 0.02500000037252903,
+		"SSAOEnabled": true,
+		"SSAOIntensity": 1.0,
+		"SSAORadius": 0.5,
+		"ShadowBias": 0.001500000013038516,
+		"ShadowDistance": 60.0,
+		"ShadowNormalBias": 0.019999999552965164,
+		"ShadowsEnabled": true,
+		"Tonemapper": "AgX"
+	},
+	"Version": 1
+}

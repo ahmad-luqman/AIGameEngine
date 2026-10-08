@@ -1,0 +1,1215 @@
+[
+ {
+  "command": "script.check",
+  "params": {
+   "path": "Assets/Scripts/Director.lua"
+  }
+ },
+ {
+  "command": "script.check",
+  "params": {
+   "path": "Assets/Scripts/Weld.lua"
+  }
+ },
+ {
+  "command": "scene.new",
+  "params": {
+   "name": "Joints",
+   "empty": true
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "Camera",
+   "components": {
+    "Transform": {
+     "Translation": [
+      1,
+      6,
+      17
+     ],
+     "Rotation": [
+      -12,
+      0,
+      0
+     ]
+    },
+    "Camera": {
+     "FOV": 50,
+     "Near": 0.1,
+     "Far": 200
+    },
+    "AudioListener": {}
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "Sun",
+   "components": {
+    "Transform": {
+     "Rotation": [
+      -45,
+      30,
+      0
+     ]
+    },
+    "DirectionalLight": {
+     "Intensity": 3.0,
+     "ShadowSoftness": 1.5
+    }
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "Sky",
+   "components": {
+    "SkyLight": {
+     "Intensity": 0.7
+    }
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "Director",
+   "components": {
+    "Script": {
+     "Script": "Assets/Scripts/Director.lua"
+    }
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "Ground",
+   "components": {
+    "Transform": {
+     "Translation": [
+      0,
+      -0.5,
+      0
+     ],
+     "Scale": [
+      40,
+      1,
+      16
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Cube"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.35,
+      0.37,
+      0.4,
+      1
+     ],
+     "Metallic": 0.0,
+     "Roughness": 0.9
+    },
+    "RigidBody": {},
+    "BoxCollider": {}
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "DoorPost",
+   "components": {
+    "Transform": {
+     "Translation": [
+      -9.1,
+      1.2,
+      0
+     ],
+     "Scale": [
+      0.2,
+      2.4,
+      0.2
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Cube"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.3,
+      0.2,
+      0.1,
+      1
+     ],
+     "Metallic": 0.0,
+     "Roughness": 0.5
+    },
+    "RigidBody": {},
+    "BoxCollider": {}
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "Door",
+   "components": {
+    "Transform": {
+     "Translation": [
+      -8.1,
+      1.15,
+      0
+     ],
+     "Scale": [
+      1.8,
+      2.2,
+      0.1
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Cube"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.75,
+      0.5,
+      0.25,
+      1
+     ],
+     "Metallic": 0.0,
+     "Roughness": 0.5
+    },
+    "RigidBody": {
+     "Type": "Dynamic",
+     "Mass": 5,
+     "GravityFactor": 1
+    },
+    "BoxCollider": {}
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "PistonBase",
+   "components": {
+    "Transform": {
+     "Translation": [
+      -4.5,
+      0.1,
+      0
+     ],
+     "Scale": [
+      1.4,
+      0.2,
+      1.4
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Cube"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.2,
+      0.2,
+      0.22,
+      1
+     ],
+     "Metallic": 1,
+     "Roughness": 0.4
+    },
+    "RigidBody": {},
+    "BoxCollider": {}
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "Piston",
+   "components": {
+    "Transform": {
+     "Translation": [
+      -4.5,
+      0.5,
+      0
+     ],
+     "Scale": [
+      1,
+      0.4,
+      1
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Cube"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.85,
+      0.2,
+      0.15,
+      1
+     ],
+     "Metallic": 1,
+     "Roughness": 0.3
+    },
+    "RigidBody": {
+     "Type": "Dynamic",
+     "Mass": 2
+    },
+    "BoxCollider": {}
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "ChainHook",
+   "components": {
+    "Transform": {
+     "Translation": [
+      -1,
+      7,
+      0
+     ],
+     "Scale": [
+      0.25,
+      0.25,
+      0.25
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Sphere"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.9,
+      0.9,
+      0.9,
+      1
+     ],
+     "Metallic": 1,
+     "Roughness": 0.2
+    }
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "Link0",
+   "components": {
+    "Transform": {
+     "Translation": [
+      -0.5,
+      7,
+      0
+     ],
+     "Scale": [
+      0.4,
+      0.4,
+      0.4
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Sphere"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.85,
+      0.75,
+      0.3,
+      1
+     ],
+     "Metallic": 1,
+     "Roughness": 0.25
+    },
+    "RigidBody": {
+     "Type": "Dynamic",
+     "Mass": 0.5,
+     "LinearDamping": 0.1
+    },
+    "SphereCollider": {}
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "Link1",
+   "components": {
+    "Transform": {
+     "Translation": [
+      0.0,
+      7,
+      0
+     ],
+     "Scale": [
+      0.4,
+      0.4,
+      0.4
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Sphere"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.85,
+      0.75,
+      0.3,
+      1
+     ],
+     "Metallic": 1,
+     "Roughness": 0.25
+    },
+    "RigidBody": {
+     "Type": "Dynamic",
+     "Mass": 0.5,
+     "LinearDamping": 0.1
+    },
+    "SphereCollider": {}
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "Link2",
+   "components": {
+    "Transform": {
+     "Translation": [
+      0.5,
+      7,
+      0
+     ],
+     "Scale": [
+      0.4,
+      0.4,
+      0.4
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Sphere"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.85,
+      0.75,
+      0.3,
+      1
+     ],
+     "Metallic": 1,
+     "Roughness": 0.25
+    },
+    "RigidBody": {
+     "Type": "Dynamic",
+     "Mass": 0.5,
+     "LinearDamping": 0.1
+    },
+    "SphereCollider": {}
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "Link3",
+   "components": {
+    "Transform": {
+     "Translation": [
+      1.0,
+      7,
+      0
+     ],
+     "Scale": [
+      0.4,
+      0.4,
+      0.4
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Sphere"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.85,
+      0.75,
+      0.3,
+      1
+     ],
+     "Metallic": 1,
+     "Roughness": 0.25
+    },
+    "RigidBody": {
+     "Type": "Dynamic",
+     "Mass": 0.5,
+     "LinearDamping": 0.1
+    },
+    "SphereCollider": {}
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "Link4",
+   "components": {
+    "Transform": {
+     "Translation": [
+      1.5,
+      7,
+      0
+     ],
+     "Scale": [
+      0.4,
+      0.4,
+      0.4
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Sphere"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.85,
+      0.75,
+      0.3,
+      1
+     ],
+     "Metallic": 1,
+     "Roughness": 0.25
+    },
+    "RigidBody": {
+     "Type": "Dynamic",
+     "Mass": 0.5,
+     "LinearDamping": 0.1
+    },
+    "SphereCollider": {}
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "Link5",
+   "components": {
+    "Transform": {
+     "Translation": [
+      2.0,
+      7,
+      0
+     ],
+     "Scale": [
+      0.4,
+      0.4,
+      0.4
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Sphere"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.85,
+      0.75,
+      0.3,
+      1
+     ],
+     "Metallic": 1,
+     "Roughness": 0.25
+    },
+    "RigidBody": {
+     "Type": "Dynamic",
+     "Mass": 0.5,
+     "LinearDamping": 0.1
+    },
+    "SphereCollider": {}
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "Link6",
+   "components": {
+    "Transform": {
+     "Translation": [
+      2.5,
+      7,
+      0
+     ],
+     "Scale": [
+      0.4,
+      0.4,
+      0.4
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Sphere"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.85,
+      0.75,
+      0.3,
+      1
+     ],
+     "Metallic": 1,
+     "Roughness": 0.25
+    },
+    "RigidBody": {
+     "Type": "Dynamic",
+     "Mass": 0.5,
+     "LinearDamping": 0.1
+    },
+    "SphereCollider": {}
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "Link7",
+   "components": {
+    "Transform": {
+     "Translation": [
+      3.0,
+      7,
+      0
+     ],
+     "Scale": [
+      0.4,
+      0.4,
+      0.4
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Sphere"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.85,
+      0.75,
+      0.3,
+      1
+     ],
+     "Metallic": 1,
+     "Roughness": 0.25
+    },
+    "RigidBody": {
+     "Type": "Dynamic",
+     "Mass": 0.5,
+     "LinearDamping": 0.1
+    },
+    "SphereCollider": {}
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "BallHook",
+   "components": {
+    "Transform": {
+     "Translation": [
+      7,
+      8,
+      0
+     ],
+     "Scale": [
+      0.3,
+      0.3,
+      0.3
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Sphere"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.9,
+      0.9,
+      0.9,
+      1
+     ],
+     "Metallic": 1,
+     "Roughness": 0.2
+    }
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "WreckingBall",
+   "components": {
+    "Transform": {
+     "Translation": [
+      3.2,
+      8,
+      0
+     ],
+     "Scale": [
+      1.3,
+      1.3,
+      1.3
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Sphere"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.1,
+      0.1,
+      0.12,
+      1
+     ],
+     "Metallic": 1,
+     "Roughness": 0.35
+    },
+    "RigidBody": {
+     "Type": "Dynamic",
+     "Mass": 40,
+     "LinearDamping": 0.0,
+     "AngularDamping": 0.0
+    },
+    "SphereCollider": {}
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "Block0",
+   "components": {
+    "Transform": {
+     "Translation": [
+      7.4,
+      0.5,
+      0
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Cube"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.2,
+      0.5,
+      0.85,
+      1
+     ],
+     "Metallic": 0.0,
+     "Roughness": 0.5
+    },
+    "RigidBody": {
+     "Type": "Dynamic",
+     "Mass": 3,
+     "Friction": 0.6
+    },
+    "BoxCollider": {},
+    "Script": {
+     "Script": "Assets/Scripts/Weld.lua"
+    }
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "Block1",
+   "components": {
+    "Transform": {
+     "Translation": [
+      7.4,
+      1.5,
+      0
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Cube"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.32,
+      0.5,
+      0.75,
+      1
+     ],
+     "Metallic": 0.0,
+     "Roughness": 0.5
+    },
+    "RigidBody": {
+     "Type": "Dynamic",
+     "Mass": 3,
+     "Friction": 0.6
+    },
+    "BoxCollider": {},
+    "Script": {
+     "Script": "Assets/Scripts/Weld.lua"
+    }
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "Block2",
+   "components": {
+    "Transform": {
+     "Translation": [
+      7.4,
+      2.5,
+      0
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Cube"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.44,
+      0.5,
+      0.6499999999999999,
+      1
+     ],
+     "Metallic": 0.0,
+     "Roughness": 0.5
+    },
+    "RigidBody": {
+     "Type": "Dynamic",
+     "Mass": 3,
+     "Friction": 0.6
+    },
+    "BoxCollider": {},
+    "Script": {
+     "Script": "Assets/Scripts/Weld.lua"
+    }
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "Block3",
+   "components": {
+    "Transform": {
+     "Translation": [
+      7.4,
+      3.5,
+      0
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Cube"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.56,
+      0.5,
+      0.5499999999999999,
+      1
+     ],
+     "Metallic": 0.0,
+     "Roughness": 0.5
+    },
+    "RigidBody": {
+     "Type": "Dynamic",
+     "Mass": 3,
+     "Friction": 0.6
+    },
+    "BoxCollider": {},
+    "Script": {
+     "Script": "Assets/Scripts/Weld.lua"
+    }
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "Block4",
+   "components": {
+    "Transform": {
+     "Translation": [
+      7.4,
+      4.5,
+      0
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Cube"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.6799999999999999,
+      0.5,
+      0.44999999999999996,
+      1
+     ],
+     "Metallic": 0.0,
+     "Roughness": 0.5
+    },
+    "RigidBody": {
+     "Type": "Dynamic",
+     "Mass": 3,
+     "Friction": 0.6
+    },
+    "BoxCollider": {},
+    "Script": {
+     "Script": "Assets/Scripts/Weld.lua"
+    }
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "Block5",
+   "components": {
+    "Transform": {
+     "Translation": [
+      7.4,
+      5.5,
+      0
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Cube"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.8,
+      0.5,
+      0.35,
+      1
+     ],
+     "Metallic": 0.0,
+     "Roughness": 0.5
+    },
+    "RigidBody": {
+     "Type": "Dynamic",
+     "Mass": 3,
+     "Friction": 0.6
+    },
+    "BoxCollider": {},
+    "Script": {
+     "Script": "Assets/Scripts/Weld.lua"
+    }
+   }
+  }
+ },
+ {
+  "command": "component.set",
+  "params": {
+   "entity": "Door",
+   "component": "Joint",
+   "data": {
+    "Type": "Hinge",
+    "ConnectedEntity": "DoorPost",
+    "Anchor": [
+     -0.5,
+     0,
+     0
+    ],
+    "Axis": [
+     0,
+     1,
+     0
+    ],
+    "UseLimits": true,
+    "LimitMin": -5,
+    "LimitMax": 100,
+    "MotorMode": "Position",
+    "MotorMaxForce": 400
+   }
+  }
+ },
+ {
+  "command": "component.set",
+  "params": {
+   "entity": "Piston",
+   "component": "Joint",
+   "data": {
+    "Type": "Slider",
+    "ConnectedEntity": "PistonBase",
+    "Axis": [
+     0,
+     1,
+     0
+    ],
+    "UseLimits": true,
+    "LimitMin": 0,
+    "LimitMax": 2.2,
+    "MotorMode": "Position",
+    "MotorTarget": 1,
+    "MotorMaxForce": 300
+   }
+  }
+ },
+ {
+  "command": "component.set",
+  "params": {
+   "entity": "Link0",
+   "component": "Joint",
+   "data": {
+    "Type": "Point",
+    "ConnectedEntity": 0,
+    "Anchor": [
+     -0.625,
+     0,
+     0
+    ]
+   }
+  }
+ },
+ {
+  "command": "component.set",
+  "params": {
+   "entity": "Link1",
+   "component": "Joint",
+   "data": {
+    "Type": "Point",
+    "ConnectedEntity": "Link0",
+    "Anchor": [
+     -0.625,
+     0,
+     0
+    ]
+   }
+  }
+ },
+ {
+  "command": "component.set",
+  "params": {
+   "entity": "Link2",
+   "component": "Joint",
+   "data": {
+    "Type": "Point",
+    "ConnectedEntity": "Link1",
+    "Anchor": [
+     -0.625,
+     0,
+     0
+    ]
+   }
+  }
+ },
+ {
+  "command": "component.set",
+  "params": {
+   "entity": "Link3",
+   "component": "Joint",
+   "data": {
+    "Type": "Point",
+    "ConnectedEntity": "Link2",
+    "Anchor": [
+     -0.625,
+     0,
+     0
+    ]
+   }
+  }
+ },
+ {
+  "command": "component.set",
+  "params": {
+   "entity": "Link4",
+   "component": "Joint",
+   "data": {
+    "Type": "Point",
+    "ConnectedEntity": "Link3",
+    "Anchor": [
+     -0.625,
+     0,
+     0
+    ]
+   }
+  }
+ },
+ {
+  "command": "component.set",
+  "params": {
+   "entity": "Link5",
+   "component": "Joint",
+   "data": {
+    "Type": "Point",
+    "ConnectedEntity": "Link4",
+    "Anchor": [
+     -0.625,
+     0,
+     0
+    ]
+   }
+  }
+ },
+ {
+  "command": "component.set",
+  "params": {
+   "entity": "Link6",
+   "component": "Joint",
+   "data": {
+    "Type": "Point",
+    "ConnectedEntity": "Link5",
+    "Anchor": [
+     -0.625,
+     0,
+     0
+    ]
+   }
+  }
+ },
+ {
+  "command": "component.set",
+  "params": {
+   "entity": "Link7",
+   "component": "Joint",
+   "data": {
+    "Type": "Point",
+    "ConnectedEntity": "Link6",
+    "Anchor": [
+     -0.625,
+     0,
+     0
+    ]
+   }
+  }
+ },
+ {
+  "command": "component.set",
+  "params": {
+   "entity": "WreckingBall",
+   "component": "Joint",
+   "data": {
+    "Type": "Distance",
+    "ConnectedAnchor": [
+     7,
+     8,
+     0
+    ]
+   }
+  }
+ },
+ {
+  "command": "component.set",
+  "params": {
+   "entity": "Block1",
+   "component": "Joint",
+   "data": {
+    "Type": "Fixed",
+    "ConnectedEntity": "Block0",
+    "Anchor": [
+     0,
+     -0.5,
+     0
+    ],
+    "BreakForce": 400,
+    "BreakTorque": 300
+   }
+  }
+ },
+ {
+  "command": "component.set",
+  "params": {
+   "entity": "Block2",
+   "component": "Joint",
+   "data": {
+    "Type": "Fixed",
+    "ConnectedEntity": "Block1",
+    "Anchor": [
+     0,
+     -0.5,
+     0
+    ],
+    "BreakForce": 400,
+    "BreakTorque": 300
+   }
+  }
+ },
+ {
+  "command": "component.set",
+  "params": {
+   "entity": "Block3",
+   "component": "Joint",
+   "data": {
+    "Type": "Fixed",
+    "ConnectedEntity": "Block2",
+    "Anchor": [
+     0,
+     -0.5,
+     0
+    ],
+    "BreakForce": 400,
+    "BreakTorque": 300
+   }
+  }
+ },
+ {
+  "command": "component.set",
+  "params": {
+   "entity": "Block4",
+   "component": "Joint",
+   "data": {
+    "Type": "Fixed",
+    "ConnectedEntity": "Block3",
+    "Anchor": [
+     0,
+     -0.5,
+     0
+    ],
+    "BreakForce": 400,
+    "BreakTorque": 300
+   }
+  }
+ },
+ {
+  "command": "component.set",
+  "params": {
+   "entity": "Block5",
+   "component": "Joint",
+   "data": {
+    "Type": "Fixed",
+    "ConnectedEntity": "Block4",
+    "Anchor": [
+     0,
+     -0.5,
+     0
+    ],
+    "BreakForce": 400,
+    "BreakTorque": 300
+   }
+  }
+ },
+ {
+  "command": "scene.settings",
+  "params": {
+   "Renderer": {
+    "Exposure": 1.0,
+    "Tonemapper": "AgX",
+    "ShadowDistance": 60
+   }
+  }
+ },
+ {
+  "command": "scene.save",
+  "params": {
+   "path": "Assets/Scenes/Joints.bscene"
+  }
+ },
+ {
+  "command": "project.set",
+  "params": {
+   "startScene": "Assets/Scenes/Joints.bscene",
+   "windowWidth": 1600,
+   "windowHeight": 900
+  }
+ }
+]

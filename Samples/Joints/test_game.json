@@ -1,0 +1,11 @@
+[
+	{ "id": "open", "command": "scene.open", "params": { "path": "Assets/Scenes/Joints.bscene" } },
+	{ "id": "play", "command": "play.start" },
+	{ "id": "swing", "command": "play.step", "params": { "frames": 90, "assertNoErrors": true } },
+	{ "id": "constraints-hold", "command": "lua.exec", "params": { "code": "local rope = Scene.FindEntityByName('WreckingBall').Translation:Distance(Scene.FindEntityByName('BallHook').Translation); assert(math.abs(rope - 3.8) < 0.1, 'rope length ' .. rope); local first = Scene.FindEntityByName('Link0').Translation:Distance(Vec3(-0.75, 7, 0)); assert(math.abs(first - 0.25) < 0.02, 'first link left its pivot: ' .. first); for i = 1, 7 do local gap = Scene.FindEntityByName('Link' .. i).Translation:Distance(Scene.FindEntityByName('Link' .. (i - 1)).Translation); assert(gap <= 0.55, 'chain stretched: ' .. gap) end; local p = Scene.FindEntityByName('Piston').Translation; assert(math.abs(p.x + 4.5) < 0.01 and math.abs(p.z) < 0.01, 'piston left its axis'); return rope" } },
+	{ "id": "door-opens", "command": "play.step", "params": { "frames": 110, "assertNoErrors": true } },
+	{ "id": "motors", "command": "lua.exec", "params": { "code": "local door = Scene.FindEntityByName('Door'):GetJointPosition(); assert(door > 60, 'door did not open: ' .. door); local piston = Scene.FindEntityByName('Piston'):GetJointPosition(); assert(piston >= -0.01 and piston <= 2.21, 'piston outside its limits: ' .. piston); return door" } },
+	{ "id": "settle", "command": "play.step", "params": { "frames": 120, "assertNoErrors": true } },
+	{ "id": "tower-broken", "command": "lua.exec", "params": { "code": "assert((JointsDemoBreaks or 0) >= 3, 'the wrecking ball broke only ' .. tostring(JointsDemoBreaks) .. ' welds'); return JointsDemoBreaks" } },
+	{ "id": "stop", "command": "play.stop" }
+]
