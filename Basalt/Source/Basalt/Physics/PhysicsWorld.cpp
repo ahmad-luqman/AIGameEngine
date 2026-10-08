@@ -13,6 +13,7 @@
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Body/BodyLockMulti.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/RayCast.h>
@@ -21,10 +22,16 @@
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
+#include <Jolt/Physics/Constraints/DistanceConstraint.h>
+#include <Jolt/Physics/Constraints/FixedConstraint.h>
+#include <Jolt/Physics/Constraints/HingeConstraint.h>
+#include <Jolt/Physics/Constraints/PointConstraint.h>
+#include <Jolt/Physics/Constraints/SliderConstraint.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/RegisterTypes.h>
 
 #include <algorithm>
+#include <cfloat>
 #include <cstdarg>
 #include <cstdio>
 #include <map>
@@ -224,6 +231,14 @@ namespace Basalt {
 			glm::quat LastRotation = { 1.0f, 0.0f, 0.0f, 0.0f };
 		};
 
+		struct JointRecord
+		{
+			JPH::Ref<JPH::TwoBodyConstraint> Constraint;
+			JointType Type = JointType::Fixed;
+			// 0 when attached to the world.
+			UUID Connected = 0;
+		};
+
 		Scope<JPH::TempAllocatorImpl> TempAllocator;
 		Scope<JPH::JobSystemThreadPool> JobSystem;
 		BroadPhaseLayerInterfaceImpl BroadPhaseLayerInterface;
@@ -235,6 +250,9 @@ namespace Basalt {
 		std::unordered_map<UUID, BodyRecord> Bodies;
 		std::unordered_map<uint32_t, UUID> BodyToEntity;
 		std::unordered_set<UUID> DirtyEntities;
+		// Keyed by the entity that owns the JointComponent.
+		std::unordered_map<UUID, JointRecord> Joints;
+		std::unordered_set<UUID> DirtyJoints;
 		// Jolt reports contacts per sub-shape pair; entities see one begin/end per entity pair. Keys are
 		// (entity A, sub-shape A, entity B, sub-shape B) with A < B; PairCounts counts keys per entity pair.
 		using ContactKey = std::tuple<uint64_t, uint32_t, uint64_t, uint32_t>;
@@ -251,6 +269,32 @@ namespace Basalt {
 			return it != Bodies.end() && it->second.IsTrigger;
 		}
 
+		void RemoveJoint(UUID owner)
+		{
+			auto it = Joints.find(owner);
+			if (it == Joints.end())
+				return;
+			System->RemoveConstraint(it->second.Constraint);
+			Joints.erase(it);
+		}
+
+		// Jolt constraints point at their bodies, so they must go before either body is destroyed. They are
+		// rebuilt before the next step if both bodies still exist then (e.g. a body that was recreated).
+		void RemoveJointsOfBody(UUID uuid)
+		{
+			for (auto it = Joints.begin(); it != Joints.end();)
+			{
+				if (it->first != uuid && it->second.Connected != uuid)
+				{
+					++it;
+					continue;
+				}
+				System->RemoveConstraint(it->second.Constraint);
+				DirtyJoints.insert(it->first);
+				it = Joints.erase(it);
+			}
+		}
+
 		// Removes a body. Contacts it had are ended now (Jolt's removal callbacks for a destroyed body can
 		// no longer be mapped to an entity), and surviving entities are notified.
 		void RemoveBody(Scene* scene, UUID uuid)
@@ -259,6 +303,7 @@ namespace Basalt {
 			if (it == Bodies.end())
 				return;
 			const bool trigger = it->second.IsTrigger;
+			RemoveJointsOfBody(uuid);
 			JPH::BodyInterface& bodies = System->GetBodyInterface();
 			BodyToEntity.erase(it->second.ID.GetIndexAndSequenceNumber());
 			bodies.RemoveBody(it->second.ID);
@@ -301,6 +346,21 @@ namespace Basalt {
 			if (const auto* id = registry.try_get<IDComponent>(entity))
 				DirtyEntities.insert(id->ID);
 		}
+
+		void OnJointChanged(entt::registry& registry, entt::entity entity)
+		{
+			if (const auto* id = registry.try_get<IDComponent>(entity))
+				DirtyJoints.insert(id->ID);
+		}
+
+		void OnJointDestroyed(entt::registry& registry, entt::entity entity)
+		{
+			if (const auto* id = registry.try_get<IDComponent>(entity))
+			{
+				RemoveJoint(id->ID);
+				DirtyJoints.erase(id->ID);
+			}
+		}
 	};
 
 	PhysicsWorld::PhysicsWorld(Scene* scene)
@@ -338,6 +398,9 @@ namespace Basalt {
 		registry.on_construct<CapsuleColliderComponent>().connect<&Impl::OnPhysicsComponentChanged>(impl);
 		registry.on_destroy<CapsuleColliderComponent>().connect<&Impl::OnPhysicsComponentChanged>(impl);
 		registry.on_update<CapsuleColliderComponent>().connect<&Impl::OnPhysicsComponentChanged>(impl);
+		registry.on_construct<JointComponent>().connect<&Impl::OnJointChanged>(impl);
+		registry.on_update<JointComponent>().connect<&Impl::OnJointChanged>(impl);
+		registry.on_destroy<JointComponent>().connect<&Impl::OnJointDestroyed>(impl);
 	}
 
 	PhysicsWorld::~PhysicsWorld()
@@ -356,7 +419,13 @@ namespace Basalt {
 		registry.on_construct<CapsuleColliderComponent>().disconnect<&Impl::OnPhysicsComponentChanged>(impl);
 		registry.on_destroy<CapsuleColliderComponent>().disconnect<&Impl::OnPhysicsComponentChanged>(impl);
 		registry.on_update<CapsuleColliderComponent>().disconnect<&Impl::OnPhysicsComponentChanged>(impl);
+		registry.on_construct<JointComponent>().disconnect<&Impl::OnJointChanged>(impl);
+		registry.on_update<JointComponent>().disconnect<&Impl::OnJointChanged>(impl);
+		registry.on_destroy<JointComponent>().disconnect<&Impl::OnJointDestroyed>(impl);
 
+		for (auto& [uuid, joint] : m_Impl->Joints)
+			m_Impl->System->RemoveConstraint(joint.Constraint);
+		m_Impl->Joints.clear();
 		JPH::BodyInterface& bodies = m_Impl->System->GetBodyInterface();
 		for (auto& [uuid, record] : m_Impl->Bodies)
 		{
@@ -378,6 +447,10 @@ namespace Basalt {
 		for (entt::entity handle : view)
 			RecreateBody({ handle, m_Scene });
 		m_Impl->DirtyEntities.clear();
+		// Joints need both of their bodies, so they are built after every body exists.
+		for (entt::entity handle : m_Scene->GetAllEntitiesWith<JointComponent>())
+			m_Impl->DirtyJoints.insert(Entity(handle, m_Scene).GetUUID());
+		RebuildDirtyJoints();
 		m_Impl->System->OptimizeBroadPhase();
 	}
 
@@ -510,7 +583,185 @@ namespace Basalt {
 	void PhysicsWorld::OnEntityDestroyed(Entity entity)
 	{
 		m_Impl->RemoveBody(m_Scene, entity.GetUUID());
+		m_Impl->RemoveJoint(entity.GetUUID());
 		m_Impl->DirtyEntities.erase(entity.GetUUID());
+		m_Impl->DirtyJoints.erase(entity.GetUUID());
+	}
+
+	void PhysicsWorld::RebuildDirtyJoints()
+	{
+		Impl& impl = *m_Impl;
+		if (impl.DirtyJoints.empty())
+			return;
+		// Walk the registry rather than the (unordered) dirty set so constraints are added in a stable
+		// order: Jolt solves them in that order, and replays must not depend on hash-set iteration.
+		for (entt::entity handle : m_Scene->GetAllEntitiesWith<JointComponent>())
+		{
+			Entity entity(handle, m_Scene);
+			if (impl.DirtyJoints.contains(entity.GetUUID()))
+				CreateJoint(entity);
+		}
+		impl.DirtyJoints.clear();
+	}
+
+	void PhysicsWorld::CreateJoint(Entity entity)
+	{
+		Impl& impl = *m_Impl;
+		impl.RemoveJoint(entity.GetUUID());
+		const JointComponent& joint = entity.GetComponent<JointComponent>();
+
+		auto self = impl.Bodies.find(entity.GetUUID());
+		if (self == impl.Bodies.end())
+		{
+			BS_CORE_WARN("Physics: joint on '{}' needs a rigid body with a collider on the same entity", entity.GetName());
+			return;
+		}
+
+		JPH::BodyID bodyIDs[2] = { JPH::BodyID(), self->second.ID };
+		bool connectedIsStatic = true;
+		Entity connected;
+		if (joint.ConnectedEntity != 0)
+		{
+			connected = m_Scene->GetEntityByUUID(joint.ConnectedEntity);
+			if (!connected || connected == entity)
+			{
+				BS_CORE_WARN("Physics: joint on '{}' connects to {} entity {}", entity.GetName(), connected ? "its own" : "a missing", static_cast<uint64_t>(joint.ConnectedEntity));
+				return;
+			}
+			auto other = impl.Bodies.find(joint.ConnectedEntity);
+			if (other == impl.Bodies.end())
+			{
+				BS_CORE_WARN("Physics: joint on '{}' connects to '{}', which has no rigid body", entity.GetName(), connected.GetName());
+				return;
+			}
+			bodyIDs[0] = other->second.ID;
+			connectedIsStatic = other->second.Type == RigidBodyType::Static;
+		}
+		if (self->second.Type == RigidBodyType::Static && connectedIsStatic)
+		{
+			BS_CORE_WARN("Physics: joint on '{}' connects two static bodies and has no effect", entity.GetName());
+			return;
+		}
+
+		// The joint frame in world space. Both bodies share it at creation, so their current relative pose
+		// becomes the joint's rest pose.
+		const glm::mat4 world = m_Scene->GetWorldTransform(entity);
+		const glm::vec3 anchor = glm::vec3(world * glm::vec4(joint.Anchor, 1.0f));
+		glm::vec3 axis = glm::mat3(world) * joint.Axis;
+		if (glm::length(axis) < 1e-6f)
+		{
+			BS_CORE_WARN("Physics: joint on '{}' has a zero axis; using local Y", entity.GetName());
+			axis = glm::mat3(world) * glm::vec3(0.0f, 1.0f, 0.0f);
+		}
+		const JPH::Vec3 joltAxis = ToJolt(glm::normalize(axis));
+		const JPH::Vec3 joltNormal = joltAxis.GetNormalizedPerpendicular();
+
+		// Jolt requires limits that contain the rest pose (min <= 0 <= max).
+		auto limits = [&](float range, const char* unit) {
+			const float min = std::clamp(joint.LimitMin, -range, 0.0f);
+			const float max = std::clamp(joint.LimitMax, 0.0f, range);
+			if (min != joint.LimitMin || max != joint.LimitMax)
+				BS_CORE_WARN("Physics: joint limits on '{}' must satisfy -{} <= LimitMin <= 0 <= LimitMax <= {} ({}); clamped", entity.GetName(), range, range, unit);
+			return std::pair(min, max);
+		};
+
+		JPH::Ref<JPH::TwoBodyConstraintSettings> settings;
+		switch (joint.Type)
+		{
+			case JointType::Fixed:
+			{
+				auto* fixed = new JPH::FixedConstraintSettings();
+				fixed->mPoint1 = fixed->mPoint2 = ToJolt(anchor);
+				settings = fixed;
+				break;
+			}
+			case JointType::Point:
+			{
+				auto* point = new JPH::PointConstraintSettings();
+				point->mPoint1 = point->mPoint2 = ToJolt(anchor);
+				settings = point;
+				break;
+			}
+			case JointType::Hinge:
+			{
+				auto* hinge = new JPH::HingeConstraintSettings();
+				hinge->mPoint1 = hinge->mPoint2 = ToJolt(anchor);
+				hinge->mHingeAxis1 = hinge->mHingeAxis2 = joltAxis;
+				hinge->mNormalAxis1 = hinge->mNormalAxis2 = joltNormal;
+				if (joint.UseLimits)
+				{
+					const auto [min, max] = limits(180.0f, "degrees");
+					hinge->mLimitsMin = glm::radians(min);
+					hinge->mLimitsMax = glm::radians(max);
+				}
+				settings = hinge;
+				break;
+			}
+			case JointType::Slider:
+			{
+				auto* slider = new JPH::SliderConstraintSettings();
+				slider->mPoint1 = slider->mPoint2 = ToJolt(anchor);
+				slider->mSliderAxis1 = slider->mSliderAxis2 = joltAxis;
+				slider->mNormalAxis1 = slider->mNormalAxis2 = joltNormal;
+				if (joint.UseLimits)
+				{
+					const auto [min, max] = limits(FLT_MAX, "meters");
+					slider->mLimitsMin = min;
+					slider->mLimitsMax = max;
+				}
+				settings = slider;
+				break;
+			}
+			case JointType::Distance:
+			{
+				auto* distance = new JPH::DistanceConstraintSettings();
+				const glm::vec3 connectedAnchor = connected ? glm::vec3(m_Scene->GetWorldTransform(connected) * glm::vec4(joint.ConnectedAnchor, 1.0f)) : joint.ConnectedAnchor;
+				distance->mPoint1 = ToJolt(connectedAnchor);
+				distance->mPoint2 = ToJolt(anchor);
+				// Without limits Jolt keeps the starting distance (negative values mean "current").
+				if (joint.UseLimits)
+				{
+					distance->mMinDistance = std::max(joint.LimitMin, 0.0f);
+					distance->mMaxDistance = std::max(joint.LimitMax, distance->mMinDistance);
+				}
+				settings = distance;
+				break;
+			}
+		}
+
+		// Body 1 is the connected body (or the world), body 2 this entity's.
+		const int bodyCount = connected ? 2 : 1;
+		const JPH::BodyLockMultiWrite lock(impl.System->GetBodyLockInterface(), connected ? bodyIDs : bodyIDs + 1, bodyCount);
+		JPH::Body* body1 = connected ? lock.GetBody(0) : &JPH::Body::sFixedToWorld;
+		JPH::Body* body2 = lock.GetBody(bodyCount - 1);
+		if (!body1 || !body2)
+			return;
+
+		Impl::JointRecord record;
+		record.Constraint = static_cast<JPH::TwoBodyConstraint*>(settings->Create(*body1, *body2));
+		record.Type = joint.Type;
+		record.Connected = joint.ConnectedEntity;
+		impl.System->AddConstraint(record.Constraint);
+		impl.Joints[entity.GetUUID()] = record;
+	}
+
+	bool PhysicsWorld::HasJoint(Entity entity) const
+	{
+		return entity && m_Impl->Joints.contains(entity.GetUUID());
+	}
+
+	std::optional<float> PhysicsWorld::GetJointPosition(Entity entity) const
+	{
+		if (!entity)
+			return std::nullopt;
+		auto it = m_Impl->Joints.find(entity.GetUUID());
+		if (it == m_Impl->Joints.end())
+			return std::nullopt;
+		if (it->second.Type == JointType::Hinge)
+			return glm::degrees(static_cast<const JPH::HingeConstraint*>(it->second.Constraint.GetPtr())->GetCurrentAngle());
+		if (it->second.Type == JointType::Slider)
+			return static_cast<const JPH::SliderConstraint*>(it->second.Constraint.GetPtr())->GetCurrentPosition();
+		return std::nullopt;
 	}
 
 	bool PhysicsWorld::HasBody(Entity entity) const
@@ -543,6 +794,7 @@ namespace Basalt {
 				}
 			}
 		}
+		RebuildDirtyJoints();
 
 		m_Accumulator += ts.GetSeconds();
 		uint32_t steps = 0;

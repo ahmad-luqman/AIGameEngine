@@ -34,6 +34,8 @@ namespace Basalt {
 	//
 	// Bodies are created for every entity with a RigidBodyComponent and at least one collider. Entities
 	// whose physics components are added or removed at runtime are rebuilt before the next step.
+	// JointComponents become Jolt constraints once both bodies exist; a joint is rebuilt (from the current
+	// poses) whenever it changes or either of its bodies is rebuilt.
 	// Dynamic bodies write their pose back to the entity; moving a dynamic or static body's transform from
 	// script teleports it; kinematic bodies follow their transform smoothly.
 	class PhysicsWorld
@@ -62,6 +64,11 @@ namespace Basalt {
 		void SetAngularVelocity(Entity entity, const glm::vec3& velocity);
 		glm::vec3 GetAngularVelocity(Entity entity) const;
 
+		bool HasJoint(Entity entity) const;
+		// Hinge angle (degrees) or slider offset (meters) relative to the joint's rest pose; nullopt for
+		// other joint types and entities without a live joint.
+		std::optional<float> GetJointPosition(Entity entity) const;
+
 		// Closest hit along the ray, ignoring triggers and optionally one entity (e.g. the caster).
 		std::optional<RaycastHit> Raycast(const glm::vec3& origin, const glm::vec3& direction, float maxDistance, UUID ignoreEntity = 0) const;
 
@@ -72,6 +79,8 @@ namespace Basalt {
 		uint64_t GetStepCount() const { return m_StepCount; }
 
 	private:
+		void RebuildDirtyJoints();
+		void CreateJoint(Entity entity);
 		void DispatchContacts();
 
 	private:
