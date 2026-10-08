@@ -1,11 +1,17 @@
 # Basalt Roadmap
 
 This file lists what Basalt does not do yet, ordered by priority, with enough detail to start work on any
-item. It is based on a review of the code as of commit `9dc130d` (October 2026). Every item follows the
+item. It is based on a review of the code as of commit `670c192` (October 2026), plus ideas from comparing
+Basalt with a similar AI-built engine shown in The Cherno's "Can AI Make a Game Engine?" video. Every item follows the
 normal workflow in AGENTS.md: unit tests, feature-test coverage for anything reachable from Lua or the
 automation API, docs, and a code review before committing.
 
 Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or more.
+
+**Execution.** Work in milestones rather than one item at a time: P0 → P1 Physics (joints, layers) →
+particles and UI components → P2 editor feel → the Marble Run sample. Run each milestone as one long
+autonomous session at high effort (or with multi-agent workflows), and check quality and token cost before
+starting the next.
 
 ## Current state (baseline)
 
@@ -14,7 +20,7 @@ Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or mor
   creation/destruction/prefabs, an editor, export, and a full automation API (CLI + TCP).
 - CI builds and tests on Windows, Ubuntu and macOS (Debug + Release) — but without a GPU. Rendering has
   only been verified on macOS (Apple M4 Max via MoltenVK) with zero validation errors.
-- 70 unit test cases, a feature test with 308 Lua checks, and a Tetris sample with a scripted gameplay
+- 93 unit test cases, a feature test with 308 Lua checks, and a Tetris sample with a scripted gameplay
   test.
 
 ---
@@ -44,6 +50,12 @@ The features most games need, roughly in order of impact.
 
 ### Physics
 
+- **Joints — M.** Fixed, hinge, slider, distance and point constraints (`JointComponent` referencing a
+  second entity by UUID), with breaking force and motor settings for hinges and sliders. Highest-impact
+  physics item for gameplay (doors, chains, a block sliding on a rail).
+- **Physics layers and collision matrix — S.** Named layers (`RigidBody.Layer`) and a project-wide
+  collision matrix in `ProjectConfig`, mapped onto Jolt's object/broad-phase layers. Shape queries and
+  `Raycast` take a layer mask built from these names.
 - **Mesh and convex-hull colliders — M.** New `MeshColliderComponent` (`Mesh`, `MeshIndex`, `Convex`
   flag). Static bodies use `JPH::MeshShape`, dynamic bodies a `JPH::ConvexHullShape` built from the
   vertices. Cache cooked shapes per mesh asset. Without this, imported levels cannot collide by their
@@ -53,8 +65,6 @@ The features most games need, roughly in order of impact.
   Platformers and first-person games need it, and `FixedRotation` dynamic bodies are a poor substitute.
 - **Shape queries — S.** `Physics.SphereCast`, `Physics.BoxCast`, `Physics.OverlapSphere`,
   `Physics.OverlapBox`, and a layer-mask parameter on `Raycast`. Return all hits optionally.
-- **Joints — M.** Fixed, hinge, slider, distance and point constraints (`JointComponent` referencing a
-  second entity by UUID), with breaking force and motor settings for hinges and sliders.
 - **Continuous collision — S.** Expose Jolt's `EMotionQuality::LinearCast` as a `RigidBody.Continuous`
   flag so fast projectiles do not tunnel.
 - **Physics materials and per-pair callbacks — S.** Combine modes for friction and restitution;
@@ -68,14 +78,14 @@ The features most games need, roughly in order of impact.
 - **Clustered forward lighting — M.** Today every pixel loops over all point and spot lights (up to 256).
   Build a froxel grid (for example 16×9×24) in a compute pass and give each cluster a light list. This
   keeps the cost per pixel bounded with hundreds of lights.
-- **Anti-aliasing — M.** FXAA as a cheap default (one post pass), then TAA (jittered projection, motion
+- **Particle system — M.** `ParticleEmitterComponent` (rate, bursts, emission shape, lifetime, velocity,
+  color and size over life, additive/alpha blending), simulated on the CPU and drawn as sorted billboards
+  in the transparent pass. Lua `Emit(count)`, `Play()`, `Stop()`. Move simulation to a compute pass later
+  if particle counts demand it. Seeded from the project random seed so replays stay deterministic.
+- **Temporal anti-aliasing — M.** TAA (jittered projection, motion
   vectors from the depth prepass, history reprojection with neighbourhood clamping), which also
-  stabilizes SSAO and specular shimmer. MSAA is an option for the forward pass but complicates the SSAO
-  prepass.
-- **Bloom — S.** Downsample/upsample chain (Call of Duty: Advanced Warfare style) on the HDR buffer
-  before tonemapping; makes emissive materials read as bright.
-- **Auto exposure — S.** Luminance histogram in compute, with adaptation speed and EV clamps in a new
-  `PostProcessComponent` (or scene settings) alongside the tonemapper choice.
+  stabilizes SSAO and specular shimmer. Builds on FXAA from P2's post-process item. MSAA is an option for
+  the forward pass but complicates the SSAO prepass.
 - **Multiple directional lights — S.** Only the first casts shadows; the others should still contribute
   unshadowed light (today they are ignored).
 - **Skinned meshes and animation — L.** Import glTF skins and animations (cgltf already parses them),
@@ -92,8 +102,7 @@ The features most games need, roughly in order of impact.
   screen-space reflections for contact detail.
 - **Render scale and dynamic resolution — S.** Render at a fraction of the window size, upscale in the
   tonemap pass.
-- **Decals, particles, text in 3D — L each.** A GPU particle system (emitter component, compute
-  simulation, sorted billboards) is the most useful for games.
+- **Decals and text in 3D — L each.**
 
 ### Scripting
 
@@ -108,8 +117,9 @@ The features most games need, roughly in order of impact.
 - **Events and messaging — S.** `Events.Emit(name, payload)` / `Events.On(name, fn)` for decoupled game
   logic, cleared when play stops.
 - **Script hot reload — M.** Watch `.lua` files during play; on change, reload the class table and rebind
-  existing instances (keeping their fields), then call an optional `OnReload`. Saves a lot of iteration
-  time, including for AI agents.
+  existing instances (keeping their fields), then call an optional `OnReload`. Also refresh the
+  inspector's cached script properties when the file is saved (today they stay cached until restart).
+  Saves a lot of iteration time, including for AI agents.
 - **Lua type definitions — S.** Generate `Docs/basalt.d.lua` (LuaLS `---@class` annotations) from the
   bindings so editors and AI agents get completion and type checks. Add a ctest that keeps it in sync.
 
@@ -136,18 +146,50 @@ The features most games need, roughly in order of impact.
 
 ### Game UI
 
+- **UI components — M.** `UIRectComponent` (anchors, pivot, offsets, size, color/texture) and
+  `UITextComponent` (text, font, size, alignment, color), drawn by the existing UI renderer after the scene
+  and laid out in the editor with an overlay showing rect bounds. Lets a HUD or menu be authored without
+  script code; `UI.*` stays for quick immediate-mode output. The items below build on these components.
 - **Images and nine-slice panels — S.** `UI.Image(texture, x, y, w, h [, tint])`.
-- **Interactive widgets — M.** `UI.Button`, `UI.Slider` and `UI.Checkbox` that return their state, with
+- **Interactive widgets — M.** Button, slider and checkbox components (with `OnClick`/`OnValueChanged`
+  script callbacks) plus matching immediate-mode `UI.Button`/`UI.Slider`/`UI.Checkbox`, with
   keyboard/gamepad navigation. Needed for menus and settings screens.
 - **Fonts — S.** Load TTF fonts from the project (`UI.Text(..., { Font = "Assets/Fonts/X.ttf" })`); today
   there is one built-in font.
-- **Anchors — S.** Anchor UI elements to screen edges so HUDs work at any aspect ratio.
+- **Anchors for immediate-mode UI — S.** Give `UI.*` calls the same anchor options as the components so
+  HUDs work at any aspect ratio.
 
 ---
 
 ## P2 — Editor and asset pipeline
 
-### Editor
+### Editor feel and visual quality
+
+What makes the editor feel finished. Most items are small; do them as one milestone.
+
+- **Viewport picking — S.** Click to select: render entity IDs into an R32_UINT target in the depth
+  prepass and read back the pixel under the cursor. Today selection works only from the hierarchy.
+- **Selection outline — S.** Draw the selected entity's silhouette into a mask and run an edge-detect
+  pass before the UI composite.
+- **Gizmo options — S.** World/local toggle (the gizmo is local only today), Q/W/E/R shortcuts, snap
+  step sizes in the toolbar (Ctrl-snapping already exists), and vertex snapping.
+- **Named undo — S.** Each history entry records the command that made it, so menus read "Undo Set
+  Material AlbedoColor", and a whole gizmo drag or slider drag is one step.
+- **Viewport overlays menu — S.** Toggles for colliders, light and camera icons, the grid and debug lines.
+- **Game view — M.** A play viewport rendered at the project's game resolution with the correct aspect
+  ratio, next to the scene view, showing "Edit mode" when not playing.
+- **Post-process component, FXAA and bloom — M.** `PostProcessComponent` holding the tonemapper choice,
+  exposure (manual, then auto exposure from a luminance histogram), SSAO settings, FXAA and bloom
+  (downsample/upsample chain on the HDR buffer, so emissive materials glow). Replaces the scattered
+  render settings.
+- **Asset thumbnails and material preview — M.** Render small previews of meshes, materials and HDRIs
+  into a cache for the content browser, with hover previews.
+- **Project settings panel — S.** Fixed timestep, random seed, game resolution and physics layers with
+  the collision matrix, all through `project.*` commands.
+- **Export validation and smoke test — S.** Validate the project before export, then run the exported
+  runtime headless for N frames and report its exit code (also an automation command).
+
+### Editor workflow
 
 - **Native file dialogs — S.** Add nativefiledialog-extended (pinned) for Open/Save/Import, keeping the
   text-box fallback for headless and Linux systems without a portal.
@@ -155,12 +197,8 @@ The features most games need, roughly in order of impact.
   with one gizmo, edit shared fields in the inspector. The `editor.select` command takes a list.
 - **Prefab editing and overrides — L.** Open a prefab in an isolated scene, save, and propagate changes
   to instances while keeping per-instance overrides (track overridden fields in `PrefabComponent`).
-- **Asset thumbnails and material preview — M.** Render small previews of meshes, materials and HDRIs
-  into a cache for the content browser.
-- **Undo with diffs — M.** Snapshot undo copies the whole scene per edit. Store per-command JSON patches
+- **Undo with diffs — M.** Snapshot undo copies the whole scene per edit (builds on named undo). Store per-command JSON patches
   (`component.set` already knows old and new values) to bound memory on large scenes.
-- **Grid, snapping and gizmo options — S.** World/local toggle, snap increments in the toolbar, and
-  vertex snapping.
 - **Editor preferences — S.** Persist camera speed, layout, recent projects and theme per user.
 - **Play-mode stats overlay — S.** Frame time, draw calls, triangle count, physics bodies and Lua
   memory.
@@ -216,6 +254,9 @@ more reliable.
   `assert.*` commands (`assert.entity_exists`, `assert.component`) so game tests read as specifications.
 - **Visual checks — S.** `render.compare` to compare a screenshot with a reference image and return a
   similarity score. This reuses the golden-image code from P0.
+- **Marble Run sample — M.** A physics showcase (joints, trigger zones, particles, spatial audio,
+  UI components) built through the automation API, with a ctest gameplay test. Exercises most of P1.
+- **Tetris polish — S.** Line-clear particles and screen shake once particles exist.
 - **More samples — M each.** Breakout (physics + UI), a 3D platformer (character controller + camera),
   and a small first-person scene (mouse look + raycasts + audio). Each one is built through the
   automation API and adds a ctest gameplay test, which also checks the API is sufficient.
