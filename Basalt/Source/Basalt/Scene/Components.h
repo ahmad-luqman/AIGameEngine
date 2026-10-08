@@ -169,6 +169,61 @@ namespace Basalt {
 		glm::vec3 Offset = { 0.0f, 0.0f, 0.0f };
 	};
 
+	enum class JointType
+	{
+		// Locks the relative position and rotation.
+		Fixed = 0,
+		// Ball-and-socket: shares the anchor point, rotates freely.
+		Point,
+		// Rotates around Axis through the anchor (doors, wheels, pendulums).
+		Hinge,
+		// Translates along Axis without rotating (pistons, rails).
+		Slider,
+		// Keeps the anchors at a fixed distance, or within [LimitMin, LimitMax] (ropes).
+		Distance
+	};
+
+	enum class JointMotorMode
+	{
+		Off = 0,
+		// Drives toward MotorTarget as a speed (degrees/s for hinges, m/s for sliders).
+		Velocity,
+		// Drives toward MotorTarget as a position (degrees for hinges, meters for sliders).
+		Position
+	};
+
+	// Constrains this entity's rigid body to the body of ConnectedEntity, or to the world when it is 0.
+	// The joint is built from the bodies' poses when physics starts (or when the joint changes): that
+	// relative pose is the joint's rest position, so hinge angles and slider offsets are measured from it.
+	// One joint per entity; a chain puts a joint on every link, connected to the previous one.
+	struct JointComponent
+	{
+		JointType Type = JointType::Hinge;
+		UUID ConnectedEntity = 0;
+		// Attachment point in this entity's local space.
+		glm::vec3 Anchor = { 0.0f, 0.0f, 0.0f };
+		// Distance joints only: attachment point on the connected entity (its local space), or a world
+		// position when connected to the world.
+		glm::vec3 ConnectedAnchor = { 0.0f, 0.0f, 0.0f };
+		// Hinge rotation axis or slider direction, in this entity's local space.
+		glm::vec3 Axis = { 0.0f, 1.0f, 0.0f };
+		// Hinge: angles in degrees within [-180, 180]; slider: offsets in meters; distance: lengths in
+		// meters. Without limits a distance joint keeps the distance it starts with.
+		bool UseLimits = false;
+		float LimitMin = 0.0f;
+		float LimitMax = 0.0f;
+		// Hinge and slider joints only.
+		JointMotorMode MotorMode = JointMotorMode::Off;
+		float MotorTarget = 0.0f;
+		// Strongest torque (N·m, hinges) or force (N, sliders) the motor may apply.
+		float MotorMaxForce = 1000.0f;
+		// The joint breaks when its constraint force (N) or torque (N·m) exceeds these; 0 never breaks.
+		float BreakForce = 0.0f;
+		float BreakTorque = 0.0f;
+		// Whether the two connected bodies collide with each other.
+		bool EnableCollision = false;
+	};
+
 	// Lua behaviour. Script is a project-relative .lua path; Properties overrides the defaults the script
 	// declares in its Properties table (numbers, booleans, strings, vectors as [x, y, z]).
 	struct ScriptComponent
@@ -222,6 +277,7 @@ namespace Basalt {
 		BoxColliderComponent,
 		SphereColliderComponent,
 		CapsuleColliderComponent,
+		JointComponent,
 		ScriptComponent,
 		AudioSourceComponent,
 		AudioListenerComponent,

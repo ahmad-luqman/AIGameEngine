@@ -177,7 +177,8 @@ namespace Basalt {
 		void DestroyEntityImmediate(Entity entity);
 		void FlushPendingDestruction();
 		void RemoveFromParent(Entity entity);
-		Entity CopyEntityRecursive(Entity source, Entity parent);
+		// Records source UUID -> copy UUID for every copied entity in outCopies.
+		Entity CopyEntityRecursive(Entity source, Entity parent, std::unordered_map<uint64_t, UUID>& outCopies);
 
 	private:
 		std::string m_Name;

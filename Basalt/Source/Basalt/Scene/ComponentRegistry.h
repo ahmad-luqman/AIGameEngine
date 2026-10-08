@@ -1,11 +1,14 @@
 #pragma once
 
+#include "Basalt/Core/UUID.h"
+
 #include <nlohmann/json.hpp>
 
 #include <functional>
 #include <map>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace Basalt {
@@ -36,6 +39,9 @@ namespace Basalt {
 		std::vector<std::string> Fields;
 		// Valid values of string-enum fields (e.g. RigidBody "Type"), for inspectors and validation messages.
 		std::map<std::string, std::vector<std::string>> EnumOptions;
+		// Rewrites the component's entity references (e.g. Joint "ConnectedEntity") through the map;
+		// references not in the map are kept. Empty for components without references.
+		std::function<void(Entity, const std::unordered_map<uint64_t, UUID>&)> RemapEntityReferences;
 	};
 
 	class ComponentRegistry
@@ -48,6 +54,10 @@ namespace Basalt {
 
 		// Adds the component if needed and merges the JSON into it.
 		static bool AddOrPatch(Entity entity, std::string_view name, const nlohmann::json& data, std::string& outError);
+
+		// Entities copied with fresh UUIDs (prefab instances, duplicated trees) keep references to the
+		// originals; this points references to entities in the copied set (old UUID -> new UUID) at the copies.
+		static void RemapEntityReferences(Entity entity, const std::unordered_map<uint64_t, UUID>& remap);
 	};
 
 }
