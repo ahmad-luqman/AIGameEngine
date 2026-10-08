@@ -80,6 +80,46 @@ namespace Basalt {
 		}
 	}
 
+	void InspectorPanel::DrawEntityReference(Entity entity, const std::string& component, const std::string& field, uint64_t current, const char* noneLabel)
+	{
+		Scene& scene = *entity.GetScene();
+		const Entity target = current != 0 ? scene.GetEntityByUUID(current) : Entity{};
+		const std::string preview = current == 0 ? noneLabel : target ? target.GetName()
+																	  : "<missing " + std::to_string(current) + ">";
+
+		uint64_t selected = current;
+		bool changed = false;
+		if (ImGui::BeginCombo(field.c_str(), preview.c_str()))
+		{
+			if (ImGui::Selectable(noneLabel, current == 0))
+			{
+				selected = 0;
+				changed = true;
+			}
+			// Only entities with a rigid body can be joined to; the entity itself is excluded.
+			for (Entity candidate : scene.GetAllEntitiesOrdered())
+			{
+				if (candidate == entity || !candidate.HasComponent<RigidBodyComponent>())
+					continue;
+				const uint64_t id = candidate.GetUUID();
+				ImGui::PushID(static_cast<int>(id ^ (id >> 32)));
+				if (ImGui::Selectable(candidate.GetName().c_str(), id == current))
+				{
+					selected = id;
+					changed = true;
+				}
+				ImGui::PopID();
+			}
+			ImGui::EndCombo();
+		}
+
+		if (changed && selected != current)
+		{
+			if (m_Context.Execute("component.set", { { "entity", static_cast<uint64_t>(entity.GetUUID()) }, { "component", component }, { "data", { { field, selected } } } }))
+				m_Context.CommitHistory();
+		}
+	}
+
 	void InspectorPanel::OnImGuiRender()
 	{
 		ImGui::Begin("Inspector");
@@ -126,6 +166,11 @@ namespace Basalt {
 						continue;
 					if (info.Name == "Script" && field == "Properties")
 						continue;
+					if (info.Name == "Joint" && field == "ConnectedEntity")
+					{
+						DrawEntityReference(entity, info.Name, field, data[field].get<uint64_t>(), "World");
+						continue;
+					}
 					auto options = info.EnumOptions.find(field);
 					const JsonFieldResult result = DrawJsonField(field, data[field], options != info.EnumOptions.end() ? &options->second : nullptr);
 					if (result.Changed)
