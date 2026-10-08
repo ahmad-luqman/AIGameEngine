@@ -638,7 +638,8 @@ namespace Basalt {
 		for (entt::entity handle : m_Scene->GetAllEntitiesWith<JointComponent>())
 		{
 			Entity entity(handle, m_Scene);
-			if (!impl.DirtyJoints.contains(entity.GetUUID()))
+			// An entity destroyed during this frame's scripts is still here until the end of the frame.
+			if (!impl.DirtyJoints.contains(entity.GetUUID()) || m_Scene->IsEntityPendingDestruction(entity))
 				continue;
 			// Scripts drive motors by setting the component every frame. Rebuilding would reset the
 			// constraint's rest pose and warm start, so only structural changes rebuild it.

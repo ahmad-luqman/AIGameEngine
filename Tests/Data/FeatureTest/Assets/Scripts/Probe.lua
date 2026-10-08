@@ -1,4 +1,4 @@
--- Records contact and trigger callbacks into FeatureTestEvents for the feature test driver.
+-- Records contact, trigger and joint-break callbacks into FeatureTestEvents for the feature test driver.
 local Probe = {}
 
 local function Count(name)
@@ -10,5 +10,9 @@ function Probe:OnCollisionBegin(other) Count("CollisionBegin") end
 function Probe:OnCollisionEnd(other) Count("CollisionEnd") end
 function Probe:OnTriggerEnter(other) Count("TriggerEnter") end
 function Probe:OnTriggerExit(other) Count("TriggerExit") end
+function Probe:OnJointBreak(other)
+	Count("JointBreak")
+	FeatureTestEvents.JointBrokeWith = other and other.Name or "world"
+end
 
 return Probe

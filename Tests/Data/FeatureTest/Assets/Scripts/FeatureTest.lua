@@ -154,7 +154,7 @@ local function TestEntities(self)
 
 	-- Every component type round-trips through Lua.
 	for _, name in ipairs({ "Camera", "Mesh", "Material", "DirectionalLight", "PointLight", "SpotLight", "SkyLight", "RigidBody",
-		"BoxCollider", "SphereCollider", "CapsuleCollider", "AudioSource", "AudioListener", "Prefab" }) do
+		"BoxCollider", "SphereCollider", "CapsuleCollider", "Joint", "AudioSource", "AudioListener", "Prefab" }) do
 		local holder = Scene.CreateEntity("Holder" .. name)
 		Expect("AddComponent " .. name, function() holder:AddComponent(name) end)
 		local data = holder:GetComponent(name)
@@ -290,6 +290,18 @@ function Driver:OnUpdate(dt)
 		dynamic:AddComponent("Mesh", { Mesh = "builtin://Cube" })
 		self.RuntimeBox = dynamic
 
+		-- Joints: the gate door is hinged to its post; a motor set through SetComponent swings it open.
+		local door = Scene.FindEntityByName("GateDoor")
+		local post = Scene.FindEntityByName("GatePost")
+		Check("Joint ConnectedEntity is the entity ID", door:GetComponent("Joint").ConnectedEntity == post.ID)
+		Check("GetJointPosition", Near(door:GetJointPosition(), 0, 0.5))
+		Check("GetJointPosition without a joint", Scene.FindEntityByName("Crate"):GetJointPosition() == nil)
+		door:SetComponent("Joint", { MotorMode = "Velocity", MotorTarget = 90 })
+		local holder = Scene.CreateEntity("JointHolder")
+		holder:AddComponent("Joint", { ConnectedEntity = post })
+		Check("Joint ConnectedEntity accepts an entity", holder:GetComponent("Joint").ConnectedEntity == post.ID)
+		holder:Destroy()
+
 		-- Runtime-added script.
 		local scripted = Scene.CreateEntity("RuntimeScripted")
 		scripted:AddComponent("Script", { Script = "Assets/Scripts/Spinner.lua", Properties = { Label = "runtime" } })
@@ -315,6 +327,9 @@ function Driver:OnUpdate(dt)
 		Check("Physics.Raycast ignore", Physics.Raycast(Vec3(0, 10, 8), Vec3(0, -1, 0), 50, Scene.FindEntityByName("Ground")) == nil)
 		Check("Kinematic/dynamic motion", Scene.FindEntityByName("Crate").Translation.x > self.CrateStart.x)
 		Check("Runtime physics body falls", self.RuntimeBox.Translation.y < 4)
+		Check("Hinge motor opens the gate", Scene.FindEntityByName("GateDoor"):GetJointPosition() > 20)
+		Check("Joint breaks and calls OnJointBreak", FeatureTestEvents.JointBreak == 1 and FeatureTestEvents.JointBrokeWith == "world")
+		Check("Broken joint component is removed", not Scene.FindEntityByName("WeakLink"):HasComponent("Joint"))
 	end
 
 	if frame == 150 then
