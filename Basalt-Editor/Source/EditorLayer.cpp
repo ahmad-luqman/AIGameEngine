@@ -35,6 +35,7 @@ namespace Basalt {
 
 		const glm::vec4 s_SelectionColor(1.0f, 0.75f, 0.1f, 1.0f);
 		const glm::vec4 s_ColliderColor(0.2f, 1.0f, 0.4f, 0.8f);
+		const glm::vec4 s_JointColor(1.0f, 0.6f, 0.1f, 1.0f);
 		const glm::vec4 s_LightColor(1.0f, 0.9f, 0.4f, 0.8f);
 		const glm::vec4 s_CameraColor(0.7f, 0.7f, 1.0f, 0.8f);
 
@@ -503,6 +504,28 @@ namespace Basalt {
 					const float halfHeight = capsule->HalfHeight * std::abs(scale.y);
 					DebugDraw::Sphere(center + up * halfHeight, radius, color, 16);
 					DebugDraw::Sphere(center - up * halfHeight, radius, color, 16);
+				}
+				// Joints: anchor, axis (hinge rotation / slider direction) and a line to what it is attached to.
+				if (const auto* joint = entity.TryGetComponent<JointComponent>())
+				{
+					const glm::vec4 jointColor = selected ? s_SelectionColor : s_JointColor;
+					const glm::vec3 anchor = glm::vec3(world * glm::vec4(joint->Anchor, 1.0f));
+					DebugDraw::Sphere(anchor, 0.08f, jointColor, 12);
+					if ((joint->Type == JointType::Hinge || joint->Type == JointType::Slider) && glm::length(joint->Axis) > 1e-6f)
+					{
+						const glm::vec3 axis = glm::normalize(glm::vec3(unscaled * glm::vec4(joint->Axis, 0.0f)));
+						DebugDraw::Arrow(anchor - axis * 0.5f, anchor + axis * 0.5f, jointColor);
+					}
+					if (Entity connected = joint->ConnectedEntity != 0 ? scene.GetEntityByUUID(joint->ConnectedEntity) : Entity{})
+					{
+						const glm::mat4 connectedWorld = scene.GetWorldTransform(connected);
+						const glm::vec3 target = joint->Type == JointType::Distance ? glm::vec3(connectedWorld * glm::vec4(joint->ConnectedAnchor, 1.0f)) : glm::vec3(connectedWorld[3]);
+						DebugDraw::Line(anchor, target, jointColor);
+					}
+					else if (joint->Type == JointType::Distance)
+					{
+						DebugDraw::Line(anchor, joint->ConnectedAnchor, jointColor);
+					}
 				}
 			}
 
