@@ -644,6 +644,7 @@ namespace Basalt {
 		ComponentInfo MakeJointInfo()
 		{
 			ComponentInfo info = MakeInfo<JointComponent>("Joint");
+			info.EntityFields = { "ConnectedEntity" };
 			info.RemapEntityReferences = [](Entity entity, const std::unordered_map<uint64_t, UUID>& remap) {
 				if (!entity.HasComponent<JointComponent>())
 					return;

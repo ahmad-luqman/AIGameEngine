@@ -103,6 +103,24 @@ namespace Basalt {
 			return project;
 		}
 
+		Entity ResolveEntity(Scene& scene, const json& reference, const char* parameter);
+
+		// Component data may name entities in reference fields (Joint "ConnectedEntity": "Door"); files and
+		// the registry store UUIDs, so names are resolved here with the same rules as the "entity" parameter.
+		json ResolveEntityFields(Scene& scene, const std::string& component, json data)
+		{
+			const ComponentInfo* info = ComponentRegistry::Find(component);
+			if (!info || !data.is_object())
+				return data;
+			for (const std::string& field : info->EntityFields)
+			{
+				auto it = data.find(field);
+				if (it != data.end() && it->is_string())
+					*it = static_cast<uint64_t>(ResolveEntity(scene, *it, field.c_str()).GetUUID());
+			}
+			return data;
+		}
+
 		// Entities are addressed by numeric ID or by (unique) name.
 		Entity ResolveEntity(Scene& scene, const json& reference, const char* parameter = "entity")
 		{
@@ -405,8 +423,22 @@ namespace Basalt {
 					scene.SetParent(entity, parent, false);
 				if (auto components = params.find("components"); components != params.end())
 				{
+					json resolved = *components;
 					std::string error;
-					if (!SceneSerializer::DeserializeEntityComponents(entity, { { "Components", *components } }, error))
+					try
+					{
+						if (resolved.is_object())
+						{
+							for (auto it = resolved.begin(); it != resolved.end(); ++it)
+								it.value() = ResolveEntityFields(scene, it.key(), it.value());
+						}
+					}
+					catch (const CommandError&)
+					{
+						scene.DestroyEntity(entity);
+						throw;
+					}
+					if (!SceneSerializer::DeserializeEntityComponents(entity, { { "Components", resolved } }, error))
 					{
 						scene.DestroyEntity(entity);
 						throw CommandError(error);
@@ -496,13 +528,13 @@ namespace Basalt {
 
 		void RegisterComponents(CommandRegistry& registry)
 		{
-			Add(registry, "component.set", "Adds the component if missing and sets the given fields (others keep their values).", { { "entity", "ID or name" }, { "component", "string, e.g. 'RigidBody'" }, { "data", "object of fields" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "component.set", "Adds the component if missing and sets the given fields (others keep their values).", { { "entity", "ID or name" }, { "component", "string, e.g. 'RigidBody'" }, { "data", "object of fields; entity references (Joint ConnectedEntity) take an ID or name" } }, [](AutomationSession& session, const json& params) {
 				Entity entity = RequireEntity(session, params);
 				const std::string name = RequireString(params, "component");
 				std::string error;
-				if (!ComponentRegistry::AddOrPatch(entity, name, params.value("data", json::object()), error))
-					throw CommandError(error);
 				Scene& scene = RequireScene(session);
+				if (!ComponentRegistry::AddOrPatch(entity, name, ResolveEntityFields(scene, name, params.value("data", json::object())), error))
+					throw CommandError(error);
 				if (name == "Script" && session.IsPlaying() && scene.GetScriptEngine())
 					scene.GetScriptEngine()->EnsureInstance(entity);
 				MarkEdited(session);

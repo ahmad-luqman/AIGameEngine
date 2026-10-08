@@ -68,7 +68,7 @@ Adds the component if missing and sets the given fields (others keep their value
 | Parameter | Type / description |
 |-----------|--------------------|
 | `component` | string, e.g. 'RigidBody' |
-| `data` | object of fields |
+| `data` | object of fields; entity references (Joint ConnectedEntity) take an ID or name |
 | `entity` | ID or name |
 
 ### `component.types`
