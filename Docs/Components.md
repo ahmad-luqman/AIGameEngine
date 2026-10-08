@@ -58,6 +58,10 @@ Fields: `Radius`, `Offset`
 
 Fields: `Radius`, `HalfHeight`, `Offset`
 
+## Joint
+
+Fields: `Type`, `ConnectedEntity`, `Anchor`, `ConnectedAnchor`, `Axis`, `UseLimits`, `LimitMin`, `LimitMax`, `MotorMode`, `MotorTarget`, `MotorMaxForce`, `BreakForce`, `BreakTorque`, `EnableCollision`
+
 ## Script
 
 Fields: `Script`, `Properties`

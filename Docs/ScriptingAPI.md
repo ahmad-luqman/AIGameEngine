@@ -24,6 +24,7 @@ function Player:OnCollisionBegin(other) end    -- other: Entity
 function Player:OnCollisionEnd(other) end
 function Player:OnTriggerEnter(other) end      -- either body is a trigger (RigidBody.IsTrigger)
 function Player:OnTriggerExit(other) end
+function Player:OnJointBreak(other) end        -- joint exceeded BreakForce/BreakTorque; other is nil for the world
 
 return Player
 ```
@@ -79,6 +80,7 @@ Entity handles store an ID and stay safe to hold: using a destroyed entity raise
 | `e:GetParent()`, `e:SetParent(parent or nil)`, `e:GetChildren()`, `e:FindChild(name)` | Hierarchy (SetParent keeps the world transform) |
 | `e:AddForce(v)`, `e:AddImpulse(v)`, `e:AddTorque(v)` | Physics (dynamic bodies) |
 | `e:SetLinearVelocity(v)`, `e:GetLinearVelocity()`, `e:SetAngularVelocity(v)`, `e:GetAngularVelocity()` | Physics velocities |
+| `e:GetJointPosition()` | Hinge angle (degrees) or slider offset (meters) from the joint's rest pose; nil otherwise |
 | `e:PlayAudio()`, `e:StopAudio()`, `e:IsAudioPlaying()` | The entity's AudioSource |
 | `e:GetScript()` | The entity's script instance (call its functions, read its fields) |
 | `e:Destroy()` | Destroy at the end of the frame (with children) |
@@ -108,6 +110,33 @@ Mouse buttons: `Left`, `Right`, `Middle`, `Button3`-`Button7`.
 `Physics.Raycast(origin, direction, maxDistance [, ignoreEntity])` returns
 `{ Entity, Point, Normal, Distance }` or nil (triggers are ignored). `Physics.GetGravity()`,
 `Physics.SetGravity(v)`.
+
+### Joints
+
+A `Joint` component connects the entity's rigid body to `ConnectedEntity`'s body, or to the world when it
+is 0. `Type` is `Fixed`, `Point` (ball and socket), `Hinge`, `Slider` or `Distance`. `Anchor`, `Axis`
+(hinge axis / slider direction) and `ConnectedAnchor` (distance joints) are in local space. The pose the
+bodies have when the joint is built is its rest pose: hinge angles and slider offsets are measured from it,
+so limits must satisfy `LimitMin <= 0 <= LimitMax`.
+
+```lua
+-- A door that swings open on a motor (hinge on the door's left edge, around Y).
+door:AddComponent("Joint", { Type = "Hinge", ConnectedEntity = frame, Anchor = { -0.5, 0, 0 },
+    UseLimits = true, LimitMin = 0, LimitMax = 100 })
+door:SetComponent("Joint", { MotorMode = "Position", MotorTarget = 90 })  -- cheap: updates the live joint
+```
+
+- `ConnectedEntity` accepts an entity or its ID and reads back as the ID.
+- Setting limits, motor fields, break thresholds or `EnableCollision` updates the joint in place, so it
+  is fine to do every frame. Changing `Type`, `ConnectedEntity`, anchors, `Axis` or `UseLimits` rebuilds
+  it from the current poses.
+- Motors (`MotorMode` `Velocity` or `Position`, `MotorTarget` in degrees(/s) or meters(/s),
+  `MotorMaxForce`) work on hinges and sliders.
+- A joint whose force or torque exceeds `BreakForce`/`BreakTorque` (0 = unbreakable) is removed with its
+  component, and both entities get `OnJointBreak`.
+- Jointed bodies do not collide with each other unless `EnableCollision` is set.
+- One joint per entity; a chain puts a joint on every link. Joints inside a prefab or a duplicated
+  hierarchy connect the new copies.
 
 ## Screen UI
 
