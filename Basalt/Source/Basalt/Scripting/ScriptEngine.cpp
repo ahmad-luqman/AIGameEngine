@@ -452,6 +452,19 @@ namespace Basalt {
 			ScriptEngineAccess::Call(*this, b.GetUUID(), callback, ScriptEntity{ a.GetUUID(), m_Scene });
 	}
 
+	void ScriptEngine::OnJointBroken(Entity owner, Entity connected)
+	{
+		if (connected)
+		{
+			ScriptEngineAccess::Call(*this, owner.GetUUID(), "OnJointBreak", ScriptEntity{ connected.GetUUID(), m_Scene });
+			ScriptEngineAccess::Call(*this, connected.GetUUID(), "OnJointBreak", ScriptEntity{ owner.GetUUID(), m_Scene });
+		}
+		else
+		{
+			ScriptEngineAccess::Call(*this, owner.GetUUID(), "OnJointBreak", sol::lua_nil);
+		}
+	}
+
 	bool ScriptEngine::ExecuteString(const std::string& code, std::string& outResult)
 	{
 		sol::state& lua = m_Impl->Lua;

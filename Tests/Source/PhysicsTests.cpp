@@ -390,4 +390,109 @@ TEST_SUITE("Physics")
 		};
 		CHECK(run() == run());
 	}
+
+	TEST_CASE("Joint motors drive hinges and sliders and update without a rebuild")
+	{
+		Scene scene;
+		Entity wheel = CreateBox(scene, { 0.0f, 0.0f, 0.0f });
+		wheel.GetComponent<RigidBodyComponent>().GravityFactor = 0.0f;
+		wheel.GetComponent<RigidBodyComponent>().AngularDamping = 0.0f;
+		auto& hinge = wheel.AddComponent<JointComponent>();
+		hinge.Axis = { 0.0f, 0.0f, 1.0f };
+		hinge.MotorMode = JointMotorMode::Velocity;
+		hinge.MotorTarget = 90.0f;
+
+		Entity arm = CreateBox(scene, { 5.0f, 0.0f, 0.0f });
+		arm.GetComponent<RigidBodyComponent>().GravityFactor = 0.0f;
+		auto& servo = arm.AddComponent<JointComponent>();
+		servo.Axis = { 0.0f, 0.0f, 1.0f };
+		servo.MotorMode = JointMotorMode::Position;
+		servo.MotorTarget = 45.0f;
+
+		Entity piston = CreateBox(scene, { 10.0f, 0.0f, 0.0f });
+		auto& slider = piston.AddComponent<JointComponent>();
+		slider.Type = JointType::Slider;
+		slider.Axis = { 0.0f, 1.0f, 0.0f };
+		slider.MotorMode = JointMotorMode::Position;
+		slider.MotorTarget = 1.5f;
+
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		Simulate(scene, 0.5f);
+		CHECK(physics.GetJointPosition(wheel).value() == doctest::Approx(45.0f).epsilon(0.05));
+		Simulate(scene, 2.5f);
+		CHECK(physics.GetJointPosition(arm).value() == doctest::Approx(45.0f).epsilon(0.02));
+		// The position motor holds the piston up against gravity.
+		CHECK(piston.GetTransform().Translation.y == doctest::Approx(1.5f).epsilon(0.05));
+
+		// Changing the target through the registry (as SetComponent does) keeps the original rest pose:
+		// a rebuilt joint would measure from the current 45 degrees instead.
+		JointComponent retarget = arm.GetComponent<JointComponent>();
+		retarget.MotorTarget = -30.0f;
+		arm.AddOrReplaceComponent<JointComponent>(retarget);
+		Simulate(scene, 3.0f);
+		CHECK(physics.GetJointPosition(arm).value() == doctest::Approx(-30.0f).epsilon(0.02));
+		CHECK(glm::degrees(arm.GetTransform().GetRotationEuler().z) == doctest::Approx(-30.0f).epsilon(0.02));
+
+		// Turning the motor off lets gravity take the piston back down.
+		JointComponent off = piston.GetComponent<JointComponent>();
+		off.MotorMode = JointMotorMode::Off;
+		piston.AddOrReplaceComponent<JointComponent>(off);
+		Simulate(scene, 0.5f);
+		CHECK(piston.GetTransform().Translation.y < 0.5f);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Joints break above their break force and are removed")
+	{
+		Scene scene;
+		// A 1 kg box hanging from the world needs about 9.8 N to hold.
+		Entity weak = CreateBox(scene, { 0.0f, 0.0f, 0.0f });
+		auto& weakJoint = weak.AddComponent<JointComponent>();
+		weakJoint.Type = JointType::Point;
+		weakJoint.BreakForce = 5.0f;
+
+		Entity strong = CreateBox(scene, { 5.0f, 0.0f, 0.0f });
+		strong.AddComponent<JointComponent>(weakJoint).BreakForce = 50.0f;
+
+		// A welded box that is twisted hard breaks on torque.
+		Entity twisted = CreateBox(scene, { 10.0f, 0.0f, 0.0f });
+		twisted.GetComponent<RigidBodyComponent>().GravityFactor = 0.0f;
+		auto& weld = twisted.AddComponent<JointComponent>();
+		weld.Type = JointType::Fixed;
+		weld.BreakTorque = 10.0f;
+
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		physics.SetAngularVelocity(twisted, { 0.0f, 20.0f, 0.0f });
+		Simulate(scene, 1.0f);
+		CHECK_FALSE(weak.HasComponent<JointComponent>());
+		CHECK_FALSE(physics.HasJoint(weak));
+		CHECK(weak.GetTransform().Translation.y < -3.0f);
+		CHECK(strong.HasComponent<JointComponent>());
+		CHECK(strong.GetTransform().Translation.y == doctest::Approx(0.0f).epsilon(0.01));
+		CHECK_FALSE(twisted.HasComponent<JointComponent>());
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Jointed bodies collide with each other only when EnableCollision is set")
+	{
+		auto settle = [](bool enableCollision) {
+			Scene scene;
+			Entity plate = CreateGround(scene);
+			// A box resting on the plate, joined to it by a vertical slider: without collision it slides through.
+			Entity box = CreateBox(scene, { 0.0f, 0.5f, 0.0f });
+			auto& joint = box.AddComponent<JointComponent>();
+			joint.Type = JointType::Slider;
+			joint.ConnectedEntity = plate.GetUUID();
+			joint.EnableCollision = enableCollision;
+			scene.OnSimulationStart();
+			Simulate(scene, 1.0f);
+			const float y = box.GetTransform().Translation.y;
+			scene.OnSimulationStop();
+			return y;
+		};
+		CHECK(settle(true) == doctest::Approx(0.5f).epsilon(0.02));
+		CHECK(settle(false) < -2.0f);
+	}
 }

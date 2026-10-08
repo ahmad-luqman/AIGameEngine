@@ -81,6 +81,11 @@ namespace Basalt {
 	private:
 		void RebuildDirtyJoints();
 		void CreateJoint(Entity entity);
+		// Applies the fields of a live joint that do not need a rebuild (limits, motor, break thresholds,
+		// collision).
+		void ApplyJointSettings(Entity entity);
+		// Removes joints whose constraint force or torque exceeded their break thresholds in the last step.
+		void CheckBrokenJoints(float fixedStep);
 		void DispatchContacts();
 
 	private:
