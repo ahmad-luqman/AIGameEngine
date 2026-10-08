@@ -5,6 +5,7 @@
 #include "Basalt/Physics/PhysicsWorld.h"
 #include "Basalt/Renderer/DebugDraw.h"
 #include "Basalt/Renderer/GameUI.h"
+#include "Basalt/Scene/ComponentRegistry.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scripting/ScriptEngine.h"
 
@@ -190,9 +191,10 @@ namespace Basalt {
 		return std::find(m_PendingDestruction.begin(), m_PendingDestruction.end(), uuid) != m_PendingDestruction.end();
 	}
 
-	Entity Scene::CopyEntityRecursive(Entity source, Entity parent)
+	Entity Scene::CopyEntityRecursive(Entity source, Entity parent, std::unordered_map<uint64_t, UUID>& outCopies)
 	{
 		Entity copy = CreateEntity(source.GetName());
+		outCopies[source.GetUUID()] = copy.GetUUID();
 		CopyComponentsIfExists(AllComponents{}, copy, source);
 		// The copied relationship refers to the source's hierarchy; rebuild it.
 		copy.GetComponent<RelationshipComponent>() = RelationshipComponent{};
@@ -204,7 +206,7 @@ namespace Basalt {
 		{
 			Entity childEntity = GetEntityByUUID(child);
 			if (childEntity)
-				CopyEntityRecursive(childEntity, copy);
+				CopyEntityRecursive(childEntity, copy, outCopies);
 		}
 		return copy;
 	}
@@ -214,7 +216,11 @@ namespace Basalt {
 		if (!entity || entity.GetScene() != this)
 			return {};
 
-		Entity copy = CopyEntityRecursive(entity, entity.GetParent());
+		std::unordered_map<uint64_t, UUID> copies;
+		Entity copy = CopyEntityRecursive(entity, entity.GetParent(), copies);
+		// Joints between entities of the duplicated tree connect the copies to each other.
+		for (const auto& [source, copied] : copies)
+			ComponentRegistry::RemapEntityReferences(GetEntityByUUID(copied), copies);
 		return copy;
 	}
 

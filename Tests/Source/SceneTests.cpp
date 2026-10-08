@@ -337,4 +337,69 @@ TEST_SUITE("Serialization")
 		CHECK_FALSE(SceneSerializer::InstantiatePrefab(scene, project.GetDirectory() / "nope.bprefab", "nope.bprefab", {}, error));
 		CHECK(scene.GetEntityCount() == 6);
 	}
+
+	TEST_CASE("Joint entity references read numbers and Lua's signed IDs")
+	{
+		Scene scene;
+		Entity entity = scene.CreateEntity("Door");
+		std::string error;
+		REQUIRE_MESSAGE(ComponentRegistry::AddOrPatch(entity, "Joint", { { "Type", "Slider" }, { "ConnectedEntity", 42 } }, error), error);
+		CHECK(entity.GetComponent<JointComponent>().Type == JointType::Slider);
+		CHECK(entity.GetComponent<JointComponent>().ConnectedEntity == 42);
+
+		// UUIDs above INT64_MAX reach Lua as negative integers and must come back unchanged.
+		const uint64_t large = 0xF000000000000001ull;
+		REQUIRE(ComponentRegistry::AddOrPatch(entity, "Joint", { { "ConnectedEntity", static_cast<int64_t>(large) } }, error));
+		CHECK(static_cast<uint64_t>(entity.GetComponent<JointComponent>().ConnectedEntity) == large);
+		CHECK(ComponentRegistry::Find("Joint")->Serialize(entity)["ConnectedEntity"].get<uint64_t>() == large);
+
+		CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, "Joint", { { "ConnectedEntity", "Frame" } }, error));
+		CHECK(error.find("ConnectedEntity") != std::string::npos);
+		CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, "Joint", { { "MotorMode", "Turbo" } }, error));
+	}
+
+	TEST_CASE("Joints inside a duplicated tree or prefab connect the copies")
+	{
+		BasaltTest::TempProject project("JointPrefab");
+		Scene scene;
+		Entity anchor = scene.CreateEntity("Anchor");
+		Entity chain = scene.CreateEntity("Chain");
+		Entity link1 = scene.CreateChildEntity(chain, "Link1");
+		Entity link2 = scene.CreateChildEntity(chain, "Link2");
+		// Link1 hangs from an entity outside the tree, Link2 from Link1.
+		link1.AddComponent<JointComponent>().ConnectedEntity = anchor.GetUUID();
+		link2.AddComponent<JointComponent>().ConnectedEntity = link1.GetUUID();
+
+		Entity copy = scene.DuplicateEntity(chain);
+		REQUIRE(copy.GetChildren().size() == 2);
+		Entity copy1 = copy.GetChildren()[0];
+		Entity copy2 = copy.GetChildren()[1];
+		CHECK(copy1.GetComponent<JointComponent>().ConnectedEntity == anchor.GetUUID());
+		CHECK(copy2.GetComponent<JointComponent>().ConnectedEntity == copy1.GetUUID());
+		// The originals are untouched.
+		CHECK(link2.GetComponent<JointComponent>().ConnectedEntity == link1.GetUUID());
+
+		std::string error;
+		const std::filesystem::path path = project.GetDirectory() / "Assets/Prefabs/Chain.bprefab";
+		REQUIRE(SceneSerializer::SavePrefab(chain, path, error));
+		Entity instance = SceneSerializer::InstantiatePrefab(scene, path, "Assets/Prefabs/Chain.bprefab", {}, error);
+		REQUIRE_MESSAGE(instance, error);
+		REQUIRE(instance.GetChildren().size() == 2);
+		Entity instance1 = instance.GetChildren()[0];
+		Entity instance2 = instance.GetChildren()[1];
+		CHECK(instance1.GetComponent<JointComponent>().ConnectedEntity == anchor.GetUUID());
+		CHECK(instance2.GetComponent<JointComponent>().ConnectedEntity == instance1.GetUUID());
+	}
+
+	TEST_CASE("The state hash does not depend on the UUIDs joints refer to")
+	{
+		auto build = []() {
+			Scene scene;
+			Entity frame = scene.CreateEntity("Frame");
+			Entity door = scene.CreateEntity("Door");
+			door.AddComponent<JointComponent>().ConnectedEntity = frame.GetUUID();
+			return SceneSerializer::ComputeStateHash(scene);
+		};
+		CHECK(build() == build());
+	}
 }

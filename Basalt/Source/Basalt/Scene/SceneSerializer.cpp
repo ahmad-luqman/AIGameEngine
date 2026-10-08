@@ -291,6 +291,13 @@ namespace Basalt {
 					return false;
 				}
 			}
+
+			// Entity references between the new entities follow them to their fresh UUIDs.
+			if (remapIDs)
+			{
+				for (Entity entity : outCreated)
+					ComponentRegistry::RemapEntityReferences(entity, idMap);
+			}
 			return true;
 		}
 

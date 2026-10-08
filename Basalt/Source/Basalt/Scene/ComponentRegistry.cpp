@@ -127,6 +127,17 @@ namespace Basalt {
 				value = static_cast<uint32_t>(number);
 			}
 
+			// Entity references are written as unsigned numbers; Lua hands them back as signed 64-bit integers.
+			static void Read(const char* name, const json& element, UUID& value)
+			{
+				if (element.is_number_unsigned())
+					value = element.get<uint64_t>();
+				else if (element.is_number_integer())
+					value = static_cast<uint64_t>(element.get<int64_t>());
+				else
+					throw std::runtime_error(std::string("field '") + name + "' must be an entity ID (integer)");
+			}
+
 			static void Read(const char* name, const json& element, bool& value)
 			{
 				if (!element.is_boolean())
@@ -183,6 +194,8 @@ namespace Basalt {
 
 		constexpr const char* s_RigidBodyTypeNames[] = { "Static", "Dynamic", "Kinematic" };
 		constexpr const char* s_ProjectionTypeNames[] = { "Perspective", "Orthographic" };
+		constexpr const char* s_JointTypeNames[] = { "Fixed", "Point", "Hinge", "Slider", "Distance" };
+		constexpr const char* s_JointMotorModeNames[] = { "Off", "Velocity", "Position" };
 
 		// --- Per-component field definitions -----------------------------------------------------
 		// Each Fields() overload lists every field once; it is used both to read and to enumerate names.
@@ -304,6 +317,24 @@ namespace Basalt {
 			r.Field("Radius", c.Radius);
 			r.Field("HalfHeight", c.HalfHeight);
 			r.Field("Offset", c.Offset);
+		}
+
+		void Fields(FieldReader& r, JointComponent& c)
+		{
+			r.EnumField("Type", c.Type, s_JointTypeNames);
+			r.Field("ConnectedEntity", c.ConnectedEntity);
+			r.Field("Anchor", c.Anchor);
+			r.Field("ConnectedAnchor", c.ConnectedAnchor);
+			r.Field("Axis", c.Axis);
+			r.Field("UseLimits", c.UseLimits);
+			r.Field("LimitMin", c.LimitMin);
+			r.Field("LimitMax", c.LimitMax);
+			r.EnumField("MotorMode", c.MotorMode, s_JointMotorModeNames);
+			r.Field("MotorTarget", c.MotorTarget);
+			r.Field("MotorMaxForce", c.MotorMaxForce);
+			r.Field("BreakForce", c.BreakForce);
+			r.Field("BreakTorque", c.BreakTorque);
+			r.Field("EnableCollision", c.EnableCollision);
 		}
 
 		void Fields(FieldReader& r, ScriptComponent& c)
@@ -431,6 +462,26 @@ namespace Basalt {
 		{
 			return { { "Radius", c.Radius }, { "HalfHeight", c.HalfHeight }, { "Offset", ToJson(c.Offset) } };
 		}
+		json Write(const JointComponent& c)
+		{
+			return {
+				{ "Type", s_JointTypeNames[static_cast<int>(c.Type)] },
+				{ "ConnectedEntity", static_cast<uint64_t>(c.ConnectedEntity) },
+				{ "Anchor", ToJson(c.Anchor) },
+				{ "ConnectedAnchor", ToJson(c.ConnectedAnchor) },
+				{ "Axis", ToJson(c.Axis) },
+				{ "UseLimits", c.UseLimits },
+				{ "LimitMin", c.LimitMin },
+				{ "LimitMax", c.LimitMax },
+				{ "MotorMode", s_JointMotorModeNames[static_cast<int>(c.MotorMode)] },
+				{ "MotorTarget", c.MotorTarget },
+				{ "MotorMaxForce", c.MotorMaxForce },
+				{ "BreakForce", c.BreakForce },
+				{ "BreakTorque", c.BreakTorque },
+				{ "EnableCollision", c.EnableCollision },
+			};
+		}
+
 		json Write(const ScriptComponent& c)
 		{
 			return { { "Script", c.Script }, { "Properties", c.Properties } };
@@ -590,6 +641,23 @@ namespace Basalt {
 			return info;
 		}
 
+		ComponentInfo MakeJointInfo()
+		{
+			ComponentInfo info = MakeInfo<JointComponent>("Joint");
+			info.RemapEntityReferences = [](Entity entity, const std::unordered_map<uint64_t, UUID>& remap) {
+				if (!entity.HasComponent<JointComponent>())
+					return;
+				auto it = remap.find(entity.GetComponent<JointComponent>().ConnectedEntity);
+				if (it == remap.end())
+					return;
+				JointComponent joint = entity.GetComponent<JointComponent>();
+				joint.ConnectedEntity = it->second;
+				// Replace through the registry so a running physics world rebuilds the joint.
+				entity.AddOrReplaceComponent<JointComponent>(joint);
+			};
+			return info;
+		}
+
 		std::vector<ComponentInfo> BuildRegistry()
 		{
 			std::vector<ComponentInfo> infos;
@@ -606,6 +674,7 @@ namespace Basalt {
 			infos.push_back(MakeInfo<BoxColliderComponent>("BoxCollider"));
 			infos.push_back(MakeInfo<SphereColliderComponent>("SphereCollider"));
 			infos.push_back(MakeInfo<CapsuleColliderComponent>("CapsuleCollider"));
+			infos.push_back(MakeJointInfo());
 			infos.push_back(MakeInfo<ScriptComponent>("Script"));
 			infos.push_back(MakeInfo<AudioSourceComponent>("AudioSource"));
 			infos.push_back(MakeInfo<AudioListenerComponent>("AudioListener"));
@@ -637,6 +706,15 @@ namespace Basalt {
 		for (const ComponentInfo& info : GetAll())
 			names += (names.empty() ? "" : ", ") + info.Name;
 		return names;
+	}
+
+	void ComponentRegistry::RemapEntityReferences(Entity entity, const std::unordered_map<uint64_t, UUID>& remap)
+	{
+		for (const ComponentInfo& info : GetAll())
+		{
+			if (info.RemapEntityReferences)
+				info.RemapEntityReferences(entity, remap);
+		}
 	}
 
 	bool ComponentRegistry::AddOrPatch(Entity entity, std::string_view name, const nlohmann::json& data, std::string& outError)
