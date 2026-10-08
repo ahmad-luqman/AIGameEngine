@@ -231,6 +231,62 @@ TEST_SUITE("Scripting")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("Scripts drive joint motors and receive OnJointBreak")
+	{
+		BasaltTest::TempProject project("ScriptJoints");
+		const std::string script = project.WriteFile("Assets/Scripts/Joints.lua", R"(
+			local Joints = {}
+			function Joints:OnCreate() self.Breaks = 0; self.BrokeWith = "" end
+			function Joints:OnUpdate(dt)
+				if self.Entity.Name == "Door" then
+					self.Entity:SetComponent("Joint", { MotorMode = "Position", MotorTarget = 60 })
+					self.Angle = self.Entity:GetJointPosition()
+				end
+			end
+			function Joints:OnJointBreak(other)
+				self.Breaks = self.Breaks + 1
+				self.BrokeWith = other and other.Name or "world"
+			end
+			return Joints
+		)");
+
+		Scene scene;
+		Entity frame = AddScripted(scene, "Frame", script);
+		frame.AddComponent<RigidBodyComponent>();
+		frame.AddComponent<BoxColliderComponent>();
+
+		Entity door = AddScripted(scene, "Door", script);
+		door.GetTransform().Translation = { 2.0f, 0.0f, 0.0f };
+		door.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+		door.GetComponent<RigidBodyComponent>().GravityFactor = 0.0f;
+		door.AddComponent<BoxColliderComponent>();
+		door.AddComponent<JointComponent>().ConnectedEntity = frame.GetUUID();
+
+		// Hangs from the frame on a joint too weak for its weight.
+		Entity lamp = AddScripted(scene, "Lamp", script);
+		lamp.GetTransform().Translation = { -2.0f, 0.0f, 0.0f };
+		lamp.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+		lamp.AddComponent<SphereColliderComponent>();
+		auto& chain = lamp.AddComponent<JointComponent>();
+		chain.Type = JointType::Distance;
+		chain.ConnectedEntity = frame.GetUUID();
+		chain.BreakForce = 1.0f;
+
+		scene.OnRuntimeStart();
+		for (int i = 0; i < 180; i++)
+			scene.OnUpdate(Step);
+
+		CHECK(Field(scene, door, "Angle").get<double>() == doctest::Approx(60.0).epsilon(0.03));
+		CHECK(Field(scene, lamp, "Breaks") == 1);
+		CHECK(Field(scene, lamp, "BrokeWith") == "Frame");
+		CHECK(Field(scene, frame, "Breaks") == 1);
+		CHECK(Field(scene, frame, "BrokeWith") == "Lamp");
+		CHECK(Field(scene, door, "Breaks") == 0);
+		CHECK_FALSE(lamp.HasComponent<JointComponent>());
+		CHECK(scene.GetScriptEngine()->GetErrors().empty());
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Scripts read injected input, apply physics and request quit")
 	{
 		BasaltTest::TempProject project("ScriptInput");

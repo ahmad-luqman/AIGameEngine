@@ -25,6 +25,7 @@ namespace Basalt {
 	//   function Player:OnLateUpdate(dt) end      -- after physics
 	//   function Player:OnDestroy() end
 	//   function Player:OnCollisionBegin(other) end  -- also OnCollisionEnd, OnTriggerEnter, OnTriggerExit
+	//   function Player:OnJointBreak(other) end    -- other is nil for a joint to the world
 	//   return Player
 	//
 	// Each entity gets an instance table (self) whose fields start as the property values, with
@@ -49,6 +50,8 @@ namespace Basalt {
 
 		void OnEntityDestroyed(Entity entity);
 		void OnContactEvent(ContactEventType type, Entity a, Entity b);
+		// Calls OnJointBreak on the joint's entity and on the connected entity (if any).
+		void OnJointBroken(Entity owner, Entity connected);
 
 		// Creates the entity's script instance now (and calls OnCreate) if it has a ScriptComponent and no
 		// instance yet. Used after spawning entities so they are initialized immediately.
