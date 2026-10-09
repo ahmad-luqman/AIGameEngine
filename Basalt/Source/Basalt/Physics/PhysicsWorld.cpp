@@ -751,7 +751,13 @@ namespace Basalt {
 						if (index < submesh.VertexCount && !used[index])
 						{
 							used[index] = true;
-							points.push_back(ToJolt(source->Vertices[submesh.BaseVertex + index].Position));
+							const glm::vec3& position = source->Vertices[submesh.BaseVertex + index].Position;
+							if (!IsFiniteVec(position))
+							{
+								cooked.Error = "the mesh has a non-finite vertex position";
+								return cooked;
+							}
+							points.push_back(ToJolt(position));
 						}
 					}
 				}
@@ -772,6 +778,11 @@ namespace Basalt {
 				for (uint32_t i = 0; i < submesh.VertexCount; i++)
 				{
 					const glm::vec3& position = source->Vertices[submesh.BaseVertex + i].Position;
+					if (!IsFiniteVec(position))
+					{
+						cooked.Error = "the mesh has a non-finite vertex position";
+						return cooked;
+					}
 					vertices.push_back(JPH::Float3(position.x, position.y, position.z));
 				}
 				for (uint32_t i = 0; i + 2 < submesh.IndexCount; i += 3)
@@ -813,13 +824,14 @@ namespace Basalt {
 			}
 
 			std::scoped_lock lock(s_MeshShapeMutex);
-			// Entries of unloaded or reloaded meshes would keep their shapes alive forever.
-			std::erase_if(s_MeshShapes, [](const auto& entry) { return entry.second.Source.expired(); });
 			auto [it, inserted] = s_MeshShapes.try_emplace(MeshShapeKey(key, meshIndex, convex));
 			if (inserted || it->second.Source.lock() != source)
 			{
 				it->second = CookMeshShape(source, meshIndex, convex);
 				s_MeshShapeCookCount++;
+				// Entries of unloaded or reloaded meshes would otherwise keep their shapes alive until the
+				// cache is cleared; new cooks are rare, so pruning here costs little.
+				std::erase_if(s_MeshShapes, [](const auto& entry) { return entry.second.Source.expired(); });
 			}
 			outError = it->second.Error;
 			return it->second.Shape;
@@ -834,6 +846,9 @@ namespace Basalt {
 			JPH::BodyID ID;
 			RigidBodyType Type = RigidBodyType::Static;
 			bool IsTrigger = false;
+			// The MeshComponent mesh a MeshCollider without its own Mesh was built from, so edits to the
+			// MeshComponent's other fields (e.g. CastShadows) do not rebuild the body.
+			std::optional<std::pair<std::string, uint32_t>> BorrowedMesh;
 			// Pose last written to / read from the entity, used to detect transforms changed by scripts.
 			glm::vec3 LastPosition = { 0.0f, 0.0f, 0.0f };
 			glm::quat LastRotation = { 1.0f, 0.0f, 0.0f, 0.0f };
@@ -1033,6 +1048,16 @@ namespace Basalt {
 				OnPhysicsComponentChanged(registry, entity);
 		}
 
+		// Only a different mesh changes the collider.
+		void OnMeshUpdated(entt::registry& registry, entt::entity entity)
+		{
+			const auto* id = registry.try_get<IDComponent>(entity);
+			const auto& mesh = registry.get<MeshComponent>(entity);
+			if (auto it = id ? Bodies.find(id->ID) : Bodies.end(); it != Bodies.end() && it->second.BorrowedMesh == std::pair(mesh.Mesh, mesh.MeshIndex))
+				return;
+			OnMeshChanged(registry, entity);
+		}
+
 		void OnJointChanged(entt::registry& registry, entt::entity entity)
 		{
 			if (const auto* id = registry.try_get<IDComponent>(entity))
@@ -1110,7 +1135,7 @@ namespace Basalt {
 		registry.on_update<MeshColliderComponent>().connect<&Impl::OnPhysicsComponentChanged>(impl);
 		registry.on_construct<MeshComponent>().connect<&Impl::OnMeshChanged>(impl);
 		registry.on_destroy<MeshComponent>().connect<&Impl::OnMeshChanged>(impl);
-		registry.on_update<MeshComponent>().connect<&Impl::OnMeshChanged>(impl);
+		registry.on_update<MeshComponent>().connect<&Impl::OnMeshUpdated>(impl);
 		registry.on_construct<JointComponent>().connect<&Impl::OnJointChanged>(impl);
 		registry.on_update<JointComponent>().connect<&Impl::OnJointChanged>(impl);
 		registry.on_destroy<JointComponent>().connect<&Impl::OnJointDestroyed>(impl);
@@ -1137,7 +1162,7 @@ namespace Basalt {
 		registry.on_update<MeshColliderComponent>().disconnect<&Impl::OnPhysicsComponentChanged>(impl);
 		registry.on_construct<MeshComponent>().disconnect<&Impl::OnMeshChanged>(impl);
 		registry.on_destroy<MeshComponent>().disconnect<&Impl::OnMeshChanged>(impl);
-		registry.on_update<MeshComponent>().disconnect<&Impl::OnMeshChanged>(impl);
+		registry.on_update<MeshComponent>().disconnect<&Impl::OnMeshUpdated>(impl);
 		registry.on_construct<JointComponent>().disconnect<&Impl::OnJointChanged>(impl);
 		registry.on_update<JointComponent>().disconnect<&Impl::OnJointChanged>(impl);
 		registry.on_destroy<JointComponent>().disconnect<&Impl::OnJointDestroyed>(impl);
@@ -1266,6 +1291,7 @@ namespace Basalt {
 		}
 		// Jolt cannot simulate a triangle mesh on a dynamic body, so those always use the convex hull.
 		bool hasTriangleMesh = false;
+		std::optional<std::pair<std::string, uint32_t>> borrowedMesh;
 		if (const auto* meshCollider = entity.TryGetComponent<MeshColliderComponent>())
 		{
 			std::string key = meshCollider->Mesh;
@@ -1273,10 +1299,20 @@ namespace Basalt {
 			const auto* meshComponent = entity.TryGetComponent<MeshComponent>();
 			if (key.empty() && meshComponent)
 			{
+				if (meshIndex != 0)
+					warn("MeshCollider MeshIndex is ignored without its own Mesh (the MeshComponent's is used)");
 				key = meshComponent->Mesh;
 				meshIndex = meshComponent->MeshIndex;
+				borrowedMesh.emplace(key, meshIndex);
 			}
-			const bool convex = meshCollider->Convex || motionType == JPH::EMotionType::Dynamic;
+			bool convex = meshCollider->Convex;
+			if (!convex && motionType == JPH::EMotionType::Dynamic)
+			{
+				convex = true;
+				warn("a dynamic body collides by the convex hull of its MeshCollider; set Convex to make that explicit");
+			}
+			// A triangle mesh has no inside, so a trigger built from one would only report crossing its surface.
+			convex |= rigidBody.IsTrigger;
 			std::string error;
 			JPH::Ref<JPH::Shape> shape;
 			if (key.empty())
@@ -1308,7 +1344,8 @@ namespace Basalt {
 		JPH::ShapeSettings::ShapeResult shapeResult = compound.Create();
 		if (shapeResult.HasError())
 		{
-			BS_CORE_WARN("Physics: failed to build shape for '{}': {}", entity.GetName(), shapeResult.GetError().c_str());
+			warn(std::string("failed to build shape: ") + shapeResult.GetError().c_str() + "; no body created");
+			reportWarnings();
 			return;
 		}
 
@@ -1374,6 +1411,7 @@ namespace Basalt {
 		record.ID = bodyID;
 		record.Type = rigidBody.Type;
 		record.IsTrigger = rigidBody.IsTrigger;
+		record.BorrowedMesh = std::move(borrowedMesh);
 		record.LastPosition = position;
 		record.LastRotation = rotation;
 		impl.Bodies[entity.GetUUID()] = record;
@@ -2286,6 +2324,12 @@ namespace Basalt {
 	void PhysicsWorld::SetGravity(const glm::vec3& gravity)
 	{
 		m_Impl->System->SetGravity(ToJolt(gravity));
+	}
+
+	void PhysicsWorld::ClearMeshShapeCache()
+	{
+		std::scoped_lock lock(s_MeshShapeMutex);
+		s_MeshShapes.clear();
 	}
 
 	uint64_t PhysicsWorld::GetMeshShapeCookCount()

@@ -13,6 +13,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -87,6 +88,38 @@ namespace {
 		return count;
 	}
 
+	// Writes a glTF with one triangle-list primitive. Returns its asset key.
+	std::string WriteMeshGltf(const BasaltTest::TempProject& project, const std::string& file, const std::vector<float>& positions, const std::vector<uint16_t>& indices)
+	{
+		std::string buffer(reinterpret_cast<const char*>(positions.data()), positions.size() * sizeof(float));
+		const size_t indexOffset = buffer.size();
+		buffer.append(reinterpret_cast<const char*>(indices.data()), indices.size() * sizeof(uint16_t));
+		// glTF requires the position bounds; non-finite coordinates are left out of them.
+		glm::vec3 min(FLT_MAX);
+		glm::vec3 max(-FLT_MAX);
+		for (size_t i = 0; i + 2 < positions.size(); i += 3)
+		{
+			const glm::vec3 position(positions[i], positions[i + 1], positions[i + 2]);
+			if (std::isfinite(position.x) && std::isfinite(position.y) && std::isfinite(position.z))
+			{
+				min = glm::min(min, position);
+				max = glm::max(max, position);
+			}
+		}
+
+		const nlohmann::json gltf = {
+			{ "asset", { { "version", "2.0" } } },
+			{ "buffers", { { { "byteLength", buffer.size() }, { "uri", "data:application/octet-stream;base64," + BasaltTest::Base64(buffer.data(), buffer.size()) } } } },
+			{ "bufferViews", { { { "buffer", 0 }, { "byteOffset", 0 }, { "byteLength", indexOffset } }, { { "buffer", 0 }, { "byteOffset", indexOffset }, { "byteLength", buffer.size() - indexOffset } } } },
+			{ "accessors", { { { "bufferView", 0 }, { "componentType", 5126 }, { "count", positions.size() / 3 }, { "type", "VEC3" }, { "min", { min.x, min.y, min.z } }, { "max", { max.x, max.y, max.z } } }, { { "bufferView", 1 }, { "componentType", 5123 }, { "count", indices.size() }, { "type", "SCALAR" } } } },
+			{ "meshes", { { { "primitives", { { { "attributes", { { "POSITION", 0 } } }, { "indices", 1 } } } } } } },
+			{ "nodes", { { { "mesh", 0 } } } },
+			{ "scenes", { { { "nodes", { 0 } } } } },
+			{ "scene", 0 },
+		};
+		return project.WriteFile("Assets/Models/" + file, gltf.dump());
+	}
+
 	// Writes a glTF holding a unit cube spanning x = 0.5..1.5 (off-centre, so mirroring shows) plus one vertex at
 	// x = 10 that no triangle uses. Returns its asset key.
 	std::string WriteOffsetCubeGltf(const BasaltTest::TempProject& project)
@@ -96,21 +129,7 @@ namespace {
 			positions.insert(positions.end(), { (i & 1) ? 1.5f : 0.5f, (i & 2) ? 0.5f : -0.5f, (i & 4) ? 0.5f : -0.5f });
 		positions.insert(positions.end(), { 10.0f, 0.0f, 0.0f });
 		const std::vector<uint16_t> indices = { 0, 6, 2, 0, 4, 6, 1, 3, 7, 1, 7, 5, 0, 1, 5, 0, 5, 4, 2, 7, 3, 2, 6, 7, 0, 3, 1, 0, 2, 3, 4, 5, 7, 4, 7, 6 };
-		std::string buffer(reinterpret_cast<const char*>(positions.data()), positions.size() * sizeof(float));
-		const size_t indexOffset = buffer.size();
-		buffer.append(reinterpret_cast<const char*>(indices.data()), indices.size() * sizeof(uint16_t));
-
-		const nlohmann::json gltf = {
-			{ "asset", { { "version", "2.0" } } },
-			{ "buffers", { { { "byteLength", buffer.size() }, { "uri", "data:application/octet-stream;base64," + BasaltTest::Base64(buffer.data(), buffer.size()) } } } },
-			{ "bufferViews", { { { "buffer", 0 }, { "byteOffset", 0 }, { "byteLength", indexOffset } }, { { "buffer", 0 }, { "byteOffset", indexOffset }, { "byteLength", buffer.size() - indexOffset } } } },
-			{ "accessors", { { { "bufferView", 0 }, { "componentType", 5126 }, { "count", 9 }, { "type", "VEC3" }, { "min", { 0.5, -0.5, -0.5 } }, { "max", { 10.0, 0.5, 0.5 } } }, { { "bufferView", 1 }, { "componentType", 5123 }, { "count", indices.size() }, { "type", "SCALAR" } } } },
-			{ "meshes", { { { "primitives", { { { "attributes", { { "POSITION", 0 } } }, { "indices", 1 } } } } } } },
-			{ "nodes", { { { "mesh", 0 } } } },
-			{ "scenes", { { { "nodes", { 0 } } } } },
-			{ "scene", 0 },
-		};
-		return project.WriteFile("Assets/Models/OffsetCube.gltf", gltf.dump());
+		return WriteMeshGltf(project, "OffsetCube.gltf", positions, indices);
 	}
 
 	// Replaces the component through the registry, as SetComponent and component.set do.
@@ -2507,6 +2526,86 @@ TEST_SUITE("Physics")
 		CHECK(CountMessages(since, "cannot load mesh 'builtin://Teapot'") == 1);
 		CHECK(CountMessages(since, "has no mesh 3 (it has 1)") == 1);
 		CHECK(CountMessages(since, "no Mesh and the entity has no MeshComponent") == 1);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Meshes that load but cannot be cooked warn once and are not cooked again")
+	{
+		BasaltTest::TempProject project("PhysicsDegenerateMesh");
+		REQUIRE(project.IsValid());
+		// Three points on a line: no triangle survives Jolt's degenerate-triangle removal and no hull exists.
+		const std::string line = WriteMeshGltf(project, "Line.gltf", { 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 2.0f, 0.0f, 0.0f }, { 0, 1, 2 });
+		const float nan = std::numeric_limits<float>::quiet_NaN();
+		const std::string broken = WriteMeshGltf(project, "Broken.gltf", { 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, nan, 1.0f }, { 0, 1, 2 });
+		REQUIRE_MESSAGE(AssetManager::GetMesh(line), AssetManager::GetError(line));
+		REQUIRE_MESSAGE(AssetManager::GetMesh(broken), AssetManager::GetError(broken));
+
+		Scene scene;
+		auto addCollider = [&](const char* name, const std::string& mesh, bool convex) {
+			Entity entity = scene.CreateEntity(name);
+			entity.AddComponent<RigidBodyComponent>();
+			auto& collider = entity.AddComponent<MeshColliderComponent>();
+			collider.Mesh = mesh;
+			collider.Convex = convex;
+			return entity;
+		};
+		const std::vector<Entity> entities = { addCollider("Triangles", line, false), addCollider("Hull", line, true), addCollider("Broken", broken, false) };
+
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		const uint64_t cooked = PhysicsWorld::GetMeshShapeCookCount();
+		scene.OnSimulationStart();
+		for (int i = 0; i < 5; i++)
+		{
+			for (Entity entity : entities)
+				entity.AddOrReplaceComponent<MeshColliderComponent>(entity.GetComponent<MeshColliderComponent>());
+			Simulate(scene, Step);
+		}
+		CHECK(scene.GetPhysicsWorld()->GetBodyCount() == 0);
+		// The failures are cached like shapes.
+		CHECK(PhysicsWorld::GetMeshShapeCookCount() == cooked + 3);
+		CHECK(CountMessages(since, "'Triangles': MeshCollider ignored: cannot build a triangle mesh") == 1);
+		CHECK(CountMessages(since, "'Hull': MeshCollider ignored: cannot build a convex hull") == 1);
+		CHECK(CountMessages(since, "'Broken': MeshCollider ignored: the mesh has a non-finite vertex position") == 1);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Dynamic MeshColliders ask for Convex, triggers use the hull, and MeshIndex picks the mesh")
+	{
+		Scene scene;
+		Entity rock = scene.CreateEntity("Rock");
+		rock.GetTransform().Translation = { 0.0f, 5.0f, 0.0f };
+		rock.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+		rock.AddComponent<MeshColliderComponent>().Mesh = "builtin://Cube";
+		Entity convexRock = scene.CreateEntity("ConvexRock");
+		convexRock.GetTransform().Translation = { 5.0f, 5.0f, 0.0f };
+		convexRock.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+		auto& convexCollider = convexRock.AddComponent<MeshColliderComponent>();
+		convexCollider.Mesh = "builtin://Cube";
+		convexCollider.Convex = true;
+
+		// A trigger zone made from a closed mesh covers its inside, not just its surface.
+		Entity zone = scene.CreateEntity("Zone");
+		zone.GetTransform().Translation = { 0.0f, 0.0f, 20.0f };
+		zone.GetTransform().Scale = glm::vec3(4.0f);
+		auto& zoneBody = zone.AddComponent<RigidBodyComponent>();
+		zoneBody.IsTrigger = true;
+		zone.AddComponent<MeshColliderComponent>().Mesh = "builtin://Cube";
+
+		// A MeshIndex of its own is ignored when the collider borrows the MeshComponent's mesh.
+		Entity borrowed = scene.CreateEntity("Borrowed");
+		borrowed.GetTransform().Translation = { 0.0f, 0.0f, -20.0f };
+		borrowed.AddComponent<MeshComponent>().Mesh = "builtin://Cube";
+		borrowed.AddComponent<RigidBodyComponent>();
+		borrowed.AddComponent<MeshColliderComponent>().MeshIndex = 1;
+
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		CHECK(physics.GetBodyCount() == 4);
+		CHECK(CountMessages(since, "'Rock': a dynamic body collides by the convex hull of its MeshCollider; set Convex") == 1);
+		CHECK(CountMessages(since, "'ConvexRock'") == 0);
+		CHECK(CountMessages(since, "'Borrowed': MeshCollider MeshIndex is ignored without its own Mesh") == 1);
+		CHECK(physics.OverlapSphere({ 0.0f, 0.0f, 20.0f }, 0.1f, { .IncludeTriggers = true }) == std::vector<UUID>{ zone.GetUUID() });
 		scene.OnSimulationStop();
 	}
 

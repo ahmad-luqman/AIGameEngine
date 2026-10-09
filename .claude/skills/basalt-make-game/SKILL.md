@@ -30,9 +30,10 @@ Write scripts with `asset.write` (or directly as files under `<project>/Assets/S
   (`{"Names": ["Default", "Player", "Pickup"], "IgnoredPairs": [["Player", "Pickup"]]}`). Set
   `RigidBody.Continuous` on fast projectiles. Probe the world with `Physics.Raycast/SphereCast/BoxCast/OverlapSphere/OverlapBox`
   (options: `Ignore`, `Layers`, `IncludeTriggers`, `All`; see Docs/ScriptingAPI.md).
-- Imported levels and props: add `MeshCollider {}` next to the `Mesh` component (an empty `Mesh` field uses
-  the entity's mesh) so static geometry collides by its real triangles; dynamic bodies get the mesh's convex
-  hull automatically. Prefer box/sphere/capsule colliders for simple moving objects: they are cheaper.
+- Imported levels and props: add `RigidBody {}` (Static by default) and `MeshCollider {}` to each entity with
+  a `Mesh` component (an empty `Mesh` field uses the entity's mesh) so static geometry collides by its real
+  triangles; without a RigidBody nothing collides. Dynamic bodies and triggers use the mesh's convex hull: set
+  `Convex = true` on them. Prefer box/sphere/capsule colliders for simple moving objects: they are cheaper.
 - Joints (`Joint` component): `Fixed`, `Point`, `Hinge`, `Slider`, `Distance`, `Cone`, `SixDOF` (ragdolls).
   An entity holds one joint; for several on one body (a rung on two ropes) give each its own child entity
   with `"BodyEntity": "<body name>"`. `LimitSpringFrequency` makes limits springy (a distance joint without
