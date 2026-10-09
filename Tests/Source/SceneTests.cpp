@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include <Basalt/Physics/PhysicsWorld.h>
 #include <Basalt/Scene/ComponentRegistry.h>
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
@@ -200,6 +201,8 @@ TEST_SUITE("Serialization")
 		entity.GetComponent<MaterialComponent>().AlbedoColor = { 0.1f, 0.2f, 0.3f, 0.4f };
 		entity.GetComponent<ScriptComponent>().Script = "Assets/Scripts/Test.lua";
 		entity.GetComponent<ScriptComponent>().Properties = { { "Speed", 3.5 }, { "Target", { 1, 2, 3 } } };
+		JointComponent& joint = entity.GetComponent<JointComponent>();
+		joint = { JointType::Distance, UUID(0xF000000000000001ull), { 1.0f, 2.0f, 3.0f }, { -1.0f, -2.0f, -3.0f }, { 0.0f, 0.0f, 1.0f }, true, 0.5f, 4.0f, JointMotorMode::Velocity, 12.0f, 250.0f, 100.0f, 50.0f, true };
 
 		const nlohmann::json json = SceneSerializer::SerializeScene(scene);
 		Scene loaded;
@@ -217,6 +220,7 @@ TEST_SUITE("Serialization")
 		CHECK(glm::degrees(copy.GetComponent<CameraComponent>().Camera.GetPerspectiveVerticalFov()) == doctest::Approx(70.0f));
 		CHECK(copy.GetComponent<RigidBodyComponent>().Type == RigidBodyType::Kinematic);
 		CHECK(Near(glm::degrees(copy.GetTransform().GetRotationEuler()), { 10.0f, 20.0f, 30.0f }, 1e-3f));
+		CHECK(copy.GetComponent<JointComponent>() == entity.GetComponent<JointComponent>());
 	}
 
 	TEST_CASE("Component JSON is strict about unknown fields, types and enum values")
@@ -358,6 +362,24 @@ TEST_SUITE("Serialization")
 		CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, "Joint", { { "MotorMode", "Turbo" } }, error));
 	}
 
+	TEST_CASE("Entity reference fields are collected from the component definitions")
+	{
+		for (const ComponentInfo& info : ComponentRegistry::GetAll())
+		{
+			INFO("component: " << info.Name);
+			if (info.Name == "Joint")
+			{
+				CHECK(info.EntityFields == std::vector<std::string>{ "ConnectedEntity" });
+				CHECK(info.RemapEntityReferences);
+			}
+			else
+			{
+				CHECK(info.EntityFields.empty());
+				CHECK_FALSE(info.RemapEntityReferences);
+			}
+		}
+	}
+
 	TEST_CASE("Joints inside a duplicated tree or prefab connect the copies")
 	{
 		BasaltTest::TempProject project("JointPrefab");
@@ -389,6 +411,52 @@ TEST_SUITE("Serialization")
 		Entity instance2 = instance.GetChildren()[1];
 		CHECK(instance1.GetComponent<JointComponent>().ConnectedEntity == anchor.GetUUID());
 		CHECK(instance2.GetComponent<JointComponent>().ConnectedEntity == instance1.GetUUID());
+	}
+
+	TEST_CASE("A prefab with joints spawned during play builds them between the new copies")
+	{
+		BasaltTest::TempProject project("JointPrefabPlay");
+		Scene scene;
+		auto addBody = [](Entity entity, RigidBodyType type) {
+			entity.AddComponent<RigidBodyComponent>().Type = type;
+			entity.AddComponent<BoxColliderComponent>().HalfExtents = { 0.2f, 0.2f, 0.2f };
+		};
+		Entity anchor = scene.CreateEntity("Anchor");
+		addBody(anchor, RigidBodyType::Static);
+		Entity chain = scene.CreateEntity("Chain");
+		Entity link1 = scene.CreateChildEntity(chain, "Link1");
+		link1.GetTransform().Translation = { 0.0f, -1.0f, 0.0f };
+		addBody(link1, RigidBodyType::Dynamic);
+		Entity link2 = scene.CreateChildEntity(chain, "Link2");
+		link2.GetTransform().Translation = { 0.0f, -2.0f, 0.0f };
+		addBody(link2, RigidBodyType::Dynamic);
+		auto& top = link1.AddComponent<JointComponent>();
+		top.Type = JointType::Point;
+		top.ConnectedEntity = anchor.GetUUID();
+		top.Anchor = { 0.0f, 1.0f, 0.0f };
+		auto& bottom = link2.AddComponent<JointComponent>();
+		bottom.Type = JointType::Point;
+		bottom.ConnectedEntity = link1.GetUUID();
+		bottom.Anchor = { 0.0f, 1.0f, 0.0f };
+
+		std::string error;
+		const std::filesystem::path path = project.GetDirectory() / "Assets/Prefabs/Chain.bprefab";
+		REQUIRE(SceneSerializer::SavePrefab(chain, path, error));
+		scene.DestroyEntity(chain);
+
+		scene.OnSimulationStart();
+		Entity instance = SceneSerializer::InstantiatePrefab(scene, path, "Assets/Prefabs/Chain.bprefab", {}, error);
+		REQUIRE_MESSAGE(instance, error);
+		Entity copy1 = instance.GetChildren()[0];
+		Entity copy2 = instance.GetChildren()[1];
+		for (int i = 0; i < 60; i++)
+			scene.OnUpdate(1.0f / 60.0f);
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		CHECK(physics.HasJoint(copy1));
+		CHECK(physics.HasJoint(copy2));
+		// The chain hangs from the anchor instead of falling.
+		CHECK(copy2.GetTransform().Translation.y == doctest::Approx(-2.0f).epsilon(0.05));
+		scene.OnSimulationStop();
 	}
 
 	TEST_CASE("The state hash does not depend on the UUIDs joints refer to")

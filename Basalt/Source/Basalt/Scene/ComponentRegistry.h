@@ -39,11 +39,12 @@ namespace Basalt {
 		std::vector<std::string> Fields;
 		// Valid values of string-enum fields (e.g. RigidBody "Type"), for inspectors and validation messages.
 		std::map<std::string, std::vector<std::string>> EnumOptions;
-		// Fields that hold an entity UUID. Tools may let users name entities there (see component.set).
+		// Fields that hold an entity UUID (collected from the field list). Tools may let users name entities
+		// there (see component.set), and inspectors show an entity picker.
 		std::vector<std::string> EntityFields;
 		// Rewrites the component's entity references (e.g. Joint "ConnectedEntity") through the map;
-		// references not in the map are kept. Empty for components without references.
-		std::function<void(Entity, const std::unordered_map<uint64_t, UUID>&)> RemapEntityReferences;
+		// references not in the map are kept. Empty for components without EntityFields.
+		std::function<void(Entity, const std::unordered_map<UUID, UUID>&)> RemapEntityReferences;
 	};
 
 	class ComponentRegistry
@@ -59,7 +60,7 @@ namespace Basalt {
 
 		// Entities copied with fresh UUIDs (prefab instances, duplicated trees) keep references to the
 		// originals; this points references to entities in the copied set (old UUID -> new UUID) at the copies.
-		static void RemapEntityReferences(Entity entity, const std::unordered_map<uint64_t, UUID>& remap);
+		static void RemapEntityReferences(Entity entity, const std::unordered_map<UUID, UUID>& remap);
 	};
 
 }
