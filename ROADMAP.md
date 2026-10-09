@@ -8,10 +8,9 @@ automation API, docs, and a code review before committing.
 
 Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or more.
 
-**Execution.** Work in milestones rather than one item at a time: P0 → P1 Physics (layers; shipped
-with shape queries and continuous collision) → particles and UI components → P2 editor feel → the Marble Run sample. Run each milestone as one long
-autonomous session at high effort (or with multi-agent workflows), and check quality and token cost before
-starting the next.
+**Execution.** Work in milestones rather than one item at a time: P0 → particles and UI components →
+P2 editor feel → the Marble Run sample. Run each milestone as one long autonomous session at high effort
+(or with multi-agent workflows), and check quality and token cost before starting the next.
 
 ## Current state (baseline)
 

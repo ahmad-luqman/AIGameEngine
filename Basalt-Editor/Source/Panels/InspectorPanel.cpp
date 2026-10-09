@@ -194,7 +194,7 @@ namespace Basalt {
 						const Ref<Project>& project = Project::GetActive();
 						layerNames = project ? project->GetConfig().Physics.GetNames() : PhysicsLayers().GetNames();
 						const std::string current = data[field].get<std::string>();
-						if (std::find(layerNames.begin(), layerNames.end(), current) == layerNames.end())
+						if (std::ranges::find(layerNames, current) == layerNames.end())
 						{
 							// Keep an unknown name selectable so it stays visible until it is fixed.
 							layerNames.push_back(current);
