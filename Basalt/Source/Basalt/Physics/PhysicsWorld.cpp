@@ -327,13 +327,6 @@ namespace Basalt {
 			JointComponent Settings;
 		};
 
-		// The last warnings logged for a joint and the settings that caused them.
-		struct JointWarnings
-		{
-			JointComponent Settings;
-			std::vector<std::string> Messages;
-		};
-
 		Scope<JPH::TempAllocatorImpl> TempAllocator;
 		Scope<JPH::JobSystemThreadPool> JobSystem;
 		BroadPhaseLayerInterfaceImpl BroadPhaseLayerInterface;
@@ -348,7 +341,8 @@ namespace Basalt {
 		// Keyed by the entity that owns the JointComponent.
 		std::unordered_map<UUID, JointRecord> Joints;
 		std::unordered_set<UUID> DirtyJoints;
-		std::unordered_map<UUID, JointWarnings> LoggedJointWarnings;
+		// The warnings last logged for each joint, so repeats are not logged again.
+		std::unordered_map<UUID, std::vector<std::string>> LoggedJointWarnings;
 		// Set while Start() creates every body; it marks all joints dirty itself afterwards.
 		bool Starting = false;
 		// Jolt reports contacts per sub-shape pair; entities see one begin/end per entity pair. Keys are
@@ -779,11 +773,11 @@ namespace Basalt {
 				logged.erase(it);
 			return;
 		}
-		if (it != logged.end() && it->second.Messages == warnings)
+		if (it != logged.end() && it->second == warnings)
 			return;
 		for (const std::string& warning : warnings)
 			BS_CORE_WARN("Physics: joint on '{}': {}", entity.GetName(), warning);
-		logged[entity.GetUUID()].Messages = std::move(warnings);
+		logged[entity.GetUUID()] = std::move(warnings);
 	}
 
 	void PhysicsWorld::ApplyJointSettings(Entity entity, std::vector<std::string>& warnings)
@@ -955,7 +949,7 @@ namespace Basalt {
 
 		// A RigidBody without a valid collider has no body either; say which part is missing.
 		auto describeMissingBody = [](Entity e) {
-			return e.HasComponent<RigidBodyComponent>() ? "has a RigidBody but no valid collider" : "has no RigidBody and collider";
+			return e.HasComponent<RigidBodyComponent>() ? "has a RigidBody but no valid collider" : "has no RigidBody";
 		};
 		auto self = impl.Bodies.find(entity.GetUUID());
 		if (self == impl.Bodies.end())
