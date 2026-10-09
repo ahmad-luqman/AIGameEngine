@@ -260,7 +260,9 @@ namespace Basalt {
 		float MotorTarget = 0.0f;
 		// Six-DOF only: a motor per axis of the joint frame (X = Axis), so animation can drive a ragdoll. Each
 		// axis reads its own component of the target: LinearMotorTarget in m/s (Velocity) or meters from the
-		// rest pose (Position); AngularMotorTarget in degrees/s around that axis (Velocity) or, for the
+		// rest pose (Position); AngularMotorTarget in degrees/s around that axis as it turns with this body
+		// (Velocity; Jolt's convention, which differs from the connected body's frame once the joint is
+		// bent) or, for the
 		// Position axes together, the target orientation relative to the rest pose as Euler angles in degrees
 		// (the same convention as Transform Rotation and GetJointRotation; components of non-Position axes are
 		// treated as 0). Position targets beyond the limits are clamped to them. A motor on a locked axis does
