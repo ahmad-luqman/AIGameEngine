@@ -901,6 +901,8 @@ namespace Basalt {
 			// Pose last written to / read from the entity, used to detect transforms changed by scripts.
 			glm::vec3 LastPosition = { 0.0f, 0.0f, 0.0f };
 			glm::quat LastRotation = { 1.0f, 0.0f, 0.0f, 0.0f };
+			// The shape's bounding box in the character's local space, relative to its position.
+			JPH::AABox Bounds;
 		};
 
 		Scope<JPH::TempAllocatorImpl> TempAllocator;
@@ -966,6 +968,20 @@ namespace Basalt {
 			record.GravityFactor = std::isfinite(c.GravityFactor) ? c.GravityFactor : 1.0f;
 			if (record.GravityFactor != c.GravityFactor)
 				warn(fmt::format("GravityFactor {} is not finite; using 1", c.GravityFactor));
+		}
+
+		// Only contacts on the lower part of the shape can be ground; others are walls or ceilings. "Lower" is
+		// along the character's up axis (against gravity) in its local space, so a turned gravity or a tilted
+		// entity keeps the bottom of the shape as its feet: below the lowest point of its bounds plus their
+		// narrowest half extent (the hemisphere of an upright capsule).
+		static void UpdateSupportingVolume(CharacterRecord& record)
+		{
+			const JPH::CharacterVirtual& character = *record.Character;
+			const JPH::Vec3 localUp = character.GetRotation().Conjugated() * character.GetUp();
+			const JPH::Vec3 extent = record.Bounds.GetExtent();
+			const float bottom = localUp.Dot(record.Bounds.GetCenter()) - localUp.Abs().Dot(extent);
+			const float halfWidth = extent.ReduceMin();
+			record.Character->SetSupportingVolume(JPH::Plane(localUp, -(bottom + halfWidth)));
 		}
 
 		// Logs a character's warnings ("; "-joined) unless they are the ones last logged for it.
@@ -1641,14 +1657,6 @@ namespace Basalt {
 		settings.mInnerBodyLayer = MakeObjectLayer(true, layer);
 		const glm::vec3 gravity = FromJolt(impl.System->GetGravity());
 		settings.mUp = glm::length(gravity) > 1e-6f ? ToJolt(-glm::normalize(gravity)) : JPH::Vec3::sAxisY();
-		// Only contacts on the lower part of the shape (below the bottom plus half its narrowest horizontal
-		// extent, the hemisphere of a capsule) can be ground; others are walls or ceilings. The plane is in the
-		// character's local space, relative to its position.
-		const JPH::AABox bounds = shape->GetLocalBounds();
-		const JPH::Vec3 centerOfMass = shape->GetCenterOfMass();
-		const float bottom = bounds.mMin.GetY() + centerOfMass.GetY();
-		const float halfWidth = std::min(bounds.GetExtent().GetX(), bounds.GetExtent().GetZ());
-		settings.mSupportingVolume = JPH::Plane(JPH::Vec3::sAxisY(), -(bottom + halfWidth));
 		auto* character = new JPH::CharacterVirtual(&settings, ToJolt(position), ToJolt(rotation), static_cast<uint64_t>(entity.GetUUID()), impl.System.get());
 		character->SetLinearVelocity(previousVelocity);
 
@@ -1660,6 +1668,10 @@ namespace Basalt {
 		record.MoveVelocity = moveVelocity;
 		record.LastPosition = position;
 		record.LastRotation = rotation;
+		// The shape's bounds relative to the character's position (Jolt's local bounds are around the centre of mass).
+		record.Bounds = shape->GetLocalBounds();
+		record.Bounds.Translate(shape->GetCenterOfMass());
+		Impl::UpdateSupportingVolume(record);
 		if (!character->GetInnerBodyID().IsInvalid())
 			impl.BodyToEntity[character->GetInnerBodyID().GetIndexAndSequenceNumber()] = entity.GetUUID();
 		Impl::ConfigureCharacter(record, warn);
@@ -2307,6 +2319,7 @@ namespace Basalt {
 			// Up is against the scene gravity, which scripts may turn.
 			if (!sceneGravity.IsNearZero())
 				character.SetUp(-sceneGravity.Normalized());
+			Impl::UpdateSupportingVolume(record);
 			const JPH::Vec3 up = character.GetUp();
 			const JPH::Vec3 gravity = sceneGravity * record.GravityFactor;
 			const JPH::Vec3 move = ToJolt(record.MoveVelocity);

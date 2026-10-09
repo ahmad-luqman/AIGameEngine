@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <optional>
 #include <string>
 
 using namespace Basalt;
@@ -353,6 +354,25 @@ TEST_SUITE("Physics")
 		Simulate(scene, 2.0f);
 		CHECK(Position(character).y == doctest::Approx(StandingHeight).epsilon(0.03));
 		CHECK(physics.IsCharacterGrounded(character));
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("A character stands on whatever gravity pulls it against")
+	{
+		// Gravity along -X makes +X the character's up, while its capsule still stands along local Y.
+		Scene scene;
+		scene.GetPhysicsSettings().Gravity = { -9.81f, 0.0f, 0.0f };
+		CreateStaticBox(scene, "Wall", { -0.5f, 0.0f, 0.0f }, { 0.5f, 50.0f, 50.0f });
+		Entity character = CreateCharacter(scene, { 2.0f, 0.0f, 0.0f });
+
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		Simulate(scene, 1.5f);
+		CHECK(Position(character).x == doctest::Approx(0.5f).epsilon(0.05));
+		CHECK(physics.IsCharacterGrounded(character));
+		const std::optional<glm::vec3> normal = physics.GetCharacterGroundNormal(character);
+		REQUIRE(normal.has_value());
+		CHECK(normal->x == doctest::Approx(1.0f).epsilon(0.01));
 		scene.OnSimulationStop();
 	}
 
