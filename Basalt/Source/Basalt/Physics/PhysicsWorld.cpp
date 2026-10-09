@@ -839,6 +839,116 @@ namespace Basalt {
 			return it->second.Shape;
 		}
 
+		// Smallest collider extent, so a zero scale or size still gives Jolt a valid shape.
+		constexpr float MinExtent = 0.001f;
+
+		// An entity's colliders combined into one shape, shared by rigid bodies and characters.
+		struct ColliderShape
+		{
+			// Null when no collider is valid (the reasons went to warn).
+			JPH::Ref<JPH::Shape> Shape;
+			// A MeshCollider contributed an exact triangle mesh (which has no volume).
+			bool HasTriangleMesh = false;
+			// The MeshComponent mesh a MeshCollider without its own Mesh used.
+			std::optional<std::pair<std::string, uint32_t>> BorrowedMesh;
+		};
+
+		// Builds the entity's box, sphere, capsule and mesh colliders, scaled by its world scale (signed: mesh
+		// colliders keep a mirroring) and by sizeFraction (a character's inner body is a little smaller).
+		// convexReason, when set, forces mesh colliders onto their convex hull and names who needs it.
+		ColliderShape BuildColliderShape(Entity entity, const glm::vec3& signedScale, float sizeFraction, const char* convexReason, bool isTrigger, const std::function<void(const std::string&)>& warn)
+		{
+			const glm::vec3 scale = glm::abs(signedScale) * sizeFraction;
+			JPH::StaticCompoundShapeSettings compound;
+			uint32_t shapeCount = 0;
+			auto addShape = [&](const JPH::ShapeSettings::ShapeResult& result, const glm::vec3& offset) {
+				if (result.HasError())
+				{
+					warn(std::string("invalid collider: ") + result.GetError().c_str());
+					return;
+				}
+				// Offsets follow the entity's scale only: a smaller inner shape stays centred on each collider.
+				compound.AddShape(ToJolt(offset * glm::abs(signedScale)), JPH::Quat::sIdentity(), result.Get());
+				shapeCount++;
+			};
+
+			if (const auto* box = entity.TryGetComponent<BoxColliderComponent>())
+			{
+				const glm::vec3 halfExtents = glm::max(box->HalfExtents * scale, glm::vec3(MinExtent));
+				const float convexRadius = std::min(JPH::cDefaultConvexRadius, glm::min(halfExtents.x, glm::min(halfExtents.y, halfExtents.z)) * 0.5f);
+				addShape(JPH::BoxShapeSettings(ToJolt(halfExtents), convexRadius).Create(), box->Offset);
+			}
+			if (const auto* sphere = entity.TryGetComponent<SphereColliderComponent>())
+			{
+				const float radius = std::max(sphere->Radius * glm::max(scale.x, glm::max(scale.y, scale.z)), MinExtent);
+				addShape(JPH::SphereShapeSettings(radius).Create(), sphere->Offset);
+			}
+			if (const auto* capsule = entity.TryGetComponent<CapsuleColliderComponent>())
+			{
+				const float radius = std::max(capsule->Radius * glm::max(scale.x, scale.z), MinExtent);
+				const float halfHeight = std::max(capsule->HalfHeight * scale.y, MinExtent);
+				addShape(JPH::CapsuleShapeSettings(halfHeight, radius).Create(), capsule->Offset);
+			}
+
+			ColliderShape result;
+			if (const auto* meshCollider = entity.TryGetComponent<MeshColliderComponent>())
+			{
+				std::string key = meshCollider->Mesh;
+				uint32_t meshIndex = meshCollider->MeshIndex;
+				const auto* meshComponent = entity.TryGetComponent<MeshComponent>();
+				if (key.empty() && meshComponent)
+				{
+					if (meshIndex != 0)
+						warn("MeshCollider MeshIndex is ignored without its own Mesh (the MeshComponent's is used)");
+					key = meshComponent->Mesh;
+					meshIndex = meshComponent->MeshIndex;
+					result.BorrowedMesh.emplace(key, meshIndex);
+				}
+				bool convex = meshCollider->Convex;
+				if (!convex && convexReason)
+				{
+					convex = true;
+					warn(std::string(convexReason) + " collides by the convex hull of its MeshCollider; set Convex to make that explicit");
+				}
+				// A triangle mesh has no inside, so a trigger built from one would only report crossing its surface.
+				convex |= isTrigger;
+				std::string error;
+				JPH::Ref<JPH::Shape> shape;
+				if (key.empty())
+					error = "MeshCollider has no Mesh and the entity has no MeshComponent to use";
+				else
+					shape = GetMeshShape(key, meshIndex, convex, error);
+				if (shape)
+				{
+					// The cooked shape is shared, so the entity's scale wraps it instead of being baked in.
+					const glm::vec3 meshScale = glm::sign(signedScale) * glm::max(scale, glm::vec3(MinExtent));
+					if (meshScale != glm::vec3(1.0f))
+						shape = new JPH::ScaledShape(shape, ToJolt(meshScale));
+					compound.AddShape(JPH::Vec3::sZero(), JPH::Quat::sIdentity(), shape);
+					shapeCount++;
+					result.HasTriangleMesh = !convex;
+				}
+				else
+				{
+					warn("MeshCollider ignored: " + error);
+				}
+			}
+
+			if (shapeCount == 0)
+			{
+				warn("no valid collider");
+				return result;
+			}
+			JPH::ShapeSettings::ShapeResult shapeResult = compound.Create();
+			if (shapeResult.HasError())
+			{
+				warn(std::string("failed to build the shape: ") + shapeResult.GetError().c_str());
+				return result;
+			}
+			result.Shape = shapeResult.Get();
+			return result;
+		}
+
 	}
 
 	struct PhysicsWorld::Impl
@@ -905,6 +1015,8 @@ namespace Basalt {
 			JPH::AABox Bounds;
 			// Set while the entity's transform cannot be decomposed (e.g. a zero scale); the character waits.
 			bool Degenerate = false;
+			// As BodyRecord::BorrowedMesh.
+			std::optional<std::pair<std::string, uint32_t>> BorrowedMesh;
 		};
 
 		Scope<JPH::TempAllocatorImpl> TempAllocator;
@@ -1112,7 +1224,10 @@ namespace Basalt {
 				return;
 			const JPH::BodyID inner = it->second.Character->GetInnerBodyID();
 			if (!inner.IsInvalid())
+			{
 				BodyToEntity.erase(inner.GetIndexAndSequenceNumber());
+				ContactListener.Materials[inner.GetIndex()] = {};
+			}
 			// The character destroys its inner body.
 			Characters.erase(it);
 			EndContacts(scene, uuid, false);
@@ -1170,7 +1285,10 @@ namespace Basalt {
 		{
 			const auto* id = registry.try_get<IDComponent>(entity);
 			const auto& mesh = registry.get<MeshComponent>(entity);
-			if (auto it = id ? Bodies.find(id->ID) : Bodies.end(); it != Bodies.end() && it->second.BorrowedMesh == std::pair(mesh.Mesh, mesh.MeshIndex))
+			const std::pair borrowed(mesh.Mesh, mesh.MeshIndex);
+			if (auto it = id ? Bodies.find(id->ID) : Bodies.end(); it != Bodies.end() && it->second.BorrowedMesh == borrowed)
+				return;
+			if (auto it = id ? Characters.find(id->ID) : Characters.end(); it != Characters.end() && it->second.BorrowedMesh == borrowed)
 				return;
 			OnMeshChanged(registry, entity);
 		}
@@ -1367,9 +1485,6 @@ namespace Basalt {
 			BS_CORE_WARN("Physics: entity '{}' has a degenerate transform; no body created", entity.GetName());
 			return;
 		}
-		// Mesh colliders keep a mirroring (negative) scale; the symmetric primitive colliders do not need it.
-		const glm::vec3 signedScale = scale;
-		scale = glm::abs(scale);
 
 		JPH::EMotionType motionType = JPH::EMotionType::Static;
 		if (rigidBody.Type == RigidBodyType::Dynamic)
@@ -1395,95 +1510,15 @@ namespace Basalt {
 			}
 		};
 
-		JPH::StaticCompoundShapeSettings compound;
-		uint32_t shapeCount = 0;
-		auto addShape = [&](const JPH::ShapeSettings::ShapeResult& result, const glm::vec3& offset) {
-			if (result.HasError())
-			{
-				BS_CORE_WARN("Physics: invalid collider on '{}': {}", entity.GetName(), result.GetError().c_str());
-				return;
-			}
-			compound.AddShape(ToJolt(offset * scale), JPH::Quat::sIdentity(), result.Get());
-			shapeCount++;
-		};
-
-		constexpr float MinExtent = 0.001f;
-		if (const auto* box = entity.TryGetComponent<BoxColliderComponent>())
-		{
-			const glm::vec3 halfExtents = glm::max(box->HalfExtents * scale, glm::vec3(MinExtent));
-			const float convexRadius = std::min(JPH::cDefaultConvexRadius, glm::min(halfExtents.x, glm::min(halfExtents.y, halfExtents.z)) * 0.5f);
-			addShape(JPH::BoxShapeSettings(ToJolt(halfExtents), convexRadius).Create(), box->Offset);
-		}
-		if (const auto* sphere = entity.TryGetComponent<SphereColliderComponent>())
-		{
-			const float radius = std::max(sphere->Radius * glm::max(scale.x, glm::max(scale.y, scale.z)), MinExtent);
-			addShape(JPH::SphereShapeSettings(radius).Create(), sphere->Offset);
-		}
-		if (const auto* capsule = entity.TryGetComponent<CapsuleColliderComponent>())
-		{
-			const float radius = std::max(capsule->Radius * glm::max(scale.x, scale.z), MinExtent);
-			const float halfHeight = std::max(capsule->HalfHeight * scale.y, MinExtent);
-			addShape(JPH::CapsuleShapeSettings(halfHeight, radius).Create(), capsule->Offset);
-		}
 		// Jolt cannot simulate a triangle mesh on a dynamic body, so those always use the convex hull.
-		bool hasTriangleMesh = false;
-		std::optional<std::pair<std::string, uint32_t>> borrowedMesh;
-		if (const auto* meshCollider = entity.TryGetComponent<MeshColliderComponent>())
+		const ColliderShape colliders = BuildColliderShape(entity, scale, 1.0f, motionType == JPH::EMotionType::Dynamic ? "a dynamic body" : nullptr, rigidBody.IsTrigger, warn);
+		if (!colliders.Shape)
 		{
-			std::string key = meshCollider->Mesh;
-			uint32_t meshIndex = meshCollider->MeshIndex;
-			const auto* meshComponent = entity.TryGetComponent<MeshComponent>();
-			if (key.empty() && meshComponent)
-			{
-				if (meshIndex != 0)
-					warn("MeshCollider MeshIndex is ignored without its own Mesh (the MeshComponent's is used)");
-				key = meshComponent->Mesh;
-				meshIndex = meshComponent->MeshIndex;
-				borrowedMesh.emplace(key, meshIndex);
-			}
-			bool convex = meshCollider->Convex;
-			if (!convex && motionType == JPH::EMotionType::Dynamic)
-			{
-				convex = true;
-				warn("a dynamic body collides by the convex hull of its MeshCollider; set Convex to make that explicit");
-			}
-			// A triangle mesh has no inside, so a trigger built from one would only report crossing its surface.
-			convex |= rigidBody.IsTrigger;
-			std::string error;
-			JPH::Ref<JPH::Shape> shape;
-			if (key.empty())
-				error = "MeshCollider has no Mesh and the entity has no MeshComponent to use";
-			else
-				shape = GetMeshShape(key, meshIndex, convex, error);
-			if (shape)
-			{
-				// The cooked shape is shared, so the entity's scale wraps it instead of being baked in.
-				if (signedScale != glm::vec3(1.0f))
-					shape = new JPH::ScaledShape(shape, ToJolt(glm::sign(signedScale) * glm::max(scale, glm::vec3(MinExtent))));
-				compound.AddShape(JPH::Vec3::sZero(), JPH::Quat::sIdentity(), shape);
-				shapeCount++;
-				hasTriangleMesh = !convex;
-			}
-			else
-			{
-				warn("MeshCollider ignored: " + error);
-			}
-		}
-
-		if (shapeCount == 0)
-		{
-			warn("no valid collider; no body created");
+			warn("no body created");
 			reportWarnings();
 			return;
 		}
-
-		JPH::ShapeSettings::ShapeResult shapeResult = compound.Create();
-		if (shapeResult.HasError())
-		{
-			warn(std::string("failed to build shape: ") + shapeResult.GetError().c_str() + "; no body created");
-			reportWarnings();
-			return;
-		}
+		const bool hasTriangleMesh = colliders.HasTriangleMesh;
 
 		const bool moving = motionType != JPH::EMotionType::Static;
 		uint32_t layer = 0;
@@ -1491,7 +1526,7 @@ namespace Basalt {
 			layer = *index;
 		else
 			warn("unknown physics layer '" + rigidBody.Layer + "', using Default");
-		JPH::BodyCreationSettings settings(shapeResult.Get(), ToJolt(position), ToJolt(rotation), motionType, MakeObjectLayer(moving, layer));
+		JPH::BodyCreationSettings settings(colliders.Shape, ToJolt(position), ToJolt(rotation), motionType, MakeObjectLayer(moving, layer));
 		settings.mUserData = static_cast<uint64_t>(entity.GetUUID());
 		// The combine modes pass these on unchecked: negative friction inverts Jolt's friction clamp and
 		// restitution above 1 adds energy on every bounce.
@@ -1522,7 +1557,7 @@ namespace Basalt {
 		// box of the shape's bounds stands in (kinematic bodies are not moved by forces, only its presence counts).
 		if (motionType == JPH::EMotionType::Kinematic && hasTriangleMesh)
 		{
-			const JPH::AABox bounds = shapeResult.Get()->GetLocalBounds();
+			const JPH::AABox bounds = colliders.Shape->GetLocalBounds();
 			settings.mOverrideMassProperties = JPH::EOverrideMassProperties::MassAndInertiaProvided;
 			settings.mMassPropertiesOverride.SetMassAndInertiaOfSolidBox(JPH::Vec3::sMax(bounds.GetSize(), JPH::Vec3::sReplicate(MinExtent)), 1.0f);
 			settings.mMassPropertiesOverride.ScaleToMass(std::max(rigidBody.Mass, 0.001f));
@@ -1547,7 +1582,7 @@ namespace Basalt {
 		record.ID = bodyID;
 		record.Type = rigidBody.Type;
 		record.IsTrigger = rigidBody.IsTrigger;
-		record.BorrowedMesh = std::move(borrowedMesh);
+		record.BorrowedMesh = colliders.BorrowedMesh;
 		record.LastPosition = position;
 		record.LastRotation = rotation;
 		impl.Bodies[entity.GetUUID()] = record;
@@ -1600,66 +1635,27 @@ namespace Basalt {
 			report();
 			return;
 		}
-		scale = glm::abs(scale);
-
 		// The collider shapes, scaled as for a rigid body. The inner body that other bodies collide with is a
 		// little smaller (as in Jolt's samples): the character stops just short of what it walks into, so a
-		// full-size inner body would touch it and shove dynamic bodies regardless of MaxStrength.
+		// full-size inner body would touch it and shove dynamic bodies regardless of MaxStrength. Characters
+		// move by shape casts, which need a convex mesh collider.
 		constexpr float InnerShapeFraction = 0.9f;
-		constexpr float MinExtent = 0.001f;
-		JPH::StaticCompoundShapeSettings compound;
-		JPH::StaticCompoundShapeSettings innerCompound;
-		uint32_t shapeCount = 0;
-		// Each collider is built at full size and at the inner body's size.
-		auto addShape = [&](const glm::vec3& offset, const std::function<JPH::ShapeSettings::ShapeResult(float)>& create) {
-			const JPH::ShapeSettings::ShapeResult result = create(1.0f);
-			const JPH::ShapeSettings::ShapeResult inner = create(InnerShapeFraction);
-			if (result.HasError() || inner.HasError())
-			{
-				warn(std::string("invalid collider: ") + (result.HasError() ? result : inner).GetError().c_str());
-				return;
-			}
-			compound.AddShape(ToJolt(offset * scale), JPH::Quat::sIdentity(), result.Get());
-			innerCompound.AddShape(ToJolt(offset * scale), JPH::Quat::sIdentity(), inner.Get());
-			shapeCount++;
-		};
-		if (const auto* box = entity.TryGetComponent<BoxColliderComponent>())
+		const ColliderShape colliders = BuildColliderShape(entity, scale, 1.0f, "a character", false, warn);
+		if (!colliders.Shape)
 		{
-			addShape(box->Offset, [&](float fraction) {
-				const glm::vec3 halfExtents = glm::max(box->HalfExtents * scale * fraction, glm::vec3(MinExtent));
-				const float convexRadius = std::min(JPH::cDefaultConvexRadius, glm::min(halfExtents.x, glm::min(halfExtents.y, halfExtents.z)) * 0.5f);
-				return JPH::BoxShapeSettings(ToJolt(halfExtents), convexRadius).Create();
-			});
-		}
-		if (const auto* sphere = entity.TryGetComponent<SphereColliderComponent>())
-		{
-			addShape(sphere->Offset, [&](float fraction) {
-				return JPH::SphereShapeSettings(std::max(sphere->Radius * glm::max(scale.x, glm::max(scale.y, scale.z)) * fraction, MinExtent)).Create();
-			});
-		}
-		if (const auto* capsule = entity.TryGetComponent<CapsuleColliderComponent>())
-		{
-			addShape(capsule->Offset, [&](float fraction) {
-				const float radius = std::max(capsule->Radius * glm::max(scale.x, scale.z) * fraction, MinExtent);
-				const float halfHeight = std::max(capsule->HalfHeight * scale.y * fraction, MinExtent);
-				return JPH::CapsuleShapeSettings(halfHeight, radius).Create();
-			});
-		}
-		if (shapeCount == 0)
-		{
-			warn("has a CharacterController but no valid collider; no character created");
+			warn("no character created");
 			report();
 			return;
 		}
-		JPH::ShapeSettings::ShapeResult shapeResult = compound.Create();
-		JPH::ShapeSettings::ShapeResult innerResult = innerCompound.Create();
-		if (shapeResult.HasError() || innerResult.HasError())
+		// Same colliders, so its warnings would only repeat the outer shape's.
+		const ColliderShape inner = BuildColliderShape(entity, scale, InnerShapeFraction, "a character", false, [](const std::string&) {});
+		if (!inner.Shape)
 		{
-			warn(std::string("failed to build its shape: ") + (shapeResult.HasError() ? shapeResult : innerResult).GetError().c_str());
+			warn("failed to build its inner shape; no character created");
 			report();
 			return;
 		}
-		const JPH::RefConst<JPH::Shape> shape = shapeResult.Get();
+		const JPH::RefConst<JPH::Shape> shape = colliders.Shape;
 
 		uint32_t layer = 0;
 		if (const auto index = impl.Layers.Find(controller.Layer))
@@ -1669,7 +1665,7 @@ namespace Basalt {
 
 		JPH::CharacterVirtualSettings settings;
 		settings.mShape = shape;
-		settings.mInnerBodyShape = innerResult.Get();
+		settings.mInnerBodyShape = inner.Shape;
 		settings.mInnerBodyLayer = MakeObjectLayer(true, layer);
 		const glm::vec3 gravity = FromJolt(impl.System->GetGravity());
 		settings.mUp = glm::length(gravity) > 1e-6f ? ToJolt(-glm::normalize(gravity)) : JPH::Vec3::sAxisY();
@@ -1680,6 +1676,7 @@ namespace Basalt {
 		record.Character = character;
 		record.Settings = controller;
 		record.Layer = layer;
+		record.BorrowedMesh = colliders.BorrowedMesh;
 		record.BuildWarnings = warnings;
 		record.MoveVelocity = moveVelocity;
 		record.LastPosition = position;
@@ -1691,7 +1688,11 @@ namespace Basalt {
 		// Jolt leaves the inner body out when the body limit is reached; the character still walks, but
 		// queries, triggers and other bodies cannot see it.
 		if (!character->GetInnerBodyID().IsInvalid())
+		{
 			impl.BodyToEntity[character->GetInnerBodyID().GetIndexAndSequenceNumber()] = entity.GetUUID();
+			// Jolt created the inner body, not RecreateBody: its slot may still hold an earlier body's modes.
+			impl.ContactListener.Materials[character->GetInnerBodyID().GetIndex()] = {};
+		}
 		else
 			BS_CORE_ERROR("Physics: body limit reached; character '{}' has no body other bodies can touch", entity.GetName());
 		Impl::ConfigureCharacter(record, warn);
