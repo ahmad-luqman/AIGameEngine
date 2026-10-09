@@ -25,7 +25,7 @@ namespace Basalt {
 	private:
 		void DrawScriptProperties(Entity entity, const nlohmann::json& component);
 		// Picker for a component field that holds an entity UUID; noneLabel names 0 (e.g. "World" for a
-		// joint's ConnectedEntity). filter, when set, limits the listed entities.
+		// joint's ConnectedEntity) and filter decides which entities are listed.
 		void DrawEntityReference(Entity entity, const std::string& component, const std::string& field, uint64_t current, const std::function<bool(Entity)>& filter, const char* noneLabel);
 		const nlohmann::json* GetScriptDefaults(const std::string& scriptPath);
 

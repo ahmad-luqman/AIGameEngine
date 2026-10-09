@@ -2,8 +2,10 @@
 
 #include "Panels/JsonWidgets.h"
 
+#include "Basalt/Math/Math.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Scene/ComponentRegistry.h"
+#include "Basalt/Scene/JointFields.h"
 #include "Basalt/Scene/Scene.h"
 #include "Basalt/Scripting/ScriptEngine.h"
 
@@ -12,7 +14,6 @@
 
 #include <algorithm>
 #include <functional>
-#include <initializer_list>
 
 namespace Basalt {
 
@@ -93,32 +94,20 @@ namespace Basalt {
 				   (entity.HasComponent<BoxColliderComponent>() || entity.HasComponent<SphereColliderComponent>() || entity.HasComponent<CapsuleColliderComponent>());
 		}
 
-		// Whether a Joint field does anything for the joint type (by its JSON name); the inspector hides the
-		// rest so each type shows a short list. Files, Lua and the automation API still see every field.
-		bool JointFieldApplies(const std::string& type, const std::string& field)
+		// Which entities a joint's reference field may name: entities with a physics body, but never the body
+		// the joint moves on both sides. BodyEntity's 0 (Self) already names the holder; a holder that is not
+		// the body may itself be the connected body.
+		std::function<bool(Entity)> JointReferenceFilter(Entity holder, const JointComponent& joint, const std::string& field)
 		{
-			auto is = [&type](std::initializer_list<const char*> types) {
-				return std::ranges::any_of(types, [&type](const char* name) { return type == name; });
+			if (field == "BodyEntity")
+			{
+				return [holder, connected = joint.ConnectedEntity](Entity candidate) {
+					return candidate != holder && candidate.GetUUID() != connected && HasPhysicsBody(candidate);
+				};
+			}
+			return [body = joint.BodyEntity != 0 ? joint.BodyEntity : holder.GetUUID()](Entity candidate) {
+				return candidate.GetUUID() != body && HasPhysicsBody(candidate);
 			};
-			if (field == "ConnectedAnchor")
-				return is({ "Distance" });
-			if (field == "Axis")
-				return is({ "Hinge", "Slider", "Cone", "SixDOF" });
-			if (field == "SecondaryAxis" || field.starts_with("LinearLimit") || field.starts_with("AngularLimit"))
-				return is({ "SixDOF" });
-			if (field == "UseLimits")
-				return !is({ "Fixed", "Point" });
-			if (field == "LimitMin")
-				return is({ "Hinge", "Slider", "Distance" });
-			if (field == "LimitMax")
-				return is({ "Hinge", "Slider", "Distance", "Cone" });
-			if (field.starts_with("LimitSpring"))
-				return is({ "Hinge", "Slider", "Distance", "SixDOF" });
-			if (field.starts_with("Motor"))
-				return is({ "Hinge", "Slider" });
-			if (field == "BreakTorque")
-				return !is({ "Point", "Distance" });
-			return true;
 		}
 
 	}
@@ -138,10 +127,9 @@ namespace Basalt {
 		{
 			if (ImGui::Selectable(noneLabel, current == 0))
 				selected = 0;
-			// The entity itself is never a valid target.
 			for (Entity candidate : scene.GetAllEntitiesOrdered())
 			{
-				if (candidate == entity || (filter && !filter(candidate)))
+				if (!filter(candidate))
 					continue;
 				const uint64_t id = candidate.GetUUID();
 				ImGui::PushID(static_cast<int>(id ^ (id >> 32)));
@@ -199,22 +187,31 @@ namespace Basalt {
 			if (open)
 			{
 				nlohmann::json data = info.Serialize(entity);
+				// Joint fields the joint does not use are hidden, except ones set away from their defaults: those
+				// stay visible and marked, so the warning they cause can be fixed here.
+				const bool isJoint = info.Name == "Joint";
+				const JointComponent joint = isJoint ? entity.GetComponent<JointComponent>() : JointComponent{};
+				const std::vector<std::string> ignoredJointFields = isJoint ? GetIgnoredJointFields(joint) : std::vector<std::string>{};
 				for (const std::string& field : info.Fields)
 				{
 					if (!data.contains(field))
 						continue;
 					if (info.Name == "Script" && field == "Properties")
 						continue;
-					if (info.Name == "Joint" && !JointFieldApplies(data["Type"].get<std::string>(), field))
+					const bool ignored = std::ranges::find(ignoredJointFields, field) != ignoredJointFields.end();
+					if (isJoint && !ignored && !JointFieldApplies(joint, field))
 						continue;
 					if (std::find(info.EntityFields.begin(), info.EntityFields.end(), field) != info.EntityFields.end())
 					{
-						// Joints can only attach to entities that will have a physics body. 0 is the entity itself for
-						// BodyEntity and the world for ConnectedEntity.
-						const bool joint = info.Name == "Joint";
-						const char* noneLabel = !joint ? "None" : field == "BodyEntity" ? "Self"
-																						: "World";
-						DrawEntityReference(entity, info.Name, field, data[field].get<uint64_t>(), joint ? std::function<bool(Entity)>(HasPhysicsBody) : nullptr, noneLabel);
+						// 0 is the entity itself for a joint's BodyEntity and the world for its ConnectedEntity.
+						const char* noneLabel = "None";
+						std::function<bool(Entity)> filter = [entity](Entity candidate) { return candidate != entity; };
+						if (isJoint)
+						{
+							noneLabel = field == "BodyEntity" ? "Self" : "World";
+							filter = JointReferenceFilter(entity, joint, field);
+						}
+						DrawEntityReference(entity, info.Name, field, data[field].get<uint64_t>(), filter, noneLabel);
 						continue;
 					}
 					auto options = info.EnumOptions.find(field);
@@ -238,6 +235,12 @@ namespace Basalt {
 					const JsonFieldResult result = DrawJsonField(field, data[field], enumOptions);
 					if (unknownLayer)
 						ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Unknown layer (plays as Default)");
+					if (ignored)
+					{
+						ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.7f, 0.2f, 1.0f));
+						ImGui::TextWrapped("%s is ignored by this joint", field.c_str());
+						ImGui::PopStyleColor();
+					}
 					if (result.Changed)
 						m_Context.Execute("component.set", { { "entity", id }, { "component", info.Name }, { "data", { { field, data[field] } } } });
 					if (result.Committed)
@@ -248,10 +251,20 @@ namespace Basalt {
 				if (info.Name == "Joint")
 				{
 					// The joint moves BodyEntity's body, or this entity's when BodyEntity is Self.
-					const uint64_t bodyID = data["BodyEntity"].get<uint64_t>();
-					const Entity body = bodyID != 0 ? scene->GetEntityByUUID(bodyID) : entity;
-					if (!body || !HasPhysicsBody(body))
-						ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), bodyID != 0 ? "BodyEntity needs a RigidBody and a collider for the joint to work." : "This entity needs a RigidBody and a collider for the joint to work.");
+					const Entity body = joint.BodyEntity != 0 ? scene->GetEntityByUUID(joint.BodyEntity) : entity;
+					if (!body)
+						ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "BodyEntity is missing; the joint is not built.");
+					else if (!HasPhysicsBody(body))
+						ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), joint.BodyEntity != 0 ? "BodyEntity needs a RigidBody and a collider for the joint to work." : "This entity needs a RigidBody and a collider for the joint to work.");
+					else
+					{
+						// Physics builds the joint frame from the body's transform and skips one it cannot decompose.
+						glm::vec3 translation;
+						glm::quat rotation;
+						glm::vec3 scale;
+						if (!Math::DecomposeTransform(scene->GetWorldTransform(body), translation, rotation, scale))
+							ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "The body's transform is degenerate (e.g. a zero scale); the joint is not built.");
+					}
 				}
 			}
 			ImGui::PopID();
