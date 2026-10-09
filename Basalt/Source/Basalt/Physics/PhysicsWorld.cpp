@@ -477,14 +477,17 @@ namespace Basalt {
 			return JPH::SpringSettings(JPH::ESpringMode::FrequencyAndDamping, frequency, damping);
 		}
 
-		// The spring a Position motor pulls toward its target with (0 Hz = as stiff as the force limit allows).
+		// The spring a Position motor pulls toward its target with. Jolt switches a position motor off when its
+		// spring has no stiffness, so the frequency must be positive.
 		JPH::SpringSettings SanitizeMotorSpring(const JointComponent& joint, std::vector<std::string>& warnings)
 		{
-			if (joint.MotorSpringFrequency < 0.0f)
-				warnings.emplace_back(fmt::format("MotorSpringFrequency {} is negative; using 0", joint.MotorSpringFrequency));
+			const float defaultFrequency = JointComponent().MotorSpringFrequency;
+			const bool validFrequency = joint.MotorSpringFrequency > 0.0f;
+			if (!validFrequency)
+				warnings.emplace_back(fmt::format("MotorSpringFrequency {} must be greater than 0; using {}", joint.MotorSpringFrequency, defaultFrequency));
 			if (joint.MotorSpringDamping < 0.0f)
 				warnings.emplace_back(fmt::format("MotorSpringDamping {} is negative; using 0", joint.MotorSpringDamping));
-			return JPH::SpringSettings(JPH::ESpringMode::FrequencyAndDamping, std::max(joint.MotorSpringFrequency, 0.0f), std::max(joint.MotorSpringDamping, 0.0f));
+			return JPH::SpringSettings(JPH::ESpringMode::FrequencyAndDamping, validFrequency ? joint.MotorSpringFrequency : defaultFrequency, std::max(joint.MotorSpringDamping, 0.0f));
 		}
 
 		JPH::EMotorState ToJoltMotorState(JointMotorMode mode)
@@ -1374,14 +1377,22 @@ namespace Basalt {
 				glm::vec3 angularPosition(0.0f);
 				for (int i = 0; i < 3; i++)
 				{
-					const JointMotorMode linearMode = joint.LinearMotorMode[i];
-					const JointMotorMode angularMode = joint.AngularMotorMode[i];
 					const auto linearAxis = static_cast<EAxis>(EAxis::TranslationX + i);
 					const auto angularAxis = static_cast<EAxis>(EAxis::RotationX + i);
+					// Jolt skips motors only when a whole group (translation or rotation) is locked; a motor on one
+					// locked axis would fight the lock, so it stays off.
+					JointMotorMode linearMode = joint.LinearMotorMode[i];
+					JointMotorMode angularMode = joint.AngularMotorMode[i];
 					if (linearMode != JointMotorMode::Off && sixDOF->IsFixedAxis(linearAxis))
+					{
 						warnings.emplace_back(fmt::format("six-DOF linear {} motor has no effect: the axis is locked{}", s_AxisNames[i], joint.UseLimits ? "" : " (translation is locked without UseLimits)"));
+						linearMode = JointMotorMode::Off;
+					}
 					if (angularMode != JointMotorMode::Off && sixDOF->IsFixedAxis(angularAxis))
+					{
 						warnings.emplace_back(fmt::format("six-DOF angular {} motor has no effect: the axis is locked", s_AxisNames[i]));
+						angularMode = JointMotorMode::Off;
+					}
 					if (linearMode == JointMotorMode::Velocity)
 						linearVelocity[i] = joint.LinearMotorTarget[i];
 					else if (linearMode == JointMotorMode::Position)
@@ -1493,10 +1504,11 @@ namespace Basalt {
 				}
 				case JointType::SixDOF:
 				{
-					// Motors act along the joint frame's axes, alongside the parts that hold the locked axes.
+					// Motors only run while a group is partly free, and then both lambdas are per joint-frame axis, so
+					// they add component-wise (like a hinge's limit and motor lambdas).
 					const auto* sixDOF = static_cast<const JPH::SixDOFConstraint*>(constraint);
-					forceImpulse = combine(sixDOF->GetTotalLambdaPosition().Length(), sixDOF->GetTotalLambdaMotorTranslation().Length());
-					torqueImpulse = combine(sixDOF->GetTotalLambdaRotation().Length(), sixDOF->GetTotalLambdaMotorRotation().Length());
+					forceImpulse = (sixDOF->GetTotalLambdaPosition() + sixDOF->GetTotalLambdaMotorTranslation()).Length();
+					torqueImpulse = (sixDOF->GetTotalLambdaRotation() + sixDOF->GetTotalLambdaMotorRotation()).Length();
 					break;
 				}
 			}

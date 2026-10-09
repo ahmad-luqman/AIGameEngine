@@ -273,7 +273,7 @@ namespace Basalt {
 		// motor may apply.
 		float MotorMaxForce = 1000.0f;
 		// The spring a Position motor pulls toward its target with (hinge, slider, six-DOF): a higher frequency
-		// (Hz) is stiffer, 0 = as stiff as MotorMaxForce allows. Damping is a ratio, 1 = critically damped.
+		// (Hz, > 0) is stiffer, still capped by MotorMaxForce. Damping is a ratio, 1 = critically damped.
 		float MotorSpringFrequency = 2.0f;
 		float MotorSpringDamping = 1.0f;
 		// The joint breaks when its constraint force (N) or torque (N·m), motor and limit effort included,

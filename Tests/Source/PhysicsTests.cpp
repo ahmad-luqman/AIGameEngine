@@ -1657,7 +1657,7 @@ TEST_SUITE("Physics")
 		CHECK(CountMessages(before, "six-DOF linear Z motor has no effect: the axis is locked") == 1);
 		CHECK(CountMessages(before, "six-DOF angular Y motor has no effect: the axis is locked") == 1);
 		CHECK(CountMessages(before, "six-DOF linear Y motor has no effect: the axis is locked (translation is locked without UseLimits)") == 1);
-		CHECK(CountMessages(before, "MotorSpringFrequency -1 is negative; using 0") == 1);
+		CHECK(CountMessages(before, "MotorSpringFrequency -1 must be greater than 0; using 2") == 1);
 		CHECK(physics.HasJoint(box));
 		CHECK(physics.HasJoint(locked));
 
@@ -1666,6 +1666,47 @@ TEST_SUITE("Physics")
 		physics.SetLinearVelocity(box, { 0.0f, 4.0f, 0.0f });
 		Simulate(scene, 0.5f);
 		CHECK(box.GetTransform().Translation.y > 1.5f);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("A motor on a locked six-DOF axis stays off and cannot break the joint")
+	{
+		Scene scene;
+		// Twist is free, swing is locked: a fast velocity motor on a locked swing axis must not fight the
+		// lock (Jolt only skips motors when a whole group is locked).
+		Entity limb = CreateWeightlessBox(scene, { 0.0f, 0.0f, 0.0f });
+		auto& joint = limb.AddComponent<JointComponent>();
+		joint.Type = JointType::SixDOF;
+		joint.Axis = { 1.0f, 0.0f, 0.0f };
+		joint.SecondaryAxis = { 0.0f, 1.0f, 0.0f };
+		joint.UseLimits = true;
+		joint.AngularLimitMin = { -180.0f, 0.0f, 0.0f };
+		joint.AngularLimitMax = { 180.0f, 0.0f, 0.0f };
+		joint.AngularMotorMode = { JointMotorMode::Off, JointMotorMode::Velocity, JointMotorMode::Off };
+		joint.AngularMotorTarget = { 0.0f, 2000.0f, 0.0f };
+		joint.MotorMaxForce = 10000.0f;
+		joint.BreakTorque = 50.0f;
+		scene.OnSimulationStart();
+		Simulate(scene, 0.5f);
+		CHECK(scene.GetPhysicsWorld()->HasJoint(limb));
+		CHECK(glm::length(scene.GetPhysicsWorld()->GetAngularVelocity(limb)) < 0.01f);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("A non-positive motor spring frequency falls back to the default and still drives")
+	{
+		Scene scene;
+		Entity arm = CreateWeightlessBox(scene, { 0.0f, 0.0f, 0.0f });
+		auto& servo = arm.AddComponent<JointComponent>();
+		servo.Axis = { 0.0f, 0.0f, 1.0f };
+		servo.MotorMode = JointMotorMode::Position;
+		servo.MotorTarget = 45.0f;
+		servo.MotorSpringFrequency = 0.0f;
+		const uint64_t before = Log::GetHistory().GetTotalCount();
+		scene.OnSimulationStart();
+		Simulate(scene, 3.0f);
+		CHECK(scene.GetPhysicsWorld()->GetJointPosition(arm).value() == doctest::Approx(45.0f).epsilon(0.02));
+		CHECK(CountMessages(before, "MotorSpringFrequency 0 must be greater than 0; using 2") == 1);
 		scene.OnSimulationStop();
 	}
 
