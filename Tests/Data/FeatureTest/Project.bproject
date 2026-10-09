@@ -4,5 +4,9 @@
 	"StartScene": "Assets/Scenes/FeatureTest.bscene",
 	"WindowWidth": 1280,
 	"WindowHeight": 720,
-	"Fullscreen": false
+	"Fullscreen": false,
+	"PhysicsLayers": {
+		"Names": ["Default", "Ghost", "Debris"],
+		"IgnoredPairs": [["Default", "Ghost"]]
+	}
 }

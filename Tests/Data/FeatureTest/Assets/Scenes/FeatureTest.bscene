@@ -80,6 +80,10 @@
 		{ "ID": 30, "Name": "GatePost", "Components": { "Transform": { "Translation": [-12, 1, 0] }, "RigidBody": {}, "BoxCollider": { "HalfExtents": [0.1, 1, 0.1] } } },
 		{ "ID": 31, "Name": "GateDoor", "Components": { "Transform": { "Translation": [-11, 1, 0] }, "RigidBody": { "Type": "Dynamic", "GravityFactor": 0 }, "BoxCollider": { "HalfExtents": [0.8, 0.9, 0.05] }, "Joint": { "Type": "Hinge", "ConnectedEntity": 30, "Anchor": [-0.9, 0, 0], "Axis": [0, 1, 0], "UseLimits": true, "LimitMin": -90, "LimitMax": 90 } } },
 		{ "ID": 32, "Name": "WeakLink", "Components": { "Transform": { "Translation": [-14, 3, 0] }, "RigidBody": { "Type": "Dynamic" }, "SphereCollider": { "Radius": 0.2 }, "Joint": { "Type": "Distance", "ConnectedAnchor": [-14, 4, 0], "BreakForce": 1 }, "Script": { "Script": "Assets/Scripts/Probe.lua" } } },
+		{ "ID": 40, "Name": "GhostBox", "Components": { "Transform": { "Translation": [14, 2, 12] }, "RigidBody": { "Type": "Dynamic", "Layer": "Ghost" }, "BoxCollider": {} } },
+		{ "ID": 41, "Name": "DebrisBox", "Components": { "Transform": { "Translation": [16, 2, 12] }, "RigidBody": { "Type": "Dynamic", "Layer": "Debris" }, "BoxCollider": {} } },
+		{ "ID": 42, "Name": "BulletWall", "Components": { "Transform": { "Translation": [15, 1, 14] }, "RigidBody": {}, "BoxCollider": { "HalfExtents": [0.025, 1, 1] } } },
+		{ "ID": 43, "Name": "Bullet", "Components": { "Transform": { "Translation": [10, 1, 14] }, "RigidBody": { "Type": "Dynamic", "GravityFactor": 0, "LinearDamping": 0, "Continuous": true }, "SphereCollider": { "Radius": 0.05 } } },
 		{ "ID": 21, "Name": "PrefabInstanceMarker", "Components": {
 			"Transform": { "Translation": [8, 0, 6] },
 			"Prefab": { "Prefab": "Assets/Prefabs/Projectile.bprefab" } } },
