@@ -30,6 +30,10 @@ Write scripts with `asset.write` (or directly as files under `<project>/Assets/S
   (`{"Names": ["Default", "Player", "Pickup"], "IgnoredPairs": [["Player", "Pickup"]]}`). Set
   `RigidBody.Continuous` on fast projectiles. Probe the world with `Physics.Raycast/SphereCast/BoxCast/OverlapSphere/OverlapBox`
   (options: `Ignore`, `Layers`, `IncludeTriggers`, `All`; see Docs/ScriptingAPI.md).
+- Joints (`Joint` component): `Fixed`, `Point`, `Hinge`, `Slider`, `Distance`, `Cone`, `SixDOF` (ragdolls).
+  An entity holds one joint; for several on one body (a rung on two ropes) give each its own child entity
+  with `"BodyEntity": "<body name>"`. `LimitSpringFrequency` makes limits springy (a distance joint without
+  limits becomes a bungee).
 - Use `Math.Seed(n)` for reproducible randomness, `Debug.Draw*` to visualise logic, `Game.Quit()` to exit.
 - Check every script compiles: `$B --project P script.check '{"path": "Assets/Scripts/Game.lua"}'`.
 

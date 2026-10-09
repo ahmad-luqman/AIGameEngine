@@ -68,7 +68,7 @@ Adds the component if missing and sets the given fields (others keep their value
 | Parameter | Type / description |
 |-----------|--------------------|
 | `component` | string, e.g. 'RigidBody' |
-| `data` | object of fields; entity references (Joint ConnectedEntity) take an ID or name |
+| `data` | object of fields; entity references (Joint BodyEntity, ConnectedEntity) take an ID or name |
 | `entity` | ID or name |
 
 ### `component.types`
@@ -83,7 +83,7 @@ Creates an entity, optionally with a parent and components ({"Mesh": {...}, ...}
 
 | Parameter | Type / description |
 |-----------|--------------------|
-| `components` | object: component name -> fields; entity references (Joint ConnectedEntity) take an ID or name |
+| `components` | object: component name -> fields; entity references (Joint BodyEntity, ConnectedEntity) take an ID or name |
 | `name` | string |
 | `parent` | entity ID or name |
 

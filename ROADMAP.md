@@ -49,9 +49,6 @@ The features most games need, roughly in order of impact.
 
 ### Physics
 
-- **Joint follow-ups — S.** Joints shipped with one `JointComponent` per entity; allow several (for
-  example a ladder rung held by two ropes), and add spring-softened limits plus cone/six-DOF types
-  (ragdolls) on top of the same lifecycle.
 - **Mesh and convex-hull colliders — M.** New `MeshColliderComponent` (`Mesh`, `MeshIndex`, `Convex`
   flag). Static bodies use `JPH::MeshShape`, dynamic bodies a `JPH::ConvexHullShape` built from the
   vertices. Cache cooked shapes per mesh asset. Without this, imported levels cannot collide by their
@@ -61,6 +58,11 @@ The features most games need, roughly in order of impact.
   Platformers and first-person games need it, and `FixedRotation` dynamic bodies are a poor substitute.
 - **Physics materials and per-pair callbacks — S.** Combine modes for friction and restitution;
   contact point, normal and impulse in `OnCollisionBegin`.
+- **Powered ragdolls — S.** Joints now cover ragdolls (six-DOF and cone types, several joints per body
+  through joint entities, spring-softened limits), but only hinges and sliders have motors. Add six-DOF
+  motors (per-axis velocity/position targets, or a target orientation; Jolt's cone joint has none) so
+  animation can drive a ragdoll. Also: explicit free six-DOF axes (today a wide limit stands in for one), a `GetJointRotation`
+  for cone and six-DOF joints, and soft rotation limits if Jolt adds them.
 
 ### Rendering
 
