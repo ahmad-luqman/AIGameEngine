@@ -204,7 +204,28 @@ TEST_SUITE("Serialization")
 		entity.GetComponent<ScriptComponent>().Script = "Assets/Scripts/Test.lua";
 		entity.GetComponent<ScriptComponent>().Properties = { { "Speed", 3.5 }, { "Target", { 1, 2, 3 } } };
 		JointComponent& joint = entity.GetComponent<JointComponent>();
-		joint = { JointType::Distance, UUID(0xF000000000000001ull), { 1.0f, 2.0f, 3.0f }, { -1.0f, -2.0f, -3.0f }, { 0.0f, 0.0f, 1.0f }, true, 0.5f, 4.0f, JointMotorMode::Velocity, 12.0f, 250.0f, 100.0f, 50.0f, true };
+		joint = { .Type = JointType::Distance,
+				  .BodyEntity = UUID(0xF000000000000002ull),
+				  .ConnectedEntity = UUID(0xF000000000000001ull),
+				  .Anchor = { 1.0f, 2.0f, 3.0f },
+				  .ConnectedAnchor = { -1.0f, -2.0f, -3.0f },
+				  .Axis = { 0.0f, 0.0f, 1.0f },
+				  .SecondaryAxis = { 0.0f, 1.0f, 0.0f },
+				  .UseLimits = true,
+				  .LimitMin = 0.5f,
+				  .LimitMax = 4.0f,
+				  .LimitSpringFrequency = 3.0f,
+				  .LimitSpringDamping = 0.25f,
+				  .LinearLimitMin = { -0.1f, -0.2f, -0.3f },
+				  .LinearLimitMax = { 0.1f, 0.2f, 0.3f },
+				  .AngularLimitMin = { -10.0f, -20.0f, -30.0f },
+				  .AngularLimitMax = { 10.0f, 20.0f, 30.0f },
+				  .MotorMode = JointMotorMode::Velocity,
+				  .MotorTarget = 12.0f,
+				  .MotorMaxForce = 250.0f,
+				  .BreakForce = 100.0f,
+				  .BreakTorque = 50.0f,
+				  .EnableCollision = true };
 
 		const nlohmann::json json = SceneSerializer::SerializeScene(scene);
 		Scene loaded;
@@ -405,7 +426,7 @@ TEST_SUITE("Serialization")
 			INFO("component: " << info.Name);
 			if (info.Name == "Joint")
 			{
-				CHECK(info.EntityFields == std::vector<std::string>{ "ConnectedEntity" });
+				CHECK(info.EntityFields == std::vector<std::string>{ "BodyEntity", "ConnectedEntity" });
 				CHECK(info.RemapEntityReferences);
 			}
 			else
@@ -447,6 +468,61 @@ TEST_SUITE("Serialization")
 		Entity instance2 = instance.GetChildren()[1];
 		CHECK(instance1.GetComponent<JointComponent>().ConnectedEntity == anchor.GetUUID());
 		CHECK(instance2.GetComponent<JointComponent>().ConnectedEntity == instance1.GetUUID());
+	}
+
+	TEST_CASE("Joint entities inside a duplicated tree or prefab move the copied body")
+	{
+		BasaltTest::TempProject project("JointBodyPrefab");
+		Scene scene;
+		Entity anchor = scene.CreateEntity("Anchor");
+		Entity rung = scene.CreateEntity("Rung");
+		// Two joint entities under the rung, each holding one joint of the rung's body.
+		Entity left = scene.CreateChildEntity(rung, "Left");
+		Entity right = scene.CreateChildEntity(rung, "Right");
+		for (Entity holder : { left, right })
+		{
+			auto& joint = holder.AddComponent<JointComponent>();
+			joint.BodyEntity = rung.GetUUID();
+			joint.ConnectedEntity = anchor.GetUUID();
+		}
+
+		Entity copy = scene.DuplicateEntity(rung);
+		REQUIRE(copy.GetChildren().size() == 2);
+		for (Entity holder : copy.GetChildren())
+		{
+			CHECK(holder.GetComponent<JointComponent>().BodyEntity == copy.GetUUID());
+			CHECK(holder.GetComponent<JointComponent>().ConnectedEntity == anchor.GetUUID());
+		}
+		CHECK(left.GetComponent<JointComponent>().BodyEntity == rung.GetUUID());
+
+		std::string error;
+		const std::filesystem::path path = project.GetDirectory() / "Assets/Prefabs/Rung.bprefab";
+		REQUIRE(SceneSerializer::SavePrefab(rung, path, error));
+		Entity instance = SceneSerializer::InstantiatePrefab(scene, path, "Assets/Prefabs/Rung.bprefab", {}, error);
+		REQUIRE_MESSAGE(instance, error);
+		REQUIRE(instance.GetChildren().size() == 2);
+		for (Entity holder : instance.GetChildren())
+			CHECK(holder.GetComponent<JointComponent>().BodyEntity == instance.GetUUID());
+	}
+
+	TEST_CASE("Joints saved before BodyEntity, limit springs and six-DOF limits load with defaults")
+	{
+		Scene scene;
+		Entity entity = scene.CreateEntity("Door");
+		std::string error;
+		// The full field set written by earlier builds.
+		const nlohmann::json old = { { "Type", "Hinge" }, { "ConnectedEntity", 7 }, { "Anchor", { 0, 1, 0 } }, { "ConnectedAnchor", { 0, 0, 0 } }, { "Axis", { 0, 1, 0 } }, { "UseLimits", true }, { "LimitMin", -45 }, { "LimitMax", 90 }, { "MotorMode", "Off" }, { "MotorTarget", 0 }, { "MotorMaxForce", 1000 }, { "BreakForce", 0 }, { "BreakTorque", 0 }, { "EnableCollision", false } };
+		REQUIRE_MESSAGE(ComponentRegistry::AddOrPatch(entity, "Joint", old, error), error);
+		const JointComponent& joint = entity.GetComponent<JointComponent>();
+		const JointComponent defaults;
+		CHECK(joint.BodyEntity == 0);
+		CHECK(joint.ConnectedEntity == 7);
+		CHECK(joint.LimitMax == 90.0f);
+		CHECK(joint.SecondaryAxis == defaults.SecondaryAxis);
+		CHECK(joint.LimitSpringFrequency == 0.0f);
+		CHECK(joint.LimitSpringDamping == 1.0f);
+		CHECK(joint.LinearLimitMin == defaults.LinearLimitMin);
+		CHECK(joint.AngularLimitMax == defaults.AngularLimitMax);
 	}
 
 	TEST_CASE("A prefab with joints spawned during play builds them between the new copies")
