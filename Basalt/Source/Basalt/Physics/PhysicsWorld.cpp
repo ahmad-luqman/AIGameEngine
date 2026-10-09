@@ -251,8 +251,8 @@ namespace Basalt {
 					const float min = std::clamp(joint.LimitMin, -range, 0.0f);
 					const float max = std::clamp(joint.LimitMax, 0.0f, range);
 					if (min != joint.LimitMin || max != joint.LimitMax)
-						warnings.push_back(fmt::format("{} limits [{}, {}] must satisfy {} (the rest pose is 0); clamped to [{}, {}]", JointTypeName(joint.Type), joint.LimitMin,
-													   joint.LimitMax, hinge ? "-180 <= LimitMin <= 0 <= LimitMax <= 180 degrees" : "LimitMin <= 0 <= LimitMax", min, max));
+						warnings.emplace_back(fmt::format("{} limits [{}, {}] must satisfy {} (the rest pose is 0); clamped to [{}, {}]", JointTypeName(joint.Type), joint.LimitMin,
+														  joint.LimitMax, hinge ? "-180 <= LimitMin <= 0 <= LimitMax <= 180 degrees" : "LimitMin <= 0 <= LimitMax", min, max));
 					return { min, max };
 				}
 				case JointType::Distance:
@@ -260,14 +260,14 @@ namespace Basalt {
 					const float min = std::max(joint.LimitMin, 0.0f);
 					const float max = std::max(joint.LimitMax, min);
 					if (min != joint.LimitMin || max != joint.LimitMax)
-						warnings.push_back(fmt::format("distance limits [{}, {}] must satisfy 0 <= LimitMin <= LimitMax; clamped to [{}, {}]", joint.LimitMin, joint.LimitMax, min, max));
+						warnings.emplace_back(fmt::format("distance limits [{}, {}] must satisfy 0 <= LimitMin <= LimitMax; clamped to [{}, {}]", joint.LimitMin, joint.LimitMax, min, max));
 					if (max <= 0.0f)
-						warnings.push_back("distance limits with LimitMax <= 0 pull the anchors together");
+						warnings.emplace_back("distance limits with LimitMax <= 0 pull the anchors together");
 					return { min, max };
 				}
 				case JointType::Fixed:
 				case JointType::Point:
-					warnings.push_back(fmt::format("UseLimits has no effect on {} joints", JointTypeName(joint.Type)));
+					warnings.emplace_back(fmt::format("UseLimits has no effect on {} joints", JointTypeName(joint.Type)));
 					break;
 			}
 			return { 0.0f, 0.0f };
@@ -789,11 +789,11 @@ namespace Basalt {
 		const auto [limitMin, limitMax] = SanitizeLimits(joint, warnings);
 		const bool motorAllowed = joint.Type == JointType::Hinge || joint.Type == JointType::Slider;
 		if (joint.MotorMode != JointMotorMode::Off && !motorAllowed)
-			warnings.push_back(fmt::format("only hinge and slider joints have motors; MotorMode is ignored on {} joints", JointTypeName(joint.Type)));
+			warnings.emplace_back(fmt::format("only hinge and slider joints have motors; MotorMode is ignored on {} joints", JointTypeName(joint.Type)));
 		if (joint.MotorMaxForce < 0.0f)
-			warnings.push_back(fmt::format("MotorMaxForce {} is negative; using 0", joint.MotorMaxForce));
+			warnings.emplace_back(fmt::format("MotorMaxForce {} is negative; using 0", joint.MotorMaxForce));
 		if (joint.BreakTorque > 0.0f && (joint.Type == JointType::Point || joint.Type == JointType::Distance))
-			warnings.push_back(fmt::format("BreakTorque has no effect on {} joints, which hold no torque", JointTypeName(joint.Type)));
+			warnings.emplace_back(fmt::format("BreakTorque has no effect on {} joints, which hold no torque", JointTypeName(joint.Type)));
 		const JPH::EMotorState motorState = ToJoltMotorState(joint.MotorMode);
 		const float motorLimit = std::max(joint.MotorMaxForce, 0.0f);
 
@@ -814,7 +814,7 @@ namespace Basalt {
 				else if (motorState == JPH::EMotorState::Position)
 				{
 					if (joint.MotorTarget < -180.0f || joint.MotorTarget > 180.0f)
-						warnings.push_back("hinge position motor targets must be within [-180, 180] degrees; clamped");
+						warnings.emplace_back("hinge position motor targets must be within [-180, 180] degrees; clamped");
 					hinge->SetTargetAngle(glm::radians(std::clamp(joint.MotorTarget, -180.0f, 180.0f)));
 				}
 				break;
@@ -954,7 +954,7 @@ namespace Basalt {
 		auto self = impl.Bodies.find(entity.GetUUID());
 		if (self == impl.Bodies.end())
 		{
-			warnings.push_back(fmt::format("not built: the entity {}", describeMissingBody(entity)));
+			warnings.emplace_back(fmt::format("not built: the entity {}", describeMissingBody(entity)));
 			return;
 		}
 
@@ -966,13 +966,13 @@ namespace Basalt {
 			connected = m_Scene->GetEntityByUUID(joint.ConnectedEntity);
 			if (!connected || connected == entity)
 			{
-				warnings.push_back(fmt::format("not built: it connects to {} entity {}", connected ? "its own" : "a missing", static_cast<uint64_t>(joint.ConnectedEntity)));
+				warnings.emplace_back(fmt::format("not built: it connects to {} entity {}", connected ? "its own" : "a missing", static_cast<uint64_t>(joint.ConnectedEntity)));
 				return;
 			}
 			auto other = impl.Bodies.find(joint.ConnectedEntity);
 			if (other == impl.Bodies.end())
 			{
-				warnings.push_back(fmt::format("not built: the connected entity '{}' {}", connected.GetName(), describeMissingBody(connected)));
+				warnings.emplace_back(fmt::format("not built: the connected entity '{}' {}", connected.GetName(), describeMissingBody(connected)));
 				return;
 			}
 			bodyIDs[0] = other->second.ID;
@@ -981,7 +981,7 @@ namespace Basalt {
 		// Jolt only moves dynamic bodies; a constraint between static and kinematic bodies does nothing.
 		if (self->second.Type != RigidBodyType::Dynamic && connectedType != RigidBodyType::Dynamic)
 		{
-			warnings.push_back("not built: it connects no dynamic body (only static, kinematic or the world) and would have no effect");
+			warnings.emplace_back("not built: it connects no dynamic body (only static, kinematic or the world) and would have no effect");
 			return;
 		}
 
@@ -994,7 +994,7 @@ namespace Basalt {
 		glm::vec3 scale;
 		if (!Math::DecomposeTransform(world, position, rotation, scale))
 		{
-			warnings.push_back("not built: the entity has a degenerate transform");
+			warnings.emplace_back("not built: the entity has a degenerate transform");
 			return;
 		}
 		const glm::vec3 anchor = glm::vec3(world * glm::vec4(joint.Anchor, 1.0f));
@@ -1002,7 +1002,7 @@ namespace Basalt {
 		if (glm::length(axis) < 1e-6f)
 		{
 			if (joint.Type == JointType::Hinge || joint.Type == JointType::Slider)
-				warnings.push_back("Axis is zero; using local Y");
+				warnings.emplace_back("Axis is zero; using local Y");
 			axis = glm::vec3(0.0f, 1.0f, 0.0f);
 		}
 		const JPH::Vec3 joltAxis = ToJolt(glm::normalize(rotation * axis));
