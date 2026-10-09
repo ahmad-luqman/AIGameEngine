@@ -94,6 +94,67 @@ namespace Basalt {
 			}
 		}
 
+		// Draws a joint from its body's world transform: the anchor, the axis (hinge rotation, slider
+		// direction, cone or twist axis), the six-DOF secondary axis, the cone's rim and a line to the
+		// connected entity (or the distance joint's world anchor).
+		void DrawJoint(Scene& scene, const JointComponent& joint, const glm::mat4& bodyWorld, const glm::vec4& color)
+		{
+			glm::vec3 translation;
+			glm::quat rotation;
+			glm::vec3 scale;
+			if (!Math::DecomposeTransform(bodyWorld, translation, rotation, scale))
+				return;
+			const glm::vec3 anchor = glm::vec3(bodyWorld * glm::vec4(joint.Anchor, 1.0f));
+			DebugDraw::Sphere(anchor, 0.08f, color, 12);
+
+			// Axes turn with the body's rotation only, as in physics.
+			const bool hasAxis = joint.Type == JointType::Hinge || joint.Type == JointType::Slider || joint.Type == JointType::Cone || joint.Type == JointType::SixDOF;
+			if (hasAxis && glm::length(joint.Axis) > 1e-6f)
+			{
+				const glm::vec3 axis = glm::normalize(rotation * joint.Axis);
+				DebugDraw::Arrow(anchor - axis * 0.5f, anchor + axis * 0.5f, color);
+				if (joint.Type == JointType::SixDOF)
+				{
+					glm::vec3 secondary = rotation * joint.SecondaryAxis;
+					secondary -= glm::dot(secondary, axis) * axis;
+					if (glm::length(secondary) > 1e-4f)
+						DebugDraw::Arrow(anchor, anchor + glm::normalize(secondary) * 0.3f, color);
+				}
+				// The cone the axis must stay in, drawn as its rim 0.5 m along the axis.
+				const float halfAngle = glm::radians(std::clamp(joint.LimitMax, 0.0f, 180.0f));
+				if (joint.Type == JointType::Cone && joint.UseLimits && halfAngle < glm::radians(85.0f))
+				{
+					const glm::vec3 reference = std::abs(axis.y) < 0.9f ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::vec3(1.0f, 0.0f, 0.0f);
+					const glm::vec3 u = glm::normalize(glm::cross(axis, reference));
+					const glm::vec3 v = glm::cross(axis, u);
+					const glm::vec3 center = anchor + axis * 0.5f;
+					const float radius = 0.5f * std::tan(halfAngle);
+					constexpr int Segments = 24;
+					glm::vec3 previous = center + u * radius;
+					for (int i = 1; i <= Segments; i++)
+					{
+						const float angle = glm::two_pi<float>() * static_cast<float>(i) / static_cast<float>(Segments);
+						const glm::vec3 point = center + (u * std::cos(angle) + v * std::sin(angle)) * radius;
+						DebugDraw::Line(previous, point, color);
+						previous = point;
+					}
+					DebugDraw::Line(anchor, center + u * radius, color);
+					DebugDraw::Line(anchor, center - u * radius, color);
+				}
+			}
+
+			if (Entity connected = joint.ConnectedEntity != 0 ? scene.GetEntityByUUID(joint.ConnectedEntity) : Entity{})
+			{
+				const glm::mat4 connectedWorld = scene.GetWorldTransform(connected);
+				const glm::vec3 target = joint.Type == JointType::Distance ? glm::vec3(connectedWorld * glm::vec4(joint.ConnectedAnchor, 1.0f)) : glm::vec3(connectedWorld[3]);
+				DebugDraw::Line(anchor, target, color);
+			}
+			else if (joint.Type == JointType::Distance)
+			{
+				DebugDraw::Line(anchor, joint.ConnectedAnchor, color);
+			}
+		}
+
 	}
 
 	EditorLayer::EditorLayer(EditorOptions options)
@@ -505,27 +566,12 @@ namespace Basalt {
 					DebugDraw::Sphere(center + up * halfHeight, radius, color, 16);
 					DebugDraw::Sphere(center - up * halfHeight, radius, color, 16);
 				}
-				// Joints: anchor, axis (hinge rotation / slider direction) and a line to what it is attached to.
+				// Joints: anchor, axes, cone rim and a line to what it is attached to. A joint entity draws at the
+				// body it moves, whose local space holds its anchor and axes.
 				if (const auto* joint = entity.TryGetComponent<JointComponent>())
 				{
-					const glm::vec4 jointColor = selected ? s_SelectionColor : s_JointColor;
-					const glm::vec3 anchor = glm::vec3(world * glm::vec4(joint->Anchor, 1.0f));
-					DebugDraw::Sphere(anchor, 0.08f, jointColor, 12);
-					if ((joint->Type == JointType::Hinge || joint->Type == JointType::Slider) && glm::length(joint->Axis) > 1e-6f)
-					{
-						const glm::vec3 axis = glm::normalize(glm::vec3(unscaled * glm::vec4(joint->Axis, 0.0f)));
-						DebugDraw::Arrow(anchor - axis * 0.5f, anchor + axis * 0.5f, jointColor);
-					}
-					if (Entity connected = joint->ConnectedEntity != 0 ? scene.GetEntityByUUID(joint->ConnectedEntity) : Entity{})
-					{
-						const glm::mat4 connectedWorld = scene.GetWorldTransform(connected);
-						const glm::vec3 target = joint->Type == JointType::Distance ? glm::vec3(connectedWorld * glm::vec4(joint->ConnectedAnchor, 1.0f)) : glm::vec3(connectedWorld[3]);
-						DebugDraw::Line(anchor, target, jointColor);
-					}
-					else if (joint->Type == JointType::Distance)
-					{
-						DebugDraw::Line(anchor, joint->ConnectedAnchor, jointColor);
-					}
+					if (Entity body = joint->BodyEntity != 0 ? scene.GetEntityByUUID(joint->BodyEntity) : entity)
+						DrawJoint(scene, *joint, body == entity ? world : scene.GetWorldTransform(body), selected ? s_SelectionColor : s_JointColor);
 				}
 			}
 
