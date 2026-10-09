@@ -467,8 +467,9 @@ namespace Basalt {
 		notify(bodyID, connectedID);
 		if (connectedID != 0)
 			notify(connectedID, bodyID);
-		// A separate joint entity hears about its own joint too, with the far side like its body.
-		if (holderID != bodyID)
+		// A separate joint entity hears about its own joint too, with the far side like its body, unless it is
+		// one of the two bodies and was notified above.
+		if (holderID != bodyID && holderID != connectedID)
 			notify(holderID, connectedID);
 	}
 

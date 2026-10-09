@@ -51,7 +51,8 @@ namespace Basalt {
 		void OnEntityDestroyed(Entity entity);
 		void OnContactEvent(ContactEventType type, Entity a, Entity b);
 		// Calls OnJointBreak on the joint's body and on the connected entity (if any), each with the other,
-		// and on the entity holding the JointComponent when that is a separate joint entity.
+		// and once on the entity holding the JointComponent when it is neither (with the connected entity, or
+		// nil for the world).
 		void OnJointBroken(Entity holder, Entity body, Entity connected);
 
 		// Creates the entity's script instance now (and calls OnCreate) if it has a ScriptComponent and no
