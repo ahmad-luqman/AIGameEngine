@@ -210,7 +210,8 @@ locked and free axes and rotation limits stay rigid (Jolt has no soft rotation l
 **Powered ragdolls.** Six-DOF joints have a motor per axis of the joint frame: `LinearMotorMode` and
 `AngularMotorMode` are `{ x, y, z }` lists of `"Off"`, `"Velocity"` or `"Position"`, and each axis reads
 its component of `LinearMotorTarget` (m/s, or meters from the rest pose) or `AngularMotorTarget` (degrees/s
-around the axis). The `Position` rotation axes together drive toward one target orientation, given as Euler
+around the axis; a velocity axis turns with the joint's own body, so it drifts from the connected body's
+frame as the joint bends). The `Position` rotation axes together drive toward one target orientation, given as Euler
 angles in degrees relative to the rest pose (the same form `GetJointRotation()` returns, so a recorded pose
 plays back as is); position targets beyond the limits are clamped to them. A motor on a locked axis does
 nothing and warns. `MotorMaxForce` caps both the force and the torque, and a `Position` motor pulls with a

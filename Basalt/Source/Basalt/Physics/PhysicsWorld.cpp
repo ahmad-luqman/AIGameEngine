@@ -1396,7 +1396,13 @@ namespace Basalt {
 					if (linearMode == JointMotorMode::Velocity)
 						linearVelocity[i] = joint.LinearMotorTarget[i];
 					else if (linearMode == JointMotorMode::Position)
+					{
+						// Jolt clamps only the orientation target; past a limit the motor would push against it at
+						// MotorMaxForce indefinitely.
 						linearPosition[i] = joint.LinearMotorTarget[i];
+						if (!sixDOF->IsFreeAxis(linearAxis))
+							linearPosition[i] = std::clamp(linearPosition[i], limits.LinearMin[i], limits.LinearMax[i]);
+					}
 					if (angularMode == JointMotorMode::Velocity)
 						angularVelocity[i] = joint.AngularMotorTarget[i];
 					else if (angularMode == JointMotorMode::Position)

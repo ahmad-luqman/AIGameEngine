@@ -1693,6 +1693,84 @@ TEST_SUITE("Physics")
 		scene.OnSimulationStop();
 	}
 
+	TEST_CASE("Six-DOF motor effort breaks a joint, and position targets stop at the limits")
+	{
+		Scene scene;
+		// A carriage free along X, pushed by a velocity motor into a static block: it stalls at its force
+		// limit, well above BreakForce, so the motor's effort breaks the joint.
+		auto carriage = [&](float z) {
+			Entity box = CreateWeightlessBox(scene, { 0.0f, 0.0f, z });
+			auto& joint = box.AddComponent<JointComponent>();
+			joint.Type = JointType::SixDOF;
+			joint.Axis = { 1.0f, 0.0f, 0.0f };
+			joint.SecondaryAxis = { 0.0f, 1.0f, 0.0f };
+			joint.FreeLinearAxes.x = true;
+			joint.LinearMotorMode[0] = JointMotorMode::Velocity;
+			// Reaching 0.5 m/s within one step takes 30 N, below the break force.
+			joint.LinearMotorTarget.x = 0.5f;
+			joint.MotorMaxForce = 200.0f;
+			joint.BreakForce = 50.0f;
+			return box;
+		};
+		Entity pushing = carriage(0.0f);
+		Entity block = CreateBox(scene, { 1.1f, 0.0f, 0.0f });
+		block.GetComponent<RigidBodyComponent>().Type = RigidBodyType::Static;
+		// The same carriage with nothing in its way.
+		Entity coasting = carriage(5.0f);
+
+		// A position target beyond the 1 m limit is clamped to it, so the spring eases in toward 1 m. Unclamped,
+		// a 4 Hz spring toward 3 m would hit the limit after about 0.035 s and keep pressing into it.
+		Entity reaching = CreateWeightlessBox(scene, { 0.0f, 0.0f, 10.0f });
+		auto& reach = reaching.AddComponent<JointComponent>();
+		reach.Type = JointType::SixDOF;
+		reach.Axis = { 1.0f, 0.0f, 0.0f };
+		reach.SecondaryAxis = { 0.0f, 1.0f, 0.0f };
+		reach.UseLimits = true;
+		reach.LinearLimitMax = { 1.0f, 0.0f, 0.0f };
+		reach.LinearMotorMode[0] = JointMotorMode::Position;
+		reach.LinearMotorTarget.x = 3.0f;
+		reach.MotorSpringFrequency = 4.0f;
+		reach.MotorMaxForce = 1000.0f;
+
+		scene.OnSimulationStart();
+		Simulate(scene, 0.1f);
+		// Critically damped toward 1 m: about 0.71 m after 0.1 s.
+		CHECK(reaching.GetTransform().Translation.x == doctest::Approx(0.71f).epsilon(0.1));
+		Simulate(scene, 1.9f);
+		CHECK_FALSE(pushing.HasComponent<JointComponent>());
+		CHECK(coasting.HasComponent<JointComponent>());
+		CHECK(reaching.GetTransform().Translation.x == doctest::Approx(1.0f).epsilon(0.02));
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Hinge and slider motor springs set how fast a position motor arrives")
+	{
+		Scene scene;
+		auto servo = [&](float x, JointType type, float frequency) {
+			Entity box = CreateWeightlessBox(scene, { x, 0.0f, 0.0f });
+			auto& joint = box.AddComponent<JointComponent>();
+			joint.Type = type;
+			joint.Axis = { 0.0f, 0.0f, 1.0f };
+			joint.MotorMode = JointMotorMode::Position;
+			joint.MotorTarget = type == JointType::Hinge ? 60.0f : 1.0f;
+			joint.MotorSpringFrequency = frequency;
+			joint.MotorMaxForce = 1000.0f;
+			return box;
+		};
+		Entity softHinge = servo(0.0f, JointType::Hinge, 0.5f);
+		Entity stiffHinge = servo(5.0f, JointType::Hinge, 5.0f);
+		Entity softSlider = servo(10.0f, JointType::Slider, 0.5f);
+		Entity stiffSlider = servo(15.0f, JointType::Slider, 5.0f);
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		Simulate(scene, 0.5f);
+		CHECK(physics.GetJointPosition(stiffHinge).value() == doctest::Approx(60.0f).epsilon(0.05));
+		CHECK(physics.GetJointPosition(softHinge).value() < 45.0f);
+		CHECK(physics.GetJointPosition(stiffSlider).value() == doctest::Approx(1.0f).epsilon(0.05));
+		CHECK(physics.GetJointPosition(softSlider).value() < 0.75f);
+		scene.OnSimulationStop();
+	}
+
 	TEST_CASE("A non-positive motor spring frequency falls back to the default and still drives")
 	{
 		Scene scene;
