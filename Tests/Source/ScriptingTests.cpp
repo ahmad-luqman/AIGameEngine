@@ -422,8 +422,17 @@ TEST_SUITE("Scripting")
 				self.Layers = table.concat(Physics.GetLayers(), ",")
 				self.BadLayer = fails("unknown physics layer 'Nope'", Physics.Raycast, top, down, 100, { Layers = { "Nope" } })
 				self.BadOption = fails("unknown query option 'Layer'", Physics.Raycast, top, down, 100, { Layer = { "Enemy" } })
-				self.BadType = fails("must be a boolean", Physics.OverlapSphere, top, 1, { All = 1 })
+				self.BadType = fails("must be a boolean", Physics.Raycast, top, down, 100, { All = 1 })
 				self.BadOptions = fails("must be an Entity or a table", Physics.Raycast, top, down, 100, 5)
+				self.OverlapAll = fails("only applies to casts", Physics.OverlapSphere, top, 1, { All = true })
+				self.EmptyLayers = fails("non-empty table", Physics.Raycast, top, down, 100, { Layers = {} })
+				self.ArrayOptions = fails("named keys", Physics.Raycast, top, down, 100, { hit.Entity })
+				self.ZeroDirection = fails("Raycast: direction must not be zero", Physics.Raycast, top, Vec3(0, 0, 0), 100)
+				self.NegativeDistance = fails("SphereCast: maxDistance must be a positive number", Physics.SphereCast, top, 1, down, -1)
+				self.ZeroRadius = fails("OverlapSphere: radius must be a positive number", Physics.OverlapSphere, top, 0)
+				self.NanOrigin = fails("SphereCast: origin must be finite", Physics.SphereCast, Vec3(0 / 0, 0, 0), 1, down, 10)
+				self.FlatBox = fails("BoxCast: halfExtents must be positive", Physics.BoxCast, top, Vec3(1, 0, 1), Quat.Identity(), down, 10)
+				self.ZeroRotation = fails("OverlapBox: rotation must be a non-zero quaternion", Physics.OverlapBox, top, Vec3(1, 1, 1), Quat(0, 0, 0, 0))
 			end
 			return Probe
 		)");
@@ -466,7 +475,61 @@ TEST_SUITE("Scripting")
 		CHECK(Field(scene, probe, "BadOption") == true);
 		CHECK(Field(scene, probe, "BadType") == true);
 		CHECK(Field(scene, probe, "BadOptions") == true);
+		for (const char* check : { "OverlapAll", "EmptyLayers", "ArrayOptions", "ZeroDirection", "NegativeDistance", "ZeroRadius", "NanOrigin", "FlatBox", "ZeroRotation" })
+		{
+			INFO(check);
+			CHECK(Field(scene, probe, check) == true);
+		}
 		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Bodies on an ignored layer pair raise no collision or trigger events")
+	{
+		BasaltTest::TempProject project("IgnoredPairEvents");
+		const std::string script = project.WriteFile("Assets/Scripts/Counter.lua", R"(
+			local Counter = {}
+			function Counter:OnCreate() self.Collisions = 0; self.Triggers = 0 end
+			function Counter:OnCollisionBegin(other) self.Collisions = self.Collisions + 1 end
+			function Counter:OnTriggerEnter(other) self.Triggers = self.Triggers + 1 end
+			return Counter
+		)");
+
+		auto fallThrough = [&script](bool ignored) {
+			PhysicsLayers layers;
+			std::string error;
+			REQUIRE(layers.Add("Ghost", error));
+			if (ignored)
+				layers.SetCollides(0, 1, false);
+			Scene scene;
+			scene.SetPhysicsLayers(layers);
+			Entity zone = scene.CreateEntity("Zone");
+			zone.GetTransform().Translation = { 0.0f, 2.0f, 0.0f };
+			zone.AddComponent<RigidBodyComponent>().IsTrigger = true;
+			zone.AddComponent<BoxColliderComponent>();
+			Entity floor = scene.CreateEntity("Floor");
+			floor.GetTransform().Translation = { 0.0f, -0.5f, 0.0f };
+			floor.AddComponent<RigidBodyComponent>();
+			floor.AddComponent<BoxColliderComponent>().HalfExtents = { 10.0f, 0.5f, 10.0f };
+			Entity ghost = AddScripted(scene, "Ghost", script);
+			ghost.GetTransform().Translation = { 0.0f, 4.0f, 0.0f };
+			auto& body = ghost.AddComponent<RigidBodyComponent>();
+			body.Type = RigidBodyType::Dynamic;
+			body.Layer = "Ghost";
+			ghost.AddComponent<SphereColliderComponent>().Radius = 0.25f;
+
+			scene.OnRuntimeStart();
+			for (int i = 0; i < 90; i++)
+				scene.OnUpdate(Step);
+			const auto counts = std::make_pair(Field(scene, ghost, "Collisions").get<int>(), Field(scene, ghost, "Triggers").get<int>());
+			CHECK(scene.GetScriptEngine()->GetErrors().empty());
+			scene.OnRuntimeStop();
+			return counts;
+		};
+		// The control run shows the same setup does produce both events when the layers collide.
+		const auto colliding = fallThrough(false);
+		CHECK(colliding.first >= 1);
+		CHECK(colliding.second >= 1);
+		CHECK(fallThrough(true) == std::make_pair(0, 0));
 	}
 
 	TEST_CASE("ExecuteString and property discovery")

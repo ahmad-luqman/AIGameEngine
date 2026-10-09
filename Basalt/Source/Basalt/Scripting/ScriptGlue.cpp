@@ -18,6 +18,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/quaternion.hpp>
 
+#include <cmath>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
@@ -110,8 +111,9 @@ namespace Basalt {
 
 		// The optional last argument of every Physics query: an Entity to ignore (Raycast's original
 		// argument) or a table { Ignore = entity, Layers = { "Default", ... }, IncludeTriggers = bool,
-		// All = bool }. Strict, so a misspelled option is an error rather than silently ignored.
-		QueryOptions ParseQueryOptions(const PhysicsWorld& physics, const sol::object& options)
+		// All = bool }. Strict, so a misspelled option, an option the query does not take (All on an
+		// overlap) or an empty Layers list is an error rather than silently ignored.
+		QueryOptions ParseQueryOptions(const PhysicsWorld& physics, const sol::object& options, bool allowAll)
 		{
 			QueryOptions result;
 			if (!options.valid() || options.get_type() == sol::type::lua_nil)
@@ -124,9 +126,12 @@ namespace Basalt {
 			if (options.get_type() != sol::type::table)
 				throw std::runtime_error("query options must be an Entity or a table");
 
+			constexpr const char* LayersError = "query option 'Layers' must be a non-empty table of layer names";
 			for (const auto& [key, value] : options.as<sol::table>())
 			{
-				const std::string name = key.get_type() == sol::type::string ? key.as<std::string>() : std::string();
+				if (key.get_type() != sol::type::string)
+					throw std::runtime_error("query options must use named keys (Ignore, Layers, IncludeTriggers, All)");
+				const std::string name = key.as<std::string>();
 				if (name == "Ignore")
 				{
 					if (!value.is<ScriptEntity>())
@@ -136,25 +141,38 @@ namespace Basalt {
 				else if (name == "Layers")
 				{
 					if (value.get_type() != sol::type::table)
-						throw std::runtime_error("query option 'Layers' must be a table of layer names");
+						throw std::runtime_error(LayersError);
 					std::vector<std::string> names;
 					for (const auto& [index, layer] : value.as<sol::table>())
 					{
 						if (layer.get_type() != sol::type::string)
-							throw std::runtime_error("query option 'Layers' must be a table of layer names");
+							throw std::runtime_error(LayersError);
 						names.push_back(layer.as<std::string>());
 					}
+					// An empty list would match nothing, which is never what a script means.
+					if (names.empty())
+						throw std::runtime_error(LayersError);
 					std::string error;
 					const auto mask = physics.GetLayers().MaskFromNames(names, error);
 					if (!mask)
 						throw std::runtime_error(error);
 					result.Filter.LayerMask = *mask;
 				}
-				else if (name == "IncludeTriggers" || name == "All")
+				else if (name == "IncludeTriggers")
 				{
 					if (value.get_type() != sol::type::boolean)
-						throw std::runtime_error("query option '" + name + "' must be a boolean");
-					(name == "All" ? result.All : result.Filter.IncludeTriggers) = value.as<bool>();
+						throw std::runtime_error("query option 'IncludeTriggers' must be a boolean");
+					result.Filter.IncludeTriggers = value.as<bool>();
+				}
+				else if (name == "All" && allowAll)
+				{
+					if (value.get_type() != sol::type::boolean)
+						throw std::runtime_error("query option 'All' must be a boolean");
+					result.All = value.as<bool>();
+				}
+				else if (name == "All")
+				{
+					throw std::runtime_error("query option 'All' only applies to casts; overlaps always return every entity");
 				}
 				else
 				{
@@ -164,10 +182,48 @@ namespace Basalt {
 			return result;
 		}
 
-		sol::table MakeHit(sol::state_view lua, ScriptContext& context, const RaycastHit& hit)
+		// Lua queries reject arguments the C++ API would quietly treat as "nothing hit", since a script
+		// with a bad vector would otherwise just see empty results.
+		void RequireFiniteVector(const char* query, const char* argument, const glm::vec3& v)
 		{
+			if (!std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.z))
+				throw std::runtime_error(std::string(query) + ": " + argument + " must be finite");
+		}
+
+		void RequirePositive(const char* query, const char* argument, float value)
+		{
+			if (!std::isfinite(value) || value <= 0.0f)
+				throw std::runtime_error(std::string(query) + ": " + argument + " must be a positive number");
+		}
+
+		void RequireCast(const char* query, const glm::vec3& origin, const glm::vec3& direction, float maxDistance)
+		{
+			RequireFiniteVector(query, "origin", origin);
+			RequireFiniteVector(query, "direction", direction);
+			if (glm::length(direction) <= 0.0f)
+				throw std::runtime_error(std::string(query) + ": direction must not be zero");
+			RequirePositive(query, "maxDistance", maxDistance);
+		}
+
+		void RequireBox(const char* query, const glm::vec3& halfExtents, const glm::quat& rotation)
+		{
+			RequireFiniteVector(query, "halfExtents", halfExtents);
+			if (halfExtents.x <= 0.0f || halfExtents.y <= 0.0f || halfExtents.z <= 0.0f)
+				throw std::runtime_error(std::string(query) + ": halfExtents must be positive");
+			const float length = glm::length(rotation);
+			if (!std::isfinite(length) || length <= 1e-6f)
+				throw std::runtime_error(std::string(query) + ": rotation must be a non-zero quaternion");
+		}
+
+		// A hit as a Lua table, or nil when its entity no longer exists (hits and overlaps treat a missing
+		// entity the same way: it is left out).
+		sol::object MakeHit(sol::state_view lua, ScriptContext& context, const RaycastHit& hit)
+		{
+			Entity entity = RequireScene(context).GetEntityByUUID(hit.EntityID);
+			if (!entity)
+				return sol::lua_nil;
 			sol::table result = lua.create_table();
-			result["Entity"] = MakeEntity(lua, context, RequireScene(context).GetEntityByUUID(hit.EntityID));
+			result["Entity"] = MakeEntity(lua, context, entity);
 			result["Point"] = hit.Point;
 			result["Normal"] = hit.Normal;
 			result["Distance"] = hit.Distance;
@@ -182,7 +238,10 @@ namespace Basalt {
 			{
 				sol::table hits = lua.create_table();
 				for (const RaycastHit& hit : castAll(options.Filter))
-					hits.add(MakeHit(lua, context, hit));
+				{
+					if (sol::object table = MakeHit(lua, context, hit); table.valid() && table.get_type() != sol::type::lua_nil)
+						hits.add(table);
+				}
 				return hits;
 			}
 			const std::optional<RaycastHit> hit = castClosest(options.Filter);
@@ -431,26 +490,35 @@ namespace Basalt {
 			sol::table physics = lua.create_named_table("Physics");
 			physics["Raycast"] = [&context](sol::this_state state, const glm::vec3& origin, const glm::vec3& direction, float maxDistance, const sol::object& options) -> sol::object {
 				const PhysicsWorld& world = RequirePhysics(context);
+				RequireCast("Raycast", origin, direction, maxDistance);
 				return CastResult(
-					state, context, ParseQueryOptions(world, options), [&](const PhysicsQueryFilter& filter) { return world.RaycastAll(origin, direction, maxDistance, filter); }, [&](const PhysicsQueryFilter& filter) { return world.Raycast(origin, direction, maxDistance, filter); });
+					state, context, ParseQueryOptions(world, options, true), [&](const PhysicsQueryFilter& filter) { return world.RaycastAll(origin, direction, maxDistance, filter); }, [&](const PhysicsQueryFilter& filter) { return world.Raycast(origin, direction, maxDistance, filter); });
 			};
 			physics["SphereCast"] = [&context](sol::this_state state, const glm::vec3& origin, float radius, const glm::vec3& direction, float maxDistance, const sol::object& options) -> sol::object {
 				const PhysicsWorld& world = RequirePhysics(context);
+				RequireCast("SphereCast", origin, direction, maxDistance);
+				RequirePositive("SphereCast", "radius", radius);
 				return CastResult(
-					state, context, ParseQueryOptions(world, options), [&](const PhysicsQueryFilter& filter) { return world.SphereCastAll(origin, radius, direction, maxDistance, filter); }, [&](const PhysicsQueryFilter& filter) { return world.SphereCast(origin, radius, direction, maxDistance, filter); });
+					state, context, ParseQueryOptions(world, options, true), [&](const PhysicsQueryFilter& filter) { return world.SphereCastAll(origin, radius, direction, maxDistance, filter); }, [&](const PhysicsQueryFilter& filter) { return world.SphereCast(origin, radius, direction, maxDistance, filter); });
 			};
 			physics["BoxCast"] = [&context](sol::this_state state, const glm::vec3& origin, const glm::vec3& halfExtents, const glm::quat& rotation, const glm::vec3& direction, float maxDistance, const sol::object& options) -> sol::object {
 				const PhysicsWorld& world = RequirePhysics(context);
+				RequireCast("BoxCast", origin, direction, maxDistance);
+				RequireBox("BoxCast", halfExtents, rotation);
 				return CastResult(
-					state, context, ParseQueryOptions(world, options), [&](const PhysicsQueryFilter& filter) { return world.BoxCastAll(origin, halfExtents, rotation, direction, maxDistance, filter); }, [&](const PhysicsQueryFilter& filter) { return world.BoxCast(origin, halfExtents, rotation, direction, maxDistance, filter); });
+					state, context, ParseQueryOptions(world, options, true), [&](const PhysicsQueryFilter& filter) { return world.BoxCastAll(origin, halfExtents, rotation, direction, maxDistance, filter); }, [&](const PhysicsQueryFilter& filter) { return world.BoxCast(origin, halfExtents, rotation, direction, maxDistance, filter); });
 			};
 			physics["OverlapSphere"] = [&context](sol::this_state state, const glm::vec3& center, float radius, const sol::object& options) {
 				const PhysicsWorld& world = RequirePhysics(context);
-				return MakeEntityList(state, context, world.OverlapSphere(center, radius, ParseQueryOptions(world, options).Filter));
+				RequireFiniteVector("OverlapSphere", "center", center);
+				RequirePositive("OverlapSphere", "radius", radius);
+				return MakeEntityList(state, context, world.OverlapSphere(center, radius, ParseQueryOptions(world, options, false).Filter));
 			};
 			physics["OverlapBox"] = [&context](sol::this_state state, const glm::vec3& center, const glm::vec3& halfExtents, const glm::quat& rotation, const sol::object& options) {
 				const PhysicsWorld& world = RequirePhysics(context);
-				return MakeEntityList(state, context, world.OverlapBox(center, halfExtents, rotation, ParseQueryOptions(world, options).Filter));
+				RequireFiniteVector("OverlapBox", "center", center);
+				RequireBox("OverlapBox", halfExtents, rotation);
+				return MakeEntityList(state, context, world.OverlapBox(center, halfExtents, rotation, ParseQueryOptions(world, options, false).Filter));
 			};
 			physics["GetLayers"] = [&context](sol::this_state state) {
 				sol::state_view view(state);
