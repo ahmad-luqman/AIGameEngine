@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include <Basalt/Core/Log.h>
 #include <Basalt/Physics/PhysicsWorld.h>
 #include <Basalt/Scene/ComponentRegistry.h>
 #include <Basalt/Scene/Entity.h>
@@ -311,6 +312,40 @@ TEST_SUITE("Serialization")
 
 		project.WriteFile("future.bscene", R"({"Version":999})");
 		CHECK_FALSE(SceneSerializer::LoadScene(project.GetDirectory() / "future.bscene", error));
+	}
+
+	TEST_CASE("Scenes from before named physics layers load when their layer settings convert losslessly")
+	{
+		BasaltTest::TempProject project("LegacyLayers");
+		std::string error;
+
+		// What every earlier build wrote for a RigidBody: an index and a full 32-bit or 16-bit mask.
+		project.WriteFile("legacy.bscene", R"({"Entities":[
+			{"ID":5,"Name":"Floor","Components":{"RigidBody":{"Type":"Static","Layer":0,"CollisionMask":4294967295}}},
+			{"ID":6,"Name":"Crate","Components":{"RigidBody":{"Type":"Dynamic","Layer":3,"CollisionMask":65535}}}]})");
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		const Ref<Scene> legacy = SceneSerializer::LoadScene(project.GetDirectory() / "legacy.bscene", error);
+		REQUIRE_MESSAGE(legacy, error);
+		CHECK(legacy->GetEntityByUUID(5).GetComponent<RigidBodyComponent>().Layer == "Default");
+		CHECK(legacy->GetEntityByUUID(6).GetComponent<RigidBodyComponent>().Layer == "Default");
+		// Saving writes the new format.
+		const nlohmann::json saved = SceneSerializer::SerializeScene(*legacy);
+		CHECK(saved.dump().find("CollisionMask") == std::string::npos);
+		uint64_t next = 0;
+		int warnings = 0;
+		for (const LogMessage& message : Log::GetHistory().GetMessagesSince(since, next))
+			warnings += message.Text.find("before named physics layers") != std::string::npos ? 1 : 0;
+		CHECK(warnings <= 1);
+
+		// A mask that excluded layers has no equivalent without project layers.
+		project.WriteFile("masked.bscene", R"({"Entities":[{"ID":5,"Name":"Ghost","Components":{"RigidBody":{"Layer":1,"CollisionMask":3}}}]})");
+		CHECK_FALSE(SceneSerializer::LoadScene(project.GetDirectory() / "masked.bscene", error));
+		CHECK(error.find("Ghost") != std::string::npos);
+		CHECK(error.find("collision matrix") != std::string::npos);
+
+		project.WriteFile("fraction.bscene", R"({"Entities":[{"ID":5,"Name":"Odd","Components":{"RigidBody":{"Layer":1.5}}}]})");
+		CHECK_FALSE(SceneSerializer::LoadScene(project.GetDirectory() / "fraction.bscene", error));
+		CHECK(error.find("layer name") != std::string::npos);
 	}
 
 	TEST_CASE("Prefabs save and instantiate with fresh UUIDs")

@@ -2,6 +2,7 @@
 
 #include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
+#include "Basalt/Physics/PhysicsLayers.h"
 #include "Basalt/Scene/Entity.h"
 
 #include <glm/gtc/type_ptr.hpp>
@@ -9,6 +10,7 @@
 #include <iterator>
 #include <stdexcept>
 #include <unordered_set>
+#include <utility>
 
 namespace Basalt {
 
@@ -92,6 +94,22 @@ namespace Basalt {
 				for (size_t i = 0; i < N; i++)
 					valid += (i ? ", " : "") + std::string(names[i]);
 				throw std::runtime_error(std::string("field '") + name + "' has invalid value '" + text + "' (valid: " + valid + ")");
+			}
+
+			// Older files may store a field in a form (or under a name) that is no longer written. When
+			// `isLegacy` accepts the stored value it is consumed and passed to `convert` instead of being read
+			// normally; the field is not listed among the component's fields. Returns whether that happened.
+			template<typename IsLegacy, typename Convert>
+			bool LegacyField(const char* name, IsLegacy&& isLegacy, Convert&& convert)
+			{
+				if (!m_Data)
+					return false;
+				auto it = m_Data->find(name);
+				if (it == m_Data->end() || !isLegacy(*it))
+					return false;
+				m_Consumed.insert(name);
+				convert(*it);
+				return true;
 			}
 
 			void CheckUnknownKeys(const std::vector<std::string>& validFields) const
@@ -315,8 +333,27 @@ namespace Basalt {
 			r.Field("Restitution", c.Restitution);
 			r.Field("IsTrigger", c.IsTrigger);
 			r.Field("FixedRotation", c.FixedRotation);
-			r.Field("Layer", c.Layer);
+			// Before named layers, files stored Layer as an index and a per-body CollisionMask (16 bits used).
+			// A body whose mask excluded no layer collides exactly like one on Default, so it converts
+			// losslessly; any other mask cannot be expressed without project layers and is an error.
+			const bool legacyMask = r.LegacyField("CollisionMask", [](const json&) { return true; }, [](const json& mask) {
+				if (!mask.is_number_unsigned() && !mask.is_number_integer())
+					throw std::runtime_error("field 'CollisionMask' must be an integer");
+				if ((mask.get<int64_t>() & 0xFFFF) != 0xFFFF)
+					throw std::runtime_error("field 'CollisionMask' was replaced by the project's collision matrix: name the layers with project.set physicsLayers, set Layer to a name and remove CollisionMask"); });
+			const bool legacyLayer = r.LegacyField("Layer", [](const json& layer) { return layer.is_number(); }, [&c](const json& layer) {
+				if (!layer.is_number_unsigned() && !layer.is_number_integer())
+					throw std::runtime_error("field 'Layer' must be a layer name");
+				c.Layer = PhysicsLayers::DefaultLayerName; });
+			if (!legacyLayer)
+				r.Field("Layer", c.Layer);
 			r.Field("Continuous", c.Continuous);
+			if (legacyMask || legacyLayer)
+			{
+				static bool s_Warned = false;
+				if (!std::exchange(s_Warned, true))
+					BS_CORE_WARN("Scene: converted RigidBody Layer/CollisionMask from before named physics layers to Layer \"Default\"; save the scene or prefab to update the file");
+			}
 		}
 
 		void Fields(FieldReader& r, BoxColliderComponent& c)
