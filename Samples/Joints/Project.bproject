@@ -2,6 +2,12 @@
 	"Format": "BasaltProject",
 	"Fullscreen": false,
 	"Name": "Joints",
+	"PhysicsLayers": {
+		"IgnoredPairs": [],
+		"Names": [
+			"Default"
+		]
+	},
 	"StartScene": "Assets/Scenes/Joints.bscene",
 	"WindowHeight": 900,
 	"WindowWidth": 1600

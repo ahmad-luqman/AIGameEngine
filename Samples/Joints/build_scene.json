@@ -1189,6 +1189,560 @@
   }
  },
  {
+  "command": "entity.create",
+  "params": {
+   "name": "LadderRung0",
+   "components": {
+    "Transform": {
+     "Translation": [
+      -6,
+      4.5,
+      -4
+     ],
+     "Scale": [
+      2.4,
+      0.15,
+      0.15
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Cube"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.55,
+      0.38,
+      0.2,
+      1
+     ],
+     "Metallic": 0.0,
+     "Roughness": 0.7
+    },
+    "RigidBody": {
+     "Type": "Dynamic",
+     "Mass": 2
+    },
+    "BoxCollider": {}
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "LadderRung0RopeLeft",
+   "parent": "LadderRung0",
+   "components": {
+    "Joint": {
+     "Type": "Distance",
+     "BodyEntity": "LadderRung0",
+     "Anchor": [
+      -0.45,
+      0,
+      0
+     ],
+     "ConnectedAnchor": [
+      -7.08,
+      6,
+      -4
+     ]
+    }
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "LadderRung0RopeRight",
+   "parent": "LadderRung0",
+   "components": {
+    "Joint": {
+     "Type": "Distance",
+     "BodyEntity": "LadderRung0",
+     "Anchor": [
+      0.45,
+      0,
+      0
+     ],
+     "ConnectedAnchor": [
+      -4.92,
+      6,
+      -4
+     ]
+    }
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "LadderRung1",
+   "components": {
+    "Transform": {
+     "Translation": [
+      -6,
+      3.3,
+      -4
+     ],
+     "Scale": [
+      2.4,
+      0.15,
+      0.15
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Cube"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.55,
+      0.38,
+      0.2,
+      1
+     ],
+     "Metallic": 0.0,
+     "Roughness": 0.7
+    },
+    "RigidBody": {
+     "Type": "Dynamic",
+     "Mass": 2
+    },
+    "BoxCollider": {}
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "LadderRung1RopeLeft",
+   "parent": "LadderRung1",
+   "components": {
+    "Joint": {
+     "Type": "Distance",
+     "BodyEntity": "LadderRung1",
+     "Anchor": [
+      -0.45,
+      0,
+      0
+     ],
+     "ConnectedEntity": "LadderRung0",
+     "ConnectedAnchor": [
+      -0.45,
+      0,
+      0
+     ]
+    }
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "LadderRung1RopeRight",
+   "parent": "LadderRung1",
+   "components": {
+    "Joint": {
+     "Type": "Distance",
+     "BodyEntity": "LadderRung1",
+     "Anchor": [
+      0.45,
+      0,
+      0
+     ],
+     "ConnectedEntity": "LadderRung0",
+     "ConnectedAnchor": [
+      0.45,
+      0,
+      0
+     ]
+    }
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "LadderRung2",
+   "components": {
+    "Transform": {
+     "Translation": [
+      -6,
+      2.1,
+      -4
+     ],
+     "Scale": [
+      2.4,
+      0.15,
+      0.15
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Cube"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.55,
+      0.38,
+      0.2,
+      1
+     ],
+     "Metallic": 0.0,
+     "Roughness": 0.7
+    },
+    "RigidBody": {
+     "Type": "Dynamic",
+     "Mass": 2
+    },
+    "BoxCollider": {}
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "LadderRung2RopeLeft",
+   "parent": "LadderRung2",
+   "components": {
+    "Joint": {
+     "Type": "Distance",
+     "BodyEntity": "LadderRung2",
+     "Anchor": [
+      -0.45,
+      0,
+      0
+     ],
+     "ConnectedEntity": "LadderRung1",
+     "ConnectedAnchor": [
+      -0.45,
+      0,
+      0
+     ]
+    }
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "LadderRung2RopeRight",
+   "parent": "LadderRung2",
+   "components": {
+    "Joint": {
+     "Type": "Distance",
+     "BodyEntity": "LadderRung2",
+     "Anchor": [
+      0.45,
+      0,
+      0
+     ],
+     "ConnectedEntity": "LadderRung1",
+     "ConnectedAnchor": [
+      0.45,
+      0,
+      0
+     ]
+    }
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "Shoulder",
+   "components": {
+    "Transform": {
+     "Translation": [
+      1.5,
+      5.5,
+      -4
+     ],
+     "Scale": [
+      0.4,
+      0.4,
+      0.4
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Sphere"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.9,
+      0.9,
+      0.9,
+      1
+     ],
+     "Metallic": 1,
+     "Roughness": 0.2
+    },
+    "RigidBody": {
+     "Type": "Static"
+    },
+    "SphereCollider": {}
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "UpperArm",
+   "components": {
+    "Transform": {
+     "Translation": [
+      1.5,
+      4.6,
+      -4
+     ],
+     "Scale": [
+      0.3,
+      1.2,
+      0.3
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Cube"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.85,
+      0.65,
+      0.5,
+      1
+     ],
+     "Metallic": 0.0,
+     "Roughness": 0.6
+    },
+    "RigidBody": {
+     "Type": "Dynamic",
+     "Mass": 2
+    },
+    "BoxCollider": {},
+    "Joint": {
+     "Type": "SixDOF",
+     "ConnectedEntity": "Shoulder",
+     "Anchor": [
+      0,
+      0.5,
+      0
+     ],
+     "Axis": [
+      0,
+      -1,
+      0
+     ],
+     "SecondaryAxis": [
+      1,
+      0,
+      0
+     ],
+     "UseLimits": true,
+     "AngularLimitMin": [
+      -30,
+      -70,
+      -40
+     ],
+     "AngularLimitMax": [
+      30,
+      70,
+      40
+     ]
+    }
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "Forearm",
+   "components": {
+    "Transform": {
+     "Translation": [
+      1.5,
+      3.4,
+      -4
+     ],
+     "Scale": [
+      0.25,
+      1.0,
+      0.25
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Cube"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.85,
+      0.65,
+      0.5,
+      1
+     ],
+     "Metallic": 0.0,
+     "Roughness": 0.6
+    },
+    "RigidBody": {
+     "Type": "Dynamic",
+     "Mass": 1.5
+    },
+    "BoxCollider": {},
+    "Joint": {
+     "Type": "Hinge",
+     "ConnectedEntity": "UpperArm",
+     "Anchor": [
+      0,
+      0.5,
+      0
+     ],
+     "Axis": [
+      1,
+      0,
+      0
+     ],
+     "UseLimits": true,
+     "LimitMin": -130,
+     "LimitMax": 0,
+     "LimitSpringFrequency": 3,
+     "LimitSpringDamping": 0.3
+    }
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "Hand",
+   "components": {
+    "Transform": {
+     "Translation": [
+      1.5,
+      2.65,
+      -4
+     ],
+     "Scale": [
+      0.35,
+      0.35,
+      0.35
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Sphere"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.85,
+      0.65,
+      0.5,
+      1
+     ],
+     "Metallic": 0.0,
+     "Roughness": 0.6
+    },
+    "RigidBody": {
+     "Type": "Dynamic",
+     "Mass": 0.5
+    },
+    "SphereCollider": {},
+    "Joint": {
+     "Type": "Cone",
+     "ConnectedEntity": "Forearm",
+     "Anchor": [
+      0,
+      0.7,
+      0
+     ],
+     "Axis": [
+      0,
+      -1,
+      0
+     ],
+     "UseLimits": true,
+     "LimitMax": 35
+    }
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "BungeeHook",
+   "components": {
+    "Transform": {
+     "Translation": [
+      5.5,
+      6.5,
+      -4
+     ],
+     "Scale": [
+      0.3,
+      0.3,
+      0.3
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Sphere"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.9,
+      0.9,
+      0.9,
+      1
+     ],
+     "Metallic": 1,
+     "Roughness": 0.2
+    }
+   }
+  }
+ },
+ {
+  "command": "entity.create",
+  "params": {
+   "name": "BungeeBall",
+   "components": {
+    "Transform": {
+     "Translation": [
+      5.5,
+      4.5,
+      -4
+     ],
+     "Scale": [
+      0.6,
+      0.6,
+      0.6
+     ]
+    },
+    "Mesh": {
+     "Mesh": "builtin://Sphere"
+    },
+    "Material": {
+     "AlbedoColor": [
+      0.2,
+      0.75,
+      0.35,
+      1
+     ],
+     "Metallic": 0.0,
+     "Roughness": 0.4
+    },
+    "RigidBody": {
+     "Type": "Dynamic",
+     "Mass": 3,
+     "LinearDamping": 0.0
+    },
+    "SphereCollider": {},
+    "Joint": {
+     "Type": "Distance",
+     "ConnectedAnchor": [
+      5.5,
+      6.5,
+      -4
+     ],
+     "LimitSpringFrequency": 1.2,
+     "LimitSpringDamping": 0.05
+    }
+   }
+  }
+ },
+ {
   "command": "scene.settings",
   "params": {
    "Renderer": {

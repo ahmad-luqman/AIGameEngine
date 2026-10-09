@@ -34,7 +34,7 @@
 					]
 				}
 			},
-			"ID": 2774874881067894741,
+			"ID": 745558297051751845,
 			"Name": "Camera",
 			"Parent": 0
 		},
@@ -68,7 +68,7 @@
 					]
 				}
 			},
-			"ID": 2571868249086530897,
+			"ID": 4650443154390160684,
 			"Name": "Sun",
 			"Parent": 0
 		},
@@ -98,7 +98,7 @@
 					]
 				}
 			},
-			"ID": 15742897323529870599,
+			"ID": 12284976672712677472,
 			"Name": "Sky",
 			"Parent": 0
 		},
@@ -126,7 +126,7 @@
 					]
 				}
 			},
-			"ID": 10228580463821028952,
+			"ID": 12611054180927794119,
 			"Name": "Director",
 			"Parent": 0
 		},
@@ -201,7 +201,7 @@
 					]
 				}
 			},
-			"ID": 182296990133257390,
+			"ID": 12456448969724138593,
 			"Name": "Ground",
 			"Parent": 0
 		},
@@ -276,7 +276,7 @@
 					]
 				}
 			},
-			"ID": 5101730724364736315,
+			"ID": 13571544219466331978,
 			"Name": "DoorPost",
 			"Parent": 0
 		},
@@ -300,11 +300,22 @@
 						0.0,
 						0.0
 					],
+					"AngularLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"AngularLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"Axis": [
 						0.0,
 						1.0,
 						0.0
 					],
+					"BodyEntity": 0,
 					"BreakForce": 0.0,
 					"BreakTorque": 0.0,
 					"ConnectedAnchor": [
@@ -312,13 +323,30 @@
 						0.0,
 						0.0
 					],
-					"ConnectedEntity": 5101730724364736315,
+					"ConnectedEntity": 13571544219466331978,
 					"EnableCollision": false,
 					"LimitMax": 100.0,
 					"LimitMin": -5.0,
+					"LimitSpringDamping": 1.0,
+					"LimitSpringFrequency": 0.0,
+					"LinearLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"LinearLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"MotorMaxForce": 400.0,
 					"MotorMode": "Position",
 					"MotorTarget": 0.0,
+					"SecondaryAxis": [
+						1.0,
+						0.0,
+						0.0
+					],
 					"Type": "Hinge",
 					"UseLimits": true
 				},
@@ -379,7 +407,7 @@
 					]
 				}
 			},
-			"ID": 4191396463113242113,
+			"ID": 8812841910881839054,
 			"Name": "Door",
 			"Parent": 0
 		},
@@ -454,7 +482,7 @@
 					]
 				}
 			},
-			"ID": 14474349420307742211,
+			"ID": 1124156748715750116,
 			"Name": "PistonBase",
 			"Parent": 0
 		},
@@ -478,11 +506,22 @@
 						0.0,
 						0.0
 					],
+					"AngularLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"AngularLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"Axis": [
 						0.0,
 						1.0,
 						0.0
 					],
+					"BodyEntity": 0,
 					"BreakForce": 0.0,
 					"BreakTorque": 0.0,
 					"ConnectedAnchor": [
@@ -490,13 +529,30 @@
 						0.0,
 						0.0
 					],
-					"ConnectedEntity": 14474349420307742211,
+					"ConnectedEntity": 1124156748715750116,
 					"EnableCollision": false,
 					"LimitMax": 2.200000047683716,
 					"LimitMin": 0.0,
+					"LimitSpringDamping": 1.0,
+					"LimitSpringFrequency": 0.0,
+					"LinearLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"LinearLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"MotorMaxForce": 300.0,
 					"MotorMode": "Position",
 					"MotorTarget": 1.0,
+					"SecondaryAxis": [
+						1.0,
+						0.0,
+						0.0
+					],
 					"Type": "Slider",
 					"UseLimits": true
 				},
@@ -557,7 +613,7 @@
 					]
 				}
 			},
-			"ID": 13205228110604667714,
+			"ID": 8292973326808109256,
 			"Name": "Piston",
 			"Parent": 0
 		},
@@ -607,7 +663,7 @@
 					]
 				}
 			},
-			"ID": 11008832551576456850,
+			"ID": 9737853932838497893,
 			"Name": "ChainHook",
 			"Parent": 0
 		},
@@ -619,11 +675,22 @@
 						0.0,
 						0.0
 					],
+					"AngularLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"AngularLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"Axis": [
 						0.0,
 						1.0,
 						0.0
 					],
+					"BodyEntity": 0,
 					"BreakForce": 0.0,
 					"BreakTorque": 0.0,
 					"ConnectedAnchor": [
@@ -635,9 +702,26 @@
 					"EnableCollision": false,
 					"LimitMax": 0.0,
 					"LimitMin": 0.0,
+					"LimitSpringDamping": 1.0,
+					"LimitSpringFrequency": 0.0,
+					"LinearLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"LinearLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"MotorMaxForce": 1000.0,
 					"MotorMode": "Off",
 					"MotorTarget": 0.0,
+					"SecondaryAxis": [
+						1.0,
+						0.0,
+						0.0
+					],
 					"Type": "Point",
 					"UseLimits": false
 				},
@@ -706,7 +790,7 @@
 					]
 				}
 			},
-			"ID": 2314254848583152782,
+			"ID": 17176253069756451769,
 			"Name": "Link0",
 			"Parent": 0
 		},
@@ -718,11 +802,22 @@
 						0.0,
 						0.0
 					],
+					"AngularLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"AngularLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"Axis": [
 						0.0,
 						1.0,
 						0.0
 					],
+					"BodyEntity": 0,
 					"BreakForce": 0.0,
 					"BreakTorque": 0.0,
 					"ConnectedAnchor": [
@@ -730,13 +825,30 @@
 						0.0,
 						0.0
 					],
-					"ConnectedEntity": 2314254848583152782,
+					"ConnectedEntity": 17176253069756451769,
 					"EnableCollision": false,
 					"LimitMax": 0.0,
 					"LimitMin": 0.0,
+					"LimitSpringDamping": 1.0,
+					"LimitSpringFrequency": 0.0,
+					"LinearLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"LinearLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"MotorMaxForce": 1000.0,
 					"MotorMode": "Off",
 					"MotorTarget": 0.0,
+					"SecondaryAxis": [
+						1.0,
+						0.0,
+						0.0
+					],
 					"Type": "Point",
 					"UseLimits": false
 				},
@@ -805,7 +917,7 @@
 					]
 				}
 			},
-			"ID": 3030674178698185544,
+			"ID": 18420509117764348581,
 			"Name": "Link1",
 			"Parent": 0
 		},
@@ -817,11 +929,22 @@
 						0.0,
 						0.0
 					],
+					"AngularLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"AngularLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"Axis": [
 						0.0,
 						1.0,
 						0.0
 					],
+					"BodyEntity": 0,
 					"BreakForce": 0.0,
 					"BreakTorque": 0.0,
 					"ConnectedAnchor": [
@@ -829,13 +952,30 @@
 						0.0,
 						0.0
 					],
-					"ConnectedEntity": 3030674178698185544,
+					"ConnectedEntity": 18420509117764348581,
 					"EnableCollision": false,
 					"LimitMax": 0.0,
 					"LimitMin": 0.0,
+					"LimitSpringDamping": 1.0,
+					"LimitSpringFrequency": 0.0,
+					"LinearLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"LinearLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"MotorMaxForce": 1000.0,
 					"MotorMode": "Off",
 					"MotorTarget": 0.0,
+					"SecondaryAxis": [
+						1.0,
+						0.0,
+						0.0
+					],
 					"Type": "Point",
 					"UseLimits": false
 				},
@@ -904,7 +1044,7 @@
 					]
 				}
 			},
-			"ID": 74343217129568172,
+			"ID": 9236212802099820896,
 			"Name": "Link2",
 			"Parent": 0
 		},
@@ -916,11 +1056,22 @@
 						0.0,
 						0.0
 					],
+					"AngularLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"AngularLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"Axis": [
 						0.0,
 						1.0,
 						0.0
 					],
+					"BodyEntity": 0,
 					"BreakForce": 0.0,
 					"BreakTorque": 0.0,
 					"ConnectedAnchor": [
@@ -928,13 +1079,30 @@
 						0.0,
 						0.0
 					],
-					"ConnectedEntity": 74343217129568172,
+					"ConnectedEntity": 9236212802099820896,
 					"EnableCollision": false,
 					"LimitMax": 0.0,
 					"LimitMin": 0.0,
+					"LimitSpringDamping": 1.0,
+					"LimitSpringFrequency": 0.0,
+					"LinearLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"LinearLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"MotorMaxForce": 1000.0,
 					"MotorMode": "Off",
 					"MotorTarget": 0.0,
+					"SecondaryAxis": [
+						1.0,
+						0.0,
+						0.0
+					],
 					"Type": "Point",
 					"UseLimits": false
 				},
@@ -1003,7 +1171,7 @@
 					]
 				}
 			},
-			"ID": 15146334682636840009,
+			"ID": 12767717874971918059,
 			"Name": "Link3",
 			"Parent": 0
 		},
@@ -1015,11 +1183,22 @@
 						0.0,
 						0.0
 					],
+					"AngularLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"AngularLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"Axis": [
 						0.0,
 						1.0,
 						0.0
 					],
+					"BodyEntity": 0,
 					"BreakForce": 0.0,
 					"BreakTorque": 0.0,
 					"ConnectedAnchor": [
@@ -1027,13 +1206,30 @@
 						0.0,
 						0.0
 					],
-					"ConnectedEntity": 15146334682636840009,
+					"ConnectedEntity": 12767717874971918059,
 					"EnableCollision": false,
 					"LimitMax": 0.0,
 					"LimitMin": 0.0,
+					"LimitSpringDamping": 1.0,
+					"LimitSpringFrequency": 0.0,
+					"LinearLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"LinearLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"MotorMaxForce": 1000.0,
 					"MotorMode": "Off",
 					"MotorTarget": 0.0,
+					"SecondaryAxis": [
+						1.0,
+						0.0,
+						0.0
+					],
 					"Type": "Point",
 					"UseLimits": false
 				},
@@ -1102,7 +1298,7 @@
 					]
 				}
 			},
-			"ID": 8167025200911526838,
+			"ID": 12812983061604536468,
 			"Name": "Link4",
 			"Parent": 0
 		},
@@ -1114,11 +1310,22 @@
 						0.0,
 						0.0
 					],
+					"AngularLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"AngularLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"Axis": [
 						0.0,
 						1.0,
 						0.0
 					],
+					"BodyEntity": 0,
 					"BreakForce": 0.0,
 					"BreakTorque": 0.0,
 					"ConnectedAnchor": [
@@ -1126,13 +1333,30 @@
 						0.0,
 						0.0
 					],
-					"ConnectedEntity": 8167025200911526838,
+					"ConnectedEntity": 12812983061604536468,
 					"EnableCollision": false,
 					"LimitMax": 0.0,
 					"LimitMin": 0.0,
+					"LimitSpringDamping": 1.0,
+					"LimitSpringFrequency": 0.0,
+					"LinearLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"LinearLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"MotorMaxForce": 1000.0,
 					"MotorMode": "Off",
 					"MotorTarget": 0.0,
+					"SecondaryAxis": [
+						1.0,
+						0.0,
+						0.0
+					],
 					"Type": "Point",
 					"UseLimits": false
 				},
@@ -1201,7 +1425,7 @@
 					]
 				}
 			},
-			"ID": 14071434565742386678,
+			"ID": 8427840340941569549,
 			"Name": "Link5",
 			"Parent": 0
 		},
@@ -1213,11 +1437,22 @@
 						0.0,
 						0.0
 					],
+					"AngularLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"AngularLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"Axis": [
 						0.0,
 						1.0,
 						0.0
 					],
+					"BodyEntity": 0,
 					"BreakForce": 0.0,
 					"BreakTorque": 0.0,
 					"ConnectedAnchor": [
@@ -1225,13 +1460,30 @@
 						0.0,
 						0.0
 					],
-					"ConnectedEntity": 14071434565742386678,
+					"ConnectedEntity": 8427840340941569549,
 					"EnableCollision": false,
 					"LimitMax": 0.0,
 					"LimitMin": 0.0,
+					"LimitSpringDamping": 1.0,
+					"LimitSpringFrequency": 0.0,
+					"LinearLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"LinearLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"MotorMaxForce": 1000.0,
 					"MotorMode": "Off",
 					"MotorTarget": 0.0,
+					"SecondaryAxis": [
+						1.0,
+						0.0,
+						0.0
+					],
 					"Type": "Point",
 					"UseLimits": false
 				},
@@ -1300,7 +1552,7 @@
 					]
 				}
 			},
-			"ID": 9750759044630951640,
+			"ID": 12049986206264155076,
 			"Name": "Link6",
 			"Parent": 0
 		},
@@ -1312,11 +1564,22 @@
 						0.0,
 						0.0
 					],
+					"AngularLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"AngularLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"Axis": [
 						0.0,
 						1.0,
 						0.0
 					],
+					"BodyEntity": 0,
 					"BreakForce": 0.0,
 					"BreakTorque": 0.0,
 					"ConnectedAnchor": [
@@ -1324,13 +1587,30 @@
 						0.0,
 						0.0
 					],
-					"ConnectedEntity": 9750759044630951640,
+					"ConnectedEntity": 12049986206264155076,
 					"EnableCollision": false,
 					"LimitMax": 0.0,
 					"LimitMin": 0.0,
+					"LimitSpringDamping": 1.0,
+					"LimitSpringFrequency": 0.0,
+					"LinearLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"LinearLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"MotorMaxForce": 1000.0,
 					"MotorMode": "Off",
 					"MotorTarget": 0.0,
+					"SecondaryAxis": [
+						1.0,
+						0.0,
+						0.0
+					],
 					"Type": "Point",
 					"UseLimits": false
 				},
@@ -1399,7 +1679,7 @@
 					]
 				}
 			},
-			"ID": 6564384098640908977,
+			"ID": 17036252229472543965,
 			"Name": "Link7",
 			"Parent": 0
 		},
@@ -1449,7 +1729,7 @@
 					]
 				}
 			},
-			"ID": 12644972372534492732,
+			"ID": 8966511977531773044,
 			"Name": "BallHook",
 			"Parent": 0
 		},
@@ -1461,11 +1741,22 @@
 						0.0,
 						0.0
 					],
+					"AngularLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"AngularLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"Axis": [
 						0.0,
 						1.0,
 						0.0
 					],
+					"BodyEntity": 0,
 					"BreakForce": 0.0,
 					"BreakTorque": 0.0,
 					"ConnectedAnchor": [
@@ -1477,9 +1768,26 @@
 					"EnableCollision": false,
 					"LimitMax": 0.0,
 					"LimitMin": 0.0,
+					"LimitSpringDamping": 1.0,
+					"LimitSpringFrequency": 0.0,
+					"LinearLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"LinearLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"MotorMaxForce": 1000.0,
 					"MotorMode": "Off",
 					"MotorTarget": 0.0,
+					"SecondaryAxis": [
+						1.0,
+						0.0,
+						0.0
+					],
 					"Type": "Distance",
 					"UseLimits": false
 				},
@@ -1548,7 +1856,7 @@
 					]
 				}
 			},
-			"ID": 12327341813045700913,
+			"ID": 8715962127929917845,
 			"Name": "WreckingBall",
 			"Parent": 0
 		},
@@ -1627,7 +1935,7 @@
 					]
 				}
 			},
-			"ID": 14663453249791594679,
+			"ID": 14174409521137809144,
 			"Name": "Block0",
 			"Parent": 0
 		},
@@ -1651,11 +1959,22 @@
 						-0.5,
 						0.0
 					],
+					"AngularLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"AngularLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"Axis": [
 						0.0,
 						1.0,
 						0.0
 					],
+					"BodyEntity": 0,
 					"BreakForce": 400.0,
 					"BreakTorque": 300.0,
 					"ConnectedAnchor": [
@@ -1663,13 +1982,30 @@
 						0.0,
 						0.0
 					],
-					"ConnectedEntity": 14663453249791594679,
+					"ConnectedEntity": 14174409521137809144,
 					"EnableCollision": false,
 					"LimitMax": 0.0,
 					"LimitMin": 0.0,
+					"LimitSpringDamping": 1.0,
+					"LimitSpringFrequency": 0.0,
+					"LinearLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"LinearLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"MotorMaxForce": 1000.0,
 					"MotorMode": "Off",
 					"MotorTarget": 0.0,
+					"SecondaryAxis": [
+						1.0,
+						0.0,
+						0.0
+					],
 					"Type": "Fixed",
 					"UseLimits": false
 				},
@@ -1734,7 +2070,7 @@
 					]
 				}
 			},
-			"ID": 16914566242499166025,
+			"ID": 17921991215314870940,
 			"Name": "Block1",
 			"Parent": 0
 		},
@@ -1758,11 +2094,22 @@
 						-0.5,
 						0.0
 					],
+					"AngularLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"AngularLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"Axis": [
 						0.0,
 						1.0,
 						0.0
 					],
+					"BodyEntity": 0,
 					"BreakForce": 400.0,
 					"BreakTorque": 300.0,
 					"ConnectedAnchor": [
@@ -1770,13 +2117,30 @@
 						0.0,
 						0.0
 					],
-					"ConnectedEntity": 16914566242499166025,
+					"ConnectedEntity": 17921991215314870940,
 					"EnableCollision": false,
 					"LimitMax": 0.0,
 					"LimitMin": 0.0,
+					"LimitSpringDamping": 1.0,
+					"LimitSpringFrequency": 0.0,
+					"LinearLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"LinearLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"MotorMaxForce": 1000.0,
 					"MotorMode": "Off",
 					"MotorTarget": 0.0,
+					"SecondaryAxis": [
+						1.0,
+						0.0,
+						0.0
+					],
 					"Type": "Fixed",
 					"UseLimits": false
 				},
@@ -1841,7 +2205,7 @@
 					]
 				}
 			},
-			"ID": 14848484691471422925,
+			"ID": 5227603113283292003,
 			"Name": "Block2",
 			"Parent": 0
 		},
@@ -1865,11 +2229,22 @@
 						-0.5,
 						0.0
 					],
+					"AngularLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"AngularLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"Axis": [
 						0.0,
 						1.0,
 						0.0
 					],
+					"BodyEntity": 0,
 					"BreakForce": 400.0,
 					"BreakTorque": 300.0,
 					"ConnectedAnchor": [
@@ -1877,13 +2252,30 @@
 						0.0,
 						0.0
 					],
-					"ConnectedEntity": 14848484691471422925,
+					"ConnectedEntity": 5227603113283292003,
 					"EnableCollision": false,
 					"LimitMax": 0.0,
 					"LimitMin": 0.0,
+					"LimitSpringDamping": 1.0,
+					"LimitSpringFrequency": 0.0,
+					"LinearLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"LinearLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"MotorMaxForce": 1000.0,
 					"MotorMode": "Off",
 					"MotorTarget": 0.0,
+					"SecondaryAxis": [
+						1.0,
+						0.0,
+						0.0
+					],
 					"Type": "Fixed",
 					"UseLimits": false
 				},
@@ -1948,7 +2340,7 @@
 					]
 				}
 			},
-			"ID": 9919830467870730747,
+			"ID": 13402965269054926790,
 			"Name": "Block3",
 			"Parent": 0
 		},
@@ -1972,11 +2364,22 @@
 						-0.5,
 						0.0
 					],
+					"AngularLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"AngularLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"Axis": [
 						0.0,
 						1.0,
 						0.0
 					],
+					"BodyEntity": 0,
 					"BreakForce": 400.0,
 					"BreakTorque": 300.0,
 					"ConnectedAnchor": [
@@ -1984,13 +2387,30 @@
 						0.0,
 						0.0
 					],
-					"ConnectedEntity": 9919830467870730747,
+					"ConnectedEntity": 13402965269054926790,
 					"EnableCollision": false,
 					"LimitMax": 0.0,
 					"LimitMin": 0.0,
+					"LimitSpringDamping": 1.0,
+					"LimitSpringFrequency": 0.0,
+					"LinearLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"LinearLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"MotorMaxForce": 1000.0,
 					"MotorMode": "Off",
 					"MotorTarget": 0.0,
+					"SecondaryAxis": [
+						1.0,
+						0.0,
+						0.0
+					],
 					"Type": "Fixed",
 					"UseLimits": false
 				},
@@ -2055,7 +2475,7 @@
 					]
 				}
 			},
-			"ID": 10186255497207242832,
+			"ID": 13846406958688200322,
 			"Name": "Block4",
 			"Parent": 0
 		},
@@ -2079,11 +2499,22 @@
 						-0.5,
 						0.0
 					],
+					"AngularLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"AngularLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"Axis": [
 						0.0,
 						1.0,
 						0.0
 					],
+					"BodyEntity": 0,
 					"BreakForce": 400.0,
 					"BreakTorque": 300.0,
 					"ConnectedAnchor": [
@@ -2091,13 +2522,30 @@
 						0.0,
 						0.0
 					],
-					"ConnectedEntity": 10186255497207242832,
+					"ConnectedEntity": 13846406958688200322,
 					"EnableCollision": false,
 					"LimitMax": 0.0,
 					"LimitMin": 0.0,
+					"LimitSpringDamping": 1.0,
+					"LimitSpringFrequency": 0.0,
+					"LinearLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"LinearLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
 					"MotorMaxForce": 1000.0,
 					"MotorMode": "Off",
 					"MotorTarget": 0.0,
+					"SecondaryAxis": [
+						1.0,
+						0.0,
+						0.0
+					],
 					"Type": "Fixed",
 					"UseLimits": false
 				},
@@ -2162,8 +2610,1350 @@
 					]
 				}
 			},
-			"ID": 6374205342374598774,
+			"ID": 17019237556201433453,
 			"Name": "Block5",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.550000011920929,
+						0.3799999952316284,
+						0.20000000298023224,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.699999988079071
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.5,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 2.0,
+					"Restitution": 0.0,
+					"Type": "Dynamic"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						2.4000000953674316,
+						0.15000000596046448,
+						0.15000000596046448
+					],
+					"Translation": [
+						-6.0,
+						4.5,
+						-4.0
+					]
+				}
+			},
+			"ID": 9754921893611674217,
+			"Name": "LadderRung0",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"Joint": {
+					"Anchor": [
+						-0.44999998807907104,
+						0.0,
+						0.0
+					],
+					"AngularLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"AngularLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"Axis": [
+						0.0,
+						1.0,
+						0.0
+					],
+					"BodyEntity": 9754921893611674217,
+					"BreakForce": 0.0,
+					"BreakTorque": 0.0,
+					"ConnectedAnchor": [
+						-7.079999923706055,
+						6.0,
+						-4.0
+					],
+					"ConnectedEntity": 0,
+					"EnableCollision": false,
+					"LimitMax": 0.0,
+					"LimitMin": 0.0,
+					"LimitSpringDamping": 1.0,
+					"LimitSpringFrequency": 0.0,
+					"LinearLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"LinearLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"MotorMaxForce": 1000.0,
+					"MotorMode": "Off",
+					"MotorTarget": 0.0,
+					"SecondaryAxis": [
+						1.0,
+						0.0,
+						0.0
+					],
+					"Type": "Distance",
+					"UseLimits": false
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						0.0,
+						0.0
+					]
+				}
+			},
+			"ID": 8430610456994580591,
+			"Name": "LadderRung0RopeLeft",
+			"Parent": 9754921893611674217
+		},
+		{
+			"Components": {
+				"Joint": {
+					"Anchor": [
+						0.44999998807907104,
+						0.0,
+						0.0
+					],
+					"AngularLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"AngularLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"Axis": [
+						0.0,
+						1.0,
+						0.0
+					],
+					"BodyEntity": 9754921893611674217,
+					"BreakForce": 0.0,
+					"BreakTorque": 0.0,
+					"ConnectedAnchor": [
+						-4.920000076293945,
+						6.0,
+						-4.0
+					],
+					"ConnectedEntity": 0,
+					"EnableCollision": false,
+					"LimitMax": 0.0,
+					"LimitMin": 0.0,
+					"LimitSpringDamping": 1.0,
+					"LimitSpringFrequency": 0.0,
+					"LinearLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"LinearLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"MotorMaxForce": 1000.0,
+					"MotorMode": "Off",
+					"MotorTarget": 0.0,
+					"SecondaryAxis": [
+						1.0,
+						0.0,
+						0.0
+					],
+					"Type": "Distance",
+					"UseLimits": false
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						0.0,
+						0.0
+					]
+				}
+			},
+			"ID": 3944816071348564783,
+			"Name": "LadderRung0RopeRight",
+			"Parent": 9754921893611674217
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.550000011920929,
+						0.3799999952316284,
+						0.20000000298023224,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.699999988079071
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.5,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 2.0,
+					"Restitution": 0.0,
+					"Type": "Dynamic"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						2.4000000953674316,
+						0.15000000596046448,
+						0.15000000596046448
+					],
+					"Translation": [
+						-6.0,
+						3.299999952316284,
+						-4.0
+					]
+				}
+			},
+			"ID": 16539130771183158294,
+			"Name": "LadderRung1",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"Joint": {
+					"Anchor": [
+						-0.44999998807907104,
+						0.0,
+						0.0
+					],
+					"AngularLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"AngularLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"Axis": [
+						0.0,
+						1.0,
+						0.0
+					],
+					"BodyEntity": 16539130771183158294,
+					"BreakForce": 0.0,
+					"BreakTorque": 0.0,
+					"ConnectedAnchor": [
+						-0.44999998807907104,
+						0.0,
+						0.0
+					],
+					"ConnectedEntity": 9754921893611674217,
+					"EnableCollision": false,
+					"LimitMax": 0.0,
+					"LimitMin": 0.0,
+					"LimitSpringDamping": 1.0,
+					"LimitSpringFrequency": 0.0,
+					"LinearLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"LinearLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"MotorMaxForce": 1000.0,
+					"MotorMode": "Off",
+					"MotorTarget": 0.0,
+					"SecondaryAxis": [
+						1.0,
+						0.0,
+						0.0
+					],
+					"Type": "Distance",
+					"UseLimits": false
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						0.0,
+						0.0
+					]
+				}
+			},
+			"ID": 690406273839861445,
+			"Name": "LadderRung1RopeLeft",
+			"Parent": 16539130771183158294
+		},
+		{
+			"Components": {
+				"Joint": {
+					"Anchor": [
+						0.44999998807907104,
+						0.0,
+						0.0
+					],
+					"AngularLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"AngularLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"Axis": [
+						0.0,
+						1.0,
+						0.0
+					],
+					"BodyEntity": 16539130771183158294,
+					"BreakForce": 0.0,
+					"BreakTorque": 0.0,
+					"ConnectedAnchor": [
+						0.44999998807907104,
+						0.0,
+						0.0
+					],
+					"ConnectedEntity": 9754921893611674217,
+					"EnableCollision": false,
+					"LimitMax": 0.0,
+					"LimitMin": 0.0,
+					"LimitSpringDamping": 1.0,
+					"LimitSpringFrequency": 0.0,
+					"LinearLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"LinearLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"MotorMaxForce": 1000.0,
+					"MotorMode": "Off",
+					"MotorTarget": 0.0,
+					"SecondaryAxis": [
+						1.0,
+						0.0,
+						0.0
+					],
+					"Type": "Distance",
+					"UseLimits": false
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						0.0,
+						0.0
+					]
+				}
+			},
+			"ID": 4406873594459465742,
+			"Name": "LadderRung1RopeRight",
+			"Parent": 16539130771183158294
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.550000011920929,
+						0.3799999952316284,
+						0.20000000298023224,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.699999988079071
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.5,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 2.0,
+					"Restitution": 0.0,
+					"Type": "Dynamic"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						2.4000000953674316,
+						0.15000000596046448,
+						0.15000000596046448
+					],
+					"Translation": [
+						-6.0,
+						2.0999999046325684,
+						-4.0
+					]
+				}
+			},
+			"ID": 2728205478877165625,
+			"Name": "LadderRung2",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"Joint": {
+					"Anchor": [
+						-0.44999998807907104,
+						0.0,
+						0.0
+					],
+					"AngularLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"AngularLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"Axis": [
+						0.0,
+						1.0,
+						0.0
+					],
+					"BodyEntity": 2728205478877165625,
+					"BreakForce": 0.0,
+					"BreakTorque": 0.0,
+					"ConnectedAnchor": [
+						-0.44999998807907104,
+						0.0,
+						0.0
+					],
+					"ConnectedEntity": 16539130771183158294,
+					"EnableCollision": false,
+					"LimitMax": 0.0,
+					"LimitMin": 0.0,
+					"LimitSpringDamping": 1.0,
+					"LimitSpringFrequency": 0.0,
+					"LinearLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"LinearLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"MotorMaxForce": 1000.0,
+					"MotorMode": "Off",
+					"MotorTarget": 0.0,
+					"SecondaryAxis": [
+						1.0,
+						0.0,
+						0.0
+					],
+					"Type": "Distance",
+					"UseLimits": false
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						0.0,
+						0.0
+					]
+				}
+			},
+			"ID": 11614044057704124465,
+			"Name": "LadderRung2RopeLeft",
+			"Parent": 2728205478877165625
+		},
+		{
+			"Components": {
+				"Joint": {
+					"Anchor": [
+						0.44999998807907104,
+						0.0,
+						0.0
+					],
+					"AngularLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"AngularLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"Axis": [
+						0.0,
+						1.0,
+						0.0
+					],
+					"BodyEntity": 2728205478877165625,
+					"BreakForce": 0.0,
+					"BreakTorque": 0.0,
+					"ConnectedAnchor": [
+						0.44999998807907104,
+						0.0,
+						0.0
+					],
+					"ConnectedEntity": 16539130771183158294,
+					"EnableCollision": false,
+					"LimitMax": 0.0,
+					"LimitMin": 0.0,
+					"LimitSpringDamping": 1.0,
+					"LimitSpringFrequency": 0.0,
+					"LinearLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"LinearLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"MotorMaxForce": 1000.0,
+					"MotorMode": "Off",
+					"MotorTarget": 0.0,
+					"SecondaryAxis": [
+						1.0,
+						0.0,
+						0.0
+					],
+					"Type": "Distance",
+					"UseLimits": false
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						0.0,
+						0.0
+					]
+				}
+			},
+			"ID": 5951614346545340865,
+			"Name": "LadderRung2RopeRight",
+			"Parent": 2728205478877165625
+		},
+		{
+			"Components": {
+				"Material": {
+					"AlbedoColor": [
+						0.8999999761581421,
+						0.8999999761581421,
+						0.8999999761581421,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 1.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.20000000298023224
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Sphere",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.5,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"Type": "Static"
+				},
+				"SphereCollider": {
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"Radius": 0.5
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.4000000059604645,
+						0.4000000059604645,
+						0.4000000059604645
+					],
+					"Translation": [
+						1.5,
+						5.5,
+						-4.0
+					]
+				}
+			},
+			"ID": 8375925148954716370,
+			"Name": "Shoulder",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"Joint": {
+					"Anchor": [
+						0.0,
+						0.5,
+						0.0
+					],
+					"AngularLimitMax": [
+						30.0,
+						70.0,
+						40.0
+					],
+					"AngularLimitMin": [
+						-30.0,
+						-70.0,
+						-40.0
+					],
+					"Axis": [
+						0.0,
+						-1.0,
+						0.0
+					],
+					"BodyEntity": 0,
+					"BreakForce": 0.0,
+					"BreakTorque": 0.0,
+					"ConnectedAnchor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"ConnectedEntity": 8375925148954716370,
+					"EnableCollision": false,
+					"LimitMax": 0.0,
+					"LimitMin": 0.0,
+					"LimitSpringDamping": 1.0,
+					"LimitSpringFrequency": 0.0,
+					"LinearLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"LinearLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"MotorMaxForce": 1000.0,
+					"MotorMode": "Off",
+					"MotorTarget": 0.0,
+					"SecondaryAxis": [
+						1.0,
+						0.0,
+						0.0
+					],
+					"Type": "SixDOF",
+					"UseLimits": true
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.8500000238418579,
+						0.6499999761581421,
+						0.5,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.6000000238418579
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.5,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 2.0,
+					"Restitution": 0.0,
+					"Type": "Dynamic"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.30000001192092896,
+						1.2000000476837158,
+						0.30000001192092896
+					],
+					"Translation": [
+						1.5,
+						4.599999904632568,
+						-4.0
+					]
+				}
+			},
+			"ID": 4401325347765417567,
+			"Name": "UpperArm",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"Joint": {
+					"Anchor": [
+						0.0,
+						0.5,
+						0.0
+					],
+					"AngularLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"AngularLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"Axis": [
+						1.0,
+						0.0,
+						0.0
+					],
+					"BodyEntity": 0,
+					"BreakForce": 0.0,
+					"BreakTorque": 0.0,
+					"ConnectedAnchor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"ConnectedEntity": 4401325347765417567,
+					"EnableCollision": false,
+					"LimitMax": 0.0,
+					"LimitMin": -130.0,
+					"LimitSpringDamping": 0.30000001192092896,
+					"LimitSpringFrequency": 3.0,
+					"LinearLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"LinearLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"MotorMaxForce": 1000.0,
+					"MotorMode": "Off",
+					"MotorTarget": 0.0,
+					"SecondaryAxis": [
+						1.0,
+						0.0,
+						0.0
+					],
+					"Type": "Hinge",
+					"UseLimits": true
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.8500000238418579,
+						0.6499999761581421,
+						0.5,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.6000000238418579
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.5,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.5,
+					"Restitution": 0.0,
+					"Type": "Dynamic"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.25,
+						1.0,
+						0.25
+					],
+					"Translation": [
+						1.5,
+						3.4000000953674316,
+						-4.0
+					]
+				}
+			},
+			"ID": 5304037924190757563,
+			"Name": "Forearm",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"Joint": {
+					"Anchor": [
+						0.0,
+						0.699999988079071,
+						0.0
+					],
+					"AngularLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"AngularLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"Axis": [
+						0.0,
+						-1.0,
+						0.0
+					],
+					"BodyEntity": 0,
+					"BreakForce": 0.0,
+					"BreakTorque": 0.0,
+					"ConnectedAnchor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"ConnectedEntity": 5304037924190757563,
+					"EnableCollision": false,
+					"LimitMax": 35.0,
+					"LimitMin": 0.0,
+					"LimitSpringDamping": 1.0,
+					"LimitSpringFrequency": 0.0,
+					"LinearLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"LinearLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"MotorMaxForce": 1000.0,
+					"MotorMode": "Off",
+					"MotorTarget": 0.0,
+					"SecondaryAxis": [
+						1.0,
+						0.0,
+						0.0
+					],
+					"Type": "Cone",
+					"UseLimits": true
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.8500000238418579,
+						0.6499999761581421,
+						0.5,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.6000000238418579
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Sphere",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.5,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 0.5,
+					"Restitution": 0.0,
+					"Type": "Dynamic"
+				},
+				"SphereCollider": {
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"Radius": 0.5
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.3499999940395355,
+						0.3499999940395355,
+						0.3499999940395355
+					],
+					"Translation": [
+						1.5,
+						2.6500000953674316,
+						-4.0
+					]
+				}
+			},
+			"ID": 1195298528726294935,
+			"Name": "Hand",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"Material": {
+					"AlbedoColor": [
+						0.8999999761581421,
+						0.8999999761581421,
+						0.8999999761581421,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 1.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.20000000298023224
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Sphere",
+					"MeshIndex": 0
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.30000001192092896,
+						0.30000001192092896,
+						0.30000001192092896
+					],
+					"Translation": [
+						5.5,
+						6.5,
+						-4.0
+					]
+				}
+			},
+			"ID": 5950234658673661780,
+			"Name": "BungeeHook",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"Joint": {
+					"Anchor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"AngularLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"AngularLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"Axis": [
+						0.0,
+						1.0,
+						0.0
+					],
+					"BodyEntity": 0,
+					"BreakForce": 0.0,
+					"BreakTorque": 0.0,
+					"ConnectedAnchor": [
+						5.5,
+						6.5,
+						-4.0
+					],
+					"ConnectedEntity": 0,
+					"EnableCollision": false,
+					"LimitMax": 0.0,
+					"LimitMin": 0.0,
+					"LimitSpringDamping": 0.05000000074505806,
+					"LimitSpringFrequency": 1.2000000476837158,
+					"LinearLimitMax": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"LinearLimitMin": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"MotorMaxForce": 1000.0,
+					"MotorMode": "Off",
+					"MotorTarget": 0.0,
+					"SecondaryAxis": [
+						1.0,
+						0.0,
+						0.0
+					],
+					"Type": "Distance",
+					"UseLimits": false
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.20000000298023224,
+						0.75,
+						0.3499999940395355,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.4000000059604645
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Sphere",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.5,
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.0,
+					"Mass": 3.0,
+					"Restitution": 0.0,
+					"Type": "Dynamic"
+				},
+				"SphereCollider": {
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"Radius": 0.5
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.6000000238418579,
+						0.6000000238418579,
+						0.6000000238418579
+					],
+					"Translation": [
+						5.5,
+						4.5,
+						-4.0
+					]
+				}
+			},
+			"ID": 11949623679657673809,
+			"Name": "BungeeBall",
 			"Parent": 0
 		}
 	],
