@@ -127,10 +127,11 @@ world uses, in order: the project's, read when play started).
 
 ### Layers and continuous collision
 
-Each rigid body is on one named layer (`RigidBody.Layer`, default `"Default"`). The project defines up to
+Each rigid body is on one named layer (`RigidBody.Layer`, default `"Default"`; a character uses
+`CharacterController.Layer`). The project defines up to
 32 layers and which pairs of layers collide (`project.set` with `physicsLayers`, stored in
 `Project.bproject`). The matrix is read when play starts. A layer name the project does not define falls
-back to `Default` with a warning; `project.set` and `scene.info` list such bodies as
+back to `Default` with a warning; `project.set` and `scene.info` list such bodies and characters as
 `unknownPhysicsLayers`. Scenes saved before named layers (numeric `Layer`, `CollisionMask`) load when no
 body's mask excluded a layer: those bodies become `Default`. Other masks are a load error, since they need
 named layers. From Lua, `SetComponent("RigidBody", { Layer = 1 })` is likewise read as `Default`.
@@ -290,7 +291,9 @@ A `CharacterController` with a collider (a `CapsuleCollider` fits most character
 Create > Character adds both) makes the entity a game character instead of a rigid body: it slides along
 walls, walks up slopes up to `SlopeLimit` degrees and steps up to `StepHeight` meters, rides moving
 platforms, and pushes dynamic bodies with at most `MaxStrength` newtons. A `RigidBody` on the same entity
-is ignored. Other bodies, queries and triggers see the character as a kinematic body on its `Layer`.
+is ignored. Other bodies, queries and triggers see the character as a kinematic body on its `Layer`,
+shaped like its colliders at 90% size (so that walking up to something does not shove it): a ray that
+grazes the outer edge of the collider, or a thin trigger at floor level, can miss it.
 
 ```lua
 function Player:OnUpdate(dt)
@@ -298,7 +301,9 @@ function Player:OnUpdate(dt)
     if Input.IsKeyDown("D") then input.x = input.x + 1 end
     if Input.IsKeyDown("A") then input.x = input.x - 1 end
     local velocity = input * self.Speed
-    if Input.IsKeyPressed("Space") and self.Entity:IsGrounded() then
+    -- Held, not pressed: Move is used at the next physics step, and on a fast frame the next frame's
+    -- Move can replace it before any step runs.
+    if Input.IsKeyDown("Space") then
         velocity.y = self.JumpSpeed
     end
     self.Entity:Move(velocity)
@@ -308,18 +313,22 @@ end
 - `Move(velocity)` holds until the next call, so call it every frame. With gravity (scene gravity times
   `GravityFactor`), its upward part only counts on walkable ground, where it jumps, again on every landing
   while it is held. In the air gravity drives the vertical speed and `Move` steers sideways. A ceiling
-  stops a jump at once. With `GravityFactor = 0` the velocity applies in full (flying, ladders).
+  stops a jump at once. With `GravityFactor = 0` the velocity applies in full (flying, ladders). A
+  velocity that is not finite is a script error.
+- `AddForce`, `AddImpulse`, `AddTorque`, `SetLinearVelocity` and `SetAngularVelocity` do nothing on a
+  character (one warning); knock it back through `Move`. `GetLinearVelocity()` returns how fast it actually
+  moved over the last step.
 - Standing still on a walkable slope does not slide; ground steeper than `SlopeLimit` does not count as
   standing (`IsGrounded()` is false), and the character slides down it. `StepHeight` also keeps the
   character on the ground when walking down stairs and slopes; 0 turns both off. A capsule's round bottom
   rolls over low edges even without `StepHeight`.
 - Moving the entity's transform teleports the character; its rotation follows the entity's rotation.
-- The character enters triggers like any body (`OnTriggerEnter`/`OnTriggerExit`). Bodies that run into it
-  raise collision callbacks; the character walking into something does not (it stops just short of it),
+- The character enters triggers like any body (`OnTriggerEnter`/`OnTriggerExit`). Dynamic bodies that run
+  into it raise collision callbacks (kinematic ones, such as other characters, do not); the character walking into something does not (it stops just short of it),
   so use a trigger or a query to detect what it touches.
 - Changing `SlopeLimit`, `StepHeight`, `MaxStrength`, `Mass` or `GravityFactor` applies in place; a new
-  `Layer` or collider rebuilds the character, which keeps its velocity. Out-of-range values are clamped
-  with one warning.
+  `Layer` or collider rebuilds the character, which keeps its velocity and ground. Out-of-range values are
+  clamped with one warning; `SlopeLimit` is at least 1 degree.
 
 ## Screen UI
 

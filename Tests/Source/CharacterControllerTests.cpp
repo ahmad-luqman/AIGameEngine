@@ -549,7 +549,7 @@ TEST_SUITE("Physics")
 		Simulate(scene, 0.5f, [&]() { character.AddOrReplaceComponent<CharacterControllerComponent>(same); });
 		CHECK(physics.HasCharacter(character));
 		CHECK(physics.IsCharacterGrounded(character));
-		CHECK(CountMessages(since, "SlopeLimit 120 must be within [0, 90] degrees; using 90") == 1);
+		CHECK(CountMessages(since, "SlopeLimit 120 must be within [1, 90] degrees; using 90") == 1);
 		CHECK(CountMessages(since, "StepHeight -1") == 1);
 		CHECK(CountMessages(since, "MaxStrength -5") == 1);
 		CHECK(CountMessages(since, "Mass -1") == 1);
@@ -616,6 +616,105 @@ TEST_SUITE("Physics")
 		CHECK(Field(scene, walker, "Speed").get<double>() == doctest::Approx(3.0).epsilon(0.02));
 		CHECK(Field(scene, walker, "MoveError") == true);
 		CHECK(Field(scene, walker, "ZoneNormal") == true);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("A character walks up walkable slopes but not steeper ones; SlopeLimit is at least 1 degree")
+	{
+		auto climb = [](float angle, float slopeLimit, uint64_t& since) {
+			Scene scene;
+			// A ramp rising towards +X.
+			Entity ramp = CreateStaticBox(scene, "Ramp", { 0.0f, 0.0f, 0.0f }, { 10.0f, 0.5f, 10.0f });
+			ramp.GetTransform().Rotation = glm::angleAxis(glm::radians(angle), glm::vec3(0.0f, 0.0f, 1.0f));
+			Entity character = CreateCharacter(scene, { 0.0f, 3.0f, 0.0f });
+			character.GetComponent<CharacterControllerComponent>().SlopeLimit = slopeLimit;
+			since = Log::GetHistory().GetTotalCount();
+			scene.OnSimulationStart();
+			PhysicsWorld& physics = *scene.GetPhysicsWorld();
+			Simulate(scene, 1.0f);
+			const glm::vec3 landed = Position(character);
+			physics.MoveCharacter(character, { 2.0f, 0.0f, 0.0f });
+			int groundedFrames = 0;
+			Simulate(scene, 1.0f, [&]() { groundedFrames += physics.IsCharacterGrounded(character) ? 1 : 0; });
+			const glm::vec3 climbed = Position(character) - landed;
+			scene.OnSimulationStop();
+			return std::pair(climbed, groundedFrames);
+		};
+
+		uint64_t since = 0;
+		const auto [up, grounded] = climb(30.0f, 45.0f, since);
+		CHECK(up.x > 1.0f);
+		CHECK(up.y > 0.5f);
+		CHECK(grounded >= 58);
+		// Too steep to stand on: it slides back down instead of climbing.
+		const auto [blocked, steepGrounded] = climb(60.0f, 45.0f, since);
+		CHECK(blocked.y < 0.0f);
+		CHECK(steepGrounded == 0);
+		// SlopeLimit 0 would switch Jolt's slope check off and make every slope walkable.
+		const auto [flatOnly, flatGrounded] = climb(30.0f, 0.0f, since);
+		CHECK(CountMessages(since, "SlopeLimit 0 must be within [1, 90] degrees; using 1") == 1);
+		CHECK(flatOnly.y < 0.0f);
+		CHECK(flatGrounded == 0);
+	}
+
+	TEST_CASE("Rigid-body velocity calls on a character warn once; a rebuild keeps it on the ground")
+	{
+		Scene scene;
+		CreateGround(scene);
+		Entity character = CreateCharacter(scene, { 0.0f, StandingHeight, 0.0f });
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		Simulate(scene, 0.5f);
+		REQUIRE(physics.IsCharacterGrounded(character));
+
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		for (int i = 0; i < 3; i++)
+		{
+			physics.AddImpulse(character, { 0.0f, 50.0f, 0.0f });
+			physics.SetLinearVelocity(character, { 5.0f, 0.0f, 0.0f });
+			physics.AddForce(character, { 0.0f, 500.0f, 0.0f });
+			scene.OnUpdate(Step);
+		}
+		CHECK(CountMessages(since, "does nothing on character 'Character'") == 1);
+		CHECK(glm::length(Position(character) - glm::vec3(0.0f, StandingHeight, 0.0f)) < 0.05f);
+
+		// A collider change rebuilds the character; a jump asked for on that very step still happens.
+		character.AddOrReplaceComponent<CapsuleColliderComponent>(character.GetComponent<CapsuleColliderComponent>());
+		physics.MoveCharacter(character, { 0.0f, 5.0f, 0.0f });
+		scene.OnUpdate(Step);
+		physics.MoveCharacter(character, { 0.0f, 0.0f, 0.0f });
+		Simulate(scene, 0.2f);
+		CHECK(Position(character).y > StandingHeight + 0.4f);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Destroying a character during play ends its trigger overlaps")
+	{
+		BasaltTest::TempProject project("CharacterDestroyed");
+		const std::string script = project.WriteFile("Assets/Scripts/Zone.lua", R"(
+			local Zone = {}
+			function Zone:OnCreate() self.Enters = 0; self.Exits = 0 end
+			function Zone:OnTriggerEnter(other) self.Enters = self.Enters + 1 end
+			function Zone:OnTriggerExit(other) self.Exits = self.Exits + 1 end
+			return Zone
+		)");
+
+		Scene scene;
+		CreateGround(scene);
+		Entity zone = AddScripted(scene, "Zone", script);
+		zone.GetTransform().Translation = { 0.0f, 1.0f, 0.0f };
+		zone.AddComponent<RigidBodyComponent>().IsTrigger = true;
+		zone.AddComponent<BoxColliderComponent>().HalfExtents = { 2.0f, 1.0f, 2.0f };
+		Entity character = CreateCharacter(scene, { 0.0f, StandingHeight, 0.0f });
+
+		scene.OnRuntimeStart();
+		Simulate(scene, 0.5f);
+		REQUIRE(Field(scene, zone, "Enters") == 1);
+		scene.DestroyEntity(character);
+		Simulate(scene, 0.5f);
+		CHECK(Field(scene, zone, "Exits") == 1);
+		CHECK(scene.GetPhysicsWorld()->GetCharacterCount() == 0);
+		CHECK(scene.GetScriptEngine()->GetErrors().empty());
 		scene.OnRuntimeStop();
 	}
 
