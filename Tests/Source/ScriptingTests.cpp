@@ -287,6 +287,60 @@ TEST_SUITE("Scripting")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("OnJointBreak may destroy the other entity during the same step")
+	{
+		BasaltTest::TempProject project("ScriptJointDestroy");
+		const std::string script = project.WriteFile("Assets/Scripts/Breaker.lua", R"(
+			local Breaker = {}
+			function Breaker:OnCreate() self.Breaks = 0; self.Built = self.Entity:HasJoint() end
+			function Breaker:OnJointBreak(other)
+				self.Breaks = self.Breaks + 1
+				-- Destroy the hook and take down the other weight's joint before its own break is handled.
+				if other then other:Destroy() end
+				for _, name in ipairs({ "Left", "Right" }) do
+					local weight = Scene.FindEntityByName(name)
+					if weight ~= self.Entity and weight:HasComponent("Joint") then weight:RemoveComponent("Joint") end
+				end
+			end
+			return Breaker
+		)");
+
+		Scene scene;
+		Entity hook = scene.CreateEntity("Hook");
+		const UUID hookID = hook.GetUUID();
+		hook.GetTransform().Translation = { 0.0f, 2.0f, 0.0f };
+		hook.AddComponent<RigidBodyComponent>();
+		hook.AddComponent<BoxColliderComponent>();
+		// Two weights hang from the hook on weak joints that both break in the first step.
+		auto hang = [&](const char* name, float x) {
+			Entity weight = AddScripted(scene, name, script);
+			weight.GetTransform().Translation = { x, 0.0f, 0.0f };
+			weight.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+			weight.AddComponent<SphereColliderComponent>();
+			auto& joint = weight.AddComponent<JointComponent>();
+			joint.Type = JointType::Point;
+			joint.ConnectedEntity = hook.GetUUID();
+			joint.BreakForce = 1.0f;
+			return weight;
+		};
+		Entity left = hang("Left", -1.0f);
+		Entity right = hang("Right", 1.0f);
+
+		scene.OnRuntimeStart();
+		CHECK(Field(scene, left, "Built") == true);
+		for (int i = 0; i < 30; i++)
+			scene.OnUpdate(Step);
+
+		CHECK_FALSE(scene.GetEntityByUUID(hookID));
+		// Whichever breaks first removes the other joint before that one's break is handled.
+		CHECK(Field(scene, left, "Breaks").get<int>() + Field(scene, right, "Breaks").get<int>() == 1);
+		CHECK_FALSE(left.HasComponent<JointComponent>());
+		CHECK_FALSE(right.HasComponent<JointComponent>());
+		CHECK_FALSE(scene.GetPhysicsWorld()->HasJoint(right));
+		CHECK(scene.GetScriptEngine()->GetErrors().empty());
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Scripts read injected input, apply physics and request quit")
 	{
 		BasaltTest::TempProject project("ScriptInput");

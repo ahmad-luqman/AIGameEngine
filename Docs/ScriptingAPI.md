@@ -81,6 +81,7 @@ Entity handles store an ID and stay safe to hold: using a destroyed entity raise
 | `e:AddForce(v)`, `e:AddImpulse(v)`, `e:AddTorque(v)` | Physics (dynamic bodies) |
 | `e:SetLinearVelocity(v)`, `e:GetLinearVelocity()`, `e:SetAngularVelocity(v)`, `e:GetAngularVelocity()` | Physics velocities |
 | `e:GetJointPosition()` | Hinge angle (degrees) or slider offset (meters) from the joint's rest pose; nil otherwise |
+| `e:HasJoint()` | Whether the entity's Joint is a live constraint (false before both bodies exist, when it is invalid, and after it broke) |
 | `e:PlayAudio()`, `e:StopAudio()`, `e:IsAudioPlaying()` | The entity's AudioSource |
 | `e:GetScript()` | The entity's script instance (call its functions, read its fields) |
 | `e:Destroy()` | Destroy at the end of the frame (with children) |
@@ -114,10 +115,16 @@ Mouse buttons: `Left`, `Right`, `Middle`, `Button3`-`Button7`.
 ### Joints
 
 A `Joint` component connects the entity's rigid body to `ConnectedEntity`'s body, or to the world when it
-is 0. `Type` is `Fixed`, `Point` (ball and socket), `Hinge`, `Slider` or `Distance`. `Anchor`, `Axis`
-(hinge axis / slider direction) and `ConnectedAnchor` (distance joints) are in local space. The pose the
-bodies have when the joint is built is its rest pose: hinge angles and slider offsets are measured from it,
-so limits must satisfy `LimitMin <= 0 <= LimitMax`.
+is 0. `Type` is `Fixed`, `Point` (ball and socket), `Hinge`, `Slider` or `Distance`. `Anchor` and `Axis`
+(hinge axis / slider direction) are in the entity's local space; `Axis` turns with the entity but ignores
+its scale. `ConnectedAnchor` (distance joints) is in the connected entity's local space, or a world
+position when the joint connects to the world. The pose the bodies have when the joint is built is its
+rest pose: hinge angles and slider offsets are measured from it.
+
+Limits (with `UseLimits`) depend on the type: hinge angles in degrees with
+`-180 <= LimitMin <= 0 <= LimitMax <= 180`, slider offsets in meters with `LimitMin <= 0 <= LimitMax`,
+and distance-joint lengths with `0 <= LimitMin <= LimitMax`. Fixed and point joints have no limits.
+Other values are clamped with a warning.
 
 ```lua
 -- A door that swings open on a motor (hinge on the door's left edge, around Y).
@@ -131,9 +138,18 @@ door:SetComponent("Joint", { MotorMode = "Position", MotorTarget = 90 })  -- che
   is fine to do every frame. Changing `Type`, `ConnectedEntity`, anchors, `Axis` or `UseLimits` rebuilds
   it from the current poses.
 - Motors (`MotorMode` `Velocity` or `Position`, `MotorTarget` in degrees(/s) or meters(/s),
-  `MotorMaxForce`) work on hinges and sliders.
+  `MotorMaxForce`) work on hinges and sliders. Hinge position targets are clamped to [-180, 180].
+- `GetJointPosition()` is this entity's position relative to the connected one: the hinge angle around
+  `Axis` (right-handed, wrapping at ±180) or the slider offset along `Axis`.
 - A joint whose force or torque exceeds `BreakForce`/`BreakTorque` (0 = unbreakable) is removed with its
-  component, and both entities get `OnJointBreak`.
+  component, and both entities get `OnJointBreak`. The force and torque include limit and motor effort,
+  so a motor stalled against an obstacle can break its joint. Point and distance joints hold no torque:
+  `BreakTorque` does not apply to them. Each break is logged with the measured force and torque, which
+  helps tune thresholds.
+- Destroying the connected entity removes the constraint with a warning and does not call `OnJointBreak`;
+  `HasJoint()` turns false while the component stays.
+- A joint whose body (or connected body) does not exist yet is built as soon as it does. Warnings about
+  a joint are logged once per distinct problem, not on every update.
 - Jointed bodies do not collide with each other unless `EnableCollision` is set.
 - One joint per entity; a chain puts a joint on every link. Joints inside a prefab or a duplicated
   hierarchy connect the new copies.
