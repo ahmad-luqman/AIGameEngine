@@ -1202,6 +1202,212 @@ TEST_SUITE("Physics")
 		scene.OnSimulationStop();
 	}
 
+	TEST_CASE("Cone joints keep their axis inside the cone")
+	{
+		Scene scene;
+		// Boxes hanging from the world 1 m above them, knocked sideways; the angle is how far each box's
+		// down axis tilts from vertical.
+		auto hang = [&](float x, bool useLimits, float halfAngle) {
+			Entity box = CreateBox(scene, { x, 0.0f, 0.0f });
+			auto& joint = box.AddComponent<JointComponent>();
+			joint.Type = JointType::Cone;
+			joint.Anchor = { 0.0f, 1.0f, 0.0f };
+			joint.Axis = { 0.0f, -1.0f, 0.0f };
+			joint.UseLimits = useLimits;
+			joint.LimitMax = halfAngle;
+			return box;
+		};
+		Entity cone = hang(0.0f, true, 20.0f);
+		Entity free = hang(5.0f, false, 0.0f);
+		Entity clamped = hang(10.0f, true, 20.0f);
+		clamped.GetComponent<JointComponent>().LimitMin = -10.0f;
+		auto tilt = [](Entity box) {
+			const glm::vec3 down = box.GetTransform().Rotation * glm::vec3(0.0f, -1.0f, 0.0f);
+			return glm::degrees(std::acos(std::clamp(-down.y, -1.0f, 1.0f)));
+		};
+
+		const uint64_t before = Log::GetHistory().GetTotalCount();
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		for (Entity box : { cone, free, clamped })
+			physics.SetLinearVelocity(box, { 0.0f, 0.0f, 4.0f });
+		float coneMax = 0.0f;
+		float freeMax = 0.0f;
+		for (int i = 0; i < 90; i++)
+		{
+			scene.OnUpdate(Step);
+			coneMax = std::max(coneMax, tilt(cone));
+			freeMax = std::max(freeMax, tilt(free));
+			// The anchor holds like a point joint.
+			CHECK(glm::distance(cone.GetTransform().Translation + cone.GetTransform().Rotation * glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f)) < 0.02f);
+		}
+		CHECK(coneMax == doctest::Approx(20.0f).epsilon(0.1));
+		CHECK(freeMax > 60.0f);
+		CHECK(physics.HasJoint(clamped));
+		CHECK(CountMessages(before, "cone limits [-10, 20]") == 1);
+		CHECK(physics.GetJointPosition(cone) == std::nullopt);
+
+		// Widening the cone in place lets the next push swing further.
+		SetJoint(cone, [](JointComponent& joint) { joint.LimitMax = 60.0f; });
+		scene.OnUpdate(Step);
+		physics.SetLinearVelocity(cone, { 0.0f, 0.0f, 4.0f });
+		coneMax = 0.0f;
+		for (int i = 0; i < 60; i++)
+		{
+			scene.OnUpdate(Step);
+			coneMax = std::max(coneMax, tilt(cone));
+		}
+		CHECK(coneMax > 35.0f);
+		CHECK(coneMax < 63.0f);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Cone and six-DOF joints break on the torque at their limits")
+	{
+		Scene scene;
+		// A narrow cone carries torque once the box hits its edge; a free cone never does.
+		auto hang = [&](float x, JointType type, bool useLimits) {
+			Entity box = CreateBox(scene, { x, 0.0f, 0.0f });
+			auto& joint = box.AddComponent<JointComponent>();
+			joint.Type = type;
+			joint.Anchor = { 0.0f, 1.0f, 0.0f };
+			joint.Axis = { 0.0f, -1.0f, 0.0f };
+			joint.UseLimits = useLimits;
+			joint.LimitMax = type == JointType::Cone ? 5.0f : 0.0f;
+			joint.AngularLimitMax = { 5.0f, 5.0f, 5.0f };
+			joint.AngularLimitMin = { -5.0f, -5.0f, -5.0f };
+			joint.BreakTorque = 20.0f;
+			return box;
+		};
+		Entity cone = hang(0.0f, JointType::Cone, true);
+		Entity freeCone = hang(5.0f, JointType::Cone, false);
+		Entity sixDOF = hang(10.0f, JointType::SixDOF, true);
+		Entity freeSixDOF = hang(15.0f, JointType::SixDOF, false);
+
+		scene.OnSimulationStart();
+		for (Entity box : { cone, freeCone, sixDOF, freeSixDOF })
+			scene.GetPhysicsWorld()->SetLinearVelocity(box, { 0.0f, 0.0f, 4.0f });
+		Simulate(scene, 0.5f);
+		CHECK_FALSE(cone.HasComponent<JointComponent>());
+		CHECK(freeCone.HasComponent<JointComponent>());
+		CHECK_FALSE(sixDOF.HasComponent<JointComponent>());
+		CHECK(freeSixDOF.HasComponent<JointComponent>());
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Six-DOF joints limit twist and swing around their frame")
+	{
+		Scene scene;
+		// Weightless boxes pinned at their centre. Axis (the twist axis) is local Y.
+		auto pinned = [&](float x, bool useLimits) {
+			Entity box = CreateBox(scene, { x, 0.0f, 0.0f });
+			box.GetComponent<RigidBodyComponent>().GravityFactor = 0.0f;
+			auto& joint = box.AddComponent<JointComponent>();
+			joint.Type = JointType::SixDOF;
+			joint.Axis = { 0.0f, 1.0f, 0.0f };
+			joint.SecondaryAxis = { 1.0f, 0.0f, 0.0f };
+			joint.UseLimits = useLimits;
+			joint.AngularLimitMin = { -10.0f, -30.0f, -30.0f };
+			joint.AngularLimitMax = { 20.0f, 30.0f, 30.0f };
+			return box;
+		};
+		Entity twist = pinned(0.0f, true);
+		Entity freeTwist = pinned(5.0f, false);
+		Entity swing = pinned(10.0f, true);
+
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		physics.SetAngularVelocity(twist, { 0.0f, 3.0f, 0.0f });
+		physics.SetAngularVelocity(freeTwist, { 0.0f, 3.0f, 0.0f });
+		physics.SetAngularVelocity(swing, { 3.0f, 0.0f, 0.0f });
+		float twistMax = 0.0f;
+		float swingMax = 0.0f;
+		for (int i = 0; i < 60; i++)
+		{
+			scene.OnUpdate(Step);
+			twistMax = std::max(twistMax, glm::degrees(glm::angle(twist.GetTransform().Rotation)));
+			const glm::vec3 up = swing.GetTransform().Rotation * glm::vec3(0.0f, 1.0f, 0.0f);
+			swingMax = std::max(swingMax, glm::degrees(std::acos(std::clamp(up.y, -1.0f, 1.0f))));
+			// Translation is locked without linear limits.
+			CHECK(glm::length(twist.GetTransform().Translation) < 0.01f);
+		}
+		// Spinning positive around Y hits the +20 degree twist limit.
+		CHECK(twistMax == doctest::Approx(20.0f).epsilon(0.1));
+		CHECK(glm::degrees(glm::angle(freeTwist.GetTransform().Rotation)) > 90.0f);
+		CHECK(swingMax == doctest::Approx(30.0f).epsilon(0.1));
+		CHECK(physics.GetJointPosition(twist) == std::nullopt);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Six-DOF translation limits, locked axes, soft limits and warnings")
+	{
+		Scene scene;
+		// Weightless boxes thrown diagonally: X (Axis) may move within [-0.5, 1], Y and Z are locked, and so
+		// is every rotation.
+		auto slider = [&](float z, float springFrequency) {
+			Entity box = CreateBox(scene, { 0.0f, 0.0f, z });
+			box.GetComponent<RigidBodyComponent>().GravityFactor = 0.0f;
+			auto& joint = box.AddComponent<JointComponent>();
+			joint.Type = JointType::SixDOF;
+			joint.Axis = { 1.0f, 0.0f, 0.0f };
+			joint.SecondaryAxis = { 0.0f, 1.0f, 0.0f };
+			joint.UseLimits = true;
+			joint.LinearLimitMin = { -0.5f, 0.0f, 0.0f };
+			joint.LinearLimitMax = { 1.0f, 0.0f, 0.0f };
+			joint.LimitSpringFrequency = springFrequency;
+			joint.LimitSpringDamping = 0.2f;
+			return box;
+		};
+		Entity rigid = slider(0.0f, 0.0f);
+		Entity soft = slider(5.0f, 2.0f);
+
+		// Invalid settings are fixed up with a warning and the joint is still built.
+		Entity odd = CreateBox(scene, { 0.0f, 0.0f, 10.0f });
+		odd.GetComponent<RigidBodyComponent>().GravityFactor = 0.0f;
+		auto& oddJoint = odd.AddComponent<JointComponent>();
+		oddJoint.Type = JointType::SixDOF;
+		oddJoint.Axis = { 1.0f, 0.0f, 0.0f };
+		oddJoint.SecondaryAxis = { 2.0f, 0.0f, 0.0f };
+		oddJoint.UseLimits = true;
+		oddJoint.LimitMax = 1.0f;
+		oddJoint.LinearLimitMin = { 0.5f, 0.0f, 0.0f };
+		oddJoint.AngularLimitMin = { 0.0f, -10.0f, 0.0f };
+		oddJoint.AngularLimitMax = { 0.0f, 30.0f, 0.0f };
+
+		const uint64_t before = Log::GetHistory().GetTotalCount();
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		physics.SetLinearVelocity(rigid, { 4.0f, 3.0f, 3.0f });
+		physics.SetAngularVelocity(rigid, { 2.0f, 2.0f, 2.0f });
+		physics.SetLinearVelocity(soft, { 4.0f, 0.0f, 0.0f });
+		float rigidPeak = 0.0f;
+		float softPeak = 0.0f;
+		for (int i = 0; i < 30; i++)
+		{
+			scene.OnUpdate(Step);
+			const glm::vec3 position = rigid.GetTransform().Translation;
+			rigidPeak = std::max(rigidPeak, position.x);
+			softPeak = std::max(softPeak, soft.GetTransform().Translation.x);
+			CHECK(std::abs(position.y) < 0.01f);
+			CHECK(std::abs(position.z) < 0.01f);
+			CHECK(glm::degrees(glm::angle(rigid.GetTransform().Rotation)) < 1.0f);
+		}
+		CHECK(rigidPeak == doctest::Approx(1.0f).epsilon(0.05));
+		CHECK(softPeak > 1.2f);
+		CHECK(physics.HasJoint(odd));
+		CHECK(CountMessages(before, "SecondaryAxis is zero or parallel to Axis") == 1);
+		CHECK(CountMessages(before, "LimitMin and LimitMax are ignored") == 1);
+		CHECK(CountMessages(before, "six-DOF linear X limits [0.5, 0] must satisfy") == 1);
+		CHECK(CountMessages(before, "six-DOF swing (angular Y) limits [-10, 30] must be a symmetric half angle") == 1);
+
+		// Widening a limit updates the live joint: the next push carries the box further along X.
+		SetJoint(rigid, [](JointComponent& joint) { joint.LinearLimitMax.x = 3.0f; });
+		physics.SetLinearVelocity(rigid, { 4.0f, 0.0f, 0.0f });
+		Simulate(scene, 0.5f);
+		CHECK(rigid.GetTransform().Translation.x > 1.5f);
+		scene.OnSimulationStop();
+	}
+
 	TEST_CASE("Joint entities give one body several joints")
 	{
 		Scene scene;

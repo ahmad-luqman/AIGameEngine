@@ -27,10 +27,12 @@
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
+#include <Jolt/Physics/Constraints/ConeConstraint.h>
 #include <Jolt/Physics/Constraints/DistanceConstraint.h>
 #include <Jolt/Physics/Constraints/FixedConstraint.h>
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
 #include <Jolt/Physics/Constraints/PointConstraint.h>
+#include <Jolt/Physics/Constraints/SixDOFConstraint.h>
 #include <Jolt/Physics/Constraints/SliderConstraint.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/RegisterTypes.h>
@@ -226,6 +228,10 @@ namespace Basalt {
 			structural.LimitMax = built.LimitMax;
 			structural.LimitSpringFrequency = built.LimitSpringFrequency;
 			structural.LimitSpringDamping = built.LimitSpringDamping;
+			structural.LinearLimitMin = built.LinearLimitMin;
+			structural.LinearLimitMax = built.LinearLimitMax;
+			structural.AngularLimitMin = built.AngularLimitMin;
+			structural.AngularLimitMax = built.AngularLimitMax;
 			structural.MotorMode = built.MotorMode;
 			structural.MotorTarget = built.MotorTarget;
 			structural.MotorMaxForce = built.MotorMaxForce;
@@ -255,6 +261,10 @@ namespace Basalt {
 					return "slider";
 				case JointType::Distance:
 					return "distance";
+				case JointType::Cone:
+					return "cone";
+				case JointType::SixDOF:
+					return "six-DOF";
 			}
 			return "unknown";
 		}
@@ -289,12 +299,74 @@ namespace Basalt {
 						warnings.emplace_back("distance limits with LimitMax <= 0 pull the anchors together");
 					return { min, max };
 				}
+				case JointType::Cone:
+				{
+					// Only the half angle; the cone is centered on the rest direction.
+					const float max = std::clamp(joint.LimitMax, 0.0f, 180.0f);
+					if (joint.LimitMin != 0.0f || max != joint.LimitMax)
+						warnings.emplace_back(fmt::format("cone limits [{}, {}] must be LimitMin = 0 and a half angle 0 <= LimitMax <= 180 degrees; using [0, {}]", joint.LimitMin, joint.LimitMax, max));
+					return { 0.0f, max };
+				}
+				case JointType::SixDOF:
+					if (joint.LimitMin != 0.0f || joint.LimitMax != 0.0f)
+						warnings.emplace_back("six-DOF joints are limited by LinearLimitMin/Max and AngularLimitMin/Max; LimitMin and LimitMax are ignored");
+					break;
 				case JointType::Fixed:
 				case JointType::Point:
 					warnings.emplace_back(fmt::format("UseLimits has no effect on {} joints", JointTypeName(joint.Type)));
 					break;
 			}
 			return { 0.0f, 0.0f };
+		}
+
+		// Six-DOF limits in Jolt's units (meters, radians) along/around the joint frame's axes.
+		struct SixDOFLimits
+		{
+			glm::vec3 LinearMin = { 0.0f, 0.0f, 0.0f };
+			glm::vec3 LinearMax = { 0.0f, 0.0f, 0.0f };
+			glm::vec3 AngularMin = { -glm::pi<float>(), -glm::pi<float>(), -glm::pi<float>() };
+			glm::vec3 AngularMax = { glm::pi<float>(), glm::pi<float>(), glm::pi<float>() };
+		};
+
+		// Without UseLimits translation is locked and rotation free (a point joint). With limits every range
+		// must contain the rest pose (0), twist stays within +-180 degrees, and the swing cone is symmetric
+		// (Jolt's cone swing ignores the minimum), so a swing minimum other than -max is mirrored.
+		SixDOFLimits SanitizeSixDOFLimits(const JointComponent& joint, std::vector<std::string>& warnings)
+		{
+			SixDOFLimits limits;
+			if (!joint.UseLimits)
+				return limits;
+			constexpr const char* AxisNames[] = { "X", "Y", "Z" };
+			for (int i = 0; i < 3; i++)
+			{
+				const float linearMin = std::min(joint.LinearLimitMin[i], 0.0f);
+				const float linearMax = std::max(joint.LinearLimitMax[i], 0.0f);
+				if (linearMin != joint.LinearLimitMin[i] || linearMax != joint.LinearLimitMax[i])
+					warnings.emplace_back(fmt::format("six-DOF linear {} limits [{}, {}] must satisfy min <= 0 <= max (the rest pose is 0); clamped to [{}, {}]", AxisNames[i], joint.LinearLimitMin[i],
+													  joint.LinearLimitMax[i], linearMin, linearMax));
+				limits.LinearMin[i] = linearMin;
+				limits.LinearMax[i] = linearMax;
+
+				float angularMin = 0.0f;
+				const float angularMax = std::clamp(joint.AngularLimitMax[i], 0.0f, 180.0f);
+				if (i == 0)
+				{
+					angularMin = std::clamp(joint.AngularLimitMin[i], -180.0f, 0.0f);
+					if (angularMin != joint.AngularLimitMin[i] || angularMax != joint.AngularLimitMax[i])
+						warnings.emplace_back(fmt::format("six-DOF twist (angular X) limits [{}, {}] must satisfy -180 <= min <= 0 <= max <= 180 degrees; clamped to [{}, {}]", joint.AngularLimitMin[i],
+														  joint.AngularLimitMax[i], angularMin, angularMax));
+				}
+				else
+				{
+					angularMin = -angularMax;
+					if (angularMin != joint.AngularLimitMin[i] || angularMax != joint.AngularLimitMax[i])
+						warnings.emplace_back(fmt::format("six-DOF swing (angular {}) limits [{}, {}] must be a symmetric half angle [-max, max] with 0 <= max <= 180 degrees; using [{}, {}]", AxisNames[i],
+														  joint.AngularLimitMin[i], joint.AngularLimitMax[i], angularMin, angularMax));
+				}
+				limits.AngularMin[i] = glm::radians(angularMin);
+				limits.AngularMax[i] = glm::radians(angularMax);
+			}
+			return limits;
 		}
 
 		// The spring that softens a joint's limits (a frequency of 0 keeps them rigid). Settings with no
@@ -312,6 +384,7 @@ namespace Basalt {
 				{
 					case JointType::Hinge:
 					case JointType::Slider:
+					case JointType::SixDOF:
 						if (!joint.UseLimits)
 							warnings.emplace_back(fmt::format("LimitSpringFrequency has no effect on a {} joint without UseLimits", JointTypeName(joint.Type)));
 						break;
@@ -322,6 +395,10 @@ namespace Basalt {
 					case JointType::Fixed:
 					case JointType::Point:
 						warnings.emplace_back(fmt::format("LimitSpringFrequency has no effect on {} joints, which have no limits", JointTypeName(joint.Type)));
+						break;
+					case JointType::Cone:
+						// Jolt's cone limit is always rigid.
+						warnings.emplace_back("LimitSpringFrequency has no effect on cone joints");
 						break;
 				}
 			}
@@ -1128,6 +1205,22 @@ namespace Basalt {
 				distance->SetLimitsSpringSettings(limitSpring);
 				break;
 			}
+			case JointType::Cone:
+				BS_CORE_ASSERT(record.Constraint->GetSubType() == JPH::EConstraintSubType::Cone, "joint record out of sync with its constraint");
+				static_cast<JPH::ConeConstraint*>(record.Constraint.GetPtr())->SetHalfConeAngle(joint.UseLimits ? glm::radians(limitMax) : JPH::JPH_PI);
+				break;
+			case JointType::SixDOF:
+			{
+				BS_CORE_ASSERT(record.Constraint->GetSubType() == JPH::EConstraintSubType::SixDOF, "joint record out of sync with its constraint");
+				auto* sixDOF = static_cast<JPH::SixDOFConstraint*>(record.Constraint.GetPtr());
+				const SixDOFLimits limits = SanitizeSixDOFLimits(joint, warnings);
+				sixDOF->SetTranslationLimits(ToJolt(limits.LinearMin), ToJolt(limits.LinearMax));
+				sixDOF->SetRotationLimits(ToJolt(limits.AngularMin), ToJolt(limits.AngularMax));
+				// Jolt softens translation limits only; rotation limits stay rigid.
+				for (auto axis : { JPH::SixDOFConstraint::EAxis::TranslationX, JPH::SixDOFConstraint::EAxis::TranslationY, JPH::SixDOFConstraint::EAxis::TranslationZ })
+					sixDOF->SetLimitsSpringSettings(axis, limitSpring);
+				break;
+			}
 			case JointType::Fixed:
 			case JointType::Point:
 				break;
@@ -1204,6 +1297,20 @@ namespace Basalt {
 				case JointType::Distance:
 					forceImpulse = std::abs(static_cast<const JPH::DistanceConstraint*>(constraint)->GetTotalLambdaPosition());
 					break;
+				case JointType::Cone:
+				{
+					const auto* cone = static_cast<const JPH::ConeConstraint*>(constraint);
+					forceImpulse = cone->GetTotalLambdaPosition().Length();
+					torqueImpulse = std::abs(cone->GetTotalLambdaRotation());
+					break;
+				}
+				case JointType::SixDOF:
+				{
+					const auto* sixDOF = static_cast<const JPH::SixDOFConstraint*>(constraint);
+					forceImpulse = sixDOF->GetTotalLambdaPosition().Length();
+					torqueImpulse = sixDOF->GetTotalLambdaRotation().Length();
+					break;
+				}
 			}
 			const float force = forceImpulse / fixedStep;
 			const float torque = torqueImpulse / fixedStep;
@@ -1306,7 +1413,8 @@ namespace Basalt {
 		glm::vec3 axis = joint.Axis;
 		if (glm::length(axis) < 1e-6f)
 		{
-			if (joint.Type == JointType::Hinge || joint.Type == JointType::Slider)
+			// Fixed, point and distance joints have no axis.
+			if (joint.Type != JointType::Fixed && joint.Type != JointType::Point && joint.Type != JointType::Distance)
 				warnings.emplace_back("Axis is zero; using local Y");
 			axis = glm::vec3(0.0f, 1.0f, 0.0f);
 		}
@@ -1359,6 +1467,34 @@ namespace Basalt {
 				settings = distance;
 				break;
 			}
+			case JointType::Cone:
+			{
+				auto* cone = new JPH::ConeConstraintSettings();
+				cone->mPoint1 = cone->mPoint2 = ToJolt(anchor);
+				cone->mTwistAxis1 = cone->mTwistAxis2 = joltAxis;
+				cone->mHalfConeAngle = JPH::JPH_PI;
+				settings = cone;
+				break;
+			}
+			case JointType::SixDOF:
+			{
+				// The frame's X is Axis; Y is SecondaryAxis with its Axis component removed.
+				glm::vec3 secondary = rotation * joint.SecondaryAxis;
+				const glm::vec3 x = FromJolt(joltAxis);
+				secondary -= glm::dot(secondary, x) * x;
+				JPH::Vec3 joltSecondary = joltNormal;
+				if (glm::length(secondary) < 1e-4f)
+					warnings.emplace_back("SecondaryAxis is zero or parallel to Axis; using an arbitrary perpendicular");
+				else
+					joltSecondary = ToJolt(glm::normalize(secondary));
+				auto* sixDOF = new JPH::SixDOFConstraintSettings();
+				sixDOF->mPosition1 = sixDOF->mPosition2 = ToJolt(anchor);
+				sixDOF->mAxisX1 = sixDOF->mAxisX2 = joltAxis;
+				sixDOF->mAxisY1 = sixDOF->mAxisY2 = joltSecondary;
+				sixDOF->mSwingType = JPH::ESwingType::Cone;
+				settings = sixDOF;
+				break;
+			}
 		}
 
 		// Body 1 is the connected body (or the world), body 2 this entity's.
@@ -1404,6 +1540,8 @@ namespace Basalt {
 			case JointType::Fixed:
 			case JointType::Point:
 			case JointType::Distance:
+			case JointType::Cone:
+			case JointType::SixDOF:
 				break;
 		}
 		return std::nullopt;

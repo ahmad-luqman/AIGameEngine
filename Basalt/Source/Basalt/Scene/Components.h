@@ -182,7 +182,12 @@ namespace Basalt {
 		// Translates along Axis without rotating (pistons, rails).
 		Slider,
 		// Keeps the anchors at a fixed distance, or within [LimitMin, LimitMax] (ropes).
-		Distance
+		Distance,
+		// Ball-and-socket whose Axis stays within LimitMax degrees of where it started (simple ragdoll limbs,
+		// hanging lamps).
+		Cone,
+		// Each translation and rotation of the joint frame locked or limited on its own (ragdolls).
+		SixDOF
 	};
 
 	enum class JointMotorMode
