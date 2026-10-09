@@ -102,6 +102,106 @@ namespace Basalt {
 			return *physics;
 		}
 
+		struct QueryOptions
+		{
+			PhysicsQueryFilter Filter;
+			bool All = false;
+		};
+
+		// The optional last argument of every Physics query: an Entity to ignore (Raycast's original
+		// argument) or a table { Ignore = entity, Layers = { "Default", ... }, IncludeTriggers = bool,
+		// All = bool }. Strict, so a misspelled option is an error rather than silently ignored.
+		QueryOptions ParseQueryOptions(const PhysicsWorld& physics, const sol::object& options)
+		{
+			QueryOptions result;
+			if (!options.valid() || options.get_type() == sol::type::lua_nil)
+				return result;
+			if (options.is<ScriptEntity>())
+			{
+				result.Filter.IgnoreEntity = options.as<ScriptEntity>().ID;
+				return result;
+			}
+			if (options.get_type() != sol::type::table)
+				throw std::runtime_error("query options must be an Entity or a table");
+
+			for (const auto& [key, value] : options.as<sol::table>())
+			{
+				const std::string name = key.get_type() == sol::type::string ? key.as<std::string>() : std::string();
+				if (name == "Ignore")
+				{
+					if (!value.is<ScriptEntity>())
+						throw std::runtime_error("query option 'Ignore' must be an Entity");
+					result.Filter.IgnoreEntity = value.as<ScriptEntity>().ID;
+				}
+				else if (name == "Layers")
+				{
+					if (value.get_type() != sol::type::table)
+						throw std::runtime_error("query option 'Layers' must be a table of layer names");
+					std::vector<std::string> names;
+					for (const auto& [index, layer] : value.as<sol::table>())
+					{
+						if (layer.get_type() != sol::type::string)
+							throw std::runtime_error("query option 'Layers' must be a table of layer names");
+						names.push_back(layer.as<std::string>());
+					}
+					std::string error;
+					const auto mask = physics.GetLayers().MaskFromNames(names, error);
+					if (!mask)
+						throw std::runtime_error(error);
+					result.Filter.LayerMask = *mask;
+				}
+				else if (name == "IncludeTriggers" || name == "All")
+				{
+					if (value.get_type() != sol::type::boolean)
+						throw std::runtime_error("query option '" + name + "' must be a boolean");
+					(name == "All" ? result.All : result.Filter.IncludeTriggers) = value.as<bool>();
+				}
+				else
+				{
+					throw std::runtime_error("unknown query option '" + name + "' (valid: Ignore, Layers, IncludeTriggers, All)");
+				}
+			}
+			return result;
+		}
+
+		sol::table MakeHit(sol::state_view lua, ScriptContext& context, const RaycastHit& hit)
+		{
+			sol::table result = lua.create_table();
+			result["Entity"] = MakeEntity(lua, context, RequireScene(context).GetEntityByUUID(hit.EntityID));
+			result["Point"] = hit.Point;
+			result["Normal"] = hit.Normal;
+			result["Distance"] = hit.Distance;
+			return result;
+		}
+
+		// A cast's result: the closest hit (or nil), or an array of every hit when options.All is set.
+		template<typename CastAll, typename CastClosest>
+		sol::object CastResult(sol::state_view lua, ScriptContext& context, const QueryOptions& options, CastAll&& castAll, CastClosest&& castClosest)
+		{
+			if (options.All)
+			{
+				sol::table hits = lua.create_table();
+				for (const RaycastHit& hit : castAll(options.Filter))
+					hits.add(MakeHit(lua, context, hit));
+				return hits;
+			}
+			const std::optional<RaycastHit> hit = castClosest(options.Filter);
+			if (!hit)
+				return sol::lua_nil;
+			return MakeHit(lua, context, *hit);
+		}
+
+		sol::table MakeEntityList(sol::state_view lua, ScriptContext& context, const std::vector<UUID>& entities)
+		{
+			sol::table result = lua.create_table();
+			for (UUID id : entities)
+			{
+				if (Entity entity = RequireScene(context).GetEntityByUUID(id))
+					result.add(MakeEntity(lua, context, entity));
+			}
+			return result;
+		}
+
 		AudioSystem& RequireAudio(ScriptContext& context)
 		{
 			AudioSystem* audio = RequireScene(context).GetAudioSystem();
@@ -329,17 +429,35 @@ namespace Basalt {
 			input["GetMouseScroll"] = []() { return Input::GetMouseScroll(); };
 
 			sol::table physics = lua.create_named_table("Physics");
-			physics["Raycast"] = [&context](sol::this_state state, const glm::vec3& origin, const glm::vec3& direction, float maxDistance, sol::optional<ScriptEntity> ignore) -> sol::object {
-				const auto hit = RequirePhysics(context).Raycast(origin, direction, maxDistance, { .IgnoreEntity = ignore ? ignore->ID : UUID(0) });
-				if (!hit)
-					return sol::lua_nil;
-				sol::state_view view(state);
-				sol::table result = view.create_table();
-				result["Entity"] = MakeEntity(state, context, RequireScene(context).GetEntityByUUID(hit->EntityID));
-				result["Point"] = hit->Point;
-				result["Normal"] = hit->Normal;
-				result["Distance"] = hit->Distance;
-				return result;
+			physics["Raycast"] = [&context](sol::this_state state, const glm::vec3& origin, const glm::vec3& direction, float maxDistance, sol::object options) -> sol::object {
+				const PhysicsWorld& world = RequirePhysics(context);
+				return CastResult(
+					state, context, ParseQueryOptions(world, options), [&](const PhysicsQueryFilter& filter) { return world.RaycastAll(origin, direction, maxDistance, filter); }, [&](const PhysicsQueryFilter& filter) { return world.Raycast(origin, direction, maxDistance, filter); });
+			};
+			physics["SphereCast"] = [&context](sol::this_state state, const glm::vec3& origin, float radius, const glm::vec3& direction, float maxDistance, sol::object options) -> sol::object {
+				const PhysicsWorld& world = RequirePhysics(context);
+				return CastResult(
+					state, context, ParseQueryOptions(world, options), [&](const PhysicsQueryFilter& filter) { return world.SphereCastAll(origin, radius, direction, maxDistance, filter); }, [&](const PhysicsQueryFilter& filter) { return world.SphereCast(origin, radius, direction, maxDistance, filter); });
+			};
+			physics["BoxCast"] = [&context](sol::this_state state, const glm::vec3& origin, const glm::vec3& halfExtents, const glm::quat& rotation, const glm::vec3& direction, float maxDistance, sol::object options) -> sol::object {
+				const PhysicsWorld& world = RequirePhysics(context);
+				return CastResult(
+					state, context, ParseQueryOptions(world, options), [&](const PhysicsQueryFilter& filter) { return world.BoxCastAll(origin, halfExtents, rotation, direction, maxDistance, filter); }, [&](const PhysicsQueryFilter& filter) { return world.BoxCast(origin, halfExtents, rotation, direction, maxDistance, filter); });
+			};
+			physics["OverlapSphere"] = [&context](sol::this_state state, const glm::vec3& center, float radius, sol::object options) {
+				const PhysicsWorld& world = RequirePhysics(context);
+				return MakeEntityList(state, context, world.OverlapSphere(center, radius, ParseQueryOptions(world, options).Filter));
+			};
+			physics["OverlapBox"] = [&context](sol::this_state state, const glm::vec3& center, const glm::vec3& halfExtents, const glm::quat& rotation, sol::object options) {
+				const PhysicsWorld& world = RequirePhysics(context);
+				return MakeEntityList(state, context, world.OverlapBox(center, halfExtents, rotation, ParseQueryOptions(world, options).Filter));
+			};
+			physics["GetLayers"] = [&context](sol::this_state state) {
+				sol::state_view lua(state);
+				sol::table names = lua.create_table();
+				for (const std::string& name : RequirePhysics(context).GetLayers().GetNames())
+					names.add(name);
+				return names;
 			};
 			physics["GetGravity"] = [&context]() { return RequirePhysics(context).GetGravity(); };
 			physics["SetGravity"] = [&context](const glm::vec3& gravity) { RequirePhysics(context).SetGravity(gravity); };
