@@ -240,7 +240,8 @@ namespace Basalt {
 		// limits a six-DOF joint locks translation and rotates freely). Translation in meters, rotation in
 		// degrees; every range must contain 0 (the rest pose), and min == max locks that axis. X rotation
 		// (twist) lies within [-180, 180]; Y and Z rotation (swing) form a cone whose half angles are
-		// AngularLimitMax.y and .z (0..180), so their minimums must mirror them.
+		// AngularLimitMax.y and .z (0..180), so their minimums are 0 or mirror them. Limit springs soften
+		// only the limited (not locked) translation axes.
 		glm::vec3 LinearLimitMin = { 0.0f, 0.0f, 0.0f };
 		glm::vec3 LinearLimitMax = { 0.0f, 0.0f, 0.0f };
 		glm::vec3 AngularLimitMin = { 0.0f, 0.0f, 0.0f };

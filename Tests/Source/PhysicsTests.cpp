@@ -1314,6 +1314,9 @@ TEST_SUITE("Physics")
 		Entity twist = pinned(0.0f, true);
 		Entity freeTwist = pinned(5.0f, false);
 		Entity swing = pinned(10.0f, true);
+		// Setting only the swing maximum is enough: a minimum of 0 mirrors it without a warning.
+		swing.GetComponent<JointComponent>().AngularLimitMin = { -10.0f, 0.0f, 0.0f };
+		const uint64_t before = Log::GetHistory().GetTotalCount();
 
 		scene.OnSimulationStart();
 		PhysicsWorld& physics = *scene.GetPhysicsWorld();
@@ -1335,6 +1338,7 @@ TEST_SUITE("Physics")
 		CHECK(twistMax == doctest::Approx(20.0f).epsilon(0.1));
 		CHECK(glm::degrees(glm::angle(freeTwist.GetTransform().Rotation)) > 90.0f);
 		CHECK(swingMax == doctest::Approx(30.0f).epsilon(0.1));
+		CHECK(CountMessages(before, "six-DOF swing") == 0);
 		CHECK(physics.GetJointPosition(twist) == std::nullopt);
 		scene.OnSimulationStop();
 	}
@@ -1379,7 +1383,7 @@ TEST_SUITE("Physics")
 		PhysicsWorld& physics = *scene.GetPhysicsWorld();
 		physics.SetLinearVelocity(rigid, { 4.0f, 3.0f, 3.0f });
 		physics.SetAngularVelocity(rigid, { 2.0f, 2.0f, 2.0f });
-		physics.SetLinearVelocity(soft, { 4.0f, 0.0f, 0.0f });
+		physics.SetLinearVelocity(soft, { 4.0f, 3.0f, 3.0f });
 		float rigidPeak = 0.0f;
 		float softPeak = 0.0f;
 		for (int i = 0; i < 30; i++)
@@ -1388,6 +1392,8 @@ TEST_SUITE("Physics")
 			const glm::vec3 position = rigid.GetTransform().Translation;
 			rigidPeak = std::max(rigidPeak, position.x);
 			softPeak = std::max(softPeak, soft.GetTransform().Translation.x);
+			// The spring softens only the limited X axis; the locked axes stay rigid.
+			CHECK(std::abs(soft.GetTransform().Translation.y) < 0.01f);
 			CHECK(std::abs(position.y) < 0.01f);
 			CHECK(std::abs(position.z) < 0.01f);
 			CHECK(glm::degrees(glm::angle(rigid.GetTransform().Rotation)) < 1.0f);

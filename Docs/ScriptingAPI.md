@@ -189,9 +189,10 @@ bungee cord.
 **Six-DOF joints** (ragdolls) build a frame at the anchor: X is `Axis` (twist), Y is `SecondaryAxis`
 (made perpendicular to `Axis`) and Z is X × Y. With `UseLimits`, each axis's range must contain 0, and
 min == max locks it; X rotation (twist) lies within ±180 and the Y and Z rotations form a swing cone whose
-half angles are `AngularLimitMax.y`/`.z` (their minimums mirror them). For a free translation, use a range
-wider than the body can travel. Without `UseLimits`, translation is locked and rotation free. Rotation
-limits are always rigid.
+half angles are `AngularLimitMax.y`/`.z` (leave their minimums at 0, or mirror them). For a free
+translation, use a range wider than the body can travel. Without `UseLimits`, translation is locked and
+rotation free. A limit spring softens only limited translation axes; locked axes and rotation limits stay
+rigid.
 
 ```lua
 -- A door that swings open on a motor (hinge on the door's left edge, around Y).
