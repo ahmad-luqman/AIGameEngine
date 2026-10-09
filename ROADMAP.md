@@ -61,8 +61,9 @@ The features most games need, roughly in order of impact.
 - **Powered ragdolls — S.** Joints now cover ragdolls (six-DOF and cone types, several joints per body
   through joint entities, spring-softened limits), but only hinges and sliders have motors. Add six-DOF
   motors (per-axis velocity/position targets, or a target orientation; Jolt's cone joint has none) so
-  animation can drive a ragdoll. Also: explicit free six-DOF axes (today a wide limit stands in for one), a `GetJointRotation`
-  for cone and six-DOF joints, and soft rotation limits if Jolt adds them.
+  animation can drive a ragdoll. Also: explicit free six-DOF translation axes (today a wide limit stands in
+  for one; rotation limits of ±180 are already free), a `GetJointRotation` for cone and six-DOF joints, and
+  soft rotation limits if Jolt adds them.
 
 ### Rendering
 

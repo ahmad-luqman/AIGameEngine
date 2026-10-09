@@ -188,11 +188,12 @@ bungee cord.
 
 **Six-DOF joints** (ragdolls) build a frame at the anchor: X is `Axis` (twist), Y is `SecondaryAxis`
 (made perpendicular to `Axis`) and Z is X × Y. With `UseLimits`, each axis's range must contain 0, and
-min == max locks it; X rotation (twist) lies within ±180 and the Y and Z rotations form a swing cone whose
-half angles are `AngularLimitMax.y`/`.z` (leave their minimums at 0, or mirror them). For a free
-translation, use a range wider than the body can travel. Without `UseLimits`, translation is locked and
-rotation free. A limit spring softens only limited translation axes; locked axes and rotation limits stay
-rigid.
+min == max locks it; X rotation (twist) lies within ±180 and the Y and Z rotations form a symmetric swing
+cone whose half angles are `AngularLimitMax.y`/`.z`. A swing minimum of 0 means -max, so a one-sided
+swing range is not possible (other minimums are mirrored with a warning). Jolt treats an angle limit within
+0.5° of 0 as locked and one within 0.5° of 180 as free. For a free translation, use a range wider than the
+body can travel. Without `UseLimits`, translation is locked and rotation free. A limit spring softens only
+limited translation axes; locked axes and rotation limits stay rigid.
 
 ```lua
 -- A door that swings open on a motor (hinge on the door's left edge, around Y).
@@ -200,7 +201,7 @@ door:AddComponent("Joint", { Type = "Hinge", ConnectedEntity = frame, Anchor = {
     UseLimits = true, LimitMin = 0, LimitMax = 100 })
 door:SetComponent("Joint", { MotorMode = "Position", MotorTarget = 90 })  -- cheap: updates the live joint
 
--- A shoulder: free twist of ±30 degrees, 70/40 degree swing cone.
+-- A shoulder: twist limited to ±30 degrees, a 70/40 degree swing cone.
 arm:AddComponent("Joint", { Type = "SixDOF", ConnectedEntity = torso, Anchor = { 0, 0.5, 0 },
     Axis = { 0, -1, 0 }, SecondaryAxis = { 1, 0, 0 }, UseLimits = true,
     AngularLimitMin = { -30, -70, -40 }, AngularLimitMax = { 30, 70, 40 } })
@@ -221,6 +222,10 @@ end
 ```
 
 - `BodyEntity` and `ConnectedEntity` accept an entity or its ID and read back as the ID.
+- Fields a joint does not use (for its `Type`, or without `UseLimits`) are ignored, with one warning
+  naming them when they are set away from their defaults; the editor shows only the fields a joint uses
+  (plus any such ignored ones, marked). Free cone and six-DOF joints (without `UseLimits`) and point and
+  distance joints hold no torque, so `BreakTorque` does not apply to them.
 - Setting limits, limit springs, motor fields, break thresholds or `EnableCollision` updates the joint in
   place, so it is fine to do every frame. Changing `Type`, an entity, an anchor, an axis or `UseLimits`
   rebuilds it from the current poses.
@@ -230,16 +235,17 @@ end
   `GetJointPosition()` is the body's position relative to the connected one: the hinge angle around
   `Axis` (right-handed, wrapping at ±180) or the slider offset along `Axis`; nil for other types.
 - A joint whose force or torque exceeds `BreakForce`/`BreakTorque` (0 = unbreakable) is removed with its
-  component. Both bodies get `OnJointBreak(other)` with the body on the other side, and so does a
-  separate joint entity (with the connected entity). The force and torque include limit and motor effort,
-  so a motor stalled against an obstacle can break its joint. Point and distance joints hold no torque:
-  `BreakTorque` does not apply to them. Each break is logged with the measured force and torque, which
-  helps tune thresholds.
-- Destroying either body removes the constraint without calling `OnJointBreak`; `HasJoint()` turns false
-  while the component stays.
+  component. Each body gets `OnJointBreak(other)` with the body on the other side (nil for the world), and
+  a separate joint entity that is neither body gets it once too (with the connected entity). The force and
+  torque include limit and motor effort, so a motor stalled against an obstacle can break its joint. Each
+  break is logged with the measured force and torque, which helps tune thresholds.
+- Destroying a body removes the constraint without calling `OnJointBreak`. When the `Joint` is held by
+  another entity that survives (not the body or one of its children), `HasJoint()` turns false while the
+  component stays, and the joint is rebuilt if a body with that ID appears again.
 - A joint whose body (or connected body) does not exist yet is built as soon as it does. Warnings about
   a joint are logged once per distinct problem, not on every update.
-- Jointed bodies do not collide with each other unless `EnableCollision` is set.
+- Jointed bodies do not collide with each other unless `EnableCollision` is set. Changing that (or which
+  bodies a joint connects) applies at once, even to bodies resting against each other.
 - Joints inside a prefab or a duplicated hierarchy connect the new copies, and joint entities move the
   copied body.
 
