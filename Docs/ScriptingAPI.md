@@ -20,7 +20,7 @@ function Player:OnCreate() end                 -- see "Creation order" below
 function Player:OnUpdate(dt) end               -- every frame, before physics
 function Player:OnLateUpdate(dt) end           -- every frame, after physics
 function Player:OnDestroy() end                -- entity destroyed, component removed, or play stopped
-function Player:OnCollisionBegin(other) end    -- other: Entity
+function Player:OnCollisionBegin(other, contact) end  -- other: Entity; contact: see below
 function Player:OnCollisionEnd(other) end
 function Player:OnTriggerEnter(other) end      -- either body is a trigger (RigidBody.IsTrigger)
 function Player:OnTriggerExit(other) end
@@ -36,6 +36,15 @@ return Player
   before its `OnCreate` ran gets neither `OnCreate` nor `OnDestroy`.
 - A runtime error disables only the failing instance and is reported (file:line) in the log and in
   `play.step`'s `scriptErrors`.
+- `contact` in `OnCollisionBegin` is a table describing where and how hard the bodies first touched:
+  `Point` (Vec3, world space, midway between the surfaces), `Normal` (Vec3, unit, pointing away from
+  `other`: a body landing on the ground gets `(0, 1, 0)`) and `Impulse` (number, N·s: the estimated impulse
+  that stops the bodies closing in, bounce included; 0 for a gentle touch). When several parts of the two
+  bodies touch in the same step, the strongest is reported. Use it for impact sounds, damage or "landed" checks.
+- Friction and restitution of a contact are combined from both bodies by `RigidBody.FrictionCombine` and
+  `RestitutionCombine`: `Default`, `GeometricMean`, `Average`, `Min`, `Multiply` or `Max`. When the bodies
+  differ, the mode later in that list wins (so `Default` defers to the other body); when both are
+  `Default`, friction uses the geometric mean and restitution the larger value.
 - Destroying entities from any callback is safe: destruction is deferred until the current update ends.
 - `require("Assets.Scripts.Lib.Util")` loads project modules. `io`, `os`, `dofile` and `loadfile` are not
   available (scripts cannot touch the file system).

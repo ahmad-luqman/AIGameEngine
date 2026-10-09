@@ -130,6 +130,18 @@ namespace Basalt {
 		Kinematic
 	};
 
+	// How a contact combines the two bodies' friction (or restitution). When the bodies ask for different
+	// modes, the one listed later wins, so Max beats every other mode and Default defers to the other body.
+	enum class PhysicsCombineMode
+	{
+		Default = 0,   // Jolt's: the geometric mean for friction, the larger value for restitution
+		GeometricMean, // sqrt(a * b)
+		Average,
+		Min,
+		Multiply,
+		Max
+	};
+
 	struct RigidBodyComponent
 	{
 		RigidBodyType Type = RigidBodyType::Static;
@@ -139,6 +151,8 @@ namespace Basalt {
 		float GravityFactor = 1.0f;
 		float Friction = 0.5f;
 		float Restitution = 0.0f;
+		PhysicsCombineMode FrictionCombine = PhysicsCombineMode::Default;
+		PhysicsCombineMode RestitutionCombine = PhysicsCombineMode::Default;
 		// Triggers report overlaps to scripts but do not collide.
 		bool IsTrigger = false;
 		// Prevents the body from rotating (character controllers, upright objects).

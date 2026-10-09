@@ -6,7 +6,12 @@ local function Count(name)
 	FeatureTestEvents[name] = (FeatureTestEvents[name] or 0) + 1
 end
 
-function Probe:OnCollisionBegin(other) Count("CollisionBegin") end
+function Probe:OnCollisionBegin(other, contact)
+	Count("CollisionBegin")
+	-- The first contact per entity.
+	local key = "Contact:" .. self.Entity.Name
+	FeatureTestEvents[key] = FeatureTestEvents[key] or contact
+end
 function Probe:OnCollisionEnd(other) Count("CollisionEnd") end
 function Probe:OnTriggerEnter(other) Count("TriggerEnter") end
 function Probe:OnTriggerExit(other) Count("TriggerExit") end

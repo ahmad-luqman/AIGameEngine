@@ -428,8 +428,25 @@ namespace Basalt {
 		ScriptEngineAccess::Teardown(*this, uuid);
 	}
 
-	void ScriptEngine::OnContactEvent(ContactEventType type, Entity a, Entity b)
+	void ScriptEngine::OnContactEvent(ContactEventType type, Entity a, Entity b, const ContactInfo& contact)
 	{
+		if (type == ContactEventType::CollisionBegin)
+		{
+			sol::state& lua = m_Impl->Lua;
+			auto makeContact = [&lua](const ContactInfo& info) {
+				sol::table table = lua.create_table();
+				table["Point"] = info.Point;
+				table["Normal"] = info.Normal;
+				table["Impulse"] = info.Impulse;
+				return table;
+			};
+			// Each side gets its own table: a callback may modify the one it receives.
+			ScriptEngineAccess::Call(*this, a.GetUUID(), "OnCollisionBegin", ScriptEntity{ b.GetUUID(), m_Scene }, makeContact(contact));
+			if (a && b)
+				ScriptEngineAccess::Call(*this, b.GetUUID(), "OnCollisionBegin", ScriptEntity{ a.GetUUID(), m_Scene }, makeContact(contact.Flipped()));
+			return;
+		}
+
 		const char* callback = "OnCollisionBegin";
 		switch (type)
 		{

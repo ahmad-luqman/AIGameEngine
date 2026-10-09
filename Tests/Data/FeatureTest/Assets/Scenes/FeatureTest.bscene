@@ -39,7 +39,7 @@
 			"Transform": { "Translation": [3, 7, 0] },
 			"Mesh": { "Mesh": "builtin://Sphere" },
 			"Material": { "AlbedoColor": [0.95, 0.95, 0.95, 1], "Metallic": 1.0, "Roughness": 0.15 },
-			"RigidBody": { "Type": "Dynamic", "Mass": 2, "Restitution": 0.1 },
+			"RigidBody": { "Type": "Dynamic", "Mass": 2, "Restitution": 0.1, "FrictionCombine": "Average", "RestitutionCombine": "Min" },
 			"SphereCollider": { "Radius": 0.5 },
 			"Script": { "Script": "Assets/Scripts/Probe.lua" } } },
 		{ "ID": 12, "Name": "Zone", "Components": {

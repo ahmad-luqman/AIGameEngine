@@ -228,11 +228,13 @@ namespace Basalt {
 		constexpr const char* s_ProjectionTypeNames[] = { "Perspective", "Orthographic" };
 		constexpr const char* s_JointTypeNames[] = { "Fixed", "Point", "Hinge", "Slider", "Distance", "Cone", "SixDOF" };
 		constexpr const char* s_JointMotorModeNames[] = { "Off", "Velocity", "Position" };
+		constexpr const char* s_CombineModeNames[] = { "Default", "GeometricMean", "Average", "Min", "Multiply", "Max" };
 		// Names are indexed by enum value; a new enum value needs a name here.
 		static_assert(std::size(s_RigidBodyTypeNames) == static_cast<size_t>(RigidBodyType::Kinematic) + 1);
 		static_assert(std::size(s_ProjectionTypeNames) == static_cast<size_t>(SceneCamera::ProjectionType::Orthographic) + 1);
 		static_assert(std::size(s_JointTypeNames) == static_cast<size_t>(JointType::SixDOF) + 1);
 		static_assert(std::size(s_JointMotorModeNames) == static_cast<size_t>(JointMotorMode::Position) + 1);
+		static_assert(std::size(s_CombineModeNames) == static_cast<size_t>(PhysicsCombineMode::Max) + 1);
 
 		// --- Per-component field definitions -----------------------------------------------------
 		// Each Fields() overload lists every field once; it is used both to read and to enumerate names.
@@ -331,6 +333,8 @@ namespace Basalt {
 			r.Field("GravityFactor", c.GravityFactor);
 			r.Field("Friction", c.Friction);
 			r.Field("Restitution", c.Restitution);
+			r.EnumField("FrictionCombine", c.FrictionCombine, s_CombineModeNames);
+			r.EnumField("RestitutionCombine", c.RestitutionCombine, s_CombineModeNames);
 			r.Field("IsTrigger", c.IsTrigger);
 			r.Field("FixedRotation", c.FixedRotation);
 			// Before named layers, files stored Layer as an index and a per-body CollisionMask (16 bits used).
@@ -507,6 +511,8 @@ namespace Basalt {
 				{ "GravityFactor", c.GravityFactor },
 				{ "Friction", c.Friction },
 				{ "Restitution", c.Restitution },
+				{ "FrictionCombine", s_CombineModeNames[static_cast<int>(c.FrictionCombine)] },
+				{ "RestitutionCombine", s_CombineModeNames[static_cast<int>(c.RestitutionCombine)] },
 				{ "IsTrigger", c.IsTrigger },
 				{ "FixedRotation", c.FixedRotation },
 				{ "Layer", c.Layer },

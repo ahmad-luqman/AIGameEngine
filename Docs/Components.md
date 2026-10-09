@@ -44,7 +44,7 @@ Fields: `EnvironmentMap`, `Intensity`, `Rotation`, `ShowBackground`
 
 ## RigidBody
 
-Fields: `Type`, `Mass`, `LinearDamping`, `AngularDamping`, `GravityFactor`, `Friction`, `Restitution`, `IsTrigger`, `FixedRotation`, `Layer`, `Continuous`
+Fields: `Type`, `Mass`, `LinearDamping`, `AngularDamping`, `GravityFactor`, `Friction`, `Restitution`, `FrictionCombine`, `RestitutionCombine`, `IsTrigger`, `FixedRotation`, `Layer`, `Continuous`
 
 ## BoxCollider
 

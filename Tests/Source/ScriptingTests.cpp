@@ -231,6 +231,57 @@ TEST_SUITE("Scripting")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("OnCollisionBegin receives the contact point, normal and impulse")
+	{
+		BasaltTest::TempProject project("ScriptContactInfo");
+		const std::string script = project.WriteFile("Assets/Scripts/Contact.lua", R"(
+			local Contact = {}
+			function Contact:OnCollisionBegin(other, contact)
+				self.Point = contact.Point
+				self.Normal = contact.Normal
+				self.Impulse = contact.Impulse
+				contact.Normal = Vec3(0, 0, 0) -- each side has its own table
+			end
+			return Contact
+		)");
+
+		Scene scene;
+		Entity ground = AddScripted(scene, "Ground", script);
+		ground.GetTransform().Translation = { 0.0f, -0.5f, 0.0f };
+		ground.AddComponent<RigidBodyComponent>();
+		ground.AddComponent<BoxColliderComponent>().HalfExtents = { 10.0f, 0.5f, 10.0f };
+
+		// Mass 2 sphere dropped so its bottom falls 5 m: it lands at about sqrt(2 * 9.81 * 5) = 9.9 m/s.
+		Entity ball = AddScripted(scene, "Ball", script);
+		ball.GetTransform().Translation = { 1.0f, 5.5f, 2.0f };
+		auto& body = ball.AddComponent<RigidBodyComponent>();
+		body.Type = RigidBodyType::Dynamic;
+		body.Mass = 2.0f;
+		body.LinearDamping = 0.0f;
+		ball.AddComponent<SphereColliderComponent>();
+
+		scene.OnRuntimeStart();
+		for (int i = 0; i < 90; i++)
+			scene.OnUpdate(Step);
+
+		const nlohmann::json ballNormal = Field(scene, ball, "Normal");
+		const nlohmann::json groundNormal = Field(scene, ground, "Normal");
+		REQUIRE(ballNormal.is_array());
+		REQUIRE(groundNormal.is_array());
+		// Each side's normal points away from the other entity.
+		CHECK(ballNormal[1].get<float>() == doctest::Approx(1.0f).epsilon(0.01));
+		CHECK(groundNormal[1].get<float>() == doctest::Approx(-1.0f).epsilon(0.01));
+		const nlohmann::json point = Field(scene, ball, "Point");
+		CHECK(point[0].get<float>() == doctest::Approx(1.0f).epsilon(0.01));
+		CHECK(std::abs(point[1].get<float>()) < 0.2f);
+		CHECK(point[2].get<float>() == doctest::Approx(2.0f).epsilon(0.01));
+		// Stopping 2 kg at 9.9 m/s without bounce takes about 19.8 N*s.
+		CHECK(Field(scene, ball, "Impulse").get<float>() == doctest::Approx(19.8f).epsilon(0.1));
+		CHECK(Field(scene, ground, "Impulse") == Field(scene, ball, "Impulse"));
+		CHECK(scene.GetScriptEngine()->GetErrors().empty());
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Scripts drive joint motors and receive OnJointBreak")
 	{
 		BasaltTest::TempProject project("ScriptJoints");

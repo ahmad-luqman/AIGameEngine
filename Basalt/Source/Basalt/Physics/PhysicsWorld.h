@@ -4,6 +4,7 @@
 #include "Basalt/Core/Timestep.h"
 #include "Basalt/Core/UUID.h"
 #include "Basalt/Physics/PhysicsLayers.h"
+#include "Basalt/Scene/Components.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -43,6 +44,28 @@ namespace Basalt {
 		TriggerExit
 	};
 
+	// Where and how hard two entities started touching (ContactEventType::CollisionBegin). Relative to the
+	// event's first entity: Normal points from the second entity toward the first, i.e. the direction that
+	// pushes the first entity out.
+	struct ContactInfo
+	{
+		glm::vec3 Point = { 0.0f, 0.0f, 0.0f };
+		glm::vec3 Normal = { 0.0f, 0.0f, 0.0f };
+		// Estimated impulse (N*s) along the normal that resolves the impact, bounce included; 0 when the
+		// bodies touched without closing in (e.g. resting contact). The strongest touching part is reported
+		// when several parts of the two bodies touch in the same step.
+		float Impulse = 0.0f;
+
+		// The same contact seen from the second entity.
+		ContactInfo Flipped() const { return { Point, -Normal, Impulse }; }
+	};
+
+	// Combine the friction or restitution values of two touching bodies. When the modes differ, the one
+	// listed later in PhysicsCombineMode wins; when both are Default, friction uses the geometric mean and
+	// restitution the larger value.
+	float CombineFriction(PhysicsCombineMode modeA, float a, PhysicsCombineMode modeB, float b);
+	float CombineRestitution(PhysicsCombineMode modeA, float a, PhysicsCombineMode modeB, float b);
+
 	// Jolt-backed physics simulation for one running scene.
 	//
 	// Bodies are created for every entity with a RigidBodyComponent and at least one collider. Entities
@@ -53,6 +76,8 @@ namespace Basalt {
 	// current poses when either body is rebuilt or one of its structural fields changes (see JointComponent);
 	// other changes update it in place. Joint warnings (including fields the joint ignores, see
 	// JointFieldApplies) are logged once per distinct setting, so scripts may set the component every frame.
+	// Contacts combine the two bodies' Friction and Restitution with their FrictionCombine/RestitutionCombine
+	// modes (see CombineFriction).
 	// Collision filtering uses named layers (RigidBodyComponent::Layer) and the collision matrix of the
 	// scene's override or else the active project, copied when the world is built: matrix edits apply on the
 	// next play. An unknown layer name falls back to Default with a warning.
