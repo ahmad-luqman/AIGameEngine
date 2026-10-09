@@ -152,6 +152,11 @@ TEST_SUITE("Automation")
 		CHECK(stranded[0]["layer"] == "Pickup");
 		CHECK(stranded[0]["entity"] == player["id"]);
 		CHECK(Run(registry, session, "scene.info")["unknownPhysicsLayers"] == stranded);
+		// A character controller replaces the RigidBody, so only the controller's layer counts.
+		Run(registry, session, "component.set", { { "entity", player["id"] }, { "component", "CharacterController" }, { "data", { { "Layer", "Player" } } } });
+		CHECK(Run(registry, session, "scene.info")["unknownPhysicsLayers"].empty());
+		Run(registry, session, "component.remove", { { "entity", player["id"] }, { "component", "CharacterController" } });
+		CHECK(Run(registry, session, "scene.info")["unknownPhysicsLayers"] == stranded);
 		CHECK(Run(registry, session, "project.set", { { "physicsLayers", layers } })["unknownPhysicsLayers"].empty());
 
 		Run(registry, session, "asset.write", { { "path", "Assets/Scripts/Hello.lua" }, { "content", "return { Properties = { Speed = 3 } }" } });
