@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <initializer_list>
 
 namespace Basalt {
 
@@ -92,13 +93,40 @@ namespace Basalt {
 				   (entity.HasComponent<BoxColliderComponent>() || entity.HasComponent<SphereColliderComponent>() || entity.HasComponent<CapsuleColliderComponent>());
 		}
 
+		// Whether a Joint field does anything for the joint type (by its JSON name); the inspector hides the
+		// rest so each type shows a short list. Files, Lua and the automation API still see every field.
+		bool JointFieldApplies(const std::string& type, const std::string& field)
+		{
+			auto is = [&type](std::initializer_list<const char*> types) {
+				return std::ranges::any_of(types, [&type](const char* name) { return type == name; });
+			};
+			if (field == "ConnectedAnchor")
+				return is({ "Distance" });
+			if (field == "Axis")
+				return is({ "Hinge", "Slider", "Cone", "SixDOF" });
+			if (field == "SecondaryAxis" || field.starts_with("LinearLimit") || field.starts_with("AngularLimit"))
+				return is({ "SixDOF" });
+			if (field == "UseLimits")
+				return !is({ "Fixed", "Point" });
+			if (field == "LimitMin")
+				return is({ "Hinge", "Slider", "Distance" });
+			if (field == "LimitMax")
+				return is({ "Hinge", "Slider", "Distance", "Cone" });
+			if (field.starts_with("LimitSpring"))
+				return is({ "Hinge", "Slider", "Distance", "SixDOF" });
+			if (field.starts_with("Motor"))
+				return is({ "Hinge", "Slider" });
+			if (field == "BreakTorque")
+				return !is({ "Point", "Distance" });
+			return true;
+		}
+
 	}
 
-	void InspectorPanel::DrawEntityReference(Entity entity, const std::string& component, const std::string& field, uint64_t current, const std::function<bool(Entity)>& filter)
+	void InspectorPanel::DrawEntityReference(Entity entity, const std::string& component, const std::string& field, uint64_t current, const std::function<bool(Entity)>& filter, const char* noneLabel)
 	{
-		constexpr const char* NoneLabel = "None";
 		Scene& scene = *entity.GetScene();
-		std::string preview = NoneLabel;
+		std::string preview = noneLabel;
 		if (current != 0)
 		{
 			const Entity target = scene.GetEntityByUUID(current);
@@ -108,7 +136,7 @@ namespace Basalt {
 		uint64_t selected = current;
 		if (ImGui::BeginCombo(field.c_str(), preview.c_str()))
 		{
-			if (ImGui::Selectable(NoneLabel, current == 0))
+			if (ImGui::Selectable(noneLabel, current == 0))
 				selected = 0;
 			// The entity itself is never a valid target.
 			for (Entity candidate : scene.GetAllEntitiesOrdered())
@@ -177,11 +205,16 @@ namespace Basalt {
 						continue;
 					if (info.Name == "Script" && field == "Properties")
 						continue;
+					if (info.Name == "Joint" && !JointFieldApplies(data["Type"].get<std::string>(), field))
+						continue;
 					if (std::find(info.EntityFields.begin(), info.EntityFields.end(), field) != info.EntityFields.end())
 					{
-						// Joints can only attach to entities that will have a physics body (None = the world).
+						// Joints can only attach to entities that will have a physics body. 0 is the entity itself for
+						// BodyEntity and the world for ConnectedEntity.
 						const bool joint = info.Name == "Joint";
-						DrawEntityReference(entity, info.Name, field, data[field].get<uint64_t>(), joint ? std::function<bool(Entity)>(HasPhysicsBody) : nullptr);
+						const char* noneLabel = !joint ? "None" : field == "BodyEntity" ? "Self"
+																						: "World";
+						DrawEntityReference(entity, info.Name, field, data[field].get<uint64_t>(), joint ? std::function<bool(Entity)>(HasPhysicsBody) : nullptr, noneLabel);
 						continue;
 					}
 					auto options = info.EnumOptions.find(field);
@@ -212,8 +245,14 @@ namespace Basalt {
 				}
 				if (info.Name == "Script")
 					DrawScriptProperties(entity, data);
-				if (info.Name == "Joint" && !HasPhysicsBody(entity))
-					ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "This entity needs a RigidBody and a collider for the joint to work.");
+				if (info.Name == "Joint")
+				{
+					// The joint moves BodyEntity's body, or this entity's when BodyEntity is Self.
+					const uint64_t bodyID = data["BodyEntity"].get<uint64_t>();
+					const Entity body = bodyID != 0 ? scene->GetEntityByUUID(bodyID) : entity;
+					if (!body || !HasPhysicsBody(body))
+						ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), bodyID != 0 ? "BodyEntity needs a RigidBody and a collider for the joint to work." : "This entity needs a RigidBody and a collider for the joint to work.");
+				}
 			}
 			ImGui::PopID();
 		}
