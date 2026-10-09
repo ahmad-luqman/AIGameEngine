@@ -21,6 +21,7 @@
 #include <Jolt/Physics/Collision/CollideShape.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
+#include <Jolt/Physics/Collision/EstimateCollisionResponse.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/ShapeCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
@@ -196,28 +197,75 @@ namespace Basalt {
 			uint32_t SubShape1 = 0;
 			uint32_t Body2 = 0;
 			uint32_t SubShape2 = 0;
+			// Added events only; Normal points from body 1 toward body 2.
+			ContactInfo Contact;
 
 			auto Tie() const { return std::tie(Added, Body1, SubShape1, Body2, SubShape2); }
 		};
 
-		// Called from Jolt worker threads: only records events, which the main thread dispatches.
+		struct BodyMaterial
+		{
+			PhysicsCombineMode FrictionCombine = PhysicsCombineMode::Default;
+			PhysicsCombineMode RestitutionCombine = PhysicsCombineMode::Default;
+		};
+
+		// Called from Jolt worker threads: only records events, which the main thread dispatches, and
+		// combines the bodies' materials.
 		class ContactListenerImpl final : public JPH::ContactListener
 		{
 		public:
-			void OnContactAdded(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold, JPH::ContactSettings&) override
+			void OnContactAdded(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold, JPH::ContactSettings& settings) override
 			{
+				CombineMaterials(body1, body2, settings);
+
+				RawContactEvent event{ true, body1.GetID().GetIndexAndSequenceNumber(), manifold.mSubShapeID1.GetValue(), body2.GetID().GetIndexAndSequenceNumber(), manifold.mSubShapeID2.GetValue(), {} };
+				if (!body1.IsSensor() && !body2.IsSensor() && !manifold.mRelativeContactPointsOn1.empty())
+				{
+					// Midway between the two surfaces, averaged over the manifold's points.
+					JPH::Vec3 sum = JPH::Vec3::sZero();
+					for (JPH::uint i = 0; i < manifold.mRelativeContactPointsOn1.size(); i++)
+						sum += manifold.mRelativeContactPointsOn1[i] + manifold.mRelativeContactPointsOn2[i];
+					const JPH::RVec3 point = manifold.mBaseOffset + sum / (2.0f * static_cast<float>(manifold.mRelativeContactPointsOn1.size()));
+					event.Contact.Point = FromJolt(JPH::Vec3(point));
+					event.Contact.Normal = FromJolt(manifold.mWorldSpaceNormal);
+
+					// The solver has not run yet; Jolt's estimate uses the velocities before the impact.
+					JPH::CollisionEstimationResult estimate;
+					JPH::EstimateCollisionResponse(body1, body2, manifold, estimate, settings.mCombinedFriction, settings.mCombinedRestitution, MinVelocityForRestitution);
+					for (const float impulse : estimate.mContactImpulse)
+						event.Contact.Impulse += impulse;
+				}
+
 				std::scoped_lock lock(Mutex);
-				Events.push_back({ true, body1.GetID().GetIndexAndSequenceNumber(), manifold.mSubShapeID1.GetValue(), body2.GetID().GetIndexAndSequenceNumber(), manifold.mSubShapeID2.GetValue() });
+				Events.push_back(event);
+			}
+
+			void OnContactPersisted(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold&, JPH::ContactSettings& settings) override
+			{
+				// Jolt recomputes the combined values for every contact each step.
+				CombineMaterials(body1, body2, settings);
 			}
 
 			void OnContactRemoved(const JPH::SubShapeIDPair& pair) override
 			{
 				std::scoped_lock lock(Mutex);
-				Events.push_back({ false, pair.GetBody1ID().GetIndexAndSequenceNumber(), pair.GetSubShapeID1().GetValue(), pair.GetBody2ID().GetIndexAndSequenceNumber(), pair.GetSubShapeID2().GetValue() });
+				Events.push_back({ false, pair.GetBody1ID().GetIndexAndSequenceNumber(), pair.GetSubShapeID1().GetValue(), pair.GetBody2ID().GetIndexAndSequenceNumber(), pair.GetSubShapeID2().GetValue(), {} });
 			}
 
 			std::mutex Mutex;
 			std::vector<RawContactEvent> Events;
+			// Indexed by BodyID::GetIndex(). Only written between steps, so workers read it without locking.
+			std::vector<BodyMaterial> Materials;
+			float MinVelocityForRestitution = 1.0f;
+
+		private:
+			void CombineMaterials(const JPH::Body& body1, const JPH::Body& body2, JPH::ContactSettings& settings) const
+			{
+				const BodyMaterial& material1 = Materials[body1.GetID().GetIndex()];
+				const BodyMaterial& material2 = Materials[body2.GetID().GetIndex()];
+				settings.mCombinedFriction = CombineFriction(material1.FrictionCombine, body1.GetFriction(), material2.FrictionCombine, body2.GetFriction());
+				settings.mCombinedRestitution = CombineRestitution(material1.RestitutionCombine, body1.GetRestitution(), material2.RestitutionCombine, body2.GetRestitution());
+			}
 		};
 
 		// Whether a joint change needs a new constraint. Only the fields a live Jolt constraint can update
@@ -854,6 +902,8 @@ namespace Basalt {
 		m_Impl->System = CreateScope<JPH::PhysicsSystem>();
 		m_Impl->System->Init(MaxBodies, NumBodyMutexes, MaxBodyPairs, MaxContactConstraints,
 							 m_Impl->BroadPhaseLayerInterface, m_Impl->ObjectVsBroadPhaseLayerFilter, m_Impl->ObjectLayerPairFilter);
+		m_Impl->ContactListener.Materials.resize(MaxBodies);
+		m_Impl->ContactListener.MinVelocityForRestitution = m_Impl->System->GetPhysicsSettings().mMinVelocityForRestitution;
 		m_Impl->System->SetContactListener(&m_Impl->ContactListener);
 		// Bodies joined by a joint do not collide with each other unless the joint asks for it.
 		m_Impl->System->SetSimCollideBodyVsBody([impl = m_Impl.get()](const JPH::Body& body1, const JPH::Body& body2, JPH::Mat44Arg transform1, JPH::Mat44Arg transform2,
@@ -1078,6 +1128,8 @@ namespace Basalt {
 			BS_CORE_ERROR("Physics: body limit reached; no body created for '{}'", entity.GetName());
 			return;
 		}
+
+		impl.ContactListener.Materials[bodyID.GetIndex()] = { rigidBody.FrictionCombine, rigidBody.RestitutionCombine };
 
 		Impl::BodyRecord record;
 		record.ID = bodyID;
@@ -1707,6 +1759,8 @@ namespace Basalt {
 		};
 
 		std::map<Impl::EntityPair, bool> touched; // pair -> was active before this step
+		// The strongest new contact of each pair, relative to the pair's first (lower UUID) entity.
+		std::map<Impl::EntityPair, ContactInfo> newContacts;
 		for (const RawContactEvent& event : events)
 		{
 			auto first = impl.BodyToEntity.find(event.Body1);
@@ -1718,10 +1772,14 @@ namespace Basalt {
 			uint64_t b = static_cast<uint64_t>(second->second);
 			uint32_t subA = event.SubShape1;
 			uint32_t subB = event.SubShape2;
+			// The event's normal points from body 1 toward body 2; ContactInfo's from the second entity
+			// toward the first.
+			ContactInfo contact = event.Contact.Flipped();
 			if (b < a)
 			{
 				std::swap(a, b);
 				std::swap(subA, subB);
+				contact = event.Contact;
 			}
 			const Impl::ContactKey key(a, subA, b, subB);
 			const Impl::EntityPair pair(a, b);
@@ -1736,6 +1794,9 @@ namespace Basalt {
 			touched.emplace(pair, impl.PairCounts.contains(pair));
 			if (event.Added)
 			{
+				auto [best, inserted] = newContacts.try_emplace(pair, contact);
+				if (!inserted && contact.Impulse > best->second.Impulse)
+					best->second = contact;
 				impl.SuspendedContacts.erase(key);
 				if (impl.ActiveContacts.insert(key).second)
 					impl.PairCounts[pair]++;
@@ -1784,8 +1845,45 @@ namespace Basalt {
 				type = isActive ? ContactEventType::TriggerEnter : ContactEventType::TriggerExit;
 			else
 				type = isActive ? ContactEventType::CollisionBegin : ContactEventType::CollisionEnd;
-			scriptEngine->OnContactEvent(type, entityA, entityB);
+			auto contact = newContacts.find(pair);
+			scriptEngine->OnContactEvent(type, entityA, entityB, contact != newContacts.end() ? contact->second : ContactInfo{});
 		}
+	}
+
+	namespace {
+
+		float CombineMaterial(PhysicsCombineMode modeA, float a, PhysicsCombineMode modeB, float b, PhysicsCombineMode fallback)
+		{
+			PhysicsCombineMode mode = std::max(modeA, modeB);
+			if (mode == PhysicsCombineMode::Default)
+				mode = fallback;
+			switch (mode)
+			{
+				case PhysicsCombineMode::Default:
+				case PhysicsCombineMode::GeometricMean:
+					return std::sqrt(std::max(a * b, 0.0f));
+				case PhysicsCombineMode::Average:
+					return 0.5f * (a + b);
+				case PhysicsCombineMode::Min:
+					return std::min(a, b);
+				case PhysicsCombineMode::Multiply:
+					return a * b;
+				case PhysicsCombineMode::Max:
+					return std::max(a, b);
+			}
+			return std::max(a, b);
+		}
+
+	}
+
+	float CombineFriction(PhysicsCombineMode modeA, float a, PhysicsCombineMode modeB, float b)
+	{
+		return CombineMaterial(modeA, a, modeB, b, PhysicsCombineMode::GeometricMean);
+	}
+
+	float CombineRestitution(PhysicsCombineMode modeA, float a, PhysicsCombineMode modeB, float b)
+	{
+		return CombineMaterial(modeA, a, modeB, b, PhysicsCombineMode::Max);
 	}
 
 	void PhysicsWorld::AddForce(Entity entity, const glm::vec3& force)

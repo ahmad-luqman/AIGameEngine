@@ -56,8 +56,6 @@ The features most games need, roughly in order of impact.
 - **Character controller — M.** Wrap `JPH::CharacterVirtual` in a `CharacterControllerComponent` (slope
   limit, step height, max strength) with Lua `Move(velocity)`, `IsGrounded()`, `GetGroundNormal()`.
   Platformers and first-person games need it, and `FixedRotation` dynamic bodies are a poor substitute.
-- **Physics materials and per-pair callbacks — S.** Combine modes for friction and restitution;
-  contact point, normal and impulse in `OnCollisionBegin`.
 - **Powered ragdolls — S.** Joints now cover ragdolls (six-DOF and cone types, several joints per body
   through joint entities, spring-softened limits), but only hinges and sliders have motors. Add six-DOF
   motors (per-axis velocity/position targets, or a target orientation; Jolt's cone joint has none) so

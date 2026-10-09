@@ -387,6 +387,11 @@ function Driver:OnUpdate(dt)
 		Check("Trigger exit", (events.TriggerExit or 0) >= 1)
 		Check("Collision begin", (events.CollisionBegin or 0) >= 1)
 		Check("Ball rests on ground", Near(Scene.FindEntityByName("Ball").Translation.y, 0.5, 0.05))
+		-- The ball (2 kg) lands at about 11 m/s; its normal points up, away from the ground.
+		local contact = events["Contact:Ball"]
+		Check("OnCollisionBegin contact", contact and Near(contact.Normal.y, 1, 0.01) and Near(contact.Point.y, 0, 0.2) and contact.Impulse > 10)
+		local ballBody = Scene.FindEntityByName("Ball"):GetComponent("RigidBody")
+		Check("RigidBody combine modes", ballBody.FrictionCombine == "Average" and ballBody.RestitutionCombine == "Min")
 
 		-- Layers: Ghost ignores Default (the ground), Debris collides with it.
 		local debris = Scene.FindEntityByName("DebrisBox")

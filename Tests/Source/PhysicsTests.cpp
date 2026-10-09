@@ -445,6 +445,76 @@ TEST_SUITE("Physics")
 		scene.OnSimulationStop();
 	}
 
+	TEST_CASE("Physics materials combine by the mode that ranks later")
+	{
+		using Mode = PhysicsCombineMode;
+		// Default matches Jolt: geometric mean friction, maximum restitution.
+		CHECK(CombineFriction(Mode::Default, 0.25f, Mode::Default, 1.0f) == doctest::Approx(0.5f));
+		CHECK(CombineRestitution(Mode::Default, 0.25f, Mode::Default, 1.0f) == doctest::Approx(1.0f));
+		// Default defers to the other body's mode.
+		CHECK(CombineRestitution(Mode::Default, 0.2f, Mode::Min, 0.6f) == doctest::Approx(0.2f));
+		CHECK(CombineFriction(Mode::GeometricMean, 0.25f, Mode::Default, 1.0f) == doctest::Approx(0.5f));
+		CHECK(CombineFriction(Mode::Average, 0.2f, Mode::GeometricMean, 0.6f) == doctest::Approx(0.4f));
+		CHECK(CombineFriction(Mode::Min, 0.2f, Mode::Average, 0.6f) == doctest::Approx(0.2f));
+		CHECK(CombineFriction(Mode::Min, 0.5f, Mode::Multiply, 0.6f) == doctest::Approx(0.3f));
+		CHECK(CombineRestitution(Mode::Multiply, 0.5f, Mode::Max, 0.6f) == doctest::Approx(0.6f));
+		// The order of the two bodies does not matter.
+		CHECK(CombineFriction(Mode::Max, 0.6f, Mode::Min, 0.2f) == doctest::Approx(0.6f));
+		CHECK(CombineFriction(Mode::Default, 0.0f, Mode::Default, 1.0f) == 0.0f);
+	}
+
+	TEST_CASE("Friction and restitution combine modes change how bodies slide and bounce")
+	{
+		// A ball with restitution 0.8 dropped on ground with restitution 0: the default (the larger value)
+		// bounces it, the ground's Min stops it dead.
+		auto bounceHeight = [](PhysicsCombineMode groundMode) {
+			Scene scene;
+			Entity ground = CreateGround(scene);
+			ground.GetComponent<RigidBodyComponent>().RestitutionCombine = groundMode;
+			Entity ball = scene.CreateEntity("Ball");
+			ball.GetTransform().Translation = { 0.0f, 3.0f, 0.0f };
+			auto& body = ball.AddComponent<RigidBodyComponent>();
+			body.Type = RigidBodyType::Dynamic;
+			body.Restitution = 0.8f;
+			body.LinearDamping = 0.0f;
+			ball.AddComponent<SphereColliderComponent>();
+			scene.OnSimulationStart();
+			Simulate(scene, 1.0f); // lands after ~0.71 s
+			float highest = 0.0f;
+			for (int i = 0; i < 60; i++)
+			{
+				scene.OnUpdate(Step);
+				highest = std::max(highest, ball.GetTransform().Translation.y);
+			}
+			scene.OnSimulationStop();
+			return highest;
+		};
+		CHECK(bounceHeight(PhysicsCombineMode::Default) > 1.5f);
+		CHECK(bounceHeight(PhysicsCombineMode::Min) < 0.6f);
+
+		// A frictionless box sliding over ground with friction 1: the default geometric mean is 0, so it keeps
+		// sliding; the ground's Max uses friction 1 and stops it.
+		auto slideSpeed = [](PhysicsCombineMode groundMode) {
+			Scene scene;
+			Entity ground = CreateGround(scene);
+			auto& groundBody = ground.GetComponent<RigidBodyComponent>();
+			groundBody.Friction = 1.0f;
+			groundBody.FrictionCombine = groundMode;
+			Entity box = CreateBox(scene, { 0.0f, 0.5f, 0.0f });
+			auto& body = box.GetComponent<RigidBodyComponent>();
+			body.Friction = 0.0f;
+			body.LinearDamping = 0.0f;
+			scene.OnSimulationStart();
+			scene.GetPhysicsWorld()->SetLinearVelocity(box, { 3.0f, 0.0f, 0.0f });
+			Simulate(scene, 1.0f);
+			const float speed = scene.GetPhysicsWorld()->GetLinearVelocity(box).x;
+			scene.OnSimulationStop();
+			return speed;
+		};
+		CHECK(slideSpeed(PhysicsCombineMode::Default) == doctest::Approx(3.0f).epsilon(0.02));
+		CHECK(slideSpeed(PhysicsCombineMode::Max) < 0.05f);
+	}
+
 	TEST_CASE("Velocities, impulses and teleporting through the transform")
 	{
 		Scene scene;
