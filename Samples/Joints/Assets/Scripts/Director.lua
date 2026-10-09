@@ -3,7 +3,6 @@ local Director = {}
 
 function Director:OnCreate()
 	self.Time = 0
-	self.Breaks = 0
 	self.Door = Scene.FindEntityByName("Door")
 	self.Piston = Scene.FindEntityByName("Piston")
 	self.Ball = Scene.FindEntityByName("WreckingBall")
