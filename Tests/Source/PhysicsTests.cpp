@@ -93,17 +93,137 @@ TEST_SUITE("Physics")
 		CHECK(scene.GetPhysicsWorld() == nullptr);
 	}
 
-	TEST_CASE("Collision masks let bodies pass through each other")
+	TEST_CASE("The collision matrix lets bodies on ignored layer pairs pass through each other")
 	{
+		PhysicsLayers layers;
+		std::string error;
+		REQUIRE(layers.Add("Ghost", error));
+		REQUIRE(layers.Add("Debris", error));
+		layers.SetCollides(0, 1, false);
+		layers.SetCollides(2, 2, false);
+
 		Scene scene;
-		Entity ground = CreateGround(scene);
-		ground.GetComponent<RigidBodyComponent>().Layer = 1;
+		scene.SetPhysicsLayers(layers);
+		CreateGround(scene);
 		Entity ghost = CreateBox(scene, { 0.0f, 2.0f, 0.0f });
-		ghost.GetComponent<RigidBodyComponent>().CollisionMask = ~(1u << 1);
+		ghost.GetComponent<RigidBodyComponent>().Layer = "Ghost";
+		Entity solid = CreateBox(scene, { 3.0f, 2.0f, 0.0f });
+		solid.GetComponent<RigidBodyComponent>().Layer = "Debris";
+		// Two Debris boxes stacked: Debris ignores itself, so the top box falls through the bottom one.
+		Entity upper = CreateBox(scene, { 3.0f, 4.0f, 0.0f });
+		upper.GetComponent<RigidBodyComponent>().Layer = "Debris";
 
 		scene.OnSimulationStart();
 		Simulate(scene, 2.0f);
 		CHECK(ghost.GetTransform().Translation.y < -5.0f);
+		CHECK(solid.GetTransform().Translation.y == doctest::Approx(0.5f).epsilon(0.02));
+		CHECK(upper.GetTransform().Translation.y == doctest::Approx(0.5f).epsilon(0.02));
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Physics uses the active project's layers unless the scene overrides them")
+	{
+		BasaltTest::TempProject temp("PhysicsProjectLayers");
+		REQUIRE(temp.IsValid());
+		std::string error;
+		PhysicsLayers& projectLayers = Project::GetActive()->GetConfig().Physics;
+		REQUIRE(projectLayers.Add("Ghost", error));
+		projectLayers.SetCollides(0, 1, false);
+
+		auto fall = [](Scene& scene) {
+			CreateGround(scene);
+			Entity ghost = CreateBox(scene, { 0.0f, 2.0f, 0.0f });
+			ghost.GetComponent<RigidBodyComponent>().Layer = "Ghost";
+			scene.OnSimulationStart();
+			Simulate(scene, 2.0f);
+			scene.OnSimulationStop();
+			return ghost.GetTransform().Translation.y;
+		};
+		Scene fromProject;
+		CHECK(fall(fromProject) < -5.0f);
+
+		// The override has no "Ghost" layer: the box warns once, falls back to Default and lands.
+		Scene overridden;
+		overridden.SetPhysicsLayers(PhysicsLayers());
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		CHECK(fall(overridden) == doctest::Approx(0.5f).epsilon(0.02));
+		CHECK(CountMessages(since, "unknown physics layer 'Ghost'") == 1);
+		const Ref<Scene> source = CreateRef<Scene>();
+		source->SetPhysicsLayers(PhysicsLayers());
+		CHECK(Scene::Copy(source)->GetPhysicsLayers() != nullptr);
+	}
+
+	TEST_CASE("Changing a body's layer at runtime rebuilds it on the new layer; warnings are logged once")
+	{
+		PhysicsLayers layers;
+		std::string error;
+		REQUIRE(layers.Add("Ghost", error));
+		layers.SetCollides(0, 1, false);
+		Scene scene;
+		scene.SetPhysicsLayers(layers);
+		CreateGround(scene);
+		Entity box = CreateBox(scene, { 0.0f, 0.5f, 0.0f });
+		box.GetComponent<RigidBodyComponent>().Layer = "Missing";
+
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		scene.OnSimulationStart();
+		for (int i = 0; i < 5; i++)
+		{
+			box.AddOrReplaceComponent<RigidBodyComponent>(box.GetComponent<RigidBodyComponent>());
+			Simulate(scene, Step);
+		}
+		CHECK(CountMessages(since, "unknown physics layer 'Missing'") == 1);
+		Simulate(scene, 1.0f);
+		CHECK(box.GetTransform().Translation.y == doctest::Approx(0.5f).epsilon(0.02));
+
+		RigidBodyComponent rigidBody = box.GetComponent<RigidBodyComponent>();
+		rigidBody.Layer = "Ghost";
+		box.AddOrReplaceComponent<RigidBodyComponent>(rigidBody);
+		Simulate(scene, 1.0f);
+		CHECK(box.GetTransform().Translation.y < -3.0f);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Continuous bodies do not tunnel through thin walls")
+	{
+		auto shoot = [](bool continuous) {
+			Scene scene;
+			Entity wall = scene.CreateEntity("Wall");
+			wall.GetTransform().Translation = { 5.0f, 0.0f, 0.0f };
+			wall.AddComponent<RigidBodyComponent>();
+			wall.AddComponent<BoxColliderComponent>().HalfExtents = { 0.025f, 5.0f, 5.0f };
+			Entity bullet = scene.CreateEntity("Bullet");
+			auto& rigidBody = bullet.AddComponent<RigidBodyComponent>();
+			rigidBody.Type = RigidBodyType::Dynamic;
+			rigidBody.GravityFactor = 0.0f;
+			rigidBody.LinearDamping = 0.0f;
+			rigidBody.Continuous = continuous;
+			bullet.AddComponent<SphereColliderComponent>().Radius = 0.05f;
+
+			scene.OnSimulationStart();
+			// 200 m/s moves 3.3 m per 60 Hz step, far more than the wall and bullet are thick.
+			scene.GetPhysicsWorld()->SetLinearVelocity(bullet, { 200.0f, 0.0f, 0.0f });
+			Simulate(scene, 0.25f);
+			const float x = bullet.GetTransform().Translation.x;
+			scene.OnSimulationStop();
+			return x;
+		};
+		CHECK(shoot(false) > 10.0f);
+		CHECK(shoot(true) < 5.0f);
+	}
+
+	TEST_CASE("Continuous on a non-dynamic body or a trigger is ignored with one warning")
+	{
+		Scene scene;
+		Entity platform = CreateGround(scene);
+		platform.GetComponent<RigidBodyComponent>().Continuous = true;
+		Entity trigger = CreateBox(scene, { 0.0f, 3.0f, 0.0f });
+		trigger.GetComponent<RigidBodyComponent>().IsTrigger = true;
+		trigger.GetComponent<RigidBodyComponent>().Continuous = true;
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		scene.OnSimulationStart();
+		Simulate(scene, 0.1f);
+		CHECK(CountMessages(since, "Continuous only affects dynamic bodies") == 2);
 		scene.OnSimulationStop();
 	}
 

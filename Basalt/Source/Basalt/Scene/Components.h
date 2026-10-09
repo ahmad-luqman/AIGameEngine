@@ -143,9 +143,11 @@ namespace Basalt {
 		bool IsTrigger = false;
 		// Prevents the body from rotating (character controllers, upright objects).
 		bool FixedRotation = false;
-		// Bodies only collide with bodies whose layer is set in CollisionMask.
-		uint32_t Layer = 0;
-		uint32_t CollisionMask = 0xFFFFFFFF;
+		// Name of a project physics layer; the project's collision matrix decides which layers collide.
+		std::string Layer = "Default";
+		// Sweeps the body between steps so fast objects (projectiles) do not tunnel through thin geometry.
+		// Costs more per step; only affects dynamic bodies.
+		bool Continuous = false;
 	};
 
 	// Collider shapes are sized in local space and scaled by the entity's world scale.

@@ -68,6 +68,7 @@ namespace Basalt {
 		Ref<Scene> scene = CreateRef<Scene>(other->m_Name);
 		scene->m_RendererSettings = other->m_RendererSettings;
 		scene->m_PhysicsSettings = other->m_PhysicsSettings;
+		scene->m_PhysicsLayers = other->m_PhysicsLayers;
 		scene->m_ViewportWidth = other->m_ViewportWidth;
 		scene->m_ViewportHeight = other->m_ViewportHeight;
 
