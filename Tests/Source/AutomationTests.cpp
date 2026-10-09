@@ -106,6 +106,11 @@ TEST_SUITE("Automation")
 		const size_t entityCount = Run(registry, session, "entity.list")["entities"].size();
 		CHECK(RunError(registry, session, "entity.create", { { "name", "Orphan" }, { "components", { { "Joint", { { "ConnectedEntity", "Nobody" } } } } } }).find("no entity named") != std::string::npos);
 		CHECK(Run(registry, session, "entity.list")["entities"].size() == entityCount);
+		// Numeric IDs are checked too; 0 means "none" (the world for joints).
+		CHECK(RunError(registry, session, "component.set", { { "entity", "Gun" }, { "component", "Joint" }, { "data", { { "ConnectedEntity", 123456789 } } } }).find("no entity with ID") != std::string::npos);
+		CHECK(Run(registry, session, "component.set", { { "entity", "Gun" }, { "component", "Joint" }, { "data", { { "ConnectedEntity", 0 } } } })["ConnectedEntity"] == 0);
+		// A name in the components of entity.create never resolves to the entity being created.
+		CHECK(RunError(registry, session, "entity.create", { { "name", "Self" }, { "components", { { "Joint", { { "ConnectedEntity", "Self" } } } } } }).find("no entity named 'Self'") != std::string::npos);
 		Run(registry, session, "entity.destroy", { { "entity", "Door" } });
 		CHECK(RunError(registry, session, "entity.get", { { "entity", "Nobody" } }).find("no entity named") != std::string::npos);
 		CHECK(RunError(registry, session, "entity.set_parent", { { "entity", "Player" }, { "parent", "Gun" } }).find("descendants") != std::string::npos);

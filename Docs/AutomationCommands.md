@@ -83,7 +83,7 @@ Creates an entity, optionally with a parent and components ({"Mesh": {...}, ...}
 
 | Parameter | Type / description |
 |-----------|--------------------|
-| `components` | object: component name -> fields |
+| `components` | object: component name -> fields; entity references (Joint ConnectedEntity) take an ID or name |
 | `name` | string |
 | `parent` | entity ID or name |
 

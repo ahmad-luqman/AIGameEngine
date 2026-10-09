@@ -103,24 +103,6 @@ namespace Basalt {
 			return project;
 		}
 
-		Entity ResolveEntity(Scene& scene, const json& reference, const char* parameter);
-
-		// Component data may name entities in reference fields (Joint "ConnectedEntity": "Door"); files and
-		// the registry store UUIDs, so names are resolved here with the same rules as the "entity" parameter.
-		json ResolveEntityFields(Scene& scene, const std::string& component, json data)
-		{
-			const ComponentInfo* info = ComponentRegistry::Find(component);
-			if (!info || !data.is_object())
-				return data;
-			for (const std::string& field : info->EntityFields)
-			{
-				auto it = data.find(field);
-				if (it != data.end() && it->is_string())
-					*it = static_cast<uint64_t>(ResolveEntity(scene, *it, field.c_str()).GetUUID());
-			}
-			return data;
-		}
-
 		// Entities are addressed by numeric ID or by (unique) name.
 		Entity ResolveEntity(Scene& scene, const json& reference, const char* parameter = "entity")
 		{
@@ -141,6 +123,27 @@ namespace Basalt {
 				return matches.front();
 			}
 			throw CommandError(std::string("parameter '") + parameter + "' must be an entity ID (number) or name (string)");
+		}
+
+		// Component data may name entities in reference fields (Joint "ConnectedEntity": "Door"); files and
+		// the registry store UUIDs, so names are resolved here with the same rules as the "entity" parameter.
+		// Numeric IDs must name an existing entity too (0 = none). Scene and prefab files stay lenient: they
+		// may be loaded before the entities they refer to exist.
+		json ResolveEntityFields(Scene& scene, const std::string& component, json data)
+		{
+			const ComponentInfo* info = ComponentRegistry::Find(component);
+			if (!info || !data.is_object())
+				return data;
+			for (const std::string& field : info->EntityFields)
+			{
+				auto it = data.find(field);
+				if (it == data.end())
+					continue;
+				const bool isNumber = it->is_number_unsigned() || it->is_number_integer();
+				if (it->is_string() || (isNumber && it->get<uint64_t>() != 0))
+					*it = static_cast<uint64_t>(ResolveEntity(scene, *it, field.c_str()).GetUUID());
+			}
+			return data;
 		}
 
 		Entity RequireEntity(AutomationSession& session, const json& params, const char* name = "entity")
@@ -415,34 +418,29 @@ namespace Basalt {
 
 		void RegisterEntity(CommandRegistry& registry)
 		{
-			Add(registry, "entity.create", "Creates an entity, optionally with a parent and components ({\"Mesh\": {...}, ...}).", { { "name", "string" }, { "parent", "entity ID or name" }, { "components", "object: component name -> fields" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "entity.create", "Creates an entity, optionally with a parent and components ({\"Mesh\": {...}, ...}).", { { "name", "string" }, { "parent", "entity ID or name" }, { "components", "object: component name -> fields; entity references (Joint ConnectedEntity) take an ID or name" } }, [](AutomationSession& session, const json& params) {
 				Scene& scene = RequireScene(session);
 				Entity parent = params.contains("parent") && !params["parent"].is_null() ? ResolveEntity(scene, params["parent"], "parent") : Entity{};
+				// References are resolved before the entity exists, so a name never resolves to the entity
+				// being created and a bad reference leaves nothing behind.
+				json components;
+				if (auto it = params.find("components"); it != params.end())
+				{
+					components = *it;
+					if (components.is_object())
+					{
+						for (auto component = components.begin(); component != components.end(); ++component)
+							component.value() = ResolveEntityFields(scene, component.key(), component.value());
+					}
+				}
 				Entity entity = scene.CreateEntity(OptionalString(params, "name", "Entity"));
 				if (parent)
 					scene.SetParent(entity, parent, false);
-				if (auto components = params.find("components"); components != params.end())
+				std::string error;
+				if (!components.is_null() && !SceneSerializer::DeserializeEntityComponents(entity, { { "Components", components } }, error))
 				{
-					json resolved = *components;
-					std::string error;
-					try
-					{
-						if (resolved.is_object())
-						{
-							for (auto it = resolved.begin(); it != resolved.end(); ++it)
-								it.value() = ResolveEntityFields(scene, it.key(), it.value());
-						}
-					}
-					catch (const CommandError&)
-					{
-						scene.DestroyEntity(entity);
-						throw;
-					}
-					if (!SceneSerializer::DeserializeEntityComponents(entity, { { "Components", resolved } }, error))
-					{
-						scene.DestroyEntity(entity);
-						throw CommandError(error);
-					}
+					scene.DestroyEntity(entity);
+					throw CommandError(error);
 				}
 				if (session.IsPlaying() && scene.GetScriptEngine())
 					scene.GetScriptEngine()->EnsureInstance(entity);
