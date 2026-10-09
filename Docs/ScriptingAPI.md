@@ -214,7 +214,7 @@ around the axis). The `Position` rotation axes together drive toward one target 
 angles in degrees relative to the rest pose (the same form `GetJointRotation()` returns, so a recorded pose
 plays back as is); position targets beyond the limits are clamped to them. A motor on a locked axis does
 nothing and warns. `MotorMaxForce` caps both the force and the torque, and a `Position` motor pulls with a
-spring of `MotorSpringFrequency` Hz (default 2; 0 = as stiff as `MotorMaxForce` allows) and
+spring of `MotorSpringFrequency` Hz (default 2, must be above 0; higher is stiffer, up to `MotorMaxForce`) and
 `MotorSpringDamping` (1 = critically damped), which also apply to hinge and slider motors. The cone joint
 has no motor; use a six-DOF joint with swing limits instead.
 
