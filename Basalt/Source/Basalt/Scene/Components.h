@@ -193,9 +193,10 @@ namespace Basalt {
 	};
 
 	// Constrains this entity's rigid body to the body of ConnectedEntity, or to the world when it is 0.
-	// The joint is built from the bodies' poses when physics starts (or when the joint changes): that
-	// relative pose is the joint's rest position, so hinge angles and slider offsets are measured from it.
-	// One joint per entity; a chain puts a joint on every link, connected to the previous one.
+	// The joint is built from the bodies' poses when physics starts, when either body is rebuilt, or when
+	// Type, ConnectedEntity, an anchor, Axis or UseLimits changes: that relative pose is the joint's rest
+	// position, so hinge angles and slider offsets are measured from it. The other fields update the live
+	// joint in place. One joint per entity; a chain puts a joint on every link, connected to the previous one.
 	struct JointComponent
 	{
 		JointType Type = JointType::Hinge;
@@ -207,8 +208,9 @@ namespace Basalt {
 		glm::vec3 ConnectedAnchor = { 0.0f, 0.0f, 0.0f };
 		// Hinge rotation axis or slider direction, in this entity's local space.
 		glm::vec3 Axis = { 0.0f, 1.0f, 0.0f };
-		// Hinge: angles in degrees within [-180, 180]; slider: offsets in meters; distance: lengths in
-		// meters. Without limits a distance joint keeps the distance it starts with.
+		// Hinge: angles in degrees with -180 <= LimitMin <= 0 <= LimitMax <= 180; slider: offsets in meters
+		// with LimitMin <= 0 <= LimitMax; distance: lengths in meters with 0 <= LimitMin <= LimitMax.
+		// Fixed and point joints have no limits. Without limits a distance joint keeps its starting length.
 		bool UseLimits = false;
 		float LimitMin = 0.0f;
 		float LimitMax = 0.0f;
@@ -217,11 +219,15 @@ namespace Basalt {
 		float MotorTarget = 0.0f;
 		// Strongest torque (N·m, hinges) or force (N, sliders) the motor may apply.
 		float MotorMaxForce = 1000.0f;
-		// The joint breaks when its constraint force (N) or torque (N·m) exceeds these; 0 never breaks.
+		// The joint breaks when its constraint force (N) or torque (N·m), motor and limit effort included,
+		// exceeds these; 0 never breaks. Point and distance joints hold no torque, so BreakTorque does not
+		// apply to them.
 		float BreakForce = 0.0f;
 		float BreakTorque = 0.0f;
 		// Whether the two connected bodies collide with each other.
 		bool EnableCollision = false;
+
+		bool operator==(const JointComponent&) const = default;
 	};
 
 	// Lua behaviour. Script is a project-relative .lua path; Properties overrides the defaults the script
