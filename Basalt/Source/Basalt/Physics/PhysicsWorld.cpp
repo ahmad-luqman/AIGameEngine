@@ -738,12 +738,22 @@ namespace Basalt {
 			const MeshData& mesh = source->Meshes[meshIndex];
 			if (convex)
 			{
+				// Only vertices the index buffer draws: a glTF accessor may hold unused ones outside the visible
+				// geometry, which would otherwise inflate the hull.
 				JPH::Array<JPH::Vec3> points;
 				for (uint32_t submeshIndex : mesh.Submeshes)
 				{
 					const Submesh& submesh = source->Submeshes[submeshIndex];
-					for (uint32_t i = 0; i < submesh.VertexCount; i++)
-						points.push_back(ToJolt(source->Vertices[submesh.BaseVertex + i].Position));
+					std::vector<bool> used(submesh.VertexCount, false);
+					for (uint32_t i = 0; i < submesh.IndexCount; i++)
+					{
+						const uint32_t index = source->Indices[submesh.BaseIndex + i];
+						if (index < submesh.VertexCount && !used[index])
+						{
+							used[index] = true;
+							points.push_back(ToJolt(source->Vertices[submesh.BaseVertex + index].Position));
+						}
+					}
 				}
 				JPH::ShapeSettings::ShapeResult result = JPH::ConvexHullShapeSettings(points).Create();
 				if (result.HasError())
@@ -1196,6 +1206,8 @@ namespace Basalt {
 			BS_CORE_WARN("Physics: entity '{}' has a degenerate transform; no body created", entity.GetName());
 			return;
 		}
+		// Mesh colliders keep a mirroring (negative) scale; the symmetric primitive colliders do not need it.
+		const glm::vec3 signedScale = scale;
 		scale = glm::abs(scale);
 
 		JPH::EMotionType motionType = JPH::EMotionType::Static;
@@ -1274,8 +1286,8 @@ namespace Basalt {
 			if (shape)
 			{
 				// The cooked shape is shared, so the entity's scale wraps it instead of being baked in.
-				if (scale != glm::vec3(1.0f))
-					shape = new JPH::ScaledShape(shape, ToJolt(glm::max(scale, glm::vec3(MinExtent))));
+				if (signedScale != glm::vec3(1.0f))
+					shape = new JPH::ScaledShape(shape, ToJolt(glm::sign(signedScale) * glm::max(scale, glm::vec3(MinExtent))));
 				compound.AddShape(JPH::Vec3::sZero(), JPH::Quat::sIdentity(), shape);
 				shapeCount++;
 				hasTriangleMesh = !convex;

@@ -17,6 +17,7 @@
 #include <functional>
 #include <limits>
 #include <string>
+#include <vector>
 
 using namespace Basalt;
 
@@ -84,6 +85,32 @@ namespace {
 				count++;
 		}
 		return count;
+	}
+
+	// Writes a glTF holding a unit cube spanning x = 0.5..1.5 (off-centre, so mirroring shows) plus one vertex at
+	// x = 10 that no triangle uses. Returns its asset key.
+	std::string WriteOffsetCubeGltf(const BasaltTest::TempProject& project)
+	{
+		std::vector<float> positions;
+		for (int i = 0; i < 8; i++)
+			positions.insert(positions.end(), { (i & 1) ? 1.5f : 0.5f, (i & 2) ? 0.5f : -0.5f, (i & 4) ? 0.5f : -0.5f });
+		positions.insert(positions.end(), { 10.0f, 0.0f, 0.0f });
+		const std::vector<uint16_t> indices = { 0, 6, 2, 0, 4, 6, 1, 3, 7, 1, 7, 5, 0, 1, 5, 0, 5, 4, 2, 7, 3, 2, 6, 7, 0, 3, 1, 0, 2, 3, 4, 5, 7, 4, 7, 6 };
+		std::string buffer(reinterpret_cast<const char*>(positions.data()), positions.size() * sizeof(float));
+		const size_t indexOffset = buffer.size();
+		buffer.append(reinterpret_cast<const char*>(indices.data()), indices.size() * sizeof(uint16_t));
+
+		const nlohmann::json gltf = {
+			{ "asset", { { "version", "2.0" } } },
+			{ "buffers", { { { "byteLength", buffer.size() }, { "uri", "data:application/octet-stream;base64," + BasaltTest::Base64(buffer.data(), buffer.size()) } } } },
+			{ "bufferViews", { { { "buffer", 0 }, { "byteOffset", 0 }, { "byteLength", indexOffset } }, { { "buffer", 0 }, { "byteOffset", indexOffset }, { "byteLength", buffer.size() - indexOffset } } } },
+			{ "accessors", { { { "bufferView", 0 }, { "componentType", 5126 }, { "count", 9 }, { "type", "VEC3" }, { "min", { 0.5, -0.5, -0.5 } }, { "max", { 10.0, 0.5, 0.5 } } }, { { "bufferView", 1 }, { "componentType", 5123 }, { "count", indices.size() }, { "type", "SCALAR" } } } },
+			{ "meshes", { { { "primitives", { { { "attributes", { { "POSITION", 0 } } }, { "indices", 1 } } } } } } },
+			{ "nodes", { { { "mesh", 0 } } } },
+			{ "scenes", { { { "nodes", { 0 } } } } },
+			{ "scene", 0 },
+		};
+		return project.WriteFile("Assets/Models/OffsetCube.gltf", gltf.dump());
 	}
 
 	// Replaces the component through the registry, as SetComponent and component.set do.
@@ -2480,6 +2507,40 @@ TEST_SUITE("Physics")
 		CHECK(CountMessages(since, "cannot load mesh 'builtin://Teapot'") == 1);
 		CHECK(CountMessages(since, "has no mesh 3 (it has 1)") == 1);
 		CHECK(CountMessages(since, "no Mesh and the entity has no MeshComponent") == 1);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("MeshColliders keep a mirroring scale and hull only the drawn vertices")
+	{
+		BasaltTest::TempProject project("PhysicsOffsetCube");
+		REQUIRE(project.IsValid());
+		const std::string key = WriteOffsetCubeGltf(project);
+		REQUIRE_MESSAGE(AssetManager::GetMesh(key), AssetManager::GetError(key));
+
+		Scene scene;
+		Entity mirrored = scene.CreateEntity("Mirrored");
+		mirrored.GetTransform().Scale = { -1.0f, 1.0f, 1.0f };
+		mirrored.AddComponent<RigidBodyComponent>();
+		mirrored.AddComponent<MeshColliderComponent>().Mesh = key;
+		Entity hull = scene.CreateEntity("Hull");
+		hull.GetTransform().Translation = { 0.0f, 0.0f, 10.0f };
+		hull.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
+		auto& collider = hull.AddComponent<MeshColliderComponent>();
+		collider.Mesh = key;
+		collider.Convex = true;
+
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		const glm::vec3 down(0.0f, -1.0f, 0.0f);
+		// Mirrored in X, the cube spans x = -1.5..-0.5, like the rendered mesh.
+		const auto top = physics.Raycast({ -1.0f, 5.0f, 0.0f }, down, 10.0f);
+		REQUIRE(top.has_value());
+		CHECK(top->EntityID == mirrored.GetUUID());
+		CHECK(top->Point.y == doctest::Approx(0.5f).epsilon(0.01));
+		CHECK_FALSE(physics.Raycast({ 1.0f, 5.0f, 0.0f }, down, 10.0f).has_value());
+		// The unused vertex at x = 10 does not stretch the hull.
+		CHECK(physics.Raycast({ 1.0f, 5.0f, 10.0f }, down, 10.0f)->EntityID == hull.GetUUID());
+		CHECK_FALSE(physics.Raycast({ 5.0f, 5.0f, 10.0f }, down, 10.0f).has_value());
 		scene.OnSimulationStop();
 	}
 }
