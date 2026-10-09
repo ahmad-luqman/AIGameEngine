@@ -287,6 +287,52 @@ TEST_SUITE("Scripting")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("OnJointBreak reaches a joint entity, the body it moves and the connected entity")
+	{
+		BasaltTest::TempProject project("ScriptJointEntity");
+		const std::string script = project.WriteFile("Assets/Scripts/Listener.lua", R"(
+			local Listener = {}
+			function Listener:OnCreate() self.Breaks = 0; self.BrokeWith = "" end
+			function Listener:OnJointBreak(other)
+				self.Breaks = self.Breaks + 1
+				self.BrokeWith = other and other.Name or "world"
+			end
+			return Listener
+		)");
+
+		Scene scene;
+		Entity hook = AddScripted(scene, "Hook", script);
+		hook.GetTransform().Translation = { 0.0f, 2.0f, 0.0f };
+		hook.AddComponent<RigidBodyComponent>();
+		hook.AddComponent<BoxColliderComponent>();
+		Entity lamp = AddScripted(scene, "Lamp", script);
+		lamp.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+		lamp.AddComponent<SphereColliderComponent>();
+		// The lamp's joint lives on a child entity; it is too weak for the lamp's weight.
+		Entity chain = AddScripted(scene, "Chain", script);
+		scene.SetParent(chain, lamp);
+		auto& joint = chain.AddComponent<JointComponent>();
+		joint.Type = JointType::Point;
+		joint.BodyEntity = lamp.GetUUID();
+		joint.ConnectedEntity = hook.GetUUID();
+		joint.BreakForce = 1.0f;
+
+		scene.OnRuntimeStart();
+		CHECK(scene.GetPhysicsWorld()->HasJoint(chain));
+		for (int i = 0; i < 30; i++)
+			scene.OnUpdate(Step);
+
+		CHECK_FALSE(chain.HasComponent<JointComponent>());
+		CHECK(Field(scene, lamp, "Breaks") == 1);
+		CHECK(Field(scene, lamp, "BrokeWith") == "Hook");
+		CHECK(Field(scene, hook, "Breaks") == 1);
+		CHECK(Field(scene, hook, "BrokeWith") == "Lamp");
+		CHECK(Field(scene, chain, "Breaks") == 1);
+		CHECK(Field(scene, chain, "BrokeWith") == "Hook");
+		CHECK(scene.GetScriptEngine()->GetErrors().empty());
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("OnJointBreak may destroy the other entity during the same step")
 	{
 		BasaltTest::TempProject project("ScriptJointDestroy");

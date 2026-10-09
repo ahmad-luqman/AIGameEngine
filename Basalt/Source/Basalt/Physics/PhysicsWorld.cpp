@@ -233,6 +233,12 @@ namespace Basalt {
 			return structural != built;
 		}
 
+		// The entity whose body a joint moves: BodyEntity, or the entity holding the component when it is 0.
+		UUID JointBody(UUID holder, const JointComponent& joint)
+		{
+			return joint.BodyEntity != 0 ? joint.BodyEntity : holder;
+		}
+
 		const char* JointTypeName(JointType type)
 		{
 			switch (type)
@@ -528,6 +534,8 @@ namespace Basalt {
 			// The component the constraint was built from (plus later in-place updates). Its Type always
 			// matches the constraint's subtype; ConnectedEntity is 0 when attached to the world.
 			JointComponent Settings;
+			// The entity whose body the joint moves (Settings.BodyEntity resolved; the holder when that is 0).
+			UUID Body = 0;
 		};
 
 		Scope<JPH::TempAllocatorImpl> TempAllocator;
@@ -541,7 +549,7 @@ namespace Basalt {
 		std::unordered_map<UUID, BodyRecord> Bodies;
 		std::unordered_map<uint32_t, UUID> BodyToEntity;
 		std::unordered_set<UUID> DirtyEntities;
-		// Keyed by the entity that owns the JointComponent.
+		// Keyed by the entity that holds the JointComponent (not necessarily the body it moves).
 		std::unordered_map<UUID, JointRecord> Joints;
 		std::unordered_set<UUID> DirtyJoints;
 		// The warnings last logged for each joint, so repeats are not logged again.
@@ -574,11 +582,11 @@ namespace Basalt {
 		void UpdateIgnoredPairs()
 		{
 			IgnoredPairs.clear();
-			for (const auto& [owner, joint] : Joints)
+			for (const auto& [holder, joint] : Joints)
 			{
 				if (joint.Settings.ConnectedEntity == 0 || joint.Settings.EnableCollision)
 					continue;
-				const uint64_t a = static_cast<uint64_t>(owner);
+				const uint64_t a = static_cast<uint64_t>(joint.Body);
 				const uint64_t b = static_cast<uint64_t>(joint.Settings.ConnectedEntity);
 				IgnoredPairs.emplace(std::min(a, b), std::max(a, b));
 			}
@@ -600,7 +608,7 @@ namespace Basalt {
 		{
 			for (auto it = Joints.begin(); it != Joints.end();)
 			{
-				if (it->first != uuid && it->second.Settings.ConnectedEntity != uuid)
+				if (it->second.Body != uuid && it->second.Settings.ConnectedEntity != uuid)
 				{
 					++it;
 					continue;
@@ -953,7 +961,8 @@ namespace Basalt {
 		for (entt::entity handle : m_Scene->GetAllEntitiesWith<JointComponent>())
 		{
 			Entity entity(handle, m_Scene);
-			if (entity.GetUUID() == uuid || entity.GetComponent<JointComponent>().ConnectedEntity == uuid)
+			const JointComponent& joint = entity.GetComponent<JointComponent>();
+			if (JointBody(entity.GetUUID(), joint) == uuid || joint.ConnectedEntity == uuid)
 				m_Impl->DirtyJoints.insert(entity.GetUUID());
 		}
 	}
@@ -1176,9 +1185,10 @@ namespace Basalt {
 			// The measured values help tune thresholds.
 			BS_CORE_INFO("Physics: joint on '{}' broke (force {:.1f} N, BreakForce {}; torque {:.1f} N·m, BreakTorque {})", entity.GetName(), joint.Force, settings.BreakForce, joint.Torque, settings.BreakTorque);
 			const UUID connectedID = settings.ConnectedEntity;
+			const UUID bodyID = it->second.Body;
 			entity.RemoveComponent<JointComponent>();
 			if (scriptEngine)
-				scriptEngine->OnJointBroken(entity, m_Scene->GetEntityByUUID(connectedID));
+				scriptEngine->OnJointBroken(entity, m_Scene->GetEntityByUUID(bodyID), m_Scene->GetEntityByUUID(connectedID));
 		}
 	}
 
@@ -1192,10 +1202,24 @@ namespace Basalt {
 		auto describeMissingBody = [](Entity e) {
 			return e.HasComponent<RigidBodyComponent>() ? "has a RigidBody but no valid collider" : "has no RigidBody";
 		};
-		auto self = impl.Bodies.find(entity.GetUUID());
+		// The joint moves BodyEntity's body; its anchor and axes are in that entity's local space.
+		Entity bodyEntity = entity;
+		if (joint.BodyEntity != 0)
+		{
+			bodyEntity = m_Scene->GetEntityByUUID(joint.BodyEntity);
+			if (!bodyEntity)
+			{
+				warnings.emplace_back(fmt::format("not built: its BodyEntity {} is missing", static_cast<uint64_t>(joint.BodyEntity)));
+				return;
+			}
+		}
+		auto self = impl.Bodies.find(bodyEntity.GetUUID());
 		if (self == impl.Bodies.end())
 		{
-			warnings.emplace_back(fmt::format("not built: the entity {}", describeMissingBody(entity)));
+			if (bodyEntity == entity)
+				warnings.emplace_back(fmt::format("not built: the entity {}", describeMissingBody(entity)));
+			else
+				warnings.emplace_back(fmt::format("not built: its BodyEntity '{}' {}", bodyEntity.GetName(), describeMissingBody(bodyEntity)));
 			return;
 		}
 
@@ -1205,9 +1229,9 @@ namespace Basalt {
 		if (joint.ConnectedEntity != 0)
 		{
 			connected = m_Scene->GetEntityByUUID(joint.ConnectedEntity);
-			if (!connected || connected == entity)
+			if (!connected || connected == bodyEntity)
 			{
-				warnings.emplace_back(fmt::format("not built: it connects to {} entity {}", connected ? "its own" : "a missing", static_cast<uint64_t>(joint.ConnectedEntity)));
+				warnings.emplace_back(fmt::format("not built: it connects to {} entity {}", connected ? "its own body's" : "a missing", static_cast<uint64_t>(joint.ConnectedEntity)));
 				return;
 			}
 			auto other = impl.Bodies.find(joint.ConnectedEntity);
@@ -1229,13 +1253,13 @@ namespace Basalt {
 		// The joint frame in world space. Both bodies share it at creation, so their current relative pose
 		// becomes the joint's rest pose. The axis turns with the body's rotation only: Jolt bodies are
 		// unscaled, so a scaled world matrix would skew it under non-uniform scale.
-		const glm::mat4 world = m_Scene->GetWorldTransform(entity);
+		const glm::mat4 world = m_Scene->GetWorldTransform(bodyEntity);
 		glm::vec3 position;
 		glm::quat rotation;
 		glm::vec3 scale;
 		if (!Math::DecomposeTransform(world, position, rotation, scale))
 		{
-			warnings.emplace_back("not built: the entity has a degenerate transform");
+			warnings.emplace_back(fmt::format("not built: '{}' has a degenerate transform", bodyEntity.GetName()));
 			return;
 		}
 		const glm::vec3 anchor = glm::vec3(world * glm::vec4(joint.Anchor, 1.0f));
@@ -1312,6 +1336,7 @@ namespace Basalt {
 		Impl::JointRecord& record = impl.Joints[entity.GetUUID()];
 		record.Constraint = settings->Create(*body1, *body2);
 		record.Settings = joint;
+		record.Body = bodyEntity.GetUUID();
 		impl.System->AddConstraint(record.Constraint);
 		lock.ReleaseLocks();
 		ApplyJointSettings(entity, warnings);

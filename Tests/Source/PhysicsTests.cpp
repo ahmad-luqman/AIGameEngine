@@ -1101,6 +1101,155 @@ TEST_SUITE("Physics")
 		CHECK(settle(true) == doctest::Approx(0.5f).epsilon(0.02));
 		CHECK(settle(false) < -2.0f);
 	}
+
+	TEST_CASE("Joint entities give one body several joints")
+	{
+		Scene scene;
+		// A 2 m rung hanging level from two 2 m ropes, one at each end, each on its own child entity.
+		Entity rung = CreateBox(scene, { 0.0f, 0.0f, 0.0f });
+		rung.GetComponent<BoxColliderComponent>().HalfExtents = { 1.0f, 0.1f, 0.1f };
+		auto rope = [&](const char* name, float x) {
+			Entity holder = scene.CreateChildEntity(rung, name);
+			auto& joint = holder.AddComponent<JointComponent>();
+			joint.Type = JointType::Distance;
+			joint.BodyEntity = rung.GetUUID();
+			joint.Anchor = { x, 0.0f, 0.0f };
+			joint.ConnectedAnchor = { x, 2.0f, 0.0f };
+			return holder;
+		};
+		Entity left = rope("Left", -1.0f);
+		Entity right = rope("Right", 1.0f);
+
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		CHECK(physics.HasJoint(left));
+		CHECK(physics.HasJoint(right));
+		CHECK_FALSE(physics.HasJoint(rung));
+		// The holders have no body of their own; their joints move the rung.
+		CHECK_FALSE(physics.HasBody(left));
+		physics.SetLinearVelocity(rung, { 0.0f, 0.0f, 1.0f });
+		Simulate(scene, 2.0f);
+		const auto& transform = rung.GetTransform();
+		CHECK(std::abs(transform.Translation.x) < 0.02f);
+		// Both ropes hold it level: its local X stays horizontal while it swings.
+		CHECK(std::abs((transform.Rotation * glm::vec3(1.0f, 0.0f, 0.0f)).y) < 0.02f);
+
+		// Rebuilding the rung's body rebuilds both of its joints.
+		rung.AddOrReplaceComponent<BoxColliderComponent>(BoxColliderComponent{ { 1.0f, 0.12f, 0.12f } });
+		scene.OnUpdate(Step);
+		CHECK(physics.HasJoint(left));
+		CHECK(physics.HasJoint(right));
+
+		// With one rope gone, the free end drops.
+		scene.DestroyEntity(left);
+		Simulate(scene, 1.0f);
+		CHECK(physics.HasJoint(right));
+		CHECK((transform.Rotation * glm::vec3(1.0f, 0.0f, 0.0f)).y > 0.5f);
+
+		// Destroying the body removes the joints that move it.
+		scene.DestroyEntity(rung);
+		CHECK_FALSE(physics.HasJoint(right));
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("A joint entity waits for its BodyEntity's body and rejects bad bodies")
+	{
+		Scene scene;
+		Entity frame = CreateGround(scene);
+		Entity body = scene.CreateEntity("Body");
+		body.GetTransform().Translation = { 0.0f, 2.0f, 0.0f };
+		Entity holder = scene.CreateEntity("Holder");
+		auto& joint = holder.AddComponent<JointComponent>();
+		joint.Type = JointType::Point;
+		joint.BodyEntity = body.GetUUID();
+		joint.ConnectedEntity = frame.GetUUID();
+		Entity missing = scene.CreateEntity("Missing");
+		missing.AddComponent<JointComponent>().BodyEntity = 4242;
+		// A joint between a body and itself is rejected, even when held elsewhere.
+		Entity self = CreateBox(scene, { 5.0f, 0.0f, 0.0f });
+		Entity selfHolder = scene.CreateEntity("SelfHolder");
+		auto& selfJoint = selfHolder.AddComponent<JointComponent>();
+		selfJoint.BodyEntity = self.GetUUID();
+		selfJoint.ConnectedEntity = self.GetUUID();
+
+		const uint64_t before = Log::GetHistory().GetTotalCount();
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		Simulate(scene, 0.1f);
+		CHECK_FALSE(physics.HasJoint(holder));
+		CHECK_FALSE(physics.HasJoint(missing));
+		CHECK_FALSE(physics.HasJoint(selfHolder));
+		CHECK(CountMessages(before, "its BodyEntity 'Body' has no RigidBody") == 1);
+		CHECK(CountMessages(before, "its BodyEntity 4242 is missing") == 1);
+		CHECK(CountMessages(before, "connects to its own body's entity") == 1);
+
+		// The joint is built once the body exists, and holds it up.
+		body.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+		body.AddComponent<BoxColliderComponent>();
+		scene.OnUpdate(Step);
+		CHECK(physics.HasJoint(holder));
+		Simulate(scene, 0.5f);
+		CHECK(std::abs(body.GetTransform().Translation.y - 2.0f) < 0.05f);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("EnableCollision on a joint entity applies to the bodies it joins")
+	{
+		auto settle = [](bool enableCollision) {
+			Scene scene;
+			Entity plate = CreateGround(scene);
+			Entity box = CreateBox(scene, { 0.0f, 0.5f, 0.0f });
+			Entity holder = scene.CreateChildEntity(box, "Slider");
+			auto& joint = holder.AddComponent<JointComponent>();
+			joint.Type = JointType::Slider;
+			joint.BodyEntity = box.GetUUID();
+			joint.ConnectedEntity = plate.GetUUID();
+			joint.EnableCollision = enableCollision;
+			scene.OnSimulationStart();
+			Simulate(scene, 1.0f);
+			const float y = box.GetTransform().Translation.y;
+			scene.OnSimulationStop();
+			return y;
+		};
+		CHECK(settle(true) == doctest::Approx(0.5f).epsilon(0.02));
+		CHECK(settle(false) < -2.0f);
+	}
+
+	TEST_CASE("Simulation with several joints on one body is deterministic")
+	{
+		auto run = []() {
+			Scene scene;
+			Entity hub = CreateBox(scene, { 0.0f, 0.0f, 0.0f });
+			std::vector<Entity> spokes;
+			for (int i = 0; i < 3; i++)
+			{
+				const float angle = glm::radians(120.0f * static_cast<float>(i));
+				const glm::vec3 direction(std::cos(angle), 0.0f, std::sin(angle));
+				Entity spoke = CreateBox(scene, direction * 1.5f);
+				Entity holder = scene.CreateChildEntity(hub, "Spoke");
+				auto& joint = holder.AddComponent<JointComponent>();
+				joint.Type = JointType::Point;
+				joint.BodyEntity = hub.GetUUID();
+				joint.ConnectedEntity = spoke.GetUUID();
+				joint.Anchor = direction * 0.75f;
+				spokes.push_back(spoke);
+			}
+			// The hub hangs from the world; the spokes swing around it.
+			auto& top = hub.AddComponent<JointComponent>();
+			top.Type = JointType::Point;
+			top.Anchor = { 0.0f, 1.0f, 0.0f };
+			scene.OnSimulationStart();
+			Simulate(scene, 2.0f);
+			std::vector<glm::vec3> positions;
+			positions.reserve(spokes.size() + 1);
+			positions.push_back(hub.GetTransform().Translation);
+			for (Entity spoke : spokes)
+				positions.push_back(spoke.GetTransform().Translation);
+			scene.OnSimulationStop();
+			return positions;
+		};
+		CHECK(run() == run());
+	}
 }
 
 TEST_SUITE("PhysicsLayers")
