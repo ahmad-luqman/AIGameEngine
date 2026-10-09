@@ -330,7 +330,7 @@ namespace Basalt {
 
 		// Without UseLimits translation is locked and rotation free (a point joint). With limits every range
 		// must contain the rest pose (0), twist stays within +-180 degrees, and the swing cone is symmetric
-		// (Jolt's cone swing ignores the minimum), so a swing minimum other than -max is mirrored.
+		// (Jolt's cone swing ignores the minimum), so a swing minimum other than 0 or -max is mirrored.
 		SixDOFLimits SanitizeSixDOFLimits(const JointComponent& joint, std::vector<std::string>& warnings)
 		{
 			SixDOFLimits limits;
@@ -358,8 +358,10 @@ namespace Basalt {
 				}
 				else
 				{
+					// A minimum of 0 (the default) stands for -max, so setting only the maximum is enough.
 					angularMin = -angularMax;
-					if (angularMin != joint.AngularLimitMin[i] || angularMax != joint.AngularLimitMax[i])
+					const bool mirrored = joint.AngularLimitMin[i] == 0.0f || joint.AngularLimitMin[i] == angularMin;
+					if (!mirrored || angularMax != joint.AngularLimitMax[i])
 						warnings.emplace_back(fmt::format("six-DOF swing (angular {}) limits [{}, {}] must be a symmetric half angle [-max, max] with 0 <= max <= 180 degrees; using [{}, {}]", AxisNames[i],
 														  joint.AngularLimitMin[i], joint.AngularLimitMax[i], angularMin, angularMax));
 				}
@@ -1217,9 +1219,18 @@ namespace Basalt {
 				const SixDOFLimits limits = SanitizeSixDOFLimits(joint, warnings);
 				sixDOF->SetTranslationLimits(ToJolt(limits.LinearMin), ToJolt(limits.LinearMax));
 				sixDOF->SetRotationLimits(ToJolt(limits.AngularMin), ToJolt(limits.AngularMax));
-				// Jolt softens translation limits only; rotation limits stay rigid.
-				for (auto axis : { JPH::SixDOFConstraint::EAxis::TranslationX, JPH::SixDOFConstraint::EAxis::TranslationY, JPH::SixDOFConstraint::EAxis::TranslationZ })
-					sixDOF->SetLimitsSpringSettings(axis, limitSpring);
+				// Jolt softens translation limits only; rotation limits stay rigid. A spring on a locked axis would
+				// make the lock soft too, so only limited axes get it.
+				bool softened = false;
+				for (int i = 0; i < 3; i++)
+				{
+					const bool limited = limits.LinearMin[i] < limits.LinearMax[i];
+					const auto axis = static_cast<JPH::SixDOFConstraint::EAxis>(JPH::SixDOFConstraint::EAxis::TranslationX + i);
+					sixDOF->SetLimitsSpringSettings(axis, limited ? limitSpring : JPH::SpringSettings());
+					softened |= limited;
+				}
+				if (limitSpring.HasStiffness() && joint.UseLimits && !softened)
+					warnings.emplace_back("LimitSpringFrequency has no effect on a six-DOF joint without a limited translation axis (rotation limits and locked axes stay rigid)");
 				break;
 			}
 			case JointType::Fixed:
