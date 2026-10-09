@@ -25,11 +25,12 @@ namespace Basalt {
 		float Distance = 0.0f;
 	};
 
-	// Which bodies a query sees. LayerMask has one bit per physics layer (see PhysicsLayers::MaskFromNames).
+	// Which bodies a query sees. LayerMask has one bit per physics layer (see PhysicsLayers::MaskFromNames);
+	// a mask of 0 matches nothing.
 	struct PhysicsQueryFilter
 	{
 		uint32_t LayerMask = 0xFFFFFFFF;
-		// Skipped entirely, e.g. the caster itself.
+		// Skipped entirely, e.g. the caster itself; 0 (never a valid entity UUID) skips nothing.
 		UUID IgnoreEntity = 0;
 		bool IncludeTriggers = false;
 	};
@@ -91,9 +92,10 @@ namespace Basalt {
 
 		// Scene queries. Casts sweep along `direction` (any length) for up to maxDistance and report the
 		// closest hit, or with the *All variants every entity hit, once each at its closest point, sorted by
-		// distance (ties by UUID). A shape cast that starts inside a body hits it at distance 0. Overlaps
-		// return each entity touching the shape once, sorted by UUID. Invalid sizes or distances return
-		// nothing. Rotations are world-space; box sizes are half extents.
+		// distance (ties by UUID). A cast that starts inside a body hits it at distance 0, whichever way it
+		// moves. Overlaps return each entity touching the shape once, sorted by UUID. Invalid input (a
+		// non-finite or zero-length direction, a non-finite position, a non-positive distance, radius or half
+		// extent, a zero rotation) returns nothing. Rotations are world-space; box sizes are half extents.
 		std::optional<RaycastHit> Raycast(const glm::vec3& origin, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter = {}) const;
 		std::vector<RaycastHit> RaycastAll(const glm::vec3& origin, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter = {}) const;
 		std::optional<RaycastHit> SphereCast(const glm::vec3& origin, float radius, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter = {}) const;

@@ -152,7 +152,47 @@ TEST_SUITE("Physics")
 		CHECK(CountMessages(since, "unknown physics layer 'Ghost'") == 1);
 		const Ref<Scene> source = CreateRef<Scene>();
 		source->SetPhysicsLayers(PhysicsLayers());
-		CHECK(Scene::Copy(source)->GetPhysicsLayers() != nullptr);
+		CHECK(Scene::Copy(source)->GetPhysicsLayers().has_value());
+	}
+
+	TEST_CASE("The highest layer index filters like any other")
+	{
+		PhysicsLayers layers;
+		std::string error;
+		for (uint32_t i = 1; i < PhysicsLayers::MaxLayers; i++)
+			REQUIRE(layers.Add("L" + std::to_string(i), error));
+		layers.SetCollides(0, 31, false);
+		Scene scene;
+		scene.SetPhysicsLayers(layers);
+		CreateGround(scene);
+		Entity last = CreateBox(scene, { 0.0f, 2.0f, 0.0f });
+		last.GetComponent<RigidBodyComponent>().Layer = "L31";
+		Entity neighbour = CreateBox(scene, { 3.0f, 2.0f, 0.0f });
+		neighbour.GetComponent<RigidBodyComponent>().Layer = "L30";
+
+		scene.OnSimulationStart();
+		Simulate(scene, 2.0f);
+		CHECK(last.GetTransform().Translation.y < -5.0f);
+		CHECK(neighbour.GetTransform().Translation.y == doctest::Approx(0.5f).epsilon(0.02));
+		const PhysicsQueryFilter lastOnly = { .LayerMask = 1u << 31 };
+		CHECK(scene.GetPhysicsWorld()->RaycastAll({ 0.0f, 50.0f, 0.0f }, { 0.0f, -1.0f, 0.0f }, 100.0f, lastOnly).size() == 1);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("A running world keeps the layers it started with")
+	{
+		BasaltTest::TempProject temp("PhysicsLayersSnapshot");
+		REQUIRE(temp.IsValid());
+		Scene scene;
+		CreateGround(scene);
+		scene.OnSimulationStart();
+		std::string error;
+		REQUIRE(Project::GetActive()->GetConfig().Physics.Add("Late", error));
+		CHECK(scene.GetPhysicsWorld()->GetLayers().GetCount() == 1);
+		scene.OnSimulationStop();
+		scene.OnSimulationStart();
+		CHECK(scene.GetPhysicsWorld()->GetLayers().GetCount() == 2);
+		scene.OnSimulationStop();
 	}
 
 	TEST_CASE("Changing a body's layer at runtime rebuilds it on the new layer; warnings are logged once")
@@ -320,11 +360,18 @@ TEST_SUITE("Physics")
 			CHECK(hit->Normal.y == doctest::Approx(1.0f).epsilon(0.01));
 			CHECK(hit->Point.y == doctest::Approx(2.5f).epsilon(0.01));
 
-			// Starting inside a body hits it immediately.
-			hit = physics.SphereCast({ 0.0f, 2.0f, 0.0f }, 0.25f, down, 100.0f);
-			REQUIRE(hit);
-			CHECK(hit->EntityID == enemy.GetUUID());
-			CHECK(hit->Distance == doctest::Approx(0.0f));
+			// Starting inside a body hits it immediately, whichever way the cast moves (also out of the body,
+			// which Jolt would skip as a back-face hit by default).
+			for (const glm::vec3& direction : { down, -down, glm::vec3(1.0f, 0.0f, 0.0f) })
+			{
+				hit = physics.SphereCast({ 0.0f, 2.3f, 0.0f }, 0.1f, direction, 100.0f, { .LayerMask = enemyOnly });
+				REQUIRE(hit);
+				CHECK(hit->EntityID == enemy.GetUUID());
+				CHECK(hit->Distance == doctest::Approx(0.0f));
+				hit = physics.BoxCast({ 0.0f, 2.3f, 0.0f }, glm::vec3(0.1f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), direction, 100.0f, { .LayerMask = enemyOnly });
+				REQUIRE(hit);
+				CHECK(hit->EntityID == enemy.GetUUID());
+			}
 
 			const auto hits = physics.SphereCastAll(top, 0.5f, down, 100.0f);
 			REQUIRE(hits.size() == 2);
@@ -1079,11 +1126,19 @@ TEST_SUITE("PhysicsLayers")
 		CHECK_FALSE(layers.ShouldCollide(2, 1));
 		CHECK_FALSE(layers.ShouldCollide(2, 2));
 		CHECK(layers.ShouldCollide(0, 2));
-		CHECK(layers.GetCollisionMask(2) == 0xFFFFFFF9u);
-		// Layers that do not exist never collide and cannot be changed.
-		CHECK_FALSE(layers.ShouldCollide(0, 3));
-		layers.SetCollides(0, 3, false);
+		// Masks only have bits for defined layers; an undefined layer's mask is empty.
+		CHECK(layers.GetCollisionMask(2) == 0b001u);
+		CHECK(layers.GetCollisionMask(0) == 0b111u);
 		CHECK(layers.GetCollisionMask(3) == 0u);
+
+		// Equality compares names and the matrix between them.
+		PhysicsLayers same;
+		REQUIRE(same.Add("Player", error));
+		REQUIRE(same.Add("Debris", error));
+		CHECK(same != layers);
+		same.SetCollides(1, 2, false);
+		same.SetCollides(2, 2, false);
+		CHECK(same == layers);
 
 		CHECK(layers.MaskFromNames({ "Default", "Debris" }, error) == 0b101u);
 		CHECK_FALSE(layers.MaskFromNames({ "Enemy" }, error).has_value());
@@ -1092,6 +1147,12 @@ TEST_SUITE("PhysicsLayers")
 		for (uint32_t i = layers.GetCount(); i < PhysicsLayers::MaxLayers; i++)
 			REQUIRE(layers.Add("Layer" + std::to_string(i), error));
 		CHECK_FALSE(layers.Add("OneTooMany", error));
+		// The last layer uses bit 31.
+		CHECK(layers.GetCollisionMask(31) == 0xFFFFFFFFu);
+		layers.SetCollides(0, 31, false);
+		CHECK_FALSE(layers.ShouldCollide(31, 0));
+		CHECK(layers.GetCollisionMask(31) == 0xFFFFFFFEu);
+		CHECK((layers.GetCollisionMask(0) & 0x80000000u) == 0u);
 	}
 
 	TEST_CASE("Layers round-trip through JSON and reject malformed data")
