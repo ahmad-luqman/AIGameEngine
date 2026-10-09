@@ -452,17 +452,24 @@ namespace Basalt {
 			ScriptEngineAccess::Call(*this, b.GetUUID(), callback, ScriptEntity{ a.GetUUID(), m_Scene });
 	}
 
-	void ScriptEngine::OnJointBroken(Entity owner, Entity connected)
+	void ScriptEngine::OnJointBroken(Entity holder, Entity body, Entity connected)
 	{
-		if (connected)
-		{
-			ScriptEngineAccess::Call(*this, owner.GetUUID(), "OnJointBreak", ScriptEntity{ connected.GetUUID(), m_Scene });
-			ScriptEngineAccess::Call(*this, connected.GetUUID(), "OnJointBreak", ScriptEntity{ owner.GetUUID(), m_Scene });
-		}
-		else
-		{
-			ScriptEngineAccess::Call(*this, owner.GetUUID(), "OnJointBreak", sol::lua_nil);
-		}
+		// Captured up front: a callback may destroy any of these entities.
+		const UUID holderID = holder.GetUUID();
+		const UUID bodyID = body ? body.GetUUID() : holderID;
+		const UUID connectedID = connected ? connected.GetUUID() : UUID(0);
+		auto notify = [this](UUID target, UUID other) {
+			if (other != 0)
+				ScriptEngineAccess::Call(*this, target, "OnJointBreak", ScriptEntity{ other, m_Scene });
+			else
+				ScriptEngineAccess::Call(*this, target, "OnJointBreak", sol::lua_nil);
+		};
+		notify(bodyID, connectedID);
+		if (connectedID != 0)
+			notify(connectedID, bodyID);
+		// A separate joint entity hears about its own joint too, with the far side like its body.
+		if (holderID != bodyID)
+			notify(holderID, connectedID);
 	}
 
 	bool ScriptEngine::ExecuteString(const std::string& code, std::string& outResult)

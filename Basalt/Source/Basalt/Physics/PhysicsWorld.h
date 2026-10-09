@@ -48,7 +48,8 @@ namespace Basalt {
 	// Bodies are created for every entity with a RigidBodyComponent and at least one collider. Entities
 	// whose physics components are added or removed at runtime are rebuilt before the next step.
 	// JointComponents become Jolt constraints once both bodies exist (a joint whose body is missing is
-	// retried when that body is created). A joint is rebuilt from the current poses when either body is
+	// retried when that body is created). A joint moves its BodyEntity's body, so several joint entities can
+	// act on one body; joints are tracked by the entity holding the component. A joint is rebuilt from the current poses when either body is
 	// rebuilt or one of its structural fields changes (see JointComponent); other changes update it in place.
 	// Joint warnings are logged once per distinct setting, so scripts may set the component every frame.
 	// Collision filtering uses named layers (RigidBodyComponent::Layer) and the collision matrix of the
@@ -82,12 +83,12 @@ namespace Basalt {
 		void SetAngularVelocity(Entity entity, const glm::vec3& velocity);
 		glm::vec3 GetAngularVelocity(Entity entity) const;
 
-		// Whether the entity's JointComponent is currently a live constraint (false before both bodies
-		// exist, when the joint is invalid, and after it broke).
+		// Whether the JointComponent held by this entity is currently a live constraint (false before both
+		// bodies exist, when the joint is invalid, and after it broke).
 		bool HasJoint(Entity entity) const;
-		// Hinge angle (degrees, wrapping at +-180) or slider offset (meters) of this entity relative to the
-		// connected one, measured from the joint's rest pose and signed around/along the world-space Axis;
-		// nullopt for other joint types and entities without a live joint.
+		// Hinge angle (degrees, wrapping at +-180) or slider offset (meters) of the joint held by this entity:
+		// its body relative to the connected one, measured from the joint's rest pose and signed around/along
+		// the world-space Axis; nullopt for other joint types and entities without a live joint.
 		std::optional<float> GetJointPosition(Entity entity) const;
 
 		// Scene queries. Casts sweep along `direction` (any length) for up to maxDistance and report the
@@ -116,7 +117,7 @@ namespace Basalt {
 
 	private:
 		void RebuildDirtyJoints();
-		// Marks every joint owned by or connected to the entity for a rebuild (its body was just created).
+		// Marks every joint moving or connected to the entity's body for a rebuild (it was just created).
 		void MarkJointsDirty(UUID uuid);
 		// Builds the entity's constraint; problems are appended to warnings.
 		void CreateJoint(Entity entity, std::vector<std::string>& warnings);

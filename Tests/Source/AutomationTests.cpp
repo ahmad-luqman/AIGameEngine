@@ -103,6 +103,13 @@ TEST_SUITE("Automation")
 		const json door = Run(registry, session, "entity.create", { { "name", "Door" }, { "components", { { "Joint", { { "Type", "Hinge" }, { "ConnectedEntity", "Player" } } } } } });
 		CHECK(Run(registry, session, "component.get", { { "entity", door["id"] }, { "component", "Joint" } })["ConnectedEntity"] == player["id"]);
 		CHECK(RunError(registry, session, "component.set", { { "entity", "Gun" }, { "component", "Joint" }, { "data", { { "ConnectedEntity", "Nobody" } } } }).find("no entity named") != std::string::npos);
+		// A joint entity names the body it moves the same way.
+		const json rope = Run(registry, session, "entity.create", { { "name", "Rope" }, { "parent", "Player" }, { "components", { { "Joint", { { "BodyEntity", "Player" }, { "ConnectedEntity", "Gun" } } } } } });
+		const json ropeJoint = Run(registry, session, "component.get", { { "entity", rope["id"] }, { "component", "Joint" } });
+		CHECK(ropeJoint["BodyEntity"] == player["id"]);
+		CHECK(ropeJoint["ConnectedEntity"] == gun["id"]);
+		CHECK(RunError(registry, session, "component.set", { { "entity", "Rope" }, { "component", "Joint" }, { "data", { { "BodyEntity", "Nobody" } } } }).find("no entity named") != std::string::npos);
+		Run(registry, session, "entity.destroy", { { "entity", "Rope" } });
 		const size_t entityCount = Run(registry, session, "entity.list")["entities"].size();
 		CHECK(RunError(registry, session, "entity.create", { { "name", "Orphan" }, { "components", { { "Joint", { { "ConnectedEntity", "Nobody" } } } } } }).find("no entity named") != std::string::npos);
 		CHECK(Run(registry, session, "entity.list")["entities"].size() == entityCount);
