@@ -453,8 +453,8 @@ namespace Basalt {
 				return MakeEntityList(state, context, world.OverlapBox(center, halfExtents, rotation, ParseQueryOptions(world, options).Filter));
 			};
 			physics["GetLayers"] = [&context](sol::this_state state) {
-				sol::state_view lua(state);
-				sol::table names = lua.create_table();
+				sol::state_view view(state);
+				sol::table names = view.create_table();
 				for (const std::string& name : RequirePhysics(context).GetLayers().GetNames())
 					names.add(name);
 				return names;
