@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Basalt/Core/Base.h"
+#include "Basalt/Physics/PhysicsLayers.h"
 
 #include <filesystem>
 #include <string>
@@ -16,6 +17,8 @@ namespace Basalt {
 		uint32_t WindowWidth = 1600;
 		uint32_t WindowHeight = 900;
 		bool Fullscreen = false;
+		// Collision layers and matrix used by every scene of the project.
+		PhysicsLayers Physics;
 	};
 
 	// A game project: a directory containing Project.bproject and an Assets/ folder. Asset references in
