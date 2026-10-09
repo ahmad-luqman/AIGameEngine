@@ -1140,7 +1140,7 @@ TEST_SUITE("PhysicsLayers")
 	{
 		BasaltTest::TempProject temp("PhysicsLayersProject");
 		REQUIRE(temp.IsValid());
-		Ref<Project> project = Project::GetActive();
+		const Ref<Project>& project = Project::GetActive();
 		std::string error;
 		REQUIRE(project->GetConfig().Physics.Add("Player", error));
 		project->GetConfig().Physics.SetCollides(1, 1, false);
