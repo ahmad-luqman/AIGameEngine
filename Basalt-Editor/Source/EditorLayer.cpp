@@ -94,6 +94,30 @@ namespace Basalt {
 			}
 		}
 
+		// The rim of a cone joint's limit, 0.5 m along its axis, with two lines back to the apex. Wide cones
+		// are skipped: the rim's radius grows with tan(halfAngle), which runs off toward infinity near 90 degrees.
+		void DrawConeRim(const glm::vec3& apex, const glm::vec3& axis, float halfAngle, const glm::vec4& color)
+		{
+			if (halfAngle >= glm::radians(85.0f))
+				return;
+			const glm::vec3 reference = std::abs(axis.y) < 0.9f ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::vec3(1.0f, 0.0f, 0.0f);
+			const glm::vec3 u = glm::normalize(glm::cross(axis, reference));
+			const glm::vec3 v = glm::cross(axis, u);
+			const glm::vec3 center = apex + axis * 0.5f;
+			const float radius = 0.5f * std::tan(halfAngle);
+			constexpr int Segments = 24;
+			glm::vec3 previous = center + u * radius;
+			for (int i = 1; i <= Segments; i++)
+			{
+				const float angle = glm::two_pi<float>() * static_cast<float>(i) / static_cast<float>(Segments);
+				const glm::vec3 point = center + (u * std::cos(angle) + v * std::sin(angle)) * radius;
+				DebugDraw::Line(previous, point, color);
+				previous = point;
+			}
+			DebugDraw::Line(apex, center + u * radius, color);
+			DebugDraw::Line(apex, center - u * radius, color);
+		}
+
 		// Draws a joint from its body's world transform: the anchor, the axis (hinge rotation, slider
 		// direction, cone or twist axis), the six-DOF secondary axis, the cone's rim and a line to the
 		// connected entity (or the distance joint's world anchor).
@@ -120,27 +144,8 @@ namespace Basalt {
 					if (glm::length(secondary) > 1e-4f)
 						DebugDraw::Arrow(anchor, anchor + glm::normalize(secondary) * 0.3f, color);
 				}
-				// The cone the axis must stay in, drawn as its rim 0.5 m along the axis.
-				const float halfAngle = glm::radians(std::clamp(joint.LimitMax, 0.0f, 180.0f));
-				if (joint.Type == JointType::Cone && joint.UseLimits && halfAngle < glm::radians(85.0f))
-				{
-					const glm::vec3 reference = std::abs(axis.y) < 0.9f ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::vec3(1.0f, 0.0f, 0.0f);
-					const glm::vec3 u = glm::normalize(glm::cross(axis, reference));
-					const glm::vec3 v = glm::cross(axis, u);
-					const glm::vec3 center = anchor + axis * 0.5f;
-					const float radius = 0.5f * std::tan(halfAngle);
-					constexpr int Segments = 24;
-					glm::vec3 previous = center + u * radius;
-					for (int i = 1; i <= Segments; i++)
-					{
-						const float angle = glm::two_pi<float>() * static_cast<float>(i) / static_cast<float>(Segments);
-						const glm::vec3 point = center + (u * std::cos(angle) + v * std::sin(angle)) * radius;
-						DebugDraw::Line(previous, point, color);
-						previous = point;
-					}
-					DebugDraw::Line(anchor, center + u * radius, color);
-					DebugDraw::Line(anchor, center - u * radius, color);
-				}
+				if (joint.Type == JointType::Cone && joint.UseLimits)
+					DrawConeRim(anchor, axis, glm::radians(std::clamp(joint.LimitMax, 0.0f, 180.0f)), color);
 			}
 
 			if (Entity connected = joint.ConnectedEntity != 0 ? scene.GetEntityByUUID(joint.ConnectedEntity) : Entity{})
