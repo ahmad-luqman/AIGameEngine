@@ -392,6 +392,83 @@ TEST_SUITE("Scripting")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("Lua physics queries take layers, ignore and trigger options and return all hits")
+	{
+		BasaltTest::TempProject project("ScriptQueries");
+		const std::string script = project.WriteFile("Assets/Scripts/Probe.lua", R"(
+			local Probe = {}
+			local function fails(pattern, ...)
+				local ok, err = pcall(...)
+				return not ok and string.find(tostring(err), pattern, 1, true) ~= nil
+			end
+			function Probe:OnCreate()
+				local top, down = Vec3(0, 10, 0), Vec3(0, -1, 0)
+				local hit = Physics.Raycast(top, down, 100)
+				self.Closest = hit.Entity.Name
+				self.IgnoreEntity = Physics.Raycast(top, down, 100, hit.Entity).Entity.Name
+				self.IgnoreOption = Physics.Raycast(top, down, 100, { Ignore = hit.Entity }).Entity.Name
+				self.DefaultLayer = Physics.Raycast(top, down, 100, { Layers = { "Default" } }).Entity.Name
+				local all = Physics.Raycast(top, down, 100, { All = true, IncludeTriggers = true })
+				self.AllCount = #all
+				self.AllFirst = all[1].Entity.Name
+				self.NoHits = #Physics.Raycast(top, Vec3(0, 1, 0), 100, { All = true })
+				self.Miss = Physics.Raycast(top, Vec3(0, 1, 0), 100) == nil
+				self.Sphere = Physics.SphereCast(top, 0.5, down, 100).Distance
+				self.SphereAll = #Physics.SphereCast(top, 0.5, down, 100, { All = true })
+				self.Box = Physics.BoxCast(top, Vec3(1, 0.1, 0.1), Quat.AngleAxis(math.rad(90), Vec3(0, 0, 1)), down, 100).Distance
+				self.Overlap = #Physics.OverlapSphere(Vec3(0, 0, 0), 3)
+				self.OverlapEnemy = Physics.OverlapBox(Vec3(0, 2, 0), Vec3(0.2, 0.2, 0.2), Quat.Identity(), { Layers = { "Enemy" } })[1].Name
+				self.OverlapTrigger = #Physics.OverlapSphere(Vec3(0, 5, 0), 0.1, { IncludeTriggers = true })
+				self.Layers = table.concat(Physics.GetLayers(), ",")
+				self.BadLayer = fails("unknown physics layer 'Nope'", Physics.Raycast, top, down, 100, { Layers = { "Nope" } })
+				self.BadOption = fails("unknown query option 'Layer'", Physics.Raycast, top, down, 100, { Layer = { "Enemy" } })
+				self.BadType = fails("must be a boolean", Physics.OverlapSphere, top, 1, { All = 1 })
+				self.BadOptions = fails("must be an Entity or a table", Physics.Raycast, top, down, 100, 5)
+			end
+			return Probe
+		)");
+
+		PhysicsLayers layers;
+		std::string error;
+		REQUIRE(layers.Add("Enemy", error));
+		Scene scene;
+		scene.SetPhysicsLayers(layers);
+		auto addBox = [&scene](const char* name, const glm::vec3& position, const glm::vec3& halfExtents) {
+			Entity entity = scene.CreateEntity(name);
+			entity.GetTransform().Translation = position;
+			entity.AddComponent<RigidBodyComponent>();
+			entity.AddComponent<BoxColliderComponent>().HalfExtents = halfExtents;
+			return entity;
+		};
+		addBox("Floor", { 0.0f, -0.5f, 0.0f }, { 50.0f, 0.5f, 50.0f });
+		addBox("Enemy", { 0.0f, 2.0f, 0.0f }, glm::vec3(0.5f)).GetComponent<RigidBodyComponent>().Layer = "Enemy";
+		addBox("Zone", { 0.0f, 5.0f, 0.0f }, glm::vec3(0.5f)).GetComponent<RigidBodyComponent>().IsTrigger = true;
+		Entity probe = AddScripted(scene, "Probe", script);
+
+		scene.OnRuntimeStart();
+		CHECK(scene.GetScriptEngine()->GetErrors().empty());
+		CHECK(Field(scene, probe, "Closest") == "Enemy");
+		CHECK(Field(scene, probe, "IgnoreEntity") == "Floor");
+		CHECK(Field(scene, probe, "IgnoreOption") == "Floor");
+		CHECK(Field(scene, probe, "DefaultLayer") == "Floor");
+		CHECK(Field(scene, probe, "AllCount") == 3);
+		CHECK(Field(scene, probe, "AllFirst") == "Zone");
+		CHECK(Field(scene, probe, "NoHits") == 0);
+		CHECK(Field(scene, probe, "Miss") == true);
+		CHECK(Field(scene, probe, "Sphere").get<double>() == doctest::Approx(7.0).epsilon(0.01));
+		CHECK(Field(scene, probe, "SphereAll") == 2);
+		CHECK(Field(scene, probe, "Box").get<double>() == doctest::Approx(6.5).epsilon(0.01));
+		CHECK(Field(scene, probe, "Overlap") == 2);
+		CHECK(Field(scene, probe, "OverlapEnemy") == "Enemy");
+		CHECK(Field(scene, probe, "OverlapTrigger") == 1);
+		CHECK(Field(scene, probe, "Layers") == "Default,Enemy");
+		CHECK(Field(scene, probe, "BadLayer") == true);
+		CHECK(Field(scene, probe, "BadOption") == true);
+		CHECK(Field(scene, probe, "BadType") == true);
+		CHECK(Field(scene, probe, "BadOptions") == true);
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("ExecuteString and property discovery")
 	{
 		BasaltTest::TempProject project("ScriptConsole");

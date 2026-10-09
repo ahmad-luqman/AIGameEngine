@@ -108,9 +108,50 @@ Mouse buttons: `Left`, `Right`, `Middle`, `Button3`-`Button7`.
 
 ## Physics
 
-`Physics.Raycast(origin, direction, maxDistance [, ignoreEntity])` returns
-`{ Entity, Point, Normal, Distance }` or nil (triggers are ignored). `Physics.GetGravity()`,
-`Physics.SetGravity(v)`.
+`Physics.GetGravity()`, `Physics.SetGravity(v)`, and `Physics.GetLayers()` (the project's layer names
+in order).
+
+### Layers and continuous collision
+
+Each rigid body is on one named layer (`RigidBody.Layer`, default `"Default"`). The project defines up to
+32 layers and which pairs of layers collide (`project.set` with `physicsLayers`, stored in
+`Project.bproject`). The matrix is read when play starts. A layer name the project does not define falls
+back to `Default` with a warning.
+
+Set `RigidBody.Continuous = true` on fast dynamic bodies (projectiles) so they cannot pass through thin
+geometry between steps. It costs more per step and has no effect on static, kinematic or trigger bodies.
+
+### Queries
+
+Casts sweep a ray, sphere or box from `origin` along `direction` (any length) for up to `maxDistance`:
+
+| Function | Returns |
+|----------|---------|
+| `Physics.Raycast(origin, direction, maxDistance [, options])` | closest hit or nil |
+| `Physics.SphereCast(origin, radius, direction, maxDistance [, options])` | closest hit or nil |
+| `Physics.BoxCast(origin, halfExtents, rotation, direction, maxDistance [, options])` | closest hit or nil |
+| `Physics.OverlapSphere(center, radius [, options])` | array of entities |
+| `Physics.OverlapBox(center, halfExtents, rotation [, options])` | array of entities |
+
+A hit is `{ Entity, Point, Normal, Distance }`. A shape cast that starts inside a body hits it at
+distance 0. `options` is an entity to ignore, or a table:
+
+- `Ignore`: an entity to skip (for example the caster).
+- `Layers`: layer names to test against (default: all). An unknown name is an error.
+- `IncludeTriggers`: also hit triggers (default false).
+- `All`: casts return an array of every hit entity, closest first, one hit per entity (default false).
+
+Overlaps list each entity once.
+
+```lua
+-- Ground check that skips the player and only sees level geometry.
+local ground = Physics.SphereCast(self.Entity.WorldPosition, 0.4, Vec3(0, -1, 0), 0.2,
+	{ Ignore = self.Entity, Layers = { "Default", "Level" } })
+-- Push every debris body within 5 m of an explosion.
+for _, entity in ipairs(Physics.OverlapSphere(center, 5, { Layers = { "Debris" } })) do
+	entity:AddImpulse((entity.WorldPosition - center):Normalized() * 10)
+end
+```
 
 ### Joints
 
