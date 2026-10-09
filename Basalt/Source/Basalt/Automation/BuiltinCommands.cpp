@@ -458,7 +458,7 @@ namespace Basalt {
 
 		void RegisterEntity(CommandRegistry& registry)
 		{
-			Add(registry, "entity.create", "Creates an entity, optionally with a parent and components ({\"Mesh\": {...}, ...}).", { { "name", "string" }, { "parent", "entity ID or name" }, { "components", "object: component name -> fields; entity references (Joint ConnectedEntity) take an ID or name" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "entity.create", "Creates an entity, optionally with a parent and components ({\"Mesh\": {...}, ...}).", { { "name", "string" }, { "parent", "entity ID or name" }, { "components", "object: component name -> fields; entity references (Joint BodyEntity, ConnectedEntity) take an ID or name" } }, [](AutomationSession& session, const json& params) {
 				Scene& scene = RequireScene(session);
 				Entity parent = params.contains("parent") && !params["parent"].is_null() ? ResolveEntity(scene, params["parent"], "parent") : Entity{};
 				// References are resolved before the entity exists, so a name never resolves to the entity
@@ -566,7 +566,7 @@ namespace Basalt {
 
 		void RegisterComponents(CommandRegistry& registry)
 		{
-			Add(registry, "component.set", "Adds the component if missing and sets the given fields (others keep their values).", { { "entity", "ID or name" }, { "component", "string, e.g. 'RigidBody'" }, { "data", "object of fields; entity references (Joint ConnectedEntity) take an ID or name" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "component.set", "Adds the component if missing and sets the given fields (others keep their values).", { { "entity", "ID or name" }, { "component", "string, e.g. 'RigidBody'" }, { "data", "object of fields; entity references (Joint BodyEntity, ConnectedEntity) take an ID or name" } }, [](AutomationSession& session, const json& params) {
 				Entity entity = RequireEntity(session, params);
 				const std::string name = RequireString(params, "component");
 				std::string error;

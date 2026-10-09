@@ -60,7 +60,7 @@ Fields: `Radius`, `HalfHeight`, `Offset`
 
 ## Joint
 
-Fields: `Type`, `ConnectedEntity`, `Anchor`, `ConnectedAnchor`, `Axis`, `UseLimits`, `LimitMin`, `LimitMax`, `MotorMode`, `MotorTarget`, `MotorMaxForce`, `BreakForce`, `BreakTorque`, `EnableCollision`
+Fields: `Type`, `BodyEntity`, `ConnectedEntity`, `Anchor`, `ConnectedAnchor`, `Axis`, `SecondaryAxis`, `UseLimits`, `LimitMin`, `LimitMax`, `LimitSpringFrequency`, `LimitSpringDamping`, `LinearLimitMin`, `LinearLimitMax`, `AngularLimitMin`, `AngularLimitMax`, `MotorMode`, `MotorTarget`, `MotorMaxForce`, `BreakForce`, `BreakTorque`, `EnableCollision`
 
 ## Script
 
