@@ -36,9 +36,16 @@ namespace Basalt {
 			BS_JOINT_FIELD(LinearLimitMax),
 			BS_JOINT_FIELD(AngularLimitMin),
 			BS_JOINT_FIELD(AngularLimitMax),
+			BS_JOINT_FIELD(FreeLinearAxes),
 			BS_JOINT_FIELD(MotorMode),
 			BS_JOINT_FIELD(MotorTarget),
+			BS_JOINT_FIELD(LinearMotorMode),
+			BS_JOINT_FIELD(AngularMotorMode),
+			BS_JOINT_FIELD(LinearMotorTarget),
+			BS_JOINT_FIELD(AngularMotorTarget),
 			BS_JOINT_FIELD(MotorMaxForce),
+			BS_JOINT_FIELD(MotorSpringFrequency),
+			BS_JOINT_FIELD(MotorSpringDamping),
 			BS_JOINT_FIELD(BreakForce),
 			BS_JOINT_FIELD(BreakTorque),
 			BS_JOINT_FIELD(EnableCollision),
@@ -74,11 +81,19 @@ namespace Basalt {
 			return type == JointType::Distance || (limited && IsAnyOf(type, { JointType::Hinge, JointType::Slider, JointType::SixDOF }));
 		if (field.starts_with("LinearLimit") || field.starts_with("AngularLimit"))
 			return limited && type == JointType::SixDOF;
-		if (field.starts_with("Motor"))
+		if (field == "FreeLinearAxes" || field.starts_with("LinearMotor") || field.starts_with("AngularMotor"))
+			return type == JointType::SixDOF;
+		if (field == "MotorMode" || field == "MotorTarget")
 			return IsAnyOf(type, { JointType::Hinge, JointType::Slider });
-		// Point and distance joints hold no torque, and neither do cone and six-DOF joints that rotate freely.
+		if (field.starts_with("Motor"))
+			return IsAnyOf(type, { JointType::Hinge, JointType::Slider, JointType::SixDOF });
+		// Point and distance joints hold no torque, and neither do cone and six-DOF joints that rotate freely
+		// (a six-DOF rotation motor makes it hold torque).
 		if (field == "BreakTorque")
-			return IsAnyOf(type, { JointType::Fixed, JointType::Hinge, JointType::Slider }) || (limited && IsAnyOf(type, { JointType::Cone, JointType::SixDOF }));
+		{
+			const bool rotationMotor = type == JointType::SixDOF && std::ranges::any_of(joint.AngularMotorMode, [](JointMotorMode mode) { return mode != JointMotorMode::Off; });
+			return IsAnyOf(type, { JointType::Fixed, JointType::Hinge, JointType::Slider }) || (limited && IsAnyOf(type, { JointType::Cone, JointType::SixDOF })) || rotationMotor;
+		}
 		return true;
 	}
 

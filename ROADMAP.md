@@ -56,12 +56,8 @@ The features most games need, roughly in order of impact.
 - **Character controller — M.** Wrap `JPH::CharacterVirtual` in a `CharacterControllerComponent` (slope
   limit, step height, max strength) with Lua `Move(velocity)`, `IsGrounded()`, `GetGroundNormal()`.
   Platformers and first-person games need it, and `FixedRotation` dynamic bodies are a poor substitute.
-- **Powered ragdolls — S.** Joints now cover ragdolls (six-DOF and cone types, several joints per body
-  through joint entities, spring-softened limits), but only hinges and sliders have motors. Add six-DOF
-  motors (per-axis velocity/position targets, or a target orientation; Jolt's cone joint has none) so
-  animation can drive a ragdoll. Also: explicit free six-DOF translation axes (today a wide limit stands in
-  for one; rotation limits of ±180 are already free), a `GetJointRotation` for cone and six-DOF joints, and
-  soft rotation limits if Jolt adds them.
+- **Soft six-DOF rotation limits — S.** Jolt 5.6 softens only six-DOF translation limits. When it adds
+  springs to rotation limits, apply `LimitSpringFrequency` to them too.
 
 ### Rendering
 

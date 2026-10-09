@@ -328,6 +328,18 @@ function Driver:OnUpdate(dt)
 		self.ConeTilt = 0
 		self.ArmTilt = 0
 
+		-- Powered ragdoll: a six-DOF limb driven to a target orientation, and a sled whose free axis gets a
+		-- velocity motor through SetComponent.
+		local limb = Scene.FindEntityByName("PoweredLimb")
+		local limbJoint = limb:GetComponent("Joint")
+		Check("Joint six-DOF motor fields", limbJoint.AngularMotorMode[3] == "Position" and limbJoint.AngularMotorTarget[3] == 40 and limbJoint.MotorSpringFrequency == 4)
+		Check("GetJointRotation", NearVec(limb:GetJointRotation(), Vec3(0, 0, 0), 0.5))
+		Check("GetJointRotation without a cone or six-DOF joint", door:GetJointRotation() == nil and Scene.FindEntityByName("Crate"):GetJointRotation() == nil)
+		local sled = Scene.FindEntityByName("PoweredSled")
+		sled:SetComponent("Joint", { LinearMotorMode = { "Velocity", "Off", "Off" }, LinearMotorTarget = { 1, 0, 0 } })
+		local sledJoint = sled:GetComponent("Joint")
+		Check("Joint FreeLinearAxes and LinearMotorMode", sledJoint.FreeLinearAxes[1] == true and sledJoint.FreeLinearAxes[2] == false and sledJoint.LinearMotorMode[1] == "Velocity")
+
 		-- Runtime-added script.
 		local scripted = Scene.CreateEntity("RuntimeScripted")
 		scripted:AddComponent("Script", { Script = "Assets/Scripts/Spinner.lua", Properties = { Label = "runtime" } })
@@ -376,6 +388,8 @@ function Driver:OnUpdate(dt)
 		-- A free lamp would swing to about 80 degrees; the solver lets the light lamp overshoot 20 slightly.
 		Check("Cone joint limits the swing", self.ConeTilt > 10 and self.ConeTilt < 27)
 		Check("Six-DOF joint limits the swing", self.ArmTilt > 20 and self.ArmTilt < 50)
+		Check("Six-DOF motor drives the limb", Near(Scene.FindEntityByName("PoweredLimb"):GetJointRotation().z, 40, 4))
+		Check("Six-DOF motor drives a free axis", Scene.FindEntityByName("PoweredSled").Translation.x > -36.7)
 		Check("Continuous body stops at a thin wall", Scene.FindEntityByName("Bullet").Translation.x < 15)
 		Check("RigidBody Layer and Continuous fields", Scene.FindEntityByName("GhostBox"):GetComponent("RigidBody").Layer == "Ghost" and Scene.FindEntityByName("Bullet"):GetComponent("RigidBody").Continuous)
 		Check("Physics.GetLayers", table.concat(Physics.GetLayers(), ",") == "Default,Ghost,Debris")

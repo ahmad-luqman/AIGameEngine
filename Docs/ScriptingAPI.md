@@ -91,6 +91,7 @@ Entity handles store an ID and stay safe to hold: using a destroyed entity raise
 | `e:AddForce(v)`, `e:AddImpulse(v)`, `e:AddTorque(v)` | Physics (dynamic bodies) |
 | `e:SetLinearVelocity(v)`, `e:GetLinearVelocity()`, `e:SetAngularVelocity(v)`, `e:GetAngularVelocity()` | Physics velocities |
 | `e:GetJointPosition()` | Hinge angle (degrees) or slider offset (meters) of the Joint this entity holds, from its rest pose; nil otherwise |
+| `e:GetJointRotation()` | Rotation (Euler degrees, like `Rotation`) of a cone or six-DOF Joint this entity holds, in the joint frame from its rest pose; nil otherwise |
 | `e:HasJoint()` | Whether the Joint this entity holds is a live constraint (false before both bodies exist, when it is invalid, and after it broke) |
 | `e:PlayAudio()`, `e:StopAudio()`, `e:IsAudioPlaying()` | The entity's AudioSource |
 | `e:GetScript()` | The entity's script instance (call its functions, read its fields) |
@@ -201,9 +202,21 @@ bungee cord.
 min == max locks it; X rotation (twist) lies within ±180 and the Y and Z rotations form a symmetric swing
 cone whose half angles are `AngularLimitMax.y`/`.z`. A swing minimum of 0 means -max, so a one-sided
 swing range is not possible (other minimums are mirrored with a warning). Jolt treats an angle limit within
-0.5° of 0 as locked and one within 0.5° of 180 as free. For a free translation, use a range wider than the
-body can travel. Without `UseLimits`, translation is locked and rotation free. A limit spring softens only
-limited translation axes; locked axes and rotation limits stay rigid.
+0.5° of 0 as locked and one within 0.5° of 180 as free. `FreeLinearAxes` (`{ x, y, z }` booleans) frees
+translation axes outright, with or without `UseLimits` (their linear limits are then ignored). Without
+`UseLimits`, translation is locked and rotation free. A limit spring softens only limited translation axes;
+locked and free axes and rotation limits stay rigid (Jolt has no soft rotation limits).
+
+**Powered ragdolls.** Six-DOF joints have a motor per axis of the joint frame: `LinearMotorMode` and
+`AngularMotorMode` are `{ x, y, z }` lists of `"Off"`, `"Velocity"` or `"Position"`, and each axis reads
+its component of `LinearMotorTarget` (m/s, or meters from the rest pose) or `AngularMotorTarget` (degrees/s
+around the axis). The `Position` rotation axes together drive toward one target orientation, given as Euler
+angles in degrees relative to the rest pose (the same form `GetJointRotation()` returns, so a recorded pose
+plays back as is); position targets beyond the limits are clamped to them. A motor on a locked axis does
+nothing and warns. `MotorMaxForce` caps both the force and the torque, and a `Position` motor pulls with a
+spring of `MotorSpringFrequency` Hz (default 2; 0 = as stiff as `MotorMaxForce` allows) and
+`MotorSpringDamping` (1 = critically damped), which also apply to hinge and slider motors. The cone joint
+has no motor; use a six-DOF joint with swing limits instead.
 
 ```lua
 -- A door that swings open on a motor (hinge on the door's left edge, around Y).
@@ -215,6 +228,10 @@ door:SetComponent("Joint", { MotorMode = "Position", MotorTarget = 90 })  -- che
 arm:AddComponent("Joint", { Type = "SixDOF", ConnectedEntity = torso, Anchor = { 0, 0.5, 0 },
     Axis = { 0, -1, 0 }, SecondaryAxis = { 1, 0, 0 }, UseLimits = true,
     AngularLimitMin = { -30, -70, -40 }, AngularLimitMax = { 30, 70, 40 } })
+
+-- Powered: every frame, pull the shoulder toward the animated pose (Euler degrees from the rest pose).
+arm:SetComponent("Joint", { AngularMotorMode = { "Position", "Position", "Position" },
+    AngularMotorTarget = pose, MotorSpringFrequency = 8, MotorMaxForce = 200 })  -- cheap: in place
 ```
 
 **Several joints on one body.** An entity holds one `Joint`. To give a body more (a ladder rung held by
@@ -234,16 +251,20 @@ end
 - `BodyEntity` and `ConnectedEntity` accept an entity or its ID and read back as the ID.
 - Fields a joint does not use (for its `Type`, or without `UseLimits`) are ignored, with one warning
   naming them when they are set away from their defaults; the editor shows only the fields a joint uses
-  (plus any such ignored ones, marked). Free cone and six-DOF joints (without `UseLimits`) and point and
-  distance joints hold no torque, so `BreakTorque` does not apply to them.
+  (plus any such ignored ones, marked). Free cone and six-DOF joints (without `UseLimits` or, for six-DOF,
+  a rotation motor) and point and distance joints hold no torque, so `BreakTorque` does not apply to them.
 - Setting limits, limit springs, motor fields, break thresholds or `EnableCollision` updates the joint in
-  place, so it is fine to do every frame. Changing `Type`, an entity, an anchor, an axis or `UseLimits`
+  place (per-axis motors and `FreeLinearAxes` included), so it is fine to do every frame. Changing `Type`, an entity, an anchor, an axis or `UseLimits`
   rebuilds it from the current poses.
 - Motors (`MotorMode` `Velocity` or `Position`, `MotorTarget` in degrees(/s) or meters(/s),
-  `MotorMaxForce`) work on hinges and sliders. Hinge position targets are clamped to [-180, 180].
-- `HasJoint()` and `GetJointPosition()` are called on the entity that holds the `Joint`.
-  `GetJointPosition()` is the body's position relative to the connected one: the hinge angle around
-  `Axis` (right-handed, wrapping at ±180) or the slider offset along `Axis`; nil for other types.
+  `MotorMaxForce`) work on hinges and sliders; six-DOF joints use the per-axis motors above. Hinge position
+  targets are clamped to [-180, 180].
+- `HasJoint()`, `GetJointPosition()` and `GetJointRotation()` are called on the entity that holds the
+  `Joint`. `GetJointPosition()` is the body's position relative to the connected one: the hinge angle
+  around `Axis` (right-handed, wrapping at ±180) or the slider offset along `Axis`; nil for other types.
+  `GetJointRotation()` is the body's rotation relative to the connected one for cone and six-DOF joints,
+  in the joint frame (X = `Axis`; Y = `SecondaryAxis` for six-DOF, an arbitrary perpendicular for a cone)
+  as Euler degrees; nil for other types.
 - A joint whose force or torque exceeds `BreakForce`/`BreakTorque` (0 = unbreakable) is removed with its
   component. Each body gets `OnJointBreak(other)` with the body on the other side (nil for the world), and
   a separate joint entity that is neither body gets it once too (with the connected entity). The force and

@@ -109,6 +109,12 @@ namespace Basalt {
 		// its body relative to the connected one, measured from the joint's rest pose and signed around/along
 		// the world-space Axis; nullopt for other joint types and entities without a live joint.
 		std::optional<float> GetJointPosition(Entity entity) const;
+		// Rotation of a cone or six-DOF joint's body relative to the connected one, measured from the joint's
+		// rest pose in the joint frame (X = Axis; for six-DOF Y = SecondaryAxis, for a cone Y and Z are an
+		// arbitrary perpendicular pair), as Euler angles in degrees like Transform Rotation. A six-DOF
+		// AngularMotorTarget in this form drives the joint back to that pose. nullopt for other joint types
+		// and entities without a live joint.
+		std::optional<glm::vec3> GetJointRotation(Entity entity) const;
 
 		// Scene queries. Casts sweep along `direction` (any length) for up to maxDistance and report the
 		// closest hit, or with the *All variants every entity hit, once each at its closest point, sorted by

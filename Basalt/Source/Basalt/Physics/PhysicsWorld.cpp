@@ -283,9 +283,16 @@ namespace Basalt {
 			structural.LinearLimitMax = built.LinearLimitMax;
 			structural.AngularLimitMin = built.AngularLimitMin;
 			structural.AngularLimitMax = built.AngularLimitMax;
+			structural.FreeLinearAxes = built.FreeLinearAxes;
 			structural.MotorMode = built.MotorMode;
 			structural.MotorTarget = built.MotorTarget;
+			structural.LinearMotorMode = built.LinearMotorMode;
+			structural.AngularMotorMode = built.AngularMotorMode;
+			structural.LinearMotorTarget = built.LinearMotorTarget;
+			structural.AngularMotorTarget = built.AngularMotorTarget;
 			structural.MotorMaxForce = built.MotorMaxForce;
+			structural.MotorSpringFrequency = built.MotorSpringFrequency;
+			structural.MotorSpringDamping = built.MotorSpringDamping;
 			structural.BreakForce = built.BreakForce;
 			structural.BreakTorque = built.BreakTorque;
 			structural.EnableCollision = built.EnableCollision;
@@ -399,25 +406,39 @@ namespace Basalt {
 			glm::vec3 AngularMax = { glm::pi<float>(), glm::pi<float>(), glm::pi<float>() };
 		};
 
+		constexpr const char* s_AxisNames[] = { "X", "Y", "Z" };
+
 		// Without UseLimits translation is locked and rotation free (a point joint). With limits every range
 		// must contain the rest pose (0), twist stays within +-180 degrees, and the swing cone is symmetric
 		// (Jolt's cone swing ignores the minimum), so a swing minimum other than 0 or -max is mirrored.
 		// Angles are capped at pi: Jolt asserts on more, and glm::radians(180) can round past it.
+		// FreeLinearAxes free their translation axes either way (Jolt treats +-FLT_MAX as free).
 		SixDOFLimits SanitizeSixDOFLimits(const JointComponent& joint, std::vector<std::string>& warnings)
 		{
 			SixDOFLimits limits;
-			if (!joint.UseLimits)
-				return limits;
-			constexpr const char* AxisNames[] = { "X", "Y", "Z" };
 			for (int i = 0; i < 3; i++)
 			{
-				const float linearMin = std::min(joint.LinearLimitMin[i], 0.0f);
-				const float linearMax = std::max(joint.LinearLimitMax[i], 0.0f);
-				if (linearMin != joint.LinearLimitMin[i] || linearMax != joint.LinearLimitMax[i])
-					warnings.emplace_back(fmt::format("six-DOF linear {} limits [{}, {}] must satisfy min <= 0 <= max (the rest pose is 0); clamped to [{}, {}]", AxisNames[i], joint.LinearLimitMin[i],
-													  joint.LinearLimitMax[i], linearMin, linearMax));
-				limits.LinearMin[i] = linearMin;
-				limits.LinearMax[i] = linearMax;
+				if (!joint.FreeLinearAxes[i])
+					continue;
+				limits.LinearMin[i] = -FLT_MAX;
+				limits.LinearMax[i] = FLT_MAX;
+				if (joint.UseLimits && (joint.LinearLimitMin[i] != 0.0f || joint.LinearLimitMax[i] != 0.0f))
+					warnings.emplace_back(fmt::format("six-DOF linear {} limits are ignored: the axis is free (FreeLinearAxes)", s_AxisNames[i]));
+			}
+			if (!joint.UseLimits)
+				return limits;
+			for (int i = 0; i < 3; i++)
+			{
+				if (!joint.FreeLinearAxes[i])
+				{
+					const float linearMin = std::min(joint.LinearLimitMin[i], 0.0f);
+					const float linearMax = std::max(joint.LinearLimitMax[i], 0.0f);
+					if (linearMin != joint.LinearLimitMin[i] || linearMax != joint.LinearLimitMax[i])
+						warnings.emplace_back(fmt::format("six-DOF linear {} limits [{}, {}] must satisfy min <= 0 <= max (the rest pose is 0); clamped to [{}, {}]", s_AxisNames[i],
+														  joint.LinearLimitMin[i], joint.LinearLimitMax[i], linearMin, linearMax));
+					limits.LinearMin[i] = linearMin;
+					limits.LinearMax[i] = linearMax;
+				}
 
 				float angularMin = 0.0f;
 				const float angularMax = std::clamp(joint.AngularLimitMax[i], 0.0f, 180.0f);
@@ -434,7 +455,7 @@ namespace Basalt {
 					angularMin = -angularMax;
 					const bool mirrored = joint.AngularLimitMin[i] == 0.0f || joint.AngularLimitMin[i] == angularMin;
 					if (!mirrored || angularMax != joint.AngularLimitMax[i])
-						warnings.emplace_back(fmt::format("six-DOF swing (angular {}) limits [{}, {}] must be a symmetric half angle [-max, max] with 0 <= max <= 180 degrees; using [{}, {}]", AxisNames[i],
+						warnings.emplace_back(fmt::format("six-DOF swing (angular {}) limits [{}, {}] must be a symmetric half angle [-max, max] with 0 <= max <= 180 degrees; using [{}, {}]", s_AxisNames[i],
 														  joint.AngularLimitMin[i], joint.AngularLimitMax[i], angularMin, angularMax));
 				}
 				limits.AngularMin[i] = std::max(glm::radians(angularMin), -JPH::JPH_PI);
@@ -454,6 +475,16 @@ namespace Basalt {
 			const float frequency = std::max(joint.LimitSpringFrequency, 0.0f);
 			const float damping = std::max(joint.LimitSpringDamping, 0.0f);
 			return JPH::SpringSettings(JPH::ESpringMode::FrequencyAndDamping, frequency, damping);
+		}
+
+		// The spring a Position motor pulls toward its target with (0 Hz = as stiff as the force limit allows).
+		JPH::SpringSettings SanitizeMotorSpring(const JointComponent& joint, std::vector<std::string>& warnings)
+		{
+			if (joint.MotorSpringFrequency < 0.0f)
+				warnings.emplace_back(fmt::format("MotorSpringFrequency {} is negative; using 0", joint.MotorSpringFrequency));
+			if (joint.MotorSpringDamping < 0.0f)
+				warnings.emplace_back(fmt::format("MotorSpringDamping {} is negative; using 0", joint.MotorSpringDamping));
+			return JPH::SpringSettings(JPH::ESpringMode::FrequencyAndDamping, std::max(joint.MotorSpringFrequency, 0.0f), std::max(joint.MotorSpringDamping, 0.0f));
 		}
 
 		JPH::EMotorState ToJoltMotorState(JointMotorMode mode)
@@ -702,7 +733,19 @@ namespace Basalt {
 			// Warnings found while building the constraint (e.g. a zero axis). In-place updates only re-check
 			// the other settings, so these are added back to keep the logged set the same.
 			std::vector<std::string> BuildWarnings;
+			// The second body's joint frame seen from the first's when the joint was built. Six-DOF frames
+			// coincide there (identity), but Jolt picks each cone frame's Y and Z per body, so they can differ
+			// by a twist; GetJointRotation measures from this.
+			JPH::Quat RestRotation = JPH::Quat::sIdentity();
 		};
+
+		// The second body's joint frame seen from the first's (see JointRecord::RestRotation).
+		static JPH::Quat RelativeJointRotation(const JPH::TwoBodyConstraint& constraint)
+		{
+			const JPH::Quat frame1 = constraint.GetBody1()->GetRotation() * constraint.GetConstraintToBody1Matrix().GetQuaternion();
+			const JPH::Quat frame2 = constraint.GetBody2()->GetRotation() * constraint.GetConstraintToBody2Matrix().GetQuaternion();
+			return (frame1.Conjugated() * frame2).Normalized();
+		}
 
 		Scope<JPH::TempAllocatorImpl> TempAllocator;
 		Scope<JPH::JobSystemThreadPool> JobSystem;
@@ -1246,6 +1289,7 @@ namespace Basalt {
 			warnings.emplace_back(fmt::format("MotorMaxForce {} is negative; using 0", joint.MotorMaxForce));
 		const JPH::EMotorState motorState = ToJoltMotorState(joint.MotorMode);
 		const float motorLimit = std::max(joint.MotorMaxForce, 0.0f);
+		const JPH::SpringSettings motorSpring = SanitizeMotorSpring(joint, warnings);
 
 		switch (joint.Type)
 		{
@@ -1257,6 +1301,7 @@ namespace Basalt {
 					hinge->SetLimits(glm::radians(limitMin), glm::radians(limitMax));
 				hinge->SetLimitsSpringSettings(limitSpring);
 				hinge->GetMotorSettings().SetTorqueLimit(motorLimit);
+				hinge->GetMotorSettings().mSpringSettings = motorSpring;
 				hinge->SetMotorState(motorState);
 				if (motorState == JPH::EMotorState::Velocity)
 				{
@@ -1278,6 +1323,7 @@ namespace Basalt {
 					slider->SetLimits(limitMin, limitMax);
 				slider->SetLimitsSpringSettings(limitSpring);
 				slider->GetMotorSettings().SetForceLimit(motorLimit);
+				slider->GetMotorSettings().mSpringSettings = motorSpring;
 				slider->SetMotorState(motorState);
 				if (motorState == JPH::EMotorState::Velocity)
 					slider->SetTargetVelocity(joint.MotorTarget);
@@ -1308,16 +1354,58 @@ namespace Basalt {
 				sixDOF->SetRotationLimits(ToJolt(limits.AngularMin), ToJolt(limits.AngularMax));
 				// Jolt softens translation limits only; rotation limits stay rigid. A spring on a locked axis would
 				// make the lock soft too, so only limited axes get it.
+				using EAxis = JPH::SixDOFConstraint::EAxis;
 				bool softened = false;
 				for (int i = 0; i < 3; i++)
 				{
-					const bool limited = limits.LinearMin[i] < limits.LinearMax[i];
-					const auto axis = static_cast<JPH::SixDOFConstraint::EAxis>(JPH::SixDOFConstraint::EAxis::TranslationX + i);
+					const auto axis = static_cast<EAxis>(EAxis::TranslationX + i);
+					const bool limited = !sixDOF->IsFixedAxis(axis) && !sixDOF->IsFreeAxis(axis);
 					sixDOF->SetLimitsSpringSettings(axis, limited ? limitSpring : JPH::SpringSettings());
 					softened |= limited;
 				}
 				if (limitSpring.HasStiffness() && joint.UseLimits && !softened)
-					warnings.emplace_back("LimitSpringFrequency has no effect on a six-DOF joint without a limited translation axis (rotation limits and locked axes stay rigid)");
+					warnings.emplace_back("LimitSpringFrequency has no effect on a six-DOF joint without a limited translation axis (rotation limits and locked or free axes stay rigid)");
+
+				// Per-axis motors in the joint frame. Jolt keeps one target vector per kind, so each axis takes
+				// its own component and the rest are 0; the Position rotation axes share one target orientation.
+				glm::vec3 linearVelocity(0.0f);
+				glm::vec3 linearPosition(0.0f);
+				glm::vec3 angularVelocity(0.0f);
+				glm::vec3 angularPosition(0.0f);
+				for (int i = 0; i < 3; i++)
+				{
+					const JointMotorMode linearMode = joint.LinearMotorMode[i];
+					const JointMotorMode angularMode = joint.AngularMotorMode[i];
+					const auto linearAxis = static_cast<EAxis>(EAxis::TranslationX + i);
+					const auto angularAxis = static_cast<EAxis>(EAxis::RotationX + i);
+					if (linearMode != JointMotorMode::Off && sixDOF->IsFixedAxis(linearAxis))
+						warnings.emplace_back(fmt::format("six-DOF linear {} motor has no effect: the axis is locked{}", s_AxisNames[i], joint.UseLimits ? "" : " (translation is locked without UseLimits)"));
+					if (angularMode != JointMotorMode::Off && sixDOF->IsFixedAxis(angularAxis))
+						warnings.emplace_back(fmt::format("six-DOF angular {} motor has no effect: the axis is locked", s_AxisNames[i]));
+					if (linearMode == JointMotorMode::Velocity)
+						linearVelocity[i] = joint.LinearMotorTarget[i];
+					else if (linearMode == JointMotorMode::Position)
+						linearPosition[i] = joint.LinearMotorTarget[i];
+					if (angularMode == JointMotorMode::Velocity)
+						angularVelocity[i] = joint.AngularMotorTarget[i];
+					else if (angularMode == JointMotorMode::Position)
+						angularPosition[i] = joint.AngularMotorTarget[i];
+
+					for (const auto axis : { linearAxis, angularAxis })
+					{
+						JPH::MotorSettings& motor = sixDOF->GetMotorSettings(axis);
+						motor.SetForceLimit(motorLimit);
+						motor.SetTorqueLimit(motorLimit);
+						motor.mSpringSettings = motorSpring;
+					}
+					sixDOF->SetMotorState(linearAxis, ToJoltMotorState(linearMode));
+					sixDOF->SetMotorState(angularAxis, ToJoltMotorState(angularMode));
+				}
+				sixDOF->SetTargetVelocityCS(ToJolt(linearVelocity));
+				sixDOF->SetTargetPositionCS(ToJolt(linearPosition));
+				sixDOF->SetTargetAngularVelocityCS(ToJolt(glm::radians(angularVelocity)));
+				// Jolt clamps the orientation to the rotation limits.
+				sixDOF->SetTargetOrientationCS(ToJolt(Math::QuatFromEuler(glm::radians(angularPosition))));
 				break;
 			}
 			case JointType::Fixed:
@@ -1405,9 +1493,10 @@ namespace Basalt {
 				}
 				case JointType::SixDOF:
 				{
+					// Motors act along the joint frame's axes, alongside the parts that hold the locked axes.
 					const auto* sixDOF = static_cast<const JPH::SixDOFConstraint*>(constraint);
-					forceImpulse = sixDOF->GetTotalLambdaPosition().Length();
-					torqueImpulse = sixDOF->GetTotalLambdaRotation().Length();
+					forceImpulse = combine(sixDOF->GetTotalLambdaPosition().Length(), sixDOF->GetTotalLambdaMotorTranslation().Length());
+					torqueImpulse = combine(sixDOF->GetTotalLambdaRotation().Length(), sixDOF->GetTotalLambdaMotorRotation().Length());
 					break;
 				}
 			}
@@ -1610,6 +1699,7 @@ namespace Basalt {
 		record.Settings = joint;
 		record.Body = bodyEntity.GetUUID();
 		record.BuildWarnings = warnings;
+		record.RestRotation = Impl::RelativeJointRotation(*record.Constraint);
 		impl.System->AddConstraint(record.Constraint);
 		lock.ReleaseLocks();
 		ApplyJointSettings(entity, warnings);
@@ -1642,6 +1732,22 @@ namespace Basalt {
 				break;
 		}
 		return std::nullopt;
+	}
+
+	std::optional<glm::vec3> PhysicsWorld::GetJointRotation(Entity entity) const
+	{
+		if (!entity)
+			return std::nullopt;
+		auto it = m_Impl->Joints.find(entity.GetUUID());
+		if (it == m_Impl->Joints.end())
+			return std::nullopt;
+		const JointType type = it->second.Settings.Type;
+		if (type != JointType::Cone && type != JointType::SixDOF)
+			return std::nullopt;
+		// Removing the rest offset on the right keeps the result in the first body's joint frame.
+		const Impl::JointRecord& record = it->second;
+		const JPH::Quat rotation = Impl::RelativeJointRotation(*record.Constraint) * record.RestRotation.Conjugated();
+		return glm::degrees(Math::EulerFromQuat(FromJolt(rotation.Normalized())));
 	}
 
 	bool PhysicsWorld::HasBody(Entity entity) const

@@ -116,6 +116,50 @@ namespace Basalt {
 			}
 			result = Finish(changed);
 		}
+		else if (value.is_array() && value.size() == 3 && std::all_of(value.begin(), value.end(), [](const nlohmann::json& v) { return v.is_boolean(); }))
+		{
+			// Per-axis flags: one checkbox per axis on a single row.
+			constexpr const char* AxisLabels[] = { "X", "Y", "Z" };
+			bool changed = false;
+			for (size_t i = 0; i < 3; i++)
+			{
+				bool flag = value[i].get<bool>();
+				if (i > 0)
+					ImGui::SameLine();
+				if (ImGui::Checkbox(AxisLabels[i], &flag))
+				{
+					value[i] = flag;
+					changed = true;
+				}
+			}
+			ImGui::SameLine();
+			ImGui::TextUnformatted(name.c_str());
+			result = { changed, changed };
+		}
+		else if (value.is_array() && value.size() == 3 && enumOptions && std::all_of(value.begin(), value.end(), [](const nlohmann::json& v) { return v.is_string(); }))
+		{
+			// Per-axis enum values: one combo per axis.
+			constexpr const char* AxisLabels[] = { "X", "Y", "Z" };
+			bool changed = false;
+			for (size_t i = 0; i < 3; i++)
+			{
+				const std::string current = value[i].get<std::string>();
+				const std::string label = name + " " + AxisLabels[i];
+				if (ImGui::BeginCombo(label.c_str(), current.c_str()))
+				{
+					for (const std::string& option : *enumOptions)
+					{
+						if (ImGui::Selectable(option.c_str(), option == current) && option != current)
+						{
+							value[i] = option;
+							changed = true;
+						}
+					}
+					ImGui::EndCombo();
+				}
+			}
+			result = { changed, changed };
+		}
 		else
 		{
 			ImGui::TextDisabled("%s: %s", name.c_str(), value.dump().c_str());

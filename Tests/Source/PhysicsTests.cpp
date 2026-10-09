@@ -1523,6 +1523,199 @@ TEST_SUITE("Physics")
 		scene.OnSimulationStop();
 	}
 
+	TEST_CASE("Six-DOF motors drive each axis toward its velocity or position target")
+	{
+		Scene scene;
+		// Weightless boxes pinned at their centre with the joint frame on the world axes (X = Axis, Y =
+		// SecondaryAxis), so joint-frame and world rotations agree.
+		auto pinned = [&](float x) {
+			Entity box = CreateWeightlessBox(scene, { x, 0.0f, 0.0f });
+			box.GetComponent<RigidBodyComponent>().AngularDamping = 0.0f;
+			auto& joint = box.AddComponent<JointComponent>();
+			joint.Type = JointType::SixDOF;
+			joint.Axis = { 1.0f, 0.0f, 0.0f };
+			joint.SecondaryAxis = { 0.0f, 1.0f, 0.0f };
+			return box;
+		};
+		// A target orientation on every rotation axis (the Velocity-free way animation drives a limb).
+		Entity limb = pinned(0.0f);
+		auto& limbJoint = limb.GetComponent<JointComponent>();
+		limbJoint.AngularMotorMode = { JointMotorMode::Position, JointMotorMode::Position, JointMotorMode::Position };
+		limbJoint.AngularMotorTarget = { 30.0f, -20.0f, 15.0f };
+		limbJoint.MotorSpringFrequency = 4.0f;
+		// Spinning around the twist axis only; the other rotation axes have no motor.
+		Entity spinner = pinned(5.0f);
+		auto& spinnerJoint = spinner.GetComponent<JointComponent>();
+		spinnerJoint.AngularMotorMode[0] = JointMotorMode::Velocity;
+		spinnerJoint.AngularMotorTarget = { 90.0f, 0.0f, 0.0f };
+		// Free translation along X driven to a position, along Y at a speed; Z stays locked.
+		Entity carriage = pinned(10.0f);
+		auto& carriageJoint = carriage.GetComponent<JointComponent>();
+		carriageJoint.FreeLinearAxes = { true, true, false };
+		carriageJoint.LinearMotorMode = { JointMotorMode::Position, JointMotorMode::Velocity, JointMotorMode::Off };
+		carriageJoint.LinearMotorTarget = { 2.0f, 0.5f, 0.0f };
+		const uint64_t before = Log::GetHistory().GetTotalCount();
+
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		physics.SetLinearVelocity(carriage, { 0.0f, 0.0f, 3.0f });
+		Simulate(scene, 3.0f);
+		const glm::vec3 limbRotation = physics.GetJointRotation(limb).value();
+		CHECK(limbRotation.x == doctest::Approx(30.0f).epsilon(0.03));
+		CHECK(limbRotation.y == doctest::Approx(-20.0f).epsilon(0.03));
+		CHECK(limbRotation.z == doctest::Approx(15.0f).epsilon(0.03));
+		// The joint frame is the world frame here, so the entity's own rotation matches.
+		CHECK(glm::degrees(limb.GetTransform().GetRotationEuler().x) == doctest::Approx(30.0f).epsilon(0.03));
+		const glm::vec3 spin = physics.GetAngularVelocity(spinner);
+		CHECK(glm::degrees(spin.x) == doctest::Approx(90.0f).epsilon(0.02));
+		CHECK(std::abs(spin.y) < 0.01f);
+		CHECK(std::abs(spin.z) < 0.01f);
+		CHECK(carriage.GetTransform().Translation.x == doctest::Approx(12.0f).epsilon(0.01));
+		CHECK(physics.GetLinearVelocity(carriage).y == doctest::Approx(0.5f).epsilon(0.02));
+		CHECK(std::abs(carriage.GetTransform().Translation.z) < 0.01f);
+		CHECK(CountMessages(before, "six-DOF") == 0);
+
+		// Retargeting through the registry updates the live joint: it keeps measuring from the first rest
+		// pose instead of being rebuilt at the current one.
+		SetJoint(limb, [](JointComponent& joint) { joint.AngularMotorTarget = { -10.0f, 0.0f, 0.0f }; });
+		SetJoint(spinner, [](JointComponent& joint) { joint.AngularMotorMode[0] = JointMotorMode::Off; });
+		Simulate(scene, 3.0f);
+		const glm::vec3 retargeted = physics.GetJointRotation(limb).value();
+		CHECK(retargeted.x == doctest::Approx(-10.0f).epsilon(0.03));
+		CHECK(std::abs(retargeted.y) < 0.5f);
+		CHECK(std::abs(retargeted.z) < 0.5f);
+		// Without its motor the spinner coasts (no damping).
+		CHECK(glm::degrees(physics.GetAngularVelocity(spinner).x) == doctest::Approx(90.0f).epsilon(0.02));
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("A stiffer six-DOF motor spring reaches its target sooner and MotorMaxForce caps it")
+	{
+		Scene scene;
+		auto powered = [&](float x, float frequency, float maxForce) {
+			Entity box = CreateWeightlessBox(scene, { x, 0.0f, 0.0f });
+			auto& joint = box.AddComponent<JointComponent>();
+			joint.Type = JointType::SixDOF;
+			joint.Axis = { 1.0f, 0.0f, 0.0f };
+			joint.SecondaryAxis = { 0.0f, 1.0f, 0.0f };
+			joint.AngularMotorMode = { JointMotorMode::Off, JointMotorMode::Off, JointMotorMode::Position };
+			joint.AngularMotorTarget = { 0.0f, 0.0f, 60.0f };
+			joint.MotorSpringFrequency = frequency;
+			joint.MotorMaxForce = maxForce;
+			return box;
+		};
+		Entity soft = powered(0.0f, 0.5f, 1000.0f);
+		Entity stiff = powered(5.0f, 5.0f, 1000.0f);
+		Entity weak = powered(10.0f, 5.0f, 0.2f);
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		Simulate(scene, 0.5f);
+		const float softAngle = physics.GetJointRotation(soft).value().z;
+		const float stiffAngle = physics.GetJointRotation(stiff).value().z;
+		const float weakAngle = physics.GetJointRotation(weak).value().z;
+		CHECK(stiffAngle == doctest::Approx(60.0f).epsilon(0.05));
+		CHECK(softAngle < 45.0f);
+		// 0.2 N·m barely turns a 1 kg box in half a second.
+		CHECK(weakAngle < 15.0f);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Six-DOF free axes ignore their limits and motors on locked axes warn")
+	{
+		Scene scene;
+		Entity box = CreateWeightlessBox(scene, { 0.0f, 0.0f, 0.0f });
+		auto& joint = box.AddComponent<JointComponent>();
+		joint.Type = JointType::SixDOF;
+		joint.Axis = { 1.0f, 0.0f, 0.0f };
+		joint.SecondaryAxis = { 0.0f, 1.0f, 0.0f };
+		joint.UseLimits = true;
+		joint.FreeLinearAxes.x = true;
+		joint.LinearLimitMax = { 1.0f, 0.5f, 0.0f };
+		joint.AngularLimitMax = { 0.0f, 0.0f, 0.0f };
+		// Z translation and every rotation are locked: these motors cannot move anything.
+		joint.LinearMotorMode[2] = JointMotorMode::Velocity;
+		joint.AngularMotorMode[1] = JointMotorMode::Position;
+
+		// Without UseLimits translation is locked, so a linear motor there warns with the reason.
+		Entity locked = CreateWeightlessBox(scene, { 0.0f, 0.0f, 5.0f });
+		auto& lockedJoint = locked.AddComponent<JointComponent>();
+		lockedJoint.Type = JointType::SixDOF;
+		lockedJoint.LinearMotorMode[1] = JointMotorMode::Velocity;
+		lockedJoint.LinearMotorTarget.y = 1.0f;
+		lockedJoint.MotorSpringFrequency = -1.0f;
+
+		const uint64_t before = Log::GetHistory().GetTotalCount();
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		physics.SetLinearVelocity(box, { 4.0f, 4.0f, 0.0f });
+		Simulate(scene, 1.0f);
+		// X is free well past its 1 m limit; Y stops at its 0.5 m limit.
+		CHECK(box.GetTransform().Translation.x > 3.0f);
+		CHECK(box.GetTransform().Translation.y == doctest::Approx(0.5f).epsilon(0.05));
+		CHECK(glm::length(locked.GetTransform().Translation - glm::vec3(0.0f, 0.0f, 5.0f)) < 0.01f);
+		CHECK(CountMessages(before, "six-DOF linear X limits are ignored: the axis is free (FreeLinearAxes)") == 1);
+		CHECK(CountMessages(before, "six-DOF linear Z motor has no effect: the axis is locked") == 1);
+		CHECK(CountMessages(before, "six-DOF angular Y motor has no effect: the axis is locked") == 1);
+		CHECK(CountMessages(before, "six-DOF linear Y motor has no effect: the axis is locked (translation is locked without UseLimits)") == 1);
+		CHECK(CountMessages(before, "MotorSpringFrequency -1 is negative; using 0") == 1);
+		CHECK(physics.HasJoint(box));
+		CHECK(physics.HasJoint(locked));
+
+		// Freeing an axis during play updates the live joint.
+		SetJoint(box, [](JointComponent& changed) { changed.FreeLinearAxes.y = true; });
+		physics.SetLinearVelocity(box, { 0.0f, 4.0f, 0.0f });
+		Simulate(scene, 0.5f);
+		CHECK(box.GetTransform().Translation.y > 1.5f);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("GetJointRotation measures cone and six-DOF joints from their rest pose")
+	{
+		Scene scene;
+		// Turned bodies give each body a different local twist axis, so Jolt picks different cone frames
+		// for them; the rest pose must still read as no rotation.
+		Entity cone = CreateWeightlessBox(scene, { 0.0f, 0.0f, 0.0f });
+		cone.GetTransform().SetRotationEuler(glm::radians(glm::vec3(20.0f, 37.0f, -15.0f)));
+		auto& coneJoint = HangFromWorld(cone, JointType::Cone);
+		coneJoint.Axis = { 0.3f, -1.0f, 0.2f };
+		Entity anchor = CreateBox(scene, { 5.0f, 2.0f, 0.0f });
+		anchor.GetComponent<RigidBodyComponent>().Type = RigidBodyType::Static;
+		anchor.GetTransform().SetRotationEuler(glm::radians(glm::vec3(0.0f, 50.0f, 0.0f)));
+		Entity limb = CreateWeightlessBox(scene, { 5.0f, 0.0f, 0.0f });
+		limb.GetComponent<RigidBodyComponent>().AngularDamping = 0.0f;
+		auto& limbJoint = limb.AddComponent<JointComponent>();
+		limbJoint.Type = JointType::SixDOF;
+		limbJoint.ConnectedEntity = anchor.GetUUID();
+		limbJoint.Axis = { 0.0f, 1.0f, 0.0f };
+		limbJoint.SecondaryAxis = { 1.0f, 0.0f, 0.0f };
+		Entity hinge = CreateWeightlessBox(scene, { 10.0f, 0.0f, 0.0f });
+		hinge.AddComponent<JointComponent>();
+
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		scene.OnUpdate(Step);
+		CHECK(glm::length(physics.GetJointRotation(cone).value()) < 0.1f);
+		CHECK(glm::length(physics.GetJointRotation(limb).value()) < 0.1f);
+		CHECK(physics.GetJointRotation(hinge) == std::nullopt);
+		CHECK(physics.GetJointRotation(anchor) == std::nullopt);
+
+		// A twist around the six-DOF Axis (world Y here) reads as rotation around the frame's X.
+		physics.SetAngularVelocity(limb, { 0.0f, glm::radians(30.0f), 0.0f });
+		Simulate(scene, 1.0f);
+		const glm::vec3 twist = physics.GetJointRotation(limb).value();
+		CHECK(twist.x == doctest::Approx(30.0f).epsilon(0.03));
+		CHECK(std::abs(twist.y) < 0.5f);
+		CHECK(std::abs(twist.z) < 0.5f);
+		// The cone's measured angle matches how far its body turned.
+		physics.SetAngularVelocity(cone, { 0.0f, 0.0f, glm::radians(25.0f) });
+		const glm::quat start = cone.GetTransform().Rotation;
+		Simulate(scene, 1.0f);
+		const float turned = glm::degrees(glm::angle(cone.GetTransform().Rotation * glm::inverse(start)));
+		const glm::vec3 coneRotation = physics.GetJointRotation(cone).value();
+		CHECK(glm::degrees(glm::angle(Math::QuatFromEuler(glm::radians(coneRotation)))) == doctest::Approx(turned).epsilon(0.02));
+		scene.OnSimulationStop();
+	}
+
 	TEST_CASE("Joint entities give one body several joints")
 	{
 		Scene scene;
