@@ -108,15 +108,18 @@ Mouse buttons: `Left`, `Right`, `Middle`, `Button3`-`Button7`.
 
 ## Physics
 
-`Physics.GetGravity()`, `Physics.SetGravity(v)`, and `Physics.GetLayers()` (the project's layer names
-in order).
+`Physics.GetGravity()`, `Physics.SetGravity(v)`, and `Physics.GetLayers()` (the layer names the running
+world uses, in order: the project's, read when play started).
 
 ### Layers and continuous collision
 
 Each rigid body is on one named layer (`RigidBody.Layer`, default `"Default"`). The project defines up to
 32 layers and which pairs of layers collide (`project.set` with `physicsLayers`, stored in
 `Project.bproject`). The matrix is read when play starts. A layer name the project does not define falls
-back to `Default` with a warning.
+back to `Default` with a warning; `project.set` and `scene.info` list such bodies as
+`unknownPhysicsLayers`. Scenes saved before named layers (numeric `Layer`, `CollisionMask`) load when no
+body's mask excluded a layer: those bodies become `Default`. Other masks are a load error, since they need
+named layers. From Lua, `SetComponent("RigidBody", { Layer = 1 })` is likewise read as `Default`.
 
 Set `RigidBody.Continuous = true` on fast dynamic bodies (projectiles) so they cannot pass through thin
 geometry between steps. It costs more per step and has no effect on static, kinematic or trigger bodies.
@@ -133,15 +136,19 @@ Casts sweep a ray, sphere or box from `origin` along `direction` (any length) fo
 | `Physics.OverlapSphere(center, radius [, options])` | array of entities |
 | `Physics.OverlapBox(center, halfExtents, rotation [, options])` | array of entities |
 
-A hit is `{ Entity, Point, Normal, Distance }`. A shape cast that starts inside a body hits it at
-distance 0. `options` is an entity to ignore, or a table:
+A hit is `{ Entity, Point, Normal, Distance }`. A cast that starts inside a body hits it at distance 0,
+whichever way it moves. Invalid arguments (a zero or non-finite direction, a non-finite position, a
+non-positive distance, radius or half extent, a zero rotation) are script errors. `options` is an entity
+to ignore, or a table:
 
 - `Ignore`: an entity to skip (for example the caster).
-- `Layers`: layer names to test against (default: all). An unknown name is an error.
+- `Layers`: a non-empty list of layer names to test against (default: all). An unknown name is an
+  error.
 - `IncludeTriggers`: also hit triggers (default false).
-- `All`: casts return an array of every hit entity, closest first, one hit per entity (default false).
+- `All` (casts only): return an array of every hit entity, closest first, one hit per entity (default
+  false).
 
-Overlaps list each entity once.
+Overlaps always list every entity they touch, each once. Unknown or misspelled options are errors.
 
 ```lua
 -- Ground check that skips the player and only sees level geometry.
