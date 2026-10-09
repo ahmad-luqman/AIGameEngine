@@ -3,6 +3,7 @@
 #include "Basalt/Core/Base.h"
 #include "Basalt/Core/Timestep.h"
 #include "Basalt/Core/UUID.h"
+#include "Basalt/Physics/PhysicsLayers.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -22,6 +23,15 @@ namespace Basalt {
 		glm::vec3 Point = { 0.0f, 0.0f, 0.0f };
 		glm::vec3 Normal = { 0.0f, 0.0f, 0.0f };
 		float Distance = 0.0f;
+	};
+
+	// Which bodies a query sees. LayerMask has one bit per physics layer (see PhysicsLayers::MaskFromNames).
+	struct PhysicsQueryFilter
+	{
+		uint32_t LayerMask = 0xFFFFFFFF;
+		// Skipped entirely, e.g. the caster itself.
+		UUID IgnoreEntity = 0;
+		bool IncludeTriggers = false;
 	};
 
 	enum class ContactEventType
@@ -79,8 +89,22 @@ namespace Basalt {
 		// nullopt for other joint types and entities without a live joint.
 		std::optional<float> GetJointPosition(Entity entity) const;
 
-		// Closest hit along the ray, ignoring triggers and optionally one entity (e.g. the caster).
-		std::optional<RaycastHit> Raycast(const glm::vec3& origin, const glm::vec3& direction, float maxDistance, UUID ignoreEntity = 0) const;
+		// Scene queries. Casts sweep along `direction` (any length) for up to maxDistance and report the
+		// closest hit, or with the *All variants every entity hit, once each at its closest point, sorted by
+		// distance (ties by UUID). A shape cast that starts inside a body hits it at distance 0. Overlaps
+		// return each entity touching the shape once, sorted by UUID. Invalid sizes or distances return
+		// nothing. Rotations are world-space; box sizes are half extents.
+		std::optional<RaycastHit> Raycast(const glm::vec3& origin, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter = {}) const;
+		std::vector<RaycastHit> RaycastAll(const glm::vec3& origin, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter = {}) const;
+		std::optional<RaycastHit> SphereCast(const glm::vec3& origin, float radius, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter = {}) const;
+		std::vector<RaycastHit> SphereCastAll(const glm::vec3& origin, float radius, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter = {}) const;
+		std::optional<RaycastHit> BoxCast(const glm::vec3& origin, const glm::vec3& halfExtents, const glm::quat& rotation, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter = {}) const;
+		std::vector<RaycastHit> BoxCastAll(const glm::vec3& origin, const glm::vec3& halfExtents, const glm::quat& rotation, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter = {}) const;
+		std::vector<UUID> OverlapSphere(const glm::vec3& center, float radius, const PhysicsQueryFilter& filter = {}) const;
+		std::vector<UUID> OverlapBox(const glm::vec3& center, const glm::vec3& halfExtents, const glm::quat& rotation, const PhysicsQueryFilter& filter = {}) const;
+
+		// The layers this world filters with (resolved when it was built).
+		const PhysicsLayers& GetLayers() const;
 
 		glm::vec3 GetGravity() const;
 		void SetGravity(const glm::vec3& gravity);

@@ -11,8 +11,10 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <string>
 
 using namespace Basalt;
@@ -247,7 +249,128 @@ TEST_SUITE("Physics")
 
 		CHECK_FALSE(physics.Raycast({ 0.0f, 10.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }, 100.0f).has_value());
 		CHECK_FALSE(physics.Raycast({ 0.0f, 10.0f, 0.0f }, { 0.0f, -1.0f, 0.0f }, 5.0f).has_value());
-		CHECK_FALSE(physics.Raycast({ 0.0f, 10.0f, 0.0f }, { 0.0f, -1.0f, 0.0f }, 100.0f, ground.GetUUID()).has_value());
+		CHECK_FALSE(physics.Raycast({ 0.0f, 10.0f, 0.0f }, { 0.0f, -1.0f, 0.0f }, 100.0f, { .IgnoreEntity = ground.GetUUID() }).has_value());
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Shape queries: layer masks, all hits, casts, overlaps and filters")
+	{
+		PhysicsLayers layers;
+		std::string error;
+		REQUIRE(layers.Add("Enemy", error));
+		Scene scene;
+		scene.SetPhysicsLayers(layers);
+		Entity ground = CreateGround(scene);
+		auto addStatic = [&scene](const char* name, const glm::vec3& position) {
+			Entity entity = scene.CreateEntity(name);
+			entity.GetTransform().Translation = position;
+			entity.AddComponent<RigidBodyComponent>();
+			entity.AddComponent<BoxColliderComponent>();
+			return entity;
+		};
+		Entity enemy = addStatic("Enemy", { 0.0f, 2.0f, 0.0f });
+		enemy.GetComponent<RigidBodyComponent>().Layer = "Enemy";
+		Entity trigger = addStatic("Trigger", { 0.0f, 5.0f, 0.0f });
+		trigger.GetComponent<RigidBodyComponent>().IsTrigger = true;
+		// Box and sphere colliders make one compound body with two sub-shapes.
+		Entity compound = addStatic("Compound", { 5.0f, 2.0f, 0.0f });
+		compound.AddComponent<SphereColliderComponent>().Radius = 0.6f;
+
+		scene.OnSimulationStart();
+		const PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		const glm::vec3 top = { 0.0f, 10.0f, 0.0f };
+		const glm::vec3 down = { 0.0f, -2.0f, 0.0f };
+		const uint32_t defaultOnly = *physics.GetLayers().MaskFromNames({ "Default" }, error);
+		const uint32_t enemyOnly = *physics.GetLayers().MaskFromNames({ "Enemy" }, error);
+
+		SUBCASE("Rays")
+		{
+			auto hit = physics.Raycast(top, down, 100.0f);
+			REQUIRE(hit);
+			CHECK(hit->EntityID == enemy.GetUUID());
+			CHECK(hit->Distance == doctest::Approx(7.5f).epsilon(0.01));
+			hit = physics.Raycast(top, down, 100.0f, { .LayerMask = defaultOnly });
+			REQUIRE(hit);
+			CHECK(hit->EntityID == ground.GetUUID());
+			hit = physics.Raycast(top, down, 100.0f, { .IncludeTriggers = true });
+			REQUIRE(hit);
+			CHECK(hit->EntityID == trigger.GetUUID());
+
+			auto hits = physics.RaycastAll(top, down, 100.0f, { .IncludeTriggers = true });
+			REQUIRE(hits.size() == 3);
+			CHECK(hits[0].EntityID == trigger.GetUUID());
+			CHECK(hits[1].EntityID == enemy.GetUUID());
+			CHECK(hits[2].EntityID == ground.GetUUID());
+			CHECK(hits[2].Distance == doctest::Approx(10.0f).epsilon(0.01));
+			CHECK(physics.RaycastAll(top, down, 100.0f, { .LayerMask = enemyOnly, .IgnoreEntity = enemy.GetUUID() }).empty());
+			// A ray through both sub-shapes of the compound reports the entity once, at the first surface.
+			hits = physics.RaycastAll({ 5.0f, 10.0f, 0.0f }, down, 100.0f, { .LayerMask = defaultOnly });
+			REQUIRE(hits.size() == 2);
+			CHECK(hits[0].EntityID == compound.GetUUID());
+			CHECK(hits[0].Distance == doctest::Approx(7.4f).epsilon(0.01));
+			CHECK(hits[1].EntityID == ground.GetUUID());
+		}
+
+		SUBCASE("Sphere and box casts")
+		{
+			auto hit = physics.SphereCast(top, 0.5f, down, 100.0f);
+			REQUIRE(hit);
+			CHECK(hit->EntityID == enemy.GetUUID());
+			CHECK(hit->Distance == doctest::Approx(7.0f).epsilon(0.01));
+			CHECK(hit->Normal.y == doctest::Approx(1.0f).epsilon(0.01));
+			CHECK(hit->Point.y == doctest::Approx(2.5f).epsilon(0.01));
+
+			// Starting inside a body hits it immediately.
+			hit = physics.SphereCast({ 0.0f, 2.0f, 0.0f }, 0.25f, down, 100.0f);
+			REQUIRE(hit);
+			CHECK(hit->EntityID == enemy.GetUUID());
+			CHECK(hit->Distance == doctest::Approx(0.0f));
+
+			const auto hits = physics.SphereCastAll(top, 0.5f, down, 100.0f);
+			REQUIRE(hits.size() == 2);
+			CHECK(hits[1].EntityID == ground.GetUUID());
+			CHECK(hits[1].Distance == doctest::Approx(9.5f).epsilon(0.01));
+
+			// A thin box lying flat reaches the enemy later than the same box stood upright by rotation.
+			const glm::vec3 halfExtents = { 1.0f, 0.1f, 0.1f };
+			hit = physics.BoxCast(top, halfExtents, glm::quat(1.0f, 0.0f, 0.0f, 0.0f), down, 100.0f);
+			REQUIRE(hit);
+			CHECK(hit->Distance == doctest::Approx(7.4f).epsilon(0.01));
+			hit = physics.BoxCast(top, halfExtents, glm::angleAxis(glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f)), down, 100.0f);
+			REQUIRE(hit);
+			CHECK(hit->Distance == doctest::Approx(6.5f).epsilon(0.01));
+			CHECK(physics.BoxCastAll(top, halfExtents, glm::quat(1.0f, 0.0f, 0.0f, 0.0f), down, 100.0f, { .LayerMask = defaultOnly }).size() == 1);
+		}
+
+		SUBCASE("Overlaps")
+		{
+			CHECK(physics.OverlapSphere({ 5.0f, 2.0f, 0.0f }, 0.1f) == std::vector<UUID>{ compound.GetUUID() });
+			std::vector<UUID> expected = { ground.GetUUID(), enemy.GetUUID() };
+			std::ranges::sort(expected);
+			CHECK(physics.OverlapSphere({ 0.0f, 0.0f, 0.0f }, 3.0f) == expected);
+			CHECK(physics.OverlapSphere({ 0.0f, 0.0f, 0.0f }, 3.0f, { .LayerMask = enemyOnly }) == std::vector<UUID>{ enemy.GetUUID() });
+			CHECK(physics.OverlapBox({ 0.0f, 5.0f, 0.0f }, glm::vec3(0.2f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f)).empty());
+			CHECK(physics.OverlapBox({ 0.0f, 5.0f, 0.0f }, glm::vec3(0.2f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), { .IncludeTriggers = true }) == std::vector<UUID>{ trigger.GetUUID() });
+			// Rotated 45 degrees, a box beside the enemy reaches into it with its corner.
+			const glm::vec3 beside = { 1.75f, 2.0f, 0.0f };
+			CHECK(physics.OverlapBox(beside, glm::vec3(1.0f, 1.0f, 0.1f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), { .LayerMask = enemyOnly }).empty());
+			CHECK(physics.OverlapBox(beside, glm::vec3(1.0f, 1.0f, 0.1f), glm::angleAxis(glm::radians(45.0f), glm::vec3(0.0f, 0.0f, 1.0f)), { .LayerMask = enemyOnly }).size() == 1);
+		}
+
+		SUBCASE("Invalid queries return nothing")
+		{
+			const float nan = std::numeric_limits<float>::quiet_NaN();
+			CHECK_FALSE(physics.Raycast(top, { 0.0f, 0.0f, 0.0f }, 100.0f));
+			CHECK_FALSE(physics.Raycast(top, down, -1.0f));
+			CHECK_FALSE(physics.Raycast(top, down, std::numeric_limits<float>::infinity()));
+			CHECK_FALSE(physics.Raycast({ nan, 0.0f, 0.0f }, down, 100.0f));
+			CHECK_FALSE(physics.SphereCast(top, 0.0f, down, 100.0f));
+			CHECK(physics.SphereCastAll(top, nan, down, 100.0f).empty());
+			CHECK_FALSE(physics.BoxCast(top, { 1.0f, 0.0f, 1.0f }, glm::quat(1.0f, 0.0f, 0.0f, 0.0f), down, 100.0f));
+			CHECK_FALSE(physics.BoxCast(top, glm::vec3(1.0f), glm::quat(0.0f, 0.0f, 0.0f, 0.0f), down, 100.0f));
+			CHECK(physics.OverlapSphere({ 0.0f, 0.0f, 0.0f }, -1.0f).empty());
+			CHECK(physics.OverlapBox({ 0.0f, 0.0f, 0.0f }, glm::vec3(-1.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f)).empty());
+		}
 		scene.OnSimulationStop();
 	}
 

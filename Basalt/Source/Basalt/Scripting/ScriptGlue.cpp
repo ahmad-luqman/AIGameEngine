@@ -330,7 +330,7 @@ namespace Basalt {
 
 			sol::table physics = lua.create_named_table("Physics");
 			physics["Raycast"] = [&context](sol::this_state state, const glm::vec3& origin, const glm::vec3& direction, float maxDistance, sol::optional<ScriptEntity> ignore) -> sol::object {
-				const auto hit = RequirePhysics(context).Raycast(origin, direction, maxDistance, ignore ? ignore->ID : UUID(0));
+				const auto hit = RequirePhysics(context).Raycast(origin, direction, maxDistance, { .IgnoreEntity = ignore ? ignore->ID : UUID(0) });
 				if (!hit)
 					return sol::lua_nil;
 				sol::state_view view(state);
