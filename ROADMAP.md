@@ -8,8 +8,8 @@ automation API, docs, and a code review before committing.
 
 Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or more.
 
-**Execution.** Work in milestones rather than one item at a time: P0 → P1 Physics (layers) →
-particles and UI components → P2 editor feel → the Marble Run sample. Run each milestone as one long
+**Execution.** Work in milestones rather than one item at a time: P0 → P1 Physics (layers; shipped
+with shape queries and continuous collision) → particles and UI components → P2 editor feel → the Marble Run sample. Run each milestone as one long
 autonomous session at high effort (or with multi-agent workflows), and check quality and token cost before
 starting the next.
 
@@ -53,9 +53,6 @@ The features most games need, roughly in order of impact.
 - **Joint follow-ups — S.** Joints shipped with one `JointComponent` per entity; allow several (for
   example a ladder rung held by two ropes), and add spring-softened limits plus cone/six-DOF types
   (ragdolls) on top of the same lifecycle.
-- **Physics layers and collision matrix — S.** Named layers (`RigidBody.Layer`) and a project-wide
-  collision matrix in `ProjectConfig`, mapped onto Jolt's object/broad-phase layers. Shape queries and
-  `Raycast` take a layer mask built from these names.
 - **Mesh and convex-hull colliders — M.** New `MeshColliderComponent` (`Mesh`, `MeshIndex`, `Convex`
   flag). Static bodies use `JPH::MeshShape`, dynamic bodies a `JPH::ConvexHullShape` built from the
   vertices. Cache cooked shapes per mesh asset. Without this, imported levels cannot collide by their
@@ -63,10 +60,6 @@ The features most games need, roughly in order of impact.
 - **Character controller — M.** Wrap `JPH::CharacterVirtual` in a `CharacterControllerComponent` (slope
   limit, step height, max strength) with Lua `Move(velocity)`, `IsGrounded()`, `GetGroundNormal()`.
   Platformers and first-person games need it, and `FixedRotation` dynamic bodies are a poor substitute.
-- **Shape queries — S.** `Physics.SphereCast`, `Physics.BoxCast`, `Physics.OverlapSphere`,
-  `Physics.OverlapBox`, and a layer-mask parameter on `Raycast`. Return all hits optionally.
-- **Continuous collision — S.** Expose Jolt's `EMotionQuality::LinearCast` as a `RigidBody.Continuous`
-  flag so fast projectiles do not tunnel.
 - **Physics materials and per-pair callbacks — S.** Combine modes for friction and restitution;
   contact point, normal and impulse in `OnCollisionBegin`.
 
@@ -184,8 +177,9 @@ What makes the editor feel finished. Most items are small; do them as one milest
   render settings.
 - **Asset thumbnails and material preview — M.** Render small previews of meshes, materials and HDRIs
   into a cache for the content browser, with hover previews.
-- **Project settings panel — S.** Fixed timestep, random seed, game resolution and physics layers with
-  the collision matrix, all through `project.*` commands.
+- **Project settings panel — S.** Fixed timestep, random seed, game resolution, and an editor for the
+  physics layers and their collision matrix (already settable with `project.set physicsLayers`), all
+  through `project.*` commands.
 - **Export validation and smoke test — S.** Validate the project before export, then run the exported
   runtime headless for N frames and report its exit code (also an automation command).
 
