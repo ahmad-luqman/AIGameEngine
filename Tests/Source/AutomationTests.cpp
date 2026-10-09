@@ -128,6 +128,11 @@ TEST_SUITE("Automation")
 		CHECK(RunError(registry, session, "scene.save", { { "path", "../escape.bscene" } }).find("inside the project") != std::string::npos);
 		Run(registry, session, "scene.save", { { "path", "Assets/Scenes/Main.bscene" } });
 		Run(registry, session, "project.set", { { "startScene", "Assets/Scenes/Main.bscene" } });
+		const json layers = json::parse(R"({"Names": ["Default", "Player", "Pickup"], "IgnoredPairs": [["Player", "Pickup"]]})");
+		Run(registry, session, "project.set", { { "physicsLayers", layers } });
+		CHECK(Run(registry, session, "project.info")["physicsLayers"] == layers);
+		CHECK(RunError(registry, session, "project.set", { { "name", "Renamed" }, { "physicsLayers", { { "Names", { "Player" } } } } }).find("Default") != std::string::npos);
+		CHECK(Run(registry, session, "project.info")["name"] == "Demo");
 
 		Run(registry, session, "asset.write", { { "path", "Assets/Scripts/Hello.lua" }, { "content", "return { Properties = { Speed = 3 } }" } });
 		CHECK(Run(registry, session, "script.check", { { "path", "Assets/Scripts/Hello.lua" } })["properties"]["Speed"] == 3);
@@ -140,6 +145,7 @@ TEST_SUITE("Automation")
 		CHECK(opened["scene"] == "Assets/Scenes/Main.bscene");
 		CHECK(Run(registry, reopened, "entity.list", { { "nameContains", "Player" } })["entities"].size() == 2);
 		CHECK(Run(registry, reopened, "scene.get")["Renderer"]["Exposure"] == 1.5);
+		CHECK(Run(registry, reopened, "project.info")["physicsLayers"] == layers);
 
 		CHECK(RunError(registry, reopened, "render.screenshot", { { "path", "x.png" } }).find("GPU host") != std::string::npos);
 	}

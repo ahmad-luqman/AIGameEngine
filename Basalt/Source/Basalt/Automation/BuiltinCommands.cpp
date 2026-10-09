@@ -16,6 +16,7 @@
 #include "Basalt/Scripting/ScriptEngine.h"
 
 #include <algorithm>
+#include <optional>
 #include <system_error>
 
 namespace Basalt {
@@ -296,17 +297,29 @@ namespace Basalt {
 					{ "windowWidth", config.WindowWidth },
 					{ "windowHeight", config.WindowHeight },
 					{ "fullscreen", config.Fullscreen },
+					{ "physicsLayers", config.Physics.ToJson() },
 				};
 			});
 
-			Add(registry, "project.set", "Changes project settings and saves the project file.", { { "name", "string" }, { "startScene", "string, project-relative scene" }, { "windowWidth", "integer" }, { "windowHeight", "integer" }, { "fullscreen", "bool" } }, [](AutomationSession&, const json& params) {
+			Add(registry, "project.set", "Changes project settings and saves the project file.", { { "name", "string" }, { "startScene", "string, project-relative scene" }, { "windowWidth", "integer" }, { "windowHeight", "integer" }, { "fullscreen", "bool" }, { "physicsLayers", "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play" } }, [](AutomationSession&, const json& params) {
 				Ref<Project> project = RequireProject();
 				ProjectConfig& config = project->GetConfig();
+				// Validated before anything changes, so a bad layer table leaves the project untouched.
+				std::optional<PhysicsLayers> layers;
+				if (const auto it = params.find("physicsLayers"); it != params.end())
+				{
+					std::string error;
+					layers = PhysicsLayers::FromJson(*it, error);
+					if (!layers)
+						throw CommandError("physicsLayers: " + error);
+				}
 				config.Name = OptionalString(params, "name", config.Name);
 				config.StartScene = OptionalString(params, "startScene", config.StartScene);
 				config.WindowWidth = static_cast<uint32_t>(OptionalInteger(params, "windowWidth", config.WindowWidth, 64, 16384));
 				config.WindowHeight = static_cast<uint32_t>(OptionalInteger(params, "windowHeight", config.WindowHeight, 64, 16384));
 				config.Fullscreen = OptionalBool(params, "fullscreen", config.Fullscreen);
+				if (layers)
+					config.Physics = std::move(*layers);
 				std::string error;
 				if (!project->Save(error))
 					throw CommandError(error);

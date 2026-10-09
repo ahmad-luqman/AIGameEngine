@@ -292,6 +292,7 @@ Changes project settings and saves the project file.
 |-----------|--------------------|
 | `fullscreen` | bool |
 | `name` | string |
+| `physicsLayers` | object {Names: ["Default", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play |
 | `startScene` | string, project-relative scene |
 | `windowHeight` | integer |
 | `windowWidth` | integer |
