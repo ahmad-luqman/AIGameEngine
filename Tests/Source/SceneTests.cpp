@@ -3,6 +3,7 @@
 #include <Basalt/Core/Log.h>
 #include <Basalt/Physics/PhysicsWorld.h>
 #include <Basalt/Scene/ComponentRegistry.h>
+#include <Basalt/Scene/JointFields.h>
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
 #include <Basalt/Scene/SceneSerializer.h>
@@ -435,6 +436,47 @@ TEST_SUITE("Serialization")
 				CHECK_FALSE(info.RemapEntityReferences);
 			}
 		}
+	}
+
+	TEST_CASE("The joint field rule covers every Joint field the registry reads")
+	{
+		const ComponentInfo* info = ComponentRegistry::Find("Joint");
+		REQUIRE(info);
+		CHECK(GetJointFieldNames() == info->Fields);
+
+		// A default joint of any type ignores nothing, with or without limits, except UseLimits itself on the
+		// types that have no limits.
+		for (int type = 0; type <= static_cast<int>(JointType::SixDOF); type++)
+		{
+			for (bool useLimits : { false, true })
+			{
+				JointComponent joint;
+				joint.Type = static_cast<JointType>(type);
+				joint.UseLimits = useLimits;
+				const bool noLimits = joint.Type == JointType::Fixed || joint.Type == JointType::Point;
+				INFO("type " << type << ", UseLimits " << useLimits);
+				CHECK(GetIgnoredJointFields(joint) == (useLimits && noLimits ? std::vector<std::string>{ "UseLimits" } : std::vector<std::string>{}));
+				// Fields every joint uses.
+				for (const char* field : { "Type", "BodyEntity", "ConnectedEntity", "Anchor", "BreakForce", "EnableCollision" })
+					CHECK(JointFieldApplies(joint, field));
+			}
+		}
+
+		JointComponent hinge;
+		hinge.MotorMode = JointMotorMode::Velocity;
+		hinge.LimitMin = -10.0f;
+		hinge.AngularLimitMax = { 5.0f, 0.0f, 0.0f };
+		CHECK(GetIgnoredJointFields(hinge) == std::vector<std::string>{ "LimitMin", "AngularLimitMax" });
+		hinge.UseLimits = true;
+		CHECK(GetIgnoredJointFields(hinge) == std::vector<std::string>{ "AngularLimitMax" });
+		// A distance joint's spring works without limits (a bungee); a hinge's does not.
+		JointComponent rope;
+		rope.Type = JointType::Distance;
+		rope.LimitSpringFrequency = 2.0f;
+		CHECK(GetIgnoredJointFields(rope).empty());
+		hinge.UseLimits = false;
+		hinge.LimitSpringFrequency = 2.0f;
+		CHECK(GetIgnoredJointFields(hinge) == std::vector<std::string>{ "LimitMin", "LimitSpringFrequency", "AngularLimitMax" });
 	}
 
 	TEST_CASE("Joints inside a duplicated tree or prefab connect the copies")
