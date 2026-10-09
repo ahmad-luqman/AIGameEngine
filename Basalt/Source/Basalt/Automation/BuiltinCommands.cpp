@@ -89,6 +89,28 @@ namespace Basalt {
 			return it->get<bool>();
 		}
 
+		const PhysicsLayers& ActivePhysicsLayers()
+		{
+			static const PhysicsLayers s_DefaultLayers;
+			const Ref<Project>& project = Project::GetActive();
+			return project ? project->GetConfig().Physics : s_DefaultLayers;
+		}
+
+		// Entities whose RigidBody names a layer the layers do not define (they play on Default), as
+		// [{entity, name, layer}] in registry order.
+		json FindUnknownPhysicsLayers(Scene& scene, const PhysicsLayers& layers)
+		{
+			json result = json::array();
+			for (entt::entity handle : scene.GetAllEntitiesWith<RigidBodyComponent>())
+			{
+				Entity entity(handle, &scene);
+				const std::string& layer = entity.GetComponent<RigidBodyComponent>().Layer;
+				if (!layers.Find(layer))
+					result.push_back({ { "entity", static_cast<uint64_t>(entity.GetUUID()) }, { "name", entity.GetName() }, { "layer", layer } });
+			}
+			return result;
+		}
+
 		Scene& RequireScene(AutomationSession& session)
 		{
 			if (!session.GetScene())
@@ -301,29 +323,33 @@ namespace Basalt {
 				};
 			});
 
-			Add(registry, "project.set", "Changes project settings and saves the project file.", { { "name", "string" }, { "startScene", "string, project-relative scene" }, { "windowWidth", "integer" }, { "windowHeight", "integer" }, { "fullscreen", "bool" }, { "physicsLayers", "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play" } }, [](AutomationSession&, const json& params) {
+			Add(registry, "project.set", "Changes project settings and saves the project file.", { { "name", "string" }, { "startScene", "string, project-relative scene" }, { "windowWidth", "integer" }, { "windowHeight", "integer" }, { "fullscreen", "bool" }, { "physicsLayers", "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play" } }, [](AutomationSession& session, const json& params) {
 				Ref<Project> project = RequireProject();
-				ProjectConfig& config = project->GetConfig();
-				// Validated before anything changes, so a bad layer table leaves the project untouched.
-				std::optional<PhysicsLayers> layers;
-				if (const auto it = params.find("physicsLayers"); it != params.end())
-				{
-					std::string error;
-					layers = PhysicsLayers::FromJson(*it, error);
-					if (!layers)
-						throw CommandError("physicsLayers: " + error);
-				}
+				// Every value is read and validated before any is assigned, so a bad parameter leaves the
+				// project untouched.
+				ProjectConfig config = project->GetConfig();
 				config.Name = OptionalString(params, "name", config.Name);
 				config.StartScene = OptionalString(params, "startScene", config.StartScene);
 				config.WindowWidth = static_cast<uint32_t>(OptionalInteger(params, "windowWidth", config.WindowWidth, 64, 16384));
 				config.WindowHeight = static_cast<uint32_t>(OptionalInteger(params, "windowHeight", config.WindowHeight, 64, 16384));
 				config.Fullscreen = OptionalBool(params, "fullscreen", config.Fullscreen);
-				if (layers)
+				if (const auto it = params.find("physicsLayers"); it != params.end())
+				{
+					std::string error;
+					auto layers = PhysicsLayers::FromJson(*it, error);
+					if (!layers)
+						throw CommandError("physicsLayers: " + error);
 					config.Physics = std::move(*layers);
+				}
+				project->GetConfig() = std::move(config);
 				std::string error;
 				if (!project->Save(error))
 					throw CommandError(error);
-				return json::object();
+				// Renaming or removing a layer strands bodies on it; report them now rather than at play time.
+				json result = json::object();
+				if (session.GetScene())
+					result["unknownPhysicsLayers"] = FindUnknownPhysicsLayers(*session.GetScene(), project->GetConfig().Physics);
+				return result;
 			});
 
 			Add(registry, "project.export", "Exports a standalone, distributable build of the game (runtime + assets).", { { "output", "string, output directory" } }, [](AutomationSession& session, const json& params) {
@@ -388,7 +414,7 @@ namespace Basalt {
 				return SceneSerializer::SerializeScene(RequireScene(session));
 			});
 
-			Add(registry, "scene.info", "Summary of the open scene: name, path, entity count, state, unsaved changes.", {}, [](AutomationSession& session, const json&) {
+			Add(registry, "scene.info", "Summary of the open scene: name, path, entity count, state, unsaved changes, rigid bodies on undefined physics layers.", {}, [](AutomationSession& session, const json&) {
 				Scene& scene = RequireScene(session);
 				return json{
 					{ "name", scene.GetName() },
@@ -396,6 +422,7 @@ namespace Basalt {
 					{ "entities", scene.GetEntityCount() },
 					{ "playing", session.IsPlaying() },
 					{ "dirty", session.IsDirty() },
+					{ "unknownPhysicsLayers", FindUnknownPhysicsLayers(scene, ActivePhysicsLayers()) },
 				};
 			});
 
