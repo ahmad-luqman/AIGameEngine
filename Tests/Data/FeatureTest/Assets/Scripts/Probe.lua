@@ -10,9 +10,10 @@ function Probe:OnCollisionBegin(other) Count("CollisionBegin") end
 function Probe:OnCollisionEnd(other) Count("CollisionEnd") end
 function Probe:OnTriggerEnter(other) Count("TriggerEnter") end
 function Probe:OnTriggerExit(other) Count("TriggerExit") end
+-- Per entity, since several probes hold joints that break.
 function Probe:OnJointBreak(other)
-	Count("JointBreak")
-	FeatureTestEvents.JointBrokeWith = other and other.Name or "world"
+	Count("JointBreak:" .. self.Entity.Name)
+	FeatureTestEvents["JointBrokeWith:" .. self.Entity.Name] = other and other.Name or "world"
 end
 
 return Probe
