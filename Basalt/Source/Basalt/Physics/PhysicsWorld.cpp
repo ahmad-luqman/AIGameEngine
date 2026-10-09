@@ -160,7 +160,7 @@ namespace Basalt {
 					return false;
 				const uint32_t indexA = LayerIndex(a);
 				const uint32_t indexB = LayerIndex(b);
-				// The matrix is symmetric, so one direction decides.
+				// PhysicsLayers keeps the matrix symmetric, so one direction decides.
 				return indexA < PhysicsLayers::MaxLayers && indexB < PhysicsLayers::MaxLayers && (m_Masks[indexA] & (1u << indexB)) != 0;
 			}
 
@@ -415,8 +415,11 @@ namespace Basalt {
 
 			const JPH::RShapeCast cast = JPH::RShapeCast::sFromWorldTransform(&shape, JPH::Vec3::sOne(), JPH::RMat44::sRotationTranslation(ToJolt(glm::normalize(rotation)), ToJolt(origin)), ToJolt(*unitDirection * maxDistance));
 			JPH::ShapeCastSettings settings;
-			// Report bodies the shape starts inside (fraction 0) with a usable penetration axis.
+			// For a shape that starts inside a body (fraction 0), compute the deepest point and penetration
+			// axis, and keep the hit even when the cast moves out of the body (Jolt drops such "back face" hits
+			// by default, so a cast would only see bodies it starts inside when moving deeper).
 			settings.mReturnDeepestPoint = true;
+			settings.mBackFaceModeConvex = JPH::EBackFaceMode::CollideWithBackFaces;
 			const QueryObjectLayerFilter layerFilter(filter.LayerMask);
 			const QueryBodyFilter bodyFilter(filter);
 			std::vector<JPH::ShapeCastResult> results;
@@ -474,6 +477,11 @@ namespace Basalt {
 			return entities;
 		}
 
+		bool IsValidRadius(float radius)
+		{
+			return std::isfinite(radius) && radius > 0.0f;
+		}
+
 		bool IsValidBox(const glm::vec3& halfExtents)
 		{
 			return IsFiniteVec(halfExtents) && halfExtents.x > 0.0f && halfExtents.y > 0.0f && halfExtents.z > 0.0f;
@@ -484,6 +492,15 @@ namespace Basalt {
 			const float length = glm::length(rotation);
 			return std::isfinite(length) && length > 1e-6f;
 		}
+
+		std::optional<RaycastHit> ClosestHit(const std::vector<RaycastHit>& hits)
+		{
+			if (hits.empty())
+				return std::nullopt;
+			return hits.front();
+		}
+
+		const glm::quat IdentityRotation(1.0f, 0.0f, 0.0f, 0.0f);
 
 		JPH::Ref<JPH::Shape> MakeQueryBox(const glm::vec3& halfExtents)
 		{
@@ -531,8 +548,7 @@ namespace Basalt {
 		std::unordered_map<UUID, std::vector<std::string>> LoggedJointWarnings;
 		// The collision layers this world was built with (scene override, else the active project's).
 		PhysicsLayers Layers;
-		// The body warnings (unknown layer, ignored Continuous) last logged for each entity, so a script that
-		// sets the component every frame does not flood the log.
+		// The body warnings (unknown layer, ignored Continuous) last logged for each entity.
 		std::unordered_map<UUID, std::string> LoggedBodyWarnings;
 		// Set while Start() creates every body; it marks all joints dirty itself afterwards.
 		bool Starting = false;
@@ -680,7 +696,7 @@ namespace Basalt {
 		const int threadCount = std::max(1, static_cast<int>(std::thread::hardware_concurrency()) - 1);
 		m_Impl->JobSystem = CreateScope<JPH::JobSystemThreadPool>(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, threadCount);
 
-		if (const PhysicsLayers* layers = scene->GetPhysicsLayers())
+		if (const auto& layers = scene->GetPhysicsLayers())
 			m_Impl->Layers = *layers;
 		else if (const Ref<Project>& project = Project::GetActive())
 			m_Impl->Layers = project->GetConfig().Physics;
@@ -860,12 +876,17 @@ namespace Basalt {
 			motionType = JPH::EMotionType::Kinematic;
 
 		const bool moving = motionType != JPH::EMotionType::Static;
+		// Problems with the body's settings, joined with "; ". Logged when they differ from the last ones
+		// logged for this entity, so a script that sets the component every frame does not flood the log.
 		std::string warnings;
+		auto warn = [&warnings](const std::string& warning) {
+			warnings += (warnings.empty() ? "" : "; ") + warning;
+		};
 		uint32_t layer = 0;
 		if (const auto index = impl.Layers.Find(rigidBody.Layer))
 			layer = *index;
 		else
-			warnings += "unknown physics layer '" + rigidBody.Layer + "', using Default. ";
+			warn("unknown physics layer '" + rigidBody.Layer + "', using Default");
 		JPH::BodyCreationSettings settings(shapeResult.Get(), ToJolt(position), ToJolt(rotation), motionType, MakeObjectLayer(moving, layer));
 		settings.mUserData = static_cast<uint64_t>(entity.GetUUID());
 		settings.mFriction = rigidBody.Friction;
@@ -878,20 +899,22 @@ namespace Basalt {
 		settings.mCollideKinematicVsNonDynamic = rigidBody.IsTrigger;
 		if (rigidBody.FixedRotation && motionType == JPH::EMotionType::Dynamic)
 			settings.mAllowedDOFs = JPH::EAllowedDOFs::TranslationX | JPH::EAllowedDOFs::TranslationY | JPH::EAllowedDOFs::TranslationZ;
-		// Jolt only sweeps dynamic bodies; a sensor has nothing to stop it, so it gains nothing from a sweep.
+		// Jolt only sweeps dynamic, non-sensor bodies.
 		if (rigidBody.Continuous)
 		{
 			if (motionType == JPH::EMotionType::Dynamic && !rigidBody.IsTrigger)
 				settings.mMotionQuality = JPH::EMotionQuality::LinearCast;
 			else
-				warnings += "Continuous only affects dynamic bodies that are not triggers. ";
+				warn("Continuous only affects dynamic bodies that are not triggers");
 		}
 		if (warnings.empty())
-			impl.LoggedBodyWarnings.erase(entity.GetUUID());
-		else if (auto [it, inserted] = impl.LoggedBodyWarnings.try_emplace(entity.GetUUID(), warnings); inserted || it->second != warnings)
 		{
-			it->second = warnings;
-			BS_CORE_WARN("Physics: entity '{}': {}", entity.GetName(), warnings.substr(0, warnings.size() - 1));
+			impl.LoggedBodyWarnings.erase(entity.GetUUID());
+		}
+		else if (std::string& logged = impl.LoggedBodyWarnings[entity.GetUUID()]; logged != warnings)
+		{
+			logged = warnings;
+			BS_CORE_WARN("Physics: entity '{}': {}", entity.GetName(), warnings);
 		}
 		if (motionType == JPH::EMotionType::Dynamic)
 		{
@@ -1579,10 +1602,7 @@ namespace Basalt {
 
 	std::optional<RaycastHit> PhysicsWorld::Raycast(const glm::vec3& origin, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter) const
 	{
-		std::vector<RaycastHit> hits = CastRay(*m_Impl->System, origin, direction, maxDistance, filter, false);
-		if (hits.empty())
-			return std::nullopt;
-		return hits.front();
+		return ClosestHit(CastRay(*m_Impl->System, origin, direction, maxDistance, filter, false));
 	}
 
 	std::vector<RaycastHit> PhysicsWorld::RaycastAll(const glm::vec3& origin, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter) const
@@ -1592,31 +1612,25 @@ namespace Basalt {
 
 	std::optional<RaycastHit> PhysicsWorld::SphereCast(const glm::vec3& origin, float radius, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter) const
 	{
-		if (!std::isfinite(radius) || radius <= 0.0f)
+		if (!IsValidRadius(radius))
 			return std::nullopt;
 		const JPH::Ref<JPH::Shape> sphere = new JPH::SphereShape(radius);
-		std::vector<RaycastHit> hits = CastShape(*m_Impl->System, *sphere, origin, glm::quat(1.0f, 0.0f, 0.0f, 0.0f), direction, maxDistance, filter, false);
-		if (hits.empty())
-			return std::nullopt;
-		return hits.front();
+		return ClosestHit(CastShape(*m_Impl->System, *sphere, origin, IdentityRotation, direction, maxDistance, filter, false));
 	}
 
 	std::vector<RaycastHit> PhysicsWorld::SphereCastAll(const glm::vec3& origin, float radius, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter) const
 	{
-		if (!std::isfinite(radius) || radius <= 0.0f)
+		if (!IsValidRadius(radius))
 			return {};
 		const JPH::Ref<JPH::Shape> sphere = new JPH::SphereShape(radius);
-		return CastShape(*m_Impl->System, *sphere, origin, glm::quat(1.0f, 0.0f, 0.0f, 0.0f), direction, maxDistance, filter, true);
+		return CastShape(*m_Impl->System, *sphere, origin, IdentityRotation, direction, maxDistance, filter, true);
 	}
 
 	std::optional<RaycastHit> PhysicsWorld::BoxCast(const glm::vec3& origin, const glm::vec3& halfExtents, const glm::quat& rotation, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter) const
 	{
 		if (!IsValidBox(halfExtents) || !IsValidRotation(rotation))
 			return std::nullopt;
-		std::vector<RaycastHit> hits = CastShape(*m_Impl->System, *MakeQueryBox(halfExtents), origin, rotation, direction, maxDistance, filter, false);
-		if (hits.empty())
-			return std::nullopt;
-		return hits.front();
+		return ClosestHit(CastShape(*m_Impl->System, *MakeQueryBox(halfExtents), origin, rotation, direction, maxDistance, filter, false));
 	}
 
 	std::vector<RaycastHit> PhysicsWorld::BoxCastAll(const glm::vec3& origin, const glm::vec3& halfExtents, const glm::quat& rotation, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter) const
@@ -1628,10 +1642,10 @@ namespace Basalt {
 
 	std::vector<UUID> PhysicsWorld::OverlapSphere(const glm::vec3& center, float radius, const PhysicsQueryFilter& filter) const
 	{
-		if (!std::isfinite(radius) || radius <= 0.0f)
+		if (!IsValidRadius(radius))
 			return {};
 		const JPH::Ref<JPH::Shape> sphere = new JPH::SphereShape(radius);
-		return Overlap(*m_Impl->System, *sphere, center, glm::quat(1.0f, 0.0f, 0.0f, 0.0f), filter);
+		return Overlap(*m_Impl->System, *sphere, center, IdentityRotation, filter);
 	}
 
 	std::vector<UUID> PhysicsWorld::OverlapBox(const glm::vec3& center, const glm::vec3& halfExtents, const glm::quat& rotation, const PhysicsQueryFilter& filter) const

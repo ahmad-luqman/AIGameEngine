@@ -1,5 +1,7 @@
 #include "Basalt/Physics/PhysicsLayers.h"
 
+#include "Basalt/Core/Assert.h"
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -7,7 +9,7 @@
 namespace Basalt {
 
 	PhysicsLayers::PhysicsLayers()
-		: m_Names{ DefaultLayerName }
+		: m_Names{ std::string(DefaultLayerName) }
 	{
 		m_Masks.fill(0xFFFFFFFFu);
 	}
@@ -43,6 +45,7 @@ namespace Basalt {
 
 	bool PhysicsLayers::ShouldCollide(uint32_t a, uint32_t b) const
 	{
+		BS_CORE_ASSERT(a < GetCount() && b < GetCount(), "physics layer index out of range");
 		if (a >= GetCount() || b >= GetCount())
 			return false;
 		return (m_Masks[a] & (1u << b)) != 0;
@@ -50,6 +53,7 @@ namespace Basalt {
 
 	void PhysicsLayers::SetCollides(uint32_t a, uint32_t b, bool collides)
 	{
+		BS_CORE_ASSERT(a < GetCount() && b < GetCount(), "physics layer index out of range");
 		if (a >= GetCount() || b >= GetCount())
 			return;
 		if (collides)
@@ -66,7 +70,22 @@ namespace Basalt {
 
 	uint32_t PhysicsLayers::GetCollisionMask(uint32_t layer) const
 	{
-		return layer < GetCount() ? m_Masks[layer] : 0u;
+		if (layer >= GetCount())
+			return 0u;
+		const uint32_t defined = GetCount() == MaxLayers ? 0xFFFFFFFFu : (1u << GetCount()) - 1u;
+		return m_Masks[layer] & defined;
+	}
+
+	bool PhysicsLayers::operator==(const PhysicsLayers& other) const
+	{
+		if (m_Names != other.m_Names)
+			return false;
+		for (uint32_t i = 0; i < GetCount(); i++)
+		{
+			if (GetCollisionMask(i) != other.GetCollisionMask(i))
+				return false;
+		}
+		return true;
 	}
 
 	std::optional<uint32_t> PhysicsLayers::MaskFromNames(const std::vector<std::string>& names, std::string& outError) const
@@ -142,16 +161,17 @@ namespace Basalt {
 
 		if (const auto pairs = data.find("IgnoredPairs"); pairs != data.end())
 		{
+			constexpr const char* PairsError = "PhysicsLayers.IgnoredPairs must be an array of [layer, layer] pairs";
 			if (!pairs->is_array())
 			{
-				outError = "PhysicsLayers.IgnoredPairs must be an array of [layer, layer] pairs";
+				outError = PairsError;
 				return std::nullopt;
 			}
 			for (const nlohmann::json& pair : *pairs)
 			{
 				if (!pair.is_array() || pair.size() != 2 || !pair[0].is_string() || !pair[1].is_string())
 				{
-					outError = "PhysicsLayers.IgnoredPairs must be an array of [layer, layer] pairs";
+					outError = PairsError;
 					return std::nullopt;
 				}
 				const auto a = layers.Find(pair[0].get<std::string>());

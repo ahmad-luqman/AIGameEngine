@@ -146,7 +146,7 @@ namespace Basalt {
 		// Name of a project physics layer; the project's collision matrix decides which layers collide.
 		std::string Layer = "Default";
 		// Sweeps the body between steps so fast objects (projectiles) do not tunnel through thin geometry.
-		// Costs more per step; only affects dynamic bodies.
+		// Costs more per step; only affects dynamic bodies that are not triggers.
 		bool Continuous = false;
 	};
 

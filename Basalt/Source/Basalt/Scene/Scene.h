@@ -167,9 +167,9 @@ namespace Basalt {
 		PhysicsSettings& GetPhysicsSettings() { return m_PhysicsSettings; }
 		const PhysicsSettings& GetPhysicsSettings() const { return m_PhysicsSettings; }
 		// Collision layers for this scene's physics, overriding the active project's (used by tests and
-		// tools that run without a project). nullptr means "use the project's". Not saved in scene files.
+		// tools that run without a project). Empty means "use the project's". Not saved in scene files.
 		void SetPhysicsLayers(std::optional<PhysicsLayers> layers) { m_PhysicsLayers = std::move(layers); }
-		const PhysicsLayers* GetPhysicsLayers() const { return m_PhysicsLayers ? &*m_PhysicsLayers : nullptr; }
+		const std::optional<PhysicsLayers>& GetPhysicsLayers() const { return m_PhysicsLayers; }
 
 		entt::registry& GetRegistry() { return m_Registry; }
 
