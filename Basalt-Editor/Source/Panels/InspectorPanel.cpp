@@ -185,7 +185,26 @@ namespace Basalt {
 						continue;
 					}
 					auto options = info.EnumOptions.find(field);
-					const JsonFieldResult result = DrawJsonField(field, data[field], options != info.EnumOptions.end() ? &options->second : nullptr);
+					const std::vector<std::string>* enumOptions = options != info.EnumOptions.end() ? &options->second : nullptr;
+					// Layer names come from the project, not the component, so the combo is built here.
+					std::vector<std::string> layerNames;
+					bool unknownLayer = false;
+					if (info.Name == "RigidBody" && field == "Layer")
+					{
+						const Ref<Project>& project = Project::GetActive();
+						layerNames = project ? project->GetConfig().Physics.GetNames() : PhysicsLayers().GetNames();
+						const std::string current = data[field].get<std::string>();
+						if (std::find(layerNames.begin(), layerNames.end(), current) == layerNames.end())
+						{
+							// Keep an unknown name selectable so it stays visible until it is fixed.
+							layerNames.push_back(current);
+							unknownLayer = true;
+						}
+						enumOptions = &layerNames;
+					}
+					const JsonFieldResult result = DrawJsonField(field, data[field], enumOptions);
+					if (unknownLayer)
+						ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Unknown layer: the body uses Default when playing.");
 					if (result.Changed)
 						m_Context.Execute("component.set", { { "entity", id }, { "component", info.Name }, { "data", { { field, data[field] } } } });
 					if (result.Committed)
