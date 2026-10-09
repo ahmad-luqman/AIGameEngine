@@ -17,22 +17,6 @@ using namespace Basalt;
 
 namespace {
 
-	std::string Base64(const void* data, size_t size)
-	{
-		static const char* alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-		const auto* bytes = static_cast<const uint8_t*>(data);
-		std::string out;
-		for (size_t i = 0; i < size; i += 3)
-		{
-			const uint32_t chunk = (bytes[i] << 16) | ((i + 1 < size ? bytes[i + 1] : 0) << 8) | (i + 2 < size ? bytes[i + 2] : 0);
-			out += alphabet[(chunk >> 18) & 63];
-			out += alphabet[(chunk >> 12) & 63];
-			out += i + 1 < size ? alphabet[(chunk >> 6) & 63] : '=';
-			out += i + 2 < size ? alphabet[chunk & 63] : '=';
-		}
-		return out;
-	}
-
 	std::string MakePng(uint32_t rgba)
 	{
 		const uint8_t pixel[4] = { static_cast<uint8_t>(rgba >> 24), static_cast<uint8_t>(rgba >> 16), static_cast<uint8_t>(rgba >> 8), static_cast<uint8_t>(rgba) };
@@ -128,8 +112,8 @@ TEST_SUITE("Assets")
 
 		const std::string buffer = MakeQuadBuffer();
 		const nlohmann::json gltf = MakeGltfJson(
-			{ { "byteLength", buffer.size() }, { "uri", "data:application/octet-stream;base64," + Base64(buffer.data(), buffer.size()) } },
-			{ { { "uri", "data:image/png;base64," + Base64(redPng.data(), redPng.size()) } }, { { "uri", "normal.png" } } });
+			{ { "byteLength", buffer.size() }, { "uri", "data:application/octet-stream;base64," + BasaltTest::Base64(buffer.data(), buffer.size()) } },
+			{ { { "uri", "data:image/png;base64," + BasaltTest::Base64(redPng.data(), redPng.size()) } }, { { "uri", "normal.png" } } });
 		project.WriteFile("Assets/Models/Quad.gltf", gltf.dump());
 
 		AssetManager::Clear();
@@ -277,7 +261,7 @@ TEST_SUITE("Assets")
 		project.WriteFile("Assets/Textures/ok.png", png);
 		project.WriteFile("Assets/Models/sub/ok.png", png);
 		const std::string buffer = MakeQuadBuffer();
-		const nlohmann::json embedded = { { "byteLength", buffer.size() }, { "uri", "data:application/octet-stream;base64," + Base64(buffer.data(), buffer.size()) } };
+		const nlohmann::json embedded = { { "byteLength", buffer.size() }, { "uri", "data:application/octet-stream;base64," + BasaltTest::Base64(buffer.data(), buffer.size()) } };
 
 		auto load = [&](const std::string& name, const nlohmann::json& bufferJson, const std::string& imageUri) {
 			project.WriteFile("Assets/Models/" + name, MakeGltfJson(bufferJson, { { { "uri", imageUri } }, { { "uri", imageUri } } }).dump());
@@ -306,7 +290,7 @@ TEST_SUITE("Assets")
 	{
 		BasaltTest::TempProject project("GltfAlignment");
 		const std::string buffer = MakeQuadBuffer() + std::string(4, '\0');
-		nlohmann::json gltf = MakeGltfJson({ { "byteLength", buffer.size() }, { "uri", "data:application/octet-stream;base64," + Base64(buffer.data(), buffer.size()) } }, nlohmann::json::array());
+		nlohmann::json gltf = MakeGltfJson({ { "byteLength", buffer.size() }, { "uri", "data:application/octet-stream;base64," + BasaltTest::Base64(buffer.data(), buffer.size()) } }, nlohmann::json::array());
 		gltf.erase("textures");
 		gltf["materials"][0]["pbrMetallicRoughness"].erase("baseColorTexture");
 		gltf["materials"][0].erase("normalTexture");
