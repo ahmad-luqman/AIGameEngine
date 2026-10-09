@@ -175,6 +175,18 @@ namespace Basalt {
 		glm::vec3 Offset = { 0.0f, 0.0f, 0.0f };
 	};
 
+	// Collides by the triangles of a mesh asset. Static and kinematic bodies use the exact triangle mesh
+	// (which cannot collide with other mesh colliders); dynamic bodies, and any body with Convex set, use the
+	// convex hull of the mesh's vertices. An empty Mesh uses the entity's MeshComponent (its Mesh and
+	// MeshIndex), so imported levels need no extra setup. Scaled by the entity's world scale like the other
+	// colliders; cooked shapes are shared by every entity using the same mesh.
+	struct MeshColliderComponent
+	{
+		std::string Mesh;
+		uint32_t MeshIndex = 0;
+		bool Convex = false;
+	};
+
 	enum class JointType
 	{
 		// Locks the relative position and rotation.
@@ -342,6 +354,7 @@ namespace Basalt {
 		BoxColliderComponent,
 		SphereColliderComponent,
 		CapsuleColliderComponent,
+		MeshColliderComponent,
 		JointComponent,
 		ScriptComponent,
 		AudioSourceComponent,

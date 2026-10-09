@@ -91,7 +91,8 @@ namespace Basalt {
 		bool HasPhysicsBody(Entity entity)
 		{
 			return entity.HasComponent<RigidBodyComponent>() &&
-				   (entity.HasComponent<BoxColliderComponent>() || entity.HasComponent<SphereColliderComponent>() || entity.HasComponent<CapsuleColliderComponent>());
+				   (entity.HasComponent<BoxColliderComponent>() || entity.HasComponent<SphereColliderComponent>() || entity.HasComponent<CapsuleColliderComponent>() ||
+					entity.HasComponent<MeshColliderComponent>());
 		}
 
 		// Which entities a joint's reference field may name: entities with a physics body, but never the body

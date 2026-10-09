@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include <Basalt/Asset/AssetManager.h>
 #include <Basalt/Core/JsonUtils.h>
 #include <Basalt/Core/Log.h>
 #include <Basalt/Physics/PhysicsLayers.h>
@@ -2325,5 +2326,160 @@ TEST_SUITE("PhysicsLayers")
 		temp.WriteFile(Project::FileName, R"({"Name": "Bad", "PhysicsLayers": {"Names": ["Default", "Default"]}})");
 		CHECK_FALSE(Project::Load(temp.GetDirectory(), error));
 		CHECK(error.find("duplicate") != std::string::npos);
+	}
+}
+
+TEST_SUITE("Physics")
+{
+	TEST_CASE("A static MeshCollider collides by the triangles of the entity's mesh")
+	{
+		Scene scene;
+		// A plane has no volume, so only its triangles can hold the box up.
+		Entity floor = scene.CreateEntity("Floor");
+		floor.GetTransform().Scale = { 20.0f, 1.0f, 20.0f };
+		floor.AddComponent<MeshComponent>().Mesh = "builtin://Plane";
+		floor.AddComponent<RigidBodyComponent>();
+		floor.AddComponent<MeshColliderComponent>();
+		Entity box = CreateBox(scene, { 3.0f, 2.0f, -2.0f });
+
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		CHECK(physics.GetBodyCount() == 2);
+		Simulate(scene, 2.0f);
+		CHECK(box.GetTransform().Translation.y == doctest::Approx(0.5f).epsilon(0.02));
+
+		// Scaled by the entity: the plane reaches x = 10, not 0.5.
+		CHECK(physics.Raycast({ 9.5f, 5.0f, 0.0f }, { 0.0f, -1.0f, 0.0f }, 10.0f)->EntityID == floor.GetUUID());
+		CHECK_FALSE(physics.Raycast({ 10.5f, 5.0f, 0.0f }, { 0.0f, -1.0f, 0.0f }, 10.0f).has_value());
+
+		// Changing the mesh the collider borrows rebuilds the body.
+		floor.GetComponent<MeshComponent>().Mesh = "builtin://Cube";
+		floor.AddOrReplaceComponent<MeshComponent>(floor.GetComponent<MeshComponent>());
+		Simulate(scene, Step);
+		const auto hit = physics.Raycast({ -9.0f, 5.0f, 9.0f }, { 0.0f, -1.0f, 0.0f }, 10.0f);
+		REQUIRE(hit.has_value());
+		CHECK(hit->Point.y == doctest::Approx(0.5f).epsilon(0.01));
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("A dynamic MeshCollider uses the convex hull of the mesh")
+	{
+		Scene scene;
+		CreateGround(scene);
+		// Cylinder: radius 0.5, height 1, so its hull stands on its flat end with the centre 0.5 up.
+		Entity can = scene.CreateEntity("Can");
+		can.GetTransform().Translation = { 0.0f, 3.0f, 0.0f };
+		can.GetTransform().Scale = { 1.0f, 2.0f, 1.0f };
+		can.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+		can.AddComponent<MeshColliderComponent>().Mesh = "builtin://Cylinder";
+
+		// A plane's hull is flat (no volume); it still gets a usable mass and lands.
+		Entity tile = scene.CreateEntity("Tile");
+		tile.GetTransform().Translation = { 3.0f, 2.0f, 0.0f };
+		tile.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+		tile.AddComponent<MeshColliderComponent>().Mesh = "builtin://Plane";
+
+		scene.OnSimulationStart();
+		CHECK(scene.GetPhysicsWorld()->GetBodyCount() == 3);
+		Simulate(scene, 3.0f);
+		CHECK(can.GetTransform().Translation.y == doctest::Approx(1.0f).epsilon(0.02));
+		CHECK(TiltDegrees(can.GetTransform().Rotation, { 0.0f, 1.0f, 0.0f }) < 1.0f);
+		CHECK(std::isfinite(tile.GetTransform().Translation.y));
+		CHECK(tile.GetTransform().Translation.y == doctest::Approx(0.0f).epsilon(0.1));
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Convex MeshColliders fill the hull; kinematic triangle meshes get a body")
+	{
+		Scene scene;
+		// Convex on a static body: a solid hull instead of the sphere's hollow triangle shell.
+		Entity solid = scene.CreateEntity("Solid");
+		solid.AddComponent<RigidBodyComponent>();
+		auto& collider = solid.AddComponent<MeshColliderComponent>();
+		collider.Mesh = "builtin://Sphere";
+		collider.Convex = true;
+		Entity mover = scene.CreateEntity("Mover");
+		mover.GetTransform().Translation = { 5.0f, 0.0f, 0.0f };
+		mover.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
+		mover.AddComponent<MeshColliderComponent>().Mesh = "builtin://Cube";
+
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		CHECK(physics.GetBodyCount() == 2);
+		const auto top = physics.Raycast({ 0.0f, 5.0f, 0.0f }, { 0.0f, -1.0f, 0.0f }, 10.0f);
+		REQUIRE(top.has_value());
+		CHECK(top->Point.y == doctest::Approx(0.5f).epsilon(0.02));
+		// A ray starting inside a convex hull hits it at once; inside a hollow triangle mesh it would not.
+		const auto inside = physics.Raycast({ 0.0f, 0.0f, 0.0f }, { 1.0f, 0.0f, 0.0f }, 0.1f);
+		CHECK((inside.has_value() && inside->EntityID == solid.GetUUID()));
+		CHECK(physics.Raycast({ 5.0f, 5.0f, 0.0f }, { 0.0f, -1.0f, 0.0f }, 10.0f)->EntityID == mover.GetUUID());
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Mesh collider shapes are cooked once per mesh and shared across entities and worlds")
+	{
+		// Drop any shape an earlier test cooked for these meshes.
+		AssetManager::Reload("builtin://Capsule");
+		Scene scene;
+		for (int i = 0; i < 3; i++)
+		{
+			Entity pillar = scene.CreateEntity("Pillar");
+			pillar.GetTransform().Translation = { 2.0f * static_cast<float>(i), 1.0f, 0.0f };
+			pillar.GetTransform().Scale = glm::vec3(1.0f + static_cast<float>(i));
+			pillar.AddComponent<MeshComponent>().Mesh = "builtin://Capsule";
+			pillar.AddComponent<RigidBodyComponent>();
+			pillar.AddComponent<MeshColliderComponent>();
+		}
+
+		const uint64_t before = PhysicsWorld::GetMeshShapeCookCount();
+		scene.OnSimulationStart();
+		CHECK(scene.GetPhysicsWorld()->GetBodyCount() == 3);
+		CHECK(PhysicsWorld::GetMeshShapeCookCount() == before + 1);
+		scene.OnSimulationStop();
+		scene.OnSimulationStart();
+		CHECK(PhysicsWorld::GetMeshShapeCookCount() == before + 1);
+
+		// The hull is a different shape; a reloaded mesh is cooked again.
+		Entity rolling = scene.CreateEntity("Rolling");
+		rolling.AddComponent<MeshComponent>().Mesh = "builtin://Capsule";
+		rolling.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+		rolling.AddComponent<MeshColliderComponent>();
+		Simulate(scene, Step);
+		CHECK(PhysicsWorld::GetMeshShapeCookCount() == before + 2);
+		scene.OnSimulationStop();
+		AssetManager::Reload("builtin://Capsule");
+		scene.OnSimulationStart();
+		CHECK(PhysicsWorld::GetMeshShapeCookCount() == before + 4);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Invalid MeshColliders create no body and warn once")
+	{
+		Scene scene;
+		Entity missing = scene.CreateEntity("Missing");
+		missing.AddComponent<RigidBodyComponent>();
+		missing.AddComponent<MeshColliderComponent>().Mesh = "builtin://Teapot";
+		Entity badIndex = scene.CreateEntity("BadIndex");
+		badIndex.AddComponent<RigidBodyComponent>();
+		auto& collider = badIndex.AddComponent<MeshColliderComponent>();
+		collider.Mesh = "builtin://Cube";
+		collider.MeshIndex = 3;
+		Entity unnamed = scene.CreateEntity("Unnamed");
+		unnamed.AddComponent<RigidBodyComponent>();
+		unnamed.AddComponent<MeshColliderComponent>();
+
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		scene.OnSimulationStart();
+		for (int i = 0; i < 5; i++)
+		{
+			for (Entity entity : { missing, badIndex, unnamed })
+				entity.AddOrReplaceComponent<MeshColliderComponent>(entity.GetComponent<MeshColliderComponent>());
+			Simulate(scene, Step);
+		}
+		CHECK(scene.GetPhysicsWorld()->GetBodyCount() == 0);
+		CHECK(CountMessages(since, "cannot load mesh 'builtin://Teapot'") == 1);
+		CHECK(CountMessages(since, "has no mesh 3 (it has 1)") == 1);
+		CHECK(CountMessages(since, "no Mesh and the entity has no MeshComponent") == 1);
+		scene.OnSimulationStop();
 	}
 }

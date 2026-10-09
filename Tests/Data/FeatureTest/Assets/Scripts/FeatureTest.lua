@@ -154,7 +154,7 @@ local function TestEntities(self)
 
 	-- Every component type round-trips through Lua.
 	for _, name in ipairs({ "Camera", "Mesh", "Material", "DirectionalLight", "PointLight", "SpotLight", "SkyLight", "RigidBody",
-		"BoxCollider", "SphereCollider", "CapsuleCollider", "Joint", "AudioSource", "AudioListener", "Prefab" }) do
+		"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "AudioSource", "AudioListener", "Prefab" }) do
 		local holder = Scene.CreateEntity("Holder" .. name)
 		Expect("AddComponent " .. name, function() holder:AddComponent(name) end)
 		local data = holder:GetComponent(name)
@@ -412,6 +412,11 @@ function Driver:OnUpdate(dt)
 		local debris = Scene.FindEntityByName("DebrisBox")
 		Check("Ignored layer pair passes through", Scene.FindEntityByName("GhostBox").Translation.y < -5)
 		Check("Colliding layer pair rests", Near(debris.Translation.y, 0.5, 0.05))
+		-- Mesh colliders (no MeshComponent, so the golden renders are unchanged): a static glTF mesh (exact
+		-- triangles) and a dynamic cylinder (convex hull) resting on it.
+		Check("Dynamic MeshCollider rests on a static one", Near(Scene.FindEntityByName("MeshRock").Translation.y, 2.5, 0.05))
+		local meshHit = Physics.Raycast(Vec3(17.8, 10, -10.8), Vec3(0, -1, 0), 50)
+		Check("Raycast hits a MeshCollider", meshHit ~= nil and meshHit.Entity.Name == "MeshBlock" and Near(meshHit.Point.y, 2, 0.01))
 		local top, down = Vec3(16, 10, 12), Vec3(0, -1, 0)
 		Check("Raycast Layers option", Physics.Raycast(top, down, 50, { Layers = { "Default" } }).Entity.Name == "Ground")
 		local all = Physics.Raycast(top, down, 50, { All = true })
