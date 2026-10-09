@@ -832,7 +832,8 @@ namespace Basalt {
 				it->second = CookMeshShape(source, meshIndex, convex);
 				s_MeshShapeCookCount++;
 				// Entries of unloaded or reloaded meshes would otherwise keep their shapes alive until the
-				// cache is cleared; new cooks are rare, so pruning here costs little.
+				// cache is cleared; new cooks are rare, so pruning here costs little. Only after cooking: a
+				// just-inserted entry has no Source yet and would count as expired.
 				std::erase_if(s_MeshShapes, [](const auto& entry) { return entry.second.Source.expired(); });
 			}
 			outError = it->second.Error;

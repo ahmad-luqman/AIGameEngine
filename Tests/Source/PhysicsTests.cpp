@@ -2569,7 +2569,7 @@ TEST_SUITE("Physics")
 		scene.OnSimulationStop();
 	}
 
-	TEST_CASE("Dynamic MeshColliders ask for Convex, triggers use the hull, and MeshIndex picks the mesh")
+	TEST_CASE("Dynamic MeshColliders ask for Convex, triggers use the hull, and a borrowed mesh ignores MeshIndex")
 	{
 		Scene scene;
 		Entity rock = scene.CreateEntity("Rock");
