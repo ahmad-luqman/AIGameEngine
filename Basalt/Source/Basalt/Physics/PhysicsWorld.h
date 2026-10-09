@@ -4,7 +4,6 @@
 #include "Basalt/Core/Timestep.h"
 #include "Basalt/Core/UUID.h"
 #include "Basalt/Physics/PhysicsLayers.h"
-#include "Basalt/Scene/Components.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -60,12 +59,6 @@ namespace Basalt {
 		ContactInfo Flipped() const { return { Point, -Normal, Impulse }; }
 	};
 
-	// Combine the friction or restitution values of two touching bodies. When the modes differ, the one
-	// listed later in PhysicsCombineMode wins; when both are Default, friction uses the geometric mean and
-	// restitution the larger value.
-	float CombineFriction(PhysicsCombineMode modeA, float a, PhysicsCombineMode modeB, float b);
-	float CombineRestitution(PhysicsCombineMode modeA, float a, PhysicsCombineMode modeB, float b);
-
 	// Jolt-backed physics simulation for one running scene.
 	//
 	// Bodies are created for every entity with a RigidBodyComponent and at least one collider. Entities
@@ -77,7 +70,7 @@ namespace Basalt {
 	// other changes update it in place. Joint warnings (including fields the joint ignores, see
 	// JointFieldApplies) are logged once per distinct setting, so scripts may set the component every frame.
 	// Contacts combine the two bodies' Friction and Restitution with their FrictionCombine/RestitutionCombine
-	// modes (see CombineFriction).
+	// modes (see CombineFriction in PhysicsMaterial.h).
 	// Collision filtering uses named layers (RigidBodyComponent::Layer) and the collision matrix of the
 	// scene's override or else the active project, copied when the world is built: matrix edits apply on the
 	// next play. An unknown layer name falls back to Default with a warning.

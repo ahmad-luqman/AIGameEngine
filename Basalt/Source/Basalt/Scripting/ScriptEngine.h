@@ -24,7 +24,8 @@ namespace Basalt {
 	//   function Player:OnUpdate(dt) end
 	//   function Player:OnLateUpdate(dt) end      -- after physics
 	//   function Player:OnDestroy() end
-	//   function Player:OnCollisionBegin(other, contact) end  -- also OnCollisionEnd, OnTriggerEnter, OnTriggerExit
+	//   function Player:OnCollisionBegin(other, contact) end
+	//   function Player:OnCollisionEnd(other) end  -- likewise OnTriggerEnter, OnTriggerExit (no contact)
 	//   function Player:OnJointBreak(other) end    -- other is the far body; nil for a joint to the world
 	//   return Player
 	//
