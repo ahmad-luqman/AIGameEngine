@@ -41,6 +41,30 @@ namespace {
 		return box;
 	}
 
+	// A dynamic box that ignores gravity, for joints tested without a load.
+	Entity CreateWeightlessBox(Scene& scene, const glm::vec3& position)
+	{
+		Entity box = CreateBox(scene, position);
+		box.GetComponent<RigidBodyComponent>().GravityFactor = 0.0f;
+		return box;
+	}
+
+	// Hangs the box from the world 1 m above its centre, with Axis pointing down from the anchor to the box.
+	JointComponent& HangFromWorld(Entity box, JointType type)
+	{
+		auto& joint = box.AddComponent<JointComponent>();
+		joint.Type = type;
+		joint.Anchor = { 0.0f, 1.0f, 0.0f };
+		joint.Axis = { 0.0f, -1.0f, 0.0f };
+		return joint;
+	}
+
+	// How far (degrees) a rotation turns a unit local axis away from where it points at rest.
+	float TiltDegrees(const glm::quat& rotation, const glm::vec3& localAxis)
+	{
+		return glm::degrees(std::acos(std::clamp(glm::dot(rotation * localAxis, localAxis), -1.0f, 1.0f)));
+	}
+
 	void Simulate(Scene& scene, float seconds)
 	{
 		const int frames = static_cast<int>(std::lround(seconds / Step));
@@ -424,8 +448,7 @@ TEST_SUITE("Physics")
 	TEST_CASE("Velocities, impulses and teleporting through the transform")
 	{
 		Scene scene;
-		Entity box = CreateBox(scene, { 0.0f, 0.0f, 0.0f });
-		box.GetComponent<RigidBodyComponent>().GravityFactor = 0.0f;
+		Entity box = CreateWeightlessBox(scene, { 0.0f, 0.0f, 0.0f });
 		box.GetComponent<RigidBodyComponent>().LinearDamping = 0.0f;
 
 		scene.OnSimulationStart();
@@ -451,8 +474,7 @@ TEST_SUITE("Physics")
 		Entity pusher = scene.CreateEntity("Pusher");
 		pusher.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
 		pusher.AddComponent<BoxColliderComponent>();
-		Entity box = CreateBox(scene, { 1.5f, 0.0f, 0.0f });
-		box.GetComponent<RigidBodyComponent>().GravityFactor = 0.0f;
+		Entity box = CreateWeightlessBox(scene, { 1.5f, 0.0f, 0.0f });
 
 		scene.OnSimulationStart();
 		for (int i = 0; i < 60; i++)
@@ -742,7 +764,7 @@ TEST_SUITE("Physics")
 			scene.OnUpdate(Step);
 		}
 		CHECK(scene.GetPhysicsWorld()->HasJoint(ball));
-		CHECK(CountMessages(before, "MotorMode is ignored") == 1);
+		CHECK(CountMessages(before, "MotorMode has no effect on point joints") == 1);
 		CHECK(CountMessages(before, "missing entity 999") == 1);
 
 		// A different problem is reported again.
@@ -769,8 +791,7 @@ TEST_SUITE("Physics")
 		Entity inverted = pendulum(0.0f, 30.0f, -30.0f);      // -> [0, 0]
 		Entity excludesRest = pendulum(10.0f, 10.0f, 400.0f); // -> [0, 180]
 
-		Entity slider = CreateBox(scene, { 20.0f, 0.0f, 0.0f });
-		slider.GetComponent<RigidBodyComponent>().GravityFactor = 0.0f;
+		Entity slider = CreateWeightlessBox(scene, { 20.0f, 0.0f, 0.0f });
 		auto& rail = slider.AddComponent<JointComponent>();
 		rail.Type = JointType::Slider;
 		rail.Axis = { 1.0f, 0.0f, 0.0f };
@@ -779,8 +800,7 @@ TEST_SUITE("Physics")
 		rail.LimitMax = 2.0f;
 
 		// A rope whose LimitMax is below LimitMin becomes a rigid rod of length LimitMin.
-		Entity weight = CreateBox(scene, { 30.0f, -1.0f, 0.0f });
-		weight.GetComponent<RigidBodyComponent>().GravityFactor = 0.0f;
+		Entity weight = CreateWeightlessBox(scene, { 30.0f, -1.0f, 0.0f });
 		auto& rope = weight.AddComponent<JointComponent>();
 		rope.Type = JointType::Distance;
 		rope.ConnectedAnchor = { 30.0f, 0.0f, 0.0f };
@@ -824,8 +844,7 @@ TEST_SUITE("Physics")
 	{
 		Scene scene;
 		// Slider limits narrow in place; the rest pose stays where it was.
-		Entity slider = CreateBox(scene, { 0.0f, 0.0f, 0.0f });
-		slider.GetComponent<RigidBodyComponent>().GravityFactor = 0.0f;
+		Entity slider = CreateWeightlessBox(scene, { 0.0f, 0.0f, 0.0f });
 		auto& rail = slider.AddComponent<JointComponent>();
 		rail.Type = JointType::Slider;
 		rail.Axis = { 1.0f, 0.0f, 0.0f };
@@ -905,8 +924,7 @@ TEST_SUITE("Physics")
 		strongRail.AddComponent<JointComponent>(slider).BreakForce = 50.0f;
 
 		// A piston motor pushing into a static block stalls at its force limit, above BreakForce.
-		Entity piston = CreateBox(scene, { 20.0f, 0.0f, 0.0f });
-		piston.GetComponent<RigidBodyComponent>().GravityFactor = 0.0f;
+		Entity piston = CreateWeightlessBox(scene, { 20.0f, 0.0f, 0.0f });
 		auto& motor = piston.AddComponent<JointComponent>();
 		motor.Type = JointType::Slider;
 		motor.MotorMode = JointMotorMode::Velocity;
@@ -917,8 +935,7 @@ TEST_SUITE("Physics")
 		Entity block = CreateBox(scene, { 20.0f, 1.1f, 0.0f });
 		block.GetComponent<RigidBodyComponent>().Type = RigidBodyType::Static;
 		// The same piston with nothing in its way only overcomes damping.
-		Entity freePiston = CreateBox(scene, { 30.0f, 0.0f, 0.0f });
-		freePiston.GetComponent<RigidBodyComponent>().GravityFactor = 0.0f;
+		Entity freePiston = CreateWeightlessBox(scene, { 30.0f, 0.0f, 0.0f });
 		freePiston.AddComponent<JointComponent>(motor);
 
 		scene.OnSimulationStart();
@@ -1000,16 +1017,14 @@ TEST_SUITE("Physics")
 	TEST_CASE("Joint motors drive hinges and sliders and update without a rebuild")
 	{
 		Scene scene;
-		Entity wheel = CreateBox(scene, { 0.0f, 0.0f, 0.0f });
-		wheel.GetComponent<RigidBodyComponent>().GravityFactor = 0.0f;
+		Entity wheel = CreateWeightlessBox(scene, { 0.0f, 0.0f, 0.0f });
 		wheel.GetComponent<RigidBodyComponent>().AngularDamping = 0.0f;
 		auto& hinge = wheel.AddComponent<JointComponent>();
 		hinge.Axis = { 0.0f, 0.0f, 1.0f };
 		hinge.MotorMode = JointMotorMode::Velocity;
 		hinge.MotorTarget = 90.0f;
 
-		Entity arm = CreateBox(scene, { 5.0f, 0.0f, 0.0f });
-		arm.GetComponent<RigidBodyComponent>().GravityFactor = 0.0f;
+		Entity arm = CreateWeightlessBox(scene, { 5.0f, 0.0f, 0.0f });
 		auto& servo = arm.AddComponent<JointComponent>();
 		servo.Axis = { 0.0f, 0.0f, 1.0f };
 		servo.MotorMode = JointMotorMode::Position;
@@ -1062,8 +1077,7 @@ TEST_SUITE("Physics")
 		strong.AddComponent<JointComponent>(weakJoint).BreakForce = 50.0f;
 
 		// A welded box that is twisted hard breaks on torque.
-		Entity twisted = CreateBox(scene, { 10.0f, 0.0f, 0.0f });
-		twisted.GetComponent<RigidBodyComponent>().GravityFactor = 0.0f;
+		Entity twisted = CreateWeightlessBox(scene, { 10.0f, 0.0f, 0.0f });
 		auto& weld = twisted.AddComponent<JointComponent>();
 		weld.Type = JointType::Fixed;
 		weld.BreakTorque = 10.0f;
@@ -1083,13 +1097,16 @@ TEST_SUITE("Physics")
 
 	TEST_CASE("Jointed bodies collide with each other only when EnableCollision is set")
 	{
-		auto settle = [](bool enableCollision) {
+		// The filter applies to the two bodies whether the joint is on the box or on a joint entity.
+		auto settle = [](bool enableCollision, bool onJointEntity) {
 			Scene scene;
 			Entity plate = CreateGround(scene);
 			// A box resting on the plate, joined to it by a vertical slider: without collision it slides through.
 			Entity box = CreateBox(scene, { 0.0f, 0.5f, 0.0f });
-			auto& joint = box.AddComponent<JointComponent>();
+			Entity holder = onJointEntity ? scene.CreateChildEntity(box, "Slider") : box;
+			auto& joint = holder.AddComponent<JointComponent>();
 			joint.Type = JointType::Slider;
+			joint.BodyEntity = onJointEntity ? box.GetUUID() : UUID(0);
 			joint.ConnectedEntity = plate.GetUUID();
 			joint.EnableCollision = enableCollision;
 			scene.OnSimulationStart();
@@ -1098,8 +1115,12 @@ TEST_SUITE("Physics")
 			scene.OnSimulationStop();
 			return y;
 		};
-		CHECK(settle(true) == doctest::Approx(0.5f).epsilon(0.02));
-		CHECK(settle(false) < -2.0f);
+		for (bool onJointEntity : { false, true })
+		{
+			INFO("on a joint entity: " << onJointEntity);
+			CHECK(settle(true, onJointEntity) == doctest::Approx(0.5f).epsilon(0.02));
+			CHECK(settle(false, onJointEntity) < -2.0f);
+		}
 	}
 
 	TEST_CASE("Spring-softened limits let a slider overshoot and pull it back")
@@ -1107,8 +1128,7 @@ TEST_SUITE("Physics")
 		// Peak and final offset of a weightless slider thrown against its +1 m limit.
 		auto run = [](float frequency) {
 			Scene scene;
-			Entity box = CreateBox(scene, { 0.0f, 0.0f, 0.0f });
-			box.GetComponent<RigidBodyComponent>().GravityFactor = 0.0f;
+			Entity box = CreateWeightlessBox(scene, { 0.0f, 0.0f, 0.0f });
 			auto& joint = box.AddComponent<JointComponent>();
 			joint.Type = JointType::Slider;
 			joint.Axis = { 1.0f, 0.0f, 0.0f };
@@ -1186,7 +1206,7 @@ TEST_SUITE("Physics")
 		Simulate(scene, 2.0f);
 		CHECK(physics.GetJointPosition(pendulum).value() == doctest::Approx(-30.0f).epsilon(0.05));
 		CHECK(CountMessages(before, "no effect on point joints") == 1);
-		CHECK(CountMessages(before, "no effect on a hinge joint without UseLimits") == 1);
+		CHECK(CountMessages(before, "LimitSpringFrequency, LimitSpringDamping have no effect without UseLimits") == 1);
 		CHECK(CountMessages(before, "LimitSpringDamping -1 is negative") == 1);
 
 		// Softening the limit keeps the rest pose (a rebuild would measure from the current angle): the
@@ -1209,10 +1229,7 @@ TEST_SUITE("Physics")
 		// down axis tilts from vertical.
 		auto hang = [&](float x, bool useLimits, float halfAngle) {
 			Entity box = CreateBox(scene, { x, 0.0f, 0.0f });
-			auto& joint = box.AddComponent<JointComponent>();
-			joint.Type = JointType::Cone;
-			joint.Anchor = { 0.0f, 1.0f, 0.0f };
-			joint.Axis = { 0.0f, -1.0f, 0.0f };
+			auto& joint = HangFromWorld(box, JointType::Cone);
 			joint.UseLimits = useLimits;
 			joint.LimitMax = halfAngle;
 			return box;
@@ -1221,10 +1238,7 @@ TEST_SUITE("Physics")
 		Entity free = hang(5.0f, false, 0.0f);
 		Entity clamped = hang(10.0f, true, 20.0f);
 		clamped.GetComponent<JointComponent>().LimitMin = -10.0f;
-		auto tilt = [](Entity box) {
-			const glm::vec3 down = box.GetTransform().Rotation * glm::vec3(0.0f, -1.0f, 0.0f);
-			return glm::degrees(std::acos(std::clamp(-down.y, -1.0f, 1.0f)));
-		};
+		auto tilt = [](Entity box) { return TiltDegrees(box.GetTransform().Rotation, { 0.0f, 1.0f, 0.0f }); };
 
 		const uint64_t before = Log::GetHistory().GetTotalCount();
 		scene.OnSimulationStart();
@@ -1244,7 +1258,7 @@ TEST_SUITE("Physics")
 		CHECK(coneMax == doctest::Approx(20.0f).epsilon(0.1));
 		CHECK(freeMax > 60.0f);
 		CHECK(physics.HasJoint(clamped));
-		CHECK(CountMessages(before, "cone limits [-10, 20]") == 1);
+		CHECK(CountMessages(before, "LimitMin has no effect on cone joints") == 1);
 		CHECK(physics.GetJointPosition(cone) == std::nullopt);
 
 		// Widening the cone in place lets the next push swing further.
@@ -1268,10 +1282,7 @@ TEST_SUITE("Physics")
 		// A narrow cone carries torque once the box hits its edge; a free cone never does.
 		auto hang = [&](float x, JointType type, bool useLimits) {
 			Entity box = CreateBox(scene, { x, 0.0f, 0.0f });
-			auto& joint = box.AddComponent<JointComponent>();
-			joint.Type = type;
-			joint.Anchor = { 0.0f, 1.0f, 0.0f };
-			joint.Axis = { 0.0f, -1.0f, 0.0f };
+			auto& joint = HangFromWorld(box, type);
 			joint.UseLimits = useLimits;
 			joint.LimitMax = type == JointType::Cone ? 5.0f : 0.0f;
 			joint.AngularLimitMax = { 5.0f, 5.0f, 5.0f };
@@ -1300,8 +1311,7 @@ TEST_SUITE("Physics")
 		Scene scene;
 		// Weightless boxes pinned at their centre. Axis (the twist axis) is local Y.
 		auto pinned = [&](float x, bool useLimits) {
-			Entity box = CreateBox(scene, { x, 0.0f, 0.0f });
-			box.GetComponent<RigidBodyComponent>().GravityFactor = 0.0f;
+			Entity box = CreateWeightlessBox(scene, { x, 0.0f, 0.0f });
 			auto& joint = box.AddComponent<JointComponent>();
 			joint.Type = JointType::SixDOF;
 			joint.Axis = { 0.0f, 1.0f, 0.0f };
@@ -1329,8 +1339,7 @@ TEST_SUITE("Physics")
 		{
 			scene.OnUpdate(Step);
 			twistMax = std::max(twistMax, glm::degrees(glm::angle(twist.GetTransform().Rotation)));
-			const glm::vec3 up = swing.GetTransform().Rotation * glm::vec3(0.0f, 1.0f, 0.0f);
-			swingMax = std::max(swingMax, glm::degrees(std::acos(std::clamp(up.y, -1.0f, 1.0f))));
+			swingMax = std::max(swingMax, TiltDegrees(swing.GetTransform().Rotation, { 0.0f, 1.0f, 0.0f }));
 			// Translation is locked without linear limits.
 			CHECK(glm::length(twist.GetTransform().Translation) < 0.01f);
 		}
@@ -1349,8 +1358,7 @@ TEST_SUITE("Physics")
 		// Weightless boxes thrown diagonally: X (Axis) may move within [-0.5, 1], Y and Z are locked, and so
 		// is every rotation.
 		auto slider = [&](float z, float springFrequency) {
-			Entity box = CreateBox(scene, { 0.0f, 0.0f, z });
-			box.GetComponent<RigidBodyComponent>().GravityFactor = 0.0f;
+			Entity box = CreateWeightlessBox(scene, { 0.0f, 0.0f, z });
 			auto& joint = box.AddComponent<JointComponent>();
 			joint.Type = JointType::SixDOF;
 			joint.Axis = { 1.0f, 0.0f, 0.0f };
@@ -1366,8 +1374,7 @@ TEST_SUITE("Physics")
 		Entity soft = slider(5.0f, 2.0f);
 
 		// Invalid settings are fixed up with a warning and the joint is still built.
-		Entity odd = CreateBox(scene, { 0.0f, 0.0f, 10.0f });
-		odd.GetComponent<RigidBodyComponent>().GravityFactor = 0.0f;
+		Entity odd = CreateWeightlessBox(scene, { 0.0f, 0.0f, 10.0f });
 		auto& oddJoint = odd.AddComponent<JointComponent>();
 		oddJoint.Type = JointType::SixDOF;
 		oddJoint.Axis = { 1.0f, 0.0f, 0.0f };
@@ -1402,7 +1409,7 @@ TEST_SUITE("Physics")
 		CHECK(softPeak > 1.2f);
 		CHECK(physics.HasJoint(odd));
 		CHECK(CountMessages(before, "SecondaryAxis is zero or parallel to Axis") == 1);
-		CHECK(CountMessages(before, "LimitMin and LimitMax are ignored") == 1);
+		CHECK(CountMessages(before, "LimitMax has no effect on six-DOF joints") == 1);
 		CHECK(CountMessages(before, "six-DOF linear X limits [0.5, 0] must satisfy") == 1);
 		CHECK(CountMessages(before, "six-DOF swing (angular Y) limits [-10, 30] must be a symmetric half angle") == 1);
 
@@ -1431,6 +1438,9 @@ TEST_SUITE("Physics")
 		};
 		Entity left = rope("Left", -1.0f);
 		Entity right = rope("Right", 1.0f);
+		// A joint entity's own transform plays no part: the anchor is in the rung's space wherever it sits.
+		left.GetTransform().Translation = { 0.0f, 5.0f, 3.0f };
+		left.GetTransform().SetRotationEuler(glm::radians(glm::vec3(0.0f, 90.0f, 45.0f)));
 
 		scene.OnSimulationStart();
 		PhysicsWorld& physics = *scene.GetPhysicsWorld();
@@ -1440,7 +1450,11 @@ TEST_SUITE("Physics")
 		// The holders have no body of their own; their joints move the rung.
 		CHECK_FALSE(physics.HasBody(left));
 		physics.SetLinearVelocity(rung, { 0.0f, 0.0f, 1.0f });
-		Simulate(scene, 2.0f);
+		Simulate(scene, 1.0f);
+		// Moving a joint entity elsewhere in the hierarchy leaves its joint alone.
+		scene.SetParent(right, Entity{});
+		Simulate(scene, 1.0f);
+		CHECK(physics.HasJoint(right));
 		const auto& transform = rung.GetTransform();
 		CHECK(std::abs(transform.Translation.x) < 0.02f);
 		// Both ropes hold it level: its local X stays horizontal while it swings.
@@ -1458,9 +1472,11 @@ TEST_SUITE("Physics")
 		CHECK(physics.HasJoint(right));
 		CHECK((transform.Rotation * glm::vec3(1.0f, 0.0f, 0.0f)).y > 0.5f);
 
-		// Destroying the body removes the joints that move it.
+		// Destroying the body removes the joints that move it, including one on a joint entity outside it.
 		scene.DestroyEntity(rung);
+		Simulate(scene, 0.1f);
 		CHECK_FALSE(physics.HasJoint(right));
+		CHECK(right.HasComponent<JointComponent>());
 		scene.OnSimulationStop();
 	}
 
@@ -1505,26 +1521,243 @@ TEST_SUITE("Physics")
 		scene.OnSimulationStop();
 	}
 
-	TEST_CASE("EnableCollision on a joint entity applies to the bodies it joins")
+	TEST_CASE("A joint entity's joint goes with its body and comes back with it")
 	{
-		auto settle = [](bool enableCollision) {
+		// The holders are top-level entities, so destroying a body does not destroy them along with it.
+		auto run = [](bool destroy) {
 			Scene scene;
-			Entity plate = CreateGround(scene);
-			Entity box = CreateBox(scene, { 0.0f, 0.5f, 0.0f });
-			Entity holder = scene.CreateChildEntity(box, "Slider");
+			const UUID bodyID = 777;
+			auto createBody = [&] {
+				Entity body = scene.CreateEntityWithUUID(bodyID, "Body");
+				body.GetTransform().Translation = { 0.0f, 3.0f, 0.0f };
+				body.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+				body.AddComponent<BoxColliderComponent>();
+				return body;
+			};
+			Entity body = createBody();
+			Entity holder = scene.CreateEntity("Holder");
 			auto& joint = holder.AddComponent<JointComponent>();
-			joint.Type = JointType::Slider;
-			joint.BodyEntity = box.GetUUID();
-			joint.ConnectedEntity = plate.GetUUID();
-			joint.EnableCollision = enableCollision;
+			joint.Type = JointType::Point;
+			joint.BodyEntity = bodyID;
+
+			const uint64_t before = Log::GetHistory().GetTotalCount();
 			scene.OnSimulationStart();
-			Simulate(scene, 1.0f);
-			const float y = box.GetTransform().Translation.y;
+			PhysicsWorld& physics = *scene.GetPhysicsWorld();
+			REQUIRE(physics.HasJoint(holder));
+			if (destroy)
+				scene.DestroyEntity(body);
+			else
+				body.RemoveComponent<RigidBodyComponent>();
+			Simulate(scene, 0.5f);
+			CHECK_FALSE(physics.HasJoint(holder));
+			CHECK(holder.HasComponent<JointComponent>());
+			CHECK(CountMessages(before, destroy ? "its BodyEntity 777 is missing" : "its BodyEntity 'Body' has no RigidBody") == 1);
+
+			// A body with the same UUID (or the same entity's body again) gets the joint back.
+			if (destroy)
+				body = createBody();
+			else
+				body.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+			body.GetTransform().Translation = { 0.0f, 3.0f, 0.0f };
+			scene.OnUpdate(Step);
+			CHECK(physics.HasJoint(holder));
+			Simulate(scene, 0.5f);
+			CHECK(std::abs(body.GetTransform().Translation.y - 3.0f) < 0.05f);
 			scene.OnSimulationStop();
-			return y;
 		};
-		CHECK(settle(true) == doctest::Approx(0.5f).epsilon(0.02));
-		CHECK(settle(false) < -2.0f);
+		SUBCASE("destroyed")
+		{
+			run(true);
+		}
+		SUBCASE("RigidBody removed")
+		{
+			run(false);
+		}
+	}
+
+	TEST_CASE("Changing BodyEntity during play moves the joint and its collision filter")
+	{
+		// Regression: Jolt replays cached contacts for resting bodies without asking the pair filter, so a
+		// box already resting on the plate kept colliding after a joint started ignoring the pair.
+		Scene scene;
+		Entity plate = CreateGround(scene);
+		// Boxes resting on the plate. The holder's vertical slider to the plate, without collision, lets its
+		// body sink through the plate.
+		Entity first = CreateBox(scene, { 0.0f, 0.5f, 0.0f });
+		Entity second = CreateBox(scene, { 3.0f, 0.5f, 0.0f });
+		Entity holder = scene.CreateEntity("Holder");
+		auto& joint = holder.AddComponent<JointComponent>();
+		joint.Type = JointType::Slider;
+		joint.BodyEntity = first.GetUUID();
+		joint.ConnectedEntity = plate.GetUUID();
+
+		scene.OnSimulationStart();
+		Simulate(scene, 0.2f);
+		CHECK(first.GetTransform().Translation.y < 0.45f);
+		CHECK(second.GetTransform().Translation.y == doctest::Approx(0.5f).epsilon(0.02));
+		SetJoint(holder, [&](JointComponent& changed) { changed.BodyEntity = second.GetUUID(); });
+		Simulate(scene, 1.0f);
+		CHECK(scene.GetPhysicsWorld()->HasJoint(holder));
+		CHECK(second.GetTransform().Translation.y < -2.0f);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Turning EnableCollision off during play lets resting bodies pass through each other")
+	{
+		Scene scene;
+		Entity plate = CreateGround(scene);
+		Entity box = CreateBox(scene, { 0.0f, 0.5f, 0.0f });
+		auto& joint = box.AddComponent<JointComponent>();
+		joint.Type = JointType::Slider;
+		joint.ConnectedEntity = plate.GetUUID();
+		joint.EnableCollision = true;
+
+		scene.OnSimulationStart();
+		// Long enough for the box to come to rest (and fall asleep) on the plate.
+		Simulate(scene, 2.0f);
+		CHECK(box.GetTransform().Translation.y == doctest::Approx(0.5f).epsilon(0.02));
+		SetJoint(box, [](JointComponent& changed) { changed.EnableCollision = false; });
+		Simulate(scene, 1.0f);
+		CHECK(box.GetTransform().Translation.y < -2.0f);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Narrowing cone and six-DOF limits during play updates the live joint")
+	{
+		// A rebuild would take the current pose as the new rest pose, so a body pressed against its old limit
+		// would stay there; an in-place update pulls it back inside the narrower one.
+		Scene scene;
+		Entity slider = CreateWeightlessBox(scene, { 0.0f, 0.0f, 0.0f });
+		auto& linear = slider.AddComponent<JointComponent>();
+		linear.Type = JointType::SixDOF;
+		linear.Axis = { 1.0f, 0.0f, 0.0f };
+		linear.UseLimits = true;
+		linear.LinearLimitMin = { -0.5f, 0.0f, 0.0f };
+		linear.LinearLimitMax = { 1.0f, 0.0f, 0.0f };
+		Entity lamp = CreateBox(scene, { 5.0f, 0.0f, 0.0f });
+		auto& cone = HangFromWorld(lamp, JointType::Cone);
+		cone.UseLimits = true;
+		cone.LimitMax = 60.0f;
+
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		auto push = [&](float seconds) {
+			for (int i = 0; i < static_cast<int>(std::lround(seconds / Step)); i++)
+			{
+				physics.SetLinearVelocity(slider, { 2.0f, 0.0f, 0.0f });
+				physics.SetLinearVelocity(lamp, { 0.0f, 0.0f, 3.0f });
+				scene.OnUpdate(Step);
+			}
+		};
+		push(1.0f);
+		CHECK(slider.GetTransform().Translation.x == doctest::Approx(1.0f).epsilon(0.05));
+		CHECK(TiltDegrees(lamp.GetTransform().Rotation, { 0.0f, 1.0f, 0.0f }) > 50.0f);
+
+		SetJoint(slider, [](JointComponent& joint) { joint.LinearLimitMax.x = 0.5f; });
+		SetJoint(lamp, [](JointComponent& joint) { joint.LimitMax = 20.0f; });
+		push(1.0f);
+		CHECK(slider.GetTransform().Translation.x == doctest::Approx(0.5f).epsilon(0.1));
+		CHECK(TiltDegrees(lamp.GetTransform().Rotation, { 0.0f, 1.0f, 0.0f }) < 30.0f);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Joint warnings stay logged once while a script updates the joint")
+	{
+		Scene scene;
+		// Warnings from building the joint (SecondaryAxis) and from its settings (a spring with no limited
+		// translation axis to soften) must not be logged again by in-place updates.
+		Entity box = CreateWeightlessBox(scene, { 0.0f, 0.0f, 0.0f });
+		auto& joint = box.AddComponent<JointComponent>();
+		joint.Type = JointType::SixDOF;
+		joint.Axis = { 1.0f, 0.0f, 0.0f };
+		joint.SecondaryAxis = { 1.0f, 0.0f, 0.0f };
+		joint.UseLimits = true;
+		joint.AngularLimitMax = { 30.0f, 30.0f, 30.0f };
+		joint.LimitSpringFrequency = 2.0f;
+
+		const uint64_t before = Log::GetHistory().GetTotalCount();
+		scene.OnSimulationStart();
+		for (int i = 0; i < 10; i++)
+		{
+			SetJoint(box, [i](JointComponent& changed) { changed.BreakForce = 1000.0f + static_cast<float>(i); });
+			scene.OnUpdate(Step);
+		}
+		CHECK(scene.GetPhysicsWorld()->HasJoint(box));
+		CHECK(CountMessages(before, "SecondaryAxis is zero or parallel to Axis") == 1);
+		CHECK(CountMessages(before, "LimitSpringFrequency has no effect on a six-DOF joint without a limited translation axis") == 1);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Cone and six-DOF joints accept their full 180 degree range")
+	{
+		// Regression: glm::radians(180) can round past Jolt's pi, which its cone and swing limits reject.
+		Scene scene;
+		Entity wide = CreateBox(scene, { 0.0f, 0.0f, 0.0f });
+		auto& cone = HangFromWorld(wide, JointType::Cone);
+		cone.UseLimits = true;
+		cone.LimitMax = 180.0f;
+		Entity clamped = CreateBox(scene, { 5.0f, 0.0f, 0.0f });
+		auto& clampedCone = HangFromWorld(clamped, JointType::Cone);
+		clampedCone.UseLimits = true;
+		clampedCone.LimitMax = 200.0f;
+		Entity sixDOF = CreateBox(scene, { 10.0f, 0.0f, 0.0f });
+		auto& full = HangFromWorld(sixDOF, JointType::SixDOF);
+		full.UseLimits = true;
+		full.AngularLimitMin = { -180.0f, -180.0f, -180.0f };
+		full.AngularLimitMax = { 180.0f, 180.0f, 180.0f };
+
+		const uint64_t before = Log::GetHistory().GetTotalCount();
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		float maxTilt[3] = {};
+		const Entity boxes[3] = { wide, clamped, sixDOF };
+		for (Entity box : boxes)
+			physics.SetLinearVelocity(box, { 0.0f, 0.0f, 4.0f });
+		for (int i = 0; i < 60; i++)
+		{
+			scene.OnUpdate(Step);
+			for (int b = 0; b < 3; b++)
+				maxTilt[b] = std::max(maxTilt[b], TiltDegrees(boxes[b].GetTransform().Rotation, { 0.0f, 1.0f, 0.0f }));
+		}
+		for (int b = 0; b < 3; b++)
+		{
+			INFO("box " << b);
+			CHECK(physics.HasJoint(boxes[b]));
+			CHECK(maxTilt[b] > 60.0f);
+		}
+		CHECK(CountMessages(before, "cone half angle LimitMax 200 must be within [0, 180] degrees") == 1);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Fields a joint ignores are reported by name")
+	{
+		Scene scene;
+		Entity ball = CreateBox(scene, { 0.0f, 0.0f, 0.0f });
+		auto& point = ball.AddComponent<JointComponent>();
+		point.Type = JointType::Point;
+		point.Axis = { 1.0f, 0.0f, 0.0f };
+		point.MotorMode = JointMotorMode::Velocity;
+		point.BreakTorque = 5.0f;
+		// Cone and six-DOF joints without limits rotate freely: they carry no torque and use no limits.
+		Entity cone = CreateBox(scene, { 5.0f, 0.0f, 0.0f });
+		auto& freeCone = HangFromWorld(cone, JointType::Cone);
+		freeCone.BreakTorque = 5.0f;
+		Entity sixDOF = CreateBox(scene, { 10.0f, 0.0f, 0.0f });
+		HangFromWorld(sixDOF, JointType::SixDOF).AngularLimitMax = { 10.0f, 10.0f, 10.0f };
+		Entity hinge = CreateBox(scene, { 15.0f, 0.0f, 0.0f });
+		hinge.AddComponent<JointComponent>().LinearLimitMax = { 1.0f, 0.0f, 0.0f };
+
+		const uint64_t before = Log::GetHistory().GetTotalCount();
+		scene.OnSimulationStart();
+		Simulate(scene, 0.1f);
+		CHECK(CountMessages(before, "Axis, MotorMode, BreakTorque have no effect on point joints") == 1);
+		CHECK(CountMessages(before, "BreakTorque has no effect without UseLimits") == 1);
+		CHECK(CountMessages(before, "AngularLimitMax has no effect without UseLimits") == 1);
+		CHECK(CountMessages(before, "LinearLimitMax has no effect on hinge joints") == 1);
+		// The joints are still built.
+		for (Entity entity : { ball, cone, sixDOF, hinge })
+			CHECK(scene.GetPhysicsWorld()->HasJoint(entity));
+		scene.OnSimulationStop();
 	}
 
 	TEST_CASE("Simulation with several joints on one body is deterministic")
@@ -1551,7 +1784,10 @@ TEST_SUITE("Physics")
 			top.Type = JointType::Point;
 			top.Anchor = { 0.0f, 1.0f, 0.0f };
 			scene.OnSimulationStart();
-			Simulate(scene, 2.0f);
+			Simulate(scene, 1.0f);
+			// Rebuilding the hub's body removes and rebuilds all four of its joints mid-run.
+			hub.AddOrReplaceComponent<BoxColliderComponent>(BoxColliderComponent{ { 0.55f, 0.55f, 0.55f } });
+			Simulate(scene, 1.0f);
 			std::vector<glm::vec3> positions;
 			positions.reserve(spokes.size() + 1);
 			positions.push_back(hub.GetTransform().Translation);

@@ -4,6 +4,7 @@
 #include "Basalt/Physics/PhysicsLayers.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Scene/Entity.h"
+#include "Basalt/Scene/JointFields.h"
 #include "Basalt/Scene/Scene.h"
 #include "Basalt/Scripting/ScriptEngine.h"
 
@@ -43,6 +44,7 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <set>
@@ -270,7 +272,8 @@ namespace Basalt {
 		}
 
 		// Limits Jolt accepts for the joint (it asserts on others). Hinge and slider limits must contain
-		// the rest pose (0); distance limits are lengths. Changed values are reported in warnings.
+		// the rest pose (0); distance limits are lengths; a cone has only its half angle. Changed values are
+		// reported in warnings; fields a joint ignores are reported by ReportIgnoredFields.
 		std::pair<float, float> SanitizeLimits(const JointComponent& joint, std::vector<std::string>& warnings)
 		{
 			if (!joint.UseLimits)
@@ -303,20 +306,39 @@ namespace Basalt {
 				{
 					// Only the half angle; the cone is centered on the rest direction.
 					const float max = std::clamp(joint.LimitMax, 0.0f, 180.0f);
-					if (joint.LimitMin != 0.0f || max != joint.LimitMax)
-						warnings.emplace_back(fmt::format("cone limits [{}, {}] must be LimitMin = 0 and a half angle 0 <= LimitMax <= 180 degrees; using [0, {}]", joint.LimitMin, joint.LimitMax, max));
+					if (max != joint.LimitMax)
+						warnings.emplace_back(fmt::format("cone half angle LimitMax {} must be within [0, 180] degrees; clamped to {}", joint.LimitMax, max));
 					return { 0.0f, max };
 				}
 				case JointType::SixDOF:
-					if (joint.LimitMin != 0.0f || joint.LimitMax != 0.0f)
-						warnings.emplace_back("six-DOF joints are limited by LinearLimitMin/Max and AngularLimitMin/Max; LimitMin and LimitMax are ignored");
-					break;
 				case JointType::Fixed:
 				case JointType::Point:
-					warnings.emplace_back(fmt::format("UseLimits has no effect on {} joints", JointTypeName(joint.Type)));
 					break;
 			}
 			return { 0.0f, 0.0f };
+		}
+
+		// Fields set away from their defaults that do nothing for this joint (see JointFieldApplies), split by
+		// whether turning on UseLimits would make them count.
+		void ReportIgnoredFields(const JointComponent& joint, std::vector<std::string>& warnings)
+		{
+			JointComponent limited = joint;
+			limited.UseLimits = true;
+			std::string byType;
+			std::string byLimits;
+			int byTypeCount = 0;
+			int byLimitsCount = 0;
+			for (const std::string& field : GetIgnoredJointFields(joint))
+			{
+				const bool needsLimits = JointFieldApplies(limited, field);
+				std::string& list = needsLimits ? byLimits : byType;
+				list += (list.empty() ? "" : ", ") + field;
+				(needsLimits ? byLimitsCount : byTypeCount)++;
+			}
+			if (byTypeCount > 0)
+				warnings.emplace_back(fmt::format("{} {} no effect on {} joints", byType, byTypeCount == 1 ? "has" : "have", JointTypeName(joint.Type)));
+			if (byLimitsCount > 0)
+				warnings.emplace_back(fmt::format("{} {} no effect without UseLimits", byLimits, byLimitsCount == 1 ? "has" : "have"));
 		}
 
 		// Six-DOF limits in Jolt's units (meters, radians) along/around the joint frame's axes.
@@ -331,6 +353,7 @@ namespace Basalt {
 		// Without UseLimits translation is locked and rotation free (a point joint). With limits every range
 		// must contain the rest pose (0), twist stays within +-180 degrees, and the swing cone is symmetric
 		// (Jolt's cone swing ignores the minimum), so a swing minimum other than 0 or -max is mirrored.
+		// Angles are capped at pi: Jolt asserts on more, and glm::radians(180) can round past it.
 		SixDOFLimits SanitizeSixDOFLimits(const JointComponent& joint, std::vector<std::string>& warnings)
 		{
 			SixDOFLimits limits;
@@ -365,14 +388,14 @@ namespace Basalt {
 						warnings.emplace_back(fmt::format("six-DOF swing (angular {}) limits [{}, {}] must be a symmetric half angle [-max, max] with 0 <= max <= 180 degrees; using [{}, {}]", AxisNames[i],
 														  joint.AngularLimitMin[i], joint.AngularLimitMax[i], angularMin, angularMax));
 				}
-				limits.AngularMin[i] = glm::radians(angularMin);
-				limits.AngularMax[i] = glm::radians(angularMax);
+				limits.AngularMin[i] = std::max(glm::radians(angularMin), -JPH::JPH_PI);
+				limits.AngularMax[i] = std::min(glm::radians(angularMax), JPH::JPH_PI);
 			}
 			return limits;
 		}
 
-		// The spring that softens a joint's limits (a frequency of 0 keeps them rigid). Settings with no
-		// effect on the joint are reported in warnings.
+		// The spring that softens a joint's limits (a frequency of 0 keeps them rigid). Whether the joint has
+		// limits to soften is reported by ReportIgnoredFields.
 		JPH::SpringSettings SanitizeLimitSpring(const JointComponent& joint, std::vector<std::string>& warnings)
 		{
 			if (joint.LimitSpringFrequency < 0.0f)
@@ -380,31 +403,8 @@ namespace Basalt {
 			if (joint.LimitSpringDamping < 0.0f)
 				warnings.emplace_back(fmt::format("LimitSpringDamping {} is negative; using 0", joint.LimitSpringDamping));
 			const float frequency = std::max(joint.LimitSpringFrequency, 0.0f);
-			if (frequency > 0.0f)
-			{
-				switch (joint.Type)
-				{
-					case JointType::Hinge:
-					case JointType::Slider:
-					case JointType::SixDOF:
-						if (!joint.UseLimits)
-							warnings.emplace_back(fmt::format("LimitSpringFrequency has no effect on a {} joint without UseLimits", JointTypeName(joint.Type)));
-						break;
-					case JointType::Distance:
-						// Without limits Jolt keeps the starting length as both limits, so the spring still
-						// works: the joint becomes a bungee pulled back to that length.
-						break;
-					case JointType::Fixed:
-					case JointType::Point:
-						warnings.emplace_back(fmt::format("LimitSpringFrequency has no effect on {} joints, which have no limits", JointTypeName(joint.Type)));
-						break;
-					case JointType::Cone:
-						// Jolt's cone limit is always rigid.
-						warnings.emplace_back("LimitSpringFrequency has no effect on cone joints");
-						break;
-				}
-			}
-			return JPH::SpringSettings(JPH::ESpringMode::FrequencyAndDamping, frequency, std::max(joint.LimitSpringDamping, 0.0f));
+			const float damping = std::max(joint.LimitSpringDamping, 0.0f);
+			return JPH::SpringSettings(JPH::ESpringMode::FrequencyAndDamping, frequency, damping);
 		}
 
 		JPH::EMotorState ToJoltMotorState(JointMotorMode mode)
@@ -647,7 +647,12 @@ namespace Basalt {
 			// matches the constraint's subtype; ConnectedEntity is 0 when attached to the world.
 			JointComponent Settings;
 			// The entity whose body the joint moves (Settings.BodyEntity resolved; the holder when that is 0).
+			// Only set when the constraint is built; that stays correct because changing BodyEntity rebuilds
+			// the joint (see NeedsRebuild).
 			UUID Body = 0;
+			// Warnings found while building the constraint (e.g. a zero axis). In-place updates only re-check
+			// the other settings, so these are added back to keep the logged set the same.
+			std::vector<std::string> BuildWarnings;
 		};
 
 		Scope<JPH::TempAllocatorImpl> TempAllocator;
@@ -693,20 +698,39 @@ namespace Basalt {
 
 		void UpdateIgnoredPairs()
 		{
-			IgnoredPairs.clear();
+			std::set<EntityPair> pairs;
 			for (const auto& [holder, joint] : Joints)
 			{
 				if (joint.Settings.ConnectedEntity == 0 || joint.Settings.EnableCollision)
 					continue;
 				const uint64_t a = static_cast<uint64_t>(joint.Body);
 				const uint64_t b = static_cast<uint64_t>(joint.Settings.ConnectedEntity);
-				IgnoredPairs.emplace(std::min(a, b), std::max(a, b));
+				pairs.emplace(std::min(a, b), std::max(a, b));
+			}
+			// Jolt replays cached contacts for bodies that have not moved (and skips sleeping ones), bypassing
+			// the pair filter. Bodies whose pair starts or stops being ignored lose that cache and wake, so two
+			// resting bodies stop (or start) colliding at once.
+			std::vector<EntityPair> changed;
+			std::ranges::set_symmetric_difference(pairs, IgnoredPairs, std::back_inserter(changed));
+			IgnoredPairs = std::move(pairs);
+			JPH::BodyInterface& bodies = System->GetBodyInterface();
+			for (const auto& [a, b] : changed)
+			{
+				for (uint64_t uuid : { a, b })
+				{
+					auto body = Bodies.find(uuid);
+					if (body == Bodies.end())
+						continue;
+					bodies.InvalidateContactCache(body->second.ID);
+					if (body->second.Type == RigidBodyType::Dynamic)
+						bodies.ActivateBody(body->second.ID);
+				}
 			}
 		}
 
-		void RemoveJoint(UUID owner)
+		void RemoveJoint(UUID holder)
 		{
-			auto it = Joints.find(owner);
+			auto it = Joints.find(holder);
 			if (it == Joints.end())
 				return;
 			System->RemoveConstraint(it->second.Constraint);
@@ -718,16 +742,21 @@ namespace Basalt {
 		// rebuilt before the next step if both bodies still exist then (e.g. a body that was recreated).
 		void RemoveJointsOfBody(UUID uuid)
 		{
-			for (auto it = Joints.begin(); it != Joints.end();)
+			// Jolt removes a constraint by moving its last one into the gap, which changes the solve order of
+			// the rest; removing in UUID order (not hash order) keeps that order reproducible.
+			std::vector<UUID> holders;
+			for (const auto& [holder, joint] : Joints)
 			{
-				if (it->second.Body != uuid && it->second.Settings.ConnectedEntity != uuid)
-				{
-					++it;
-					continue;
-				}
+				if (joint.Body == uuid || joint.Settings.ConnectedEntity == uuid)
+					holders.push_back(holder);
+			}
+			std::ranges::sort(holders);
+			for (UUID holder : holders)
+			{
+				auto it = Joints.find(holder);
 				System->RemoveConstraint(it->second.Constraint);
-				DirtyJoints.insert(it->first);
-				it = Joints.erase(it);
+				DirtyJoints.insert(holder);
+				Joints.erase(it);
 			}
 			UpdateIgnoredPairs();
 		}
@@ -1112,6 +1141,7 @@ namespace Basalt {
 				// Rewriting the same values must not wake the bodies.
 				if (joint == existing->second.Settings)
 					continue;
+				warnings = existing->second.BuildWarnings;
 				ApplyJointSettings(entity, warnings);
 			}
 			else
@@ -1148,15 +1178,11 @@ namespace Basalt {
 		const JointComponent& joint = entity.GetComponent<JointComponent>();
 		record.Settings = joint;
 
+		ReportIgnoredFields(joint, warnings);
 		const auto [limitMin, limitMax] = SanitizeLimits(joint, warnings);
 		const JPH::SpringSettings limitSpring = SanitizeLimitSpring(joint, warnings);
-		const bool motorAllowed = joint.Type == JointType::Hinge || joint.Type == JointType::Slider;
-		if (joint.MotorMode != JointMotorMode::Off && !motorAllowed)
-			warnings.emplace_back(fmt::format("only hinge and slider joints have motors; MotorMode is ignored on {} joints", JointTypeName(joint.Type)));
 		if (joint.MotorMaxForce < 0.0f)
 			warnings.emplace_back(fmt::format("MotorMaxForce {} is negative; using 0", joint.MotorMaxForce));
-		if (joint.BreakTorque > 0.0f && (joint.Type == JointType::Point || joint.Type == JointType::Distance))
-			warnings.emplace_back(fmt::format("BreakTorque has no effect on {} joints, which hold no torque", JointTypeName(joint.Type)));
 		const JPH::EMotorState motorState = ToJoltMotorState(joint.MotorMode);
 		const float motorLimit = std::max(joint.MotorMaxForce, 0.0f);
 
@@ -1361,16 +1387,13 @@ namespace Basalt {
 		auto describeMissingBody = [](Entity e) {
 			return e.HasComponent<RigidBodyComponent>() ? "has a RigidBody but no valid collider" : "has no RigidBody";
 		};
-		// The joint moves BodyEntity's body; its anchor and axes are in that entity's local space.
-		Entity bodyEntity = entity;
-		if (joint.BodyEntity != 0)
+		// The joint moves BodyEntity's body; its anchor and axes are in that entity's local space. The holder
+		// itself always exists, so only a BodyEntity can be missing.
+		Entity bodyEntity = m_Scene->GetEntityByUUID(JointBody(entity.GetUUID(), joint));
+		if (!bodyEntity)
 		{
-			bodyEntity = m_Scene->GetEntityByUUID(joint.BodyEntity);
-			if (!bodyEntity)
-			{
-				warnings.emplace_back(fmt::format("not built: its BodyEntity {} is missing", static_cast<uint64_t>(joint.BodyEntity)));
-				return;
-			}
+			warnings.emplace_back(fmt::format("not built: its BodyEntity {} is missing", static_cast<uint64_t>(joint.BodyEntity)));
+			return;
 		}
 		auto self = impl.Bodies.find(bodyEntity.GetUUID());
 		if (self == impl.Bodies.end())
@@ -1430,7 +1453,8 @@ namespace Basalt {
 				warnings.emplace_back("Axis is zero; using local Y");
 			axis = glm::vec3(0.0f, 1.0f, 0.0f);
 		}
-		const JPH::Vec3 joltAxis = ToJolt(glm::normalize(rotation * axis));
+		const glm::vec3 worldAxis = glm::normalize(rotation * axis);
+		const JPH::Vec3 joltAxis = ToJolt(worldAxis);
 		const JPH::Vec3 joltNormal = joltAxis.GetNormalizedPerpendicular();
 
 		// Limits, motors and break thresholds are applied by ApplyJointSettings below.
@@ -1492,8 +1516,7 @@ namespace Basalt {
 			{
 				// The frame's X is Axis; Y is SecondaryAxis with its Axis component removed.
 				glm::vec3 secondary = rotation * joint.SecondaryAxis;
-				const glm::vec3 x = FromJolt(joltAxis);
-				secondary -= glm::dot(secondary, x) * x;
+				secondary -= glm::dot(secondary, worldAxis) * worldAxis;
 				JPH::Vec3 joltSecondary = joltNormal;
 				if (glm::length(secondary) < 1e-4f)
 					warnings.emplace_back("SecondaryAxis is zero or parallel to Axis; using an arbitrary perpendicular");
@@ -1509,7 +1532,7 @@ namespace Basalt {
 			}
 		}
 
-		// Body 1 is the connected body (or the world), body 2 this entity's.
+		// Body 1 is the connected body (or the world), body 2 the joint's body (BodyEntity's, or the holder's).
 		const int bodyCount = connected ? 2 : 1;
 		JPH::BodyLockMultiWrite lock(impl.System->GetBodyLockInterface(), connected ? bodyIDs : bodyIDs + 1, bodyCount);
 		JPH::Body* body1 = connected ? lock.GetBody(0) : &JPH::Body::sFixedToWorld;
@@ -1525,6 +1548,7 @@ namespace Basalt {
 		record.Constraint = settings->Create(*body1, *body2);
 		record.Settings = joint;
 		record.Body = bodyEntity.GetUUID();
+		record.BuildWarnings = warnings;
 		impl.System->AddConstraint(record.Constraint);
 		lock.ReleaseLocks();
 		ApplyJointSettings(entity, warnings);
