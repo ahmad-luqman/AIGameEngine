@@ -7,6 +7,8 @@
 
 #include <glm/gtc/type_ptr.hpp>
 
+#include <algorithm>
+#include <array>
 #include <iterator>
 #include <stdexcept>
 #include <unordered_set>
@@ -77,23 +79,25 @@ namespace Basalt {
 			{
 				m_EnumOptions[name] = std::vector<std::string>(std::begin(names), std::end(names));
 				const json* element = Find(name);
+				if (element)
+					value = ReadEnum<E>(name, *element, names);
+			}
+
+			// One enum value per axis, written as an array of names (e.g. ["Off", "Position", "Off"]). The
+			// whole array is validated before any element changes.
+			template<typename E, size_t Count, size_t N>
+			void EnumArrayField(const char* name, std::array<E, Count>& value, const char* const (&names)[N])
+			{
+				m_EnumOptions[name] = std::vector<std::string>(std::begin(names), std::end(names));
+				const json* element = Find(name);
 				if (!element)
 					return;
-				if (!element->is_string())
-					throw std::runtime_error(std::string("field '") + name + "' must be a string");
-				const std::string text = element->get<std::string>();
-				for (size_t i = 0; i < N; i++)
-				{
-					if (text == names[i])
-					{
-						value = static_cast<E>(i);
-						return;
-					}
-				}
-				std::string valid;
-				for (size_t i = 0; i < N; i++)
-					valid += (i ? ", " : "") + std::string(names[i]);
-				throw std::runtime_error(std::string("field '") + name + "' has invalid value '" + text + "' (valid: " + valid + ")");
+				if (!element->is_array() || element->size() != Count)
+					throw std::runtime_error(std::string("field '") + name + "' must be an array of " + std::to_string(Count) + " strings");
+				std::array<E, Count> result;
+				for (size_t i = 0; i < Count; i++)
+					result[i] = ReadEnum<E>(name, (*element)[i], names);
+				value = result;
 			}
 
 			// Older files may store a field in a form (or under a name) that is no longer written. When
@@ -128,6 +132,23 @@ namespace Basalt {
 			}
 
 		private:
+			template<typename E, size_t N>
+			static E ReadEnum(const char* name, const json& element, const char* const (&names)[N])
+			{
+				if (!element.is_string())
+					throw std::runtime_error(std::string("field '") + name + "' must be a string");
+				const std::string text = element.get<std::string>();
+				for (size_t i = 0; i < N; i++)
+				{
+					if (text == names[i])
+						return static_cast<E>(i);
+				}
+				std::string valid;
+				for (size_t i = 0; i < N; i++)
+					valid += (i ? ", " : "") + std::string(names[i]);
+				throw std::runtime_error(std::string("field '") + name + "' has invalid value '" + text + "' (valid: " + valid + ")");
+			}
+
 			const json* Find(const char* name)
 			{
 				m_FieldNames.emplace_back(name);
@@ -202,6 +223,15 @@ namespace Basalt {
 				}
 			}
 
+			template<glm::length_t L>
+			static void Read(const char* name, const json& element, glm::vec<L, bool, glm::defaultp>& value)
+			{
+				if (!element.is_array() || element.size() != static_cast<size_t>(L) || !std::ranges::all_of(element, [](const json& v) { return v.is_boolean(); }))
+					throw std::runtime_error(std::string("field '") + name + "' must be an array of " + std::to_string(L) + " booleans");
+				for (glm::length_t i = 0; i < L; i++)
+					value[i] = element[static_cast<size_t>(i)].get<bool>();
+			}
+
 		private:
 			const json* m_Data = nullptr;
 			std::unordered_set<std::string> m_Consumed;
@@ -216,6 +246,24 @@ namespace Basalt {
 			json array = json::array();
 			for (glm::length_t i = 0; i < L; i++)
 				array.push_back(value[i]);
+			return array;
+		}
+
+		template<glm::length_t L>
+		json ToJson(const glm::vec<L, bool, glm::defaultp>& value)
+		{
+			json array = json::array();
+			for (glm::length_t i = 0; i < L; i++)
+				array.push_back(value[i]);
+			return array;
+		}
+
+		template<typename E, size_t Count, size_t N>
+		json EnumArrayToJson(const std::array<E, Count>& value, const char* const (&names)[N])
+		{
+			json array = json::array();
+			for (E element : value)
+				array.push_back(names[static_cast<size_t>(element)]);
 			return array;
 		}
 
@@ -397,9 +445,16 @@ namespace Basalt {
 			r.Field("LinearLimitMax", c.LinearLimitMax);
 			r.Field("AngularLimitMin", c.AngularLimitMin);
 			r.Field("AngularLimitMax", c.AngularLimitMax);
+			r.Field("FreeLinearAxes", c.FreeLinearAxes);
 			r.EnumField("MotorMode", c.MotorMode, s_JointMotorModeNames);
 			r.Field("MotorTarget", c.MotorTarget);
+			r.EnumArrayField("LinearMotorMode", c.LinearMotorMode, s_JointMotorModeNames);
+			r.EnumArrayField("AngularMotorMode", c.AngularMotorMode, s_JointMotorModeNames);
+			r.Field("LinearMotorTarget", c.LinearMotorTarget);
+			r.Field("AngularMotorTarget", c.AngularMotorTarget);
 			r.Field("MotorMaxForce", c.MotorMaxForce);
+			r.Field("MotorSpringFrequency", c.MotorSpringFrequency);
+			r.Field("MotorSpringDamping", c.MotorSpringDamping);
 			r.Field("BreakForce", c.BreakForce);
 			r.Field("BreakTorque", c.BreakTorque);
 			r.Field("EnableCollision", c.EnableCollision);
@@ -551,9 +606,16 @@ namespace Basalt {
 				{ "LinearLimitMax", ToJson(c.LinearLimitMax) },
 				{ "AngularLimitMin", ToJson(c.AngularLimitMin) },
 				{ "AngularLimitMax", ToJson(c.AngularLimitMax) },
+				{ "FreeLinearAxes", ToJson(c.FreeLinearAxes) },
 				{ "MotorMode", s_JointMotorModeNames[static_cast<int>(c.MotorMode)] },
 				{ "MotorTarget", c.MotorTarget },
+				{ "LinearMotorMode", EnumArrayToJson(c.LinearMotorMode, s_JointMotorModeNames) },
+				{ "AngularMotorMode", EnumArrayToJson(c.AngularMotorMode, s_JointMotorModeNames) },
+				{ "LinearMotorTarget", ToJson(c.LinearMotorTarget) },
+				{ "AngularMotorTarget", ToJson(c.AngularMotorTarget) },
 				{ "MotorMaxForce", c.MotorMaxForce },
+				{ "MotorSpringFrequency", c.MotorSpringFrequency },
+				{ "MotorSpringDamping", c.MotorSpringDamping },
 				{ "BreakForce", c.BreakForce },
 				{ "BreakTorque", c.BreakTorque },
 				{ "EnableCollision", c.EnableCollision },

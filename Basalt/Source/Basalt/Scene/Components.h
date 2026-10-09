@@ -9,6 +9,7 @@
 #include <glm/gtc/quaternion.hpp>
 #include <nlohmann/json.hpp>
 
+#include <array>
 #include <string>
 #include <vector>
 
@@ -196,9 +197,9 @@ namespace Basalt {
 	enum class JointMotorMode
 	{
 		Off = 0,
-		// Drives toward MotorTarget as a speed (degrees/s for hinges, m/s for sliders).
+		// Drives toward its target as a speed (degrees/s for hinges, m/s for sliders).
 		Velocity,
-		// Drives toward MotorTarget as a position (degrees for hinges, meters for sliders).
+		// Drives toward its target as a position (degrees for hinges, meters for sliders).
 		Position
 	};
 
@@ -246,16 +247,35 @@ namespace Basalt {
 		// (twist) lies within [-180, 180]; Y and Z rotation (swing) form a symmetric cone whose half angles are
 		// AngularLimitMax.y and .z (0..180): AngularLimitMin.y/.z of 0 means -max (Jolt's cone swing cannot be
 		// one-sided). Jolt locks an angle limit within 0.5 degrees of 0 and frees one within 0.5 of 180. Limit
-		// springs soften only the limited (not locked) translation axes.
+		// springs soften only the limited (not locked or free) translation axes; Jolt has no soft rotation limits.
 		glm::vec3 LinearLimitMin = { 0.0f, 0.0f, 0.0f };
 		glm::vec3 LinearLimitMax = { 0.0f, 0.0f, 0.0f };
 		glm::vec3 AngularLimitMin = { 0.0f, 0.0f, 0.0f };
 		glm::vec3 AngularLimitMax = { 0.0f, 0.0f, 0.0f };
+		// Six-DOF only: translation axes of the joint frame that move freely, with or without UseLimits (their
+		// LinearLimitMin/Max are ignored). Rotation needs no flag: a +-180 degree limit already frees it.
+		glm::bvec3 FreeLinearAxes = { false, false, false };
 		// Hinge and slider joints only.
 		JointMotorMode MotorMode = JointMotorMode::Off;
 		float MotorTarget = 0.0f;
-		// Strongest torque (N·m, hinges) or force (N, sliders) the motor may apply.
+		// Six-DOF only: a motor per axis of the joint frame (X = Axis), so animation can drive a ragdoll. Each
+		// axis reads its own component of the target: LinearMotorTarget in m/s (Velocity) or meters from the
+		// rest pose (Position); AngularMotorTarget in degrees/s around that axis (Velocity) or, for the
+		// Position axes together, the target orientation relative to the rest pose as Euler angles in degrees
+		// (the same convention as Transform Rotation and GetJointRotation; components of non-Position axes are
+		// treated as 0). Position targets beyond the limits are clamped to them. A motor on a locked axis does
+		// nothing (without UseLimits translation is locked).
+		std::array<JointMotorMode, 3> LinearMotorMode = { JointMotorMode::Off, JointMotorMode::Off, JointMotorMode::Off };
+		std::array<JointMotorMode, 3> AngularMotorMode = { JointMotorMode::Off, JointMotorMode::Off, JointMotorMode::Off };
+		glm::vec3 LinearMotorTarget = { 0.0f, 0.0f, 0.0f };
+		glm::vec3 AngularMotorTarget = { 0.0f, 0.0f, 0.0f };
+		// Strongest torque (N·m, hinges and six-DOF rotation) or force (N, sliders and six-DOF translation) a
+		// motor may apply.
 		float MotorMaxForce = 1000.0f;
+		// The spring a Position motor pulls toward its target with (hinge, slider, six-DOF): a higher frequency
+		// (Hz) is stiffer, 0 = as stiff as MotorMaxForce allows. Damping is a ratio, 1 = critically damped.
+		float MotorSpringFrequency = 2.0f;
+		float MotorSpringDamping = 1.0f;
 		// The joint breaks when its constraint force (N) or torque (N·m), motor and limit effort included,
 		// exceeds these; 0 never breaks. Point and distance joints hold no torque, so BreakTorque does not
 		// apply to them.

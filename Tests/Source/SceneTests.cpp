@@ -221,9 +221,16 @@ TEST_SUITE("Serialization")
 				  .LinearLimitMax = { 0.1f, 0.2f, 0.3f },
 				  .AngularLimitMin = { -10.0f, -20.0f, -30.0f },
 				  .AngularLimitMax = { 10.0f, 20.0f, 30.0f },
+				  .FreeLinearAxes = { true, false, true },
 				  .MotorMode = JointMotorMode::Velocity,
 				  .MotorTarget = 12.0f,
+				  .LinearMotorMode = { JointMotorMode::Position, JointMotorMode::Off, JointMotorMode::Velocity },
+				  .AngularMotorMode = { JointMotorMode::Velocity, JointMotorMode::Position, JointMotorMode::Off },
+				  .LinearMotorTarget = { 0.5f, 0.0f, -1.0f },
+				  .AngularMotorTarget = { 45.0f, 10.0f, 0.0f },
 				  .MotorMaxForce = 250.0f,
+				  .MotorSpringFrequency = 8.0f,
+				  .MotorSpringDamping = 0.5f,
 				  .BreakForce = 100.0f,
 				  .BreakTorque = 50.0f,
 				  .EnableCollision = true };
@@ -420,6 +427,32 @@ TEST_SUITE("Serialization")
 		CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, "Joint", { { "MotorMode", "Turbo" } }, error));
 	}
 
+	TEST_CASE("Per-axis joint fields read three values and reject anything else unchanged")
+	{
+		Scene scene;
+		Entity entity = scene.CreateEntity("Hip");
+		std::string error;
+		REQUIRE_MESSAGE(ComponentRegistry::AddOrPatch(entity, "Joint", { { "Type", "SixDOF" }, { "FreeLinearAxes", { false, true, false } }, { "AngularMotorMode", { "Position", "Velocity", "Off" } } }, error), error);
+		const JointComponent& joint = entity.GetComponent<JointComponent>();
+		CHECK(joint.FreeLinearAxes == glm::bvec3(false, true, false));
+		CHECK(joint.AngularMotorMode == std::array{ JointMotorMode::Position, JointMotorMode::Velocity, JointMotorMode::Off });
+		const nlohmann::json written = ComponentRegistry::Find("Joint")->Serialize(entity);
+		CHECK(written["FreeLinearAxes"] == nlohmann::json({ false, true, false }));
+		CHECK(written["AngularMotorMode"] == nlohmann::json({ "Position", "Velocity", "Off" }));
+
+		// A bad element rejects the whole patch: the first elements are not applied either.
+		CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, "Joint", { { "AngularMotorMode", { "Off", "Off", "Turbo" } } }, error));
+		CHECK(error.find("Turbo") != std::string::npos);
+		CHECK(joint.AngularMotorMode[0] == JointMotorMode::Position);
+		CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, "Joint", { { "LinearMotorMode", "Velocity" } }, error));
+		CHECK(error.find("array of 3 strings") != std::string::npos);
+		CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, "Joint", { { "LinearMotorMode", { "Off", "Off" } } }, error));
+		CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, "Joint", { { "FreeLinearAxes", { 1, 0, 0 } } }, error));
+		CHECK(error.find("array of 3 booleans") != std::string::npos);
+		CHECK(joint.FreeLinearAxes == glm::bvec3(false, true, false));
+		CHECK(ComponentRegistry::Find("Joint")->EnumOptions.at("LinearMotorMode") == std::vector<std::string>{ "Off", "Velocity", "Position" });
+	}
+
 	TEST_CASE("Entity reference fields are collected from the component definitions")
 	{
 		for (const ComponentInfo& info : ComponentRegistry::GetAll())
@@ -477,6 +510,26 @@ TEST_SUITE("Serialization")
 		hinge.UseLimits = false;
 		hinge.LimitSpringFrequency = 2.0f;
 		CHECK(GetIgnoredJointFields(hinge) == std::vector<std::string>{ "LimitMin", "LimitSpringFrequency", "AngularLimitMax" });
+
+		// Six-DOF joints use per-axis motors and free axes; hinges and sliders use the single motor. The motor
+		// force and spring are shared.
+		JointComponent poweredHinge;
+		poweredHinge.FreeLinearAxes.x = true;
+		poweredHinge.AngularMotorMode[0] = JointMotorMode::Position;
+		poweredHinge.MotorSpringFrequency = 10.0f;
+		CHECK(GetIgnoredJointFields(poweredHinge) == std::vector<std::string>{ "FreeLinearAxes", "AngularMotorMode" });
+		JointComponent ragdoll;
+		ragdoll.Type = JointType::SixDOF;
+		ragdoll.MotorMode = JointMotorMode::Position;
+		ragdoll.FreeLinearAxes.y = true;
+		ragdoll.AngularMotorTarget = { 10.0f, 0.0f, 0.0f };
+		ragdoll.MotorSpringDamping = 0.5f;
+		CHECK(GetIgnoredJointFields(ragdoll) == std::vector<std::string>{ "MotorMode" });
+		// A rotation motor makes a six-DOF joint without limits hold torque, so BreakTorque applies.
+		ragdoll.BreakTorque = 10.0f;
+		CHECK_FALSE(JointFieldApplies(ragdoll, "BreakTorque"));
+		ragdoll.AngularMotorMode[2] = JointMotorMode::Velocity;
+		CHECK(JointFieldApplies(ragdoll, "BreakTorque"));
 	}
 
 	TEST_CASE("Joints inside a duplicated tree or prefab connect the copies")
@@ -565,6 +618,10 @@ TEST_SUITE("Serialization")
 		CHECK(joint.LimitSpringDamping == 1.0f);
 		CHECK(joint.LinearLimitMin == defaults.LinearLimitMin);
 		CHECK(joint.AngularLimitMax == defaults.AngularLimitMax);
+		CHECK(joint.FreeLinearAxes == defaults.FreeLinearAxes);
+		CHECK(joint.AngularMotorMode == defaults.AngularMotorMode);
+		CHECK(joint.MotorSpringFrequency == 2.0f);
+		CHECK(joint.MotorSpringDamping == 1.0f);
 	}
 
 	TEST_CASE("A prefab with joints spawned during play builds them between the new copies")
