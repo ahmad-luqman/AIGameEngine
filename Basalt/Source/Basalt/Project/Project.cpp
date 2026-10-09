@@ -81,6 +81,17 @@ namespace Basalt {
 			outError = "invalid project file '" + filePath.string() + "': " + e.what();
 			return nullptr;
 		}
+		if (const auto layers = data.find("PhysicsLayers"); layers != data.end())
+		{
+			std::string layerError;
+			auto physics = PhysicsLayers::FromJson(*layers, layerError);
+			if (!physics)
+			{
+				outError = "invalid project file '" + filePath.string() + "': " + layerError;
+				return nullptr;
+			}
+			config.Physics = std::move(*physics);
+		}
 		return project;
 	}
 
@@ -93,6 +104,7 @@ namespace Basalt {
 			{ "WindowWidth", m_Config.WindowWidth },
 			{ "WindowHeight", m_Config.WindowHeight },
 			{ "Fullscreen", m_Config.Fullscreen },
+			{ "PhysicsLayers", m_Config.Physics.ToJson() },
 		};
 		if (!FileSystem::WriteTextFile(GetProjectFilePath(), data.dump(1, '\t')))
 		{

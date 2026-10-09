@@ -1,9 +1,15 @@
 #include <doctest/doctest.h>
 
+#include <Basalt/Core/JsonUtils.h>
 #include <Basalt/Core/Log.h>
+#include <Basalt/Physics/PhysicsLayers.h>
 #include <Basalt/Physics/PhysicsWorld.h>
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
+
+#include "TestUtils.h"
+
+#include <nlohmann/json.hpp>
 
 #include <cmath>
 #include <functional>
@@ -804,5 +810,105 @@ TEST_SUITE("Physics")
 		};
 		CHECK(settle(true) == doctest::Approx(0.5f).epsilon(0.02));
 		CHECK(settle(false) < -2.0f);
+	}
+}
+
+TEST_SUITE("PhysicsLayers")
+{
+	TEST_CASE("Layers start with Default, look up by name and keep the matrix symmetric")
+	{
+		PhysicsLayers layers;
+		CHECK(layers.GetNames() == std::vector<std::string>{ "Default" });
+		std::string error;
+		REQUIRE(layers.Add("Player", error));
+		REQUIRE(layers.Add("Debris", error));
+		CHECK_FALSE(layers.Add("Player", error));
+		CHECK(error.find("duplicate") != std::string::npos);
+		CHECK_FALSE(layers.Add("", error));
+
+		CHECK(layers.Find("Debris") == 2u);
+		CHECK_FALSE(layers.Find("Enemy").has_value());
+		CHECK(layers.ShouldCollide(1, 2));
+
+		layers.SetCollides(2, 1, false);
+		layers.SetCollides(2, 2, false);
+		CHECK_FALSE(layers.ShouldCollide(1, 2));
+		CHECK_FALSE(layers.ShouldCollide(2, 1));
+		CHECK_FALSE(layers.ShouldCollide(2, 2));
+		CHECK(layers.ShouldCollide(0, 2));
+		CHECK(layers.GetCollisionMask(2) == 0xFFFFFFF9u);
+		// Layers that do not exist never collide and cannot be changed.
+		CHECK_FALSE(layers.ShouldCollide(0, 3));
+		layers.SetCollides(0, 3, false);
+		CHECK(layers.GetCollisionMask(3) == 0u);
+
+		CHECK(layers.MaskFromNames({ "Default", "Debris" }, error) == 0b101u);
+		CHECK_FALSE(layers.MaskFromNames({ "Enemy" }, error).has_value());
+		CHECK(error.find("Enemy") != std::string::npos);
+
+		for (uint32_t i = layers.GetCount(); i < PhysicsLayers::MaxLayers; i++)
+			REQUIRE(layers.Add("Layer" + std::to_string(i), error));
+		CHECK_FALSE(layers.Add("OneTooMany", error));
+	}
+
+	TEST_CASE("Layers round-trip through JSON and reject malformed data")
+	{
+		PhysicsLayers layers;
+		std::string error;
+		REQUIRE(layers.Add("Player", error));
+		REQUIRE(layers.Add("Pickup", error));
+		layers.SetCollides(1, 2, false);
+		layers.SetCollides(2, 2, false);
+
+		const nlohmann::json data = layers.ToJson();
+		CHECK(data["IgnoredPairs"] == nlohmann::json::parse(R"([["Player","Pickup"],["Pickup","Pickup"]])"));
+		const auto loaded = PhysicsLayers::FromJson(data, error);
+		REQUIRE(loaded.has_value());
+		CHECK(*loaded == layers);
+		CHECK(PhysicsLayers::FromJson(nlohmann::json::object(), error) == PhysicsLayers());
+
+		const char* invalid[] = {
+			R"([])",
+			R"({"Names": ["Default"], "Extra": 1})",
+			R"({"Names": []})",
+			R"({"Names": ["Player"]})",
+			R"({"Names": ["Default", "A", "A"]})",
+			R"({"Names": ["Default", 3]})",
+			R"({"Names": ["Default", ""]})",
+			R"({"IgnoredPairs": {}})",
+			R"({"IgnoredPairs": [["Default"]]})",
+			R"({"IgnoredPairs": [["Default", 1]]})",
+			R"({"IgnoredPairs": [["Default", "Ghost"]]})",
+		};
+		for (const char* text : invalid)
+		{
+			INFO(text);
+			error.clear();
+			CHECK_FALSE(PhysicsLayers::FromJson(ParseJson(text), error).has_value());
+			CHECK_FALSE(error.empty());
+		}
+		nlohmann::json tooMany = { { "Names", nlohmann::json::array({ "Default" }) } };
+		for (uint32_t i = 1; i <= PhysicsLayers::MaxLayers; i++)
+			tooMany["Names"].push_back("L" + std::to_string(i));
+		CHECK_FALSE(PhysicsLayers::FromJson(tooMany, error).has_value());
+	}
+
+	TEST_CASE("Projects save and load their physics layers")
+	{
+		BasaltTest::TempProject temp("PhysicsLayersProject");
+		REQUIRE(temp.IsValid());
+		Ref<Project> project = Project::GetActive();
+		std::string error;
+		REQUIRE(project->GetConfig().Physics.Add("Player", error));
+		project->GetConfig().Physics.SetCollides(1, 1, false);
+		REQUIRE(project->Save(error));
+
+		const Ref<Project> loaded = Project::Load(temp.GetDirectory(), error);
+		REQUIRE(loaded);
+		CHECK(loaded->GetConfig().Physics == project->GetConfig().Physics);
+
+		temp.WriteFile(Project::FileName, R"({"Name": "Bad", "PhysicsLayers": {"Names": ["Default", "Default"]}})");
+		CHECK_FALSE(Project::Load(temp.GetDirectory(), error));
+		CHECK(error.find("duplicate") != std::string::npos);
 	}
 }
