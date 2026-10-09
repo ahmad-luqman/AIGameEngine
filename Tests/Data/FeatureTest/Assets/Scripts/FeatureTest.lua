@@ -265,6 +265,7 @@ function Driver:OnUpdate(dt)
 		Check("CharacterController fields", controller.SlopeLimit == 40 and Near(controller.StepHeight, 0.35, 1e-6) and controller.Layer == "Default")
 		ExpectError("Move without a CharacterController", function() Scene.FindEntityByName("Crate"):Move(Vec3(1, 0, 0)) end, "needs a CharacterController")
 		Check("IsGrounded without a character", not Scene.FindEntityByName("Crate"):IsGrounded() and Scene.FindEntityByName("Crate"):GetGroundNormal() == nil)
+		ExpectError("Move with a non-finite velocity", function() hero:Move(Vec3(0 / 0, 0, 0)) end, "must be finite")
 		hero:Move(Vec3(2, 0, 0))
 		-- 200 m/s covers 3.3 m per step; only the continuous sweep stops it at the 5 cm wall.
 		Scene.FindEntityByName("Bullet"):SetLinearVelocity(Vec3(200, 0, 0))

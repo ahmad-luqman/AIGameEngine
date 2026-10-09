@@ -405,6 +405,9 @@ namespace Basalt {
 					// Silently ignoring Move on a plain entity would hide a missing component.
 					if (!entity.HasComponent<CharacterControllerComponent>())
 						throw std::runtime_error("Move needs a CharacterController component on '" + entity.GetName() + "'");
+					// Ignoring it would keep the character walking at its last velocity (e.g. after normalizing a zero vector).
+					if (!std::isfinite(velocity.x) || !std::isfinite(velocity.y) || !std::isfinite(velocity.z))
+						throw std::runtime_error("Move velocity must be finite");
 					RequirePhysics(context).MoveCharacter(entity, velocity); }, "IsGrounded", [&context](const ScriptEntity& self) { return RequirePhysics(context).IsCharacterGrounded(self.ResolveOrThrow()); }, "GetGroundNormal", [&context](const ScriptEntity& self) {
 					const std::optional<glm::vec3> normal = RequirePhysics(context).GetCharacterGroundNormal(self.ResolveOrThrow());
 					return normal ? sol::optional<glm::vec3>(*normal) : sol::optional<glm::vec3>(); },

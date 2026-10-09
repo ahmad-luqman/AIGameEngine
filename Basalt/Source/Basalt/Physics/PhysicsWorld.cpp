@@ -903,6 +903,8 @@ namespace Basalt {
 			glm::quat LastRotation = { 1.0f, 0.0f, 0.0f, 0.0f };
 			// The shape's bounding box in the character's local space, relative to its position.
 			JPH::AABox Bounds;
+			// Set while the entity's transform cannot be decomposed (e.g. a zero scale); the character waits.
+			bool Degenerate = false;
 		};
 
 		Scope<JPH::TempAllocatorImpl> TempAllocator;
@@ -919,6 +921,8 @@ namespace Basalt {
 		std::unordered_set<UUID> DirtyCharacters;
 		// The character warnings last logged for each entity.
 		std::unordered_map<UUID, std::string> LoggedCharacterWarnings;
+		// Characters already warned that rigid-body velocity and force calls do nothing on them.
+		std::unordered_set<UUID> WarnedCharacterBodyCalls;
 		std::unordered_map<uint32_t, UUID> BodyToEntity;
 		std::unordered_set<UUID> DirtyEntities;
 		// Keyed by the entity that holds the JointComponent (not necessarily the body it moves).
@@ -950,9 +954,10 @@ namespace Basalt {
 		static void ConfigureCharacter(CharacterRecord& record, const std::function<void(const std::string&)>& warn)
 		{
 			const CharacterControllerComponent& c = record.Settings;
-			const float slope = std::isfinite(c.SlopeLimit) ? std::clamp(c.SlopeLimit, 0.0f, 90.0f) : 45.0f;
+			// Below about 0.8 degrees Jolt switches the slope check off and every slope becomes walkable.
+			const float slope = std::isfinite(c.SlopeLimit) ? std::clamp(c.SlopeLimit, 1.0f, 90.0f) : 45.0f;
 			if (slope != c.SlopeLimit)
-				warn(fmt::format("SlopeLimit {} must be within [0, 90] degrees; using {}", c.SlopeLimit, slope));
+				warn(fmt::format("SlopeLimit {} must be within [1, 90] degrees; using {}", c.SlopeLimit, slope));
 			record.Character->SetMaxSlopeAngle(glm::radians(slope));
 			const float strength = std::isfinite(c.MaxStrength) && c.MaxStrength >= 0.0f ? c.MaxStrength : 0.0f;
 			if (strength != c.MaxStrength)
@@ -982,6 +987,17 @@ namespace Basalt {
 			const float bottom = localUp.Dot(record.Bounds.GetCenter()) - localUp.Abs().Dot(extent);
 			const float halfWidth = extent.ReduceMin();
 			record.Character->SetSupportingVolume(JPH::Plane(localUp, -(bottom + halfWidth)));
+		}
+
+		// Velocity and force calls address rigid bodies; a character moves only through Move. Warns once per
+		// character so knockback code that silently does nothing is noticed. Returns whether it is a character.
+		bool WarnIfCharacter(Entity entity, const char* call)
+		{
+			if (!Characters.contains(entity.GetUUID()))
+				return false;
+			if (WarnedCharacterBodyCalls.insert(entity.GetUUID()).second)
+				BS_CORE_WARN("Physics: {} does nothing on character '{}' (it has a CharacterController); use Move", call, entity.GetName());
+			return true;
 		}
 
 		// Logs a character's warnings ("; "-joined) unless they are the ones last logged for it.
@@ -1672,10 +1688,20 @@ namespace Basalt {
 		record.Bounds = shape->GetLocalBounds();
 		record.Bounds.Translate(shape->GetCenterOfMass());
 		Impl::UpdateSupportingVolume(record);
+		// Jolt leaves the inner body out when the body limit is reached; the character still walks, but
+		// queries, triggers and other bodies cannot see it.
 		if (!character->GetInnerBodyID().IsInvalid())
 			impl.BodyToEntity[character->GetInnerBodyID().GetIndexAndSequenceNumber()] = entity.GetUUID();
+		else
+			BS_CORE_ERROR("Physics: body limit reached; character '{}' has no body other bodies can touch", entity.GetName());
 		Impl::ConfigureCharacter(record, warn);
 		report();
+
+		// A new character starts in the air; find its ground now so a rebuild (e.g. a crouch changing the
+		// collider) does not lose a step of IsGrounded or a jump.
+		const JPH::ObjectLayer objectLayer = MakeObjectLayer(true, layer);
+		character->RefreshContacts(JPH::DefaultBroadPhaseLayerFilter(impl.ObjectVsBroadPhaseLayerFilter, objectLayer), JPH::DefaultObjectLayerFilter(impl.ObjectLayerPairFilter, objectLayer), JPH::BodyFilter(), JPH::ShapeFilter(),
+								   *impl.TempAllocator);
 	}
 
 	void PhysicsWorld::ApplyCharacterSettings(Entity entity)
@@ -2055,6 +2081,8 @@ namespace Basalt {
 
 		// A RigidBody without a valid collider has no body either; say which part is missing.
 		auto describeMissingBody = [](Entity e) {
+			if (e.HasComponent<CharacterControllerComponent>())
+				return "is a character (a CharacterController replaces its body; joints need a RigidBody)";
 			return e.HasComponent<RigidBodyComponent>() ? "has a RigidBody but no valid collider" : "has no RigidBody";
 		};
 		// The joint moves BodyEntity's body; its anchor and axes are in that entity's local space. The holder
@@ -2281,7 +2309,7 @@ namespace Basalt {
 		if (impl.Characters.empty())
 			return;
 		const JPH::Vec3 sceneGravity = impl.System->GetGravity();
-		// Registry order, not hash order: characters push bodies and each other, so the order shows in replays.
+		// Registry order, not hash order: characters push bodies, so the order shows in replays.
 		for (entt::entity handle : m_Scene->GetAllEntitiesWith<CharacterControllerComponent>())
 		{
 			Entity entity(handle, m_Scene);
@@ -2295,7 +2323,17 @@ namespace Basalt {
 			glm::quat rotation;
 			glm::vec3 scale;
 			if (!Math::DecomposeTransform(m_Scene->GetWorldTransform(entity), position, rotation, scale))
+			{
+				if (!record.Degenerate)
+					impl.ReportCharacterWarnings(entity, record.BuildWarnings + (record.BuildWarnings.empty() ? "" : "; ") + "degenerate transform (e.g. a zero scale); the character does not move");
+				record.Degenerate = true;
 				continue;
+			}
+			if (record.Degenerate)
+			{
+				record.Degenerate = false;
+				impl.ReportCharacterWarnings(entity, record.BuildWarnings);
+			}
 			const JPH::ObjectLayer layer = MakeObjectLayer(true, record.Layer);
 			const JPH::DefaultBroadPhaseLayerFilter broadPhaseFilter(impl.ObjectVsBroadPhaseLayerFilter, layer);
 			const JPH::DefaultObjectLayerFilter objectLayerFilter(impl.ObjectLayerPairFilter, layer);
@@ -2625,6 +2663,8 @@ namespace Basalt {
 
 	void PhysicsWorld::AddForce(Entity entity, const glm::vec3& force)
 	{
+		if (m_Impl->WarnIfCharacter(entity, "AddForce"))
+			return;
 		auto it = m_Impl->Bodies.find(entity.GetUUID());
 		if (it != m_Impl->Bodies.end())
 			m_Impl->System->GetBodyInterface().AddForce(it->second.ID, ToJolt(force));
@@ -2632,6 +2672,8 @@ namespace Basalt {
 
 	void PhysicsWorld::AddImpulse(Entity entity, const glm::vec3& impulse)
 	{
+		if (m_Impl->WarnIfCharacter(entity, "AddImpulse"))
+			return;
 		auto it = m_Impl->Bodies.find(entity.GetUUID());
 		if (it != m_Impl->Bodies.end())
 			m_Impl->System->GetBodyInterface().AddImpulse(it->second.ID, ToJolt(impulse));
@@ -2639,6 +2681,8 @@ namespace Basalt {
 
 	void PhysicsWorld::AddTorque(Entity entity, const glm::vec3& torque)
 	{
+		if (m_Impl->WarnIfCharacter(entity, "AddTorque"))
+			return;
 		auto it = m_Impl->Bodies.find(entity.GetUUID());
 		if (it != m_Impl->Bodies.end())
 			m_Impl->System->GetBodyInterface().AddTorque(it->second.ID, ToJolt(torque));
@@ -2646,6 +2690,8 @@ namespace Basalt {
 
 	void PhysicsWorld::SetLinearVelocity(Entity entity, const glm::vec3& velocity)
 	{
+		if (m_Impl->WarnIfCharacter(entity, "SetLinearVelocity"))
+			return;
 		auto it = m_Impl->Bodies.find(entity.GetUUID());
 		if (it != m_Impl->Bodies.end())
 			m_Impl->System->GetBodyInterface().SetLinearVelocity(it->second.ID, ToJolt(velocity));
@@ -2663,6 +2709,8 @@ namespace Basalt {
 
 	void PhysicsWorld::SetAngularVelocity(Entity entity, const glm::vec3& velocity)
 	{
+		if (m_Impl->WarnIfCharacter(entity, "SetAngularVelocity"))
+			return;
 		auto it = m_Impl->Bodies.find(entity.GetUUID());
 		if (it != m_Impl->Bodies.end())
 			m_Impl->System->GetBodyInterface().SetAngularVelocity(it->second.ID, ToJolt(velocity));

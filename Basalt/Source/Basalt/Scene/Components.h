@@ -307,10 +307,11 @@ namespace Basalt {
 	// walls, walks up slopes and steps within its limits, rides moving platforms and pushes dynamic bodies.
 	// Its shape is the entity's colliders. Scripts drive it with Move(velocity); while airborne, gravity
 	// (scaled by GravityFactor) takes over the vertical speed. A RigidBodyComponent on the same entity is
-	// ignored. Other bodies, queries and triggers see the character as a kinematic body.
+	// ignored. Other bodies, queries and triggers see the character as a kinematic body at 90% of the
+	// colliders' size.
 	struct CharacterControllerComponent
 	{
-		// Steepest ground (degrees from horizontal, 0..90) the character stands on and walks up; it slides
+		// Steepest ground (degrees from horizontal, 1..90) the character stands on and walks up; it slides
 		// down anything steeper.
 		float SlopeLimit = 45.0f;
 		// Tallest step (m) the character climbs while walking; it also stays on the ground over drops this
