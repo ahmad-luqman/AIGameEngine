@@ -89,7 +89,10 @@ Entity handles store an ID and stay safe to hold: using a destroyed entity raise
 | `e:RemoveComponent(name)` | Remove (Tag/Transform cannot be removed) |
 | `e:GetParent()`, `e:SetParent(parent or nil)`, `e:GetChildren()`, `e:FindChild(name)` | Hierarchy (SetParent keeps the world transform) |
 | `e:AddForce(v)`, `e:AddImpulse(v)`, `e:AddTorque(v)` | Physics (dynamic bodies) |
-| `e:SetLinearVelocity(v)`, `e:GetLinearVelocity()`, `e:SetAngularVelocity(v)`, `e:GetAngularVelocity()` | Physics velocities |
+| `e:SetLinearVelocity(v)`, `e:GetLinearVelocity()`, `e:SetAngularVelocity(v)`, `e:GetAngularVelocity()` | Physics velocities (`GetLinearVelocity` also reports how fast a character moved in the last step) |
+| `e:Move(velocity)` | Walk a CharacterController with this velocity (m/s) until the next call; an upward part jumps from the ground (see Character controllers). Errors without a CharacterController |
+| `e:IsGrounded()` | The character stands on ground no steeper than its `SlopeLimit` (false without a character) |
+| `e:GetGroundNormal()` | Normal of the ground the character touches (walkable or too steep); nil in the air or without a character |
 | `e:GetJointPosition()` | Hinge angle (degrees) or slider offset (meters) of the Joint this entity holds, from its rest pose; nil otherwise |
 | `e:GetJointRotation()` | Rotation (Euler degrees, like `Rotation`) of a cone or six-DOF Joint this entity holds, in the joint frame from its rest pose; nil otherwise |
 | `e:HasJoint()` | Whether the Joint this entity holds is a live constraint (false before both bodies exist, when it is invalid, and after it broke) |
@@ -280,6 +283,43 @@ end
   bodies a joint connects) applies at once, even to bodies resting against each other.
 - Joints inside a prefab or a duplicated hierarchy connect the new copies, and joint entities move the
   copied body.
+
+### Character controllers
+
+A `CharacterController` with a collider (a `CapsuleCollider` fits most characters; the editor's
+Create > Character adds both) makes the entity a game character instead of a rigid body: it slides along
+walls, walks up slopes up to `SlopeLimit` degrees and steps up to `StepHeight` meters, rides moving
+platforms, and pushes dynamic bodies with at most `MaxStrength` newtons. A `RigidBody` on the same entity
+is ignored. Other bodies, queries and triggers see the character as a kinematic body on its `Layer`.
+
+```lua
+function Player:OnUpdate(dt)
+    local input = Vec3(0, 0, 0)
+    if Input.IsKeyDown("D") then input.x = input.x + 1 end
+    if Input.IsKeyDown("A") then input.x = input.x - 1 end
+    local velocity = input * self.Speed
+    if Input.IsKeyPressed("Space") and self.Entity:IsGrounded() then
+        velocity.y = self.JumpSpeed
+    end
+    self.Entity:Move(velocity)
+end
+```
+
+- `Move(velocity)` holds until the next call, so call it every frame. With gravity (scene gravity times
+  `GravityFactor`), its upward part only counts on walkable ground, where it jumps, again on every landing
+  while it is held. In the air gravity drives the vertical speed and `Move` steers sideways. A ceiling
+  stops a jump at once. With `GravityFactor = 0` the velocity applies in full (flying, ladders).
+- Standing still on a walkable slope does not slide; ground steeper than `SlopeLimit` does not count as
+  standing (`IsGrounded()` is false), and the character slides down it. `StepHeight` also keeps the
+  character on the ground when walking down stairs and slopes; 0 turns both off. A capsule's round bottom
+  rolls over low edges even without `StepHeight`.
+- Moving the entity's transform teleports the character; its rotation follows the entity's rotation.
+- The character enters triggers like any body (`OnTriggerEnter`/`OnTriggerExit`). Bodies that run into it
+  raise collision callbacks; the character walking into something does not (it stops just short of it),
+  so use a trigger or a query to detect what it touches.
+- Changing `SlopeLimit`, `StepHeight`, `MaxStrength`, `Mass` or `GravityFactor` applies in place; a new
+  `Layer` or collider rebuilds the character, which keeps its velocity. Out-of-range values are clamped
+  with one warning.
 
 ## Screen UI
 

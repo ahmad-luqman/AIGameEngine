@@ -303,6 +303,31 @@ namespace Basalt {
 		bool operator==(const JointComponent&) const = default;
 	};
 
+	// Moves the entity as a game character (Jolt's CharacterVirtual) instead of a rigid body: it slides along
+	// walls, walks up slopes and steps within its limits, rides moving platforms and pushes dynamic bodies.
+	// Its shape is the entity's colliders. Scripts drive it with Move(velocity); while airborne, gravity
+	// (scaled by GravityFactor) takes over the vertical speed. A RigidBodyComponent on the same entity is
+	// ignored. Other bodies, queries and triggers see the character as a kinematic body.
+	struct CharacterControllerComponent
+	{
+		// Steepest ground (degrees from horizontal, 0..90) the character stands on and walks up; it slides
+		// down anything steeper.
+		float SlopeLimit = 45.0f;
+		// Tallest step (m) the character climbs while walking; it also stays on the ground over drops this
+		// small when walking down stairs or slopes. 0 turns both off.
+		float StepHeight = 0.3f;
+		// Strongest force (N) the character pushes dynamic bodies with.
+		float MaxStrength = 100.0f;
+		// Mass (kg) pressing down on dynamic bodies the character stands on.
+		float Mass = 70.0f;
+		// Scales the scene gravity; 0 makes the Move velocity apply in full on every axis (flying, ladders).
+		float GravityFactor = 1.0f;
+		// Name of a project physics layer, as on RigidBodyComponent.
+		std::string Layer = "Default";
+
+		bool operator==(const CharacterControllerComponent&) const = default;
+	};
+
 	// Lua behaviour. Script is a project-relative .lua path; Properties overrides the defaults the script
 	// declares in its Properties table (numbers, booleans, strings, vectors as [x, y, z]).
 	struct ScriptComponent
@@ -358,6 +383,7 @@ namespace Basalt {
 		CapsuleColliderComponent,
 		MeshColliderComponent,
 		JointComponent,
+		CharacterControllerComponent,
 		ScriptComponent,
 		AudioSourceComponent,
 		AudioListenerComponent,

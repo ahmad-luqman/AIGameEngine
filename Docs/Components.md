@@ -66,6 +66,10 @@ Fields: `Mesh`, `MeshIndex`, `Convex`
 
 Fields: `Type`, `BodyEntity`, `ConnectedEntity`, `Anchor`, `ConnectedAnchor`, `Axis`, `SecondaryAxis`, `UseLimits`, `LimitMin`, `LimitMax`, `LimitSpringFrequency`, `LimitSpringDamping`, `LinearLimitMin`, `LinearLimitMax`, `AngularLimitMin`, `AngularLimitMax`, `FreeLinearAxes`, `MotorMode`, `MotorTarget`, `LinearMotorMode`, `AngularMotorMode`, `LinearMotorTarget`, `AngularMotorTarget`, `MotorMaxForce`, `MotorSpringFrequency`, `MotorSpringDamping`, `BreakForce`, `BreakTorque`, `EnableCollision`
 
+## CharacterController
+
+Fields: `SlopeLimit`, `StepHeight`, `MaxStrength`, `Mass`, `GravityFactor`, `Layer`
+
 ## Script
 
 Fields: `Script`, `Properties`

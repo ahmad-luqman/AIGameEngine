@@ -400,6 +400,15 @@ namespace Basalt {
 				const std::optional<glm::vec3> rotation = RequirePhysics(context).GetJointRotation(self.ResolveOrThrow());
 				return rotation ? sol::optional<glm::vec3>(*rotation) : sol::optional<glm::vec3>(); }, "HasJoint", [&context](const ScriptEntity& self) { return RequirePhysics(context).HasJoint(self.ResolveOrThrow()); },
 
+										   "Move", [&context](const ScriptEntity& self, const glm::vec3& velocity) {
+					Entity entity = self.ResolveOrThrow();
+					// Silently ignoring Move on a plain entity would hide a missing component.
+					if (!entity.HasComponent<CharacterControllerComponent>())
+						throw std::runtime_error("Move needs a CharacterController component on '" + entity.GetName() + "'");
+					RequirePhysics(context).MoveCharacter(entity, velocity); }, "IsGrounded", [&context](const ScriptEntity& self) { return RequirePhysics(context).IsCharacterGrounded(self.ResolveOrThrow()); }, "GetGroundNormal", [&context](const ScriptEntity& self) {
+					const std::optional<glm::vec3> normal = RequirePhysics(context).GetCharacterGroundNormal(self.ResolveOrThrow());
+					return normal ? sol::optional<glm::vec3>(*normal) : sol::optional<glm::vec3>(); },
+
 										   "PlayAudio", [&context](const ScriptEntity& self) { return RequireAudio(context).Play(self.ResolveOrThrow()); }, "StopAudio", [&context](const ScriptEntity& self) { RequireAudio(context).Stop(self.ResolveOrThrow()); }, "IsAudioPlaying", [&context](const ScriptEntity& self) { return RequireAudio(context).IsPlaying(self.ResolveOrThrow()); },
 
 										   "GetScript", [&context](const ScriptEntity& self) -> sol::object {
