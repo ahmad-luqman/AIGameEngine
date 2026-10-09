@@ -143,6 +143,9 @@ namespace Basalt {
 		// How many mesh collider shapes have been cooked by every world so far. Cooked shapes are cached per
 		// mesh asset, mesh index and convexity across worlds, so this only grows for new or reloaded meshes.
 		static uint64_t GetMeshShapeCookCount();
+		// Drops every cached mesh collider shape (e.g. after AssetManager::Clear on a project switch). Shapes
+		// still used by a body stay alive through that body.
+		static void ClearMeshShapeCache();
 
 	private:
 		void RebuildDirtyJoints();

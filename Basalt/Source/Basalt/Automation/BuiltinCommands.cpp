@@ -7,6 +7,7 @@
 #include "Basalt/Core/Input.h"
 #include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
+#include "Basalt/Physics/PhysicsWorld.h"
 #include "Basalt/Project/Exporter.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Scene/ComponentRegistry.h"
@@ -283,6 +284,7 @@ namespace Basalt {
 					throw CommandError(error);
 				Project::SetActive(project);
 				AssetManager::Clear();
+				PhysicsWorld::ClearMeshShapeCache();
 				session.SetEditScene(CreateRef<Scene>("Untitled"), "");
 				return json{ { "directory", project->GetDirectory().string() } };
 			});
@@ -294,6 +296,7 @@ namespace Basalt {
 					throw CommandError(error);
 				Project::SetActive(project);
 				AssetManager::Clear();
+				PhysicsWorld::ClearMeshShapeCache();
 				const std::string startScene = project->GetConfig().StartScene;
 				if (!startScene.empty())
 				{

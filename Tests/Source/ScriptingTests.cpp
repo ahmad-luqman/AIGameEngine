@@ -298,6 +298,45 @@ TEST_SUITE("Scripting")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("Editing a mesh's render settings does not rebuild its MeshCollider")
+	{
+		// A rebuild would end and restart the box's contact with the floor (and re-pose joints) every frame.
+		BasaltTest::TempProject project("ScriptMeshRebuild");
+		const std::string script = project.WriteFile("Assets/Scripts/Floor.lua", R"(
+			local Floor = {}
+			function Floor:OnCreate() self.Hits = 0; self.Ends = 0 end
+			function Floor:OnUpdate(dt)
+				if self.Entity.Name == "Floor" then
+					local mesh = self.Entity:GetComponent("Mesh")
+					self.Entity:SetComponent("Mesh", { CastShadows = not mesh.CastShadows })
+				end
+			end
+			function Floor:OnCollisionBegin(other) self.Hits = self.Hits + 1 end
+			function Floor:OnCollisionEnd(other) self.Ends = self.Ends + 1 end
+			return Floor
+		)");
+
+		Scene scene;
+		Entity floor = AddScripted(scene, "Floor", script);
+		floor.GetTransform().Scale = { 20.0f, 1.0f, 20.0f };
+		floor.AddComponent<MeshComponent>().Mesh = "builtin://Plane";
+		floor.AddComponent<RigidBodyComponent>();
+		floor.AddComponent<MeshColliderComponent>();
+		Entity box = AddScripted(scene, "Box", script);
+		box.GetTransform().Translation = { 0.0f, 1.0f, 0.0f };
+		box.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+		box.AddComponent<BoxColliderComponent>();
+
+		scene.OnRuntimeStart();
+		for (int i = 0; i < 120; i++)
+			scene.OnUpdate(Step);
+		CHECK(Field(scene, box, "Hits") == 1);
+		CHECK(Field(scene, box, "Ends") == 0);
+		CHECK(box.GetTransform().Translation.y == doctest::Approx(0.5f).epsilon(0.02));
+		CHECK(scene.GetScriptEngine()->GetErrors().empty());
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Scripts drive joint motors and receive OnJointBreak")
 	{
 		BasaltTest::TempProject project("ScriptJoints");
