@@ -194,28 +194,52 @@ namespace Basalt {
 		Position
 	};
 
-	// Constrains this entity's rigid body to the body of ConnectedEntity, or to the world when it is 0.
-	// The joint is built from the bodies' poses when physics starts, when either body is rebuilt, or when
-	// Type, ConnectedEntity, an anchor, Axis or UseLimits changes: that relative pose is the joint's rest
-	// position, so hinge angles and slider offsets are measured from it. The other fields update the live
-	// joint in place. One joint per entity; a chain puts a joint on every link, connected to the previous one.
+	// Constrains the rigid body of BodyEntity (this entity when 0) to the body of ConnectedEntity, or to the
+	// world when that is 0. The joint is built from the bodies' poses when physics starts, when either body
+	// is rebuilt, or when a structural field changes (Type, an entity, an anchor, an axis or UseLimits): that
+	// relative pose is the joint's rest position, so hinge angles, slider offsets and six-DOF limits are
+	// measured from it. The other fields update the live joint in place.
+	// An entity holds one JointComponent. To give a body several joints (a ladder rung held by two ropes),
+	// put each joint on its own entity, usually a child of the body, with BodyEntity set to the body.
 	struct JointComponent
 	{
 		JointType Type = JointType::Hinge;
+		// The entity whose body this joint moves; 0 = the entity holding the component. Anchor and the axes
+		// are in this body's local space; a separate holder's own transform plays no part.
+		UUID BodyEntity = 0;
 		UUID ConnectedEntity = 0;
-		// Attachment point in this entity's local space.
+		// Attachment point in the body's local space.
 		glm::vec3 Anchor = { 0.0f, 0.0f, 0.0f };
 		// Distance joints only: attachment point on the connected entity (its local space), or a world
 		// position when connected to the world.
 		glm::vec3 ConnectedAnchor = { 0.0f, 0.0f, 0.0f };
-		// Hinge rotation axis or slider direction, in this entity's local space.
+		// Hinge rotation axis, slider direction, cone axis or six-DOF twist axis (X of the joint frame), in
+		// the body's local space.
 		glm::vec3 Axis = { 0.0f, 1.0f, 0.0f };
+		// Six-DOF only: Y of the joint frame (made perpendicular to Axis); Z is Axis x SecondaryAxis.
+		glm::vec3 SecondaryAxis = { 1.0f, 0.0f, 0.0f };
 		// Hinge: angles in degrees with -180 <= LimitMin <= 0 <= LimitMax <= 180; slider: offsets in meters
-		// with LimitMin <= 0 <= LimitMax; distance: lengths in meters with 0 <= LimitMin <= LimitMax.
-		// Fixed and point joints have no limits. Without limits a distance joint keeps its starting length.
+		// with LimitMin <= 0 <= LimitMax; distance: lengths in meters with 0 <= LimitMin <= LimitMax; cone:
+		// LimitMax is the cone's half angle in degrees (0..180) and LimitMin is unused. Six-DOF joints use
+		// the Linear/Angular limits below instead. Fixed and point joints have no limits. Without limits a
+		// distance joint keeps its starting length and a cone joint swings freely.
 		bool UseLimits = false;
 		float LimitMin = 0.0f;
 		float LimitMax = 0.0f;
+		// Softens the limits into a spring (hinge, slider, distance and six-DOF translation): 0 Hz = rigid.
+		// Damping is a ratio, 1 = critically damped; lower values bounce. A spring on a distance joint without
+		// limits pulls it back to its starting length (a bungee).
+		float LimitSpringFrequency = 0.0f;
+		float LimitSpringDamping = 1.0f;
+		// Six-DOF limits along/around the joint frame's X (Axis), Y and Z, used when UseLimits is set (without
+		// limits a six-DOF joint locks translation and rotates freely). Translation in meters, rotation in
+		// degrees; every range must contain 0 (the rest pose), and min == max locks that axis. X rotation
+		// (twist) lies within [-180, 180]; Y and Z rotation (swing) form a cone whose half angles are
+		// AngularLimitMax.y and .z (0..180), so their minimums must mirror them.
+		glm::vec3 LinearLimitMin = { 0.0f, 0.0f, 0.0f };
+		glm::vec3 LinearLimitMax = { 0.0f, 0.0f, 0.0f };
+		glm::vec3 AngularLimitMin = { 0.0f, 0.0f, 0.0f };
+		glm::vec3 AngularLimitMax = { 0.0f, 0.0f, 0.0f };
 		// Hinge and slider joints only.
 		JointMotorMode MotorMode = JointMotorMode::Off;
 		float MotorTarget = 0.0f;

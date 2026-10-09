@@ -378,13 +378,21 @@ namespace Basalt {
 		void Fields(FieldReader& r, JointComponent& c)
 		{
 			r.EnumField("Type", c.Type, s_JointTypeNames);
+			r.Field("BodyEntity", c.BodyEntity);
 			r.Field("ConnectedEntity", c.ConnectedEntity);
 			r.Field("Anchor", c.Anchor);
 			r.Field("ConnectedAnchor", c.ConnectedAnchor);
 			r.Field("Axis", c.Axis);
+			r.Field("SecondaryAxis", c.SecondaryAxis);
 			r.Field("UseLimits", c.UseLimits);
 			r.Field("LimitMin", c.LimitMin);
 			r.Field("LimitMax", c.LimitMax);
+			r.Field("LimitSpringFrequency", c.LimitSpringFrequency);
+			r.Field("LimitSpringDamping", c.LimitSpringDamping);
+			r.Field("LinearLimitMin", c.LinearLimitMin);
+			r.Field("LinearLimitMax", c.LinearLimitMax);
+			r.Field("AngularLimitMin", c.AngularLimitMin);
+			r.Field("AngularLimitMax", c.AngularLimitMax);
 			r.EnumField("MotorMode", c.MotorMode, s_JointMotorModeNames);
 			r.Field("MotorTarget", c.MotorTarget);
 			r.Field("MotorMaxForce", c.MotorMaxForce);
@@ -522,13 +530,21 @@ namespace Basalt {
 		{
 			return {
 				{ "Type", s_JointTypeNames[static_cast<int>(c.Type)] },
+				{ "BodyEntity", static_cast<uint64_t>(c.BodyEntity) },
 				{ "ConnectedEntity", static_cast<uint64_t>(c.ConnectedEntity) },
 				{ "Anchor", ToJson(c.Anchor) },
 				{ "ConnectedAnchor", ToJson(c.ConnectedAnchor) },
 				{ "Axis", ToJson(c.Axis) },
+				{ "SecondaryAxis", ToJson(c.SecondaryAxis) },
 				{ "UseLimits", c.UseLimits },
 				{ "LimitMin", c.LimitMin },
 				{ "LimitMax", c.LimitMax },
+				{ "LimitSpringFrequency", c.LimitSpringFrequency },
+				{ "LimitSpringDamping", c.LimitSpringDamping },
+				{ "LinearLimitMin", ToJson(c.LinearLimitMin) },
+				{ "LinearLimitMax", ToJson(c.LinearLimitMax) },
+				{ "AngularLimitMin", ToJson(c.AngularLimitMin) },
+				{ "AngularLimitMax", ToJson(c.AngularLimitMax) },
 				{ "MotorMode", s_JointMotorModeNames[static_cast<int>(c.MotorMode)] },
 				{ "MotorTarget", c.MotorTarget },
 				{ "MotorMaxForce", c.MotorMaxForce },
