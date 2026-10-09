@@ -204,7 +204,7 @@ namespace Basalt {
 					}
 					const JsonFieldResult result = DrawJsonField(field, data[field], enumOptions);
 					if (unknownLayer)
-						ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Unknown layer: the body uses Default when playing.");
+						ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Unknown layer (plays as Default)");
 					if (result.Changed)
 						m_Context.Execute("component.set", { { "entity", id }, { "component", info.Name }, { "data", { { field, data[field] } } } });
 					if (result.Committed)
