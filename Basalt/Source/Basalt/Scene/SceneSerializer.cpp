@@ -233,7 +233,7 @@ namespace Basalt {
 				return false;
 			}
 
-			std::unordered_map<uint64_t, UUID> idMap;
+			std::unordered_map<UUID, UUID> idMap;
 			std::vector<std::pair<Entity, uint64_t>> parentLinks;
 
 			for (size_t i = 0; i < entities.size(); i++)

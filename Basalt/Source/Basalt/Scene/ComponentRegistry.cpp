@@ -1,10 +1,12 @@
 #include "Basalt/Scene/ComponentRegistry.h"
 
 #include "Basalt/Core/JsonUtils.h"
+#include "Basalt/Core/Log.h"
 #include "Basalt/Scene/Entity.h"
 
 #include <glm/gtc/type_ptr.hpp>
 
+#include <iterator>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -26,10 +28,21 @@ namespace Basalt {
 
 			std::vector<std::string>& GetFieldNames() { return m_FieldNames; }
 			std::map<std::string, std::vector<std::string>>& GetEnumOptions() { return m_EnumOptions; }
+			std::vector<std::string>& GetEntityFields() { return m_EntityFields; }
 
 			template<typename T>
 			void Field(const char* name, T& value)
 			{
+				const json* element = Find(name);
+				if (element)
+					Read(name, *element, value);
+			}
+
+			// A field holding another entity's UUID (0 = none). Recorded so tools can resolve names and
+			// copies can remap the reference.
+			void Field(const char* name, UUID& value)
+			{
+				m_EntityFields.emplace_back(name);
 				const json* element = Find(name);
 				if (element)
 					Read(name, *element, value);
@@ -176,6 +189,7 @@ namespace Basalt {
 			std::unordered_set<std::string> m_Consumed;
 			std::vector<std::string> m_FieldNames;
 			std::map<std::string, std::vector<std::string>> m_EnumOptions;
+			std::vector<std::string> m_EntityFields;
 		};
 
 		template<glm::length_t L>
@@ -196,6 +210,10 @@ namespace Basalt {
 		constexpr const char* s_ProjectionTypeNames[] = { "Perspective", "Orthographic" };
 		constexpr const char* s_JointTypeNames[] = { "Fixed", "Point", "Hinge", "Slider", "Distance" };
 		constexpr const char* s_JointMotorModeNames[] = { "Off", "Velocity", "Position" };
+		// Names are indexed by enum value; a new enum value needs a name here.
+		static_assert(std::size(s_RigidBodyTypeNames) == static_cast<size_t>(RigidBodyType::Kinematic) + 1);
+		static_assert(std::size(s_JointTypeNames) == static_cast<size_t>(JointType::Distance) + 1);
+		static_assert(std::size(s_JointMotorModeNames) == static_cast<size_t>(JointMotorMode::Position) + 1);
 
 		// --- Per-component field definitions -----------------------------------------------------
 		// Each Fields() overload lists every field once; it is used both to read and to enumerate names.
@@ -531,14 +549,41 @@ namespace Basalt {
 		}
 
 		template<typename T>
-		std::vector<std::string> CollectFieldNames(std::map<std::string, std::vector<std::string>>* outEnumOptions = nullptr)
+		std::vector<std::string> CollectFieldNames(std::map<std::string, std::vector<std::string>>* outEnumOptions = nullptr, std::vector<std::string>* outEntityFields = nullptr)
 		{
 			FieldReader collector(nullptr);
 			T dummy{};
 			Fields(collector, dummy);
 			if (outEnumOptions)
 				*outEnumOptions = collector.GetEnumOptions();
+			if (outEntityFields)
+				*outEntityFields = collector.GetEntityFields();
 			return collector.GetFieldNames();
+		}
+
+		// Rewrites a component's entity references through its JSON form, so every component with UUID
+		// fields gets remapping from its field list alone.
+		void InstallEntityRemap(ComponentInfo& info)
+		{
+			if (info.EntityFields.empty())
+				return;
+			info.RemapEntityReferences = [name = info.Name, fields = info.EntityFields, has = info.Has, serialize = info.Serialize,
+										  deserialize = info.Deserialize](Entity entity, const std::unordered_map<UUID, UUID>& remap) {
+				if (!has(entity))
+					return;
+				json patch = json::object();
+				const json data = serialize(entity);
+				for (const std::string& field : fields)
+				{
+					auto it = remap.find(UUID(data[field].get<uint64_t>()));
+					if (it != remap.end())
+						patch[field] = static_cast<uint64_t>(it->second);
+				}
+				// Deserialize replaces through the registry, so a running physics world rebuilds joints.
+				std::string error;
+				if (!patch.empty() && !deserialize(entity, patch, error))
+					BS_CORE_ERROR("Remapping entity references of {} on '{}' failed: {}", name, entity.GetName(), error);
+			};
 		}
 
 		template<typename T>
@@ -547,7 +592,7 @@ namespace Basalt {
 			ComponentInfo info;
 			info.Name = name;
 			info.IsCore = isCore;
-			info.Fields = CollectFieldNames<T>(&info.EnumOptions);
+			info.Fields = CollectFieldNames<T>(&info.EnumOptions, &info.EntityFields);
 			info.Has = [](Entity entity) { return entity.HasComponent<T>(); };
 			info.Add = [](Entity entity) {
 				if (!entity.HasComponent<T>())
@@ -581,6 +626,7 @@ namespace Basalt {
 				entity.AddOrReplaceComponent<T>(std::move(value));
 				return true;
 			};
+			InstallEntityRemap(info);
 			return info;
 		}
 
@@ -641,24 +687,6 @@ namespace Basalt {
 			return info;
 		}
 
-		ComponentInfo MakeJointInfo()
-		{
-			ComponentInfo info = MakeInfo<JointComponent>("Joint");
-			info.EntityFields = { "ConnectedEntity" };
-			info.RemapEntityReferences = [](Entity entity, const std::unordered_map<uint64_t, UUID>& remap) {
-				if (!entity.HasComponent<JointComponent>())
-					return;
-				auto it = remap.find(entity.GetComponent<JointComponent>().ConnectedEntity);
-				if (it == remap.end())
-					return;
-				JointComponent joint = entity.GetComponent<JointComponent>();
-				joint.ConnectedEntity = it->second;
-				// Replace through the registry so a running physics world rebuilds the joint.
-				entity.AddOrReplaceComponent<JointComponent>(joint);
-			};
-			return info;
-		}
-
 		std::vector<ComponentInfo> BuildRegistry()
 		{
 			std::vector<ComponentInfo> infos;
@@ -675,7 +703,7 @@ namespace Basalt {
 			infos.push_back(MakeInfo<BoxColliderComponent>("BoxCollider"));
 			infos.push_back(MakeInfo<SphereColliderComponent>("SphereCollider"));
 			infos.push_back(MakeInfo<CapsuleColliderComponent>("CapsuleCollider"));
-			infos.push_back(MakeJointInfo());
+			infos.push_back(MakeInfo<JointComponent>("Joint"));
 			infos.push_back(MakeInfo<ScriptComponent>("Script"));
 			infos.push_back(MakeInfo<AudioSourceComponent>("AudioSource"));
 			infos.push_back(MakeInfo<AudioListenerComponent>("AudioListener"));
@@ -709,7 +737,7 @@ namespace Basalt {
 		return names;
 	}
 
-	void ComponentRegistry::RemapEntityReferences(Entity entity, const std::unordered_map<uint64_t, UUID>& remap)
+	void ComponentRegistry::RemapEntityReferences(Entity entity, const std::unordered_map<UUID, UUID>& remap)
 	{
 		for (const ComponentInfo& info : GetAll())
 		{

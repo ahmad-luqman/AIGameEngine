@@ -191,7 +191,7 @@ namespace Basalt {
 		return std::find(m_PendingDestruction.begin(), m_PendingDestruction.end(), uuid) != m_PendingDestruction.end();
 	}
 
-	Entity Scene::CopyEntityRecursive(Entity source, Entity parent, std::unordered_map<uint64_t, UUID>& outCopies)
+	Entity Scene::CopyEntityRecursive(Entity source, Entity parent, std::unordered_map<UUID, UUID>& outCopies)
 	{
 		Entity copy = CreateEntity(source.GetName());
 		outCopies[source.GetUUID()] = copy.GetUUID();
@@ -216,7 +216,7 @@ namespace Basalt {
 		if (!entity || entity.GetScene() != this)
 			return {};
 
-		std::unordered_map<uint64_t, UUID> copies;
+		std::unordered_map<UUID, UUID> copies;
 		Entity copy = CopyEntityRecursive(entity, entity.GetParent(), copies);
 		// Joints between entities of the duplicated tree connect the copies to each other.
 		for (const auto& [source, copied] : copies)
