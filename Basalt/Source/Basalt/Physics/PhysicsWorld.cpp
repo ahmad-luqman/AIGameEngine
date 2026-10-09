@@ -19,6 +19,7 @@
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Body/BodyLockMulti.h>
+#include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/CollideShape.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
@@ -50,6 +51,7 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <functional>
 #include <iterator>
 #include <map>
 #include <optional>
@@ -881,6 +883,26 @@ namespace Basalt {
 			return (frame1.Conjugated() * frame2).Normalized();
 		}
 
+		struct CharacterRecord
+		{
+			JPH::Ref<JPH::CharacterVirtual> Character;
+			// The settings applied to the character (from its CharacterControllerComponent).
+			CharacterControllerComponent Settings;
+			uint32_t Layer = 0;
+			// Settings in Jolt's terms, checked by ConfigureCharacter.
+			float StepHeight = 0.0f;
+			float GravityFactor = 1.0f;
+			// Warnings found while building the character, repeated with the settings' own when they change.
+			std::string BuildWarnings;
+			// The last MoveCharacter velocity, used every step until the next call.
+			glm::vec3 MoveVelocity = { 0.0f, 0.0f, 0.0f };
+			// Displacement over the last step divided by its duration.
+			glm::vec3 ActualVelocity = { 0.0f, 0.0f, 0.0f };
+			// Pose last written to / read from the entity, used to detect transforms changed by scripts.
+			glm::vec3 LastPosition = { 0.0f, 0.0f, 0.0f };
+			glm::quat LastRotation = { 1.0f, 0.0f, 0.0f, 0.0f };
+		};
+
 		Scope<JPH::TempAllocatorImpl> TempAllocator;
 		Scope<JPH::JobSystemThreadPool> JobSystem;
 		BroadPhaseLayerInterfaceImpl BroadPhaseLayerInterface;
@@ -890,6 +912,11 @@ namespace Basalt {
 		Scope<JPH::PhysicsSystem> System;
 
 		std::unordered_map<UUID, BodyRecord> Bodies;
+		std::unordered_map<UUID, CharacterRecord> Characters;
+		// Characters whose CharacterControllerComponent changed (collider changes go to DirtyEntities).
+		std::unordered_set<UUID> DirtyCharacters;
+		// The character warnings last logged for each entity.
+		std::unordered_map<UUID, std::string> LoggedCharacterWarnings;
 		std::unordered_map<uint32_t, UUID> BodyToEntity;
 		std::unordered_set<UUID> DirtyEntities;
 		// Keyed by the entity that holds the JointComponent (not necessarily the body it moves).
@@ -915,6 +942,45 @@ namespace Basalt {
 		// Contacts whose removal was reported because a body fell asleep. They stay active; once both bodies
 		// are awake again, a contact that Jolt does not re-report has really ended.
 		std::set<ContactKey> SuspendedContacts;
+
+		// Applies the record's Settings that a live character can change, sanitizing out-of-range values
+		// (reported through warn).
+		static void ConfigureCharacter(CharacterRecord& record, const std::function<void(const std::string&)>& warn)
+		{
+			const CharacterControllerComponent& c = record.Settings;
+			const float slope = std::isfinite(c.SlopeLimit) ? std::clamp(c.SlopeLimit, 0.0f, 90.0f) : 45.0f;
+			if (slope != c.SlopeLimit)
+				warn(fmt::format("SlopeLimit {} must be within [0, 90] degrees; using {}", c.SlopeLimit, slope));
+			record.Character->SetMaxSlopeAngle(glm::radians(slope));
+			const float strength = std::isfinite(c.MaxStrength) && c.MaxStrength >= 0.0f ? c.MaxStrength : 0.0f;
+			if (strength != c.MaxStrength)
+				warn(fmt::format("MaxStrength {} must be a finite, non-negative force; using 0", c.MaxStrength));
+			record.Character->SetMaxStrength(strength);
+			const float mass = std::isfinite(c.Mass) && c.Mass >= 0.0f ? c.Mass : 0.0f;
+			if (mass != c.Mass)
+				warn(fmt::format("Mass {} must be a finite, non-negative mass; using 0", c.Mass));
+			record.Character->SetMass(mass);
+			record.StepHeight = std::isfinite(c.StepHeight) && c.StepHeight >= 0.0f ? c.StepHeight : 0.0f;
+			if (record.StepHeight != c.StepHeight)
+				warn(fmt::format("StepHeight {} must be a finite, non-negative distance; using 0", c.StepHeight));
+			record.GravityFactor = std::isfinite(c.GravityFactor) ? c.GravityFactor : 1.0f;
+			if (record.GravityFactor != c.GravityFactor)
+				warn(fmt::format("GravityFactor {} is not finite; using 1", c.GravityFactor));
+		}
+
+		// Logs a character's warnings ("; "-joined) unless they are the ones last logged for it.
+		void ReportCharacterWarnings(Entity entity, const std::string& warnings)
+		{
+			if (warnings.empty())
+			{
+				LoggedCharacterWarnings.erase(entity.GetUUID());
+			}
+			else if (std::string& logged = LoggedCharacterWarnings[entity.GetUUID()]; logged != warnings)
+			{
+				logged = warnings;
+				BS_CORE_WARN("Physics: character '{}': {}", entity.GetName(), warnings);
+			}
+		}
 
 		bool IsTrigger(UUID uuid) const
 		{
@@ -1003,7 +1069,26 @@ namespace Basalt {
 			bodies.RemoveBody(it->second.ID);
 			bodies.DestroyBody(it->second.ID);
 			Bodies.erase(it);
+			EndContacts(scene, uuid, trigger);
+		}
 
+		// Removes a character and its inner body, ending its contacts like RemoveBody.
+		void RemoveCharacter(Scene* scene, UUID uuid)
+		{
+			auto it = Characters.find(uuid);
+			if (it == Characters.end())
+				return;
+			const JPH::BodyID inner = it->second.Character->GetInnerBodyID();
+			if (!inner.IsInvalid())
+				BodyToEntity.erase(inner.GetIndexAndSequenceNumber());
+			// The character destroys its inner body.
+			Characters.erase(it);
+			EndContacts(scene, uuid, false);
+		}
+
+		// Ends every contact of an entity whose body is gone and notifies the surviving entities.
+		void EndContacts(Scene* scene, UUID uuid, bool trigger)
+		{
 			const uint64_t id = static_cast<uint64_t>(uuid);
 			std::set<EntityPair> ended;
 			for (auto key = ActiveContacts.begin(); key != ActiveContacts.end();)
@@ -1056,6 +1141,12 @@ namespace Basalt {
 			if (auto it = id ? Bodies.find(id->ID) : Bodies.end(); it != Bodies.end() && it->second.BorrowedMesh == std::pair(mesh.Mesh, mesh.MeshIndex))
 				return;
 			OnMeshChanged(registry, entity);
+		}
+
+		void OnCharacterChanged(entt::registry& registry, entt::entity entity)
+		{
+			if (const auto* id = registry.try_get<IDComponent>(entity))
+				DirtyCharacters.insert(id->ID);
 		}
 
 		void OnJointChanged(entt::registry& registry, entt::entity entity)
@@ -1136,6 +1227,10 @@ namespace Basalt {
 		registry.on_construct<MeshComponent>().connect<&Impl::OnMeshChanged>(impl);
 		registry.on_destroy<MeshComponent>().connect<&Impl::OnMeshChanged>(impl);
 		registry.on_update<MeshComponent>().connect<&Impl::OnMeshUpdated>(impl);
+		// Adding or removing a controller swaps a body for a character, so it rebuilds like a collider change.
+		registry.on_construct<CharacterControllerComponent>().connect<&Impl::OnPhysicsComponentChanged>(impl);
+		registry.on_destroy<CharacterControllerComponent>().connect<&Impl::OnPhysicsComponentChanged>(impl);
+		registry.on_update<CharacterControllerComponent>().connect<&Impl::OnCharacterChanged>(impl);
 		registry.on_construct<JointComponent>().connect<&Impl::OnJointChanged>(impl);
 		registry.on_update<JointComponent>().connect<&Impl::OnJointChanged>(impl);
 		registry.on_destroy<JointComponent>().connect<&Impl::OnJointDestroyed>(impl);
@@ -1163,6 +1258,9 @@ namespace Basalt {
 		registry.on_construct<MeshComponent>().disconnect<&Impl::OnMeshChanged>(impl);
 		registry.on_destroy<MeshComponent>().disconnect<&Impl::OnMeshChanged>(impl);
 		registry.on_update<MeshComponent>().disconnect<&Impl::OnMeshUpdated>(impl);
+		registry.on_construct<CharacterControllerComponent>().disconnect<&Impl::OnPhysicsComponentChanged>(impl);
+		registry.on_destroy<CharacterControllerComponent>().disconnect<&Impl::OnPhysicsComponentChanged>(impl);
+		registry.on_update<CharacterControllerComponent>().disconnect<&Impl::OnCharacterChanged>(impl);
 		registry.on_construct<JointComponent>().disconnect<&Impl::OnJointChanged>(impl);
 		registry.on_update<JointComponent>().disconnect<&Impl::OnJointChanged>(impl);
 		registry.on_destroy<JointComponent>().disconnect<&Impl::OnJointDestroyed>(impl);
@@ -1170,6 +1268,8 @@ namespace Basalt {
 		for (auto& [uuid, joint] : m_Impl->Joints)
 			m_Impl->System->RemoveConstraint(joint.Constraint);
 		m_Impl->Joints.clear();
+		// Characters remove their inner bodies, so they go while the system exists.
+		m_Impl->Characters.clear();
 		JPH::BodyInterface& bodies = m_Impl->System->GetBodyInterface();
 		for (auto& [uuid, record] : m_Impl->Bodies)
 		{
@@ -1191,8 +1291,11 @@ namespace Basalt {
 		m_Impl->Starting = true;
 		for (entt::entity handle : view)
 			RecreateBody({ handle, m_Scene });
+		for (entt::entity handle : m_Scene->GetAllEntitiesWith<CharacterControllerComponent>())
+			RecreateCharacter({ handle, m_Scene });
 		m_Impl->Starting = false;
 		m_Impl->DirtyEntities.clear();
+		m_Impl->DirtyCharacters.clear();
 		// Joints need both of their bodies, so they are built after every body exists.
 		for (entt::entity handle : m_Scene->GetAllEntitiesWith<JointComponent>())
 			m_Impl->DirtyJoints.insert(Entity(handle, m_Scene).GetUUID());
@@ -1219,7 +1322,8 @@ namespace Basalt {
 			}
 		}
 
-		if (!entity || !entity.HasComponent<RigidBodyComponent>())
+		// A character controller replaces the body (RecreateCharacter reports the ignored RigidBody).
+		if (!entity || !entity.HasComponent<RigidBodyComponent>() || entity.HasComponent<CharacterControllerComponent>())
 			return;
 
 		const auto& rigidBody = entity.GetComponent<RigidBodyComponent>();
@@ -1426,6 +1530,167 @@ namespace Basalt {
 			MarkJointsDirty(entity.GetUUID());
 	}
 
+	void PhysicsWorld::RecreateCharacter(Entity entity)
+	{
+		Impl& impl = *m_Impl;
+		JPH::Vec3 previousVelocity = JPH::Vec3::sZero();
+		glm::vec3 moveVelocity(0.0f);
+		if (entity)
+		{
+			auto existing = impl.Characters.find(entity.GetUUID());
+			if (existing != impl.Characters.end())
+			{
+				// Rebuilding (e.g. after a collider change) keeps the character moving.
+				previousVelocity = existing->second.Character->GetLinearVelocity();
+				moveVelocity = existing->second.MoveVelocity;
+				impl.RemoveCharacter(m_Scene, entity.GetUUID());
+			}
+		}
+		if (!entity || !entity.HasComponent<CharacterControllerComponent>())
+			return;
+
+		const auto& controller = entity.GetComponent<CharacterControllerComponent>();
+		// Problems with the settings, joined with "; " and logged when they differ from the last ones logged.
+		std::string warnings;
+		auto warn = [&warnings](const std::string& warning) {
+			warnings += (warnings.empty() ? "" : "; ") + warning;
+		};
+		auto report = [&]() { impl.ReportCharacterWarnings(entity, warnings); };
+		if (entity.HasComponent<RigidBodyComponent>())
+			warn("its RigidBody is ignored (the character controller replaces it)");
+
+		glm::vec3 position;
+		glm::quat rotation;
+		glm::vec3 scale;
+		if (!Math::DecomposeTransform(m_Scene->GetWorldTransform(entity), position, rotation, scale))
+		{
+			warn("degenerate transform; no character created");
+			report();
+			return;
+		}
+		scale = glm::abs(scale);
+
+		// The collider shapes, scaled as for a rigid body. The inner body that other bodies collide with is a
+		// little smaller (as in Jolt's samples): the character stops just short of what it walks into, so a
+		// full-size inner body would touch it and shove dynamic bodies regardless of MaxStrength.
+		constexpr float InnerShapeFraction = 0.9f;
+		constexpr float MinExtent = 0.001f;
+		JPH::StaticCompoundShapeSettings compound;
+		JPH::StaticCompoundShapeSettings innerCompound;
+		uint32_t shapeCount = 0;
+		// Each collider is built at full size and at the inner body's size.
+		auto addShape = [&](const glm::vec3& offset, const std::function<JPH::ShapeSettings::ShapeResult(float)>& create) {
+			const JPH::ShapeSettings::ShapeResult result = create(1.0f);
+			const JPH::ShapeSettings::ShapeResult inner = create(InnerShapeFraction);
+			if (result.HasError() || inner.HasError())
+			{
+				warn(std::string("invalid collider: ") + (result.HasError() ? result : inner).GetError().c_str());
+				return;
+			}
+			compound.AddShape(ToJolt(offset * scale), JPH::Quat::sIdentity(), result.Get());
+			innerCompound.AddShape(ToJolt(offset * scale), JPH::Quat::sIdentity(), inner.Get());
+			shapeCount++;
+		};
+		if (const auto* box = entity.TryGetComponent<BoxColliderComponent>())
+		{
+			addShape(box->Offset, [&](float fraction) {
+				const glm::vec3 halfExtents = glm::max(box->HalfExtents * scale * fraction, glm::vec3(MinExtent));
+				const float convexRadius = std::min(JPH::cDefaultConvexRadius, glm::min(halfExtents.x, glm::min(halfExtents.y, halfExtents.z)) * 0.5f);
+				return JPH::BoxShapeSettings(ToJolt(halfExtents), convexRadius).Create();
+			});
+		}
+		if (const auto* sphere = entity.TryGetComponent<SphereColliderComponent>())
+		{
+			addShape(sphere->Offset, [&](float fraction) {
+				return JPH::SphereShapeSettings(std::max(sphere->Radius * glm::max(scale.x, glm::max(scale.y, scale.z)) * fraction, MinExtent)).Create();
+			});
+		}
+		if (const auto* capsule = entity.TryGetComponent<CapsuleColliderComponent>())
+		{
+			addShape(capsule->Offset, [&](float fraction) {
+				const float radius = std::max(capsule->Radius * glm::max(scale.x, scale.z) * fraction, MinExtent);
+				const float halfHeight = std::max(capsule->HalfHeight * scale.y * fraction, MinExtent);
+				return JPH::CapsuleShapeSettings(halfHeight, radius).Create();
+			});
+		}
+		if (shapeCount == 0)
+		{
+			warn("has a CharacterController but no valid collider; no character created");
+			report();
+			return;
+		}
+		JPH::ShapeSettings::ShapeResult shapeResult = compound.Create();
+		JPH::ShapeSettings::ShapeResult innerResult = innerCompound.Create();
+		if (shapeResult.HasError() || innerResult.HasError())
+		{
+			warn(std::string("failed to build its shape: ") + (shapeResult.HasError() ? shapeResult : innerResult).GetError().c_str());
+			report();
+			return;
+		}
+		const JPH::RefConst<JPH::Shape> shape = shapeResult.Get();
+
+		uint32_t layer = 0;
+		if (const auto index = impl.Layers.Find(controller.Layer))
+			layer = *index;
+		else
+			warn("unknown physics layer '" + controller.Layer + "', using Default");
+
+		JPH::CharacterVirtualSettings settings;
+		settings.mShape = shape;
+		settings.mInnerBodyShape = innerResult.Get();
+		settings.mInnerBodyLayer = MakeObjectLayer(true, layer);
+		const glm::vec3 gravity = FromJolt(impl.System->GetGravity());
+		settings.mUp = glm::length(gravity) > 1e-6f ? ToJolt(-glm::normalize(gravity)) : JPH::Vec3::sAxisY();
+		// Only contacts on the lower part of the shape (below the bottom plus half its narrowest horizontal
+		// extent, the hemisphere of a capsule) can be ground; others are walls or ceilings. The plane is in the
+		// character's local space, relative to its position.
+		const JPH::AABox bounds = shape->GetLocalBounds();
+		const JPH::Vec3 centerOfMass = shape->GetCenterOfMass();
+		const float bottom = bounds.mMin.GetY() + centerOfMass.GetY();
+		const float halfWidth = std::min(bounds.GetExtent().GetX(), bounds.GetExtent().GetZ());
+		settings.mSupportingVolume = JPH::Plane(JPH::Vec3::sAxisY(), -(bottom + halfWidth));
+		auto* character = new JPH::CharacterVirtual(&settings, ToJolt(position), ToJolt(rotation), static_cast<uint64_t>(entity.GetUUID()), impl.System.get());
+		character->SetLinearVelocity(previousVelocity);
+
+		Impl::CharacterRecord& record = impl.Characters[entity.GetUUID()];
+		record.Character = character;
+		record.Settings = controller;
+		record.Layer = layer;
+		record.BuildWarnings = warnings;
+		record.MoveVelocity = moveVelocity;
+		record.LastPosition = position;
+		record.LastRotation = rotation;
+		if (!character->GetInnerBodyID().IsInvalid())
+			impl.BodyToEntity[character->GetInnerBodyID().GetIndexAndSequenceNumber()] = entity.GetUUID();
+		Impl::ConfigureCharacter(record, warn);
+		report();
+	}
+
+	void PhysicsWorld::ApplyCharacterSettings(Entity entity)
+	{
+		Impl& impl = *m_Impl;
+		auto it = impl.Characters.find(entity.GetUUID());
+		if (!entity.HasComponent<CharacterControllerComponent>())
+			return;
+		const auto& controller = entity.GetComponent<CharacterControllerComponent>();
+		// A character that could not be built may be buildable now; the layer is baked into the inner body.
+		if (it == impl.Characters.end() || controller.Layer != it->second.Settings.Layer)
+		{
+			RecreateCharacter(entity);
+			return;
+		}
+		Impl::CharacterRecord& record = it->second;
+		// Scripts may set the component every frame; the same values change nothing.
+		if (controller == record.Settings)
+			return;
+		record.Settings = controller;
+		std::string warnings = record.BuildWarnings;
+		Impl::ConfigureCharacter(record, [&warnings](const std::string& warning) {
+			warnings += (warnings.empty() ? "" : "; ") + warning;
+		});
+		impl.ReportCharacterWarnings(entity, warnings);
+	}
+
 	void PhysicsWorld::MarkJointsDirty(UUID uuid)
 	{
 		for (entt::entity handle : m_Scene->GetAllEntitiesWith<JointComponent>())
@@ -1440,8 +1705,11 @@ namespace Basalt {
 	void PhysicsWorld::OnEntityDestroyed(Entity entity)
 	{
 		m_Impl->RemoveBody(m_Scene, entity.GetUUID());
+		m_Impl->RemoveCharacter(m_Scene, entity.GetUUID());
 		m_Impl->RemoveJoint(entity.GetUUID());
 		m_Impl->DirtyEntities.erase(entity.GetUUID());
+		m_Impl->DirtyCharacters.erase(entity.GetUUID());
+		m_Impl->LoggedCharacterWarnings.erase(entity.GetUUID());
 		m_Impl->DirtyJoints.erase(entity.GetUUID());
 		m_Impl->LoggedJointWarnings.erase(entity.GetUUID());
 		m_Impl->LoggedBodyWarnings.erase(entity.GetUUID());
@@ -1995,6 +2263,128 @@ namespace Basalt {
 		return entity && m_Impl->Bodies.contains(entity.GetUUID());
 	}
 
+	void PhysicsWorld::UpdateCharacters(float fixedStep)
+	{
+		Impl& impl = *m_Impl;
+		if (impl.Characters.empty())
+			return;
+		const JPH::Vec3 sceneGravity = impl.System->GetGravity();
+		// Registry order, not hash order: characters push bodies and each other, so the order shows in replays.
+		for (entt::entity handle : m_Scene->GetAllEntitiesWith<CharacterControllerComponent>())
+		{
+			Entity entity(handle, m_Scene);
+			auto it = impl.Characters.find(entity.GetUUID());
+			if (it == impl.Characters.end())
+				continue;
+			Impl::CharacterRecord& record = it->second;
+			JPH::CharacterVirtual& character = *record.Character;
+
+			glm::vec3 position;
+			glm::quat rotation;
+			glm::vec3 scale;
+			if (!Math::DecomposeTransform(m_Scene->GetWorldTransform(entity), position, rotation, scale))
+				continue;
+			const JPH::ObjectLayer layer = MakeObjectLayer(true, record.Layer);
+			const JPH::DefaultBroadPhaseLayerFilter broadPhaseFilter(impl.ObjectVsBroadPhaseLayerFilter, layer);
+			const JPH::DefaultObjectLayerFilter objectLayerFilter(impl.ObjectLayerPairFilter, layer);
+			const JPH::BodyFilter bodyFilter;
+			const JPH::ShapeFilter shapeFilter;
+
+			// A script that moved the transform teleports the character (whose old ground no longer holds it);
+			// its rotation always follows the entity.
+			if (glm::any(glm::greaterThan(glm::abs(position - record.LastPosition), glm::vec3(1e-5f))))
+			{
+				character.SetPosition(ToJolt(position));
+				character.RefreshContacts(broadPhaseFilter, objectLayerFilter, bodyFilter, shapeFilter, *impl.TempAllocator);
+			}
+			if (glm::abs(glm::dot(rotation, record.LastRotation)) < 1.0f - 1e-6f)
+				character.SetRotation(ToJolt(rotation));
+
+			// Standing characters move with their ground and may jump off it; airborne ones keep their vertical
+			// speed under gravity and steer sideways (Jolt's CharacterVirtual sample). Unlike the sample, gravity
+			// is left out on walkable ground so an idle character does not creep down slopes; walking down them
+			// relies on the StepHeight stick-to-floor.
+			// Up is against the scene gravity, which scripts may turn.
+			if (!sceneGravity.IsNearZero())
+				character.SetUp(-sceneGravity.Normalized());
+			const JPH::Vec3 up = character.GetUp();
+			const JPH::Vec3 gravity = sceneGravity * record.GravityFactor;
+			const JPH::Vec3 move = ToJolt(record.MoveVelocity);
+			const JPH::Vec3 moveVertical = up * move.Dot(up);
+			const JPH::Vec3 current = character.GetLinearVelocity();
+			const JPH::Vec3 groundVelocity = character.GetGroundVelocity();
+			const bool onGround = character.GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround;
+			JPH::Vec3 velocity;
+			if (gravity.IsNearZero())
+			{
+				velocity = move + (onGround ? groundVelocity : JPH::Vec3::sZero());
+			}
+			else
+			{
+				// Moving away from the ground (just jumped) counts as airborne, or the jump would be undone.
+				if (onGround && (current - groundVelocity).Dot(up) < 0.1f)
+					velocity = groundVelocity + moveVertical;
+				else
+					velocity = up * current.Dot(up) + gravity * fixedStep;
+				velocity += move - moveVertical;
+			}
+			character.SetLinearVelocity(velocity);
+
+			JPH::CharacterVirtual::ExtendedUpdateSettings update;
+			update.mStickToFloorStepDown = -up * record.StepHeight;
+			update.mWalkStairsStepUp = up * record.StepHeight;
+			const JPH::RVec3 before = character.GetPosition();
+			character.ExtendedUpdate(fixedStep, gravity, update, broadPhaseFilter, objectLayerFilter, bodyFilter, shapeFilter, *impl.TempAllocator);
+			const JPH::Vec3 moved = JPH::Vec3(character.GetPosition() - before);
+			record.ActualVelocity = FromJolt(moved / fixedStep);
+
+			// Jolt does not stop a rising character at a ceiling; without this it would stick there until
+			// gravity ate the jump speed.
+			const float wantedRise = character.GetLinearVelocity().Dot(up);
+			const float actualRise = moved.Dot(up) / fixedStep;
+			if (wantedRise > 0.0f && actualRise < wantedRise)
+			{
+				const JPH::Vec3 corrected = character.GetLinearVelocity() + up * (std::max(actualRise, 0.0f) - wantedRise);
+				character.SetLinearVelocity(corrected);
+			}
+
+			record.LastPosition = FromJolt(JPH::Vec3(character.GetPosition()));
+			record.LastRotation = rotation;
+			m_Scene->SetWorldTransform(entity, Math::ComposeTransform(record.LastPosition, rotation, scale));
+		}
+	}
+
+	bool PhysicsWorld::HasCharacter(Entity entity) const
+	{
+		return entity && m_Impl->Characters.contains(entity.GetUUID());
+	}
+
+	void PhysicsWorld::MoveCharacter(Entity entity, const glm::vec3& velocity)
+	{
+		auto it = m_Impl->Characters.find(entity.GetUUID());
+		if (it != m_Impl->Characters.end() && IsFiniteVec(velocity))
+			it->second.MoveVelocity = velocity;
+	}
+
+	bool PhysicsWorld::IsCharacterGrounded(Entity entity) const
+	{
+		auto it = m_Impl->Characters.find(entity.GetUUID());
+		return it != m_Impl->Characters.end() && it->second.Character->GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround;
+	}
+
+	std::optional<glm::vec3> PhysicsWorld::GetCharacterGroundNormal(Entity entity) const
+	{
+		auto it = m_Impl->Characters.find(entity.GetUUID());
+		if (it == m_Impl->Characters.end() || !it->second.Character->IsSupported())
+			return std::nullopt;
+		return FromJolt(it->second.Character->GetGroundNormal());
+	}
+
+	uint32_t PhysicsWorld::GetCharacterCount() const
+	{
+		return static_cast<uint32_t>(m_Impl->Characters.size());
+	}
+
 	void PhysicsWorld::Step(Timestep ts)
 	{
 		Impl& impl = *m_Impl;
@@ -2013,11 +2403,23 @@ namespace Basalt {
 				if (entity)
 				{
 					RecreateBody(entity);
+					RecreateCharacter(entity);
 				}
 				else
 				{
 					impl.RemoveBody(m_Scene, uuid);
+					impl.RemoveCharacter(m_Scene, uuid);
 				}
+			}
+		}
+		if (!impl.DirtyCharacters.empty())
+		{
+			const std::unordered_set<UUID> dirty = std::move(impl.DirtyCharacters);
+			impl.DirtyCharacters.clear();
+			for (UUID uuid : dirty)
+			{
+				if (Entity entity = m_Scene->GetEntityByUUID(uuid))
+					ApplyCharacterSettings(entity);
 			}
 		}
 		RebuildDirtyJoints();
@@ -2052,6 +2454,9 @@ namespace Basalt {
 				record.LastPosition = position;
 				record.LastRotation = rotation;
 			}
+
+			// Characters move before the bodies step, as Jolt expects.
+			UpdateCharacters(fixedStep);
 
 			impl.System->Update(fixedStep, 1, impl.TempAllocator.get(), impl.JobSystem.get());
 			m_Accumulator -= fixedStep;
@@ -2235,6 +2640,8 @@ namespace Basalt {
 
 	glm::vec3 PhysicsWorld::GetLinearVelocity(Entity entity) const
 	{
+		if (auto character = m_Impl->Characters.find(entity.GetUUID()); character != m_Impl->Characters.end())
+			return character->second.ActualVelocity;
 		auto it = m_Impl->Bodies.find(entity.GetUUID());
 		if (it == m_Impl->Bodies.end())
 			return glm::vec3(0.0f);

@@ -77,6 +77,9 @@ namespace Basalt {
 	// next play. An unknown layer name falls back to Default with a warning.
 	// Dynamic bodies write their pose back to the entity; moving a dynamic or static body's transform from
 	// script teleports it; kinematic bodies follow their transform smoothly.
+	// Entities with a CharacterControllerComponent and a collider get a Jolt CharacterVirtual (plus a kinematic
+	// inner body that other bodies, queries and contact events see) instead of a rigid body. Characters move
+	// before each step, in registry order, and write their position back; their rotation follows the entity.
 	class PhysicsWorld
 	{
 	public:
@@ -99,6 +102,7 @@ namespace Basalt {
 		void AddImpulse(Entity entity, const glm::vec3& impulse);
 		void AddTorque(Entity entity, const glm::vec3& torque);
 		void SetLinearVelocity(Entity entity, const glm::vec3& velocity);
+		// For a character, how fast it actually moved in the last step (after collisions, steps and slopes).
 		glm::vec3 GetLinearVelocity(Entity entity) const;
 		void SetAngularVelocity(Entity entity, const glm::vec3& velocity);
 		glm::vec3 GetAngularVelocity(Entity entity) const;
@@ -116,6 +120,21 @@ namespace Basalt {
 		// AngularMotorTarget in this form drives the joint back to that pose. nullopt for other joint types
 		// and entities without a live joint.
 		std::optional<glm::vec3> GetJointRotation(Entity entity) const;
+
+		// Character controllers. MoveCharacter sets the velocity the character walks with until the next call.
+		// With gravity (scene gravity times GravityFactor), the part of it along the up axis (against gravity)
+		// only counts while the character stands on walkable ground, where it jumps (again on every landing
+		// while it is held); in the air gravity drives the vertical speed and the rest steers. The character
+		// also moves with the ground it stands on. Without gravity the velocity applies in full. Calls on
+		// entities without a character do nothing; non-finite velocities are ignored.
+		bool HasCharacter(Entity entity) const;
+		void MoveCharacter(Entity entity, const glm::vec3& velocity);
+		// Standing on ground no steeper than SlopeLimit.
+		bool IsCharacterGrounded(Entity entity) const;
+		// Normal of the ground the character touches (walkable or too steep), nullopt in the air or without a
+		// character.
+		std::optional<glm::vec3> GetCharacterGroundNormal(Entity entity) const;
+		uint32_t GetCharacterCount() const;
 
 		// Scene queries. Casts sweep along `direction` (any length) for up to maxDistance and report the
 		// closest hit, or with the *All variants every entity hit, once each at its closest point, sorted by
@@ -148,6 +167,11 @@ namespace Basalt {
 		static void ClearMeshShapeCache();
 
 	private:
+		// Rebuilds (or removes) the entity's character; keeps its velocity and the last Move velocity.
+		void RecreateCharacter(Entity entity);
+		// Applies changed CharacterController settings in place, rebuilding only when the layer changed.
+		void ApplyCharacterSettings(Entity entity);
+		void UpdateCharacters(float fixedStep);
 		void RebuildDirtyJoints();
 		// Marks every joint moving or connected to the entity's body for a rebuild (it was just created).
 		void MarkJointsDirty(UUID uuid);

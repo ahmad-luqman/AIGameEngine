@@ -26,6 +26,7 @@ namespace Basalt {
 				{ "Plane", "Plane", { { "Mesh", { { "Mesh", "builtin://Plane" } } }, { "Transform", { { "Scale", { 10, 1, 10 } } } } } },
 				{ "Cylinder", "Cylinder", { { "Mesh", { { "Mesh", "builtin://Cylinder" } } } } },
 				{ "Capsule", "Capsule", { { "Mesh", { { "Mesh", "builtin://Capsule" } } } } },
+				{ "Character", "Character", { { "Mesh", { { "Mesh", "builtin://Capsule" } } }, { "CapsuleCollider", nlohmann::json::object() }, { "CharacterController", nlohmann::json::object() } } },
 				{ "Camera", "Camera", { { "Camera", nlohmann::json::object() } } },
 				{ "Directional Light", "Directional Light", { { "DirectionalLight", nlohmann::json::object() }, { "Transform", { { "Rotation", { -50, 30, 0 } } } } } },
 				{ "Point Light", "Point Light", { { "PointLight", nlohmann::json::object() } } },

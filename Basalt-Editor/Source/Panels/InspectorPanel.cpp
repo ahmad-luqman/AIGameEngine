@@ -90,7 +90,7 @@ namespace Basalt {
 		// Whether the entity gets a physics body when play starts (a RigidBody alone is not enough).
 		bool HasPhysicsBody(Entity entity)
 		{
-			return entity.HasComponent<RigidBodyComponent>() &&
+			return entity.HasComponent<RigidBodyComponent>() && !entity.HasComponent<CharacterControllerComponent>() &&
 				   (entity.HasComponent<BoxColliderComponent>() || entity.HasComponent<SphereColliderComponent>() || entity.HasComponent<CapsuleColliderComponent>() ||
 					entity.HasComponent<MeshColliderComponent>());
 		}
@@ -220,7 +220,7 @@ namespace Basalt {
 					// Layer names come from the project, not the component, so the combo is built here.
 					std::vector<std::string> layerNames;
 					bool unknownLayer = false;
-					if (info.Name == "RigidBody" && field == "Layer")
+					if ((info.Name == "RigidBody" || info.Name == "CharacterController") && field == "Layer")
 					{
 						const Ref<Project>& project = Project::GetActive();
 						layerNames = project ? project->GetConfig().Physics.GetNames() : PhysicsLayers().GetNames();
@@ -249,6 +249,14 @@ namespace Basalt {
 				}
 				if (info.Name == "Script")
 					DrawScriptProperties(entity, data);
+				if (info.Name == "CharacterController")
+				{
+					// Physics shapes the character from these and skips it without one.
+					if (!entity.HasComponent<BoxColliderComponent>() && !entity.HasComponent<SphereColliderComponent>() && !entity.HasComponent<CapsuleColliderComponent>())
+						ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Add a collider (a CapsuleCollider fits most characters).");
+					if (entity.HasComponent<RigidBodyComponent>())
+						ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "The RigidBody is ignored while the character controller is present.");
+				}
 				if (info.Name == "Joint")
 				{
 					// The joint moves BodyEntity's body, or this entity's when BodyEntity is Self.

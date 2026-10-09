@@ -97,18 +97,19 @@ namespace Basalt {
 			return project ? project->GetConfig().Physics : s_DefaultLayers;
 		}
 
-		// Entities whose RigidBody names a layer the layers do not define (they play on Default), as
-		// [{entity, name, layer}] in registry order.
+		// Entities whose RigidBody or CharacterController names a layer the layers do not define (they play on
+		// Default), as [{entity, name, layer}] in registry order, rigid bodies first.
 		json FindUnknownPhysicsLayers(Scene& scene, const PhysicsLayers& layers)
 		{
 			json result = json::array();
-			for (entt::entity handle : scene.GetAllEntitiesWith<RigidBodyComponent>())
-			{
-				Entity entity(handle, &scene);
-				const std::string& layer = entity.GetComponent<RigidBodyComponent>().Layer;
+			auto check = [&](Entity entity, const std::string& layer) {
 				if (!layers.Find(layer))
 					result.push_back({ { "entity", static_cast<uint64_t>(entity.GetUUID()) }, { "name", entity.GetName() }, { "layer", layer } });
-			}
+			};
+			for (entt::entity handle : scene.GetAllEntitiesWith<RigidBodyComponent>())
+				check(Entity(handle, &scene), scene.GetRegistry().get<RigidBodyComponent>(handle).Layer);
+			for (entt::entity handle : scene.GetAllEntitiesWith<CharacterControllerComponent>())
+				check(Entity(handle, &scene), scene.GetRegistry().get<CharacterControllerComponent>(handle).Layer);
 			return result;
 		}
 

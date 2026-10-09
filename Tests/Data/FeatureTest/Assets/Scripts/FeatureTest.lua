@@ -154,7 +154,7 @@ local function TestEntities(self)
 
 	-- Every component type round-trips through Lua.
 	for _, name in ipairs({ "Camera", "Mesh", "Material", "DirectionalLight", "PointLight", "SpotLight", "SkyLight", "RigidBody",
-		"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "AudioSource", "AudioListener", "Prefab" }) do
+		"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "AudioSource", "AudioListener", "Prefab" }) do
 		local holder = Scene.CreateEntity("Holder" .. name)
 		Expect("AddComponent " .. name, function() holder:AddComponent(name) end)
 		local data = holder:GetComponent(name)
@@ -258,6 +258,14 @@ function Driver:OnUpdate(dt)
 		Check("Input.GetMousePosition", Input.GetMousePosition() == Vec2(320, 240))
 		Check("Input.GetMouseScroll", Input.GetMouseScroll() == Vec2(0, 0))
 		Check("No release on the press frame", not Input.IsKeyReleased("Space") and not Input.IsMouseButtonReleased("Left"))
+
+		-- Character controller: the hero walks towards a step, jumps on frame 25 and walks again from frame 100.
+		local hero = Scene.FindEntityByName("Hero")
+		local controller = hero:GetComponent("CharacterController")
+		Check("CharacterController fields", controller.SlopeLimit == 40 and Near(controller.StepHeight, 0.35, 1e-6) and controller.Layer == "Default")
+		ExpectError("Move without a CharacterController", function() Scene.FindEntityByName("Crate"):Move(Vec3(1, 0, 0)) end, "needs a CharacterController")
+		Check("IsGrounded without a character", not Scene.FindEntityByName("Crate"):IsGrounded() and Scene.FindEntityByName("Crate"):GetGroundNormal() == nil)
+		hero:Move(Vec3(2, 0, 0))
 		-- 200 m/s covers 3.3 m per step; only the continuous sweep stops it at the 5 cm wall.
 		Scene.FindEntityByName("Bullet"):SetLinearVelocity(Vec3(200, 0, 0))
 		Check("Destroyed entity is gone", not self.Doomed:IsValid())
@@ -369,6 +377,28 @@ function Driver:OnUpdate(dt)
 		Check("AddTorque", crate:GetAngularVelocity().y > 1.1)
 	end
 
+	if frame == 25 then
+		local hero = Scene.FindEntityByName("Hero")
+		Check("Character IsGrounded", hero:IsGrounded())
+		Check("Character GetGroundNormal", hero:GetGroundNormal() ~= nil and NearVec(hero:GetGroundNormal(), Vec3(0, 1, 0), 1e-3))
+		Check("Character Move walks", hero.Translation.x > 8.6 and Near(hero:GetLinearVelocity().x, 2, 0.05))
+		hero:Move(Vec3(0, 5, 0))
+		self.HeroJumpStart = hero.Translation.y
+	end
+
+	if frame == 34 then
+		local hero = Scene.FindEntityByName("Hero")
+		Check("Character Move up jumps", not hero:IsGrounded() and hero:GetGroundNormal() == nil and hero.Translation.y > self.HeroJumpStart + 0.2 and hero:GetLinearVelocity().y > 0)
+		-- A held upward Move would jump again on landing.
+		hero:Move(Vec3(0, 0, 0))
+	end
+
+	if frame == 100 then
+		local hero = Scene.FindEntityByName("Hero")
+		Check("Character lands", hero:IsGrounded() and Near(hero.Translation.y, self.HeroJumpStart, 0.02))
+		hero:Move(Vec3(2, 0, 0))
+	end
+
 	if frame == 30 then
 		local hit = Physics.Raycast(Vec3(0, 10, 8), Vec3(0, -1, 0), 50)
 		Check("Physics.Raycast hit", hit ~= nil and hit.Entity.Name == "Ground" and Near(hit.Point.y, 0, 0.05) and NearVec(hit.Normal, Vec3(0, 1, 0), 1e-3) and Near(hit.Distance, 10, 0.05))
@@ -407,6 +437,8 @@ function Driver:OnUpdate(dt)
 		Check("OnCollisionBegin contact", contact and Near(contact.Normal.y, 1, 0.01) and Near(contact.Point.y, 0, 0.2) and contact.Impulse > 10)
 		local ballBody = Scene.FindEntityByName("Ball"):GetComponent("RigidBody")
 		Check("RigidBody combine modes", ballBody.FrictionCombine == "Average" and ballBody.RestitutionCombine == "Min")
+		local hero = Scene.FindEntityByName("Hero")
+		Check("Character climbs a step", hero.Translation.x > 10 and Near(hero.Translation.y, self.HeroJumpStart + 0.3, 0.03) and hero:IsGrounded())
 
 		-- Layers: Ghost ignores Default (the ground), Debris collides with it.
 		local debris = Scene.FindEntityByName("DebrisBox")

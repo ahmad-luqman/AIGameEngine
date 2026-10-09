@@ -49,9 +49,6 @@ The features most games need, roughly in order of impact.
 
 ### Physics
 
-- **Character controller — M.** Wrap `JPH::CharacterVirtual` in a `CharacterControllerComponent` (slope
-  limit, step height, max strength) with Lua `Move(velocity)`, `IsGrounded()`, `GetGroundNormal()`.
-  Platformers and first-person games need it, and `FixedRotation` dynamic bodies are a poor substitute.
 - **Soft six-DOF rotation limits — S.** Jolt 5.6 softens only six-DOF translation limits. When it adds
   springs to rotation limits, apply `LimitSpringFrequency` to them too.
 

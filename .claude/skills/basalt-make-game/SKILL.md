@@ -25,7 +25,9 @@ Write scripts with `asset.write` (or directly as files under `<project>/Assets/S
 - Grid games (Tetris, Snake, Minesweeper): keep the logical state in Lua tables and mirror it with
   entities (cubes with `Mesh builtin://Cube` + `Material AlbedoColor`). Do not use physics for them.
 - Physics games: `RigidBody` (`Dynamic`/`Static`/`Kinematic`, `IsTrigger`) + a collider; react in
-  `OnCollisionBegin`/`OnTriggerEnter`. Move characters with `SetLinearVelocity`. Put bodies on named
+  `OnCollisionBegin`/`OnTriggerEnter`. Give walking characters (platformers, first-person) a
+  `CapsuleCollider` + `CharacterController` (no RigidBody) and call `self.Entity:Move(velocity)` every
+  frame (an upward part jumps when `IsGrounded()`). Put bodies on named
   layers (`RigidBody.Layer`) and set which layers collide with `project.set` `physicsLayers`
   (`{"Names": ["Default", "Player", "Pickup"], "IgnoredPairs": [["Player", "Pickup"]]}`). Set
   `RigidBody.Continuous` on fast projectiles. Probe the world with `Physics.Raycast/SphereCast/BoxCast/OverlapSphere/OverlapBox`

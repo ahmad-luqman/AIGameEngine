@@ -467,6 +467,16 @@ namespace Basalt {
 			r.Field("EnableCollision", c.EnableCollision);
 		}
 
+		void Fields(FieldReader& r, CharacterControllerComponent& c)
+		{
+			r.Field("SlopeLimit", c.SlopeLimit);
+			r.Field("StepHeight", c.StepHeight);
+			r.Field("MaxStrength", c.MaxStrength);
+			r.Field("Mass", c.Mass);
+			r.Field("GravityFactor", c.GravityFactor);
+			r.Field("Layer", c.Layer);
+		}
+
 		void Fields(FieldReader& r, ScriptComponent& c)
 		{
 			r.Field("Script", c.Script);
@@ -630,6 +640,18 @@ namespace Basalt {
 				{ "BreakForce", c.BreakForce },
 				{ "BreakTorque", c.BreakTorque },
 				{ "EnableCollision", c.EnableCollision },
+			};
+		}
+
+		json Write(const CharacterControllerComponent& c)
+		{
+			return {
+				{ "SlopeLimit", c.SlopeLimit },
+				{ "StepHeight", c.StepHeight },
+				{ "MaxStrength", c.MaxStrength },
+				{ "Mass", c.Mass },
+				{ "GravityFactor", c.GravityFactor },
+				{ "Layer", c.Layer },
 			};
 		}
 
@@ -838,6 +860,7 @@ namespace Basalt {
 			infos.push_back(MakeInfo<CapsuleColliderComponent>("CapsuleCollider"));
 			infos.push_back(MakeInfo<MeshColliderComponent>("MeshCollider"));
 			infos.push_back(MakeInfo<JointComponent>("Joint"));
+			infos.push_back(MakeInfo<CharacterControllerComponent>("CharacterController"));
 			infos.push_back(MakeInfo<ScriptComponent>("Script"));
 			infos.push_back(MakeInfo<AudioSourceComponent>("AudioSource"));
 			infos.push_back(MakeInfo<AudioListenerComponent>("AudioListener"));
