@@ -1207,7 +1207,8 @@ namespace Basalt {
 			}
 			case JointType::Cone:
 				BS_CORE_ASSERT(record.Constraint->GetSubType() == JPH::EConstraintSubType::Cone, "joint record out of sync with its constraint");
-				static_cast<JPH::ConeConstraint*>(record.Constraint.GetPtr())->SetHalfConeAngle(joint.UseLimits ? glm::radians(limitMax) : JPH::JPH_PI);
+				// Jolt requires at most pi, which glm::radians(180) can round past.
+				static_cast<JPH::ConeConstraint*>(record.Constraint.GetPtr())->SetHalfConeAngle(joint.UseLimits ? std::min(glm::radians(limitMax), JPH::JPH_PI) : JPH::JPH_PI);
 				break;
 			case JointType::SixDOF:
 			{
