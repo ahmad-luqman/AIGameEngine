@@ -5,6 +5,7 @@
 #include "Basalt/Scene/Entity.h"
 
 #include <filesystem>
+#include <functional>
 #include <unordered_map>
 
 namespace Basalt {
@@ -23,8 +24,9 @@ namespace Basalt {
 
 	private:
 		void DrawScriptProperties(Entity entity, const nlohmann::json& component);
-		// Picker for a component field that holds an entity UUID (0 = none, shown as noneLabel).
-		void DrawEntityReference(Entity entity, const std::string& component, const std::string& field, uint64_t current, const char* noneLabel);
+		// Picker for a component field that holds an entity UUID (0 = none). filter, when set, limits the
+		// listed entities.
+		void DrawEntityReference(Entity entity, const std::string& component, const std::string& field, uint64_t current, const std::function<bool(Entity)>& filter);
 		const nlohmann::json* GetScriptDefaults(const std::string& scriptPath);
 
 	private:

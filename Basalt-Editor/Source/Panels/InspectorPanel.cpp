@@ -10,6 +10,9 @@
 #include <imgui.h>
 #include <imgui_stdlib.h>
 
+#include <algorithm>
+#include <functional>
+
 namespace Basalt {
 
 	const nlohmann::json* InspectorPanel::GetScriptDefaults(const std::string& scriptPath)
@@ -80,40 +83,48 @@ namespace Basalt {
 		}
 	}
 
-	void InspectorPanel::DrawEntityReference(Entity entity, const std::string& component, const std::string& field, uint64_t current, const char* noneLabel)
+	namespace {
+
+		// Whether the entity gets a physics body when play starts (a RigidBody alone is not enough).
+		bool HasPhysicsBody(Entity entity)
+		{
+			return entity.HasComponent<RigidBodyComponent>() &&
+				   (entity.HasComponent<BoxColliderComponent>() || entity.HasComponent<SphereColliderComponent>() || entity.HasComponent<CapsuleColliderComponent>());
+		}
+
+	}
+
+	void InspectorPanel::DrawEntityReference(Entity entity, const std::string& component, const std::string& field, uint64_t current, const std::function<bool(Entity)>& filter)
 	{
+		constexpr const char* NoneLabel = "None";
 		Scene& scene = *entity.GetScene();
-		const Entity target = current != 0 ? scene.GetEntityByUUID(current) : Entity{};
-		const std::string preview = current == 0 ? noneLabel : target ? target.GetName()
-																	  : "<missing " + std::to_string(current) + ">";
+		std::string preview = NoneLabel;
+		if (current != 0)
+		{
+			const Entity target = scene.GetEntityByUUID(current);
+			preview = target ? target.GetName() : "<missing " + std::to_string(current) + ">";
+		}
 
 		uint64_t selected = current;
-		bool changed = false;
 		if (ImGui::BeginCombo(field.c_str(), preview.c_str()))
 		{
-			if (ImGui::Selectable(noneLabel, current == 0))
-			{
+			if (ImGui::Selectable(NoneLabel, current == 0))
 				selected = 0;
-				changed = true;
-			}
-			// Only entities with a rigid body can be joined to; the entity itself is excluded.
+			// The entity itself is never a valid target.
 			for (Entity candidate : scene.GetAllEntitiesOrdered())
 			{
-				if (candidate == entity || !candidate.HasComponent<RigidBodyComponent>())
+				if (candidate == entity || (filter && !filter(candidate)))
 					continue;
 				const uint64_t id = candidate.GetUUID();
 				ImGui::PushID(static_cast<int>(id ^ (id >> 32)));
 				if (ImGui::Selectable(candidate.GetName().c_str(), id == current))
-				{
 					selected = id;
-					changed = true;
-				}
 				ImGui::PopID();
 			}
 			ImGui::EndCombo();
 		}
 
-		if (changed && selected != current)
+		if (selected != current)
 		{
 			if (m_Context.Execute("component.set", { { "entity", static_cast<uint64_t>(entity.GetUUID()) }, { "component", component }, { "data", { { field, selected } } } }))
 				m_Context.CommitHistory();
@@ -166,9 +177,11 @@ namespace Basalt {
 						continue;
 					if (info.Name == "Script" && field == "Properties")
 						continue;
-					if (info.Name == "Joint" && field == "ConnectedEntity")
+					if (std::find(info.EntityFields.begin(), info.EntityFields.end(), field) != info.EntityFields.end())
 					{
-						DrawEntityReference(entity, info.Name, field, data[field].get<uint64_t>(), "World");
+						// Joints can only attach to entities that will have a physics body (None = the world).
+						const bool joint = info.Name == "Joint";
+						DrawEntityReference(entity, info.Name, field, data[field].get<uint64_t>(), joint ? std::function<bool(Entity)>(HasPhysicsBody) : nullptr);
 						continue;
 					}
 					auto options = info.EnumOptions.find(field);
@@ -180,6 +193,8 @@ namespace Basalt {
 				}
 				if (info.Name == "Script")
 					DrawScriptProperties(entity, data);
+				if (info.Name == "Joint" && !HasPhysicsBody(entity))
+					ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "This entity needs a RigidBody and a collider for the joint to work.");
 			}
 			ImGui::PopID();
 		}
