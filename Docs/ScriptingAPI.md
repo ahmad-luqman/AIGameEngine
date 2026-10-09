@@ -288,7 +288,7 @@ end
 ### Character controllers
 
 A `CharacterController` with a collider (a `CapsuleCollider` fits most characters; the editor's
-Create > Character adds both) makes the entity a game character instead of a rigid body: it slides along
+Create > Character adds both; a `MeshCollider` uses its convex hull) makes the entity a game character instead of a rigid body: it slides along
 walls, walks up slopes up to `SlopeLimit` degrees and steps up to `StepHeight` meters, rides moving
 platforms, and pushes dynamic bodies with at most `MaxStrength` newtons. A `RigidBody` on the same entity
 is ignored. Other bodies, queries and triggers see the character as a kinematic body on its `Layer`,

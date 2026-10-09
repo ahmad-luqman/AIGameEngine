@@ -252,7 +252,8 @@ namespace Basalt {
 				if (info.Name == "CharacterController")
 				{
 					// Physics shapes the character from these and skips it without one.
-					if (!entity.HasComponent<BoxColliderComponent>() && !entity.HasComponent<SphereColliderComponent>() && !entity.HasComponent<CapsuleColliderComponent>())
+					if (!entity.HasComponent<BoxColliderComponent>() && !entity.HasComponent<SphereColliderComponent>() && !entity.HasComponent<CapsuleColliderComponent>() &&
+						!entity.HasComponent<MeshColliderComponent>())
 						ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Add a collider (a CapsuleCollider fits most characters).");
 					if (entity.HasComponent<RigidBodyComponent>())
 						ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "The RigidBody is ignored while the character controller is present.");

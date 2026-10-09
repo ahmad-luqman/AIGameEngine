@@ -342,6 +342,8 @@ TEST_SUITE("Physics")
 		CreateGround(scene);
 		Entity character = CreateCharacter(scene, { 0.0f, 3.0f, 0.0f });
 		character.GetComponent<CharacterControllerComponent>().GravityFactor = 0.0f;
+		// Without strength the character does not push the ball itself: only its body's restitution bounces it.
+		character.GetComponent<CharacterControllerComponent>().MaxStrength = 0.0f;
 
 		scene.OnSimulationStart();
 		PhysicsWorld& physics = *scene.GetPhysicsWorld();
@@ -716,6 +718,73 @@ TEST_SUITE("Physics")
 		CHECK(scene.GetPhysicsWorld()->GetCharacterCount() == 0);
 		CHECK(scene.GetScriptEngine()->GetErrors().empty());
 		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("A character can be shaped by a MeshCollider, which uses its convex hull")
+	{
+		Scene scene;
+		CreateGround(scene);
+		Entity character = scene.CreateEntity("Crate");
+		character.GetTransform().Translation = { 0.0f, 3.0f, 0.0f };
+		character.AddComponent<MeshComponent>().Mesh = "builtin://Cube";
+		character.AddComponent<MeshColliderComponent>();
+		character.AddComponent<CharacterControllerComponent>();
+
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		REQUIRE(physics.HasCharacter(character));
+		CHECK(CountMessages(since, "a character collides by the convex hull of its MeshCollider; set Convex") == 1);
+		Simulate(scene, 1.5f);
+		CHECK(physics.IsCharacterGrounded(character));
+		// The unit cube rests on its base (plus Jolt's small character padding).
+		CHECK(Position(character).y == doctest::Approx(0.5f).epsilon(0.05));
+		// Other bodies and queries see its (smaller) inner body.
+		const auto hit = physics.Raycast({ 0.0f, 5.0f, 0.0f }, { 0.0f, -1.0f, 0.0f }, 10.0f);
+		REQUIRE(hit.has_value());
+		CHECK(hit->EntityID == character.GetUUID());
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("A character's body does not inherit the combine modes of a removed body")
+	{
+		Scene scene;
+		CreateGround(scene);
+		// A body whose restitution Min stops every bounce; removed during play, so Jolt reuses its slot for the
+		// character's inner body created right after.
+		Entity stale = CreateStaticBox(scene, "Stale", { 20.0f, 0.5f, 0.0f }, glm::vec3(0.5f));
+		stale.GetComponent<RigidBodyComponent>().RestitutionCombine = PhysicsCombineMode::Min;
+		Entity ball = scene.CreateEntity("Ball");
+		ball.GetTransform().Translation = { 0.0f, 6.0f, 0.0f };
+		auto& body = ball.AddComponent<RigidBodyComponent>();
+		body.Type = RigidBodyType::Dynamic;
+		body.Restitution = 0.8f;
+		body.LinearDamping = 0.0f;
+		ball.AddComponent<SphereColliderComponent>().Radius = 0.25f;
+
+		scene.OnSimulationStart();
+		scene.DestroyEntity(stale);
+		scene.OnUpdate(Step);
+		Entity character = CreateCharacter(scene, { 0.0f, StandingHeight, 0.0f });
+		character.GetComponent<CharacterControllerComponent>().GravityFactor = 0.0f;
+		// Without strength the character does not push the ball itself: only its body's restitution bounces it.
+		character.GetComponent<CharacterControllerComponent>().MaxStrength = 0.0f;
+		scene.OnUpdate(Step);
+		REQUIRE(scene.GetPhysicsWorld()->HasCharacter(character));
+
+		// Default modes take the larger restitution (0.8), so the ball bounces off the character's head.
+		float lowest = 100.0f;
+		float highestAfter = 0.0f;
+		Simulate(scene, 2.5f, [&]() {
+			const float y = ball.GetTransform().Translation.y;
+			if (y < lowest)
+				lowest = y;
+			else if (lowest < 3.0f)
+				highestAfter = std::max(highestAfter, y);
+		});
+		CHECK(lowest > 1.5f);
+		CHECK(highestAfter > lowest + 1.0f);
+		scene.OnSimulationStop();
 	}
 
 	TEST_CASE("CharacterController round-trips through the component registry")
