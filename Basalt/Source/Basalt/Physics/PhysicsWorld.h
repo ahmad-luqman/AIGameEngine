@@ -40,6 +40,9 @@ namespace Basalt {
 	// retried when that body is created). A joint is rebuilt from the current poses when either body is
 	// rebuilt or one of its structural fields changes (see JointComponent); other changes update it in place.
 	// Joint warnings are logged once per distinct setting, so scripts may set the component every frame.
+	// Collision filtering uses named layers (RigidBodyComponent::Layer) and the collision matrix of the
+	// scene's override or else the active project, copied when the world is built: matrix edits apply on the
+	// next play. An unknown layer name falls back to Default with a warning.
 	// Dynamic bodies write their pose back to the entity; moving a dynamic or static body's transform from
 	// script teleports it; kinematic bodies follow their transform smoothly.
 	class PhysicsWorld

@@ -316,7 +316,7 @@ namespace Basalt {
 			r.Field("IsTrigger", c.IsTrigger);
 			r.Field("FixedRotation", c.FixedRotation);
 			r.Field("Layer", c.Layer);
-			r.Field("CollisionMask", c.CollisionMask);
+			r.Field("Continuous", c.Continuous);
 		}
 
 		void Fields(FieldReader& r, BoxColliderComponent& c)
@@ -465,7 +465,7 @@ namespace Basalt {
 				{ "IsTrigger", c.IsTrigger },
 				{ "FixedRotation", c.FixedRotation },
 				{ "Layer", c.Layer },
-				{ "CollisionMask", c.CollisionMask },
+				{ "Continuous", c.Continuous },
 			};
 		}
 

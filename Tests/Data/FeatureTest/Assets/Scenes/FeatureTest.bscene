@@ -62,7 +62,7 @@
 		{ "ID": 15, "Name": "Pillar", "Components": {
 			"Transform": { "Translation": [-3, 1, -6] },
 			"Mesh": { "Mesh": "builtin://Capsule" },
-			"RigidBody": { "Type": "Static", "Layer": 2, "CollisionMask": 65535 },
+			"RigidBody": { "Type": "Static" },
 			"CapsuleCollider": {} } },
 		{ "ID": 16, "Name": "Pillar", "Components": {
 			"Transform": { "Translation": [3, 1, -6] },

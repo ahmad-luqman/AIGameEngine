@@ -197,7 +197,8 @@ TEST_SUITE("Serialization")
 		transform.Scale = { 2.0f, 2.0f, 2.0f };
 		entity.GetComponent<CameraComponent>().Camera.SetPerspective(glm::radians(70.0f), 0.5f, 500.0f);
 		entity.GetComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
-		entity.GetComponent<RigidBodyComponent>().Layer = 3;
+		entity.GetComponent<RigidBodyComponent>().Layer = "Debris";
+		entity.GetComponent<RigidBodyComponent>().Continuous = true;
 		entity.GetComponent<MaterialComponent>().AlbedoColor = { 0.1f, 0.2f, 0.3f, 0.4f };
 		entity.GetComponent<ScriptComponent>().Script = "Assets/Scripts/Test.lua";
 		entity.GetComponent<ScriptComponent>().Properties = { { "Speed", 3.5 }, { "Target", { 1, 2, 3 } } };

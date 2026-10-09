@@ -1,6 +1,8 @@
 #include "Basalt/Physics/PhysicsWorld.h"
 
 #include "Basalt/Core/Log.h"
+#include "Basalt/Physics/PhysicsLayers.h"
+#include "Basalt/Project/Project.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
 #include "Basalt/Scripting/ScriptEngine.h"
@@ -31,6 +33,7 @@
 #include <Jolt/RegisterTypes.h>
 
 #include <algorithm>
+#include <array>
 #include <cfloat>
 #include <cmath>
 #include <cstdarg>
@@ -86,14 +89,13 @@ namespace Basalt {
 		}
 
 		// ---------------------------------------------------------------------------------------
-		// Object layers: bit 20 = moving, bits 16-19 = collision layer index, bits 0-15 = collision mask.
+		// Object layers: bit 8 = moving, bits 0-7 = physics layer index (see PhysicsLayers).
 		// ---------------------------------------------------------------------------------------
-		constexpr uint32_t MovingBit = 1u << 20;
-		constexpr uint32_t MaxCollisionLayers = 16;
+		constexpr uint32_t MovingBit = 1u << 8;
 
-		JPH::ObjectLayer MakeObjectLayer(bool moving, uint32_t layer, uint32_t mask)
+		JPH::ObjectLayer MakeObjectLayer(bool moving, uint32_t layer)
 		{
-			return static_cast<JPH::ObjectLayer>((moving ? MovingBit : 0u) | ((layer & 0xFu) << 16) | (mask & 0xFFFFu));
+			return static_cast<JPH::ObjectLayer>((moving ? MovingBit : 0u) | (layer & 0xFFu));
 		}
 
 		bool IsMovingLayer(JPH::ObjectLayer layer)
@@ -102,11 +104,7 @@ namespace Basalt {
 		}
 		uint32_t LayerIndex(JPH::ObjectLayer layer)
 		{
-			return (layer >> 16) & 0xFu;
-		}
-		uint32_t LayerMask(JPH::ObjectLayer layer)
-		{
-			return layer & 0xFFFFu;
+			return layer & 0xFFu;
 		}
 
 		namespace BroadPhaseLayers {
@@ -141,15 +139,29 @@ namespace Basalt {
 			}
 		};
 
+		// Applies the project's collision matrix. Read by Jolt worker threads, so the masks are only set
+		// before the first step.
 		class ObjectLayerPairFilterImpl final : public JPH::ObjectLayerPairFilter
 		{
 		public:
+			void SetLayers(const PhysicsLayers& layers)
+			{
+				for (uint32_t i = 0; i < PhysicsLayers::MaxLayers; i++)
+					m_Masks[i] = layers.GetCollisionMask(i);
+			}
+
 			bool ShouldCollide(JPH::ObjectLayer a, JPH::ObjectLayer b) const override
 			{
 				if (!IsMovingLayer(a) && !IsMovingLayer(b))
 					return false;
-				return ((1u << LayerIndex(a)) & LayerMask(b)) != 0 && ((1u << LayerIndex(b)) & LayerMask(a)) != 0;
+				const uint32_t indexA = LayerIndex(a);
+				const uint32_t indexB = LayerIndex(b);
+				// The matrix is symmetric, so one direction decides.
+				return indexA < PhysicsLayers::MaxLayers && indexB < PhysicsLayers::MaxLayers && (m_Masks[indexA] & (1u << indexB)) != 0;
 			}
+
+		private:
+			std::array<uint32_t, PhysicsLayers::MaxLayers> m_Masks{};
 		};
 
 		JPH::Vec3 ToJolt(const glm::vec3& v)
@@ -343,6 +355,11 @@ namespace Basalt {
 		std::unordered_set<UUID> DirtyJoints;
 		// The warnings last logged for each joint, so repeats are not logged again.
 		std::unordered_map<UUID, std::vector<std::string>> LoggedJointWarnings;
+		// The collision layers this world was built with (scene override, else the active project's).
+		PhysicsLayers Layers;
+		// The body warnings (unknown layer, ignored Continuous) last logged for each entity, so a script that
+		// sets the component every frame does not flood the log.
+		std::unordered_map<UUID, std::string> LoggedBodyWarnings;
 		// Set while Start() creates every body; it marks all joints dirty itself afterwards.
 		bool Starting = false;
 		// Jolt reports contacts per sub-shape pair; entities see one begin/end per entity pair. Keys are
@@ -488,6 +505,12 @@ namespace Basalt {
 		m_Impl->TempAllocator = CreateScope<JPH::TempAllocatorImpl>(16 * 1024 * 1024);
 		const int threadCount = std::max(1, static_cast<int>(std::thread::hardware_concurrency()) - 1);
 		m_Impl->JobSystem = CreateScope<JPH::JobSystemThreadPool>(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, threadCount);
+
+		if (const PhysicsLayers* layers = scene->GetPhysicsLayers())
+			m_Impl->Layers = *layers;
+		else if (const Ref<Project>& project = Project::GetActive())
+			m_Impl->Layers = project->GetConfig().Physics;
+		m_Impl->ObjectLayerPairFilter.SetLayers(m_Impl->Layers);
 
 		m_Impl->System = CreateScope<JPH::PhysicsSystem>();
 		m_Impl->System->Init(MaxBodies, NumBodyMutexes, MaxBodyPairs, MaxContactConstraints,
@@ -663,8 +686,13 @@ namespace Basalt {
 			motionType = JPH::EMotionType::Kinematic;
 
 		const bool moving = motionType != JPH::EMotionType::Static;
-		const uint32_t layer = std::min(rigidBody.Layer, MaxCollisionLayers - 1);
-		JPH::BodyCreationSettings settings(shapeResult.Get(), ToJolt(position), ToJolt(rotation), motionType, MakeObjectLayer(moving, layer, rigidBody.CollisionMask));
+		std::string warnings;
+		uint32_t layer = 0;
+		if (const auto index = impl.Layers.Find(rigidBody.Layer))
+			layer = *index;
+		else
+			warnings += "unknown physics layer '" + rigidBody.Layer + "', using Default. ";
+		JPH::BodyCreationSettings settings(shapeResult.Get(), ToJolt(position), ToJolt(rotation), motionType, MakeObjectLayer(moving, layer));
 		settings.mUserData = static_cast<uint64_t>(entity.GetUUID());
 		settings.mFriction = rigidBody.Friction;
 		settings.mRestitution = rigidBody.Restitution;
@@ -676,6 +704,21 @@ namespace Basalt {
 		settings.mCollideKinematicVsNonDynamic = rigidBody.IsTrigger;
 		if (rigidBody.FixedRotation && motionType == JPH::EMotionType::Dynamic)
 			settings.mAllowedDOFs = JPH::EAllowedDOFs::TranslationX | JPH::EAllowedDOFs::TranslationY | JPH::EAllowedDOFs::TranslationZ;
+		// Jolt only sweeps dynamic bodies; a sensor has nothing to stop it, so it gains nothing from a sweep.
+		if (rigidBody.Continuous)
+		{
+			if (motionType == JPH::EMotionType::Dynamic && !rigidBody.IsTrigger)
+				settings.mMotionQuality = JPH::EMotionQuality::LinearCast;
+			else
+				warnings += "Continuous only affects dynamic bodies that are not triggers. ";
+		}
+		if (warnings.empty())
+			impl.LoggedBodyWarnings.erase(entity.GetUUID());
+		else if (auto [it, inserted] = impl.LoggedBodyWarnings.try_emplace(entity.GetUUID(), warnings); inserted || it->second != warnings)
+		{
+			it->second = warnings;
+			BS_CORE_WARN("Physics: entity '{}': {}", entity.GetName(), warnings.substr(0, warnings.size() - 1));
+		}
 		if (motionType == JPH::EMotionType::Dynamic)
 		{
 			settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
@@ -725,6 +768,7 @@ namespace Basalt {
 		m_Impl->DirtyEntities.erase(entity.GetUUID());
 		m_Impl->DirtyJoints.erase(entity.GetUUID());
 		m_Impl->LoggedJointWarnings.erase(entity.GetUUID());
+		m_Impl->LoggedBodyWarnings.erase(entity.GetUUID());
 	}
 
 	void PhysicsWorld::RebuildDirtyJoints()

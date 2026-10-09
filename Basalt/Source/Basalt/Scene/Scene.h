@@ -3,10 +3,12 @@
 #include "Basalt/Core/Base.h"
 #include "Basalt/Core/Timestep.h"
 #include "Basalt/Core/UUID.h"
+#include "Basalt/Physics/PhysicsLayers.h"
 
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -164,6 +166,10 @@ namespace Basalt {
 		const RendererSettings& GetRendererSettings() const { return m_RendererSettings; }
 		PhysicsSettings& GetPhysicsSettings() { return m_PhysicsSettings; }
 		const PhysicsSettings& GetPhysicsSettings() const { return m_PhysicsSettings; }
+		// Collision layers for this scene's physics, overriding the active project's (used by tests and
+		// tools that run without a project). nullptr means "use the project's". Not saved in scene files.
+		void SetPhysicsLayers(std::optional<PhysicsLayers> layers) { m_PhysicsLayers = std::move(layers); }
+		const PhysicsLayers* GetPhysicsLayers() const { return m_PhysicsLayers ? &*m_PhysicsLayers : nullptr; }
 
 		entt::registry& GetRegistry() { return m_Registry; }
 
@@ -202,6 +208,7 @@ namespace Basalt {
 
 		RendererSettings m_RendererSettings;
 		PhysicsSettings m_PhysicsSettings;
+		std::optional<PhysicsLayers> m_PhysicsLayers;
 
 		Scope<PhysicsWorld> m_PhysicsWorld;
 		Scope<ScriptEngine> m_ScriptEngine;
