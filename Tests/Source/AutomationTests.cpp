@@ -133,6 +133,19 @@ TEST_SUITE("Automation")
 		CHECK(Run(registry, session, "project.info")["physicsLayers"] == layers);
 		CHECK(RunError(registry, session, "project.set", { { "name", "Renamed" }, { "physicsLayers", { { "Names", { "Player" } } } } }).find("Default") != std::string::npos);
 		CHECK(Run(registry, session, "project.info")["name"] == "Demo");
+		// Every parameter is validated before any is applied.
+		CHECK(RunError(registry, session, "project.set", { { "name", "Renamed" }, { "windowWidth", 1 } }).find("windowWidth") != std::string::npos);
+		CHECK(Run(registry, session, "project.info")["name"] == "Demo");
+		// Removing a layer that a body uses is reported right away, by project.set and scene.info.
+		Run(registry, session, "component.set", { { "entity", player["id"] }, { "component", "RigidBody" }, { "data", { { "Layer", "Pickup" } } } });
+		CHECK(Run(registry, session, "scene.info")["unknownPhysicsLayers"].empty());
+		const json stranded = Run(registry, session, "project.set", { { "physicsLayers", { { "Names", { "Default", "Player" } } } } })["unknownPhysicsLayers"];
+		REQUIRE(stranded.size() == 1);
+		CHECK(stranded[0]["name"] == "Player");
+		CHECK(stranded[0]["layer"] == "Pickup");
+		CHECK(stranded[0]["entity"] == player["id"]);
+		CHECK(Run(registry, session, "scene.info")["unknownPhysicsLayers"] == stranded);
+		CHECK(Run(registry, session, "project.set", { { "physicsLayers", layers } })["unknownPhysicsLayers"].empty());
 
 		Run(registry, session, "asset.write", { { "path", "Assets/Scripts/Hello.lua" }, { "content", "return { Properties = { Speed = 3 } }" } });
 		CHECK(Run(registry, session, "script.check", { { "path", "Assets/Scripts/Hello.lua" } })["properties"]["Speed"] == 3);

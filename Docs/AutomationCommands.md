@@ -346,7 +346,7 @@ Hash of the current scene state (the play copy while playing); equal states give
 
 ### `scene.info`
 
-Summary of the open scene: name, path, entity count, state, unsaved changes.
+Summary of the open scene: name, path, entity count, state, unsaved changes, rigid bodies on undefined physics layers.
 
 ### `scene.new`
 
