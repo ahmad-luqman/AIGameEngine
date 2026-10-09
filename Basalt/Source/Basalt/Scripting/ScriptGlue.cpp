@@ -429,26 +429,26 @@ namespace Basalt {
 			input["GetMouseScroll"] = []() { return Input::GetMouseScroll(); };
 
 			sol::table physics = lua.create_named_table("Physics");
-			physics["Raycast"] = [&context](sol::this_state state, const glm::vec3& origin, const glm::vec3& direction, float maxDistance, sol::object options) -> sol::object {
+			physics["Raycast"] = [&context](sol::this_state state, const glm::vec3& origin, const glm::vec3& direction, float maxDistance, const sol::object& options) -> sol::object {
 				const PhysicsWorld& world = RequirePhysics(context);
 				return CastResult(
 					state, context, ParseQueryOptions(world, options), [&](const PhysicsQueryFilter& filter) { return world.RaycastAll(origin, direction, maxDistance, filter); }, [&](const PhysicsQueryFilter& filter) { return world.Raycast(origin, direction, maxDistance, filter); });
 			};
-			physics["SphereCast"] = [&context](sol::this_state state, const glm::vec3& origin, float radius, const glm::vec3& direction, float maxDistance, sol::object options) -> sol::object {
+			physics["SphereCast"] = [&context](sol::this_state state, const glm::vec3& origin, float radius, const glm::vec3& direction, float maxDistance, const sol::object& options) -> sol::object {
 				const PhysicsWorld& world = RequirePhysics(context);
 				return CastResult(
 					state, context, ParseQueryOptions(world, options), [&](const PhysicsQueryFilter& filter) { return world.SphereCastAll(origin, radius, direction, maxDistance, filter); }, [&](const PhysicsQueryFilter& filter) { return world.SphereCast(origin, radius, direction, maxDistance, filter); });
 			};
-			physics["BoxCast"] = [&context](sol::this_state state, const glm::vec3& origin, const glm::vec3& halfExtents, const glm::quat& rotation, const glm::vec3& direction, float maxDistance, sol::object options) -> sol::object {
+			physics["BoxCast"] = [&context](sol::this_state state, const glm::vec3& origin, const glm::vec3& halfExtents, const glm::quat& rotation, const glm::vec3& direction, float maxDistance, const sol::object& options) -> sol::object {
 				const PhysicsWorld& world = RequirePhysics(context);
 				return CastResult(
 					state, context, ParseQueryOptions(world, options), [&](const PhysicsQueryFilter& filter) { return world.BoxCastAll(origin, halfExtents, rotation, direction, maxDistance, filter); }, [&](const PhysicsQueryFilter& filter) { return world.BoxCast(origin, halfExtents, rotation, direction, maxDistance, filter); });
 			};
-			physics["OverlapSphere"] = [&context](sol::this_state state, const glm::vec3& center, float radius, sol::object options) {
+			physics["OverlapSphere"] = [&context](sol::this_state state, const glm::vec3& center, float radius, const sol::object& options) {
 				const PhysicsWorld& world = RequirePhysics(context);
 				return MakeEntityList(state, context, world.OverlapSphere(center, radius, ParseQueryOptions(world, options).Filter));
 			};
-			physics["OverlapBox"] = [&context](sol::this_state state, const glm::vec3& center, const glm::vec3& halfExtents, const glm::quat& rotation, sol::object options) {
+			physics["OverlapBox"] = [&context](sol::this_state state, const glm::vec3& center, const glm::vec3& halfExtents, const glm::quat& rotation, const sol::object& options) {
 				const PhysicsWorld& world = RequirePhysics(context);
 				return MakeEntityList(state, context, world.OverlapBox(center, halfExtents, rotation, ParseQueryOptions(world, options).Filter));
 			};
