@@ -25,7 +25,11 @@ Write scripts with `asset.write` (or directly as files under `<project>/Assets/S
 - Grid games (Tetris, Snake, Minesweeper): keep the logical state in Lua tables and mirror it with
   entities (cubes with `Mesh builtin://Cube` + `Material AlbedoColor`). Do not use physics for them.
 - Physics games: `RigidBody` (`Dynamic`/`Static`/`Kinematic`, `IsTrigger`) + a collider; react in
-  `OnCollisionBegin`/`OnTriggerEnter`. Move characters with `SetLinearVelocity`.
+  `OnCollisionBegin`/`OnTriggerEnter`. Move characters with `SetLinearVelocity`. Put bodies on named
+  layers (`RigidBody.Layer`) and set which layers collide with `project.set` `physicsLayers`
+  (`{"Names": ["Default", "Player", "Pickup"], "IgnoredPairs": [["Player", "Pickup"]]}`). Set
+  `RigidBody.Continuous` on fast projectiles. Probe the world with `Physics.Raycast/SphereCast/BoxCast/OverlapSphere/OverlapBox`
+  (options: `Ignore`, `Layers`, `IncludeTriggers`, `All`; see Docs/ScriptingAPI.md).
 - Use `Math.Seed(n)` for reproducible randomness, `Debug.Draw*` to visualise logic, `Game.Quit()` to exit.
 - Check every script compiles: `$B --project P script.check '{"path": "Assets/Scripts/Game.lua"}'`.
 
