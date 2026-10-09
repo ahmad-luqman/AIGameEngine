@@ -206,6 +206,7 @@ namespace Basalt {
 	// measured from it. The other fields update the live joint in place.
 	// An entity holds one JointComponent. To give a body several joints (a ladder rung held by two ropes),
 	// put each joint on its own entity, usually a child of the body, with BodyEntity set to the body.
+	// Which fields each type reads is decided in one place, JointFieldApplies (Basalt/Scene/JointFields.h).
 	struct JointComponent
 	{
 		JointType Type = JointType::Hinge;
@@ -239,9 +240,10 @@ namespace Basalt {
 		// Six-DOF limits along/around the joint frame's X (Axis), Y and Z, used when UseLimits is set (without
 		// limits a six-DOF joint locks translation and rotates freely). Translation in meters, rotation in
 		// degrees; every range must contain 0 (the rest pose), and min == max locks that axis. X rotation
-		// (twist) lies within [-180, 180]; Y and Z rotation (swing) form a cone whose half angles are
-		// AngularLimitMax.y and .z (0..180), so their minimums are 0 or mirror them. Limit springs soften
-		// only the limited (not locked) translation axes.
+		// (twist) lies within [-180, 180]; Y and Z rotation (swing) form a symmetric cone whose half angles are
+		// AngularLimitMax.y and .z (0..180): AngularLimitMin.y/.z of 0 means -max (Jolt's cone swing cannot be
+		// one-sided). Jolt locks an angle limit within 0.5 degrees of 0 and frees one within 0.5 of 180. Limit
+		// springs soften only the limited (not locked) translation axes.
 		glm::vec3 LinearLimitMin = { 0.0f, 0.0f, 0.0f };
 		glm::vec3 LinearLimitMax = { 0.0f, 0.0f, 0.0f };
 		glm::vec3 AngularLimitMin = { 0.0f, 0.0f, 0.0f };
