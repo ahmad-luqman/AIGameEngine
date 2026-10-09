@@ -224,6 +224,8 @@ namespace Basalt {
 			JointComponent structural = current;
 			structural.LimitMin = built.LimitMin;
 			structural.LimitMax = built.LimitMax;
+			structural.LimitSpringFrequency = built.LimitSpringFrequency;
+			structural.LimitSpringDamping = built.LimitSpringDamping;
 			structural.MotorMode = built.MotorMode;
 			structural.MotorTarget = built.MotorTarget;
 			structural.MotorMaxForce = built.MotorMaxForce;
@@ -293,6 +295,37 @@ namespace Basalt {
 					break;
 			}
 			return { 0.0f, 0.0f };
+		}
+
+		// The spring that softens a joint's limits (a frequency of 0 keeps them rigid). Settings with no
+		// effect on the joint are reported in warnings.
+		JPH::SpringSettings SanitizeLimitSpring(const JointComponent& joint, std::vector<std::string>& warnings)
+		{
+			if (joint.LimitSpringFrequency < 0.0f)
+				warnings.emplace_back(fmt::format("LimitSpringFrequency {} is negative; using 0 (rigid limits)", joint.LimitSpringFrequency));
+			if (joint.LimitSpringDamping < 0.0f)
+				warnings.emplace_back(fmt::format("LimitSpringDamping {} is negative; using 0", joint.LimitSpringDamping));
+			const float frequency = std::max(joint.LimitSpringFrequency, 0.0f);
+			if (frequency > 0.0f)
+			{
+				switch (joint.Type)
+				{
+					case JointType::Hinge:
+					case JointType::Slider:
+						if (!joint.UseLimits)
+							warnings.emplace_back(fmt::format("LimitSpringFrequency has no effect on a {} joint without UseLimits", JointTypeName(joint.Type)));
+						break;
+					case JointType::Distance:
+						// Without limits Jolt keeps the starting length as both limits, so the spring still
+						// works: the joint becomes a bungee pulled back to that length.
+						break;
+					case JointType::Fixed:
+					case JointType::Point:
+						warnings.emplace_back(fmt::format("LimitSpringFrequency has no effect on {} joints, which have no limits", JointTypeName(joint.Type)));
+						break;
+				}
+			}
+			return JPH::SpringSettings(JPH::ESpringMode::FrequencyAndDamping, frequency, std::max(joint.LimitSpringDamping, 0.0f));
 		}
 
 		JPH::EMotorState ToJoltMotorState(JointMotorMode mode)
@@ -1037,6 +1070,7 @@ namespace Basalt {
 		record.Settings = joint;
 
 		const auto [limitMin, limitMax] = SanitizeLimits(joint, warnings);
+		const JPH::SpringSettings limitSpring = SanitizeLimitSpring(joint, warnings);
 		const bool motorAllowed = joint.Type == JointType::Hinge || joint.Type == JointType::Slider;
 		if (joint.MotorMode != JointMotorMode::Off && !motorAllowed)
 			warnings.emplace_back(fmt::format("only hinge and slider joints have motors; MotorMode is ignored on {} joints", JointTypeName(joint.Type)));
@@ -1055,6 +1089,7 @@ namespace Basalt {
 				auto* hinge = static_cast<JPH::HingeConstraint*>(record.Constraint.GetPtr());
 				if (joint.UseLimits)
 					hinge->SetLimits(glm::radians(limitMin), glm::radians(limitMax));
+				hinge->SetLimitsSpringSettings(limitSpring);
 				hinge->GetMotorSettings().SetTorqueLimit(motorLimit);
 				hinge->SetMotorState(motorState);
 				if (motorState == JPH::EMotorState::Velocity)
@@ -1075,6 +1110,7 @@ namespace Basalt {
 				auto* slider = static_cast<JPH::SliderConstraint*>(record.Constraint.GetPtr());
 				if (joint.UseLimits)
 					slider->SetLimits(limitMin, limitMax);
+				slider->SetLimitsSpringSettings(limitSpring);
 				slider->GetMotorSettings().SetForceLimit(motorLimit);
 				slider->SetMotorState(motorState);
 				if (motorState == JPH::EMotorState::Velocity)
@@ -1084,10 +1120,14 @@ namespace Basalt {
 				break;
 			}
 			case JointType::Distance:
+			{
 				BS_CORE_ASSERT(record.Constraint->GetSubType() == JPH::EConstraintSubType::Distance, "joint record out of sync with its constraint");
+				auto* distance = static_cast<JPH::DistanceConstraint*>(record.Constraint.GetPtr());
 				if (joint.UseLimits)
-					static_cast<JPH::DistanceConstraint*>(record.Constraint.GetPtr())->SetDistance(limitMin, limitMax);
+					distance->SetDistance(limitMin, limitMax);
+				distance->SetLimitsSpringSettings(limitSpring);
 				break;
+			}
 			case JointType::Fixed:
 			case JointType::Point:
 				break;

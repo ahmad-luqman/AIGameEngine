@@ -1102,6 +1102,106 @@ TEST_SUITE("Physics")
 		CHECK(settle(false) < -2.0f);
 	}
 
+	TEST_CASE("Spring-softened limits let a slider overshoot and pull it back")
+	{
+		// Peak and final offset of a weightless slider thrown against its +1 m limit.
+		auto run = [](float frequency) {
+			Scene scene;
+			Entity box = CreateBox(scene, { 0.0f, 0.0f, 0.0f });
+			box.GetComponent<RigidBodyComponent>().GravityFactor = 0.0f;
+			auto& joint = box.AddComponent<JointComponent>();
+			joint.Type = JointType::Slider;
+			joint.Axis = { 1.0f, 0.0f, 0.0f };
+			joint.UseLimits = true;
+			joint.LimitMin = -1.0f;
+			joint.LimitMax = 1.0f;
+			joint.LimitSpringFrequency = frequency;
+			joint.LimitSpringDamping = 0.2f;
+			scene.OnSimulationStart();
+			scene.GetPhysicsWorld()->SetLinearVelocity(box, { 5.0f, 0.0f, 0.0f });
+			float peak = 0.0f;
+			for (int i = 0; i < 30; i++)
+			{
+				scene.OnUpdate(Step);
+				peak = std::max(peak, box.GetTransform().Translation.x);
+			}
+			const float after = box.GetTransform().Translation.x;
+			scene.OnSimulationStop();
+			return std::pair(peak, after);
+		};
+		const auto [rigidPeak, rigidAfter] = run(0.0f);
+		CHECK(rigidPeak < 1.05f);
+		const auto [softPeak, softAfter] = run(2.0f);
+		CHECK(softPeak > 1.2f);
+		// Half a second later the spring has thrown it back inside the limits.
+		CHECK(softAfter < 1.0f);
+	}
+
+	TEST_CASE("A spring on a distance joint without limits makes a bungee")
+	{
+		// Length of a 2 m rope holding a 1 kg box after it settles.
+		auto settle = [](float frequency) {
+			Scene scene;
+			Entity box = CreateBox(scene, { 0.0f, 0.0f, 0.0f });
+			auto& joint = box.AddComponent<JointComponent>();
+			joint.Type = JointType::Distance;
+			joint.ConnectedAnchor = { 0.0f, 2.0f, 0.0f };
+			joint.LimitSpringFrequency = frequency;
+			scene.OnSimulationStart();
+			Simulate(scene, 4.0f);
+			const float length = 2.0f - box.GetTransform().Translation.y;
+			scene.OnSimulationStop();
+			return length;
+		};
+		CHECK(settle(0.0f) == doctest::Approx(2.0f).epsilon(0.01));
+		// A 1 Hz spring stretches by g / (2 pi f)^2 = 0.25 m under its load.
+		CHECK(settle(1.0f) == doctest::Approx(2.25f).epsilon(0.02));
+	}
+
+	TEST_CASE("Limit springs update in place and warn when they have no effect")
+	{
+		Scene scene;
+		// A pendulum resting against its -30 degree limit.
+		Entity pendulum = CreateBox(scene, { 1.0f, 0.0f, 0.0f });
+		auto& hinge = pendulum.AddComponent<JointComponent>();
+		hinge.Type = JointType::Hinge;
+		hinge.Anchor = { -1.0f, 0.0f, 0.0f };
+		hinge.Axis = { 0.0f, 0.0f, 1.0f };
+		hinge.UseLimits = true;
+		hinge.LimitMin = -30.0f;
+		hinge.LimitMax = 30.0f;
+
+		Entity ball = CreateBox(scene, { 5.0f, 0.0f, 0.0f });
+		auto& point = ball.AddComponent<JointComponent>();
+		point.Type = JointType::Point;
+		point.LimitSpringFrequency = 2.0f;
+		Entity door = CreateBox(scene, { 10.0f, 0.0f, 0.0f });
+		auto& free = door.AddComponent<JointComponent>();
+		free.LimitSpringFrequency = 2.0f;
+		free.LimitSpringDamping = -1.0f;
+
+		const uint64_t before = Log::GetHistory().GetTotalCount();
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		Simulate(scene, 2.0f);
+		CHECK(physics.GetJointPosition(pendulum).value() == doctest::Approx(-30.0f).epsilon(0.05));
+		CHECK(CountMessages(before, "no effect on point joints") == 1);
+		CHECK(CountMessages(before, "no effect on a hinge joint without UseLimits") == 1);
+		CHECK(CountMessages(before, "LimitSpringDamping -1 is negative") == 1);
+
+		// Softening the limit keeps the rest pose (a rebuild would measure from the current angle): the
+		// pendulum sinks past -30 degrees and its angle is still measured from where it started.
+		SetJoint(pendulum, [](JointComponent& joint) { joint.LimitSpringFrequency = 1.0f; });
+		scene.OnUpdate(Step);
+		CHECK(physics.GetJointPosition(pendulum).value() < -29.0f);
+		Simulate(scene, 2.0f);
+		CHECK(physics.GetJointPosition(pendulum).value() < -35.0f);
+		SetJoint(pendulum, [](JointComponent& joint) { joint.LimitSpringFrequency = 0.0f; });
+		Simulate(scene, 2.0f);
+		CHECK(physics.GetJointPosition(pendulum).value() == doctest::Approx(-30.0f).epsilon(0.05));
+		scene.OnSimulationStop();
+	}
+
 	TEST_CASE("Joint entities give one body several joints")
 	{
 		Scene scene;
