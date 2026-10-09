@@ -212,6 +212,7 @@ namespace Basalt {
 		constexpr const char* s_JointMotorModeNames[] = { "Off", "Velocity", "Position" };
 		// Names are indexed by enum value; a new enum value needs a name here.
 		static_assert(std::size(s_RigidBodyTypeNames) == static_cast<size_t>(RigidBodyType::Kinematic) + 1);
+		static_assert(std::size(s_ProjectionTypeNames) == static_cast<size_t>(SceneCamera::ProjectionType::Orthographic) + 1);
 		static_assert(std::size(s_JointTypeNames) == static_cast<size_t>(JointType::Distance) + 1);
 		static_assert(std::size(s_JointMotorModeNames) == static_cast<size_t>(JointMotorMode::Position) + 1);
 
