@@ -296,6 +296,7 @@ function Driver:OnUpdate(dt)
 		Check("Joint ConnectedEntity is the entity ID", door:GetComponent("Joint").ConnectedEntity == post.ID)
 		Check("GetJointPosition", Near(door:GetJointPosition(), 0, 0.5))
 		Check("GetJointPosition without a joint", Scene.FindEntityByName("Crate"):GetJointPosition() == nil)
+		Check("HasJoint", door:HasJoint() and not Scene.FindEntityByName("Crate"):HasJoint())
 		door:SetComponent("Joint", { MotorMode = "Velocity", MotorTarget = 90 })
 		local holder = Scene.CreateEntity("JointHolder")
 		holder:AddComponent("Joint", { ConnectedEntity = post })
@@ -330,6 +331,7 @@ function Driver:OnUpdate(dt)
 		Check("Hinge motor opens the gate", Scene.FindEntityByName("GateDoor"):GetJointPosition() > 20)
 		Check("Joint breaks and calls OnJointBreak", FeatureTestEvents.JointBreak == 1 and FeatureTestEvents.JointBrokeWith == "world")
 		Check("Broken joint component is removed", not Scene.FindEntityByName("WeakLink"):HasComponent("Joint"))
+		Check("HasJoint after a break", not Scene.FindEntityByName("WeakLink"):HasJoint())
 	end
 
 	if frame == 150 then
