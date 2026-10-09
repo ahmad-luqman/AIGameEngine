@@ -427,6 +427,13 @@ namespace Basalt {
 			r.Field("Offset", c.Offset);
 		}
 
+		void Fields(FieldReader& r, MeshColliderComponent& c)
+		{
+			r.Field("Mesh", c.Mesh);
+			r.Field("MeshIndex", c.MeshIndex);
+			r.Field("Convex", c.Convex);
+		}
+
 		void Fields(FieldReader& r, JointComponent& c)
 		{
 			r.EnumField("Type", c.Type, s_JointTypeNames);
@@ -586,6 +593,10 @@ namespace Basalt {
 		json Write(const CapsuleColliderComponent& c)
 		{
 			return { { "Radius", c.Radius }, { "HalfHeight", c.HalfHeight }, { "Offset", ToJson(c.Offset) } };
+		}
+		json Write(const MeshColliderComponent& c)
+		{
+			return { { "Mesh", c.Mesh }, { "MeshIndex", c.MeshIndex }, { "Convex", c.Convex } };
 		}
 		json Write(const JointComponent& c)
 		{
@@ -825,6 +836,7 @@ namespace Basalt {
 			infos.push_back(MakeInfo<BoxColliderComponent>("BoxCollider"));
 			infos.push_back(MakeInfo<SphereColliderComponent>("SphereCollider"));
 			infos.push_back(MakeInfo<CapsuleColliderComponent>("CapsuleCollider"));
+			infos.push_back(MakeInfo<MeshColliderComponent>("MeshCollider"));
 			infos.push_back(MakeInfo<JointComponent>("Joint"));
 			infos.push_back(MakeInfo<ScriptComponent>("Script"));
 			infos.push_back(MakeInfo<AudioSourceComponent>("AudioSource"));

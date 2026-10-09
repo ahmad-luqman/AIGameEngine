@@ -61,8 +61,9 @@ namespace Basalt {
 
 	// Jolt-backed physics simulation for one running scene.
 	//
-	// Bodies are created for every entity with a RigidBodyComponent and at least one collider. Entities
-	// whose physics components are added or removed at runtime are rebuilt before the next step.
+	// Bodies are created for every entity with a RigidBodyComponent and at least one collider (box, sphere,
+	// capsule or mesh; several combine into one compound shape). Entities whose physics components are added
+	// or removed at runtime are rebuilt before the next step.
 	// JointComponents become Jolt constraints once both bodies exist (a joint whose body is missing is
 	// retried when that body is created). A joint moves its BodyEntity's body, so several joint entities can
 	// act on one body; joints are tracked by the entity holding the component. A joint is rebuilt from the
@@ -139,6 +140,9 @@ namespace Basalt {
 
 		uint32_t GetBodyCount() const;
 		uint64_t GetStepCount() const { return m_StepCount; }
+		// How many mesh collider shapes have been cooked by every world so far. Cooked shapes are cached per
+		// mesh asset, mesh index and convexity across worlds, so this only grows for new or reloaded meshes.
+		static uint64_t GetMeshShapeCookCount();
 
 	private:
 		void RebuildDirtyJoints();

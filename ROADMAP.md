@@ -49,10 +49,6 @@ The features most games need, roughly in order of impact.
 
 ### Physics
 
-- **Mesh and convex-hull colliders — M.** New `MeshColliderComponent` (`Mesh`, `MeshIndex`, `Convex`
-  flag). Static bodies use `JPH::MeshShape`, dynamic bodies a `JPH::ConvexHullShape` built from the
-  vertices. Cache cooked shapes per mesh asset. Without this, imported levels cannot collide by their
-  real geometry.
 - **Character controller — M.** Wrap `JPH::CharacterVirtual` in a `CharacterControllerComponent` (slope
   limit, step height, max strength) with Lua `Move(velocity)`, `IsGrounded()`, `GetGroundNormal()`.
   Platformers and first-person games need it, and `FixedRotation` dynamic bodies are a poor substitute.

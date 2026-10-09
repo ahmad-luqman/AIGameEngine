@@ -94,6 +94,8 @@
 		{ "ID": 41, "Name": "DebrisBox", "Components": { "Transform": { "Translation": [16, 2, 12] }, "RigidBody": { "Type": "Dynamic", "Layer": "Debris" }, "BoxCollider": {} } },
 		{ "ID": 42, "Name": "BulletWall", "Components": { "Transform": { "Translation": [15, 1, 14] }, "RigidBody": {}, "BoxCollider": { "HalfExtents": [0.025, 1, 1] } } },
 		{ "ID": 43, "Name": "Bullet", "Components": { "Transform": { "Translation": [10, 1, 14] }, "RigidBody": { "Type": "Dynamic", "GravityFactor": 0, "LinearDamping": 0, "Continuous": true }, "SphereCollider": { "Radius": 0.05 } } },
+		{ "ID": 60, "Name": "MeshBlock", "Components": { "Transform": { "Translation": [17, 1, -10], "Scale": [2, 2, 2] }, "RigidBody": {}, "MeshCollider": { "Mesh": "Assets/Models/TexturedCube.glb" } } },
+		{ "ID": 61, "Name": "MeshRock", "Components": { "Transform": { "Translation": [17, 6, -10] }, "RigidBody": { "Type": "Dynamic" }, "MeshCollider": { "Mesh": "builtin://Cylinder" } } },
 		{ "ID": 21, "Name": "PrefabInstanceMarker", "Components": {
 			"Transform": { "Translation": [8, 0, 6] },
 			"Prefab": { "Prefab": "Assets/Prefabs/Projectile.bprefab" } } },

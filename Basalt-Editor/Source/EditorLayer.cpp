@@ -571,6 +571,15 @@ namespace Basalt {
 					DebugDraw::Sphere(center + up * halfHeight, radius, color, 16);
 					DebugDraw::Sphere(center - up * halfHeight, radius, color, 16);
 				}
+				// Mesh colliders: the bounds of the mesh they collide by (drawing every triangle would bury the scene).
+				if (const auto* meshCollider = entity.TryGetComponent<MeshColliderComponent>())
+				{
+					const auto* mesh = entity.TryGetComponent<MeshComponent>();
+					const std::string& key = !meshCollider->Mesh.empty() || !mesh ? meshCollider->Mesh : mesh->Mesh;
+					const uint32_t meshIndex = !meshCollider->Mesh.empty() || !mesh ? meshCollider->MeshIndex : mesh->MeshIndex;
+					if (Ref<MeshSource> source = key.empty() ? nullptr : AssetManager::GetMesh(key); source && meshIndex < source->Meshes.size())
+						DebugDraw::Box(source->Meshes[meshIndex].Bounds.Transformed(world), color);
+				}
 				// Joints: anchor, axes, cone rim and a line to what it is attached to. A joint entity draws at the
 				// body it moves, whose local space holds its anchor and axes.
 				if (const auto* joint = entity.TryGetComponent<JointComponent>())
