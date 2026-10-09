@@ -305,10 +305,44 @@ function Driver:OnUpdate(dt)
 		Check("Joint ConnectedEntity accepts an entity", holder:GetComponent("Joint").ConnectedEntity == post.ID)
 		holder:Destroy()
 
+		-- Joint entities: the rung hangs from two rope entities; a third is added at runtime.
+		local rung = Scene.FindEntityByName("Rung")
+		local ropeLeft = Scene.FindEntityByName("RungRopeLeft")
+		Check("Joint BodyEntity is the entity ID", ropeLeft:GetComponent("Joint").BodyEntity == rung.ID)
+		Check("HasJoint on a joint entity", ropeLeft:HasJoint() and Scene.FindEntityByName("RungRopeRight"):HasJoint() and not rung:HasJoint())
+		local extraRope = Scene.CreateEntity("RungRopeMiddle")
+		extraRope:AddComponent("Joint", { Type = "Distance", BodyEntity = rung, ConnectedAnchor = { -18, 4, 0 } })
+		Check("Joint BodyEntity accepts an entity", extraRope:GetComponent("Joint").BodyEntity == rung.ID)
+		self.ExtraRope = extraRope
+
+		-- Soft limits, cone and six-DOF joints, each knocked sideways and tracked every frame.
+		local slider = Scene.FindEntityByName("SoftSlider")
+		Check("Joint LimitSpring fields", slider:GetComponent("Joint").LimitSpringFrequency == 2 and Near(slider:GetComponent("Joint").LimitSpringDamping, 0.1, 1e-6))
+		slider:SetLinearVelocity(Vec3(4, 0, 0))
+		local arm = Scene.FindEntityByName("RagdollArm")
+		local armJoint = arm:GetComponent("Joint")
+		Check("Joint six-DOF fields", armJoint.Type == "SixDOF" and armJoint.AngularLimitMax[2] == 45 and armJoint.SecondaryAxis[1] == 1)
+		Scene.FindEntityByName("ConeLamp"):SetLinearVelocity(Vec3(0, 0, 4))
+		arm:SetLinearVelocity(Vec3(0, 0, 4))
+		self.SoftPeak = 0
+		self.ConeTilt = 0
+		self.ArmTilt = 0
+
 		-- Runtime-added script.
 		local scripted = Scene.CreateEntity("RuntimeScripted")
 		scripted:AddComponent("Script", { Script = "Assets/Scripts/Spinner.lua", Properties = { Label = "runtime" } })
 		Check("AddComponent Script starts the script", scripted:GetScript() ~= nil and scripted:GetScript().Label == "runtime")
+	end
+
+	-- How far each knocked joint gets (degrees from hanging straight down for the cone and the arm).
+	if self.SoftPeak then
+		local function tilt(name)
+			local up = Scene.FindEntityByName(name):GetUp()
+			return math.deg(math.acos(math.max(-1, math.min(1, up.y))))
+		end
+		self.SoftPeak = math.max(self.SoftPeak, Scene.FindEntityByName("SoftSlider").Translation.x + 22)
+		self.ConeTilt = math.max(self.ConeTilt, tilt("ConeLamp"))
+		self.ArmTilt = math.max(self.ArmTilt, tilt("RagdollArm"))
 	end
 
 	if frame == 2 then
@@ -331,9 +365,17 @@ function Driver:OnUpdate(dt)
 		Check("Kinematic/dynamic motion", Scene.FindEntityByName("Crate").Translation.x > self.CrateStart.x)
 		Check("Runtime physics body falls", self.RuntimeBox.Translation.y < 4)
 		Check("Hinge motor opens the gate", Scene.FindEntityByName("GateDoor"):GetJointPosition() > 20)
-		Check("Joint breaks and calls OnJointBreak", FeatureTestEvents.JointBreak == 1 and FeatureTestEvents.JointBrokeWith == "world")
+		Check("Joint breaks and calls OnJointBreak", FeatureTestEvents["JointBreak:WeakLink"] == 1 and FeatureTestEvents["JointBrokeWith:WeakLink"] == "world")
 		Check("Broken joint component is removed", not Scene.FindEntityByName("WeakLink"):HasComponent("Joint"))
 		Check("HasJoint after a break", not Scene.FindEntityByName("WeakLink"):HasJoint())
+		Check("Joint entity breaks and calls OnJointBreak", FeatureTestEvents["JointBreak:LanternChain"] == 1 and FeatureTestEvents["JointBrokeWith:LanternChain"] == "world"
+			and not Scene.FindEntityByName("LanternChain"):HasComponent("Joint") and Scene.FindEntityByName("Lantern").Translation.y < 1.5)
+		local rung = Scene.FindEntityByName("Rung")
+		Check("Two joint entities hold one body", self.ExtraRope:HasJoint() and Near(rung.Translation.y, 2, 0.05) and Near(rung:GetRight().y, 0, 0.02))
+		Check("Soft limit overshoots", self.SoftPeak > 0.6)
+		-- A free lamp would swing to about 80 degrees; the solver lets the light lamp overshoot 20 slightly.
+		Check("Cone joint limits the swing", self.ConeTilt > 10 and self.ConeTilt < 27)
+		Check("Six-DOF joint limits the swing", self.ArmTilt > 20 and self.ArmTilt < 50)
 		Check("Continuous body stops at a thin wall", Scene.FindEntityByName("Bullet").Translation.x < 15)
 		Check("RigidBody Layer and Continuous fields", Scene.FindEntityByName("GhostBox"):GetComponent("RigidBody").Layer == "Ghost" and Scene.FindEntityByName("Bullet"):GetComponent("RigidBody").Continuous)
 		Check("Physics.GetLayers", table.concat(Physics.GetLayers(), ",") == "Default,Ghost,Debris")
