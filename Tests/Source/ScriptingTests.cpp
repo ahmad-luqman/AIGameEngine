@@ -245,14 +245,30 @@ TEST_SUITE("Scripting")
 			return Contact
 		)");
 
+		// Contact pairs are ordered by UUID and the normal is flipped for the second entity, so run both
+		// orders with fixed UUIDs rather than whichever order random UUIDs happen to give.
+		UUID groundID = UUID(1);
+		UUID ballID = UUID(2);
+		SUBCASE("ground first") {}
+		SUBCASE("ball first")
+		{
+			std::swap(groundID, ballID);
+		}
+
+		auto addScripted = [&](Scene& target, UUID id, const std::string& name) {
+			Entity entity = target.CreateEntityWithUUID(id, name);
+			entity.AddComponent<ScriptComponent>().Script = script;
+			return entity;
+		};
+
 		Scene scene;
-		Entity ground = AddScripted(scene, "Ground", script);
+		Entity ground = addScripted(scene, groundID, "Ground");
 		ground.GetTransform().Translation = { 0.0f, -0.5f, 0.0f };
 		ground.AddComponent<RigidBodyComponent>();
 		ground.AddComponent<BoxColliderComponent>().HalfExtents = { 10.0f, 0.5f, 10.0f };
 
 		// Mass 2 sphere dropped so its bottom falls 5 m: it lands at about sqrt(2 * 9.81 * 5) = 9.9 m/s.
-		Entity ball = AddScripted(scene, "Ball", script);
+		Entity ball = addScripted(scene, ballID, "Ball");
 		ball.GetTransform().Translation = { 1.0f, 5.5f, 2.0f };
 		auto& body = ball.AddComponent<RigidBodyComponent>();
 		body.Type = RigidBodyType::Dynamic;

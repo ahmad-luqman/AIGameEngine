@@ -2,6 +2,7 @@
 
 #include "Basalt/Core/UUID.h"
 #include "Basalt/Math/Math.h"
+#include "Basalt/Physics/PhysicsMaterial.h"
 #include "Basalt/Scene/SceneCamera.h"
 
 #include <glm/glm.hpp>
@@ -128,18 +129,6 @@ namespace Basalt {
 		Static = 0,
 		Dynamic,
 		Kinematic
-	};
-
-	// How a contact combines the two bodies' friction (or restitution). When the bodies ask for different
-	// modes, the one listed later wins, so Max beats every other mode and Default defers to the other body.
-	enum class PhysicsCombineMode
-	{
-		Default = 0,   // Jolt's: the geometric mean for friction, the larger value for restitution
-		GeometricMean, // sqrt(a * b)
-		Average,
-		Min,
-		Multiply,
-		Max
 	};
 
 	struct RigidBodyComponent

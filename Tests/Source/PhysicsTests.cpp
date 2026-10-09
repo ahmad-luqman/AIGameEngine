@@ -515,6 +515,38 @@ TEST_SUITE("Physics")
 		CHECK(slideSpeed(PhysicsCombineMode::Max) < 0.05f);
 	}
 
+	TEST_CASE("Out-of-range friction and restitution are clamped with a warning")
+	{
+		// Restitution 2 combined with Max would add energy on every bounce; clamped to 1 the ball can at most
+		// return to its drop height.
+		Scene scene;
+		Entity ground = CreateGround(scene);
+		auto& groundBody = ground.GetComponent<RigidBodyComponent>();
+		groundBody.RestitutionCombine = PhysicsCombineMode::Max;
+		groundBody.Friction = -1.0f;
+		Entity ball = scene.CreateEntity("Ball");
+		ball.GetTransform().Translation = { 0.0f, 3.0f, 0.0f };
+		auto& body = ball.AddComponent<RigidBodyComponent>();
+		body.Type = RigidBodyType::Dynamic;
+		body.Restitution = 2.0f;
+		body.LinearDamping = 0.0f;
+		ball.AddComponent<SphereColliderComponent>();
+
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		scene.OnSimulationStart();
+		CHECK(CountMessages(since, "Restitution must be between 0 and 1") == 1);
+		CHECK(CountMessages(since, "Friction must not be negative") == 1);
+		float highest = 0.0f;
+		for (int i = 0; i < 240; i++)
+		{
+			scene.OnUpdate(Step);
+			if (i > 60)
+				highest = std::max(highest, ball.GetTransform().Translation.y);
+		}
+		CHECK(highest < 3.25f);
+		scene.OnSimulationStop();
+	}
+
 	TEST_CASE("Velocities, impulses and teleporting through the transform")
 	{
 		Scene scene;

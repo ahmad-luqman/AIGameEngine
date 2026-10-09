@@ -2,6 +2,7 @@
 
 #include "Basalt/Core/Log.h"
 #include "Basalt/Physics/PhysicsLayers.h"
+#include "Basalt/Physics/PhysicsMaterial.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/JointFields.h"
@@ -820,6 +821,8 @@ namespace Basalt {
 			RemoveJointsOfBody(uuid);
 			JPH::BodyInterface& bodies = System->GetBodyInterface();
 			BodyToEntity.erase(it->second.ID.GetIndexAndSequenceNumber());
+			// Jolt reuses the index for the next body; whatever creates it must not inherit these modes.
+			ContactListener.Materials[it->second.ID.GetIndex()] = {};
 			bodies.RemoveBody(it->second.ID);
 			bodies.DestroyBody(it->second.ID);
 			Bodies.erase(it);
@@ -1088,8 +1091,14 @@ namespace Basalt {
 			warn("unknown physics layer '" + rigidBody.Layer + "', using Default");
 		JPH::BodyCreationSettings settings(shapeResult.Get(), ToJolt(position), ToJolt(rotation), motionType, MakeObjectLayer(moving, layer));
 		settings.mUserData = static_cast<uint64_t>(entity.GetUUID());
-		settings.mFriction = rigidBody.Friction;
-		settings.mRestitution = rigidBody.Restitution;
+		// The combine modes pass these on unchecked: negative friction inverts Jolt's friction clamp and
+		// restitution above 1 adds energy on every bounce.
+		settings.mFriction = std::max(rigidBody.Friction, 0.0f);
+		if (rigidBody.Friction < 0.0f)
+			warn("Friction must not be negative, using 0");
+		settings.mRestitution = std::clamp(rigidBody.Restitution, 0.0f, 1.0f);
+		if (rigidBody.Restitution < 0.0f || rigidBody.Restitution > 1.0f)
+			warn("Restitution must be between 0 and 1, clamped");
 		settings.mLinearDamping = rigidBody.LinearDamping;
 		settings.mAngularDamping = rigidBody.AngularDamping;
 		settings.mGravityFactor = rigidBody.GravityFactor;
@@ -1848,42 +1857,6 @@ namespace Basalt {
 			auto contact = newContacts.find(pair);
 			scriptEngine->OnContactEvent(type, entityA, entityB, contact != newContacts.end() ? contact->second : ContactInfo{});
 		}
-	}
-
-	namespace {
-
-		float CombineMaterial(PhysicsCombineMode modeA, float a, PhysicsCombineMode modeB, float b, PhysicsCombineMode fallback)
-		{
-			PhysicsCombineMode mode = std::max(modeA, modeB);
-			if (mode == PhysicsCombineMode::Default)
-				mode = fallback;
-			switch (mode)
-			{
-				case PhysicsCombineMode::Default:
-				case PhysicsCombineMode::GeometricMean:
-					return std::sqrt(std::max(a * b, 0.0f));
-				case PhysicsCombineMode::Average:
-					return 0.5f * (a + b);
-				case PhysicsCombineMode::Min:
-					return std::min(a, b);
-				case PhysicsCombineMode::Multiply:
-					return a * b;
-				case PhysicsCombineMode::Max:
-					return std::max(a, b);
-			}
-			return std::max(a, b);
-		}
-
-	}
-
-	float CombineFriction(PhysicsCombineMode modeA, float a, PhysicsCombineMode modeB, float b)
-	{
-		return CombineMaterial(modeA, a, modeB, b, PhysicsCombineMode::GeometricMean);
-	}
-
-	float CombineRestitution(PhysicsCombineMode modeA, float a, PhysicsCombineMode modeB, float b)
-	{
-		return CombineMaterial(modeA, a, modeB, b, PhysicsCombineMode::Max);
 	}
 
 	void PhysicsWorld::AddForce(Entity entity, const glm::vec3& force)
