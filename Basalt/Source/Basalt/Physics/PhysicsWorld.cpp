@@ -98,6 +98,20 @@ namespace Basalt {
 		OnMeshChanged(registry, entity);
 	}
 
+	void PhysicsWorld::Impl::WireSignals(entt::registry& registry, bool connect)
+	{
+		constexpr auto Changed = &Impl::OnPhysicsComponentChanged;
+		Wire<RigidBodyComponent, Changed, Changed, Changed>(registry, connect);
+		Wire<BoxColliderComponent, Changed, Changed, Changed>(registry, connect);
+		Wire<SphereColliderComponent, Changed, Changed, Changed>(registry, connect);
+		Wire<CapsuleColliderComponent, Changed, Changed, Changed>(registry, connect);
+		Wire<MeshColliderComponent, Changed, Changed, Changed>(registry, connect);
+		Wire<MeshComponent, &Impl::OnMeshChanged, &Impl::OnMeshUpdated, &Impl::OnMeshChanged>(registry, connect);
+		// Adding or removing a controller swaps a body for a character, so it rebuilds like a collider change.
+		Wire<CharacterControllerComponent, Changed, &Impl::OnCharacterChanged, Changed>(registry, connect);
+		Wire<JointComponent, &Impl::OnJointChanged, &Impl::OnJointChanged, &Impl::OnJointDestroyed>(registry, connect);
+	}
+
 	PhysicsWorld::PhysicsWorld(Scene* scene)
 		: m_Impl(CreateScope<Impl>())
 		, m_Scene(scene)
@@ -140,62 +154,13 @@ namespace Basalt {
 		SetGravity(scene->GetPhysicsSettings().Gravity);
 
 		entt::registry& registry = scene->GetRegistry();
-		Impl& impl = *m_Impl;
-		registry.on_construct<RigidBodyComponent>().connect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_destroy<RigidBodyComponent>().connect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_update<RigidBodyComponent>().connect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_construct<BoxColliderComponent>().connect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_destroy<BoxColliderComponent>().connect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_update<BoxColliderComponent>().connect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_construct<SphereColliderComponent>().connect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_destroy<SphereColliderComponent>().connect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_update<SphereColliderComponent>().connect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_construct<CapsuleColliderComponent>().connect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_destroy<CapsuleColliderComponent>().connect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_update<CapsuleColliderComponent>().connect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_construct<MeshColliderComponent>().connect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_destroy<MeshColliderComponent>().connect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_update<MeshColliderComponent>().connect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_construct<MeshComponent>().connect<&Impl::OnMeshChanged>(impl);
-		registry.on_destroy<MeshComponent>().connect<&Impl::OnMeshChanged>(impl);
-		registry.on_update<MeshComponent>().connect<&Impl::OnMeshUpdated>(impl);
-		// Adding or removing a controller swaps a body for a character, so it rebuilds like a collider change.
-		registry.on_construct<CharacterControllerComponent>().connect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_destroy<CharacterControllerComponent>().connect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_update<CharacterControllerComponent>().connect<&Impl::OnCharacterChanged>(impl);
-		registry.on_construct<JointComponent>().connect<&Impl::OnJointChanged>(impl);
-		registry.on_update<JointComponent>().connect<&Impl::OnJointChanged>(impl);
-		registry.on_destroy<JointComponent>().connect<&Impl::OnJointDestroyed>(impl);
+		m_Impl->WireSignals(registry, true);
 	}
 
 	PhysicsWorld::~PhysicsWorld()
 	{
 		entt::registry& registry = m_Scene->GetRegistry();
-		Impl& impl = *m_Impl;
-		registry.on_construct<RigidBodyComponent>().disconnect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_destroy<RigidBodyComponent>().disconnect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_update<RigidBodyComponent>().disconnect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_construct<BoxColliderComponent>().disconnect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_destroy<BoxColliderComponent>().disconnect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_update<BoxColliderComponent>().disconnect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_construct<SphereColliderComponent>().disconnect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_destroy<SphereColliderComponent>().disconnect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_update<SphereColliderComponent>().disconnect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_construct<CapsuleColliderComponent>().disconnect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_destroy<CapsuleColliderComponent>().disconnect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_update<CapsuleColliderComponent>().disconnect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_construct<MeshColliderComponent>().disconnect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_destroy<MeshColliderComponent>().disconnect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_update<MeshColliderComponent>().disconnect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_construct<MeshComponent>().disconnect<&Impl::OnMeshChanged>(impl);
-		registry.on_destroy<MeshComponent>().disconnect<&Impl::OnMeshChanged>(impl);
-		registry.on_update<MeshComponent>().disconnect<&Impl::OnMeshUpdated>(impl);
-		registry.on_construct<CharacterControllerComponent>().disconnect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_destroy<CharacterControllerComponent>().disconnect<&Impl::OnPhysicsComponentChanged>(impl);
-		registry.on_update<CharacterControllerComponent>().disconnect<&Impl::OnCharacterChanged>(impl);
-		registry.on_construct<JointComponent>().disconnect<&Impl::OnJointChanged>(impl);
-		registry.on_update<JointComponent>().disconnect<&Impl::OnJointChanged>(impl);
-		registry.on_destroy<JointComponent>().disconnect<&Impl::OnJointDestroyed>(impl);
+		m_Impl->WireSignals(registry, false);
 
 		for (auto& [uuid, joint] : m_Impl->Joints)
 			m_Impl->System->RemoveConstraint(joint.Constraint);

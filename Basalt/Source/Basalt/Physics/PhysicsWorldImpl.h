@@ -192,6 +192,27 @@ namespace Basalt {
 		void OnJointChanged(entt::registry& registry, entt::entity entity);
 
 		void OnJointDestroyed(entt::registry& registry, entt::entity entity);
+
+		// Connects (or disconnects) every component signal the world listens to, from one list so the
+		// constructor and destructor cannot drift apart.
+		void WireSignals(entt::registry& registry, bool connect);
+
+		template<typename Component, auto OnConstruct, auto OnUpdate, auto OnDestroy>
+		void Wire(entt::registry& registry, bool connect)
+		{
+			if (connect)
+			{
+				registry.on_construct<Component>().template connect<OnConstruct>(*this);
+				registry.on_update<Component>().template connect<OnUpdate>(*this);
+				registry.on_destroy<Component>().template connect<OnDestroy>(*this);
+			}
+			else
+			{
+				registry.on_construct<Component>().template disconnect<OnConstruct>(*this);
+				registry.on_update<Component>().template disconnect<OnUpdate>(*this);
+				registry.on_destroy<Component>().template disconnect<OnDestroy>(*this);
+			}
+		}
 	};
 
 }
