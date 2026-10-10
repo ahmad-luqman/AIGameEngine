@@ -9,6 +9,19 @@ basalt_set_warnings(Basalt)
 
 target_include_directories(Basalt PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/Source")
 
+# Floating point must give the same bits on every platform and build type: physics replays and scene.hash
+# are compared across platforms. No fused multiply-add contraction, which GCC (-ffp-contract=fast) and clang
+# (=on) apply by default wherever the target has FMA, at the optimizer's discretion. PUBLIC so every target
+# that compiles engine headers (inline glm and math code) agrees. /fp:precise is MSVC's default, pinned here;
+# clang-cl also needs contraction turned off explicitly.
+if(MSVC AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+	target_compile_options(Basalt PUBLIC /fp:precise /clang:-ffp-contract=off)
+elseif(MSVC)
+	target_compile_options(Basalt PUBLIC /fp:precise)
+else()
+	target_compile_options(Basalt PUBLIC -ffp-contract=off)
+endif()
+
 target_compile_definitions(Basalt
 	PUBLIC
 		GLM_FORCE_DEPTH_ZERO_TO_ONE
