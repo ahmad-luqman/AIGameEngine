@@ -44,8 +44,8 @@ return Player
 - `OnTriggerEnter` gets the same table for where the bodies started to overlap (`Impulse` is 0: triggers
   push nothing). `OnCollisionEnd` and `OnTriggerExit` get where the bodies parted: `Point` midway between
   their closest points right after they separated and `Normal` pointing away from `other` (the way this
-  entity left), `Impulse` 0. Their `contact` is nil when the other body is gone (destroyed, or rebuilt after
-  a component change) or already far away.
+  entity left), `Impulse` 0. Their `contact` is nil when either body is gone (destroyed, or rebuilt after a
+  `RigidBody` or collider change) or they are already far apart (e.g. one was teleported away).
 - Friction and restitution of a contact are combined from both bodies by `RigidBody.FrictionCombine` and
   `RestitutionCombine`: `Default`, `GeometricMean`, `Average`, `Min`, `Multiply` or `Max`. When the bodies
   differ, the mode later in that list wins (so `Default` defers to the other body); when both are
@@ -248,8 +248,8 @@ frame as the joint bends). The `Position` rotation axes together drive toward on
 angles in degrees relative to the rest pose (the same form `GetJointRotation()` returns, so a recorded pose
 plays back as is); position targets beyond the limits are clamped to them. A motor on a locked axis does
 nothing and warns. `MotorMaxForce` caps the translation motors' force (N) and `MotorMaxTorque` the rotation
-motors' torque (N·m); a `MotorMaxTorque` of 0 (the default) uses `MotorMaxForce` for both, as joints saved
-before it existed did. A `Position` motor pulls with a
+motors' torque (N·m); a `MotorMaxTorque` of 0 (the default) or below uses `MotorMaxForce` for both, as joints
+saved before it existed did (a negative one also warns). A `Position` motor pulls with a
 spring of `MotorSpringFrequency` Hz (default 2, must be above 0; higher is stiffer, up to that cap) and
 `MotorSpringDamping` (1 = critically damped), which also apply to hinge and slider motors. The cone joint
 has no motor; use a six-DOF joint with swing limits instead.
@@ -293,7 +293,7 @@ end
   place (per-axis motors and `FreeLinearAxes` included), so it is fine to do every frame. Changing `Type`, an entity, an anchor, an axis or `UseLimits`
   rebuilds it from the current poses.
 - Motors (`MotorMode` `Velocity` or `Position`, `MotorTarget` in degrees(/s) or meters(/s),
-  `MotorMaxForce` for sliders, `MotorMaxTorque` for hinges, which falls back to `MotorMaxForce` while it is 0)
+  `MotorMaxForce` for sliders, `MotorMaxTorque` for hinges, which falls back to `MotorMaxForce` while it is 0 or below)
   work on hinges and sliders; six-DOF joints use the per-axis motors above. Hinge position
   targets are clamped to [-180, 180].
 - `HasJoint()`, `GetJointPosition()` and `GetJointRotation()` are called on the entity that holds the

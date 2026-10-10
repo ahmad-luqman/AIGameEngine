@@ -54,6 +54,9 @@ namespace Basalt {
 			glm::quat LastRotation = { 1.0f, 0.0f, 0.0f, 0.0f };
 			// The world scale the colliders were built with (see PhysicsWorld::ApplyScaleChanges).
 			glm::vec3 BuiltScale = { 1.0f, 1.0f, 1.0f };
+			// Set while the entity's transform cannot be decomposed (e.g. a zero scale): the body keeps its shape
+			// and simulates on, but its pose is not written back (warned once per episode).
+			bool Degenerate = false;
 		};
 
 		struct JointRecord
@@ -111,23 +114,48 @@ namespace Basalt {
 		Scope<JPH::PhysicsSystem> System;
 
 		// Applies the collision matrix between characters, which CharacterCollision does not know about.
-		struct CharacterLayerFilter final : JPH::CharacterContactListener
+		class CharacterLayerFilter final : public JPH::CharacterContactListener
 		{
-			const Impl* Owner = nullptr;
+		public:
+			explicit CharacterLayerFilter(const Impl& owner)
+				: m_Owner(owner)
+			{
+			}
 			bool OnCharacterContactValidate(const JPH::CharacterVirtual* character, const JPH::CharacterContact& contact) override;
+
+		private:
+			const Impl& m_Owner;
+		};
+
+		// Character moves skip characters' inner bodies: characters meet each other through CharacterCollision.
+		class NonCharacterBodyFilter final : public JPH::BodyFilter
+		{
+		public:
+			explicit NonCharacterBodyFilter(const Impl& owner)
+				: m_Owner(owner)
+			{
+			}
+			bool ShouldCollideLocked(const JPH::Body& body) const override { return !m_Owner.IsCharacterBody(body); }
+
+		private:
+			const Impl& m_Owner;
 		};
 
 		std::unordered_map<UUID, BodyRecord> Bodies;
 		std::unordered_map<UUID, CharacterRecord> Characters;
 		// Characters meet each other's full shapes through this list, and a moving one pushes the other with its
 		// velocity (in the pushed character's own update). They skip each other's inner bodies, which Jolt
-		// moves by teleporting, so those would only block. Holds raw pointers: RemoveCharacter takes a
-		// character out before its record goes, in creation order otherwise.
+		// moves by teleporting, so those would only block. Holds raw pointers, one per Characters record:
+		// RemoveCharacter takes a character out before its record goes, and the destructor clears it first.
+		// Characters are in the order they were last built (a rebuilt one moves to the end), which is
+		// deterministic but not the registry order.
 		JPH::CharacterVsCharacterCollisionSimple CharacterCollision;
-		CharacterLayerFilter CharacterListener;
-		// Entities that got no body or character because their transform could not be decomposed (e.g. a zero
-		// scale); ApplyScaleChanges builds them once it can.
-		std::unordered_set<UUID> Degenerate;
+		CharacterLayerFilter CharacterLayers{ *this };
+		NonCharacterBodyFilter CharacterBodyFilter{ *this };
+		// Entities that got no body or character because their transform could not be decomposed (e.g. spawned
+		// at a zero scale); ApplyScaleChanges builds them once it can. A live body or character whose transform
+		// turns degenerate keeps its record instead (BodyRecord/CharacterRecord::Degenerate).
+		std::unordered_set<UUID> Unbuilt;
 		// Characters whose CharacterControllerComponent changed (collider changes go to DirtyEntities).
 		PhysicsInternal::DirtySet DirtyCharacters;
 		// Character warnings (sanitized settings, an ignored RigidBody, a missing collider).
@@ -202,11 +230,14 @@ namespace Basalt {
 		// ContactInfo), relative to the first. nullopt when either has no body or they are already far apart.
 		std::optional<ContactInfo> SeparationContact(UUID first, UUID second, float fixedStep) const;
 
-		// Writes a simulated pose to the entity, keeping its scale. Physics never changes the scale, but read back
-		// from the world matrix it would pick up rounding every step and drift (enough after a few hundred steps
-		// to count as a rescale), so its magnitudes are kept exactly. Their signs come from the matrix: it cannot
-		// say which axis was mirrored, and the decomposed rotation assumes its own choice (see DecomposeTransform).
-		static void WritePose(Scene* scene, Entity entity, const glm::vec3& position, const glm::quat& rotation);
+		// Writes a simulated pose to the entity, keeping its scale's magnitudes exactly: read back from the world
+		// matrix they would pick up rounding every step and drift (enough after a few hundred steps to count as a
+		// rescale). The signs come from the matrix, which cannot say which axis was mirrored; the decomposed
+		// rotation assumes a negative X (see DecomposeTransform), so a Y- or Z-mirrored entity's Scale and
+		// Rotation are re-expressed that way on its first write-back.
+		// Returns false, writing nothing, while the entity's transform cannot be decomposed: a pose composed with
+		// a zero scale (or under a zero-scaled parent) would lose its rotation or turn into NaN.
+		static bool WritePose(Entity entity, const glm::vec3& position, const glm::quat& rotation);
 
 		void OnPhysicsComponentChanged(entt::registry& registry, entt::entity entity);
 

@@ -13,6 +13,13 @@ namespace Basalt {
 	// not apply, and physics warns about the ones set away from their defaults, so both follow this one rule.
 	bool JointFieldApplies(const JointComponent& joint, std::string_view field);
 
+	// Whether rotation motors use the joint's own MotorMaxTorque; otherwise (0, the default, or negative) they use
+	// MotorMaxForce, which capped both before MotorMaxTorque existed. One rule for physics and the inspector.
+	inline bool HasOwnMotorTorque(const JointComponent& joint)
+	{
+		return joint.MotorMaxTorque > 0.0f;
+	}
+
 	// Whether a change from `built` to `current` must rebuild a joint in play (which resets its rest pose)
 	// rather than apply in place. Each field's entry in the JointFields table says which it needs.
 	bool JointNeedsRebuild(const JointComponent& built, const JointComponent& current);

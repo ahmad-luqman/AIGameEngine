@@ -447,11 +447,11 @@ function Driver:OnUpdate(dt)
 		Check("Trigger enter", (events.TriggerEnter or 0) >= 1)
 		Check("Trigger exit", (events.TriggerExit or 0) >= 1)
 		-- Where bodies started overlapping a trigger, and where trigger overlaps and collisions ended.
-		local function partingContact(contact)
+		local function zeroImpulseContact(contact)
 			return contact ~= nil and Near(contact.Normal:Length(), 1, 0.01) and contact.Impulse == 0
 		end
-		Check("OnTriggerEnter contact", partingContact(events.TriggerEnterContact))
-		Check("OnTriggerExit contact", partingContact(events.TriggerExitContact))
+		Check("OnTriggerEnter contact", zeroImpulseContact(events.TriggerEnterContact))
+		Check("OnTriggerExit contact", zeroImpulseContact(events.TriggerExitContact))
 		Check("Collision begin", (events.CollisionBegin or 0) >= 1)
 		Check("Ball rests on ground", Near(Scene.FindEntityByName("Ball").Translation.y, 0.5, 0.05))
 		-- The ball (2 kg) lands at about 11 m/s; its normal points up, away from the ground.

@@ -694,6 +694,56 @@ TEST_SUITE("Physics")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("A fast character leaving a trigger still gets where it left")
+	{
+		// 40 m/s covers two thirds of a meter per step; the parting is measured with the character's own speed.
+		BasaltTest::TempProject project("FastCharacterExit");
+		const std::string script = project.WriteFile("Assets/Scripts/Exit.lua", R"(
+			local Exit = {}
+			function Exit:OnTriggerExit(other, contact)
+				self.Exits = (self.Exits or 0) + 1
+				if contact then self.NormalX = contact.Normal.x end
+			end
+			return Exit
+		)");
+		Scene scene;
+		CreateGround(scene);
+		Entity runner = AddScripted(scene, "Runner", script);
+		runner.GetTransform().Translation = { 0.0f, StandingHeight, 0.0f };
+		runner.AddComponent<CapsuleColliderComponent>();
+		runner.AddComponent<CharacterControllerComponent>();
+		Entity zone = scene.CreateEntity("Zone");
+		zone.GetTransform().Translation = { 4.0f, 1.0f, 0.0f };
+		zone.AddComponent<RigidBodyComponent>().IsTrigger = true;
+		zone.AddComponent<BoxColliderComponent>();
+
+		scene.OnRuntimeStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		Simulate(scene, 1.0f, [&]() { physics.MoveCharacter(runner, { 40.0f, 0.0f, 0.0f }); });
+		CHECK(Field(scene, runner, "Exits") == 1);
+		// It left through the zone's +X face, moving away from it.
+		REQUIRE(Field(scene, runner, "NormalX").is_number());
+		CHECK(Field(scene, runner, "NormalX").get<float>() == doctest::Approx(1.0f).epsilon(0.02));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("A character's collider materials are ignored with one warning")
+	{
+		Scene scene;
+		CreateGround(scene);
+		Entity character = CreateCharacter(scene, { 0.0f, StandingHeight, 0.0f });
+		auto& capsule = character.GetComponent<CapsuleColliderComponent>();
+		capsule.OverrideMaterial = true;
+		capsule.Friction = -1.0f;
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		scene.OnSimulationStart();
+		Simulate(scene, 0.5f);
+		CHECK(CountMessages(since, "OverrideMaterial has no effect here (characters do not use collider materials)") == 1);
+		// The value it never uses is not checked either.
+		CHECK(CountMessages(since, "Friction must not be negative") == 0);
+		scene.OnSimulationStop();
+	}
+
 	TEST_CASE("A character walks up walkable slopes but not steeper ones; SlopeLimit is at least 1 degree")
 	{
 		auto climb = [](float angle, float slopeLimit, uint64_t& since) {

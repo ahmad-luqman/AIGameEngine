@@ -78,6 +78,31 @@ namespace {
 			scene.OnUpdate(Step);
 	}
 
+	// Drops an undamped sphere (radius 0.5) from 3 m onto the ground and returns the highest point of its first
+	// bounce; configure sets the materials before play starts.
+	float BounceHeight(const std::function<void(Entity ground, Entity ball)>& configure)
+	{
+		Scene scene;
+		Entity ground = CreateGround(scene);
+		Entity ball = scene.CreateEntity("Ball");
+		ball.GetTransform().Translation = { 0.0f, 3.0f, 0.0f };
+		auto& body = ball.AddComponent<RigidBodyComponent>();
+		body.Type = RigidBodyType::Dynamic;
+		body.LinearDamping = 0.0f;
+		ball.AddComponent<SphereColliderComponent>();
+		configure(ground, ball);
+		scene.OnSimulationStart();
+		Simulate(scene, 1.0f); // lands after ~0.71 s
+		float highest = 0.0f;
+		for (int i = 0; i < 60; i++)
+		{
+			scene.OnUpdate(Step);
+			highest = std::max(highest, ball.GetTransform().Translation.y);
+		}
+		scene.OnSimulationStop();
+		return highest;
+	}
+
 	// Log messages containing text since the history's total count was `since`.
 	int CountMessages(uint64_t since, const std::string& text)
 	{
@@ -545,26 +570,10 @@ TEST_SUITE("Physics")
 		// A ball with restitution 0.8 dropped on ground with restitution 0: the default (the larger value)
 		// bounces it, the ground's Min stops it dead.
 		auto bounceHeight = [](PhysicsCombineMode groundMode) {
-			Scene scene;
-			Entity ground = CreateGround(scene);
-			ground.GetComponent<RigidBodyComponent>().RestitutionCombine = groundMode;
-			Entity ball = scene.CreateEntity("Ball");
-			ball.GetTransform().Translation = { 0.0f, 3.0f, 0.0f };
-			auto& body = ball.AddComponent<RigidBodyComponent>();
-			body.Type = RigidBodyType::Dynamic;
-			body.Restitution = 0.8f;
-			body.LinearDamping = 0.0f;
-			ball.AddComponent<SphereColliderComponent>();
-			scene.OnSimulationStart();
-			Simulate(scene, 1.0f); // lands after ~0.71 s
-			float highest = 0.0f;
-			for (int i = 0; i < 60; i++)
-			{
-				scene.OnUpdate(Step);
-				highest = std::max(highest, ball.GetTransform().Translation.y);
-			}
-			scene.OnSimulationStop();
-			return highest;
+			return BounceHeight([groundMode](Entity ground, Entity ball) {
+				ground.GetComponent<RigidBodyComponent>().RestitutionCombine = groundMode;
+				ball.GetComponent<RigidBodyComponent>().Restitution = 0.8f;
+			});
 		};
 		CHECK(bounceHeight(PhysicsCombineMode::Default) > 1.5f);
 		CHECK(bounceHeight(PhysicsCombineMode::Min) < 0.6f);
@@ -626,8 +635,8 @@ TEST_SUITE("Physics")
 
 	TEST_CASE("A collider with its own material touches with it; the body's other colliders keep the body's")
 	{
-		// A sled that cannot tip: a sphere runner on the ground and a box seat 1 m above it (index 0 and 1 of
-		// the compound). Body and ground friction are 1, so it stops unless the touching runner is frictionless.
+		// A sled that cannot tip: a box seat 1 m up (compound child 0) over a sphere runner on the ground (child
+		// 1). Body and ground friction are 1, so it stops unless the touching runner is frictionless.
 		enum class Icy
 		{
 			None,
@@ -670,29 +679,67 @@ TEST_SUITE("Physics")
 
 		// A single collider (not a compound) with its own restitution bounces a body whose own is 0.
 		auto bounceHeight = [](bool bouncyCollider) {
-			Scene scene;
-			CreateGround(scene);
-			Entity ball = scene.CreateEntity("Ball");
-			ball.GetTransform().Translation = { 0.0f, 3.0f, 0.0f };
-			auto& body = ball.AddComponent<RigidBodyComponent>();
-			body.Type = RigidBodyType::Dynamic;
-			body.LinearDamping = 0.0f;
-			auto& sphere = ball.AddComponent<SphereColliderComponent>();
-			sphere.OverrideMaterial = bouncyCollider;
-			sphere.Restitution = 0.8f;
-			scene.OnSimulationStart();
-			Simulate(scene, 1.0f);
-			float highest = 0.0f;
-			for (int i = 0; i < 60; i++)
-			{
-				scene.OnUpdate(Step);
-				highest = std::max(highest, ball.GetTransform().Translation.y);
-			}
-			scene.OnSimulationStop();
-			return highest;
+			return BounceHeight([bouncyCollider](Entity, Entity ball) {
+				auto& sphere = ball.GetComponent<SphereColliderComponent>();
+				sphere.OverrideMaterial = bouncyCollider;
+				sphere.Restitution = 0.8f;
+			});
 		};
 		CHECK(bounceHeight(true) > 1.5f);
 		CHECK(bounceHeight(false) < 0.6f);
+	}
+
+	TEST_CASE("Mesh colliders have their own material too: a triangle-mesh floor and a compound's mesh child")
+	{
+		// A box (friction 1) sliding on a static plane MeshCollider: a single triangle mesh, not a compound,
+		// whose sub-shape IDs still carry triangle bits. Its own friction 0 lets the box slide on.
+		auto slideOnFloor = [](bool icyFloor) {
+			Scene scene;
+			Entity floor = scene.CreateEntity("Floor");
+			floor.GetTransform().Scale = { 40.0f, 1.0f, 40.0f };
+			floor.AddComponent<RigidBodyComponent>().Friction = 1.0f;
+			auto& collider = floor.AddComponent<MeshColliderComponent>();
+			collider.Mesh = "builtin://Plane";
+			collider.OverrideMaterial = icyFloor;
+			collider.Friction = 0.0f;
+			Entity box = CreateBox(scene, { 0.0f, 0.5f, 0.0f });
+			auto& body = box.GetComponent<RigidBodyComponent>();
+			body.Friction = 1.0f;
+			body.LinearDamping = 0.0f;
+			scene.OnSimulationStart();
+			scene.GetPhysicsWorld()->SetLinearVelocity(box, { 3.0f, 0.0f, 0.0f });
+			Simulate(scene, 1.0f);
+			const float speed = scene.GetPhysicsWorld()->GetLinearVelocity(box).x;
+			scene.OnSimulationStop();
+			return speed;
+		};
+		CHECK(slideOnFloor(true) == doctest::Approx(3.0f).epsilon(0.02));
+		CHECK(slideOnFloor(false) < 0.05f);
+
+		// A sled whose runner is a convex MeshCollider: the mesh is the compound's last child (after the box).
+		Scene scene;
+		Entity ground = CreateGround(scene);
+		ground.GetComponent<RigidBodyComponent>().Friction = 1.0f;
+		Entity sled = scene.CreateEntity("Sled");
+		sled.GetTransform().Translation = { 0.0f, 0.5f, 0.0f };
+		auto& body = sled.AddComponent<RigidBodyComponent>();
+		body.Type = RigidBodyType::Dynamic;
+		body.Friction = 1.0f;
+		body.LinearDamping = 0.0f;
+		body.FixedRotation = true;
+		auto& seat = sled.AddComponent<BoxColliderComponent>();
+		seat.HalfExtents = { 0.5f, 0.25f, 0.5f };
+		seat.Offset = { 0.0f, 1.0f, 0.0f };
+		auto& runner = sled.AddComponent<MeshColliderComponent>();
+		runner.Mesh = "builtin://Cube";
+		runner.Convex = true;
+		runner.OverrideMaterial = true;
+		runner.Friction = 0.0f;
+		scene.OnSimulationStart();
+		scene.GetPhysicsWorld()->SetLinearVelocity(sled, { 3.0f, 0.0f, 0.0f });
+		Simulate(scene, 1.0f);
+		CHECK(scene.GetPhysicsWorld()->GetLinearVelocity(sled).x == doctest::Approx(3.0f).epsilon(0.02));
+		scene.OnSimulationStop();
 	}
 
 	TEST_CASE("Out-of-range collider materials are clamped with a warning naming the collider")
@@ -911,6 +958,56 @@ TEST_SUITE("Physics")
 		scene.OnSimulationStop();
 	}
 
+	TEST_CASE("A body resized in place keeps its mass")
+	{
+		Scene scene;
+		Entity box = CreateWeightlessBox(scene, { 0.0f, 0.0f, 0.0f });
+		box.GetComponent<RigidBodyComponent>().Mass = 2.0f;
+		box.GetComponent<RigidBodyComponent>().LinearDamping = 0.0f;
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		scene.OnUpdate(Step);
+		// Eight times the volume, the same 2 kg: an impulse of 2 N*s still gives 1 m/s (Jolt's density would not).
+		box.GetTransform().Scale = glm::vec3(2.0f);
+		scene.OnUpdate(Step);
+		physics.AddImpulse(box, { 2.0f, 0.0f, 0.0f });
+		CHECK(physics.GetLinearVelocity(box).x == doctest::Approx(1.0f).epsilon(0.01));
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("A zero scale during play pauses the pose write-back, warns once, and resumes")
+	{
+		Scene scene;
+		Entity spinner = CreateWeightlessBox(scene, { 0.0f, 3.0f, 0.0f });
+		Entity parent = scene.CreateEntity("Parent");
+		Entity child = CreateBox(scene, { 5.0f, 3.0f, 0.0f });
+		scene.SetParent(child, parent);
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		physics.SetAngularVelocity(spinner, { 0.0f, 2.0f, 0.0f });
+		scene.OnUpdate(Step);
+
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		spinner.GetTransform().Scale = glm::vec3(0.0f);
+		parent.GetTransform().Scale = glm::vec3(0.0f);
+		Simulate(scene, 0.5f);
+		CHECK(CountMessages(since, "'Box' has a degenerate transform (e.g. a zero scale); its body keeps its shape") == 2);
+		CHECK(physics.HasBody(spinner));
+		// Composing a pose under a zero-scaled parent would invert a singular matrix.
+		const glm::vec3 childAt = child.GetTransform().Translation;
+		CHECK((std::isfinite(childAt.x) && std::isfinite(childAt.y) && std::isfinite(childAt.z)));
+
+		// Back to its size, it carries on from where the simulation took it: still turning, not reset.
+		spinner.GetTransform().Scale = glm::vec3(1.0f);
+		parent.GetTransform().Scale = glm::vec3(1.0f);
+		scene.OnUpdate(Step);
+		const glm::quat turned = spinner.GetTransform().Rotation;
+		CHECK(std::abs(turned.w) < 0.99f);
+		CHECK(physics.GetAngularVelocity(spinner).y == doctest::Approx(2.0f).epsilon(0.05));
+		CHECK(spinner.GetTransform().Scale == glm::vec3(1.0f));
+		scene.OnSimulationStop();
+	}
+
 	TEST_CASE("Rescaling a jointed body rebuilds its joint with the anchor at the new scale")
 	{
 		// Hung by a point joint 1 m above its centre (the anchor is in its scaled local space).
@@ -966,7 +1063,7 @@ TEST_SUITE("Physics")
 		PhysicsWorld& physics = *scene.GetPhysicsWorld();
 		physics.SetAngularVelocity(spinner, { 2.0f, 3.0f, 1.0f });
 		physics.SetAngularVelocity(child, { -1.0f, 2.0f, 3.0f });
-		// Before the fix, round-tripping through the world matrix drifted the scale by about 1e-4 per 600 steps.
+		// Round-tripping through the world matrix would drift the scale by about 1e-4 per 600 steps.
 		Simulate(scene, 20.0f);
 		CHECK(spinner.GetTransform().Scale == glm::vec3(0.7f, 1.3f, 2.1f));
 		CHECK(child.GetTransform().Scale == childScale);
@@ -2037,6 +2134,34 @@ TEST_SUITE("Physics")
 		CHECK(physics.GetLinearVelocity(weakTorque).x == doctest::Approx(2.0f).epsilon(0.02));
 		CHECK(physics.GetJointRotation(weakTorque).value().z < 15.0f);
 		CHECK(physics.GetJointPosition(hinge).value() < 15.0f);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("A negative MotorMaxTorque falls back to MotorMaxForce with one warning, only where it applies")
+	{
+		Scene scene;
+		Entity hinge = CreateWeightlessBox(scene, { 0.0f, 0.0f, 0.0f });
+		auto& hingeJoint = hinge.AddComponent<JointComponent>();
+		hingeJoint.Axis = { 0.0f, 0.0f, 1.0f };
+		hingeJoint.MotorMode = JointMotorMode::Position;
+		hingeJoint.MotorTarget = 60.0f;
+		hingeJoint.MotorSpringFrequency = 5.0f;
+		hingeJoint.MotorMaxForce = 0.2f;
+		hingeJoint.MotorMaxTorque = -5.0f;
+		// A slider has no rotation motor: the field is reported as ignored, not as falling back.
+		Entity slider = CreateWeightlessBox(scene, { 0.0f, 0.0f, 5.0f });
+		auto& sliderJoint = slider.AddComponent<JointComponent>();
+		sliderJoint.Type = JointType::Slider;
+		sliderJoint.MotorMaxTorque = -7.0f;
+
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		Simulate(scene, 0.5f);
+		// Capped by the 0.2 force cap, it barely turns.
+		CHECK(physics.GetJointPosition(hinge).value() < 15.0f);
+		CHECK(CountMessages(since, "MotorMaxTorque -5 is negative; using MotorMaxForce") == 1);
+		CHECK(CountMessages(since, "MotorMaxTorque -7 is negative") == 0);
 		scene.OnSimulationStop();
 	}
 

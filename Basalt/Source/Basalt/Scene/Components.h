@@ -159,7 +159,7 @@ namespace Basalt {
 	// and its joints are rebuilt from the current poses (their anchors scale with the body).
 	// Every collider can set OverrideMaterial to touch with its own Friction and Restitution instead of the
 	// RigidBody's (still combined with the other body by the RigidBody's combine modes and clamped the same way),
-	// e.g. an icy runner under a grippy cart. Characters ignore it.
+	// e.g. an icy runner under a grippy cart. Characters ignore it (with a warning).
 	struct BoxColliderComponent
 	{
 		glm::vec3 HalfExtents = { 0.5f, 0.5f, 0.5f };
@@ -190,8 +190,9 @@ namespace Basalt {
 	};
 
 	// Collides by the triangles of a mesh asset (the entity also needs a RigidBodyComponent). Static and
-	// kinematic bodies use the exact triangle mesh. Two of those never need to meet (Jolt does not collide
-	// static and kinematic bodies with each other), and everything that does move against one is convex.
+	// kinematic bodies use the exact triangle mesh. Two of those never meet: Jolt skips pairs without a dynamic
+	// body unless one opts in, which Basalt lets only triggers do, and triggers, dynamic bodies and characters
+	// are always convex.
 	// Bodies with Convex set use the convex hull of the mesh's drawn vertices; so do dynamic bodies (Jolt
 	// cannot simulate a triangle mesh; a warning asks to set Convex) and triggers (a triangle mesh has no
 	// inside). An empty Mesh uses the entity's MeshComponent (its Mesh and MeshIndex; this MeshIndex is then
@@ -305,8 +306,9 @@ namespace Basalt {
 		glm::vec3 AngularMotorTarget = { 0.0f, 0.0f, 0.0f };
 		// Strongest force (N) a slider or six-DOF translation motor may apply.
 		float MotorMaxForce = 1000.0f;
-		// Strongest torque (N·m) a hinge or six-DOF rotation motor may apply; 0 uses MotorMaxForce, which capped
-		// both before this field existed (so a ragdoll can drive its limbs weakly and its root hard).
+		// Strongest torque (N·m) a hinge or six-DOF rotation motor may apply. 0 (the default) uses MotorMaxForce,
+		// which capped both before this field existed; so does a negative value, with a warning. Separate because
+		// one six-DOF joint drives in two units: a strong translation drive with a gentle rotation one.
 		float MotorMaxTorque = 0.0f;
 		// The spring a Position motor pulls toward its target with (hinge, slider, six-DOF): a higher frequency
 		// (Hz, > 0) is stiffer, still capped by the motor's force or torque. Damping is a ratio, 1 = critically

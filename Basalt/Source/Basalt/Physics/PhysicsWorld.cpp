@@ -16,6 +16,7 @@
 #include <cmath>
 #include <mutex>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace Basalt {
@@ -74,43 +75,48 @@ namespace Basalt {
 			Entity a = scene->GetEntityByUUID(pair.first);
 			Entity b = scene->GetEntityByUUID(pair.second);
 			if (scriptEngine && a && b)
-				scriptEngine->OnContactEvent(isTrigger ? ContactEventType::TriggerExit : ContactEventType::CollisionEnd, a, b);
+				scriptEngine->OnContactEvent(isTrigger ? ContactEventType::TriggerExit : ContactEventType::CollisionEnd, a, b, std::nullopt);
 		}
 	}
 
-	void PhysicsWorld::Impl::WritePose(Scene* scene, Entity entity, const glm::vec3& position, const glm::quat& rotation)
+	bool PhysicsWorld::Impl::WritePose(Entity entity, const glm::vec3& position, const glm::quat& rotation)
 	{
-		glm::vec3 oldPosition;
-		glm::quat oldRotation;
+		Scene* scene = entity.GetScene();
+		glm::vec3 unusedPosition;
+		glm::quat unusedRotation;
 		glm::vec3 scale;
-		Math::DecomposeTransform(scene->GetWorldTransform(entity), oldPosition, oldRotation, scale);
+		if (!Math::DecomposeTransform(scene->GetWorldTransform(entity), unusedPosition, unusedRotation, scale))
+			return false;
 		TransformComponent& transform = entity.GetTransform();
 		const glm::vec3 localScale = transform.Scale;
 		scene->SetWorldTransform(entity, Math::ComposeTransform(position, rotation, scale));
+		// copysign, not glm::sign: a zero component of the decomposed scale still takes the magnitude.
 		for (int axis = 0; axis < 3; axis++)
 			transform.Scale[axis] = std::copysign(std::abs(localScale[axis]), transform.Scale[axis]);
+		return true;
 	}
 
 	std::optional<ContactInfo> PhysicsWorld::Impl::SeparationContact(UUID first, UUID second, float fixedStep) const
 	{
-		auto bodyOf = [this](UUID uuid) {
+		const JPH::BodyInterface& bodies = System->GetBodyInterface();
+		// A character's inner body is teleported, so it reports no velocity: use the character's own.
+		auto bodyOf = [&](UUID uuid) -> std::pair<JPH::BodyID, JPH::Vec3> {
 			if (auto body = Bodies.find(uuid); body != Bodies.end())
-				return body->second.ID;
+				return { body->second.ID, bodies.GetLinearVelocity(body->second.ID) };
 			if (auto character = Characters.find(uuid); character != Characters.end())
-				return character->second.Character->GetInnerBodyID();
-			return JPH::BodyID();
+				return { character->second.Character->GetInnerBodyID(), ToJolt(character->second.ActualVelocity) };
+			return { JPH::BodyID(), JPH::Vec3::sZero() };
 		};
-		const JPH::BodyID bodyA = bodyOf(first);
-		const JPH::BodyID bodyB = bodyOf(second);
+		const auto [bodyA, velocityA] = bodyOf(first);
+		const auto [bodyB, velocityB] = bodyOf(second);
 		if (bodyA.IsInvalid() || bodyB.IsInvalid())
 			return std::nullopt;
 
-		const JPH::BodyInterface& bodies = System->GetBodyInterface();
 		const JPH::TransformedShape shapeA = bodies.GetTransformedShape(bodyA);
 		const JPH::TransformedShape shapeB = bodies.GetTransformedShape(bodyB);
-		// They parted during the last step, so they are about one step of relative motion apart (plus Jolt's
-		// speculative contact distance; a character's inner body reports no velocity, hence the margin).
-		const float relativeSpeed = (bodies.GetLinearVelocity(bodyA) - bodies.GetLinearVelocity(bodyB)).Length();
+		// They parted during the last step: at most one step of relative motion apart, plus Jolt's 0.02 m
+		// speculative contact distance. Twice that, plus a margin for rotation, finds them.
+		const float relativeSpeed = (velocityA - velocityB).Length();
 		JPH::CollideShapeSettings settings;
 		settings.mMaxSeparationDistance = 0.25f + 2.0f * relativeSpeed * fixedStep;
 		// The least separated pair of parts.
@@ -118,11 +124,14 @@ namespace Basalt {
 		shapeB.CollideShape(shapeA.mShape, shapeA.GetShapeScale(), shapeA.GetCenterOfMassTransform(), settings, JPH::RVec3::sZero(), collector);
 		if (!collector.HadHit())
 			return std::nullopt;
-		// Shape 1 is A's: the penetration axis points from A toward B, and the normal from B toward A.
+		// Shape 1 is A's: the penetration axis points from A toward B, and the normal from B toward A. Shapes
+		// that touch at a single point give no direction, which is no contact to report.
 		const JPH::CollideShapeResult& hit = collector.mHit;
+		if (hit.mPenetrationAxis.IsNearZero())
+			return std::nullopt;
 		ContactInfo contact;
 		contact.Point = FromJolt(JPH::Vec3(0.5f * (hit.mContactPointOn1 + hit.mContactPointOn2)));
-		contact.Normal = FromJolt(-hit.mPenetrationAxis.NormalizedOr(JPH::Vec3::sZero()));
+		contact.Normal = FromJolt(-hit.mPenetrationAxis.Normalized());
 		return contact;
 	}
 
@@ -191,7 +200,6 @@ namespace Basalt {
 		m_Impl->ContactListener.Materials.resize(MaxBodies);
 		m_Impl->ContactListener.MinVelocityForRestitution = m_Impl->System->GetPhysicsSettings().mMinVelocityForRestitution;
 		m_Impl->System->SetContactListener(&m_Impl->ContactListener);
-		m_Impl->CharacterListener.Owner = m_Impl.get();
 		// Bodies joined by a joint do not collide with each other unless the joint asks for it.
 		m_Impl->System->SetSimCollideBodyVsBody([impl = m_Impl.get()](const JPH::Body& body1, const JPH::Body& body2, JPH::Mat44Arg transform1, JPH::Mat44Arg transform2,
 																	  JPH::CollideShapeSettings& settings, JPH::CollideShapeCollector& collector, const JPH::ShapeFilter& filter) {
@@ -284,10 +292,10 @@ namespace Basalt {
 		if (!Math::DecomposeTransform(m_Scene->GetWorldTransform(entity), position, rotation, scale))
 		{
 			BS_CORE_WARN("Physics: entity '{}' has a degenerate transform; no body created", entity.GetName());
-			impl.Degenerate.insert(entity.GetUUID());
+			impl.Unbuilt.insert(entity.GetUUID());
 			return;
 		}
-		impl.Degenerate.erase(entity.GetUUID());
+		impl.Unbuilt.erase(entity.GetUUID());
 
 		JPH::EMotionType motionType = JPH::EMotionType::Static;
 		if (rigidBody.Type == RigidBodyType::Dynamic)
@@ -302,7 +310,7 @@ namespace Basalt {
 		auto reportWarnings = [&]() { impl.BodyWarnings.Report(entity, warnings); };
 
 		// Jolt cannot simulate a triangle mesh on a dynamic body, so those always use the convex hull.
-		const ColliderShape colliders = BuildColliderShape(entity, scale, 1.0f, motionType == JPH::EMotionType::Dynamic ? "a dynamic body" : nullptr, rigidBody.IsTrigger, warn);
+		const ColliderShape colliders = BuildColliderShape(entity, scale, 1.0f, motionType == JPH::EMotionType::Dynamic ? "a dynamic body" : nullptr, rigidBody.IsTrigger, true, warn);
 		if (!colliders.Shape)
 		{
 			warn("no body created");
@@ -319,14 +327,9 @@ namespace Basalt {
 			warn("unknown physics layer '" + rigidBody.Layer + "', using Default");
 		JPH::BodyCreationSettings settings(colliders.Shape, ToJolt(position), ToJolt(rotation), motionType, MakeObjectLayer(moving, layer));
 		settings.mUserData = static_cast<uint64_t>(entity.GetUUID());
-		// The combine modes pass these on unchecked: negative friction inverts Jolt's friction clamp and
-		// restitution above 1 adds energy on every bounce.
-		settings.mFriction = std::max(rigidBody.Friction, 0.0f);
-		if (rigidBody.Friction < 0.0f)
-			warn("Friction must not be negative, using 0");
-		settings.mRestitution = std::clamp(rigidBody.Restitution, 0.0f, 1.0f);
-		if (rigidBody.Restitution < 0.0f || rigidBody.Restitution > 1.0f)
-			warn("Restitution must be between 0 and 1, clamped");
+		const ColliderMaterial surface = SanitizeSurface(rigidBody.Friction, rigidBody.Restitution, "", warn);
+		settings.mFriction = surface.Friction;
+		settings.mRestitution = surface.Restitution;
 		settings.mLinearDamping = rigidBody.LinearDamping;
 		settings.mAngularDamping = rigidBody.AngularDamping;
 		settings.mGravityFactor = rigidBody.GravityFactor;
@@ -367,8 +370,10 @@ namespace Basalt {
 			return;
 		}
 
-		const bool anyOverride = std::ranges::any_of(colliders.Materials, &ColliderMaterial::Override);
-		impl.ContactListener.Materials[bodyID.GetIndex()] = { rigidBody.FrictionCombine, rigidBody.RestitutionCombine, colliders.Materials, anyOverride };
+		BodyMaterial& material = impl.ContactListener.Materials[bodyID.GetIndex()];
+		material = { .FrictionCombine = rigidBody.FrictionCombine, .RestitutionCombine = rigidBody.RestitutionCombine };
+		if (std::ranges::any_of(colliders.Materials, &ColliderMaterial::Override))
+			material.Colliders = CreateScope<const ColliderMaterials>(colliders.Materials);
 
 		Impl::BodyRecord record;
 		record.ID = bodyID;
@@ -415,7 +420,7 @@ namespace Basalt {
 				if (rescaled(scale, it->second.BuiltScale))
 					resized.emplace_back(entity, scale);
 			}
-			else if (impl.Degenerate.contains(entity.GetUUID()))
+			else if (impl.Unbuilt.contains(entity.GetUUID()))
 			{
 				recovered.push_back(entity);
 			}
@@ -448,7 +453,7 @@ namespace Basalt {
 		Impl::BodyRecord& record = found->second;
 		const bool dynamic = record.Type == RigidBodyType::Dynamic;
 		// The same colliders the body was built from, so their warnings would only repeat.
-		const ColliderShape colliders = BuildColliderShape(entity, scale, 1.0f, dynamic ? "a dynamic body" : nullptr, record.IsTrigger, [](const std::string&) {});
+		const ColliderShape colliders = BuildColliderShape(entity, scale, 1.0f, dynamic ? "a dynamic body" : nullptr, record.IsTrigger, true, [](const std::string&) {});
 		if (!colliders.Shape)
 		{
 			RecreateBody(entity);
@@ -458,7 +463,8 @@ namespace Basalt {
 		// Joint anchors are scaled with the body (see CreateJoint), so its joints are rebuilt from the current
 		// poses before the next step, as after any rebuild. Constraints must go before their body's shape changes.
 		impl.RemoveJointsOfBody(entity.GetUUID());
-		// Jolt keeps the body's position (its origin) and re-evaluates its contacts without ending them.
+		// Jolt keeps the body's position (its origin) and re-evaluates its contacts without ending them. The
+		// collider set is unchanged, so the contact listener's materials (indexed by child) still match.
 		impl.System->GetBodyInterface().SetShape(record.ID, colliders.Shape, false, JPH::EActivation::Activate);
 		if (dynamic)
 		{
@@ -484,7 +490,7 @@ namespace Basalt {
 		m_Impl->DirtyJoints.erase(entity.GetUUID());
 		m_Impl->JointWarnings.Forget(entity.GetUUID());
 		m_Impl->BodyWarnings.Forget(entity.GetUUID());
-		m_Impl->Degenerate.erase(entity.GetUUID());
+		m_Impl->Unbuilt.erase(entity.GetUUID());
 	}
 
 	bool PhysicsWorld::HasBody(Entity entity) const
@@ -586,7 +592,15 @@ namespace Basalt {
 				const glm::vec3 position = FromJolt(joltPosition);
 				const glm::quat rotation = glm::normalize(FromJolt(joltRotation));
 
-				Impl::WritePose(m_Scene, entity, position, rotation);
+				// While the transform is degenerate the entity keeps its last written pose. LastPosition stays with
+				// it, so once the transform is valid again the body is not teleported back but written out.
+				if (!Impl::WritePose(entity, position, rotation))
+				{
+					if (!std::exchange(record.Degenerate, true))
+						BS_CORE_WARN("Physics: entity '{}' has a degenerate transform (e.g. a zero scale); its body keeps its shape and its pose is not written back until the transform is valid", entity.GetName());
+					continue;
+				}
+				record.Degenerate = false;
 				record.LastPosition = position;
 				record.LastRotation = rotation;
 			}
@@ -622,10 +636,14 @@ namespace Basalt {
 			return record != impl.Bodies.end() && record->second.Type != RigidBodyType::Static && !bodies.IsActive(record->second.ID);
 		};
 
-		std::map<Impl::EntityPair, bool> touched; // pair -> was active before this step
-		// The strongest new contact of each pair, relative to the pair's first (lower UUID) entity (begin and
-		// enter events).
-		std::map<Impl::EntityPair, ContactInfo> newContacts;
+		struct PairChange
+		{
+			bool WasActive = false;
+			// The strongest new contact, relative to the pair's first (lower UUID) entity. A pair only becomes
+			// active through an Added event, so begin and enter events always have one.
+			std::optional<ContactInfo> Begin;
+		};
+		std::map<Impl::EntityPair, PairChange> touched;
 		for (const RawContactEvent& event : events)
 		{
 			auto first = impl.BodyToEntity.find(event.Body1);
@@ -656,12 +674,11 @@ namespace Basalt {
 				continue;
 			}
 
-			touched.emplace(pair, impl.PairCounts.contains(pair));
+			PairChange& change = touched.try_emplace(pair, PairChange{ impl.PairCounts.contains(pair), std::nullopt }).first->second;
 			if (event.Added)
 			{
-				auto [best, inserted] = newContacts.try_emplace(pair, contact);
-				if (!inserted && contact.Impulse > best->second.Impulse)
-					best->second = contact;
+				if (!change.Begin || contact.Impulse > change.Begin->Impulse)
+					change.Begin = contact;
 				impl.SuspendedContacts.erase(key);
 				if (impl.ActiveContacts.insert(key).second)
 					impl.PairCounts[pair]++;
@@ -686,7 +703,7 @@ namespace Basalt {
 				continue;
 			}
 			const Impl::EntityPair pair(std::get<0>(*key), std::get<2>(*key));
-			touched.emplace(pair, impl.PairCounts.contains(pair));
+			touched.try_emplace(pair, PairChange{ impl.PairCounts.contains(pair), std::nullopt });
 			if (impl.ActiveContacts.erase(*key) > 0 && --impl.PairCounts[pair] <= 0)
 				impl.PairCounts.erase(pair);
 			key = impl.SuspendedContacts.erase(key);
@@ -695,10 +712,10 @@ namespace Basalt {
 		ScriptEngine* scriptEngine = m_Scene->GetScriptEngine();
 		if (!scriptEngine)
 			return;
-		for (const auto& [pair, wasActive] : touched)
+		for (const auto& [pair, change] : touched)
 		{
 			const bool isActive = impl.PairCounts.contains(pair);
-			if (wasActive == isActive)
+			if (change.WasActive == isActive)
 				continue;
 			Entity entityA = m_Scene->GetEntityByUUID(pair.first);
 			Entity entityB = m_Scene->GetEntityByUUID(pair.second);
@@ -710,16 +727,7 @@ namespace Basalt {
 				type = isActive ? ContactEventType::TriggerEnter : ContactEventType::TriggerExit;
 			else
 				type = isActive ? ContactEventType::CollisionBegin : ContactEventType::CollisionEnd;
-			std::optional<ContactInfo> contact;
-			if (isActive)
-			{
-				if (auto found = newContacts.find(pair); found != newContacts.end())
-					contact = found->second;
-			}
-			else
-			{
-				contact = impl.SeparationContact(UUID(pair.first), UUID(pair.second), fixedStep);
-			}
+			const std::optional<ContactInfo> contact = isActive ? change.Begin : impl.SeparationContact(UUID(pair.first), UUID(pair.second), fixedStep);
 			scriptEngine->OnContactEvent(type, entityA, entityB, contact);
 		}
 	}

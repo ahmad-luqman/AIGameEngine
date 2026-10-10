@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <cfloat>
 #include <optional>
-#include <utility>
 
 namespace Basalt {
 
@@ -20,22 +19,6 @@ namespace Basalt {
 		// would touch it and shove dynamic bodies regardless of MaxStrength.
 		constexpr float InnerShapeFraction = 0.9f;
 
-		// A BodyFilter from a predicate on the (locked) body.
-		template<typename Predicate>
-		class BodyPredicateFilter final : public JPH::BodyFilter
-		{
-		public:
-			explicit BodyPredicateFilter(Predicate predicate)
-				: m_Predicate(std::move(predicate))
-			{
-			}
-
-			bool ShouldCollideLocked(const JPH::Body& body) const override { return m_Predicate(body); }
-
-		private:
-			Predicate m_Predicate;
-		};
-
 	}
 
 	bool PhysicsWorld::Impl::IsCharacterBody(const JPH::Body& body) const
@@ -46,11 +29,16 @@ namespace Basalt {
 
 	bool PhysicsWorld::Impl::CharacterLayerFilter::OnCharacterContactValidate(const JPH::CharacterVirtual* character, const JPH::CharacterContact& contact)
 	{
-		auto self = Owner->Characters.find(UUID(character->GetUserData()));
-		auto other = contact.mCharacterB ? Owner->Characters.find(UUID(contact.mCharacterB->GetUserData())) : Owner->Characters.end();
-		if (self == Owner->Characters.end() || other == Owner->Characters.end())
+		// Contacts with bodies were already filtered by layer when they were collected.
+		if (!contact.mCharacterB)
 			return true;
-		return Owner->ObjectLayerPairFilter.ShouldCollide(MakeObjectLayer(true, self->second.Layer), MakeObjectLayer(true, other->second.Layer));
+		const auto& characters = m_Owner.Characters;
+		auto self = characters.find(UUID(character->GetUserData()));
+		auto other = characters.find(UUID(contact.mCharacterB->GetUserData()));
+		BS_CORE_ASSERT(self != characters.end() && other != characters.end(), "a character in CharacterCollision has no record");
+		if (self == characters.end() || other == characters.end())
+			return true;
+		return m_Owner.ObjectLayerPairFilter.ShouldCollide(MakeObjectLayer(true, self->second.Layer), MakeObjectLayer(true, other->second.Layer));
 	}
 
 	void PhysicsWorld::Impl::ConfigureCharacter(CharacterRecord& record, const std::function<void(const std::string&)>& warn)
@@ -153,13 +141,13 @@ namespace Basalt {
 		{
 			warn("degenerate transform; no character created");
 			report();
-			impl.Degenerate.insert(entity.GetUUID());
+			impl.Unbuilt.insert(entity.GetUUID());
 			return;
 		}
-		impl.Degenerate.erase(entity.GetUUID());
+		impl.Unbuilt.erase(entity.GetUUID());
 		// The collider shapes, scaled as for a rigid body, and the smaller inner body's (InnerShapeFraction).
 		// Characters move by shape casts, which need a convex mesh collider.
-		const ColliderShape colliders = BuildColliderShape(entity, scale, 1.0f, "a character", false, warn);
+		const ColliderShape colliders = BuildColliderShape(entity, scale, 1.0f, "a character", false, false, warn);
 		if (!colliders.Shape)
 		{
 			warn("no character created");
@@ -167,7 +155,7 @@ namespace Basalt {
 			return;
 		}
 		// Same colliders, so its warnings would only repeat the outer shape's.
-		const ColliderShape inner = BuildColliderShape(entity, scale, InnerShapeFraction, "a character", false, [](const std::string&) {});
+		const ColliderShape inner = BuildColliderShape(entity, scale, InnerShapeFraction, "a character", false, false, [](const std::string&) {});
 		if (!inner.Shape)
 		{
 			warn("failed to build its inner shape; no character created");
@@ -191,7 +179,7 @@ namespace Basalt {
 		auto* character = new JPH::CharacterVirtual(&settings, ToJolt(position), ToJolt(rotation), static_cast<uint64_t>(entity.GetUUID()), impl.System.get());
 		character->SetLinearVelocity(previousVelocity);
 		character->SetCharacterVsCharacterCollision(&impl.CharacterCollision);
-		character->SetListener(&impl.CharacterListener);
+		character->SetListener(&impl.CharacterLayers);
 
 		Impl::CharacterRecord& record = impl.Characters[entity.GetUUID()];
 		record.Character = character;
@@ -225,8 +213,7 @@ namespace Basalt {
 		// A new character starts in the air; find its ground now so a rebuild (e.g. a crouch changing the
 		// collider) does not lose a step of IsGrounded or a jump.
 		const JPH::ObjectLayer objectLayer = MakeObjectLayer(true, layer);
-		const BodyPredicateFilter bodyFilter([&impl](const JPH::Body& body) { return !impl.IsCharacterBody(body); });
-		character->RefreshContacts(JPH::DefaultBroadPhaseLayerFilter(impl.ObjectVsBroadPhaseLayerFilter, objectLayer), JPH::DefaultObjectLayerFilter(impl.ObjectLayerPairFilter, objectLayer), bodyFilter, JPH::ShapeFilter(),
+		character->RefreshContacts(JPH::DefaultBroadPhaseLayerFilter(impl.ObjectVsBroadPhaseLayerFilter, objectLayer), JPH::DefaultObjectLayerFilter(impl.ObjectLayerPairFilter, objectLayer), impl.CharacterBodyFilter, JPH::ShapeFilter(),
 								   *impl.TempAllocator);
 	}
 
@@ -239,8 +226,8 @@ namespace Basalt {
 		Impl::CharacterRecord& record = found->second;
 		// The same colliders the character was built from, so their warnings would only repeat.
 		auto silent = [](const std::string&) {};
-		const ColliderShape outer = BuildColliderShape(entity, scale, 1.0f, "a character", false, silent);
-		const ColliderShape inner = BuildColliderShape(entity, scale, InnerShapeFraction, "a character", false, silent);
+		const ColliderShape outer = BuildColliderShape(entity, scale, 1.0f, "a character", false, false, silent);
+		const ColliderShape inner = BuildColliderShape(entity, scale, InnerShapeFraction, "a character", false, false, silent);
 		if (!outer.Shape || !inner.Shape)
 		{
 			RecreateCharacter(entity);
@@ -249,10 +236,9 @@ namespace Basalt {
 
 		JPH::CharacterVirtual& character = *record.Character;
 		const JPH::ObjectLayer layer = MakeObjectLayer(true, record.Layer);
-		const BodyPredicateFilter bodyFilter([&impl](const JPH::Body& body) { return !impl.IsCharacterBody(body); });
 		// Switches whatever the new shape overlaps (FLT_MAX); the next update pushes a grown character out. The
 		// character keeps its contacts and ground.
-		character.SetShape(outer.Shape, FLT_MAX, JPH::DefaultBroadPhaseLayerFilter(impl.ObjectVsBroadPhaseLayerFilter, layer), JPH::DefaultObjectLayerFilter(impl.ObjectLayerPairFilter, layer), bodyFilter, JPH::ShapeFilter(),
+		character.SetShape(outer.Shape, FLT_MAX, JPH::DefaultBroadPhaseLayerFilter(impl.ObjectVsBroadPhaseLayerFilter, layer), JPH::DefaultObjectLayerFilter(impl.ObjectLayerPairFilter, layer), impl.CharacterBodyFilter, JPH::ShapeFilter(),
 						   *impl.TempAllocator);
 		character.SetInnerBodyShape(inner.Shape);
 		record.Bounds = outer.Shape->GetLocalBounds();
@@ -289,6 +275,7 @@ namespace Basalt {
 		Impl& impl = *m_Impl;
 		if (impl.Characters.empty())
 			return;
+		BS_CORE_ASSERT(impl.CharacterCollision.mCharacters.size() == impl.Characters.size(), "CharacterCollision is out of sync with the characters");
 		const JPH::Vec3 sceneGravity = impl.System->GetGravity();
 		// Registry order, not hash order: characters push bodies, so the order shows in replays.
 		for (entt::entity handle : m_Scene->GetAllEntitiesWith<CharacterControllerComponent>())
@@ -323,7 +310,7 @@ namespace Basalt {
 			const JPH::DefaultBroadPhaseLayerFilter broadPhaseFilter(impl.ObjectVsBroadPhaseLayerFilter, layer);
 			const JPH::DefaultObjectLayerFilter objectLayerFilter(impl.ObjectLayerPairFilter, layer);
 			// Other characters are met through CharacterCollision, not their inner bodies.
-			const BodyPredicateFilter bodyFilter([&impl](const JPH::Body& body) { return !impl.IsCharacterBody(body); });
+			const JPH::BodyFilter& bodyFilter = impl.CharacterBodyFilter;
 			const JPH::ShapeFilter shapeFilter;
 
 			// A script that moved the transform teleports the character (whose old ground no longer holds it);
@@ -387,7 +374,8 @@ namespace Basalt {
 
 			record.LastPosition = FromJolt(JPH::Vec3(character.GetPosition()));
 			record.LastRotation = rotation;
-			Impl::WritePose(m_Scene, entity, record.LastPosition, rotation);
+			// The transform decomposed above, so this cannot fail.
+			Impl::WritePose(entity, record.LastPosition, rotation);
 		}
 	}
 

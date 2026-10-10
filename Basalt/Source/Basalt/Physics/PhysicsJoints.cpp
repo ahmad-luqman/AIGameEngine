@@ -174,11 +174,12 @@ namespace Basalt {
 		const JPH::SpringSettings limitSpring = SanitizeLimitSpring(joint, warnings);
 		if (joint.MotorMaxForce < 0.0f)
 			warnings.emplace_back(fmt::format("MotorMaxForce {} is negative; using 0", joint.MotorMaxForce));
-		if (joint.MotorMaxTorque < 0.0f)
+		// Joints without rotation motors already list MotorMaxTorque as ignored.
+		if (joint.MotorMaxTorque < 0.0f && JointFieldApplies(joint, "MotorMaxTorque"))
 			warnings.emplace_back(fmt::format("MotorMaxTorque {} is negative; using MotorMaxForce", joint.MotorMaxTorque));
 		const JPH::EMotorState motorState = ToJoltMotorState(joint.MotorMode);
 		const float motorForceLimit = std::max(joint.MotorMaxForce, 0.0f);
-		const float motorTorqueLimit = joint.MotorMaxTorque > 0.0f ? joint.MotorMaxTorque : motorForceLimit;
+		const float motorTorqueLimit = HasOwnMotorTorque(joint) ? joint.MotorMaxTorque : motorForceLimit;
 		const JPH::SpringSettings motorSpring = SanitizeMotorSpring(joint, warnings);
 
 		switch (joint.Type)
