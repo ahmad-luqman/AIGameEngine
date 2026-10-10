@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include <Basalt/Core/Log.h>
+#include <Basalt/Physics/JointSettings.h>
 #include <Basalt/Physics/PhysicsWorld.h>
 #include <Basalt/Scene/ComponentRegistry.h>
 #include <Basalt/Scene/JointFields.h>
@@ -11,6 +12,10 @@
 #include "TestUtils.h"
 
 #include <glm/gtc/epsilon.hpp>
+
+#include <functional>
+#include <map>
+#include <set>
 
 using namespace Basalt;
 
@@ -531,6 +536,114 @@ TEST_SUITE("Serialization")
 		CHECK_FALSE(JointFieldApplies(ragdoll, "BreakTorque"));
 		ragdoll.AngularMotorMode[2] = JointMotorMode::Velocity;
 		CHECK(JointFieldApplies(ragdoll, "BreakTorque"));
+	}
+
+	TEST_CASE("Which joint fields apply, for every type, UseLimits and six-DOF rotation motor")
+	{
+		// One character per combination, in the order: type (Fixed..SixDOF), UseLimits off/on, rotation motor
+		// off/on. Pins the rule so restructuring it cannot change which fields the inspector shows.
+		const std::map<std::string, std::string> expected = {
+			{ "Type", "1111111111111111111111111111" },
+			{ "BodyEntity", "1111111111111111111111111111" },
+			{ "ConnectedEntity", "1111111111111111111111111111" },
+			{ "Anchor", "1111111111111111111111111111" },
+			{ "ConnectedAnchor", "0000000000000000111100000000" },
+			{ "Axis", "0000000011111111000011111111" },
+			{ "SecondaryAxis", "0000000000000000000000001111" },
+			{ "UseLimits", "0000000011111111111111111111" },
+			{ "LimitMin", "0000000000110011001100000000" },
+			{ "LimitMax", "0000000000110011001100110000" },
+			{ "LimitSpringFrequency", "0000000000110011111100000011" },
+			{ "LimitSpringDamping", "0000000000110011111100000011" },
+			{ "LinearLimitMin", "0000000000000000000000000011" },
+			{ "LinearLimitMax", "0000000000000000000000000011" },
+			{ "AngularLimitMin", "0000000000000000000000000011" },
+			{ "AngularLimitMax", "0000000000000000000000000011" },
+			{ "FreeLinearAxes", "0000000000000000000000001111" },
+			{ "MotorMode", "0000000011111111000000000000" },
+			{ "MotorTarget", "0000000011111111000000000000" },
+			{ "LinearMotorMode", "0000000000000000000000001111" },
+			{ "AngularMotorMode", "0000000000000000000000001111" },
+			{ "LinearMotorTarget", "0000000000000000000000001111" },
+			{ "AngularMotorTarget", "0000000000000000000000001111" },
+			{ "MotorMaxForce", "0000000011111111000000001111" },
+			{ "MotorSpringFrequency", "0000000011111111000000001111" },
+			{ "MotorSpringDamping", "0000000011111111000000001111" },
+			{ "BreakForce", "1111111111111111111111111111" },
+			{ "BreakTorque", "1111000011111111000000110111" },
+			{ "EnableCollision", "1111111111111111111111111111" },
+		};
+		for (const std::string& field : GetJointFieldNames())
+		{
+			std::string actual;
+			for (const JointType type : { JointType::Fixed, JointType::Point, JointType::Hinge, JointType::Slider, JointType::Distance, JointType::Cone, JointType::SixDOF })
+			{
+				for (const bool limits : { false, true })
+				{
+					for (const bool motor : { false, true })
+					{
+						JointComponent joint;
+						joint.Type = type;
+						joint.UseLimits = limits;
+						if (motor)
+							joint.AngularMotorMode[1] = JointMotorMode::Velocity;
+						actual += JointFieldApplies(joint, field) ? '1' : '0';
+					}
+				}
+			}
+			INFO("field: " << field);
+			auto it = expected.find(field);
+			REQUIRE(it != expected.end());
+			CHECK(it->second == actual);
+		}
+	}
+
+	TEST_CASE("Only the fields a live joint can update in place avoid a rebuild")
+	{
+		// A different valid value for every field; the list must cover them all.
+		const std::map<std::string, std::function<void(JointComponent&)>> change = {
+			{ "Type", [](JointComponent& j) { j.Type = JointType::Slider; } },
+			{ "BodyEntity", [](JointComponent& j) { j.BodyEntity = UUID(7); } },
+			{ "ConnectedEntity", [](JointComponent& j) { j.ConnectedEntity = UUID(8); } },
+			{ "Anchor", [](JointComponent& j) { j.Anchor.x += 1.0f; } },
+			{ "ConnectedAnchor", [](JointComponent& j) { j.ConnectedAnchor.x += 1.0f; } },
+			{ "Axis", [](JointComponent& j) { j.Axis = { 1.0f, 0.0f, 0.0f }; } },
+			{ "SecondaryAxis", [](JointComponent& j) { j.SecondaryAxis = { 0.0f, 0.0f, 1.0f }; } },
+			{ "UseLimits", [](JointComponent& j) { j.UseLimits = !j.UseLimits; } },
+			{ "LimitMin", [](JointComponent& j) { j.LimitMin -= 1.0f; } },
+			{ "LimitMax", [](JointComponent& j) { j.LimitMax += 1.0f; } },
+			{ "LimitSpringFrequency", [](JointComponent& j) { j.LimitSpringFrequency += 1.0f; } },
+			{ "LimitSpringDamping", [](JointComponent& j) { j.LimitSpringDamping += 1.0f; } },
+			{ "LinearLimitMin", [](JointComponent& j) { j.LinearLimitMin.x -= 1.0f; } },
+			{ "LinearLimitMax", [](JointComponent& j) { j.LinearLimitMax.x += 1.0f; } },
+			{ "AngularLimitMin", [](JointComponent& j) { j.AngularLimitMin.x -= 1.0f; } },
+			{ "AngularLimitMax", [](JointComponent& j) { j.AngularLimitMax.x += 1.0f; } },
+			{ "FreeLinearAxes", [](JointComponent& j) { j.FreeLinearAxes.x = !j.FreeLinearAxes.x; } },
+			{ "MotorMode", [](JointComponent& j) { j.MotorMode = JointMotorMode::Position; } },
+			{ "MotorTarget", [](JointComponent& j) { j.MotorTarget += 1.0f; } },
+			{ "LinearMotorMode", [](JointComponent& j) { j.LinearMotorMode[0] = JointMotorMode::Position; } },
+			{ "AngularMotorMode", [](JointComponent& j) { j.AngularMotorMode[0] = JointMotorMode::Position; } },
+			{ "LinearMotorTarget", [](JointComponent& j) { j.LinearMotorTarget.x += 1.0f; } },
+			{ "AngularMotorTarget", [](JointComponent& j) { j.AngularMotorTarget.x += 1.0f; } },
+			{ "MotorMaxForce", [](JointComponent& j) { j.MotorMaxForce += 1.0f; } },
+			{ "MotorSpringFrequency", [](JointComponent& j) { j.MotorSpringFrequency += 1.0f; } },
+			{ "MotorSpringDamping", [](JointComponent& j) { j.MotorSpringDamping += 1.0f; } },
+			{ "BreakForce", [](JointComponent& j) { j.BreakForce += 1.0f; } },
+			{ "BreakTorque", [](JointComponent& j) { j.BreakTorque += 1.0f; } },
+			{ "EnableCollision", [](JointComponent& j) { j.EnableCollision = !j.EnableCollision; } },
+		};
+		const std::set<std::string> rebuilds = { "Type", "BodyEntity", "ConnectedEntity", "Anchor", "ConnectedAnchor", "Axis", "SecondaryAxis", "UseLimits" };
+		for (const std::string& field : GetJointFieldNames())
+		{
+			INFO("field: " << field);
+			auto it = change.find(field);
+			REQUIRE(it != change.end());
+			const JointComponent built;
+			JointComponent changed = built;
+			it->second(changed);
+			REQUIRE(changed != built);
+			CHECK(PhysicsInternal::NeedsRebuild(built, changed) == rebuilds.contains(field));
+		}
 	}
 
 	TEST_CASE("Joints inside a duplicated tree or prefab connect the copies")
