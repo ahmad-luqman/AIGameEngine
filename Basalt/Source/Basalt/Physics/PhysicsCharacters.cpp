@@ -5,6 +5,7 @@
 #include "Basalt/Physics/PhysicsWorldImpl.h"
 
 #include <algorithm>
+#include <cfloat>
 #include <optional>
 #include <utility>
 
@@ -13,6 +14,11 @@ namespace Basalt {
 	using namespace PhysicsInternal;
 
 	namespace {
+
+		// The inner body that other bodies collide with is a little smaller than the character's shape (as in
+		// Jolt's samples): the character stops just short of what it walks into, so a full-size inner body
+		// would touch it and shove dynamic bodies regardless of MaxStrength.
+		constexpr float InnerShapeFraction = 0.9f;
 
 		// A BodyFilter from a predicate on the (locked) body.
 		template<typename Predicate>
@@ -147,13 +153,12 @@ namespace Basalt {
 		{
 			warn("degenerate transform; no character created");
 			report();
+			impl.Degenerate.insert(entity.GetUUID());
 			return;
 		}
-		// The collider shapes, scaled as for a rigid body. The inner body that other bodies collide with is a
-		// little smaller (as in Jolt's samples): the character stops just short of what it walks into, so a
-		// full-size inner body would touch it and shove dynamic bodies regardless of MaxStrength. Characters
-		// move by shape casts, which need a convex mesh collider.
-		constexpr float InnerShapeFraction = 0.9f;
+		impl.Degenerate.erase(entity.GetUUID());
+		// The collider shapes, scaled as for a rigid body, and the smaller inner body's (InnerShapeFraction).
+		// Characters move by shape casts, which need a convex mesh collider.
 		const ColliderShape colliders = BuildColliderShape(entity, scale, 1.0f, "a character", false, warn);
 		if (!colliders.Shape)
 		{
@@ -223,6 +228,37 @@ namespace Basalt {
 		const BodyPredicateFilter bodyFilter([&impl](const JPH::Body& body) { return !impl.IsCharacterBody(body); });
 		character->RefreshContacts(JPH::DefaultBroadPhaseLayerFilter(impl.ObjectVsBroadPhaseLayerFilter, objectLayer), JPH::DefaultObjectLayerFilter(impl.ObjectLayerPairFilter, objectLayer), bodyFilter, JPH::ShapeFilter(),
 								   *impl.TempAllocator);
+	}
+
+	void PhysicsWorld::ResizeCharacter(Entity entity, const glm::vec3& scale)
+	{
+		Impl& impl = *m_Impl;
+		auto found = impl.Characters.find(entity.GetUUID());
+		if (found == impl.Characters.end())
+			return;
+		Impl::CharacterRecord& record = found->second;
+		// The same colliders the character was built from, so their warnings would only repeat.
+		auto silent = [](const std::string&) {};
+		const ColliderShape outer = BuildColliderShape(entity, scale, 1.0f, "a character", false, silent);
+		const ColliderShape inner = BuildColliderShape(entity, scale, InnerShapeFraction, "a character", false, silent);
+		if (!outer.Shape || !inner.Shape)
+		{
+			RecreateCharacter(entity);
+			return;
+		}
+
+		JPH::CharacterVirtual& character = *record.Character;
+		const JPH::ObjectLayer layer = MakeObjectLayer(true, record.Layer);
+		const BodyPredicateFilter bodyFilter([&impl](const JPH::Body& body) { return !impl.IsCharacterBody(body); });
+		// Switches whatever the new shape overlaps (FLT_MAX); the next update pushes a grown character out. The
+		// character keeps its contacts and ground.
+		character.SetShape(outer.Shape, FLT_MAX, JPH::DefaultBroadPhaseLayerFilter(impl.ObjectVsBroadPhaseLayerFilter, layer), JPH::DefaultObjectLayerFilter(impl.ObjectLayerPairFilter, layer), bodyFilter, JPH::ShapeFilter(),
+						   *impl.TempAllocator);
+		character.SetInnerBodyShape(inner.Shape);
+		record.Bounds = outer.Shape->GetLocalBounds();
+		record.Bounds.Translate(outer.Shape->GetCenterOfMass());
+		Impl::UpdateSupportingVolume(record);
+		record.BuiltScale = scale;
 	}
 
 	void PhysicsWorld::ApplyCharacterSettings(Entity entity)

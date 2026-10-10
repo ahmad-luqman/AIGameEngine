@@ -160,8 +160,10 @@ body's mask excluded a layer: those bodies become `Default`. Other masks are a l
 named layers. From Lua, `SetComponent("RigidBody", { Layer = 1 })` is likewise read as `Default`.
 
 Colliders are sized by the entity's world scale. Changing the scale during play (`e.Scale`, or a parent's)
-rebuilds the body at the next physics step; it keeps its velocity, and its joints are rebuilt from the
-current poses like after any rebuild. Characters are rebuilt the same way.
+resizes the body's shape at the next physics step. Its velocity and contacts carry on, so animating the
+scale of a trigger or a body does not repeat its enter/begin callbacks; its joints are rebuilt from the
+current poses, with their anchors at the new scale. Characters are resized the same way. An entity whose
+scale was zero gets its body once the scale is valid again.
 
 Set `RigidBody.Continuous = true` on fast dynamic bodies (projectiles) so they cannot pass through thin
 geometry between steps. It costs more per step and has no effect on static, kinematic or trigger bodies.

@@ -155,8 +155,8 @@ namespace Basalt {
 	};
 
 	// Collider shapes are sized in local space and scaled by the entity's world scale. A scale change during
-	// play (the entity's or a parent's) rebuilds the body, which keeps its velocity; like any rebuild, its
-	// joints are rebuilt from the current poses.
+	// play (the entity's or a parent's) resizes the body's shape in place: its velocity and contacts carry on,
+	// and its joints are rebuilt from the current poses (their anchors scale with the body).
 	// Every collider can set OverrideMaterial to touch with its own Friction and Restitution instead of the
 	// RigidBody's (still combined with the other body by the RigidBody's combine modes and clamped the same way),
 	// e.g. an icy runner under a grippy cart. Characters ignore it.

@@ -7,6 +7,8 @@
 #include "Basalt/Scripting/ScriptEngine.h"
 
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Body/MassProperties.h>
 #include <Jolt/Physics/Collision/CollideShape.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 
@@ -87,34 +89,6 @@ namespace Basalt {
 		scene->SetWorldTransform(entity, Math::ComposeTransform(position, rotation, scale));
 		for (int axis = 0; axis < 3; axis++)
 			transform.Scale[axis] = std::copysign(std::abs(localScale[axis]), transform.Scale[axis]);
-	}
-
-	void PhysicsWorld::Impl::MarkRescaledDirty(Scene* scene)
-	{
-		// Relative, so tiny and huge scales are treated alike; decomposing the same transform again only
-		// differs in the last bits, far below this.
-		auto rescaled = [](const glm::vec3& scale, const glm::vec3& built) {
-			return glm::any(glm::greaterThan(glm::abs(scale - built), glm::abs(built) * 1e-4f + glm::vec3(1e-7f)));
-		};
-		auto check = [&](entt::entity handle, const glm::vec3& built) {
-			Entity entity(handle, scene);
-			glm::vec3 position;
-			glm::quat rotation;
-			glm::vec3 scale;
-			// A degenerate transform keeps the old shape; RecreateBody would only refuse to build a new one.
-			if (Math::DecomposeTransform(scene->GetWorldTransform(entity), position, rotation, scale) && rescaled(scale, built))
-				DirtyEntities.Insert(entity.GetUUID());
-		};
-		for (entt::entity handle : scene->GetAllEntitiesWith<RigidBodyComponent>())
-		{
-			if (auto it = Bodies.find(Entity(handle, scene).GetUUID()); it != Bodies.end())
-				check(handle, it->second.BuiltScale);
-		}
-		for (entt::entity handle : scene->GetAllEntitiesWith<CharacterControllerComponent>())
-		{
-			if (auto it = Characters.find(Entity(handle, scene).GetUUID()); it != Characters.end())
-				check(handle, it->second.BuiltScale);
-		}
 	}
 
 	std::optional<ContactInfo> PhysicsWorld::Impl::SeparationContact(UUID first, UUID second, float fixedStep) const
@@ -310,8 +284,10 @@ namespace Basalt {
 		if (!Math::DecomposeTransform(m_Scene->GetWorldTransform(entity), position, rotation, scale))
 		{
 			BS_CORE_WARN("Physics: entity '{}' has a degenerate transform; no body created", entity.GetName());
+			impl.Degenerate.insert(entity.GetUUID());
 			return;
 		}
+		impl.Degenerate.erase(entity.GetUUID());
 
 		JPH::EMotionType motionType = JPH::EMotionType::Static;
 		if (rigidBody.Type == RigidBodyType::Dynamic)
@@ -414,6 +390,91 @@ namespace Basalt {
 			MarkJointsDirty(entity.GetUUID());
 	}
 
+	void PhysicsWorld::ApplyScaleChanges()
+	{
+		Impl& impl = *m_Impl;
+		// Relative, so tiny and huge scales are treated alike; decomposing the same transform again only
+		// differs in the last bits, far below this.
+		auto rescaled = [](const glm::vec3& scale, const glm::vec3& built) {
+			return glm::any(glm::greaterThan(glm::abs(scale - built), glm::abs(built) * 1e-4f + glm::vec3(1e-7f)));
+		};
+		// Collected in registry order first: a fallback rebuild can end contacts and so run scripts.
+		std::vector<std::pair<Entity, glm::vec3>> resizedBodies;
+		std::vector<std::pair<Entity, glm::vec3>> resizedCharacters;
+		std::vector<Entity> recovered;
+		auto collect = [&](entt::entity handle, auto& records, auto& resized) {
+			Entity entity(handle, m_Scene);
+			glm::vec3 position;
+			glm::quat rotation;
+			glm::vec3 scale;
+			// A degenerate transform keeps the old shape; no new one could be built from it.
+			if (!Math::DecomposeTransform(m_Scene->GetWorldTransform(entity), position, rotation, scale))
+				return;
+			if (auto it = records.find(entity.GetUUID()); it != records.end())
+			{
+				if (rescaled(scale, it->second.BuiltScale))
+					resized.emplace_back(entity, scale);
+			}
+			else if (impl.Degenerate.contains(entity.GetUUID()))
+			{
+				recovered.push_back(entity);
+			}
+		};
+		for (entt::entity handle : m_Scene->GetAllEntitiesWith<RigidBodyComponent>())
+			collect(handle, impl.Bodies, resizedBodies);
+		for (entt::entity handle : m_Scene->GetAllEntitiesWith<CharacterControllerComponent>())
+			collect(handle, impl.Characters, resizedCharacters);
+
+		for (auto& [entity, scale] : resizedBodies)
+			ResizeBody(entity, scale);
+		for (auto& [entity, scale] : resizedCharacters)
+			ResizeCharacter(entity, scale);
+		for (Entity entity : recovered)
+		{
+			if (entity)
+			{
+				RecreateBody(entity);
+				RecreateCharacter(entity);
+			}
+		}
+	}
+
+	void PhysicsWorld::ResizeBody(Entity entity, const glm::vec3& scale)
+	{
+		Impl& impl = *m_Impl;
+		auto found = impl.Bodies.find(entity.GetUUID());
+		if (found == impl.Bodies.end())
+			return;
+		Impl::BodyRecord& record = found->second;
+		const bool dynamic = record.Type == RigidBodyType::Dynamic;
+		// The same colliders the body was built from, so their warnings would only repeat.
+		const ColliderShape colliders = BuildColliderShape(entity, scale, 1.0f, dynamic ? "a dynamic body" : nullptr, record.IsTrigger, [](const std::string&) {});
+		if (!colliders.Shape)
+		{
+			RecreateBody(entity);
+			return;
+		}
+
+		// Joint anchors are scaled with the body (see CreateJoint), so its joints are rebuilt from the current
+		// poses before the next step, as after any rebuild. Constraints must go before their body's shape changes.
+		impl.RemoveJointsOfBody(entity.GetUUID());
+		// Jolt keeps the body's position (its origin) and re-evaluates its contacts without ending them.
+		impl.System->GetBodyInterface().SetShape(record.ID, colliders.Shape, false, JPH::EActivation::Activate);
+		if (dynamic)
+		{
+			// As in RecreateBody: the new shape's inertia at the component's mass, not at Jolt's density.
+			JPH::BodyLockWrite lock(impl.System->GetBodyLockInterface(), record.ID);
+			if (lock.Succeeded())
+			{
+				JPH::MotionProperties* motion = lock.GetBody().GetMotionProperties();
+				JPH::MassProperties mass = colliders.Shape->GetMassProperties();
+				mass.ScaleToMass(std::max(entity.GetComponent<RigidBodyComponent>().Mass, 0.001f));
+				motion->SetMassProperties(motion->GetAllowedDOFs(), mass);
+			}
+		}
+		record.BuiltScale = scale;
+	}
+
 	void PhysicsWorld::OnEntityDestroyed(Entity entity)
 	{
 		m_Impl->RemoveBody(m_Scene, entity.GetUUID());
@@ -423,6 +484,7 @@ namespace Basalt {
 		m_Impl->DirtyJoints.erase(entity.GetUUID());
 		m_Impl->JointWarnings.Forget(entity.GetUUID());
 		m_Impl->BodyWarnings.Forget(entity.GetUUID());
+		m_Impl->Degenerate.erase(entity.GetUUID());
 	}
 
 	bool PhysicsWorld::HasBody(Entity entity) const
@@ -437,8 +499,7 @@ namespace Basalt {
 		const PhysicsSettings& settings = m_Scene->GetPhysicsSettings();
 		const float fixedStep = settings.FixedTimestep > 0.0f ? settings.FixedTimestep : 1.0f / 60.0f;
 
-		// Rebuild bodies whose physics components or scale changed since the last step.
-		impl.MarkRescaledDirty(m_Scene);
+		// Rebuild bodies whose physics components changed since the last step, then resize rescaled ones.
 		for (UUID uuid : impl.DirtyEntities.Take())
 		{
 			Entity entity = m_Scene->GetEntityByUUID(uuid);
@@ -458,6 +519,7 @@ namespace Basalt {
 			if (Entity entity = m_Scene->GetEntityByUUID(uuid))
 				ApplyCharacterSettings(entity);
 		}
+		ApplyScaleChanges();
 		RebuildDirtyJoints();
 
 		m_Accumulator += ts.GetSeconds();

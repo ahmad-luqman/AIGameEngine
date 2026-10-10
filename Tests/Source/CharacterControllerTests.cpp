@@ -593,6 +593,15 @@ TEST_SUITE("Physics")
 		CHECK(physics.GetCharacterCount() == 1);
 		CHECK(Position(character).y == doctest::Approx(0.5f * StandingHeight).epsilon(0.05));
 		CHECK(physics.IsCharacterGrounded(character));
+
+		// A zero scale leaves a new character unbuilt until the scale is valid again.
+		Entity flat = CreateCharacter(scene, { 5.0f, StandingHeight, 0.0f });
+		flat.GetTransform().Scale = glm::vec3(0.0f);
+		scene.OnUpdate(Step);
+		CHECK_FALSE(physics.HasCharacter(flat));
+		flat.GetTransform().Scale = glm::vec3(1.0f);
+		scene.OnUpdate(Step);
+		CHECK(physics.HasCharacter(flat));
 		scene.OnSimulationStop();
 	}
 

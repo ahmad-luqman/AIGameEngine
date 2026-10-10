@@ -389,6 +389,52 @@ TEST_SUITE("Scripting")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("Animating a trigger's or a body's scale keeps their overlaps and contacts")
+	{
+		// The zone and the ground pulse every frame; the ball rests on the ground inside the zone.
+		BasaltTest::TempProject project("ScriptPulse");
+		const std::string script = project.WriteFile("Assets/Scripts/Pulse.lua", R"(
+			local Pulse = {}
+			function Pulse:OnCreate() self.Begins = 0; self.Ends = 0; self.Enters = 0; self.Exits = 0; self.Frame = 0 end
+			function Pulse:OnUpdate(dt)
+				self.Frame = self.Frame + 1
+				local s = 1 + 0.05 * (self.Frame % 10)
+				if self.Entity.Name == "Zone" then self.Entity.Scale = Vec3(4 * s, 4 * s, 4 * s) end
+				if self.Entity.Name == "Ground" then self.Entity.Scale = Vec3(s, 1, s) end
+			end
+			function Pulse:OnCollisionBegin(other) self.Begins = self.Begins + 1 end
+			function Pulse:OnCollisionEnd(other) self.Ends = self.Ends + 1 end
+			function Pulse:OnTriggerEnter(other) self.Enters = self.Enters + 1 end
+			function Pulse:OnTriggerExit(other) self.Exits = self.Exits + 1 end
+			return Pulse
+		)");
+
+		Scene scene;
+		Entity ground = AddScripted(scene, "Ground", script);
+		ground.GetTransform().Translation = { 0.0f, -0.5f, 0.0f };
+		ground.AddComponent<RigidBodyComponent>();
+		ground.AddComponent<BoxColliderComponent>().HalfExtents = { 10.0f, 0.5f, 10.0f };
+		Entity zone = AddScripted(scene, "Zone", script);
+		zone.GetTransform().Translation = { 0.0f, 1.0f, 0.0f };
+		zone.AddComponent<RigidBodyComponent>().IsTrigger = true;
+		zone.AddComponent<BoxColliderComponent>();
+		Entity ball = AddScripted(scene, "Ball", script);
+		ball.GetTransform().Translation = { 0.0f, 0.5f, 0.0f };
+		ball.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+		ball.AddComponent<SphereColliderComponent>();
+
+		scene.OnRuntimeStart();
+		for (int i = 0; i < 120; i++)
+			scene.OnUpdate(Step);
+		CHECK(Field(scene, zone, "Enters") == 1);
+		CHECK(Field(scene, zone, "Exits") == 0);
+		CHECK(Field(scene, ground, "Begins") == 1);
+		CHECK(Field(scene, ground, "Ends") == 0);
+		CHECK(ball.GetTransform().Translation.y == doctest::Approx(0.5f).epsilon(0.02));
+		CHECK(scene.GetScriptEngine()->GetErrors().empty());
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Editing a mesh's render settings does not rebuild its MeshCollider")
 	{
 		// A rebuild would end and restart the box's contact with the floor (and re-pose joints) every frame.
