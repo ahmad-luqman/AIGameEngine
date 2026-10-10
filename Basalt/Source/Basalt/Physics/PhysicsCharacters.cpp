@@ -152,7 +152,8 @@ namespace Basalt {
 		record.Settings = controller;
 		record.Layer = layer;
 		record.BorrowedMesh = colliders.BorrowedMesh;
-		record.BuildWarnings = warnings;
+		// A copy: warn and report keep using warnings below.
+		record.BuildWarnings = warnings; // NOLINT(performance-use-std-move)
 		record.MoveVelocity = moveVelocity;
 		record.LastPosition = position;
 		record.LastRotation = rotation;
