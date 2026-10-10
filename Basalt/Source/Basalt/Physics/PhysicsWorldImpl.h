@@ -179,6 +179,10 @@ namespace Basalt {
 		// Ends every contact of an entity whose body is gone and notifies the surviving entities.
 		void EndContacts(Scene* scene, UUID uuid, bool trigger);
 
+		// Where two entities whose contact just ended parted: the closest points of their bodies (see
+		// ContactInfo), relative to the first. nullopt when either has no body or they are already far apart.
+		std::optional<ContactInfo> SeparationContact(UUID first, UUID second, float fixedStep) const;
+
 		// Colliders are sized by the entity's world scale, which a script, an animation or a parent can change
 		// without touching a physics component: marks bodies and characters whose scale differs from the one
 		// they were built with for a rebuild. Runs once per Step, in registry order, before dirty entities are

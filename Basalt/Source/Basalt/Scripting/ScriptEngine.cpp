@@ -428,25 +428,8 @@ namespace Basalt {
 		ScriptEngineAccess::Teardown(*this, uuid);
 	}
 
-	void ScriptEngine::OnContactEvent(ContactEventType type, Entity a, Entity b, const ContactInfo& contact)
+	void ScriptEngine::OnContactEvent(ContactEventType type, Entity a, Entity b, const std::optional<ContactInfo>& contact)
 	{
-		if (type == ContactEventType::CollisionBegin)
-		{
-			sol::state& lua = m_Impl->Lua;
-			auto makeContact = [&lua](const ContactInfo& info) {
-				sol::table table = lua.create_table();
-				table["Point"] = info.Point;
-				table["Normal"] = info.Normal;
-				table["Impulse"] = info.Impulse;
-				return table;
-			};
-			// Each side gets its own table: a callback may modify the one it receives.
-			ScriptEngineAccess::Call(*this, a.GetUUID(), "OnCollisionBegin", ScriptEntity{ b.GetUUID(), m_Scene }, makeContact(contact));
-			if (a && b)
-				ScriptEngineAccess::Call(*this, b.GetUUID(), "OnCollisionBegin", ScriptEntity{ a.GetUUID(), m_Scene }, makeContact(contact.Flipped()));
-			return;
-		}
-
 		const char* callback = "OnCollisionBegin";
 		switch (type)
 		{
@@ -464,9 +447,22 @@ namespace Basalt {
 				break;
 		}
 
-		ScriptEngineAccess::Call(*this, a.GetUUID(), callback, ScriptEntity{ b.GetUUID(), m_Scene });
+		sol::state& lua = m_Impl->Lua;
+		auto makeContact = [&lua](const ContactInfo& info) -> sol::object {
+			sol::table table = lua.create_table();
+			table["Point"] = info.Point;
+			table["Normal"] = info.Normal;
+			table["Impulse"] = info.Impulse;
+			return table;
+		};
+		// Each side gets its own table: a callback may modify the one it receives.
+		const sol::object contactA = contact ? makeContact(*contact) : sol::object(sol::lua_nil);
+		ScriptEngineAccess::Call(*this, a.GetUUID(), callback, ScriptEntity{ b.GetUUID(), m_Scene }, contactA);
 		if (a && b)
-			ScriptEngineAccess::Call(*this, b.GetUUID(), callback, ScriptEntity{ a.GetUUID(), m_Scene });
+		{
+			const sol::object contactB = contact ? makeContact(contact->Flipped()) : sol::object(sol::lua_nil);
+			ScriptEngineAccess::Call(*this, b.GetUUID(), callback, ScriptEntity{ a.GetUUID(), m_Scene }, contactB);
+		}
 	}
 
 	void ScriptEngine::OnJointBroken(Entity holder, Entity body, Entity connected)

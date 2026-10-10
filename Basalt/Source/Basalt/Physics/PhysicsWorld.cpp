@@ -8,6 +8,7 @@
 
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Collision/CollideShape.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 
 #include <algorithm>
 #include <mutex>
@@ -100,6 +101,41 @@ namespace Basalt {
 			if (auto it = Characters.find(Entity(handle, scene).GetUUID()); it != Characters.end())
 				check(handle, it->second.BuiltScale);
 		}
+	}
+
+	std::optional<ContactInfo> PhysicsWorld::Impl::SeparationContact(UUID first, UUID second, float fixedStep) const
+	{
+		auto bodyOf = [this](UUID uuid) {
+			if (auto body = Bodies.find(uuid); body != Bodies.end())
+				return body->second.ID;
+			if (auto character = Characters.find(uuid); character != Characters.end())
+				return character->second.Character->GetInnerBodyID();
+			return JPH::BodyID();
+		};
+		const JPH::BodyID bodyA = bodyOf(first);
+		const JPH::BodyID bodyB = bodyOf(second);
+		if (bodyA.IsInvalid() || bodyB.IsInvalid())
+			return std::nullopt;
+
+		const JPH::BodyInterface& bodies = System->GetBodyInterface();
+		const JPH::TransformedShape shapeA = bodies.GetTransformedShape(bodyA);
+		const JPH::TransformedShape shapeB = bodies.GetTransformedShape(bodyB);
+		// They parted during the last step, so they are about one step of relative motion apart (plus Jolt's
+		// speculative contact distance; a character's inner body reports no velocity, hence the margin).
+		const float relativeSpeed = (bodies.GetLinearVelocity(bodyA) - bodies.GetLinearVelocity(bodyB)).Length();
+		JPH::CollideShapeSettings settings;
+		settings.mMaxSeparationDistance = 0.25f + 2.0f * relativeSpeed * fixedStep;
+		// The least separated pair of parts.
+		JPH::ClosestHitCollisionCollector<JPH::CollideShapeCollector> collector;
+		shapeB.CollideShape(shapeA.mShape, shapeA.GetShapeScale(), shapeA.GetCenterOfMassTransform(), settings, JPH::RVec3::sZero(), collector);
+		if (!collector.HadHit())
+			return std::nullopt;
+		// Shape 1 is A's: the penetration axis points from A toward B, and the normal from B toward A.
+		const JPH::CollideShapeResult& hit = collector.mHit;
+		ContactInfo contact;
+		contact.Point = FromJolt(JPH::Vec3(0.5f * (hit.mContactPointOn1 + hit.mContactPointOn2)));
+		contact.Normal = FromJolt(-hit.mPenetrationAxis.NormalizedOr(JPH::Vec3::sZero()));
+		return contact;
 	}
 
 	void PhysicsWorld::Impl::OnPhysicsComponentChanged(entt::registry& registry, entt::entity entity)
@@ -486,7 +522,7 @@ namespace Basalt {
 			}
 
 			CheckBrokenJoints(fixedStep);
-			DispatchContacts();
+			DispatchContacts(fixedStep);
 		}
 
 		// Never let a long stall build an unbounded backlog of steps.
@@ -494,7 +530,7 @@ namespace Basalt {
 			m_Accumulator = std::min(m_Accumulator, fixedStep);
 	}
 
-	void PhysicsWorld::DispatchContacts()
+	void PhysicsWorld::DispatchContacts(float fixedStep)
 	{
 		Impl& impl = *m_Impl;
 		JPH::BodyInterface& bodies = impl.System->GetBodyInterface();
@@ -517,7 +553,8 @@ namespace Basalt {
 		};
 
 		std::map<Impl::EntityPair, bool> touched; // pair -> was active before this step
-		// The strongest new contact of each pair, relative to the pair's first (lower UUID) entity.
+		// The strongest new contact of each pair, relative to the pair's first (lower UUID) entity (begin and
+		// enter events).
 		std::map<Impl::EntityPair, ContactInfo> newContacts;
 		for (const RawContactEvent& event : events)
 		{
@@ -603,8 +640,17 @@ namespace Basalt {
 				type = isActive ? ContactEventType::TriggerEnter : ContactEventType::TriggerExit;
 			else
 				type = isActive ? ContactEventType::CollisionBegin : ContactEventType::CollisionEnd;
-			auto contact = newContacts.find(pair);
-			scriptEngine->OnContactEvent(type, entityA, entityB, contact != newContacts.end() ? contact->second : ContactInfo{});
+			std::optional<ContactInfo> contact;
+			if (isActive)
+			{
+				if (auto found = newContacts.find(pair); found != newContacts.end())
+					contact = found->second;
+			}
+			else
+			{
+				contact = impl.SeparationContact(UUID(pair.first), UUID(pair.second), fixedStep);
+			}
+			scriptEngine->OnContactEvent(type, entityA, entityB, contact);
 		}
 	}
 

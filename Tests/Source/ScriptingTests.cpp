@@ -10,6 +10,8 @@
 
 #include "TestUtils.h"
 
+#include <array>
+
 using namespace Basalt;
 
 namespace {
@@ -294,6 +296,95 @@ TEST_SUITE("Scripting")
 		// Stopping 2 kg at 9.9 m/s without bounce takes about 19.8 N*s.
 		CHECK(Field(scene, ball, "Impulse").get<float>() == doctest::Approx(19.8f).epsilon(0.1));
 		CHECK(Field(scene, ground, "Impulse") == Field(scene, ball, "Impulse"));
+		CHECK(scene.GetScriptEngine()->GetErrors().empty());
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Trigger and end callbacks receive where the bodies met or parted")
+	{
+		BasaltTest::TempProject project("ScriptContactEnds");
+		const std::string script = project.WriteFile("Assets/Scripts/Contact.lua", R"(
+			local Contact = {}
+			-- Keeps the first event of each kind; a destroyed body's contacts end without one.
+			local function record(self, key, contact)
+				if contact == nil then
+					self.NilEvents = (self.NilEvents or 0) + 1
+					return
+				end
+				if self[key .. "Normal"] then return end
+				self[key .. "Point"] = contact.Point
+				self[key .. "Normal"] = contact.Normal
+				self[key .. "Impulse"] = contact.Impulse
+			end
+			function Contact:OnTriggerEnter(other, contact) record(self, "Enter", contact) end
+			function Contact:OnTriggerExit(other, contact) record(self, "Exit", contact) end
+			function Contact:OnCollisionEnd(other, contact) record(self, "End", contact) end
+			return Contact
+		)");
+
+		// Pairs are ordered by UUID and the second entity gets the flipped normal: run both orders.
+		std::array<UUID, 3> ids = { UUID(1), UUID(2), UUID(3) };
+		SUBCASE("ground first") {}
+		SUBCASE("ball first")
+		{
+			std::swap(ids[0], ids[2]);
+		}
+		auto addScripted = [&](Scene& target, UUID id, const std::string& name) {
+			Entity entity = target.CreateEntityWithUUID(id, name);
+			entity.AddComponent<ScriptComponent>().Script = script;
+			return entity;
+		};
+
+		Scene scene;
+		Entity ground = addScripted(scene, ids[0], "Ground");
+		ground.GetTransform().Translation = { 0.0f, -0.5f, 0.0f };
+		ground.AddComponent<RigidBodyComponent>();
+		ground.AddComponent<BoxColliderComponent>().HalfExtents = { 10.0f, 0.5f, 10.0f };
+		// The ball falls through the zone (y 2.5 to 3.5), then bounces off the ground.
+		Entity zone = addScripted(scene, ids[1], "Zone");
+		zone.GetTransform().Translation = { 1.0f, 3.0f, 2.0f };
+		zone.AddComponent<RigidBodyComponent>().IsTrigger = true;
+		zone.AddComponent<BoxColliderComponent>();
+		Entity ball = addScripted(scene, ids[2], "Ball");
+		ball.GetTransform().Translation = { 1.0f, 6.0f, 2.0f };
+		auto& body = ball.AddComponent<RigidBodyComponent>();
+		body.Type = RigidBodyType::Dynamic;
+		body.Restitution = 0.8f;
+		ball.AddComponent<SphereColliderComponent>();
+		Entity crate = scene.CreateEntity("Crate");
+		crate.GetTransform().Translation = { 5.0f, 0.5f, 0.0f };
+		crate.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+		crate.AddComponent<BoxColliderComponent>();
+
+		scene.OnRuntimeStart();
+		for (int i = 0; i < 90; i++)
+			scene.OnUpdate(Step);
+
+		auto vec = [&](Entity entity, const std::string& field) {
+			const nlohmann::json value = Field(scene, entity, field);
+			REQUIRE_MESSAGE(value.is_array(), field);
+			return glm::vec3(value[0].get<float>(), value[1].get<float>(), value[2].get<float>());
+		};
+		auto near = [](const glm::vec3& a, const glm::vec3& b, float tolerance) { return glm::all(glm::lessThan(glm::abs(a - b), glm::vec3(tolerance))); };
+		// Entering from above at the zone's top face; each side's normal points away from the other.
+		CHECK(near(vec(ball, "EnterPoint"), { 1.0f, 3.5f, 2.0f }, 0.2f));
+		CHECK(near(vec(ball, "EnterNormal"), { 0.0f, 1.0f, 0.0f }, 0.01f));
+		CHECK(near(vec(zone, "EnterNormal"), { 0.0f, -1.0f, 0.0f }, 0.01f));
+		CHECK(Field(scene, ball, "EnterImpulse") == 0.0);
+		// Leaving through the bottom face: the ball left downward, away from the zone.
+		CHECK(near(vec(ball, "ExitPoint"), { 1.0f, 2.5f, 2.0f }, 0.2f));
+		CHECK(near(vec(ball, "ExitNormal"), { 0.0f, -1.0f, 0.0f }, 0.01f));
+		CHECK(near(vec(zone, "ExitNormal"), { 0.0f, 1.0f, 0.0f }, 0.01f));
+		// Bouncing off the ground, just above where it hit.
+		CHECK(near(vec(ball, "EndPoint"), { 1.0f, 0.0f, 2.0f }, 0.2f));
+		CHECK(near(vec(ball, "EndNormal"), { 0.0f, 1.0f, 0.0f }, 0.01f));
+		CHECK(near(vec(ground, "EndNormal"), { 0.0f, -1.0f, 0.0f }, 0.01f));
+		CHECK(Field(scene, ground, "EndImpulse") == 0.0);
+		CHECK(Field(scene, ground, "NilEvents").is_null());
+
+		// A destroyed body is gone before its contacts end, so the ground hears of it without a contact.
+		scene.DestroyEntity(crate);
+		CHECK(Field(scene, ground, "NilEvents") == 1);
 		CHECK(scene.GetScriptEngine()->GetErrors().empty());
 		scene.OnRuntimeStop();
 	}
