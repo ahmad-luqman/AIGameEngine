@@ -71,8 +71,8 @@ namespace Basalt {
 			BS_JOINT_FIELD(AngularMotorMode, Live, joint.Type == JointType::SixDOF),
 			BS_JOINT_FIELD(LinearMotorTarget, Live, joint.Type == JointType::SixDOF),
 			BS_JOINT_FIELD(AngularMotorTarget, Live, joint.Type == JointType::SixDOF),
-			// A hinge's motor is capped by MotorMaxForce only while MotorMaxTorque is 0.
-			BS_JOINT_FIELD(MotorMaxForce, Live, IsAnyOf(joint.Type, { JointType::Slider, JointType::SixDOF }) || (joint.Type == JointType::Hinge && joint.MotorMaxTorque == 0.0f)),
+			// A hinge's motor is capped by MotorMaxForce only while MotorMaxTorque is not positive.
+			BS_JOINT_FIELD(MotorMaxForce, Live, IsAnyOf(joint.Type, { JointType::Slider, JointType::SixDOF }) || (joint.Type == JointType::Hinge && joint.MotorMaxTorque <= 0.0f)),
 			BS_JOINT_FIELD(MotorMaxTorque, Live, IsAnyOf(joint.Type, { JointType::Hinge, JointType::SixDOF })),
 			BS_JOINT_FIELD(MotorSpringFrequency, Live, IsAnyOf(joint.Type, { JointType::Hinge, JointType::Slider, JointType::SixDOF })),
 			BS_JOINT_FIELD(MotorSpringDamping, Live, IsAnyOf(joint.Type, { JointType::Hinge, JointType::Slider, JointType::SixDOF })),

@@ -11,6 +11,7 @@
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 
 #include <algorithm>
+#include <cmath>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -73,6 +74,19 @@ namespace Basalt {
 			if (scriptEngine && a && b)
 				scriptEngine->OnContactEvent(isTrigger ? ContactEventType::TriggerExit : ContactEventType::CollisionEnd, a, b);
 		}
+	}
+
+	void PhysicsWorld::Impl::WritePose(Scene* scene, Entity entity, const glm::vec3& position, const glm::quat& rotation)
+	{
+		glm::vec3 oldPosition;
+		glm::quat oldRotation;
+		glm::vec3 scale;
+		Math::DecomposeTransform(scene->GetWorldTransform(entity), oldPosition, oldRotation, scale);
+		TransformComponent& transform = entity.GetTransform();
+		const glm::vec3 localScale = transform.Scale;
+		scene->SetWorldTransform(entity, Math::ComposeTransform(position, rotation, scale));
+		for (int axis = 0; axis < 3; axis++)
+			transform.Scale[axis] = std::copysign(std::abs(localScale[axis]), transform.Scale[axis]);
 	}
 
 	void PhysicsWorld::Impl::MarkRescaledDirty(Scene* scene)
@@ -510,15 +524,7 @@ namespace Basalt {
 				const glm::vec3 position = FromJolt(joltPosition);
 				const glm::quat rotation = glm::normalize(FromJolt(joltRotation));
 
-				glm::vec3 oldPosition;
-				glm::quat oldRotation;
-				glm::vec3 scale;
-				Math::DecomposeTransform(m_Scene->GetWorldTransform(entity), oldPosition, oldRotation, scale);
-				// Physics never changes the scale. Read back from the matrix it would pick up rounding every step
-				// and drift (enough after a few hundred steps to count as a rescale), so it is kept as it was.
-				const glm::vec3 localScale = entity.GetTransform().Scale;
-				m_Scene->SetWorldTransform(entity, Math::ComposeTransform(position, rotation, scale));
-				entity.GetTransform().Scale = localScale;
+				Impl::WritePose(m_Scene, entity, position, rotation);
 				record.LastPosition = position;
 				record.LastRotation = rotation;
 			}

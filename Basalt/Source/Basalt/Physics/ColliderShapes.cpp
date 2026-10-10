@@ -1,5 +1,6 @@
 #include "Basalt/Physics/ColliderShapes.h"
 
+#include "Basalt/Core/Assert.h"
 #include "Basalt/Physics/JoltUtils.h"
 #include "Basalt/Physics/MeshShapeCache.h"
 #include "Basalt/Scene/Components.h"
@@ -43,6 +44,7 @@ namespace Basalt::PhysicsInternal {
 				warn(std::string("invalid collider: ") + shape.GetError().c_str());
 				return;
 			}
+			BS_CORE_ASSERT(shapeCount < MaxColliders, "more collider kinds than MaxColliders");
 			// Offsets follow the entity's scale only: a smaller inner shape stays centred on each collider.
 			compound.AddShape(ToJolt(offset * glm::abs(signedScale)), JPH::Quat::sIdentity(), shape.Get());
 			result.Materials[shapeCount++] = material;

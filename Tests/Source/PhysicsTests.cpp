@@ -934,6 +934,31 @@ TEST_SUITE("Physics")
 		scene.OnSimulationStop();
 	}
 
+	TEST_CASE("Mirrored dynamic bodies rest steadily whichever axis carries the mirroring")
+	{
+		// A matrix cannot tell which axis was mirrored; the write-back must pair its rotation with a scale
+		// mirrored the same way, or the body turns 180 degrees every step.
+		for (const glm::vec3 mirror : { glm::vec3(-1.0f, 1.0f, 1.0f), glm::vec3(1.0f, -1.0f, 1.0f), glm::vec3(1.0f, 1.0f, -1.0f), glm::vec3(-1.0f) })
+		{
+			INFO("scale: " << mirror.x << " " << mirror.y << " " << mirror.z);
+			Scene scene;
+			CreateGround(scene);
+			Entity box = CreateBox(scene, { 0.0f, 0.5f, 0.0f });
+			box.GetTransform().Scale = mirror * 0.9f;
+			scene.OnSimulationStart();
+			PhysicsWorld& physics = *scene.GetPhysicsWorld();
+			Simulate(scene, 1.0f);
+			const glm::mat4 before = scene.GetWorldTransform(box);
+			scene.OnUpdate(Step);
+			const glm::mat4 after = scene.GetWorldTransform(box);
+			for (int column = 0; column < 4; column++)
+				CHECK(glm::all(glm::lessThan(glm::abs(after[column] - before[column]), glm::vec4(1e-4f))));
+			CHECK(glm::length(physics.GetLinearVelocity(box)) < 0.01f);
+			CHECK(glm::abs(box.GetTransform().Scale) == glm::vec3(0.9f));
+			scene.OnSimulationStop();
+		}
+	}
+
 	TEST_CASE("Simulation is deterministic")
 	{
 		auto run = []() {

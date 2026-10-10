@@ -199,6 +199,12 @@ namespace Basalt {
 		// ContactInfo), relative to the first. nullopt when either has no body or they are already far apart.
 		std::optional<ContactInfo> SeparationContact(UUID first, UUID second, float fixedStep) const;
 
+		// Writes a simulated pose to the entity, keeping its scale. Physics never changes the scale, but read back
+		// from the world matrix it would pick up rounding every step and drift (enough after a few hundred steps
+		// to count as a rescale), so its magnitudes are kept exactly. Their signs come from the matrix: it cannot
+		// say which axis was mirrored, and the decomposed rotation assumes its own choice (see DecomposeTransform).
+		static void WritePose(Scene* scene, Entity entity, const glm::vec3& position, const glm::quat& rotation);
+
 		// Colliders are sized by the entity's world scale, which a script, an animation or a parent can change
 		// without touching a physics component: marks bodies and characters whose scale differs from the one
 		// they were built with for a rebuild. Runs once per Step, in registry order, before dirty entities are
