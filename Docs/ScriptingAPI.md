@@ -353,6 +353,9 @@ end
   character on the ground when walking down stairs and slopes; 0 turns both off. A capsule's round bottom
   rolls over low edges even without `StepHeight`.
 - Moving the entity's transform teleports the character; its rotation follows the entity's rotation.
+- Characters collide with each other's full shapes (on layers that collide) and a moving character pushes
+  another with its velocity, whatever its `MaxStrength` (that only limits how hard it pushes dynamic
+  bodies).
 - The character enters triggers like any body (`OnTriggerEnter`/`OnTriggerExit`). Dynamic bodies that run
   into it raise collision callbacks (kinematic ones, such as other characters, do not); the character walking into something does not (it stops just short of it),
   so use a trigger or a query to detect what it touches.

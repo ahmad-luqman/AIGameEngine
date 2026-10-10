@@ -267,6 +267,14 @@ function Driver:OnUpdate(dt)
 		Check("IsGrounded without a character", not Scene.FindEntityByName("Crate"):IsGrounded() and Scene.FindEntityByName("Crate"):GetGroundNormal() == nil)
 		ExpectError("Move with a non-finite velocity", function() hero:Move(Vec3(0 / 0, 0, 0)) end, "must be finite")
 		hero:Move(Vec3(2, 0, 0))
+		-- Two more characters (no meshes, so the renders are unchanged): from frame 2, once physics has built
+		-- them, one walks into the other and pushes it.
+		for i, name in ipairs({ "Walker", "Standee" }) do
+			local character = Scene.CreateEntity(name)
+			character.Translation = Vec3(-16.5 + 1.5 * i, 1, -18)
+			character:AddComponent("CapsuleCollider", {})
+			character:AddComponent("CharacterController", {})
+		end
 		-- 200 m/s covers 3.3 m per step; only the continuous sweep stops it at the 5 cm wall.
 		Scene.FindEntityByName("Bullet"):SetLinearVelocity(Vec3(200, 0, 0))
 		Check("Destroyed entity is gone", not self.Doomed:IsValid())
@@ -373,6 +381,7 @@ function Driver:OnUpdate(dt)
 	end
 
 	if frame == 2 then
+		Scene.FindEntityByName("Walker"):Move(Vec3(2, 0, 0))
 		-- The batch released Space and the mouse button and moved the mouse by (10, 10) before this frame.
 		Check("Input.IsKeyReleased", Input.IsKeyReleased("Space") and not Input.IsKeyDown("Space"))
 		Check("Input.IsMouseButtonReleased", Input.IsMouseButtonReleased("Left") and not Input.IsMouseButtonDown("Left"))
@@ -450,6 +459,7 @@ function Driver:OnUpdate(dt)
 		Check("OnCollisionBegin contact", contact and Near(contact.Normal.y, 1, 0.01) and Near(contact.Point.y, 0, 0.2) and contact.Impulse > 10)
 		local ballBody = Scene.FindEntityByName("Ball"):GetComponent("RigidBody")
 		Check("RigidBody combine modes", ballBody.FrictionCombine == "Average" and ballBody.RestitutionCombine == "Min")
+		Check("Characters push each other", Scene.FindEntityByName("Standee").Translation.x > -12 and Near(Scene.FindEntityByName("Standee").Translation.x - Scene.FindEntityByName("Walker").Translation.x, 1, 0.1))
 		local hero = Scene.FindEntityByName("Hero")
 		Check("Character climbs a step", hero.Translation.x > 10 and Near(hero.Translation.y, self.HeroJumpStart + 0.3, 0.03) and hero:IsGrounded())
 

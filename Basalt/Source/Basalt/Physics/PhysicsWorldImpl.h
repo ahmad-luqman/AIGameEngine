@@ -110,8 +110,21 @@ namespace Basalt {
 		PhysicsInternal::ContactListenerImpl ContactListener;
 		Scope<JPH::PhysicsSystem> System;
 
+		// Applies the collision matrix between characters, which CharacterCollision does not know about.
+		struct CharacterLayerFilter final : JPH::CharacterContactListener
+		{
+			const Impl* Owner = nullptr;
+			bool OnCharacterContactValidate(const JPH::CharacterVirtual* character, const JPH::CharacterContact& contact) override;
+		};
+
 		std::unordered_map<UUID, BodyRecord> Bodies;
 		std::unordered_map<UUID, CharacterRecord> Characters;
+		// Characters meet each other's full shapes through this list, and a moving one pushes the other with its
+		// velocity (in the pushed character's own update). They skip each other's inner bodies, which Jolt
+		// moves by teleporting, so those would only block. Holds raw pointers: RemoveCharacter takes a
+		// character out before its record goes, in creation order otherwise.
+		JPH::CharacterVsCharacterCollisionSimple CharacterCollision;
+		CharacterLayerFilter CharacterListener;
 		// Characters whose CharacterControllerComponent changed (collider changes go to DirtyEntities).
 		PhysicsInternal::DirtySet DirtyCharacters;
 		// Character warnings (sanitized settings, an ignored RigidBody, a missing collider).
@@ -160,6 +173,9 @@ namespace Basalt {
 		bool WarnIfCharacter(Entity entity, const char* call);
 
 		bool IsTrigger(UUID uuid) const;
+
+		// Whether the body is a character's inner body (see CharacterCollision).
+		bool IsCharacterBody(const JPH::Body& body) const;
 
 		void UpdateIgnoredPairs();
 

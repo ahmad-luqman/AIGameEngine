@@ -84,6 +84,8 @@ namespace Basalt {
 	// Entities with a CharacterControllerComponent and a collider get a Jolt CharacterVirtual (plus a kinematic
 	// inner body that other bodies, queries and contact events see) instead of a rigid body. Characters move
 	// before each step, in registry order, and write their position back; their rotation follows the entity.
+	// They collide with each other's shapes (filtered by the collision matrix), so a moving character pushes
+	// another one with its velocity.
 	class PhysicsWorld
 	{
 	public:

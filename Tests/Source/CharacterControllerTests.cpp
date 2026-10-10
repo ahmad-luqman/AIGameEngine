@@ -414,6 +414,51 @@ TEST_SUITE("Physics")
 		}
 	}
 
+	TEST_CASE("Characters push each other, unless their layers do not collide")
+	{
+		// Ghost ignores Default; the ground is on a third layer both collide with.
+		PhysicsLayers layers;
+		std::string error;
+		REQUIRE(layers.Add("Ghost", error));
+		REQUIRE(layers.Add("Floor", error));
+		layers.SetCollides(0, 1, false);
+		Scene scene;
+		scene.SetPhysicsLayers(layers);
+		CreateGround(scene).GetComponent<RigidBodyComponent>().Layer = "Floor";
+		// Each walker starts 1.5 m from a standing character (0.5 m between the capsules) and walks into it.
+		Entity pusher = CreateCharacter(scene, { 0.0f, StandingHeight, 0.0f });
+		Entity pushed = CreateCharacter(scene, { 1.5f, StandingHeight, 0.0f });
+		Entity ghost = CreateCharacter(scene, { 0.0f, StandingHeight, 5.0f });
+		ghost.GetComponent<CharacterControllerComponent>().Layer = "Ghost";
+		Entity bystander = CreateCharacter(scene, { 1.5f, StandingHeight, 5.0f });
+
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		Simulate(scene, 1.5f, [&]() {
+			physics.MoveCharacter(pusher, { 2.0f, 0.0f, 0.0f });
+			physics.MoveCharacter(ghost, { 2.0f, 0.0f, 0.0f });
+		});
+		// The pushed character keeps about a capsule's width ahead of the pusher, which is not held back.
+		CHECK(Position(pusher).x > 2.0f);
+		CHECK(Position(pushed).x - Position(pusher).x == doctest::Approx(1.0f).epsilon(0.1));
+		CHECK(Position(pushed).y == doctest::Approx(StandingHeight).epsilon(0.03));
+		// The ghost walks straight through the bystander, which stays put.
+		CHECK(Position(ghost).x == doctest::Approx(3.0f).epsilon(0.03));
+		CHECK(Position(bystander).x == doctest::Approx(1.5f).epsilon(0.01));
+
+		// A rebuilt character (a collider change) is still pushed; a destroyed one is gone from the others' view.
+		pushed.AddOrReplaceComponent<CapsuleColliderComponent>(pushed.GetComponent<CapsuleColliderComponent>());
+		auto walk = [&]() { physics.MoveCharacter(pusher, { 2.0f, 0.0f, 0.0f }); };
+		Simulate(scene, 0.5f, walk);
+		CHECK(Position(pushed).x - Position(pusher).x == doctest::Approx(1.0f).epsilon(0.1));
+		const float pusherAt = Position(pusher).x;
+		scene.DestroyEntity(pushed);
+		Simulate(scene, 0.5f, walk);
+		CHECK(physics.GetCharacterCount() == 3);
+		CHECK(Position(pusher).x - pusherAt == doctest::Approx(1.0f).epsilon(0.03));
+		scene.OnSimulationStop();
+	}
+
 	TEST_CASE("A character rides a kinematic platform")
 	{
 		Scene scene;

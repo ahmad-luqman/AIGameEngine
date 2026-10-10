@@ -6,10 +6,46 @@
 
 #include <algorithm>
 #include <optional>
+#include <utility>
 
 namespace Basalt {
 
 	using namespace PhysicsInternal;
+
+	namespace {
+
+		// A BodyFilter from a predicate on the (locked) body.
+		template<typename Predicate>
+		class BodyPredicateFilter final : public JPH::BodyFilter
+		{
+		public:
+			explicit BodyPredicateFilter(Predicate predicate)
+				: m_Predicate(std::move(predicate))
+			{
+			}
+
+			bool ShouldCollideLocked(const JPH::Body& body) const override { return m_Predicate(body); }
+
+		private:
+			Predicate m_Predicate;
+		};
+
+	}
+
+	bool PhysicsWorld::Impl::IsCharacterBody(const JPH::Body& body) const
+	{
+		auto it = Characters.find(UUID(body.GetUserData()));
+		return it != Characters.end() && it->second.Character->GetInnerBodyID() == body.GetID();
+	}
+
+	bool PhysicsWorld::Impl::CharacterLayerFilter::OnCharacterContactValidate(const JPH::CharacterVirtual* character, const JPH::CharacterContact& contact)
+	{
+		auto self = Owner->Characters.find(UUID(character->GetUserData()));
+		auto other = contact.mCharacterB ? Owner->Characters.find(UUID(contact.mCharacterB->GetUserData())) : Owner->Characters.end();
+		if (self == Owner->Characters.end() || other == Owner->Characters.end())
+			return true;
+		return Owner->ObjectLayerPairFilter.ShouldCollide(MakeObjectLayer(true, self->second.Layer), MakeObjectLayer(true, other->second.Layer));
+	}
 
 	void PhysicsWorld::Impl::ConfigureCharacter(CharacterRecord& record, const std::function<void(const std::string&)>& warn)
 	{
@@ -59,6 +95,7 @@ namespace Basalt {
 		auto it = Characters.find(uuid);
 		if (it == Characters.end())
 			return;
+		CharacterCollision.Remove(it->second.Character.GetPtr());
 		const JPH::BodyID inner = it->second.Character->GetInnerBodyID();
 		if (!inner.IsInvalid())
 		{
@@ -148,9 +185,12 @@ namespace Basalt {
 		settings.mUp = glm::length(gravity) > 1e-6f ? ToJolt(-glm::normalize(gravity)) : JPH::Vec3::sAxisY();
 		auto* character = new JPH::CharacterVirtual(&settings, ToJolt(position), ToJolt(rotation), static_cast<uint64_t>(entity.GetUUID()), impl.System.get());
 		character->SetLinearVelocity(previousVelocity);
+		character->SetCharacterVsCharacterCollision(&impl.CharacterCollision);
+		character->SetListener(&impl.CharacterListener);
 
 		Impl::CharacterRecord& record = impl.Characters[entity.GetUUID()];
 		record.Character = character;
+		impl.CharacterCollision.Add(character);
 		record.Settings = controller;
 		record.Layer = layer;
 		record.BorrowedMesh = colliders.BorrowedMesh;
@@ -180,7 +220,8 @@ namespace Basalt {
 		// A new character starts in the air; find its ground now so a rebuild (e.g. a crouch changing the
 		// collider) does not lose a step of IsGrounded or a jump.
 		const JPH::ObjectLayer objectLayer = MakeObjectLayer(true, layer);
-		character->RefreshContacts(JPH::DefaultBroadPhaseLayerFilter(impl.ObjectVsBroadPhaseLayerFilter, objectLayer), JPH::DefaultObjectLayerFilter(impl.ObjectLayerPairFilter, objectLayer), JPH::BodyFilter(), JPH::ShapeFilter(),
+		const BodyPredicateFilter bodyFilter([&impl](const JPH::Body& body) { return !impl.IsCharacterBody(body); });
+		character->RefreshContacts(JPH::DefaultBroadPhaseLayerFilter(impl.ObjectVsBroadPhaseLayerFilter, objectLayer), JPH::DefaultObjectLayerFilter(impl.ObjectLayerPairFilter, objectLayer), bodyFilter, JPH::ShapeFilter(),
 								   *impl.TempAllocator);
 	}
 
@@ -245,7 +286,8 @@ namespace Basalt {
 			const JPH::ObjectLayer layer = MakeObjectLayer(true, record.Layer);
 			const JPH::DefaultBroadPhaseLayerFilter broadPhaseFilter(impl.ObjectVsBroadPhaseLayerFilter, layer);
 			const JPH::DefaultObjectLayerFilter objectLayerFilter(impl.ObjectLayerPairFilter, layer);
-			const JPH::BodyFilter bodyFilter;
+			// Other characters are met through CharacterCollision, not their inner bodies.
+			const BodyPredicateFilter bodyFilter([&impl](const JPH::Body& body) { return !impl.IsCharacterBody(body); });
 			const JPH::ShapeFilter shapeFilter;
 
 			// A script that moved the transform teleports the character (whose old ground no longer holds it);
