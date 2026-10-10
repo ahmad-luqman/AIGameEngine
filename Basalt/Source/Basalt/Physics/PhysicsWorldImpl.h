@@ -7,14 +7,12 @@
 
 #include "Basalt/Core/Log.h"
 #include "Basalt/Physics/ContactListener.h"
-#include "Basalt/Physics/JointSettings.h"
 #include "Basalt/Physics/JoltUtils.h"
 #include "Basalt/Physics/PhysicsLayers.h"
-#include "Basalt/Physics/PhysicsWarnings.h"
+#include "Basalt/Physics/WarningLog.h"
 #include "Basalt/Scene/Components.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
-#include "Basalt/Scripting/ScriptEngine.h"
 
 #include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/Core/TempAllocator.h>
@@ -75,9 +73,6 @@ namespace Basalt {
 			// by a twist; GetJointRotation measures from this.
 			JPH::Quat RestRotation = JPH::Quat::sIdentity();
 		};
-
-		// The second body's joint frame seen from the first's (see JointRecord::RestRotation).
-		static JPH::Quat RelativeJointRotation(const JPH::TwoBodyConstraint& constraint);
 
 		struct CharacterRecord
 		{

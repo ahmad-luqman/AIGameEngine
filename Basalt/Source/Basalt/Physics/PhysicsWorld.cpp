@@ -1,19 +1,17 @@
 #include "Basalt/Physics/PhysicsWorld.h"
 
-#include "Basalt/Physics/PhysicsWorldImpl.h"
 #include "Basalt/Physics/ColliderShapes.h"
 #include "Basalt/Physics/MeshShapeCache.h"
+#include "Basalt/Physics/PhysicsWorldImpl.h"
 #include "Basalt/Project/Project.h"
+#include "Basalt/Scripting/ScriptEngine.h"
 
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Collision/CollideShape.h>
 
 #include <algorithm>
-#include <map>
-#include <tuple>
 #include <mutex>
 #include <thread>
-#include <unordered_set>
 #include <vector>
 
 namespace Basalt {

@@ -259,6 +259,11 @@ more reliable.
   in the stats overlay and `render.stats`.
 - **Performance benchmarks — M.** A benchmark scene with thousands of entities, many lights and physics
   bodies, run in Release on CI with frame-time thresholds to catch regressions.
+- **Physics internals follow-ups — S.** After the PhysicsWorld split: give `PhysicsWorld::Impl` the
+  `Scene*` and move the private helpers (`RecreateCharacter`, `CreateJoint`, `DispatchContacts`, ...) onto
+  it so `PhysicsWorld.h` holds only the API; move contact tracking (`EndContacts`, `DispatchContacts` and
+  their state) into its own file with one pair-count release helper; collect warnings one way
+  (`std::vector<std::string>&` instead of `warn` callbacks in `BuildColliderShape`/`ConfigureCharacter`).
 
 ---
 

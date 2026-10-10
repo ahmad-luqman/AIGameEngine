@@ -42,7 +42,7 @@ namespace Basalt::PhysicsInternal {
 		glm::vec3 AngularMax = { glm::pi<float>(), glm::pi<float>(), glm::pi<float>() };
 	};
 
-	constexpr const char* s_AxisNames[] = { "X", "Y", "Z" };
+	inline constexpr const char* AxisNames[] = { "X", "Y", "Z" };
 
 	// Without UseLimits translation is locked and rotation free (a point joint). With limits every range
 	// must contain the rest pose (0), twist stays within +-180 degrees, and the swing cone is symmetric

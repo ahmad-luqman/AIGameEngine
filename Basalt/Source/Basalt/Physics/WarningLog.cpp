@@ -1,4 +1,4 @@
-#include "Basalt/Physics/PhysicsWarnings.h"
+#include "Basalt/Physics/WarningLog.h"
 
 #include "Basalt/Core/Log.h"
 

@@ -8,8 +8,8 @@ namespace Basalt {
 
 	namespace {
 
-		// How a live joint takes a change to the field: updated in place, or a new constraint built from the
-		// current poses (which also resets the rest pose its angles are measured from).
+		// How a joint in play takes a change to the field: applied in place, or rebuilt from the current poses
+		// (which also resets the rest pose its angles are measured from).
 		enum class FieldUpdate
 		{
 			Rebuild,
@@ -36,8 +36,8 @@ namespace Basalt {
 		}
 
 		// One entry per JointComponent field, in declaration order; a unit test checks this against the
-		// registry's field list. A new field should rebuild unless Jolt can update it on a live constraint, so
-		// a field that physics forgets to apply in place is still not ignored in play.
+		// registry's field list. A new field should rebuild unless physics applies it in place, so a field it
+		// forgets to apply is still not ignored in play.
 #define BS_JOINT_FIELD(name, update, ...)                                                         \
 	JointField                                                                                    \
 	{                                                                                             \
@@ -54,16 +54,16 @@ namespace Basalt {
 			BS_JOINT_FIELD(SecondaryAxis, Rebuild, joint.Type == JointType::SixDOF),
 			// Toggling UseLimits rebuilds: it changes how a distance joint's rest length is chosen.
 			BS_JOINT_FIELD(UseLimits, Rebuild, !IsAnyOf(joint.Type, { JointType::Fixed, JointType::Point })),
-			BS_JOINT_FIELD(LimitMin, Live, joint.UseLimits&& IsAnyOf(joint.Type, { JointType::Hinge, JointType::Slider, JointType::Distance })),
-			BS_JOINT_FIELD(LimitMax, Live, joint.UseLimits&& IsAnyOf(joint.Type, { JointType::Hinge, JointType::Slider, JointType::Distance, JointType::Cone })),
+			BS_JOINT_FIELD(LimitMin, Live, (joint.UseLimits && IsAnyOf(joint.Type, { JointType::Hinge, JointType::Slider, JointType::Distance }))),
+			BS_JOINT_FIELD(LimitMax, Live, (joint.UseLimits && IsAnyOf(joint.Type, { JointType::Hinge, JointType::Slider, JointType::Distance, JointType::Cone }))),
 			// Without limits a distance joint keeps its starting length as both limits, so its spring still works
 			// (a bungee).
 			BS_JOINT_FIELD(LimitSpringFrequency, Live, joint.Type == JointType::Distance || (joint.UseLimits && IsAnyOf(joint.Type, { JointType::Hinge, JointType::Slider, JointType::SixDOF }))),
 			BS_JOINT_FIELD(LimitSpringDamping, Live, joint.Type == JointType::Distance || (joint.UseLimits && IsAnyOf(joint.Type, { JointType::Hinge, JointType::Slider, JointType::SixDOF }))),
-			BS_JOINT_FIELD(LinearLimitMin, Live, joint.UseLimits&& joint.Type == JointType::SixDOF),
-			BS_JOINT_FIELD(LinearLimitMax, Live, joint.UseLimits&& joint.Type == JointType::SixDOF),
-			BS_JOINT_FIELD(AngularLimitMin, Live, joint.UseLimits&& joint.Type == JointType::SixDOF),
-			BS_JOINT_FIELD(AngularLimitMax, Live, joint.UseLimits&& joint.Type == JointType::SixDOF),
+			BS_JOINT_FIELD(LinearLimitMin, Live, (joint.UseLimits && joint.Type == JointType::SixDOF)),
+			BS_JOINT_FIELD(LinearLimitMax, Live, (joint.UseLimits && joint.Type == JointType::SixDOF)),
+			BS_JOINT_FIELD(AngularLimitMin, Live, (joint.UseLimits && joint.Type == JointType::SixDOF)),
+			BS_JOINT_FIELD(AngularLimitMax, Live, (joint.UseLimits && joint.Type == JointType::SixDOF)),
 			BS_JOINT_FIELD(FreeLinearAxes, Live, joint.Type == JointType::SixDOF),
 			BS_JOINT_FIELD(MotorMode, Live, IsAnyOf(joint.Type, { JointType::Hinge, JointType::Slider })),
 			BS_JOINT_FIELD(MotorTarget, Live, IsAnyOf(joint.Type, { JointType::Hinge, JointType::Slider })),
@@ -118,7 +118,7 @@ namespace Basalt {
 		std::vector<std::string> ignored;
 		for (const JointField& field : s_JointFields)
 		{
-			if (field.Differs(joint, defaults) && !JointFieldApplies(joint, field.Name))
+			if (field.Differs(joint, defaults) && !field.Applies(joint))
 				ignored.emplace_back(field.Name);
 		}
 		return ignored;

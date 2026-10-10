@@ -1,8 +1,10 @@
 // PhysicsWorld: joints (JointComponent constraints, motors, breaking).
 #include "Basalt/Physics/PhysicsWorld.h"
 
+#include "Basalt/Physics/JointSettings.h"
 #include "Basalt/Physics/PhysicsWorldImpl.h"
 #include "Basalt/Scene/JointFields.h"
+#include "Basalt/Scripting/ScriptEngine.h"
 
 #include <Jolt/Physics/Body/BodyLockMulti.h>
 #include <Jolt/Physics/Constraints/ConeConstraint.h>
@@ -20,11 +22,16 @@
 
 namespace Basalt {
 
-	JPH::Quat PhysicsWorld::Impl::RelativeJointRotation(const JPH::TwoBodyConstraint& constraint)
-	{
-		const JPH::Quat frame1 = constraint.GetBody1()->GetRotation() * constraint.GetConstraintToBody1Matrix().GetQuaternion();
-		const JPH::Quat frame2 = constraint.GetBody2()->GetRotation() * constraint.GetConstraintToBody2Matrix().GetQuaternion();
-		return (frame1.Conjugated() * frame2).Normalized();
+	namespace {
+
+		// The second body's joint frame seen from the first's (see JointRecord::RestRotation).
+		JPH::Quat RelativeJointRotation(const JPH::TwoBodyConstraint& constraint)
+		{
+			const JPH::Quat frame1 = constraint.GetBody1()->GetRotation() * constraint.GetConstraintToBody1Matrix().GetQuaternion();
+			const JPH::Quat frame2 = constraint.GetBody2()->GetRotation() * constraint.GetConstraintToBody2Matrix().GetQuaternion();
+			return (frame1.Conjugated() * frame2).Normalized();
+		}
+
 	}
 
 	void PhysicsWorld::Impl::UpdateIgnoredPairs()
@@ -147,7 +154,7 @@ namespace Basalt {
 			{
 				CreateJoint(entity, warnings);
 			}
-			m_Impl->JointWarnings.Report(entity, warnings);
+			impl.JointWarnings.Report(entity, warnings);
 		}
 		impl.DirtyJoints.clear();
 		impl.UpdateIgnoredPairs();
@@ -259,12 +266,12 @@ namespace Basalt {
 					JointMotorMode angularMode = joint.AngularMotorMode[i];
 					if (linearMode != JointMotorMode::Off && sixDOF->IsFixedAxis(linearAxis))
 					{
-						warnings.emplace_back(fmt::format("six-DOF linear {} motor has no effect: the axis is locked{}", s_AxisNames[i], joint.UseLimits ? "" : " (translation is locked without UseLimits)"));
+						warnings.emplace_back(fmt::format("six-DOF linear {} motor has no effect: the axis is locked{}", AxisNames[i], joint.UseLimits ? "" : " (translation is locked without UseLimits)"));
 						linearMode = JointMotorMode::Off;
 					}
 					if (angularMode != JointMotorMode::Off && sixDOF->IsFixedAxis(angularAxis))
 					{
-						warnings.emplace_back(fmt::format("six-DOF angular {} motor has no effect: the axis is locked", s_AxisNames[i]));
+						warnings.emplace_back(fmt::format("six-DOF angular {} motor has no effect: the axis is locked", AxisNames[i]));
 						angularMode = JointMotorMode::Off;
 					}
 					if (linearMode == JointMotorMode::Velocity)
@@ -593,7 +600,7 @@ namespace Basalt {
 		record.Settings = joint;
 		record.Body = bodyEntity.GetUUID();
 		record.BuildWarnings = warnings;
-		record.RestRotation = Impl::RelativeJointRotation(*record.Constraint);
+		record.RestRotation = RelativeJointRotation(*record.Constraint);
 		impl.System->AddConstraint(record.Constraint);
 		lock.ReleaseLocks();
 		ApplyJointSettings(entity, warnings);
@@ -640,7 +647,7 @@ namespace Basalt {
 			return std::nullopt;
 		// Removing the rest offset on the right keeps the result in the first body's joint frame.
 		const Impl::JointRecord& record = it->second;
-		const JPH::Quat rotation = Impl::RelativeJointRotation(*record.Constraint) * record.RestRotation.Conjugated();
+		const JPH::Quat rotation = RelativeJointRotation(*record.Constraint) * record.RestRotation.Conjugated();
 		return glm::degrees(Math::EulerFromQuat(FromJolt(rotation.Normalized())));
 	}
 
