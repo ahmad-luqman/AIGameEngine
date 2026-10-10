@@ -18,6 +18,86 @@
 
 namespace Basalt {
 
+	bool PhysicsWorld::Impl::IsTrigger(UUID uuid) const
+	{
+		auto it = Bodies.find(uuid);
+		return it != Bodies.end() && it->second.IsTrigger;
+	}
+
+	void PhysicsWorld::Impl::RemoveBody(Scene* scene, UUID uuid)
+	{
+		auto it = Bodies.find(uuid);
+		if (it == Bodies.end())
+			return;
+		const bool trigger = it->second.IsTrigger;
+		RemoveJointsOfBody(uuid);
+		JPH::BodyInterface& bodies = System->GetBodyInterface();
+		BodyToEntity.erase(it->second.ID.GetIndexAndSequenceNumber());
+		// Jolt reuses the index for the next body; whatever creates it must not inherit these modes.
+		ContactListener.Materials[it->second.ID.GetIndex()] = {};
+		bodies.RemoveBody(it->second.ID);
+		bodies.DestroyBody(it->second.ID);
+		Bodies.erase(it);
+		EndContacts(scene, uuid, trigger);
+	}
+
+	void PhysicsWorld::Impl::EndContacts(Scene* scene, UUID uuid, bool trigger)
+	{
+		const uint64_t id = static_cast<uint64_t>(uuid);
+		std::set<EntityPair> ended;
+		for (auto key = ActiveContacts.begin(); key != ActiveContacts.end();)
+		{
+			if (std::get<0>(*key) != id && std::get<2>(*key) != id)
+			{
+				++key;
+				continue;
+			}
+			const EntityPair pair(std::get<0>(*key), std::get<2>(*key));
+			if (--PairCounts[pair] <= 0)
+			{
+				PairCounts.erase(pair);
+				ended.insert(pair);
+			}
+			SuspendedContacts.erase(*key);
+			key = ActiveContacts.erase(key);
+		}
+
+		ScriptEngine* scriptEngine = scene->GetScriptEngine();
+		for (const EntityPair& pair : ended)
+		{
+			const UUID other = pair.first == id ? UUID(pair.second) : UUID(pair.first);
+			const bool isTrigger = trigger || IsTrigger(other);
+			Entity a = scene->GetEntityByUUID(pair.first);
+			Entity b = scene->GetEntityByUUID(pair.second);
+			if (scriptEngine && a && b)
+				scriptEngine->OnContactEvent(isTrigger ? ContactEventType::TriggerExit : ContactEventType::CollisionEnd, a, b);
+		}
+	}
+
+	void PhysicsWorld::Impl::OnPhysicsComponentChanged(entt::registry& registry, entt::entity entity)
+	{
+		if (const auto* id = registry.try_get<IDComponent>(entity))
+			DirtyEntities.insert(id->ID);
+	}
+
+	void PhysicsWorld::Impl::OnMeshChanged(entt::registry& registry, entt::entity entity)
+	{
+		if (const auto* collider = registry.try_get<MeshColliderComponent>(entity); collider && collider->Mesh.empty())
+			OnPhysicsComponentChanged(registry, entity);
+	}
+
+	void PhysicsWorld::Impl::OnMeshUpdated(entt::registry& registry, entt::entity entity)
+	{
+		const auto* id = registry.try_get<IDComponent>(entity);
+		const auto& mesh = registry.get<MeshComponent>(entity);
+		const std::pair borrowed(mesh.Mesh, mesh.MeshIndex);
+		if (auto it = id ? Bodies.find(id->ID) : Bodies.end(); it != Bodies.end() && it->second.BorrowedMesh == borrowed)
+			return;
+		if (auto it = id ? Characters.find(id->ID) : Characters.end(); it != Characters.end() && it->second.BorrowedMesh == borrowed)
+			return;
+		OnMeshChanged(registry, entity);
+	}
+
 	PhysicsWorld::PhysicsWorld(Scene* scene)
 		: m_Impl(CreateScope<Impl>())
 		, m_Scene(scene)

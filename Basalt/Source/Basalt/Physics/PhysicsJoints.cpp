@@ -19,6 +19,92 @@
 
 namespace Basalt {
 
+	JPH::Quat PhysicsWorld::Impl::RelativeJointRotation(const JPH::TwoBodyConstraint& constraint)
+	{
+		const JPH::Quat frame1 = constraint.GetBody1()->GetRotation() * constraint.GetConstraintToBody1Matrix().GetQuaternion();
+		const JPH::Quat frame2 = constraint.GetBody2()->GetRotation() * constraint.GetConstraintToBody2Matrix().GetQuaternion();
+		return (frame1.Conjugated() * frame2).Normalized();
+	}
+
+	void PhysicsWorld::Impl::UpdateIgnoredPairs()
+	{
+		std::set<EntityPair> pairs;
+		for (const auto& [holder, joint] : Joints)
+		{
+			if (joint.Settings.ConnectedEntity == 0 || joint.Settings.EnableCollision)
+				continue;
+			const uint64_t a = static_cast<uint64_t>(joint.Body);
+			const uint64_t b = static_cast<uint64_t>(joint.Settings.ConnectedEntity);
+			pairs.emplace(std::min(a, b), std::max(a, b));
+		}
+		// Jolt replays cached contacts for bodies that have not moved (and skips sleeping ones), bypassing
+		// the pair filter. Bodies whose pair starts or stops being ignored lose that cache and wake, so two
+		// resting bodies stop (or start) colliding at once.
+		std::vector<EntityPair> changed;
+		std::ranges::set_symmetric_difference(pairs, IgnoredPairs, std::back_inserter(changed));
+		IgnoredPairs = std::move(pairs);
+		JPH::BodyInterface& bodies = System->GetBodyInterface();
+		for (const auto& [a, b] : changed)
+		{
+			for (uint64_t uuid : { a, b })
+			{
+				auto body = Bodies.find(uuid);
+				if (body == Bodies.end())
+					continue;
+				bodies.InvalidateContactCache(body->second.ID);
+				if (body->second.Type == RigidBodyType::Dynamic)
+					bodies.ActivateBody(body->second.ID);
+			}
+		}
+	}
+
+	void PhysicsWorld::Impl::RemoveJoint(UUID holder)
+	{
+		auto it = Joints.find(holder);
+		if (it == Joints.end())
+			return;
+		System->RemoveConstraint(it->second.Constraint);
+		Joints.erase(it);
+		UpdateIgnoredPairs();
+	}
+
+	void PhysicsWorld::Impl::RemoveJointsOfBody(UUID uuid)
+	{
+		// Jolt removes a constraint by moving its last one into the gap, which changes the solve order of
+		// the rest; removing in UUID order (not hash order) keeps that order reproducible.
+		std::vector<UUID> holders;
+		for (const auto& [holder, joint] : Joints)
+		{
+			if (joint.Body == uuid || joint.Settings.ConnectedEntity == uuid)
+				holders.push_back(holder);
+		}
+		std::ranges::sort(holders);
+		for (UUID holder : holders)
+		{
+			auto it = Joints.find(holder);
+			System->RemoveConstraint(it->second.Constraint);
+			DirtyJoints.insert(holder);
+			Joints.erase(it);
+		}
+		UpdateIgnoredPairs();
+	}
+
+	void PhysicsWorld::Impl::OnJointChanged(entt::registry& registry, entt::entity entity)
+	{
+		if (const auto* id = registry.try_get<IDComponent>(entity))
+			DirtyJoints.insert(id->ID);
+	}
+
+	void PhysicsWorld::Impl::OnJointDestroyed(entt::registry& registry, entt::entity entity)
+	{
+		if (const auto* id = registry.try_get<IDComponent>(entity))
+		{
+			RemoveJoint(id->ID);
+			DirtyJoints.erase(id->ID);
+			LoggedJointWarnings.erase(id->ID);
+		}
+	}
+
 	void PhysicsWorld::MarkJointsDirty(UUID uuid)
 	{
 		for (entt::entity handle : m_Scene->GetAllEntitiesWith<JointComponent>())
