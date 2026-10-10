@@ -226,6 +226,21 @@ TEST_SUITE("Automation")
 
 		Run(registry, other, "component.set", { { "entity", "B" }, { "component", "Transform" }, { "data", { { "Translation", { 0.0, 1e-6, 0.0 } } } } });
 		CHECK(Run(registry, other, "scene.hash")["hash"] != hash);
+
+		// A rotation is hashed as its quaternion, so a tiny change still counts.
+		const std::string beforeTurn = Run(registry, other, "scene.hash")["hash"];
+		Run(registry, other, "component.set", { { "entity", "B" }, { "component", "Transform" }, { "data", { { "Rotation", { 0.0, 0.001, 0.0 } } } } });
+		CHECK(Run(registry, other, "scene.hash")["hash"] != beforeTurn);
+
+		// expect / expectHash fail with both hashes in the message.
+		CHECK(Run(registry, session, "scene.hash", { { "expect", hash } })["hash"] == hash);
+		const std::string error = RunError(registry, session, "scene.hash", { { "expect", "0000000000000000" } });
+		CHECK(error.find("state hash " + hash + " differs from the expected 0000000000000000") != std::string::npos);
+		Run(registry, session, "play.start");
+		const std::string stepped = Run(registry, session, "play.step", { { "frames", 2 }, { "hash", true } })["stateHash"];
+		CHECK(RunError(registry, session, "play.step", { { "expectHash", "0000000000000000" } }).find("differs from the expected") != std::string::npos);
+		CHECK_FALSE(stepped.empty());
+		Run(registry, session, "play.stop");
 	}
 
 	TEST_CASE("Recorded input replays to the same state")
