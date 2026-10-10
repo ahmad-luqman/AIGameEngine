@@ -1,0 +1,8 @@
+{
+	"Format": "BasaltProject",
+	"Name": "Determinism",
+	"StartScene": "Assets/Scenes/PhysicsPile.bscene",
+	"WindowWidth": 1280,
+	"WindowHeight": 720,
+	"Fullscreen": false
+}

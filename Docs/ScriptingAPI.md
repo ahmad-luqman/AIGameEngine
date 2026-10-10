@@ -69,6 +69,13 @@ sequence on every platform. Lua's `math.random`/`math.randomseed` use the same g
 seeds them from the clock), so replays and automated tests reproduce exactly.
 The random generator is deterministic; seed it for reproducible games and tests.
 
+Physics is deterministic across platforms too: the same scene and inputs reach the same state (and
+`scene.hash`) on Windows, Linux and macOS, in Debug and Release. That holds as long as the state does not
+go through the platform's math library: Lua's `math.sin`/`math.cos`/`math.atan` and `Math.Radians`-based
+`Quat.FromEuler`/`SetRotation` from Euler angles can differ in the last bit between platforms, and so can
+the initial rotation of entities whose scene files store non-trivial Euler angles. Identity rotations,
+exact constants and physics-produced motion are portable.
+
 ## Entity
 
 Entity handles store an ID and stay safe to hold: using a destroyed entity raises an error

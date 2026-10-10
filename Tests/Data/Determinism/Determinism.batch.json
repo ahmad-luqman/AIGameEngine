@@ -1,0 +1,11 @@
+[
+	{ "id": "open", "command": "scene.open", "params": { "path": "Assets/Scenes/PhysicsPile.bscene" } },
+	{ "id": "play", "command": "play.start" },
+	{ "id": "loaded", "command": "scene.hash", "params": { "expect": "91b7f47520024ed3" } },
+	{ "id": "launch", "command": "lua.exec", "params": { "code": "Scene.FindEntityByName('Cannonball'):SetLinearVelocity(Vec3(-14, 0, 0)) Scene.FindEntityByName('Character'):Move(Vec3(1.5, 0, -0.5))" } },
+	{ "id": "frame-1", "command": "play.step", "params": { "frames": 1, "expectHash": "a3934d0fabbf3495" } },
+	{ "id": "frame-120", "command": "play.step", "params": { "frames": 119, "expectHash": "aff45956c0e45a94" } },
+	{ "id": "rebuild", "command": "lua.exec", "params": { "code": "for i = 7, 0, -1 do Scene.FindEntityByName('Ball' .. i):SetComponent('SphereCollider', { Radius = 0.3 }) end" } },
+	{ "id": "frame-600", "command": "play.step", "params": { "frames": 480, "expectHash": "f1dd0b39f67ce646" } },
+	{ "id": "stop", "command": "play.stop" }
+]

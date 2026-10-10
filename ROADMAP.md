@@ -29,12 +29,6 @@ P2 editor feel → the Marble Run sample. Run each milestone as one long autonom
 These close the gap between "works on the developer's machine" and "production-grade". Do them before
 adding features.
 
-### Cross-platform physics determinism — S
-Replays (`replay.*`, `scene.hash`) are bit-exact on one machine, and script/game logic is portable
-(`Basalt::Random`, see `Samples/Tetris/test_replay.json`). Physics is not yet portable across platforms:
-enable Jolt's `CROSS_PLATFORM_DETERMINISTIC` (some performance cost) and add a physics-heavy replay whose
-`StateHash` is asserted on all three CI platforms.
-
 ### Real-GPU smoke tests on Windows and Linux — S (manual) / M (automated)
 Lavapipe does not catch driver-specific bugs. The procedure and results table are in
 `Docs/TestedHardware.md` (`--offscreen`, `--gpu`, golden comparison, interactive checklist). Remaining:
