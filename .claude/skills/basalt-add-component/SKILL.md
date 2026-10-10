@@ -14,7 +14,9 @@ description: Add a new component type to the Basalt engine end to end (data, ser
    system (see the Camera adapter).
 3. **Runtime behaviour** — if a system consumes it (physics, audio, renderer, scripting), react to
    `on_construct/on_update/on_destroy` signals or read it each frame. Never store runtime handles in the
-   component.
+   component. Physics components get one `Wire<...>` line in `PhysicsWorld::Impl::WireSignals`
+   (`Physics/PhysicsWorld.cpp`); new collider types also go in `BuildColliderShape` (`Physics/ColliderShapes.cpp`),
+   and new Joint fields in the `JointFields.cpp` table (which fields apply, and whether a live joint updates them).
 4. **Editor** — nothing to do: the inspector is generated from the registry. Add a creation preset to
    `SceneHierarchyPanel.cpp` if users create it often, and an overlay in `EditorLayer::DrawEditorOverlays`
    if it has a spatial extent.

@@ -259,11 +259,6 @@ more reliable.
   in the stats overlay and `render.stats`.
 - **Performance benchmarks — M.** A benchmark scene with thousands of entities, many lights and physics
   bodies, run in Release on CI with frame-time thresholds to catch regressions.
-- **Split PhysicsWorld.cpp — M.** It is past 2,800 lines. Move the Jolt conversion helpers to a
-  `JoltUtils.h`, then the mesh shape cache, the contact listener, the character controller and the joint
-  builder into their own files. Merge the three warning-deduplication paths (bodies, characters, joints)
-  into one, drive the component signal connect/disconnect lists from one table, and generate the joint
-  "structural field" and "applies to" rules from the `JointFields` table instead of hand-kept lists.
 
 ---
 
