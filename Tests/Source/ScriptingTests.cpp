@@ -365,7 +365,7 @@ TEST_SUITE("Scripting")
 			REQUIRE_MESSAGE(value.is_array(), field);
 			return glm::vec3(value[0].get<float>(), value[1].get<float>(), value[2].get<float>());
 		};
-		auto near = [](const glm::vec3& a, const glm::vec3& b, float tolerance) { return glm::all(glm::lessThan(glm::abs(a - b), glm::vec3(tolerance))); };
+		auto near = [](const glm::vec3& a, const glm::vec3& b, float tolerance) { return glm::all(glm::epsilonEqual(a, b, tolerance)); };
 		// Entering from above at the zone's top face; each side's normal points away from the other.
 		CHECK(near(vec(ball, "EnterPoint"), { 1.0f, 3.5f, 2.0f }, 0.2f));
 		CHECK(near(vec(ball, "EnterNormal"), { 0.0f, 1.0f, 0.0f }, 0.01f));
@@ -385,6 +385,120 @@ TEST_SUITE("Scripting")
 		// A destroyed body is gone before its contacts end, so the ground hears of it without a contact.
 		scene.DestroyEntity(crate);
 		CHECK(Field(scene, ground, "NilEvents") == 1);
+		CHECK(scene.GetScriptEngine()->GetErrors().empty());
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Collision ends against a triangle-mesh floor report the parting, in either UUID order")
+	{
+		BasaltTest::TempProject project("ScriptMeshEnds");
+		const std::string script = project.WriteFile("Assets/Scripts/End.lua", R"(
+			local End = {}
+			function End:OnCollisionEnd(other, contact)
+				if contact and not self.Normal then self.Normal = contact.Normal end
+			end
+			return End
+		)");
+		// The floor's mesh is the query shape when it has the lower UUID, the other shape otherwise.
+		UUID floorID = UUID(1);
+		UUID ballID = UUID(2);
+		SUBCASE("floor first") {}
+		SUBCASE("ball first")
+		{
+			std::swap(floorID, ballID);
+		}
+		Scene scene;
+		Entity floor = scene.CreateEntityWithUUID(floorID, "Floor");
+		floor.AddComponent<ScriptComponent>().Script = script;
+		floor.GetTransform().Scale = { 20.0f, 1.0f, 20.0f };
+		floor.AddComponent<RigidBodyComponent>();
+		floor.AddComponent<MeshColliderComponent>().Mesh = "builtin://Plane";
+		Entity ball = scene.CreateEntityWithUUID(ballID, "Ball");
+		ball.AddComponent<ScriptComponent>().Script = script;
+		ball.GetTransform().Translation = { 1.0f, 3.0f, 2.0f };
+		auto& body = ball.AddComponent<RigidBodyComponent>();
+		body.Type = RigidBodyType::Dynamic;
+		body.Restitution = 0.8f;
+		ball.AddComponent<SphereColliderComponent>();
+
+		scene.OnRuntimeStart();
+		for (int i = 0; i < 90; i++)
+			scene.OnUpdate(Step);
+		const nlohmann::json ballNormal = Field(scene, ball, "Normal");
+		const nlohmann::json floorNormal = Field(scene, floor, "Normal");
+		REQUIRE(ballNormal.is_array());
+		REQUIRE(floorNormal.is_array());
+		CHECK(ballNormal[1].get<float>() == doctest::Approx(1.0f).epsilon(0.01));
+		CHECK(floorNormal[1].get<float>() == doctest::Approx(-1.0f).epsilon(0.01));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("A rebuilt body ends its contacts without a contact on both sides, then begins them again")
+	{
+		BasaltTest::TempProject project("ScriptRebuildEnds");
+		const std::string script = project.WriteFile("Assets/Scripts/Count.lua", R"(
+			local Count = {}
+			function Count:OnCreate() self.Begins = 0; self.NilEnds = 0 end
+			function Count:OnCollisionBegin(other, contact) self.Begins = self.Begins + 1 end
+			function Count:OnCollisionEnd(other, contact) if contact == nil then self.NilEnds = self.NilEnds + 1 end end
+			return Count
+		)");
+		Scene scene;
+		Entity ground = AddScripted(scene, "Ground", script);
+		ground.GetTransform().Translation = { 0.0f, -0.5f, 0.0f };
+		ground.AddComponent<RigidBodyComponent>();
+		ground.AddComponent<BoxColliderComponent>().HalfExtents = { 10.0f, 0.5f, 10.0f };
+		Entity ball = AddScripted(scene, "Ball", script);
+		ball.GetTransform().Translation = { 0.0f, 0.5f, 0.0f };
+		ball.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+		ball.AddComponent<SphereColliderComponent>();
+		scene.OnRuntimeStart();
+		for (int i = 0; i < 30; i++)
+			scene.OnUpdate(Step);
+		REQUIRE(Field(scene, ball, "Begins") == 1);
+
+		// A collider change rebuilds the body: the old body is gone, so neither side gets a contact.
+		ball.AddOrReplaceComponent<SphereColliderComponent>(SphereColliderComponent{ .Radius = 0.45f });
+		for (int i = 0; i < 30; i++)
+			scene.OnUpdate(Step);
+		CHECK(Field(scene, ball, "NilEnds") == 1);
+		CHECK(Field(scene, ground, "NilEnds") == 1);
+		CHECK(Field(scene, ball, "Begins") == 2);
+		CHECK(Field(scene, ground, "Begins") == 2);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("A resting body with a mirrored, non-uniform scale under a turned, scaled parent stays in contact")
+	{
+		// No rebuild or teleport may sneak in from rounding in the decomposed scale or rotation.
+		BasaltTest::TempProject project("ScriptRestingScale");
+		const std::string script = project.WriteFile("Assets/Scripts/Rest.lua", R"(
+			local Rest = {}
+			function Rest:OnCreate() self.Begins = 0; self.Ends = 0 end
+			function Rest:OnCollisionBegin(other) self.Begins = self.Begins + 1 end
+			function Rest:OnCollisionEnd(other) self.Ends = self.Ends + 1 end
+			return Rest
+		)");
+		Scene scene;
+		Entity ground = AddScripted(scene, "Ground", script);
+		ground.GetTransform().Translation = { 0.0f, -0.5f, 0.0f };
+		ground.AddComponent<RigidBodyComponent>();
+		ground.AddComponent<BoxColliderComponent>().HalfExtents = { 10.0f, 0.5f, 10.0f };
+		Entity parent = scene.CreateEntity("Parent");
+		parent.GetTransform().Scale = glm::vec3(1.5f);
+		parent.GetTransform().SetRotationEuler({ 0.0f, glm::radians(30.0f), 0.0f });
+		Entity box = AddScripted(scene, "Box", script);
+		box.GetTransform().Scale = { -0.7f, 1.3f, 0.9f };
+		box.GetTransform().Translation = { 0.0f, 0.5f * 1.3f, 0.0f };
+		box.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+		box.AddComponent<BoxColliderComponent>();
+		scene.SetParent(box, parent, false);
+
+		scene.OnRuntimeStart();
+		for (int i = 0; i < 1200; i++)
+			scene.OnUpdate(Step);
+		CHECK(Field(scene, ground, "Begins") == 1);
+		CHECK(Field(scene, ground, "Ends") == 0);
 		CHECK(scene.GetScriptEngine()->GetErrors().empty());
 		scene.OnRuntimeStop();
 	}

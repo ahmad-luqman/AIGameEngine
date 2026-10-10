@@ -2,6 +2,7 @@
 
 // Internal to the physics module.
 
+#include "Basalt/Core/Base.h"
 #include "Basalt/Physics/ColliderShapes.h"
 #include "Basalt/Physics/JoltUtils.h"
 #include "Basalt/Physics/PhysicsMaterial.h"
@@ -15,7 +16,6 @@
 #include <cstdint>
 #include <mutex>
 #include <tuple>
-#include <utility>
 #include <vector>
 
 namespace Basalt::PhysicsInternal {
@@ -33,14 +33,13 @@ namespace Basalt::PhysicsInternal {
 		auto Tie() const { return std::tie(Added, Body1, SubShape1, Body2, SubShape2); }
 	};
 
+	// One per Jolt body index, reset with `= {}` when the body goes.
 	struct BodyMaterial
 	{
 		PhysicsCombineMode FrictionCombine = PhysicsCombineMode::Default;
 		PhysicsCombineMode RestitutionCombine = PhysicsCombineMode::Default;
-		// Colliders with their own friction and restitution; AnyOverride skips the lookup for the usual body
-		// without any.
-		ColliderMaterials Colliders{};
-		bool AnyOverride = false;
+		// Only for a body with a collider that has its own material, so the usual slot stays small.
+		Scope<const ColliderMaterials> Colliders;
 	};
 
 	// Called from Jolt worker threads: only records events, which the main thread dispatches, and
@@ -98,9 +97,9 @@ namespace Basalt::PhysicsInternal {
 
 	private:
 		// The friction and restitution of the part of the body that touches: its collider's own, else the body's.
-		static std::pair<float, float> SurfaceOf(const BodyMaterial& material, const JPH::Body& body, const JPH::SubShapeID& subShape)
+		static ColliderMaterial SurfaceOf(const BodyMaterial& material, const JPH::Body& body, const JPH::SubShapeID& subShape)
 		{
-			if (material.AnyOverride)
+			if (material.Colliders)
 			{
 				uint32_t index = 0;
 				if (body.GetShape()->GetType() == JPH::EShapeType::Compound)
@@ -108,20 +107,20 @@ namespace Basalt::PhysicsInternal {
 					JPH::SubShapeID remainder;
 					index = static_cast<const JPH::CompoundShape*>(body.GetShape())->GetSubShapeIndexFromID(subShape, remainder);
 				}
-				if (index < material.Colliders.size() && material.Colliders[index].Override)
-					return { material.Colliders[index].Friction, material.Colliders[index].Restitution };
+				if (index < material.Colliders->size() && (*material.Colliders)[index].Override)
+					return (*material.Colliders)[index];
 			}
-			return { body.GetFriction(), body.GetRestitution() };
+			return { .Friction = body.GetFriction(), .Restitution = body.GetRestitution() };
 		}
 
 		void CombineMaterials(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold, JPH::ContactSettings& settings) const
 		{
 			const BodyMaterial& material1 = Materials[body1.GetID().GetIndex()];
 			const BodyMaterial& material2 = Materials[body2.GetID().GetIndex()];
-			const auto [friction1, restitution1] = SurfaceOf(material1, body1, manifold.mSubShapeID1);
-			const auto [friction2, restitution2] = SurfaceOf(material2, body2, manifold.mSubShapeID2);
-			settings.mCombinedFriction = CombineFriction(material1.FrictionCombine, friction1, material2.FrictionCombine, friction2);
-			settings.mCombinedRestitution = CombineRestitution(material1.RestitutionCombine, restitution1, material2.RestitutionCombine, restitution2);
+			const ColliderMaterial surface1 = SurfaceOf(material1, body1, manifold.mSubShapeID1);
+			const ColliderMaterial surface2 = SurfaceOf(material2, body2, manifold.mSubShapeID2);
+			settings.mCombinedFriction = CombineFriction(material1.FrictionCombine, surface1.Friction, material2.FrictionCombine, surface2.Friction);
+			settings.mCombinedRestitution = CombineRestitution(material1.RestitutionCombine, surface1.Restitution, material2.RestitutionCombine, surface2.Restitution);
 		}
 	};
 

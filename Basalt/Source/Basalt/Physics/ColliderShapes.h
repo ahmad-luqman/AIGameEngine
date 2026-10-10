@@ -49,9 +49,15 @@ namespace Basalt::PhysicsInternal {
 		ColliderMaterials Materials{};
 	};
 
+	// Clamps friction to >= 0 and restitution to [0, 1] with a warning each, so the combine modes cannot invert
+	// Jolt's friction clamp or add energy on every bounce. `owner` prefixes the warnings ("BoxCollider ", or ""
+	// for the RigidBody). The result has Override set.
+	ColliderMaterial SanitizeSurface(float friction, float restitution, const std::string& owner, const std::function<void(const std::string&)>& warn);
+
 	// Builds the entity's box, sphere, capsule and mesh colliders, scaled by its world scale (signed: mesh
 	// colliders keep a mirroring) and by sizeFraction (a character's inner body is a little smaller).
-	// convexReason, when set, forces mesh colliders onto their convex hull and names who needs it.
-	ColliderShape BuildColliderShape(Entity entity, const glm::vec3& signedScale, float sizeFraction, const char* convexReason, bool isTrigger, const std::function<void(const std::string&)>& warn);
+	// convexReason, when set, forces mesh colliders onto their convex hull and names who needs it. Without
+	// useMaterials (characters) collider materials are not read, and an OverrideMaterial is reported as ignored.
+	ColliderShape BuildColliderShape(Entity entity, const glm::vec3& signedScale, float sizeFraction, const char* convexReason, bool isTrigger, bool useMaterials, const std::function<void(const std::string&)>& warn);
 
 }

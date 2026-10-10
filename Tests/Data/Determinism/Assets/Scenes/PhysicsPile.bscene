@@ -995,7 +995,7 @@
 						-30
 					],
 					"MotorSpringFrequency": 3,
-					"MotorMaxTorque": 250
+					"MotorMaxTorque": 0.05
 				}
 			}
 		},

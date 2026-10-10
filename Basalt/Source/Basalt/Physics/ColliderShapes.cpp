@@ -15,57 +15,64 @@
 
 namespace Basalt::PhysicsInternal {
 
-	namespace {
-
-		// Clamped like the RigidBody's values (see RecreateBody), with the collider named in the warning.
-		template<typename Collider>
-		ColliderMaterial SanitizeMaterial(const Collider& collider, const char* name, const std::function<void(const std::string&)>& warn)
-		{
-			if (!collider.OverrideMaterial)
-				return {};
-			if (collider.Friction < 0.0f)
-				warn(std::string(name) + " Friction must not be negative, using 0");
-			if (collider.Restitution < 0.0f || collider.Restitution > 1.0f)
-				warn(std::string(name) + " Restitution must be between 0 and 1, clamped");
-			return { true, std::max(collider.Friction, 0.0f), std::clamp(collider.Restitution, 0.0f, 1.0f) };
-		}
-
+	ColliderMaterial SanitizeSurface(float friction, float restitution, const std::string& owner, const std::function<void(const std::string&)>& warn)
+	{
+		if (friction < 0.0f)
+			warn(owner + "Friction must not be negative, using 0");
+		if (restitution < 0.0f || restitution > 1.0f)
+			warn(owner + "Restitution must be between 0 and 1, clamped");
+		return { .Override = true, .Friction = std::max(friction, 0.0f), .Restitution = std::clamp(restitution, 0.0f, 1.0f) };
 	}
 
-	ColliderShape BuildColliderShape(Entity entity, const glm::vec3& signedScale, float sizeFraction, const char* convexReason, bool isTrigger, const std::function<void(const std::string&)>& warn)
+	ColliderShape BuildColliderShape(Entity entity, const glm::vec3& signedScale, float sizeFraction, const char* convexReason, bool isTrigger, bool useMaterials, const std::function<void(const std::string&)>& warn)
 	{
 		const glm::vec3 scale = glm::abs(signedScale) * sizeFraction;
 		JPH::StaticCompoundShapeSettings compound;
 		uint32_t shapeCount = 0;
 		ColliderShape result;
+		bool ignoredMaterial = false;
+		auto materialOf = [&](const auto& collider, const char* name) -> ColliderMaterial {
+			if (!collider.OverrideMaterial)
+				return {};
+			if (!useMaterials)
+			{
+				ignoredMaterial = true;
+				return {};
+			}
+			return SanitizeSurface(collider.Friction, collider.Restitution, std::string(name) + " ", warn);
+		};
+		// Every compound child goes through here, so Materials stays indexed like the children.
+		auto addChild = [&](const JPH::Shape* shape, const glm::vec3& offset, const ColliderMaterial& material) {
+			BS_CORE_ASSERT(shapeCount < MaxColliders, "more collider kinds than MaxColliders");
+			// Offsets follow the entity's scale only: a smaller inner shape stays centred on each collider.
+			compound.AddShape(ToJolt(offset * glm::abs(signedScale)), JPH::Quat::sIdentity(), shape);
+			result.Materials[shapeCount++] = material;
+		};
 		auto addShape = [&](const JPH::ShapeSettings::ShapeResult& shape, const glm::vec3& offset, const ColliderMaterial& material) {
 			if (shape.HasError())
 			{
 				warn(std::string("invalid collider: ") + shape.GetError().c_str());
 				return;
 			}
-			BS_CORE_ASSERT(shapeCount < MaxColliders, "more collider kinds than MaxColliders");
-			// Offsets follow the entity's scale only: a smaller inner shape stays centred on each collider.
-			compound.AddShape(ToJolt(offset * glm::abs(signedScale)), JPH::Quat::sIdentity(), shape.Get());
-			result.Materials[shapeCount++] = material;
+			addChild(shape.Get(), offset, material);
 		};
 
 		if (const auto* box = entity.TryGetComponent<BoxColliderComponent>())
 		{
 			const glm::vec3 halfExtents = glm::max(box->HalfExtents * scale, glm::vec3(MinExtent));
 			const float convexRadius = std::min(JPH::cDefaultConvexRadius, glm::min(halfExtents.x, glm::min(halfExtents.y, halfExtents.z)) * 0.5f);
-			addShape(JPH::BoxShapeSettings(ToJolt(halfExtents), convexRadius).Create(), box->Offset, SanitizeMaterial(*box, "BoxCollider", warn));
+			addShape(JPH::BoxShapeSettings(ToJolt(halfExtents), convexRadius).Create(), box->Offset, materialOf(*box, "BoxCollider"));
 		}
 		if (const auto* sphere = entity.TryGetComponent<SphereColliderComponent>())
 		{
 			const float radius = std::max(sphere->Radius * glm::max(scale.x, glm::max(scale.y, scale.z)), MinExtent);
-			addShape(JPH::SphereShapeSettings(radius).Create(), sphere->Offset, SanitizeMaterial(*sphere, "SphereCollider", warn));
+			addShape(JPH::SphereShapeSettings(radius).Create(), sphere->Offset, materialOf(*sphere, "SphereCollider"));
 		}
 		if (const auto* capsule = entity.TryGetComponent<CapsuleColliderComponent>())
 		{
 			const float radius = std::max(capsule->Radius * glm::max(scale.x, scale.z), MinExtent);
 			const float halfHeight = std::max(capsule->HalfHeight * scale.y, MinExtent);
-			addShape(JPH::CapsuleShapeSettings(halfHeight, radius).Create(), capsule->Offset, SanitizeMaterial(*capsule, "CapsuleCollider", warn));
+			addShape(JPH::CapsuleShapeSettings(halfHeight, radius).Create(), capsule->Offset, materialOf(*capsule, "CapsuleCollider"));
 		}
 
 		if (const auto* meshCollider = entity.TryGetComponent<MeshColliderComponent>())
@@ -101,8 +108,7 @@ namespace Basalt::PhysicsInternal {
 				const glm::vec3 meshScale = glm::sign(signedScale) * glm::max(scale, glm::vec3(MinExtent));
 				if (meshScale != glm::vec3(1.0f))
 					shape = new JPH::ScaledShape(shape, ToJolt(meshScale));
-				compound.AddShape(JPH::Vec3::sZero(), JPH::Quat::sIdentity(), shape);
-				result.Materials[shapeCount++] = SanitizeMaterial(*meshCollider, "MeshCollider", warn);
+				addChild(shape, glm::vec3(0.0f), materialOf(*meshCollider, "MeshCollider"));
 				result.HasTriangleMesh = !convex;
 			}
 			else
@@ -111,6 +117,8 @@ namespace Basalt::PhysicsInternal {
 			}
 		}
 
+		if (ignoredMaterial)
+			warn("OverrideMaterial has no effect here (characters do not use collider materials)");
 		if (shapeCount == 0)
 		{
 			warn("no valid collider");
