@@ -94,10 +94,11 @@ add_test(NAME PhysicsDeterminism
 
 # Labels let CI jobs pick test groups (ctest -L gpu, ctest -LE "gpu|format").
 set_tests_properties(BasaltTests PROPERTIES LABELS unit)
-set_tests_properties(FeatureTest SampleTetris SampleTetrisReplay SampleJoints PhysicsDeterminism PROPERTIES LABELS integration)
+set(basaltIntegrationTests FeatureTest SampleTetris SampleTetrisReplay SampleJoints PhysicsDeterminism)
+set_tests_properties(${basaltIntegrationTests} PROPERTIES LABELS integration)
 if(TEST CodeFormat)
 	set_tests_properties(CodeFormat PROPERTIES LABELS format)
 endif()
 if(BASALT_SANITIZE)
-	set_property(TEST BasaltTests FeatureTest SampleTetris SampleTetrisReplay SampleJoints PhysicsDeterminism APPEND PROPERTY ENVIRONMENT ${BASALT_SANITIZER_ENVIRONMENT})
+	set_property(TEST BasaltTests ${basaltIntegrationTests} APPEND PROPERTY ENVIRONMENT ${BASALT_SANITIZER_ENVIRONMENT})
 endif()

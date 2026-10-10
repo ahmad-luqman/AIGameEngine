@@ -987,12 +987,12 @@
 					"AngularMotorMode": [
 						"Velocity",
 						"Off",
-						"Position"
+						"Velocity"
 					],
 					"AngularMotorTarget": [
 						45,
 						0,
-						30
+						-30
 					],
 					"MotorSpringFrequency": 3
 				}
@@ -1052,6 +1052,97 @@
 					"MaxStrength": 50
 				}
 			}
+		},
+		{
+			"ID": 44,
+			"Name": "PusherA",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						-8,
+						0.6,
+						-3
+					]
+				},
+				"RigidBody": {
+					"Type": "Kinematic"
+				},
+				"BoxCollider": {
+					"HalfExtents": [
+						0.5,
+						0.5,
+						1.5
+					]
+				}
+			}
+		},
+		{
+			"ID": 45,
+			"Name": "PusherB",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						8,
+						0.6,
+						3
+					]
+				},
+				"RigidBody": {
+					"Type": "Kinematic"
+				},
+				"BoxCollider": {
+					"HalfExtents": [
+						0.5,
+						0.5,
+						1.5
+					]
+				}
+			}
+		},
+		{
+			"ID": 46,
+			"Name": "Carrier",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						-1,
+						6,
+						-3
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 2
+				},
+				"BoxCollider": {
+					"HalfExtents": [
+						0.6,
+						0.3,
+						0.6
+					]
+				}
+			}
+		},
+		{
+			"ID": 47,
+			"Name": "Rider",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						0.2,
+						1.2,
+						0
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 0.5
+				},
+				"SphereCollider": {
+					"Radius": 0.3
+				}
+			},
+			"Parent": 46
 		}
 	]
 }
