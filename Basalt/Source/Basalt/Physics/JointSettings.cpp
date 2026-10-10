@@ -9,33 +9,6 @@
 
 namespace Basalt::PhysicsInternal {
 
-	bool NeedsRebuild(const JointComponent& built, const JointComponent& current)
-	{
-		JointComponent structural = current;
-		structural.LimitMin = built.LimitMin;
-		structural.LimitMax = built.LimitMax;
-		structural.LimitSpringFrequency = built.LimitSpringFrequency;
-		structural.LimitSpringDamping = built.LimitSpringDamping;
-		structural.LinearLimitMin = built.LinearLimitMin;
-		structural.LinearLimitMax = built.LinearLimitMax;
-		structural.AngularLimitMin = built.AngularLimitMin;
-		structural.AngularLimitMax = built.AngularLimitMax;
-		structural.FreeLinearAxes = built.FreeLinearAxes;
-		structural.MotorMode = built.MotorMode;
-		structural.MotorTarget = built.MotorTarget;
-		structural.LinearMotorMode = built.LinearMotorMode;
-		structural.AngularMotorMode = built.AngularMotorMode;
-		structural.LinearMotorTarget = built.LinearMotorTarget;
-		structural.AngularMotorTarget = built.AngularMotorTarget;
-		structural.MotorMaxForce = built.MotorMaxForce;
-		structural.MotorSpringFrequency = built.MotorSpringFrequency;
-		structural.MotorSpringDamping = built.MotorSpringDamping;
-		structural.BreakForce = built.BreakForce;
-		structural.BreakTorque = built.BreakTorque;
-		structural.EnableCollision = built.EnableCollision;
-		return structural != built;
-	}
-
 	UUID JointBody(UUID holder, const JointComponent& joint)
 	{
 		return joint.BodyEntity != 0 ? joint.BodyEntity : holder;
