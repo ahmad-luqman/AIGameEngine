@@ -38,8 +38,6 @@
 
 namespace Basalt {
 
-	using namespace PhysicsInternal;
-
 	struct PhysicsWorld::Impl
 	{
 		struct BodyRecord
@@ -102,17 +100,18 @@ namespace Basalt {
 
 		Scope<JPH::TempAllocatorImpl> TempAllocator;
 		Scope<JPH::JobSystemThreadPool> JobSystem;
-		BroadPhaseLayerInterfaceImpl BroadPhaseLayerInterface;
-		ObjectVsBroadPhaseLayerFilterImpl ObjectVsBroadPhaseLayerFilter;
-		ObjectLayerPairFilterImpl ObjectLayerPairFilter;
-		ContactListenerImpl ContactListener;
+		PhysicsInternal::BroadPhaseLayerInterfaceImpl BroadPhaseLayerInterface;
+		PhysicsInternal::ObjectVsBroadPhaseLayerFilterImpl ObjectVsBroadPhaseLayerFilter;
+		PhysicsInternal::ObjectLayerPairFilterImpl ObjectLayerPairFilter;
+		PhysicsInternal::ContactListenerImpl ContactListener;
 		Scope<JPH::PhysicsSystem> System;
 
 		std::unordered_map<UUID, BodyRecord> Bodies;
 		std::unordered_map<UUID, CharacterRecord> Characters;
 		// Characters whose CharacterControllerComponent changed (collider changes go to DirtyEntities).
 		std::unordered_set<UUID> DirtyCharacters;
-		WarningLog CharacterWarnings{ "character", true };
+		// Character warnings (sanitized settings, an ignored RigidBody, a missing collider).
+		PhysicsInternal::WarningLog CharacterWarnings{ "character", true };
 		// Characters already warned that rigid-body velocity and force calls do nothing on them.
 		std::unordered_set<UUID> WarnedCharacterBodyCalls;
 		std::unordered_map<uint32_t, UUID> BodyToEntity;
@@ -120,11 +119,12 @@ namespace Basalt {
 		// Keyed by the entity that holds the JointComponent (not necessarily the body it moves).
 		std::unordered_map<UUID, JointRecord> Joints;
 		std::unordered_set<UUID> DirtyJoints;
-		WarningLog JointWarnings{ "joint on", false };
+		// Joint warnings, one line each (fields the joint ignores, clamped limits, why it is not built).
+		PhysicsInternal::WarningLog JointWarnings{ "joint on", false };
 		// The collision layers this world was built with (scene override, else the active project's).
 		PhysicsLayers Layers;
 		// Body warnings (e.g. an unknown layer or an ignored Continuous).
-		WarningLog BodyWarnings{ "entity", true };
+		PhysicsInternal::WarningLog BodyWarnings{ "entity", true };
 		// Set while Start() creates every body; it marks all joints dirty itself afterwards.
 		bool Starting = false;
 		// Jolt reports contacts per sub-shape pair; entities see one begin/end per entity pair. Keys are

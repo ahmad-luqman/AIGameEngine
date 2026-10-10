@@ -1,13 +1,15 @@
 // PhysicsWorld: character controllers (CharacterControllerComponent on Jolt's CharacterVirtual).
 #include "Basalt/Physics/PhysicsWorld.h"
 
-#include "Basalt/Physics/PhysicsWorldImpl.h"
 #include "Basalt/Physics/ColliderShapes.h"
+#include "Basalt/Physics/PhysicsWorldImpl.h"
 
 #include <algorithm>
 #include <optional>
 
 namespace Basalt {
+
+	using namespace PhysicsInternal;
 
 	void PhysicsWorld::Impl::ConfigureCharacter(CharacterRecord& record, const std::function<void(const std::string&)>& warn)
 	{

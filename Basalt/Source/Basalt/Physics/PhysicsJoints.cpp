@@ -17,10 +17,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <optional>
 #include <vector>
 
 namespace Basalt {
+
+	using namespace PhysicsInternal;
 
 	namespace {
 

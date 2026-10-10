@@ -19,6 +19,8 @@
 
 namespace Basalt {
 
+	using namespace PhysicsInternal;
+
 	namespace {
 
 		// Query filters: the layer mask, then triggers and the ignored entity (see PhysicsQueryFilter).
