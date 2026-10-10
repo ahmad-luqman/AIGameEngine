@@ -52,6 +52,8 @@ namespace Basalt {
 			// Pose last written to / read from the entity, used to detect transforms changed by scripts.
 			glm::vec3 LastPosition = { 0.0f, 0.0f, 0.0f };
 			glm::quat LastRotation = { 1.0f, 0.0f, 0.0f, 0.0f };
+			// The world scale the colliders were built with (see MarkRescaledDirty).
+			glm::vec3 BuiltScale = { 1.0f, 1.0f, 1.0f };
 		};
 
 		struct JointRecord
@@ -95,8 +97,9 @@ namespace Basalt {
 			JPH::AABox Bounds;
 			// Set while the entity's transform cannot be decomposed (e.g. a zero scale); the character waits.
 			bool Degenerate = false;
-			// As BodyRecord::BorrowedMesh.
+			// As BodyRecord::BorrowedMesh and BuiltScale.
 			std::optional<std::pair<std::string, uint32_t>> BorrowedMesh;
+			glm::vec3 BuiltScale = { 1.0f, 1.0f, 1.0f };
 		};
 
 		Scope<JPH::TempAllocatorImpl> TempAllocator;
@@ -175,6 +178,12 @@ namespace Basalt {
 
 		// Ends every contact of an entity whose body is gone and notifies the surviving entities.
 		void EndContacts(Scene* scene, UUID uuid, bool trigger);
+
+		// Colliders are sized by the entity's world scale, which a script, an animation or a parent can change
+		// without touching a physics component: marks bodies and characters whose scale differs from the one
+		// they were built with for a rebuild. Runs once per Step, in registry order, before dirty entities are
+		// rebuilt, so a rebuilt body's joints are back before the next fixed step.
+		void MarkRescaledDirty(Scene* scene);
 
 		void OnPhysicsComponentChanged(entt::registry& registry, entt::entity entity);
 

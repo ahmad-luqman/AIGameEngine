@@ -159,6 +159,7 @@ namespace Basalt {
 		record.MoveVelocity = moveVelocity;
 		record.LastPosition = position;
 		record.LastRotation = rotation;
+		record.BuiltScale = scale;
 		// The shape's bounds relative to the character's position (Jolt's local bounds are around the centre of mass).
 		record.Bounds = shape->GetLocalBounds();
 		record.Bounds.Translate(shape->GetCenterOfMass());
@@ -308,7 +309,10 @@ namespace Basalt {
 
 			record.LastPosition = FromJolt(JPH::Vec3(character.GetPosition()));
 			record.LastRotation = rotation;
+			// The scale is kept exact, as for rigid bodies (PhysicsWorld::Step).
+			const glm::vec3 localScale = entity.GetTransform().Scale;
 			m_Scene->SetWorldTransform(entity, Math::ComposeTransform(record.LastPosition, rotation, scale));
+			entity.GetTransform().Scale = localScale;
 		}
 	}
 

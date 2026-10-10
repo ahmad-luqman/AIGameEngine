@@ -154,7 +154,9 @@ namespace Basalt {
 		bool Continuous = false;
 	};
 
-	// Collider shapes are sized in local space and scaled by the entity's world scale.
+	// Collider shapes are sized in local space and scaled by the entity's world scale. A scale change during
+	// play (the entity's or a parent's) rebuilds the body, which keeps its velocity; like any rebuild, its
+	// joints are rebuilt from the current poses.
 	struct BoxColliderComponent
 	{
 		glm::vec3 HalfExtents = { 0.5f, 0.5f, 0.5f };
