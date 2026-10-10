@@ -2,6 +2,7 @@
 
 // Internal to the physics module.
 
+#include "Basalt/Physics/ColliderShapes.h"
 #include "Basalt/Physics/JoltUtils.h"
 #include "Basalt/Physics/PhysicsMaterial.h"
 #include "Basalt/Physics/PhysicsWorld.h"
@@ -9,10 +10,12 @@
 #include <Jolt/Physics/Body/Body.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/EstimateCollisionResponse.h>
+#include <Jolt/Physics/Collision/Shape/CompoundShape.h>
 
 #include <cstdint>
 #include <mutex>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 namespace Basalt::PhysicsInternal {
@@ -34,6 +37,10 @@ namespace Basalt::PhysicsInternal {
 	{
 		PhysicsCombineMode FrictionCombine = PhysicsCombineMode::Default;
 		PhysicsCombineMode RestitutionCombine = PhysicsCombineMode::Default;
+		// Colliders with their own friction and restitution; AnyOverride skips the lookup for the usual body
+		// without any.
+		ColliderMaterials Colliders{};
+		bool AnyOverride = false;
 	};
 
 	// Called from Jolt worker threads: only records events, which the main thread dispatches, and
@@ -43,7 +50,7 @@ namespace Basalt::PhysicsInternal {
 	public:
 		void OnContactAdded(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold, JPH::ContactSettings& settings) override
 		{
-			CombineMaterials(body1, body2, settings);
+			CombineMaterials(body1, body2, manifold, settings);
 
 			RawContactEvent event{ true, body1.GetID().GetIndexAndSequenceNumber(), manifold.mSubShapeID1.GetValue(), body2.GetID().GetIndexAndSequenceNumber(), manifold.mSubShapeID2.GetValue(), {} };
 			if (!body1.IsSensor() && !body2.IsSensor() && !manifold.mRelativeContactPointsOn1.empty())
@@ -67,10 +74,10 @@ namespace Basalt::PhysicsInternal {
 			Events.push_back(event);
 		}
 
-		void OnContactPersisted(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold&, JPH::ContactSettings& settings) override
+		void OnContactPersisted(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold, JPH::ContactSettings& settings) override
 		{
 			// Jolt recomputes the combined values for every contact each step.
-			CombineMaterials(body1, body2, settings);
+			CombineMaterials(body1, body2, manifold, settings);
 		}
 
 		void OnContactRemoved(const JPH::SubShapeIDPair& pair) override
@@ -86,12 +93,31 @@ namespace Basalt::PhysicsInternal {
 		float MinVelocityForRestitution = 1.0f;
 
 	private:
-		void CombineMaterials(const JPH::Body& body1, const JPH::Body& body2, JPH::ContactSettings& settings) const
+		// The friction and restitution of the part of the body that touches: its collider's own, else the body's.
+		static std::pair<float, float> SurfaceOf(const BodyMaterial& material, const JPH::Body& body, const JPH::SubShapeID& subShape)
+		{
+			if (material.AnyOverride)
+			{
+				uint32_t index = 0;
+				if (body.GetShape()->GetType() == JPH::EShapeType::Compound)
+				{
+					JPH::SubShapeID remainder;
+					index = static_cast<const JPH::CompoundShape*>(body.GetShape())->GetSubShapeIndexFromID(subShape, remainder);
+				}
+				if (index < material.Colliders.size() && material.Colliders[index].Override)
+					return { material.Colliders[index].Friction, material.Colliders[index].Restitution };
+			}
+			return { body.GetFriction(), body.GetRestitution() };
+		}
+
+		void CombineMaterials(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold, JPH::ContactSettings& settings) const
 		{
 			const BodyMaterial& material1 = Materials[body1.GetID().GetIndex()];
 			const BodyMaterial& material2 = Materials[body2.GetID().GetIndex()];
-			settings.mCombinedFriction = CombineFriction(material1.FrictionCombine, body1.GetFriction(), material2.FrictionCombine, body2.GetFriction());
-			settings.mCombinedRestitution = CombineRestitution(material1.RestitutionCombine, body1.GetRestitution(), material2.RestitutionCombine, body2.GetRestitution());
+			const auto [friction1, restitution1] = SurfaceOf(material1, body1, manifold.mSubShapeID1);
+			const auto [friction2, restitution2] = SurfaceOf(material2, body2, manifold.mSubShapeID2);
+			settings.mCombinedFriction = CombineFriction(material1.FrictionCombine, friction1, material2.FrictionCombine, friction2);
+			settings.mCombinedRestitution = CombineRestitution(material1.RestitutionCombine, restitution1, material2.RestitutionCombine, restitution2);
 		}
 	};
 

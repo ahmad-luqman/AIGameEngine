@@ -45,7 +45,10 @@ return Player
   `RestitutionCombine`: `Default`, `GeometricMean`, `Average`, `Min`, `Multiply` or `Max`. When the bodies
   differ, the mode later in that list wins (so `Default` defers to the other body); when both are
   `Default`, friction uses the geometric mean and restitution the larger value. `Friction` below 0 is
-  treated as 0 and `Restitution` is clamped to 0..1 (with a warning).
+  treated as 0 and `Restitution` is clamped to 0..1 (with a warning). A collider with `OverrideMaterial`
+  set (every collider type has it) touches with its own `Friction` and `Restitution` instead of the
+  body's, combined by the body's modes: one body can have an icy runner and a grippy seat. Characters
+  ignore collider materials.
 - Destroying entities from any callback is safe: destruction is deferred until the current update ends.
 - `require("Assets.Scripts.Lib.Util")` loads project modules. `io`, `os`, `dofile` and `loadfile` are not
   available (scripts cannot touch the file system).

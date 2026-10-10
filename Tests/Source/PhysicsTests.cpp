@@ -624,6 +624,98 @@ TEST_SUITE("Physics")
 		scene.OnSimulationStop();
 	}
 
+	TEST_CASE("A collider with its own material touches with it; the body's other colliders keep the body's")
+	{
+		// A sled that cannot tip: a sphere runner on the ground and a box seat 1 m above it (index 0 and 1 of
+		// the compound). Body and ground friction are 1, so it stops unless the touching runner is frictionless.
+		enum class Icy
+		{
+			None,
+			Runner,
+			Seat
+		};
+		auto slideSpeed = [](Icy icy) {
+			Scene scene;
+			Entity ground = CreateGround(scene);
+			ground.GetComponent<RigidBodyComponent>().Friction = 1.0f;
+			Entity sled = scene.CreateEntity("Sled");
+			sled.GetTransform().Translation = { 0.0f, 0.5f, 0.0f };
+			auto& body = sled.AddComponent<RigidBodyComponent>();
+			body.Type = RigidBodyType::Dynamic;
+			body.Friction = 1.0f;
+			body.LinearDamping = 0.0f;
+			body.FixedRotation = true;
+			auto& seat = sled.AddComponent<BoxColliderComponent>();
+			seat.HalfExtents = { 0.5f, 0.25f, 0.5f };
+			seat.Offset = { 0.0f, 1.0f, 0.0f };
+			auto& runner = sled.AddComponent<SphereColliderComponent>();
+			auto makeIcy = [](auto& collider) {
+				collider.OverrideMaterial = true;
+				collider.Friction = 0.0f;
+			};
+			if (icy == Icy::Runner)
+				makeIcy(runner);
+			else if (icy == Icy::Seat)
+				makeIcy(seat);
+			scene.OnSimulationStart();
+			scene.GetPhysicsWorld()->SetLinearVelocity(sled, { 3.0f, 0.0f, 0.0f });
+			Simulate(scene, 1.0f);
+			const float speed = scene.GetPhysicsWorld()->GetLinearVelocity(sled).x;
+			scene.OnSimulationStop();
+			return speed;
+		};
+		CHECK(slideSpeed(Icy::None) < 0.05f);
+		CHECK(slideSpeed(Icy::Runner) == doctest::Approx(3.0f).epsilon(0.02));
+		CHECK(slideSpeed(Icy::Seat) < 0.05f);
+
+		// A single collider (not a compound) with its own restitution bounces a body whose own is 0.
+		auto bounceHeight = [](bool bouncyCollider) {
+			Scene scene;
+			CreateGround(scene);
+			Entity ball = scene.CreateEntity("Ball");
+			ball.GetTransform().Translation = { 0.0f, 3.0f, 0.0f };
+			auto& body = ball.AddComponent<RigidBodyComponent>();
+			body.Type = RigidBodyType::Dynamic;
+			body.LinearDamping = 0.0f;
+			auto& sphere = ball.AddComponent<SphereColliderComponent>();
+			sphere.OverrideMaterial = bouncyCollider;
+			sphere.Restitution = 0.8f;
+			scene.OnSimulationStart();
+			Simulate(scene, 1.0f);
+			float highest = 0.0f;
+			for (int i = 0; i < 60; i++)
+			{
+				scene.OnUpdate(Step);
+				highest = std::max(highest, ball.GetTransform().Translation.y);
+			}
+			scene.OnSimulationStop();
+			return highest;
+		};
+		CHECK(bounceHeight(true) > 1.5f);
+		CHECK(bounceHeight(false) < 0.6f);
+	}
+
+	TEST_CASE("Out-of-range collider materials are clamped with a warning naming the collider")
+	{
+		Scene scene;
+		CreateGround(scene);
+		Entity box = CreateBox(scene, { 0.0f, 3.0f, 0.0f });
+		auto& collider = box.GetComponent<BoxColliderComponent>();
+		collider.OverrideMaterial = true;
+		collider.Friction = -1.0f;
+		collider.Restitution = 3.0f;
+		// Without OverrideMaterial the collider's values are not read, so they are not checked either.
+		auto& sphere = box.AddComponent<SphereColliderComponent>();
+		sphere.Friction = -5.0f;
+
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		scene.OnSimulationStart();
+		CHECK(CountMessages(since, "BoxCollider Friction must not be negative") == 1);
+		CHECK(CountMessages(since, "BoxCollider Restitution must be between 0 and 1") == 1);
+		CHECK(CountMessages(since, "SphereCollider") == 0);
+		scene.OnSimulationStop();
+	}
+
 	TEST_CASE("DirtySet hands members back in the order they were first marked")
 	{
 		PhysicsInternal::DirtySet set;

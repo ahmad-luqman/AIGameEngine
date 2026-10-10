@@ -48,19 +48,19 @@ Fields: `Type`, `Mass`, `LinearDamping`, `AngularDamping`, `GravityFactor`, `Fri
 
 ## BoxCollider
 
-Fields: `HalfExtents`, `Offset`
+Fields: `HalfExtents`, `Offset`, `OverrideMaterial`, `Friction`, `Restitution`
 
 ## SphereCollider
 
-Fields: `Radius`, `Offset`
+Fields: `Radius`, `Offset`, `OverrideMaterial`, `Friction`, `Restitution`
 
 ## CapsuleCollider
 
-Fields: `Radius`, `HalfHeight`, `Offset`
+Fields: `Radius`, `HalfHeight`, `Offset`, `OverrideMaterial`, `Friction`, `Restitution`
 
 ## MeshCollider
 
-Fields: `Mesh`, `MeshIndex`, `Convex`
+Fields: `Mesh`, `MeshIndex`, `Convex`, `OverrideMaterial`, `Friction`, `Restitution`
 
 ## Joint
 

@@ -339,7 +339,8 @@ namespace Basalt {
 			return;
 		}
 
-		impl.ContactListener.Materials[bodyID.GetIndex()] = { rigidBody.FrictionCombine, rigidBody.RestitutionCombine };
+		const bool anyOverride = std::ranges::any_of(colliders.Materials, &ColliderMaterial::Override);
+		impl.ContactListener.Materials[bodyID.GetIndex()] = { rigidBody.FrictionCombine, rigidBody.RestitutionCombine, colliders.Materials, anyOverride };
 
 		Impl::BodyRecord record;
 		record.ID = bodyID;

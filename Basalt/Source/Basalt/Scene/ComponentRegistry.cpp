@@ -408,16 +408,27 @@ namespace Basalt {
 			}
 		}
 
+		// The material override every collider has.
+		template<typename Collider>
+		void MaterialFields(FieldReader& r, Collider& c)
+		{
+			r.Field("OverrideMaterial", c.OverrideMaterial);
+			r.Field("Friction", c.Friction);
+			r.Field("Restitution", c.Restitution);
+		}
+
 		void Fields(FieldReader& r, BoxColliderComponent& c)
 		{
 			r.Field("HalfExtents", c.HalfExtents);
 			r.Field("Offset", c.Offset);
+			MaterialFields(r, c);
 		}
 
 		void Fields(FieldReader& r, SphereColliderComponent& c)
 		{
 			r.Field("Radius", c.Radius);
 			r.Field("Offset", c.Offset);
+			MaterialFields(r, c);
 		}
 
 		void Fields(FieldReader& r, CapsuleColliderComponent& c)
@@ -425,6 +436,7 @@ namespace Basalt {
 			r.Field("Radius", c.Radius);
 			r.Field("HalfHeight", c.HalfHeight);
 			r.Field("Offset", c.Offset);
+			MaterialFields(r, c);
 		}
 
 		void Fields(FieldReader& r, MeshColliderComponent& c)
@@ -432,6 +444,7 @@ namespace Basalt {
 			r.Field("Mesh", c.Mesh);
 			r.Field("MeshIndex", c.MeshIndex);
 			r.Field("Convex", c.Convex);
+			MaterialFields(r, c);
 		}
 
 		void Fields(FieldReader& r, JointComponent& c)
@@ -593,21 +606,30 @@ namespace Basalt {
 			};
 		}
 
+		template<typename Collider>
+		json WithMaterial(json data, const Collider& c)
+		{
+			data["OverrideMaterial"] = c.OverrideMaterial;
+			data["Friction"] = c.Friction;
+			data["Restitution"] = c.Restitution;
+			return data;
+		}
+
 		json Write(const BoxColliderComponent& c)
 		{
-			return { { "HalfExtents", ToJson(c.HalfExtents) }, { "Offset", ToJson(c.Offset) } };
+			return WithMaterial({ { "HalfExtents", ToJson(c.HalfExtents) }, { "Offset", ToJson(c.Offset) } }, c);
 		}
 		json Write(const SphereColliderComponent& c)
 		{
-			return { { "Radius", c.Radius }, { "Offset", ToJson(c.Offset) } };
+			return WithMaterial({ { "Radius", c.Radius }, { "Offset", ToJson(c.Offset) } }, c);
 		}
 		json Write(const CapsuleColliderComponent& c)
 		{
-			return { { "Radius", c.Radius }, { "HalfHeight", c.HalfHeight }, { "Offset", ToJson(c.Offset) } };
+			return WithMaterial({ { "Radius", c.Radius }, { "HalfHeight", c.HalfHeight }, { "Offset", ToJson(c.Offset) } }, c);
 		}
 		json Write(const MeshColliderComponent& c)
 		{
-			return { { "Mesh", c.Mesh }, { "MeshIndex", c.MeshIndex }, { "Convex", c.Convex } };
+			return WithMaterial({ { "Mesh", c.Mesh }, { "MeshIndex", c.MeshIndex }, { "Convex", c.Convex } }, c);
 		}
 		json Write(const JointComponent& c)
 		{

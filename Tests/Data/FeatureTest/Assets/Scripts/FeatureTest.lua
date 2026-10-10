@@ -297,8 +297,11 @@ function Driver:OnUpdate(dt)
 		local dynamic = Scene.CreateEntity("RuntimeBox")
 		dynamic.Translation = Vec3(6, 4, 0)
 		dynamic:AddComponent("RigidBody", { Type = "Dynamic" })
-		dynamic:AddComponent("BoxCollider", { HalfExtents = { 0.25, 0.25, 0.25 } })
+		-- Its collider's own material: grippier than the body's 0.5 and a little bouncy.
+		dynamic:AddComponent("BoxCollider", { HalfExtents = { 0.25, 0.25, 0.25 }, OverrideMaterial = true, Friction = 0.8, Restitution = 0.25 })
 		dynamic:AddComponent("Mesh", { Mesh = "builtin://Cube" })
+		local runtimeCollider = dynamic:GetComponent("BoxCollider")
+		Check("Collider material override", runtimeCollider.OverrideMaterial and Near(runtimeCollider.Friction, 0.8, 1e-6) and runtimeCollider.Restitution == 0.25)
 		self.RuntimeBox = dynamic
 
 		-- Joints: the gate door is hinged to its post; a motor set through SetComponent swings it open.
