@@ -1,0 +1,409 @@
+#pragma once
+
+// Internal to the physics module: PhysicsWorld's state, shared by its source files (PhysicsWorld.cpp,
+// PhysicsJoints.cpp, PhysicsCharacters.cpp, PhysicsQueries.cpp).
+
+#include "Basalt/Physics/PhysicsWorld.h"
+
+#include "Basalt/Core/Log.h"
+#include "Basalt/Physics/ContactListener.h"
+#include "Basalt/Physics/JointSettings.h"
+#include "Basalt/Physics/JoltUtils.h"
+#include "Basalt/Physics/PhysicsLayers.h"
+#include "Basalt/Scene/Components.h"
+#include "Basalt/Scene/Entity.h"
+#include "Basalt/Scene/Scene.h"
+#include "Basalt/Scripting/ScriptEngine.h"
+
+#include <Jolt/Core/JobSystemThreadPool.h>
+#include <Jolt/Core/TempAllocator.h>
+#include <Jolt/Physics/Body/BodyInterface.h>
+#include <Jolt/Physics/Character/CharacterVirtual.h>
+#include <Jolt/Physics/Constraints/TwoBodyConstraint.h>
+#include <Jolt/Physics/PhysicsSystem.h>
+
+#include <entt/entt.hpp>
+#include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
+
+#include <functional>
+#include <map>
+#include <optional>
+#include <set>
+#include <string>
+#include <tuple>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+
+namespace Basalt {
+
+	using namespace PhysicsInternal;
+
+	struct PhysicsWorld::Impl
+	{
+		struct BodyRecord
+		{
+			JPH::BodyID ID;
+			RigidBodyType Type = RigidBodyType::Static;
+			bool IsTrigger = false;
+			// The MeshComponent mesh a MeshCollider without its own Mesh was built from, so edits to the
+			// MeshComponent's other fields (e.g. CastShadows) do not rebuild the body.
+			std::optional<std::pair<std::string, uint32_t>> BorrowedMesh;
+			// Pose last written to / read from the entity, used to detect transforms changed by scripts.
+			glm::vec3 LastPosition = { 0.0f, 0.0f, 0.0f };
+			glm::quat LastRotation = { 1.0f, 0.0f, 0.0f, 0.0f };
+		};
+
+		struct JointRecord
+		{
+			JPH::Ref<JPH::TwoBodyConstraint> Constraint;
+			// The component the constraint was built from (plus later in-place updates). Its Type always
+			// matches the constraint's subtype; ConnectedEntity is 0 when attached to the world.
+			JointComponent Settings;
+			// The entity whose body the joint moves (Settings.BodyEntity resolved; the holder when that is 0).
+			// Only set when the constraint is built; that stays correct because changing BodyEntity rebuilds
+			// the joint (see NeedsRebuild).
+			UUID Body = 0;
+			// Warnings found while building the constraint (e.g. a zero axis). In-place updates only re-check
+			// the other settings, so these are added back to keep the logged set the same.
+			std::vector<std::string> BuildWarnings;
+			// The second body's joint frame seen from the first's when the joint was built. Six-DOF frames
+			// coincide there (identity), but Jolt picks each cone frame's Y and Z per body, so they can differ
+			// by a twist; GetJointRotation measures from this.
+			JPH::Quat RestRotation = JPH::Quat::sIdentity();
+		};
+
+		// The second body's joint frame seen from the first's (see JointRecord::RestRotation).
+		static JPH::Quat RelativeJointRotation(const JPH::TwoBodyConstraint& constraint)
+		{
+			const JPH::Quat frame1 = constraint.GetBody1()->GetRotation() * constraint.GetConstraintToBody1Matrix().GetQuaternion();
+			const JPH::Quat frame2 = constraint.GetBody2()->GetRotation() * constraint.GetConstraintToBody2Matrix().GetQuaternion();
+			return (frame1.Conjugated() * frame2).Normalized();
+		}
+
+		struct CharacterRecord
+		{
+			JPH::Ref<JPH::CharacterVirtual> Character;
+			// The settings applied to the character (from its CharacterControllerComponent).
+			CharacterControllerComponent Settings;
+			uint32_t Layer = 0;
+			// Settings in Jolt's terms, checked by ConfigureCharacter.
+			float StepHeight = 0.0f;
+			float GravityFactor = 1.0f;
+			// Warnings found while building the character, repeated with the settings' own when they change.
+			std::string BuildWarnings;
+			// The last MoveCharacter velocity, used every step until the next call.
+			glm::vec3 MoveVelocity = { 0.0f, 0.0f, 0.0f };
+			// Displacement over the last step divided by its duration.
+			glm::vec3 ActualVelocity = { 0.0f, 0.0f, 0.0f };
+			// Pose last written to / read from the entity, used to detect transforms changed by scripts.
+			glm::vec3 LastPosition = { 0.0f, 0.0f, 0.0f };
+			glm::quat LastRotation = { 1.0f, 0.0f, 0.0f, 0.0f };
+			// The shape's bounding box in the character's local space, relative to its position.
+			JPH::AABox Bounds;
+			// Set while the entity's transform cannot be decomposed (e.g. a zero scale); the character waits.
+			bool Degenerate = false;
+			// As BodyRecord::BorrowedMesh.
+			std::optional<std::pair<std::string, uint32_t>> BorrowedMesh;
+		};
+
+		Scope<JPH::TempAllocatorImpl> TempAllocator;
+		Scope<JPH::JobSystemThreadPool> JobSystem;
+		BroadPhaseLayerInterfaceImpl BroadPhaseLayerInterface;
+		ObjectVsBroadPhaseLayerFilterImpl ObjectVsBroadPhaseLayerFilter;
+		ObjectLayerPairFilterImpl ObjectLayerPairFilter;
+		ContactListenerImpl ContactListener;
+		Scope<JPH::PhysicsSystem> System;
+
+		std::unordered_map<UUID, BodyRecord> Bodies;
+		std::unordered_map<UUID, CharacterRecord> Characters;
+		// Characters whose CharacterControllerComponent changed (collider changes go to DirtyEntities).
+		std::unordered_set<UUID> DirtyCharacters;
+		// The character warnings last logged for each entity.
+		std::unordered_map<UUID, std::string> LoggedCharacterWarnings;
+		// Characters already warned that rigid-body velocity and force calls do nothing on them.
+		std::unordered_set<UUID> WarnedCharacterBodyCalls;
+		std::unordered_map<uint32_t, UUID> BodyToEntity;
+		std::unordered_set<UUID> DirtyEntities;
+		// Keyed by the entity that holds the JointComponent (not necessarily the body it moves).
+		std::unordered_map<UUID, JointRecord> Joints;
+		std::unordered_set<UUID> DirtyJoints;
+		// The warnings last logged for each joint, so repeats are not logged again.
+		std::unordered_map<UUID, std::vector<std::string>> LoggedJointWarnings;
+		// The collision layers this world was built with (scene override, else the active project's).
+		PhysicsLayers Layers;
+		// The body warnings (unknown layer, ignored Continuous) last logged for each entity.
+		std::unordered_map<UUID, std::string> LoggedBodyWarnings;
+		// Set while Start() creates every body; it marks all joints dirty itself afterwards.
+		bool Starting = false;
+		// Jolt reports contacts per sub-shape pair; entities see one begin/end per entity pair. Keys are
+		// (entity A, sub-shape A, entity B, sub-shape B) with A < B; PairCounts counts keys per entity pair.
+		using ContactKey = std::tuple<uint64_t, uint32_t, uint64_t, uint32_t>;
+		using EntityPair = std::pair<uint64_t, uint64_t>;
+		std::set<ContactKey> ActiveContacts;
+		std::map<EntityPair, int> PairCounts;
+		// Entity pairs (lower UUID first) joined by a joint with EnableCollision off. Read by Jolt worker
+		// threads during Update, so it only changes between steps.
+		std::set<EntityPair> IgnoredPairs;
+		// Contacts whose removal was reported because a body fell asleep. They stay active; once both bodies
+		// are awake again, a contact that Jolt does not re-report has really ended.
+		std::set<ContactKey> SuspendedContacts;
+
+		// Applies the record's Settings that a live character can change, sanitizing out-of-range values
+		// (reported through warn).
+		static void ConfigureCharacter(CharacterRecord& record, const std::function<void(const std::string&)>& warn)
+		{
+			const CharacterControllerComponent& c = record.Settings;
+			// Below about 0.8 degrees Jolt switches the slope check off and every slope becomes walkable.
+			const float slope = std::isfinite(c.SlopeLimit) ? std::clamp(c.SlopeLimit, 1.0f, 90.0f) : 45.0f;
+			if (slope != c.SlopeLimit)
+				warn(fmt::format("SlopeLimit {} must be within [1, 90] degrees; using {}", c.SlopeLimit, slope));
+			record.Character->SetMaxSlopeAngle(glm::radians(slope));
+			const float strength = std::isfinite(c.MaxStrength) && c.MaxStrength >= 0.0f ? c.MaxStrength : 0.0f;
+			if (strength != c.MaxStrength)
+				warn(fmt::format("MaxStrength {} must be a finite, non-negative force; using 0", c.MaxStrength));
+			record.Character->SetMaxStrength(strength);
+			const float mass = std::isfinite(c.Mass) && c.Mass >= 0.0f ? c.Mass : 0.0f;
+			if (mass != c.Mass)
+				warn(fmt::format("Mass {} must be a finite, non-negative mass; using 0", c.Mass));
+			record.Character->SetMass(mass);
+			record.StepHeight = std::isfinite(c.StepHeight) && c.StepHeight >= 0.0f ? c.StepHeight : 0.0f;
+			if (record.StepHeight != c.StepHeight)
+				warn(fmt::format("StepHeight {} must be a finite, non-negative distance; using 0", c.StepHeight));
+			record.GravityFactor = std::isfinite(c.GravityFactor) ? c.GravityFactor : 1.0f;
+			if (record.GravityFactor != c.GravityFactor)
+				warn(fmt::format("GravityFactor {} is not finite; using 1", c.GravityFactor));
+		}
+
+		// Only contacts on the lower part of the shape can be ground; others are walls or ceilings. "Lower" is
+		// along the character's up axis (against gravity) in its local space, so a turned gravity or a tilted
+		// entity keeps the bottom of the shape as its feet: below the lowest point of its bounds plus their
+		// narrowest half extent (the hemisphere of an upright capsule).
+		static void UpdateSupportingVolume(CharacterRecord& record)
+		{
+			const JPH::CharacterVirtual& character = *record.Character;
+			const JPH::Vec3 localUp = character.GetRotation().Conjugated() * character.GetUp();
+			const JPH::Vec3 extent = record.Bounds.GetExtent();
+			const float bottom = localUp.Dot(record.Bounds.GetCenter()) - localUp.Abs().Dot(extent);
+			const float halfWidth = extent.ReduceMin();
+			record.Character->SetSupportingVolume(JPH::Plane(localUp, -(bottom + halfWidth)));
+		}
+
+		// Velocity and force calls address rigid bodies; a character moves only through Move. Warns once per
+		// character so knockback code that silently does nothing is noticed. Returns whether it is a character.
+		bool WarnIfCharacter(Entity entity, const char* call)
+		{
+			if (!Characters.contains(entity.GetUUID()))
+				return false;
+			if (WarnedCharacterBodyCalls.insert(entity.GetUUID()).second)
+				BS_CORE_WARN("Physics: {} does nothing on character '{}' (it has a CharacterController); use Move", call, entity.GetName());
+			return true;
+		}
+
+		// Logs a character's warnings ("; "-joined) unless they are the ones last logged for it.
+		void ReportCharacterWarnings(Entity entity, const std::string& warnings)
+		{
+			if (warnings.empty())
+			{
+				LoggedCharacterWarnings.erase(entity.GetUUID());
+			}
+			else if (std::string& logged = LoggedCharacterWarnings[entity.GetUUID()]; logged != warnings)
+			{
+				logged = warnings;
+				BS_CORE_WARN("Physics: character '{}': {}", entity.GetName(), warnings);
+			}
+		}
+
+		bool IsTrigger(UUID uuid) const
+		{
+			auto it = Bodies.find(uuid);
+			return it != Bodies.end() && it->second.IsTrigger;
+		}
+
+		void UpdateIgnoredPairs()
+		{
+			std::set<EntityPair> pairs;
+			for (const auto& [holder, joint] : Joints)
+			{
+				if (joint.Settings.ConnectedEntity == 0 || joint.Settings.EnableCollision)
+					continue;
+				const uint64_t a = static_cast<uint64_t>(joint.Body);
+				const uint64_t b = static_cast<uint64_t>(joint.Settings.ConnectedEntity);
+				pairs.emplace(std::min(a, b), std::max(a, b));
+			}
+			// Jolt replays cached contacts for bodies that have not moved (and skips sleeping ones), bypassing
+			// the pair filter. Bodies whose pair starts or stops being ignored lose that cache and wake, so two
+			// resting bodies stop (or start) colliding at once.
+			std::vector<EntityPair> changed;
+			std::ranges::set_symmetric_difference(pairs, IgnoredPairs, std::back_inserter(changed));
+			IgnoredPairs = std::move(pairs);
+			JPH::BodyInterface& bodies = System->GetBodyInterface();
+			for (const auto& [a, b] : changed)
+			{
+				for (uint64_t uuid : { a, b })
+				{
+					auto body = Bodies.find(uuid);
+					if (body == Bodies.end())
+						continue;
+					bodies.InvalidateContactCache(body->second.ID);
+					if (body->second.Type == RigidBodyType::Dynamic)
+						bodies.ActivateBody(body->second.ID);
+				}
+			}
+		}
+
+		void RemoveJoint(UUID holder)
+		{
+			auto it = Joints.find(holder);
+			if (it == Joints.end())
+				return;
+			System->RemoveConstraint(it->second.Constraint);
+			Joints.erase(it);
+			UpdateIgnoredPairs();
+		}
+
+		// Jolt constraints point at their bodies, so they must go before either body is destroyed. They are
+		// rebuilt before the next step if both bodies still exist then (e.g. a body that was recreated).
+		void RemoveJointsOfBody(UUID uuid)
+		{
+			// Jolt removes a constraint by moving its last one into the gap, which changes the solve order of
+			// the rest; removing in UUID order (not hash order) keeps that order reproducible.
+			std::vector<UUID> holders;
+			for (const auto& [holder, joint] : Joints)
+			{
+				if (joint.Body == uuid || joint.Settings.ConnectedEntity == uuid)
+					holders.push_back(holder);
+			}
+			std::ranges::sort(holders);
+			for (UUID holder : holders)
+			{
+				auto it = Joints.find(holder);
+				System->RemoveConstraint(it->second.Constraint);
+				DirtyJoints.insert(holder);
+				Joints.erase(it);
+			}
+			UpdateIgnoredPairs();
+		}
+
+		// Removes a body. Contacts it had are ended now (Jolt's removal callbacks for a destroyed body can
+		// no longer be mapped to an entity), and surviving entities are notified.
+		void RemoveBody(Scene* scene, UUID uuid)
+		{
+			auto it = Bodies.find(uuid);
+			if (it == Bodies.end())
+				return;
+			const bool trigger = it->second.IsTrigger;
+			RemoveJointsOfBody(uuid);
+			JPH::BodyInterface& bodies = System->GetBodyInterface();
+			BodyToEntity.erase(it->second.ID.GetIndexAndSequenceNumber());
+			// Jolt reuses the index for the next body; whatever creates it must not inherit these modes.
+			ContactListener.Materials[it->second.ID.GetIndex()] = {};
+			bodies.RemoveBody(it->second.ID);
+			bodies.DestroyBody(it->second.ID);
+			Bodies.erase(it);
+			EndContacts(scene, uuid, trigger);
+		}
+
+		// Removes a character and its inner body, ending its contacts like RemoveBody.
+		void RemoveCharacter(Scene* scene, UUID uuid)
+		{
+			auto it = Characters.find(uuid);
+			if (it == Characters.end())
+				return;
+			const JPH::BodyID inner = it->second.Character->GetInnerBodyID();
+			if (!inner.IsInvalid())
+			{
+				BodyToEntity.erase(inner.GetIndexAndSequenceNumber());
+				ContactListener.Materials[inner.GetIndex()] = {};
+			}
+			// The character destroys its inner body.
+			Characters.erase(it);
+			EndContacts(scene, uuid, false);
+		}
+
+		// Ends every contact of an entity whose body is gone and notifies the surviving entities.
+		void EndContacts(Scene* scene, UUID uuid, bool trigger)
+		{
+			const uint64_t id = static_cast<uint64_t>(uuid);
+			std::set<EntityPair> ended;
+			for (auto key = ActiveContacts.begin(); key != ActiveContacts.end();)
+			{
+				if (std::get<0>(*key) != id && std::get<2>(*key) != id)
+				{
+					++key;
+					continue;
+				}
+				const EntityPair pair(std::get<0>(*key), std::get<2>(*key));
+				if (--PairCounts[pair] <= 0)
+				{
+					PairCounts.erase(pair);
+					ended.insert(pair);
+				}
+				SuspendedContacts.erase(*key);
+				key = ActiveContacts.erase(key);
+			}
+
+			ScriptEngine* scriptEngine = scene->GetScriptEngine();
+			for (const EntityPair& pair : ended)
+			{
+				const UUID other = pair.first == id ? UUID(pair.second) : UUID(pair.first);
+				const bool isTrigger = trigger || IsTrigger(other);
+				Entity a = scene->GetEntityByUUID(pair.first);
+				Entity b = scene->GetEntityByUUID(pair.second);
+				if (scriptEngine && a && b)
+					scriptEngine->OnContactEvent(isTrigger ? ContactEventType::TriggerExit : ContactEventType::CollisionEnd, a, b);
+			}
+		}
+
+		void OnPhysicsComponentChanged(entt::registry& registry, entt::entity entity)
+		{
+			if (const auto* id = registry.try_get<IDComponent>(entity))
+				DirtyEntities.insert(id->ID);
+		}
+
+		// A MeshCollider without its own Mesh collides by the entity's MeshComponent.
+		void OnMeshChanged(entt::registry& registry, entt::entity entity)
+		{
+			if (const auto* collider = registry.try_get<MeshColliderComponent>(entity); collider && collider->Mesh.empty())
+				OnPhysicsComponentChanged(registry, entity);
+		}
+
+		// Only a different mesh changes the collider.
+		void OnMeshUpdated(entt::registry& registry, entt::entity entity)
+		{
+			const auto* id = registry.try_get<IDComponent>(entity);
+			const auto& mesh = registry.get<MeshComponent>(entity);
+			const std::pair borrowed(mesh.Mesh, mesh.MeshIndex);
+			if (auto it = id ? Bodies.find(id->ID) : Bodies.end(); it != Bodies.end() && it->second.BorrowedMesh == borrowed)
+				return;
+			if (auto it = id ? Characters.find(id->ID) : Characters.end(); it != Characters.end() && it->second.BorrowedMesh == borrowed)
+				return;
+			OnMeshChanged(registry, entity);
+		}
+
+		void OnCharacterChanged(entt::registry& registry, entt::entity entity)
+		{
+			if (const auto* id = registry.try_get<IDComponent>(entity))
+				DirtyCharacters.insert(id->ID);
+		}
+
+		void OnJointChanged(entt::registry& registry, entt::entity entity)
+		{
+			if (const auto* id = registry.try_get<IDComponent>(entity))
+				DirtyJoints.insert(id->ID);
+		}
+
+		void OnJointDestroyed(entt::registry& registry, entt::entity entity)
+		{
+			if (const auto* id = registry.try_get<IDComponent>(entity))
+			{
+				RemoveJoint(id->ID);
+				DirtyJoints.erase(id->ID);
+				LoggedJointWarnings.erase(id->ID);
+			}
+		}
+	};
+
+}
