@@ -460,6 +460,7 @@ namespace Basalt {
 			r.Field("LinearMotorTarget", c.LinearMotorTarget);
 			r.Field("AngularMotorTarget", c.AngularMotorTarget);
 			r.Field("MotorMaxForce", c.MotorMaxForce);
+			r.Field("MotorMaxTorque", c.MotorMaxTorque);
 			r.Field("MotorSpringFrequency", c.MotorSpringFrequency);
 			r.Field("MotorSpringDamping", c.MotorSpringDamping);
 			r.Field("BreakForce", c.BreakForce);
@@ -635,6 +636,7 @@ namespace Basalt {
 				{ "LinearMotorTarget", ToJson(c.LinearMotorTarget) },
 				{ "AngularMotorTarget", ToJson(c.AngularMotorTarget) },
 				{ "MotorMaxForce", c.MotorMaxForce },
+				{ "MotorMaxTorque", c.MotorMaxTorque },
 				{ "MotorSpringFrequency", c.MotorSpringFrequency },
 				{ "MotorSpringDamping", c.MotorSpringDamping },
 				{ "BreakForce", c.BreakForce },

@@ -1839,6 +1839,51 @@ TEST_SUITE("Physics")
 		scene.OnSimulationStop();
 	}
 
+	TEST_CASE("MotorMaxTorque caps rotation motors apart from MotorMaxForce; 0 shares the force cap")
+	{
+		Scene scene;
+		// Slides along X at 2 m/s and turns 60 degrees around Z, each capped separately.
+		auto powered = [&](float z, float maxForce, float maxTorque) {
+			Entity box = CreateWeightlessBox(scene, { 0.0f, 0.0f, z });
+			auto& joint = box.AddComponent<JointComponent>();
+			joint.Type = JointType::SixDOF;
+			joint.Axis = { 1.0f, 0.0f, 0.0f };
+			joint.SecondaryAxis = { 0.0f, 1.0f, 0.0f };
+			joint.FreeLinearAxes.x = true;
+			joint.LinearMotorMode[0] = JointMotorMode::Velocity;
+			joint.LinearMotorTarget.x = 2.0f;
+			joint.AngularMotorMode[2] = JointMotorMode::Position;
+			joint.AngularMotorTarget.z = 60.0f;
+			joint.MotorSpringFrequency = 5.0f;
+			joint.MotorMaxForce = maxForce;
+			joint.MotorMaxTorque = maxTorque;
+			return box;
+		};
+		Entity shared = powered(0.0f, 0.2f, 0.0f);
+		Entity strongTorque = powered(5.0f, 0.2f, 1000.0f);
+		Entity weakTorque = powered(10.0f, 1000.0f, 0.2f);
+		Entity hinge = CreateWeightlessBox(scene, { 0.0f, 0.0f, 15.0f });
+		auto& hingeJoint = hinge.AddComponent<JointComponent>();
+		hingeJoint.Axis = { 0.0f, 0.0f, 1.0f };
+		hingeJoint.MotorMode = JointMotorMode::Position;
+		hingeJoint.MotorTarget = 60.0f;
+		hingeJoint.MotorSpringFrequency = 5.0f;
+		hingeJoint.MotorMaxTorque = 0.2f;
+
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		Simulate(scene, 0.5f);
+		// 0.2 N gives a 1 kg box 0.1 m/s in half a second, and 0.2 N·m barely turns it.
+		CHECK(physics.GetLinearVelocity(shared).x < 0.2f);
+		CHECK(physics.GetJointRotation(shared).value().z < 15.0f);
+		CHECK(physics.GetLinearVelocity(strongTorque).x < 0.2f);
+		CHECK(physics.GetJointRotation(strongTorque).value().z == doctest::Approx(60.0f).epsilon(0.05));
+		CHECK(physics.GetLinearVelocity(weakTorque).x == doctest::Approx(2.0f).epsilon(0.02));
+		CHECK(physics.GetJointRotation(weakTorque).value().z < 15.0f);
+		CHECK(physics.GetJointPosition(hinge).value() < 15.0f);
+		scene.OnSimulationStop();
+	}
+
 	TEST_CASE("Six-DOF free axes ignore their limits and motors on locked axes warn")
 	{
 		Scene scene;

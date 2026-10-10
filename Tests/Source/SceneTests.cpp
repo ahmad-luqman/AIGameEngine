@@ -234,6 +234,7 @@ TEST_SUITE("Serialization")
 				  .LinearMotorTarget = { 0.5f, 0.0f, -1.0f },
 				  .AngularMotorTarget = { 45.0f, 10.0f, 0.0f },
 				  .MotorMaxForce = 250.0f,
+				  .MotorMaxTorque = 75.0f,
 				  .MotorSpringFrequency = 8.0f,
 				  .MotorSpringDamping = 0.5f,
 				  .BreakForce = 100.0f,
@@ -530,6 +531,12 @@ TEST_SUITE("Serialization")
 		ragdoll.AngularMotorTarget = { 10.0f, 0.0f, 0.0f };
 		ragdoll.MotorSpringDamping = 0.5f;
 		CHECK(GetIgnoredJointFields(ragdoll) == std::vector<std::string>{ "MotorMode" });
+		// A hinge with its own MotorMaxTorque no longer reads MotorMaxForce.
+		JointComponent torqueHinge;
+		torqueHinge.MotorMaxForce = 50.0f;
+		CHECK(GetIgnoredJointFields(torqueHinge).empty());
+		torqueHinge.MotorMaxTorque = 20.0f;
+		CHECK(GetIgnoredJointFields(torqueHinge) == std::vector<std::string>{ "MotorMaxForce" });
 		// A rotation motor makes a six-DOF joint without limits hold torque, so BreakTorque applies.
 		ragdoll.BreakTorque = 10.0f;
 		CHECK_FALSE(JointFieldApplies(ragdoll, "BreakTorque"));
@@ -566,6 +573,7 @@ TEST_SUITE("Serialization")
 			{ "LinearMotorTarget", "0000000000000000000000001111" },
 			{ "AngularMotorTarget", "0000000000000000000000001111" },
 			{ "MotorMaxForce", "0000000011111111000000001111" },
+			{ "MotorMaxTorque", "0000000011110000000000001111" },
 			{ "MotorSpringFrequency", "0000000011111111000000001111" },
 			{ "MotorSpringDamping", "0000000011111111000000001111" },
 			{ "BreakForce", "1111111111111111111111111111" },
@@ -625,6 +633,7 @@ TEST_SUITE("Serialization")
 			{ "LinearMotorTarget", [](JointComponent& j) { j.LinearMotorTarget.x += 1.0f; } },
 			{ "AngularMotorTarget", [](JointComponent& j) { j.AngularMotorTarget.x += 1.0f; } },
 			{ "MotorMaxForce", [](JointComponent& j) { j.MotorMaxForce += 1.0f; } },
+			{ "MotorMaxTorque", [](JointComponent& j) { j.MotorMaxTorque += 1.0f; } },
 			{ "MotorSpringFrequency", [](JointComponent& j) { j.MotorSpringFrequency += 1.0f; } },
 			{ "MotorSpringDamping", [](JointComponent& j) { j.MotorSpringDamping += 1.0f; } },
 			{ "BreakForce", [](JointComponent& j) { j.BreakForce += 1.0f; } },
@@ -735,6 +744,9 @@ TEST_SUITE("Serialization")
 		CHECK(joint.AngularMotorMode == defaults.AngularMotorMode);
 		CHECK(joint.MotorSpringFrequency == 2.0f);
 		CHECK(joint.MotorSpringDamping == 1.0f);
+		// MotorMaxForce keeps capping the torque too, as it did when it was the only limit.
+		CHECK(joint.MotorMaxTorque == 0.0f);
+		CHECK(JointFieldApplies(joint, "MotorMaxForce"));
 	}
 
 	TEST_CASE("A prefab with joints spawned during play builds them between the new copies")

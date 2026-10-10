@@ -287,11 +287,14 @@ namespace Basalt {
 		std::array<JointMotorMode, 3> AngularMotorMode = { JointMotorMode::Off, JointMotorMode::Off, JointMotorMode::Off };
 		glm::vec3 LinearMotorTarget = { 0.0f, 0.0f, 0.0f };
 		glm::vec3 AngularMotorTarget = { 0.0f, 0.0f, 0.0f };
-		// Strongest torque (N·m, hinges and six-DOF rotation) or force (N, sliders and six-DOF translation) a
-		// motor may apply.
+		// Strongest force (N) a slider or six-DOF translation motor may apply.
 		float MotorMaxForce = 1000.0f;
+		// Strongest torque (N·m) a hinge or six-DOF rotation motor may apply; 0 uses MotorMaxForce, which capped
+		// both before this field existed (so a ragdoll can drive its limbs weakly and its root hard).
+		float MotorMaxTorque = 0.0f;
 		// The spring a Position motor pulls toward its target with (hinge, slider, six-DOF): a higher frequency
-		// (Hz, > 0) is stiffer, still capped by MotorMaxForce. Damping is a ratio, 1 = critically damped.
+		// (Hz, > 0) is stiffer, still capped by the motor's force or torque. Damping is a ratio, 1 = critically
+		// damped.
 		float MotorSpringFrequency = 2.0f;
 		float MotorSpringDamping = 1.0f;
 		// The joint breaks when its constraint force (N) or torque (N·m), motor and limit effort included,
