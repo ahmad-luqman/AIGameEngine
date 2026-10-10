@@ -1,0 +1,1057 @@
+{
+	"Format": "BasaltScene",
+	"Version": 1,
+	"Name": "PhysicsPile",
+	"Physics": {
+		"Gravity": [
+			0,
+			-9.81,
+			0
+		],
+		"FixedTimestep": 0.016666668,
+		"MaxStepsPerFrame": 8
+	},
+	"Entities": [
+		{
+			"ID": 1,
+			"Name": "Camera",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						0,
+						6,
+						22
+					]
+				},
+				"Camera": {
+					"Primary": true
+				}
+			}
+		},
+		{
+			"ID": 2,
+			"Name": "Ground",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						0,
+						-0.5,
+						0
+					]
+				},
+				"RigidBody": {
+					"Friction": 0.7
+				},
+				"BoxCollider": {
+					"HalfExtents": [
+						30,
+						0.5,
+						30
+					]
+				}
+			}
+		},
+		{
+			"ID": 3,
+			"Name": "Wall",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						-6,
+						2,
+						0
+					]
+				},
+				"RigidBody": {},
+				"BoxCollider": {
+					"HalfExtents": [
+						0.5,
+						2,
+						8
+					]
+				}
+			}
+		},
+		{
+			"ID": 4,
+			"Name": "Tower0Box0",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						-2.0,
+						0.5,
+						0.0
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 1.0,
+					"Restitution": 0.1,
+					"FrictionCombine": "Average"
+				},
+				"BoxCollider": {}
+			}
+		},
+		{
+			"ID": 5,
+			"Name": "Tower0Box1",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						-1.93,
+						1.52,
+						0.0
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 1.25,
+					"Restitution": 0.1,
+					"FrictionCombine": "Average"
+				},
+				"BoxCollider": {}
+			}
+		},
+		{
+			"ID": 6,
+			"Name": "Tower0Box2",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						-1.8599999999999999,
+						2.54,
+						0.0
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 1.5,
+					"Restitution": 0.1,
+					"FrictionCombine": "Average"
+				},
+				"BoxCollider": {}
+			}
+		},
+		{
+			"ID": 7,
+			"Name": "Tower0Box3",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						-1.79,
+						3.56,
+						0.0
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 1.75,
+					"Restitution": 0.1,
+					"FrictionCombine": "Average"
+				},
+				"BoxCollider": {}
+			}
+		},
+		{
+			"ID": 8,
+			"Name": "Tower0Box4",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						-1.72,
+						4.58,
+						0.0
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 2.0,
+					"Restitution": 0.1,
+					"FrictionCombine": "Average"
+				},
+				"BoxCollider": {}
+			}
+		},
+		{
+			"ID": 9,
+			"Name": "Tower0Box5",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						-1.65,
+						5.6,
+						0.0
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 2.25,
+					"Restitution": 0.1,
+					"FrictionCombine": "Average"
+				},
+				"BoxCollider": {}
+			}
+		},
+		{
+			"ID": 10,
+			"Name": "Tower1Box0",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						0.0,
+						0.5,
+						0.13
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 1.0,
+					"Restitution": 0.1,
+					"FrictionCombine": "Average"
+				},
+				"BoxCollider": {}
+			}
+		},
+		{
+			"ID": 11,
+			"Name": "Tower1Box1",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						-0.07,
+						1.52,
+						0.13
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 1.25,
+					"Restitution": 0.1,
+					"FrictionCombine": "Average"
+				},
+				"BoxCollider": {}
+			}
+		},
+		{
+			"ID": 12,
+			"Name": "Tower1Box2",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						-0.14,
+						2.54,
+						0.13
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 1.5,
+					"Restitution": 0.1,
+					"FrictionCombine": "Average"
+				},
+				"BoxCollider": {}
+			}
+		},
+		{
+			"ID": 13,
+			"Name": "Tower1Box3",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						-0.21000000000000002,
+						3.56,
+						0.13
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 1.75,
+					"Restitution": 0.1,
+					"FrictionCombine": "Average"
+				},
+				"BoxCollider": {}
+			}
+		},
+		{
+			"ID": 14,
+			"Name": "Tower1Box4",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						-0.28,
+						4.58,
+						0.13
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 2.0,
+					"Restitution": 0.1,
+					"FrictionCombine": "Average"
+				},
+				"BoxCollider": {}
+			}
+		},
+		{
+			"ID": 15,
+			"Name": "Tower1Box5",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						-0.35000000000000003,
+						5.6,
+						0.13
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 2.25,
+					"Restitution": 0.1,
+					"FrictionCombine": "Average"
+				},
+				"BoxCollider": {}
+			}
+		},
+		{
+			"ID": 16,
+			"Name": "Tower2Box0",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						2.0,
+						0.5,
+						0.26
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 1.0,
+					"Restitution": 0.1,
+					"FrictionCombine": "Average"
+				},
+				"BoxCollider": {}
+			}
+		},
+		{
+			"ID": 17,
+			"Name": "Tower2Box1",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						2.07,
+						1.52,
+						0.26
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 1.25,
+					"Restitution": 0.1,
+					"FrictionCombine": "Average"
+				},
+				"BoxCollider": {}
+			}
+		},
+		{
+			"ID": 18,
+			"Name": "Tower2Box2",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						2.14,
+						2.54,
+						0.26
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 1.5,
+					"Restitution": 0.1,
+					"FrictionCombine": "Average"
+				},
+				"BoxCollider": {}
+			}
+		},
+		{
+			"ID": 19,
+			"Name": "Tower2Box3",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						2.21,
+						3.56,
+						0.26
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 1.75,
+					"Restitution": 0.1,
+					"FrictionCombine": "Average"
+				},
+				"BoxCollider": {}
+			}
+		},
+		{
+			"ID": 20,
+			"Name": "Tower2Box4",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						2.2800000000000002,
+						4.58,
+						0.26
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 2.0,
+					"Restitution": 0.1,
+					"FrictionCombine": "Average"
+				},
+				"BoxCollider": {}
+			}
+		},
+		{
+			"ID": 21,
+			"Name": "Tower2Box5",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						2.35,
+						5.6,
+						0.26
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 2.25,
+					"Restitution": 0.1,
+					"FrictionCombine": "Average"
+				},
+				"BoxCollider": {}
+			}
+		},
+		{
+			"ID": 22,
+			"Name": "Ball0",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						-3.0,
+						9.0,
+						-0.4
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 2,
+					"Restitution": 0.4,
+					"RestitutionCombine": "Max"
+				},
+				"SphereCollider": {
+					"Radius": 0.35
+				}
+			}
+		},
+		{
+			"ID": 23,
+			"Name": "Ball1",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						-2.15,
+						9.6,
+						-0.29000000000000004
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 2,
+					"Restitution": 0.4,
+					"RestitutionCombine": "Max"
+				},
+				"SphereCollider": {
+					"Radius": 0.35
+				}
+			}
+		},
+		{
+			"ID": 24,
+			"Name": "Ball2",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						-1.3,
+						10.2,
+						-0.18000000000000002
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 2,
+					"Restitution": 0.4,
+					"RestitutionCombine": "Max"
+				},
+				"SphereCollider": {
+					"Radius": 0.35
+				}
+			}
+		},
+		{
+			"ID": 25,
+			"Name": "Ball3",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						-0.4500000000000002,
+						10.8,
+						-0.07
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 2,
+					"Restitution": 0.4,
+					"RestitutionCombine": "Max"
+				},
+				"SphereCollider": {
+					"Radius": 0.35
+				}
+			}
+		},
+		{
+			"ID": 26,
+			"Name": "Ball4",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						0.3999999999999999,
+						11.4,
+						0.03999999999999998
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 2,
+					"Restitution": 0.4,
+					"RestitutionCombine": "Max"
+				},
+				"SphereCollider": {
+					"Radius": 0.35
+				}
+			}
+		},
+		{
+			"ID": 27,
+			"Name": "Ball5",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						1.25,
+						12.0,
+						0.15000000000000002
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 2,
+					"Restitution": 0.4,
+					"RestitutionCombine": "Max"
+				},
+				"SphereCollider": {
+					"Radius": 0.35
+				}
+			}
+		},
+		{
+			"ID": 28,
+			"Name": "Ball6",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						2.0999999999999996,
+						12.6,
+						0.26
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 2,
+					"Restitution": 0.4,
+					"RestitutionCombine": "Max"
+				},
+				"SphereCollider": {
+					"Radius": 0.35
+				}
+			}
+		},
+		{
+			"ID": 29,
+			"Name": "Ball7",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						2.95,
+						13.2,
+						0.37
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 2,
+					"Restitution": 0.4,
+					"RestitutionCombine": "Max"
+				},
+				"SphereCollider": {
+					"Radius": 0.35
+				}
+			}
+		},
+		{
+			"ID": 30,
+			"Name": "Capsule0",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						-1.5,
+						14.0,
+						0.6
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 1.5
+				},
+				"CapsuleCollider": {
+					"Radius": 0.25,
+					"HalfHeight": 0.4
+				}
+			}
+		},
+		{
+			"ID": 31,
+			"Name": "Capsule1",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						-0.3999999999999999,
+						14.5,
+						0.6
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 1.5
+				},
+				"CapsuleCollider": {
+					"Radius": 0.25,
+					"HalfHeight": 0.4
+				}
+			}
+		},
+		{
+			"ID": 32,
+			"Name": "Capsule2",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						0.7000000000000002,
+						15.0,
+						0.6
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 1.5
+				},
+				"CapsuleCollider": {
+					"Radius": 0.25,
+					"HalfHeight": 0.4
+				}
+			}
+		},
+		{
+			"ID": 33,
+			"Name": "Capsule3",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						1.8000000000000003,
+						15.5,
+						0.6
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 1.5
+				},
+				"CapsuleCollider": {
+					"Radius": 0.25,
+					"HalfHeight": 0.4
+				}
+			}
+		},
+		{
+			"ID": 34,
+			"Name": "HullCrate",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						1.0,
+						18,
+						-0.3
+					],
+					"Scale": [
+						1.4,
+						0.8,
+						1.1
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 3
+				},
+				"MeshCollider": {
+					"Mesh": "builtin://Cube",
+					"Convex": true
+				}
+			}
+		},
+		{
+			"ID": 35,
+			"Name": "Cannonball",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						12,
+						1.2,
+						0.2
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 20,
+					"GravityFactor": 0,
+					"LinearDamping": 0,
+					"Continuous": true
+				},
+				"SphereCollider": {
+					"Radius": 0.5
+				}
+			}
+		},
+		{
+			"ID": 36,
+			"Name": "Link0",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						4,
+						9.0,
+						0
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 0.5
+				},
+				"BoxCollider": {
+					"HalfExtents": [
+						0.1,
+						0.45,
+						0.1
+					]
+				},
+				"Joint": {
+					"Type": "Hinge",
+					"Anchor": [
+						0,
+						0.45,
+						0
+					],
+					"Axis": [
+						0,
+						0,
+						1
+					],
+					"UseLimits": true,
+					"LimitMin": -60,
+					"LimitMax": 60
+				}
+			}
+		},
+		{
+			"ID": 37,
+			"Name": "Link1",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						4,
+						8.0,
+						0
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 0.5
+				},
+				"BoxCollider": {
+					"HalfExtents": [
+						0.1,
+						0.45,
+						0.1
+					]
+				},
+				"Joint": {
+					"Type": "Hinge",
+					"Anchor": [
+						0,
+						0.45,
+						0
+					],
+					"Axis": [
+						0,
+						0,
+						1
+					],
+					"UseLimits": true,
+					"LimitMin": -60,
+					"LimitMax": 60,
+					"ConnectedEntity": 36
+				}
+			}
+		},
+		{
+			"ID": 38,
+			"Name": "Link2",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						4,
+						7.0,
+						0
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 0.5
+				},
+				"BoxCollider": {
+					"HalfExtents": [
+						0.1,
+						0.45,
+						0.1
+					]
+				},
+				"Joint": {
+					"Type": "Hinge",
+					"Anchor": [
+						0,
+						0.45,
+						0
+					],
+					"Axis": [
+						0,
+						0,
+						1
+					],
+					"UseLimits": true,
+					"LimitMin": -60,
+					"LimitMax": 60,
+					"ConnectedEntity": 37
+				}
+			}
+		},
+		{
+			"ID": 39,
+			"Name": "Link3",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						4,
+						6.0,
+						0
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 0.5
+				},
+				"BoxCollider": {
+					"HalfExtents": [
+						0.1,
+						0.45,
+						0.1
+					]
+				},
+				"Joint": {
+					"Type": "Hinge",
+					"Anchor": [
+						0,
+						0.45,
+						0
+					],
+					"Axis": [
+						0,
+						0,
+						1
+					],
+					"UseLimits": true,
+					"LimitMin": -60,
+					"LimitMax": 60,
+					"ConnectedEntity": 38
+				}
+			}
+		},
+		{
+			"ID": 40,
+			"Name": "Link4",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						4,
+						5.0,
+						0
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 0.5
+				},
+				"BoxCollider": {
+					"HalfExtents": [
+						0.1,
+						0.45,
+						0.1
+					]
+				},
+				"Joint": {
+					"Type": "Hinge",
+					"Anchor": [
+						0,
+						0.45,
+						0
+					],
+					"Axis": [
+						0,
+						0,
+						1
+					],
+					"UseLimits": true,
+					"LimitMin": -60,
+					"LimitMax": 60,
+					"ConnectedEntity": 39
+				}
+			}
+		},
+		{
+			"ID": 41,
+			"Name": "Limb",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						7,
+						3,
+						0
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"GravityFactor": 0
+				},
+				"BoxCollider": {
+					"HalfExtents": [
+						0.1,
+						0.5,
+						0.1
+					]
+				},
+				"Joint": {
+					"Type": "SixDOF",
+					"Anchor": [
+						0,
+						0.5,
+						0
+					],
+					"Axis": [
+						0,
+						-1,
+						0
+					],
+					"SecondaryAxis": [
+						1,
+						0,
+						0
+					],
+					"AngularMotorMode": [
+						"Velocity",
+						"Off",
+						"Position"
+					],
+					"AngularMotorTarget": [
+						45,
+						0,
+						30
+					],
+					"MotorSpringFrequency": 3
+				}
+			}
+		},
+		{
+			"ID": 42,
+			"Name": "Piston",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						9,
+						0.6,
+						0
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"GravityFactor": 0
+				},
+				"BoxCollider": {
+					"HalfExtents": [
+						0.3,
+						0.3,
+						0.3
+					]
+				},
+				"Joint": {
+					"Type": "Slider",
+					"Axis": [
+						1,
+						0,
+						0
+					],
+					"UseLimits": true,
+					"LimitMin": -2,
+					"LimitMax": 2,
+					"MotorMode": "Velocity",
+					"MotorTarget": -1.5,
+					"MotorMaxForce": 400
+				}
+			}
+		},
+		{
+			"ID": 43,
+			"Name": "Character",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						-4,
+						3,
+						1.5
+					]
+				},
+				"CapsuleCollider": {},
+				"CharacterController": {
+					"MaxStrength": 50
+				}
+			}
+		}
+	]
+}

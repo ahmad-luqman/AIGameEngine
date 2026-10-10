@@ -87,12 +87,17 @@ add_test(NAME SampleJoints
 add_test(NAME SampleTetrisReplay
 	COMMAND BasaltCLI --project "${PROJECT_SOURCE_DIR}/Samples/Tetris" batch "${PROJECT_SOURCE_DIR}/Samples/Tetris/test_replay.json")
 
+# Cross-platform determinism: a physics-heavy scene must reach the same state hashes on every platform
+# and build type (Tests/Data/Determinism).
+add_test(NAME PhysicsDeterminism
+	COMMAND BasaltCLI --project "${PROJECT_SOURCE_DIR}/Tests/Data/Determinism" --no-save batch "${PROJECT_SOURCE_DIR}/Tests/Data/Determinism/Determinism.batch.json")
+
 # Labels let CI jobs pick test groups (ctest -L gpu, ctest -LE "gpu|format").
 set_tests_properties(BasaltTests PROPERTIES LABELS unit)
-set_tests_properties(FeatureTest SampleTetris SampleTetrisReplay SampleJoints PROPERTIES LABELS integration)
+set_tests_properties(FeatureTest SampleTetris SampleTetrisReplay SampleJoints PhysicsDeterminism PROPERTIES LABELS integration)
 if(TEST CodeFormat)
 	set_tests_properties(CodeFormat PROPERTIES LABELS format)
 endif()
 if(BASALT_SANITIZE)
-	set_property(TEST BasaltTests FeatureTest SampleTetris SampleTetrisReplay SampleJoints APPEND PROPERTY ENVIRONMENT ${BASALT_SANITIZER_ENVIRONMENT})
+	set_property(TEST BasaltTests FeatureTest SampleTetris SampleTetrisReplay SampleJoints PhysicsDeterminism APPEND PROPERTY ENVIRONMENT ${BASALT_SANITIZER_ENVIRONMENT})
 endif()
