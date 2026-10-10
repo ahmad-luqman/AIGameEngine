@@ -52,7 +52,7 @@ namespace Basalt {
 			// Pose last written to / read from the entity, used to detect transforms changed by scripts.
 			glm::vec3 LastPosition = { 0.0f, 0.0f, 0.0f };
 			glm::quat LastRotation = { 1.0f, 0.0f, 0.0f, 0.0f };
-			// The world scale the colliders were built with (see MarkRescaledDirty).
+			// The world scale the colliders were built with (see PhysicsWorld::ApplyScaleChanges).
 			glm::vec3 BuiltScale = { 1.0f, 1.0f, 1.0f };
 		};
 
@@ -125,6 +125,9 @@ namespace Basalt {
 		// character out before its record goes, in creation order otherwise.
 		JPH::CharacterVsCharacterCollisionSimple CharacterCollision;
 		CharacterLayerFilter CharacterListener;
+		// Entities that got no body or character because their transform could not be decomposed (e.g. a zero
+		// scale); ApplyScaleChanges builds them once it can.
+		std::unordered_set<UUID> Degenerate;
 		// Characters whose CharacterControllerComponent changed (collider changes go to DirtyEntities).
 		PhysicsInternal::DirtySet DirtyCharacters;
 		// Character warnings (sanitized settings, an ignored RigidBody, a missing collider).
@@ -204,12 +207,6 @@ namespace Basalt {
 		// to count as a rescale), so its magnitudes are kept exactly. Their signs come from the matrix: it cannot
 		// say which axis was mirrored, and the decomposed rotation assumes its own choice (see DecomposeTransform).
 		static void WritePose(Scene* scene, Entity entity, const glm::vec3& position, const glm::quat& rotation);
-
-		// Colliders are sized by the entity's world scale, which a script, an animation or a parent can change
-		// without touching a physics component: marks bodies and characters whose scale differs from the one
-		// they were built with for a rebuild. Runs once per Step, in registry order, before dirty entities are
-		// rebuilt, so a rebuilt body's joints are back before the next fixed step.
-		void MarkRescaledDirty(Scene* scene);
 
 		void OnPhysicsComponentChanged(entt::registry& registry, entt::entity entity);
 

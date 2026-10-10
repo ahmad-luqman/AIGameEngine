@@ -175,6 +175,15 @@ namespace Basalt {
 	private:
 		// Rebuilds (or removes) the entity's character; keeps its velocity and the last Move velocity.
 		void RecreateCharacter(Entity entity);
+		// Colliders are sized by the entity's world scale, which a script, an animation or a parent can change
+		// without touching a physics component. Once per Step, after dirty entities are rebuilt, bodies and
+		// characters whose scale differs from the one they were built with get a new shape in place, keeping
+		// their contacts (so an animated scale does not end and restart every overlap each frame); a body's
+		// joints are rebuilt from the current poses, since their anchors scale with it.
+		// Entities left without a body by a degenerate transform are built once it decomposes again.
+		void ApplyScaleChanges();
+		void ResizeBody(Entity entity, const glm::vec3& scale);
+		void ResizeCharacter(Entity entity, const glm::vec3& scale);
 		// Applies changed CharacterController settings in place, rebuilding only when the layer changed.
 		void ApplyCharacterSettings(Entity entity);
 		void UpdateCharacters(float fixedStep);

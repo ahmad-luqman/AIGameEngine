@@ -911,6 +911,45 @@ TEST_SUITE("Physics")
 		scene.OnSimulationStop();
 	}
 
+	TEST_CASE("Rescaling a jointed body rebuilds its joint with the anchor at the new scale")
+	{
+		// Hung by a point joint 1 m above its centre (the anchor is in its scaled local space).
+		Scene scene;
+		Entity box = CreateBox(scene, { 0.0f, 3.0f, 0.0f });
+		HangFromWorld(box, JointType::Point);
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		scene.OnUpdate(Step);
+
+		// Twice the size: the anchor is now 2 m above the centre, so the box swings 2 m below (0, 5, 0).
+		box.GetTransform().Scale = glm::vec3(2.0f);
+		scene.OnUpdate(Step);
+		CHECK(physics.HasJoint(box));
+		physics.SetLinearVelocity(box, { 3.0f, 0.0f, 0.0f });
+		Simulate(scene, 1.0f);
+		CHECK(glm::distance(box.GetTransform().Translation, glm::vec3(0.0f, 5.0f, 0.0f)) == doctest::Approx(2.0f).epsilon(0.02));
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("An entity with a zero scale gets its body once the scale is valid again")
+	{
+		Scene scene;
+		CreateGround(scene);
+		Entity box = CreateBox(scene, { 0.0f, 3.0f, 0.0f });
+		box.GetTransform().Scale = glm::vec3(0.0f);
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		scene.OnUpdate(Step);
+		CHECK_FALSE(physics.HasBody(box));
+
+		box.GetTransform().Scale = glm::vec3(1.0f);
+		scene.OnUpdate(Step);
+		CHECK(physics.HasBody(box));
+		Simulate(scene, 2.0f);
+		CHECK(box.GetTransform().Translation.y == doctest::Approx(0.5f).epsilon(0.02));
+		scene.OnSimulationStop();
+	}
+
 	TEST_CASE("Writing simulated poses back keeps the entity's scale exact")
 	{
 		Scene scene;
