@@ -52,19 +52,6 @@ namespace Basalt {
 		return true;
 	}
 
-	void PhysicsWorld::Impl::ReportCharacterWarnings(Entity entity, const std::string& warnings)
-	{
-		if (warnings.empty())
-		{
-			LoggedCharacterWarnings.erase(entity.GetUUID());
-		}
-		else if (std::string& logged = LoggedCharacterWarnings[entity.GetUUID()]; logged != warnings)
-		{
-			logged = warnings;
-			BS_CORE_WARN("Physics: character '{}': {}", entity.GetName(), warnings);
-		}
-	}
-
 	void PhysicsWorld::Impl::RemoveCharacter(Scene* scene, UUID uuid)
 	{
 		auto it = Characters.find(uuid);
@@ -108,11 +95,9 @@ namespace Basalt {
 
 		const auto& controller = entity.GetComponent<CharacterControllerComponent>();
 		// Problems with the settings, joined with "; " and logged when they differ from the last ones logged.
-		std::string warnings;
-		auto warn = [&warnings](const std::string& warning) {
-			warnings += (warnings.empty() ? "" : "; ") + warning;
-		};
-		auto report = [&]() { impl.ReportCharacterWarnings(entity, warnings); };
+		std::vector<std::string> warnings;
+		auto warn = [&warnings](const std::string& warning) { warnings.push_back(warning); };
+		auto report = [&]() { impl.CharacterWarnings.Report(entity, warnings); };
 		if (entity.HasComponent<RigidBodyComponent>())
 			warn("its RigidBody is ignored (the character controller replaces it)");
 
@@ -213,11 +198,9 @@ namespace Basalt {
 		if (controller == record.Settings)
 			return;
 		record.Settings = controller;
-		std::string warnings = record.BuildWarnings;
-		Impl::ConfigureCharacter(record, [&warnings](const std::string& warning) {
-			warnings += (warnings.empty() ? "" : "; ") + warning;
-		});
-		impl.ReportCharacterWarnings(entity, warnings);
+		std::vector<std::string> warnings = record.BuildWarnings;
+		Impl::ConfigureCharacter(record, [&warnings](const std::string& warning) { warnings.push_back(warning); });
+		impl.CharacterWarnings.Report(entity, warnings);
 	}
 
 	void PhysicsWorld::UpdateCharacters(float fixedStep)
@@ -242,14 +225,18 @@ namespace Basalt {
 			if (!Math::DecomposeTransform(m_Scene->GetWorldTransform(entity), position, rotation, scale))
 			{
 				if (!record.Degenerate)
-					impl.ReportCharacterWarnings(entity, record.BuildWarnings + (record.BuildWarnings.empty() ? "" : "; ") + "degenerate transform (e.g. a zero scale); the character does not move");
+				{
+					std::vector<std::string> warnings = record.BuildWarnings;
+					warnings.emplace_back("degenerate transform (e.g. a zero scale); the character does not move");
+					impl.CharacterWarnings.Report(entity, warnings);
+				}
 				record.Degenerate = true;
 				continue;
 			}
 			if (record.Degenerate)
 			{
 				record.Degenerate = false;
-				impl.ReportCharacterWarnings(entity, record.BuildWarnings);
+				impl.CharacterWarnings.Report(entity, record.BuildWarnings);
 			}
 			const JPH::ObjectLayer layer = MakeObjectLayer(true, record.Layer);
 			const JPH::DefaultBroadPhaseLayerFilter broadPhaseFilter(impl.ObjectVsBroadPhaseLayerFilter, layer);

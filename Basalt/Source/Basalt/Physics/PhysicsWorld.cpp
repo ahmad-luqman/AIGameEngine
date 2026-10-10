@@ -276,21 +276,9 @@ namespace Basalt {
 
 		// Problems with the body's settings, joined with "; ". Logged when they differ from the last ones
 		// logged for this entity, so a script that sets the component every frame does not flood the log.
-		std::string warnings;
-		auto warn = [&warnings](const std::string& warning) {
-			warnings += (warnings.empty() ? "" : "; ") + warning;
-		};
-		auto reportWarnings = [&]() {
-			if (warnings.empty())
-			{
-				impl.LoggedBodyWarnings.erase(entity.GetUUID());
-			}
-			else if (std::string& logged = impl.LoggedBodyWarnings[entity.GetUUID()]; logged != warnings)
-			{
-				logged = warnings;
-				BS_CORE_WARN("Physics: entity '{}': {}", entity.GetName(), warnings);
-			}
-		};
+		std::vector<std::string> warnings;
+		auto warn = [&warnings](const std::string& warning) { warnings.push_back(warning); };
+		auto reportWarnings = [&]() { impl.BodyWarnings.Report(entity, warnings); };
 
 		// Jolt cannot simulate a triangle mesh on a dynamic body, so those always use the convex hull.
 		const ColliderShape colliders = BuildColliderShape(entity, scale, 1.0f, motionType == JPH::EMotionType::Dynamic ? "a dynamic body" : nullptr, rigidBody.IsTrigger, warn);
@@ -386,10 +374,10 @@ namespace Basalt {
 		m_Impl->RemoveJoint(entity.GetUUID());
 		m_Impl->DirtyEntities.erase(entity.GetUUID());
 		m_Impl->DirtyCharacters.erase(entity.GetUUID());
-		m_Impl->LoggedCharacterWarnings.erase(entity.GetUUID());
+		m_Impl->CharacterWarnings.Forget(entity.GetUUID());
 		m_Impl->DirtyJoints.erase(entity.GetUUID());
-		m_Impl->LoggedJointWarnings.erase(entity.GetUUID());
-		m_Impl->LoggedBodyWarnings.erase(entity.GetUUID());
+		m_Impl->JointWarnings.Forget(entity.GetUUID());
+		m_Impl->BodyWarnings.Forget(entity.GetUUID());
 	}
 
 	bool PhysicsWorld::HasBody(Entity entity) const

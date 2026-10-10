@@ -101,7 +101,7 @@ namespace Basalt {
 		{
 			RemoveJoint(id->ID);
 			DirtyJoints.erase(id->ID);
-			LoggedJointWarnings.erase(id->ID);
+			JointWarnings.Forget(id->ID);
 		}
 	}
 
@@ -146,28 +146,10 @@ namespace Basalt {
 			{
 				CreateJoint(entity, warnings);
 			}
-			ReportJointWarnings(entity, std::move(warnings));
+			m_Impl->JointWarnings.Report(entity, warnings);
 		}
 		impl.DirtyJoints.clear();
 		impl.UpdateIgnoredPairs();
-	}
-
-	void PhysicsWorld::ReportJointWarnings(Entity entity, std::vector<std::string> warnings)
-	{
-		// Messages name the offending values, so the same messages mean the same problem.
-		auto& logged = m_Impl->LoggedJointWarnings;
-		auto it = logged.find(entity.GetUUID());
-		if (warnings.empty())
-		{
-			if (it != logged.end())
-				logged.erase(it);
-			return;
-		}
-		if (it != logged.end() && it->second == warnings)
-			return;
-		for (const std::string& warning : warnings)
-			BS_CORE_WARN("Physics: joint on '{}': {}", entity.GetName(), warning);
-		logged[entity.GetUUID()] = std::move(warnings);
 	}
 
 	void PhysicsWorld::ApplyJointSettings(Entity entity, std::vector<std::string>& warnings)
