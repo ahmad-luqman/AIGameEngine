@@ -994,7 +994,8 @@
 						0,
 						-30
 					],
-					"MotorSpringFrequency": 3
+					"MotorSpringFrequency": 3,
+					"MotorMaxTorque": 250
 				}
 			}
 		},
@@ -1143,6 +1144,58 @@
 				}
 			},
 			"Parent": 46
+		},
+		{
+			"ID": 48,
+			"Name": "Bystander",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						-2.5,
+						3,
+						1
+					]
+				},
+				"CapsuleCollider": {},
+				"CharacterController": {}
+			}
+		},
+		{
+			"ID": 49,
+			"Name": "Sled",
+			"Components": {
+				"Transform": {
+					"Translation": [
+						-12,
+						0.5,
+						12
+					]
+				},
+				"RigidBody": {
+					"Type": "Dynamic",
+					"Mass": 2,
+					"Friction": 1,
+					"FixedRotation": true
+				},
+				"BoxCollider": {
+					"HalfExtents": [
+						0.5,
+						0.25,
+						0.5
+					],
+					"Offset": [
+						0,
+						1,
+						0
+					]
+				},
+				"SphereCollider": {
+					"Radius": 0.5,
+					"OverrideMaterial": true,
+					"Friction": 0.05,
+					"Restitution": 0.2
+				}
+			}
 		}
 	]
 }
