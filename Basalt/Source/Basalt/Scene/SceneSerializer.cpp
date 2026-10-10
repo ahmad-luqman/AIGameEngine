@@ -547,22 +547,32 @@ namespace Basalt {
 
 	}
 
+	namespace {
+
+		// Files store Transform rotations as Euler angles, which atan2/asin compute differently on each
+		// platform's math library. The stored quaternion is reached through basic arithmetic and sqrt only (load
+		// aside), so hashing it gives the same bits everywhere.
+		void ReplaceEulerRotations(nlohmann::json& data, Scene& scene)
+		{
+			for (nlohmann::json& entity : data["Entities"])
+			{
+				nlohmann::json& components = entity["Components"];
+				if (!components.contains("Transform"))
+					continue;
+				const glm::quat& rotation = scene.GetEntityByUUID(UUID(entity["ID"].get<uint64_t>())).GetTransform().Rotation;
+				components["Transform"]["Rotation"] = { rotation.w, rotation.x, rotation.y, rotation.z };
+			}
+		}
+
+	}
+
 	std::string SceneSerializer::ComputeStateHash(Scene& scene)
 	{
 		nlohmann::json data = SerializeScene(scene);
+		ReplaceEulerRotations(data, scene);
 		std::unordered_map<uint64_t, uint64_t> indices;
-		for (nlohmann::json& entity : data["Entities"])
-		{
-			const uint64_t id = entity["ID"].get<uint64_t>();
-			indices.emplace(id, indices.size() + 1);
-			// Files store rotations as Euler angles, which atan2/asin compute differently on each platform's
-			// math library; the quaternion itself is what physics produced, bit for bit.
-			if (nlohmann::json* transform = entity["Components"].contains("Transform") ? &entity["Components"]["Transform"] : nullptr)
-			{
-				const glm::quat& rotation = scene.GetEntityByUUID(UUID(id)).GetTransform().Rotation;
-				(*transform)["Rotation"] = { rotation.w, rotation.x, rotation.y, rotation.z };
-			}
-		}
+		for (const nlohmann::json& entity : data["Entities"])
+			indices.emplace(entity["ID"].get<uint64_t>(), indices.size() + 1);
 		CanonicalizeIds(data, indices);
 
 		// FNV-1a over the compact dump: object keys are sorted and floats print with round-trip precision,
