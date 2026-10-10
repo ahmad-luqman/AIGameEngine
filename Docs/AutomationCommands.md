@@ -225,6 +225,7 @@ Advances play mode by N fixed frames (default dt 1/60) and reports script errors
 |-----------|--------------------|
 | `assertNoErrors` | bool: fail the command if any script error occurred |
 | `dt` | number, seconds per frame |
+| `expectHash` | string: fail unless the state hash afterwards equals this one |
 | `frames` | integer (default 1) |
 | `hash` | bool: also return stateHash (see scene.hash) |
 
@@ -343,6 +344,10 @@ Returns the whole open scene as JSON (same format as .bscene files).
 ### `scene.hash`
 
 Hash of the current scene state (the play copy while playing); equal states give equal hashes, whatever the entity UUIDs.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `expect` | string: fail unless the hash equals this one |
 
 ### `scene.info`
 
