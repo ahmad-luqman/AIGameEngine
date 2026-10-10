@@ -169,6 +169,9 @@ set(JPH_USE_DX12 OFF CACHE BOOL "" FORCE)
 set(JPH_USE_VK OFF CACHE BOOL "" FORCE)
 set(JPH_USE_MTL OFF CACHE BOOL "" FORCE)
 set(JPH_USE_CPU_COMPUTE OFF CACHE BOOL "" FORCE)
+# The same simulation on every platform (replays and scene.hash are compared across platforms): Jolt
+# avoids FMA and platform math functions, at some cost in speed.
+set(CROSS_PLATFORM_DETERMINISTIC ON CACHE BOOL "" FORCE)
 # 32-bit object layers: Basalt packs motion type, collision layer and collision mask into them.
 set(OBJECT_LAYER_BITS 32 CACHE STRING "" FORCE)
 
