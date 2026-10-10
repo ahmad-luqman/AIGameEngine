@@ -532,6 +532,25 @@ TEST_SUITE("Physics")
 		scene.OnSimulationStop();
 	}
 
+	TEST_CASE("Scaling a character during play rebuilds its shape at the new size")
+	{
+		Scene scene;
+		CreateGround(scene);
+		Entity character = CreateCharacter(scene, { 0.0f, StandingHeight, 0.0f });
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		Simulate(scene, 0.5f);
+		CHECK(Position(character).y == doctest::Approx(StandingHeight).epsilon(0.03));
+
+		// Half the size: the capsule's centre settles half as high, and it stays the same one character.
+		character.GetTransform().Scale = glm::vec3(0.5f);
+		Simulate(scene, 1.0f);
+		CHECK(physics.GetCharacterCount() == 1);
+		CHECK(Position(character).y == doctest::Approx(0.5f * StandingHeight).epsilon(0.05));
+		CHECK(physics.IsCharacterGrounded(character));
+		scene.OnSimulationStop();
+	}
+
 	TEST_CASE("Invalid CharacterController values are sanitized and reported once")
 	{
 		Scene scene;

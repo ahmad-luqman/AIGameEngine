@@ -74,6 +74,34 @@ namespace Basalt {
 		}
 	}
 
+	void PhysicsWorld::Impl::MarkRescaledDirty(Scene* scene)
+	{
+		// Relative, so tiny and huge scales are treated alike; decomposing the same transform again only
+		// differs in the last bits, far below this.
+		auto rescaled = [](const glm::vec3& scale, const glm::vec3& built) {
+			return glm::any(glm::greaterThan(glm::abs(scale - built), glm::abs(built) * 1e-4f + glm::vec3(1e-7f)));
+		};
+		auto check = [&](entt::entity handle, const glm::vec3& built) {
+			Entity entity(handle, scene);
+			glm::vec3 position;
+			glm::quat rotation;
+			glm::vec3 scale;
+			// A degenerate transform keeps the old shape; RecreateBody would only refuse to build a new one.
+			if (Math::DecomposeTransform(scene->GetWorldTransform(entity), position, rotation, scale) && rescaled(scale, built))
+				DirtyEntities.Insert(entity.GetUUID());
+		};
+		for (entt::entity handle : scene->GetAllEntitiesWith<RigidBodyComponent>())
+		{
+			if (auto it = Bodies.find(Entity(handle, scene).GetUUID()); it != Bodies.end())
+				check(handle, it->second.BuiltScale);
+		}
+		for (entt::entity handle : scene->GetAllEntitiesWith<CharacterControllerComponent>())
+		{
+			if (auto it = Characters.find(Entity(handle, scene).GetUUID()); it != Characters.end())
+				check(handle, it->second.BuiltScale);
+		}
+	}
+
 	void PhysicsWorld::Impl::OnPhysicsComponentChanged(entt::registry& registry, entt::entity entity)
 	{
 		if (const auto* id = registry.try_get<IDComponent>(entity))
@@ -320,6 +348,7 @@ namespace Basalt {
 		record.BorrowedMesh = colliders.BorrowedMesh;
 		record.LastPosition = position;
 		record.LastRotation = rotation;
+		record.BuiltScale = scale;
 		impl.Bodies[entity.GetUUID()] = record;
 		impl.BodyToEntity[bodyID.GetIndexAndSequenceNumber()] = entity.GetUUID();
 		if (motionType == JPH::EMotionType::Dynamic)
@@ -355,7 +384,8 @@ namespace Basalt {
 		const PhysicsSettings& settings = m_Scene->GetPhysicsSettings();
 		const float fixedStep = settings.FixedTimestep > 0.0f ? settings.FixedTimestep : 1.0f / 60.0f;
 
-		// Rebuild bodies whose physics components changed since the last step.
+		// Rebuild bodies whose physics components or scale changed since the last step.
+		impl.MarkRescaledDirty(m_Scene);
 		for (UUID uuid : impl.DirtyEntities.Take())
 		{
 			Entity entity = m_Scene->GetEntityByUUID(uuid);
@@ -445,7 +475,11 @@ namespace Basalt {
 				glm::quat oldRotation;
 				glm::vec3 scale;
 				Math::DecomposeTransform(m_Scene->GetWorldTransform(entity), oldPosition, oldRotation, scale);
+				// Physics never changes the scale. Read back from the matrix it would pick up rounding every step
+				// and drift (enough after a few hundred steps to count as a rescale), so it is kept as it was.
+				const glm::vec3 localScale = entity.GetTransform().Scale;
 				m_Scene->SetWorldTransform(entity, Math::ComposeTransform(position, rotation, scale));
+				entity.GetTransform().Scale = localScale;
 				record.LastPosition = position;
 				record.LastRotation = rotation;
 			}

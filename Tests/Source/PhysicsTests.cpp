@@ -778,6 +778,70 @@ TEST_SUITE("Physics")
 		scene.OnSimulationStop();
 	}
 
+	TEST_CASE("Scale changes during play resize the colliders, including through a parent")
+	{
+		Scene scene;
+		CreateGround(scene);
+		Entity box = CreateBox(scene, { 0.0f, 0.5f, 0.0f });
+		Entity parent = scene.CreateEntity("Parent");
+		parent.GetTransform().Translation = { 10.0f, 0.0f, 0.0f };
+		Entity post = scene.CreateEntity("Post");
+		post.GetTransform().Translation = { 10.0f, 1.0f, 0.0f };
+		post.AddComponent<RigidBodyComponent>();
+		post.AddComponent<BoxColliderComponent>();
+		scene.SetParent(post, parent);
+
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		Simulate(scene, 0.5f);
+		auto topOf = [&](float x) {
+			const auto hit = physics.Raycast({ x, 10.0f, 0.0f }, { 0.0f, -1.0f, 0.0f }, 20.0f);
+			return hit ? hit->Point.y : -1.0f;
+		};
+		CHECK(topOf(0.0f) == doctest::Approx(1.0f).epsilon(0.01));
+		CHECK(topOf(10.0f) == doctest::Approx(1.5f).epsilon(0.01));
+
+		// The dynamic box doubles in size and settles on the ground twice as high; it keeps moving sideways.
+		box.GetTransform().Scale = glm::vec3(2.0f);
+		physics.SetLinearVelocity(box, { 1.0f, 0.0f, 0.0f });
+		scene.OnUpdate(Step);
+		CHECK(physics.HasBody(box));
+		CHECK(physics.GetLinearVelocity(box).x > 0.5f);
+		Simulate(scene, 1.0f);
+		CHECK(box.GetTransform().Translation.y == doctest::Approx(1.0f).epsilon(0.02));
+		CHECK(topOf(box.GetTransform().Translation.x) == doctest::Approx(2.0f).epsilon(0.02));
+
+		// The static post is scaled through its parent: three times as tall about the parent's origin.
+		parent.GetTransform().Scale = glm::vec3(3.0f);
+		scene.OnUpdate(Step);
+		CHECK(topOf(10.0f) == doctest::Approx(4.5f).epsilon(0.01));
+		CHECK(physics.GetBodyCount() == 3);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Writing simulated poses back keeps the entity's scale exact")
+	{
+		Scene scene;
+		Entity spinner = CreateWeightlessBox(scene, { 0.0f, 3.0f, 0.0f });
+		spinner.GetTransform().Scale = { 0.7f, 1.3f, 2.1f };
+		Entity parent = scene.CreateEntity("Parent");
+		parent.GetTransform().Scale = glm::vec3(1.5f);
+		Entity child = CreateWeightlessBox(scene, { 5.0f, 3.0f, 0.0f });
+		child.GetTransform().Scale = { 1.1f, 0.9f, 1.0f };
+		scene.SetParent(child, parent);
+		const glm::vec3 childScale = child.GetTransform().Scale;
+
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		physics.SetAngularVelocity(spinner, { 2.0f, 3.0f, 1.0f });
+		physics.SetAngularVelocity(child, { -1.0f, 2.0f, 3.0f });
+		// Before the fix, round-tripping through the world matrix drifted the scale by about 1e-4 per 600 steps.
+		Simulate(scene, 20.0f);
+		CHECK(spinner.GetTransform().Scale == glm::vec3(0.7f, 1.3f, 2.1f));
+		CHECK(child.GetTransform().Scale == childScale);
+		scene.OnSimulationStop();
+	}
+
 	TEST_CASE("Simulation is deterministic")
 	{
 		auto run = []() {
