@@ -65,7 +65,7 @@ namespace Basalt {
 			JointComponent Settings;
 			// The entity whose body the joint moves (Settings.BodyEntity resolved; the holder when that is 0).
 			// Only set when the constraint is built; that stays correct because changing BodyEntity rebuilds
-			// the joint (see NeedsRebuild).
+			// the joint (see JointNeedsRebuild).
 			UUID Body = 0;
 			// Warnings found while building the constraint (e.g. a zero axis). In-place updates only re-check
 			// the other settings, so these are added back to keep the logged set the same.

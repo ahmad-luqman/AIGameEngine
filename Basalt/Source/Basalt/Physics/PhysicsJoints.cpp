@@ -2,6 +2,7 @@
 #include "Basalt/Physics/PhysicsWorld.h"
 
 #include "Basalt/Physics/PhysicsWorldImpl.h"
+#include "Basalt/Scene/JointFields.h"
 
 #include <Jolt/Physics/Body/BodyLockMulti.h>
 #include <Jolt/Physics/Constraints/ConeConstraint.h>
@@ -134,7 +135,7 @@ namespace Basalt {
 			auto existing = impl.Joints.find(entity.GetUUID());
 			const JointComponent& joint = entity.GetComponent<JointComponent>();
 			std::vector<std::string> warnings;
-			if (existing != impl.Joints.end() && !NeedsRebuild(existing->second.Settings, joint))
+			if (existing != impl.Joints.end() && !JointNeedsRebuild(existing->second.Settings, joint))
 			{
 				// Rewriting the same values must not wake the bodies.
 				if (joint == existing->second.Settings)

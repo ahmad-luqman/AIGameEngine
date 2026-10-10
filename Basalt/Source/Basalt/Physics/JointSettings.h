@@ -19,11 +19,6 @@
 
 namespace Basalt::PhysicsInternal {
 
-	// Whether a joint change needs a new constraint. Only the fields a live Jolt constraint can update
-	// are exempt, so a field added later rebuilds the joint by default instead of being ignored in play.
-	// (Toggling UseLimits rebuilds too: it changes how a distance joint's rest length is chosen.)
-	bool NeedsRebuild(const JointComponent& built, const JointComponent& current);
-
 	// The entity whose body a joint moves: BodyEntity, or the entity holding the component when it is 0.
 	UUID JointBody(UUID holder, const JointComponent& joint);
 

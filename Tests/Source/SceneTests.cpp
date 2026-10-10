@@ -1,7 +1,6 @@
 #include <doctest/doctest.h>
 
 #include <Basalt/Core/Log.h>
-#include <Basalt/Physics/JointSettings.h>
 #include <Basalt/Physics/PhysicsWorld.h>
 #include <Basalt/Scene/ComponentRegistry.h>
 #include <Basalt/Scene/JointFields.h>
@@ -642,7 +641,7 @@ TEST_SUITE("Serialization")
 			JointComponent changed = built;
 			it->second(changed);
 			REQUIRE(changed != built);
-			CHECK(PhysicsInternal::NeedsRebuild(built, changed) == rebuilds.contains(field));
+			CHECK(JointNeedsRebuild(built, changed) == rebuilds.contains(field));
 		}
 	}
 
