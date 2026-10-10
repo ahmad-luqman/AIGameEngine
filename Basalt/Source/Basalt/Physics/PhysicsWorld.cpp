@@ -16,6 +16,8 @@
 
 namespace Basalt {
 
+	using namespace PhysicsInternal;
+
 	bool PhysicsWorld::Impl::IsTrigger(UUID uuid) const
 	{
 		auto it = Bodies.find(uuid);

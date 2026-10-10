@@ -44,8 +44,8 @@ namespace Basalt::PhysicsInternal {
 	}
 
 	namespace BroadPhaseLayers {
-		constexpr JPH::BroadPhaseLayer NonMoving(0);
-		constexpr JPH::BroadPhaseLayer Moving(1);
+		inline constexpr JPH::BroadPhaseLayer NonMoving(0);
+		inline constexpr JPH::BroadPhaseLayer Moving(1);
 		constexpr uint32_t Count = 2;
 	}
 
