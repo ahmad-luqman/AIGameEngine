@@ -38,6 +38,41 @@
 
 namespace Basalt {
 
+	// Entities waiting for a rebuild, in the order they were first marked. Rebuilding creates Jolt bodies,
+	// whose creation order steers the simulation, so it must not follow a hash order (which differs between
+	// standard libraries).
+	class DirtySet
+	{
+	public:
+		void Insert(UUID uuid)
+		{
+			if (m_Members.insert(uuid).second)
+				m_Order.push_back(uuid);
+		}
+		void Erase(UUID uuid)
+		{
+			if (m_Members.erase(uuid) > 0)
+				std::erase(m_Order, uuid);
+		}
+		bool Empty() const { return m_Order.empty(); }
+		void Clear()
+		{
+			m_Members.clear();
+			m_Order.clear();
+		}
+		// Empties the set and returns its members in marking order.
+		std::vector<UUID> Take()
+		{
+			std::vector<UUID> order = std::move(m_Order);
+			Clear();
+			return order;
+		}
+
+	private:
+		std::unordered_set<UUID> m_Members;
+		std::vector<UUID> m_Order;
+	};
+
 	struct PhysicsWorld::Impl
 	{
 		struct BodyRecord
@@ -109,13 +144,13 @@ namespace Basalt {
 		std::unordered_map<UUID, BodyRecord> Bodies;
 		std::unordered_map<UUID, CharacterRecord> Characters;
 		// Characters whose CharacterControllerComponent changed (collider changes go to DirtyEntities).
-		std::unordered_set<UUID> DirtyCharacters;
+		DirtySet DirtyCharacters;
 		// Character warnings (sanitized settings, an ignored RigidBody, a missing collider).
 		PhysicsInternal::WarningLog CharacterWarnings{ "character", true };
 		// Characters already warned that rigid-body velocity and force calls do nothing on them.
 		std::unordered_set<UUID> WarnedCharacterBodyCalls;
 		std::unordered_map<uint32_t, UUID> BodyToEntity;
-		std::unordered_set<UUID> DirtyEntities;
+		DirtySet DirtyEntities;
 		// Keyed by the entity that holds the JointComponent (not necessarily the body it moves).
 		std::unordered_map<UUID, JointRecord> Joints;
 		std::unordered_set<UUID> DirtyJoints;

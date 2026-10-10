@@ -73,7 +73,7 @@ namespace Basalt {
 	void PhysicsWorld::Impl::OnCharacterChanged(entt::registry& registry, entt::entity entity)
 	{
 		if (const auto* id = registry.try_get<IDComponent>(entity))
-			DirtyCharacters.insert(id->ID);
+			DirtyCharacters.Insert(id->ID);
 	}
 
 	void PhysicsWorld::RecreateCharacter(Entity entity)

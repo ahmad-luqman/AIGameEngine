@@ -1,4 +1,5 @@
-# Strict warnings for Basalt's own targets. Third-party code is never compiled with these.
+# Strict warnings and the floating-point model for Basalt's own targets. Third-party code is never
+# compiled with these.
 
 function(basalt_set_warnings target)
 	if(MSVC)
@@ -17,6 +18,15 @@ function(basalt_set_warnings target)
 		if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 			target_compile_options(${target} PRIVATE -Wnull-dereference)
 		endif()
+	endif()
+
+	# Floating point must give the same bits on every platform and build type (physics replays and
+	# scene.hash are compared across platforms): no fused multiply-add contraction, which clang applies
+	# on ARM by default and only where it chooses to, and MSVC's precise model.
+	if(MSVC)
+		target_compile_options(${target} PRIVATE /fp:precise)
+	else()
+		target_compile_options(${target} PRIVATE -ffp-contract=off)
 	endif()
 
 	if(BASALT_WARNINGS_AS_ERRORS)

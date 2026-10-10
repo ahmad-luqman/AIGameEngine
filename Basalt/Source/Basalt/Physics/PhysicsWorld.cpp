@@ -77,7 +77,7 @@ namespace Basalt {
 	void PhysicsWorld::Impl::OnPhysicsComponentChanged(entt::registry& registry, entt::entity entity)
 	{
 		if (const auto* id = registry.try_get<IDComponent>(entity))
-			DirtyEntities.insert(id->ID);
+			DirtyEntities.Insert(id->ID);
 	}
 
 	void PhysicsWorld::Impl::OnMeshChanged(entt::registry& registry, entt::entity entity)
@@ -191,8 +191,8 @@ namespace Basalt {
 		for (entt::entity handle : m_Scene->GetAllEntitiesWith<CharacterControllerComponent>())
 			RecreateCharacter({ handle, m_Scene });
 		m_Impl->Starting = false;
-		m_Impl->DirtyEntities.clear();
-		m_Impl->DirtyCharacters.clear();
+		m_Impl->DirtyEntities.Clear();
+		m_Impl->DirtyCharacters.Clear();
 		// Joints need both of their bodies, so they are built after every body exists.
 		for (entt::entity handle : m_Scene->GetAllEntitiesWith<JointComponent>())
 			m_Impl->DirtyJoints.insert(Entity(handle, m_Scene).GetUUID());
@@ -337,8 +337,8 @@ namespace Basalt {
 		m_Impl->RemoveBody(m_Scene, entity.GetUUID());
 		m_Impl->RemoveCharacter(m_Scene, entity.GetUUID());
 		m_Impl->RemoveJoint(entity.GetUUID());
-		m_Impl->DirtyEntities.erase(entity.GetUUID());
-		m_Impl->DirtyCharacters.erase(entity.GetUUID());
+		m_Impl->DirtyEntities.Erase(entity.GetUUID());
+		m_Impl->DirtyCharacters.Erase(entity.GetUUID());
 		m_Impl->CharacterWarnings.Forget(entity.GetUUID());
 		m_Impl->DirtyJoints.erase(entity.GetUUID());
 		m_Impl->JointWarnings.Forget(entity.GetUUID());
@@ -358,11 +358,9 @@ namespace Basalt {
 		const float fixedStep = settings.FixedTimestep > 0.0f ? settings.FixedTimestep : 1.0f / 60.0f;
 
 		// Rebuild bodies whose physics components changed since the last step.
-		if (!impl.DirtyEntities.empty())
+		if (!impl.DirtyEntities.Empty())
 		{
-			const std::unordered_set<UUID> dirty = std::move(impl.DirtyEntities);
-			impl.DirtyEntities.clear();
-			for (UUID uuid : dirty)
+			for (UUID uuid : impl.DirtyEntities.Take())
 			{
 				Entity entity = m_Scene->GetEntityByUUID(uuid);
 				if (entity)
@@ -377,11 +375,9 @@ namespace Basalt {
 				}
 			}
 		}
-		if (!impl.DirtyCharacters.empty())
+		if (!impl.DirtyCharacters.Empty())
 		{
-			const std::unordered_set<UUID> dirty = std::move(impl.DirtyCharacters);
-			impl.DirtyCharacters.clear();
-			for (UUID uuid : dirty)
+			for (UUID uuid : impl.DirtyCharacters.Take())
 			{
 				if (Entity entity = m_Scene->GetEntityByUUID(uuid))
 					ApplyCharacterSettings(entity);
@@ -393,12 +389,15 @@ namespace Basalt {
 		uint32_t steps = 0;
 		while (m_Accumulator >= fixedStep && steps < settings.MaxStepsPerFrame)
 		{
-			// Push entity-side transform changes into the simulation.
-			for (auto& [uuid, record] : impl.Bodies)
+			// Push entity-side transform changes into the simulation, in registry order: activating bodies
+			// orders Jolt's active list, so a hash order would differ between standard libraries.
+			for (entt::entity handle : m_Scene->GetAllEntitiesWith<RigidBodyComponent>())
 			{
-				Entity entity = m_Scene->GetEntityByUUID(uuid);
-				if (!entity)
+				Entity entity(handle, m_Scene);
+				auto found = impl.Bodies.find(entity.GetUUID());
+				if (found == impl.Bodies.end())
 					continue;
+				Impl::BodyRecord& record = found->second;
 
 				glm::vec3 position;
 				glm::quat rotation;
