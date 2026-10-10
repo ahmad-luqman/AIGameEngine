@@ -29,6 +29,30 @@ namespace Basalt {
 			throw CommandError("unknown command '" + command + "' (run 'help' to list commands)");
 		if (!params.is_object())
 			throw CommandError("'params' must be a JSON object");
+		// A misspelled or misplaced parameter would otherwise be ignored silently, e.g. a hash check that never
+		// runs.
+		for (const auto& [key, value] : params.items())
+		{
+			if (!info->Parameters.contains(key))
+			{
+				std::string message = "unknown parameter '";
+				message.append(key).append("' for ").append(command);
+				if (info->Parameters.empty())
+					message += " (it takes none)";
+				else
+				{
+					message += " (expected: ";
+					for (auto it = info->Parameters.begin(); it != info->Parameters.end(); ++it)
+					{
+						if (it != info->Parameters.begin())
+							message += ", ";
+						message += it->first;
+					}
+					message += ')';
+				}
+				throw CommandError(message);
+			}
+		}
 		return info->Handler(session, params);
 	}
 
@@ -75,6 +99,33 @@ namespace Basalt {
 			BS_CORE_ERROR("Automation: command failed unexpectedly: {}", e.what());
 			response["ok"] = false;
 			response["error"] = std::string("internal error: ") + e.what();
+		}
+
+		if (request.is_object() && request.contains("expectError"))
+		{
+			const nlohmann::json& expected = request["expectError"];
+			if (!expected.is_string() || expected.get<std::string>().empty())
+			{
+				response = { { "ok", false }, { "error", "'expectError' must be a non-empty string" } };
+				if (request.contains("id"))
+					response["id"] = request["id"];
+			}
+			else if (response["ok"] == true)
+			{
+				response.erase("result");
+				response["ok"] = false;
+				response["error"] = "expected an error containing '" + expected.get<std::string>() + "', but the command succeeded";
+			}
+			else if (response["error"].get<std::string>().find(expected.get<std::string>()) == std::string::npos)
+			{
+				response["error"] = "expected an error containing '" + expected.get<std::string>() + "', got: " + response["error"].get<std::string>();
+			}
+			else
+			{
+				response["ok"] = true;
+				response["expectedError"] = response["error"];
+				response.erase("error");
+			}
 		}
 		return response;
 	}

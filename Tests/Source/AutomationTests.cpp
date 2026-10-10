@@ -227,20 +227,56 @@ TEST_SUITE("Automation")
 		Run(registry, other, "component.set", { { "entity", "B" }, { "component", "Transform" }, { "data", { { "Translation", { 0.0, 1e-6, 0.0 } } } } });
 		CHECK(Run(registry, other, "scene.hash")["hash"] != hash);
 
-		// A rotation is hashed as its quaternion, so a tiny change still counts.
+		// Rotations count too (they are hashed as quaternions; the cross-platform PhysicsDeterminism test is
+		// what pins that form).
 		const std::string beforeTurn = Run(registry, other, "scene.hash")["hash"];
 		Run(registry, other, "component.set", { { "entity", "B" }, { "component", "Transform" }, { "data", { { "Rotation", { 0.0, 0.001, 0.0 } } } } });
 		CHECK(Run(registry, other, "scene.hash")["hash"] != beforeTurn);
 
-		// expect / expectHash fail with both hashes in the message.
-		CHECK(Run(registry, session, "scene.hash", { { "expect", hash } })["hash"] == hash);
-		const std::string error = RunError(registry, session, "scene.hash", { { "expect", "0000000000000000" } });
-		CHECK(error.find("state hash " + hash + " differs from the expected 0000000000000000") != std::string::npos);
+		// expectHash passes on a match and fails naming both hashes; present but empty or null is an error, not a
+		// check that silently passes.
+		CHECK(Run(registry, session, "scene.hash", { { "expectHash", hash } })["hash"] == hash);
+		CHECK(RunError(registry, session, "scene.hash", { { "expectHash", "0000000000000000" } }).find("state hash " + hash + " differs from the expected 0000000000000000") != std::string::npos);
+		CHECK(RunError(registry, session, "scene.hash", { { "expectHash", "" } }).find("must be a non-empty string") != std::string::npos);
+		CHECK(RunError(registry, session, "scene.hash", { { "expectHash", nullptr } }).find("must be a non-empty string") != std::string::npos);
 		Run(registry, session, "play.start");
 		const std::string stepped = Run(registry, session, "play.step", { { "frames", 2 }, { "hash", true } })["stateHash"];
+		CHECK(Run(registry, session, "scene.hash", { { "expectHash", stepped } })["hash"] == stepped);
+		// Nothing here moves, so a step keeps the hash; expectHash then passes and returns it.
+		CHECK(Run(registry, session, "play.step", { { "expectHash", stepped } })["stateHash"] == stepped);
 		CHECK(RunError(registry, session, "play.step", { { "expectHash", "0000000000000000" } }).find("differs from the expected") != std::string::npos);
-		CHECK_FALSE(stepped.empty());
 		Run(registry, session, "play.stop");
+	}
+
+	TEST_CASE("Commands reject parameters they do not take")
+	{
+		CommandRegistry registry;
+		AutomationSession session;
+		// A misspelled check must fail instead of passing without checking anything.
+		CHECK(RunError(registry, session, "scene.hash", { { "expecthash", "0000000000000000" } }) == "unknown parameter 'expecthash' for scene.hash (expected: expectHash)");
+		CHECK(RunError(registry, session, "scene.new", { { "name", "A" }, { "size", 3 } }).find("unknown parameter 'size' for scene.new") != std::string::npos);
+		CHECK(RunError(registry, session, "editor.nothing", {}).find("unknown command") != std::string::npos);
+	}
+
+	TEST_CASE("Batch requests with expectError succeed only on the expected failure")
+	{
+		CommandRegistry registry;
+		AutomationSession session;
+		const json responses = registry.HandleRequest(session, json::array({
+																   { { "id", 1 }, { "command", "scene.hash" }, { "params", { { "expectHash", "0000000000000000" } } }, { "expectError", "differs from the expected" } },
+																   { { "id", 2 }, { "command", "scene.hash" }, { "expectError", "anything" } },
+																   { { "id", 3 }, { "command", "scene.hash" }, { "params", { { "expectHash", "" } } }, { "expectError", "something else" } },
+																   { { "id", 4 }, { "command", "scene.hash" }, { "expectError", "" } },
+															   }));
+		REQUIRE(responses.size() == 4);
+		CHECK(responses[0]["ok"] == true);
+		CHECK(responses[0]["expectedError"].get<std::string>().find("differs from the expected 0000000000000000") != std::string::npos);
+		CHECK(responses[1]["ok"] == false);
+		CHECK(responses[1]["error"] == "expected an error containing 'anything', but the command succeeded");
+		CHECK(responses[2]["ok"] == false);
+		CHECK(responses[2]["error"].get<std::string>().find("got: parameter 'expectHash' must be a non-empty string") != std::string::npos);
+		CHECK(responses[3]["ok"] == false);
+		CHECK(responses[3]["id"] == 4);
 	}
 
 	TEST_CASE("Recorded input replays to the same state")
