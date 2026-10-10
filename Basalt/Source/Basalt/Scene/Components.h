@@ -190,7 +190,8 @@ namespace Basalt {
 	};
 
 	// Collides by the triangles of a mesh asset (the entity also needs a RigidBodyComponent). Static and
-	// kinematic bodies use the exact triangle mesh, which does not collide with other triangle-mesh colliders.
+	// kinematic bodies use the exact triangle mesh. Two of those never need to meet (Jolt does not collide
+	// static and kinematic bodies with each other), and everything that does move against one is convex.
 	// Bodies with Convex set use the convex hull of the mesh's drawn vertices; so do dynamic bodies (Jolt
 	// cannot simulate a triangle mesh; a warning asks to set Convex) and triggers (a triangle mesh has no
 	// inside). An empty Mesh uses the entity's MeshComponent (its Mesh and MeshIndex; this MeshIndex is then
@@ -328,7 +329,8 @@ namespace Basalt {
 	// Its shape is the entity's colliders. Scripts drive it with Move(velocity); while airborne, gravity
 	// (scaled by GravityFactor) takes over the vertical speed. A RigidBodyComponent on the same entity is
 	// ignored. Other bodies, queries and triggers see the character as a kinematic body at 90% of the
-	// colliders' size.
+	// colliders' size. Characters meet each other's full shapes instead and push each other with their
+	// velocity (when their layers collide); they raise no collision events with each other.
 	struct CharacterControllerComponent
 	{
 		// Steepest ground (degrees from horizontal, 1..90) the character stands on and walks up; it slides

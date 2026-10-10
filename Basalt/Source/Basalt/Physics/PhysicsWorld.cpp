@@ -203,6 +203,7 @@ namespace Basalt {
 		m_Impl->ContactListener.Materials.resize(MaxBodies);
 		m_Impl->ContactListener.MinVelocityForRestitution = m_Impl->System->GetPhysicsSettings().mMinVelocityForRestitution;
 		m_Impl->System->SetContactListener(&m_Impl->ContactListener);
+		m_Impl->CharacterListener.Owner = m_Impl.get();
 		// Bodies joined by a joint do not collide with each other unless the joint asks for it.
 		m_Impl->System->SetSimCollideBodyVsBody([impl = m_Impl.get()](const JPH::Body& body1, const JPH::Body& body2, JPH::Mat44Arg transform1, JPH::Mat44Arg transform2,
 																	  JPH::CollideShapeSettings& settings, JPH::CollideShapeCollector& collector, const JPH::ShapeFilter& filter) {
@@ -230,6 +231,7 @@ namespace Basalt {
 			m_Impl->System->RemoveConstraint(joint.Constraint);
 		m_Impl->Joints.clear();
 		// Characters remove their inner bodies, so they go while the system exists.
+		m_Impl->CharacterCollision.mCharacters.clear();
 		m_Impl->Characters.clear();
 		JPH::BodyInterface& bodies = m_Impl->System->GetBodyInterface();
 		for (auto& [uuid, record] : m_Impl->Bodies)
