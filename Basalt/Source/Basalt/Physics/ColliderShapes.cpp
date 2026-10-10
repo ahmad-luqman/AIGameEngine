@@ -14,41 +14,58 @@
 
 namespace Basalt::PhysicsInternal {
 
+	namespace {
+
+		// Clamped like the RigidBody's values (see RecreateBody), with the collider named in the warning.
+		template<typename Collider>
+		ColliderMaterial SanitizeMaterial(const Collider& collider, const char* name, const std::function<void(const std::string&)>& warn)
+		{
+			if (!collider.OverrideMaterial)
+				return {};
+			if (collider.Friction < 0.0f)
+				warn(std::string(name) + " Friction must not be negative, using 0");
+			if (collider.Restitution < 0.0f || collider.Restitution > 1.0f)
+				warn(std::string(name) + " Restitution must be between 0 and 1, clamped");
+			return { true, std::max(collider.Friction, 0.0f), std::clamp(collider.Restitution, 0.0f, 1.0f) };
+		}
+
+	}
+
 	ColliderShape BuildColliderShape(Entity entity, const glm::vec3& signedScale, float sizeFraction, const char* convexReason, bool isTrigger, const std::function<void(const std::string&)>& warn)
 	{
 		const glm::vec3 scale = glm::abs(signedScale) * sizeFraction;
 		JPH::StaticCompoundShapeSettings compound;
 		uint32_t shapeCount = 0;
-		auto addShape = [&](const JPH::ShapeSettings::ShapeResult& result, const glm::vec3& offset) {
-			if (result.HasError())
+		ColliderShape result;
+		auto addShape = [&](const JPH::ShapeSettings::ShapeResult& shape, const glm::vec3& offset, const ColliderMaterial& material) {
+			if (shape.HasError())
 			{
-				warn(std::string("invalid collider: ") + result.GetError().c_str());
+				warn(std::string("invalid collider: ") + shape.GetError().c_str());
 				return;
 			}
 			// Offsets follow the entity's scale only: a smaller inner shape stays centred on each collider.
-			compound.AddShape(ToJolt(offset * glm::abs(signedScale)), JPH::Quat::sIdentity(), result.Get());
-			shapeCount++;
+			compound.AddShape(ToJolt(offset * glm::abs(signedScale)), JPH::Quat::sIdentity(), shape.Get());
+			result.Materials[shapeCount++] = material;
 		};
 
 		if (const auto* box = entity.TryGetComponent<BoxColliderComponent>())
 		{
 			const glm::vec3 halfExtents = glm::max(box->HalfExtents * scale, glm::vec3(MinExtent));
 			const float convexRadius = std::min(JPH::cDefaultConvexRadius, glm::min(halfExtents.x, glm::min(halfExtents.y, halfExtents.z)) * 0.5f);
-			addShape(JPH::BoxShapeSettings(ToJolt(halfExtents), convexRadius).Create(), box->Offset);
+			addShape(JPH::BoxShapeSettings(ToJolt(halfExtents), convexRadius).Create(), box->Offset, SanitizeMaterial(*box, "BoxCollider", warn));
 		}
 		if (const auto* sphere = entity.TryGetComponent<SphereColliderComponent>())
 		{
 			const float radius = std::max(sphere->Radius * glm::max(scale.x, glm::max(scale.y, scale.z)), MinExtent);
-			addShape(JPH::SphereShapeSettings(radius).Create(), sphere->Offset);
+			addShape(JPH::SphereShapeSettings(radius).Create(), sphere->Offset, SanitizeMaterial(*sphere, "SphereCollider", warn));
 		}
 		if (const auto* capsule = entity.TryGetComponent<CapsuleColliderComponent>())
 		{
 			const float radius = std::max(capsule->Radius * glm::max(scale.x, scale.z), MinExtent);
 			const float halfHeight = std::max(capsule->HalfHeight * scale.y, MinExtent);
-			addShape(JPH::CapsuleShapeSettings(halfHeight, radius).Create(), capsule->Offset);
+			addShape(JPH::CapsuleShapeSettings(halfHeight, radius).Create(), capsule->Offset, SanitizeMaterial(*capsule, "CapsuleCollider", warn));
 		}
 
-		ColliderShape result;
 		if (const auto* meshCollider = entity.TryGetComponent<MeshColliderComponent>())
 		{
 			std::string key = meshCollider->Mesh;
@@ -83,7 +100,7 @@ namespace Basalt::PhysicsInternal {
 				if (meshScale != glm::vec3(1.0f))
 					shape = new JPH::ScaledShape(shape, ToJolt(meshScale));
 				compound.AddShape(JPH::Vec3::sZero(), JPH::Quat::sIdentity(), shape);
-				shapeCount++;
+				result.Materials[shapeCount++] = SanitizeMaterial(*meshCollider, "MeshCollider", warn);
 				result.HasTriangleMesh = !convex;
 			}
 			else

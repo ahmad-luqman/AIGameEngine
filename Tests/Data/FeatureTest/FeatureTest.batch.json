@@ -24,7 +24,7 @@
 	{ "id": "hash-ground", "command": "entity.create", "params": { "name": "Ground", "components": { "Transform": { "Translation": [0, -0.5, 0] }, "RigidBody": {}, "BoxCollider": { "HalfExtents": [5, 0.5, 5] } } } },
 	{ "id": "hash-box", "command": "entity.create", "params": { "name": "Box", "components": { "Transform": { "Translation": [0.25, 3, 0] }, "RigidBody": { "Type": "Dynamic" }, "BoxCollider": {} } } },
 	{ "id": "hash-play", "command": "play.start" },
-	{ "id": "hash-step", "command": "play.step", "params": { "frames": 60, "expectHash": "41cc442cbb8e3671" } },
+	{ "id": "hash-step", "command": "play.step", "params": { "frames": 60, "expectHash": "0c7663d08635b679" } },
 	{ "id": "hash-mismatch", "command": "scene.hash", "params": { "expectHash": "0000000000000000" }, "expectError": "differs from the expected 0000000000000000" },
 	{ "id": "hash-empty", "command": "play.step", "params": { "expectHash": "" }, "expectError": "must be a non-empty string" },
 	{ "id": "hash-misspelled", "command": "scene.hash", "params": { "expect": "0000000000000000" }, "expectError": "unknown parameter 'expect'" },

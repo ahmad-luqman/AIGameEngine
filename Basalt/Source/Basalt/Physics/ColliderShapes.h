@@ -10,6 +10,8 @@
 
 #include <glm/glm.hpp>
 
+#include <array>
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <string>
@@ -20,6 +22,21 @@ namespace Basalt::PhysicsInternal {
 	// Smallest collider extent, so a zero scale or size still gives Jolt a valid shape.
 	constexpr float MinExtent = 0.001f;
 
+	// One per collider kind an entity can have (box, sphere, capsule, mesh).
+	constexpr uint32_t MaxColliders = 4;
+
+	// A collider's own friction and restitution (its OverrideMaterial), already clamped.
+	struct ColliderMaterial
+	{
+		bool Override = false;
+		float Friction = 0.0f;
+		float Restitution = 0.0f;
+	};
+
+	// Indexed like the shape's compound children, in the order BuildColliderShape adds them; a shape made of
+	// one collider is not a compound and uses index 0.
+	using ColliderMaterials = std::array<ColliderMaterial, MaxColliders>;
+
 	// An entity's colliders combined into one shape, shared by rigid bodies and characters.
 	struct ColliderShape
 	{
@@ -29,6 +46,7 @@ namespace Basalt::PhysicsInternal {
 		bool HasTriangleMesh = false;
 		// The MeshComponent mesh a MeshCollider without its own Mesh used.
 		std::optional<std::pair<std::string, uint32_t>> BorrowedMesh;
+		ColliderMaterials Materials{};
 	};
 
 	// Builds the entity's box, sphere, capsule and mesh colliders, scaled by its world scale (signed: mesh

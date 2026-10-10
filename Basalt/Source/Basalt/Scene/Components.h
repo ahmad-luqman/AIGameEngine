@@ -157,16 +157,25 @@ namespace Basalt {
 	// Collider shapes are sized in local space and scaled by the entity's world scale. A scale change during
 	// play (the entity's or a parent's) rebuilds the body, which keeps its velocity; like any rebuild, its
 	// joints are rebuilt from the current poses.
+	// Every collider can set OverrideMaterial to touch with its own Friction and Restitution instead of the
+	// RigidBody's (still combined with the other body by the RigidBody's combine modes and clamped the same way),
+	// e.g. an icy runner under a grippy cart. Characters ignore it.
 	struct BoxColliderComponent
 	{
 		glm::vec3 HalfExtents = { 0.5f, 0.5f, 0.5f };
 		glm::vec3 Offset = { 0.0f, 0.0f, 0.0f };
+		bool OverrideMaterial = false;
+		float Friction = 0.5f;
+		float Restitution = 0.0f;
 	};
 
 	struct SphereColliderComponent
 	{
 		float Radius = 0.5f;
 		glm::vec3 Offset = { 0.0f, 0.0f, 0.0f };
+		bool OverrideMaterial = false;
+		float Friction = 0.5f;
+		float Restitution = 0.0f;
 	};
 
 	// Capsule aligned with the local Y axis. Total height = 2 * (HalfHeight + Radius).
@@ -175,6 +184,9 @@ namespace Basalt {
 		float Radius = 0.5f;
 		float HalfHeight = 0.5f;
 		glm::vec3 Offset = { 0.0f, 0.0f, 0.0f };
+		bool OverrideMaterial = false;
+		float Friction = 0.5f;
+		float Restitution = 0.0f;
 	};
 
 	// Collides by the triangles of a mesh asset (the entity also needs a RigidBodyComponent). Static and
@@ -189,6 +201,9 @@ namespace Basalt {
 		std::string Mesh;
 		uint32_t MeshIndex = 0;
 		bool Convex = false;
+		bool OverrideMaterial = false;
+		float Friction = 0.5f;
+		float Restitution = 0.0f;
 	};
 
 	enum class JointType

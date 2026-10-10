@@ -1,15 +1,15 @@
 [
 	{ "id": "open", "command": "scene.open", "params": { "path": "Assets/Scenes/PhysicsPile.bscene" } },
 	{ "id": "play", "command": "play.start" },
-	{ "id": "loaded", "command": "scene.hash", "params": { "expectHash": "d3b332600f73833c" } },
+	{ "id": "loaded", "command": "scene.hash", "params": { "expectHash": "5c89279536651290" } },
 	{ "id": "launch", "command": "lua.exec", "params": { "code": "Scene.FindEntityByName('Cannonball'):SetLinearVelocity(Vec3(-14, 0, 0)) Scene.FindEntityByName('Character'):Move(Vec3(1.5, 0, -0.5))" } },
-	{ "id": "frame-1", "command": "play.step", "params": { "frames": 1, "expectHash": "27b5770e5d4c5c1f" } },
-	{ "id": "frame-60", "command": "play.step", "params": { "frames": 59, "expectHash": "e8f64e065f79662e" } },
+	{ "id": "frame-1", "command": "play.step", "params": { "frames": 1, "expectHash": "06297ebe87cbc30f" } },
+	{ "id": "frame-60", "command": "play.step", "params": { "frames": 59, "expectHash": "9a4f9fbfa2b889f6" } },
 	{ "id": "push-and-teleport", "command": "lua.exec", "params": { "code": "Scene.FindEntityByName('PusherA').Translation = Vec3(-3.5, 0.6, -3) Scene.FindEntityByName('PusherB').Translation = Vec3(3.5, 0.6, 3) for i = 5, 0, -1 do Scene.FindEntityByName('Tower0Box' .. i).Translation = Vec3(-9, 0.5 + 1.25 * i, 4) end" } },
-	{ "id": "frame-120", "command": "play.step", "params": { "frames": 60, "expectHash": "3f313a2768f799ee" } },
+	{ "id": "frame-120", "command": "play.step", "params": { "frames": 60, "expectHash": "0d901113d11741c6" } },
 	{ "id": "rebuild", "command": "lua.exec", "params": { "code": "for i = 7, 0, -1 do Scene.FindEntityByName('Ball' .. i):SetComponent('SphereCollider', { Radius = 0.3 }) end" } },
-	{ "id": "frame-300", "command": "play.step", "params": { "frames": 180, "expectHash": "4564c09fda69d602" } },
+	{ "id": "frame-300", "command": "play.step", "params": { "frames": 180, "expectHash": "86b8ba9116f906b0" } },
 	{ "id": "destroy-spawn-rejoint", "command": "lua.exec", "params": { "code": "Scene.FindEntityByName('Tower2Box5'):Destroy() Scene.FindEntityByName('Tower2Box4'):Destroy() for i = 0, 3 do local e = Scene.CreateEntity('Spawned' .. i) e.Translation = Vec3(2 + 0.13 * i, 7 + 0.82 * i, 0.25) end for i = 3, 0, -1 do local e = Scene.FindEntityByName('Spawned' .. i) e:AddComponent('RigidBody', { Type = 'Dynamic', Mass = 1.5 }) e:AddComponent('BoxCollider', { HalfExtents = Vec3(0.4, 0.4, 0.4) }) end Scene.FindEntityByName('Link2'):SetComponent('Joint', { Axis = Vec3(1, 0, 0) }) Scene.FindEntityByName('Character'):SetComponent('CapsuleCollider', { HalfHeight = 0.35 })" } },
-	{ "id": "frame-600", "command": "play.step", "params": { "frames": 300, "expectHash": "bd6927fc0b567442" } },
+	{ "id": "frame-600", "command": "play.step", "params": { "frames": 300, "expectHash": "89ff0ffa5c4921ec" } },
 	{ "id": "stop", "command": "play.stop" }
 ]

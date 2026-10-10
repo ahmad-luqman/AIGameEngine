@@ -205,7 +205,10 @@ TEST_SUITE("Serialization")
 		entity.GetComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
 		entity.GetComponent<RigidBodyComponent>().Layer = "Debris";
 		entity.GetComponent<RigidBodyComponent>().Continuous = true;
-		entity.GetComponent<MeshColliderComponent>() = { .Mesh = "Assets/Models/Level.glb", .MeshIndex = 2, .Convex = true };
+		entity.GetComponent<MeshColliderComponent>() = { .Mesh = "Assets/Models/Level.glb", .MeshIndex = 2, .Convex = true, .OverrideMaterial = true, .Friction = 0.25f, .Restitution = 0.75f };
+		entity.GetComponent<BoxColliderComponent>() = { .HalfExtents = { 1.0f, 2.0f, 3.0f }, .OverrideMaterial = true, .Friction = 0.125f, .Restitution = 0.5f };
+		entity.GetComponent<SphereColliderComponent>().Friction = 0.9f;
+		entity.GetComponent<CapsuleColliderComponent>().Restitution = 0.3f;
 		entity.GetComponent<MaterialComponent>().AlbedoColor = { 0.1f, 0.2f, 0.3f, 0.4f };
 		entity.GetComponent<ScriptComponent>().Script = "Assets/Scripts/Test.lua";
 		entity.GetComponent<ScriptComponent>().Properties = { { "Speed", 3.5 }, { "Target", { 1, 2, 3 } } };
