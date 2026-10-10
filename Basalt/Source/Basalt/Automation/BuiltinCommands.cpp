@@ -280,12 +280,15 @@ namespace Basalt {
 			});
 		}
 
-		// Fails when a state hash differs from an expected one; the message names both so a failing CI run
-		// shows each platform's value.
-		void CheckExpectedHash(const json& params, const char* name, const std::string& hash)
+		// Fails when params has an expectHash that differs from the state hash; the message names both so a
+		// failing CI run shows each platform's value. A present but empty or null expectHash is an error, not a
+		// check that silently passes.
+		void CheckExpectedHash(const json& params, const std::string& hash)
 		{
-			const std::string expected = OptionalString(params, name, "");
-			if (!expected.empty() && expected != hash)
+			if (!params.contains("expectHash"))
+				return;
+			const std::string expected = RequireString(params, "expectHash");
+			if (expected != hash)
 				throw CommandError("state hash " + hash + " differs from the expected " + expected);
 		}
 
@@ -423,9 +426,9 @@ namespace Basalt {
 				return json{ { "path", path } };
 			});
 
-			Add(registry, "scene.hash", "Hash of the current scene state (the play copy while playing); equal states give equal hashes, whatever the entity UUIDs.", { { "expect", "string: fail unless the hash equals this one" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "scene.hash", "Hash of the current scene state (the play copy while playing); equal states give equal hashes, whatever the entity UUIDs.", { { "expectHash", "string: fail unless the hash equals this one (16 lowercase hex digits)" } }, [](AutomationSession& session, const json& params) {
 				const std::string hash = SceneSerializer::ComputeStateHash(RequireScene(session));
-				CheckExpectedHash(params, "expect", hash);
+				CheckExpectedHash(params, hash);
 				return json{ { "hash", hash } };
 			});
 
@@ -736,7 +739,7 @@ namespace Basalt {
 				return json{ { "playing", false } };
 			});
 
-			Add(registry, "play.step", "Advances play mode by N fixed frames (default dt 1/60) and reports script errors.", { { "frames", "integer (default 1)" }, { "dt", "number, seconds per frame" }, { "assertNoErrors", "bool: fail the command if any script error occurred" }, { "hash", "bool: also return stateHash (see scene.hash)" }, { "expectHash", "string: fail unless the state hash afterwards equals this one" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "play.step", "Advances play mode by N fixed frames (default dt 1/60) and reports script errors.", { { "frames", "integer (default 1)" }, { "dt", "number, seconds per frame" }, { "assertNoErrors", "bool: fail the command if any script error occurred" }, { "hash", "bool: also return stateHash (see scene.hash)" }, { "expectHash", "string: fail unless the state hash after the step (which has run either way) equals this one; also returns stateHash" } }, [](AutomationSession& session, const json& params) {
 				if (!session.IsPlaying())
 					throw CommandError("not playing (use play.start)");
 				const uint32_t frames = static_cast<uint32_t>(OptionalInteger(params, "frames", 1, 1, 100000));
@@ -754,8 +757,9 @@ namespace Basalt {
 				json result = { { "time", scene.GetTime() }, { "frame", scene.GetFrameCount() }, { "scriptErrors", errors }, { "quitRequested", scene.IsQuitRequested() } };
 				if (OptionalBool(params, "hash", false) || params.contains("expectHash"))
 				{
-					result["stateHash"] = SceneSerializer::ComputeStateHash(scene);
-					CheckExpectedHash(params, "expectHash", result["stateHash"].get<std::string>());
+					const std::string hash = SceneSerializer::ComputeStateHash(scene);
+					CheckExpectedHash(params, hash);
+					result["stateHash"] = hash;
 				}
 				return result;
 			});

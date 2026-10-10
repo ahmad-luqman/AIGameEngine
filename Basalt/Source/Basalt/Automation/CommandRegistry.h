@@ -35,6 +35,8 @@ namespace Basalt {
 	// Response:                 { "id": <same>, "ok": true, "result": { ... } }
 	//                           { "id": <same>, "ok": false, "error": "message" }
 	// A JSON array of requests is executed in order and answered with an array of responses.
+	// A request with "expectError": "<text>" (for tests) succeeds only if the command fails with an error
+	// containing <text>; the response then has "ok": true and the error as "expectedError".
 	class CommandRegistry
 	{
 	public:
