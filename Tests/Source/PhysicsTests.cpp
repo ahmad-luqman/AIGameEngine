@@ -19,6 +19,7 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <ranges>
 #include <string>
 #include <vector>
 
@@ -652,13 +653,14 @@ TEST_SUITE("Physics")
 				boxes.push_back(box);
 			}
 			// Physics is added in reverse creation order, so registry order alone would not reproduce it either.
-			for (auto it = boxes.rbegin(); it != boxes.rend(); ++it)
+			for (Entity box : std::views::reverse(boxes))
 			{
-				it->AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
-				it->AddComponent<BoxColliderComponent>();
+				box.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+				box.AddComponent<BoxColliderComponent>();
 			}
 			Simulate(scene, 3.0f);
 			std::vector<glm::vec3> positions;
+			positions.reserve(boxes.size());
 			for (Entity box : boxes)
 				positions.push_back(box.GetTransform().Translation);
 			scene.OnSimulationStop();
