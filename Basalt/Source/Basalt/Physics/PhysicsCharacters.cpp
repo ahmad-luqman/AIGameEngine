@@ -9,6 +9,84 @@
 
 namespace Basalt {
 
+	void PhysicsWorld::Impl::ConfigureCharacter(CharacterRecord& record, const std::function<void(const std::string&)>& warn)
+	{
+		const CharacterControllerComponent& c = record.Settings;
+		// Below about 0.8 degrees Jolt switches the slope check off and every slope becomes walkable.
+		const float slope = std::isfinite(c.SlopeLimit) ? std::clamp(c.SlopeLimit, 1.0f, 90.0f) : 45.0f;
+		if (slope != c.SlopeLimit)
+			warn(fmt::format("SlopeLimit {} must be within [1, 90] degrees; using {}", c.SlopeLimit, slope));
+		record.Character->SetMaxSlopeAngle(glm::radians(slope));
+		const float strength = std::isfinite(c.MaxStrength) && c.MaxStrength >= 0.0f ? c.MaxStrength : 0.0f;
+		if (strength != c.MaxStrength)
+			warn(fmt::format("MaxStrength {} must be a finite, non-negative force; using 0", c.MaxStrength));
+		record.Character->SetMaxStrength(strength);
+		const float mass = std::isfinite(c.Mass) && c.Mass >= 0.0f ? c.Mass : 0.0f;
+		if (mass != c.Mass)
+			warn(fmt::format("Mass {} must be a finite, non-negative mass; using 0", c.Mass));
+		record.Character->SetMass(mass);
+		record.StepHeight = std::isfinite(c.StepHeight) && c.StepHeight >= 0.0f ? c.StepHeight : 0.0f;
+		if (record.StepHeight != c.StepHeight)
+			warn(fmt::format("StepHeight {} must be a finite, non-negative distance; using 0", c.StepHeight));
+		record.GravityFactor = std::isfinite(c.GravityFactor) ? c.GravityFactor : 1.0f;
+		if (record.GravityFactor != c.GravityFactor)
+			warn(fmt::format("GravityFactor {} is not finite; using 1", c.GravityFactor));
+	}
+
+	void PhysicsWorld::Impl::UpdateSupportingVolume(CharacterRecord& record)
+	{
+		const JPH::CharacterVirtual& character = *record.Character;
+		const JPH::Vec3 localUp = character.GetRotation().Conjugated() * character.GetUp();
+		const JPH::Vec3 extent = record.Bounds.GetExtent();
+		const float bottom = localUp.Dot(record.Bounds.GetCenter()) - localUp.Abs().Dot(extent);
+		const float halfWidth = extent.ReduceMin();
+		record.Character->SetSupportingVolume(JPH::Plane(localUp, -(bottom + halfWidth)));
+	}
+
+	bool PhysicsWorld::Impl::WarnIfCharacter(Entity entity, const char* call)
+	{
+		if (!Characters.contains(entity.GetUUID()))
+			return false;
+		if (WarnedCharacterBodyCalls.insert(entity.GetUUID()).second)
+			BS_CORE_WARN("Physics: {} does nothing on character '{}' (it has a CharacterController); use Move", call, entity.GetName());
+		return true;
+	}
+
+	void PhysicsWorld::Impl::ReportCharacterWarnings(Entity entity, const std::string& warnings)
+	{
+		if (warnings.empty())
+		{
+			LoggedCharacterWarnings.erase(entity.GetUUID());
+		}
+		else if (std::string& logged = LoggedCharacterWarnings[entity.GetUUID()]; logged != warnings)
+		{
+			logged = warnings;
+			BS_CORE_WARN("Physics: character '{}': {}", entity.GetName(), warnings);
+		}
+	}
+
+	void PhysicsWorld::Impl::RemoveCharacter(Scene* scene, UUID uuid)
+	{
+		auto it = Characters.find(uuid);
+		if (it == Characters.end())
+			return;
+		const JPH::BodyID inner = it->second.Character->GetInnerBodyID();
+		if (!inner.IsInvalid())
+		{
+			BodyToEntity.erase(inner.GetIndexAndSequenceNumber());
+			ContactListener.Materials[inner.GetIndex()] = {};
+		}
+		// The character destroys its inner body.
+		Characters.erase(it);
+		EndContacts(scene, uuid, false);
+	}
+
+	void PhysicsWorld::Impl::OnCharacterChanged(entt::registry& registry, entt::entity entity)
+	{
+		if (const auto* id = registry.try_get<IDComponent>(entity))
+			DirtyCharacters.insert(id->ID);
+	}
+
 	void PhysicsWorld::RecreateCharacter(Entity entity)
 	{
 		Impl& impl = *m_Impl;
