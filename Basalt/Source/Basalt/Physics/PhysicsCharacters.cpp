@@ -351,10 +351,7 @@ namespace Basalt {
 
 			record.LastPosition = FromJolt(JPH::Vec3(character.GetPosition()));
 			record.LastRotation = rotation;
-			// The scale is kept exact, as for rigid bodies (PhysicsWorld::Step).
-			const glm::vec3 localScale = entity.GetTransform().Scale;
-			m_Scene->SetWorldTransform(entity, Math::ComposeTransform(record.LastPosition, rotation, scale));
-			entity.GetTransform().Scale = localScale;
+			Impl::WritePose(m_Scene, entity, record.LastPosition, rotation);
 		}
 	}
 

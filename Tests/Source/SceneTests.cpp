@@ -540,6 +540,9 @@ TEST_SUITE("Serialization")
 		CHECK(GetIgnoredJointFields(torqueHinge).empty());
 		torqueHinge.MotorMaxTorque = 20.0f;
 		CHECK(GetIgnoredJointFields(torqueHinge) == std::vector<std::string>{ "MotorMaxForce" });
+		// A negative torque cap falls back to MotorMaxForce (with a warning), so MotorMaxForce applies again.
+		torqueHinge.MotorMaxTorque = -5.0f;
+		CHECK(GetIgnoredJointFields(torqueHinge).empty());
 		// A rotation motor makes a six-DOF joint without limits hold torque, so BreakTorque applies.
 		ragdoll.BreakTorque = 10.0f;
 		CHECK_FALSE(JointFieldApplies(ragdoll, "BreakTorque"));
