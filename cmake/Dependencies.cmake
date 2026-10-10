@@ -169,8 +169,10 @@ set(JPH_USE_DX12 OFF CACHE BOOL "" FORCE)
 set(JPH_USE_VK OFF CACHE BOOL "" FORCE)
 set(JPH_USE_MTL OFF CACHE BOOL "" FORCE)
 set(JPH_USE_CPU_COMPUTE OFF CACHE BOOL "" FORCE)
-# The same simulation on every platform (replays and scene.hash are compared across platforms): Jolt
-# avoids FMA and platform math functions, at some cost in speed.
+# The same simulation on every platform (replays and scene.hash are compared across platforms). Jolt always
+# uses its own trig; this also drops FMA, builds Jolt without contraction (/fp:precise instead of /fp:fast on
+# MSVC) and makes a few vector operations deterministic, at roughly 8% speed. It only holds when every
+# platform builds the same Jolt source with the same defines, hence the exact pin above.
 set(CROSS_PLATFORM_DETERMINISTIC ON CACHE BOOL "" FORCE)
 # 32-bit object layers: Basalt packs motion type, collision layer and collision mask into them.
 set(OBJECT_LAYER_BITS 32 CACHE STRING "" FORCE)
@@ -178,6 +180,10 @@ set(OBJECT_LAYER_BITS 32 CACHE STRING "" FORCE)
 FetchContent_MakeAvailable(VulkanHeaders)
 FetchContent_MakeAvailable(glfw glm nvrhi spdlog entt json jolt sol2 doctest
 	lua imgui imguizmo miniaudio cgltf stb)
+# Jolt's deterministic mode turns contraction off for GCC, clang and MSVC, but not for clang-cl.
+if(MSVC AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+	target_compile_options(Jolt PRIVATE /clang:-ffp-contract=off)
+endif()
 
 # ---------------------------------------------------------------------------------------------
 # Targets for source-only dependencies
