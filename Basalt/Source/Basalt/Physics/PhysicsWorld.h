@@ -180,8 +180,6 @@ namespace Basalt {
 		// Applies the fields of a live joint that do not need a rebuild (limits, motor, break thresholds,
 		// collision).
 		void ApplyJointSettings(Entity entity, std::vector<std::string>& warnings);
-		// Logs the warnings unless the same ones were already logged for the same settings.
-		void ReportJointWarnings(Entity entity, std::vector<std::string> warnings);
 		// Removes joints whose constraint force or torque exceeded their break thresholds in the last step.
 		void CheckBrokenJoints(float fixedStep);
 		void DispatchContacts();

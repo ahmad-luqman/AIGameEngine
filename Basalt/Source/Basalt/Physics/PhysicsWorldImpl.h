@@ -10,6 +10,7 @@
 #include "Basalt/Physics/JointSettings.h"
 #include "Basalt/Physics/JoltUtils.h"
 #include "Basalt/Physics/PhysicsLayers.h"
+#include "Basalt/Physics/PhysicsWarnings.h"
 #include "Basalt/Scene/Components.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
@@ -88,7 +89,7 @@ namespace Basalt {
 			float StepHeight = 0.0f;
 			float GravityFactor = 1.0f;
 			// Warnings found while building the character, repeated with the settings' own when they change.
-			std::string BuildWarnings;
+			std::vector<std::string> BuildWarnings;
 			// The last MoveCharacter velocity, used every step until the next call.
 			glm::vec3 MoveVelocity = { 0.0f, 0.0f, 0.0f };
 			// Displacement over the last step divided by its duration.
@@ -116,8 +117,7 @@ namespace Basalt {
 		std::unordered_map<UUID, CharacterRecord> Characters;
 		// Characters whose CharacterControllerComponent changed (collider changes go to DirtyEntities).
 		std::unordered_set<UUID> DirtyCharacters;
-		// The character warnings last logged for each entity.
-		std::unordered_map<UUID, std::string> LoggedCharacterWarnings;
+		WarningLog CharacterWarnings{ "character", true };
 		// Characters already warned that rigid-body velocity and force calls do nothing on them.
 		std::unordered_set<UUID> WarnedCharacterBodyCalls;
 		std::unordered_map<uint32_t, UUID> BodyToEntity;
@@ -125,12 +125,11 @@ namespace Basalt {
 		// Keyed by the entity that holds the JointComponent (not necessarily the body it moves).
 		std::unordered_map<UUID, JointRecord> Joints;
 		std::unordered_set<UUID> DirtyJoints;
-		// The warnings last logged for each joint, so repeats are not logged again.
-		std::unordered_map<UUID, std::vector<std::string>> LoggedJointWarnings;
+		WarningLog JointWarnings{ "joint on", false };
 		// The collision layers this world was built with (scene override, else the active project's).
 		PhysicsLayers Layers;
-		// The body warnings (unknown layer, ignored Continuous) last logged for each entity.
-		std::unordered_map<UUID, std::string> LoggedBodyWarnings;
+		// Body warnings (e.g. an unknown layer or an ignored Continuous).
+		WarningLog BodyWarnings{ "entity", true };
 		// Set while Start() creates every body; it marks all joints dirty itself afterwards.
 		bool Starting = false;
 		// Jolt reports contacts per sub-shape pair; entities see one begin/end per entity pair. Keys are
@@ -159,9 +158,6 @@ namespace Basalt {
 		// Velocity and force calls address rigid bodies; a character moves only through Move. Warns once per
 		// character so knockback code that silently does nothing is noticed. Returns whether it is a character.
 		bool WarnIfCharacter(Entity entity, const char* call);
-
-		// Logs a character's warnings ("; "-joined) unless they are the ones last logged for it.
-		void ReportCharacterWarnings(Entity entity, const std::string& warnings);
 
 		bool IsTrigger(UUID uuid) const;
 

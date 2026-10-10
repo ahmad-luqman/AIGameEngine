@@ -4,6 +4,7 @@
 #include <Basalt/Core/JsonUtils.h>
 #include <Basalt/Core/Log.h>
 #include <Basalt/Physics/PhysicsLayers.h>
+#include <Basalt/Physics/PhysicsWarnings.h>
 #include <Basalt/Physics/PhysicsWorld.h>
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
@@ -144,6 +145,33 @@ namespace {
 
 TEST_SUITE("Physics")
 {
+	TEST_CASE("Physics warnings are logged once per distinct set and again after they clear")
+	{
+		Scene scene;
+		Entity entity = scene.CreateEntity("Warned");
+		PhysicsInternal::WarningLog joined("entity", true);
+		PhysicsInternal::WarningLog perLine("joint on", false);
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		for (int i = 0; i < 3; i++)
+		{
+			joined.Report(entity, { "first", "second" });
+			perLine.Report(entity, { "first", "second" });
+		}
+		CHECK(CountMessages(since, "Physics: entity 'Warned': first; second") == 1);
+		CHECK(CountMessages(since, "Physics: joint on 'Warned': first") == 1);
+		CHECK(CountMessages(since, "Physics: joint on 'Warned': second") == 1);
+
+		// A different set is logged; clearing and repeating logs the same set again.
+		joined.Report(entity, { "third" });
+		joined.Report(entity, {});
+		joined.Report(entity, { "third" });
+		CHECK(CountMessages(since, "Physics: entity 'Warned': third") == 2);
+		// Forgetting the entity (it was destroyed) also logs the next report.
+		perLine.Forget(entity.GetUUID());
+		perLine.Report(entity, { "first", "second" });
+		CHECK(CountMessages(since, "Physics: joint on 'Warned': first") == 2);
+	}
+
 	TEST_CASE("A dynamic box falls under gravity and rests on static ground")
 	{
 		Scene scene;
