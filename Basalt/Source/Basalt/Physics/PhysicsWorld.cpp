@@ -337,8 +337,6 @@ namespace Basalt {
 		m_Impl->RemoveBody(m_Scene, entity.GetUUID());
 		m_Impl->RemoveCharacter(m_Scene, entity.GetUUID());
 		m_Impl->RemoveJoint(entity.GetUUID());
-		m_Impl->DirtyEntities.Erase(entity.GetUUID());
-		m_Impl->DirtyCharacters.Erase(entity.GetUUID());
 		m_Impl->CharacterWarnings.Forget(entity.GetUUID());
 		m_Impl->DirtyJoints.erase(entity.GetUUID());
 		m_Impl->JointWarnings.Forget(entity.GetUUID());
@@ -358,30 +356,24 @@ namespace Basalt {
 		const float fixedStep = settings.FixedTimestep > 0.0f ? settings.FixedTimestep : 1.0f / 60.0f;
 
 		// Rebuild bodies whose physics components changed since the last step.
-		if (!impl.DirtyEntities.Empty())
+		for (UUID uuid : impl.DirtyEntities.Take())
 		{
-			for (UUID uuid : impl.DirtyEntities.Take())
+			Entity entity = m_Scene->GetEntityByUUID(uuid);
+			if (entity)
 			{
-				Entity entity = m_Scene->GetEntityByUUID(uuid);
-				if (entity)
-				{
-					RecreateBody(entity);
-					RecreateCharacter(entity);
-				}
-				else
-				{
-					impl.RemoveBody(m_Scene, uuid);
-					impl.RemoveCharacter(m_Scene, uuid);
-				}
+				RecreateBody(entity);
+				RecreateCharacter(entity);
+			}
+			else
+			{
+				impl.RemoveBody(m_Scene, uuid);
+				impl.RemoveCharacter(m_Scene, uuid);
 			}
 		}
-		if (!impl.DirtyCharacters.Empty())
+		for (UUID uuid : impl.DirtyCharacters.Take())
 		{
-			for (UUID uuid : impl.DirtyCharacters.Take())
-			{
-				if (Entity entity = m_Scene->GetEntityByUUID(uuid))
-					ApplyCharacterSettings(entity);
-			}
+			if (Entity entity = m_Scene->GetEntityByUUID(uuid))
+				ApplyCharacterSettings(entity);
 		}
 		RebuildDirtyJoints();
 
@@ -427,14 +419,21 @@ namespace Basalt {
 			m_StepCount++;
 			steps++;
 
-			// Write simulated poses of dynamic bodies back to their entities.
-			for (auto& [uuid, record] : impl.Bodies)
+			// Write simulated poses of dynamic bodies back to their entities, parents before children: a
+			// child's local transform is derived from its parent's world transform, which must already be
+			// this step's.
+			std::vector<std::pair<uint32_t, Entity>> movedBodies;
+			for (entt::entity handle : m_Scene->GetAllEntitiesWith<RigidBodyComponent>())
 			{
-				if (record.Type != RigidBodyType::Dynamic)
-					continue;
-				Entity entity = m_Scene->GetEntityByUUID(uuid);
-				if (!entity)
-					continue;
+				Entity entity(handle, m_Scene);
+				auto found = impl.Bodies.find(entity.GetUUID());
+				if (found != impl.Bodies.end() && found->second.Type == RigidBodyType::Dynamic)
+					movedBodies.emplace_back(m_Scene->GetDepth(entity), entity);
+			}
+			std::ranges::stable_sort(movedBodies, {}, &std::pair<uint32_t, Entity>::first);
+			for (auto& [depth, entity] : movedBodies)
+			{
+				Impl::BodyRecord& record = impl.Bodies.at(entity.GetUUID());
 
 				JPH::RVec3 joltPosition;
 				JPH::Quat joltRotation;

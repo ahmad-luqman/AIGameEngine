@@ -4,6 +4,7 @@
 #include <Basalt/Core/JsonUtils.h>
 #include <Basalt/Core/Log.h>
 #include <Basalt/Physics/PhysicsLayers.h>
+#include <Basalt/Physics/DirtySet.h>
 #include <Basalt/Physics/PhysicsWorld.h>
 #include <Basalt/Physics/WarningLog.h>
 #include <Basalt/Scene/Entity.h>
@@ -619,6 +620,83 @@ TEST_SUITE("Physics")
 				highest = std::max(highest, ball.GetTransform().Translation.y);
 		}
 		CHECK(highest < 3.25f);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("DirtySet hands members back in the order they were first marked")
+	{
+		PhysicsInternal::DirtySet set;
+		for (const uint64_t id : { 30, 10, 20, 10, 30 })
+			set.Insert(UUID(id));
+		CHECK(set.Take() == std::vector<UUID>{ UUID(30), UUID(10), UUID(20) });
+		CHECK(set.Take().empty());
+		set.Insert(UUID(10));
+		set.Clear();
+		set.Insert(UUID(20));
+		CHECK(set.Take() == std::vector<UUID>{ UUID(20) });
+	}
+
+	TEST_CASE("Bodies added during play are created in the order they were marked, whatever their UUIDs")
+	{
+		// Spawned entities get random UUIDs. Body creation order steers Jolt, so if it followed hash order the
+		// same input would end differently from run to run.
+		auto run = []() {
+			Scene scene;
+			CreateGround(scene);
+			scene.OnSimulationStart();
+			std::vector<Entity> boxes;
+			for (int i = 0; i < 6; i++)
+			{
+				Entity box = scene.CreateEntity("Spawned");
+				box.GetTransform().Translation = { 0.11f * static_cast<float>(i), 0.5f + 0.95f * static_cast<float>(i), 0.07f * static_cast<float>(i) };
+				boxes.push_back(box);
+			}
+			// Physics is added in reverse creation order, so registry order alone would not reproduce it either.
+			for (auto it = boxes.rbegin(); it != boxes.rend(); ++it)
+			{
+				it->AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+				it->AddComponent<BoxColliderComponent>();
+			}
+			Simulate(scene, 3.0f);
+			std::vector<glm::vec3> positions;
+			for (Entity box : boxes)
+				positions.push_back(box.GetTransform().Translation);
+			scene.OnSimulationStop();
+			return positions;
+		};
+		const std::vector<glm::vec3> first = run();
+		for (int i = 0; i < 3; i++)
+			CHECK(run() == first);
+	}
+
+	TEST_CASE("Dynamic bodies parented to dynamic bodies write back parent-first")
+	{
+		// Each child falls exactly like its parent, 3 m to the side. Writing a child back before its parent
+		// would derive its local transform from the parent's previous pose, so it would lag a step behind.
+		Scene scene;
+		std::vector<std::pair<Entity, Entity>> pairs;
+		for (int i = 0; i < 16; i++)
+		{
+			const float z = 4.0f * static_cast<float>(i);
+			// Half of the children are created first, so creation order alone is not parent-first.
+			Entity child = i % 2 ? CreateBox(scene, { 3.0f, 20.0f, z }) : Entity{};
+			Entity parent = CreateBox(scene, { 0.0f, 20.0f, z });
+			if (!child)
+				child = CreateBox(scene, { 3.0f, 20.0f, z });
+			scene.SetParent(child, parent);
+			pairs.emplace_back(parent, child);
+		}
+		scene.OnSimulationStart();
+		for (int step = 0; step < 30; step++)
+		{
+			scene.OnUpdate(Step);
+			for (const auto& [parent, child] : pairs)
+			{
+				const float parentY = scene.GetWorldTransform(parent)[3].y;
+				const float childY = scene.GetWorldTransform(child)[3].y;
+				REQUIRE(childY == doctest::Approx(parentY).epsilon(1e-5));
+			}
+		}
 		scene.OnSimulationStop();
 	}
 
