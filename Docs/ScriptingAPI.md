@@ -237,8 +237,10 @@ around the axis; a velocity axis turns with the joint's own body, so it drifts f
 frame as the joint bends). The `Position` rotation axes together drive toward one target orientation, given as Euler
 angles in degrees relative to the rest pose (the same form `GetJointRotation()` returns, so a recorded pose
 plays back as is); position targets beyond the limits are clamped to them. A motor on a locked axis does
-nothing and warns. `MotorMaxForce` caps both the force and the torque, and a `Position` motor pulls with a
-spring of `MotorSpringFrequency` Hz (default 2, must be above 0; higher is stiffer, up to `MotorMaxForce`) and
+nothing and warns. `MotorMaxForce` caps the translation motors' force (N) and `MotorMaxTorque` the rotation
+motors' torque (N·m); a `MotorMaxTorque` of 0 (the default) uses `MotorMaxForce` for both, as joints saved
+before it existed did. A `Position` motor pulls with a
+spring of `MotorSpringFrequency` Hz (default 2, must be above 0; higher is stiffer, up to that cap) and
 `MotorSpringDamping` (1 = critically damped), which also apply to hinge and slider motors. The cone joint
 has no motor; use a six-DOF joint with swing limits instead.
 
@@ -255,7 +257,7 @@ arm:AddComponent("Joint", { Type = "SixDOF", ConnectedEntity = torso, Anchor = {
 
 -- Powered: every frame, pull the shoulder toward the animated pose (Euler degrees from the rest pose).
 arm:SetComponent("Joint", { AngularMotorMode = { "Position", "Position", "Position" },
-    AngularMotorTarget = pose, MotorSpringFrequency = 8, MotorMaxForce = 200 })  -- cheap: in place
+    AngularMotorTarget = pose, MotorSpringFrequency = 8, MotorMaxTorque = 200 })  -- cheap: in place
 ```
 
 **Several joints on one body.** An entity holds one `Joint`. To give a body more (a ladder rung held by
@@ -281,7 +283,8 @@ end
   place (per-axis motors and `FreeLinearAxes` included), so it is fine to do every frame. Changing `Type`, an entity, an anchor, an axis or `UseLimits`
   rebuilds it from the current poses.
 - Motors (`MotorMode` `Velocity` or `Position`, `MotorTarget` in degrees(/s) or meters(/s),
-  `MotorMaxForce`) work on hinges and sliders; six-DOF joints use the per-axis motors above. Hinge position
+  `MotorMaxForce` for sliders, `MotorMaxTorque` for hinges, which falls back to `MotorMaxForce` while it is 0)
+  work on hinges and sliders; six-DOF joints use the per-axis motors above. Hinge position
   targets are clamped to [-180, 180].
 - `HasJoint()`, `GetJointPosition()` and `GetJointRotation()` are called on the entity that holds the
   `Joint`. `GetJointPosition()` is the body's position relative to the connected one: the hinge angle

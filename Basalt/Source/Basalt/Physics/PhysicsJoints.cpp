@@ -174,8 +174,11 @@ namespace Basalt {
 		const JPH::SpringSettings limitSpring = SanitizeLimitSpring(joint, warnings);
 		if (joint.MotorMaxForce < 0.0f)
 			warnings.emplace_back(fmt::format("MotorMaxForce {} is negative; using 0", joint.MotorMaxForce));
+		if (joint.MotorMaxTorque < 0.0f)
+			warnings.emplace_back(fmt::format("MotorMaxTorque {} is negative; using MotorMaxForce", joint.MotorMaxTorque));
 		const JPH::EMotorState motorState = ToJoltMotorState(joint.MotorMode);
-		const float motorLimit = std::max(joint.MotorMaxForce, 0.0f);
+		const float motorForceLimit = std::max(joint.MotorMaxForce, 0.0f);
+		const float motorTorqueLimit = joint.MotorMaxTorque > 0.0f ? joint.MotorMaxTorque : motorForceLimit;
 		const JPH::SpringSettings motorSpring = SanitizeMotorSpring(joint, warnings);
 
 		switch (joint.Type)
@@ -187,7 +190,7 @@ namespace Basalt {
 				if (joint.UseLimits)
 					hinge->SetLimits(glm::radians(limitMin), glm::radians(limitMax));
 				hinge->SetLimitsSpringSettings(limitSpring);
-				hinge->GetMotorSettings().SetTorqueLimit(motorLimit);
+				hinge->GetMotorSettings().SetTorqueLimit(motorTorqueLimit);
 				hinge->GetMotorSettings().mSpringSettings = motorSpring;
 				hinge->SetMotorState(motorState);
 				if (motorState == JPH::EMotorState::Velocity)
@@ -209,7 +212,7 @@ namespace Basalt {
 				if (joint.UseLimits)
 					slider->SetLimits(limitMin, limitMax);
 				slider->SetLimitsSpringSettings(limitSpring);
-				slider->GetMotorSettings().SetForceLimit(motorLimit);
+				slider->GetMotorSettings().SetForceLimit(motorForceLimit);
 				slider->GetMotorSettings().mSpringSettings = motorSpring;
 				slider->SetMotorState(motorState);
 				if (motorState == JPH::EMotorState::Velocity)
@@ -295,8 +298,8 @@ namespace Basalt {
 					for (const auto axis : { linearAxis, angularAxis })
 					{
 						JPH::MotorSettings& motor = sixDOF->GetMotorSettings(axis);
-						motor.SetForceLimit(motorLimit);
-						motor.SetTorqueLimit(motorLimit);
+						motor.SetForceLimit(motorForceLimit);
+						motor.SetTorqueLimit(motorTorqueLimit);
 						motor.mSpringSettings = motorSpring;
 					}
 					sixDOF->SetMotorState(linearAxis, ToJoltMotorState(linearMode));
