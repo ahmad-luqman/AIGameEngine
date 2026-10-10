@@ -70,11 +70,19 @@ seeds them from the clock), so replays and automated tests reproduce exactly.
 The random generator is deterministic; seed it for reproducible games and tests.
 
 Physics is deterministic across platforms too: the same scene and inputs reach the same state (and
-`scene.hash`) on Windows, Linux and macOS, in Debug and Release. That holds as long as the state does not
-go through the platform's math library: Lua's `math.sin`/`math.cos`/`math.atan` and `Math.Radians`-based
-`Quat.FromEuler`/`SetRotation` from Euler angles can differ in the last bit between platforms, and so can
-the initial rotation of entities whose scene files store non-trivial Euler angles. Identity rotations,
-exact constants and physics-produced motion are portable.
+`scene.hash`) on Windows, Linux and macOS, in Debug and Release (`Tests/Data/Determinism` checks it on
+every CI run). That holds as long as nothing feeding the state goes through the platform's math library,
+whose trigonometric and exponential functions can differ in the last bit between platforms:
+- Lua's `math.sin`/`cos`/`tan`/`asin`/`acos`/`atan`/`exp`/`log` and `^`;
+- Euler angles in either direction: `e.EulerAngles`, `Quat.FromEuler`, `Quat.ToEuler`,
+  `SetComponent("Transform", { Rotation = ... })`, and scene files whose rotations are not all zero;
+- `Quat.AngleAxis`, `Quat.Slerp`, `GetJointRotation()`, and six-DOF `Position` motors on rotation axes
+  (their target is an Euler orientation).
+
+`Math.Radians` and `Math.Degrees` are plain multiplications, and physics-produced motion is portable.
+Entities spawned during play get random UUIDs, and some engine orders (joint removal, contact callbacks,
+the creation order of new script instances) still follow UUID values, so a game that spawns jointed or
+contact-driven entities at runtime is not yet reproducible run to run.
 
 ## Entity
 

@@ -146,8 +146,9 @@ Other rules:
   `Assets/Scripts/FeatureTest.lua`, run by ctest through `basalt batch FeatureTest.batch.json`). Add a
   `Check(...)` for every new API function and put every new component in the scene.
 - `PhysicsDeterminism` (`Tests/Data/Determinism`) pins the state hashes of a physics-heavy scene, which
-  must match on every platform and build type. A deliberate physics change that alters them updates the
-  expected hashes (see its README); an unexplained change is a determinism bug.
+  must match on every CI platform and configuration (Debug, Release, ASan, coverage). Deliberate changes to
+  physics, scene serialization or the component registry legitimately move them: update the expected
+  hashes (see its README). An unexplained change is a determinism bug.
 - GPU tests (label `gpu`) are registered by `scripts/build.sh` unless `CI` is set (CI registers them
   explicitly in its lavapipe job): they render the feature scene and fail on any validation error — and
   also when the Khronos validation layer is not installed (`--require-validation`). Install the Vulkan
