@@ -111,7 +111,7 @@ namespace Basalt::PhysicsInternal {
 			limits.LinearMin[i] = -FLT_MAX;
 			limits.LinearMax[i] = FLT_MAX;
 			if (joint.UseLimits && (joint.LinearLimitMin[i] != 0.0f || joint.LinearLimitMax[i] != 0.0f))
-				warnings.emplace_back(fmt::format("six-DOF linear {} limits are ignored: the axis is free (FreeLinearAxes)", s_AxisNames[i]));
+				warnings.emplace_back(fmt::format("six-DOF linear {} limits are ignored: the axis is free (FreeLinearAxes)", AxisNames[i]));
 		}
 		if (!joint.UseLimits)
 			return limits;
@@ -122,7 +122,7 @@ namespace Basalt::PhysicsInternal {
 				const float linearMin = std::min(joint.LinearLimitMin[i], 0.0f);
 				const float linearMax = std::max(joint.LinearLimitMax[i], 0.0f);
 				if (linearMin != joint.LinearLimitMin[i] || linearMax != joint.LinearLimitMax[i])
-					warnings.emplace_back(fmt::format("six-DOF linear {} limits [{}, {}] must satisfy min <= 0 <= max (the rest pose is 0); clamped to [{}, {}]", s_AxisNames[i],
+					warnings.emplace_back(fmt::format("six-DOF linear {} limits [{}, {}] must satisfy min <= 0 <= max (the rest pose is 0); clamped to [{}, {}]", AxisNames[i],
 													  joint.LinearLimitMin[i], joint.LinearLimitMax[i], linearMin, linearMax));
 				limits.LinearMin[i] = linearMin;
 				limits.LinearMax[i] = linearMax;
@@ -143,7 +143,7 @@ namespace Basalt::PhysicsInternal {
 				angularMin = -angularMax;
 				const bool mirrored = joint.AngularLimitMin[i] == 0.0f || joint.AngularLimitMin[i] == angularMin;
 				if (!mirrored || angularMax != joint.AngularLimitMax[i])
-					warnings.emplace_back(fmt::format("six-DOF swing (angular {}) limits [{}, {}] must be a symmetric half angle [-max, max] with 0 <= max <= 180 degrees; using [{}, {}]", s_AxisNames[i],
+					warnings.emplace_back(fmt::format("six-DOF swing (angular {}) limits [{}, {}] must be a symmetric half angle [-max, max] with 0 <= max <= 180 degrees; using [{}, {}]", AxisNames[i],
 													  joint.AngularLimitMin[i], joint.AngularLimitMax[i], angularMin, angularMax));
 			}
 			limits.AngularMin[i] = std::max(glm::radians(angularMin), -JPH::JPH_PI);

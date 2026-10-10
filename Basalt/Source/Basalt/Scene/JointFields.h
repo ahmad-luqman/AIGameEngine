@@ -13,8 +13,8 @@ namespace Basalt {
 	// not apply, and physics warns about the ones set away from their defaults, so both follow this one rule.
 	bool JointFieldApplies(const JointComponent& joint, std::string_view field);
 
-	// Whether a change from `built` to `current` needs a new constraint: some field differs that a live Jolt
-	// constraint cannot update in place (the joint's type, bodies, anchors, axes or UseLimits).
+	// Whether a change from `built` to `current` must rebuild a joint in play (which resets its rest pose)
+	// rather than apply in place. Each field's entry in the JointFields table says which it needs.
 	bool JointNeedsRebuild(const JointComponent& built, const JointComponent& current);
 
 	// Every JointComponent field name, in declaration order (the same list the component registry reads).

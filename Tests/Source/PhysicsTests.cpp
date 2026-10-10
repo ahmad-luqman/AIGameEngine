@@ -4,7 +4,7 @@
 #include <Basalt/Core/JsonUtils.h>
 #include <Basalt/Core/Log.h>
 #include <Basalt/Physics/PhysicsLayers.h>
-#include <Basalt/Physics/PhysicsWarnings.h>
+#include <Basalt/Physics/WarningLog.h>
 #include <Basalt/Physics/PhysicsWorld.h>
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
