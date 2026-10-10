@@ -1,8 +1,9 @@
 #include "Basalt/Physics/PhysicsWorld.h"
 
-#include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Core/Log.h"
+#include "Basalt/Physics/ColliderShapes.h"
 #include "Basalt/Physics/JoltUtils.h"
+#include "Basalt/Physics/MeshShapeCache.h"
 #include "Basalt/Physics/PhysicsLayers.h"
 #include "Basalt/Physics/PhysicsMaterial.h"
 #include "Basalt/Project/Project.h"
@@ -577,241 +578,6 @@ namespace Basalt {
 		{
 			const float convexRadius = std::min(JPH::cDefaultConvexRadius, 0.5f * std::min({ halfExtents.x, halfExtents.y, halfExtents.z }));
 			return new JPH::BoxShape(ToJolt(halfExtents), convexRadius);
-		}
-
-		// ---------------------------------------------------------------------------------------
-		// Cooked mesh collider shapes, shared by every entity (and every PhysicsWorld) that uses the same
-		// mesh. Cooking a level's triangle tree is the slow part of starting play, so shapes outlive the
-		// world; an entry is re-cooked when its mesh asset was reloaded (the cached source expired).
-		// ---------------------------------------------------------------------------------------
-		struct CookedMeshShape
-		{
-			std::weak_ptr<MeshSource> Source;
-			// Unscaled shape in the mesh's local space; null when cooking failed.
-			JPH::Ref<JPH::Shape> Shape;
-			std::string Error;
-		};
-
-		using MeshShapeKey = std::tuple<std::string, uint32_t, bool>;
-		std::mutex s_MeshShapeMutex;
-		std::map<MeshShapeKey, CookedMeshShape> s_MeshShapes;
-		uint64_t s_MeshShapeCookCount = 0;
-
-		CookedMeshShape CookMeshShape(const Ref<MeshSource>& source, uint32_t meshIndex, bool convex)
-		{
-			CookedMeshShape cooked;
-			cooked.Source = source;
-			const MeshData& mesh = source->Meshes[meshIndex];
-			if (convex)
-			{
-				// Only vertices the index buffer draws: a glTF accessor may hold unused ones outside the visible
-				// geometry, which would otherwise inflate the hull.
-				JPH::Array<JPH::Vec3> points;
-				for (uint32_t submeshIndex : mesh.Submeshes)
-				{
-					const Submesh& submesh = source->Submeshes[submeshIndex];
-					std::vector<bool> used(submesh.VertexCount, false);
-					for (uint32_t i = 0; i < submesh.IndexCount; i++)
-					{
-						const uint32_t index = source->Indices[submesh.BaseIndex + i];
-						if (index < submesh.VertexCount && !used[index])
-						{
-							used[index] = true;
-							const glm::vec3& position = source->Vertices[submesh.BaseVertex + index].Position;
-							if (!IsFiniteVec(position))
-							{
-								cooked.Error = "the mesh has a non-finite vertex position";
-								return cooked;
-							}
-							points.push_back(ToJolt(position));
-						}
-					}
-				}
-				JPH::ShapeSettings::ShapeResult result = JPH::ConvexHullShapeSettings(points).Create();
-				if (result.HasError())
-					cooked.Error = std::string("cannot build a convex hull: ") + result.GetError().c_str();
-				else
-					cooked.Shape = result.Get();
-				return cooked;
-			}
-
-			JPH::VertexList vertices;
-			JPH::IndexedTriangleList triangles;
-			for (uint32_t submeshIndex : mesh.Submeshes)
-			{
-				const Submesh& submesh = source->Submeshes[submeshIndex];
-				const uint32_t base = static_cast<uint32_t>(vertices.size());
-				for (uint32_t i = 0; i < submesh.VertexCount; i++)
-				{
-					const glm::vec3& position = source->Vertices[submesh.BaseVertex + i].Position;
-					if (!IsFiniteVec(position))
-					{
-						cooked.Error = "the mesh has a non-finite vertex position";
-						return cooked;
-					}
-					vertices.push_back(JPH::Float3(position.x, position.y, position.z));
-				}
-				for (uint32_t i = 0; i + 2 < submesh.IndexCount; i += 3)
-				{
-					const uint32_t* index = &source->Indices[submesh.BaseIndex + i];
-					if (index[0] >= submesh.VertexCount || index[1] >= submesh.VertexCount || index[2] >= submesh.VertexCount)
-						continue;
-					triangles.push_back(JPH::IndexedTriangle(base + index[0], base + index[1], base + index[2]));
-				}
-			}
-			if (triangles.empty())
-			{
-				cooked.Error = "the mesh has no triangles";
-				return cooked;
-			}
-			JPH::ShapeSettings::ShapeResult result = JPH::MeshShapeSettings(std::move(vertices), std::move(triangles)).Create();
-			if (result.HasError())
-				cooked.Error = std::string("cannot build a triangle mesh: ") + result.GetError().c_str();
-			else
-				cooked.Shape = result.Get();
-			return cooked;
-		}
-
-		// Returns the unscaled shape for one mesh of a mesh asset, cooking it on first use. On failure returns
-		// null and sets outError.
-		JPH::Ref<JPH::Shape> GetMeshShape(const std::string& key, uint32_t meshIndex, bool convex, std::string& outError)
-		{
-			const Ref<MeshSource> source = AssetManager::GetMesh(key);
-			if (!source)
-			{
-				const std::string error = AssetManager::GetError(key);
-				outError = "cannot load mesh '" + key + "'" + (error.empty() ? "" : ": " + error);
-				return nullptr;
-			}
-			if (meshIndex >= source->Meshes.size())
-			{
-				outError = "mesh '" + key + "' has no mesh " + std::to_string(meshIndex) + " (it has " + std::to_string(source->Meshes.size()) + ")";
-				return nullptr;
-			}
-
-			std::scoped_lock lock(s_MeshShapeMutex);
-			auto [it, inserted] = s_MeshShapes.try_emplace(MeshShapeKey(key, meshIndex, convex));
-			if (inserted || it->second.Source.lock() != source)
-			{
-				it->second = CookMeshShape(source, meshIndex, convex);
-				s_MeshShapeCookCount++;
-				// Entries of unloaded or reloaded meshes would otherwise keep their shapes alive until the
-				// cache is cleared; new cooks are rare, so pruning here costs little. Only after cooking: a
-				// just-inserted entry has no Source yet and would count as expired.
-				std::erase_if(s_MeshShapes, [](const auto& entry) { return entry.second.Source.expired(); });
-			}
-			outError = it->second.Error;
-			return it->second.Shape;
-		}
-
-		// Smallest collider extent, so a zero scale or size still gives Jolt a valid shape.
-		constexpr float MinExtent = 0.001f;
-
-		// An entity's colliders combined into one shape, shared by rigid bodies and characters.
-		struct ColliderShape
-		{
-			// Null when no collider is valid (the reasons went to warn).
-			JPH::Ref<JPH::Shape> Shape;
-			// A MeshCollider contributed an exact triangle mesh (which has no volume).
-			bool HasTriangleMesh = false;
-			// The MeshComponent mesh a MeshCollider without its own Mesh used.
-			std::optional<std::pair<std::string, uint32_t>> BorrowedMesh;
-		};
-
-		// Builds the entity's box, sphere, capsule and mesh colliders, scaled by its world scale (signed: mesh
-		// colliders keep a mirroring) and by sizeFraction (a character's inner body is a little smaller).
-		// convexReason, when set, forces mesh colliders onto their convex hull and names who needs it.
-		ColliderShape BuildColliderShape(Entity entity, const glm::vec3& signedScale, float sizeFraction, const char* convexReason, bool isTrigger, const std::function<void(const std::string&)>& warn)
-		{
-			const glm::vec3 scale = glm::abs(signedScale) * sizeFraction;
-			JPH::StaticCompoundShapeSettings compound;
-			uint32_t shapeCount = 0;
-			auto addShape = [&](const JPH::ShapeSettings::ShapeResult& result, const glm::vec3& offset) {
-				if (result.HasError())
-				{
-					warn(std::string("invalid collider: ") + result.GetError().c_str());
-					return;
-				}
-				// Offsets follow the entity's scale only: a smaller inner shape stays centred on each collider.
-				compound.AddShape(ToJolt(offset * glm::abs(signedScale)), JPH::Quat::sIdentity(), result.Get());
-				shapeCount++;
-			};
-
-			if (const auto* box = entity.TryGetComponent<BoxColliderComponent>())
-			{
-				const glm::vec3 halfExtents = glm::max(box->HalfExtents * scale, glm::vec3(MinExtent));
-				const float convexRadius = std::min(JPH::cDefaultConvexRadius, glm::min(halfExtents.x, glm::min(halfExtents.y, halfExtents.z)) * 0.5f);
-				addShape(JPH::BoxShapeSettings(ToJolt(halfExtents), convexRadius).Create(), box->Offset);
-			}
-			if (const auto* sphere = entity.TryGetComponent<SphereColliderComponent>())
-			{
-				const float radius = std::max(sphere->Radius * glm::max(scale.x, glm::max(scale.y, scale.z)), MinExtent);
-				addShape(JPH::SphereShapeSettings(radius).Create(), sphere->Offset);
-			}
-			if (const auto* capsule = entity.TryGetComponent<CapsuleColliderComponent>())
-			{
-				const float radius = std::max(capsule->Radius * glm::max(scale.x, scale.z), MinExtent);
-				const float halfHeight = std::max(capsule->HalfHeight * scale.y, MinExtent);
-				addShape(JPH::CapsuleShapeSettings(halfHeight, radius).Create(), capsule->Offset);
-			}
-
-			ColliderShape result;
-			if (const auto* meshCollider = entity.TryGetComponent<MeshColliderComponent>())
-			{
-				std::string key = meshCollider->Mesh;
-				uint32_t meshIndex = meshCollider->MeshIndex;
-				const auto* meshComponent = entity.TryGetComponent<MeshComponent>();
-				if (key.empty() && meshComponent)
-				{
-					if (meshIndex != 0)
-						warn("MeshCollider MeshIndex is ignored without its own Mesh (the MeshComponent's is used)");
-					key = meshComponent->Mesh;
-					meshIndex = meshComponent->MeshIndex;
-					result.BorrowedMesh.emplace(key, meshIndex);
-				}
-				bool convex = meshCollider->Convex;
-				if (!convex && convexReason)
-				{
-					convex = true;
-					warn(std::string(convexReason) + " collides by the convex hull of its MeshCollider; set Convex to make that explicit");
-				}
-				// A triangle mesh has no inside, so a trigger built from one would only report crossing its surface.
-				convex |= isTrigger;
-				std::string error;
-				JPH::Ref<JPH::Shape> shape;
-				if (key.empty())
-					error = "MeshCollider has no Mesh and the entity has no MeshComponent to use";
-				else
-					shape = GetMeshShape(key, meshIndex, convex, error);
-				if (shape)
-				{
-					// The cooked shape is shared, so the entity's scale wraps it instead of being baked in.
-					const glm::vec3 meshScale = glm::sign(signedScale) * glm::max(scale, glm::vec3(MinExtent));
-					if (meshScale != glm::vec3(1.0f))
-						shape = new JPH::ScaledShape(shape, ToJolt(meshScale));
-					compound.AddShape(JPH::Vec3::sZero(), JPH::Quat::sIdentity(), shape);
-					shapeCount++;
-					result.HasTriangleMesh = !convex;
-				}
-				else
-				{
-					warn("MeshCollider ignored: " + error);
-				}
-			}
-
-			if (shapeCount == 0)
-			{
-				warn("no valid collider");
-				return result;
-			}
-			JPH::ShapeSettings::ShapeResult shapeResult = compound.Create();
-			if (shapeResult.HasError())
-			{
-				warn(std::string("failed to build the shape: ") + shapeResult.GetError().c_str());
-				return result;
-			}
-			result.Shape = shapeResult.Get();
-			return result;
 		}
 
 	}
@@ -2662,14 +2428,12 @@ namespace Basalt {
 
 	void PhysicsWorld::ClearMeshShapeCache()
 	{
-		std::scoped_lock lock(s_MeshShapeMutex);
-		s_MeshShapes.clear();
+		PhysicsInternal::ClearMeshShapeCache();
 	}
 
 	uint64_t PhysicsWorld::GetMeshShapeCookCount()
 	{
-		std::scoped_lock lock(s_MeshShapeMutex);
-		return s_MeshShapeCookCount;
+		return PhysicsInternal::GetMeshShapeCookCount();
 	}
 
 	uint32_t PhysicsWorld::GetBodyCount() const
