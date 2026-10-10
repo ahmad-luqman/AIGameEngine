@@ -437,6 +437,12 @@ function Driver:OnUpdate(dt)
 		local events = FeatureTestEvents
 		Check("Trigger enter", (events.TriggerEnter or 0) >= 1)
 		Check("Trigger exit", (events.TriggerExit or 0) >= 1)
+		-- Where bodies started overlapping a trigger, and where trigger overlaps and collisions ended.
+		local function partingContact(contact)
+			return contact ~= nil and Near(contact.Normal:Length(), 1, 0.01) and contact.Impulse == 0
+		end
+		Check("OnTriggerEnter contact", partingContact(events.TriggerEnterContact))
+		Check("OnTriggerExit contact", partingContact(events.TriggerExitContact))
 		Check("Collision begin", (events.CollisionBegin or 0) >= 1)
 		Check("Ball rests on ground", Near(Scene.FindEntityByName("Ball").Translation.y, 0.5, 0.05))
 		-- The ball (2 kg) lands at about 11 m/s; its normal points up, away from the ground.
@@ -482,13 +488,15 @@ function Driver:OnUpdate(dt)
 		Check("Driver late update runs", self.Late == frame - 1)
 		Check("Time advances", Time.GetFrame() == frame - 1 and Time.GetElapsed() > 2.0)
 		Check("Audio clip finished", not Scene.FindEntityByName("Speaker"):IsAudioPlaying())
-		-- Lift the resting ball off the ground to end the contact.
-		local ball = Scene.FindEntityByName("Ball")
-		ball.Translation = ball.Translation + Vec3(0, 5, 0)
+		-- Launch the resting ball off the ground to end the contact.
+		Scene.FindEntityByName("Ball"):SetLinearVelocity(Vec3(0, 6, 0))
 	end
 
 	if frame == 160 then
 		Check("Collision end", (FeatureTestEvents.CollisionEnd or 0) >= 1)
+		-- It left the ground upward, just above where it rested.
+		local parted = FeatureTestEvents.CollisionEndContact
+		Check("OnCollisionEnd contact", parted ~= nil and math.abs(parted.Normal.y) > 0.99 and parted.Impulse == 0 and Near(parted.Point.y, 0, 0.3))
 		Expect("Game.Quit", function() Game.Quit() end)
 		FeatureTest.Quit = true
 		FeatureTest.Phase = "done"

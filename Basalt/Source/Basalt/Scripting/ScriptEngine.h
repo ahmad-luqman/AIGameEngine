@@ -50,9 +50,9 @@ namespace Basalt {
 		void Stop();
 
 		void OnEntityDestroyed(Entity entity);
-		// Calls the event's callback on both entities. OnCollisionBegin also receives the contact (Point,
-		// Normal pointing away from the other entity, Impulse) as a table.
-		void OnContactEvent(ContactEventType type, Entity a, Entity b, const ContactInfo& contact = {});
+		// Calls the event's callback on both entities, each with the other and the contact (Point, Normal
+		// pointing away from the other entity, Impulse) as a table, or nil when there is none (see ContactInfo).
+		void OnContactEvent(ContactEventType type, Entity a, Entity b, const std::optional<ContactInfo>& contact = std::nullopt);
 		// Calls OnJointBreak on the joint's body and on the connected entity (if any), each with the other,
 		// and once on the entity holding the JointComponent when it is neither (with the connected entity, or
 		// nil for the world).

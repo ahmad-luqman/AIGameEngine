@@ -21,9 +21,9 @@ function Player:OnUpdate(dt) end               -- every frame, before physics
 function Player:OnLateUpdate(dt) end           -- every frame, after physics
 function Player:OnDestroy() end                -- entity destroyed, component removed, or play stopped
 function Player:OnCollisionBegin(other, contact) end  -- other: Entity; contact: see below
-function Player:OnCollisionEnd(other) end
-function Player:OnTriggerEnter(other) end      -- either body is a trigger (RigidBody.IsTrigger)
-function Player:OnTriggerExit(other) end
+function Player:OnCollisionEnd(other, contact) end
+function Player:OnTriggerEnter(other, contact) end  -- either body is a trigger (RigidBody.IsTrigger)
+function Player:OnTriggerExit(other, contact) end
 function Player:OnJointBreak(other) end        -- joint exceeded BreakForce/BreakTorque; other is the far body, nil for the world
 
 return Player
@@ -41,6 +41,11 @@ return Player
   `other`: a body landing on the ground gets `(0, 1, 0)`) and `Impulse` (number, N·s: the estimated impulse
   that stops the bodies closing in, bounce included; 0 when they touched without closing in). When several parts of the two
   bodies touch in the same step, the strongest is reported. Use it for impact sounds, damage or "landed" checks.
+- `OnTriggerEnter` gets the same table for where the bodies started to overlap (`Impulse` is 0: triggers
+  push nothing). `OnCollisionEnd` and `OnTriggerExit` get where the bodies parted: `Point` midway between
+  their closest points right after they separated and `Normal` pointing away from `other` (the way this
+  entity left), `Impulse` 0. Their `contact` is nil when the other body is gone (destroyed, or rebuilt after
+  a component change) or already far away.
 - Friction and restitution of a contact are combined from both bodies by `RigidBody.FrictionCombine` and
   `RestitutionCombine`: `Default`, `GeometricMean`, `Average`, `Min`, `Multiply` or `Max`. When the bodies
   differ, the mode later in that list wins (so `Default` defers to the other body); when both are

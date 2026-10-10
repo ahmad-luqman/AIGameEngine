@@ -43,16 +43,19 @@ namespace Basalt {
 		TriggerExit
 	};
 
-	// Where and how hard two entities started touching (ContactEventType::CollisionBegin). Relative to the
-	// event's first entity: Normal points from the second entity toward the first, i.e. the direction that
-	// pushes the first entity out.
+	// Where two entities started or stopped touching. Begin and enter events report where they first touched
+	// (midway between the surfaces); end and exit events the closest points of the two bodies right after they
+	// parted (midway between them), and none when either body is gone (destroyed or being rebuilt) or they
+	// are already far apart. Relative to the event's first entity: Normal points from the second entity toward
+	// the first, i.e. the direction that pushes the first entity out (or that it left in).
 	struct ContactInfo
 	{
 		glm::vec3 Point = { 0.0f, 0.0f, 0.0f };
 		glm::vec3 Normal = { 0.0f, 0.0f, 0.0f };
-		// Estimated impulse (N*s) along the normal that resolves the impact, bounce included; 0 when the
-		// bodies touched without closing in (e.g. resting contact). The strongest touching part is reported
-		// when several parts of the two bodies touch in the same step.
+		// CollisionBegin only: the estimated impulse (N*s) along the normal that resolves the impact, bounce
+		// included; 0 when the bodies touched without closing in (e.g. resting contact), and for the other
+		// events (triggers do not push, and parting takes none). The strongest touching part is reported when
+		// several parts of the two bodies touch in the same step.
 		float Impulse = 0.0f;
 
 		// The same contact seen from the second entity.
@@ -183,7 +186,7 @@ namespace Basalt {
 		void ApplyJointSettings(Entity entity, std::vector<std::string>& warnings);
 		// Removes joints whose constraint force or torque exceeded their break thresholds in the last step.
 		void CheckBrokenJoints(float fixedStep);
-		void DispatchContacts();
+		void DispatchContacts(float fixedStep);
 
 	private:
 		struct Impl;

@@ -27,7 +27,7 @@ namespace Basalt::PhysicsInternal {
 		uint32_t SubShape1 = 0;
 		uint32_t Body2 = 0;
 		uint32_t SubShape2 = 0;
-		// Added events only; Normal points from body 1 toward body 2.
+		// Added events only (Impulse stays 0 for sensors); Normal points from body 1 toward body 2.
 		ContactInfo Contact;
 
 		auto Tie() const { return std::tie(Added, Body1, SubShape1, Body2, SubShape2); }
@@ -53,7 +53,7 @@ namespace Basalt::PhysicsInternal {
 			CombineMaterials(body1, body2, manifold, settings);
 
 			RawContactEvent event{ true, body1.GetID().GetIndexAndSequenceNumber(), manifold.mSubShapeID1.GetValue(), body2.GetID().GetIndexAndSequenceNumber(), manifold.mSubShapeID2.GetValue(), {} };
-			if (!body1.IsSensor() && !body2.IsSensor() && !manifold.mRelativeContactPointsOn1.empty())
+			if (!manifold.mRelativeContactPointsOn1.empty())
 			{
 				// Midway between the two surfaces, averaged over the manifold's points.
 				JPH::Vec3 sum = JPH::Vec3::sZero();
@@ -63,11 +63,15 @@ namespace Basalt::PhysicsInternal {
 				event.Contact.Point = FromJolt(JPH::Vec3(point));
 				event.Contact.Normal = FromJolt(manifold.mWorldSpaceNormal);
 
-				// The solver has not run yet; Jolt's estimate uses the velocities before the impact.
-				JPH::CollisionEstimationResult estimate;
-				JPH::EstimateCollisionResponse(body1, body2, manifold, estimate, settings.mCombinedFriction, settings.mCombinedRestitution, MinVelocityForRestitution);
-				for (const float impulse : estimate.mContactImpulse)
-					event.Contact.Impulse += impulse;
+				// The solver has not run yet; Jolt's estimate uses the velocities before the impact. A sensor
+				// pushes nothing.
+				if (!body1.IsSensor() && !body2.IsSensor())
+				{
+					JPH::CollisionEstimationResult estimate;
+					JPH::EstimateCollisionResponse(body1, body2, manifold, estimate, settings.mCombinedFriction, settings.mCombinedRestitution, MinVelocityForRestitution);
+					for (const float impulse : estimate.mContactImpulse)
+						event.Contact.Impulse += impulse;
+				}
 			}
 
 			std::scoped_lock lock(Mutex);
