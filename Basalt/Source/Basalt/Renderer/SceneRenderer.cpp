@@ -170,7 +170,7 @@ namespace Basalt {
 
 		// Shaders
 		nvrhi::ShaderHandle ShadowMaskedVS, ShadowMaskedPS;
-		nvrhi::ShaderHandle MeshVS, DepthNormalPS, PbrPS, ShadowVS, FullscreenVS, SsaoPS, SsaoBlurPS, SkyboxVS, SkyboxPS, TonemapPS, BlitPS;
+		nvrhi::ShaderHandle MeshVS, DepthNormalPS, PbrPS, ShadowVS, FullscreenVS, SsaoPS, SsaoBlurPS, SkyboxVS, SkyboxPS, TonemapPS, BlitPS, DepthUpsamplePS;
 		nvrhi::ShaderHandle EquirectCS, SkyCS, IrradianceCS, PrefilterCS, BrdfCS, DownsampleCS;
 
 		// Layouts
@@ -181,8 +181,8 @@ namespace Basalt {
 		nvrhi::BindingLayoutHandle MaterialLayout;
 		nvrhi::BindingLayoutHandle SsaoLayout;
 		nvrhi::BindingLayoutHandle BlurLayout;
-		nvrhi::BindingLayoutHandle TextureSamplerLayout; // blit: texture(0), sampler(1)
-		nvrhi::BindingLayoutHandle TonemapLayout;        // HDR(0), sampler(1), SSAO(2), normals(3), depth(4)
+		nvrhi::BindingLayoutHandle TextureSamplerLayout; // blit, depth upsample: texture(0), sampler(1)
+		nvrhi::BindingLayoutHandle TonemapLayout;        // HDR(0), point sampler(1), SSAO(2), normals(3), depth(4), HDR sampler(5)
 		nvrhi::BindingLayoutHandle ComputeLayout;        // IBL: texture(0), sampler(1), image(2)
 
 		// Samplers
@@ -210,9 +210,10 @@ namespace Basalt {
 		std::string EnvironmentKey = "\x01"; // never a valid key: forces the first build
 		Environment Env;
 
-		// Size-dependent targets
-		nvrhi::TextureHandle NormalTexture, HdrTexture, SsaoTexture, SsaoBlurTexture;
-		nvrhi::FramebufferHandle PrepassFramebuffer, LightingFramebuffer, SsaoFramebuffer, SsaoBlurFramebuffer, OutputFramebuffer;
+		// Size-dependent targets. The scene renders at the render size; the output (and OverlayDepth) has the
+		// viewport size. OverlayDepth exists only when the two differ.
+		nvrhi::TextureHandle NormalTexture, HdrTexture, SsaoTexture, SsaoBlurTexture, OverlayDepth;
+		nvrhi::FramebufferHandle PrepassFramebuffer, LightingFramebuffer, SsaoFramebuffer, SsaoBlurFramebuffer, OutputFramebuffer, OverlayDepthFramebuffer;
 
 		// Pipelines (created lazily per framebuffer layout where needed)
 		nvrhi::GraphicsPipelineHandle PrepassPipeline[2]; // [doubleSided]
@@ -224,12 +225,13 @@ namespace Basalt {
 		nvrhi::GraphicsPipelineHandle SsaoPipeline;
 		nvrhi::GraphicsPipelineHandle SsaoBlurPipeline;
 		nvrhi::GraphicsPipelineHandle TonemapPipeline;
+		nvrhi::GraphicsPipelineHandle DepthUpsamplePipeline;
 		std::unordered_map<std::string, nvrhi::GraphicsPipelineHandle> BlitPipelines;
 		nvrhi::ComputePipelineHandle EquirectPipeline, SkyPipeline, IrradiancePipeline, PrefilterPipeline, BrdfPipeline, DownsamplePipeline;
 
 		// Binding sets
 		nvrhi::BindingSetHandle FrameSet;
-		nvrhi::BindingSetHandle SsaoSet, BlurHorizontalSet, BlurVerticalSet, TonemapSet, BlitSet;
+		nvrhi::BindingSetHandle SsaoSet, BlurHorizontalSet, BlurVerticalSet, TonemapSet, BlitSet, DepthUpsampleSet;
 		struct MaterialSetEntry
 		{
 			nvrhi::BindingSetHandle Set;
@@ -281,13 +283,14 @@ namespace Basalt {
 		impl.SkyboxPS = CreateEmbeddedShader(device, "Skybox.frag", nvrhi::ShaderType::Pixel);
 		impl.TonemapPS = CreateEmbeddedShader(device, "Tonemap.frag", nvrhi::ShaderType::Pixel);
 		impl.BlitPS = CreateEmbeddedShader(device, "Blit.frag", nvrhi::ShaderType::Pixel);
+		impl.DepthUpsamplePS = CreateEmbeddedShader(device, "DepthUpsample.frag", nvrhi::ShaderType::Pixel);
 		impl.EquirectCS = CreateEmbeddedShader(device, "EquirectToCube.comp", nvrhi::ShaderType::Compute);
 		impl.SkyCS = CreateEmbeddedShader(device, "ProceduralSky.comp", nvrhi::ShaderType::Compute);
 		impl.IrradianceCS = CreateEmbeddedShader(device, "Irradiance.comp", nvrhi::ShaderType::Compute);
 		impl.PrefilterCS = CreateEmbeddedShader(device, "Prefilter.comp", nvrhi::ShaderType::Compute);
 		impl.BrdfCS = CreateEmbeddedShader(device, "BRDFLut.comp", nvrhi::ShaderType::Compute);
 		impl.DownsampleCS = CreateEmbeddedShader(device, "CubeDownsample.comp", nvrhi::ShaderType::Compute);
-		for (const nvrhi::ShaderHandle& shader : { impl.MeshVS, impl.DepthNormalPS, impl.PbrPS, impl.ShadowVS, impl.FullscreenVS, impl.SsaoPS, impl.SsaoBlurPS, impl.SkyboxVS, impl.SkyboxPS, impl.TonemapPS, impl.BlitPS, impl.EquirectCS, impl.SkyCS, impl.IrradianceCS, impl.PrefilterCS, impl.BrdfCS, impl.DownsampleCS })
+		for (const nvrhi::ShaderHandle& shader : { impl.MeshVS, impl.DepthNormalPS, impl.PbrPS, impl.ShadowVS, impl.FullscreenVS, impl.SsaoPS, impl.SsaoBlurPS, impl.SkyboxVS, impl.SkyboxPS, impl.TonemapPS, impl.BlitPS, impl.DepthUpsamplePS, impl.EquirectCS, impl.SkyCS, impl.IrradianceCS, impl.PrefilterCS, impl.BrdfCS, impl.DownsampleCS })
 		{
 			if (!shader)
 				return false;
@@ -372,6 +375,7 @@ namespace Basalt {
 			nvrhi::BindingLayoutItem::Texture_SRV(2),
 			nvrhi::BindingLayoutItem::Texture_SRV(3),
 			nvrhi::BindingLayoutItem::Texture_SRV(4),
+			nvrhi::BindingLayoutItem::Sampler(5),
 		};
 		impl.TonemapLayout = device->createBindingLayout(tonemapDesc);
 
@@ -515,20 +519,37 @@ namespace Basalt {
 
 	void SceneRenderer::SetViewportSize(uint32_t width, uint32_t height)
 	{
+		ResizeTargets(width, height, m_RenderScale);
+	}
+
+	void SceneRenderer::SetRenderScale(float scale)
+	{
+		// Applied by the next SetViewportSize or Render, so setting size and scale in either order reallocates
+		// the targets once.
+		m_RenderScale = std::isfinite(scale) ? std::clamp(scale, MinRenderScale, MaxRenderScale) : 1.0f;
+	}
+
+	void SceneRenderer::ResizeTargets(uint32_t width, uint32_t height, float renderScale)
+	{
 		width = std::max(width, 1u);
 		height = std::max(height, 1u);
-		if (width == m_Width && height == m_Height && m_OutputTexture)
+		const glm::uvec2 renderSize = ComputeRenderSize(width, height, renderScale);
+		if (width == m_Width && height == m_Height && renderSize.x == m_RenderWidth && renderSize.y == m_RenderHeight && m_OutputTexture)
 			return;
 
 		Impl& impl = *m_Impl;
 		m_Device->waitForIdle();
 		m_Width = width;
 		m_Height = height;
+		m_RenderWidth = renderSize.x;
+		m_RenderHeight = renderSize.y;
+		const bool scaled = m_RenderWidth != m_Width || m_RenderHeight != m_Height;
 
-		auto makeTarget = [&](nvrhi::Format format, const char* name, bool isDepth = false) {
+		// Scene targets have the render size; the output and the overlay depth have the viewport size.
+		auto makeTarget = [&](nvrhi::Format format, const char* name, bool isDepth = false, bool outputSize = false) {
 			nvrhi::TextureDesc desc;
-			desc.width = width;
-			desc.height = height;
+			desc.width = outputSize ? m_Width : m_RenderWidth;
+			desc.height = outputSize ? m_Height : m_RenderHeight;
 			desc.format = format;
 			desc.isRenderTarget = true;
 			desc.debugName = name;
@@ -543,14 +564,18 @@ namespace Basalt {
 		impl.HdrTexture = makeTarget(nvrhi::Format::RGBA16_FLOAT, "SceneHDR");
 		impl.SsaoTexture = makeTarget(nvrhi::Format::R8_UNORM, "SSAO");
 		impl.SsaoBlurTexture = makeTarget(nvrhi::Format::R8_UNORM, "SSAOBlur");
-		m_OutputTexture = makeTarget(nvrhi::Format::RGBA8_UNORM, "SceneOutput");
+		m_OutputTexture = makeTarget(nvrhi::Format::RGBA8_UNORM, "SceneOutput", false, true);
+		// Debug lines are drawn over the output and depth-tested against the scene, so a scaled scene's depth
+		// is resampled to the output size (see the depth upsample pass in Render).
+		impl.OverlayDepth = scaled ? makeTarget(nvrhi::Format::D32, "OverlayDepth", true, true) : nullptr;
 
 		impl.PrepassFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(impl.NormalTexture).setDepthAttachment(m_DepthTexture));
 		impl.LightingFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(impl.HdrTexture).setDepthAttachment(m_DepthTexture));
 		impl.SsaoFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(impl.SsaoTexture));
 		impl.SsaoBlurFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(impl.SsaoBlurTexture));
 		impl.OutputFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(m_OutputTexture));
-		m_OverlayFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(m_OutputTexture).setDepthAttachment(m_DepthTexture));
+		m_OverlayFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(m_OutputTexture).setDepthAttachment(scaled ? impl.OverlayDepth : m_DepthTexture));
+		impl.OverlayDepthFramebuffer = scaled ? m_Device->createFramebuffer(nvrhi::FramebufferDesc().setDepthAttachment(impl.OverlayDepth)) : nullptr;
 
 		// Pipelines depend only on formats, but are cheap to create; rebuild them with the targets.
 		auto meshPipeline = [&](nvrhi::IShader* pixelShader, nvrhi::IFramebuffer* framebuffer, bool doubleSided, bool depthWrite, bool blend) {
@@ -597,6 +622,17 @@ namespace Basalt {
 		impl.SsaoBlurPipeline = fullscreenPipeline(impl.FullscreenVS, impl.SsaoBlurPS, impl.BlurLayout, impl.SsaoBlurFramebuffer, false);
 		impl.TonemapPipeline = fullscreenPipeline(impl.FullscreenVS, impl.TonemapPS, impl.TonemapLayout, impl.OutputFramebuffer, false);
 		impl.SkyboxPipeline = fullscreenPipeline(impl.SkyboxVS, impl.SkyboxPS, impl.FrameLayout, impl.LightingFramebuffer, true);
+		impl.DepthUpsamplePipeline = nullptr;
+		if (scaled)
+		{
+			nvrhi::GraphicsPipelineDesc desc;
+			desc.VS = impl.FullscreenVS;
+			desc.PS = impl.DepthUpsamplePS;
+			desc.renderState.rasterState.setCullNone();
+			desc.renderState.depthStencilState.setDepthTestEnable(true).setDepthWriteEnable(true).setDepthFunc(nvrhi::ComparisonFunc::Always);
+			desc.bindingLayouts = { impl.TextureSamplerLayout };
+			impl.DepthUpsamplePipeline = m_Device->createGraphicsPipeline(desc, impl.OverlayDepthFramebuffer->getFramebufferInfo());
+		}
 
 		impl.SsaoSet = m_Device->createBindingSet(nvrhi::BindingSetDesc().setTrackLiveness(true).addItem(nvrhi::BindingSetItem::ConstantBuffer(0, impl.SsaoConstantsBuffer)).addItem(nvrhi::BindingSetItem::Texture_SRV(1, m_DepthTexture)).addItem(nvrhi::BindingSetItem::Texture_SRV(2, impl.NormalTexture)).addItem(nvrhi::BindingSetItem::Texture_SRV(3, impl.SsaoNoise)).addItem(nvrhi::BindingSetItem::Sampler(4, impl.PointClamp)).addItem(nvrhi::BindingSetItem::Sampler(5, impl.PointWrap)), impl.SsaoLayout);
 		impl.BlurHorizontalSet = m_Device->createBindingSet(nvrhi::BindingSetDesc()
@@ -617,8 +653,16 @@ namespace Basalt {
 														 .addItem(nvrhi::BindingSetItem::Sampler(1, impl.PointClamp))
 														 .addItem(nvrhi::BindingSetItem::Texture_SRV(2, impl.SsaoTexture))
 														 .addItem(nvrhi::BindingSetItem::Texture_SRV(3, impl.NormalTexture))
-														 .addItem(nvrhi::BindingSetItem::Texture_SRV(4, m_DepthTexture)),
+														 .addItem(nvrhi::BindingSetItem::Texture_SRV(4, m_DepthTexture))
+														 // Bilinear only when resampling: at native size it would equal point sampling, at best.
+														 .addItem(nvrhi::BindingSetItem::Sampler(5, scaled ? impl.LinearClamp : impl.PointClamp)),
 													 impl.TonemapLayout);
+		impl.DepthUpsampleSet = scaled ? m_Device->createBindingSet(nvrhi::BindingSetDesc()
+																		.addItem(nvrhi::BindingSetItem::PushConstants(0, 8))
+																		.addItem(nvrhi::BindingSetItem::Texture_SRV(0, m_DepthTexture))
+																		.addItem(nvrhi::BindingSetItem::Sampler(1, impl.PointClamp)),
+																	impl.TextureSamplerLayout)
+									   : nullptr;
 		impl.BlitSet = m_Device->createBindingSet(nvrhi::BindingSetDesc()
 													  .addItem(nvrhi::BindingSetItem::PushConstants(0, 8))
 													  .addItem(nvrhi::BindingSetItem::Texture_SRV(0, m_OutputTexture))
@@ -631,8 +675,7 @@ namespace Basalt {
 	void SceneRenderer::Render(Scene& scene, const RenderCamera& camera)
 	{
 		Impl& impl = *m_Impl;
-		if (!m_OutputTexture)
-			SetViewportSize(std::max(m_Width, 1u), std::max(m_Height, 1u));
+		ResizeTargets(m_Width, m_Height, m_RenderScale);
 
 		nvrhi::ICommandList* commandList = impl.CommandList;
 		commandList->open();
@@ -832,7 +875,7 @@ namespace Basalt {
 		view.InverseView = glm::inverse(camera.View);
 		view.InverseProjection = glm::inverse(camera.Projection);
 		view.CameraPosition = glm::vec4(camera.Position, 1.0f);
-		view.ViewportSize = glm::vec4(static_cast<float>(m_Width), static_cast<float>(m_Height), 1.0f / static_cast<float>(m_Width), 1.0f / static_cast<float>(m_Height));
+		view.ViewportSize = glm::vec4(static_cast<float>(m_RenderWidth), static_cast<float>(m_RenderHeight), 1.0f / static_cast<float>(m_RenderWidth), 1.0f / static_cast<float>(m_RenderHeight));
 		view.CameraClip = glm::vec4(camera.Near, camera.Far, 0.0f, 0.0f);
 		const float iblIntensity = skyLight ? skyLight->Intensity : 1.0f;
 		view.AmbientColor = glm::vec4(settings.AmbientColor, iblIntensity);
@@ -1139,7 +1182,7 @@ namespace Basalt {
 			impl.SsaoConstants.Projection = camera.Projection;
 			impl.SsaoConstants.InverseProjection = view.InverseProjection;
 			impl.SsaoConstants.Params = glm::vec4(settings.SSAORadius, settings.SSAOBias, settings.SSAOIntensity, static_cast<float>(SSAOKernelSize));
-			impl.SsaoConstants.ScreenSize = glm::vec4(static_cast<float>(m_Width), static_cast<float>(m_Height), static_cast<float>(m_Width) / 4.0f, static_cast<float>(m_Height) / 4.0f);
+			impl.SsaoConstants.ScreenSize = glm::vec4(static_cast<float>(m_RenderWidth), static_cast<float>(m_RenderHeight), static_cast<float>(m_RenderWidth) / 4.0f, static_cast<float>(m_RenderHeight) / 4.0f);
 			commandList->writeBuffer(impl.SsaoConstantsBuffer, &impl.SsaoConstants, sizeof(GpuSSAOConstants));
 
 			auto fullscreen = [&](nvrhi::IGraphicsPipeline* pipeline, nvrhi::IFramebuffer* framebuffer, nvrhi::IBindingSet* set, const void* push, size_t pushSize) {
@@ -1147,7 +1190,7 @@ namespace Basalt {
 				state.pipeline = pipeline;
 				state.framebuffer = framebuffer;
 				state.bindings = { set };
-				state.viewport.addViewportAndScissorRect(nvrhi::Viewport(static_cast<float>(m_Width), static_cast<float>(m_Height)));
+				state.viewport.addViewportAndScissorRect(nvrhi::Viewport(static_cast<float>(m_RenderWidth), static_cast<float>(m_RenderHeight)));
 				commandList->setGraphicsState(state);
 				if (push)
 					commandList->setPushConstants(push, pushSize);
@@ -1155,9 +1198,9 @@ namespace Basalt {
 			};
 			fullscreen(impl.SsaoPipeline, impl.SsaoFramebuffer, impl.SsaoSet, nullptr, 0);
 			const float orthographic = IsOrthographic(camera.Projection) ? 1.0f : 0.0f;
-			const float horizontal[8] = { 1.0f / static_cast<float>(m_Width), 0.0f, camera.Near, camera.Far, orthographic, 0.0f, 0.0f, 0.0f };
+			const float horizontal[8] = { 1.0f / static_cast<float>(m_RenderWidth), 0.0f, camera.Near, camera.Far, orthographic, 0.0f, 0.0f, 0.0f };
 			fullscreen(impl.SsaoBlurPipeline, impl.SsaoBlurFramebuffer, impl.BlurHorizontalSet, horizontal, sizeof(horizontal));
-			const float vertical[8] = { 0.0f, 1.0f / static_cast<float>(m_Height), camera.Near, camera.Far, orthographic, 0.0f, 0.0f, 0.0f };
+			const float vertical[8] = { 0.0f, 1.0f / static_cast<float>(m_RenderHeight), camera.Near, camera.Far, orthographic, 0.0f, 0.0f, 0.0f };
 			fullscreen(impl.SsaoBlurPipeline, impl.SsaoFramebuffer, impl.BlurVerticalSet, vertical, sizeof(vertical));
 			commandList->endMarker();
 		}
@@ -1179,7 +1222,7 @@ namespace Basalt {
 			state.pipeline = impl.SkyboxPipeline;
 			state.framebuffer = impl.LightingFramebuffer;
 			state.bindings = { impl.FrameSet };
-			state.viewport.addViewportAndScissorRect(nvrhi::Viewport(static_cast<float>(m_Width), static_cast<float>(m_Height)));
+			state.viewport.addViewportAndScissorRect(nvrhi::Viewport(static_cast<float>(m_RenderWidth), static_cast<float>(m_RenderHeight)));
 			commandList->setGraphicsState(state);
 			const DrawPush push{ 0, 0 };
 			commandList->setPushConstants(&push, sizeof(push));
@@ -1220,6 +1263,25 @@ namespace Basalt {
 				float Padding;
 			} push = { settings.Exposure, static_cast<uint32_t>(settings.Tonemap), static_cast<uint32_t>(settings.DebugView), 0.0f };
 			commandList->setPushConstants(&push, sizeof(push));
+			commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
+			commandList->endMarker();
+		}
+
+		// --- Overlay depth (scaled rendering only) -------------------------------------------------
+		// Every frame rather than only when lines are drawn, so the overlay framebuffer always holds the
+		// frame's depth. Point sampling keeps silhouettes hard: a blend of foreground and background depth
+		// would be a surface that does not exist.
+		if (impl.DepthUpsamplePipeline)
+		{
+			commandList->beginMarker("OverlayDepth");
+			nvrhi::GraphicsState state;
+			state.pipeline = impl.DepthUpsamplePipeline;
+			state.framebuffer = impl.OverlayDepthFramebuffer;
+			state.bindings = { impl.DepthUpsampleSet };
+			state.viewport.addViewportAndScissorRect(nvrhi::Viewport(static_cast<float>(m_Width), static_cast<float>(m_Height)));
+			commandList->setGraphicsState(state);
+			const uint32_t unused[2] = {};
+			commandList->setPushConstants(unused, sizeof(unused));
 			commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
 			commandList->endMarker();
 		}

@@ -19,9 +19,11 @@ namespace Basalt {
 		bool HasFlag(const std::string& name) const;
 		std::optional<std::string> GetValue(const std::string& name) const;
 		std::optional<int64_t> GetInteger(const std::string& name) const;
+		// A finite number in float range ("0.5", "2", "1e-1"); nullopt when absent or malformed.
+		std::optional<float> GetFloat(const std::string& name) const;
 		const std::vector<std::string>& GetPositional() const { return m_Positional; }
 		// Problems found while parsing (options missing their value). Malformed numbers make GetInteger
-		// return nullopt; callers report them.
+		// and GetFloat return nullopt; callers report them.
 		const std::vector<std::string>& GetErrors() const { return m_Errors; }
 
 	private:

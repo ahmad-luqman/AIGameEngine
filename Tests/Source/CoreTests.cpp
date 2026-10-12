@@ -302,6 +302,20 @@ TEST_SUITE("Core")
 		CHECK(commandLine.GetErrors()[0].find("screenshot") != std::string::npos);
 	}
 
+	TEST_CASE("CommandLine reads finite floats and rejects everything else")
+	{
+		const char* argv[] = { "app", "--a", "0.5", "--b", "2", "--c", "1e-1", "--d", "0.5x", "--e", "nan", "--f", "inf", "--g", "1e60", "--h", " 1", "--i", "" };
+		const CommandLine commandLine(19, argv, { "a", "b", "c", "d", "e", "f", "g", "h", "i" });
+		CHECK(commandLine.GetFloat("a") == 0.5f);
+		CHECK(commandLine.GetFloat("b") == 2.0f);
+		CHECK(commandLine.GetFloat("c") == doctest::Approx(0.1f));
+		for (const char* name : { "d", "e", "f", "g", "h", "i", "missing" })
+		{
+			INFO(name);
+			CHECK_FALSE(commandLine.GetFloat(name).has_value());
+		}
+	}
+
 	// Regression: untrusted JSON (automation requests, scene files) could nest deeply enough to overflow
 	// the stack when copied or dumped.
 	TEST_CASE("ParseJson rejects syntax errors and excessive nesting")

@@ -2,6 +2,8 @@
 
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/JsonUtils.h"
+#include "Basalt/Core/Log.h"
+#include "Basalt/Renderer/RenderMath.h"
 
 #include <nlohmann/json.hpp>
 
@@ -81,6 +83,14 @@ namespace Basalt {
 			outError = "invalid project file '" + filePath.string() + "': " + e.what();
 			return nullptr;
 		}
+		if (const auto renderScale = data.find("RenderScale"); renderScale != data.end())
+		{
+			if (!JsonToFloat(*renderScale, config.RenderScale) || config.RenderScale < MinRenderScale || config.RenderScale > MaxRenderScale)
+			{
+				outError = fmt::format("invalid project file '{}': RenderScale must be a number in [{}, {}]", filePath.string(), MinRenderScale, MaxRenderScale);
+				return nullptr;
+			}
+		}
 		if (const auto layers = data.find("PhysicsLayers"); layers != data.end())
 		{
 			std::string layerError;
@@ -104,6 +114,7 @@ namespace Basalt {
 			{ "WindowWidth", m_Config.WindowWidth },
 			{ "WindowHeight", m_Config.WindowHeight },
 			{ "Fullscreen", m_Config.Fullscreen },
+			{ "RenderScale", m_Config.RenderScale },
 			{ "PhysicsLayers", m_Config.Physics.ToJson() },
 		};
 		if (!FileSystem::WriteTextFile(GetProjectFilePath(), data.dump(1, '\t')))

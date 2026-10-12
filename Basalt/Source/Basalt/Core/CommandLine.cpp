@@ -1,7 +1,12 @@
 #include "Basalt/Core/CommandLine.h"
 
 #include <algorithm>
+#include <cctype>
+#include <cerrno>
 #include <charconv>
+#include <cmath>
+#include <cstdlib>
+#include <limits>
 
 namespace Basalt {
 
@@ -65,6 +70,21 @@ namespace Basalt {
 		if (error != std::errc() || pointer != end)
 			return std::nullopt;
 		return result;
+	}
+
+	std::optional<float> CommandLine::GetFloat(const std::string& name) const
+	{
+		const auto value = GetValue(name);
+		// strtod skips leading whitespace and accepts "inf"/"nan"; neither is a usable option value.
+		if (!value || value->empty() || std::isspace(static_cast<unsigned char>(value->front())))
+			return std::nullopt;
+		// std::from_chars for floating point is missing from some supported standard libraries.
+		errno = 0;
+		char* end = nullptr;
+		const double result = std::strtod(value->c_str(), &end);
+		if (errno != 0 || end != value->c_str() + value->size() || !std::isfinite(result) || std::abs(result) > static_cast<double>(std::numeric_limits<float>::max()))
+			return std::nullopt;
+		return static_cast<float>(result);
 	}
 
 }

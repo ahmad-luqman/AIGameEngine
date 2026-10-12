@@ -19,6 +19,8 @@ namespace Basalt {
 		// Fail (exit code 5) when GPU validation is not active, so validation-based tests cannot pass vacuously.
 		bool RequireValidation = false;
 		RendererDebugView DebugView = RendererDebugView::None;
+		// The project's RenderScale unless --render-scale overrides it.
+		float RenderScale = 1.0f;
 	};
 
 	// Plays a scene: scripts, physics and audio run every frame and the primary camera's view is

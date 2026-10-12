@@ -12,7 +12,9 @@ description: Diagnose rendering problems in Basalt (black/inside-out/flipped ima
    ```
    Exit code 3 means GPU validation errors occurred: read the `[Vulkan]`/`[nvrhi]` log lines first.
 2. **Isolate passes** with `--debug-view` and by toggling `scene.settings`
-   `{"Renderer": {"SSAOEnabled": false}}` / `{"ShadowsEnabled": false}` in a copy of the scene.
+   `{"Renderer": {"SSAOEnabled": false}}` / `{"ShadowsEnabled": false}` in a copy of the scene. Check the
+   project's `RenderScale` too (`project.info`; override with `--render-scale 1`): below 1 the scene renders
+   smaller and is upsampled, so soft or stair-stepped edges are expected there.
    Compare intermediate images before reasoning about shader math.
 3. **Known conventions** (AGENTS.md "Rendering conventions"): clip space is +Y up (nvrhi flips the Vulkan
    viewport) — never flip projections; fullscreen UV (0,0) is top-left; meshes wind CCW; GLSL

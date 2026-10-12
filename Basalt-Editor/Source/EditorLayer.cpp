@@ -39,6 +39,13 @@ namespace Basalt {
 		const glm::vec4 s_LightColor(1.0f, 0.9f, 0.4f, 0.8f);
 		const glm::vec4 s_CameraColor(0.7f, 0.7f, 1.0f, 0.8f);
 
+		// The viewport and screenshots render like the exported game: at the project's render scale.
+		float ActiveRenderScale()
+		{
+			const Ref<Project>& project = Project::GetActive();
+			return project ? project->GetConfig().RenderScale : 1.0f;
+		}
+
 		// Ray/AABB slab test. Returns the entry distance, or nothing.
 		std::optional<float> IntersectRay(const glm::vec3& origin, const glm::vec3& direction, const AABB& box)
 		{
@@ -350,6 +357,7 @@ namespace Basalt {
 				return false;
 			}
 		}
+		m_CaptureRenderer->SetRenderScale(ActiveRenderScale());
 		m_CaptureRenderer->SetViewportSize(width, height);
 
 		// Debug lines belong to the viewport frame; draw editor overlays only for editor-camera shots.
@@ -608,6 +616,7 @@ namespace Basalt {
 
 		const uint32_t width = std::max(1u, static_cast<uint32_t>(m_ViewportSize.x));
 		const uint32_t height = std::max(1u, static_cast<uint32_t>(m_ViewportSize.y));
+		m_Renderer->SetRenderScale(ActiveRenderScale());
 		m_Renderer->SetViewportSize(width, height);
 		Scene& scene = *m_Session.GetScene();
 		scene.OnViewportResize(width, height);
@@ -823,6 +832,18 @@ namespace Basalt {
 				}
 				ImGui::EndMenu();
 			}
+			// A project setting (it ships with the game), so it goes through project.set like any other.
+			if (ImGui::BeginMenu("Render Scale", static_cast<bool>(Project::GetActive())))
+			{
+				const float current = ActiveRenderScale();
+				for (const float scale : { 0.5f, 0.75f, 1.0f, 1.5f, 2.0f })
+				{
+					const std::string label = std::to_string(static_cast<int>(scale * 100.0f)) + "%";
+					if (ImGui::MenuItem(label.c_str(), nullptr, current == scale) && current != scale)
+						m_Context.Execute("project.set", { { "renderScale", scale } });
+				}
+				ImGui::EndMenu();
+			}
 			ImGui::EndMenu();
 		}
 
@@ -978,6 +999,7 @@ namespace Basalt {
 			ImGui::Text("Draw calls: %u (shadow %u)", stats.DrawCalls, stats.ShadowDrawCalls);
 			ImGui::Text("Culled submeshes: %u", stats.CulledSubmeshes);
 			ImGui::Text("Lights: %u", stats.Lights);
+			ImGui::Text("Resolution: %ux%u (%.0f%% render scale)", m_Renderer->GetRenderWidth(), m_Renderer->GetRenderHeight(), m_Renderer->GetRenderScale() * 100.0f);
 			ImGui::Text("Frame: %.2f ms (%.0f FPS)", 1000.0f / std::max(ImGui::GetIO().Framerate, 1.0f), ImGui::GetIO().Framerate);
 			if (GraphicsDevice* device = Application::Get().GetGraphicsDevice())
 				ImGui::Text("GPU: %s", device->GetAdapterName().c_str());

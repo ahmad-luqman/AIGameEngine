@@ -9,11 +9,30 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <cmath>
+#include <limits>
 
 using namespace Basalt;
 
 TEST_SUITE("RenderMath")
 {
+	TEST_CASE("Render size scales each side, rounds, clamps the scale and never reaches zero")
+	{
+		CHECK(ComputeRenderSize(1280, 720, 1.0f) == glm::uvec2(1280, 720));
+		CHECK(ComputeRenderSize(1280, 720, 0.5f) == glm::uvec2(640, 360));
+		CHECK(ComputeRenderSize(1281, 721, 0.5f) == glm::uvec2(641, 361));
+		CHECK(ComputeRenderSize(1280, 720, 2.0f) == glm::uvec2(2560, 1440));
+		// Out-of-range scales clamp; non-finite ones mean full resolution.
+		CHECK(ComputeRenderSize(1000, 1000, 0.01f) == glm::uvec2(250, 250));
+		CHECK(ComputeRenderSize(1000, 1000, 10.0f) == glm::uvec2(2000, 2000));
+		CHECK(ComputeRenderSize(1000, 1000, std::numeric_limits<float>::quiet_NaN()) == glm::uvec2(1000, 1000));
+		CHECK(ComputeRenderSize(1000, 1000, std::numeric_limits<float>::infinity()) == glm::uvec2(1000, 1000));
+		CHECK(ComputeRenderSize(1, 1, MinRenderScale) == glm::uvec2(1, 1));
+		// Supersampling stops at the largest supported target, keeping the aspect ratio.
+		CHECK(ComputeRenderSize(16384, 8192, 2.0f) == glm::uvec2(16384, 8192));
+		CHECK(ComputeRenderSize(12000, 6000, 2.0f) == glm::uvec2(16384, 8192));
+		CHECK(ComputeRenderSize(8192, 4096, 2.0f) == glm::uvec2(16384, 8192));
+	}
+
 	TEST_CASE("Cascade splits are increasing, finite and end at the shadow distance")
 	{
 		const auto perspective = ComputeCascadeSplits<4>(0.1f, 60.0f, 0.85f, false);

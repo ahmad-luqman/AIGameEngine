@@ -10,6 +10,7 @@
 #include "Basalt/Physics/PhysicsWorld.h"
 #include "Basalt/Project/Exporter.h"
 #include "Basalt/Project/Project.h"
+#include "Basalt/Renderer/RenderMath.h"
 #include "Basalt/Scene/ComponentRegistry.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
@@ -339,11 +340,12 @@ namespace Basalt {
 					{ "windowWidth", config.WindowWidth },
 					{ "windowHeight", config.WindowHeight },
 					{ "fullscreen", config.Fullscreen },
+					{ "renderScale", config.RenderScale },
 					{ "physicsLayers", config.Physics.ToJson() },
 				};
 			});
 
-			Add(registry, "project.set", "Changes project settings and saves the project file.", { { "name", "string" }, { "startScene", "string, project-relative scene" }, { "windowWidth", "integer" }, { "windowHeight", "integer" }, { "fullscreen", "bool" }, { "physicsLayers", "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "project.set", "Changes project settings and saves the project file.", { { "name", "string" }, { "startScene", "string, project-relative scene" }, { "windowWidth", "integer" }, { "windowHeight", "integer" }, { "fullscreen", "bool" }, { "renderScale", "number in [0.25, 2], fraction of the window resolution the scene renders at" }, { "physicsLayers", "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play" } }, [](AutomationSession& session, const json& params) {
 				Ref<Project> project = RequireProject();
 				// Every value is read and validated before any is assigned, so a bad parameter leaves the
 				// project untouched.
@@ -353,6 +355,7 @@ namespace Basalt {
 				config.WindowWidth = static_cast<uint32_t>(OptionalInteger(params, "windowWidth", config.WindowWidth, 64, 16384));
 				config.WindowHeight = static_cast<uint32_t>(OptionalInteger(params, "windowHeight", config.WindowHeight, 64, 16384));
 				config.Fullscreen = OptionalBool(params, "fullscreen", config.Fullscreen);
+				config.RenderScale = static_cast<float>(OptionalNumber(params, "renderScale", config.RenderScale, MinRenderScale, MaxRenderScale));
 				if (const auto it = params.find("physicsLayers"); it != params.end())
 				{
 					std::string error;

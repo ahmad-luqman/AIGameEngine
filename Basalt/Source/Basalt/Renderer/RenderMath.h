@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 
 namespace Basalt {
 
@@ -24,6 +25,29 @@ namespace Basalt {
 	inline bool IsOrthographic(const glm::mat4& projection)
 	{
 		return projection[3][3] == 1.0f;
+	}
+
+	// Render scale range: below a quarter the image is unusable, above 2x (supersampling) a 4K window
+	// would need 8K render targets.
+	constexpr float MinRenderScale = 0.25f;
+	constexpr float MaxRenderScale = 2.0f;
+	// Largest render target side: Vulkan devices commonly support 16384 (MoltenVK, lavapipe), and windows
+	// and screenshots are capped at that size already.
+	constexpr uint32_t MaxRenderTargetSize = 16384;
+
+	// Size the scene is rendered at before the tonemap pass resamples it to the output size. The scale is
+	// clamped to [MinRenderScale, MaxRenderScale] (non-finite values mean 1), then lowered as far as needed
+	// to keep both sides within MaxRenderTargetSize; each side is at least 1.
+	inline glm::uvec2 ComputeRenderSize(uint32_t outputWidth, uint32_t outputHeight, float scale)
+	{
+		scale = std::isfinite(scale) ? std::clamp(scale, MinRenderScale, MaxRenderScale) : 1.0f;
+		const uint32_t largest = std::max(outputWidth, outputHeight);
+		if (static_cast<double>(largest) * scale > MaxRenderTargetSize)
+			scale = static_cast<float>(static_cast<double>(MaxRenderTargetSize) / largest);
+		auto scaled = [scale](uint32_t size) {
+			return std::max(1u, static_cast<uint32_t>(std::lround(static_cast<double>(size) * scale)));
+		};
+		return { scaled(outputWidth), scaled(outputHeight) };
 	}
 
 	// View-space distances at which shadow cascades end, covering [near, shadowFar]. Perspective cameras use

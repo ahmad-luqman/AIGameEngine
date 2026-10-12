@@ -47,6 +47,7 @@ namespace Basalt {
 				application.Close();
 				return;
 			}
+			m_Renderer->SetRenderScale(m_Options.RenderScale);
 			m_CommandList = device->GetDevice()->createCommandList();
 			m_Scene->OnViewportResize(device->GetBackBufferWidth(), device->GetBackBufferHeight());
 		}

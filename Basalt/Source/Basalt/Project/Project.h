@@ -17,6 +17,9 @@ namespace Basalt {
 		uint32_t WindowWidth = 1600;
 		uint32_t WindowHeight = 900;
 		bool Fullscreen = false;
+		// Fraction of the window resolution the scene renders at (MinRenderScale..MaxRenderScale); the
+		// tonemap pass resamples it to the window. Below 1 trades sharpness for GPU time.
+		float RenderScale = 1.0f;
 		// Collision layers and matrix used by every scene of the project.
 		PhysicsLayers Physics;
 	};
