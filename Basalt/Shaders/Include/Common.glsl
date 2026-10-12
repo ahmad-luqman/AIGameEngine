@@ -61,9 +61,9 @@ layout(std430, set = 0, binding = 2) readonly buffer MaterialBuffer
 
 struct LightData
 {
-	vec4 Position;        // xyz, w: range
-	vec4 Color;           // rgb * intensity, w: type (0 point, 1 spot)
-	vec4 Direction;       // xyz (spot), w: cos(outer)
+	vec4 Position;        // xyz, w: range (point, spot)
+	vec4 Color;           // rgb * intensity, w: type (0 point, 1 spot, 2 unshadowed directional)
+	vec4 Direction;       // xyz: direction the light travels (spot, directional), w: cos(outer)
 	vec4 Params;          // x: cos(inner)
 };
 

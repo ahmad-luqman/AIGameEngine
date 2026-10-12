@@ -87,7 +87,8 @@ namespace Basalt {
 		std::string EmissiveMap;
 	};
 
-	// Light shining along the entity's forward axis (-Z).
+	// Light shining along the entity's forward axis (-Z). A scene may have several; only the primary one
+	// (see CollectDirectionalLights) renders shadows, the others light the scene unshadowed.
 	struct DirectionalLightComponent
 	{
 		glm::vec3 Color = { 1.0f, 1.0f, 1.0f };

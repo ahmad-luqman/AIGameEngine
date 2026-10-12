@@ -39,11 +39,16 @@ void main()
 		color += EvaluateLight(N, V, L, u_View.Sun.Color.rgb * shadow, surface.Albedo, surface.Metallic, surface.Roughness, F0);
 	}
 
-	// Point and spot lights.
+	// Additional directional lights (unshadowed), then point and spot lights.
 	uint lightCount = uint(u_View.EnvironmentParams.w);
 	for (uint i = 0u; i < lightCount; i++)
 	{
 		LightData light = u_Lights.Lights[i];
+		if (light.Color.w > 1.5)
+		{
+			color += EvaluateLight(N, V, -normalize(light.Direction.xyz), light.Color.rgb, surface.Albedo, surface.Metallic, surface.Roughness, F0);
+			continue;
+		}
 		vec3 toLight = light.Position.xyz - v_WorldPosition;
 		float distance = length(toLight);
 		if (distance > light.Position.w)
