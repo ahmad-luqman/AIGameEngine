@@ -139,6 +139,9 @@ TEST_SUITE("Automation")
 		temp.WriteFile(Project::FileName, R"({"RandomSeed": 0})");
 		REQUIRE(Project::Load(temp.GetDirectory(), error));
 		CHECK(Project::Load(temp.GetDirectory(), error)->GetConfig().RandomSeed == 0u);
+		temp.WriteFile(Project::FileName, R"({"RandomSeed": 4294967295})");
+		REQUIRE(Project::Load(temp.GetDirectory(), error));
+		CHECK(Project::Load(temp.GetDirectory(), error)->GetConfig().RandomSeed == 4294967295u);
 		for (const char* bad : { R"({"RandomSeed": -1})", R"({"RandomSeed": 4294967296})", R"({"RandomSeed": 18446744073709551615})", R"({"RandomSeed": 2.5})", R"({"RandomSeed": "1"})" })
 		{
 			INFO(bad);
@@ -496,7 +499,7 @@ TEST_SUITE("Automation")
 		temp.WriteFile("Replays/Legacy.breplay", R"({ "Format": "BasaltReplay", "Version": 1, "Frames": 1, "Events": [] })");
 		Run(registry, session, "replay.run", { { "path", "Replays/Legacy.breplay" } });
 		Run(registry, session, "project.set", { { "randomSeed", 3 } });
-		CHECK(RunError(registry, session, "replay.run", { { "path", "Replays/Legacy.breplay" } }).find("recorded with random seed 9067031") != std::string::npos);
+		CHECK(RunError(registry, session, "replay.run", { { "path", "Replays/Legacy.breplay" } }).find("recorded with random seed " + std::to_string(Random::DefaultSeed)) != std::string::npos);
 		Run(registry, session, "project.set", { { "randomSeed", Random::DefaultSeed } });
 
 		// The replay stored the seed it ran with; another seed would replay different random numbers.

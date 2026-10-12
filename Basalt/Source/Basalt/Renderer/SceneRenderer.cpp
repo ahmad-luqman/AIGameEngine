@@ -1375,13 +1375,14 @@ namespace Basalt {
 		impl.ParticleData.Clear();
 		if (const ParticleSystem* particleSystem = scene.GetParticleSystem())
 			particleSystem->BuildRenderData(camera.Position, cameraForward, impl.ParticleData);
-		const std::vector<GpuParticle>& particles = impl.ParticleData.Particles;
-		const size_t uploadCount = std::min(particles.size(), MaxFrameParticles);
-		if (uploadCount < particles.size() && !impl.ReportedParticleCap)
+		const size_t particleTotal = impl.ParticleData.Particles.size();
+		if (impl.ParticleData.LimitTo(MaxFrameParticles) && !impl.ReportedParticleCap)
 		{
 			impl.ReportedParticleCap = true;
-			BS_CORE_WARN("SceneRenderer: {} particles exceed the {} drawn per frame; skipping the emitters beyond", particles.size(), MaxFrameParticles);
+			BS_CORE_WARN("SceneRenderer: {} particles exceed the {} drawn per frame; skipping the emitters beyond", particleTotal, MaxFrameParticles);
 		}
+		const std::vector<GpuParticle>& particles = impl.ParticleData.Particles;
+		const size_t uploadCount = particles.size();
 		if (uploadCount > 0)
 		{
 			const nvrhi::BufferHandle previousParticles = impl.ParticleBuffer;
@@ -1397,7 +1398,7 @@ namespace Basalt {
 		for (const ParticleBatch& batch : impl.ParticleData.Batches)
 		{
 			BS_CORE_ASSERT(batch.Count > 0 && batch.FirstParticle + batch.Count <= particles.size(), "particle batches index the particle array");
-			if (!impl.ParticleBuffer || batch.FirstParticle + batch.Count > uploadCount || !frustum.Intersects(batch.Bounds))
+			if (!impl.ParticleBuffer || !frustum.Intersects(batch.Bounds))
 				continue;
 			nvrhi::ITexture* particleTexture = resolveTexture(batch.Texture, true, impl.ParticleTexture);
 			Impl::MaterialSetEntry& entry = impl.ParticleSets[particleTexture];
