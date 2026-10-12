@@ -1,0 +1,19 @@
+{
+	"Format": "BasaltScene",
+	"Version": 1,
+	"Name": "Particles",
+	"Entities": [
+		{ "ID": 1, "Name": "Sparks", "Components": {
+			"Transform": { "Translation": [0, 0, 0] },
+			"ParticleEmitter": { "PlayOnStart": true, "Looping": true, "Duration": 2, "MaxParticles": 500, "Rate": 40, "BurstCount": 20, "Shape": "Cone", "ShapeRadius": 0.1, "BoxExtents": [0.5, 0.5, 0.5], "ConeAngle": 20,
+				"LifetimeMin": 1, "LifetimeMax": 1.5, "SpeedMin": 3, "SpeedMax": 4, "Velocity": [0, 0, 0], "GravityScale": 0.5, "Drag": 0, "SimulationSpace": "World",
+				"StartColor": [4, 1.6, 0.4, 1], "EndColor": [1, 0.2, 0, 0], "StartSize": 0.12, "EndSize": 0.04, "Blend": "Additive", "Texture": "" } } },
+		{ "ID": 2, "Name": "Smoke", "Components": {
+			"Transform": { "Translation": [2, 0, 0] },
+			"ParticleEmitter": { "Rate": 12, "Shape": "Box", "BoxExtents": [0.3, 0.05, 0.3], "SimulationSpace": "Local", "Blend": "Alpha", "Drag": 0.3, "EndSize": 1.2, "Texture": "Assets/Textures/Smoke.png" } } },
+		{ "ID": 3, "Name": "Puff", "Components": {
+			"Transform": { "Translation": [-2, 0, 0] },
+			"ParticleEmitter": { "Shape": "Sphere", "PlayOnStart": false, "Looping": false } } },
+		{ "ID": 4, "Name": "Point", "Components": { "ParticleEmitter": { "Shape": "Point" } } }
+	]
+}

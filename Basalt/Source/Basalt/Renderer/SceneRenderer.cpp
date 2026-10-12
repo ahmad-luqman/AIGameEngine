@@ -3,6 +3,7 @@
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Log.h"
+#include "Basalt/Particles/ParticleSystem.h"
 #include "Basalt/Renderer/DebugLineRenderer.h"
 #include "Basalt/Renderer/RenderMath.h"
 #include "Basalt/Renderer/SceneLights.h"
@@ -34,6 +35,7 @@ namespace Basalt {
 		constexpr uint32_t SSAOKernelSize = 24;
 		constexpr uint32_t MaxLights = 256;
 		constexpr uint64_t MaterialSetRetentionFrames = 120;
+		constexpr uint32_t ParticleTextureSize = 64;
 
 		// GPU profiler passes (debug markers too), in recording order. Unscoped so the values index the
 		// profiler's pass list directly; the names below must match the order.
@@ -185,6 +187,45 @@ namespace Basalt {
 			AABB ShadowBounds;
 		};
 
+		// One emitter's billboards: a range of the particle buffer drawn with the batch's texture.
+		struct ParticleDraw
+		{
+			uint32_t FirstParticle = 0;
+			uint32_t Count = 0;
+			float ViewDepth = 0.0f;
+			ParticleBlendMode Blend = ParticleBlendMode::Alpha;
+			nvrhi::IBindingSet* Set = nullptr;
+		};
+
+		// Blended meshes and particle batches share one back-to-front order. Exactly one pointer is set.
+		struct TransparentDraw
+		{
+			float ViewDepth = 0.0f;
+			const DrawItem* Item = nullptr;
+			const ParticleDraw* Particles = nullptr;
+		};
+
+		// White with a smooth round alpha falloff: particles without a texture look like soft dots.
+		std::vector<uint8_t> MakeSoftDiscTexture(uint32_t size)
+		{
+			std::vector<uint8_t> pixels(static_cast<size_t>(size) * size * 4);
+			for (uint32_t y = 0; y < size; y++)
+			{
+				for (uint32_t x = 0; x < size; x++)
+				{
+					// Distance from the center in texel centers, 1 at the edge of the inscribed circle.
+					const glm::vec2 offset((static_cast<float>(x) + 0.5f) / static_cast<float>(size) * 2.0f - 1.0f, (static_cast<float>(y) + 0.5f) / static_cast<float>(size) * 2.0f - 1.0f);
+					const float falloff = std::clamp(1.0f - glm::length(offset), 0.0f, 1.0f);
+					// Smoothstep keeps the center bright and the rim free of a visible edge.
+					const float alpha = falloff * falloff * (3.0f - 2.0f * falloff);
+					uint8_t* pixel = &pixels[(static_cast<size_t>(y) * size + x) * 4];
+					pixel[0] = pixel[1] = pixel[2] = 255;
+					pixel[3] = static_cast<uint8_t>(std::lround(alpha * 255.0f));
+				}
+			}
+			return pixels;
+		}
+
 		nvrhi::BufferHandle EnsureStructuredBuffer(nvrhi::IDevice* device, nvrhi::BufferHandle buffer, size_t requiredBytes, uint32_t stride, const char* name)
 		{
 			if (buffer && buffer->getDesc().byteSize >= requiredBytes)
@@ -234,6 +275,7 @@ namespace Basalt {
 		nvrhi::ShaderHandle ShadowMaskedVS, ShadowMaskedPS;
 		nvrhi::ShaderHandle MeshVS, DepthNormalPS, PbrPS, ShadowVS, FullscreenVS, SsaoPS, SsaoBlurPS, SkyboxVS, SkyboxPS, TonemapPS, BlitPS, DepthUpsamplePS;
 		nvrhi::ShaderHandle EquirectCS, SkyCS, IrradianceCS, PrefilterCS, BrdfCS, DownsampleCS;
+		nvrhi::ShaderHandle ParticleVS, ParticlePS;
 
 		// Layouts
 		nvrhi::InputLayoutHandle MeshInputLayout;
@@ -246,6 +288,7 @@ namespace Basalt {
 		nvrhi::BindingLayoutHandle TextureSamplerLayout; // blit, depth upsample: texture(0), sampler(1)
 		nvrhi::BindingLayoutHandle TonemapLayout;        // HDR(0), point sampler(1), SSAO(2), normals(3), depth(4), HDR sampler(5)
 		nvrhi::BindingLayoutHandle ComputeLayout;        // IBL: texture(0), sampler(1), image(2)
+		nvrhi::BindingLayoutHandle ParticleLayout;       // set 1: particles(0), texture(1), sampler(2)
 
 		// Samplers
 		nvrhi::SamplerHandle EquirectSampler, LinearClamp, LinearWrapAniso, PointClamp, PointWrap, ShadowCompare;
@@ -259,6 +302,8 @@ namespace Basalt {
 		nvrhi::TextureHandle SsaoNoise;
 		nvrhi::TextureHandle BrdfLut;
 		bool BrdfLutReady = false;
+		nvrhi::BufferHandle ParticleBuffer;
+		nvrhi::TextureHandle ParticleTexture; // built-in soft disc
 		GpuSSAOConstants SsaoConstants{};
 
 		// Environment (IBL)
@@ -281,6 +326,7 @@ namespace Basalt {
 		nvrhi::GraphicsPipelineHandle PrepassPipeline[2]; // [doubleSided]
 		nvrhi::GraphicsPipelineHandle OpaquePipeline[2];
 		nvrhi::GraphicsPipelineHandle TransparentPipeline[2];
+		nvrhi::GraphicsPipelineHandle ParticlePipeline[2]; // [ParticleBlendMode]
 		nvrhi::GraphicsPipelineHandle ShadowPipeline;
 		nvrhi::GraphicsPipelineHandle ShadowMaskedPipeline;
 		nvrhi::GraphicsPipelineHandle SkyboxPipeline;
@@ -301,13 +347,17 @@ namespace Basalt {
 		};
 		// Keyed by the five material textures (albedo, normal, metallic-roughness, occlusion, emissive).
 		std::map<std::array<nvrhi::ITexture*, 5>, MaterialSetEntry> MaterialSets;
+		// Keyed by particle texture; they also reference the particle buffer, so they are rebuilt when it grows.
+		std::map<nvrhi::ITexture*, MaterialSetEntry> ParticleSets;
 
 		// Per-frame scratch, kept to avoid reallocating every frame.
 		std::vector<GpuDrawData> Draws;
 		std::vector<GpuMaterialData> Materials;
 		std::vector<GpuLightData> Lights;
 		std::vector<DrawItem> Items;
-		std::vector<const DrawItem*> Transparent;
+		std::vector<TransparentDraw> Transparent;
+		ParticleRenderData ParticleData;
+		std::vector<ParticleDraw> ParticleDraws;
 		uint64_t FrameCounter = 0;
 		bool FrameSetDirty = true;
 	};
@@ -353,7 +403,9 @@ namespace Basalt {
 		impl.PrefilterCS = CreateEmbeddedShader(device, "Prefilter.comp", nvrhi::ShaderType::Compute);
 		impl.BrdfCS = CreateEmbeddedShader(device, "BRDFLut.comp", nvrhi::ShaderType::Compute);
 		impl.DownsampleCS = CreateEmbeddedShader(device, "CubeDownsample.comp", nvrhi::ShaderType::Compute);
-		for (const nvrhi::ShaderHandle& shader : { impl.MeshVS, impl.DepthNormalPS, impl.PbrPS, impl.ShadowVS, impl.FullscreenVS, impl.SsaoPS, impl.SsaoBlurPS, impl.SkyboxVS, impl.SkyboxPS, impl.TonemapPS, impl.BlitPS, impl.DepthUpsamplePS, impl.EquirectCS, impl.SkyCS, impl.IrradianceCS, impl.PrefilterCS, impl.BrdfCS, impl.DownsampleCS })
+		impl.ParticleVS = CreateEmbeddedShader(device, "Particle.vert", nvrhi::ShaderType::Vertex);
+		impl.ParticlePS = CreateEmbeddedShader(device, "Particle.frag", nvrhi::ShaderType::Pixel);
+		for (const nvrhi::ShaderHandle& shader : { impl.MeshVS, impl.DepthNormalPS, impl.PbrPS, impl.ShadowVS, impl.FullscreenVS, impl.SsaoPS, impl.SsaoBlurPS, impl.SkyboxVS, impl.SkyboxPS, impl.TonemapPS, impl.BlitPS, impl.DepthUpsamplePS, impl.EquirectCS, impl.SkyCS, impl.IrradianceCS, impl.PrefilterCS, impl.BrdfCS, impl.DownsampleCS, impl.ParticleVS, impl.ParticlePS })
 		{
 			if (!shader)
 				return false;
@@ -451,6 +503,16 @@ namespace Basalt {
 		};
 		impl.ComputeLayout = device->createBindingLayout(computeDesc);
 
+		// Set 1 of the particle pipelines (set 0 is FrameLayout): the vertex shader reads the particles, the
+		// pixel shader the texture.
+		nvrhi::BindingLayoutDesc particleDesc = MakeLayout(1, nvrhi::ShaderType::All);
+		particleDesc.bindings = {
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),
+			nvrhi::BindingLayoutItem::Texture_SRV(1),
+			nvrhi::BindingLayoutItem::Sampler(2),
+		};
+		impl.ParticleLayout = device->createBindingLayout(particleDesc);
+
 		// --- Samplers -----------------------------------------------------------------------------
 		// Equirectangular maps wrap horizontally (longitude) and clamp at the poles.
 		impl.EquirectSampler = device->createSampler(nvrhi::SamplerDesc().setAllFilters(true).setAddressU(nvrhi::SamplerAddressMode::Wrap).setAddressV(nvrhi::SamplerAddressMode::Clamp).setAddressW(nvrhi::SamplerAddressMode::Clamp));
@@ -532,6 +594,16 @@ namespace Basalt {
 		lutDesc.keepInitialState = true;
 		impl.BrdfLut = device->createTexture(lutDesc);
 
+		const std::vector<uint8_t> softDisc = MakeSoftDiscTexture(ParticleTextureSize);
+		nvrhi::TextureDesc particleTextureDesc;
+		particleTextureDesc.width = ParticleTextureSize;
+		particleTextureDesc.height = ParticleTextureSize;
+		particleTextureDesc.format = nvrhi::Format::RGBA8_UNORM;
+		particleTextureDesc.debugName = "ParticleSoftDisc";
+		particleTextureDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+		particleTextureDesc.keepInitialState = true;
+		impl.ParticleTexture = device->createTexture(particleTextureDesc);
+
 		// --- Compute pipelines --------------------------------------------------------------------
 		auto makeCompute = [&](nvrhi::IShader* shader) {
 			nvrhi::ComputePipelineDesc desc;
@@ -571,10 +643,11 @@ namespace Basalt {
 		impl.CommandList->open();
 		m_Resources->Initialize(impl.CommandList);
 		impl.CommandList->writeTexture(impl.SsaoNoise, 0, 0, noise.data(), 16);
+		impl.CommandList->writeTexture(impl.ParticleTexture, 0, 0, softDisc.data(), size_t{ ParticleTextureSize } * 4);
 		impl.CommandList->close();
 		device->executeCommandList(impl.CommandList);
 
-		const bool valid = impl.MeshInputLayout && impl.ShadowInputLayout && impl.FrameLayout && impl.MaterialLayout && impl.SsaoLayout && impl.BlurLayout && impl.TextureSamplerLayout && impl.ComputeLayout && impl.ShadowMap && impl.ShadowPipeline && impl.ShadowMaskedPipeline && impl.ShadowMaskedInputLayout && impl.EquirectPipeline && impl.SkyPipeline && impl.IrradiancePipeline && impl.PrefilterPipeline && impl.BrdfPipeline && impl.DownsamplePipeline && impl.ViewConstantsBuffer;
+		const bool valid = impl.MeshInputLayout && impl.ShadowInputLayout && impl.FrameLayout && impl.MaterialLayout && impl.SsaoLayout && impl.BlurLayout && impl.TextureSamplerLayout && impl.ComputeLayout && impl.ShadowMap && impl.ShadowPipeline && impl.ShadowMaskedPipeline && impl.ShadowMaskedInputLayout && impl.EquirectPipeline && impl.SkyPipeline && impl.IrradiancePipeline && impl.PrefilterPipeline && impl.BrdfPipeline && impl.DownsamplePipeline && impl.ViewConstantsBuffer && impl.ParticleLayout && impl.ParticleTexture;
 		if (!valid)
 			BS_CORE_ERROR("SceneRenderer: failed to create GPU resources");
 		return valid;
@@ -773,6 +846,27 @@ namespace Basalt {
 			impl.PrepassPipeline[doubleSided] = meshPipeline(impl.DepthNormalPS, impl.PrepassFramebuffer, doubleSided, true, false);
 			impl.OpaquePipeline[doubleSided] = meshPipeline(impl.PbrPS, impl.LightingFramebuffer, doubleSided, false, false);
 			impl.TransparentPipeline[doubleSided] = meshPipeline(impl.PbrPS, impl.LightingFramebuffer, doubleSided, false, true);
+		}
+
+		// Billboards: depth-tested against the scene but not written (they are blended), never culled.
+		for (ParticleBlendMode blend : { ParticleBlendMode::Alpha, ParticleBlendMode::Additive })
+		{
+			nvrhi::GraphicsPipelineDesc desc;
+			desc.VS = impl.ParticleVS;
+			desc.PS = impl.ParticlePS;
+			desc.renderState.rasterState.setCullNone();
+			desc.renderState.depthStencilState.setDepthTestEnable(true).setDepthWriteEnable(false).setDepthFunc(nvrhi::ComparisonFunc::LessOrEqual);
+			// Alpha blends like transparent meshes; additive adds color weighted by opacity and keeps the
+			// target's alpha.
+			const bool additive = blend == ParticleBlendMode::Additive;
+			desc.renderState.blendState.targets[0]
+				.setBlendEnable(true)
+				.setSrcBlend(nvrhi::BlendFactor::SrcAlpha)
+				.setDestBlend(additive ? nvrhi::BlendFactor::One : nvrhi::BlendFactor::InvSrcAlpha)
+				.setSrcBlendAlpha(additive ? nvrhi::BlendFactor::Zero : nvrhi::BlendFactor::One)
+				.setDestBlendAlpha(additive ? nvrhi::BlendFactor::One : nvrhi::BlendFactor::InvSrcAlpha);
+			desc.bindingLayouts = { impl.FrameLayout, impl.ParticleLayout };
+			impl.ParticlePipeline[static_cast<size_t>(blend)] = m_Device->createGraphicsPipeline(desc, impl.LightingFramebuffer->getFramebufferInfo());
 		}
 
 		auto fullscreenPipeline = [&](nvrhi::IShader* vertexShader, nvrhi::IShader* pixelShader, nvrhi::IBindingLayout* layout, nvrhi::IFramebuffer* framebuffer, bool depthTest) {
@@ -1262,6 +1356,48 @@ namespace Basalt {
 		}
 		m_Statistics.Materials = static_cast<uint32_t>(materials.size());
 
+		// --- Particles ----------------------------------------------------------------------------
+		// Only a running scene has a particle system. Batches outside the view frustum are not drawn.
+		std::vector<ParticleDraw>& particleDraws = impl.ParticleDraws;
+		particleDraws.clear();
+		impl.ParticleData.Clear();
+		if (const ParticleSystem* particleSystem = scene.GetParticleSystem())
+			particleSystem->BuildRenderData(camera.Position, cameraForward, impl.ParticleData);
+		const std::vector<ParticleVertex>& particles = impl.ParticleData.Particles;
+		if (!particles.empty())
+		{
+			const nvrhi::BufferHandle previousParticles = impl.ParticleBuffer;
+			impl.ParticleBuffer = EnsureStructuredBuffer(m_Device, impl.ParticleBuffer, particles.size() * sizeof(ParticleVertex), sizeof(ParticleVertex), "ParticleBuffer");
+			if (impl.ParticleBuffer != previousParticles)
+				impl.ParticleSets.clear();
+			commandList->writeBuffer(impl.ParticleBuffer, particles.data(), particles.size() * sizeof(ParticleVertex));
+			for (const ParticleBatch& batch : impl.ParticleData.Batches)
+			{
+				if (!frustum.Intersects(batch.Bounds))
+					continue;
+				// A texture that is missing or still loading falls back to the soft disc (AssetManager logs failures).
+				nvrhi::ITexture* particleTexture = impl.ParticleTexture;
+				if (!batch.Texture.empty())
+				{
+					Ref<TextureSource> source = AssetManager::GetTexture(batch.Texture);
+					if (nvrhi::ITexture* gpu = source ? m_Resources->GetTexture(source, true, commandList) : nullptr)
+						particleTexture = gpu;
+				}
+				Impl::MaterialSetEntry& entry = impl.ParticleSets[particleTexture];
+				if (!entry.Set)
+				{
+					entry.Set = m_Device->createBindingSet(nvrhi::BindingSetDesc()
+															   .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(0, impl.ParticleBuffer))
+															   .addItem(nvrhi::BindingSetItem::Texture_SRV(1, particleTexture))
+															   .addItem(nvrhi::BindingSetItem::Sampler(2, impl.LinearClamp)),
+														   impl.ParticleLayout);
+				}
+				entry.LastUsed = impl.FrameCounter;
+				particleDraws.push_back({ batch.FirstParticle, batch.Count, batch.ViewDepth, batch.Blend, entry.Set });
+				m_Statistics.Particles += batch.Count;
+			}
+		}
+
 		// Upload per-frame buffers (empty arrays still need one element for valid descriptors).
 		if (draws.empty())
 			draws.push_back({});
@@ -1404,19 +1540,38 @@ namespace Basalt {
 				fullscreen(impl.SkyboxPipeline, impl.LightingFramebuffer, impl.FrameSet, renderViewport, &push, sizeof(push));
 			}
 
-			std::vector<const DrawItem*>& transparent = impl.Transparent;
+			// Blended meshes and particle batches, back to front. Particles sort as one batch per emitter (by
+			// their bounds center), like a mesh; within the batch they are already sorted.
+			std::vector<TransparentDraw>& transparent = impl.Transparent;
 			transparent.clear();
 			for (const DrawItem& item : items)
 			{
 				if (item.Blend && item.WorldBounds.IsValid())
-					transparent.push_back(&item);
+					transparent.push_back({ item.ViewDepth, &item, nullptr });
 			}
-			// Stable: items at equal depth keep submission order, so a scene always renders the same image.
-			// NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order): ordered by depth, not by address.
-			std::stable_sort(transparent.begin(), transparent.end(), [](const DrawItem* a, const DrawItem* b) { return a->ViewDepth > b->ViewDepth; });
-			for (const DrawItem* item : transparent)
+			for (const ParticleDraw& particleDraw : particleDraws)
+				transparent.push_back({ particleDraw.ViewDepth, nullptr, &particleDraw });
+			// Stable: draws at equal depth keep submission order, so a scene always renders the same image.
+			std::stable_sort(transparent.begin(), transparent.end(), [](const TransparentDraw& a, const TransparentDraw& b) { return a.ViewDepth > b.ViewDepth; });
+			for (const TransparentDraw& draw : transparent)
 			{
-				drawItem(*item, impl.TransparentPipeline[item->DoubleSided ? 1 : 0], impl.LightingFramebuffer, renderViewport, 0, true);
+				if (draw.Item)
+				{
+					drawItem(*draw.Item, impl.TransparentPipeline[draw.Item->DoubleSided ? 1 : 0], impl.LightingFramebuffer, renderViewport, 0, true);
+				}
+				else
+				{
+					const ParticleDraw& particleDraw = *draw.Particles;
+					nvrhi::GraphicsState state;
+					state.pipeline = impl.ParticlePipeline[static_cast<size_t>(particleDraw.Blend)];
+					state.framebuffer = impl.LightingFramebuffer;
+					state.bindings = { impl.FrameSet, particleDraw.Set };
+					state.viewport.addViewportAndScissorRect(renderViewport);
+					commandList->setGraphicsState(state);
+					const DrawPush push{ particleDraw.FirstParticle, 0 };
+					commandList->setPushConstants(&push, sizeof(push));
+					commandList->draw(nvrhi::DrawArguments().setVertexCount(particleDraw.Count * 6));
+				}
 				m_Statistics.DrawCalls++;
 			}
 		}
@@ -1452,6 +1607,7 @@ namespace Basalt {
 
 		// Release cached material sets (and the textures they reference) that are no longer used.
 		std::erase_if(impl.MaterialSets, [&](const auto& entry) { return impl.FrameCounter - entry.second.LastUsed > MaterialSetRetentionFrames; });
+		std::erase_if(impl.ParticleSets, [&](const auto& entry) { return impl.FrameCounter - entry.second.LastUsed > MaterialSetRetentionFrames; });
 		if (impl.FrameCounter % 300 == 0)
 			m_Resources->CollectGarbage();
 	}

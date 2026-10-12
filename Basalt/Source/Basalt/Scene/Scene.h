@@ -20,6 +20,7 @@ namespace Basalt {
 	class PhysicsWorld;
 	class ScriptEngine;
 	class AudioSystem;
+	class ParticleSystem;
 
 	enum class Tonemapper
 	{
@@ -139,7 +140,8 @@ namespace Basalt {
 		void OnRuntimeStop();
 		void OnSimulationStart();
 		void OnSimulationStop();
-		// Advances scripts, physics and audio (Play) or physics only (Simulate). No-op in Edit state.
+		// Advances scripts, physics, particles and audio (Play) or physics and particles (Simulate). No-op in
+		// Edit state.
 		void OnUpdate(Timestep ts);
 		SceneState GetState() const { return m_State; }
 		bool IsRunning() const { return m_State != SceneState::Edit; }
@@ -159,6 +161,7 @@ namespace Basalt {
 		PhysicsWorld* GetPhysicsWorld() const { return m_PhysicsWorld.get(); }
 		ScriptEngine* GetScriptEngine() const { return m_ScriptEngine.get(); }
 		AudioSystem* GetAudioSystem() const { return m_AudioSystem.get(); }
+		ParticleSystem* GetParticleSystem() const { return m_ParticleSystem.get(); }
 
 		const std::string& GetName() const { return m_Name; }
 		void SetName(const std::string& name) { m_Name = name; }
@@ -213,6 +216,7 @@ namespace Basalt {
 		Scope<PhysicsWorld> m_PhysicsWorld;
 		Scope<ScriptEngine> m_ScriptEngine;
 		Scope<AudioSystem> m_AudioSystem;
+		Scope<ParticleSystem> m_ParticleSystem;
 
 		friend class Entity;
 		friend class SceneSerializer;

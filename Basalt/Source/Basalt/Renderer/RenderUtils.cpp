@@ -91,6 +91,7 @@ namespace Basalt {
 			{ "drawCalls", statistics.DrawCalls },
 			{ "shadowDrawCalls", statistics.ShadowDrawCalls },
 			{ "culledSubmeshes", statistics.CulledSubmeshes },
+			{ "particles", statistics.Particles },
 			{ "lights", statistics.Lights },
 			{ "materials", statistics.Materials },
 			{ "gpu", std::move(gpu) },

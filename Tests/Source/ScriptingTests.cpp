@@ -1044,6 +1044,28 @@ TEST_SUITE("Scripting")
 		CHECK(sequence() == first);
 	}
 
+	TEST_CASE("Lua's random numbers start from the project seed; math.randomseed() returns to it")
+	{
+		BasaltTest::TempProject project("LuaRandomSeed");
+		REQUIRE(project.IsValid());
+		auto draw = [](const char* code) {
+			Scene scene;
+			scene.OnRuntimeStart();
+			std::string result;
+			REQUIRE(scene.GetScriptEngine()->ExecuteString(code, result));
+			scene.OnRuntimeStop();
+			return result;
+		};
+		const char* sequence = "local t = {} for i = 1, 4 do t[i] = math.random(1000000) end return table.concat(t, ',')";
+		const std::string defaultSeed = draw(sequence);
+		Project::GetActive()->GetConfig().RandomSeed = 4242;
+		const std::string otherSeed = draw(sequence);
+		CHECK(otherSeed != defaultSeed);
+		CHECK(draw(sequence) == otherSeed);
+		// Reseeding without an argument starts the project's sequence again, not the engine default.
+		CHECK(draw("math.random(10) math.random(10) math.randomseed() local t = {} for i = 1, 4 do t[i] = math.random(1000000) end return table.concat(t, ',')") == otherSeed);
+	}
+
 	TEST_CASE("Scripts added at runtime start on the next update; require loads project modules")
 	{
 		BasaltTest::TempProject project("ScriptRuntimeAdd");

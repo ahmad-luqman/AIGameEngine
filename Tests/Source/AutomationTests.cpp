@@ -109,6 +109,47 @@ TEST_SUITE("Automation")
 		}
 	}
 
+	TEST_CASE("The random seed is a validated project setting that survives save and load")
+	{
+		BasaltTest::TempProject temp("RandomSeedProject");
+		REQUIRE(temp.IsValid());
+		CommandRegistry registry;
+		AutomationSession session;
+		CHECK(Run(registry, session, "project.info")["randomSeed"] == Random::DefaultSeed);
+		CHECK(Project::GetActiveRandomSeed() == Random::DefaultSeed);
+		Run(registry, session, "project.set", { { "randomSeed", 4294967295u } });
+		CHECK(Run(registry, session, "project.info")["randomSeed"] == 4294967295u);
+		CHECK(Project::GetActiveRandomSeed() == 4294967295u);
+		for (const json& bad : { json(-1), json(4294967296), json(1.5), json("7") })
+		{
+			INFO(bad.dump());
+			CHECK(RunError(registry, session, "project.set", { { "randomSeed", bad } }).find("randomSeed") != std::string::npos);
+		}
+		Run(registry, session, "project.set", { { "randomSeed", 7 } });
+
+		std::string error;
+		const Ref<Project> loaded = Project::Load(temp.GetDirectory(), error);
+		REQUIRE(loaded);
+		CHECK(loaded->GetConfig().RandomSeed == 7u);
+
+		// Older project files have no seed: the default, so their games play as before.
+		temp.WriteFile(Project::FileName, R"({"Name": "Old"})");
+		REQUIRE(Project::Load(temp.GetDirectory(), error));
+		CHECK(Project::Load(temp.GetDirectory(), error)->GetConfig().RandomSeed == Random::DefaultSeed);
+		temp.WriteFile(Project::FileName, R"({"RandomSeed": 0})");
+		REQUIRE(Project::Load(temp.GetDirectory(), error));
+		CHECK(Project::Load(temp.GetDirectory(), error)->GetConfig().RandomSeed == 0u);
+		for (const char* bad : { R"({"RandomSeed": -1})", R"({"RandomSeed": 4294967296})", R"({"RandomSeed": 18446744073709551615})", R"({"RandomSeed": 2.5})", R"({"RandomSeed": "1"})" })
+		{
+			INFO(bad);
+			temp.WriteFile(Project::FileName, bad);
+			CHECK_FALSE(Project::Load(temp.GetDirectory(), error));
+			CHECK(error.find("RandomSeed") != std::string::npos);
+		}
+		Project::SetActive(nullptr);
+		CHECK(Project::GetActiveRandomSeed() == Random::DefaultSeed);
+	}
+
 	TEST_CASE("Dynamic resolution settings are validated project settings that survive save and load")
 	{
 		BasaltTest::TempProject temp("DynamicResolutionProject");
@@ -439,6 +480,15 @@ TEST_SUITE("Automation")
 		CHECK(shorter["frame"] == 5);
 		CHECK(shorter["stateHash"] != live["stateHash"]);
 		CHECK(RunError(registry, session, "replay.run", { { "path", "Replays/Test.breplay" }, { "frames", 5 }, { "assertHash", true } }).find("full recorded length") != std::string::npos);
+
+		// The replay stored the seed it ran with; another seed would replay different random numbers.
+		CHECK(json::parse(*FileSystem::ReadTextFile(temp.GetDirectory() / "Replays/Test.breplay"))["RandomSeed"] == Random::DefaultSeed);
+		Run(registry, session, "project.set", { { "randomSeed", 99 } });
+		CHECK(RunError(registry, session, "replay.run", { { "path", "Replays/Test.breplay" } }).find("recorded with random seed") != std::string::npos);
+		Run(registry, session, "project.set", { { "randomSeed", Random::DefaultSeed } });
+		CHECK(Run(registry, session, "replay.run", { { "path", "Replays/Test.breplay" }, { "assertHash", true } })["stateHash"] == live["stateHash"]);
+		temp.WriteFile("Replays/BadSeed.breplay", R"({ "Format": "BasaltReplay", "RandomSeed": -3, "Events": [] })");
+		CHECK(RunError(registry, session, "replay.run", { { "path", "Replays/BadSeed.breplay" } }).find("invalid RandomSeed") != std::string::npos);
 
 		temp.WriteFile("Replays/Bad.breplay", R"({ "Format": "Other" })");
 		CHECK(RunError(registry, session, "replay.run", { { "path", "Replays/Bad.breplay" } }).find("not a Basalt replay") != std::string::npos);

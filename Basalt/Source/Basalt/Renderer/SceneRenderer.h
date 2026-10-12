@@ -32,6 +32,8 @@ namespace Basalt {
 		uint32_t CulledSubmeshes = 0;
 		uint32_t Lights = 0;
 		uint32_t Materials = 0;
+		// Particle billboards drawn (after frustum culling of whole emitters).
+		uint32_t Particles = 0;
 	};
 
 	// GPU timer results dynamic resolution received since the renderer was created: Rejected ones were not
@@ -52,7 +54,8 @@ namespace Basalt {
 
 	// Renders a Scene from a camera into an internal LDR image:
 	//   cascaded soft shadow maps -> depth/normal prepass -> SSAO (+ bilateral blur) -> forward PBR with
-	//   IBL (opaque) -> skybox -> transparent PBR (sorted) -> exposure + tonemapping + sRGB encode.
+	//   IBL (opaque) -> skybox -> transparent PBR and particle billboards (sorted together) -> exposure +
+	//   tonemapping + sRGB encode.
 	// The scene renders at the viewport size times the render scale; the tonemap pass resamples it to the
 	// viewport size. With dynamic resolution the scale follows the GPU time measured by the renderer's
 	// GpuProfiler; the targets keep the size of the configured render scale and the scene renders into

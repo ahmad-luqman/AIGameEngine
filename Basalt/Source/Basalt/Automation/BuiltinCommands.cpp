@@ -345,10 +345,11 @@ namespace Basalt {
 					{ "targetFrameRate", config.DynamicResolution.TargetFrameRate },
 					{ "minRenderScale", config.DynamicResolution.MinScale },
 					{ "physicsLayers", config.Physics.ToJson() },
+					{ "randomSeed", config.RandomSeed },
 				};
 			});
 
-			Add(registry, "project.set", "Changes project settings and saves the project file.", { { "name", "string" }, { "startScene", "string, project-relative scene" }, { "windowWidth", "integer" }, { "windowHeight", "integer" }, { "fullscreen", "bool" }, { "renderScale", "number in [0.25, 2], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution)" }, { "dynamicResolution", "bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries)" }, { "targetFrameRate", "number in [10, 1000]; dynamic resolution keeps the scene's GPU time within this frame rate's frame time" }, { "minRenderScale", "number in [0.25, 2], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning)" }, { "physicsLayers", "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "project.set", "Changes project settings and saves the project file.", { { "name", "string" }, { "startScene", "string, project-relative scene" }, { "windowWidth", "integer" }, { "windowHeight", "integer" }, { "fullscreen", "bool" }, { "renderScale", "number in [0.25, 2], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution)" }, { "dynamicResolution", "bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries)" }, { "targetFrameRate", "number in [10, 1000]; dynamic resolution keeps the scene's GPU time within this frame rate's frame time" }, { "minRenderScale", "number in [0.25, 2], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning)" }, { "physicsLayers", "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play" }, { "randomSeed", "integer in [0, 4294967295], seeds Lua's random numbers and particle emitters; applies from the next play" } }, [](AutomationSession& session, const json& params) {
 				Ref<Project> project = RequireProject();
 				// Every value is read and validated before any is assigned, so a bad parameter leaves the
 				// project untouched.
@@ -362,6 +363,7 @@ namespace Basalt {
 				config.DynamicResolution.Enabled = OptionalBool(params, "dynamicResolution", config.DynamicResolution.Enabled);
 				config.DynamicResolution.TargetFrameRate = static_cast<float>(OptionalNumber(params, "targetFrameRate", config.DynamicResolution.TargetFrameRate, MinTargetFrameRate, MaxTargetFrameRate));
 				config.DynamicResolution.MinScale = static_cast<float>(OptionalNumber(params, "minRenderScale", config.DynamicResolution.MinScale, MinRenderScale, MaxRenderScale));
+				config.RandomSeed = static_cast<uint32_t>(OptionalInteger(params, "randomSeed", config.RandomSeed, 0, UINT32_MAX));
 				if (const auto it = params.find("physicsLayers"); it != params.end())
 				{
 					std::string error;
@@ -790,7 +792,8 @@ namespace Basalt {
 					throw CommandError("not recording (use replay.record_start)");
 				const uint64_t frames = session.IsPlaying() ? RequireScene(session).GetFrameCount() : 0;
 				const json events = session.StopRecording();
-				json replay = { { "Format", "BasaltReplay" }, { "Version", 1 }, { "Frames", frames }, { "Events", events } };
+				// The seed is part of the run: Lua randomness and particles follow it.
+				json replay = { { "Format", "BasaltReplay" }, { "Version", 1 }, { "Frames", frames }, { "RandomSeed", Project::GetActiveRandomSeed() }, { "Events", events } };
 				// The recorded run's final state: replay.run with assertHash checks a replay reproduces it.
 				if (session.IsPlaying())
 					replay["StateHash"] = SceneSerializer::ComputeStateHash(RequireScene(session));
@@ -809,6 +812,14 @@ namespace Basalt {
 					const json replay = ParseJson(*text);
 					if (!replay.is_object() || replay.value("Format", "") != "BasaltReplay" || !replay.contains("Events") || !replay["Events"].is_array())
 						throw CommandError("'" + path + "' is not a Basalt replay file");
+					// Replays recorded before the seed was stored carry none and run with the project's.
+					if (const auto seed = replay.find("RandomSeed"); seed != replay.end())
+					{
+						if (!seed->is_number_unsigned() || seed->get<uint64_t>() > UINT32_MAX)
+							throw CommandError("'" + path + "' has an invalid RandomSeed");
+						if (seed->get<uint64_t>() != Project::GetActiveRandomSeed())
+							throw CommandError("'" + path + "' was recorded with random seed " + std::to_string(seed->get<uint64_t>()) + " but the project uses " + std::to_string(Project::GetActiveRandomSeed()) + " (project.set randomSeed)");
+					}
 					const int64_t recorded = replay.value("Frames", int64_t{ 0 });
 					const uint32_t frames = static_cast<uint32_t>(OptionalInteger(params, "frames", recorded, 0, 10000000));
 
