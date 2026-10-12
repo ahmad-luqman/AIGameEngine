@@ -34,6 +34,8 @@ namespace Basalt {
 			m_Scene->OnSimulationStart();
 		else
 			m_Scene->OnRuntimeStart();
+		if (IsRecording() && !m_RecordingSeed)
+			m_RecordingSeed = m_Scene->GetRandomSeed();
 		return true;
 	}
 
@@ -59,6 +61,12 @@ namespace Basalt {
 		return IsPlaying() && m_Scene->GetState() == SceneState::Simulate;
 	}
 
+	void AutomationSession::StartRecording()
+	{
+		m_Recording = nlohmann::json::array();
+		m_RecordingSeed = IsPlaying() ? std::optional<uint32_t>(m_Scene->GetRandomSeed()) : std::nullopt;
+	}
+
 	void AutomationSession::RecordInput(const std::string& command, const nlohmann::json& params)
 	{
 		if (!IsRecording())
@@ -71,6 +79,7 @@ namespace Basalt {
 	{
 		nlohmann::json events = IsRecording() ? std::move(m_Recording) : nlohmann::json::array();
 		m_Recording = nullptr;
+		m_RecordingSeed.reset();
 		return events;
 	}
 

@@ -11,7 +11,9 @@ description: Add a new component type to the Basalt engine end to end (data, ser
    field once (use `EnumField` for enums, `RotationField`/`AngleField` for angles), a `Write(const T&)`
    overload, and `infos.push_back(MakeInfo<T>("Name"))` in `BuildRegistry`. The name is what files, Lua and
    the automation API use. If invalid values could break a system, add a `std::string Validate(const T&)`
-   overload next to the others (it returns the problem, naming the field and value; see the
+   overload beside the ParticleEmitter one, before `MakeInfo` (a later one is silently never called;
+   components with a custom Deserialize, like Camera, validate there). It returns the problem, naming the
+   field and value; see the
    ParticleEmitter one, whose rules live in `Particles/ParticleEmitterRules.h` so the system can also
    repair values C++ code wrote directly). Every load, Lua `SetComponent`, `component.set` and inspector
    edit runs it. Adding a missing component constructs it once with its final values.

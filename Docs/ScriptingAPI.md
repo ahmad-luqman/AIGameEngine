@@ -76,8 +76,9 @@ Random numbers are deterministic: each play session starts from the project's `R
 (`project.set randomSeed`, applied from the next play; `project.info` shows it, by default 9067031) and
 produces the same sequence on every platform. Lua's `math.random`/`math.randomseed` use the same generator
 (standard Lua seeds them from the clock), so replays and automated tests reproduce exactly.
-`math.randomseed(n)` takes an integer (seeds are 32-bit); without an argument it returns to the seed the
-session started with. Replays store that seed, and `replay.run` refuses to run with a different one.
+`math.randomseed(n)` and `Math.Seed(n)` take an integer or an integral float (seeds are 32-bit: negative
+integers and integers of 2^32 and up use their low 32 bits); `math.randomseed()` (or `nil`) returns to the
+seed the session started with. Replays store that seed, and `replay.run` refuses to run with a different one.
 
 Physics is deterministic across platforms too: the same scene and inputs reach the same state (and
 `scene.hash`) on Windows, Linux and macOS, in Debug and Release (`Tests/Data/Determinism` checks it on
@@ -388,26 +389,28 @@ Use `Blend = "Additive"` for sparks and fire, `"Alpha"` for smoke. `Texture` is 
 - Shapes are in the emitter's local space: `Point` and `Sphere` (radius `ShapeRadius`) emit in every
   direction, `Box` (half-extents `BoxExtents`) along local +Y, `Cone` (base radius `ShapeRadius`, half-angle
   `ConeAngle` degrees) within that angle of +Y. Speed (m/s) is picked between `SpeedMin` and `SpeedMax`
-  along that direction (negative speeds emit the other way), plus `Velocity` (an emitter-local direction).
+  along that direction (negative speeds emit the other way), plus `Velocity` (m/s along the emitter's
+  rotated axes).
   The shape scales with the emitter; speeds do not. `GravityScale` scales the scene gravity; `Drag` is a
   rate (1/s): speed decays by about e^-Drag per second.
 - `SimulationSpace = "World"` leaves particles where they were emitted when the emitter moves; `"Local"`
   carries (and turns) them along.
 - Color and size go from `StartColor`/`StartSize` to `EndColor`/`EndSize` over each particle's life (picked
   between `LifetimeMin` and `LifetimeMax` seconds). Min/max pairs may be in either order.
-- Limits: `Duration` and lifetimes at least 0.001 s, `MaxParticles` 1..10000, `Rate` up to 1e6 per second,
-  speeds, `Velocity`, `GravityScale`, `Drag`, sizes, `ShapeRadius`/`BoxExtents` and color channels up to
-  1e4 in magnitude, opacity 0..1, `ConeAngle` 0..180. `SetComponent` rejects values outside them.
+- Limits: `Duration` and lifetimes 0.001..1e5 s, `MaxParticles` 1..10000, `BurstCount` 0..10000, `Rate`
+  0..1e6 per second, `ConeAngle` 0..180, opacity 0..1; speeds, `Velocity` and `GravityScale` between -1e4
+  and 1e4; `Drag`, sizes, `ShapeRadius`, `BoxExtents` and color channels 0..1e4. Scene and prefab files,
+  `SetComponent` and `component.set` reject values outside them, naming the field and value.
 
 Emitters are deterministic: each one draws from its own random stream, seeded from the session's seed
 (the project's `RandomSeed`) and the order emitters appear in (scene emitters by entity ID, then the ones
 added during play), so the same session plays the same particles on the same platform (shape sampling uses
-`sin`/`cos`, which differ slightly between C libraries), and particles never change what `Math.Random`
+`sin`/`cos`/`cbrt`, which differ slightly between C libraries), and particles never change what `Math.Random`
 returns. Particles are runtime state only: they are not saved and not part of `scene.hash`.
 
 ```lua
 function Explosion:OnCreate()
-    self.Entity:EmitParticles(200)          -- one-off burst without playing the emitter (Rate/BurstCount do not apply)
+    self.Entity:EmitParticles(200)          -- one-off burst; does not start the emitter (Rate/BurstCount do not apply)
 end
 
 function Torch:OnUpdate(dt)

@@ -205,34 +205,31 @@ TEST_SUITE("Serialization")
 		}
 
 		// One construction with the final values, and no update: systems never see the defaults first.
-		int constructed = 0;
-		int updated = 0;
-		float constructedIntensity = 0.0f;
 		struct Counter
 		{
-			int* Constructed;
-			int* Updated;
-			float* Intensity;
+			int Constructed = 0;
+			int Updated = 0;
+			float Intensity = 0.0f;
 			void OnConstruct(entt::registry& registry, entt::entity handle)
 			{
-				(*Constructed)++;
-				*Intensity = registry.get<PointLightComponent>(handle).Intensity;
+				Constructed++;
+				Intensity = registry.get<PointLightComponent>(handle).Intensity;
 			}
-			void OnUpdate(entt::registry&, entt::entity) { (*Updated)++; }
-		} counter{ &constructed, &updated, &constructedIntensity };
+			void OnUpdate(entt::registry&, entt::entity) { Updated++; }
+		} counter;
 		scene.GetRegistry().on_construct<PointLightComponent>().connect<&Counter::OnConstruct>(counter);
 		scene.GetRegistry().on_update<PointLightComponent>().connect<&Counter::OnUpdate>(counter);
 		Entity lamp = scene.CreateEntity("Lamp");
 		std::string error;
 		REQUIRE(ComponentRegistry::AddOrPatch(lamp, "PointLight", { { "Intensity", 42 } }, error));
-		CHECK(constructed == 1);
-		CHECK(updated == 0);
-		CHECK(constructedIntensity == 42.0f);
+		CHECK(counter.Constructed == 1);
+		CHECK(counter.Updated == 0);
+		CHECK(counter.Intensity == 42.0f);
 		// A rejected add leaves no component behind.
 		Entity broken = scene.CreateEntity("Broken");
 		CHECK_FALSE(ComponentRegistry::AddOrPatch(broken, "PointLight", { { "Intensity", "bright" } }, error));
 		CHECK_FALSE(broken.HasComponent<PointLightComponent>());
-		CHECK(constructed == 1);
+		CHECK(counter.Constructed == 1);
 		scene.GetRegistry().on_construct<PointLightComponent>().disconnect<&Counter::OnConstruct>(counter);
 		scene.GetRegistry().on_update<PointLightComponent>().disconnect<&Counter::OnUpdate>(counter);
 	}

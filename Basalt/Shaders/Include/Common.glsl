@@ -4,7 +4,7 @@
 //                     9 linear clamp sampler, 10 shadow comparison sampler, 11 point clamp sampler,
 //                     push constants (DrawPush)
 //   set 1 (material): 0 albedo, 1 normal, 2 metallic-roughness, 3 occlusion, 4 emissive, 5 material sampler
-//   (set 1 differs per pipeline: the particle pipelines use their own, see Particle.vert)
+//   (the particle pipelines bind their own set 1; see Particle.vert)
 
 #ifndef BASALT_COMMON_GLSL
 #define BASALT_COMMON_GLSL

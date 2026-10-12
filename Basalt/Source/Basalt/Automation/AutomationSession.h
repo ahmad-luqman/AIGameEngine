@@ -7,6 +7,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
 
 namespace Basalt {
@@ -48,9 +49,12 @@ namespace Basalt {
 		// --- Input recording (replays) ---------------------------------------------------------------
 		// While recording, input commands are stored with the play frame they arrived on, so replaying
 		// them on the same frames of a fresh play session reproduces the run.
-		void StartRecording() { m_Recording = nlohmann::json::array(); }
+		void StartRecording();
 		bool IsRecording() const { return m_Recording.is_array(); }
 		void RecordInput(const std::string& command, const nlohmann::json& params);
+		// Seed of the first play session the recording saw (Scene::GetRandomSeed), if any: replays must run
+		// with it, whatever the project's seed was changed to since.
+		std::optional<uint32_t> GetRecordingSeed() const { return m_RecordingSeed; }
 		// Returns the recorded events and stops recording.
 		nlohmann::json StopRecording();
 
@@ -74,6 +78,7 @@ namespace Basalt {
 		bool m_Dirty = false;
 		// Array of { "frame", "command", "params" } while recording, null otherwise.
 		nlohmann::json m_Recording;
+		std::optional<uint32_t> m_RecordingSeed;
 	};
 
 }

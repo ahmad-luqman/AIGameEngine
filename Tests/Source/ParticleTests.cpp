@@ -113,9 +113,11 @@ TEST_SUITE("Particles")
 			{ { { "ConeAngle", 181 } }, "ConeAngle must be between 0 and 180 (got 181)" },
 			{ { { "ConeAngle", -1 } }, "ConeAngle" },
 			{ { { "Duration", 0.0001 } }, "Duration" },
+			{ { { "Duration", 2e5 } }, "Duration" },
+			{ { { "LifetimeMax", 2e5 } }, "LifetimeMax" },
 			{ { { "LifetimeMin", 0 } }, "LifetimeMin" },
 			{ { { "LifetimeMax", 0 } }, "LifetimeMax" },
-			// Magnitudes that would overflow a particle's motion to infinity.
+			// Values beyond MinTime/MaxTime, MaxRate and MaxMagnitude, and colors outside their ranges.
 			{ { { "Rate", 2e6 } }, "Rate" },
 			{ { { "SpeedMax", 2e4 } }, "SpeedMax" },
 			{ { { "SpeedMin", -2e4 } }, "SpeedMin" },
@@ -123,7 +125,7 @@ TEST_SUITE("Particles")
 			{ { { "GravityScale", 1e5 } }, "GravityScale" },
 			{ { { "Drag", 1e5 } }, "Drag" },
 			{ { { "ShapeRadius", 1e5 } }, "ShapeRadius" },
-			{ { { "BoxExtents", { 1, 1, 1e5 } } }, "BoxExtents" },
+			{ { { "BoxExtents", { 1, 1, 1e5 } } }, "BoxExtents.z must be between 0 and 10000 (got 100000)" },
 			{ { { "StartSize", 1e5 } }, "StartSize" },
 			{ { { "StartColor", { 1, 1, 1, 1.5 } } }, "StartColor" },
 			{ { { "EndColor", { -1, 0, 0, 0 } } }, "EndColor" },
@@ -253,11 +255,14 @@ TEST_SUITE("Particles")
 		scene.OnUpdate(Step);
 		CHECK(particles.GetParticleCount(entity) == 4);
 
-		// Entities without an emitter: nothing happens.
+		// Entities without an emitter: nothing happens, and the calls say so.
 		Entity plain = scene.CreateEntity("Plain");
+		CHECK(particles.HasEmitter(entity));
+		CHECK_FALSE(particles.HasEmitter(plain));
 		CHECK_FALSE(particles.Play(plain));
 		CHECK(particles.Emit(plain, 3) == 0);
-		particles.Stop(plain, true);
+		CHECK_FALSE(particles.Stop(plain, true));
+		CHECK(particles.Stop(entity));
 		CHECK_FALSE(particles.IsPlaying(plain));
 		CHECK(particles.GetParticleCount(plain) == 0);
 		scene.OnRuntimeStop();
@@ -346,8 +351,8 @@ TEST_SUITE("Particles")
 
 		const ParticleRenderData data = RenderData(scene);
 		REQUIRE(data.Batches.size() == 2);
-		CHECK(glm::vec3(data.Particles[data.Batches[0].FirstParticle].PositionSize) == glm::vec3(0.0f, 0.0f, 0.0f));
-		CHECK(glm::vec3(data.Particles[data.Batches[1].FirstParticle].PositionSize) == glm::vec3(5.0f, 1.0f, 0.0f));
+		CHECK(ParticlePosition(data, 0) == glm::vec3(0.0f, 0.0f, 0.0f));
+		CHECK(ParticlePosition(data, 1) == glm::vec3(5.0f, 1.0f, 0.0f));
 		scene.OnRuntimeStop();
 	}
 
@@ -363,7 +368,7 @@ TEST_SUITE("Particles")
 		scene.OnRuntimeStart();
 		scene.GetParticleSystem()->Emit(entity, 1);
 		StepFrames(scene, 61); // the emitting frame, then one second of motion
-		const glm::vec3 position(RenderData(scene).Particles.at(0).PositionSize);
+		const glm::vec3 position = ParticlePosition(RenderData(scene), 0);
 		CHECK(position.x == doctest::Approx(-1.0).epsilon(1e-3));
 		CHECK(position.y == doctest::Approx(0.0).epsilon(1e-3));
 		scene.OnRuntimeStop();
@@ -840,7 +845,6 @@ TEST_SUITE("Particles")
 		CHECK(expected.y < -4.0f);
 		// A flattened emitter has no frame to express gravity in; its particle stays put and finite.
 		const glm::vec3 flattened = ParticlePosition(data, 3);
-		CHECK((std::isfinite(flattened.x) && std::isfinite(flattened.y) && std::isfinite(flattened.z)));
 		CHECK(flattened == glm::vec3(30.0f, 0.0f, 0.0f));
 		scene.OnRuntimeStop();
 	}
@@ -861,27 +865,28 @@ TEST_SUITE("Particles")
 		emitter.ConeAngle = 30.0f;
 		Entity cone = AddEmitter(scene, "Cone", emitter);
 		scene.OnRuntimeStart();
+		constexpr uint32_t Count = 500;
 		for (Entity entity : { point, box, cone })
-			scene.GetParticleSystem()->Emit(entity, 500);
+			scene.GetParticleSystem()->Emit(entity, Count);
 		StepFrames(scene, 61); // the emitting frame, then one second of motion
 		const ParticleRenderData data = RenderData(scene);
 		REQUIRE(data.Batches.size() == 3);
 
 		glm::vec3 mean(0.0f);
 		glm::bvec3 negative(false);
-		for (uint32_t i = 0; i < 500; i++)
+		for (uint32_t i = 0; i < Count; i++)
 		{
 			const glm::vec3 p = ParticlePosition(data, 0, i);
 			CHECK(glm::length(p) == doctest::Approx(1.0).epsilon(1e-3));
-			mean += p / 500.0f;
+			mean += p / static_cast<float>(Count);
 			negative = glm::bvec3(negative.x || p.x < 0.0f, negative.y || p.y < 0.0f, negative.z || p.z < 0.0f);
 		}
 		CHECK(glm::length(mean) < 0.15f);
 		CHECK(glm::all(negative));
-		for (uint32_t i = 0; i < 500; i++)
+		for (uint32_t i = 0; i < Count; i++)
 			CHECK(glm::distance(ParticlePosition(data, 1, i), glm::vec3(0.0f, 1.0f, 0.0f)) < 1e-3f);
 		float lowest = 1.0f;
-		for (uint32_t i = 0; i < 500; i++)
+		for (uint32_t i = 0; i < Count; i++)
 			lowest = std::min(lowest, ParticlePosition(data, 2, i).y);
 		// Within 30 degrees of +Y, and actually spread over that angle.
 		CHECK(lowest >= std::cos(glm::radians(30.0f)) - 1e-3f);
@@ -940,7 +945,7 @@ TEST_SUITE("Particles")
 		CHECK(data.Particles[0].Color == emitter.StartColor);
 		scene.OnUpdate(Step);
 		CHECK(particles.GetParticleCount(entity) == 0);
-		// Stop(clear) right after Emit leaves nothing marked new for the next update.
+		// Stop(clear) right after Emit forgets the fresh particles too (defensive: Emit adds fresh ones anyway).
 		particles.Emit(entity, 1);
 		particles.Stop(entity, true);
 		particles.Emit(entity, 1);
@@ -1130,6 +1135,55 @@ TEST_SUITE("Particles")
 		CHECK(data.LimitTo(3));
 		CHECK(data.Batches.empty());
 		CHECK(data.Particles.empty());
+	}
+
+	TEST_CASE("Lowering a one-shot emitter's Duration below the time it has run stops it without a burst")
+	{
+		Scene scene;
+		ParticleEmitterComponent emitter = QuietEmitter();
+		emitter.PlayOnStart = true;
+		emitter.Looping = false;
+		emitter.Rate = 50.0f;
+		Entity entity = AddEmitter(scene, "Fountain", emitter);
+		scene.OnRuntimeStart();
+		ParticleSystem& particles = *scene.GetParticleSystem();
+		StepFrames(scene, 180);
+		const uint32_t before = particles.GetParticleCount(entity);
+		CHECK(before >= 149);
+		entity.GetComponent<ParticleEmitterComponent>().Duration = 1.0f; // valid, but 3 s have passed
+		scene.OnUpdate(Step);
+		CHECK(particles.GetParticleCount(entity) == before);
+		CHECK_FALSE(particles.IsPlaying(entity));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Invalid emitter values are reported again after they were fixed, listing every problem")
+	{
+		Scene scene;
+		Entity entity = AddEmitter(scene, "Emitter", QuietEmitter());
+		scene.OnRuntimeStart();
+		auto& component = entity.GetComponent<ParticleEmitterComponent>();
+		const uint64_t logStart = Log::GetHistory().GetTotalCount();
+		component.Drag = -1.0f;
+		component.Blend = static_cast<ParticleBlendMode>(7);
+		StepFrames(scene, 3);
+		CHECK(BasaltTest::CountLogMessages(logStart, "has invalid values (Drag must be between 0 and 10000 (got -1); Blend must be one of its 2 values (got 7))") == 1);
+		component = QuietEmitter();
+		StepFrames(scene, 2);
+		component.Rate = -5.0f;
+		StepFrames(scene, 2);
+		CHECK(BasaltTest::CountLogMessages(logStart, "has invalid values") == 2);
+		CHECK(BasaltTest::CountLogMessages(logStart, "Rate must be between") == 1);
+		scene.OnRuntimeStop();
+
+		ParticleEmitterComponent broken;
+		broken.Duration = std::numeric_limits<float>::quiet_NaN();
+		broken.Shape = static_cast<ParticleEmitterShape>(9);
+		const std::vector<std::string> problems = FindParticleEmitterProblems(broken);
+		REQUIRE(problems.size() == 2);
+		CHECK(problems[0].find("Duration") != std::string::npos);
+		CHECK(problems[1] == "Shape must be one of its 4 values (got 9)");
+		CHECK(ValidateParticleEmitter(broken) == problems[0]);
 	}
 
 	TEST_CASE("Lua: EmitParticles, PlayParticles, StopParticles, IsEmittingParticles, GetParticleCount")

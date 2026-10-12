@@ -4,146 +4,137 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
+#include <cstdint>
 
 namespace Basalt {
 
 	namespace {
 
-		using Limits = ParticleEmitterComponent;
-		constexpr float Unbounded = std::numeric_limits<float>::max();
+		using Emitter = ParticleEmitterComponent;
 
-		// One rule per field: the range its values must lie in. NaN lies in no range.
 		struct FloatRule
 		{
 			const char* Name;
-			float ParticleEmitterComponent::* Field;
+			float Emitter::* Field;
 			float Min;
 			float Max;
 		};
 
 		constexpr FloatRule FloatRules[] = {
-			{ "Duration", &ParticleEmitterComponent::Duration, Limits::MinTime, Unbounded },
-			{ "Rate", &ParticleEmitterComponent::Rate, 0.0f, Limits::MaxRate },
-			{ "ShapeRadius", &ParticleEmitterComponent::ShapeRadius, 0.0f, Limits::MaxMagnitude },
-			{ "ConeAngle", &ParticleEmitterComponent::ConeAngle, 0.0f, Limits::MaxConeAngle },
-			{ "LifetimeMin", &ParticleEmitterComponent::LifetimeMin, Limits::MinTime, Unbounded },
-			{ "LifetimeMax", &ParticleEmitterComponent::LifetimeMax, Limits::MinTime, Unbounded },
-			{ "SpeedMin", &ParticleEmitterComponent::SpeedMin, -Limits::MaxMagnitude, Limits::MaxMagnitude },
-			{ "SpeedMax", &ParticleEmitterComponent::SpeedMax, -Limits::MaxMagnitude, Limits::MaxMagnitude },
-			{ "GravityScale", &ParticleEmitterComponent::GravityScale, -Limits::MaxMagnitude, Limits::MaxMagnitude },
-			{ "Drag", &ParticleEmitterComponent::Drag, 0.0f, Limits::MaxMagnitude },
-			{ "StartSize", &ParticleEmitterComponent::StartSize, 0.0f, Limits::MaxMagnitude },
-			{ "EndSize", &ParticleEmitterComponent::EndSize, 0.0f, Limits::MaxMagnitude },
+			{ "Duration", &Emitter::Duration, Emitter::MinTime, Emitter::MaxTime },
+			{ "Rate", &Emitter::Rate, 0.0f, Emitter::MaxRate },
+			{ "ShapeRadius", &Emitter::ShapeRadius, 0.0f, Emitter::MaxMagnitude },
+			{ "ConeAngle", &Emitter::ConeAngle, 0.0f, Emitter::MaxConeAngle },
+			{ "LifetimeMin", &Emitter::LifetimeMin, Emitter::MinTime, Emitter::MaxTime },
+			{ "LifetimeMax", &Emitter::LifetimeMax, Emitter::MinTime, Emitter::MaxTime },
+			{ "SpeedMin", &Emitter::SpeedMin, -Emitter::MaxMagnitude, Emitter::MaxMagnitude },
+			{ "SpeedMax", &Emitter::SpeedMax, -Emitter::MaxMagnitude, Emitter::MaxMagnitude },
+			{ "GravityScale", &Emitter::GravityScale, -Emitter::MaxMagnitude, Emitter::MaxMagnitude },
+			{ "Drag", &Emitter::Drag, 0.0f, Emitter::MaxMagnitude },
+			{ "StartSize", &Emitter::StartSize, 0.0f, Emitter::MaxMagnitude },
+			{ "EndSize", &Emitter::EndSize, 0.0f, Emitter::MaxMagnitude },
 		};
 
 		struct Vec3Rule
 		{
 			const char* Name;
-			glm::vec3 ParticleEmitterComponent::* Field;
+			glm::vec3 Emitter::* Field;
 			float Min;
 			float Max;
 		};
 
 		constexpr Vec3Rule Vec3Rules[] = {
-			{ "BoxExtents", &ParticleEmitterComponent::BoxExtents, 0.0f, Limits::MaxMagnitude },
-			{ "Velocity", &ParticleEmitterComponent::Velocity, -Limits::MaxMagnitude, Limits::MaxMagnitude },
+			{ "BoxExtents", &Emitter::BoxExtents, 0.0f, Emitter::MaxMagnitude },
+			{ "Velocity", &Emitter::Velocity, -Emitter::MaxMagnitude, Emitter::MaxMagnitude },
 		};
 
-		// Colors: HDR channels, opacity 0..1.
+		// HDR color channels, opacity 0..1.
 		struct ColorRule
 		{
 			const char* Name;
-			glm::vec4 ParticleEmitterComponent::* Field;
+			glm::vec4 Emitter::* Field;
+			float RgbMax;
+			float AlphaMax;
 		};
 
 		constexpr ColorRule ColorRules[] = {
-			{ "StartColor", &ParticleEmitterComponent::StartColor },
-			{ "EndColor", &ParticleEmitterComponent::EndColor },
+			{ "StartColor", &Emitter::StartColor, Emitter::MaxMagnitude, 1.0f },
+			{ "EndColor", &Emitter::EndColor, Emitter::MaxMagnitude, 1.0f },
 		};
 
-		bool InRange(float value, float min, float max)
+		constexpr const char* AxisNames[] = { ".x", ".y", ".z", ".a" };
+		constexpr const char* ChannelNames[] = { ".r", ".g", ".b", ".a" };
+
+		// Walks every rule once. Each field gets the value it must have (clamped, or the default when it is
+		// not finite or not an enum value); a field whose value differs breaks its rule and is reported to
+		// `onProblem` and, when `repair`, replaced. NaN differs from everything, -0.0 equals 0.0.
+		template<typename OnProblem>
+		void ApplyRules(Emitter& emitter, bool repair, OnProblem&& onProblem)
 		{
-			return value >= min && value <= max;
+			const Emitter defaults;
+			auto checkFloat = [&](float& value, float min, float max, float fallback, const std::string& name) {
+				const float required = std::isfinite(value) ? std::clamp(value, min, max) : fallback;
+				if (required == value)
+					return;
+				onProblem(fmt::format("{} must be between {} and {} (got {})", name, min, max, value));
+				if (repair)
+					value = required;
+			};
+			auto checkCount = [&](uint32_t& value, uint32_t min, const char* name) {
+				const uint32_t required = std::clamp(value, min, Emitter::MaxParticlesLimit);
+				if (required == value)
+					return;
+				onProblem(fmt::format("{} must be between {} and {} (got {})", name, min, Emitter::MaxParticlesLimit, value));
+				if (repair)
+					value = required;
+			};
+			auto checkEnum = [&](auto& value, size_t count, auto fallback, const char* name) {
+				if (static_cast<size_t>(value) < count)
+					return;
+				onProblem(fmt::format("{} must be one of its {} values (got {})", name, count, static_cast<size_t>(value)));
+				if (repair)
+					value = fallback;
+			};
+
+			checkCount(emitter.MaxParticles, 1, "MaxParticles");
+			checkCount(emitter.BurstCount, 0, "BurstCount");
+			for (const FloatRule& rule : FloatRules)
+				checkFloat(emitter.*rule.Field, rule.Min, rule.Max, defaults.*rule.Field, rule.Name);
+			for (const Vec3Rule& rule : Vec3Rules)
+			{
+				for (int axis = 0; axis < 3; axis++)
+					checkFloat((emitter.*rule.Field)[axis], rule.Min, rule.Max, (defaults.*rule.Field)[axis], std::string(rule.Name) + AxisNames[axis]);
+			}
+			for (const ColorRule& rule : ColorRules)
+			{
+				for (int channel = 0; channel < 4; channel++)
+					checkFloat((emitter.*rule.Field)[channel], 0.0f, channel == 3 ? rule.AlphaMax : rule.RgbMax, (defaults.*rule.Field)[channel], std::string(rule.Name) + ChannelNames[channel]);
+			}
+			// Only C++ code can write these out of range; files and Lua go through the enum names.
+			checkEnum(emitter.Shape, ParticleEmitterShapeCount, defaults.Shape, "Shape");
+			checkEnum(emitter.SimulationSpace, ParticleSimulationSpaceCount, defaults.SimulationSpace, "SimulationSpace");
+			checkEnum(emitter.Blend, ParticleBlendModeCount, defaults.Blend, "Blend");
 		}
 
-		float ClampOr(float value, float min, float max, float fallback)
-		{
-			return std::isfinite(value) ? std::clamp(value, min, max) : fallback;
-		}
+	}
 
-		std::string RangeError(const char* name, float value, float min, float max)
-		{
-			if (max == Unbounded)
-				return fmt::format("{} must be at least {} (got {})", name, min, value);
-			return fmt::format("{} must be between {} and {} (got {})", name, min, max, value);
-		}
-
-		template<typename E>
-		bool IsValidEnum(E value, E last)
-		{
-			return static_cast<uint32_t>(value) <= static_cast<uint32_t>(last);
-		}
-
+	std::vector<std::string> FindParticleEmitterProblems(const ParticleEmitterComponent& emitter)
+	{
+		std::vector<std::string> problems;
+		ParticleEmitterComponent copy = emitter;
+		ApplyRules(copy, false, [&](std::string problem) { problems.push_back(std::move(problem)); });
+		return problems;
 	}
 
 	std::string ValidateParticleEmitter(const ParticleEmitterComponent& emitter)
 	{
-		if (emitter.MaxParticles < 1 || emitter.MaxParticles > Limits::MaxParticlesLimit)
-			return fmt::format("MaxParticles must be between 1 and {} (got {})", Limits::MaxParticlesLimit, emitter.MaxParticles);
-		if (emitter.BurstCount > Limits::MaxParticlesLimit)
-			return fmt::format("BurstCount must be at most {} (got {})", Limits::MaxParticlesLimit, emitter.BurstCount);
-		for (const FloatRule& rule : FloatRules)
-		{
-			if (!InRange(emitter.*rule.Field, rule.Min, rule.Max))
-				return RangeError(rule.Name, emitter.*rule.Field, rule.Min, rule.Max);
-		}
-		for (const Vec3Rule& rule : Vec3Rules)
-		{
-			const glm::vec3& value = emitter.*rule.Field;
-			for (int axis = 0; axis < 3; axis++)
-			{
-				if (!InRange(value[axis], rule.Min, rule.Max))
-					return fmt::format("{} components must be between {} and {} (got [{}, {}, {}])", rule.Name, rule.Min, rule.Max, value.x, value.y, value.z);
-			}
-		}
-		for (const ColorRule& rule : ColorRules)
-		{
-			const glm::vec4& color = emitter.*rule.Field;
-			if (!InRange(color.r, 0.0f, Limits::MaxMagnitude) || !InRange(color.g, 0.0f, Limits::MaxMagnitude) || !InRange(color.b, 0.0f, Limits::MaxMagnitude) || !InRange(color.a, 0.0f, 1.0f))
-				return fmt::format("{} needs RGB between 0 and {} and alpha between 0 and 1 (got [{}, {}, {}, {}])", rule.Name, Limits::MaxMagnitude, color.r, color.g, color.b, color.a);
-		}
-		// Only C++ code can write these; files and Lua go through the enum names.
-		if (!IsValidEnum(emitter.Shape, ParticleEmitterShape::Cone) || !IsValidEnum(emitter.SimulationSpace, ParticleSimulationSpace::Local) || !IsValidEnum(emitter.Blend, ParticleBlendMode::Additive))
-			return "Shape, SimulationSpace or Blend has a value outside its enum";
-		return {};
+		std::vector<std::string> problems = FindParticleEmitterProblems(emitter);
+		return problems.empty() ? std::string() : std::move(problems.front());
 	}
 
 	ParticleEmitterComponent SanitizeParticleEmitter(ParticleEmitterComponent emitter)
 	{
-		const ParticleEmitterComponent defaults;
-		emitter.MaxParticles = std::clamp<uint32_t>(emitter.MaxParticles, 1, Limits::MaxParticlesLimit);
-		emitter.BurstCount = std::min(emitter.BurstCount, Limits::MaxParticlesLimit);
-		for (const FloatRule& rule : FloatRules)
-			emitter.*rule.Field = ClampOr(emitter.*rule.Field, rule.Min, rule.Max, defaults.*rule.Field);
-		for (const Vec3Rule& rule : Vec3Rules)
-		{
-			for (int axis = 0; axis < 3; axis++)
-				(emitter.*rule.Field)[axis] = ClampOr((emitter.*rule.Field)[axis], rule.Min, rule.Max, (defaults.*rule.Field)[axis]);
-		}
-		for (const ColorRule& rule : ColorRules)
-		{
-			glm::vec4& color = emitter.*rule.Field;
-			for (int channel = 0; channel < 3; channel++)
-				color[channel] = ClampOr(color[channel], 0.0f, Limits::MaxMagnitude, (defaults.*rule.Field)[channel]);
-			color.a = ClampOr(color.a, 0.0f, 1.0f, (defaults.*rule.Field).a);
-		}
-		if (!IsValidEnum(emitter.Shape, ParticleEmitterShape::Cone))
-			emitter.Shape = defaults.Shape;
-		if (!IsValidEnum(emitter.SimulationSpace, ParticleSimulationSpace::Local))
-			emitter.SimulationSpace = defaults.SimulationSpace;
-		if (!IsValidEnum(emitter.Blend, ParticleBlendMode::Additive))
-			emitter.Blend = defaults.Blend;
+		ApplyRules(emitter, true, [](const std::string&) {});
 		return emitter;
 	}
 

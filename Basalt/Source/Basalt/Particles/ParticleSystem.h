@@ -11,6 +11,7 @@
 
 #include <cstddef>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
@@ -26,6 +27,7 @@ namespace Basalt {
 		glm::vec4 PositionSize; // xyz: world position, w: billboard size (m)
 		glm::vec4 Color;        // linear HDR color, a: opacity
 	};
+	static_assert(std::is_standard_layout_v<GpuParticle>, "offsetof needs a standard-layout type");
 	static_assert(sizeof(GpuParticle) == 32 && offsetof(GpuParticle, PositionSize) == 0 && offsetof(GpuParticle, Color) == 16, "GpuParticle must match the std430 ParticleData struct");
 
 	// The live particles of one emitter, sorted back to front, as a range of ParticleRenderData::Particles.
@@ -92,11 +94,14 @@ namespace Basalt {
 		// Ages and moves particles, then emits (bursts and rate) from playing emitters.
 		void Update(Timestep ts);
 
+		// Whether the entity's ParticleEmitter is registered (every emitter added while the system runs is).
+		bool HasEmitter(Entity entity) const;
 		// Starts a new emission cycle (with its burst) unless the emitter is already playing. Returns false
 		// when the entity has no registered emitter.
 		bool Play(Entity entity);
-		// Stops emitting; live particles finish their lives unless `clear` removes them now.
-		void Stop(Entity entity, bool clear = false);
+		// Stops emitting; live particles finish their lives unless `clear` removes them now. Returns false
+		// when the entity has no registered emitter.
+		bool Stop(Entity entity, bool clear = false);
 		// Emits up to `count` particles right away, playing or not; they are first drawn at age 0, like
 		// burst and rate particles. Returns how many fit under MaxParticles.
 		uint32_t Emit(Entity entity, uint32_t count);
@@ -114,7 +119,9 @@ namespace Basalt {
 		{
 			glm::vec3 Position{ 0.0f }; // world space, or emitter-local for SimulationSpace::Local
 			float Age = 0.0f;
-			glm::vec3 Velocity{ 0.0f }; // m/s; for Local, in the emitter's frame with its scale divided out
+			// World: m/s. Local: emitter-local units/s (the m/s velocity divided by the emitter's scale), so
+			// drawing through the scaled transform restores m/s; rescaling the emitter rescales live ones.
+			glm::vec3 Velocity{ 0.0f };
 			float Lifetime = 1.0f;
 		};
 
@@ -136,10 +143,12 @@ namespace Basalt {
 			float CycleTime = 0.0f;
 			// Fractional particles owed by the rate, carried between frames.
 			float RateAccumulator = 0.0f;
-			// The last particles, emitted by Emit since the last update: that update does not age them.
+			// Invariant: the last FreshCount particles were added by Emit since the last update; the next Update
+			// neither ages nor moves them. Emit grows it; Update, Stop(clear) and MaxParticles trims shrink it.
 			size_t FreshCount = 0;
-			// The component broke its rules (written from C++) and was reported once.
-			bool ReportedInvalid = false;
+			// The component's current invalid values (written from C++) were reported; cleared once it is valid
+			// again, so a later breakage is reported too. Mutable: rendering (const) reports as well.
+			mutable bool ReportedInvalid = false;
 		};
 
 		void OnConstruct(entt::registry& registry, entt::entity handle);
@@ -149,15 +158,16 @@ namespace Basalt {
 		Emitter* Find(Entity entity);
 		const Emitter* Find(Entity entity) const;
 		// The emitter's component with its values in range (reported once when they were not).
-		ParticleEmitterComponent ReadComponent(Emitter& emitter) const;
+		ParticleEmitterComponent ReadComponent(const Emitter& emitter) const;
 
 		static void StartCycle(Emitter& emitter);
 		static uint32_t Spawn(Emitter& emitter, const ParticleEmitterComponent& component, const glm::mat4& emitterTransform, uint32_t count);
-		static void Simulate(std::vector<Particle>& particles, const glm::vec3& gravity, float damping, float deltaTime);
+		// Ages and moves particles [0, count), swap-removing expired ones within that range; returns how many
+		// of them live (now the first ones).
+		static size_t Simulate(std::vector<Particle>& particles, size_t count, const glm::vec3& gravity, float damping, float deltaTime);
 
 	private:
 		Scene* m_Scene = nullptr;
-		uint32_t m_Seed = Random::DefaultSeed;
 		// Never reused, so removing an emitter does not change the seeds of emitters registered later.
 		uint32_t m_NextOrdinal = 0;
 		std::unordered_map<UUID, Emitter> m_Emitters;

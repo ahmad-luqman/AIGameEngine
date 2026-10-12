@@ -1091,15 +1091,26 @@ TEST_SUITE("Scripting")
 		REQUIRE(lua.ExecuteString("math.randomseed(4294967308) return math.random(1000000)", result));
 		CHECK(result == seeded);
 		// Negative seeds wrap like any other 64-bit integer: -1 seeds like 2^32 - 1.
-		REQUIRE(lua.ExecuteString("math.randomseed(-1) return math.random(1000000)", seeded));
+		std::string wrapped;
+		REQUIRE(lua.ExecuteString("math.randomseed(-1) return math.random(1000000)", wrapped));
 		REQUIRE(lua.ExecuteString("math.randomseed(4294967295) return math.random(1000000)", result));
-		CHECK(result == seeded);
-		for (const char* call : { "math.randomseed('abc')", "math.randomseed(1.5)", "math.randomseed({})", "math.randomseed(math.huge)", "math.randomseed(-math.huge)", "math.randomseed(1e300)", "math.randomseed(0/0)" })
+		CHECK(result == wrapped);
+		for (const char* call : { "math.randomseed(1.5)", "math.randomseed(math.huge)", "math.randomseed(-math.huge)", "math.randomseed(1e300)", "math.randomseed(0/0)", "math.randomseed(2^63)", "Math.Seed(2.5)" })
 		{
 			INFO(call);
 			CHECK_FALSE(lua.ExecuteString(call, result));
 			CHECK(result.find("no integer representation") != std::string::npos);
 		}
+		for (const char* call : { "math.randomseed('12')", "math.randomseed({})", "Math.Seed('x')" })
+		{
+			INFO(call);
+			CHECK_FALSE(lua.ExecuteString(call, result));
+			CHECK(result.find("number expected") != std::string::npos);
+		}
+		// The largest integral float below 2^63 is accepted; Math.Seed takes the same values.
+		CHECK(lua.ExecuteString("math.randomseed(2^62)", result));
+		REQUIRE(lua.ExecuteString("Math.Seed(12) return math.random(1000000)", result));
+		CHECK(result == seeded);
 		scene.OnRuntimeStop();
 	}
 
