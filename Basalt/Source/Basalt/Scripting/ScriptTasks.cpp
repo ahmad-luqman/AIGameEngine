@@ -285,8 +285,12 @@ namespace Basalt {
 			return true;
 		}
 
-		// The message and where it was raised, taken before lua_closethread resets the stack.
-		outError = ErrorText(from, coroutine);
+		// The message and where it was raised, taken before lua_closethread resets the stack. As the owner: a
+		// __tostring may create timers or handlers, which must end with the failing instance.
+		{
+			ScriptOwnerScope scope(m_Context, owner);
+			outError = ErrorText(from, coroutine);
+		}
 		const std::string traceback = Traceback(from, coroutine);
 		if (!traceback.empty())
 			outError += "\n" + traceback;
@@ -303,9 +307,14 @@ namespace Basalt {
 		{
 			lua_xmove(coroutine, from, 1);
 			if (!lua_rawequal(from, -1, -2))
+			{
+				ScriptOwnerScope scope(m_Context, owner);
 				outError += "\n(closing its to-be-closed variables also failed: " + PopAsText(from) + ")";
+			}
 			else
+			{
 				lua_pop(from, 1);
+			}
 		}
 		lua_pop(from, 1);
 		return false;

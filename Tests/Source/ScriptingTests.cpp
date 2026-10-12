@@ -1961,6 +1961,12 @@ TEST_SUITE("Gameplay scripting")
 						error(setmetatable({}, { __tostring = function() error("tostring itself fails") end }))
 					elseif self.Kind == "custom" then
 						error(setmetatable({}, { __tostring = function() return "custom error object" end }))
+					elseif self.Kind == "registering" then
+						-- Created while the error is turned into text: it belongs to this failing instance.
+						error(setmetatable({}, { __tostring = function()
+							LateTimer = Timer.After(0, function() LateFired = true end)
+							return "registering error object"
+						end }))
 					elseif self.Kind == "closing" then
 						local failing <close> = setmetatable({}, { __close = function() error("close failed") end })
 						error("first failure")
@@ -1974,13 +1980,14 @@ TEST_SUITE("Gameplay scripting")
 		Entity raising = AddScripted(scene, "Raising", script, { { "Kind", "raising" } });
 		AddScripted(scene, "Custom", script, { { "Kind", "custom" } });
 		AddScripted(scene, "Closing", script, { { "Kind", "closing" } });
+		AddScripted(scene, "Registering", script, { { "Kind", "registering" } });
 		scene.OnRuntimeStart();
 		ScriptEngine& engine = *scene.GetScriptEngine();
 		for (int i = 0; i < 4; i++)
 			scene.OnUpdate(Step);
 
 		// Each failure is one script error that disables its own instance; the updates go on.
-		REQUIRE(engine.GetErrors().size() == 3);
+		REQUIRE(engine.GetErrors().size() == 4);
 		CHECK(engine.GetErrors()[0].find("(error object is a table value whose __tostring failed)") != std::string::npos);
 		CHECK(engine.GetErrors()[0].find("(in a coroutine of 'Raising'") != std::string::npos);
 		CHECK(engine.GetErrors()[1].find("custom error object") != std::string::npos);
@@ -1990,7 +1997,10 @@ TEST_SUITE("Gameplay scripting")
 		// It failed in update 1 (after that OnUpdate) and never updated again.
 		CHECK(Field(scene, raising, "Updates") == 1);
 		// Every coroutine's guard was closed, the plain one with the error it failed with.
-		CHECK(BasaltTest::Eval(engine, "Closed") == "3");
+		CHECK(BasaltTest::Eval(engine, "Closed") == "4");
+		CHECK(engine.GetErrors()[3].find("registering error object") != std::string::npos);
+		// The timer the failing instance's __tostring created ended with it.
+		CHECK(BasaltTest::Eval(engine, "tostring(LateTimer:IsActive()) .. ' ' .. tostring(LateFired)") == "false nil");
 		scene.OnRuntimeStop();
 	}
 

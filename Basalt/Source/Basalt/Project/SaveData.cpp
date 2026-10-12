@@ -9,6 +9,8 @@
 #include <cctype>
 #include <cerrno>
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
 #include <system_error>
 #include <utility>
 
@@ -83,7 +85,23 @@ namespace Basalt {
 		const std::optional<std::filesystem::path> base = Platform::GetUserDataDirectory(outError);
 		if (!base)
 			return std::nullopt;
-		return *base / SanitizeDirectoryName(projectName) / FileName;
+		// A name sanitizing changed gets a hash of the original, so distinct names ("Foo/Bar", "Foo?Bar") never
+		// share save data; names that are already safe stay readable as they are.
+		std::string directory = SanitizeDirectoryName(projectName);
+		if (directory != projectName)
+		{
+			// FNV-1a: small, stable across platforms and runs.
+			uint32_t hash = 2166136261u;
+			for (const char c : projectName)
+			{
+				hash ^= static_cast<uint8_t>(c);
+				hash *= 16777619u;
+			}
+			char suffix[10] = {};
+			std::snprintf(suffix, sizeof(suffix), "-%08x", hash);
+			directory += suffix;
+		}
+		return *base / directory / FileName;
 	}
 
 	std::string SaveData::SanitizeDirectoryName(const std::string& name)

@@ -34,8 +34,9 @@ namespace Basalt {
 
 		explicit SaveData(std::filesystem::path path);
 
-		// <Platform::GetUserDataDirectory()>/<SanitizeDirectoryName(projectName)>/SaveData.json, or nullopt
-		// (with outError) when there is no usable user data directory.
+		// <Platform::GetUserDataDirectory()>/<directory>/SaveData.json, where directory is
+		// SanitizeDirectoryName(projectName), plus "-<hash of the name>" when sanitizing changed it (so distinct
+		// names never share save data); nullopt (with outError) when there is no usable user data directory.
 		static std::optional<std::filesystem::path> GetDefaultPath(const std::string& projectName, std::string& outError);
 		// A project name usable as one directory name on every platform: characters other than ASCII letters,
 		// digits, space, '-', '_' and '.' become '_', leading/trailing spaces and dots are dropped, a Windows
