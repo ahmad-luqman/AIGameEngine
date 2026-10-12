@@ -87,6 +87,8 @@ namespace Basalt {
 		virtual bool PollQuery(uint32_t query) = 0;
 		// The query's time; only after PollQuery returned true (reading earlier would wait for the GPU).
 		virtual float ReadMilliseconds(uint32_t query) = 0;
+		// Makes a read query recordable again (nvrhi's contract: every used query is reset before reuse).
+		virtual void ResetQuery(uint32_t query) = 0;
 		virtual void BeginMarker(nvrhi::ICommandList* commandList, const char* name) = 0;
 		virtual void EndMarker(nvrhi::ICommandList* commandList) = 0;
 	};
