@@ -498,13 +498,16 @@ namespace Basalt {
 		return entity && m_Impl->Bodies.contains(entity.GetUUID());
 	}
 
-	void PhysicsWorld::Step(Timestep ts)
+	void PhysicsWorld::OnSceneLoaded()
+	{
+		ApplyPendingChanges();
+		// Like Start: many bodies were just added.
+		m_Impl->System->OptimizeBroadPhase();
+	}
+
+	void PhysicsWorld::ApplyPendingChanges()
 	{
 		Impl& impl = *m_Impl;
-		JPH::BodyInterface& bodies = impl.System->GetBodyInterface();
-		const PhysicsSettings& settings = m_Scene->GetPhysicsSettings();
-		const float fixedStep = settings.FixedTimestep > 0.0f ? settings.FixedTimestep : 1.0f / 60.0f;
-
 		// Rebuild bodies whose physics components changed since the last step, then resize rescaled ones.
 		for (UUID uuid : impl.DirtyEntities.Take())
 		{
@@ -527,6 +530,16 @@ namespace Basalt {
 		}
 		ApplyScaleChanges();
 		RebuildDirtyJoints();
+	}
+
+	void PhysicsWorld::Step(Timestep ts)
+	{
+		Impl& impl = *m_Impl;
+		JPH::BodyInterface& bodies = impl.System->GetBodyInterface();
+		const PhysicsSettings& settings = m_Scene->GetPhysicsSettings();
+		const float fixedStep = settings.FixedTimestep > 0.0f ? settings.FixedTimestep : 1.0f / 60.0f;
+
+		ApplyPendingChanges();
 
 		m_Accumulator += ts.GetSeconds();
 		uint32_t steps = 0;

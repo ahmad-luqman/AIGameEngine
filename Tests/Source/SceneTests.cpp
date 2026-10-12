@@ -7,6 +7,7 @@
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
 #include <Basalt/Scene/SceneSerializer.h>
+#include <Basalt/Scripting/ScriptEngine.h>
 
 #include "TestUtils.h"
 
@@ -876,5 +877,208 @@ TEST_SUITE("Serialization")
 			return SceneSerializer::ComputeStateHash(scene);
 		};
 		CHECK(build() == build());
+	}
+}
+
+TEST_SUITE("Scene loading")
+{
+	namespace {
+
+		// Scenes A and B share the manager (same ID, so it is skipped in B while the persistent one lives); each
+		// has its own level entity. B's manager has a child of its own that is skipped with it.
+		void WriteSwitchProject(const BasaltTest::TempProject& project)
+		{
+			project.WriteFile("Assets/Scripts/Manager.lua", R"(
+				local M = {}
+				function M:OnCreate()
+					Scene.DontDestroyOnLoad(self.Entity)
+					ManagerCreates = (ManagerCreates or 0) + 1
+					self.Ticks = 0
+					Timer.Every(0.05, function() self.Ticks = self.Ticks + 1 end)
+					Events.On("LevelStarted", function(name) LastLevel = name end)
+				end
+				return M
+			)");
+			project.WriteFile("Assets/Scripts/Level.lua", R"(
+				local L = {}
+				function L:OnCreate()
+					LevelCreates = (LevelCreates or 0) + 1
+					-- Bodies exist before OnCreate, as at play start.
+					LevelSeesFloor = Physics.Raycast(Vec3(0, 5, 0), Vec3(0, -1, 0), 10) ~= nil
+					Events.Emit("LevelStarted", Scene.GetName())
+				end
+				function L:OnDestroy() LevelDestroys = (LevelDestroys or 0) + 1 end
+				return L
+			)");
+			project.WriteFile("Assets/Scenes/A.bscene", R"({
+				"Format": "BasaltScene", "Version": 1, "Name": "A",
+				"Renderer": { "Exposure": 3.0, "SSAOEnabled": false },
+				"Physics": { "Gravity": [0, -20, 0] },
+				"Entities": [
+					{ "ID": 100, "Name": "Manager", "Parent": 0, "Components": { "Script": { "Script": "Assets/Scripts/Manager.lua" } } },
+					{ "ID": 101, "Name": "ManagerChild", "Parent": 100, "Components": {} },
+					{ "ID": 200, "Name": "LevelA", "Parent": 0, "Components": { "Script": { "Script": "Assets/Scripts/Level.lua" } } }
+				]
+			})");
+			project.WriteFile("Assets/Scenes/B.bscene", R"({
+				"Format": "BasaltScene", "Version": 1, "Name": "B",
+				"Physics": { "Gravity": [0, -1, 0] },
+				"Entities": [
+					{ "ID": 102, "Name": "OtherManagerChild", "Parent": 100, "Components": {} },
+					{ "ID": 100, "Name": "Manager", "Parent": 0, "Components": { "Script": { "Script": "Assets/Scripts/Manager.lua" } } },
+					{ "ID": 300, "Name": "LevelB", "Parent": 0, "Components": {
+						"Script": { "Script": "Assets/Scripts/Level.lua" },
+						"RigidBody": {}, "BoxCollider": { "HalfExtents": [5, 0.5, 5] } } },
+					{ "ID": 301, "Name": "LevelBChild", "Parent": 300, "Components": {} }
+				]
+			})");
+		}
+
+		std::string Eval(Scene& scene, const std::string& code)
+		{
+			std::string result;
+			if (!scene.GetScriptEngine()->ExecuteString(code, result))
+				return "error: " + result;
+			return result;
+		}
+
+	}
+
+	TEST_CASE("Scene.Load replaces the scene at the end of the frame and keeps persistent entities")
+	{
+		BasaltTest::TempProject project("SceneLoadSwitch");
+		WriteSwitchProject(project);
+		std::string error;
+		Ref<Scene> scene = SceneSerializer::LoadScene(project.GetDirectory() / "Assets/Scenes/A.bscene", error);
+		REQUIRE_MESSAGE(scene, error);
+		CHECK(scene->GetPath() == "Assets/Scenes/A.bscene");
+		scene->OnRuntimeStart();
+		scene->OnUpdate(1.0f / 60.0f);
+		CHECK(Eval(*scene, "Scene.GetName() .. ' ' .. Scene.GetPath()") == "A Assets/Scenes/A.bscene");
+		const UUID managerID = 100;
+		CHECK(scene->IsPersistent(scene->GetEntityByUUID(101)));
+		CHECK_FALSE(scene->IsPersistent(scene->GetEntityByUUID(200)));
+
+		// Deferred: nothing changes until the frame ends. The last request of a frame wins.
+		CHECK(Eval(*scene, "Scene.Load('Assets/Scenes/A.bscene') Scene.Load('Assets/Scenes/B.bscene')") == "");
+		CHECK(scene->HasPendingLoad());
+		CHECK(scene->FindEntityByName("LevelA"));
+		const auto ticksBefore = scene->GetScriptEngine()->GetInstanceField(scene->GetEntityByUUID(managerID), "Ticks");
+		scene->OnUpdate(1.0f / 60.0f);
+
+		CHECK_FALSE(scene->HasPendingLoad());
+		CHECK(scene->GetName() == "B");
+		CHECK(scene->GetPath() == "Assets/Scenes/B.bscene");
+		CHECK_FALSE(scene->FindEntityByName("LevelA"));
+		REQUIRE(scene->FindEntityByName("LevelB"));
+		CHECK(scene->FindEntityByName("LevelBChild").GetParent() == scene->FindEntityByName("LevelB"));
+		// The persistent manager and its own child are kept; the file's copy and its child are skipped.
+		CHECK(scene->FindEntitiesByName("Manager").size() == 1);
+		CHECK(scene->GetEntityByUUID(101));
+		CHECK_FALSE(scene->GetEntityByUUID(102));
+		CHECK(scene->GetEntityCount() == 4);
+		CHECK(Eval(*scene, "ManagerCreates .. ' ' .. LevelCreates .. ' ' .. LevelDestroys .. ' ' .. LastLevel .. ' ' .. tostring(LevelSeesFloor)") == "1 2 1 B true");
+		// Settings come from B; those it leaves out are defaults, not A's.
+		CHECK(scene->GetRendererSettings().Exposure == 1.0f);
+		CHECK(scene->GetRendererSettings().SSAOEnabled);
+		CHECK(scene->GetPhysicsWorld()->GetGravity() == glm::vec3(0.0f, -1.0f, 0.0f));
+
+		// The manager's state and timer carried over.
+		for (int i = 0; i < 6; i++)
+			scene->OnUpdate(1.0f / 60.0f);
+		const auto ticksAfter = scene->GetScriptEngine()->GetInstanceField(scene->GetEntityByUUID(managerID), "Ticks");
+		REQUIRE(ticksBefore.has_value());
+		REQUIRE(ticksAfter.has_value());
+		CHECK(ticksAfter->get<int>() > ticksBefore->get<int>());
+		CHECK(scene->GetScriptEngine()->GetErrors().empty());
+
+		// Loading A again: the persistent manager stays the only one.
+		CHECK(Eval(*scene, "Scene.Load('Assets/Scenes/A.bscene')") == "");
+		scene->OnUpdate(1.0f / 60.0f);
+		CHECK(scene->FindEntitiesByName("Manager").size() == 1);
+		CHECK(scene->FindEntityByName("LevelA"));
+		CHECK_FALSE(scene->FindEntityByName("LevelB"));
+		CHECK(scene->GetPhysicsWorld()->GetGravity() == glm::vec3(0.0f, -20.0f, 0.0f));
+		CHECK(Eval(*scene, "ManagerCreates .. ' ' .. LastLevel") == "1 A");
+
+		Entity manager = scene->GetEntityByUUID(managerID);
+		scene->OnRuntimeStop();
+		// Persistence lasts one play session.
+		CHECK_FALSE(scene->IsPersistent(manager));
+	}
+
+	TEST_CASE("Scene.Load rejects bad paths and invalid files without touching the playing scene")
+	{
+		BasaltTest::TempProject project("SceneLoadErrors");
+		WriteSwitchProject(project);
+		project.WriteFile("Assets/Scenes/Broken.bscene", "{ not json");
+		project.WriteFile("Assets/Scenes/BadEntity.bscene", R"({ "Format": "BasaltScene", "Version": 1, "Entities": [ { "ID": 1, "Name": "X", "Parent": 77 } ] })");
+		project.WriteFile("Assets/Scenes/Notes.txt", "{}");
+		std::string error;
+		Ref<Scene> scene = SceneSerializer::LoadScene(project.GetDirectory() / "Assets/Scenes/A.bscene", error);
+		REQUIRE(scene);
+
+		// Only while playing.
+		CHECK_FALSE(scene->RequestLoad("Assets/Scenes/B.bscene", error));
+		CHECK(error.find("only be loaded while playing") != std::string::npos);
+
+		scene->OnRuntimeStart();
+		const std::string absolute = (project.GetDirectory() / "Assets/Scenes/B.bscene").generic_string();
+		const std::pair<std::string, const char*> invalid[] = {
+			{ "Assets/Scenes/Missing.bscene", "cannot read 'Assets/Scenes/Missing.bscene'" },
+			{ "../Elsewhere/B.bscene", "must be a project-relative path inside the project" },
+			{ "Assets/../../B.bscene", "must be a project-relative path inside the project" },
+			{ absolute, "must be a project-relative path inside the project" },
+			{ "", "must be a project-relative path" },
+			{ "Assets/Scenes/Notes.txt", "is not a scene file (.bscene)" },
+			{ "Assets/Scenes/Broken.bscene", "is not valid JSON" },
+			{ "Assets/Scenes/BadEntity.bscene", "BadEntity.bscene: entity 'X' references unknown parent 77" },
+		};
+		for (const auto& [path, expected] : invalid)
+		{
+			CHECK_FALSE(scene->RequestLoad(path, error));
+			CHECK_MESSAGE(error.find(expected) != std::string::npos, path, " -> ", error);
+			CHECK_FALSE(scene->HasPendingLoad());
+		}
+		// The Lua error carries the same reason; a non-root cannot be made persistent.
+		CHECK(Eval(*scene, "Scene.Load('Assets/Scenes/Missing.bscene')").find("Scene.Load: cannot read") != std::string::npos);
+		CHECK(Eval(*scene, "Scene.DontDestroyOnLoad(Scene.FindEntityByName('ManagerChild'))").find("'ManagerChild' is not a root entity") != std::string::npos);
+		CHECK_FALSE(scene->SetPersistent(scene->FindEntityByName("ManagerChild")));
+		// Normalized paths inside the project are fine.
+		CHECK(scene->RequestLoad("Assets/Scripts/../Scenes/B.bscene", error));
+		scene->OnUpdate(1.0f / 60.0f);
+		CHECK(scene->GetPath() == "Assets/Scenes/B.bscene");
+		CHECK(scene->FindEntityByName("LevelB"));
+		scene->OnRuntimeStop();
+	}
+
+	TEST_CASE("Entities spawned by OnDestroy while a scene unloads are destroyed too")
+	{
+		BasaltTest::TempProject project("SceneLoadSpawnOnDestroy");
+		WriteSwitchProject(project);
+		project.WriteFile("Assets/Scripts/Spawner.lua", R"(
+			local S = {}
+			function S:OnDestroy()
+				Destroyed = (Destroyed or 0) + 1
+				local remains = Scene.CreateEntity("Remains")
+				remains:AddComponent("Script", { Script = "Assets/Scripts/Spawner.lua" })
+			end
+			return S
+		)");
+		Scene scene;
+		Entity spawner = scene.CreateEntity("Spawner");
+		spawner.AddComponent<ScriptComponent>().Script = "Assets/Scripts/Spawner.lua";
+		scene.OnRuntimeStart();
+		std::string error;
+		REQUIRE(scene.RequestLoad("Assets/Scenes/B.bscene", error));
+		const uint64_t warnings = Log::GetHistory().GetTotalCount();
+		scene.OnUpdate(1.0f / 60.0f);
+		// Each unload pass spawns one more "Remains"; after MaxUnloadPasses the last one is kept, with a warning.
+		CHECK(scene.FindEntitiesByName("Remains").size() == 1);
+		CHECK(BasaltTest::CountLogMessages(warnings, "spawned by OnDestroy") == 1);
+		// The spawner and the remains of the first seven passes were destroyed.
+		CHECK(Eval(scene, "Destroyed") == "8");
+		CHECK(scene.FindEntityByName("LevelB"));
+		scene.OnRuntimeStop();
 	}
 }

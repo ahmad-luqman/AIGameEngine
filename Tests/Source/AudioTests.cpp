@@ -92,4 +92,29 @@ TEST_SUITE("Audio")
 		scene.OnRuntimeStop();
 		AudioEngine::Shutdown();
 	}
+
+	TEST_CASE("A scene load starts the new scene's PlayOnStart sources")
+	{
+		BasaltTest::TempProject project("AudioSceneLoad");
+		project.WriteFile("Assets/Audio/Beep.wav", MakeWav(0.25f));
+		project.WriteFile("Assets/Scenes/Next.bscene", R"({
+			"Format": "BasaltScene", "Version": 1,
+			"Entities": [
+				{ "ID": 10, "Name": "Music", "Parent": 0, "Components": { "AudioSource": { "Clip": "Assets/Audio/Beep.wav", "PlayOnStart": true } } },
+				{ "ID": 11, "Name": "Silent", "Parent": 0, "Components": { "AudioSource": { "Clip": "Assets/Audio/Beep.wav", "PlayOnStart": false } } }
+			]
+		})");
+		REQUIRE(AudioEngine::Init(true));
+
+		Scene scene;
+		scene.OnRuntimeStart();
+		std::string error;
+		REQUIRE_MESSAGE(scene.RequestLoad("Assets/Scenes/Next.bscene", error), error);
+		scene.OnUpdate(1.0f / 60.0f);
+		REQUIRE(scene.GetAudioSystem());
+		CHECK(scene.GetAudioSystem()->IsPlaying(scene.FindEntityByName("Music")));
+		CHECK_FALSE(scene.GetAudioSystem()->IsPlaying(scene.FindEntityByName("Silent")));
+		scene.OnRuntimeStop();
+		AudioEngine::Shutdown();
+	}
 }

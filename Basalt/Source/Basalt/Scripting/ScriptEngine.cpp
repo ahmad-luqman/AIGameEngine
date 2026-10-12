@@ -4,14 +4,19 @@
 #include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Project/Project.h"
+#include "Basalt/Project/SaveData.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
 #include "Basalt/Scripting/LuaJson.h"
+#include "Basalt/Scripting/ScriptEvents.h"
 #include "Basalt/Scripting/ScriptGlue.h"
+#include "Basalt/Scripting/ScriptTasks.h"
 
 #include <sol/sol.hpp>
 
 #include <algorithm>
+#include <optional>
+#include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -103,10 +108,22 @@ namespace Basalt {
 			bool Created = false;
 		};
 
+		struct ScriptClass
+		{
+			sol::table Table;
+			// Shared by the class's instances: methods come from the class, then the engine's instance methods.
+			sol::table InstanceMetatable;
+		};
+
 		// Declared before Lua so it outlives lua_close(): __gc metamethods may still call bindings.
 		ScriptContext Context;
 		sol::state Lua;
-		std::unordered_map<std::string, sol::table> Classes;
+		// Declared after Lua: they hold Lua references, which must be released before the state closes.
+		ScriptTasks Tasks{ Lua, Context };
+		ScriptEvents Events{ Context };
+		// Loaded on the first Storage call, so sessions that never use it never touch the disk.
+		std::optional<SaveData> Storage;
+		std::unordered_map<std::string, ScriptClass> Classes;
 		std::unordered_set<std::string> FailedClasses;
 		std::unordered_map<UUID, Instance> Instances;
 		// Creation order, for deterministic callback order.
@@ -131,14 +148,44 @@ namespace Basalt {
 			return it->second.Self;
 		}
 
-		// Calls self:<name>(args...) if defined. Returns false (after reporting) if the call raised an error.
+		// The instance exists, has started (OnCreate), has not failed, and its entity is not being destroyed:
+		// its timers, coroutines and event handlers may run.
+		static bool IsActive(const ScriptEngine& engine, UUID id)
+		{
+			auto it = engine.m_Impl->Instances.find(id);
+			if (it == engine.m_Impl->Instances.end() || it->second.Failed || !it->second.Created)
+				return false;
+			Entity entity = engine.m_Scene->GetEntityByUUID(id);
+			return entity && !engine.m_Scene->IsEntityPendingDestruction(entity);
+		}
+
+		// Cancels everything the instance owns (its timers, coroutines and event handlers).
+		static void ReleaseOwned(ScriptEngine& engine, UUID id)
+		{
+			engine.m_Impl->Tasks.CancelOwnedBy(id);
+			engine.m_Impl->Events.RemoveOwnedBy(id);
+		}
+
+		// Disables a live instance after an error: no more callbacks, and nothing it owns runs again.
+		static void Fail(ScriptEngine& engine, UUID id)
+		{
+			auto it = engine.m_Impl->Instances.find(id);
+			if (it == engine.m_Impl->Instances.end())
+				return;
+			it->second.Failed = true;
+			ReleaseOwned(engine, id);
+		}
+
+		// Calls self:<name>(args...) if defined, with the instance as the current owner. Returns false (after
+		// reporting) if the call raised an error.
 		template<typename... Args>
-		static bool Invoke(ScriptEngine& engine, const sol::table& self, const char* name, Args&&... args)
+		static bool Invoke(ScriptEngine& engine, UUID id, const sol::table& self, const char* name, Args&&... args)
 		{
 			const sol::object callback = self[name];
 			if (callback.get_type() != sol::type::function)
 				return true;
 			sol::protected_function function = callback.as<sol::protected_function>();
+			ScriptOwnerScope scope(engine.m_Impl->Context, id);
 			const sol::protected_function_result result = function(self, std::forward<Args>(args)...);
 			if (result.valid())
 				return true;
@@ -157,11 +204,8 @@ namespace Basalt {
 
 			// Copy the table: the callback may destroy this instance (e.g. by removing its component).
 			const sol::table self = it->second.Self;
-			if (Invoke(engine, self, name, std::forward<Args>(args)...))
-				return;
-			auto failed = engine.m_Impl->Instances.find(id);
-			if (failed != engine.m_Impl->Instances.end())
-				failed->second.Failed = true;
+			if (!Invoke(engine, id, self, name, std::forward<Args>(args)...))
+				Fail(engine, id);
 		}
 
 		// Removes the instance first, then calls OnDestroy on it, so the callback cannot re-enter teardown.
@@ -174,8 +218,10 @@ namespace Basalt {
 			ScriptEngine::Impl::Instance instance = std::move(it->second);
 			impl.Instances.erase(it);
 			impl.Order.erase(std::remove(impl.Order.begin(), impl.Order.end(), id), impl.Order.end());
+			// Before OnDestroy, which therefore cannot start anything new (it would never run).
+			ReleaseOwned(engine, id);
 			if (instance.Created && !instance.Failed)
-				Invoke(engine, instance.Self, "OnDestroy");
+				Invoke(engine, id, instance.Self, "OnDestroy");
 		}
 
 		// Calls OnCreate once on an instance that exists, has not been created, and whose entity still has
@@ -204,6 +250,31 @@ namespace Basalt {
 		// Every play session starts from its seed (the project's), so its random numbers repeat run after run.
 		m_Impl->Context.ResetRandom(scene->GetRandomSeed());
 		m_Impl->Context.GetInstance = [this](UUID id) { return ScriptEngineAccess::GetInstance(*this, id); };
+		m_Impl->Context.Tasks = &m_Impl->Tasks;
+		m_Impl->Context.Events = &m_Impl->Events;
+		m_Impl->Context.IsOwnerActive = [this](UUID owner) { return owner == 0 || ScriptEngineAccess::IsActive(*this, owner); };
+		m_Impl->Context.FailOwner = [this](UUID owner, const std::string& message) {
+			ReportError(message);
+			if (owner != 0)
+				ScriptEngineAccess::Fail(*this, owner);
+		};
+		m_Impl->Context.GetStorage = [this]() -> SaveData& {
+			Impl& impl = *m_Impl;
+			if (impl.Storage)
+				return *impl.Storage;
+			const Ref<Project>& project = Project::GetActive();
+			if (!project)
+				throw std::runtime_error("Storage needs an active project (its name names the save data directory)");
+			std::string error;
+			const std::optional<std::filesystem::path> path = SaveData::GetDefaultPath(project->GetConfig().Name, error);
+			if (!path)
+				throw std::runtime_error("Storage: " + error);
+			impl.Storage.emplace(*path);
+			// Unreadable data is reported and the session continues with empty save data (see SaveData::Load).
+			if (!impl.Storage->Load(error))
+				ReportError("Storage: " + error);
+			return *impl.Storage;
+		};
 		RegisterScriptBindings(m_Impl->Lua, m_Impl->Context);
 
 		entt::registry& registry = scene->GetRegistry();
@@ -219,7 +290,13 @@ namespace Basalt {
 		registry.on_update<ScriptComponent>().disconnect<&Impl::OnScriptComponentChanged>(*m_Impl);
 		registry.on_destroy<ScriptComponent>().disconnect<&Impl::OnScriptComponentChanged>(*m_Impl);
 
-		// Lua references must be released before the state is closed.
+		// Lua references must be released before the state is closed, and bindings run by __gc metamethods
+		// during lua_close must not reach the systems.
+		m_Impl->Tasks.Clear();
+		m_Impl->Events.Clear();
+		m_Impl->Context.Tasks = nullptr;
+		m_Impl->Context.Events = nullptr;
+		m_Impl->Context.GetStorage = nullptr;
 		m_Impl->Instances.clear();
 		m_Impl->Classes.clear();
 	}
@@ -292,15 +369,13 @@ namespace Basalt {
 				ReportError(error);
 				return false;
 			}
-			classIt = impl.Classes.emplace(component->Script, *scriptClass).first;
+			classIt = impl.Classes.emplace(component->Script, Impl::ScriptClass{ *scriptClass, MakeInstanceMetatable(impl.Lua, *scriptClass) }).first;
 		}
-		const sol::table& scriptClass = classIt->second;
+		const sol::table& scriptClass = classIt->second.Table;
 
 		// Instance: fields from Properties (with per-entity overrides), methods via the class metatable.
 		sol::table self = impl.Lua.create_table();
-		sol::table metatable = impl.Lua.create_table();
-		metatable[sol::meta_function::index] = scriptClass;
-		self[sol::metatable_key] = metatable;
+		self[sol::metatable_key] = classIt->second.InstanceMetatable;
 		self["Entity"] = ScriptEntity{ uuid, m_Scene };
 
 		const sol::object properties = scriptClass["Properties"];
@@ -380,6 +455,7 @@ namespace Basalt {
 	{
 		Impl& impl = *m_Impl;
 		impl.Context.DeltaTime = ts.GetSeconds();
+		impl.Tasks.BeginFrame(ts.GetSeconds());
 
 		// Components added or changed since the last frame (outside of the Lua API).
 		if (!impl.Pending.empty())
@@ -398,6 +474,9 @@ namespace Basalt {
 			if (entity && !m_Scene->IsEntityPendingDestruction(entity))
 				ScriptEngineAccess::Call(*this, uuid, "OnUpdate", ts.GetSeconds());
 		}
+
+		// Timers and coroutines run after every OnUpdate, before physics.
+		impl.Tasks.RunDue();
 	}
 
 	void ScriptEngine::LateUpdate(Timestep ts)
@@ -419,6 +498,9 @@ namespace Basalt {
 			ScriptEngineAccess::Teardown(*this, uuid);
 		impl.Instances.clear();
 		impl.Order.clear();
+		// The session's own timers, coroutines and handlers (from the console or lua.exec) end with play.
+		impl.Tasks.Clear();
+		impl.Events.Clear();
 		impl.Started = false;
 	}
 

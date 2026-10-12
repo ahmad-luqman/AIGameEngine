@@ -40,6 +40,12 @@ Other directories: `Docs/` (scripting API, generated command/component reference
   emitters) are seeded from the session's seed, `Scene::GetRandomSeed` (the project's `RandomSeed`).
 - **Play mode runs a copy.** `Scene::Copy` duplicates the edit scene (same UUIDs) for play/simulate;
   stopping discards it.
+- **Gameplay services live in the ScriptEngine.** Timers and coroutines (`ScriptTasks`) and events
+  (`ScriptEvents`) belong to the script instance that created them and end with it; `Storage` save data
+  (`Project/SaveData`) goes to the per-user data directory (`Platform::GetUserDataDirectory`, overridden by
+  `BASALT_USER_DATA_DIR`, which tests set so they never touch the real one). `Scene.Load` switches scenes
+  in place at the end of the frame (`Scene::RequestLoad`), so the Lua state and persistent entities
+  survive.
 - **Automation first.** `CommandRegistry` (Automation/BuiltinCommands.cpp) is the API for tools and AI
   agents. The editor performs its edits through the same commands, so the GUI cannot do anything the
   API cannot. Hosts: `basalt` CLI (headless) and the editor's TCP server (127.0.0.1:7420, adds

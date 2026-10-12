@@ -30,6 +30,8 @@ namespace Basalt {
 
 		// Starts every source with PlayOnStart.
 		void Start();
+		// Starts the PlayOnStart sources among entities added by a scene load, as Start does for the first scene.
+		void PlayOnStart(const std::vector<Entity>& entities);
 		void Update(Timestep ts);
 		void OnEntityDestroyed(Entity entity);
 

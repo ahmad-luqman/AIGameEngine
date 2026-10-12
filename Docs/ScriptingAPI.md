@@ -30,6 +30,9 @@ return Player
 ```
 
 - `self.Entity` is the entity the instance belongs to; property values are fields (`self.Speed`).
+  Instances also have the engine methods `self:StartCoroutine`, `self:StopCoroutine` and
+  `self:StopAllCoroutines` (see "Timers and coroutines"); a class can still define its own method of the
+  same name, and class inheritance through metatables keeps working.
 - **Creation order:** when play starts, and when a prefab is instantiated, every new instance is created
   (with its properties) before any `OnCreate` runs, so `OnCreate` can use `GetScript()` on the others.
   A script added later on its own (`AddComponent("Script", ...)`) starts immediately. An entity destroyed
@@ -136,7 +139,123 @@ Vectors in component tables are arrays (`{1, 2, 3}`); rotations are Euler degree
 `Scene.CreateEntity([name])`, `Scene.FindEntityByName(name)`, `Scene.FindEntitiesByName(name)`,
 `Scene.GetEntityByID(id)`, `Scene.GetEntitiesWith(componentName)`, `Scene.Destroy(entity)`,
 `Scene.Instantiate(prefabPath [, position [, parent]])` (scripts in the prefab start immediately),
-`Scene.GetPrimaryCamera()`, `Scene.GetEntityCount()`.
+`Scene.GetPrimaryCamera()`, `Scene.GetEntityCount()`, `Scene.GetName()`, `Scene.GetPath()` (the
+project-relative scene file, or nil for a scene never saved).
+
+### Switching scenes
+
+`Scene.Load(path)` replaces the playing scene with the scene file `path` (a project-relative `.bscene`
+inside the project; absolute paths and `..` escapes are rejected, stricter than `Scene.Instantiate`) at
+the **end of the current frame**:
+
+1. Every entity that is not persistent is destroyed (its `OnDestroy` runs).
+2. The file's settings (renderer, physics) replace the old ones; settings the file leaves out take their
+   defaults.
+3. The file's entities start as on play start: physics bodies exist first, `PlayOnStart` audio and
+   particles start, and every new script instance exists before any `OnCreate` runs.
+
+The file is read and checked right away, so a missing or invalid file raises an error from `Scene.Load`
+and nothing changes. Calling it again in the same frame replaces the earlier request. Elapsed time
+(`Time.GetElapsed`) and the frame count keep running, and the Lua state is the same: globals, the session's
+timers and event handlers, and `Storage` carry over.
+
+`Scene.DontDestroyOnLoad(entity)` keeps a **root** entity and its whole tree (anything else is an error)
+through every load for the rest of the play session; its instance keeps its fields, timers, coroutines and
+event handlers. An entity of the loaded file whose ID is already present (typically the same manager placed
+in every level, so each level also plays on its own) is skipped together with its children, so there is
+only ever one. Stopping play (or the editor's Stop button) returns to the scene play started from.
+
+```lua
+function GameManager:OnCreate()
+	Scene.DontDestroyOnLoad(self.Entity)
+	Events.On("LevelComplete", function(next) Scene.Load(next) end)
+end
+```
+
+## Timers and coroutines
+
+```lua
+function Bomb:OnCreate()
+	self.Fuse = Timer.After(3, function() self:Explode() end)         -- once, after 3 s
+	Timer.Every(0.5, function(timer) self:Blink() end, 6)             -- every 0.5 s, 6 times
+	self:StartCoroutine(function(height)
+		self.Entity.Translation = Vec3(0, height, 0)
+		Wait(1.5)                                                     -- seconds
+		WaitFrames(2)                                                 -- frames
+		Log.Info("landed")
+	end, 10)
+end
+function Bomb:Defuse() self.Fuse:Cancel() end
+```
+
+- `Timer.After(seconds, fn)` calls `fn(handle)` once; `Timer.Every(seconds, fn [, count])` calls it every
+  `seconds` (> 0), `count` times or until cancelled. Both return a `TaskHandle`.
+- `self:StartCoroutine(fn, ...)` runs `fn(...)` as a coroutine **right away, up to its first wait**, and
+  returns a `TaskHandle`. An error before that first wait is raised from `StartCoroutine`. Inside it,
+  `Wait(seconds)` (>= 0) and `WaitFrames(n)` (an integer >= 1) suspend it, and a plain `coroutine.yield()`
+  waits one frame. They only work in a coroutine started this way (not in one made with `coroutine.create`
+  or `coroutine.wrap`, and not in a function the engine calls from C, such as an event handler).
+- `handle:Cancel()` stops a timer or coroutine (returns whether it was still active);
+  `handle:IsActive()`. `self:StopCoroutine(handle)` is the same as `handle:Cancel()`;
+  `self:StopAllCoroutines()` stops the instance's coroutines but not its timers. A coroutine that stops
+  itself ends at its next wait.
+- Time is game time: nothing runs while the scene is paused. Due timers and coroutines run once per frame
+  after every `OnUpdate` (before physics), in the order they were created, and always at the earliest on
+  the next frame (a 0 s delay waits one frame). A repeating timer fires at most once per frame; periods
+  missed in one long frame are skipped.
+- **Ownership:** a timer, coroutine or event handler belongs to the instance whose code created it (any
+  of its callbacks, timers, coroutines or handlers). It ends when that instance is destroyed (or its
+  Script removed) and when the instance fails: an error in a timer, coroutine or handler is reported like
+  any script error and disables its instance. Creating one from `OnDestroy` (it could never run) raises
+  an error. Ones created by console code (`lua.exec`, the editor console) belong to the play session.
+  Play stopping ends them all.
+
+## Events
+
+```lua
+self.OnHit = Events.On("PlayerHit", function(damage, source) self.Health = self.Health - damage end)
+Events.Once("LevelLoaded", function(name) Log.Info("entered " .. name) end)
+Events.Emit("PlayerHit", 10, self.Entity)   -- returns how many handlers ran
+self.OnHit:Cancel()
+```
+
+- `Events.On(name, fn)` / `Events.Once(name, fn)` subscribe (a `Once` handler ends before its first call)
+  and return an `EventHandle` with `Cancel()` and `IsActive()`. Names are non-empty strings; any values
+  can be passed (they are not copied).
+- `Events.Emit(name, ...)` is synchronous: the handlers subscribed when it starts run in subscription
+  order before it returns, and it returns how many ran. Handlers subscribed during an emit wait for the
+  next one; handlers cancelled before their turn are skipped, as are handlers of an instance that is being
+  destroyed. An error in a handler does not reach the emitter (it is reported and disables the handler's
+  instance). Emits nested more than 32 levels deep (a handler that keeps re-emitting) raise an error.
+- Handlers follow the ownership rules of timers above and are all cleared when play stops.
+
+## Save data
+
+`Storage` is a key-value store that persists between play sessions and game launches:
+
+```lua
+local best = Storage.Get("BestScore", 0)
+if score > best then
+	Storage.Set("BestScore", score)
+	local ok, err = Storage.Save()
+	if not ok then Log.Warn("could not save: " .. err) end
+end
+```
+
+- `Storage.Get(key [, default])`, `Storage.Set(key, value)` (`nil` deletes), `Storage.Has(key)`,
+  `Storage.Delete(key)` (returns whether it existed), `Storage.Clear()`, `Storage.GetKeys()` (sorted).
+  Keys are non-empty strings. Values are numbers, strings, booleans and tables of them, stored as JSON:
+  `Vec2/3/4` come back as arrays (`{x, y, z}`), an `Entity` as its numeric ID. Functions are an error.
+- Changes are kept in memory until `Storage.Save()`, which writes them atomically; `Storage.Load()`
+  re-reads the file, dropping unsaved changes. Both return `true`, or `false` and the reason. Unsaved
+  changes are lost when play stops.
+- The file is `SaveData.json` in a per-game directory named after the project: `%APPDATA%\<Project>`
+  (Windows), `~/Library/Application Support/<Project>` (macOS), `$XDG_DATA_HOME/<Project>` or
+  `~/.local/share/<Project>` (Linux). The environment variable `BASALT_USER_DATA_DIR` replaces the
+  platform directory (tests and tools use it). Scripts never choose a path, so the file-system sandbox
+  stays intact. The editor's play mode and the exported game share the file.
+- A save file that cannot be read (edited by hand, damaged) is reported as a script error, moved to
+  `SaveData.corrupt.json` so it can be recovered, and the game continues with empty data.
 
 ## Input
 

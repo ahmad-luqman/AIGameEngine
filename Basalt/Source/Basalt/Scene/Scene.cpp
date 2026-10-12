@@ -1,6 +1,8 @@
 #include "Basalt/Scene/Scene.h"
 
 #include "Basalt/Audio/AudioSystem.h"
+#include "Basalt/Core/FileSystem.h"
+#include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Particles/ParticleSystem.h"
 #include "Basalt/Physics/PhysicsWorld.h"
@@ -9,9 +11,11 @@
 #include "Basalt/Renderer/GameUI.h"
 #include "Basalt/Scene/ComponentRegistry.h"
 #include "Basalt/Scene/Entity.h"
+#include "Basalt/Scene/SceneSerializer.h"
 #include "Basalt/Scripting/ScriptEngine.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <functional>
 
 namespace Basalt {
@@ -48,6 +52,13 @@ namespace Basalt {
 
 	}
 
+	struct Scene::PendingLoad
+	{
+		// Project-relative, normalized.
+		std::string Path;
+		nlohmann::json Data;
+	};
+
 	Scene::Scene(std::string name)
 		: m_Name(std::move(name))
 	{
@@ -71,6 +82,7 @@ namespace Basalt {
 		scene->m_RendererSettings = other->m_RendererSettings;
 		scene->m_PhysicsSettings = other->m_PhysicsSettings;
 		scene->m_PhysicsLayers = other->m_PhysicsLayers;
+		scene->m_Path = other->m_Path;
 		scene->m_ViewportWidth = other->m_ViewportWidth;
 		scene->m_ViewportHeight = other->m_ViewportHeight;
 
@@ -161,6 +173,7 @@ namespace Basalt {
 
 		RemoveFromParent(entity);
 		const UUID uuid = entity.GetUUID();
+		m_PersistentEntities.erase(uuid);
 		m_RootEntities.erase(std::remove(m_RootEntities.begin(), m_RootEntities.end(), uuid), m_RootEntities.end());
 		m_EntityMap.erase(uuid);
 		m_Registry.destroy(entity);
@@ -438,6 +451,8 @@ namespace Basalt {
 		m_QuitRequested = false;
 		m_Paused = false;
 		m_StepFrames = 0;
+		m_PendingLoad.reset();
+		m_PersistentEntities.clear();
 
 		m_PhysicsWorld = CreateScope<PhysicsWorld>(this);
 		m_AudioSystem = CreateScope<AudioSystem>(this);
@@ -471,6 +486,8 @@ namespace Basalt {
 		m_AudioSystem.reset();
 		m_PhysicsWorld.reset();
 		m_State = SceneState::Edit;
+		m_PendingLoad.reset();
+		m_PersistentEntities.clear();
 		FlushPendingDestruction();
 	}
 
@@ -534,6 +551,185 @@ namespace Basalt {
 		FlushPendingDestruction();
 		m_Time += ts.GetSeconds();
 		m_FrameCount++;
+
+		if (m_State == SceneState::Play && m_PendingLoad)
+			ApplyPendingLoad();
+	}
+
+	bool Scene::RequestLoad(const std::string& path, std::string& outError)
+	{
+		if (m_State != SceneState::Play)
+		{
+			outError = "scenes can only be loaded while playing";
+			return false;
+		}
+
+		// Scripts name scenes inside the project only, like every other asset they load by path.
+		const std::filesystem::path relative = std::filesystem::path(path).lexically_normal();
+		if (path.empty() || relative.has_root_name() || relative.has_root_directory() || relative.empty() || *relative.begin() == "..")
+		{
+			outError = "'" + path + "' must be a project-relative path inside the project";
+			return false;
+		}
+		if (relative.extension() != ".bscene")
+		{
+			outError = "'" + path + "' is not a scene file (.bscene)";
+			return false;
+		}
+
+		const std::optional<std::string> text = FileSystem::ReadTextFile(Project::ResolvePath(relative));
+		if (!text)
+		{
+			outError = "cannot read '" + path + "'";
+			return false;
+		}
+		nlohmann::json data = ParseJson(*text);
+		if (data.is_discarded())
+		{
+			outError = "'" + path + "' is not valid JSON";
+			return false;
+		}
+		// Fully validated now (a scratch copy is built and discarded), so applying it at the end of the frame
+		// cannot fail halfway with the old scene already gone.
+		Scene scratch;
+		if (!SceneSerializer::DeserializeScene(scratch, data, outError))
+		{
+			outError = relative.filename().string() + ": " + outError;
+			return false;
+		}
+
+		if (m_PendingLoad)
+			BS_CORE_WARN("Scene.Load: '{}' replaces the load of '{}' requested earlier this frame", relative.generic_string(), m_PendingLoad->Path);
+		m_PendingLoad = CreateScope<PendingLoad>(PendingLoad{ relative.generic_string(), std::move(data) });
+		return true;
+	}
+
+	bool Scene::SetPersistent(Entity entity)
+	{
+		if (!entity || entity.GetScene() != this || entity.GetParent())
+			return false;
+		m_PersistentEntities.insert(entity.GetUUID());
+		return true;
+	}
+
+	bool Scene::IsPersistent(Entity entity)
+	{
+		if (!entity || entity.GetScene() != this)
+			return false;
+		Entity root = entity;
+		while (Entity parent = root.GetParent())
+			root = parent;
+		return m_PersistentEntities.contains(root.GetUUID());
+	}
+
+	void Scene::ApplyPendingLoad()
+	{
+		const Scope<PendingLoad> load = std::move(m_PendingLoad);
+
+		// Unload: OnDestroy may spawn entities, which a second pass destroys too.
+		for (int pass = 0;; pass++)
+		{
+			std::vector<UUID> doomed;
+			for (UUID root : m_RootEntities)
+			{
+				if (!m_PersistentEntities.contains(root))
+					doomed.push_back(root);
+			}
+			if (doomed.empty())
+				break;
+			if (pass == MaxUnloadPasses)
+			{
+				BS_CORE_WARN("Scene.Load: {} entities spawned by OnDestroy while '{}' was unloading are kept in '{}'", doomed.size(), m_Name, load->Path);
+				break;
+			}
+			m_DeferDestruction++;
+			for (UUID root : doomed)
+				DestroyEntity(GetEntityByUUID(root));
+			m_DeferDestruction--;
+			FlushPendingDestruction();
+		}
+
+		// An entity of the file that is already here (normally the persistent copy of a manager every level
+		// contains) is skipped together with its descendants, which the kept entity already has.
+		nlohmann::json data = load->Data;
+		size_t skipped = 0;
+		if (auto entities = data.find("Entities"); entities != data.end() && entities->is_array())
+		{
+			auto idOf = [](const nlohmann::json& entity, const char* key) -> uint64_t {
+				const auto it = entity.find(key);
+				return it != entity.end() && it->is_number_unsigned() ? it->get<uint64_t>() : 0;
+			};
+			std::unordered_set<uint64_t> skippedIDs;
+			// Repeated until stable: files list parents first, but nothing requires it.
+			for (bool changed = true; changed;)
+			{
+				changed = false;
+				for (const nlohmann::json& entity : *entities)
+				{
+					const uint64_t id = idOf(entity, "ID");
+					if (id == 0 || skippedIDs.contains(id))
+						continue;
+					if (m_EntityMap.contains(UUID(id)) || skippedIDs.contains(idOf(entity, "Parent")))
+					{
+						skippedIDs.insert(id);
+						changed = true;
+					}
+				}
+			}
+			if (!skippedIDs.empty())
+			{
+				nlohmann::json kept = nlohmann::json::array();
+				for (nlohmann::json& entity : *entities)
+				{
+					if (!skippedIDs.contains(idOf(entity, "ID")))
+						kept.push_back(std::move(entity));
+				}
+				*entities = std::move(kept);
+				skipped = skippedIDs.size();
+			}
+		}
+
+		// Settings the file leaves out take their defaults, not the previous scene's values.
+		const RendererDebugView debugView = m_RendererSettings.DebugView;
+		m_RendererSettings = RendererSettings{};
+		m_RendererSettings.DebugView = debugView;
+		m_PhysicsSettings = PhysicsSettings{};
+		m_Name = std::filesystem::path(load->Path).stem().string();
+		m_Path = load->Path;
+
+		std::unordered_set<UUID> existing;
+		for (const auto& [uuid, handle] : m_EntityMap)
+			existing.insert(uuid);
+		std::string error;
+		if (!SceneSerializer::DeserializeScene(*this, data, error))
+		{
+			// RequestLoad validated the file, so only an engine bug gets here; keep whatever was created.
+			BS_CORE_ERROR("Scene.Load: '{}' failed to load after validation: {}", load->Path, error);
+		}
+
+		std::vector<Entity> created;
+		for (Entity entity : GetAllEntitiesOrdered())
+		{
+			if (!existing.contains(entity.GetUUID()))
+				created.push_back(entity);
+		}
+
+		// Start the new entities as OnRuntimeStart starts a scene: bodies first, so OnCreate can use them.
+		OnViewportResize(m_ViewportWidth, m_ViewportHeight);
+		if (m_PhysicsWorld)
+		{
+			m_PhysicsWorld->SetGravity(m_PhysicsSettings.Gravity);
+			m_PhysicsWorld->OnSceneLoaded();
+		}
+		m_DeferDestruction++;
+		if (m_AudioSystem)
+			m_AudioSystem->PlayOnStart(created);
+		if (m_ScriptEngine)
+			m_ScriptEngine->EnsureInstances(created);
+		m_DeferDestruction--;
+		FlushPendingDestruction();
+
+		BS_CORE_INFO("Scene: loaded '{}' ({} entities; {} kept from the previous scene, {} of the file's skipped as already present)", load->Path, created.size(), existing.size(), skipped);
 	}
 
 	Entity Entity::GetParent() const
