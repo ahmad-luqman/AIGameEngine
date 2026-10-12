@@ -40,7 +40,7 @@ namespace Basalt {
 		enum ScenePass : uint32_t
 		{
 			PassEnvironment, // BRDF LUT and IBL bake: only on the first frame and when the sky changes
-			PassUploads,     // per-frame buffers, plus meshes and textures streamed in for this frame
+			PassUploads,     // per-frame buffers (not the SSAO constants, written in their pass), streamed meshes and textures
 			PassShadows,
 			PassPrepass,
 			PassSSAO,
@@ -199,6 +199,20 @@ namespace Basalt {
 			return device->createBuffer(desc);
 		}
 
+		// Fullscreen triangle with one binding set and optional push constants.
+		void DrawFullscreen(nvrhi::ICommandList* commandList, nvrhi::IGraphicsPipeline* pipeline, nvrhi::IFramebuffer* framebuffer, nvrhi::IBindingSet* set, const nvrhi::Viewport& viewport, const void* push, size_t pushSize)
+		{
+			nvrhi::GraphicsState state;
+			state.pipeline = pipeline;
+			state.framebuffer = framebuffer;
+			state.bindings = { set };
+			state.viewport.addViewportAndScissorRect(viewport);
+			commandList->setGraphicsState(state);
+			if (push)
+				commandList->setPushConstants(push, pushSize);
+			commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
+		}
+
 		nvrhi::BindingLayoutDesc MakeLayout(uint32_t set, nvrhi::ShaderType visibility)
 		{
 			nvrhi::BindingLayoutDesc desc;
@@ -302,7 +316,7 @@ namespace Basalt {
 		: m_Impl(CreateScope<Impl>())
 		, m_Device(device)
 		, m_Resources(CreateScope<RenderResources>(device))
-		, m_Profiler(CreateScope<GpuProfiler>(device, std::vector<std::string>(std::begin(ScenePassNames), std::end(ScenePassNames)), specification.GpuTimers))
+		, m_Profiler(device, std::vector<std::string>(std::begin(ScenePassNames), std::end(ScenePassNames)), specification.GpuTimers)
 	{
 	}
 
@@ -568,18 +582,14 @@ namespace Basalt {
 
 	void SceneRenderer::SetViewportSize(uint32_t width, uint32_t height)
 	{
-		ResizeTargets(width, height, m_RenderScale);
+		ResizeTargets(width, height);
 	}
 
 	void SceneRenderer::SetRenderScale(float scale)
 	{
 		// Applied by the next SetViewportSize or Render, so setting size and scale in either order reallocates
 		// the targets once.
-		const float clamped = std::isfinite(scale) ? std::clamp(scale, MinRenderScale, MaxRenderScale) : 1.0f;
-		if (clamped == m_RenderScale)
-			return;
-		m_RenderScale = clamped;
-		CheckDynamicResolution();
+		m_RenderScale = std::isfinite(scale) ? std::clamp(scale, MinRenderScale, MaxRenderScale) : 1.0f;
 	}
 
 	void SceneRenderer::SetDynamicResolution(const DynamicResolutionSettings& settings)
@@ -587,6 +597,9 @@ namespace Basalt {
 		const DynamicResolutionSettings sanitized = SanitizeDynamicResolution(settings);
 		if (sanitized == m_DynamicResolution)
 			return;
+		// Validated inputs never need this; a programmatic caller passing bad values should hear about it.
+		if (!(sanitized == settings))
+			BS_CORE_WARN("SceneRenderer: dynamic resolution settings out of range (target {} fps, minimum scale {}); using {} fps and {}", settings.TargetFrameRate, settings.MinScale, sanitized.TargetFrameRate, sanitized.MinScale);
 		// Turning it on starts from the render scale. A new budget or minimum keeps the current scale (jumping
 		// back to the highest scale would cost slow frames until samples arrive) but not the old costs.
 		if (sanitized.Enabled != m_DynamicResolution.Enabled)
@@ -594,55 +607,65 @@ namespace Basalt {
 		else
 			m_DynamicController.ForgetHistory();
 		m_DynamicResolution = sanitized;
-		CheckDynamicResolution();
 	}
 
-	void SceneRenderer::CheckDynamicResolution()
+	DynamicResolutionState SceneRenderer::GetDynamicResolutionState() const
 	{
-		if (!m_DynamicResolution.Enabled)
-			return;
-		if (!HasGpuTimers())
-		{
-			if (!m_WarnedNoGpuTimers)
-				BS_CORE_WARN("SceneRenderer: dynamic resolution needs GPU timer queries, which this renderer does not have (see the GraphicsDevice/GpuProfiler log); rendering at the fixed render scale");
-			m_WarnedNoGpuTimers = true;
-			return;
-		}
-		const bool emptyRange = m_DynamicResolution.MinScale >= m_RenderScale;
-		if (emptyRange && !m_WarnedEmptyRange)
-			BS_CORE_WARN("SceneRenderer: dynamic resolution has nothing to adjust: its minimum render scale ({}) is not below the render scale ({})", m_DynamicResolution.MinScale, m_RenderScale);
-		m_WarnedEmptyRange = emptyRange;
+		return Basalt::GetDynamicResolutionState(m_DynamicResolution, m_RenderScale, HasGpuTimers());
 	}
 
 	bool SceneRenderer::IsDynamicResolutionActive() const
 	{
 		// An empty scale range would only cost the dynamic targets' resampling and overlay depth pass.
-		return m_DynamicResolution.Enabled && HasGpuTimers() && m_DynamicResolution.MinScale < m_RenderScale;
+		return GetDynamicResolutionState() == DynamicResolutionState::Active;
+	}
+
+	float SceneRenderer::GetDynamicResolutionMilliseconds(const GpuFrameSample& sample)
+	{
+		// The environment bake runs once per sky change and uploads follow asset streaming; no resolution would
+		// absorb either (a first frame full of uploads would otherwise drop to the minimum).
+		return sample.MillisecondsWithout({ PassEnvironment, PassUploads });
+	}
+
+	void SceneRenderer::ReportDynamicResolutionState()
+	{
+		// Once per change, at the start of a frame, when the settings and the render scale of the frame are both
+		// set: hosts set them one after the other, and the state in between is not worth a warning.
+		const DynamicResolutionState state = GetDynamicResolutionState();
+		if (state == m_Diagnostics.ReportedState)
+			return;
+		m_Diagnostics.ReportedState = state;
+		if (state == DynamicResolutionState::NoGpuTimers || state == DynamicResolutionState::EmptyRange)
+			BS_CORE_WARN("SceneRenderer: dynamic resolution {}; rendering at the fixed render scale", DescribeDynamicResolutionState(state, m_DynamicResolution, m_RenderScale));
 	}
 
 	void SceneRenderer::UpdateRenderSize(const std::optional<GpuFrameSample>& sample)
 	{
+		ReportDynamicResolutionState();
 		float scale = m_RenderScale;
 		if (IsDynamicResolutionActive())
 		{
 			const float minScale = m_DynamicResolution.MinScale;
 			if (sample)
 			{
-				// The environment bake runs once per sky change and uploads follow asset streaming; no resolution
-				// would absorb either (a first frame full of uploads would otherwise drop to the minimum).
-				const float milliseconds = sample->MillisecondsWithout({ PassEnvironment, PassUploads });
+				const float milliseconds = GetDynamicResolutionMilliseconds(*sample);
 				const float budget = 1000.0f / m_DynamicResolution.TargetFrameRate;
 				// Against the current viewport: a result from before a resize then predicts the right cost.
 				const float renderedScale = ComputePixelScale(sample->RenderedPixels, { m_Width, m_Height });
 				if (m_DynamicController.AddSample(milliseconds, renderedScale, budget, minScale, m_RenderScale))
 				{
-					m_UnusableSamples = 0;
+					m_Diagnostics.Samples.Accepted++;
+					m_Diagnostics.RejectedInARow = 0;
 				}
-				else if (++m_UnusableSamples == GpuProfiler::AverageWindow && !m_WarnedUnusableSamples)
+				else
 				{
+					m_Diagnostics.Samples.Rejected++;
 					// Timers that report 0 (coarse or saturating counters) would leave the scale frozen silently.
-					BS_CORE_WARN("SceneRenderer: the last {} GPU timer results were unusable ({:.3f} ms); dynamic resolution cannot adjust", m_UnusableSamples, milliseconds);
-					m_WarnedUnusableSamples = true;
+					if (++m_Diagnostics.RejectedInARow == GpuProfiler::AverageWindow && !m_Diagnostics.WarnedRejected)
+					{
+						BS_CORE_WARN("SceneRenderer: the last {} GPU timer results were unusable ({:.3f} ms); dynamic resolution cannot adjust", m_Diagnostics.RejectedInARow, milliseconds);
+						m_Diagnostics.WarnedRejected = true;
+					}
 				}
 			}
 			scale = m_DynamicController.GetScale(minScale, m_RenderScale);
@@ -657,13 +680,16 @@ namespace Basalt {
 		m_RenderWidth = size.x;
 		m_RenderHeight = size.y;
 		m_CurrentRenderScale = scale;
+		// ResizeTargets ran first in this frame with the same settings; only dynamic targets may be rendered
+		// partially (the others' samplers and overlay depth assume the render area fills them).
+		BS_CORE_ASSERT(m_TargetsDynamic == IsDynamicResolutionActive() && (m_TargetsDynamic || (m_RenderWidth == m_TargetWidth && m_RenderHeight == m_TargetHeight)), "the render area does not match the targets' configuration");
 	}
 
-	void SceneRenderer::ResizeTargets(uint32_t width, uint32_t height, float renderScale)
+	void SceneRenderer::ResizeTargets(uint32_t width, uint32_t height)
 	{
 		width = std::max(width, 1u);
 		height = std::max(height, 1u);
-		const glm::uvec2 targetSize = ComputeRenderSize(width, height, renderScale);
+		const glm::uvec2 targetSize = ComputeRenderSize(width, height, m_RenderScale);
 		const bool dynamic = IsDynamicResolutionActive();
 		if (width == m_Width && height == m_Height && targetSize.x == m_TargetWidth && targetSize.y == m_TargetHeight && dynamic == m_TargetsDynamic && m_OutputTexture)
 			return;
@@ -681,7 +707,7 @@ namespace Basalt {
 		m_TargetsDynamic = dynamic;
 		m_RenderWidth = m_TargetWidth;
 		m_RenderHeight = m_TargetHeight;
-		m_CurrentRenderScale = renderScale;
+		m_CurrentRenderScale = m_RenderScale;
 		// Dynamic resolution can render below the target size at any time, so it always resamples.
 		const bool scaled = dynamic || m_TargetWidth != m_Width || m_TargetHeight != m_Height;
 
@@ -815,11 +841,11 @@ namespace Basalt {
 	void SceneRenderer::Render(Scene& scene, const RenderCamera& camera)
 	{
 		Impl& impl = *m_Impl;
-		ResizeTargets(m_Width, m_Height, m_RenderScale);
+		ResizeTargets(m_Width, m_Height);
 
 		nvrhi::ICommandList* commandList = impl.CommandList;
 		commandList->open();
-		GpuProfiler& profiler = *m_Profiler;
+		GpuProfiler& profiler = m_Profiler;
 		UpdateRenderSize(profiler.BeginFrame(commandList));
 		impl.FrameCounter++;
 		m_Statistics = {};
@@ -1299,17 +1325,8 @@ namespace Basalt {
 			commandList->drawIndexed(args);
 		};
 
-		// Fullscreen triangle with one binding set and optional push constants.
 		auto fullscreen = [&](nvrhi::IGraphicsPipeline* pipeline, nvrhi::IFramebuffer* framebuffer, nvrhi::IBindingSet* set, const nvrhi::Viewport& viewport, const void* push, size_t pushSize) {
-			nvrhi::GraphicsState state;
-			state.pipeline = pipeline;
-			state.framebuffer = framebuffer;
-			state.bindings = { set };
-			state.viewport.addViewportAndScissorRect(viewport);
-			commandList->setGraphicsState(state);
-			if (push)
-				commandList->setPushConstants(push, pushSize);
-			commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
+			DrawFullscreen(commandList, pipeline, framebuffer, set, viewport, push, pushSize);
 		};
 		const nvrhi::Viewport outputViewport(static_cast<float>(m_Width), static_cast<float>(m_Height));
 
@@ -1383,15 +1400,8 @@ namespace Basalt {
 
 			if (!skyLight || skyLight->ShowBackground)
 			{
-				nvrhi::GraphicsState state;
-				state.pipeline = impl.SkyboxPipeline;
-				state.framebuffer = impl.LightingFramebuffer;
-				state.bindings = { impl.FrameSet };
-				state.viewport.addViewportAndScissorRect(renderViewport);
-				commandList->setGraphicsState(state);
 				const DrawPush push{ 0, 0 };
-				commandList->setPushConstants(&push, sizeof(push));
-				commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
+				fullscreen(impl.SkyboxPipeline, impl.LightingFramebuffer, impl.FrameSet, renderViewport, &push, sizeof(push));
 			}
 
 			std::vector<const DrawItem*>& transparent = impl.Transparent;
@@ -1418,7 +1428,7 @@ namespace Basalt {
 			fullscreen(impl.TonemapPipeline, impl.OutputFramebuffer, impl.TonemapSet, outputViewport, &push, sizeof(push));
 		}
 
-		// --- Overlay depth (scaled rendering only) -------------------------------------------------
+		// --- Overlay depth (scaled or dynamic-resolution targets only) -----------------------------
 		// Every frame rather than only when lines are drawn, so the overlay framebuffer always holds the
 		// frame's depth. Point sampling keeps silhouettes hard: a blend of foreground and background depth
 		// would be a surface that does not exist.
@@ -1466,15 +1476,8 @@ namespace Basalt {
 			it = impl.BlitPipelines.emplace(key, m_Device->createGraphicsPipeline(desc, info)).first;
 		}
 
-		nvrhi::GraphicsState state;
-		state.pipeline = it->second;
-		state.framebuffer = target;
-		state.bindings = { impl.BlitSet };
-		state.viewport.addViewportAndScissorRect(nvrhi::Viewport(static_cast<float>(info.width), static_cast<float>(info.height)));
-		commandList->setGraphicsState(state);
 		const glm::vec2 unused(0.0f);
-		commandList->setPushConstants(&unused, TextureSamplerPushSize);
-		commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
+		DrawFullscreen(commandList, it->second, target, impl.BlitSet, nvrhi::Viewport(static_cast<float>(info.width), static_cast<float>(info.height)), &unused, TextureSamplerPushSize);
 	}
 
 	bool SceneRenderer::ReadOutputPixels(std::vector<uint8_t>& outPixels, uint32_t& outWidth, uint32_t& outHeight)

@@ -34,6 +34,14 @@ namespace Basalt {
 		uint32_t Materials = 0;
 	};
 
+	// GPU timer results dynamic resolution received since the renderer was created: Rejected ones were not
+	// positive and finite (broken or saturated timestamps), so they could not steer the scale.
+	struct DynamicResolutionSampleCounts
+	{
+		uint64_t Accepted = 0;
+		uint64_t Rejected = 0;
+	};
+
 	struct SceneRendererSpecification
 	{
 		// Time the passes with GPU timer queries (GraphicsDevice::SupportsTimerQueries). Needed for
@@ -71,13 +79,19 @@ namespace Basalt {
 		void SetRenderScale(float scale);
 		float GetRenderScale() const { return m_RenderScale; }
 		// Lets the render scale drop (down to the minimum) to keep the GPU time within the target frame time.
-		// Values are sanitized (SanitizeDynamicResolution). Inactive, with a warning, without GPU timers or when
-		// the minimum is not below the render scale.
+		// Values are sanitized (SanitizeDynamicResolution). Inactive without GPU timers or when the minimum is
+		// not below the render scale (GetDynamicResolutionState; the next Render logs a warning).
 		void SetDynamicResolution(const DynamicResolutionSettings& settings);
 		const DynamicResolutionSettings& GetDynamicResolution() const { return m_DynamicResolution; }
+		DynamicResolutionState GetDynamicResolutionState() const;
 		bool IsDynamicResolutionActive() const;
-		// Scale requested for the last frame (below the render scale when dynamic resolution lowered it; the
-		// render scale after a resize). GetRenderWidth/Height give the exact size of the area rendered.
+		const DynamicResolutionSampleCounts& GetDynamicResolutionSamples() const { return m_Diagnostics.Samples; }
+		// The part of a frame's GPU time dynamic resolution steers by: without the passes no render scale
+		// affects (the environment bake and uploads).
+		static float GetDynamicResolutionMilliseconds(const GpuFrameSample& sample);
+		// Scale of the last rendered frame (below the render scale while dynamic resolution has lowered it; a
+		// resize keeps it). Between a resize and the next Render it reads GetRenderScale(). GetRenderWidth/Height
+		// give the exact size of the area rendered.
 		float GetCurrentRenderScale() const { return m_CurrentRenderScale; }
 		uint32_t GetRenderWidth() const { return m_RenderWidth; }
 		uint32_t GetRenderHeight() const { return m_RenderHeight; }
@@ -102,23 +116,24 @@ namespace Basalt {
 		const SceneRendererStatistics& GetStatistics() const { return m_Statistics; }
 		// GPU time per pass, averaged over the last GpuProfiler::AverageWindow frames. SampleCount is 0 (every
 		// pass listed at 0 ms) until results arrive, and always without GPU timers.
-		const GpuTimings& GetGpuTimings() const { return m_Profiler->GetTimings(); }
-		bool HasGpuTimers() const { return m_Profiler->IsEnabled(); }
+		const GpuTimings& GetGpuTimings() const { return m_Profiler.GetTimings(); }
+		bool HasGpuTimers() const { return m_Profiler.IsEnabled(); }
 		RenderResources& GetResources() { return *m_Resources; }
 
 	private:
-		void ResizeTargets(uint32_t width, uint32_t height, float renderScale);
+		// Allocates the targets for the viewport size and m_RenderScale (and the dynamic resolution state).
+		void ResizeTargets(uint32_t width, uint32_t height);
 		// Picks this frame's render size from the configured scale and, with dynamic resolution, the GPU time
 		// of an earlier frame.
 		void UpdateRenderSize(const std::optional<GpuFrameSample>& sample);
 		// Warns (once per change of state) when dynamic resolution is enabled but cannot adjust anything.
-		void CheckDynamicResolution();
+		void ReportDynamicResolutionState();
 
 		struct Impl;
 		Scope<Impl> m_Impl;
 		nvrhi::IDevice* m_Device = nullptr;
 		Scope<RenderResources> m_Resources;
-		Scope<GpuProfiler> m_Profiler;
+		GpuProfiler m_Profiler;
 
 		uint32_t m_Width = 0;
 		uint32_t m_Height = 0;
@@ -134,11 +149,16 @@ namespace Basalt {
 		float m_CurrentRenderScale = 1.0f;
 		DynamicResolutionSettings m_DynamicResolution;
 		DynamicResolutionController m_DynamicController;
-		bool m_WarnedNoGpuTimers = false;
-		bool m_WarnedEmptyRange = false;
-		// Samples in a row the controller rejected (zero or broken GPU times); warned about once.
-		uint32_t m_UnusableSamples = 0;
-		bool m_WarnedUnusableSamples = false;
+		// What dynamic resolution reported and received (warnings, render.stats), not render state.
+		struct DynamicResolutionDiagnostics
+		{
+			DynamicResolutionState ReportedState = DynamicResolutionState::Off;
+			DynamicResolutionSampleCounts Samples;
+			// Rejected samples in a row; warned about once, at GpuProfiler::AverageWindow.
+			uint32_t RejectedInARow = 0;
+			bool WarnedRejected = false;
+		};
+		DynamicResolutionDiagnostics m_Diagnostics;
 		nvrhi::TextureHandle m_OutputTexture;
 		nvrhi::TextureHandle m_DepthTexture;
 		nvrhi::FramebufferHandle m_OverlayFramebuffer;

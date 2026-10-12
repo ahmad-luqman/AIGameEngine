@@ -27,7 +27,8 @@ Run all steps on each GPU. Steps 1–3 are automated; step 4 needs a person at t
        --require-validation --gpu nvidia --screenshot lit.png
    ```
    Exit code 0 means the validation layer was active and reported no errors (3 = validation errors,
-   5 = validation layer missing, 4 = screenshot failed). Repeat with `--debug-view SSAO`, `Normals` and
+   5 = validation layer missing, 4 = screenshot failed, 6 = `--dynamic-resolution` given but it could not
+   run; the first problem keeps its code). Repeat with `--debug-view SSAO`, `Normals` and
    `Depth`. `ctest --test-dir build-release -L gpu` runs all views at once, but always on the automatically
    selected GPU (discrete first), so use the commands above for any other GPU.
 3. **Compare with the golden images.** There are no references for vendor drivers yet. Compare against

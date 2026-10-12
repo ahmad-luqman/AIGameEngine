@@ -65,7 +65,10 @@ namespace Basalt {
 		std::string text = fmt::format("{:.2f} ms over {} frames (", timings.FrameMilliseconds, timings.SampleCount);
 		for (size_t i = 0; i < timings.Passes.size(); i++)
 			text += fmt::format("{}{} {:.2f}", i == 0 ? "" : ", ", timings.Passes[i].Name, timings.Passes[i].Milliseconds);
-		return text + ")";
+		text += ')';
+		if (timings.DroppedFrames > 0)
+			text += fmt::format("; {} frames dropped", timings.DroppedFrames);
+		return text;
 	}
 
 	nlohmann::json GetRenderStats(const SceneRenderer& renderer)
@@ -81,6 +84,8 @@ namespace Basalt {
 			{ "currentRenderScale", renderer.GetCurrentRenderScale() },
 			{ "dynamicResolution", dynamic.Enabled },
 			{ "dynamicResolutionActive", renderer.IsDynamicResolutionActive() },
+			{ "dynamicResolutionState", DescribeDynamicResolutionState(renderer.GetDynamicResolutionState(), dynamic, renderer.GetRenderScale()) },
+			{ "dynamicResolutionSamples", { { "accepted", renderer.GetDynamicResolutionSamples().Accepted }, { "rejected", renderer.GetDynamicResolutionSamples().Rejected } } },
 			{ "targetFrameRate", dynamic.TargetFrameRate },
 			{ "minRenderScale", dynamic.MinScale },
 			{ "drawCalls", statistics.DrawCalls },

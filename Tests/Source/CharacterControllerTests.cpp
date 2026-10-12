@@ -66,18 +66,6 @@ namespace {
 		}
 	}
 
-	int CountMessages(uint64_t since, const std::string& text)
-	{
-		uint64_t next = 0;
-		int count = 0;
-		for (const LogMessage& message : Log::GetHistory().GetMessagesSince(since, next))
-		{
-			if (message.Text.find(text) != std::string::npos)
-				count++;
-		}
-		return count;
-	}
-
 	// Replaces the component through the registry, as SetComponent and component.set do.
 	void SetController(Entity entity, const std::function<void(CharacterControllerComponent&)>& change)
 	{
@@ -537,7 +525,7 @@ TEST_SUITE("Physics")
 		Simulate(scene, 2.0f * Step, [&]() { SetController(character, [](auto& c) { c.SlopeLimit = 30.0f; c.MaxStrength = 50.0f; }); });
 		CHECK(physics.GetLinearVelocity(character).y < fallSpeed);
 		CHECK(physics.GetLinearVelocity(character).x == doctest::Approx(1.0f).epsilon(0.01));
-		CHECK(CountMessages(since, "Physics:") == 0);
+		CHECK(BasaltTest::CountLogMessages(since, "Physics:") == 0);
 
 		// A changed layer rebuilds the character and keeps its velocity and Move: Ghost falls through the ground.
 		SetController(character, [](auto& c) { c.Layer = "Ghost"; });
@@ -553,7 +541,7 @@ TEST_SUITE("Physics")
 		character.RemoveComponent<CapsuleColliderComponent>();
 		scene.OnUpdate(Step);
 		CHECK_FALSE(physics.HasCharacter(character));
-		CHECK(CountMessages(since, "no valid collider") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "no valid collider") == 1);
 		character.AddComponent<SphereColliderComponent>();
 		scene.OnUpdate(Step);
 		CHECK(physics.HasCharacter(character));
@@ -563,7 +551,7 @@ TEST_SUITE("Physics")
 		scene.OnUpdate(Step);
 		CHECK(physics.HasCharacter(character));
 		CHECK_FALSE(physics.HasBody(character));
-		CHECK(CountMessages(since, "RigidBody is ignored") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "RigidBody is ignored") == 1);
 		character.RemoveComponent<CharacterControllerComponent>();
 		scene.OnUpdate(Step);
 		CHECK_FALSE(physics.HasCharacter(character));
@@ -624,17 +612,17 @@ TEST_SUITE("Physics")
 		Simulate(scene, 0.5f, [&]() { character.AddOrReplaceComponent<CharacterControllerComponent>(same); });
 		CHECK(physics.HasCharacter(character));
 		CHECK(physics.IsCharacterGrounded(character));
-		CHECK(CountMessages(since, "SlopeLimit 120 must be within [1, 90] degrees; using 90") == 1);
-		CHECK(CountMessages(since, "StepHeight -1") == 1);
-		CHECK(CountMessages(since, "MaxStrength -5") == 1);
-		CHECK(CountMessages(since, "Mass -1") == 1);
-		CHECK(CountMessages(since, "unknown physics layer 'Nowhere'") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "SlopeLimit 120 must be within [1, 90] degrees; using 90") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "StepHeight -1") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "MaxStrength -5") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "Mass -1") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "unknown physics layer 'Nowhere'") == 1);
 
 		// Fixing a value logs the remaining problems once more.
 		SetController(character, [](auto& c) { c.SlopeLimit = 45.0f; });
 		Simulate(scene, 2.0f * Step);
-		CHECK(CountMessages(since, "SlopeLimit") == 1);
-		CHECK(CountMessages(since, "StepHeight -1") == 2);
+		CHECK(BasaltTest::CountLogMessages(since, "SlopeLimit") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "StepHeight -1") == 2);
 
 		// Move ignores non-finite velocities.
 		physics.MoveCharacter(character, { NAN, 0.0f, 0.0f });
@@ -738,9 +726,9 @@ TEST_SUITE("Physics")
 		const uint64_t since = Log::GetHistory().GetTotalCount();
 		scene.OnSimulationStart();
 		Simulate(scene, 0.5f);
-		CHECK(CountMessages(since, "OverrideMaterial has no effect here (characters do not use collider materials)") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "OverrideMaterial has no effect here (characters do not use collider materials)") == 1);
 		// The value it never uses is not checked either.
-		CHECK(CountMessages(since, "Friction must not be negative") == 0);
+		CHECK(BasaltTest::CountLogMessages(since, "Friction must not be negative") == 0);
 		scene.OnSimulationStop();
 	}
 
@@ -777,7 +765,7 @@ TEST_SUITE("Physics")
 		CHECK(steepGrounded == 0);
 		// SlopeLimit 0 would switch Jolt's slope check off and make every slope walkable.
 		const auto [flatOnly, flatGrounded] = climb(30.0f, 0.0f, since);
-		CHECK(CountMessages(since, "SlopeLimit 0 must be within [1, 90] degrees; using 1") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "SlopeLimit 0 must be within [1, 90] degrees; using 1") == 1);
 		CHECK(flatOnly.y < 0.0f);
 		CHECK(flatGrounded == 0);
 	}
@@ -800,7 +788,7 @@ TEST_SUITE("Physics")
 			physics.AddForce(character, { 0.0f, 500.0f, 0.0f });
 			scene.OnUpdate(Step);
 		}
-		CHECK(CountMessages(since, "does nothing on character 'Character'") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "does nothing on character 'Character'") == 1);
 		CHECK(glm::length(Position(character) - glm::vec3(0.0f, StandingHeight, 0.0f)) < 0.05f);
 
 		// A collider change rebuilds the character; a jump asked for on that very step still happens.
@@ -857,7 +845,7 @@ TEST_SUITE("Physics")
 		scene.OnSimulationStart();
 		PhysicsWorld& physics = *scene.GetPhysicsWorld();
 		REQUIRE(physics.HasCharacter(character));
-		CHECK(CountMessages(since, "a character collides by the convex hull of its MeshCollider; set Convex") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "a character collides by the convex hull of its MeshCollider; set Convex") == 1);
 		Simulate(scene, 1.5f);
 		CHECK(physics.IsCharacterGrounded(character));
 		// The unit cube rests on its base (plus Jolt's small character padding).

@@ -140,35 +140,63 @@ namespace Basalt {
 
 	void RuntimeLayer::OnRunFinished()
 	{
-		// Automated runs (--frames) report problems through the exit code.
-		const GraphicsDevice* device = Application::Get().GetGraphicsDevice();
+		// Automated runs (--frames) report problems through the exit code. The first problem keeps its code
+		// (a failed screenshot, 4, is set while the last frame is presented); every one is logged.
+		Application& application = Application::Get();
+		auto fail = [&application](int exitCode) {
+			if (application.GetExitCode() == 0)
+				application.SetExitCode(exitCode);
+		};
+		const GraphicsDevice* device = application.GetGraphicsDevice();
 		if (m_Options.MaxFrames == 0 || !device)
 			return;
 		if (m_Renderer)
-		{
-			const GpuTimings& timings = m_Renderer->GetGpuTimings();
-			const std::string text = FormatGpuTimings(timings, m_Renderer->HasGpuTimers());
-			// After a whole run, timers that delivered nothing point at a driver or profiler problem.
-			if (m_Renderer->HasGpuTimers() && timings.SampleCount == 0)
-				BS_CORE_WARN("Runtime: scene GPU time {}", text);
-			else
-				BS_CORE_INFO("Runtime: scene GPU time {}", text);
-			BS_CORE_INFO("Runtime: last frame rendered at {}x{} ({:.0f}% render scale)", m_Renderer->GetRenderWidth(), m_Renderer->GetRenderHeight(), m_Renderer->GetCurrentRenderScale() * 100.0f);
-			if (m_Options.RequireDynamicResolution && (!m_Renderer->IsDynamicResolutionActive() || timings.SampleCount == 0))
-			{
-				BS_CORE_ERROR("Runtime: --dynamic-resolution given but dynamic resolution did not run ({}; see the warnings above)", m_Renderer->IsDynamicResolutionActive() ? "no GPU timer results arrived" : "inactive");
-				Application::Get().SetExitCode(6);
-			}
-		}
+			CheckRendererResults(fail);
 		if (device->GetValidationErrorCount() > 0)
 		{
 			BS_CORE_ERROR("Runtime: {} GPU validation error(s) occurred", device->GetValidationErrorCount());
-			Application::Get().SetExitCode(3);
+			fail(3);
 		}
 		else if (m_Options.RequireValidation && !device->IsValidationActive())
 		{
 			BS_CORE_ERROR("Runtime: --require-validation given but the Vulkan validation layer is not active");
-			Application::Get().SetExitCode(5);
+			fail(5);
+		}
+	}
+
+	void RuntimeLayer::CheckRendererResults(const std::function<void(int)>& fail)
+	{
+		const bool timers = m_Renderer->HasGpuTimers();
+		const GpuTimings& timings = m_Renderer->GetGpuTimings();
+		const std::string text = FormatGpuTimings(timings, timers);
+		// Results arrive GpuProfiler::Latency frames late, so a shorter run cannot have any.
+		const bool tooShort = m_Options.MaxFrames <= GpuProfiler::Latency;
+		if (timers && timings.SampleCount == 0 && tooShort)
+			BS_CORE_INFO("Runtime: scene GPU time {} (the run is too short: results arrive {} frames late)", text, GpuProfiler::Latency);
+		else if (timers && timings.SampleCount == 0)
+			BS_CORE_WARN("Runtime: scene GPU time {}", text); // a whole run without results: a driver or profiler problem
+		else
+			BS_CORE_INFO("Runtime: scene GPU time {}", text);
+		BS_CORE_INFO("Runtime: last frame rendered at {}x{} ({:.0f}% render scale)", m_Renderer->GetRenderWidth(), m_Renderer->GetRenderHeight(), m_Renderer->GetCurrentRenderScale() * 100.0f);
+
+		const DynamicResolutionSampleCounts& samples = m_Renderer->GetDynamicResolutionSamples();
+		if (samples.Rejected > 0 && samples.Accepted == 0)
+			BS_CORE_WARN("Runtime: all {} GPU timer results dynamic resolution received were unusable (not positive and finite)", samples.Rejected);
+		if (!m_Options.RequireDynamicResolution)
+			return;
+		std::string reason;
+		if (!m_Renderer->IsDynamicResolutionActive())
+			reason = DescribeDynamicResolutionState(m_Renderer->GetDynamicResolutionState(), m_Renderer->GetDynamicResolution(), m_Renderer->GetRenderScale());
+		else if (tooShort)
+			reason = fmt::format("the run is too short: GPU timer results arrive {} frames late, use more --frames", GpuProfiler::Latency);
+		else if (timings.SampleCount == 0)
+			reason = "no GPU timer results arrived";
+		else if (samples.Accepted == 0)
+			reason = fmt::format("none of the {} GPU timer results was usable", samples.Rejected);
+		if (!reason.empty())
+		{
+			BS_CORE_ERROR("Runtime: --dynamic-resolution given but dynamic resolution did not run ({})", reason);
+			fail(6);
 		}
 	}
 

@@ -2,41 +2,57 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
 
 namespace Basalt {
 
-	// Range of DynamicResolutionSettings::TargetFrameRate in project files and the automation API. The runtime's
-	// --dynamic-resolution accepts higher rates (tests pin the lowest scale with an unreachable target).
+	// Range of DynamicResolutionSettings::TargetFrameRate in project files and the automation API.
 	constexpr float MinTargetFrameRate = 10.0f;
 	constexpr float MaxTargetFrameRate = 1000.0f;
+	// A target no GPU reaches, which pins the lowest scale. The runtime's --dynamic-resolution accepts rates up
+	// to it (the GPU tests use it), and sanitizing maps higher rates and +infinity to it.
+	constexpr float UnreachableTargetFrameRate = 1e6f;
 
-	// Dynamic resolution settings (a project setting, next to RenderScale). Project files and the automation
-	// API spell them DynamicResolution / TargetFrameRate / MinRenderScale.
+	// Dynamic resolution settings (a project setting, next to RenderScale). Project files spell them
+	// DynamicResolution / TargetFrameRate / MinRenderScale; the automation API (project.set, project.info,
+	// render.stats) dynamicResolution / targetFrameRate / minRenderScale.
 	struct DynamicResolutionSettings
 	{
 		bool Enabled = false;
-		// The scene's GPU time (without the environment bake and uploads) is kept within
-		// Headroom * 1000 / TargetFrameRate ms. CPU time, the editor UI and vsync are not measured, so this
-		// neither caps nor guarantees the frame rate.
+		// Dynamic resolution aims the scene's GPU time (without the environment bake and uploads) at
+		// DynamicResolutionController::Headroom (90%) of 1000 / TargetFrameRate ms. CPU time, the editor UI and
+		// vsync are not measured, so this neither caps nor guarantees the frame rate.
 		float TargetFrameRate = 60.0f;
 		// Lowest render scale, in [Basalt::MinRenderScale, Basalt::MaxRenderScale] (RenderMath.h). The project
-		// RenderScale is the highest; with a minimum at or above it there is nothing to adjust (a warning).
+		// RenderScale is the highest; with a minimum at or above it there is nothing to adjust (EmptyRange).
 		float MinScale = 0.5f;
 
 		bool operator==(const DynamicResolutionSettings&) const = default;
 	};
 
-	// The settings with every value usable: a frame rate below MinTargetFrameRate (or infinite) becomes
-	// MinTargetFrameRate, the minimum scale is clamped to the render scale range, and NaN values become the
-	// defaults. Inputs are validated where they enter (project
-	// files, commands, command line); this is the renderer's backstop for programmatic callers.
+	// The settings with every value usable: the frame rate is clamped to [MinTargetFrameRate,
+	// UnreachableTargetFrameRate], the minimum scale to the render scale range, and NaN values become the
+	// defaults. Inputs are validated where they enter (project files, commands, command line); this is the
+	// renderer's backstop for programmatic callers.
 	DynamicResolutionSettings SanitizeDynamicResolution(const DynamicResolutionSettings& settings);
+
+	// Whether dynamic resolution runs, and why not.
+	enum class DynamicResolutionState
+	{
+		Off,         // not enabled
+		NoGpuTimers, // enabled, but the renderer cannot time the GPU
+		EmptyRange,  // enabled, but the minimum scale is not below the render scale
+		Active
+	};
+	DynamicResolutionState GetDynamicResolutionState(const DynamicResolutionSettings& settings, float renderScale, bool gpuTimers);
+	// "off", "active", or why it is inactive (for logs, render.stats, the editor and project.set warnings).
+	std::string DescribeDynamicResolutionState(DynamicResolutionState state, const DynamicResolutionSettings& settings, float renderScale);
 
 	// Picks the render scale that keeps the scene's GPU time within a budget. GPU time is modelled as
 	// proportional to the pixel count (the scale squared), so each sample becomes the cost of a full-scale
 	// frame; the median of the last three (one slow frame is not a trend) is smoothed, and the scale whose
-	// predicted cost fits the budget (with Headroom) is the target. The first sample after a reset is taken
-	// as is, so an over-budget start drops at once.
+	// predicted cost fits the budget (with Headroom) is the target. The first sample after Reset or
+	// ForgetHistory (a resize, a new budget) is taken as is, so an over-budget start drops at once.
 	// The scale drops as soon as the target is lower by more than Deadband (or is the minimum), and rises only
 	// after RaiseDelay samples in a row with room to spare, in steps of at most MaxRaiseStep, which limits
 	// oscillation and overshoot. Scale-independent costs (shadow maps, the output-size tonemap) make the model
@@ -75,9 +91,8 @@ namespace Basalt {
 		std::array<float, 3> m_RecentCosts{};
 		uint32_t m_RecentCount = 0;
 		uint32_t m_RecentNext = 0;
-		// Smoothed GPU milliseconds of a frame at scale 1.
+		// Smoothed GPU milliseconds of a frame at scale 1 (valid once m_RecentCount > 0).
 		float m_FullScaleCost = 0.0f;
-		bool m_HasCost = false;
 		uint32_t m_RaiseSamples = 0;
 	};
 

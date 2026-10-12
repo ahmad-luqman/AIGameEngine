@@ -865,12 +865,14 @@ namespace Basalt {
 			if (ImGui::BeginMenu("Dynamic Resolution", static_cast<bool>(Project::GetActive())))
 			{
 				const DynamicResolutionSettings current = ActiveDynamicResolution();
-				// Hand-edited project values (59.94) need not match a preset exactly.
+				// With a tolerance, so values that went through JSON still tick their preset (a hand-edited 59.94
+				// ticks none).
 				auto matches = [](float a, float b) { return std::abs(a - b) < 1e-3f; };
 				if (ImGui::MenuItem("Enabled", nullptr, current.Enabled))
 					m_Context.Execute("project.set", { { "dynamicResolution", !current.Enabled } });
-				if (m_Renderer && !m_Renderer->HasGpuTimers())
-					ImGui::TextDisabled("Needs GPU timer queries (unavailable; see the log)");
+				// Why an enabled dynamic resolution does nothing (no GPU timers, or nothing to adjust).
+				if (m_Renderer && current.Enabled && !m_Renderer->IsDynamicResolutionActive())
+					ImGui::TextDisabled("%s", DescribeDynamicResolutionState(m_Renderer->GetDynamicResolutionState(), m_Renderer->GetDynamicResolution(), m_Renderer->GetRenderScale()).c_str());
 				ImGui::Separator();
 				ImGui::TextDisabled("Target frame rate");
 				for (const float rate : { 30.0f, 60.0f, 120.0f, 144.0f })
@@ -1050,6 +1052,8 @@ namespace Basalt {
 				ImGui::Text("Resolution: %ux%u (%.0f%% render scale, dynamic up to %.0f%%)", m_Renderer->GetRenderWidth(), m_Renderer->GetRenderHeight(), m_Renderer->GetCurrentRenderScale() * 100.0f, m_Renderer->GetRenderScale() * 100.0f);
 			else
 				ImGui::Text("Resolution: %ux%u (%.0f%% render scale)", m_Renderer->GetRenderWidth(), m_Renderer->GetRenderHeight(), m_Renderer->GetRenderScale() * 100.0f);
+			if (m_Renderer->GetDynamicResolution().Enabled && !m_Renderer->IsDynamicResolutionActive())
+				ImGui::TextDisabled("Dynamic resolution %s", DescribeDynamicResolutionState(m_Renderer->GetDynamicResolutionState(), m_Renderer->GetDynamicResolution(), m_Renderer->GetRenderScale()).c_str());
 			ImGui::Text("Frame: %.2f ms (%.0f FPS)", 1000.0f / std::max(ImGui::GetIO().Framerate, 1.0f), ImGui::GetIO().Framerate);
 			if (GraphicsDevice* device = Application::Get().GetGraphicsDevice())
 				ImGui::Text("GPU: %s", device->GetAdapterName().c_str());

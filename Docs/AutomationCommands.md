@@ -295,7 +295,7 @@ Changes project settings and saves the project file.
 |-----------|--------------------|
 | `dynamicResolution` | bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries) |
 | `fullscreen` | bool |
-| `minRenderScale` | number in [0.25, 2], lowest scale dynamic resolution uses (capped at renderScale) |
+| `minRenderScale` | number in [0.25, 2], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning) |
 | `name` | string |
 | `physicsLayers` | object {Names: ["Default", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play |
 | `renderScale` | number in [0.25, 2], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution) |
@@ -318,7 +318,7 @@ Renders the current scene from its primary camera to a PNG (editor / GPU hosts o
 
 ### `render.stats`
 
-Returns the scene renderer's statistics: viewport and render size, render scale and dynamic resolution state, draw and culling counts, and the GPU time of each pass averaged over the last 30 frames (editor / GPU hosts only).
+Returns the scene renderer's statistics: viewport and render size, render scale and dynamic resolution state, draw and culling counts, and the GPU time of each pass averaged over recent frames (editor / GPU hosts only).
 
 ## replay
 

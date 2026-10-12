@@ -120,7 +120,7 @@ TEST_SUITE("Automation")
 		CHECK(info["targetFrameRate"] == 60.0);
 		CHECK(info["minRenderScale"] == 0.5);
 
-		Run(registry, session, "project.set", { { "dynamicResolution", true }, { "targetFrameRate", 120 }, { "minRenderScale", 0.75 } });
+		CHECK_FALSE(Run(registry, session, "project.set", { { "dynamicResolution", true }, { "targetFrameRate", 120 }, { "minRenderScale", 0.75 } }).contains("warnings"));
 		info = Run(registry, session, "project.info");
 		CHECK(info["dynamicResolution"] == true);
 		CHECK(info["targetFrameRate"] == 120.0);
@@ -142,6 +142,13 @@ TEST_SUITE("Automation")
 		REQUIRE(loaded);
 		const DynamicResolutionSettings expected{ true, 120.0f, 0.75f };
 		CHECK(loaded->GetConfig().DynamicResolution == expected);
+
+		// Valid but useless: a minimum at or above the render scale leaves nothing to adjust, which headless
+		// hosts (no renderer to warn) learn from the result.
+		const json warned = Run(registry, session, "project.set", { { "renderScale", 0.75 } });
+		REQUIRE(warned.contains("warnings"));
+		CHECK(warned["warnings"][0].get<std::string>().find("nothing to adjust") != std::string::npos);
+		CHECK_FALSE(Run(registry, session, "project.set", { { "renderScale", 1.0 } }).contains("warnings"));
 
 		// Older project files have none of the keys: off, 60 frames per second, half resolution at worst.
 		temp.WriteFile(Project::FileName, R"({"Name": "Old"})");

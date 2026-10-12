@@ -348,7 +348,7 @@ namespace Basalt {
 				};
 			});
 
-			Add(registry, "project.set", "Changes project settings and saves the project file.", { { "name", "string" }, { "startScene", "string, project-relative scene" }, { "windowWidth", "integer" }, { "windowHeight", "integer" }, { "fullscreen", "bool" }, { "renderScale", "number in [0.25, 2], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution)" }, { "dynamicResolution", "bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries)" }, { "targetFrameRate", "number in [10, 1000]; dynamic resolution keeps the scene's GPU time within this frame rate's frame time" }, { "minRenderScale", "number in [0.25, 2], lowest scale dynamic resolution uses (capped at renderScale)" }, { "physicsLayers", "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "project.set", "Changes project settings and saves the project file.", { { "name", "string" }, { "startScene", "string, project-relative scene" }, { "windowWidth", "integer" }, { "windowHeight", "integer" }, { "fullscreen", "bool" }, { "renderScale", "number in [0.25, 2], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution)" }, { "dynamicResolution", "bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries)" }, { "targetFrameRate", "number in [10, 1000]; dynamic resolution keeps the scene's GPU time within this frame rate's frame time" }, { "minRenderScale", "number in [0.25, 2], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning)" }, { "physicsLayers", "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play" } }, [](AutomationSession& session, const json& params) {
 				Ref<Project> project = RequireProject();
 				// Every value is read and validated before any is assigned, so a bad parameter leaves the
 				// project untouched.
@@ -374,8 +374,13 @@ namespace Basalt {
 				std::string error;
 				if (!project->Save(error))
 					throw CommandError(error);
-				// Renaming or removing a layer strands bodies on it; report them now rather than at play time.
 				json result = json::object();
+				// Valid but useless, and a headless host has no renderer to warn about it later.
+				const ProjectConfig& saved = project->GetConfig();
+				const DynamicResolutionState dynamicState = GetDynamicResolutionState(saved.DynamicResolution, saved.RenderScale, true);
+				if (dynamicState == DynamicResolutionState::EmptyRange)
+					result["warnings"] = json::array({ "dynamic resolution " + DescribeDynamicResolutionState(dynamicState, saved.DynamicResolution, saved.RenderScale) });
+				// Renaming or removing a layer strands bodies on it; report them now rather than at play time.
 				if (session.GetScene())
 					result["unknownPhysicsLayers"] = FindUnknownPhysicsLayers(*session.GetScene(), project->GetConfig().Physics);
 				return result;
@@ -882,7 +887,7 @@ namespace Basalt {
 				return json{ { "path", path } };
 			});
 
-			Add(registry, "render.stats", "Returns the scene renderer's statistics: viewport and render size, render scale and dynamic resolution state, draw and culling counts, and the GPU time of each pass averaged over the last 30 frames (editor / GPU hosts only).", {}, [](AutomationSession& session, const json&) {
+			Add(registry, "render.stats", "Returns the scene renderer's statistics: viewport and render size, render scale and dynamic resolution state, draw and culling counts, and the GPU time of each pass averaged over recent frames (editor / GPU hosts only).", {}, [](AutomationSession& session, const json&) {
 				if (!session.RenderStats)
 					throw CommandError("render statistics need a GPU host (the editor); this host is '" + session.HostName + "'");
 				json stats;
