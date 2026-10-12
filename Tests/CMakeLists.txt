@@ -101,6 +101,7 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 		list(APPEND basaltGpuTests FeatureTest${dynamicView}MatchesScaled)
 	endforeach()
 	# A dynamic run must actually have lowered the scale (the runtime also exits 6 when it could not run).
+	# "1280x720" is the full size from basaltRenderArgs.
 	set_tests_properties(FeatureTestRender_Dynamic FeatureTestRender_DynamicSSAO PROPERTIES FAIL_REGULAR_EXPRESSION "scene GPU time (unavailable|not available yet);rendered at 1280x720")
 	# The window + swapchain path needs a display, so it only runs on developer machines.
 	if(NOT DEFINED ENV{CI})

@@ -138,9 +138,6 @@ namespace Basalt {
 		bool m_WarnedEmptyRange = false;
 		// Samples in a row the controller rejected (zero or broken GPU times); warned about once.
 		uint32_t m_UnusableSamples = 0;
-		// Samples still in flight from before a viewport resize, which the controller must not see (their
-		// scale is relative to the old viewport).
-		uint32_t m_StaleSamples = 0;
 		bool m_WarnedUnusableSamples = false;
 		nvrhi::TextureHandle m_OutputTexture;
 		nvrhi::TextureHandle m_DepthTexture;
