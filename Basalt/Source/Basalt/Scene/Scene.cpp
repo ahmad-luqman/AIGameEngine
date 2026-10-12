@@ -591,7 +591,7 @@ namespace Basalt {
 
 		if (m_PendingLoad)
 			BS_CORE_WARN("Scene.Load: '{}' replaces the load of '{}' requested earlier this frame", relative.generic_string(), m_PendingLoad->Path);
-		m_PendingLoad = CreateScope<PendingLoad>(PendingLoad{ relative.generic_string(), std::move(*data) });
+		m_PendingLoad = CreateScope<PendingLoad>(PendingLoad{ SceneSerializer::ScenePathOf(Project::ResolvePath(relative)), std::move(*data) });
 		return true;
 	}
 
@@ -617,10 +617,12 @@ namespace Basalt {
 
 	void Scene::ReportLoadProblem(const std::string& message)
 	{
-		BS_CORE_ERROR("{}", message);
-		// Caused by scripts (or an engine bug): make it visible to them and to play.step's scriptErrors.
+		// Caused by scripts (or an engine bug): make it visible to them and to play.step's scriptErrors (which
+		// logs it too).
 		if (m_ScriptEngine)
 			m_ScriptEngine->ReportError(message);
+		else
+			BS_CORE_ERROR("{}", message);
 	}
 
 	void Scene::ApplyPendingLoad()
@@ -628,11 +630,14 @@ namespace Basalt {
 		const Scope<PendingLoad> load = std::move(m_PendingLoad);
 
 		// Unload: OnDestroy may spawn entities, which a further pass destroys too.
+		const std::unordered_set<UUID> persistentBefore = m_PersistentEntities;
 		for (int pass = 0;; pass++)
 		{
 			// A persistent entity that was parented under one that is not leaves that tree first (keeping its
-			// world transform), so it survives as promised.
-			const std::vector<UUID> persistent(m_PersistentEntities.begin(), m_PersistentEntities.end());
+			// world transform), so it survives as promised. Sorted: roots are appended in this order, which must
+			// not depend on the standard library's hash order.
+			std::vector<UUID> persistent(m_PersistentEntities.begin(), m_PersistentEntities.end());
+			std::sort(persistent.begin(), persistent.end(), [](UUID a, UUID b) { return static_cast<uint64_t>(a) < static_cast<uint64_t>(b); });
 			for (UUID uuid : persistent)
 			{
 				Entity entity = GetEntityByUUID(uuid);
@@ -661,6 +666,12 @@ namespace Basalt {
 				DestroyEntity(GetEntityByUUID(root));
 			m_DeferDestruction--;
 			FlushPendingDestruction();
+		}
+		// OnDestroy may also have destroyed a persistent entity, or parented it under one being destroyed.
+		for (UUID uuid : persistentBefore)
+		{
+			if (!m_EntityMap.contains(uuid))
+				BS_CORE_WARN("Scene.Load: persistent entity {} was destroyed while '{}' unloaded", static_cast<uint64_t>(uuid), m_Name);
 		}
 
 		// An entity of the file that is already here (normally the persistent copy of a manager every level

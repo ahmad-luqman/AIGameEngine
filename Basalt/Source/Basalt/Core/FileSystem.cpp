@@ -3,6 +3,7 @@
 #include "Basalt/Core/Base.h"
 #include "Basalt/Core/Log.h"
 
+#include <cerrno>
 #include <fstream>
 #include <system_error>
 
@@ -58,7 +59,21 @@ namespace Basalt {
 		return WriteBinaryFile(path, text.data(), text.size());
 	}
 
+	bool FileSystem::WriteTextFile(const std::filesystem::path& path, std::string_view text, std::string& outError)
+	{
+		return WriteAtomically(path, text.data(), text.size(), outError);
+	}
+
 	bool FileSystem::WriteBinaryFile(const std::filesystem::path& path, const void* data, size_t size)
+	{
+		std::string error;
+		if (WriteAtomically(path, data, size, error))
+			return true;
+		BS_CORE_ERROR("FileSystem: {}", error);
+		return false;
+	}
+
+	bool FileSystem::WriteAtomically(const std::filesystem::path& path, const void* data, size_t size, std::string& outError)
 	{
 		std::error_code error;
 		if (path.has_parent_path())
@@ -67,10 +82,12 @@ namespace Basalt {
 		std::filesystem::path tempPath = path;
 		tempPath += ".tmp";
 		{
+			errno = 0;
 			std::ofstream stream(tempPath, std::ios::out | std::ios::binary | std::ios::trunc);
 			if (!stream)
 			{
-				BS_CORE_ERROR("FileSystem: cannot open '{}' for writing", tempPath.string());
+				const int reason = errno;
+				outError = "cannot open '" + tempPath.string() + "' for writing" + (reason != 0 ? ": " + std::generic_category().message(reason) : std::string());
 				return false;
 			}
 			stream.write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
@@ -80,7 +97,7 @@ namespace Basalt {
 			stream.close();
 			if (stream.fail())
 			{
-				BS_CORE_ERROR("FileSystem: failed writing '{}'", tempPath.string());
+				outError = "failed writing '" + tempPath.string() + "' (disk full?)";
 				std::filesystem::remove(tempPath, error);
 				return false;
 			}
@@ -89,11 +106,17 @@ namespace Basalt {
 		std::filesystem::rename(tempPath, path, error);
 		if (error)
 		{
-			BS_CORE_ERROR("FileSystem: cannot replace '{}': {}", path.string(), error.message());
+			outError = "cannot replace '" + path.string() + "': " + error.message();
 			std::filesystem::remove(tempPath, error);
 			return false;
 		}
 		return true;
+	}
+
+	std::string FileSystem::PathToUtf8(const std::filesystem::path& path)
+	{
+		const std::u8string text = path.u8string();
+		return std::string(text.begin(), text.end());
 	}
 
 	bool FileSystem::Exists(const std::filesystem::path& path)

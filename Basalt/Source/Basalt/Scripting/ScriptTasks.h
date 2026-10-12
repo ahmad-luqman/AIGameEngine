@@ -10,7 +10,7 @@
 
 namespace Basalt {
 
-	struct ScriptContext;
+	class ScriptContext;
 	class ScriptHost;
 
 	// Lua-side handle of a timer or coroutine (TaskHandle). Holds only the id, so it stays safe to keep after
@@ -24,7 +24,7 @@ namespace Basalt {
 	//
 	// Time is game time: BeginFrame advances it once per scene update (a paused scene runs nothing), and
 	// RunDue runs the due tasks in creation order after OnUpdate. A task always waits at least until the next
-	// frame. Every task has an owner (see ScriptContext::CurrentOwner): it runs with that owner current, is
+	// frame. Every task has an owner (see ScriptContext::GetCurrentOwner): it runs with that owner current, is
 	// dropped once ScriptHost::IsOwnerActive says the owner is gone, and an error in it is reported through
 	// ScriptHost::FailOwner. Callers (the Lua bindings) validate arguments; the asserts here catch engine bugs.
 	//
@@ -53,19 +53,26 @@ namespace Basalt {
 		// to-be-closed variables of a cancelled coroutine are not closed.
 		bool Cancel(uint64_t id);
 		bool IsActive(uint64_t id) const;
-		// Whether id is an active coroutine started on `owner` (self:StopCoroutine only stops its own).
-		bool IsCoroutineOf(uint64_t id, UUID owner) const;
+		enum class StopResult
+		{
+			Stopped,
+			// Already finished or cancelled.
+			NotActive,
+			// A timer, or a coroutine started on another instance.
+			NotOwned
+		};
+		// self:StopCoroutine: stops id only if it is a coroutine started on `owner`.
+		StopResult StopCoroutine(uint64_t id, UUID owner);
 		void CancelOwnedBy(UUID owner);
 		void CancelCoroutinesOwnedBy(UUID owner);
 		void Clear();
 
-		// Whether `thread` is the coroutine this scheduler is running (only those may Wait).
-		bool IsRunningCoroutine(lua_State* thread) const { return thread != nullptr && thread == m_Running; }
-		// Wait/WaitFrames: records how long `thread` waits, which it does by yielding right after. False (nothing
-		// recorded) unless `thread` is the coroutine this scheduler is running: only those may wait. Without a
-		// call, a coroutine that yields waits one frame.
-		bool RequestWaitSeconds(lua_State* thread, double seconds);
-		bool RequestWaitFrames(lua_State* thread, uint64_t frames);
+		// Whether `thread` is the coroutine this scheduler is running: only those may Wait.
+		bool IsRunningCoroutine(lua_State* thread) const { return thread != nullptr && thread == m_Active.Thread; }
+		// Wait/WaitFrames: records how long the running coroutine `thread` waits, which it does by yielding right
+		// after (callers check IsRunningCoroutine first). A coroutine that yields without a request waits one frame.
+		void RequestWaitSeconds(lua_State* thread, double seconds);
+		void RequestWaitFrames(lua_State* thread, uint64_t frames);
 
 		void BeginFrame(double deltaTime);
 		void RunDue();
@@ -81,7 +88,7 @@ namespace Basalt {
 		{
 			Kind Type = Kind::Timer;
 			UUID Owner = 0;
-			// Timers only.
+			// Timers only. A one-shot timer has Remaining 1 (and Interval 0).
 			sol::protected_function Callback;
 			double Interval = 0.0;
 			// Firings left; 0 means unlimited (repeating timers).
@@ -93,13 +100,19 @@ namespace Basalt {
 			double ReadyTime = 0.0;
 		};
 
-		// How long the running coroutine waits: FrameCount frames, and with Seconds also until the clock
-		// (Wait) — the default is a bare yield, one frame.
+		// How long a coroutine waits: FrameCount frames, and until the clock is Seconds later (game time never
+		// runs backwards, so 0 adds nothing). The default, a bare yield, is one frame.
 		struct WaitRequest
 		{
-			bool Seconds = false;
 			uint64_t FrameCount = 1;
-			double Duration = 0.0;
+			double Seconds = 0.0;
+		};
+
+		// The coroutine being resumed and the wait it asked for: swapped as one around each (nested) resume.
+		struct ActiveResume
+		{
+			lua_State* Thread = nullptr;
+			WaitRequest Wait;
 		};
 
 		uint64_t AddTimer(UUID owner, const sol::protected_function& callback, double delay, double interval, uint32_t count);
@@ -119,8 +132,7 @@ namespace Basalt {
 		uint64_t m_NextID = 1;
 		uint64_t m_Frame = 0;
 		double m_Time = 0.0;
-		lua_State* m_Running = nullptr;
-		WaitRequest m_Wait;
+		ActiveResume m_Active;
 	};
 
 }

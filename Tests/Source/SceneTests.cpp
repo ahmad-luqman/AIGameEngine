@@ -948,7 +948,7 @@ TEST_SUITE("Scene loading")
 		REQUIRE_MESSAGE(scene, error);
 		CHECK(scene->GetPath() == "Assets/Scenes/A.bscene");
 		scene->OnRuntimeStart();
-		scene->OnUpdate(1.0f / 60.0f);
+		scene->OnUpdate(BasaltTest::Step);
 		CHECK(Eval(*scene, "Scene.GetName() .. ' ' .. Scene.GetPath()") == "A Assets/Scenes/A.bscene");
 		const UUID managerID = 100;
 		CHECK(scene->IsPersistent(scene->GetEntityByUUID(101)));
@@ -959,7 +959,7 @@ TEST_SUITE("Scene loading")
 		CHECK(scene->HasPendingLoad());
 		CHECK(scene->FindEntityByName("LevelA"));
 		const auto ticksBefore = scene->GetScriptEngine()->GetInstanceField(scene->GetEntityByUUID(managerID), "Ticks");
-		scene->OnUpdate(1.0f / 60.0f);
+		scene->OnUpdate(BasaltTest::Step);
 
 		CHECK_FALSE(scene->HasPendingLoad());
 		CHECK(scene->GetName() == "B");
@@ -980,7 +980,7 @@ TEST_SUITE("Scene loading")
 
 		// The manager's state and timer carried over.
 		for (int i = 0; i < 6; i++)
-			scene->OnUpdate(1.0f / 60.0f);
+			scene->OnUpdate(BasaltTest::Step);
 		const auto ticksAfter = scene->GetScriptEngine()->GetInstanceField(scene->GetEntityByUUID(managerID), "Ticks");
 		REQUIRE(ticksBefore.has_value());
 		REQUIRE(ticksAfter.has_value());
@@ -989,7 +989,7 @@ TEST_SUITE("Scene loading")
 
 		// Loading A again: the persistent manager stays the only one.
 		CHECK(Eval(*scene, "Scene.Load('Assets/Scenes/A.bscene')") == "");
-		scene->OnUpdate(1.0f / 60.0f);
+		scene->OnUpdate(BasaltTest::Step);
 		CHECK(scene->FindEntitiesByName("Manager").size() == 1);
 		CHECK(scene->FindEntityByName("LevelA"));
 		CHECK_FALSE(scene->FindEntityByName("LevelB"));
@@ -1041,7 +1041,7 @@ TEST_SUITE("Scene loading")
 		CHECK_FALSE(scene->SetPersistent(scene->FindEntityByName("ManagerChild")));
 		// Normalized paths inside the project are fine.
 		CHECK(scene->RequestLoad("Assets/Scripts/../Scenes/B.bscene", error));
-		scene->OnUpdate(1.0f / 60.0f);
+		scene->OnUpdate(BasaltTest::Step);
 		CHECK(scene->GetPath() == "Assets/Scenes/B.bscene");
 		CHECK(scene->FindEntityByName("LevelB"));
 		scene->OnRuntimeStop();
@@ -1066,7 +1066,7 @@ TEST_SUITE("Scene loading")
 		scene.OnRuntimeStart();
 		std::string error;
 		REQUIRE(scene.RequestLoad("Assets/Scenes/B.bscene", error));
-		scene.OnUpdate(1.0f / 60.0f);
+		scene.OnUpdate(BasaltTest::Step);
 		// Each unload pass spawns one more "Remains"; after MaxUnloadPasses the last one is kept, reported as a
 		// script error that names it.
 		CHECK(scene.FindEntitiesByName("Remains").size() == 1);
@@ -1097,7 +1097,7 @@ TEST_SUITE("Scene loading")
 		)") == "");
 		// Still marked, under a level that is not.
 		CHECK(scene->IsPersistent(scene->GetEntityByUUID(100)));
-		scene->OnUpdate(1.0f / 60.0f);
+		scene->OnUpdate(BasaltTest::Step);
 		Entity manager = scene->GetEntityByUUID(100);
 		REQUIRE(manager);
 		// Moved back to the root, where it was in the world, with its child.
@@ -1133,10 +1133,10 @@ TEST_SUITE("Scene loading")
 			scene.OnRuntimeStart();
 			std::string error;
 			REQUIRE(scene.RequestLoad("Assets/Scenes/Splash.bscene", error));
-			scene.OnUpdate(1.0f / 60.0f);
+			scene.OnUpdate(BasaltTest::Step);
 			CHECK(scene.GetName() == "Splash");
 			CHECK(scene.HasPendingLoad());
-			scene.OnUpdate(1.0f / 60.0f);
+			scene.OnUpdate(BasaltTest::Step);
 			CHECK(scene.GetName() == "B");
 			CHECK_FALSE(scene.HasPendingLoad());
 			CHECK(scene.GetScriptEngine()->GetErrors().empty());
@@ -1149,10 +1149,10 @@ TEST_SUITE("Scene loading")
 			scene.OnRuntimeStart();
 			std::string error;
 			REQUIRE(scene.RequestLoad("Assets/Scenes/A.bscene", error));
-			scene.OnUpdate(1.0f / 60.0f);
+			scene.OnUpdate(BasaltTest::Step);
 			CHECK(scene.GetName() == "A");
 			CHECK(scene.HasPendingLoad());
-			scene.OnUpdate(1.0f / 60.0f);
+			scene.OnUpdate(BasaltTest::Step);
 			CHECK(scene.GetName() == "Splash");
 			scene.OnRuntimeStop();
 		}
@@ -1176,7 +1176,7 @@ TEST_SUITE("Scene loading")
 		scene.OnRuntimeStart();
 		std::string error;
 		REQUIRE(scene.RequestLoad("Assets/Scenes/Full.bscene", error));
-		scene.OnUpdate(1.0f / 60.0f);
+		scene.OnUpdate(BasaltTest::Step);
 
 		// The file's "Name" wins over its file name; the path is the file's.
 		CHECK(scene.GetName() == "Named Differently");
@@ -1215,12 +1215,12 @@ TEST_SUITE("Scene loading")
 			for (int reload = 0; reload < 2; reload++)
 			{
 				for (int i = 0; i < 30; i++)
-					scene->OnUpdate(1.0f / 60.0f);
+					scene->OnUpdate(BasaltTest::Step);
 				REQUIRE(scene->RequestLoad("Assets/Scenes/Ball.bscene", error));
-				scene->OnUpdate(1.0f / 60.0f);
+				scene->OnUpdate(BasaltTest::Step);
 			}
 			for (int i = 0; i < 60; i++)
-				scene->OnUpdate(1.0f / 60.0f);
+				scene->OnUpdate(BasaltTest::Step);
 			// The same two entities each time; the old instances' timers ended with them.
 			CHECK(scene->GetEntityCount() == 2);
 			CHECK(Eval(*scene, "#Tickers .. ' ' .. tostring(Tickers[1]:IsActive()) .. tostring(Tickers[2]:IsActive()) .. tostring(Tickers[3]:IsActive())") == "3 falsefalsetrue");
@@ -1250,13 +1250,13 @@ TEST_SUITE("Scene loading")
 		scene->OnRuntimeStop();
 		CHECK_FALSE(scene->HasPendingLoad());
 		scene->OnRuntimeStart();
-		scene->OnUpdate(1.0f / 60.0f);
+		scene->OnUpdate(BasaltTest::Step);
 		CHECK(scene->GetName() == "A");
 
 		// The persistent manager is destroyed; B's copy is then a new entity, not skipped.
 		scene->DestroyEntity(scene->GetEntityByUUID(100));
 		REQUIRE(scene->RequestLoad("Assets/Scenes/B.bscene", error));
-		scene->OnUpdate(1.0f / 60.0f);
+		scene->OnUpdate(BasaltTest::Step);
 		REQUIRE(scene->GetEntityByUUID(100));
 		CHECK(scene->GetEntityByUUID(102));
 		CHECK(Eval(*scene, "ManagerCreates") == "2");
@@ -1274,5 +1274,28 @@ TEST_SUITE("Scene loading")
 		const std::filesystem::path elsewhere = outside.GetPath() / "Elsewhere.bscene";
 		REQUIRE(SceneSerializer::SaveScene(scene, elsewhere, error));
 		CHECK(scene.GetPath() == elsewhere.lexically_normal().generic_string());
+	}
+
+	TEST_CASE("A persistent entity under another persistent entity stays where it is")
+	{
+		BasaltTest::TempProject project("SceneLoadNestedPersistent");
+		WriteSwitchProject(project);
+		std::string error;
+		Ref<Scene> scene = SceneSerializer::LoadScene(project.GetDirectory() / "Assets/Scenes/A.bscene", error);
+		REQUIRE(scene);
+		scene->OnRuntimeStart();
+		// A second persistent root, then the manager's child marked too after moving it under that root.
+		CHECK(Eval(*scene, R"(
+			local keeper = Scene.CreateEntity("Keeper")
+			Scene.DontDestroyOnLoad(keeper)
+			local child = Scene.FindEntityByName("ManagerChild")
+			child:SetParent(keeper)
+			Scene.Load("Assets/Scenes/B.bscene")
+		)") == "");
+		scene->OnUpdate(BasaltTest::Step);
+		Entity child = scene->GetEntityByUUID(101);
+		REQUIRE(child);
+		CHECK(child.GetParent() == scene->FindEntityByName("Keeper"));
+		scene->OnRuntimeStop();
 	}
 }

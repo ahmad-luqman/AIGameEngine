@@ -163,8 +163,8 @@ The file is read and checked right away, so a missing or invalid file raises an 
 and nothing changes. Calling it again in the same frame replaces the earlier request; calling it while a
 load is applied (from `OnDestroy` or the new scene's `OnCreate`, e.g. a splash screen moving on) loads at
 the end of the next frame. Elapsed time (`Time.GetElapsed`) and the frame count keep running, and the Lua
-state is the same: globals, `Storage`, everything owned by persistent entities, and timers and handlers
-created by console code carry over. Loading the current scene's file again restarts it.
+state is the same: globals, `Storage`, everything owned by persistent entities, and the play session's own
+timers and handlers (from console or top-level script code) carry over. Loading the current scene's file again restarts it.
 
 `Scene.DontDestroyOnLoad(entity)` keeps a **root** entity and its whole tree (anything else is an error)
 through every load for the rest of the play session; its instance keeps its fields, timers, coroutines and
@@ -206,8 +206,9 @@ function Bomb:Defuse() self.Fuse:Cancel() end
   or `coroutine.wrap`, and not in a function the engine calls from C, such as an event handler). A
   coroutine may start others.
 - `handle:Cancel()` stops a timer or coroutine (returns whether it was still active); `handle:IsActive()`.
-  `self:StopCoroutine(handle)` stops one of this instance's coroutines (an error for a timer or another
-  instance's coroutine, which `handle:Cancel()` stops); `self:StopAllCoroutines()` stops the instance's
+  `self:StopCoroutine(handle)` stops one of this instance's coroutines and returns whether it was still
+  active (an error for an active timer or another instance's active coroutine, which `handle:Cancel()`
+  stops); `self:StopAllCoroutines()` stops the instance's
   coroutines but not its timers. A coroutine that stops itself ends at its next wait. To-be-closed
   variables of a stopped coroutine are not closed (those of a coroutine that fails are).
 - Time is game time: nothing runs while the scene is paused. Due timers and coroutines run once per frame
@@ -240,8 +241,9 @@ self.OnHit:Cancel()
   order before it returns, and it returns how many were called. Handlers subscribed during an emit wait
   for the next one; handlers cancelled before their turn are skipped, as are handlers of an instance that
   is being destroyed or has failed. An error in a handler is reported and disables the handler's instance
-  without reaching the emitter, unless the emitter's own handler failed: then `Emit` raises an error too,
-  so the disabled instance's callback stops there. Emits nested more than 32 levels deep (a handler that
+  without reaching the emitter, unless a handler of the emitting instance itself failed: then `Emit`
+  raises an error too, so the disabled instance's callback stops there (a handler that only destroys the
+  emitter is fine). Emits nested more than 32 levels deep (a handler that
   keeps re-emitting) raise an error.
 - Handlers follow the ownership rules of timers above and are all cleared when play stops.
 
@@ -267,7 +269,8 @@ end
   exactly: functions, NaN or infinite numbers, and strings (or keys) that are not valid UTF-8 text.
 - Changes are kept in memory until `Storage.Save()`, which writes them atomically; `Storage.Load()`
   re-reads the file, dropping unsaved changes. Both return `true`, or `false` and the reason (also
-  logged). Unsaved changes are lost when play stops.
+  logged), including when there is nowhere to save (no user data directory); the other functions raise an
+  error then. Unsaved changes are lost when play stops.
 - The file is `SaveData.json` in a per-game directory named after the project: `%APPDATA%\<Project>`
   (Windows), `~/Library/Application Support/<Project>` (macOS), `$XDG_DATA_HOME/<Project>` or
   `~/.local/share/<Project>` (Linux). The environment variable `BASALT_USER_DATA_DIR` replaces the
@@ -276,7 +279,8 @@ end
   mode and the exported game share the file.
 - The player's data is never destroyed:
   - a file that is damaged (hand-edited, truncated, larger than 16 MB) is moved to
-    `SaveData.corrupt.json` (then `SaveData.corrupt.2.json`, ...) and the game continues with empty data;
+    `SaveData.corrupt.json` (then `SaveData.corrupt.2.json`, ...) and the game continues with empty data
+    (if it cannot be moved, it is left alone and `Storage.Save()` refuses to overwrite it);
   - a file written by a newer version of the game, or one that cannot be read (locked, no permission), is
     left alone, and `Storage.Save()` refuses to overwrite it until a `Storage.Load()` succeeds.
 

@@ -6,7 +6,9 @@
 
 #include "TestUtils.h"
 
+#include <cmath>
 #include <filesystem>
+#include <limits>
 
 using namespace Basalt;
 
@@ -32,11 +34,26 @@ TEST_SUITE("Project")
 		CHECK(data.Load(error));
 		CHECK(data.GetKeys().empty());
 
-		CHECK(data.Set("Score", 42));
-		CHECK(data.Set("Name", "Ada"));
-		CHECK(data.Set("Nested", { { "Level", 3 }, { "Flags", { true, false } } }));
-		CHECK_FALSE(data.Set("", 1));
-		CHECK(data.GetKeys() == std::vector<std::string>{ "Name", "Nested", "Score" });
+		CHECK(data.Set("Score", 42, error));
+		CHECK(data.Set("Name", "Ada", error));
+		CHECK(data.Set("Nested", { { "Level", 3 }, { "Flags", { true, false } } }, error));
+		// Only what a save writes back exactly is stored.
+		CHECK_FALSE(data.Set("", 1, error));
+		CHECK(error == "keys must not be empty");
+		CHECK_FALSE(data.Set("NaN", std::nan(""), error));
+		CHECK(error.find("numbers must be finite") != std::string::npos);
+		CHECK_FALSE(data.Set("Deep", { 1, { { "x", -std::numeric_limits<double>::infinity() } } }, error));
+		CHECK_FALSE(data.Set("Bytes", std::string("\xff"), error));
+		CHECK(error == "strings must be valid UTF-8 text");
+		CHECK_FALSE(data.Set("\xff", 1, error));
+		CHECK_FALSE(data.Set("Keys", { { "\xfe", 1 } }, error));
+		// Valid UTF-8 beyond ASCII is fine.
+		CHECK(data.Set("Text", "Caf\xc3\xa9 \xe6\x97\xa5\xe6\x9c\xac", error));
+		// null removes.
+		CHECK(data.Set("Temporary", 1, error));
+		CHECK(data.Set("Temporary", nullptr, error));
+		CHECK(data.Find("Temporary") == nullptr);
+		CHECK(data.GetKeys() == std::vector<std::string>{ "Name", "Nested", "Score", "Text" });
 		// The directory is created on the first save.
 		REQUIRE_MESSAGE(data.Save(error), error);
 		CHECK(std::filesystem::exists(path));
@@ -46,6 +63,7 @@ TEST_SUITE("Project")
 		REQUIRE(reloaded.Find("Score"));
 		CHECK(*reloaded.Find("Score") == 42);
 		CHECK(*reloaded.Find("Nested") == nlohmann::json({ { "Level", 3 }, { "Flags", { true, false } } }));
+		CHECK(*reloaded.Find("Text") == "Caf\xc3\xa9 \xe6\x97\xa5\xe6\x9c\xac");
 		CHECK(reloaded.Remove("Score"));
 		CHECK_FALSE(reloaded.Remove("Score"));
 		CHECK(reloaded.Find("Score") == nullptr);
@@ -66,7 +84,7 @@ TEST_SUITE("Project")
 		for (const auto& [text, expected] : invalid)
 		{
 			SaveData parsed(path);
-			parsed.Set("Kept", 1);
+			REQUIRE(parsed.Set("Kept", 1, error));
 			CHECK_FALSE(parsed.LoadFromString(text, error));
 			CHECK_MESSAGE(error.find(expected) != std::string::npos, text, " -> ", error);
 			// A failed load keeps the values it had.
@@ -88,8 +106,8 @@ TEST_SUITE("Project")
 		REQUIRE(FileSystem::WriteTextFile(path, "{ definitely not json"));
 
 		SaveData data(path);
-		data.Set("Unsaved", true);
 		std::string error;
+		REQUIRE(data.Set("Unsaved", true, error));
 		CHECK_FALSE(data.Load(error));
 		CHECK(error.find("unreadable") != std::string::npos);
 		CHECK(error.find("SaveData.corrupt.json") != std::string::npos);
@@ -99,7 +117,7 @@ TEST_SUITE("Project")
 		CHECK(FileSystem::ReadTextFile(firstBackup) == "{ definitely not json");
 
 		// It can save again, and a second damaged file gets its own backup.
-		data.Set("Fresh", true);
+		REQUIRE(data.Set("Fresh", true, error));
 		CHECK(data.Save(error));
 		REQUIRE(FileSystem::WriteTextFile(path, "second damage"));
 		CHECK_FALSE(data.Load(error));
@@ -125,11 +143,18 @@ TEST_SUITE("Project")
 		SaveData data(path);
 		CHECK_FALSE(data.Load(error));
 		CHECK(error.find("newer version") != std::string::npos);
-		data.Set("Score", 1);
+		REQUIRE(data.Set("Score", 1, error));
 		CHECK_FALSE(data.Save(error));
 		CHECK(error.find("not saving") != std::string::npos);
 		CHECK(FileSystem::ReadTextFile(path) == newer);
 		CHECK_FALSE(std::filesystem::exists(directory.GetPath() / "SaveData.corrupt.json"));
+
+		// A newer version is recognized whatever else it changed (here a key this version does not know).
+		const std::string newerLayout = R"({"Format": "BasaltSaveData", "Version": 2, "Metadata": {}, "Values": []})";
+		REQUIRE(FileSystem::WriteTextFile(path, newerLayout));
+		CHECK_FALSE(data.Load(error));
+		CHECK(error.find("newer version") != std::string::npos);
+		CHECK(FileSystem::ReadTextFile(path) == newerLayout);
 
 		// A successful load unblocks saving.
 		REQUIRE(FileSystem::WriteTextFile(path, SaveFile({ { "Score", 5 } })));
@@ -182,5 +207,63 @@ TEST_SUITE("Project")
 		CHECK(SaveData::SanitizeDirectoryName("Lpt3.tar.gz") == "Lpt3_.tar.gz");
 		CHECK(SaveData::SanitizeDirectoryName("Console") == "Console");
 		CHECK(SaveData::SanitizeDirectoryName("Caf\xc3\xa9") == "Caf__");
+	}
+
+	TEST_CASE("Save data that cannot be moved aside or saved within the limit is not written")
+	{
+		BasaltTest::TempDirectory directory("SaveDataLimits");
+		const std::filesystem::path path = directory.GetPath() / SaveData::FileName;
+		std::string error;
+
+		// Every backup name taken: the malformed file stays, and nothing overwrites it.
+		REQUIRE(FileSystem::WriteTextFile(directory.GetPath() / "SaveData.corrupt.json", "old"));
+		for (int index = 2; index <= 1000; index++)
+			REQUIRE(FileSystem::WriteTextFile(directory.GetPath() / ("SaveData.corrupt." + std::to_string(index) + ".json"), "old"));
+		REQUIRE(FileSystem::WriteTextFile(path, "damaged"));
+		SaveData data(path);
+		CHECK_FALSE(data.Load(error));
+		CHECK(error.find("all 1000 backup names are taken") != std::string::npos);
+		REQUIRE(data.Set("Score", 1, error));
+		CHECK_FALSE(data.Save(error));
+		CHECK(FileSystem::ReadTextFile(path) == "damaged");
+
+		// More than Load would accept is never written.
+		std::filesystem::remove(path);
+		CHECK(data.Load(error));
+		REQUIRE(data.Set("Big", std::string(SaveData::MaxFileSize, 'x'), error));
+		CHECK_FALSE(data.Save(error));
+		CHECK(error.find("more than the 16 MB limit") != std::string::npos);
+		CHECK_FALSE(std::filesystem::exists(path));
+	}
+
+	TEST_CASE("Without an override, the user data directory comes from the platform's variables")
+	{
+		std::string error;
+		BasaltTest::ScopedEnvVar noOverride(Platform::UserDataDirectoryVariable, std::nullopt);
+#if defined(BS_PLATFORM_WINDOWS)
+		BasaltTest::ScopedEnvVar appData("APPDATA", "C:\\Users\\Player\\AppData\\Roaming");
+		CHECK(Platform::GetUserDataDirectory(error) == std::filesystem::path("C:\\Users\\Player\\AppData\\Roaming"));
+#else
+		BasaltTest::ScopedEnvVar home("HOME", "/home/player");
+	#if defined(BS_PLATFORM_MACOS)
+		CHECK(Platform::GetUserDataDirectory(error) == std::filesystem::path("/home/player/Library/Application Support"));
+	#else
+		{
+			BasaltTest::ScopedEnvVar xdg("XDG_DATA_HOME", "/data/player");
+			CHECK(Platform::GetUserDataDirectory(error) == std::filesystem::path("/data/player"));
+		}
+		{
+			// The XDG spec ignores a relative XDG_DATA_HOME.
+			BasaltTest::ScopedEnvVar xdg("XDG_DATA_HOME", "relative");
+			CHECK(Platform::GetUserDataDirectory(error) == std::filesystem::path("/home/player/.local/share"));
+		}
+	#endif
+		{
+			BasaltTest::ScopedEnvVar relativeHome("HOME", "relative/home");
+			BasaltTest::ScopedEnvVar noXdg("XDG_DATA_HOME", std::nullopt);
+			CHECK_FALSE(Platform::GetUserDataDirectory(error));
+			CHECK(error.find("HOME is set to 'relative/home', which is not an absolute path") != std::string::npos);
+		}
+#endif
 	}
 }

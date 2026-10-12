@@ -8,6 +8,7 @@
 #include <array>
 #include <cctype>
 #include <cerrno>
+#include <cmath>
 #include <system_error>
 #include <utility>
 
@@ -15,8 +16,8 @@ namespace Basalt {
 
 	namespace {
 
-		// A free backup name next to the save file, or nullopt when all are taken.
-		std::optional<std::filesystem::path> FreeBackupPath(const std::filesystem::path& directory)
+		// A free backup name next to the save file; nullopt (with outError) when none can be found.
+		std::optional<std::filesystem::path> FreeBackupPath(const std::filesystem::path& directory, std::string& outError)
 		{
 			constexpr int MaxBackups = 1000;
 			for (int index = 1; index <= MaxBackups; index++)
@@ -24,10 +25,50 @@ namespace Basalt {
 				const std::string suffix = index == 1 ? std::string() : "." + std::to_string(index);
 				std::filesystem::path candidate = directory / (std::string(SaveData::CorruptFileStem) + suffix + ".json");
 				std::error_code error;
-				if (!std::filesystem::exists(candidate, error) && !error)
+				const bool taken = std::filesystem::exists(candidate, error);
+				if (error)
+				{
+					outError = "cannot check '" + FileSystem::PathToUtf8(candidate) + "': " + error.message();
+					return std::nullopt;
+				}
+				if (!taken)
 					return candidate;
 			}
+			outError = "all " + std::to_string(MaxBackups) + " backup names are taken";
 			return std::nullopt;
+		}
+
+		// Whether the value (and every string and key in it) is what a save writes back exactly: JSON has no NaN
+		// or infinity (they would come back as null) and only UTF-8 text (other bytes would be replaced).
+		bool IsStorable(const nlohmann::json& value, std::string& outError)
+		{
+			if (value.is_number_float() && !std::isfinite(value.get<double>()))
+			{
+				outError = "numbers must be finite (NaN and infinity cannot be saved)";
+				return false;
+			}
+			if (value.is_structured())
+			{
+				for (const auto& item : value)
+				{
+					if (!IsStorable(item, outError))
+						return false;
+				}
+			}
+			if (value.is_string() || value.is_object())
+			{
+				try
+				{
+					// Strict UTF-8 check of strings and object keys: dumping throws on invalid bytes.
+					(void)value.dump();
+				}
+				catch (const nlohmann::json::type_error&)
+				{
+					outError = "strings must be valid UTF-8 text";
+					return false;
+				}
+			}
+			return true;
 		}
 
 	}
@@ -76,102 +117,97 @@ namespace Basalt {
 
 	bool SaveData::Load(std::string& outError)
 	{
-		const std::string where = "save data '" + m_Path.string() + "'";
+		const std::string where = "save data '" + FileSystem::PathToUtf8(m_Path) + "'";
 		std::error_code error;
 		const bool exists = std::filesystem::exists(m_Path, error);
 		if (error)
-		{
-			outError = "cannot access " + where + ": " + error.message();
-			m_SaveBlocked = outError;
-			return false;
-		}
+			return BlockSave("cannot access " + where + ": " + error.message(), outError);
 		if (!exists)
 		{
 			m_Values = nlohmann::json::object();
-			m_SaveBlocked.clear();
+			m_SaveBlocked.reset();
 			return true;
 		}
 
 		const uintmax_t size = std::filesystem::file_size(m_Path, error);
 		if (error)
-		{
-			outError = "cannot read " + where + ": " + error.message();
-			m_SaveBlocked = outError;
-			return false;
-		}
-
-		std::string problem;
+			return BlockSave("cannot read " + where + ": " + error.message(), outError);
 		if (size > MaxFileSize)
-		{
-			problem = "it is larger than " + std::to_string(MaxFileSize / (size_t{ 1024 } * 1024)) + " MB";
-		}
-		else
-		{
-			errno = 0;
-			const std::optional<std::string> text = FileSystem::ReadTextFile(m_Path);
-			if (!text)
-			{
-				const int reason = errno;
-				outError = "cannot read " + where + (reason != 0 ? ": " + std::generic_category().message(reason) : std::string());
-				m_SaveBlocked = outError;
-				return false;
-			}
-			nlohmann::json values;
-			switch (Parse(*text, values, problem))
-			{
-				case ParseStatus::Valid:
-					m_Values = std::move(values);
-					m_SaveBlocked.clear();
-					return true;
-				case ParseStatus::Newer:
-					outError = where + " was written by a newer version of the game (" + problem + "); it was left untouched and will not be overwritten";
-					m_SaveBlocked = outError;
-					return false;
-				case ParseStatus::Malformed:
-					break;
-			}
-		}
+			return MoveMalformedAside(where, "it is larger than " + std::to_string(MaxFileSizeMB) + " MB", outError);
 
-		// Malformed: keep it for recovery, then start afresh (the next Save writes a new file).
-		outError = where + " is unreadable (" + problem + ")";
-		const std::optional<std::filesystem::path> backup = FreeBackupPath(m_Path.parent_path());
-		if (backup)
-			std::filesystem::rename(m_Path, *backup, error);
-		if (!backup || error)
+		errno = 0;
+		const std::optional<std::string> text = FileSystem::ReadTextFile(m_Path);
+		if (!text)
 		{
-			outError += "; moving it aside failed (" + (backup ? error.message() : std::string("too many backups")) + "), so it will not be overwritten";
-			m_SaveBlocked = outError;
-			return false;
+			const int reason = errno;
+			return BlockSave("cannot read " + where + (reason != 0 ? ": " + std::generic_category().message(reason) : std::string()), outError);
 		}
-		outError += "; it was moved to '" + backup->string() + "' and the game starts with empty save data";
+		std::string problem;
+		nlohmann::json values;
+		switch (Parse(*text, values, problem))
+		{
+			case ParseStatus::Valid:
+				m_Values = std::move(values);
+				m_SaveBlocked.reset();
+				return true;
+			case ParseStatus::Newer:
+				return BlockSave(where + " was written by a newer version of the game (" + problem + "); it was left untouched and will not be overwritten", outError);
+			case ParseStatus::Malformed:
+				break;
+		}
+		return MoveMalformedAside(where, problem, outError);
+	}
+
+	bool SaveData::BlockSave(std::string message, std::string& outError)
+	{
+		outError = message;
+		m_SaveBlocked = std::move(message);
+		return false;
+	}
+
+	bool SaveData::MoveMalformedAside(const std::string& where, const std::string& problem, std::string& outError)
+	{
+		std::string reason;
+		const std::optional<std::filesystem::path> backup = FreeBackupPath(m_Path.parent_path(), reason);
+		std::error_code error;
+		if (backup)
+		{
+			std::filesystem::rename(m_Path, *backup, error);
+			if (error)
+				reason = error.message();
+		}
+		if (!backup || error)
+			return BlockSave(where + " is unreadable (" + problem + "); moving it aside failed (" + reason + "), so it will not be overwritten", outError);
+		outError = where + " is unreadable (" + problem + "); it was moved to '" + FileSystem::PathToUtf8(*backup) + "' and the game starts with empty save data";
 		m_Values = nlohmann::json::object();
-		m_SaveBlocked.clear();
+		m_SaveBlocked.reset();
 		return false;
 	}
 
 	bool SaveData::Save(std::string& outError) const
 	{
-		if (!m_SaveBlocked.empty())
+		if (m_SaveBlocked)
 		{
-			outError = "not saving: " + m_SaveBlocked + " (Storage.Load() retries)";
+			outError = "not saving: " + *m_SaveBlocked + " (Storage.Load() retries)";
 			return false;
 		}
 		const std::string text = SaveToString();
 		if (text.size() > MaxFileSize)
 		{
-			outError = "save data would be " + std::to_string(text.size() / 1024) + " KB, more than the " + std::to_string(MaxFileSize / (size_t{ 1024 } * 1024)) + " MB limit";
+			outError = "save data would be " + std::to_string(text.size() / 1024) + " KB, more than the " + std::to_string(MaxFileSizeMB) + " MB limit";
 			return false;
 		}
 		std::error_code error;
 		std::filesystem::create_directories(m_Path.parent_path(), error);
 		if (error)
 		{
-			outError = "cannot create the save data directory '" + m_Path.parent_path().string() + "': " + error.message();
+			outError = "cannot create the save data directory '" + FileSystem::PathToUtf8(m_Path.parent_path()) + "': " + error.message();
 			return false;
 		}
-		if (!FileSystem::WriteTextFile(m_Path, text))
+		std::string reason;
+		if (!FileSystem::WriteTextFile(m_Path, text, reason))
 		{
-			outError = "cannot write save data '" + m_Path.string() + "' (the log has the reason)";
+			outError = "cannot write save data: " + reason;
 			return false;
 		}
 		return true;
@@ -199,19 +235,13 @@ namespace Basalt {
 			outError = "the file must contain a JSON object";
 			return ParseStatus::Malformed;
 		}
-		for (const auto& [key, value] : data.items())
-		{
-			if (key != "Format" && key != "Version" && key != "Values")
-			{
-				outError = "unknown key '" + key + "' (valid: Format, Version, Values)";
-				return ParseStatus::Malformed;
-			}
-		}
 
+		// Format and version first: a newer version may change everything else, so its file is never judged by
+		// this version's rules.
 		const auto format = data.find("Format");
-		if (format == data.end() || !format->is_string() || *format != "BasaltSaveData")
+		if (format == data.end() || *format != FormatName)
 		{
-			outError = "'Format' must be \"BasaltSaveData\"";
+			outError = std::string("'Format' must be \"") + FormatName + "\"";
 			return ParseStatus::Malformed;
 		}
 		const auto version = data.find("Version");
@@ -225,6 +255,15 @@ namespace Basalt {
 		{
 			outError = "version " + std::to_string(versionNumber) + ", newer than supported version " + std::to_string(FormatVersion);
 			return ParseStatus::Newer;
+		}
+
+		for (const auto& [key, value] : data.items())
+		{
+			if (key != "Format" && key != "Version" && key != "Values")
+			{
+				outError = "unknown key '" + key + "' (valid: Format, Version, Values)";
+				return ParseStatus::Malformed;
+			}
 		}
 		const auto values = data.find("Values");
 		if (values == data.end() || !values->is_object())
@@ -250,8 +289,8 @@ namespace Basalt {
 
 	std::string SaveData::SaveToString() const
 	{
-		const nlohmann::json data = { { "Format", "BasaltSaveData" }, { "Version", FormatVersion }, { "Values", m_Values } };
-		// Storage.Set only stores valid UTF-8; replacing (rather than throwing) keeps a save working regardless.
+		const nlohmann::json data = { { "Format", FormatName }, { "Version", FormatVersion }, { "Values", m_Values } };
+		// Set only stores valid UTF-8; replacing (rather than throwing) keeps a save working regardless.
 		return data.dump(1, '\t', false, nlohmann::json::error_handler_t::replace);
 	}
 
@@ -261,11 +300,19 @@ namespace Basalt {
 		return it != m_Values.end() ? &*it : nullptr;
 	}
 
-	bool SaveData::Set(const std::string& key, nlohmann::json value)
+	bool SaveData::Set(const std::string& key, nlohmann::json value, std::string& outError)
 	{
 		if (key.empty())
+		{
+			outError = "keys must not be empty";
 			return false;
-		m_Values[key] = std::move(value);
+		}
+		if (!IsStorable(nlohmann::json(key), outError) || !IsStorable(value, outError))
+			return false;
+		if (value.is_null())
+			m_Values.erase(key);
+		else
+			m_Values[key] = std::move(value);
 		return true;
 	}
 

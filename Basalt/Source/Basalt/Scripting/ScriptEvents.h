@@ -10,7 +10,7 @@
 
 namespace Basalt {
 
-	struct ScriptContext;
+	class ScriptContext;
 	class ScriptHost;
 
 	// Lua-side handle of an event subscription (EventHandle); holds only the id.
@@ -21,7 +21,7 @@ namespace Basalt {
 
 	// Named events between scripts of one play session (Lua Events.On/Once/Emit). Emit is synchronous: the
 	// handlers subscribed when it starts run in subscription order before it returns. A handler belongs to its
-	// owner (ScriptContext::CurrentOwner when subscribing): it runs with that owner current, is skipped while
+	// owner (ScriptContext::GetCurrentOwner when subscribing): it runs with that owner current, is skipped while
 	// ScriptHost::IsOwnerActive says the owner is not active, and an error in it is reported through
 	// ScriptHost::FailOwner. Handlers are kept bound to the main thread, like ScriptTasks' callbacks.
 	class ScriptEvents
@@ -46,8 +46,8 @@ namespace Basalt {
 		// Calls handler(args...) for every subscription to name that exists when the call starts and is still
 		// active when its turn comes, on the caller's thread. Returns how many handlers were called (failed ones
 		// included). A failing handler of the session (owner 0) is unsubscribed. Throws std::runtime_error when
-		// nested deeper than MaxEmitDepth, or when a handler failed and so disabled the emitting instance itself
-		// (its callback must not continue as if nothing happened).
+		// nested deeper than MaxEmitDepth, or when a handler of the emitting instance itself failed, which disabled
+		// it (its callback must not continue as if nothing happened). A handler that destroys the emitter is fine.
 		int Emit(lua_State* caller, const std::string& name, const sol::variadic_args& args);
 
 	private:

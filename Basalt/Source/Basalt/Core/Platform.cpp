@@ -1,6 +1,7 @@
 #include "Basalt/Core/Platform.h"
 
 #include "Basalt/Core/Base.h"
+#include "Basalt/Core/FileSystem.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -29,11 +30,7 @@ namespace Basalt::Platform {
 	{
 		if (GetEnvVar(name))
 			return true;
-#if defined(BS_PLATFORM_WINDOWS)
-		return _putenv_s(name, value.c_str()) == 0;
-#else
-		return setenv(name, value.c_str(), 0) == 0;
-#endif
+		return SetEnvVar(name, value);
 	}
 
 	bool SetEnvVar(const char* name, const std::string& value)
@@ -58,6 +55,7 @@ namespace Basalt::Platform {
 	namespace {
 
 		// The variable as a path, read as wide text on Windows so user names outside the ANSI code page survive.
+		// Names are ASCII constants, so widening them byte by byte is exact.
 		std::optional<std::filesystem::path> GetPathVar(const char* name)
 		{
 #if defined(BS_PLATFORM_WINDOWS)
@@ -77,21 +75,45 @@ namespace Basalt::Platform {
 		}
 
 		// The variable's path when it is set to an absolute one; otherwise nullopt and why.
-		std::optional<std::filesystem::path> AbsolutePathVar(const char* name, std::string& outError)
+		std::optional<std::filesystem::path> AbsolutePathVar(const char* name, std::string& outReason)
 		{
 			std::optional<std::filesystem::path> value = GetPathVar(name);
 			if (!value)
 			{
-				outError = std::string(name) + " is not set";
+				outReason = std::string(name) + " is not set";
 				return std::nullopt;
 			}
 			// Relative values would resolve against the working directory, which changes between launches.
 			if (!value->is_absolute())
 			{
-				outError = std::string(name) + " is set to '" + value->string() + "', which is not an absolute path";
+				outReason = std::string(name) + " is set to '" + FileSystem::PathToUtf8(*value) + "', which is not an absolute path";
 				return std::nullopt;
 			}
 			return value;
+		}
+
+		std::optional<std::filesystem::path> FindUserDataDirectory(std::string& outReason)
+		{
+			// A set but unusable override is a configuration mistake: falling back to the real user directory
+			// would let tests write into it.
+			if (GetPathVar(UserDataDirectoryVariable))
+				return AbsolutePathVar(UserDataDirectoryVariable, outReason);
+#if defined(BS_PLATFORM_WINDOWS)
+			return AbsolutePathVar("APPDATA", outReason);
+#elif defined(BS_PLATFORM_MACOS)
+			if (auto home = AbsolutePathVar("HOME", outReason))
+				return *home / "Library" / "Application Support";
+			return std::nullopt;
+#else
+			// The XDG spec says to ignore an unset, empty or relative XDG_DATA_HOME.
+			std::string dataReason;
+			if (auto data = AbsolutePathVar("XDG_DATA_HOME", dataReason))
+				return data;
+			if (auto home = AbsolutePathVar("HOME", outReason))
+				return *home / ".local" / "share";
+			outReason = dataReason + ", and " + outReason;
+			return std::nullopt;
+#endif
 		}
 
 	}
@@ -99,34 +121,10 @@ namespace Basalt::Platform {
 	std::optional<std::filesystem::path> GetUserDataDirectory(std::string& outError)
 	{
 		std::string reason;
-		if (GetPathVar(UserDataDirectoryVariable))
-		{
-			// A set but unusable override is a configuration mistake: falling back to the real user directory
-			// would let tests write into it.
-			auto overridden = AbsolutePathVar(UserDataDirectoryVariable, reason);
-			if (!overridden)
-				outError = "no user data directory: " + reason;
-			return overridden;
-		}
-#if defined(BS_PLATFORM_WINDOWS)
-		auto appData = AbsolutePathVar("APPDATA", reason);
-		if (!appData)
+		std::optional<std::filesystem::path> directory = FindUserDataDirectory(reason);
+		if (!directory)
 			outError = "no user data directory: " + reason;
-		return appData;
-#elif defined(BS_PLATFORM_MACOS)
-		if (auto home = AbsolutePathVar("HOME", reason))
-			return *home / "Library" / "Application Support";
-		outError = "no user data directory: " + reason;
-		return std::nullopt;
-#else
-		// The XDG spec says to ignore an unset, empty or relative XDG_DATA_HOME.
-		if (auto data = AbsolutePathVar("XDG_DATA_HOME", reason))
-			return data;
-		if (auto home = AbsolutePathVar("HOME", reason))
-			return *home / ".local" / "share";
-		outError = "no user data directory: " + reason;
-		return std::nullopt;
-#endif
+		return directory;
 	}
 
 }

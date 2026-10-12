@@ -17,14 +17,15 @@ namespace Basalt {
 	//
 	// File layout: { "Format": "BasaltSaveData", "Version": 1, "Values": { "<key>": <value>, ... } }
 	//
-	// The player's file is never destroyed: one that cannot be read, or that a newer version wrote, blocks
-	// Save until a later Load succeeds; a malformed one is first moved to a backup next to it.
+	// The player's file is never destroyed: one that cannot be read, or that a newer version wrote, blocks Save
+	// until a later Load reads a file, finds none, or moves a malformed one aside (to a backup next to it).
 	class SaveData
 	{
 	public:
 		static constexpr const char* FileName = "SaveData.json";
-		// Backups of malformed files are "SaveData.corrupt.json", then "SaveData.corrupt.2.json", ... (never
-		// overwritten, so every damaged file stays recoverable).
+		static constexpr const char* FormatName = "BasaltSaveData";
+		// Backups of malformed files are "SaveData.corrupt.json", then "SaveData.corrupt.2.json", ... (a new name
+		// each time, so every damaged file stays recoverable).
 		static constexpr const char* CorruptFileStem = "SaveData.corrupt";
 		static constexpr int FormatVersion = 1;
 		// Real save files are a few kilobytes; this bounds the memory a broken or hostile file can take. Save
@@ -42,23 +43,26 @@ namespace Basalt {
 		// "NUL_.txt"), and an empty result becomes "Untitled".
 		static std::string SanitizeDirectoryName(const std::string& name);
 
-		// Replaces the values with the file's; a missing file is empty save data. On failure (false, outError)
-		// the values are kept, and:
-		// - a malformed file (bad JSON or layout, larger than MaxFileSize) is moved to a backup and the values
-		//   are cleared, so the game starts afresh (if the move fails, Save stays blocked instead);
-		// - a file that cannot be read, or that a newer version wrote, is left alone and Save is blocked.
+		// Replaces the values with the file's; a missing file is empty save data. Returns false with outError when
+		// - the file is malformed (bad JSON or layout, larger than MaxFileSize): it is moved to a backup and the
+		//   values are cleared, so the game starts afresh (if it cannot be moved, the values are kept and Save is
+		//   blocked);
+		// - it cannot be read, or a newer version wrote it: it is left alone, the values are kept and Save is
+		//   blocked.
 		bool Load(std::string& outError);
 		// Writes atomically (a crash never leaves a half-written save), creating the directory if needed. Fails
 		// while blocked by Load, and when the data would exceed MaxFileSize.
 		bool Save(std::string& outError) const;
-		// The file format without the file (used by Load/Save and the fuzzer). On failure the values are kept.
+		// The file format without the file (the fuzzer and tests). On failure the values are kept. It does not
+		// change whether Save is blocked.
 		bool LoadFromString(std::string_view text, std::string& outError);
 		std::string SaveToString() const;
 
 		// The value stored under key, or null when there is none. The pointer is valid until the next change.
 		const nlohmann::json* Find(const std::string& key) const;
-		// False (nothing stored) for an empty key.
-		bool Set(const std::string& key, nlohmann::json value);
+		// Stores a value (null removes the key). False with outError, storing nothing, for what a save could not
+		// write back exactly: an empty key, NaN or infinite numbers, strings or keys that are not valid UTF-8.
+		[[nodiscard]] bool Set(const std::string& key, nlohmann::json value, std::string& outError);
 		// Returns whether the key existed.
 		bool Remove(const std::string& key);
 		void Clear();
@@ -72,17 +76,24 @@ namespace Basalt {
 		{
 			Valid,
 			Malformed,
-			// A valid file of a newer FormatVersion: not ours to change.
+			// A file of a newer FormatVersion (whatever else it contains): not ours to change.
 			Newer
 		};
+		static constexpr size_t MaxFileSizeMB = MaxFileSize / (size_t{ 1024 } * 1024);
+
 		static ParseStatus Parse(std::string_view text, nlohmann::json& outValues, std::string& outError);
+		// Moves a malformed file to a fresh backup and starts afresh (or blocks Save when it cannot be moved).
+		// Always false: the load failed either way.
+		bool MoveMalformedAside(const std::string& where, const std::string& problem, std::string& outError);
+		// Records that saving would destroy the player's data. Always false (Load's result).
+		bool BlockSave(std::string message, std::string& outError);
 
 	private:
 		std::filesystem::path m_Path;
 		// Always a JSON object.
 		nlohmann::json m_Values = nlohmann::json::object();
-		// Why Save would destroy the player's data, while it would; empty when saving is safe.
-		std::string m_SaveBlocked;
+		// Why Save would destroy the player's data, while it would.
+		std::optional<std::string> m_SaveBlocked;
 	};
 
 }

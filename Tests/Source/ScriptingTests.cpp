@@ -21,7 +21,7 @@ using namespace Basalt;
 
 namespace {
 
-	constexpr float Step = 1.0f / 60.0f;
+	using BasaltTest::Step;
 
 	Entity AddScripted(Scene& scene, const std::string& name, const std::string& script, nlohmann::json properties = nlohmann::json::object())
 	{
@@ -1587,8 +1587,8 @@ TEST_SUITE("Gameplay scripting")
 		std::string result;
 		REQUIRE(engine.ExecuteString("Events.On('Go', function() SessionHeard = true end)", result));
 		REQUIRE(engine.ExecuteString("Events.Emit('Go')", result));
-		// The failing handler and the session's ran; the faulty instance's second handler was skipped (its owner
-		// had just failed), and the error did not reach the emitter.
+		// The failing handler and the session's ran; the faulty instance's second handler was removed when its
+		// owner failed, and the error did not reach the emitter.
 		CHECK(result == "2");
 		REQUIRE(engine.GetErrors().size() == 1);
 		CHECK(engine.GetErrors()[0].find("Faulty.lua:5: handler failure") != std::string::npos);
@@ -1601,6 +1601,28 @@ TEST_SUITE("Gameplay scripting")
 		CHECK(BasaltTest::Eval(engine, "Events.On('Bad', function() error('session failure') end) return Events.Emit('Bad') .. ' ' .. Events.Emit('Bad')") == "1 0");
 		REQUIRE(engine.GetErrors().size() == 2);
 		CHECK(engine.GetErrors()[1].find("(in a handler of event 'Bad' of the play session)") != std::string::npos);
+
+		// A handler that destroys the emitter (or another instance's failing handler) is no failure of the emitter.
+		const std::string bullet = project.WriteFile("Assets/Scripts/Bullet.lua", R"(
+			local B = {}
+			function B:OnUpdate()
+				if not BulletEmitted then
+					BulletEmitted = true
+					HitCount = Events.Emit("Hit", self.Entity)
+					BulletContinued = true
+				end
+			end
+			return B
+		)");
+		REQUIRE(BasaltTest::Eval(engine, "Events.On('Hit', function(bullet) bullet:Destroy() end) Events.On('Hit', function() error('another instance') end)") == "");
+		const size_t errorsBefore = engine.GetErrors().size();
+		AddScripted(scene, "Bullet", bullet);
+		scene.OnUpdate(Step);
+		CHECK(BasaltTest::Eval(engine, "HitCount .. ' ' .. tostring(BulletContinued)") == "2 true");
+		CHECK_FALSE(scene.FindEntityByName("Bullet"));
+		// Only the failing session handler's error.
+		REQUIRE(engine.GetErrors().size() == errorsBefore + 1);
+		CHECK(engine.GetErrors().back().find("another instance") != std::string::npos);
 
 		// An instance whose own handler fails while it emits does not carry on as if nothing happened.
 		AddScripted(scene, "SelfEmitter", selfEmitter);
@@ -1757,6 +1779,8 @@ TEST_SUITE("Gameplay scripting")
 				-- Stopped by the first coroutine's StopAllCoroutines before it ever resumes.
 				self.Other = self:StartCoroutine(function() WaitFrames(5) OtherRan = true end)
 				StopTimer = select(2, pcall(function() return self:StopCoroutine(self.Timer) end))
+				-- A coroutine that already finished is simply not stopped.
+				StopFinished = self:StopCoroutine(self:StartCoroutine(function() end))
 			end
 			return S
 		)");
@@ -1766,7 +1790,7 @@ TEST_SUITE("Gameplay scripting")
 		Entity stopperEntity = AddScripted(scene, "Stopper", stopper);
 		scene.OnRuntimeStart();
 		ScriptEngine& engine = *scene.GetScriptEngine();
-		CHECK(BasaltTest::Eval(engine, "ArgCount .. ' ' .. ArgLast") == "200 200");
+		CHECK(BasaltTest::Eval(engine, "ArgCount .. ' ' .. ArgLast .. ' ' .. tostring(StopFinished)") == "200 200 false");
 		CHECK(BasaltTest::Eval(engine, "StopTimer").find("StopCoroutine: the handle is a timer or another instance's coroutine") != std::string::npos);
 		// Another instance's coroutine cannot be stopped through StopCoroutine either.
 		CHECK(BasaltTest::Eval(engine, "local s = Scene.FindEntityByName('Stopper'):GetScript() return select(2, pcall(function() return Scene.FindEntityByName('Nesting'):GetScript():StopCoroutine(s.Other) end))").find("another instance's coroutine") != std::string::npos);
@@ -1793,6 +1817,9 @@ TEST_SUITE("Gameplay scripting")
 			local C = {}
 			function C:OnCreate()
 				self:StartCoroutine(function()
+					-- Lets the test check that the finished coroutine's thread really is collected.
+					Weak = setmetatable({}, { __mode = "v" })
+					Weak[1] = coroutine.running()
 					Timer.After(0.1, function() TimerFired = (TimerFired or 0) + 1 end)
 					Events.On("Ping", function(value) PingHeard = value end)
 					self.Repeating = Timer.Every(0.05, function() Ticks = (Ticks or 0) + 1 end)
@@ -1806,7 +1833,7 @@ TEST_SUITE("Gameplay scripting")
 		scene.OnRuntimeStart();
 		ScriptEngine& engine = *scene.GetScriptEngine();
 		// The finished coroutine's thread is collected.
-		CHECK(BasaltTest::Eval(engine, "collectgarbage('collect') return 1") == "1");
+		CHECK(BasaltTest::Eval(engine, "collectgarbage('collect') return tostring(Weak[1])") == "nil");
 		for (int i = 0; i < 10; i++)
 			scene.OnUpdate(Step);
 		CHECK(BasaltTest::Eval(engine, "collectgarbage('collect') return Events.Emit('Ping', 7)") == "1");
@@ -1892,5 +1919,121 @@ TEST_SUITE("Gameplay scripting")
 			CHECK(BasaltTest::Eval(scene, "Storage.Get('Score')").find("Storage: no user data directory: BASALT_USER_DATA_DIR is set to 'relative/dir'") != std::string::npos);
 			scene.OnRuntimeStop();
 		}
+	}
+
+	// Regression: a coroutine's wait request leaked into the coroutine that had started it, whose bare
+	// coroutine.yield() then waited as long as the inner coroutine's Wait.
+	TEST_CASE("A coroutine's bare yield waits one frame even after starting a coroutine that waits")
+	{
+		BasaltTest::TempProject project("ScriptCoroutineWaitLeak");
+		const std::string script = project.WriteFile("Assets/Scripts/Outer.lua", R"(
+			local O = {}
+			function O:OnCreate()
+				self:StartCoroutine(function()
+					self:StartCoroutine(function() Wait(5) end)
+					coroutine.yield()
+					ResumedAt = Time.GetFrame()
+				end)
+			end
+			return O
+		)");
+		Scene scene;
+		AddScripted(scene, "Outer", script);
+		scene.OnRuntimeStart();
+		for (int i = 0; i < 3; i++)
+			scene.OnUpdate(Step);
+		CHECK(BasaltTest::Eval(scene, "tostring(ResumedAt)") == "0");
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Coroutine errors are reported safely, with their to-be-closed variables closed")
+	{
+		BasaltTest::TempProject project("ScriptCoroutineErrorObjects");
+		const std::string script = project.WriteFile("Assets/Scripts/Thrower.lua", R"(
+			local T = {}
+			T.Properties = { Kind = "" }
+			function T:OnCreate()
+				self.Updates = 0
+				self:StartCoroutine(function()
+					local guard <close> = setmetatable({}, { __close = function(_, err) Closed = (Closed or 0) + 1 ClosedWith = tostring(err) end })
+					WaitFrames(1)
+					if self.Kind == "raising" then
+						error(setmetatable({}, { __tostring = function() error("tostring itself fails") end }))
+					elseif self.Kind == "custom" then
+						error(setmetatable({}, { __tostring = function() return "custom error object" end }))
+					elseif self.Kind == "closing" then
+						local failing <close> = setmetatable({}, { __close = function() error("close failed") end })
+						error("first failure")
+					end
+				end)
+			end
+			function T:OnUpdate() self.Updates = self.Updates + 1 end
+			return T
+		)");
+		Scene scene;
+		Entity raising = AddScripted(scene, "Raising", script, { { "Kind", "raising" } });
+		AddScripted(scene, "Custom", script, { { "Kind", "custom" } });
+		AddScripted(scene, "Closing", script, { { "Kind", "closing" } });
+		scene.OnRuntimeStart();
+		ScriptEngine& engine = *scene.GetScriptEngine();
+		for (int i = 0; i < 4; i++)
+			scene.OnUpdate(Step);
+
+		// Each failure is one script error that disables its own instance; the updates go on.
+		REQUIRE(engine.GetErrors().size() == 3);
+		CHECK(engine.GetErrors()[0].find("(error object is a table value whose __tostring failed)") != std::string::npos);
+		CHECK(engine.GetErrors()[0].find("(in a coroutine of 'Raising'") != std::string::npos);
+		CHECK(engine.GetErrors()[1].find("custom error object") != std::string::npos);
+		CHECK(engine.GetErrors()[2].find("first failure") != std::string::npos);
+		CHECK(engine.GetErrors()[2].find("closing its to-be-closed variables also failed") != std::string::npos);
+		CHECK(engine.GetErrors()[2].find("close failed") != std::string::npos);
+		// It failed in update 1 (after that OnUpdate) and never updated again.
+		CHECK(Field(scene, raising, "Updates") == 1);
+		// Every coroutine's guard was closed, the plain one with the error it failed with.
+		CHECK(BasaltTest::Eval(engine, "Closed") == "3");
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Bindings called by finalizers while the Lua state closes do nothing")
+	{
+		BasaltTest::TempProject project("ScriptFinalizers");
+		const std::string script = project.WriteFile("Assets/Scripts/Finalizer.lua", R"(
+			local F = {}
+			function F:OnCreate()
+				local entity = self.Entity
+				Keeper = setmetatable({}, { __gc = function()
+					pcall(Timer.After, 1, function() end)
+					pcall(Events.On, "x", function() end)
+					pcall(Events.Emit, "x")
+					pcall(Storage.Get, "k")
+					pcall(function() return entity:GetScript() end)
+					pcall(function() return self:StartCoroutine(function() end) end)
+					pcall(function() return self:StopAllCoroutines() end)
+				end })
+			end
+			return F
+		)");
+		Scene scene;
+		AddScripted(scene, "Finalizer", script);
+		scene.OnRuntimeStart();
+		scene.OnUpdate(Step);
+		// lua_close runs the finalizer after the engine let go of its host: no crash (the sanitizer jobs check).
+		scene.OnRuntimeStop();
+		CHECK_FALSE(scene.GetScriptEngine());
+	}
+
+	TEST_CASE("Storage.Save and Storage.Load report a missing save location instead of raising")
+	{
+		BasaltTest::TempProject project("ScriptStorageNowhere");
+		BasaltTest::ScopedEnvVar relative(Platform::UserDataDirectoryVariable, "relative/dir");
+		Scene scene;
+		scene.OnRuntimeStart();
+		const std::string saved = BasaltTest::Eval(scene, "local ok, err = Storage.Save() return tostring(ok) .. ' ' .. err");
+		CHECK(saved.find("false Storage: no user data directory") == 0);
+		const std::string loaded = BasaltTest::Eval(scene, "local ok, err = Storage.Load() return tostring(ok) .. ' ' .. err");
+		CHECK(loaded.find("false Storage: no user data directory") == 0);
+		// The others raise.
+		CHECK(BasaltTest::Eval(scene, "Storage.Set('x', 1)").find("error: ") == 0);
+		scene.OnRuntimeStop();
 	}
 }
