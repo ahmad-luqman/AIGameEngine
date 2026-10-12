@@ -9,6 +9,7 @@
 
 #include <doctest/doctest.h>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -19,16 +20,28 @@
 
 namespace BasaltTest {
 
-	// A fresh, empty temporary directory (BasaltTests/<name>), removed on scope exit.
+	// Fixed frame time of the tests (60 Hz).
+	inline constexpr float Step = 1.0f / 60.0f;
+
+	// Scratch root of this test run: <temp>/BasaltTests/<run>, unique per process, so test runs at the same time
+	// (e.g. Debug and ASan builds) never share or delete each other's files.
+	inline const std::filesystem::path& GetRunDirectory()
+	{
+		static const std::filesystem::path directory = std::filesystem::temp_directory_path() / "BasaltTests" / ("Run-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+		return directory;
+	}
+
+	// A fresh, empty temporary directory (<run directory>/<name>), removed on scope exit.
 	class TempDirectory
 	{
 	public:
 		explicit TempDirectory(const std::string& name)
-			: m_Path(std::filesystem::temp_directory_path() / "BasaltTests" / name)
+			: m_Path(GetRunDirectory() / name)
 		{
 			std::error_code error;
 			std::filesystem::remove_all(m_Path, error);
 			std::filesystem::create_directories(m_Path, error);
+			REQUIRE_MESSAGE(!error, "cannot create '", m_Path.string(), "': ", error.message());
 		}
 		~TempDirectory()
 		{
@@ -49,25 +62,25 @@ namespace BasaltTest {
 	class ScopedEnvVar
 	{
 	public:
-		ScopedEnvVar(const char* name, const std::string& value)
-			: m_Name(name)
-			, m_Previous(Basalt::Platform::GetEnvVar(name))
+		// With no value, the variable is removed for the scope.
+		ScopedEnvVar(std::string name, const std::optional<std::string>& value)
+			: m_Name(std::move(name))
+			, m_Previous(Basalt::Platform::GetEnvVar(m_Name.c_str()))
 		{
-			Basalt::Platform::SetEnvVar(name, value);
+			const bool changed = value ? Basalt::Platform::SetEnvVar(m_Name.c_str(), *value) : Basalt::Platform::UnsetEnvVar(m_Name.c_str());
+			REQUIRE_MESSAGE(changed, "cannot change ", m_Name);
 		}
 		~ScopedEnvVar()
 		{
-			if (m_Previous)
-				Basalt::Platform::SetEnvVar(m_Name, *m_Previous);
-			else
-				Basalt::Platform::UnsetEnvVar(m_Name);
+			const bool restored = m_Previous ? Basalt::Platform::SetEnvVar(m_Name.c_str(), *m_Previous) : Basalt::Platform::UnsetEnvVar(m_Name.c_str());
+			CHECK_MESSAGE(restored, "cannot restore ", m_Name);
 		}
 
 		ScopedEnvVar(const ScopedEnvVar&) = delete;
 		ScopedEnvVar& operator=(const ScopedEnvVar&) = delete;
 
 	private:
-		const char* m_Name;
+		std::string m_Name;
 		std::optional<std::string> m_Previous;
 	};
 
@@ -101,20 +114,14 @@ namespace BasaltTest {
 	{
 	public:
 		explicit TempProject(const std::string& name)
+			: m_Directory(name)
 		{
-			m_Directory = std::filesystem::temp_directory_path() / "BasaltTests" / name;
-			std::filesystem::remove_all(m_Directory);
 			std::string error;
-			m_Project = Basalt::Project::Create(m_Directory, name, error);
+			m_Project = Basalt::Project::Create(m_Directory.GetPath(), name, error);
 			Basalt::Project::SetActive(m_Project);
 		}
 
-		~TempProject()
-		{
-			Basalt::Project::SetActive(nullptr);
-			std::error_code error;
-			std::filesystem::remove_all(m_Directory, error);
-		}
+		~TempProject() { Basalt::Project::SetActive(nullptr); }
 
 		TempProject(const TempProject&) = delete;
 		TempProject& operator=(const TempProject&) = delete;
@@ -122,15 +129,15 @@ namespace BasaltTest {
 		// Writes a project-relative file and returns its project-relative path.
 		std::string WriteFile(const std::string& relativePath, const std::string& contents) const
 		{
-			Basalt::FileSystem::WriteTextFile(m_Directory / relativePath, contents);
+			Basalt::FileSystem::WriteTextFile(m_Directory.GetPath() / relativePath, contents);
 			return relativePath;
 		}
 
-		const std::filesystem::path& GetDirectory() const { return m_Directory; }
+		const std::filesystem::path& GetDirectory() const { return m_Directory.GetPath(); }
 		bool IsValid() const { return m_Project != nullptr; }
 
 	private:
-		std::filesystem::path m_Directory;
+		TempDirectory m_Directory;
 		Basalt::Ref<Basalt::Project> m_Project;
 	};
 

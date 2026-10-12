@@ -34,10 +34,11 @@ namespace Basalt {
 		// Both record the file as the scene's path (Scene::GetPath).
 		static bool SaveScene(Scene& scene, const std::filesystem::path& path, std::string& outError);
 		static Ref<Scene> LoadScene(const std::filesystem::path& path, std::string& outError);
-		// Reads and parses a scene file without applying it; errors name the file as displayName.
+		// Reads and parses a scene file without applying it; errors name the file as displayName (a missing file's
+		// also gives the resolved path).
 		static std::optional<nlohmann::json> ReadSceneFile(const std::filesystem::path& path, const std::string& displayName, std::string& outError);
 		// The path Scene::GetPath reports for a scene file: project-relative inside the active project,
-		// otherwise absolute; normalized, with '/' separators.
+		// otherwise absolute (relative input is made absolute first); normalized, with '/' separators.
 		static std::string ScenePathOf(const std::filesystem::path& path);
 
 		// Entity plus all descendants, as an "Entities" array (root first).

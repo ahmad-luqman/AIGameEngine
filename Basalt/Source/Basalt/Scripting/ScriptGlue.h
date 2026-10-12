@@ -33,7 +33,7 @@ namespace Basalt {
 	class ScriptHost
 	{
 	public:
-		// The script instance table of an entity, or nil.
+		// The script instance table of an entity, or nil (none, or it failed).
 		virtual sol::object GetInstance(UUID id) = 0;
 		// Creates and starts the script instances of new entities now (see ScriptEngine::EnsureInstances).
 		virtual void EnsureInstances(const std::vector<Entity>& entities) = 0;
@@ -44,7 +44,7 @@ namespace Basalt {
 		// Reports an error raised in an owner's timer, coroutine or event handler (`where`, e.g. "a timer") and
 		// disables the owning instance, cancelling everything it owns, like an error in any other callback. For
 		// owner 0 the error is only reported (the caller ends the failing timer or handler itself).
-		virtual void FailOwner(UUID owner, const std::string& message, const char* where) = 0;
+		virtual void FailOwner(UUID owner, const std::string& message, const std::string& where) = 0;
 
 		virtual ScriptTasks& GetTasks() = 0;
 		virtual ScriptEvents& GetEvents() = 0;
@@ -53,7 +53,7 @@ namespace Basalt {
 		// directory).
 		virtual SaveData& GetStorage() = 0;
 		// Storage.Load: (re)reads the save data, returning the problem (rather than reporting it) even when this
-		// is the first use.
+		// is the first use. Throws like GetStorage when the save data cannot be located.
 		virtual bool LoadStorage(std::string& outError) = 0;
 
 	protected:
@@ -61,12 +61,13 @@ namespace Basalt {
 	};
 
 	// State shared between the bindings and the ScriptEngine.
-	struct ScriptContext
+	class ScriptContext
 	{
+	public:
 		// Null when scripts are loaded outside a running scene (property discovery).
 		Scene* SceneContext = nullptr;
-		// The running session; null outside a running scene and once the engine starts shutting down, so
-		// bindings called from __gc metamethods during lua_close never reach a dying engine.
+		// The running session; null in property discovery (no scene) and once the engine starts shutting down,
+		// so bindings called from __gc metamethods during lua_close never reach a dying engine.
 		ScriptHost* Host = nullptr;
 		float DeltaTime = 0.0f;
 		// Backs Math.Random* and Lua's math.random: seeded and identical on every platform.
@@ -74,21 +75,27 @@ namespace Basalt {
 		// The session's starting seed (Scene::GetRandomSeed), which math.randomseed() returns to.
 		uint32_t Seed = Random::DefaultSeed;
 
-		// The script instance (entity UUID) whose engine callback is running: an instance callback, or one of
-		// its timers, coroutines or event handlers. Timers and event handlers created now belong to it (calling
-		// another instance's method does not change it); coroutines belong to the instance they are started on.
-		// 0 outside instance code (console, lua.exec, top-level script code). Changed only by ScriptOwnerScope.
-		UUID CurrentOwner = 0;
-
 		// Starts the random sequence of a session: the seed and the generator change together.
 		void ResetRandom(uint32_t seed)
 		{
 			Seed = seed;
 			Rng.Seed(seed);
 		}
+
+		// The script instance (entity UUID) whose engine callback is running: an instance callback, or one of
+		// its timers, coroutines or event handlers. Timers and event handlers created now belong to it (calling
+		// another instance's method does not change it); coroutines belong to the instance they are started on.
+		// 0 outside instance code (console, lua.exec, top-level script code).
+		UUID GetCurrentOwner() const { return m_CurrentOwner; }
+
+	private:
+		// Changed only by ScriptOwnerScope.
+		UUID m_CurrentOwner = 0;
+
+		friend class ScriptOwnerScope;
 	};
 
-	// Makes `owner` the context's current owner for the lifetime of the scope (see ScriptContext::CurrentOwner).
+	// Makes `owner` the context's current owner for the lifetime of the scope (see ScriptContext::GetCurrentOwner).
 	// Rule: only wrap protected calls (pcall, lua_resume). Lua is compiled as C, so an error raised through an
 	// unprotected scope would longjmp past its destructor and leave the wrong owner current.
 	class ScriptOwnerScope
@@ -96,11 +103,11 @@ namespace Basalt {
 	public:
 		ScriptOwnerScope(ScriptContext& context, UUID owner)
 			: m_Context(context)
-			, m_Previous(context.CurrentOwner)
+			, m_Previous(context.m_CurrentOwner)
 		{
-			context.CurrentOwner = owner;
+			context.m_CurrentOwner = owner;
 		}
-		~ScriptOwnerScope() { m_Context.CurrentOwner = m_Previous; }
+		~ScriptOwnerScope() { m_Context.m_CurrentOwner = m_Previous; }
 
 		ScriptOwnerScope(const ScriptOwnerScope&) = delete;
 		ScriptOwnerScope& operator=(const ScriptOwnerScope&) = delete;

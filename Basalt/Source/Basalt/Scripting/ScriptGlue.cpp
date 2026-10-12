@@ -700,9 +700,9 @@ namespace Basalt {
 		// (for example in OnDestroy) would never run it, which is an error rather than a silent no-op.
 		UUID RequireActiveOwner(ScriptContext& context, const char* function)
 		{
-			if (!RequireHost(context).IsOwnerActive(context.CurrentOwner))
+			if (!RequireHost(context).IsOwnerActive(context.GetCurrentOwner()))
 				throw std::runtime_error(std::string(function) + ": the calling script instance is being destroyed or has failed, so this would never run");
-			return context.CurrentOwner;
+			return context.GetCurrentOwner();
 		}
 
 		std::string TypeName(const sol::object& value)
@@ -785,7 +785,8 @@ namespace Basalt {
 
 		// Wait(seconds) and WaitFrames(n) suspend the coroutine the scheduler is running. Plain C functions:
 		// lua_yield must be the return of a C function, and since Lua is compiled as C, its errors longjmp, so
-		// nothing here may own resources with destructors.
+		// nothing here may own resources with destructors. WaitTarget returns the scheduler only when the caller may
+		// wait; otherwise it raises the Lua error (and never returns).
 		ScriptTasks* WaitTarget(lua_State* state, const char* function)
 		{
 			const auto* context = static_cast<const ScriptContext*>(lua_touserdata(state, lua_upvalueindex(1)));
@@ -808,8 +809,9 @@ namespace Basalt {
 			if (!std::isfinite(seconds) || seconds < 0.0)
 				return luaL_error(state, "Wait: seconds must be a finite number >= 0");
 			ScriptTasks* tasks = WaitTarget(state, "Wait");
-			if (!tasks || !tasks->RequestWaitSeconds(state, seconds))
-				return luaL_error(state, "Wait can only be called in a coroutine started with self:StartCoroutine");
+			if (!tasks)
+				return 0;
+			tasks->RequestWaitSeconds(state, seconds);
 			return lua_yield(state, 0);
 		}
 
@@ -820,8 +822,9 @@ namespace Basalt {
 			if (!isInteger || frames < 1)
 				return luaL_error(state, "WaitFrames: frames must be an integer >= 1");
 			ScriptTasks* tasks = WaitTarget(state, "WaitFrames");
-			if (!tasks || !tasks->RequestWaitFrames(state, static_cast<uint64_t>(frames)))
-				return luaL_error(state, "WaitFrames can only be called in a coroutine started with self:StartCoroutine");
+			if (!tasks)
+				return 0;
+			tasks->RequestWaitFrames(state, static_cast<uint64_t>(frames));
 			return lua_yield(state, 0);
 		}
 
@@ -839,33 +842,17 @@ namespace Basalt {
 		void RegisterHandleType(sol::state& lua, ScriptContext& context, const char* name, Registry& (ScriptHost::*registry)())
 		{
 			auto active = [&context, registry]() -> Registry* { return context.Host ? &(context.Host->*registry)() : nullptr; };
-			lua.new_usertype<Handle>(
-				name, sol::no_constructor, "Cancel", [active](const Handle& handle) { Registry* found = active(); return found != nullptr && found->Cancel(handle.ID); }, "IsActive", [active](const Handle& handle) { Registry* found = active(); return found != nullptr && found->IsActive(handle.ID); }, sol::meta_function::equal_to, [](const Handle& a, const Handle& b) { return a.ID == b.ID; }, sol::meta_function::to_string, [name](const Handle& handle) { return std::string(name) + "(" + std::to_string(handle.ID) + ")"; });
-		}
-
-		// Values Storage can save exactly: Save writes JSON, which has no NaN or infinity (they would come back as
-		// null) and only UTF-8 text (other bytes would be replaced). Throws naming the problem.
-		void RequireStorable(const nlohmann::json& value, const std::string& function)
-		{
-			if (value.is_number_float() && !std::isfinite(value.get<double>()))
-				throw std::runtime_error(function + ": numbers must be finite (NaN and infinity cannot be saved)");
-			if (value.is_structured())
-			{
-				for (const auto& item : value)
-					RequireStorable(item, function);
-			}
-			if (value.is_string() || value.is_object())
-			{
-				try
-				{
-					// Strict UTF-8 check of strings and object keys (dumping throws on invalid bytes).
-					(void)value.dump();
-				}
-				catch (const nlohmann::json::type_error&)
-				{
-					throw std::runtime_error(function + ": strings must be valid UTF-8 text");
-				}
-			}
+			sol::usertype<Handle> type = lua.new_usertype<Handle>(name, sol::no_constructor);
+			type["Cancel"] = [active](const Handle& handle) {
+				Registry* found = active();
+				return found != nullptr && found->Cancel(handle.ID);
+			};
+			type["IsActive"] = [active](const Handle& handle) {
+				Registry* found = active();
+				return found != nullptr && found->IsActive(handle.ID);
+			};
+			type[sol::meta_function::equal_to] = [](const Handle& a, const Handle& b) { return a.ID == b.ID; };
+			type[sol::meta_function::to_string] = [name](const Handle& handle) { return std::string(name) + "(" + std::to_string(handle.ID) + ")"; };
 		}
 
 		// Storage.Save/Load results: true, or false and the reason (also logged), so a game can tell the player.
@@ -916,10 +903,16 @@ namespace Basalt {
 				const UUID owner = RequireInstance(context, self, "StopCoroutine", false);
 				if (!handle.is<ScriptTaskHandle>())
 					throw std::runtime_error("StopCoroutine: expected the TaskHandle returned by StartCoroutine, got " + TypeName(handle));
-				const uint64_t id = handle.as<ScriptTaskHandle>().ID;
-				if (tasks.IsActive(id) && !tasks.IsCoroutineOf(id, owner))
-					throw std::runtime_error("StopCoroutine: the handle is a timer or another instance's coroutine (use handle:Cancel())");
-				return tasks.Cancel(id);
+				switch (tasks.StopCoroutine(handle.as<ScriptTaskHandle>().ID, owner))
+				{
+					case ScriptTasks::StopResult::Stopped:
+						return true;
+					case ScriptTasks::StopResult::NotActive:
+						return false;
+					case ScriptTasks::StopResult::NotOwned:
+						break;
+				}
+				throw std::runtime_error("StopCoroutine: the handle is a timer or another instance's coroutine (use handle:Cancel())");
 			};
 			methods["StopAllCoroutines"] = [&context](const sol::object& self) { RequireHost(context).GetTasks().CancelCoroutinesOwnedBy(RequireInstance(context, self, "StopAllCoroutines", false)); };
 
@@ -967,24 +960,21 @@ namespace Basalt {
 			storage["Set"] = [&context](const sol::object& key, const sol::object& value) {
 				const std::string name = RequireName(key, "Storage.Set", "the key");
 				const std::string function = "Storage.Set('" + name + "')";
-				RequireStorable(nlohmann::json(name), function);
 				SaveData& data = RequireHost(context).GetStorage();
-				if (IsNil(value))
-				{
-					data.Remove(name);
-					return;
-				}
-				nlohmann::json json;
+				// nil is JSON null, which Set treats as removing the key.
+				nlohmann::json json = nullptr;
 				try
 				{
-					json = LuaToJson(value);
+					if (!IsNil(value))
+						json = LuaToJson(value);
 				}
 				catch (const std::runtime_error& e)
 				{
 					throw std::runtime_error(function + ": " + e.what());
 				}
-				RequireStorable(json, function);
-				data.Set(name, std::move(json));
+				std::string error;
+				if (!data.Set(name, std::move(json), error))
+					throw std::runtime_error(function + ": " + error);
 			};
 			storage["Has"] = [&context](const sol::object& key) { return RequireHost(context).GetStorage().Find(RequireName(key, "Storage.Has", "the key")) != nullptr; };
 			storage["Delete"] = [&context](const sol::object& key) { return RequireHost(context).GetStorage().Remove(RequireName(key, "Storage.Delete", "the key")); };
@@ -996,14 +986,34 @@ namespace Basalt {
 					keys.add(key);
 				return keys;
 			};
+			// Save and Load report every failure as false and the reason, including save data that cannot be
+			// located (no active project or user data directory), so `local ok, err = Storage.Save()` always works.
 			storage["Save"] = [&context]() {
+				ScriptHost& host = RequireHost(context);
 				std::string error;
-				const bool saved = RequireHost(context).GetStorage().Save(error);
+				bool saved = false;
+				try
+				{
+					saved = host.GetStorage().Save(error);
+				}
+				catch (const std::runtime_error& e)
+				{
+					error = e.what();
+				}
 				return StorageResult("Storage.Save", saved, error);
 			};
 			storage["Load"] = [&context]() {
+				ScriptHost& host = RequireHost(context);
 				std::string error;
-				const bool loaded = RequireHost(context).LoadStorage(error);
+				bool loaded = false;
+				try
+				{
+					loaded = host.LoadStorage(error);
+				}
+				catch (const std::runtime_error& e)
+				{
+					error = e.what();
+				}
 				return StorageResult("Storage.Load", loaded, error);
 			};
 		}

@@ -437,7 +437,12 @@ namespace Basalt {
 		if (!text)
 		{
 			std::error_code error;
-			outError = "cannot read '" + displayName + "'" + (std::filesystem::exists(path, error) ? std::string() : " (no such file: '" + path.string() + "')");
+			const bool exists = std::filesystem::exists(path, error);
+			outError = "cannot read '" + displayName + "'";
+			if (error)
+				outError += " (" + error.message() + ")";
+			else if (!exists)
+				outError += " (no such file: '" + FileSystem::PathToUtf8(path) + "')";
 			return std::nullopt;
 		}
 		json data = ParseJson(*text);
@@ -451,8 +456,9 @@ namespace Basalt {
 
 	std::string SceneSerializer::ScenePathOf(const std::filesystem::path& path)
 	{
-		const std::string relative = Project::MakeRelative(path);
-		return std::filesystem::path(relative).is_absolute() ? path.lexically_normal().generic_string() : std::filesystem::path(relative).lexically_normal().generic_string();
+		std::error_code error;
+		const std::filesystem::path absolute = std::filesystem::absolute(path, error);
+		return std::filesystem::path(Project::MakeRelative(error ? path : absolute)).lexically_normal().generic_string();
 	}
 
 	Ref<Scene> SceneSerializer::LoadScene(const std::filesystem::path& path, std::string& outError)

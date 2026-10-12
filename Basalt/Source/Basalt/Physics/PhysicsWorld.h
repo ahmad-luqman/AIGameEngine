@@ -102,8 +102,9 @@ namespace Basalt {
 		void Start();
 		// Runs as many fixed steps as the accumulated time allows, then dispatches contact events.
 		void Step(Timestep ts);
-		// Applies every pending physics change right away, as Start does: called by Scene::ApplyPendingLoad so the
-		// bodies, characters and joints of the entities a scene load just added exist before their OnCreate.
+		// Applies every pending physics change now (what each Step does first) and optimizes the broad phase like
+		// Start: called by Scene::ApplyPendingLoad so the bodies, characters and joints of the entities a scene load
+		// just added exist before their OnCreate.
 		void OnSceneLoaded();
 		void OnEntityDestroyed(Entity entity);
 
@@ -182,8 +183,8 @@ namespace Basalt {
 	private:
 		// Rebuilds (or removes) the entity's character; keeps its velocity and the last Move velocity.
 		void RecreateCharacter(Entity entity);
-		// Rebuilds bodies and characters whose components changed, resizes rescaled ones and rebuilds dirty
-		// joints (the start of every Step, and OnSceneLoaded).
+		// Rebuilds bodies and characters whose components changed, applies changed character settings, resizes
+		// rescaled ones and rebuilds dirty joints (the start of every Step, and OnSceneLoaded).
 		void ApplyPendingChanges();
 		// Colliders are sized by the entity's world scale, which a script, an animation or a parent can change
 		// without touching a physics component. Once per Step (and on a scene load), after dirty entities are

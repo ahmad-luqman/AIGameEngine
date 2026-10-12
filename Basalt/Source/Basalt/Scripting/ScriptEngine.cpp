@@ -97,38 +97,22 @@ namespace Basalt {
 
 	}
 
-	namespace {
-
-		// The ScriptHost the bindings use; forwards to the engine (definitions after ScriptEngineAccess).
-		class SessionHost final : public ScriptHost
-		{
-		public:
-			explicit SessionHost(ScriptEngine& engine)
-				: m_Engine(engine)
-			{
-			}
-
-			sol::object GetInstance(UUID id) override;
-			void EnsureInstances(const std::vector<Entity>& entities) override;
-			bool IsOwnerActive(UUID owner) const override;
-			void FailOwner(UUID owner, const std::string& message, const char* where) override;
-			ScriptTasks& GetTasks() override;
-			ScriptEvents& GetEvents() override;
-			SaveData& GetStorage() override;
-			bool LoadStorage(std::string& outError) override;
-
-		private:
-			ScriptEngine& m_Engine;
-		};
-
-	}
-
-	struct ScriptEngine::Impl
+	// The engine's private state, and the ScriptHost the bindings use (definitions after ScriptEngineAccess).
+	struct ScriptEngine::Impl final : ScriptHost
 	{
 		explicit Impl(ScriptEngine& engine)
-			: Host(engine)
+			: Engine(engine)
 		{
 		}
+
+		sol::object GetInstance(UUID id) override;
+		void EnsureInstances(const std::vector<Entity>& entities) override;
+		bool IsOwnerActive(UUID owner) const override;
+		void FailOwner(UUID owner, const std::string& message, const std::string& where) override;
+		ScriptTasks& GetTasks() override { return Tasks; }
+		ScriptEvents& GetEvents() override { return Events; }
+		SaveData& GetStorage() override;
+		bool LoadStorage(std::string& outError) override;
 
 		struct Instance
 		{
@@ -146,13 +130,13 @@ namespace Basalt {
 			sol::table InstanceMetatable;
 		};
 
+		ScriptEngine& Engine;
 		// Declared before Lua so it outlives lua_close(): __gc metamethods may still call bindings.
 		ScriptContext Context;
 		sol::state Lua;
-		SessionHost Host;
 		// Declared after Lua: they hold Lua references, which must be released before the state closes.
-		ScriptTasks Tasks{ Lua, Context, Host };
-		ScriptEvents Events{ Lua, Context, Host };
+		ScriptTasks Tasks{ Lua, Context, *this };
+		ScriptEvents Events{ Lua, Context, *this };
 		// Loaded on the first Storage call, so sessions that never use it never touch the disk.
 		std::optional<SaveData> Storage;
 		std::unordered_map<std::string, ScriptClass> Classes;
@@ -257,10 +241,8 @@ namespace Basalt {
 				Invoke(engine, id, instance.Self, "OnDestroy");
 		}
 
-		static ScriptEngine::Impl& GetImpl(ScriptEngine& engine) { return *engine.m_Impl; }
-
 		// Reports an error of an owner's timer, coroutine or event handler, naming the owner, and disables it.
-		static void FailOwner(ScriptEngine& engine, UUID owner, const std::string& message, const char* where)
+		static void FailOwner(ScriptEngine& engine, UUID owner, const std::string& message, const std::string& where)
 		{
 			std::string ownerName = "the play session";
 			if (owner != 0)
@@ -273,12 +255,11 @@ namespace Basalt {
 				Fail(engine, owner);
 		}
 
-		// The session's save data, created (not loaded) on first use; outCreated tells whether this call created
-		// it. Throws std::runtime_error when the save data cannot be located.
-		static SaveData& EnsureStorage(ScriptEngine& engine, bool& outCreated)
+		// The session's save data, created (not loaded) on first use. Throws std::runtime_error when it cannot be
+		// located.
+		static SaveData& LocateStorage(ScriptEngine& engine)
 		{
 			ScriptEngine::Impl& impl = *engine.m_Impl;
-			outCreated = false;
 			if (impl.Storage)
 				return *impl.Storage;
 			const Ref<Project>& project = Project::GetActive();
@@ -288,7 +269,6 @@ namespace Basalt {
 			const std::optional<std::filesystem::path> path = SaveData::GetDefaultPath(project->GetConfig().Name, error);
 			if (!path)
 				throw std::runtime_error("Storage: " + error);
-			outCreated = true;
 			return impl.Storage.emplace(*path);
 		}
 
@@ -308,54 +288,39 @@ namespace Basalt {
 		}
 	};
 
-	namespace {
+	sol::object ScriptEngine::Impl::GetInstance(UUID id)
+	{
+		return ScriptEngineAccess::GetInstance(Engine, id);
+	}
 
-		sol::object SessionHost::GetInstance(UUID id)
-		{
-			return ScriptEngineAccess::GetInstance(m_Engine, id);
-		}
+	void ScriptEngine::Impl::EnsureInstances(const std::vector<Entity>& entities)
+	{
+		Engine.EnsureInstances(entities);
+	}
 
-		void SessionHost::EnsureInstances(const std::vector<Entity>& entities)
-		{
-			m_Engine.EnsureInstances(entities);
-		}
+	bool ScriptEngine::Impl::IsOwnerActive(UUID owner) const
+	{
+		return owner == 0 || ScriptEngineAccess::IsActive(Engine, owner);
+	}
 
-		bool SessionHost::IsOwnerActive(UUID owner) const
-		{
-			return owner == 0 || ScriptEngineAccess::IsActive(m_Engine, owner);
-		}
+	void ScriptEngine::Impl::FailOwner(UUID owner, const std::string& message, const std::string& where)
+	{
+		ScriptEngineAccess::FailOwner(Engine, owner, message, where);
+	}
 
-		void SessionHost::FailOwner(UUID owner, const std::string& message, const char* where)
-		{
-			ScriptEngineAccess::FailOwner(m_Engine, owner, message, where);
-		}
+	SaveData& ScriptEngine::Impl::GetStorage()
+	{
+		const bool firstUse = !Storage.has_value();
+		SaveData& data = ScriptEngineAccess::LocateStorage(Engine);
+		std::string error;
+		if (firstUse && !data.Load(error))
+			Engine.ReportError("Storage: " + error);
+		return data;
+	}
 
-		ScriptTasks& SessionHost::GetTasks()
-		{
-			return ScriptEngineAccess::GetImpl(m_Engine).Tasks;
-		}
-
-		ScriptEvents& SessionHost::GetEvents()
-		{
-			return ScriptEngineAccess::GetImpl(m_Engine).Events;
-		}
-
-		SaveData& SessionHost::GetStorage()
-		{
-			bool created = false;
-			SaveData& data = ScriptEngineAccess::EnsureStorage(m_Engine, created);
-			std::string error;
-			if (created && !data.Load(error))
-				m_Engine.ReportError("Storage: " + error);
-			return data;
-		}
-
-		bool SessionHost::LoadStorage(std::string& outError)
-		{
-			bool created = false;
-			return ScriptEngineAccess::EnsureStorage(m_Engine, created).Load(outError);
-		}
-
+	bool ScriptEngine::Impl::LoadStorage(std::string& outError)
+	{
+		return ScriptEngineAccess::LocateStorage(Engine).Load(outError);
 	}
 
 	ScriptEngine::ScriptEngine(Scene* scene)
@@ -366,7 +331,7 @@ namespace Basalt {
 		m_Impl->Context.SceneContext = scene;
 		// Every play session starts from its seed (the project's), so its random numbers repeat run after run.
 		m_Impl->Context.ResetRandom(scene->GetRandomSeed());
-		m_Impl->Context.Host = &m_Impl->Host;
+		m_Impl->Context.Host = m_Impl.get();
 		RegisterScriptBindings(m_Impl->Lua, m_Impl->Context);
 
 		entt::registry& registry = scene->GetRegistry();

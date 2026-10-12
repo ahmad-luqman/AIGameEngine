@@ -82,8 +82,9 @@ namespace Basalt {
 			return 0;
 
 		const DepthGuard depth(m_Depth);
-		const UUID emitter = m_Context.CurrentOwner;
-		const bool emitterActive = m_Host.IsOwnerActive(emitter);
+		const UUID emitter = m_Context.GetCurrentOwner();
+		// Recorded rather than inferred: the emitter also stops being active when a handler merely destroys it.
+		bool emitterFailed = false;
 		int called = 0;
 		for (uint64_t id : ids)
 		{
@@ -108,11 +109,13 @@ namespace Basalt {
 				// The session's handler would fail again on every emit; an instance's ends with its instance.
 				if (owner == 0)
 					Cancel(id);
-				m_Host.FailOwner(owner, error.what(), ("a handler of event '" + name + "'").c_str());
+				else if (owner == emitter)
+					emitterFailed = true;
+				m_Host.FailOwner(owner, error.what(), "a handler of event '" + name + "'");
 			}
 		}
 
-		if (emitter != 0 && emitterActive && !m_Host.IsOwnerActive(emitter))
+		if (emitterFailed)
 			throw std::runtime_error("Events.Emit('" + name + "'): a handler of this instance failed (see the previous error), which disabled it");
 		return called;
 	}

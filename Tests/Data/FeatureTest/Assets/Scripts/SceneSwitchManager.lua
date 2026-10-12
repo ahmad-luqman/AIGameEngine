@@ -55,6 +55,11 @@ local function TestStorage()
 	Check("Storage.Clear", #Storage.GetKeys() == 0)
 	ExpectError("Storage.Set needs a key", function() Storage.Set("", 1) end, "non-empty string")
 	ExpectError("Storage.Set rejects functions", function() Storage.Set("SceneSwitch.Fn", function() end) end, "Storage.Set('SceneSwitch.Fn')")
+	ExpectError("Storage.Set rejects NaN", function() Storage.Set("SceneSwitch.N", 0 / 0) end, "numbers must be finite")
+	ExpectError("Storage.Set rejects invalid UTF-8", function() Storage.Set("SceneSwitch.S", "a\255") end, "valid UTF-8")
+	Storage.Set("SceneSwitch.Text", "Caf\195\169")
+	Check("Storage keeps UTF-8 text", Storage.Get("SceneSwitch.Text") == "Caf\195\169")
+	Storage.Delete("SceneSwitch.Text")
 	Check("Storage.Save after Clear", Storage.Save() == true)
 end
 

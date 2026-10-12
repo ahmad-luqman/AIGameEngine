@@ -18,12 +18,12 @@ changing code. Task-specific procedures live in `.claude/skills/*/SKILL.md`.
 | `cmake/` | Dependency pins (`Dependencies.cmake`), warnings, shader embedding, format check. |
 | `scripts/` | `build.sh`, `test.sh`, `format.sh`. |
 
-Engine modules (`Basalt/Source/Basalt/<Module>/`): `Core` (application, window, input, log, file
-system, command line), `Events`, `Math`, `Renderer` (device, scene renderer, IBL, debug lines),
-`ImGui`, `Scene` (EnTT scene, components, component registry, serialization), `Asset` (glTF, images,
-primitives, asset cache), `Physics` (Jolt), `Audio` (miniaudio), `Particles` (CPU particle simulation),
-`Scripting` (Lua 5.4 + sol2; timers, coroutines, events), `Project` (project files, exporter, save data), `Automation` (command API, session,
-TCP server).
+Engine modules (`Basalt/Source/Basalt/<Module>/`): `Core` (application, window, input, log, file system,
+command line), `Events`, `Math`, `Renderer` (device, scene renderer, IBL, debug lines), `ImGui`, `Scene`
+(EnTT scene, components, component registry, serialization), `Asset` (glTF, images, primitives, asset
+cache), `Physics` (Jolt), `Audio` (miniaudio), `Particles` (CPU particle simulation), `Scripting` (Lua
+5.4 + sol2; timers, coroutines, events), `Project` (project files, exporter, save data), `Automation`
+(command API, session, TCP server).
 
 Other directories: `Docs/` (scripting API, generated command/component references), `Tests/Data/FeatureTest`
 (the project that exercises every feature).
