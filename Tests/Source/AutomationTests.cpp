@@ -337,6 +337,37 @@ TEST_SUITE("Automation")
 		CHECK(RunError(registry, reopened, "render.screenshot", { { "path", "x.png" } }).find("GPU host") != std::string::npos);
 	}
 
+	TEST_CASE("play.step reports a scene switched by Lua, and stopping returns to the edit scene")
+	{
+		BasaltTest::TempProject temp("AutomationSceneSwitch");
+		CommandRegistry registry;
+		AutomationSession session;
+		Run(registry, session, "entity.create", { { "name", "InA" } });
+		Run(registry, session, "scene.save", { { "path", "Assets/Scenes/A.bscene" } });
+		Run(registry, session, "scene.new", { { "name", "B" }, { "empty", true } });
+		Run(registry, session, "entity.create", { { "name", "InB" } });
+		Run(registry, session, "scene.save", { { "path", "Assets/Scenes/B.bscene" } });
+		Run(registry, session, "scene.open", { { "path", "Assets/Scenes/A.bscene" } });
+
+		Run(registry, session, "play.start");
+		Run(registry, session, "lua.exec", { { "code", "Scene.Load('Assets/Scenes/B.bscene')" } });
+		const json step = Run(registry, session, "play.step");
+		CHECK(step["scene"] == "B");
+		CHECK(step["scenePath"] == "Assets/Scenes/B.bscene");
+		CHECK(Run(registry, session, "lua.exec", { { "code", "tostring(Scene.FindEntityByName('InB') ~= nil)" } })["result"] == "true");
+
+		// The edit scene is untouched: still A, and saving writes A's file.
+		Run(registry, session, "play.stop");
+		const json info = Run(registry, session, "scene.info");
+		CHECK(info["path"] == "Assets/Scenes/A.bscene");
+		CHECK(info["entities"] == 1);
+		Run(registry, session, "scene.save");
+		const auto saved = FileSystem::ReadTextFile(temp.GetDirectory() / "Assets/Scenes/A.bscene");
+		REQUIRE(saved);
+		CHECK(saved->find("InA") != std::string::npos);
+		CHECK(saved->find("InB") == std::string::npos);
+	}
+
 	TEST_CASE("Play mode runs a copy of the scene, steps deterministically and accepts input")
 	{
 		BasaltTest::TempProject temp("AutomationPlay");

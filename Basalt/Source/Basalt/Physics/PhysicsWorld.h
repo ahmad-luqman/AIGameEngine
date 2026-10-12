@@ -102,8 +102,8 @@ namespace Basalt {
 		void Start();
 		// Runs as many fixed steps as the accumulated time allows, then dispatches contact events.
 		void Step(Timestep ts);
-		// Builds the bodies, characters and joints of entities a scene load just added (Scene::RequestLoad) right
-		// away, as Start does, so their scripts' OnCreate finds them.
+		// Applies every pending physics change right away, as Start does: called by Scene::ApplyPendingLoad so the
+		// bodies, characters and joints of the entities a scene load just added exist before their OnCreate.
 		void OnSceneLoaded();
 		void OnEntityDestroyed(Entity entity);
 
@@ -182,15 +182,15 @@ namespace Basalt {
 	private:
 		// Rebuilds (or removes) the entity's character; keeps its velocity and the last Move velocity.
 		void RecreateCharacter(Entity entity);
-		// Colliders are sized by the entity's world scale, which a script, an animation or a parent can change
-		// without touching a physics component. Once per Step, after dirty entities are rebuilt, bodies and
-		// characters whose scale differs from the one they were built with get a new shape in place, keeping
-		// their contacts (so an animated scale does not end and restart every overlap each frame); a body's
-		// joints are rebuilt from the current poses, since their anchors scale with it.
-		// Entities left without a body by a degenerate transform are built once it decomposes again.
 		// Rebuilds bodies and characters whose components changed, resizes rescaled ones and rebuilds dirty
-		// joints (the start of every Step).
+		// joints (the start of every Step, and OnSceneLoaded).
 		void ApplyPendingChanges();
+		// Colliders are sized by the entity's world scale, which a script, an animation or a parent can change
+		// without touching a physics component. Once per Step (and on a scene load), after dirty entities are
+		// rebuilt, bodies and characters whose scale differs from the one they were built with get a new shape in
+		// place, keeping their contacts (so an animated scale does not end and restart every overlap each frame);
+		// a body's joints are rebuilt from the current poses, since their anchors scale with it.
+		// Entities left without a body by a degenerate transform are built once it decomposes again.
 		void ApplyScaleChanges();
 		void ResizeBody(Entity entity, const glm::vec3& scale);
 		void ResizeCharacter(Entity entity, const glm::vec3& scale);

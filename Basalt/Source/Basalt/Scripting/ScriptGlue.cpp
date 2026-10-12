@@ -48,11 +48,32 @@ namespace Basalt {
 
 	namespace {
 
+		constexpr const char* NotRunningError = "this function is only available while the scene is running";
+
 		Scene& RequireScene(ScriptContext& context)
 		{
 			if (!context.SceneContext)
-				throw std::runtime_error("this function is only available while the scene is running");
+				throw std::runtime_error(NotRunningError);
 			return *context.SceneContext;
+		}
+
+		// An omitted argument or an explicit nil.
+		bool IsNil(const sol::object& value)
+		{
+			return !value.valid() || value.get_type() == sol::type::lua_nil;
+		}
+
+		// A Lua integer, or a float with an integer value in int64 range ([-2^63, 2^63)); nullopt otherwise.
+		std::optional<int64_t> ToInteger(const sol::object& value)
+		{
+			if (value.get_type() != sol::type::number)
+				return std::nullopt;
+			if (value.is<int64_t>())
+				return value.as<int64_t>();
+			const double number = value.as<double>();
+			if (std::trunc(number) != number || number < -0x1p63 || number >= 0x1p63)
+				return std::nullopt;
+			return static_cast<int64_t>(number);
 		}
 
 		sol::object MakeEntity(const sol::state_view& lua, ScriptContext& context, Entity entity)
@@ -124,7 +145,7 @@ namespace Basalt {
 		QueryOptions ParseQueryOptions(const PhysicsWorld& physics, const sol::object& options, bool allowAll)
 		{
 			QueryOptions result;
-			if (!options.valid() || options.get_type() == sol::type::lua_nil)
+			if (IsNil(options))
 				return result;
 			if (options.is<ScriptEntity>())
 			{
@@ -313,18 +334,10 @@ namespace Basalt {
 		{
 			if (value.get_type() != sol::type::number)
 				throw std::runtime_error(std::string("bad argument #1 to '") + function + "' (number expected, got " + sol::type_name(value.lua_state(), value.get_type()) + ")");
-			int64_t integer = 0;
-			if (value.is<int64_t>())
-				integer = value.as<int64_t>();
-			else
-			{
-				// Exactly the doubles an int64 holds: [-2^63, 2^63).
-				const double number = value.as<double>();
-				if (std::trunc(number) != number || number < -0x1p63 || number >= 0x1p63)
-					throw std::runtime_error(std::string("bad argument #1 to '") + function + "' (number has no integer representation)");
-				integer = static_cast<int64_t>(number);
-			}
-			return static_cast<uint32_t>(static_cast<uint64_t>(integer));
+			const std::optional<int64_t> integer = ToInteger(value);
+			if (!integer)
+				throw std::runtime_error(std::string("bad argument #1 to '") + function + "' (number has no integer representation)");
+			return static_cast<uint32_t>(static_cast<uint64_t>(*integer));
 		}
 
 		void RegisterMath(sol::state& lua, ScriptContext& context)
@@ -413,8 +426,8 @@ namespace Basalt {
 					const nlohmann::json json = data ? LuaToJson(*data) : nlohmann::json::object();
 					if (!ComponentRegistry::AddOrPatch(entity, name, json, error))
 						throw std::runtime_error(error);
-					if (name == "Script" && context.Engine)
-						context.Engine->EnsureInstance(entity); }, "RemoveComponent", [](const ScriptEntity& self, const std::string& name) {
+					if (name == "Script" && context.Host)
+						context.Host->EnsureInstances({ entity }); }, "RemoveComponent", [](const ScriptEntity& self, const std::string& name) {
 					const ComponentInfo& info = RequireComponent(name);
 					if (info.IsCore)
 						throw std::runtime_error("component '" + name + "' cannot be removed");
@@ -485,7 +498,7 @@ namespace Basalt {
 
 										   "GetScript", [&context](const ScriptEntity& self) -> sol::object {
 					self.ResolveOrThrow();
-					return context.GetInstance ? context.GetInstance(self.ID) : sol::object(sol::lua_nil); }, "Destroy", [&context](const ScriptEntity& self) {
+					return context.Host ? context.Host->GetInstance(self.ID) : sol::object(sol::lua_nil); }, "Destroy", [&context](const ScriptEntity& self) {
 					if (Entity entity = self.Resolve())
 						RequireScene(context).DestroyEntity(entity); },
 
@@ -535,7 +548,7 @@ namespace Basalt {
 					throw std::runtime_error(error);
 				if (position)
 					root.GetTransform().Translation = *position;
-				if (context.Engine)
+				if (context.Host)
 				{
 					// Root first, then descendants depth-first.
 					std::vector<Entity> tree;
@@ -545,7 +558,7 @@ namespace Basalt {
 							collect(child);
 					};
 					collect(root);
-					context.Engine->EnsureInstances(tree);
+					context.Host->EnsureInstances(tree);
 				}
 				return MakeEntity(state, context, root);
 			};
@@ -676,32 +689,18 @@ namespace Basalt {
 			game["Quit"] = [&context]() { RequireScene(context).RequestQuit(); };
 		}
 
-		ScriptTasks& RequireTasks(ScriptContext& context)
+		ScriptHost& RequireHost(ScriptContext& context)
 		{
-			if (!context.Tasks)
-				throw std::runtime_error("this function is only available while the scene is running");
-			return *context.Tasks;
-		}
-
-		ScriptEvents& RequireEvents(ScriptContext& context)
-		{
-			if (!context.Events)
-				throw std::runtime_error("this function is only available while the scene is running");
-			return *context.Events;
-		}
-
-		SaveData& RequireStorage(ScriptContext& context)
-		{
-			if (!context.GetStorage)
-				throw std::runtime_error("this function is only available while the scene is running");
-			return context.GetStorage();
+			if (!context.Host)
+				throw std::runtime_error(NotRunningError);
+			return *context.Host;
 		}
 
 		// The owner of a timer or event handler the running code creates. An owner that is no longer active
 		// (for example in OnDestroy) would never run it, which is an error rather than a silent no-op.
 		UUID RequireActiveOwner(ScriptContext& context, const char* function)
 		{
-			if (!context.IsOwnerActive || !context.IsOwnerActive(context.CurrentOwner))
+			if (!RequireHost(context).IsOwnerActive(context.CurrentOwner))
 				throw std::runtime_error(std::string(function) + ": the calling script instance is being destroyed or has failed, so this would never run");
 			return context.CurrentOwner;
 		}
@@ -727,27 +726,12 @@ namespace Basalt {
 			return seconds;
 		}
 
-		// A whole number (a Lua integer or an integral float) in [min, max].
 		int64_t RequireInteger(const sol::object& value, const char* function, const char* argument, int64_t min, int64_t max)
 		{
-			const std::string range = std::string(function) + ": " + argument + " must be an integer from " + std::to_string(min) + " to " + std::to_string(max);
-			if (value.get_type() != sol::type::number)
-				throw std::runtime_error(range);
-			int64_t integer = 0;
-			if (value.is<int64_t>())
-			{
-				integer = value.as<int64_t>();
-			}
-			else
-			{
-				const double number = value.as<double>();
-				if (std::trunc(number) != number || number < static_cast<double>(min) || number > static_cast<double>(max))
-					throw std::runtime_error(range);
-				integer = static_cast<int64_t>(number);
-			}
-			if (integer < min || integer > max)
-				throw std::runtime_error(range);
-			return integer;
+			const std::optional<int64_t> integer = ToInteger(value);
+			if (!integer || *integer < min || *integer > max)
+				throw std::runtime_error(std::string(function) + ": " + argument + " must be an integer from " + std::to_string(min) + " to " + std::to_string(max));
+			return *integer;
 		}
 
 		std::string RequireName(const sol::object& value, const char* function, const char* what)
@@ -757,11 +741,24 @@ namespace Basalt {
 			return value.as<std::string>();
 		}
 
+		// Raw identity of two Lua values. sol's operator== compares on each reference's own thread, which is wrong
+		// when one was obtained inside a coroutine; both are pushed onto one stack here.
+		bool RawEqual(const sol::object& a, const sol::object& b)
+		{
+			lua_State* state = b.lua_state();
+			a.push(state);
+			b.push(state);
+			const bool equal = lua_rawequal(state, -1, -2) != 0;
+			lua_pop(state, 2);
+			return equal;
+		}
+
 		// The instance an instance method was called on (self:StartCoroutine(...)), by its entity's UUID. With
 		// requireActive, an instance that is being destroyed or has failed is an error (what it would start
 		// could never run); otherwise such an instance is accepted (stopping its coroutines is harmless).
 		UUID RequireInstance(ScriptContext& context, const sol::object& self, const char* function, bool requireActive)
 		{
+			ScriptHost& host = RequireHost(context);
 			const auto usage = std::string(function) + " must be called on a script instance (self:" + function + "(...))";
 			if (self.get_type() != sol::type::table)
 				throw std::runtime_error(usage);
@@ -769,13 +766,20 @@ namespace Basalt {
 			if (!entity.is<ScriptEntity>())
 				throw std::runtime_error(usage);
 			const UUID id = entity.as<ScriptEntity>().ID;
-			if (requireActive && !context.IsOwnerActive(id))
+			if (requireActive && !host.IsOwnerActive(id))
 				throw std::runtime_error(std::string(function) + ": this instance is being destroyed or has failed, so the coroutine would never run");
-			// Only the instance itself may act for its entity. GetInstance's nil (an instance that is gone) has no
-			// Lua state, so it must not be compared.
-			const sol::object instance = context.GetInstance ? context.GetInstance(id) : sol::object(sol::lua_nil);
-			if (instance.valid() ? instance != self : requireActive)
+			// Only the instance itself may act for its entity. GetInstance returns nil (which has no Lua state, so
+			// it must not be compared) for an instance that is gone.
+			const sol::object instance = host.GetInstance(id);
+			if (instance.valid())
+			{
+				if (!RawEqual(instance, self))
+					throw std::runtime_error(usage);
+			}
+			else if (requireActive)
+			{
 				throw std::runtime_error(usage);
+			}
 			return id;
 		}
 
@@ -784,9 +788,8 @@ namespace Basalt {
 		// nothing here may own resources with destructors.
 		ScriptTasks* WaitTarget(lua_State* state, const char* function)
 		{
-			auto* context = static_cast<ScriptContext*>(lua_touserdata(state, lua_upvalueindex(1)));
-			ScriptTasks* tasks = context->Tasks;
-			if (!tasks || !tasks->IsRunningCoroutine(state))
+			const auto* context = static_cast<const ScriptContext*>(lua_touserdata(state, lua_upvalueindex(1)));
+			if (!context->Host || !context->Host->GetTasks().IsRunningCoroutine(state))
 			{
 				luaL_error(state, "%s can only be called in a coroutine started with self:StartCoroutine", function);
 				return nullptr;
@@ -796,7 +799,7 @@ namespace Basalt {
 				luaL_error(state, "%s cannot suspend the coroutine here (inside a function called from C, such as an event handler run by Events.Emit)", function);
 				return nullptr;
 			}
-			return tasks;
+			return &context->Host->GetTasks();
 		}
 
 		int LuaWait(lua_State* state)
@@ -804,7 +807,9 @@ namespace Basalt {
 			const lua_Number seconds = lua_type(state, 1) == LUA_TNUMBER ? lua_tonumber(state, 1) : -1.0;
 			if (!std::isfinite(seconds) || seconds < 0.0)
 				return luaL_error(state, "Wait: seconds must be a finite number >= 0");
-			WaitTarget(state, "Wait")->SetWaitSeconds(seconds);
+			ScriptTasks* tasks = WaitTarget(state, "Wait");
+			if (!tasks || !tasks->RequestWaitSeconds(state, seconds))
+				return luaL_error(state, "Wait can only be called in a coroutine started with self:StartCoroutine");
 			return lua_yield(state, 0);
 		}
 
@@ -814,7 +819,9 @@ namespace Basalt {
 			const lua_Integer frames = lua_type(state, 1) == LUA_TNUMBER ? lua_tointegerx(state, 1, &isInteger) : 0;
 			if (!isInteger || frames < 1)
 				return luaL_error(state, "WaitFrames: frames must be an integer >= 1");
-			WaitTarget(state, "WaitFrames")->SetWaitFrames(static_cast<uint64_t>(frames));
+			ScriptTasks* tasks = WaitTarget(state, "WaitFrames");
+			if (!tasks || !tasks->RequestWaitFrames(state, static_cast<uint64_t>(frames)))
+				return luaL_error(state, "WaitFrames can only be called in a coroutine started with self:StartCoroutine");
 			return lua_yield(state, 0);
 		}
 
@@ -826,30 +833,71 @@ namespace Basalt {
 			lua_setglobal(state, name);
 		}
 
+		// TaskHandle/EventHandle: Cancel and IsActive act on the running session's registry and report false
+		// once play has stopped.
+		template<typename Handle, typename Registry>
+		void RegisterHandleType(sol::state& lua, ScriptContext& context, const char* name, Registry& (ScriptHost::*registry)())
+		{
+			auto active = [&context, registry]() -> Registry* { return context.Host ? &(context.Host->*registry)() : nullptr; };
+			lua.new_usertype<Handle>(
+				name, sol::no_constructor, "Cancel", [active](const Handle& handle) { Registry* found = active(); return found != nullptr && found->Cancel(handle.ID); }, "IsActive", [active](const Handle& handle) { Registry* found = active(); return found != nullptr && found->IsActive(handle.ID); }, sol::meta_function::equal_to, [](const Handle& a, const Handle& b) { return a.ID == b.ID; }, sol::meta_function::to_string, [name](const Handle& handle) { return std::string(name) + "(" + std::to_string(handle.ID) + ")"; });
+		}
+
+		// Values Storage can save exactly: Save writes JSON, which has no NaN or infinity (they would come back as
+		// null) and only UTF-8 text (other bytes would be replaced). Throws naming the problem.
+		void RequireStorable(const nlohmann::json& value, const std::string& function)
+		{
+			if (value.is_number_float() && !std::isfinite(value.get<double>()))
+				throw std::runtime_error(function + ": numbers must be finite (NaN and infinity cannot be saved)");
+			if (value.is_structured())
+			{
+				for (const auto& item : value)
+					RequireStorable(item, function);
+			}
+			if (value.is_string() || value.is_object())
+			{
+				try
+				{
+					// Strict UTF-8 check of strings and object keys (dumping throws on invalid bytes).
+					(void)value.dump();
+				}
+				catch (const nlohmann::json::type_error&)
+				{
+					throw std::runtime_error(function + ": strings must be valid UTF-8 text");
+				}
+			}
+		}
+
+		// Storage.Save/Load results: true, or false and the reason (also logged), so a game can tell the player.
+		std::tuple<bool, sol::optional<std::string>> StorageResult(const char* function, bool succeeded, const std::string& error)
+		{
+			if (succeeded)
+				return { true, sol::nullopt };
+			BS_CORE_ERROR("{}: {}", function, error);
+			return { false, error };
+		}
+
 		// Key under which the registry holds the instance-metatable factory (MakeInstanceMetatable).
 		constexpr const char* InstanceMetatableFactoryKey = "Basalt.InstanceMetatableFactory";
 
 		void RegisterGameplay(sol::state& lua, ScriptContext& context)
 		{
-			lua.new_usertype<ScriptTaskHandle>(
-				"TaskHandle", sol::no_constructor, "Cancel", [&context](const ScriptTaskHandle& handle) { return context.Tasks != nullptr && context.Tasks->Cancel(handle.ID); }, "IsActive", [&context](const ScriptTaskHandle& handle) { return context.Tasks != nullptr && context.Tasks->IsActive(handle.ID); }, sol::meta_function::equal_to, [](const ScriptTaskHandle& a, const ScriptTaskHandle& b) { return a.ID == b.ID; }, sol::meta_function::to_string, [](const ScriptTaskHandle& handle) { return "TaskHandle(" + std::to_string(handle.ID) + ")"; });
-			lua.new_usertype<ScriptEventHandle>(
-				"EventHandle", sol::no_constructor, "Cancel", [&context](const ScriptEventHandle& handle) { return context.Events != nullptr && context.Events->Cancel(handle.ID); }, "IsActive", [&context](const ScriptEventHandle& handle) { return context.Events != nullptr && context.Events->IsActive(handle.ID); }, sol::meta_function::equal_to, [](const ScriptEventHandle& a, const ScriptEventHandle& b) { return a.ID == b.ID; }, sol::meta_function::to_string, [](const ScriptEventHandle& handle) { return "EventHandle(" + std::to_string(handle.ID) + ")"; });
+			RegisterHandleType<ScriptTaskHandle>(lua, context, "TaskHandle", &ScriptHost::GetTasks);
+			RegisterHandleType<ScriptEventHandle>(lua, context, "EventHandle", &ScriptHost::GetEvents);
 
 			sol::table timer = lua.create_named_table("Timer");
 			timer["After"] = [&context](const sol::object& seconds, const sol::object& callback) {
-				ScriptTasks& tasks = RequireTasks(context);
+				ScriptTasks& tasks = RequireHost(context).GetTasks();
 				const double delay = RequireSeconds(seconds, "Timer.After", false);
-				sol::protected_function function = RequireFunction(callback, "Timer.After");
-				return ScriptTaskHandle{ tasks.AddTimer(RequireActiveOwner(context, "Timer.After"), std::move(function), delay, 0.0, 1) };
+				const sol::protected_function function = RequireFunction(callback, "Timer.After");
+				return ScriptTaskHandle{ tasks.AddOneShot(RequireActiveOwner(context, "Timer.After"), function, delay) };
 			};
 			timer["Every"] = [&context](const sol::object& seconds, const sol::object& callback, const sol::object& count) {
-				ScriptTasks& tasks = RequireTasks(context);
+				ScriptTasks& tasks = RequireHost(context).GetTasks();
 				const double interval = RequireSeconds(seconds, "Timer.Every", true);
-				sol::protected_function function = RequireFunction(callback, "Timer.Every");
-				const bool limited = count.valid() && count.get_type() != sol::type::lua_nil;
-				const auto times = limited ? static_cast<uint32_t>(RequireInteger(count, "Timer.Every", "count", 1, std::numeric_limits<uint32_t>::max())) : 0u;
-				return ScriptTaskHandle{ tasks.AddTimer(RequireActiveOwner(context, "Timer.Every"), std::move(function), interval, interval, times) };
+				const sol::protected_function function = RequireFunction(callback, "Timer.Every");
+				const auto times = IsNil(count) ? 0u : static_cast<uint32_t>(RequireInteger(count, "Timer.Every", "count", 1, std::numeric_limits<uint32_t>::max()));
+				return ScriptTaskHandle{ tasks.AddRepeating(RequireActiveOwner(context, "Timer.Every"), function, interval, times) };
 			};
 
 			RegisterWaitFunction(lua, context, "Wait", &LuaWait);
@@ -858,18 +906,22 @@ namespace Basalt {
 			// Methods every script instance has (self:StartCoroutine(...)), unless its class defines its own.
 			sol::table methods = lua.create_table();
 			methods["StartCoroutine"] = [&context](sol::this_state state, const sol::object& self, const sol::object& function, sol::variadic_args args) {
-				ScriptTasks& tasks = RequireTasks(context);
+				ScriptTasks& tasks = RequireHost(context).GetTasks();
 				const UUID owner = RequireInstance(context, self, "StartCoroutine", true);
 				const sol::protected_function body = RequireFunction(function, "StartCoroutine");
 				return ScriptTaskHandle{ tasks.StartCoroutine(state, owner, body, args) };
 			};
 			methods["StopCoroutine"] = [&context](const sol::object& self, const sol::object& handle) {
-				RequireInstance(context, self, "StopCoroutine", false);
+				ScriptTasks& tasks = RequireHost(context).GetTasks();
+				const UUID owner = RequireInstance(context, self, "StopCoroutine", false);
 				if (!handle.is<ScriptTaskHandle>())
 					throw std::runtime_error("StopCoroutine: expected the TaskHandle returned by StartCoroutine, got " + TypeName(handle));
-				return RequireTasks(context).Cancel(handle.as<ScriptTaskHandle>().ID);
+				const uint64_t id = handle.as<ScriptTaskHandle>().ID;
+				if (tasks.IsActive(id) && !tasks.IsCoroutineOf(id, owner))
+					throw std::runtime_error("StopCoroutine: the handle is a timer or another instance's coroutine (use handle:Cancel())");
+				return tasks.Cancel(id);
 			};
-			methods["StopAllCoroutines"] = [&context](const sol::object& self) { RequireTasks(context).CancelOwnedBy(RequireInstance(context, self, "StopAllCoroutines", false), true); };
+			methods["StopAllCoroutines"] = [&context](const sol::object& self) { RequireHost(context).GetTasks().CancelCoroutinesOwnedBy(RequireInstance(context, self, "StopAllCoroutines", false)); };
 
 			// Instances look a key up in their class first (which keeps class inheritance through metatables
 			// working), then in these methods.
@@ -893,29 +945,31 @@ namespace Basalt {
 
 			sol::table events = lua.create_named_table("Events");
 			auto subscribe = [&context](const sol::object& name, const sol::object& handler, bool once, const char* function) {
-				ScriptEvents& bus = RequireEvents(context);
+				ScriptEvents& bus = RequireHost(context).GetEvents();
 				const std::string eventName = RequireName(name, function, "the event name");
-				sol::protected_function callback = RequireFunction(handler, function);
-				return ScriptEventHandle{ bus.Subscribe(RequireActiveOwner(context, function), eventName, std::move(callback), once) };
+				const sol::protected_function callback = RequireFunction(handler, function);
+				return ScriptEventHandle{ bus.Subscribe(RequireActiveOwner(context, function), eventName, callback, once) };
 			};
 			events["On"] = [subscribe](const sol::object& name, const sol::object& handler) { return subscribe(name, handler, false, "Events.On"); };
 			events["Once"] = [subscribe](const sol::object& name, const sol::object& handler) { return subscribe(name, handler, true, "Events.Once"); };
 			events["Emit"] = [&context](sol::this_state state, const sol::object& name, sol::variadic_args args) {
-				ScriptEvents& bus = RequireEvents(context);
+				ScriptEvents& bus = RequireHost(context).GetEvents();
 				return bus.Emit(state, RequireName(name, "Events.Emit", "the event name"), args);
 			};
 
 			sol::table storage = lua.create_named_table("Storage");
 			storage["Get"] = [&context](sol::this_state state, const sol::object& key, const sol::object& fallback) -> sol::object {
 				const std::string name = RequireName(key, "Storage.Get", "the key");
-				if (const nlohmann::json* value = RequireStorage(context).Find(name))
+				if (const nlohmann::json* value = RequireHost(context).GetStorage().Find(name))
 					return JsonToLua(state, *value);
-				return fallback.valid() ? fallback : sol::object(sol::lua_nil);
+				return IsNil(fallback) ? sol::object(sol::lua_nil) : fallback;
 			};
 			storage["Set"] = [&context](const sol::object& key, const sol::object& value) {
 				const std::string name = RequireName(key, "Storage.Set", "the key");
-				SaveData& data = RequireStorage(context);
-				if (!value.valid() || value.get_type() == sol::type::lua_nil)
+				const std::string function = "Storage.Set('" + name + "')";
+				RequireStorable(nlohmann::json(name), function);
+				SaveData& data = RequireHost(context).GetStorage();
+				if (IsNil(value))
 				{
 					data.Remove(name);
 					return;
@@ -925,39 +979,34 @@ namespace Basalt {
 				{
 					json = LuaToJson(value);
 				}
-				catch (const std::exception& e)
+				catch (const std::runtime_error& e)
 				{
-					throw std::runtime_error("Storage.Set('" + name + "'): " + e.what());
+					throw std::runtime_error(function + ": " + e.what());
 				}
+				RequireStorable(json, function);
 				data.Set(name, std::move(json));
 			};
-			storage["Has"] = [&context](const sol::object& key) { return RequireStorage(context).Find(RequireName(key, "Storage.Has", "the key")) != nullptr; };
-			storage["Delete"] = [&context](const sol::object& key) { return RequireStorage(context).Remove(RequireName(key, "Storage.Delete", "the key")); };
-			storage["Clear"] = [&context]() { RequireStorage(context).Clear(); };
+			storage["Has"] = [&context](const sol::object& key) { return RequireHost(context).GetStorage().Find(RequireName(key, "Storage.Has", "the key")) != nullptr; };
+			storage["Delete"] = [&context](const sol::object& key) { return RequireHost(context).GetStorage().Remove(RequireName(key, "Storage.Delete", "the key")); };
+			storage["Clear"] = [&context]() { RequireHost(context).GetStorage().Clear(); };
 			storage["GetKeys"] = [&context](sol::this_state state) {
 				sol::state_view view(state);
 				sol::table keys = view.create_table();
-				for (const std::string& key : RequireStorage(context).GetKeys())
+				for (const std::string& key : RequireHost(context).GetStorage().GetKeys())
 					keys.add(key);
 				return keys;
 			};
-			// Both return true, or false and the reason (also logged), so a game can tell the player.
-			storage["Save"] = [&context]() -> std::tuple<bool, sol::optional<std::string>> {
+			storage["Save"] = [&context]() {
 				std::string error;
-				if (RequireStorage(context).Save(error))
-					return { true, sol::nullopt };
-				BS_CORE_ERROR("Storage.Save: {}", error);
-				return { false, error };
+				const bool saved = RequireHost(context).GetStorage().Save(error);
+				return StorageResult("Storage.Save", saved, error);
 			};
-			storage["Load"] = [&context]() -> std::tuple<bool, sol::optional<std::string>> {
+			storage["Load"] = [&context]() {
 				std::string error;
-				if (RequireStorage(context).Load(error))
-					return { true, sol::nullopt };
-				BS_CORE_ERROR("Storage.Load: {}", error);
-				return { false, error };
+				const bool loaded = RequireHost(context).LoadStorage(error);
+				return StorageResult("Storage.Load", loaded, error);
 			};
 		}
-
 	}
 
 	void RegisterScriptBindings(sol::state& lua, ScriptContext& context)

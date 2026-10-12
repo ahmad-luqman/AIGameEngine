@@ -7,13 +7,8 @@
 FeatureTest = { Checks = 0, Failures = {}, Phase = "create", Quit = false }
 FeatureTestEvents = FeatureTestEvents or {}
 
-local function Check(name, condition)
-	FeatureTest.Checks = FeatureTest.Checks + 1
-	if not condition then
-		table.insert(FeatureTest.Failures, name)
-		Log.Error("FeatureTest FAILED: " .. name)
-	end
-end
+local Checks = require("Assets.Scripts.Lib.Checks").New(FeatureTest, "FeatureTest")
+local Check, Expect, ExpectError = Checks.Check, Checks.Expect, Checks.ExpectError
 
 local function Near(a, b, epsilon)
 	return math.abs(a - b) <= (epsilon or 1e-4)
@@ -21,16 +16,6 @@ end
 
 local function NearVec(a, b, epsilon)
 	return Near(a.x, b.x, epsilon) and Near(a.y, b.y, epsilon) and Near(a.z, b.z, epsilon)
-end
-
-local function Expect(name, fn)
-	local ok, err = pcall(fn)
-	Check(name .. (ok and "" or (": " .. tostring(err))), ok)
-end
-
-local function ExpectError(name, fn, fragment)
-	local ok, err = pcall(fn)
-	Check(name, (not ok) and (fragment == nil or string.find(tostring(err), fragment, 1, true) ~= nil))
 end
 
 function FeatureTest.Report()
@@ -288,6 +273,7 @@ local function TestGameplay(self)
 	Check("StartCoroutine runs to the first wait", #g.Trace == 1 and self.Routine:IsActive())
 	local looping = self:StartCoroutine(function() while true do Wait(1) end end)
 	Check("StopCoroutine", self:StopCoroutine(looping) and not looping:IsActive())
+	ExpectError("StopCoroutine only stops coroutines", function() self:StopCoroutine(self.AfterTimer) end, "is a timer")
 	ExpectError("Wait outside a coroutine", function() Wait(1) end, "can only be called in a coroutine")
 	ExpectError("WaitFrames needs a whole number", function() WaitFrames(0) end, "integer >= 1")
 

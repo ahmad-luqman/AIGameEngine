@@ -1,8 +1,7 @@
 #include "Basalt/Scene/Scene.h"
 
 #include "Basalt/Audio/AudioSystem.h"
-#include "Basalt/Core/FileSystem.h"
-#include "Basalt/Core/JsonUtils.h"
+#include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Particles/ParticleSystem.h"
 #include "Basalt/Physics/PhysicsWorld.h"
@@ -564,9 +563,10 @@ namespace Basalt {
 			return false;
 		}
 
-		// Scripts name scenes inside the project only, like every other asset they load by path.
+		// Only scenes inside the project (stricter than Scene.Instantiate): a scene switch replaces the whole
+		// game, so it must not come from outside it.
 		const std::filesystem::path relative = std::filesystem::path(path).lexically_normal();
-		if (path.empty() || relative.has_root_name() || relative.has_root_directory() || relative.empty() || *relative.begin() == "..")
+		if (relative.empty() || relative.has_root_name() || relative.has_root_directory() || *relative.begin() == "..")
 		{
 			outError = "'" + path + "' must be a project-relative path inside the project";
 			return false;
@@ -577,22 +577,13 @@ namespace Basalt {
 			return false;
 		}
 
-		const std::optional<std::string> text = FileSystem::ReadTextFile(Project::ResolvePath(relative));
-		if (!text)
-		{
-			outError = "cannot read '" + path + "'";
+		std::optional<nlohmann::json> data = SceneSerializer::ReadSceneFile(Project::ResolvePath(relative), path, outError);
+		if (!data)
 			return false;
-		}
-		nlohmann::json data = ParseJson(*text);
-		if (data.is_discarded())
-		{
-			outError = "'" + path + "' is not valid JSON";
-			return false;
-		}
 		// Fully validated now (a scratch copy is built and discarded), so applying it at the end of the frame
 		// cannot fail halfway with the old scene already gone.
 		Scene scratch;
-		if (!SceneSerializer::DeserializeScene(scratch, data, outError))
+		if (!SceneSerializer::DeserializeScene(scratch, *data, outError))
 		{
 			outError = relative.filename().string() + ": " + outError;
 			return false;
@@ -600,7 +591,7 @@ namespace Basalt {
 
 		if (m_PendingLoad)
 			BS_CORE_WARN("Scene.Load: '{}' replaces the load of '{}' requested earlier this frame", relative.generic_string(), m_PendingLoad->Path);
-		m_PendingLoad = CreateScope<PendingLoad>(PendingLoad{ relative.generic_string(), std::move(data) });
+		m_PendingLoad = CreateScope<PendingLoad>(PendingLoad{ relative.generic_string(), std::move(*data) });
 		return true;
 	}
 
@@ -612,23 +603,43 @@ namespace Basalt {
 		return true;
 	}
 
-	bool Scene::IsPersistent(Entity entity)
+	bool Scene::IsPersistent(Entity entity) const
 	{
 		if (!entity || entity.GetScene() != this)
 			return false;
-		Entity root = entity;
-		while (Entity parent = root.GetParent())
-			root = parent;
-		return m_PersistentEntities.contains(root.GetUUID());
+		for (Entity current = entity; current; current = current.GetParent())
+		{
+			if (m_PersistentEntities.contains(current.GetUUID()))
+				return true;
+		}
+		return false;
+	}
+
+	void Scene::ReportLoadProblem(const std::string& message)
+	{
+		BS_CORE_ERROR("{}", message);
+		// Caused by scripts (or an engine bug): make it visible to them and to play.step's scriptErrors.
+		if (m_ScriptEngine)
+			m_ScriptEngine->ReportError(message);
 	}
 
 	void Scene::ApplyPendingLoad()
 	{
 		const Scope<PendingLoad> load = std::move(m_PendingLoad);
 
-		// Unload: OnDestroy may spawn entities, which a second pass destroys too.
+		// Unload: OnDestroy may spawn entities, which a further pass destroys too.
 		for (int pass = 0;; pass++)
 		{
+			// A persistent entity that was parented under one that is not leaves that tree first (keeping its
+			// world transform), so it survives as promised.
+			const std::vector<UUID> persistent(m_PersistentEntities.begin(), m_PersistentEntities.end());
+			for (UUID uuid : persistent)
+			{
+				Entity entity = GetEntityByUUID(uuid);
+				if (entity && entity.GetParent() && !IsPersistent(entity.GetParent()))
+					SetParent(entity, {}, true);
+			}
+
 			std::vector<UUID> doomed;
 			for (UUID root : m_RootEntities)
 			{
@@ -639,7 +650,10 @@ namespace Basalt {
 				break;
 			if (pass == MaxUnloadPasses)
 			{
-				BS_CORE_WARN("Scene.Load: {} entities spawned by OnDestroy while '{}' was unloading are kept in '{}'", doomed.size(), m_Name, load->Path);
+				std::string names;
+				for (UUID root : doomed)
+					names += (names.empty() ? "'" : ", '") + GetEntityByUUID(root).GetName() + "'";
+				ReportLoadProblem("Scene.Load: entities that OnDestroy keeps spawning while '" + m_Name + "' unloads are kept in '" + load->Path + "': " + names);
 				break;
 			}
 			m_DeferDestruction++;
@@ -650,8 +664,9 @@ namespace Basalt {
 		}
 
 		// An entity of the file that is already here (normally the persistent copy of a manager every level
-		// contains) is skipped together with its descendants, which the kept entity already has.
-		nlohmann::json data = load->Data;
+		// contains) is skipped together with all its descendants in the file, whether or not the kept entity has
+		// them: the kept tree stays exactly as it is.
+		nlohmann::json data = std::move(load->Data);
 		size_t skipped = 0;
 		if (auto entities = data.find("Entities"); entities != data.end() && entities->is_array())
 		{
@@ -689,7 +704,8 @@ namespace Basalt {
 			}
 		}
 
-		// Settings the file leaves out take their defaults, not the previous scene's values.
+		// Settings the file leaves out take their defaults, not the previous scene's values (the debug view is a
+		// viewing aid, not scene data, so it stays).
 		const RendererDebugView debugView = m_RendererSettings.DebugView;
 		m_RendererSettings = RendererSettings{};
 		m_RendererSettings.DebugView = debugView;
@@ -701,11 +717,11 @@ namespace Basalt {
 		for (const auto& [uuid, handle] : m_EntityMap)
 			existing.insert(uuid);
 		std::string error;
-		if (!SceneSerializer::DeserializeScene(*this, data, error))
-		{
-			// RequestLoad validated the file, so only an engine bug gets here; keep whatever was created.
-			BS_CORE_ERROR("Scene.Load: '{}' failed to load after validation: {}", load->Path, error);
-		}
+		const bool loaded = SceneSerializer::DeserializeScene(*this, data, error);
+		// RequestLoad validated the file, so only an engine bug gets here; keep and start whatever was created.
+		BS_CORE_ASSERT(loaded, "a validated scene failed to load");
+		if (!loaded)
+			ReportLoadProblem("Scene.Load: '" + load->Path + "' failed to load after validation (an engine bug): " + error);
 
 		std::vector<Entity> created;
 		for (Entity entity : GetAllEntitiesOrdered())
@@ -729,7 +745,8 @@ namespace Basalt {
 		m_DeferDestruction--;
 		FlushPendingDestruction();
 
-		BS_CORE_INFO("Scene: loaded '{}' ({} entities; {} kept from the previous scene, {} of the file's skipped as already present)", load->Path, created.size(), existing.size(), skipped);
+		if (loaded)
+			BS_CORE_INFO("Scene: loaded '{}' ({} entities; {} kept from the previous scene, {} of the file's skipped as already present)", load->Path, created.size(), existing.size(), skipped);
 	}
 
 	Entity Entity::GetParent() const

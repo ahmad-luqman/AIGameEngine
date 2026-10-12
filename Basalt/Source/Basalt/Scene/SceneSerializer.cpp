@@ -9,6 +9,7 @@
 
 #include <ranges>
 #include <set>
+#include <system_error>
 #include <unordered_map>
 
 namespace Basalt {
@@ -426,33 +427,47 @@ namespace Basalt {
 			outError = "cannot write '" + path.string() + "'";
 			return false;
 		}
-		scene.SetPath(Project::MakeRelative(path));
+		scene.m_Path = ScenePathOf(path);
 		return true;
 	}
 
-	Ref<Scene> SceneSerializer::LoadScene(const std::filesystem::path& path, std::string& outError)
+	std::optional<json> SceneSerializer::ReadSceneFile(const std::filesystem::path& path, const std::string& displayName, std::string& outError)
 	{
 		const auto text = FileSystem::ReadTextFile(path);
 		if (!text)
 		{
-			outError = "cannot read '" + path.string() + "'";
-			return nullptr;
+			std::error_code error;
+			outError = "cannot read '" + displayName + "'" + (std::filesystem::exists(path, error) ? std::string() : " (no such file: '" + path.string() + "')");
+			return std::nullopt;
 		}
-
 		json data = ParseJson(*text);
 		if (data.is_discarded())
 		{
-			outError = "'" + path.string() + "' is not valid JSON";
-			return nullptr;
+			outError = "'" + displayName + "' is not valid JSON";
+			return std::nullopt;
 		}
+		return data;
+	}
+
+	std::string SceneSerializer::ScenePathOf(const std::filesystem::path& path)
+	{
+		const std::string relative = Project::MakeRelative(path);
+		return std::filesystem::path(relative).is_absolute() ? path.lexically_normal().generic_string() : std::filesystem::path(relative).lexically_normal().generic_string();
+	}
+
+	Ref<Scene> SceneSerializer::LoadScene(const std::filesystem::path& path, std::string& outError)
+	{
+		const std::optional<json> data = ReadSceneFile(path, path.string(), outError);
+		if (!data)
+			return nullptr;
 
 		Ref<Scene> scene = CreateRef<Scene>(path.stem().string());
-		if (!DeserializeScene(*scene, data, outError))
+		if (!DeserializeScene(*scene, *data, outError))
 		{
 			outError = path.filename().string() + ": " + outError;
 			return nullptr;
 		}
-		scene->SetPath(Project::MakeRelative(path));
+		scene->m_Path = ScenePathOf(path);
 		return scene;
 	}
 

@@ -1,39 +1,54 @@
 #include "Basalt/Scripting/ScriptEvents.h"
 
+#include "Basalt/Core/Assert.h"
 #include "Basalt/Scripting/ScriptGlue.h"
 
 #include <stdexcept>
-#include <utility>
+#include <vector>
 
 namespace Basalt {
 
-	ScriptEvents::ScriptEvents(ScriptContext& context)
-		: m_Context(context)
+	namespace {
+
+		// Counts the nesting of Emit for the lifetime of one call.
+		class DepthGuard
+		{
+		public:
+			explicit DepthGuard(int& depth)
+				: m_Depth(depth)
+			{
+				m_Depth++;
+			}
+			~DepthGuard() { m_Depth--; }
+
+			DepthGuard(const DepthGuard&) = delete;
+			DepthGuard& operator=(const DepthGuard&) = delete;
+
+		private:
+			int& m_Depth;
+		};
+
+	}
+
+	ScriptEvents::ScriptEvents(const sol::state_view& lua, ScriptContext& context, ScriptHost& host)
+		: m_MainState(lua.lua_state())
+		, m_Context(context)
+		, m_Host(host)
 	{
 	}
 
-	uint64_t ScriptEvents::Subscribe(UUID owner, const std::string& name, sol::protected_function handler, bool once)
+	uint64_t ScriptEvents::Subscribe(UUID owner, const std::string& name, const sol::protected_function& handler, bool once)
 	{
+		BS_CORE_ASSERT(!name.empty(), "event names are validated by the bindings");
 		const uint64_t id = m_NextID++;
-		m_Subscriptions.emplace(id, Subscription{ .Owner = owner, .Name = name, .Handler = std::move(handler), .Once = once });
-		m_ByName[name].push_back(id);
+		// Rebound to the main thread: the handler may come from a coroutine, whose thread can be collected first.
+		m_Subscriptions.emplace(id, Subscription{ .Owner = owner, .Name = name, .Handler = sol::protected_function(m_MainState, handler), .Once = once });
 		return id;
 	}
 
 	bool ScriptEvents::Cancel(uint64_t id)
 	{
-		auto it = m_Subscriptions.find(id);
-		if (it == m_Subscriptions.end())
-			return false;
-		auto byName = m_ByName.find(it->second.Name);
-		if (byName != m_ByName.end())
-		{
-			std::erase(byName->second, id);
-			if (byName->second.empty())
-				m_ByName.erase(byName);
-		}
-		m_Subscriptions.erase(it);
-		return true;
+		return m_Subscriptions.erase(id) > 0;
 	}
 
 	bool ScriptEvents::IsActive(uint64_t id) const
@@ -43,20 +58,12 @@ namespace Basalt {
 
 	void ScriptEvents::RemoveOwnedBy(UUID owner)
 	{
-		std::vector<uint64_t> owned;
-		for (const auto& [id, subscription] : m_Subscriptions)
-		{
-			if (subscription.Owner == owner)
-				owned.push_back(id);
-		}
-		for (uint64_t id : owned)
-			Cancel(id);
+		std::erase_if(m_Subscriptions, [owner](const auto& entry) { return entry.second.Owner == owner; });
 	}
 
 	void ScriptEvents::Clear()
 	{
 		m_Subscriptions.clear();
-		m_ByName.clear();
 	}
 
 	int ScriptEvents::Emit(lua_State* caller, const std::string& name, const sol::variadic_args& args)
@@ -64,25 +71,19 @@ namespace Basalt {
 		if (m_Depth >= MaxEmitDepth)
 			throw std::runtime_error("Events.Emit('" + name + "'): events nested more than " + std::to_string(MaxEmitDepth) + " levels deep (does a handler emit the event it handles?)");
 
-		auto byName = m_ByName.find(name);
-		if (byName == m_ByName.end())
-			return 0;
 		// Handlers subscribed by these handlers wait for the next emit.
-		const std::vector<uint64_t> ids = byName->second;
-
-		struct DepthGuard
+		std::vector<uint64_t> ids;
+		for (const auto& [id, subscription] : m_Subscriptions)
 		{
-			int& Depth;
-			explicit DepthGuard(int& depth)
-				: Depth(depth)
-			{
-				Depth++;
-			}
-			~DepthGuard() { Depth--; }
-			DepthGuard(const DepthGuard&) = delete;
-			DepthGuard& operator=(const DepthGuard&) = delete;
-		} depthGuard(m_Depth);
+			if (subscription.Name == name)
+				ids.push_back(id);
+		}
+		if (ids.empty())
+			return 0;
 
+		const DepthGuard depth(m_Depth);
+		const UUID emitter = m_Context.CurrentOwner;
+		const bool emitterActive = m_Host.IsOwnerActive(emitter);
 		int called = 0;
 		for (uint64_t id : ids)
 		{
@@ -91,7 +92,7 @@ namespace Basalt {
 			if (it == m_Subscriptions.end())
 				continue;
 			const UUID owner = it->second.Owner;
-			if (!m_Context.IsOwnerActive(owner))
+			if (!m_Host.IsOwnerActive(owner))
 				continue;
 			// Bound to the caller's thread, where the arguments are: Emit may run inside a coroutine.
 			const sol::protected_function handler(caller, it->second.Handler);
@@ -104,9 +105,15 @@ namespace Basalt {
 			if (!result.valid())
 			{
 				const sol::error error = result;
-				m_Context.FailOwner(owner, std::string(error.what()) + " (in a handler of event '" + name + "')");
+				// The session's handler would fail again on every emit; an instance's ends with its instance.
+				if (owner == 0)
+					Cancel(id);
+				m_Host.FailOwner(owner, error.what(), ("a handler of event '" + name + "'").c_str());
 			}
 		}
+
+		if (emitter != 0 && emitterActive && !m_Host.IsOwnerActive(emitter))
+			throw std::runtime_error("Events.Emit('" + name + "'): a handler of this instance failed (see the previous error), which disabled it");
 		return called;
 	}
 
