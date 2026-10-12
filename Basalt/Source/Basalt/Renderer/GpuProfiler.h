@@ -1,8 +1,9 @@
 #pragma once
 
+#include "Basalt/Core/Base.h"
+
 #include <nvrhi/nvrhi.h>
 
-#include <array>
 #include <cstdint>
 #include <initializer_list>
 #include <optional>
@@ -21,7 +22,8 @@ namespace Basalt {
 		// viewport current when the result arrives, which stays right even across a resize.
 		uint64_t RenderedPixels = 0;
 
-		// The frame time without the given passes (work that does not depend on the render scale).
+		// The frame time without the given passes (work that does not depend on the render scale). Indices
+		// outside the pass list are ignored.
 		float MillisecondsWithout(std::initializer_list<uint32_t> passes) const;
 	};
 
@@ -70,11 +72,34 @@ namespace Basalt {
 		std::vector<double> m_PassSums;
 	};
 
-	// Times a renderer's passes on the GPU with timer queries. Results arrive Latency frames later, when the
-	// slot holding the queries comes round again, and reading them never waits for the GPU: when they have not
-	// arrived yet, the slot is kept for later and the new frame is not timed (a dropped frame, counted). Pass
-	// scopes are also debug markers, so GPU captures show the same names. Without timer-query support (or when
-	// disabled) only the markers are recorded.
+	// The GPU side of GpuProfiler: timer queries addressed by index, and debug markers. The nvrhi backend is
+	// the real one; tests substitute a fake to exercise the profiler's frame bookkeeping without a GPU.
+	class GpuTimerBackend
+	{
+	public:
+		virtual ~GpuTimerBackend() = default;
+
+		// Creates queries 0..count-1; false when the device cannot.
+		virtual bool CreateQueries(uint32_t count) = 0;
+		virtual void BeginQuery(nvrhi::ICommandList* commandList, uint32_t query) = 0;
+		virtual void EndQuery(nvrhi::ICommandList* commandList, uint32_t query) = 0;
+		// True once the query's result is available; never waits.
+		virtual bool PollQuery(uint32_t query) = 0;
+		// The query's time; only after PollQuery returned true (reading earlier would wait for the GPU).
+		virtual float ReadMilliseconds(uint32_t query) = 0;
+		virtual void BeginMarker(nvrhi::ICommandList* commandList, const char* name) = 0;
+		virtual void EndMarker(nvrhi::ICommandList* commandList) = 0;
+	};
+
+	// The nvrhi timer-query backend for `device` (null without a device).
+	Scope<GpuTimerBackend> CreateNvrhiTimerBackend(nvrhi::IDevice* device);
+
+	// Times a renderer's passes on the GPU with timer queries. Results arrive at least Latency frames later,
+	// when the slot holding the queries comes round again, and reading them never waits for the GPU: when
+	// they have not arrived yet, the slot is kept for later (its frame then arrives a multiple of Latency
+	// frames late) and the new frame is not timed (a dropped frame, counted). Pass scopes are also debug
+	// markers, so GPU captures show the same names. Without timer queries (or when disabled) only the markers
+	// are recorded.
 	class GpuProfiler
 	{
 	public:
@@ -84,22 +109,28 @@ namespace Basalt {
 		static constexpr uint32_t Latency = 4;
 		// Frames in the average returned by GetTimings (half a second at 60 frames per second).
 		static constexpr uint32_t AverageWindow = 30;
-		// Timer queries nvrhi's Vulkan device can create in total (nvrhi::vulkan::DeviceDesc::maxTimerQueries).
-		// Profilers stay below it, because nvrhi reports running out as an error (a GPU validation error).
+		// Timer queries a device provides in total. GraphicsDevice creates the nvrhi device with this many
+		// (DeviceDesc::maxTimerQueries), and profilers stay within it, because nvrhi reports running out as an
+		// error (a GPU validation error). Counted per process, which is conservative with several devices.
 		static constexpr uint32_t DeviceTimerQueryCapacity = 256;
+		// Consecutive dropped frames after which a stall is warned about.
+		static constexpr uint32_t DropWarningThreshold = 2 * Latency;
 
-		// Creates every timer query up front: Latency * (passes + 1), 40 for SceneRenderer. Disables itself,
-		// with a warning, when the profilers alive would exceed DeviceTimerQueryCapacity.
+		// Times with nvrhi timer queries on `device` (markers only when `enabled` is false or the device is null).
 		GpuProfiler(nvrhi::IDevice* device, std::vector<std::string> passNames, bool enabled);
+		// Times through `backend` (markers only when `enabled` is false or the backend is null).
+		GpuProfiler(Scope<GpuTimerBackend> backend, std::vector<std::string> passNames, bool enabled);
 		~GpuProfiler();
 
 		GpuProfiler(const GpuProfiler&) = delete;
 		GpuProfiler& operator=(const GpuProfiler&) = delete;
 
 		bool IsEnabled() const { return m_Enabled; }
+		// Queries every profiler alive holds (against DeviceTimerQueryCapacity).
+		static uint32_t GetQueriesInUse() { return s_QueriesInUse; }
 
-		// Starts a frame on an open command list, before any pass. Returns the frame recorded Latency frames
-		// earlier when its results are available (they are also added to the average).
+		// Starts a frame on an open command list, before any pass. Returns the frame last recorded in this slot
+		// (Latency or more frames earlier) when its results are available; they are also added to the average.
 		std::optional<GpuFrameSample> BeginFrame(nvrhi::ICommandList* commandList);
 		// A pass may run at most once per frame; passes do not nest. Prefer GpuPassScope.
 		void BeginPass(nvrhi::ICommandList* commandList, uint32_t pass);
@@ -114,22 +145,23 @@ namespace Basalt {
 
 		struct FrameSlot
 		{
-			nvrhi::TimerQueryHandle Frame;
-			std::vector<nvrhi::TimerQueryHandle> Passes;
 			std::vector<uint8_t> Recorded;
 			uint64_t RenderedPixels = 0;
 			// Recorded and submitted, not read back yet.
 			bool Pending = false;
 		};
 
-		bool IsReady(const FrameSlot& slot) const;
-		std::optional<GpuFrameSample> Collect(FrameSlot& slot);
+		// Query indices: each slot has one per pass, then one for the whole frame.
+		uint32_t PassQuery(uint32_t slot, uint32_t pass) const { return slot * (GetPassCount() + 1) + pass; }
+		uint32_t FrameQuery(uint32_t slot) const { return PassQuery(slot, GetPassCount()); }
+		bool IsReady(uint32_t slot) const;
+		GpuFrameSample Collect(uint32_t slot);
 		uint32_t GetPassCount() const { return static_cast<uint32_t>(m_Average.Get().Passes.size()); }
 
 		static uint32_t s_QueriesInUse;
 
-		nvrhi::IDevice* m_Device = nullptr;
-		std::array<FrameSlot, Latency> m_Slots;
+		Scope<GpuTimerBackend> m_Backend;
+		std::vector<FrameSlot> m_Slots;
 		uint32_t m_Current = 0;
 		uint32_t m_QueryCount = 0;
 		bool m_Enabled = false;

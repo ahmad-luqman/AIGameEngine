@@ -61,8 +61,12 @@ namespace Basalt {
 		Project::SetActive(project);
 
 		options.ScenePath = commandLine.GetValue("scene").value_or(project->GetConfig().StartScene);
+		// Fatal: a malformed count would otherwise mean "run forever".
 		if (commandLine.GetValue("frames") && !commandLine.GetInteger("frames"))
-			BS_CORE_WARN("--frames must be an integer");
+		{
+			BS_CORE_CRITICAL("--frames must be an integer");
+			return nullptr;
+		}
 		options.MaxFrames = static_cast<uint64_t>(std::max<int64_t>(commandLine.GetInteger("frames").value_or(0), 0));
 		options.ScreenshotPath = commandLine.GetValue("screenshot").value_or("");
 		options.RequireValidation = commandLine.HasFlag("require-validation");
@@ -141,6 +145,11 @@ namespace Basalt {
 			if (!options.ScreenshotPath.empty())
 			{
 				BS_CORE_ERROR("--screenshot needs a GPU and cannot be combined with --headless");
+				return nullptr;
+			}
+			if (options.RequireDynamicResolution)
+			{
+				BS_CORE_ERROR("--dynamic-resolution needs a GPU and cannot be combined with --headless");
 				return nullptr;
 			}
 		}

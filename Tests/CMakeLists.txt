@@ -48,9 +48,14 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	# "Dynamic" reaches the same image through dynamic resolution: an unreachable frame-rate target drops the
 	# scale to its 0.5 minimum (once GPU timer results arrive), and the scene renders into the top-left of
 	# full-size targets. "ScaledSSAO"/"DynamicSSAO" are the same pair for the SSAO view, which isolates the
-	# blur's edge handling. Each Dynamic image must equal its Scaled image exactly (compared below); the
-	# goldens compare across drivers within image.compare's tolerance.
+	# blur's edge handling. Each Dynamic image must equal its Scaled image exactly (compared below; exact
+	# because 0.5 of 1280x720 makes every UV scale a power of two, so the taps land on the same texels).
+	# Dynamic is also compared with the current driver's Scaled golden within image.compare's default
+	# tolerance; the SSAO pair has no golden.
 	set(dynamicArgs --dynamic-resolution 1000000 --min-render-scale 0.5)
+	# Every driver these tests run on (lavapipe in CI, MoltenVK and desktop GPUs locally) has timer queries,
+	# so missing GPU timings are a profiler bug. The prefixes come from FormatGpuTimings (pinned by a unit test).
+	set(noGpuTimingsRegex "scene GPU time (unavailable|not available yet)")
 	foreach(view Lit SSAO Normals Depth Scaled Dynamic ScaledSSAO DynamicSSAO)
 		set(debugView ${view})
 		set(renderTest FeatureTestRender_${view})
@@ -77,8 +82,7 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 		endif()
 		add_test(NAME ${renderTest}
 			COMMAND BasaltRuntime ${basaltRenderArgs} --offscreen --debug-view ${debugView} ${extraArgs} --screenshot "${basaltGoldenOutput}/FeatureTest_${view}.png")
-		# Every CI driver (lavapipe, MoltenVK) has timer queries, so missing GPU timings are a profiler bug.
-		set_tests_properties(${renderTest} PROPERTIES FIXTURES_SETUP Render${view} FAIL_REGULAR_EXPRESSION "scene GPU time (unavailable|not available yet)")
+		set_tests_properties(${renderTest} PROPERTIES FIXTURES_SETUP Render${view} FAIL_REGULAR_EXPRESSION "${noGpuTimingsRegex}")
 		list(APPEND basaltGpuTests ${renderTest})
 
 		if(BASALT_GOLDEN_DRIVER AND referenceView)
@@ -102,11 +106,18 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	endforeach()
 	# A dynamic run must actually have lowered the scale (the runtime also exits 6 when it could not run).
 	# "1280x720" is the full size from basaltRenderArgs.
-	set_tests_properties(FeatureTestRender_Dynamic FeatureTestRender_DynamicSSAO PROPERTIES FAIL_REGULAR_EXPRESSION "scene GPU time (unavailable|not available yet);rendered at 1280x720")
+	set_tests_properties(FeatureTestRender_Dynamic FeatureTestRender_DynamicSSAO PROPERTIES FAIL_REGULAR_EXPRESSION "${noGpuTimingsRegex};rendered at 1280x720")
+	# And when it cannot run (here: a minimum equal to the render scale leaves nothing to adjust), the run says
+	# why and fails (exit code 6), so a test cannot pass without dynamic resolution having worked.
+	add_test(NAME FeatureTestRender_DynamicInactive
+		COMMAND BasaltRuntime ${basaltRenderArgs} --offscreen --dynamic-resolution 1000000 --min-render-scale 1)
+	set_tests_properties(FeatureTestRender_DynamicInactive PROPERTIES PASS_REGULAR_EXPRESSION "did not run \\(inactive: nothing to adjust")
+	list(APPEND basaltGpuTests FeatureTestRender_DynamicInactive)
 	# The window + swapchain path needs a display, so it only runs on developer machines.
 	if(NOT DEFINED ENV{CI})
 		add_test(NAME FeatureTestRenderWindowed
 			COMMAND BasaltRuntime ${basaltRenderArgs} --screenshot "${CMAKE_CURRENT_BINARY_DIR}/FeatureTestRenderWindowed.png")
+		set_tests_properties(FeatureTestRenderWindowed PROPERTIES FAIL_REGULAR_EXPRESSION "${noGpuTimingsRegex}")
 		list(APPEND basaltGpuTests FeatureTestRenderWindowed)
 	endif()
 	set_tests_properties(${basaltGpuTests} PROPERTIES LABELS gpu)
@@ -117,30 +128,40 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 endif()
 
 # Runtime option validation: bad values must stop the run before a window or GPU is needed (an ignored
-# option would let a test pass without testing anything).
+# option would let a test pass without testing anything). The message is what is checked; a run that went
+# ahead anyway logs "Runtime: playing" and fails, and --frames 1 plus the timeout keep it from hanging.
 if(TARGET BasaltRuntime)
 	set(basaltRuntimeOptionTests "")
 	foreach(case
 			"dynamic-resolution-low;--dynamic-resolution;5;--dynamic-resolution must be 0"
 			"dynamic-resolution-high;--dynamic-resolution;2e6;--dynamic-resolution must be 0"
 			"dynamic-resolution-text;--dynamic-resolution;abc;--dynamic-resolution must be 0"
+			"dynamic-resolution-headless;--dynamic-resolution;60;--dynamic-resolution needs a GPU"
 			"min-render-scale;--min-render-scale;0.1;--min-render-scale must be a number"
-			"render-scale;--render-scale;3;--render-scale must be a number")
+			"render-scale;--render-scale;3;--render-scale must be a number"
+			"frames;--frames;abc;--frames must be an integer")
 		list(GET case 0 caseName)
 		list(GET case 1 option)
 		list(GET case 2 value)
 		list(GET case 3 message)
 		add_test(NAME RuntimeOption_${caseName}
-			COMMAND BasaltRuntime --project "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest" --headless ${option} ${value})
+			COMMAND BasaltRuntime --project "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest" --headless --frames 1 ${option} ${value})
 		set_tests_properties(RuntimeOption_${caseName} PROPERTIES PASS_REGULAR_EXPRESSION "${message}")
 		list(APPEND basaltRuntimeOptionTests RuntimeOption_${caseName})
 	endforeach()
-	# An option missing its value is fatal too, rather than running with the default.
+	# An option missing its value is fatal too, rather than running with the default (it must come last, or
+	# it would take the next argument as its value).
 	add_test(NAME RuntimeOption_missing-value
-		COMMAND BasaltRuntime --project "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest" --headless --dynamic-resolution)
+		COMMAND BasaltRuntime --project "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest" --headless --frames 1 --dynamic-resolution)
 	set_tests_properties(RuntimeOption_missing-value PROPERTIES PASS_REGULAR_EXPRESSION "option --dynamic-resolution requires a value")
 	list(APPEND basaltRuntimeOptionTests RuntimeOption_missing-value)
-	set_tests_properties(${basaltRuntimeOptionTests} PROPERTIES LABELS integration)
+	set_tests_properties(${basaltRuntimeOptionTests} PROPERTIES FAIL_REGULAR_EXPRESSION "Runtime: playing")
+	# Accepted values run: 0 turns dynamic resolution off, which makes --min-render-scale pointless (a warning).
+	add_test(NAME RuntimeOption_min-render-scale-unused
+		COMMAND BasaltRuntime --project "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest" --headless --frames 1 --dynamic-resolution 0 --min-render-scale 0.5)
+	set_tests_properties(RuntimeOption_min-render-scale-unused PROPERTIES PASS_REGULAR_EXPRESSION "--min-render-scale has no effect")
+	list(APPEND basaltRuntimeOptionTests RuntimeOption_min-render-scale-unused)
+	set_tests_properties(${basaltRuntimeOptionTests} PROPERTIES LABELS integration TIMEOUT 60)
 endif()
 
 # Sample games built entirely through the automation API; their gameplay checks run headless.

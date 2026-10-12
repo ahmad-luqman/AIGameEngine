@@ -104,17 +104,6 @@ namespace {
 	}
 
 	// Log messages containing text since the history's total count was `since`.
-	int CountMessages(uint64_t since, const std::string& text)
-	{
-		uint64_t next = 0;
-		int count = 0;
-		for (const LogMessage& message : Log::GetHistory().GetMessagesSince(since, next))
-		{
-			if (message.Text.find(text) != std::string::npos)
-				count++;
-		}
-		return count;
-	}
 
 	// Writes a glTF with one triangle-list primitive. Returns its asset key.
 	std::string WriteMeshGltf(const BasaltTest::TempProject& project, const std::string& file, const std::vector<float>& positions, const std::vector<uint16_t>& indices)
@@ -184,19 +173,19 @@ TEST_SUITE("Physics")
 			joined.Report(entity, { "first", "second" });
 			perLine.Report(entity, { "first", "second" });
 		}
-		CHECK(CountMessages(since, "Physics: entity 'Warned': first; second") == 1);
-		CHECK(CountMessages(since, "Physics: joint on 'Warned': first") == 1);
-		CHECK(CountMessages(since, "Physics: joint on 'Warned': second") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "Physics: entity 'Warned': first; second") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "Physics: joint on 'Warned': first") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "Physics: joint on 'Warned': second") == 1);
 
 		// A different set is logged; clearing and repeating logs the same set again.
 		joined.Report(entity, { "third" });
 		joined.Report(entity, {});
 		joined.Report(entity, { "third" });
-		CHECK(CountMessages(since, "Physics: entity 'Warned': third") == 2);
+		CHECK(BasaltTest::CountLogMessages(since, "Physics: entity 'Warned': third") == 2);
 		// Forgetting the entity (it was destroyed) also logs the next report.
 		perLine.Forget(entity.GetUUID());
 		perLine.Report(entity, { "first", "second" });
-		CHECK(CountMessages(since, "Physics: joint on 'Warned': first") == 2);
+		CHECK(BasaltTest::CountLogMessages(since, "Physics: joint on 'Warned': first") == 2);
 	}
 
 	TEST_CASE("A dynamic box falls under gravity and rests on static ground")
@@ -275,7 +264,7 @@ TEST_SUITE("Physics")
 		overridden.SetPhysicsLayers(PhysicsLayers());
 		const uint64_t since = Log::GetHistory().GetTotalCount();
 		CHECK(fall(overridden) == doctest::Approx(0.5f).epsilon(0.02));
-		CHECK(CountMessages(since, "unknown physics layer 'Ghost'") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "unknown physics layer 'Ghost'") == 1);
 		const Ref<Scene> source = CreateRef<Scene>();
 		source->SetPhysicsLayers(PhysicsLayers());
 		CHECK(Scene::Copy(source)->GetPhysicsLayers().has_value());
@@ -340,7 +329,7 @@ TEST_SUITE("Physics")
 			box.AddOrReplaceComponent<RigidBodyComponent>(box.GetComponent<RigidBodyComponent>());
 			Simulate(scene, Step);
 		}
-		CHECK(CountMessages(since, "unknown physics layer 'Missing'") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "unknown physics layer 'Missing'") == 1);
 		Simulate(scene, 1.0f);
 		CHECK(box.GetTransform().Translation.y == doctest::Approx(0.5f).epsilon(0.02));
 
@@ -391,7 +380,7 @@ TEST_SUITE("Physics")
 		const uint64_t since = Log::GetHistory().GetTotalCount();
 		scene.OnSimulationStart();
 		Simulate(scene, 0.1f);
-		CHECK(CountMessages(since, "Continuous only affects dynamic bodies") == 2);
+		CHECK(BasaltTest::CountLogMessages(since, "Continuous only affects dynamic bodies") == 2);
 		scene.OnSimulationStop();
 	}
 
@@ -620,8 +609,8 @@ TEST_SUITE("Physics")
 
 		const uint64_t since = Log::GetHistory().GetTotalCount();
 		scene.OnSimulationStart();
-		CHECK(CountMessages(since, "Restitution must be between 0 and 1") == 1);
-		CHECK(CountMessages(since, "Friction must not be negative") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "Restitution must be between 0 and 1") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "Friction must not be negative") == 1);
 		float highest = 0.0f;
 		for (int i = 0; i < 240; i++)
 		{
@@ -757,9 +746,9 @@ TEST_SUITE("Physics")
 
 		const uint64_t since = Log::GetHistory().GetTotalCount();
 		scene.OnSimulationStart();
-		CHECK(CountMessages(since, "BoxCollider Friction must not be negative") == 1);
-		CHECK(CountMessages(since, "BoxCollider Restitution must be between 0 and 1") == 1);
-		CHECK(CountMessages(since, "SphereCollider") == 0);
+		CHECK(BasaltTest::CountLogMessages(since, "BoxCollider Friction must not be negative") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "BoxCollider Restitution must be between 0 and 1") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "SphereCollider") == 0);
 		scene.OnSimulationStop();
 	}
 
@@ -991,7 +980,7 @@ TEST_SUITE("Physics")
 		spinner.GetTransform().Scale = glm::vec3(0.0f);
 		parent.GetTransform().Scale = glm::vec3(0.0f);
 		Simulate(scene, 0.5f);
-		CHECK(CountMessages(since, "'Box' has a degenerate transform (e.g. a zero scale); its body keeps its shape") == 2);
+		CHECK(BasaltTest::CountLogMessages(since, "'Box' has a degenerate transform (e.g. a zero scale); its body keeps its shape") == 2);
 		CHECK(physics.HasBody(spinner));
 		// Composing a pose under a zero-scaled parent would invert a singular matrix.
 		const glm::vec3 childAt = child.GetTransform().Translation;
@@ -1338,13 +1327,13 @@ TEST_SUITE("Physics")
 			scene.OnUpdate(Step);
 		}
 		CHECK(scene.GetPhysicsWorld()->HasJoint(ball));
-		CHECK(CountMessages(before, "MotorMode has no effect on point joints") == 1);
-		CHECK(CountMessages(before, "missing entity 999") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "MotorMode has no effect on point joints") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "missing entity 999") == 1);
 
 		// A different problem is reported again.
 		SetJoint(orphan, [](JointComponent& joint) { joint.ConnectedEntity = 998; });
 		scene.OnUpdate(Step);
-		CHECK(CountMessages(before, "missing entity 998") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "missing entity 998") == 1);
 		scene.OnSimulationStop();
 	}
 
@@ -1389,9 +1378,9 @@ TEST_SUITE("Physics")
 		REQUIRE(physics.HasJoint(excludesRest));
 		REQUIRE(physics.HasJoint(slider));
 		REQUIRE(physics.HasJoint(weight));
-		CHECK(CountMessages(before, "must satisfy -180") == 2);
-		CHECK(CountMessages(before, "must satisfy LimitMin <= 0") == 1);
-		CHECK(CountMessages(before, "must satisfy 0 <= LimitMin") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "must satisfy -180") == 2);
+		CHECK(BasaltTest::CountLogMessages(before, "must satisfy LimitMin <= 0") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "must satisfy 0 <= LimitMin") == 1);
 
 		physics.SetLinearVelocity(slider, { -2.0f, 0.0f, 0.0f });
 		Simulate(scene, 1.0f);
@@ -1409,8 +1398,8 @@ TEST_SUITE("Physics")
 		});
 		scene.OnUpdate(Step);
 		CHECK(physics.HasJoint(inverted));
-		CHECK(CountMessages(during, "must satisfy -180") == 1);
-		CHECK(CountMessages(during, "pull the anchors together") == 1);
+		CHECK(BasaltTest::CountLogMessages(during, "must satisfy -180") == 1);
+		CHECK(BasaltTest::CountLogMessages(during, "pull the anchors together") == 1);
 		scene.OnSimulationStop();
 	}
 
@@ -1779,9 +1768,9 @@ TEST_SUITE("Physics")
 		PhysicsWorld& physics = *scene.GetPhysicsWorld();
 		Simulate(scene, 2.0f);
 		CHECK(physics.GetJointPosition(pendulum).value() == doctest::Approx(-30.0f).epsilon(0.05));
-		CHECK(CountMessages(before, "no effect on point joints") == 1);
-		CHECK(CountMessages(before, "LimitSpringFrequency, LimitSpringDamping have no effect without UseLimits") == 1);
-		CHECK(CountMessages(before, "LimitSpringDamping -1 is negative") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "no effect on point joints") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "LimitSpringFrequency, LimitSpringDamping have no effect without UseLimits") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "LimitSpringDamping -1 is negative") == 1);
 
 		// Softening the limit keeps the rest pose (a rebuild would measure from the current angle): the
 		// pendulum sinks past -30 degrees and its angle is still measured from where it started.
@@ -1832,7 +1821,7 @@ TEST_SUITE("Physics")
 		CHECK(coneMax == doctest::Approx(20.0f).epsilon(0.1));
 		CHECK(freeMax > 60.0f);
 		CHECK(physics.HasJoint(clamped));
-		CHECK(CountMessages(before, "LimitMin has no effect on cone joints") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "LimitMin has no effect on cone joints") == 1);
 		CHECK(physics.GetJointPosition(cone) == std::nullopt);
 
 		// Widening the cone in place lets the next push swing further.
@@ -1921,7 +1910,7 @@ TEST_SUITE("Physics")
 		CHECK(twistMax == doctest::Approx(20.0f).epsilon(0.1));
 		CHECK(glm::degrees(glm::angle(freeTwist.GetTransform().Rotation)) > 90.0f);
 		CHECK(swingMax == doctest::Approx(30.0f).epsilon(0.1));
-		CHECK(CountMessages(before, "six-DOF swing") == 0);
+		CHECK(BasaltTest::CountLogMessages(before, "six-DOF swing") == 0);
 		CHECK(physics.GetJointPosition(twist) == std::nullopt);
 		scene.OnSimulationStop();
 	}
@@ -1982,10 +1971,10 @@ TEST_SUITE("Physics")
 		CHECK(rigidPeak == doctest::Approx(1.0f).epsilon(0.05));
 		CHECK(softPeak > 1.2f);
 		CHECK(physics.HasJoint(odd));
-		CHECK(CountMessages(before, "SecondaryAxis is zero or parallel to Axis") == 1);
-		CHECK(CountMessages(before, "LimitMax has no effect on six-DOF joints") == 1);
-		CHECK(CountMessages(before, "six-DOF linear X limits [0.5, 0] must satisfy") == 1);
-		CHECK(CountMessages(before, "six-DOF swing (angular Y) limits [-10, 30] must be a symmetric half angle") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "SecondaryAxis is zero or parallel to Axis") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "LimitMax has no effect on six-DOF joints") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "six-DOF linear X limits [0.5, 0] must satisfy") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "six-DOF swing (angular Y) limits [-10, 30] must be a symmetric half angle") == 1);
 
 		// Widening a limit updates the live joint: the next push carries the box further along X.
 		SetJoint(rigid, [](JointComponent& joint) { joint.LinearLimitMax.x = 3.0f; });
@@ -2045,7 +2034,7 @@ TEST_SUITE("Physics")
 		CHECK(carriage.GetTransform().Translation.x == doctest::Approx(12.0f).epsilon(0.01));
 		CHECK(physics.GetLinearVelocity(carriage).y == doctest::Approx(0.5f).epsilon(0.02));
 		CHECK(std::abs(carriage.GetTransform().Translation.z) < 0.01f);
-		CHECK(CountMessages(before, "six-DOF") == 0);
+		CHECK(BasaltTest::CountLogMessages(before, "six-DOF") == 0);
 
 		// Retargeting through the registry updates the live joint: it keeps measuring from the first rest
 		// pose instead of being rebuilt at the current one.
@@ -2160,8 +2149,8 @@ TEST_SUITE("Physics")
 		Simulate(scene, 0.5f);
 		// Capped by the 0.2 force cap, it barely turns.
 		CHECK(physics.GetJointPosition(hinge).value() < 15.0f);
-		CHECK(CountMessages(since, "MotorMaxTorque -5 is negative; using MotorMaxForce") == 1);
-		CHECK(CountMessages(since, "MotorMaxTorque -7 is negative") == 0);
+		CHECK(BasaltTest::CountLogMessages(since, "MotorMaxTorque -5 is negative; using MotorMaxForce") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "MotorMaxTorque -7 is negative") == 0);
 		scene.OnSimulationStop();
 	}
 
@@ -2198,11 +2187,11 @@ TEST_SUITE("Physics")
 		CHECK(box.GetTransform().Translation.x > 3.0f);
 		CHECK(box.GetTransform().Translation.y == doctest::Approx(0.5f).epsilon(0.05));
 		CHECK(glm::length(locked.GetTransform().Translation - glm::vec3(0.0f, 0.0f, 5.0f)) < 0.01f);
-		CHECK(CountMessages(before, "six-DOF linear X limits are ignored: the axis is free (FreeLinearAxes)") == 1);
-		CHECK(CountMessages(before, "six-DOF linear Z motor has no effect: the axis is locked") == 1);
-		CHECK(CountMessages(before, "six-DOF angular Y motor has no effect: the axis is locked") == 1);
-		CHECK(CountMessages(before, "six-DOF linear Y motor has no effect: the axis is locked (translation is locked without UseLimits)") == 1);
-		CHECK(CountMessages(before, "MotorSpringFrequency -1 must be greater than 0; using 2") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "six-DOF linear X limits are ignored: the axis is free (FreeLinearAxes)") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "six-DOF linear Z motor has no effect: the axis is locked") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "six-DOF angular Y motor has no effect: the axis is locked") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "six-DOF linear Y motor has no effect: the axis is locked (translation is locked without UseLimits)") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "MotorSpringFrequency -1 must be greater than 0; using 2") == 1);
 		CHECK(physics.HasJoint(box));
 		CHECK(physics.HasJoint(locked));
 
@@ -2329,7 +2318,7 @@ TEST_SUITE("Physics")
 		scene.OnSimulationStart();
 		Simulate(scene, 3.0f);
 		CHECK(scene.GetPhysicsWorld()->GetJointPosition(arm).value() == doctest::Approx(45.0f).epsilon(0.02));
-		CHECK(CountMessages(before, "MotorSpringFrequency 0 must be greater than 0; using 2") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "MotorSpringFrequency 0 must be greater than 0; using 2") == 1);
 		scene.OnSimulationStop();
 	}
 
@@ -2466,9 +2455,9 @@ TEST_SUITE("Physics")
 		CHECK_FALSE(physics.HasJoint(holder));
 		CHECK_FALSE(physics.HasJoint(missing));
 		CHECK_FALSE(physics.HasJoint(selfHolder));
-		CHECK(CountMessages(before, "its BodyEntity 'Body' has no RigidBody") == 1);
-		CHECK(CountMessages(before, "its BodyEntity 4242 is missing") == 1);
-		CHECK(CountMessages(before, "connects to its own body's entity") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "its BodyEntity 'Body' has no RigidBody") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "its BodyEntity 4242 is missing") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "connects to its own body's entity") == 1);
 
 		// The joint is built once the body exists, and holds it up.
 		body.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
@@ -2510,7 +2499,7 @@ TEST_SUITE("Physics")
 			Simulate(scene, 0.5f);
 			CHECK_FALSE(physics.HasJoint(holder));
 			CHECK(holder.HasComponent<JointComponent>());
-			CHECK(CountMessages(before, destroy ? "its BodyEntity 777 is missing" : "its BodyEntity 'Body' has no RigidBody") == 1);
+			CHECK(BasaltTest::CountLogMessages(before, destroy ? "its BodyEntity 777 is missing" : "its BodyEntity 'Body' has no RigidBody") == 1);
 
 			// A body with the same UUID (or the same entity's body again) gets the joint back.
 			if (destroy)
@@ -2642,8 +2631,8 @@ TEST_SUITE("Physics")
 			scene.OnUpdate(Step);
 		}
 		CHECK(scene.GetPhysicsWorld()->HasJoint(box));
-		CHECK(CountMessages(before, "SecondaryAxis is zero or parallel to Axis") == 1);
-		CHECK(CountMessages(before, "LimitSpringFrequency has no effect on a six-DOF joint without a limited translation axis") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "SecondaryAxis is zero or parallel to Axis") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "LimitSpringFrequency has no effect on a six-DOF joint without a limited translation axis") == 1);
 		scene.OnSimulationStop();
 	}
 
@@ -2684,7 +2673,7 @@ TEST_SUITE("Physics")
 			CHECK(physics.HasJoint(boxes[b]));
 			CHECK(maxTilt[b] > 60.0f);
 		}
-		CHECK(CountMessages(before, "cone half angle LimitMax 200 must be within [0, 180] degrees") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "cone half angle LimitMax 200 must be within [0, 180] degrees") == 1);
 		scene.OnSimulationStop();
 	}
 
@@ -2709,10 +2698,10 @@ TEST_SUITE("Physics")
 		const uint64_t before = Log::GetHistory().GetTotalCount();
 		scene.OnSimulationStart();
 		Simulate(scene, 0.1f);
-		CHECK(CountMessages(before, "Axis, MotorMode, BreakTorque have no effect on point joints") == 1);
-		CHECK(CountMessages(before, "BreakTorque has no effect without UseLimits") == 1);
-		CHECK(CountMessages(before, "AngularLimitMax has no effect without UseLimits") == 1);
-		CHECK(CountMessages(before, "LinearLimitMax has no effect on hinge joints") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "Axis, MotorMode, BreakTorque have no effect on point joints") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "BreakTorque has no effect without UseLimits") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "AngularLimitMax has no effect without UseLimits") == 1);
+		CHECK(BasaltTest::CountLogMessages(before, "LinearLimitMax has no effect on hinge joints") == 1);
 		// The joints are still built.
 		for (Entity entity : { ball, cone, sixDOF, hinge })
 			CHECK(scene.GetPhysicsWorld()->HasJoint(entity));
@@ -3021,9 +3010,9 @@ TEST_SUITE("Physics")
 			Simulate(scene, Step);
 		}
 		CHECK(scene.GetPhysicsWorld()->GetBodyCount() == 0);
-		CHECK(CountMessages(since, "cannot load mesh 'builtin://Teapot'") == 1);
-		CHECK(CountMessages(since, "has no mesh 3 (it has 1)") == 1);
-		CHECK(CountMessages(since, "no Mesh and the entity has no MeshComponent") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "cannot load mesh 'builtin://Teapot'") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "has no mesh 3 (it has 1)") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "no Mesh and the entity has no MeshComponent") == 1);
 		scene.OnSimulationStop();
 	}
 
@@ -3061,9 +3050,9 @@ TEST_SUITE("Physics")
 		CHECK(scene.GetPhysicsWorld()->GetBodyCount() == 0);
 		// The failures are cached like shapes.
 		CHECK(PhysicsWorld::GetMeshShapeCookCount() == cooked + 3);
-		CHECK(CountMessages(since, "'Triangles': MeshCollider ignored: cannot build a triangle mesh") == 1);
-		CHECK(CountMessages(since, "'Hull': MeshCollider ignored: cannot build a convex hull") == 1);
-		CHECK(CountMessages(since, "'Broken': MeshCollider ignored: the mesh has a non-finite vertex position") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "'Triangles': MeshCollider ignored: cannot build a triangle mesh") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "'Hull': MeshCollider ignored: cannot build a convex hull") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "'Broken': MeshCollider ignored: the mesh has a non-finite vertex position") == 1);
 		scene.OnSimulationStop();
 	}
 
@@ -3100,9 +3089,9 @@ TEST_SUITE("Physics")
 		scene.OnSimulationStart();
 		PhysicsWorld& physics = *scene.GetPhysicsWorld();
 		CHECK(physics.GetBodyCount() == 4);
-		CHECK(CountMessages(since, "'Rock': a dynamic body collides by the convex hull of its MeshCollider; set Convex") == 1);
-		CHECK(CountMessages(since, "'ConvexRock'") == 0);
-		CHECK(CountMessages(since, "'Borrowed': MeshCollider MeshIndex is ignored without its own Mesh") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "'Rock': a dynamic body collides by the convex hull of its MeshCollider; set Convex") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "'ConvexRock'") == 0);
+		CHECK(BasaltTest::CountLogMessages(since, "'Borrowed': MeshCollider MeshIndex is ignored without its own Mesh") == 1);
 		CHECK(physics.OverlapSphere({ 0.0f, 0.0f, 20.0f }, 0.1f, { .IncludeTriggers = true }) == std::vector<UUID>{ zone.GetUUID() });
 		scene.OnSimulationStop();
 	}

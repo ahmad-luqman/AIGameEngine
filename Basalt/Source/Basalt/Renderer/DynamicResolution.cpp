@@ -1,5 +1,6 @@
 #include "Basalt/Renderer/DynamicResolution.h"
 
+#include "Basalt/Core/Log.h" // fmt::format (bundled with spdlog)
 #include "Basalt/Renderer/RenderMath.h"
 
 #include <algorithm>
@@ -14,17 +15,50 @@ namespace Basalt {
 			return std::isfinite(value) && value > 0.0f;
 		}
 
+		float MedianOfThree(float a, float b, float c)
+		{
+			return std::max(std::min(a, b), std::min(std::max(a, b), c));
+		}
+
 	}
 
 	DynamicResolutionSettings SanitizeDynamicResolution(const DynamicResolutionSettings& settings)
 	{
 		DynamicResolutionSettings result = settings;
 		const DynamicResolutionSettings defaults;
-		result.TargetFrameRate = std::isnan(settings.TargetFrameRate) ? defaults.TargetFrameRate : std::max(settings.TargetFrameRate, MinTargetFrameRate);
-		if (!std::isfinite(result.TargetFrameRate))
-			result.TargetFrameRate = MinTargetFrameRate;
+		if (std::isnan(settings.TargetFrameRate))
+			result.TargetFrameRate = defaults.TargetFrameRate;
+		else
+			result.TargetFrameRate = std::clamp(settings.TargetFrameRate, MinTargetFrameRate, UnreachableTargetFrameRate);
 		result.MinScale = std::isnan(settings.MinScale) ? defaults.MinScale : std::clamp(settings.MinScale, MinRenderScale, MaxRenderScale);
 		return result;
+	}
+
+	DynamicResolutionState GetDynamicResolutionState(const DynamicResolutionSettings& settings, float renderScale, bool gpuTimers)
+	{
+		if (!settings.Enabled)
+			return DynamicResolutionState::Off;
+		if (!gpuTimers)
+			return DynamicResolutionState::NoGpuTimers;
+		if (settings.MinScale >= renderScale)
+			return DynamicResolutionState::EmptyRange;
+		return DynamicResolutionState::Active;
+	}
+
+	std::string DescribeDynamicResolutionState(DynamicResolutionState state, const DynamicResolutionSettings& settings, float renderScale)
+	{
+		switch (state)
+		{
+			case DynamicResolutionState::Off:
+				return "off";
+			case DynamicResolutionState::NoGpuTimers:
+				return "inactive: needs GPU timer queries, which this renderer does not have";
+			case DynamicResolutionState::EmptyRange:
+				return fmt::format("inactive: nothing to adjust, the minimum render scale ({}) is not below the render scale ({})", settings.MinScale, renderScale);
+			case DynamicResolutionState::Active:
+				return "active";
+		}
+		return "unknown";
 	}
 
 	void DynamicResolutionController::Reset(float scale)
@@ -38,7 +72,6 @@ namespace Basalt {
 		m_RecentCount = 0;
 		m_RecentNext = 0;
 		m_FullScaleCost = 0.0f;
-		m_HasCost = false;
 		m_RaiseSamples = 0;
 	}
 
@@ -57,16 +90,15 @@ namespace Basalt {
 		m_RecentCosts[m_RecentNext] = gpuMilliseconds / (renderedScale * renderedScale);
 		m_RecentNext = (m_RecentNext + 1) % static_cast<uint32_t>(m_RecentCosts.size());
 		m_RecentCount = std::min(m_RecentCount + 1, static_cast<uint32_t>(m_RecentCosts.size()));
-		// Median of three; of two, the lower (a spike right after a reset is not a trend either).
-		const auto& recent = m_RecentCosts;
-		float cost = recent[0];
+		// Median of three; of two, the lower (a spike right after a reset is not a trend either). ForgetHistory
+		// restarts the ring at index 0, so the first samples are always at the front.
+		float cost = m_RecentCosts[0];
 		if (m_RecentCount == 2)
-			cost = std::min(recent[0], recent[1]);
+			cost = std::min(m_RecentCosts[0], m_RecentCosts[1]);
 		else if (m_RecentCount == 3)
-			cost = std::max(std::min(recent[0], recent[1]), std::min(std::max(recent[0], recent[1]), recent[2]));
+			cost = MedianOfThree(m_RecentCosts[0], m_RecentCosts[1], m_RecentCosts[2]);
 		// The first sample is taken as is, so an over-budget start drops at once instead of easing in.
-		m_FullScaleCost = m_HasCost ? m_FullScaleCost + Smoothing * (cost - m_FullScaleCost) : cost;
-		m_HasCost = true;
+		m_FullScaleCost = m_RecentCount > 1 ? m_FullScaleCost + Smoothing * (cost - m_FullScaleCost) : cost;
 
 		const float target = std::clamp(std::sqrt(budgetMilliseconds * Headroom / m_FullScaleCost), low, maxScale);
 		// Changes within the deadband are skipped, except the last step onto a bound (clamp returns the bound

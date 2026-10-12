@@ -6,6 +6,7 @@
 
 #include <nvrhi/nvrhi.h>
 
+#include <functional>
 #include <string>
 
 namespace Basalt {
@@ -24,7 +25,8 @@ namespace Basalt {
 		// The project's settings unless --dynamic-resolution / --min-render-scale override them.
 		DynamicResolutionSettings DynamicResolution;
 		// --dynamic-resolution asked for it explicitly: a --frames run fails (exit code 6) when dynamic
-		// resolution could not run (no GPU timers, nothing to adjust, or no timer results arrived).
+		// resolution could not run (no GPU timers, nothing to adjust, a run too short for timer results, or no
+		// usable results).
 		bool RequireDynamicResolution = false;
 	};
 
@@ -43,6 +45,9 @@ namespace Basalt {
 		void OnRunFinished() override;
 
 	private:
+		// Logs the GPU timings and fails (through `fail`) a run whose --dynamic-resolution did not run.
+		void CheckRendererResults(const std::function<void(int)>& fail);
+
 		RuntimeOptions m_Options;
 		Ref<Scene> m_Scene;
 		Scope<SceneRenderer> m_Renderer;

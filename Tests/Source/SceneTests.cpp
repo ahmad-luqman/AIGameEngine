@@ -369,11 +369,7 @@ TEST_SUITE("Serialization")
 		// Saving writes the new format.
 		const nlohmann::json saved = SceneSerializer::SerializeScene(*legacy);
 		CHECK(saved.dump().find("CollisionMask") == std::string::npos);
-		uint64_t next = 0;
-		int warnings = 0;
-		for (const LogMessage& message : Log::GetHistory().GetMessagesSince(since, next))
-			warnings += message.Text.find("before named physics layers") != std::string::npos ? 1 : 0;
-		CHECK(warnings <= 1);
+		CHECK(BasaltTest::CountLogMessages(since, "before named physics layers") <= 1);
 
 		// A mask that excluded layers has no equivalent without project layers.
 		project.WriteFile("masked.bscene", R"({"Entities":[{"ID":5,"Name":"Ghost","Components":{"RigidBody":{"Layer":1,"CollisionMask":3}}}]})");

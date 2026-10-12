@@ -3,6 +3,7 @@
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Window.h"
 #include "Basalt/Renderer/DeviceSelection.h"
+#include "Basalt/Renderer/GpuProfiler.h"
 #include "Basalt/Renderer/VulkanHeaders.h"
 #include "Basalt/Renderer/VulkanLoader.h"
 
@@ -482,6 +483,8 @@ namespace Basalt {
 		nvrhiDesc.deviceExtensions = impl.DeviceExtensions.data();
 		nvrhiDesc.numDeviceExtensions = impl.DeviceExtensions.size();
 		nvrhiDesc.bufferDeviceAddressSupported = enabled12.bufferDeviceAddress;
+		// The profilers budget their queries against this capacity.
+		nvrhiDesc.maxTimerQueries = GpuProfiler::DeviceTimerQueryCapacity;
 
 		impl.VulkanDevice = nvrhi::vulkan::createDevice(nvrhiDesc);
 		if (!impl.VulkanDevice)

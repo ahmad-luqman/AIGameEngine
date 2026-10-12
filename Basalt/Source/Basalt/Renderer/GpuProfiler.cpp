@@ -7,7 +7,54 @@
 
 namespace Basalt {
 
+	namespace {
+
+		class NvrhiTimerBackend final : public GpuTimerBackend
+		{
+		public:
+			explicit NvrhiTimerBackend(nvrhi::IDevice* device)
+				: m_Device(device)
+			{
+			}
+
+			bool CreateQueries(uint32_t count) override
+			{
+				m_Queries.clear();
+				for (uint32_t i = 0; i < count; i++)
+				{
+					nvrhi::TimerQueryHandle query = m_Device->createTimerQuery();
+					if (!query)
+					{
+						m_Queries.clear();
+						return false;
+					}
+					m_Queries.push_back(std::move(query));
+				}
+				return true;
+			}
+			void BeginQuery(nvrhi::ICommandList* commandList, uint32_t query) override { commandList->beginTimerQuery(m_Queries[query]); }
+			void EndQuery(nvrhi::ICommandList* commandList, uint32_t query) override { commandList->endTimerQuery(m_Queries[query]); }
+			bool PollQuery(uint32_t query) override { return m_Device->pollTimerQuery(m_Queries[query]); }
+			// getTimerQueryTime also clears nvrhi's "started" state, which lets the query be recorded again.
+			float ReadMilliseconds(uint32_t query) override { return m_Device->getTimerQueryTime(m_Queries[query]) * 1000.0f; }
+			void BeginMarker(nvrhi::ICommandList* commandList, const char* name) override { commandList->beginMarker(name); }
+			void EndMarker(nvrhi::ICommandList* commandList) override { commandList->endMarker(); }
+
+		private:
+			nvrhi::IDevice* m_Device;
+			std::vector<nvrhi::TimerQueryHandle> m_Queries;
+		};
+
+	}
+
 	uint32_t GpuProfiler::s_QueriesInUse = 0;
+
+	Scope<GpuTimerBackend> CreateNvrhiTimerBackend(nvrhi::IDevice* device)
+	{
+		if (!device)
+			return nullptr;
+		return CreateScope<NvrhiTimerBackend>(device);
+	}
 
 	float GpuFrameSample::MillisecondsWithout(std::initializer_list<uint32_t> passes) const
 	{
@@ -59,8 +106,13 @@ namespace Basalt {
 	}
 
 	GpuProfiler::GpuProfiler(nvrhi::IDevice* device, std::vector<std::string> passNames, bool enabled)
-		: m_Device(device)
-		, m_Enabled(enabled && device)
+		: GpuProfiler(CreateNvrhiTimerBackend(device), std::move(passNames), enabled)
+	{
+	}
+
+	GpuProfiler::GpuProfiler(Scope<GpuTimerBackend> backend, std::vector<std::string> passNames, bool enabled)
+		: m_Backend(std::move(backend))
+		, m_Enabled(enabled && m_Backend)
 		, m_Average(std::move(passNames), AverageWindow)
 	{
 		if (!m_Enabled)
@@ -73,27 +125,15 @@ namespace Basalt {
 			m_Enabled = false;
 			return;
 		}
-
-		bool created = true;
-		for (FrameSlot& slot : m_Slots)
-		{
-			slot.Frame = m_Device->createTimerQuery();
-			slot.Passes.resize(GetPassCount());
-			slot.Recorded.assign(GetPassCount(), 0);
-			created = created && slot.Frame;
-			for (size_t pass = 0; created && pass < slot.Passes.size(); pass++)
-			{
-				slot.Passes[pass] = m_Device->createTimerQuery();
-				created = slot.Passes[pass] != nullptr;
-			}
-		}
-		if (!created)
+		if (!m_Backend->CreateQueries(queries))
 		{
 			BS_CORE_WARN("GpuProfiler: timer query creation failed; GPU timings are disabled for this renderer");
 			m_Enabled = false;
-			m_Slots = {};
 			return;
 		}
+		m_Slots.resize(Latency);
+		for (FrameSlot& slot : m_Slots)
+			slot.Recorded.assign(GetPassCount(), 0);
 		m_QueryCount = queries;
 		s_QueriesInUse += queries;
 	}
@@ -103,34 +143,35 @@ namespace Basalt {
 		s_QueriesInUse -= m_QueryCount;
 	}
 
-	bool GpuProfiler::IsReady(const FrameSlot& slot) const
+	bool GpuProfiler::IsReady(uint32_t slot) const
 	{
 		// Every query of a frame is in one command list, so they finish together; poll them all anyway,
 		// because reading one that is not ready would block until it is.
-		if (!m_Device->pollTimerQuery(slot.Frame))
+		if (!m_Backend->PollQuery(FrameQuery(slot)))
 			return false;
-		for (size_t pass = 0; pass < slot.Passes.size(); pass++)
+		for (uint32_t pass = 0; pass < GetPassCount(); pass++)
 		{
-			if (slot.Recorded[pass] && !m_Device->pollTimerQuery(slot.Passes[pass]))
+			if (m_Slots[slot].Recorded[pass] && !m_Backend->PollQuery(PassQuery(slot, pass)))
 				return false;
 		}
 		return true;
 	}
 
-	std::optional<GpuFrameSample> GpuProfiler::Collect(FrameSlot& slot)
+	GpuFrameSample GpuProfiler::Collect(uint32_t slot)
 	{
-		slot.Pending = false;
+		FrameSlot& frame = m_Slots[slot];
+		frame.Pending = false;
 		m_ConsecutiveDrops = 0;
 
 		GpuFrameSample sample;
-		sample.FrameMilliseconds = m_Device->getTimerQueryTime(slot.Frame) * 1000.0f;
-		sample.PassMilliseconds.assign(slot.Passes.size(), 0.0f);
-		for (size_t pass = 0; pass < slot.Passes.size(); pass++)
+		sample.FrameMilliseconds = m_Backend->ReadMilliseconds(FrameQuery(slot));
+		sample.PassMilliseconds.assign(GetPassCount(), 0.0f);
+		for (uint32_t pass = 0; pass < GetPassCount(); pass++)
 		{
-			if (slot.Recorded[pass])
-				sample.PassMilliseconds[pass] = m_Device->getTimerQueryTime(slot.Passes[pass]) * 1000.0f;
+			if (frame.Recorded[pass])
+				sample.PassMilliseconds[pass] = m_Backend->ReadMilliseconds(PassQuery(slot, pass));
 		}
-		sample.RenderedPixels = slot.RenderedPixels;
+		sample.RenderedPixels = frame.RenderedPixels;
 		m_Average.Add(sample);
 		return sample;
 	}
@@ -146,21 +187,21 @@ namespace Basalt {
 		std::optional<GpuFrameSample> sample;
 		if (slot.Pending)
 		{
-			if (!IsReady(slot))
+			if (!IsReady(m_Current))
 			{
 				// Normally impossible (see Latency). The slot stays pending, and this frame goes untimed: reusing
 				// its queries now could let the old submission write them after the new one reset them. A run
 				// of these means results stopped arriving (lost device, a driver that never completes
 				// timestamps), which also stalls dynamic resolution.
 				m_Average.AddDropped();
-				if (++m_ConsecutiveDrops == 2 * Latency)
+				if (++m_ConsecutiveDrops == DropWarningThreshold)
 					BS_CORE_WARN("GpuProfiler: no GPU timer results for {} frames in a row; GPU timings and dynamic resolution are stalled", m_ConsecutiveDrops);
 				return std::nullopt;
 			}
-			sample = Collect(slot);
+			sample = Collect(m_Current);
 		}
 		std::fill(slot.Recorded.begin(), slot.Recorded.end(), uint8_t{ 0 });
-		commandList->beginTimerQuery(slot.Frame);
+		m_Backend->BeginQuery(commandList, FrameQuery(m_Current));
 		m_FrameOpen = true;
 		return sample;
 	}
@@ -169,13 +210,14 @@ namespace Basalt {
 	{
 		BS_CORE_ASSERT(pass < GetPassCount(), "unknown GPU profiler pass");
 		BS_CORE_ASSERT(m_OpenPass == NoPass, "GPU profiler passes do not nest");
-		commandList->beginMarker(m_Average.Get().Passes[pass].Name.c_str());
+		if (m_Backend)
+			m_Backend->BeginMarker(commandList, m_Average.Get().Passes[pass].Name.c_str());
 		m_OpenPass = pass;
 		if (!m_FrameOpen)
 			return;
 		FrameSlot& slot = m_Slots[m_Current];
 		BS_CORE_ASSERT(!slot.Recorded[pass], "a GPU profiler pass ran twice in one frame");
-		commandList->beginTimerQuery(slot.Passes[pass]);
+		m_Backend->BeginQuery(commandList, PassQuery(m_Current, pass));
 		slot.Recorded[pass] = 1;
 	}
 
@@ -183,8 +225,9 @@ namespace Basalt {
 	{
 		BS_CORE_ASSERT(m_OpenPass == pass, "GpuProfiler::EndPass does not match the open pass");
 		if (m_FrameOpen)
-			commandList->endTimerQuery(m_Slots[m_Current].Passes[pass]);
-		commandList->endMarker();
+			m_Backend->EndQuery(commandList, PassQuery(m_Current, pass));
+		if (m_Backend)
+			m_Backend->EndMarker(commandList);
 		m_OpenPass = NoPass;
 	}
 
@@ -194,7 +237,7 @@ namespace Basalt {
 		if (!m_FrameOpen)
 			return;
 		FrameSlot& slot = m_Slots[m_Current];
-		commandList->endTimerQuery(slot.Frame);
+		m_Backend->EndQuery(commandList, FrameQuery(m_Current));
 		slot.RenderedPixels = renderedPixels;
 		slot.Pending = true;
 		m_FrameOpen = false;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Basalt/Core/FileSystem.h>
+#include <Basalt/Core/Log.h>
 #include <Basalt/Project/Project.h>
 
 #include <cstddef>
@@ -47,6 +48,19 @@ namespace BasaltTest {
 		std::filesystem::path m_Directory;
 		Basalt::Ref<Basalt::Project> m_Project;
 	};
+
+	// Log messages containing `text` since the history's total count was `since`.
+	inline int CountLogMessages(uint64_t since, const std::string& text)
+	{
+		uint64_t next = 0;
+		int count = 0;
+		for (const Basalt::LogMessage& message : Basalt::Log::GetHistory().GetMessagesSince(since, next))
+		{
+			if (message.Text.find(text) != std::string::npos)
+				count++;
+		}
+		return count;
+	}
 
 	// Standard base64 (with padding), for data: URIs in generated glTF files.
 	inline std::string Base64(const void* data, size_t size)
