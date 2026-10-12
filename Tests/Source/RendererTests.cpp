@@ -476,13 +476,16 @@ TEST_SUITE("GpuProfiler")
 		return sample;
 	}
 
-	// Timer queries whose results arrive when the test says so (the GPU "finishing" a frame).
+	// Timer queries whose results arrive when the test says so (the GPU "finishing" a frame). Enforces
+	// nvrhi's contract: a query is recorded only when new or reset, and read only once finished.
 	struct FakeTimers
 	{
 		bool FailCreation = false;
 		uint32_t Created = 0;
 		std::vector<uint8_t> Ready;
+		std::vector<uint8_t> Recordable;
 		std::vector<uint32_t> Begun;
+		uint32_t Resets = 0;
 		int Markers = 0;
 
 		// Every query recorded so far finishes: frame queries take 4 ms, pass queries 1 ms.
@@ -505,13 +508,21 @@ TEST_SUITE("GpuProfiler")
 				return false;
 			m_Timers.Created = count;
 			m_Timers.Ready.assign(count, 0);
+			m_Timers.Recordable.assign(count, 1);
 			m_Timers.Begun.assign(count, 0);
 			return true;
 		}
 		void BeginQuery(nvrhi::ICommandList*, uint32_t query) override
 		{
+			CHECK(m_Timers.Recordable[query]); // used without a reset
+			m_Timers.Recordable[query] = 0;
 			m_Timers.Begun[query]++;
 			m_Timers.Ready[query] = 0;
+		}
+		void ResetQuery(uint32_t query) override
+		{
+			m_Timers.Recordable[query] = 1;
+			m_Timers.Resets++;
 		}
 		void EndQuery(nvrhi::ICommandList*, uint32_t) override {}
 		bool PollQuery(uint32_t query) override { return m_Timers.Ready[query] != 0; }
@@ -560,6 +571,8 @@ TEST_SUITE("GpuProfiler")
 		CHECK(sample->RenderedPixels == 100);
 		CHECK(sample->FrameMilliseconds == 4.0f);
 		CHECK(sample->PassMilliseconds == std::vector<float>{ 1.0f, 0.0f });
+		// The frame and pass A queries of the slot were reset before it recorded again; pass B never ran.
+		CHECK(timers.Resets == 2);
 		CHECK(profiler.GetTimings().SampleCount == 1);
 		CHECK(profiler.GetTimings().DroppedFrames == 0);
 		CHECK(timers.Markers == static_cast<int>(GpuProfiler::Latency) + 1);

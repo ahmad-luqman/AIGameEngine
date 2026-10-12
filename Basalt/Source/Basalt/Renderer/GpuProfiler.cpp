@@ -35,8 +35,8 @@ namespace Basalt {
 			void BeginQuery(nvrhi::ICommandList* commandList, uint32_t query) override { commandList->beginTimerQuery(m_Queries[query]); }
 			void EndQuery(nvrhi::ICommandList* commandList, uint32_t query) override { commandList->endTimerQuery(m_Queries[query]); }
 			bool PollQuery(uint32_t query) override { return m_Device->pollTimerQuery(m_Queries[query]); }
-			// getTimerQueryTime also clears nvrhi's "started" state, which lets the query be recorded again.
 			float ReadMilliseconds(uint32_t query) override { return m_Device->getTimerQueryTime(m_Queries[query]) * 1000.0f; }
+			void ResetQuery(uint32_t query) override { m_Device->resetTimerQuery(m_Queries[query]); }
 			void BeginMarker(nvrhi::ICommandList* commandList, const char* name) override { commandList->beginMarker(name); }
 			void EndMarker(nvrhi::ICommandList* commandList) override { commandList->endMarker(); }
 
@@ -163,13 +163,17 @@ namespace Basalt {
 		frame.Pending = false;
 		m_ConsecutiveDrops = 0;
 
+		// Every query read is reset, so the slot can record again (passes that did not run were never begun).
 		GpuFrameSample sample;
 		sample.FrameMilliseconds = m_Backend->ReadMilliseconds(FrameQuery(slot));
+		m_Backend->ResetQuery(FrameQuery(slot));
 		sample.PassMilliseconds.assign(GetPassCount(), 0.0f);
 		for (uint32_t pass = 0; pass < GetPassCount(); pass++)
 		{
-			if (frame.Recorded[pass])
-				sample.PassMilliseconds[pass] = m_Backend->ReadMilliseconds(PassQuery(slot, pass));
+			if (!frame.Recorded[pass])
+				continue;
+			sample.PassMilliseconds[pass] = m_Backend->ReadMilliseconds(PassQuery(slot, pass));
+			m_Backend->ResetQuery(PassQuery(slot, pass));
 		}
 		sample.RenderedPixels = frame.RenderedPixels;
 		m_Average.Add(sample);
