@@ -73,11 +73,11 @@ return Player
 `Math.Pi`, `Math.Radians(deg)`, `Math.Degrees(rad)`, `Math.Clamp(v, min, max)`, `Math.Lerp(a, b, t)`,
 `Math.Sign(v)`, `Math.Seed(n)`, `Math.Random()` (0..1), `Math.Random(min, max)`, `Math.RandomInt(min, max)`.
 Random numbers are deterministic: each play session starts from the project's `RandomSeed`
-(`project.set randomSeed`, default 9067031) and produces the same sequence on every platform. Lua's
-`math.random`/`math.randomseed` use the same generator (standard Lua seeds them from the clock), so replays
-and automated tests reproduce exactly; `math.randomseed()` without an argument returns to the project
-seed. Replays store the seed they were recorded with, and `replay.run` refuses a different one.
-The random generator is deterministic; seed it for reproducible games and tests.
+(`project.set randomSeed`, applied from the next play; `project.info` shows it, by default 9067031) and
+produces the same sequence on every platform. Lua's `math.random`/`math.randomseed` use the same generator
+(standard Lua seeds them from the clock), so replays and automated tests reproduce exactly.
+`math.randomseed(n)` takes an integer (seeds are 32-bit); without an argument it returns to the seed the
+session started with. Replays store that seed, and `replay.run` refuses to run with a different one.
 
 Physics is deterministic across platforms too: the same scene and inputs reach the same state (and
 `scene.hash`) on Windows, Linux and macOS, in Debug and Release (`Tests/Data/Determinism` checks it on
@@ -122,7 +122,7 @@ Entity handles store an ID and stay safe to hold: using a destroyed entity raise
 | `e:GetJointRotation()` | Rotation (Euler degrees, like `Rotation`) of a cone or six-DOF Joint this entity holds, in the joint frame from its rest pose; nil otherwise |
 | `e:HasJoint()` | Whether the Joint this entity holds is a live constraint (false before both bodies exist, when it is invalid, and after it broke) |
 | `e:PlayAudio()`, `e:StopAudio()`, `e:IsAudioPlaying()` | The entity's AudioSource |
-| `e:PlayParticles()`, `e:StopParticles([clear])`, `e:EmitParticles(count)` | The entity's ParticleEmitter (see Particles). Errors without a ParticleEmitter |
+| `e:PlayParticles()`, `e:StopParticles([clear])`, `e:EmitParticles(count)` | The entity's ParticleEmitter (see Particles; `clear` is a boolean). Errors without a ParticleEmitter |
 | `e:IsEmittingParticles()`, `e:GetParticleCount()` | Whether the ParticleEmitter is playing, and its live particles (false/0 without one) |
 | `e:GetScript()` | The entity's script instance (call its functions, read its fields) |
 | `e:Destroy()` | Destroy at the end of the frame (with children) |
@@ -373,9 +373,9 @@ end
 
 A `ParticleEmitter` component emits camera-facing billboards while the scene plays (and while the editor
 simulates). Particles are simulated on the CPU and drawn unlit, sorted with transparent meshes; their
-colors are linear HDR, so values above 1 glow through the tonemapper (use `Blend = "Additive"` for sparks
-and fire, `"Alpha"` for smoke). `Texture` is a project-relative image (its alpha is coverage); without one
-particles are soft discs.
+colors are linear HDR, so values above 1 stay bright after exposure and tonemapping (there is no bloom).
+Use `Blend = "Additive"` for sparks and fire, `"Alpha"` for smoke. `Texture` is a project-relative image
+(its alpha is coverage); without one particles are soft discs.
 
 - Each emission cycle lasts `Duration` seconds: it starts with `BurstCount` particles and emits `Rate` per
   second. `Looping` emitters start a new cycle (and burst) at its end; the others stop emitting.
@@ -383,24 +383,31 @@ particles are soft discs.
 - `e:PlayParticles()` starts a new cycle unless the emitter is playing. `e:StopParticles()` stops emitting
   and lets live particles finish; `e:StopParticles(true)` also removes them.
 - `e:EmitParticles(count)` emits up to `count` (0..10000) particles at once, playing or not, and returns
-  how many fit under `MaxParticles`.
+  how many fit under `MaxParticles`. They use the emitter's shape, speeds, lifetimes, colors and sizes, and
+  are first drawn where they were born, like burst and rate particles.
 - Shapes are in the emitter's local space: `Point` and `Sphere` (radius `ShapeRadius`) emit in every
   direction, `Box` (half-extents `BoxExtents`) along local +Y, `Cone` (base radius `ShapeRadius`, half-angle
-  `ConeAngle` degrees) within that angle of +Y. Speed is `SpeedMin..SpeedMax` along that direction, plus
-  `Velocity` (emitter-local); `GravityScale` scales the scene gravity; `Drag` slows particles down.
+  `ConeAngle` degrees) within that angle of +Y. Speed (m/s) is picked between `SpeedMin` and `SpeedMax`
+  along that direction (negative speeds emit the other way), plus `Velocity` (an emitter-local direction).
+  The shape scales with the emitter; speeds do not. `GravityScale` scales the scene gravity; `Drag` is a
+  rate (1/s): speed decays by about e^-Drag per second.
 - `SimulationSpace = "World"` leaves particles where they were emitted when the emitter moves; `"Local"`
-  carries them along.
-- Color and size go from `StartColor`/`StartSize` to `EndColor`/`EndSize` over each particle's life
-  (`LifetimeMin..LifetimeMax` seconds).
+  carries (and turns) them along.
+- Color and size go from `StartColor`/`StartSize` to `EndColor`/`EndSize` over each particle's life (picked
+  between `LifetimeMin` and `LifetimeMax` seconds). Min/max pairs may be in either order.
+- Limits: `Duration` and lifetimes at least 0.001 s, `MaxParticles` 1..10000, `Rate` up to 1e6 per second,
+  speeds, `Velocity`, `GravityScale`, `Drag`, sizes, `ShapeRadius`/`BoxExtents` and color channels up to
+  1e4 in magnitude, opacity 0..1, `ConeAngle` 0..180. `SetComponent` rejects values outside them.
 
-Emitters are deterministic: each one draws from its own random stream, seeded from the project's
-`RandomSeed` and the order emitters appear in (scene emitters by entity ID, then the ones added during
-play), so the same session plays the same particles, and particles never change what `Math.Random`
+Emitters are deterministic: each one draws from its own random stream, seeded from the session's seed
+(the project's `RandomSeed`) and the order emitters appear in (scene emitters by entity ID, then the ones
+added during play), so the same session plays the same particles on the same platform (shape sampling uses
+`sin`/`cos`, which differ slightly between C libraries), and particles never change what `Math.Random`
 returns. Particles are runtime state only: they are not saved and not part of `scene.hash`.
 
 ```lua
 function Explosion:OnCreate()
-    self.Entity:EmitParticles(200)          -- one-off burst, whatever the emitter's settings
+    self.Entity:EmitParticles(200)          -- one-off burst without playing the emitter (Rate/BurstCount do not apply)
 end
 
 function Torch:OnUpdate(dt)

@@ -14,6 +14,7 @@
 	{ "id": "dynamic-resolution-type", "command": "project.set", "params": { "dynamicResolution": "on" }, "expectError": "'dynamicResolution' must be true or false" },
 	{ "id": "target-frame-rate-range", "command": "project.set", "params": { "targetFrameRate": 5 }, "expectError": "'targetFrameRate' must be in" },
 	{ "id": "min-render-scale-range", "command": "project.set", "params": { "minRenderScale": 0.1 }, "expectError": "'minRenderScale' must be in" },
+	{ "id": "random-seed-range", "command": "project.set", "params": { "randomSeed": -1 }, "expectError": "'randomSeed' must be in" },
 	{ "id": "render-stats-headless", "command": "render.stats", "expectError": "render statistics need a GPU host" },
 	{ "id": "image-same", "command": "image.compare", "params": { "actual": "Assets/Textures/Checker.png", "reference": "Assets/Textures/Checker.png", "assertMatch": true } },
 	{ "id": "hash", "command": "scene.hash" },

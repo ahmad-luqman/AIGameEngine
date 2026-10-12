@@ -244,7 +244,7 @@ local function TestSystems(self)
 	ExpectError("StopParticles without a ParticleEmitter", function() crate:StopParticles() end, "needs a ParticleEmitter")
 	Check("Particle queries without a ParticleEmitter", not crate:IsEmittingParticles() and crate:GetParticleCount() == 0)
 	ExpectError("EmitParticles with a negative count", function() confetti:EmitParticles(-1) end, "between 0 and")
-	ExpectError("ParticleEmitter validation", function() confetti:SetComponent("ParticleEmitter", { LifetimeMin = 0 }) end, "LifetimeMin must be positive")
+	ExpectError("ParticleEmitter validation", function() confetti:SetComponent("ParticleEmitter", { LifetimeMin = 0 }) end, "LifetimeMin must be at least")
 
 	-- Input names are validated.
 	ExpectError("Unknown key name", function() Input.IsKeyDown("Hyperspace") end, "unknown key")
@@ -309,6 +309,11 @@ function Driver:OnUpdate(dt)
 		puff:AddComponent("ParticleEmitter", { BurstCount = 10, Rate = 0, Looping = false, Duration = 0.1, LifetimeMin = 0.2, LifetimeMax = 0.2 })
 		self.Puff = puff
 		Check("Emitter added during play plays", puff:IsEmittingParticles() and puff:GetParticleCount() == 0)
+		-- PlayOnStart = false holds for emitters added during play too (they wait for PlayParticles).
+		local trigger = Scene.CreateEntity("Trigger")
+		trigger:AddComponent("ParticleEmitter", { PlayOnStart = false, BurstCount = 10 })
+		Check("Emitter added during play without PlayOnStart waits", not trigger:IsEmittingParticles())
+		trigger:Destroy()
 
 		-- Spawning a prefab.
 		local projectile = Scene.Instantiate("Assets/Prefabs/Projectile.bprefab", Vec3(-4, 3, 0))
@@ -472,9 +477,10 @@ function Driver:OnUpdate(dt)
 		Check("RigidBody Layer and Continuous fields", Scene.FindEntityByName("GhostBox"):GetComponent("RigidBody").Layer == "Ghost" and Scene.FindEntityByName("Bullet"):GetComponent("RigidBody").Continuous)
 		Check("Physics.GetLayers", table.concat(Physics.GetLayers(), ",") == "Default,Ghost,Debris")
 
-		-- 30 updates: the 20-particle burst and 40/s for half a second, none old enough to expire.
+		-- 29 particle updates (scripts run before particles each frame): the 20-particle burst and 40/s for
+		-- 29/60 s, none old enough to expire.
 		local sparkCount = Scene.FindEntityByName("Sparks"):GetParticleCount()
-		Check("Particles emit at their rate", sparkCount >= 39 and sparkCount <= 40)
+		Check("Particles emit at their rate", sparkCount >= 38 and sparkCount <= 39)
 		Check("Particles live their lifetime", Scene.FindEntityByName("Confetti"):GetParticleCount() == 30)
 		Check("Particles expire; a one-shot emitter stops", self.Puff:GetParticleCount() == 0 and not self.Puff:IsEmittingParticles())
 		self.Puff:Destroy()

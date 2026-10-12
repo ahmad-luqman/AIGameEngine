@@ -400,20 +400,31 @@ namespace Basalt {
 		Additive
 	};
 
-	// Emits camera-facing particles while the scene plays (ParticleSystem simulates them on the CPU, the
-	// renderer draws them in the transparent pass, unlit). Shapes and Velocity are in the emitter's local
-	// space; Box and Cone emit along local +Y, Point and Sphere in every direction. Each emission cycle
+	// Emits camera-facing particles while the scene plays or simulates (ParticleSystem simulates them on the
+	// CPU, the renderer draws them unlit in the transparent pass). Shapes and Velocity are in the emitter's
+	// local space; Box and Cone emit along local +Y, Point and Sphere in every direction. Each emission cycle
 	// lasts Duration seconds and starts with BurstCount particles; Rate emits continuously in between.
+	// Value limits are below; ValidateParticleEmitter (Particles/ParticleEmitterRules.h) enforces them.
 	struct ParticleEmitterComponent
 	{
-		// Upper bound for MaxParticles (the registry rejects larger values).
+		// Largest MaxParticles and BurstCount.
 		static constexpr uint32_t MaxParticlesLimit = 10000;
+		// Shortest Duration and lifetime (s).
+		static constexpr float MinTime = 1e-3f;
+		// Largest Rate (particles/s).
+		static constexpr float MaxRate = 1e6f;
+		// Largest magnitude of speeds, Velocity, GravityScale, Drag, shape and particle sizes and color
+		// channels: keeps a particle's motion far from float overflow over any lifetime.
+		static constexpr float MaxMagnitude = 1e4f;
+		// Largest ConeAngle (degrees): a full sphere.
+		static constexpr float MaxConeAngle = 180.0f;
 
 		bool PlayOnStart = true;
 		// Restarts the cycle (and its burst) every Duration seconds; otherwise emission stops after one cycle.
 		bool Looping = true;
 		float Duration = 5.0f;
-		// Live particles per emitter; emission pauses while the emitter is full.
+		// Cap on live particles; emission beyond it is dropped, not deferred. Lowering it during play removes
+		// the excess.
 		uint32_t MaxParticles = 1000;
 
 		// Particles per second.
@@ -427,22 +438,24 @@ namespace Basalt {
 		// Half-angle of the Cone shape in degrees (0..180; 180 emits in every direction).
 		float ConeAngle = 25.0f;
 
-		// Seconds a particle lives, picked uniformly per particle.
+		// Seconds a particle lives, picked uniformly between the two (in either order).
 		float LifetimeMin = 1.0f;
 		float LifetimeMax = 2.0f;
-		// Initial speed along the shape's emission direction (m/s), picked uniformly per particle.
+		// Initial speed along the shape's emission direction (m/s), picked uniformly between the two (in
+		// either order); negative speeds emit against that direction.
 		float SpeedMin = 1.0f;
 		float SpeedMax = 2.0f;
-		// Added to every particle's initial velocity (emitter-local, m/s).
+		// Added to every particle's initial velocity (emitter-local direction, m/s).
 		glm::vec3 Velocity = { 0.0f, 0.0f, 0.0f };
 		// Scales the scene's physics gravity.
 		float GravityScale = 0.0f;
-		// Fraction of speed lost per second (linear drag, >= 0).
+		// Linear drag rate (1/s, >= 0): speed decays by about e^-Drag per second (1 leaves ~37% after a second).
 		float Drag = 0.0f;
-		// World: particles stay where they were emitted when the emitter moves. Local: they move with it.
+		// World: particles stay where they were emitted when the emitter moves. Local: they move (and turn)
+		// with it. Either way the shape scales with the emitter and speeds are in m/s.
 		ParticleSimulationSpace SimulationSpace = ParticleSimulationSpace::World;
 
-		// Linear HDR color and opacity at birth and at death, interpolated over the particle's life.
+		// Linear HDR color and opacity (0..1) at birth and at death, interpolated over the particle's life.
 		glm::vec4 StartColor = { 1.0f, 1.0f, 1.0f, 1.0f };
 		glm::vec4 EndColor = { 1.0f, 1.0f, 1.0f, 0.0f };
 		// Billboard width and height (m) at birth and at death.

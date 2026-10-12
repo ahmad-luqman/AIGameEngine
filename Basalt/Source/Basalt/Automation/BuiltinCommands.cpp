@@ -792,8 +792,10 @@ namespace Basalt {
 					throw CommandError("not recording (use replay.record_start)");
 				const uint64_t frames = session.IsPlaying() ? RequireScene(session).GetFrameCount() : 0;
 				const json events = session.StopRecording();
-				// The seed is part of the run: Lua randomness and particles follow it.
-				json replay = { { "Format", "BasaltReplay" }, { "Version", 1 }, { "Frames", frames }, { "RandomSeed", Project::GetActiveRandomSeed() }, { "Events", events } };
+				// The seed is part of the run (Lua randomness and particles follow it): the one the session started
+				// with, which project.set randomSeed during the recording does not change.
+				const uint32_t seed = session.IsPlaying() ? RequireScene(session).GetRandomSeed() : Project::GetActiveRandomSeed();
+				json replay = { { "Format", "BasaltReplay" }, { "Version", 1 }, { "Frames", frames }, { "RandomSeed", seed }, { "Events", events } };
 				// The recorded run's final state: replay.run with assertHash checks a replay reproduces it.
 				if (session.IsPlaying())
 					replay["StateHash"] = SceneSerializer::ComputeStateHash(RequireScene(session));
@@ -812,14 +814,13 @@ namespace Basalt {
 					const json replay = ParseJson(*text);
 					if (!replay.is_object() || replay.value("Format", "") != "BasaltReplay" || !replay.contains("Events") || !replay["Events"].is_array())
 						throw CommandError("'" + path + "' is not a Basalt replay file");
-					// Replays recorded before the seed was stored carry none and run with the project's.
-					if (const auto seed = replay.find("RandomSeed"); seed != replay.end())
-					{
-						if (!seed->is_number_unsigned() || seed->get<uint64_t>() > UINT32_MAX)
-							throw CommandError("'" + path + "' has an invalid RandomSeed");
-						if (seed->get<uint64_t>() != Project::GetActiveRandomSeed())
-							throw CommandError("'" + path + "' was recorded with random seed " + std::to_string(seed->get<uint64_t>()) + " but the project uses " + std::to_string(Project::GetActiveRandomSeed()) + " (project.set randomSeed)");
-					}
+					// Replays from before seeds were stored ran with Random::DefaultSeed, the only seed there was.
+					uint32_t recordedSeed = Random::DefaultSeed;
+					if (const auto seed = replay.find("RandomSeed"); seed != replay.end() && !JsonToUInt32(*seed, recordedSeed))
+						throw CommandError("'" + path + "' has an invalid RandomSeed (must be an integer between 0 and 4294967295)");
+					// The replay restarts play, which seeds from the project.
+					if (recordedSeed != Project::GetActiveRandomSeed())
+						throw CommandError("'" + path + "' was recorded with random seed " + std::to_string(recordedSeed) + " but the project uses " + std::to_string(Project::GetActiveRandomSeed()) + " (project.set randomSeed)");
 					const int64_t recorded = replay.value("Frames", int64_t{ 0 });
 					const uint32_t frames = static_cast<uint32_t>(OptionalInteger(params, "frames", recorded, 0, 10000000));
 

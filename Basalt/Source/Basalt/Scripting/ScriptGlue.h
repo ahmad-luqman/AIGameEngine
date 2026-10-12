@@ -36,6 +36,8 @@ namespace Basalt {
 		float DeltaTime = 0.0f;
 		// Backs Math.Random* and Lua's math.random: seeded and identical on every platform.
 		Random Rng;
+		// The session's starting seed (Scene::GetRandomSeed), which math.randomseed() returns to.
+		uint32_t Seed = Random::DefaultSeed;
 	};
 
 	// Registers the complete Basalt Lua API (see Docs/ScriptingAPI.md) into the state.

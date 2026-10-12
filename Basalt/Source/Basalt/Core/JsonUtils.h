@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 
 #include <cmath>
+#include <cstdint>
 #include <exception>
 #include <limits>
 #include <string_view>
@@ -50,6 +51,23 @@ namespace Basalt {
 		if (!std::isfinite(number) || std::abs(number) > static_cast<double>(std::numeric_limits<float>::max()))
 			return false;
 		out = static_cast<float>(number);
+		return true;
+	}
+
+	// Reads a JSON integer in [0, UINT32_MAX] (nlohmann's get<uint32_t> would wrap negative and larger values).
+	// Returns false when `value` is not such an integer.
+	inline bool JsonToUInt32(const nlohmann::json& value, uint32_t& out)
+	{
+		if (value.is_number_unsigned())
+		{
+			if (value.get<uint64_t>() > std::numeric_limits<uint32_t>::max())
+				return false;
+			out = static_cast<uint32_t>(value.get<uint64_t>());
+			return true;
+		}
+		if (!value.is_number_integer() || value.get<int64_t>() < 0 || value.get<int64_t>() > std::numeric_limits<uint32_t>::max())
+			return false;
+		out = static_cast<uint32_t>(value.get<int64_t>());
 		return true;
 	}
 

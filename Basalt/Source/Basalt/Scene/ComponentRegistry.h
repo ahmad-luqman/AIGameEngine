@@ -19,8 +19,10 @@ namespace Basalt {
 	// snapshots, Lua (Entity:GetComponent/SetComponent) and the automation API all go through these
 	// functions, so a component behaves identically everywhere.
 	//
-	// Deserialize merges: only keys present in the JSON are changed. Unknown keys and wrong value types
-	// are rejected with a descriptive error (and the component is left unchanged).
+	// Deserialize merges: only keys present in the JSON are changed, and a missing component is added with
+	// its defaults and the given keys (one construction, no separate update). Unknown keys, wrong value
+	// types and values the component's rules reject fail with a descriptive error, leaving the entity
+	// unchanged.
 	struct ComponentInfo
 	{
 		// Name used in files and APIs, e.g. "Transform", "RigidBody".
@@ -55,7 +57,7 @@ namespace Basalt {
 		// Comma-separated list of component names, for error messages.
 		static std::string GetNameList();
 
-		// Adds the component if needed and merges the JSON into it.
+		// Adds the component if needed and merges the JSON into it; on failure the entity is unchanged.
 		static bool AddOrPatch(Entity entity, std::string_view name, const nlohmann::json& data, std::string& outError);
 
 		// Entities copied with fresh UUIDs (prefab instances, duplicated trees) keep references to the

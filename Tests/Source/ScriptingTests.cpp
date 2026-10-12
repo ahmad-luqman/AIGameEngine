@@ -2,6 +2,7 @@
 
 #include <Basalt/Core/Input.h>
 #include <Basalt/Physics/PhysicsWorld.h>
+#include <Basalt/Project/Project.h>
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
 #include <Basalt/Scene/SceneSerializer.h>
@@ -1064,6 +1065,38 @@ TEST_SUITE("Scripting")
 		CHECK(draw(sequence) == otherSeed);
 		// Reseeding without an argument starts the project's sequence again, not the engine default.
 		CHECK(draw("math.random(10) math.random(10) math.randomseed() local t = {} for i = 1, 4 do t[i] = math.random(1000000) end return table.concat(t, ',')") == otherSeed);
+
+		// The session keeps its seed when the project's changes mid-session (it applies from the next play).
+		Scene scene;
+		scene.OnRuntimeStart();
+		Project::GetActive()->GetConfig().RandomSeed = 7;
+		CHECK(scene.GetRandomSeed() == 4242u);
+		std::string result;
+		REQUIRE(scene.GetScriptEngine()->ExecuteString(std::string("math.randomseed() ") + sequence, result));
+		CHECK(result == otherSeed);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("math.randomseed takes integers (or integral floats) and rejects anything else")
+	{
+		Scene scene;
+		scene.OnRuntimeStart();
+		ScriptEngine& lua = *scene.GetScriptEngine();
+		std::string seeded;
+		std::string result;
+		REQUIRE(lua.ExecuteString("math.randomseed(12) return math.random(1000000)", seeded));
+		REQUIRE(lua.ExecuteString("math.randomseed(12.0) return math.random(1000000)", result));
+		CHECK(result == seeded);
+		// Seeds are 32-bit: 2^32 + 12 seeds like 12.
+		REQUIRE(lua.ExecuteString("math.randomseed(4294967308) return math.random(1000000)", result));
+		CHECK(result == seeded);
+		for (const char* call : { "math.randomseed('abc')", "math.randomseed(1.5)", "math.randomseed({})" })
+		{
+			INFO(call);
+			CHECK_FALSE(lua.ExecuteString(call, result));
+			CHECK(result.find("no integer representation") != std::string::npos);
+		}
+		scene.OnRuntimeStop();
 	}
 
 	TEST_CASE("Scripts added at runtime start on the next update; require loads project modules")
