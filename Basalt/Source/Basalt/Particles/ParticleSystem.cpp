@@ -192,7 +192,9 @@ namespace Basalt {
 		emitter.Handle = handle;
 		emitter.Rng.Seed(MixSeed(m_Scene->GetRandomSeed(), m_NextOrdinal++));
 		m_Order.push_back(id);
-		if (m_Scene->GetRegistry().get<ParticleEmitterComponent>(handle).PlayOnStart)
+		const ParticleEmitterComponent component = ReadComponent(emitter);
+		emitter.Space = component.SimulationSpace;
+		if (component.PlayOnStart)
 			StartCycle(emitter);
 	}
 
@@ -233,6 +235,38 @@ namespace Basalt {
 			BS_CORE_WARN("ParticleSystem: the ParticleEmitter on '{}' has invalid values ({}); simulating corrected ones", Entity(emitter.Handle, m_Scene).GetName(), problems);
 		}
 		return sanitized;
+	}
+
+	void ParticleSystem::ConvertSpace(Emitter& emitter, ParticleSimulationSpace space, const glm::mat4& emitterTransform)
+	{
+		if (emitter.Space == space)
+			return;
+		emitter.Space = space;
+		if (space == ParticleSimulationSpace::World)
+		{
+			// Local units through the scaled transform give world positions and m/s.
+			const glm::mat3 basis(emitterTransform);
+			for (Particle& particle : emitter.Particles)
+			{
+				particle.Position = glm::vec3(emitterTransform * glm::vec4(particle.Position, 1.0f));
+				particle.Velocity = basis * particle.Velocity;
+			}
+			return;
+		}
+		const glm::mat3 toEmitter = WorldToEmitter(emitterTransform);
+		// A degenerate emitter has no local frame to hold them: its particles cannot be kept.
+		if (toEmitter == glm::mat3(0.0f))
+		{
+			emitter.Particles.clear();
+			emitter.FreshCount = 0;
+			return;
+		}
+		const glm::vec3 origin(emitterTransform[3]);
+		for (Particle& particle : emitter.Particles)
+		{
+			particle.Position = toEmitter * (particle.Position - origin);
+			particle.Velocity = toEmitter * particle.Velocity;
+		}
 	}
 
 	void ParticleSystem::StartCycle(Emitter& emitter)
@@ -276,7 +310,11 @@ namespace Basalt {
 		Emitter* emitter = Find(entity);
 		if (!emitter)
 			return 0;
-		const uint32_t spawned = Spawn(*emitter, ReadComponent(*emitter), m_Scene->GetWorldTransform(entity), count);
+		const ParticleEmitterComponent component = ReadComponent(*emitter);
+		const glm::mat4 transform = m_Scene->GetWorldTransform(entity);
+		// New particles are stored in the component's space: bring the live ones there first.
+		ConvertSpace(*emitter, component.SimulationSpace, transform);
+		const uint32_t spawned = Spawn(*emitter, component, transform, count);
 		emitter->FreshCount += spawned;
 		return spawned;
 	}
@@ -384,6 +422,7 @@ namespace Basalt {
 				emitter.Particles.resize(component.MaxParticles);
 			}
 			BS_CORE_ASSERT(emitter.FreshCount <= emitter.Particles.size(), "fresh particles are a suffix of the particles");
+			ConvertSpace(emitter, component.SimulationSpace, transform);
 
 			glm::vec3 gravity = m_Scene->GetPhysicsSettings().Gravity * component.GravityScale;
 			// Local particles are drawn through the emitter's transform, so world gravity is expressed in its
@@ -453,7 +492,8 @@ namespace Basalt {
 				continue;
 			// Read here too (not cached from Update): edits made while paused render, and are reported, at once.
 			const ParticleEmitterComponent component = ReadComponent(emitter);
-			const bool local = component.SimulationSpace == ParticleSimulationSpace::Local;
+			// The space the particles are stored in (a SimulationSpace change converts them at the next update).
+			const bool local = emitter.Space == ParticleSimulationSpace::Local;
 			const glm::mat4 transform = local ? m_Scene->GetWorldTransform(Entity(emitter.Handle, m_Scene)) : glm::mat4(1.0f);
 
 			ParticleBatch batch;
