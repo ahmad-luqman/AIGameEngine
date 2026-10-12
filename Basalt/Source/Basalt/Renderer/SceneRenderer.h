@@ -1,11 +1,14 @@
 #pragma once
 
 #include "Basalt/Core/Base.h"
+#include "Basalt/Renderer/DynamicResolution.h"
+#include "Basalt/Renderer/GpuProfiler.h"
 #include "Basalt/Renderer/RenderResources.h"
 
 #include <glm/glm.hpp>
 #include <nvrhi/nvrhi.h>
 
+#include <optional>
 #include <vector>
 
 namespace Basalt {
@@ -35,12 +38,16 @@ namespace Basalt {
 	//   cascaded soft shadow maps -> depth/normal prepass -> SSAO (+ bilateral blur) -> forward PBR with
 	//   IBL (opaque) -> skybox -> transparent PBR (sorted) -> exposure + tonemapping + sRGB encode.
 	// The scene renders at the viewport size times the render scale; the tonemap pass resamples it to the
-	// viewport size. The output texture can be shown through ImGui (editor viewport) or blitted to the
-	// swapchain.
+	// viewport size. With dynamic resolution the scale follows the GPU time measured by the renderer's
+	// GpuProfiler; the targets keep the size of the configured render scale and the scene renders into
+	// their top-left corner, so scale changes never reallocate. The output texture can be shown through
+	// ImGui (editor viewport) or blitted to the swapchain.
 	class SceneRenderer
 	{
 	public:
-		explicit SceneRenderer(nvrhi::IDevice* device);
+		// gpuTimers: time the passes with GPU timer queries (GraphicsDevice::SupportsTimerQueries). Needed for
+		// GetGpuTimings and dynamic resolution.
+		explicit SceneRenderer(nvrhi::IDevice* device, bool gpuTimers = false);
 		~SceneRenderer();
 
 		SceneRenderer(const SceneRenderer&) = delete;
@@ -53,9 +60,17 @@ namespace Basalt {
 		uint32_t GetViewportWidth() const { return m_Width; }
 		uint32_t GetViewportHeight() const { return m_Height; }
 		// Fraction of the viewport size the scene renders at, clamped to [MinRenderScale, MaxRenderScale]
-		// (RenderMath.h). Takes effect at the next SetViewportSize or Render, which recreate the targets.
+		// (RenderMath.h); the highest scale when dynamic resolution is on. Takes effect at the next
+		// SetViewportSize or Render, which recreate the targets.
 		void SetRenderScale(float scale);
 		float GetRenderScale() const { return m_RenderScale; }
+		// Lets the render scale drop (down to the minimum) to keep the GPU time within the target frame time.
+		// Needs GPU timers; without them the scene renders at the render scale (a warning is logged once).
+		void SetDynamicResolution(const DynamicResolutionSettings& settings);
+		const DynamicResolutionSettings& GetDynamicResolution() const { return m_DynamicResolution; }
+		bool IsDynamicResolutionActive() const;
+		// Scale and size the last frame rendered at (below the render scale when dynamic resolution lowered it).
+		float GetCurrentRenderScale() const { return m_CurrentRenderScale; }
 		uint32_t GetRenderWidth() const { return m_RenderWidth; }
 		uint32_t GetRenderHeight() const { return m_RenderHeight; }
 
@@ -64,7 +79,8 @@ namespace Basalt {
 
 		// RGBA8 display-referred image of the last Render (shader resource state), at the viewport size.
 		nvrhi::ITexture* GetOutputTexture() const { return m_OutputTexture; }
-		// Scene depth of the last frame (D32), at the render size.
+		// Scene depth of the last frame (D32). The scene covers its top-left GetRenderWidth() x GetRenderHeight()
+		// texels; the texture is larger while dynamic resolution renders below the render scale.
 		nvrhi::ITexture* GetDepthTexture() const { return m_DepthTexture; }
 		// Framebuffer with the output color and the scene depth at the viewport size attached (for overlays).
 		nvrhi::IFramebuffer* GetOverlayFramebuffer() const { return m_OverlayFramebuffer; }
@@ -76,21 +92,39 @@ namespace Basalt {
 		bool ReadOutputPixels(std::vector<uint8_t>& outPixels, uint32_t& outWidth, uint32_t& outHeight);
 
 		const SceneRendererStatistics& GetStatistics() const { return m_Statistics; }
+		// GPU time per pass, averaged over the last frames (GpuProfiler::AverageWindow). Empty (SampleCount 0)
+		// until results arrive, and always without GPU timers.
+		const GpuTimings& GetGpuTimings() const;
+		bool HasGpuTimers() const;
 		RenderResources& GetResources() { return *m_Resources; }
 
 	private:
 		void ResizeTargets(uint32_t width, uint32_t height, float renderScale);
+		// Picks this frame's render size from the configured scale and, with dynamic resolution, the GPU time
+		// of an earlier frame.
+		void UpdateRenderSize(const std::optional<GpuFrameSample>& sample);
 
 		struct Impl;
 		Scope<Impl> m_Impl;
 		nvrhi::IDevice* m_Device = nullptr;
 		Scope<RenderResources> m_Resources;
 
+		bool m_GpuTimers = false;
 		uint32_t m_Width = 0;
 		uint32_t m_Height = 0;
 		float m_RenderScale = 1.0f;
+		// Size of the scene targets: the viewport size times the render scale.
+		uint32_t m_TargetWidth = 0;
+		uint32_t m_TargetHeight = 0;
+		// The targets were created for dynamic resolution (overlay depth and resampling even at full size).
+		bool m_TargetsDynamic = false;
+		// Area of the targets the scene renders into this frame.
 		uint32_t m_RenderWidth = 0;
 		uint32_t m_RenderHeight = 0;
+		float m_CurrentRenderScale = 1.0f;
+		DynamicResolutionSettings m_DynamicResolution;
+		DynamicResolutionController m_DynamicController;
+		bool m_WarnedNoGpuTimers = false;
 		nvrhi::TextureHandle m_OutputTexture;
 		nvrhi::TextureHandle m_DepthTexture;
 		nvrhi::FramebufferHandle m_OverlayFramebuffer;

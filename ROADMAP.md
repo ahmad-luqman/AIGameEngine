@@ -81,10 +81,9 @@ The features most games need, roughly in order of impact.
   strategy games).
 - **Reflection probes and SSR — L.** Local box-projected cubemap probes captured in the editor, then
   screen-space reflections for contact detail.
-- **Dynamic resolution — S.** Drive `SceneRenderer::SetRenderScale` from GPU frame time to hold a target
-  frame rate. Render scale itself ships (project `RenderScale`, bilinear upsampling in the tonemap pass);
-  allocate the targets at the maximum size and render into a sub-rectangle so changes do not reallocate,
-  and consider a sharper upscaler (FSR 1 EASU/RCAS) once scales below ~0.75 are common.
+- **Sharper upscaling — S.** Render scale and dynamic resolution ship with bilinear upsampling in the
+  tonemap pass, which softens the image below ~0.75. Add FSR 1 (EASU upscale + RCAS sharpening) as an
+  option; with dynamic resolution, EASU must read only the render area (`UVScale` in Tonemap.frag).
 - **Decals and text in 3D — L each.**
 
 ### Scripting
@@ -252,8 +251,9 @@ more reliable.
 - **Job system — M.** A small engine-wide thread pool with work stealing, used by asset loading,
   animation and culling. Physics currently owns a private `JPH::JobSystemThreadPool`; route it through
   the shared pool (Jolt's `JobSystemWithBarrier`) so the two do not oversubscribe the CPU.
-- **GPU profiler — S.** nvrhi timer queries per pass, shown in the editor stats overlay and returned by a
-  `render.stats` command.
+- **GPU profiler follow-ups — S.** Scene passes are timed (`GpuProfiler`, editor statistics, `render.stats`);
+  the editor's own ImGui pass and the runtime blit are not. Time them too and show the totals in the
+  play-mode stats overlay.
 - **CPU profiler integration — S.** Optional Tracy instrumentation behind `BASALT_PROFILE`, compiled out
   by default.
 - **Memory tracking — S.** Track allocations per subsystem (assets, GPU buffers, Lua heap) and report them

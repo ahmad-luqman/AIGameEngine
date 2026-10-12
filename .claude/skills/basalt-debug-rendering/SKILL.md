@@ -14,7 +14,9 @@ description: Diagnose rendering problems in Basalt (black/inside-out/flipped ima
 2. **Isolate passes** with `--debug-view` and by toggling `scene.settings`
    `{"Renderer": {"SSAOEnabled": false}}` / `{"ShadowsEnabled": false}` in a copy of the scene. Check the
    project's `RenderScale` too (`project.info`; override with `--render-scale 1`): below 1 the scene renders
-   smaller and is upsampled, so soft or stair-stepped edges are expected there.
+   smaller and is upsampled, so soft or stair-stepped edges are expected there. With `DynamicResolution`
+   on, the scale also changes with GPU load: turn it off (`--dynamic-resolution 0`) for stable images.
+   For slow frames, `render.stats` (editor) and the runtime's `--frames` log give the GPU time per pass.
    Compare intermediate images before reasoning about shader math.
 3. **Known conventions** (AGENTS.md "Rendering conventions"): clip space is +Y up (nvrhi flips the Vulkan
    viewport) — never flip projections; fullscreen UV (0,0) is top-left; meshes wind CCW; GLSL

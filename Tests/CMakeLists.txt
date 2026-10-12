@@ -45,9 +45,13 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 
 	set(basaltGpuTests "")
 	# "Scaled" is the lit image rendered at half resolution and upsampled by the tonemap pass (render scale).
-	foreach(view Lit SSAO Normals Depth Scaled)
+	# "Dynamic" reaches the same image through dynamic resolution: an unreachable frame-rate target drops the
+	# scale to its 0.5 minimum (once GPU timer results arrive), and the scene renders into the top-left of
+	# full-size targets, which must match rendering at half size exactly.
+	foreach(view Lit SSAO Normals Depth Scaled Dynamic)
 		set(debugView ${view})
 		set(renderTest FeatureTestRender_${view})
+		set(referenceView ${view})
 		set(extraArgs "")
 		if(view STREQUAL "Lit")
 			set(debugView None)
@@ -55,6 +59,10 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 		elseif(view STREQUAL "Scaled")
 			set(debugView None)
 			set(extraArgs --render-scale 0.5)
+		elseif(view STREQUAL "Dynamic")
+			set(debugView None)
+			set(referenceView Scaled)
+			set(extraArgs --dynamic-resolution 1000000 --min-render-scale 0.5)
 		endif()
 		add_test(NAME ${renderTest}
 			COMMAND BasaltRuntime ${basaltRenderArgs} --offscreen --debug-view ${debugView} ${extraArgs} --screenshot "${basaltGoldenOutput}/FeatureTest_${view}.png")
@@ -62,7 +70,7 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 		list(APPEND basaltGpuTests ${renderTest})
 
 		if(BASALT_GOLDEN_DRIVER)
-			set(reference "${CMAKE_CURRENT_SOURCE_DIR}/Data/Golden/${BASALT_GOLDEN_DRIVER}/FeatureTest_${view}.png")
+			set(reference "${CMAKE_CURRENT_SOURCE_DIR}/Data/Golden/${BASALT_GOLDEN_DRIVER}/FeatureTest_${referenceView}.png")
 			add_test(NAME FeatureTestGolden_${view}
 				COMMAND BasaltCLI image.compare "{\"actual\": \"${basaltGoldenOutput}/FeatureTest_${view}.png\", \"reference\": \"${reference}\", \"diff\": \"${basaltGoldenOutput}/FeatureTest_${view}.diff.png\", \"assertMatch\": true}")
 			set_tests_properties(FeatureTestGolden_${view} PROPERTIES FIXTURES_REQUIRED Render${view} SKIP_REGULAR_EXPRESSION "reference image not found")

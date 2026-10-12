@@ -2,6 +2,7 @@
 
 #include "Basalt/Core/Base.h"
 #include "Basalt/Physics/PhysicsLayers.h"
+#include "Basalt/Renderer/DynamicResolution.h"
 
 #include <filesystem>
 #include <string>
@@ -20,6 +21,9 @@ namespace Basalt {
 		// Fraction of the window resolution the scene renders at (MinRenderScale..MaxRenderScale); the
 		// tonemap pass resamples it to the window. Below 1 trades sharpness for GPU time.
 		float RenderScale = 1.0f;
+		// Lowers the render scale (to no less than its MinRenderScale) when the GPU cannot hold the target
+		// frame rate; RenderScale is then the highest scale.
+		DynamicResolutionSettings DynamicResolution;
 		// Collision layers and matrix used by every scene of the project.
 		PhysicsLayers Physics;
 	};

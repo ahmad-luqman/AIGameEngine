@@ -341,11 +341,14 @@ namespace Basalt {
 					{ "windowHeight", config.WindowHeight },
 					{ "fullscreen", config.Fullscreen },
 					{ "renderScale", config.RenderScale },
+					{ "dynamicResolution", config.DynamicResolution.Enabled },
+					{ "targetFrameRate", config.DynamicResolution.TargetFrameRate },
+					{ "minRenderScale", config.DynamicResolution.MinRenderScale },
 					{ "physicsLayers", config.Physics.ToJson() },
 				};
 			});
 
-			Add(registry, "project.set", "Changes project settings and saves the project file.", { { "name", "string" }, { "startScene", "string, project-relative scene" }, { "windowWidth", "integer" }, { "windowHeight", "integer" }, { "fullscreen", "bool" }, { "renderScale", "number in [0.25, 2], fraction of the window resolution the scene renders at" }, { "physicsLayers", "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "project.set", "Changes project settings and saves the project file.", { { "name", "string" }, { "startScene", "string, project-relative scene" }, { "windowWidth", "integer" }, { "windowHeight", "integer" }, { "fullscreen", "bool" }, { "renderScale", "number in [0.25, 2], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution)" }, { "dynamicResolution", "bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries)" }, { "targetFrameRate", "number in [10, 1000], frame rate dynamic resolution holds" }, { "minRenderScale", "number in [0.25, 2], lowest scale dynamic resolution uses (capped at renderScale)" }, { "physicsLayers", "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play" } }, [](AutomationSession& session, const json& params) {
 				Ref<Project> project = RequireProject();
 				// Every value is read and validated before any is assigned, so a bad parameter leaves the
 				// project untouched.
@@ -356,6 +359,9 @@ namespace Basalt {
 				config.WindowHeight = static_cast<uint32_t>(OptionalInteger(params, "windowHeight", config.WindowHeight, 64, 16384));
 				config.Fullscreen = OptionalBool(params, "fullscreen", config.Fullscreen);
 				config.RenderScale = static_cast<float>(OptionalNumber(params, "renderScale", config.RenderScale, MinRenderScale, MaxRenderScale));
+				config.DynamicResolution.Enabled = OptionalBool(params, "dynamicResolution", config.DynamicResolution.Enabled);
+				config.DynamicResolution.TargetFrameRate = static_cast<float>(OptionalNumber(params, "targetFrameRate", config.DynamicResolution.TargetFrameRate, MinTargetFrameRate, MaxTargetFrameRate));
+				config.DynamicResolution.MinRenderScale = static_cast<float>(OptionalNumber(params, "minRenderScale", config.DynamicResolution.MinRenderScale, MinRenderScale, MaxRenderScale));
 				if (const auto it = params.find("physicsLayers"); it != params.end())
 				{
 					std::string error;
@@ -874,6 +880,12 @@ namespace Basalt {
 				if (!session.Screenshot(path, width, height, error))
 					throw CommandError(error);
 				return json{ { "path", path } };
+			});
+
+			Add(registry, "render.stats", "Returns the scene renderer's statistics: viewport and render size, render scale (and the dynamic resolution state), draw counts, and the GPU time of each pass averaged over the last frames (editor / GPU hosts only).", {}, [](AutomationSession& session, const json&) {
+				if (!session.RenderStats)
+					throw CommandError("render statistics need a GPU host (the editor); this host is '" + session.HostName + "'");
+				return session.RenderStats();
 			});
 
 			// Headless, so tests and agents can check renders from any host (golden-image tests use it).

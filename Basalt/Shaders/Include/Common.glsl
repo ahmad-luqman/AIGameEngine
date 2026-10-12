@@ -28,7 +28,7 @@ layout(set = 0, binding = 0) uniform ViewConstants
 	mat4 CascadeViewProjection[MAX_CASCADES];
 	vec4 CascadeSplits;   // view-space far distance of each cascade
 	vec4 CameraPosition;  // xyz, w: unused
-	vec4 ViewportSize;    // xy: size, zw: 1/size
+	vec4 ViewportSize;    // xy: render size, zw: 1 / render target size (larger under dynamic resolution)
 	vec4 AmbientColor;    // rgb, w: IBL intensity
 	vec4 EnvironmentParams; // x: rotation (radians), y: prefiltered mip count, z: SSAO enabled, w: light count
 	vec4 CameraClip;      // x: near, y: far

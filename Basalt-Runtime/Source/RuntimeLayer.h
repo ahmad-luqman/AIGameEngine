@@ -21,6 +21,8 @@ namespace Basalt {
 		RendererDebugView DebugView = RendererDebugView::None;
 		// The project's RenderScale unless --render-scale overrides it.
 		float RenderScale = 1.0f;
+		// The project's settings unless --dynamic-resolution / --min-render-scale override them.
+		DynamicResolutionSettings DynamicResolution;
 	};
 
 	// Plays a scene: scripts, physics and audio run every frame and the primary camera's view is

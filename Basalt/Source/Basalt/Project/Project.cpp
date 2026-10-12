@@ -77,6 +77,7 @@ namespace Basalt {
 			config.WindowWidth = data.value("WindowWidth", config.WindowWidth);
 			config.WindowHeight = data.value("WindowHeight", config.WindowHeight);
 			config.Fullscreen = data.value("Fullscreen", config.Fullscreen);
+			config.DynamicResolution.Enabled = data.value("DynamicResolution", config.DynamicResolution.Enabled);
 		}
 		catch (const nlohmann::json::exception& e)
 		{
@@ -88,6 +89,22 @@ namespace Basalt {
 			if (!JsonToFloat(*renderScale, config.RenderScale) || config.RenderScale < MinRenderScale || config.RenderScale > MaxRenderScale)
 			{
 				outError = fmt::format("invalid project file '{}': RenderScale must be a number in [{}, {}]", filePath.string(), MinRenderScale, MaxRenderScale);
+				return nullptr;
+			}
+		}
+		if (const auto targetFrameRate = data.find("TargetFrameRate"); targetFrameRate != data.end())
+		{
+			if (!JsonToFloat(*targetFrameRate, config.DynamicResolution.TargetFrameRate) || config.DynamicResolution.TargetFrameRate < MinTargetFrameRate || config.DynamicResolution.TargetFrameRate > MaxTargetFrameRate)
+			{
+				outError = fmt::format("invalid project file '{}': TargetFrameRate must be a number in [{}, {}]", filePath.string(), MinTargetFrameRate, MaxTargetFrameRate);
+				return nullptr;
+			}
+		}
+		if (const auto minRenderScale = data.find("MinRenderScale"); minRenderScale != data.end())
+		{
+			if (!JsonToFloat(*minRenderScale, config.DynamicResolution.MinRenderScale) || config.DynamicResolution.MinRenderScale < MinRenderScale || config.DynamicResolution.MinRenderScale > MaxRenderScale)
+			{
+				outError = fmt::format("invalid project file '{}': MinRenderScale must be a number in [{}, {}]", filePath.string(), MinRenderScale, MaxRenderScale);
 				return nullptr;
 			}
 		}
@@ -115,6 +132,9 @@ namespace Basalt {
 			{ "WindowHeight", m_Config.WindowHeight },
 			{ "Fullscreen", m_Config.Fullscreen },
 			{ "RenderScale", m_Config.RenderScale },
+			{ "DynamicResolution", m_Config.DynamicResolution.Enabled },
+			{ "TargetFrameRate", m_Config.DynamicResolution.TargetFrameRate },
+			{ "MinRenderScale", m_Config.DynamicResolution.MinRenderScale },
 			{ "PhysicsLayers", m_Config.Physics.ToJson() },
 		};
 		if (!FileSystem::WriteTextFile(GetProjectFilePath(), data.dump(1, '\t')))

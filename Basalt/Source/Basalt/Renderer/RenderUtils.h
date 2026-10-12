@@ -3,6 +3,8 @@
 #include "Basalt/Asset/ImageUtils.h"
 #include "Basalt/Renderer/SceneRenderer.h"
 
+#include <nlohmann/json_fwd.hpp>
+
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -17,5 +19,12 @@ namespace Basalt {
 
 	// Writes the renderer's last output image as a PNG.
 	bool SaveScreenshot(SceneRenderer& renderer, const std::filesystem::path& path, std::string& outError);
+
+	// { "frames", "frameMs", "passes": [{ "name", "ms" }] } (render.stats).
+	nlohmann::json GpuTimingsToJson(const GpuTimings& timings);
+	// One line for logs: "2.41 ms (Shadows 0.52, Prepass 0.31, ...)", or a note when there are no samples.
+	std::string FormatGpuTimings(const GpuTimings& timings);
+	// Everything render.stats reports about a renderer's last frames.
+	nlohmann::json GetRenderStats(const SceneRenderer& renderer);
 
 }
