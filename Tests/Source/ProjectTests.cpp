@@ -58,6 +58,13 @@ TEST_SUITE("Project")
 		REQUIRE_MESSAGE(data.Save(error), error);
 		CHECK(std::filesystem::exists(path));
 
+		// Saving again replaces the existing file (atomically, on every platform).
+		REQUIRE(data.Set("Score", 43, error));
+		REQUIRE_MESSAGE(data.Save(error), error);
+		REQUIRE(data.Set("Score", 42, error));
+		REQUIRE_MESSAGE(data.Save(error), error);
+		CHECK_FALSE(std::filesystem::exists(path.string() + ".tmp"));
+
 		SaveData reloaded(path);
 		REQUIRE_MESSAGE(reloaded.Load(error), error);
 		REQUIRE(reloaded.Find("Score"));
@@ -181,9 +188,18 @@ TEST_SUITE("Project")
 		REQUIRE_MESSAGE(base.has_value(), error);
 		CHECK(*base == std::filesystem::path(*Platform::GetEnvVar(Platform::UserDataDirectoryVariable)));
 
+		// A safe name is used as it is; one that sanitizing changed also gets a hash, so names that sanitize alike
+		// keep separate save data.
+		const auto plain = SaveData::GetDefaultPath("Tetris 2", error);
+		REQUIRE_MESSAGE(plain.has_value(), error);
+		CHECK(*plain == *base / "Tetris 2" / SaveData::FileName);
 		const auto path = SaveData::GetDefaultPath("My Game: Deluxe", error);
 		REQUIRE_MESSAGE(path.has_value(), error);
-		CHECK(*path == *base / "My Game_ Deluxe" / SaveData::FileName);
+		const std::string directoryName = path->parent_path().filename().string();
+		CHECK(directoryName.rfind("My Game_ Deluxe-", 0) == 0);
+		CHECK(directoryName.size() == std::string("My Game_ Deluxe-").size() + 8);
+		CHECK(SaveData::GetDefaultPath("My Game: Deluxe", error) == path);
+		CHECK(SaveData::GetDefaultPath("Foo/Bar", error) != SaveData::GetDefaultPath("Foo?Bar", error));
 
 		// A set but unusable override never falls back to the real user directory.
 		{

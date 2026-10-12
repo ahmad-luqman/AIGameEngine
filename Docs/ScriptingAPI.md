@@ -271,7 +271,8 @@ end
   re-reads the file, dropping unsaved changes. Both return `true`, or `false` and the reason (also
   logged), including when there is nowhere to save (no user data directory); the other functions raise an
   error then. Unsaved changes are lost when play stops.
-- The file is `SaveData.json` in a per-game directory named after the project: `%APPDATA%\<Project>`
+- The file is `SaveData.json` in a per-game directory named after the project (characters that are not
+  safe in a file name become `_`, and then a short hash of the name is appended): `%APPDATA%\<Project>`
   (Windows), `~/Library/Application Support/<Project>` (macOS), `$XDG_DATA_HOME/<Project>` or
   `~/.local/share/<Project>` (Linux). The environment variable `BASALT_USER_DATA_DIR` replaces the
   platform directory (tests and tools use it; set to a relative path, `Storage` raises an error rather than
