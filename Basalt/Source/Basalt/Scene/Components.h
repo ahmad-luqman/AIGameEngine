@@ -380,6 +380,81 @@ namespace Basalt {
 		bool Active = true;
 	};
 
+	enum class ParticleEmitterShape
+	{
+		Point = 0,
+		Sphere,
+		Box,
+		Cone
+	};
+
+	enum class ParticleSimulationSpace
+	{
+		World = 0,
+		Local
+	};
+
+	enum class ParticleBlendMode
+	{
+		Alpha = 0,
+		Additive
+	};
+
+	// Emits camera-facing particles while the scene plays (ParticleSystem simulates them on the CPU, the
+	// renderer draws them in the transparent pass, unlit). Shapes and Velocity are in the emitter's local
+	// space; Box and Cone emit along local +Y, Point and Sphere in every direction. Each emission cycle
+	// lasts Duration seconds and starts with BurstCount particles; Rate emits continuously in between.
+	struct ParticleEmitterComponent
+	{
+		// Upper bound for MaxParticles (the registry rejects larger values).
+		static constexpr uint32_t MaxParticlesLimit = 10000;
+
+		bool PlayOnStart = true;
+		// Restarts the cycle (and its burst) every Duration seconds; otherwise emission stops after one cycle.
+		bool Looping = true;
+		float Duration = 5.0f;
+		// Live particles per emitter; emission pauses while the emitter is full.
+		uint32_t MaxParticles = 1000;
+
+		// Particles per second.
+		float Rate = 10.0f;
+		uint32_t BurstCount = 0;
+		ParticleEmitterShape Shape = ParticleEmitterShape::Point;
+		// Sphere radius, or the cone's base radius.
+		float ShapeRadius = 0.5f;
+		// Half-extents of the Box shape.
+		glm::vec3 BoxExtents = { 0.5f, 0.5f, 0.5f };
+		// Half-angle of the Cone shape in degrees (0..180; 180 emits in every direction).
+		float ConeAngle = 25.0f;
+
+		// Seconds a particle lives, picked uniformly per particle.
+		float LifetimeMin = 1.0f;
+		float LifetimeMax = 2.0f;
+		// Initial speed along the shape's emission direction (m/s), picked uniformly per particle.
+		float SpeedMin = 1.0f;
+		float SpeedMax = 2.0f;
+		// Added to every particle's initial velocity (emitter-local, m/s).
+		glm::vec3 Velocity = { 0.0f, 0.0f, 0.0f };
+		// Scales the scene's physics gravity.
+		float GravityScale = 0.0f;
+		// Fraction of speed lost per second (linear drag, >= 0).
+		float Drag = 0.0f;
+		// World: particles stay where they were emitted when the emitter moves. Local: they move with it.
+		ParticleSimulationSpace SimulationSpace = ParticleSimulationSpace::World;
+
+		// Linear HDR color and opacity at birth and at death, interpolated over the particle's life.
+		glm::vec4 StartColor = { 1.0f, 1.0f, 1.0f, 1.0f };
+		glm::vec4 EndColor = { 1.0f, 1.0f, 1.0f, 0.0f };
+		// Billboard width and height (m) at birth and at death.
+		float StartSize = 0.2f;
+		float EndSize = 0.2f;
+		ParticleBlendMode Blend = ParticleBlendMode::Alpha;
+		// Project-relative texture (sRGB color, alpha = coverage); empty uses a built-in soft disc.
+		std::string Texture;
+
+		bool operator==(const ParticleEmitterComponent&) const = default;
+	};
+
 	// Marks the root entity of a prefab instance and remembers the prefab it came from.
 	struct PrefabComponent
 	{
@@ -413,6 +488,7 @@ namespace Basalt {
 		ScriptComponent,
 		AudioSourceComponent,
 		AudioListenerComponent,
+		ParticleEmitterComponent,
 		PrefabComponent>;
 
 }

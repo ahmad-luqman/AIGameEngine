@@ -21,8 +21,9 @@ changing code. Task-specific procedures live in `.claude/skills/*/SKILL.md`.
 Engine modules (`Basalt/Source/Basalt/<Module>/`): `Core` (application, window, input, log, file
 system, command line), `Events`, `Math`, `Renderer` (device, scene renderer, IBL, debug lines),
 `ImGui`, `Scene` (EnTT scene, components, component registry, serialization), `Asset` (glTF, images,
-primitives, asset cache), `Physics` (Jolt), `Audio` (miniaudio), `Scripting` (Lua 5.4 + sol2),
-`Project` (project files, exporter), `Automation` (command API, session, TCP server).
+primitives, asset cache), `Physics` (Jolt), `Audio` (miniaudio), `Particles` (CPU particle simulation),
+`Scripting` (Lua 5.4 + sol2), `Project` (project files, exporter), `Automation` (command API, session,
+TCP server).
 
 Other directories: `Docs/` (scripting API, generated command/component references), `Tests/Data/FeatureTest`
 (the project that exercises every feature).
@@ -33,8 +34,9 @@ Other directories: `Docs/` (scripting API, generated command/component reference
   writer that every consumer shares: scene and prefab files, Lua `GetComponent/SetComponent`, the
   automation commands and the editor inspector. Adding a component = one registry entry (see the
   `basalt-add-component` skill).
-- **Runtime state lives in systems.** `PhysicsWorld`, `ScriptEngine` and `AudioSystem` exist only while a
-  scene plays and key their state by entity UUID; they react to EnTT component signals.
+- **Runtime state lives in systems.** `PhysicsWorld`, `ScriptEngine`, `AudioSystem` and `ParticleSystem` exist
+  only while a scene plays and key their state by entity UUID; they react to EnTT component signals.
+  Every random stream of a play session (Lua, particle emitters) is seeded from the project's `RandomSeed`.
 - **Play mode runs a copy.** `Scene::Copy` duplicates the edit scene (same UUIDs) for play/simulate;
   stopping discards it.
 - **Automation first.** `CommandRegistry` (Automation/BuiltinCommands.cpp) is the API for tools and AI

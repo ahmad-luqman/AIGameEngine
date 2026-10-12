@@ -154,7 +154,7 @@ local function TestEntities(self)
 
 	-- Every component type round-trips through Lua.
 	for _, name in ipairs({ "Camera", "Mesh", "Material", "DirectionalLight", "PointLight", "SpotLight", "SkyLight", "RigidBody",
-		"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "AudioSource", "AudioListener", "Prefab" }) do
+		"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "AudioSource", "AudioListener", "ParticleEmitter", "Prefab" }) do
 		local holder = Scene.CreateEntity("Holder" .. name)
 		Expect("AddComponent " .. name, function() holder:AddComponent(name) end)
 		local data = holder:GetComponent(name)
@@ -222,6 +222,30 @@ local function TestSystems(self)
 	Check("Audio.PlayOneShot", Audio.PlayOneShot("Assets/Audio/Beep.wav", Vec3(0, 1, 0), 0.5) and Audio.PlayOneShot("Assets/Audio/Beep.wav"))
 	Check("Audio.PlayOneShot missing clip", not Audio.PlayOneShot("Assets/Audio/Missing.wav"))
 
+	-- Particles. Sparks and Smoke play from the start; Confetti only emits what scripts ask for.
+	local sparks = Scene.FindEntityByName("Sparks")
+	Check("ParticleEmitter PlayOnStart", sparks:IsEmittingParticles() and sparks:GetParticleCount() == 0)
+	local confetti = Scene.FindEntityByName("Confetti")
+	Check("ParticleEmitter without PlayOnStart", not confetti:IsEmittingParticles())
+	Check("EmitParticles", confetti:EmitParticles(30) == 30 and confetti:GetParticleCount() == 30)
+	confetti:PlayParticles()
+	Check("PlayParticles", confetti:IsEmittingParticles())
+	confetti:StopParticles()
+	Check("StopParticles keeps live particles", not confetti:IsEmittingParticles() and confetti:GetParticleCount() == 30)
+	local smoke = Scene.FindEntityByName("Smoke")
+	smoke:EmitParticles(5)
+	smoke:StopParticles(true)
+	Check("StopParticles(true) clears", smoke:GetParticleCount() == 0 and not smoke:IsEmittingParticles())
+	smoke:PlayParticles()
+	Check("ParticleEmitter fields", sparks:GetComponent("ParticleEmitter").Shape == "Cone" and sparks:GetComponent("ParticleEmitter").Blend == "Additive")
+	local crate = Scene.FindEntityByName("Crate")
+	ExpectError("EmitParticles without a ParticleEmitter", function() crate:EmitParticles(1) end, "needs a ParticleEmitter")
+	ExpectError("PlayParticles without a ParticleEmitter", function() crate:PlayParticles() end, "needs a ParticleEmitter")
+	ExpectError("StopParticles without a ParticleEmitter", function() crate:StopParticles() end, "needs a ParticleEmitter")
+	Check("Particle queries without a ParticleEmitter", not crate:IsEmittingParticles() and crate:GetParticleCount() == 0)
+	ExpectError("EmitParticles with a negative count", function() confetti:EmitParticles(-1) end, "between 0 and")
+	ExpectError("ParticleEmitter validation", function() confetti:SetComponent("ParticleEmitter", { LifetimeMin = 0 }) end, "LifetimeMin must be positive")
+
 	-- Input names are validated.
 	ExpectError("Unknown key name", function() Input.IsKeyDown("Hyperspace") end, "unknown key")
 	ExpectError("Unknown mouse button", function() Input.IsMouseButtonDown("Thumb") end, "unknown mouse button")
@@ -279,6 +303,12 @@ function Driver:OnUpdate(dt)
 		Scene.FindEntityByName("Bullet"):SetLinearVelocity(Vec3(200, 0, 0))
 		Check("Destroyed entity is gone", not self.Doomed:IsValid())
 		ExpectError("Stale entity access", function() return self.Doomed.Name end, "no longer exists")
+
+		-- An emitter added during play: one burst, then its particles expire (checked on frame 30).
+		local puff = Scene.CreateEntity("Puff")
+		puff:AddComponent("ParticleEmitter", { BurstCount = 10, Rate = 0, Looping = false, Duration = 0.1, LifetimeMin = 0.2, LifetimeMax = 0.2 })
+		self.Puff = puff
+		Check("Emitter added during play plays", puff:IsEmittingParticles() and puff:GetParticleCount() == 0)
 
 		-- Spawning a prefab.
 		local projectile = Scene.Instantiate("Assets/Prefabs/Projectile.bprefab", Vec3(-4, 3, 0))
@@ -381,6 +411,7 @@ function Driver:OnUpdate(dt)
 	end
 
 	if frame == 2 then
+		Check("Burst of an emitter added during play", self.Puff:GetParticleCount() == 10)
 		Scene.FindEntityByName("Walker"):Move(Vec3(2, 0, 0))
 		-- The batch released Space and the mouse button and moved the mouse by (10, 10) before this frame.
 		Check("Input.IsKeyReleased", Input.IsKeyReleased("Space") and not Input.IsKeyDown("Space"))
@@ -440,6 +471,13 @@ function Driver:OnUpdate(dt)
 		Check("Continuous body stops at a thin wall", Scene.FindEntityByName("Bullet").Translation.x < 15)
 		Check("RigidBody Layer and Continuous fields", Scene.FindEntityByName("GhostBox"):GetComponent("RigidBody").Layer == "Ghost" and Scene.FindEntityByName("Bullet"):GetComponent("RigidBody").Continuous)
 		Check("Physics.GetLayers", table.concat(Physics.GetLayers(), ",") == "Default,Ghost,Debris")
+
+		-- 30 updates: the 20-particle burst and 40/s for half a second, none old enough to expire.
+		local sparkCount = Scene.FindEntityByName("Sparks"):GetParticleCount()
+		Check("Particles emit at their rate", sparkCount >= 39 and sparkCount <= 40)
+		Check("Particles live their lifetime", Scene.FindEntityByName("Confetti"):GetParticleCount() == 30)
+		Check("Particles expire; a one-shot emitter stops", self.Puff:GetParticleCount() == 0 and not self.Puff:IsEmittingParticles())
+		self.Puff:Destroy()
 	end
 
 	if frame == 150 then

@@ -298,6 +298,7 @@ Changes project settings and saves the project file.
 | `minRenderScale` | number in [0.25, 2], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning) |
 | `name` | string |
 | `physicsLayers` | object {Names: ["Default", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play |
+| `randomSeed` | integer in [0, 4294967295], seeds Lua's random numbers and particle emitters; applies from the next play |
 | `renderScale` | number in [0.25, 2], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution) |
 | `startScene` | string, project-relative scene |
 | `targetFrameRate` | number in [10, 1000]; dynamic resolution keeps the scene's GPU time within this frame rate's frame time |

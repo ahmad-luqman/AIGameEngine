@@ -2,6 +2,7 @@
 
 #include "Basalt/Audio/AudioSystem.h"
 #include "Basalt/Core/Log.h"
+#include "Basalt/Particles/ParticleSystem.h"
 #include "Basalt/Physics/PhysicsWorld.h"
 #include "Basalt/Renderer/DebugDraw.h"
 #include "Basalt/Renderer/GameUI.h"
@@ -155,6 +156,8 @@ namespace Basalt {
 			m_PhysicsWorld->OnEntityDestroyed(entity);
 		if (m_AudioSystem)
 			m_AudioSystem->OnEntityDestroyed(entity);
+		if (m_ParticleSystem)
+			m_ParticleSystem->OnEntityDestroyed(entity);
 
 		RemoveFromParent(entity);
 		const UUID uuid = entity.GetUUID();
@@ -437,10 +440,13 @@ namespace Basalt {
 
 		m_PhysicsWorld = CreateScope<PhysicsWorld>(this);
 		m_AudioSystem = CreateScope<AudioSystem>(this);
+		m_ParticleSystem = CreateScope<ParticleSystem>(this);
 		m_ScriptEngine = CreateScope<ScriptEngine>(this);
 
 		m_PhysicsWorld->Start();
 		m_AudioSystem->Start();
+		// Before scripts, so OnCreate can play and emit particles.
+		m_ParticleSystem->Start();
 
 		// Scripts may destroy entities in OnCreate.
 		m_DeferDestruction++;
@@ -460,6 +466,7 @@ namespace Basalt {
 			m_ScriptEngine->Stop();
 		m_DeferDestruction--;
 		m_ScriptEngine.reset();
+		m_ParticleSystem.reset();
 		m_AudioSystem.reset();
 		m_PhysicsWorld.reset();
 		m_State = SceneState::Edit;
@@ -478,6 +485,9 @@ namespace Basalt {
 		m_StepFrames = 0;
 		m_PhysicsWorld = CreateScope<PhysicsWorld>(this);
 		m_PhysicsWorld->Start();
+		// Particles preview in simulation too (PlayOnStart emitters); nothing else can play them there.
+		m_ParticleSystem = CreateScope<ParticleSystem>(this);
+		m_ParticleSystem->Start();
 	}
 
 	void Scene::OnSimulationStop()
@@ -485,6 +495,7 @@ namespace Basalt {
 		if (m_State != SceneState::Simulate)
 			return;
 
+		m_ParticleSystem.reset();
 		m_PhysicsWorld.reset();
 		m_PendingDestruction.clear();
 		m_State = SceneState::Edit;
@@ -511,10 +522,11 @@ namespace Basalt {
 			m_ScriptEngine->Update(ts);
 		m_PhysicsWorld->Step(ts);
 		if (m_State == SceneState::Play)
-		{
 			m_ScriptEngine->LateUpdate(ts);
+		// After every system that moves entities, so particles leave from where the emitter is this frame.
+		m_ParticleSystem->Update(ts);
+		if (m_State == SceneState::Play)
 			m_AudioSystem->Update(ts);
-		}
 		m_DeferDestruction--;
 
 		FlushPendingDestruction();

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Basalt/Core/Base.h"
+#include "Basalt/Math/Random.h"
 #include "Basalt/Physics/PhysicsLayers.h"
 #include "Basalt/Renderer/DynamicResolution.h"
 
@@ -26,6 +27,9 @@ namespace Basalt {
 		DynamicResolutionSettings DynamicResolution;
 		// Collision layers and matrix used by every scene of the project.
 		PhysicsLayers Physics;
+		// Seeds every random stream of a play session (Lua's Math.Random/math.random, particle emitters), so
+		// a session replays identically. Changing it changes the gameplay of scripts that use randomness.
+		uint32_t RandomSeed = Random::DefaultSeed;
 	};
 
 	// A game project: a directory containing Project.bproject and an Assets/ folder. Asset references in
@@ -44,6 +48,8 @@ namespace Basalt {
 
 		static void SetActive(const Ref<Project>& project) { s_ActiveProject = project; }
 		static const Ref<Project>& GetActive() { return s_ActiveProject; }
+		// The active project's RandomSeed, or Random::DefaultSeed without an active project (tests, tools).
+		static uint32_t GetActiveRandomSeed() { return s_ActiveProject ? s_ActiveProject->m_Config.RandomSeed : Random::DefaultSeed; }
 
 		// Resolves a project-relative path against the active project directory, or the working directory
 		// when no project is active. Absolute paths are returned unchanged.

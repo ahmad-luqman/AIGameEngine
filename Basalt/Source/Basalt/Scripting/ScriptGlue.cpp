@@ -3,6 +3,7 @@
 #include "Basalt/Audio/AudioSystem.h"
 #include "Basalt/Core/Input.h"
 #include "Basalt/Core/Log.h"
+#include "Basalt/Particles/ParticleSystem.h"
 #include "Basalt/Physics/PhysicsWorld.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/DebugDraw.h"
@@ -269,6 +270,24 @@ namespace Basalt {
 			return *audio;
 		}
 
+		ParticleSystem& RequireParticles(ScriptContext& context)
+		{
+			ParticleSystem* particles = RequireScene(context).GetParticleSystem();
+			if (!particles)
+				throw std::runtime_error("particles are not running");
+			return *particles;
+		}
+
+		// The entity, when it has a ParticleEmitter: silently ignoring Play/Stop/Emit on a plain entity would
+		// hide a missing component.
+		Entity RequireEmitter(const ScriptEntity& self, const char* function)
+		{
+			Entity entity = self.ResolveOrThrow();
+			if (!entity.HasComponent<ParticleEmitterComponent>())
+				throw std::runtime_error(std::string(function) + " needs a ParticleEmitter component on '" + entity.GetName() + "'");
+			return entity;
+		}
+
 		void RegisterMath(sol::state& lua, ScriptContext& context)
 		{
 			lua.new_usertype<glm::vec2>("Vec2", sol::call_constructor, sol::constructors<glm::vec2(), glm::vec2(float), glm::vec2(float, float)>(), "x", sol::property([](const glm::vec2& v) { return v.x; }, [](glm::vec2& v, float value) { v.x = value; }), "y", sol::property([](const glm::vec2& v) { return v.y; }, [](glm::vec2& v, float value) { v.y = value; }), "Length", [](const glm::vec2& v) { return glm::length(v); }, "Normalized", [](const glm::vec2& v) { return glm::length(v) > 0.0f ? glm::normalize(v) : v; }, "Dot", [](const glm::vec2& a, const glm::vec2& b) { return glm::dot(a, b); }, sol::meta_function::addition, [](const glm::vec2& a, const glm::vec2& b) { return a + b; }, sol::meta_function::subtraction, [](const glm::vec2& a, const glm::vec2& b) { return a - b; }, sol::meta_function::multiplication, sol::overload([](const glm::vec2& a, const glm::vec2& b) { return a * b; }, [](const glm::vec2& a, float s) { return a * s; }, [](float s, const glm::vec2& a) { return a * s; }), sol::meta_function::division, sol::overload([](const glm::vec2& a, const glm::vec2& b) { return a / b; }, [](const glm::vec2& a, float s) { return a / s; }), sol::meta_function::unary_minus, [](const glm::vec2& a) { return -a; }, sol::meta_function::equal_to, [](const glm::vec2& a, const glm::vec2& b) { return a == b; }, sol::meta_function::to_string, [](const glm::vec2& v) { return "Vec2(" + std::to_string(v.x) + ", " + std::to_string(v.y) + ")"; });
@@ -309,7 +328,8 @@ namespace Basalt {
 						throw std::runtime_error("bad argument #2 to 'random' (interval is empty)");
 					return context.Rng.Int(min, max);
 				});
-			luaMath["randomseed"] = [&context](sol::optional<int64_t> seed) { context.Rng.Seed(static_cast<uint32_t>(seed.value_or(Random::DefaultSeed))); };
+			// Without an argument it returns to the session's starting point (the project seed).
+			luaMath["randomseed"] = [&context](sol::optional<int64_t> seed) { context.Rng.Seed(seed ? static_cast<uint32_t>(*seed) : Project::GetActiveRandomSeed()); };
 		}
 
 		void RegisterEntity(sol::state& lua, ScriptContext& context)
@@ -413,6 +433,12 @@ namespace Basalt {
 					return normal ? sol::optional<glm::vec3>(*normal) : sol::optional<glm::vec3>(); },
 
 										   "PlayAudio", [&context](const ScriptEntity& self) { return RequireAudio(context).Play(self.ResolveOrThrow()); }, "StopAudio", [&context](const ScriptEntity& self) { RequireAudio(context).Stop(self.ResolveOrThrow()); }, "IsAudioPlaying", [&context](const ScriptEntity& self) { return RequireAudio(context).IsPlaying(self.ResolveOrThrow()); },
+
+										   "PlayParticles", [&context](const ScriptEntity& self) { RequireParticles(context).Play(RequireEmitter(self, "PlayParticles")); }, "StopParticles", [&context](const ScriptEntity& self, sol::optional<bool> clear) { RequireParticles(context).Stop(RequireEmitter(self, "StopParticles"), clear.value_or(false)); }, "EmitParticles", [&context](const ScriptEntity& self, int64_t count) {
+					Entity entity = RequireEmitter(self, "EmitParticles");
+					if (count < 0 || count > static_cast<int64_t>(ParticleEmitterComponent::MaxParticlesLimit))
+						throw std::runtime_error("EmitParticles count must be between 0 and " + std::to_string(ParticleEmitterComponent::MaxParticlesLimit));
+					return RequireParticles(context).Emit(entity, static_cast<uint32_t>(count)); }, "IsEmittingParticles", [&context](const ScriptEntity& self) { return RequireParticles(context).IsPlaying(self.ResolveOrThrow()); }, "GetParticleCount", [&context](const ScriptEntity& self) { return RequireParticles(context).GetParticleCount(self.ResolveOrThrow()); },
 
 										   "GetScript", [&context](const ScriptEntity& self) -> sol::object {
 					self.ResolveOrThrow();

@@ -61,10 +61,12 @@ The features most games need, roughly in order of impact.
 - **Clustered forward lighting — M.** Today every pixel loops over all point and spot lights (up to 256).
   Build a froxel grid (for example 16×9×24) in a compute pass and give each cluster a light list. This
   keeps the cost per pixel bounded with hundreds of lights.
-- **Particle system — M.** `ParticleEmitterComponent` (rate, bursts, emission shape, lifetime, velocity,
-  color and size over life, additive/alpha blending), simulated on the CPU and drawn as sorted billboards
-  in the transparent pass. Lua `Emit(count)`, `Play()`, `Stop()`. Move simulation to a compute pass later
-  if particle counts demand it. Seeded from the project random seed so replays stay deterministic.
+- **Particle follow-ups — M.** `ParticleEmitterComponent` (Particles/ParticleSystem) covers CPU simulation,
+  bursts, shapes, start-to-end color and size, alpha/additive billboards and Lua control. Missing: soft
+  particles (fade against scene depth; needs a depth copy, since the transparent pass has depth attached),
+  per-particle rotation and random start size/color, color/size curves with several keys (needs an
+  inspector widget for arrays of objects), lit particles, an edit-mode preview, and simulation in a compute
+  pass if particle counts demand it.
 - **Temporal anti-aliasing — M.** TAA (jittered projection, motion
   vectors from the depth prepass, history reprojection with neighbourhood clamping), which also
   stabilizes SSAO and specular shimmer. Builds on FXAA from P2's post-process item. MSAA is an option for
@@ -167,8 +169,8 @@ What makes the editor feel finished. Most items are small; do them as one milest
 - **Asset thumbnails and material preview — M.** Render small previews of meshes, materials and HDRIs
   into a cache for the content browser, with hover previews.
 - **Project settings panel — S.** Fixed timestep, random seed, game resolution, and an editor for the
-  physics layers and their collision matrix (already settable with `project.set physicsLayers`), all
-  through `project.*` commands.
+  physics layers and their collision matrix (layers and the seed are already settable with
+  `project.set physicsLayers` / `randomSeed`), all through `project.*` commands.
 - **Export validation and smoke test — S.** Validate the project before export, then run the exported
   runtime headless for N frames and report its exit code (also an automation command).
 

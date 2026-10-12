@@ -109,6 +109,18 @@
 			"Prefab": { "Prefab": "Assets/Prefabs/Projectile.bprefab" } } },
 		{ "ID": 20, "Name": "Speaker", "Components": {
 			"Transform": { "Translation": [0, 1, 0] },
-			"AudioSource": { "Clip": "Assets/Audio/Beep.wav", "Volume": 0.5, "Pitch": 1.0, "Loop": false, "PlayOnStart": true, "Spatial": true, "MinDistance": 1, "MaxDistance": 30 } } }
+			"AudioSource": { "Clip": "Assets/Audio/Beep.wav", "Volume": 0.5, "Pitch": 1.0, "Loop": false, "PlayOnStart": true, "Spatial": true, "MinDistance": 1, "MaxDistance": 30 } } },
+		{ "ID": 22, "Name": "Sparks", "Components": {
+			"Transform": { "Translation": [2.5, 0.1, 4] },
+			"ParticleEmitter": { "Rate": 40, "BurstCount": 20, "Shape": "Cone", "ShapeRadius": 0.1, "ConeAngle": 20, "LifetimeMin": 1, "LifetimeMax": 1.5, "SpeedMin": 3, "SpeedMax": 4, "GravityScale": 0.5,
+				"StartColor": [4, 1.6, 0.4, 1], "EndColor": [1, 0.2, 0, 0], "StartSize": 0.12, "EndSize": 0.04, "Blend": "Additive" } } },
+		{ "ID": 23, "Name": "Smoke", "Components": {
+			"Transform": { "Translation": [-3.5, 0.2, 3] },
+			"ParticleEmitter": { "Rate": 12, "Shape": "Box", "BoxExtents": [0.3, 0.05, 0.3], "LifetimeMin": 2, "LifetimeMax": 3, "SpeedMin": 0.4, "SpeedMax": 0.8, "Drag": 0.3, "SimulationSpace": "Local",
+				"StartColor": [0.5, 0.5, 0.55, 0.6], "EndColor": [0.25, 0.25, 0.25, 0], "StartSize": 0.3, "EndSize": 1.2 } } },
+		{ "ID": 24, "Name": "Confetti", "Components": {
+			"Transform": { "Translation": [0.5, 3, 3] },
+			"ParticleEmitter": { "PlayOnStart": false, "Looping": false, "Duration": 1, "Rate": 0, "Shape": "Sphere", "ShapeRadius": 0.3, "LifetimeMin": 5, "LifetimeMax": 5, "SpeedMin": 0.5, "SpeedMax": 1,
+				"GravityScale": 0.1, "Drag": 0.5, "StartSize": 0.2, "EndSize": 0.2, "EndColor": [1, 1, 1, 1], "Texture": "Assets/Textures/Checker.png" } } }
 	]
 }

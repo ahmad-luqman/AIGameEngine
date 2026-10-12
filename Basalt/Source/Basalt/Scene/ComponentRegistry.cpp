@@ -277,12 +277,18 @@ namespace Basalt {
 		constexpr const char* s_JointTypeNames[] = { "Fixed", "Point", "Hinge", "Slider", "Distance", "Cone", "SixDOF" };
 		constexpr const char* s_JointMotorModeNames[] = { "Off", "Velocity", "Position" };
 		constexpr const char* s_CombineModeNames[] = { "Default", "GeometricMean", "Average", "Min", "Multiply", "Max" };
+		constexpr const char* s_ParticleShapeNames[] = { "Point", "Sphere", "Box", "Cone" };
+		constexpr const char* s_ParticleSpaceNames[] = { "World", "Local" };
+		constexpr const char* s_ParticleBlendNames[] = { "Alpha", "Additive" };
 		// Names are indexed by enum value; a new enum value needs a name here.
 		static_assert(std::size(s_RigidBodyTypeNames) == static_cast<size_t>(RigidBodyType::Kinematic) + 1);
 		static_assert(std::size(s_ProjectionTypeNames) == static_cast<size_t>(SceneCamera::ProjectionType::Orthographic) + 1);
 		static_assert(std::size(s_JointTypeNames) == static_cast<size_t>(JointType::SixDOF) + 1);
 		static_assert(std::size(s_JointMotorModeNames) == static_cast<size_t>(JointMotorMode::Position) + 1);
 		static_assert(std::size(s_CombineModeNames) == static_cast<size_t>(PhysicsCombineMode::Max) + 1);
+		static_assert(std::size(s_ParticleShapeNames) == static_cast<size_t>(ParticleEmitterShape::Cone) + 1);
+		static_assert(std::size(s_ParticleSpaceNames) == static_cast<size_t>(ParticleSimulationSpace::Local) + 1);
+		static_assert(std::size(s_ParticleBlendNames) == static_cast<size_t>(ParticleBlendMode::Additive) + 1);
 
 		// --- Per-component field definitions -----------------------------------------------------
 		// Each Fields() overload lists every field once; it is used both to read and to enumerate names.
@@ -514,6 +520,34 @@ namespace Basalt {
 			r.Field("Active", c.Active);
 		}
 
+		void Fields(FieldReader& r, ParticleEmitterComponent& c)
+		{
+			r.Field("PlayOnStart", c.PlayOnStart);
+			r.Field("Looping", c.Looping);
+			r.Field("Duration", c.Duration);
+			r.Field("MaxParticles", c.MaxParticles);
+			r.Field("Rate", c.Rate);
+			r.Field("BurstCount", c.BurstCount);
+			r.EnumField("Shape", c.Shape, s_ParticleShapeNames);
+			r.Field("ShapeRadius", c.ShapeRadius);
+			r.Field("BoxExtents", c.BoxExtents);
+			r.Field("ConeAngle", c.ConeAngle);
+			r.Field("LifetimeMin", c.LifetimeMin);
+			r.Field("LifetimeMax", c.LifetimeMax);
+			r.Field("SpeedMin", c.SpeedMin);
+			r.Field("SpeedMax", c.SpeedMax);
+			r.Field("Velocity", c.Velocity);
+			r.Field("GravityScale", c.GravityScale);
+			r.Field("Drag", c.Drag);
+			r.EnumField("SimulationSpace", c.SimulationSpace, s_ParticleSpaceNames);
+			r.Field("StartColor", c.StartColor);
+			r.Field("EndColor", c.EndColor);
+			r.Field("StartSize", c.StartSize);
+			r.Field("EndSize", c.EndSize);
+			r.EnumField("Blend", c.Blend, s_ParticleBlendNames);
+			r.Field("Texture", c.Texture);
+		}
+
 		void Fields(FieldReader& r, PrefabComponent& c)
 		{
 			r.Field("Prefab", c.Prefab);
@@ -702,6 +736,59 @@ namespace Basalt {
 		{
 			return { { "Active", c.Active } };
 		}
+		json Write(const ParticleEmitterComponent& c)
+		{
+			return {
+				{ "PlayOnStart", c.PlayOnStart },
+				{ "Looping", c.Looping },
+				{ "Duration", c.Duration },
+				{ "MaxParticles", c.MaxParticles },
+				{ "Rate", c.Rate },
+				{ "BurstCount", c.BurstCount },
+				{ "Shape", s_ParticleShapeNames[static_cast<size_t>(c.Shape)] },
+				{ "ShapeRadius", c.ShapeRadius },
+				{ "BoxExtents", ToJson(c.BoxExtents) },
+				{ "ConeAngle", c.ConeAngle },
+				{ "LifetimeMin", c.LifetimeMin },
+				{ "LifetimeMax", c.LifetimeMax },
+				{ "SpeedMin", c.SpeedMin },
+				{ "SpeedMax", c.SpeedMax },
+				{ "Velocity", ToJson(c.Velocity) },
+				{ "GravityScale", c.GravityScale },
+				{ "Drag", c.Drag },
+				{ "SimulationSpace", s_ParticleSpaceNames[static_cast<size_t>(c.SimulationSpace)] },
+				{ "StartColor", ToJson(c.StartColor) },
+				{ "EndColor", ToJson(c.EndColor) },
+				{ "StartSize", c.StartSize },
+				{ "EndSize", c.EndSize },
+				{ "Blend", s_ParticleBlendNames[static_cast<size_t>(c.Blend)] },
+				{ "Texture", c.Texture },
+			};
+		}
+
+		// Values the particle system cannot simulate (it would divide by zero, emit forever or allocate
+		// without bound). Returns the problem, or an empty string.
+		std::string Validate(const ParticleEmitterComponent& c)
+		{
+			if (c.Duration <= 0.0f)
+				return "Duration must be positive";
+			if (c.MaxParticles < 1 || c.MaxParticles > ParticleEmitterComponent::MaxParticlesLimit)
+				return "MaxParticles must be between 1 and " + std::to_string(ParticleEmitterComponent::MaxParticlesLimit);
+			if (c.BurstCount > ParticleEmitterComponent::MaxParticlesLimit)
+				return "BurstCount must be at most " + std::to_string(ParticleEmitterComponent::MaxParticlesLimit);
+			if (c.Rate < 0.0f || c.ShapeRadius < 0.0f || c.Drag < 0.0f || c.StartSize < 0.0f || c.EndSize < 0.0f)
+				return "Rate, ShapeRadius, Drag, StartSize and EndSize must not be negative";
+			if (c.BoxExtents.x < 0.0f || c.BoxExtents.y < 0.0f || c.BoxExtents.z < 0.0f)
+				return "BoxExtents must not be negative";
+			if (c.ConeAngle < 0.0f || c.ConeAngle > 180.0f)
+				return "ConeAngle must be between 0 and 180 degrees";
+			if (c.LifetimeMin <= 0.0f || c.LifetimeMax < c.LifetimeMin)
+				return "LifetimeMin must be positive and LifetimeMax at least LifetimeMin";
+			if (c.SpeedMax < c.SpeedMin)
+				return "SpeedMax must be at least SpeedMin";
+			return {};
+		}
+
 		json Write(const PrefabComponent& c)
 		{
 			return { { "Prefab", c.Prefab } };
@@ -765,8 +852,12 @@ namespace Basalt {
 			};
 		}
 
+		// Checks a component's values after a read; returns the problem, or an empty string when they are valid.
 		template<typename T>
-		ComponentInfo MakeInfo(const char* name, bool isCore = false)
+		using Validator = std::string (*)(const T&);
+
+		template<typename T>
+		ComponentInfo MakeInfo(const char* name, bool isCore = false, Validator<T> validate = nullptr)
 		{
 			ComponentInfo info;
 			info.Name = name;
@@ -782,7 +873,7 @@ namespace Basalt {
 					entity.RemoveComponent<T>();
 			};
 			info.Serialize = [](Entity entity) { return Write(entity.GetComponent<T>()); };
-			info.Deserialize = [fields = info.Fields](Entity entity, const json& data, std::string& outError) {
+			info.Deserialize = [fields = info.Fields, validate](Entity entity, const json& data, std::string& outError) {
 				if (!data.is_object())
 				{
 					outError = "component data must be a JSON object";
@@ -800,6 +891,12 @@ namespace Basalt {
 				{
 					outError = e.what();
 					return false;
+				}
+				if (validate)
+				{
+					outError = validate(value);
+					if (!outError.empty())
+						return false;
 				}
 				// Replace through the registry so on_update observers see the change.
 				entity.AddOrReplaceComponent<T>(std::move(value));
@@ -888,6 +985,7 @@ namespace Basalt {
 			infos.push_back(MakeInfo<ScriptComponent>("Script"));
 			infos.push_back(MakeInfo<AudioSourceComponent>("AudioSource"));
 			infos.push_back(MakeInfo<AudioListenerComponent>("AudioListener"));
+			infos.push_back(MakeInfo<ParticleEmitterComponent>("ParticleEmitter", false, &Validate));
 			infos.push_back(MakeInfo<PrefabComponent>("Prefab"));
 			return infos;
 		}

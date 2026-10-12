@@ -82,6 +82,10 @@ Fields: `Clip`, `Volume`, `Pitch`, `Loop`, `PlayOnStart`, `Spatial`, `MinDistanc
 
 Fields: `Active`
 
+## ParticleEmitter
+
+Fields: `PlayOnStart`, `Looping`, `Duration`, `MaxParticles`, `Rate`, `BurstCount`, `Shape`, `ShapeRadius`, `BoxExtents`, `ConeAngle`, `LifetimeMin`, `LifetimeMax`, `SpeedMin`, `SpeedMax`, `Velocity`, `GravityScale`, `Drag`, `SimulationSpace`, `StartColor`, `EndColor`, `StartSize`, `EndSize`, `Blend`, `Texture`
+
 ## Prefab
 
 Fields: `Prefab`

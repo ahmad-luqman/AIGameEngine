@@ -201,6 +201,8 @@ namespace Basalt {
 		OpenSafeLibraries(m_Impl->Lua);
 		m_Impl->Context.SceneContext = scene;
 		m_Impl->Context.Engine = this;
+		// Every play session starts from the project's seed, so its random numbers repeat run after run.
+		m_Impl->Context.Rng.Seed(Project::GetActiveRandomSeed());
 		m_Impl->Context.GetInstance = [this](UUID id) { return ScriptEngineAccess::GetInstance(*this, id); };
 		RegisterScriptBindings(m_Impl->Lua, m_Impl->Context);
 

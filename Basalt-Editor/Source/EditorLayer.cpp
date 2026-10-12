@@ -18,6 +18,7 @@
 #include "Basalt/Scene/Scene.h"
 #include "Basalt/Scene/SceneSerializer.h"
 
+#include <glm/gtc/constants.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -136,6 +137,48 @@ namespace Basalt {
 		// Draws a joint from its body's world transform: the anchor, the axis (hinge rotation, slider
 		// direction, cone or twist axis), the six-DOF secondary axis, the cone's rim and a line to the
 		// connected entity (or the distance joint's world anchor).
+		// The emitter's shape in its local space (scaled by the transform) and its emission direction.
+		void DrawParticleEmitter(const glm::mat4& world, const ParticleEmitterComponent& emitter, const glm::vec4& color)
+		{
+			const glm::vec3 origin(world[3]);
+			auto toWorld = [&world](const glm::vec3& local) { return glm::vec3(world * glm::vec4(local, 1.0f)); };
+			switch (emitter.Shape)
+			{
+				case ParticleEmitterShape::Point:
+					DebugDraw::Sphere(origin, 0.1f, color, 12);
+					break;
+				case ParticleEmitterShape::Sphere:
+				{
+					const float scale = std::max({ glm::length(glm::vec3(world[0])), glm::length(glm::vec3(world[1])), glm::length(glm::vec3(world[2])) });
+					DebugDraw::Sphere(origin, emitter.ShapeRadius * scale, color);
+					break;
+				}
+				case ParticleEmitterShape::Box:
+					DebugDraw::Box(world, emitter.BoxExtents, color);
+					DebugDraw::Arrow(origin, toWorld({ 0.0f, emitter.BoxExtents.y + 1.0f, 0.0f }), color);
+					break;
+				case ParticleEmitterShape::Cone:
+				{
+					// Base disc and the cone's rim one unit along +Y (wider than a hemisphere draws as one).
+					const float angle = glm::radians(std::min(emitter.ConeAngle, 89.0f));
+					const float rimRadius = emitter.ShapeRadius + std::tan(angle);
+					constexpr int Segments = 24;
+					for (int i = 0; i < Segments; i++)
+					{
+						const float a0 = glm::two_pi<float>() * static_cast<float>(i) / Segments;
+						const float a1 = glm::two_pi<float>() * static_cast<float>(i + 1) / Segments;
+						const glm::vec3 d0(std::cos(a0), 0.0f, std::sin(a0));
+						const glm::vec3 d1(std::cos(a1), 0.0f, std::sin(a1));
+						DebugDraw::Line(toWorld(d0 * emitter.ShapeRadius), toWorld(d1 * emitter.ShapeRadius), color);
+						DebugDraw::Line(toWorld(d0 * rimRadius + glm::vec3(0.0f, 1.0f, 0.0f)), toWorld(d1 * rimRadius + glm::vec3(0.0f, 1.0f, 0.0f)), color);
+						if (i % 6 == 0)
+							DebugDraw::Line(toWorld(d0 * emitter.ShapeRadius), toWorld(d0 * rimRadius + glm::vec3(0.0f, 1.0f, 0.0f)), color);
+					}
+					break;
+				}
+			}
+		}
+
 		void DrawJoint(Scene& scene, const JointComponent& joint, const glm::mat4& bodyWorld, const glm::vec4& color)
 		{
 			glm::vec3 translation;
@@ -616,6 +659,8 @@ namespace Basalt {
 
 			if (selected)
 			{
+				if (const auto* emitter = entity.TryGetComponent<ParticleEmitterComponent>())
+					DrawParticleEmitter(world, *emitter, s_SelectionColor);
 				if (const auto* mesh = entity.TryGetComponent<MeshComponent>())
 				{
 					if (Ref<MeshSource> source = AssetManager::GetMesh(mesh->Mesh); source && mesh->MeshIndex < source->Meshes.size())
@@ -1047,6 +1092,7 @@ namespace Basalt {
 			ImGui::Text("Entities: %zu", scene.GetEntityCount());
 			ImGui::Text("Draw calls: %u (shadow %u)", stats.DrawCalls, stats.ShadowDrawCalls);
 			ImGui::Text("Culled submeshes: %u", stats.CulledSubmeshes);
+			ImGui::Text("Particles: %u", stats.Particles);
 			ImGui::Text("Lights: %u", stats.Lights);
 			if (m_Renderer->IsDynamicResolutionActive())
 				ImGui::Text("Resolution: %ux%u (%.0f%% render scale, dynamic up to %.0f%%)", m_Renderer->GetRenderWidth(), m_Renderer->GetRenderHeight(), m_Renderer->GetCurrentRenderScale() * 100.0f, m_Renderer->GetRenderScale() * 100.0f);

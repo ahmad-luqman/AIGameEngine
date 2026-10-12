@@ -210,6 +210,30 @@ TEST_SUITE("Serialization")
 		entity.GetComponent<SphereColliderComponent>().Friction = 0.9f;
 		entity.GetComponent<CapsuleColliderComponent>().Restitution = 0.3f;
 		entity.GetComponent<MaterialComponent>().AlbedoColor = { 0.1f, 0.2f, 0.3f, 0.4f };
+		entity.GetComponent<ParticleEmitterComponent>() = { .PlayOnStart = false,
+															.Looping = false,
+															.Duration = 2.5f,
+															.MaxParticles = 77,
+															.Rate = 12.5f,
+															.BurstCount = 9,
+															.Shape = ParticleEmitterShape::Cone,
+															.ShapeRadius = 0.75f,
+															.BoxExtents = { 1.0f, 2.0f, 3.0f },
+															.ConeAngle = 40.0f,
+															.LifetimeMin = 0.5f,
+															.LifetimeMax = 1.5f,
+															.SpeedMin = -1.0f,
+															.SpeedMax = 4.0f,
+															.Velocity = { 0.0f, 1.0f, -2.0f },
+															.GravityScale = 0.25f,
+															.Drag = 0.5f,
+															.SimulationSpace = ParticleSimulationSpace::Local,
+															.StartColor = { 4.0f, 2.0f, 1.0f, 1.0f },
+															.EndColor = { 0.5f, 0.0f, 0.0f, 0.0f },
+															.StartSize = 0.1f,
+															.EndSize = 0.6f,
+															.Blend = ParticleBlendMode::Additive,
+															.Texture = "Assets/Textures/Spark.png" };
 		entity.GetComponent<ScriptComponent>().Script = "Assets/Scripts/Test.lua";
 		entity.GetComponent<ScriptComponent>().Properties = { { "Speed", 3.5 }, { "Target", { 1, 2, 3 } } };
 		JointComponent& joint = entity.GetComponent<JointComponent>();
@@ -258,6 +282,7 @@ TEST_SUITE("Serialization")
 			CHECK(JsonNear(info.Serialize(copy), info.Serialize(entity)));
 		}
 		CHECK(glm::degrees(copy.GetComponent<CameraComponent>().Camera.GetPerspectiveVerticalFov()) == doctest::Approx(70.0f));
+		CHECK(copy.GetComponent<ParticleEmitterComponent>() == entity.GetComponent<ParticleEmitterComponent>());
 		CHECK(copy.GetComponent<RigidBodyComponent>().Type == RigidBodyType::Kinematic);
 		CHECK(Near(glm::degrees(copy.GetTransform().GetRotationEuler()), { 10.0f, 20.0f, 30.0f }, 1e-3f));
 		CHECK(copy.GetComponent<JointComponent>() == entity.GetComponent<JointComponent>());
