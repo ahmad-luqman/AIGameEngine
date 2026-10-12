@@ -626,17 +626,15 @@ namespace Basalt {
 		if (IsDynamicResolutionActive())
 		{
 			const float minScale = m_DynamicResolution.MinScale;
-			if (sample && m_StaleSamples > 0)
-			{
-				m_StaleSamples--;
-			}
-			else if (sample)
+			if (sample)
 			{
 				// The environment bake runs once per sky change and uploads follow asset streaming; no resolution
 				// would absorb either (a first frame full of uploads would otherwise drop to the minimum).
 				const float milliseconds = sample->MillisecondsWithout({ PassEnvironment, PassUploads });
 				const float budget = 1000.0f / m_DynamicResolution.TargetFrameRate;
-				if (m_DynamicController.AddSample(milliseconds, sample->RenderScale, budget, minScale, m_RenderScale))
+				// Against the current viewport: a result from before a resize then predicts the right cost.
+				const float renderedScale = ComputePixelScale(sample->RenderedPixels, { m_Width, m_Height });
+				if (m_DynamicController.AddSample(milliseconds, renderedScale, budget, minScale, m_RenderScale))
 				{
 					m_UnusableSamples = 0;
 				}
@@ -672,12 +670,10 @@ namespace Basalt {
 
 		Impl& impl = *m_Impl;
 		m_Device->waitForIdle();
+		// The smoothed costs are per frame of the old viewport size; results still in flight carry their pixel
+		// count, so they are converted correctly when they arrive.
 		if (width != m_Width || height != m_Height)
-		{
-			// Costs were measured for the old viewport size, and frames still in the profiler drew into it.
 			m_DynamicController.ForgetHistory();
-			m_StaleSamples = GpuProfiler::Latency;
-		}
 		m_Width = width;
 		m_Height = height;
 		m_TargetWidth = targetSize.x;
@@ -1440,7 +1436,7 @@ namespace Basalt {
 			impl.Lines.Render(commandList, m_OverlayFramebuffer, view.ViewProjection, lines);
 		}
 
-		profiler.EndFrame(commandList, ComputePixelScale({ m_RenderWidth, m_RenderHeight }, { m_Width, m_Height }));
+		profiler.EndFrame(commandList, static_cast<uint64_t>(m_RenderWidth) * m_RenderHeight);
 		commandList->close();
 		m_Device->executeCommandList(commandList);
 

@@ -17,9 +17,9 @@ namespace Basalt {
 		float FrameMilliseconds = 0.0f;
 		// One entry per profiler pass, in pass order; 0 for passes that did not run that frame.
 		std::vector<float> PassMilliseconds;
-		// A value the renderer recorded with the frame (EndFrame); SceneRenderer stores the effective render
-		// scale, sqrt(rendered pixels / viewport pixels), which dynamic resolution normalizes the time by.
-		float RenderScale = 1.0f;
+		// Pixels the frame rendered (EndFrame). Dynamic resolution normalizes the time by them against the
+		// viewport current when the result arrives, which stays right even across a resize.
+		uint64_t RenderedPixels = 0;
 
 		// The frame time without the given passes (work that does not depend on the render scale).
 		float MillisecondsWithout(std::initializer_list<uint32_t> passes) const;
@@ -104,8 +104,8 @@ namespace Basalt {
 		// A pass may run at most once per frame; passes do not nest. Prefer GpuPassScope.
 		void BeginPass(nvrhi::ICommandList* commandList, uint32_t pass);
 		void EndPass(nvrhi::ICommandList* commandList, uint32_t pass);
-		// Ends the frame before the command list is closed; renderScale is returned with the frame's sample.
-		void EndFrame(nvrhi::ICommandList* commandList, float renderScale);
+		// Ends the frame before the command list is closed; renderedPixels is returned with the frame's sample.
+		void EndFrame(nvrhi::ICommandList* commandList, uint64_t renderedPixels);
 
 		const GpuTimings& GetTimings() const { return m_Average.Get(); }
 
@@ -117,7 +117,7 @@ namespace Basalt {
 			nvrhi::TimerQueryHandle Frame;
 			std::vector<nvrhi::TimerQueryHandle> Passes;
 			std::vector<uint8_t> Recorded;
-			float RenderScale = 1.0f;
+			uint64_t RenderedPixels = 0;
 			// Recorded and submitted, not read back yet.
 			bool Pending = false;
 		};

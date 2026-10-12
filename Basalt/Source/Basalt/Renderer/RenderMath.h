@@ -58,13 +58,13 @@ namespace Basalt {
 		return glm::min(ComputeRenderSize(outputWidth, outputHeight, scale), targetSize);
 	}
 
-	// Effective scale of a render: sqrt(rendered pixels / output pixels). Rounding each side makes it differ
-	// slightly from the requested scale; GPU time follows the pixel count, so dynamic resolution uses this.
-	inline float ComputePixelScale(glm::uvec2 renderSize, glm::uvec2 outputSize)
+	// Effective scale of a render of `renderedPixels` for an output of outputSize: sqrt of the pixel ratio.
+	// Rounding each side makes it differ slightly from the requested scale; GPU time follows the pixel count,
+	// so dynamic resolution uses this.
+	inline float ComputePixelScale(uint64_t renderedPixels, glm::uvec2 outputSize)
 	{
-		const double rendered = static_cast<double>(renderSize.x) * renderSize.y;
 		const double output = std::max(static_cast<double>(outputSize.x) * outputSize.y, 1.0);
-		return static_cast<float>(std::sqrt(rendered / output));
+		return static_cast<float>(std::sqrt(static_cast<double>(renderedPixels) / output));
 	}
 
 	// View-space distances at which shadow cascades end, covering [near, shadowFar]. Perspective cameras use

@@ -401,10 +401,12 @@ TEST_SUITE("DynamicResolution")
 
 	TEST_CASE("The pixel scale is the square root of the pixel ratio")
 	{
-		CHECK(ComputePixelScale({ 640, 360 }, { 1280, 720 }) == doctest::Approx(0.5f));
-		CHECK(ComputePixelScale({ 1280, 720 }, { 1280, 720 }) == 1.0f);
-		CHECK(ComputePixelScale({ 641, 361 }, { 1281, 721 }) == doctest::Approx(std::sqrt(641.0f * 361.0f / (1281.0f * 721.0f))));
-		CHECK(std::isfinite(ComputePixelScale({ 1, 1 }, { 0, 0 })));
+		CHECK(ComputePixelScale(uint64_t{ 640 } * 360, { 1280, 720 }) == doctest::Approx(0.5f));
+		CHECK(ComputePixelScale(uint64_t{ 1280 } * 720, { 1280, 720 }) == 1.0f);
+		CHECK(ComputePixelScale(uint64_t{ 641 } * 361, { 1281, 721 }) == doctest::Approx(std::sqrt(641.0f * 361.0f / (1281.0f * 721.0f))));
+		// A frame from before a resize, against the new viewport: 1280x720 rendered for a 2560x1440 output.
+		CHECK(ComputePixelScale(uint64_t{ 1280 } * 720, { 2560, 1440 }) == doctest::Approx(0.5f));
+		CHECK(std::isfinite(ComputePixelScale(1, { 0, 0 })));
 	}
 }
 
@@ -512,7 +514,7 @@ TEST_SUITE("SceneRenderer")
 	TEST_CASE("Without GPU timers dynamic resolution stays inactive, says so once, and render.stats reports it")
 	{
 		const uint64_t since = Log::GetHistory().GetTotalCount();
-		SceneRenderer renderer(nullptr, SceneRendererSpecification{ true });
+		SceneRenderer renderer(nullptr, SceneRendererSpecification{ .GpuTimers = true });
 		CHECK_FALSE(renderer.HasGpuTimers());
 		renderer.SetDynamicResolution({ true, 30.0f, 0.5f });
 		renderer.SetDynamicResolution({ true, 60.0f, 0.5f });

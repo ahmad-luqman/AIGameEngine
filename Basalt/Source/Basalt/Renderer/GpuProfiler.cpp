@@ -130,7 +130,7 @@ namespace Basalt {
 			if (slot.Recorded[pass])
 				sample.PassMilliseconds[pass] = m_Device->getTimerQueryTime(slot.Passes[pass]) * 1000.0f;
 		}
-		sample.RenderScale = slot.RenderScale;
+		sample.RenderedPixels = slot.RenderedPixels;
 		m_Average.Add(sample);
 		return sample;
 	}
@@ -188,14 +188,14 @@ namespace Basalt {
 		m_OpenPass = NoPass;
 	}
 
-	void GpuProfiler::EndFrame(nvrhi::ICommandList* commandList, float renderScale)
+	void GpuProfiler::EndFrame(nvrhi::ICommandList* commandList, uint64_t renderedPixels)
 	{
 		BS_CORE_ASSERT(m_OpenPass == NoPass, "GpuProfiler::EndFrame inside a pass");
 		if (!m_FrameOpen)
 			return;
 		FrameSlot& slot = m_Slots[m_Current];
 		commandList->endTimerQuery(slot.Frame);
-		slot.RenderScale = renderScale;
+		slot.RenderedPixels = renderedPixels;
 		slot.Pending = true;
 		m_FrameOpen = false;
 	}
