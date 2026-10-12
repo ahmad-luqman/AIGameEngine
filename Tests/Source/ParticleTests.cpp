@@ -1186,6 +1186,40 @@ TEST_SUITE("Particles")
 		CHECK(ValidateParticleEmitter(broken) == problems[0]);
 	}
 
+	TEST_CASE("Changing SimulationSpace during play keeps live particles where they are and moving as they were")
+	{
+		Scene scene;
+		ParticleEmitterComponent emitter = QuietEmitter();
+		emitter.Velocity = { 0.0f, 1.0f, 0.0f };
+		Entity entity = AddEmitter(scene, "Emitter", emitter, { 5.0f, 0.0f, 0.0f });
+		entity.GetTransform().Rotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+		entity.GetTransform().Scale = { 2.0f, 3.0f, 0.5f };
+		scene.OnRuntimeStart();
+		ParticleSystem& particles = *scene.GetParticleSystem();
+		particles.Emit(entity, 1);
+		StepFrames(scene, 31); // half a second along world -X (local +Y turned 90 degrees about Z)
+		const glm::vec3 start = ParticlePosition(RenderData(scene), 0);
+		CHECK(start.x == doctest::Approx(4.5).epsilon(1e-3));
+
+		auto& component = entity.GetComponent<ParticleEmitterComponent>();
+		component.SimulationSpace = ParticleSimulationSpace::Local;
+		// Drawn before the next update: still where it was.
+		CHECK(glm::distance(ParticlePosition(RenderData(scene), 0), start) < 1e-4f);
+		StepFrames(scene, 30);
+		const glm::vec3 local = ParticlePosition(RenderData(scene), 0);
+		CHECK(local.x == doctest::Approx(4.0).epsilon(1e-3));
+		CHECK(local.y == doctest::Approx(0.0).epsilon(1e-3));
+
+		component.SimulationSpace = ParticleSimulationSpace::World;
+		StepFrames(scene, 30);
+		CHECK(ParticlePosition(RenderData(scene), 0).x == doctest::Approx(3.5).epsilon(1e-3));
+		// New particles follow the new space too.
+		particles.Emit(entity, 1);
+		scene.OnUpdate(Step);
+		CHECK(particles.GetParticleCount(entity) == 2);
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Lua: EmitParticles, PlayParticles, StopParticles, IsEmittingParticles, GetParticleCount")
 	{
 		Scene scene;

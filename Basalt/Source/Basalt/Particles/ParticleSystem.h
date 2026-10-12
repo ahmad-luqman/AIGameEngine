@@ -139,6 +139,9 @@ namespace Basalt {
 			Random Rng;
 			std::vector<Particle> Particles;
 			EmitterState State = EmitterState::Stopped;
+			// The space the particles are stored in. A SimulationSpace change converts them (at the next Update or
+			// Emit); until then they are drawn in this space, so they never jump.
+			ParticleSimulationSpace Space = ParticleSimulationSpace::World;
 			// Seconds into the current emission cycle.
 			float CycleTime = 0.0f;
 			// Fractional particles owed by the rate, carried between frames.
@@ -160,6 +163,8 @@ namespace Basalt {
 		// The emitter's component with its values in range (reported once when they were not).
 		ParticleEmitterComponent ReadComponent(const Emitter& emitter) const;
 
+		// Converts the emitter's particles to `space` (positions and velocities), for the emitter's transform.
+		static void ConvertSpace(Emitter& emitter, ParticleSimulationSpace space, const glm::mat4& emitterTransform);
 		static void StartCycle(Emitter& emitter);
 		static uint32_t Spawn(Emitter& emitter, const ParticleEmitterComponent& component, const glm::mat4& emitterTransform, uint32_t count);
 		// Ages and moves particles [0, count), swap-removing expired ones within that range; returns how many
