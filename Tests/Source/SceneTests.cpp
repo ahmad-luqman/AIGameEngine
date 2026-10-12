@@ -190,6 +190,53 @@ TEST_SUITE("Scene")
 
 TEST_SUITE("Serialization")
 {
+	TEST_CASE("Every component's defaults pass its own rules; adding through the registry constructs once")
+	{
+		Scene scene;
+		for (const ComponentInfo& info : ComponentRegistry::GetAll())
+		{
+			if (info.IsCore)
+				continue;
+			INFO("component: " << info.Name);
+			Entity entity = scene.CreateEntity(info.Name);
+			std::string error;
+			CHECK_MESSAGE(info.Deserialize(entity, nlohmann::json::object(), error), error);
+			CHECK(info.Has(entity));
+		}
+
+		// One construction with the final values, and no update: systems never see the defaults first.
+		int constructed = 0;
+		int updated = 0;
+		float constructedIntensity = 0.0f;
+		struct Counter
+		{
+			int* Constructed;
+			int* Updated;
+			float* Intensity;
+			void OnConstruct(entt::registry& registry, entt::entity handle)
+			{
+				(*Constructed)++;
+				*Intensity = registry.get<PointLightComponent>(handle).Intensity;
+			}
+			void OnUpdate(entt::registry&, entt::entity) { (*Updated)++; }
+		} counter{ &constructed, &updated, &constructedIntensity };
+		scene.GetRegistry().on_construct<PointLightComponent>().connect<&Counter::OnConstruct>(counter);
+		scene.GetRegistry().on_update<PointLightComponent>().connect<&Counter::OnUpdate>(counter);
+		Entity lamp = scene.CreateEntity("Lamp");
+		std::string error;
+		REQUIRE(ComponentRegistry::AddOrPatch(lamp, "PointLight", { { "Intensity", 42 } }, error));
+		CHECK(constructed == 1);
+		CHECK(updated == 0);
+		CHECK(constructedIntensity == 42.0f);
+		// A rejected add leaves no component behind.
+		Entity broken = scene.CreateEntity("Broken");
+		CHECK_FALSE(ComponentRegistry::AddOrPatch(broken, "PointLight", { { "Intensity", "bright" } }, error));
+		CHECK_FALSE(broken.HasComponent<PointLightComponent>());
+		CHECK(constructed == 1);
+		scene.GetRegistry().on_construct<PointLightComponent>().disconnect<&Counter::OnConstruct>(counter);
+		scene.GetRegistry().on_update<PointLightComponent>().disconnect<&Counter::OnUpdate>(counter);
+	}
+
 	TEST_CASE("Every registered component round-trips through JSON")
 	{
 		Scene scene;

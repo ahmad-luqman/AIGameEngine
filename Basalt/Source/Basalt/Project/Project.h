@@ -27,8 +27,9 @@ namespace Basalt {
 		DynamicResolutionSettings DynamicResolution;
 		// Collision layers and matrix used by every scene of the project.
 		PhysicsLayers Physics;
-		// Seeds every random stream of a play session (Lua's Math.Random/math.random, particle emitters), so
-		// a session replays identically. Changing it changes the gameplay of scripts that use randomness.
+		// Seeds the gameplay random streams of play sessions (Lua's Math.Random/math.random, particle emitters;
+		// not UUIDs of runtime spawns), so a session replays identically. Applies from the next play; changing
+		// it changes the gameplay of scripts that use randomness.
 		uint32_t RandomSeed = Random::DefaultSeed;
 	};
 

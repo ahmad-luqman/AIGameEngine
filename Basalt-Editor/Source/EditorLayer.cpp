@@ -110,6 +110,19 @@ namespace Basalt {
 			}
 		}
 
+		// A circle through center + (u cos a + v sin a) * radius (an ellipse when u and v differ in length).
+		void DrawCircle(const glm::vec3& center, const glm::vec3& u, const glm::vec3& v, float radius, const glm::vec4& color, int segments = 24)
+		{
+			glm::vec3 previous = center + u * radius;
+			for (int i = 1; i <= segments; i++)
+			{
+				const float angle = glm::two_pi<float>() * static_cast<float>(i) / static_cast<float>(segments);
+				const glm::vec3 point = center + (u * std::cos(angle) + v * std::sin(angle)) * radius;
+				DebugDraw::Line(previous, point, color);
+				previous = point;
+			}
+		}
+
 		// The rim of a cone joint's limit, 0.5 m along its axis, with two lines back to the apex. Wide cones
 		// are skipped: the rim's radius grows with tan(halfAngle), which runs off toward infinity near 90 degrees.
 		void DrawConeRim(const glm::vec3& apex, const glm::vec3& axis, float halfAngle, const glm::vec4& color)
@@ -121,27 +134,19 @@ namespace Basalt {
 			const glm::vec3 v = glm::cross(axis, u);
 			const glm::vec3 center = apex + axis * 0.5f;
 			const float radius = 0.5f * std::tan(halfAngle);
-			constexpr int Segments = 24;
-			glm::vec3 previous = center + u * radius;
-			for (int i = 1; i <= Segments; i++)
-			{
-				const float angle = glm::two_pi<float>() * static_cast<float>(i) / static_cast<float>(Segments);
-				const glm::vec3 point = center + (u * std::cos(angle) + v * std::sin(angle)) * radius;
-				DebugDraw::Line(previous, point, color);
-				previous = point;
-			}
+			DrawCircle(center, u, v, radius, color);
 			DebugDraw::Line(apex, center + u * radius, color);
 			DebugDraw::Line(apex, center - u * radius, color);
 		}
 
-		// Draws a joint from its body's world transform: the anchor, the axis (hinge rotation, slider
-		// direction, cone or twist axis), the six-DOF secondary axis, the cone's rim and a line to the
-		// connected entity (or the distance joint's world anchor).
-		// The emitter's shape in its local space (scaled by the transform) and its emission direction.
+		// The selected emitter's shape in its local space (scaled by the transform); Box and Cone also show the
+		// +Y emission direction.
 		void DrawParticleEmitter(const glm::mat4& world, const ParticleEmitterComponent& emitter, const glm::vec4& color)
 		{
 			const glm::vec3 origin(world[3]);
-			auto toWorld = [&world](const glm::vec3& local) { return glm::vec3(world * glm::vec4(local, 1.0f)); };
+			const glm::vec3 x(world[0]);
+			const glm::vec3 y(world[1]);
+			const glm::vec3 z(world[2]);
 			switch (emitter.Shape)
 			{
 				case ParticleEmitterShape::Point:
@@ -149,36 +154,33 @@ namespace Basalt {
 					break;
 				case ParticleEmitterShape::Sphere:
 				{
-					const float scale = std::max({ glm::length(glm::vec3(world[0])), glm::length(glm::vec3(world[1])), glm::length(glm::vec3(world[2])) });
+					const float scale = std::max({ glm::length(x), glm::length(y), glm::length(z) });
 					DebugDraw::Sphere(origin, emitter.ShapeRadius * scale, color);
 					break;
 				}
 				case ParticleEmitterShape::Box:
 					DebugDraw::Box(world, emitter.BoxExtents, color);
-					DebugDraw::Arrow(origin, toWorld({ 0.0f, emitter.BoxExtents.y + 1.0f, 0.0f }), color);
+					DebugDraw::Arrow(origin, origin + y * (emitter.BoxExtents.y + 1.0f), color);
 					break;
 				case ParticleEmitterShape::Cone:
 				{
-					// Base disc and the cone's rim one unit along +Y (wider than a hemisphere draws as one).
-					const float angle = glm::radians(std::min(emitter.ConeAngle, 89.0f));
-					const float rimRadius = emitter.ShapeRadius + std::tan(angle);
-					constexpr int Segments = 24;
-					for (int i = 0; i < Segments; i++)
-					{
-						const float a0 = glm::two_pi<float>() * static_cast<float>(i) / Segments;
-						const float a1 = glm::two_pi<float>() * static_cast<float>(i + 1) / Segments;
-						const glm::vec3 d0(std::cos(a0), 0.0f, std::sin(a0));
-						const glm::vec3 d1(std::cos(a1), 0.0f, std::sin(a1));
-						DebugDraw::Line(toWorld(d0 * emitter.ShapeRadius), toWorld(d1 * emitter.ShapeRadius), color);
-						DebugDraw::Line(toWorld(d0 * rimRadius + glm::vec3(0.0f, 1.0f, 0.0f)), toWorld(d1 * rimRadius + glm::vec3(0.0f, 1.0f, 0.0f)), color);
-						if (i % 6 == 0)
-							DebugDraw::Line(toWorld(d0 * emitter.ShapeRadius), toWorld(d0 * rimRadius + glm::vec3(0.0f, 1.0f, 0.0f)), color);
-					}
+					// The base disc, and where directions at the cone's angle reach one unit from it: a rim
+					// cos(angle) up and sin(angle) out, which stays bounded for any angle up to 180 degrees.
+					const float angle = glm::radians(emitter.ConeAngle);
+					const glm::vec3 rimCenter = origin + y * std::cos(angle);
+					const float rimRadius = emitter.ShapeRadius + std::sin(angle);
+					DrawCircle(origin, x, z, emitter.ShapeRadius, color);
+					DrawCircle(rimCenter, x, z, rimRadius, color);
+					for (const glm::vec3& side : { x, z, -x, -z })
+						DebugDraw::Line(origin + side * emitter.ShapeRadius, rimCenter + side * rimRadius, color);
 					break;
 				}
 			}
 		}
 
+		// Draws a joint from its body's world transform: the anchor, the axis (hinge rotation, slider
+		// direction, cone or twist axis), the six-DOF secondary axis, the cone's rim and a line to the
+		// connected entity (or the distance joint's world anchor).
 		void DrawJoint(Scene& scene, const JointComponent& joint, const glm::mat4& bodyWorld, const glm::vec4& color)
 		{
 			glm::vec3 translation;

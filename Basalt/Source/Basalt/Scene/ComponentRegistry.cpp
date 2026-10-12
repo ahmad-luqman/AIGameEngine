@@ -2,6 +2,7 @@
 
 #include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
+#include "Basalt/Particles/ParticleEmitterRules.h"
 #include "Basalt/Physics/PhysicsLayers.h"
 #include "Basalt/Scene/Entity.h"
 
@@ -766,29 +767,6 @@ namespace Basalt {
 			};
 		}
 
-		// Values the particle system cannot simulate (it would divide by zero, emit forever or allocate
-		// without bound). Returns the problem, or an empty string.
-		std::string Validate(const ParticleEmitterComponent& c)
-		{
-			if (c.Duration <= 0.0f)
-				return "Duration must be positive";
-			if (c.MaxParticles < 1 || c.MaxParticles > ParticleEmitterComponent::MaxParticlesLimit)
-				return "MaxParticles must be between 1 and " + std::to_string(ParticleEmitterComponent::MaxParticlesLimit);
-			if (c.BurstCount > ParticleEmitterComponent::MaxParticlesLimit)
-				return "BurstCount must be at most " + std::to_string(ParticleEmitterComponent::MaxParticlesLimit);
-			if (c.Rate < 0.0f || c.ShapeRadius < 0.0f || c.Drag < 0.0f || c.StartSize < 0.0f || c.EndSize < 0.0f)
-				return "Rate, ShapeRadius, Drag, StartSize and EndSize must not be negative";
-			if (c.BoxExtents.x < 0.0f || c.BoxExtents.y < 0.0f || c.BoxExtents.z < 0.0f)
-				return "BoxExtents must not be negative";
-			if (c.ConeAngle < 0.0f || c.ConeAngle > 180.0f)
-				return "ConeAngle must be between 0 and 180 degrees";
-			if (c.LifetimeMin <= 0.0f || c.LifetimeMax < c.LifetimeMin)
-				return "LifetimeMin must be positive and LifetimeMax at least LifetimeMin";
-			if (c.SpeedMax < c.SpeedMin)
-				return "SpeedMax must be at least SpeedMin";
-			return {};
-		}
-
 		json Write(const PrefabComponent& c)
 		{
 			return { { "Prefab", c.Prefab } };
@@ -852,12 +830,21 @@ namespace Basalt {
 			};
 		}
 
-		// Checks a component's values after a read; returns the problem, or an empty string when they are valid.
+		// Checks a component's values after a read: the problem, or an empty string when they are valid.
+		// Components without an overload below accept whatever their fields' types accept.
 		template<typename T>
-		using Validator = std::string (*)(const T&);
+		std::string Validate(const T&)
+		{
+			return {};
+		}
+
+		std::string Validate(const ParticleEmitterComponent& emitter)
+		{
+			return ValidateParticleEmitter(emitter);
+		}
 
 		template<typename T>
-		ComponentInfo MakeInfo(const char* name, bool isCore = false, Validator<T> validate = nullptr)
+		ComponentInfo MakeInfo(const char* name, bool isCore = false)
 		{
 			ComponentInfo info;
 			info.Name = name;
@@ -873,14 +860,16 @@ namespace Basalt {
 					entity.RemoveComponent<T>();
 			};
 			info.Serialize = [](Entity entity) { return Write(entity.GetComponent<T>()); };
-			info.Deserialize = [fields = info.Fields, validate](Entity entity, const json& data, std::string& outError) {
+			info.Deserialize = [fields = info.Fields](Entity entity, const json& data, std::string& outError) {
 				if (!data.is_object())
 				{
 					outError = "component data must be a JSON object";
 					return false;
 				}
-				// Read into a copy so a failure leaves the component untouched.
-				T value = entity.GetComponent<T>();
+				// Read into a copy so a failure leaves the component (or its absence) untouched. A missing
+				// component is added once, with its final values: systems that react to its construction
+				// (PlayOnStart emitters, physics bodies) never see the defaults first.
+				T value = entity.HasComponent<T>() ? entity.GetComponent<T>() : T{};
 				try
 				{
 					FieldReader reader(&data);
@@ -892,11 +881,10 @@ namespace Basalt {
 					outError = e.what();
 					return false;
 				}
-				if (validate)
+				if (std::string problem = Validate(value); !problem.empty())
 				{
-					outError = validate(value);
-					if (!outError.empty())
-						return false;
+					outError = std::move(problem);
+					return false;
 				}
 				// Replace through the registry so on_update observers see the change.
 				entity.AddOrReplaceComponent<T>(std::move(value));
@@ -927,7 +915,8 @@ namespace Basalt {
 					outError = "component data must be a JSON object";
 					return false;
 				}
-				CameraFields value = ToFields(entity.GetComponent<CameraComponent>());
+				CameraComponent camera = entity.HasComponent<CameraComponent>() ? entity.GetComponent<CameraComponent>() : CameraComponent{};
+				CameraFields value = ToFields(camera);
 				try
 				{
 					FieldReader reader(&data);
@@ -955,7 +944,6 @@ namespace Basalt {
 					outError = "OrthoSize must be positive and OrthoFar greater than OrthoNear";
 					return false;
 				}
-				CameraComponent camera = entity.GetComponent<CameraComponent>();
 				ApplyFields(camera, value);
 				entity.AddOrReplaceComponent<CameraComponent>(camera);
 				return true;
@@ -985,7 +973,7 @@ namespace Basalt {
 			infos.push_back(MakeInfo<ScriptComponent>("Script"));
 			infos.push_back(MakeInfo<AudioSourceComponent>("AudioSource"));
 			infos.push_back(MakeInfo<AudioListenerComponent>("AudioListener"));
-			infos.push_back(MakeInfo<ParticleEmitterComponent>("ParticleEmitter", false, &Validate));
+			infos.push_back(MakeInfo<ParticleEmitterComponent>("ParticleEmitter"));
 			infos.push_back(MakeInfo<PrefabComponent>("Prefab"));
 			return infos;
 		}
@@ -1034,13 +1022,9 @@ namespace Basalt {
 			return false;
 		}
 
-		const bool existed = info->Has(entity);
-		if (!existed)
-			info->Add(entity);
+		// Deserialize adds a missing component itself, once and only on success.
 		if (!info->Deserialize(entity, data, outError))
 		{
-			if (!existed)
-				info->Remove(entity);
 			outError = std::string(name) + ": " + outError;
 			return false;
 		}

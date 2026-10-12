@@ -114,15 +114,10 @@ namespace Basalt {
 			!ReadBoundedFloat(data, "TargetFrameRate", MinTargetFrameRate, MaxTargetFrameRate, config.DynamicResolution.TargetFrameRate, filePath, outError) ||
 			!ReadBoundedFloat(data, "MinRenderScale", MinRenderScale, MaxRenderScale, config.DynamicResolution.MinScale, filePath, outError))
 			return nullptr;
-		if (const auto seed = data.find("RandomSeed"); seed != data.end())
+		if (const auto seed = data.find("RandomSeed"); seed != data.end() && !JsonToUInt32(*seed, config.RandomSeed))
 		{
-			// Any 32-bit unsigned integer; nlohmann's get<uint32_t> would wrap negative or larger values.
-			if (!seed->is_number_integer() || seed->get<int64_t>() < 0 || seed->get<int64_t>() > static_cast<int64_t>(UINT32_MAX))
-			{
-				outError = fmt::format("invalid project file '{}': RandomSeed must be an integer between 0 and {}", filePath.string(), UINT32_MAX);
-				return nullptr;
-			}
-			config.RandomSeed = static_cast<uint32_t>(seed->get<int64_t>());
+			outError = fmt::format("invalid project file '{}': RandomSeed must be an integer between 0 and {}", filePath.string(), UINT32_MAX);
+			return nullptr;
 		}
 		if (const auto layers = data.find("PhysicsLayers"); layers != data.end())
 		{

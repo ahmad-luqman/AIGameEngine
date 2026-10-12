@@ -20,6 +20,7 @@
 #include <glm/gtx/quaternion.hpp>
 
 #include <cmath>
+#include <optional>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
@@ -278,14 +279,34 @@ namespace Basalt {
 			return *particles;
 		}
 
-		// The entity, when it has a ParticleEmitter: silently ignoring Play/Stop/Emit on a plain entity would
-		// hide a missing component.
-		Entity RequireEmitter(const ScriptEntity& self, const char* function)
+		// The entity, when it has component T: silently ignoring a call that needs T (Move, PlayParticles) on
+		// an entity without it would hide the missing component.
+		template<typename T>
+		Entity RequireComponent(const ScriptEntity& self, const char* function, const char* component)
 		{
 			Entity entity = self.ResolveOrThrow();
-			if (!entity.HasComponent<ParticleEmitterComponent>())
-				throw std::runtime_error(std::string(function) + " needs a ParticleEmitter component on '" + entity.GetName() + "'");
+			if (!entity.HasComponent<T>())
+				throw std::runtime_error(std::string(function) + " needs a " + component + " component on '" + entity.GetName() + "'");
 			return entity;
+		}
+
+		Entity RequireEmitter(const ScriptEntity& self, const char* function)
+		{
+			return RequireComponent<ParticleEmitterComponent>(self, function, "ParticleEmitter");
+		}
+
+		// Lua integers, and floats with an integer value (as stock Lua's math.randomseed accepts them).
+		std::optional<int64_t> ToInteger(const sol::object& value)
+		{
+			if (value.is<int64_t>())
+				return value.as<int64_t>();
+			if (value.get_type() == sol::type::number)
+			{
+				const double number = value.as<double>();
+				if (std::trunc(number) == number && number >= -9.2e18 && number <= 9.2e18)
+					return static_cast<int64_t>(number);
+			}
+			return std::nullopt;
 		}
 
 		void RegisterMath(sol::state& lua, ScriptContext& context)
@@ -305,7 +326,8 @@ namespace Basalt {
 			math["Clamp"] = [](float value, float min, float max) { return glm::clamp(value, min, max); };
 			math["Lerp"] = [](float a, float b, float t) { return a + (b - a) * t; };
 			math["Sign"] = [](float value) { return value > 0.0f ? 1.0f : (value < 0.0f ? -1.0f : 0.0f); };
-			// Deterministic generator; Math.Seed makes runs reproducible.
+			// Deterministic generator, seeded from the session's seed (the project's RandomSeed); Math.Seed
+			// picks another sequence.
 			math["Seed"] = [&context](uint32_t seed) { context.Rng.Seed(seed); };
 			math["Random"] = sol::overload([&context]() { return context.Rng.Float(); }, [&context](float min, float max) { return context.Rng.Range(min, max); });
 			math["RandomInt"] = [&context](int64_t min, int64_t max) { return context.Rng.Int(min, max); };
@@ -328,8 +350,19 @@ namespace Basalt {
 						throw std::runtime_error("bad argument #2 to 'random' (interval is empty)");
 					return context.Rng.Int(min, max);
 				});
-			// Without an argument it returns to the session's starting point (the project seed).
-			luaMath["randomseed"] = [&context](sol::optional<int64_t> seed) { context.Rng.Seed(seed ? static_cast<uint32_t>(*seed) : Project::GetActiveRandomSeed()); };
+			// Without an argument it returns to the session's starting point (the seed play started with).
+			// Seeds are 32-bit: larger integers use their low 32 bits.
+			luaMath["randomseed"] = [&context](const sol::object& seed) {
+				if (!seed.valid() || seed.get_type() == sol::type::lua_nil)
+				{
+					context.Rng.Seed(context.Seed);
+					return;
+				}
+				const std::optional<int64_t> integer = ToInteger(seed);
+				if (!integer)
+					throw std::runtime_error("bad argument #1 to 'randomseed' (number has no integer representation)");
+				context.Rng.Seed(static_cast<uint32_t>(static_cast<uint64_t>(*integer)));
+			};
 		}
 
 		void RegisterEntity(sol::state& lua, ScriptContext& context)
@@ -421,10 +454,7 @@ namespace Basalt {
 				return rotation ? sol::optional<glm::vec3>(*rotation) : sol::optional<glm::vec3>(); }, "HasJoint", [&context](const ScriptEntity& self) { return RequirePhysics(context).HasJoint(self.ResolveOrThrow()); },
 
 										   "Move", [&context](const ScriptEntity& self, const glm::vec3& velocity) {
-					Entity entity = self.ResolveOrThrow();
-					// Silently ignoring Move on a plain entity would hide a missing component.
-					if (!entity.HasComponent<CharacterControllerComponent>())
-						throw std::runtime_error("Move needs a CharacterController component on '" + entity.GetName() + "'");
+					Entity entity = RequireComponent<CharacterControllerComponent>(self, "Move", "CharacterController");
 					// Ignoring it would keep the character walking at its last velocity (e.g. after normalizing a zero vector).
 					if (!std::isfinite(velocity.x) || !std::isfinite(velocity.y) || !std::isfinite(velocity.z))
 						throw std::runtime_error("Move velocity must be finite");
@@ -434,7 +464,17 @@ namespace Basalt {
 
 										   "PlayAudio", [&context](const ScriptEntity& self) { return RequireAudio(context).Play(self.ResolveOrThrow()); }, "StopAudio", [&context](const ScriptEntity& self) { RequireAudio(context).Stop(self.ResolveOrThrow()); }, "IsAudioPlaying", [&context](const ScriptEntity& self) { return RequireAudio(context).IsPlaying(self.ResolveOrThrow()); },
 
-										   "PlayParticles", [&context](const ScriptEntity& self) { RequireParticles(context).Play(RequireEmitter(self, "PlayParticles")); }, "StopParticles", [&context](const ScriptEntity& self, sol::optional<bool> clear) { RequireParticles(context).Stop(RequireEmitter(self, "StopParticles"), clear.value_or(false)); }, "EmitParticles", [&context](const ScriptEntity& self, int64_t count) {
+										   "PlayParticles", [&context](const ScriptEntity& self) {
+					Entity entity = RequireEmitter(self, "PlayParticles");
+					// Every emitter registers when its component is added; a miss is an engine bug, not a no-op.
+					if (!RequireParticles(context).Play(entity))
+						throw std::runtime_error("the ParticleEmitter on '" + entity.GetName() + "' is not registered with the particle system"); }, "StopParticles", [&context](const ScriptEntity& self, const sol::object& clear) {
+					Entity entity = RequireEmitter(self, "StopParticles");
+					// A truthy non-boolean (1, "yes") would read as false through sol's conversion.
+					const sol::type clearType = clear.valid() ? clear.get_type() : sol::type::lua_nil;
+					if (clearType != sol::type::lua_nil && clearType != sol::type::boolean)
+						throw std::runtime_error("StopParticles: clear must be true, false or nil");
+					RequireParticles(context).Stop(entity, clearType == sol::type::boolean && clear.as<bool>()); }, "EmitParticles", [&context](const ScriptEntity& self, int64_t count) {
 					Entity entity = RequireEmitter(self, "EmitParticles");
 					if (count < 0 || count > static_cast<int64_t>(ParticleEmitterComponent::MaxParticlesLimit))
 						throw std::runtime_error("EmitParticles count must be between 0 and " + std::to_string(ParticleEmitterComponent::MaxParticlesLimit));

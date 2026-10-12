@@ -4,6 +4,7 @@
 #include "Basalt/Core/Log.h"
 #include "Basalt/Particles/ParticleSystem.h"
 #include "Basalt/Physics/PhysicsWorld.h"
+#include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/DebugDraw.h"
 #include "Basalt/Renderer/GameUI.h"
 #include "Basalt/Scene/ComponentRegistry.h"
@@ -156,8 +157,7 @@ namespace Basalt {
 			m_PhysicsWorld->OnEntityDestroyed(entity);
 		if (m_AudioSystem)
 			m_AudioSystem->OnEntityDestroyed(entity);
-		if (m_ParticleSystem)
-			m_ParticleSystem->OnEntityDestroyed(entity);
+		// ParticleSystem unregisters through its on_destroy signal when the registry destroys the entity.
 
 		RemoveFromParent(entity);
 		const UUID uuid = entity.GetUUID();
@@ -434,6 +434,7 @@ namespace Basalt {
 		m_State = SceneState::Play;
 		m_Time = 0.0f;
 		m_FrameCount = 0;
+		m_RandomSeed = Project::GetActiveRandomSeed();
 		m_QuitRequested = false;
 		m_Paused = false;
 		m_StepFrames = 0;
@@ -481,6 +482,7 @@ namespace Basalt {
 		m_State = SceneState::Simulate;
 		m_Time = 0.0f;
 		m_FrameCount = 0;
+		m_RandomSeed = Project::GetActiveRandomSeed();
 		m_Paused = false;
 		m_StepFrames = 0;
 		m_PhysicsWorld = CreateScope<PhysicsWorld>(this);

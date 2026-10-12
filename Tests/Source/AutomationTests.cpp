@@ -481,6 +481,24 @@ TEST_SUITE("Automation")
 		CHECK(shorter["stateHash"] != live["stateHash"]);
 		CHECK(RunError(registry, session, "replay.run", { { "path", "Replays/Test.breplay" }, { "frames", 5 }, { "assertHash", true } }).find("full recorded length") != std::string::npos);
 
+		// A seed set during a recording applies from the next play: the replay stores the one the run used.
+		Run(registry, session, "play.stop"); // replay.run keeps playing
+		Run(registry, session, "replay.record_start");
+		Run(registry, session, "play.start");
+		Run(registry, session, "project.set", { { "randomSeed", 55 } });
+		Run(registry, session, "play.step", { { "frames", 2 } });
+		Run(registry, session, "replay.record_stop", { { "path", "Replays/SeedChanged.breplay" } });
+		CHECK(json::parse(*FileSystem::ReadTextFile(temp.GetDirectory() / "Replays/SeedChanged.breplay"))["RandomSeed"] == Random::DefaultSeed);
+		Run(registry, session, "play.stop");
+		Run(registry, session, "project.set", { { "randomSeed", Random::DefaultSeed } });
+
+		// Replays from before seeds were stored ran with the default seed.
+		temp.WriteFile("Replays/Legacy.breplay", R"({ "Format": "BasaltReplay", "Version": 1, "Frames": 1, "Events": [] })");
+		Run(registry, session, "replay.run", { { "path", "Replays/Legacy.breplay" } });
+		Run(registry, session, "project.set", { { "randomSeed", 3 } });
+		CHECK(RunError(registry, session, "replay.run", { { "path", "Replays/Legacy.breplay" } }).find("recorded with random seed 9067031") != std::string::npos);
+		Run(registry, session, "project.set", { { "randomSeed", Random::DefaultSeed } });
+
 		// The replay stored the seed it ran with; another seed would replay different random numbers.
 		CHECK(json::parse(*FileSystem::ReadTextFile(temp.GetDirectory() / "Replays/Test.breplay"))["RandomSeed"] == Random::DefaultSeed);
 		Run(registry, session, "project.set", { { "randomSeed", 99 } });

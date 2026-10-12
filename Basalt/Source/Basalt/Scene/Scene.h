@@ -3,6 +3,7 @@
 #include "Basalt/Core/Base.h"
 #include "Basalt/Core/Timestep.h"
 #include "Basalt/Core/UUID.h"
+#include "Basalt/Math/Random.h"
 #include "Basalt/Physics/PhysicsLayers.h"
 
 #include <entt/entt.hpp>
@@ -153,6 +154,10 @@ namespace Basalt {
 		float GetTime() const { return m_Time; }
 		// Number of OnUpdate calls that advanced the simulation since the runtime started.
 		uint64_t GetFrameCount() const { return m_FrameCount; }
+		// Seed of every gameplay random stream of this play/simulate session (Lua, particle emitters): the
+		// project's RandomSeed when the session started, so changing the project setting mid-session (it
+		// applies from the next play) cannot split one session over two seeds.
+		uint32_t GetRandomSeed() const { return m_RandomSeed; }
 
 		// Set by gameplay code (Lua Game.Quit) to ask the host application to stop the game.
 		void RequestQuit() { m_QuitRequested = true; }
@@ -203,6 +208,7 @@ namespace Basalt {
 		uint32_t m_StepFrames = 0;
 		float m_Time = 0.0f;
 		uint64_t m_FrameCount = 0;
+		uint32_t m_RandomSeed = Random::DefaultSeed;
 		bool m_QuitRequested = false;
 		std::vector<UUID> m_PendingDestruction;
 
