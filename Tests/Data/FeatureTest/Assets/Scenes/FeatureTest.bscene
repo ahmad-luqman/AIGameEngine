@@ -19,6 +19,9 @@
 		{ "ID": 3, "Name": "Sun", "Components": {
 			"Transform": { "Rotation": [-50, 35, 0] },
 			"DirectionalLight": { "Color": [1, 0.95, 0.88], "Intensity": 3.0, "CastShadows": true, "ShadowSoftness": 1.0 } } },
+		{ "ID": 62, "Name": "FillLight", "Components": {
+			"Transform": { "Rotation": [-25, -90, 0] },
+			"DirectionalLight": { "Color": [0.6, 0.7, 1], "Intensity": 1.2, "CastShadows": true } } },
 		{ "ID": 4, "Name": "Sky", "Components": {
 			"SkyLight": { "EnvironmentMap": "Assets/Environments/Sky.hdr", "Intensity": 0.45, "Rotation": 30, "ShowBackground": true } } },
 		{ "ID": 5, "Name": "Lamp", "Components": {

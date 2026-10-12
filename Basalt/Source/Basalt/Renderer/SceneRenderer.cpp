@@ -4,6 +4,7 @@
 #include "Basalt/Core/Log.h"
 #include "Basalt/Renderer/DebugLineRenderer.h"
 #include "Basalt/Renderer/RenderMath.h"
+#include "Basalt/Renderer/SceneLights.h"
 #include "Basalt/Renderer/ShaderUtils.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
@@ -656,28 +657,28 @@ namespace Basalt {
 		}
 
 		// --- Lights -------------------------------------------------------------------------------
+		// The primary directional light (with shadow cascades) goes into the view constants; the other
+		// directional lights are unshadowed and lead the light buffer, so MaxLights drops local lights first.
+		const std::vector<DirectionalLightInfo> directionalLights = CollectDirectionalLights(scene);
 		GpuDirectionalLight sun{};
 		sun.Direction = glm::vec4(0.0f, -1.0f, 0.0f, 0.0f);
+		if (!directionalLights.empty())
 		{
-			// One directional light (the first) is supported.
-			auto view = scene.GetAllEntitiesWith<DirectionalLightComponent>();
-			if (auto it = view.begin(); it != view.end())
-			{
-				const entt::entity handle = *it;
-				Entity entity(handle, &scene);
-				const auto& light = view.get<DirectionalLightComponent>(handle);
-				const glm::mat4 world = scene.GetWorldTransform(entity);
-				const glm::vec3 direction = glm::normalize(glm::vec3(world * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f)));
-				sun.Direction = glm::vec4(direction, 1.0f);
-				sun.Color = glm::vec4(light.Color * light.Intensity, (light.CastShadows && settings.ShadowsEnabled) ? 1.0f : 0.0f);
-				sun.ShadowParams = glm::vec4(settings.ShadowBias, settings.ShadowNormalBias, light.ShadowSoftness, static_cast<float>(MaxCascades));
-				m_Statistics.Lights++;
-			}
+			const DirectionalLightInfo& primary = directionalLights.front();
+			sun.Direction = glm::vec4(primary.Direction, 1.0f);
+			sun.Color = glm::vec4(primary.Radiance, (primary.CastShadows && settings.ShadowsEnabled) ? 1.0f : 0.0f);
+			sun.ShadowParams = glm::vec4(settings.ShadowBias, settings.ShadowNormalBias, primary.ShadowSoftness, static_cast<float>(MaxCascades));
+			m_Statistics.Lights++;
 		}
 
 		std::vector<GpuLightData>& lights = impl.Lights;
 		lights.clear();
 		{
+			for (size_t i = 1; i < directionalLights.size() && lights.size() < MaxLights; i++)
+			{
+				const DirectionalLightInfo& light = directionalLights[i];
+				lights.push_back({ glm::vec4(0.0f), glm::vec4(light.Radiance, 2.0f), glm::vec4(light.Direction, 0.0f), glm::vec4(0.0f) });
+			}
 			auto pointView = scene.GetAllEntitiesWith<PointLightComponent>();
 			for (entt::entity handle : pointView)
 			{
