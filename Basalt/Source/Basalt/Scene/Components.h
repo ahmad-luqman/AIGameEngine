@@ -10,6 +10,7 @@
 #include <nlohmann/json.hpp>
 
 #include <array>
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -380,6 +381,8 @@ namespace Basalt {
 		bool Active = true;
 	};
 
+	// Each particle enum's value count follows it: name tables, the emitter rules and the renderer's
+	// pipelines size themselves from it, so a new value cannot be half supported.
 	enum class ParticleEmitterShape
 	{
 		Point = 0,
@@ -387,34 +390,39 @@ namespace Basalt {
 		Box,
 		Cone
 	};
+	constexpr size_t ParticleEmitterShapeCount = 4;
 
 	enum class ParticleSimulationSpace
 	{
 		World = 0,
 		Local
 	};
+	constexpr size_t ParticleSimulationSpaceCount = 2;
 
 	enum class ParticleBlendMode
 	{
 		Alpha = 0,
 		Additive
 	};
+	constexpr size_t ParticleBlendModeCount = 2;
 
 	// Emits camera-facing particles while the scene plays or simulates (ParticleSystem simulates them on the
 	// CPU, the renderer draws them unlit in the transparent pass). Shapes and Velocity are in the emitter's
 	// local space; Box and Cone emit along local +Y, Point and Sphere in every direction. Each emission cycle
 	// lasts Duration seconds and starts with BurstCount particles; Rate emits continuously in between.
-	// Value limits are below; ValidateParticleEmitter (Particles/ParticleEmitterRules.h) enforces them.
+	// Limit constants are below; the full per-field rules are in Particles/ParticleEmitterRules.cpp.
 	struct ParticleEmitterComponent
 	{
 		// Largest MaxParticles and BurstCount.
 		static constexpr uint32_t MaxParticlesLimit = 10000;
-		// Shortest Duration and lifetime (s).
+		// Shortest and longest Duration and lifetime (s). The longest keeps a particle's age advancing at
+		// small time steps (float precision) and its motion far from overflow.
 		static constexpr float MinTime = 1e-3f;
+		static constexpr float MaxTime = 1e5f;
 		// Largest Rate (particles/s).
 		static constexpr float MaxRate = 1e6f;
 		// Largest magnitude of speeds, Velocity, GravityScale, Drag, shape and particle sizes and color
-		// channels: keeps a particle's motion far from float overflow over any lifetime.
+		// channels: with MaxTime, keeps positions, sizes and colors finite through a particle's whole life.
 		static constexpr float MaxMagnitude = 1e4f;
 		// Largest ConeAngle (degrees): a full sphere.
 		static constexpr float MaxConeAngle = 180.0f;
@@ -445,7 +453,7 @@ namespace Basalt {
 		// either order); negative speeds emit against that direction.
 		float SpeedMin = 1.0f;
 		float SpeedMax = 2.0f;
-		// Added to every particle's initial velocity (emitter-local direction, m/s).
+		// Added to every particle's initial velocity (m/s, along the emitter's rotated axes; not scaled).
 		glm::vec3 Velocity = { 0.0f, 0.0f, 0.0f };
 		// Scales the scene's physics gravity.
 		float GravityScale = 0.0f;

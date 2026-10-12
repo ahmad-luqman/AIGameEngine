@@ -20,6 +20,22 @@ using namespace Basalt;
 
 TEST_SUITE("Core")
 {
+	TEST_CASE("JsonToUInt32 accepts exactly the integers 0..4294967295")
+	{
+		using json = nlohmann::json;
+		uint32_t out = 7;
+		CHECK((JsonToUInt32(json(0u), out) && out == 0u));
+		CHECK((JsonToUInt32(json::parse("4294967295"), out) && out == 4294967295u));
+		CHECK((JsonToUInt32(json(int64_t{ 5 }), out) && out == 5u)); // signed, in range
+		out = 9;
+		for (const json& bad : { json::parse("4294967296"), json::parse("18446744073709551615"), json(int64_t{ 4294967296 }), json(-1), json(1.0), json(2.5), json("1"), json(true), json(nullptr) })
+		{
+			INFO(bad.dump());
+			CHECK_FALSE(JsonToUInt32(bad, out));
+			CHECK(out == 9u); // untouched on failure
+		}
+	}
+
 	TEST_CASE("UUID generates unique non-zero values")
 	{
 		std::unordered_set<uint64_t> values;

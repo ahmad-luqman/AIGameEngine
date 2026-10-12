@@ -16,6 +16,9 @@ namespace Basalt {
 
 	namespace {
 
+		// A camera-facing square's corner lies within half its diagonal of the center along any world axis.
+		constexpr float HalfDiagonal = 0.70710678f;
+
 		// Spreads consecutive ordinals of one seed over unrelated mt19937 seeds (murmur3's finalizer).
 		uint32_t MixSeed(uint32_t seed, uint32_t ordinal)
 		{
@@ -44,11 +47,15 @@ namespace Basalt {
 		}
 
 		// Maps world-space vectors into a local-space emitter's frame, so that drawing through the emitter's
-		// (scaled) transform gives them back. A degenerate (zero-scale) emitter has no such frame: nothing.
+		// (scaled) transform gives them back. A degenerate emitter (an axis scaled to zero, or axes that
+		// coincide) has no such frame: nothing. The test compares the determinant with the axis lengths, so
+		// small but valid scales (0.01 under a 0.01 parent) still count. Degenerate: the zero matrix (local
+		// velocities and gravity vanish).
 		glm::mat3 WorldToEmitter(const glm::mat4& transform)
 		{
 			const glm::mat3 basis(transform);
-			return std::abs(glm::determinant(basis)) > 1e-12f ? glm::inverse(basis) : glm::mat3(0.0f);
+			const float lengths = glm::length(basis[0]) * glm::length(basis[1]) * glm::length(basis[2]);
+			return lengths > 0.0f && std::abs(glm::determinant(basis)) > 1e-6f * lengths ? glm::inverse(basis) : glm::mat3(0.0f);
 		}
 
 		// Uniform direction on the unit sphere. Each random number is drawn in its own statement: argument
@@ -101,7 +108,7 @@ namespace Basalt {
 					return;
 				}
 			}
-			// Unreachable for sanitized components (Shape is in range).
+			BS_CORE_ASSERT(false, "SampleShape needs a sanitized component (Shape in range)");
 			outPosition = glm::vec3(0.0f);
 			outDirection = { 0.0f, 1.0f, 0.0f };
 		}
@@ -125,7 +132,6 @@ namespace Basalt {
 
 	void ParticleSystem::Start()
 	{
-		m_Seed = m_Scene->GetRandomSeed();
 		m_NextOrdinal = 0;
 		m_Emitters.clear();
 		m_Order.clear();
@@ -144,16 +150,19 @@ namespace Basalt {
 	void ParticleSystem::OnConstruct(entt::registry& registry, entt::entity handle)
 	{
 		if (const auto* id = registry.try_get<IDComponent>(handle))
+		{
 			Register(id->ID, handle);
-		else
-			BS_CORE_ERROR("ParticleSystem: a ParticleEmitter was added to an entity without an ID; it will not emit");
+			return;
+		}
+		const auto* tag = registry.try_get<TagComponent>(handle);
+		BS_CORE_ERROR("ParticleSystem: a ParticleEmitter was added to entity {} ('{}') without an ID; it will not emit", static_cast<uint32_t>(handle), tag ? tag->Tag : "");
 	}
 
 	// Covers RemoveComponent and entity destruction alike (destroying an entity removes its components).
 	void ParticleSystem::OnDestroy(entt::registry& registry, entt::entity handle)
 	{
-		// The IDComponent normally outlives the emitter (EnTT removes pools in reverse creation order), but
-		// the emitter must never outlive its entity, so fall back to the handle.
+		// The IDComponent normally outlives the emitter (EnTT's single-entity destroy removes components in
+		// reverse pool-creation order), but the emitter must never outlive its entity: fall back to the handle.
 		if (const auto* id = registry.try_get<IDComponent>(handle))
 		{
 			Unregister(id->ID);
@@ -171,12 +180,17 @@ namespace Basalt {
 
 	void ParticleSystem::Register(UUID id, entt::entity handle)
 	{
-		// Start registers what the registry already holds; a signal for one of those is not a second emitter.
-		if (m_Emitters.contains(id))
+		// Defensive: a second registration of one UUID (duplicate UUIDs) must not create another emitter or
+		// use up an ordinal.
+		if (auto existing = m_Emitters.find(id); existing != m_Emitters.end())
+		{
+			if (existing->second.Handle != handle)
+				BS_CORE_ERROR("ParticleSystem: two entities share UUID {}; only the first one's ParticleEmitter emits", static_cast<uint64_t>(id));
 			return;
+		}
 		Emitter& emitter = m_Emitters[id];
 		emitter.Handle = handle;
-		emitter.Rng.Seed(MixSeed(m_Seed, m_NextOrdinal++));
+		emitter.Rng.Seed(MixSeed(m_Scene->GetRandomSeed(), m_NextOrdinal++));
 		m_Order.push_back(id);
 		if (m_Scene->GetRegistry().get<ParticleEmitterComponent>(handle).PlayOnStart)
 			StartCycle(emitter);
@@ -200,16 +214,23 @@ namespace Basalt {
 		return it != m_Emitters.end() ? &it->second : nullptr;
 	}
 
-	ParticleEmitterComponent ParticleSystem::ReadComponent(Emitter& emitter) const
+	ParticleEmitterComponent ParticleSystem::ReadComponent(const Emitter& emitter) const
 	{
 		const auto& component = m_Scene->GetRegistry().get<ParticleEmitterComponent>(emitter.Handle);
 		ParticleEmitterComponent sanitized = SanitizeParticleEmitter(component);
+		if (sanitized == component)
+		{
+			emitter.ReportedInvalid = false;
+			return sanitized;
+		}
 		// The registry rejects such values, so C++ code wrote them directly; simulate repaired ones, and say so.
-		if (!(sanitized == component) && !emitter.ReportedInvalid)
+		if (!emitter.ReportedInvalid)
 		{
 			emitter.ReportedInvalid = true;
-			const Entity entity(emitter.Handle, m_Scene);
-			BS_CORE_WARN("ParticleSystem: the ParticleEmitter on '{}' has invalid values ({}); simulating corrected ones", entity.GetName(), ValidateParticleEmitter(component));
+			std::string problems;
+			for (const std::string& problem : FindParticleEmitterProblems(component))
+				problems += (problems.empty() ? "" : "; ") + problem;
+			BS_CORE_WARN("ParticleSystem: the ParticleEmitter on '{}' has invalid values ({}); simulating corrected ones", Entity(emitter.Handle, m_Scene).GetName(), problems);
 		}
 		return sanitized;
 	}
@@ -219,6 +240,11 @@ namespace Basalt {
 		emitter.State = EmitterState::BurstPending;
 		emitter.CycleTime = 0.0f;
 		emitter.RateAccumulator = 0.0f;
+	}
+
+	bool ParticleSystem::HasEmitter(Entity entity) const
+	{
+		return Find(entity) != nullptr;
 	}
 
 	bool ParticleSystem::Play(Entity entity)
@@ -231,17 +257,18 @@ namespace Basalt {
 		return true;
 	}
 
-	void ParticleSystem::Stop(Entity entity, bool clear)
+	bool ParticleSystem::Stop(Entity entity, bool clear)
 	{
 		Emitter* emitter = Find(entity);
 		if (!emitter)
-			return;
+			return false;
 		emitter->State = EmitterState::Stopped;
 		if (clear)
 		{
 			emitter->Particles.clear();
 			emitter->FreshCount = 0;
 		}
+		return true;
 	}
 
 	uint32_t ParticleSystem::Emit(Entity entity, uint32_t count)
@@ -301,36 +328,40 @@ namespace Basalt {
 		return spawned;
 	}
 
-	void ParticleSystem::Simulate(std::vector<Particle>& particles, const glm::vec3& gravity, float damping, float deltaTime)
+	size_t ParticleSystem::Simulate(std::vector<Particle>& particles, size_t count, const glm::vec3& gravity, float damping, float deltaTime)
 	{
-		for (size_t i = 0; i < particles.size();)
+		for (size_t i = 0; i < count;)
 		{
 			Particle& particle = particles[i];
 			particle.Age += deltaTime;
 			if (particle.Age >= particle.Lifetime)
 			{
-				// Swap-remove: changes the order, but deterministically; rendering re-sorts by depth (ties keep
-				// this order).
-				particle = particles.back();
-				particles.pop_back();
+				// Swap-remove within the range: changes the order, but deterministically; rendering re-sorts by
+				// depth (ties keep this order).
+				particle = particles[--count];
 				continue;
 			}
 			particle.Velocity = (particle.Velocity + gravity * deltaTime) * damping;
 			particle.Position += particle.Velocity * deltaTime;
 			i++;
 		}
+		return count;
 	}
 
 	void ParticleSystem::Update(Timestep ts)
 	{
 		const float deltaTime = ts.GetSeconds();
+		// A zero step is a paused frame: nothing to do, nothing wrong.
 		if (deltaTime == 0.0f)
 			return;
+		// Negative or non-finite steps are a host bug: report it, but keep the particles as they are.
 		if (!(deltaTime > 0.0f) || !std::isfinite(deltaTime))
 		{
 			if (!m_ReportedTimestep)
-				BS_CORE_WARN("ParticleSystem: ignoring a time step of {} s (must be positive and finite)", deltaTime);
-			m_ReportedTimestep = true;
+			{
+				m_ReportedTimestep = true;
+				BS_CORE_ERROR("ParticleSystem: ignoring a time step of {} s (must be positive and finite)", deltaTime);
+			}
 			return;
 		}
 
@@ -338,6 +369,8 @@ namespace Basalt {
 		{
 			auto it = m_Emitters.find(id);
 			BS_CORE_ASSERT(it != m_Emitters.end(), "m_Order and m_Emitters hold the same emitters");
+			if (it == m_Emitters.end())
+				continue;
 			Emitter& emitter = it->second;
 			const ParticleEmitterComponent component = ReadComponent(emitter);
 			const glm::mat4 transform = m_Scene->GetWorldTransform(Entity(emitter.Handle, m_Scene));
@@ -362,10 +395,9 @@ namespace Basalt {
 			// Particles Emit added since the last update sit at the end; this update does not age them, so they
 			// are drawn at age 0 like burst and rate particles.
 			std::vector<Particle>& particles = emitter.Particles;
-			std::vector<Particle> fresh(particles.end() - static_cast<std::ptrdiff_t>(emitter.FreshCount), particles.end());
-			particles.resize(particles.size() - emitter.FreshCount);
-			Simulate(particles, gravity, damping, deltaTime);
-			particles.insert(particles.end(), fresh.begin(), fresh.end());
+			const size_t aged = particles.size() - emitter.FreshCount;
+			const size_t alive = Simulate(particles, aged, gravity, damping, deltaTime);
+			particles.erase(particles.begin() + static_cast<std::ptrdiff_t>(alive), particles.begin() + static_cast<std::ptrdiff_t>(aged));
 			emitter.FreshCount = 0;
 			if (emitter.State == EmitterState::Stopped)
 				continue;
@@ -375,14 +407,17 @@ namespace Basalt {
 				emitter.State = EmitterState::Playing;
 				Spawn(emitter, component, transform, component.BurstCount);
 			}
-			// A one-shot emitter emits only for what is left of its cycle. Particles the emitter has no room
-			// for are dropped, not owed: a full emitter does not burst once space frees up.
-			const float emitTime = component.Looping ? deltaTime : std::min(deltaTime, component.Duration - emitter.CycleTime);
-			emitter.RateAccumulator += component.Rate * emitTime;
+			// A one-shot emitter emits only for what is left of its cycle (nothing when Duration was lowered
+			// below the time already spent). Particles the emitter has no room for are dropped, not owed: a
+			// full emitter does not burst once space frees up.
+			const float emitTime = component.Looping ? deltaTime : std::clamp(component.Duration - emitter.CycleTime, 0.0f, deltaTime);
+			// Capped before accumulating, so any finite step keeps the accumulator finite and the count in range.
+			const float limit = static_cast<float>(ParticleEmitterComponent::MaxParticlesLimit);
+			emitter.RateAccumulator += std::min(component.Rate * emitTime, limit);
 			const float whole = std::floor(emitter.RateAccumulator);
+			BS_CORE_ASSERT(whole >= 0.0f, "particles owed are never negative (converting them would be undefined)");
 			emitter.RateAccumulator -= whole;
-			// Rate and the step are bounded, so `whole` is finite; the cap keeps the conversion in range.
-			Spawn(emitter, component, transform, static_cast<uint32_t>(std::min(whole, static_cast<float>(ParticleEmitterComponent::MaxParticlesLimit))));
+			Spawn(emitter, component, transform, static_cast<uint32_t>(std::min(whole, limit)));
 
 			emitter.CycleTime += deltaTime;
 			if (emitter.CycleTime >= component.Duration)
@@ -405,18 +440,19 @@ namespace Basalt {
 	void ParticleSystem::BuildRenderData(const glm::vec3& cameraPosition, const glm::vec3& cameraForward, ParticleRenderData& out) const
 	{
 		out.Clear();
-		// A camera-facing square's corner lies within half its diagonal of the center along any axis.
-		const float halfDiagonal = 0.5f * glm::root_two<float>();
 		std::vector<std::pair<float, uint32_t>> order;
+		std::vector<glm::vec3> positions;
 		for (UUID id : m_Order)
 		{
 			auto it = m_Emitters.find(id);
 			BS_CORE_ASSERT(it != m_Emitters.end(), "m_Order and m_Emitters hold the same emitters");
+			if (it == m_Emitters.end())
+				continue;
 			const Emitter& emitter = it->second;
 			if (emitter.Particles.empty())
 				continue;
-			// Update reports invalid values; this only needs them in range.
-			const ParticleEmitterComponent component = SanitizeParticleEmitter(m_Scene->GetRegistry().get<ParticleEmitterComponent>(emitter.Handle));
+			// Read here too (not cached from Update): edits made while paused render, and are reported, at once.
+			const ParticleEmitterComponent component = ReadComponent(emitter);
 			const bool local = component.SimulationSpace == ParticleSimulationSpace::Local;
 			const glm::mat4 transform = local ? m_Scene->GetWorldTransform(Entity(emitter.Handle, m_Scene)) : glm::mat4(1.0f);
 
@@ -429,11 +465,12 @@ namespace Basalt {
 			// Back to front, so alpha blending composites correctly within the emitter. Stable, so equal depths
 			// keep simulation order whatever the standard library's sort does.
 			order.clear();
+			positions.clear();
 			for (uint32_t i = 0; i < batch.Count; i++)
 			{
 				const glm::vec3& position = emitter.Particles[i].Position;
-				const glm::vec3 world = local ? glm::vec3(transform * glm::vec4(position, 1.0f)) : position;
-				order.emplace_back(glm::dot(world - cameraPosition, cameraForward), i);
+				positions.push_back(local ? glm::vec3(transform * glm::vec4(position, 1.0f)) : position);
+				order.emplace_back(glm::dot(positions.back() - cameraPosition, cameraForward), i);
 			}
 			std::stable_sort(order.begin(), order.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
 
@@ -442,14 +479,14 @@ namespace Basalt {
 			{
 				const Particle& particle = emitter.Particles[index];
 				const float t = std::clamp(particle.Age / particle.Lifetime, 0.0f, 1.0f);
-				const glm::vec3 position = local ? glm::vec3(transform * glm::vec4(particle.Position, 1.0f)) : particle.Position;
+				const glm::vec3& position = positions[index];
 				const float size = glm::mix(component.StartSize, component.EndSize, t);
 				largestSize = std::max(largestSize, size);
 				out.Particles.push_back({ glm::vec4(position, size), glm::mix(component.StartColor, component.EndColor, t) });
 				batch.Bounds.Expand(position);
 			}
-			batch.Bounds.Min -= glm::vec3(largestSize * halfDiagonal);
-			batch.Bounds.Max += glm::vec3(largestSize * halfDiagonal);
+			batch.Bounds.Min -= glm::vec3(largestSize * HalfDiagonal);
+			batch.Bounds.Max += glm::vec3(largestSize * HalfDiagonal);
 			batch.ViewDepth = glm::dot(batch.Bounds.GetCenter() - cameraPosition, cameraForward);
 			out.Batches.push_back(std::move(batch));
 		}

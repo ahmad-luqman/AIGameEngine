@@ -32,8 +32,10 @@ namespace Basalt {
 		uint32_t CulledSubmeshes = 0;
 		uint32_t Lights = 0;
 		uint32_t Materials = 0;
-		// Particle billboards drawn (after frustum culling of whole emitters).
+		// Particle billboards drawn (after frustum culling of whole emitters), and the ones skipped because
+		// the frame's particle budget (or particle buffer) was exhausted.
 		uint32_t Particles = 0;
+		uint32_t ParticlesSkipped = 0;
 	};
 
 	// GPU timer results dynamic resolution received since the renderer was created: Rejected ones were not

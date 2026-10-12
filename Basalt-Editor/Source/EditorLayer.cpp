@@ -111,12 +111,13 @@ namespace Basalt {
 		}
 
 		// A circle through center + (u cos a + v sin a) * radius (an ellipse when u and v differ in length).
-		void DrawCircle(const glm::vec3& center, const glm::vec3& u, const glm::vec3& v, float radius, const glm::vec4& color, int segments = 24)
+		void DrawCircle(const glm::vec3& center, const glm::vec3& u, const glm::vec3& v, float radius, const glm::vec4& color)
 		{
+			constexpr int Segments = 24;
 			glm::vec3 previous = center + u * radius;
-			for (int i = 1; i <= segments; i++)
+			for (int i = 1; i <= Segments; i++)
 			{
-				const float angle = glm::two_pi<float>() * static_cast<float>(i) / static_cast<float>(segments);
+				const float angle = glm::two_pi<float>() * static_cast<float>(i) / static_cast<float>(Segments);
 				const glm::vec3 point = center + (u * std::cos(angle) + v * std::sin(angle)) * radius;
 				DebugDraw::Line(previous, point, color);
 				previous = point;
@@ -139,8 +140,8 @@ namespace Basalt {
 			DebugDraw::Line(apex, center - u * radius, color);
 		}
 
-		// The selected emitter's shape in its local space (scaled by the transform); Box and Cone also show the
-		// +Y emission direction.
+		// The selected emitter's shape in its local space (scaled by the transform). Box adds an arrow along +Y;
+		// Cone draws its base disc and the rim its directions reach one local unit out.
 		void DrawParticleEmitter(const glm::mat4& world, const ParticleEmitterComponent& emitter, const glm::vec4& color)
 		{
 			const glm::vec3 origin(world[3]);
@@ -1094,7 +1095,7 @@ namespace Basalt {
 			ImGui::Text("Entities: %zu", scene.GetEntityCount());
 			ImGui::Text("Draw calls: %u (shadow %u)", stats.DrawCalls, stats.ShadowDrawCalls);
 			ImGui::Text("Culled submeshes: %u", stats.CulledSubmeshes);
-			ImGui::Text("Particles: %u", stats.Particles);
+			ImGui::Text("Particles: %u (skipped %u)", stats.Particles, stats.ParticlesSkipped);
 			ImGui::Text("Lights: %u", stats.Lights);
 			if (m_Renderer->IsDynamicResolutionActive())
 				ImGui::Text("Resolution: %ux%u (%.0f%% render scale, dynamic up to %.0f%%)", m_Renderer->GetRenderWidth(), m_Renderer->GetRenderHeight(), m_Renderer->GetCurrentRenderScale() * 100.0f, m_Renderer->GetRenderScale() * 100.0f);

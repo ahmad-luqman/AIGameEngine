@@ -40,7 +40,7 @@ Write scripts with `asset.write` (or directly as files under `<project>/Assets/S
   An entity holds one joint; for several on one body (a rung on two ropes) give each its own child entity
   with `"BodyEntity": "<body name>"`. `LimitSpringFrequency` makes limits springy (a distance joint without
   limits becomes a bungee).
-- Use `Math.Seed(n)` for reproducible randomness, `Debug.Draw*` to visualise logic, `Game.Quit()` to exit.
+- Random numbers repeat every play session (the project's `RandomSeed`); `Math.Seed(n)` picks another sequence, `Debug.Draw*` to visualise logic, `Game.Quit()` to exit.
 - Check every script compiles: `$B --project P script.check '{"path": "Assets/Scripts/Game.lua"}'`.
 
 ## 3. Build the scene with a batch file

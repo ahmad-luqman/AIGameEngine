@@ -244,7 +244,9 @@ local function TestSystems(self)
 	ExpectError("StopParticles without a ParticleEmitter", function() crate:StopParticles() end, "needs a ParticleEmitter")
 	Check("Particle queries without a ParticleEmitter", not crate:IsEmittingParticles() and crate:GetParticleCount() == 0)
 	ExpectError("EmitParticles with a negative count", function() confetti:EmitParticles(-1) end, "between 0 and")
-	ExpectError("ParticleEmitter validation", function() confetti:SetComponent("ParticleEmitter", { LifetimeMin = 0 }) end, "LifetimeMin must be at least")
+	ExpectError("StopParticles with a non-boolean clear", function() confetti:StopParticles(1) end, "clear must be")
+	ExpectError("math.randomseed with a fraction", function() math.randomseed(1.5) end, "no integer representation")
+	ExpectError("ParticleEmitter validation", function() confetti:SetComponent("ParticleEmitter", { LifetimeMin = 0 }) end, "LifetimeMin must be between")
 
 	-- Input names are validated.
 	ExpectError("Unknown key name", function() Input.IsKeyDown("Hyperspace") end, "unknown key")

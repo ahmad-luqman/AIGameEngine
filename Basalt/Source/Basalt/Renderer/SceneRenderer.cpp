@@ -37,13 +37,13 @@ namespace Basalt {
 		constexpr uint32_t MaxLights = 256;
 		constexpr uint64_t MaterialSetRetentionFrames = 120;
 		constexpr uint32_t ParticleTextureSize = 64;
-		// Billboards drawn per frame, at most (32 MB of particle buffer); beyond it whole emitters are skipped.
+		// Billboards drawn per frame, at most (a 32 MB upload; the buffer grows to twice that); beyond it whole
+		// emitters are skipped.
 		constexpr size_t MaxFrameParticles = 1000000;
 		// Set 1 of the particle pipelines (Particle.vert/.frag; keep in sync).
 		constexpr uint32_t ParticleBufferSlot = 0;
 		constexpr uint32_t ParticleTextureSlot = 1;
 		constexpr uint32_t ParticleSamplerSlot = 2;
-		constexpr size_t ParticleBlendModeCount = static_cast<size_t>(ParticleBlendMode::Additive) + 1;
 
 		// GPU profiler passes (debug markers too), in recording order. Unscoped so the values index the
 		// profiler's pass list directly; the names below must match the order.
@@ -195,14 +195,23 @@ namespace Basalt {
 			AABB ShadowBounds;
 		};
 
-		// One emitter's batch with the binding set of its texture (held, so the set outlives cache pruning).
+		// One emitter's batch with the binding set of its texture (a strong handle, so the draw never depends
+		// on the cache entry).
 		struct ParticleDraw
 		{
 			const ParticleBatch* Batch = nullptr;
 			nvrhi::BindingSetHandle Set;
 		};
 
-		// Blended meshes and particle batches share one back-to-front order.
+		// One overload set from several lambdas, for std::visit.
+		template<typename... Lambdas>
+		struct Overloaded : Lambdas...
+		{
+			using Lambdas::operator()...;
+		};
+
+		// Blended meshes and particle batches share one back-to-front order. The pointers stay valid while the
+		// frame draws: the item, draw and batch lists are complete before this list is built.
 		struct TransparentDraw
 		{
 			float ViewDepth = 0.0f;
@@ -344,15 +353,15 @@ namespace Basalt {
 		// Binding sets
 		nvrhi::BindingSetHandle FrameSet;
 		nvrhi::BindingSetHandle SsaoSet, BlurHorizontalSet, BlurVerticalSet, TonemapSet, BlitSet, DepthUpsampleSet;
-		struct MaterialSetEntry
+		struct CachedBindingSet
 		{
 			nvrhi::BindingSetHandle Set;
 			uint64_t LastUsed = 0;
 		};
 		// Keyed by the five material textures (albedo, normal, metallic-roughness, occlusion, emissive).
-		std::map<std::array<nvrhi::ITexture*, 5>, MaterialSetEntry> MaterialSets;
+		std::map<std::array<nvrhi::ITexture*, 5>, CachedBindingSet> MaterialSets;
 		// Keyed by particle texture; they also reference the particle buffer, so they are rebuilt when it grows.
-		std::map<nvrhi::ITexture*, MaterialSetEntry> ParticleSets;
+		std::map<nvrhi::ITexture*, CachedBindingSet> ParticleSets;
 
 		// Per-frame scratch, kept to avoid reallocating every frame.
 		std::vector<GpuDrawData> Draws;
@@ -362,9 +371,10 @@ namespace Basalt {
 		std::vector<TransparentDraw> Transparent;
 		ParticleRenderData ParticleData;
 		std::vector<ParticleDraw> ParticleDraws;
-		// Particle problems are reported once per renderer, not every frame.
+		// Particle problems are reported once per episode (while they persist), not every frame.
 		bool ReportedParticleCap = false;
-		bool ReportedParticleFailure = false;
+		bool ReportedParticleBufferFailure = false;
+		bool ReportedParticleSetFailure = false;
 		uint64_t FrameCounter = 0;
 		bool FrameSetDirty = true;
 	};
@@ -1375,33 +1385,43 @@ namespace Basalt {
 		impl.ParticleData.Clear();
 		if (const ParticleSystem* particleSystem = scene.GetParticleSystem())
 			particleSystem->BuildRenderData(camera.Position, cameraForward, impl.ParticleData);
-		const size_t particleTotal = impl.ParticleData.Particles.size();
-		if (impl.ParticleData.LimitTo(MaxFrameParticles) && !impl.ReportedParticleCap)
+		auto limitParticles = [&](size_t budget) {
+			const size_t total = impl.ParticleData.Particles.size();
+			if (impl.ParticleData.LimitTo(budget))
+				m_Statistics.ParticlesSkipped += static_cast<uint32_t>(total - impl.ParticleData.Particles.size());
+		};
+		limitParticles(MaxFrameParticles);
+		// Reported once per overflow episode: a later overflow (after a frame within budget) warns again.
+		if (m_Statistics.ParticlesSkipped > 0 && !impl.ReportedParticleCap)
+			BS_CORE_WARN("SceneRenderer: particles exceed the {} drawn per frame; skipping {} in whole emitters", MaxFrameParticles, m_Statistics.ParticlesSkipped);
+		impl.ReportedParticleCap = m_Statistics.ParticlesSkipped > 0;
+		if (!impl.ParticleData.Particles.empty())
 		{
-			impl.ReportedParticleCap = true;
-			BS_CORE_WARN("SceneRenderer: {} particles exceed the {} drawn per frame; skipping the emitters beyond", particleTotal, MaxFrameParticles);
-		}
-		const std::vector<GpuParticle>& particles = impl.ParticleData.Particles;
-		const size_t uploadCount = particles.size();
-		if (uploadCount > 0)
-		{
-			const nvrhi::BufferHandle previousParticles = impl.ParticleBuffer;
-			impl.ParticleBuffer = EnsureStructuredBuffer(m_Device, impl.ParticleBuffer, uploadCount * sizeof(GpuParticle), sizeof(GpuParticle), "ParticleBuffer");
-			if (impl.ParticleBuffer != previousParticles)
+			const nvrhi::BufferHandle grown = EnsureStructuredBuffer(m_Device, impl.ParticleBuffer, impl.ParticleData.Particles.size() * sizeof(GpuParticle), sizeof(GpuParticle), "ParticleBuffer");
+			if (grown && grown != impl.ParticleBuffer)
+			{
+				impl.ParticleBuffer = grown;
 				impl.ParticleSets.clear();
-			if (impl.ParticleBuffer)
-				commandList->writeBuffer(impl.ParticleBuffer, particles.data(), uploadCount * sizeof(GpuParticle));
-			else if (!impl.ReportedParticleFailure)
-				BS_CORE_ERROR("SceneRenderer: cannot create a buffer for {} particles; particles are not drawn", uploadCount);
-			impl.ReportedParticleFailure |= !impl.ParticleBuffer;
+			}
+			if (!grown)
+			{
+				// Keep the buffer that works and draw what fits in it.
+				if (!impl.ReportedParticleBufferFailure)
+					BS_CORE_ERROR("SceneRenderer: cannot create a buffer for {} particles; drawing the emitters that fit", impl.ParticleData.Particles.size());
+				limitParticles(impl.ParticleBuffer ? impl.ParticleBuffer->getDesc().byteSize / sizeof(GpuParticle) : 0);
+			}
+			impl.ReportedParticleBufferFailure = !grown;
+			if (!impl.ParticleData.Particles.empty())
+				commandList->writeBuffer(impl.ParticleBuffer, impl.ParticleData.Particles.data(), impl.ParticleData.Particles.size() * sizeof(GpuParticle));
 		}
 		for (const ParticleBatch& batch : impl.ParticleData.Batches)
 		{
-			BS_CORE_ASSERT(batch.Count > 0 && batch.FirstParticle + batch.Count <= particles.size(), "particle batches index the particle array");
-			if (!impl.ParticleBuffer || !frustum.Intersects(batch.Bounds))
+			BS_CORE_ASSERT(batch.Count > 0 && batch.FirstParticle + batch.Count <= impl.ParticleData.Particles.size(), "particle batches index the particle array");
+			BS_CORE_ASSERT(static_cast<size_t>(batch.Blend) < ParticleBlendModeCount, "render data carries sanitized blend modes");
+			if (!frustum.Intersects(batch.Bounds))
 				continue;
 			nvrhi::ITexture* particleTexture = resolveTexture(batch.Texture, true, impl.ParticleTexture);
-			Impl::MaterialSetEntry& entry = impl.ParticleSets[particleTexture];
+			Impl::CachedBindingSet& entry = impl.ParticleSets[particleTexture];
 			if (!entry.Set)
 			{
 				entry.Set = m_Device->createBindingSet(nvrhi::BindingSetDesc()
@@ -1409,12 +1429,13 @@ namespace Basalt {
 														   .addItem(nvrhi::BindingSetItem::Texture_SRV(ParticleTextureSlot, particleTexture))
 														   .addItem(nvrhi::BindingSetItem::Sampler(ParticleSamplerSlot, impl.LinearClamp)),
 													   impl.ParticleLayout);
+				// Reported once per failure episode: a later failure (after a set was created) reports again.
+				if (!entry.Set && !impl.ReportedParticleSetFailure)
+					BS_CORE_ERROR("SceneRenderer: cannot create a particle binding set for texture '{}'; those particles are not drawn", batch.Texture.empty() ? "<soft disc>" : batch.Texture);
+				impl.ReportedParticleSetFailure = !entry.Set;
 			}
 			if (!entry.Set)
 			{
-				if (!impl.ReportedParticleFailure)
-					BS_CORE_ERROR("SceneRenderer: cannot create a particle binding set; those particles are not drawn");
-				impl.ReportedParticleFailure = true;
 				impl.ParticleSets.erase(particleTexture);
 				continue;
 			}
@@ -1586,17 +1607,20 @@ namespace Basalt {
 				state.bindings = { impl.FrameSet, particleDraw.Set };
 				state.viewport.addViewportAndScissorRect(renderViewport);
 				commandList->setGraphicsState(state);
+				// Particle.vert reads DrawPush.DrawIndex as the batch's first particle.
 				const DrawPush push{ batch.FirstParticle, 0 };
 				commandList->setPushConstants(&push, sizeof(push));
 				// Six vertices (two triangles) per billboard, pulled from the particle buffer.
 				commandList->draw(nvrhi::DrawArguments().setVertexCount(batch.Count * 6));
 			};
+			// std::visit: a new kind of transparent draw must be handled here to compile.
+			const auto drawTransparent = Overloaded{
+				[&](const DrawItem* item) { drawItem(*item, impl.TransparentPipeline[item->DoubleSided ? 1 : 0], impl.LightingFramebuffer, renderViewport, 0, true); },
+				[&](const ParticleDraw* particleDraw) { drawParticles(*particleDraw); },
+			};
 			for (const TransparentDraw& draw : transparent)
 			{
-				if (const DrawItem* const* item = std::get_if<const DrawItem*>(&draw.Source))
-					drawItem(**item, impl.TransparentPipeline[(*item)->DoubleSided ? 1 : 0], impl.LightingFramebuffer, renderViewport, 0, true);
-				else
-					drawParticles(*std::get<const ParticleDraw*>(draw.Source));
+				std::visit(drawTransparent, draw.Source);
 				m_Statistics.DrawCalls++;
 			}
 		}

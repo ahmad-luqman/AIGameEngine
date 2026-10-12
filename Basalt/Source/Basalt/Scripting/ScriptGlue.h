@@ -38,6 +38,13 @@ namespace Basalt {
 		Random Rng;
 		// The session's starting seed (Scene::GetRandomSeed), which math.randomseed() returns to.
 		uint32_t Seed = Random::DefaultSeed;
+
+		// Starts the random sequence of a session: the seed and the generator change together.
+		void ResetRandom(uint32_t seed)
+		{
+			Seed = seed;
+			Rng.Seed(seed);
+		}
 	};
 
 	// Registers the complete Basalt Lua API (see Docs/ScriptingAPI.md) into the state.

@@ -287,9 +287,21 @@ namespace Basalt {
 		static_assert(std::size(s_JointTypeNames) == static_cast<size_t>(JointType::SixDOF) + 1);
 		static_assert(std::size(s_JointMotorModeNames) == static_cast<size_t>(JointMotorMode::Position) + 1);
 		static_assert(std::size(s_CombineModeNames) == static_cast<size_t>(PhysicsCombineMode::Max) + 1);
-		static_assert(std::size(s_ParticleShapeNames) == static_cast<size_t>(ParticleEmitterShape::Cone) + 1);
-		static_assert(std::size(s_ParticleSpaceNames) == static_cast<size_t>(ParticleSimulationSpace::Local) + 1);
-		static_assert(std::size(s_ParticleBlendNames) == static_cast<size_t>(ParticleBlendMode::Additive) + 1);
+		static_assert(std::size(s_ParticleShapeNames) == ParticleEmitterShapeCount);
+		static_assert(std::size(s_ParticleSpaceNames) == ParticleSimulationSpaceCount);
+		static_assert(std::size(s_ParticleBlendNames) == ParticleBlendModeCount);
+
+		// The name of an enum value. C++ code can store a value outside the enum (the registry never does);
+		// writing it as the first name keeps saving from reading past the table.
+		template<typename E, size_t N>
+		const char* EnumName(const char* const (&names)[N], E value)
+		{
+			const auto index = static_cast<size_t>(value);
+			if (index < N)
+				return names[index];
+			BS_CORE_ERROR("ComponentRegistry: enum value {} is out of range; writing '{}'", index, names[0]);
+			return names[0];
+		}
 
 		// --- Per-component field definitions -----------------------------------------------------
 		// Each Fields() overload lists every field once; it is used both to read and to enumerate names.
@@ -746,7 +758,7 @@ namespace Basalt {
 				{ "MaxParticles", c.MaxParticles },
 				{ "Rate", c.Rate },
 				{ "BurstCount", c.BurstCount },
-				{ "Shape", s_ParticleShapeNames[static_cast<size_t>(c.Shape)] },
+				{ "Shape", EnumName(s_ParticleShapeNames, c.Shape) },
 				{ "ShapeRadius", c.ShapeRadius },
 				{ "BoxExtents", ToJson(c.BoxExtents) },
 				{ "ConeAngle", c.ConeAngle },
@@ -757,12 +769,12 @@ namespace Basalt {
 				{ "Velocity", ToJson(c.Velocity) },
 				{ "GravityScale", c.GravityScale },
 				{ "Drag", c.Drag },
-				{ "SimulationSpace", s_ParticleSpaceNames[static_cast<size_t>(c.SimulationSpace)] },
+				{ "SimulationSpace", EnumName(s_ParticleSpaceNames, c.SimulationSpace) },
 				{ "StartColor", ToJson(c.StartColor) },
 				{ "EndColor", ToJson(c.EndColor) },
 				{ "StartSize", c.StartSize },
 				{ "EndSize", c.EndSize },
-				{ "Blend", s_ParticleBlendNames[static_cast<size_t>(c.Blend)] },
+				{ "Blend", EnumName(s_ParticleBlendNames, c.Blend) },
 				{ "Texture", c.Texture },
 			};
 		}
@@ -831,7 +843,9 @@ namespace Basalt {
 		}
 
 		// Checks a component's values after a read: the problem, or an empty string when they are valid.
-		// Components without an overload below accept whatever their fields' types accept.
+		// Components without an overload accept whatever their fields' types accept. Overloads must be
+		// declared here, before MakeInfo: its unqualified call does not find later ones (they live in this
+		// unnamed namespace, outside argument-dependent lookup) and would silently use this template.
 		template<typename T>
 		std::string Validate(const T&)
 		{

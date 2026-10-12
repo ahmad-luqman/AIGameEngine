@@ -18,6 +18,7 @@
 #include "Basalt/Scripting/ScriptEngine.h"
 
 #include <algorithm>
+#include <limits>
 #include <optional>
 #include <system_error>
 
@@ -790,15 +791,17 @@ namespace Basalt {
 				const std::string path = ProjectRelative(RequireString(params, "path"));
 				if (!session.IsRecording())
 					throw CommandError("not recording (use replay.record_start)");
-				const uint64_t frames = session.IsPlaying() ? RequireScene(session).GetFrameCount() : 0;
+				Scene* playing = session.IsPlaying() ? &RequireScene(session) : nullptr;
+				const uint64_t frames = playing ? playing->GetFrameCount() : 0;
+				// The seed is part of the run (Lua randomness and particles follow it): the seed of the session
+				// recorded, which project.set randomSeed during or after the recording does not change. A recording
+				// that saw no play session replays with the project's seed.
+				const uint32_t seed = session.GetRecordingSeed().value_or(Project::GetActiveRandomSeed());
 				const json events = session.StopRecording();
-				// The seed is part of the run (Lua randomness and particles follow it): the one the session started
-				// with, which project.set randomSeed during the recording does not change.
-				const uint32_t seed = session.IsPlaying() ? RequireScene(session).GetRandomSeed() : Project::GetActiveRandomSeed();
 				json replay = { { "Format", "BasaltReplay" }, { "Version", 1 }, { "Frames", frames }, { "RandomSeed", seed }, { "Events", events } };
 				// The recorded run's final state: replay.run with assertHash checks a replay reproduces it.
-				if (session.IsPlaying())
-					replay["StateHash"] = SceneSerializer::ComputeStateHash(RequireScene(session));
+				if (playing)
+					replay["StateHash"] = SceneSerializer::ComputeStateHash(*playing);
 				if (!FileSystem::WriteTextFile(Project::ResolvePath(path), replay.dump(1, '\t')))
 					throw CommandError("cannot write '" + path + "'");
 				return json{ { "path", path }, { "events", events.size() }, { "frames", frames } };
@@ -815,12 +818,16 @@ namespace Basalt {
 					if (!replay.is_object() || replay.value("Format", "") != "BasaltReplay" || !replay.contains("Events") || !replay["Events"].is_array())
 						throw CommandError("'" + path + "' is not a Basalt replay file");
 					// Replays from before seeds were stored ran with Random::DefaultSeed, the only seed there was.
+					const auto storedSeed = replay.find("RandomSeed");
 					uint32_t recordedSeed = Random::DefaultSeed;
-					if (const auto seed = replay.find("RandomSeed"); seed != replay.end() && !JsonToUInt32(*seed, recordedSeed))
-						throw CommandError("'" + path + "' has an invalid RandomSeed (must be an integer between 0 and 4294967295)");
+					if (storedSeed != replay.end() && !JsonToUInt32(*storedSeed, recordedSeed))
+						throw CommandError("'" + path + "' has an invalid RandomSeed (must be an integer between 0 and " + std::to_string(std::numeric_limits<uint32_t>::max()) + ")");
 					// The replay restarts play, which seeds from the project.
-					if (recordedSeed != Project::GetActiveRandomSeed())
-						throw CommandError("'" + path + "' was recorded with random seed " + std::to_string(recordedSeed) + " but the project uses " + std::to_string(Project::GetActiveRandomSeed()) + " (project.set randomSeed)");
+					if (const uint32_t projectSeed = Project::GetActiveRandomSeed(); recordedSeed != projectSeed)
+					{
+						const std::string recordedWith = storedSeed != replay.end() ? "was recorded with random seed " + std::to_string(recordedSeed) : "has no RandomSeed (it was recorded before seeds were stored, with the default seed " + std::to_string(recordedSeed) + ")";
+						throw CommandError("'" + path + "' " + recordedWith + " but the project uses " + std::to_string(projectSeed) + " (project.set randomSeed)");
+					}
 					const int64_t recorded = replay.value("Frames", int64_t{ 0 });
 					const uint32_t frames = static_cast<uint32_t>(OptionalInteger(params, "frames", recorded, 0, 10000000));
 

@@ -154,9 +154,10 @@ namespace Basalt {
 		float GetTime() const { return m_Time; }
 		// Number of OnUpdate calls that advanced the simulation since the runtime started.
 		uint64_t GetFrameCount() const { return m_FrameCount; }
-		// Seed of every gameplay random stream of this play/simulate session (Lua, particle emitters): the
-		// project's RandomSeed when the session started, so changing the project setting mid-session (it
-		// applies from the next play) cannot split one session over two seeds.
+		// Starting seed of the gameplay random streams of this play/simulate session (Lua, particle emitters;
+		// scripts may reseed Lua's): the project's RandomSeed when the session started, so changing the
+		// project setting mid-session (it applies from the next play) cannot split one session over two
+		// seeds. Meaningful while running; outside play it is the last session's.
 		uint32_t GetRandomSeed() const { return m_RandomSeed; }
 
 		// Set by gameplay code (Lua Game.Quit) to ask the host application to stop the game.
