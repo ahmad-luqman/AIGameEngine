@@ -3,6 +3,7 @@
 #include "Basalt/Core/Base.h"
 
 #include <cstdlib>
+#include <cstring>
 
 namespace Basalt::Platform {
 
@@ -35,35 +36,95 @@ namespace Basalt::Platform {
 #endif
 	}
 
-	std::optional<std::filesystem::path> GetUserDataDirectory()
+	bool SetEnvVar(const char* name, const std::string& value)
 	{
-		// Relative values would resolve against the working directory, which changes between launches.
-		auto absolute = [](const std::optional<std::string>& value) -> std::optional<std::filesystem::path> {
-			if (!value || value->empty())
-				return std::nullopt;
-			std::filesystem::path path(*value);
-			if (!path.is_absolute())
-				return std::nullopt;
-			return path;
-		};
+#if defined(BS_PLATFORM_WINDOWS)
+		return _putenv_s(name, value.c_str()) == 0;
+#else
+		return setenv(name, value.c_str(), 1) == 0;
+#endif
+	}
 
-		if (auto overridden = GetEnvVar(UserDataDirectoryVariable))
+	bool UnsetEnvVar(const char* name)
+	{
+#if defined(BS_PLATFORM_WINDOWS)
+		// An empty value removes the variable on Windows.
+		return _putenv_s(name, "") == 0;
+#else
+		return unsetenv(name) == 0;
+#endif
+	}
+
+	namespace {
+
+		// The variable as a path, read as wide text on Windows so user names outside the ANSI code page survive.
+		std::optional<std::filesystem::path> GetPathVar(const char* name)
+		{
+#if defined(BS_PLATFORM_WINDOWS)
+			const std::wstring wideName(name, name + std::strlen(name));
+			wchar_t* buffer = nullptr;
+			size_t length = 0;
+			if (_wdupenv_s(&buffer, &length, wideName.c_str()) != 0 || !buffer)
+				return std::nullopt;
+			std::filesystem::path value(buffer);
+			std::free(buffer);
+			return value;
+#else
+			if (auto value = GetEnvVar(name))
+				return std::filesystem::path(*value);
+			return std::nullopt;
+#endif
+		}
+
+		// The variable's path when it is set to an absolute one; otherwise nullopt and why.
+		std::optional<std::filesystem::path> AbsolutePathVar(const char* name, std::string& outError)
+		{
+			std::optional<std::filesystem::path> value = GetPathVar(name);
+			if (!value)
+			{
+				outError = std::string(name) + " is not set";
+				return std::nullopt;
+			}
+			// Relative values would resolve against the working directory, which changes between launches.
+			if (!value->is_absolute())
+			{
+				outError = std::string(name) + " is set to '" + value->string() + "', which is not an absolute path";
+				return std::nullopt;
+			}
+			return value;
+		}
+
+	}
+
+	std::optional<std::filesystem::path> GetUserDataDirectory(std::string& outError)
+	{
+		std::string reason;
+		if (GetPathVar(UserDataDirectoryVariable))
 		{
 			// A set but unusable override is a configuration mistake: falling back to the real user directory
 			// would let tests write into it.
-			return absolute(overridden);
+			auto overridden = AbsolutePathVar(UserDataDirectoryVariable, reason);
+			if (!overridden)
+				outError = "no user data directory: " + reason;
+			return overridden;
 		}
 #if defined(BS_PLATFORM_WINDOWS)
-		return absolute(GetEnvVar("APPDATA"));
+		auto appData = AbsolutePathVar("APPDATA", reason);
+		if (!appData)
+			outError = "no user data directory: " + reason;
+		return appData;
 #elif defined(BS_PLATFORM_MACOS)
-		if (auto home = absolute(GetEnvVar("HOME")))
+		if (auto home = AbsolutePathVar("HOME", reason))
 			return *home / "Library" / "Application Support";
+		outError = "no user data directory: " + reason;
 		return std::nullopt;
 #else
-		if (auto data = absolute(GetEnvVar("XDG_DATA_HOME")))
+		// The XDG spec says to ignore an unset, empty or relative XDG_DATA_HOME.
+		if (auto data = AbsolutePathVar("XDG_DATA_HOME", reason))
 			return data;
-		if (auto home = absolute(GetEnvVar("HOME")))
+		if (auto home = AbsolutePathVar("HOME", reason))
 			return *home / ".local" / "share";
+		outError = "no user data directory: " + reason;
 		return std::nullopt;
 #endif
 	}

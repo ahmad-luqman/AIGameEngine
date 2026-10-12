@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 
 #include <filesystem>
+#include <optional>
 #include <string>
 
 namespace Basalt {
@@ -30,8 +31,14 @@ namespace Basalt {
 		// leaving any entities created before the error in place, with outError describing the problem.
 		static bool DeserializeScene(Scene& scene, const nlohmann::json& data, std::string& outError);
 
+		// Both record the file as the scene's path (Scene::GetPath).
 		static bool SaveScene(Scene& scene, const std::filesystem::path& path, std::string& outError);
 		static Ref<Scene> LoadScene(const std::filesystem::path& path, std::string& outError);
+		// Reads and parses a scene file without applying it; errors name the file as displayName.
+		static std::optional<nlohmann::json> ReadSceneFile(const std::filesystem::path& path, const std::string& displayName, std::string& outError);
+		// The path Scene::GetPath reports for a scene file: project-relative inside the active project,
+		// otherwise absolute; normalized, with '/' separators.
+		static std::string ScenePathOf(const std::filesystem::path& path);
 
 		// Entity plus all descendants, as an "Entities" array (root first).
 		static nlohmann::json SerializeEntityTree(Entity root);

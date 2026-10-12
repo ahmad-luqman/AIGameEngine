@@ -77,6 +77,8 @@ namespace Basalt {
 		// last expression (if any) is returned as a string.
 		bool ExecuteString(const std::string& code, std::string& outResult);
 
+		// Records a script error (logged, and returned by GetErrors, e.g. play.step's scriptErrors).
+		void ReportError(const std::string& message);
 		const std::vector<std::string>& GetErrors() const { return m_Errors; }
 		void ClearErrors() { m_Errors.clear(); }
 
@@ -86,7 +88,6 @@ namespace Basalt {
 	private:
 		// Creates the instance (properties applied) without calling OnCreate. False if none was created.
 		bool CreateInstance(Entity entity);
-		void ReportError(const std::string& message);
 
 	private:
 		struct Impl;

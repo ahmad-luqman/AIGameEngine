@@ -1,5 +1,6 @@
 #include "Basalt/Scripting/ScriptTasks.h"
 
+#include "Basalt/Core/Assert.h"
 #include "Basalt/Scripting/ScriptGlue.h"
 
 #include <cmath>
@@ -11,36 +12,46 @@ namespace Basalt {
 
 	namespace {
 
-		// The error object on top of a failed coroutine's stack, as text (popped).
-		std::string PopErrorMessage(lua_State* thread)
+		// The error object on top of a failed coroutine's stack, as text with the coroutine's traceback (lua_resume
+		// runs no message handler, but the dead coroutine's stack still describes where it failed). Pops it. The
+		// traceback is built on `running`, the thread executing this code.
+		std::string PopErrorMessage(lua_State* running, lua_State* thread)
 		{
-			size_t length = 0;
-			const char* text = lua_tolstring(thread, -1, &length);
-			std::string message = text ? std::string(text, length) : std::string("(error object is not a string)");
-			lua_pop(thread, 1);
+			// luaL_tolstring honours __tostring; it pushes the text onto the coroutine.
+			const char* text = luaL_tolstring(thread, -1, nullptr);
+			luaL_traceback(running, thread, text, 0);
+			std::string message = lua_tostring(running, -1);
+			lua_pop(running, 1);
+			lua_pop(thread, 2);
 			return message;
 		}
 
 	}
 
-	ScriptTasks::ScriptTasks(const sol::state_view& lua, ScriptContext& context)
+	ScriptTasks::ScriptTasks(const sol::state_view& lua, ScriptContext& context, ScriptHost& host)
 		: m_MainState(lua.lua_state())
 		, m_Context(context)
+		, m_Host(host)
 	{
 	}
 
-	uint64_t ScriptTasks::AddTimer(UUID owner, sol::protected_function callback, double delay, double interval, uint32_t count)
+	uint64_t ScriptTasks::AddOneShot(UUID owner, const sol::protected_function& callback, double delay)
+	{
+		BS_CORE_ASSERT(std::isfinite(delay) && delay >= 0.0, "timer delays are validated by the bindings");
+		return AddTimer(owner, callback, delay, 0.0, 1);
+	}
+
+	uint64_t ScriptTasks::AddRepeating(UUID owner, const sol::protected_function& callback, double interval, uint32_t count)
+	{
+		BS_CORE_ASSERT(std::isfinite(interval) && interval > 0.0, "timer intervals are validated by the bindings");
+		return AddTimer(owner, callback, interval, interval, count);
+	}
+
+	uint64_t ScriptTasks::AddTimer(UUID owner, const sol::protected_function& callback, double delay, double interval, uint32_t count)
 	{
 		const uint64_t id = m_NextID++;
-		Task task;
-		task.Type = Kind::Timer;
-		task.Owner = owner;
-		task.Callback = std::move(callback);
-		task.ReadyFrame = m_Frame + 1;
-		task.ReadyTime = m_Time + delay;
-		task.Interval = interval;
-		task.Remaining = count;
-		m_Tasks.emplace(id, std::move(task));
+		// Rebound to the main thread: the callback may come from a coroutine, whose thread can be collected first.
+		m_Tasks.emplace(id, Task{ .Type = Kind::Timer, .Owner = owner, .Callback = sol::protected_function(m_MainState, callback), .Interval = interval, .Remaining = count, .ReadyFrame = m_Frame + 1, .ReadyTime = m_Time + delay });
 		return id;
 	}
 
@@ -48,6 +59,9 @@ namespace Basalt {
 	{
 		sol::thread thread = sol::thread::create(m_MainState);
 		lua_State* coroutine = thread.thread_state();
+		// A new thread guarantees only LUA_MINSTACK free slots; lua_xmove does not grow the stack.
+		if (!lua_checkstack(coroutine, static_cast<int>(args.size()) + 1))
+			throw std::runtime_error("StartCoroutine: too many arguments");
 		function.push(coroutine);
 		int argumentCount = 0;
 		for (const sol::stack_proxy argument : args)
@@ -59,25 +73,17 @@ namespace Basalt {
 
 		// Registered before it runs, so the body can stop itself (StopAllCoroutines) like any later run.
 		const uint64_t id = m_NextID++;
-		Task task;
-		task.Type = Kind::Coroutine;
-		task.Owner = owner;
-		task.Thread = thread;
-		m_Tasks.emplace(id, std::move(task));
+		m_Tasks.emplace(id, Task{ .Type = Kind::Coroutine, .Owner = owner, .Thread = std::move(thread) });
 
 		std::string error;
-		const ResumeStatus status = Resume(id, thread, owner, caller, argumentCount, error);
-		if (status == ResumeStatus::Waiting)
-			return id;
-		m_Tasks.erase(id);
-		if (status == ResumeStatus::Failed)
-			throw std::runtime_error(error);
+		if (!Resume(id, caller, argumentCount, error))
+			throw std::runtime_error(error + " (in a coroutine)");
 		return id;
 	}
 
 	bool ScriptTasks::Cancel(uint64_t id)
 	{
-		// A running coroutine keeps its thread alive through Resume's own reference until it yields.
+		// A running coroutine stays alive through the copy of its thread that the resuming code holds.
 		return m_Tasks.erase(id) > 0;
 	}
 
@@ -86,9 +92,20 @@ namespace Basalt {
 		return m_Tasks.contains(id);
 	}
 
-	void ScriptTasks::CancelOwnedBy(UUID owner, bool coroutinesOnly)
+	bool ScriptTasks::IsCoroutineOf(uint64_t id, UUID owner) const
 	{
-		std::erase_if(m_Tasks, [&](const auto& entry) { return entry.second.Owner == owner && (!coroutinesOnly || entry.second.Type == Kind::Coroutine); });
+		const auto it = m_Tasks.find(id);
+		return it != m_Tasks.end() && it->second.Type == Kind::Coroutine && it->second.Owner == owner;
+	}
+
+	void ScriptTasks::CancelOwnedBy(UUID owner)
+	{
+		std::erase_if(m_Tasks, [owner](const auto& entry) { return entry.second.Owner == owner; });
+	}
+
+	void ScriptTasks::CancelCoroutinesOwnedBy(UUID owner)
+	{
+		std::erase_if(m_Tasks, [owner](const auto& entry) { return entry.second.Owner == owner && entry.second.Type == Kind::Coroutine; });
 	}
 
 	void ScriptTasks::Clear()
@@ -96,14 +113,20 @@ namespace Basalt {
 		m_Tasks.clear();
 	}
 
-	void ScriptTasks::SetWaitSeconds(double seconds)
+	bool ScriptTasks::RequestWaitSeconds(lua_State* thread, double seconds)
 	{
-		m_Wait = { .Set = true, .Frames = false, .FrameCount = 1, .Seconds = seconds };
+		if (thread == nullptr || thread != m_Running)
+			return false;
+		m_Wait = { .Seconds = true, .FrameCount = 1, .Duration = seconds };
+		return true;
 	}
 
-	void ScriptTasks::SetWaitFrames(uint64_t frames)
+	bool ScriptTasks::RequestWaitFrames(lua_State* thread, uint64_t frames)
 	{
-		m_Wait = { .Set = true, .Frames = true, .FrameCount = frames, .Seconds = 0.0 };
+		if (thread == nullptr || thread != m_Running)
+			return false;
+		m_Wait = { .Seconds = false, .FrameCount = frames, .Duration = 0.0 };
+		return true;
 	}
 
 	void ScriptTasks::BeginFrame(double deltaTime)
@@ -128,7 +151,7 @@ namespace Basalt {
 			// Cancelled by a task that ran before it.
 			if (it == m_Tasks.end())
 				continue;
-			if (!m_Context.IsOwnerActive(it->second.Owner))
+			if (!m_Host.IsOwnerActive(it->second.Owner))
 			{
 				m_Tasks.erase(it);
 				continue;
@@ -148,8 +171,7 @@ namespace Basalt {
 		const UUID owner = task.Owner;
 
 		// Rescheduled (or retired) before the call, so the callback can cancel itself either way.
-		const bool last = task.Interval <= 0.0 || task.Remaining == 1;
-		if (last)
+		if (task.Interval <= 0.0 || task.Remaining == 1)
 		{
 			m_Tasks.erase(id);
 		}
@@ -169,33 +191,30 @@ namespace Basalt {
 			return;
 		const sol::error error = result;
 		m_Tasks.erase(id);
-		m_Context.FailOwner(owner, std::string(error.what()) + " (in a timer)");
+		m_Host.FailOwner(owner, error.what(), "a timer");
 	}
 
 	void ScriptTasks::RunCoroutine(uint64_t id)
 	{
-		// Copied: the coroutine may cancel its own task while it runs.
+		const UUID owner = m_Tasks.at(id).Owner;
+		std::string error;
+		if (!Resume(id, m_MainState, 0, error))
+			m_Host.FailOwner(owner, error, "a coroutine");
+	}
+
+	bool ScriptTasks::Resume(uint64_t id, lua_State* from, int nargs, std::string& outError)
+	{
+		// Copied: this reference keeps the coroutine alive even if it cancels its own task while it runs.
 		const Task& task = m_Tasks.at(id);
 		const sol::thread thread = task.Thread;
 		const UUID owner = task.Owner;
-		std::string error;
-		const ResumeStatus status = Resume(id, thread, owner, m_MainState, 0, error);
-		if (status == ResumeStatus::Waiting)
-			return;
-		m_Tasks.erase(id);
-		if (status == ResumeStatus::Failed)
-			m_Context.FailOwner(owner, error + " (in a coroutine)");
-	}
-
-	ScriptTasks::ResumeStatus ScriptTasks::Resume(uint64_t id, const sol::thread& thread, UUID owner, lua_State* from, int nargs, std::string& outError)
-	{
-		// The caller's `thread` reference keeps the coroutine alive even if it cancels its own task while running.
 		lua_State* coroutine = thread.thread_state();
+
+		// Saved and restored: a coroutine may start (and so resume) another one. m_Wait needs no saving: a
+		// coroutine records its wait right before it yields, so no other resume can come in between.
 		lua_State* previousRunning = m_Running;
-		const WaitRequest previousWait = m_Wait;
 		m_Running = coroutine;
 		m_Wait = {};
-
 		int resultCount = 0;
 		int status = LUA_OK;
 		{
@@ -204,29 +223,30 @@ namespace Basalt {
 		}
 		const WaitRequest wait = m_Wait;
 		m_Running = previousRunning;
-		m_Wait = previousWait;
 
-		if (status == LUA_OK || status == LUA_YIELD)
+		if (status == LUA_YIELD)
 		{
-			// Values yielded or returned are not used.
+			// Values yielded are not used.
 			lua_pop(coroutine, resultCount);
-			if (status == LUA_OK)
-				return ResumeStatus::Finished;
-			auto it = m_Tasks.find(id);
-			if (it != m_Tasks.end())
+			if (auto it = m_Tasks.find(id); it != m_Tasks.end())
 			{
-				Task& task = it->second;
-				const bool frames = !wait.Set || wait.Frames;
-				task.ReadyFrame = m_Frame + (frames ? wait.FrameCount : 1);
-				task.ReadyTime = frames ? 0.0 : m_Time + wait.Seconds;
+				it->second.ReadyFrame = m_Frame + wait.FrameCount;
+				it->second.ReadyTime = wait.Seconds ? m_Time + wait.Duration : 0.0;
 			}
-			return ResumeStatus::Waiting;
+			return true;
 		}
 
-		outError = PopErrorMessage(coroutine);
-		if (outError.empty())
-			outError = "coroutine failed";
-		return ResumeStatus::Failed;
+		m_Tasks.erase(id);
+		if (status == LUA_OK)
+		{
+			lua_pop(coroutine, resultCount);
+			return true;
+		}
+		outError = PopErrorMessage(from, coroutine);
+		// Closes the dead coroutine's pending to-be-closed variables (their own errors are already part of the
+		// status, which is an error either way).
+		lua_closethread(coroutine, from);
+		return false;
 	}
 
 }

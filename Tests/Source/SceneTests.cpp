@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include <Basalt/Core/Log.h>
+#include <Basalt/Particles/ParticleSystem.h>
 #include <Basalt/Physics/PhysicsWorld.h>
 #include <Basalt/Scene/ComponentRegistry.h>
 #include <Basalt/Scene/JointFields.h>
@@ -934,13 +935,7 @@ TEST_SUITE("Scene loading")
 			})");
 		}
 
-		std::string Eval(Scene& scene, const std::string& code)
-		{
-			std::string result;
-			if (!scene.GetScriptEngine()->ExecuteString(code, result))
-				return "error: " + result;
-			return result;
-		}
+		using BasaltTest::Eval;
 
 	}
 
@@ -1071,14 +1066,213 @@ TEST_SUITE("Scene loading")
 		scene.OnRuntimeStart();
 		std::string error;
 		REQUIRE(scene.RequestLoad("Assets/Scenes/B.bscene", error));
-		const uint64_t warnings = Log::GetHistory().GetTotalCount();
 		scene.OnUpdate(1.0f / 60.0f);
-		// Each unload pass spawns one more "Remains"; after MaxUnloadPasses the last one is kept, with a warning.
+		// Each unload pass spawns one more "Remains"; after MaxUnloadPasses the last one is kept, reported as a
+		// script error that names it.
 		CHECK(scene.FindEntitiesByName("Remains").size() == 1);
-		CHECK(BasaltTest::CountLogMessages(warnings, "spawned by OnDestroy") == 1);
+		REQUIRE(scene.GetScriptEngine()->GetErrors().size() == 1);
+		CHECK(scene.GetScriptEngine()->GetErrors()[0].find("entities that OnDestroy keeps spawning while 'Untitled' unloads are kept in 'Assets/Scenes/B.bscene': 'Remains'") != std::string::npos);
 		// The spawner and the remains of the first seven passes were destroyed.
 		CHECK(Eval(scene, "Destroyed") == "8");
 		CHECK(scene.FindEntityByName("LevelB"));
 		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("A persistent entity parented under the level still survives a load")
+	{
+		BasaltTest::TempProject project("SceneLoadPersistentParent");
+		WriteSwitchProject(project);
+		std::string error;
+		Ref<Scene> scene = SceneSerializer::LoadScene(project.GetDirectory() / "Assets/Scenes/A.bscene", error);
+		REQUIRE(scene);
+		scene->OnRuntimeStart();
+		// Parent the persistent manager under level A, which the load destroys.
+		CHECK(Eval(*scene, R"(
+			local level = Scene.FindEntityByName("LevelA")
+			level.Translation = Vec3(1, 2, 3)
+			local manager = Scene.FindEntityByName("Manager")
+			manager.Translation = Vec3(5, 0, 0)
+			manager:SetParent(level)
+			Scene.Load("Assets/Scenes/B.bscene")
+		)") == "");
+		// Still marked, under a level that is not.
+		CHECK(scene->IsPersistent(scene->GetEntityByUUID(100)));
+		scene->OnUpdate(1.0f / 60.0f);
+		Entity manager = scene->GetEntityByUUID(100);
+		REQUIRE(manager);
+		// Moved back to the root, where it was in the world, with its child.
+		CHECK_FALSE(manager.GetParent());
+		CHECK(manager.GetTransform().Translation == glm::vec3(5.0f, 0.0f, 0.0f));
+		CHECK(scene->GetEntityByUUID(101));
+		CHECK(scene->IsPersistent(manager));
+		CHECK_FALSE(scene->FindEntityByName("LevelA"));
+		CHECK(Eval(*scene, "ManagerCreates") == "1");
+		scene->OnRuntimeStop();
+	}
+
+	TEST_CASE("Loads requested while a load is applied run at the end of the next update")
+	{
+		BasaltTest::TempProject project("SceneLoadChained");
+		WriteSwitchProject(project);
+		project.WriteFile("Assets/Scripts/Redirect.lua", R"(
+			local R = {}
+			function R:OnCreate() Scene.Load("Assets/Scenes/B.bscene") end
+			return R
+		)");
+		project.WriteFile("Assets/Scripts/Leaving.lua", R"(
+			local L = {}
+			function L:OnDestroy() Scene.Load("Assets/Scenes/Splash.bscene") end
+			return L
+		)");
+		project.WriteFile("Assets/Scenes/Splash.bscene", R"({ "Format": "BasaltScene", "Version": 1,
+			"Entities": [ { "ID": 400, "Name": "Splash", "Parent": 0, "Components": { "Script": { "Script": "Assets/Scripts/Redirect.lua" } } } ] })");
+
+		// A splash screen whose OnCreate moves on to the next scene.
+		{
+			Scene scene;
+			scene.OnRuntimeStart();
+			std::string error;
+			REQUIRE(scene.RequestLoad("Assets/Scenes/Splash.bscene", error));
+			scene.OnUpdate(1.0f / 60.0f);
+			CHECK(scene.GetName() == "Splash");
+			CHECK(scene.HasPendingLoad());
+			scene.OnUpdate(1.0f / 60.0f);
+			CHECK(scene.GetName() == "B");
+			CHECK_FALSE(scene.HasPendingLoad());
+			CHECK(scene.GetScriptEngine()->GetErrors().empty());
+			scene.OnRuntimeStop();
+		}
+		// An OnDestroy that requests a load while the old scene unloads.
+		{
+			Scene scene;
+			scene.CreateEntity("Leaving").AddComponent<ScriptComponent>().Script = "Assets/Scripts/Leaving.lua";
+			scene.OnRuntimeStart();
+			std::string error;
+			REQUIRE(scene.RequestLoad("Assets/Scenes/A.bscene", error));
+			scene.OnUpdate(1.0f / 60.0f);
+			CHECK(scene.GetName() == "A");
+			CHECK(scene.HasPendingLoad());
+			scene.OnUpdate(1.0f / 60.0f);
+			CHECK(scene.GetName() == "Splash");
+			scene.OnRuntimeStop();
+		}
+	}
+
+	TEST_CASE("A loaded scene starts its particles, cameras and scripts like a played one")
+	{
+		BasaltTest::TempProject project("SceneLoadStart");
+		WriteSwitchProject(project);
+		project.WriteFile("Assets/Scenes/Full.bscene", R"({ "Format": "BasaltScene", "Version": 1, "Name": "Named Differently",
+			"Entities": [
+				{ "ID": 500, "Name": "Sparks", "Parent": 0, "Components": { "ParticleEmitter": { "PlayOnStart": true } } },
+				{ "ID": 501, "Name": "Idle", "Parent": 0, "Components": { "ParticleEmitter": { "PlayOnStart": false } } },
+				{ "ID": 502, "Name": "Camera", "Parent": 0, "Components": { "Camera": {} } },
+				{ "ID": 503, "Name": "Broken", "Parent": 0, "Components": { "Script": { "Script": "Assets/Scripts/Missing.lua" } } },
+				{ "ID": 504, "Name": "Level", "Parent": 0, "Components": { "Script": { "Script": "Assets/Scripts/Level.lua" } } }
+			] })");
+		Scene scene;
+		// Not 16:9 (the camera default), so a camera left at its default aspect would show.
+		scene.OnViewportResize(800, 800);
+		scene.OnRuntimeStart();
+		std::string error;
+		REQUIRE(scene.RequestLoad("Assets/Scenes/Full.bscene", error));
+		scene.OnUpdate(1.0f / 60.0f);
+
+		// The file's "Name" wins over its file name; the path is the file's.
+		CHECK(scene.GetName() == "Named Differently");
+		CHECK(scene.GetPath() == "Assets/Scenes/Full.bscene");
+		REQUIRE(scene.GetParticleSystem());
+		CHECK(scene.GetParticleSystem()->IsPlaying(scene.FindEntityByName("Sparks")));
+		CHECK_FALSE(scene.GetParticleSystem()->IsPlaying(scene.FindEntityByName("Idle")));
+		CHECK(scene.FindEntityByName("Camera").GetComponent<CameraComponent>().Camera.GetAspectRatio() == doctest::Approx(1.0f));
+		// A missing script is reported; the other new instances still start.
+		REQUIRE(scene.GetScriptEngine()->GetErrors().size() == 1);
+		CHECK(scene.GetScriptEngine()->GetErrors()[0].find("Missing.lua") != std::string::npos);
+		CHECK(Eval(scene, "LevelCreates") == "1");
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Reloading a scene restarts it, deterministically")
+	{
+		BasaltTest::TempProject project("SceneLoadReload");
+		WriteSwitchProject(project);
+		project.WriteFile("Assets/Scripts/Ticker.lua", R"(
+			local T = {}
+			function T:OnCreate() self.Timer = Timer.Every(0.05, function() Ticks = (Ticks or 0) + 1 end) Tickers = (Tickers or {}) table.insert(Tickers, self.Timer) end
+			return T
+		)");
+		project.WriteFile("Assets/Scenes/Ball.bscene", R"({ "Format": "BasaltScene", "Version": 1,
+			"Entities": [
+				{ "ID": 600, "Name": "Floor", "Parent": 0, "Components": { "RigidBody": {}, "BoxCollider": { "HalfExtents": [5, 0.5, 5] } } },
+				{ "ID": 601, "Name": "Ball", "Parent": 0, "Components": { "Transform": { "Translation": [0, 3, 0] }, "RigidBody": { "Type": "Dynamic" }, "SphereCollider": {}, "Script": { "Script": "Assets/Scripts/Ticker.lua" } } }
+			] })");
+
+		auto run = [&](std::string& outHash) {
+			std::string error;
+			Ref<Scene> scene = SceneSerializer::LoadScene(project.GetDirectory() / "Assets/Scenes/Ball.bscene", error);
+			REQUIRE(scene);
+			scene->OnRuntimeStart();
+			for (int reload = 0; reload < 2; reload++)
+			{
+				for (int i = 0; i < 30; i++)
+					scene->OnUpdate(1.0f / 60.0f);
+				REQUIRE(scene->RequestLoad("Assets/Scenes/Ball.bscene", error));
+				scene->OnUpdate(1.0f / 60.0f);
+			}
+			for (int i = 0; i < 60; i++)
+				scene->OnUpdate(1.0f / 60.0f);
+			// The same two entities each time; the old instances' timers ended with them.
+			CHECK(scene->GetEntityCount() == 2);
+			CHECK(Eval(*scene, "#Tickers .. ' ' .. tostring(Tickers[1]:IsActive()) .. tostring(Tickers[2]:IsActive()) .. tostring(Tickers[3]:IsActive())") == "3 falsefalsetrue");
+			// The reloaded ball fell again and rests on the floor.
+			const float height = scene->FindEntityByName("Ball").GetTransform().Translation.y;
+			CHECK(height == doctest::Approx(1.0f).epsilon(0.05));
+			CHECK(scene->GetScriptEngine()->GetErrors().empty());
+			outHash = SceneSerializer::ComputeStateHash(*scene);
+			scene->OnRuntimeStop();
+		};
+		std::string first;
+		std::string second;
+		run(first);
+		run(second);
+		CHECK(first == second);
+	}
+
+	TEST_CASE("Stopping play drops a pending load; a destroyed persistent entity is loaded again")
+	{
+		BasaltTest::TempProject project("SceneLoadStop");
+		WriteSwitchProject(project);
+		std::string error;
+		Ref<Scene> scene = SceneSerializer::LoadScene(project.GetDirectory() / "Assets/Scenes/A.bscene", error);
+		REQUIRE(scene);
+		scene->OnRuntimeStart();
+		REQUIRE(scene->RequestLoad("Assets/Scenes/B.bscene", error));
+		scene->OnRuntimeStop();
+		CHECK_FALSE(scene->HasPendingLoad());
+		scene->OnRuntimeStart();
+		scene->OnUpdate(1.0f / 60.0f);
+		CHECK(scene->GetName() == "A");
+
+		// The persistent manager is destroyed; B's copy is then a new entity, not skipped.
+		scene->DestroyEntity(scene->GetEntityByUUID(100));
+		REQUIRE(scene->RequestLoad("Assets/Scenes/B.bscene", error));
+		scene->OnUpdate(1.0f / 60.0f);
+		REQUIRE(scene->GetEntityByUUID(100));
+		CHECK(scene->GetEntityByUUID(102));
+		CHECK(Eval(*scene, "ManagerCreates") == "2");
+		scene->OnRuntimeStop();
+	}
+
+	TEST_CASE("Saving records the scene's path; files outside the project keep an absolute one")
+	{
+		BasaltTest::TempProject project("SceneLoadPaths");
+		Scene scene;
+		std::string error;
+		REQUIRE(SceneSerializer::SaveScene(scene, project.GetDirectory() / "Assets/Scenes/Saved.bscene", error));
+		CHECK(scene.GetPath() == "Assets/Scenes/Saved.bscene");
+		BasaltTest::TempDirectory outside("SceneLoadPathsOutside");
+		const std::filesystem::path elsewhere = outside.GetPath() / "Elsewhere.bscene";
+		REQUIRE(SceneSerializer::SaveScene(scene, elsewhere, error));
+		CHECK(scene.GetPath() == elsewhere.lexically_normal().generic_string());
 	}
 }

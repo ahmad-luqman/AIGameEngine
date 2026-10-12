@@ -22,7 +22,7 @@ Engine modules (`Basalt/Source/Basalt/<Module>/`): `Core` (application, window, 
 system, command line), `Events`, `Math`, `Renderer` (device, scene renderer, IBL, debug lines),
 `ImGui`, `Scene` (EnTT scene, components, component registry, serialization), `Asset` (glTF, images,
 primitives, asset cache), `Physics` (Jolt), `Audio` (miniaudio), `Particles` (CPU particle simulation),
-`Scripting` (Lua 5.4 + sol2), `Project` (project files, exporter), `Automation` (command API, session,
+`Scripting` (Lua 5.4 + sol2; timers, coroutines, events), `Project` (project files, exporter, save data), `Automation` (command API, session,
 TCP server).
 
 Other directories: `Docs/` (scripting API, generated command/component references), `Tests/Data/FeatureTest`

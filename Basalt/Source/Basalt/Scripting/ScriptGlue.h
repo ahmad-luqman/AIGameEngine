@@ -5,15 +5,14 @@
 
 #include <sol/sol.hpp>
 
-#include <functional>
 #include <string>
+#include <vector>
 
 namespace Basalt {
 
 	class Entity;
 	class SaveData;
 	class Scene;
-	class ScriptEngine;
 	class ScriptEvents;
 	class ScriptTasks;
 
@@ -29,36 +28,57 @@ namespace Basalt {
 		bool operator==(const ScriptEntity& other) const { return ID == other.ID && SceneContext == other.SceneContext; }
 	};
 
+	// The running play session as the bindings see it (implemented by ScriptEngine). Owners are entity UUIDs of
+	// script instances; owner 0 is the play session itself (console and lua.exec code, top-level script code).
+	class ScriptHost
+	{
+	public:
+		// The script instance table of an entity, or nil.
+		virtual sol::object GetInstance(UUID id) = 0;
+		// Creates and starts the script instances of new entities now (see ScriptEngine::EnsureInstances).
+		virtual void EnsureInstances(const std::vector<Entity>& entities) = 0;
+
+		// Whether an owner can still run code: always for 0, otherwise its instance exists, has started
+		// (OnCreate), has not failed, and its entity is not about to be destroyed.
+		virtual bool IsOwnerActive(UUID owner) const = 0;
+		// Reports an error raised in an owner's timer, coroutine or event handler (`where`, e.g. "a timer") and
+		// disables the owning instance, cancelling everything it owns, like an error in any other callback. For
+		// owner 0 the error is only reported (the caller ends the failing timer or handler itself).
+		virtual void FailOwner(UUID owner, const std::string& message, const char* where) = 0;
+
+		virtual ScriptTasks& GetTasks() = 0;
+		virtual ScriptEvents& GetEvents() = 0;
+		// The session's save data (Lua Storage), loaded on first use: a problem with that load is reported as a
+		// script error. Throws std::runtime_error when it cannot be located (no active project, no user data
+		// directory).
+		virtual SaveData& GetStorage() = 0;
+		// Storage.Load: (re)reads the save data, returning the problem (rather than reporting it) even when this
+		// is the first use.
+		virtual bool LoadStorage(std::string& outError) = 0;
+
+	protected:
+		~ScriptHost() = default;
+	};
+
 	// State shared between the bindings and the ScriptEngine.
 	struct ScriptContext
 	{
 		// Null when scripts are loaded outside a running scene (property discovery).
 		Scene* SceneContext = nullptr;
-		ScriptEngine* Engine = nullptr;
-		// Returns the script instance table of an entity, or nil.
-		std::function<sol::object(UUID)> GetInstance;
+		// The running session; null outside a running scene and once the engine starts shutting down, so
+		// bindings called from __gc metamethods during lua_close never reach a dying engine.
+		ScriptHost* Host = nullptr;
 		float DeltaTime = 0.0f;
 		// Backs Math.Random* and Lua's math.random: seeded and identical on every platform.
 		Random Rng;
 		// The session's starting seed (Scene::GetRandomSeed), which math.randomseed() returns to.
 		uint32_t Seed = Random::DefaultSeed;
 
-		// The script instance (entity UUID) whose code is running: an instance callback, or one of its timers,
-		// coroutines or event handlers. Timers, coroutines and event handlers created now belong to it. 0 for
-		// code outside any instance (console, lua.exec), whose tasks belong to the play session.
+		// The script instance (entity UUID) whose engine callback is running: an instance callback, or one of
+		// its timers, coroutines or event handlers. Timers and event handlers created now belong to it (calling
+		// another instance's method does not change it); coroutines belong to the instance they are started on.
+		// 0 outside instance code (console, lua.exec, top-level script code). Changed only by ScriptOwnerScope.
 		UUID CurrentOwner = 0;
-		// The play session's timers/coroutines and events; null outside a running scene.
-		ScriptTasks* Tasks = nullptr;
-		ScriptEvents* Events = nullptr;
-		// Whether an owner can still run code: true for 0 (the session), otherwise its instance exists, has
-		// started (OnCreate), has not failed, and its entity is not about to be destroyed.
-		std::function<bool(UUID)> IsOwnerActive;
-		// Reports an error raised by an owner's timer, coroutine or event handler and disables the owning
-		// instance (cancelling everything it owns), like an error in any other callback.
-		std::function<void(UUID owner, const std::string& message)> FailOwner;
-		// The play session's save data (Lua Storage), loaded on first use. Throws std::runtime_error when it
-		// cannot be located (no active project, no user data directory). Unset outside a running scene.
-		std::function<SaveData&()> GetStorage;
 
 		// Starts the random sequence of a session: the seed and the generator change together.
 		void ResetRandom(uint32_t seed)
@@ -69,7 +89,8 @@ namespace Basalt {
 	};
 
 	// Makes `owner` the context's current owner for the lifetime of the scope (see ScriptContext::CurrentOwner).
-	// Only wraps protected calls (pcall, lua_resume), so a Lua error never skips the restore.
+	// Rule: only wrap protected calls (pcall, lua_resume). Lua is compiled as C, so an error raised through an
+	// unprotected scope would longjmp past its destructor and leave the wrong owner current.
 	class ScriptOwnerScope
 	{
 	public:

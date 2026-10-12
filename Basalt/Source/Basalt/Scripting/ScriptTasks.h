@@ -11,6 +11,7 @@
 namespace Basalt {
 
 	struct ScriptContext;
+	class ScriptHost;
 
 	// Lua-side handle of a timer or coroutine (TaskHandle). Holds only the id, so it stays safe to keep after
 	// the task ended or play stopped.
@@ -23,40 +24,48 @@ namespace Basalt {
 	//
 	// Time is game time: BeginFrame advances it once per scene update (a paused scene runs nothing), and
 	// RunDue runs the due tasks in creation order after OnUpdate. A task always waits at least until the next
-	// frame. Every task has an owner (ScriptContext::CurrentOwner when created): it runs with that owner
-	// current, is dropped once the owner is no longer active, and an error in it is reported through
-	// ScriptContext::FailOwner (which disables the owning instance).
+	// frame. Every task has an owner (see ScriptContext::CurrentOwner): it runs with that owner current, is
+	// dropped once ScriptHost::IsOwnerActive says the owner is gone, and an error in it is reported through
+	// ScriptHost::FailOwner. Callers (the Lua bindings) validate arguments; the asserts here catch engine bugs.
+	//
+	// Lua references kept here are bound to the main thread: a reference bound to a coroutine's thread would
+	// outlive that thread once the coroutine ends and is collected.
 	class ScriptTasks
 	{
 	public:
-		ScriptTasks(const sol::state_view& lua, ScriptContext& context);
+		ScriptTasks(const sol::state_view& lua, ScriptContext& context, ScriptHost& host);
 
 		ScriptTasks(const ScriptTasks&) = delete;
 		ScriptTasks& operator=(const ScriptTasks&) = delete;
 
-		// Calls callback(handle) after `delay` seconds and then, when interval > 0, every `interval` seconds,
-		// `count` times in all (0: until cancelled). A repeating timer fires at most once per frame; periods
-		// missed during one long frame are skipped, keeping its phase.
-		uint64_t AddTimer(UUID owner, sol::protected_function callback, double delay, double interval, uint32_t count);
+		// Calls callback(handle) after `delay` seconds (finite, >= 0).
+		uint64_t AddOneShot(UUID owner, const sol::protected_function& callback, double delay);
+		// Calls callback(handle) every `interval` seconds (finite, > 0), `count` times (0: until cancelled). It
+		// fires at most once per frame; periods missed during one long frame are skipped, keeping its phase.
+		uint64_t AddRepeating(UUID owner, const sol::protected_function& callback, double interval, uint32_t count);
 		// Runs function(args...) as a coroutine right away, up to its first wait, from the `caller` thread.
 		// Returns its id, which is already inactive if the coroutine finished without waiting. Throws
-		// std::runtime_error with the Lua message if that first run raised an error.
+		// std::runtime_error with the Lua message if that first run raised an error (or the arguments do not
+		// fit on a new Lua stack). Only for use by Lua bindings, which turn the exception into a Lua error.
 		uint64_t StartCoroutine(lua_State* caller, UUID owner, const sol::protected_function& function, const sol::variadic_args& args);
 
-		// Returns whether the task was active. A coroutine that cancels itself ends at its next wait.
+		// Returns whether the task was active. A coroutine that cancels itself ends at its next wait. Pending
+		// to-be-closed variables of a cancelled coroutine are not closed.
 		bool Cancel(uint64_t id);
 		bool IsActive(uint64_t id) const;
-		// Cancels the owner's tasks (only its coroutines with coroutinesOnly).
-		void CancelOwnedBy(UUID owner, bool coroutinesOnly = false);
+		// Whether id is an active coroutine started on `owner` (self:StopCoroutine only stops its own).
+		bool IsCoroutineOf(uint64_t id, UUID owner) const;
+		void CancelOwnedBy(UUID owner);
+		void CancelCoroutinesOwnedBy(UUID owner);
 		void Clear();
-		size_t GetCount() const { return m_Tasks.size(); }
 
-		// Wait/WaitFrames may only suspend the coroutine this scheduler is running, from its own thread.
+		// Whether `thread` is the coroutine this scheduler is running (only those may Wait).
 		bool IsRunningCoroutine(lua_State* thread) const { return thread != nullptr && thread == m_Running; }
-		// Records how long the running coroutine waits; it yields right after. Without a call, a coroutine that
-		// yields waits one frame.
-		void SetWaitSeconds(double seconds);
-		void SetWaitFrames(uint64_t frames);
+		// Wait/WaitFrames: records how long `thread` waits, which it does by yielding right after. False (nothing
+		// recorded) unless `thread` is the coroutine this scheduler is running: only those may wait. Without a
+		// call, a coroutine that yields waits one frame.
+		bool RequestWaitSeconds(lua_State* thread, double seconds);
+		bool RequestWaitFrames(lua_State* thread, uint64_t frames);
 
 		void BeginFrame(double deltaTime);
 		void RunDue();
@@ -72,41 +81,39 @@ namespace Basalt {
 		{
 			Kind Type = Kind::Timer;
 			UUID Owner = 0;
+			// Timers only.
 			sol::protected_function Callback;
+			double Interval = 0.0;
+			// Firings left; 0 means unlimited (repeating timers).
+			uint32_t Remaining = 0;
+			// Coroutines only.
 			sol::thread Thread;
 			// Due once the frame counter reaches ReadyFrame and the clock reaches ReadyTime.
 			uint64_t ReadyFrame = 0;
 			double ReadyTime = 0.0;
-			double Interval = 0.0;
-			// Firings left (timers); 0 means unlimited.
-			uint32_t Remaining = 0;
 		};
 
+		// How long the running coroutine waits: FrameCount frames, and with Seconds also until the clock
+		// (Wait) — the default is a bare yield, one frame.
 		struct WaitRequest
 		{
-			bool Set = false;
-			bool Frames = true;
+			bool Seconds = false;
 			uint64_t FrameCount = 1;
-			double Seconds = 0.0;
+			double Duration = 0.0;
 		};
 
-		enum class ResumeStatus
-		{
-			Waiting,
-			Finished,
-			Failed
-		};
-
+		uint64_t AddTimer(UUID owner, const sol::protected_function& callback, double delay, double interval, uint32_t count);
 		bool IsDue(const Task& task) const { return m_Frame >= task.ReadyFrame && m_Time >= task.ReadyTime; }
 		void RunTimer(uint64_t id);
 		void RunCoroutine(uint64_t id);
-		// Resumes the coroutine with nargs arguments on its stack. On Waiting, the task (if still present)
-		// is rescheduled; on Failed, outError holds the message.
-		ResumeStatus Resume(uint64_t id, const sol::thread& thread, UUID owner, lua_State* from, int nargs, std::string& outError);
+		// Resumes the task's coroutine with nargs arguments on its stack. A coroutine that waits is rescheduled
+		// (unless it cancelled itself); one that finishes or fails is removed. False with outError on an error.
+		bool Resume(uint64_t id, lua_State* from, int nargs, std::string& outError);
 
 	private:
 		lua_State* m_MainState = nullptr;
 		ScriptContext& m_Context;
+		ScriptHost& m_Host;
 		// Ordered by id, which is creation order: tasks run deterministically.
 		std::map<uint64_t, Task> m_Tasks;
 		uint64_t m_NextID = 1;

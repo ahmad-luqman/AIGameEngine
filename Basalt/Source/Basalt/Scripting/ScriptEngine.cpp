@@ -97,8 +97,39 @@ namespace Basalt {
 
 	}
 
+	namespace {
+
+		// The ScriptHost the bindings use; forwards to the engine (definitions after ScriptEngineAccess).
+		class SessionHost final : public ScriptHost
+		{
+		public:
+			explicit SessionHost(ScriptEngine& engine)
+				: m_Engine(engine)
+			{
+			}
+
+			sol::object GetInstance(UUID id) override;
+			void EnsureInstances(const std::vector<Entity>& entities) override;
+			bool IsOwnerActive(UUID owner) const override;
+			void FailOwner(UUID owner, const std::string& message, const char* where) override;
+			ScriptTasks& GetTasks() override;
+			ScriptEvents& GetEvents() override;
+			SaveData& GetStorage() override;
+			bool LoadStorage(std::string& outError) override;
+
+		private:
+			ScriptEngine& m_Engine;
+		};
+
+	}
+
 	struct ScriptEngine::Impl
 	{
+		explicit Impl(ScriptEngine& engine)
+			: Host(engine)
+		{
+		}
+
 		struct Instance
 		{
 			std::string ScriptPath;
@@ -118,9 +149,10 @@ namespace Basalt {
 		// Declared before Lua so it outlives lua_close(): __gc metamethods may still call bindings.
 		ScriptContext Context;
 		sol::state Lua;
+		SessionHost Host;
 		// Declared after Lua: they hold Lua references, which must be released before the state closes.
-		ScriptTasks Tasks{ Lua, Context };
-		ScriptEvents Events{ Context };
+		ScriptTasks Tasks{ Lua, Context, Host };
+		ScriptEvents Events{ Lua, Context, Host };
 		// Loaded on the first Storage call, so sessions that never use it never touch the disk.
 		std::optional<SaveData> Storage;
 		std::unordered_map<std::string, ScriptClass> Classes;
@@ -218,10 +250,46 @@ namespace Basalt {
 			ScriptEngine::Impl::Instance instance = std::move(it->second);
 			impl.Instances.erase(it);
 			impl.Order.erase(std::remove(impl.Order.begin(), impl.Order.end(), id), impl.Order.end());
-			// Before OnDestroy, which therefore cannot start anything new (it would never run).
+			// Cancel what it owns. The instance is already removed, so anything OnDestroy tries to start raises an
+			// error instead of silently never running.
 			ReleaseOwned(engine, id);
 			if (instance.Created && !instance.Failed)
 				Invoke(engine, id, instance.Self, "OnDestroy");
+		}
+
+		static ScriptEngine::Impl& GetImpl(ScriptEngine& engine) { return *engine.m_Impl; }
+
+		// Reports an error of an owner's timer, coroutine or event handler, naming the owner, and disables it.
+		static void FailOwner(ScriptEngine& engine, UUID owner, const std::string& message, const char* where)
+		{
+			std::string ownerName = "the play session";
+			if (owner != 0)
+			{
+				Entity entity = engine.m_Scene->GetEntityByUUID(owner);
+				ownerName = "'" + (entity ? entity.GetName() : std::string("<destroyed>")) + "' (" + std::to_string(static_cast<uint64_t>(owner)) + ")";
+			}
+			engine.ReportError(message + " (in " + where + " of " + ownerName + ")");
+			if (owner != 0)
+				Fail(engine, owner);
+		}
+
+		// The session's save data, created (not loaded) on first use; outCreated tells whether this call created
+		// it. Throws std::runtime_error when the save data cannot be located.
+		static SaveData& EnsureStorage(ScriptEngine& engine, bool& outCreated)
+		{
+			ScriptEngine::Impl& impl = *engine.m_Impl;
+			outCreated = false;
+			if (impl.Storage)
+				return *impl.Storage;
+			const Ref<Project>& project = Project::GetActive();
+			if (!project)
+				throw std::runtime_error("Storage needs an active project (its name names the save data directory)");
+			std::string error;
+			const std::optional<std::filesystem::path> path = SaveData::GetDefaultPath(project->GetConfig().Name, error);
+			if (!path)
+				throw std::runtime_error("Storage: " + error);
+			outCreated = true;
+			return impl.Storage.emplace(*path);
 		}
 
 		// Calls OnCreate once on an instance that exists, has not been created, and whose entity still has
@@ -240,41 +308,65 @@ namespace Basalt {
 		}
 	};
 
+	namespace {
+
+		sol::object SessionHost::GetInstance(UUID id)
+		{
+			return ScriptEngineAccess::GetInstance(m_Engine, id);
+		}
+
+		void SessionHost::EnsureInstances(const std::vector<Entity>& entities)
+		{
+			m_Engine.EnsureInstances(entities);
+		}
+
+		bool SessionHost::IsOwnerActive(UUID owner) const
+		{
+			return owner == 0 || ScriptEngineAccess::IsActive(m_Engine, owner);
+		}
+
+		void SessionHost::FailOwner(UUID owner, const std::string& message, const char* where)
+		{
+			ScriptEngineAccess::FailOwner(m_Engine, owner, message, where);
+		}
+
+		ScriptTasks& SessionHost::GetTasks()
+		{
+			return ScriptEngineAccess::GetImpl(m_Engine).Tasks;
+		}
+
+		ScriptEvents& SessionHost::GetEvents()
+		{
+			return ScriptEngineAccess::GetImpl(m_Engine).Events;
+		}
+
+		SaveData& SessionHost::GetStorage()
+		{
+			bool created = false;
+			SaveData& data = ScriptEngineAccess::EnsureStorage(m_Engine, created);
+			std::string error;
+			if (created && !data.Load(error))
+				m_Engine.ReportError("Storage: " + error);
+			return data;
+		}
+
+		bool SessionHost::LoadStorage(std::string& outError)
+		{
+			bool created = false;
+			return ScriptEngineAccess::EnsureStorage(m_Engine, created).Load(outError);
+		}
+
+	}
+
 	ScriptEngine::ScriptEngine(Scene* scene)
-		: m_Impl(CreateScope<Impl>())
+		: m_Impl(CreateScope<Impl>(*this))
 		, m_Scene(scene)
 	{
 		OpenSafeLibraries(m_Impl->Lua);
 		m_Impl->Context.SceneContext = scene;
-		m_Impl->Context.Engine = this;
 		// Every play session starts from its seed (the project's), so its random numbers repeat run after run.
 		m_Impl->Context.ResetRandom(scene->GetRandomSeed());
-		m_Impl->Context.GetInstance = [this](UUID id) { return ScriptEngineAccess::GetInstance(*this, id); };
-		m_Impl->Context.Tasks = &m_Impl->Tasks;
-		m_Impl->Context.Events = &m_Impl->Events;
-		m_Impl->Context.IsOwnerActive = [this](UUID owner) { return owner == 0 || ScriptEngineAccess::IsActive(*this, owner); };
-		m_Impl->Context.FailOwner = [this](UUID owner, const std::string& message) {
-			ReportError(message);
-			if (owner != 0)
-				ScriptEngineAccess::Fail(*this, owner);
-		};
-		m_Impl->Context.GetStorage = [this]() -> SaveData& {
-			Impl& impl = *m_Impl;
-			if (impl.Storage)
-				return *impl.Storage;
-			const Ref<Project>& project = Project::GetActive();
-			if (!project)
-				throw std::runtime_error("Storage needs an active project (its name names the save data directory)");
-			std::string error;
-			const std::optional<std::filesystem::path> path = SaveData::GetDefaultPath(project->GetConfig().Name, error);
-			if (!path)
-				throw std::runtime_error("Storage: " + error);
-			impl.Storage.emplace(*path);
-			// Unreadable data is reported and the session continues with empty save data (see SaveData::Load).
-			if (!impl.Storage->Load(error))
-				ReportError("Storage: " + error);
-			return *impl.Storage;
-		};
+		m_Impl->Context.Host = &m_Impl->Host;
 		RegisterScriptBindings(m_Impl->Lua, m_Impl->Context);
 
 		entt::registry& registry = scene->GetRegistry();
@@ -291,12 +383,10 @@ namespace Basalt {
 		registry.on_destroy<ScriptComponent>().disconnect<&Impl::OnScriptComponentChanged>(*m_Impl);
 
 		// Lua references must be released before the state is closed, and bindings run by __gc metamethods
-		// during lua_close must not reach the systems.
+		// during lua_close must not reach the engine.
+		m_Impl->Context.Host = nullptr;
 		m_Impl->Tasks.Clear();
 		m_Impl->Events.Clear();
-		m_Impl->Context.Tasks = nullptr;
-		m_Impl->Context.Events = nullptr;
-		m_Impl->Context.GetStorage = nullptr;
 		m_Impl->Instances.clear();
 		m_Impl->Classes.clear();
 	}
@@ -362,7 +452,12 @@ namespace Basalt {
 			if (impl.FailedClasses.contains(component->Script))
 				return false;
 			std::string error;
-			auto scriptClass = LoadScriptClass(impl.Lua, component->Script, error);
+			std::optional<sol::table> scriptClass;
+			{
+				// Top-level script code belongs to the session, whichever instance happened to load the class first.
+				ScriptOwnerScope scope(impl.Context, 0);
+				scriptClass = LoadScriptClass(impl.Lua, component->Script, error);
+			}
 			if (!scriptClass)
 			{
 				impl.FailedClasses.insert(component->Script);
@@ -498,7 +593,7 @@ namespace Basalt {
 			ScriptEngineAccess::Teardown(*this, uuid);
 		impl.Instances.clear();
 		impl.Order.clear();
-		// The session's own timers, coroutines and handlers (from the console or lua.exec) end with play.
+		// What is left belongs to the session (console or lua.exec timers and handlers): it ends with play.
 		impl.Tasks.Clear();
 		impl.Events.Clear();
 		impl.Started = false;

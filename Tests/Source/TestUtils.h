@@ -2,14 +2,99 @@
 
 #include <Basalt/Core/FileSystem.h>
 #include <Basalt/Core/Log.h>
+#include <Basalt/Core/Platform.h>
 #include <Basalt/Project/Project.h>
+#include <Basalt/Scene/Scene.h>
+#include <Basalt/Scripting/ScriptEngine.h>
+
+#include <doctest/doctest.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
+#include <span>
 #include <string>
+#include <utility>
 
 namespace BasaltTest {
+
+	// A fresh, empty temporary directory (BasaltTests/<name>), removed on scope exit.
+	class TempDirectory
+	{
+	public:
+		explicit TempDirectory(const std::string& name)
+			: m_Path(std::filesystem::temp_directory_path() / "BasaltTests" / name)
+		{
+			std::error_code error;
+			std::filesystem::remove_all(m_Path, error);
+			std::filesystem::create_directories(m_Path, error);
+		}
+		~TempDirectory()
+		{
+			std::error_code error;
+			std::filesystem::remove_all(m_Path, error);
+		}
+
+		TempDirectory(const TempDirectory&) = delete;
+		TempDirectory& operator=(const TempDirectory&) = delete;
+
+		const std::filesystem::path& GetPath() const { return m_Path; }
+
+	private:
+		std::filesystem::path m_Path;
+	};
+
+	// Sets an environment variable for the scope and restores its previous value (or absence) afterwards.
+	class ScopedEnvVar
+	{
+	public:
+		ScopedEnvVar(const char* name, const std::string& value)
+			: m_Name(name)
+			, m_Previous(Basalt::Platform::GetEnvVar(name))
+		{
+			Basalt::Platform::SetEnvVar(name, value);
+		}
+		~ScopedEnvVar()
+		{
+			if (m_Previous)
+				Basalt::Platform::SetEnvVar(m_Name, *m_Previous);
+			else
+				Basalt::Platform::UnsetEnvVar(m_Name);
+		}
+
+		ScopedEnvVar(const ScopedEnvVar&) = delete;
+		ScopedEnvVar& operator=(const ScopedEnvVar&) = delete;
+
+	private:
+		const char* m_Name;
+		std::optional<std::string> m_Previous;
+	};
+
+	// The result of a Lua chunk in the engine (see ScriptEngine::ExecuteString), or "error: <message>".
+	inline std::string Eval(Basalt::ScriptEngine& engine, const std::string& code)
+	{
+		std::string result;
+		if (!engine.ExecuteString(code, result))
+			return "error: " + result;
+		return result;
+	}
+
+	inline std::string Eval(Basalt::Scene& scene, const std::string& code)
+	{
+		return Eval(*scene.GetScriptEngine(), code);
+	}
+
+	// Every snippet must fail with a message containing its expected fragment.
+	inline void CheckLuaErrors(Basalt::ScriptEngine& engine, std::span<const std::pair<const char*, const char*>> cases)
+	{
+		std::string result;
+		for (const auto& [code, expected] : cases)
+		{
+			CHECK_FALSE(engine.ExecuteString(code, result));
+			CHECK_MESSAGE(result.find(expected) != std::string::npos, code, " -> ", result);
+		}
+	}
 
 	// Creates an empty, active project in a fresh temporary directory; removed and deactivated on scope exit.
 	class TempProject

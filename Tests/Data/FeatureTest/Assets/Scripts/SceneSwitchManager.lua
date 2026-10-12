@@ -5,18 +5,9 @@
 -- SceneSwitchTest.CheckSaved(), which needs the save data written at the end of the first session. ctest points
 -- BASALT_USER_DATA_DIR at the build directory, so this never touches the real user data directory.
 
-local function Check(name, condition)
-	SceneSwitchTest.Checks = SceneSwitchTest.Checks + 1
-	if not condition then
-		table.insert(SceneSwitchTest.Failures, name)
-		Log.Error("SceneSwitchTest FAILED: " .. name)
-	end
-end
-
-local function ExpectError(name, fn, fragment)
-	local ok, err = pcall(fn)
-	Check(name, (not ok) and string.find(tostring(err), fragment, 1, true) ~= nil)
-end
+local Checks = require("Assets.Scripts.Lib.Checks")
+-- Bound to the session's SceneSwitchTest table in OnCreate.
+local Check, ExpectError
 
 local function CountNamed(name)
 	return #Scene.FindEntitiesByName(name)
@@ -71,6 +62,8 @@ local Manager = {}
 
 function Manager:OnCreate()
 	SceneSwitchTest = { Checks = 0, Failures = {}, Phase = "A", Levels = {}, SawFloor = {}, Unloaded = 0, Report = Report, CheckSaved = CheckSaved }
+	local checks = Checks.New(SceneSwitchTest, "SceneSwitchTest")
+	Check, ExpectError = checks.Check, checks.ExpectError
 	-- What the previous session saved, read before this one clears the data.
 	SceneSwitchTest.Previous = Storage.Get("SceneSwitch.Result")
 	Storage.Clear()
