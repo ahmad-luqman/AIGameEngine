@@ -756,7 +756,7 @@ namespace Basalt {
 				return json{ { "playing", false } };
 			});
 
-			Add(registry, "play.step", "Advances play mode by N fixed frames (default dt 1/60) and reports script errors.", { { "frames", "integer (default 1)" }, { "dt", "number, seconds per frame" }, { "assertNoErrors", "bool: fail the command if any script error occurred" }, { "hash", "bool: also return stateHash (see scene.hash)" }, { "expectHash", "string: fail unless the state hash after the step (which has run either way) equals this one; also returns stateHash" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "play.step", "Advances play mode by N fixed frames (default dt 1/60) and reports script errors and the playing scene (which Lua Scene.Load may switch).", { { "frames", "integer (default 1)" }, { "dt", "number, seconds per frame" }, { "assertNoErrors", "bool: fail the command if any script error occurred" }, { "hash", "bool: also return stateHash (see scene.hash)" }, { "expectHash", "string: fail unless the state hash after the step (which has run either way) equals this one; also returns stateHash" } }, [](AutomationSession& session, const json& params) {
 				if (!session.IsPlaying())
 					throw CommandError("not playing (use play.start)");
 				const uint32_t frames = static_cast<uint32_t>(OptionalInteger(params, "frames", 1, 1, 100000));
@@ -771,7 +771,7 @@ namespace Basalt {
 				json errors = scene.GetScriptEngine() ? json(scene.GetScriptEngine()->GetErrors()) : json::array();
 				if (OptionalBool(params, "assertNoErrors", false) && !errors.empty())
 					throw CommandError("script errors: " + errors.dump());
-				json result = { { "time", scene.GetTime() }, { "frame", scene.GetFrameCount() }, { "scriptErrors", errors }, { "quitRequested", scene.IsQuitRequested() } };
+				json result = { { "time", scene.GetTime() }, { "frame", scene.GetFrameCount() }, { "scriptErrors", errors }, { "quitRequested", scene.IsQuitRequested() }, { "scene", scene.GetName() }, { "scenePath", scene.GetPath() } };
 				if (OptionalBool(params, "hash", false) || params.contains("expectHash"))
 				{
 					const std::string hash = SceneSerializer::ComputeStateHash(scene);

@@ -1,0 +1,25 @@
+{
+	"Format": "BasaltScene",
+	"Version": 1,
+	"Name": "SceneSwitchB",
+	"Physics": { "Gravity": [0, -3, 0] },
+	"Entities": [
+		{ "ID": 9000, "Name": "SwitchManager", "Components": {
+			"Script": { "Script": "Assets/Scripts/SceneSwitchManager.lua" } } },
+		{ "ID": 9002, "Name": "OtherManagerChild", "Parent": 9000, "Components": {} },
+		{ "ID": 9200, "Name": "CameraB", "Components": {
+			"Transform": { "Translation": [0, 4, 10], "Rotation": [-20, 0, 0] },
+			"Camera": { "FOV": 50, "Near": 0.1, "Far": 200 } } },
+		{ "ID": 9201, "Name": "SunB", "Components": {
+			"Transform": { "Rotation": [-60, -30, 0] },
+			"DirectionalLight": { "Color": [0.9, 0.95, 1], "Intensity": 2.5 } } },
+		{ "ID": 9202, "Name": "LevelB", "Components": {
+			"Transform": { "Scale": [10, 1, 10] },
+			"Mesh": { "Mesh": "builtin://Plane" },
+			"Material": { "AlbedoColor": [0.2, 0.5, 0.9, 1] },
+			"RigidBody": {},
+			"BoxCollider": { "HalfExtents": [0.5, 0.05, 0.5] },
+			"AudioSource": { "Clip": "Assets/Audio/Beep.wav", "PlayOnStart": true, "Spatial": false },
+			"Script": { "Script": "Assets/Scripts/SceneSwitchLevel.lua" } } }
+	]
+}

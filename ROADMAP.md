@@ -90,16 +90,6 @@ The features most games need, roughly in order of impact.
 
 ### Scripting
 
-- **Timers and coroutines — S.** `Timer.After(seconds, fn)`, `Timer.Every(seconds, fn)` and
-  `self:StartCoroutine(fn)` with `Wait(seconds)` and `WaitFrames(n)`, owned by the instance and cancelled
-  when it is destroyed.
-- **Scene switching — S.** `Scene.Load(path)` deferred to the end of the frame, with an optional
-  `DontDestroyOnLoad` for persistent managers.
-- **Persistent save data — S.** `Storage.Set(key, value)`, `Storage.Get(key)`, `Storage.Save()` writing
-  JSON to a per-game user-data directory (platform-specific app data). This keeps the file-system
-  sandbox intact.
-- **Events and messaging — S.** `Events.Emit(name, payload)` / `Events.On(name, fn)` for decoupled game
-  logic, cleared when play stops.
 - **Script hot reload — M.** Watch `.lua` files during play; on change, reload the class table and rebind
   existing instances (keeping their fields), then call an optional `OnReload`. Also refresh the
   inspector's cached script properties when the file is saved (today they stay cached until restart).

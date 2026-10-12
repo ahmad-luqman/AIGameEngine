@@ -102,6 +102,9 @@ namespace Basalt {
 		void Start();
 		// Runs as many fixed steps as the accumulated time allows, then dispatches contact events.
 		void Step(Timestep ts);
+		// Builds the bodies, characters and joints of entities a scene load just added (Scene::RequestLoad) right
+		// away, as Start does, so their scripts' OnCreate finds them.
+		void OnSceneLoaded();
 		void OnEntityDestroyed(Entity entity);
 
 		bool HasBody(Entity entity) const;
@@ -185,6 +188,9 @@ namespace Basalt {
 		// their contacts (so an animated scale does not end and restart every overlap each frame); a body's
 		// joints are rebuilt from the current poses, since their anchors scale with it.
 		// Entities left without a body by a degenerate transform are built once it decomposes again.
+		// Rebuilds bodies and characters whose components changed, resizes rescaled ones and rebuilds dirty
+		// joints (the start of every Step).
+		void ApplyPendingChanges();
 		void ApplyScaleChanges();
 		void ResizeBody(Entity entity, const glm::vec3& scale);
 		void ResizeCharacter(Entity entity, const glm::vec3& scale);

@@ -35,4 +35,37 @@ namespace Basalt::Platform {
 #endif
 	}
 
+	std::optional<std::filesystem::path> GetUserDataDirectory()
+	{
+		// Relative values would resolve against the working directory, which changes between launches.
+		auto absolute = [](const std::optional<std::string>& value) -> std::optional<std::filesystem::path> {
+			if (!value || value->empty())
+				return std::nullopt;
+			std::filesystem::path path(*value);
+			if (!path.is_absolute())
+				return std::nullopt;
+			return path;
+		};
+
+		if (auto overridden = GetEnvVar(UserDataDirectoryVariable))
+		{
+			// A set but unusable override is a configuration mistake: falling back to the real user directory
+			// would let tests write into it.
+			return absolute(overridden);
+		}
+#if defined(BS_PLATFORM_WINDOWS)
+		return absolute(GetEnvVar("APPDATA"));
+#elif defined(BS_PLATFORM_MACOS)
+		if (auto home = absolute(GetEnvVar("HOME")))
+			return *home / "Library" / "Application Support";
+		return std::nullopt;
+#else
+		if (auto data = absolute(GetEnvVar("XDG_DATA_HOME")))
+			return data;
+		if (auto home = absolute(GetEnvVar("HOME")))
+			return *home / ".local" / "share";
+		return std::nullopt;
+#endif
+	}
+
 }

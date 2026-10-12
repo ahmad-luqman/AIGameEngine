@@ -62,6 +62,18 @@ namespace Basalt {
 		Update(0.0f);
 	}
 
+	void AudioSystem::PlayOnStart(const std::vector<Entity>& entities)
+	{
+		for (Entity entity : entities)
+		{
+			const auto* source = entity ? entity.TryGetComponent<AudioSourceComponent>() : nullptr;
+			if (source && source->PlayOnStart)
+				Play(entity);
+		}
+		// Positions the new sources and the listener right away, as Start does.
+		Update(0.0f);
+	}
+
 	bool AudioSystem::Play(Entity entity)
 	{
 		const auto* source = entity.TryGetComponent<AudioSourceComponent>();

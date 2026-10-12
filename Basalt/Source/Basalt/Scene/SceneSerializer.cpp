@@ -3,6 +3,7 @@
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
+#include "Basalt/Project/Project.h"
 #include "Basalt/Scene/ComponentRegistry.h"
 #include "Basalt/Scene/Scene.h"
 
@@ -425,6 +426,7 @@ namespace Basalt {
 			outError = "cannot write '" + path.string() + "'";
 			return false;
 		}
+		scene.SetPath(Project::MakeRelative(path));
 		return true;
 	}
 
@@ -450,6 +452,7 @@ namespace Basalt {
 			outError = path.filename().string() + ": " + outError;
 			return nullptr;
 		}
+		scene->SetPath(Project::MakeRelative(path));
 		return scene;
 	}
 

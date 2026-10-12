@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace Basalt {
@@ -160,6 +161,28 @@ namespace Basalt {
 		// seeds. Meaningful while running; outside play it is the last session's.
 		uint32_t GetRandomSeed() const { return m_RandomSeed; }
 
+		// --- Scene switching (play mode, Lua Scene.Load) ---------------------------------------
+		// Replaces the playing scene's contents with the scene file at `path` (project-relative, a .bscene
+		// inside the project) at the end of the current update, keeping the Scene object, its systems and the
+		// script state: every entity that is not persistent is destroyed (OnDestroy runs), the file's settings
+		// and entities replace them, and the new entities start as at play start (physics bodies, PlayOnStart
+		// audio and particles, then every script instance before any OnCreate). An entity of the file whose ID
+		// is already present (a persistent manager placed in every level) is skipped with its descendants.
+		// Elapsed time and the frame count keep running. The file is read and validated now: false (with
+		// outError, and nothing changed) when it cannot be loaded or the scene is not playing. A later request
+		// in the same frame replaces an earlier one; one made while a load is applied runs next frame.
+		bool RequestLoad(const std::string& path, std::string& outError);
+		bool HasPendingLoad() const { return m_PendingLoad != nullptr; }
+		// Keeps a root entity and its whole tree through scene loads (Lua DontDestroyOnLoad) for the rest of
+		// the play session. False (nothing marked) when the entity is not a root of this scene.
+		bool SetPersistent(Entity entity);
+		// Whether the entity survives scene loads: it or its root was marked persistent.
+		bool IsPersistent(Entity entity);
+		// Project-relative path of the scene file this scene was loaded from or last saved to; empty for a scene
+		// that never was. Scene loads update it.
+		const std::string& GetPath() const { return m_Path; }
+		void SetPath(std::string path) { m_Path = std::move(path); }
+
 		// Set by gameplay code (Lua Game.Quit) to ask the host application to stop the game.
 		void RequestQuit() { m_QuitRequested = true; }
 		bool IsQuitRequested() const { return m_QuitRequested; }
@@ -189,6 +212,12 @@ namespace Basalt {
 		}
 
 	private:
+		// A validated scene file waiting for the end of the update (RequestLoad).
+		struct PendingLoad;
+		// Unload passes for entities spawned by OnDestroy while the old scene is torn down.
+		static constexpr int MaxUnloadPasses = 8;
+
+		void ApplyPendingLoad();
 		void DestroyEntityImmediate(Entity entity);
 		void FlushPendingDestruction();
 		void RemoveFromParent(Entity entity);
@@ -212,6 +241,10 @@ namespace Basalt {
 		uint32_t m_RandomSeed = Random::DefaultSeed;
 		bool m_QuitRequested = false;
 		std::vector<UUID> m_PendingDestruction;
+		Scope<PendingLoad> m_PendingLoad;
+		// Roots marked with SetPersistent; runtime-only (cleared when play starts or stops, never saved).
+		std::unordered_set<UUID> m_PersistentEntities;
+		std::string m_Path;
 
 		uint32_t m_ViewportWidth = 0;
 		uint32_t m_ViewportHeight = 0;

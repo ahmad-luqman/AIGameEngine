@@ -30,8 +30,13 @@ namespace Basalt {
 	//   return Player
 	//
 	// Each entity gets an instance table (self) whose fields start as the property values, with
-	// self.Entity referring to its entity. A runtime error disables the failing instance and is recorded
-	// (GetErrors) instead of stopping the game. The full Lua API is documented in Docs/ScriptingAPI.md.
+	// self.Entity referring to its entity, plus engine methods (self:StartCoroutine, ...). A runtime error
+	// disables the failing instance and is recorded (GetErrors) instead of stopping the game.
+	//
+	// The engine also owns the session's timers and coroutines (ScriptTasks), events (ScriptEvents) and save
+	// data (SaveData, loaded on first use). Timers, coroutines and event handlers belong to the instance whose
+	// code created them and end with it; Update runs the due ones after every OnUpdate. The full Lua API is
+	// documented in Docs/ScriptingAPI.md.
 	class ScriptEngine
 	{
 	public:
@@ -46,7 +51,7 @@ namespace Basalt {
 		void Start();
 		void Update(Timestep ts);
 		void LateUpdate(Timestep ts);
-		// Calls OnDestroy on every live instance.
+		// Calls OnDestroy on every live instance, then ends the session's timers, coroutines and event handlers.
 		void Stop();
 
 		void OnEntityDestroyed(Entity entity);

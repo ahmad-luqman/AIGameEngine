@@ -23,6 +23,8 @@ endif()
 # component and its Lua driver exercises the entire scripting API (see FeatureTest.lua).
 add_test(NAME FeatureTest
 	COMMAND BasaltCLI --project "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest" batch "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest/FeatureTest.batch.json")
+# Lua Storage (the SceneSwitch scenes) saves under the user data directory: keep it in the build tree.
+set_tests_properties(FeatureTest PROPERTIES ENVIRONMENT "BASALT_USER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/UserData")
 
 # GPU tests need a Vulkan device (a real GPU, or lavapipe on CI). They render the feature scene through the
 # runtime with validation enabled; any Vulkan/nvrhi validation error fails the test. --offscreen needs no

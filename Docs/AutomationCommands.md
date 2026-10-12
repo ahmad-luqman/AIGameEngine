@@ -221,7 +221,7 @@ Starts play mode on a copy of the scene (scripts, physics, audio run).
 
 ### `play.step`
 
-Advances play mode by N fixed frames (default dt 1/60) and reports script errors.
+Advances play mode by N fixed frames (default dt 1/60) and reports script errors and the playing scene (which Lua Scene.Load may switch).
 
 | Parameter | Type / description |
 |-----------|--------------------|

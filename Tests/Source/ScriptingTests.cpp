@@ -1,8 +1,10 @@
 #include <doctest/doctest.h>
 
+#include <Basalt/Core/FileSystem.h>
 #include <Basalt/Core/Input.h>
 #include <Basalt/Physics/PhysicsWorld.h>
 #include <Basalt/Project/Project.h>
+#include <Basalt/Project/SaveData.h>
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
 #include <Basalt/Scene/SceneSerializer.h>
@@ -12,6 +14,7 @@
 #include "TestUtils.h"
 
 #include <array>
+#include <filesystem>
 
 using namespace Basalt;
 
@@ -1134,5 +1137,569 @@ TEST_SUITE("Scripting")
 		CHECK(Field(scene, entity, "Value") == 42);
 		CHECK(scene.GetScriptEngine()->GetErrors().empty());
 		scene.OnRuntimeStop();
+	}
+}
+
+TEST_SUITE("Gameplay scripting")
+{
+	TEST_CASE("Timer.After and Timer.Every fire on game time, in creation order, and can be cancelled")
+	{
+		BasaltTest::TempProject project("ScriptTimers");
+		const std::string script = project.WriteFile("Assets/Scripts/Timers.lua", R"(
+			local T = {}
+			local function record(name) return function() table.insert(Fired, name .. "@" .. Time.GetFrame()) end end
+			function T:OnCreate()
+				Fired = {}
+				self.After = Timer.After(0.5, record("after"))
+				self.Every = Timer.Every(0.25, record("every"), 3)
+				self.Zero = Timer.After(0, record("zero"))
+				local cancelled = Timer.After(0.1, record("cancelled"))
+				CancelReturned = cancelled:Cancel()
+				CancelAgain = cancelled:Cancel()
+				self.SelfCancel = Timer.Every(0.1, function(handle)
+					SelfCancelCount = (SelfCancelCount or 0) + 1
+					if SelfCancelCount == 2 then handle:Cancel() end
+				end)
+			end
+			function T:OnUpdate()
+				-- Created during an update, a zero delay still waits for the next frame.
+				if Time.GetFrame() == 2 then Timer.After(0, record("fromUpdate")) end
+			end
+			return T
+		)");
+
+		Scene scene;
+		AddScripted(scene, "Timers", script);
+		scene.OnRuntimeStart();
+		ScriptEngine& engine = *scene.GetScriptEngine();
+		std::string result;
+		// Nothing fires before the first update, even with a zero delay.
+		REQUIRE(engine.ExecuteString("#Fired", result));
+		CHECK(result == "0");
+		CHECK(engine.ExecuteString("CancelReturned == true and CancelAgain == false", result));
+		CHECK(result == "true");
+
+		for (int i = 0; i < 60; i++)
+			scene.OnUpdate(Step);
+		CHECK(engine.GetErrors().empty());
+		// Update N runs with Time.GetFrame() == N - 1. 0.5 s is update 30; Every fires at 15, 30 and 45 and the
+		// earlier-created After runs first at 30.
+		REQUIRE(engine.ExecuteString("table.concat(Fired, ' ')", result));
+		CHECK(result == "zero@0 fromUpdate@3 every@14 after@29 every@29 every@44");
+		REQUIRE(engine.ExecuteString("SelfCancelCount", result));
+		CHECK(result == "2");
+		REQUIRE(engine.ExecuteString("local s = Scene.FindEntityByName('Timers'):GetScript() return tostring(s.After:IsActive()) .. tostring(s.Every:IsActive()) .. tostring(s.SelfCancel:IsActive())", result));
+		CHECK(result == "falsefalsefalse");
+
+		// Bad arguments are errors, not silently ignored timers.
+		const std::pair<const char*, const char*> invalid[] = {
+			{ "Timer.After(-1, function() end)", "seconds must be a finite number >= 0" },
+			{ "Timer.After(0 / 0, function() end)", "seconds must be a finite number >= 0" },
+			{ "Timer.After('1', function() end)", "seconds must be a finite number >= 0" },
+			{ "Timer.Every(0, function() end)", "seconds must be a finite number > 0" },
+			{ "Timer.After(1, 5)", "expected a function, got number" },
+			{ "Timer.Every(1, function() end, 0)", "count must be an integer from 1" },
+			{ "Timer.Every(1, function() end, 2.5)", "count must be an integer from 1" },
+		};
+		for (const auto& [code, expected] : invalid)
+		{
+			CHECK_FALSE(engine.ExecuteString(code, result));
+			CHECK_MESSAGE(result.find(expected) != std::string::npos, code, " -> ", result);
+		}
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Timers stop when the scene pauses; repeating timers skip periods missed in a long frame")
+	{
+		BasaltTest::TempProject project("ScriptTimerPause");
+		Scene scene;
+		scene.OnRuntimeStart();
+		ScriptEngine& engine = *scene.GetScriptEngine();
+		std::string result;
+		REQUIRE(engine.ExecuteString("Ticks = {} Timer.Every(0.1, function() table.insert(Ticks, Time.GetFrame()) end)", result));
+		scene.SetPaused(true);
+		for (int i = 0; i < 30; i++)
+			scene.OnUpdate(Step);
+		REQUIRE(engine.ExecuteString("#Ticks", result));
+		CHECK(result == "0");
+		scene.SetPaused(false);
+		// One 0.35 s frame: fires once, and the next period is the next 0.1 s boundary (0.4 s).
+		scene.OnUpdate(0.35f);
+		scene.OnUpdate(0.04f);
+		scene.OnUpdate(0.02f);
+		REQUIRE(engine.ExecuteString("table.concat(Ticks, ' ')", result));
+		CHECK(result == "0 2");
+		CHECK(engine.GetErrors().empty());
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Coroutines wait for seconds and frames, start right away and can be stopped")
+	{
+		BasaltTest::TempProject project("ScriptCoroutines");
+		project.WriteFile("Assets/Scripts/Base.lua", R"(
+			local Base = {}
+			function Base:Describe() return "base" end
+			return Base
+		)");
+		const std::string script = project.WriteFile("Assets/Scripts/Coroutines.lua", R"(
+			local Base = require("Assets.Scripts.Base")
+			local C = setmetatable({}, { __index = Base })
+			function C:OnCreate()
+				Trace = {}
+				Inherited = self:Describe()
+				self.Main = self:StartCoroutine(function(a, b)
+					table.insert(Trace, "start " .. a .. b .. "@" .. Time.GetFrame())
+					WaitFrames(2)
+					table.insert(Trace, "frames@" .. Time.GetFrame())
+					Wait(0.5)
+					table.insert(Trace, "seconds@" .. Time.GetFrame())
+					coroutine.yield()
+					table.insert(Trace, "yield@" .. Time.GetFrame())
+				end, "x", "y")
+				StartedImmediately = #Trace == 1
+				DoneActive = self:StartCoroutine(function() end):IsActive()
+				self.Loop = self:StartCoroutine(function()
+					while true do
+						LoopCount = (LoopCount or 0) + 1
+						WaitFrames(1)
+					end
+				end)
+				self.Other = self:StartCoroutine(function() while true do Wait(0) end end)
+				self.Timer = Timer.Every(0.1, function() end)
+				EarlyOk, EarlyError = pcall(function() self:StartCoroutine(function() error("early failure") end) end)
+			end
+			function C:OnUpdate()
+				if Time.GetFrame() == 10 then
+					StopReturned = self:StopCoroutine(self.Loop)
+				end
+				if Time.GetFrame() == 35 then
+					self:StopAllCoroutines()
+				end
+			end
+			return C
+		)");
+
+		Scene scene;
+		AddScripted(scene, "Coroutines", script);
+		scene.OnRuntimeStart();
+		ScriptEngine& engine = *scene.GetScriptEngine();
+		std::string result;
+		REQUIRE(engine.ExecuteString("tostring(StartedImmediately) .. tostring(DoneActive) .. Inherited", result));
+		CHECK(result == "truefalsebase");
+		REQUIRE(engine.ExecuteString("tostring(EarlyOk) .. ' ' .. EarlyError", result));
+		CHECK(result.find("false") == 0);
+		CHECK(result.find("early failure") != std::string::npos);
+
+		for (int i = 0; i < 40; i++)
+			scene.OnUpdate(Step);
+		CHECK(engine.GetErrors().empty());
+		REQUIRE(engine.ExecuteString("table.concat(Trace, ' ')", result));
+		// WaitFrames(2) from OnCreate resumes on update 2, Wait(0.5) half a second later, a bare yield next frame.
+		CHECK(result == "start xy@0 frames@1 seconds@31 yield@32");
+		// OnCreate plus updates 1-10 (stopped in update 11's OnUpdate, before coroutines run).
+		REQUIRE(engine.ExecuteString("LoopCount", result));
+		CHECK(result == "11");
+		REQUIRE(engine.ExecuteString("local s = Scene.FindEntityByName('Coroutines'):GetScript() return tostring(StopReturned) .. tostring(s.Main:IsActive()) .. tostring(s.Other:IsActive()) .. tostring(s.Timer:IsActive())", result));
+		// StopAllCoroutines ends the coroutines but leaves the instance's timers alone.
+		CHECK(result == "truefalsefalsetrue");
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Wait and WaitFrames only suspend engine coroutines; coroutine errors disable the owner")
+	{
+		BasaltTest::TempProject project("ScriptCoroutineErrors");
+		const std::string script = project.WriteFile("Assets/Scripts/Faulty.lua", R"(
+			local F = {}
+			function F:OnCreate()
+				self.Updates = 0
+				self.Ticks = 0
+				Timer.Every(0.05, function() self.Ticks = self.Ticks + 1 end)
+				self:StartCoroutine(function()
+					WaitFrames(3)
+					error("late failure")
+				end)
+			end
+			function F:OnUpdate() self.Updates = self.Updates + 1 end
+			return F
+		)");
+		const std::string probe = project.WriteFile("Assets/Scripts/Probe.lua", R"(
+			local P = {}
+			function P:OnCreate()
+				NotAFunction = select(2, pcall(function() self:StartCoroutine(5) end))
+				local start = self.StartCoroutine
+				NotAnInstance = select(2, pcall(start, {}, function() end))
+				self:StartCoroutine(function()
+					WrappedOk, WrappedError = pcall(coroutine.wrap(function() Wait(1) end))
+					BadSeconds = select(2, pcall(Wait, -1))
+					BadFrames = select(2, pcall(WaitFrames, 0))
+					FractionFrames = select(2, pcall(WaitFrames, 1.5))
+					-- Last: the failing handler belongs to this instance and disables it.
+					Events.On("Inside", function() Wait(1) end)
+					Events.Emit("Inside")
+					WaitFrames(1)
+				end)
+			end
+			return P
+		)");
+
+		Scene scene;
+		Entity faulty = AddScripted(scene, "Faulty", script);
+		AddScripted(scene, "Probe", probe);
+		scene.OnRuntimeStart();
+		ScriptEngine& engine = *scene.GetScriptEngine();
+		std::string result;
+
+		CHECK_FALSE(engine.ExecuteString("Wait(1)", result));
+		CHECK(result.find("Wait can only be called in a coroutine started with self:StartCoroutine") != std::string::npos);
+		CHECK_FALSE(engine.ExecuteString("WaitFrames(1)", result));
+		CHECK(result.find("WaitFrames can only be called in a coroutine") != std::string::npos);
+		REQUIRE(engine.ExecuteString("tostring(WrappedOk) .. ' ' .. WrappedError", result));
+		CHECK(result.find("false") == 0);
+		CHECK(result.find("Wait can only be called in a coroutine") != std::string::npos);
+		REQUIRE(engine.ExecuteString("BadSeconds .. ' | ' .. BadFrames .. ' | ' .. FractionFrames .. ' | ' .. NotAFunction .. ' | ' .. NotAnInstance", result));
+		CHECK(result.find("seconds must be a finite number >= 0") != std::string::npos);
+		CHECK(result.find("frames must be an integer >= 1") != std::string::npos);
+		CHECK(result.find("StartCoroutine: expected a function, got number") != std::string::npos);
+		CHECK(result.find("must be called on a script instance") != std::string::npos);
+		// The event handler that tried to wait failed (it ran inside Emit, not as the coroutine itself).
+		REQUIRE(engine.GetErrors().size() == 1);
+		CHECK(engine.GetErrors()[0].find("cannot suspend the coroutine here") != std::string::npos);
+		CHECK(engine.GetErrors()[0].find("(in a handler of event 'Inside')") != std::string::npos);
+
+		for (int i = 0; i < 10; i++)
+			scene.OnUpdate(Step);
+		REQUIRE(engine.GetErrors().size() == 2);
+		CHECK(engine.GetErrors()[1].find("Faulty.lua:9: late failure") != std::string::npos);
+		CHECK(engine.GetErrors()[1].find("(in a coroutine)") != std::string::npos);
+		// The coroutine failed in update 3, after OnUpdate and the timer (created first): it disabled its
+		// instance, so neither ran again.
+		CHECK(Field(scene, faulty, "Updates") == 3);
+		CHECK(Field(scene, faulty, "Ticks") == 1);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Timers, coroutines and event handlers end with the instance that owns them")
+	{
+		BasaltTest::TempProject project("ScriptOwnership");
+		const std::string owner = project.WriteFile("Assets/Scripts/Owner.lua", R"(
+			local O = {}
+			function O:OnCreate()
+				Counts = Counts or { Timer = 0, Coroutine = 0, Event = 0 }
+				self.Timer = Timer.Every(0.05, function() Counts.Timer = Counts.Timer + 1 end)
+				self.Coroutine = self:StartCoroutine(function() while true do Counts.Coroutine = Counts.Coroutine + 1 WaitFrames(1) end end)
+				self.Handler = Events.On("Ping", function() Counts.Event = Counts.Event + 1 end)
+			end
+			function O:OnDestroy()
+				LateTimer = select(2, pcall(Timer.After, 1, function() end))
+				LateHandler = select(2, pcall(Events.On, "Ping", function() end))
+				LateCoroutine = select(2, pcall(function() self:StartCoroutine(function() end) end))
+				Handles = { self.Timer, self.Coroutine, self.Handler }
+			end
+			return O
+		)");
+		const std::string failing = project.WriteFile("Assets/Scripts/FailingUpdate.lua", R"(
+			local F = {}
+			function F:OnCreate()
+				FailingTicks = 0
+				Timer.Every(0.02, function() FailingTicks = FailingTicks + 1 end)
+				FailingHandler = Events.On("Ping", function() FailingHeard = true end)
+			end
+			function F:OnUpdate() if Time.GetFrame() == 2 then error("update failure") end end
+			return F
+		)");
+		const std::string faulty = project.WriteFile("Assets/Scripts/FaultyTimer.lua", R"(
+			local F = {}
+			function F:OnCreate()
+				self.Updates = 0
+				self.Handler = Events.On("Ping", function() FaultyHeard = (FaultyHeard or 0) + 1 end)
+				Timer.After(0.05, function() error("timer failure") end)
+			end
+			function F:OnUpdate() self.Updates = self.Updates + 1 end
+			return F
+		)");
+
+		Scene scene;
+		Entity entity = AddScripted(scene, "Owner", owner);
+		Entity broken = AddScripted(scene, "Faulty", faulty);
+		AddScripted(scene, "Failing", failing);
+		scene.OnRuntimeStart();
+		ScriptEngine& engine = *scene.GetScriptEngine();
+		std::string result;
+		// Session-owned (console) tasks survive the instance.
+		REQUIRE(engine.ExecuteString("SessionTicks = 0 Timer.Every(0.05, function() SessionTicks = SessionTicks + 1 end)", result));
+		for (int i = 0; i < 6; i++)
+			scene.OnUpdate(Step);
+		REQUIRE(engine.ExecuteString("Events.Emit('Ping')", result));
+		// In update 3 the failing instance raised an error in OnUpdate, then the faulty one in its timer: both
+		// lost their handlers, and the failing one's timer (which ticked in update 2) never ran again.
+		CHECK(result == "1");
+		REQUIRE(engine.GetErrors().size() == 2);
+		CHECK(engine.GetErrors()[0].find("FailingUpdate.lua:8: update failure") != std::string::npos);
+		CHECK(engine.GetErrors()[1].find("FaultyTimer.lua:6: timer failure") != std::string::npos);
+		CHECK(engine.GetErrors()[1].find("(in a timer)") != std::string::npos);
+		// Released right away, not just skipped: the handle reports it.
+		REQUIRE(engine.ExecuteString("FailingTicks .. tostring(FailingHeard) .. tostring(FailingHandler:IsActive())", result));
+		CHECK(result == "1nilfalse");
+		// The timer was due in update 3, after that update's OnUpdate.
+		CHECK(Field(scene, broken, "Updates") == 3);
+
+		scene.DestroyEntity(entity);
+		REQUIRE(engine.ExecuteString("Counts.Timer .. ' ' .. Counts.Coroutine .. ' ' .. Counts.Event .. ' ' .. SessionTicks", result));
+		const std::string before = result;
+		REQUIRE(engine.ExecuteString("LateTimer .. ' | ' .. LateHandler .. ' | ' .. LateCoroutine", result));
+		CHECK(result.find("Timer.After: the calling script instance is being destroyed or has failed") != std::string::npos);
+		CHECK(result.find("Events.On: the calling script instance is being destroyed") != std::string::npos);
+		CHECK(result.find("StartCoroutine: this instance is being destroyed or has failed") != std::string::npos);
+		REQUIRE(engine.ExecuteString("tostring(Handles[1]:IsActive()) .. tostring(Handles[2]:IsActive()) .. tostring(Handles[3]:IsActive())", result));
+		CHECK(result == "falsefalsefalse");
+
+		for (int i = 0; i < 12; i++)
+			scene.OnUpdate(Step);
+		REQUIRE(engine.ExecuteString("Events.Emit('Ping')", result));
+		CHECK(result == "0");
+		REQUIRE(engine.ExecuteString("Counts.Timer .. ' ' .. Counts.Coroutine .. ' ' .. Counts.Event", result));
+		CHECK(before.find(result) == 0);
+		REQUIRE(engine.ExecuteString("SessionTicks", result));
+		CHECK(result == "6");
+
+		// Play stopping ends the session's own tasks too.
+		REQUIRE(engine.ExecuteString("SessionHandle = Timer.After(1, function() end) SessionEvent = Events.On('X', function() end)", result));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Events reach their handlers in subscription order with every argument")
+	{
+		BasaltTest::TempProject project("ScriptEvents");
+		const std::string listener = project.WriteFile("Assets/Scripts/Listener.lua", R"(
+			local L = {}
+			function L:OnCreate()
+				Events.On("Hit", function(...) table.insert(Received, "listener:" .. select("#", ...)) end)
+				Events.On("Hit2", function() table.insert(Received2, "listener") end)
+			end
+			return L
+		)");
+		const std::string doomed = project.WriteFile("Assets/Scripts/Doomed.lua", R"(
+			local D = {}
+			function D:OnCreate()
+				Events.On("Hit", function() table.insert(Received, "doomed") end)
+				Events.On("Hit2", function() table.insert(Received2, "doomed") end)
+			end
+			return D
+		)");
+
+		const std::string killer = project.WriteFile("Assets/Scripts/Killer.lua", R"(
+			local K = {}
+			function K:OnUpdate()
+				if Killed then return end
+				Killed = true
+				Received2 = {}
+				Scene.FindEntityByName("Doomed"):Destroy()
+				-- Destruction waits for the end of the update, but the doomed owner hears nothing more.
+				KilledEmit = Events.Emit("Hit2")
+			end
+			return K
+		)");
+
+		Scene scene;
+		AddScripted(scene, "Listener", listener);
+		const UUID doomedID = AddScripted(scene, "Doomed", doomed).GetUUID();
+		scene.OnRuntimeStart();
+		ScriptEngine& engine = *scene.GetScriptEngine();
+		std::string result;
+		REQUIRE(engine.ExecuteString(R"(
+			Received = Received or {}
+			local a
+			a = Events.On("Hit", function(x, y) table.insert(Received, "a" .. x .. y) end)
+			Once = Events.Once("Hit", function(x) table.insert(Received, "once" .. x) end)
+			Events.On("Hit", function()
+				table.insert(Received, "b")
+				Events.On("Hit", function() table.insert(Received, "late") end)
+				a:Cancel()
+			end)
+			First = Events.Emit("Hit", 1, 2)
+			Second = Events.Emit("Hit", 3, 4)
+		)",
+									 result));
+		REQUIRE(engine.ExecuteString("table.concat(Received, ' ') .. ' | ' .. First .. ' ' .. Second .. ' ' .. tostring(Once:IsActive())", result));
+		// Handlers added during an emit wait for the next one; a handler cancelled during an emit is skipped
+		// if its turn has not come yet.
+		CHECK(result == "listener:2 doomed a12 once1 b listener:2 doomed b late | 5 4 false");
+		CHECK(engine.GetErrors().empty());
+
+		// An owner about to be destroyed hears nothing; once it is gone, it has no handlers left.
+		AddScripted(scene, "Killer", killer);
+		scene.OnUpdate(Step);
+		CHECK_FALSE(scene.GetEntityByUUID(doomedID));
+		REQUIRE(engine.ExecuteString("KilledEmit .. ' ' .. table.concat(Received2, ' ')", result));
+		CHECK(result == "1 listener");
+		REQUIRE(engine.ExecuteString("Received = {} return Events.Emit('Hit', nil, 'x')", result));
+		CHECK(result == "4");
+		REQUIRE(engine.ExecuteString("table.concat(Received, ' ')", result));
+		CHECK(result == "listener:2 b late late");
+		REQUIRE(engine.ExecuteString("Events.Emit('Nobody')", result));
+		CHECK(result == "0");
+
+		// Emit works from inside a coroutine (the handler runs on the coroutine's thread).
+		REQUIRE(engine.ExecuteString("Events.On('Co', function(v) CoValue = v end)", result));
+		REQUIRE(engine.ExecuteString("Scene.FindEntityByName('Listener'):GetScript():StartCoroutine(function() Events.Emit('Co', 'from coroutine') end)", result));
+		REQUIRE(engine.ExecuteString("CoValue", result));
+		CHECK(result == "from coroutine");
+
+		// Endless recursion is stopped at MaxEmitDepth and reported once.
+		REQUIRE(engine.ExecuteString("Events.On('Loop', function() Events.Emit('Loop') end)", result));
+		REQUIRE(engine.ExecuteString("Events.Emit('Loop')", result));
+		REQUIRE(engine.GetErrors().size() == 1);
+		CHECK(engine.GetErrors()[0].find("nested more than 32 levels") != std::string::npos);
+
+		const std::pair<const char*, const char*> invalid[] = {
+			{ "Events.On('', function() end)", "Events.On: the event name must be a non-empty string" },
+			{ "Events.On(5, function() end)", "Events.On: the event name must be a non-empty string" },
+			{ "Events.Once('x', 'nope')", "Events.Once: expected a function, got string" },
+			{ "Events.Emit()", "Events.Emit: the event name must be a non-empty string" },
+		};
+		for (const auto& [code, expected] : invalid)
+		{
+			CHECK_FALSE(engine.ExecuteString(code, result));
+			CHECK_MESSAGE(result.find(expected) != std::string::npos, code, " -> ", result);
+		}
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("An error in an event handler disables only its owner")
+	{
+		BasaltTest::TempProject project("ScriptEventErrors");
+		const std::string faulty = project.WriteFile("Assets/Scripts/Faulty.lua", R"(
+			local F = {}
+			function F:OnCreate()
+				self.Updates = 0
+				Events.On("Go", function() error("handler failure") end)
+				Events.On("Other", function() OtherHeard = true end)
+			end
+			function F:OnUpdate() self.Updates = self.Updates + 1 end
+			return F
+		)");
+		Scene scene;
+		Entity entity = AddScripted(scene, "Faulty", faulty);
+		scene.OnRuntimeStart();
+		ScriptEngine& engine = *scene.GetScriptEngine();
+		std::string result;
+		REQUIRE(engine.ExecuteString("Events.On('Go', function() SessionHeard = true end)", result));
+		REQUIRE(engine.ExecuteString("Events.Emit('Go')", result));
+		// Both handlers ran; the error did not reach the emitter.
+		CHECK(result == "2");
+		REQUIRE(engine.GetErrors().size() == 1);
+		CHECK(engine.GetErrors()[0].find("Faulty.lua:5: handler failure") != std::string::npos);
+		CHECK(engine.GetErrors()[0].find("(in a handler of event 'Go')") != std::string::npos);
+		REQUIRE(engine.ExecuteString("tostring(SessionHeard) .. ' ' .. Events.Emit('Other')", result));
+		CHECK(result == "true 0");
+		scene.OnUpdate(Step);
+		CHECK(Field(scene, entity, "Updates") == 0);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Storage keeps values across play sessions in the user data directory")
+	{
+		BasaltTest::TempProject project("ScriptStorage");
+		std::string error;
+		const auto savePath = SaveData::GetDefaultPath("ScriptStorage", error);
+		REQUIRE_MESSAGE(savePath.has_value(), error);
+		std::filesystem::remove_all(savePath->parent_path());
+
+		std::string result;
+		{
+			Scene scene;
+			scene.OnRuntimeStart();
+			ScriptEngine& engine = *scene.GetScriptEngine();
+			REQUIRE(engine.ExecuteString("Storage.Get('Missing', 7) == 7 and Storage.Get('Missing') == nil and not Storage.Has('Missing')", result));
+			CHECK(result == "true");
+			REQUIRE(engine.ExecuteString(R"(
+				Storage.Set("Score", 42)
+				Storage.Set("Name", "Ada")
+				Storage.Set("Position", Vec3(1, 2, 3))
+				Storage.Set("Progress", { Level = 3, Flags = { true, false } })
+				Storage.Set("Temporary", 1)
+				Storage.Set("Temporary", nil)
+				Storage.Set("Doomed", 1)
+				DeleteReturned = tostring(Storage.Delete("Doomed")) .. tostring(Storage.Delete("Doomed"))
+			)",
+										 result));
+			REQUIRE(engine.ExecuteString("table.concat(Storage.GetKeys(), ',') .. ' ' .. DeleteReturned", result));
+			CHECK(result == "Name,Position,Progress,Score truefalse");
+			CHECK_FALSE(std::filesystem::exists(*savePath));
+			REQUIRE(engine.ExecuteString("local ok, err = Storage.Save() return tostring(ok) .. tostring(err)", result));
+			CHECK(result == "truenil");
+			CHECK(std::filesystem::exists(*savePath));
+
+			const std::pair<const char*, const char*> invalid[] = {
+				{ "Storage.Set('', 1)", "Storage.Set: the key must be a non-empty string" },
+				{ "Storage.Get(5)", "Storage.Get: the key must be a non-empty string" },
+				{ "Storage.Set('Fn', function() end)", "Storage.Set('Fn'):" },
+			};
+			for (const auto& [code, expected] : invalid)
+			{
+				CHECK_FALSE(engine.ExecuteString(code, result));
+				CHECK_MESSAGE(result.find(expected) != std::string::npos, code, " -> ", result);
+			}
+			// Unsaved changes are dropped by Load (and when play stops).
+			REQUIRE(engine.ExecuteString("Storage.Set('Score', 1) Storage.Load() return Storage.Get('Score')", result));
+			CHECK(result == "42");
+			REQUIRE(engine.ExecuteString("Storage.Set('Unsaved', true)", result));
+			CHECK(engine.GetErrors().empty());
+			scene.OnRuntimeStop();
+		}
+		{
+			Scene scene;
+			scene.OnRuntimeStart();
+			ScriptEngine& engine = *scene.GetScriptEngine();
+			REQUIRE(engine.ExecuteString(R"(
+				local p = Storage.Get("Position")
+				local progress = Storage.Get("Progress")
+				return Storage.Get("Score") .. Storage.Get("Name") .. p[1] .. p[2] .. p[3] .. progress.Level .. tostring(progress.Flags[2]) .. tostring(Storage.Has("Unsaved"))
+			)",
+										 result));
+			CHECK(result == "42Ada1.02.03.03falsefalse");
+			scene.OnRuntimeStop();
+		}
+
+		// A corrupt file is reported, kept aside, and the game continues with empty data.
+		REQUIRE(FileSystem::WriteTextFile(*savePath, "not json"));
+		{
+			Scene scene;
+			scene.OnRuntimeStart();
+			ScriptEngine& engine = *scene.GetScriptEngine();
+			REQUIRE(engine.ExecuteString("Storage.Get('Score') == nil", result));
+			CHECK(result == "true");
+			REQUIRE(engine.GetErrors().size() == 1);
+			CHECK(engine.GetErrors()[0].find("unreadable") != std::string::npos);
+			CHECK(std::filesystem::exists(savePath->parent_path() / SaveData::CorruptFileName));
+			scene.OnRuntimeStop();
+		}
+		std::filesystem::remove_all(savePath->parent_path());
+	}
+
+	TEST_CASE("Storage needs an active project and gameplay functions need a running scene")
+	{
+		Scene scene;
+		scene.OnRuntimeStart();
+		std::string result;
+		CHECK_FALSE(scene.GetScriptEngine()->ExecuteString("Storage.Get('Score')", result));
+		CHECK(result.find("Storage needs an active project") != std::string::npos);
+		scene.OnRuntimeStop();
+
+		// Script files load without a scene (property discovery): calling these at load time is an error.
+		BasaltTest::TempProject project("ScriptGameplayNoScene");
+		const std::pair<const char*, const char*> scripts[] = {
+			{ "Assets/Scripts/A.lua", "Timer.After(1, function() end) return {}" },
+			{ "Assets/Scripts/B.lua", "Events.Emit('x') return {}" },
+			{ "Assets/Scripts/C.lua", "Storage.Get('x') return {}" },
+			{ "Assets/Scripts/D.lua", "Scene.Load('Assets/Scenes/A.bscene') return {}" },
+		};
+		for (const auto& [path, code] : scripts)
+		{
+			project.WriteFile(path, code);
+			std::string error;
+			CHECK_FALSE(ScriptEngine::LoadScriptProperties(path, error));
+			CHECK_MESSAGE(error.find("only available while the scene is running") != std::string::npos, path, " -> ", error);
+		}
 	}
 }

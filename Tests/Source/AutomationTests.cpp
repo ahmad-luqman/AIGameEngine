@@ -358,6 +358,9 @@ TEST_SUITE("Automation")
 		const json step = Run(registry, session, "play.step", { { "frames", 3 } });
 		CHECK(step["frame"] == 3);
 		CHECK(step["scriptErrors"].empty());
+		// The playing scene, which Lua Scene.Load may have switched (an unsaved scene has no path).
+		CHECK(step["scene"] == "Untitled");
+		CHECK(step["scenePath"] == "");
 		Run(registry, session, "input.key", { { "key", "Space" }, { "down", false } });
 		// Pressed only on the first frame.
 		CHECK(Run(registry, session, "entity.transform", { { "entity", "Jumper" } })["local"]["Translation"][1] == 1.0);

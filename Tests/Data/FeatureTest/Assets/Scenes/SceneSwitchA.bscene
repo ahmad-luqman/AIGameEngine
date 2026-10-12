@@ -1,0 +1,23 @@
+{
+	"Format": "BasaltScene",
+	"Version": 1,
+	"Name": "SceneSwitchA",
+	"Renderer": { "Exposure": 1.0, "SSAOEnabled": false },
+	"Physics": { "Gravity": [0, -9.81, 0] },
+	"Entities": [
+		{ "ID": 9000, "Name": "SwitchManager", "Components": {
+			"Script": { "Script": "Assets/Scripts/SceneSwitchManager.lua" } } },
+		{ "ID": 9001, "Name": "SwitchManagerChild", "Parent": 9000, "Components": {} },
+		{ "ID": 9100, "Name": "CameraA", "Components": {
+			"Transform": { "Translation": [0, 3, 9], "Rotation": [-15, 0, 0] },
+			"Camera": { "FOV": 50, "Near": 0.1, "Far": 200 } } },
+		{ "ID": 9101, "Name": "SunA", "Components": {
+			"Transform": { "Rotation": [-45, 30, 0] },
+			"DirectionalLight": { "Color": [1, 0.95, 0.9], "Intensity": 3.0 } } },
+		{ "ID": 9102, "Name": "LevelA", "Components": {
+			"Transform": { "Translation": [0, 0.5, 0] },
+			"Mesh": { "Mesh": "builtin://Cube" },
+			"Material": { "AlbedoColor": [0.9, 0.3, 0.2, 1] },
+			"Script": { "Script": "Assets/Scripts/SceneSwitchLevel.lua" } } }
+	]
+}

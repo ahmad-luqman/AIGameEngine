@@ -258,6 +258,56 @@ local function TestSystems(self)
 	Check("require project module", util.Triple(3) == 9)
 end
 
+-- Timers, coroutines, events and scene information. Scene switching and Storage are exercised by the
+-- SceneSwitchA/B scenes (SceneSwitchManager.lua), which the batch plays after this scene.
+local function TestGameplay(self)
+	local g = { Fired = {}, Every = 0, Trace = {} }
+	self.Gameplay = g
+	self.AfterTimer = Timer.After(0.25, function(handle)
+		table.insert(g.Fired, "after@" .. Time.GetFrame())
+		g.AfterHandle = handle
+	end)
+	self.EveryTimer = Timer.Every(0.1, function() g.Every = g.Every + 1 end, 3)
+	local cancelled = Timer.After(0.05, function() table.insert(g.Fired, "cancelled") end)
+	Check("TaskHandle:Cancel", cancelled:Cancel() and not cancelled:IsActive() and not cancelled:Cancel())
+	Check("TaskHandle:IsActive", self.AfterTimer:IsActive() and self.EveryTimer:IsActive())
+	ExpectError("Timer.After rejects negative delays", function() Timer.After(-1, function() end) end, "finite number >= 0")
+	ExpectError("Timer.Every needs a positive interval", function() Timer.Every(0, function() end) end, "> 0")
+	ExpectError("Timer.After needs a function", function() Timer.After(1, "nope") end, "expected a function")
+
+	-- Coroutines run right away, up to their first wait.
+	self.Routine = self:StartCoroutine(function(label)
+		table.insert(g.Trace, label .. "@" .. Time.GetFrame())
+		WaitFrames(2)
+		table.insert(g.Trace, "frames@" .. Time.GetFrame())
+		Wait(0.2)
+		table.insert(g.Trace, "seconds@" .. Time.GetFrame())
+		coroutine.yield()
+		table.insert(g.Trace, "yield@" .. Time.GetFrame())
+	end, "start")
+	Check("StartCoroutine runs to the first wait", #g.Trace == 1 and self.Routine:IsActive())
+	local looping = self:StartCoroutine(function() while true do Wait(1) end end)
+	Check("StopCoroutine", self:StopCoroutine(looping) and not looping:IsActive())
+	ExpectError("Wait outside a coroutine", function() Wait(1) end, "can only be called in a coroutine")
+	ExpectError("WaitFrames needs a whole number", function() WaitFrames(0) end, "integer >= 1")
+
+	-- Events are synchronous; Once handlers end after their first call.
+	local heard = {}
+	local handle = Events.On("FeatureTest.Ping", function(a, b) table.insert(heard, a .. b) end)
+	local once = Events.Once("FeatureTest.Ping", function() table.insert(heard, "once") end)
+	Check("Events.Emit", Events.Emit("FeatureTest.Ping", "x", 1) == 2 and Events.Emit("FeatureTest.Ping", "y", 2) == 1 and table.concat(heard, ",") == "x1,once,y2")
+	Check("EventHandle", not once:IsActive() and handle:Cancel() and not handle:IsActive() and Events.Emit("FeatureTest.Ping", "z", 3) == 0)
+	Events.On("FeatureTest.Later", function(value) g.Later = value end)
+	Timer.After(0.1, function() Events.Emit("FeatureTest.Later", 42) end)
+	ExpectError("Events.On needs a name", function() Events.On("", function() end) end, "non-empty string")
+
+	Check("Scene.GetName", Scene.GetName() == "FeatureTest")
+	Check("Scene.GetPath", Scene.GetPath() == "Assets/Scenes/FeatureTest.bscene")
+	ExpectError("Scene.Load missing file", function() Scene.Load("Assets/Scenes/Missing.bscene") end, "cannot read")
+	ExpectError("Scene.Load outside the project", function() Scene.Load("../Other.bscene") end, "inside the project")
+	ExpectError("DontDestroyOnLoad needs a root", function() Scene.DontDestroyOnLoad(Scene.FindEntityByName("TexturedCube")) end, "not a root entity")
+end
+
 -- ---------------------------------------------------------------------------------------------
 -- Lifecycle
 -- ---------------------------------------------------------------------------------------------
@@ -268,6 +318,7 @@ function Driver:OnCreate()
 	TestMath()
 	TestEntities(self)
 	TestSystems(self)
+	TestGameplay(self)
 	FeatureTest.Phase = "running"
 end
 
@@ -546,6 +597,19 @@ function Driver:OnUpdate(dt)
 		Check("Audio clip finished", not Scene.FindEntityByName("Speaker"):IsAudioPlaying())
 		-- Launch the resting ball off the ground to end the contact.
 		Scene.FindEntityByName("Ball"):SetLinearVelocity(Vec3(0, 6, 0))
+	end
+
+	if frame == 40 then
+		-- Game time: 0.25 s is update 15 (Time.GetFrame() 14); the coroutine's Wait(0.2) started on update 2.
+		local g = self.Gameplay
+		Check("Timer.After fired once", table.concat(g.Fired, ",") == "after@14" and g.AfterHandle == self.AfterTimer and not self.AfterTimer:IsActive())
+		Check("Timer.Every count", g.Every == 3 and not self.EveryTimer:IsActive())
+		Check("Coroutine waits", table.concat(g.Trace, " ") == "start@0 frames@1 seconds@13 yield@14" and not self.Routine:IsActive())
+		Check("Events from a timer", g.Later == 42)
+		local spinning = self:StartCoroutine(function() while true do WaitFrames(1) end end)
+		local timer = Timer.After(10, function() end)
+		self:StopAllCoroutines()
+		Check("StopAllCoroutines keeps timers", not spinning:IsActive() and timer:IsActive() and timer:Cancel())
 	end
 
 	if frame == 160 then
