@@ -109,6 +109,68 @@ TEST_SUITE("Automation")
 		}
 	}
 
+	TEST_CASE("Dynamic resolution settings are validated project settings that survive save and load")
+	{
+		BasaltTest::TempProject temp("DynamicResolutionProject");
+		REQUIRE(temp.IsValid());
+		CommandRegistry registry;
+		AutomationSession session;
+		json info = Run(registry, session, "project.info");
+		CHECK(info["dynamicResolution"] == false);
+		CHECK(info["targetFrameRate"] == 60.0);
+		CHECK(info["minRenderScale"] == 0.5);
+
+		Run(registry, session, "project.set", { { "dynamicResolution", true }, { "targetFrameRate", 120 }, { "minRenderScale", 0.75 } });
+		info = Run(registry, session, "project.info");
+		CHECK(info["dynamicResolution"] == true);
+		CHECK(info["targetFrameRate"] == 120.0);
+		CHECK(info["minRenderScale"] == 0.75);
+
+		// A bad value anywhere leaves every setting untouched.
+		const std::vector<std::pair<const char*, json>> bad = { { "dynamicResolution", json(1) }, { "targetFrameRate", json(5) }, { "targetFrameRate", json(2000) }, { "targetFrameRate", json("60") }, { "minRenderScale", json(0.1) }, { "minRenderScale", json(3) } };
+		for (const auto& [name, value] : bad)
+		{
+			INFO(name << " = " << value.dump());
+			CHECK(RunError(registry, session, "project.set", { { "renderScale", 0.5 }, { name, value } }).find(name) != std::string::npos);
+		}
+		info = Run(registry, session, "project.info");
+		CHECK(info["renderScale"] == 1.0);
+		CHECK(info["dynamicResolution"] == true);
+
+		std::string error;
+		const Ref<Project> loaded = Project::Load(temp.GetDirectory(), error);
+		REQUIRE(loaded);
+		const DynamicResolutionSettings expected{ true, 120.0f, 0.75f };
+		CHECK(loaded->GetConfig().DynamicResolution == expected);
+
+		// Older project files have none of the keys: off, 60 frames per second, half resolution at worst.
+		temp.WriteFile(Project::FileName, R"({"Name": "Old"})");
+		const Ref<Project> old = Project::Load(temp.GetDirectory(), error);
+		REQUIRE(old);
+		CHECK(old->GetConfig().DynamicResolution == DynamicResolutionSettings{});
+		for (const char* file : { R"({"DynamicResolution": 1})", R"({"TargetFrameRate": 0})", R"({"TargetFrameRate": 1e300})", R"({"TargetFrameRate": "60"})", R"({"MinRenderScale": 0.2})", R"({"MinRenderScale": null})" })
+		{
+			INFO(file);
+			temp.WriteFile(Project::FileName, file);
+			CHECK_FALSE(Project::Load(temp.GetDirectory(), error));
+			CHECK(error.find("invalid project file") != std::string::npos);
+		}
+	}
+
+	TEST_CASE("render.stats reports the host's renderer statistics and needs a GPU host")
+	{
+		CommandRegistry registry;
+		AutomationSession session;
+		CHECK(RunError(registry, session, "render.stats").find("GPU host") != std::string::npos);
+		CHECK(RunError(registry, session, "render.stats").find("'cli'") != std::string::npos);
+
+		session.RenderStats = []() { return json{ { "drawCalls", 3 } }; };
+		CHECK(Run(registry, session, "render.stats")["drawCalls"] == 3);
+		CHECK(RunError(registry, session, "render.stats", { { "frames", 1 } }).find("frames") != std::string::npos);
+		session.RenderStats = []() -> json { throw CommandError("renderer gone"); };
+		CHECK(RunError(registry, session, "render.stats") == "renderer gone");
+	}
+
 	TEST_CASE("Build, save, reopen and export a project through commands")
 	{
 		BasaltTest::TempProject temp("AutomationProject");

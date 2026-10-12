@@ -21,7 +21,7 @@ namespace Basalt {
 
 	Application* CreateApplication(ApplicationCommandLineArgs args)
 	{
-		const CommandLine commandLine(args.Count, args.Args, { "project", "scene", "frames", "screenshot", "width", "height", "debug-view", "gpu", "render-scale" });
+		const CommandLine commandLine(args.Count, args.Args, { "project", "scene", "frames", "screenshot", "width", "height", "debug-view", "gpu", "render-scale", "dynamic-resolution", "min-render-scale" });
 		for (const std::string& error : commandLine.GetErrors())
 			BS_CORE_ERROR("{}", error);
 
@@ -66,6 +66,32 @@ namespace Basalt {
 				return nullptr;
 			}
 			options.RenderScale = *renderScale;
+		}
+		options.DynamicResolution = project->GetConfig().DynamicResolution;
+		if (commandLine.GetValue("dynamic-resolution"))
+		{
+			// Above the project range on purpose: an unreachable target pins the lowest scale, which the GPU
+			// tests rely on. 0 turns dynamic resolution off.
+			constexpr float MaxCommandLineFrameRate = 1e6f;
+			const auto frameRate = commandLine.GetFloat("dynamic-resolution");
+			if (!frameRate || (*frameRate != 0.0f && (*frameRate < MinTargetFrameRate || *frameRate > MaxCommandLineFrameRate)))
+			{
+				BS_CORE_CRITICAL("--dynamic-resolution must be 0 (off) or a frame rate in [{}, {}]", MinTargetFrameRate, MaxCommandLineFrameRate);
+				return nullptr;
+			}
+			options.DynamicResolution.Enabled = *frameRate != 0.0f;
+			if (options.DynamicResolution.Enabled)
+				options.DynamicResolution.TargetFrameRate = *frameRate;
+		}
+		if (commandLine.GetValue("min-render-scale"))
+		{
+			const auto minRenderScale = commandLine.GetFloat("min-render-scale");
+			if (!minRenderScale || *minRenderScale < MinRenderScale || *minRenderScale > MaxRenderScale)
+			{
+				BS_CORE_CRITICAL("--min-render-scale must be a number in [{}, {}]", MinRenderScale, MaxRenderScale);
+				return nullptr;
+			}
+			options.DynamicResolution.MinRenderScale = *minRenderScale;
 		}
 
 		ApplicationSpecification specification;

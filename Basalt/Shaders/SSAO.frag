@@ -7,7 +7,8 @@ layout(set = 0, binding = 0) uniform SSAOConstants
 	mat4 InverseProjection;
 	vec4 Kernel[32];
 	vec4 Params;        // x: radius, y: bias, z: intensity, w: sample count
-	vec4 ScreenSize;    // xy: size, zw: noise scale
+	vec4 ScreenSize;    // xy: render size, zw: noise scale
+	vec4 UVScale;       // xy: render size / target size (the scene covers the targets' top-left corner)
 } u_SSAO;
 
 layout(set = 0, binding = 1) uniform texture2D u_Depth;
@@ -19,9 +20,16 @@ layout(set = 0, binding = 5) uniform sampler u_PointWrap;
 layout(location = 0) in vec2 v_TexCoord;
 layout(location = 0) out float o_Occlusion;
 
+// Texture coordinate of a point of the render area (uv is 0..1 across the area), kept on its texels.
+vec2 TargetUV(vec2 uv)
+{
+	vec2 halfTexel = 0.5 / vec2(textureSize(sampler2D(u_Depth, u_PointClamp), 0));
+	return clamp(uv * u_SSAO.UVScale.xy, halfTexel, u_SSAO.UVScale.xy - halfTexel);
+}
+
 vec3 ViewPosition(vec2 uv)
 {
-	float depth = textureLod(sampler2D(u_Depth, u_PointClamp), uv, 0.0).r;
+	float depth = textureLod(sampler2D(u_Depth, u_PointClamp), TargetUV(uv), 0.0).r;
 	vec4 clip = vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0);
 	vec4 view = u_SSAO.InverseProjection * clip;
 	return view.xyz / view.w;
@@ -29,7 +37,7 @@ vec3 ViewPosition(vec2 uv)
 
 void main()
 {
-	float depth = textureLod(sampler2D(u_Depth, u_PointClamp), v_TexCoord, 0.0).r;
+	float depth = textureLod(sampler2D(u_Depth, u_PointClamp), TargetUV(v_TexCoord), 0.0).r;
 	if (depth >= 1.0)
 	{
 		o_Occlusion = 1.0;
@@ -37,7 +45,7 @@ void main()
 	}
 
 	vec3 position = ViewPosition(v_TexCoord);
-	vec3 normal = normalize(textureLod(sampler2D(u_Normals, u_PointClamp), v_TexCoord, 0.0).xyz);
+	vec3 normal = normalize(textureLod(sampler2D(u_Normals, u_PointClamp), TargetUV(v_TexCoord), 0.0).xyz);
 	vec3 random = vec3(textureLod(sampler2D(u_Noise, u_PointWrap), v_TexCoord * u_SSAO.ScreenSize.zw, 0.0).xy * 2.0 - 1.0, 0.0);
 
 	vec3 tangent = normalize(random - normal * dot(random, normal));

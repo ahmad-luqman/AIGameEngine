@@ -41,13 +41,14 @@ namespace Basalt {
 
 		if (GraphicsDevice* device = application.GetGraphicsDevice())
 		{
-			m_Renderer = CreateScope<SceneRenderer>(device->GetDevice());
+			m_Renderer = CreateScope<SceneRenderer>(device->GetDevice(), device->SupportsTimerQueries());
 			if (!m_Renderer->Initialize())
 			{
 				application.Close();
 				return;
 			}
 			m_Renderer->SetRenderScale(m_Options.RenderScale);
+			m_Renderer->SetDynamicResolution(m_Options.DynamicResolution);
 			m_CommandList = device->GetDevice()->createCommandList();
 			m_Scene->OnViewportResize(device->GetBackBufferWidth(), device->GetBackBufferHeight());
 		}
@@ -143,6 +144,11 @@ namespace Basalt {
 		const GraphicsDevice* device = Application::Get().GetGraphicsDevice();
 		if (m_Options.MaxFrames == 0 || !device)
 			return;
+		if (m_Renderer)
+		{
+			BS_CORE_INFO("Runtime: scene GPU time {}", FormatGpuTimings(m_Renderer->GetGpuTimings()));
+			BS_CORE_INFO("Runtime: last frame rendered at {}x{} ({:.0f}% render scale)", m_Renderer->GetRenderWidth(), m_Renderer->GetRenderHeight(), m_Renderer->GetCurrentRenderScale() * 100.0f);
+		}
 		if (device->GetValidationErrorCount() > 0)
 		{
 			BS_CORE_ERROR("Runtime: {} GPU validation error(s) occurred", device->GetValidationErrorCount());

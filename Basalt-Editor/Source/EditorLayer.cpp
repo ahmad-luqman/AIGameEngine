@@ -46,6 +46,14 @@ namespace Basalt {
 			return project ? project->GetConfig().RenderScale : 1.0f;
 		}
 
+		// Only the viewport follows the project's dynamic resolution; screenshots render at the full render
+		// scale, so they do not depend on how fast the GPU was.
+		DynamicResolutionSettings ActiveDynamicResolution()
+		{
+			const Ref<Project>& project = Project::GetActive();
+			return project ? project->GetConfig().DynamicResolution : DynamicResolutionSettings{};
+		}
+
 		// Ray/AABB slab test. Returns the entry distance, or nothing.
 		std::optional<float> IntersectRay(const glm::vec3& origin, const glm::vec3& direction, const AABB& box)
 		{
@@ -186,7 +194,7 @@ namespace Basalt {
 	{
 		Application& application = Application::Get();
 		GraphicsDevice* device = application.GetGraphicsDevice();
-		m_Renderer = CreateScope<SceneRenderer>(device->GetDevice());
+		m_Renderer = CreateScope<SceneRenderer>(device->GetDevice(), device->SupportsTimerQueries());
 		if (!m_Renderer->Initialize())
 		{
 			BS_CORE_CRITICAL("Editor: renderer initialization failed");
@@ -199,6 +207,11 @@ namespace Basalt {
 		m_Session.OnSceneChanged = [this]() { OnSceneChanged(); };
 		m_Session.Screenshot = [this](const std::filesystem::path& path, uint32_t width, uint32_t height, std::string& outError) {
 			return RenderToFile(path, width, height, false, outError);
+		};
+		m_Session.RenderStats = [this]() {
+			if (!m_Renderer)
+				throw CommandError("the editor's renderer is not available");
+			return GetRenderStats(*m_Renderer);
 		};
 		RegisterEditorCommands();
 		m_ContentBrowserPanel.OnOpenAsset = [this](const std::string& path) { OpenAsset(path); };
@@ -617,6 +630,7 @@ namespace Basalt {
 		const uint32_t width = std::max(1u, static_cast<uint32_t>(m_ViewportSize.x));
 		const uint32_t height = std::max(1u, static_cast<uint32_t>(m_ViewportSize.y));
 		m_Renderer->SetRenderScale(ActiveRenderScale());
+		m_Renderer->SetDynamicResolution(ActiveDynamicResolution());
 		m_Renderer->SetViewportSize(width, height);
 		Scene& scene = *m_Session.GetScene();
 		scene.OnViewportResize(width, height);
@@ -844,6 +858,31 @@ namespace Basalt {
 				}
 				ImGui::EndMenu();
 			}
+			if (ImGui::BeginMenu("Dynamic Resolution", static_cast<bool>(Project::GetActive())))
+			{
+				const DynamicResolutionSettings current = ActiveDynamicResolution();
+				if (ImGui::MenuItem("Enabled", nullptr, current.Enabled))
+					m_Context.Execute("project.set", { { "dynamicResolution", !current.Enabled } });
+				if (m_Renderer && !m_Renderer->HasGpuTimers())
+					ImGui::TextDisabled("Needs GPU timer queries (unavailable on this GPU)");
+				ImGui::Separator();
+				ImGui::TextDisabled("Target frame rate");
+				for (const float rate : { 30.0f, 60.0f, 120.0f, 144.0f })
+				{
+					const std::string label = std::to_string(static_cast<int>(rate)) + " FPS";
+					if (ImGui::MenuItem(label.c_str(), nullptr, current.TargetFrameRate == rate) && current.TargetFrameRate != rate)
+						m_Context.Execute("project.set", { { "targetFrameRate", rate } });
+				}
+				ImGui::Separator();
+				ImGui::TextDisabled("Lowest render scale");
+				for (const float scale : { 0.25f, 0.5f, 0.75f })
+				{
+					const std::string label = std::to_string(static_cast<int>(scale * 100.0f)) + "%";
+					if (ImGui::MenuItem(label.c_str(), nullptr, current.MinRenderScale == scale) && current.MinRenderScale != scale)
+						m_Context.Execute("project.set", { { "minRenderScale", scale } });
+				}
+				ImGui::EndMenu();
+			}
 			ImGui::EndMenu();
 		}
 
@@ -999,10 +1038,40 @@ namespace Basalt {
 			ImGui::Text("Draw calls: %u (shadow %u)", stats.DrawCalls, stats.ShadowDrawCalls);
 			ImGui::Text("Culled submeshes: %u", stats.CulledSubmeshes);
 			ImGui::Text("Lights: %u", stats.Lights);
-			ImGui::Text("Resolution: %ux%u (%.0f%% render scale)", m_Renderer->GetRenderWidth(), m_Renderer->GetRenderHeight(), m_Renderer->GetRenderScale() * 100.0f);
+			if (m_Renderer->IsDynamicResolutionActive())
+				ImGui::Text("Resolution: %ux%u (%.0f%% render scale, dynamic up to %.0f%%)", m_Renderer->GetRenderWidth(), m_Renderer->GetRenderHeight(), m_Renderer->GetCurrentRenderScale() * 100.0f, m_Renderer->GetRenderScale() * 100.0f);
+			else
+				ImGui::Text("Resolution: %ux%u (%.0f%% render scale)", m_Renderer->GetRenderWidth(), m_Renderer->GetRenderHeight(), m_Renderer->GetRenderScale() * 100.0f);
 			ImGui::Text("Frame: %.2f ms (%.0f FPS)", 1000.0f / std::max(ImGui::GetIO().Framerate, 1.0f), ImGui::GetIO().Framerate);
 			if (GraphicsDevice* device = Application::Get().GetGraphicsDevice())
 				ImGui::Text("GPU: %s", device->GetAdapterName().c_str());
+
+			// Scene passes only: the editor UI is drawn after the scene and is not part of the game's cost.
+			const GpuTimings& timings = m_Renderer->GetGpuTimings();
+			if (!m_Renderer->HasGpuTimers())
+				ImGui::TextDisabled("GPU timings: timer queries unavailable");
+			else if (timings.SampleCount == 0)
+				ImGui::TextDisabled("GPU timings: waiting for the first frames");
+			else if (ImGui::BeginTable("GpuTimings", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
+			{
+				ImGui::TableSetupColumn("Scene GPU time");
+				ImGui::TableSetupColumn("ms", ImGuiTableColumnFlags_WidthFixed);
+				ImGui::TableHeadersRow();
+				for (const GpuPassTiming& pass : timings.Passes)
+				{
+					ImGui::TableNextRow();
+					ImGui::TableNextColumn();
+					ImGui::TextUnformatted(pass.Name.c_str());
+					ImGui::TableNextColumn();
+					ImGui::Text("%.2f", pass.Milliseconds);
+				}
+				ImGui::TableNextRow();
+				ImGui::TableNextColumn();
+				ImGui::TextUnformatted("Total");
+				ImGui::TableNextColumn();
+				ImGui::Text("%.2f", timings.FrameMilliseconds);
+				ImGui::EndTable();
+			}
 		}
 		ImGui::End();
 	}

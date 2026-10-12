@@ -70,6 +70,8 @@ namespace Basalt {
 		uint32_t GetValidationErrorCount() const;
 		// True when the Khronos validation layer is active (it may be requested but unavailable).
 		bool IsValidationActive() const { return m_ValidationActive; }
+		// True when the graphics queue can time GPU work (timer queries: GpuProfiler, dynamic resolution).
+		bool SupportsTimerQueries() const { return m_TimerQueriesSupported; }
 
 	private:
 		struct Impl;
@@ -99,6 +101,7 @@ namespace Basalt {
 		std::string m_AdapterName;
 		bool m_SwapchainDirty = false;
 		bool m_ValidationActive = false;
+		bool m_TimerQueriesSupported = false;
 		CaptureCallback m_PendingCapture;
 	};
 

@@ -408,6 +408,12 @@ namespace Basalt {
 
 		const vk::PhysicalDeviceProperties deviceProperties = impl.PhysicalDevice.getProperties();
 		m_AdapterName = deviceProperties.deviceName.data();
+		// nvrhi reads timer queries as 32-bit values and subtracts them, which is only right when the
+		// counter has at least 32 valid bits (it then wraps at 2^32 like the subtraction does).
+		const uint32_t timestampBits = impl.PhysicalDevice.getQueueFamilyProperties()[impl.GraphicsQueueFamily].timestampValidBits;
+		m_TimerQueriesSupported = timestampBits >= 32 && deviceProperties.limits.timestampPeriod > 0.0f;
+		if (!m_TimerQueriesSupported)
+			BS_CORE_WARN("GraphicsDevice: GPU timer queries are unavailable ({} valid timestamp bits); GPU timings and dynamic resolution are disabled", timestampBits);
 
 		// --- Logical device ---------------------------------------------------------------------
 		const auto deviceExtensions = impl.PhysicalDevice.enumerateDeviceExtensionProperties();

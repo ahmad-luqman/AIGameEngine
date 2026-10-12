@@ -15,6 +15,8 @@ layout(push_constant) uniform TonemapPush
 	float Exposure;
 	uint Operator;      // 0 None, 1 Reinhard, 2 ACES, 3 AgX
 	uint DebugView;     // 0 final, 1 SSAO, 2 view-space normals, 3 depth
+	float Padding;
+	vec2 UVScale;       // render size / target size (the scene covers the targets' top-left corner)
 } u_Push;
 
 layout(location = 0) in vec2 v_TexCoord;
@@ -59,24 +61,29 @@ vec3 LinearToSRGB(vec3 color)
 
 void main()
 {
+	// Kept half a texel inside the render area, so bilinear filtering never blends in texels beyond it
+	// (equivalent to clamp-to-edge addressing when the area fills the targets).
+	vec2 halfTexel = 0.5 / vec2(textureSize(sampler2D(u_HDR, u_PointClamp), 0));
+	vec2 uv = clamp(v_TexCoord * u_Push.UVScale, halfTexel, u_Push.UVScale - halfTexel);
+
 	if (u_Push.DebugView == 1u)
 	{
-		o_Color = vec4(vec3(textureLod(sampler2D(u_SSAO, u_PointClamp), v_TexCoord, 0.0).r), 1.0);
+		o_Color = vec4(vec3(textureLod(sampler2D(u_SSAO, u_PointClamp), uv, 0.0).r), 1.0);
 		return;
 	}
 	if (u_Push.DebugView == 2u)
 	{
-		o_Color = vec4(textureLod(sampler2D(u_Normals, u_PointClamp), v_TexCoord, 0.0).xyz * 0.5 + 0.5, 1.0);
+		o_Color = vec4(textureLod(sampler2D(u_Normals, u_PointClamp), uv, 0.0).xyz * 0.5 + 0.5, 1.0);
 		return;
 	}
 	if (u_Push.DebugView == 3u)
 	{
-		float depth = textureLod(sampler2D(u_Depth, u_PointClamp), v_TexCoord, 0.0).r;
+		float depth = textureLod(sampler2D(u_Depth, u_PointClamp), uv, 0.0).r;
 		o_Color = vec4(vec3(pow(depth, 64.0)), 1.0);
 		return;
 	}
 
-	vec3 color = textureLod(sampler2D(u_HDR, u_ColorSampler), v_TexCoord, 0.0).rgb * u_Push.Exposure;
+	vec3 color = textureLod(sampler2D(u_HDR, u_ColorSampler), uv, 0.0).rgb * u_Push.Exposure;
 	if (u_Push.Operator == 1u)
 		color = color / (1.0 + color);
 	else if (u_Push.Operator == 2u)

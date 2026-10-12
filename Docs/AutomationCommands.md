@@ -293,11 +293,14 @@ Changes project settings and saves the project file.
 
 | Parameter | Type / description |
 |-----------|--------------------|
+| `dynamicResolution` | bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries) |
 | `fullscreen` | bool |
+| `minRenderScale` | number in [0.25, 2], lowest scale dynamic resolution uses (capped at renderScale) |
 | `name` | string |
 | `physicsLayers` | object {Names: ["Default", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play |
-| `renderScale` | number in [0.25, 2], fraction of the window resolution the scene renders at |
+| `renderScale` | number in [0.25, 2], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution) |
 | `startScene` | string, project-relative scene |
+| `targetFrameRate` | number in [10, 1000], frame rate dynamic resolution holds |
 | `windowHeight` | integer |
 | `windowWidth` | integer |
 
@@ -312,6 +315,10 @@ Renders the current scene from its primary camera to a PNG (editor / GPU hosts o
 | `height` | integer |
 | `path` | string, output .png |
 | `width` | integer |
+
+### `render.stats`
+
+Returns the scene renderer's statistics: viewport and render size, render scale (and the dynamic resolution state), draw counts, and the GPU time of each pass averaged over the last frames (editor / GPU hosts only).
 
 ## replay
 
