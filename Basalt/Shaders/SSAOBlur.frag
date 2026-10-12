@@ -1,4 +1,5 @@
 #version 450
+#include "RenderArea.glsl"
 
 // Separable depth-aware (bilateral) blur: smooths SSAO noise without bleeding across edges.
 layout(set = 0, binding = 0) uniform texture2D u_Input;
@@ -11,8 +12,8 @@ layout(push_constant) uniform BlurPush
 	float Near;
 	float Far;
 	float Orthographic; // 1 for orthographic cameras (depth is already linear)
-	float Padding;
-	vec2 UVScale;       // render size / target size (the scene covers the targets' top-left corner)
+	float Padding;      // aligns UVScale to 8 bytes in both std430 and the C++ mirror (BlurPush)
+	vec2 UVScale;       // render size / target size (RenderArea.glsl)
 } u_Push;
 
 layout(location = 0) in vec2 v_TexCoord;
@@ -28,8 +29,8 @@ float LinearDepth(float depth)
 void main()
 {
 	const float weights[5] = float[](0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);
-	// Taps stay inside the render area: beyond it the targets hold older frames.
-	vec2 halfTexel = 0.5 / vec2(textureSize(sampler2D(u_Depth, u_PointClamp), 0));
+	// Taps stay inside the render area: beyond it the SSAO targets hold results of frames rendered larger.
+	ivec2 targetSize = textureSize(sampler2D(u_Depth, u_PointClamp), 0);
 	vec2 center = v_TexCoord * u_Push.UVScale;
 	float centerDepth = LinearDepth(textureLod(sampler2D(u_Depth, u_PointClamp), center, 0.0).r);
 
@@ -39,7 +40,7 @@ void main()
 	{
 		for (int side = -1; side <= 1; side += 2)
 		{
-			vec2 uv = clamp(center + u_Push.Direction * float(i * side) * 1.5, halfTexel, u_Push.UVScale - halfTexel);
+			vec2 uv = ClampToRenderArea(center + u_Push.Direction * float(i * side) * 1.5, u_Push.UVScale, targetSize);
 			float sampleDepth = LinearDepth(textureLod(sampler2D(u_Depth, u_PointClamp), uv, 0.0).r);
 			float depthWeight = exp(-abs(sampleDepth - centerDepth) * 4.0 / max(centerDepth * 0.05, 1e-3));
 			float weight = weights[i] * depthWeight;

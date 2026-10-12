@@ -300,7 +300,7 @@ Changes project settings and saves the project file.
 | `physicsLayers` | object {Names: ["Default", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play |
 | `renderScale` | number in [0.25, 2], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution) |
 | `startScene` | string, project-relative scene |
-| `targetFrameRate` | number in [10, 1000], frame rate dynamic resolution holds |
+| `targetFrameRate` | number in [10, 1000]; dynamic resolution keeps the scene's GPU time within this frame rate's frame time |
 | `windowHeight` | integer |
 | `windowWidth` | integer |
 
@@ -318,7 +318,7 @@ Renders the current scene from its primary camera to a PNG (editor / GPU hosts o
 
 ### `render.stats`
 
-Returns the scene renderer's statistics: viewport and render size, render scale (and the dynamic resolution state), draw counts, and the GPU time of each pass averaged over the last frames (editor / GPU hosts only).
+Returns the scene renderer's statistics: viewport and render size, render scale and dynamic resolution state, draw and culling counts, and the GPU time of each pass averaged over the last 30 frames (editor / GPU hosts only).
 
 ## replay
 

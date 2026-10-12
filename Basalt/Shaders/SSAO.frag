@@ -1,4 +1,5 @@
 #version 450
+#include "RenderArea.glsl"
 
 // Normal-oriented hemisphere SSAO on view-space positions reconstructed from depth.
 layout(set = 0, binding = 0) uniform SSAOConstants
@@ -8,7 +9,7 @@ layout(set = 0, binding = 0) uniform SSAOConstants
 	vec4 Kernel[32];
 	vec4 Params;        // x: radius, y: bias, z: intensity, w: sample count
 	vec4 ScreenSize;    // xy: render size, zw: noise scale
-	vec4 UVScale;       // xy: render size / target size (the scene covers the targets' top-left corner)
+	vec4 UVScale;       // xy: render size / target size (RenderArea.glsl)
 } u_SSAO;
 
 layout(set = 0, binding = 1) uniform texture2D u_Depth;
@@ -20,11 +21,10 @@ layout(set = 0, binding = 5) uniform sampler u_PointWrap;
 layout(location = 0) in vec2 v_TexCoord;
 layout(location = 0) out float o_Occlusion;
 
-// Texture coordinate of a point of the render area (uv is 0..1 across the area), kept on its texels.
+// Target UV of a point of the render area (uv is 0..1 across the area). Depth and normals have the same size.
 vec2 TargetUV(vec2 uv)
 {
-	vec2 halfTexel = 0.5 / vec2(textureSize(sampler2D(u_Depth, u_PointClamp), 0));
-	return clamp(uv * u_SSAO.UVScale.xy, halfTexel, u_SSAO.UVScale.xy - halfTexel);
+	return ClampToRenderArea(uv * u_SSAO.UVScale.xy, u_SSAO.UVScale.xy, textureSize(sampler2D(u_Depth, u_PointClamp), 0));
 }
 
 vec3 ViewPosition(vec2 uv)

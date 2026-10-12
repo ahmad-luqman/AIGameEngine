@@ -194,7 +194,7 @@ namespace Basalt {
 	{
 		Application& application = Application::Get();
 		GraphicsDevice* device = application.GetGraphicsDevice();
-		m_Renderer = CreateScope<SceneRenderer>(device->GetDevice(), device->SupportsTimerQueries());
+		m_Renderer = CreateScope<SceneRenderer>(device->GetDevice(), SceneRendererSpecification{ device->SupportsTimerQueries() });
 		if (!m_Renderer->Initialize())
 		{
 			BS_CORE_CRITICAL("Editor: renderer initialization failed");
@@ -208,10 +208,14 @@ namespace Basalt {
 		m_Session.Screenshot = [this](const std::filesystem::path& path, uint32_t width, uint32_t height, std::string& outError) {
 			return RenderToFile(path, width, height, false, outError);
 		};
-		m_Session.RenderStats = [this]() {
+		m_Session.RenderStats = [this](nlohmann::json& outStats, std::string& outError) {
 			if (!m_Renderer)
-				throw CommandError("the editor's renderer is not available");
-			return GetRenderStats(*m_Renderer);
+			{
+				outError = "the editor's renderer is not available";
+				return false;
+			}
+			outStats = GetRenderStats(*m_Renderer);
+			return true;
 		};
 		RegisterEditorCommands();
 		m_ContentBrowserPanel.OnOpenAsset = [this](const std::string& path) { OpenAsset(path); };
@@ -861,16 +865,19 @@ namespace Basalt {
 			if (ImGui::BeginMenu("Dynamic Resolution", static_cast<bool>(Project::GetActive())))
 			{
 				const DynamicResolutionSettings current = ActiveDynamicResolution();
+				// Hand-edited project values (59.94) need not match a preset exactly.
+				auto matches = [](float a, float b) { return std::abs(a - b) < 1e-3f; };
 				if (ImGui::MenuItem("Enabled", nullptr, current.Enabled))
 					m_Context.Execute("project.set", { { "dynamicResolution", !current.Enabled } });
 				if (m_Renderer && !m_Renderer->HasGpuTimers())
-					ImGui::TextDisabled("Needs GPU timer queries (unavailable on this GPU)");
+					ImGui::TextDisabled("Needs GPU timer queries (unavailable; see the log)");
 				ImGui::Separator();
 				ImGui::TextDisabled("Target frame rate");
 				for (const float rate : { 30.0f, 60.0f, 120.0f, 144.0f })
 				{
 					const std::string label = std::to_string(static_cast<int>(rate)) + " FPS";
-					if (ImGui::MenuItem(label.c_str(), nullptr, current.TargetFrameRate == rate) && current.TargetFrameRate != rate)
+					const bool selected = matches(current.TargetFrameRate, rate);
+					if (ImGui::MenuItem(label.c_str(), nullptr, selected) && !selected)
 						m_Context.Execute("project.set", { { "targetFrameRate", rate } });
 				}
 				ImGui::Separator();
@@ -878,7 +885,8 @@ namespace Basalt {
 				for (const float scale : { 0.25f, 0.5f, 0.75f })
 				{
 					const std::string label = std::to_string(static_cast<int>(scale * 100.0f)) + "%";
-					if (ImGui::MenuItem(label.c_str(), nullptr, current.MinRenderScale == scale) && current.MinRenderScale != scale)
+					const bool selected = matches(current.MinScale, scale);
+					if (ImGui::MenuItem(label.c_str(), nullptr, selected) && !selected)
 						m_Context.Execute("project.set", { { "minRenderScale", scale } });
 				}
 				ImGui::EndMenu();
@@ -1048,29 +1056,28 @@ namespace Basalt {
 
 			// Scene passes only: the editor UI is drawn after the scene and is not part of the game's cost.
 			const GpuTimings& timings = m_Renderer->GetGpuTimings();
-			if (!m_Renderer->HasGpuTimers())
-				ImGui::TextDisabled("GPU timings: timer queries unavailable");
-			else if (timings.SampleCount == 0)
-				ImGui::TextDisabled("GPU timings: waiting for the first frames");
+			if (timings.SampleCount == 0)
+			{
+				ImGui::TextDisabled("GPU timings: %s", FormatGpuTimings(timings, m_Renderer->HasGpuTimers()).c_str());
+			}
 			else if (ImGui::BeginTable("GpuTimings", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
 			{
+				auto timingRow = [](const char* name, float milliseconds) {
+					ImGui::TableNextRow();
+					ImGui::TableNextColumn();
+					ImGui::TextUnformatted(name);
+					ImGui::TableNextColumn();
+					ImGui::Text("%.2f", milliseconds);
+				};
 				ImGui::TableSetupColumn("Scene GPU time");
 				ImGui::TableSetupColumn("ms", ImGuiTableColumnFlags_WidthFixed);
 				ImGui::TableHeadersRow();
 				for (const GpuPassTiming& pass : timings.Passes)
-				{
-					ImGui::TableNextRow();
-					ImGui::TableNextColumn();
-					ImGui::TextUnformatted(pass.Name.c_str());
-					ImGui::TableNextColumn();
-					ImGui::Text("%.2f", pass.Milliseconds);
-				}
-				ImGui::TableNextRow();
-				ImGui::TableNextColumn();
-				ImGui::TextUnformatted("Total");
-				ImGui::TableNextColumn();
-				ImGui::Text("%.2f", timings.FrameMilliseconds);
+					timingRow(pass.Name.c_str(), pass.Milliseconds);
+				timingRow("Total", timings.FrameMilliseconds);
 				ImGui::EndTable();
+				if (timings.DroppedFrames > 0)
+					ImGui::TextDisabled("%llu frames without timer results", static_cast<unsigned long long>(timings.DroppedFrames));
 			}
 		}
 		ImGui::End();

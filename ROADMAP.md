@@ -252,8 +252,8 @@ more reliable.
   animation and culling. Physics currently owns a private `JPH::JobSystemThreadPool`; route it through
   the shared pool (Jolt's `JobSystemWithBarrier`) so the two do not oversubscribe the CPU.
 - **GPU profiler follow-ups — S.** Scene passes are timed (`GpuProfiler`, editor statistics, `render.stats`);
-  the editor's own ImGui pass and the runtime blit are not. Time them too and show the totals in the
-  play-mode stats overlay.
+  the editor's own ImGui pass and the runtime blit are not. Time them too, and show the totals in the
+  play-mode stats overlay (see Editor) once it exists.
 - **CPU profiler integration — S.** Optional Tracy instrumentation behind `BASALT_PROFILE`, compiled out
   by default.
 - **Memory tracking — S.** Track allocations per subsystem (assets, GPU buffers, Lua heap) and report them

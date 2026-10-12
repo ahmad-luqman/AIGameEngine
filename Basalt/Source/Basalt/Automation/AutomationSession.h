@@ -59,7 +59,7 @@ namespace Basalt {
 		std::function<bool(const std::filesystem::path& path, uint32_t width, uint32_t height, std::string& outError)> Screenshot;
 		// Statistics of the host's scene renderer (render.stats): resolution, draw counts, GPU pass times.
 		// Unset in headless hosts.
-		std::function<nlohmann::json()> RenderStats;
+		std::function<bool(nlohmann::json& outStats, std::string& outError)> RenderStats;
 		// Called after the edit scene is replaced (editor resets panels, camera...).
 		std::function<void()> OnSceneChanged;
 		// Name of the host for diagnostics ("cli", "editor").

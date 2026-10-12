@@ -47,8 +47,11 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	# "Scaled" is the lit image rendered at half resolution and upsampled by the tonemap pass (render scale).
 	# "Dynamic" reaches the same image through dynamic resolution: an unreachable frame-rate target drops the
 	# scale to its 0.5 minimum (once GPU timer results arrive), and the scene renders into the top-left of
-	# full-size targets, which must match rendering at half size exactly.
-	foreach(view Lit SSAO Normals Depth Scaled Dynamic)
+	# full-size targets. "ScaledSSAO"/"DynamicSSAO" are the same pair for the SSAO view, which isolates the
+	# blur's edge handling. Each Dynamic image must equal its Scaled image exactly (compared below); the
+	# goldens compare across drivers within image.compare's tolerance.
+	set(dynamicArgs --dynamic-resolution 1000000 --min-render-scale 0.5)
+	foreach(view Lit SSAO Normals Depth Scaled Dynamic ScaledSSAO DynamicSSAO)
 		set(debugView ${view})
 		set(renderTest FeatureTestRender_${view})
 		set(referenceView ${view})
@@ -62,14 +65,23 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 		elseif(view STREQUAL "Dynamic")
 			set(debugView None)
 			set(referenceView Scaled)
-			set(extraArgs --dynamic-resolution 1000000 --min-render-scale 0.5)
+			set(extraArgs ${dynamicArgs})
+		elseif(view STREQUAL "ScaledSSAO")
+			set(debugView SSAO)
+			set(referenceView "")
+			set(extraArgs --render-scale 0.5)
+		elseif(view STREQUAL "DynamicSSAO")
+			set(debugView SSAO)
+			set(referenceView "")
+			set(extraArgs ${dynamicArgs})
 		endif()
 		add_test(NAME ${renderTest}
 			COMMAND BasaltRuntime ${basaltRenderArgs} --offscreen --debug-view ${debugView} ${extraArgs} --screenshot "${basaltGoldenOutput}/FeatureTest_${view}.png")
-		set_tests_properties(${renderTest} PROPERTIES FIXTURES_SETUP Render${view})
+		# Every CI driver (lavapipe, MoltenVK) has timer queries, so missing GPU timings are a profiler bug.
+		set_tests_properties(${renderTest} PROPERTIES FIXTURES_SETUP Render${view} FAIL_REGULAR_EXPRESSION "scene GPU time (unavailable|not available yet)")
 		list(APPEND basaltGpuTests ${renderTest})
 
-		if(BASALT_GOLDEN_DRIVER)
+		if(BASALT_GOLDEN_DRIVER AND referenceView)
 			set(reference "${CMAKE_CURRENT_SOURCE_DIR}/Data/Golden/${BASALT_GOLDEN_DRIVER}/FeatureTest_${referenceView}.png")
 			add_test(NAME FeatureTestGolden_${view}
 				COMMAND BasaltCLI image.compare "{\"actual\": \"${basaltGoldenOutput}/FeatureTest_${view}.png\", \"reference\": \"${reference}\", \"diff\": \"${basaltGoldenOutput}/FeatureTest_${view}.diff.png\", \"assertMatch\": true}")
@@ -77,6 +89,19 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 			list(APPEND basaltGpuTests FeatureTestGolden_${view})
 		endif()
 	endforeach()
+	# Rendering into the top-left of larger targets must give exactly the image of rendering at that size;
+	# a tap beyond the render area (stale texels) would change a few edge pixels. Driver-independent: both
+	# images come from the same machine.
+	foreach(pair "Dynamic;Scaled" "DynamicSSAO;ScaledSSAO")
+		list(GET pair 0 dynamicView)
+		list(GET pair 1 scaledView)
+		add_test(NAME FeatureTest${dynamicView}MatchesScaled
+			COMMAND BasaltCLI image.compare "{\"actual\": \"${basaltGoldenOutput}/FeatureTest_${dynamicView}.png\", \"reference\": \"${basaltGoldenOutput}/FeatureTest_${scaledView}.png\", \"diff\": \"${basaltGoldenOutput}/FeatureTest_${dynamicView}VsScaled.diff.png\", \"pixelThreshold\": 0, \"maxPercent\": 0, \"assertMatch\": true}")
+		set_tests_properties(FeatureTest${dynamicView}MatchesScaled PROPERTIES FIXTURES_REQUIRED "Render${dynamicView};Render${scaledView}")
+		list(APPEND basaltGpuTests FeatureTest${dynamicView}MatchesScaled)
+	endforeach()
+	# A dynamic run must actually have lowered the scale (the runtime also exits 6 when it could not run).
+	set_tests_properties(FeatureTestRender_Dynamic FeatureTestRender_DynamicSSAO PROPERTIES FAIL_REGULAR_EXPRESSION "scene GPU time (unavailable|not available yet);rendered at 1280x720")
 	# The window + swapchain path needs a display, so it only runs on developer machines.
 	if(NOT DEFINED ENV{CI})
 		add_test(NAME FeatureTestRenderWindowed
@@ -88,6 +113,33 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 		# Homebrew's validation layer manifest names its library without a path (Apple silicon and Intel prefixes).
 		set_tests_properties(${basaltGpuTests} PROPERTIES ENVIRONMENT "DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib:/usr/local/lib")
 	endif()
+endif()
+
+# Runtime option validation: bad values must stop the run before a window or GPU is needed (an ignored
+# option would let a test pass without testing anything).
+if(TARGET BasaltRuntime)
+	set(basaltRuntimeOptionTests "")
+	foreach(case
+			"dynamic-resolution-low;--dynamic-resolution;5;--dynamic-resolution must be 0"
+			"dynamic-resolution-high;--dynamic-resolution;2e6;--dynamic-resolution must be 0"
+			"dynamic-resolution-text;--dynamic-resolution;abc;--dynamic-resolution must be 0"
+			"min-render-scale;--min-render-scale;0.1;--min-render-scale must be a number"
+			"render-scale;--render-scale;3;--render-scale must be a number")
+		list(GET case 0 caseName)
+		list(GET case 1 option)
+		list(GET case 2 value)
+		list(GET case 3 message)
+		add_test(NAME RuntimeOption_${caseName}
+			COMMAND BasaltRuntime --project "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest" --headless ${option} ${value})
+		set_tests_properties(RuntimeOption_${caseName} PROPERTIES PASS_REGULAR_EXPRESSION "${message}")
+		list(APPEND basaltRuntimeOptionTests RuntimeOption_${caseName})
+	endforeach()
+	# An option missing its value is fatal too, rather than running with the default.
+	add_test(NAME RuntimeOption_missing-value
+		COMMAND BasaltRuntime --project "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest" --headless --dynamic-resolution)
+	set_tests_properties(RuntimeOption_missing-value PROPERTIES PASS_REGULAR_EXPRESSION "option --dynamic-resolution requires a value")
+	list(APPEND basaltRuntimeOptionTests RuntimeOption_missing-value)
+	set_tests_properties(${basaltRuntimeOptionTests} PROPERTIES LABELS integration)
 endif()
 
 # Sample games built entirely through the automation API; their gameplay checks run headless.

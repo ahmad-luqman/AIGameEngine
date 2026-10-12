@@ -1,8 +1,10 @@
 #include <doctest/doctest.h>
 
+#include <Basalt/Core/Log.h>
 #include <Basalt/Renderer/DeviceSelection.h>
 #include <Basalt/Renderer/DynamicResolution.h>
 #include <Basalt/Renderer/GpuProfiler.h>
+#include <Basalt/Renderer/RenderMath.h>
 #include <Basalt/Renderer/RenderUtils.h>
 #include <Basalt/Renderer/SceneLights.h>
 #include <Basalt/Scene/Entity.h>
@@ -11,6 +13,7 @@
 #include <glm/gtc/epsilon.hpp>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <deque>
 #include <limits>
@@ -182,7 +185,7 @@ TEST_SUITE("DynamicResolution")
 		Controller controller;
 		controller.Reset(1.0f);
 		// 40 ms at full scale, 10 ms budget: cost scales with the pixel count, so aim for sqrt(9 / 40).
-		controller.AddSample(40.0f, 1.0f, 10.0f, 0.25f, 1.0f);
+		CHECK(controller.AddSample(40.0f, 1.0f, 10.0f, 0.25f, 1.0f));
 		CHECK(controller.GetScale(0.25f, 1.0f) == doctest::Approx(std::sqrt(10.0f * Controller::Headroom / 40.0f)));
 
 		// Samples are normalized by the scale they rendered at: 10 ms at half scale is 40 ms at full scale.
@@ -207,37 +210,112 @@ TEST_SUITE("DynamicResolution")
 		CHECK(controller.GetScale(1.5f, 0.8f) == 0.8f);
 	}
 
-	TEST_CASE("The scale rises only after RaiseDelay samples with headroom, by at most MaxRaiseStep, up to the maximum")
+	TEST_CASE("Raises come RaiseDelay samples apart, by at most MaxRaiseStep, up to the maximum")
 	{
 		Controller controller;
 		controller.Reset(1.0f);
 		controller.AddSample(1000.0f, 1.0f, 1.0f, 0.25f, 1.0f);
 		REQUIRE(controller.GetScale(0.25f, 1.0f) == 0.25f);
 
-		// The GPU becomes fast: every sample now predicts that full scale fits.
-		for (uint32_t i = 0; i + 1 < Controller::RaiseDelay; i++)
-			controller.AddSample(0.01f, 0.25f, 1.0f, 0.25f, 1.0f);
-		// The smoothed cost still remembers the slow frame, but RaiseDelay samples later it has decayed.
-		float previous = controller.GetScale(0.25f, 1.0f);
-		CHECK(previous == 0.25f);
-		int raises = 0;
+		// The GPU becomes fast: every sample now predicts that full scale fits. The smoothed cost still
+		// remembers the slow frame, so raises start once it has decayed.
+		std::vector<float> scales;
 		for (int i = 0; i < 2000; i++)
 		{
 			controller.AddSample(0.01f, controller.GetScale(0.25f, 1.0f), 1.0f, 0.25f, 1.0f);
-			const float scale = controller.GetScale(0.25f, 1.0f);
-			CHECK(scale - previous <= Controller::MaxRaiseStep + 1e-6f);
-			if (scale != previous)
-				raises++;
-			previous = scale;
+			scales.push_back(controller.GetScale(0.25f, 1.0f));
 		}
-		CHECK(previous == 1.0f);
-		// At least (1 - 0.25) / MaxRaiseStep steps, each RaiseDelay samples apart.
+		CHECK(scales.back() == 1.0f);
+		float previous = 0.25f;
+		size_t lastRaise = 0;
+		int raises = 0;
+		bool spacedAndSmall = true;
+		for (size_t i = 0; i < scales.size(); i++)
+		{
+			if (scales[i] == previous)
+				continue;
+			spacedAndSmall = spacedAndSmall && scales[i] > previous && scales[i] - previous <= Controller::MaxRaiseStep + 1e-6f;
+			// The first raise also waits RaiseDelay samples after the drop.
+			spacedAndSmall = spacedAndSmall && i + 1 - (raises == 0 ? 0 : lastRaise + 1) >= Controller::RaiseDelay;
+			lastRaise = i;
+			previous = scales[i];
+			raises++;
+		}
+		CHECK(spacedAndSmall);
 		CHECK(raises >= static_cast<int>(std::ceil(0.75f / Controller::MaxRaiseStep)));
+	}
+
+	TEST_CASE("A sample without room to spare restarts the raise delay")
+	{
+		// At scale 0.5 with a 10 ms budget, 8 ms frames leave room for a raise, 10 ms frames do not (their target
+		// is within the deadband). Without the restart the 30th sample with room would raise the scale.
+		Controller controller;
+		controller.Reset(0.5f);
+		auto feed = [&](float milliseconds, uint32_t count) {
+			for (uint32_t i = 0; i < count; i++)
+				controller.AddSample(milliseconds, 0.5f, 10.0f, 0.25f, 1.0f);
+		};
+		feed(8.0f, Controller::RaiseDelay - 2);
+		feed(10.0f, 2); // two, because the median filter ignores one
+		feed(8.0f, Controller::RaiseDelay);
+		CHECK(controller.GetScale(0.25f, 1.0f) == 0.5f);
+		feed(8.0f, 10);
+		CHECK(controller.GetScale(0.25f, 1.0f) > 0.5f);
+	}
+
+	TEST_CASE("The last step onto a bound is taken even inside the deadband")
+	{
+		Controller down;
+		down.Reset(0.51f);
+		down.AddSample(100.0f, 0.51f, 10.0f, 0.5f, 1.0f); // the target clamps to 0.5, 0.01 away
+		CHECK(down.GetScale(0.5f, 1.0f) == 0.5f);
+
+		Controller up;
+		up.Reset(0.99f);
+		for (uint32_t i = 0; i < Controller::RaiseDelay; i++)
+			up.AddSample(0.01f, 0.99f, 10.0f, 0.25f, 1.0f);
+		CHECK(up.GetScale(0.25f, 1.0f) == 1.0f);
+	}
+
+	TEST_CASE("Small changes inside the deadband are ignored, in both directions")
+	{
+		for (const float factor : { 1.01f, 0.99f })
+		{
+			INFO("factor " << factor);
+			Controller controller;
+			controller.Reset(1.0f);
+			controller.AddSample(20.0f, 1.0f, 10.0f, 0.25f, 1.0f);
+			const float scale = controller.GetScale(0.25f, 1.0f);
+			// The time that makes `scale` exactly right, slightly off: the target moves by less than the deadband.
+			const float exact = scale * scale * 10.0f * Controller::Headroom / (scale * scale);
+			for (int i = 0; i < 100; i++)
+				controller.AddSample(exact * scale * scale * factor / (scale * scale), scale, 10.0f, 0.25f, 1.0f);
+			CHECK(controller.GetScale(0.25f, 1.0f) == scale);
+		}
+	}
+
+	TEST_CASE("One slow frame is not a trend: the median filter ignores single spikes")
+	{
+		Controller controller;
+		controller.Reset(1.0f);
+		for (int i = 0; i < 10; i++)
+			controller.AddSample(5.0f, 1.0f, 10.0f, 0.25f, 1.0f);
+		REQUIRE(controller.GetScale(0.25f, 1.0f) == 1.0f);
+		controller.AddSample(500.0f, 1.0f, 10.0f, 0.25f, 1.0f); // a hitch (shader compile, asset streaming)
+		controller.AddSample(5.0f, 1.0f, 10.0f, 0.25f, 1.0f);
+		controller.AddSample(5.0f, 1.0f, 10.0f, 0.25f, 1.0f);
+		CHECK(controller.GetScale(0.25f, 1.0f) == 1.0f);
+
+		// Two slow frames in a row are.
+		controller.AddSample(500.0f, 1.0f, 10.0f, 0.25f, 1.0f);
+		controller.AddSample(500.0f, 1.0f, 10.0f, 0.25f, 1.0f);
+		CHECK(controller.GetScale(0.25f, 1.0f) < 1.0f);
 	}
 
 	TEST_CASE("A simulated GPU with fixed and per-pixel costs settles within the budget without oscillating")
 	{
-		// 2 ms of fixed work (shadow maps) plus 18 ms per full-resolution frame, results three frames late.
+		// 2 ms of fixed work (shadow maps) plus 18 ms per full-resolution frame. A frame's result reaches the
+		// controller GpuProfiler::Latency frames after it was queued, as with the real profiler.
 		auto gpuTime = [](float scale) { return 2.0f + 18.0f * scale * scale; };
 		constexpr float Budget = 1000.0f / 60.0f;
 		Controller controller;
@@ -249,7 +327,7 @@ TEST_SUITE("DynamicResolution")
 			const float scale = controller.GetScale(0.25f, 1.0f);
 			scales.push_back(scale);
 			inFlight.push_back(scale);
-			if (inFlight.size() > 3)
+			if (inFlight.size() > GpuProfiler::Latency - 1)
 			{
 				const float rendered = inFlight.front();
 				inFlight.pop_front();
@@ -258,47 +336,75 @@ TEST_SUITE("DynamicResolution")
 		}
 		const float settled = scales.back();
 		CHECK(gpuTime(settled) <= Budget);
-		// Not needlessly low: within a deadband-sized step of the scale that fills the headroom.
+		// Not needlessly low: within two deadbands of the scale that fills the headroom.
 		const float ideal = std::sqrt((Budget * Controller::Headroom - 2.0f) / 18.0f);
 		CHECK(settled >= ideal - 2.0f * Controller::Deadband);
 		// The last 300 frames hold one scale.
 		CHECK(std::all_of(scales.end() - 300, scales.end(), [&](float scale) { return scale == settled; }));
 	}
 
-	TEST_CASE("Small changes inside the deadband are ignored")
-	{
-		Controller controller;
-		controller.Reset(1.0f);
-		controller.AddSample(20.0f, 1.0f, 10.0f, 0.25f, 1.0f);
-		const float scale = controller.GetScale(0.25f, 1.0f);
-		// Slightly slower than predicted: the target moves by less than the deadband.
-		const float target = scale * scale * 20.0f / (1.0f - Controller::Deadband * 0.5f);
-		for (int i = 0; i < 100; i++)
-			controller.AddSample(target * 1.01f, scale, 10.0f, 0.25f, 1.0f);
-		CHECK(controller.GetScale(0.25f, 1.0f) == scale);
-	}
-
-	TEST_CASE("Invalid samples and budgets are ignored; Reset forgets the history")
+	TEST_CASE("Invalid samples and budgets are ignored; Reset forgets the history, ForgetHistory keeps the scale")
 	{
 		constexpr float NaN = std::numeric_limits<float>::quiet_NaN();
 		constexpr float Infinity = std::numeric_limits<float>::infinity();
 		Controller controller;
 		controller.Reset(0.8f);
 		for (const float milliseconds : { 0.0f, -1.0f, NaN, Infinity })
-			controller.AddSample(milliseconds, 1.0f, 1.0f, 0.25f, 1.0f);
+			CHECK_FALSE(controller.AddSample(milliseconds, 1.0f, 1.0f, 0.25f, 1.0f));
 		for (const float scale : { 0.0f, -0.5f, NaN })
-			controller.AddSample(100.0f, scale, 1.0f, 0.25f, 1.0f);
+			CHECK_FALSE(controller.AddSample(100.0f, scale, 1.0f, 0.25f, 1.0f));
 		for (const float budget : { 0.0f, NaN, -Infinity })
-			controller.AddSample(100.0f, 1.0f, budget, 0.25f, 1.0f);
+			CHECK_FALSE(controller.AddSample(100.0f, 1.0f, budget, 0.25f, 1.0f));
 		CHECK(controller.GetScale(0.25f, 1.0f) == 0.8f);
 
 		controller.AddSample(100.0f, 1.0f, 1.0f, 0.25f, 1.0f);
+		CHECK(controller.GetScale(0.25f, 1.0f) == 0.25f);
+		controller.ForgetHistory();
 		CHECK(controller.GetScale(0.25f, 1.0f) == 0.25f);
 		controller.Reset(1.0f);
 		CHECK(controller.GetScale(0.25f, 1.0f) == 1.0f);
 		// After a reset the next sample is taken as is again, not blended with the old history.
 		controller.AddSample(1.0f, 1.0f, 1.0f / Controller::Headroom, 0.25f, 1.0f);
 		CHECK(controller.GetScale(0.25f, 1.0f) == 1.0f);
+	}
+
+	TEST_CASE("Settings are sanitized for programmatic callers")
+	{
+		constexpr float NaN = std::numeric_limits<float>::quiet_NaN();
+		const DynamicResolutionSettings defaults;
+		CHECK(SanitizeDynamicResolution(defaults) == defaults);
+		CHECK(SanitizeDynamicResolution({ true, NaN, NaN }) == DynamicResolutionSettings{ true, defaults.TargetFrameRate, defaults.MinScale });
+		CHECK(SanitizeDynamicResolution({ true, 0.0f, 0.0f }) == DynamicResolutionSettings{ true, MinTargetFrameRate, MinRenderScale });
+		CHECK(SanitizeDynamicResolution({ true, std::numeric_limits<float>::infinity(), 5.0f }) == DynamicResolutionSettings{ true, MinTargetFrameRate, MaxRenderScale });
+		// Rates above the project range stay (the runtime's test affordance).
+		CHECK(SanitizeDynamicResolution({ true, 1e6f, 0.5f }).TargetFrameRate == 1e6f);
+	}
+
+	TEST_CASE("Dynamic render sizes stay inside the targets and grow with the scale")
+	{
+		const glm::uvec2 target = ComputeRenderSize(1281, 721, 1.0f);
+		glm::uvec2 previous(0);
+		for (int percent = 25; percent <= 100; percent++)
+		{
+			const float scale = static_cast<float>(percent) / 100.0f;
+			const glm::uvec2 size = ComputeDynamicRenderSize(1281, 721, scale, target);
+			CHECK(size.x <= target.x);
+			CHECK(size.y <= target.y);
+			CHECK(size.x >= previous.x);
+			CHECK(size.y >= previous.y);
+			previous = size;
+		}
+		CHECK(ComputeDynamicRenderSize(1281, 721, 0.5f, target) == glm::uvec2(641, 361));
+		// A scale above the one the targets were made for is clipped to them.
+		CHECK(ComputeDynamicRenderSize(1281, 721, 2.0f, target) == target);
+	}
+
+	TEST_CASE("The pixel scale is the square root of the pixel ratio")
+	{
+		CHECK(ComputePixelScale({ 640, 360 }, { 1280, 720 }) == doctest::Approx(0.5f));
+		CHECK(ComputePixelScale({ 1280, 720 }, { 1280, 720 }) == 1.0f);
+		CHECK(ComputePixelScale({ 641, 361 }, { 1281, 721 }) == doctest::Approx(std::sqrt(641.0f * 361.0f / (1281.0f * 721.0f))));
+		CHECK(std::isfinite(ComputePixelScale({ 1, 1 }, { 0, 0 })));
 	}
 }
 
@@ -333,9 +439,12 @@ TEST_SUITE("GpuProfiler")
 		CHECK(average.Get().FrameMilliseconds == doctest::Approx((2.0f + 6.0f + 8.0f) / 3.0f));
 		CHECK(average.Get().Passes[0].Milliseconds == doctest::Approx(3.0f));
 
-		average.Clear();
-		CHECK(average.Get().SampleCount == 0);
-		CHECK(average.Get().FrameMilliseconds == 0.0f);
+		// Dropped frames are counted for the profiler's lifetime, outside the window.
+		CHECK(average.Get().DroppedFrames == 0);
+		average.AddDropped();
+		average.AddDropped();
+		CHECK(average.Get().DroppedFrames == 2);
+		CHECK(average.Get().SampleCount == 3);
 	}
 
 	TEST_CASE("A zero window still keeps the latest frame")
@@ -347,6 +456,15 @@ TEST_SUITE("GpuProfiler")
 		CHECK(average.Get().FrameMilliseconds == 3.0f);
 	}
 
+	TEST_CASE("Scale-independent passes can be left out of a frame's time")
+	{
+		const GpuFrameSample sample = Sample(10.0f, { 4.0f, 1.0f, 2.0f });
+		CHECK(sample.MillisecondsWithout({ 0, 1 }) == doctest::Approx(5.0f));
+		CHECK(sample.MillisecondsWithout({}) == 10.0f);
+		// Unknown passes are ignored rather than read out of bounds.
+		CHECK(sample.MillisecondsWithout({ 7 }) == 10.0f);
+	}
+
 	TEST_CASE("A disabled profiler records only markers and reports no timings")
 	{
 		GpuProfiler profiler(nullptr, { "Pass" }, true);
@@ -356,21 +474,73 @@ TEST_SUITE("GpuProfiler")
 		CHECK(profiler.GetTimings().Passes[0].Name == "Pass");
 	}
 
-	TEST_CASE("GPU timings format for logs and render.stats")
+	TEST_CASE("GPU timings format for logs and render.stats, saying why there are none")
 	{
 		GpuTimings timings;
-		CHECK(FormatGpuTimings(timings).find("no GPU timings") != std::string::npos);
+		CHECK(FormatGpuTimings(timings, false).find("no GPU timer queries") != std::string::npos);
+		timings.DroppedFrames = 4;
+		CHECK(FormatGpuTimings(timings, true).find("no GPU timer results arrived (4 frames dropped)") != std::string::npos);
 		CHECK(GpuTimingsToJson(timings)["frames"] == 0);
+		CHECK(GpuTimingsToJson(timings)["droppedFrames"] == 4);
 
 		timings.SampleCount = 30;
 		timings.FrameMilliseconds = 2.5f;
 		timings.Passes = { { "Shadows", 1.0f }, { "Lighting", 0.75f } };
-		CHECK(FormatGpuTimings(timings) == "2.50 ms over 30 frames (Shadows 1.00, Lighting 0.75)");
+		CHECK(FormatGpuTimings(timings, true) == "2.50 ms over 30 frames (Shadows 1.00, Lighting 0.75)");
 		const nlohmann::json json = GpuTimingsToJson(timings);
 		CHECK(json["frames"] == 30);
 		CHECK(json["frameMs"] == 2.5);
 		REQUIRE(json["passes"].size() == 2);
 		CHECK(json["passes"][1]["name"] == "Lighting");
 		CHECK(json["passes"][1]["ms"] == 0.75);
+	}
+}
+
+TEST_SUITE("SceneRenderer")
+{
+	int CountMessages(uint64_t since, const std::string& text)
+	{
+		uint64_t next = 0;
+		int count = 0;
+		for (const LogMessage& message : Log::GetHistory().GetMessagesSince(since, next))
+			count += message.Text.find(text) != std::string::npos ? 1 : 0;
+		return count;
+	}
+
+	// A renderer without a device (never initialized) has no GPU timers, which is enough to check the
+	// dynamic resolution state and the render.stats contract headless.
+	TEST_CASE("Without GPU timers dynamic resolution stays inactive, says so once, and render.stats reports it")
+	{
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		SceneRenderer renderer(nullptr, SceneRendererSpecification{ true });
+		CHECK_FALSE(renderer.HasGpuTimers());
+		renderer.SetDynamicResolution({ true, 30.0f, 0.5f });
+		renderer.SetDynamicResolution({ true, 60.0f, 0.5f });
+		CHECK(renderer.GetDynamicResolution().Enabled);
+		CHECK_FALSE(renderer.IsDynamicResolutionActive());
+		CHECK(CountMessages(since, "dynamic resolution needs GPU timer queries") == 1);
+
+		const nlohmann::json stats = GetRenderStats(renderer);
+		CHECK(stats["dynamicResolution"] == true);
+		CHECK(stats["dynamicResolutionActive"] == false);
+		CHECK(stats["targetFrameRate"] == 60.0);
+		CHECK(stats["minRenderScale"] == 0.5);
+		CHECK(stats["gpu"]["timers"] == false);
+		CHECK(stats["gpu"]["frames"] == 0);
+		CHECK(stats["gpu"]["droppedFrames"] == 0);
+		CHECK(stats["gpu"]["passes"].size() == 9);
+		CHECK(stats["gpu"]["passes"][0]["name"] == "Environment");
+		for (const char* key : { "viewport", "renderSize", "renderScale", "currentRenderScale", "drawCalls", "shadowDrawCalls", "culledSubmeshes", "lights", "materials" })
+		{
+			INFO(key);
+			CHECK(stats.contains(key));
+		}
+	}
+
+	TEST_CASE("Dynamic resolution settings are sanitized by the renderer")
+	{
+		SceneRenderer renderer(nullptr);
+		renderer.SetDynamicResolution({ true, std::numeric_limits<float>::quiet_NaN(), 9.0f });
+		CHECK(renderer.GetDynamicResolution() == DynamicResolutionSettings{ true, 60.0f, MaxRenderScale });
 	}
 }

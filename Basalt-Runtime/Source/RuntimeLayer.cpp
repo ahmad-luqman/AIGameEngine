@@ -41,7 +41,7 @@ namespace Basalt {
 
 		if (GraphicsDevice* device = application.GetGraphicsDevice())
 		{
-			m_Renderer = CreateScope<SceneRenderer>(device->GetDevice(), device->SupportsTimerQueries());
+			m_Renderer = CreateScope<SceneRenderer>(device->GetDevice(), SceneRendererSpecification{ device->SupportsTimerQueries() });
 			if (!m_Renderer->Initialize())
 			{
 				application.Close();
@@ -146,8 +146,19 @@ namespace Basalt {
 			return;
 		if (m_Renderer)
 		{
-			BS_CORE_INFO("Runtime: scene GPU time {}", FormatGpuTimings(m_Renderer->GetGpuTimings()));
+			const GpuTimings& timings = m_Renderer->GetGpuTimings();
+			const std::string text = FormatGpuTimings(timings, m_Renderer->HasGpuTimers());
+			// After a whole run, timers that delivered nothing point at a driver or profiler problem.
+			if (m_Renderer->HasGpuTimers() && timings.SampleCount == 0)
+				BS_CORE_WARN("Runtime: scene GPU time {}", text);
+			else
+				BS_CORE_INFO("Runtime: scene GPU time {}", text);
 			BS_CORE_INFO("Runtime: last frame rendered at {}x{} ({:.0f}% render scale)", m_Renderer->GetRenderWidth(), m_Renderer->GetRenderHeight(), m_Renderer->GetCurrentRenderScale() * 100.0f);
+			if (m_Options.RequireDynamicResolution && (!m_Renderer->IsDynamicResolutionActive() || timings.SampleCount == 0))
+			{
+				BS_CORE_ERROR("Runtime: --dynamic-resolution given but dynamic resolution did not run ({}; see the warnings above)", m_Renderer->IsDynamicResolutionActive() ? "no GPU timer results arrived" : "inactive");
+				Application::Get().SetExitCode(6);
+			}
 		}
 		if (device->GetValidationErrorCount() > 0)
 		{

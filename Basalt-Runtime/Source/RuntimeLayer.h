@@ -23,6 +23,9 @@ namespace Basalt {
 		float RenderScale = 1.0f;
 		// The project's settings unless --dynamic-resolution / --min-render-scale override them.
 		DynamicResolutionSettings DynamicResolution;
+		// --dynamic-resolution asked for it explicitly: a --frames run fails (exit code 6) when dynamic
+		// resolution could not run (no GPU timers, nothing to adjust, or no timer results arrived).
+		bool RequireDynamicResolution = false;
 	};
 
 	// Plays a scene: scripts, physics and audio run every frame and the primary camera's view is
