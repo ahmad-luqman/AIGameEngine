@@ -19,11 +19,34 @@ namespace Basalt {
 		}
 	};
 
+	namespace {
+
+		// Reads a render scale option into `value` (unchanged when absent); false, after logging, when it is
+		// present but not a number in the render scale range.
+		bool ReadScaleOption(const CommandLine& commandLine, const char* name, float& value)
+		{
+			if (!commandLine.GetValue(name))
+				return true;
+			const auto scale = commandLine.GetFloat(name);
+			if (!scale || *scale < MinRenderScale || *scale > MaxRenderScale)
+			{
+				BS_CORE_CRITICAL("--{} must be a number in [{}, {}]", name, MinRenderScale, MaxRenderScale);
+				return false;
+			}
+			value = *scale;
+			return true;
+		}
+
+	}
+
 	Application* CreateApplication(ApplicationCommandLineArgs args)
 	{
 		const CommandLine commandLine(args.Count, args.Args, { "project", "scene", "frames", "screenshot", "width", "height", "debug-view", "gpu", "render-scale", "dynamic-resolution", "min-render-scale" });
+		// An option without its value would otherwise run with the default silently (a test passing vacuously).
 		for (const std::string& error : commandLine.GetErrors())
-			BS_CORE_ERROR("{}", error);
+			BS_CORE_CRITICAL("{}", error);
+		if (!commandLine.GetErrors().empty())
+			return nullptr;
 
 		RuntimeOptions options;
 		// An exported game ships its project file next to the executable.
@@ -57,16 +80,8 @@ namespace Basalt {
 			return nullptr;
 		}
 		options.RenderScale = project->GetConfig().RenderScale;
-		if (commandLine.GetValue("render-scale"))
-		{
-			const auto renderScale = commandLine.GetFloat("render-scale");
-			if (!renderScale || *renderScale < MinRenderScale || *renderScale > MaxRenderScale)
-			{
-				BS_CORE_CRITICAL("--render-scale must be a number in [{}, {}]", MinRenderScale, MaxRenderScale);
-				return nullptr;
-			}
-			options.RenderScale = *renderScale;
-		}
+		if (!ReadScaleOption(commandLine, "render-scale", options.RenderScale))
+			return nullptr;
 		options.DynamicResolution = project->GetConfig().DynamicResolution;
 		if (commandLine.GetValue("dynamic-resolution"))
 		{
@@ -80,19 +95,14 @@ namespace Basalt {
 				return nullptr;
 			}
 			options.DynamicResolution.Enabled = *frameRate != 0.0f;
+			options.RequireDynamicResolution = options.DynamicResolution.Enabled;
 			if (options.DynamicResolution.Enabled)
 				options.DynamicResolution.TargetFrameRate = *frameRate;
 		}
-		if (commandLine.GetValue("min-render-scale"))
-		{
-			const auto minRenderScale = commandLine.GetFloat("min-render-scale");
-			if (!minRenderScale || *minRenderScale < MinRenderScale || *minRenderScale > MaxRenderScale)
-			{
-				BS_CORE_CRITICAL("--min-render-scale must be a number in [{}, {}]", MinRenderScale, MaxRenderScale);
-				return nullptr;
-			}
-			options.DynamicResolution.MinRenderScale = *minRenderScale;
-		}
+		if (!ReadScaleOption(commandLine, "min-render-scale", options.DynamicResolution.MinScale))
+			return nullptr;
+		if (commandLine.GetValue("min-render-scale") && !options.DynamicResolution.Enabled)
+			BS_CORE_WARN("--min-render-scale has no effect: dynamic resolution is off (enable it in the project or with --dynamic-resolution <fps>)");
 
 		ApplicationSpecification specification;
 		specification.Name = project->GetConfig().Name;

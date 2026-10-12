@@ -148,12 +148,21 @@ TEST_SUITE("Automation")
 		const Ref<Project> old = Project::Load(temp.GetDirectory(), error);
 		REQUIRE(old);
 		CHECK(old->GetConfig().DynamicResolution == DynamicResolutionSettings{});
-		for (const char* file : { R"({"DynamicResolution": 1})", R"({"TargetFrameRate": 0})", R"({"TargetFrameRate": 1e300})", R"({"TargetFrameRate": "60"})", R"({"MinRenderScale": 0.2})", R"({"MinRenderScale": null})" })
+		for (const char* file : { R"({"DynamicResolution": 1})", R"({"DynamicResolution": {"Enabled": true}})", R"({"TargetFrameRate": 0})", R"({"TargetFrameRate": 1e300})", R"({"TargetFrameRate": "60"})", R"({"MinRenderScale": 0.2})", R"({"MinRenderScale": null})" })
 		{
 			INFO(file);
 			temp.WriteFile(Project::FileName, file);
 			CHECK_FALSE(Project::Load(temp.GetDirectory(), error));
 			CHECK(error.find("invalid project file") != std::string::npos);
+			// The message names the key.
+			CHECK((error.find("DynamicResolution") != std::string::npos || error.find("TargetFrameRate") != std::string::npos || error.find("MinRenderScale") != std::string::npos));
+		}
+		// The range bounds themselves are valid.
+		for (const char* file : { R"({"TargetFrameRate": 10, "MinRenderScale": 0.25})", R"({"TargetFrameRate": 1000, "MinRenderScale": 2})" })
+		{
+			INFO(file);
+			temp.WriteFile(Project::FileName, file);
+			CHECK(Project::Load(temp.GetDirectory(), error));
 		}
 	}
 
@@ -164,10 +173,16 @@ TEST_SUITE("Automation")
 		CHECK(RunError(registry, session, "render.stats").find("GPU host") != std::string::npos);
 		CHECK(RunError(registry, session, "render.stats").find("'cli'") != std::string::npos);
 
-		session.RenderStats = []() { return json{ { "drawCalls", 3 } }; };
+		session.RenderStats = [](json& stats, std::string&) {
+			stats = { { "drawCalls", 3 } };
+			return true;
+		};
 		CHECK(Run(registry, session, "render.stats")["drawCalls"] == 3);
 		CHECK(RunError(registry, session, "render.stats", { { "frames", 1 } }).find("frames") != std::string::npos);
-		session.RenderStats = []() -> json { throw CommandError("renderer gone"); };
+		session.RenderStats = [](json&, std::string& error) {
+			error = "renderer gone";
+			return false;
+		};
 		CHECK(RunError(registry, session, "render.stats") == "renderer gone");
 	}
 

@@ -408,12 +408,17 @@ namespace Basalt {
 
 		const vk::PhysicalDeviceProperties deviceProperties = impl.PhysicalDevice.getProperties();
 		m_AdapterName = deviceProperties.deviceName.data();
-		// nvrhi reads timer queries as 32-bit values and subtracts them, which is only right when the
-		// counter has at least 32 valid bits (it then wraps at 2^32 like the subtraction does).
+		// nvrhi reads timer queries as 32-bit values (no VK_QUERY_RESULT_64_BIT) and subtracts them. That is
+		// right when the counter has at least 32 valid bits and the driver wraps values above 2^32, which the
+		// spec allows along with saturating. A saturating driver would report 0 ms once the counter passes
+		// 2^32; SceneRenderer warns when dynamic resolution only receives such samples.
 		const uint32_t timestampBits = impl.PhysicalDevice.getQueueFamilyProperties()[impl.GraphicsQueueFamily].timestampValidBits;
-		m_TimerQueriesSupported = timestampBits >= 32 && deviceProperties.limits.timestampPeriod > 0.0f;
-		if (!m_TimerQueriesSupported)
-			BS_CORE_WARN("GraphicsDevice: GPU timer queries are unavailable ({} valid timestamp bits); GPU timings and dynamic resolution are disabled", timestampBits);
+		const float timestampPeriod = deviceProperties.limits.timestampPeriod;
+		m_TimerQueriesSupported = timestampBits >= 32 && timestampPeriod > 0.0f;
+		if (m_TimerQueriesSupported)
+			BS_CORE_INFO("GraphicsDevice: GPU timer queries available ({} valid timestamp bits, {} ns per tick)", timestampBits, timestampPeriod);
+		else
+			BS_CORE_WARN("GraphicsDevice: GPU timer queries are unavailable ({} valid timestamp bits, {} ns per tick; need at least 32 bits and a positive period); GPU timings and dynamic resolution are disabled", timestampBits, timestampPeriod);
 
 		// --- Logical device ---------------------------------------------------------------------
 		const auto deviceExtensions = impl.PhysicalDevice.enumerateDeviceExtensionProperties();

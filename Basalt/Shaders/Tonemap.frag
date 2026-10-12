@@ -1,4 +1,5 @@
 #version 450
+#include "RenderArea.glsl"
 
 // HDR -> display: resampling to the output size, exposure, tonemapping operator, sRGB encoding and
 // dithering.
@@ -15,8 +16,8 @@ layout(push_constant) uniform TonemapPush
 	float Exposure;
 	uint Operator;      // 0 None, 1 Reinhard, 2 ACES, 3 AgX
 	uint DebugView;     // 0 final, 1 SSAO, 2 view-space normals, 3 depth
-	float Padding;
-	vec2 UVScale;       // render size / target size (the scene covers the targets' top-left corner)
+	float Padding;      // aligns UVScale to 8 bytes in both std430 and the C++ mirror (TonemapPush)
+	vec2 UVScale;       // render size / target size (RenderArea.glsl)
 } u_Push;
 
 layout(location = 0) in vec2 v_TexCoord;
@@ -61,10 +62,8 @@ vec3 LinearToSRGB(vec3 color)
 
 void main()
 {
-	// Kept half a texel inside the render area, so bilinear filtering never blends in texels beyond it
-	// (equivalent to clamp-to-edge addressing when the area fills the targets).
-	vec2 halfTexel = 0.5 / vec2(textureSize(sampler2D(u_HDR, u_PointClamp), 0));
-	vec2 uv = clamp(v_TexCoord * u_Push.UVScale, halfTexel, u_Push.UVScale - halfTexel);
+	// Bilinear filtering of the scaled scene must not blend in texels beyond the render area.
+	vec2 uv = ClampToRenderArea(v_TexCoord * u_Push.UVScale, u_Push.UVScale, textureSize(sampler2D(u_HDR, u_PointClamp), 0));
 
 	if (u_Push.DebugView == 1u)
 	{

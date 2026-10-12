@@ -35,10 +35,12 @@ namespace Basalt {
 		constexpr uint32_t MaxLights = 256;
 		constexpr uint64_t MaterialSetRetentionFrames = 120;
 
-		// GPU profiler passes (debug markers too), in recording order.
+		// GPU profiler passes (debug markers too), in recording order. Unscoped so the values index the
+		// profiler's pass list directly; the names below must match the order.
 		enum ScenePass : uint32_t
 		{
 			PassEnvironment, // BRDF LUT and IBL bake: only on the first frame and when the sky changes
+			PassUploads,     // per-frame buffers, plus meshes and textures streamed in for this frame
 			PassShadows,
 			PassPrepass,
 			PassSSAO,
@@ -48,12 +50,9 @@ namespace Basalt {
 			PassDebugLines,
 			PassCount
 		};
-		std::vector<std::string> ScenePassNames()
-		{
-			std::vector<std::string> names = { "Environment", "Shadows", "Prepass", "SSAO", "Lighting", "Tonemap", "OverlayDepth", "DebugLines" };
-			BS_CORE_ASSERT(names.size() == PassCount);
-			return names;
-		}
+		constexpr const char* ScenePassNames[] = { "Environment", "Uploads", "Shadows", "Prepass", "SSAO", "Lighting", "Tonemap", "OverlayDepth", "DebugLines" };
+		// A C array, not std::array<..., PassCount>, which would accept too few names (filling the rest with null).
+		static_assert(std::size(ScenePassNames) == PassCount, "one name per ScenePass");
 
 		// --- GPU data layouts (must match Basalt/Shaders/Include/Common.glsl) ------------------------
 
@@ -146,6 +145,10 @@ namespace Basalt {
 		};
 		static_assert(sizeof(BlurPush) == 32);
 
+		// The texture + sampler layout's push constants: DepthUpsample.frag's UVScale (Blit.frag ignores them).
+		constexpr uint32_t TextureSamplerPushSize = sizeof(glm::vec2);
+		static_assert(TextureSamplerPushSize == 8);
+
 		struct SkyPush
 		{
 			glm::vec4 ZenithColor;
@@ -212,7 +215,6 @@ namespace Basalt {
 	{
 		nvrhi::CommandListHandle CommandList;
 		DebugLineRenderer Lines;
-		Scope<GpuProfiler> Profiler;
 
 		// Shaders
 		nvrhi::ShaderHandle ShadowMaskedVS, ShadowMaskedPS;
@@ -296,11 +298,11 @@ namespace Basalt {
 		bool FrameSetDirty = true;
 	};
 
-	SceneRenderer::SceneRenderer(nvrhi::IDevice* device, bool gpuTimers)
+	SceneRenderer::SceneRenderer(nvrhi::IDevice* device, const SceneRendererSpecification& specification)
 		: m_Impl(CreateScope<Impl>())
 		, m_Device(device)
 		, m_Resources(CreateScope<RenderResources>(device))
-		, m_GpuTimers(gpuTimers)
+		, m_Profiler(CreateScope<GpuProfiler>(device, std::vector<std::string>(std::begin(ScenePassNames), std::end(ScenePassNames)), specification.GpuTimers))
 	{
 	}
 
@@ -315,7 +317,6 @@ namespace Basalt {
 		Impl& impl = *m_Impl;
 		nvrhi::IDevice* device = m_Device;
 		impl.CommandList = device->createCommandList();
-		impl.Profiler = CreateScope<GpuProfiler>(device, ScenePassNames(), m_GpuTimers);
 
 		// --- Shaders ------------------------------------------------------------------------------
 		impl.MeshVS = CreateEmbeddedShader(device, "Mesh.vert", nvrhi::ShaderType::Vertex);
@@ -409,7 +410,7 @@ namespace Basalt {
 
 		nvrhi::BindingLayoutDesc textureSamplerDesc = MakeLayout(0, nvrhi::ShaderType::Pixel);
 		textureSamplerDesc.bindings = {
-			nvrhi::BindingLayoutItem::PushConstants(0, 8),
+			nvrhi::BindingLayoutItem::PushConstants(0, TextureSamplerPushSize),
 			nvrhi::BindingLayoutItem::Texture_SRV(0),
 			nvrhi::BindingLayoutItem::Sampler(1),
 		};
@@ -574,37 +575,49 @@ namespace Basalt {
 	{
 		// Applied by the next SetViewportSize or Render, so setting size and scale in either order reallocates
 		// the targets once.
-		m_RenderScale = std::isfinite(scale) ? std::clamp(scale, MinRenderScale, MaxRenderScale) : 1.0f;
+		const float clamped = std::isfinite(scale) ? std::clamp(scale, MinRenderScale, MaxRenderScale) : 1.0f;
+		if (clamped == m_RenderScale)
+			return;
+		m_RenderScale = clamped;
+		CheckDynamicResolution();
 	}
 
 	void SceneRenderer::SetDynamicResolution(const DynamicResolutionSettings& settings)
 	{
-		if (settings == m_DynamicResolution)
+		const DynamicResolutionSettings sanitized = SanitizeDynamicResolution(settings);
+		if (sanitized == m_DynamicResolution)
 			return;
-		m_DynamicResolution = settings;
-		// Measurements under other settings say nothing about the new budget.
-		m_DynamicController.Reset(m_RenderScale);
-		if (settings.Enabled && !HasGpuTimers() && !m_WarnedNoGpuTimers)
+		// Turning it on starts from the render scale. A new budget or minimum keeps the current scale (jumping
+		// back to the highest scale would cost slow frames until samples arrive) but not the old costs.
+		if (sanitized.Enabled != m_DynamicResolution.Enabled)
+			m_DynamicController.Reset(m_RenderScale);
+		else
+			m_DynamicController.ForgetHistory();
+		m_DynamicResolution = sanitized;
+		CheckDynamicResolution();
+	}
+
+	void SceneRenderer::CheckDynamicResolution()
+	{
+		if (!m_DynamicResolution.Enabled)
+			return;
+		if (!HasGpuTimers())
 		{
-			BS_CORE_WARN("SceneRenderer: dynamic resolution needs GPU timer queries, which this renderer does not have; rendering at the fixed render scale");
+			if (!m_WarnedNoGpuTimers)
+				BS_CORE_WARN("SceneRenderer: dynamic resolution needs GPU timer queries, which this renderer does not have (see the GraphicsDevice/GpuProfiler log); rendering at the fixed render scale");
 			m_WarnedNoGpuTimers = true;
+			return;
 		}
+		const bool emptyRange = m_DynamicResolution.MinScale >= m_RenderScale;
+		if (emptyRange && !m_WarnedEmptyRange)
+			BS_CORE_WARN("SceneRenderer: dynamic resolution has nothing to adjust: its minimum render scale ({}) is not below the render scale ({})", m_DynamicResolution.MinScale, m_RenderScale);
+		m_WarnedEmptyRange = emptyRange;
 	}
 
 	bool SceneRenderer::IsDynamicResolutionActive() const
 	{
-		return m_DynamicResolution.Enabled && HasGpuTimers();
-	}
-
-	bool SceneRenderer::HasGpuTimers() const
-	{
-		return m_Impl->Profiler && m_Impl->Profiler->IsEnabled();
-	}
-
-	const GpuTimings& SceneRenderer::GetGpuTimings() const
-	{
-		static const GpuTimings s_None;
-		return m_Impl->Profiler ? m_Impl->Profiler->GetTimings() : s_None;
+		// An empty scale range would only cost the dynamic targets' resampling and overlay depth pass.
+		return m_DynamicResolution.Enabled && HasGpuTimers() && m_DynamicResolution.MinScale < m_RenderScale;
 	}
 
 	void SceneRenderer::UpdateRenderSize(const std::optional<GpuFrameSample>& sample)
@@ -612,26 +625,39 @@ namespace Basalt {
 		float scale = m_RenderScale;
 		if (IsDynamicResolutionActive())
 		{
-			const float minScale = m_DynamicResolution.MinRenderScale;
-			if (sample)
+			const float minScale = m_DynamicResolution.MinScale;
+			if (sample && m_StaleSamples > 0)
 			{
-				// The environment bake runs once per sky change; no resolution would absorb it.
-				const float milliseconds = sample->FrameMilliseconds - sample->PassMilliseconds[PassEnvironment];
-				const float budget = 1000.0f / std::max(m_DynamicResolution.TargetFrameRate, 1e-3f);
-				m_DynamicController.AddSample(milliseconds, sample->RenderScale, budget, minScale, m_RenderScale);
+				m_StaleSamples--;
+			}
+			else if (sample)
+			{
+				// The environment bake runs once per sky change and uploads follow asset streaming; no resolution
+				// would absorb either (a first frame full of uploads would otherwise drop to the minimum).
+				const float milliseconds = sample->MillisecondsWithout({ PassEnvironment, PassUploads });
+				const float budget = 1000.0f / m_DynamicResolution.TargetFrameRate;
+				if (m_DynamicController.AddSample(milliseconds, sample->RenderScale, budget, minScale, m_RenderScale))
+				{
+					m_UnusableSamples = 0;
+				}
+				else if (++m_UnusableSamples == GpuProfiler::AverageWindow && !m_WarnedUnusableSamples)
+				{
+					// Timers that report 0 (coarse or saturating counters) would leave the scale frozen silently.
+					BS_CORE_WARN("SceneRenderer: the last {} GPU timer results were unusable ({:.3f} ms); dynamic resolution cannot adjust", m_UnusableSamples, milliseconds);
+					m_WarnedUnusableSamples = true;
+				}
 			}
 			scale = m_DynamicController.GetScale(minScale, m_RenderScale);
 		}
 		else
 		{
+			// Inactive (also when SetRenderScale emptied the range): start from the top when it becomes active.
 			m_DynamicController.Reset(m_RenderScale);
 		}
 
-		// Never larger than the targets: the targets were sized for m_RenderScale, which bounds `scale`, but
-		// ComputeRenderSize rounds each size on its own.
-		const glm::uvec2 size = ComputeRenderSize(m_Width, m_Height, scale);
-		m_RenderWidth = std::min(size.x, m_TargetWidth);
-		m_RenderHeight = std::min(size.y, m_TargetHeight);
+		const glm::uvec2 size = ComputeDynamicRenderSize(m_Width, m_Height, scale, { m_TargetWidth, m_TargetHeight });
+		m_RenderWidth = size.x;
+		m_RenderHeight = size.y;
 		m_CurrentRenderScale = scale;
 	}
 
@@ -646,6 +672,12 @@ namespace Basalt {
 
 		Impl& impl = *m_Impl;
 		m_Device->waitForIdle();
+		if (width != m_Width || height != m_Height)
+		{
+			// Costs were measured for the old viewport size, and frames still in the profiler drew into it.
+			m_DynamicController.ForgetHistory();
+			m_StaleSamples = GpuProfiler::Latency;
+		}
 		m_Width = width;
 		m_Height = height;
 		m_TargetWidth = targetSize.x;
@@ -653,6 +685,7 @@ namespace Basalt {
 		m_TargetsDynamic = dynamic;
 		m_RenderWidth = m_TargetWidth;
 		m_RenderHeight = m_TargetHeight;
+		m_CurrentRenderScale = renderScale;
 		// Dynamic resolution can render below the target size at any time, so it always resamples.
 		const bool scaled = dynamic || m_TargetWidth != m_Width || m_TargetHeight != m_Height;
 
@@ -769,13 +802,13 @@ namespace Basalt {
 														 .addItem(nvrhi::BindingSetItem::Sampler(5, scaled ? impl.LinearClamp : impl.PointClamp)),
 													 impl.TonemapLayout);
 		impl.DepthUpsampleSet = scaled ? m_Device->createBindingSet(nvrhi::BindingSetDesc()
-																		.addItem(nvrhi::BindingSetItem::PushConstants(0, 8))
+																		.addItem(nvrhi::BindingSetItem::PushConstants(0, TextureSamplerPushSize))
 																		.addItem(nvrhi::BindingSetItem::Texture_SRV(0, m_DepthTexture))
 																		.addItem(nvrhi::BindingSetItem::Sampler(1, impl.PointClamp)),
 																	impl.TextureSamplerLayout)
 									   : nullptr;
 		impl.BlitSet = m_Device->createBindingSet(nvrhi::BindingSetDesc()
-													  .addItem(nvrhi::BindingSetItem::PushConstants(0, 8))
+													  .addItem(nvrhi::BindingSetItem::PushConstants(0, TextureSamplerPushSize))
 													  .addItem(nvrhi::BindingSetItem::Texture_SRV(0, m_OutputTexture))
 													  .addItem(nvrhi::BindingSetItem::Sampler(1, impl.LinearClamp)),
 												  impl.TextureSamplerLayout);
@@ -790,7 +823,7 @@ namespace Basalt {
 
 		nvrhi::ICommandList* commandList = impl.CommandList;
 		commandList->open();
-		GpuProfiler& profiler = *impl.Profiler;
+		GpuProfiler& profiler = *m_Profiler;
 		UpdateRenderSize(profiler.BeginFrame(commandList));
 		impl.FrameCounter++;
 		m_Statistics = {};
@@ -865,8 +898,9 @@ namespace Basalt {
 			bakeKey += "|sky|" + std::to_string(quantized.x) + "," + std::to_string(quantized.y) + "," + std::to_string(quantized.z);
 		}
 		const bool bakeEnvironment = bakeKey != impl.EnvironmentKey || !impl.Env.Cube;
+		std::optional<GpuPassScope> environmentPass;
 		if (!impl.BrdfLutReady || bakeEnvironment)
-			profiler.BeginPass(commandList, PassEnvironment);
+			environmentPass.emplace(profiler, commandList, PassEnvironment);
 
 		// --- BRDF LUT (once) ----------------------------------------------------------------------
 		if (!impl.BrdfLutReady)
@@ -882,8 +916,6 @@ namespace Basalt {
 			commandList->setPushConstants(&unused, sizeof(unused));
 			commandList->dispatch((BRDFLutSize + 7) / 8, (BRDFLutSize + 7) / 8, 1);
 			impl.BrdfLutReady = true;
-			if (!bakeEnvironment)
-				profiler.EndPass(commandList, PassEnvironment);
 		}
 
 		if (bakeEnvironment)
@@ -984,8 +1016,8 @@ namespace Basalt {
 				commandList->setPushConstants(&push, sizeof(SkyPush));
 				commandList->dispatch((size + 7) / 8, (size + 7) / 8, 6);
 			}
-			profiler.EndPass(commandList, PassEnvironment);
 		}
+		environmentPass.reset();
 
 		// --- Camera, cascades and view constants --------------------------------------------------
 		GpuViewConstants view{};
@@ -1069,6 +1101,9 @@ namespace Basalt {
 			}
 		}
 
+		// Meshes and textures stream in while the draw list is built; with the per-frame buffers they form the
+		// Uploads pass, which dynamic resolution leaves out (no resolution would absorb a burst of uploads).
+		std::optional<GpuPassScope> uploadsPass(std::in_place, profiler, commandList, PassUploads);
 		commandList->writeBuffer(impl.ViewConstantsBuffer, &view, sizeof(view));
 
 		// --- Draw list ----------------------------------------------------------------------------
@@ -1242,6 +1277,7 @@ namespace Basalt {
 													   impl.FrameLayout);
 			impl.FrameSetDirty = false;
 		}
+		uploadsPass.reset();
 
 		// The scene targets can be larger than this frame's render area (dynamic resolution), so their passes use
 		// the render size; shadow maps use their own.
@@ -1267,44 +1303,60 @@ namespace Basalt {
 			commandList->drawIndexed(args);
 		};
 
+		// Fullscreen triangle with one binding set and optional push constants.
+		auto fullscreen = [&](nvrhi::IGraphicsPipeline* pipeline, nvrhi::IFramebuffer* framebuffer, nvrhi::IBindingSet* set, const nvrhi::Viewport& viewport, const void* push, size_t pushSize) {
+			nvrhi::GraphicsState state;
+			state.pipeline = pipeline;
+			state.framebuffer = framebuffer;
+			state.bindings = { set };
+			state.viewport.addViewportAndScissorRect(viewport);
+			commandList->setGraphicsState(state);
+			if (push)
+				commandList->setPushConstants(push, pushSize);
+			commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
+		};
+		const nvrhi::Viewport outputViewport(static_cast<float>(m_Width), static_cast<float>(m_Height));
+
 		// --- Shadow maps --------------------------------------------------------------------------
-		profiler.BeginPass(commandList, PassShadows);
-		commandList->clearDepthStencilTexture(impl.ShadowMap, nvrhi::AllSubresources, true, 1.0f, false, 0);
-		if (shadowsActive)
 		{
-			for (uint32_t cascade = 0; cascade < MaxCascades; cascade++)
+			const GpuPassScope pass(profiler, commandList, PassShadows);
+			commandList->clearDepthStencilTexture(impl.ShadowMap, nvrhi::AllSubresources, true, 1.0f, false, 0);
+			if (shadowsActive)
 			{
-				for (const DrawItem& item : items)
+				for (uint32_t cascade = 0; cascade < MaxCascades; cascade++)
 				{
-					if (!item.CastShadows || !cascadeFrusta[cascade].Intersects(item.ShadowBounds))
-						continue;
-					if (item.AlphaTested)
-						drawItem(item, impl.ShadowMaskedPipeline, impl.ShadowFramebuffers[cascade], shadowViewport, cascade, true);
-					else
-						drawItem(item, impl.ShadowPipeline, impl.ShadowFramebuffers[cascade], shadowViewport, cascade, false);
-					m_Statistics.ShadowDrawCalls++;
+					for (const DrawItem& item : items)
+					{
+						if (!item.CastShadows || !cascadeFrusta[cascade].Intersects(item.ShadowBounds))
+							continue;
+						if (item.AlphaTested)
+							drawItem(item, impl.ShadowMaskedPipeline, impl.ShadowFramebuffers[cascade], shadowViewport, cascade, true);
+						else
+							drawItem(item, impl.ShadowPipeline, impl.ShadowFramebuffers[cascade], shadowViewport, cascade, false);
+						m_Statistics.ShadowDrawCalls++;
+					}
 				}
 			}
 		}
-		profiler.EndPass(commandList, PassShadows);
 
 		// --- Depth/normal prepass (opaque, visible) -----------------------------------------------
-		// Clears cover the whole targets, also outside a dynamic-resolution render area; nothing reads there.
-		profiler.BeginPass(commandList, PassPrepass);
-		commandList->clearDepthStencilTexture(m_DepthTexture, nvrhi::AllSubresources, true, 1.0f, false, 0);
-		commandList->clearTextureFloat(impl.NormalTexture, nvrhi::AllSubresources, nvrhi::Color(0.0f, 0.0f, 1.0f, 0.0f));
-		for (const DrawItem& item : items)
 		{
-			if (item.Blend || !item.WorldBounds.IsValid())
-				continue;
-			drawItem(item, impl.PrepassPipeline[item.DoubleSided ? 1 : 0], impl.PrepassFramebuffer, renderViewport, 0, true);
+			const GpuPassScope pass(profiler, commandList, PassPrepass);
+			// Clears cover the whole targets, also outside a dynamic-resolution render area; nothing reads there.
+			commandList->clearDepthStencilTexture(m_DepthTexture, nvrhi::AllSubresources, true, 1.0f, false, 0);
+			commandList->clearTextureFloat(impl.NormalTexture, nvrhi::AllSubresources, nvrhi::Color(0.0f, 0.0f, 1.0f, 0.0f));
+			for (const DrawItem& item : items)
+			{
+				if (item.Blend || !item.WorldBounds.IsValid())
+					continue;
+				drawItem(item, impl.PrepassPipeline[item.DoubleSided ? 1 : 0], impl.PrepassFramebuffer, renderViewport, 0, true);
+			}
 		}
-		profiler.EndPass(commandList, PassPrepass);
 
 		// --- SSAO ---------------------------------------------------------------------------------
 		if (settings.SSAOEnabled)
 		{
-			profiler.BeginPass(commandList, PassSSAO);
+			const GpuPassScope pass(profiler, commandList, PassSSAO);
 			impl.SsaoConstants.Projection = camera.Projection;
 			impl.SsaoConstants.InverseProjection = view.InverseProjection;
 			impl.SsaoConstants.Params = glm::vec4(settings.SSAORadius, settings.SSAOBias, settings.SSAOIntensity, static_cast<float>(SSAOKernelSize));
@@ -1312,81 +1364,62 @@ namespace Basalt {
 			impl.SsaoConstants.UVScale = glm::vec4(uvScale, 0.0f, 0.0f);
 			commandList->writeBuffer(impl.SsaoConstantsBuffer, &impl.SsaoConstants, sizeof(GpuSSAOConstants));
 
-			auto fullscreen = [&](nvrhi::IGraphicsPipeline* pipeline, nvrhi::IFramebuffer* framebuffer, nvrhi::IBindingSet* set, const void* push, size_t pushSize) {
-				nvrhi::GraphicsState state;
-				state.pipeline = pipeline;
-				state.framebuffer = framebuffer;
-				state.bindings = { set };
-				state.viewport.addViewportAndScissorRect(renderViewport);
-				commandList->setGraphicsState(state);
-				if (push)
-					commandList->setPushConstants(push, pushSize);
-				commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
-			};
-			fullscreen(impl.SsaoPipeline, impl.SsaoFramebuffer, impl.SsaoSet, nullptr, 0);
-			// Steps of one target texel.
+			fullscreen(impl.SsaoPipeline, impl.SsaoFramebuffer, impl.SsaoSet, renderViewport, nullptr, 0);
 			const float orthographic = IsOrthographic(camera.Projection) ? 1.0f : 0.0f;
-			const BlurPush horizontal{ { 1.0f / static_cast<float>(m_TargetWidth), 0.0f }, camera.Near, camera.Far, orthographic, 0.0f, uvScale };
-			fullscreen(impl.SsaoBlurPipeline, impl.SsaoBlurFramebuffer, impl.BlurHorizontalSet, &horizontal, sizeof(horizontal));
-			const BlurPush vertical{ { 0.0f, 1.0f / static_cast<float>(m_TargetHeight) }, camera.Near, camera.Far, orthographic, 0.0f, uvScale };
-			fullscreen(impl.SsaoBlurPipeline, impl.SsaoFramebuffer, impl.BlurVerticalSet, &vertical, sizeof(vertical));
-			profiler.EndPass(commandList, PassSSAO);
+			// Blur steps are one target texel: the targets, not the render area, set the texel size.
+			BlurPush blur{ { 1.0f / static_cast<float>(m_TargetWidth), 0.0f }, camera.Near, camera.Far, orthographic, 0.0f, uvScale };
+			fullscreen(impl.SsaoBlurPipeline, impl.SsaoBlurFramebuffer, impl.BlurHorizontalSet, renderViewport, &blur, sizeof(blur));
+			blur.Direction = { 0.0f, 1.0f / static_cast<float>(m_TargetHeight) };
+			fullscreen(impl.SsaoBlurPipeline, impl.SsaoFramebuffer, impl.BlurVerticalSet, renderViewport, &blur, sizeof(blur));
 		}
 
 		// --- Lighting (opaque), skybox, transparent -----------------------------------------------
-		profiler.BeginPass(commandList, PassLighting);
-		commandList->clearTextureFloat(impl.HdrTexture, nvrhi::AllSubresources, nvrhi::Color(0.0f, 0.0f, 0.0f, 1.0f));
-		for (const DrawItem& item : items)
 		{
-			if (item.Blend || !item.WorldBounds.IsValid())
-				continue;
-			drawItem(item, impl.OpaquePipeline[item.DoubleSided ? 1 : 0], impl.LightingFramebuffer, renderViewport, 0, true);
-			m_Statistics.DrawCalls++;
-		}
+			const GpuPassScope pass(profiler, commandList, PassLighting);
+			commandList->clearTextureFloat(impl.HdrTexture, nvrhi::AllSubresources, nvrhi::Color(0.0f, 0.0f, 0.0f, 1.0f));
+			for (const DrawItem& item : items)
+			{
+				if (item.Blend || !item.WorldBounds.IsValid())
+					continue;
+				drawItem(item, impl.OpaquePipeline[item.DoubleSided ? 1 : 0], impl.LightingFramebuffer, renderViewport, 0, true);
+				m_Statistics.DrawCalls++;
+			}
 
-		if (!skyLight || skyLight->ShowBackground)
-		{
-			nvrhi::GraphicsState state;
-			state.pipeline = impl.SkyboxPipeline;
-			state.framebuffer = impl.LightingFramebuffer;
-			state.bindings = { impl.FrameSet };
-			state.viewport.addViewportAndScissorRect(renderViewport);
-			commandList->setGraphicsState(state);
-			const DrawPush push{ 0, 0 };
-			commandList->setPushConstants(&push, sizeof(push));
-			commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
-		}
+			if (!skyLight || skyLight->ShowBackground)
+			{
+				nvrhi::GraphicsState state;
+				state.pipeline = impl.SkyboxPipeline;
+				state.framebuffer = impl.LightingFramebuffer;
+				state.bindings = { impl.FrameSet };
+				state.viewport.addViewportAndScissorRect(renderViewport);
+				commandList->setGraphicsState(state);
+				const DrawPush push{ 0, 0 };
+				commandList->setPushConstants(&push, sizeof(push));
+				commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
+			}
 
-		std::vector<const DrawItem*>& transparent = impl.Transparent;
-		transparent.clear();
-		for (const DrawItem& item : items)
-		{
-			if (item.Blend && item.WorldBounds.IsValid())
-				transparent.push_back(&item);
+			std::vector<const DrawItem*>& transparent = impl.Transparent;
+			transparent.clear();
+			for (const DrawItem& item : items)
+			{
+				if (item.Blend && item.WorldBounds.IsValid())
+					transparent.push_back(&item);
+			}
+			// Stable: items at equal depth keep submission order, so a scene always renders the same image.
+			// NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order): ordered by depth, not by address.
+			std::stable_sort(transparent.begin(), transparent.end(), [](const DrawItem* a, const DrawItem* b) { return a->ViewDepth > b->ViewDepth; });
+			for (const DrawItem* item : transparent)
+			{
+				drawItem(*item, impl.TransparentPipeline[item->DoubleSided ? 1 : 0], impl.LightingFramebuffer, renderViewport, 0, true);
+				m_Statistics.DrawCalls++;
+			}
 		}
-		// Stable: items at equal depth keep submission order, so a scene always renders the same image.
-		// NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order): ordered by depth, not by address.
-		std::stable_sort(transparent.begin(), transparent.end(), [](const DrawItem* a, const DrawItem* b) { return a->ViewDepth > b->ViewDepth; });
-		for (const DrawItem* item : transparent)
-		{
-			drawItem(*item, impl.TransparentPipeline[item->DoubleSided ? 1 : 0], impl.LightingFramebuffer, renderViewport, 0, true);
-			m_Statistics.DrawCalls++;
-		}
-		profiler.EndPass(commandList, PassLighting);
 
 		// --- Tonemap ------------------------------------------------------------------------------
 		{
-			profiler.BeginPass(commandList, PassTonemap);
-			nvrhi::GraphicsState state;
-			state.pipeline = impl.TonemapPipeline;
-			state.framebuffer = impl.OutputFramebuffer;
-			state.bindings = { impl.TonemapSet };
-			state.viewport.addViewportAndScissorRect(nvrhi::Viewport(static_cast<float>(m_Width), static_cast<float>(m_Height)));
-			commandList->setGraphicsState(state);
+			const GpuPassScope pass(profiler, commandList, PassTonemap);
 			const TonemapPush push = { settings.Exposure, static_cast<uint32_t>(settings.Tonemap), static_cast<uint32_t>(settings.DebugView), 0.0f, uvScale };
-			commandList->setPushConstants(&push, sizeof(push));
-			commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
-			profiler.EndPass(commandList, PassTonemap);
+			fullscreen(impl.TonemapPipeline, impl.OutputFramebuffer, impl.TonemapSet, outputViewport, &push, sizeof(push));
 		}
 
 		// --- Overlay depth (scaled rendering only) -------------------------------------------------
@@ -1395,30 +1428,19 @@ namespace Basalt {
 		// would be a surface that does not exist.
 		if (impl.DepthUpsamplePipeline)
 		{
-			profiler.BeginPass(commandList, PassOverlayDepth);
-			nvrhi::GraphicsState state;
-			state.pipeline = impl.DepthUpsamplePipeline;
-			state.framebuffer = impl.OverlayDepthFramebuffer;
-			state.bindings = { impl.DepthUpsampleSet };
-			state.viewport.addViewportAndScissorRect(nvrhi::Viewport(static_cast<float>(m_Width), static_cast<float>(m_Height)));
-			commandList->setGraphicsState(state);
-			commandList->setPushConstants(&uvScale, sizeof(uvScale));
-			commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
-			profiler.EndPass(commandList, PassOverlayDepth);
+			const GpuPassScope pass(profiler, commandList, PassOverlayDepth);
+			fullscreen(impl.DepthUpsamplePipeline, impl.OverlayDepthFramebuffer, impl.DepthUpsampleSet, outputViewport, &uvScale, sizeof(uvScale));
 		}
 
 		// --- Debug lines (scripts, editor gizmos) --------------------------------------------------
 		const std::vector<DebugLineVertex> lines = DebugDraw::TakeLines();
 		if (!lines.empty())
 		{
-			profiler.BeginPass(commandList, PassDebugLines);
+			const GpuPassScope pass(profiler, commandList, PassDebugLines);
 			impl.Lines.Render(commandList, m_OverlayFramebuffer, view.ViewProjection, lines);
-			profiler.EndPass(commandList, PassDebugLines);
 		}
 
-		// The pixel ratio, not the requested scale: rounding the sizes changes the pixel count a little.
-		const float renderedScale = std::sqrt((static_cast<float>(m_RenderWidth) * static_cast<float>(m_RenderHeight)) / (static_cast<float>(m_Width) * static_cast<float>(m_Height)));
-		profiler.EndFrame(commandList, renderedScale);
+		profiler.EndFrame(commandList, ComputePixelScale({ m_RenderWidth, m_RenderHeight }, { m_Width, m_Height }));
 		commandList->close();
 		m_Device->executeCommandList(commandList);
 
@@ -1454,8 +1476,8 @@ namespace Basalt {
 		state.bindings = { impl.BlitSet };
 		state.viewport.addViewportAndScissorRect(nvrhi::Viewport(static_cast<float>(info.width), static_cast<float>(info.height)));
 		commandList->setGraphicsState(state);
-		const uint32_t unused[2] = {};
-		commandList->setPushConstants(unused, sizeof(unused));
+		const glm::vec2 unused(0.0f);
+		commandList->setPushConstants(&unused, TextureSamplerPushSize);
 		commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
 	}
 

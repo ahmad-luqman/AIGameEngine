@@ -53,13 +53,15 @@ namespace Basalt {
 		nlohmann::json passes = nlohmann::json::array();
 		for (const GpuPassTiming& pass : timings.Passes)
 			passes.push_back({ { "name", pass.Name }, { "ms", pass.Milliseconds } });
-		return { { "frames", timings.SampleCount }, { "frameMs", timings.FrameMilliseconds }, { "passes", std::move(passes) } };
+		return { { "frames", timings.SampleCount }, { "droppedFrames", timings.DroppedFrames }, { "frameMs", timings.FrameMilliseconds }, { "passes", std::move(passes) } };
 	}
 
-	std::string FormatGpuTimings(const GpuTimings& timings)
+	std::string FormatGpuTimings(const GpuTimings& timings, bool timersAvailable)
 	{
+		if (!timersAvailable)
+			return "unavailable (no GPU timer queries)";
 		if (timings.SampleCount == 0)
-			return "no GPU timings (timer queries unavailable, or no frame has finished yet)";
+			return fmt::format("not available yet: no GPU timer results arrived ({} frames dropped)", timings.DroppedFrames);
 		std::string text = fmt::format("{:.2f} ms over {} frames (", timings.FrameMilliseconds, timings.SampleCount);
 		for (size_t i = 0; i < timings.Passes.size(); i++)
 			text += fmt::format("{}{} {:.2f}", i == 0 ? "" : ", ", timings.Passes[i].Name, timings.Passes[i].Milliseconds);
@@ -77,7 +79,10 @@ namespace Basalt {
 			{ "renderSize", { renderer.GetRenderWidth(), renderer.GetRenderHeight() } },
 			{ "renderScale", renderer.GetRenderScale() },
 			{ "currentRenderScale", renderer.GetCurrentRenderScale() },
-			{ "dynamicResolution", { { "enabled", dynamic.Enabled }, { "active", renderer.IsDynamicResolutionActive() }, { "targetFrameRate", dynamic.TargetFrameRate }, { "minRenderScale", dynamic.MinRenderScale } } },
+			{ "dynamicResolution", dynamic.Enabled },
+			{ "dynamicResolutionActive", renderer.IsDynamicResolutionActive() },
+			{ "targetFrameRate", dynamic.TargetFrameRate },
+			{ "minRenderScale", dynamic.MinScale },
 			{ "drawCalls", statistics.DrawCalls },
 			{ "shadowDrawCalls", statistics.ShadowDrawCalls },
 			{ "culledSubmeshes", statistics.CulledSubmeshes },

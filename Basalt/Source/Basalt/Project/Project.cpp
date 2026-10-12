@@ -11,6 +11,23 @@
 
 namespace Basalt {
 
+	namespace {
+
+		// Reads an optional number in [min, max] into `value`; false (with outError) when the key is present but
+		// not such a number.
+		bool ReadBoundedFloat(const nlohmann::json& data, const char* key, float min, float max, float& value, const std::filesystem::path& filePath, std::string& outError)
+		{
+			const auto it = data.find(key);
+			if (it == data.end())
+				return true;
+			if (JsonToFloat(*it, value) && value >= min && value <= max)
+				return true;
+			outError = fmt::format("invalid project file '{}': {} must be a number in [{}, {}]", filePath.string(), key, min, max);
+			return false;
+		}
+
+	}
+
 	Ref<Project> Project::s_ActiveProject;
 
 	Ref<Project> Project::Create(const std::filesystem::path& directory, const std::string& name, std::string& outError)
@@ -77,37 +94,26 @@ namespace Basalt {
 			config.WindowWidth = data.value("WindowWidth", config.WindowWidth);
 			config.WindowHeight = data.value("WindowHeight", config.WindowHeight);
 			config.Fullscreen = data.value("Fullscreen", config.Fullscreen);
-			config.DynamicResolution.Enabled = data.value("DynamicResolution", config.DynamicResolution.Enabled);
 		}
 		catch (const nlohmann::json::exception& e)
 		{
 			outError = "invalid project file '" + filePath.string() + "': " + e.what();
 			return nullptr;
 		}
-		if (const auto renderScale = data.find("RenderScale"); renderScale != data.end())
+		if (const auto dynamic = data.find("DynamicResolution"); dynamic != data.end())
 		{
-			if (!JsonToFloat(*renderScale, config.RenderScale) || config.RenderScale < MinRenderScale || config.RenderScale > MaxRenderScale)
+			// Named explicitly: nlohmann's type error would not say which key is wrong.
+			if (!dynamic->is_boolean())
 			{
-				outError = fmt::format("invalid project file '{}': RenderScale must be a number in [{}, {}]", filePath.string(), MinRenderScale, MaxRenderScale);
+				outError = fmt::format("invalid project file '{}': DynamicResolution must be true or false (TargetFrameRate and MinRenderScale are separate keys)", filePath.string());
 				return nullptr;
 			}
+			config.DynamicResolution.Enabled = dynamic->get<bool>();
 		}
-		if (const auto targetFrameRate = data.find("TargetFrameRate"); targetFrameRate != data.end())
-		{
-			if (!JsonToFloat(*targetFrameRate, config.DynamicResolution.TargetFrameRate) || config.DynamicResolution.TargetFrameRate < MinTargetFrameRate || config.DynamicResolution.TargetFrameRate > MaxTargetFrameRate)
-			{
-				outError = fmt::format("invalid project file '{}': TargetFrameRate must be a number in [{}, {}]", filePath.string(), MinTargetFrameRate, MaxTargetFrameRate);
-				return nullptr;
-			}
-		}
-		if (const auto minRenderScale = data.find("MinRenderScale"); minRenderScale != data.end())
-		{
-			if (!JsonToFloat(*minRenderScale, config.DynamicResolution.MinRenderScale) || config.DynamicResolution.MinRenderScale < MinRenderScale || config.DynamicResolution.MinRenderScale > MaxRenderScale)
-			{
-				outError = fmt::format("invalid project file '{}': MinRenderScale must be a number in [{}, {}]", filePath.string(), MinRenderScale, MaxRenderScale);
-				return nullptr;
-			}
-		}
+		if (!ReadBoundedFloat(data, "RenderScale", MinRenderScale, MaxRenderScale, config.RenderScale, filePath, outError) ||
+			!ReadBoundedFloat(data, "TargetFrameRate", MinTargetFrameRate, MaxTargetFrameRate, config.DynamicResolution.TargetFrameRate, filePath, outError) ||
+			!ReadBoundedFloat(data, "MinRenderScale", MinRenderScale, MaxRenderScale, config.DynamicResolution.MinScale, filePath, outError))
+			return nullptr;
 		if (const auto layers = data.find("PhysicsLayers"); layers != data.end())
 		{
 			std::string layerError;
@@ -134,7 +140,7 @@ namespace Basalt {
 			{ "RenderScale", m_Config.RenderScale },
 			{ "DynamicResolution", m_Config.DynamicResolution.Enabled },
 			{ "TargetFrameRate", m_Config.DynamicResolution.TargetFrameRate },
-			{ "MinRenderScale", m_Config.DynamicResolution.MinRenderScale },
+			{ "MinRenderScale", m_Config.DynamicResolution.MinScale },
 			{ "PhysicsLayers", m_Config.Physics.ToJson() },
 		};
 		if (!FileSystem::WriteTextFile(GetProjectFilePath(), data.dump(1, '\t')))

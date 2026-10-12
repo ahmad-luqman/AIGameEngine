@@ -50,6 +50,23 @@ namespace Basalt {
 		return { scaled(outputWidth), scaled(outputHeight) };
 	}
 
+	// Size of a dynamic-resolution frame rendered at `scale` into targets of targetSize (sized for the render
+	// scale, the highest `scale`). ComputeRenderSize grows monotonically with the scale, so this only clips
+	// when the scale exceeds the one the targets were made for; the clip keeps the viewport inside them.
+	inline glm::uvec2 ComputeDynamicRenderSize(uint32_t outputWidth, uint32_t outputHeight, float scale, glm::uvec2 targetSize)
+	{
+		return glm::min(ComputeRenderSize(outputWidth, outputHeight, scale), targetSize);
+	}
+
+	// Effective scale of a render: sqrt(rendered pixels / output pixels). Rounding each side makes it differ
+	// slightly from the requested scale; GPU time follows the pixel count, so dynamic resolution uses this.
+	inline float ComputePixelScale(glm::uvec2 renderSize, glm::uvec2 outputSize)
+	{
+		const double rendered = static_cast<double>(renderSize.x) * renderSize.y;
+		const double output = std::max(static_cast<double>(outputSize.x) * outputSize.y, 1.0);
+		return static_cast<float>(std::sqrt(rendered / output));
+	}
+
 	// View-space distances at which shadow cascades end, covering [near, shadowFar]. Perspective cameras use
 	// the practical split scheme (lambda blends logarithmic and uniform splits); orthographic cameras and
 	// cameras with a non-positive near plane use uniform splits (the logarithm is undefined there).
