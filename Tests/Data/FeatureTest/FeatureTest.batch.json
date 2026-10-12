@@ -9,6 +9,8 @@
 	{ "id": "run", "command": "play.step", "params": { "frames": 169, "assertNoErrors": true } },
 	{ "id": "report", "command": "lua.exec", "params": { "code": "FeatureTest.Report()" } },
 	{ "id": "stop", "command": "play.stop" },
+	{ "id": "render-scale-info", "command": "project.info" },
+	{ "id": "render-scale-range", "command": "project.set", "params": { "renderScale": 4 }, "expectError": "'renderScale' must be in" },
 	{ "id": "image-same", "command": "image.compare", "params": { "actual": "Assets/Textures/Checker.png", "reference": "Assets/Textures/Checker.png", "assertMatch": true } },
 	{ "id": "hash", "command": "scene.hash" },
 	{ "id": "record", "command": "replay.record_start" },

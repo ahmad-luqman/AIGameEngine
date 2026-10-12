@@ -44,15 +44,20 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	file(MAKE_DIRECTORY "${basaltGoldenOutput}")
 
 	set(basaltGpuTests "")
-	foreach(view Lit SSAO Normals Depth)
+	# "Scaled" is the lit image rendered at half resolution and upsampled by the tonemap pass (render scale).
+	foreach(view Lit SSAO Normals Depth Scaled)
 		set(debugView ${view})
 		set(renderTest FeatureTestRender_${view})
+		set(extraArgs "")
 		if(view STREQUAL "Lit")
 			set(debugView None)
 			set(renderTest FeatureTestRender)
+		elseif(view STREQUAL "Scaled")
+			set(debugView None)
+			set(extraArgs --render-scale 0.5)
 		endif()
 		add_test(NAME ${renderTest}
-			COMMAND BasaltRuntime ${basaltRenderArgs} --offscreen --debug-view ${debugView} --screenshot "${basaltGoldenOutput}/FeatureTest_${view}.png")
+			COMMAND BasaltRuntime ${basaltRenderArgs} --offscreen --debug-view ${debugView} ${extraArgs} --screenshot "${basaltGoldenOutput}/FeatureTest_${view}.png")
 		set_tests_properties(${renderTest} PROPERTIES FIXTURES_SETUP Render${view})
 		list(APPEND basaltGpuTests ${renderTest})
 

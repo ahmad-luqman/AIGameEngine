@@ -1,11 +1,14 @@
 #version 450
 
-// HDR -> display: exposure, tonemapping operator, sRGB encoding and dithering.
+// HDR -> display: resampling to the output size, exposure, tonemapping operator, sRGB encoding and
+// dithering.
 layout(set = 0, binding = 0) uniform texture2D u_HDR;
 layout(set = 0, binding = 1) uniform sampler u_PointClamp;
 layout(set = 0, binding = 2) uniform texture2D u_SSAO;
 layout(set = 0, binding = 3) uniform texture2D u_Normals;
 layout(set = 0, binding = 4) uniform texture2D u_Depth;
+// Linear when the scene renders at a different size than the output (render scale), point otherwise.
+layout(set = 0, binding = 5) uniform sampler u_ColorSampler;
 
 layout(push_constant) uniform TonemapPush
 {
@@ -73,7 +76,7 @@ void main()
 		return;
 	}
 
-	vec3 color = textureLod(sampler2D(u_HDR, u_PointClamp), v_TexCoord, 0.0).rgb * u_Push.Exposure;
+	vec3 color = textureLod(sampler2D(u_HDR, u_ColorSampler), v_TexCoord, 0.0).rgb * u_Push.Exposure;
 	if (u_Push.Operator == 1u)
 		color = color / (1.0 + color);
 	else if (u_Push.Operator == 2u)

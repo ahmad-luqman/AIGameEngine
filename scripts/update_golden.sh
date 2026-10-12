@@ -24,7 +24,7 @@ ctest --test-dir "$buildDir" --output-on-failure -R '^FeatureTestRender(_[A-Za-z
 
 target="Tests/Data/Golden/$driver"
 mkdir -p "$target"
-for view in Lit SSAO Normals Depth; do
+for view in Lit SSAO Normals Depth Scaled; do
 	cp "$buildDir/Tests/Golden/FeatureTest_$view.png" "$target/"
 done
 echo "Updated $target. Review the images, then commit them."

@@ -75,6 +75,40 @@ TEST_SUITE("Automation")
 		CHECK(responses[1]["ok"] == true);
 	}
 
+	TEST_CASE("The render scale is a validated project setting that survives save and load")
+	{
+		BasaltTest::TempProject temp("RenderScaleProject");
+		REQUIRE(temp.IsValid());
+		CommandRegistry registry;
+		AutomationSession session;
+		CHECK(Run(registry, session, "project.info")["renderScale"] == 1.0);
+		Run(registry, session, "project.set", { { "renderScale", 0.75 } });
+		CHECK(Run(registry, session, "project.info")["renderScale"] == 0.75);
+		for (const json& bad : { json(0.1), json(2.5), json("half"), json(-1) })
+		{
+			INFO(bad.dump());
+			CHECK(RunError(registry, session, "project.set", { { "renderScale", bad } }).find("renderScale") != std::string::npos);
+		}
+		CHECK(Run(registry, session, "project.info")["renderScale"] == 0.75);
+
+		std::string error;
+		const Ref<Project> loaded = Project::Load(temp.GetDirectory(), error);
+		REQUIRE(loaded);
+		CHECK(loaded->GetConfig().RenderScale == 0.75f);
+
+		// Older project files have no RenderScale: full resolution.
+		temp.WriteFile(Project::FileName, R"({"Name": "Old"})");
+		REQUIRE(Project::Load(temp.GetDirectory(), error));
+		CHECK(Project::Load(temp.GetDirectory(), error)->GetConfig().RenderScale == 1.0f);
+		for (const char* bad : { R"({"RenderScale": 0})", R"({"RenderScale": 3})", R"({"RenderScale": "1"})", R"({"RenderScale": 1e300})" })
+		{
+			INFO(bad);
+			temp.WriteFile(Project::FileName, bad);
+			CHECK_FALSE(Project::Load(temp.GetDirectory(), error));
+			CHECK(error.find("RenderScale") != std::string::npos);
+		}
+	}
+
 	TEST_CASE("Build, save, reopen and export a project through commands")
 	{
 		BasaltTest::TempProject temp("AutomationProject");

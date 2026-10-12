@@ -81,8 +81,10 @@ The features most games need, roughly in order of impact.
   strategy games).
 - **Reflection probes and SSR — L.** Local box-projected cubemap probes captured in the editor, then
   screen-space reflections for contact detail.
-- **Render scale and dynamic resolution — S.** Render at a fraction of the window size, upscale in the
-  tonemap pass.
+- **Dynamic resolution — S.** Drive `SceneRenderer::SetRenderScale` from GPU frame time to hold a target
+  frame rate. Render scale itself ships (project `RenderScale`, bilinear upsampling in the tonemap pass);
+  allocate the targets at the maximum size and render into a sub-rectangle so changes do not reallocate,
+  and consider a sharper upscaler (FSR 1 EASU/RCAS) once scales below ~0.75 are common.
 - **Decals and text in 3D — L each.**
 
 ### Scripting

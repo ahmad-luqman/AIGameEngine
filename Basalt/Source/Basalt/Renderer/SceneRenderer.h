@@ -34,7 +34,9 @@ namespace Basalt {
 	// Renders a Scene from a camera into an internal LDR image:
 	//   cascaded soft shadow maps -> depth/normal prepass -> SSAO (+ bilateral blur) -> forward PBR with
 	//   IBL (opaque) -> skybox -> transparent PBR (sorted) -> exposure + tonemapping + sRGB encode.
-	// The output texture can be shown through ImGui (editor viewport) or blitted to the swapchain.
+	// The scene renders at the viewport size times the render scale; the tonemap pass resamples it to the
+	// viewport size. The output texture can be shown through ImGui (editor viewport) or blitted to the
+	// swapchain.
 	class SceneRenderer
 	{
 	public:
@@ -50,15 +52,21 @@ namespace Basalt {
 		void SetViewportSize(uint32_t width, uint32_t height);
 		uint32_t GetViewportWidth() const { return m_Width; }
 		uint32_t GetViewportHeight() const { return m_Height; }
+		// Fraction of the viewport size the scene renders at, clamped to [MinRenderScale, MaxRenderScale]
+		// (RenderMath.h). Takes effect at the next SetViewportSize or Render, which recreate the targets.
+		void SetRenderScale(float scale);
+		float GetRenderScale() const { return m_RenderScale; }
+		uint32_t GetRenderWidth() const { return m_RenderWidth; }
+		uint32_t GetRenderHeight() const { return m_RenderHeight; }
 
 		// Records and submits all passes for one frame.
 		void Render(Scene& scene, const RenderCamera& camera);
 
-		// RGBA8 display-referred image of the last Render (shader resource state).
+		// RGBA8 display-referred image of the last Render (shader resource state), at the viewport size.
 		nvrhi::ITexture* GetOutputTexture() const { return m_OutputTexture; }
-		// Depth of the last frame (D32), useful for editor overlays drawn on the output.
+		// Scene depth of the last frame (D32), at the render size.
 		nvrhi::ITexture* GetDepthTexture() const { return m_DepthTexture; }
-		// Framebuffer with the output color and scene depth attached (for overlays).
+		// Framebuffer with the output color and the scene depth at the viewport size attached (for overlays).
 		nvrhi::IFramebuffer* GetOverlayFramebuffer() const { return m_OverlayFramebuffer; }
 
 		// Draws the output image stretched over the target framebuffer.
@@ -71,6 +79,8 @@ namespace Basalt {
 		RenderResources& GetResources() { return *m_Resources; }
 
 	private:
+		void ResizeTargets(uint32_t width, uint32_t height, float renderScale);
+
 		struct Impl;
 		Scope<Impl> m_Impl;
 		nvrhi::IDevice* m_Device = nullptr;
@@ -78,6 +88,9 @@ namespace Basalt {
 
 		uint32_t m_Width = 0;
 		uint32_t m_Height = 0;
+		float m_RenderScale = 1.0f;
+		uint32_t m_RenderWidth = 0;
+		uint32_t m_RenderHeight = 0;
 		nvrhi::TextureHandle m_OutputTexture;
 		nvrhi::TextureHandle m_DepthTexture;
 		nvrhi::FramebufferHandle m_OverlayFramebuffer;

@@ -2,6 +2,7 @@
 #include "Basalt/Core/EntryPoint.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Project/Project.h"
+#include "Basalt/Renderer/RenderMath.h"
 
 #include "RuntimeLayer.h"
 
@@ -20,7 +21,7 @@ namespace Basalt {
 
 	Application* CreateApplication(ApplicationCommandLineArgs args)
 	{
-		const CommandLine commandLine(args.Count, args.Args, { "project", "scene", "frames", "screenshot", "width", "height", "debug-view", "gpu" });
+		const CommandLine commandLine(args.Count, args.Args, { "project", "scene", "frames", "screenshot", "width", "height", "debug-view", "gpu", "render-scale" });
 		for (const std::string& error : commandLine.GetErrors())
 			BS_CORE_ERROR("{}", error);
 
@@ -54,6 +55,17 @@ namespace Basalt {
 			// An error, not a warning: a typo would otherwise silently test the lit image instead.
 			BS_CORE_CRITICAL("Unknown --debug-view '{}' (valid: None, SSAO, Normals, Depth)", debugView);
 			return nullptr;
+		}
+		options.RenderScale = project->GetConfig().RenderScale;
+		if (commandLine.GetValue("render-scale"))
+		{
+			const auto renderScale = commandLine.GetFloat("render-scale");
+			if (!renderScale || *renderScale < MinRenderScale || *renderScale > MaxRenderScale)
+			{
+				BS_CORE_CRITICAL("--render-scale must be a number in [{}, {}]", MinRenderScale, MaxRenderScale);
+				return nullptr;
+			}
+			options.RenderScale = *renderScale;
 		}
 
 		ApplicationSpecification specification;
