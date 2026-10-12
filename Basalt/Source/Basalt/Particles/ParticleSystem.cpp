@@ -342,10 +342,15 @@ namespace Basalt {
 			const ParticleEmitterComponent component = ReadComponent(emitter);
 			const glm::mat4 transform = m_Scene->GetWorldTransform(Entity(emitter.Handle, m_Scene));
 
-			// A smaller MaxParticles (set during play) takes effect at once.
+			// A smaller MaxParticles (set during play) takes effect at once. The trim removes the newest
+			// particles, so the fresh ones (last) go first.
 			if (emitter.Particles.size() > component.MaxParticles)
+			{
+				const size_t removed = emitter.Particles.size() - component.MaxParticles;
+				emitter.FreshCount -= std::min(emitter.FreshCount, removed);
 				emitter.Particles.resize(component.MaxParticles);
-			emitter.FreshCount = std::min(emitter.FreshCount, emitter.Particles.size());
+			}
+			BS_CORE_ASSERT(emitter.FreshCount <= emitter.Particles.size(), "fresh particles are a suffix of the particles");
 
 			glm::vec3 gravity = m_Scene->GetPhysicsSettings().Gravity * component.GravityScale;
 			// Local particles are drawn through the emitter's transform, so world gravity is expressed in its

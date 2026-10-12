@@ -1090,7 +1090,11 @@ TEST_SUITE("Scripting")
 		// Seeds are 32-bit: 2^32 + 12 seeds like 12.
 		REQUIRE(lua.ExecuteString("math.randomseed(4294967308) return math.random(1000000)", result));
 		CHECK(result == seeded);
-		for (const char* call : { "math.randomseed('abc')", "math.randomseed(1.5)", "math.randomseed({})" })
+		// Negative seeds wrap like any other 64-bit integer: -1 seeds like 2^32 - 1.
+		REQUIRE(lua.ExecuteString("math.randomseed(-1) return math.random(1000000)", seeded));
+		REQUIRE(lua.ExecuteString("math.randomseed(4294967295) return math.random(1000000)", result));
+		CHECK(result == seeded);
+		for (const char* call : { "math.randomseed('abc')", "math.randomseed(1.5)", "math.randomseed({})", "math.randomseed(math.huge)", "math.randomseed(-math.huge)", "math.randomseed(1e300)", "math.randomseed(0/0)" })
 		{
 			INFO(call);
 			CHECK_FALSE(lua.ExecuteString(call, result));

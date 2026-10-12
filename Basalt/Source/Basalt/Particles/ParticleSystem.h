@@ -54,6 +54,18 @@ namespace Basalt {
 			Particles.clear();
 			Batches.clear();
 		}
+
+		// Keeps at most `maxParticles` particles, dropping whole batches from the end (a partial batch would
+		// change an emitter's look more than a missing one). Returns whether anything was dropped.
+		bool LimitTo(size_t maxParticles)
+		{
+			if (Particles.size() <= maxParticles)
+				return false;
+			while (!Batches.empty() && Batches.back().FirstParticle + Batches.back().Count > maxParticles)
+				Batches.pop_back();
+			Particles.resize(Batches.empty() ? 0 : Batches.back().FirstParticle + Batches.back().Count);
+			return true;
+		}
 	};
 
 	// Simulates the ParticleEmitterComponents of a running scene on the CPU. Exists while the scene plays or

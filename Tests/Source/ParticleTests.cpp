@@ -110,7 +110,7 @@ TEST_SUITE("Particles")
 			{ { { "StartSize", -1 } }, "StartSize" },
 			{ { { "EndSize", -1 } }, "EndSize" },
 			{ { { "BoxExtents", { 1, -1, 1 } } }, "BoxExtents" },
-			{ { { "ConeAngle", 181 } }, "ConeAngle" },
+			{ { { "ConeAngle", 181 } }, "ConeAngle must be between 0 and 180 (got 181)" },
 			{ { { "ConeAngle", -1 } }, "ConeAngle" },
 			{ { { "Duration", 0.0001 } }, "Duration" },
 			{ { { "LifetimeMin", 0 } }, "LifetimeMin" },
@@ -621,15 +621,20 @@ TEST_SUITE("Particles")
 		emitter.Shape = ParticleEmitterShape::Sphere;
 		emitter.Blend = static_cast<ParticleBlendMode>(7);
 		Entity entity = AddEmitter(scene, "Broken", emitter);
+		ParticleEmitterComponent dragged = QuietEmitter();
+		dragged.Drag = -1.0f;
+		AddEmitter(scene, "BrokenB", dragged);
 		const uint64_t logStart = Log::GetHistory().GetTotalCount();
 		scene.OnRuntimeStart();
 		ParticleSystem& particles = *scene.GetParticleSystem();
 		StepFrames(scene, 3);
-		CHECK(BasaltTest::CountLogMessages(logStart, "has invalid values") == 1);
+		// Once per emitter, naming the emitter and the broken field.
+		CHECK(BasaltTest::CountLogMessages(logStart, "has invalid values") == 2);
+		CHECK(BasaltTest::CountLogMessages(logStart, "'BrokenB' has invalid values (Drag must be between") == 1);
 		// MaxParticles 0 acts as 1; every value the particle carries stays finite, and the blend mode valid.
 		CHECK(particles.GetParticleCount(entity) == 1);
 		const ParticleRenderData data = RenderData(scene);
-		REQUIRE(data.Batches.size() == 1);
+		REQUIRE(data.Batches.size() == 1); // BrokenB has no particles
 		CHECK(data.Batches[0].Blend == ParticleBlendMode::Alpha);
 		CHECK(std::isfinite(data.Batches[0].ViewDepth));
 		for (const GpuParticle& particle : data.Particles)
@@ -645,6 +650,8 @@ TEST_SUITE("Particles")
 		// Zero, negative and non-finite time steps change nothing (the bad ones are reported once).
 		const std::vector<float> before = Snapshot(scene);
 		const uint64_t stepLog = Log::GetHistory().GetTotalCount();
+		particles.Update(0.0f); // a paused frame: legitimate, silent
+		CHECK(BasaltTest::CountLogMessages(stepLog, "ignoring a time step") == 0);
 		for (float step : { 0.0f, -1.0f, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity() })
 			particles.Update(step);
 		CHECK(Snapshot(scene) == before);
@@ -662,22 +669,36 @@ TEST_SUITE("Particles")
 		Random random(99);
 		auto pick = [&]() { return values[random.Int(0, std::size(values) - 1)]; };
 		int valid = 0;
-		for (int i = 0; i < 4000; i++)
+		for (int i = 0; i < 6000; i++)
 		{
 			ParticleEmitterComponent c;
 			// Most fields keep their defaults, so valid components come up too.
 			auto maybe = [&](float& field) {
-				if (random.Float() < 0.15f)
+				if (random.Float() < 0.06f)
 					field = pick();
 			};
-			for (float* field : { &c.Duration, &c.Rate, &c.ShapeRadius, &c.ConeAngle, &c.LifetimeMin, &c.LifetimeMax, &c.SpeedMin, &c.SpeedMax, &c.GravityScale, &c.Drag, &c.StartSize, &c.EndSize, &c.BoxExtents.y, &c.Velocity.x, &c.StartColor.r, &c.StartColor.a, &c.EndColor.g })
+			for (float* field : { &c.Duration, &c.Rate, &c.ShapeRadius, &c.ConeAngle, &c.LifetimeMin, &c.LifetimeMax, &c.SpeedMin, &c.SpeedMax, &c.GravityScale, &c.Drag, &c.StartSize, &c.EndSize })
 				maybe(*field);
+			for (int axis = 0; axis < 3; axis++)
+			{
+				maybe(c.BoxExtents[axis]);
+				maybe(c.Velocity[axis]);
+			}
+			for (int channel = 0; channel < 4; channel++)
+			{
+				maybe(c.StartColor[channel]);
+				maybe(c.EndColor[channel]);
+			}
 			if (random.Float() < 0.1f)
 				c.MaxParticles = counts[random.Int(0, std::size(counts) - 1)];
 			if (random.Float() < 0.1f)
 				c.BurstCount = counts[random.Int(0, std::size(counts) - 1)];
 			if (random.Float() < 0.05f)
 				c.Shape = static_cast<ParticleEmitterShape>(random.Int(0, 5));
+			if (random.Float() < 0.05f)
+				c.SimulationSpace = static_cast<ParticleSimulationSpace>(random.Int(0, 3));
+			if (random.Float() < 0.05f)
+				c.Blend = static_cast<ParticleBlendMode>(random.Int(0, 3));
 
 			INFO("iteration " << i);
 			const bool isValid = ValidateParticleEmitter(c).empty();
@@ -688,7 +709,7 @@ TEST_SUITE("Particles")
 		}
 		// Both outcomes were exercised.
 		CHECK(valid > 100);
-		CHECK(valid < 3900);
+		CHECK(valid < 5900);
 	}
 
 	TEST_CASE("Emitters added through the registry during play honour PlayOnStart; failed adds change nothing")
@@ -888,6 +909,9 @@ TEST_SUITE("Particles")
 		particles.Update(10.0f);
 		particles.Update(Step);
 		CHECK(particles.GetParticleCount(looping) == 6);
+		// The long frame wrapped into the current cycle: no burst on the next frames.
+		particles.Update(Step);
+		CHECK(particles.GetParticleCount(looping) == 6);
 		CHECK(particles.IsPlaying(looping));
 		// 100/s for what is left of 0.05 s, not for the whole 10 s step.
 		CHECK(particles.GetParticleCount(once) >= 4);
@@ -941,6 +965,171 @@ TEST_SUITE("Particles")
 		CHECK(RenderData(scene).Batches.empty());
 		registry.emplace<IDComponent>(entity, UUID(77));
 		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Lowering MaxParticles right after Emit trims the newest particles; the survivors keep aging")
+	{
+		Scene scene;
+		ParticleEmitterComponent emitter = QuietEmitter();
+		emitter.LifetimeMin = 1.0f;
+		emitter.LifetimeMax = 1.0f;
+		emitter.StartSize = 1.0f;
+		emitter.EndSize = 3.0f;
+		Entity entity = AddEmitter(scene, "Emitter", emitter);
+		scene.OnRuntimeStart();
+		ParticleSystem& particles = *scene.GetParticleSystem();
+
+		// Only fresh particles, more than the new cap.
+		CHECK(particles.Emit(entity, 5) == 5);
+		entity.GetComponent<ParticleEmitterComponent>().MaxParticles = 3;
+		scene.OnUpdate(Step);
+		CHECK(particles.GetParticleCount(entity) == 3);
+		for (const GpuParticle& particle : RenderData(scene).Particles)
+			CHECK(particle.PositionSize.w == doctest::Approx(1.0f)); // still age 0
+
+		// Old particles plus fresh ones: the trim drops the fresh ones, and the old survivors age this update.
+		particles.Stop(entity, true);
+		entity.GetComponent<ParticleEmitterComponent>().MaxParticles = 10;
+		particles.Emit(entity, 4);
+		StepFrames(scene, 31); // the emitting frame, then 30 frames: age 30/60
+		particles.Emit(entity, 5);
+		entity.GetComponent<ParticleEmitterComponent>().MaxParticles = 3;
+		scene.OnUpdate(Step);
+		REQUIRE(particles.GetParticleCount(entity) == 3);
+		for (const GpuParticle& particle : RenderData(scene).Particles)
+			CHECK(particle.PositionSize.w == doctest::Approx(1.0f + 2.0f * 31.0f / 60.0f).epsilon(1e-4));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Simulate mode seeds particles from the project, like play mode")
+	{
+		BasaltTest::TempProject project("ParticleSimulateSeed");
+		REQUIRE(project.IsValid());
+		Project::GetActive()->GetConfig().RandomSeed = 12345;
+		ParticleEmitterComponent emitter = QuietEmitter();
+		emitter.PlayOnStart = true;
+		emitter.Rate = 30.0f;
+		emitter.Shape = ParticleEmitterShape::Sphere;
+		emitter.SpeedMin = 0.5f;
+		emitter.SpeedMax = 2.0f;
+		auto run = [&emitter](bool simulate) {
+			Scene scene; // fresh: its seed starts at the default
+			AddEmitter(scene, "Emitter", emitter);
+			if (simulate)
+				scene.OnSimulationStart();
+			else
+				scene.OnRuntimeStart();
+			CHECK(scene.GetRandomSeed() == 12345u);
+			StepFrames(scene, 20);
+			std::vector<float> snapshot = Snapshot(scene);
+			if (simulate)
+				scene.OnSimulationStop();
+			else
+				scene.OnRuntimeStop();
+			return snapshot;
+		};
+		CHECK(run(true) == run(false));
+	}
+
+	TEST_CASE("Huge rates and steps emit at most MaxParticles")
+	{
+		Scene scene;
+		ParticleEmitterComponent emitter = QuietEmitter();
+		emitter.PlayOnStart = true;
+		emitter.Rate = ParticleEmitterComponent::MaxRate;
+		emitter.MaxParticles = 50;
+		Entity entity = AddEmitter(scene, "Firehose", emitter);
+		scene.OnRuntimeStart();
+		// 1e10 particles owed: more than a uint32 holds.
+		scene.GetParticleSystem()->Update(1e4f);
+		CHECK(scene.GetParticleSystem()->GetParticleCount(entity) == 50);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("A removed emitter's ordinal is not reused, so later emitters keep their own streams")
+	{
+		ParticleEmitterComponent emitter = QuietEmitter();
+		emitter.Shape = ParticleEmitterShape::Sphere;
+		emitter.ShapeRadius = 1.0f;
+		Scene scene;
+		Entity first = AddEmitter(scene, "A", emitter);
+		Entity second = AddEmitter(scene, "B", emitter, { 5.0f, 0.0f, 0.0f });
+		scene.OnRuntimeStart();
+		ParticleSystem& particles = *scene.GetParticleSystem();
+		first.RemoveComponent<ParticleEmitterComponent>();
+		Entity third = scene.CreateEntity("C");
+		third.GetTransform().Translation = { 10.0f, 0.0f, 0.0f };
+		third.AddComponent<ParticleEmitterComponent>(emitter);
+		particles.Emit(second, 1);
+		particles.Emit(third, 1);
+		const ParticleRenderData data = RenderData(scene);
+		REQUIRE(data.Batches.size() == 2);
+		// With a reused ordinal C would draw B's stream: the same offset from its emitter.
+		const glm::vec3 fromB = ParticlePosition(data, 0) - glm::vec3(5.0f, 0.0f, 0.0f);
+		const glm::vec3 fromC = ParticlePosition(data, 1) - glm::vec3(10.0f, 0.0f, 0.0f);
+		CHECK(glm::distance(fromB, fromC) > 1e-3f);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Velocities ignore uneven scale in local space and mirror with a mirrored world emitter")
+	{
+		Scene scene;
+		ParticleEmitterComponent emitter = QuietEmitter();
+		emitter.SimulationSpace = ParticleSimulationSpace::Local;
+		emitter.Velocity = { 0.0f, 1.0f, 0.0f };
+		Entity squashed = AddEmitter(scene, "Squashed", emitter);
+		squashed.GetTransform().Scale = { 1.0f, 0.5f, 1.0f };
+		emitter.SimulationSpace = ParticleSimulationSpace::World;
+		emitter.Velocity = { 1.0f, 0.0f, 0.0f };
+		Entity mirrored = AddEmitter(scene, "Mirrored", emitter, { 10.0f, 0.0f, 0.0f });
+		mirrored.GetTransform().Scale = { -1.0f, 1.0f, 1.0f };
+		scene.OnRuntimeStart();
+		scene.GetParticleSystem()->Emit(squashed, 1);
+		scene.GetParticleSystem()->Emit(mirrored, 1);
+		StepFrames(scene, 61); // the emitting frame, then one second of motion
+		const ParticleRenderData data = RenderData(scene);
+		REQUIRE(data.Batches.size() == 2);
+		CHECK(ParticlePosition(data, 0).y == doctest::Approx(1.0).epsilon(1e-3));
+		CHECK(ParticlePosition(data, 1).x == doctest::Approx(9.0).epsilon(1e-3));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Reversed min/max pairs pick between the two values")
+	{
+		Scene scene;
+		ParticleEmitterComponent emitter = QuietEmitter();
+		emitter.LifetimeMin = 0.5f;
+		emitter.LifetimeMax = 0.25f;
+		Entity entity = AddEmitter(scene, "Reversed", emitter);
+		scene.OnRuntimeStart();
+		ParticleSystem& particles = *scene.GetParticleSystem();
+		particles.Emit(entity, 100);
+		StepFrames(scene, 14); // the emitting frame, then 13/60 s: younger than 0.25 s
+		CHECK(particles.GetParticleCount(entity) == 100);
+		StepFrames(scene, 18); // 31/60 s: older than 0.5 s
+		CHECK(particles.GetParticleCount(entity) == 0);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Render data beyond a particle budget drops whole batches from the end")
+	{
+		ParticleRenderData data;
+		for (uint32_t i = 0; i < 3; i++)
+		{
+			ParticleBatch batch;
+			batch.FirstParticle = static_cast<uint32_t>(data.Particles.size());
+			batch.Count = 4;
+			data.Batches.push_back(batch);
+			data.Particles.resize(data.Particles.size() + 4);
+		}
+		CHECK_FALSE(data.LimitTo(12));
+		CHECK(data.Batches.size() == 3);
+		CHECK(data.LimitTo(10));
+		CHECK(data.Batches.size() == 2);
+		CHECK(data.Particles.size() == 8);
+		CHECK(data.LimitTo(3));
+		CHECK(data.Batches.empty());
+		CHECK(data.Particles.empty());
 	}
 
 	TEST_CASE("Lua: EmitParticles, PlayParticles, StopParticles, IsEmittingParticles, GetParticleCount")
