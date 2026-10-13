@@ -63,8 +63,21 @@ namespace Basalt {
 		static void SetNavigationEnabled(bool enabled);
 		static bool IsNavigationEnabled();
 
-		// The mouse position on the canvas of the current viewport, or nullopt while pointer input is disabled.
+		// The mouse position on the canvas of the current viewport; nullopt while pointer input is disabled or
+		// before the first mouse position arrives.
 		static std::optional<glm::vec2> GetPointerPosition();
+
+		// Everything a host sets about its view, to save and restore around a run that needs the headless view.
+		struct HostState
+		{
+			glm::vec2 ViewportOrigin = { 0.0f, 0.0f };
+			glm::vec2 ViewportSize = { 1920.0f, 1080.0f };
+			bool PointerEnabled = true;
+			bool NavigationEnabled = true;
+		};
+		static HostState GetHostState();
+		// Sets every field (each one ignored, like its setter, when it is not usable).
+		static void SetHostState(const HostState& state);
 	};
 
 }

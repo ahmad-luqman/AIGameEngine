@@ -3,8 +3,8 @@
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Scene/Entity.h"
-#include "Basalt/Scripting/ScriptGlue.h"
 #include "Basalt/Scene/Scene.h"
+#include "Basalt/Scripting/ScriptGlue.h"
 #include "Basalt/UI/GameUI.h"
 #include "Basalt/UI/UIInteraction.h"
 #include "Basalt/UI/UILayout.h"
@@ -224,20 +224,29 @@ namespace Basalt {
 			return names;
 		}
 
-		// The play session's widget input; immediate-mode widgets only exist while the scene plays.
+		// The play session's widget input, or nullptr when the scene does not play.
+		UIInteraction* FindInteraction(ScriptContext& context)
+		{
+			return context.SceneContext ? context.SceneContext->GetUIInteraction() : nullptr;
+		}
+
+		// Immediate-mode widgets only exist while the scene plays.
 		UIInteraction& RequireInteraction(ScriptContext& context, const Checker& checker)
 		{
-			UIInteraction* interaction = context.SceneContext ? context.SceneContext->GetUIInteraction() : nullptr;
+			UIInteraction* interaction = FindInteraction(context);
 			if (!interaction)
 				checker.Fail("widgets only work while the scene plays");
 			return *interaction;
 		}
 
-		// One immediate-mode widget call: reads the shared arguments and options, registers the widget for input
-		// and draws its parts and label.
+		// One immediate-mode widget call: reads the shared arguments and options (and a slider's handle width), then
+		// registers the widget for input and draws its parts and label. Use: construct, Register once, then Draw.
 		class ImmediateWidget
 		{
 		public:
+			// Draw commands one widget may submit (a slider's track, fill and handle, and its label).
+			static constexpr size_t MaxCommands = 4;
+
 			ImmediateWidget(const Checker& checker, UIWidgetKind kind, const std::string& label, float x, float y, float width, float height, const sol::object& optionsArgument, std::initializer_list<std::string_view> ownOptions)
 				: m_Checker(checker)
 				, m_Label(label)
@@ -281,56 +290,64 @@ namespace Basalt {
 					checker.Fail("a widget needs a label or an 'Id' option to tell it apart from others");
 				m_Widget.ID = std::move(id);
 				m_Widget.Offset = position - pivot * size;
+				if (kind == UIWidgetKind::Slider)
+					m_Widget.HandleWidth = OptionNumber("HandleWidth", 0.0f, UIRectComponent::MaxMagnitude, UISliderComponent{}.HandleWidth);
 			}
 
-			const Options* GetOptions() const { return m_Options ? &*m_Options : nullptr; }
 			glm::vec4 Color(const glm::vec4& fallback) const { return m_Color.value_or(fallback); }
-			bool IsInteractable() const { return m_Widget.Interactable; }
+			// A widget's own option, or `fallback` when it is not given.
+			glm::vec4 OptionColor(const char* key, const glm::vec4& fallback) const { return m_Options ? m_Options->Color(key).value_or(fallback) : fallback; }
+			float OptionNumber(const char* key, float min, float max, float fallback) const { return m_Options ? m_Options->Number(key, min, max).value_or(fallback) : fallback; }
+			float GetHandleWidth() const { return m_Widget.HandleWidth; }
 			UIBox Rect() const { return { m_Widget.Offset, m_Widget.Size }; }
-			void SetHandleWidth(float width) { m_Widget.HandleWidth = width; }
 
-			// Registers the widget for input and returns what the user did to it this frame.
+			// Registers the widget for input and returns what the user did to it this frame (nothing when it is drawn
+			// disabled). Fails before registering when its drawing would not fit in this frame's commands, so a
+			// widget is never registered without being drawn.
 			UIImmediateInput Register(ScriptContext& context)
 			{
+				BS_CORE_ASSERT(!m_Registered, "an immediate-mode widget registers once");
+				m_Registered = true;
 				UIInteraction& interaction = RequireInteraction(context, m_Checker);
+				if (GameUI::GetCommandCount() + MaxCommands > GameUI::MaxCommands)
+					m_Checker.Fail(fmt::format("more than {} UI commands this frame", GameUI::MaxCommands));
 				UIImmediateInput input;
 				switch (interaction.SubmitImmediate(m_Widget, input))
 				{
 					case UIInteraction::SubmitResult::Accepted:
-						break;
+						return input;
 					case UIInteraction::SubmitResult::DuplicateID:
 						m_Checker.Fail(fmt::format("another widget already uses the id '{}' this frame (give one of them an 'Id' option)", m_Widget.ID));
 					case UIInteraction::SubmitResult::TooMany:
 						m_Checker.Fail(fmt::format("more than {} widgets this frame", UIInteraction::MaxImmediateWidgets));
 				}
+				BS_CORE_ASSERT(false, "unknown SubmitResult");
 				return input;
 			}
 
-			// Submits draw commands built on the widget's rect (UIWidgets::Append*), anchored like the widget.
-			void Draw(std::vector<UIDrawCommand> commands) const
+			// Submits draw commands built on the widget's rect (UIWidgets::Append*), anchored like the widget, then
+			// the label in `labelBox` at `labelAlign` (nothing for an empty label).
+			void Draw(std::vector<UIDrawCommand> commands, const UIBox& labelBox, const glm::vec2& labelAlign) const
 			{
+				BS_CORE_ASSERT(m_Registered, "a widget registers before it draws");
+				if (!m_Label.empty())
+				{
+					UIDrawCommand& label = commands.emplace_back();
+					label.Kind = UIDrawKind::Text;
+					label.Position = labelBox.Min;
+					label.Size = labelBox.Size;
+					label.Text = m_Label;
+					label.Font = m_Font;
+					label.FontSize = m_FontSize;
+					label.Color = m_TextColor;
+					label.Align = labelAlign;
+				}
+				BS_CORE_ASSERT(commands.size() <= MaxCommands, "Register reserved room for every command");
 				for (UIDrawCommand& command : commands)
 				{
 					command.Anchor = m_Widget.Anchor;
 					Submit(std::move(command), m_Checker);
 				}
-			}
-
-			// Draws the label in `box` at `align` (nothing for an empty label).
-			void DrawLabel(const UIBox& box, const glm::vec2& align) const
-			{
-				if (m_Label.empty())
-					return;
-				UIDrawCommand command;
-				command.Kind = UIDrawKind::Text;
-				command.Position = box.Min;
-				command.Size = box.Size;
-				command.Text = m_Label;
-				command.Font = m_Font;
-				command.FontSize = m_FontSize;
-				command.Color = m_TextColor;
-				command.Align = align;
-				Draw({ std::move(command) });
 			}
 
 		private:
@@ -342,6 +359,7 @@ namespace Basalt {
 			glm::vec4 m_TextColor = { 1.0f, 1.0f, 1.0f, 1.0f };
 			float m_FontSize = UITextComponent::DefaultFontSize;
 			std::string m_Font;
+			bool m_Registered = false;
 		};
 
 		// The tints of immediate-mode widgets: the components' defaults.
@@ -452,28 +470,23 @@ namespace Basalt {
 			ImmediateWidget widget(checker, UIWidgetKind::Button, label, x, y, width, height, options, {});
 			const UIImmediateInput input = widget.Register(context);
 			std::vector<UIDrawCommand> commands;
-			UIDrawCommand& background = commands.emplace_back();
-			background.Position = widget.Rect().Min;
-			background.Size = widget.Rect().Size;
-			background.Color = widget.Color({ 0.18f, 0.2f, 0.26f, 0.92f }) * DefaultTint<UIButtonComponent>(input.State);
-			widget.Draw(std::move(commands));
-			widget.DrawLabel(widget.Rect(), { 0.5f, 0.5f });
-			return input.Activated && widget.IsInteractable();
+			UIWidgets::AppendRect(widget.Rect(), widget.Color({ 0.18f, 0.2f, 0.26f, 0.92f }) * DefaultTint<UIButtonComponent>(input.State), commands);
+			widget.Draw(std::move(commands), widget.Rect(), { 0.5f, 0.5f });
+			return input.Activated;
 		};
 
 		// UI.Checkbox(label, checked, x, y, width, height [, options]): the new checked state.
 		ui["Checkbox"] = [&context](const std::string& label, bool checked, float x, float y, float width, float height, const sol::object& options) {
 			const Checker checker("UI.Checkbox");
 			ImmediateWidget widget(checker, UIWidgetKind::Checkbox, label, x, y, width, height, options, { "CheckColor" });
-			const UIImmediateInput input = widget.Register(context);
-			if (input.Activated && widget.IsInteractable())
-				checked = !checked;
 			const UICheckboxComponent defaults;
-			const glm::vec4 checkColor = widget.GetOptions() ? widget.GetOptions()->Color("CheckColor").value_or(defaults.CheckColor) : defaults.CheckColor;
+			const glm::vec4 checkColor = widget.OptionColor("CheckColor", defaults.CheckColor);
+			const UIImmediateInput input = widget.Register(context);
+			if (input.Activated)
+				checked = !checked;
 			std::vector<UIDrawCommand> commands;
 			UIWidgets::AppendCheckbox(widget.Rect(), checked, widget.Color(defaults.BoxColor) * DefaultTint<UICheckboxComponent>(input.State), checkColor, commands);
-			widget.Draw(std::move(commands));
-			widget.DrawLabel(UIWidgets::CheckboxLabelBox(widget.Rect()), { 0.0f, 0.5f });
+			widget.Draw(std::move(commands), UIWidgets::CheckboxLabelBox(widget.Rect()), { 0.0f, 0.5f });
 			return checked;
 		};
 
@@ -488,44 +501,31 @@ namespace Basalt {
 			checker.Range("value", value, min, max);
 			ImmediateWidget widget(checker, UIWidgetKind::Slider, label, x, y, width, height, options, { "Step", "FillColor", "HandleColor", "HandleWidth" });
 			const UISliderComponent defaults;
-			float step = defaults.Step;
-			glm::vec4 fillColor = defaults.FillColor;
-			glm::vec4 handleColor = defaults.HandleColor;
-			float handleWidth = defaults.HandleWidth;
-			if (const Options* table = widget.GetOptions())
-			{
-				step = table->Number("Step", 0.0f, Limit).value_or(step);
-				fillColor = table->Color("FillColor").value_or(fillColor);
-				handleColor = table->Color("HandleColor").value_or(handleColor);
-				handleWidth = table->Number("HandleWidth", 0.0f, Limit).value_or(handleWidth);
-			}
-			widget.SetHandleWidth(handleWidth);
+			const float step = widget.OptionNumber("Step", 0.0f, Limit, defaults.Step);
+			const glm::vec4 fillColor = widget.OptionColor("FillColor", defaults.FillColor);
+			const glm::vec4 handleColor = widget.OptionColor("HandleColor", defaults.HandleColor);
 			const UIImmediateInput input = widget.Register(context);
-			if (widget.IsInteractable())
-			{
-				if (input.SliderFraction)
-					value = UIWidgets::SnapSliderValue(min + *input.SliderFraction * (max - min), min, max, step);
-				if (input.SliderSteps != 0)
-					value = UIWidgets::SnapSliderValue(value + static_cast<float>(input.SliderSteps) * UIWidgets::SliderNavigationStep(min, max, step), min, max, step);
-			}
+			if (input.SliderFraction)
+				value = UIWidgets::SliderValueAtFraction(*input.SliderFraction, min, max, step);
+			if (input.SliderSteps != 0)
+				value = UIWidgets::StepSliderValue(value, input.SliderSteps, min, max, step);
 			std::vector<UIDrawCommand> commands;
-			UIWidgets::AppendSlider(widget.Rect(), UIWidgets::SliderFraction(value, min, max), handleWidth, widget.Color(defaults.TrackColor), fillColor, handleColor * DefaultTint<UISliderComponent>(input.State), commands);
-			widget.Draw(std::move(commands));
-			widget.DrawLabel(widget.Rect(), { 0.5f, 0.5f });
+			UIWidgets::AppendSlider(widget.Rect(), UIWidgets::SliderFraction(value, min, max), widget.GetHandleWidth(), widget.Color(defaults.TrackColor), fillColor, handleColor * DefaultTint<UISliderComponent>(input.State), commands);
+			widget.Draw(std::move(commands), widget.Rect(), { 0.5f, 0.5f });
 			return value;
 		};
 
 		// UI.GetFocus(): the focused widget: an entity (widget component), an id string (immediate-mode widget) or
 		// nil.
 		ui["GetFocus"] = [&context](sol::this_state state) -> sol::object {
-			const UIInteraction* interaction = context.SceneContext ? context.SceneContext->GetUIInteraction() : nullptr;
+			const UIInteraction* interaction = FindInteraction(context);
 			if (!interaction)
 				return sol::lua_nil;
 			const UIWidgetID& focus = interaction->GetFocus();
-			if (focus.Entity != 0)
-				return sol::make_object(state, ScriptEntity{ focus.Entity, context.SceneContext });
-			if (!focus.Name.empty())
-				return sol::make_object(state, focus.Name);
+			if (focus.IsEntity())
+				return sol::make_object(state, ScriptEntity{ focus.GetEntity(), context.SceneContext });
+			if (focus.IsName())
+				return sol::make_object(state, focus.GetName());
 			return sol::lua_nil;
 		};
 
@@ -556,8 +556,16 @@ namespace Basalt {
 
 		// UI.IsPointerOverWidget(): whether the pointer is over an interactable widget (a click there is the UI's).
 		ui["IsPointerOverWidget"] = [&context]() {
-			const UIInteraction* interaction = context.SceneContext ? context.SceneContext->GetUIInteraction() : nullptr;
+			const UIInteraction* interaction = FindInteraction(context);
 			return interaction && interaction->IsPointerOverWidget();
+		};
+
+		// UI.SetNavigationEnabled(enabled): whether the keyboard and gamepads move the focus and activate widgets (a
+		// game that reads them itself turns it off while widgets are visible).
+		ui["SetNavigationEnabled"] = [&context](bool enabled) { RequireInteraction(context, Checker("UI.SetNavigationEnabled")).SetNavigationEnabled(enabled); };
+		ui["IsNavigationEnabled"] = [&context]() {
+			const UIInteraction* interaction = FindInteraction(context);
+			return interaction && interaction->IsNavigationEnabled();
 		};
 
 		// UI.GetRect(entity): the laid-out rect of an entity with UI components as Vec4(x, y, width, height)

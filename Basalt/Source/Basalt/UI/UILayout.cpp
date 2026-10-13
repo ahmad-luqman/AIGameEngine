@@ -16,11 +16,31 @@ namespace Basalt {
 
 		bool HasUIComponent(Entity entity)
 		{
-			return entity.HasComponent<UIRectComponent>() || entity.HasComponent<UIImageComponent>() || entity.HasComponent<UITextComponent>() || UILayout::CountWidgetComponents(entity) > 0;
+			return entity.HasComponent<UIRectComponent>() || entity.HasComponent<UIImageComponent>() || entity.HasComponent<UITextComponent>() || UILayout::GetWidgetKind(entity).has_value();
 		}
 
-		// Reported repairs, bounded so a long session with many broken entities cannot grow it without end.
-		constexpr size_t MaxReportedRepairs = 1024;
+		// Reported problems, bounded so a long session with many broken entities cannot grow it without end.
+		constexpr size_t MaxReportedProblems = 1024;
+
+		// Warns about a problem with an entity's UI once per entity and `kind` (the problem may be met every
+		// frame). `makeMessage` builds the warning only when it is logged.
+		template<typename MakeMessage>
+		void WarnOnce(Entity entity, const char* kind, MakeMessage&& makeMessage)
+		{
+			static std::mutex s_Mutex;
+			static std::unordered_set<std::string> s_Reported;
+			std::scoped_lock lock(s_Mutex);
+			if (s_Reported.size() > MaxReportedProblems)
+				return;
+			if (s_Reported.size() == MaxReportedProblems)
+			{
+				s_Reported.insert({});
+				BS_CORE_WARN("UILayout: more than {} UI problems; no longer reporting them", MaxReportedProblems);
+				return;
+			}
+			if (s_Reported.insert(fmt::format("{}/{}", static_cast<uint64_t>(entity.GetUUID()), kind)).second)
+				BS_CORE_WARN("{}", makeMessage());
+		}
 
 		// The registry rejects invalid values, so only C++ code writing a component directly produces them.
 		// The layout draws repaired values and says so, once per entity and component (the value may change
@@ -31,23 +51,11 @@ namespace Basalt {
 			T repaired = sanitize(component);
 			if (repaired == component)
 				return repaired;
-			static std::mutex s_Mutex;
-			static std::unordered_set<std::string> s_Reported;
-			std::scoped_lock lock(s_Mutex);
-			if (s_Reported.size() > MaxReportedRepairs)
-				return repaired;
-			if (s_Reported.size() == MaxReportedRepairs)
-			{
-				s_Reported.insert({});
-				BS_CORE_WARN("UILayout: more than {} UI components with invalid values; no longer reporting them", MaxReportedRepairs);
-				return repaired;
-			}
-			if (s_Reported.insert(fmt::format("{}/{}", static_cast<uint64_t>(entity.GetUUID()), name)).second)
-			{
+			WarnOnce(entity, name, [&] {
 				const std::string problem = validate(component);
 				BS_CORE_ASSERT(!problem.empty(), "the {} rules repair a value they accept", name);
-				BS_CORE_WARN("UILayout: the {} on '{}' has invalid values ({}); drawing corrected ones", name, entity.GetName(), problem);
-			}
+				return fmt::format("UILayout: the {} on '{}' has invalid values ({}); drawing corrected ones", name, entity.GetName(), problem);
+			});
 			return repaired;
 		}
 
@@ -90,12 +98,11 @@ namespace Basalt {
 		}
 
 		// The state a widget is drawn in.
-		template<typename T>
-		UIWidgetState WidgetState(const UIInteraction* interaction, Entity entity, const T& widget)
+		UIWidgetState WidgetState(const UIInteraction* interaction, Entity entity, bool interactable)
 		{
 			if (!interaction)
-				return widget.Interactable ? UIWidgetState::Normal : UIWidgetState::Disabled;
-			return interaction->GetState(UIWidgetID::ForEntity(entity.GetUUID()), widget.Interactable);
+				return interactable ? UIWidgetState::Normal : UIWidgetState::Disabled;
+			return interaction->GetState(UIWidgetID::ForEntity(entity.GetUUID()), interactable);
 		}
 
 		// The draw commands of one laid-out entity: its image (tinted by a button), its slider or checkbox, then its
@@ -103,16 +110,17 @@ namespace Basalt {
 		void AppendCommands(const UILayoutItem& item, const UIInteraction* interaction, std::vector<UIDrawCommand>& out)
 		{
 			const Entity entity = item.Owner;
-			const std::optional<UIWidgetKind> widget = UILayout::GetWidgetKind(entity);
+			const std::optional<UIWidgetInfo> info = UILayout::GetWidget(entity);
+			const std::optional<UIWidgetKind> widget = info ? std::optional(info->Kind) : std::nullopt;
 			glm::vec4 imageTint = { 1.0f, 1.0f, 1.0f, 1.0f };
 			if (widget == UIWidgetKind::Button)
 			{
 				const UIButtonComponent button = Repaired(entity, entity.GetComponent<UIButtonComponent>(), &SanitizeUIButton, &ValidateUIButton, "UIButton");
-				imageTint = UIWidgetTints::Of(button).For(WidgetState(interaction, entity, button));
+				imageTint = UIWidgetTints::Of(button).For(WidgetState(interaction, entity, button.Interactable));
 			}
-			if (const auto* component = item.Owner.TryGetComponent<UIImageComponent>())
+			if (const auto* component = entity.TryGetComponent<UIImageComponent>())
 			{
-				const UIImageComponent image = Repaired(item.Owner, *component, &SanitizeUIImage, &ValidateUIImage, "UIImage");
+				const UIImageComponent image = Repaired(entity, *component, &SanitizeUIImage, &ValidateUIImage, "UIImage");
 				UIDrawCommand& command = out.emplace_back();
 				command.Kind = UIDrawKind::Image;
 				command.Position = item.Rect.Min;
@@ -126,19 +134,19 @@ namespace Basalt {
 			if (widget == UIWidgetKind::Slider)
 			{
 				const UISliderComponent slider = Repaired(entity, entity.GetComponent<UISliderComponent>(), &SanitizeUISlider, &ValidateUISlider, "UISlider");
-				const glm::vec4 tint = UIWidgetTints::Of(slider).For(WidgetState(interaction, entity, slider));
+				const glm::vec4 tint = UIWidgetTints::Of(slider).For(WidgetState(interaction, entity, slider.Interactable));
 				UIWidgets::AppendSlider(item.Rect, UIWidgets::SliderFraction(slider.Value, slider.Min, slider.Max), slider.HandleWidth, slider.TrackColor, slider.FillColor, slider.HandleColor * tint, out);
 			}
 			else if (widget == UIWidgetKind::Checkbox)
 			{
 				const UICheckboxComponent checkbox = Repaired(entity, entity.GetComponent<UICheckboxComponent>(), &SanitizeUICheckbox, &ValidateUICheckbox, "UICheckbox");
-				const glm::vec4 tint = UIWidgetTints::Of(checkbox).For(WidgetState(interaction, entity, checkbox));
+				const glm::vec4 tint = UIWidgetTints::Of(checkbox).For(WidgetState(interaction, entity, checkbox.Interactable));
 				UIWidgets::AppendCheckbox(item.Rect, checkbox.Checked, checkbox.BoxColor * tint, checkbox.CheckColor, out);
 				textRect = UIWidgets::CheckboxLabelBox(item.Rect);
 			}
-			if (const auto* component = item.Owner.TryGetComponent<UITextComponent>())
+			if (const auto* component = entity.TryGetComponent<UITextComponent>())
 			{
-				const UITextComponent text = Repaired(item.Owner, *component, &SanitizeUIText, &ValidateUIText, "UIText");
+				const UITextComponent text = Repaired(entity, *component, &SanitizeUIText, &ValidateUIText, "UIText");
 				UIDrawCommand& command = out.emplace_back();
 				command.Kind = UIDrawKind::Text;
 				command.Position = textRect.Min;
@@ -151,6 +159,12 @@ namespace Basalt {
 				command.Wrap = text.Wrap;
 				command.Shadow = text.Shadow;
 			}
+		}
+
+		template<typename... Components>
+		bool AnyEntityWith(Scene& scene)
+		{
+			return (!scene.GetAllEntitiesWith<Components>().empty() || ...);
 		}
 
 		// The entity's ancestors, root first.
@@ -167,7 +181,12 @@ namespace Basalt {
 
 	bool UILayout::HasUI(Scene& scene)
 	{
-		return !scene.GetAllEntitiesWith<UIRectComponent>().empty() || !scene.GetAllEntitiesWith<UIImageComponent>().empty() || !scene.GetAllEntitiesWith<UITextComponent>().empty() || !scene.GetAllEntitiesWith<UIButtonComponent>().empty() || !scene.GetAllEntitiesWith<UISliderComponent>().empty() || !scene.GetAllEntitiesWith<UICheckboxComponent>().empty();
+		return AnyEntityWith<UIRectComponent, UIImageComponent, UITextComponent>(scene) || HasWidgets(scene);
+	}
+
+	bool UILayout::HasWidgets(Scene& scene)
+	{
+		return AnyEntityWith<UIButtonComponent, UISliderComponent, UICheckboxComponent>(scene);
 	}
 
 	std::vector<UILayoutItem> UILayout::Layout(Scene& scene, const glm::vec2& canvasSize)
@@ -211,6 +230,29 @@ namespace Basalt {
 		for (Entity ancestor : GetAncestors(entity))
 			rect = RectInParent(ancestor, rect);
 		return rect;
+	}
+
+	std::optional<UIWidgetInfo> UILayout::GetWidget(Entity entity)
+	{
+		std::optional<UIWidgetInfo> info;
+		if (const auto* component = entity.TryGetComponent<UIButtonComponent>())
+		{
+			const UIButtonComponent button = Repaired(entity, *component, &SanitizeUIButton, &ValidateUIButton, "UIButton");
+			info = UIWidgetInfo{ UIWidgetKind::Button, button.Interactable, button.Target, button.OnClick };
+		}
+		else if (const auto* slider = entity.TryGetComponent<UISliderComponent>())
+		{
+			const UISliderComponent repaired = Repaired(entity, *slider, &SanitizeUISlider, &ValidateUISlider, "UISlider");
+			info = UIWidgetInfo{ UIWidgetKind::Slider, repaired.Interactable, repaired.Target, repaired.OnValueChanged };
+		}
+		else if (const auto* checkbox = entity.TryGetComponent<UICheckboxComponent>())
+		{
+			const UICheckboxComponent repaired = Repaired(entity, *checkbox, &SanitizeUICheckbox, &ValidateUICheckbox, "UICheckbox");
+			info = UIWidgetInfo{ UIWidgetKind::Checkbox, repaired.Interactable, repaired.Target, repaired.OnValueChanged };
+		}
+		if (info && CountWidgetComponents(entity) > 1)
+			WarnOnce(entity, "widgets", [&] { return fmt::format("UILayout: '{}' has several widget components; it acts as its {} only", entity.GetName(), UIWidgetComponentName(info->Kind)); });
+		return info;
 	}
 
 	std::optional<UIWidgetKind> UILayout::GetWidgetKind(Entity entity)

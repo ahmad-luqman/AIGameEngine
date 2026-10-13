@@ -22,6 +22,17 @@ namespace Basalt {
 		std::array<float, GamepadAxisCount> Axes = {};
 	};
 
+	// Who drives a gamepad slot.
+	enum class GamepadSource : uint8_t
+	{
+		// Nothing is connected.
+		None = 0,
+		// A physical gamepad, polled by the window host.
+		Device,
+		// Injected by tests or the automation API; device polls leave it alone.
+		Injected
+	};
+
 	// Polled input state. Fed by window events (or injected by tests / the automation API), so it works
 	// identically with and without a window.
 	//
@@ -29,11 +40,14 @@ namespace Basalt {
 	//
 	// Gamepads are indexed 0..MaxGamepads-1 (GLFW joystick ids). A window host polls the devices every frame
 	// (Window::PollEvents); tests and the automation API inject gamepads instead, and the device poll leaves an
-	// injected gamepad alone until it is disconnected again.
+	// injected gamepad alone until it is disconnected again. A reset (focus loss) releases every button and
+	// centers every stick; a physical button or stick held through it stays released until it is let go, so it
+	// does not press again.
 	class Input
 	{
 	public:
 		static constexpr uint32_t MaxGamepads = 16;
+		static constexpr const char* DefaultInjectedGamepadName = "Injected Gamepad";
 
 		static bool IsKeyDown(KeyCode key);
 		static bool IsKeyPressed(KeyCode key);
@@ -44,16 +58,20 @@ namespace Basalt {
 		static bool IsMouseButtonReleased(MouseCode button);
 
 		static glm::vec2 GetMousePosition();
+		// Whether any mouse position arrived yet (before that, GetMousePosition is 0,0 but means nothing).
+		static bool HasMousePosition();
 		// Mouse movement since the previous frame.
 		static glm::vec2 GetMouseDelta();
 		// Scroll accumulated during the current frame.
 		static glm::vec2 GetMouseScroll();
 
-		// Out-of-range indices and disconnected gamepads read as released buttons and centered axes.
+		// Out-of-range indices and disconnected gamepads read as buttons up and centered axes;
+		// IsGamepadButtonReleased still reports the buttons held at a disconnect, on that frame.
 		static bool IsGamepadConnected(uint32_t index);
 		// Connected or disconnected on the current frame.
 		static bool WasGamepadConnected(uint32_t index);
 		static bool WasGamepadDisconnected(uint32_t index);
+		static GamepadSource GetGamepadSource(uint32_t index);
 		// The device's name ("Xbox Controller", ...); empty when not connected.
 		static std::string GetGamepadName(uint32_t index);
 		static bool IsGamepadButtonDown(uint32_t index, GamepadButton button);
@@ -75,17 +93,21 @@ namespace Basalt {
 		static void SetMousePosition(const glm::vec2& position);
 		static void AddMouseScroll(const glm::vec2& scroll);
 
-		// Injected gamepads (tests, automation). Connecting names the gamepad; disconnecting releases everything.
-		// The button and axis setters return false for an index out of range or a gamepad that is not connected.
-		// Axis values are clamped to the axis' range; NaN centers it.
-		static void SetGamepadConnected(uint32_t index, bool connected, const std::string& name = "Injected Gamepad");
+		// Injected gamepads (tests, automation). Connecting names the gamepad and makes it injected (taking over a
+		// physical gamepad at that index, released); disconnecting releases everything (a physical gamepad there
+		// comes back with the next poll). The button and axis setters return false for an index out of range or a
+		// gamepad that is not injected. Axis values are clamped to the axis' range; NaN centers it.
+		static void SetGamepadConnected(uint32_t index, bool connected, const std::string& name = DefaultInjectedGamepadName);
 		static bool SetGamepadButtonState(uint32_t index, GamepadButton button, bool down);
 		static bool SetGamepadAxis(uint32_t index, GamepadAxis axis, float value);
 		// Removes every injected gamepad as if it had never been connected: no disconnect is reported, and a gamepad
 		// connected again on the same frame reports its connection (a replay starts from no gamepads).
 		static void ForgetInjectedGamepads();
+		// While disabled, physical gamepads are forgotten like ForgetInjectedGamepads and device polls are ignored, so
+		// replays see only the gamepads they inject. Enabled by default.
+		static void SetDeviceGamepadsEnabled(bool enabled);
 		// A device poll: `state` is the device's current state, or nullptr when no gamepad is at `index`. Ignored
-		// for injected gamepads.
+		// for injected gamepads and while device gamepads are disabled.
 		static void UpdateGamepadFromDevice(uint32_t index, const GamepadDeviceState* state);
 	};
 

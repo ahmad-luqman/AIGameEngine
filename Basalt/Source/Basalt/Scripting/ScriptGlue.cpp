@@ -22,6 +22,7 @@
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/quaternion.hpp>
+#include <spdlog/fmt/ranges.h>
 
 #include <cmath>
 #include <limits>
@@ -120,7 +121,7 @@ namespace Basalt {
 		{
 			const auto button = GamepadButtonFromString(name);
 			if (!button)
-				throw std::runtime_error("unknown gamepad button '" + name + "' (valid: A, B, X, Y, LeftBumper, RightBumper, Back, Start, Guide, LeftThumb, RightThumb, DPadUp, DPadRight, DPadDown, DPadLeft)");
+				throw std::runtime_error(fmt::format("unknown gamepad button '{}' (valid: {})", name, fmt::join(GetGamepadButtonNames(), ", ")));
 			return *button;
 		}
 
@@ -128,7 +129,7 @@ namespace Basalt {
 		{
 			const auto axis = GamepadAxisFromString(name);
 			if (!axis)
-				throw std::runtime_error("unknown gamepad axis '" + name + "' (valid: LeftX, LeftY, RightX, RightY, LeftTrigger, RightTrigger)");
+				throw std::runtime_error(fmt::format("unknown gamepad axis '{}' (valid: {})", name, fmt::join(GetGamepadAxisNames(), ", ")));
 			return *axis;
 		}
 

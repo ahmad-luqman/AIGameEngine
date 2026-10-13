@@ -216,8 +216,7 @@ TEST_SUITE("Core")
 	TEST_CASE("Input tracks injected gamepads: connection, buttons, axes and their transitions")
 	{
 		Input::Reset();
-		for (uint32_t i = 0; i < Input::MaxGamepads; i++)
-			Input::SetGamepadConnected(i, false);
+		Input::ForgetInjectedGamepads();
 		Input::EndFrame();
 
 		// Disconnected gamepads read as released and centered, and cannot be driven.
@@ -276,8 +275,7 @@ TEST_SUITE("Core")
 	TEST_CASE("Device polls feed gamepads but leave injected ones alone")
 	{
 		Input::Reset();
-		for (uint32_t i = 0; i < Input::MaxGamepads; i++)
-			Input::SetGamepadConnected(i, false);
+		Input::ForgetInjectedGamepads();
 		Input::EndFrame();
 
 		GamepadDeviceState device;
@@ -326,6 +324,71 @@ TEST_SUITE("Core")
 		Input::SetGamepadConnected(4, false);
 		Input::UpdateGamepadFromDevice(5, nullptr);
 		Input::EndFrame();
+	}
+
+	TEST_CASE("A physical gamepad held through a focus loss stays released until it is let go")
+	{
+		Input::Reset();
+		Input::ForgetInjectedGamepads();
+		GamepadDeviceState device;
+		device.Name = "Pad";
+		device.Buttons[static_cast<size_t>(GamepadButton::A)] = true;
+		device.Axes[static_cast<size_t>(GamepadAxis::LeftX)] = 0.9f;
+		Input::UpdateGamepadFromDevice(0, &device);
+		CHECK(Input::GetGamepadSource(0) == GamepadSource::Device);
+		Input::EndFrame();
+		CHECK(Input::IsGamepadButtonDown(0, GamepadButton::A));
+
+		// Focus loss: released, and the next poll (A and the stick still held) does not press them again.
+		Input::Reset();
+		Input::UpdateGamepadFromDevice(0, &device);
+		CHECK_FALSE(Input::IsGamepadButtonDown(0, GamepadButton::A));
+		CHECK_FALSE(Input::IsGamepadButtonPressed(0, GamepadButton::A));
+		CHECK(Input::GetGamepadAxis(0, GamepadAxis::LeftX) == 0.0f);
+		Input::EndFrame();
+		// Let go (the stick back near the center), then pressed again: a real press.
+		device.Buttons[static_cast<size_t>(GamepadButton::A)] = false;
+		device.Axes[static_cast<size_t>(GamepadAxis::LeftX)] = 0.1f;
+		Input::UpdateGamepadFromDevice(0, &device);
+		CHECK(Input::GetGamepadAxis(0, GamepadAxis::LeftX) == doctest::Approx(0.1f));
+		Input::EndFrame();
+		device.Buttons[static_cast<size_t>(GamepadButton::A)] = true;
+		device.Axes[static_cast<size_t>(GamepadAxis::LeftX)] = 0.9f;
+		Input::UpdateGamepadFromDevice(0, &device);
+		CHECK(Input::IsGamepadButtonPressed(0, GamepadButton::A));
+		CHECK(Input::GetGamepadAxis(0, GamepadAxis::LeftX) == doctest::Approx(0.9f));
+
+		// Injecting over a physical gamepad takes it over, released; it cannot be driven while it is the device's.
+		Input::EndFrame();
+		Input::Reset();
+		Input::UpdateGamepadFromDevice(1, &device);
+		CHECK_FALSE(Input::SetGamepadButtonState(1, GamepadButton::B, true));
+		Input::SetGamepadConnected(1, true, "Test");
+		CHECK(Input::GetGamepadSource(1) == GamepadSource::Injected);
+		CHECK_FALSE(Input::IsGamepadButtonDown(1, GamepadButton::A));
+		CHECK(Input::SetGamepadButtonState(1, GamepadButton::B, true));
+
+		// With device gamepads off (replays), physical ones are forgotten and polls ignored.
+		Input::SetDeviceGamepadsEnabled(false);
+		CHECK_FALSE(Input::IsGamepadConnected(0));
+		CHECK_FALSE(Input::WasGamepadDisconnected(0));
+		Input::UpdateGamepadFromDevice(0, &device);
+		CHECK_FALSE(Input::IsGamepadConnected(0));
+		CHECK(Input::IsGamepadConnected(1));
+		Input::SetDeviceGamepadsEnabled(true);
+		Input::UpdateGamepadFromDevice(0, &device);
+		CHECK(Input::IsGamepadConnected(0));
+		Input::UpdateGamepadFromDevice(0, nullptr);
+		Input::ForgetInjectedGamepads();
+		Input::EndFrame();
+	}
+
+	TEST_CASE("Gamepad name lists match the enums")
+	{
+		REQUIRE(GetGamepadButtonNames().size() == GamepadButtonCount);
+		REQUIRE(GetGamepadAxisNames().size() == GamepadAxisCount);
+		CHECK(GetGamepadButtonNames()[static_cast<size_t>(GamepadButton::DPadLeft)] == "DPadLeft");
+		CHECK(GetGamepadAxisNames()[static_cast<size_t>(GamepadAxis::RightTrigger)] == "RightTrigger");
 	}
 
 	TEST_CASE("EventDispatcher routes by type and records handling")

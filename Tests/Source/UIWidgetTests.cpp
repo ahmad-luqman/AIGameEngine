@@ -41,8 +41,7 @@ namespace {
 		static void Reset()
 		{
 			Input::Reset();
-			for (uint32_t index = 0; index < Input::MaxGamepads; index++)
-				Input::SetGamepadConnected(index, false);
+			Input::ForgetInjectedGamepads();
 			Input::SetMousePosition({ -1000.0f, -1000.0f });
 			Input::EndFrame();
 			GameUI::SetViewportSize({ 1920.0f, 1080.0f });
@@ -123,6 +122,13 @@ namespace {
 	UIWidgetID IDOf(Entity entity)
 	{
 		return UIWidgetID::ForEntity(entity.GetUUID());
+	}
+
+	UIWidgetState StateOf(Scene& scene, Entity widget)
+	{
+		const std::optional<UIWidgetInfo> info = UILayout::GetWidget(widget);
+		REQUIRE(info);
+		return scene.GetUIInteraction()->GetState(IDOf(widget), info->Interactable);
 	}
 
 	nlohmann::json Field(Scene& scene, Entity entity, const std::string& name)
@@ -239,8 +245,25 @@ TEST_SUITE("UIWidgets")
 		CHECK(UIWidgets::SnapSliderValue(9.9f, 1.0f, 10.0f, 4.0f) == 10.0f);
 		CHECK(UIWidgets::SnapSliderValue(-3.0f, 0.0f, 1.0f, 0.0f) == 0.0f);
 		CHECK(UIWidgets::SnapSliderValue(0.3f, 0.0f, 1.0f, 1e-38f) == doctest::Approx(0.3f));
-		CHECK(UIWidgets::SliderNavigationStep(0.0f, 10.0f, 0.0f) == 0.5f);
-		CHECK(UIWidgets::SliderNavigationStep(0.0f, 10.0f, 2.0f) == 2.0f);
+		// Navigation steps from stop to stop, reaching every stop both ways, even when the range is not a whole
+		// number of steps (0, 0.3, 0.6, 0.9, 1).
+		CHECK(UIWidgets::StepSliderValue(1.0f, -1, 0.0f, 1.0f, 0.3f) == doctest::Approx(0.9f));
+		CHECK(UIWidgets::StepSliderValue(0.9f, 1, 0.0f, 1.0f, 0.3f) == 1.0f);
+		CHECK(UIWidgets::StepSliderValue(0.9f, -1, 0.0f, 1.0f, 0.3f) == doctest::Approx(0.6f));
+		CHECK(UIWidgets::StepSliderValue(0.0f, -1, 0.0f, 1.0f, 0.3f) == 0.0f);
+		CHECK(UIWidgets::StepSliderValue(0.0f, 9, 0.0f, 1.0f, 0.3f) == 1.0f);
+		// From between stops: to the neighbour of the nearest stop.
+		CHECK(UIWidgets::StepSliderValue(0.4f, 1, 0.0f, 1.0f, 0.3f) == doctest::Approx(0.6f));
+		// Exact steps (0.1 is not exact in binary) still end on Max.
+		CHECK(UIWidgets::StepSliderValue(0.9f, 1, 0.0f, 1.0f, 0.1f) == 1.0f);
+		CHECK(UIWidgets::StepSliderValue(2.0f, 3, -10.0f, 10.0f, 2.0f) == 8.0f);
+		// Continuous: a twentieth of the range.
+		CHECK(UIWidgets::StepSliderValue(5.0f, 1, 0.0f, 10.0f, 0.0f) == 5.5f);
+		CHECK(UIWidgets::StepSliderValue(9.9f, 2, 0.0f, 10.0f, 0.0f) == 10.0f);
+		// More stops than a float tells apart: steps by value.
+		CHECK(UIWidgets::StepSliderValue(0.0f, 1, 0.0f, 1e6f, 1e-3f) == doctest::Approx(1e-3f));
+		CHECK(UIWidgets::SliderValueAtFraction(0.5f, 0.0f, 10.0f, 3.0f) == 6.0f);
+		CHECK(UIWidgets::SliderValueAtFraction(2.0f, 0.0f, 10.0f, 0.0f) == 10.0f);
 		CHECK(UIWidgets::SliderFraction(5.0f, 0.0f, 10.0f) == 0.5f);
 		CHECK(UIWidgets::SliderFraction(5.0f, 1.0f, 1.0f) == 0.0f);
 
@@ -274,19 +297,19 @@ TEST_SUITE("UIWidgets")
 		Entity play = AddWidget<UIButtonComponent>(scene, "Play", { 100.0f, 100.0f }, { 200.0f, 80.0f }, { .Target = menu.GetUUID(), .OnClick = "StartGame" });
 		Entity self = AddWidget<UIButtonComponent>(scene, "Self", { 100.0f, 300.0f }, { 200.0f, 80.0f });
 		self.AddComponent<ScriptComponent>().Script = "Assets/Scripts/Recorder.lua";
-		Entity silent = AddWidget<UIButtonComponent>(scene, "Silent", { 100.0f, 500.0f }, { 200.0f, 80.0f }, { .Target = menu.GetUUID(), .OnClick = "" });
+		AddWidget<UIButtonComponent>(scene, "Silent", { 100.0f, 500.0f }, { 200.0f, 80.0f }, { .Target = menu.GetUUID(), .OnClick = "" });
 		scene.OnRuntimeStart();
 		REQUIRE(scene.GetUIInteraction());
 
 		Press(scene, { 150.0f, 120.0f });
 		CHECK(LogOf(scene, menu).empty());
-		CHECK(scene.GetUIInteraction()->GetState(IDOf(play), true) == UIWidgetState::Pressed);
+		CHECK(StateOf(scene, play) == UIWidgetState::Pressed);
 		CHECK(scene.GetUIInteraction()->IsPointerOverWidget());
 		Release(scene, { 160.0f, 130.0f });
 		CHECK(LogOf(scene, menu) == std::vector<std::string>{ "Play:StartGame" });
-		// The click focused it; the pointer still over it highlights it.
-		CHECK(FocusOf(scene) == IDOf(play));
-		CHECK(scene.GetUIInteraction()->GetState(IDOf(play), true) == UIWidgetState::Highlighted);
+		// A click does not focus (Space and Enter stay the game's); the pointer still over it highlights it.
+		CHECK_FALSE(FocusOf(scene).IsValid());
+		CHECK(StateOf(scene, play) == UIWidgetState::Highlighted);
 
 		// Released elsewhere: no click (dragging off a button cancels it). Pressed elsewhere: no click either.
 		Press(scene, { 150.0f, 120.0f });
@@ -308,8 +331,7 @@ TEST_SUITE("UIWidgets")
 		Click(scene, { 150.0f, 120.0f });
 		CHECK(LogOf(scene, menu).size() == 1);
 		CHECK_FALSE(scene.GetUIInteraction()->IsPointerOverWidget());
-		CHECK(scene.GetUIInteraction()->GetState(IDOf(play), false) == UIWidgetState::Disabled);
-		CHECK(silent);
+		CHECK(StateOf(scene, play) == UIWidgetState::Disabled);
 		scene.OnRuntimeStop();
 	}
 
@@ -357,7 +379,7 @@ TEST_SUITE("UIWidgets")
 		Input::SetMousePosition({ 9000.0f, 700.0f });
 		Frame(scene);
 		CHECK(volume.GetComponent<UISliderComponent>().Value == 10.0f);
-		CHECK(scene.GetUIInteraction()->GetState(IDOf(volume), true) == UIWidgetState::Pressed);
+		CHECK(StateOf(scene, volume) == UIWidgetState::Pressed);
 		Input::SetMousePosition({ 151.0f, 700.0f });
 		Frame(scene);
 		Release(scene, { 151.0f, 700.0f });
@@ -397,8 +419,8 @@ TEST_SUITE("UIWidgets")
 		const UICheckboxComponent defaults;
 		CHECK(commands[0].Kind == UIDrawKind::Rect);
 		CHECK(ResolveUIBox(commands[0], GameUI::GetCanvasSize()) == UIBox{ { 100.0f, 100.0f }, { 40.0f, 40.0f } });
-		// Focused by the clicks: highlighted.
-		CHECK(commands[0].Color == defaults.BoxColor * defaults.HighlightTint);
+		// Neither hovered nor focused (clicks do not focus): normal.
+		CHECK(commands[0].Color == defaults.BoxColor * defaults.NormalTint);
 		CHECK(ResolveUIBox(commands[1], GameUI::GetCanvasSize()) == UIBox{ { 110.0f, 110.0f }, { 20.0f, 20.0f } });
 		CHECK(commands[1].Color == defaults.CheckColor);
 		CHECK(commands[2].Kind == UIDrawKind::Text);
@@ -439,8 +461,12 @@ TEST_SUITE("UIWidgets")
 		Input::SetMouseButtonState(MouseCode::Left, true);
 		Frame(scene);
 		CHECK(imageColor() == glm::vec4(0.2f, 0.1f, 0.05f, 1.0f));
-		// Held, but the pointer moved off: no longer pressed, still focused.
+		// Held, but the pointer moved off: no longer pressed or hovered (and a press does not focus).
 		Input::SetMousePosition({ 500.0f, 500.0f });
+		Frame(scene);
+		CHECK(imageColor() == glm::vec4(0.4f, 0.2f, 0.1f, 1.0f));
+		// Focused by navigation: highlighted.
+		scene.GetUIInteraction()->SetFocus(IDOf(button));
 		Frame(scene);
 		CHECK(imageColor() == glm::vec4(0.8f, 0.4f, 0.2f, 1.0f));
 		Input::SetMouseButtonState(MouseCode::Left, false);
@@ -450,12 +476,16 @@ TEST_SUITE("UIWidgets")
 		CHECK(imageColor() == glm::vec4(0.8f, 0.4f, 0.2f, 0.5f));
 		CHECK_FALSE(FocusOf(scene).IsValid());
 
-		// An entity with several widget components acts (and draws) as the first of button, slider, checkbox.
+		// An entity with several widget components acts (and draws) as the first of button, slider, checkbox, and
+		// says so once.
 		slider.AddComponent<UIButtonComponent>();
 		CHECK(UILayout::GetWidgetKind(slider) == UIWidgetKind::Button);
 		CHECK(UILayout::CountWidgetComponents(slider) == 2);
+		const uint64_t since = Log::GetHistory().GetTotalCount();
 		commands = BuildCommands(scene);
+		Frame(scene, 2);
 		CHECK(commands.size() == 1);
+		CHECK(CountLogMessages(since, "'Slider' has several widget components; it acts as its UIButton only") == 1);
 		scene.OnRuntimeStop();
 	}
 
@@ -476,7 +506,7 @@ TEST_SUITE("UIWidgets")
 		// The first move only shows the focus, on the first widget.
 		Tap(scene, KeyCode::Down);
 		CHECK(FocusOf(scene) == IDOf(a));
-		CHECK(scene.GetUIInteraction()->GetState(IDOf(a), true) == UIWidgetState::Highlighted);
+		CHECK(StateOf(scene, a) == UIWidgetState::Highlighted);
 		Tap(scene, KeyCode::Right);
 		CHECK(FocusOf(scene) == IDOf(b));
 		Tap(scene, KeyCode::Down);
@@ -514,13 +544,22 @@ TEST_SUITE("UIWidgets")
 		CHECK(FocusOf(scene) == IDOf(e));
 		Tap(scene, KeyCode::Tab);
 		CHECK(FocusOf(scene) == IDOf(a));
+		// A focus set on a hidden widget gets one frame to appear (a widget may be shown as it is focused), then
+		// is dropped with a warning: it never was a widget that could take focus.
+		const uint64_t since = Log::GetHistory().GetTotalCount();
 		scene.GetUIInteraction()->SetFocus(IDOf(c));
 		Frame(scene);
+		CHECK(FocusOf(scene) == IDOf(c));
+		Frame(scene);
 		CHECK_FALSE(FocusOf(scene).IsValid());
+		CHECK(CountLogMessages(since, "is not a visible, interactable widget; dropped it") == 1);
+		// A focused widget that goes away loses the focus at once, without a warning.
 		scene.GetUIInteraction()->SetFocus(IDOf(d));
+		Frame(scene);
 		scene.DestroyEntity(d);
 		Frame(scene);
 		CHECK_FALSE(FocusOf(scene).IsValid());
+		CHECK(CountLogMessages(since, "is not a visible, interactable widget; dropped it") == 1);
 
 		// Navigation off (the editor's view does not have focus): keys do nothing.
 		GameUI::SetNavigationEnabled(false);
@@ -567,8 +606,8 @@ TEST_SUITE("UIWidgets")
 		};
 
 		// 1/64 s frames are exact in binary: the move happens on the first frame (t = 0), repeats once
-		// t >= RepeatDelay (0.4 s: frame 26, t = 0.40625), then every RepeatInterval (t = 0.5: frame 32,
-		// t = 0.6: frame 39).
+		// t >= RepeatDelay (0.4 s: frame 26, t = 0.40625), then every RepeatInterval (due at t = 0.5: frame 32;
+		// due at t = 0.6: frame 39, t = 0.609).
 		constexpr float Dt = 1.0f / 64.0f;
 		Input::SetKeyState(KeyCode::Down, true);
 		Frame(scene, 1, Dt);
@@ -620,12 +659,12 @@ TEST_SUITE("UIWidgets")
 		scene.GetUIInteraction()->SetFocus(IDOf(play));
 		Input::SetKeyState(KeyCode::Enter, true);
 		Frame(scene);
-		CHECK(scene.GetUIInteraction()->GetState(IDOf(play), true) == UIWidgetState::Pressed);
+		CHECK(StateOf(scene, play) == UIWidgetState::Pressed);
 		// Activated on the press, once.
 		Frame(scene, 3);
 		Input::SetKeyState(KeyCode::Enter, false);
 		Frame(scene);
-		CHECK(scene.GetUIInteraction()->GetState(IDOf(play), true) == UIWidgetState::Highlighted);
+		CHECK(StateOf(scene, play) == UIWidgetState::Highlighted);
 		Tap(scene, KeyCode::KPEnter);
 		CHECK(LogOf(scene, menu) == std::vector<std::string>{ "Play:OnClick", "Play:OnClick" });
 
@@ -788,15 +827,16 @@ TEST_SUITE("UIWidgets")
 		CHECK(Field(scene, menu, "Clicks") == 1);
 		Frame(scene);
 		CHECK(Field(scene, menu, "Clicks") == 1);
-		CHECK(Eval(scene, "return UI.GetFocus()") == "Play");
+		CHECK(Eval(scene, "return UI.GetFocus()") == "nil");
 		Click(scene, { 120.0f, 310.0f });
 		CHECK(Field(scene, menu, "Music") == true);
 		// The slider sits anchored to the bottom-right corner: its rect is (1480, 940) - (1900, 980).
 		Press(scene, { 1480.0f + 10.0f + 300.0f, 960.0f });
 		Release(scene, { 1480.0f + 10.0f + 300.0f, 960.0f });
 		CHECK(Field(scene, menu, "Volume") == 0.75);
+		// The disabled button takes no click (and covers nothing else).
 		Click(scene, { 150.0f, 520.0f });
-		CHECK(Eval(scene, "return UI.GetFocus()") == "Volume");
+		CHECK(Eval(scene, "return UI.IsPointerOverWidget()") == "false");
 
 		// Navigation reaches immediate widgets after the components (draw order), skipping the disabled one.
 		CHECK(Eval(scene, "UI.SetFocus(nil)") == "");
@@ -951,6 +991,359 @@ TEST_SUITE("UIWidgets")
 		scene.OnSimulationStop();
 	}
 
+	TEST_CASE("A Lua error in a widget callback is reported once and disables that script")
+	{
+		WidgetInputScope input;
+		TempProject project("UICallbackError");
+		Scene scene;
+		const std::string script = project.WriteFile("Assets/Scripts/Broken.lua", R"(
+			local Broken = {}
+			function Broken:OnCreate() self.Updates = 0 end
+			function Broken:OnUpdate() self.Updates = self.Updates + 1 end
+			function Broken:OnClick() error("boom") end
+			return Broken
+		)");
+		Entity menu = scene.CreateEntity("Menu");
+		menu.AddComponent<ScriptComponent>().Script = script;
+		AddWidget<UIButtonComponent>(scene, "Button", { 0.0f, 0.0f }, { 100.0f, 100.0f }, { .Target = menu.GetUUID() });
+		scene.OnRuntimeStart();
+		Click(scene, { 50.0f, 50.0f });
+		const nlohmann::json updates = Field(scene, menu, "Updates");
+		Click(scene, { 50.0f, 50.0f });
+		const std::vector<std::string>& errors = scene.GetScriptEngine()->GetErrors();
+		REQUIRE(errors.size() == 1);
+		CHECK(Contains(errors[0], "boom"));
+		CHECK(Contains(errors[0], "(in OnClick)"));
+		// Disabled like after any callback error: no more OnUpdate either.
+		CHECK(Field(scene, menu, "Updates") == updates);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("A held slider follows the pointer only when it moves, so a callback can override the value")
+	{
+		WidgetInputScope input;
+		TempProject project("UISliderOverride");
+		Scene scene;
+		const std::string script = project.WriteFile("Assets/Scripts/Limit.lua", R"(
+			local Limit = {}
+			function Limit:OnCreate() self.Calls = 0 end
+			function Limit:OnValueChanged(widget, value)
+				self.Calls = self.Calls + 1
+				if value > 5 then widget:SetComponent("UISlider", { Value = 5 }) end
+			end
+			return Limit
+		)");
+		Entity slider = AddWidget<UISliderComponent>(scene, "Volume", { 100.0f, 100.0f }, { 420.0f, 40.0f }, { .Value = 0.0f, .Min = 0.0f, .Max = 10.0f, .Step = 1.0f, .HandleWidth = 20.0f });
+		slider.AddComponent<ScriptComponent>().Script = script;
+		scene.OnRuntimeStart();
+		// The pointer at the fraction for 8: one callback, clamped to 5, and holding still keeps it there.
+		Press(scene, { 110.0f + 0.8f * 400.0f, 120.0f });
+		Frame(scene, 5);
+		CHECK(slider.GetComponent<UISliderComponent>().Value == 5.0f);
+		CHECK(Field(scene, slider, "Calls") == 1);
+		// Moving again drags again.
+		Input::SetMousePosition({ 110.0f + 0.2f * 400.0f, 120.0f });
+		Frame(scene);
+		CHECK(slider.GetComponent<UISliderComponent>().Value == 2.0f);
+		CHECK(Field(scene, slider, "Calls") == 2);
+		Release(scene, { 110.0f + 0.2f * 400.0f, 120.0f });
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Disabling, hiding or destroying a held widget cancels the hold")
+	{
+		WidgetInputScope input;
+		TempProject project("UIHoldCancel");
+		Scene scene;
+		Entity menu = AddRecorder(scene, project, "Menu");
+		Entity panel = scene.CreateEntity("Panel");
+		panel.AddComponent<UIRectComponent>(PlacedRect({ 0.0f, 0.0f }, { 1000.0f, 1000.0f }));
+		Entity play = AddWidget<UIButtonComponent>(scene, "Play", { 100.0f, 100.0f }, { 200.0f, 80.0f }, { .Target = menu.GetUUID() });
+		scene.SetParent(play, panel);
+		Entity volume = AddWidget<UISliderComponent>(scene, "Volume", { 100.0f, 300.0f }, { 420.0f, 40.0f }, { .Value = 0.5f, .HandleWidth = 20.0f, .Target = menu.GetUUID() });
+		scene.OnRuntimeStart();
+
+		Press(scene, { 150.0f, 120.0f });
+		play.GetComponent<UIButtonComponent>().Interactable = false;
+		Release(scene, { 150.0f, 120.0f });
+		play.GetComponent<UIButtonComponent>().Interactable = true;
+		Press(scene, { 150.0f, 120.0f });
+		panel.GetComponent<UIRectComponent>().Visible = false;
+		Release(scene, { 150.0f, 120.0f });
+		panel.GetComponent<UIRectComponent>().Visible = true;
+		CHECK(LogOf(scene, menu).empty());
+
+		// A slider disabled during a drag stops following the pointer.
+		Press(scene, { 310.0f, 320.0f });
+		volume.GetComponent<UISliderComponent>().Interactable = false;
+		Input::SetMousePosition({ 500.0f, 320.0f });
+		Frame(scene);
+		Release(scene, { 500.0f, 320.0f });
+		CHECK(volume.GetComponent<UISliderComponent>().Value == 0.5f);
+		CHECK(LogOf(scene, menu).empty());
+
+		// Destroyed while held: no click, no error.
+		Press(scene, { 150.0f, 120.0f });
+		scene.DestroyEntity(play);
+		Release(scene, { 150.0f, 120.0f });
+		CHECK(LogOf(scene, menu).empty());
+		CHECK(scene.GetScriptEngine()->GetErrors().empty());
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Losing the window's focus while a button is held does not click it")
+	{
+		WidgetInputScope input;
+		TempProject project("UIFocusLoss");
+		Scene scene;
+		Entity menu = AddRecorder(scene, project, "Menu");
+		AddWidget<UIButtonComponent>(scene, "Play", { 100.0f, 100.0f }, { 200.0f, 80.0f }, { .Target = menu.GetUUID() });
+		scene.OnRuntimeStart();
+		Press(scene, { 150.0f, 120.0f });
+		// What WindowLostFocusEvent does: every button up, without a release.
+		Input::Reset();
+		Frame(scene, 2);
+		CHECK(LogOf(scene, menu).empty());
+		// A real click still works afterwards.
+		Click(scene, { 150.0f, 120.0f });
+		CHECK(LogOf(scene, menu) == std::vector<std::string>{ "Play:OnClick" });
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("A mouse press drops the keyboard focus, on a widget or not")
+	{
+		WidgetInputScope input;
+		Scene scene;
+		Entity a = AddWidget<UIButtonComponent>(scene, "A", { 100.0f, 100.0f }, { 200.0f, 80.0f });
+		Entity b = AddWidget<UIButtonComponent>(scene, "B", { 100.0f, 300.0f }, { 200.0f, 80.0f });
+		scene.OnRuntimeStart();
+		scene.GetUIInteraction()->SetFocus(IDOf(a));
+		Frame(scene);
+		Click(scene, { 900.0f, 900.0f });
+		CHECK_FALSE(FocusOf(scene).IsValid());
+		scene.GetUIInteraction()->SetFocus(IDOf(a));
+		Frame(scene);
+		Click(scene, { 150.0f, 320.0f });
+		CHECK_FALSE(FocusOf(scene).IsValid());
+		// Space then belongs to the game: nothing focused, nothing activated.
+		Tap(scene, KeyCode::Space);
+		CHECK_FALSE(FocusOf(scene).IsValid());
+		CHECK(StateOf(scene, b) != UIWidgetState::Pressed);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("A game can turn widget navigation off")
+	{
+		WidgetInputScope input;
+		TempProject project("UINavigationOff");
+		Scene scene;
+		Entity menu = AddRecorder(scene, project, "Menu");
+		Entity play = AddWidget<UIButtonComponent>(scene, "Play", { 100.0f, 100.0f }, { 200.0f, 80.0f }, { .Target = menu.GetUUID() });
+		scene.OnRuntimeStart();
+		CHECK(Eval(scene, "return UI.IsNavigationEnabled()") == "true");
+		scene.GetUIInteraction()->SetFocus(IDOf(play));
+		Frame(scene);
+		// Turning it off drops the focus; arrows, Tab and Space then do nothing for the widgets.
+		CHECK(Eval(scene, "UI.SetNavigationEnabled(false)") == "");
+		CHECK(Eval(scene, "return UI.IsNavigationEnabled()") == "false");
+		CHECK_FALSE(FocusOf(scene).IsValid());
+		Tap(scene, KeyCode::Down);
+		Tap(scene, KeyCode::Tab);
+		Tap(scene, KeyCode::Space);
+		CHECK_FALSE(FocusOf(scene).IsValid());
+		CHECK(LogOf(scene, menu).empty());
+		// The mouse still works.
+		Click(scene, { 150.0f, 120.0f });
+		CHECK(LogOf(scene, menu) == std::vector<std::string>{ "Play:OnClick" });
+		CHECK(Eval(scene, "UI.SetNavigationEnabled(true)") == "");
+		Tap(scene, KeyCode::Down);
+		CHECK(FocusOf(scene) == IDOf(play));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("A diagonal stick moves along its dominant axis; the stick's X moves a focused slider")
+	{
+		WidgetInputScope input;
+		Scene scene;
+		Entity volume = AddWidget<UISliderComponent>(scene, "Volume", { 100.0f, 100.0f }, { 400.0f, 40.0f }, { .Value = 0.5f, .Step = 0.1f });
+		Entity below = AddWidget<UIButtonComponent>(scene, "Below", { 100.0f, 300.0f }, { 400.0f, 40.0f });
+		scene.OnRuntimeStart();
+		Input::SetGamepadConnected(0, true);
+		scene.GetUIInteraction()->SetFocus(IDOf(volume));
+		Frame(scene);
+		const auto push = [&](float x, float y) {
+			REQUIRE(Input::SetGamepadAxis(0, GamepadAxis::LeftX, x));
+			REQUIRE(Input::SetGamepadAxis(0, GamepadAxis::LeftY, y));
+			Frame(scene);
+			REQUIRE(Input::SetGamepadAxis(0, GamepadAxis::LeftX, 0.0f));
+			REQUIRE(Input::SetGamepadAxis(0, GamepadAxis::LeftY, 0.0f));
+			Frame(scene);
+		};
+		push(-1.0f, 0.0f);
+		CHECK(volume.GetComponent<UISliderComponent>().Value == doctest::Approx(0.4f));
+		push(0.6f, 0.2f);
+		CHECK(volume.GetComponent<UISliderComponent>().Value == doctest::Approx(0.5f));
+		// Mostly down: navigates down instead of moving the slider.
+		push(0.6f, 0.7f);
+		CHECK(volume.GetComponent<UISliderComponent>().Value == doctest::Approx(0.5f));
+		CHECK(FocusOf(scene) == IDOf(below));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Scripts hear about gamepads connected before play and while paused")
+	{
+		WidgetInputScope input;
+		TempProject project("UIGamepadAnnounce");
+		Scene scene;
+		const std::string script = project.WriteFile("Assets/Scripts/Pads.lua", R"(
+			local Pads = {}
+			function Pads:OnCreate() self.Log = {} end
+			function Pads:OnGamepadConnected(index) table.insert(self.Log, "+" .. index) end
+			function Pads:OnGamepadDisconnected(index) table.insert(self.Log, "-" .. index) end
+			return Pads
+		)");
+		Entity pads = scene.CreateEntity("Pads");
+		pads.AddComponent<ScriptComponent>().Script = script;
+		Input::SetGamepadConnected(1, true);
+		Input::EndFrame();
+		scene.OnRuntimeStart();
+		Frame(scene);
+		CHECK(Field(scene, pads, "Log") == nlohmann::json({ "+1" }));
+		// While paused nothing updates; the change is announced when play resumes.
+		scene.SetPaused(true);
+		Input::SetGamepadConnected(1, false);
+		Input::SetGamepadConnected(3, true);
+		Frame(scene, 3);
+		scene.SetPaused(false);
+		Frame(scene);
+		CHECK(Field(scene, pads, "Log") == nlohmann::json({ "+1", "-1", "+3" }));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Loading a scene drops what the UI held, hovered and focused")
+	{
+		WidgetInputScope input;
+		TempProject project("UISceneLoad");
+		const std::string level = project.WriteFile("Assets/Scenes/Level.bscene", R"({
+			"Format": "BasaltScene", "Version": 1, "Name": "Level",
+			"Entities": [ { "ID": 7, "Name": "LevelButton", "Components": { "UIRect": { "AnchorMin": [0, 0], "AnchorMax": [0, 0], "Pivot": [0, 0], "Position": [100, 100], "Size": [200, 80] }, "UIButton": { "OnClick": "" } } } ]
+		})");
+		const std::string script = project.WriteFile("Assets/Scripts/Loader.lua", R"(
+			local Loader = {}
+			function Loader:OnClick() Scene.Load("Assets/Scenes/Level.bscene") end
+			return Loader
+		)");
+		Scene scene;
+		// The new scene's button has the same ID (as when a scene reloads): only the load itself can drop the state.
+		Entity start = scene.CreateEntityWithUUID(UUID(7), "Start");
+		start.AddComponent<UIRectComponent>(PlacedRect({ 100.0f, 100.0f }, { 200.0f, 80.0f }));
+		start.AddComponent<UIButtonComponent>();
+		start.AddComponent<ScriptComponent>().Script = script;
+		scene.OnRuntimeStart();
+		// Hold the mouse on Start, then activate it from the keyboard: the load lands at the end of that frame.
+		Press(scene, { 150.0f, 120.0f });
+		scene.GetUIInteraction()->SetFocus(IDOf(start));
+		Frame(scene);
+		Tap(scene, KeyCode::Enter);
+		Entity levelButton = scene.FindEntityByName("LevelButton");
+		REQUIRE(levelButton);
+		CHECK_FALSE(FocusOf(scene).IsValid());
+		// The mouse held through the load does not click the new scene's button at the same spot.
+		Release(scene, { 150.0f, 120.0f });
+		CHECK(StateOf(scene, levelButton) == UIWidgetState::Highlighted);
+		CHECK(scene.GetScriptEngine()->GetErrors().empty());
+		scene.OnRuntimeStop();
+		CHECK(level == "Assets/Scenes/Level.bscene");
+	}
+
+	TEST_CASE("A focus set on an immediate-mode widget before it is drawn waits a frame for it")
+	{
+		WidgetInputScope input;
+		TempProject project("UIFocusFirst");
+		Scene scene;
+		const std::string script = project.WriteFile("Assets/Scripts/Menu.lua", R"(
+			local Menu = {}
+			function Menu:OnCreate() self.Clicks = 0; UI.SetFocus("Play") end
+			function Menu:OnUpdate()
+				if ShowMenu ~= false and UI.Button("Play", 100, 100, 200, 80) then self.Clicks = self.Clicks + 1 end
+			end
+			return Menu
+		)");
+		Entity menu = scene.CreateEntity("Menu");
+		menu.AddComponent<ScriptComponent>().Script = script;
+		scene.OnRuntimeStart();
+		Frame(scene, 2);
+		CHECK(FocusOf(scene) == UIWidgetID::ForName("Play"));
+		Tap(scene, KeyCode::Enter);
+		CHECK(Field(scene, menu, "Clicks") == 1);
+		// A focused immediate widget that is no longer drawn loses the focus (without a warning: it was a widget).
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		CHECK(Eval(scene, "ShowMenu = false") == "");
+		Frame(scene, 2);
+		CHECK(Eval(scene, "return UI.GetFocus()") == "nil");
+		Tap(scene, KeyCode::Enter);
+		CHECK(Field(scene, menu, "Clicks") == 1);
+		CHECK(CountLogMessages(since, "dropped it") == 0);
+		// An id that never shows up is dropped with a warning.
+		CHECK(Eval(scene, "UI.SetFocus('Nope')") == "");
+		Frame(scene, 2);
+		CHECK(Eval(scene, "return UI.GetFocus()") == "nil");
+		CHECK(CountLogMessages(since, "the focus was set to 'Nope', which is not a visible, interactable widget") == 1);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Immediate-mode checkboxes and sliders drawn disabled ignore input that arrived before")
+	{
+		WidgetInputScope input;
+		TempProject project("UIImmediateLock");
+		Scene scene;
+		const std::string script = project.WriteFile("Assets/Scripts/Menu.lua", R"(
+			local Menu = {}
+			function Menu:OnCreate() self.Music = false; self.Volume = 0.5 end
+			function Menu:OnUpdate()
+				self.Music = UI.Checkbox("Music", self.Music, 100, 100, 300, 40, { Interactable = not Lock })
+				self.Volume = UI.Slider("Volume", self.Volume, 0, 1, 100, 200, 420, 40, { Interactable = not Lock, HandleWidth = 20 })
+			end
+			return Menu
+		)");
+		Entity menu = scene.CreateEntity("Menu");
+		menu.AddComponent<ScriptComponent>().Script = script;
+		scene.OnRuntimeStart();
+		Frame(scene);
+		Press(scene, { 120.0f, 120.0f });
+		CHECK(Eval(scene, "Lock = true") == "");
+		Release(scene, { 120.0f, 120.0f });
+		CHECK(Field(scene, menu, "Music") == false);
+		CHECK(Eval(scene, "Lock = false") == "");
+		Frame(scene);
+		CHECK(Eval(scene, "Lock = true") == "");
+		Press(scene, { 500.0f, 220.0f });
+		Release(scene, { 500.0f, 220.0f });
+		CHECK(Field(scene, menu, "Volume") == 0.5);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Callback problems are reported once per kind of problem")
+	{
+		WidgetInputScope input;
+		TempProject project("UICallbackKinds");
+		Scene scene;
+		Entity target = scene.CreateEntity("Target");
+		AddWidget<UIButtonComponent>(scene, "Button", { 0.0f, 0.0f }, { 100.0f, 100.0f }, { .Target = target.GetUUID(), .OnClick = "Go" });
+		scene.OnRuntimeStart();
+		Click(scene, { 50.0f, 50.0f });
+		// The game adds a script, but without the method: a new problem, reported too.
+		target.AddComponent<ScriptComponent>().Script = project.WriteFile("Assets/Scripts/Empty.lua", "return {}");
+		Frame(scene);
+		Click(scene, { 50.0f, 50.0f });
+		Click(scene, { 50.0f, 50.0f });
+		const std::vector<std::string>& errors = scene.GetScriptEngine()->GetErrors();
+		REQUIRE(errors.size() == 2);
+		CHECK(Contains(errors[0], "'Target' has no running script"));
+		CHECK(Contains(errors[1], "the script of 'Target' has no method Go"));
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Validating a widget component accepts exactly what sanitizing leaves unchanged")
 	{
 		std::mt19937 random(11);
@@ -962,20 +1355,9 @@ TEST_SUITE("UIWidgets")
 		for (int i = 0; i < 500; i++)
 		{
 			INFO("iteration ", i);
-			UISliderComponent slider{ .Value = pick(), .Min = pick(), .Max = pick(), .Step = pick(), .FillColor = color(), .HandleWidth = pick(), .NormalTint = color(), .OnValueChanged = name() };
-			const UISliderComponent repairedSlider = SanitizeUISlider(slider);
-			CHECK(ValidateUISlider(slider).empty() == (repairedSlider == slider));
-			CHECK_MESSAGE(ValidateUISlider(repairedSlider).empty(), ValidateUISlider(repairedSlider), " min ", slider.Min, " max ", slider.Max, " value ", slider.Value, " step ", slider.Step);
-
-			UIButtonComponent button{ .HighlightTint = color(), .PressedTint = color(), .OnClick = name() };
-			const UIButtonComponent repairedButton = SanitizeUIButton(button);
-			CHECK(ValidateUIButton(button).empty() == (repairedButton == button));
-			CHECK(ValidateUIButton(repairedButton).empty());
-
-			UICheckboxComponent checkbox{ .BoxColor = color(), .CheckColor = color(), .DisabledTint = color(), .OnValueChanged = name() };
-			const UICheckboxComponent repairedCheckbox = SanitizeUICheckbox(checkbox);
-			CHECK(ValidateUICheckbox(checkbox).empty() == (repairedCheckbox == checkbox));
-			CHECK(ValidateUICheckbox(repairedCheckbox).empty());
+			CheckRulesAgree(UISliderComponent{ .Value = pick(), .Min = pick(), .Max = pick(), .Step = pick(), .FillColor = color(), .HandleWidth = pick(), .NormalTint = color(), .OnValueChanged = name() }, &SanitizeUISlider, &ValidateUISlider);
+			CheckRulesAgree(UIButtonComponent{ .HighlightTint = color(), .PressedTint = color(), .OnClick = name() }, &SanitizeUIButton, &ValidateUIButton);
+			CheckRulesAgree(UICheckboxComponent{ .BoxColor = color(), .CheckColor = color(), .DisabledTint = color(), .OnValueChanged = name() }, &SanitizeUICheckbox, &ValidateUICheckbox);
 		}
 	}
 }

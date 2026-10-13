@@ -4,7 +4,7 @@
 #include "Basalt/Core/Timestep.h"
 #include "Basalt/Core/UUID.h"
 #include "Basalt/Physics/PhysicsWorld.h"
-#include "Basalt/UI/UIInteraction.h"
+#include "Basalt/UI/UIWidgetEvent.h"
 
 #include <nlohmann/json.hpp>
 
@@ -30,7 +30,8 @@ namespace Basalt {
 	//   function Player:OnCollisionBegin(other, contact) end
 	//   function Player:OnCollisionEnd(other) end  -- likewise OnTriggerEnter, OnTriggerExit (no contact)
 	//   function Player:OnJointBreak(other) end    -- other is the far body; nil for a joint to the world
-	//   function Player:OnGamepadConnected(index) end  -- likewise OnGamepadDisconnected
+	//   function Player:OnGamepadConnected(index) end  -- also for gamepads connected when play starts; likewise
+	//                                                  -- OnGamepadDisconnected
 	//   return Player
 	//
 	// Each entity gets an instance table (self) whose fields start as the property values, with
@@ -53,10 +54,10 @@ namespace Basalt {
 		// Instantiates every ScriptComponent, then calls OnCreate on each in hierarchy order (all instances
 		// exist before the first OnCreate runs).
 		void Start();
-		// Creates the instances of scripts added since the last frame, calls OnGamepadConnected/Disconnected for
-		// this frame's gamepad changes, the widget callbacks of `uiEvents` (UIInteraction) and OnUpdate, then
-		// runs the due timers and coroutines.
-		void Update(Timestep ts, std::span<const UIWidgetEvent> uiEvents = {});
+		// Creates the instances of scripts added since the last frame, calls OnGamepadConnected/Disconnected for the
+		// gamepads connected or disconnected since the last Update (the first one announces those already connected),
+		// the widget callbacks of `uiEvents` (UIInteraction) and OnUpdate, then runs the due timers and coroutines.
+		void Update(Timestep ts, std::span<const UIWidgetEvent> uiEvents);
 		void LateUpdate(Timestep ts);
 		// Calls OnDestroy on every live instance, then ends the session's timers, coroutines and event handlers.
 		void Stop();
@@ -97,7 +98,7 @@ namespace Basalt {
 		bool CreateInstance(Entity entity);
 		void DispatchGamepadConnections();
 		// Calls a widget's callback on its target. A callback that cannot be called (no target entity, no script,
-		// no such method) is reported once per widget and method.
+		// no such method) is a script error, reported once per widget, method and problem.
 		void DispatchUIEvent(const UIWidgetEvent& event);
 
 	private:

@@ -339,7 +339,7 @@ Returns the scene renderer's statistics: viewport and render size, render scale 
 
 ### `replay.record_start`
 
-Starts recording input.key/input.mouse commands with the play frame they arrive on.
+Starts recording input.key/input.mouse/input.gamepad commands with the play frame they arrive on (injected gamepads already connected are recorded as connected on that frame).
 
 ### `replay.record_stop`
 
@@ -427,7 +427,7 @@ Compiles a Lua script in isolation and returns its Properties, or the error.
 
 ### `ui.layout`
 
-Lays out the current scene's UI components (the play copy while playing) for a viewport of width x height pixels: the canvas size, every visible UI entity's rect [x, y, width, height] in canvas units in draw order (widgets add their kind, values, target and, while playing, state and focus; headless, widgets take mouse input on the 1920x1080 canvas, where mouse positions are canvas units), and the problems that make UI draw differently than authored (an image that does not load and draws its Color, a font that does not load and falls back to the built-in one or has glyphs that draw blank).
+Lays out the current scene's UI components (the play copy while playing) for a viewport of width x height pixels: the canvas size, every visible UI entity's rect [x, y, width, height] in canvas units in draw order (widgets add their kind, values, target, callback and, while playing, state and focus), the host's view that maps the mouse onto the canvas for the widgets (`view`: origin and size in mouse coordinates and whether widgets take pointer and navigation input; headless, mouse positions are canvas units), and the problems that make UI draw or behave differently than authored (an image that does not load and draws its Color, a font that does not load and falls back to the built-in one or has glyphs that draw blank, an entity with several widget components, a widget callback whose target is missing or has no Script).
 
 | Parameter | Type / description |
 |-----------|--------------------|
