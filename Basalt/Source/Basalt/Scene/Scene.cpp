@@ -472,7 +472,8 @@ namespace Basalt {
 		m_ScriptEngine->Start();
 		m_DeferDestruction--;
 		FlushPendingDestruction();
-		// After OnCreate, which applies saved bus volumes before the PlayOnStart sources sound.
+		// After OnCreate, so bus volumes it sets (e.g. the player's saved settings) apply before the PlayOnStart
+		// sources sound.
 		m_AudioSystem->BeginPlayback();
 	}
 
@@ -772,6 +773,9 @@ namespace Basalt {
 			m_ScriptEngine->EnsureInstances(created);
 		m_DeferDestruction--;
 		FlushPendingDestruction();
+		// After OnCreate, as on play start: the new scene's scripts can stop or re-bus its music first.
+		if (m_AudioSystem)
+			m_AudioSystem->BeginPlayback();
 
 		if (loaded)
 			BS_CORE_INFO("Scene: loaded '{}' ({} entities; {} kept from the previous scene, {} of the file's skipped as already present)", load->Path, created.size(), existing.size(), skipped);

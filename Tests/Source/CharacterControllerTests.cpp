@@ -647,7 +647,7 @@ TEST_SUITE("Physics")
 				end
 				self.Speed = self.Entity:GetLinearVelocity().x
 				local ok, err = pcall(function() Scene.FindEntityByName("Zone"):Move(Vec3(1, 0, 0)) end)
-				self.MoveError = not ok and tostring(err):find("needs a CharacterController") ~= nil
+				self.MoveError = not ok and tostring(err):find("needs the CharacterController component") ~= nil
 				self.ZoneNormal = Scene.FindEntityByName("Zone"):GetGroundNormal() == nil
 			end
 			function Walker:OnTriggerEnter(other) self.Triggers = self.Triggers + 1; self.Other = other.Name end

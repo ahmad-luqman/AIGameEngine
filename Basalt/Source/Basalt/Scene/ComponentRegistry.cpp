@@ -10,6 +10,7 @@
 #include "Basalt/UI/UIRules.h"
 
 #include <glm/gtc/type_ptr.hpp>
+#include <spdlog/fmt/ranges.h>
 
 #include <algorithm>
 #include <array>
@@ -145,10 +146,7 @@ namespace Basalt {
 				const std::string text = element.get<std::string>();
 				if (const std::optional<E> value = EnumFromName<E>(names, text))
 					return *value;
-				std::string valid;
-				for (size_t i = 0; i < N; i++)
-					valid += (i ? ", " : "") + std::string(names[i]);
-				throw std::runtime_error(std::string("field '") + name + "' has invalid value '" + text + "' (valid: " + valid + ")");
+				throw std::runtime_error(fmt::format("field '{}' has invalid value '{}' (valid: {})", name, text, fmt::join(names, ", ")));
 			}
 
 			const json* Find(const char* name)
@@ -301,10 +299,9 @@ namespace Basalt {
 		template<typename E, size_t N>
 		const char* EnumName(const char* const (&names)[N], E value)
 		{
-			const auto index = static_cast<size_t>(value);
-			if (index < N)
-				return names[index];
-			BS_CORE_ERROR("ComponentRegistry: enum value {} is out of range; writing '{}'", index, names[0]);
+			if (const char* name = EnumNameOrNull(names, value))
+				return name;
+			BS_CORE_ERROR("ComponentRegistry: enum value {} is out of range; writing '{}'", static_cast<size_t>(value), names[0]);
 			return names[0];
 		}
 

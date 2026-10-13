@@ -2,6 +2,7 @@
 
 #include "Basalt/Audio/AudioEngine.h"
 #include "Basalt/Audio/AudioRules.h"
+#include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Scene/Entity.h"
@@ -10,6 +11,7 @@
 #include <miniaudio.h>
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace Basalt {
@@ -20,15 +22,15 @@ namespace Basalt {
 		constexpr auto MasterIndex = static_cast<size_t>(AudioBus::Master);
 		static_assert(MasterIndex == 0);
 
-		// C++ code can store a value outside the enum (the registry and Lua never do); it plays on SFX, the
-		// default bus, rather than indexing past the bus arrays.
-		size_t BusIndex(AudioBus bus)
+		// The bus's index into the bus arrays; nullopt (logged) for a value outside the enum, which only C++ code
+		// can pass (the registry and Lua reject unknown names, and sources are validated before they play).
+		std::optional<size_t> BusIndex(AudioBus bus)
 		{
 			const auto index = static_cast<size_t>(bus);
 			if (index < AudioBusCount)
 				return index;
-			BS_CORE_ERROR("Audio: bus value {} is out of range; using SFX", index);
-			return static_cast<size_t>(AudioBus::SFX);
+			BS_CORE_ERROR("Audio: bus value {} is out of range", index);
+			return std::nullopt;
 		}
 
 	}
@@ -47,17 +49,19 @@ namespace Basalt {
 			return;
 
 		// Master feeds the engine's endpoint; every other bus feeds Master. Buses only mix: they are neither
-		// spatialized (a group is a point at the origin; miniaudio's default for groups, stated here so it does
-		// not depend on that) nor pitched.
+		// spatialized (a group has no position, so spatializing one would attenuate it by the listener's distance
+		// from the origin; miniaudio already disables it for groups, the flag makes that explicit) nor pitched.
 		constexpr ma_uint32 BusFlags = MA_SOUND_FLAG_NO_SPATIALIZATION | MA_SOUND_FLAG_NO_PITCH;
 		for (size_t i = 0; i < AudioBusCount; i++)
 		{
 			ma_sound* parent = i == MasterIndex ? nullptr : m_Buses[MasterIndex].get();
+			// A plain unique_ptr until init succeeds: SoundDeleter must only see initialized sounds.
 			auto group = std::make_unique<ma_sound>();
 			if (const ma_result result = ma_sound_group_init(engine, BusFlags, parent, group.get()); result != MA_SUCCESS)
 			{
-				// CreateSound routes the bus's sounds into Master instead (or the endpoint, without Master).
-				BS_CORE_ERROR("Audio: cannot create the {} bus ({}); its sounds ignore its volume", AudioBusNames[i], ma_result_description(result));
+				// CreateSound routes the bus's sounds into Master instead (or the endpoint, without Master), and
+				// SetBusVolume refuses the bus.
+				BS_CORE_ERROR("Audio: cannot create the {} bus ({}); its sounds play through Master and ignore its volume", AudioBusNames[i], ma_result_description(result));
 				continue;
 			}
 			m_Buses[i] = SoundHandle(group.release());
@@ -70,10 +74,19 @@ namespace Basalt {
 	AudioSystem::SoundHandle AudioSystem::CreateSound(const std::string& clip, bool spatial, AudioBus bus, bool stream)
 	{
 		ma_engine* engine = AudioEngine::GetEngine();
-		if (!engine || clip.empty())
+		if (!engine)
+			return nullptr;
+		if (clip.empty())
+		{
+			BS_CORE_ERROR("Audio: cannot play a sound without a clip");
+			return nullptr;
+		}
+		const std::optional<size_t> busIndex = BusIndex(bus);
+		if (!busIndex)
 			return nullptr;
 
 		const std::string path = Project::ResolvePath(clip).string();
+		// A plain unique_ptr until init succeeds: SoundDeleter must only see initialized sounds.
 		auto sound = std::make_unique<ma_sound>();
 		// Streams decode a page at a time as they play (the resource manager keeps two one-second pages);
 		// everything else is decoded whole on load and shared while any sound uses the same file.
@@ -81,7 +94,8 @@ namespace Basalt {
 		if (!spatial)
 			flags |= MA_SOUND_FLAG_NO_SPATIALIZATION;
 		// A bus that failed to create falls back to Master, so Master's volume still applies.
-		ma_sound* group = m_Buses[BusIndex(bus)] ? m_Buses[BusIndex(bus)].get() : m_Buses[MasterIndex].get();
+		const SoundHandle& busGroup = m_Buses[*busIndex];
+		ma_sound* group = busGroup ? busGroup.get() : m_Buses[MasterIndex].get();
 		if (const ma_result result = ma_sound_init_from_file(engine, path.c_str(), flags, group, nullptr, sound.get()); result != MA_SUCCESS)
 		{
 			BS_CORE_ERROR("Audio: cannot load clip '{}' ({}, {}): {}", clip, path, stream ? "streamed" : "decoded", ma_result_description(result));
@@ -92,12 +106,12 @@ namespace Basalt {
 
 	void AudioSystem::Start()
 	{
+		BS_CORE_ASSERT(m_PendingStarts.empty(), "Start runs once, before BeginPlayback");
 		auto view = m_Scene->GetAllEntitiesWith<AudioSourceComponent>();
 		for (entt::entity handle : view)
 		{
-			Entity entity = { handle, m_Scene };
-			if (view.get<AudioSourceComponent>(handle).PlayOnStart && PlaySource(entity, false))
-				m_PendingStarts.insert(entity.GetUUID());
+			if (view.get<AudioSourceComponent>(handle).PlayOnStart)
+				PlaySource({ handle, m_Scene }, StartMode::OnBeginPlayback);
 		}
 		Update(0.0f);
 	}
@@ -118,7 +132,7 @@ namespace Basalt {
 		{
 			const auto* source = entity ? entity.TryGetComponent<AudioSourceComponent>() : nullptr;
 			if (source && source->PlayOnStart)
-				Play(entity);
+				PlaySource(entity, StartMode::OnBeginPlayback);
 		}
 		// Positions the new sources and the listener right away, as Start does.
 		Update(0.0f);
@@ -126,10 +140,10 @@ namespace Basalt {
 
 	bool AudioSystem::Play(Entity entity)
 	{
-		return PlaySource(entity, true);
+		return PlaySource(entity, StartMode::Now);
 	}
 
-	bool AudioSystem::PlaySource(Entity entity, bool startNow)
+	bool AudioSystem::PlaySource(Entity entity, StartMode mode)
 	{
 		const auto* source = entity.TryGetComponent<AudioSourceComponent>();
 		if (!source)
@@ -156,22 +170,30 @@ namespace Basalt {
 			const glm::vec3 position = glm::vec3(m_Scene->GetWorldTransform(entity)[3]);
 			ma_sound_set_position(sound.get(), position.x, position.y, position.z);
 		}
-		if (startNow)
+		const UUID uuid = entity.GetUUID();
+		if (mode == StartMode::Now)
 			ma_sound_start(sound.get());
-		m_Sources[entity.GetUUID()] = std::move(sound);
+		else
+			m_PendingStarts.insert(uuid);
+		m_Sources[uuid] = std::move(sound);
 		return true;
 	}
 
 	void AudioSystem::Stop(Entity entity)
 	{
-		m_PendingStarts.erase(entity.GetUUID());
-		m_Sources.erase(entity.GetUUID());
+		const UUID uuid = entity.GetUUID();
+		m_PendingStarts.erase(uuid);
+		m_Sources.erase(uuid);
 	}
 
 	bool AudioSystem::IsPlaying(Entity entity) const
 	{
-		auto it = m_Sources.find(entity.GetUUID());
-		return it != m_Sources.end() && (m_PendingStarts.contains(entity.GetUUID()) || ma_sound_is_playing(it->second.get()));
+		const UUID uuid = entity.GetUUID();
+		auto it = m_Sources.find(uuid);
+		if (it == m_Sources.end())
+			return false;
+		// A pending source (loaded, BeginPlayback not run yet) already counts as playing.
+		return m_PendingStarts.contains(uuid) || ma_sound_is_playing(it->second.get());
 	}
 
 	bool AudioSystem::IsStreaming(Entity entity) const
@@ -243,21 +265,31 @@ namespace Basalt {
 
 	bool AudioSystem::SetBusVolume(AudioBus bus, float volume)
 	{
+		const std::optional<size_t> index = BusIndex(bus);
+		if (!index)
+			return false;
 		if (!IsValidAudioVolume(volume))
 		{
-			BS_CORE_ERROR("Audio: the {} bus volume must be a finite number >= 0 (got {})", AudioBusNames[BusIndex(bus)], volume);
+			BS_CORE_ERROR("Audio: the {} bus volume must be a finite number >= 0 (got {})", AudioBusNames[*index], volume);
 			return false;
 		}
-		const size_t index = BusIndex(bus);
-		m_BusVolumes[index] = volume;
-		if (m_Buses[index])
-			ma_sound_group_set_volume(m_Buses[index].get(), volume);
+		// Without an engine there is nothing to scale and the volume is only kept; with one, a bus that failed to
+		// create cannot apply it.
+		if (AudioEngine::GetEngine() && !m_Buses[*index])
+		{
+			BS_CORE_ERROR("Audio: the {} bus failed to create; its volume cannot change", AudioBusNames[*index]);
+			return false;
+		}
+		m_BusVolumes[*index] = volume;
+		if (m_Buses[*index])
+			ma_sound_group_set_volume(m_Buses[*index].get(), volume);
 		return true;
 	}
 
 	float AudioSystem::GetBusVolume(AudioBus bus) const
 	{
-		return m_BusVolumes[BusIndex(bus)];
+		const std::optional<size_t> index = BusIndex(bus);
+		return index ? m_BusVolumes[*index] : 0.0f;
 	}
 
 	uint32_t AudioSystem::GetActiveSoundCount() const

@@ -797,9 +797,13 @@ whose data could crash the font rasterizer draw blank, with a warning (also show
 
 An `AudioSource` component plays a project-relative clip (WAV, FLAC or MP3) while the scene plays: from
 the start with `PlayOnStart`, or when a script calls `e:PlayAudio()` (which restarts it from the beginning).
-Every field is read when the clip starts; changes apply on the next `e:PlayAudio()`. `PlayOnStart` sources
-start sounding right after the scripts' `OnCreate` (they already report `e:IsAudioPlaying()` there), so
-volumes a script sets in `OnCreate` apply from the first sample.
+Every field is read when the clip is loaded; changes apply on the next `e:PlayAudio()`, which stops the
+current sound first even when the new one cannot play. `PlayOnStart` sources (on play start, and those a
+`Scene.Load` adds) are loaded before the scripts' `OnCreate`, where they already report
+`e:IsAudioPlaying()`, and start sounding right after it: bus volumes set there apply from the first sample,
+and `e:StopAudio()` there keeps a source silent. `e:PlayAudio()` and `e:StopAudio()` raise an error on an
+entity without an `AudioSource`; `e:PlayAudio()` returns false (with the reason in the log) when the source
+cannot play.
 
 | Field | Meaning |
 |-------|---------|
@@ -833,8 +837,10 @@ end
   3D when a position is given (pass `nil` to skip it). Returns false when the clip cannot be loaded or
   audio is unavailable. One-shots are never streamed.
 - `Audio.SetBusVolume(bus, volume)`, `Audio.GetBusVolume(bus)` — `bus` is `"Master"`, `"Music"`, `"SFX"` or
-  `"UI"`; `volume` is a linear gain like `Volume`.
-- An unknown bus name or a volume that is negative or not finite raises an error.
+  `"UI"`; `volume` is a linear gain like `Volume`. `SetBusVolume` returns true, or false (logged) if the bus
+  could not be created.
+- An unknown bus name or a volume that is negative or not finite raises an error, as does any `Audio.*`
+  call outside play ("audio is not running").
 
 ## Debug drawing, time, logging, game
 
