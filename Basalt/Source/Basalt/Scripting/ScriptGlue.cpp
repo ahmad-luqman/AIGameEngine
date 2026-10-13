@@ -337,7 +337,7 @@ namespace Basalt {
 		float RequireAudioVolume(const char* function, float volume)
 		{
 			if (!IsValidAudioVolume(volume))
-				throw std::runtime_error(std::string(function) + ": volume must be a finite number >= 0");
+				throw std::runtime_error(fmt::format("{}: volume must be a finite number >= 0 (got {})", function, volume));
 			return volume;
 		}
 
@@ -356,7 +356,7 @@ namespace Basalt {
 		{
 			Entity entity = self.ResolveOrThrow();
 			if (!entity.HasComponent<T>())
-				throw std::runtime_error(std::string(function) + " needs a " + component + " component on '" + entity.GetName() + "'");
+				throw std::runtime_error(std::string(function) + " needs the " + component + " component on '" + entity.GetName() + "'");
 			return entity;
 		}
 
@@ -526,7 +526,7 @@ namespace Basalt {
 					const std::optional<glm::vec3> normal = RequirePhysics(context).GetCharacterGroundNormal(self.ResolveOrThrow());
 					return normal ? sol::optional<glm::vec3>(*normal) : sol::optional<glm::vec3>(); },
 
-										   "PlayAudio", [&context](const ScriptEntity& self) { return RequireAudio(context).Play(self.ResolveOrThrow()); }, "StopAudio", [&context](const ScriptEntity& self) { RequireAudio(context).Stop(self.ResolveOrThrow()); }, "IsAudioPlaying", [&context](const ScriptEntity& self) { return RequireAudio(context).IsPlaying(self.ResolveOrThrow()); },
+										   "PlayAudio", [&context](const ScriptEntity& self) { return RequireAudio(context).Play(RequireEntityWith<AudioSourceComponent>(self, "PlayAudio", "AudioSource")); }, "StopAudio", [&context](const ScriptEntity& self) { RequireAudio(context).Stop(RequireEntityWith<AudioSourceComponent>(self, "StopAudio", "AudioSource")); }, "IsAudioPlaying", [&context](const ScriptEntity& self) { return RequireAudio(context).IsPlaying(self.ResolveOrThrow()); },
 
 										   "PlayParticles", [&context](const ScriptEntity& self) { RequireParticles(context).Play(RequireEmitter(context, self, "PlayParticles")); }, "StopParticles", [&context](const ScriptEntity& self, const sol::object& clear) {
 					Entity entity = RequireEmitter(context, self, "StopParticles");
@@ -714,7 +714,8 @@ namespace Basalt {
 			};
 			audio["SetBusVolume"] = [&context](const std::string& bus, float volume) {
 				const AudioBus target = ParseAudioBus("Audio.SetBusVolume", bus);
-				RequireAudio(context).SetBusVolume(target, RequireAudioVolume("Audio.SetBusVolume", volume));
+				// The volume and bus are checked above; false then only means the bus failed to create (logged).
+				return RequireAudio(context).SetBusVolume(target, RequireAudioVolume("Audio.SetBusVolume", volume));
 			};
 			audio["GetBusVolume"] = [&context](const std::string& bus) { return RequireAudio(context).GetBusVolume(ParseAudioBus("Audio.GetBusVolume", bus)); };
 

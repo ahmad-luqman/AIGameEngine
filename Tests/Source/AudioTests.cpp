@@ -3,6 +3,7 @@
 #include <Basalt/Audio/AudioEngine.h>
 #include <Basalt/Audio/AudioRules.h>
 #include <Basalt/Audio/AudioSystem.h>
+#include <Basalt/Core/Log.h>
 #include <Basalt/Scene/ComponentRegistry.h>
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
@@ -12,8 +13,8 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <cmath>
-#include <cstring>
 #include <limits>
+#include <span>
 #include <vector>
 
 using namespace Basalt;
@@ -63,6 +64,13 @@ namespace {
 
 	// Interleaved stereo at the device-less engine's rate: two samples per frame.
 	constexpr size_t SamplesPerSecond = size_t{ 2 } * 48000;
+	// The scene's update step; 800 frames at 48 kHz.
+	constexpr float StepSeconds = 1.0f / 60.0f;
+
+	int StepCount(float seconds)
+	{
+		return static_cast<int>(std::lround(seconds / StepSeconds));
+	}
 
 	// Mixes the given duration and returns the interleaved stereo output.
 	std::vector<float> Mix(float seconds)
@@ -76,14 +84,13 @@ namespace {
 	std::vector<float> MixInFrames(float seconds)
 	{
 		std::vector<float> frames;
-		const int steps = static_cast<int>(std::lround(seconds * 60.0f));
-		for (int i = 0; i < steps; i++)
-			REQUIRE(AudioEngine::ReadDeviceless(1.0f / 60.0f, frames));
+		for (int i = 0; i < StepCount(seconds); i++)
+			REQUIRE(AudioEngine::ReadDeviceless(StepSeconds, frames));
 		return frames;
 	}
 
 	// RMS of every channel-th sample starting at first (first 0 = left, 1 = right), or of all samples.
-	float Rms(const std::vector<float>& samples, size_t first = 0, size_t channels = 1)
+	float Rms(std::span<const float> samples, size_t first = 0, size_t channels = 1)
 	{
 		double sum = 0.0;
 		size_t count = 0;
@@ -93,11 +100,6 @@ namespace {
 			count++;
 		}
 		return count ? static_cast<float>(std::sqrt(sum / static_cast<double>(count))) : 0.0f;
-	}
-
-	float Rms(std::vector<float>::const_iterator begin, std::vector<float>::const_iterator end)
-	{
-		return Rms(std::vector<float>(begin, end));
 	}
 
 	// The number of samples in which two mixes differ by more than rounding.
@@ -159,9 +161,8 @@ namespace {
 		// Advances the scene (and the mix) by whole 60 Hz frames.
 		void Run(float seconds)
 		{
-			const int frames = static_cast<int>(std::lround(seconds * 60.0f));
-			for (int i = 0; i < frames; i++)
-				m_Scene.OnUpdate(1.0f / 60.0f);
+			for (int i = 0; i < StepCount(seconds); i++)
+				m_Scene.OnUpdate(StepSeconds);
 		}
 
 		Scene& GetScene() { return m_Scene; }
@@ -224,14 +225,21 @@ TEST_SUITE("Audio")
 		CHECK(audio.IsPlaying(speaker));
 		CHECK_FALSE(audio.IsPlaying(looping));
 		CHECK(audio.Play(looping));
+		const uint64_t since = Log::GetHistory().GetTotalCount();
 		CHECK_FALSE(audio.Play(broken));
+		CHECK(BasaltTest::CountLogMessages(since, "cannot load clip 'Assets/Audio/Missing.wav'") == 1);
+		// miniaudio's own diagnostics reach the engine log, without their trailing newline.
+		CHECK(BasaltTest::CountLogMessages(since, "miniaudio: Failed to load file") == 1);
+		uint64_t next = 0;
+		for (const LogMessage& message : Log::GetHistory().GetMessagesSince(since, next))
+			CHECK(message.Text.back() != '\n');
 
 		const glm::vec3 position(1.0f, 0.0f, 0.0f);
 		CHECK(audio.PlayOneShot("Assets/Audio/Beep.wav", &position, 0.5f));
 		CHECK(audio.GetActiveSoundCount() == 3);
 
 		for (int i = 0; i < 30; i++)
-			scene.OnUpdate(1.0f / 60.0f);
+			scene.OnUpdate(StepSeconds);
 		CHECK_FALSE(audio.IsPlaying(speaker));
 		CHECK(audio.IsPlaying(looping));
 		// The finished one-shot was released; sources stay registered until stopped.
@@ -261,10 +269,12 @@ TEST_SUITE("Audio")
 		scene.OnRuntimeStart();
 		std::string error;
 		REQUIRE_MESSAGE(scene.RequestLoad("Assets/Scenes/Next.bscene", error), error);
-		scene.OnUpdate(1.0f / 60.0f);
+		scene.OnUpdate(StepSeconds);
 		REQUIRE(scene.GetAudioSystem());
 		CHECK(scene.GetAudioSystem()->IsPlaying(scene.FindEntityByName("Music")));
 		CHECK_FALSE(scene.GetAudioSystem()->IsPlaying(scene.FindEntityByName("Silent")));
+		// Actually sounding: the load started it after the new scene's OnCreate.
+		CHECK(Rms(Mix(0.05f)) > 0.01f);
 		scene.OnRuntimeStop();
 	}
 
@@ -313,22 +323,35 @@ TEST_SUITE("Audio")
 		Scene scene;
 		Entity entity = scene.CreateEntity("Speaker");
 		entity.AddComponent<AudioSourceComponent>().Volume = 0.25f;
+		const ComponentInfo* info = ComponentRegistry::Find("AudioSource");
+		REQUIRE(info);
+		const nlohmann::json before = info->Serialize(entity);
 		for (const Case& c : cases)
 		{
 			CAPTURE(c.Problem);
 			std::string error;
 			CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, "AudioSource", c.Patch, error));
 			CHECK(error.find(c.Problem) != std::string::npos);
-			CHECK(entity.GetComponent<AudioSourceComponent>().Volume == 0.25f);
+			CHECK(info->Serialize(entity) == before);
 		}
 		// Equal distances are allowed (no attenuation range).
 		std::string error;
 		CHECK_MESSAGE(ComponentRegistry::AddOrPatch(entity, "AudioSource", { { "MinDistance", 5 }, { "MaxDistance", 5 } }, error), error);
 
+		// Only C++ can store non-finite values (JSON and Lua numbers are checked); every float rule catches them.
+		for (const float bad : { nan, std::numeric_limits<float>::infinity() })
+		{
+			for (float AudioSourceComponent::* field : { &AudioSourceComponent::Volume, &AudioSourceComponent::Pitch, &AudioSourceComponent::MinDistance, &AudioSourceComponent::MaxDistance })
+			{
+				AudioSourceComponent invalid;
+				invalid.*field = bad;
+				const std::string problem = ValidateAudioSource(invalid);
+				CAPTURE(problem);
+				CHECK_FALSE(problem.empty());
+				CHECK(problem.find("must be a finite number") != std::string::npos);
+			}
+		}
 		AudioSourceComponent invalid;
-		invalid.Volume = nan;
-		CHECK(ValidateAudioSource(invalid).find("Volume") == 0);
-		invalid = {};
 		invalid.Bus = static_cast<AudioBus>(9);
 		CHECK(ValidateAudioSource(invalid) == "Bus must be one of its 4 values (got 9)");
 		CHECK_FALSE(IsValidAudioVolume(nan));
@@ -337,7 +360,7 @@ TEST_SUITE("Audio")
 		CHECK(IsValidAudioVolume(0.0f));
 		CHECK(IsValidAudioVolume(4.0f));
 
-		// C++ code can bypass the registry; the system refuses to play such a source rather than corrupt its bus.
+		// C++ code can bypass the registry; the system refuses to play such a source rather than mix an invalid gain.
 		BasaltTest::TempProject project("AudioValidation");
 		project.WriteFile("Assets/Audio/Beep.wav", MakeWav(0.25f));
 		HeadlessAudio engine;
@@ -347,13 +370,20 @@ TEST_SUITE("Audio")
 		Entity bad = audioScene.Add("Bad", negative);
 		AudioSystem& audio = audioScene.Start();
 		CHECK_FALSE(audio.IsPlaying(bad));
+		const uint64_t since = Log::GetHistory().GetTotalCount();
 		CHECK_FALSE(audio.Play(bad));
+		CHECK(BasaltTest::CountLogMessages(since, "cannot play the AudioSource of 'Bad': Volume must be a finite number >= 0 (got -1)") == 1);
 		CHECK_FALSE(audio.PlayOneShot("Assets/Audio/Beep.wav", nullptr, nan));
 		CHECK_FALSE(audio.PlayOneShot("Assets/Audio/Beep.wav", nullptr, -1.0f));
+		CHECK(BasaltTest::CountLogMessages(since, "cannot play 'Assets/Audio/Beep.wav' at volume") == 2);
 		CHECK(audio.GetActiveSoundCount() == 0);
 		CHECK_FALSE(audio.SetBusVolume(AudioBus::Music, nan));
 		CHECK_FALSE(audio.SetBusVolume(AudioBus::Music, -0.5f));
+		CHECK(BasaltTest::CountLogMessages(since, "the Music bus volume must be a finite number >= 0") == 2);
 		CHECK(audio.GetBusVolume(AudioBus::Music) == 1.0f);
+		// A source without a clip says so.
+		CHECK_FALSE(audio.Play(audioScene.Add("NoClip", Source(""))));
+		CHECK(BasaltTest::CountLogMessages(since, "cannot play a sound without a clip") == 1);
 	}
 
 	TEST_CASE("Mixer buses scale the sounds routed to them, and Master scales every bus")
@@ -424,15 +454,22 @@ TEST_SUITE("Audio")
 		CHECK(Rms(Mix(0.1f)) == 0.0f);
 	}
 
-	TEST_CASE("A bus value outside the enum (C++ only) falls back to SFX")
+	TEST_CASE("A bus value outside the enum (C++ only) is refused and changes nothing")
 	{
 		BasaltTest::TempProject project("AudioBadBus");
+		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(1.0f));
 		HeadlessAudio engine;
 		AudioScene scene;
 		AudioSystem& audio = scene.Start();
-		CHECK(audio.SetBusVolume(static_cast<AudioBus>(7), 0.5f));
-		CHECK(audio.GetBusVolume(AudioBus::SFX) == 0.5f);
-		CHECK(audio.GetBusVolume(static_cast<AudioBus>(7)) == 0.5f);
+		const auto badBus = static_cast<AudioBus>(7);
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		CHECK_FALSE(audio.SetBusVolume(badBus, 0.5f));
+		CHECK(audio.GetBusVolume(badBus) == 0.0f);
+		CHECK_FALSE(audio.PlayOneShot("Assets/Audio/Tone.wav", nullptr, 1.0f, badBus));
+		CHECK(BasaltTest::CountLogMessages(since, "bus value 7 is out of range") == 3);
+		for (size_t i = 0; i < AudioBusCount; i++)
+			CHECK(audio.GetBusVolume(static_cast<AudioBus>(i)) == 1.0f);
+		CHECK(audio.GetActiveSoundCount() == 0);
 	}
 
 	TEST_CASE("Bus volumes last for the play session: Scene.Load keeps them, a new session resets them")
@@ -445,6 +482,7 @@ TEST_SUITE("Audio")
 				{ "ID": 10, "Name": "Music", "Parent": 0, "Components": { "AudioSource": { "Clip": "Assets/Audio/Tone.wav", "PlayOnStart": true, "Loop": true, "Spatial": false, "Bus": "Music", "Stream": true } } }
 			]
 		})");
+		project.WriteFile("Assets/Scenes/Quiet.bscene", R"({ "Format": "BasaltScene", "Version": 1, "Entities": [ { "ID": 20, "Name": "Nobody", "Parent": 0, "Components": {} } ] })");
 		HeadlessAudio engine;
 		Scene scene;
 		scene.OnRuntimeStart();
@@ -452,7 +490,7 @@ TEST_SUITE("Audio")
 		CHECK(scene.GetAudioSystem()->SetBusVolume(AudioBus::Music, 0.0f));
 		std::string error;
 		REQUIRE_MESSAGE(scene.RequestLoad("Assets/Scenes/Next.bscene", error), error);
-		scene.OnUpdate(1.0f / 60.0f);
+		scene.OnUpdate(StepSeconds);
 		AudioSystem* audio = scene.GetAudioSystem();
 		REQUIRE(audio);
 		Entity music = scene.FindEntityByName("Music");
@@ -463,11 +501,12 @@ TEST_SUITE("Audio")
 		CHECK(Rms(Mix(0.1f)) > 0.01f);
 		CHECK(audio->SetBusVolume(AudioBus::Music, 0.25f));
 
-		// Loading away from a playing stream releases it.
-		REQUIRE_MESSAGE(scene.RequestLoad("Assets/Scenes/Next.bscene", error), error);
-		scene.OnUpdate(1.0f / 60.0f);
-		CHECK(audio->GetActiveSoundCount() == 1);
-		CHECK(audio->IsPlaying(scene.FindEntityByName("Music")));
+		// Loading a scene without audio releases the playing stream.
+		REQUIRE_MESSAGE(scene.RequestLoad("Assets/Scenes/Quiet.bscene", error), error);
+		scene.OnUpdate(StepSeconds);
+		CHECK_FALSE(scene.FindEntityByName("Music"));
+		CHECK(audio->GetActiveSoundCount() == 0);
+		CHECK(Rms(Mix(0.1f)) == 0.0f);
 		CHECK(audio->GetBusVolume(AudioBus::Music) == 0.25f);
 
 		scene.OnRuntimeStop();
@@ -506,6 +545,31 @@ TEST_SUITE("Audio")
 			CHECK(audio.SetBusVolume(AudioBus::Music, 1.0f));
 			CHECK(Rms(Mix(0.1f)) == doctest::Approx(level * 2.0f).epsilon(0.05));
 		}
+		{
+			// Play during OnCreate starts at once, and BeginPlayback leaves it be (no second sound).
+			AudioSystem audio(&scene);
+			audio.Start();
+			REQUIRE(audio.Play(music));
+			audio.Stop(cancelled);
+			const float level = Rms(Mix(0.1f));
+			CHECK(level > 0.01f);
+			audio.BeginPlayback();
+			CHECK(audio.GetActiveSoundCount() == 1);
+			CHECK(Rms(Mix(0.1f)) == doctest::Approx(level).epsilon(0.05));
+		}
+		{
+			// Sources a scene load adds wait for BeginPlayback too.
+			AudioSystem audio(&scene);
+			audio.Start();
+			audio.BeginPlayback();
+			audio.Stop(music);
+			audio.Stop(cancelled);
+			audio.PlayOnStart({ music, cancelled });
+			CHECK(audio.IsPlaying(music));
+			CHECK(Rms(Mix(0.1f)) == 0.0f);
+			audio.BeginPlayback();
+			CHECK(Rms(Mix(0.1f)) > 0.01f);
+		}
 	}
 
 	TEST_CASE("A streamed clip plays exactly the samples of the decoded clip, across its pages")
@@ -523,8 +587,8 @@ TEST_SUITE("Audio")
 		const std::vector<float> streamed = PlayAlone(source, 3.0f, true);
 		CHECK(CountMismatches(decoded, streamed) == 0);
 		// The last page is heard, and the clip ends on time.
-		CHECK(Rms(streamed.begin() + 2 * SamplesPerSecond, streamed.begin() + 2 * SamplesPerSecond + SamplesPerSecond / 10) > 0.01f);
-		CHECK(Rms(streamed.end() - SamplesPerSecond / 4, streamed.end()) == 0.0f);
+		CHECK(Rms(std::span(streamed).subspan(2 * SamplesPerSecond, SamplesPerSecond / 10)) > 0.01f);
+		CHECK(Rms(std::span(streamed).last(SamplesPerSecond / 4)) == 0.0f);
 	}
 
 	TEST_CASE("Looping and resampled streams match their decoded clips")
@@ -542,7 +606,7 @@ TEST_SUITE("Audio")
 			source.Stream = true;
 			const std::vector<float> streamed = PlayAlone(source, 3.0f, true);
 			CHECK(CountMismatches(decoded, streamed) == 0);
-			CHECK(Rms(streamed.end() - SamplesPerSecond / 5, streamed.end()) > 0.01f);
+			CHECK(Rms(std::span(streamed).last(SamplesPerSecond / 5)) > 0.01f);
 		}
 	}
 
@@ -580,15 +644,17 @@ TEST_SUITE("Audio")
 		const float flatLevel = Rms(Mix(0.1f));
 		CHECK(spatialLevel == doctest::Approx(flatLevel / 4.0f).epsilon(0.1));
 
-		// Stopped while a page refill is pending, then replayed from the start.
-		scene.Run(1.5f);
+		// Stopped right as the first page ran out (0.1 s + 54 updates of 800 frames = 48000 frames), with its
+		// refill job still queued, then replayed from the start.
+		scene.Run(0.9f);
 		audio.Stop(songEntity);
 		CHECK(Rms(Mix(0.1f)) == 0.0f);
 		REQUIRE(audio.Play(songEntity));
 		CHECK(audio.GetActiveSoundCount() == 2);
 		CHECK(audio.IsStreaming(songEntity));
 		CHECK(Rms(Mix(0.1f)) > 0.01f);
-		scene.Run(1.5f);
+		// Destroyed with a refill queued the same way.
+		scene.Run(0.9f);
 		scene.GetScene().DestroyEntity(songEntity);
 		CHECK(audio.GetActiveSoundCount() == 1);
 		CHECK(Rms(Mix(0.1f)) == 0.0f);
@@ -598,6 +664,10 @@ TEST_SUITE("Audio")
 	{
 		BasaltTest::TempProject project("AudioStreamBroken");
 		project.WriteFile("Assets/Audio/Garbage.wav", "not a wav file at all");
+		// The header promises 2.5 s; the data holds 0.5 s.
+		std::string truncated = MakeWav(2.5f, 48000);
+		truncated.resize(44 + 48000);
+		project.WriteFile("Assets/Audio/Truncated.wav", truncated);
 		HeadlessAudio engine;
 		AudioScene scene;
 		AudioSourceComponent missing = Source("Assets/Audio/Missing.wav", AudioBus::Music);
@@ -609,10 +679,25 @@ TEST_SUITE("Audio")
 		AudioSystem& audio = scene.Start();
 		CHECK_FALSE(audio.IsPlaying(missingEntity));
 		CHECK_FALSE(audio.IsPlaying(garbageEntity));
+		const uint64_t since = Log::GetHistory().GetTotalCount();
 		CHECK_FALSE(audio.Play(missingEntity));
 		CHECK_FALSE(audio.Play(garbageEntity));
+		CHECK(BasaltTest::CountLogMessages(since, "cannot load clip 'Assets/Audio/Missing.wav'") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "cannot load clip 'Assets/Audio/Garbage.wav'") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "streamed") == 2);
 		CHECK(audio.GetActiveSoundCount() == 0);
 		CHECK(Rms(Mix(0.1f)) == 0.0f);
+
+		// A file shorter than its header says streams what it has, then ends: no hang, no endless silence.
+		AudioSourceComponent shortSource = Source("Assets/Audio/Truncated.wav", AudioBus::Music);
+		shortSource.Stream = true;
+		shortSource.Loop = false;
+		shortSource.PlayOnStart = false;
+		Entity shortEntity = scene.Add("Truncated", shortSource);
+		REQUIRE(audio.Play(shortEntity));
+		CHECK(Rms(Mix(0.1f)) > 0.01f);
+		scene.Run(3.0f);
+		CHECK_FALSE(audio.IsPlaying(shortEntity));
 	}
 
 	TEST_CASE("Spatial sources fade with distance from the listener; non-spatial sources do not")
@@ -643,7 +728,7 @@ TEST_SUITE("Audio")
 		CHECK(MeasureRms(spatial, farListener - glm::vec3(0.0f, 0.0f, 2.0f), farListener) == doctest::Approx(nearRms).epsilon(0.02));
 	}
 
-	TEST_CASE("Spatial sources follow their entity, pan by direction, and one-shots fade too")
+	TEST_CASE("Spatial sources follow their entity and pan by direction")
 	{
 		BasaltTest::TempProject project("AudioSpatialMotion");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
@@ -656,17 +741,17 @@ TEST_SUITE("Audio")
 		const float nearRms = Rms(Mix(0.1f));
 		// The system moves the sound to the entity's position every update.
 		speaker.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.0f, -20.0f);
-		scene.Run(1.0f / 60.0f);
+		scene.Run(StepSeconds);
 		CHECK(nearRms / Rms(Mix(0.1f)) == doctest::Approx(10.0f).epsilon(0.1));
 
 		// The listener looks down -Z, so +X is on its right (channel 1).
 		speaker.GetComponent<TransformComponent>().Translation = glm::vec3(3.0f, 0.0f, 0.0f);
-		scene.Run(1.0f / 60.0f);
+		scene.Run(StepSeconds);
 		std::vector<float> mix = Mix(0.1f);
 		CHECK(Rms(mix, 1, 2) > 2.0f * Rms(mix, 0, 2));
 		// Turned around, the same source is on its left.
 		scene.GetListener().GetComponent<TransformComponent>().Rotation = glm::angleAxis(glm::pi<float>(), glm::vec3(0.0f, 1.0f, 0.0f));
-		scene.Run(1.0f / 60.0f);
+		scene.Run(StepSeconds);
 		mix = Mix(0.1f);
 		CHECK(Rms(mix, 0, 2) > 2.0f * Rms(mix, 1, 2));
 	}
@@ -747,7 +832,7 @@ TEST_SUITE("Audio")
 		scene.Run(0.15f);
 		CHECK_FALSE(audio.IsPlaying(beep));
 		// A finished source stays registered until it is stopped or replayed, also through further updates.
-		scene.GetScene().OnUpdate(1.0f / 60.0f);
+		scene.GetScene().OnUpdate(StepSeconds);
 		CHECK(audio.GetActiveSoundCount() == 1);
 		audio.Stop(beep);
 		CHECK(audio.GetActiveSoundCount() == 0);
@@ -788,7 +873,11 @@ TEST_SUITE("Audio")
 		CHECK_FALSE(AudioEngine::ReadDeviceless(std::numeric_limits<float>::quiet_NaN(), frames));
 		CHECK_FALSE(AudioEngine::ReadDeviceless(std::numeric_limits<float>::infinity(), frames));
 		CHECK(frames.empty());
-		CHECK(AudioEngine::ReadDeviceless(0.01f, frames));
-		CHECK(frames.size() == 2 * 480);
+		CHECK_FALSE(AudioEngine::ReadDeviceless(std::numeric_limits<float>::max(), frames));
+		CHECK_FALSE(AudioEngine::ReadDeviceless(3601.0f, frames));
+		CHECK(frames.empty());
+		// 1/64 s is exact in binary: 750 frames.
+		CHECK(AudioEngine::ReadDeviceless(0.015625f, frames));
+		CHECK(frames.size() == SamplesPerSecond / 64);
 	}
 }

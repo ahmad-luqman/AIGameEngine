@@ -1250,7 +1250,7 @@ TEST_SUITE("Particles")
 		{
 			INFO(call);
 			CHECK_FALSE(lua.ExecuteString(call, result));
-			CHECK(result.find("needs a ParticleEmitter component on 'Plain'") != std::string::npos);
+			CHECK(result.find("needs the ParticleEmitter component on 'Plain'") != std::string::npos);
 		}
 		REQUIRE(lua.ExecuteString("return tostring(plain:IsEmittingParticles()) .. ',' .. plain:GetParticleCount()", result));
 		CHECK(result == "false,0");

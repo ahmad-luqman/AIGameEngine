@@ -6,11 +6,12 @@
 #include <miniaudio.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <memory>
 #include <mutex>
-#include <string>
+#include <string_view>
 #include <vector>
 
 namespace Basalt {
@@ -25,32 +26,58 @@ namespace Basalt {
 		// a job whose predecessor was lost could otherwise spin forever. Far above the jobs one step creates.
 		constexpr int MaxJobsPerChunk = 256;
 
+		// Longer requests are refused: they would only come from a broken caller, and the frame count must fit.
+		constexpr float MaxMixSeconds = 3600.0f;
+
+		// Uninitializes and frees a log.
+		struct LogDeleter
+		{
+			void operator()(ma_log* log) const
+			{
+				ma_log_uninit(log);
+				delete log;
+			}
+		};
+		using LogHandle = std::unique_ptr<ma_log, LogDeleter>;
+
 		std::mutex s_Mutex;
+		// miniaudio's diagnostics (decoder and device messages), forwarded to the engine log. Declared first so
+		// it outlives the engine and the resource manager, which both write to it.
+		LogHandle s_Log;
 		std::unique_ptr<ma_engine> s_Engine;
 		// Only the device-less engine has one of its own; the device engine uses miniaudio's internal manager.
 		std::unique_ptr<ma_resource_manager> s_ResourceManager;
-		// miniaudio's diagnostics (decoder and device errors), forwarded to the engine log. Outlives the engine
-		// and the resource manager, which both write to it.
-		std::unique_ptr<ma_log> s_Log;
 		bool s_HasDevice = false;
-
-		void UninitLog(ma_log* log)
-		{
-			if (log)
-				ma_log_uninit(log);
-		}
+		// Report a persistent problem once until it clears, instead of every mix step.
+		std::atomic<bool> s_JobBoundReported = false;
+		std::atomic<bool> s_MixFailureReported = false;
 
 		void ForwardMiniaudioLog(void* /*userData*/, ma_uint32 level, const char* message)
 		{
-			// Warnings, not errors: miniaudio reports probing failures (a missing output device, an unsupported
-			// backend) that the engine recovers from. Callers log a real failure themselves, with context.
-			// May run on the audio thread; the engine log is thread-safe.
+			// Forwarded as warnings, miniaudio's errors included: it reports probing failures (a missing output
+			// device, an unsupported backend) that the engine recovers from, and the failures that matter (a clip
+			// that does not load) are logged as errors by the engine itself, with context. May run on the audio
+			// thread; the engine log is thread-safe.
 			if (level > MA_LOG_LEVEL_WARNING)
 				return;
-			std::string text = message ? message : "";
-			while (!text.empty() && (text.back() == '\n' || text.back() == '\r'))
-				text.pop_back();
+			std::string_view text = message ? message : "";
+			text = text.substr(0, text.find_last_not_of("\r\n") + 1);
 			BS_CORE_WARN("miniaudio: {}", text);
+		}
+
+		// Null (logged) when miniaudio cannot create a log; its diagnostics are then dropped.
+		LogHandle CreateForwardingLog()
+		{
+			auto log = std::make_unique<ma_log>();
+			if (const ma_result result = ma_log_init(nullptr, log.get()); result != MA_SUCCESS)
+			{
+				BS_CORE_WARN("AudioEngine: cannot create miniaudio's log ({}); its messages are dropped", ma_result_description(result));
+				return nullptr;
+			}
+			LogHandle handle(log.release());
+			if (const ma_result result = ma_log_register_callback(handle.get(), ma_log_callback_init(&ForwardMiniaudioLog, nullptr)); result != MA_SUCCESS)
+				BS_CORE_WARN("AudioEngine: cannot forward miniaudio's log ({}); its messages are dropped", ma_result_description(result));
+			return handle;
 		}
 
 		// Runs the resource manager's pending jobs. This manager has no job thread, so nothing else runs them: a
@@ -61,16 +88,23 @@ namespace Basalt {
 			{
 				const ma_result result = ma_resource_manager_process_next_job(resourceManager);
 				if (result == MA_NO_DATA_AVAILABLE || result == MA_CANCELLED)
+				{
+					s_JobBoundReported = false;
 					return;
-				// A failed job (e.g. a page of a stream whose file broke) affects only its sound; keep going.
+				}
+				// Only a stream already in an error state fails a job, and that affects only its sound: keep going.
+				// (miniaudio treats a decode error inside a page as the end of the clip, so a file that is corrupt
+				// part-way just ends early; its load errors come through the forwarded log.)
 				if (result != MA_SUCCESS)
-					BS_CORE_ERROR("AudioEngine: a streaming job failed: {}", ma_result_description(result));
+					BS_CORE_ERROR("AudioEngine: a resource-manager job failed: {}", ma_result_description(result));
 			}
+			if (!s_JobBoundReported.exchange(true))
+				BS_CORE_ERROR("AudioEngine: more than {} resource-manager jobs in one mix step; a stream's job is stuck re-posting itself", MaxJobsPerChunk);
 		}
 
 		// Mixes the given duration when there is no device, appending the frames to output when it is not null.
-		// False when a device is present (it pulls the mix itself), the engine is not initialized, seconds is
-		// not finite, or the mix fails.
+		// False (output unchanged) when a device is present (it pulls the mix itself), the engine is not
+		// initialized, seconds is not a finite number up to MaxMixSeconds, or the mix fails.
 		bool MixDeviceless(float seconds, std::vector<float>* output)
 		{
 			ma_engine* engine = nullptr;
@@ -83,14 +117,15 @@ namespace Basalt {
 				resourceManager = s_ResourceManager.get();
 			}
 			BS_CORE_ASSERT(resourceManager, "the device-less engine always has its own resource manager");
-			if (!std::isfinite(seconds))
+			if (!std::isfinite(seconds) || seconds > MaxMixSeconds)
 			{
-				BS_CORE_ERROR("AudioEngine: cannot mix a duration of {} seconds", seconds);
+				BS_CORE_ERROR("AudioEngine: cannot mix a duration of {} seconds (at most {})", seconds, MaxMixSeconds);
 				return false;
 			}
 			if (seconds <= 0.0f)
 				return true;
 
+			const size_t outputSize = output ? output->size() : 0;
 			const ma_uint32 channels = ma_engine_get_channels(engine);
 			ma_uint64 remaining = static_cast<ma_uint64>(seconds * static_cast<float>(ma_engine_get_sample_rate(engine)));
 			std::vector<float> scratch(static_cast<size_t>(channels) * MixChunkFrames);
@@ -100,17 +135,23 @@ namespace Basalt {
 				// samples of the decoded clip.
 				RunResourceJobs(resourceManager);
 				const ma_uint64 frames = std::min(remaining, MixChunkFrames);
+				// A short read is padded with silence, which is what a device would play: the frames all count.
 				const ma_result result = ma_engine_read_pcm_frames(engine, scratch.data(), frames, nullptr);
-				// MA_AT_END only means nothing is playing (the frames are silence).
+				// Not a failure: miniaudio's graph passes MA_AT_END up from an input it read last, and the frames are
+				// still a complete mix.
 				if (result != MA_SUCCESS && result != MA_AT_END)
 				{
-					BS_CORE_ERROR("AudioEngine: mixing without a device failed: {}", ma_result_description(result));
+					if (!s_MixFailureReported.exchange(true))
+						BS_CORE_ERROR("AudioEngine: mixing without a device failed: {}", ma_result_description(result));
+					if (output)
+						output->resize(outputSize);
 					return false;
 				}
 				if (output)
 					output->insert(output->end(), scratch.begin(), scratch.begin() + static_cast<std::ptrdiff_t>(frames * channels));
 				remaining -= frames;
 			}
+			s_MixFailureReported = false;
 			return true;
 		}
 
@@ -122,18 +163,14 @@ namespace Basalt {
 		if (s_Engine)
 			return true;
 
-		auto log = std::make_unique<ma_log>();
-		if (ma_log_init(nullptr, log.get()) == MA_SUCCESS)
-			ma_log_register_callback(log.get(), ma_log_callback_init(&ForwardMiniaudioLog, nullptr));
-		else
-			log.reset();
-
+		LogHandle log = CreateForwardingLog();
 		auto engine = std::make_unique<ma_engine>();
 		if (!headless)
 		{
 			ma_engine_config config = ma_engine_config_init();
 			config.pLog = log.get();
-			if (ma_engine_init(&config, engine.get()) == MA_SUCCESS)
+			const ma_result result = ma_engine_init(&config, engine.get());
+			if (result == MA_SUCCESS)
 			{
 				s_Log = std::move(log);
 				s_Engine = std::move(engine);
@@ -141,7 +178,7 @@ namespace Basalt {
 				BS_CORE_INFO("AudioEngine: output device initialized");
 				return true;
 			}
-			BS_CORE_WARN("AudioEngine: no audio output device available; audio will be silent");
+			BS_CORE_WARN("AudioEngine: no audio output device available ({}); audio will be silent", ma_result_description(result));
 		}
 
 		// Without a device the mix runs on the caller's thread, so the resource manager does too: no job thread.
@@ -158,7 +195,6 @@ namespace Basalt {
 		if (const ma_result result = ma_resource_manager_init(&resourceConfig, resourceManager.get()); result != MA_SUCCESS)
 		{
 			BS_CORE_ERROR("AudioEngine: failed to initialize the audio resource manager: {}", ma_result_description(result));
-			UninitLog(log.get());
 			return false;
 		}
 
@@ -172,7 +208,6 @@ namespace Basalt {
 		{
 			BS_CORE_ERROR("AudioEngine: failed to initialize the audio engine: {}", ma_result_description(result));
 			ma_resource_manager_uninit(resourceManager.get());
-			UninitLog(log.get());
 			return false;
 		}
 		s_Log = std::move(log);
@@ -189,14 +224,13 @@ namespace Basalt {
 			return;
 		ma_engine_uninit(s_Engine.get());
 		s_Engine.reset();
-		// After the engine, which was built on it: miniaudio requires a caller-supplied resource manager to
-		// outlive its engine. Every sound is already uninitialized (each holds a data source from it).
+		// After the engine, which was built on it (an engine never uninitializes a manager it was given). Every
+		// AudioSystem must already be destroyed: each sound holds a data source from this manager.
 		if (s_ResourceManager)
 		{
 			ma_resource_manager_uninit(s_ResourceManager.get());
 			s_ResourceManager.reset();
 		}
-		UninitLog(s_Log.get());
 		s_Log.reset();
 		s_HasDevice = false;
 	}

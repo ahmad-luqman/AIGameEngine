@@ -13,8 +13,9 @@ namespace Basalt {
 	// available (headless runs, CI), so audio code paths behave the same everywhere.
 	// The device-less engine's resource manager has no job thread and no locking of its own: create and destroy
 	// sounds and call AdvanceDeviceless/ReadDeviceless from one thread (the main thread; the editor's automation
-	// server already hands its work to it). The mutex only guards Init/Shutdown against the accessors. With a
-	// device, miniaudio's own job thread loads stream pages in real time instead.
+	// server already hands its work to it). The mutex only makes the engine pointer and flags safe to read:
+	// Shutdown must not run while another thread still uses the engine. With a device, miniaudio's own job
+	// thread loads stream pages in real time instead.
 	class AudioEngine
 	{
 	public:
@@ -34,9 +35,9 @@ namespace Basalt {
 		// (stream page refills) as it goes. No-op when a device is present.
 		static void AdvanceDeviceless(float seconds);
 		// AdvanceDeviceless that also appends the mixed frames to output (interleaved, ma_engine_get_channels
-		// channels at ma_engine_get_sample_rate), so tests can measure what reached the speakers. False (nothing
-		// appended) when a device is present, the engine is not initialized or the mix fails; true with nothing
-		// appended for seconds <= 0.
+		// channels at ma_engine_get_sample_rate), so tests can measure what reached the speakers. False (output
+		// unchanged) when a device is present, the engine is not initialized, seconds is not finite or exceeds an
+		// hour, or the mix fails; true with nothing appended for seconds <= 0.
 		static bool ReadDeviceless(float seconds, std::vector<float>& output);
 	};
 
