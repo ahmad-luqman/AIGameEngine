@@ -1,5 +1,7 @@
 #include "Basalt/UI/UIGeometry.h"
 
+#include "Basalt/UI/GameUI.h"
+
 #include <algorithm>
 
 namespace Basalt {
@@ -31,8 +33,19 @@ namespace Basalt {
 			return names;
 		}();
 
-		// Border sizes along one axis: texel borders clamped to the texture, canvas borders shrunk together
-		// when they would overlap inside `length`.
+		// Scales `a` and `b` down together so their sum is at most `limit`.
+		void ShrinkToFit(float& a, float& b, float limit)
+		{
+			const float total = a + b;
+			if (total > limit && total > 0.0f)
+			{
+				const float shrink = std::max(limit, 0.0f) / total;
+				a *= shrink;
+				b *= shrink;
+			}
+		}
+
+		// Border sizes along one axis, in texels and on the canvas.
 		struct AxisSlice
 		{
 			float TexelBefore;
@@ -43,29 +56,19 @@ namespace Basalt {
 
 		AxisSlice SliceAxis(float before, float after, float textureLength, float length, float scale)
 		{
-			AxisSlice axis{};
-			before = std::max(before, 0.0f);
-			after = std::max(after, 0.0f);
-			if (before + after > textureLength && before + after > 0.0f)
-			{
-				const float shrink = textureLength / (before + after);
-				before *= shrink;
-				after *= shrink;
-			}
-			axis.TexelBefore = before;
-			axis.TexelAfter = after;
-			axis.CanvasBefore = before * scale;
-			axis.CanvasAfter = after * scale;
-			const float total = axis.CanvasBefore + axis.CanvasAfter;
-			if (total > length && total > 0.0f)
-			{
-				const float shrink = std::max(length, 0.0f) / total;
-				axis.CanvasBefore *= shrink;
-				axis.CanvasAfter *= shrink;
-			}
+			AxisSlice axis{ std::max(before, 0.0f), std::max(after, 0.0f), 0.0f, 0.0f };
+			ShrinkToFit(axis.TexelBefore, axis.TexelAfter, textureLength);
+			axis.CanvasBefore = axis.TexelBefore * scale;
+			axis.CanvasAfter = axis.TexelAfter * scale;
+			ShrinkToFit(axis.CanvasBefore, axis.CanvasAfter, length);
 			return axis;
 		}
 
+	}
+
+	UICanvasMapping UICanvasMapping::ForViewport(const glm::vec2& origin, const glm::vec2& size)
+	{
+		return { origin, size.y / GameUI::CanvasHeight };
 	}
 
 	UIBox ComputeUIRect(const UIBox& parent, const UIRectComponent& rect)
@@ -89,8 +92,9 @@ namespace Basalt {
 		const AxisSlice y = SliceAxis(slice.y, slice.w, textureSize.y, box.Size.y, sliceScale);
 
 		// Patch edges on the canvas and in texture space, left/top to right/bottom.
-		const float canvasX[4] = { box.Min.x, box.Min.x + x.CanvasBefore, box.Min.x + box.Size.x - x.CanvasAfter, box.Min.x + box.Size.x };
-		const float canvasY[4] = { box.Min.y, box.Min.y + y.CanvasBefore, box.Min.y + box.Size.y - y.CanvasAfter, box.Min.y + box.Size.y };
+		const glm::vec2 max = box.Max();
+		const float canvasX[4] = { box.Min.x, box.Min.x + x.CanvasBefore, max.x - x.CanvasAfter, max.x };
+		const float canvasY[4] = { box.Min.y, box.Min.y + y.CanvasBefore, max.y - y.CanvasAfter, max.y };
 		const auto uv = [](float texels, float length) { return length > 0.0f ? texels / length : 0.0f; };
 		const float u[4] = { 0.0f, uv(x.TexelBefore, textureSize.x), 1.0f - uv(x.TexelAfter, textureSize.x), 1.0f };
 		const float v[4] = { 0.0f, uv(y.TexelBefore, textureSize.y), 1.0f - uv(y.TexelAfter, textureSize.y), 1.0f };
@@ -123,6 +127,32 @@ namespace Basalt {
 	std::span<const std::string_view> GetUIAnchorPresetNames()
 	{
 		return AnchorPresetNames;
+	}
+
+	std::optional<UIRectComponent> ApplyUIAnchorPreset(const UIRectComponent& rect, std::string_view preset, const UIBox& parent, const UIBox& current)
+	{
+		UIRectComponent result = rect;
+		if (preset == "Stretch")
+		{
+			result.AnchorMin = { 0.0f, 0.0f };
+			result.AnchorMax = { 1.0f, 1.0f };
+			result.Pivot = { 0.5f, 0.5f };
+		}
+		else if (std::optional<glm::vec2> point = FindUIAnchorPreset(preset))
+		{
+			result.AnchorMin = result.AnchorMax = result.Pivot = *point;
+		}
+		else
+		{
+			return std::nullopt;
+		}
+		// Inverse of ComputeUIRect: Size is what the box adds to the anchors' span, Position how far the box's
+		// pivot is from the anchors' pivot point.
+		const glm::vec2 anchorMin = parent.Min + parent.Size * result.AnchorMin;
+		const glm::vec2 span = parent.Size * (result.AnchorMax - result.AnchorMin);
+		result.Size = current.Size - span;
+		result.Position = (current.Min + current.Size * result.Pivot) - (anchorMin + span * result.Pivot);
+		return result;
 	}
 
 }

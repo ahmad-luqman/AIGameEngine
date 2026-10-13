@@ -120,13 +120,10 @@ The features most games need, roughly in order of impact.
 
 ### Game UI
 
-UI components (`UIRect`, `UIImage`, `UIText`: anchors, nine-slice images, TrueType fonts), anchored
-immediate-mode `UI.*` calls and the editor's UI bounds overlay are done (`Basalt/Source/Basalt/UI`).
-
 - **Interactive widgets — M.** Button, slider and checkbox components (with `OnClick`/`OnValueChanged`
   script callbacks) plus matching immediate-mode `UI.Button`/`UI.Slider`/`UI.Checkbox`, with
-  keyboard/gamepad navigation. Needed for menus and settings screens. `UILayout` already gives every rect
-  for hit testing.
+  keyboard/gamepad navigation. Needed for menus and settings screens. Build them on the UI components
+  (`Basalt/Source/Basalt/UI`): `UILayout` already gives every rect for hit testing.
 - **UI follow-ups — S.** Text measuring from Lua (`UI.MeasureText`), clipping a subtree to its rect (scroll
   lists), rotation and scale of UI rects, sprite sheets (UV rects) for `UIImage`, editor handles to drag
   and resize rects in the viewport, and showing UI components in `render.screenshot`.

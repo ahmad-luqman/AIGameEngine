@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Basalt/Scene/Components.h"
 #include "Basalt/UI/UIGeometry.h"
 
 #include <glm/glm.hpp>
@@ -18,6 +19,9 @@ namespace Basalt {
 
 	// One thing to draw on the UI canvas, from a UI component or an immediate-mode UI.* call. Placement is
 	// resolved when drawing (ResolveUIBox), so anchored commands follow the canvas as the window resizes.
+	// Commands built from components (UILayout) carry their laid-out box as Position/Size with Anchor and
+	// Pivot at zero; immediate-mode commands carry the caller's anchor, offset and pivot. Rect commands use
+	// only placement and Color.
 	struct UIDrawCommand
 	{
 		UIDrawKind Kind = UIDrawKind::Rect;
@@ -36,18 +40,18 @@ namespace Basalt {
 		float SliceScale = 1.0f;
 
 		// Text: each line is placed in the box at Align (0 = left/top, 1 = right/bottom). With a zero-size box
-		// (immediate-mode text) Align is the text's pivot on the box position. Wrap breaks lines at the box
-		// width when it is positive.
+		// (immediate-mode text without Width) Align is the text's pivot on the box position. Wrap breaks lines
+		// at the box width when it is positive.
 		std::string Text;
 		std::string Font;
-		float FontSize = 32.0f;
+		float FontSize = UITextComponent::DefaultFontSize;
 		glm::vec2 Align = { 0.0f, 0.0f };
 		bool Wrap = false;
 		bool Shadow = true;
 	};
 
-	// A GPU texture the UI can draw: its ImGui texture id (an nvrhi::ITexture* with the engine's ImGui backend)
-	// and its size in texels.
+	// A GPU texture the UI can draw: its ImGui texture id (an nvrhi::ITexture* with the engine's ImGui backend,
+	// never 0) and its size in texels. Valid for the frame it was looked up in (SceneRenderer::GetUITexture).
 	struct UITexture
 	{
 		uint64_t Handle = 0;
@@ -57,8 +61,10 @@ namespace Basalt {
 	// The command's box on a canvas of the given size.
 	UIBox ResolveUIBox(const UIDrawCommand& command, const glm::vec2& canvasSize);
 
-	// Moves the command's values into the ranges the renderer handles: font size, colors, slices and alignment
-	// are clamped; NaN or infinite placement makes the whole command unusable (returns false).
+	// Moves the command's values into the ranges the renderer handles, so its box stays finite: Position and
+	// Size within +-UIRectComponent::MaxMagnitude (Size >= 0), Anchor, Pivot, Align and Color within 0..1, and
+	// Slice, SliceScale and FontSize within their component limits. NaN or infinite placement makes the
+	// whole command unusable (returns false); other non-finite values take their defaults.
 	bool SanitizeUIDrawCommand(UIDrawCommand& command);
 
 }

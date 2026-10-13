@@ -505,8 +505,10 @@ namespace Basalt {
 	// Fills the entity's UI rect with a color, an image, or a nine-slice panel.
 	struct UIImageComponent
 	{
-		// Largest Slice border (texels) and SliceScale.
+		// Largest Slice border (texels), and the SliceScale range: a zero scale would collapse the borders, and
+		// 1/1000 of a canvas unit per texel is already invisible.
 		static constexpr float MaxSlice = 1e4f;
+		static constexpr float MinSliceScale = 1e-3f;
 		static constexpr float MaxSliceScale = 100.0f;
 
 		// Project-relative image, drawn as stored (display colors, no sRGB decoding); empty draws Color.
@@ -516,7 +518,7 @@ namespace Basalt {
 		// Nine-slice borders in texels (left, top, right, bottom): corners keep their size, edges stretch
 		// along one axis and the center along both. All zero stretches the whole image.
 		glm::vec4 Slice = { 0.0f, 0.0f, 0.0f, 0.0f };
-		// Canvas units per border texel; borders shrink proportionally when they would overlap.
+		// Canvas units per border texel; borders shrink proportionally when they would overlap in the rect.
 		float SliceScale = 1.0f;
 
 		bool operator==(const UIImageComponent&) const = default;
@@ -543,19 +545,20 @@ namespace Basalt {
 	{
 		static constexpr float MinFontSize = 4.0f;
 		static constexpr float MaxFontSize = 512.0f;
+		static constexpr float DefaultFontSize = 32.0f;
 
 		std::string Text = "Text";
 		// Project-relative TrueType font (.ttf); empty uses the built-in font. A font that fails to load falls
 		// back to the built-in one (the error is logged once).
 		std::string Font;
 		// Line height in canvas units.
-		float FontSize = 32.0f;
+		float FontSize = DefaultFontSize;
 		glm::vec4 Color = { 1.0f, 1.0f, 1.0f, 1.0f };
 		UIHorizontalAlign HorizontalAlign = UIHorizontalAlign::Left;
 		UIVerticalAlign VerticalAlign = UIVerticalAlign::Top;
-		// Breaks lines at the rect's width (between words where possible). '\n' always breaks.
+		// Breaks lines at the rect's width, between words (a word wider than the rect is cut). '\n' always breaks.
 		bool Wrap = true;
-		// A soft drop shadow that keeps text readable over bright scenes.
+		// An offset drop shadow that keeps text readable over bright scenes.
 		bool Shadow = true;
 
 		bool operator==(const UITextComponent&) const = default;

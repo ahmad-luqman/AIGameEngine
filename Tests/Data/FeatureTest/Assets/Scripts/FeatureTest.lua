@@ -197,7 +197,8 @@ local function TestSystems(self)
 	ExpectError("UI unknown option", function() UI.Rect(0, 0, 1, 1, { Colour = Vec4(1) }) end, "unknown option 'Colour'")
 	ExpectError("UI unknown anchor", function() UI.Text("x", 0, 0, { Anchor = "Middle" }) end, "unknown Anchor 'Middle'")
 	ExpectError("UI.Image without a texture", function() UI.Image("", 0, 0, 1, 1) end, "texture path is empty")
-	ExpectError("UI non-finite position", function() UI.Rect(0 / 0, 0, 1, 1) end, "must be finite")
+	ExpectError("UI non-finite position", function() UI.Rect(0 / 0, 0, 1, 1) end, "x must be between")
+	ExpectError("UI out-of-range font size", function() UI.Text("x", 0, 0, 1000) end, "size must be between 4 and 512")
 
 	-- UI components: laid out from the parent's rect (the HUD is inset by 24 units from the canvas edges).
 	local function RectIs(rect, x, y, w, h)
@@ -230,6 +231,8 @@ local function TestSystems(self)
 	ExpectError("UIText font size", function() label:SetComponent("UIText", { FontSize = 1000 }) end, "FontSize must be between 4 and 512")
 	ExpectError("UIText alignment", function() label:SetComponent("UIText", { HorizontalAlign = "Middle" }) end, "HorizontalAlign")
 	ExpectError("UIImage slice scale", function() panel:SetComponent("UIImage", { SliceScale = 0 }) end, "SliceScale must be between")
+	Check("Rejected UI patches change nothing", RectIs(UI.GetRect(panel), canvas.x - 24 - 360, 24, 360, 120)
+		and label:GetComponent("UIText").FontSize == 52 and label:GetComponent("UIText").HorizontalAlign == "Right" and panel:GetComponent("UIImage").SliceScale == 2)
 
 	-- Time.
 	Check("Time at start", Time.GetFrame() == 0 and Near(Time.GetElapsed(), 0))

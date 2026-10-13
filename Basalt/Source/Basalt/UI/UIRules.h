@@ -22,4 +22,11 @@ namespace Basalt {
 	UIImageComponent SanitizeUIImage(UIImageComponent image);
 	UITextComponent SanitizeUIText(UITextComponent text);
 
+	// The value a rule gives `value`: `fallback` when it is not finite, otherwise clamped to [min, max].
+	float ClampOrFallback(float value, float min, float max, float fallback);
+
+	// Where text sits in the free space of its rect: 0 (Left/Top), 0.5 (Center/Middle) or 1 (Right/Bottom).
+	float UIAlignFraction(UIHorizontalAlign align);
+	float UIAlignFraction(UIVerticalAlign align);
+
 }

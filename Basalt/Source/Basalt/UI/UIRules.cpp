@@ -25,7 +25,7 @@ namespace Basalt {
 
 			void Float(float& value, float min, float max, float fallback, const std::string& name)
 			{
-				const float required = std::isfinite(value) ? std::clamp(value, min, max) : fallback;
+				const float required = ClampOrFallback(value, min, max, fallback);
 				if (required == value)
 					return;
 				Report(fmt::format("{} must be between {} and {} (got {})", name, min, max, value));
@@ -78,7 +78,8 @@ namespace Basalt {
 			rules.Vector(rect.AnchorMax, 0.0f, 1.0f, defaults.AnchorMax, "AnchorMax", AxisNames);
 			for (glm::length_t axis = 0; axis < 2; axis++)
 			{
-				// Checked after the range rules, so a repaired AnchorMin is compared, never NaN.
+				// After the range rules: when repairing, both anchors are finite here; when validating, a NaN
+				// anchor was already reported (only the first problem is kept).
 				if (rect.AnchorMax[axis] >= rect.AnchorMin[axis])
 					continue;
 				rules.Report(fmt::format("AnchorMax{} must not be less than AnchorMin{} (got {} < {})", AxisNames[axis], AxisNames[axis], rect.AnchorMax[axis], rect.AnchorMin[axis]));
@@ -95,8 +96,7 @@ namespace Basalt {
 			const UIImageComponent defaults;
 			rules.Color(image.Color, defaults.Color, "Color");
 			rules.Vector(image.Slice, 0.0f, UIImageComponent::MaxSlice, defaults.Slice, "Slice", AxisNames);
-			// A zero scale would collapse the borders; 1/1000 of a canvas unit per texel is already invisible.
-			rules.Float(image.SliceScale, 1e-3f, UIImageComponent::MaxSliceScale, defaults.SliceScale, "SliceScale");
+			rules.Float(image.SliceScale, UIImageComponent::MinSliceScale, UIImageComponent::MaxSliceScale, defaults.SliceScale, "SliceScale");
 		}
 
 		void ApplyRules(UITextComponent& text, RuleWalker& rules)
@@ -155,6 +155,37 @@ namespace Basalt {
 	UITextComponent SanitizeUIText(UITextComponent text)
 	{
 		return Sanitize(std::move(text));
+	}
+
+	float ClampOrFallback(float value, float min, float max, float fallback)
+	{
+		return std::isfinite(value) ? std::clamp(value, min, max) : fallback;
+	}
+
+	float UIAlignFraction(UIHorizontalAlign align)
+	{
+		switch (align)
+		{
+			case UIHorizontalAlign::Center:
+				return 0.5f;
+			case UIHorizontalAlign::Right:
+				return 1.0f;
+			default:
+				return 0.0f;
+		}
+	}
+
+	float UIAlignFraction(UIVerticalAlign align)
+	{
+		switch (align)
+		{
+			case UIVerticalAlign::Middle:
+				return 0.5f;
+			case UIVerticalAlign::Bottom:
+				return 1.0f;
+			default:
+				return 0.0f;
+		}
 	}
 
 }

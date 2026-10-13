@@ -19,19 +19,22 @@ namespace Basalt {
 		static constexpr float CanvasHeight = 1080.0f;
 		static constexpr size_t MaxCommands = 65536;
 
-		// Queues a command for this frame. Commands with NaN or infinite placement are dropped (see
-		// SanitizeUIDrawCommand), and so is everything past MaxCommands; returns whether it was queued.
+		// Queues a command for this frame, sanitized (SanitizeUIDrawCommand). Returns false, queuing nothing,
+		// for a command with NaN or infinite placement and once MaxCommands are queued (the UI.* functions
+		// check placement first, so for them false means the queue is full).
 		static bool Submit(UIDrawCommand command);
 
-		// Called at the start of every scene update.
+		// Called at the start of every scene update, and when play starts and stops.
 		static void BeginFrame();
-		static std::vector<UIDrawCommand> GetCommands();
+		// Appends this frame's commands to `out`, in submission order.
+		static void AppendCommands(std::vector<UIDrawCommand>& out);
 		static size_t GetCommandCount();
 
 		// Canvas size for a viewport of the given pixel size.
 		static glm::vec2 GetCanvasSize(const glm::vec2& viewportSize);
 
-		// Viewport size used by GetCanvasSize() from scripts (set by the host each frame).
+		// Viewport size used by GetCanvasSize() from scripts (set by the host each frame; 1920x1080 until then,
+		// e.g. headless). Sizes that are not positive and finite are ignored.
 		static void SetViewportSize(const glm::vec2& size);
 		static glm::vec2 GetViewportSize();
 	};

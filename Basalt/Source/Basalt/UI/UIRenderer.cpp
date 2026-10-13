@@ -31,23 +31,14 @@ namespace Basalt {
 			return c == ' ' || c == '\t' || c == '\r';
 		}
 
-		// Canvas-to-screen mapping of one Draw call.
-		struct CanvasMapping
-		{
-			glm::vec2 Origin;
-			float Scale;
-
-			glm::vec2 ToScreen(const glm::vec2& canvasPoint) const { return Origin + canvasPoint * Scale; }
-			UIBox ToScreen(const UIBox& box) const { return { ToScreen(box.Min), box.Size * Scale }; }
-		};
-
-		void DrawImage(ImDrawList* drawList, const CanvasMapping& mapping, const UIDrawCommand& command, const UIBox& box, const UITextureMap& textures)
+		void DrawImage(ImDrawList* drawList, const UICanvasMapping& mapping, const UIDrawCommand& command, const UIBox& box, const UIResources& resources)
 		{
 			const ImU32 color = ToColor(command.Color);
 			const UIBox screen = mapping.ToScreen(box);
-			auto texture = command.Texture.empty() ? textures.end() : textures.find(command.Texture);
-			// No image, or one that failed to load (logged by AssetManager): fill with the color.
-			if (texture == textures.end() || texture->second.Handle == 0)
+			auto texture = command.Texture.empty() ? resources.Textures.end() : resources.Textures.find(command.Texture);
+			// No image, or one that failed to load (logged by AssetManager, shown in the inspector): fill with
+			// the color.
+			if (texture == resources.Textures.end())
 			{
 				drawList->AddRectFilled(ToImVec(screen.Min), ToImVec(screen.Max()), color);
 				return;
@@ -61,19 +52,22 @@ namespace Basalt {
 			}
 			for (const UIQuad& quad : ComputeNineSlice(box, texture->second.Size, command.Slice, command.SliceScale))
 			{
-				if (quad.Box.Size.x <= 0.0f || quad.Box.Size.y <= 0.0f)
+				// Written to skip NaN sizes too.
+				if (!(quad.Box.Size.x > 0.0f) || !(quad.Box.Size.y > 0.0f))
 					continue;
 				const UIBox patch = mapping.ToScreen(quad.Box);
 				drawList->AddImage(id, ToImVec(patch.Min), ToImVec(patch.Max()), ToImVec(quad.UVMin), ToImVec(quad.UVMax), color);
 			}
 		}
 
-		void DrawText(ImDrawList* drawList, const CanvasMapping& mapping, const UIDrawCommand& command, const UIBox& box)
+		void DrawText(ImDrawList* drawList, const UICanvasMapping& mapping, const UIDrawCommand& command, const UIBox& box, const UIResources& resources)
 		{
 			if (command.Text.empty())
 				return;
-			ImFont* font = UIFonts::Get(command.Font);
-			const float pixelSize = std::clamp(command.FontSize * mapping.Scale, 1.0f, UIRenderer::MaxTextPixelSize);
+			auto loaded = command.Font.empty() ? resources.Fonts.end() : resources.Fonts.find(command.Font);
+			ImFont* font = loaded != resources.Fonts.end() ? loaded->second : UIFonts::GetDefault();
+			const float density = std::max(ImGui::GetIO().DisplayFramebufferScale.y, 1.0f);
+			const float pixelSize = std::clamp(command.FontSize * mapping.Scale, 1.0f, UIRenderer::MaxTextPixelSize / density);
 			const UIBox screen = mapping.ToScreen(box);
 			const float wrapWidth = command.Wrap && screen.Size.x > 0.0f ? screen.Size.x : 0.0f;
 			const std::vector<UITextLine> lines = UIRenderer::BreakLines(font, pixelSize, command.Text, wrapWidth);
@@ -129,26 +123,28 @@ namespace Basalt {
 				cursor = lineEnd + 1;
 				continue;
 			}
-			// A wrapped line: the next one starts at the next word.
+			// A wrapped line: the next one starts at the next word. Blanks before a newline end with it, as in
+			// ImGui's own wrapping, rather than leave an empty line.
 			cursor = lineEnd;
 			while (cursor < end && IsBlank(*cursor))
 				++cursor;
 			if (cursor >= end)
 				break;
+			if (*cursor == '\n')
+				++cursor;
 		}
 		return lines;
 	}
 
-	void UIRenderer::Draw(ImDrawList* drawList, const glm::vec2& origin, const glm::vec2& size, std::span<const UIDrawCommand> commands, const UITextureMap& textures)
+	void UIRenderer::Draw(ImDrawList* drawList, const glm::vec2& origin, const glm::vec2& size, const glm::vec2& canvasSize, std::span<const UIDrawCommand> commands, const UIResources& resources)
 	{
 		if (!drawList || commands.empty() || !(size.x > 0.0f) || !(size.y > 0.0f))
 			return;
-		const CanvasMapping mapping{ origin, size.y / GameUI::CanvasHeight };
-		const glm::vec2 canvas = GameUI::GetCanvasSize(size);
+		const UICanvasMapping mapping = UICanvasMapping::ForViewport(origin, size);
 		drawList->PushClipRect(ToImVec(origin), ToImVec(origin + size), true);
 		for (const UIDrawCommand& command : commands)
 		{
-			const UIBox box = ResolveUIBox(command, canvas);
+			const UIBox box = ResolveUIBox(command, canvasSize);
 			switch (command.Kind)
 			{
 				case UIDrawKind::Rect:
@@ -158,10 +154,10 @@ namespace Basalt {
 					break;
 				}
 				case UIDrawKind::Image:
-					DrawImage(drawList, mapping, command, box, textures);
+					DrawImage(drawList, mapping, command, box, resources);
 					break;
 				case UIDrawKind::Text:
-					DrawText(drawList, mapping, command, box);
+					DrawText(drawList, mapping, command, box, resources);
 					break;
 			}
 		}
@@ -171,33 +167,32 @@ namespace Basalt {
 	void UIFrame::Build(Scene* scene, const glm::vec2& viewportSize, bool includeImmediate)
 	{
 		m_Commands.clear();
+		m_Resources = {};
+		m_CanvasSize = GameUI::GetCanvasSize(viewportSize);
 		if (scene)
-			UILayout::BuildCommands(*scene, GameUI::GetCanvasSize(viewportSize), m_Commands);
+			UILayout::BuildCommands(*scene, m_CanvasSize, m_Commands);
 		if (includeImmediate)
-		{
-			std::vector<UIDrawCommand> immediate = GameUI::GetCommands();
-			m_Commands.insert(m_Commands.end(), std::make_move_iterator(immediate.begin()), std::make_move_iterator(immediate.end()));
-		}
+			GameUI::AppendCommands(m_Commands);
 	}
 
 	void UIFrame::Clear()
 	{
 		m_Commands.clear();
-		m_Textures.clear();
+		m_Resources = {};
 	}
 
-	void UIFrame::LoadFonts() const
+	void UIFrame::LoadFonts()
 	{
 		for (const UIDrawCommand& command : m_Commands)
 		{
-			if (command.Kind == UIDrawKind::Text && !command.Font.empty())
-				UIFonts::Get(command.Font);
+			if (command.Kind == UIDrawKind::Text && !command.Font.empty() && !m_Resources.Fonts.contains(command.Font))
+				m_Resources.Fonts.emplace(command.Font, UIFonts::Get(command.Font));
 		}
 	}
 
 	void UIFrame::Draw(ImDrawList* drawList, const glm::vec2& origin, const glm::vec2& size) const
 	{
-		UIRenderer::Draw(drawList, origin, size, m_Commands, m_Textures);
+		UIRenderer::Draw(drawList, origin, size, m_CanvasSize, m_Commands, m_Resources);
 	}
 
 }

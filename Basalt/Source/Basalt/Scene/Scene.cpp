@@ -7,11 +7,11 @@
 #include "Basalt/Physics/PhysicsWorld.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/DebugDraw.h"
-#include "Basalt/UI/GameUI.h"
 #include "Basalt/Scene/ComponentRegistry.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/SceneSerializer.h"
 #include "Basalt/Scripting/ScriptEngine.h"
+#include "Basalt/UI/GameUI.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -446,6 +446,8 @@ namespace Basalt {
 		m_State = SceneState::Play;
 		m_Time = 0.0f;
 		m_FrameCount = 0;
+		// A play session never shows the previous session's immediate-mode UI (e.g. when it starts paused).
+		GameUI::BeginFrame();
 		m_RandomSeed = Project::GetActiveRandomSeed();
 		m_QuitRequested = false;
 		m_Paused = false;
@@ -475,6 +477,7 @@ namespace Basalt {
 		if (m_State != SceneState::Play)
 			return;
 
+		GameUI::BeginFrame();
 		// OnDestroy callbacks may destroy entities; apply those once every system is shut down.
 		m_DeferDestruction++;
 		if (m_ScriptEngine)

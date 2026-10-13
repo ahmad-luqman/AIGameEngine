@@ -11,15 +11,29 @@
 
 namespace Basalt {
 
-	// An axis-aligned rectangle on the UI canvas (canvas units, origin top-left, +Y down).
+	// An axis-aligned rectangle on the UI canvas (canvas units, origin top-left, +Y down). Every box the UI
+	// produces has a non-negative size.
 	struct UIBox
 	{
 		glm::vec2 Min = { 0.0f, 0.0f };
 		glm::vec2 Size = { 0.0f, 0.0f };
 
 		glm::vec2 Max() const { return Min + Size; }
-		bool Contains(const glm::vec2& point) const { return point.x >= Min.x && point.y >= Min.y && point.x < Min.x + Size.x && point.y < Min.y + Size.y; }
 		bool operator==(const UIBox&) const = default;
+	};
+
+	// Maps the canvas onto a screen rectangle: the canvas is GameUI::CanvasHeight units tall, so one unit is
+	// `Scale` pixels (the same on both axes). Shared by the UI renderer and the editor's UI overlay.
+	struct UICanvasMapping
+	{
+		glm::vec2 Origin = { 0.0f, 0.0f };
+		float Scale = 1.0f;
+
+		// The mapping that shows the whole canvas on the screen rectangle [origin, origin + size).
+		static UICanvasMapping ForViewport(const glm::vec2& origin, const glm::vec2& size);
+
+		glm::vec2 ToScreen(const glm::vec2& canvasPoint) const { return Origin + canvasPoint * Scale; }
+		UIBox ToScreen(const UIBox& box) const { return { ToScreen(box.Min), box.Size * Scale }; }
 	};
 
 	// The rect a UIRectComponent describes inside its parent's rect (see UIRectComponent). A negative
@@ -40,13 +54,20 @@ namespace Basalt {
 
 	// Splits `box` into the nine patches of a nine-slice image (row by row, top-left first). `slice` holds
 	// the borders in texels (left, top, right, bottom); on the canvas each border is `slice * sliceScale`
-	// units. Borders wider than the texture are clamped to it, and borders that would overlap in `box` shrink
-	// proportionally, so the corners never invert. Patches can have zero size (no border on that side).
+	// units. Opposite borders that together exceed the texture shrink proportionally to fit it, and so do
+	// borders that would overlap in `box`, so the corners never invert. Patches can have zero size (no border
+	// on that side).
 	std::array<UIQuad, 9> ComputeNineSlice(const UIBox& box, const glm::vec2& textureSize, const glm::vec4& slice, float sliceScale);
 
 	// Named canvas anchors for immediate-mode UI ("TopLeft", "Center", "BottomRight", ...), as fractions of
 	// the canvas. nullopt for an unknown name.
 	std::optional<glm::vec2> FindUIAnchorPreset(std::string_view name);
 	std::span<const std::string_view> GetUIAnchorPresetNames();
+
+	// The editor's anchor presets: a named point (see FindUIAnchorPreset) or "Stretch". Returns `rect` with
+	// its anchors and pivot set to the preset and its Position and Size recomputed so that, inside `parent`,
+	// it covers exactly the box it covers now (`current`). Only how the rect follows its parent's size
+	// changes. nullopt for an unknown preset.
+	std::optional<UIRectComponent> ApplyUIAnchorPreset(const UIRectComponent& rect, std::string_view preset, const UIBox& parent, const UIBox& current);
 
 }

@@ -1,5 +1,6 @@
 #include "Basalt/UI/GameUI.h"
 
+#include <cmath>
 #include <mutex>
 
 namespace Basalt {
@@ -29,10 +30,10 @@ namespace Basalt {
 		s_Commands.clear();
 	}
 
-	std::vector<UIDrawCommand> GameUI::GetCommands()
+	void GameUI::AppendCommands(std::vector<UIDrawCommand>& out)
 	{
 		std::scoped_lock lock(s_Mutex);
-		return s_Commands;
+		out.insert(out.end(), s_Commands.begin(), s_Commands.end());
 	}
 
 	size_t GameUI::GetCommandCount()
@@ -50,7 +51,7 @@ namespace Basalt {
 	void GameUI::SetViewportSize(const glm::vec2& size)
 	{
 		std::scoped_lock lock(s_Mutex);
-		if (size.x > 0.0f && size.y > 0.0f)
+		if (std::isfinite(size.x) && std::isfinite(size.y) && size.x > 0.0f && size.y > 0.0f)
 			s_ViewportSize = size;
 	}
 

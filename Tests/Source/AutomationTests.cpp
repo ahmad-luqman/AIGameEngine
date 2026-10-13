@@ -695,7 +695,35 @@ TEST_SUITE("Automation")
 		CHECK(layout["canvas"] == json({ 1440.0, 1080.0 }));
 		CHECK(layout["items"][0]["rect"] == json({ 0.0, 980.0, 1440.0, 100.0 }));
 
+		CHECK(layout["problems"].empty());
+
+		// While playing it lays out the play copy.
+		Run(registry, session, "play.start");
+		Run(registry, session, "component.set", { { "entity", "Bar" }, { "component", "UIRect" }, { "data", { { "Size", { 0, 50 } } } } });
+		CHECK(Run(registry, session, "ui.layout")["items"][0]["rect"] == json({ 0.0, 1030.0, 1920.0, 50.0 }));
+		Run(registry, session, "play.stop");
+		CHECK(Run(registry, session, "ui.layout")["items"][0]["rect"] == json({ 0.0, 980.0, 1920.0, 100.0 }));
+
 		CHECK(RunError(registry, session, "ui.layout", { { "width", 0 } }).find("'width' must be in") != std::string::npos);
 		CHECK(RunError(registry, session, "ui.layout", { { "height", "tall" } }).find("must be an integer") != std::string::npos);
+	}
+
+	TEST_CASE("ui.layout reports images and fonts that will not load")
+	{
+		BasaltTest::TempProject project("UILayoutProblems");
+		project.WriteFile("Assets/Fonts/Bad.ttf", std::string(500, 'x'));
+		CommandRegistry registry;
+		AutomationSession session;
+		Run(registry, session, "scene.new", { { "name", "UI" }, { "empty", true } });
+		Run(registry, session, "entity.create", { { "name", "Panel" }, { "components", { { "UIRect", json::object() }, { "UIImage", { { "Texture", "Assets/Textures/Missing.png" } } } } } });
+		Run(registry, session, "entity.create", { { "name", "Label" }, { "components", { { "UIRect", json::object() }, { "UIText", { { "Font", "Assets/Fonts/Bad.ttf" } } } } } });
+		Run(registry, session, "entity.create", { { "name", "Plain" }, { "components", { { "UIText", json::object() } } } });
+
+		const json problems = Run(registry, session, "ui.layout")["problems"];
+		REQUIRE(problems.size() == 2);
+		CHECK(problems[0]["name"] == "Panel");
+		CHECK(problems[0]["problem"].get<std::string>().find("UIImage texture 'Assets/Textures/Missing.png'") != std::string::npos);
+		CHECK(problems[1]["name"] == "Label");
+		CHECK(problems[1]["problem"].get<std::string>().find("not a TrueType font") != std::string::npos);
 	}
 }

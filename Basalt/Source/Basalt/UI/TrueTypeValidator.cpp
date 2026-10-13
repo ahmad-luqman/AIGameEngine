@@ -8,10 +8,13 @@
 #include <string_view>
 #include <vector>
 
-// The checks follow the reads stb_truetype (imstb_truetype.h, as used by imgui_draw.cpp's font loader) makes
-// for a font: stbtt_InitFont, stbtt_FindGlyphIndex, stbtt_GetFontVMetrics, stbtt_GetGlyphHMetrics,
-// stbtt_GetGlyphBox and stbtt__GetGlyphShapeTT. Where stb's arithmetic matters (16-bit wrap-around in the
-// cmap search, the composite transform) it is mirrored exactly.
+// The checks follow the reads stb_truetype (imstb_truetype.h) makes through Dear ImGui's font loader
+// (imgui_draw.cpp, ImGui_ImplStbTrueType_*): stbtt_GetFontOffsetForIndex, stbtt_InitFont,
+// stbtt_ScaleForPixelHeight and stbtt_GetFontVMetrics (hhea), stbtt_FindGlyphIndex (cmap),
+// stbtt_GetGlyphHMetrics (hmtx), stbtt_GetGlyphBitmapBox(Subpixel) (loca, glyph boxes) and
+// stbtt_MakeGlyphBitmapSubpixelPrefilter (stbtt__GetGlyphShapeTT and the rasterizer). Where stb's arithmetic
+// matters (16-bit wrap-around in the cmap search, the composite transform) it is mirrored exactly. Verified
+// against Dear ImGui 1.92.9: check again when the imgui pin in cmake/Dependencies.cmake changes.
 
 namespace Basalt {
 
@@ -115,24 +118,9 @@ namespace Basalt {
 			float Matrix[6] = { 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f };
 		};
 
-		struct Glyph
-		{
-			bool Present = false; // loca gives it data (stb skips glyphs whose range is empty)
-			uint64_t Offset = 0;  // in the file
-			// stb cannot draw it safely; RepairTrueTypeFont blanks it.
-			bool Broken = false;
-			std::string Problem;
-			int16_t Box[4] = {}; // xMin, yMin, xMax, yMax from the glyph header
-			bool Composite = false;
-			std::vector<Component> Components;
-			// Simple glyphs: coordinates of the vertices stb produces (points and midpoints between them) and of
-			// their control points (points, or the origin for lines), and an upper bound on the vertex count.
-			Extent Values;
-			Extent Controls;
-			uint64_t Vertices = 0;
-		};
-
-		// What stbtt_GetGlyphShape produces for a glyph, composite glyphs expanded.
+		// What stbtt_GetGlyphShape produces for a glyph, composite glyphs expanded: the coordinates of its
+		// vertices (points and midpoints between them) and of their control points (points, or the origin for
+		// lines), and an upper bound on the vertices allocated.
 		struct Shape
 		{
 			Extent Values;
@@ -144,9 +132,51 @@ namespace Basalt {
 			int Height = 0;
 		};
 
+		struct Glyph
+		{
+			bool Present = false; // loca gives it data (stb skips glyphs whose range is empty)
+			uint64_t Offset = 0;  // in the file
+			// stb cannot draw it safely; RepairTrueTypeFont blanks it.
+			bool Broken = false;
+			std::string Problem;
+			int16_t Box[4] = {}; // xMin, yMin, xMax, yMax from the glyph header
+			// A simple glyph's own outline; a composite has none (empty), only components.
+			Shape Outline;
+			std::vector<Component> Components;
+			// The expanded shape, once resolved.
+			std::optional<Shape> Resolved;
+		};
+
+		enum class ShapeStatus
+		{
+			Ok,
+			// Expanding the glyph at this depth would nest composites too deep (a cycle always does).
+			TooDeep,
+			// The glyph just turned out broken (and was marked so).
+			Broken
+		};
+
+		struct ShapeResult
+		{
+			ShapeStatus Status = ShapeStatus::Ok;
+			const Shape* Value = nullptr;
+		};
+
 		// Upper bounds on one glyph's expansion: vertices allocated, and recursive shape calls.
 		constexpr uint64_t MaxShapeVertices = uint64_t{ 1 } << 18;
 		constexpr uint64_t MaxShapeCalls = 4096;
+
+		// The tables stb reads, found by ReadTableDirectory.
+		struct Tables
+		{
+			Region Cmap;
+			Region Head;
+			Region Hhea;
+			Region Hmtx;
+			Region Glyf;
+			Region Loca;
+			Region Maxp;
+		};
 
 		class Validator
 		{
@@ -227,46 +257,41 @@ namespace Basalt {
 				header.Require(12, 16 * static_cast<uint64_t>(m_TableCount));
 				if (!FindTable(header, "glyf"))
 					Fail("the font has no 'glyf' table (CFF outlines are not supported)");
-				m_Cmap = RequireTable(header, "cmap");
-				m_Head = RequireTable(header, "head");
-				m_Hhea = RequireTable(header, "hhea");
-				m_Hmtx = RequireTable(header, "hmtx");
-				m_Glyf = RequireTable(header, "glyf");
-				m_Loca = RequireTable(header, "loca");
-				m_Maxp = RequireTable(header, "maxp");
+				m_Tables.emplace(Tables{ RequireTable(header, "cmap"), RequireTable(header, "head"), RequireTable(header, "hhea"), RequireTable(header, "hmtx"),
+										 RequireTable(header, "glyf"), RequireTable(header, "loca"), RequireTable(header, "maxp") });
 			}
 
 			void ReadHead()
 			{
-				m_IndexToLocFormat = m_Head->U16(50);
+				m_IndexToLocFormat = m_Tables->Head.U16(50);
 				if (m_IndexToLocFormat > 1)
 					Fail(fmt::format("unknown 'loca' format {}", m_IndexToLocFormat));
 			}
 
 			void ReadMaxp()
 			{
-				m_GlyphCount = m_Maxp->U16(4);
+				m_GlyphCount = m_Tables->Maxp.U16(4);
 				if (m_GlyphCount == 0)
 					Fail("the font has no glyphs");
 			}
 
 			void ReadHorizontalMetrics()
 			{
-				const int ascent = m_Hhea->S16(4);
-				const int descent = m_Hhea->S16(6);
+				const int ascent = m_Tables->Hhea.S16(4);
+				const int descent = m_Tables->Hhea.S16(6);
 				m_LineHeight = ascent - descent;
 				// ImGui scales by 1 / (ascent - descent).
 				if (m_LineHeight <= 0)
 					Fail(fmt::format("the font's ascent ({}) must be above its descent ({})", ascent, descent));
-				const uint16_t longMetrics = m_Hhea->U16(34);
+				const uint16_t longMetrics = m_Tables->Hhea.U16(34);
 				if (longMetrics == 0 || longMetrics > m_GlyphCount)
 					Fail(fmt::format("'hhea' declares {} horizontal metrics for {} glyphs", longMetrics, m_GlyphCount));
-				m_Hmtx->Require(0, 4 * static_cast<uint64_t>(longMetrics) + 2 * static_cast<uint64_t>(m_GlyphCount - longMetrics));
+				m_Tables->Hmtx.Require(0, 4 * static_cast<uint64_t>(longMetrics) + 2 * static_cast<uint64_t>(m_GlyphCount - longMetrics));
 			}
 
 			uint64_t GlyphOffset(uint32_t index) const
 			{
-				return m_IndexToLocFormat == 0 ? uint64_t{ m_Loca->U16(2 * static_cast<uint64_t>(index)) } * 2 : m_Loca->U32(4 * static_cast<uint64_t>(index));
+				return m_IndexToLocFormat == 0 ? uint64_t{ m_Tables->Loca.U16(2 * static_cast<uint64_t>(index)) } * 2 : m_Tables->Loca.U32(4 * static_cast<uint64_t>(index));
 			}
 
 			void ReadGlyphs()
@@ -278,14 +303,14 @@ namespace Basalt {
 					const uint64_t next = GlyphOffset(index + 1);
 					if (next < previous)
 						Fail(fmt::format("'loca' offsets decrease at glyph {}", index));
-					if (next > m_Glyf->Length())
+					if (next > m_Tables->Glyf.Length())
 						Fail(fmt::format("glyph {} extends past the 'glyf' table", index));
 					if (next != previous)
 					{
 						// The header is where a repair blanks the glyph, so it must exist.
 						if (next - previous < 10)
 							Fail(fmt::format("glyph {} is too short ({} bytes) for a glyph header", index, next - previous));
-						const Region data(m_Data, m_Glyf->Offset() + previous, next - previous, "glyph data");
+						const Region data(m_Data, m_Tables->Glyf.Offset() + previous, next - previous, "glyph data");
 						try
 						{
 							ReadGlyph(index, data);
@@ -332,7 +357,8 @@ namespace Basalt {
 
 			void ReadSimpleGlyph(Glyph& glyph, const Region& data, int contours)
 			{
-				// Contour end points must increase strictly: stb walks contours by them.
+				// Contour end points must increase strictly (as the format requires), so the contour starts found
+				// here are where stb starts contours: the off-curve check below relies on them.
 				int previousEnd = -1;
 				std::vector<uint32_t> contourStarts;
 				contourStarts.reserve(static_cast<size_t>(contours));
@@ -390,8 +416,8 @@ namespace Basalt {
 				readAxis(ys, 4, 32);
 
 				for (uint32_t i = 0; i < points; i++)
-					glyph.Values.Add(xs[i], ys[i]);
-				CheckTop(glyph, glyph.Values);
+					glyph.Outline.Values.Add(xs[i], ys[i]);
+				CheckTop(glyph, glyph.Outline.Values);
 				// A contour that starts off the curve makes stb read the point after it; for the last point
 				// there is none.
 				for (uint32_t start : contourStarts)
@@ -399,15 +425,14 @@ namespace Basalt {
 					if (start == points - 1 && !(flags[start] & 1))
 						Fail("it ends with a contour of one off-curve point");
 				}
-				glyph.Controls = glyph.Values;
-				glyph.Controls.Add(0, 0);
+				glyph.Outline.Controls = glyph.Outline.Values;
+				glyph.Outline.Controls.Add(0, 0);
 				// stb allocates one vertex per point plus two per contour.
-				glyph.Vertices = points + 2 * static_cast<uint64_t>(contours);
+				glyph.Outline.Vertices = points + 2 * static_cast<uint64_t>(contours);
 			}
 
 			void ReadCompositeGlyph(Glyph& glyph, const Region& data)
 			{
-				glyph.Composite = true;
 				uint64_t at = 10;
 				bool more = true;
 				while (more)
@@ -458,75 +483,73 @@ namespace Basalt {
 				}
 			}
 
-			// stb rasterizes a glyph into a bitmap sized from its box and clips the outline to it, except in one
-			// case: when the box's top row is the baseline's (the box ends at or below the baseline), an edge
-			// entirely above that row trips an assertion in stbtt__rasterize_sorted_edges. Such an edge exists
-			// when the outline rises above the baseline (y > 0).
+			// stb sizes a glyph's bitmap from its box and clamps edges that start above the bitmap's top row,
+			// except when that top row is row 0 (off_y == 0 in stbtt__rasterize_sorted_edges): there an edge
+			// lying entirely above it trips an assertion. off_y is 0 when -1/scale < yMax <= 0, which a small
+			// enough text size reaches for any box ending at or below the baseline; such an edge needs outline
+			// points above the baseline (y > 0). So this conservatively breaks every glyph whose box ends at or
+			// below the baseline while its outline rises above it.
 			static void CheckTop(const Glyph& glyph, const Extent& values)
 			{
 				if (!values.Empty && glyph.Box[3] <= 0 && values.MaxY > 0)
 					Fail("its outline rises above the baseline but its bounding box ends at or below it");
 			}
 
-			// Expands a glyph like stbtt_GetGlyphShape and checks each composite's transformed components; null
-			// when the glyph just became broken, or when expanding it here would nest too deep (a cycle always
-			// does). Glyphs broken before are blanked by the repair, so they expand to nothing.
-			const Shape* ResolveShape(uint32_t index, int depth)
+			// Expands a glyph like stbtt_GetGlyphShape and checks each composite's transformed components.
+			// Glyphs already broken are blanked by the repair, so they expand to nothing. A glyph that breaks here
+			// is marked broken; one that would nest too deep at `depth` reports TooDeep to its caller, so only
+			// the glyph being resolved at depth 0 is blamed (ResolveShapes) and the components it shares with
+			// other glyphs stay intact.
+			ShapeResult ResolveShape(uint32_t index, int depth)
 			{
 				static const Shape s_Empty;
-				const Glyph& glyph = m_Glyphs[index];
-				// stb draws nothing for glyphs without data, nor for broken ones once they are blanked.
+				Glyph& glyph = m_Glyphs[index];
 				if (!glyph.Present || glyph.Broken)
-					return &s_Empty;
-				if (m_Shapes[index])
+					return { ShapeStatus::Ok, &s_Empty };
+				if (glyph.Resolved)
 				{
-					if (depth + m_Shapes[index]->Height > MaxCompositeGlyphDepth)
-						return nullptr;
-					return &*m_Shapes[index];
+					if (depth + glyph.Resolved->Height > MaxCompositeGlyphDepth)
+						return { ShapeStatus::TooDeep };
+					return { ShapeStatus::Ok, &*glyph.Resolved };
 				}
 				// A cycle recurses until it is too deep.
 				if (depth > MaxCompositeGlyphDepth)
-					return nullptr;
+					return { ShapeStatus::TooDeep };
 
-				Shape shape;
-				if (!glyph.Composite)
-				{
-					shape.Values = glyph.Values;
-					shape.Controls = glyph.Controls;
-					shape.Vertices = glyph.Vertices;
-				}
+				Shape shape = glyph.Outline;
 				try
 				{
 					for (const Component& component : glyph.Components)
 					{
 						shape.Calls++;
+						// stb draws nothing for a component past the last glyph.
 						if (component.Glyph >= m_GlyphCount)
 							continue;
-						const Shape* child = ResolveShape(component.Glyph, depth + 1);
-						// A component broken on its own is blanked by the repair, so it draws nothing here.
-						if (!child && m_Glyphs[component.Glyph].Broken)
+						const ShapeResult child = ResolveShape(component.Glyph, depth + 1);
+						if (child.Status == ShapeStatus::TooDeep)
+							return child;
+						// Broken on its own: blanked by the repair, so it draws nothing here.
+						if (child.Status == ShapeStatus::Broken)
 							continue;
-						if (!child)
-							Fail(fmt::format("its components nest more than {} levels deep or form a cycle", MaxCompositeGlyphDepth));
-						shape.Calls += child->Calls;
-						shape.Vertices += child->Vertices;
-						shape.Height = std::max(shape.Height, child->Height + 1);
+						shape.Calls += child.Value->Calls;
+						shape.Vertices += child.Value->Vertices;
+						shape.Height = std::max(shape.Height, child.Value->Height + 1);
 						if (shape.Calls > MaxShapeCalls || shape.Vertices > MaxShapeVertices)
 							Fail("it expands into too many components");
-						if (child->Vertices == 0)
+						if (child.Value->Vertices == 0)
 							continue;
-						shape.Values.Add(Transform(child->Values, component.Matrix));
-						shape.Controls.Add(Transform(child->Controls, component.Matrix));
+						shape.Values.Add(Transform(child.Value->Values, component.Matrix));
+						shape.Controls.Add(Transform(child.Value->Controls, component.Matrix));
 					}
 					CheckTop(glyph, shape.Values);
 				}
 				catch (const FontError& error)
 				{
 					MarkBroken(index, error.Message);
-					return nullptr;
+					return { ShapeStatus::Broken };
 				}
-				m_Shapes[index] = shape;
-				return &*m_Shapes[index];
+				glyph.Resolved = shape;
+				return { ShapeStatus::Ok, &*glyph.Resolved };
 			}
 
 			// stb's component transform of every corner of `extent` (the transform is linear, so the corners
@@ -561,12 +584,18 @@ namespace Basalt {
 
 			void ResolveShapes()
 			{
-				m_Shapes.assign(m_GlyphCount, std::nullopt);
 				for (uint32_t index = 0; index < m_GlyphCount; index++)
 				{
-					if (m_Glyphs[index].Present && !m_Glyphs[index].Broken)
-						ResolveShape(index, 0);
+					if (ResolveShape(index, 0).Status == ShapeStatus::TooDeep)
+						MarkBroken(index, fmt::format("its components nest more than {} levels deep or form a cycle", MaxCompositeGlyphDepth));
 				}
+			}
+
+			// Glyphs past the last one are fatal: stb reads their metrics past the end of 'hmtx'.
+			void CheckGlyphRange(uint32_t first, uint32_t last, uint64_t lastGlyph)
+			{
+				if (lastGlyph >= m_GlyphCount)
+					Fail(fmt::format("the character map sends U+{:04X}..U+{:04X} to glyphs up to {}, but the font has {} glyphs", first, last, lastGlyph, m_GlyphCount));
 			}
 
 			void CheckGlyphId(uint32_t glyph, uint32_t codepoint)
@@ -577,7 +606,7 @@ namespace Basalt {
 
 			void ReadCmap()
 			{
-				const Region& cmap = *m_Cmap;
+				const Region& cmap = m_Tables->Cmap;
 				const uint16_t subtables = cmap.U16(2);
 				// stb takes the last Unicode subtable: Microsoft Unicode BMP or full repertoire, or any Unicode
 				// platform one. Its address is a 32-bit sum, so mirror the wrap-around.
@@ -653,7 +682,9 @@ namespace Basalt {
 				const uint16_t searchRange = static_cast<uint16_t>(cmap.U16(map + 8) >> 1);
 				const uint16_t entrySelector = cmap.U16(map + 10);
 				const uint16_t rangeShift = static_cast<uint16_t>(cmap.U16(map + 12) >> 1);
-				// Halving a 16-bit searchRange reaches zero after 16 steps; more only repeat the last read.
+				// stb accepts any value (once searchRange reaches 0, further steps re-read the same entry), but
+				// SearchFormat4 recurses once per step: values above 16, which no valid font has, are rejected to
+				// bound the recursion.
 				if (entrySelector > 16)
 					Fail(fmt::format("character map entrySelector {} is out of range", entrySelector));
 
@@ -703,9 +734,7 @@ namespace Basalt {
 					// 65535 (which is never a glyph: there are at most 65535).
 					const auto delta = static_cast<uint16_t>(cmap.S16(table.Map + 14 + segments * 4 + 2 + 2 * uint64_t{ item }));
 					const uint32_t firstGlyph = (first + delta) & 0xFFFF;
-					const uint32_t lastGlyph = firstGlyph + (last - first);
-					if (lastGlyph >= m_GlyphCount)
-						Fail(fmt::format("the character map sends U+{:04X}..U+{:04X} to glyphs up to {}, but the font has {} glyphs", first, last, lastGlyph, m_GlyphCount));
+					CheckGlyphRange(first, last, firstGlyph + uint64_t{ last - first });
 					return;
 				}
 				for (uint32_t codepoint = first; codepoint <= last; codepoint++)
@@ -726,27 +755,18 @@ namespace Basalt {
 					if (end < start)
 						continue;
 					// stb returns startGlyph + (codepoint - start) for format 12 and startGlyph for format 13.
-					const uint64_t lastGlyph = format == 12 ? uint64_t{ startGlyph } + (end - start) : startGlyph;
-					if (lastGlyph >= m_GlyphCount)
-						Fail(fmt::format("the character map sends U+{:04X}..U+{:04X} to glyphs up to {}, but the font has {} glyphs", start, end, lastGlyph, m_GlyphCount));
+					CheckGlyphRange(start, end, format == 12 ? uint64_t{ startGlyph } + (end - start) : startGlyph);
 				}
 			}
 
 		private:
 			std::span<const uint8_t> m_Data;
 			uint32_t m_TableCount = 0;
-			std::optional<Region> m_Cmap;
-			std::optional<Region> m_Head;
-			std::optional<Region> m_Hhea;
-			std::optional<Region> m_Hmtx;
-			std::optional<Region> m_Glyf;
-			std::optional<Region> m_Loca;
-			std::optional<Region> m_Maxp;
+			std::optional<Tables> m_Tables;
 			uint16_t m_IndexToLocFormat = 0;
 			uint32_t m_GlyphCount = 0;
 			int m_LineHeight = 0;
 			std::vector<Glyph> m_Glyphs;
-			std::vector<std::optional<Shape>> m_Shapes;
 		};
 
 	}
@@ -767,6 +787,12 @@ namespace Basalt {
 		catch (const std::bad_alloc&)
 		{
 			check.Error = "out of memory while checking the font";
+		}
+		catch (const std::exception& error)
+		{
+			// No other exception is expected; reject the font rather than let one leave the check.
+			check.Error = fmt::format("internal error while checking the font: {}", error.what());
+			BS_CORE_ERROR("TrueTypeValidator: {}", check.Error);
 		}
 		return check;
 	}

@@ -2,10 +2,10 @@
 
 #include "Basalt/Core/Application.h"
 #include "Basalt/Project/Project.h"
-#include "Basalt/UI/GameUI.h"
 #include "Basalt/Renderer/GraphicsDevice.h"
 #include "Basalt/Renderer/RenderUtils.h"
 #include "Basalt/Scene/SceneSerializer.h"
+#include "Basalt/UI/GameUI.h"
 
 #include <imgui.h>
 #include <nvrhi/utils.h>
@@ -94,7 +94,8 @@ namespace Basalt {
 
 		const uint32_t width = device->GetBackBufferWidth();
 		const uint32_t height = device->GetBackBufferHeight();
-		GameUI::SetViewportSize({ static_cast<float>(width), static_cast<float>(height) });
+		const glm::vec2 viewportSize(static_cast<float>(width), static_cast<float>(height));
+		GameUI::SetViewportSize(viewportSize);
 		m_Scene->OnViewportResize(width, height);
 		m_Renderer->SetViewportSize(width, height);
 
@@ -109,7 +110,7 @@ namespace Basalt {
 
 		// Debug views show the renderer's raw buffers: no game UI over them.
 		if (m_Options.DebugView == RendererDebugView::None)
-			m_UIFrame.Build(m_Scene.get(), { static_cast<float>(width), static_cast<float>(height) }, true);
+			m_UIFrame.Build(m_Scene.get(), viewportSize, true);
 		else
 			m_UIFrame.Clear();
 

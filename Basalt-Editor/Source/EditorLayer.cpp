@@ -10,14 +10,15 @@
 #include "Basalt/ImGui/ImGuiLayer.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/DebugDraw.h"
-#include "Basalt/UI/GameUI.h"
-#include "Basalt/UI/UILayout.h"
 #include "Basalt/Renderer/GraphicsDevice.h"
 #include "Basalt/Renderer/RenderUtils.h"
 #include "Basalt/Scene/ComponentRegistry.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
 #include "Basalt/Scene/SceneSerializer.h"
+#include "Basalt/UI/GameUI.h"
+#include "Basalt/UI/UILayout.h"
+#include "Basalt/UI/UIRules.h"
 
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -690,20 +691,20 @@ namespace Basalt {
 		scene.OnViewportResize(width, height);
 		scene.GetRendererSettings().DebugView = m_DebugView;
 
+		const bool playing = IsGameRunning();
 		std::optional<RenderCamera> camera;
-		if (m_Session.IsPlaying() && !m_Session.IsSimulating())
+		if (playing)
 			camera = GetPrimaryRenderCamera(scene, width, height);
 		if (!camera)
 		{
 			camera = m_Camera.GetRenderCamera();
-			if (!m_Session.IsPlaying() || m_Session.IsSimulating())
+			if (!playing)
 				DrawEditorOverlays();
 		}
 		m_Renderer->Render(scene, *camera);
 
 		// UI components show in every mode, so layouts can be authored without playing; the scripts'
 		// immediate-mode UI only exists while playing. Debug views show the renderer's raw buffers.
-		const bool playing = m_Session.IsPlaying() && !m_Session.IsSimulating();
 		if (m_DebugView == RendererDebugView::None)
 			m_UIFrame.Build(&scene, m_ViewportSize, playing);
 		else
@@ -1019,7 +1020,7 @@ namespace Basalt {
 			ImGui::Image(ImTextureRef(reinterpret_cast<ImTextureID>(m_Renderer->GetOutputTexture())), available);
 		GameUI::SetViewportSize({ available.x, available.y });
 		m_UIFrame.Draw(ImGui::GetWindowDrawList(), { cursor.x, cursor.y }, { available.x, available.y });
-		if (m_ShowUIBounds && (!m_Session.IsPlaying() || m_Session.IsSimulating()))
+		if (m_ShowUIBounds && !IsGameRunning())
 			DrawUIBounds({ cursor.x, cursor.y }, { available.x, available.y });
 
 		if (ImGui::BeginDragDropTarget())
@@ -1082,9 +1083,12 @@ namespace Basalt {
 	void EditorLayer::DrawUIBounds(const glm::vec2& origin, const glm::vec2& size)
 	{
 		Scene& scene = *m_Session.GetScene();
-		const glm::vec2 canvas = GameUI::GetCanvasSize(size);
-		const float scale = size.y / GameUI::CanvasHeight;
-		const auto toScreen = [&](const glm::vec2& point) { return ImVec2(origin.x + point.x * scale, origin.y + point.y * scale); };
+		const glm::vec2 canvas = m_UIFrame.GetCanvasSize();
+		const UICanvasMapping mapping = UICanvasMapping::ForViewport(origin, size);
+		const auto toScreen = [&](const glm::vec2& point) {
+			const glm::vec2 screen = mapping.ToScreen(point);
+			return ImVec2(screen.x, screen.y);
+		};
 		ImDrawList* drawList = ImGui::GetWindowDrawList();
 		drawList->PushClipRect(toScreen({ 0.0f, 0.0f }), toScreen(canvas), true);
 
@@ -1099,33 +1103,27 @@ namespace Basalt {
 			else
 				drawList->AddRect(toScreen(item.Rect.Min), toScreen(item.Rect.Max()), boundsColor);
 		}
-
-		const auto* rect = selected ? selected.TryGetComponent<UIRectComponent>() : nullptr;
-		if (selectedRect)
+		if (!selectedRect)
 		{
-			drawList->AddRect(toScreen(selectedRect->Min), toScreen(selectedRect->Max()), selectionColor, 0.0f, 0, 2.0f);
-			if (rect)
+			drawList->PopClipRect();
+			return;
+		}
+
+		// The selection on top: its rect, its pivot as a dot and its anchors as diamonds on the parent rect.
+		drawList->AddRect(toScreen(selectedRect->Min), toScreen(selectedRect->Max()), selectionColor, 0.0f, 0, 2.0f);
+		if (const auto* rectComponent = selected.TryGetComponent<UIRectComponent>())
+		{
+			const UIRectComponent rect = SanitizeUIRect(*rectComponent);
+			drawList->AddCircleFilled(toScreen(selectedRect->Min + selectedRect->Size * rect.Pivot), 4.0f, selectionColor);
+			const UIBox parent = UILayout::GetParentRect(scene, selected, canvas);
+			const glm::vec2 anchorMin = parent.Min + parent.Size * rect.AnchorMin;
+			const glm::vec2 anchorMax = parent.Min + parent.Size * rect.AnchorMax;
+			constexpr float anchorMarkerRadius = 5.0f;
+			for (const glm::vec2& anchor : { anchorMin, glm::vec2(anchorMax.x, anchorMin.y), glm::vec2(anchorMin.x, anchorMax.y), anchorMax })
 			{
-				// The pivot as a dot, the anchors as small diamonds on the parent's rect.
-				const ImVec2 pivot = toScreen(selectedRect->Min + selectedRect->Size * rect->Pivot);
-				drawList->AddCircleFilled(pivot, 4.0f, selectionColor);
-				UIBox parent{ { 0.0f, 0.0f }, canvas };
-				for (Entity ancestor = selected.GetParent(); ancestor; ancestor = ancestor.GetParent())
-				{
-					if (std::optional<UIBox> ancestorRect = UILayout::GetRect(scene, ancestor, canvas))
-					{
-						parent = *ancestorRect;
-						break;
-					}
-				}
-				const glm::vec2 anchorMin = parent.Min + parent.Size * rect->AnchorMin;
-				const glm::vec2 anchorMax = parent.Min + parent.Size * rect->AnchorMax;
-				for (const glm::vec2& anchor : { anchorMin, glm::vec2(anchorMax.x, anchorMin.y), glm::vec2(anchorMin.x, anchorMax.y), anchorMax })
-				{
-					const ImVec2 point = toScreen(anchor);
-					constexpr float r = 5.0f;
-					drawList->AddQuad(ImVec2(point.x, point.y - r), ImVec2(point.x + r, point.y), ImVec2(point.x, point.y + r), ImVec2(point.x - r, point.y), selectionColor, 1.5f);
-				}
+				const ImVec2 point = toScreen(anchor);
+				const float r = anchorMarkerRadius;
+				drawList->AddQuad(ImVec2(point.x, point.y - r), ImVec2(point.x + r, point.y), ImVec2(point.x, point.y + r), ImVec2(point.x - r, point.y), selectionColor, 1.5f);
 			}
 		}
 		drawList->PopClipRect();

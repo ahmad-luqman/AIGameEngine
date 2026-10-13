@@ -13,7 +13,8 @@ namespace Basalt {
 
 	class Scene;
 
-	// An entity with UI components and the rect it occupies on the canvas.
+	// An entity with UI components and the rect it occupies on the canvas: a snapshot, valid until the scene
+	// changes.
 	struct UILayoutItem
 	{
 		Entity Owner;
@@ -40,8 +41,9 @@ namespace Basalt {
 		// The entity's rect; nullopt when it has no UI component or it, or an ancestor, is hidden.
 		static std::optional<UIBox> GetRect(Scene& scene, Entity entity, const glm::vec2& canvasSize);
 
-		// The draw commands of one laid-out entity (none, one or two).
-		static void AppendCommands(const UILayoutItem& item, std::vector<UIDrawCommand>& out);
+		// The rect the entity is laid out in: its nearest UI ancestor's rect, or the canvas. Computed as if
+		// every ancestor were visible (for the editor, which places hidden rects too).
+		static UIBox GetParentRect(Scene& scene, Entity entity, const glm::vec2& canvasSize);
 	};
 
 }

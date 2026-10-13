@@ -2,14 +2,18 @@
 
 #include "Panels/JsonWidgets.h"
 
+#include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Math/Math.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Scene/ComponentRegistry.h"
 #include "Basalt/Scene/JointFields.h"
 #include "Basalt/Scene/Scene.h"
 #include "Basalt/Scripting/ScriptEngine.h"
+#include "Basalt/UI/GameUI.h"
 #include "Basalt/UI/UIFonts.h"
 #include "Basalt/UI/UIGeometry.h"
+#include "Basalt/UI/UILayout.h"
+#include "Basalt/UI/UIRules.h"
 
 #include <imgui.h>
 #include <imgui_stdlib.h>
@@ -40,28 +44,34 @@ namespace Basalt {
 		return &it->second.Properties;
 	}
 
-	void InspectorPanel::DrawAnchorPresets(uint64_t id)
+	void InspectorPanel::DrawAnchorPresets(Entity entity)
 	{
-		// Point presets pin the anchors and pivot to one spot of the parent rect; Stretch fills it.
-		const auto apply = [&](const nlohmann::json& data) {
-			if (m_Context.Execute("component.set", { { "entity", id }, { "component", "UIRect" }, { "data", data } }))
-				m_Context.CommitHistory();
-		};
 		if (!ImGui::BeginCombo("Anchor Preset", "Choose...", ImGuiComboFlags_HeightLarge))
 			return;
+		// A preset changes how the rect follows its parent's size, never where it is now.
+		std::optional<std::string_view> chosen;
 		for (std::string_view name : GetUIAnchorPresetNames())
 		{
-			const std::string label(name);
-			if (ImGui::Selectable(label.c_str()))
-			{
-				const glm::vec2 anchor = *FindUIAnchorPreset(name);
-				const nlohmann::json point = { anchor.x, anchor.y };
-				apply({ { "AnchorMin", point }, { "AnchorMax", point }, { "Pivot", point } });
-			}
+			if (ImGui::Selectable(std::string(name).c_str()))
+				chosen = name;
 		}
 		if (ImGui::Selectable("Stretch"))
-			apply({ { "AnchorMin", { 0.0f, 0.0f } }, { "AnchorMax", { 1.0f, 1.0f } }, { "Pivot", { 0.5f, 0.5f } }, { "Position", { 0.0f, 0.0f } }, { "Size", { 0.0f, 0.0f } } });
+			chosen = "Stretch";
 		ImGui::EndCombo();
+		if (!chosen)
+			return;
+
+		Scene& scene = *entity.GetScene();
+		const glm::vec2 canvas = GameUI::GetCanvasSize(GameUI::GetViewportSize());
+		const UIRectComponent rect = SanitizeUIRect(entity.GetComponent<UIRectComponent>());
+		const UIBox parent = UILayout::GetParentRect(scene, entity, canvas);
+		const std::optional<UIRectComponent> preset = ApplyUIAnchorPreset(rect, *chosen, parent, ComputeUIRect(parent, rect));
+		if (!preset)
+			return;
+		const auto vec2 = [](const glm::vec2& value) { return nlohmann::json::array({ value.x, value.y }); };
+		const nlohmann::json data = { { "AnchorMin", vec2(preset->AnchorMin) }, { "AnchorMax", vec2(preset->AnchorMax) }, { "Pivot", vec2(preset->Pivot) }, { "Position", vec2(preset->Position) }, { "Size", vec2(preset->Size) } };
+		if (m_Context.Execute("component.set", { { "entity", static_cast<uint64_t>(entity.GetUUID()) }, { "component", "UIRect" }, { "data", data } }))
+			m_Context.CommitHistory();
 	}
 
 	void InspectorPanel::DrawScriptProperties(Entity entity, const nlohmann::json& component)
@@ -220,7 +230,7 @@ namespace Basalt {
 				const JointComponent joint = isJoint ? entity.GetComponent<JointComponent>() : JointComponent{};
 				const std::vector<std::string> ignoredJointFields = isJoint ? GetIgnoredJointFields(joint) : std::vector<std::string>{};
 				if (info.Name == "UIRect")
-					DrawAnchorPresets(id);
+					DrawAnchorPresets(entity);
 				for (const std::string& field : info.Fields)
 				{
 					if (!data.contains(field))
@@ -279,6 +289,12 @@ namespace Basalt {
 					DrawScriptProperties(entity, data);
 				if ((info.Name == "UIImage" || info.Name == "UIText") && !entity.HasComponent<UIRectComponent>())
 					ImGui::TextDisabled("No UIRect: fills the parent's UI rect (or the screen).");
+				if (info.Name == "UIImage")
+				{
+					const std::string& texture = entity.GetComponent<UIImageComponent>().Texture;
+					if (const std::string error = texture.empty() ? std::string() : AssetManager::GetError(texture); !error.empty())
+						ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Image not loaded (%s); drawing the Color instead.", error.c_str());
+				}
 				if (info.Name == "UIText")
 				{
 					const std::string& font = entity.GetComponent<UITextComponent>().Font;

@@ -576,7 +576,8 @@ Game UI is drawn over the scene on a canvas 1080 units tall, with the origin at 
 the width following the window's aspect ratio (`UI.GetSize()`). It comes in two forms, drawn in this order:
 
 1. **UI components** on entities, laid out from the scene hierarchy every frame. Use them for HUDs and menus
-   that can be authored without code (the editor shows them in every mode, with their rects outlined).
+   that can be authored without code (the editor draws them in every mode and, outside play mode, outlines
+   their rects: View > UI Bounds).
 2. **Immediate-mode `UI.*` calls**, drawn on top. Submit them every frame (usually from `OnUpdate`); they
    last until the next update, so a paused game keeps showing them.
 
@@ -590,24 +591,30 @@ Colors are display colors with opacity, 0..1 (not HDR). Debug views (`--debug-vi
 | `UIImage` | `Texture`, `Color` (tint), `Slice` (Vec4 left, top, right, bottom, in texels), `SliceScale` |
 | `UIText` | `Text`, `Font` (.ttf path, empty = built-in), `FontSize`, `Color`, `HorizontalAlign` (`Left`/`Center`/`Right`), `VerticalAlign` (`Top`/`Middle`/`Bottom`), `Wrap`, `Shadow` |
 
-`UIRect` places a rectangle inside its parent's rect: that of the nearest ancestor with UI components, or
-the whole canvas. Anchors are fractions of the parent rect (`0,0` top-left, `1,1` bottom-right).
+`UIRect` places a rectangle relative to its parent's rect: that of the nearest ancestor with UI components,
+or the whole canvas (nothing is clipped to it). Anchors are fractions of the parent rect (`0,0` top-left,
+`1,1` bottom-right).
 
 - **Equal anchors** pin the rect to that spot: `Size` is its size, and its `Pivot` (a fraction of the rect)
   sits on the anchor, moved by `Position`.
 - **Different anchors** stretch the rect with its parent: `Size` is added to the anchors' span, so
-  `Size = Vec2(-40, -40)` with anchors `0,0`/`1,1` insets it by 20 units on every side.
+  `Size = Vec2(-40, -40)` with anchors `0,0`/`1,1` (and the default centered `Pivot`) insets it by 20 units
+  on every side.
 - `Visible = false` hides the entity and everything below it.
 
-`UIImage` fills the rect with `Color`, or with `Texture` tinted by `Color`. A non-zero `Slice` makes it a
-nine-slice panel: the corners keep their size (`Slice` texels times `SliceScale` canvas units), the edges
-stretch along one axis and the center along both. `UIText` draws inside the rect, each line aligned on its
-own, breaking lines at the rect's width when `Wrap` is on. Without a `UIRect`, an image or text fills its
+`UIImage` fills the rect with `Color`, or with `Texture` tinted by `Color`; an image that does not load is
+logged once and draws the plain `Color` (the inspector and `ui.layout` show the error). A non-zero `Slice`
+makes it a nine-slice panel: the corners keep their size (`Slice` texels times `SliceScale` canvas units,
+shrinking proportionally only when they would overlap), the edges stretch along one axis and the center
+along both. `UIText` draws inside the rect, each line aligned on its
+own, breaking lines at the rect's width when `Wrap` is on (between words; a word wider than the rect is
+cut). Without a `UIRect`, an image or text fills its
 parent's rect.
 
 Draw order follows the hierarchy: a parent before its children, later siblings over earlier ones. Change
-components with `SetComponent` like any other (values are checked: anchors and pivots in 0..1,
-`AnchorMax >= AnchorMin`, `FontSize` 4..512).
+components with `SetComponent` like any other. Values are checked, and a bad one is an error naming the
+field: anchors and pivots in 0..1 with `AnchorMax >= AnchorMin`, `Position` and `Size` within ±1000000,
+colors in 0..1, `Slice` 0..10000, `SliceScale` 0.001..100, `FontSize` 4..512.
 
 ```lua
 local label = Scene.FindEntityByName("ScoreLabel")
@@ -616,7 +623,8 @@ Scene.FindEntityByName("PauseMenu"):SetComponent("UIRect", { Visible = paused })
 ```
 
 - `UI.GetRect(entity)` — the entity's laid-out rect as `Vec4(x, y, width, height)` in canvas units, or nil
-  when it has no UI components or is hidden
+  when it has no UI components or it or an ancestor is hidden. Laid out for the last rendered viewport
+  (1920×1080 when headless), like `UI.GetSize()`.
 
 ### Immediate mode
 
@@ -632,7 +640,9 @@ Scene.FindEntityByName("PauseMenu"):SetComponent("UIRect", { Visible = paused })
 `Bottom`, `BottomRight`) or a Vec2 of canvas fractions; `x, y` are then offsets from that point, so a HUD
 keeps its place at any aspect ratio. `Pivot` (a fraction of the element) defaults to the anchor, so an
 element anchored to a corner grows away from it. For text, `Align` sets the pivot's x. Unknown options,
-unknown preset names and values of the wrong type are errors.
+unknown preset names, values of the wrong type and values outside the ranges the UI components accept (see
+above; `x, y`, `width, height` and `Width` within ±1000000) are errors. A frame takes at most 65536
+`UI.*` commands; one more is an error (usually a loop that never ends).
 
 ```lua
 UI.Text("Lives: " .. self.Lives, -24, 24, { Anchor = "TopRight", Size = 40, Font = "Assets/Fonts/Title.ttf" })
@@ -644,8 +654,8 @@ UI.Image("Assets/Textures/Panel.png", 0, -40, 480, 120, { Anchor = "Bottom", Sli
 `Font` takes a TrueType file in the project (`.ttf`, or `.otf` with TrueType outlines). Each file is loaded
 once and drawn at any size. A font that cannot be read, or is not a TrueType font (CFF outlines,
 collections, fonts without a Unicode character map), logs an error once and falls back to the built-in
-font. Every font is checked before it is used. Glyphs whose data could crash the font rasterizer draw
-blank, with a warning.
+font until the file changes. Every font is checked before it is used; glyphs whose data could crash the font
+rasterizer draw blank, with a warning. Fonts are files up to 32 MB.
 
 ## Audio, debug drawing, time, logging, game
 

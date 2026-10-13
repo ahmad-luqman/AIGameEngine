@@ -413,7 +413,7 @@ Compiles a Lua script in isolation and returns its Properties, or the error.
 
 ### `ui.layout`
 
-Lays out the current scene's UI components (the play copy while playing) for a viewport of width x height pixels: the canvas size and every visible UI entity's rect [x, y, width, height] in canvas units, in draw order.
+Lays out the current scene's UI components (the play copy while playing) for a viewport of width x height pixels: the canvas size, every visible UI entity's rect [x, y, width, height] in canvas units in draw order, and the problems that make UI draw differently than authored (an image that does not load, a font that does not load).
 
 | Parameter | Type / description |
 |-----------|--------------------|
