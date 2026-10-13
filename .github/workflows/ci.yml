@@ -218,7 +218,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: lavapipe-screenshots
-          path: build/Tests/Golden/*.png
+          path: build/Tests/Golden/**/*.png
           if-no-files-found: warn
 
   # Short libFuzzer run of every target on each push (scripts/fuzz.sh); longer runs happen nightly

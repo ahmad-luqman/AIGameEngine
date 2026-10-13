@@ -129,6 +129,17 @@ local function TestEntities(self)
 	light.Radius = 3
 	probe:SetComponent("PointLight", light)
 	Check("SetComponent", probe:GetComponent("PointLight").Radius == 3)
+	for _, kind in ipairs({ "PointLight", "SpotLight" }) do
+		local lamp = Scene.GetEntitiesWith(kind)[1]
+		local original = lamp:GetComponent(kind)
+		lamp:SetComponent(kind, { CastShadows = true, ShadowSoftness = 2.5 })
+		local shadow = lamp:GetComponent(kind)
+		Check(kind .. " shadow controls", shadow.CastShadows and shadow.ShadowSoftness == 2.5)
+		lamp:SetComponent(kind, { CastShadows = false, ShadowSoftness = 0 })
+		shadow = lamp:GetComponent(kind)
+		Check(kind .. " shadow disable", not shadow.CastShadows and shadow.ShadowSoftness == 0)
+		lamp:SetComponent(kind, original)
+	end
 	Check("HasComponent", probe:HasComponent("PointLight") and not probe:HasComponent("SpotLight"))
 	probe:RemoveComponent("PointLight")
 	Check("RemoveComponent", not probe:HasComponent("PointLight") and probe:GetComponent("PointLight") == nil)

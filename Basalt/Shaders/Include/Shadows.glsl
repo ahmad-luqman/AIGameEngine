@@ -105,4 +105,50 @@ float ComputeShadow(vec3 worldPosition, vec3 normal, float viewDepth, vec2 fragC
 	return shadow;
 }
 
+layout(set = 0, binding = 13) uniform texture2D u_LocalShadowAtlas;
+
+uint PointShadowFace(vec3 direction)
+{
+	vec3 a = abs(direction);
+	if (a.x >= a.y && a.x >= a.z)
+		return direction.x >= 0.0 ? 0u : 1u;
+	if (a.y >= a.z)
+		return direction.y >= 0.0 ? 2u : 3u;
+	return direction.z >= 0.0 ? 4u : 5u;
+}
+
+float ComputeLocalShadow(LightData light, vec3 worldPosition, vec3 normal)
+{
+	if (light.Params.y < 0.5)
+		return 1.0;
+	vec3 toLight = light.Position.xyz - worldPosition;
+	vec3 L = toLight / max(length(toLight), 1e-5);
+	// Perspective depth is nonlinear: apply the bias in world space before projecting, so the far end
+	// of a light does not lose contact shadows to a constant depth-buffer offset.
+	vec3 position = worldPosition + normal * u_View.CameraClip.w * (1.0 - clamp(dot(normal, L), 0.0, 1.0)) +
+		L * u_View.CameraClip.z * light.Position.w;
+	uint index = uint(light.Params.y) - 1u;
+	if (light.Color.w < 0.5)
+		index += PointShadowFace(position - light.Position.xyz);
+	LocalShadowMap map = u_LocalShadows.Maps[index];
+	vec4 clip = map.ViewProjection * vec4(position, 1.0);
+	if (clip.w <= 0.0)
+		return 1.0;
+	vec3 coords = clip.xyz / clip.w;
+	if (coords.z <= 0.0 || coords.z >= 1.0 || any(greaterThan(abs(coords.xy), vec2(1.0))))
+		return 1.0;
+	vec2 uv = (vec2(coords.x, -coords.y) * 0.5 + 0.5) * map.AtlasRect.xy + map.AtlasRect.zw;
+	vec2 texel = 1.0 / vec2(textureSize(sampler2D(u_LocalShadowAtlas, u_PointSampler), 0));
+	vec2 lo = map.AtlasRect.zw + 0.5 * texel;
+	vec2 hi = map.AtlasRect.zw + map.AtlasRect.xy - 0.5 * texel;
+	float lit = 0.0;
+	// Cube faces overlap by six texels, enough for the maximum four-texel kernel plus bilinear PCF.
+	// Clamp every tap to texel centers as a second barrier against sampling an unrelated atlas tile.
+	for (int y = -1; y <= 1; y++)
+		for (int x = -1; x <= 1; x++)
+			lit += texture(sampler2DShadow(u_LocalShadowAtlas, u_ShadowCompareSampler),
+				vec3(clamp(uv + vec2(x, y) * light.Params.z * texel, lo, hi), coords.z));
+	return lit / 9.0;
+}
+
 #endif

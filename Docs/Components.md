@@ -32,11 +32,11 @@ Fields: `Color`, `Intensity`, `CastShadows`, `ShadowSoftness`
 
 ## PointLight
 
-Fields: `Color`, `Intensity`, `Radius`
+Fields: `Color`, `Intensity`, `Radius`, `CastShadows`, `ShadowSoftness`
 
 ## SpotLight
 
-Fields: `Color`, `Intensity`, `Range`, `InnerConeAngle`, `OuterConeAngle`
+Fields: `Color`, `Intensity`, `Range`, `InnerConeAngle`, `OuterConeAngle`, `CastShadows`, `ShadowSoftness`
 
 ## SkyLight
 
