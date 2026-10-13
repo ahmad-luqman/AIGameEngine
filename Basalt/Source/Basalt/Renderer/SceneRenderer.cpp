@@ -5,6 +5,7 @@
 #include "Basalt/Core/Log.h"
 #include "Basalt/Particles/ParticleSystem.h"
 #include "Basalt/Renderer/DebugLineRenderer.h"
+#include "Basalt/Renderer/Fsr1Upscaler.h"
 #include "Basalt/Renderer/RenderMath.h"
 #include "Basalt/Renderer/LocalShadows.h"
 #include "Basalt/Renderer/SceneLights.h"
@@ -170,7 +171,7 @@ namespace Basalt {
 			float Exposure;
 			uint32_t Operator;
 			uint32_t DebugView;
-			float Padding;
+			uint32_t FSR1Input;
 			glm::vec2 UVScale;
 		};
 		static_assert(sizeof(TonemapPush) == 24);
@@ -366,6 +367,8 @@ namespace Basalt {
 		// Identity of the baked environment: map path, source object and (procedural sky) sun direction.
 		std::string EnvironmentKey = "\x01"; // never a valid key: forces the first build
 		Environment Env;
+
+		Fsr1Upscaler Upscaler;
 
 		// Size-dependent targets. The scene renders into the top-left render size of the targets; the output
 		// (and OverlayDepth) has the viewport size. OverlayDepth exists only when the two can differ.
@@ -865,6 +868,7 @@ namespace Basalt {
 
 		Impl& impl = *m_Impl;
 		m_Device->waitForIdle();
+		impl.Upscaler.Reset();
 		// The smoothed costs are per frame of the old viewport size; results still in flight carry their pixel
 		// count, so they are converted correctly when they arrive.
 		if (width != m_Width || height != m_Height)
@@ -1805,11 +1809,28 @@ namespace Basalt {
 			}
 		}
 
-		// --- Tonemap ------------------------------------------------------------------------------
+		// Native size, supersampling and diagnostic buffers retain their original path. A rounded tiny
+		// viewport may have only one reduced dimension, which EASU supports.
+		const bool fsr1 = settings.FSR1Enabled && settings.DebugView == RendererDebugView::None &&
+						  m_RenderWidth <= m_Width && m_RenderHeight <= m_Height && (m_RenderWidth < m_Width || m_RenderHeight < m_Height);
+		if (fsr1 && !impl.Upscaler.Prepare(m_Device, { m_TargetWidth, m_TargetHeight }, impl.OutputFramebuffer,
+										   impl.FullscreenVS, impl.TonemapPS, impl.TonemapLayout))
+		{
+			abortFrame();
+			return;
+		}
+
+		// --- Tonemap + optional FSR 1 (included in the dynamic-resolution GPU cost) -----------------
 		{
 			const GpuPassScope pass(profiler, commandList, PassTonemap);
-			const TonemapPush push = { settings.Exposure, static_cast<uint32_t>(settings.Tonemap), static_cast<uint32_t>(settings.DebugView), 0.0f, uvScale };
-			fullscreen(impl.TonemapPipeline, impl.OutputFramebuffer, impl.TonemapSet, outputViewport, &push, sizeof(push));
+			const TonemapPush push = { settings.Exposure, static_cast<uint32_t>(settings.Tonemap), static_cast<uint32_t>(settings.DebugView), fsr1 ? 1u : 0u, uvScale };
+			if (fsr1)
+			{
+				fullscreen(impl.Upscaler.GetTonemapPipeline(), impl.Upscaler.GetInputFramebuffer(), impl.TonemapSet, renderViewport, &push, sizeof(push));
+				impl.Upscaler.Render(commandList, impl.OutputFramebuffer, { m_RenderWidth, m_RenderHeight }, settings.FSR1Sharpness);
+			}
+			else
+				fullscreen(impl.TonemapPipeline, impl.OutputFramebuffer, impl.TonemapSet, outputViewport, &push, sizeof(push));
 		}
 
 		// --- Overlay depth (scaled or dynamic-resolution targets only) -----------------------------

@@ -404,6 +404,8 @@ TEST_SUITE("Serialization")
 		Entity c = scene->CreateChildEntity(a, "C");
 		Entity d = scene->CreateChildEntity(a, "D");
 		scene->GetRendererSettings().Tonemap = Tonemapper::AgX;
+		scene->GetRendererSettings().FSR1Enabled = true;
+		scene->GetRendererSettings().FSR1Sharpness = 1.5f;
 		scene->GetPhysicsSettings().Gravity = { 0.0f, -3.0f, 0.0f };
 
 		const auto path = project.GetDirectory() / "Assets/Scenes/Level1.bscene";
@@ -414,6 +416,9 @@ TEST_SUITE("Serialization")
 		REQUIRE_MESSAGE(loaded, error);
 		CHECK(loaded->GetName() == "Level1");
 		CHECK(loaded->GetRendererSettings().Tonemap == Tonemapper::AgX);
+		CHECK(loaded->GetRendererSettings().FSR1Enabled);
+		CHECK(loaded->GetRendererSettings().FSR1Sharpness == 1.5f);
+		CHECK(Scene::Copy(loaded)->GetRendererSettings().FSR1Sharpness == 1.5f);
 		CHECK(loaded->GetPhysicsSettings().Gravity.y == -3.0f);
 
 		const std::vector<Entity> ordered = loaded->GetAllEntitiesOrdered();

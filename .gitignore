@@ -20,3 +20,6 @@ imgui.ini
 # Editor swap/backup files
 *.swp
 *~
+
+# Python rendering-test helpers
+__pycache__/

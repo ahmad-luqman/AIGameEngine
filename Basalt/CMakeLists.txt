@@ -73,6 +73,8 @@ target_compile_definitions(Basalt PRIVATE BS_SHADOW_CASCADE_COUNT=${BASALT_SHADO
 
 basalt_embed_shaders(Basalt
 	INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/Include"
+	EXTRA_INCLUDE_DIRS "${fsr1_SOURCE_DIR}/ffx-fsr"
+	EXTRA_DEPENDS "${fsr1_SOURCE_DIR}/ffx-fsr/ffx_a.h" "${fsr1_SOURCE_DIR}/ffx-fsr/ffx_fsr1.h"
 	SOURCES ${BASALT_SHADER_SOURCES})
 
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/Source" FILES ${BASALT_SOURCES})

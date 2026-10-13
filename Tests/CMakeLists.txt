@@ -39,6 +39,14 @@ if(Python3_Interpreter_FOUND)
 endif()
 
 if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
+	add_executable(BasaltFSR1GPU Rendering/FSR1GPU.cpp)
+	basalt_set_warnings(BasaltFSR1GPU)
+	target_link_libraries(BasaltFSR1GPU PRIVATE Basalt doctest::doctest)
+	add_test(NAME FSR1GPU COMMAND BasaltFSR1GPU)
+	set_tests_properties(FSR1GPU PROPERTIES LABELS gpu TIMEOUT 60)
+	if(APPLE)
+		set_tests_properties(FSR1GPU PROPERTIES ENVIRONMENT "DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib:/usr/local/lib")
+	endif()
 	set(basaltRenderArgs --project "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest" --frames 90 --width 1280 --height 720 --require-validation)
 
 	# Golden images: each debug view is rendered offscreen, then compared with the reference for this driver
@@ -131,6 +139,12 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 		list(APPEND basaltGpuTests FeatureTestRenderWindowed)
 	endif()
 	if(Python3_Interpreter_FOUND)
+		add_test(NAME FSR1Render
+			COMMAND "${Python3_EXECUTABLE}" -O "${CMAKE_CURRENT_SOURCE_DIR}/Rendering/FSR1.py"
+				--runtime $<TARGET_FILE:BasaltRuntime> --cli $<TARGET_FILE:BasaltCLI>
+				--output "${basaltGoldenOutput}/FSR1")
+		set_tests_properties(FSR1Render PROPERTIES TIMEOUT 600)
+		list(APPEND basaltGpuTests FSR1Render)
 		add_test(NAME LocalShadowRender
 			COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/Rendering/LocalShadows.py"
 				--runtime $<TARGET_FILE:BasaltRuntime> --cli $<TARGET_FILE:BasaltCLI>
@@ -138,7 +152,7 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 		set_tests_properties(LocalShadowRender PROPERTIES TIMEOUT 600)
 		list(APPEND basaltGpuTests LocalShadowRender)
 	else()
-		message(STATUS "Python 3 not found: skipping LocalShadowRender (other GPU tests remain enabled)")
+		message(STATUS "Python 3 not found: skipping LocalShadowRender and FSR1Render (other GPU tests remain enabled)")
 	endif()
 	set_tests_properties(${basaltGpuTests} PROPERTIES LABELS gpu)
 	if(APPLE)

@@ -16,7 +16,7 @@ layout(push_constant) uniform TonemapPush
 	float Exposure;
 	uint Operator;      // 0 None, 1 Reinhard, 2 ACES, 3 AgX
 	uint DebugView;     // 0 final, 1 SSAO, 2 view-space normals, 3 depth
-	float Padding;      // aligns UVScale to 8 bytes in both std430 and the C++ mirror (TonemapPush)
+	uint FSR1Input;     // defer dithering until after RCAS
 	vec2 UVScale;       // render size / target size (RenderArea.glsl)
 } u_Push;
 
@@ -82,7 +82,9 @@ void main()
 		return;
 	}
 
-	vec3 color = textureLod(sampler2D(u_HDR, u_ColorSampler), uv, 0.0).rgb * u_Push.Exposure;
+	vec3 color = (u_Push.FSR1Input != 0u
+		? texelFetch(sampler2D(u_HDR, u_PointClamp), ivec2(gl_FragCoord.xy), 0).rgb
+		: textureLod(sampler2D(u_HDR, u_ColorSampler), uv, 0.0).rgb) * u_Push.Exposure;
 	if (u_Push.Operator == 1u)
 		color = color / (1.0 + color);
 	else if (u_Push.Operator == 2u)
@@ -93,6 +95,7 @@ void main()
 
 	// Triangular dither removes banding in dark gradients (8-bit output).
 	float noise = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
-	color += (noise - 0.5) / 255.0;
+	if (u_Push.FSR1Input == 0u)
+		color += (noise - 0.5) / 255.0;
 	o_Color = vec4(color, 1.0);
 }

@@ -24,3 +24,6 @@ the batch and copy the new hashes from the errors (the batch keeps going after a
 
 A hash after loading that differs means the scene loads differently (file format, transforms); later ones
 mean the simulation diverged.
+
+The FSR 1 integration adds `FSR1Enabled` and `FSR1Sharpness` to serialized renderer settings; the
+checkpoint hashes were regenerated for those fields. Physics behavior is unchanged.

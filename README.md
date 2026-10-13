@@ -30,6 +30,7 @@ build/bin/basalt --project Samples/Tetris project.export '{"output": "Dist/Tetri
 ## Documentation
 
 - [AGENTS.md](AGENTS.md) — architecture, conventions and development workflow
+- [Docs/Rendering.md](Docs/Rendering.md) — FSR 1 settings, render-area handling and GPU tests
 - [Docs/ScriptingAPI.md](Docs/ScriptingAPI.md) — Lua API
 - [Docs/AutomationCommands.md](Docs/AutomationCommands.md), [Docs/Components.md](Docs/Components.md) — generated references
 - [ROADMAP.md](ROADMAP.md) — planned work and known gaps

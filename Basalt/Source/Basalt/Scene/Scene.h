@@ -48,6 +48,11 @@ namespace Basalt {
 		float Exposure = 1.0f;
 		Tonemapper Tonemap = Tonemapper::ACES;
 
+		// FSR 1 runs only below native size, before overlays. Sharpness is RCAS attenuation in stops
+		// (0 = strongest, 2 = weakest); old scenes retain bilinear upsampling.
+		bool FSR1Enabled = false;
+		float FSR1Sharpness = 0.2f;
+
 		bool SSAOEnabled = true;
 		float SSAORadius = 0.5f;
 		float SSAOIntensity = 1.0f;
