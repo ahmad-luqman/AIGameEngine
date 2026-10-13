@@ -5,6 +5,7 @@
 #include "Basalt/Particles/ParticleEmitterRules.h"
 #include "Basalt/Physics/PhysicsLayers.h"
 #include "Basalt/Scene/Entity.h"
+#include "Basalt/UI/UIRules.h"
 
 #include <glm/gtc/type_ptr.hpp>
 
@@ -281,6 +282,8 @@ namespace Basalt {
 		constexpr const char* s_ParticleShapeNames[] = { "Point", "Sphere", "Box", "Cone" };
 		constexpr const char* s_ParticleSpaceNames[] = { "World", "Local" };
 		constexpr const char* s_ParticleBlendNames[] = { "Alpha", "Additive" };
+		constexpr const char* s_UIHorizontalAlignNames[] = { "Left", "Center", "Right" };
+		constexpr const char* s_UIVerticalAlignNames[] = { "Top", "Middle", "Bottom" };
 		// Names are indexed by enum value; a new enum value needs a name here.
 		static_assert(std::size(s_RigidBodyTypeNames) == static_cast<size_t>(RigidBodyType::Kinematic) + 1);
 		static_assert(std::size(s_ProjectionTypeNames) == static_cast<size_t>(SceneCamera::ProjectionType::Orthographic) + 1);
@@ -290,6 +293,8 @@ namespace Basalt {
 		static_assert(std::size(s_ParticleShapeNames) == ParticleEmitterShapeCount);
 		static_assert(std::size(s_ParticleSpaceNames) == ParticleSimulationSpaceCount);
 		static_assert(std::size(s_ParticleBlendNames) == ParticleBlendModeCount);
+		static_assert(std::size(s_UIHorizontalAlignNames) == UIHorizontalAlignCount);
+		static_assert(std::size(s_UIVerticalAlignNames) == UIVerticalAlignCount);
 
 		// The name of an enum value. C++ code can store a value outside the enum (the registry never does);
 		// writing it as the first name keeps saving from reading past the table.
@@ -561,6 +566,36 @@ namespace Basalt {
 			r.Field("Texture", c.Texture);
 		}
 
+		void Fields(FieldReader& r, UIRectComponent& c)
+		{
+			r.Field("Visible", c.Visible);
+			r.Field("AnchorMin", c.AnchorMin);
+			r.Field("AnchorMax", c.AnchorMax);
+			r.Field("Pivot", c.Pivot);
+			r.Field("Position", c.Position);
+			r.Field("Size", c.Size);
+		}
+
+		void Fields(FieldReader& r, UIImageComponent& c)
+		{
+			r.Field("Texture", c.Texture);
+			r.Field("Color", c.Color);
+			r.Field("Slice", c.Slice);
+			r.Field("SliceScale", c.SliceScale);
+		}
+
+		void Fields(FieldReader& r, UITextComponent& c)
+		{
+			r.Field("Text", c.Text);
+			r.Field("Font", c.Font);
+			r.Field("FontSize", c.FontSize);
+			r.Field("Color", c.Color);
+			r.EnumField("HorizontalAlign", c.HorizontalAlign, s_UIHorizontalAlignNames);
+			r.EnumField("VerticalAlign", c.VerticalAlign, s_UIVerticalAlignNames);
+			r.Field("Wrap", c.Wrap);
+			r.Field("Shadow", c.Shadow);
+		}
+
 		void Fields(FieldReader& r, PrefabComponent& c)
 		{
 			r.Field("Prefab", c.Prefab);
@@ -779,6 +814,42 @@ namespace Basalt {
 			};
 		}
 
+		json Write(const UIRectComponent& c)
+		{
+			return {
+				{ "Visible", c.Visible },
+				{ "AnchorMin", ToJson(c.AnchorMin) },
+				{ "AnchorMax", ToJson(c.AnchorMax) },
+				{ "Pivot", ToJson(c.Pivot) },
+				{ "Position", ToJson(c.Position) },
+				{ "Size", ToJson(c.Size) },
+			};
+		}
+
+		json Write(const UIImageComponent& c)
+		{
+			return {
+				{ "Texture", c.Texture },
+				{ "Color", ToJson(c.Color) },
+				{ "Slice", ToJson(c.Slice) },
+				{ "SliceScale", c.SliceScale },
+			};
+		}
+
+		json Write(const UITextComponent& c)
+		{
+			return {
+				{ "Text", c.Text },
+				{ "Font", c.Font },
+				{ "FontSize", c.FontSize },
+				{ "Color", ToJson(c.Color) },
+				{ "HorizontalAlign", EnumName(s_UIHorizontalAlignNames, c.HorizontalAlign) },
+				{ "VerticalAlign", EnumName(s_UIVerticalAlignNames, c.VerticalAlign) },
+				{ "Wrap", c.Wrap },
+				{ "Shadow", c.Shadow },
+			};
+		}
+
 		json Write(const PrefabComponent& c)
 		{
 			return { { "Prefab", c.Prefab } };
@@ -855,6 +926,21 @@ namespace Basalt {
 		std::string Validate(const ParticleEmitterComponent& emitter)
 		{
 			return ValidateParticleEmitter(emitter);
+		}
+
+		std::string Validate(const UIRectComponent& rect)
+		{
+			return ValidateUIRect(rect);
+		}
+
+		std::string Validate(const UIImageComponent& image)
+		{
+			return ValidateUIImage(image);
+		}
+
+		std::string Validate(const UITextComponent& text)
+		{
+			return ValidateUIText(text);
 		}
 
 		template<typename T>
@@ -988,6 +1074,9 @@ namespace Basalt {
 			infos.push_back(MakeInfo<AudioSourceComponent>("AudioSource"));
 			infos.push_back(MakeInfo<AudioListenerComponent>("AudioListener"));
 			infos.push_back(MakeInfo<ParticleEmitterComponent>("ParticleEmitter"));
+			infos.push_back(MakeInfo<UIRectComponent>("UIRect"));
+			infos.push_back(MakeInfo<UIImageComponent>("UIImage"));
+			infos.push_back(MakeInfo<UITextComponent>("UIText"));
 			infos.push_back(MakeInfo<PrefabComponent>("Prefab"));
 			return infos;
 		}

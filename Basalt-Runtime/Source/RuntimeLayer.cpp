@@ -2,7 +2,7 @@
 
 #include "Basalt/Core/Application.h"
 #include "Basalt/Project/Project.h"
-#include "Basalt/Renderer/GameUI.h"
+#include "Basalt/UI/GameUI.h"
 #include "Basalt/Renderer/GraphicsDevice.h"
 #include "Basalt/Renderer/RenderUtils.h"
 #include "Basalt/Scene/SceneSerializer.h"
@@ -63,6 +63,7 @@ namespace Basalt {
 		if (m_Scene)
 			m_Scene->OnRuntimeStop();
 		m_Scene.reset();
+		m_UIFrame.Clear();
 		m_CommandList = nullptr;
 		m_Renderer.reset();
 	}
@@ -81,7 +82,7 @@ namespace Basalt {
 	void RuntimeLayer::OnImGuiRender()
 	{
 		const ImGuiIO& io = ImGui::GetIO();
-		GameUI::Draw(ImGui::GetForegroundDrawList(), { 0.0f, 0.0f }, { io.DisplaySize.x, io.DisplaySize.y });
+		m_UIFrame.Draw(ImGui::GetForegroundDrawList(), { 0.0f, 0.0f }, { io.DisplaySize.x, io.DisplaySize.y });
 	}
 
 	void RuntimeLayer::OnRender()
@@ -106,7 +107,14 @@ namespace Basalt {
 			m_WarnedNoCamera = true;
 		}
 
+		// Debug views show the renderer's raw buffers: no game UI over them.
+		if (m_Options.DebugView == RendererDebugView::None)
+			m_UIFrame.Build(m_Scene.get(), { static_cast<float>(width), static_cast<float>(height) }, true);
+		else
+			m_UIFrame.Clear();
+
 		m_CommandList->open();
+		m_UIFrame.Prepare([&](const std::string& path) { return m_Renderer->GetUITexture(path, m_CommandList); });
 		if (camera)
 			m_Renderer->Blit(m_CommandList, device->GetCurrentFramebuffer());
 		else

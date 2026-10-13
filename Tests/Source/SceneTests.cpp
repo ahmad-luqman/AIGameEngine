@@ -280,6 +280,9 @@ TEST_SUITE("Serialization")
 															.EndSize = 0.6f,
 															.Blend = ParticleBlendMode::Additive,
 															.Texture = "Assets/Textures/Spark.png" };
+		entity.GetComponent<UIRectComponent>() = { .Visible = false, .AnchorMin = { 0.0f, 0.25f }, .AnchorMax = { 1.0f, 0.75f }, .Pivot = { 0.0f, 1.0f }, .Position = { 12.5f, -4.0f }, .Size = { -20.0f, 64.0f } };
+		entity.GetComponent<UIImageComponent>() = { .Texture = "Assets/Textures/Panel.png", .Color = { 0.5f, 0.25f, 1.0f, 0.75f }, .Slice = { 1.0f, 2.0f, 3.0f, 4.0f }, .SliceScale = 2.5f };
+		entity.GetComponent<UITextComponent>() = { .Text = "Score: 10\nLives: 3", .Font = "Assets/Fonts/Karla-Regular.ttf", .FontSize = 48.0f, .Color = { 1.0f, 0.5f, 0.0f, 0.5f }, .HorizontalAlign = UIHorizontalAlign::Right, .VerticalAlign = UIVerticalAlign::Bottom, .Wrap = false, .Shadow = false };
 		entity.GetComponent<ScriptComponent>().Script = "Assets/Scripts/Test.lua";
 		entity.GetComponent<ScriptComponent>().Properties = { { "Speed", 3.5 }, { "Target", { 1, 2, 3 } } };
 		JointComponent& joint = entity.GetComponent<JointComponent>();
@@ -332,6 +335,9 @@ TEST_SUITE("Serialization")
 		CHECK(copy.GetComponent<RigidBodyComponent>().Type == RigidBodyType::Kinematic);
 		CHECK(Near(glm::degrees(copy.GetTransform().GetRotationEuler()), { 10.0f, 20.0f, 30.0f }, 1e-3f));
 		CHECK(copy.GetComponent<JointComponent>() == entity.GetComponent<JointComponent>());
+		CHECK(copy.GetComponent<UIRectComponent>() == entity.GetComponent<UIRectComponent>());
+		CHECK(copy.GetComponent<UIImageComponent>() == entity.GetComponent<UIImageComponent>());
+		CHECK(copy.GetComponent<UITextComponent>() == entity.GetComponent<UITextComponent>());
 	}
 
 	TEST_CASE("Component JSON is strict about unknown fields, types and enum values")

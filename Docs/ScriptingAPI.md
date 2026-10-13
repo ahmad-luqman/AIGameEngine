@@ -572,12 +572,80 @@ end
 
 ## Screen UI
 
-Immediate-mode HUD drawn over the game. Submit everything every frame (usually from `OnUpdate`); the
-canvas is 1080 units tall with the origin at the top-left and its width follows the window's aspect ratio.
+Game UI is drawn over the scene on a canvas 1080 units tall, with the origin at the top-left, +Y down and
+the width following the window's aspect ratio (`UI.GetSize()`). It comes in two forms, drawn in this order:
+
+1. **UI components** on entities, laid out from the scene hierarchy every frame. Use them for HUDs and menus
+   that can be authored without code (the editor shows them in every mode, with their rects outlined).
+2. **Immediate-mode `UI.*` calls**, drawn on top. Submit them every frame (usually from `OnUpdate`); they
+   last until the next update, so a paused game keeps showing them.
+
+Colors are display colors with opacity, 0..1 (not HDR). Debug views (`--debug-view`) show no game UI.
+
+### UI components
+
+| Component | Fields |
+|-----------|--------|
+| `UIRect` | `Visible`, `AnchorMin`, `AnchorMax`, `Pivot`, `Position`, `Size` (Vec2s) |
+| `UIImage` | `Texture`, `Color` (tint), `Slice` (Vec4 left, top, right, bottom, in texels), `SliceScale` |
+| `UIText` | `Text`, `Font` (.ttf path, empty = built-in), `FontSize`, `Color`, `HorizontalAlign` (`Left`/`Center`/`Right`), `VerticalAlign` (`Top`/`Middle`/`Bottom`), `Wrap`, `Shadow` |
+
+`UIRect` places a rectangle inside its parent's rect: that of the nearest ancestor with UI components, or
+the whole canvas. Anchors are fractions of the parent rect (`0,0` top-left, `1,1` bottom-right).
+
+- **Equal anchors** pin the rect to that spot: `Size` is its size, and its `Pivot` (a fraction of the rect)
+  sits on the anchor, moved by `Position`.
+- **Different anchors** stretch the rect with its parent: `Size` is added to the anchors' span, so
+  `Size = Vec2(-40, -40)` with anchors `0,0`/`1,1` insets it by 20 units on every side.
+- `Visible = false` hides the entity and everything below it.
+
+`UIImage` fills the rect with `Color`, or with `Texture` tinted by `Color`. A non-zero `Slice` makes it a
+nine-slice panel: the corners keep their size (`Slice` texels times `SliceScale` canvas units), the edges
+stretch along one axis and the center along both. `UIText` draws inside the rect, each line aligned on its
+own, breaking lines at the rect's width when `Wrap` is on. Without a `UIRect`, an image or text fills its
+parent's rect.
+
+Draw order follows the hierarchy: a parent before its children, later siblings over earlier ones. Change
+components with `SetComponent` like any other (values are checked: anchors and pivots in 0..1,
+`AnchorMax >= AnchorMin`, `FontSize` 4..512).
+
+```lua
+local label = Scene.FindEntityByName("ScoreLabel")
+label:SetComponent("UIText", { Text = "SCORE " .. self.Score })
+Scene.FindEntityByName("PauseMenu"):SetComponent("UIRect", { Visible = paused })
+```
+
+- `UI.GetRect(entity)` — the entity's laid-out rect as `Vec4(x, y, width, height)` in canvas units, or nil
+  when it has no UI components or is hidden
+
+### Immediate mode
 
 - `UI.GetSize()` — canvas size (Vec2)
-- `UI.Text(text, x, y [, size = 32 [, color = Vec4(1) [, align = "Left"|"Center"|"Right"]]])`
-- `UI.Rect(x, y, width, height [, color = Vec4(0, 0, 0, 0.5)])`
+- `UI.Text(text, x, y [, size = 32 [, color = Vec4(1) [, align = "Left"|"Center"|"Right"]]])` or
+  `UI.Text(text, x, y, options)` — options: `Size`, `Color`, `Align`, `Anchor`, `Pivot`, `Font`,
+  `Shadow` (default true), `Width` (wraps lines at this width)
+- `UI.Rect(x, y, width, height [, color = Vec4(0, 0, 0, 0.5) | options])` — options: `Color`, `Anchor`, `Pivot`
+- `UI.Image(texture, x, y, width, height [, tint = Vec4(1) | options])` — options: `Tint`, `Anchor`,
+  `Pivot`, `Slice`, `SliceScale` (as in `UIImage`)
+
+`Anchor` is a preset name (`TopLeft`, `Top`, `TopRight`, `Left`, `Center`, `Right`, `BottomLeft`,
+`Bottom`, `BottomRight`) or a Vec2 of canvas fractions; `x, y` are then offsets from that point, so a HUD
+keeps its place at any aspect ratio. `Pivot` (a fraction of the element) defaults to the anchor, so an
+element anchored to a corner grows away from it. For text, `Align` sets the pivot's x. Unknown options,
+unknown preset names and values of the wrong type are errors.
+
+```lua
+UI.Text("Lives: " .. self.Lives, -24, 24, { Anchor = "TopRight", Size = 40, Font = "Assets/Fonts/Title.ttf" })
+UI.Image("Assets/Textures/Panel.png", 0, -40, 480, 120, { Anchor = "Bottom", Slice = Vec4(12, 12, 12, 12) })
+```
+
+### Fonts
+
+`Font` takes a TrueType file in the project (`.ttf`, or `.otf` with TrueType outlines). Each file is loaded
+once and drawn at any size. A font that cannot be read, or is not a TrueType font (CFF outlines,
+collections, fonts without a Unicode character map), logs an error once and falls back to the built-in
+font. Every font is checked before it is used. Glyphs whose data could crash the font rasterizer draw
+blank, with a warning.
 
 ## Audio, debug drawing, time, logging, game
 

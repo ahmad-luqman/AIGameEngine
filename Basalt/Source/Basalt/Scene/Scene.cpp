@@ -7,7 +7,7 @@
 #include "Basalt/Physics/PhysicsWorld.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/DebugDraw.h"
-#include "Basalt/Renderer/GameUI.h"
+#include "Basalt/UI/GameUI.h"
 #include "Basalt/Scene/ComponentRegistry.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/SceneSerializer.h"

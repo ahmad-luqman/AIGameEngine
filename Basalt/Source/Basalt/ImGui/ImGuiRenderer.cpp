@@ -57,7 +57,10 @@ namespace Basalt {
 		m_BindingLayout = m_Device->createBindingLayout(layoutDesc);
 
 		nvrhi::SamplerDesc samplerDesc;
-		samplerDesc.setAllAddressModes(nvrhi::SamplerAddressMode::Wrap).setAllFilters(true);
+		// Clamped: game UI images and nine-slice patches end exactly at their texture's edges, where wrapping
+		// would blend in texels from the opposite side. The font atlas and the editor's images use UVs inside
+		// [0, 1] anyway.
+		samplerDesc.setAllAddressModes(nvrhi::SamplerAddressMode::ClampToEdge).setAllFilters(true);
 		m_Sampler = m_Device->createSampler(samplerDesc);
 
 		ImGuiIO& io = ImGui::GetIO();

@@ -94,7 +94,7 @@ namespace Basalt {
 			if (committed)
 				result = { true, true };
 		}
-		else if (value.is_array() && (value.size() == 3 || value.size() == 4) && std::all_of(value.begin(), value.end(), [](const nlohmann::json& v) { return v.is_number(); }))
+		else if (value.is_array() && value.size() >= 2 && value.size() <= 4 && std::all_of(value.begin(), value.end(), [](const nlohmann::json& v) { return v.is_number(); }))
 		{
 			float components[4] = {};
 			for (size_t i = 0; i < value.size(); i++)
@@ -105,6 +105,8 @@ namespace Basalt {
 				changed = ImGui::ColorEdit3(name.c_str(), components, ImGuiColorEditFlags_Float);
 			else if (isColor)
 				changed = ImGui::ColorEdit4(name.c_str(), components, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_AlphaBar);
+			else if (value.size() == 2)
+				changed = ImGui::DragFloat2(name.c_str(), components, DragSpeed(name));
 			else if (value.size() == 3)
 				changed = ImGui::DragFloat3(name.c_str(), components, DragSpeed(name));
 			else

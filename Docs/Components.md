@@ -86,6 +86,18 @@ Fields: `Active`
 
 Fields: `PlayOnStart`, `Looping`, `Duration`, `MaxParticles`, `Rate`, `BurstCount`, `Shape`, `ShapeRadius`, `BoxExtents`, `ConeAngle`, `LifetimeMin`, `LifetimeMax`, `SpeedMin`, `SpeedMax`, `Velocity`, `GravityScale`, `Drag`, `SimulationSpace`, `StartColor`, `EndColor`, `StartSize`, `EndSize`, `Blend`, `Texture`
 
+## UIRect
+
+Fields: `Visible`, `AnchorMin`, `AnchorMax`, `Pivot`, `Position`, `Size`
+
+## UIImage
+
+Fields: `Texture`, `Color`, `Slice`, `SliceScale`
+
+## UIText
+
+Fields: `Text`, `Font`, `FontSize`, `Color`, `HorizontalAlign`, `VerticalAlign`, `Wrap`, `Shadow`
+
 ## Prefab
 
 Fields: `Prefab`

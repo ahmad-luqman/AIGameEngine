@@ -3,6 +3,7 @@
 #include "Basalt/Core/Layer.h"
 #include "Basalt/Renderer/SceneRenderer.h"
 #include "Basalt/Scene/Scene.h"
+#include "Basalt/UI/UIRenderer.h"
 
 #include <nvrhi/nvrhi.h>
 
@@ -52,6 +53,8 @@ namespace Basalt {
 		Ref<Scene> m_Scene;
 		Scope<SceneRenderer> m_Renderer;
 		nvrhi::CommandListHandle m_CommandList;
+		// The game UI of the frame being rendered (built in OnRender, drawn in OnImGuiRender).
+		UIFrame m_UIFrame;
 		uint64_t m_Frame = 0;
 		bool m_WarnedNoCamera = false;
 	};

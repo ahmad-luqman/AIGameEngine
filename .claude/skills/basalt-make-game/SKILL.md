@@ -41,6 +41,10 @@ Write scripts with `asset.write` (or directly as files under `<project>/Assets/S
   with `"BodyEntity": "<body name>"`. `LimitSpringFrequency` makes limits springy (a distance joint without
   limits becomes a bungee).
 - Random numbers repeat every play session (the project's `RandomSeed`); `Math.Seed(n)` picks another sequence, `Debug.Draw*` to visualise logic, `Game.Quit()` to exit.
+- HUDs and menus: put `UIRect` + `UIImage`/`UIText` entities in the scene (anchored, nine-slice panels,
+  `.ttf` fonts; see "Screen UI" in Docs/ScriptingAPI.md) and update their text with `SetComponent`; check
+  the layout headlessly with `ui.layout`. Quick per-frame text goes through `UI.Text(..., { Anchor = ... })`.
+  Note: `render.screenshot` shows the 3D scene only; the runtime's `--screenshot` includes the UI.
 - Check every script compiles: `$B --project P script.check '{"path": "Assets/Scripts/Game.lua"}'`.
 
 ## 3. Build the scene with a batch file

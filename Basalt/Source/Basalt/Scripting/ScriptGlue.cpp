@@ -9,7 +9,7 @@
 #include "Basalt/Project/Project.h"
 #include "Basalt/Project/SaveData.h"
 #include "Basalt/Renderer/DebugDraw.h"
-#include "Basalt/Renderer/GameUI.h"
+#include "Basalt/Scripting/ScriptUI.h"
 #include "Basalt/Scene/ComponentRegistry.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
@@ -670,20 +670,7 @@ namespace Basalt {
 			};
 			debug["DrawSphere"] = [defaultColor](const glm::vec3& center, float radius, sol::optional<glm::vec4> color) { DebugDraw::Sphere(center, radius, color.value_or(defaultColor)); };
 
-			sol::table ui = lua.create_named_table("UI");
-			ui["Text"] = [](const std::string& text, float x, float y, sol::optional<float> size, sol::optional<glm::vec4> color, const sol::optional<std::string>& align) {
-				UIAlign alignment = UIAlign::Left;
-				const std::string alignName = align.value_or("Left");
-				if (alignName == "Center")
-					alignment = UIAlign::Center;
-				else if (alignName == "Right")
-					alignment = UIAlign::Right;
-				else if (alignName != "Left")
-					throw std::runtime_error("UI.Text align must be 'Left', 'Center' or 'Right'");
-				GameUI::Text(text, { x, y }, size.value_or(32.0f), color.value_or(glm::vec4(1.0f)), alignment);
-			};
-			ui["Rect"] = [](float x, float y, float width, float height, sol::optional<glm::vec4> color) { GameUI::Rect({ x, y }, { width, height }, color.value_or(glm::vec4(0.0f, 0.0f, 0.0f, 0.5f))); };
-			ui["GetSize"] = []() { return GameUI::GetCanvasSize(GameUI::GetViewportSize()); };
+			RegisterUIBindings(lua);
 
 			sol::table game = lua.create_named_table("Game");
 			game["Quit"] = [&context]() { RequireScene(context).RequestQuit(); };

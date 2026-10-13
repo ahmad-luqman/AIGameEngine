@@ -10,7 +10,8 @@
 #include "Basalt/ImGui/ImGuiLayer.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/DebugDraw.h"
-#include "Basalt/Renderer/GameUI.h"
+#include "Basalt/UI/GameUI.h"
+#include "Basalt/UI/UILayout.h"
 #include "Basalt/Renderer/GraphicsDevice.h"
 #include "Basalt/Renderer/RenderUtils.h"
 #include "Basalt/Scene/ComponentRegistry.h"
@@ -289,6 +290,7 @@ namespace Basalt {
 		m_Session.StopPlay();
 		if (Application::Get().GetGraphicsDevice())
 			Application::Get().GetGraphicsDevice()->WaitIdle();
+		m_UIFrame.Clear();
 		m_CaptureRenderer.reset();
 		m_Renderer.reset();
 		m_CommandList = nullptr;
@@ -699,8 +701,17 @@ namespace Basalt {
 		}
 		m_Renderer->Render(scene, *camera);
 
+		// UI components show in every mode, so layouts can be authored without playing; the scripts'
+		// immediate-mode UI only exists while playing. Debug views show the renderer's raw buffers.
+		const bool playing = m_Session.IsPlaying() && !m_Session.IsSimulating();
+		if (m_DebugView == RendererDebugView::None)
+			m_UIFrame.Build(&scene, m_ViewportSize, playing);
+		else
+			m_UIFrame.Clear();
+
 		// The dockspace covers the window, but clear the back buffer so no stale content shows through.
 		m_CommandList->open();
+		m_UIFrame.Prepare([&](const std::string& path) { return m_Renderer->GetUITexture(path, m_CommandList); });
 		nvrhi::utils::ClearColorAttachment(m_CommandList, device->GetCurrentFramebuffer(), 0, nvrhi::Color(0.08f, 0.08f, 0.09f, 1.0f));
 		m_CommandList->close();
 		device->GetDevice()->executeCommandList(m_CommandList);
@@ -888,6 +899,7 @@ namespace Basalt {
 			ImGui::MenuItem("Grid", nullptr, &m_ShowGrid);
 			ImGui::MenuItem("Colliders", nullptr, &m_ShowColliders);
 			ImGui::MenuItem("Light & Camera Gizmos", nullptr, &m_ShowLightGizmos);
+			ImGui::MenuItem("UI Bounds", nullptr, &m_ShowUIBounds);
 			if (ImGui::BeginMenu("Debug View"))
 			{
 				const char* names[] = { "None", "SSAO", "Normals", "Depth" };
@@ -1006,8 +1018,9 @@ namespace Basalt {
 		if (m_Renderer && m_Renderer->GetOutputTexture())
 			ImGui::Image(ImTextureRef(reinterpret_cast<ImTextureID>(m_Renderer->GetOutputTexture())), available);
 		GameUI::SetViewportSize({ available.x, available.y });
-		if (m_Session.IsPlaying() && !m_Session.IsSimulating())
-			GameUI::Draw(ImGui::GetWindowDrawList(), { cursor.x, cursor.y }, { available.x, available.y });
+		m_UIFrame.Draw(ImGui::GetWindowDrawList(), { cursor.x, cursor.y }, { available.x, available.y });
+		if (m_ShowUIBounds && (!m_Session.IsPlaying() || m_Session.IsSimulating()))
+			DrawUIBounds({ cursor.x, cursor.y }, { available.x, available.y });
 
 		if (ImGui::BeginDragDropTarget())
 		{
@@ -1016,11 +1029,12 @@ namespace Basalt {
 			ImGui::EndDragDropTarget();
 		}
 
-		// Gizmo for the selected entity (edit mode only: play-mode edits are discarded anyway).
+		// Gizmo for the selected entity (edit mode only: play-mode edits are discarded anyway). UI rects are
+		// placed by their UIRect, not their transform.
 		Scene& scene = *m_Session.GetScene();
 		Entity selected = scene.GetEntityByUUID(m_Session.GetSelection());
 		bool gizmoActive = false;
-		if (selected && m_GizmoOperation != 0 && !m_Session.IsPlaying())
+		if (selected && m_GizmoOperation != 0 && !m_Session.IsPlaying() && !selected.HasComponent<UIRectComponent>())
 		{
 			ImGuizmo::SetOrthographic(false);
 			ImGuizmo::SetDrawlist();
@@ -1063,6 +1077,58 @@ namespace Basalt {
 
 		ImGui::End();
 		ImGui::PopStyleVar();
+	}
+
+	void EditorLayer::DrawUIBounds(const glm::vec2& origin, const glm::vec2& size)
+	{
+		Scene& scene = *m_Session.GetScene();
+		const glm::vec2 canvas = GameUI::GetCanvasSize(size);
+		const float scale = size.y / GameUI::CanvasHeight;
+		const auto toScreen = [&](const glm::vec2& point) { return ImVec2(origin.x + point.x * scale, origin.y + point.y * scale); };
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+		drawList->PushClipRect(toScreen({ 0.0f, 0.0f }), toScreen(canvas), true);
+
+		const Entity selected = scene.GetEntityByUUID(m_Session.GetSelection());
+		const ImU32 boundsColor = IM_COL32(255, 255, 255, 90);
+		const ImU32 selectionColor = ImGui::ColorConvertFloat4ToU32(ImVec4(s_SelectionColor.r, s_SelectionColor.g, s_SelectionColor.b, s_SelectionColor.a));
+		std::optional<UIBox> selectedRect;
+		for (const UILayoutItem& item : UILayout::Layout(scene, canvas))
+		{
+			if (item.Owner == selected)
+				selectedRect = item.Rect;
+			else
+				drawList->AddRect(toScreen(item.Rect.Min), toScreen(item.Rect.Max()), boundsColor);
+		}
+
+		const auto* rect = selected ? selected.TryGetComponent<UIRectComponent>() : nullptr;
+		if (selectedRect)
+		{
+			drawList->AddRect(toScreen(selectedRect->Min), toScreen(selectedRect->Max()), selectionColor, 0.0f, 0, 2.0f);
+			if (rect)
+			{
+				// The pivot as a dot, the anchors as small diamonds on the parent's rect.
+				const ImVec2 pivot = toScreen(selectedRect->Min + selectedRect->Size * rect->Pivot);
+				drawList->AddCircleFilled(pivot, 4.0f, selectionColor);
+				UIBox parent{ { 0.0f, 0.0f }, canvas };
+				for (Entity ancestor = selected.GetParent(); ancestor; ancestor = ancestor.GetParent())
+				{
+					if (std::optional<UIBox> ancestorRect = UILayout::GetRect(scene, ancestor, canvas))
+					{
+						parent = *ancestorRect;
+						break;
+					}
+				}
+				const glm::vec2 anchorMin = parent.Min + parent.Size * rect->AnchorMin;
+				const glm::vec2 anchorMax = parent.Min + parent.Size * rect->AnchorMax;
+				for (const glm::vec2& anchor : { anchorMin, glm::vec2(anchorMax.x, anchorMin.y), glm::vec2(anchorMin.x, anchorMax.y), anchorMax })
+				{
+					const ImVec2 point = toScreen(anchor);
+					constexpr float r = 5.0f;
+					drawList->AddQuad(ImVec2(point.x, point.y - r), ImVec2(point.x + r, point.y), ImVec2(point.x, point.y + r), ImVec2(point.x - r, point.y), selectionColor, 1.5f);
+				}
+			}
+		}
+		drawList->PopClipRect();
 	}
 
 	void EditorLayer::DrawSceneSettingsPanel()

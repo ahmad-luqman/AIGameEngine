@@ -13,6 +13,7 @@
 #include "Basalt/Automation/CommandRegistry.h"
 #include "Basalt/Core/Layer.h"
 #include "Basalt/Renderer/SceneRenderer.h"
+#include "Basalt/UI/UIRenderer.h"
 
 #include <glm/glm.hpp>
 #include <nvrhi/nvrhi.h>
@@ -57,6 +58,8 @@ namespace Basalt {
 		void HandleShortcuts();
 
 		void DrawEditorOverlays();
+		// Outlines every UI rect over the viewport (the selected entity's with its pivot and anchors).
+		void DrawUIBounds(const glm::vec2& origin, const glm::vec2& size);
 		void HandleViewportClick(const glm::vec2& mouse);
 		void HandleAssetDrop(const std::string& path);
 		void OpenAsset(const std::string& path);
@@ -90,6 +93,8 @@ namespace Basalt {
 		Scope<SceneRenderer> m_Renderer;
 		Scope<SceneRenderer> m_CaptureRenderer;
 		nvrhi::CommandListHandle m_CommandList;
+		// The viewport's game UI: built in OnRender, drawn over the viewport image in DrawViewport.
+		UIFrame m_UIFrame;
 
 		glm::vec2 m_ViewportSize = { 1280.0f, 720.0f };
 		glm::vec2 m_ViewportMin = { 0.0f, 0.0f };
@@ -101,6 +106,7 @@ namespace Basalt {
 		bool m_ShowGrid = true;
 		bool m_ShowColliders = true;
 		bool m_ShowLightGizmos = true;
+		bool m_ShowUIBounds = true;
 		RendererDebugView m_DebugView = RendererDebugView::None;
 
 		enum class PromptKind

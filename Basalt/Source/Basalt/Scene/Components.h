@@ -476,6 +476,91 @@ namespace Basalt {
 		bool operator==(const ParticleEmitterComponent&) const = default;
 	};
 
+	// Screen-space game UI. Everything is laid out on the canvas UI.* uses: 1080 units tall, origin at the
+	// top-left, +Y down, width following the aspect ratio. Draw order follows the scene hierarchy: parents
+	// before their children, later siblings on top; immediate-mode UI.* output draws over all of it.
+	// Value rules are in UI/UIRules.cpp.
+
+	// Places a rectangle relative to its parent's rect: the rect of the nearest ancestor with UI components,
+	// or the whole canvas. AnchorMin/AnchorMax are fractions of the parent rect (0,0 = top-left): equal
+	// anchors pin the rect to a point, different anchors stretch it with the parent. Size is added to the
+	// anchors' span (so with equal anchors it is the size), Position moves the Pivot (a fraction of this rect)
+	// away from its anchored spot. Draws nothing itself; UIImage and UIText on the entity fill it.
+	struct UIRectComponent
+	{
+		// Largest magnitude of Position and Size: far beyond any canvas, small enough to stay exact in float.
+		static constexpr float MaxMagnitude = 1e6f;
+
+		// false hides this entity and its whole subtree (layout, drawing and UI.GetRect).
+		bool Visible = true;
+		glm::vec2 AnchorMin = { 0.5f, 0.5f };
+		glm::vec2 AnchorMax = { 0.5f, 0.5f };
+		glm::vec2 Pivot = { 0.5f, 0.5f };
+		glm::vec2 Position = { 0.0f, 0.0f };
+		glm::vec2 Size = { 200.0f, 100.0f };
+
+		bool operator==(const UIRectComponent&) const = default;
+	};
+
+	// Fills the entity's UI rect with a color, an image, or a nine-slice panel.
+	struct UIImageComponent
+	{
+		// Largest Slice border (texels) and SliceScale.
+		static constexpr float MaxSlice = 1e4f;
+		static constexpr float MaxSliceScale = 100.0f;
+
+		// Project-relative image, drawn as stored (display colors, no sRGB decoding); empty draws Color.
+		std::string Texture;
+		// Tint multiplied with the image (display color and opacity, 0..1).
+		glm::vec4 Color = { 1.0f, 1.0f, 1.0f, 1.0f };
+		// Nine-slice borders in texels (left, top, right, bottom): corners keep their size, edges stretch
+		// along one axis and the center along both. All zero stretches the whole image.
+		glm::vec4 Slice = { 0.0f, 0.0f, 0.0f, 0.0f };
+		// Canvas units per border texel; borders shrink proportionally when they would overlap.
+		float SliceScale = 1.0f;
+
+		bool operator==(const UIImageComponent&) const = default;
+	};
+
+	enum class UIHorizontalAlign
+	{
+		Left = 0,
+		Center,
+		Right
+	};
+	constexpr size_t UIHorizontalAlignCount = 3;
+
+	enum class UIVerticalAlign
+	{
+		Top = 0,
+		Middle,
+		Bottom
+	};
+	constexpr size_t UIVerticalAlignCount = 3;
+
+	// Draws text inside the entity's UI rect, each line aligned on its own.
+	struct UITextComponent
+	{
+		static constexpr float MinFontSize = 4.0f;
+		static constexpr float MaxFontSize = 512.0f;
+
+		std::string Text = "Text";
+		// Project-relative TrueType font (.ttf); empty uses the built-in font. A font that fails to load falls
+		// back to the built-in one (the error is logged once).
+		std::string Font;
+		// Line height in canvas units.
+		float FontSize = 32.0f;
+		glm::vec4 Color = { 1.0f, 1.0f, 1.0f, 1.0f };
+		UIHorizontalAlign HorizontalAlign = UIHorizontalAlign::Left;
+		UIVerticalAlign VerticalAlign = UIVerticalAlign::Top;
+		// Breaks lines at the rect's width (between words where possible). '\n' always breaks.
+		bool Wrap = true;
+		// A soft drop shadow that keeps text readable over bright scenes.
+		bool Shadow = true;
+
+		bool operator==(const UITextComponent&) const = default;
+	};
+
 	// Marks the root entity of a prefab instance and remembers the prefab it came from.
 	struct PrefabComponent
 	{
@@ -510,6 +595,9 @@ namespace Basalt {
 		AudioSourceComponent,
 		AudioListenerComponent,
 		ParticleEmitterComponent,
+		UIRectComponent,
+		UIImageComponent,
+		UITextComponent,
 		PrefabComponent>;
 
 }

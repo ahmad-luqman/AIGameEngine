@@ -139,7 +139,7 @@ local function TestEntities(self)
 
 	-- Every component type round-trips through Lua.
 	for _, name in ipairs({ "Camera", "Mesh", "Material", "DirectionalLight", "PointLight", "SpotLight", "SkyLight", "RigidBody",
-		"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "AudioSource", "AudioListener", "ParticleEmitter", "Prefab" }) do
+		"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "AudioSource", "AudioListener", "ParticleEmitter", "UIRect", "UIImage", "UIText", "Prefab" }) do
 		local holder = Scene.CreateEntity("Holder" .. name)
 		Expect("AddComponent " .. name, function() holder:AddComponent(name) end)
 		local data = holder:GetComponent(name)
@@ -187,6 +187,49 @@ local function TestSystems(self)
 		UI.Text("Right", canvas.x - 20, 100, 24, Vec4(1, 1, 1, 1), "Right")
 	end)
 	ExpectError("UI.Text invalid alignment", function() UI.Text("x", 0, 0, 20, Vec4(1), "Middle") end, "align")
+	Expect("UI options and images", function()
+		UI.Text("Anchored", -20, -20, { Size = 24, Anchor = "BottomRight", Font = "Assets/Fonts/Karla-Regular.ttf", Shadow = false })
+		UI.Text("Wrapped paragraph of text", 0, 200, { Anchor = "Top", Align = "Center", Width = 300 })
+		UI.Rect(0, 0, 100, 20, { Color = Vec4(1, 1, 1, 0.5), Anchor = Vec2(0.5, 0.5), Pivot = Vec2(0.5, 0.5) })
+		UI.Image("Assets/Textures/UIPanel.png", 20, 20, 64, 64)
+		UI.Image("Assets/Textures/UIPanel.png", 20, 20, 200, 80, { Slice = Vec4(10, 10, 10, 10), SliceScale = 2, Tint = Vec4(1, 1, 1, 0.8), Anchor = "TopLeft" })
+	end)
+	ExpectError("UI unknown option", function() UI.Rect(0, 0, 1, 1, { Colour = Vec4(1) }) end, "unknown option 'Colour'")
+	ExpectError("UI unknown anchor", function() UI.Text("x", 0, 0, { Anchor = "Middle" }) end, "unknown Anchor 'Middle'")
+	ExpectError("UI.Image without a texture", function() UI.Image("", 0, 0, 1, 1) end, "texture path is empty")
+	ExpectError("UI non-finite position", function() UI.Rect(0 / 0, 0, 1, 1) end, "must be finite")
+
+	-- UI components: laid out from the parent's rect (the HUD is inset by 24 units from the canvas edges).
+	local function RectIs(rect, x, y, w, h)
+		return rect ~= nil and Near(rect.x, x) and Near(rect.y, y) and Near(rect.z, w) and Near(rect.w, h)
+	end
+	local hud = Scene.FindEntityByName("HUD")
+	local panel = Scene.FindEntityByName("ScorePanel")
+	local label = Scene.FindEntityByName("ScoreLabel")
+	local banner = Scene.FindEntityByName("Banner")
+	Check("UI.GetRect stretched", RectIs(UI.GetRect(hud), 24, 24, canvas.x - 48, canvas.y - 48))
+	Check("UI.GetRect anchored to a corner", RectIs(UI.GetRect(panel), canvas.x - 24 - 360, 24, 360, 120))
+	Check("UI.GetRect nested and inset", RectIs(UI.GetRect(label), canvas.x - 24 - 340, 36, 320, 96))
+	Check("UI.GetRect bottom bar", RectIs(UI.GetRect(banner), 24, canvas.y - 24 - 64, canvas.x - 48, 64))
+	Check("UI.GetRect without a UIRect fills the parent", RectIs(UI.GetRect(Scene.FindEntityByName("BannerText")), 24, canvas.y - 88, canvas.x - 48, 64))
+	Check("UI.GetRect hidden", UI.GetRect(Scene.FindEntityByName("HiddenMenu")) == nil)
+	Check("UI.GetRect without UI components", UI.GetRect(Scene.FindEntityByName("Sun")) == nil)
+	local text = label:GetComponent("UIText")
+	Check("UIText fields", text.Text == "SCORE 1250" and text.Font == "Assets/Fonts/Karla-Regular.ttf" and text.HorizontalAlign == "Right" and text.VerticalAlign == "Middle")
+	local image = panel:GetComponent("UIImage")
+	Check("UIImage fields", image.Texture == "Assets/Textures/UIPanel.png" and image.Slice[1] == 10 and image.SliceScale == 2)
+	local rect = panel:GetComponent("UIRect")
+	rect.Position = Vec2(-10, 30)
+	panel:SetComponent("UIRect", rect)
+	Check("UIRect SetComponent moves the rect", RectIs(UI.GetRect(panel), canvas.x - 24 - 370, 54, 360, 120))
+	Check("UIRect moves its children", RectIs(UI.GetRect(label), canvas.x - 24 - 350, 66, 320, 96))
+	rect.Position = Vec2(0, 0)
+	panel:SetComponent("UIRect", rect)
+	ExpectError("UIRect anchors out of range", function() panel:SetComponent("UIRect", { AnchorMin = Vec2(-1, 0) }) end, "AnchorMin.x must be between 0 and 1")
+	ExpectError("UIRect anchors crossed", function() panel:SetComponent("UIRect", { AnchorMin = Vec2(1, 1), AnchorMax = Vec2(0, 1) }) end, "AnchorMax.x must not be less than AnchorMin.x")
+	ExpectError("UIText font size", function() label:SetComponent("UIText", { FontSize = 1000 }) end, "FontSize must be between 4 and 512")
+	ExpectError("UIText alignment", function() label:SetComponent("UIText", { HorizontalAlign = "Middle" }) end, "HorizontalAlign")
+	ExpectError("UIImage slice scale", function() panel:SetComponent("UIImage", { SliceScale = 0 }) end, "SliceScale must be between")
 
 	-- Time.
 	Check("Time at start", Time.GetFrame() == 0 and Near(Time.GetElapsed(), 0))
@@ -313,6 +356,10 @@ function Driver:OnUpdate(dt)
 	self.Frame = self.Frame + 1
 	local frame = self.Frame
 	Check("Time.GetDelta", Near(Time.GetDelta(), dt))
+
+	-- Immediate-mode UI every frame (the GPU goldens show it): an anchored nine-slice panel with TTF text.
+	UI.Image("Assets/Textures/UIPanel.png", 24, -112, 300, 96, { Anchor = "BottomLeft", Pivot = Vec2(0, 1), Slice = Vec4(10, 10, 10, 10), SliceScale = 2 })
+	UI.Text("LIVES 3", 174, -160, { Anchor = "BottomLeft", Pivot = Vec2(0.5, 0.5), Size = 44, Font = "Assets/Fonts/Karla-Regular.ttf", Color = Vec4(0.6, 0.9, 1, 1) })
 
 	if frame == 1 then
 		-- The batch holds Space and the left mouse button from the first frame.
