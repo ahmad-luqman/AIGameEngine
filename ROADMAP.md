@@ -80,9 +80,6 @@ The features most games need, roughly in order of impact.
   strategy games).
 - **Reflection probes and SSR — L.** Local box-projected cubemap probes captured in the editor, then
   screen-space reflections for contact detail.
-- **Sharper upscaling — S.** Render scale and dynamic resolution ship with bilinear upsampling in the
-  tonemap pass, which softens the image below ~0.75. Add FSR 1 (EASU upscale + RCAS sharpening) as an
-  option; with dynamic resolution, EASU must read only the render area (`UVScale` in Tonemap.frag).
 - **Decals and text in 3D — L each.**
 
 ### Scripting

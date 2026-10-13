@@ -14,7 +14,9 @@ description: Diagnose rendering problems in Basalt (black/inside-out/flipped ima
 2. **Isolate passes** with `--debug-view` and by toggling `scene.settings`
    `{"Renderer": {"SSAOEnabled": false}}` / `{"ShadowsEnabled": false}` in a copy of the scene. Check the
    project's `RenderScale` too (`project.info`; override with `--render-scale 1`): below 1 the scene renders
-   smaller and is upsampled, so soft or stair-stepped edges are expected there. With `DynamicResolution`
+   smaller and is upsampled. Scene `Renderer.FSR1Enabled` selects FSR 1 below native size;
+   `FSR1Sharpness` is RCAS attenuation in stops (0 strongest, 2 weakest, default 0.2). It runs after
+   tonemapping and before overlays, and is bypassed for native size, supersampling and debug views. With `DynamicResolution`
    on, the scale also changes with GPU load: turn it off (`--dynamic-resolution 0`) for stable images.
    For slow frames, `render.stats` (editor) and the runtime's `--frames` log give the GPU time per pass.
    Compare intermediate images before reasoning about shader math.

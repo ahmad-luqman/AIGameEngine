@@ -79,6 +79,14 @@ FetchContent_Declare(doctest
 
 # Sources without a usable CMake project: populated only, targets defined below.
 # SOURCE_SUBDIR points at a directory that does not exist so FetchContent never calls add_subdirectory.
+# AMD FSR 1.0.2: unmodified MIT-licensed shader headers, used only at shader compile time.
+FetchContent_Declare(fsr1
+	SYSTEM
+	GIT_REPOSITORY https://github.com/GPUOpen-Effects/FidelityFX-FSR.git
+	GIT_TAG a21ffb8f6c13233ba336352bdff293894c706575
+	GIT_SUBMODULES "" # sample applications/media are not needed
+	SOURCE_SUBDIR _BasaltNoCMake)
+
 FetchContent_Declare(lua
 	SYSTEM
 	GIT_REPOSITORY https://github.com/lua/lua.git
@@ -179,7 +187,7 @@ set(OBJECT_LAYER_BITS 32 CACHE STRING "" FORCE)
 
 FetchContent_MakeAvailable(VulkanHeaders)
 FetchContent_MakeAvailable(glfw glm nvrhi spdlog entt json jolt sol2 doctest
-	lua imgui imguizmo miniaudio cgltf stb)
+	lua imgui imguizmo miniaudio cgltf stb fsr1)
 # Jolt's deterministic mode turns contraction off for GCC, clang and MSVC, but not for clang-cl.
 if(MSVC AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 	target_compile_options(Jolt PRIVATE /clang:-ffp-contract=off)

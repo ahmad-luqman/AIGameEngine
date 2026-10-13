@@ -293,6 +293,20 @@ TEST_SUITE("Automation")
 		Run(registry, session, "scene.settings", { { "Renderer", { { "Exposure", 1.5 } } }, { "Physics", { { "Gravity", { 0, -20, 0 } } } } });
 		CHECK(RunError(registry, session, "scene.settings", { { "Renderer", { { "Exposur", 1 } } } }).find("Exposur") != std::string::npos);
 
+		CHECK(Run(registry, session, "scene.get")["Renderer"]["FSR1Enabled"] == false);
+		for (float sharpness : { 0.0f, 0.2f, 2.0f })
+		{
+			Run(registry, session, "scene.settings", { { "Renderer", { { "FSR1Enabled", true }, { "FSR1Sharpness", sharpness } } } });
+			CHECK(Run(registry, session, "scene.get")["Renderer"]["FSR1Sharpness"] == sharpness);
+		}
+		for (const json& value : { json(-0.01), json(2.01), json("sharp"), json(true), json(1e100) })
+		{
+			CHECK_FALSE(RunError(registry, session, "scene.settings", { { "Renderer", { { "FSR1Enabled", false }, { "FSR1Sharpness", value } } } }).empty());
+			CHECK(Run(registry, session, "scene.get")["Renderer"]["FSR1Enabled"] == true);
+			CHECK(Run(registry, session, "scene.get")["Renderer"]["FSR1Sharpness"] == 2.0f);
+		}
+		CHECK_FALSE(RunError(registry, session, "scene.settings", { { "Renderer", { { "FSR1Enabled", 1 } } } }).empty());
+
 		CHECK(Run(registry, session, "scene.info")["dirty"] == true);
 		CHECK(RunError(registry, session, "scene.save").find("never been saved") != std::string::npos);
 		CHECK(RunError(registry, session, "scene.save", { { "path", "../escape.bscene" } }).find("inside the project") != std::string::npos);
@@ -333,6 +347,8 @@ TEST_SUITE("Automation")
 		CHECK(opened["scene"] == "Assets/Scenes/Main.bscene");
 		CHECK(Run(registry, reopened, "entity.list", { { "nameContains", "Player" } })["entities"].size() == 2);
 		CHECK(Run(registry, reopened, "scene.get")["Renderer"]["Exposure"] == 1.5);
+		CHECK(Run(registry, reopened, "scene.get")["Renderer"]["FSR1Enabled"] == true);
+		CHECK(Run(registry, reopened, "scene.get")["Renderer"]["FSR1Sharpness"] == 2.0f);
 		CHECK(Run(registry, reopened, "project.info")["physicsLayers"] == layers);
 
 		CHECK(RunError(registry, reopened, "render.screenshot", { { "path", "x.png" } }).find("GPU host") != std::string::npos);
