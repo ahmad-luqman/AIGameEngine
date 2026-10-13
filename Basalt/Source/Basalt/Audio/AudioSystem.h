@@ -1,15 +1,17 @@
 #pragma once
 
-#include "Basalt/Core/Base.h"
+#include "Basalt/Audio/AudioBus.h"
 #include "Basalt/Core/Timestep.h"
 #include "Basalt/Core/UUID.h"
-#include "Basalt/Scene/Components.h"
 
 #include <glm/glm.hpp>
 
 #include <array>
+#include <cstdint>
+#include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 struct ma_sound;
@@ -32,40 +34,65 @@ namespace Basalt {
 		AudioSystem(const AudioSystem&) = delete;
 		AudioSystem& operator=(const AudioSystem&) = delete;
 
-		// Starts every source with PlayOnStart.
+		// Loads every source with PlayOnStart; they start sounding in BeginPlayback. IsPlaying reports them as
+		// playing from here on, so OnCreate sees the scene as it will be.
 		void Start();
+		// Starts the sources Start loaded. The scene calls it after the scripts' OnCreate: with an output device
+		// the mix runs all the time, and music must not sound at full volume before a script applies the
+		// player's saved bus volumes.
+		void BeginPlayback();
 		// Starts the PlayOnStart sources among entities added by a scene load, as Start does for the first scene.
 		void PlayOnStart(const std::vector<Entity>& entities);
 		void Update(Timestep ts);
 		void OnEntityDestroyed(Entity entity);
 
-		// (Re)starts the entity's AudioSourceComponent clip from the beginning. Returns false if it cannot play.
+		// (Re)starts the entity's AudioSourceComponent clip from the beginning, reading every field once (later
+		// changes apply on the next Play). Returns false, logging why, if it cannot play.
 		bool Play(Entity entity);
 		void Stop(Entity entity);
 		bool IsPlaying(Entity entity) const;
-		// True when the entity's current sound decodes its clip while it plays (AudioSource.Stream).
+		// True when the entity's current sound decodes its clip while it plays (AudioSource.Stream). Asks
+		// miniaudio what it did rather than echoing the field, for tests and diagnostics.
 		bool IsStreaming(Entity entity) const;
 		// Fire-and-forget sound at a world position (non-spatial when position is null). Always decoded whole.
+		// False, logging why, when the clip cannot load or volume is not a finite number >= 0.
 		bool PlayOneShot(const std::string& clip, const glm::vec3* position, float volume = 1.0f, AudioBus bus = AudioBus::SFX);
 
-		// Linear gain of a bus (0 = silent, 1 = unchanged). A sound's level is its own volume times its bus's
-		// times Master's. volume must be finite and not negative (the Lua binding checks it).
-		void SetBusVolume(AudioBus bus, float volume);
+		// Linear gain of a bus (0 = silent, 1 = unchanged, above 1 amplifies). A sound's level is its own volume
+		// times its bus's times Master's. Returns false, logging why, unless volume is a finite number >= 0.
+		bool SetBusVolume(AudioBus bus, float volume);
 		float GetBusVolume(AudioBus bus) const;
 
 		uint32_t GetActiveSoundCount() const;
 
 	private:
-		ma_sound* CreateSound(const std::string& clip, bool spatial, AudioBus bus, bool stream);
-		static void DestroySound(ma_sound* sound);
+		// Uninitializes and frees a sound or a bus (an ma_sound_group is an ma_sound).
+		struct SoundDeleter
+		{
+			void operator()(ma_sound* sound) const;
+		};
+		using SoundHandle = std::unique_ptr<ma_sound, SoundDeleter>;
+
+		static constexpr std::array<float, AudioBusCount> UnitBusVolumes = [] {
+			std::array<float, AudioBusCount> volumes = {};
+			volumes.fill(1.0f);
+			return volumes;
+		}();
+
+		bool PlaySource(Entity entity, bool startNow);
+		SoundHandle CreateSound(const std::string& clip, bool spatial, AudioBus bus, bool stream);
 
 	private:
 		Scene* m_Scene = nullptr;
-		std::unordered_map<UUID, ma_sound*> m_Sources;
-		std::vector<ma_sound*> m_OneShots;
-		// One ma_sound_group per bus, indexed by AudioBus; null without an audio engine (sounds are skipped then).
-		std::array<ma_sound*, AudioBusCount> m_Buses = {};
-		std::array<float, AudioBusCount> m_BusVolumes;
+		// One ma_sound_group per bus, indexed by AudioBus. All null without an audio engine (nothing plays then);
+		// one is null if its group failed to create (its sounds then play through Master). Declared before the
+		// sounds so it is destroyed after them, and elements go in reverse order: Master (index 0) last.
+		std::array<SoundHandle, AudioBusCount> m_Buses;
+		std::array<float, AudioBusCount> m_BusVolumes = UnitBusVolumes;
+		std::unordered_map<UUID, SoundHandle> m_Sources;
+		// Sources loaded by Start that BeginPlayback has not started yet (see BeginPlayback).
+		std::unordered_set<UUID> m_PendingStarts;
+		std::vector<SoundHandle> m_OneShots;
 	};
 
 }

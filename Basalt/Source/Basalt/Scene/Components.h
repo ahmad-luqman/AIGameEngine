@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Basalt/Audio/AudioBus.h"
 #include "Basalt/Core/UUID.h"
 #include "Basalt/Math/Math.h"
 #include "Basalt/Physics/PhysicsMaterial.h"
@@ -362,19 +363,6 @@ namespace Basalt {
 		std::string Script;
 		nlohmann::json Properties = nlohmann::json::object();
 	};
-
-	// Mixer buses. Music, SFX and UI feed Master, so a settings menu can scale one category or everything.
-	// The names are shared by the component registry and the Lua Audio table.
-	enum class AudioBus
-	{
-		Master = 0,
-		Music,
-		SFX,
-		UI
-	};
-	constexpr size_t AudioBusCount = 4;
-	inline constexpr const char* AudioBusNames[] = { "Master", "Music", "SFX", "UI" };
-	static_assert(std::size(AudioBusNames) == AudioBusCount);
 
 	struct AudioSourceComponent
 	{

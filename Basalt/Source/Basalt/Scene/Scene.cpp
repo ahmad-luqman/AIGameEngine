@@ -472,6 +472,8 @@ namespace Basalt {
 		m_ScriptEngine->Start();
 		m_DeferDestruction--;
 		FlushPendingDestruction();
+		// After OnCreate, which applies saved bus volumes before the PlayOnStart sources sound.
+		m_AudioSystem->BeginPlayback();
 	}
 
 	void Scene::OnRuntimeStop()
