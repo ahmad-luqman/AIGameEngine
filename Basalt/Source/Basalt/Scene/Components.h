@@ -363,6 +363,19 @@ namespace Basalt {
 		nlohmann::json Properties = nlohmann::json::object();
 	};
 
+	// Mixer buses. Music, SFX and UI feed Master, so a settings menu can scale one category or everything.
+	// The names are shared by the component registry and the Lua Audio table.
+	enum class AudioBus
+	{
+		Master = 0,
+		Music,
+		SFX,
+		UI
+	};
+	constexpr size_t AudioBusCount = 4;
+	inline constexpr const char* AudioBusNames[] = { "Master", "Music", "SFX", "UI" };
+	static_assert(std::size(AudioBusNames) == AudioBusCount);
+
 	struct AudioSourceComponent
 	{
 		std::string Clip;
@@ -374,6 +387,10 @@ namespace Basalt {
 		bool Spatial = true;
 		float MinDistance = 1.0f;
 		float MaxDistance = 50.0f;
+		// SFX by default: routing straight to Master would put the sound outside every category volume.
+		AudioBus Bus = AudioBus::SFX;
+		// Decodes the clip while it plays instead of loading it whole: for long music and ambience.
+		bool Stream = false;
 	};
 
 	struct AudioListenerComponent

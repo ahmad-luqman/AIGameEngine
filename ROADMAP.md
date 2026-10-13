@@ -107,13 +107,7 @@ The features most games need, roughly in order of impact.
 
 ### Audio
 
-- **Mixer buses — S.** Master, Music, SFX and UI groups (`ma_sound_group`) with Lua volume control and
-  an `AudioSource.Bus` field.
-- **Streaming music — S.** Use `MA_SOUND_FLAG_STREAM` for long clips instead of decoding them fully into
-  memory.
 - **Effects — M.** Low-pass, reverb and doppler via miniaudio nodes; `AudioSource.Doppler`.
-- **More tests — S.** Only one audio test case exists. Cover the source lifecycle, spatial attenuation
-  with the deviceless engine, looping, and pitch.
 
 ### Game UI
 

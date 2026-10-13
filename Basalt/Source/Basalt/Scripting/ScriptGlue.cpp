@@ -324,6 +324,16 @@ namespace Basalt {
 			return *audio;
 		}
 
+		AudioBus ParseAudioBus(const std::string& name)
+		{
+			for (size_t i = 0; i < AudioBusCount; i++)
+			{
+				if (name == AudioBusNames[i])
+					return static_cast<AudioBus>(i);
+			}
+			throw std::runtime_error(fmt::format("unknown audio bus '{}' (valid: {})", name, fmt::join(AudioBusNames, ", ")));
+		}
+
 		ParticleSystem& RequireParticles(ScriptContext& context)
 		{
 			ParticleSystem* particles = RequireScene(context).GetParticleSystem();
@@ -689,10 +699,18 @@ namespace Basalt {
 			physics["SetGravity"] = [&context](const glm::vec3& gravity) { RequirePhysics(context).SetGravity(gravity); };
 
 			sol::table audio = lua.create_named_table("Audio");
-			audio["PlayOneShot"] = [&context](const std::string& clip, sol::optional<glm::vec3> position, sol::optional<float> volume) {
+			audio["PlayOneShot"] = [&context](const std::string& clip, sol::optional<glm::vec3> position, sol::optional<float> volume, sol::optional<std::string> bus) {
 				const glm::vec3* positionPointer = position ? &*position : nullptr;
-				return RequireAudio(context).PlayOneShot(clip, positionPointer, volume.value_or(1.0f));
+				const AudioBus target = bus ? ParseAudioBus(*bus) : AudioBus::SFX;
+				return RequireAudio(context).PlayOneShot(clip, positionPointer, volume.value_or(1.0f), target);
 			};
+			audio["SetBusVolume"] = [&context](const std::string& bus, float volume) {
+				const AudioBus target = ParseAudioBus(bus);
+				if (!std::isfinite(volume) || volume < 0.0f)
+					throw std::runtime_error("Audio.SetBusVolume: volume must be a finite number of at least 0");
+				RequireAudio(context).SetBusVolume(target, volume);
+			};
+			audio["GetBusVolume"] = [&context](const std::string& bus) { return RequireAudio(context).GetBusVolume(ParseAudioBus(bus)); };
 
 			sol::table log = lua.create_named_table("Log");
 			log["Trace"] = [](sol::variadic_args args) { BS_TRACE("{}", JoinArguments(args)); };

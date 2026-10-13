@@ -531,6 +531,8 @@ namespace Basalt {
 			r.Field("Spatial", c.Spatial);
 			r.Field("MinDistance", c.MinDistance);
 			r.Field("MaxDistance", c.MaxDistance);
+			r.EnumField("Bus", c.Bus, AudioBusNames);
+			r.Field("Stream", c.Stream);
 		}
 
 		void Fields(FieldReader& r, AudioListenerComponent& c)
@@ -818,6 +820,8 @@ namespace Basalt {
 				{ "Spatial", c.Spatial },
 				{ "MinDistance", c.MinDistance },
 				{ "MaxDistance", c.MaxDistance },
+				{ "Bus", EnumName(AudioBusNames, c.Bus) },
+				{ "Stream", c.Stream },
 			};
 		}
 

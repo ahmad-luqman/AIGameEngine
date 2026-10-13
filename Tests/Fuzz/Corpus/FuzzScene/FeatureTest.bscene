@@ -82,6 +82,6 @@
 			"Prefab": { "Prefab": "Assets/Prefabs/Projectile.bprefab" } } },
 		{ "ID": 20, "Name": "Speaker", "Components": {
 			"Transform": { "Translation": [0, 1, 0] },
-			"AudioSource": { "Clip": "Assets/Audio/Beep.wav", "Volume": 0.5, "Pitch": 1.0, "Loop": false, "PlayOnStart": true, "Spatial": true, "MinDistance": 1, "MaxDistance": 30 } } }
+			"AudioSource": { "Clip": "Assets/Audio/Beep.wav", "Volume": 0.5, "Pitch": 1.0, "Loop": false, "PlayOnStart": true, "Spatial": true, "MinDistance": 1, "MaxDistance": 30, "Bus": "Music", "Stream": true } } }
 	]
 }
