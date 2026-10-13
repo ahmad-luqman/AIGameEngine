@@ -76,7 +76,7 @@ Fields: `Script`, `Properties`
 
 ## AudioSource
 
-Fields: `Clip`, `Volume`, `Pitch`, `Loop`, `PlayOnStart`, `Spatial`, `MinDistance`, `MaxDistance`
+Fields: `Clip`, `Volume`, `Pitch`, `Loop`, `PlayOnStart`, `Spatial`, `MinDistance`, `MaxDistance`, `Bus`, `Stream`
 
 ## AudioListener
 

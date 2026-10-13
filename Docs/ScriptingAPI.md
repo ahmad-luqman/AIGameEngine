@@ -793,9 +793,42 @@ font until the file changes (a font that loaded is kept). Every font is checked 
 whose data could crash the font rasterizer draw blank, with a warning (also shown by the inspector and
 `ui.layout`). Fonts are files up to 32 MB.
 
-## Audio, debug drawing, time, logging, game
+## Audio
 
-- `Audio.PlayOneShot(clip [, position [, volume]])` (3D when a position is given)
+An `AudioSource` component plays a project-relative clip (WAV, FLAC or MP3) while the scene plays: from
+the start with `PlayOnStart`, or when a script calls `e:PlayAudio()` (which restarts it from the beginning).
+`Volume` and `Pitch` (2 = twice as fast and an octave higher) are read when the clip starts. `Spatial`
+sources are positioned at the entity and fade with distance from the listener (the first active
+`AudioListener`, or the primary camera): full volume up to `MinDistance`, then
+`MinDistance / distance`, no quieter beyond `MaxDistance`.
+
+`Stream = true` decodes the clip a second at a time while it plays instead of loading it whole: use it for
+music and long ambience. Other clips are decoded once and shared by every sound that plays them.
+
+**Mixer buses.** Every sound plays through a bus: `Music`, `SFX` (the default) or `UI`, which all feed
+`Master`. A sound's level is its own volume times its bus's volume times `Master`'s. Pick an
+`AudioSource`'s bus with its `Bus` field, a one-shot's with the last argument of `Audio.PlayOneShot`.
+Bus volumes belong to the play session: each starts at 1 when play starts, keeps its value through
+`Scene.Load` and is forgotten when play stops, so apply saved settings in `OnCreate`:
+
+```lua
+function Menu:OnCreate()
+	Audio.SetBusVolume("Music", Storage.Get("MusicVolume", 0.8))
+end
+
+function Menu:OnMusicVolumeChanged(slider, value) -- a UISlider's OnValueChanged
+	Audio.SetBusVolume("Music", value)
+	Storage.Set("MusicVolume", value)
+end
+```
+
+- `Audio.PlayOneShot(clip [, position [, volume [, bus]]])` — fire and forget (3D when a position is given;
+  pass `nil` to skip it). Returns false when the clip cannot be loaded. One-shots are never streamed
+- `Audio.SetBusVolume(bus, volume)`, `Audio.GetBusVolume(bus)` — `bus` is `"Master"`, `"Music"`, `"SFX"` or
+  `"UI"`; `volume` is a linear gain (0 = silent, 1 = unchanged, above 1 amplifies) and must not be negative
+
+## Debug drawing, time, logging, game
+
 - `Debug.DrawLine(from, to [, color])`, `Debug.DrawArrow(from, to [, color])`,
   `Debug.DrawBox(center, halfExtents [, color])`, `Debug.DrawSphere(center, radius [, color])` — drawn
   this frame only

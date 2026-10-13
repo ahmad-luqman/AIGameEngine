@@ -252,6 +252,20 @@ local function TestSystems(self)
 	Check("PlayAudio", speaker:PlayAudio() and speaker:IsAudioPlaying())
 	Check("Audio.PlayOneShot", Audio.PlayOneShot("Assets/Audio/Beep.wav", Vec3(0, 1, 0), 0.5) and Audio.PlayOneShot("Assets/Audio/Beep.wav"))
 	Check("Audio.PlayOneShot missing clip", not Audio.PlayOneShot("Assets/Audio/Missing.wav"))
+	local music = Scene.FindEntityByName("Music")
+	local musicSource = music:GetComponent("AudioSource")
+	Check("AudioSource Bus and Stream", musicSource.Bus == "Music" and musicSource.Stream == true and speaker:GetComponent("AudioSource").Bus == "SFX")
+	Check("Streamed music plays", music:IsAudioPlaying())
+	Check("Audio.GetBusVolume", Audio.GetBusVolume("Master") == 1 and Audio.GetBusVolume("Music") == 1)
+	Audio.SetBusVolume("SFX", 0.25)
+	Check("Audio.SetBusVolume", Near(Audio.GetBusVolume("SFX"), 0.25) and Audio.GetBusVolume("UI") == 1)
+	Audio.SetBusVolume("SFX", 1)
+	Check("Audio.PlayOneShot on a bus", Audio.PlayOneShot("Assets/Audio/Beep.wav", nil, 0.5, "UI"))
+	ExpectError("Audio bus name", function() Audio.SetBusVolume("Voice", 1) end, "unknown audio bus 'Voice' (valid: Master, Music, SFX, UI)")
+	ExpectError("Audio.GetBusVolume bus name", function() Audio.GetBusVolume("music") end, "unknown audio bus 'music'")
+	ExpectError("Audio.PlayOneShot bus name", function() Audio.PlayOneShot("Assets/Audio/Beep.wav", nil, 1, "Voice") end, "unknown audio bus")
+	ExpectError("Audio bus volume range", function() Audio.SetBusVolume("Music", -1) end, "volume must be a finite number of at least 0")
+	ExpectError("Audio bus volume finite", function() Audio.SetBusVolume("Music", 0 / 0) end, "volume must be a finite number")
 
 	-- Particles. Sparks and Smoke play from the start; Confetti only emits what scripts ask for.
 	local sparks = Scene.FindEntityByName("Sparks")
@@ -404,6 +418,7 @@ function FeatureTest.CheckWidgets()
 	local driver = Scene.FindEntityByName("FeatureTestDriver"):GetScript()
 	Check("Widget callbacks", table.concat(driver.WidgetLog, ",") == "PlayButton,VolumeSlider=0.6,MusicCheckbox=true")
 	Check("Widget values", Near(Scene.FindEntityByName("VolumeSlider"):GetComponent("UISlider").Value, 0.6) and Scene.FindEntityByName("MusicCheckbox"):GetComponent("UICheckbox").Checked)
+	Check("Volume slider drives the Music bus", Near(Audio.GetBusVolume("Music"), 0.6))
 	Check("A click drops the focus", UI.GetFocus() == nil)
 	Check("Immediate-mode button clicked", FeatureTest.ImmediateClicks == 1)
 	Check("Gamepad connected callback", FeatureTestEvents.GamepadConnected == 0 and FeatureTestEvents.GamepadName == "Injected Gamepad" and FeatureTestEvents.GamepadCount == 1)
@@ -745,6 +760,10 @@ end
 function Driver:OnSettingChanged(widget, value)
 	local text = type(value) == "number" and string.format("%.1f", value) or tostring(value)
 	table.insert(self.WidgetLog, widget.Name .. "=" .. text)
+	-- The settings-menu pattern: a slider drives a mixer bus.
+	if widget.Name == "VolumeSlider" then
+		Audio.SetBusVolume("Music", value)
+	end
 end
 
 function Driver:OnGamepadConnected(index)
