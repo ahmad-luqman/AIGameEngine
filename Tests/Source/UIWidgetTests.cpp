@@ -159,6 +159,23 @@ namespace {
 		return log;
 	}
 
+	// Records gamepad connections as "+<index>" / "-<index>" in self.Log.
+	constexpr const char* PadsScript = R"(
+		local Pads = {}
+		function Pads:OnCreate() self.Log = {} end
+		function Pads:OnGamepadConnected(index) table.insert(self.Log, "+" .. index) end
+		function Pads:OnGamepadDisconnected(index) table.insert(self.Log, "-" .. index) end
+		return Pads
+	)";
+
+	// An entity with a script written into the project.
+	Entity AddScripted(Scene& scene, const TempProject& project, const std::string& name, const std::string& path, const char* source)
+	{
+		Entity entity = scene.CreateEntity(name);
+		entity.AddComponent<ScriptComponent>().Script = project.WriteFile(path, source);
+		return entity;
+	}
+
 	Entity AddRecorder(Scene& scene, const TempProject& project, const std::string& name)
 	{
 		Entity entity = scene.CreateEntity(name);
@@ -761,7 +778,15 @@ TEST_SUITE("UIWidgets")
 		CHECK(LogOf(scene, menu).size() == 1);
 		CHECK(button);
 
+		// Before the first mouse position there is no pointer: nothing at the canvas origin is hovered.
+		Input::ResetMousePosition();
+		CHECK_FALSE(GameUI::GetPointerPosition());
+		GameUI::SetHostState({});
+		Frame(scene);
+		CHECK_FALSE(scene.GetUIInteraction()->IsPointerOverWidget());
+
 		// Non-finite origins are ignored.
+		GameUI::SetViewportOrigin({ 100.0f, 50.0f });
 		GameUI::SetViewportOrigin({ std::numeric_limits<float>::quiet_NaN(), 0.0f });
 		CHECK(GameUI::GetViewportOrigin() == glm::vec2(100.0f, 50.0f));
 		scene.OnRuntimeStop();
@@ -929,15 +954,7 @@ TEST_SUITE("UIWidgets")
 		WidgetInputScope input;
 		TempProject project("UIGamepadLua");
 		Scene scene;
-		const std::string script = project.WriteFile("Assets/Scripts/Pads.lua", R"(
-			local Pads = {}
-			function Pads:OnCreate() self.Log = {} end
-			function Pads:OnGamepadConnected(index) table.insert(self.Log, "+" .. index) end
-			function Pads:OnGamepadDisconnected(index) table.insert(self.Log, "-" .. index) end
-			return Pads
-		)");
-		Entity pads = scene.CreateEntity("Pads");
-		pads.AddComponent<ScriptComponent>().Script = script;
+		Entity pads = AddScripted(scene, project, "Pads", "Assets/Scripts/Pads.lua", PadsScript);
 		scene.OnRuntimeStart();
 
 		Input::SetGamepadConnected(2, true, "Arcade Stick");
@@ -1187,6 +1204,12 @@ TEST_SUITE("UIWidgets")
 		push(0.6f, 0.7f);
 		CHECK(volume.GetComponent<UISliderComponent>().Value == doctest::Approx(0.5f));
 		CHECK(FocusOf(scene) == IDOf(below));
+		// Exactly diagonal: vertical wins.
+		scene.GetUIInteraction()->SetFocus(IDOf(volume));
+		Frame(scene);
+		push(0.7f, 0.7f);
+		CHECK(volume.GetComponent<UISliderComponent>().Value == doctest::Approx(0.5f));
+		CHECK(FocusOf(scene) == IDOf(below));
 		scene.OnRuntimeStop();
 	}
 
@@ -1195,15 +1218,7 @@ TEST_SUITE("UIWidgets")
 		WidgetInputScope input;
 		TempProject project("UIGamepadAnnounce");
 		Scene scene;
-		const std::string script = project.WriteFile("Assets/Scripts/Pads.lua", R"(
-			local Pads = {}
-			function Pads:OnCreate() self.Log = {} end
-			function Pads:OnGamepadConnected(index) table.insert(self.Log, "+" .. index) end
-			function Pads:OnGamepadDisconnected(index) table.insert(self.Log, "-" .. index) end
-			return Pads
-		)");
-		Entity pads = scene.CreateEntity("Pads");
-		pads.AddComponent<ScriptComponent>().Script = script;
+		Entity pads = AddScripted(scene, project, "Pads", "Assets/Scripts/Pads.lua", PadsScript);
 		Input::SetGamepadConnected(1, true);
 		Input::EndFrame();
 		scene.OnRuntimeStart();
@@ -1217,6 +1232,17 @@ TEST_SUITE("UIWidgets")
 		scene.SetPaused(false);
 		Frame(scene);
 		CHECK(Field(scene, pads, "Log") == nlohmann::json({ "+1", "-1", "+3" }));
+		// A gamepad replaced at its index between two updates: a disconnect and a connect.
+		Input::SetGamepadConnected(3, false);
+		Input::SetGamepadConnected(3, true);
+		Frame(scene);
+		CHECK(Field(scene, pads, "Log") == nlohmann::json({ "+1", "-1", "+3", "-3", "+3" }));
+		// An instance created later hears about the gamepads already connected, right after OnCreate.
+		Entity late = scene.CreateEntity("Late");
+		late.AddComponent<ScriptComponent>().Script = "Assets/Scripts/Pads.lua";
+		Frame(scene);
+		CHECK(Field(scene, late, "Log") == nlohmann::json({ "+3" }));
+		CHECK(Field(scene, pads, "Log").size() == 5);
 		scene.OnRuntimeStop();
 	}
 
@@ -1224,7 +1250,7 @@ TEST_SUITE("UIWidgets")
 	{
 		WidgetInputScope input;
 		TempProject project("UISceneLoad");
-		const std::string level = project.WriteFile("Assets/Scenes/Level.bscene", R"({
+		project.WriteFile("Assets/Scenes/Level.bscene", R"({
 			"Format": "BasaltScene", "Version": 1, "Name": "Level",
 			"Entities": [ { "ID": 7, "Name": "LevelButton", "Components": { "UIRect": { "AnchorMin": [0, 0], "AnchorMax": [0, 0], "Pivot": [0, 0], "Position": [100, 100], "Size": [200, 80] }, "UIButton": { "OnClick": "" } } } ]
 		})");
@@ -1248,12 +1274,43 @@ TEST_SUITE("UIWidgets")
 		Entity levelButton = scene.FindEntityByName("LevelButton");
 		REQUIRE(levelButton);
 		CHECK_FALSE(FocusOf(scene).IsValid());
-		// The mouse held through the load does not click the new scene's button at the same spot.
+		// The mouse held through the load holds nothing in the new scene (the button at the same spot is only
+		// hovered), and releasing it clicks nothing.
+		CHECK(StateOf(scene, levelButton) == UIWidgetState::Highlighted);
 		Release(scene, { 150.0f, 120.0f });
 		CHECK(StateOf(scene, levelButton) == UIWidgetState::Highlighted);
 		CHECK(scene.GetScriptEngine()->GetErrors().empty());
 		scene.OnRuntimeStop();
-		CHECK(level == "Assets/Scenes/Level.bscene");
+	}
+
+	TEST_CASE("Immediate-mode widgets the old scene drew are gone after a load")
+	{
+		WidgetInputScope input;
+		TempProject project("UISceneLoadImmediate");
+		project.WriteFile("Assets/Scenes/Empty.bscene", R"({ "Format": "BasaltScene", "Version": 1, "Name": "Empty", "Entities": [] })");
+		Scene scene;
+		AddScripted(scene, project, "Menu", "Assets/Scripts/Menu.lua", R"(
+			local Menu = {}
+			function Menu:OnCreate() Scene.DontDestroyOnLoad(self.Entity) end
+			function Menu:OnUpdate()
+				if not InLevel then UI.Button("Menu", 100, 100, 200, 80) end
+				if Input.IsKeyPressed("L") then Scene.Load("Assets/Scenes/Empty.bscene"); InLevel = true end
+			end
+			return Menu
+		)");
+		scene.OnRuntimeStart();
+		Frame(scene);
+		Input::SetMousePosition({ 150.0f, 120.0f });
+		Frame(scene);
+		CHECK(scene.GetUIInteraction()->IsPointerOverWidget());
+		// The frame that loads still draws the menu; the next one, in the new scene, must not hit it.
+		Input::SetKeyState(KeyCode::L, true);
+		Frame(scene);
+		Input::SetKeyState(KeyCode::L, false);
+		Frame(scene);
+		CHECK_FALSE(scene.GetUIInteraction()->IsPointerOverWidget());
+		CHECK(scene.GetScriptEngine()->GetErrors().empty());
+		scene.OnRuntimeStop();
 	}
 
 	TEST_CASE("A focus set on an immediate-mode widget before it is drawn waits a frame for it")
@@ -1341,6 +1398,70 @@ TEST_SUITE("UIWidgets")
 		REQUIRE(errors.size() == 2);
 		CHECK(Contains(errors[0], "'Target' has no running script"));
 		CHECK(Contains(errors[1], "the script of 'Target' has no method Go"));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("A widget whose drawing would not fit in the frame's commands is not registered either")
+	{
+		WidgetInputScope input;
+		Scene scene;
+		scene.CreateEntity("Plain");
+		scene.OnRuntimeStart();
+		REQUIRE(scene.GetScriptEngine());
+		Input::SetMousePosition({ 5.0f, 5.0f });
+		while (GameUI::GetCommandCount() + 3 < GameUI::MaxCommands)
+			REQUIRE(GameUI::Submit(UIDrawCommand{}) == GameUI::SubmitResult::Queued);
+		const size_t commands = GameUI::GetCommandCount();
+		CHECK(Contains(Eval(scene, "UI.Button('B', 0, 0, 10, 10)"), "UI.Button: more than 65536 UI commands this frame"));
+		CHECK(GameUI::GetCommandCount() == commands);
+		// Not registered: the next frame has nothing under the pointer.
+		Frame(scene);
+		CHECK_FALSE(scene.GetUIInteraction()->IsPointerOverWidget());
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("A callback that destroys its target skips the target's other callbacks that frame")
+	{
+		WidgetInputScope input;
+		TempProject project("UIDestroyedTarget");
+		Scene scene;
+		Entity menu = AddScripted(scene, project, "Menu", "Assets/Scripts/Close.lua", R"(
+			local Close = {}
+			function Close:OnClick() Scene.Destroy(self.Entity) end
+			return Close
+		)");
+		const UUID menuID = menu.GetUUID();
+		AddWidget<UIButtonComponent>(scene, "A", { 100.0f, 100.0f }, { 200.0f, 80.0f }, { .Target = menuID });
+		Entity b = AddWidget<UIButtonComponent>(scene, "B", { 100.0f, 300.0f }, { 200.0f, 80.0f }, { .Target = menuID });
+		scene.OnRuntimeStart();
+		Press(scene, { 150.0f, 120.0f });
+		scene.GetUIInteraction()->SetFocus(IDOf(b));
+		// One frame: the release clicks A, and Enter clicks the focused B.
+		Input::SetMouseButtonState(MouseCode::Left, false);
+		Input::SetKeyState(KeyCode::Enter, true);
+		Frame(scene);
+		Input::SetKeyState(KeyCode::Enter, false);
+		CHECK_FALSE(scene.GetEntityByUUID(menuID));
+		CHECK(scene.GetScriptEngine()->GetErrors().empty());
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("A widget focused by navigation and then hidden loses the focus without a warning")
+	{
+		WidgetInputScope input;
+		Scene scene;
+		Entity menu = AddWidget<UIButtonComponent>(scene, "Menu", { 100.0f, 100.0f }, { 200.0f, 80.0f });
+		scene.OnRuntimeStart();
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		// Tab focuses it, and the game hides the menu on the same key press.
+		Input::SetKeyState(KeyCode::Tab, true);
+		Frame(scene);
+		CHECK(FocusOf(scene) == IDOf(menu));
+		menu.GetComponent<UIRectComponent>().Visible = false;
+		Input::SetKeyState(KeyCode::Tab, false);
+		Frame(scene, 2);
+		CHECK_FALSE(FocusOf(scene).IsValid());
+		CHECK(CountLogMessages(since, "dropped it") == 0);
 		scene.OnRuntimeStop();
 	}
 

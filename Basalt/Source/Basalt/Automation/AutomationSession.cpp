@@ -67,7 +67,13 @@ namespace Basalt {
 	{
 		m_Recording = nlohmann::json::array();
 		m_RecordingSeed = IsPlaying() ? std::optional<uint32_t>(m_Scene->GetRandomSeed()) : std::nullopt;
-		// A replay starts from no injected gamepads: record the ones already connected, with what they hold.
+		// A replay starts from no input: record the mouse position and the injected gamepads already connected, with
+		// what they hold.
+		if (Input::HasMousePosition())
+		{
+			const glm::vec2 mouse = Input::GetMousePosition();
+			RecordInput("input.mouse", { { "position", { mouse.x, mouse.y } } });
+		}
 		for (uint32_t index = 0; index < Input::MaxGamepads; index++)
 		{
 			if (Input::GetGamepadSource(index) != GamepadSource::Injected)

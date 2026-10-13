@@ -35,9 +35,10 @@ Other directories: `Docs/` (scripting API, generated command/component reference
   writer that every consumer shares: scene and prefab files, Lua `GetComponent/SetComponent`, the
   automation commands and the editor inspector. Adding a component = one registry entry (see the
   `basalt-add-component` skill).
-- **Runtime state lives in systems.** `PhysicsWorld`, `ScriptEngine`, `AudioSystem`, `ParticleSystem` and
-  `UIInteraction` (widget hover, hold and focus) exist only while a scene plays (physics and particles also while
-  it simulates) and key their state by entity UUID; they react to EnTT component signals. Gameplay random streams (Lua's random numbers, particle
+- **Runtime state lives in systems.** `PhysicsWorld`, `ScriptEngine`, `AudioSystem` and `ParticleSystem` exist
+  only while a scene plays (physics and particles also while it simulates) and key their state by entity
+  UUID; they react to EnTT component signals. `UIInteraction` (widget hover, hold and focus) exists only in Play
+  and re-reads the widgets every frame. Gameplay random streams (Lua's random numbers, particle
   emitters) are seeded from the session's seed, `Scene::GetRandomSeed` (the project's `RandomSeed`).
 - **Play mode runs a copy.** `Scene::Copy` duplicates the edit scene (same UUIDs) for play/simulate;
   stopping discards it.

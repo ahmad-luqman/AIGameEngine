@@ -17,8 +17,12 @@ namespace Basalt {
 		};
 
 		// std::array zero-fills missing initializers: every enum value must have a name.
-		static_assert(std::ranges::none_of(s_ButtonNames, &std::string_view::empty));
-		static_assert(std::ranges::none_of(s_AxisNames, &std::string_view::empty));
+		constexpr bool IsEmpty(std::string_view name)
+		{
+			return name.empty();
+		}
+		static_assert(std::ranges::none_of(s_ButtonNames, IsEmpty));
+		static_assert(std::ranges::none_of(s_AxisNames, IsEmpty));
 
 		bool EqualsIgnoreCase(std::string_view a, std::string_view b)
 		{

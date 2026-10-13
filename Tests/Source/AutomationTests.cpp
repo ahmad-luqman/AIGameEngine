@@ -748,7 +748,11 @@ TEST_SUITE("Automation")
 		Input::UpdateGamepadFromDevice(5, &device);
 		CHECK(RunError(registry, session, "input.gamepad", { { "index", 5 }, { "button", "A" } }).find("gamepad 5 is a physical device; pass connected: true") != std::string::npos);
 		CHECK(RunError(registry, session, "input.gamepad", { { "index", 5 }, { "connected", false } }).find("cannot be disconnected") != std::string::npos);
-		Input::UpdateGamepadFromDevice(5, nullptr);
+		// Taking it over: connected: true makes it injected, released.
+		Run(registry, session, "input.gamepad", { { "index", 5 }, { "connected", true }, { "button", "A" } });
+		CHECK(Input::GetGamepadSource(5) == GamepadSource::Injected);
+		CHECK(Input::IsGamepadButtonDown(5, GamepadButton::A));
+		Run(registry, session, "input.gamepad", { { "index", 5 }, { "connected", false } });
 
 		Run(registry, session, "replay.record_start");
 		Run(registry, session, "play.start");
@@ -792,7 +796,11 @@ TEST_SUITE("Automation")
 		Run(registry, session, "asset.write", { { "path", "Assets/Scripts/Count.lua" }, { "content", R"(
 			local C = {}
 			function C:OnClick() self.Entity.Translation = self.Entity.Translation + Vec3(1, 0, 0) end
-			function C:OnUpdate() self.Entity.Translation = self.Entity.Translation + Vec3(0, Input.GetGamepadAxis(2, "RightX"), 0) end
+			function C:OnUpdate()
+				local held = Input.IsGamepadButtonDown(2, "B") and 1 or 0
+				local mouse = Input.GetMousePosition().x
+				self.Entity.Translation = self.Entity.Translation + Vec3(0, Input.GetGamepadAxis(2, "RightX") + held + mouse, #Input.GetGamepads())
+			end
 			return C
 		)" } });
 		Run(registry, session, "entity.create", { { "name", "Button" }, { "components", { { "UIRect", { { "AnchorMin", { 0, 0 } }, { "AnchorMax", { 0, 0 } }, { "Pivot", { 0, 0 } }, { "Size", { 200, 100 } } } }, { "UIButton", json::object() }, { "Script", { { "Script", "Assets/Scripts/Count.lua" } } } } } });
@@ -800,7 +808,11 @@ TEST_SUITE("Automation")
 		// A gamepad connected (and pushed) before recording starts is part of the recording.
 		Run(registry, session, "play.start");
 		Run(registry, session, "input.gamepad", { { "index", 2 }, { "connected", true }, { "name", "Early" }, { "axis", "RightX" }, { "value", 0.5 } });
-		Run(registry, session, "replay.record_start");
+		Run(registry, session, "input.gamepad", { { "index", 2 }, { "button", "B" } });
+		// No mouse position yet when recording starts: the first recorded frame reads 0, and so must the replay's.
+		Input::ResetMousePosition();
+		CHECK(Run(registry, session, "replay.record_start")["physicalGamepads"].empty());
+		Run(registry, session, "play.step", { { "frames", 1 } });
 		Run(registry, session, "input.mouse", { { "position", { 50, 50 } }, { "button", "Left" }, { "down", true } });
 		Run(registry, session, "play.step", { { "frames", 1 } });
 		Run(registry, session, "input.mouse", { { "button", "Left" }, { "down", false } });
@@ -808,16 +820,35 @@ TEST_SUITE("Automation")
 		Run(registry, session, "replay.record_stop", { { "path", "Replays/Host.breplay" } });
 		CHECK(Run(registry, session, "lua.exec", { { "code", "return Scene.FindEntityByName('Button').Translation.x" } })["result"] == "1.0");
 
-		// An editor-like host: the view offset and scaled, the mouse outside it. The replay still clicks.
+		// An editor-like host: the view offset and scaled, the mouse elsewhere, a physical gamepad connected. The
+		// replay still clicks (headless view, from no mouse position) and sees only its own gamepad, restored with
+		// what it held.
 		const GameUI::HostState editor{ { 300.0f, 200.0f }, { 640.0f, 360.0f }, false, false };
 		GameUI::SetHostState(editor);
+		Input::SetMousePosition({ 900.0f, 900.0f });
+		GamepadDeviceState device;
+		Input::UpdateGamepadFromDevice(0, &device);
 		const json replayed = Run(registry, session, "replay.run", { { "path", "Replays/Host.breplay" }, { "assertHash", true }, { "assertNoErrors", true } });
 		CHECK(replayed["stateHash"] == live["stateHash"]);
+		CHECK(Run(registry, session, "lua.exec", { { "code", "return Input.GetGamepadName(2)" } })["result"] == "Early");
+		// Physical gamepads are back after the replay.
+		CHECK(Input::IsDeviceGamepadsEnabled());
+		Input::UpdateGamepadFromDevice(0, &device);
+		CHECK(Input::IsGamepadConnected(0));
+		Input::UpdateGamepadFromDevice(0, nullptr);
 		const GameUI::HostState restored = GameUI::GetHostState();
 		CHECK(restored.ViewportOrigin == editor.ViewportOrigin);
 		CHECK(restored.ViewportSize == editor.ViewportSize);
 		CHECK_FALSE(restored.PointerEnabled);
 		CHECK_FALSE(restored.NavigationEnabled);
+		// A replay that fails restores the host too, and names the event that failed.
+		const json bad = { { "Format", "BasaltReplay" }, { "Version", 1 }, { "Frames", 2 }, { "RandomSeed", Project::GetActiveRandomSeed() }, { "Events", json::array({ { { "frame", 1 }, { "command", "input.gamepad" }, { "params", { { "button", "A" } } } } }) } };
+		Run(registry, session, "asset.write", { { "path", "Replays/Bad.breplay" }, { "content", bad.dump() } });
+		const std::string error = RunError(registry, session, "replay.run", { { "path", "Replays/Bad.breplay" } });
+		INFO(error);
+		CHECK(error.find("'Replays/Bad.breplay' event 0 (frame 1, input.gamepad): gamepad 0 is not connected") != std::string::npos);
+		CHECK(GameUI::GetHostState().ViewportOrigin == editor.ViewportOrigin);
+		CHECK(Input::IsDeviceGamepadsEnabled());
 		GameUI::SetHostState({});
 		// Stopping play forgets injected gamepads.
 		Run(registry, session, "play.stop");
@@ -831,25 +862,35 @@ TEST_SUITE("Automation")
 		Run(registry, session, "scene.new", { { "name", "UI" }, { "empty", true } });
 		Run(registry, session, "entity.create", { { "name", "Both" }, { "components", { { "UIRect", json::object() }, { "UISlider", { { "Value", 0.25 } } }, { "UICheckbox", json::object() } } } });
 		const json menu = Run(registry, session, "entity.create", { { "name", "Menu" } });
+		Run(registry, session, "entity.create", { { "name", "Plain" } });
+		Run(registry, session, "entity.create", { { "name", "Calls" }, { "components", { { "UIRect", json::object() }, { "UIButton", { { "Target", "Plain" }, { "OnClick", "Go" } } } } } });
 		// Targets resolve by name in commands, like every entity reference.
 		Run(registry, session, "entity.create", { { "name", "Lost" }, { "components", { { "UIRect", json::object() }, { "UIButton", { { "Target", "Menu" } } } } } });
 		Run(registry, session, "entity.destroy", { { "entity", "Menu" } });
 		const json layout = Run(registry, session, "ui.layout");
-		REQUIRE(layout["items"].size() == 2);
+		REQUIRE(layout["items"].size() == 3);
 		CHECK(layout["items"][0]["widget"]["kind"] == "UISlider");
 		CHECK(layout["items"][0]["widget"]["value"] == 0.25);
 		// Not playing: no state or focus.
 		CHECK_FALSE(layout["items"][0]["widget"].contains("state"));
 		CHECK(layout["items"][0]["widget"]["callback"] == "OnValueChanged");
-		REQUIRE(layout["problems"].size() == 3);
+		REQUIRE(layout["problems"].size() == 4);
 		CHECK(layout["problems"][0]["problem"] == "several widget components: it acts as its UISlider only");
 		// The default callback on the widget itself, which has no Script.
 		CHECK(layout["problems"][1]["problem"] == "UISlider calls OnValueChanged on 'Both', which has no Script");
-		CHECK(layout["problems"][2]["problem"] == "UIButton Target " + std::to_string(menu["id"].get<uint64_t>()) + " does not exist (its callback cannot run)");
+		CHECK(layout["problems"][2]["problem"] == "UIButton calls Go on 'Plain', which has no Script");
+		CHECK(layout["problems"][3]["problem"] == "UIButton Target " + std::to_string(menu["id"].get<uint64_t>()) + " does not exist (its callback cannot run)");
 		// The host's view: headless, mouse positions are canvas units.
 		CHECK(layout["view"]["origin"] == json({ 0.0, 0.0 }));
 		CHECK(layout["view"]["size"] == json({ 1920.0, 1080.0 }));
 		CHECK(layout["view"]["pointerEnabled"] == true);
+		CHECK(layout["view"]["navigationEnabled"] == true);
+		// A callback name only C++ can write (the registry rejects it) calls nothing, and says so.
+		Entity calls = session.GetScene()->FindEntityByName("Calls");
+		REQUIRE(calls);
+		calls.GetComponent<UIButtonComponent>().OnClick = "not a name";
+		const json repaired = Run(registry, session, "ui.layout");
+		CHECK(repaired["problems"][2]["problem"] == "UIButton callback 'not a name' is not a script method name (it calls nothing)");
 	}
 
 	TEST_CASE("ui.layout reports images and fonts that will not load")

@@ -100,22 +100,27 @@ namespace Basalt {
 		{
 			BS_CORE_ASSERT(min < max, "a slider range must not be empty");
 			if (!(step > 0.0f))
-				return std::clamp(value + static_cast<float>(steps) * (max - min) / 20.0f, min, max);
+				return std::clamp(value + static_cast<float>(steps) * (max - min) / ContinuousNavigationStops, min, max);
 			// Count stops in double: Min + k * Step for k = 0..last grid stop, then Max when it is past the grid.
-			const double range = static_cast<double>(max) - static_cast<double>(min);
-			const double grid = std::floor(range / step);
+			const double first = min;
+			const double last = max;
+			const double stride = step;
+			const double grid = std::floor((last - first) / stride);
 			// More stops than a float can tell apart: step by value and snap.
 			constexpr double MaxStops = 1e7;
 			if (!(grid <= MaxStops))
 				return SnapSliderValue(value + static_cast<float>(steps) * step, min, max, step);
 			const auto lastGrid = static_cast<int64_t>(grid);
-			const bool maxIsExtraStop = static_cast<double>(min) + grid * step < static_cast<double>(max);
-			const int64_t last = lastGrid + (maxIsExtraStop ? 1 : 0);
-			const int64_t current = value >= max ? last : std::clamp<int64_t>(std::llround((static_cast<double>(value) - min) / step), 0, lastGrid);
-			const int64_t target = std::clamp<int64_t>(current + steps, 0, last);
-			if (target == last)
+			const bool maxIsExtraStop = first + grid * stride < last;
+			const int64_t lastStop = lastGrid + (maxIsExtraStop ? 1 : 0);
+			// The stop nearest the value (Max included).
+			int64_t current = std::clamp<int64_t>(std::llround((static_cast<double>(value) - first) / stride), 0, lastGrid);
+			if (maxIsExtraStop && last - value < std::abs(value - (first + static_cast<double>(current) * stride)))
+				current = lastStop;
+			const int64_t target = std::clamp<int64_t>(current + steps, 0, lastStop);
+			if (target == lastStop)
 				return max;
-			return std::min(static_cast<float>(static_cast<double>(min) + static_cast<double>(target) * step), max);
+			return std::min(static_cast<float>(first + static_cast<double>(target) * stride), max);
 		}
 
 		void AppendRect(const UIBox& box, const glm::vec4& color, std::vector<UIDrawCommand>& out)

@@ -17,7 +17,6 @@
 
 namespace Basalt {
 
-	class Entity;
 	class Scene;
 
 	// Identifies a widget across frames: a widget component by its entity, or an immediate-mode widget (UI.Button,
@@ -62,8 +61,8 @@ namespace Basalt {
 		float HandleWidth = 0.0f;
 	};
 
-	// What the user did to an immediate-mode widget this frame. Always empty for a widget drawn disabled this
-	// frame, even when the input arrived while it was enabled.
+	// What the user did to an immediate-mode widget this frame. A widget drawn disabled this frame gets no Activated,
+	// SliderFraction or SliderSteps, even when the input arrived while it was enabled.
 	struct UIImmediateInput
 	{
 		UIWidgetState State = UIWidgetState::Normal;
@@ -81,9 +80,9 @@ namespace Basalt {
 	//
 	// Every frame Update hit-tests the visible widget components (UILayout) and the immediate-mode widgets drawn
 	// the frame before, topmost first: immediate widgets over components, later ones over earlier ones. Only
-	// widgets take pointer input; a plain UIImage does not block it. Pressing the left mouse button on a widget
-	// holds it (and drops any keyboard/gamepad focus); releasing it over the same widget clicks a button or toggles
-	// a checkbox, and a held slider follows the pointer as it moves. Arrows, the D-pad and the left stick (with
+	// widgets take pointer input; a plain UIImage does not block it. Any left press in the game view drops the
+	// keyboard/gamepad focus, and one on a widget holds it; a real release over the same widget clicks a button or
+	// toggles a checkbox, and a held slider follows the pointer as it moves. Arrows, the D-pad and the left stick (with
 	// repeat after RepeatDelay, every RepeatInterval) move the focus to the nearest widget in that direction,
 	// Tab/Shift+Tab through all of them in draw order; Enter, keypad Enter, Space or gamepad A activate the focused
 	// widget on the press, and Left/Right move a focused slider. Widget components change their own Value/Checked
@@ -104,8 +103,8 @@ namespace Basalt {
 		void Update(Scene& scene, float deltaTime);
 		// The widget component events of the last Update, in the order they happened.
 		std::vector<UIWidgetEvent> TakeEvents();
-		// The scene was replaced (Scene.Load): nothing is hovered, held or focused any more, and the last frame's
-		// immediate-mode widgets are gone.
+		// The scene was replaced (Scene.Load, at the end of a frame): nothing is hovered, held or focused any more, and
+		// the immediate-mode widgets the old scene drew are gone. The navigation setting stays (the Lua state does).
 		void OnSceneLoaded();
 
 		enum class SubmitResult
@@ -124,18 +123,20 @@ namespace Basalt {
 		// How the widget looks this frame.
 		UIWidgetState GetState(const UIWidgetID& id, bool interactable) const;
 
-		// The focused widget (invalid when none). A focus that is not a visible, interactable widget is dropped in
-		// an Update, with a warning when it never was one; an immediate-mode id set before its widget is first
-		// drawn (e.g. from OnCreate) gets one frame to appear.
-		const UIWidgetID& GetFocus() const { return m_Focus; }
+		// The focused widget (invalid when none). A focus that is not a visible, interactable widget is dropped in an
+		// Update, with a warning when it never was one; a newly set focus gets one Update to appear (an immediate-mode
+		// widget set from OnCreate, a widget shown as it is focused). A script may set it while navigation is off;
+		// the keyboard and gamepads then still do not act on it.
+		const UIWidgetID& GetFocus() const { return m_Focus.ID; }
 		void SetFocus(UIWidgetID id);
 		// Whether the pointer was over an interactable widget in the last Update (so a click there is the UI's,
 		// not the game's).
 		bool IsPointerOverWidget() const { return m_Hovered.IsValid(); }
 
-		// Keyboard and gamepad navigation for the game (UI.SetNavigationEnabled): a game that reads the arrows,
-		// Space or the D-pad itself while widgets are visible turns it off, so they never focus or activate a
-		// widget. Turning it off drops the focus. On by default; the host can turn it off too (GameUI).
+		// The game's keyboard and gamepad navigation setting (UI.SetNavigationEnabled): a game that reads the arrows,
+		// Space or the D-pad itself while widgets are visible turns it off, so they never focus or activate a widget.
+		// Turning it off drops the focus. On by default. The host's switch (GameUI::SetNavigationEnabled, e.g. the
+		// editor view without focus) pauses navigation too but keeps the focus; this reports the game's setting.
 		void SetNavigationEnabled(bool enabled);
 		bool IsNavigationEnabled() const { return m_NavigationEnabled; }
 
@@ -147,6 +148,26 @@ namespace Basalt {
 			UIBox Rect;
 			bool Interactable = true;
 			float HandleWidth = 0.0f;
+			// Widget components: the resolved callback target and method (from UILayout::GetWidget).
+			UUID Target = 0;
+			std::string Callback;
+		};
+
+		// How sure the focus is that its widget exists.
+		enum class FocusPhase
+		{
+			// Just set: it gets one Update to appear.
+			New,
+			// Set, and not a widget in the last Update: dropped, with a warning, if it is not one in the next.
+			Unseen,
+			// Was a live widget: dropped silently when it goes away.
+			Seen
+		};
+
+		struct Focus
+		{
+			UIWidgetID ID;
+			FocusPhase Phase = FocusPhase::New;
 		};
 
 		enum class Direction
@@ -174,20 +195,19 @@ namespace Basalt {
 		// Whether a held direction fires this frame (when it starts, then repeating).
 		bool Repeat(Direction direction, bool held, float deltaTime);
 
+		// Focuses a widget that is live in this Update (navigation): no grace frame, no warning when it goes away.
+		void FocusLive(const UIWidgetID& id);
+
 		void Activate(Scene& scene, const Candidate& widget);
 		void DragSlider(Scene& scene, const Candidate& widget, float pointerX);
 		void StepSlider(Scene& scene, const Candidate& widget, int steps);
 		// Writes a slider component's new value and queues its callback, when the value changed.
-		void CommitSliderValue(Entity entity, UISliderComponent& slider, float value);
+		void CommitSliderValue(const Candidate& widget, UISliderComponent& slider, float value);
 
 	private:
 		UIWidgetID m_Hovered;
 		std::optional<Press> m_Pressed;
-		UIWidgetID m_Focus;
-		// The focus was set but its widget not seen yet: it survives one Update without a widget.
-		bool m_FocusPending = false;
-		// The focused widget has been seen live (a focus dropped before that was never a widget: warn).
-		bool m_FocusSeen = false;
+		Focus m_Focus;
 		// The accept button is held on the focused widget.
 		bool m_AcceptHeld = false;
 		bool m_NavigationEnabled = true;

@@ -307,8 +307,10 @@ Buttons: `A` (bottom face button), `B`, `X`, `Y`, `LeftBumper`, `RightBumper`, `
 `LeftThumb`, `RightThumb`, `DPadUp`, `DPadRight`, `DPadDown`, `DPadLeft`. Axes: `LeftX`, `LeftY`, `RightX`,
 `RightY` (-1..1, +Y is down, like the canvas), `LeftTrigger`, `RightTrigger` (0..1). Names are
 case-insensitive; an unknown one is an error. Sticks are reported raw: apply your own dead zone. While the window
-does not have focus, gamepads read as released; a button or stick held through a focus loss stays released until
-it is let go. Controllers missing from GLFW's mapping database are ignored, with a warning naming them.
+does not have focus, gamepads read as released; a button or stick held through a focus loss (or pressed while
+unfocused) stays released until it is let go. Controllers missing from GLFW's built-in mapping database are
+ignored, with a warning naming them; mappings in SDL's format in the `SDL_GAMECONTROLLERCONFIG` environment
+variable are added at startup.
 
 - `Input.GetGamepads()` — the indices of the connected gamepads (array)
 - `Input.IsGamepadConnected(index)`, `Input.GetGamepadName(index)` (nil when not connected)
@@ -318,7 +320,9 @@ it is let go. Controllers missing from GLFW's mapping database are ignored, with
 
 Every script instance gets `OnGamepadConnected(index)` and `OnGamepadDisconnected(index)` before `OnUpdate`, on
 the first frame the scene updates after the change: gamepads already connected when play starts are announced on
-the first frame, and changes while the game is paused when it resumes. Headless runs have no devices: the
+the first frame, changes while the game is paused when it resumes, and a gamepad replaced at its index (unplugged
+and another plugged in) as a disconnect and a connect. An instance created later (a spawned entity, a new scene)
+gets `OnGamepadConnected` for every connected gamepad right after its `OnCreate`. Headless runs have no devices: the
 automation command `input.gamepad` injects one (tests and replays use it; a replay sees only the gamepads it
 injects).
 
@@ -690,8 +694,10 @@ end
 
 Callbacks run at the start of the frame, before `OnUpdate`, in the order the interactions happened; the
 widget's `Value`/`Checked` is already updated. Setting values with `SetComponent` (or in the scene file) calls
-nothing. A callback that cannot run — the target entity is gone, has no running script, or its script has no
-such method — is a script error, reported once per widget and method. Names must be Lua identifiers (or
+nothing. A callback that cannot run — the target entity does not exist, has no running script, or its script
+has no such method — is a script error, reported once per widget, method and kind of problem (`ui.layout` lists
+the targets that are missing or have no Script). A widget or target that an earlier callback destroyed this
+frame (a menu closing itself) is skipped. Names must be Lua identifiers (or
 empty); `Target` is remapped when the widget is duplicated or instantiated with its target, like joints.
 
 **Input.** Only widgets take pointer input (a plain `UIImage` over a button does not block it; hide or disable
@@ -699,7 +705,8 @@ the widgets under a modal panel). The topmost widget under the mouse is hovered 
 over the components, later ones over earlier ones; a disabled widget still covers the ones below). Pressing
 the left mouse button on a widget holds it; releasing over it clicks a button or toggles a checkbox (losing the
 window's focus while holding does not), and a held slider follows the mouse as it moves, even off its rect. Any
-mouse press drops the keyboard/gamepad focus, so after a click Space and Enter are the game's again. Keyboard and
+left click in the game view drops the keyboard/gamepad focus, so after a click Space and Enter are the game's
+again. Keyboard and
 gamepads move the focus:
 
 | Input | Effect |
@@ -721,7 +728,9 @@ gamepads while it has focus.
   `OnCreate`, for a menu that opens with a button focused); a focus that is not a visible, interactable widget a
   frame later is dropped with a warning. An error outside play.
 - `UI.SetNavigationEnabled(enabled)`, `UI.IsNavigationEnabled()` — whether the keyboard and gamepads move the
-  focus and activate widgets (on by default; turning it off drops the focus)
+  focus and activate widgets (on by default; turning it off drops the focus, though `UI.SetFocus` can still set
+  one). The game's setting: it survives `Scene.Load`, and the editor also pauses navigation while its game view
+  does not have focus. `UI.SetNavigationEnabled` is an error outside play; `UI.IsNavigationEnabled` is then false.
 - `UI.IsPointerOverWidget()` — whether the mouse is over an interactable widget (so a click there is the UI's,
   not the game's)
 
