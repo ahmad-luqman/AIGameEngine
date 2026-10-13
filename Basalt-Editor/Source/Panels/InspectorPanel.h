@@ -24,8 +24,9 @@ namespace Basalt {
 
 	private:
 		void DrawScriptProperties(Entity entity, const nlohmann::json& component);
-		// A combo that sets a UIRect's anchors and pivot to a named spot of the parent rect, or stretches it.
-		void DrawAnchorPresets(uint64_t id);
+		// A combo that sets a UIRect's anchors and pivot to a named spot of the parent rect, or stretches it,
+		// keeping the rect where it is (ApplyUIAnchorPreset).
+		void DrawAnchorPresets(Entity entity);
 		// Picker for a component field that holds an entity UUID; noneLabel names 0 (e.g. "World" for a
 		// joint's ConnectedEntity) and filter decides which entities are listed.
 		void DrawEntityReference(Entity entity, const std::string& component, const std::string& field, uint64_t current, const std::function<bool(Entity)>& filter, const char* noneLabel);

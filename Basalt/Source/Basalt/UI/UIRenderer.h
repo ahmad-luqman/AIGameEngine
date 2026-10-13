@@ -18,10 +18,16 @@ namespace Basalt {
 
 	class Scene;
 
-	// Resolved textures by path; a missing entry draws the image's Color instead.
-	using UITextureMap = std::unordered_map<std::string, UITexture>;
+	// What the UI draws with, resolved before the ImGui frame: textures and fonts by path. A texture without
+	// an entry draws the image's Color instead; a font without one draws with the built-in font.
+	struct UIResources
+	{
+		std::unordered_map<std::string, UITexture> Textures;
+		std::unordered_map<std::string, ImFont*> Fonts;
+	};
 
-	// One line of text after breaking: a range of the source string and its width in pixels.
+	// One line of text after breaking: a range of the source string (it points into that string) and its
+	// width in pixels.
 	struct UITextLine
 	{
 		std::string_view Text;
@@ -33,57 +39,63 @@ namespace Basalt {
 	class UIRenderer
 	{
 	public:
-		// Largest text size in pixels: bigger glyphs would not fit the font atlas. Text is drawn at its canvas
-		// size times the canvas scale, capped here.
+		// Largest text size, in physical pixels. The atlas rasterizes glyphs at the display's framebuffer
+		// scale, so the cap in ImGui units is this divided by it. Together with TrueTypeValidator's
+		// MaxGlyphExtentPerLineHeight (3) it bounds a glyph bitmap to 3072 px, inside ImGui's 8192 px font
+		// atlas; change them together.
 		static constexpr float MaxTextPixelSize = 1024.0f;
 
-		// Draws `commands` onto the rectangle [origin, origin + size) of the draw list (screen pixels), which
-		// shows the whole canvas (GameUI::CanvasHeight units tall).
-		static void Draw(ImDrawList* drawList, const glm::vec2& origin, const glm::vec2& size, std::span<const UIDrawCommand> commands, const UITextureMap& textures);
+		// Draws `commands` onto the rectangle [origin, origin + size) of the draw list (screen units), which
+		// shows the whole canvas: GameUI::CanvasHeight units tall, and `canvasSize.x` wide (anchored commands
+		// are placed on that width). Draws nothing new into the font atlas: fonts come from `resources`.
+		static void Draw(ImDrawList* drawList, const glm::vec2& origin, const glm::vec2& size, const glm::vec2& canvasSize, std::span<const UIDrawCommand> commands, const UIResources& resources);
 
-		// Breaks `text` into lines at '\n' and, when wrapWidth > 0, between words so each line fits
-		// wrapWidth pixels (a single word wider than that gets a line of its own and may overflow). Trailing
-		// blanks do not count toward a line's width, and a wrapped line drops its leading blanks.
+		// Breaks `text` into lines at '\n' and, when wrapWidth > 0, where ImGui's word wrap does: between
+		// words, or inside a word wider than wrapWidth. Trailing blanks are left out of a line's text and
+		// width, and a line that starts after a wrap drops its leading blanks.
 		static std::vector<UITextLine> BreakLines(ImFont* font, float pixelSize, std::string_view text, float wrapWidth);
 	};
 
 	// One frame of game UI, shared by the runtime and the editor: built and prepared in OnRender (outside the
-	// ImGui frame, with a command list open for texture uploads), drawn in OnImGuiRender.
+	// ImGui frame, with a command list open for texture uploads), drawn in OnImGuiRender. Every step uses the
+	// canvas Build was given, so components and anchored commands agree even while the viewport resizes.
 	class UIFrame
 	{
 	public:
 		// Collects the scene's UI components (when `scene` is set) and then, with `includeImmediate`, this
-		// frame's UI.* commands, laid out for a viewport of `viewportSize` pixels.
+		// frame's UI.* commands, laid out for a viewport of `viewportSize` pixels. Forgets the last
+		// frame's resources: call Prepare before Draw.
 		void Build(Scene* scene, const glm::vec2& viewportSize, bool includeImmediate);
 		void Clear();
 
-		// Loads every font the commands use and looks up every texture with `lookupTexture` (which uploads it
-		// to the GPU on first use). Call outside an ImGui frame: new fonts are added to the atlas.
+		// Loads every font the commands use (before the ImGui frame, so drawing never adds fonts to the atlas
+		// mid-frame) and looks up every texture with `lookupTexture` (which uploads it on first use).
 		template<typename LookupTexture>
 		void Prepare(LookupTexture&& lookupTexture)
 		{
 			LoadFonts();
-			m_Textures.clear();
 			for (const UIDrawCommand& command : m_Commands)
 			{
-				if (command.Kind != UIDrawKind::Image || command.Texture.empty() || m_Textures.contains(command.Texture))
+				if (command.Kind != UIDrawKind::Image || command.Texture.empty() || m_Resources.Textures.contains(command.Texture))
 					continue;
-				if (std::optional<UITexture> texture = lookupTexture(command.Texture))
-					m_Textures.emplace(command.Texture, *texture);
+				if (std::optional<UITexture> texture = lookupTexture(command.Texture); texture && texture->Handle != 0)
+					m_Resources.Textures.emplace(command.Texture, *texture);
 			}
 		}
 
 		void Draw(ImDrawList* drawList, const glm::vec2& origin, const glm::vec2& size) const;
 
 		const std::vector<UIDrawCommand>& GetCommands() const { return m_Commands; }
-		const UITextureMap& GetTextures() const { return m_Textures; }
+		const UIResources& GetResources() const { return m_Resources; }
+		const glm::vec2& GetCanvasSize() const { return m_CanvasSize; }
 
 	private:
-		void LoadFonts() const;
+		void LoadFonts();
 
 	private:
 		std::vector<UIDrawCommand> m_Commands;
-		UITextureMap m_Textures;
+		UIResources m_Resources;
+		glm::vec2 m_CanvasSize = { 1920.0f, 1080.0f };
 	};
 
 }

@@ -9,7 +9,6 @@
 #include "Basalt/Project/Project.h"
 #include "Basalt/Project/SaveData.h"
 #include "Basalt/Renderer/DebugDraw.h"
-#include "Basalt/Scripting/ScriptUI.h"
 #include "Basalt/Scene/ComponentRegistry.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
@@ -18,6 +17,7 @@
 #include "Basalt/Scripting/ScriptEngine.h"
 #include "Basalt/Scripting/ScriptEvents.h"
 #include "Basalt/Scripting/ScriptTasks.h"
+#include "Basalt/Scripting/ScriptUI.h"
 
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/matrix_transform.hpp>

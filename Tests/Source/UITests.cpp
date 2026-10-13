@@ -7,7 +7,6 @@
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
 #include <Basalt/UI/GameUI.h>
-#include <Basalt/UI/TrueTypeValidator.h>
 #include <Basalt/UI/UIFonts.h>
 #include <Basalt/UI/UIGeometry.h>
 #include <Basalt/UI/UILayout.h>
@@ -15,151 +14,20 @@
 #include <Basalt/UI/UIRules.h>
 
 #include "TestUtils.h"
+#include "UITestUtils.h"
 
 #include <imgui.h>
 
 #include <algorithm>
 #include <cfloat>
-#include <cstring>
+#include <cmath>
 #include <limits>
 #include <random>
 #include <string>
 #include <vector>
 
 using namespace Basalt;
-using BasaltTest::Step;
-
-namespace {
-
-	const std::filesystem::path& GetFeatureTestDirectory()
-	{
-		static const std::filesystem::path directory = std::filesystem::path(BASALT_TEST_DATA_DIR) / "FeatureTest";
-		return directory;
-	}
-
-	// The FuzzFont seed with composite glyphs (Karla has none).
-	std::vector<uint8_t> ReadCousine()
-	{
-		std::optional<std::vector<uint8_t>> data = FileSystem::ReadBinaryFile(std::filesystem::path(BASALT_TEST_DATA_DIR) / "../Fuzz/Corpus/FuzzFont/Cousine-Regular.ttf");
-		REQUIRE(data);
-		return *data;
-	}
-
-	std::vector<uint8_t> ReadKarla()
-	{
-		std::optional<std::vector<uint8_t>> data = FileSystem::ReadBinaryFile(GetFeatureTestDirectory() / "Assets/Fonts/Karla-Regular.ttf");
-		REQUIRE(data);
-		return *data;
-	}
-
-	// An ImGui context for font and draw tests: no window or GPU, but the dynamic font atlas works on the CPU
-	// once a renderer claims to handle textures.
-	class ImGuiTestContext
-	{
-	public:
-		ImGuiTestContext()
-		{
-			ImGui::CreateContext();
-			ImGuiIO& io = ImGui::GetIO();
-			io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
-			io.IniFilename = nullptr;
-			io.DisplaySize = ImVec2(1920.0f, 1080.0f);
-			io.DeltaTime = 1.0f / 60.0f;
-		}
-		~ImGuiTestContext()
-		{
-			UIFonts::Clear();
-			ImGui::DestroyContext();
-		}
-
-		ImGuiTestContext(const ImGuiTestContext&) = delete;
-		ImGuiTestContext& operator=(const ImGuiTestContext&) = delete;
-	};
-
-	// Big-endian access into a font file, for tests that corrupt one field.
-	uint16_t ReadU16(const std::vector<uint8_t>& data, size_t at)
-	{
-		return static_cast<uint16_t>((data[at] << 8) | data[at + 1]);
-	}
-
-	uint32_t ReadU32(const std::vector<uint8_t>& data, size_t at)
-	{
-		return (static_cast<uint32_t>(ReadU16(data, at)) << 16) | ReadU16(data, at + 2);
-	}
-
-	void WriteU16(std::vector<uint8_t>& data, size_t at, uint16_t value)
-	{
-		data[at] = static_cast<uint8_t>(value >> 8);
-		data[at + 1] = static_cast<uint8_t>(value & 0xFF);
-	}
-
-	void WriteU32(std::vector<uint8_t>& data, size_t at, uint32_t value)
-	{
-		WriteU16(data, at, static_cast<uint16_t>(value >> 16));
-		WriteU16(data, at + 2, static_cast<uint16_t>(value & 0xFFFF));
-	}
-
-	// Offset of a table in a font file (0 when it has none).
-	size_t FindTable(const std::vector<uint8_t>& data, const char* tag)
-	{
-		const uint16_t tables = ReadU16(data, 4);
-		for (size_t i = 0; i < tables; i++)
-		{
-			const size_t record = 12 + 16 * i;
-			if (std::memcmp(&data[record], tag, 4) == 0)
-				return ReadU32(data, record + 8);
-		}
-		return 0;
-	}
-
-	// Offset of a glyph's data (relative to the file) and its length.
-	std::pair<size_t, size_t> FindGlyph(const std::vector<uint8_t>& data, uint32_t glyph)
-	{
-		const size_t head = FindTable(data, "head");
-		const size_t loca = FindTable(data, "loca");
-		const size_t glyf = FindTable(data, "glyf");
-		const bool longOffsets = ReadU16(data, head + 50) == 1;
-		const auto offset = [&](size_t index) -> size_t { return longOffsets ? ReadU32(data, loca + 4 * index) : size_t{ ReadU16(data, loca + 2 * index) } * 2; };
-		return { glyf + offset(glyph), offset(glyph + 1) - offset(glyph) };
-	}
-
-	uint32_t GlyphCount(const std::vector<uint8_t>& data)
-	{
-		return ReadU16(data, FindTable(data, "maxp") + 4);
-	}
-
-	// First glyph whose contour count passes `predicate` (simple: > 0, composite: < 0).
-	template<typename Predicate>
-	uint32_t FindGlyphWhere(const std::vector<uint8_t>& data, Predicate predicate)
-	{
-		for (uint32_t glyph = 0; glyph < GlyphCount(data); glyph++)
-		{
-			const auto [offset, length] = FindGlyph(data, glyph);
-			if (length >= 10 && predicate(static_cast<int16_t>(ReadU16(data, offset))))
-				return glyph;
-		}
-		FAIL("no such glyph in the font");
-		return 0;
-	}
-
-	bool Contains(const std::string& text, const char* fragment)
-	{
-		return text.find(fragment) != std::string::npos;
-	}
-
-	// Number of log messages containing `fragment`.
-	size_t CountLogMessages(const char* fragment)
-	{
-		size_t count = 0;
-		for (const LogMessage& message : Log::GetHistory().GetAll())
-		{
-			if (Contains(message.Text, fragment))
-				count++;
-		}
-		return count;
-	}
-
-}
+using namespace BasaltTest;
 
 TEST_SUITE("UI")
 {
@@ -179,7 +47,7 @@ TEST_SUITE("UI")
 		rect.Size = { -5.0f, 50.0f };
 		CHECK(GameUI::Submit(rect));
 
-		const std::vector<UIDrawCommand> commands = GameUI::GetCommands();
+		const std::vector<UIDrawCommand> commands = GetImmediateCommands();
 		REQUIRE(commands.size() == 2);
 		CHECK(commands[0].FontSize == UITextComponent::MaxFontSize);
 		CHECK(commands[0].Color == glm::vec4(1.0f, 0.0f, 0.5f, 1.0f));
@@ -380,16 +248,23 @@ TEST_SUITE("UI")
 		UITextComponent& text = entity.AddComponent<UITextComponent>();
 		text.FontSize = 9000.0f;
 		text.HorizontalAlign = static_cast<UIHorizontalAlign>(7);
+		UIImageComponent& image = entity.AddComponent<UIImageComponent>();
+		image.Color = { std::numeric_limits<float>::quiet_NaN(), 2.0f, 0.5f, 1.0f };
 
+		const size_t warnings = CountLogMessages("on 'Broken' has invalid values");
 		const std::vector<UILayoutItem> items = UILayout::Layout(scene, { 1920.0f, 1080.0f });
 		REQUIRE(items.size() == 1);
 		// AnchorMin.y takes its default (0.5) and AnchorMax.x is raised to AnchorMin.x.
 		CHECK(items[0].Rect == UIBox{ { 860.0f, 490.0f }, { 200.0f, 100.0f } });
 		std::vector<UIDrawCommand> commands;
 		UILayout::BuildCommands(scene, { 1920.0f, 1080.0f }, commands);
-		REQUIRE(commands.size() == 1);
-		CHECK(commands[0].FontSize == UITextComponent::MaxFontSize);
-		CHECK(commands[0].Align.x == 0.0f);
+		REQUIRE(commands.size() == 2);
+		CHECK(commands[0].Color == glm::vec4(1.0f, 1.0f, 0.5f, 1.0f)); // NaN takes the default
+		CHECK(commands[1].FontSize == UITextComponent::MaxFontSize);
+		CHECK(commands[1].Align.x == 0.0f);
+		// Each component is reported once (UIRect, UIImage, UIText), however often it is laid out.
+		UILayout::BuildCommands(scene, { 1920.0f, 1080.0f }, commands);
+		CHECK(CountLogMessages("on 'Broken' has invalid values") == warnings + 3);
 	}
 
 	TEST_CASE("UI component rules reject values the layout cannot use")
@@ -442,310 +317,6 @@ TEST_SUITE("UI")
 		CHECK(ValidateUIText(UITextComponent{}).empty());
 	}
 
-	TEST_CASE("The TrueType validator accepts real fonts and names what is wrong with broken ones")
-	{
-		const std::vector<uint8_t> karla = ReadKarla();
-		CHECK(ValidateTrueTypeFont(karla).empty());
-
-		CHECK(Contains(ValidateTrueTypeFont(std::vector<uint8_t>(50, 0)), "too small"));
-		std::vector<uint8_t> junk(4096, 0x41);
-		CHECK(Contains(ValidateTrueTypeFont(junk), "not a TrueType font"));
-		std::vector<uint8_t> cff = karla;
-		std::memcpy(cff.data(), "OTTO", 4);
-		CHECK(Contains(ValidateTrueTypeFont(cff), "CFF"));
-		std::vector<uint8_t> collection = karla;
-		std::memcpy(collection.data(), "ttcf", 4);
-		CHECK(Contains(ValidateTrueTypeFont(collection), "collections"));
-
-		// Truncation cuts tables short.
-		const std::vector<uint8_t> truncated(karla.begin(), karla.begin() + static_cast<std::ptrdiff_t>(karla.size() / 2));
-		const std::string truncatedError = ValidateTrueTypeFont(truncated);
-		CHECK_MESSAGE((Contains(truncatedError, "outside the file") || Contains(truncatedError, "truncated")), truncatedError);
-
-		// A table directory pointing past the end of the file.
-		std::vector<uint8_t> farTable = karla;
-		for (size_t record = 12; record < 12 + 16 * size_t{ ReadU16(farTable, 4) }; record += 16)
-		{
-			if (std::memcmp(&farTable[record], "head", 4) == 0)
-				WriteU32(farTable, record + 8, 0x7FFFFFF0u);
-		}
-		CHECK(Contains(ValidateTrueTypeFont(farTable), "outside the file"));
-
-		// No horizontal metrics.
-		std::vector<uint8_t> noMetrics = karla;
-		WriteU16(noMetrics, FindTable(noMetrics, "hhea") + 34, 0);
-		CHECK(Contains(ValidateTrueTypeFont(noMetrics), "horizontal metrics"));
-
-		// Ascent below descent (ImGui would divide by zero or flip the font).
-		std::vector<uint8_t> flat = karla;
-		WriteU16(flat, FindTable(flat, "hhea") + 4, 0);
-		WriteU16(flat, FindTable(flat, "hhea") + 6, 0);
-		CHECK(Contains(ValidateTrueTypeFont(flat), "ascent"));
-
-		// An unknown loca format.
-		std::vector<uint8_t> badLoca = karla;
-		WriteU16(badLoca, FindTable(badLoca, "head") + 50, 2);
-		CHECK(Contains(ValidateTrueTypeFont(badLoca), "'loca' format"));
-
-		// Glyph problems break only that glyph. A box that ends at the baseline while the outline rises above it
-		// makes stb assert while rasterizing (the outline starts above the bitmap's first row).
-		std::vector<uint8_t> overBaseline = karla;
-		const uint32_t tall = FindGlyphWhere(overBaseline, [](int16_t contours) { return contours > 0; });
-		const size_t tallOffset = FindGlyph(overBaseline, tall).first;
-		REQUIRE(static_cast<int16_t>(ReadU16(overBaseline, tallOffset + 8)) > 0);
-		WriteU16(overBaseline, tallOffset + 4, static_cast<uint16_t>(-300)); // yMin
-		WriteU16(overBaseline, tallOffset + 8, 0);                           // yMax
-		TrueTypeFontCheck check = CheckTrueTypeFont(overBaseline);
-		CHECK(check.Error.empty());
-		REQUIRE(check.BrokenGlyphs.size() == 1);
-		CHECK(check.BrokenGlyphs[0].Index == tall);
-		CHECK(Contains(check.BrokenGlyphs[0].Problem, "rises above the baseline"));
-		CHECK(ValidateTrueTypeFont(overBaseline) == "glyph " + std::to_string(tall) + ": " + check.BrokenGlyphs[0].Problem);
-		// Geometry outside the box elsewhere is clipped by the rasterizer: fine.
-		std::vector<uint8_t> belowBaseline = karla;
-		WriteU16(belowBaseline, tallOffset + 8, 5);
-		CHECK(ValidateTrueTypeFont(belowBaseline).empty());
-
-		// An inverted box would give ImGui a negative bitmap size; an oversized one would not fit the atlas.
-		std::vector<uint8_t> inverted = karla;
-		WriteU16(inverted, tallOffset + 6, static_cast<uint16_t>(static_cast<int16_t>(ReadU16(inverted, tallOffset + 2)) - 1)); // xMax < xMin
-		CHECK(Contains(ValidateTrueTypeFont(inverted), "inverted"));
-		std::vector<uint8_t> huge = karla;
-		WriteU16(huge, tallOffset + 2, static_cast<uint16_t>(-30000));
-		WriteU16(huge, tallOffset + 6, 30000);
-		CHECK(Contains(ValidateTrueTypeFont(huge), "times the line height"));
-
-		// Contour end points out of order.
-		std::vector<uint8_t> unordered = karla;
-		const uint32_t multi = FindGlyphWhere(unordered, [](int16_t contours) { return contours > 1; });
-		WriteU16(unordered, FindGlyph(unordered, multi).first + 12, 0);
-		CHECK(Contains(ValidateTrueTypeFont(unordered), "out of order"));
-
-		// A composite glyph that contains itself would recurse until the stack overflows. (Karla has no
-		// composite glyphs: turn a simple one into a composite of itself.)
-		std::vector<uint8_t> cycle = karla;
-		const uint32_t victim = FindGlyphWhere(cycle, [](int16_t contours) { return contours > 0; });
-		const size_t victimOffset = FindGlyph(cycle, victim).first;
-		WriteU16(cycle, victimOffset, 0xFFFF);                             // numberOfContours = -1
-		WriteU16(cycle, victimOffset + 10, 0x0002);                        // ARGS_ARE_XY_VALUES, byte offsets, last component
-		WriteU16(cycle, victimOffset + 12, static_cast<uint16_t>(victim)); // the component is the glyph itself
-		WriteU16(cycle, victimOffset + 14, 0);
-		CHECK(Contains(ValidateTrueTypeFont(cycle), "form a cycle"));
-
-		// Point matching would make stb assert.
-		std::vector<uint8_t> matching = cycle;
-		WriteU16(matching, victimOffset + 10, 0x0000);
-		CHECK(Contains(ValidateTrueTypeFont(matching), "point matching"));
-
-		// A character mapped past the last glyph.
-		std::vector<uint8_t> badMap = karla;
-		const size_t cmap = FindTable(badMap, "cmap");
-		size_t format4 = 0;
-		for (size_t i = 0; i < ReadU16(badMap, cmap + 2) && format4 == 0; i++)
-		{
-			const size_t subtable = cmap + ReadU32(badMap, cmap + 4 + 8 * i + 4);
-			if (ReadU16(badMap, subtable) == 4)
-				format4 = subtable;
-		}
-		REQUIRE(format4 != 0);
-		const size_t segmentsX2 = ReadU16(badMap, format4 + 6);
-		const size_t startCodes = format4 + 16 + segmentsX2;
-		const size_t deltas = startCodes + segmentsX2;
-		const size_t rangeOffsets = deltas + segmentsX2;
-		REQUIRE(ReadU16(badMap, rangeOffsets) == 0); // the first segment maps through its delta
-		WriteU16(badMap, deltas, static_cast<uint16_t>(GlyphCount(badMap) - ReadU16(badMap, startCodes)));
-		CHECK(Contains(ValidateTrueTypeFont(badMap), "but the font has"));
-	}
-
-	TEST_CASE("Composite glyphs: real ones pass, cycles and runaway transforms break only their glyph")
-	{
-		const std::vector<uint8_t> cousine = ReadCousine();
-		CHECK(ValidateTrueTypeFont(cousine).empty());
-
-		const uint32_t composite = FindGlyphWhere(cousine, [](int16_t contours) { return contours < 0; });
-		const size_t offset = FindGlyph(cousine, composite).first;
-		const uint16_t flags = ReadU16(cousine, offset + 10);
-		REQUIRE((flags & 2) != 0); // positioned by offsets
-
-		std::vector<uint8_t> cycle = cousine;
-		WriteU16(cycle, offset + 12, static_cast<uint16_t>(composite));
-		TrueTypeFontCheck check = CheckTrueTypeFont(cycle);
-		CHECK(check.Error.empty());
-		REQUIRE_FALSE(check.BrokenGlyphs.empty());
-		CHECK(std::ranges::any_of(check.BrokenGlyphs, [&](const auto& glyph) { return glyph.Index == composite && Contains(glyph.Problem, "form a cycle"); }));
-		std::vector<uint8_t> repaired = cycle;
-		CHECK(RepairTrueTypeFont(repaired).empty());
-		CHECK(ValidateTrueTypeFont(repaired).empty());
-
-		// A component moved far away and scaled up would overflow stb's 16-bit vertex coordinates. Rewrite the
-		// first component as: 16-bit offsets (bit 0), positioned by offsets (bit 1), one scale (bit 3), last.
-		REQUIRE(FindGlyph(cousine, composite).second >= 20);
-		std::vector<uint8_t> far = cousine;
-		WriteU16(far, offset + 10, (1 << 0) | (1 << 1) | (1 << 3));
-		WriteU16(far, offset + 14, 32000);  // x offset
-		WriteU16(far, offset + 16, 0);      // y offset
-		WriteU16(far, offset + 18, 0x7FFF); // scale ~2 (F2Dot14)
-		const std::string farError = ValidateTrueTypeFont(far);
-		CHECK_MESSAGE(Contains(farError, "beyond 16-bit coordinates"), farError);
-	}
-
-	TEST_CASE("stb only reads inside the character map of fonts the check accepts")
-	{
-		// Random changes to Karla's format 4 character map (its search parameters, segment ends and starts,
-		// deltas and range offsets). For every changed font the check accepts, ImGui (stb) looks up every 16-bit
-		// codepoint and loads the glyphs of some: an out-of-bounds read there fails under ASan, and a glyph
-		// index past the end makes stb read past the metrics.
-		ImGuiTestContext imgui;
-		const std::vector<uint8_t> karla = ReadKarla();
-		const size_t cmap = FindTable(karla, "cmap");
-		size_t format4 = 0;
-		for (size_t i = 0; i < ReadU16(karla, cmap + 2) && format4 == 0; i++)
-		{
-			const size_t subtable = cmap + ReadU32(karla, cmap + 4 + 8 * i + 4);
-			if (ReadU16(karla, subtable) == 4)
-				format4 = subtable;
-		}
-		REQUIRE(format4 != 0);
-		const size_t length = 16 + 4 * size_t{ ReadU16(karla, format4 + 6) };
-
-		std::mt19937 random(1234);
-		int accepted = 0;
-		int rejected = 0;
-		for (int mutant = 0; mutant < 60; mutant++)
-		{
-			std::vector<uint8_t> font = karla;
-			const int changes = 1 + static_cast<int>(random() % 3);
-			for (int change = 0; change < changes; change++)
-			{
-				const size_t at = format4 + 6 + random() % (length - 6);
-				font[at] = static_cast<uint8_t>(random() % 4 == 0 ? random() : font[at] ^ (1u << (random() % 8)));
-			}
-			std::string error;
-			ImFont* loaded = UIFonts::LoadFromMemory(font, "Mutant", error);
-			if (!loaded)
-			{
-				rejected++;
-				continue;
-			}
-			accepted++;
-			for (uint32_t c = 0; c <= 0xFFFF; c++)
-				loaded->IsGlyphInFont(static_cast<ImWchar>(c));
-			ImFontBaked* baked = loaded->GetFontBaked(20.0f);
-			for (ImWchar c = 32; c < 127; c++)
-				baked->FindGlyph(c);
-		}
-		INFO("accepted ", accepted, ", rejected ", rejected);
-		CHECK(accepted > 5);
-		CHECK(rejected > 5);
-	}
-
-	TEST_CASE("RepairTrueTypeFont blanks broken glyphs so ImGui can load and draw the rest of the font")
-	{
-		ImGuiTestContext imgui;
-		const std::vector<uint8_t> karla = ReadKarla();
-		std::vector<TrueTypeFontCheck::BrokenGlyph> repaired;
-		std::vector<uint8_t> clean = karla;
-		CHECK(RepairTrueTypeFont(clean, &repaired).empty());
-		CHECK(repaired.empty());
-		CHECK(clean == karla);
-
-		// Break every glyph that rises above the baseline (so every letter is broken): one becomes a composite of
-		// itself, the others get a box that ends at the baseline.
-		std::vector<uint8_t> broken = karla;
-		std::vector<uint32_t> victims;
-		for (uint32_t glyph = 0; glyph < GlyphCount(broken); glyph++)
-		{
-			const auto [offset, length] = FindGlyph(broken, glyph);
-			if (length < 16 || static_cast<int16_t>(ReadU16(broken, offset)) <= 0 || static_cast<int16_t>(ReadU16(broken, offset + 8)) <= 0)
-				continue;
-			victims.push_back(glyph);
-			if (victims.size() == 1)
-			{
-				WriteU16(broken, offset, 0xFFFF);
-				WriteU16(broken, offset + 10, 0x0002);
-				WriteU16(broken, offset + 12, static_cast<uint16_t>(glyph));
-				WriteU16(broken, offset + 14, 0);
-				continue;
-			}
-			WriteU16(broken, offset + 4, static_cast<uint16_t>(-300));
-			WriteU16(broken, offset + 8, 0);
-		}
-		REQUIRE(victims.size() > 50);
-
-		CHECK(RepairTrueTypeFont(broken, &repaired).empty());
-		REQUIRE(repaired.size() == victims.size());
-		CHECK(Contains(repaired[0].Problem, "form a cycle"));
-		CHECK(Contains(repaired[1].Problem, "rises above the baseline"));
-		CHECK(ValidateTrueTypeFont(broken).empty());
-		// A blanked glyph has no contours and an empty box.
-		const size_t blankedOffset = FindGlyph(broken, victims[1]).first;
-		for (size_t i = 0; i < 10; i++)
-			CHECK(broken[blankedOffset + i] == 0);
-
-		// The repaired font rasterizes every printable ASCII character at several sizes (stb would assert on
-		// the unrepaired glyph).
-		std::string error;
-		ImFont* font = UIFonts::LoadFromMemory(broken, "Repaired", error);
-		REQUIRE_MESSAGE(font, error);
-		for (float size : { 8.0f, 32.0f, 200.0f })
-		{
-			ImFontBaked* baked = font->GetFontBaked(size);
-			for (ImWchar c = 32; c < 127; c++)
-				baked->FindGlyph(c);
-		}
-		CHECK(font->CalcTextSizeA(32.0f, FLT_MAX, 0.0f, "ABC xyz").x > 0.0f);
-
-		// Font-wide problems cannot be repaired.
-		std::vector<uint8_t> noMetrics = karla;
-		WriteU16(noMetrics, FindTable(noMetrics, "hhea") + 34, 0);
-		CHECK(Contains(RepairTrueTypeFont(noMetrics, &repaired), "horizontal metrics"));
-		CHECK(repaired.empty());
-	}
-
-	TEST_CASE("UIFonts loads project fonts once, falls back to the built-in font and logs each failure once")
-	{
-		ImGuiTestContext imgui;
-		// Loading a game font first still leaves the built-in font as ImGui's default (the atlas's first).
-		std::string firstError;
-		REQUIRE(UIFonts::LoadFromMemory(ReadKarla(), "Karla", firstError));
-		CHECK(ImGui::GetIO().Fonts->Fonts[0] != ImGui::GetIO().Fonts->Fonts.back());
-		ImFont* builtIn = UIFonts::GetDefault();
-		CHECK(builtIn == ImGui::GetIO().Fonts->Fonts[0]);
-		REQUIRE(builtIn);
-		CHECK(UIFonts::Get("") == builtIn);
-
-		std::string error;
-		ImFont* karla = UIFonts::LoadFromMemory(ReadKarla(), "Karla", error);
-		REQUIRE_MESSAGE(karla, error);
-		const float karlaWidth = karla->CalcTextSizeA(40.0f, FLT_MAX, 0.0f, "Hello").x;
-		CHECK(karlaWidth > 0.0f);
-		CHECK(karlaWidth != builtIn->CalcTextSizeA(40.0f, FLT_MAX, 0.0f, "Hello").x);
-		CHECK_FALSE(UIFonts::LoadFromMemory(std::vector<uint8_t>(200, 0), "Junk", error));
-		CHECK(Contains(error, "not a TrueType font"));
-
-		BasaltTest::TempProject project("UIFonts");
-		const std::vector<uint8_t> data = ReadKarla();
-		REQUIRE(FileSystem::WriteBinaryFile(project.GetDirectory() / "Assets/Fonts/Karla.ttf", data.data(), data.size()));
-		ImFont* loaded = UIFonts::Get("Assets/Fonts/Karla.ttf");
-		CHECK(loaded != builtIn);
-		CHECK(UIFonts::Get("Assets/Fonts/../Fonts/Karla.ttf") == loaded); // one entry per file
-		CHECK(UIFonts::GetError("Assets/Fonts/Karla.ttf").empty());
-
-		const size_t before = CountLogMessages("Missing.ttf");
-		CHECK(UIFonts::Get("Assets/Fonts/Missing.ttf") == builtIn);
-		CHECK(UIFonts::Get("Assets/Fonts/Missing.ttf") == builtIn);
-		CHECK(CountLogMessages("Missing.ttf") == before + 1);
-		CHECK(Contains(UIFonts::GetError("Assets/Fonts/Missing.ttf"), "could not be read"));
-
-		REQUIRE(FileSystem::WriteTextFile(project.GetDirectory() / "Assets/Fonts/Fake.ttf", std::string(500, 'x')));
-		CHECK(UIFonts::Get("Assets/Fonts/Fake.ttf") == builtIn);
-		CHECK(Contains(UIFonts::GetError("Assets/Fonts/Fake.ttf"), "not a TrueType font"));
-
-		// Clearing forgets failures, so a fixed file loads.
-		UIFonts::Clear();
-		CHECK(UIFonts::GetError("Assets/Fonts/Missing.ttf").empty());
-	}
-
 	TEST_CASE("BreakLines breaks at newlines and between words, without trailing blanks")
 	{
 		ImGuiTestContext imgui;
@@ -754,83 +325,169 @@ TEST_SUITE("UI")
 		REQUIRE_MESSAGE(font, error);
 		const float size = 32.0f;
 		const auto width = [&](const char* text) { return font->CalcTextSizeA(size, FLT_MAX, 0.0f, text).x; };
+		const auto texts = [](const std::vector<UITextLine>& lines) {
+			std::vector<std::string> result;
+			for (const UITextLine& line : lines)
+				result.emplace_back(line.Text);
+			return result;
+		};
 
 		std::vector<UITextLine> lines = UIRenderer::BreakLines(font, size, "Score\nLives   \n", 0.0f);
-		REQUIRE(lines.size() == 3);
-		CHECK(lines[0].Text == "Score");
+		CHECK(texts(lines) == std::vector<std::string>{ "Score", "Lives", "" });
 		CHECK(lines[0].Width == doctest::Approx(width("Score")));
-		CHECK(lines[1].Text == "Lives");
 		CHECK(lines[1].Width == doctest::Approx(width("Lives")));
-		CHECK(lines[2].Text.empty());
+		// Carriage returns count as trailing blanks.
+		CHECK(texts(UIRenderer::BreakLines(font, size, "a\r\nb", 0.0f)) == std::vector<std::string>{ "a", "b" });
 
-		lines = UIRenderer::BreakLines(font, size, "Hello world again", width("Hello world") + 2.0f);
-		REQUIRE(lines.size() == 2);
-		CHECK(lines[0].Text == "Hello world");
-		CHECK(lines[1].Text == "again");
+		CHECK(texts(UIRenderer::BreakLines(font, size, "Hello world again", width("Hello world") + 2.0f)) == std::vector<std::string>{ "Hello world", "again" });
+		// Regression: a wrap at the blanks before a newline used to leave an empty line.
+		CHECK(texts(UIRenderer::BreakLines(font, size, "ab \ncd", (width("ab") + width("ab ")) * 0.5f)) == std::vector<std::string>{ "ab", "cd" });
 
 		// No wrapping without a width, however long the line.
 		CHECK(UIRenderer::BreakLines(font, size, "Hello world again", 0.0f).size() == 1);
-		// A width too small for anything still makes progress.
-		lines = UIRenderer::BreakLines(font, size, "ab", 0.5f);
-		CHECK(lines.size() == 2);
+		// A width too small for anything still makes progress, one whole character (not byte) at a time.
+		CHECK(texts(UIRenderer::BreakLines(font, size, "ab", 0.5f)) == std::vector<std::string>{ "a", "b" });
+		CHECK(texts(UIRenderer::BreakLines(font, size, "\xC3\xA9\xC3\xA9", 0.5f)) == std::vector<std::string>{ "\xC3\xA9", "\xC3\xA9" });
 		CHECK(UIRenderer::BreakLines(font, size, "", 100.0f).size() == 1);
 	}
 
-	TEST_CASE("UIRenderer draws rects, images, nine-slice panels and aligned text into a draw list")
+	TEST_CASE("UIRenderer draws rects, images, nine-slice panels and aligned text where the canvas maps them")
 	{
 		ImGuiTestContext imgui;
 		ImGui::NewFrame();
+		ImGuiTestContext::MarkTexturesUploaded();
 		ImDrawList* drawList = ImGui::GetForegroundDrawList();
+		UIResources resources;
+		resources.Textures["Panel.png"] = UITexture{ 0x1234, { 32.0f, 32.0f } };
 
-		UITextureMap textures;
-		textures["Panel.png"] = UITexture{ 0x1234, { 32.0f, 32.0f } };
-
-		std::vector<UIDrawCommand> commands(4);
-		commands[0].Kind = UIDrawKind::Rect;
-		commands[0].Position = { 0.0f, 0.0f };
-		commands[0].Size = { 100.0f, 100.0f };
-		commands[1].Kind = UIDrawKind::Image;
-		commands[1].Texture = "Panel.png";
-		commands[1].Size = { 200.0f, 100.0f };
-		commands[1].Slice = { 8.0f, 8.0f, 8.0f, 8.0f };
-		commands[2].Kind = UIDrawKind::Image;
-		commands[2].Texture = "Missing.png"; // not resolved: filled with the color
-		commands[2].Size = { 50.0f, 50.0f };
-		commands[3].Kind = UIDrawKind::Text;
-		commands[3].Text = "Right";
-		commands[3].Position = { 1000.0f, 500.0f };
-		commands[3].Size = { 400.0f, 100.0f };
-		commands[3].Align = { 1.0f, 1.0f };
-		commands[3].Shadow = false;
-
-		// The 1920x1080 canvas drawn at half size: canvas units map to half a pixel.
-		const int vertexCountBefore = drawList->VtxBuffer.Size;
-		UIRenderer::Draw(drawList, { 0.0f, 0.0f }, { 960.0f, 540.0f }, commands, textures);
-
-		int panelVertices = 0;
-		for (const ImDrawCmd& command : drawList->CmdBuffer)
+		// The 1920x1080 canvas drawn at half size, at an offset: canvas (x, y) lands on (300 + x/2, 200 + y/2).
+		const glm::vec2 origin(300.0f, 200.0f);
+		const glm::vec2 size(960.0f, 540.0f);
+		const glm::vec2 canvas(1920.0f, 1080.0f);
+		struct Drawn
 		{
-			// TexRef, not GetTexID(): the font atlas was never uploaded (there is no GPU), which GetTexID asserts.
-			if (command.TexRef._TexData == nullptr && command.TexRef._TexID == static_cast<ImTextureID>(0x1234))
-				panelVertices += static_cast<int>(command.ElemCount);
-		}
-		CHECK(panelVertices == 9 * 6); // nine patches, two triangles each
+			std::vector<ImDrawVert> Vertices;
+			std::vector<ImDrawCmd> Commands;
+			glm::vec2 Min{ FLT_MAX };
+			glm::vec2 Max{ -FLT_MAX };
+		};
+		const auto draw = [&](const UIDrawCommand& command) {
+			const int firstVertex = drawList->VtxBuffer.Size;
+			const int firstCommand = drawList->CmdBuffer.Size;
+			UIRenderer::Draw(drawList, origin, size, canvas, std::span(&command, 1), resources);
+			// Drawing text can grow the atlas into new textures.
+			ImGuiTestContext::MarkTexturesUploaded();
+			Drawn drawn;
+			for (int i = firstVertex; i < drawList->VtxBuffer.Size; i++)
+			{
+				const ImDrawVert& vertex = drawList->VtxBuffer[i];
+				drawn.Vertices.push_back(vertex);
+				drawn.Min = glm::min(drawn.Min, glm::vec2(vertex.pos.x, vertex.pos.y));
+				drawn.Max = glm::max(drawn.Max, glm::vec2(vertex.pos.x, vertex.pos.y));
+			}
+			for (int i = std::max(firstCommand - 1, 0); i < drawList->CmdBuffer.Size; i++)
+				drawn.Commands.push_back(drawList->CmdBuffer[i]);
+			return drawn;
+		};
 
-		// The text's glyphs end at the box's bottom-right corner (1400, 600 canvas = 700, 300 pixels).
-		float maxX = 0.0f;
-		float minX = FLT_MAX;
-		for (int i = vertexCountBefore + 4 + 9 * 4 + 4; i < drawList->VtxBuffer.Size; i++)
+		UIDrawCommand rect;
+		rect.Kind = UIDrawKind::Rect;
+		rect.Position = { 100.0f, 50.0f };
+		rect.Size = { 200.0f, 100.0f };
+		Drawn drawn = draw(rect);
+		CHECK(drawn.Min == glm::vec2(350.0f, 225.0f));
+		CHECK(drawn.Max == glm::vec2(450.0f, 275.0f));
+		// Clipped to the viewport.
+		CHECK(std::ranges::any_of(drawn.Commands, [&](const ImDrawCmd& command) { return command.ClipRect.x == origin.x && command.ClipRect.y == origin.y && command.ClipRect.z == origin.x + size.x && command.ClipRect.w == origin.y + size.y; }));
+
+		// An anchored command is placed on the canvas width it is drawn with.
+		UIDrawCommand anchored = rect;
+		anchored.Anchor = anchored.Pivot = { 1.0f, 1.0f };
+		anchored.Position = { 0.0f, 0.0f };
+		drawn = draw(anchored);
+		CHECK(drawn.Max == origin + size);
+
+		UIDrawCommand panel;
+		panel.Kind = UIDrawKind::Image;
+		panel.Texture = "Panel.png";
+		panel.Size = { 200.0f, 100.0f };
+		panel.Slice = { 8.0f, 8.0f, 8.0f, 8.0f };
+		drawn = draw(panel);
+		int panelIndices = 0;
+		for (const ImDrawCmd& command : drawn.Commands)
 		{
-			maxX = std::max(maxX, drawList->VtxBuffer[i].pos.x);
-			minX = std::min(minX, drawList->VtxBuffer[i].pos.x);
+			if (command.GetTexID() == static_cast<ImTextureID>(0x1234))
+				panelIndices += static_cast<int>(command.ElemCount);
 		}
-		CHECK(maxX <= 700.5f);
-		CHECK(maxX > 680.0f);
-		CHECK(minX > 600.0f);
+		CHECK(panelIndices == 9 * 6); // nine patches, two triangles each
+		CHECK(drawn.Min == origin);
+		CHECK(drawn.Max == origin + glm::vec2(100.0f, 50.0f));
+
+		// An image whose texture did not resolve is filled with its color: one quad, no texture of its own.
+		UIDrawCommand missing = panel;
+		missing.Texture = "Missing.png";
+		drawn = draw(missing);
+		CHECK(drawn.Vertices.size() == 4);
+		CHECK(std::ranges::none_of(drawn.Commands, [](const ImDrawCmd& command) { return command.GetTexID() == static_cast<ImTextureID>(0x1234); }));
+
+		// Text aligned to the bottom-right corner of its box (1000..1400, 500..600 on the canvas).
+		UIDrawCommand text;
+		text.Kind = UIDrawKind::Text;
+		text.Text = "Right";
+		text.Position = { 1000.0f, 500.0f };
+		text.Size = { 400.0f, 100.0f };
+		text.Align = { 1.0f, 1.0f };
+		text.Shadow = false;
+		drawn = draw(text);
+		const glm::vec2 corner = origin + glm::vec2(700.0f, 300.0f);
+		// (Glyph quads carry up to a pixel of padding.)
+		CHECK(drawn.Max.x <= corner.x + 1.5f);
+		CHECK(drawn.Max.x > corner.x - 10.0f);
+		CHECK(drawn.Max.y <= corner.y + 1.5f);
+		CHECK(drawn.Max.y > corner.y - 16.0f); // glyphs end at the descent, above the line's bottom
+		CHECK(drawn.Min.x > origin.x + 600.0f);
+
+		// Two centered lines: the block is centered in the box (and so is each line).
+		text.Text = "One\nTwo";
+		text.Align = { 0.5f, 0.5f };
+		text.FontSize = 40.0f;
+		drawn = draw(text);
+		const glm::vec2 center = origin + glm::vec2(600.0f, 275.0f);
+		CHECK((drawn.Min.x + drawn.Max.x) * 0.5f == doctest::Approx(center.x).epsilon(0.02));
+		CHECK(drawn.Min.y >= center.y - 21.5f); // 2 lines of 20 pixels
+		CHECK(drawn.Max.y <= center.y + 21.5f);
+
+		// Text is capped at MaxTextPixelSize physical pixels: 512 display units on a 2x display (a 512-unit
+		// font on a canvas drawn at 2x would be 1024).
+		ImGui::GetIO().DisplayFramebufferScale = ImVec2(2.0f, 2.0f);
+		UIDrawCommand huge;
+		huge.Kind = UIDrawKind::Text;
+		huge.Text = "I";
+		huge.FontSize = UITextComponent::MaxFontSize;
+		huge.Shadow = false;
+		const int firstVertex = drawList->VtxBuffer.Size;
+		UIRenderer::Draw(drawList, { 0.0f, 0.0f }, { 3840.0f, 2160.0f }, canvas, std::span(&huge, 1), resources);
+		float top = FLT_MAX;
+		float bottom = -FLT_MAX;
+		for (int i = firstVertex; i < drawList->VtxBuffer.Size; i++)
+		{
+			top = std::min(top, drawList->VtxBuffer[i].pos.y);
+			bottom = std::max(bottom, drawList->VtxBuffer[i].pos.y);
+		}
+		CHECK(bottom - top > 200.0f);
+		CHECK(bottom - top <= UIRenderer::MaxTextPixelSize / 2.0f);
+		ImGui::GetIO().DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
+		ImGuiTestContext::MarkTexturesUploaded();
+
+		// A shadow doubles the glyphs.
+		text.Text = "Shadow";
+		const size_t plain = draw(text).Vertices.size();
+		text.Shadow = true;
+		CHECK(draw(text).Vertices.size() == 2 * plain);
 		ImGui::EndFrame();
 	}
 
-	TEST_CASE("UIFrame puts UI components under this frame's immediate commands and resolves each texture once")
+	TEST_CASE("UIFrame puts UI components under this frame's immediate commands and resolves each resource once")
 	{
 		ImGuiTestContext imgui;
 		Scene scene;
@@ -840,6 +497,8 @@ TEST_SUITE("UI")
 		Entity label = scene.CreateEntity("Label");
 		label.AddComponent<UIRectComponent>();
 		label.AddComponent<UITextComponent>().Font = "Assets/Fonts/Missing.ttf";
+		Entity broken = scene.CreateEntity("Broken");
+		broken.AddComponent<UIImageComponent>().Texture = "Assets/Textures/Broken.png";
 
 		GameUI::BeginFrame();
 		UIDrawCommand overlay;
@@ -848,31 +507,37 @@ TEST_SUITE("UI")
 		REQUIRE(GameUI::Submit(overlay));
 
 		UIFrame frame;
-		frame.Build(&scene, { 1920.0f, 1080.0f }, true);
-		REQUIRE(frame.GetCommands().size() == 3);
+		frame.Build(&scene, { 800.0f, 600.0f }, true);
+		CHECK(frame.GetCanvasSize() == glm::vec2(1440.0f, 1080.0f));
+		REQUIRE(frame.GetCommands().size() == 4);
 		CHECK(frame.GetCommands()[0].Kind == UIDrawKind::Image);
 		CHECK(frame.GetCommands()[1].Kind == UIDrawKind::Text);
-		CHECK(frame.GetCommands()[2].Texture == overlay.Texture);
+		CHECK(frame.GetCommands()[3].Texture == overlay.Texture);
 
-		int lookups = 0;
+		std::vector<std::string> lookups;
 		const size_t missingFontErrors = CountLogMessages("Missing.ttf");
 		frame.Prepare([&](const std::string& path) -> std::optional<UITexture> {
-			lookups++;
-			CHECK(path == "Assets/Textures/Panel.png");
+			lookups.push_back(path);
+			if (path == "Assets/Textures/Broken.png")
+				return UITexture{ 0, { 16.0f, 16.0f } }; // an invalid handle counts as missing
 			return UITexture{ 7, { 16.0f, 16.0f } };
 		});
-		CHECK(lookups == 1);
-		CHECK(frame.GetTextures().at("Assets/Textures/Panel.png").Handle == 7);
-		// Fonts load (and fail) while preparing, outside the ImGui frame.
+		CHECK(lookups == std::vector<std::string>{ "Assets/Textures/Panel.png", "Assets/Textures/Broken.png" });
+		CHECK(frame.GetResources().Textures.at("Assets/Textures/Panel.png").Handle == 7);
+		CHECK_FALSE(frame.GetResources().Textures.contains("Assets/Textures/Broken.png"));
+		// Fonts load (and fail, falling back to the built-in one) while preparing, outside the ImGui frame.
 		CHECK(CountLogMessages("Missing.ttf") == missingFontErrors + 1);
+		CHECK(frame.GetResources().Fonts.at("Assets/Fonts/Missing.ttf") == UIFonts::GetDefault());
 
+		// Building again forgets the last frame's resources.
 		frame.Build(&scene, { 1920.0f, 1080.0f }, false);
-		CHECK(frame.GetCommands().size() == 2);
+		CHECK(frame.GetCommands().size() == 3);
+		CHECK(frame.GetResources().Textures.empty());
+		CHECK(frame.GetResources().Fonts.empty());
 		frame.Build(nullptr, { 1920.0f, 1080.0f }, true);
 		CHECK(frame.GetCommands().size() == 1);
 		frame.Clear();
 		CHECK(frame.GetCommands().empty());
-		CHECK(frame.GetTextures().empty());
 		GameUI::BeginFrame();
 	}
 
@@ -895,7 +560,7 @@ TEST_SUITE("UI")
 		CHECK(BasaltTest::Eval(scene, "UI.Image('Assets/Textures/Panel.png', 0, 0, 64, 64, Vec4(1, 1, 1, 0.5))") == "");
 		CHECK(BasaltTest::Eval(scene, "UI.Image('Assets/Textures/Panel.png', 0, 0, 64, 64, { Slice = Vec4(4, 5, 6, 7), SliceScale = 2, Tint = Vec4(0, 1, 0, 1), Anchor = 'Center' })") == "");
 
-		const std::vector<UIDrawCommand> commands = GameUI::GetCommands();
+		const std::vector<UIDrawCommand> commands = GetImmediateCommands();
 		REQUIRE(commands.size() == 7);
 		CHECK(commands[0].Kind == UIDrawKind::Text);
 		CHECK(commands[0].FontSize == 40.0f);
@@ -907,6 +572,8 @@ TEST_SUITE("UI")
 		CHECK_FALSE(commands[1].Shadow);
 		CHECK(commands[1].Wrap);
 		CHECK(commands[1].Size == glm::vec2(300.0f, 0.0f));
+		// Width makes a box whose right edge sits on the anchored point.
+		CHECK(ResolveUIBox(commands[1], { 1920.0f, 1080.0f }) == UIBox{ { 1600.0f, 1060.0f }, { 300.0f, 0.0f } });
 		CHECK(commands[2].Anchor == glm::vec2(0.5f, 0.25f));
 		CHECK(commands[2].Align == glm::vec2(1.0f, 1.0f));
 		CHECK(commands[3].Kind == UIDrawKind::Rect);
@@ -934,16 +601,221 @@ TEST_SUITE("UI")
 			{ "UI.Text('x', 0, 0, 20, Vec4(1), 'Middle')", "align must be" },
 			{ "UI.Text('x', 0, 0, { Size = 20 }, Vec4(1))", "either an options table" },
 			{ "UI.Text('x', 0, 0, 'big')", "a size or an options table" },
-			{ "UI.Text('x', 0/0, 0)", "must be finite" },
+			{ "UI.Text('x', 0/0, 0)", "UI.Text: x must be between" },
 			{ "UI.Rect(0, 0, 1, 1, 'red')", "Vec4 color or an options table" },
 			{ "UI.Rect(0, 0, 1, 1, { Tint = Vec4(1) })", "unknown option 'Tint'" },
 			{ "UI.Image('', 0, 0, 1, 1)", "texture path is empty" },
 			{ "UI.Image('a.png', 0, 0, 1, 1, { Slice = 4 })", "option 'Slice' must be a Vec4" },
 			{ "UI.Image('a.png', 0, 0, 1, 1, { [1] = 4 })", "option keys must be names" },
-			{ "UI.GetRect(nil)", "" },
+			{ "UI.GetRect(nil)", "stack index 1" },
+			// Values outside what the UI components accept are errors, not silently clamped.
+			{ "UI.Text('x', 0, 0, 1000)", "UI.Text: size must be between 4 and 512 (got 1000)" },
+			{ "UI.Text('x', 0, 0, { Size = 2 })", "Size must be between 4 and 512" },
+			{ "UI.Text('x', 0, 0, 20, Vec4(0/0, 1, 1, 1))", "color.x must be between 0 and 1" },
+			{ "UI.Text('x', 0, 0, { Color = Vec4(2, 1, 1, 1) })", "Color.x must be between 0 and 1" },
+			{ "UI.Text('x', 0, 0, { Width = 1e7 })", "option 'Width' must be positive and at most" },
+			{ "UI.Text('x', 3e38, 0)", "x must be between -1000000 and 1000000" },
+			{ "UI.Rect(0, 0, -1, 1)", "width must be between 0 and" },
+			{ "UI.Rect(0, 0, 1, 3e38)", "height must be between 0 and" },
+			{ "UI.Rect(0, 0, 1, 1, { Anchor = Vec2(1e38, 0) })", "Anchor.x must be between 0 and 1" },
+			{ "UI.Rect(0, 0, 1, 1, { Pivot = Vec2(0, 2) })", "Pivot.y must be between 0 and 1" },
+			{ "UI.Image('a.png', 0, 0, 1, 1, { Slice = Vec4(-1, 0, 0, 0) })", "Slice.x must be between 0 and" },
+			{ "UI.Image('a.png', 0, 0, 1, 1, { SliceScale = 0 })", "SliceScale must be between" },
+			{ "UI.Image('a.png', 0, 0, 1, 1, Vec4(1, 1, 1, 1.5))", "color.w must be between 0 and 1" },
 		};
 		BasaltTest::CheckLuaErrors(*scene.GetScriptEngine(), errors);
-		scene.OnRuntimeStop();
+		// None of the failed calls queued anything.
+		CHECK(GameUI::GetCommandCount() == 7);
+
+		// A full queue is a Lua error too (a runaway loop), rather than UI silently missing.
 		GameUI::BeginFrame();
+		std::string result;
+		CHECK_FALSE(scene.GetScriptEngine()->ExecuteString("for i = 1, 70000 do UI.Rect(0, 0, 1, 1) end", result));
+		CHECK(Contains(result, "UI.Rect: more than 65536 UI commands this frame"));
+		CHECK(GameUI::GetCommandCount() == GameUI::MaxCommands);
+		scene.OnRuntimeStop();
+		// Stopping (and starting) play clears the immediate-mode UI.
+		CHECK(GameUI::GetCommandCount() == 0);
+	}
+
+	TEST_CASE("Starting play clears the previous session's immediate-mode UI")
+	{
+		GameUI::BeginFrame();
+		REQUIRE(GameUI::Submit(UIDrawCommand{}));
+		Scene scene;
+		scene.OnRuntimeStart();
+		CHECK(GameUI::GetCommandCount() == 0);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("GameUI ignores viewport sizes that are not positive and finite")
+	{
+		GameUI::SetViewportSize({ 800.0f, 600.0f });
+		GameUI::SetViewportSize({ 0.0f, 600.0f });
+		GameUI::SetViewportSize({ std::numeric_limits<float>::infinity(), 600.0f });
+		GameUI::SetViewportSize({ 800.0f, std::numeric_limits<float>::quiet_NaN() });
+		CHECK(GameUI::GetViewportSize() == glm::vec2(800.0f, 600.0f));
+		GameUI::SetViewportSize({ 1920.0f, 1080.0f });
+	}
+
+	TEST_CASE("SanitizeUIDrawCommand keeps every box finite")
+	{
+		UIDrawCommand command;
+		command.Position = { 3e38f, -3e38f };
+		command.Size = { 3e38f, -5.0f };
+		command.Anchor = { 1e38f, -2.0f };
+		command.Pivot = { 2.0f, 0.5f };
+		command.Align = { -1.0f, 3.0f };
+		command.Color = { std::numeric_limits<float>::quiet_NaN(), 2.0f, -1.0f, 0.5f };
+		command.Slice = { -1.0f, 1e9f, 4.0f, 0.0f };
+		command.SliceScale = 0.0f;
+		command.FontSize = std::numeric_limits<float>::infinity();
+		REQUIRE(SanitizeUIDrawCommand(command));
+		constexpr float limit = UIRectComponent::MaxMagnitude;
+		CHECK(command.Position == glm::vec2(limit, -limit));
+		CHECK(command.Size == glm::vec2(limit, 0.0f));
+		CHECK(command.Anchor == glm::vec2(1.0f, 0.0f));
+		CHECK(command.Pivot == glm::vec2(1.0f, 0.5f));
+		CHECK(command.Align == glm::vec2(0.0f, 1.0f));
+		CHECK(command.Color == glm::vec4(1.0f, 1.0f, 0.0f, 0.5f));
+		CHECK(command.Slice == glm::vec4(0.0f, UIImageComponent::MaxSlice, 4.0f, 0.0f));
+		CHECK(command.SliceScale == UIImageComponent::MinSliceScale);
+		CHECK(command.FontSize == UITextComponent::DefaultFontSize);
+		const UIBox box = ResolveUIBox(command, { 1e6f, 1080.0f });
+		CHECK(std::isfinite(box.Min.x));
+		CHECK(std::isfinite(box.Min.y));
+
+		UIDrawCommand broken;
+		broken.Pivot = { std::numeric_limits<float>::quiet_NaN(), 0.0f };
+		CHECK_FALSE(SanitizeUIDrawCommand(broken));
+	}
+
+	TEST_CASE("Text alignment maps to fractions of the free space")
+	{
+		CHECK(UIAlignFraction(UIHorizontalAlign::Left) == 0.0f);
+		CHECK(UIAlignFraction(UIHorizontalAlign::Center) == 0.5f);
+		CHECK(UIAlignFraction(UIHorizontalAlign::Right) == 1.0f);
+		CHECK(UIAlignFraction(UIVerticalAlign::Top) == 0.0f);
+		CHECK(UIAlignFraction(UIVerticalAlign::Middle) == 0.5f);
+		CHECK(UIAlignFraction(UIVerticalAlign::Bottom) == 1.0f);
+
+		Scene scene;
+		Entity entity = scene.CreateEntity("Label");
+		entity.AddComponent<UITextComponent>(UITextComponent{ .HorizontalAlign = UIHorizontalAlign::Right, .VerticalAlign = UIVerticalAlign::Middle });
+		std::vector<UIDrawCommand> commands;
+		UILayout::BuildCommands(scene, { 1920.0f, 1080.0f }, commands);
+		REQUIRE(commands.size() == 1);
+		CHECK(commands[0].Align == glm::vec2(1.0f, 0.5f));
+	}
+
+	TEST_CASE("Validating a UI component accepts exactly what sanitizing leaves unchanged")
+	{
+		std::mt19937 random(42);
+		const float values[] = { 0.0f, 0.25f, 1.0f, -0.5f, 1.5f, 3e6f, -3e6f, 600.0f, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity() };
+		const auto pick = [&] { return values[random() % std::size(values)]; };
+		for (int i = 0; i < 500; i++)
+		{
+			UIRectComponent rect{ .AnchorMin = { pick(), pick() }, .AnchorMax = { pick(), pick() }, .Pivot = { pick(), pick() }, .Position = { pick(), pick() }, .Size = { pick(), pick() } };
+			INFO("UIRect ", i);
+			const UIRectComponent repairedRect = SanitizeUIRect(rect);
+			CHECK(ValidateUIRect(rect).empty() == (repairedRect == rect));
+			CHECK(ValidateUIRect(repairedRect).empty());
+
+			UIImageComponent image{ .Color = { pick(), pick(), pick(), pick() }, .Slice = { pick(), pick(), pick(), pick() }, .SliceScale = pick() };
+			const UIImageComponent repairedImage = SanitizeUIImage(image);
+			CHECK(ValidateUIImage(image).empty() == (repairedImage == image));
+			CHECK(ValidateUIImage(repairedImage).empty());
+
+			UITextComponent text{ .FontSize = pick() * 100.0f, .Color = { pick(), pick(), pick(), pick() } };
+			const UITextComponent repairedText = SanitizeUIText(text);
+			CHECK(ValidateUIText(text).empty() == (repairedText == text));
+			CHECK(ValidateUIText(repairedText).empty());
+		}
+	}
+
+	TEST_CASE("UI.GetRect and the layout agree on every rect of a random hierarchy")
+	{
+		std::mt19937 random(7);
+		const float anchors[] = { 0.0f, 0.25f, 0.5f, 1.0f };
+		for (int round = 0; round < 20; round++)
+		{
+			Scene scene;
+			std::vector<Entity> entities;
+			for (int i = 0; i < 30; i++)
+			{
+				Entity parent = entities.empty() || random() % 4 == 0 ? Entity{} : entities[random() % entities.size()];
+				Entity entity = parent ? scene.CreateChildEntity(parent, "E") : scene.CreateEntity("E");
+				switch (random() % 4)
+				{
+					case 0:
+						break; // no UI component: passes its parent's rect on
+					case 1:
+						entity.AddComponent<UITextComponent>();
+						break;
+					default:
+					{
+						UIRectComponent rect;
+						rect.Visible = random() % 5 != 0;
+						rect.AnchorMin = { anchors[random() % 2], anchors[random() % 2] };
+						rect.AnchorMax = { anchors[2 + random() % 2], anchors[2 + random() % 2] };
+						rect.Pivot = { anchors[random() % 4], anchors[random() % 4] };
+						rect.Position = { static_cast<float>(random() % 200) - 100.0f, static_cast<float>(random() % 200) - 100.0f };
+						rect.Size = { static_cast<float>(random() % 400) - 100.0f, static_cast<float>(random() % 400) - 100.0f };
+						entity.AddComponent<UIRectComponent>(rect);
+						break;
+					}
+				}
+				entities.push_back(entity);
+			}
+			const glm::vec2 canvas(1920.0f, 1080.0f);
+			const std::vector<UILayoutItem> items = UILayout::Layout(scene, canvas);
+			for (const UILayoutItem& item : items)
+				CHECK(UILayout::GetRect(scene, item.Owner, canvas) == item.Rect);
+			for (Entity entity : entities)
+			{
+				const bool laidOut = std::ranges::any_of(items, [&](const UILayoutItem& item) { return item.Owner == entity; });
+				CHECK(laidOut == UILayout::GetRect(scene, entity, canvas).has_value());
+			}
+		}
+	}
+
+	TEST_CASE("Anchor presets change how a rect follows its parent, never where it is")
+	{
+		const UIBox parent{ { 100.0f, 50.0f }, { 800.0f, 600.0f } };
+		const UIRectComponent rects[] = {
+			{},
+			{ .AnchorMin = { 0.0f, 0.0f }, .AnchorMax = { 1.0f, 1.0f }, .Size = { -48.0f, -48.0f } },
+			{ .AnchorMin = { 0.0f, 1.0f }, .AnchorMax = { 1.0f, 1.0f }, .Pivot = { 0.5f, 1.0f }, .Position = { 10.0f, -8.0f }, .Size = { 0.0f, 64.0f } },
+			{ .AnchorMin = { 1.0f, 0.0f }, .AnchorMax = { 1.0f, 0.0f }, .Pivot = { 1.0f, 0.0f }, .Position = { -20.0f, 20.0f }, .Size = { 360.0f, 120.0f } },
+		};
+		std::vector<std::string_view> presets(GetUIAnchorPresetNames().begin(), GetUIAnchorPresetNames().end());
+		presets.push_back("Stretch");
+		for (const UIRectComponent& rect : rects)
+		{
+			const UIBox current = ComputeUIRect(parent, rect);
+			for (std::string_view preset : presets)
+			{
+				INFO("preset ", std::string(preset));
+				const std::optional<UIRectComponent> changed = ApplyUIAnchorPreset(rect, preset, parent, current);
+				REQUIRE(changed);
+				const UIBox after = ComputeUIRect(parent, *changed);
+				CHECK(after.Min.x == doctest::Approx(current.Min.x));
+				CHECK(after.Min.y == doctest::Approx(current.Min.y));
+				CHECK(after.Size.x == doctest::Approx(current.Size.x));
+				CHECK(after.Size.y == doctest::Approx(current.Size.y));
+				CHECK(ValidateUIRect(*changed).empty());
+			}
+		}
+		// A point preset pins anchors and pivot to the point; Stretch spans the parent.
+		const std::optional<UIRectComponent> corner = ApplyUIAnchorPreset(rects[1], "BottomRight", parent, ComputeUIRect(parent, rects[1]));
+		REQUIRE(corner);
+		CHECK(corner->AnchorMin == glm::vec2(1.0f, 1.0f));
+		CHECK(corner->AnchorMax == glm::vec2(1.0f, 1.0f));
+		CHECK(corner->Pivot == glm::vec2(1.0f, 1.0f));
+		CHECK(corner->Size == glm::vec2(752.0f, 552.0f)); // the stretched rect keeps its size
+		const std::optional<UIRectComponent> stretched = ApplyUIAnchorPreset(rects[0], "Stretch", parent, ComputeUIRect(parent, rects[0]));
+		REQUIRE(stretched);
+		CHECK(stretched->AnchorMax == glm::vec2(1.0f, 1.0f));
+		CHECK_FALSE(ApplyUIAnchorPreset(rects[0], "Middle", parent, parent));
 	}
 }

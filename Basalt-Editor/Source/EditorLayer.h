@@ -58,6 +58,8 @@ namespace Basalt {
 		void HandleShortcuts();
 
 		void DrawEditorOverlays();
+		// Play mode proper: the game's camera and its immediate-mode UI (not edit mode, not simulate).
+		bool IsGameRunning() const { return m_Session.IsPlaying() && !m_Session.IsSimulating(); }
 		// Outlines every UI rect over the viewport (the selected entity's with its pivot and anchors).
 		void DrawUIBounds(const glm::vec2& origin, const glm::vec2& size);
 		void HandleViewportClick(const glm::vec2& mouse);

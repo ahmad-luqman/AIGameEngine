@@ -18,6 +18,7 @@
 	{ "id": "storage-check", "command": "lua.exec", "params": { "code": "SceneSwitchTest.CheckSaved()" } },
 	{ "id": "storage-stop", "command": "play.stop" },
 	{ "id": "switch-reopen", "command": "scene.open", "params": { "path": "Assets/Scenes/FeatureTest.bscene" } },
+	{ "id": "ui-layout", "command": "ui.layout", "params": { "width": 1280, "height": 720 } },
 	{ "id": "render-scale-info", "command": "project.info" },
 	{ "id": "render-scale-range", "command": "project.set", "params": { "renderScale": 4 }, "expectError": "'renderScale' must be in" },
 	{ "id": "dynamic-resolution-type", "command": "project.set", "params": { "dynamicResolution": "on" }, "expectError": "'dynamicResolution' must be true or false" },

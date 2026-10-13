@@ -1,8 +1,7 @@
 #include "Basalt/UI/UIDrawCommand.h"
 
-#include "Basalt/Scene/Components.h"
+#include "Basalt/UI/UIRules.h"
 
-#include <algorithm>
 #include <cmath>
 
 namespace Basalt {
@@ -20,17 +19,11 @@ namespace Basalt {
 			return true;
 		}
 
-		// Non-finite values become `fallback`, the rest are clamped.
-		float Clamp(float value, float min, float max, float fallback)
-		{
-			return std::isfinite(value) ? std::clamp(value, min, max) : fallback;
-		}
-
 		template<glm::length_t L>
-		void Clamp(glm::vec<L, float, glm::defaultp>& value, float min, float max, float fallback)
+		void Clamp(glm::vec<L, float, glm::defaultp>& value, float min, float max, const glm::vec<L, float, glm::defaultp>& fallback)
 		{
 			for (glm::length_t i = 0; i < L; i++)
-				value[i] = Clamp(value[i], min, max, fallback);
+				value[i] = ClampOrFallback(value[i], min, max, fallback[i]);
 		}
 
 	}
@@ -44,12 +37,17 @@ namespace Basalt {
 	{
 		if (!IsFinite(command.Anchor) || !IsFinite(command.Position) || !IsFinite(command.Size) || !IsFinite(command.Pivot))
 			return false;
-		command.Size = glm::max(command.Size, glm::vec2(0.0f));
-		Clamp(command.Color, 0.0f, 1.0f, 1.0f);
-		Clamp(command.Slice, 0.0f, UIImageComponent::MaxSlice, 0.0f);
-		command.SliceScale = Clamp(command.SliceScale, 1e-3f, UIImageComponent::MaxSliceScale, 1.0f);
-		command.FontSize = Clamp(command.FontSize, UITextComponent::MinFontSize, UITextComponent::MaxFontSize, 32.0f);
-		Clamp(command.Align, 0.0f, 1.0f, 0.0f);
+		const UIDrawCommand defaults;
+		constexpr float limit = UIRectComponent::MaxMagnitude;
+		Clamp(command.Position, -limit, limit, defaults.Position);
+		Clamp(command.Size, 0.0f, limit, defaults.Size);
+		Clamp(command.Anchor, 0.0f, 1.0f, defaults.Anchor);
+		Clamp(command.Pivot, 0.0f, 1.0f, defaults.Pivot);
+		Clamp(command.Align, 0.0f, 1.0f, defaults.Align);
+		Clamp(command.Color, 0.0f, 1.0f, defaults.Color);
+		Clamp(command.Slice, 0.0f, UIImageComponent::MaxSlice, defaults.Slice);
+		command.SliceScale = ClampOrFallback(command.SliceScale, UIImageComponent::MinSliceScale, UIImageComponent::MaxSliceScale, defaults.SliceScale);
+		command.FontSize = ClampOrFallback(command.FontSize, UITextComponent::MinFontSize, UITextComponent::MaxFontSize, defaults.FontSize);
 		return true;
 	}
 

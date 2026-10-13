@@ -1,7 +1,12 @@
 #include "Basalt/UI/UILayout.h"
 
+#include "Basalt/Core/Log.h"
 #include "Basalt/Scene/Scene.h"
 #include "Basalt/UI/UIRules.h"
+
+#include <algorithm>
+#include <mutex>
+#include <unordered_set>
 
 namespace Basalt {
 
@@ -12,14 +17,33 @@ namespace Basalt {
 			return entity.HasComponent<UIRectComponent>() || entity.HasComponent<UIImageComponent>() || entity.HasComponent<UITextComponent>();
 		}
 
-		// The entity's rect inside `parent`, or nullopt when its UIRect hides it (and its subtree).
-		std::optional<UIBox> RectInParent(Entity entity, const UIBox& parent)
+		// The registry rejects invalid values, so only C++ code writing a component directly produces them.
+		// The layout draws repaired values and says so, once per entity, component and problem.
+		template<typename T>
+		T Repaired(Entity entity, const T& component, T (*sanitize)(T), std::string (*validate)(const T&), const char* name)
+		{
+			T repaired = sanitize(component);
+			if (repaired == component)
+				return repaired;
+			static std::mutex s_Mutex;
+			static std::unordered_set<std::string> s_Reported;
+			const std::string problem = validate(component);
+			std::scoped_lock lock(s_Mutex);
+			// Bounded, so a long session with many broken entities cannot grow it without end.
+			if (s_Reported.size() < 1024 && s_Reported.insert(fmt::format("{}/{}/{}", static_cast<uint64_t>(entity.GetUUID()), name, problem)).second)
+				BS_CORE_WARN("UILayout: the {} on '{}' has invalid values ({}); drawing corrected ones", name, entity.GetName(), problem);
+			return repaired;
+		}
+
+		// The entity's rect inside `parent`, or nullopt when its UIRect hides it (and its subtree), unless
+		// `ignoreVisibility`.
+		std::optional<UIBox> RectInParent(Entity entity, const UIBox& parent, bool ignoreVisibility = false)
 		{
 			const auto* component = entity.TryGetComponent<UIRectComponent>();
 			if (!component)
 				return parent;
-			const UIRectComponent rect = SanitizeUIRect(*component);
-			if (!rect.Visible)
+			const UIRectComponent rect = Repaired(entity, *component, &SanitizeUIRect, &ValidateUIRect, "UIRect");
+			if (!rect.Visible && !ignoreVisibility)
 				return std::nullopt;
 			return ComputeUIRect(parent, rect);
 		}
@@ -40,14 +64,46 @@ namespace Basalt {
 			}
 		}
 
-		float HorizontalAlign(UIHorizontalAlign align)
+		// The draw commands of one laid-out entity: its image, then its text.
+		void AppendCommands(const UILayoutItem& item, std::vector<UIDrawCommand>& out)
 		{
-			return static_cast<float>(align) * 0.5f;
+			if (const auto* component = item.Owner.TryGetComponent<UIImageComponent>())
+			{
+				const UIImageComponent image = Repaired(item.Owner, *component, &SanitizeUIImage, &ValidateUIImage, "UIImage");
+				UIDrawCommand& command = out.emplace_back();
+				command.Kind = UIDrawKind::Image;
+				command.Position = item.Rect.Min;
+				command.Size = item.Rect.Size;
+				command.Color = image.Color;
+				command.Texture = image.Texture;
+				command.Slice = image.Slice;
+				command.SliceScale = image.SliceScale;
+			}
+			if (const auto* component = item.Owner.TryGetComponent<UITextComponent>())
+			{
+				const UITextComponent text = Repaired(item.Owner, *component, &SanitizeUIText, &ValidateUIText, "UIText");
+				UIDrawCommand& command = out.emplace_back();
+				command.Kind = UIDrawKind::Text;
+				command.Position = item.Rect.Min;
+				command.Size = item.Rect.Size;
+				command.Color = text.Color;
+				command.Text = text.Text;
+				command.Font = text.Font;
+				command.FontSize = text.FontSize;
+				command.Align = { UIAlignFraction(text.HorizontalAlign), UIAlignFraction(text.VerticalAlign) };
+				command.Wrap = text.Wrap;
+				command.Shadow = text.Shadow;
+			}
 		}
 
-		float VerticalAlign(UIVerticalAlign align)
+		// The entity's ancestors, root first.
+		std::vector<Entity> GetAncestors(Entity entity)
 		{
-			return static_cast<float>(align) * 0.5f;
+			std::vector<Entity> ancestors;
+			for (Entity current = entity.GetParent(); current; current = current.GetParent())
+				ancestors.push_back(current);
+			std::reverse(ancestors.begin(), ancestors.end());
+			return ancestors;
 		}
 
 	}
@@ -68,37 +124,6 @@ namespace Basalt {
 		return items;
 	}
 
-	void UILayout::AppendCommands(const UILayoutItem& item, std::vector<UIDrawCommand>& out)
-	{
-		if (const auto* component = item.Owner.TryGetComponent<UIImageComponent>())
-		{
-			const UIImageComponent image = SanitizeUIImage(*component);
-			UIDrawCommand& command = out.emplace_back();
-			command.Kind = UIDrawKind::Image;
-			command.Position = item.Rect.Min;
-			command.Size = item.Rect.Size;
-			command.Color = image.Color;
-			command.Texture = image.Texture;
-			command.Slice = image.Slice;
-			command.SliceScale = image.SliceScale;
-		}
-		if (const auto* component = item.Owner.TryGetComponent<UITextComponent>())
-		{
-			const UITextComponent text = SanitizeUIText(*component);
-			UIDrawCommand& command = out.emplace_back();
-			command.Kind = UIDrawKind::Text;
-			command.Position = item.Rect.Min;
-			command.Size = item.Rect.Size;
-			command.Color = text.Color;
-			command.Text = text.Text;
-			command.Font = text.Font;
-			command.FontSize = text.FontSize;
-			command.Align = { HorizontalAlign(text.HorizontalAlign), VerticalAlign(text.VerticalAlign) };
-			command.Wrap = text.Wrap;
-			command.Shadow = text.Shadow;
-		}
-	}
-
 	void UILayout::BuildCommands(Scene& scene, const glm::vec2& canvasSize, std::vector<UIDrawCommand>& out)
 	{
 		for (const UILayoutItem& item : Layout(scene, canvasSize))
@@ -109,15 +134,23 @@ namespace Basalt {
 	{
 		if (!entity || entity.GetScene() != &scene || !HasUIComponent(entity))
 			return std::nullopt;
-
-		// Root first, then down to the entity.
-		std::vector<Entity> chain;
-		for (Entity current = entity; current; current = current.GetParent())
-			chain.push_back(current);
-
 		std::optional<UIBox> rect = UIBox{ { 0.0f, 0.0f }, canvasSize };
-		for (auto it = chain.rbegin(); it != chain.rend() && rect; ++it)
-			rect = RectInParent(*it, *rect);
+		for (Entity ancestor : GetAncestors(entity))
+		{
+			rect = RectInParent(ancestor, *rect);
+			if (!rect)
+				return std::nullopt;
+		}
+		return RectInParent(entity, *rect);
+	}
+
+	UIBox UILayout::GetParentRect(Scene& scene, Entity entity, const glm::vec2& canvasSize)
+	{
+		UIBox rect{ { 0.0f, 0.0f }, canvasSize };
+		if (!entity || entity.GetScene() != &scene)
+			return rect;
+		for (Entity ancestor : GetAncestors(entity))
+			rect = *RectInParent(ancestor, rect, true);
 		return rect;
 	}
 

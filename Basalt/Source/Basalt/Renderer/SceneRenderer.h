@@ -116,7 +116,8 @@ namespace Basalt {
 
 		// A project image for the game UI, uploaded on the given open command list on first use. UI textures
 		// are linear (UNORM): the UI draws display-referred colors into the UNORM swapchain, so the image's
-		// bytes must reach it unconverted. nullopt (logged by AssetManager) when the image does not load.
+		// bytes must reach it unconverted. nullopt when the image does not load (logged once by AssetManager, or
+		// by RenderResources when the GPU texture cannot be created).
 		std::optional<UITexture> GetUITexture(const std::string& path, nvrhi::ICommandList* commandList);
 
 		// Draws the output image stretched over the target framebuffer.
