@@ -91,12 +91,13 @@ namespace Basalt {
 			if (!visible)
 				continue;
 			// Conservative projected sphere area. Orthographic size ignores depth; perspective uses the
-			// nearest sphere depth. The full-screen cap makes nearby screen-filling lights tie by UUID/type.
+			// nearest sphere depth. Project the diameter, then cap at the viewport's two NDC units so
+			// screen-filling lights tie by UUID/type regardless of extra influence outside the viewport.
 			const double depth = -static_cast<double>((view * glm::vec4(center, 1.0f)).z);
 			const double radius = boundsRadius;
 			const double denominator = IsOrthographic(projection) ? 1.0 : std::max(depth - radius, 0.001);
-			const double width = std::min(2.0, std::abs(static_cast<double>(projection[0][0])) * radius / denominator);
-			const double height = std::min(2.0, std::abs(static_cast<double>(projection[1][1])) * radius / denominator);
+			const double width = std::min(2.0, std::abs(static_cast<double>(projection[0][0])) * (2.0 * radius) / denominator);
+			const double height = std::min(2.0, std::abs(static_cast<double>(projection[1][1])) * (2.0 * radius) / denominator);
 			const double importance = width * height;
 			if (std::isfinite(importance) && importance > 0.0)
 				candidates.push_back({ &request, importance, direction });
