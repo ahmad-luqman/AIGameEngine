@@ -291,6 +291,23 @@ namespace Basalt {
 			return {};
 		}
 
+		// A replay's "view" event (AutomationSession::RecordInput): the host view the recording had from then on.
+		void ApplyViewEvent(const json& params)
+		{
+			const auto readVec2 = [&params](const char* name, glm::vec2& out) {
+				const auto it = params.find(name);
+				return it != params.end() && it->is_array() && it->size() == 2 && JsonToFloat((*it)[0], out.x) && JsonToFloat((*it)[1], out.y);
+			};
+			GameUI::HostState view;
+			if (!readVec2("origin", view.ViewportOrigin))
+				throw CommandError("'origin' must be [x, y]");
+			if (!readVec2("size", view.ViewportSize) || !(view.ViewportSize.x > 0.0f && view.ViewportSize.y > 0.0f))
+				throw CommandError("'size' must be [width, height] with positive values");
+			view.PointerEnabled = OptionalBool(params, "pointerEnabled", true);
+			view.NavigationEnabled = OptionalBool(params, "navigationEnabled", true);
+			GameUI::SetHostState(view);
+		}
+
 		// Validates the whole request before changing anything, so a bad one leaves the gamepad as it was (and is not
 		// recorded half-applied).
 		void ApplyGamepadInput(const json& params)
@@ -929,7 +946,7 @@ namespace Basalt {
 				return result;
 			});
 
-			Add(registry, "replay.record_start", "Starts recording input.key/input.mouse/input.gamepad commands with the play frame they arrive on. The mouse position and the injected gamepads (with what they hold) are recorded as they are on that frame. Physical gamepads are not recorded (replays run without them): they are listed in physicalGamepads.", {}, [](AutomationSession& session, const json&) {
+			Add(registry, "replay.record_start", "Starts recording input.key/input.mouse/input.gamepad commands with the play frame they arrive on. The mouse position and the injected gamepads (with what they hold) are recorded as they are on that frame, and the host's view (where mouse positions land on the UI canvas) whenever it changes, so replays map them the same way in any host. Physical gamepads are not recorded (replays run without them): they are listed in physicalGamepads.", {}, [](AutomationSession& session, const json&) {
 				session.StartRecording();
 				json physical = json::array();
 				for (uint32_t index = 0; index < Input::MaxGamepads; index++)
@@ -963,7 +980,7 @@ namespace Basalt {
 				return json{ { "path", path }, { "events", events.size() }, { "frames", frames } };
 			});
 
-			Add(registry, "replay.run", "Restarts play from the edit scene, re-applies a replay's inputs on their frames, and returns the state hash. Play keeps running afterwards for inspection.",
+			Add(registry, "replay.run", "Restarts play from the edit scene with no input held, re-applies a replay's inputs (and recorded host views) on their frames without physical gamepads, and returns the state hash. Play keeps running afterwards for inspection; the host view and gamepads are restored.",
 				{ { "path", "string, replay file" }, { "frames", "integer, default: the recorded length" }, { "assertNoErrors", "bool" }, { "assertHash", "bool: fail unless the final state hash equals the recorded one" } }, [](AutomationSession& session, const json& params) {
 					RequireProject();
 					const std::string path = ProjectRelative(RequireString(params, "path"));
@@ -989,9 +1006,9 @@ namespace Basalt {
 
 					session.StopPlay();
 					// A replay starts from no input (whether or not play was running): no keys or buttons held, no mouse
-					// position, no injected gamepads. It runs with the headless view whatever the host (mouse positions
-					// are canvas units, widgets always take input) and with only the gamepads it injects, so it plays the
-					// same in the editor.
+					// position, no injected gamepads. It runs with the view it recorded ("view" events; the headless view
+					// for recordings without one) whatever the host, and with only the gamepads it injects, so it plays
+					// the same in the editor and headless.
 					Input::Reset();
 					Input::ResetMousePosition();
 					Input::ForgetInjectedGamepads();
@@ -1028,6 +1045,8 @@ namespace Basalt {
 									ApplyMouseInput(eventParams);
 								else if (command == "input.gamepad")
 									ApplyGamepadInput(eventParams);
+								else if (command == "view")
+									ApplyViewEvent(eventParams);
 								else
 									throw CommandError("unknown command '" + command + "'");
 							}

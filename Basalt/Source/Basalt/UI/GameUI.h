@@ -75,6 +75,8 @@ namespace Basalt {
 			glm::vec2 ViewportSize = { 1920.0f, 1080.0f };
 			bool PointerEnabled = true;
 			bool NavigationEnabled = true;
+
+			bool operator==(const HostState&) const = default;
 		};
 		static HostState GetHostState();
 		// Sets every field at once (an origin or size that is not usable is ignored, like its setter).

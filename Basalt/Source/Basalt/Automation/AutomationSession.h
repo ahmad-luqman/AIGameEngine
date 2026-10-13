@@ -2,6 +2,7 @@
 
 #include "Basalt/Core/Base.h"
 #include "Basalt/Core/UUID.h"
+#include "Basalt/UI/GameUI.h"
 
 #include <nlohmann/json.hpp>
 
@@ -52,6 +53,9 @@ namespace Basalt {
 		// them on the same frames of a fresh play session reproduces the run.
 		void StartRecording();
 		bool IsRecording() const { return m_Recording.is_array(); }
+		// Records an input command on the current play frame. Before it, when the host's view (GameUI::HostState: where
+		// the mouse maps onto the canvas, and whether widgets take input) differs from the last one recorded, a "view"
+		// event records it, so a replay maps the recorded mouse positions the same way in any host.
 		void RecordInput(const std::string& command, const nlohmann::json& params);
 		// Seed of the first play session the recording saw (Scene::GetRandomSeed), if any: replays must run
 		// with it, whatever the project's seed was changed to since.
@@ -80,6 +84,8 @@ namespace Basalt {
 		// Array of { "frame", "command", "params" } while recording, null otherwise.
 		nlohmann::json m_Recording;
 		std::optional<uint32_t> m_RecordingSeed;
+		// The host view the recording last recorded.
+		std::optional<GameUI::HostState> m_RecordedView;
 	};
 
 }

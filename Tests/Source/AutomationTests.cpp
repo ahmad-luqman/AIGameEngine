@@ -502,7 +502,8 @@ TEST_SUITE("Automation")
 		Run(registry, session, "input.key", { { "key", "Right" }, { "down", false } });
 		const json live = Run(registry, session, "play.step", { { "frames", 5 }, { "hash", true } });
 		const json saved = Run(registry, session, "replay.record_stop", { { "path", "Replays/Test.breplay" } });
-		CHECK(saved["events"] == 4);
+		// The four keys and the view they were made in.
+		CHECK(saved["events"] == 5);
 		CHECK(saved["frames"] == 16);
 
 		const json first = Run(registry, session, "replay.run", { { "path", "Replays/Test.breplay" }, { "assertHash", true } });
@@ -778,7 +779,8 @@ TEST_SUITE("Automation")
 		CHECK(item["widget"]["target"] == 0);
 
 		const json saved = Run(registry, session, "replay.record_stop", { { "path", "Replays/Pad.breplay" } });
-		CHECK(saved["events"] == 6);
+		// Six gamepad events and the view.
+		CHECK(saved["events"] == 7);
 		// The replay starts without the injected gamepad (still connected here) and connects it on its frame.
 		CHECK(Input::IsGamepadConnected(1));
 		const json replayed = Run(registry, session, "replay.run", { { "path", "Replays/Pad.breplay" }, { "assertHash", true }, { "assertNoErrors", true } });
@@ -853,6 +855,45 @@ TEST_SUITE("Automation")
 		// Stopping play forgets injected gamepads.
 		Run(registry, session, "play.stop");
 		CHECK_FALSE(Input::IsGamepadConnected(2));
+	}
+
+	TEST_CASE("A replay maps mouse positions through the view it was recorded in")
+	{
+		BasaltTest::TempProject temp("AutomationReplayView");
+		CommandRegistry registry;
+		AutomationSession session;
+		Input::ForgetInjectedGamepads();
+		Run(registry, session, "asset.write", { { "path", "Assets/Scripts/Count.lua" }, { "content", R"(
+			local C = {}
+			function C:OnClick() self.Entity.Translation = self.Entity.Translation + Vec3(1, 0, 0) end
+			return C
+		)" } });
+		// A button at (1000, 500) - (1200, 600) on the canvas.
+		Run(registry, session, "entity.create", { { "name", "Button" }, { "components", { { "UIRect", { { "AnchorMin", { 0, 0 } }, { "AnchorMax", { 0, 0 } }, { "Pivot", { 0, 0 } }, { "Position", { 1000, 500 } }, { "Size", { 200, 100 } } } }, { "UIButton", json::object() }, { "Script", { { "Script", "Assets/Scripts/Count.lua" } } } } } });
+
+		// Recorded in an editor-like view: a 960 x 540 panel at (100, 50), half scale. Canvas (1100, 550) is window
+		// (650, 325), which on the headless canvas is outside the button.
+		GameUI::SetHostState({ { 100.0f, 50.0f }, { 960.0f, 540.0f }, true, true });
+		Run(registry, session, "play.start");
+		Run(registry, session, "replay.record_start");
+		Run(registry, session, "input.mouse", { { "position", { 650, 325 } }, { "button", "Left" }, { "down", true } });
+		Run(registry, session, "play.step", { { "frames", 1 } });
+		Run(registry, session, "input.mouse", { { "button", "Left" }, { "down", false } });
+		const json live = Run(registry, session, "play.step", { { "frames", 2 }, { "hash", true } });
+		Run(registry, session, "replay.record_stop", { { "path", "Replays/View.breplay" } });
+		CHECK(Run(registry, session, "lua.exec", { { "code", "return Scene.FindEntityByName('Button').Translation.x" } })["result"] == "1.0");
+
+		// Replayed headless: the recorded view applies, the click lands, and the host's view comes back.
+		GameUI::SetHostState({});
+		const json replayed = Run(registry, session, "replay.run", { { "path", "Replays/View.breplay" }, { "assertHash", true }, { "assertNoErrors", true } });
+		CHECK(replayed["stateHash"] == live["stateHash"]);
+		CHECK(GameUI::GetHostState() == GameUI::HostState{});
+
+		// A bad view event is an error naming the event.
+		const json bad = { { "Format", "BasaltReplay" }, { "Version", 1 }, { "Frames", 1 }, { "RandomSeed", Project::GetActiveRandomSeed() }, { "Events", json::array({ { { "frame", 0 }, { "command", "view" }, { "params", { { "origin", { 0, 0 } }, { "size", { 0, 100 } } } } } }) } };
+		Run(registry, session, "asset.write", { { "path", "Replays/BadView.breplay" }, { "content", bad.dump() } });
+		CHECK(RunError(registry, session, "replay.run", { { "path", "Replays/BadView.breplay" } }).find("event 0 (frame 0, view): 'size' must be [width, height] with positive values") != std::string::npos);
+		Run(registry, session, "play.stop");
 	}
 
 	TEST_CASE("ui.layout reports widgets with several widget components or a missing target")

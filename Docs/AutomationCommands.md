@@ -339,7 +339,7 @@ Returns the scene renderer's statistics: viewport and render size, render scale 
 
 ### `replay.record_start`
 
-Starts recording input.key/input.mouse/input.gamepad commands with the play frame they arrive on. The mouse position and the injected gamepads (with what they hold) are recorded as they are on that frame. Physical gamepads are not recorded (replays run without them): they are listed in physicalGamepads.
+Starts recording input.key/input.mouse/input.gamepad commands with the play frame they arrive on. The mouse position and the injected gamepads (with what they hold) are recorded as they are on that frame, and the host's view (where mouse positions land on the UI canvas) whenever it changes, so replays map them the same way in any host. Physical gamepads are not recorded (replays run without them): they are listed in physicalGamepads.
 
 ### `replay.record_stop`
 
@@ -351,7 +351,7 @@ Stops recording and writes the replay file (project-relative path, e.g. 'Replays
 
 ### `replay.run`
 
-Restarts play from the edit scene, re-applies a replay's inputs on their frames, and returns the state hash. Play keeps running afterwards for inspection.
+Restarts play from the edit scene with no input held, re-applies a replay's inputs (and recorded host views) on their frames without physical gamepads, and returns the state hash. Play keeps running afterwards for inspection; the host view and gamepads are restored.
 
 | Parameter | Type / description |
 |-----------|--------------------|
