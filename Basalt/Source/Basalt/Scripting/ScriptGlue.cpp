@@ -1,7 +1,9 @@
 #include "Basalt/Scripting/ScriptGlue.h"
 
+#include "Basalt/Audio/AudioRules.h"
 #include "Basalt/Audio/AudioSystem.h"
 #include "Basalt/Core/Assert.h"
+#include "Basalt/Core/EnumNames.h"
 #include "Basalt/Core/Input.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Particles/ParticleSystem.h"
@@ -324,14 +326,19 @@ namespace Basalt {
 			return *audio;
 		}
 
-		AudioBus ParseAudioBus(const std::string& name)
+		AudioBus ParseAudioBus(const char* function, const std::string& name)
 		{
-			for (size_t i = 0; i < AudioBusCount; i++)
-			{
-				if (name == AudioBusNames[i])
-					return static_cast<AudioBus>(i);
-			}
-			throw std::runtime_error(fmt::format("unknown audio bus '{}' (valid: {})", name, fmt::join(AudioBusNames, ", ")));
+			if (const std::optional<AudioBus> bus = EnumFromName<AudioBus>(AudioBusNames, name))
+				return *bus;
+			throw std::runtime_error(fmt::format("{}: unknown audio bus '{}' (valid: {})", function, name, fmt::join(AudioBusNames, ", ")));
+		}
+
+		// A linear gain (see IsValidAudioVolume): checked here so a script gets an error at the call.
+		float RequireAudioVolume(const char* function, float volume)
+		{
+			if (!IsValidAudioVolume(volume))
+				throw std::runtime_error(std::string(function) + ": volume must be a finite number >= 0");
+			return volume;
 		}
 
 		ParticleSystem& RequireParticles(ScriptContext& context)
@@ -701,16 +708,15 @@ namespace Basalt {
 			sol::table audio = lua.create_named_table("Audio");
 			audio["PlayOneShot"] = [&context](const std::string& clip, sol::optional<glm::vec3> position, sol::optional<float> volume, sol::optional<std::string> bus) {
 				const glm::vec3* positionPointer = position ? &*position : nullptr;
-				const AudioBus target = bus ? ParseAudioBus(*bus) : AudioBus::SFX;
-				return RequireAudio(context).PlayOneShot(clip, positionPointer, volume.value_or(1.0f), target);
+				const float gain = RequireAudioVolume("Audio.PlayOneShot", volume.value_or(1.0f));
+				const AudioBus target = bus ? ParseAudioBus("Audio.PlayOneShot", *bus) : AudioBus::SFX;
+				return RequireAudio(context).PlayOneShot(clip, positionPointer, gain, target);
 			};
 			audio["SetBusVolume"] = [&context](const std::string& bus, float volume) {
-				const AudioBus target = ParseAudioBus(bus);
-				if (!std::isfinite(volume) || volume < 0.0f)
-					throw std::runtime_error("Audio.SetBusVolume: volume must be a finite number of at least 0");
-				RequireAudio(context).SetBusVolume(target, volume);
+				const AudioBus target = ParseAudioBus("Audio.SetBusVolume", bus);
+				RequireAudio(context).SetBusVolume(target, RequireAudioVolume("Audio.SetBusVolume", volume));
 			};
-			audio["GetBusVolume"] = [&context](const std::string& bus) { return RequireAudio(context).GetBusVolume(ParseAudioBus(bus)); };
+			audio["GetBusVolume"] = [&context](const std::string& bus) { return RequireAudio(context).GetBusVolume(ParseAudioBus("Audio.GetBusVolume", bus)); };
 
 			sol::table log = lua.create_named_table("Log");
 			log["Trace"] = [](sol::variadic_args args) { BS_TRACE("{}", JoinArguments(args)); };

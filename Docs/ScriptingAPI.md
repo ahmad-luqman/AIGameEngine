@@ -797,19 +797,26 @@ whose data could crash the font rasterizer draw blank, with a warning (also show
 
 An `AudioSource` component plays a project-relative clip (WAV, FLAC or MP3) while the scene plays: from
 the start with `PlayOnStart`, or when a script calls `e:PlayAudio()` (which restarts it from the beginning).
-`Volume` and `Pitch` (2 = twice as fast and an octave higher) are read when the clip starts. `Spatial`
-sources are positioned at the entity and fade with distance from the listener (the first active
-`AudioListener`, or the primary camera): full volume up to `MinDistance`, then
-`MinDistance / distance`, no quieter beyond `MaxDistance`.
+Every field is read when the clip starts; changes apply on the next `e:PlayAudio()`. `PlayOnStart` sources
+start sounding right after the scripts' `OnCreate` (they already report `e:IsAudioPlaying()` there), so
+volumes a script sets in `OnCreate` apply from the first sample.
 
-`Stream = true` decodes the clip a second at a time while it plays instead of loading it whole: use it for
-music and long ambience. Other clips are decoded once and shared by every sound that plays them.
+| Field | Meaning |
+|-------|---------|
+| `Volume` | Linear gain: a finite number >= 0 (0 = silent, 1 = unchanged, above 1 amplifies) |
+| `Pitch` | Playback speed, a finite number > 0 (2 = twice as fast and an octave higher) |
+| `Spatial` | Positioned at the entity, panned by direction and faded with distance from the listener (the first active `AudioListener`, or the primary camera) |
+| `MinDistance`, `MaxDistance` | Full volume up to `MinDistance` (> 0), then `MinDistance / distance`, no quieter beyond `MaxDistance` (>= `MinDistance`; equal distances turn fading off) |
+| `Bus` | `"Master"`, `"Music"`, `"SFX"` (default) or `"UI"` (see Mixer buses) |
+| `Stream` | Decode the clip a second at a time while it plays instead of loading it whole: for music and long ambience |
 
-**Mixer buses.** Every sound plays through a bus: `Music`, `SFX` (the default) or `UI`, which all feed
-`Master`. A sound's level is its own volume times its bus's volume times `Master`'s. Pick an
-`AudioSource`'s bus with its `Bus` field, a one-shot's with the last argument of `Audio.PlayOneShot`.
-Bus volumes belong to the play session: each starts at 1 when play starts, keeps its value through
-`Scene.Load` and is forgotten when play stops, so apply saved settings in `OnCreate`:
+Clips that are not streamed are decoded when they load and shared while any sound uses them. Invalid values
+are rejected with an error by `SetComponent`, scene files and the automation API.
+
+**Mixer buses.** Every sound plays through a bus: `Music`, `SFX` or `UI`, which all feed `Master` (a source
+can also play on `Master` directly). A sound's level is its own volume times its bus's volume times
+`Master`'s. Bus volumes belong to the play session: each starts at 1 when play starts, keeps its value
+through `Scene.Load` and is forgotten when play stops, so apply saved settings in `OnCreate`:
 
 ```lua
 function Menu:OnCreate()
@@ -822,10 +829,12 @@ function Menu:OnMusicVolumeChanged(slider, value) -- a UISlider's OnValueChanged
 end
 ```
 
-- `Audio.PlayOneShot(clip [, position [, volume [, bus]]])` — fire and forget (3D when a position is given;
-  pass `nil` to skip it). Returns false when the clip cannot be loaded. One-shots are never streamed
+- `Audio.PlayOneShot(clip [, position [, volume [, bus]]])` — fire and forget, on `bus` (default `"SFX"`);
+  3D when a position is given (pass `nil` to skip it). Returns false when the clip cannot be loaded or
+  audio is unavailable. One-shots are never streamed.
 - `Audio.SetBusVolume(bus, volume)`, `Audio.GetBusVolume(bus)` — `bus` is `"Master"`, `"Music"`, `"SFX"` or
-  `"UI"`; `volume` is a linear gain (0 = silent, 1 = unchanged, above 1 amplifies) and must not be negative
+  `"UI"`; `volume` is a linear gain like `Volume`.
+- An unknown bus name or a volume that is negative or not finite raises an error.
 
 ## Debug drawing, time, logging, game
 

@@ -1,5 +1,7 @@
 #include "Basalt/Scene/ComponentRegistry.h"
 
+#include "Basalt/Audio/AudioRules.h"
+#include "Basalt/Core/EnumNames.h"
 #include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Particles/ParticleEmitterRules.h"
@@ -12,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <iterator>
+#include <optional>
 #include <stdexcept>
 #include <unordered_set>
 #include <utility>
@@ -140,11 +143,8 @@ namespace Basalt {
 				if (!element.is_string())
 					throw std::runtime_error(std::string("field '") + name + "' must be a string");
 				const std::string text = element.get<std::string>();
-				for (size_t i = 0; i < N; i++)
-				{
-					if (text == names[i])
-						return static_cast<E>(i);
-				}
+				if (const std::optional<E> value = EnumFromName<E>(names, text))
+					return *value;
 				std::string valid;
 				for (size_t i = 0; i < N; i++)
 					valid += (i ? ", " : "") + std::string(names[i]);
@@ -1010,6 +1010,11 @@ namespace Basalt {
 		std::string Validate(const T&)
 		{
 			return {};
+		}
+
+		std::string Validate(const AudioSourceComponent& source)
+		{
+			return ValidateAudioSource(source);
 		}
 
 		std::string Validate(const ParticleEmitterComponent& emitter)
