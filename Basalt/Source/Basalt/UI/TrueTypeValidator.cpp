@@ -64,6 +64,8 @@ namespace Basalt {
 			int16_t S16(uint64_t at) const { return static_cast<int16_t>(U16(at)); }
 			uint32_t U32(uint64_t at) const { return (static_cast<uint32_t>(U16(at)) << 16) | U16(at + 2); }
 
+			bool Has(uint64_t at) const { return at <= m_Bytes.size(); }
+
 			void Require(uint64_t at, uint64_t size) const
 			{
 				if (at > m_Bytes.size() || size > m_Bytes.size() - at)
@@ -340,6 +342,7 @@ namespace Basalt {
 						if (next - previous < 10)
 							Fail(fmt::format("glyph {} is too short ({} bytes) for a glyph header", index, next - previous));
 						const Region data(m_Data, GetTables().Glyf.Offset() + previous, next - previous, "glyph data");
+						CountPoints(index, data);
 						try
 						{
 							ReadGlyph(index, data);
@@ -351,6 +354,21 @@ namespace Basalt {
 					}
 					previous = next;
 				}
+			}
+
+			// Repeated flags and zero deltas let a glyph declare 65536 points in a few hundred bytes, and every
+			// point costs a few passes here (and in stb). Real fonts spend about a byte or more per point, so a
+			// font declaring far more points than its size allows is refused before the glyphs are read: with
+			// tens of thousands of such glyphs, checking them would freeze the first use of the font.
+			void CountPoints(uint32_t index, const Region& data)
+			{
+				const int16_t contours = data.S16(0);
+				if (contours <= 0 || !data.Has(10 + 2 * static_cast<uint64_t>(contours)))
+					return;
+				m_DeclaredPoints += uint64_t{ data.U16(10 + 2 * static_cast<uint64_t>(contours - 1)) } + 1;
+				const uint64_t budget = 4 * uint64_t{ m_Data.size() } + 65536;
+				if (m_DeclaredPoints > budget)
+					Fail(fmt::format("the glyphs up to glyph {} declare {} outline points, more than a {}-byte font can hold", index, m_DeclaredPoints, m_Data.size()));
 			}
 
 			void MarkBroken(uint32_t index, std::string problem)
@@ -807,6 +825,7 @@ namespace Basalt {
 			uint32_t m_TableCount = 0;
 			std::optional<Tables> m_Tables;
 			uint16_t m_IndexToLocFormat = 0;
+			uint64_t m_DeclaredPoints = 0;
 			uint32_t m_GlyphCount = 0;
 			int m_LineHeight = 0;
 			std::vector<Glyph> m_Glyphs;
