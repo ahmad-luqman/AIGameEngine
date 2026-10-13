@@ -111,6 +111,25 @@ namespace Basalt {
 		m_Renderer.Render(ImGui::GetDrawData(), device->GetCurrentFramebuffer());
 	}
 
+	void ImGuiLayer::RenderDrawList(ImDrawList& drawList, const glm::vec2& displaySize, nvrhi::IFramebuffer* target)
+	{
+		if (!m_Initialized || !target)
+			return;
+		// The atlas's own list: textures it created since the last frame are not in the platform list yet.
+		ImVector<ImTextureData*> textures = ImGui::GetIO().Fonts->TexList;
+		ImDrawData drawData;
+		drawData.Valid = true;
+		drawData.CmdLists.push_back(&drawList);
+		drawData.CmdListsCount = 1;
+		drawData.TotalVtxCount = drawList.VtxBuffer.Size;
+		drawData.TotalIdxCount = drawList.IdxBuffer.Size;
+		drawData.DisplayPos = ImVec2(0.0f, 0.0f);
+		drawData.DisplaySize = ImVec2(displaySize.x, displaySize.y);
+		drawData.FramebufferScale = ImVec2(1.0f, 1.0f);
+		drawData.Textures = &textures;
+		m_Renderer.Render(&drawData, target);
+	}
+
 	void ImGuiLayer::SetDarkThemeColors()
 	{
 		auto& colors = ImGui::GetStyle().Colors;

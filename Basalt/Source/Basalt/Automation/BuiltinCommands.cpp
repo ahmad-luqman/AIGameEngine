@@ -927,7 +927,7 @@ namespace Basalt {
 				return json{ { "result", result } };
 			});
 
-			Add(registry, "render.screenshot", "Renders the current scene from its primary camera to a PNG (editor / GPU hosts only).", { { "path", "string, output .png" }, { "width", "integer" }, { "height", "integer" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "render.screenshot", "Renders the current scene from its primary camera, with its game UI, to a PNG (editor / GPU hosts only).", { { "path", "string, output .png" }, { "width", "integer" }, { "height", "integer" } }, [](AutomationSession& session, const json& params) {
 				if (!session.Screenshot)
 					throw CommandError("screenshots need a GPU host (the editor, or 'BasaltRuntime --frames N --screenshot out.png'); this host is '" + session.HostName + "'");
 				const std::string path = RequireString(params, "path");

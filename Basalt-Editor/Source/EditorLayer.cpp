@@ -380,7 +380,7 @@ namespace Basalt {
 								 return nlohmann::json{ { "path", path.string() }, { "note", "written at the end of the current frame" } };
 							 } });
 
-		m_Commands.Register({ "editor.screenshot", "Renders the scene from the editor camera (with editor overlays) to a PNG.", { { "path", "string, .png" }, { "width", "integer" }, { "height", "integer" } }, [this](AutomationSession&, const nlohmann::json& params) {
+		m_Commands.Register({ "editor.screenshot", "Renders the scene from the editor camera (with editor overlays and the game UI) to a PNG.", { { "path", "string, .png" }, { "width", "integer" }, { "height", "integer" } }, [this](AutomationSession&, const nlohmann::json& params) {
 								 if (!params.contains("path") || !params["path"].is_string())
 									 throw CommandError("missing parameter 'path'");
 								 const uint32_t width = params.value("width", 1280u);
@@ -434,6 +434,8 @@ namespace Basalt {
 		DebugDraw::Clear();
 		for (size_t i = 0; i + 1 < pending.size(); i += 2)
 			DebugDraw::Line(pending[i].Position, pending[i + 1].Position, pending[i].Color);
+		if (m_DebugView == RendererDebugView::None)
+			DrawGameUIOverCapture(scene, width, height);
 		return SaveScreenshot(*m_CaptureRenderer, path, outError);
 	}
 
@@ -1076,6 +1078,34 @@ namespace Basalt {
 
 		ImGui::End();
 		ImGui::PopStyleVar();
+	}
+
+	void EditorLayer::DrawGameUIOverCapture(Scene& scene, uint32_t width, uint32_t height)
+	{
+		ImGuiLayer* imgui = Application::Get().GetImGuiLayer();
+		GraphicsDevice* device = Application::Get().GetGraphicsDevice();
+		if (!imgui || !imgui->IsInitialized() || !device)
+			return;
+		// The same UI the viewport shows: UI components always, the scripts' UI.* output while playing.
+		const glm::vec2 size(static_cast<float>(width), static_cast<float>(height));
+		UIFrame frame;
+		frame.Build(&scene, size, IsGameRunning());
+		if (frame.GetCommands().empty())
+			return;
+		nvrhi::CommandListHandle commandList = device->GetDevice()->createCommandList();
+		commandList->open();
+		frame.Prepare([&](const std::string& texture) { return m_CaptureRenderer->GetUITexture(texture, commandList); });
+		commandList->close();
+		device->GetDevice()->executeCommandList(commandList);
+
+		ImDrawList drawList(ImGui::GetDrawListSharedData());
+		drawList._ResetForNewFrame();
+		drawList.PushTexture(ImGui::GetIO().Fonts->TexRef);
+		drawList.PushClipRect(ImVec2(0.0f, 0.0f), ImVec2(size.x, size.y));
+		frame.Draw(&drawList, { 0.0f, 0.0f }, size);
+		drawList.PopClipRect();
+		drawList.PopTexture();
+		imgui->RenderDrawList(drawList, size, m_CaptureRenderer->GetOverlayFramebuffer());
 	}
 
 	void EditorLayer::DrawUIBounds(const glm::vec2& origin, const glm::vec2& size)

@@ -126,7 +126,7 @@ The features most games need, roughly in order of impact.
   (`Basalt/Source/Basalt/UI`): `UILayout` already gives every rect for hit testing.
 - **UI follow-ups — S.** Text measuring from Lua (`UI.MeasureText`), clipping a subtree to its rect (scroll
   lists), rotation and scale of UI rects, sprite sheets (UV rects) for `UIImage`, editor handles to drag
-  and resize rects in the viewport, and showing UI components in `render.screenshot`.
+  and resize rects in the viewport.
 
 ---
 

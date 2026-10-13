@@ -309,7 +309,7 @@ Changes project settings and saves the project file.
 
 ### `render.screenshot`
 
-Renders the current scene from its primary camera to a PNG (editor / GPU hosts only).
+Renders the current scene from its primary camera, with its game UI, to a PNG (editor / GPU hosts only).
 
 | Parameter | Type / description |
 |-----------|--------------------|

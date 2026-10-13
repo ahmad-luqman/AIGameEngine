@@ -58,6 +58,9 @@ namespace Basalt {
 		void HandleShortcuts();
 
 		void DrawEditorOverlays();
+		// Draws the scene's game UI over the capture renderer's last image (screenshots show what the viewport
+		// shows).
+		void DrawGameUIOverCapture(Scene& scene, uint32_t width, uint32_t height);
 		// Play mode proper: the game's camera and its immediate-mode UI (not edit mode, not simulate).
 		bool IsGameRunning() const { return m_Session.IsPlaying() && !m_Session.IsSimulating(); }
 		// Outlines every UI rect over the viewport (the selected entity's with its pivot and anchors).
