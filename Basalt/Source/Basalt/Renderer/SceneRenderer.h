@@ -37,6 +37,7 @@ namespace Basalt {
 		uint32_t LocalShadowMaps = 0;
 		uint32_t LocalShadowsSkipped = 0;
 		uint32_t LocalShadowAtlasSize = 1; // One-texel fallback until the first active shadow.
+		bool FSR1Active = false;           // EASU and RCAS actually ran in this frame.
 		bool Failed = false;               // This frame could not be rendered; hosts must not report success.
 		uint32_t Materials = 0;
 		// Particle billboards drawn (after frustum culling of whole emitters), and the ones skipped because
@@ -64,10 +65,10 @@ namespace Basalt {
 	// Renders a Scene from a camera into an internal LDR image:
 	//   directional cascades + point/spot shadow atlas -> depth/normal prepass -> SSAO (+ bilateral blur) ->
 	//   forward PBR with IBL (opaque) -> skybox -> transparent PBR and particle billboards -> exposure +
-	//   tonemapping + sRGB encode.
-	// The scene renders at the viewport size times the render scale; the tonemap pass resamples it to the
-	// viewport size. With dynamic resolution the scale follows the GPU time measured by the renderer's
-	// GpuProfiler; the targets keep the size of the configured render scale and the scene renders into
+	//   tonemapping + sRGB encode -> optional EASU + RCAS -> dithering -> output-resolution overlays.
+	// The scene renders at the current render scale; either tonemap resamples directly to the viewport
+	// or FSR 1 upscales its perceptual-color output. With dynamic resolution the scale follows the GPU time
+	// measured by GpuProfiler; the targets keep the size of the configured render scale and the scene renders into
 	// their top-left corner, so scale changes never reallocate. The output texture can be shown through
 	// ImGui (editor viewport) or blitted to the swapchain.
 	class SceneRenderer

@@ -110,3 +110,14 @@ TEST_SUITE("RenderMath")
 		AssetManager::Clear();
 	}
 }
+
+TEST_CASE("Spatial upscaling gate follows the current render area on either axis")
+{
+	CHECK(NeedsSpatialUpscale({ 64, 31 }, { 64, 64 }));
+	CHECK(NeedsSpatialUpscale({ 31, 64 }, { 64, 64 }));
+	CHECK(NeedsSpatialUpscale({ 1, 1 }, { 64, 64 }));
+	CHECK_FALSE(NeedsSpatialUpscale({ 64, 64 }, { 64, 64 }));
+	CHECK_FALSE(NeedsSpatialUpscale({ 65, 31 }, { 64, 64 }));
+	CHECK_FALSE(NeedsSpatialUpscale({ 31, 65 }, { 64, 64 }));
+	CHECK_FALSE(NeedsSpatialUpscale({ 0, 1 }, { 64, 64 }));
+}

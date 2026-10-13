@@ -5,6 +5,7 @@
 #include "Basalt/Core/UUID.h"
 #include "Basalt/Math/Random.h"
 #include "Basalt/Physics/PhysicsLayers.h"
+#include "Basalt/Renderer/Fsr1Settings.h"
 
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
@@ -51,7 +52,7 @@ namespace Basalt {
 		// FSR 1 runs only below native size, before overlays. Sharpness is RCAS attenuation in stops
 		// (0 = strongest, 2 = weakest); old scenes retain bilinear upsampling.
 		bool FSR1Enabled = false;
-		float FSR1Sharpness = 0.2f;
+		float FSR1Sharpness = DefaultFsr1Sharpness;
 
 		bool SSAOEnabled = true;
 		float SSAORadius = 0.5f;

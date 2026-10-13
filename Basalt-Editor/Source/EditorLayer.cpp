@@ -1036,6 +1036,12 @@ namespace Basalt {
 		else
 			io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 		m_UIFrame.Draw(ImGui::GetWindowDrawList(), { cursor.x, cursor.y }, { available.x, available.y });
+		if (m_Renderer && m_Renderer->GetStatistics().Failed)
+		{
+			ImDrawList* drawList = ImGui::GetWindowDrawList();
+			drawList->AddRectFilled(cursor, ImVec2(cursor.x + available.x, cursor.y + 28.0f), IM_COL32(100, 15, 15, 235));
+			drawList->AddText(ImVec2(cursor.x + 8.0f, cursor.y + 6.0f), IM_COL32_WHITE, "Rendering failed. See Console.");
+		}
 		if (m_ShowUIBounds && !IsGameRunning())
 			DrawUIBounds({ cursor.x, cursor.y }, { available.x, available.y });
 
@@ -1195,6 +1201,9 @@ namespace Basalt {
 		if (ImGui::CollapsingHeader("Statistics", ImGuiTreeNodeFlags_DefaultOpen) && m_Renderer)
 		{
 			const SceneRendererStatistics& stats = m_Renderer->GetStatistics();
+			if (stats.Failed)
+				ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Frame failed — see Console. Toggle FSR off/on to retry FSR allocation.");
+			ImGui::Text("FSR 1: %s", stats.FSR1Active ? "active" : "inactive");
 			ImGui::Text("Entities: %zu", scene.GetEntityCount());
 			ImGui::Text("Draw calls: %u (shadow %u)", stats.DrawCalls, stats.ShadowDrawCalls);
 			ImGui::Text("Culled submeshes: %u", stats.CulledSubmeshes);

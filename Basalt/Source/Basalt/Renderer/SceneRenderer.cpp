@@ -286,30 +286,6 @@ namespace Basalt {
 			return device->createBuffer(desc);
 		}
 
-		// Fullscreen triangle with one binding set and optional push constants.
-		void DrawFullscreen(nvrhi::ICommandList* commandList, nvrhi::IGraphicsPipeline* pipeline, nvrhi::IFramebuffer* framebuffer, nvrhi::IBindingSet* set, const nvrhi::Viewport& viewport, const void* push, size_t pushSize)
-		{
-			nvrhi::GraphicsState state;
-			state.pipeline = pipeline;
-			state.framebuffer = framebuffer;
-			state.bindings = { set };
-			state.viewport.addViewportAndScissorRect(viewport);
-			commandList->setGraphicsState(state);
-			if (push)
-				commandList->setPushConstants(push, pushSize);
-			commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
-		}
-
-		nvrhi::BindingLayoutDesc MakeLayout(uint32_t set, nvrhi::ShaderType visibility)
-		{
-			nvrhi::BindingLayoutDesc desc;
-			desc.visibility = visibility;
-			desc.bindingOffsets = ZeroBindingOffsets;
-			desc.registerSpace = set;
-			desc.registerSpaceIsDescriptorSet = true;
-			return desc;
-		}
-
 	}
 
 	struct SceneRenderer::Impl
@@ -369,6 +345,9 @@ namespace Basalt {
 		Environment Env;
 
 		Fsr1Upscaler Upscaler;
+		nvrhi::GraphicsPipelineHandle FsrTonemapPipeline;
+		bool FsrTonemapFailed = false;
+		bool FsrRequested = false;
 
 		// Size-dependent targets. The scene renders into the top-left render size of the targets; the output
 		// (and OverlayDepth) has the viewport size. OverlayDepth exists only when the two can differ.
@@ -869,6 +848,8 @@ namespace Basalt {
 		Impl& impl = *m_Impl;
 		m_Device->waitForIdle();
 		impl.Upscaler.Reset();
+		impl.FsrTonemapPipeline = nullptr;
+		impl.FsrTonemapFailed = false;
 		// The smoothed costs are per frame of the old viewport size; results still in flight carry their pixel
 		// count, so they are converted correctly when they arrive.
 		if (width != m_Width || height != m_Height)
@@ -970,19 +951,10 @@ namespace Basalt {
 			impl.ParticlePipeline[blendIndex] = m_Device->createGraphicsPipeline(desc, impl.LightingFramebuffer->getFramebufferInfo());
 		}
 
-		auto fullscreenPipeline = [&](nvrhi::IShader* vertexShader, nvrhi::IShader* pixelShader, nvrhi::IBindingLayout* layout, nvrhi::IFramebuffer* framebuffer, bool depthTest) {
-			nvrhi::GraphicsPipelineDesc desc;
-			desc.VS = vertexShader;
-			desc.PS = pixelShader;
-			desc.renderState.rasterState.setCullNone();
-			desc.renderState.depthStencilState.setDepthTestEnable(depthTest).setDepthWriteEnable(false).setDepthFunc(nvrhi::ComparisonFunc::LessOrEqual);
-			desc.bindingLayouts = { layout };
-			return m_Device->createGraphicsPipeline(desc, framebuffer->getFramebufferInfo());
-		};
-		impl.SsaoPipeline = fullscreenPipeline(impl.FullscreenVS, impl.SsaoPS, impl.SsaoLayout, impl.SsaoFramebuffer, false);
-		impl.SsaoBlurPipeline = fullscreenPipeline(impl.FullscreenVS, impl.SsaoBlurPS, impl.BlurLayout, impl.SsaoBlurFramebuffer, false);
-		impl.TonemapPipeline = fullscreenPipeline(impl.FullscreenVS, impl.TonemapPS, impl.TonemapLayout, impl.OutputFramebuffer, false);
-		impl.SkyboxPipeline = fullscreenPipeline(impl.SkyboxVS, impl.SkyboxPS, impl.FrameLayout, impl.LightingFramebuffer, true);
+		impl.SsaoPipeline = CreateFullscreenPipeline(m_Device, impl.FullscreenVS, impl.SsaoPS, impl.SsaoLayout, impl.SsaoFramebuffer, false);
+		impl.SsaoBlurPipeline = CreateFullscreenPipeline(m_Device, impl.FullscreenVS, impl.SsaoBlurPS, impl.BlurLayout, impl.SsaoBlurFramebuffer, false);
+		impl.TonemapPipeline = CreateFullscreenPipeline(m_Device, impl.FullscreenVS, impl.TonemapPS, impl.TonemapLayout, impl.OutputFramebuffer, false);
+		impl.SkyboxPipeline = CreateFullscreenPipeline(m_Device, impl.SkyboxVS, impl.SkyboxPS, impl.FrameLayout, impl.LightingFramebuffer, true);
 		impl.DepthUpsamplePipeline = nullptr;
 		if (scaled)
 		{
@@ -1809,15 +1781,34 @@ namespace Basalt {
 			}
 		}
 
-		// Native size, supersampling and diagnostic buffers retain their original path. A rounded tiny
-		// viewport may have only one reduced dimension, which EASU supports.
+		// The current render area selects FSR, even when a dynamic run starts above native size.
 		const bool fsr1 = settings.FSR1Enabled && settings.DebugView == RendererDebugView::None &&
-						  m_RenderWidth <= m_Width && m_RenderHeight <= m_Height && (m_RenderWidth < m_Width || m_RenderHeight < m_Height);
-		if (fsr1 && !impl.Upscaler.Prepare(m_Device, { m_TargetWidth, m_TargetHeight }, impl.OutputFramebuffer,
-										   impl.FullscreenVS, impl.TonemapPS, impl.TonemapLayout))
+						  NeedsSpatialUpscale({ m_RenderWidth, m_RenderHeight }, { m_Width, m_Height });
+		impl.Upscaler.SetActive(fsr1);
+		if (fsr1 && !impl.FsrRequested)
+			impl.FsrTonemapFailed = false;
+		impl.FsrRequested = fsr1;
+		if (fsr1)
 		{
-			abortFrame();
-			return;
+			if (!impl.Upscaler.Prepare(m_Device, { m_TargetWidth, m_TargetHeight }, impl.OutputFramebuffer, impl.FullscreenVS, impl.PointClamp))
+			{
+				abortFrame();
+				return;
+			}
+			if (!impl.FsrTonemapPipeline && !impl.FsrTonemapFailed)
+			{
+				impl.FsrTonemapPipeline = CreateFullscreenPipeline(m_Device, impl.FullscreenVS, impl.TonemapPS, impl.TonemapLayout, impl.Upscaler.GetInputFramebuffer());
+				if (!impl.FsrTonemapPipeline)
+				{
+					BS_CORE_ERROR("SceneRenderer: failed to create FSR 1 tonemap pipeline (target {}x{}, output {}x{})", m_TargetWidth, m_TargetHeight, m_Width, m_Height);
+					impl.FsrTonemapFailed = true;
+				}
+			}
+			if (impl.FsrTonemapFailed)
+			{
+				abortFrame();
+				return;
+			}
 		}
 
 		// --- Tonemap + optional FSR 1 (included in the dynamic-resolution GPU cost) -----------------
@@ -1826,8 +1817,9 @@ namespace Basalt {
 			const TonemapPush push = { settings.Exposure, static_cast<uint32_t>(settings.Tonemap), static_cast<uint32_t>(settings.DebugView), fsr1 ? 1u : 0u, uvScale };
 			if (fsr1)
 			{
-				fullscreen(impl.Upscaler.GetTonemapPipeline(), impl.Upscaler.GetInputFramebuffer(), impl.TonemapSet, renderViewport, &push, sizeof(push));
+				fullscreen(impl.FsrTonemapPipeline, impl.Upscaler.GetInputFramebuffer(), impl.TonemapSet, renderViewport, &push, sizeof(push));
 				impl.Upscaler.Render(commandList, impl.OutputFramebuffer, { m_RenderWidth, m_RenderHeight }, settings.FSR1Sharpness);
+				m_Statistics.FSR1Active = true;
 			}
 			else
 				fullscreen(impl.TonemapPipeline, impl.OutputFramebuffer, impl.TonemapSet, outputViewport, &push, sizeof(push));

@@ -411,7 +411,7 @@ Patches scene-level settings: {Renderer: {...}, Physics: {...}, Name}.
 |-----------|--------------------|
 | `Name` | string |
 | `Physics` | object, e.g. {Gravity: [0,-9.81,0]} |
-| `Renderer` | object, e.g. {Exposure, Tonemapper, FSR1Enabled, FSR1Sharpness, SSAOEnabled, ShadowDistance}; FSR1Sharpness: [0,2] stops, 0 strongest |
+| `Renderer` | object, e.g. {Exposure, Tonemapper, FSR1Enabled, FSR1Sharpness, SSAOEnabled, ShadowDistance}; FSR1Sharpness: [0, 2] stops (0 = strongest) |
 
 ## script
 

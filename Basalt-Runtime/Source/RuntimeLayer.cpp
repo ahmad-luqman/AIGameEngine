@@ -192,8 +192,8 @@ namespace Basalt {
 	void RuntimeLayer::CheckRendererResults(const std::function<void(int)>& fail)
 	{
 		const auto& stats = m_Renderer->GetStatistics();
-		BS_CORE_INFO("Runtime: render stats localShadowMaps={} localShadowsSkipped={} lightsSkipped={} localShadowAtlasSize={}",
-					 stats.LocalShadowMaps, stats.LocalShadowsSkipped, stats.LightsSkipped, stats.LocalShadowAtlasSize);
+		BS_CORE_INFO("Runtime: render stats localShadowMaps={} localShadowsSkipped={} lightsSkipped={} localShadowAtlasSize={} fsr1={}",
+					 stats.LocalShadowMaps, stats.LocalShadowsSkipped, stats.LightsSkipped, stats.LocalShadowAtlasSize, stats.FSR1Active ? 1 : 0);
 		const bool timers = m_Renderer->HasGpuTimers();
 		const GpuTimings& timings = m_Renderer->GetGpuTimings();
 		const std::string text = FormatGpuTimings(timings, timers);

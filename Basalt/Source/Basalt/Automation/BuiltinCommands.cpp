@@ -630,7 +630,7 @@ namespace Basalt {
 				};
 			});
 
-			Add(registry, "scene.settings", "Patches scene-level settings: {Renderer: {...}, Physics: {...}, Name}.", { { "Renderer", "object, e.g. {Exposure, Tonemapper, FSR1Enabled, FSR1Sharpness, SSAOEnabled, ShadowDistance}; FSR1Sharpness: [0,2] stops, 0 strongest" }, { "Physics", "object, e.g. {Gravity: [0,-9.81,0]}" }, { "Name", "string" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "scene.settings", "Patches scene-level settings: {Renderer: {...}, Physics: {...}, Name}.", { { "Renderer", "object, e.g. {Exposure, Tonemapper, FSR1Enabled, FSR1Sharpness, SSAOEnabled, ShadowDistance}; FSR1Sharpness: " + Fsr1SharpnessRange() }, { "Physics", "object, e.g. {Gravity: [0,-9.81,0]}" }, { "Name", "string" } }, [](AutomationSession& session, const json& params) {
 				Scene& scene = RequireScene(session);
 				json patch = json::object();
 				for (const char* key : { "Renderer", "Physics", "Name" })

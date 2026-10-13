@@ -4,13 +4,14 @@
 find_program(BASALT_GLSLC glslc HINTS "$ENV{VULKAN_SDK}/bin" "$ENV{VULKAN_SDK}/Bin" REQUIRED)
 
 # basalt_embed_shaders(<target> INCLUDE_DIR <dir> [EXTRA_INCLUDE_DIRS <dirs...>]
-#                      [EXTRA_DEPENDS <files...>] SOURCES <files...>)
+#                      SOURCES <files...>)
 #
 # Compiles every .vert/.frag/.comp source to SPIR-V and adds a generated EmbeddedShaders.cpp to <target>
 # that registers them by file name (e.g. "ImGui.vert"). Shared headers (*.glsl in INCLUDE_DIR) are
-# dependencies of every shader, so editing one recompiles everything that could include it.
+# dependencies of every shader, as are *.h files in EXTRA_INCLUDE_DIRS. Editing any shared
+# header recompiles every shader. External sources stay unmodified in the dependency tree.
 function(basalt_embed_shaders target)
-	cmake_parse_arguments(ARG "" "INCLUDE_DIR" "SOURCES;EXTRA_INCLUDE_DIRS;EXTRA_DEPENDS" ${ARGN})
+	cmake_parse_arguments(ARG "" "INCLUDE_DIR" "SOURCES;EXTRA_INCLUDE_DIRS" ${ARGN})
 
 	set(outputDir "${CMAKE_CURRENT_BINARY_DIR}/EmbeddedShaders")
 	file(MAKE_DIRECTORY "${outputDir}")
@@ -20,10 +21,12 @@ function(basalt_embed_shaders target)
 		file(GLOB includeDeps CONFIGURE_DEPENDS "${ARG_INCLUDE_DIR}/*.glsl")
 	endif()
 
-	set(extraIncludes "")
 	foreach(dir IN LISTS ARG_EXTRA_INCLUDE_DIRS)
-		list(APPEND extraIncludes -I "${dir}")
+		file(GLOB extraHeaders CONFIGURE_DEPENDS "${dir}/*.h")
+		list(APPEND includeDeps ${extraHeaders})
 	endforeach()
+	set(extraIncludes ${ARG_EXTRA_INCLUDE_DIRS})
+	list(TRANSFORM extraIncludes PREPEND "-I")
 
 	set(generatedIncludes "")
 	set(generatedTable "")
@@ -38,7 +41,7 @@ function(basalt_embed_shaders target)
 			COMMAND "${BASALT_GLSLC}" --target-env=vulkan1.2 -O -Werror -mfmt=c
 				-DMAX_CASCADES=${BASALT_SHADOW_CASCADES}
 				-I "${ARG_INCLUDE_DIR}" ${extraIncludes} "${source}" -o "${output}"
-			DEPENDS "${source}" ${includeDeps} ${ARG_EXTRA_DEPENDS}
+			DEPENDS "${source}" ${includeDeps}
 			COMMENT "Compiling shader ${fileName}"
 			VERBATIM)
 		list(APPEND outputs "${output}")
