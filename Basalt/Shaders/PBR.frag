@@ -26,6 +26,7 @@ void main()
 		discard;
 
 	vec3 N = surface.Normal;
+	vec3 geometricNormal = normalize(v_Normal);
 	vec3 V = normalize(u_View.CameraPosition.xyz - v_WorldPosition);
 	vec3 F0 = mix(vec3(0.04), surface.Albedo, surface.Metallic);
 	vec3 color = vec3(0.0);
@@ -34,7 +35,7 @@ void main()
 	if (u_View.Sun.Direction.w > 0.5)
 	{
 		float viewDepth = -(u_View.View * vec4(v_WorldPosition, 1.0)).z;
-		float shadow = ComputeShadow(v_WorldPosition, normalize(v_Normal), viewDepth, gl_FragCoord.xy);
+		float shadow = ComputeShadow(v_WorldPosition, geometricNormal, viewDepth, gl_FragCoord.xy);
 		vec3 L = -normalize(u_View.Sun.Direction.xyz);
 		color += EvaluateLight(N, V, L, u_View.Sun.Color.rgb * shadow, surface.Albedo, surface.Metallic, surface.Roughness, F0);
 	}
@@ -61,7 +62,7 @@ void main()
 			attenuation *= smoothstep(light.Direction.w, light.Params.x, cosAngle);
 		}
 		if (attenuation > 0.0)
-			attenuation *= ComputeLocalShadow(light, v_WorldPosition, normalize(v_Normal));
+			attenuation *= ComputeLocalShadow(light, v_WorldPosition, geometricNormal);
 		color += EvaluateLight(N, V, L, light.Color.rgb * attenuation, surface.Albedo, surface.Metallic, surface.Roughness, F0);
 	}
 

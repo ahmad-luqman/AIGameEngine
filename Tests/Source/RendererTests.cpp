@@ -755,6 +755,11 @@ TEST_SUITE("SceneRenderer")
 		CHECK_FALSE(renderer.IsDynamicResolutionActive());
 
 		const nlohmann::json stats = GetRenderStats(renderer);
+		CHECK(stats["localShadowMaps"] == 0);
+		CHECK(stats["localShadowsSkipped"] == 0);
+		CHECK(stats["lightsSkipped"] == 0);
+		CHECK(stats["localShadowAtlasSize"] == 1);
+		CHECK(stats["failed"] == false);
 		CHECK(stats["dynamicResolution"] == true);
 		CHECK(stats["dynamicResolutionActive"] == false);
 		CHECK(stats["dynamicResolutionState"].get<std::string>().find("GPU timer queries") != std::string::npos);

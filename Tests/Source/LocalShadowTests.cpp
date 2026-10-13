@@ -4,6 +4,7 @@
 #include <Basalt/Scene/ComponentRegistry.h>
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
+#include <Basalt/Scene/SceneSerializer.h>
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -11,6 +12,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <string_view>
 
 using namespace Basalt;
 
@@ -61,6 +63,7 @@ TEST_SUITE("Local shadows")
 		const auto plan = BuildLocalShadowPlan(requests, View, Projection, 1000);
 		REQUIRE(plan.Maps.size() == MaxLocalShadowMaps);
 		REQUIRE(plan.Allocations.size() == 14);
+		CHECK(plan.Skipped == 66);
 		uint32_t next = 0;
 		for (const auto& allocation : plan.Allocations)
 		{
@@ -96,7 +99,9 @@ TEST_SUITE("Local shadows")
 			{ 6, 5, LocalShadowType::Spot, { 0, 0, -5 }, 1, { 0, 0, 0 } },
 			{ 7, 6, LocalShadowType::Spot, { 0, 0, -5 }, 1, { 0, 0, -1 }, 90 },
 			{ 8, 7, LocalShadowType::Point, { 0, 0, -5 }, std::numeric_limits<float>::infinity() },
-			{ 9, 8, LocalShadowType::Point, { std::numeric_limits<float>::quiet_NaN(), 0, -5 }, 1 }
+			{ 9, 8, LocalShadowType::Point, { std::numeric_limits<float>::quiet_NaN(), 0, -5 }, 1 },
+			{ 10, 9, LocalShadowType::Point, { 0, 0, -5 }, -1 },
+			{ 11, 10, LocalShadowType::Point, { 0, 0, -5 }, 0.0005f }
 		};
 		const auto plan = BuildLocalShadowPlan(requests, View, Projection);
 		REQUIRE(plan.Allocations.size() == 1);
@@ -105,6 +110,52 @@ TEST_SUITE("Local shadows")
 		const auto ortho = BuildLocalShadowPlan(requests, View, glm::ortho(-10.0f, 10.0f, -10.0f, 10.0f, -10.0f, 100.0f), 1);
 		REQUIRE(ortho.Allocations.size() == 1);
 		CHECK(ortho.Allocations[0].LightIndex == 1); // Same screen size independent of depth: UUID wins.
+	}
+
+	TEST_CASE("Coincident point and spot priority is stable and spot bounds follow the cone")
+	{
+		std::array requests = { LocalShadowRequest{ 42, 1, LocalShadowType::Spot, { 0, 0, -1 }, 10 },
+								LocalShadowRequest{ 42, 0, LocalShadowType::Point, { 0, 0, -1 }, 10 } };
+		for (int order = 0; order < 2; order++)
+		{
+			const auto plan = BuildLocalShadowPlan(requests, View, Projection, 6);
+			REQUIRE(plan.Allocations.size() == 1);
+			CHECK(plan.Allocations[0].LightIndex == 0);
+			CHECK(plan.Maps.size() == 6);
+			CHECK(plan.Skipped == 1);
+			std::reverse(requests.begin(), requests.end());
+		}
+		const std::array away = { LocalShadowRequest{ 1, 0, LocalShadowType::Spot, { 0, 0, 5 }, 10, { 0, 0, 1 }, 30 } };
+		CHECK(BuildLocalShadowPlan(away, View, Projection).Maps.empty());
+		const std::array wide = { LocalShadowRequest{ 1, 0, LocalShadowType::Spot, { 0, 0, -5 }, 10, { 0, 0, 1 }, 80 } };
+		CHECK(BuildLocalShadowPlan(wide, View, Projection).Maps.size() == 1);
+	}
+
+	TEST_CASE("Direct C++ softness has a finite bounded fallback")
+	{
+		CHECK(SanitizeLocalShadowSoftness(-1) == 0);
+		CHECK(SanitizeLocalShadowSoftness(5) == MaxLocalShadowSoftness);
+		CHECK(SanitizeLocalShadowSoftness(2) == 2);
+		CHECK(SanitizeLocalShadowSoftness(std::numeric_limits<float>::quiet_NaN()) == 1);
+		CHECK(SanitizeLocalShadowSoftness(std::numeric_limits<float>::infinity()) == 1);
+		CHECK_FALSE(ValidateLocalShadowSoftness(std::numeric_limits<float>::quiet_NaN()).empty());
+	}
+
+	TEST_CASE("Scene shadow bias settings reject excessive and negative offsets")
+	{
+		for (const auto* field : { "ShadowBias", "ShadowNormalBias" })
+		{
+			const float maxValue = std::string_view(field) == "ShadowBias" ? 0.05f : 1.0f;
+			for (float value : { -0.1f, maxValue + 0.001f })
+			{
+				Scene scene;
+				std::string error;
+				auto data = SceneSerializer::SerializeScene(scene);
+				data["Renderer"][field] = value;
+				CHECK_FALSE(SceneSerializer::DeserializeScene(scene, data, error));
+				CHECK(error.find(field) != std::string::npos);
+			}
+		}
 	}
 
 	TEST_CASE("All six cube faces project their axes and overlap at seams with room for PCF")
@@ -160,6 +211,8 @@ TEST_SUITE("Local shadows")
 			REQUIRE(info);
 			CHECK(info->Serialize(entity)["CastShadows"] == false);
 			CHECK(info->Serialize(entity)["ShadowSoftness"] == 1.0f);
+			REQUIRE(ComponentRegistry::AddOrPatch(entity, name, { { "ShadowSoftness", 0.0f } }, error));
+			CHECK(info->Serialize(entity)["ShadowSoftness"] == 0.0f);
 			REQUIRE(ComponentRegistry::AddOrPatch(entity, name, { { "CastShadows", true }, { "ShadowSoftness", 4.0f } }, error));
 			const auto expected = info->Serialize(entity);
 			for (const auto& bad : { nlohmann::json(-0.1f), nlohmann::json(4.1f), nlohmann::json("soft"), nlohmann::json(std::numeric_limits<double>::infinity()) })
@@ -168,6 +221,15 @@ TEST_SUITE("Local shadows")
 				CHECK(error.find("ShadowSoftness") != std::string::npos);
 				CHECK(info->Serialize(entity) == expected);
 			}
+			const char* range = std::string_view(name) == "PointLight" ? "Radius" : "Range";
+			for (const auto& bad : { nlohmann::json(-1), nlohmann::json(std::numeric_limits<double>::infinity()) })
+			{
+				CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, name, { { range, bad } }, error));
+				CHECK(error.find(range) != std::string::npos);
+				CHECK(info->Serialize(entity) == expected);
+			}
+			CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, name, { { "CastShadows", 1 } }, error));
+			CHECK(info->Serialize(entity) == expected);
 			const auto copy = Scene::Copy(scene);
 			CHECK(info->Serialize(copy->GetEntityByUUID(42)) == expected);
 			Entity restored = scene->CreateEntity();

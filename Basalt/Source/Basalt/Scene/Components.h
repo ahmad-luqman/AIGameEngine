@@ -107,7 +107,8 @@ namespace Basalt {
 		float Intensity = 10.0f;
 		float Radius = 10.0f;
 		bool CastShadows = false;
-		// PCF radius in shadow texels, [0, 4]; zero keeps only hardware comparison filtering.
+		// Texel radius (unlike directional angular softness), [0, MaxLocalShadowSoftness].
+		// Zero keeps hardware comparison filtering.
 		float ShadowSoftness = 1.0f;
 	};
 
@@ -120,7 +121,8 @@ namespace Basalt {
 		float InnerConeAngle = 20.0f;
 		float OuterConeAngle = 30.0f;
 		bool CastShadows = false;
-		// PCF radius in shadow texels, [0, 4].
+		// Texel radius (unlike directional angular softness), [0, MaxLocalShadowSoftness].
+		// Zero keeps hardware comparison filtering.
 		float ShadowSoftness = 1.0f;
 	};
 

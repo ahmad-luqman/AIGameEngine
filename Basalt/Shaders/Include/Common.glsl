@@ -4,13 +4,14 @@
 //                     9 linear clamp sampler, 10 shadow comparison sampler, 11 point clamp sampler,
 //                     12 environment cube, 13 local shadow atlas, 14 local shadow maps (SSBO),
 //                     push constants (DrawPush)
+// Shadow pipelines use a reduced set 0: push constants, 0, 1, 2 and 14 only.
 //   set 1 (material): 0 albedo, 1 normal, 2 metallic-roughness, 3 occlusion, 4 emissive, 5 material sampler
 //   (the particle pipelines bind their own set 1; see Particle.vert)
 
 #ifndef BASALT_COMMON_GLSL
 #define BASALT_COMMON_GLSL
 
-#define MAX_CASCADES 4
+// MAX_CASCADES is supplied by CMake from the same value as the C++ view-constant layout.
 #define PI 3.14159265359
 
 struct DirectionalLight
@@ -33,7 +34,7 @@ layout(set = 0, binding = 0) uniform ViewConstants
 	vec4 ViewportSize;    // xy: render-area size; zw: 1 / scene target size, NOT 1 / xy (the targets exceed the area under dynamic resolution), so gl_FragCoord.xy * zw is a target UV
 	vec4 AmbientColor;    // rgb, w: IBL intensity
 	vec4 EnvironmentParams; // x: rotation (radians), y: prefiltered mip count, z: SSAO enabled, w: light count
-	vec4 CameraClip;      // x: near, y: far, z: local shadow range-relative bias, w: local shadow normal bias
+	vec4 CameraClip;      // x: near, y: far, zw: local biases (available without a Sun); z uses range-relative world distance, unlike Sun.ShadowParams.x
 	DirectionalLight Sun;
 } u_View;
 
@@ -88,8 +89,14 @@ layout(std430, set = 0, binding = 14) readonly buffer LocalShadowBuffer
 layout(push_constant) uniform DrawPush
 {
 	uint DrawIndex;
-	uint CascadeIndex;
+	uint ShadowViewIndex; // [0, MAX_CASCADES) selects a cascade; later indices select atlas maps.
 } u_Push;
+
+mat4 ShadowViewProjection(uint index)
+{
+	return index < MAX_CASCADES ? u_View.CascadeViewProjection[index] :
+		u_LocalShadows.Maps[index - MAX_CASCADES].ViewProjection;
+}
 
 // Material flags (MaterialData.Params.w).
 #define MATERIAL_HAS_ALBEDO_MAP 1u

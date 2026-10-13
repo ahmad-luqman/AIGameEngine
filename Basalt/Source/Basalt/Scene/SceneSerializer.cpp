@@ -195,6 +195,11 @@ namespace Basalt {
 			const bool ok = reader.Float("Exposure", s.Exposure, outError) && reader.Bool("SSAOEnabled", s.SSAOEnabled, outError) && reader.Float("SSAORadius", s.SSAORadius, outError) && reader.Float("SSAOIntensity", s.SSAOIntensity, outError) && reader.Float("SSAOBias", s.SSAOBias, outError) && reader.Bool("ShadowsEnabled", s.ShadowsEnabled, outError) && reader.Float("ShadowDistance", s.ShadowDistance, outError) && reader.Float("ShadowBias", s.ShadowBias, outError) && reader.Float("ShadowNormalBias", s.ShadowNormalBias, outError) && reader.Float("CascadeSplitLambda", s.CascadeSplitLambda, outError) && reader.Vec3("AmbientColor", s.AmbientColor, outError) && reader.Finish(outError);
 			if (!ok)
 				return false;
+			if (s.ShadowBias < 0.0f || s.ShadowBias > 0.05f || s.ShadowNormalBias < 0.0f || s.ShadowNormalBias > 1.0f)
+			{
+				outError = "Renderer: ShadowBias must be in [0, 0.05]; ShadowNormalBias must be in [0, 1]";
+				return false;
+			}
 			if (s.Exposure <= 0.0f || s.ShadowDistance <= 0.0f || s.SSAORadius <= 0.0f || s.CascadeSplitLambda < 0.0f || s.CascadeSplitLambda > 1.0f)
 			{
 				outError = "Renderer: Exposure, ShadowDistance and SSAORadius must be positive; CascadeSplitLambda must be in [0, 1]";
