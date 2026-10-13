@@ -138,6 +138,8 @@ local function TestEntities(self)
 		lamp:SetComponent(kind, { CastShadows = false, ShadowSoftness = 0 })
 		shadow = lamp:GetComponent(kind)
 		Check(kind .. " shadow disable", not shadow.CastShadows and shadow.ShadowSoftness == 0)
+		Check(kind .. " negative softness rejected", not pcall(function() lamp:SetComponent(kind, { ShadowSoftness = -1 }) end))
+		Check(kind .. " numeric shadow flag rejected", not pcall(function() lamp:SetComponent(kind, { CastShadows = 1 }) end))
 		lamp:SetComponent(kind, original)
 	end
 	Check("HasComponent", probe:HasComponent("PointLight") and not probe:HasComponent("SpotLight"))

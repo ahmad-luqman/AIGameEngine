@@ -601,20 +601,31 @@ end
 ## Local light shadows
 
 `PointLight` and `SpotLight` accept `CastShadows` (default `false`) and `ShadowSoftness`
-(default `1`, finite range `0`–`4`) through `GetComponent`/`SetComponent`, scene files,
-`component.set`, and the generated inspector. Softness is the PCF radius in shadow texels;
-zero retains hardware comparison filtering. `Renderer.ShadowsEnabled` disables all shadows,
-and `Mesh.CastShadows` controls local-light casters as well as directional ones. Opaque and
-alpha-masked meshes cast shadows; alpha-blended meshes do not.
+(default `1`) through `GetComponent`/`SetComponent`, scene files, `component.set`, and the
+inspector. Softness must be finite and within 0–4; other values are rejected. It is the PCF
+radius in shadow texels (unlike directional light softness, which is an angular size).
+Zero retains hardware comparison filtering. `ShadowsEnabled` in the scene's `Renderer`
+settings (scene files / `scene.settings`) disables all shadows. `Mesh.CastShadows` controls
+local and directional casters. Opaque and alpha-masked meshes cast; alpha-blended meshes do not.
 
-Local shadows use a 4096² depth atlas with 64 fixed 512² tiles. Each frame, lights whose range
-intersects the camera frustum are ranked by conservative projected influence size, then UUID
-and light type. A spot consumes one tile; a point consumes six overlapping cube faces, allocated
-as a whole. Lights that do not fit remain lit without shadows. The existing 256-entry light
-buffer limit still applies before atlas allocation. Shadows cover the light's range with a
-near plane of `min(0.05, range * 0.01)`; ranges below `0.001` do not allocate shadows.
-`ShadowBias` is applied relative to local-light range before perspective projection;
-`ShadowNormalBias` offsets receivers along their geometric normals in world units.
+Local shadows use a 4096² depth atlas with 64 fixed 512² tiles, allocated on first use; until
+then a 1×1 fallback is bound. Each frame, point range spheres and spheres bounding spot cones
+are tested against the camera frustum. Visible influences are ranked by conservative projected
+size, capped at full-screen width and height, then UUID and light type. In particular, lights
+containing the camera tie at full-screen importance even if their ranges differ. A spot consumes
+one tile; a point consumes six overlapping cube faces, allocated as a whole. Zero-intensity
+lights get no tiles. Lights that do not fit remain lit without shadows. The existing 256-entry
+light buffer limit applies before atlas allocation. `render.stats` reports `localShadowMaps`,
+`localShadowsSkipped`, `localShadowAtlasSize`, and `lightsSkipped`; the editor also displays the
+counts. Atlas and light-buffer overflow each warn once per overflow episode.
+
+Radius/range must be finite and nonnegative. Shadows use a near plane of
+`min(0.05, range * 0.01)`; ranges below `0.001` do not allocate shadows. In the scene's `Renderer`
+settings, `ShadowBias` (0–0.05) is a depth offset for directional shadows and a range-relative
+world offset for local shadows, so tuning it affects both. `ShadowNormalBias` (0–1 world units)
+offsets local receivers along their vertex normal, scaled by `(1 − N·L)` to emphasize grazing
+angles. Invalid bias settings are rejected. A zero-scale spot has no valid direction and is
+skipped; non-finite spot directions also warn once until the transforms recover.
 
 ## Screen UI
 

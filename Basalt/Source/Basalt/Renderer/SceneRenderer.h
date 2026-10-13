@@ -33,6 +33,11 @@ namespace Basalt {
 		uint32_t ShadowDrawCalls = 0;
 		uint32_t CulledSubmeshes = 0;
 		uint32_t Lights = 0;
+		uint32_t LightsSkipped = 0;
+		uint32_t LocalShadowMaps = 0;
+		uint32_t LocalShadowsSkipped = 0;
+		uint32_t LocalShadowAtlasSize = 1; // One-texel fallback until the first active shadow.
+		bool Failed = false;               // This frame could not be rendered; hosts must not report success.
 		uint32_t Materials = 0;
 		// Particle billboards drawn (after frustum culling of whole emitters), and the ones skipped because
 		// the frame's particle budget (or particle buffer) was exhausted.
@@ -57,8 +62,8 @@ namespace Basalt {
 	};
 
 	// Renders a Scene from a camera into an internal LDR image:
-	//   directional cascades + point/spot shadow atlas -> depth/normal prepass -> SSAO (+ bilateral blur) -> forward PBR with
-	//   IBL (opaque) -> skybox -> transparent PBR and particle billboards (sorted together) -> exposure +
+	//   directional cascades + point/spot shadow atlas -> depth/normal prepass -> SSAO (+ bilateral blur) ->
+	//   forward PBR with IBL (opaque) -> skybox -> transparent PBR and particle billboards -> exposure +
 	//   tonemapping + sRGB encode.
 	// The scene renders at the viewport size times the render scale; the tonemap pass resamples it to the
 	// viewport size. With dynamic resolution the scale follows the GPU time measured by the renderer's

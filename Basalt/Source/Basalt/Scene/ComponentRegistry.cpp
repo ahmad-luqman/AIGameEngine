@@ -1017,12 +1017,16 @@ namespace Basalt {
 
 		std::string Validate(const PointLightComponent& light)
 		{
-			return std::isfinite(light.ShadowSoftness) && light.ShadowSoftness >= 0.0f && light.ShadowSoftness <= MaxLocalShadowSoftness ? std::string() : "ShadowSoftness must be finite and in [0, 4]";
+			if (!std::isfinite(light.Radius) || light.Radius < 0.0f)
+				return fmt::format("Radius {} must be finite and nonnegative", light.Radius);
+			return ValidateLocalShadowSoftness(light.ShadowSoftness);
 		}
 
 		std::string Validate(const SpotLightComponent& light)
 		{
-			return std::isfinite(light.ShadowSoftness) && light.ShadowSoftness >= 0.0f && light.ShadowSoftness <= MaxLocalShadowSoftness ? std::string() : "ShadowSoftness must be finite and in [0, 4]";
+			if (!std::isfinite(light.Range) || light.Range < 0.0f)
+				return fmt::format("Range {} must be finite and nonnegative", light.Range);
+			return ValidateLocalShadowSoftness(light.ShadowSoftness);
 		}
 
 		std::string Validate(const AudioSourceComponent& source)

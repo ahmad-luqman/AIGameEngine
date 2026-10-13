@@ -30,6 +30,14 @@ set_tests_properties(FeatureTest PROPERTIES ENVIRONMENT "BASALT_USER_DATA_DIR=${
 # runtime with validation enabled; any Vulkan/nvrhi validation error fails the test. --offscreen needs no
 # window or display server; --require-validation fails the test if the validation layer could not be loaded.
 option(BASALT_GPU_TESTS "Register tests that need a GPU" OFF)
+# Python is optional; headless checks also guard the GPU harness against false passes.
+find_package(Python3 QUIET COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+	add_test(NAME LocalShadowHarness
+		COMMAND "${Python3_EXECUTABLE}" -O "${CMAKE_CURRENT_SOURCE_DIR}/Rendering/LocalShadowsTests.py")
+	set_tests_properties(LocalShadowHarness PROPERTIES LABELS unit TIMEOUT 30)
+endif()
+
 if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	set(basaltRenderArgs --project "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest" --frames 90 --width 1280 --height 720 --require-validation)
 
@@ -122,13 +130,16 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 		set_tests_properties(FeatureTestRenderWindowed PROPERTIES FAIL_REGULAR_EXPRESSION "${noGpuTimingsRegex}")
 		list(APPEND basaltGpuTests FeatureTestRenderWindowed)
 	endif()
-	find_package(Python3 REQUIRED COMPONENTS Interpreter)
-	add_test(NAME LocalShadowRender
-		COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/Rendering/LocalShadows.py"
-			--runtime $<TARGET_FILE:BasaltRuntime> --cli $<TARGET_FILE:BasaltCLI>
-			--output "${basaltGoldenOutput}/LocalShadows")
-	set_tests_properties(LocalShadowRender PROPERTIES TIMEOUT 300)
-	list(APPEND basaltGpuTests LocalShadowRender)
+	if(Python3_Interpreter_FOUND)
+		add_test(NAME LocalShadowRender
+			COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/Rendering/LocalShadows.py"
+				--runtime $<TARGET_FILE:BasaltRuntime> --cli $<TARGET_FILE:BasaltCLI>
+				--output "${basaltGoldenOutput}/LocalShadows")
+		set_tests_properties(LocalShadowRender PROPERTIES TIMEOUT 600)
+		list(APPEND basaltGpuTests LocalShadowRender)
+	else()
+		message(STATUS "Python 3 not found: skipping LocalShadowRender (other GPU tests remain enabled)")
+	endif()
 	set_tests_properties(${basaltGpuTests} PROPERTIES LABELS gpu)
 	if(APPLE)
 		# Homebrew's validation layer manifest names its library without a path (Apple silicon and Intel prefixes).

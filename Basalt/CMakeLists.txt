@@ -67,6 +67,10 @@ file(GLOB BASALT_SHADER_SOURCES CONFIGURE_DEPENDS
 	"${CMAKE_CURRENT_SOURCE_DIR}/Shaders/*.frag"
 	"${CMAKE_CURRENT_SOURCE_DIR}/Shaders/*.comp")
 
+# One source for the C++/GLSL cascade array length and shadow-view index encoding.
+set(BASALT_SHADOW_CASCADES 4)
+target_compile_definitions(Basalt PRIVATE BS_SHADOW_CASCADE_COUNT=${BASALT_SHADOW_CASCADES})
+
 basalt_embed_shaders(Basalt
 	INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/Include"
 	SOURCES ${BASALT_SHADER_SOURCES})

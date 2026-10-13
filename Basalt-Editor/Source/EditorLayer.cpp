@@ -1193,6 +1193,8 @@ namespace Basalt {
 			ImGui::Text("Entities: %zu", scene.GetEntityCount());
 			ImGui::Text("Draw calls: %u (shadow %u)", stats.DrawCalls, stats.ShadowDrawCalls);
 			ImGui::Text("Culled submeshes: %u", stats.CulledSubmeshes);
+			ImGui::Text("Local shadow maps: %u (skipped lights %u)", stats.LocalShadowMaps, stats.LocalShadowsSkipped);
+			ImGui::Text("Lights skipped: %u", stats.LightsSkipped);
 			ImGui::Text("Particles: %u (skipped %u)", stats.Particles, stats.ParticlesSkipped);
 			ImGui::Text("Lights: %u", stats.Lights);
 			if (m_Renderer->IsDynamicResolutionActive())

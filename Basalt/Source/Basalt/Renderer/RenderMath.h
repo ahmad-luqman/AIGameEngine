@@ -21,6 +21,12 @@ namespace Basalt {
 		bool Intersects(const AABB& box) const;
 	};
 
+	// Avoid a degenerate look-at basis for nearly vertical light directions.
+	inline glm::vec3 ShadowUpVector(const glm::vec3& direction)
+	{
+		return std::abs(direction.y) > 0.99f ? glm::vec3(0, 0, 1) : glm::vec3(0, 1, 0);
+	}
+
 	// True for orthographic projections (no perspective divide).
 	inline bool IsOrthographic(const glm::mat4& projection)
 	{

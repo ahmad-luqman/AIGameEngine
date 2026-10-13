@@ -26,6 +26,7 @@ namespace Basalt {
 		if (m_Options.ScenePath.empty())
 		{
 			BS_CORE_CRITICAL("Runtime: no scene to play (set StartScene in the project or pass --scene)");
+			application.SetExitCode(1);
 			application.Close();
 			return;
 		}
@@ -45,6 +46,8 @@ namespace Basalt {
 			m_Renderer = CreateScope<SceneRenderer>(device->GetDevice(), SceneRendererSpecification{ .GpuTimers = device->SupportsTimerQueries() });
 			if (!m_Renderer->Initialize())
 			{
+				m_Renderer.reset();
+				application.SetExitCode(1);
 				application.Close();
 				return;
 			}
@@ -108,7 +111,15 @@ namespace Basalt {
 
 		const auto camera = GetPrimaryRenderCamera(*m_Scene, width, height);
 		if (camera)
+		{
 			m_Renderer->Render(*m_Scene, *camera);
+			if (m_Renderer->GetStatistics().Failed)
+			{
+				application.SetExitCode(1);
+				application.Close();
+				return;
+			}
+		}
 		else if (!m_WarnedNoCamera)
 		{
 			BS_CORE_WARN("Runtime: the scene has no primary camera");
@@ -180,6 +191,9 @@ namespace Basalt {
 
 	void RuntimeLayer::CheckRendererResults(const std::function<void(int)>& fail)
 	{
+		const auto& stats = m_Renderer->GetStatistics();
+		BS_CORE_INFO("Runtime: render stats localShadowMaps={} localShadowsSkipped={} lightsSkipped={} localShadowAtlasSize={}",
+					 stats.LocalShadowMaps, stats.LocalShadowsSkipped, stats.LightsSkipped, stats.LocalShadowAtlasSize);
 		const bool timers = m_Renderer->HasGpuTimers();
 		const GpuTimings& timings = m_Renderer->GetGpuTimings();
 		const std::string text = FormatGpuTimings(timings, timers);

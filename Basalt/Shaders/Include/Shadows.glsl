@@ -18,6 +18,11 @@ float InterleavedGradientNoise(vec2 position)
 	return fract(52.9829189 * fract(dot(position, vec2(0.06711056, 0.00583715))));
 }
 
+vec2 ShadowClipToUV(vec2 ndc)
+{
+	return vec2(ndc.x, -ndc.y) * 0.5 + 0.5;
+}
+
 int SelectCascade(float viewDepth)
 {
 	int cascadeCount = int(u_View.Sun.ShadowParams.w);
@@ -39,7 +44,7 @@ float SampleCascade(int cascade, vec3 worldPosition, vec3 normal, vec2 fragCoord
 
 	vec4 lightClip = u_View.CascadeViewProjection[cascade] * vec4(offsetPosition, 1.0);
 	vec3 coords = lightClip.xyz / lightClip.w;
-	vec2 uv = vec2(coords.x * 0.5 + 0.5, 0.5 - coords.y * 0.5);
+	vec2 uv = ShadowClipToUV(coords.xy);
 	if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))) || coords.z > 1.0)
 		return 1.0;
 
@@ -128,6 +133,7 @@ float ComputeLocalShadow(LightData light, vec3 worldPosition, vec3 normal)
 	vec3 position = worldPosition + normal * u_View.CameraClip.w * (1.0 - clamp(dot(normal, L), 0.0, 1.0)) +
 		L * u_View.CameraClip.z * light.Position.w;
 	uint index = uint(light.Params.y) - 1u;
+	// Type 0 is a point: its six maps follow PointShadowFace order; spots own only the base map.
 	if (light.Color.w < 0.5)
 		index += PointShadowFace(position - light.Position.xyz);
 	LocalShadowMap map = u_LocalShadows.Maps[index];
@@ -137,7 +143,7 @@ float ComputeLocalShadow(LightData light, vec3 worldPosition, vec3 normal)
 	vec3 coords = clip.xyz / clip.w;
 	if (coords.z <= 0.0 || coords.z >= 1.0 || any(greaterThan(abs(coords.xy), vec2(1.0))))
 		return 1.0;
-	vec2 uv = (vec2(coords.x, -coords.y) * 0.5 + 0.5) * map.AtlasRect.xy + map.AtlasRect.zw;
+	vec2 uv = ShadowClipToUV(coords.xy) * map.AtlasRect.xy + map.AtlasRect.zw;
 	vec2 texel = 1.0 / vec2(textureSize(sampler2D(u_LocalShadowAtlas, u_PointSampler), 0));
 	vec2 lo = map.AtlasRect.zw + 0.5 * texel;
 	vec2 hi = map.AtlasRect.zw + map.AtlasRect.xy - 0.5 * texel;
