@@ -598,18 +598,17 @@ or the whole canvas (nothing is clipped to it). Anchors are fractions of the par
 - **Equal anchors** pin the rect to that spot: `Size` is its size, and its `Pivot` (a fraction of the rect)
   sits on the anchor, moved by `Position`.
 - **Different anchors** stretch the rect with its parent: `Size` is added to the anchors' span, so
-  `Size = Vec2(-40, -40)` with anchors `0,0`/`1,1` (and the default centered `Pivot`) insets it by 20 units
-  on every side.
+  `Size = Vec2(-40, -40)` with anchors `0,0`/`1,1` (and the default centered `Pivot` and zero `Position`)
+  insets it by 20 units on every side.
 - `Visible = false` hides the entity and everything below it.
 
-`UIImage` fills the rect with `Color`, or with `Texture` tinted by `Color`; an image that does not load is
+`UIImage` fills the rect with `Color`, or with `Texture` tinted by `Color`. An image that cannot be read is
 logged once and draws the plain `Color` (the inspector and `ui.layout` show the error). A non-zero `Slice`
 makes it a nine-slice panel: the corners keep their size (`Slice` texels times `SliceScale` canvas units,
-shrinking proportionally only when they would overlap), the edges stretch along one axis and the center
-along both. `UIText` draws inside the rect, each line aligned on its
+shrinking proportionally when opposite borders would overlap, in the rect or in the texture), the edges
+stretch along one axis and the center along both. `UIText` draws inside the rect, each line aligned on its
 own, breaking lines at the rect's width when `Wrap` is on (between words; a word wider than the rect is
-cut). Without a `UIRect`, an image or text fills its
-parent's rect.
+split across lines). Without a `UIRect`, an image or text fills its parent's rect.
 
 Draw order follows the hierarchy: a parent before its children, later siblings over earlier ones. Change
 components with `SetComponent` like any other. Values are checked, and a bad one is an error naming the
@@ -641,7 +640,8 @@ Scene.FindEntityByName("PauseMenu"):SetComponent("UIRect", { Visible = paused })
 keeps its place at any aspect ratio. `Pivot` (a fraction of the element) defaults to the anchor, so an
 element anchored to a corner grows away from it. For text, `Align` sets the pivot's x. Unknown options,
 unknown preset names, values of the wrong type and values outside the ranges the UI components accept (see
-above; `x, y`, `width, height` and `Width` within ±1000000) are errors. A frame takes at most 65536
+above; `x, y` within ±1000000, `width, height` up to 1000000, `Width` above 0 and up to 1000000) are
+errors; a negative width or height draws nothing (a health bar at negative health). A frame takes at most 65536
 `UI.*` commands; one more is an error (usually a loop that never ends).
 
 ```lua
@@ -654,8 +654,9 @@ UI.Image("Assets/Textures/Panel.png", 0, -40, 480, 120, { Anchor = "Bottom", Sli
 `Font` takes a TrueType file in the project (`.ttf`, or `.otf` with TrueType outlines). Each file is loaded
 once and drawn at any size. A font that cannot be read, or is not a TrueType font (CFF outlines,
 collections, fonts without a Unicode character map), logs an error once and falls back to the built-in
-font until the file changes. Every font is checked before it is used; glyphs whose data could crash the font
-rasterizer draw blank, with a warning. Fonts are files up to 32 MB.
+font until the file changes (a font that loaded is kept). Every font is checked before it is used; glyphs
+whose data could crash the font rasterizer draw blank, with a warning (also shown by the inspector and
+`ui.layout`). Fonts are files up to 32 MB.
 
 ## Audio, debug drawing, time, logging, game
 

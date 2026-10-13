@@ -109,10 +109,8 @@ namespace Basalt {
 		}
 
 		// Debug views show the renderer's raw buffers: no game UI over them.
-		if (m_Options.DebugView == RendererDebugView::None)
-			m_UIFrame.Build(m_Scene.get(), viewportSize, true);
-		else
-			m_UIFrame.Clear();
+		const bool drawUI = m_Options.DebugView == RendererDebugView::None;
+		m_UIFrame.Build(drawUI ? m_Scene.get() : nullptr, viewportSize, drawUI);
 
 		m_CommandList->open();
 		m_UIFrame.Prepare([&](const std::string& path) { return m_Renderer->GetUITexture(path, m_CommandList); });

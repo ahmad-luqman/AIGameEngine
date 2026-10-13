@@ -1,5 +1,6 @@
 #include "Basalt/UI/UILayout.h"
 
+#include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Scene/Scene.h"
 #include "Basalt/UI/UIRules.h"
@@ -17,8 +18,12 @@ namespace Basalt {
 			return entity.HasComponent<UIRectComponent>() || entity.HasComponent<UIImageComponent>() || entity.HasComponent<UITextComponent>();
 		}
 
+		// Reported repairs, bounded so a long session with many broken entities cannot grow it without end.
+		constexpr size_t MaxReportedRepairs = 1024;
+
 		// The registry rejects invalid values, so only C++ code writing a component directly produces them.
-		// The layout draws repaired values and says so, once per entity, component and problem.
+		// The layout draws repaired values and says so, once per entity and component (the value may change
+		// every frame, as when C++ animates it).
 		template<typename T>
 		T Repaired(Entity entity, const T& component, T (*sanitize)(T), std::string (*validate)(const T&), const char* name)
 		{
@@ -27,32 +32,51 @@ namespace Basalt {
 				return repaired;
 			static std::mutex s_Mutex;
 			static std::unordered_set<std::string> s_Reported;
-			const std::string problem = validate(component);
 			std::scoped_lock lock(s_Mutex);
-			// Bounded, so a long session with many broken entities cannot grow it without end.
-			if (s_Reported.size() < 1024 && s_Reported.insert(fmt::format("{}/{}/{}", static_cast<uint64_t>(entity.GetUUID()), name, problem)).second)
+			if (s_Reported.size() > MaxReportedRepairs)
+				return repaired;
+			if (s_Reported.size() == MaxReportedRepairs)
+			{
+				s_Reported.insert({});
+				BS_CORE_WARN("UILayout: more than {} UI components with invalid values; no longer reporting them", MaxReportedRepairs);
+				return repaired;
+			}
+			if (s_Reported.insert(fmt::format("{}/{}", static_cast<uint64_t>(entity.GetUUID()), name)).second)
+			{
+				const std::string problem = validate(component);
+				BS_CORE_ASSERT(!problem.empty(), "the {} rules repair a value they accept", name);
 				BS_CORE_WARN("UILayout: the {} on '{}' has invalid values ({}); drawing corrected ones", name, entity.GetName(), problem);
+			}
 			return repaired;
 		}
 
-		// The entity's rect inside `parent`, or nullopt when its UIRect hides it (and its subtree), unless
-		// `ignoreVisibility`.
-		std::optional<UIBox> RectInParent(Entity entity, const UIBox& parent, bool ignoreVisibility = false)
+		// The entity's rect inside `parent` (its UIRect's, or the parent's when it has none), whether visible
+		// or not.
+		UIBox RectInParent(Entity entity, const UIBox& parent)
 		{
 			const auto* component = entity.TryGetComponent<UIRectComponent>();
-			if (!component)
-				return parent;
-			const UIRectComponent rect = Repaired(entity, *component, &SanitizeUIRect, &ValidateUIRect, "UIRect");
-			if (!rect.Visible && !ignoreVisibility)
-				return std::nullopt;
-			return ComputeUIRect(parent, rect);
+			return component ? ComputeUIRect(parent, Repaired(entity, *component, &SanitizeUIRect, &ValidateUIRect, "UIRect")) : parent;
+		}
+
+		// Whether a UIRect hides the entity (and its subtree).
+		bool IsHidden(Entity entity)
+		{
+			const auto* component = entity.TryGetComponent<UIRectComponent>();
+			return component && !component->Visible;
+		}
+
+		// RectInParent, or nullopt when the entity is hidden.
+		std::optional<UIBox> VisibleRectInParent(Entity entity, const UIBox& parent)
+		{
+			const UIBox rect = RectInParent(entity, parent);
+			return IsHidden(entity) ? std::nullopt : std::optional(rect);
 		}
 
 		// Depth-first in hierarchy order. Scene bounds hierarchy depth (Scene::MaxHierarchyDepth), so the
 		// recursion is bounded too.
 		void Visit(Scene& scene, Entity entity, const UIBox& parent, std::vector<UILayoutItem>& out)
 		{
-			const std::optional<UIBox> rect = RectInParent(entity, parent);
+			const std::optional<UIBox> rect = VisibleRectInParent(entity, parent);
 			if (!rect)
 				return;
 			if (HasUIComponent(entity))
@@ -134,14 +158,15 @@ namespace Basalt {
 	{
 		if (!entity || entity.GetScene() != &scene || !HasUIComponent(entity))
 			return std::nullopt;
-		std::optional<UIBox> rect = UIBox{ { 0.0f, 0.0f }, canvasSize };
+		UIBox rect{ { 0.0f, 0.0f }, canvasSize };
 		for (Entity ancestor : GetAncestors(entity))
 		{
-			rect = RectInParent(ancestor, *rect);
-			if (!rect)
+			const std::optional<UIBox> next = VisibleRectInParent(ancestor, rect);
+			if (!next)
 				return std::nullopt;
+			rect = *next;
 		}
-		return RectInParent(entity, *rect);
+		return VisibleRectInParent(entity, rect);
 	}
 
 	UIBox UILayout::GetParentRect(Scene& scene, Entity entity, const glm::vec2& canvasSize)
@@ -150,7 +175,7 @@ namespace Basalt {
 		if (!entity || entity.GetScene() != &scene)
 			return rect;
 		for (Entity ancestor : GetAncestors(entity))
-			rect = *RectInParent(ancestor, rect, true);
+			rect = RectInParent(ancestor, rect);
 		return rect;
 	}
 

@@ -454,7 +454,7 @@ namespace Basalt {
 			});
 
 			Add(registry, "ui.layout",
-				"Lays out the current scene's UI components (the play copy while playing) for a viewport of width x height pixels: the canvas size, every visible UI entity's rect [x, y, width, height] in canvas units in draw order, and the problems that make UI draw differently than authored (an image that does not load, a font that does not load).",
+				"Lays out the current scene's UI components (the play copy while playing) for a viewport of width x height pixels: the canvas size, every visible UI entity's rect [x, y, width, height] in canvas units in draw order, and the problems that make UI draw differently than authored (an image that does not load and draws its Color, a font that does not load and falls back to the built-in one or has glyphs that draw blank).",
 				{ { "width", "integer, viewport pixels (default 1920)" }, { "height", "integer, viewport pixels (default 1080)" } }, [](AutomationSession& session, const json& params) {
 					const auto width = static_cast<float>(OptionalInteger(params, "width", 1920, 1, 65536));
 					const auto height = static_cast<float>(OptionalInteger(params, "height", 1080, 1, 65536));
@@ -476,7 +476,7 @@ namespace Basalt {
 							if (added)
 								error->second = UIFonts::CheckFile(text->Font);
 							if (!error->second.empty())
-								report(fmt::format("UIText font '{}': {} (draws with the built-in font)", text->Font, error->second));
+								report(fmt::format("UIText font '{}': {}", text->Font, error->second));
 						}
 					}
 					return json{ { "canvas", { canvas.x, canvas.y } }, { "items", items }, { "problems", problems } };

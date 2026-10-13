@@ -712,15 +712,24 @@ TEST_SUITE("Automation")
 	{
 		BasaltTest::TempProject project("UILayoutProblems");
 		project.WriteFile("Assets/Fonts/Bad.ttf", std::string(500, 'x'));
+		// Images and fonts that load are no problem.
+		const std::filesystem::path data = std::filesystem::path(BASALT_TEST_DATA_DIR) / "FeatureTest/Assets";
+		std::filesystem::create_directories(project.GetDirectory() / "Assets/Textures");
+		std::filesystem::copy_file(data / "Textures/UIPanel.png", project.GetDirectory() / "Assets/Textures/Panel.png");
+		std::filesystem::copy_file(data / "Fonts/Karla-Regular.ttf", project.GetDirectory() / "Assets/Fonts/Karla.ttf");
 		CommandRegistry registry;
 		AutomationSession session;
 		Run(registry, session, "scene.new", { { "name", "UI" }, { "empty", true } });
 		Run(registry, session, "entity.create", { { "name", "Panel" }, { "components", { { "UIRect", json::object() }, { "UIImage", { { "Texture", "Assets/Textures/Missing.png" } } } } } });
 		Run(registry, session, "entity.create", { { "name", "Label" }, { "components", { { "UIRect", json::object() }, { "UIText", { { "Font", "Assets/Fonts/Bad.ttf" } } } } } });
 		Run(registry, session, "entity.create", { { "name", "Plain" }, { "components", { { "UIText", json::object() } } } });
+		Run(registry, session, "entity.create", { { "name", "Good" }, { "components", { { "UIImage", { { "Texture", "Assets/Textures/Panel.png" } } }, { "UIText", { { "Font", "Assets/Fonts/Karla.ttf" } } } } } });
+		// Each entity using a bad font is reported (the file is checked once).
+		Run(registry, session, "entity.create", { { "name", "Label2" }, { "components", { { "UIText", { { "Font", "Assets/Fonts/Bad.ttf" } } } } } });
 
 		const json problems = Run(registry, session, "ui.layout")["problems"];
-		REQUIRE(problems.size() == 2);
+		REQUIRE(problems.size() == 3);
+		CHECK(problems[2]["name"] == "Label2");
 		CHECK(problems[0]["name"] == "Panel");
 		CHECK(problems[0]["problem"].get<std::string>().find("UIImage texture 'Assets/Textures/Missing.png'") != std::string::npos);
 		CHECK(problems[1]["name"] == "Label");

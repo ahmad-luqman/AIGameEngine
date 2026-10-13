@@ -6,9 +6,8 @@
 
 namespace Basalt {
 
-	// The value rules of the UI components, shared by the two places that apply them: the component registry
-	// rejects values outside them (files, Lua, automation, inspector) and the UI layout repairs components
-	// that C++ code wrote directly. One walk over the rules does both, so a component is valid exactly when
+	// The value rules of the UI components: the component registry rejects values outside them (files, Lua,
+	// automation, inspector), and the UI layout and editor repair components that C++ code wrote directly. One walk over the rules does both, so a component is valid exactly when
 	// its Sanitize function leaves it unchanged.
 
 	// The first rule the component breaks, naming the field and its value; empty when it is valid.

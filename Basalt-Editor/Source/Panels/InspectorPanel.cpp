@@ -3,6 +3,7 @@
 #include "Panels/JsonWidgets.h"
 
 #include "Basalt/Asset/AssetManager.h"
+#include "Basalt/Core/Assert.h"
 #include "Basalt/Math/Math.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Scene/ComponentRegistry.h"
@@ -55,17 +56,17 @@ namespace Basalt {
 			if (ImGui::Selectable(std::string(name).c_str()))
 				chosen = name;
 		}
-		if (ImGui::Selectable("Stretch"))
-			chosen = "Stretch";
+		if (ImGui::Selectable(std::string(UIStretchPreset).c_str()))
+			chosen = UIStretchPreset;
 		ImGui::EndCombo();
 		if (!chosen)
 			return;
 
 		Scene& scene = *entity.GetScene();
-		const glm::vec2 canvas = GameUI::GetCanvasSize(GameUI::GetViewportSize());
 		const UIRectComponent rect = SanitizeUIRect(entity.GetComponent<UIRectComponent>());
-		const UIBox parent = UILayout::GetParentRect(scene, entity, canvas);
-		const std::optional<UIRectComponent> preset = ApplyUIAnchorPreset(rect, *chosen, parent, ComputeUIRect(parent, rect));
+		const UIBox parent = UILayout::GetParentRect(scene, entity, GameUI::GetCanvasSize());
+		const std::optional<UIRectComponent> preset = ApplyUIAnchorPreset(rect, *chosen, parent);
+		BS_CORE_ASSERT(preset, "the anchor preset list holds a name ApplyUIAnchorPreset does not know");
 		if (!preset)
 			return;
 		const auto vec2 = [](const glm::vec2& value) { return nlohmann::json::array({ value.x, value.y }); };
@@ -292,7 +293,7 @@ namespace Basalt {
 				if (info.Name == "UIImage")
 				{
 					const std::string& texture = entity.GetComponent<UIImageComponent>().Texture;
-					if (const std::string error = texture.empty() ? std::string() : AssetManager::GetError(texture); !error.empty())
+					if (const std::string error = AssetManager::GetError(texture); !error.empty())
 						ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Image not loaded (%s); drawing the Color instead.", error.c_str());
 				}
 				if (info.Name == "UIText")
@@ -300,6 +301,8 @@ namespace Basalt {
 					const std::string& font = entity.GetComponent<UITextComponent>().Font;
 					if (const std::string error = UIFonts::GetError(font); !error.empty())
 						ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Font not loaded (%s); using the built-in font.", error.c_str());
+					else if (const std::string warning = UIFonts::GetWarning(font); !warning.empty())
+						ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Font: %s.", warning.c_str());
 				}
 				if (info.Name == "CharacterController")
 				{

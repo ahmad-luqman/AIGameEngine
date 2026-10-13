@@ -55,37 +55,27 @@ namespace {
 	{
 		const auto [offset, length] = FindGlyph(data, glyph);
 		REQUIRE(length >= 28);
-		const uint8_t bytes[28] = {
-			0,
-			2,
-			0,
-			0,
-			0,
-			0,
-			0,
-			50,
-			0,
-			50, // contours, xMin, yMin, xMax, yMax
-			0,
-			2,
-			0,
-			3, // contour end points
-			0,
-			0, // no instructions
-			0x37,
-			0x37,
-			0x37,
-			lastFlags, // on-curve, x and y as positive bytes
-			10,
-			10,
-			10,
-			10, // x deltas
-			10,
-			10,
-			10,
-			10, // y deltas
-		};
-		std::memcpy(&data[offset], bytes, sizeof(bytes));
+		std::vector<uint8_t> bytes;
+		for (uint16_t value : { 2, 0, 0, 50, 50 }) // contours, xMin, yMin, xMax, yMax
+			AppendU16(bytes, value);
+		for (uint16_t value : { 2, 3, 0 }) // contour end points, no instructions
+			AppendU16(bytes, value);
+		bytes.insert(bytes.end(), { 0x37, 0x37, 0x37, lastFlags });    // on-curve, x and y as positive bytes
+		bytes.insert(bytes.end(), { 10, 10, 10, 10, 10, 10, 10, 10 }); // x deltas, y deltas
+		REQUIRE(bytes.size() == 28);
+		std::memcpy(&data[offset], bytes.data(), bytes.size());
+	}
+
+	// Exactly `glyph` is broken, for a reason containing `fragment`; the font itself is fine.
+	void ExpectBroken(const std::vector<uint8_t>& font, uint32_t glyph, const char* fragment)
+	{
+		const TrueTypeFontCheck check = CheckTrueTypeFont(font);
+		CHECK_MESSAGE(check.Error.empty(), check.Error);
+		REQUIRE(check.BrokenGlyphs.size() == 1);
+		CHECK(check.BrokenGlyphs[0].Index == glyph);
+		CHECK(check.BrokenGlyphs[0].Offset == FindGlyph(font, glyph).first);
+		CHECK_MESSAGE(Contains(check.BrokenGlyphs[0].Problem, fragment), check.BrokenGlyphs[0].Problem);
+		CHECK(ValidateTrueTypeFont(font) == "glyph " + std::to_string(glyph) + ": " + check.BrokenGlyphs[0].Problem);
 	}
 
 	struct CmapRecord
@@ -192,7 +182,7 @@ namespace {
 	// Codepoints (of the 16-bit ones) for which stb's own lookup gives a glyph past the last one.
 	int CountGlyphsPastTheEnd(std::vector<uint8_t>& font)
 	{
-		stbtt_fontinfo info;
+		stbtt_fontinfo info{};
 		REQUIRE(stbtt_InitFont(&info, font.data(), 0));
 		int past = 0;
 		for (int codepoint = 0; codepoint <= 0xFFFF; codepoint++)
@@ -296,21 +286,12 @@ TEST_SUITE("UIFonts")
 		const std::vector<uint8_t> karla = ReadKarla();
 		const std::vector<uint32_t> tall = FindTallSimpleGlyphs(karla, 28);
 		REQUIRE(tall.size() > 2);
-		const auto expectBroken = [](const std::vector<uint8_t>& font, uint32_t glyph, const char* fragment) {
-			const TrueTypeFontCheck check = CheckTrueTypeFont(font);
-			CHECK_MESSAGE(check.Error.empty(), check.Error);
-			REQUIRE(check.BrokenGlyphs.size() == 1);
-			CHECK(check.BrokenGlyphs[0].Index == glyph);
-			CHECK(check.BrokenGlyphs[0].Offset == FindGlyph(font, glyph).first);
-			CHECK_MESSAGE(Contains(check.BrokenGlyphs[0].Problem, fragment), check.BrokenGlyphs[0].Problem);
-			CHECK(ValidateTrueTypeFont(font) == "glyph " + std::to_string(glyph) + ": " + check.BrokenGlyphs[0].Problem);
-		};
 
 		// A box that ends at the baseline while the outline rises above it makes stb assert while rasterizing
 		// (an edge lies above the bitmap's first row). Elsewhere the rasterizer clips geometry outside the box.
 		std::vector<uint8_t> overBaseline = karla;
 		EndBoxAtBaseline(overBaseline, tall[0]);
-		expectBroken(overBaseline, tall[0], "rises above the baseline");
+		ExpectBroken(overBaseline, tall[0], "rises above the baseline");
 		std::vector<uint8_t> lowTop = karla;
 		WriteU16(lowTop, FindGlyph(lowTop, tall[0]).first + 8, 5);
 		CHECK(ValidateTrueTypeFont(lowTop).empty());
@@ -319,21 +300,21 @@ TEST_SUITE("UIFonts")
 		const size_t offset = FindGlyph(karla, tall[0]).first;
 		std::vector<uint8_t> inverted = karla;
 		WriteU16(inverted, offset + 6, static_cast<uint16_t>(static_cast<int16_t>(ReadU16(inverted, offset + 2)) - 1));
-		expectBroken(inverted, tall[0], "inverted");
+		ExpectBroken(inverted, tall[0], "inverted");
 		std::vector<uint8_t> huge = karla;
 		WriteU16(huge, offset + 2, static_cast<uint16_t>(-30000));
 		WriteU16(huge, offset + 6, 30000);
-		expectBroken(huge, tall[0], "times the line height");
+		ExpectBroken(huge, tall[0], "times the line height");
 
 		std::vector<uint8_t> unordered = karla;
 		const uint32_t multi = FindGlyphWhere(unordered, [](int16_t contours) { return contours > 1; });
 		WriteU16(unordered, FindGlyph(unordered, multi).first + 12, 0);
-		expectBroken(unordered, multi, "out of order");
+		ExpectBroken(unordered, multi, "out of order");
 
 		// stb reads the point after a contour's off-curve first point; for the last point there is none.
 		std::vector<uint8_t> offCurveLast = karla;
 		MakeTwoContourGlyph(offCurveLast, tall[1], 0x36);
-		expectBroken(offCurveLast, tall[1], "one off-curve point");
+		ExpectBroken(offCurveLast, tall[1], "one off-curve point");
 		std::vector<uint8_t> onCurveLast = karla;
 		MakeTwoContourGlyph(onCurveLast, tall[1], 0x37);
 		CHECK(ValidateTrueTypeFont(onCurveLast).empty());
@@ -341,15 +322,15 @@ TEST_SUITE("UIFonts")
 		// Outline data cut short inside the glyph.
 		std::vector<uint8_t> cut = karla;
 		WriteU16(cut, FindGlyph(cut, tall[2]).first + 10 + 2 * size_t{ static_cast<uint16_t>(GlyphContours(cut, tall[2])) }, 60000); // instruction length
-		expectBroken(cut, tall[2], "truncated");
+		ExpectBroken(cut, tall[2], "truncated");
 
 		// A composite that contains itself would recurse until the stack overflows; point matching asserts.
 		std::vector<uint8_t> cycle = karla;
 		MakeComposite(cycle, tall[0], { tall[0] });
-		expectBroken(cycle, tall[0], "form a cycle");
+		ExpectBroken(cycle, tall[0], "form a cycle");
 		std::vector<uint8_t> matching = cycle;
 		WriteU16(matching, offset + 10, 0x0000);
-		expectBroken(matching, tall[0], "point matching");
+		ExpectBroken(matching, tall[0], "point matching");
 	}
 
 	TEST_CASE("Composite glyphs: real ones pass, and only the glyph that misbehaves breaks")
@@ -374,18 +355,13 @@ TEST_SUITE("UIFonts")
 		// A composite rising above a box that ends at the baseline (the same stb assertion as a simple glyph).
 		std::vector<uint8_t> overBaseline = cousine;
 		EndBoxAtBaseline(overBaseline, composite);
-		TrueTypeFontCheck check = CheckTrueTypeFont(overBaseline);
-		REQUIRE(check.BrokenGlyphs.size() == 1);
-		CHECK(check.BrokenGlyphs[0].Index == composite);
-		CHECK(Contains(check.BrokenGlyphs[0].Problem, "rises above the baseline"));
+		ExpectBroken(overBaseline, composite, "rises above the baseline");
 
 		// A broken component is blanked; the composites using it keep their other parts.
 		std::vector<uint8_t> brokenBase = cousine;
 		const size_t baseOffset = FindGlyph(brokenBase, base).first;
 		WriteU16(brokenBase, baseOffset + 6, static_cast<uint16_t>(static_cast<int16_t>(ReadU16(brokenBase, baseOffset + 2)) - 1));
-		check = CheckTrueTypeFont(brokenBase);
-		REQUIRE(check.BrokenGlyphs.size() == 1);
-		CHECK(check.BrokenGlyphs[0].Index == base);
+		ExpectBroken(brokenBase, base, "inverted");
 
 		// A component moved far away and scaled up would overflow stb's 16-bit vertex coordinates. Rewrite the
 		// first component as: 16-bit offsets (bit 0), positioned by offsets (bit 1), one scale (bit 3), last.
@@ -394,15 +370,11 @@ TEST_SUITE("UIFonts")
 		WriteU16(far, offset + 14, 32000);  // x offset
 		WriteU16(far, offset + 16, 0);      // y offset
 		WriteU16(far, offset + 18, 0x7FFF); // scale ~2 (F2Dot14)
-		check = CheckTrueTypeFont(far);
-		REQUIRE(check.BrokenGlyphs.size() == 1);
-		CHECK(check.BrokenGlyphs[0].Index == composite);
-		CHECK(Contains(check.BrokenGlyphs[0].Problem, "beyond 16-bit coordinates"));
+		ExpectBroken(far, composite, "beyond 16-bit coordinates");
 
 		std::vector<uint8_t> cycle = cousine;
 		WriteU16(cycle, offset + 12, static_cast<uint16_t>(composite));
-		check = CheckTrueTypeFont(cycle);
-		CHECK(std::ranges::any_of(check.BrokenGlyphs, [&](const auto& glyph) { return glyph.Index == composite && Contains(glyph.Problem, "form a cycle"); }));
+		ExpectBroken(cycle, composite, "form a cycle");
 		CHECK(RepairTrueTypeFont(cycle).empty());
 		CHECK(ValidateTrueTypeFont(cycle).empty());
 	}
@@ -413,24 +385,37 @@ TEST_SUITE("UIFonts")
 		const std::vector<uint32_t> victims = FindTallSimpleGlyphs(karla, 28);
 		REQUIRE(victims.size() >= 10);
 
-		// A chain: each glyph a composite of the one before. Nine levels are allowed, ten are not.
+		// A chain: each glyph a composite of the one before. Eight composite levels are allowed, nine are not.
 		std::vector<uint8_t> chain = karla;
 		for (size_t level = 1; level <= 9; level++)
 			MakeComposite(chain, victims[level], { victims[level - 1] });
-		TrueTypeFontCheck check = CheckTrueTypeFont(chain);
-		REQUIRE(check.BrokenGlyphs.size() == 1);
-		CHECK(check.BrokenGlyphs[0].Index == victims[9]);
-		CHECK(Contains(check.BrokenGlyphs[0].Problem, "nest more than 8 levels"));
+		ExpectBroken(chain, victims[9], "nest more than 8 levels");
+
+		// The same chain the other way round (the root has the lowest index, so it is resolved first): still
+		// only the root is blamed, not the glyph where the depth limit is reached.
+		std::vector<uint8_t> reversed = karla;
+		for (size_t level = 1; level <= 9; level++)
+			MakeComposite(reversed, victims[level - 1], { victims[level] });
+		ExpectBroken(reversed, victims[0], "nest more than 8 levels");
+
+		// A cycle breaks one glyph, whatever the glyph order: A -> B -> A breaks A (the glyph that comes back
+		// around) and leaves B, and C using B, intact; a composite D using a self-cycle C' keeps its other part.
+		std::vector<uint8_t> loop = karla;
+		MakeComposite(loop, victims[0], { victims[1] });
+		MakeComposite(loop, victims[1], { victims[0] });
+		MakeComposite(loop, victims[2], { victims[1] });
+		ExpectBroken(loop, victims[0], "form a cycle");
+		std::vector<uint8_t> innocent = karla;
+		MakeComposite(innocent, victims[0], { victims[2], victims[1] });
+		MakeComposite(innocent, victims[1], { victims[1] });
+		ExpectBroken(innocent, victims[1], "form a cycle");
 
 		// Fan-out: each glyph uses the one before three times. stb expands composites without caching, so
 		// level 7 would take 6559 shape calls; the limit is MaxShapeCalls.
 		std::vector<uint8_t> fan = karla;
 		for (size_t level = 1; level <= 7; level++)
 			MakeComposite(fan, victims[level], { victims[level - 1], victims[level - 1], victims[level - 1] });
-		check = CheckTrueTypeFont(fan);
-		REQUIRE(check.BrokenGlyphs.size() == 1);
-		CHECK(check.BrokenGlyphs[0].Index == victims[7]);
-		CHECK(Contains(check.BrokenGlyphs[0].Problem, "too many components"));
+		ExpectBroken(fan, victims[7], "too many components");
 		CHECK(RepairTrueTypeFont(fan).empty());
 	}
 
@@ -560,6 +545,7 @@ TEST_SUITE("UIFonts")
 		for (size_t i = 1; i < victims.size(); i++)
 			EndBoxAtBaseline(broken, victims[i]);
 
+		const std::vector<uint8_t> unrepaired = broken;
 		CHECK(RepairTrueTypeFont(broken, &repaired).empty());
 		REQUIRE(repaired.size() == victims.size());
 		CHECK(Contains(repaired[0].Problem, "form a cycle"));
@@ -571,8 +557,11 @@ TEST_SUITE("UIFonts")
 			CHECK(broken[blankedOffset + i] == 0);
 
 		// The repaired font rasterizes every printable ASCII character at several sizes (stb would assert on
-		// the unrepaired glyphs).
-		ImFont* font = LoadAndRasterize(broken);
+		// the unrepaired glyphs). The warning lists the first five blanked glyphs.
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		ImFont* font = LoadAndRasterize(unrepaired);
+		CHECK(CountLogMessages(since, fmt::format("{} glyph(s) cannot be drawn safely", victims.size())) == 1);
+		CHECK(CountLogMessages(since, "; ...)") == 1);
 		CHECK(font->CalcTextSizeA(32.0f, FLT_MAX, 0.0f, "ABC xyz").x > 0.0f);
 
 		// Font-wide problems cannot be repaired.
@@ -604,16 +593,13 @@ TEST_SUITE("UIFonts")
 	{
 		ImGuiTestContext imgui;
 		// Loading a game font first still leaves the built-in font as ImGui's default (the atlas's first).
-		std::string firstError;
-		REQUIRE(UIFonts::LoadFromMemory(ReadKarla(), "Karla", firstError));
-		CHECK(ImGui::GetIO().Fonts->Fonts[0] != ImGui::GetIO().Fonts->Fonts.back());
-		ImFont* builtIn = UIFonts::GetDefault();
-		CHECK(builtIn == ImGui::GetIO().Fonts->Fonts[0]);
-		CHECK(UIFonts::Get("") == builtIn);
-
 		std::string error;
 		ImFont* karla = UIFonts::LoadFromMemory(ReadKarla(), "Karla", error);
 		REQUIRE_MESSAGE(karla, error);
+		CHECK(ImGui::GetIO().Fonts->Fonts[0] != karla);
+		ImFont* builtIn = UIFonts::GetDefault();
+		CHECK(builtIn == ImGui::GetIO().Fonts->Fonts[0]);
+		CHECK(UIFonts::Get("") == builtIn);
 		const float karlaWidth = karla->CalcTextSizeA(40.0f, FLT_MAX, 0.0f, "Hello").x;
 		CHECK(karlaWidth > 0.0f);
 		CHECK(karlaWidth != builtIn->CalcTextSizeA(40.0f, FLT_MAX, 0.0f, "Hello").x);
@@ -631,10 +617,10 @@ TEST_SUITE("UIFonts")
 		CHECK(UIFonts::CheckFile("Assets/Fonts/Karla.ttf").empty());
 
 		// A missing file is logged once, and loaded once it appears.
-		const size_t before = CountLogMessages("Missing.ttf");
+		const uint64_t since = Log::GetHistory().GetTotalCount();
 		CHECK(UIFonts::Get("Assets/Fonts/Missing.ttf") == builtIn);
 		CHECK(UIFonts::Get("Assets/Fonts/Missing.ttf") == builtIn);
-		CHECK(CountLogMessages("Missing.ttf") == before + 1);
+		CHECK(CountLogMessages(since, "Missing.ttf") == 1);
 		CHECK(Contains(UIFonts::GetError("Assets/Fonts/Missing.ttf"), "does not exist or is not a file"));
 		REQUIRE(FileSystem::WriteBinaryFile(fonts / "Missing.ttf", data.data(), data.size()));
 		CHECK(UIFonts::Get("Assets/Fonts/Missing.ttf") != builtIn);
@@ -643,11 +629,15 @@ TEST_SUITE("UIFonts")
 		// An invalid file, fixed on disk, loads on the next use.
 		const std::filesystem::path fake = fonts / "Fake.ttf";
 		REQUIRE(FileSystem::WriteTextFile(fake, std::string(500, 'x')));
+		const uint64_t fakeSince = Log::GetHistory().GetTotalCount();
 		CHECK(UIFonts::Get("Assets/Fonts/Fake.ttf") == builtIn);
+		CHECK(UIFonts::Get("Assets/Fonts/Fake.ttf") == builtIn); // unchanged: not read again
+		CHECK(CountLogMessages(fakeSince, "Fake.ttf") == 1);
 		CHECK(Contains(UIFonts::GetError("Assets/Fonts/Fake.ttf"), "not a TrueType font"));
 		CHECK(Contains(UIFonts::CheckFile("Assets/Fonts/Fake.ttf"), "not a TrueType font"));
 		REQUIRE(FileSystem::WriteBinaryFile(fake, data.data(), data.size()));
 		std::filesystem::last_write_time(fake, std::filesystem::last_write_time(fake) + std::chrono::hours(1));
+		CHECK(UIFonts::GetError("Assets/Fonts/Fake.ttf").empty()); // changed since: no longer the error
 		CHECK(UIFonts::Get("Assets/Fonts/Fake.ttf") != builtIn);
 
 		// Directories and oversized files are refused before they are read.
@@ -658,6 +648,19 @@ TEST_SUITE("UIFonts")
 		std::filesystem::resize_file(fonts / "Huge.ttf", MaxTrueTypeFontSize + 1);
 		CHECK(UIFonts::Get("Assets/Fonts/Huge.ttf") == builtIn);
 		CHECK(Contains(UIFonts::GetError("Assets/Fonts/Huge.ttf"), "larger than 32 MB"));
+		// Exactly the limit is read (and then checked).
+		REQUIRE(FileSystem::WriteTextFile(fonts / "Limit.ttf", "x"));
+		std::filesystem::resize_file(fonts / "Limit.ttf", MaxTrueTypeFontSize);
+		CHECK(Contains(UIFonts::CheckFile("Assets/Fonts/Limit.ttf"), "not a TrueType font"));
+
+		// A font with blanked glyphs loads, with a warning that the inspector and ui.layout show.
+		std::vector<uint8_t> repairable = data;
+		EndBoxAtBaseline(repairable, FindTallSimpleGlyphs(repairable, 10).front());
+		REQUIRE(FileSystem::WriteBinaryFile(fonts / "Repairable.ttf", repairable.data(), repairable.size()));
+		CHECK(UIFonts::Get("Assets/Fonts/Repairable.ttf") != builtIn);
+		CHECK(Contains(UIFonts::GetWarning("Assets/Fonts/Repairable.ttf"), "1 glyph(s) cannot be drawn safely"));
+		CHECK(Contains(UIFonts::CheckFile("Assets/Fonts/Repairable.ttf"), "1 glyph(s) cannot be drawn safely"));
+		CHECK(UIFonts::GetWarning("Assets/Fonts/Karla.ttf").empty());
 
 		// Clearing forgets failures.
 		UIFonts::Clear();
@@ -676,8 +679,7 @@ TEST_SUITE("UIFonts")
 		// The new context may reuse the old one's address; its atlas must still get its own font.
 		ImGuiTestContext second;
 		ImFont* font = UIFonts::Get("Assets/Fonts/Karla.ttf");
-		const ImVector<ImFont*>& fonts = ImGui::GetIO().Fonts->Fonts;
-		CHECK(std::find(fonts.begin(), fonts.end(), font) != fonts.end());
+		CHECK(ImGui::GetIO().Fonts->Fonts.contains(font));
 		CHECK(font != UIFonts::GetDefault());
 	}
 }

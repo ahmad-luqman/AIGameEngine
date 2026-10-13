@@ -2,11 +2,9 @@
 
 // Helpers shared by the UI tests (UITests.cpp) and the font tests (UIFontTests.cpp): an ImGui context without
 // a GPU, the test fonts, and big-endian access into font files for tests that corrupt or rebuild one table.
+// (Destroying the context also clears UIFonts, through its shutdown hook.)
 
 #include <Basalt/Core/FileSystem.h>
-#include <Basalt/Core/Log.h>
-#include <Basalt/UI/GameUI.h>
-#include <Basalt/UI/UIFonts.h>
 
 #include <doctest/doctest.h>
 #include <imgui.h>
@@ -41,7 +39,7 @@ namespace BasaltTest {
 	}
 
 	// An ImGui context for font and draw tests: no window or GPU, but the dynamic font atlas works on the CPU
-	// once a renderer claims to handle textures. Destroying it clears UIFonts (through UIFonts' shutdown hook).
+	// once a renderer claims to handle textures.
 	class ImGuiTestContext
 	{
 	public:
@@ -236,25 +234,6 @@ namespace BasaltTest {
 	inline bool Contains(const std::string& text, const char* fragment)
 	{
 		return text.find(fragment) != std::string::npos;
-	}
-
-	// Number of log messages containing `fragment`.
-	inline size_t CountLogMessages(const char* fragment)
-	{
-		size_t count = 0;
-		for (const Basalt::LogMessage& message : Basalt::Log::GetHistory().GetAll())
-		{
-			if (Contains(message.Text, fragment))
-				count++;
-		}
-		return count;
-	}
-
-	inline std::vector<Basalt::UIDrawCommand> GetImmediateCommands()
-	{
-		std::vector<Basalt::UIDrawCommand> commands;
-		Basalt::GameUI::AppendCommands(commands);
-		return commands;
 	}
 
 }

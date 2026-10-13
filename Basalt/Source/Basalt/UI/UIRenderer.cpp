@@ -5,6 +5,7 @@
 #include "Basalt/UI/UILayout.h"
 
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include <algorithm>
 #include <cfloat>
@@ -36,9 +37,8 @@ namespace Basalt {
 			const ImU32 color = ToColor(command.Color);
 			const UIBox screen = mapping.ToScreen(box);
 			auto texture = command.Texture.empty() ? resources.Textures.end() : resources.Textures.find(command.Texture);
-			// No image, or one that failed to load (logged by AssetManager, shown in the inspector): fill with
-			// the color.
-			if (texture == resources.Textures.end())
+			// No image, or one that failed to load or upload (logged once): fill with the color.
+			if (texture == resources.Textures.end() || texture->second.Handle == 0)
 			{
 				drawList->AddRectFilled(ToImVec(screen.Min), ToImVec(screen.Max()), color);
 				return;
@@ -66,7 +66,11 @@ namespace Basalt {
 				return;
 			auto loaded = command.Font.empty() ? resources.Fonts.end() : resources.Fonts.find(command.Font);
 			ImFont* font = loaded != resources.Fonts.end() ? loaded->second : UIFonts::GetDefault();
-			const float density = std::max(ImGui::GetIO().DisplayFramebufferScale.y, 1.0f);
+			// Glyphs are rasterized at the font's current density. ImGui sets it only on fonts it pushes, so set
+			// the display's density (the framebuffer scale) for this draw: text stays sharp on HiDPI displays.
+			const float density = std::max(ImGui::GetFontRasterizerDensity(), 1.0f);
+			const float previousDensity = font->CurrentRasterizerDensity;
+			font->CurrentRasterizerDensity = density;
 			const float pixelSize = std::clamp(command.FontSize * mapping.Scale, 1.0f, UIRenderer::MaxTextPixelSize / density);
 			const UIBox screen = mapping.ToScreen(box);
 			const float wrapWidth = command.Wrap && screen.Size.x > 0.0f ? screen.Size.x : 0.0f;
@@ -89,6 +93,7 @@ namespace Basalt {
 					drawList->AddText(font, pixelSize, ImVec2(position.x + shadowOffset, position.y + shadowOffset), shadow, begin, end);
 				drawList->AddText(font, pixelSize, ToImVec(position), color, begin, end);
 			}
+			font->CurrentRasterizerDensity = previousDensity;
 		}
 
 	}

@@ -73,7 +73,7 @@ namespace Basalt {
 		void ApplyRules(UIRectComponent& rect, RuleWalker& rules)
 		{
 			const UIRectComponent defaults;
-			constexpr float limit = UIRectComponent::MaxMagnitude;
+			constexpr float Limit = UIRectComponent::MaxMagnitude;
 			rules.Vector(rect.AnchorMin, 0.0f, 1.0f, defaults.AnchorMin, "AnchorMin", AxisNames);
 			rules.Vector(rect.AnchorMax, 0.0f, 1.0f, defaults.AnchorMax, "AnchorMax", AxisNames);
 			for (glm::length_t axis = 0; axis < 2; axis++)
@@ -87,8 +87,8 @@ namespace Basalt {
 					rect.AnchorMax[axis] = rect.AnchorMin[axis];
 			}
 			rules.Vector(rect.Pivot, 0.0f, 1.0f, defaults.Pivot, "Pivot", AxisNames);
-			rules.Vector(rect.Position, -limit, limit, defaults.Position, "Position", AxisNames);
-			rules.Vector(rect.Size, -limit, limit, defaults.Size, "Size", AxisNames);
+			rules.Vector(rect.Position, -Limit, Limit, defaults.Position, "Position", AxisNames);
+			rules.Vector(rect.Size, -Limit, Limit, defaults.Size, "Size", AxisNames);
 		}
 
 		void ApplyRules(UIImageComponent& image, RuleWalker& rules)
@@ -166,26 +166,28 @@ namespace Basalt {
 	{
 		switch (align)
 		{
+			case UIHorizontalAlign::Left:
+				return 0.0f;
 			case UIHorizontalAlign::Center:
 				return 0.5f;
 			case UIHorizontalAlign::Right:
 				return 1.0f;
-			default:
-				return 0.0f;
 		}
+		return 0.0f; // out-of-range values (only C++ can write them)
 	}
 
 	float UIAlignFraction(UIVerticalAlign align)
 	{
 		switch (align)
 		{
+			case UIVerticalAlign::Top:
+				return 0.0f;
 			case UIVerticalAlign::Middle:
 				return 0.5f;
 			case UIVerticalAlign::Bottom:
 				return 1.0f;
-			default:
-				return 0.0f;
 		}
+		return 0.0f; // out-of-range values (only C++ can write them)
 	}
 
 }
