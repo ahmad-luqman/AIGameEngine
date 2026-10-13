@@ -6,6 +6,7 @@
 #include "Basalt/Particles/ParticleSystem.h"
 #include "Basalt/Renderer/DebugLineRenderer.h"
 #include "Basalt/Renderer/RenderMath.h"
+#include "Basalt/Renderer/LocalShadows.h"
 #include "Basalt/Renderer/SceneLights.h"
 #include "Basalt/Renderer/ShaderUtils.h"
 #include "Basalt/Scene/Entity.h"
@@ -19,6 +20,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <cmath>
 #include <map>
 #include <variant>
 
@@ -295,6 +297,7 @@ namespace Basalt {
 		nvrhi::InputLayoutHandle ShadowInputLayout;
 		nvrhi::InputLayoutHandle ShadowMaskedInputLayout;
 		nvrhi::BindingLayoutHandle FrameLayout;
+		nvrhi::BindingLayoutHandle ShadowFrameLayout;
 		nvrhi::BindingLayoutHandle MaterialLayout;
 		nvrhi::BindingLayoutHandle SsaoLayout;
 		nvrhi::BindingLayoutHandle BlurLayout;
@@ -311,6 +314,10 @@ namespace Basalt {
 		nvrhi::BufferHandle SsaoConstantsBuffer;
 		nvrhi::BufferHandle DrawBuffer, MaterialBuffer, LightBuffer;
 		nvrhi::TextureHandle ShadowMap;
+		nvrhi::TextureHandle LocalShadowAtlas;
+		nvrhi::FramebufferHandle LocalShadowFramebuffer;
+		nvrhi::BufferHandle LocalShadowBuffer;
+		nvrhi::GraphicsPipelineHandle LocalShadowPipeline, LocalShadowMaskedPipeline;
 		std::array<nvrhi::FramebufferHandle, MaxCascades> ShadowFramebuffers;
 		nvrhi::TextureHandle SsaoNoise;
 		nvrhi::TextureHandle BrdfLut;
@@ -352,6 +359,7 @@ namespace Basalt {
 
 		// Binding sets
 		nvrhi::BindingSetHandle FrameSet;
+		nvrhi::BindingSetHandle ShadowFrameSet;
 		nvrhi::BindingSetHandle SsaoSet, BlurHorizontalSet, BlurVerticalSet, TonemapSet, BlitSet, DepthUpsampleSet;
 		struct CachedBindingSet
 		{
@@ -457,8 +465,21 @@ namespace Basalt {
 			nvrhi::BindingLayoutItem::Sampler(10),
 			nvrhi::BindingLayoutItem::Sampler(11),
 			nvrhi::BindingLayoutItem::Texture_SRV(12),
+			nvrhi::BindingLayoutItem::Texture_SRV(13),
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(14),
 		};
 		impl.FrameLayout = device->createBindingLayout(frameDesc);
+		// Shadow passes must not bind the depth textures they write as SRVs. In particular, switching
+		// between opaque and masked pipelines can otherwise transition the active attachment to read-only.
+		nvrhi::BindingLayoutDesc shadowFrameDesc = MakeLayout(0, nvrhi::ShaderType::AllGraphics);
+		shadowFrameDesc.bindings = {
+			nvrhi::BindingLayoutItem::PushConstants(PushConstantSlot, sizeof(DrawPush)),
+			nvrhi::BindingLayoutItem::ConstantBuffer(0),
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(14),
+		};
+		impl.ShadowFrameLayout = device->createBindingLayout(shadowFrameDesc);
 
 		nvrhi::BindingLayoutDesc materialDesc = MakeLayout(1, nvrhi::ShaderType::Pixel);
 		materialDesc.bindings = {
@@ -570,6 +591,25 @@ namespace Basalt {
 		for (uint32_t cascade = 0; cascade < MaxCascades; cascade++)
 			impl.ShadowFramebuffers[cascade] = device->createFramebuffer(nvrhi::FramebufferDesc().setDepthAttachment(impl.ShadowMap, nvrhi::TextureSubresourceSet(0, 1, cascade, 1)));
 
+		shadowDesc.width = LocalShadowAtlasSize;
+		shadowDesc.height = LocalShadowAtlasSize;
+		shadowDesc.arraySize = 1;
+		shadowDesc.dimension = nvrhi::TextureDimension::Texture2D;
+		shadowDesc.debugName = "LocalShadowAtlas";
+		impl.LocalShadowAtlas = device->createTexture(shadowDesc);
+		impl.LocalShadowBuffer = EnsureStructuredBuffer(device, nullptr, sizeof(LocalShadowMap) * MaxLocalShadowMaps, sizeof(LocalShadowMap), "LocalShadowBuffer");
+		if (!impl.LocalShadowAtlas || !impl.LocalShadowBuffer)
+		{
+			BS_CORE_ERROR("SceneRenderer: failed to create local shadow atlas or map buffer");
+			return false;
+		}
+		impl.LocalShadowFramebuffer = device->createFramebuffer(nvrhi::FramebufferDesc().setDepthAttachment(impl.LocalShadowAtlas));
+		if (!impl.LocalShadowFramebuffer)
+		{
+			BS_CORE_ERROR("SceneRenderer: failed to create local shadow framebuffer");
+			return false;
+		}
+
 		// SSAO kernel: hemisphere samples concentrated near the origin; 4x4 rotation noise.
 		// Basalt::Random is identical on every platform, and values are drawn in statement order (argument
 		// evaluation order varies by compiler), so every platform builds the same kernel and image.
@@ -645,15 +685,23 @@ namespace Basalt {
 			desc.renderState.rasterState.setCullNone().setDepthBias(1).setDepthClipEnable(false);
 			desc.renderState.rasterState.slopeScaledDepthBias = 1.5f;
 			desc.renderState.depthStencilState.setDepthTestEnable(true).setDepthWriteEnable(true).setDepthFunc(nvrhi::ComparisonFunc::LessOrEqual);
-			desc.bindingLayouts = { impl.FrameLayout };
+			desc.bindingLayouts = { impl.ShadowFrameLayout };
 			impl.ShadowPipeline = device->createGraphicsPipeline(desc, impl.ShadowFramebuffers[0]->getFramebufferInfo());
 
 			// Alpha-tested casters (foliage, fences) discard transparent texels.
 			desc.inputLayout = impl.ShadowMaskedInputLayout;
 			desc.VS = impl.ShadowMaskedVS;
 			desc.PS = impl.ShadowMaskedPS;
-			desc.bindingLayouts = { impl.FrameLayout, impl.MaterialLayout };
+			desc.bindingLayouts = { impl.ShadowFrameLayout, impl.MaterialLayout };
 			impl.ShadowMaskedPipeline = device->createGraphicsPipeline(desc, impl.ShadowFramebuffers[0]->getFramebufferInfo());
+			// Perspective shadows must clip at the near plane; depth clamp is only for the sun cascades.
+			desc.renderState.rasterState.setDepthClipEnable(true);
+			impl.LocalShadowMaskedPipeline = device->createGraphicsPipeline(desc, impl.LocalShadowFramebuffer->getFramebufferInfo());
+			desc.inputLayout = impl.ShadowInputLayout;
+			desc.VS = impl.ShadowVS;
+			desc.PS = nullptr;
+			desc.bindingLayouts = { impl.ShadowFrameLayout };
+			impl.LocalShadowPipeline = device->createGraphicsPipeline(desc, impl.LocalShadowFramebuffer->getFramebufferInfo());
 		}
 
 		// Upload constant data.
@@ -664,7 +712,7 @@ namespace Basalt {
 		impl.CommandList->close();
 		device->executeCommandList(impl.CommandList);
 
-		const bool valid = impl.MeshInputLayout && impl.ShadowInputLayout && impl.FrameLayout && impl.MaterialLayout && impl.SsaoLayout && impl.BlurLayout && impl.TextureSamplerLayout && impl.ComputeLayout && impl.ShadowMap && impl.ShadowPipeline && impl.ShadowMaskedPipeline && impl.ShadowMaskedInputLayout && impl.EquirectPipeline && impl.SkyPipeline && impl.IrradiancePipeline && impl.PrefilterPipeline && impl.BrdfPipeline && impl.DownsamplePipeline && impl.ViewConstantsBuffer && impl.ParticleLayout && impl.ParticleTexture;
+		const bool valid = impl.ShadowFrameLayout && impl.LocalShadowPipeline && impl.LocalShadowMaskedPipeline && impl.MeshInputLayout && impl.ShadowInputLayout && impl.FrameLayout && impl.MaterialLayout && impl.SsaoLayout && impl.BlurLayout && impl.TextureSamplerLayout && impl.ComputeLayout && impl.ShadowMap && impl.ShadowPipeline && impl.ShadowMaskedPipeline && impl.ShadowMaskedInputLayout && impl.EquirectPipeline && impl.SkyPipeline && impl.IrradiancePipeline && impl.PrefilterPipeline && impl.BrdfPipeline && impl.DownsamplePipeline && impl.ViewConstantsBuffer && impl.ParticleLayout && impl.ParticleTexture;
 		if (!valid)
 			BS_CORE_ERROR("SceneRenderer: failed to create GPU resources");
 		return valid;
@@ -980,6 +1028,7 @@ namespace Basalt {
 
 		std::vector<GpuLightData>& lights = impl.Lights;
 		lights.clear();
+		std::vector<LocalShadowRequest> shadowRequests;
 		{
 			for (size_t i = 1; i < directionalLights.size() && lights.size() < MaxLights; i++)
 			{
@@ -993,7 +1042,10 @@ namespace Basalt {
 					break;
 				const auto& light = pointView.get<PointLightComponent>(handle);
 				const glm::vec3 position(scene.GetWorldTransform({ handle, &scene })[3]);
-				lights.push_back({ glm::vec4(position, light.Radius), glm::vec4(light.Color * light.Intensity, 0.0f), glm::vec4(0.0f), glm::vec4(0.0f) });
+				if (settings.ShadowsEnabled && light.CastShadows && light.Intensity > 0.0f)
+					shadowRequests.push_back({ Entity(handle, &scene).GetUUID(), static_cast<uint32_t>(lights.size()), LocalShadowType::Point, position, light.Radius });
+				const float softness = std::isfinite(light.ShadowSoftness) ? std::clamp(light.ShadowSoftness, 0.0f, MaxLocalShadowSoftness) : 1.0f;
+				lights.push_back({ glm::vec4(position, light.Radius), glm::vec4(light.Color * light.Intensity, 0.0f), glm::vec4(0.0f), glm::vec4(0.0f, 0.0f, softness, 0.0f) });
 			}
 			auto spotView = scene.GetAllEntitiesWith<SpotLightComponent>();
 			for (entt::entity handle : spotView)
@@ -1002,14 +1054,28 @@ namespace Basalt {
 					break;
 				const auto& light = spotView.get<SpotLightComponent>(handle);
 				const glm::mat4 world = scene.GetWorldTransform({ handle, &scene });
-				const glm::vec3 direction = glm::normalize(glm::vec3(world * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f)));
+				const glm::vec3 forward(world * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f));
+				const float length = glm::length(forward);
+				if (!std::isfinite(length) || length < 1e-6f)
+					continue;
+				const glm::vec3 direction = forward / length;
 				const float outerDegrees = std::clamp(light.OuterConeAngle, 0.1f, 89.9f);
 				const float outer = glm::cos(glm::radians(outerDegrees));
 				const float inner = glm::cos(glm::radians(std::clamp(light.InnerConeAngle, 0.0f, outerDegrees)));
-				lights.push_back({ glm::vec4(glm::vec3(world[3]), light.Range), glm::vec4(light.Color * light.Intensity, 1.0f), glm::vec4(direction, outer), glm::vec4(std::max(inner, outer + 1e-4f), 0.0f, 0.0f, 0.0f) });
+				if (settings.ShadowsEnabled && light.CastShadows && light.Intensity > 0.0f)
+					shadowRequests.push_back({ Entity(handle, &scene).GetUUID(), static_cast<uint32_t>(lights.size()), LocalShadowType::Spot, glm::vec3(world[3]), light.Range, direction, outerDegrees });
+				const float softness = std::isfinite(light.ShadowSoftness) ? std::clamp(light.ShadowSoftness, 0.0f, MaxLocalShadowSoftness) : 1.0f;
+				lights.push_back({ glm::vec4(glm::vec3(world[3]), light.Range), glm::vec4(light.Color * light.Intensity, 1.0f), glm::vec4(direction, outer), glm::vec4(std::max(inner, outer + 1e-4f), 0.0f, softness, 0.0f) });
 			}
 		}
 		m_Statistics.Lights += static_cast<uint32_t>(lights.size());
+		const LocalShadowPlan localShadows = BuildLocalShadowPlan(shadowRequests, camera.View, camera.Projection);
+		for (const auto& allocation : localShadows.Allocations)
+			lights[allocation.LightIndex].Params.y = static_cast<float>(allocation.FirstMap + 1);
+		std::vector<Frustum> localShadowFrusta;
+		localShadowFrusta.reserve(localShadows.Maps.size());
+		for (const auto& map : localShadows.Maps)
+			localShadowFrusta.emplace_back(map.ViewProjection);
 
 		// --- Environment --------------------------------------------------------------------------
 		const SkyLightComponent* skyLight = nullptr;
@@ -1162,7 +1228,7 @@ namespace Basalt {
 		view.InverseProjection = glm::inverse(camera.Projection);
 		view.CameraPosition = glm::vec4(camera.Position, 1.0f);
 		view.ViewportSize = glm::vec4(static_cast<float>(m_RenderWidth), static_cast<float>(m_RenderHeight), 1.0f / static_cast<float>(m_TargetWidth), 1.0f / static_cast<float>(m_TargetHeight));
-		view.CameraClip = glm::vec4(camera.Near, camera.Far, 0.0f, 0.0f);
+		view.CameraClip = glm::vec4(camera.Near, camera.Far, settings.ShadowBias, settings.ShadowNormalBias);
 		// Fraction of the targets the scene covers: screen-space passes sample the scene's targets through it.
 		const glm::vec2 uvScale(static_cast<float>(m_RenderWidth) / static_cast<float>(m_TargetWidth), static_cast<float>(m_RenderHeight) / static_cast<float>(m_TargetHeight));
 		const float iblIntensity = skyLight ? skyLight->Intensity : 1.0f;
@@ -1312,7 +1378,8 @@ namespace Basalt {
 				const Submesh& submesh = source->Submeshes[submeshIndex];
 				const AABB worldBounds = submesh.Bounds.Transformed(model);
 				const bool visible = frustum.Intersects(worldBounds);
-				const bool castsShadow = meshComponent.CastShadows && std::any_of(cascadeFrusta.begin(), cascadeFrusta.end(), [&](const Frustum& cascade) { return cascade.Intersects(worldBounds); });
+				const bool castsShadow = meshComponent.CastShadows && (std::any_of(cascadeFrusta.begin(), cascadeFrusta.end(), [&](const Frustum& cascade) { return cascade.Intersects(worldBounds); }) ||
+																	   std::any_of(localShadowFrusta.begin(), localShadowFrusta.end(), [&](const Frustum& local) { return local.Intersects(worldBounds); }));
 				if (!visible && !castsShadow)
 				{
 					m_Statistics.CulledSubmeshes++;
@@ -1460,6 +1527,8 @@ namespace Basalt {
 		commandList->writeBuffer(impl.DrawBuffer, draws.data(), draws.size() * sizeof(GpuDrawData));
 		commandList->writeBuffer(impl.MaterialBuffer, materials.data(), materials.size() * sizeof(GpuMaterialData));
 		commandList->writeBuffer(impl.LightBuffer, lights.data(), lights.size() * sizeof(GpuLightData));
+		if (!localShadows.Maps.empty())
+			commandList->writeBuffer(impl.LocalShadowBuffer, localShadows.Maps.data(), localShadows.Maps.size() * sizeof(LocalShadowMap));
 
 		if (impl.FrameSetDirty)
 		{
@@ -1477,8 +1546,26 @@ namespace Basalt {
 														   .addItem(nvrhi::BindingSetItem::Sampler(9, impl.LinearClamp))
 														   .addItem(nvrhi::BindingSetItem::Sampler(10, impl.ShadowCompare))
 														   .addItem(nvrhi::BindingSetItem::Sampler(11, impl.PointClamp))
-														   .addItem(nvrhi::BindingSetItem::Texture_SRV(12, impl.Env.Cube, nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::TextureCube)),
+														   .addItem(nvrhi::BindingSetItem::Texture_SRV(12, impl.Env.Cube, nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::TextureCube))
+														   .addItem(nvrhi::BindingSetItem::Texture_SRV(13, impl.LocalShadowAtlas))
+														   .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(14, impl.LocalShadowBuffer)),
 													   impl.FrameLayout);
+			impl.ShadowFrameSet = m_Device->createBindingSet(nvrhi::BindingSetDesc()
+																 .addItem(nvrhi::BindingSetItem::PushConstants(PushConstantSlot, sizeof(DrawPush)))
+																 .addItem(nvrhi::BindingSetItem::ConstantBuffer(0, impl.ViewConstantsBuffer))
+																 .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(1, impl.DrawBuffer))
+																 .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(2, impl.MaterialBuffer))
+																 .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(14, impl.LocalShadowBuffer)),
+															 impl.ShadowFrameLayout);
+			if (!impl.FrameSet || !impl.ShadowFrameSet)
+			{
+				BS_CORE_ERROR("SceneRenderer: failed to create frame bindings");
+				uploadsPass.reset();
+				profiler.EndFrame(commandList, 0);
+				commandList->close();
+				m_Device->executeCommandList(commandList);
+				return;
+			}
 			impl.FrameSetDirty = false;
 		}
 		uploadsPass.reset();
@@ -1487,11 +1574,11 @@ namespace Basalt {
 		// the render size; shadow maps use their own.
 		const nvrhi::Viewport renderViewport(static_cast<float>(m_RenderWidth), static_cast<float>(m_RenderHeight));
 		const nvrhi::Viewport shadowViewport(static_cast<float>(ShadowMapSize), static_cast<float>(ShadowMapSize));
-		auto drawItem = [&](const DrawItem& item, nvrhi::IGraphicsPipeline* pipeline, nvrhi::IFramebuffer* framebuffer, const nvrhi::Viewport& viewport, uint32_t cascade, bool withMaterial) {
+		auto drawItem = [&](const DrawItem& item, nvrhi::IGraphicsPipeline* pipeline, nvrhi::IFramebuffer* framebuffer, const nvrhi::Viewport& viewport, uint32_t cascade, bool withMaterial, nvrhi::IBindingSet* frameSet = nullptr) {
 			nvrhi::GraphicsState state;
 			state.pipeline = pipeline;
 			state.framebuffer = framebuffer;
-			state.bindings = { impl.FrameSet };
+			state.bindings = { frameSet ? frameSet : impl.FrameSet.Get() };
 			if (withMaterial)
 				state.bindings.push_back(item.MaterialSet);
 			state.vertexBuffers = { nvrhi::VertexBufferBinding().setBuffer(item.Mesh->VertexBuffer).setSlot(0).setOffset(0) };
@@ -1525,11 +1612,27 @@ namespace Basalt {
 						if (!item.CastShadows || !cascadeFrusta[cascade].Intersects(item.ShadowBounds))
 							continue;
 						if (item.AlphaTested)
-							drawItem(item, impl.ShadowMaskedPipeline, impl.ShadowFramebuffers[cascade], shadowViewport, cascade, true);
+							drawItem(item, impl.ShadowMaskedPipeline, impl.ShadowFramebuffers[cascade], shadowViewport, cascade, true, impl.ShadowFrameSet);
 						else
-							drawItem(item, impl.ShadowPipeline, impl.ShadowFramebuffers[cascade], shadowViewport, cascade, false);
+							drawItem(item, impl.ShadowPipeline, impl.ShadowFramebuffers[cascade], shadowViewport, cascade, false, impl.ShadowFrameSet);
 						m_Statistics.ShadowDrawCalls++;
 					}
+				}
+			}
+			commandList->clearDepthStencilTexture(impl.LocalShadowAtlas, nvrhi::AllSubresources, true, 1.0f, false, 0);
+			for (uint32_t map = 0; map < localShadows.Maps.size(); map++)
+			{
+				const float x = static_cast<float>((map % LocalShadowTilesPerRow) * LocalShadowTileSize);
+				const uint32_t row = map / LocalShadowTilesPerRow;
+				const float y = static_cast<float>(row * LocalShadowTileSize);
+				const nvrhi::Viewport tileViewport(x, x + LocalShadowTileSize, y, y + LocalShadowTileSize, 0.0f, 1.0f);
+				for (const DrawItem& item : items)
+				{
+					if (!item.CastShadows || !localShadowFrusta[map].Intersects(item.ShadowBounds))
+						continue;
+					drawItem(item, item.AlphaTested ? impl.LocalShadowMaskedPipeline : impl.LocalShadowPipeline,
+							 impl.LocalShadowFramebuffer, tileViewport, MaxCascades + map, item.AlphaTested, impl.ShadowFrameSet);
+					m_Statistics.ShadowDrawCalls++;
 				}
 			}
 		}

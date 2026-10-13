@@ -60,6 +60,8 @@ void main()
 			float cosAngle = dot(-L, normalize(light.Direction.xyz));
 			attenuation *= smoothstep(light.Direction.w, light.Params.x, cosAngle);
 		}
+		if (attenuation > 0.0)
+			attenuation *= ComputeLocalShadow(light, v_WorldPosition, normalize(v_Normal));
 		color += EvaluateLight(N, V, L, light.Color.rgb * attenuation, surface.Albedo, surface.Metallic, surface.Roughness, F0);
 	}
 

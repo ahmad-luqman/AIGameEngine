@@ -122,6 +122,13 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 		set_tests_properties(FeatureTestRenderWindowed PROPERTIES FAIL_REGULAR_EXPRESSION "${noGpuTimingsRegex}")
 		list(APPEND basaltGpuTests FeatureTestRenderWindowed)
 	endif()
+	find_package(Python3 REQUIRED COMPONENTS Interpreter)
+	add_test(NAME LocalShadowRender
+		COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/Rendering/LocalShadows.py"
+			--runtime $<TARGET_FILE:BasaltRuntime> --cli $<TARGET_FILE:BasaltCLI>
+			--output "${basaltGoldenOutput}/LocalShadows")
+	set_tests_properties(LocalShadowRender PROPERTIES TIMEOUT 300)
+	list(APPEND basaltGpuTests LocalShadowRender)
 	set_tests_properties(${basaltGpuTests} PROPERTIES LABELS gpu)
 	if(APPLE)
 		# Homebrew's validation layer manifest names its library without a path (Apple silicon and Intel prefixes).

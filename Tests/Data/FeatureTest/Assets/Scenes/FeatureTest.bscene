@@ -26,10 +26,10 @@
 			"SkyLight": { "EnvironmentMap": "Assets/Environments/Sky.hdr", "Intensity": 0.45, "Rotation": 30, "ShowBackground": true } } },
 		{ "ID": 5, "Name": "Lamp", "Components": {
 			"Transform": { "Translation": [-3, 1.5, 3] },
-			"PointLight": { "Color": [1, 0.6, 0.3], "Intensity": 20, "Radius": 8 } } },
+			"PointLight": { "Color": [1, 0.6, 0.3], "Intensity": 20, "Radius": 8, "CastShadows": true, "ShadowSoftness": 1.5 } } },
 		{ "ID": 6, "Name": "Spot", "Components": {
 			"Transform": { "Translation": [4, 5, 4], "Rotation": [-60, 0, 0] },
-			"SpotLight": { "Color": [0.4, 0.6, 1], "Intensity": 60, "Range": 12, "InnerConeAngle": 15, "OuterConeAngle": 25 } } },
+			"SpotLight": { "Color": [0.4, 0.6, 1], "Intensity": 60, "Range": 12, "InnerConeAngle": 15, "OuterConeAngle": 25, "CastShadows": true, "ShadowSoftness": 2 } } },
 
 		{ "ID": 10, "Name": "Ground", "Components": {
 			"Transform": { "Scale": [40, 1, 40] },

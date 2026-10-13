@@ -2,6 +2,7 @@
 //   set 0 (frame):    0 ViewConstants (UBO), 1 Draws (SSBO), 2 Materials (SSBO), 3 Lights (SSBO),
 //                     4 shadow map array, 5 irradiance cube, 6 prefiltered cube, 7 BRDF LUT, 8 SSAO,
 //                     9 linear clamp sampler, 10 shadow comparison sampler, 11 point clamp sampler,
+//                     12 environment cube, 13 local shadow atlas, 14 local shadow maps (SSBO),
 //                     push constants (DrawPush)
 //   set 1 (material): 0 albedo, 1 normal, 2 metallic-roughness, 3 occlusion, 4 emissive, 5 material sampler
 //   (the particle pipelines bind their own set 1; see Particle.vert)
@@ -32,7 +33,7 @@ layout(set = 0, binding = 0) uniform ViewConstants
 	vec4 ViewportSize;    // xy: render-area size; zw: 1 / scene target size, NOT 1 / xy (the targets exceed the area under dynamic resolution), so gl_FragCoord.xy * zw is a target UV
 	vec4 AmbientColor;    // rgb, w: IBL intensity
 	vec4 EnvironmentParams; // x: rotation (radians), y: prefiltered mip count, z: SSAO enabled, w: light count
-	vec4 CameraClip;      // x: near, y: far
+	vec4 CameraClip;      // x: near, y: far, z: local shadow range-relative bias, w: local shadow normal bias
 	DirectionalLight Sun;
 } u_View;
 
@@ -65,13 +66,24 @@ struct LightData
 	vec4 Position;        // xyz, w: range (point, spot)
 	vec4 Color;           // rgb * intensity, w: type (0 point, 1 spot, 2 unshadowed directional)
 	vec4 Direction;       // xyz: direction the light travels (spot, directional), w: cos(outer)
-	vec4 Params;          // x: cos(inner)
+	vec4 Params;          // x: cos(inner), y: first shadow map + 1 (0 = none), z: PCF radius in texels
 };
 
 layout(std430, set = 0, binding = 3) readonly buffer LightBuffer
 {
 	LightData Lights[];
 } u_Lights;
+
+struct LocalShadowMap
+{
+	mat4 ViewProjection;
+	vec4 AtlasRect;       // scale.xy, offset.zw
+};
+
+layout(std430, set = 0, binding = 14) readonly buffer LocalShadowBuffer
+{
+	LocalShadowMap Maps[];
+} u_LocalShadows;
 
 layout(push_constant) uniform DrawPush
 {

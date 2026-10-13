@@ -100,11 +100,15 @@ namespace Basalt {
 		float ShadowSoftness = 1.0f;
 	};
 
+	// Omnidirectional local light; optional shadows use six atlas tiles.
 	struct PointLightComponent
 	{
 		glm::vec3 Color = { 1.0f, 1.0f, 1.0f };
 		float Intensity = 10.0f;
 		float Radius = 10.0f;
+		bool CastShadows = false;
+		// PCF radius in shadow texels, [0, 4]; zero keeps only hardware comparison filtering.
+		float ShadowSoftness = 1.0f;
 	};
 
 	// Cone light along the entity's forward axis (-Z). Angles are in degrees.
@@ -115,6 +119,9 @@ namespace Basalt {
 		float Range = 15.0f;
 		float InnerConeAngle = 20.0f;
 		float OuterConeAngle = 30.0f;
+		bool CastShadows = false;
+		// PCF radius in shadow texels, [0, 4].
+		float ShadowSoftness = 1.0f;
 	};
 
 	// Image-based lighting and background from an equirectangular HDRI (.hdr).

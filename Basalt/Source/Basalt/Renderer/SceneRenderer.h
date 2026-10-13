@@ -57,7 +57,7 @@ namespace Basalt {
 	};
 
 	// Renders a Scene from a camera into an internal LDR image:
-	//   cascaded soft shadow maps -> depth/normal prepass -> SSAO (+ bilateral blur) -> forward PBR with
+	//   directional cascades + point/spot shadow atlas -> depth/normal prepass -> SSAO (+ bilateral blur) -> forward PBR with
 	//   IBL (opaque) -> skybox -> transparent PBR and particle billboards (sorted together) -> exposure +
 	//   tonemapping + sRGB encode.
 	// The scene renders at the viewport size times the render scale; the tonemap pass resamples it to the

@@ -6,6 +6,7 @@
 #include "Basalt/Core/Log.h"
 #include "Basalt/Particles/ParticleEmitterRules.h"
 #include "Basalt/Physics/PhysicsLayers.h"
+#include "Basalt/Renderer/LocalShadows.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/UI/UIRules.h"
 
@@ -14,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <iterator>
 #include <optional>
 #include <stdexcept>
@@ -374,6 +376,8 @@ namespace Basalt {
 			r.Field("Color", c.Color);
 			r.Field("Intensity", c.Intensity);
 			r.Field("Radius", c.Radius);
+			r.Field("CastShadows", c.CastShadows);
+			r.Field("ShadowSoftness", c.ShadowSoftness);
 		}
 
 		void Fields(FieldReader& r, SpotLightComponent& c)
@@ -383,6 +387,8 @@ namespace Basalt {
 			r.Field("Range", c.Range);
 			r.Field("InnerConeAngle", c.InnerConeAngle);
 			r.Field("OuterConeAngle", c.OuterConeAngle);
+			r.Field("CastShadows", c.CastShadows);
+			r.Field("ShadowSoftness", c.ShadowSoftness);
 		}
 
 		void Fields(FieldReader& r, SkyLightComponent& c)
@@ -696,12 +702,12 @@ namespace Basalt {
 
 		json Write(const PointLightComponent& c)
 		{
-			return { { "Color", ToJson(c.Color) }, { "Intensity", c.Intensity }, { "Radius", c.Radius } };
+			return { { "Color", ToJson(c.Color) }, { "Intensity", c.Intensity }, { "Radius", c.Radius }, { "CastShadows", c.CastShadows }, { "ShadowSoftness", c.ShadowSoftness } };
 		}
 
 		json Write(const SpotLightComponent& c)
 		{
-			return { { "Color", ToJson(c.Color) }, { "Intensity", c.Intensity }, { "Range", c.Range }, { "InnerConeAngle", c.InnerConeAngle }, { "OuterConeAngle", c.OuterConeAngle } };
+			return { { "Color", ToJson(c.Color) }, { "Intensity", c.Intensity }, { "Range", c.Range }, { "InnerConeAngle", c.InnerConeAngle }, { "OuterConeAngle", c.OuterConeAngle }, { "CastShadows", c.CastShadows }, { "ShadowSoftness", c.ShadowSoftness } };
 		}
 
 		json Write(const SkyLightComponent& c)
@@ -1007,6 +1013,16 @@ namespace Basalt {
 		std::string Validate(const T&)
 		{
 			return {};
+		}
+
+		std::string Validate(const PointLightComponent& light)
+		{
+			return std::isfinite(light.ShadowSoftness) && light.ShadowSoftness >= 0.0f && light.ShadowSoftness <= MaxLocalShadowSoftness ? std::string() : "ShadowSoftness must be finite and in [0, 4]";
+		}
+
+		std::string Validate(const SpotLightComponent& light)
+		{
+			return std::isfinite(light.ShadowSoftness) && light.ShadowSoftness >= 0.0f && light.ShadowSoftness <= MaxLocalShadowSoftness ? std::string() : "ShadowSoftness must be finite and in [0, 4]";
 		}
 
 		std::string Validate(const AudioSourceComponent& source)

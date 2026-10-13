@@ -598,6 +598,24 @@ function Torch:OnUpdate(dt)
 end
 ```
 
+## Local light shadows
+
+`PointLight` and `SpotLight` accept `CastShadows` (default `false`) and `ShadowSoftness`
+(default `1`, finite range `0`–`4`) through `GetComponent`/`SetComponent`, scene files,
+`component.set`, and the generated inspector. Softness is the PCF radius in shadow texels;
+zero retains hardware comparison filtering. `Renderer.ShadowsEnabled` disables all shadows,
+and `Mesh.CastShadows` controls local-light casters as well as directional ones. Opaque and
+alpha-masked meshes cast shadows; alpha-blended meshes do not.
+
+Local shadows use a 4096² depth atlas with 64 fixed 512² tiles. Each frame, lights whose range
+intersects the camera frustum are ranked by conservative projected influence size, then UUID
+and light type. A spot consumes one tile; a point consumes six overlapping cube faces, allocated
+as a whole. Lights that do not fit remain lit without shadows. The existing 256-entry light
+buffer limit still applies before atlas allocation. Shadows cover the light's range with a
+near plane of `min(0.05, range * 0.01)`; ranges below `0.001` do not allocate shadows.
+`ShadowBias` is applied relative to local-light range before perspective projection;
+`ShadowNormalBias` offsets receivers along their geometric normals in world units.
+
 ## Screen UI
 
 Game UI is drawn over the scene on a canvas 1080 units tall, with the origin at the top-left, +Y down and

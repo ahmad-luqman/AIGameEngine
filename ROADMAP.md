@@ -55,9 +55,6 @@ The features most games need, roughly in order of impact.
 
 ### Rendering
 
-- **Point and spot light shadows — L.** A shadow atlas (spot: one perspective map; point: cube faces or
-  dual-paraboloid), allocated per frame by screen-space importance, with PCF filtering. Add
-  `CastShadows` and `ShadowSoftness` to both light components.
 - **Clustered forward lighting — M.** Today every pixel loops over all point and spot lights (up to 256).
   Build a froxel grid (for example 16×9×24) in a compute pass and give each cluster a light list. This
   keeps the cost per pixel bounded with hundreds of lights.
