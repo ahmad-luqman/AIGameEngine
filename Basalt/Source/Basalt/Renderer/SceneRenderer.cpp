@@ -1619,7 +1619,8 @@ namespace Basalt {
 					}
 				}
 			}
-			commandList->clearDepthStencilTexture(impl.LocalShadowAtlas, nvrhi::AllSubresources, true, 1.0f, false, 0);
+			if (!localShadows.Maps.empty())
+				commandList->clearDepthStencilTexture(impl.LocalShadowAtlas, nvrhi::AllSubresources, true, 1.0f, false, 0);
 			for (uint32_t map = 0; map < localShadows.Maps.size(); map++)
 			{
 				const float x = static_cast<float>((map % LocalShadowTilesPerRow) * LocalShadowTileSize);
