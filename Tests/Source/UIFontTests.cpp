@@ -21,6 +21,7 @@
 #include <cfloat>
 #include <chrono>
 #include <cstring>
+#include <initializer_list>
 #include <map>
 #include <random>
 #include <string>
@@ -56,9 +57,9 @@ namespace {
 		const auto [offset, length] = FindGlyph(data, glyph);
 		REQUIRE(length >= 28);
 		std::vector<uint8_t> bytes;
-		for (uint16_t value : { 2, 0, 0, 50, 50 }) // contours, xMin, yMin, xMax, yMax
+		for (uint16_t value : std::initializer_list<uint16_t>{ 2, 0, 0, 50, 50 }) // contours, xMin, yMin, xMax, yMax
 			AppendU16(bytes, value);
-		for (uint16_t value : { 2, 3, 0 }) // contour end points, no instructions
+		for (uint16_t value : std::initializer_list<uint16_t>{ 2, 3, 0 }) // contour end points, no instructions
 			AppendU16(bytes, value);
 		bytes.insert(bytes.end(), { 0x37, 0x37, 0x37, lastFlags });    // on-curve, x and y as positive bytes
 		bytes.insert(bytes.end(), { 10, 10, 10, 10, 10, 10, 10, 10 }); // x deltas, y deltas
