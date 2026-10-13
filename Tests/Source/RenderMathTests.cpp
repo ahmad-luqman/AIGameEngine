@@ -121,3 +121,11 @@ TEST_CASE("Spatial upscaling gate follows the current render area on either axis
 	CHECK_FALSE(NeedsSpatialUpscale({ 31, 65 }, { 64, 64 }));
 	CHECK_FALSE(NeedsSpatialUpscale({ 0, 1 }, { 64, 64 }));
 }
+
+TEST_CASE("FSR input allocation caps a supersampled ceiling at output size")
+{
+	CHECK(ComputeFsr1TargetSize({ 7680, 4320 }, { 3840, 2160 }) == glm::uvec2(3840, 2160));
+	CHECK(ComputeFsr1TargetSize({ 1920, 1080 }, { 3840, 2160 }) == glm::uvec2(1920, 1080));
+	CHECK(ComputeFsr1TargetSize({ 3840, 2160 }, { 3840, 2160 }) == glm::uvec2(3840, 2160));
+	CHECK(ComputeFsr1TargetSize({ 1, 128 }, { 1, 64 }) == glm::uvec2(1, 64));
+}

@@ -1790,7 +1790,8 @@ namespace Basalt {
 		impl.FsrRequested = fsr1;
 		if (fsr1)
 		{
-			if (!impl.Upscaler.Prepare(m_Device, { m_TargetWidth, m_TargetHeight }, impl.OutputFramebuffer, impl.FullscreenVS, impl.PointClamp))
+			const glm::uvec2 fsrTargetSize = ComputeFsr1TargetSize({ m_TargetWidth, m_TargetHeight }, { m_Width, m_Height });
+			if (!impl.Upscaler.Prepare(m_Device, fsrTargetSize, impl.OutputFramebuffer, impl.FullscreenVS, impl.PointClamp))
 			{
 				abortFrame();
 				return;
@@ -1800,7 +1801,7 @@ namespace Basalt {
 				impl.FsrTonemapPipeline = CreateFullscreenPipeline(m_Device, impl.FullscreenVS, impl.TonemapPS, impl.TonemapLayout, impl.Upscaler.GetInputFramebuffer());
 				if (!impl.FsrTonemapPipeline)
 				{
-					BS_CORE_ERROR("SceneRenderer: failed to create FSR 1 tonemap pipeline (target {}x{}, output {}x{})", m_TargetWidth, m_TargetHeight, m_Width, m_Height);
+					BS_CORE_ERROR("SceneRenderer: failed to create FSR 1 tonemap pipeline (target {}x{}, output {}x{})", fsrTargetSize.x, fsrTargetSize.y, m_Width, m_Height);
 					impl.FsrTonemapFailed = true;
 				}
 			}
