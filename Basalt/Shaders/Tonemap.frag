@@ -1,8 +1,9 @@
 #version 450
 #include "RenderArea.glsl"
+#include "Dither.glsl"
 
-// HDR -> display: resampling to the output size, exposure, tonemapping operator, sRGB encoding and
-// dithering.
+// HDR -> perceptual color: exposure, tonemapping and sRGB encoding. The direct-output path also
+// resamples and dithers; FSR input is read 1:1 and leaves the final dither to RCAS.
 layout(set = 0, binding = 0) uniform texture2D u_HDR;
 layout(set = 0, binding = 1) uniform sampler u_PointClamp;
 layout(set = 0, binding = 2) uniform texture2D u_SSAO;
@@ -16,7 +17,7 @@ layout(push_constant) uniform TonemapPush
 	float Exposure;
 	uint Operator;      // 0 None, 1 Reinhard, 2 ACES, 3 AgX
 	uint DebugView;     // 0 final, 1 SSAO, 2 view-space normals, 3 depth
-	uint FSR1Input;     // defer dithering until after RCAS
+	uint FSR1Input;     // 1:1 texelFetch, no dither; also aligns UVScale to 8 bytes in C++/std430
 	vec2 UVScale;       // render size / target size (RenderArea.glsl)
 } u_Push;
 
@@ -93,9 +94,8 @@ void main()
 		color = AgX(color);
 	color = LinearToSRGB(clamp(color, 0.0, 1.0));
 
-	// Triangular dither removes banding in dark gradients (8-bit output).
-	float noise = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+	// Uniform dither reduces banding at the final 8-bit output conversion.
 	if (u_Push.FSR1Input == 0u)
-		color += (noise - 0.5) / 255.0;
+		color += OutputDither(gl_FragCoord.xy);
 	o_Color = vec4(color, 1.0);
 }

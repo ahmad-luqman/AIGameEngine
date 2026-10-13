@@ -77,9 +77,10 @@ FetchContent_Declare(doctest
 	GIT_TAG v2.5.3
 	GIT_SHALLOW TRUE)
 
-# Sources without a usable CMake project: populated only, targets defined below.
+# Sources without a usable CMake project: populated only; library targets are defined below where needed.
 # SOURCE_SUBDIR points at a directory that does not exist so FetchContent never calls add_subdirectory.
-# AMD FSR 1.0.2: unmodified MIT-licensed shader headers, used only at shader compile time.
+# AMD FSR 1.0.2: unmodified MIT-licensed headers. AMD-derived SPIR-V ships in our binaries;
+# retain the AMD notice in LICENSE. This source-only shader dependency has no CMake library target.
 FetchContent_Declare(fsr1
 	SYSTEM
 	GIT_REPOSITORY https://github.com/GPUOpen-Effects/FidelityFX-FSR.git

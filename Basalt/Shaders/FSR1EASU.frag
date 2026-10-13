@@ -1,19 +1,6 @@
 #version 450
-#define A_GPU 1
-#define A_GLSL 1
-#include "ffx_a.h"
 #define FSR_EASU_F 1
-#include "ffx_fsr1.h"
-
-layout(set = 0, binding = 0) uniform texture2D u_Input;
-layout(set = 0, binding = 1) uniform sampler u_PointClamp;
-layout(push_constant) uniform FsrPush
-{
-	vec2 RenderSize;
-	vec2 OutputSize;
-	float Sharpness;
-} u_Push;
-layout(location = 0) out vec4 o_Color;
+#include "FSR1.glsl"
 
 vec3 LoadInput(ivec2 p)
 {
@@ -25,7 +12,7 @@ vec3 LoadInput(ivec2 p)
 vec4 GatherChannel(vec2 p, int channel)
 {
 	ivec2 base = ivec2(floor(p * vec2(textureSize(sampler2D(u_Input, u_PointClamp), 0)) - 0.5));
-	// GLSL textureGather order: lower-left, lower-right, upper-right, upper-left in texture space.
+	// GLSL textureGather order relative to base: (0,1), (1,1), (1,0), (0,0).
 	return vec4(LoadInput(base + ivec2(0, 1))[channel], LoadInput(base + ivec2(1, 1))[channel],
 		LoadInput(base + ivec2(1, 0))[channel], LoadInput(base)[channel]);
 }

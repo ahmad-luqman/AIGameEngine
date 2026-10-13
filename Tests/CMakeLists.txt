@@ -43,10 +43,7 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	basalt_set_warnings(BasaltFSR1GPU)
 	target_link_libraries(BasaltFSR1GPU PRIVATE Basalt doctest::doctest)
 	add_test(NAME FSR1GPU COMMAND BasaltFSR1GPU)
-	set_tests_properties(FSR1GPU PROPERTIES LABELS gpu TIMEOUT 60)
-	if(APPLE)
-		set_tests_properties(FSR1GPU PROPERTIES ENVIRONMENT "DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib:/usr/local/lib")
-	endif()
+	set_tests_properties(FSR1GPU PROPERTIES TIMEOUT 60)
 	set(basaltRenderArgs --project "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest" --frames 90 --width 1280 --height 720 --require-validation)
 
 	# Golden images: each debug view is rendered offscreen, then compared with the reference for this driver
@@ -61,7 +58,7 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	set(basaltGoldenOutput "${CMAKE_CURRENT_BINARY_DIR}/Golden")
 	file(MAKE_DIRECTORY "${basaltGoldenOutput}")
 
-	set(basaltGpuTests "")
+	set(basaltGpuTests FSR1GPU)
 	# "Scaled" is the lit image rendered at half resolution and upsampled by the tonemap pass (render scale).
 	# "Dynamic" reaches the same image through dynamic resolution: an unreachable frame-rate target drops the
 	# scale to its 0.5 minimum (once GPU timer results arrive), and the scene renders into the top-left of
@@ -139,8 +136,9 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 		list(APPEND basaltGpuTests FeatureTestRenderWindowed)
 	endif()
 	if(Python3_Interpreter_FOUND)
+		# -B keeps helper bytecode out of the source tree; -O verifies checks survive Python optimization.
 		add_test(NAME FSR1Render
-			COMMAND "${Python3_EXECUTABLE}" -O "${CMAKE_CURRENT_SOURCE_DIR}/Rendering/FSR1.py"
+			COMMAND "${Python3_EXECUTABLE}" -B -O "${CMAKE_CURRENT_SOURCE_DIR}/Rendering/FSR1.py"
 				--runtime $<TARGET_FILE:BasaltRuntime> --cli $<TARGET_FILE:BasaltCLI>
 				--output "${basaltGoldenOutput}/FSR1")
 		set_tests_properties(FSR1Render PROPERTIES TIMEOUT 600)

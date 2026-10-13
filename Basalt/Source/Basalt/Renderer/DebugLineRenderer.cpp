@@ -20,9 +20,7 @@ namespace Basalt {
 		};
 		m_InputLayout = device->createInputLayout(attributes, 2, m_VertexShader);
 
-		nvrhi::BindingLayoutDesc layoutDesc;
-		layoutDesc.visibility = nvrhi::ShaderType::Vertex;
-		layoutDesc.bindingOffsets = ZeroBindingOffsets;
+		nvrhi::BindingLayoutDesc layoutDesc = MakeLayout(0, nvrhi::ShaderType::Vertex);
 		layoutDesc.bindings = { nvrhi::BindingLayoutItem::PushConstants(PushConstantSlot, sizeof(glm::mat4)) };
 		m_BindingLayout = device->createBindingLayout(layoutDesc);
 		m_BindingSet = device->createBindingSet(nvrhi::BindingSetDesc().addItem(nvrhi::BindingSetItem::PushConstants(PushConstantSlot, sizeof(glm::mat4))), m_BindingLayout);

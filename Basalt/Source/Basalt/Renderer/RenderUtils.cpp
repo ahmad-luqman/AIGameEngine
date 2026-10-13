@@ -101,6 +101,7 @@ namespace Basalt {
 			{ "localShadowsSkipped", statistics.LocalShadowsSkipped },
 			{ "localShadowAtlasSize", statistics.LocalShadowAtlasSize },
 			{ "failed", statistics.Failed },
+			{ "fsr1Active", statistics.FSR1Active },
 			{ "culledSubmeshes", statistics.CulledSubmeshes },
 			{ "particles", statistics.Particles },
 			{ "particlesSkipped", statistics.ParticlesSkipped },

@@ -174,6 +174,8 @@ namespace Basalt {
 			ObjectReader reader(data, "Renderer");
 			if (!reader.IsObject(outError))
 				return false;
+			if (!reader.Float("Exposure", s.Exposure, outError))
+				return false;
 			std::string tonemapper;
 			if (!reader.String("Tonemapper", tonemapper, outError))
 				return false;
@@ -194,12 +196,12 @@ namespace Basalt {
 					return false;
 				}
 			}
-			const bool ok = reader.Bool("FSR1Enabled", s.FSR1Enabled, outError) && reader.Float("FSR1Sharpness", s.FSR1Sharpness, outError) && reader.Float("Exposure", s.Exposure, outError) && reader.Bool("SSAOEnabled", s.SSAOEnabled, outError) && reader.Float("SSAORadius", s.SSAORadius, outError) && reader.Float("SSAOIntensity", s.SSAOIntensity, outError) && reader.Float("SSAOBias", s.SSAOBias, outError) && reader.Bool("ShadowsEnabled", s.ShadowsEnabled, outError) && reader.Float("ShadowDistance", s.ShadowDistance, outError) && reader.Float("ShadowBias", s.ShadowBias, outError) && reader.Float("ShadowNormalBias", s.ShadowNormalBias, outError) && reader.Float("CascadeSplitLambda", s.CascadeSplitLambda, outError) && reader.Vec3("AmbientColor", s.AmbientColor, outError) && reader.Finish(outError);
+			const bool ok = reader.Bool("FSR1Enabled", s.FSR1Enabled, outError) && reader.Float("FSR1Sharpness", s.FSR1Sharpness, outError) && reader.Bool("SSAOEnabled", s.SSAOEnabled, outError) && reader.Float("SSAORadius", s.SSAORadius, outError) && reader.Float("SSAOIntensity", s.SSAOIntensity, outError) && reader.Float("SSAOBias", s.SSAOBias, outError) && reader.Bool("ShadowsEnabled", s.ShadowsEnabled, outError) && reader.Float("ShadowDistance", s.ShadowDistance, outError) && reader.Float("ShadowBias", s.ShadowBias, outError) && reader.Float("ShadowNormalBias", s.ShadowNormalBias, outError) && reader.Float("CascadeSplitLambda", s.CascadeSplitLambda, outError) && reader.Vec3("AmbientColor", s.AmbientColor, outError) && reader.Finish(outError);
 			if (!ok)
 				return false;
-			if (s.FSR1Sharpness < 0.0f || s.FSR1Sharpness > 2.0f)
+			if (s.FSR1Sharpness < MinFsr1Sharpness || s.FSR1Sharpness > MaxFsr1Sharpness)
 			{
-				outError = "Renderer: FSR1Sharpness must be in [0, 2] stops (0 = strongest)";
+				outError = "Renderer: FSR1Sharpness must be in " + Fsr1SharpnessRange();
 				return false;
 			}
 			if (s.ShadowBias < 0.0f || s.ShadowBias > 0.05f || s.ShadowNormalBias < 0.0f || s.ShadowNormalBias > 1.0f)

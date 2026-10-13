@@ -301,11 +301,11 @@ TEST_SUITE("Automation")
 		}
 		for (const json& value : { json(-0.01), json(2.01), json("sharp"), json(true), json(1e100) })
 		{
-			CHECK_FALSE(RunError(registry, session, "scene.settings", { { "Renderer", { { "FSR1Enabled", false }, { "FSR1Sharpness", value } } } }).empty());
+			CHECK(RunError(registry, session, "scene.settings", { { "Renderer", { { "FSR1Enabled", false }, { "FSR1Sharpness", value } } } }).find("FSR1Sharpness") != std::string::npos);
 			CHECK(Run(registry, session, "scene.get")["Renderer"]["FSR1Enabled"] == true);
 			CHECK(Run(registry, session, "scene.get")["Renderer"]["FSR1Sharpness"] == 2.0f);
 		}
-		CHECK_FALSE(RunError(registry, session, "scene.settings", { { "Renderer", { { "FSR1Enabled", 1 } } } }).empty());
+		CHECK(RunError(registry, session, "scene.settings", { { "Renderer", { { "FSR1Enabled", 1 } } } }).find("FSR1Enabled") != std::string::npos);
 
 		CHECK(Run(registry, session, "scene.info")["dirty"] == true);
 		CHECK(RunError(registry, session, "scene.save").find("never been saved") != std::string::npos);

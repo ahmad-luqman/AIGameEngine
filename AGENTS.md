@@ -26,7 +26,7 @@ component layout, widgets and their mouse/keyboard/gamepad interaction, immediat
 drawn through ImGui after the scene), `Scripting` (Lua 5.4 + sol2; timers, coroutines, events), `Project`
 (project files, exporter, save data), `Automation` (command API, session, TCP server).
 
-Other directories: `Docs/` (scripting API, generated command/component references), `Tests/Data/FeatureTest`
+Other directories: `Docs/` (scripting API, rendering guide, generated command/component references), `Tests/Data/FeatureTest`
 (the project that exercises every feature).
 
 ## Architecture
@@ -173,6 +173,7 @@ Other rules:
 
 ## Documentation
 
+- Rendering: `Docs/Rendering.md` (FSR 1 settings, pipeline, diagnostics and GPU tests).
 - Lua API: `Docs/ScriptingAPI.md` (update with every binding change).
 - `Docs/AutomationCommands.md` and `Docs/Components.md` are generated: run
   `python3 scripts/generate_docs.py` after changing commands or components.

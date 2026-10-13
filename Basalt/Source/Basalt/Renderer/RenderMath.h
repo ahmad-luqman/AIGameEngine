@@ -33,6 +33,12 @@ namespace Basalt {
 		return projection[3][3] == 1.0f;
 	}
 
+	// Spatial upscalers allow one unchanged axis, but never downsample either axis.
+	inline bool NeedsSpatialUpscale(glm::uvec2 renderSize, glm::uvec2 outputSize)
+	{
+		return renderSize.x > 0 && renderSize.y > 0 && renderSize.x <= outputSize.x && renderSize.y <= outputSize.y && renderSize != outputSize;
+	}
+
 	// Render scale range: below a quarter the image is unusable, above 2x (supersampling) a 4K window
 	// would need 8K render targets.
 	constexpr float MinRenderScale = 0.25f;
@@ -41,7 +47,7 @@ namespace Basalt {
 	// and screenshots are capped at that size already.
 	constexpr uint32_t MaxRenderTargetSize = 16384;
 
-	// Size the scene is rendered at before the tonemap pass resamples it to the output size. The scale is
+	// Scene size before tonemapping and optional spatial upscaling to the output size. The scale is
 	// clamped to [MinRenderScale, MaxRenderScale] (non-finite values mean 1), then lowered as far as needed
 	// to keep both sides within MaxRenderTargetSize; each side is at least 1.
 	inline glm::uvec2 ComputeRenderSize(uint32_t outputWidth, uint32_t outputHeight, float scale)
