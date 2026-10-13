@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include <Basalt/Core/FileSystem.h>
 #include <Basalt/Core/Log.h>
 #include <Basalt/Renderer/DeviceSelection.h>
 #include <Basalt/Renderer/DynamicResolution.h>
@@ -778,6 +779,23 @@ TEST_SUITE("SceneRenderer")
 			INFO(key);
 			CHECK(stats.contains(key));
 		}
+	}
+
+	TEST_CASE("Screenshots reject failed frames before readback and preserve existing files")
+	{
+		SceneRenderer renderer(nullptr);
+		// Inject a failed frame without allocating a GPU. The statistics belong to this non-const
+		// renderer; changing them here exercises the same public capture path as an allocation failure.
+		const_cast<SceneRendererStatistics&>(renderer.GetStatistics()).Failed = true;
+		BasaltTest::TempDirectory temporary("FailedScreenshot");
+		const auto path = temporary.GetPath() / "capture.png";
+		REQUIRE(FileSystem::WriteTextFile(path, "previous image"));
+		std::string error;
+		CHECK_FALSE(SaveScreenshot(renderer, path, error));
+		CHECK(error == "cannot save screenshot: the last render failed");
+		const auto contents = FileSystem::ReadTextFile(path);
+		REQUIRE(contents);
+		CHECK(*contents == "previous image");
 	}
 
 	TEST_CASE("Dynamic resolution steers by the frame time without the environment bake and uploads")

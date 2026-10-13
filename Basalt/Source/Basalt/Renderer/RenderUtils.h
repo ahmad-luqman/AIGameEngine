@@ -17,7 +17,7 @@ namespace Basalt {
 	// Camera for the scene's primary CameraComponent (aspect ratio from the viewport), if any.
 	std::optional<RenderCamera> GetPrimaryRenderCamera(Scene& scene, uint32_t viewportWidth, uint32_t viewportHeight);
 
-	// Writes the renderer's last output image as a PNG.
+	// Writes the renderer's last output image as a PNG; rejects a failed frame before readback.
 	bool SaveScreenshot(SceneRenderer& renderer, const std::filesystem::path& path, std::string& outError);
 
 	// { "frames", "droppedFrames", "frameMs", "passes": [{ "name", "ms" }] } (render.stats).

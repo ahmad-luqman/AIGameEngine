@@ -36,6 +36,12 @@ namespace Basalt {
 
 	bool SaveScreenshot(SceneRenderer& renderer, const std::filesystem::path& path, std::string& outError)
 	{
+		if (renderer.GetStatistics().Failed)
+		{
+			outError = "cannot save screenshot: the last render failed";
+			return false;
+		}
+
 		std::vector<uint8_t> pixels;
 		uint32_t width = 0;
 		uint32_t height = 0;
