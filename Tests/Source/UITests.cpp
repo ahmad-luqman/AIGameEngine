@@ -17,6 +17,7 @@
 #include "UITestUtils.h"
 
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include <algorithm>
 #include <cfloat>
@@ -29,6 +30,17 @@
 using namespace Basalt;
 using namespace BasaltTest;
 
+namespace {
+
+	std::vector<UIDrawCommand> GetImmediateCommands()
+	{
+		std::vector<UIDrawCommand> commands;
+		GameUI::AppendCommands(commands);
+		return commands;
+	}
+
+}
+
 TEST_SUITE("UI")
 {
 	TEST_CASE("GameUI collects immediate-mode commands per scene update and maps the 1080-unit canvas")
@@ -39,13 +51,13 @@ TEST_SUITE("UI")
 		text.Text = "Score";
 		text.FontSize = 1000.0f;
 		text.Color = { 2.0f, -1.0f, 0.5f, 1.0f };
-		CHECK(GameUI::Submit(text));
+		CHECK(GameUI::Submit(text) == GameUI::SubmitResult::Queued);
 		UIDrawCommand broken;
 		broken.Position = { std::numeric_limits<float>::quiet_NaN(), 0.0f };
-		CHECK_FALSE(GameUI::Submit(broken));
+		CHECK(GameUI::Submit(broken) == GameUI::SubmitResult::InvalidPlacement);
 		UIDrawCommand rect;
 		rect.Size = { -5.0f, 50.0f };
-		CHECK(GameUI::Submit(rect));
+		CHECK(GameUI::Submit(rect) == GameUI::SubmitResult::Queued);
 
 		const std::vector<UIDrawCommand> commands = GetImmediateCommands();
 		REQUIRE(commands.size() == 2);
@@ -68,8 +80,8 @@ TEST_SUITE("UI")
 	{
 		GameUI::BeginFrame();
 		for (size_t i = 0; i < GameUI::MaxCommands; i++)
-			REQUIRE(GameUI::Submit(UIDrawCommand{}));
-		CHECK_FALSE(GameUI::Submit(UIDrawCommand{}));
+			REQUIRE(GameUI::Submit(UIDrawCommand{}) == GameUI::SubmitResult::Queued);
+		CHECK(GameUI::Submit(UIDrawCommand{}) == GameUI::SubmitResult::QueueFull);
 		CHECK(GameUI::GetCommandCount() == GameUI::MaxCommands);
 		GameUI::BeginFrame();
 	}
@@ -251,7 +263,7 @@ TEST_SUITE("UI")
 		UIImageComponent& image = entity.AddComponent<UIImageComponent>();
 		image.Color = { std::numeric_limits<float>::quiet_NaN(), 2.0f, 0.5f, 1.0f };
 
-		const size_t warnings = CountLogMessages("on 'Broken' has invalid values");
+		const uint64_t since = Log::GetHistory().GetTotalCount();
 		const std::vector<UILayoutItem> items = UILayout::Layout(scene, { 1920.0f, 1080.0f });
 		REQUIRE(items.size() == 1);
 		// AnchorMin.y takes its default (0.5) and AnchorMax.x is raised to AnchorMin.x.
@@ -264,7 +276,13 @@ TEST_SUITE("UI")
 		CHECK(commands[1].Align.x == 0.0f);
 		// Each component is reported once (UIRect, UIImage, UIText), however often it is laid out.
 		UILayout::BuildCommands(scene, { 1920.0f, 1080.0f }, commands);
-		CHECK(CountLogMessages("on 'Broken' has invalid values") == warnings + 3);
+		CHECK(CountLogMessages(since, "on 'Broken' has invalid values") == 3);
+		// A value that changes every frame (C++ animating it) is still reported once.
+		rect.AnchorMin.y = 2.0f;
+		image.Color.r = 3.0f;
+		text.FontSize = 9500.0f;
+		UILayout::BuildCommands(scene, { 1920.0f, 1080.0f }, commands);
+		CHECK(CountLogMessages(since, "on 'Broken' has invalid values") == 3);
 	}
 
 	TEST_CASE("UI component rules reject values the layout cannot use")
@@ -327,6 +345,7 @@ TEST_SUITE("UI")
 		const auto width = [&](const char* text) { return font->CalcTextSizeA(size, FLT_MAX, 0.0f, text).x; };
 		const auto texts = [](const std::vector<UITextLine>& lines) {
 			std::vector<std::string> result;
+			result.reserve(lines.size());
 			for (const UITextLine& line : lines)
 				result.emplace_back(line.Text);
 			return result;
@@ -340,8 +359,11 @@ TEST_SUITE("UI")
 		CHECK(texts(UIRenderer::BreakLines(font, size, "a\r\nb", 0.0f)) == std::vector<std::string>{ "a", "b" });
 
 		CHECK(texts(UIRenderer::BreakLines(font, size, "Hello world again", width("Hello world") + 2.0f)) == std::vector<std::string>{ "Hello world", "again" });
-		// Regression: a wrap at the blanks before a newline used to leave an empty line.
-		CHECK(texts(UIRenderer::BreakLines(font, size, "ab \ncd", (width("ab") + width("ab ")) * 0.5f)) == std::vector<std::string>{ "ab", "cd" });
+		// Regression: a wrap at the blanks before a newline used to leave an empty line; a blank line the
+		// text asks for stays.
+		const float wrap = (width("ab") + width("ab ")) * 0.5f;
+		CHECK(texts(UIRenderer::BreakLines(font, size, "ab \ncd", wrap)) == std::vector<std::string>{ "ab", "cd" });
+		CHECK(texts(UIRenderer::BreakLines(font, size, "ab \n\ncd", wrap)) == std::vector<std::string>{ "ab", "", "cd" });
 
 		// No wrapping without a width, however long the line.
 		CHECK(UIRenderer::BreakLines(font, size, "Hello world again", 0.0f).size() == 1);
@@ -371,10 +393,10 @@ TEST_SUITE("UI")
 			glm::vec2 Min{ FLT_MAX };
 			glm::vec2 Max{ -FLT_MAX };
 		};
-		const auto draw = [&](const UIDrawCommand& command) {
+		const auto drawAt = [&](const UIDrawCommand& command, const glm::vec2& at, const glm::vec2& extent) {
 			const int firstVertex = drawList->VtxBuffer.Size;
 			const int firstCommand = drawList->CmdBuffer.Size;
-			UIRenderer::Draw(drawList, origin, size, canvas, std::span(&command, 1), resources);
+			UIRenderer::Draw(drawList, at, extent, canvas, std::span(&command, 1), resources);
 			// Drawing text can grow the atlas into new textures.
 			ImGuiTestContext::MarkTexturesUploaded();
 			Drawn drawn;
@@ -389,6 +411,7 @@ TEST_SUITE("UI")
 				drawn.Commands.push_back(drawList->CmdBuffer[i]);
 			return drawn;
 		};
+		const auto draw = [&](const UIDrawCommand& command) { return drawAt(command, origin, size); };
 
 		UIDrawCommand rect;
 		rect.Kind = UIDrawKind::Rect;
@@ -457,27 +480,38 @@ TEST_SUITE("UI")
 		CHECK(drawn.Min.y >= center.y - 21.5f); // 2 lines of 20 pixels
 		CHECK(drawn.Max.y <= center.y + 21.5f);
 
-		// Text is capped at MaxTextPixelSize physical pixels: 512 display units on a 2x display (a 512-unit
-		// font on a canvas drawn at 2x would be 1024).
-		ImGui::GetIO().DisplayFramebufferScale = ImVec2(2.0f, 2.0f);
+		// Text is capped at MaxTextPixelSize physical pixels: 512 display units where ImGui rasterizes at 2x
+		// (a 512-unit font on a canvas drawn at 2x would be 1024; an "I" is about 0.6 of the size tall).
+		ImGui::SetFontRasterizerDensity(2.0f);
+		std::string error;
+		ImFont* karla = UIFonts::LoadFromMemory(ReadKarla(), "Karla", error);
+		REQUIRE_MESSAGE(karla, error);
+		resources.Fonts["Karla.ttf"] = karla;
 		UIDrawCommand huge;
 		huge.Kind = UIDrawKind::Text;
+		huge.Font = "Karla.ttf";
 		huge.Text = "I";
 		huge.FontSize = UITextComponent::MaxFontSize;
 		huge.Shadow = false;
-		const int firstVertex = drawList->VtxBuffer.Size;
-		UIRenderer::Draw(drawList, { 0.0f, 0.0f }, { 3840.0f, 2160.0f }, canvas, std::span(&huge, 1), resources);
-		float top = FLT_MAX;
-		float bottom = -FLT_MAX;
-		for (int i = firstVertex; i < drawList->VtxBuffer.Size; i++)
-		{
-			top = std::min(top, drawList->VtxBuffer[i].pos.y);
-			bottom = std::max(bottom, drawList->VtxBuffer[i].pos.y);
-		}
+		const Drawn tall = drawAt(huge, { 0.0f, 0.0f }, { 3840.0f, 2160.0f });
+		const float top = tall.Min.y;
+		const float bottom = tall.Max.y;
 		CHECK(bottom - top > 200.0f);
-		CHECK(bottom - top <= UIRenderer::MaxTextPixelSize / 2.0f);
-		ImGui::GetIO().DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
+		CHECK(bottom - top <= UIRenderer::MaxTextPixelSize / 2.0f * 0.75f);
+		// The draw rasterized at the display's density and left the (not pushed) font's own as it was.
+		CHECK(karla->CurrentRasterizerDensity == 1.0f);
+		ImGui::SetFontRasterizerDensity(1.0f);
 		ImGuiTestContext::MarkTexturesUploaded();
+
+		// Drawing reads no font files: a font missing from the resources draws with the built-in font, and
+		// is neither loaded nor reported.
+		UIDrawCommand unresolved = text;
+		unresolved.Font = "Assets/Fonts/Unresolved.ttf";
+		const int fontCount = ImGui::GetIO().Fonts->Fonts.Size;
+		const float builtInWidth = draw(text).Max.x;
+		CHECK(draw(unresolved).Max.x == builtInWidth);
+		CHECK(ImGui::GetIO().Fonts->Fonts.Size == fontCount);
+		CHECK(UIFonts::GetError(unresolved.Font).empty());
 
 		// A shadow doubles the glyphs.
 		text.Text = "Shadow";
@@ -504,7 +538,7 @@ TEST_SUITE("UI")
 		UIDrawCommand overlay;
 		overlay.Kind = UIDrawKind::Image;
 		overlay.Texture = "Assets/Textures/Panel.png";
-		REQUIRE(GameUI::Submit(overlay));
+		REQUIRE(GameUI::Submit(overlay) == GameUI::SubmitResult::Queued);
 
 		UIFrame frame;
 		frame.Build(&scene, { 800.0f, 600.0f }, true);
@@ -515,7 +549,7 @@ TEST_SUITE("UI")
 		CHECK(frame.GetCommands()[3].Texture == overlay.Texture);
 
 		std::vector<std::string> lookups;
-		const size_t missingFontErrors = CountLogMessages("Missing.ttf");
+		const uint64_t since = Log::GetHistory().GetTotalCount();
 		frame.Prepare([&](const std::string& path) -> std::optional<UITexture> {
 			lookups.push_back(path);
 			if (path == "Assets/Textures/Broken.png")
@@ -526,8 +560,29 @@ TEST_SUITE("UI")
 		CHECK(frame.GetResources().Textures.at("Assets/Textures/Panel.png").Handle == 7);
 		CHECK_FALSE(frame.GetResources().Textures.contains("Assets/Textures/Broken.png"));
 		// Fonts load (and fail, falling back to the built-in one) while preparing, outside the ImGui frame.
-		CHECK(CountLogMessages("Missing.ttf") == missingFontErrors + 1);
+		CHECK(CountLogMessages(since, "Missing.ttf") == 1);
 		CHECK(frame.GetResources().Fonts.at("Assets/Fonts/Missing.ttf") == UIFonts::GetDefault());
+
+		// Drawing places anchored commands on Build's canvas (1440 wide for 800x600), whatever the draw size:
+		// a right-anchored rect ends at 1440 * 0.5 = 720 on a 960-wide draw.
+		ImGui::NewFrame();
+		ImGuiTestContext::MarkTexturesUploaded();
+		GameUI::BeginFrame();
+		UIDrawCommand corner;
+		corner.Kind = UIDrawKind::Rect;
+		corner.Anchor = corner.Pivot = { 1.0f, 0.0f };
+		corner.Size = { 100.0f, 100.0f };
+		REQUIRE(GameUI::Submit(corner) == GameUI::SubmitResult::Queued);
+		UIFrame anchored;
+		anchored.Build(nullptr, { 800.0f, 600.0f }, true);
+		ImDrawList* drawList = ImGui::GetForegroundDrawList();
+		const int firstVertex = drawList->VtxBuffer.Size;
+		anchored.Draw(drawList, { 0.0f, 0.0f }, { 960.0f, 540.0f });
+		float right = 0.0f;
+		for (int i = firstVertex; i < drawList->VtxBuffer.Size; i++)
+			right = std::max(right, drawList->VtxBuffer[i].pos.x);
+		CHECK(right == doctest::Approx(720.0f));
+		ImGui::EndFrame();
 
 		// Building again forgets the last frame's resources.
 		frame.Build(&scene, { 1920.0f, 1080.0f }, false);
@@ -559,9 +614,11 @@ TEST_SUITE("UI")
 		CHECK(BasaltTest::Eval(scene, "UI.Rect(0, 0, 100, 20, { Color = Vec4(1, 1, 1, 1), Anchor = 'Top' })") == "");
 		CHECK(BasaltTest::Eval(scene, "UI.Image('Assets/Textures/Panel.png', 0, 0, 64, 64, Vec4(1, 1, 1, 0.5))") == "");
 		CHECK(BasaltTest::Eval(scene, "UI.Image('Assets/Textures/Panel.png', 0, 0, 64, 64, { Slice = Vec4(4, 5, 6, 7), SliceScale = 2, Tint = Vec4(0, 1, 0, 1), Anchor = 'Center' })") == "");
+		// A negative size draws nothing (a health bar below zero health), rather than raising an error.
+		CHECK(BasaltTest::Eval(scene, "UI.Rect(0, 0, 200 * -5 / 100, 20)") == "");
 
 		const std::vector<UIDrawCommand> commands = GetImmediateCommands();
-		REQUIRE(commands.size() == 7);
+		REQUIRE(commands.size() == 8);
 		CHECK(commands[0].Kind == UIDrawKind::Text);
 		CHECK(commands[0].FontSize == 40.0f);
 		CHECK(commands[0].Anchor == glm::vec2(0.0f));
@@ -586,6 +643,7 @@ TEST_SUITE("UI")
 		CHECK(commands[6].SliceScale == 2.0f);
 		CHECK(commands[6].Color == glm::vec4(0.0f, 1.0f, 0.0f, 1.0f));
 		CHECK(commands[6].Pivot == glm::vec2(0.5f, 0.5f));
+		CHECK(commands[7].Size == glm::vec2(0.0f, 20.0f));
 
 		CHECK(BasaltTest::Eval(scene, "local r = UI.GetRect(Scene.FindEntityByName('HUD')) return r.x .. ',' .. r.y .. ',' .. r.z .. ',' .. r.w") == "1600.0,20.0,300.0,80.0");
 		CHECK(BasaltTest::Eval(scene, "return UI.GetRect(Scene.FindEntityByName('Plain')) == nil") == "true");
@@ -615,17 +673,26 @@ TEST_SUITE("UI")
 			{ "UI.Text('x', 0, 0, { Color = Vec4(2, 1, 1, 1) })", "Color.x must be between 0 and 1" },
 			{ "UI.Text('x', 0, 0, { Width = 1e7 })", "option 'Width' must be positive and at most" },
 			{ "UI.Text('x', 3e38, 0)", "x must be between -1000000 and 1000000" },
-			{ "UI.Rect(0, 0, -1, 1)", "width must be between 0 and" },
-			{ "UI.Rect(0, 0, 1, 3e38)", "height must be between 0 and" },
+			{ "UI.Rect(0, 0, -2e6, 1)", "width must be between -1000000 and 1000000" },
+			{ "UI.Rect(0, 0, 1, 3e38)", "height must be between -1000000 and 1000000" },
 			{ "UI.Rect(0, 0, 1, 1, { Anchor = Vec2(1e38, 0) })", "Anchor.x must be between 0 and 1" },
 			{ "UI.Rect(0, 0, 1, 1, { Pivot = Vec2(0, 2) })", "Pivot.y must be between 0 and 1" },
 			{ "UI.Image('a.png', 0, 0, 1, 1, { Slice = Vec4(-1, 0, 0, 0) })", "Slice.x must be between 0 and" },
 			{ "UI.Image('a.png', 0, 0, 1, 1, { SliceScale = 0 })", "SliceScale must be between" },
-			{ "UI.Image('a.png', 0, 0, 1, 1, Vec4(1, 1, 1, 1.5))", "color.w must be between 0 and 1" },
+			{ "UI.Image('a.png', 0, 0, 1, 1, Vec4(1, 1, 1, 1.5))", "UI.Image: tint.w must be between 0 and 1" },
+			{ "UI.Image('a.png', 0, 0, 1, 1, 'red')", "a Vec4 tint or an options table" },
+			{ "UI.Text('x', 0, 0, { Font = 42 })", "option 'Font' must be a string" },
 		};
 		BasaltTest::CheckLuaErrors(*scene.GetScriptEngine(), errors);
+		// The limits themselves are accepted.
+		const uint64_t accepted = GameUI::GetCommandCount();
+		CHECK(BasaltTest::Eval(scene, "UI.Rect(1e6, -1e6, 1e6, 0) UI.Text('x', 0, 0, 4) UI.Text('x', 0, 0, 512)") == "");
+		CHECK(GameUI::GetCommandCount() == accepted + 3);
+		GameUI::BeginFrame();
+		for (int i = 0; i < 8; i++)
+			REQUIRE(GameUI::Submit(UIDrawCommand{}) == GameUI::SubmitResult::Queued);
 		// None of the failed calls queued anything.
-		CHECK(GameUI::GetCommandCount() == 7);
+		CHECK(GameUI::GetCommandCount() == 8);
 
 		// A full queue is a Lua error too (a runaway loop), rather than UI silently missing.
 		GameUI::BeginFrame();
@@ -641,7 +708,7 @@ TEST_SUITE("UI")
 	TEST_CASE("Starting play clears the previous session's immediate-mode UI")
 	{
 		GameUI::BeginFrame();
-		REQUIRE(GameUI::Submit(UIDrawCommand{}));
+		REQUIRE(GameUI::Submit(UIDrawCommand{}) == GameUI::SubmitResult::Queued);
 		Scene scene;
 		scene.OnRuntimeStart();
 		CHECK(GameUI::GetCommandCount() == 0);
@@ -770,13 +837,63 @@ TEST_SUITE("UI")
 			const glm::vec2 canvas(1920.0f, 1080.0f);
 			const std::vector<UILayoutItem> items = UILayout::Layout(scene, canvas);
 			for (const UILayoutItem& item : items)
+			{
 				CHECK(UILayout::GetRect(scene, item.Owner, canvas) == item.Rect);
+				// The parent rect the inspector's presets use is the one the layout used.
+				if (const auto* rect = item.Owner.TryGetComponent<UIRectComponent>())
+					CHECK(ComputeUIRect(UILayout::GetParentRect(scene, item.Owner, canvas), SanitizeUIRect(*rect)) == item.Rect);
+			}
 			for (Entity entity : entities)
 			{
 				const bool laidOut = std::ranges::any_of(items, [&](const UILayoutItem& item) { return item.Owner == entity; });
 				CHECK(laidOut == UILayout::GetRect(scene, entity, canvas).has_value());
 			}
 		}
+	}
+
+	// (Here rather than in UIFontTests.cpp: it needs imgui_internal.h, which clashes with the stb copy there.)
+	TEST_CASE("UIFonts empties its cache when its ImGui context shuts down, with one hook per context")
+	{
+		BasaltTest::TempProject project("UIFontsHook");
+		ImGuiTestContext imgui;
+		CHECK(UIFonts::Get("Assets/Fonts/Missing.ttf") == UIFonts::GetDefault());
+		CHECK_FALSE(UIFonts::GetError("Assets/Fonts/Missing.ttf").empty());
+		ImGuiContext* context = ImGui::GetCurrentContext();
+		const int hooks = context->Hooks.Size;
+		UIFonts::Clear();
+		UIFonts::Get("Assets/Fonts/Missing.ttf");
+		CHECK(context->Hooks.Size == hooks); // however often the cache is cleared and refilled
+		// ... or another context takes over for a while.
+		ImGuiContext* other = ImGui::CreateContext();
+		ImGui::SetCurrentContext(other);
+		ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+		UIFonts::Get("Assets/Fonts/Missing.ttf");
+		ImGui::SetCurrentContext(context);
+		UIFonts::Get("Assets/Fonts/Missing.ttf");
+		CHECK(context->Hooks.Size == hooks);
+		ImGui::DestroyContext(other);
+		ImGui::SetCurrentContext(context);
+		// The hook itself, without relying on a new context reusing the old one's address.
+		ImGui::CallContextHooks(ImGui::GetCurrentContext(), ImGuiContextHookType_Shutdown);
+		CHECK(UIFonts::GetError("Assets/Fonts/Missing.ttf").empty());
+	}
+
+	TEST_CASE("GetParentRect ignores visibility and falls back to the canvas")
+	{
+		Scene scene;
+		Entity menu = scene.CreateEntity("Menu");
+		menu.AddComponent<UIRectComponent>(UIRectComponent{ .Visible = false, .AnchorMin = { 0.0f, 0.0f }, .AnchorMax = { 0.5f, 1.0f }, .Size = { 0.0f, 0.0f } });
+		Entity plain = scene.CreateChildEntity(menu, "Plain");
+		Entity button = scene.CreateChildEntity(plain, "Button");
+		button.AddComponent<UIRectComponent>();
+		const glm::vec2 canvas(1920.0f, 1080.0f);
+		CHECK_FALSE(UILayout::GetRect(scene, button, canvas));
+		// The hidden menu's rect (through the plain entity, which passes it on).
+		CHECK(UILayout::GetParentRect(scene, button, canvas) == UIBox{ { 0.0f, 0.0f }, { 960.0f, 1080.0f } });
+		CHECK(UILayout::GetParentRect(scene, menu, canvas) == UIBox{ { 0.0f, 0.0f }, canvas });
+		Scene other;
+		CHECK(UILayout::GetParentRect(other, button, canvas) == UIBox{ { 0.0f, 0.0f }, canvas });
+		CHECK(UILayout::GetParentRect(scene, Entity{}, canvas) == UIBox{ { 0.0f, 0.0f }, canvas });
 	}
 
 	TEST_CASE("Anchor presets change how a rect follows its parent, never where it is")
@@ -789,14 +906,14 @@ TEST_SUITE("UI")
 			{ .AnchorMin = { 1.0f, 0.0f }, .AnchorMax = { 1.0f, 0.0f }, .Pivot = { 1.0f, 0.0f }, .Position = { -20.0f, 20.0f }, .Size = { 360.0f, 120.0f } },
 		};
 		std::vector<std::string_view> presets(GetUIAnchorPresetNames().begin(), GetUIAnchorPresetNames().end());
-		presets.push_back("Stretch");
+		presets.push_back(UIStretchPreset);
 		for (const UIRectComponent& rect : rects)
 		{
 			const UIBox current = ComputeUIRect(parent, rect);
 			for (std::string_view preset : presets)
 			{
 				INFO("preset ", std::string(preset));
-				const std::optional<UIRectComponent> changed = ApplyUIAnchorPreset(rect, preset, parent, current);
+				const std::optional<UIRectComponent> changed = ApplyUIAnchorPreset(rect, preset, parent);
 				REQUIRE(changed);
 				const UIBox after = ComputeUIRect(parent, *changed);
 				CHECK(after.Min.x == doctest::Approx(current.Min.x));
@@ -806,16 +923,24 @@ TEST_SUITE("UI")
 				CHECK(ValidateUIRect(*changed).empty());
 			}
 		}
+		// A rect whose Position or Size would leave their range keeps a valid one (and moves as little as
+		// it must).
+		const UIRectComponent wide{ .AnchorMin = { 0.0f, 0.0f }, .AnchorMax = { 1.0f, 1.0f }, .Size = { UIRectComponent::MaxMagnitude, 0.0f } };
+		const std::optional<UIRectComponent> pinned = ApplyUIAnchorPreset(wide, "Center", parent);
+		REQUIRE(pinned);
+		CHECK(ValidateUIRect(*pinned).empty());
+		CHECK(pinned->Size.x == UIRectComponent::MaxMagnitude);
+
 		// A point preset pins anchors and pivot to the point; Stretch spans the parent.
-		const std::optional<UIRectComponent> corner = ApplyUIAnchorPreset(rects[1], "BottomRight", parent, ComputeUIRect(parent, rects[1]));
+		const std::optional<UIRectComponent> corner = ApplyUIAnchorPreset(rects[1], "BottomRight", parent);
 		REQUIRE(corner);
 		CHECK(corner->AnchorMin == glm::vec2(1.0f, 1.0f));
 		CHECK(corner->AnchorMax == glm::vec2(1.0f, 1.0f));
 		CHECK(corner->Pivot == glm::vec2(1.0f, 1.0f));
 		CHECK(corner->Size == glm::vec2(752.0f, 552.0f)); // the stretched rect keeps its size
-		const std::optional<UIRectComponent> stretched = ApplyUIAnchorPreset(rects[0], "Stretch", parent, ComputeUIRect(parent, rects[0]));
+		const std::optional<UIRectComponent> stretched = ApplyUIAnchorPreset(rects[0], UIStretchPreset, parent);
 		REQUIRE(stretched);
 		CHECK(stretched->AnchorMax == glm::vec2(1.0f, 1.0f));
-		CHECK_FALSE(ApplyUIAnchorPreset(rects[0], "Middle", parent, parent));
+		CHECK_FALSE(ApplyUIAnchorPreset(rects[0], "Middle", parent));
 	}
 }

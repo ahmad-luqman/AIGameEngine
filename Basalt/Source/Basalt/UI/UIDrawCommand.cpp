@@ -38,9 +38,9 @@ namespace Basalt {
 		if (!IsFinite(command.Anchor) || !IsFinite(command.Position) || !IsFinite(command.Size) || !IsFinite(command.Pivot))
 			return false;
 		const UIDrawCommand defaults;
-		constexpr float limit = UIRectComponent::MaxMagnitude;
-		Clamp(command.Position, -limit, limit, defaults.Position);
-		Clamp(command.Size, 0.0f, limit, defaults.Size);
+		constexpr float Limit = UIRectComponent::MaxMagnitude;
+		Clamp(command.Position, -Limit, Limit, defaults.Position);
+		Clamp(command.Size, 0.0f, Limit, defaults.Size);
 		Clamp(command.Anchor, 0.0f, 1.0f, defaults.Anchor);
 		Clamp(command.Pivot, 0.0f, 1.0f, defaults.Pivot);
 		Clamp(command.Align, 0.0f, 1.0f, defaults.Align);

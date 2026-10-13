@@ -518,7 +518,8 @@ namespace Basalt {
 		// Nine-slice borders in texels (left, top, right, bottom): corners keep their size, edges stretch
 		// along one axis and the center along both. All zero stretches the whole image.
 		glm::vec4 Slice = { 0.0f, 0.0f, 0.0f, 0.0f };
-		// Canvas units per border texel; borders shrink proportionally when they would overlap in the rect.
+		// Canvas units per border texel; opposite borders shrink proportionally when they would overlap, in the
+		// rect or in the texture.
 		float SliceScale = 1.0f;
 
 		bool operator==(const UIImageComponent&) const = default;
@@ -549,14 +550,15 @@ namespace Basalt {
 
 		std::string Text = "Text";
 		// Project-relative TrueType font (.ttf); empty uses the built-in font. A font that fails to load falls
-		// back to the built-in one (the error is logged once).
+		// back to the built-in one (the error is logged once per change of the file).
 		std::string Font;
 		// Line height in canvas units.
 		float FontSize = DefaultFontSize;
 		glm::vec4 Color = { 1.0f, 1.0f, 1.0f, 1.0f };
 		UIHorizontalAlign HorizontalAlign = UIHorizontalAlign::Left;
 		UIVerticalAlign VerticalAlign = UIVerticalAlign::Top;
-		// Breaks lines at the rect's width, between words (a word wider than the rect is cut). '\n' always breaks.
+		// Breaks lines at the rect's width, between words (a word wider than the rect is split across lines).
+		// '\n' always breaks.
 		bool Wrap = true;
 		// An offset drop shadow that keeps text readable over bright scenes.
 		bool Shadow = true;

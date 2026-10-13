@@ -23,15 +23,30 @@ namespace Basalt {
 		{
 			ImFont* Font = nullptr;
 			std::string Error;
-			// For a failure: the file's modification time then (nullopt: it did not exist). A change makes
-			// the next Get try again, so fixing or adding the file needs no restart.
+			// Loaded, but some glyphs draw blank (RepairTrueTypeFont).
+			std::string Warning;
+			// For a failure: the file's modification time before it was read (nullopt: it did not exist). A
+			// change makes the next Get try again, so fixing or adding the file needs no restart.
 			std::optional<std::filesystem::file_time_type> FailedStamp;
+
+			bool Failed() const { return Font == nullptr; }
 		};
 
 		// Keyed by the resolved file path, so the same file named two ways loads once and another project's
 		// file with the same relative path is a different font.
 		std::unordered_map<std::string, FontEntry> s_Fonts;
 		ImGuiContext* s_Context = nullptr;
+
+		// Repaired glyphs listed in a warning.
+		constexpr size_t MaxListedGlyphs = 5;
+
+		void OnContextShutdown(ImGuiContext* context, ImGuiContextHook*)
+		{
+			if (context != s_Context)
+				return;
+			s_Fonts.clear();
+			s_Context = nullptr;
+		}
 
 		// Fonts belong to a context's atlas. The cache follows the current context, and a shutdown hook clears
 		// it when that context is destroyed, so it never holds fonts of a dead atlas (even if a new context
@@ -45,12 +60,15 @@ namespace Basalt {
 			s_Context = context;
 			if (!context)
 				return;
+			// One hook per context, however often the current context changes.
+			for (const ImGuiContextHook& hook : context->Hooks)
+			{
+				if (hook.Type == ImGuiContextHookType_Shutdown && hook.Callback == &OnContextShutdown)
+					return;
+			}
 			ImGuiContextHook hook;
 			hook.Type = ImGuiContextHookType_Shutdown;
-			hook.Callback = [](ImGuiContext* shutdown, ImGuiContextHook*) {
-				if (shutdown == s_Context)
-					UIFonts::Clear();
-			};
+			hook.Callback = &OnContextShutdown;
 			ImGui::AddContextHook(context, &hook);
 		}
 
@@ -70,22 +88,45 @@ namespace Basalt {
 		// before allocating for it.
 		std::optional<std::vector<uint8_t>> ReadFontFile(const std::filesystem::path& file, std::string& outError)
 		{
+			const std::string name = FileSystem::PathToUtf8(file);
 			std::error_code error;
-			if (!std::filesystem::is_regular_file(file, error))
+			const bool regular = std::filesystem::is_regular_file(file, error);
+			if (error && error != std::errc::no_such_file_or_directory)
 			{
-				outError = fmt::format("'{}' does not exist or is not a file", FileSystem::PathToUtf8(file));
+				outError = fmt::format("'{}' could not be read: {}", name, error.message());
+				return std::nullopt;
+			}
+			if (!regular)
+			{
+				outError = fmt::format("'{}' does not exist or is not a file", name);
 				return std::nullopt;
 			}
 			const uintmax_t size = std::filesystem::file_size(file, error);
-			if (error || size > MaxTrueTypeFontSize)
+			if (error)
 			{
-				outError = fmt::format("'{}' is larger than {} MB", FileSystem::PathToUtf8(file), MaxTrueTypeFontSize >> 20);
+				outError = fmt::format("'{}' could not be read: {}", name, error.message());
+				return std::nullopt;
+			}
+			if (size > MaxTrueTypeFontSize)
+			{
+				outError = fmt::format("'{}' is larger than {} MB", name, MaxTrueTypeFontSize / (size_t{ 1024 } * 1024));
 				return std::nullopt;
 			}
 			std::optional<std::vector<uint8_t>> data = FileSystem::ReadBinaryFile(file);
 			if (!data)
-				outError = fmt::format("'{}' could not be read", FileSystem::PathToUtf8(file));
+				outError = fmt::format("'{}' could not be read", name);
 			return data;
+		}
+
+		// The warning for a font whose broken glyphs were blanked; empty when none were.
+		std::string DescribeRepairs(const std::vector<TrueTypeFontCheck::BrokenGlyph>& repaired)
+		{
+			if (repaired.empty())
+				return {};
+			std::string glyphs;
+			for (size_t i = 0; i < repaired.size() && i < MaxListedGlyphs; i++)
+				glyphs += fmt::format("{}glyph {}: {}", i > 0 ? "; " : "", repaired[i].Index, repaired[i].Problem);
+			return fmt::format("{} glyph(s) cannot be drawn safely and draw blank ({}{})", repaired.size(), glyphs, repaired.size() > MaxListedGlyphs ? "; ..." : "");
 		}
 
 	}
@@ -100,7 +141,7 @@ namespace Basalt {
 		return io.Fonts->AddFontDefault();
 	}
 
-	ImFont* UIFonts::LoadFromMemory(std::vector<uint8_t> data, const std::string& name, std::string& outError)
+	ImFont* UIFonts::LoadFromMemory(std::vector<uint8_t> data, const std::string& name, std::string& outError, std::string* outWarning)
 	{
 		std::vector<TrueTypeFontCheck::BrokenGlyph> repaired;
 		if (std::string problem = RepairTrueTypeFont(data, &repaired); !problem.empty())
@@ -108,12 +149,11 @@ namespace Basalt {
 			outError = std::move(problem);
 			return nullptr;
 		}
-		if (!repaired.empty())
+		if (std::string warning = DescribeRepairs(repaired); !warning.empty())
 		{
-			std::string glyphs;
-			for (size_t i = 0; i < repaired.size() && i < 5; i++)
-				glyphs += fmt::format("{}glyph {}: {}", i > 0 ? "; " : "", repaired[i].Index, repaired[i].Problem);
-			BS_CORE_WARN("UI font '{}': {} glyph(s) cannot be drawn safely and draw blank ({}{})", name, repaired.size(), glyphs, repaired.size() > 5 ? "; ..." : "");
+			BS_CORE_WARN("UI font '{}': {}", name, warning);
+			if (outWarning)
+				*outWarning = std::move(warning);
 		}
 
 		// ImGui's default font is the atlas's first one: make sure that is the built-in font, not a game font
@@ -149,32 +189,33 @@ namespace Basalt {
 		const std::filesystem::path file = ResolveFile(path);
 		const std::string key = FileSystem::PathToUtf8(file);
 		auto it = s_Fonts.find(key);
-		if (it != s_Fonts.end() && !it->second.Font && it->second.FailedStamp != GetStamp(file))
-		{
-			s_Fonts.erase(it);
-			it = s_Fonts.end();
-		}
-		if (it == s_Fonts.end())
+		const bool retry = it != s_Fonts.end() && it->second.Failed() && it->second.FailedStamp != GetStamp(file);
+		if (it == s_Fonts.end() || retry)
 		{
 			FontEntry entry;
+			// Taken before reading, so a file saved while it is read is read again next time.
+			const std::optional<std::filesystem::file_time_type> stamp = GetStamp(file);
 			if (std::optional<std::vector<uint8_t>> data = ReadFontFile(file, entry.Error))
-				entry.Font = LoadFromMemory(std::move(*data), path, entry.Error);
-			if (!entry.Font)
+				entry.Font = LoadFromMemory(std::move(*data), path, entry.Error, &entry.Warning);
+			if (entry.Failed())
 			{
-				entry.FailedStamp = GetStamp(file);
+				entry.FailedStamp = stamp;
 				BS_CORE_ERROR("UI font '{}': {}; using the built-in font", path, entry.Error);
 			}
-			it = s_Fonts.emplace(key, std::move(entry)).first;
+			it = s_Fonts.insert_or_assign(key, std::move(entry)).first;
 		}
-		return it->second.Font ? it->second.Font : GetDefault();
+		return it->second.Failed() ? GetDefault() : it->second.Font;
 	}
 
 	std::string UIFonts::CheckFile(const std::string& path)
 	{
-		std::string error;
-		if (std::optional<std::vector<uint8_t>> data = ReadFontFile(ResolveFile(path), error))
-			error = RepairTrueTypeFont(*data);
-		return error;
+		std::string problem;
+		std::optional<std::vector<uint8_t>> data = ReadFontFile(ResolveFile(path), problem);
+		if (!data)
+			return problem;
+		std::vector<TrueTypeFontCheck::BrokenGlyph> repaired;
+		problem = RepairTrueTypeFont(*data, &repaired);
+		return problem.empty() ? DescribeRepairs(repaired) : problem;
 	}
 
 	std::string UIFonts::GetError(const std::string& path)
@@ -182,14 +223,26 @@ namespace Basalt {
 		if (path.empty())
 			return {};
 		SyncContext();
+		const std::filesystem::path file = ResolveFile(path);
+		auto it = s_Fonts.find(FileSystem::PathToUtf8(file));
+		// A failure whose file changed since is tried again on the next Get: it is no longer the error.
+		if (it == s_Fonts.end() || (it->second.Failed() && it->second.FailedStamp != GetStamp(file)))
+			return {};
+		return it->second.Error;
+	}
+
+	std::string UIFonts::GetWarning(const std::string& path)
+	{
+		if (path.empty())
+			return {};
+		SyncContext();
 		auto it = s_Fonts.find(FileSystem::PathToUtf8(ResolveFile(path)));
-		return it != s_Fonts.end() ? it->second.Error : std::string();
+		return it != s_Fonts.end() ? it->second.Warning : std::string();
 	}
 
 	void UIFonts::Clear()
 	{
 		s_Fonts.clear();
-		s_Context = nullptr;
 	}
 
 }

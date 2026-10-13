@@ -705,10 +705,8 @@ namespace Basalt {
 
 		// UI components show in every mode, so layouts can be authored without playing; the scripts'
 		// immediate-mode UI only exists while playing. Debug views show the renderer's raw buffers.
-		if (m_DebugView == RendererDebugView::None)
-			m_UIFrame.Build(&scene, m_ViewportSize, playing);
-		else
-			m_UIFrame.Clear();
+		// (Built empty in debug views, so the UI bounds overlay still gets this frame's canvas.)
+		m_UIFrame.Build(m_DebugView == RendererDebugView::None ? &scene : nullptr, m_ViewportSize, playing && m_DebugView == RendererDebugView::None);
 
 		// The dockspace covers the window, but clear the back buffer so no stale content shows through.
 		m_CommandList->open();
@@ -1103,27 +1101,22 @@ namespace Basalt {
 			else
 				drawList->AddRect(toScreen(item.Rect.Min), toScreen(item.Rect.Max()), boundsColor);
 		}
-		if (!selectedRect)
-		{
-			drawList->PopClipRect();
-			return;
-		}
-
 		// The selection on top: its rect, its pivot as a dot and its anchors as diamonds on the parent rect.
-		drawList->AddRect(toScreen(selectedRect->Min), toScreen(selectedRect->Max()), selectionColor, 0.0f, 0, 2.0f);
-		if (const auto* rectComponent = selected.TryGetComponent<UIRectComponent>())
+		const auto* rectComponent = selected ? selected.TryGetComponent<UIRectComponent>() : nullptr;
+		if (selectedRect)
+			drawList->AddRect(toScreen(selectedRect->Min), toScreen(selectedRect->Max()), selectionColor, 0.0f, 0, 2.0f);
+		if (selectedRect && rectComponent)
 		{
 			const UIRectComponent rect = SanitizeUIRect(*rectComponent);
 			drawList->AddCircleFilled(toScreen(selectedRect->Min + selectedRect->Size * rect.Pivot), 4.0f, selectionColor);
 			const UIBox parent = UILayout::GetParentRect(scene, selected, canvas);
 			const glm::vec2 anchorMin = parent.Min + parent.Size * rect.AnchorMin;
 			const glm::vec2 anchorMax = parent.Min + parent.Size * rect.AnchorMax;
-			constexpr float anchorMarkerRadius = 5.0f;
+			constexpr float AnchorMarkerRadius = 5.0f;
 			for (const glm::vec2& anchor : { anchorMin, glm::vec2(anchorMax.x, anchorMin.y), glm::vec2(anchorMin.x, anchorMax.y), anchorMax })
 			{
 				const ImVec2 point = toScreen(anchor);
-				const float r = anchorMarkerRadius;
-				drawList->AddQuad(ImVec2(point.x, point.y - r), ImVec2(point.x + r, point.y), ImVec2(point.x, point.y + r), ImVec2(point.x - r, point.y), selectionColor, 1.5f);
+				drawList->AddQuad(ImVec2(point.x, point.y - AnchorMarkerRadius), ImVec2(point.x + AnchorMarkerRadius, point.y), ImVec2(point.x, point.y + AnchorMarkerRadius), ImVec2(point.x - AnchorMarkerRadius, point.y), selectionColor, 1.5f);
 			}
 		}
 		drawList->PopClipRect();

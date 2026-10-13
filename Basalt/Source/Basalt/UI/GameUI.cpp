@@ -13,15 +13,15 @@ namespace Basalt {
 
 	}
 
-	bool GameUI::Submit(UIDrawCommand command)
+	GameUI::SubmitResult GameUI::Submit(UIDrawCommand command)
 	{
 		if (!SanitizeUIDrawCommand(command))
-			return false;
+			return SubmitResult::InvalidPlacement;
 		std::scoped_lock lock(s_Mutex);
 		if (s_Commands.size() >= MaxCommands)
-			return false;
+			return SubmitResult::QueueFull;
 		s_Commands.push_back(std::move(command));
-		return true;
+		return SubmitResult::Queued;
 	}
 
 	void GameUI::BeginFrame()

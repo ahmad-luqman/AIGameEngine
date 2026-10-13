@@ -42,7 +42,7 @@ namespace Basalt {
 		static std::optional<UIBox> GetRect(Scene& scene, Entity entity, const glm::vec2& canvasSize);
 
 		// The rect the entity is laid out in: its nearest UI ancestor's rect, or the canvas. Computed as if
-		// every ancestor were visible (for the editor, which places hidden rects too).
+		// every ancestor were visible (the inspector's anchor presets work on hidden rects too).
 		static UIBox GetParentRect(Scene& scene, Entity entity, const glm::vec2& canvasSize);
 	};
 

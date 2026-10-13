@@ -23,13 +23,13 @@ namespace Basalt {
 	};
 
 	// Maps the canvas onto a screen rectangle: the canvas is GameUI::CanvasHeight units tall, so one unit is
-	// `Scale` pixels (the same on both axes). Shared by the UI renderer and the editor's UI overlay.
+	// `Scale` screen (ImGui) units (the same on both axes). Shared by the UI renderer and the editor's UI overlay.
 	struct UICanvasMapping
 	{
 		glm::vec2 Origin = { 0.0f, 0.0f };
 		float Scale = 1.0f;
 
-		// The mapping that shows the whole canvas on the screen rectangle [origin, origin + size).
+		// The mapping that shows the whole canvas on the screen rectangle [origin, origin + size); size.y > 0.
 		static UICanvasMapping ForViewport(const glm::vec2& origin, const glm::vec2& size);
 
 		glm::vec2 ToScreen(const glm::vec2& canvasPoint) const { return Origin + canvasPoint * Scale; }
@@ -64,10 +64,13 @@ namespace Basalt {
 	std::optional<glm::vec2> FindUIAnchorPreset(std::string_view name);
 	std::span<const std::string_view> GetUIAnchorPresetNames();
 
-	// The editor's anchor presets: a named point (see FindUIAnchorPreset) or "Stretch". Returns `rect` with
-	// its anchors and pivot set to the preset and its Position and Size recomputed so that, inside `parent`,
-	// it covers exactly the box it covers now (`current`). Only how the rect follows its parent's size
-	// changes. nullopt for an unknown preset.
-	std::optional<UIRectComponent> ApplyUIAnchorPreset(const UIRectComponent& rect, std::string_view preset, const UIBox& parent, const UIBox& current);
+	// The anchor preset that stretches a rect over its parent; the others are FindUIAnchorPreset's points.
+	constexpr std::string_view UIStretchPreset = "Stretch";
+
+	// The editor's anchor presets: a named point (see FindUIAnchorPreset) or UIStretchPreset. Returns `rect`
+	// with its anchors and pivot set to the preset and its Position and Size recomputed so that, inside
+	// `parent`, it covers the same box as before: only how it follows its parent's size changes (unless
+	// Position or Size would leave their range, which clamps them). nullopt for an unknown preset.
+	std::optional<UIRectComponent> ApplyUIAnchorPreset(const UIRectComponent& rect, std::string_view preset, const UIBox& parent);
 
 }

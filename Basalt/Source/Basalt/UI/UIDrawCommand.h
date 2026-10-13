@@ -50,8 +50,9 @@ namespace Basalt {
 		bool Shadow = true;
 	};
 
-	// A GPU texture the UI can draw: its ImGui texture id (an nvrhi::ITexture* with the engine's ImGui backend,
-	// never 0) and its size in texels. Valid for the frame it was looked up in (SceneRenderer::GetUITexture).
+	// A GPU texture the UI can draw: its ImGui texture id (an nvrhi::ITexture* with the engine's ImGui backend;
+	// 0 is unusable, and UIFrame::Prepare drops it) and its size in texels. Valid for the frame it was looked up
+	// in (SceneRenderer::GetUITexture).
 	struct UITexture
 	{
 		uint64_t Handle = 0;

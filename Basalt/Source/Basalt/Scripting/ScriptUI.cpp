@@ -1,5 +1,6 @@
 #include "Basalt/Scripting/ScriptUI.h"
 
+#include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scripting/ScriptGlue.h"
@@ -44,7 +45,10 @@ namespace Basalt {
 			{
 				constexpr const char* Components[] = { "x", "y", "z", "w" };
 				for (glm::length_t i = 0; i < L; i++)
-					Range(fmt::format("{}.{}", name, Components[i]).c_str(), value[i], min, max);
+				{
+					if (!(value[i] >= min && value[i] <= max))
+						Fail(fmt::format("{}.{} must be between {} and {} (got {})", name, Components[i], min, max, value[i]));
+				}
 				return value;
 			}
 
@@ -54,17 +58,17 @@ namespace Basalt {
 			// A position on the canvas, or an offset from an anchor.
 			glm::vec2 Position(float x, float y) const
 			{
-				constexpr float limit = UIRectComponent::MaxMagnitude;
-				return { Range("x", x, -limit, limit), Range("y", y, -limit, limit) };
+				constexpr float Limit = UIRectComponent::MaxMagnitude;
+				return { Range("x", x, -Limit, Limit), Range("y", y, -Limit, Limit) };
 			}
 
+			// A negative size draws nothing (as for a health bar at negative health: SanitizeUIDrawCommand makes
+			// it 0); NaN and sizes beyond the canvas limits are errors.
 			glm::vec2 Size(float width, float height) const
 			{
-				constexpr float limit = UIRectComponent::MaxMagnitude;
-				return { Range("width", width, 0.0f, limit), Range("height", height, 0.0f, limit) };
+				constexpr float Limit = UIRectComponent::MaxMagnitude;
+				return { Range("width", width, -Limit, Limit), Range("height", height, -Limit, Limit) };
 			}
-
-			const char* GetFunction() const { return m_Function; }
 
 		private:
 			const char* m_Function;
@@ -75,7 +79,7 @@ namespace Basalt {
 		class Options
 		{
 		public:
-			Options(const Checker& checker, sol::table table, std::initializer_list<std::string_view> allowed)
+			Options(Checker checker, sol::table table, std::initializer_list<std::string_view> allowed)
 				: m_Checker(checker)
 				, m_Table(std::move(table))
 			{
@@ -113,6 +117,9 @@ namespace Basalt {
 				return m_Checker.Range(key, value.as<T>(), min, max);
 			}
 
+			// Display colors and opacity, 0..1.
+			std::optional<glm::vec4> Color(const char* key) const { return Vector<glm::vec4>(key, "Vec4", 0.0f, 1.0f); }
+
 			// An anchor preset name ("TopLeft", "Center", ...) or a Vec2 of canvas fractions.
 			std::optional<glm::vec2> Anchor(const char* key) const
 			{
@@ -144,7 +151,7 @@ namespace Basalt {
 				return value.as<T>();
 			}
 
-			const Checker& m_Checker;
+			Checker m_Checker;
 			sol::table m_Table;
 		};
 
@@ -159,16 +166,16 @@ namespace Basalt {
 			checker.Fail(fmt::format("align must be 'Left', 'Center' or 'Right' (got '{}')", name));
 		}
 
-		// The optional last argument of UI.Rect / UI.Image: nil, a color, or an options table.
-		std::optional<sol::table> OptionsOrColor(const sol::object& argument, glm::vec4& color, const Checker& checker)
+		// The optional last argument of UI.Rect / UI.Image: nil, a color (called `name`), or an options table.
+		std::optional<sol::table> OptionsOrColor(const sol::object& argument, glm::vec4& color, const Checker& checker, const char* name)
 		{
 			if (argument == sol::lua_nil)
 				return std::nullopt;
 			if (argument.get_type() == sol::type::table)
 				return argument.as<sol::table>();
 			if (!argument.is<glm::vec4>())
-				checker.Fail("the last argument must be a Vec4 color or an options table");
-			color = checker.Color("color", argument.as<glm::vec4>());
+				checker.Fail(fmt::format("the last argument must be a Vec4 {} or an options table", name));
+			color = checker.Color(name, argument.as<glm::vec4>());
 			return std::nullopt;
 		}
 
@@ -183,10 +190,18 @@ namespace Basalt {
 
 		void Submit(UIDrawCommand command, const Checker& checker)
 		{
-			// Every value was checked, so only a full queue refuses the command. Most likely a loop that never
-			// ends submits it, and dropping later (top-most) UI silently would hide that.
-			if (!GameUI::Submit(std::move(command)))
-				checker.Fail(fmt::format("more than {} UI commands this frame", GameUI::MaxCommands));
+			switch (GameUI::Submit(std::move(command)))
+			{
+				case GameUI::SubmitResult::Queued:
+					return;
+				case GameUI::SubmitResult::InvalidPlacement:
+					// The checks above reject every such value.
+					BS_CORE_ASSERT(false, "a UI.* function let a non-finite placement through");
+					checker.Fail("positions, sizes, anchors and pivots must be finite numbers");
+				case GameUI::SubmitResult::QueueFull:
+					// Most likely a loop that never ends; dropping later (top-most) UI silently would hide it.
+					checker.Fail(fmt::format("more than {} UI commands this frame", GameUI::MaxCommands));
+			}
 		}
 
 	}
@@ -195,7 +210,7 @@ namespace Basalt {
 	{
 		sol::table ui = lua.create_named_table("UI");
 
-		ui["GetSize"] = []() { return GameUI::GetCanvasSize(GameUI::GetViewportSize()); };
+		ui["GetSize"] = []() { return GameUI::GetCanvasSize(); };
 
 		// UI.Text(text, x, y [, size [, color [, align]]]) or UI.Text(text, x, y, options).
 		ui["Text"] = [](const std::string& text, float x, float y, const sol::object& sizeOrOptions, sol::optional<glm::vec4> color, sol::optional<std::string> align) {
@@ -209,15 +224,15 @@ namespace Basalt {
 			std::optional<float> alignX;
 			if (align)
 				alignX = ParseAlign(*align, checker);
-			constexpr float minSize = UITextComponent::MinFontSize;
-			constexpr float maxSize = UITextComponent::MaxFontSize;
+			constexpr float MinSize = UITextComponent::MinFontSize;
+			constexpr float MaxSize = UITextComponent::MaxFontSize;
 			if (sizeOrOptions.get_type() == sol::type::table)
 			{
 				if (color || align)
 					checker.Fail("pass either an options table or size, color and align, not both");
 				const Options options(checker, sizeOrOptions.as<sol::table>(), { "Size", "Color", "Align", "Anchor", "Pivot", "Font", "Shadow", "Width" });
-				command.FontSize = options.Number("Size", minSize, maxSize).value_or(command.FontSize);
-				command.Color = options.Vector<glm::vec4>("Color", "Vec4", 0.0f, 1.0f).value_or(command.Color);
+				command.FontSize = options.Number("Size", MinSize, MaxSize).value_or(command.FontSize);
+				command.Color = options.Color("Color").value_or(command.Color);
 				if (std::optional<std::string> name = options.String("Align"))
 					alignX = ParseAlign(*name, checker);
 				ReadPlacement(options, command);
@@ -233,7 +248,7 @@ namespace Basalt {
 			}
 			else if (sizeOrOptions.get_type() == sol::type::number)
 			{
-				command.FontSize = checker.Range("size", sizeOrOptions.as<float>(), minSize, maxSize);
+				command.FontSize = checker.Range("size", sizeOrOptions.as<float>(), MinSize, MaxSize);
 			}
 			else if (sizeOrOptions != sol::lua_nil)
 			{
@@ -254,10 +269,10 @@ namespace Basalt {
 			command.Position = checker.Position(x, y);
 			command.Size = checker.Size(width, height);
 			command.Color = glm::vec4(0.0f, 0.0f, 0.0f, 0.5f);
-			if (std::optional<sol::table> table = OptionsOrColor(colorOrOptions, command.Color, checker))
+			if (std::optional<sol::table> table = OptionsOrColor(colorOrOptions, command.Color, checker, "color"))
 			{
 				const Options options(checker, *table, { "Color", "Anchor", "Pivot" });
-				command.Color = options.Vector<glm::vec4>("Color", "Vec4", 0.0f, 1.0f).value_or(command.Color);
+				command.Color = options.Color("Color").value_or(command.Color);
 				ReadPlacement(options, command);
 			}
 			Submit(std::move(command), checker);
@@ -273,10 +288,10 @@ namespace Basalt {
 			command.Texture = texture;
 			command.Position = checker.Position(x, y);
 			command.Size = checker.Size(width, height);
-			if (std::optional<sol::table> table = OptionsOrColor(tintOrOptions, command.Color, checker))
+			if (std::optional<sol::table> table = OptionsOrColor(tintOrOptions, command.Color, checker, "tint"))
 			{
 				const Options options(checker, *table, { "Tint", "Anchor", "Pivot", "Slice", "SliceScale" });
-				command.Color = options.Vector<glm::vec4>("Tint", "Vec4", 0.0f, 1.0f).value_or(command.Color);
+				command.Color = options.Color("Tint").value_or(command.Color);
 				ReadPlacement(options, command);
 				command.Slice = options.Vector<glm::vec4>("Slice", "Vec4 (left, top, right, bottom texels)", 0.0f, UIImageComponent::MaxSlice).value_or(command.Slice);
 				command.SliceScale = options.Number("SliceScale", UIImageComponent::MinSliceScale, UIImageComponent::MaxSliceScale).value_or(command.SliceScale);
@@ -289,7 +304,7 @@ namespace Basalt {
 		// rendered viewport (1920x1080 headless).
 		ui["GetRect"] = [](const ScriptEntity& self) -> std::optional<glm::vec4> {
 			Entity entity = self.ResolveOrThrow();
-			const glm::vec2 canvas = GameUI::GetCanvasSize(GameUI::GetViewportSize());
+			const glm::vec2 canvas = GameUI::GetCanvasSize();
 			const std::optional<UIBox> rect = UILayout::GetRect(*entity.GetScene(), entity, canvas);
 			if (!rect)
 				return std::nullopt;

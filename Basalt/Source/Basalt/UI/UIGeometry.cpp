@@ -1,6 +1,7 @@
 #include "Basalt/UI/UIGeometry.h"
 
 #include "Basalt/UI/GameUI.h"
+#include "Basalt/UI/UIRules.h"
 
 #include <algorithm>
 
@@ -129,10 +130,11 @@ namespace Basalt {
 		return AnchorPresetNames;
 	}
 
-	std::optional<UIRectComponent> ApplyUIAnchorPreset(const UIRectComponent& rect, std::string_view preset, const UIBox& parent, const UIBox& current)
+	std::optional<UIRectComponent> ApplyUIAnchorPreset(const UIRectComponent& rect, std::string_view preset, const UIBox& parent)
 	{
+		const UIBox current = ComputeUIRect(parent, rect);
 		UIRectComponent result = rect;
-		if (preset == "Stretch")
+		if (preset == UIStretchPreset)
 		{
 			result.AnchorMin = { 0.0f, 0.0f };
 			result.AnchorMax = { 1.0f, 1.0f };
@@ -152,7 +154,7 @@ namespace Basalt {
 		const glm::vec2 span = parent.Size * (result.AnchorMax - result.AnchorMin);
 		result.Size = current.Size - span;
 		result.Position = (current.Min + current.Size * result.Pivot) - (anchorMin + span * result.Pivot);
-		return result;
+		return SanitizeUIRect(result);
 	}
 
 }
