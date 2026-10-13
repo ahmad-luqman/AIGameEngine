@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include <Basalt/Core/FileSystem.h>
+#include <Basalt/Core/GamepadCodes.h>
 #include <Basalt/Core/Input.h>
 #include <Basalt/Core/JsonUtils.h>
 #include <Basalt/Core/KeyCodes.h>
@@ -13,6 +14,7 @@
 #include <Basalt/Events/MouseEvent.h>
 
 #include <filesystem>
+#include <limits>
 #include <unordered_set>
 #include <vector>
 
@@ -187,6 +189,143 @@ TEST_SUITE("Core")
 		Input::OnEvent(lostFocus);
 		CHECK_FALSE(Input::IsMouseButtonDown(MouseCode::Left));
 		CHECK(Input::GetMousePosition() == glm::vec2(110.0f, 45.0f));
+	}
+
+	TEST_CASE("Gamepad button and axis names round-trip")
+	{
+		for (uint32_t i = 0; i < GamepadButtonCount; i++)
+		{
+			const auto button = static_cast<GamepadButton>(i);
+			CHECK(GamepadButtonFromString(GamepadButtonToString(button)) == button);
+		}
+		for (uint32_t i = 0; i < GamepadAxisCount; i++)
+		{
+			const auto axis = static_cast<GamepadAxis>(i);
+			CHECK(GamepadAxisFromString(GamepadAxisToString(axis)) == axis);
+		}
+		CHECK(GamepadButtonFromString("dpadup") == GamepadButton::DPadUp);
+		CHECK(GamepadAxisFromString("lefttrigger") == GamepadAxis::LeftTrigger);
+		CHECK_FALSE(GamepadButtonFromString("Turbo").has_value());
+		CHECK_FALSE(GamepadAxisFromString("").has_value());
+		CHECK(GamepadButtonToString(static_cast<GamepadButton>(GamepadButtonCount)) == "Unknown");
+		CHECK(GamepadAxisToString(static_cast<GamepadAxis>(GamepadAxisCount)) == "Unknown");
+		CHECK(IsGamepadTrigger(GamepadAxis::RightTrigger));
+		CHECK_FALSE(IsGamepadTrigger(GamepadAxis::RightY));
+	}
+
+	TEST_CASE("Input tracks injected gamepads: connection, buttons, axes and their transitions")
+	{
+		Input::Reset();
+		for (uint32_t i = 0; i < Input::MaxGamepads; i++)
+			Input::SetGamepadConnected(i, false);
+		Input::EndFrame();
+
+		// Disconnected gamepads read as released and centered, and cannot be driven.
+		CHECK_FALSE(Input::IsGamepadConnected(1));
+		CHECK_FALSE(Input::SetGamepadButtonState(1, GamepadButton::A, true));
+		CHECK_FALSE(Input::SetGamepadAxis(1, GamepadAxis::LeftX, 1.0f));
+		CHECK(Input::GetGamepadName(1).empty());
+		CHECK_FALSE(Input::IsGamepadConnected(Input::MaxGamepads));
+		CHECK_FALSE(Input::SetGamepadButtonState(Input::MaxGamepads, GamepadButton::A, true));
+
+		Input::SetGamepadConnected(1, true, "Pad");
+		CHECK(Input::IsGamepadConnected(1));
+		CHECK(Input::WasGamepadConnected(1));
+		CHECK(Input::GetGamepadName(1) == "Pad");
+		CHECK(Input::SetGamepadButtonState(1, GamepadButton::A, true));
+		CHECK(Input::IsGamepadButtonDown(1, GamepadButton::A));
+		CHECK(Input::IsGamepadButtonPressed(1, GamepadButton::A));
+		CHECK_FALSE(Input::IsGamepadButtonDown(0, GamepadButton::A));
+		Input::EndFrame();
+		CHECK_FALSE(Input::WasGamepadConnected(1));
+		CHECK_FALSE(Input::IsGamepadButtonPressed(1, GamepadButton::A));
+		CHECK(Input::IsGamepadButtonDown(1, GamepadButton::A));
+
+		// Axes are clamped to their range; NaN centers them.
+		CHECK(Input::SetGamepadAxis(1, GamepadAxis::LeftX, -3.0f));
+		CHECK(Input::GetGamepadAxis(1, GamepadAxis::LeftX) == -1.0f);
+		CHECK(Input::SetGamepadAxis(1, GamepadAxis::LeftTrigger, -0.5f));
+		CHECK(Input::GetGamepadAxis(1, GamepadAxis::LeftTrigger) == 0.0f);
+		CHECK(Input::SetGamepadAxis(1, GamepadAxis::RightY, 0.25f));
+		CHECK(Input::GetGamepadAxis(1, GamepadAxis::RightY) == 0.25f);
+		CHECK(Input::SetGamepadAxis(1, GamepadAxis::RightY, std::numeric_limits<float>::quiet_NaN()));
+		CHECK(Input::GetGamepadAxis(1, GamepadAxis::RightY) == 0.0f);
+
+		// A reset (focus loss) releases buttons and centers sticks without a release or a disconnect.
+		CHECK(Input::SetGamepadAxis(1, GamepadAxis::LeftX, 1.0f));
+		Input::Reset();
+		CHECK(Input::IsGamepadConnected(1));
+		CHECK_FALSE(Input::WasGamepadConnected(1));
+		CHECK_FALSE(Input::IsGamepadButtonDown(1, GamepadButton::A));
+		CHECK_FALSE(Input::IsGamepadButtonReleased(1, GamepadButton::A));
+		CHECK(Input::GetGamepadAxis(1, GamepadAxis::LeftX) == 0.0f);
+
+		// Disconnecting while a button is held reports the release and the disconnect on that frame.
+		CHECK(Input::SetGamepadButtonState(1, GamepadButton::B, true));
+		Input::EndFrame();
+		Input::SetGamepadConnected(1, false);
+		CHECK_FALSE(Input::IsGamepadConnected(1));
+		CHECK(Input::WasGamepadDisconnected(1));
+		CHECK(Input::IsGamepadButtonReleased(1, GamepadButton::B));
+		CHECK_FALSE(Input::IsGamepadButtonDown(1, GamepadButton::B));
+		Input::EndFrame();
+		CHECK_FALSE(Input::WasGamepadDisconnected(1));
+		CHECK_FALSE(Input::IsGamepadButtonReleased(1, GamepadButton::B));
+	}
+
+	TEST_CASE("Device polls feed gamepads but leave injected ones alone")
+	{
+		Input::Reset();
+		for (uint32_t i = 0; i < Input::MaxGamepads; i++)
+			Input::SetGamepadConnected(i, false);
+		Input::EndFrame();
+
+		GamepadDeviceState device;
+		device.Name = "Controller";
+		device.Buttons[static_cast<size_t>(GamepadButton::Start)] = true;
+		device.Axes[static_cast<size_t>(GamepadAxis::LeftY)] = 2.0f;
+		Input::UpdateGamepadFromDevice(2, &device);
+		CHECK(Input::IsGamepadConnected(2));
+		CHECK(Input::WasGamepadConnected(2));
+		CHECK(Input::GetGamepadName(2) == "Controller");
+		CHECK(Input::IsGamepadButtonPressed(2, GamepadButton::Start));
+		CHECK(Input::GetGamepadAxis(2, GamepadAxis::LeftY) == 1.0f);
+		Input::EndFrame();
+		Input::UpdateGamepadFromDevice(2, nullptr);
+		CHECK(Input::WasGamepadDisconnected(2));
+		CHECK(Input::IsGamepadButtonReleased(2, GamepadButton::Start));
+
+		// An injected gamepad keeps its state through polls that see no device there, or another device.
+		Input::SetGamepadConnected(3, true, "Injected");
+		CHECK(Input::SetGamepadButtonState(3, GamepadButton::X, true));
+		Input::UpdateGamepadFromDevice(3, nullptr);
+		Input::UpdateGamepadFromDevice(3, &device);
+		CHECK(Input::IsGamepadConnected(3));
+		CHECK(Input::GetGamepadName(3) == "Injected");
+		CHECK(Input::IsGamepadButtonDown(3, GamepadButton::X));
+		CHECK_FALSE(Input::IsGamepadButtonDown(3, GamepadButton::Start));
+		// Once disconnected, the device poll owns the slot again.
+		Input::SetGamepadConnected(3, false);
+		Input::UpdateGamepadFromDevice(3, &device);
+		CHECK(Input::GetGamepadName(3) == "Controller");
+		Input::UpdateGamepadFromDevice(3, nullptr);
+		Input::UpdateGamepadFromDevice(Input::MaxGamepads, &device);
+		Input::EndFrame();
+
+		// Forgetting injected gamepads reports no disconnect, and a reconnection on the same frame is reported
+		// (a replay starts from no gamepads). Device gamepads are not forgotten.
+		Input::SetGamepadConnected(4, true);
+		Input::UpdateGamepadFromDevice(5, &device);
+		Input::EndFrame();
+		Input::ForgetInjectedGamepads();
+		CHECK_FALSE(Input::IsGamepadConnected(4));
+		CHECK_FALSE(Input::WasGamepadDisconnected(4));
+		CHECK(Input::IsGamepadConnected(5));
+		Input::SetGamepadConnected(4, true);
+		CHECK(Input::WasGamepadConnected(4));
+		Input::SetGamepadConnected(4, false);
+		Input::UpdateGamepadFromDevice(5, nullptr);
+		Input::EndFrame();
 	}
 
 	TEST_CASE("EventDispatcher routes by type and records handling")

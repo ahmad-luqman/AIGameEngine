@@ -596,6 +596,47 @@ namespace Basalt {
 			r.Field("Shadow", c.Shadow);
 		}
 
+		// The tints, target and callback every widget has, after its own fields.
+		template<typename T>
+		void WidgetFields(FieldReader& r, T& c, const char* callbackField, std::string& callback)
+		{
+			r.Field("NormalTint", c.NormalTint);
+			r.Field("HighlightTint", c.HighlightTint);
+			r.Field("PressedTint", c.PressedTint);
+			r.Field("DisabledTint", c.DisabledTint);
+			r.Field("Target", c.Target);
+			r.Field(callbackField, callback);
+		}
+
+		void Fields(FieldReader& r, UIButtonComponent& c)
+		{
+			r.Field("Interactable", c.Interactable);
+			WidgetFields(r, c, "OnClick", c.OnClick);
+		}
+
+		void Fields(FieldReader& r, UISliderComponent& c)
+		{
+			r.Field("Interactable", c.Interactable);
+			r.Field("Value", c.Value);
+			r.Field("Min", c.Min);
+			r.Field("Max", c.Max);
+			r.Field("Step", c.Step);
+			r.Field("TrackColor", c.TrackColor);
+			r.Field("FillColor", c.FillColor);
+			r.Field("HandleColor", c.HandleColor);
+			r.Field("HandleWidth", c.HandleWidth);
+			WidgetFields(r, c, "OnValueChanged", c.OnValueChanged);
+		}
+
+		void Fields(FieldReader& r, UICheckboxComponent& c)
+		{
+			r.Field("Interactable", c.Interactable);
+			r.Field("Checked", c.Checked);
+			r.Field("BoxColor", c.BoxColor);
+			r.Field("CheckColor", c.CheckColor);
+			WidgetFields(r, c, "OnValueChanged", c.OnValueChanged);
+		}
+
 		void Fields(FieldReader& r, PrefabComponent& c)
 		{
 			r.Field("Prefab", c.Prefab);
@@ -850,6 +891,50 @@ namespace Basalt {
 			};
 		}
 
+		template<typename T>
+		json WithWidgetFields(json data, const T& c, const char* callbackField, const std::string& callback)
+		{
+			data["NormalTint"] = ToJson(c.NormalTint);
+			data["HighlightTint"] = ToJson(c.HighlightTint);
+			data["PressedTint"] = ToJson(c.PressedTint);
+			data["DisabledTint"] = ToJson(c.DisabledTint);
+			data["Target"] = static_cast<uint64_t>(c.Target);
+			data[callbackField] = callback;
+			return data;
+		}
+
+		json Write(const UIButtonComponent& c)
+		{
+			return WithWidgetFields({ { "Interactable", c.Interactable } }, c, "OnClick", c.OnClick);
+		}
+
+		json Write(const UISliderComponent& c)
+		{
+			return WithWidgetFields({
+										{ "Interactable", c.Interactable },
+										{ "Value", c.Value },
+										{ "Min", c.Min },
+										{ "Max", c.Max },
+										{ "Step", c.Step },
+										{ "TrackColor", ToJson(c.TrackColor) },
+										{ "FillColor", ToJson(c.FillColor) },
+										{ "HandleColor", ToJson(c.HandleColor) },
+										{ "HandleWidth", c.HandleWidth },
+									},
+									c, "OnValueChanged", c.OnValueChanged);
+		}
+
+		json Write(const UICheckboxComponent& c)
+		{
+			return WithWidgetFields({
+										{ "Interactable", c.Interactable },
+										{ "Checked", c.Checked },
+										{ "BoxColor", ToJson(c.BoxColor) },
+										{ "CheckColor", ToJson(c.CheckColor) },
+									},
+									c, "OnValueChanged", c.OnValueChanged);
+		}
+
 		json Write(const PrefabComponent& c)
 		{
 			return { { "Prefab", c.Prefab } };
@@ -941,6 +1026,21 @@ namespace Basalt {
 		std::string Validate(const UITextComponent& text)
 		{
 			return ValidateUIText(text);
+		}
+
+		std::string Validate(const UIButtonComponent& button)
+		{
+			return ValidateUIButton(button);
+		}
+
+		std::string Validate(const UISliderComponent& slider)
+		{
+			return ValidateUISlider(slider);
+		}
+
+		std::string Validate(const UICheckboxComponent& checkbox)
+		{
+			return ValidateUICheckbox(checkbox);
 		}
 
 		template<typename T>
@@ -1077,6 +1177,9 @@ namespace Basalt {
 			infos.push_back(MakeInfo<UIRectComponent>("UIRect"));
 			infos.push_back(MakeInfo<UIImageComponent>("UIImage"));
 			infos.push_back(MakeInfo<UITextComponent>("UIText"));
+			infos.push_back(MakeInfo<UIButtonComponent>("UIButton"));
+			infos.push_back(MakeInfo<UISliderComponent>("UISlider"));
+			infos.push_back(MakeInfo<UICheckboxComponent>("UICheckbox"));
 			infos.push_back(MakeInfo<PrefabComponent>("Prefab"));
 			return infos;
 		}

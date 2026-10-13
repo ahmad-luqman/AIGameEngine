@@ -1,6 +1,7 @@
 #include "Basalt/Scripting/ScriptEngine.h"
 
 #include "Basalt/Core/FileSystem.h"
+#include "Basalt/Core/Input.h"
 #include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Project/Project.h"
@@ -511,7 +512,7 @@ namespace Basalt {
 		EnsureInstances(m_Scene->GetAllEntitiesOrdered());
 	}
 
-	void ScriptEngine::Update(Timestep ts)
+	void ScriptEngine::Update(Timestep ts, std::span<const UIWidgetEvent> uiEvents)
 	{
 		Impl& impl = *m_Impl;
 		impl.Context.DeltaTime = ts.GetSeconds();
@@ -527,6 +528,10 @@ namespace Basalt {
 				EnsureInstance(m_Scene->GetEntityByUUID(uuid));
 		}
 
+		DispatchGamepadConnections();
+		for (const UIWidgetEvent& event : uiEvents)
+			DispatchUIEvent(event);
+
 		const std::vector<UUID> order = impl.Order;
 		for (UUID uuid : order)
 		{
@@ -537,6 +542,66 @@ namespace Basalt {
 
 		// Timers and coroutines run after every OnUpdate, before physics.
 		impl.Tasks.RunDue();
+	}
+
+	void ScriptEngine::DispatchGamepadConnections()
+	{
+		for (uint32_t index = 0; index < Input::MaxGamepads; index++)
+		{
+			const char* callback = nullptr;
+			if (Input::WasGamepadConnected(index))
+				callback = "OnGamepadConnected";
+			else if (Input::WasGamepadDisconnected(index))
+				callback = "OnGamepadDisconnected";
+			if (!callback)
+				continue;
+			const std::vector<UUID> order = m_Impl->Order;
+			for (UUID uuid : order)
+			{
+				Entity entity = m_Scene->GetEntityByUUID(uuid);
+				if (entity && !m_Scene->IsEntityPendingDestruction(entity))
+					ScriptEngineAccess::Call(*this, uuid, callback, static_cast<int>(index));
+			}
+		}
+	}
+
+	void ScriptEngine::DispatchUIEvent(const UIWidgetEvent& event)
+	{
+		Entity widget = m_Scene->GetEntityByUUID(event.Widget);
+		if (!widget || m_Scene->IsEntityPendingDestruction(widget))
+			return;
+		const auto report = [&](const std::string& problem) {
+			if (m_ReportedUICallbacks.insert(std::to_string(static_cast<uint64_t>(event.Widget)) + "/" + event.Method).second)
+				ReportError("UI widget '" + widget.GetName() + "' cannot call " + event.Method + ": " + problem);
+		};
+		Entity target = m_Scene->GetEntityByUUID(event.Target);
+		if (!target || m_Scene->IsEntityPendingDestruction(target))
+		{
+			report("its Target entity " + std::to_string(static_cast<uint64_t>(event.Target)) + " does not exist");
+			return;
+		}
+		auto it = m_Impl->Instances.find(event.Target);
+		if (it == m_Impl->Instances.end())
+		{
+			report("'" + target.GetName() + "' has no running script");
+			return;
+		}
+		// A failed instance already reported its error.
+		if (it->second.Failed)
+			return;
+		if (it->second.Self[event.Method].get_type() != sol::type::function)
+		{
+			report("the script of '" + target.GetName() + "' has no method " + event.Method);
+			return;
+		}
+		const ScriptEntity widgetEntity{ event.Widget, m_Scene };
+		const char* method = event.Method.c_str();
+		if (const float* value = std::get_if<float>(&event.Value))
+			ScriptEngineAccess::Call(*this, event.Target, method, widgetEntity, *value);
+		else if (const bool* checked = std::get_if<bool>(&event.Value))
+			ScriptEngineAccess::Call(*this, event.Target, method, widgetEntity, *checked);
+		else
+			ScriptEngineAccess::Call(*this, event.Target, method, widgetEntity);
 	}
 
 	void ScriptEngine::LateUpdate(Timestep ts)

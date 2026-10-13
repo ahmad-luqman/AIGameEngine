@@ -5,6 +5,7 @@
 #include <glm/glm.hpp>
 
 #include <cstddef>
+#include <optional>
 #include <vector>
 
 namespace Basalt {
@@ -46,6 +47,24 @@ namespace Basalt {
 		// e.g. headless). Sizes that are not positive and finite are ignored.
 		static void SetViewportSize(const glm::vec2& size);
 		static glm::vec2 GetViewportSize();
+
+		// Where the viewport's top-left corner is in Input's mouse coordinates (window coordinates; 0,0 until set,
+		// e.g. headless). Together with the viewport size it maps the mouse onto the canvas for the widgets; the
+		// size must then be in the same units as the mouse (window units, not framebuffer pixels).
+		// Non-finite origins are ignored.
+		static void SetViewportOrigin(const glm::vec2& origin);
+		static glm::vec2 GetViewportOrigin();
+
+		// Whether the widgets take pointer input (the mouse is over the game view) and navigation input (keyboard
+		// and gamepads: the game view has focus). Both true until a host says otherwise; the editor follows its
+		// viewport panel's hover and focus.
+		static void SetPointerEnabled(bool enabled);
+		static bool IsPointerEnabled();
+		static void SetNavigationEnabled(bool enabled);
+		static bool IsNavigationEnabled();
+
+		// The mouse position on the canvas of the current viewport, or nullopt while pointer input is disabled.
+		static std::optional<glm::vec2> GetPointerPosition();
 	};
 
 }

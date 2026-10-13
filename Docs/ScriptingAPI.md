@@ -25,6 +25,7 @@ function Player:OnCollisionEnd(other, contact) end
 function Player:OnTriggerEnter(other, contact) end  -- either body is a trigger (RigidBody.IsTrigger)
 function Player:OnTriggerExit(other, contact) end
 function Player:OnJointBreak(other) end        -- joint exceeded BreakForce/BreakTorque; other is the far body, nil for the world
+function Player:OnGamepadConnected(index) end  -- a gamepad was plugged in (see "Input"); likewise OnGamepadDisconnected
 
 return Player
 ```
@@ -297,6 +298,24 @@ Mouse buttons: `Left`, `Right`, `Middle`, `Button3`-`Button7`.
 `Input.IsKeyDown(key)`, `Input.IsKeyPressed(key)` (this frame only), `Input.IsKeyReleased(key)`,
 `Input.IsMouseButtonDown/Pressed/Released(button)`, `Input.GetMousePosition()`, `Input.GetMouseDelta()`,
 `Input.GetMouseScroll()` (all Vec2).
+
+### Gamepads
+
+Gamepads use the standard (Xbox-style) layout; GLFW's mapping database maps PlayStation, Switch and most other
+controllers onto it. Up to 16 are tracked, by index 0..15 (an integer; anything else is an error).
+Buttons: `A` (bottom face button), `B`, `X`, `Y`, `LeftBumper`, `RightBumper`, `Back`, `Start`, `Guide`,
+`LeftThumb`, `RightThumb`, `DPadUp`, `DPadRight`, `DPadDown`, `DPadLeft`. Axes: `LeftX`, `LeftY`, `RightX`,
+`RightY` (-1..1, +Y is down, like the canvas), `LeftTrigger`, `RightTrigger` (0..1). Names are
+case-insensitive; an unknown one is an error. Sticks are reported raw: apply your own dead zone.
+
+- `Input.GetGamepads()` — the indices of the connected gamepads (array)
+- `Input.IsGamepadConnected(index)`, `Input.GetGamepadName(index)` (nil when not connected)
+- `Input.IsGamepadButtonDown/Pressed/Released(index, button)`, `Input.GetGamepadAxis(index, axis)` — a
+  gamepad that is not connected reads as released and centered
+
+Every script instance gets `OnGamepadConnected(index)` and `OnGamepadDisconnected(index)` on the frame it
+happens, before `OnUpdate`. Headless runs have no devices: the automation command `input.gamepad` injects one
+(tests and replays use it).
 
 ## Physics
 
@@ -590,6 +609,9 @@ Colors are display colors with opacity, 0..1 (not HDR). Debug views (`--debug-vi
 | `UIRect` | `Visible`, `AnchorMin`, `AnchorMax`, `Pivot`, `Position`, `Size` (Vec2s) |
 | `UIImage` | `Texture`, `Color` (tint), `Slice` (Vec4 left, top, right, bottom, in texels), `SliceScale` |
 | `UIText` | `Text`, `Font` (.ttf path, empty = built-in), `FontSize`, `Color`, `HorizontalAlign` (`Left`/`Center`/`Right`), `VerticalAlign` (`Top`/`Middle`/`Bottom`), `Wrap`, `Shadow` |
+| `UIButton` | `Interactable`, tints (below), `Target`, `OnClick` |
+| `UISlider` | `Interactable`, `Value`, `Min`, `Max`, `Step`, `TrackColor`, `FillColor`, `HandleColor`, `HandleWidth`, tints, `Target`, `OnValueChanged` |
+| `UICheckbox` | `Interactable`, `Checked`, `BoxColor`, `CheckColor`, tints, `Target`, `OnValueChanged` |
 
 `UIRect` places a rectangle relative to its parent's rect: that of the nearest ancestor with UI components,
 or the whole canvas (nothing is clipped to it). Anchors are fractions of the parent rect (`0,0` top-left,
@@ -613,7 +635,8 @@ split across lines). Without a `UIRect`, an image or text fills its parent's rec
 Draw order follows the hierarchy: a parent before its children, later siblings over earlier ones. Change
 components with `SetComponent` like any other. Values are checked, and a bad one is an error naming the
 field: anchors and pivots in 0..1 with `AnchorMax >= AnchorMin`, `Position` and `Size` within ±1000000,
-colors in 0..1, `Slice` 0..10000, `SliceScale` 0.001..100, `FontSize` 4..512.
+colors in 0..1, `Slice` 0..10000, `SliceScale` 0.001..100, `FontSize` 4..512; for sliders `Min < Max`
+(within ±1000000), `Min <= Value <= Max`, `Step` and `HandleWidth` 0..1000000.
 
 ```lua
 local label = Scene.FindEntityByName("ScoreLabel")
@@ -624,6 +647,68 @@ Scene.FindEntityByName("PauseMenu"):SetComponent("UIRect", { Visible = paused })
 - `UI.GetRect(entity)` — the entity's laid-out rect as `Vec4(x, y, width, height)` in canvas units, or nil
   when it has no UI components or it or an ancestor is hidden. Laid out for the last rendered viewport
   (1920×1080 when headless), like `UI.GetSize()`.
+
+### Widgets
+
+`UIButton`, `UISlider` and `UICheckbox` make an entity's rect interactive while the scene plays (in the editor
+and while simulating they only draw). Give the entity a `UIRect` as usual; the rect is the area that takes
+input.
+
+- **`UIButton`** draws nothing itself: it tints the entity's `UIImage` (its background) by state, and the
+  entity's `UIText` is its label. Without a `UIImage` it is an invisible click area.
+- **`UISlider`** (horizontal) draws its track (`TrackColor`, the whole rect), a fill from the left edge to the
+  value (`FillColor`) and a handle (`HandleColor`, `HandleWidth` units wide, as tall as the rect, tinted by
+  state) that stays inside the rect. `Value` lies in `Min..Max`; a positive `Step` snaps it to
+  `Min + k * Step` (and `Max`), 0 is continuous.
+- **`UICheckbox`** draws a box (`BoxColor`, tinted by state) as tall as the rect at its left edge and, when
+  `Checked`, a mark inside it (`CheckColor`); the entity's `UIText` is laid out in the rest of the rect, as the
+  label. Clicking anywhere in the rect toggles it.
+
+Tints multiply the widget's look by state: `NormalTint`, `HighlightTint` (hovered by the mouse, or focused by
+keyboard/gamepad navigation), `PressedTint` (held down) and `DisabledTint` (`Interactable = false`: no input,
+no focus). An entity with several widget components acts as the first of button, slider, checkbox
+(`ui.layout` reports it).
+
+**Callbacks.** A user interaction calls a method on the script of the `Target` entity (0, the default, means
+the widget's own entity), named by `OnClick` (buttons) or `OnValueChanged` (sliders: the new number;
+checkboxes: the new boolean); an empty name calls nothing. The widget entity is the first argument, so one
+menu script can handle every button:
+
+```lua
+-- On the menu entity; each button's Target is the menu, its OnClick names the method.
+function Menu:StartGame(button) Scene.Load("Assets/Scenes/Level1.bscene") end
+function Menu:OnValueChanged(widget, value)
+    if widget.Name == "Volume" then self.Volume = value end
+end
+```
+
+Callbacks run at the start of the frame, before `OnUpdate`, in the order the interactions happened; the
+widget's `Value`/`Checked` is already updated. Setting values with `SetComponent` (or in the scene file) calls
+nothing. A callback that cannot run — the target entity is gone, has no running script, or its script has no
+such method — is a script error, reported once per widget and method. Names must be Lua identifiers (or
+empty); `Target` is remapped when the widget is duplicated or instantiated with its target, like joints.
+
+**Input.** Only widgets take pointer input (a plain `UIImage` over a button does not block it; hide or disable
+the widgets under a modal panel). The topmost widget under the mouse is hovered (immediate-mode widgets are
+over the components, later ones over earlier ones; a disabled widget still covers the ones below). Pressing
+the left mouse button on a widget holds and focuses it; releasing over it clicks a button or toggles a
+checkbox, and a held slider follows the mouse, even off its rect. Keyboard and gamepads move the focus:
+
+| Input | Effect |
+|-------|--------|
+| Arrows, D-pad, left stick (pushed past half way) | Focus the nearest widget in that direction (from widget centers; sideways distance counts double). The first press with nothing focused focuses the first widget. Held, it repeats after 0.4 s, every 0.1 s. |
+| Left/Right on a focused slider | Move it by `Step` (a twentieth of the range when continuous); Up/Down still navigate |
+| Tab / Shift+Tab | Next / previous widget in draw order, wrapping |
+| Enter, Space, gamepad `A` | Click the focused button / toggle the focused checkbox |
+
+Hidden, disabled and destroyed widgets lose the focus. In the editor, the game view takes the mouse while it is
+hovered and the keyboard and gamepads while it has focus.
+
+- `UI.GetFocus()` — the focused widget: its entity, an immediate-mode widget's id (string), or nil
+- `UI.SetFocus(widget)` — focus a widget entity (an error if it has no widget component) or an immediate-mode
+  widget id; nil clears the focus
+- `UI.IsPointerOverWidget()` — whether the mouse is over an interactable widget (so a click there is the UI's,
+  not the game's)
 
 ### Immediate mode
 
@@ -647,6 +732,30 @@ errors; a negative width or height draws nothing (a health bar at negative healt
 ```lua
 UI.Text("Lives: " .. self.Lives, -24, 24, { Anchor = "TopRight", Size = 40, Font = "Assets/Fonts/Title.ttf" })
 UI.Image("Assets/Textures/Panel.png", 0, -40, 480, 120, { Anchor = "Bottom", Slice = Vec4(12, 12, 12, 12) })
+```
+
+Immediate-mode widgets are drawn and take input like the widget components (with their default colors and
+tints), and return what the user did:
+
+- `UI.Button(label, x, y, width, height [, options])` — true on the frame the button is clicked
+- `UI.Checkbox(label, checked, x, y, width, height [, options])` — the new checked state (options add
+  `CheckColor`)
+- `UI.Slider(label, value, min, max, x, y, width, height [, options])` — the new value (options add `Step`,
+  `FillColor`, `HandleColor`, `HandleWidth`); `min < max`, and `value` must lie between them
+
+Options for all three: `Id`, `Anchor`, `Pivot`, `Interactable` (default true), `Color` (background, box or
+track), `TextColor`, `Size` (label font size; default 60% of the height, at most 32), `Font`. A widget is
+identified across frames by its `Id`, which defaults to the label: two widgets with the same id in one frame are
+an error (give one an `Id`; a slider without a visible label needs one). The width and height must be
+positive. A widget takes input from the frame after it is first drawn, so draw it every frame; it lasts while it
+is drawn. A frame takes at most 4096 immediate-mode widgets.
+
+```lua
+function Menu:OnUpdate(dt)
+    if UI.Button("Play", 0, -60, 320, 64, { Anchor = "Center" }) then Scene.Load("Assets/Scenes/Level1.bscene") end
+    self.Music = UI.Checkbox("Music", self.Music, 0, 20, 320, 40, { Anchor = "Center" })
+    self.Volume = UI.Slider("Volume", self.Volume, 0, 1, 0, 80, 320, 32, { Anchor = "Center", Step = 0.1 })
+end
 ```
 
 ### Fonts

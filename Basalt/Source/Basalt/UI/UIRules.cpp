@@ -56,6 +56,16 @@ namespace Basalt {
 					value = fallback;
 			}
 
+			// A widget callback name: a Lua identifier or empty.
+			void CallbackName(std::string& value, const char* name)
+			{
+				if (value.empty() || IsValidUICallbackName(value))
+					return;
+				Report(fmt::format("{} must be the name of a script method (a Lua identifier of at most {} characters) or empty (got '{}')", name, MaxUICallbackNameLength, value));
+				if (m_Repair)
+					value.clear();
+			}
+
 			void Report(std::string problem)
 			{
 				if (m_Problem.empty())
@@ -109,6 +119,59 @@ namespace Basalt {
 			rules.Enum(text.VerticalAlign, UIVerticalAlignCount, defaults.VerticalAlign, "VerticalAlign");
 		}
 
+		// The tints and callback every widget has.
+		template<typename T>
+		void ApplyWidgetRules(T& widget, RuleWalker& rules, std::string& callback, const char* callbackName)
+		{
+			const T defaults;
+			rules.Color(widget.NormalTint, defaults.NormalTint, "NormalTint");
+			rules.Color(widget.HighlightTint, defaults.HighlightTint, "HighlightTint");
+			rules.Color(widget.PressedTint, defaults.PressedTint, "PressedTint");
+			rules.Color(widget.DisabledTint, defaults.DisabledTint, "DisabledTint");
+			rules.CallbackName(callback, callbackName);
+		}
+
+		void ApplyRules(UIButtonComponent& button, RuleWalker& rules)
+		{
+			ApplyWidgetRules(button, rules, button.OnClick, "OnClick");
+		}
+
+		void ApplyRules(UISliderComponent& slider, RuleWalker& rules)
+		{
+			const UISliderComponent defaults;
+			constexpr float Limit = UIRectComponent::MaxMagnitude;
+			rules.Float(slider.Min, -Limit, Limit, defaults.Min, "Min");
+			rules.Float(slider.Max, -Limit, Limit, defaults.Max, "Max");
+			// After the range rules, as for the anchors: an empty range has no fraction for the value.
+			if (!(slider.Max > slider.Min))
+			{
+				rules.Report(fmt::format("Max must be greater than Min (got Max {} and Min {})", slider.Max, slider.Min));
+				if (rules.Repairing())
+				{
+					// A unit range above Min, or the top unit of the allowed range when Min is at its top.
+					slider.Min = std::min(slider.Min, Limit - 1.0f);
+					slider.Max = slider.Min + 1.0f;
+				}
+			}
+			// When validating an empty or NaN range (already reported) there is no range to check Value against.
+			if (slider.Max > slider.Min)
+				rules.Float(slider.Value, slider.Min, slider.Max, slider.Min, "Value");
+			rules.Float(slider.Step, 0.0f, Limit, defaults.Step, "Step");
+			rules.Color(slider.TrackColor, defaults.TrackColor, "TrackColor");
+			rules.Color(slider.FillColor, defaults.FillColor, "FillColor");
+			rules.Color(slider.HandleColor, defaults.HandleColor, "HandleColor");
+			rules.Float(slider.HandleWidth, 0.0f, Limit, defaults.HandleWidth, "HandleWidth");
+			ApplyWidgetRules(slider, rules, slider.OnValueChanged, "OnValueChanged");
+		}
+
+		void ApplyRules(UICheckboxComponent& checkbox, RuleWalker& rules)
+		{
+			const UICheckboxComponent defaults;
+			rules.Color(checkbox.BoxColor, defaults.BoxColor, "BoxColor");
+			rules.Color(checkbox.CheckColor, defaults.CheckColor, "CheckColor");
+			ApplyWidgetRules(checkbox, rules, checkbox.OnValueChanged, "OnValueChanged");
+		}
+
 		template<typename T>
 		std::string Validate(T component)
 		{
@@ -155,6 +218,52 @@ namespace Basalt {
 	UITextComponent SanitizeUIText(UITextComponent text)
 	{
 		return Sanitize(std::move(text));
+	}
+
+	std::string ValidateUIButton(const UIButtonComponent& button)
+	{
+		return Validate(button);
+	}
+
+	std::string ValidateUISlider(const UISliderComponent& slider)
+	{
+		return Validate(slider);
+	}
+
+	std::string ValidateUICheckbox(const UICheckboxComponent& checkbox)
+	{
+		return Validate(checkbox);
+	}
+
+	UIButtonComponent SanitizeUIButton(UIButtonComponent button)
+	{
+		return Sanitize(std::move(button));
+	}
+
+	UISliderComponent SanitizeUISlider(UISliderComponent slider)
+	{
+		return Sanitize(std::move(slider));
+	}
+
+	UICheckboxComponent SanitizeUICheckbox(UICheckboxComponent checkbox)
+	{
+		return Sanitize(std::move(checkbox));
+	}
+
+	bool IsValidUICallbackName(std::string_view name)
+	{
+		static constexpr std::string_view Keywords[] = { "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if", "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while" };
+		if (name.empty() || name.size() > MaxUICallbackNameLength)
+			return false;
+		const auto isAlpha = [](char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'; };
+		if (!isAlpha(name.front()))
+			return false;
+		for (char c : name)
+		{
+			if (!isAlpha(c) && !(c >= '0' && c <= '9'))
+				return false;
+		}
+		return std::ranges::find(Keywords, name) == std::end(Keywords);
 	}
 
 	float ClampOrFallback(float value, float min, float max, float fallback)

@@ -18,7 +18,7 @@ namespace {
 		static const std::set<std::string> allowed = {
 			"help", "log.get", "project.info", "scene.get", "scene.hash", "scene.info", "scene.new", "scene.settings", "entity.create", "entity.destroy",
 			"entity.duplicate", "entity.get", "entity.list", "entity.rename", "entity.set_parent", "entity.transform", "component.get", "component.remove",
-			"component.set", "component.types", "play.start", "play.step", "play.stop", "input.key", "input.mouse", "replay.record_start"
+			"component.set", "component.types", "play.start", "play.step", "play.stop", "input.key", "input.mouse", "input.gamepad", "ui.layout", "replay.record_start"
 		};
 		if (!request.is_object() || !request.contains("command") || !request["command"].is_string())
 			return true; // malformed requests exercise the protocol error paths
@@ -59,5 +59,6 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 	registry.HandleRequest(session, request);
 	session.StopPlay();
 	Basalt::Input::Reset();
+	Basalt::Input::ForgetInjectedGamepads();
 	return 0;
 }

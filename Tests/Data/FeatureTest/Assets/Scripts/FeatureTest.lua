@@ -139,7 +139,7 @@ local function TestEntities(self)
 
 	-- Every component type round-trips through Lua.
 	for _, name in ipairs({ "Camera", "Mesh", "Material", "DirectionalLight", "PointLight", "SpotLight", "SkyLight", "RigidBody",
-		"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "AudioSource", "AudioListener", "ParticleEmitter", "UIRect", "UIImage", "UIText", "Prefab" }) do
+		"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "AudioSource", "AudioListener", "ParticleEmitter", "UIRect", "UIImage", "UIText", "UIButton", "UISlider", "UICheckbox", "Prefab" }) do
 		local holder = Scene.CreateEntity("Holder" .. name)
 		Expect("AddComponent " .. name, function() holder:AddComponent(name) end)
 		local data = holder:GetComponent(name)
@@ -341,6 +341,69 @@ local function TestGameplay(self)
 	ExpectError("DontDestroyOnLoad needs a root", function() Scene.DontDestroyOnLoad(Scene.FindEntityByName("TexturedCube")) end, "not a root entity")
 end
 
+-- Widgets: the scene's menu (PlayButton, VolumeSlider, MusicCheckbox call this driver), immediate-mode widgets,
+-- focus and gamepads. The batch clicks and navigates them after the run; FeatureTest.CheckWidgets() checks what
+-- happened.
+local function TestWidgets(self)
+	self.WidgetLog = {}
+	local function RectIs(rect, x, y, w, h)
+		return rect ~= nil and Near(rect.x, x) and Near(rect.y, y) and Near(rect.z, w) and Near(rect.w, h)
+	end
+	local play = Scene.FindEntityByName("PlayButton")
+	local volume = Scene.FindEntityByName("VolumeSlider")
+	local music = Scene.FindEntityByName("MusicCheckbox")
+	-- The panel sits at the HUD's left middle: (24, 410), 360 x 260.
+	Check("Widget rects", RectIs(UI.GetRect(play), 44, 430, 320, 64) and RectIs(UI.GetRect(volume), 44, 514, 320, 32) and RectIs(UI.GetRect(music), 44, 566, 320, 40))
+	local button = play:GetComponent("UIButton")
+	Check("UIButton fields", button.Interactable and button.OnClick == "OnPlayClicked" and button.Target == self.Entity.ID and button.NormalTint[1] < 1)
+	local slider = volume:GetComponent("UISlider")
+	Check("UISlider fields", Near(slider.Value, 0.5) and slider.Min == 0 and slider.Max == 1 and Near(slider.Step, 0.1) and slider.HandleWidth == 20 and slider.OnValueChanged == "OnSettingChanged")
+	local checkbox = music:GetComponent("UICheckbox")
+	Check("UICheckbox fields", checkbox.Checked == false and checkbox.OnValueChanged == "OnSettingChanged" and #checkbox.CheckColor == 4)
+	ExpectError("UISlider empty range", function() volume:SetComponent("UISlider", { Min = 1 }) end, "Max must be greater than Min")
+	ExpectError("UISlider value out of range", function() volume:SetComponent("UISlider", { Value = 2 }) end, "Value must be between 0 and 1")
+	ExpectError("UIButton callback name", function() play:SetComponent("UIButton", { OnClick = "Start Game" }) end, "OnClick must be the name of a script method")
+	Check("Rejected widget patches change nothing", Near(volume:GetComponent("UISlider").Value, 0.5) and play:GetComponent("UIButton").OnClick == "OnPlayClicked")
+
+	-- Immediate-mode widgets: nothing happened to them yet.
+	Check("UI.Button", UI.Button("Probe button", 20, 20, 100, 40) == false)
+	Check("UI.Checkbox", UI.Checkbox("Probe checkbox", true, 20, 80, 200, 40, { CheckColor = Vec4(1, 0, 0, 1) }) == true)
+	Check("UI.Slider", UI.Slider("", 0.25, 0, 1, 20, 140, 200, 30, { Id = "Probe slider", Step = 0.25, HandleWidth = 10 }) == 0.25)
+	ExpectError("UI.Button duplicate id", function() UI.Button("Probe button", 0, 0, 10, 10) end, "already uses the id 'Probe button'")
+	ExpectError("UI.Slider empty range", function() UI.Slider("x", 0, 1, 1, 0, 0, 10, 10) end, "max must be greater than min")
+	ExpectError("UI.Checkbox unknown option", function() UI.Checkbox("y", false, 0, 0, 10, 10, { Step = 1 }) end, "unknown option 'Step'")
+	Check("UI.GetFocus", UI.GetFocus() == nil)
+	UI.SetFocus(play)
+	Check("UI.SetFocus entity", UI.GetFocus() == play)
+	UI.SetFocus("Probe button")
+	Check("UI.SetFocus id", UI.GetFocus() == "Probe button")
+	UI.SetFocus(nil)
+	ExpectError("UI.SetFocus non-widget", function() UI.SetFocus(Scene.FindEntityByName("HUD")) end, "has no UIButton, UISlider or UICheckbox")
+	Check("UI.IsPointerOverWidget", UI.IsPointerOverWidget() == false)
+
+	-- Gamepads (none is connected headless, but a developer machine may have one).
+	Check("Input.GetGamepads", type(Input.GetGamepads()) == "table")
+	Check("Input.IsGamepadConnected", type(Input.IsGamepadConnected(0)) == "boolean")
+	Check("Input.GetGamepadAxis", type(Input.GetGamepadAxis(0, "LeftX")) == "number")
+	Check("Input.IsGamepadButtonDown", type(Input.IsGamepadButtonDown(0, "A")) == "boolean" and type(Input.IsGamepadButtonPressed(0, "Start")) == "boolean" and type(Input.IsGamepadButtonReleased(0, "B")) == "boolean")
+	Check("Input.GetGamepadName", Input.GetGamepadName(15) == nil or type(Input.GetGamepadName(15)) == "string")
+	ExpectError("Gamepad index range", function() Input.IsGamepadConnected(16) end, "integer from 0 to 15")
+	ExpectError("Gamepad button name", function() Input.IsGamepadButtonDown(0, "Turbo") end, "unknown gamepad button")
+	ExpectError("Gamepad axis name", function() Input.GetGamepadAxis(0, "Wheel") end, "unknown gamepad axis")
+end
+
+-- Called by the batch after it clicked PLAY, moved the focus down to the slider with the keyboard, pushed it right
+-- and moved down to the checkbox with an injected gamepad, toggled it with A, and clicked the immediate-mode button.
+function FeatureTest.CheckWidgets()
+	local driver = Scene.FindEntityByName("FeatureTestDriver"):GetScript()
+	Check("Widget callbacks", table.concat(driver.WidgetLog, ",") == "PlayButton,VolumeSlider=0.6,MusicCheckbox=true")
+	Check("Widget values", Near(Scene.FindEntityByName("VolumeSlider"):GetComponent("UISlider").Value, 0.6) and Scene.FindEntityByName("MusicCheckbox"):GetComponent("UICheckbox").Checked)
+	Check("Widget focus", UI.GetFocus() == "Immediate button")
+	Check("Immediate-mode button clicked", FeatureTest.ImmediateClicks == 1)
+	Check("Gamepad connected callback", FeatureTestEvents.GamepadConnected == 0)
+	return FeatureTest.Report()
+end
+
 -- ---------------------------------------------------------------------------------------------
 -- Lifecycle
 -- ---------------------------------------------------------------------------------------------
@@ -352,6 +415,7 @@ function Driver:OnCreate()
 	TestEntities(self)
 	TestSystems(self)
 	TestGameplay(self)
+	TestWidgets(self)
 	FeatureTest.Phase = "running"
 end
 
@@ -363,6 +427,13 @@ function Driver:OnUpdate(dt)
 	-- Immediate-mode UI every frame (the GPU goldens show it): an anchored nine-slice panel with TTF text.
 	UI.Image("Assets/Textures/UIPanel.png", 24, -112, 300, 96, { Anchor = "BottomLeft", Pivot = Vec2(0, 1), Slice = Vec4(10, 10, 10, 10), SliceScale = 2 })
 	UI.Text("LIVES 3", 174, -160, { Anchor = "BottomLeft", Pivot = Vec2(0.5, 0.5), Size = 44, Font = "Assets/Fonts/Karla-Regular.ttf", Color = Vec4(0.6, 0.9, 1, 1) })
+
+	-- The batch turns these on after the run (the GPU goldens do not show them).
+	if FeatureTest.ShowImmediateWidgets then
+		if UI.Button("Immediate button", 20, 700, 240, 60) then
+			FeatureTest.ImmediateClicks = (FeatureTest.ImmediateClicks or 0) + 1
+		end
+	end
 
 	if frame == 1 then
 		-- The batch holds Space and the left mouse button from the first frame.
@@ -658,6 +729,19 @@ function Driver:OnUpdate(dt)
 		FeatureTest.Quit = true
 		FeatureTest.Phase = "done"
 	end
+end
+
+function Driver:OnPlayClicked(button)
+	table.insert(self.WidgetLog, button.Name)
+end
+
+function Driver:OnSettingChanged(widget, value)
+	local text = type(value) == "number" and string.format("%.1f", value) or tostring(value)
+	table.insert(self.WidgetLog, widget.Name .. "=" .. text)
+end
+
+function Driver:OnGamepadConnected(index)
+	FeatureTestEvents.GamepadConnected = index
 end
 
 function Driver:OnLateUpdate(dt)

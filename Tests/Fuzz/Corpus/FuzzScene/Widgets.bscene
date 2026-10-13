@@ -1,0 +1,21 @@
+{
+	"Format": "BasaltScene",
+	"Version": 1,
+	"Name": "Widgets",
+	"Entities": [
+		{ "ID": 1, "Name": "Menu", "Components": { "UIRect": { "AnchorMin": [0, 0.5], "AnchorMax": [0, 0.5], "Pivot": [0, 0.5], "Size": [360, 260] } } },
+		{ "ID": 2, "Name": "Play", "Parent": 1, "Components": {
+			"UIRect": { "AnchorMin": [0, 0], "AnchorMax": [0, 0], "Pivot": [0, 0], "Position": [20, 20], "Size": [320, 64] },
+			"UIImage": { "Color": [0.25, 0.45, 0.85, 1] },
+			"UIText": { "Text": "PLAY", "HorizontalAlign": "Center", "VerticalAlign": "Middle" },
+			"UIButton": { "Interactable": true, "NormalTint": [0.9, 0.9, 0.9, 1], "HighlightTint": [1, 1, 1, 1], "PressedTint": [0.6, 0.6, 0.6, 1], "DisabledTint": [0.5, 0.5, 0.5, 0.5], "Target": 1, "OnClick": "StartGame" } } },
+		{ "ID": 3, "Name": "Volume", "Parent": 1, "Components": {
+			"UIRect": { "AnchorMin": [0, 0], "AnchorMax": [0, 0], "Pivot": [0, 0], "Position": [20, 104], "Size": [320, 32] },
+			"UISlider": { "Value": 0.5, "Min": 0, "Max": 1, "Step": 0.1, "TrackColor": [0, 0, 0, 0.5], "FillColor": [0.3, 0.6, 1, 1], "HandleColor": [1, 1, 1, 1], "HandleWidth": 20, "Target": 1, "OnValueChanged": "SetVolume" } } },
+		{ "ID": 4, "Name": "Music", "Parent": 1, "Components": {
+			"UIRect": { "AnchorMin": [0, 0], "AnchorMax": [0, 0], "Pivot": [0, 0], "Position": [20, 156], "Size": [320, 40] },
+			"UIText": { "Text": "Music", "VerticalAlign": "Middle" },
+			"UICheckbox": { "Checked": true, "BoxColor": [0.1, 0.1, 0.1, 1], "CheckColor": [1, 1, 1, 1], "Target": 0, "OnValueChanged": "" } } },
+		{ "ID": 5, "Name": "Both", "Parent": 1, "Components": { "UISlider": {}, "UIButton": { "Interactable": false } } }
+	]
+}

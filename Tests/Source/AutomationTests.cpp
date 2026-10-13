@@ -708,6 +708,91 @@ TEST_SUITE("Automation")
 		CHECK(RunError(registry, session, "ui.layout", { { "height", "tall" } }).find("must be an integer") != std::string::npos);
 	}
 
+	TEST_CASE("input.gamepad drives an injected gamepad, is recorded and replays")
+	{
+		BasaltTest::TempProject temp("AutomationGamepad");
+		CommandRegistry registry;
+		AutomationSession session;
+		for (uint32_t index = 0; index < Input::MaxGamepads; index++)
+			Input::SetGamepadConnected(index, false);
+		// Moves with the stick, and toggles a checkbox through gamepad navigation.
+		Run(registry, session, "asset.write", { { "path", "Assets/Scripts/Pad.lua" }, { "content", R"(
+			local P = {}
+			function P:OnUpdate(dt)
+				self.Entity.Translation = self.Entity.Translation + Vec3(Input.GetGamepadAxis(1, "LeftX") * dt, 0, 0)
+			end
+			function P:OnGamepadConnected(index)
+				self.Entity.Translation = self.Entity.Translation + Vec3(0, index, 0)
+			end
+			return P
+		)" } });
+		Run(registry, session, "entity.create", { { "name", "Pad" }, { "components", { { "Script", { { "Script", "Assets/Scripts/Pad.lua" } } } } } });
+		Run(registry, session, "entity.create", { { "name", "Option" }, { "components", { { "UIRect", json::object() }, { "UICheckbox", { { "OnValueChanged", "" } } } } } });
+
+		CHECK(RunError(registry, session, "input.gamepad", { { "index", 1 } }).find("give 'connected', 'button' or 'axis'") != std::string::npos);
+		CHECK(RunError(registry, session, "input.gamepad", { { "index", 16 }, { "connected", true } }).find("'index' must be in") != std::string::npos);
+		CHECK(RunError(registry, session, "input.gamepad", { { "index", 1 }, { "button", "A" } }).find("gamepad 1 is not connected") != std::string::npos);
+		CHECK(RunError(registry, session, "input.gamepad", { { "connected", true }, { "button", "Turbo" } }).find("unknown gamepad button 'Turbo'") != std::string::npos);
+		CHECK(RunError(registry, session, "input.gamepad", { { "connected", true }, { "axis", "LeftTrigger" }, { "value", -0.5 } }).find("'value' must be a number from 0 to 1") != std::string::npos);
+		CHECK(RunError(registry, session, "input.gamepad", { { "connected", true }, { "axis", "LeftX" } }).find("'value' must be a number from -1 to 1") != std::string::npos);
+		CHECK(RunError(registry, session, "input.gamepad", { { "connected", true }, { "axis", "Wheel" }, { "value", 0 } }).find("unknown gamepad axis") != std::string::npos);
+		// A rejected request changes nothing, not even the connection it asked for.
+		CHECK_FALSE(Input::IsGamepadConnected(0));
+
+		Run(registry, session, "replay.record_start");
+		Run(registry, session, "play.start");
+		Run(registry, session, "input.gamepad", { { "index", 1 }, { "connected", true }, { "name", "Test Pad" }, { "axis", "LeftX" }, { "value", 1 } });
+		CHECK(Input::GetGamepadName(1) == "Test Pad");
+		Run(registry, session, "play.step", { { "frames", 30 } });
+		Run(registry, session, "input.gamepad", { { "index", 1 }, { "axis", "LeftX" }, { "value", 0 } });
+		Run(registry, session, "input.gamepad", { { "index", 1 }, { "button", "DPadDown" } });
+		Run(registry, session, "play.step", { { "frames", 1 } });
+		Run(registry, session, "input.gamepad", { { "index", 1 }, { "button", "DPadDown" }, { "down", false } });
+		Run(registry, session, "input.gamepad", { { "index", 1 }, { "button", "A" } });
+		Run(registry, session, "play.step", { { "frames", 1 } });
+		Run(registry, session, "input.gamepad", { { "index", 1 }, { "button", "A" }, { "down", false } });
+		const json live = Run(registry, session, "play.step", { { "frames", 2 }, { "hash", true } });
+
+		// ui.layout describes the widget, its state and focus while playing.
+		const json item = Run(registry, session, "ui.layout")["items"][0];
+		CHECK(item["widget"]["kind"] == "UICheckbox");
+		CHECK(item["widget"]["checked"] == true);
+		CHECK(item["widget"]["focused"] == true);
+		CHECK(item["widget"]["state"] == "Highlighted");
+		CHECK(item["widget"]["interactable"] == true);
+		CHECK(item["widget"]["target"] == 0);
+
+		const json saved = Run(registry, session, "replay.record_stop", { { "path", "Replays/Pad.breplay" } });
+		CHECK(saved["events"] == 6);
+		// The replay starts without the injected gamepad (still connected here) and connects it on its frame.
+		CHECK(Input::IsGamepadConnected(1));
+		const json replayed = Run(registry, session, "replay.run", { { "path", "Replays/Pad.breplay" }, { "assertHash", true }, { "assertNoErrors", true } });
+		CHECK(replayed["stateHash"] == live["stateHash"]);
+		Run(registry, session, "play.stop");
+		Input::SetGamepadConnected(1, false);
+	}
+
+	TEST_CASE("ui.layout reports widgets with several widget components or a missing target")
+	{
+		CommandRegistry registry;
+		AutomationSession session;
+		Run(registry, session, "scene.new", { { "name", "UI" }, { "empty", true } });
+		Run(registry, session, "entity.create", { { "name", "Both" }, { "components", { { "UIRect", json::object() }, { "UISlider", { { "Value", 0.25 } } }, { "UICheckbox", json::object() } } } });
+		const json menu = Run(registry, session, "entity.create", { { "name", "Menu" } });
+		// Targets resolve by name in commands, like every entity reference.
+		Run(registry, session, "entity.create", { { "name", "Lost" }, { "components", { { "UIRect", json::object() }, { "UIButton", { { "Target", "Menu" } } } } } });
+		Run(registry, session, "entity.destroy", { { "entity", "Menu" } });
+		const json layout = Run(registry, session, "ui.layout");
+		REQUIRE(layout["items"].size() == 2);
+		CHECK(layout["items"][0]["widget"]["kind"] == "UISlider");
+		CHECK(layout["items"][0]["widget"]["value"] == 0.25);
+		// Not playing: no state or focus.
+		CHECK_FALSE(layout["items"][0]["widget"].contains("state"));
+		REQUIRE(layout["problems"].size() == 2);
+		CHECK(layout["problems"][0]["problem"] == "several widget components: it acts as its UISlider only");
+		CHECK(layout["problems"][1]["problem"] == "UIButton Target " + std::to_string(menu["id"].get<uint64_t>()) + " does not exist (its callback cannot run)");
+	}
+
 	TEST_CASE("ui.layout reports images and fonts that will not load")
 	{
 		BasaltTest::TempProject project("UILayoutProblems");

@@ -98,6 +98,18 @@ Fields: `Texture`, `Color`, `Slice`, `SliceScale`
 
 Fields: `Text`, `Font`, `FontSize`, `Color`, `HorizontalAlign`, `VerticalAlign`, `Wrap`, `Shadow`
 
+## UIButton
+
+Fields: `Interactable`, `NormalTint`, `HighlightTint`, `PressedTint`, `DisabledTint`, `Target`, `OnClick`
+
+## UISlider
+
+Fields: `Interactable`, `Value`, `Min`, `Max`, `Step`, `TrackColor`, `FillColor`, `HandleColor`, `HandleWidth`, `NormalTint`, `HighlightTint`, `PressedTint`, `DisabledTint`, `Target`, `OnValueChanged`
+
+## UICheckbox
+
+Fields: `Interactable`, `Checked`, `BoxColor`, `CheckColor`, `NormalTint`, `HighlightTint`, `PressedTint`, `DisabledTint`, `Target`, `OnValueChanged`
+
 ## Prefab
 
 Fields: `Prefab`
