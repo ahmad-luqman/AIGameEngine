@@ -257,6 +257,29 @@ TEST_SUITE("UIFonts")
 		WriteU16(shortGlyph, FindTable(shortGlyph, "loca") + 2 * (glyph + size_t{ 1 }), static_cast<uint16_t>((LocaOffset(shortGlyph, glyph) + 4) / 2));
 		expectError(shortGlyph, "too short");
 
+		// Glyphs declaring far more points than the file could hold (repeated flags, zero deltas): checking a
+		// font made of tens of thousands of them would take billions of steps, so the font is refused.
+		std::vector<uint8_t> pointHeavy = karla;
+		size_t packed = 0;
+		for (uint32_t heavy : FindGlyphsWhere(pointHeavy, IsSimple, 60))
+		{
+			const auto [heavyOffset, heavyLength] = FindGlyph(pointHeavy, heavy);
+			// One contour; each (flag with repeat, count) pair adds 256 points with no coordinates.
+			const size_t pairs = (heavyLength - 16) / 2;
+			const uint16_t points = static_cast<uint16_t>(std::min<size_t>(pairs * 256, 65536) - 1);
+			WriteU16(pointHeavy, heavyOffset, 1);
+			WriteU16(pointHeavy, heavyOffset + 10, points); // last point index
+			WriteU16(pointHeavy, heavyOffset + 12, 0);      // no instructions
+			for (size_t pair = 0; pair < pairs; pair++)
+			{
+				pointHeavy[heavyOffset + 14 + 2 * pair] = 0x39; // on-curve, x and y unchanged, repeated
+				pointHeavy[heavyOffset + 15 + 2 * pair] = 255;
+			}
+			packed += size_t{ points } + 1;
+		}
+		REQUIRE(packed > 4 * pointHeavy.size() + 65536);
+		expectError(pointHeavy, "outline points, more than a");
+
 		// Character maps: an unsupported format, none for Unicode, a search parameter past any valid font, and a
 		// character mapped past the last glyph.
 		const size_t format4 = FindCmapSubtable(karla, 4);
