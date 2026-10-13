@@ -639,9 +639,6 @@ namespace Basalt {
 	void Scene::ApplyPendingLoad()
 	{
 		const Scope<PendingLoad> load = std::move(m_PendingLoad);
-		// Nothing of the old scene's UI stays hovered, held or focused (a held button must not click the new scene).
-		if (m_UIInteraction)
-			m_UIInteraction->OnSceneLoaded();
 
 		// Unload: OnDestroy may spawn entities, which a further pass destroys too.
 		const std::unordered_set<UUID> persistentBefore = m_PersistentEntities;
@@ -687,6 +684,10 @@ namespace Basalt {
 			if (!m_EntityMap.contains(uuid))
 				BS_CORE_WARN("Scene.Load: persistent entity {} was destroyed while '{}' unloaded", static_cast<uint64_t>(uuid), m_Name);
 		}
+		// Nothing of the old scene's UI stays hovered, held or focused (a held button must not click the new scene).
+		// After the unload: its OnDestroy callbacks may still draw widgets or set the focus.
+		if (m_UIInteraction)
+			m_UIInteraction->OnSceneLoaded();
 
 		// An entity of the file that is already here (normally the persistent copy of a manager every level
 		// contains) is skipped together with all its descendants in the file, whether or not the kept entity has

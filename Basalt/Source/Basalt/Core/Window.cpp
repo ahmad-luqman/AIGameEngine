@@ -2,6 +2,7 @@
 
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Input.h"
+#include "Basalt/Core/Platform.h"
 #include "Basalt/Events/ApplicationEvent.h"
 #include "Basalt/Events/KeyEvent.h"
 #include "Basalt/Events/MouseEvent.h"
@@ -9,7 +10,7 @@
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
-#include <cstdlib>
+#include <optional>
 #include <string>
 #include <unordered_set>
 
@@ -28,10 +29,10 @@ namespace Basalt {
 		// line) to GLFW's built-in database, for controllers it does not know.
 		void LoadGamepadMappings()
 		{
-			const char* mappings = std::getenv("SDL_GAMECONTROLLERCONFIG");
-			if (!mappings || !*mappings)
+			const std::optional<std::string> mappings = Platform::GetEnvVar("SDL_GAMECONTROLLERCONFIG");
+			if (!mappings || mappings->empty())
 				return;
-			if (glfwUpdateGamepadMappings(mappings))
+			if (glfwUpdateGamepadMappings(mappings->c_str()))
 				BS_CORE_INFO("Input: added the gamepad mappings of SDL_GAMECONTROLLERCONFIG");
 			else
 				BS_CORE_ERROR("Input: SDL_GAMECONTROLLERCONFIG has invalid gamepad mappings (see the GLFW error above); they are ignored");

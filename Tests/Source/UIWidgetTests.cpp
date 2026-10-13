@@ -1298,6 +1298,12 @@ TEST_SUITE("UIWidgets")
 			end
 			return Menu
 		)");
+		// An entity of the old scene draws and focuses a widget as it is destroyed by the load.
+		AddScripted(scene, project, "Leaving", "Assets/Scripts/Leaving.lua", R"(
+			local Leaving = {}
+			function Leaving:OnDestroy() UI.Button("Goodbye", 100, 100, 200, 80); UI.SetFocus("Goodbye") end
+			return Leaving
+		)");
 		scene.OnRuntimeStart();
 		Frame(scene);
 		Input::SetMousePosition({ 150.0f, 120.0f });
@@ -1309,6 +1315,7 @@ TEST_SUITE("UIWidgets")
 		Input::SetKeyState(KeyCode::L, false);
 		Frame(scene);
 		CHECK_FALSE(scene.GetUIInteraction()->IsPointerOverWidget());
+		CHECK_FALSE(FocusOf(scene).IsValid());
 		CHECK(scene.GetScriptEngine()->GetErrors().empty());
 		scene.OnRuntimeStop();
 	}
