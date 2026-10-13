@@ -198,6 +198,11 @@ namespace Basalt {
 			command.Pivot = options.Vector<glm::vec2>("Pivot", "Vec2", 0.0f, 1.0f).value_or(command.Anchor);
 		}
 
+		std::string TooManyCommandsMessage()
+		{
+			return fmt::format("more than {} UI commands this frame", GameUI::MaxCommands);
+		}
+
 		void Submit(UIDrawCommand command, const Checker& checker)
 		{
 			switch (GameUI::Submit(std::move(command)))
@@ -210,7 +215,7 @@ namespace Basalt {
 					checker.Fail("positions, sizes, anchors and pivots must be finite numbers");
 				case GameUI::SubmitResult::QueueFull:
 					// Most likely a loop that never ends; dropping later (top-most) UI silently would hide it.
-					checker.Fail(fmt::format("more than {} UI commands this frame", GameUI::MaxCommands));
+					checker.Fail(TooManyCommandsMessage());
 			}
 		}
 
@@ -244,7 +249,8 @@ namespace Basalt {
 		class ImmediateWidget
 		{
 		public:
-			// Draw commands one widget may submit (a slider's track, fill and handle, and its label).
+			// Draw commands one widget may submit: the most is a slider's track, fill and handle
+			// (UIWidgets::AppendSlider) and its label. Change it with them.
 			static constexpr size_t MaxCommands = 4;
 
 			ImmediateWidget(const Checker& checker, UIWidgetKind kind, const std::string& label, float x, float y, float width, float height, const sol::object& optionsArgument, std::initializer_list<std::string_view> ownOptions)
@@ -296,8 +302,17 @@ namespace Basalt {
 
 			glm::vec4 Color(const glm::vec4& fallback) const { return m_Color.value_or(fallback); }
 			// A widget's own option, or `fallback` when it is not given.
-			glm::vec4 OptionColor(const char* key, const glm::vec4& fallback) const { return m_Options ? m_Options->Color(key).value_or(fallback) : fallback; }
-			float OptionNumber(const char* key, float min, float max, float fallback) const { return m_Options ? m_Options->Number(key, min, max).value_or(fallback) : fallback; }
+			// Read before Register: a bad option is an error, and the widget must not be registered by then.
+			glm::vec4 OptionColor(const char* key, const glm::vec4& fallback) const
+			{
+				BS_CORE_ASSERT(!m_Registered, "options are read before Register");
+				return m_Options ? m_Options->Color(key).value_or(fallback) : fallback;
+			}
+			float OptionNumber(const char* key, float min, float max, float fallback) const
+			{
+				BS_CORE_ASSERT(!m_Registered, "options are read before Register");
+				return m_Options ? m_Options->Number(key, min, max).value_or(fallback) : fallback;
+			}
 			float GetHandleWidth() const { return m_Widget.HandleWidth; }
 			UIBox Rect() const { return { m_Widget.Offset, m_Widget.Size }; }
 
@@ -310,7 +325,7 @@ namespace Basalt {
 				m_Registered = true;
 				UIInteraction& interaction = RequireInteraction(context, m_Checker);
 				if (GameUI::GetCommandCount() + MaxCommands > GameUI::MaxCommands)
-					m_Checker.Fail(fmt::format("more than {} UI commands this frame", GameUI::MaxCommands));
+					m_Checker.Fail(TooManyCommandsMessage());
 				UIImmediateInput input;
 				switch (interaction.SubmitImmediate(m_Widget, input))
 				{

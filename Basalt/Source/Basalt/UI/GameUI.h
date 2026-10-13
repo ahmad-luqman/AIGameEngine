@@ -67,7 +67,8 @@ namespace Basalt {
 		// before the first mouse position arrives.
 		static std::optional<glm::vec2> GetPointerPosition();
 
-		// Everything a host sets about its view, to save and restore around a run that needs the headless view.
+		// Everything a host sets about its view, to save and restore around a run that needs the headless view (the
+		// defaults).
 		struct HostState
 		{
 			glm::vec2 ViewportOrigin = { 0.0f, 0.0f };
@@ -76,7 +77,7 @@ namespace Basalt {
 			bool NavigationEnabled = true;
 		};
 		static HostState GetHostState();
-		// Sets every field (each one ignored, like its setter, when it is not usable).
+		// Sets every field at once (an origin or size that is not usable is ignored, like its setter).
 		static void SetHostState(const HostState& state);
 	};
 

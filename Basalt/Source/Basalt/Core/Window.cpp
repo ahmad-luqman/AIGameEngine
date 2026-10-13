@@ -9,6 +9,7 @@
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <string>
 #include <unordered_set>
 
@@ -23,50 +24,67 @@ namespace Basalt {
 			BS_CORE_ERROR("GLFW error ({}): {}", error, description);
 		}
 
-		// Feeds Input with every joystick GLFW maps to the standard gamepad layout (its SDL mapping database).
-		// Joysticks without a mapping are not gamepads and read as disconnected (with a warning once per device).
-		// While the window does not have focus, gamepads stay connected but read as released: like the keyboard,
-		// they do not drive an unfocused game.
+		// Adds the gamepad mappings of the SDL_GAMECONTROLLERCONFIG environment variable (SDL's format, one mapping per
+		// line) to GLFW's built-in database, for controllers it does not know.
+		void LoadGamepadMappings()
+		{
+			const char* mappings = std::getenv("SDL_GAMECONTROLLERCONFIG");
+			if (!mappings || !*mappings)
+				return;
+			if (glfwUpdateGamepadMappings(mappings))
+				BS_CORE_INFO("Input: added the gamepad mappings of SDL_GAMECONTROLLERCONFIG");
+			else
+				BS_CORE_ERROR("Input: SDL_GAMECONTROLLERCONFIG has invalid gamepad mappings (see the GLFW error above); they are ignored");
+		}
+
+		// Feeds Input with every joystick GLFW maps to the standard gamepad layout (its SDL mapping database plus
+		// SDL_GAMECONTROLLERCONFIG). Joysticks without a mapping are not gamepads and read as disconnected, with a
+		// warning once per controller model. While the window does not have focus, gamepads stay connected but read
+		// as released (Input::UpdateGamepadFromDevice): like the keyboard, they do not drive an unfocused game.
 		void PollGamepads(bool focused)
 		{
 			static_assert(static_cast<uint32_t>(GLFW_GAMEPAD_BUTTON_LAST + 1) == GamepadButtonCount && static_cast<uint32_t>(GLFW_GAMEPAD_AXIS_LAST + 1) == GamepadAxisCount);
 			static_assert(GLFW_GAMEPAD_BUTTON_A == static_cast<int>(GamepadButton::A) && GLFW_GAMEPAD_BUTTON_DPAD_LEFT == static_cast<int>(GamepadButton::DPadLeft));
 			static_assert(GLFW_GAMEPAD_AXIS_LEFT_TRIGGER == static_cast<int>(GamepadAxis::LeftTrigger));
 			static std::unordered_set<std::string> s_ReportedUnmapped;
+			static std::unordered_set<int> s_ReportedUnreadable;
 			constexpr int Count = std::min(static_cast<int>(Input::MaxGamepads), GLFW_JOYSTICK_LAST + 1);
 			for (int id = 0; id < Count; id++)
 			{
+				const auto index = static_cast<uint32_t>(id);
 				if (!glfwJoystickIsGamepad(id))
 				{
 					if (glfwJoystickPresent(id))
 					{
 						const char* guid = glfwGetJoystickGUID(id);
 						const char* name = glfwGetJoystickName(id);
-						if (s_ReportedUnmapped.insert(guid ? guid : "").second)
-							BS_CORE_WARN("Input: joystick '{}' (GUID {}) has no gamepad mapping and is ignored; add one to SDL_GAMECONTROLLERCONFIG or the SDL controller database", name ? name : "?", guid ? guid : "?");
+						if (s_ReportedUnmapped.insert(fmt::format("{}/{}", guid ? guid : "", name ? name : "")).second)
+							BS_CORE_WARN("Input: joystick '{}' (GUID {}) has no gamepad mapping and is ignored; add a mapping for it to the SDL_GAMECONTROLLERCONFIG environment variable", name ? name : "?", guid ? guid : "?");
 					}
-					Input::UpdateGamepadFromDevice(static_cast<uint32_t>(id), nullptr);
+					Input::UpdateGamepadFromDevice(index, nullptr);
 					continue;
 				}
-				GLFWgamepadstate state;
-				// A gamepad unplugged between the two calls: the next poll sees it gone.
-				if (!glfwGetGamepadState(id, &state))
-					continue;
 				GamepadDeviceState device;
 				const char* name = glfwGetGamepadName(id);
 				device.Name = name ? name : "Gamepad";
-				if (focused)
+				GLFWgamepadstate state;
+				// Unplugged between the two calls (the next poll sees it gone) or a platform error: released.
+				if (!glfwGetGamepadState(id, &state))
 				{
-					for (uint32_t b = 0; b < GamepadButtonCount; b++)
-						device.Buttons[b] = state.buttons[b] == GLFW_PRESS;
-					for (uint32_t a = 0; a < GamepadAxisCount; a++)
-					{
-						// GLFW reports triggers from -1 (released) to 1, like the sticks.
-						const float value = state.axes[a];
-						device.Axes[a] = IsGamepadTrigger(static_cast<GamepadAxis>(a)) ? (value + 1.0f) * 0.5f : value;
-					}
+					if (s_ReportedUnreadable.insert(id).second)
+						BS_CORE_WARN("Input: could not read gamepad {} ('{}'); it reads as released", id, device.Name);
+					Input::UpdateGamepadFromDevice(index, &device, focused);
+					continue;
 				}
-				Input::UpdateGamepadFromDevice(static_cast<uint32_t>(id), &device);
+				for (uint32_t b = 0; b < GamepadButtonCount; b++)
+					device.Buttons[b] = state.buttons[b] == GLFW_PRESS;
+				for (uint32_t a = 0; a < GamepadAxisCount; a++)
+				{
+					// GLFW reports triggers from -1 (released) to 1, like the sticks.
+					const float value = state.axes[a];
+					device.Axes[a] = IsGamepadTrigger(static_cast<GamepadAxis>(a)) ? (value + 1.0f) * 0.5f : value;
+				}
+				Input::UpdateGamepadFromDevice(index, &device, focused);
 			}
 		}
 	}
@@ -85,6 +103,7 @@ namespace Basalt {
 				BS_CORE_ERROR("Could not initialize GLFW (no display available?)");
 				return;
 			}
+			LoadGamepadMappings();
 		}
 
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);

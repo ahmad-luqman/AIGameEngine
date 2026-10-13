@@ -68,9 +68,12 @@ namespace Basalt {
 		float SnapSliderValue(float value, float min, float max, float step);
 		// The value at `fraction` of the range, snapped.
 		float SliderValueAtFraction(float fraction, float min, float max, float step);
-		// The value `steps` navigation stops away (positive = towards Max): with a positive step, from stop to stop
-		// (Min + k * step, then Max), so every stop is reached in both directions; when continuous, by a twentieth
-		// of the range per step.
+		// How many navigation steps cross a continuous slider (Step 0).
+		inline constexpr float ContinuousNavigationStops = 20.0f;
+
+		// The value `steps` navigation stops away (positive = towards Max): with a positive step, from the stop
+		// nearest the value to the next (Min + k * step, then Max), so every stop is reached in both directions (with
+		// more than 1e7 stops it steps by value and snaps instead); when continuous, by a twentieth of the range.
 		float StepSliderValue(float value, int steps, float min, float max, float step);
 
 		// The handle's width in `rect`: HandleWidth, at most the rect's width.

@@ -23,15 +23,25 @@ namespace Basalt {
 		UIBox Rect;
 	};
 
-	// What the interaction and the tools need to know about an entity's widget.
+	// What the interaction and the tools need to know about an entity's widget, from its repaired component.
 	struct UIWidgetInfo
 	{
 		UIWidgetKind Kind = UIWidgetKind::Button;
 		bool Interactable = true;
-		// The component's Target (0 = the widget itself).
+		// The component's Target as stored: 0 means the widget itself (see ResolveTarget).
 		UUID Target = 0;
-		// The callback's method name, empty for none.
+		// The callback's method name, empty for none (also when the stored name is not a method name: see
+		// AuthoredCallback).
 		std::string Callback;
+		// The callback name as stored in the component.
+		std::string AuthoredCallback;
+		// Sliders only.
+		float HandleWidth = 0.0f;
+		// The entity has more than one widget component (it acts as this one alone).
+		bool SeveralComponents = false;
+
+		// The entity whose script the callback calls.
+		UUID ResolveTarget(UUID widget) const { return Target != 0 ? Target : widget; }
 	};
 
 	// Lays out the scene's UI components (UIRect, UIImage, UIText and the widgets) on a canvas. Headless: the
@@ -65,6 +75,7 @@ namespace Basalt {
 		// The entity's widget: the first of its UIButton, UISlider and UICheckbox (an entity with several acts as
 		// that one alone, and the layout warns once). nullopt when it has none. Values come repaired (UIRules).
 		static std::optional<UIWidgetInfo> GetWidget(Entity entity);
+		// The kind GetWidget reports, without repairing or warning.
 		static std::optional<UIWidgetKind> GetWidgetKind(Entity entity);
 		// How many widget components the entity has (more than one is a mistake).
 		static int CountWidgetComponents(Entity entity);

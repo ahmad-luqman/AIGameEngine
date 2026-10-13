@@ -147,9 +147,10 @@ namespace Basalt {
 		// Creation order, for deterministic callback order.
 		std::vector<UUID> Order;
 		std::unordered_set<UUID> Pending;
-		// The gamepads scripts were told about (OnGamepadConnected): Update announces the difference, so changes
-		// while the scene does not update (paused) and gamepads connected before play are announced too.
-		std::array<bool, Input::MaxGamepads> AnnouncedGamepads = {};
+		// The gamepad connections scripts were told about (Input::GetGamepadConnection, 0 = none): Update announces
+		// the difference, so gamepads connected before play, changes while the scene does not update (paused) and a
+		// gamepad replaced at its index are announced too. Instances started later hear about these on start.
+		std::array<uint32_t, Input::MaxGamepads> AnnouncedGamepads = {};
 		bool Started = false;
 
 		void OnScriptComponentChanged(entt::registry& registry, entt::entity entity)
@@ -304,6 +305,12 @@ namespace Basalt {
 				return;
 			it->second.Created = true;
 			Call(engine, id, "OnCreate");
+			// Gamepads announced before this instance existed (OnGamepadConnected is for every instance).
+			for (uint32_t index = 0; index < Input::MaxGamepads; index++)
+			{
+				if (impl.AnnouncedGamepads[index] != 0)
+					Call(engine, id, "OnGamepadConnected", static_cast<int>(index));
+			}
 		}
 	};
 
@@ -560,11 +567,16 @@ namespace Basalt {
 	{
 		for (uint32_t index = 0; index < Input::MaxGamepads; index++)
 		{
-			const bool connected = Input::IsGamepadConnected(index);
-			if (connected == m_Impl->AnnouncedGamepads[index])
+			const uint32_t connection = Input::GetGamepadConnection(index);
+			uint32_t& announced = m_Impl->AnnouncedGamepads[index];
+			if (connection == announced)
 				continue;
-			m_Impl->AnnouncedGamepads[index] = connected;
-			ScriptEngineAccess::CallOnEveryInstance(*this, connected ? "OnGamepadConnected" : "OnGamepadDisconnected", static_cast<int>(index));
+			const bool wasConnected = announced != 0;
+			announced = connection;
+			if (wasConnected)
+				ScriptEngineAccess::CallOnEveryInstance(*this, "OnGamepadDisconnected", static_cast<int>(index));
+			if (connection != 0)
+				ScriptEngineAccess::CallOnEveryInstance(*this, "OnGamepadConnected", static_cast<int>(index));
 		}
 	}
 
@@ -584,11 +596,10 @@ namespace Basalt {
 			report("missing", "its Target entity " + std::to_string(static_cast<uint64_t>(event.Target)) + " does not exist");
 			return;
 		}
+		// An earlier callback this frame destroyed the target (a menu closing itself): like a widget being destroyed,
+		// nothing is left to call.
 		if (m_Scene->IsEntityPendingDestruction(target))
-		{
-			report("destroyed", "its Target '" + target.GetName() + "' is being destroyed");
 			return;
-		}
 		auto it = m_Impl->Instances.find(event.Target);
 		if (it == m_Impl->Instances.end())
 		{

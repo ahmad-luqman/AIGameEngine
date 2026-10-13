@@ -385,7 +385,8 @@ local function TestWidgets(self)
 	UI.SetNavigationEnabled(true)
 	Check("UI.IsNavigationEnabled", UI.IsNavigationEnabled() == true)
 
-	-- Gamepads (none is connected headless, but a developer machine may have one).
+	-- Gamepads: only types here. The batch runs headless (no device polling) and injects one later; the GPU tests run
+	-- this scene in the runtime, where a developer's own gamepad may be connected.
 	Check("Input.GetGamepads", type(Input.GetGamepads()) == "table")
 	Check("Input.IsGamepadConnected", type(Input.IsGamepadConnected(0)) == "boolean")
 	Check("Input.GetGamepadAxis", type(Input.GetGamepadAxis(0, "LeftX")) == "number")

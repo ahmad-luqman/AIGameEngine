@@ -30,8 +30,8 @@ namespace Basalt {
 	//   function Player:OnCollisionBegin(other, contact) end
 	//   function Player:OnCollisionEnd(other) end  -- likewise OnTriggerEnter, OnTriggerExit (no contact)
 	//   function Player:OnJointBreak(other) end    -- other is the far body; nil for a joint to the world
-	//   function Player:OnGamepadConnected(index) end  -- also for gamepads connected when play starts; likewise
-	//                                                  -- OnGamepadDisconnected
+	//   function Player:OnGamepadConnected(index) end  -- also for gamepads connected before the instance started;
+	//                                                  -- likewise OnGamepadDisconnected
 	//   return Player
 	//
 	// Each entity gets an instance table (self) whose fields start as the property values, with
@@ -55,8 +55,9 @@ namespace Basalt {
 		// exist before the first OnCreate runs).
 		void Start();
 		// Creates the instances of scripts added since the last frame, calls OnGamepadConnected/Disconnected for the
-		// gamepads connected or disconnected since the last Update (the first one announces those already connected),
-		// the widget callbacks of `uiEvents` (UIInteraction) and OnUpdate, then runs the due timers and coroutines.
+		// gamepads whose connection changed since the last Update (the first one announces those already connected;
+		// a gamepad replaced at its index is a disconnect and a connect), the widget callbacks of `uiEvents`
+		// (UIInteraction) and OnUpdate, then runs the due timers and coroutines.
 		void Update(Timestep ts, std::span<const UIWidgetEvent> uiEvents);
 		void LateUpdate(Timestep ts);
 		// Calls OnDestroy on every live instance, then ends the session's timers, coroutines and event handlers.
@@ -98,7 +99,8 @@ namespace Basalt {
 		bool CreateInstance(Entity entity);
 		void DispatchGamepadConnections();
 		// Calls a widget's callback on its target. A callback that cannot be called (no target entity, no script,
-		// no such method) is a script error, reported once per widget, method and problem.
+		// no such method) is a script error, reported once per widget, method and problem; a widget or target that an
+		// earlier callback this frame destroyed is skipped.
 		void DispatchUIEvent(const UIWidgetEvent& event);
 
 	private:

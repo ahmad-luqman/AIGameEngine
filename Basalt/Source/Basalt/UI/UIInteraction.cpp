@@ -45,28 +45,34 @@ namespace Basalt {
 			GamepadAxis Axis;
 			// The sign of the stick axis in this direction.
 			float Sign;
+			// The stick's other axis, and whether this direction wins when both are pushed equally far.
+			GamepadAxis CrossAxis;
+			bool WinsTies;
 			glm::vec2 Vector;
 		};
 
-		// In Direction order. Vertical first: one move per frame, and menus are mostly columns.
+		// In Direction order. Vertical first (one move per frame, and menus are mostly columns): a stick pushed exactly
+		// diagonally moves vertically.
 		constexpr DirectionBinding DirectionBindings[] = {
-			{ KeyCode::Up, GamepadButton::DPadUp, GamepadAxis::LeftY, -1.0f, { 0.0f, -1.0f } },
-			{ KeyCode::Down, GamepadButton::DPadDown, GamepadAxis::LeftY, 1.0f, { 0.0f, 1.0f } },
-			{ KeyCode::Left, GamepadButton::DPadLeft, GamepadAxis::LeftX, -1.0f, { -1.0f, 0.0f } },
-			{ KeyCode::Right, GamepadButton::DPadRight, GamepadAxis::LeftX, 1.0f, { 1.0f, 0.0f } },
+			{ KeyCode::Up, GamepadButton::DPadUp, GamepadAxis::LeftY, -1.0f, GamepadAxis::LeftX, true, { 0.0f, -1.0f } },
+			{ KeyCode::Down, GamepadButton::DPadDown, GamepadAxis::LeftY, 1.0f, GamepadAxis::LeftX, true, { 0.0f, 1.0f } },
+			{ KeyCode::Left, GamepadButton::DPadLeft, GamepadAxis::LeftX, -1.0f, GamepadAxis::LeftY, false, { -1.0f, 0.0f } },
+			{ KeyCode::Right, GamepadButton::DPadRight, GamepadAxis::LeftX, 1.0f, GamepadAxis::LeftY, false, { 1.0f, 0.0f } },
 		};
 
-		// The direction is held on the keyboard, a D-pad or a left stick. A stick counts along its dominant axis
-		// only: a diagonal push moves one way, not two.
+		// Whether a gamepad's left stick is pushed in the binding's direction, along its dominant axis only: a diagonal
+		// push moves one way, not two.
+		bool IsStickPushed(uint32_t index, const DirectionBinding& binding)
+		{
+			const float along = Input::GetGamepadAxis(index, binding.Axis) * binding.Sign;
+			const float across = std::abs(Input::GetGamepadAxis(index, binding.CrossAxis));
+			return along >= UIInteraction::StickThreshold && (along > across || (binding.WinsTies && along == across));
+		}
+
+		// The direction is held on the keyboard, a D-pad or a left stick.
 		bool IsDirectionHeld(const DirectionBinding& binding)
 		{
-			return Input::IsKeyDown(binding.Key) || AnyGamepad([&binding](uint32_t index) {
-					   if (Input::IsGamepadButtonDown(index, binding.DPad))
-						   return true;
-					   const float along = Input::GetGamepadAxis(index, binding.Axis) * binding.Sign;
-					   const GamepadAxis other = binding.Axis == GamepadAxis::LeftX ? GamepadAxis::LeftY : GamepadAxis::LeftX;
-					   return along >= UIInteraction::StickThreshold && along > std::abs(Input::GetGamepadAxis(index, other));
-				   });
+			return Input::IsKeyDown(binding.Key) || AnyGamepad([&binding](uint32_t index) { return Input::IsGamepadButtonDown(index, binding.DPad) || IsStickPushed(index, binding); });
 		}
 
 		// The widget nearest `from` in `direction` (a unit axis): by center distance along it plus twice the sideways
@@ -96,14 +102,12 @@ namespace Basalt {
 			return best;
 		}
 
-		// Queues the widget's callback on its target (itself when Target is 0); a widget whose callback name is
-		// empty queues nothing.
-		void QueueEvent(std::vector<UIWidgetEvent>& events, Entity widget, UUID target, const std::string& method, UIWidgetValue value)
+		// The live entity of a widget component candidate.
+		Entity WidgetEntity(Scene& scene, const UIWidgetID& id)
 		{
-			if (method.empty())
-				return;
-			const UUID self = widget.GetUUID();
-			events.push_back({ self, target != 0 ? target : self, method, value });
+			Entity entity = scene.GetEntityByUUID(id.GetEntity());
+			BS_CORE_ASSERT(entity, "candidates are live entities");
+			return entity;
 		}
 
 	}
@@ -137,22 +141,25 @@ namespace Basalt {
 		const auto isLive = [&widgets](const UIWidgetID& id) {
 			return std::ranges::any_of(widgets, [&id](const Candidate& widget) { return widget.Interactable && widget.ID == id; });
 		};
-		if (m_Focus.IsValid())
+		if (m_Focus.ID.IsValid())
 		{
-			if (isLive(m_Focus))
+			if (isLive(m_Focus.ID))
 			{
-				m_FocusSeen = true;
-				m_FocusPending = false;
+				m_Focus.Phase = FocusPhase::Seen;
 			}
-			else if (m_FocusPending)
+			else if (m_Focus.Phase == FocusPhase::New)
 			{
-				m_FocusPending = false;
+				m_Focus.Phase = FocusPhase::Unseen;
 			}
 			else
 			{
-				if (!m_FocusSeen)
-					BS_CORE_WARN("UI: the focus was set to '{}', which is not a visible, interactable widget; dropped it", m_Focus.IsName() ? m_Focus.GetName() : std::to_string(static_cast<uint64_t>(m_Focus.GetEntity())));
-				m_Focus = {};
+				if (m_Focus.Phase == FocusPhase::Unseen)
+				{
+					const Entity entity = m_Focus.ID.IsEntity() ? scene.GetEntityByUUID(m_Focus.ID.GetEntity()) : Entity();
+					const std::string name = entity ? entity.GetName() : (m_Focus.ID.IsName() ? m_Focus.ID.GetName() : std::to_string(static_cast<uint64_t>(m_Focus.ID.GetEntity())));
+					BS_CORE_WARN("UI: the focus was set to '{}', which is not a visible, interactable widget; dropped it", name);
+				}
+				SetFocus({});
 			}
 		}
 		if (m_Pressed && !isLive(m_Pressed->ID))
@@ -171,10 +178,11 @@ namespace Basalt {
 	{
 		m_Hovered = {};
 		m_Pressed.reset();
-		m_Focus = {};
-		m_AcceptHeld = false;
-		m_LastImmediate.clear();
-		m_ImmediateInputs.clear();
+		SetFocus({});
+		// The load comes at the end of a frame, after the old scene's scripts drew this frame's widgets.
+		m_Immediate.clear();
+		m_ImmediateIDs.clear();
+		m_HeldTime.fill(-1.0f);
 	}
 
 	UIInteraction::SubmitResult UIInteraction::SubmitImmediate(UIImmediateWidget widget, UIImmediateInput& outInput)
@@ -200,18 +208,22 @@ namespace Basalt {
 		if (!id.IsValid())
 			return UIWidgetState::Normal;
 		const bool held = m_Pressed && m_Pressed->ID == id && (m_Hovered == id || m_Pressed->IsDrag);
-		if (held || (id == m_Focus && m_AcceptHeld))
+		if (held || (id == m_Focus.ID && m_AcceptHeld))
 			return UIWidgetState::Pressed;
-		if (id == m_Hovered || id == m_Focus)
+		if (id == m_Hovered || id == m_Focus.ID)
 			return UIWidgetState::Highlighted;
 		return UIWidgetState::Normal;
 	}
 
 	void UIInteraction::SetFocus(UIWidgetID id)
 	{
-		m_Focus = std::move(id);
-		m_FocusPending = m_Focus.IsValid();
-		m_FocusSeen = false;
+		m_Focus = { std::move(id), FocusPhase::New };
+		m_AcceptHeld = false;
+	}
+
+	void UIInteraction::FocusLive(const UIWidgetID& id)
+	{
+		m_Focus = { id, FocusPhase::Seen };
 		m_AcceptHeld = false;
 	}
 
@@ -230,15 +242,14 @@ namespace Basalt {
 		const glm::vec2 canvas = GameUI::GetCanvasSize();
 		for (const UILayoutItem& item : UILayout::Layout(scene, canvas))
 		{
-			const std::optional<UIWidgetInfo> info = UILayout::GetWidget(item.Owner);
-			if (!info)
-				continue;
-			Candidate& candidate = widgets.emplace_back(Candidate{ UIWidgetID::ForEntity(item.Owner.GetUUID()), info->Kind, item.Rect, info->Interactable });
-			if (info->Kind == UIWidgetKind::Slider)
-				candidate.HandleWidth = SanitizeUISlider(item.Owner.GetComponent<UISliderComponent>()).HandleWidth;
+			if (const std::optional<UIWidgetInfo> info = UILayout::GetWidget(item.Owner))
+			{
+				const UUID entity = item.Owner.GetUUID();
+				widgets.push_back({ UIWidgetID::ForEntity(entity), info->Kind, item.Rect, info->Interactable, info->HandleWidth, info->ResolveTarget(entity), info->Callback });
+			}
 		}
 		for (const UIImmediateWidget& widget : m_LastImmediate)
-			widgets.push_back({ UIWidgetID::ForName(widget.ID), widget.Kind, { canvas * widget.Anchor + widget.Offset, widget.Size }, widget.Interactable, widget.HandleWidth });
+			widgets.push_back({ UIWidgetID::ForName(widget.ID), widget.Kind, { canvas * widget.Anchor + widget.Offset, widget.Size }, widget.Interactable, widget.HandleWidth, 0, {} });
 		return widgets;
 	}
 
@@ -264,8 +275,7 @@ namespace Basalt {
 
 		if (m_Pressed)
 		{
-			// Update keeps only holds on live widgets. Without pointer input (it left the game view) the hold ends
-			// without a click.
+			// Without pointer input (it left the game view) the hold ends without a click.
 			const auto pressed = std::ranges::find_if(widgets, [this](const Candidate& widget) { return widget.ID == m_Pressed->ID; });
 			BS_CORE_ASSERT(pressed != widgets.end(), "Update keeps only holds on live widgets");
 			if (!pointer)
@@ -314,7 +324,8 @@ namespace Basalt {
 		std::array<bool, DirectionCount> fired = {};
 		for (size_t direction = 0; direction < DirectionCount; direction++)
 			fired[direction] = Repeat(static_cast<Direction>(direction), IsDirectionHeld(DirectionBindings[direction]), deltaTime);
-		const auto isFired = [&fired](Direction direction) { return fired[static_cast<size_t>(direction)]; };
+		const bool left = fired[static_cast<size_t>(Direction::Left)];
+		const bool right = fired[static_cast<size_t>(Direction::Right)];
 
 		std::vector<const Candidate*> navigable;
 		for (const Candidate& widget : widgets)
@@ -322,32 +333,33 @@ namespace Basalt {
 			if (widget.Interactable)
 				navigable.push_back(&widget);
 		}
-		const auto findFocus = [&]() { return std::ranges::find_if(navigable, [this](const Candidate* widget) { return widget->ID == m_Focus; }); };
+		// The focused widget's place in `navigable`; its size when nothing navigable is focused.
+		const auto focusIndex = [&]() { return static_cast<size_t>(std::ranges::find_if(navigable, [this](const Candidate* widget) { return widget->ID == m_Focus.ID; }) - navigable.begin()); };
 
 		if (Input::IsKeyPressed(KeyCode::Tab) && !navigable.empty())
 		{
 			const bool backwards = Input::IsKeyDown(KeyCode::LeftShift) || Input::IsKeyDown(KeyCode::RightShift);
-			const auto it = findFocus();
 			const size_t count = navigable.size();
+			const size_t current = focusIndex();
 			size_t next = 0;
-			if (it == navigable.end())
+			if (current == count)
 				next = backwards ? count - 1 : 0;
 			else
-				next = (static_cast<size_t>(it - navigable.begin()) + (backwards ? count - 1 : 1)) % count;
-			SetFocus(navigable[next]->ID);
+				next = (current + (backwards ? count - 1 : 1)) % count;
+			FocusLive(navigable[next]->ID);
 		}
 		else if (std::ranges::any_of(fired, [](bool f) { return f; }))
 		{
-			const auto it = findFocus();
-			if (it == navigable.end())
+			const size_t current = focusIndex();
+			if (current == navigable.size())
 			{
 				// The first move only shows where the focus is.
 				if (!navigable.empty())
-					SetFocus(navigable.front()->ID);
+					FocusLive(navigable.front()->ID);
 			}
-			else if ((*it)->Kind == UIWidgetKind::Slider && (isFired(Direction::Left) || isFired(Direction::Right)))
+			else if (navigable[current]->Kind == UIWidgetKind::Slider && (left || right))
 			{
-				StepSlider(scene, **it, (isFired(Direction::Right) ? 1 : 0) - (isFired(Direction::Left) ? 1 : 0));
+				StepSlider(scene, *navigable[current], (right ? 1 : 0) - (left ? 1 : 0));
 			}
 			else
 			{
@@ -356,15 +368,15 @@ namespace Basalt {
 				{
 					if (!fired[direction])
 						continue;
-					if (const Candidate* neighbor = FindNeighbor(widgets, **it, DirectionBindings[direction].Vector))
-						SetFocus(neighbor->ID);
+					if (const Candidate* neighbor = FindNeighbor(widgets, *navigable[current], DirectionBindings[direction].Vector))
+						FocusLive(neighbor->ID);
 					break;
 				}
 			}
 		}
 
-		const auto it = findFocus();
-		const Candidate* focus = it != navigable.end() ? *it : nullptr;
+		const size_t current = focusIndex();
+		const Candidate* focus = current < navigable.size() ? navigable[current] : nullptr;
 		if (focus && focus->Kind != UIWidgetKind::Slider && IsAccept(&Input::IsKeyPressed, &Input::IsGamepadButtonPressed))
 			Activate(scene, *focus);
 		m_AcceptHeld = focus && focus->Kind != UIWidgetKind::Slider && IsAccept(&Input::IsKeyDown, &Input::IsGamepadButtonDown);
@@ -404,19 +416,15 @@ namespace Basalt {
 			m_ImmediateInputs[widget.ID.GetName()].Activated = true;
 			return;
 		}
-		Entity entity = scene.GetEntityByUUID(widget.ID.GetEntity());
-		BS_CORE_ASSERT(entity, "candidates are live entities");
-		if (widget.Kind == UIWidgetKind::Button)
+		UIWidgetValue value;
+		if (widget.Kind == UIWidgetKind::Checkbox)
 		{
-			const UIButtonComponent button = SanitizeUIButton(entity.GetComponent<UIButtonComponent>());
-			QueueEvent(m_Events, entity, button.Target, button.OnClick, std::monostate{});
-		}
-		else if (widget.Kind == UIWidgetKind::Checkbox)
-		{
-			auto& checkbox = entity.GetComponent<UICheckboxComponent>();
+			auto& checkbox = WidgetEntity(scene, widget.ID).GetComponent<UICheckboxComponent>();
 			checkbox.Checked = !checkbox.Checked;
-			QueueEvent(m_Events, entity, checkbox.Target, SanitizeUICheckbox(checkbox).OnValueChanged, checkbox.Checked);
+			value = checkbox.Checked;
 		}
+		if (!widget.Callback.empty())
+			m_Events.push_back({ widget.ID.GetEntity(), widget.Target, widget.Callback, value });
 	}
 
 	void UIInteraction::DragSlider(Scene& scene, const Candidate& widget, float pointerX)
@@ -427,11 +435,9 @@ namespace Basalt {
 			m_ImmediateInputs[widget.ID.GetName()].SliderFraction = fraction;
 			return;
 		}
-		Entity entity = scene.GetEntityByUUID(widget.ID.GetEntity());
-		BS_CORE_ASSERT(entity, "candidates are live entities");
-		auto& component = entity.GetComponent<UISliderComponent>();
+		auto& component = WidgetEntity(scene, widget.ID).GetComponent<UISliderComponent>();
 		const UISliderComponent slider = SanitizeUISlider(component);
-		CommitSliderValue(entity, component, UIWidgets::SliderValueAtFraction(fraction, slider.Min, slider.Max, slider.Step));
+		CommitSliderValue(widget, component, UIWidgets::SliderValueAtFraction(fraction, slider.Min, slider.Max, slider.Step));
 	}
 
 	void UIInteraction::StepSlider(Scene& scene, const Candidate& widget, int steps)
@@ -443,19 +449,18 @@ namespace Basalt {
 			m_ImmediateInputs[widget.ID.GetName()].SliderSteps += steps;
 			return;
 		}
-		Entity entity = scene.GetEntityByUUID(widget.ID.GetEntity());
-		BS_CORE_ASSERT(entity, "candidates are live entities");
-		auto& component = entity.GetComponent<UISliderComponent>();
+		auto& component = WidgetEntity(scene, widget.ID).GetComponent<UISliderComponent>();
 		const UISliderComponent slider = SanitizeUISlider(component);
-		CommitSliderValue(entity, component, UIWidgets::StepSliderValue(slider.Value, steps, slider.Min, slider.Max, slider.Step));
+		CommitSliderValue(widget, component, UIWidgets::StepSliderValue(slider.Value, steps, slider.Min, slider.Max, slider.Step));
 	}
 
-	void UIInteraction::CommitSliderValue(Entity entity, UISliderComponent& slider, float value)
+	void UIInteraction::CommitSliderValue(const Candidate& widget, UISliderComponent& slider, float value)
 	{
 		if (value == slider.Value)
 			return;
 		slider.Value = value;
-		QueueEvent(m_Events, entity, slider.Target, SanitizeUISlider(slider).OnValueChanged, value);
+		if (!widget.Callback.empty())
+			m_Events.push_back({ widget.ID.GetEntity(), widget.Target, widget.Callback, value });
 	}
 
 }

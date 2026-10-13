@@ -12,10 +12,18 @@ namespace Basalt {
 
 		std::mutex s_Mutex;
 		std::vector<UIDrawCommand> s_Commands;
-		glm::vec2 s_ViewportSize = { 1920.0f, 1080.0f };
-		glm::vec2 s_ViewportOrigin = { 0.0f, 0.0f };
-		bool s_PointerEnabled = true;
-		bool s_NavigationEnabled = true;
+		// The defaults are the headless view.
+		GameUI::HostState s_Host;
+
+		bool IsUsableSize(const glm::vec2& size)
+		{
+			return std::isfinite(size.x) && std::isfinite(size.y) && size.x > 0.0f && size.y > 0.0f;
+		}
+
+		bool IsUsableOrigin(const glm::vec2& origin)
+		{
+			return std::isfinite(origin.x) && std::isfinite(origin.y);
+		}
 
 	}
 
@@ -57,51 +65,51 @@ namespace Basalt {
 	void GameUI::SetViewportSize(const glm::vec2& size)
 	{
 		std::scoped_lock lock(s_Mutex);
-		if (std::isfinite(size.x) && std::isfinite(size.y) && size.x > 0.0f && size.y > 0.0f)
-			s_ViewportSize = size;
+		if (IsUsableSize(size))
+			s_Host.ViewportSize = size;
 	}
 
 	glm::vec2 GameUI::GetViewportSize()
 	{
 		std::scoped_lock lock(s_Mutex);
-		return s_ViewportSize;
+		return s_Host.ViewportSize;
 	}
 
 	void GameUI::SetViewportOrigin(const glm::vec2& origin)
 	{
 		std::scoped_lock lock(s_Mutex);
-		if (std::isfinite(origin.x) && std::isfinite(origin.y))
-			s_ViewportOrigin = origin;
+		if (IsUsableOrigin(origin))
+			s_Host.ViewportOrigin = origin;
 	}
 
 	glm::vec2 GameUI::GetViewportOrigin()
 	{
 		std::scoped_lock lock(s_Mutex);
-		return s_ViewportOrigin;
+		return s_Host.ViewportOrigin;
 	}
 
 	void GameUI::SetPointerEnabled(bool enabled)
 	{
 		std::scoped_lock lock(s_Mutex);
-		s_PointerEnabled = enabled;
+		s_Host.PointerEnabled = enabled;
 	}
 
 	bool GameUI::IsPointerEnabled()
 	{
 		std::scoped_lock lock(s_Mutex);
-		return s_PointerEnabled;
+		return s_Host.PointerEnabled;
 	}
 
 	void GameUI::SetNavigationEnabled(bool enabled)
 	{
 		std::scoped_lock lock(s_Mutex);
-		s_NavigationEnabled = enabled;
+		s_Host.NavigationEnabled = enabled;
 	}
 
 	bool GameUI::IsNavigationEnabled()
 	{
 		std::scoped_lock lock(s_Mutex);
-		return s_NavigationEnabled;
+		return s_Host.NavigationEnabled;
 	}
 
 	std::optional<glm::vec2> GameUI::GetPointerPosition()
@@ -110,23 +118,26 @@ namespace Basalt {
 			return std::nullopt;
 		const glm::vec2 mouse = Input::GetMousePosition();
 		std::scoped_lock lock(s_Mutex);
-		if (!s_PointerEnabled)
+		if (!s_Host.PointerEnabled)
 			return std::nullopt;
-		return UICanvasMapping::ForViewport(s_ViewportOrigin, s_ViewportSize).ToCanvas(mouse);
+		return UICanvasMapping::ForViewport(s_Host.ViewportOrigin, s_Host.ViewportSize).ToCanvas(mouse);
 	}
 
 	GameUI::HostState GameUI::GetHostState()
 	{
 		std::scoped_lock lock(s_Mutex);
-		return { s_ViewportOrigin, s_ViewportSize, s_PointerEnabled, s_NavigationEnabled };
+		return s_Host;
 	}
 
 	void GameUI::SetHostState(const HostState& state)
 	{
-		SetViewportOrigin(state.ViewportOrigin);
-		SetViewportSize(state.ViewportSize);
-		SetPointerEnabled(state.PointerEnabled);
-		SetNavigationEnabled(state.NavigationEnabled);
+		std::scoped_lock lock(s_Mutex);
+		if (IsUsableOrigin(state.ViewportOrigin))
+			s_Host.ViewportOrigin = state.ViewportOrigin;
+		if (IsUsableSize(state.ViewportSize))
+			s_Host.ViewportSize = state.ViewportSize;
+		s_Host.PointerEnabled = state.PointerEnabled;
+		s_Host.NavigationEnabled = state.NavigationEnabled;
 	}
 
 }

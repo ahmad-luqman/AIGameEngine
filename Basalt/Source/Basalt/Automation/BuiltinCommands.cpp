@@ -277,10 +277,13 @@ namespace Basalt {
 		// only found when it is called, since the script is not loaded here.
 		std::string WidgetCallbackProblem(Scene& scene, Entity entity, const UIWidgetInfo& info)
 		{
+			// The registry rejects invalid names, so only C++ code writes one; the widget then calls nothing.
+			if (info.AuthoredCallback != info.Callback)
+				return fmt::format("{} callback '{}' is not a script method name (it calls nothing)", UIWidgetComponentName(info.Kind), info.AuthoredCallback);
 			if (info.Callback.empty())
 				return {};
 			const char* component = UIWidgetComponentName(info.Kind);
-			Entity target = info.Target != 0 ? scene.GetEntityByUUID(info.Target) : entity;
+			Entity target = scene.GetEntityByUUID(info.ResolveTarget(entity.GetUUID()));
 			if (!target)
 				return fmt::format("{} Target {} does not exist (its callback cannot run)", component, static_cast<uint64_t>(info.Target));
 			if (!target.HasComponent<ScriptComponent>())
@@ -299,8 +302,10 @@ namespace Basalt {
 			const bool hasAxis = params.contains("axis");
 			if (!hasConnected && !hasButton && !hasAxis)
 				throw CommandError("give 'connected', 'button' or 'axis'");
-			const std::optional<bool> connected = hasConnected ? std::optional(OptionalBool(params, "connected", true)) : std::nullopt;
-			if (params.contains("name") && connected != true)
+			// Plain bools rather than optional<bool>: GCC's -Wmaybe-uninitialized misfires on optional<bool> in Release.
+			const bool connect = hasConnected && OptionalBool(params, "connected", true);
+			const bool disconnect = hasConnected && !connect;
+			if (params.contains("name") && !connect)
 				throw CommandError("'name' names a gamepad being connected: pass it with connected: true");
 			if (params.contains("down") && !hasButton)
 				throw CommandError("'down' goes with 'button'");
@@ -333,20 +338,21 @@ namespace Basalt {
 			}
 			// A physical gamepad is the device's: the next poll would undo what a command changed.
 			const GamepadSource source = Input::GetGamepadSource(index);
-			if (source == GamepadSource::Device && connected == false)
+			if (source == GamepadSource::Device && disconnect)
 				throw CommandError(fmt::format("gamepad {} is a physical device and cannot be disconnected (inject at another index)", index));
-			if (source == GamepadSource::Device && (button || axis) && connected != true)
+			if (source == GamepadSource::Device && (button || axis) && !connect)
 				throw CommandError(fmt::format("gamepad {} is a physical device; pass connected: true to take it over", index));
-			if ((button || axis) && !connected.value_or(source != GamepadSource::None))
+			if ((button || axis) && !connect && (disconnect || source == GamepadSource::None))
 				throw CommandError(fmt::format("gamepad {} is not connected (pass connected: true)", index));
 
-			if (connected)
-				Input::SetGamepadConnected(index, *connected, name);
-			// The checks above make the gamepad injected and connected here.
+			if (hasConnected)
+				Input::SetGamepadConnected(index, connect, name);
+			// The checks above make the gamepad injected and connected here; a failure would record an input that never
+			// happened, so it is an error even where asserts are off.
 			if (button && !Input::SetGamepadButtonState(index, *button, down))
-				BS_CORE_ASSERT(false, "input.gamepad: gamepad {} rejected a button", index);
+				throw CommandError(fmt::format("gamepad {} rejected the button", index));
 			if (axis && !Input::SetGamepadAxis(index, *axis, value))
-				BS_CORE_ASSERT(false, "input.gamepad: gamepad {} rejected an axis", index);
+				throw CommandError(fmt::format("gamepad {} rejected the axis", index));
 		}
 
 		// --- Command groups -------------------------------------------------------------------------
@@ -569,7 +575,7 @@ namespace Basalt {
 						if (const std::optional<UIWidgetInfo> widget = UILayout::GetWidget(item.Owner))
 						{
 							entry["widget"] = WidgetSummary(scene, item.Owner, *widget);
-							if (UILayout::CountWidgetComponents(item.Owner) > 1)
+							if (widget->SeveralComponents)
 								report(fmt::format("several widget components: it acts as its {} only", UIWidgetComponentName(widget->Kind)));
 							if (const std::string problem = WidgetCallbackProblem(scene, item.Owner, *widget); !problem.empty())
 								report(problem);
@@ -923,9 +929,17 @@ namespace Basalt {
 				return result;
 			});
 
-			Add(registry, "replay.record_start", "Starts recording input.key/input.mouse/input.gamepad commands with the play frame they arrive on (injected gamepads already connected are recorded as connected on that frame).", {}, [](AutomationSession& session, const json&) {
+			Add(registry, "replay.record_start", "Starts recording input.key/input.mouse/input.gamepad commands with the play frame they arrive on. The mouse position and the injected gamepads (with what they hold) are recorded as they are on that frame. Physical gamepads are not recorded (replays run without them): they are listed in physicalGamepads.", {}, [](AutomationSession& session, const json&) {
 				session.StartRecording();
-				return json{ { "recording", true } };
+				json physical = json::array();
+				for (uint32_t index = 0; index < Input::MaxGamepads; index++)
+				{
+					if (Input::GetGamepadSource(index) == GamepadSource::Device)
+						physical.push_back(index);
+				}
+				if (!physical.empty())
+					BS_CORE_WARN("replay.record_start: physical gamepads {} are connected; replays run without them, so their input will not replay", physical.dump());
+				return json{ { "recording", true }, { "physicalGamepads", physical } };
 			});
 
 			Add(registry, "replay.record_stop", "Stops recording and writes the replay file (project-relative path, e.g. 'Replays/run.breplay').", { { "path", "string" } }, [](AutomationSession& session, const json& params) {
@@ -973,21 +987,26 @@ namespace Basalt {
 					const int64_t recorded = replay.value("Frames", int64_t{ 0 });
 					const uint32_t frames = static_cast<uint32_t>(OptionalInteger(params, "frames", recorded, 0, 10000000));
 
-					session.StopPlay(); // also resets input and forgets injected gamepads
-					// A replay runs with the headless view whatever the host (mouse positions are canvas units, widgets
-					// always take input) and with only the gamepads it injects, so it plays the same in the editor.
-					const GameUI::HostState host = GameUI::GetHostState();
-					GameUI::SetHostState({});
-					Input::SetDeviceGamepadsEnabled(false);
+					session.StopPlay();
+					// A replay starts from no input (whether or not play was running): no keys or buttons held, no mouse
+					// position, no injected gamepads. It runs with the headless view whatever the host (mouse positions
+					// are canvas units, widgets always take input) and with only the gamepads it injects, so it plays the
+					// same in the editor.
+					Input::Reset();
+					Input::ResetMousePosition();
+					Input::ForgetInjectedGamepads();
 					struct RestoreHost
 					{
-						GameUI::HostState Host;
+						GameUI::HostState Host = GameUI::GetHostState();
+						bool DeviceGamepads = Input::IsDeviceGamepadsEnabled();
 						~RestoreHost()
 						{
 							GameUI::SetHostState(Host);
-							Input::SetDeviceGamepadsEnabled(true);
+							Input::SetDeviceGamepadsEnabled(DeviceGamepads);
 						}
-					} restore{ host };
+					} restore;
+					GameUI::SetHostState({});
+					Input::SetDeviceGamepadsEnabled(false);
 					std::string error;
 					if (!session.StartPlay(error))
 						throw CommandError(error);
@@ -1001,14 +1020,21 @@ namespace Basalt {
 							const json& event = events[next];
 							const std::string command = event.value("command", "");
 							const json eventParams = event.value("params", json::object());
-							if (command == "input.key")
-								ApplyKeyInput(eventParams);
-							else if (command == "input.mouse")
-								ApplyMouseInput(eventParams);
-							else if (command == "input.gamepad")
-								ApplyGamepadInput(eventParams);
-							else
-								throw CommandError("replay event " + std::to_string(next) + " has unknown command '" + command + "'");
+							try
+							{
+								if (command == "input.key")
+									ApplyKeyInput(eventParams);
+								else if (command == "input.mouse")
+									ApplyMouseInput(eventParams);
+								else if (command == "input.gamepad")
+									ApplyGamepadInput(eventParams);
+								else
+									throw CommandError("unknown command '" + command + "'");
+							}
+							catch (const CommandError& e)
+							{
+								throw CommandError(fmt::format("'{}' event {} (frame {}, {}): {}", path, next, frame, command, e.what()));
+							}
 						}
 						if (frame < frames)
 							session.Step(1, 1.0f / 60.0f);

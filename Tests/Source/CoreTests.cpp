@@ -227,16 +227,17 @@ TEST_SUITE("Core")
 		CHECK_FALSE(Input::IsGamepadConnected(Input::MaxGamepads));
 		CHECK_FALSE(Input::SetGamepadButtonState(Input::MaxGamepads, GamepadButton::A, true));
 
+		CHECK(Input::GetGamepadConnection(1) == 0);
 		Input::SetGamepadConnected(1, true, "Pad");
 		CHECK(Input::IsGamepadConnected(1));
-		CHECK(Input::WasGamepadConnected(1));
+		const uint32_t connection = Input::GetGamepadConnection(1);
+		CHECK(connection != 0);
 		CHECK(Input::GetGamepadName(1) == "Pad");
 		CHECK(Input::SetGamepadButtonState(1, GamepadButton::A, true));
 		CHECK(Input::IsGamepadButtonDown(1, GamepadButton::A));
 		CHECK(Input::IsGamepadButtonPressed(1, GamepadButton::A));
 		CHECK_FALSE(Input::IsGamepadButtonDown(0, GamepadButton::A));
 		Input::EndFrame();
-		CHECK_FALSE(Input::WasGamepadConnected(1));
 		CHECK_FALSE(Input::IsGamepadButtonPressed(1, GamepadButton::A));
 		CHECK(Input::IsGamepadButtonDown(1, GamepadButton::A));
 
@@ -254,7 +255,9 @@ TEST_SUITE("Core")
 		CHECK(Input::SetGamepadAxis(1, GamepadAxis::LeftX, 1.0f));
 		Input::Reset();
 		CHECK(Input::IsGamepadConnected(1));
-		CHECK_FALSE(Input::WasGamepadConnected(1));
+		// Renaming an injected gamepad is the same connection.
+		Input::SetGamepadConnected(1, true, "Renamed");
+		CHECK(Input::GetGamepadConnection(1) == connection);
 		CHECK_FALSE(Input::IsGamepadButtonDown(1, GamepadButton::A));
 		CHECK_FALSE(Input::IsGamepadButtonReleased(1, GamepadButton::A));
 		CHECK(Input::GetGamepadAxis(1, GamepadAxis::LeftX) == 0.0f);
@@ -264,12 +267,15 @@ TEST_SUITE("Core")
 		Input::EndFrame();
 		Input::SetGamepadConnected(1, false);
 		CHECK_FALSE(Input::IsGamepadConnected(1));
-		CHECK(Input::WasGamepadDisconnected(1));
+		CHECK(Input::GetGamepadConnection(1) == 0);
 		CHECK(Input::IsGamepadButtonReleased(1, GamepadButton::B));
 		CHECK_FALSE(Input::IsGamepadButtonDown(1, GamepadButton::B));
 		Input::EndFrame();
-		CHECK_FALSE(Input::WasGamepadDisconnected(1));
 		CHECK_FALSE(Input::IsGamepadButtonReleased(1, GamepadButton::B));
+		// Connecting again is a new connection.
+		Input::SetGamepadConnected(1, true);
+		CHECK(Input::GetGamepadConnection(1) != connection);
+		Input::SetGamepadConnected(1, false);
 	}
 
 	TEST_CASE("Device polls feed gamepads but leave injected ones alone")
@@ -284,13 +290,17 @@ TEST_SUITE("Core")
 		device.Axes[static_cast<size_t>(GamepadAxis::LeftY)] = 2.0f;
 		Input::UpdateGamepadFromDevice(2, &device);
 		CHECK(Input::IsGamepadConnected(2));
-		CHECK(Input::WasGamepadConnected(2));
+		const uint32_t deviceConnection = Input::GetGamepadConnection(2);
+		CHECK(deviceConnection != 0);
 		CHECK(Input::GetGamepadName(2) == "Controller");
 		CHECK(Input::IsGamepadButtonPressed(2, GamepadButton::Start));
 		CHECK(Input::GetGamepadAxis(2, GamepadAxis::LeftY) == 1.0f);
+		// Later polls are the same connection.
+		Input::UpdateGamepadFromDevice(2, &device);
+		CHECK(Input::GetGamepadConnection(2) == deviceConnection);
 		Input::EndFrame();
 		Input::UpdateGamepadFromDevice(2, nullptr);
-		CHECK(Input::WasGamepadDisconnected(2));
+		CHECK(Input::GetGamepadConnection(2) == 0);
 		CHECK(Input::IsGamepadButtonReleased(2, GamepadButton::Start));
 
 		// An injected gamepad keeps its state through polls that see no device there, or another device.
@@ -310,17 +320,19 @@ TEST_SUITE("Core")
 		Input::UpdateGamepadFromDevice(Input::MaxGamepads, &device);
 		Input::EndFrame();
 
-		// Forgetting injected gamepads reports no disconnect, and a reconnection on the same frame is reported
-		// (a replay starts from no gamepads). Device gamepads are not forgotten.
+		// Forgetting injected gamepads reports no release; device gamepads are not forgotten. A gamepad connected
+		// again is a new connection.
 		Input::SetGamepadConnected(4, true);
+		CHECK(Input::SetGamepadButtonState(4, GamepadButton::Y, true));
+		const uint32_t injected = Input::GetGamepadConnection(4);
 		Input::UpdateGamepadFromDevice(5, &device);
 		Input::EndFrame();
 		Input::ForgetInjectedGamepads();
 		CHECK_FALSE(Input::IsGamepadConnected(4));
-		CHECK_FALSE(Input::WasGamepadDisconnected(4));
+		CHECK_FALSE(Input::IsGamepadButtonReleased(4, GamepadButton::Y));
 		CHECK(Input::IsGamepadConnected(5));
 		Input::SetGamepadConnected(4, true);
-		CHECK(Input::WasGamepadConnected(4));
+		CHECK(Input::GetGamepadConnection(4) != injected);
 		Input::SetGamepadConnected(4, false);
 		Input::UpdateGamepadFromDevice(5, nullptr);
 		Input::EndFrame();
@@ -332,46 +344,77 @@ TEST_SUITE("Core")
 		Input::ForgetInjectedGamepads();
 		GamepadDeviceState device;
 		device.Name = "Pad";
-		device.Buttons[static_cast<size_t>(GamepadButton::A)] = true;
-		device.Axes[static_cast<size_t>(GamepadAxis::LeftX)] = 0.9f;
+		const auto hold = [&device](bool a, float leftX) {
+			device.Buttons[static_cast<size_t>(GamepadButton::A)] = a;
+			device.Axes[static_cast<size_t>(GamepadAxis::LeftX)] = leftX;
+		};
+		hold(true, 0.9f);
 		Input::UpdateGamepadFromDevice(0, &device);
 		CHECK(Input::GetGamepadSource(0) == GamepadSource::Device);
 		Input::EndFrame();
 		CHECK(Input::IsGamepadButtonDown(0, GamepadButton::A));
 
-		// Focus loss: released, and the next poll (A and the stick still held) does not press them again.
+		// What the window does on focus loss: Reset, then polls while unfocused (A and the stick still held).
 		Input::Reset();
+		Input::UpdateGamepadFromDevice(0, &device, false);
+		CHECK_FALSE(Input::IsGamepadButtonDown(0, GamepadButton::A));
+		CHECK(Input::GetGamepadAxis(0, GamepadAxis::LeftX) == 0.0f);
+		CHECK(Input::IsGamepadConnected(0));
+		Input::EndFrame();
+		Input::UpdateGamepadFromDevice(0, &device, false);
+		Input::EndFrame();
+		// Focus is back, still held: no new press.
 		Input::UpdateGamepadFromDevice(0, &device);
 		CHECK_FALSE(Input::IsGamepadButtonDown(0, GamepadButton::A));
 		CHECK_FALSE(Input::IsGamepadButtonPressed(0, GamepadButton::A));
 		CHECK(Input::GetGamepadAxis(0, GamepadAxis::LeftX) == 0.0f);
 		Input::EndFrame();
 		// Let go (the stick back near the center), then pressed again: a real press.
-		device.Buttons[static_cast<size_t>(GamepadButton::A)] = false;
-		device.Axes[static_cast<size_t>(GamepadAxis::LeftX)] = 0.1f;
+		hold(false, 0.1f);
 		Input::UpdateGamepadFromDevice(0, &device);
 		CHECK(Input::GetGamepadAxis(0, GamepadAxis::LeftX) == doctest::Approx(0.1f));
 		Input::EndFrame();
-		device.Buttons[static_cast<size_t>(GamepadButton::A)] = true;
-		device.Axes[static_cast<size_t>(GamepadAxis::LeftX)] = 0.9f;
+		hold(true, 0.9f);
 		Input::UpdateGamepadFromDevice(0, &device);
 		CHECK(Input::IsGamepadButtonPressed(0, GamepadButton::A));
 		CHECK(Input::GetGamepadAxis(0, GamepadAxis::LeftX) == doctest::Approx(0.9f));
+		Input::EndFrame();
+
+		// A button first pressed while unfocused is blocked too; a reset while focused (stopping play) blocks held
+		// buttons as well.
+		hold(false, 0.0f);
+		Input::UpdateGamepadFromDevice(0, &device);
+		Input::EndFrame();
+		hold(true, 0.0f);
+		Input::UpdateGamepadFromDevice(0, &device, false);
+		Input::UpdateGamepadFromDevice(0, &device);
+		CHECK_FALSE(Input::IsGamepadButtonDown(0, GamepadButton::A));
+		hold(false, 0.0f);
+		Input::UpdateGamepadFromDevice(0, &device);
+		hold(true, 0.0f);
+		Input::UpdateGamepadFromDevice(0, &device);
+		Input::EndFrame();
+		Input::Reset();
+		Input::UpdateGamepadFromDevice(0, &device);
+		CHECK_FALSE(Input::IsGamepadButtonDown(0, GamepadButton::A));
 
 		// Injecting over a physical gamepad takes it over, released; it cannot be driven while it is the device's.
 		Input::EndFrame();
-		Input::Reset();
 		Input::UpdateGamepadFromDevice(1, &device);
 		CHECK_FALSE(Input::SetGamepadButtonState(1, GamepadButton::B, true));
+		const uint32_t deviceConnection = Input::GetGamepadConnection(1);
 		Input::SetGamepadConnected(1, true, "Test");
 		CHECK(Input::GetGamepadSource(1) == GamepadSource::Injected);
+		CHECK(Input::GetGamepadConnection(1) != deviceConnection);
 		CHECK_FALSE(Input::IsGamepadButtonDown(1, GamepadButton::A));
 		CHECK(Input::SetGamepadButtonState(1, GamepadButton::B, true));
 
-		// With device gamepads off (replays), physical ones are forgotten and polls ignored.
+		// With device gamepads off (replays), physical ones are forgotten and polls ignored; a reset keeps the setting.
 		Input::SetDeviceGamepadsEnabled(false);
+		CHECK_FALSE(Input::IsDeviceGamepadsEnabled());
 		CHECK_FALSE(Input::IsGamepadConnected(0));
-		CHECK_FALSE(Input::WasGamepadDisconnected(0));
+		CHECK_FALSE(Input::IsGamepadButtonReleased(0, GamepadButton::A));
+		Input::Reset();
 		Input::UpdateGamepadFromDevice(0, &device);
 		CHECK_FALSE(Input::IsGamepadConnected(0));
 		CHECK(Input::IsGamepadConnected(1));
@@ -380,6 +423,19 @@ TEST_SUITE("Core")
 		CHECK(Input::IsGamepadConnected(0));
 		Input::UpdateGamepadFromDevice(0, nullptr);
 		Input::ForgetInjectedGamepads();
+		Input::EndFrame();
+	}
+
+	TEST_CASE("The mouse position can be forgotten, as before the first one arrived")
+	{
+		Input::SetMousePosition({ 10.0f, 20.0f });
+		CHECK(Input::HasMousePosition());
+		Input::ResetMousePosition();
+		CHECK_FALSE(Input::HasMousePosition());
+		CHECK(Input::GetMousePosition() == glm::vec2(0.0f));
+		// The next position is the first again: no delta from the origin.
+		Input::SetMousePosition({ 300.0f, 200.0f });
+		CHECK(Input::GetMouseDelta() == glm::vec2(0.0f));
 		Input::EndFrame();
 	}
 
