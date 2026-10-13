@@ -24,8 +24,9 @@ The pipeline is HDR lighting → exposure/tonemapping/sRGB encoding → EASU →
 Intermediate color is stored in RGBA16_FLOAT without sRGB decoding; FSR expects normalized perceptual
 color. The extra targets allocate on first use and remain cached while FSR is off and across dynamic
 render-area changes. Viewport, configured render-scale and active dynamic-mode changes release them.
-The upscaler also checks its full configuration and rebuilds automatically when dimensions, output
-format, device, vertex shader or sampler change. The tonemap pipeline belongs to `SceneRenderer`.
+The FSR input allocation is capped at output size even with a supersampled dynamic ceiling, since
+FSR never reads a larger render area. The upscaler also checks its full configuration and rebuilds
+automatically when dimensions, output format, device, vertex shader or sampler change. The tonemap pipeline belongs to `SceneRenderer`.
 GPU cost is included in the existing Tonemap timing and dynamic-resolution feedback.
 
 A resource failure fails the frame and capture rather than silently changing image quality. Its log

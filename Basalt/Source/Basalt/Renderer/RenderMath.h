@@ -39,6 +39,12 @@ namespace Basalt {
 		return renderSize.x > 0 && renderSize.y > 0 && renderSize.x <= outputSize.x && renderSize.y <= outputSize.y && renderSize != outputSize;
 	}
 
+	// FSR only runs below native size, so its input never needs the supersampled allocation ceiling.
+	inline glm::uvec2 ComputeFsr1TargetSize(glm::uvec2 sceneTargetSize, glm::uvec2 outputSize)
+	{
+		return glm::min(sceneTargetSize, outputSize);
+	}
+
 	// Render scale range: below a quarter the image is unusable, above 2x (supersampling) a 4K window
 	// would need 8K render targets.
 	constexpr float MinRenderScale = 0.25f;

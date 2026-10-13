@@ -60,8 +60,10 @@ def main():
     check(difference(render('ssao_fixed', size=(320, 180), ssao=True),
                      render('ssao_dynamic', dynamic=True, size=(320, 180), ssao=True)) == 0,
           'full-stack dynamic FSR differs with SSAO')
-    check(difference(render('fixed_from_supersample'), render('dynamic_from_supersample', dynamic=True, ceiling=1.5)) == 0,
-          'FSR did not activate when the current render area dropped below native')
+    fixed = render('fixed_from_supersample')
+    for ceiling in (1.5, 2):
+        check(difference(fixed, render(f'dynamic_from_supersample_{ceiling}', dynamic=True, ceiling=ceiling)) == 0,
+              'FSR did not activate correctly with an output-capped input allocation')
     fsr = render('fsr')
     bilinear = render('bilinear', enabled=False)
     check(difference(fsr, bilinear, 2) > 1, 'FSR did not visibly change the scaled image')
