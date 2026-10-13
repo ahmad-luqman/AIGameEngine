@@ -40,6 +40,7 @@ namespace Basalt {
 		// Plays a copy of the edit scene (edits made while playing are discarded on stop). With simulate,
 		// only physics runs (no scripts or audio).
 		bool StartPlay(std::string& outError, bool simulate = false);
+		// Also releases every key and button and forgets injected gamepads (they belong to the play session).
 		void StopPlay();
 		bool IsPlaying() const;
 		bool IsSimulating() const;

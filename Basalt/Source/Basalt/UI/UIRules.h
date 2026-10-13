@@ -20,8 +20,9 @@ namespace Basalt {
 	std::string ValidateUICheckbox(const UICheckboxComponent& checkbox);
 
 	// The component with every value moved into its range: non-finite values and out-of-range enums take the
-	// default component's value, everything else is clamped (AnchorMax is raised to AnchorMin; a slider's Max is
-	// raised above Min, and Value clamped between them). A callback name that is not a Lua identifier becomes empty.
+	// default component's value, everything else is clamped (AnchorMax is raised to AnchorMin; a slider with
+	// Max <= Min gets the unit range above Min, or the top unit of the allowed range, Value is clamped into it, and a
+	// non-finite Value becomes Min). A callback name that is not a Lua identifier becomes empty.
 	UIRectComponent SanitizeUIRect(UIRectComponent rect);
 	UIImageComponent SanitizeUIImage(UIImageComponent image);
 	UITextComponent SanitizeUIText(UITextComponent text);

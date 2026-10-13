@@ -48,7 +48,9 @@ namespace Basalt {
 		else
 			m_Scene->OnRuntimeStop();
 		m_Scene = m_EditScene;
+		// Like held keys, injected gamepads belong to the play session.
 		Input::Reset();
+		Input::ForgetInjectedGamepads();
 	}
 
 	bool AutomationSession::IsPlaying() const
@@ -65,6 +67,23 @@ namespace Basalt {
 	{
 		m_Recording = nlohmann::json::array();
 		m_RecordingSeed = IsPlaying() ? std::optional<uint32_t>(m_Scene->GetRandomSeed()) : std::nullopt;
+		// A replay starts from no injected gamepads: record the ones already connected, with what they hold.
+		for (uint32_t index = 0; index < Input::MaxGamepads; index++)
+		{
+			if (Input::GetGamepadSource(index) != GamepadSource::Injected)
+				continue;
+			RecordInput("input.gamepad", { { "index", index }, { "connected", true }, { "name", Input::GetGamepadName(index) } });
+			for (uint32_t b = 0; b < GamepadButtonCount; b++)
+			{
+				if (Input::IsGamepadButtonDown(index, static_cast<GamepadButton>(b)))
+					RecordInput("input.gamepad", { { "index", index }, { "button", GamepadButtonToString(static_cast<GamepadButton>(b)) } });
+			}
+			for (uint32_t a = 0; a < GamepadAxisCount; a++)
+			{
+				if (const float value = Input::GetGamepadAxis(index, static_cast<GamepadAxis>(a)); value != 0.0f)
+					RecordInput("input.gamepad", { { "index", index }, { "axis", GamepadAxisToString(static_cast<GamepadAxis>(a)) }, { "value", value } });
+			}
+		}
 	}
 
 	void AutomationSession::RecordInput(const std::string& command, const nlohmann::json& params)

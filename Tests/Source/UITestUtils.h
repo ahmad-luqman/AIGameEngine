@@ -236,4 +236,14 @@ namespace BasaltTest {
 		return text.find(fragment) != std::string::npos;
 	}
 
+	// A component's validation accepts exactly what its sanitizing leaves unchanged, and sanitizing gives a valid
+	// component (UIRules: one walk over the rules does both).
+	template<typename T>
+	void CheckRulesAgree(const T& component, T (*sanitize)(T), std::string (*validate)(const T&))
+	{
+		const T repaired = sanitize(component);
+		CHECK(validate(component).empty() == (repaired == component));
+		CHECK_MESSAGE(validate(repaired).empty(), validate(repaired));
+	}
+
 }

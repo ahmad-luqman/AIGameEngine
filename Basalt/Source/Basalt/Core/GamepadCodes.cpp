@@ -1,18 +1,24 @@
 #include "Basalt/Core/GamepadCodes.h"
 
+#include <algorithm>
+#include <array>
 #include <cctype>
 
 namespace Basalt {
 
 	namespace {
 
-		constexpr std::string_view s_ButtonNames[GamepadButtonCount] = {
+		constexpr std::array<std::string_view, GamepadButtonCount> s_ButtonNames = {
 			"A", "B", "X", "Y", "LeftBumper", "RightBumper", "Back", "Start", "Guide", "LeftThumb", "RightThumb", "DPadUp", "DPadRight", "DPadDown", "DPadLeft"
 		};
 
-		constexpr std::string_view s_AxisNames[GamepadAxisCount] = {
+		constexpr std::array<std::string_view, GamepadAxisCount> s_AxisNames = {
 			"LeftX", "LeftY", "RightX", "RightY", "LeftTrigger", "RightTrigger"
 		};
+
+		// std::array zero-fills missing initializers: every enum value must have a name.
+		static_assert(std::ranges::none_of(s_ButtonNames, &std::string_view::empty));
+		static_assert(std::ranges::none_of(s_AxisNames, &std::string_view::empty));
 
 		bool EqualsIgnoreCase(std::string_view a, std::string_view b)
 		{
@@ -27,7 +33,7 @@ namespace Basalt {
 		}
 
 		template<typename T, size_t N>
-		std::optional<T> FindName(const std::string_view (&names)[N], std::string_view name)
+		std::optional<T> FindName(const std::array<std::string_view, N>& names, std::string_view name)
 		{
 			for (size_t i = 0; i < N; i++)
 			{
@@ -59,6 +65,16 @@ namespace Basalt {
 	std::optional<GamepadAxis> GamepadAxisFromString(std::string_view name)
 	{
 		return FindName<GamepadAxis>(s_AxisNames, name);
+	}
+
+	std::span<const std::string_view> GetGamepadButtonNames()
+	{
+		return s_ButtonNames;
+	}
+
+	std::span<const std::string_view> GetGamepadAxisNames()
+	{
+		return s_AxisNames;
 	}
 
 }

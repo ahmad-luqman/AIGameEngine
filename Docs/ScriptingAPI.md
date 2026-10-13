@@ -25,7 +25,7 @@ function Player:OnCollisionEnd(other, contact) end
 function Player:OnTriggerEnter(other, contact) end  -- either body is a trigger (RigidBody.IsTrigger)
 function Player:OnTriggerExit(other, contact) end
 function Player:OnJointBreak(other) end        -- joint exceeded BreakForce/BreakTorque; other is the far body, nil for the world
-function Player:OnGamepadConnected(index) end  -- a gamepad was plugged in (see "Input"); likewise OnGamepadDisconnected
+function Player:OnGamepadConnected(index) end  -- a gamepad is connected (see "Input"); likewise OnGamepadDisconnected
 
 return Player
 ```
@@ -306,16 +306,21 @@ controllers onto it. Up to 16 are tracked, by index 0..15 (an integer; anything 
 Buttons: `A` (bottom face button), `B`, `X`, `Y`, `LeftBumper`, `RightBumper`, `Back`, `Start`, `Guide`,
 `LeftThumb`, `RightThumb`, `DPadUp`, `DPadRight`, `DPadDown`, `DPadLeft`. Axes: `LeftX`, `LeftY`, `RightX`,
 `RightY` (-1..1, +Y is down, like the canvas), `LeftTrigger`, `RightTrigger` (0..1). Names are
-case-insensitive; an unknown one is an error. Sticks are reported raw: apply your own dead zone.
+case-insensitive; an unknown one is an error. Sticks are reported raw: apply your own dead zone. While the window
+does not have focus, gamepads read as released; a button or stick held through a focus loss stays released until
+it is let go. Controllers missing from GLFW's mapping database are ignored, with a warning naming them.
 
 - `Input.GetGamepads()` — the indices of the connected gamepads (array)
 - `Input.IsGamepadConnected(index)`, `Input.GetGamepadName(index)` (nil when not connected)
 - `Input.IsGamepadButtonDown/Pressed/Released(index, button)`, `Input.GetGamepadAxis(index, axis)` — a
-  gamepad that is not connected reads as released and centered
+  gamepad that is not connected reads as buttons up and centered axes (`IsGamepadButtonReleased` still reports
+  the buttons held when it disconnected, on that frame)
 
-Every script instance gets `OnGamepadConnected(index)` and `OnGamepadDisconnected(index)` on the frame it
-happens, before `OnUpdate`. Headless runs have no devices: the automation command `input.gamepad` injects one
-(tests and replays use it).
+Every script instance gets `OnGamepadConnected(index)` and `OnGamepadDisconnected(index)` before `OnUpdate`, on
+the first frame the scene updates after the change: gamepads already connected when play starts are announced on
+the first frame, and changes while the game is paused when it resumes. Headless runs have no devices: the
+automation command `input.gamepad` injects one (tests and replays use it; a replay sees only the gamepads it
+injects).
 
 ## Physics
 
@@ -664,9 +669,10 @@ input.
   `Checked`, a mark inside it (`CheckColor`); the entity's `UIText` is laid out in the rest of the rect, as the
   label. Clicking anywhere in the rect toggles it.
 
-Tints multiply the widget's look by state: `NormalTint`, `HighlightTint` (hovered by the mouse, or focused by
-keyboard/gamepad navigation), `PressedTint` (held down) and `DisabledTint` (`Interactable = false`: no input,
-no focus). An entity with several widget components acts as the first of button, slider, checkbox
+Tints multiply one part of the widget by state (the button's `UIImage`, the slider's handle, the checkbox's
+box): `NormalTint`, `HighlightTint` (hovered by the mouse, or focused by keyboard/gamepad navigation),
+`PressedTint` (held with the mouse over it — a dragged slider stays pressed — or by the accept key) and
+`DisabledTint` (`Interactable = false`: no input, no focus). An entity with several widget components acts as the first of button, slider, checkbox
 (`ui.layout` reports it).
 
 **Callbacks.** A user interaction calls a method on the script of the `Target` entity (0, the default, means
@@ -691,22 +697,31 @@ empty); `Target` is remapped when the widget is duplicated or instantiated with 
 **Input.** Only widgets take pointer input (a plain `UIImage` over a button does not block it; hide or disable
 the widgets under a modal panel). The topmost widget under the mouse is hovered (immediate-mode widgets are
 over the components, later ones over earlier ones; a disabled widget still covers the ones below). Pressing
-the left mouse button on a widget holds and focuses it; releasing over it clicks a button or toggles a
-checkbox, and a held slider follows the mouse, even off its rect. Keyboard and gamepads move the focus:
+the left mouse button on a widget holds it; releasing over it clicks a button or toggles a checkbox (losing the
+window's focus while holding does not), and a held slider follows the mouse as it moves, even off its rect. Any
+mouse press drops the keyboard/gamepad focus, so after a click Space and Enter are the game's again. Keyboard and
+gamepads move the focus:
 
 | Input | Effect |
 |-------|--------|
-| Arrows, D-pad, left stick (pushed past half way) | Focus the nearest widget in that direction (from widget centers; sideways distance counts double). The first press with nothing focused focuses the first widget. Held, it repeats after 0.4 s, every 0.1 s. |
-| Left/Right on a focused slider | Move it by `Step` (a twentieth of the range when continuous); Up/Down still navigate |
+| Arrows, D-pad, left stick (pushed past half way, along its dominant axis) | Focus the nearest widget in that direction (from widget centers; sideways distance counts double). The first press with nothing focused focuses the first widget. Held, it repeats after 0.4 s, every 0.1 s. |
+| Left/Right on a focused slider | Move it to the next stop (`Min + k * Step`, and `Max`; a twentieth of the range when continuous); Up/Down still navigate |
 | Tab / Shift+Tab | Next / previous widget in draw order, wrapping |
-| Enter, Space, gamepad `A` | Click the focused button / toggle the focused checkbox |
+| Enter, keypad Enter, Space, gamepad `A` | Click the focused button / toggle the focused checkbox, on the press |
 
-Hidden, disabled and destroyed widgets lose the focus. In the editor, the game view takes the mouse while it is
-hovered and the keyboard and gamepads while it has focus.
+Hidden, disabled and destroyed widgets lose the focus, and so does everything when the scene changes
+(`Scene.Load`). The keys that act on a focused widget still reach `Input`: a game that reads the arrows, Space or
+the D-pad itself while widgets are visible turns navigation off (`UI.SetNavigationEnabled(false)`), or checks
+`UI.GetFocus() == nil`. In the editor, the game view takes the mouse while it is hovered and the keyboard and
+gamepads while it has focus.
 
 - `UI.GetFocus()` — the focused widget: its entity, an immediate-mode widget's id (string), or nil
 - `UI.SetFocus(widget)` — focus a widget entity (an error if it has no widget component) or an immediate-mode
-  widget id; nil clears the focus
+  widget id; nil clears the focus. An immediate-mode id may be set before its widget is first drawn (e.g. in
+  `OnCreate`, for a menu that opens with a button focused); a focus that is not a visible, interactable widget a
+  frame later is dropped with a warning. An error outside play.
+- `UI.SetNavigationEnabled(enabled)`, `UI.IsNavigationEnabled()` — whether the keyboard and gamepads move the
+  focus and activate widgets (on by default; turning it off drops the focus)
 - `UI.IsPointerOverWidget()` — whether the mouse is over an interactable widget (so a click there is the UI's,
   not the game's)
 
@@ -734,8 +749,8 @@ UI.Text("Lives: " .. self.Lives, -24, 24, { Anchor = "TopRight", Size = 40, Font
 UI.Image("Assets/Textures/Panel.png", 0, -40, 480, 120, { Anchor = "Bottom", Slice = Vec4(12, 12, 12, 12) })
 ```
 
-Immediate-mode widgets are drawn and take input like the widget components (with their default colors and
-tints), and return what the user did:
+Immediate-mode widgets are drawn and take input like the widget components (with built-in default colors and the
+components' default tints; a slider's label is drawn centered on it), and return what the user did:
 
 - `UI.Button(label, x, y, width, height [, options])` — true on the frame the button is clicked
 - `UI.Checkbox(label, checked, x, y, width, height [, options])` — the new checked state (options add
@@ -746,7 +761,9 @@ tints), and return what the user did:
 Options for all three: `Id`, `Anchor`, `Pivot`, `Interactable` (default true), `Color` (background, box or
 track), `TextColor`, `Size` (label font size; default 60% of the height, at most 32), `Font`. A widget is
 identified across frames by its `Id`, which defaults to the label: two widgets with the same id in one frame are
-an error (give one an `Id`; a slider without a visible label needs one). The width and height must be
+an error (give one an `Id`; a slider without a visible label needs one). A label that changes (`"Volume 40%"`)
+needs a stable `Id`, or the widget loses its hover, hold and focus whenever the text changes. A widget drawn
+disabled ignores input that arrived while it was enabled. The width and height must be
 positive. A widget takes input from the frame after it is first drawn, so draw it every frame; it lasts while it
 is drawn. A frame takes at most 4096 immediate-mode widgets.
 

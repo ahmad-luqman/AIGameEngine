@@ -380,6 +380,10 @@ local function TestWidgets(self)
 	UI.SetFocus(nil)
 	ExpectError("UI.SetFocus non-widget", function() UI.SetFocus(Scene.FindEntityByName("HUD")) end, "has no UIButton, UISlider or UICheckbox")
 	Check("UI.IsPointerOverWidget", UI.IsPointerOverWidget() == false)
+	UI.SetNavigationEnabled(false)
+	Check("UI.SetNavigationEnabled", UI.IsNavigationEnabled() == false)
+	UI.SetNavigationEnabled(true)
+	Check("UI.IsNavigationEnabled", UI.IsNavigationEnabled() == true)
 
 	-- Gamepads (none is connected headless, but a developer machine may have one).
 	Check("Input.GetGamepads", type(Input.GetGamepads()) == "table")
@@ -392,15 +396,17 @@ local function TestWidgets(self)
 	ExpectError("Gamepad axis name", function() Input.GetGamepadAxis(0, "Wheel") end, "unknown gamepad axis")
 end
 
--- Called by the batch after it clicked PLAY, moved the focus down to the slider with the keyboard, pushed it right
--- and moved down to the checkbox with an injected gamepad, toggled it with A, and clicked the immediate-mode button.
+-- Called by the batch after it clicked PLAY (a click does not focus), pressed Down twice (the first shows the focus
+-- on PLAY, the second moves it to the slider), pushed the slider right and the stick down to the checkbox with an
+-- injected gamepad, toggled it with A, clicked the immediate-mode button and disconnected the gamepad.
 function FeatureTest.CheckWidgets()
 	local driver = Scene.FindEntityByName("FeatureTestDriver"):GetScript()
 	Check("Widget callbacks", table.concat(driver.WidgetLog, ",") == "PlayButton,VolumeSlider=0.6,MusicCheckbox=true")
 	Check("Widget values", Near(Scene.FindEntityByName("VolumeSlider"):GetComponent("UISlider").Value, 0.6) and Scene.FindEntityByName("MusicCheckbox"):GetComponent("UICheckbox").Checked)
-	Check("Widget focus", UI.GetFocus() == "Immediate button")
+	Check("A click drops the focus", UI.GetFocus() == nil)
 	Check("Immediate-mode button clicked", FeatureTest.ImmediateClicks == 1)
-	Check("Gamepad connected callback", FeatureTestEvents.GamepadConnected == 0)
+	Check("Gamepad connected callback", FeatureTestEvents.GamepadConnected == 0 and FeatureTestEvents.GamepadName == "Injected Gamepad" and FeatureTestEvents.GamepadCount == 1)
+	Check("Gamepad disconnected callback", FeatureTestEvents.GamepadDisconnected == 0 and not Input.IsGamepadConnected(0))
 	return FeatureTest.Report()
 end
 
@@ -742,6 +748,12 @@ end
 
 function Driver:OnGamepadConnected(index)
 	FeatureTestEvents.GamepadConnected = index
+	FeatureTestEvents.GamepadName = Input.GetGamepadName(index)
+	FeatureTestEvents.GamepadCount = #Input.GetGamepads()
+end
+
+function Driver:OnGamepadDisconnected(index)
+	FeatureTestEvents.GamepadDisconnected = index
 end
 
 function Driver:OnLateUpdate(dt)

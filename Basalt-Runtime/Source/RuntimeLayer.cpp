@@ -95,12 +95,13 @@ namespace Basalt {
 
 		const uint32_t width = device->GetBackBufferWidth();
 		const uint32_t height = device->GetBackBufferHeight();
-		const glm::vec2 viewportSize(static_cast<float>(width), static_cast<float>(height));
-		// The widgets map the mouse (window units) onto the canvas, so they need the view in window units, which
-		// differ from back-buffer pixels on high-DPI displays (same aspect, so the canvas is the same).
+		// The widgets map the mouse (window units) onto the canvas, so the UI uses the view in window units, which
+		// differ from back-buffer pixels on high-DPI displays. Drawing and hit testing then lay out the same canvas
+		// even when fractional scaling rounds the two sizes to slightly different aspects.
 		const Window* window = application.GetWindow();
 		const bool hasWindowSize = window && window->GetWidth() > 0 && window->GetHeight() > 0;
-		GameUI::SetViewportSize(hasWindowSize ? glm::vec2(static_cast<float>(window->GetWidth()), static_cast<float>(window->GetHeight())) : viewportSize);
+		const glm::vec2 viewportSize = hasWindowSize ? glm::vec2(static_cast<float>(window->GetWidth()), static_cast<float>(window->GetHeight())) : glm::vec2(static_cast<float>(width), static_cast<float>(height));
+		GameUI::SetViewportSize(viewportSize);
 		GameUI::SetViewportOrigin({ 0.0f, 0.0f });
 		m_Scene->OnViewportResize(width, height);
 		m_Renderer->SetViewportSize(width, height);

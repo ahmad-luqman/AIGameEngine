@@ -639,6 +639,9 @@ namespace Basalt {
 	void Scene::ApplyPendingLoad()
 	{
 		const Scope<PendingLoad> load = std::move(m_PendingLoad);
+		// Nothing of the old scene's UI stays hovered, held or focused (a held button must not click the new scene).
+		if (m_UIInteraction)
+			m_UIInteraction->OnSceneLoaded();
 
 		// Unload: OnDestroy may spawn entities, which a further pass destroys too.
 		const std::unordered_set<UUID> persistentBefore = m_PersistentEntities;

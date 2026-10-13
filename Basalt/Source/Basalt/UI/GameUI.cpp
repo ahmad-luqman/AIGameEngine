@@ -106,11 +106,27 @@ namespace Basalt {
 
 	std::optional<glm::vec2> GameUI::GetPointerPosition()
 	{
+		if (!Input::HasMousePosition())
+			return std::nullopt;
 		const glm::vec2 mouse = Input::GetMousePosition();
 		std::scoped_lock lock(s_Mutex);
 		if (!s_PointerEnabled)
 			return std::nullopt;
 		return UICanvasMapping::ForViewport(s_ViewportOrigin, s_ViewportSize).ToCanvas(mouse);
+	}
+
+	GameUI::HostState GameUI::GetHostState()
+	{
+		std::scoped_lock lock(s_Mutex);
+		return { s_ViewportOrigin, s_ViewportSize, s_PointerEnabled, s_NavigationEnabled };
+	}
+
+	void GameUI::SetHostState(const HostState& state)
+	{
+		SetViewportOrigin(state.ViewportOrigin);
+		SetViewportSize(state.ViewportSize);
+		SetPointerEnabled(state.PointerEnabled);
+		SetNavigationEnabled(state.NavigationEnabled);
 	}
 
 }

@@ -566,12 +566,13 @@ namespace Basalt {
 		bool operator==(const UITextComponent&) const = default;
 	};
 
-	// Interactive widgets: a widget component on an entity with a UIRect makes the rect respond to the mouse, the
-	// keyboard and gamepads while the scene plays (UI/UIInteraction.h). The tints multiply the widget's visuals by
-	// state: Highlight while hovered or focused, Pressed while held, Disabled when not Interactable. A user
-	// interaction calls Target's script method (Target 0 = the widget's own entity) named by OnClick /
-	// OnValueChanged, with the widget entity (and the new value); an empty name calls nothing. Setting values
-	// from code or files does not call it.
+	// Interactive widgets: a widget component on a UI entity makes its laid-out rect (its UIRect's, or its parent's)
+	// respond to the mouse, the keyboard and gamepads while the scene plays (UI/UIInteraction.h). The tints multiply
+	// one part of the widget by state (the button's UIImage, the slider's handle, the checkbox's box): Highlight
+	// while hovered or focused, Pressed while held with the pointer over it (a dragged slider stays pressed) or by
+	// the accept key, Disabled when not Interactable. A user interaction calls Target's script method (Target 0 =
+	// the widget's own entity) named by OnClick / OnValueChanged, with the widget entity (and the new value); an
+	// empty name calls nothing. Setting values from code or files does not call it.
 
 	// A clickable rect. Draws nothing itself: it tints the entity's UIImage, and its UIText is the label.
 	struct UIButtonComponent
@@ -588,8 +589,8 @@ namespace Basalt {
 	};
 
 	// A horizontal slider: a track filling the rect, a fill from the left edge to the value and a handle (tinted)
-	// at the value. Dragging, or Left/Right while focused, changes Value within [Min, Max] in steps of Step
-	// (0 = continuous).
+	// at the value. Dragging, or Left/Right while focused, changes Value within [Min, Max] in steps of Step, Max
+	// always being a stop (0 = continuous; Left/Right then move a twentieth of the range).
 	struct UISliderComponent
 	{
 		bool Interactable = true;

@@ -288,7 +288,7 @@ namespace Basalt {
 				}
 				if (info.Name == "Script")
 					DrawScriptProperties(entity, data);
-				const bool isWidget = info.Name == "UIButton" || info.Name == "UISlider" || info.Name == "UICheckbox";
+				const bool isWidget = UIWidgetKindFromComponentName(info.Name).has_value();
 				if ((info.Name == "UIImage" || info.Name == "UIText" || isWidget) && !entity.HasComponent<UIRectComponent>())
 					ImGui::TextDisabled("No UIRect: fills the parent's UI rect (or the screen).");
 				if (isWidget && UILayout::CountWidgetComponents(entity) > 1)

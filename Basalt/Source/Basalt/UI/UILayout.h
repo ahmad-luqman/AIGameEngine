@@ -8,6 +8,7 @@
 #include <glm/glm.hpp>
 
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace Basalt {
@@ -22,13 +23,27 @@ namespace Basalt {
 		UIBox Rect;
 	};
 
-	// Lays out the scene's UI components (UIRect, UIImage, UIText and the widgets) on a canvas. Headless: the editor overlay,
-	// UI.GetRect, the ui.layout command and the renderer all share it, so they agree on every rect.
+	// What the interaction and the tools need to know about an entity's widget.
+	struct UIWidgetInfo
+	{
+		UIWidgetKind Kind = UIWidgetKind::Button;
+		bool Interactable = true;
+		// The component's Target (0 = the widget itself).
+		UUID Target = 0;
+		// The callback's method name, empty for none.
+		std::string Callback;
+	};
+
+	// Lays out the scene's UI components (UIRect, UIImage, UIText and the widgets) on a canvas. Headless: the
+	// editor overlay, UI.GetRect, the ui.layout command, the widgets' hit testing and the renderer all share it, so
+	// they agree on every rect.
 	class UILayout
 	{
 	public:
 		// Whether any entity has a UI component (scenes without UI skip the hierarchy walk).
 		static bool HasUI(Scene& scene);
+		// Whether any entity has a widget component.
+		static bool HasWidgets(Scene& scene);
 
 		// Every visible entity with a UI component, in draw order (depth-first in hierarchy order: parents
 		// before children, later siblings after earlier ones). An entity without a UIRect occupies its parent's
@@ -36,7 +51,8 @@ namespace Basalt {
 		static std::vector<UILayoutItem> Layout(Scene& scene, const glm::vec2& canvasSize);
 
 		// Appends the draw commands of the scene's UI components in draw order (each entity's image, then its
-		// widget, then its text). Widgets look the way the scene's UIInteraction says (normal when not playing).
+		// widget, then its text). Widgets look the way the scene's UIInteraction says (when not playing: normal, or
+		// disabled when not Interactable).
 		static void BuildCommands(Scene& scene, const glm::vec2& canvasSize, std::vector<UIDrawCommand>& out);
 
 		// The entity's rect; nullopt when it has no UI component or it, or an ancestor, is hidden.
@@ -47,9 +63,10 @@ namespace Basalt {
 		static UIBox GetParentRect(Scene& scene, Entity entity, const glm::vec2& canvasSize);
 
 		// The entity's widget: the first of its UIButton, UISlider and UICheckbox (an entity with several acts as
-		// that one alone). nullopt when it has none.
+		// that one alone, and the layout warns once). nullopt when it has none. Values come repaired (UIRules).
+		static std::optional<UIWidgetInfo> GetWidget(Entity entity);
 		static std::optional<UIWidgetKind> GetWidgetKind(Entity entity);
-		// How many widget components the entity has (more than one is a mistake ui.layout reports).
+		// How many widget components the entity has (more than one is a mistake).
 		static int CountWidgetComponents(Entity entity);
 	};
 

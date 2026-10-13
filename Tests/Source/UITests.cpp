@@ -782,21 +782,10 @@ TEST_SUITE("UI")
 		const auto pick = [&] { return values[random() % std::size(values)]; };
 		for (int i = 0; i < 500; i++)
 		{
-			UIRectComponent rect{ .AnchorMin = { pick(), pick() }, .AnchorMax = { pick(), pick() }, .Pivot = { pick(), pick() }, .Position = { pick(), pick() }, .Size = { pick(), pick() } };
-			INFO("UIRect ", i);
-			const UIRectComponent repairedRect = SanitizeUIRect(rect);
-			CHECK(ValidateUIRect(rect).empty() == (repairedRect == rect));
-			CHECK(ValidateUIRect(repairedRect).empty());
-
-			UIImageComponent image{ .Color = { pick(), pick(), pick(), pick() }, .Slice = { pick(), pick(), pick(), pick() }, .SliceScale = pick() };
-			const UIImageComponent repairedImage = SanitizeUIImage(image);
-			CHECK(ValidateUIImage(image).empty() == (repairedImage == image));
-			CHECK(ValidateUIImage(repairedImage).empty());
-
-			UITextComponent text{ .FontSize = pick() * 100.0f, .Color = { pick(), pick(), pick(), pick() } };
-			const UITextComponent repairedText = SanitizeUIText(text);
-			CHECK(ValidateUIText(text).empty() == (repairedText == text));
-			CHECK(ValidateUIText(repairedText).empty());
+			INFO("iteration ", i);
+			CheckRulesAgree(UIRectComponent{ .AnchorMin = { pick(), pick() }, .AnchorMax = { pick(), pick() }, .Pivot = { pick(), pick() }, .Position = { pick(), pick() }, .Size = { pick(), pick() } }, &SanitizeUIRect, &ValidateUIRect);
+			CheckRulesAgree(UIImageComponent{ .Color = { pick(), pick(), pick(), pick() }, .Slice = { pick(), pick(), pick(), pick() }, .SliceScale = pick() }, &SanitizeUIImage, &ValidateUIImage);
+			CheckRulesAgree(UITextComponent{ .FontSize = pick() * 100.0f, .Color = { pick(), pick(), pick(), pick() } }, &SanitizeUIText, &ValidateUIText);
 		}
 	}
 

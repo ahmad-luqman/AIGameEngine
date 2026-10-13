@@ -16,6 +16,7 @@
 #include <sol/sol.hpp>
 
 #include <algorithm>
+#include <array>
 #include <optional>
 #include <stdexcept>
 #include <unordered_map>
@@ -146,6 +147,9 @@ namespace Basalt {
 		// Creation order, for deterministic callback order.
 		std::vector<UUID> Order;
 		std::unordered_set<UUID> Pending;
+		// The gamepads scripts were told about (OnGamepadConnected): Update announces the difference, so changes
+		// while the scene does not update (paused) and gamepads connected before play are announced too.
+		std::array<bool, Input::MaxGamepads> AnnouncedGamepads = {};
 		bool Started = false;
 
 		void OnScriptComponentChanged(entt::registry& registry, entt::entity entity)
@@ -223,6 +227,20 @@ namespace Basalt {
 			const sol::table self = it->second.Self;
 			if (!Invoke(engine, id, self, name, std::forward<Args>(args)...))
 				Fail(engine, id);
+		}
+
+		// Calls a callback on every live instance in creation order (instances created by a callback wait for the
+		// next call), skipping entities about to be destroyed.
+		template<typename... Args>
+		static void CallOnEveryInstance(ScriptEngine& engine, const char* name, const Args&... args)
+		{
+			const std::vector<UUID> order = engine.m_Impl->Order;
+			for (UUID uuid : order)
+			{
+				Entity entity = engine.m_Scene->GetEntityByUUID(uuid);
+				if (entity && !engine.m_Scene->IsEntityPendingDestruction(entity))
+					Call(engine, uuid, name, args...);
+			}
 		}
 
 		// Removes the instance first, then calls OnDestroy on it, so the callback cannot re-enter teardown.
@@ -532,13 +550,7 @@ namespace Basalt {
 		for (const UIWidgetEvent& event : uiEvents)
 			DispatchUIEvent(event);
 
-		const std::vector<UUID> order = impl.Order;
-		for (UUID uuid : order)
-		{
-			Entity entity = m_Scene->GetEntityByUUID(uuid);
-			if (entity && !m_Scene->IsEntityPendingDestruction(entity))
-				ScriptEngineAccess::Call(*this, uuid, "OnUpdate", ts.GetSeconds());
-		}
+		ScriptEngineAccess::CallOnEveryInstance(*this, "OnUpdate", ts.GetSeconds());
 
 		// Timers and coroutines run after every OnUpdate, before physics.
 		impl.Tasks.RunDue();
@@ -548,20 +560,11 @@ namespace Basalt {
 	{
 		for (uint32_t index = 0; index < Input::MaxGamepads; index++)
 		{
-			const char* callback = nullptr;
-			if (Input::WasGamepadConnected(index))
-				callback = "OnGamepadConnected";
-			else if (Input::WasGamepadDisconnected(index))
-				callback = "OnGamepadDisconnected";
-			if (!callback)
+			const bool connected = Input::IsGamepadConnected(index);
+			if (connected == m_Impl->AnnouncedGamepads[index])
 				continue;
-			const std::vector<UUID> order = m_Impl->Order;
-			for (UUID uuid : order)
-			{
-				Entity entity = m_Scene->GetEntityByUUID(uuid);
-				if (entity && !m_Scene->IsEntityPendingDestruction(entity))
-					ScriptEngineAccess::Call(*this, uuid, callback, static_cast<int>(index));
-			}
+			m_Impl->AnnouncedGamepads[index] = connected;
+			ScriptEngineAccess::CallOnEveryInstance(*this, connected ? "OnGamepadConnected" : "OnGamepadDisconnected", static_cast<int>(index));
 		}
 	}
 
@@ -570,20 +573,26 @@ namespace Basalt {
 		Entity widget = m_Scene->GetEntityByUUID(event.Widget);
 		if (!widget || m_Scene->IsEntityPendingDestruction(widget))
 			return;
-		const auto report = [&](const std::string& problem) {
-			if (m_ReportedUICallbacks.insert(std::to_string(static_cast<uint64_t>(event.Widget)) + "/" + event.Method).second)
+		// Once per widget, method and kind of problem: fixing one problem must not hide the next.
+		const auto report = [&](const char* kind, const std::string& problem) {
+			if (m_ReportedUICallbacks.insert(fmt::format("{}/{}/{}", static_cast<uint64_t>(event.Widget), event.Method, kind)).second)
 				ReportError("UI widget '" + widget.GetName() + "' cannot call " + event.Method + ": " + problem);
 		};
 		Entity target = m_Scene->GetEntityByUUID(event.Target);
-		if (!target || m_Scene->IsEntityPendingDestruction(target))
+		if (!target)
 		{
-			report("its Target entity " + std::to_string(static_cast<uint64_t>(event.Target)) + " does not exist");
+			report("missing", "its Target entity " + std::to_string(static_cast<uint64_t>(event.Target)) + " does not exist");
+			return;
+		}
+		if (m_Scene->IsEntityPendingDestruction(target))
+		{
+			report("destroyed", "its Target '" + target.GetName() + "' is being destroyed");
 			return;
 		}
 		auto it = m_Impl->Instances.find(event.Target);
 		if (it == m_Impl->Instances.end())
 		{
-			report("'" + target.GetName() + "' has no running script");
+			report("script", "'" + target.GetName() + "' has no running script");
 			return;
 		}
 		// A failed instance already reported its error.
@@ -591,7 +600,7 @@ namespace Basalt {
 			return;
 		if (it->second.Self[event.Method].get_type() != sol::type::function)
 		{
-			report("the script of '" + target.GetName() + "' has no method " + event.Method);
+			report("method", "the script of '" + target.GetName() + "' has no method " + event.Method);
 			return;
 		}
 		const ScriptEntity widgetEntity{ event.Widget, m_Scene };
@@ -606,13 +615,7 @@ namespace Basalt {
 
 	void ScriptEngine::LateUpdate(Timestep ts)
 	{
-		const std::vector<UUID> order = m_Impl->Order;
-		for (UUID uuid : order)
-		{
-			Entity entity = m_Scene->GetEntityByUUID(uuid);
-			if (entity && !m_Scene->IsEntityPendingDestruction(entity))
-				ScriptEngineAccess::Call(*this, uuid, "OnLateUpdate", ts.GetSeconds());
-		}
+		ScriptEngineAccess::CallOnEveryInstance(*this, "OnLateUpdate", ts.GetSeconds());
 	}
 
 	void ScriptEngine::Stop()

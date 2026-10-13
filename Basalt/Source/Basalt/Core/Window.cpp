@@ -9,6 +9,8 @@
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
+#include <string>
+#include <unordered_set>
 
 namespace Basalt {
 
@@ -22,36 +24,51 @@ namespace Basalt {
 		}
 
 		// Feeds Input with every joystick GLFW maps to the standard gamepad layout (its SDL mapping database).
-		// Joysticks without a mapping are not gamepads and read as disconnected.
-		void PollGamepads()
+		// Joysticks without a mapping are not gamepads and read as disconnected (with a warning once per device).
+		// While the window does not have focus, gamepads stay connected but read as released: like the keyboard,
+		// they do not drive an unfocused game.
+		void PollGamepads(bool focused)
 		{
-			static_assert(GLFW_GAMEPAD_BUTTON_LAST + 1 == GamepadButtonCount && GLFW_GAMEPAD_AXIS_LAST + 1 == GamepadAxisCount);
+			static_assert(static_cast<uint32_t>(GLFW_GAMEPAD_BUTTON_LAST + 1) == GamepadButtonCount && static_cast<uint32_t>(GLFW_GAMEPAD_AXIS_LAST + 1) == GamepadAxisCount);
 			static_assert(GLFW_GAMEPAD_BUTTON_A == static_cast<int>(GamepadButton::A) && GLFW_GAMEPAD_BUTTON_DPAD_LEFT == static_cast<int>(GamepadButton::DPadLeft));
 			static_assert(GLFW_GAMEPAD_AXIS_LEFT_TRIGGER == static_cast<int>(GamepadAxis::LeftTrigger));
+			static std::unordered_set<std::string> s_ReportedUnmapped;
 			constexpr int Count = std::min(static_cast<int>(Input::MaxGamepads), GLFW_JOYSTICK_LAST + 1);
 			for (int id = 0; id < Count; id++)
 			{
-				GLFWgamepadstate state;
-				if (!glfwJoystickIsGamepad(id) || !glfwGetGamepadState(id, &state))
+				if (!glfwJoystickIsGamepad(id))
 				{
+					if (glfwJoystickPresent(id))
+					{
+						const char* guid = glfwGetJoystickGUID(id);
+						const char* name = glfwGetJoystickName(id);
+						if (s_ReportedUnmapped.insert(guid ? guid : "").second)
+							BS_CORE_WARN("Input: joystick '{}' (GUID {}) has no gamepad mapping and is ignored; add one to SDL_GAMECONTROLLERCONFIG or the SDL controller database", name ? name : "?", guid ? guid : "?");
+					}
 					Input::UpdateGamepadFromDevice(static_cast<uint32_t>(id), nullptr);
 					continue;
 				}
+				GLFWgamepadstate state;
+				// A gamepad unplugged between the two calls: the next poll sees it gone.
+				if (!glfwGetGamepadState(id, &state))
+					continue;
 				GamepadDeviceState device;
 				const char* name = glfwGetGamepadName(id);
 				device.Name = name ? name : "Gamepad";
-				for (uint32_t b = 0; b < GamepadButtonCount; b++)
-					device.Buttons[b] = state.buttons[b] == GLFW_PRESS;
-				for (uint32_t a = 0; a < GamepadAxisCount; a++)
+				if (focused)
 				{
-					// GLFW reports triggers from -1 (released) to 1, like the sticks.
-					const float value = state.axes[a];
-					device.Axes[a] = IsGamepadTrigger(static_cast<GamepadAxis>(a)) ? (value + 1.0f) * 0.5f : value;
+					for (uint32_t b = 0; b < GamepadButtonCount; b++)
+						device.Buttons[b] = state.buttons[b] == GLFW_PRESS;
+					for (uint32_t a = 0; a < GamepadAxisCount; a++)
+					{
+						// GLFW reports triggers from -1 (released) to 1, like the sticks.
+						const float value = state.axes[a];
+						device.Axes[a] = IsGamepadTrigger(static_cast<GamepadAxis>(a)) ? (value + 1.0f) * 0.5f : value;
+					}
 				}
 				Input::UpdateGamepadFromDevice(static_cast<uint32_t>(id), &device);
 			}
 		}
-
 	}
 
 	Window::Window(const WindowSpecification& specification)
@@ -210,7 +227,7 @@ namespace Basalt {
 	void Window::PollEvents()
 	{
 		glfwPollEvents();
-		PollGamepads();
+		PollGamepads(glfwGetWindowAttrib(m_Window, GLFW_FOCUSED) == GLFW_TRUE);
 	}
 
 	void Window::GetFramebufferSize(uint32_t& outWidth, uint32_t& outHeight) const

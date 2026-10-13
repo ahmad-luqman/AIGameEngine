@@ -7,6 +7,7 @@
 #include <Basalt/Project/Project.h>
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
+#include <Basalt/UI/GameUI.h>
 
 #include "TestUtils.h"
 
@@ -713,8 +714,7 @@ TEST_SUITE("Automation")
 		BasaltTest::TempProject temp("AutomationGamepad");
 		CommandRegistry registry;
 		AutomationSession session;
-		for (uint32_t index = 0; index < Input::MaxGamepads; index++)
-			Input::SetGamepadConnected(index, false);
+		Input::ForgetInjectedGamepads();
 		// Moves with the stick, and toggles a checkbox through gamepad navigation.
 		Run(registry, session, "asset.write", { { "path", "Assets/Scripts/Pad.lua" }, { "content", R"(
 			local P = {}
@@ -736,8 +736,19 @@ TEST_SUITE("Automation")
 		CHECK(RunError(registry, session, "input.gamepad", { { "connected", true }, { "axis", "LeftTrigger" }, { "value", -0.5 } }).find("'value' must be a number from 0 to 1") != std::string::npos);
 		CHECK(RunError(registry, session, "input.gamepad", { { "connected", true }, { "axis", "LeftX" } }).find("'value' must be a number from -1 to 1") != std::string::npos);
 		CHECK(RunError(registry, session, "input.gamepad", { { "connected", true }, { "axis", "Wheel" }, { "value", 0 } }).find("unknown gamepad axis") != std::string::npos);
+		CHECK(RunError(registry, session, "input.gamepad", { { "connected", true }, { "button", "A" }, { "down", "yes" } }).find("'down' must be") != std::string::npos);
+		CHECK(RunError(registry, session, "input.gamepad", { { "connected", false }, { "name", "Pad" } }).find("'name' names a gamepad being connected") != std::string::npos);
+		CHECK(RunError(registry, session, "input.gamepad", { { "connected", true }, { "down", true } }).find("'down' goes with 'button'") != std::string::npos);
+		CHECK(RunError(registry, session, "input.gamepad", { { "connected", true }, { "value", 1 } }).find("'value' goes with 'axis'") != std::string::npos);
+		CHECK(RunError(registry, session, "input.gamepad", { { "connected", true }, { "name", std::string(300, 'x') } }).find("'name' must be at most 256") != std::string::npos);
 		// A rejected request changes nothing, not even the connection it asked for.
 		CHECK_FALSE(Input::IsGamepadConnected(0));
+		// A physical gamepad is the device's: it cannot be driven or disconnected without taking it over.
+		GamepadDeviceState device;
+		Input::UpdateGamepadFromDevice(5, &device);
+		CHECK(RunError(registry, session, "input.gamepad", { { "index", 5 }, { "button", "A" } }).find("gamepad 5 is a physical device; pass connected: true") != std::string::npos);
+		CHECK(RunError(registry, session, "input.gamepad", { { "index", 5 }, { "connected", false } }).find("cannot be disconnected") != std::string::npos);
+		Input::UpdateGamepadFromDevice(5, nullptr);
 
 		Run(registry, session, "replay.record_start");
 		Run(registry, session, "play.start");
@@ -772,6 +783,47 @@ TEST_SUITE("Automation")
 		Input::SetGamepadConnected(1, false);
 	}
 
+	TEST_CASE("Recording starts with the injected gamepads; replays run with the headless view whatever the host")
+	{
+		BasaltTest::TempProject temp("AutomationReplayHost");
+		CommandRegistry registry;
+		AutomationSession session;
+		Input::ForgetInjectedGamepads();
+		Run(registry, session, "asset.write", { { "path", "Assets/Scripts/Count.lua" }, { "content", R"(
+			local C = {}
+			function C:OnClick() self.Entity.Translation = self.Entity.Translation + Vec3(1, 0, 0) end
+			function C:OnUpdate() self.Entity.Translation = self.Entity.Translation + Vec3(0, Input.GetGamepadAxis(2, "RightX"), 0) end
+			return C
+		)" } });
+		Run(registry, session, "entity.create", { { "name", "Button" }, { "components", { { "UIRect", { { "AnchorMin", { 0, 0 } }, { "AnchorMax", { 0, 0 } }, { "Pivot", { 0, 0 } }, { "Size", { 200, 100 } } } }, { "UIButton", json::object() }, { "Script", { { "Script", "Assets/Scripts/Count.lua" } } } } } });
+
+		// A gamepad connected (and pushed) before recording starts is part of the recording.
+		Run(registry, session, "play.start");
+		Run(registry, session, "input.gamepad", { { "index", 2 }, { "connected", true }, { "name", "Early" }, { "axis", "RightX" }, { "value", 0.5 } });
+		Run(registry, session, "replay.record_start");
+		Run(registry, session, "input.mouse", { { "position", { 50, 50 } }, { "button", "Left" }, { "down", true } });
+		Run(registry, session, "play.step", { { "frames", 1 } });
+		Run(registry, session, "input.mouse", { { "button", "Left" }, { "down", false } });
+		const json live = Run(registry, session, "play.step", { { "frames", 3 }, { "hash", true } });
+		Run(registry, session, "replay.record_stop", { { "path", "Replays/Host.breplay" } });
+		CHECK(Run(registry, session, "lua.exec", { { "code", "return Scene.FindEntityByName('Button').Translation.x" } })["result"] == "1.0");
+
+		// An editor-like host: the view offset and scaled, the mouse outside it. The replay still clicks.
+		const GameUI::HostState editor{ { 300.0f, 200.0f }, { 640.0f, 360.0f }, false, false };
+		GameUI::SetHostState(editor);
+		const json replayed = Run(registry, session, "replay.run", { { "path", "Replays/Host.breplay" }, { "assertHash", true }, { "assertNoErrors", true } });
+		CHECK(replayed["stateHash"] == live["stateHash"]);
+		const GameUI::HostState restored = GameUI::GetHostState();
+		CHECK(restored.ViewportOrigin == editor.ViewportOrigin);
+		CHECK(restored.ViewportSize == editor.ViewportSize);
+		CHECK_FALSE(restored.PointerEnabled);
+		CHECK_FALSE(restored.NavigationEnabled);
+		GameUI::SetHostState({});
+		// Stopping play forgets injected gamepads.
+		Run(registry, session, "play.stop");
+		CHECK_FALSE(Input::IsGamepadConnected(2));
+	}
+
 	TEST_CASE("ui.layout reports widgets with several widget components or a missing target")
 	{
 		CommandRegistry registry;
@@ -788,9 +840,16 @@ TEST_SUITE("Automation")
 		CHECK(layout["items"][0]["widget"]["value"] == 0.25);
 		// Not playing: no state or focus.
 		CHECK_FALSE(layout["items"][0]["widget"].contains("state"));
-		REQUIRE(layout["problems"].size() == 2);
+		CHECK(layout["items"][0]["widget"]["callback"] == "OnValueChanged");
+		REQUIRE(layout["problems"].size() == 3);
 		CHECK(layout["problems"][0]["problem"] == "several widget components: it acts as its UISlider only");
-		CHECK(layout["problems"][1]["problem"] == "UIButton Target " + std::to_string(menu["id"].get<uint64_t>()) + " does not exist (its callback cannot run)");
+		// The default callback on the widget itself, which has no Script.
+		CHECK(layout["problems"][1]["problem"] == "UISlider calls OnValueChanged on 'Both', which has no Script");
+		CHECK(layout["problems"][2]["problem"] == "UIButton Target " + std::to_string(menu["id"].get<uint64_t>()) + " does not exist (its callback cannot run)");
+		// The host's view: headless, mouse positions are canvas units.
+		CHECK(layout["view"]["origin"] == json({ 0.0, 0.0 }));
+		CHECK(layout["view"]["size"] == json({ 1920.0, 1080.0 }));
+		CHECK(layout["view"]["pointerEnabled"] == true);
 	}
 
 	TEST_CASE("ui.layout reports images and fonts that will not load")

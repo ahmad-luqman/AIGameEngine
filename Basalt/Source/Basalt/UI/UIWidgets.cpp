@@ -1,7 +1,10 @@
 #include "Basalt/UI/UIWidgets.h"
 
+#include "Basalt/Core/Assert.h"
+
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace Basalt {
 
@@ -16,7 +19,18 @@ namespace Basalt {
 			case UIWidgetKind::Checkbox:
 				return "UICheckbox";
 		}
+		BS_CORE_ASSERT(false, "unknown widget kind {}", static_cast<int>(kind));
 		return "UIButton";
+	}
+
+	std::optional<UIWidgetKind> UIWidgetKindFromComponentName(std::string_view name)
+	{
+		for (UIWidgetKind kind : { UIWidgetKind::Button, UIWidgetKind::Slider, UIWidgetKind::Checkbox })
+		{
+			if (name == UIWidgetComponentName(kind))
+				return kind;
+		}
+		return std::nullopt;
 	}
 
 	const char* UIWidgetStateName(UIWidgetState state)
@@ -32,6 +46,7 @@ namespace Basalt {
 			case UIWidgetState::Disabled:
 				return "Disabled";
 		}
+		BS_CORE_ASSERT(false, "unknown widget state {}", static_cast<int>(state));
 		return "Normal";
 	}
 
@@ -48,23 +63,11 @@ namespace Basalt {
 			case UIWidgetState::Disabled:
 				return Disabled;
 		}
+		BS_CORE_ASSERT(false, "unknown widget state {}", static_cast<int>(state));
 		return Normal;
 	}
 
 	namespace UIWidgets {
-
-		namespace {
-
-			void AppendRect(const UIBox& box, const glm::vec4& color, std::vector<UIDrawCommand>& out)
-			{
-				UIDrawCommand& command = out.emplace_back();
-				command.Kind = UIDrawKind::Rect;
-				command.Position = box.Min;
-				command.Size = box.Size;
-				command.Color = color;
-			}
-
-		}
 
 		float SliderFraction(float value, float min, float max)
 		{
@@ -75,6 +78,7 @@ namespace Basalt {
 
 		float SnapSliderValue(float value, float min, float max, float step)
 		{
+			BS_CORE_ASSERT(min < max, "a slider range must not be empty");
 			value = std::clamp(value, min, max);
 			if (!(step > 0.0f))
 				return value;
@@ -87,9 +91,40 @@ namespace Basalt {
 			return std::abs(max - value) < std::abs(snapped - value) ? max : snapped;
 		}
 
-		float SliderNavigationStep(float min, float max, float step)
+		float SliderValueAtFraction(float fraction, float min, float max, float step)
 		{
-			return step > 0.0f ? step : (max - min) / 20.0f;
+			return SnapSliderValue(min + std::clamp(fraction, 0.0f, 1.0f) * (max - min), min, max, step);
+		}
+
+		float StepSliderValue(float value, int steps, float min, float max, float step)
+		{
+			BS_CORE_ASSERT(min < max, "a slider range must not be empty");
+			if (!(step > 0.0f))
+				return std::clamp(value + static_cast<float>(steps) * (max - min) / 20.0f, min, max);
+			// Count stops in double: Min + k * Step for k = 0..last grid stop, then Max when it is past the grid.
+			const double range = static_cast<double>(max) - static_cast<double>(min);
+			const double grid = std::floor(range / step);
+			// More stops than a float can tell apart: step by value and snap.
+			constexpr double MaxStops = 1e7;
+			if (!(grid <= MaxStops))
+				return SnapSliderValue(value + static_cast<float>(steps) * step, min, max, step);
+			const auto lastGrid = static_cast<int64_t>(grid);
+			const bool maxIsExtraStop = static_cast<double>(min) + grid * step < static_cast<double>(max);
+			const int64_t last = lastGrid + (maxIsExtraStop ? 1 : 0);
+			const int64_t current = value >= max ? last : std::clamp<int64_t>(std::llround((static_cast<double>(value) - min) / step), 0, lastGrid);
+			const int64_t target = std::clamp<int64_t>(current + steps, 0, last);
+			if (target == last)
+				return max;
+			return std::min(static_cast<float>(static_cast<double>(min) + static_cast<double>(target) * step), max);
+		}
+
+		void AppendRect(const UIBox& box, const glm::vec4& color, std::vector<UIDrawCommand>& out)
+		{
+			UIDrawCommand& command = out.emplace_back();
+			command.Kind = UIDrawKind::Rect;
+			command.Position = box.Min;
+			command.Size = box.Size;
+			command.Color = color;
 		}
 
 		float SliderHandleWidth(const UIBox& rect, float handleWidth)
