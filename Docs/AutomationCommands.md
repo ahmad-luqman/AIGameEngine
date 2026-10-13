@@ -409,3 +409,14 @@ Compiles a Lua script in isolation and returns its Properties, or the error.
 |-----------|--------------------|
 | `path` | string |
 
+## ui
+
+### `ui.layout`
+
+Lays out the current scene's UI components (the play copy while playing) for a viewport of width x height pixels: the canvas size and every visible UI entity's rect [x, y, width, height] in canvas units, in draw order.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `height` | integer, viewport pixels (default 1080) |
+| `width` | integer, viewport pixels (default 1920) |
+

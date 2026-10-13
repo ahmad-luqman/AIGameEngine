@@ -667,3 +667,35 @@ TEST_SUITE("Automation")
 		std::filesystem::remove_all(occupied);
 	}
 }
+
+TEST_SUITE("Automation")
+{
+	TEST_CASE("ui.layout reports every visible UI rect in draw order for a viewport size")
+	{
+		CommandRegistry registry;
+		AutomationSession session;
+		Run(registry, session, "scene.new", { { "name", "UI" }, { "empty", true } });
+		CHECK(Run(registry, session, "ui.layout")["items"].empty());
+
+		const json bar = Run(registry, session, "entity.create", { { "name", "Bar" }, { "components", { { "UIRect", { { "AnchorMin", { 0, 1 } }, { "AnchorMax", { 1, 1 } }, { "Pivot", { 0.5, 1 } }, { "Size", { 0, 100 } } } }, { "UIImage", json::object() } } } });
+		Run(registry, session, "entity.create", { { "name", "Label" }, { "parent", bar["id"] }, { "components", { { "UIText", { { "Text", "Hi" } } } } } });
+		Run(registry, session, "entity.create", { { "name", "Hidden" }, { "components", { { "UIRect", { { "Visible", false } } } } } });
+
+		json layout = Run(registry, session, "ui.layout");
+		CHECK(layout["canvas"] == json({ 1920.0, 1080.0 }));
+		REQUIRE(layout["items"].size() == 2);
+		CHECK(layout["items"][0]["name"] == "Bar");
+		CHECK(layout["items"][0]["id"] == bar["id"]);
+		CHECK(layout["items"][0]["rect"] == json({ 0.0, 980.0, 1920.0, 100.0 }));
+		CHECK(layout["items"][1]["name"] == "Label");
+		CHECK(layout["items"][1]["rect"] == layout["items"][0]["rect"]);
+
+		// A 4:3 viewport narrows the canvas; the stretched bar follows it.
+		layout = Run(registry, session, "ui.layout", { { "width", 800 }, { "height", 600 } });
+		CHECK(layout["canvas"] == json({ 1440.0, 1080.0 }));
+		CHECK(layout["items"][0]["rect"] == json({ 0.0, 980.0, 1440.0, 100.0 }));
+
+		CHECK(RunError(registry, session, "ui.layout", { { "width", 0 } }).find("'width' must be in") != std::string::npos);
+		CHECK(RunError(registry, session, "ui.layout", { { "height", "tall" } }).find("must be an integer") != std::string::npos);
+	}
+}

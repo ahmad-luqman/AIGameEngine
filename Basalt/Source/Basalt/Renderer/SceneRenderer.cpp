@@ -1662,6 +1662,17 @@ namespace Basalt {
 			m_Resources->CollectGarbage();
 	}
 
+	std::optional<UITexture> SceneRenderer::GetUITexture(const std::string& path, nvrhi::ICommandList* commandList)
+	{
+		Ref<TextureSource> source = AssetManager::GetTexture(path);
+		if (!source)
+			return std::nullopt;
+		nvrhi::ITexture* texture = m_Resources->GetTexture(source, false, commandList);
+		if (!texture)
+			return std::nullopt;
+		return UITexture{ reinterpret_cast<uint64_t>(texture), { static_cast<float>(source->Width), static_cast<float>(source->Height) } };
+	}
+
 	void SceneRenderer::Blit(nvrhi::ICommandList* commandList, nvrhi::IFramebuffer* target)
 	{
 		Impl& impl = *m_Impl;

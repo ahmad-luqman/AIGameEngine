@@ -1,0 +1,63 @@
+#include "Basalt/UI/GameUI.h"
+
+#include <mutex>
+
+namespace Basalt {
+
+	namespace {
+
+		std::mutex s_Mutex;
+		std::vector<UIDrawCommand> s_Commands;
+		glm::vec2 s_ViewportSize = { 1920.0f, 1080.0f };
+
+	}
+
+	bool GameUI::Submit(UIDrawCommand command)
+	{
+		if (!SanitizeUIDrawCommand(command))
+			return false;
+		std::scoped_lock lock(s_Mutex);
+		if (s_Commands.size() >= MaxCommands)
+			return false;
+		s_Commands.push_back(std::move(command));
+		return true;
+	}
+
+	void GameUI::BeginFrame()
+	{
+		std::scoped_lock lock(s_Mutex);
+		s_Commands.clear();
+	}
+
+	std::vector<UIDrawCommand> GameUI::GetCommands()
+	{
+		std::scoped_lock lock(s_Mutex);
+		return s_Commands;
+	}
+
+	size_t GameUI::GetCommandCount()
+	{
+		std::scoped_lock lock(s_Mutex);
+		return s_Commands.size();
+	}
+
+	glm::vec2 GameUI::GetCanvasSize(const glm::vec2& viewportSize)
+	{
+		const float aspect = viewportSize.y > 0.0f ? viewportSize.x / viewportSize.y : 16.0f / 9.0f;
+		return { CanvasHeight * aspect, CanvasHeight };
+	}
+
+	void GameUI::SetViewportSize(const glm::vec2& size)
+	{
+		std::scoped_lock lock(s_Mutex);
+		if (size.x > 0.0f && size.y > 0.0f)
+			s_ViewportSize = size;
+	}
+
+	glm::vec2 GameUI::GetViewportSize()
+	{
+		std::scoped_lock lock(s_Mutex);
+		return s_ViewportSize;
+	}
+
+}

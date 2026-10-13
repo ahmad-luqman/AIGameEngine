@@ -4,11 +4,13 @@
 #include "Basalt/Renderer/DynamicResolution.h"
 #include "Basalt/Renderer/GpuProfiler.h"
 #include "Basalt/Renderer/RenderResources.h"
+#include "Basalt/UI/UIDrawCommand.h"
 
 #include <glm/glm.hpp>
 #include <nvrhi/nvrhi.h>
 
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace Basalt {
@@ -111,6 +113,11 @@ namespace Basalt {
 		nvrhi::ITexture* GetDepthTexture() const { return m_DepthTexture; }
 		// Framebuffer with the output color and the scene depth at the viewport size attached (for overlays).
 		nvrhi::IFramebuffer* GetOverlayFramebuffer() const { return m_OverlayFramebuffer; }
+
+		// A project image for the game UI, uploaded on the given open command list on first use. UI textures
+		// are linear (UNORM): the UI draws display-referred colors into the UNORM swapchain, so the image's
+		// bytes must reach it unconverted. nullopt (logged by AssetManager) when the image does not load.
+		std::optional<UITexture> GetUITexture(const std::string& path, nvrhi::ICommandList* commandList);
 
 		// Draws the output image stretched over the target framebuffer.
 		void Blit(nvrhi::ICommandList* commandList, nvrhi::IFramebuffer* target);

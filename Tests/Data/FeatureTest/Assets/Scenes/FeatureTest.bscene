@@ -121,6 +121,23 @@
 		{ "ID": 24, "Name": "Confetti", "Components": {
 			"Transform": { "Translation": [0.5, 3, 3] },
 			"ParticleEmitter": { "PlayOnStart": false, "Looping": false, "Duration": 1, "Rate": 0, "Shape": "Sphere", "ShapeRadius": 0.3, "LifetimeMin": 5, "LifetimeMax": 5, "SpeedMin": 0.5, "SpeedMax": 1,
-				"GravityScale": 0.1, "Drag": 0.5, "StartSize": 0.2, "EndSize": 0.2, "EndColor": [1, 1, 1, 1], "Texture": "Assets/Textures/Checker.png" } } }
+				"GravityScale": 0.1, "Drag": 0.5, "StartSize": 0.2, "EndSize": 0.2, "EndColor": [1, 1, 1, 1], "Texture": "Assets/Textures/Checker.png" } } },
+
+		{ "ID": 200, "Name": "HUD", "Components": {
+			"UIRect": { "AnchorMin": [0, 0], "AnchorMax": [1, 1], "Size": [-48, -48] } } },
+		{ "ID": 201, "Name": "ScorePanel", "Parent": 200, "Components": {
+			"UIRect": { "AnchorMin": [1, 0], "AnchorMax": [1, 0], "Pivot": [1, 0], "Size": [360, 120] },
+			"UIImage": { "Texture": "Assets/Textures/UIPanel.png", "Slice": [10, 10, 10, 10], "SliceScale": 2 } } },
+		{ "ID": 202, "Name": "ScoreLabel", "Parent": 201, "Components": {
+			"UIRect": { "AnchorMin": [0, 0], "AnchorMax": [1, 1], "Size": [-40, -24] },
+			"UIText": { "Text": "SCORE 1250", "Font": "Assets/Fonts/Karla-Regular.ttf", "FontSize": 52, "Color": [1, 0.85, 0.4, 1], "HorizontalAlign": "Right", "VerticalAlign": "Middle" } } },
+		{ "ID": 203, "Name": "Banner", "Parent": 200, "Components": {
+			"UIRect": { "AnchorMin": [0, 1], "AnchorMax": [1, 1], "Pivot": [0.5, 1], "Size": [0, 64] },
+			"UIImage": { "Color": [0, 0, 0, 0.45] } } },
+		{ "ID": 204, "Name": "BannerText", "Parent": 203, "Components": {
+			"UIText": { "Text": "Basalt feature test: UI components", "FontSize": 36, "HorizontalAlign": "Center", "VerticalAlign": "Middle" } } },
+		{ "ID": 205, "Name": "HiddenMenu", "Parent": 200, "Components": {
+			"UIRect": { "Visible": false, "AnchorMin": [0, 0], "AnchorMax": [1, 1] },
+			"UIImage": { "Color": [1, 0, 0, 1] } } }
 	]
 }

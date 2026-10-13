@@ -3,6 +3,7 @@
 #include "Basalt/Core/Application.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Renderer/GraphicsDevice.h"
+#include "Basalt/UI/UIFonts.h"
 
 #include <GLFW/glfw3.h>
 #include <imgui.h>
@@ -63,6 +64,7 @@ namespace Basalt {
 				ImGui_ImplGlfw_Shutdown();
 			m_Initialized = false;
 		}
+		UIFonts::Clear();
 		ImGui::DestroyContext();
 	}
 

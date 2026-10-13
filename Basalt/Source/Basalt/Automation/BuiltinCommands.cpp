@@ -16,6 +16,8 @@
 #include "Basalt/Scene/Scene.h"
 #include "Basalt/Scene/SceneSerializer.h"
 #include "Basalt/Scripting/ScriptEngine.h"
+#include "Basalt/UI/GameUI.h"
+#include "Basalt/UI/UILayout.h"
 
 #include <algorithm>
 #include <limits>
@@ -447,6 +449,19 @@ namespace Basalt {
 				const std::string hash = SceneSerializer::ComputeStateHash(RequireScene(session));
 				CheckExpectedHash(params, hash);
 				return json{ { "hash", hash } };
+			});
+
+			Add(registry, "ui.layout", "Lays out the current scene's UI components (the play copy while playing) for a viewport of width x height pixels: the canvas size and every visible UI entity's rect [x, y, width, height] in canvas units, in draw order.", { { "width", "integer, viewport pixels (default 1920)" }, { "height", "integer, viewport pixels (default 1080)" } }, [](AutomationSession& session, const json& params) {
+				const auto width = static_cast<float>(OptionalInteger(params, "width", 1920, 1, 65536));
+				const auto height = static_cast<float>(OptionalInteger(params, "height", 1080, 1, 65536));
+				const glm::vec2 canvas = GameUI::GetCanvasSize({ width, height });
+				json items = json::array();
+				for (const UILayoutItem& item : UILayout::Layout(RequireScene(session), canvas))
+				{
+					const UIBox& rect = item.Rect;
+					items.push_back({ { "id", static_cast<uint64_t>(item.Owner.GetUUID()) }, { "name", item.Owner.GetName() }, { "rect", { rect.Min.x, rect.Min.y, rect.Size.x, rect.Size.y } } });
+				}
+				return json{ { "canvas", { canvas.x, canvas.y } }, { "items", items } };
 			});
 
 			Add(registry, "scene.get", "Returns the whole open scene as JSON (same format as .bscene files).", {}, [](AutomationSession& session, const json&) {

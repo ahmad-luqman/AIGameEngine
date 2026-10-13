@@ -8,6 +8,8 @@
 #include "Basalt/Scene/JointFields.h"
 #include "Basalt/Scene/Scene.h"
 #include "Basalt/Scripting/ScriptEngine.h"
+#include "Basalt/UI/UIFonts.h"
+#include "Basalt/UI/UIGeometry.h"
 
 #include <imgui.h>
 #include <imgui_stdlib.h>
@@ -36,6 +38,30 @@ namespace Basalt {
 			return nullptr;
 		}
 		return &it->second.Properties;
+	}
+
+	void InspectorPanel::DrawAnchorPresets(uint64_t id)
+	{
+		// Point presets pin the anchors and pivot to one spot of the parent rect; Stretch fills it.
+		const auto apply = [&](const nlohmann::json& data) {
+			if (m_Context.Execute("component.set", { { "entity", id }, { "component", "UIRect" }, { "data", data } }))
+				m_Context.CommitHistory();
+		};
+		if (!ImGui::BeginCombo("Anchor Preset", "Choose...", ImGuiComboFlags_HeightLarge))
+			return;
+		for (std::string_view name : GetUIAnchorPresetNames())
+		{
+			const std::string label(name);
+			if (ImGui::Selectable(label.c_str()))
+			{
+				const glm::vec2 anchor = *FindUIAnchorPreset(name);
+				const nlohmann::json point = { anchor.x, anchor.y };
+				apply({ { "AnchorMin", point }, { "AnchorMax", point }, { "Pivot", point } });
+			}
+		}
+		if (ImGui::Selectable("Stretch"))
+			apply({ { "AnchorMin", { 0.0f, 0.0f } }, { "AnchorMax", { 1.0f, 1.0f } }, { "Pivot", { 0.5f, 0.5f } }, { "Position", { 0.0f, 0.0f } }, { "Size", { 0.0f, 0.0f } } });
+		ImGui::EndCombo();
 	}
 
 	void InspectorPanel::DrawScriptProperties(Entity entity, const nlohmann::json& component)
@@ -193,6 +219,8 @@ namespace Basalt {
 				const bool isJoint = info.Name == "Joint";
 				const JointComponent joint = isJoint ? entity.GetComponent<JointComponent>() : JointComponent{};
 				const std::vector<std::string> ignoredJointFields = isJoint ? GetIgnoredJointFields(joint) : std::vector<std::string>{};
+				if (info.Name == "UIRect")
+					DrawAnchorPresets(id);
 				for (const std::string& field : info.Fields)
 				{
 					if (!data.contains(field))
@@ -249,6 +277,14 @@ namespace Basalt {
 				}
 				if (info.Name == "Script")
 					DrawScriptProperties(entity, data);
+				if ((info.Name == "UIImage" || info.Name == "UIText") && !entity.HasComponent<UIRectComponent>())
+					ImGui::TextDisabled("No UIRect: fills the parent's UI rect (or the screen).");
+				if (info.Name == "UIText")
+				{
+					const std::string& font = entity.GetComponent<UITextComponent>().Font;
+					if (const std::string error = UIFonts::GetError(font); !error.empty())
+						ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Font not loaded (%s); using the built-in font.", error.c_str());
+				}
 				if (info.Name == "CharacterController")
 				{
 					// Physics shapes the character from these and skips it without one.

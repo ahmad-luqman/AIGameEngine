@@ -1,0 +1,14 @@
+{
+	"Format": "BasaltScene",
+	"Version": 1,
+	"Name": "UI",
+	"Entities": [
+		{ "ID": 1, "Name": "HUD", "Components": { "UIRect": { "AnchorMin": [0, 0], "AnchorMax": [1, 1], "Size": [-48, -48] } } },
+		{ "ID": 2, "Name": "Panel", "Parent": 1, "Components": {
+			"UIRect": { "Visible": true, "AnchorMin": [1, 0], "AnchorMax": [1, 0], "Pivot": [1, 0], "Position": [-10, 10], "Size": [360, 120] },
+			"UIImage": { "Texture": "Assets/Textures/UIPanel.png", "Color": [1, 1, 1, 0.9], "Slice": [10, 10, 10, 10], "SliceScale": 2 } } },
+		{ "ID": 3, "Name": "Label", "Parent": 2, "Components": {
+			"UIText": { "Text": "SCORE", "Font": "Assets/Fonts/Karla-Regular.ttf", "FontSize": 48, "Color": [1, 1, 1, 1], "HorizontalAlign": "Right", "VerticalAlign": "Middle", "Wrap": false, "Shadow": true } } },
+		{ "ID": 4, "Name": "Hidden", "Parent": 1, "Components": { "UIRect": { "Visible": false }, "UIImage": {} } }
+	]
+}

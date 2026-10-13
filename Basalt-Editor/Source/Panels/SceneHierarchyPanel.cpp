@@ -34,6 +34,8 @@ namespace Basalt {
 				{ "Sky Light", "Sky Light", { { "SkyLight", nlohmann::json::object() } } },
 				{ "Audio Source", "Audio Source", { { "AudioSource", nlohmann::json::object() } } },
 				{ "Particle Emitter", "Particle Emitter", { { "ParticleEmitter", nlohmann::json::object() } } },
+				{ "UI Panel", "Panel", { { "UIRect", nlohmann::json::object() }, { "UIImage", { { "Color", { 0.0, 0.0, 0.0, 0.5 } } } } } },
+				{ "UI Text", "Text", { { "UIRect", nlohmann::json::object() }, { "UIText", nlohmann::json::object() } } },
 			};
 			return s_Options;
 		}
