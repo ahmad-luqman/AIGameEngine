@@ -43,6 +43,26 @@ TEST_SUITE("Local shadows")
 		CHECK(plan.Allocations[0].LightIndex == 1);
 	}
 
+	TEST_CASE("Screen-filling influences tie at one viewport in both camera projections")
+	{
+		for (bool orthographic : { false, true })
+		{
+			const auto projection = orthographic ? glm::ortho(-10.0f, 10.0f, -10.0f, 10.0f, 0.1f, 100.0f) : Projection;
+			std::array requests = {
+				LocalShadowRequest{ 1, 0, LocalShadowType::Point, { 0, 0, -4 }, orthographic ? 10.0f : 2.0f },
+				LocalShadowRequest{ 2, 1, LocalShadowType::Point, { 0, 0, -4 }, orthographic ? 20.0f : 3.0f }
+			};
+			for (int order = 0; order < 2; order++)
+			{
+				const auto plan = BuildLocalShadowPlan(requests, View, projection, 6);
+				REQUIRE(plan.Allocations.size() == 1);
+				CHECK(plan.Allocations[0].LightIndex == 0);
+				CHECK(plan.Skipped == 1);
+				std::reverse(requests.begin(), requests.end());
+			}
+		}
+	}
+
 	TEST_CASE("Spot importance accounts for its cone and direction")
 	{
 		const std::array requests = {
