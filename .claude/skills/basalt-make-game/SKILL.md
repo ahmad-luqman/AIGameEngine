@@ -45,6 +45,12 @@ Write scripts with `asset.write` (or directly as files under `<project>/Assets/S
   `.ttf` fonts; see "Screen UI" in Docs/ScriptingAPI.md) and update their text with `SetComponent`; check
   the layout headlessly with `ui.layout`. Quick per-frame text goes through `UI.Text(..., { Anchor = ... })`.
   Screenshots (`render.screenshot`, `editor.screenshot`, the runtime's `--screenshot`) include the game UI.
+- Menus and settings: add `UIButton` / `UISlider` / `UICheckbox` to UI entities, with `Target` set to the
+  menu entity (commands accept its name) and `OnClick` / `OnValueChanged` naming the menu script's methods
+  (`function Menu:StartGame(button)`). They work with the mouse, arrows/Tab/Enter and gamepads. Test them
+  headlessly: mouse positions are canvas units there, so click a rect from `ui.layout` (default size) with
+  `input.mouse` (press, `play.step`, release, `play.step`), navigate with `input.key`, and drive a pad with
+  `input.gamepad {connected: true, button: "A"}`. Per-frame menus can use `UI.Button/Checkbox/Slider` instead.
 - Check every script compiles: `$B --project P script.check '{"path": "Assets/Scripts/Game.lua"}'`.
 
 ## 3. Build the scene with a batch file

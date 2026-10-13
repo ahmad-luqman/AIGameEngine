@@ -18,6 +18,7 @@
 #include "Basalt/Scripting/ScriptEngine.h"
 #include "Basalt/UI/GameUI.h"
 #include "Basalt/UI/UIFonts.h"
+#include "Basalt/UI/UIInteraction.h"
 #include "Basalt/UI/UILayout.h"
 
 #include <algorithm>
@@ -252,6 +253,93 @@ namespace Basalt {
 			}
 		}
 
+		// ui.layout's description of a widget entity.
+		json WidgetSummary(const Scene& scene, Entity entity, UIWidgetKind kind)
+		{
+			json summary = { { "kind", UIWidgetComponentName(kind) } };
+			bool interactable = true;
+			UUID target = 0;
+			switch (kind)
+			{
+				case UIWidgetKind::Button:
+				{
+					const auto& button = entity.GetComponent<UIButtonComponent>();
+					interactable = button.Interactable;
+					target = button.Target;
+					break;
+				}
+				case UIWidgetKind::Slider:
+				{
+					const auto& slider = entity.GetComponent<UISliderComponent>();
+					interactable = slider.Interactable;
+					target = slider.Target;
+					summary["value"] = slider.Value;
+					break;
+				}
+				case UIWidgetKind::Checkbox:
+				{
+					const auto& checkbox = entity.GetComponent<UICheckboxComponent>();
+					interactable = checkbox.Interactable;
+					target = checkbox.Target;
+					summary["checked"] = checkbox.Checked;
+					break;
+				}
+			}
+			summary["interactable"] = interactable;
+			summary["target"] = static_cast<uint64_t>(target);
+			if (const UIInteraction* interaction = scene.GetUIInteraction())
+			{
+				const UIWidgetID id = UIWidgetID::ForEntity(entity.GetUUID());
+				summary["state"] = UIWidgetStateName(interaction->GetState(id, interactable));
+				summary["focused"] = interaction->GetFocus() == id;
+			}
+			return summary;
+		}
+
+		// Validates the whole request before changing anything, so a bad one leaves the gamepad as it was.
+		void ApplyGamepadInput(const json& params)
+		{
+			const auto index = static_cast<uint32_t>(OptionalInteger(params, "index", 0, 0, Input::MaxGamepads - 1));
+			const bool hasConnected = params.contains("connected");
+			const bool hasButton = params.contains("button");
+			const bool hasAxis = params.contains("axis");
+			if (!hasConnected && !hasButton && !hasAxis)
+				throw CommandError("give 'connected', 'button' or 'axis'");
+			const std::optional<bool> connected = hasConnected ? std::optional(OptionalBool(params, "connected", true)) : std::nullopt;
+			const std::string name = params.contains("name") ? RequireString(params, "name") : std::string("Injected Gamepad");
+			std::optional<GamepadButton> button;
+			if (hasButton)
+			{
+				const std::string buttonName = RequireString(params, "button");
+				button = GamepadButtonFromString(buttonName);
+				if (!button)
+					throw CommandError("unknown gamepad button '" + buttonName + "'");
+			}
+			std::optional<GamepadAxis> axis;
+			float value = 0.0f;
+			if (hasAxis)
+			{
+				const std::string axisName = RequireString(params, "axis");
+				axis = GamepadAxisFromString(axisName);
+				if (!axis)
+					throw CommandError("unknown gamepad axis '" + axisName + "'");
+				const auto found = params.find("value");
+				const float min = IsGamepadTrigger(*axis) ? 0.0f : -1.0f;
+				if (found == params.end() || !JsonToFloat(*found, value) || value < min || value > 1.0f)
+					throw CommandError(fmt::format("'value' must be a number from {} to 1 for axis '{}'", min, axisName));
+			}
+			const bool willBeConnected = connected.value_or(Input::IsGamepadConnected(index));
+			if ((button || axis) && !willBeConnected)
+				throw CommandError("gamepad " + std::to_string(index) + " is not connected (pass connected: true)");
+
+			if (connected)
+				Input::SetGamepadConnected(index, *connected, name);
+			if (button)
+				Input::SetGamepadButtonState(index, *button, OptionalBool(params, "down", true));
+			if (axis)
+				Input::SetGamepadAxis(index, *axis, value);
+		}
+
 		// --- Command groups -------------------------------------------------------------------------
 
 		void RegisterGeneral(CommandRegistry& registry)
@@ -454,7 +542,7 @@ namespace Basalt {
 			});
 
 			Add(registry, "ui.layout",
-				"Lays out the current scene's UI components (the play copy while playing) for a viewport of width x height pixels: the canvas size, every visible UI entity's rect [x, y, width, height] in canvas units in draw order, and the problems that make UI draw differently than authored (an image that does not load and draws its Color, a font that does not load and falls back to the built-in one or has glyphs that draw blank).",
+				"Lays out the current scene's UI components (the play copy while playing) for a viewport of width x height pixels: the canvas size, every visible UI entity's rect [x, y, width, height] in canvas units in draw order (widgets add their kind, values, target and, while playing, state and focus; headless, widgets take mouse input on the 1920x1080 canvas, where mouse positions are canvas units), and the problems that make UI draw differently than authored (an image that does not load and draws its Color, a font that does not load and falls back to the built-in one or has glyphs that draw blank).",
 				{ { "width", "integer, viewport pixels (default 1920)" }, { "height", "integer, viewport pixels (default 1080)" } }, [](AutomationSession& session, const json& params) {
 					const auto width = static_cast<float>(OptionalInteger(params, "width", 1920, 1, 65536));
 					const auto height = static_cast<float>(OptionalInteger(params, "height", 1080, 1, 65536));
@@ -462,12 +550,22 @@ namespace Basalt {
 					json items = json::array();
 					json problems = json::array();
 					std::unordered_map<std::string, std::string> fontErrors;
-					for (const UILayoutItem& item : UILayout::Layout(RequireScene(session), canvas))
+					Scene& scene = RequireScene(session);
+					for (const UILayoutItem& item : UILayout::Layout(scene, canvas))
 					{
 						const UIBox& rect = item.Rect;
 						const uint64_t id = item.Owner.GetUUID();
-						items.push_back({ { "id", id }, { "name", item.Owner.GetName() }, { "rect", { rect.Min.x, rect.Min.y, rect.Size.x, rect.Size.y } } });
+						json entry = { { "id", id }, { "name", item.Owner.GetName() }, { "rect", { rect.Min.x, rect.Min.y, rect.Size.x, rect.Size.y } } };
 						const auto report = [&](const std::string& problem) { problems.push_back({ { "id", id }, { "name", item.Owner.GetName() }, { "problem", problem } }); };
+						if (const std::optional<UIWidgetKind> widget = UILayout::GetWidgetKind(item.Owner))
+						{
+							entry["widget"] = WidgetSummary(scene, item.Owner, *widget);
+							if (UILayout::CountWidgetComponents(item.Owner) > 1)
+								report(fmt::format("several widget components: it acts as its {} only", UIWidgetComponentName(*widget)));
+							if (const UUID target = entry["widget"]["target"].get<uint64_t>(); target != 0 && !scene.GetEntityByUUID(target))
+								report(fmt::format("{} Target {} does not exist (its callback cannot run)", UIWidgetComponentName(*widget), static_cast<uint64_t>(target)));
+						}
+						items.push_back(std::move(entry));
 						if (const auto* image = item.Owner.TryGetComponent<UIImageComponent>(); image && !image->Texture.empty() && !AssetManager::GetTexture(image->Texture))
 							report(fmt::format("UIImage texture '{}': {} (draws its Color instead)", image->Texture, AssetManager::GetError(image->Texture)));
 						if (const auto* text = item.Owner.TryGetComponent<UITextComponent>(); text && !text->Font.empty())
@@ -865,6 +963,8 @@ namespace Basalt {
 					const uint32_t frames = static_cast<uint32_t>(OptionalInteger(params, "frames", recorded, 0, 10000000));
 
 					session.StopPlay(); // also resets input
+					// Gamepads injected before the replay would change what it sees (connection callbacks, navigation).
+					Input::ForgetInjectedGamepads();
 					std::string error;
 					if (!session.StartPlay(error))
 						throw CommandError(error);
@@ -882,6 +982,8 @@ namespace Basalt {
 								ApplyKeyInput(eventParams);
 							else if (command == "input.mouse")
 								ApplyMouseInput(eventParams);
+							else if (command == "input.gamepad")
+								ApplyGamepadInput(eventParams);
 							else
 								throw CommandError("replay event " + std::to_string(next) + " has unknown command '" + command + "'");
 						}
@@ -916,6 +1018,15 @@ namespace Basalt {
 				session.RecordInput("input.mouse", params);
 				return json::object();
 			});
+
+			Add(registry, "input.gamepad",
+				"Connects, disconnects or drives an injected gamepad for play mode (e.g. {index: 0, connected: true}, {button: 'A', down: true}, {axis: 'LeftX', value: -1}). A device poll never overrides an injected gamepad. Recorded while replay recording is on.",
+				{ { "index", "integer 0-15 (default 0)" }, { "connected", "bool" }, { "name", "string, the gamepad's name when connecting" }, { "button", "string (A, B, X, Y, LeftBumper, RightBumper, Back, Start, Guide, LeftThumb, RightThumb, DPadUp, DPadRight, DPadDown, DPadLeft)" }, { "down", "bool (default true)" }, { "axis", "string (LeftX, LeftY, RightX, RightY, LeftTrigger, RightTrigger)" }, { "value", "number: sticks -1..1 (+Y down), triggers 0..1" } },
+				[](AutomationSession& session, const json& params) {
+					ApplyGamepadInput(params);
+					session.RecordInput("input.gamepad", params);
+					return json::object();
+				});
 
 			Add(registry, "lua.exec", "Runs Lua in the playing scene's script state; returns the value of the expression.", { { "code", "string" } }, [](AutomationSession& session, const json& params) {
 				Scene& scene = RequireScene(session);

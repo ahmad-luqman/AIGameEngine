@@ -19,6 +19,9 @@ namespace Basalt {
 		glm::vec2 Size = { 0.0f, 0.0f };
 
 		glm::vec2 Max() const { return Min + Size; }
+		glm::vec2 Center() const { return Min + Size * 0.5f; }
+		// Min inclusive, Max exclusive, so adjacent boxes never both contain a point.
+		bool Contains(const glm::vec2& point) const { return point.x >= Min.x && point.y >= Min.y && point.x < Min.x + Size.x && point.y < Min.y + Size.y; }
 		bool operator==(const UIBox&) const = default;
 	};
 
@@ -34,6 +37,8 @@ namespace Basalt {
 
 		glm::vec2 ToScreen(const glm::vec2& canvasPoint) const { return Origin + canvasPoint * Scale; }
 		UIBox ToScreen(const UIBox& box) const { return { ToScreen(box.Min), box.Size * Scale }; }
+		// The inverse of ToScreen for points (Scale > 0).
+		glm::vec2 ToCanvas(const glm::vec2& screenPoint) const { return (screenPoint - Origin) / Scale; }
 	};
 
 	// The rect a UIRectComponent describes inside its parent's rect (see UIRectComponent). A negative

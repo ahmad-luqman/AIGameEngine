@@ -1,11 +1,14 @@
 #include "Basalt/Core/Window.h"
 
 #include "Basalt/Core/Assert.h"
+#include "Basalt/Core/Input.h"
 #include "Basalt/Events/ApplicationEvent.h"
 #include "Basalt/Events/KeyEvent.h"
 #include "Basalt/Events/MouseEvent.h"
 
 #include <GLFW/glfw3.h>
+
+#include <algorithm>
 
 namespace Basalt {
 
@@ -16,6 +19,37 @@ namespace Basalt {
 		void GLFWErrorCallback(int error, const char* description)
 		{
 			BS_CORE_ERROR("GLFW error ({}): {}", error, description);
+		}
+
+		// Feeds Input with every joystick GLFW maps to the standard gamepad layout (its SDL mapping database).
+		// Joysticks without a mapping are not gamepads and read as disconnected.
+		void PollGamepads()
+		{
+			static_assert(GLFW_GAMEPAD_BUTTON_LAST + 1 == GamepadButtonCount && GLFW_GAMEPAD_AXIS_LAST + 1 == GamepadAxisCount);
+			static_assert(GLFW_GAMEPAD_BUTTON_A == static_cast<int>(GamepadButton::A) && GLFW_GAMEPAD_BUTTON_DPAD_LEFT == static_cast<int>(GamepadButton::DPadLeft));
+			static_assert(GLFW_GAMEPAD_AXIS_LEFT_TRIGGER == static_cast<int>(GamepadAxis::LeftTrigger));
+			constexpr int Count = std::min(static_cast<int>(Input::MaxGamepads), GLFW_JOYSTICK_LAST + 1);
+			for (int id = 0; id < Count; id++)
+			{
+				GLFWgamepadstate state;
+				if (!glfwJoystickIsGamepad(id) || !glfwGetGamepadState(id, &state))
+				{
+					Input::UpdateGamepadFromDevice(static_cast<uint32_t>(id), nullptr);
+					continue;
+				}
+				GamepadDeviceState device;
+				const char* name = glfwGetGamepadName(id);
+				device.Name = name ? name : "Gamepad";
+				for (uint32_t b = 0; b < GamepadButtonCount; b++)
+					device.Buttons[b] = state.buttons[b] == GLFW_PRESS;
+				for (uint32_t a = 0; a < GamepadAxisCount; a++)
+				{
+					// GLFW reports triggers from -1 (released) to 1, like the sticks.
+					const float value = state.axes[a];
+					device.Axes[a] = IsGamepadTrigger(static_cast<GamepadAxis>(a)) ? (value + 1.0f) * 0.5f : value;
+				}
+				Input::UpdateGamepadFromDevice(static_cast<uint32_t>(id), &device);
+			}
 		}
 
 	}
@@ -176,6 +210,7 @@ namespace Basalt {
 	void Window::PollEvents()
 	{
 		glfwPollEvents();
+		PollGamepads();
 	}
 
 	void Window::GetFramebufferSize(uint32_t& outWidth, uint32_t& outHeight) const

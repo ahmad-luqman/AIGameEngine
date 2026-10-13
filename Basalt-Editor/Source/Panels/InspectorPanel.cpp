@@ -288,8 +288,11 @@ namespace Basalt {
 				}
 				if (info.Name == "Script")
 					DrawScriptProperties(entity, data);
-				if ((info.Name == "UIImage" || info.Name == "UIText") && !entity.HasComponent<UIRectComponent>())
+				const bool isWidget = info.Name == "UIButton" || info.Name == "UISlider" || info.Name == "UICheckbox";
+				if ((info.Name == "UIImage" || info.Name == "UIText" || isWidget) && !entity.HasComponent<UIRectComponent>())
 					ImGui::TextDisabled("No UIRect: fills the parent's UI rect (or the screen).");
+				if (isWidget && UILayout::CountWidgetComponents(entity) > 1)
+					ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "Several widget components: the entity acts as its %s only.", UIWidgetComponentName(*UILayout::GetWidgetKind(entity)));
 				if (info.Name == "UIImage")
 				{
 					const std::string& texture = entity.GetComponent<UIImageComponent>().Texture;

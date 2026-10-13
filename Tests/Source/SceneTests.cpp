@@ -283,6 +283,23 @@ TEST_SUITE("Serialization")
 		entity.GetComponent<UIRectComponent>() = { .Visible = false, .AnchorMin = { 0.0f, 0.25f }, .AnchorMax = { 1.0f, 0.75f }, .Pivot = { 0.0f, 1.0f }, .Position = { 12.5f, -4.0f }, .Size = { -20.0f, 64.0f } };
 		entity.GetComponent<UIImageComponent>() = { .Texture = "Assets/Textures/Panel.png", .Color = { 0.5f, 0.25f, 1.0f, 0.75f }, .Slice = { 1.0f, 2.0f, 3.0f, 4.0f }, .SliceScale = 2.5f };
 		entity.GetComponent<UITextComponent>() = { .Text = "Score: 10\nLives: 3", .Font = "Assets/Fonts/Karla-Regular.ttf", .FontSize = 48.0f, .Color = { 1.0f, 0.5f, 0.0f, 0.5f }, .HorizontalAlign = UIHorizontalAlign::Right, .VerticalAlign = UIVerticalAlign::Bottom, .Wrap = false, .Shadow = false };
+		entity.GetComponent<UIButtonComponent>() = { .Interactable = false, .NormalTint = { 0.1f, 0.2f, 0.3f, 0.4f }, .HighlightTint = { 0.5f, 0.6f, 0.7f, 0.8f }, .PressedTint = { 0.9f, 0.8f, 0.7f, 0.6f }, .DisabledTint = { 0.25f, 0.25f, 0.25f, 0.25f }, .Target = UUID(0xF000000000000003ull), .OnClick = "StartGame" };
+		entity.GetComponent<UISliderComponent>() = { .Interactable = false,
+													 .Value = 7.5f,
+													 .Min = -10.0f,
+													 .Max = 20.0f,
+													 .Step = 2.5f,
+													 .TrackColor = { 0.1f, 0.1f, 0.1f, 0.5f },
+													 .FillColor = { 0.2f, 0.3f, 0.4f, 0.5f },
+													 .HandleColor = { 0.6f, 0.7f, 0.8f, 0.9f },
+													 .HandleWidth = 12.0f,
+													 .NormalTint = { 0.9f, 0.9f, 0.9f, 1.0f },
+													 .HighlightTint = { 0.95f, 0.95f, 0.95f, 1.0f },
+													 .PressedTint = { 0.7f, 0.7f, 0.7f, 1.0f },
+													 .DisabledTint = { 0.3f, 0.3f, 0.3f, 0.3f },
+													 .Target = UUID(0xF000000000000004ull),
+													 .OnValueChanged = "SetVolume" };
+		entity.GetComponent<UICheckboxComponent>() = { .Interactable = false, .Checked = true, .BoxColor = { 0.3f, 0.3f, 0.3f, 1.0f }, .CheckColor = { 1.0f, 0.0f, 0.0f, 1.0f }, .NormalTint = { 0.8f, 0.8f, 0.8f, 1.0f }, .HighlightTint = { 0.9f, 1.0f, 0.9f, 1.0f }, .PressedTint = { 0.6f, 0.6f, 0.6f, 1.0f }, .DisabledTint = { 0.4f, 0.4f, 0.4f, 0.4f }, .Target = UUID(0xF000000000000005ull), .OnValueChanged = "" };
 		entity.GetComponent<ScriptComponent>().Script = "Assets/Scripts/Test.lua";
 		entity.GetComponent<ScriptComponent>().Properties = { { "Speed", 3.5 }, { "Target", { 1, 2, 3 } } };
 		JointComponent& joint = entity.GetComponent<JointComponent>();
@@ -338,6 +355,9 @@ TEST_SUITE("Serialization")
 		CHECK(copy.GetComponent<UIRectComponent>() == entity.GetComponent<UIRectComponent>());
 		CHECK(copy.GetComponent<UIImageComponent>() == entity.GetComponent<UIImageComponent>());
 		CHECK(copy.GetComponent<UITextComponent>() == entity.GetComponent<UITextComponent>());
+		CHECK(copy.GetComponent<UIButtonComponent>() == entity.GetComponent<UIButtonComponent>());
+		CHECK(copy.GetComponent<UISliderComponent>() == entity.GetComponent<UISliderComponent>());
+		CHECK(copy.GetComponent<UICheckboxComponent>() == entity.GetComponent<UICheckboxComponent>());
 	}
 
 	TEST_CASE("Component JSON is strict about unknown fields, types and enum values")
@@ -543,6 +563,11 @@ TEST_SUITE("Serialization")
 			if (info.Name == "Joint")
 			{
 				CHECK(info.EntityFields == std::vector<std::string>{ "BodyEntity", "ConnectedEntity" });
+				CHECK(info.RemapEntityReferences);
+			}
+			else if (info.Name == "UIButton" || info.Name == "UISlider" || info.Name == "UICheckbox")
+			{
+				CHECK(info.EntityFields == std::vector<std::string>{ "Target" });
 				CHECK(info.RemapEntityReferences);
 			}
 			else

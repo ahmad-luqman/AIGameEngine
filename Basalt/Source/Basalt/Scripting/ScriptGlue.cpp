@@ -116,6 +116,31 @@ namespace Basalt {
 			return *button;
 		}
 
+		GamepadButton ParseGamepadButton(const std::string& name)
+		{
+			const auto button = GamepadButtonFromString(name);
+			if (!button)
+				throw std::runtime_error("unknown gamepad button '" + name + "' (valid: A, B, X, Y, LeftBumper, RightBumper, Back, Start, Guide, LeftThumb, RightThumb, DPadUp, DPadRight, DPadDown, DPadLeft)");
+			return *button;
+		}
+
+		GamepadAxis ParseGamepadAxis(const std::string& name)
+		{
+			const auto axis = GamepadAxisFromString(name);
+			if (!axis)
+				throw std::runtime_error("unknown gamepad axis '" + name + "' (valid: LeftX, LeftY, RightX, RightY, LeftTrigger, RightTrigger)");
+			return *axis;
+		}
+
+		// A gamepad index argument: an integer from 0 to Input::MaxGamepads - 1.
+		uint32_t ParseGamepadIndex(const sol::object& value)
+		{
+			const std::optional<int64_t> index = ToInteger(value);
+			if (!index || *index < 0 || *index >= static_cast<int64_t>(Input::MaxGamepads))
+				throw std::runtime_error("the gamepad index must be an integer from 0 to " + std::to_string(Input::MaxGamepads - 1));
+			return static_cast<uint32_t>(*index);
+		}
+
 		const ComponentInfo& RequireComponent(const std::string& name)
 		{
 			const ComponentInfo* info = ComponentRegistry::Find(name);
@@ -598,6 +623,26 @@ namespace Basalt {
 			input["GetMousePosition"] = []() { return Input::GetMousePosition(); };
 			input["GetMouseDelta"] = []() { return Input::GetMouseDelta(); };
 			input["GetMouseScroll"] = []() { return Input::GetMouseScroll(); };
+			input["IsGamepadConnected"] = [](const sol::object& index) { return Input::IsGamepadConnected(ParseGamepadIndex(index)); };
+			input["GetGamepadName"] = [](const sol::object& index) -> sol::optional<std::string> {
+				const uint32_t gamepad = ParseGamepadIndex(index);
+				if (!Input::IsGamepadConnected(gamepad))
+					return sol::nullopt;
+				return Input::GetGamepadName(gamepad);
+			};
+			input["GetGamepads"] = [](sol::this_state state) {
+				sol::table gamepads = sol::state_view(state).create_table();
+				for (uint32_t index = 0; index < Input::MaxGamepads; index++)
+				{
+					if (Input::IsGamepadConnected(index))
+						gamepads.add(index);
+				}
+				return gamepads;
+			};
+			input["IsGamepadButtonDown"] = [](const sol::object& index, const std::string& button) { return Input::IsGamepadButtonDown(ParseGamepadIndex(index), ParseGamepadButton(button)); };
+			input["IsGamepadButtonPressed"] = [](const sol::object& index, const std::string& button) { return Input::IsGamepadButtonPressed(ParseGamepadIndex(index), ParseGamepadButton(button)); };
+			input["IsGamepadButtonReleased"] = [](const sol::object& index, const std::string& button) { return Input::IsGamepadButtonReleased(ParseGamepadIndex(index), ParseGamepadButton(button)); };
+			input["GetGamepadAxis"] = [](const sol::object& index, const std::string& axis) { return Input::GetGamepadAxis(ParseGamepadIndex(index), ParseGamepadAxis(axis)); };
 
 			sol::table physics = lua.create_named_table("Physics");
 			physics["Raycast"] = [&context](sol::this_state state, const glm::vec3& origin, const glm::vec3& direction, float maxDistance, const sol::object& options) -> sol::object {
@@ -670,7 +715,7 @@ namespace Basalt {
 			};
 			debug["DrawSphere"] = [defaultColor](const glm::vec3& center, float radius, sol::optional<glm::vec4> color) { DebugDraw::Sphere(center, radius, color.value_or(defaultColor)); };
 
-			RegisterUIBindings(lua);
+			RegisterUIBindings(lua, context);
 
 			sol::table game = lua.create_named_table("Game");
 			game["Quit"] = [&context]() { RequireScene(context).RequestQuit(); };

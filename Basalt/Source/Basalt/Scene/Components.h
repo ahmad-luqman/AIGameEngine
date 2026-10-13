@@ -566,6 +566,71 @@ namespace Basalt {
 		bool operator==(const UITextComponent&) const = default;
 	};
 
+	// Interactive widgets: a widget component on an entity with a UIRect makes the rect respond to the mouse, the
+	// keyboard and gamepads while the scene plays (UI/UIInteraction.h). The tints multiply the widget's visuals by
+	// state: Highlight while hovered or focused, Pressed while held, Disabled when not Interactable. A user
+	// interaction calls Target's script method (Target 0 = the widget's own entity) named by OnClick /
+	// OnValueChanged, with the widget entity (and the new value); an empty name calls nothing. Setting values
+	// from code or files does not call it.
+
+	// A clickable rect. Draws nothing itself: it tints the entity's UIImage, and its UIText is the label.
+	struct UIButtonComponent
+	{
+		bool Interactable = true;
+		glm::vec4 NormalTint = { 0.85f, 0.85f, 0.85f, 1.0f };
+		glm::vec4 HighlightTint = { 1.0f, 1.0f, 1.0f, 1.0f };
+		glm::vec4 PressedTint = { 0.65f, 0.65f, 0.65f, 1.0f };
+		glm::vec4 DisabledTint = { 0.5f, 0.5f, 0.5f, 0.5f };
+		UUID Target = 0;
+		std::string OnClick = "OnClick";
+
+		bool operator==(const UIButtonComponent&) const = default;
+	};
+
+	// A horizontal slider: a track filling the rect, a fill from the left edge to the value and a handle (tinted)
+	// at the value. Dragging, or Left/Right while focused, changes Value within [Min, Max] in steps of Step
+	// (0 = continuous).
+	struct UISliderComponent
+	{
+		bool Interactable = true;
+		float Value = 0.0f;
+		float Min = 0.0f;
+		float Max = 1.0f;
+		float Step = 0.0f;
+		glm::vec4 TrackColor = { 0.12f, 0.12f, 0.15f, 0.9f };
+		glm::vec4 FillColor = { 0.3f, 0.6f, 1.0f, 1.0f };
+		glm::vec4 HandleColor = { 1.0f, 1.0f, 1.0f, 1.0f };
+		// Canvas units; a handle wider than the rect shrinks to its width.
+		float HandleWidth = 24.0f;
+		glm::vec4 NormalTint = { 0.85f, 0.85f, 0.85f, 1.0f };
+		glm::vec4 HighlightTint = { 1.0f, 1.0f, 1.0f, 1.0f };
+		glm::vec4 PressedTint = { 0.65f, 0.65f, 0.65f, 1.0f };
+		glm::vec4 DisabledTint = { 0.5f, 0.5f, 0.5f, 0.5f };
+		UUID Target = 0;
+		std::string OnValueChanged = "OnValueChanged";
+
+		bool operator==(const UISliderComponent&) const = default;
+	};
+
+	// A check box with its label: a square box (tinted) as tall as the rect at its left edge, a check mark inside
+	// while Checked, and the entity's UIText laid out in the rest of the rect. Clicking anywhere in the rect toggles
+	// it.
+	struct UICheckboxComponent
+	{
+		bool Interactable = true;
+		bool Checked = false;
+		glm::vec4 BoxColor = { 0.12f, 0.12f, 0.15f, 0.9f };
+		glm::vec4 CheckColor = { 0.3f, 0.6f, 1.0f, 1.0f };
+		glm::vec4 NormalTint = { 0.85f, 0.85f, 0.85f, 1.0f };
+		glm::vec4 HighlightTint = { 1.0f, 1.0f, 1.0f, 1.0f };
+		glm::vec4 PressedTint = { 0.65f, 0.65f, 0.65f, 1.0f };
+		glm::vec4 DisabledTint = { 0.5f, 0.5f, 0.5f, 0.5f };
+		UUID Target = 0;
+		std::string OnValueChanged = "OnValueChanged";
+
+		bool operator==(const UICheckboxComponent&) const = default;
+	};
+
 	// Marks the root entity of a prefab instance and remembers the prefab it came from.
 	struct PrefabComponent
 	{
@@ -603,6 +668,9 @@ namespace Basalt {
 		UIRectComponent,
 		UIImageComponent,
 		UITextComponent,
+		UIButtonComponent,
+		UISliderComponent,
+		UICheckboxComponent,
 		PrefabComponent>;
 
 }

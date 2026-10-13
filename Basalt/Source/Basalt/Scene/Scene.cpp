@@ -12,6 +12,7 @@
 #include "Basalt/Scene/SceneSerializer.h"
 #include "Basalt/Scripting/ScriptEngine.h"
 #include "Basalt/UI/GameUI.h"
+#include "Basalt/UI/UIInteraction.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -459,6 +460,7 @@ namespace Basalt {
 		m_AudioSystem = CreateScope<AudioSystem>(this);
 		m_ParticleSystem = CreateScope<ParticleSystem>(this);
 		m_ScriptEngine = CreateScope<ScriptEngine>(this);
+		m_UIInteraction = CreateScope<UIInteraction>();
 
 		m_PhysicsWorld->Start();
 		m_AudioSystem->Start();
@@ -484,6 +486,7 @@ namespace Basalt {
 			m_ScriptEngine->Stop();
 		m_DeferDestruction--;
 		m_ScriptEngine.reset();
+		m_UIInteraction.reset();
 		m_ParticleSystem.reset();
 		m_AudioSystem.reset();
 		m_PhysicsWorld.reset();
@@ -540,7 +543,12 @@ namespace Basalt {
 
 		m_DeferDestruction++;
 		if (m_State == SceneState::Play)
-			m_ScriptEngine->Update(ts);
+		{
+			// Before the scripts: widget callbacks run before OnUpdate, and immediate-mode widgets drawn in
+			// OnUpdate read this frame's input.
+			m_UIInteraction->Update(*this, ts.GetSeconds());
+			m_ScriptEngine->Update(ts, m_UIInteraction->TakeEvents());
+		}
 		m_PhysicsWorld->Step(ts);
 		if (m_State == SceneState::Play)
 			m_ScriptEngine->LateUpdate(ts);

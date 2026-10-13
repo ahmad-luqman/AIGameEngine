@@ -173,6 +173,20 @@ Compares a PNG with a reference image within a tolerance; optionally writes a di
 
 ## input
 
+### `input.gamepad`
+
+Connects, disconnects or drives an injected gamepad for play mode (e.g. {index: 0, connected: true}, {button: 'A', down: true}, {axis: 'LeftX', value: -1}). A device poll never overrides an injected gamepad. Recorded while replay recording is on.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `axis` | string (LeftX, LeftY, RightX, RightY, LeftTrigger, RightTrigger) |
+| `button` | string (A, B, X, Y, LeftBumper, RightBumper, Back, Start, Guide, LeftThumb, RightThumb, DPadUp, DPadRight, DPadDown, DPadLeft) |
+| `connected` | bool |
+| `down` | bool (default true) |
+| `index` | integer 0-15 (default 0) |
+| `name` | string, the gamepad's name when connecting |
+| `value` | number: sticks -1..1 (+Y down), triggers 0..1 |
+
 ### `input.key`
 
 Sets a key's state for play mode (e.g. {key: 'Space', down: true}). Recorded while replay recording is on.
@@ -413,7 +427,7 @@ Compiles a Lua script in isolation and returns its Properties, or the error.
 
 ### `ui.layout`
 
-Lays out the current scene's UI components (the play copy while playing) for a viewport of width x height pixels: the canvas size, every visible UI entity's rect [x, y, width, height] in canvas units in draw order, and the problems that make UI draw differently than authored (an image that does not load and draws its Color, a font that does not load and falls back to the built-in one or has glyphs that draw blank).
+Lays out the current scene's UI components (the play copy while playing) for a viewport of width x height pixels: the canvas size, every visible UI entity's rect [x, y, width, height] in canvas units in draw order (widgets add their kind, values, target and, while playing, state and focus; headless, widgets take mouse input on the 1920x1080 canvas, where mouse positions are canvas units), and the problems that make UI draw differently than authored (an image that does not load and draws its Color, a font that does not load and falls back to the built-in one or has glyphs that draw blank).
 
 | Parameter | Type / description |
 |-----------|--------------------|

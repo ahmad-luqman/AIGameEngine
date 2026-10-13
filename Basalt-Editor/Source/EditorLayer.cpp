@@ -1019,6 +1019,17 @@ namespace Basalt {
 		if (m_Renderer && m_Renderer->GetOutputTexture())
 			ImGui::Image(ImTextureRef(reinterpret_cast<ImTextureID>(m_Renderer->GetOutputTexture())), available);
 		GameUI::SetViewportSize({ available.x, available.y });
+		GameUI::SetViewportOrigin({ cursor.x, cursor.y });
+		// The game's widgets take the mouse over the view and the keyboard and gamepads while it has focus. ImGui's
+		// own keyboard navigation would act on the toolbar at the same time (Space pressing Stop), so it is off
+		// while the game has the keyboard.
+		GameUI::SetPointerEnabled(m_ViewportHovered);
+		GameUI::SetNavigationEnabled(m_ViewportFocused);
+		ImGuiIO& io = ImGui::GetIO();
+		if (IsGameRunning() && m_ViewportFocused)
+			io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
+		else
+			io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 		m_UIFrame.Draw(ImGui::GetWindowDrawList(), { cursor.x, cursor.y }, { available.x, available.y });
 		if (m_ShowUIBounds && !IsGameRunning())
 			DrawUIBounds({ cursor.x, cursor.y }, { available.x, available.y });

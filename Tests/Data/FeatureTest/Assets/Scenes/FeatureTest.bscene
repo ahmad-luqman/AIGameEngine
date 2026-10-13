@@ -138,6 +138,26 @@
 			"UIText": { "Text": "Basalt feature test: UI components", "FontSize": 36, "HorizontalAlign": "Center", "VerticalAlign": "Middle" } } },
 		{ "ID": 205, "Name": "HiddenMenu", "Parent": 200, "Components": {
 			"UIRect": { "Visible": false, "AnchorMin": [0, 0], "AnchorMax": [1, 1] },
-			"UIImage": { "Color": [1, 0, 0, 1] } } }
+			"UIImage": { "Color": [1, 0, 0, 1] } } },
+		{ "ID": 206, "Name": "WidgetPanel", "Parent": 200, "Components": {
+			"UIRect": { "AnchorMin": [0, 0.5], "AnchorMax": [0, 0.5], "Pivot": [0, 0.5], "Size": [360, 260] },
+			"UIImage": { "Texture": "Assets/Textures/UIPanel.png", "Slice": [10, 10, 10, 10], "SliceScale": 2, "Color": [1, 1, 1, 0.9] } } },
+		{ "ID": 207, "Name": "PlayButton", "Parent": 206, "Components": {
+			"UIRect": { "AnchorMin": [0, 0], "AnchorMax": [0, 0], "Pivot": [0, 0], "Position": [20, 20], "Size": [320, 64] },
+			"UIImage": { "Color": [0.25, 0.45, 0.85, 1] },
+			"UIText": { "Text": "PLAY", "Font": "Assets/Fonts/Karla-Regular.ttf", "FontSize": 40, "HorizontalAlign": "Center", "VerticalAlign": "Middle", "Wrap": false },
+			"UIButton": { "Target": 100, "OnClick": "OnPlayClicked" } } },
+		{ "ID": 208, "Name": "VolumeSlider", "Parent": 206, "Components": {
+			"UIRect": { "AnchorMin": [0, 0], "AnchorMax": [0, 0], "Pivot": [0, 0], "Position": [20, 104], "Size": [320, 32] },
+			"UISlider": { "Value": 0.5, "Step": 0.1, "HandleWidth": 20, "Target": 100, "OnValueChanged": "OnSettingChanged" } } },
+		{ "ID": 209, "Name": "MusicCheckbox", "Parent": 206, "Components": {
+			"UIRect": { "AnchorMin": [0, 0], "AnchorMax": [0, 0], "Pivot": [0, 0], "Position": [20, 156], "Size": [320, 40] },
+			"UIText": { "Text": "Music", "Font": "Assets/Fonts/Karla-Regular.ttf", "FontSize": 32, "VerticalAlign": "Middle", "Wrap": false },
+			"UICheckbox": { "Target": 100, "OnValueChanged": "OnSettingChanged" } } },
+		{ "ID": 210, "Name": "DisabledButton", "Parent": 206, "Components": {
+			"UIRect": { "AnchorMin": [0, 0], "AnchorMax": [0, 0], "Pivot": [0, 0], "Position": [20, 208], "Size": [320, 36] },
+			"UIImage": { "Color": [0.9, 0.9, 0.9, 1] },
+			"UIText": { "Text": "LOCKED", "FontSize": 26, "HorizontalAlign": "Center", "VerticalAlign": "Middle", "Wrap": false },
+			"UIButton": { "Interactable": false, "OnClick": "" } } }
 	]
 }

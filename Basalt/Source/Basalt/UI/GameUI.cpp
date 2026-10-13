@@ -1,5 +1,8 @@
 #include "Basalt/UI/GameUI.h"
 
+#include "Basalt/Core/Input.h"
+#include "Basalt/UI/UIGeometry.h"
+
 #include <cmath>
 #include <mutex>
 
@@ -10,6 +13,9 @@ namespace Basalt {
 		std::mutex s_Mutex;
 		std::vector<UIDrawCommand> s_Commands;
 		glm::vec2 s_ViewportSize = { 1920.0f, 1080.0f };
+		glm::vec2 s_ViewportOrigin = { 0.0f, 0.0f };
+		bool s_PointerEnabled = true;
+		bool s_NavigationEnabled = true;
 
 	}
 
@@ -59,6 +65,52 @@ namespace Basalt {
 	{
 		std::scoped_lock lock(s_Mutex);
 		return s_ViewportSize;
+	}
+
+	void GameUI::SetViewportOrigin(const glm::vec2& origin)
+	{
+		std::scoped_lock lock(s_Mutex);
+		if (std::isfinite(origin.x) && std::isfinite(origin.y))
+			s_ViewportOrigin = origin;
+	}
+
+	glm::vec2 GameUI::GetViewportOrigin()
+	{
+		std::scoped_lock lock(s_Mutex);
+		return s_ViewportOrigin;
+	}
+
+	void GameUI::SetPointerEnabled(bool enabled)
+	{
+		std::scoped_lock lock(s_Mutex);
+		s_PointerEnabled = enabled;
+	}
+
+	bool GameUI::IsPointerEnabled()
+	{
+		std::scoped_lock lock(s_Mutex);
+		return s_PointerEnabled;
+	}
+
+	void GameUI::SetNavigationEnabled(bool enabled)
+	{
+		std::scoped_lock lock(s_Mutex);
+		s_NavigationEnabled = enabled;
+	}
+
+	bool GameUI::IsNavigationEnabled()
+	{
+		std::scoped_lock lock(s_Mutex);
+		return s_NavigationEnabled;
+	}
+
+	std::optional<glm::vec2> GameUI::GetPointerPosition()
+	{
+		const glm::vec2 mouse = Input::GetMousePosition();
+		std::scoped_lock lock(s_Mutex);
+		if (!s_PointerEnabled)
+			return std::nullopt;
+		return UICanvasMapping::ForViewport(s_ViewportOrigin, s_ViewportSize).ToCanvas(mouse);
 	}
 
 }

@@ -36,6 +36,9 @@ namespace Basalt {
 				{ "Particle Emitter", "Particle Emitter", { { "ParticleEmitter", nlohmann::json::object() } } },
 				{ "UI Panel", "Panel", { { "UIRect", nlohmann::json::object() }, { "UIImage", { { "Color", { 0.0, 0.0, 0.0, 0.5 } } } } } },
 				{ "UI Text", "Text", { { "UIRect", nlohmann::json::object() }, { "UIText", nlohmann::json::object() } } },
+				{ "UI Button", "Button", { { "UIRect", { { "Size", { 240, 64 } } } }, { "UIImage", { { "Color", { 0.2, 0.24, 0.32, 0.95 } } } }, { "UIText", { { "Text", "Button" }, { "HorizontalAlign", "Center" }, { "VerticalAlign", "Middle" } } }, { "UIButton", nlohmann::json::object() } } },
+				{ "UI Slider", "Slider", { { "UIRect", { { "Size", { 320, 32 } } } }, { "UISlider", nlohmann::json::object() } } },
+				{ "UI Checkbox", "Checkbox", { { "UIRect", { { "Size", { 320, 40 } } } }, { "UIText", { { "Text", "Checkbox" }, { "VerticalAlign", "Middle" }, { "Wrap", false } } }, { "UICheckbox", nlohmann::json::object() } } },
 			};
 			return s_Options;
 		}

@@ -3,6 +3,7 @@
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Scene/Scene.h"
+#include "Basalt/UI/UIInteraction.h"
 #include "Basalt/UI/UIRules.h"
 
 #include <algorithm>
@@ -15,7 +16,7 @@ namespace Basalt {
 
 		bool HasUIComponent(Entity entity)
 		{
-			return entity.HasComponent<UIRectComponent>() || entity.HasComponent<UIImageComponent>() || entity.HasComponent<UITextComponent>();
+			return entity.HasComponent<UIRectComponent>() || entity.HasComponent<UIImageComponent>() || entity.HasComponent<UITextComponent>() || UILayout::CountWidgetComponents(entity) > 0;
 		}
 
 		// Reported repairs, bounded so a long session with many broken entities cannot grow it without end.
@@ -88,9 +89,27 @@ namespace Basalt {
 			}
 		}
 
-		// The draw commands of one laid-out entity: its image, then its text.
-		void AppendCommands(const UILayoutItem& item, std::vector<UIDrawCommand>& out)
+		// The state a widget is drawn in.
+		template<typename T>
+		UIWidgetState WidgetState(const UIInteraction* interaction, Entity entity, const T& widget)
 		{
+			if (!interaction)
+				return widget.Interactable ? UIWidgetState::Normal : UIWidgetState::Disabled;
+			return interaction->GetState(UIWidgetID::ForEntity(entity.GetUUID()), widget.Interactable);
+		}
+
+		// The draw commands of one laid-out entity: its image (tinted by a button), its slider or checkbox, then its
+		// text (beside a checkbox's box).
+		void AppendCommands(const UILayoutItem& item, const UIInteraction* interaction, std::vector<UIDrawCommand>& out)
+		{
+			const Entity entity = item.Owner;
+			const std::optional<UIWidgetKind> widget = UILayout::GetWidgetKind(entity);
+			glm::vec4 imageTint = { 1.0f, 1.0f, 1.0f, 1.0f };
+			if (widget == UIWidgetKind::Button)
+			{
+				const UIButtonComponent button = Repaired(entity, entity.GetComponent<UIButtonComponent>(), &SanitizeUIButton, &ValidateUIButton, "UIButton");
+				imageTint = UIWidgetTints::Of(button).For(WidgetState(interaction, entity, button));
+			}
 			if (const auto* component = item.Owner.TryGetComponent<UIImageComponent>())
 			{
 				const UIImageComponent image = Repaired(item.Owner, *component, &SanitizeUIImage, &ValidateUIImage, "UIImage");
@@ -98,18 +117,32 @@ namespace Basalt {
 				command.Kind = UIDrawKind::Image;
 				command.Position = item.Rect.Min;
 				command.Size = item.Rect.Size;
-				command.Color = image.Color;
+				command.Color = image.Color * imageTint;
 				command.Texture = image.Texture;
 				command.Slice = image.Slice;
 				command.SliceScale = image.SliceScale;
+			}
+			UIBox textRect = item.Rect;
+			if (widget == UIWidgetKind::Slider)
+			{
+				const UISliderComponent slider = Repaired(entity, entity.GetComponent<UISliderComponent>(), &SanitizeUISlider, &ValidateUISlider, "UISlider");
+				const glm::vec4 tint = UIWidgetTints::Of(slider).For(WidgetState(interaction, entity, slider));
+				UIWidgets::AppendSlider(item.Rect, UIWidgets::SliderFraction(slider.Value, slider.Min, slider.Max), slider.HandleWidth, slider.TrackColor, slider.FillColor, slider.HandleColor * tint, out);
+			}
+			else if (widget == UIWidgetKind::Checkbox)
+			{
+				const UICheckboxComponent checkbox = Repaired(entity, entity.GetComponent<UICheckboxComponent>(), &SanitizeUICheckbox, &ValidateUICheckbox, "UICheckbox");
+				const glm::vec4 tint = UIWidgetTints::Of(checkbox).For(WidgetState(interaction, entity, checkbox));
+				UIWidgets::AppendCheckbox(item.Rect, checkbox.Checked, checkbox.BoxColor * tint, checkbox.CheckColor, out);
+				textRect = UIWidgets::CheckboxLabelBox(item.Rect);
 			}
 			if (const auto* component = item.Owner.TryGetComponent<UITextComponent>())
 			{
 				const UITextComponent text = Repaired(item.Owner, *component, &SanitizeUIText, &ValidateUIText, "UIText");
 				UIDrawCommand& command = out.emplace_back();
 				command.Kind = UIDrawKind::Text;
-				command.Position = item.Rect.Min;
-				command.Size = item.Rect.Size;
+				command.Position = textRect.Min;
+				command.Size = textRect.Size;
 				command.Color = text.Color;
 				command.Text = text.Text;
 				command.Font = text.Font;
@@ -134,7 +167,7 @@ namespace Basalt {
 
 	bool UILayout::HasUI(Scene& scene)
 	{
-		return !scene.GetAllEntitiesWith<UIRectComponent>().empty() || !scene.GetAllEntitiesWith<UIImageComponent>().empty() || !scene.GetAllEntitiesWith<UITextComponent>().empty();
+		return !scene.GetAllEntitiesWith<UIRectComponent>().empty() || !scene.GetAllEntitiesWith<UIImageComponent>().empty() || !scene.GetAllEntitiesWith<UITextComponent>().empty() || !scene.GetAllEntitiesWith<UIButtonComponent>().empty() || !scene.GetAllEntitiesWith<UISliderComponent>().empty() || !scene.GetAllEntitiesWith<UICheckboxComponent>().empty();
 	}
 
 	std::vector<UILayoutItem> UILayout::Layout(Scene& scene, const glm::vec2& canvasSize)
@@ -150,8 +183,9 @@ namespace Basalt {
 
 	void UILayout::BuildCommands(Scene& scene, const glm::vec2& canvasSize, std::vector<UIDrawCommand>& out)
 	{
+		const UIInteraction* interaction = scene.GetUIInteraction();
 		for (const UILayoutItem& item : Layout(scene, canvasSize))
-			AppendCommands(item, out);
+			AppendCommands(item, interaction, out);
 	}
 
 	std::optional<UIBox> UILayout::GetRect(Scene& scene, Entity entity, const glm::vec2& canvasSize)
@@ -177,6 +211,22 @@ namespace Basalt {
 		for (Entity ancestor : GetAncestors(entity))
 			rect = RectInParent(ancestor, rect);
 		return rect;
+	}
+
+	std::optional<UIWidgetKind> UILayout::GetWidgetKind(Entity entity)
+	{
+		if (entity.HasComponent<UIButtonComponent>())
+			return UIWidgetKind::Button;
+		if (entity.HasComponent<UISliderComponent>())
+			return UIWidgetKind::Slider;
+		if (entity.HasComponent<UICheckboxComponent>())
+			return UIWidgetKind::Checkbox;
+		return std::nullopt;
+	}
+
+	int UILayout::CountWidgetComponents(Entity entity)
+	{
+		return (entity.HasComponent<UIButtonComponent>() ? 1 : 0) + (entity.HasComponent<UISliderComponent>() ? 1 : 0) + (entity.HasComponent<UICheckboxComponent>() ? 1 : 0);
 	}
 
 }

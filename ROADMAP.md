@@ -99,9 +99,6 @@ The features most games need, roughly in order of impact.
 
 ### Input
 
-- **Gamepads — S.** GLFW already provides the SDL gamepad mapping database; expose
-  `Input.IsGamepadButtonDown(index, button)`, `Input.GetGamepadAxis(index, axis)`, and connection
-  events. Add `input.gamepad` to the automation API so tests can drive it.
 - **Action mapping — M.** Named actions and axes (`"Jump"`, `"MoveX"`) bound to keys, mouse and gamepad
   in a project-level `Input.binput` file, read with `Input.GetAction("Jump")`. Lets players rebind
   controls without script changes.
@@ -120,13 +117,12 @@ The features most games need, roughly in order of impact.
 
 ### Game UI
 
-- **Interactive widgets — M.** Button, slider and checkbox components (with `OnClick`/`OnValueChanged`
-  script callbacks) plus matching immediate-mode `UI.Button`/`UI.Slider`/`UI.Checkbox`, with
-  keyboard/gamepad navigation. Needed for menus and settings screens. Build them on the UI components
-  (`Basalt/Source/Basalt/UI`): `UILayout` already gives every rect for hit testing.
 - **UI follow-ups — S.** Text measuring from Lua (`UI.MeasureText`), clipping a subtree to its rect (scroll
   lists), rotation and scale of UI rects, sprite sheets (UV rects) for `UIImage`, editor handles to drag
   and resize rects in the viewport.
+- **More widgets — M.** Text input fields, dropdowns and scroll views; vertical sliders; explicit navigation
+  neighbours (overriding the nearest-widget rule); panels that block pointer input to the widgets below them;
+  a focus ring that only shows after keyboard/gamepad use.
 
 ---
 
