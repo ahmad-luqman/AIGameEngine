@@ -434,6 +434,11 @@ namespace Basalt {
 		DebugDraw::Clear();
 		for (size_t i = 0; i + 1 < pending.size(); i += 2)
 			DebugDraw::Line(pending[i].Position, pending[i + 1].Position, pending[i].Color);
+		if (m_CaptureRenderer->GetStatistics().Failed)
+		{
+			outError = "capture render failed; see the renderer error in the log";
+			return false;
+		}
 		if (m_DebugView == RendererDebugView::None)
 			DrawGameUIOverCapture(scene, width, height);
 		return SaveScreenshot(*m_CaptureRenderer, path, outError);
