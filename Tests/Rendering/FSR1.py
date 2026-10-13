@@ -19,7 +19,7 @@ def main():
     source = Path(__file__).resolve().parents[1] / 'Data/FeatureTest'
     # The render fixture is static, unlike the gameplay scene, so different frame counts compare exactly.
     fixture = json.loads((source / 'Assets/Scenes/RenderTest.bscene').read_text())
-    # SSAO's normalized noise sampling itself differs for odd backing sizes. Isolate EASU here;
+    # SSAO's normalized sampling is not bit-exact across odd backing sizes. Isolate EASU here;
     # the even-size pair below covers the complete SSAO -> tonemap -> FSR path.
     fixture['Renderer']['SSAOEnabled'] = False
 
