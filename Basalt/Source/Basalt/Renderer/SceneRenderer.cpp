@@ -774,9 +774,9 @@ namespace Basalt {
 	float SceneRenderer::GetDynamicResolutionMilliseconds(const GpuFrameSample& sample)
 	{
 		// The environment bake runs once per sky change and uploads follow asset streaming; no resolution would
-		// absorb either (a first frame full of uploads would otherwise drop to the minimum). The fixed
-		// cluster grid also costs the same at every render scale.
-		return sample.MillisecondsWithout({ PassEnvironment, PassUploads, PassClusters });
+		// absorb either (a first frame full of uploads would otherwise drop to the minimum). Recurring
+		// work, including the fixed cluster grid, must still fit within the requested frame budget.
+		return sample.MillisecondsWithout({ PassEnvironment, PassUploads });
 	}
 
 	void SceneRenderer::ReportDynamicResolutionState()
