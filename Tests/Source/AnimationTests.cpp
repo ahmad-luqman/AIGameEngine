@@ -261,6 +261,49 @@ TEST_SUITE("Animation")
 		CHECK(source->Skins[0].InverseBindMatrices[1] == glm::mat4(1));
 	}
 
+	TEST_CASE("Zero-scale node matrices preserve authored transforms in animated and static imports")
+	{
+		TempDirectory directory("ZeroScaleMatrix");
+		for (bool animated : { false, true })
+			for (const auto& scale : { glm::vec3(0, 2, 3), glm::vec3(2, 0, 3), glm::vec3(2, 3, 0), glm::vec3(0, 0, 3), glm::vec3(0, 2, 0), glm::vec3(2, 0, 0), glm::vec3(0), glm::vec3(-2, 3, 4), glm::vec3(1e-21f) })
+			{
+				INFO("animated=" << animated << " scale=" << scale.x << "," << scale.y << "," << scale.z);
+				auto data = FixtureJson();
+				const auto matrix = Math::ComposeTransform({ 4, 5, 6 }, glm::quat(glm::radians(glm::vec3(30, 50, 80))), scale);
+				nlohmann::json values = nlohmann::json::array();
+				for (int c = 0; c < 4; c++)
+					for (int r = 0; r < 4; r++)
+						values.push_back(matrix[c][r]);
+				data["nodes"][1].erase("translation");
+				data["nodes"][1]["matrix"] = values;
+				if (!animated)
+				{
+					data.erase("animations");
+					data.erase("skins");
+					data["nodes"][1].erase("skin");
+				}
+				const auto path = directory.GetPath() / "Model.gltf";
+				REQUIRE(FileSystem::WriteTextFile(path, data.dump()));
+				std::string error;
+				const auto source = MeshImporter::LoadGltf(path, path.string(), error);
+				REQUIRE_MESSAGE(source, error);
+				std::vector<glm::mat4> globals;
+				REQUIRE(EvaluateAnimation(*source, nullptr, 0, globals));
+				for (int c = 0; c < 4; c++)
+					CHECK(globals[1][c] == matrix[c]);
+				if (!animated)
+				{
+					Scene scene;
+					MeshImporter::InstantiateHierarchy(scene, *source, "Model", {});
+					const auto mesh = scene.FindEntityByName("Mesh");
+					REQUIRE(mesh);
+					const auto world = scene.GetWorldTransform(mesh);
+					for (int c = 0; c < 4; c++)
+						CHECK(glm::all(glm::epsilonEqual(world[c], matrix[c], 1e-5f)));
+				}
+			}
+	}
+
 	TEST_CASE("Normalized byte and short weights and sparse weight accessors preserve influences")
 	{
 		TempDirectory directory("WeightAccessors");
