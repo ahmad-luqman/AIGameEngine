@@ -201,7 +201,8 @@ TEST_CASE("FSR 1 clamps every tap to the active area including degenerate dimens
 	SceneRenderer resized(device, rendererSpec);
 	REQUIRE(resized.Initialize());
 	auto readScene = [&](SceneRenderer& renderer, glm::uvec2 size, float scale, bool dynamic) {
-		renderer.SetDynamicResolution({ dynamic, 60.0f, 0.25f });
+		// Force scale feedback to arrive even on fast GPUs; the comparison below follows the actual area.
+		renderer.SetDynamicResolution({ dynamic, 1000000.0f, 0.25f });
 		renderer.SetRenderScale(scale);
 		renderer.SetViewportSize(size.x, size.y);
 		renderer.Render(scene, camera);
@@ -216,6 +217,7 @@ TEST_CASE("FSR 1 clamps every tap to the active area including degenerate dimens
 		CHECK(height == size.y);
 		return pixels;
 	};
+	bool sawDynamicReduction = false;
 	for (const glm::uvec2 size : { glm::uvec2(64, 64), { 83, 47 }, { 31, 51 } })
 		for (const float scale : { 0.5f, 0.75f })
 		{
@@ -223,13 +225,21 @@ TEST_CASE("FSR 1 clamps every tap to the active area including degenerate dimens
 			REQUIRE(fresh.Initialize());
 			const auto expected = readScene(fresh, size, scale, false);
 			CHECK((readScene(resized, size, scale, false) == expected));
-			CHECK((readScene(resized, size, scale, true) == expected));
+			const auto dynamicImage = readScene(resized, size, scale, true);
+			const float actualScale = resized.GetCurrentRenderScale();
+			sawDynamicReduction |= actualScale < scale;
+			// A software GPU may already have lowered the active scale from earlier timer samples.
+			// Compare the larger dynamic allocation against a fresh renderer at that exact render area.
+			CHECK((dynamicImage == readScene(fresh, size, actualScale, false)));
+			CHECK(resized.GetRenderWidth() == fresh.GetRenderWidth());
+			CHECK(resized.GetRenderHeight() == fresh.GetRenderHeight());
 			scene.GetRendererSettings().FSR1Enabled = false;
 			resized.Render(scene, camera);
 			CHECK_FALSE(resized.GetStatistics().FSR1Active);
 			scene.GetRendererSettings().FSR1Enabled = true;
 			CHECK((readScene(resized, size, scale, false) == expected));
 		}
+	CHECK(sawDynamicReduction);
 	graphics->WaitIdle();
 	CHECK(graphics->GetValidationErrorCount() == 0);
 }

@@ -144,15 +144,6 @@ namespace Basalt {
 		};
 		static_assert(sizeof(GpuMaterialData) == 48);
 
-		struct GpuLightData
-		{
-			glm::vec4 Position;
-			glm::vec4 Color;
-			glm::vec4 Direction;
-			glm::vec4 Params;
-		};
-		static_assert(sizeof(GpuLightData) == 64);
-
 		struct GpuSSAOConstants
 		{
 			glm::mat4 Projection;
@@ -471,6 +462,8 @@ namespace Basalt {
 		impl.ShadowMaskedInputLayout = device->createInputLayout(maskedShadowAttributes, 2, impl.ShadowMaskedVS);
 
 		// --- Binding layouts ----------------------------------------------------------------------
+		// Light records and cluster lists share slot 3: keep this frame layout at four storage buffers,
+		// the Vulkan core minimum per shader stage.
 		nvrhi::BindingLayoutDesc frameDesc = MakeLayout(0, nvrhi::ShaderType::All);
 		frameDesc.bindings = {
 			nvrhi::BindingLayoutItem::PushConstants(PushConstantSlot, sizeof(DrawPush)),
@@ -489,8 +482,6 @@ namespace Basalt {
 			nvrhi::BindingLayoutItem::Texture_SRV(12),
 			nvrhi::BindingLayoutItem::Texture_SRV(13),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(14),
-			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(15),
-			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(16),
 		};
 		impl.FrameLayout = device->createBindingLayout(frameDesc);
 		// Shadow passes must not bind the depth textures they write as SRVs. In particular, switching
@@ -603,12 +594,12 @@ namespace Basalt {
 
 		impl.DrawBuffer = EnsureStructuredBuffer(device, nullptr, sizeof(GpuDrawData) * 256, sizeof(GpuDrawData), "DrawBuffer");
 		impl.MaterialBuffer = EnsureStructuredBuffer(device, nullptr, sizeof(GpuMaterialData) * 256, sizeof(GpuMaterialData), "MaterialBuffer");
-		impl.LightBuffer = EnsureStructuredBuffer(device, nullptr, sizeof(GpuLightData) * MaxLights, sizeof(GpuLightData), "LightBuffer");
-		if (!impl.LightBuffer || !impl.Clusters.Initialize(device, impl.LightBuffer))
+		if (!impl.Clusters.Initialize(device))
 		{
 			BS_CORE_ERROR("SceneRenderer: failed to initialize clustered lighting");
 			return false;
 		}
+		impl.LightBuffer = impl.Clusters.GetBuffer();
 
 		nvrhi::TextureDesc shadowDesc;
 		shadowDesc.width = ShadowMapSize;
@@ -1628,9 +1619,7 @@ namespace Basalt {
 														   .addItem(nvrhi::BindingSetItem::Sampler(11, impl.PointClamp))
 														   .addItem(nvrhi::BindingSetItem::Texture_SRV(12, impl.Env.Cube, nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::TextureCube))
 														   .addItem(nvrhi::BindingSetItem::Texture_SRV(13, impl.LocalShadowAtlas))
-														   .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(14, impl.LocalShadowBuffer))
-														   .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(15, impl.Clusters.GetCounts()))
-														   .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(16, impl.Clusters.GetIndices())),
+														   .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(14, impl.LocalShadowBuffer)),
 													   impl.FrameLayout);
 			impl.ShadowFrameSet = m_Device->createBindingSet(commonFrameDesc
 																 .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(14, impl.LocalShadowBuffer)),
