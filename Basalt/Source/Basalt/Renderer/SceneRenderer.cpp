@@ -1,5 +1,7 @@
 #include "Basalt/Renderer/SceneRenderer.h"
 
+#include "Basalt/Animation/AnimationPose.h"
+#include "Basalt/Animation/AnimationSystem.h"
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Log.h"
@@ -455,11 +457,14 @@ namespace Basalt {
 			nvrhi::VertexAttributeDesc().setName("NORMAL").setFormat(nvrhi::Format::RGB32_FLOAT).setOffset(offsetof(Vertex, Normal)).setElementStride(sizeof(Vertex)),
 			nvrhi::VertexAttributeDesc().setName("TANGENT").setFormat(nvrhi::Format::RGBA32_FLOAT).setOffset(offsetof(Vertex, Tangent)).setElementStride(sizeof(Vertex)),
 			nvrhi::VertexAttributeDesc().setName("TEXCOORD").setFormat(nvrhi::Format::RG32_FLOAT).setOffset(offsetof(Vertex, TexCoord)).setElementStride(sizeof(Vertex)),
+			nvrhi::VertexAttributeDesc().setName("JOINTS").setFormat(nvrhi::Format::RGBA32_UINT).setOffset(offsetof(Vertex, Joints)).setElementStride(sizeof(Vertex)),
+			nvrhi::VertexAttributeDesc().setName("WEIGHTS").setFormat(nvrhi::Format::RGBA32_FLOAT).setOffset(offsetof(Vertex, Weights)).setElementStride(sizeof(Vertex)),
 		};
-		impl.MeshInputLayout = device->createInputLayout(meshAttributes, 4, impl.MeshVS);
-		impl.ShadowInputLayout = device->createInputLayout(meshAttributes, 1, impl.ShadowVS);
-		const nvrhi::VertexAttributeDesc maskedShadowAttributes[] = { meshAttributes[0], meshAttributes[3] };
-		impl.ShadowMaskedInputLayout = device->createInputLayout(maskedShadowAttributes, 2, impl.ShadowMaskedVS);
+		impl.MeshInputLayout = device->createInputLayout(meshAttributes, 6, impl.MeshVS);
+		const nvrhi::VertexAttributeDesc shadowAttributes[] = { meshAttributes[0], meshAttributes[4], meshAttributes[5] };
+		impl.ShadowInputLayout = device->createInputLayout(shadowAttributes, 3, impl.ShadowVS);
+		const nvrhi::VertexAttributeDesc maskedShadowAttributes[] = { meshAttributes[0], meshAttributes[3], meshAttributes[4], meshAttributes[5] };
+		impl.ShadowMaskedInputLayout = device->createInputLayout(maskedShadowAttributes, 4, impl.ShadowMaskedVS);
 
 		// --- Binding layouts ----------------------------------------------------------------------
 		// Light records and cluster lists share slot 3: keep this frame layout at four storage buffers,
@@ -1424,31 +1429,30 @@ namespace Basalt {
 		};
 
 		const glm::vec3 cameraForward = -glm::vec3(view.InverseView[2]);
-		auto meshView = scene.GetAllEntitiesWith<MeshComponent>();
-		for (entt::entity handle : meshView)
-		{
-			Entity entity(handle, &scene);
-			const auto& meshComponent = meshView.get<MeshComponent>(handle);
-			Ref<MeshSource> source = AssetManager::GetMesh(meshComponent.Mesh);
-			if (!source || meshComponent.MeshIndex >= source->Meshes.size())
-				continue;
+		auto addMesh = [&](Entity entity, const Ref<MeshSource>& source, uint32_t meshIndex, const glm::mat4& model, bool castShadows, const std::vector<glm::mat4>& palette) {
+			if (!source || meshIndex >= source->Meshes.size())
+				return;
 			const GpuMesh* gpuMesh = m_Resources->GetMesh(source, commandList);
 			if (!gpuMesh)
-				continue;
+				return;
+			// Palettes share the draw SSBO, preserving Vulkan's minimum storage-buffer descriptor budget.
+			const uint32_t paletteOffset = static_cast<uint32_t>(draws.size());
+			for (const auto& joint : palette)
+				draws.push_back({ joint, glm::mat4(1), glm::uvec4(0) });
 
-			const glm::mat4 model = scene.GetWorldTransform(entity);
 			const glm::mat4 normalMatrix = glm::transpose(glm::inverse(model));
 			const auto* materialOverride = entity.TryGetComponent<MaterialComponent>();
 
-			for (uint32_t submeshIndex : source->Meshes[meshComponent.MeshIndex].Submeshes)
+			for (uint32_t submeshIndex : source->Meshes[meshIndex].Submeshes)
 			{
 				const Submesh& submesh = source->Submeshes[submeshIndex];
-				const AABB worldBounds = submesh.Bounds.Transformed(model);
+				const AABB bounds = palette.empty() ? submesh.Bounds : SkinBounds(*source, submesh, palette);
+				const AABB worldBounds = bounds.Transformed(model);
 				const bool visible = frustum.Intersects(worldBounds);
 				auto intersectsAny = [&](const std::vector<Frustum>& frusta) {
 					return std::any_of(frusta.begin(), frusta.end(), [&](const Frustum& f) { return f.Intersects(worldBounds); });
 				};
-				const bool castsShadow = meshComponent.CastShadows && (intersectsAny(cascadeFrusta) || intersectsAny(localShadowFrusta));
+				const bool castsShadow = castShadows && (intersectsAny(cascadeFrusta) || intersectsAny(localShadowFrusta));
 				if (!visible && !castsShadow)
 				{
 					m_Statistics.CulledSubmeshes++;
@@ -1493,7 +1497,7 @@ namespace Basalt {
 				const uint32_t materialIndex = static_cast<uint32_t>(materials.size());
 				materials.push_back(material);
 				const uint32_t drawIndex = static_cast<uint32_t>(draws.size());
-				draws.push_back({ model, normalMatrix, glm::uvec4(materialIndex, 0, 0, 0) });
+				draws.push_back({ model, normalMatrix, glm::uvec4(materialIndex, 0, paletteOffset, static_cast<uint32_t>(palette.size())) });
 
 				DrawItem item;
 				item.Mesh = gpuMesh;
@@ -1510,6 +1514,39 @@ namespace Basalt {
 				item.ViewDepth = visible ? glm::dot(worldBounds.GetCenter() - camera.Position, cameraForward) : -1.0f;
 				item.WorldBounds = visible ? worldBounds : AABB{};
 				items.push_back(item);
+			}
+		};
+		for (auto handle : scene.GetAllEntitiesWith<MeshComponent>())
+		{
+			Entity entity(handle, &scene);
+			const auto& component = entity.GetComponent<MeshComponent>();
+			addMesh(entity, AssetManager::GetMesh(component.Mesh), component.MeshIndex, scene.GetWorldTransform(entity), component.CastShadows, {});
+		}
+		for (auto handle : scene.GetAllEntitiesWith<AnimatorComponent>())
+		{
+			Entity entity(handle, &scene);
+			const auto& component = entity.GetComponent<AnimatorComponent>();
+			const auto source = AssetManager::GetMesh(component.Mesh);
+			if (!source)
+				continue;
+			std::vector<glm::mat4> rest;
+			const std::vector<glm::mat4>* globals = scene.GetAnimationSystem() ? scene.GetAnimationSystem()->GetPose(entity) : nullptr;
+			if (!globals)
+			{
+				if (!EvaluateAnimation(*source, nullptr, 0, rest))
+					continue;
+				globals = &rest;
+			}
+			const glm::mat4 root = scene.GetWorldTransform(entity);
+			for (size_t i = 0; i < source->Nodes.size(); i++)
+			{
+				const auto& node = source->Nodes[i];
+				if (!node.Active || node.MeshIndex < 0)
+					continue;
+				const auto palette = node.SkinIndex >= 0 ? BuildSkinPalette(source->Skins[node.SkinIndex], *globals) : std::vector<glm::mat4>{};
+				if (node.SkinIndex >= 0 && palette.empty())
+					continue;
+				addMesh(entity, source, static_cast<uint32_t>(node.MeshIndex), palette.empty() ? root * (*globals)[i] : root, component.CastShadows, palette);
 			}
 		}
 		m_Statistics.Materials = static_cast<uint32_t>(materials.size());
@@ -1591,6 +1628,13 @@ namespace Basalt {
 		const nvrhi::BufferHandle previousMaterials = impl.MaterialBuffer;
 		impl.DrawBuffer = EnsureStructuredBuffer(m_Device, impl.DrawBuffer, draws.size() * sizeof(GpuDrawData), sizeof(GpuDrawData), "DrawBuffer");
 		impl.MaterialBuffer = EnsureStructuredBuffer(m_Device, impl.MaterialBuffer, materials.size() * sizeof(GpuMaterialData), sizeof(GpuMaterialData), "MaterialBuffer");
+		if (!impl.DrawBuffer || !impl.MaterialBuffer)
+		{
+			BS_CORE_ERROR("SceneRenderer: failed to allocate draw/palette or material buffer");
+			uploadsPass.reset();
+			abortFrame();
+			return;
+		}
 		if (impl.DrawBuffer != previousDraws || impl.MaterialBuffer != previousMaterials)
 			impl.FrameSetDirty = true;
 		commandList->writeBuffer(impl.DrawBuffer, draws.data(), draws.size() * sizeof(GpuDrawData));

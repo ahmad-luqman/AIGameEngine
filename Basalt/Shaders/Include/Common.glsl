@@ -44,7 +44,7 @@ struct DrawData
 {
 	mat4 Model;
 	mat4 Normal;          // inverse-transpose of Model (upper 3x3 used)
-	uvec4 Indices;        // x: material index
+	uvec4 Indices;        // x: material index; zw: joint palette offset/count (0 count = rigid)
 };
 
 layout(std430, set = 0, binding = 1) readonly buffer DrawBuffer

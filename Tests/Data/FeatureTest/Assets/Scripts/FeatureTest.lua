@@ -151,7 +151,7 @@ local function TestEntities(self)
 	ExpectError("SetComponent on missing component", function() probe:SetComponent("Camera", {}) end, "no Camera")
 
 	-- Every component type round-trips through Lua.
-	for _, name in ipairs({ "Camera", "Mesh", "Material", "DirectionalLight", "PointLight", "SpotLight", "SkyLight", "RigidBody",
+	for _, name in ipairs({ "Camera", "Mesh", "Animator", "Material", "DirectionalLight", "PointLight", "SpotLight", "SkyLight", "RigidBody",
 		"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "AudioSource", "AudioListener", "ParticleEmitter", "UIRect", "UIImage", "UIText", "UIButton", "UISlider", "UICheckbox", "Prefab" }) do
 		local holder = Scene.CreateEntity("Holder" .. name)
 		Expect("AddComponent " .. name, function() holder:AddComponent(name) end)
@@ -159,6 +159,24 @@ local function TestEntities(self)
 		Expect("SetComponent round trip " .. name, function() holder:SetComponent(name, data) end)
 		holder:Destroy()
 	end
+
+	local rig = Scene.FindEntityByName("AnimationRig")
+	Check("GetAnimationClips", #rig:GetAnimationClips() == 3)
+	Check("GetAnimationDuration", rig:GetAnimationDuration() == 2)
+	Check("IsAnimationPlaying", rig:IsAnimationPlaying())
+	rig:PauseAnimation()
+	Check("PauseAnimation", not rig:IsAnimationPlaying())
+	Check("SetAnimationTime", rig:SetAnimationTime(1))
+	Check("GetAnimationTime", rig:GetAnimationTime() == 1)
+	rig:StopAnimation()
+	Check("StopAnimation", not rig:IsAnimationPlaying() and rig:GetAnimationTime() == 0)
+	Check("PlayAnimation", rig:PlayAnimation("Bend"))
+	Check("CrossFadeAnimation", rig:CrossFadeAnimation("Step", .5))
+	Check("BlendAnimations", rig:BlendAnimations("Bend", "Cubic", .5))
+	Check("Animation missing clip", not rig:PlayAnimation("Missing"))
+	Check("Animation bad time", not rig:SetAnimationTime(-1))
+	ExpectError("Animation pause type", function() rig:PauseAnimation(1) end, "paused must be")
+	ExpectError("Animation speed validation", function() rig:SetComponent("Animator", { Speed = -1 }) end, "Speed must be")
 
 	-- Other scripts.
 	local spinner = Scene.FindEntityByName("Turntable"):GetScript()

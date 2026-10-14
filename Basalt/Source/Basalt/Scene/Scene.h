@@ -24,6 +24,7 @@ namespace Basalt {
 	class ScriptEngine;
 	class AudioSystem;
 	class ParticleSystem;
+	class AnimationSystem;
 	class UIInteraction;
 
 	enum class Tonemapper
@@ -200,6 +201,7 @@ namespace Basalt {
 		PhysicsWorld* GetPhysicsWorld() const { return m_PhysicsWorld.get(); }
 		ScriptEngine* GetScriptEngine() const { return m_ScriptEngine.get(); }
 		AudioSystem* GetAudioSystem() const { return m_AudioSystem.get(); }
+		AnimationSystem* GetAnimationSystem() const { return m_AnimationSystem.get(); }
 		ParticleSystem* GetParticleSystem() const { return m_ParticleSystem.get(); }
 		// The widgets' pointer, keyboard and gamepad state; only while playing.
 		UIInteraction* GetUIInteraction() const { return m_UIInteraction.get(); }
@@ -271,6 +273,7 @@ namespace Basalt {
 		Scope<ScriptEngine> m_ScriptEngine;
 		Scope<AudioSystem> m_AudioSystem;
 		Scope<ParticleSystem> m_ParticleSystem;
+		Scope<AnimationSystem> m_AnimationSystem;
 		Scope<UIInteraction> m_UIInteraction;
 
 		friend class Entity;

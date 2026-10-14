@@ -65,9 +65,6 @@ The features most games need, roughly in order of impact.
   vectors from the depth prepass, history reprojection with neighbourhood clamping), which also
   stabilizes SSAO and specular shimmer. Builds on FXAA from P2's post-process item. MSAA is an option for
   the forward pass but complicates the SSAO prepass.
-- **Skinned meshes and animation — L.** Import glTF skins and animations (cgltf already parses them),
-  skin on the GPU in a compute pass or in `Mesh.vert`, and add an `AnimatorComponent` with play, blend
-  and crossfade from Lua. Extend the importer test with Khronos `CesiumMan`/`Fox` sample assets.
 - **glTF extensions — M.** `KHR_texture_transform`, `KHR_materials_emissive_strength`,
   `KHR_materials_clearcoat`, `KHR_materials_transmission` (via the transparent pass),
   `KHR_mesh_quantization`, `KHR_texture_basisu`. Unknown required extensions should fail the import with

@@ -2,6 +2,7 @@
 
 #include "Panels/JsonWidgets.h"
 
+#include "Basalt/Animation/AnimationPose.h"
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Core/Application.h"
 #include "Basalt/Core/Input.h"
@@ -518,11 +519,11 @@ namespace Basalt {
 		if (!entity)
 			return;
 		const glm::mat4 world = scene.GetWorldTransform(entity);
-		AABB bounds;
+		AABB bounds = AnimatedModelBounds(entity);
 		if (const auto* mesh = entity.TryGetComponent<MeshComponent>())
 		{
 			if (Ref<MeshSource> source = AssetManager::GetMesh(mesh->Mesh); source && mesh->MeshIndex < source->Meshes.size())
-				bounds = source->Meshes[mesh->MeshIndex].Bounds.Transformed(world);
+				bounds.Expand(source->Meshes[mesh->MeshIndex].Bounds.Transformed(world));
 		}
 		if (bounds.IsValid())
 			m_Camera.Focus(bounds.GetCenter(), glm::length(bounds.GetExtents()));
@@ -672,6 +673,9 @@ namespace Basalt {
 
 			if (selected)
 			{
+				const AABB animatedBounds = AnimatedModelBounds(entity);
+				if (animatedBounds.IsValid())
+					DebugDraw::Box(animatedBounds, s_SelectionColor);
 				if (const auto* emitter = entity.TryGetComponent<ParticleEmitterComponent>())
 					DrawParticleEmitter(world, *emitter, s_SelectionColor);
 				if (const auto* mesh = entity.TryGetComponent<MeshComponent>())
@@ -786,11 +790,11 @@ namespace Basalt {
 		for (Entity entity : scene.GetAllEntitiesOrdered())
 		{
 			const glm::mat4 world = scene.GetWorldTransform(entity);
-			AABB bounds;
+			AABB bounds = AnimatedModelBounds(entity);
 			if (const auto* mesh = entity.TryGetComponent<MeshComponent>())
 			{
 				if (Ref<MeshSource> source = AssetManager::GetMesh(mesh->Mesh); source && mesh->MeshIndex < source->Meshes.size())
-					bounds = source->Meshes[mesh->MeshIndex].Bounds.Transformed(world);
+					bounds.Expand(source->Meshes[mesh->MeshIndex].Bounds.Transformed(world));
 			}
 			else if (entity.HasComponent<CameraComponent>() || entity.HasComponent<PointLightComponent>() || entity.HasComponent<SpotLightComponent>() || entity.HasComponent<DirectionalLightComponent>() || entity.HasComponent<AudioSourceComponent>())
 			{

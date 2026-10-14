@@ -22,6 +22,10 @@ Fields: `Projection`, `FOV`, `Near`, `Far`, `OrthoSize`, `OrthoNear`, `OrthoFar`
 
 Fields: `Mesh`, `MeshIndex`, `CastShadows`
 
+## Animator
+
+Fields: `Mesh`, `Clip`, `Speed`, `Looping`, `PlayOnStart`, `CastShadows`
+
 ## Material
 
 Fields: `AlbedoColor`, `Metallic`, `Roughness`, `EmissiveColor`, `EmissiveIntensity`, `AlbedoMap`, `NormalMap`, `MetallicRoughnessMap`, `OcclusionMap`, `EmissiveMap`

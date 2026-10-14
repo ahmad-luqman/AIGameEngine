@@ -73,6 +73,17 @@ namespace Basalt {
 		bool CastShadows = true;
 	};
 
+	// Draws an entire glTF model with independent skeletal/TRS animation playback.
+	struct AnimatorComponent
+	{
+		std::string Mesh;
+		std::string Clip; // Empty selects the first clip.
+		float Speed = 1.0f;
+		bool Looping = true;
+		bool PlayOnStart = true;
+		bool CastShadows = true;
+	};
+
 	// PBR metallic-roughness material. When present it overrides the material imported with the mesh.
 	// Texture paths are project-relative; empty means "no texture".
 	struct MaterialComponent
@@ -664,6 +675,7 @@ namespace Basalt {
 		RelationshipComponent,
 		CameraComponent,
 		MeshComponent,
+		AnimatorComponent,
 		MaterialComponent,
 		DirectionalLightComponent,
 		PointLightComponent,

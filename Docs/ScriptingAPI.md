@@ -879,3 +879,46 @@ end
 - `Time.GetDelta()`, `Time.GetElapsed()`, `Time.GetFrame()`
 - `Log.Trace/Info/Warn/Error(...)`, `print(...)` (to the engine log / editor console)
 - `Game.Quit()` — ends the game (the runtime exits, the editor leaves play mode)
+
+## Skeletal animation
+
+An `Animator` component draws a whole glTF model under one entity. `Mesh` is the asset path;
+`Clip` selects the initial clip (empty selects the first); `PlayOnStart` and `Looping` default to true;
+`Speed` defaults to 1 and accepts 0..100; `CastShadows` defaults to true. Importing a model with skins
+or animation creates this component on the imported root. Static imports retain their entity hierarchy.
+The inspector, component commands and generic Lua component access share these fields.
+
+```lua
+local actor = Scene.CreateEntity("Fox")
+actor:AddComponent("Animator", { Mesh = "Assets/Models/Fox.glb", Clip = "Walk" })
+actor:CrossFadeAnimation("Run", 0.25)
+-- A persistent two-clip blend; updating the same pair's weight preserves both clocks.
+actor:BlendAnimations("Walk", "Run", 0.7)
+```
+
+| Function | Behavior |
+|---|---|
+| `e:GetAnimationClips()` | Array of selectable clip names. Unnamed clips use `AnimationN`; duplicates receive numeric suffixes. |
+| `e:PlayAnimation([clip])` | Restarts the selected clip at 0, clears blending, returns success. Omitted/empty selects the first clip. |
+| `e:CrossFadeAnimation(clip, seconds)` | Starts the target at 0 and fades from the current pose. Both clips advance; interrupted fades start from a snapshot of their visible pose. Zero duration acts as Play. Returns success. |
+| `e:BlendAnimations(first, second, weight)` | Persistent local-TRS blend, weight 0..1 toward the second clip. New pairs start at 0; changing only weight preserves both clocks. Returns success. |
+| `e:PauseAnimation([paused])` | Freezes/resumes clocks and transitions. Defaults to true; only boolean or nil accepted. |
+| `e:StopAnimation()` | Stops, clears blending, resets time, and displays the authored rest pose. |
+| `e:SetAnimationTime(seconds)` | Seeks to nonnegative finite seconds, clamped to each active clip's duration, without changing pause state or fade progress. Returns success. |
+| `e:GetAnimationTime()` | Target/current clip time in seconds (the second clip for a persistent blend). |
+| `e:GetAnimationDuration()` | Target/current clip duration, or 0 if none. |
+| `e:IsAnimationPlaying()` | Whether playback is advancing; speed 0 still counts as playing. |
+
+All functions require a running scene and an Animator on the entity. A missing asset yields empty
+clips, zero times, false queries/operations. Unknown clips or invalid numeric parameters return false
+without changing existing playback. Non-looping clips hold their final pose; looping clocks wrap by
+clip duration, including large timesteps. Crossfade duration is scene time, independent of Speed.
+`Speed` and `Looping` updates apply immediately; changing `Mesh` or the configured `Clip`, asset reload,
+or removing/re-adding Animator resets playback according to `PlayOnStart`. With PlayOnStart false,
+the selected clip is held at time 0 until played. Edit mode shows the authored rest pose.
+
+Playback also runs in Simulate, respects scene pause/step, and advances after scripts and physics.
+State belongs to the play scene and is not serialized or included in `scene.hash`; copies start fresh.
+Persistent entities retain playback across `Scene.Load`. Bone nodes remain internal to the model:
+there are no bone attachments, animation events, retargeting or root-motion extraction. Animated
+node motion is relative to the entity; physics uses the entity's colliders, not deformed triangles.

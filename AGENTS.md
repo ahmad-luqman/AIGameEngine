@@ -21,7 +21,7 @@ changing code. Task-specific procedures live in `.claude/skills/*/SKILL.md`.
 Engine modules (`Basalt/Source/Basalt/<Module>/`): `Core` (application, window, input incl. gamepads, log, file
 system, command line), `Events`, `Math`, `Renderer` (device, scene renderer, IBL, debug lines), `ImGui`, `Scene`
 (EnTT scene, components, component registry, serialization), `Asset` (glTF, images, primitives, asset
-cache), `Physics` (Jolt), `Audio` (miniaudio), `Particles` (CPU particle simulation), `UI` (game UI: UI
+cache), `Physics` (Jolt), `Audio` (miniaudio), `Particles` (CPU particle simulation), `Animation` (glTF TRS sampling, blends, crossfades and per-entity playback), `UI` (game UI: UI
 component layout, widgets and their mouse/keyboard/gamepad interaction, immediate-mode `UI.*`, TrueType fonts;
 drawn through ImGui after the scene), `Scripting` (Lua 5.4 + sol2; timers, coroutines, events), `Project`
 (project files, exporter, save data), `Automation` (command API, session, TCP server).
@@ -35,8 +35,8 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   writer that every consumer shares: scene and prefab files, Lua `GetComponent/SetComponent`, the
   automation commands and the editor inspector. Adding a component = one registry entry (see the
   `basalt-add-component` skill).
-- **Runtime state lives in systems.** `PhysicsWorld`, `ScriptEngine`, `AudioSystem` and `ParticleSystem` exist
-  only while a scene plays (physics and particles also while it simulates) and key their state by entity
+- **Runtime state lives in systems.** `PhysicsWorld`, `ScriptEngine`, `AudioSystem`, `AnimationSystem` and `ParticleSystem` exist
+  only while a scene plays (physics, animation and particles also while it simulates) and key their state by entity
   UUID; they react to EnTT component signals. `UIInteraction` (widget hover, hold and focus) exists only in Play
   and re-reads the widgets every frame. Gameplay random streams (Lua's random numbers, particle
   emitters) are seeded from the session's seed, `Scene::GetRandomSeed` (the project's `RandomSeed`).

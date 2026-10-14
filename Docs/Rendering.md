@@ -91,3 +91,50 @@ preservation, cache reconfiguration, resize, failure retries and sharpness sanit
 validation. `FSR1Render` exercises scene settings, odd fixed/dynamic sizes, native-image error bounds,
 RCAS contrast direction, positive activity statistics and bypass paths on the static feature fixture.
 Both run in the lavapipe CI GPU job.
+
+# Skinned meshes and animation
+
+`AnimatorComponent` renders all mesh nodes in the glTF default scene under one entity. The asset owns
+its skeletons, inverse binds, and immutable animation clips; `AnimationSystem` owns independent
+per-entity clocks, local poses and composed node transforms while a scene plays or simulates. The
+component registry exposes setup through scene files, prefabs, the inspector, Lua and automation.
+`asset.import_model` creates an Animator root for animated/skinned assets; static assets retain their
+editable entity hierarchy. A Material on the root overrides imported materials. Editor picking,
+focus and selection outlines use the current animated model bounds.
+
+TRS tracks support STEP, LINEAR (shortest-arc quaternion slerp), and CUBICSPLINE (time-scaled Hermite
+with normalized quaternion results). Missing channels retain authored node values. Blends and
+crossfades mix local translation, rotation and scale before composing the hierarchy. The Lua API
+section “Skeletal animation” defines playback and transition behavior.
+
+Vertices carry four joint indices and normalized nonnegative weights. Vertex-stage linear blend
+skinning uses `jointGlobal * inverseBind`; as glTF requires, the skinned mesh node transform does not
+move the skin a second time. The Basalt entity world transform applies after skinning. Rigid animated
+nodes use their evaluated node transform. Normals use the inverse transpose of the blended linear
+transform; tangents use its linear transform and preserve reflection handedness. Degenerate skin
+transforms have a finite normal fallback. The same palette and position operation feed PBR, depth/
+normal prepass, opaque and masked cascades, and point/spot shadows. Transparent meshes use skinning
+but retain the renderer's no-transparent-shadow policy.
+
+Palettes occupy records in the existing draw SSBO, with per-draw offset/count metadata. This keeps
+the frame at four storage-buffer bindings and supports independent instances without mutable GPU
+asset data. Vertex stride is 80 bytes for both rigid and skinned geometry. Palette upload storage grows
+with demand and uses nvrhi resource lifetime tracking; allocation failure fails the frame explicitly.
+Exact submesh bounds are computed on the CPU from the current palette for camera and shadow culling.
+This adds work proportional to animated vertex count, in addition to GPU skinning; large crowds would
+benefit from cached joint influence bounds or GPU culling.
+
+Import rejects malformed weights/joints, invalid track shapes/times/quaternions, cyclic hierarchies,
+and unsupported extra influence sets or morph-weight animation. Sparse accessors and normalized
+unsigned byte/short weights are supported. Limits are 65,536 nodes and joints per skin, 4,096 skins
+and clips, and 64 MiB of decoded skin/animation floats (repeated sampler references count separately).
+Non-finite evaluated hierarchies or palettes log once per failure episode and display the validated rest pose.
+A skin may use the first N matrices of a larger inverse-bind accessor; absent inverse binds are
+identity. Duplicate clip names get deterministic suffixes. There is no morph-target deformation,
+retargeting, animation state machine, bone attachment API, or root-motion extraction.
+
+`AnimationTests` covers import, interpolation, space conventions, playback, blending, component/Lua
+validation and lifecycle; the Khronos Fox fixture verifies Survey/Walk/Run from a real exported rig.
+The feature-test driver exercises every Lua operation on an off-camera rig. `AnimationGPU` compares
+GPU skinning with independently deformed CPU geometry for opaque/masked/blended materials, lit/
+normal/depth outputs and directional/point/spot shadows, with Vulkan validation required.

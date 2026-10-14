@@ -1,5 +1,7 @@
 #include "Basalt/Asset/MeshImporter.h"
 
+#include "Basalt/Animation/AnimationPose.h"
+#include "Basalt/Asset/AnimationImporter.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Project/Project.h"
@@ -7,6 +9,7 @@
 
 #include <cgltf.h>
 
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -238,6 +241,11 @@ namespace Basalt {
 		if (!data)
 			return nullptr;
 
+		if (data->nodes_count > 65536 || data->skins_count > 4096 || data->animations_count > 4096)
+		{
+			outError = key + ": exceeds animation limits (65536 nodes, 4096 skins/clips)";
+			return nullptr;
+		}
 		Ref<MeshSource> source = CreateRef<MeshSource>();
 		source->Key = key;
 
@@ -290,10 +298,21 @@ namespace Basalt {
 				const cgltf_accessor* normals = nullptr;
 				const cgltf_accessor* tangents = nullptr;
 				const cgltf_accessor* texCoords = nullptr;
+				const cgltf_accessor* joints = nullptr;
+				const cgltf_accessor* weights = nullptr;
 				for (cgltf_size a = 0; a < primitive.attributes_count; a++)
 				{
 					const cgltf_attribute& attribute = primitive.attributes[a];
-					if (attribute.type == cgltf_attribute_type_position)
+					if ((attribute.type == cgltf_attribute_type_joints || attribute.type == cgltf_attribute_type_weights) && attribute.index != 0)
+					{
+						outError = key + ": more than four skin influences per vertex are not supported";
+						return nullptr;
+					}
+					if (attribute.type == cgltf_attribute_type_joints)
+						joints = attribute.data;
+					else if (attribute.type == cgltf_attribute_type_weights)
+						weights = attribute.data;
+					else if (attribute.type == cgltf_attribute_type_position)
 						positions = attribute.data;
 					else if (attribute.type == cgltf_attribute_type_normal)
 						normals = attribute.data;
@@ -317,6 +336,39 @@ namespace Basalt {
 				}
 				for (size_t v = 0; v < vertices.size(); v++)
 					vertices[v].Position = positionData[v];
+
+				if (joints || weights)
+				{
+					std::vector<glm::vec4> jointData, weightData;
+					if (!joints || !weights || joints->count != positions->count || weights->count != positions->count ||
+						(joints->component_type != cgltf_component_type_r_8u && joints->component_type != cgltf_component_type_r_16u) || joints->normalized ||
+						!((weights->component_type == cgltf_component_type_r_32f && !weights->normalized) ||
+						  ((weights->component_type == cgltf_component_type_r_8u || weights->component_type == cgltf_component_type_r_16u) && weights->normalized)) ||
+						!ReadAccessor(joints, jointData, 4) || !ReadAccessor(weights, weightData, 4))
+					{
+						outError = key + ": invalid joint/weight accessor";
+						return nullptr;
+					}
+					for (size_t v = 0; v < vertices.size(); v++)
+					{
+						for (int k = 0; k < 4; k++)
+						{
+							if (!std::isfinite(weightData[v][k]) || weightData[v][k] < 0.0f)
+							{
+								outError = key + ": skin weights must be finite and nonnegative";
+								return nullptr;
+							}
+						}
+						const float sum = glm::dot(weightData[v], glm::vec4(1));
+						if (!std::isfinite(sum) || sum <= 0.0f)
+						{
+							outError = key + ": skin weights must have a positive finite sum";
+							return nullptr;
+						}
+						vertices[v].Joints = glm::uvec4(jointData[v]);
+						vertices[v].Weights = weightData[v] / sum;
+					}
+				}
 
 				std::vector<glm::vec3> normalData;
 				const bool hasNormals = normals && normals->count == positions->count && ReadAccessor(normals, normalData, 3);
@@ -384,11 +436,18 @@ namespace Basalt {
 			result.Name = node.name ? node.name : "Node" + std::to_string(i);
 			result.Parent = node.parent ? static_cast<int32_t>(node.parent - data->nodes) : -1;
 			result.MeshIndex = node.mesh ? static_cast<int32_t>(node.mesh - data->meshes) : -1;
+			result.SkinIndex = node.skin ? static_cast<int32_t>(node.skin - data->skins) : -1;
 			if (node.has_matrix)
 			{
 				glm::mat4 matrix;
 				std::memcpy(&matrix, node.matrix, sizeof(float) * 16);
-				Math::DecomposeTransform(matrix, result.Translation, result.Rotation, result.Scale);
+				result.HasMatrix = true;
+				result.Matrix = matrix;
+				if (!Math::DecomposeTransform(matrix, result.Translation, result.Rotation, result.Scale))
+				{
+					outError = key + ": node matrix cannot be decomposed";
+					return nullptr;
+				}
 			}
 			else
 			{
@@ -399,6 +458,13 @@ namespace Basalt {
 				if (node.has_scale)
 					result.Scale = { node.scale[0], node.scale[1], node.scale[2] };
 			}
+			const float rotationLength = glm::length(result.Rotation);
+			if (!std::isfinite(rotationLength) || rotationLength < 1e-6f)
+			{
+				outError = key + ": invalid node rotation";
+				return nullptr;
+			}
+			result.Rotation /= rotationLength;
 			source->Nodes.push_back(std::move(result));
 		}
 		// A file with meshes but no nodes still gets something to instantiate.
@@ -407,6 +473,22 @@ namespace Basalt {
 			for (size_t m = 0; m < source->Meshes.size(); m++)
 				source->Nodes.push_back(MeshNode{ .Name = source->Meshes[m].Name, .MeshIndex = static_cast<int32_t>(m) });
 		}
+
+		if (!ImportAnimations(*data, *source, outError))
+			return nullptr;
+
+		std::vector<glm::mat4> rest;
+		if (!EvaluateAnimation(*source, nullptr, 0, rest))
+		{
+			outError = key + ": non-finite node hierarchy";
+			return nullptr;
+		}
+		for (const auto& skin : source->Skins)
+			if (BuildSkinPalette(skin, rest).empty())
+			{
+				outError = key + ": non-finite skin bind transform";
+				return nullptr;
+			}
 
 		// Keep embedded images' encoded bytes so textures decode without re-reading the file.
 		source->EmbeddedImages.resize(data->images_count);
@@ -428,6 +510,12 @@ namespace Basalt {
 		Entity root = scene.CreateEntity(name);
 		if (parent)
 			scene.SetParent(root, parent, false);
+
+		if (!source.Skins.empty() || !source.Animations.empty())
+		{
+			root.AddComponent<AnimatorComponent>().Mesh = source.Key;
+			return root;
+		}
 
 		std::vector<Entity> nodeEntities(source.Nodes.size());
 		for (size_t i = 0; i < source.Nodes.size(); i++)
