@@ -64,7 +64,7 @@ namespace Basalt {
 
 	// Renders a Scene from a camera into an internal LDR image:
 	//   directional cascades + point/spot shadow atlas -> depth/normal prepass -> SSAO (+ bilateral blur) ->
-	//   forward PBR with IBL (opaque) -> skybox -> transparent PBR and particle billboards -> exposure +
+	//   clustered forward PBR with IBL (opaque) -> skybox -> transparent PBR and particle billboards -> exposure +
 	//   tonemapping + sRGB encode -> optional EASU + RCAS -> dithering -> output-resolution overlays.
 	// The scene renders at the current render scale; either tonemap resamples directly to the viewport
 	// or FSR 1 upscales its perceptual-color output. With dynamic resolution the scale follows the GPU time
@@ -100,7 +100,7 @@ namespace Basalt {
 		bool IsDynamicResolutionActive() const;
 		const DynamicResolutionSampleCounts& GetDynamicResolutionSamples() const { return m_Diagnostics.Samples; }
 		// The part of a frame's GPU time dynamic resolution steers by: without the passes no render scale
-		// affects (the environment bake and uploads).
+		// affects (the environment bake, uploads and fixed cluster grid).
 		static float GetDynamicResolutionMilliseconds(const GpuFrameSample& sample);
 		// Scale of the last rendered frame (below the render scale while dynamic resolution has lowered it; a
 		// resize keeps it). Between a resize and the next Render it reads GetRenderScale(). GetRenderWidth/Height
@@ -108,6 +108,10 @@ namespace Basalt {
 		float GetCurrentRenderScale() const { return m_CurrentRenderScale; }
 		uint32_t GetRenderWidth() const { return m_RenderWidth; }
 		uint32_t GetRenderHeight() const { return m_RenderHeight; }
+
+		// Clustered lighting is enabled by default. Disabling selects the all-lights diagnostic reference
+		// for image comparisons and profiling; it is not a serialized scene setting.
+		void SetClusteredLighting(bool enabled) { m_ClusteredLighting = enabled; }
 
 		// Records and submits all passes for one frame.
 		void Render(Scene& scene, const RenderCamera& camera);
@@ -157,6 +161,7 @@ namespace Basalt {
 		uint32_t m_Width = 0;
 		uint32_t m_Height = 0;
 		float m_RenderScale = 1.0f;
+		bool m_ClusteredLighting = true;
 		// Size of the scene targets: the viewport size times the render scale.
 		uint32_t m_TargetWidth = 0;
 		uint32_t m_TargetHeight = 0;

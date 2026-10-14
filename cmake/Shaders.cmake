@@ -39,7 +39,7 @@ function(basalt_embed_shaders target)
 		add_custom_command(
 			OUTPUT "${output}"
 			COMMAND "${BASALT_GLSLC}" --target-env=vulkan1.2 -O -Werror -mfmt=c
-				-DMAX_CASCADES=${BASALT_SHADOW_CASCADES}
+				-DMAX_CASCADES=${BASALT_SHADOW_CASCADES} -DMAX_LIGHTS=${BASALT_MAX_LIGHTS}
 				-I "${ARG_INCLUDE_DIR}" ${extraIncludes} "${source}" -o "${output}"
 			DEPENDS "${source}" ${includeDeps}
 			COMMENT "Compiling shader ${fileName}"

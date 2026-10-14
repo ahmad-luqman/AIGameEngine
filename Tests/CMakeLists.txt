@@ -39,6 +39,11 @@ if(Python3_Interpreter_FOUND)
 endif()
 
 if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
+	add_executable(BasaltLightClustersGPU Rendering/LightClustersGPU.cpp)
+	basalt_set_warnings(BasaltLightClustersGPU)
+	target_link_libraries(BasaltLightClustersGPU PRIVATE Basalt doctest::doctest)
+	add_test(NAME LightClustersGPU COMMAND BasaltLightClustersGPU)
+	set_tests_properties(LightClustersGPU PROPERTIES TIMEOUT 120)
 	add_executable(BasaltFSR1GPU Rendering/FSR1GPU.cpp)
 	basalt_set_warnings(BasaltFSR1GPU)
 	target_link_libraries(BasaltFSR1GPU PRIVATE Basalt doctest::doctest)
@@ -58,7 +63,7 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	set(basaltGoldenOutput "${CMAKE_CURRENT_BINARY_DIR}/Golden")
 	file(MAKE_DIRECTORY "${basaltGoldenOutput}")
 
-	set(basaltGpuTests FSR1GPU)
+	set(basaltGpuTests FSR1GPU LightClustersGPU)
 	# "Scaled" is the lit image rendered at half resolution and upsampled by the tonemap pass (render scale).
 	# "Dynamic" reaches the same image through dynamic resolution: an unreachable frame-rate target drops the
 	# scale to its 0.5 minimum (once GPU timer results arrive), and the scene renders into the top-left of

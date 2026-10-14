@@ -3,6 +3,7 @@
 //                     4 shadow map array, 5 irradiance cube, 6 prefiltered cube, 7 BRDF LUT, 8 SSAO,
 //                     9 linear clamp sampler, 10 shadow comparison sampler, 11 point clamp sampler,
 //                     12 environment cube, 13 local shadow atlas, 14 local shadow maps (SSBO),
+//                     15 cluster counts (SSBO), 16 cluster indices (SSBO),
 //                     push constants (DrawPush)
 // Shadow pipelines use a reduced set 0: push constants, 0, 1, 2 and 14 only.
 //   set 1 (material): 0 albedo, 1 normal, 2 metallic-roughness, 3 occlusion, 4 emissive, 5 material sampler
@@ -36,6 +37,8 @@ layout(set = 0, binding = 0) uniform ViewConstants
 	vec4 EnvironmentParams; // x: rotation (radians), y: prefiltered mip count, z: SSAO enabled, w: light count
 	vec4 CameraClip;      // x: near, y: far, zw: local biases (available without a Sun); z uses range-relative world distance, unlike Sun.ShadowParams.x
 	DirectionalLight Sun;
+	uvec4 ClusterGrid;    // xyz dimensions, w: clustered lookup enabled (0 = diagnostic all-lights path)
+	vec4 ClusterDepths;   // near, far, orthographic, unused
 } u_View;
 
 struct DrawData
@@ -62,13 +65,7 @@ layout(std430, set = 0, binding = 2) readonly buffer MaterialBuffer
 	MaterialData Materials[];
 } u_Materials;
 
-struct LightData
-{
-	vec4 Position;        // xyz, w: range (point, spot)
-	vec4 Color;           // rgb * intensity, w: type (0 point, 1 spot, 2 unshadowed directional)
-	vec4 Direction;       // xyz: direction the light travels (spot, directional), w: cos(outer)
-	vec4 Params;          // x: cos(inner), y: first shadow map + 1 (0 = none), z: PCF radius in texels
-};
+#include "LightData.glsl"
 
 layout(std430, set = 0, binding = 3) readonly buffer LightBuffer
 {
