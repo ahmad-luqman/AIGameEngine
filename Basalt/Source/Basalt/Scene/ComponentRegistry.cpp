@@ -349,6 +349,16 @@ namespace Basalt {
 			r.Field("CastShadows", c.CastShadows);
 		}
 
+		void Fields(FieldReader& r, AnimatorComponent& c)
+		{
+			r.Field("Mesh", c.Mesh);
+			r.Field("Clip", c.Clip);
+			r.Field("Speed", c.Speed);
+			r.Field("Looping", c.Looping);
+			r.Field("PlayOnStart", c.PlayOnStart);
+			r.Field("CastShadows", c.CastShadows);
+		}
+
 		void Fields(FieldReader& r, MaterialComponent& c)
 		{
 			r.Field("AlbedoColor", c.AlbedoColor);
@@ -677,6 +687,11 @@ namespace Basalt {
 		json Write(const MeshComponent& c)
 		{
 			return { { "Mesh", c.Mesh }, { "MeshIndex", c.MeshIndex }, { "CastShadows", c.CastShadows } };
+		}
+
+		json Write(const AnimatorComponent& c)
+		{
+			return { { "Mesh", c.Mesh }, { "Clip", c.Clip }, { "Speed", c.Speed }, { "Looping", c.Looping }, { "PlayOnStart", c.PlayOnStart }, { "CastShadows", c.CastShadows } };
 		}
 
 		json Write(const MaterialComponent& c)
@@ -1034,6 +1049,13 @@ namespace Basalt {
 			return ValidateAudioSource(source);
 		}
 
+		std::string Validate(const AnimatorComponent& c)
+		{
+			if (!std::isfinite(c.Speed) || c.Speed < 0.0f || c.Speed > 100.0f)
+				return "Speed must be finite and between 0 and 100";
+			return {};
+		}
+
 		std::string Validate(const ParticleEmitterComponent& emitter)
 		{
 			return ValidateParticleEmitter(emitter);
@@ -1184,6 +1206,7 @@ namespace Basalt {
 			infos.push_back(MakeInfo<TransformComponent>("Transform", true));
 			infos.push_back(MakeCameraInfo());
 			infos.push_back(MakeInfo<MeshComponent>("Mesh"));
+			infos.push_back(MakeInfo<AnimatorComponent>("Animator"));
 			infos.push_back(MakeInfo<MaterialComponent>("Material"));
 			infos.push_back(MakeInfo<DirectionalLightComponent>("DirectionalLight"));
 			infos.push_back(MakeInfo<PointLightComponent>("PointLight"));

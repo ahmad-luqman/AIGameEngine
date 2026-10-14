@@ -121,6 +121,7 @@ namespace Basalt {
 				const uint32_t submesh = source->AddSubmesh(vertices, indices, 0);
 				source->Meshes.push_back(MeshData{ name, { submesh }, {} });
 				source->Nodes.push_back(MeshNode{ .Name = name, .MeshIndex = 0 });
+				source->NodeOrder.push_back(0);
 				source->UpdateBounds();
 				return source;
 			}

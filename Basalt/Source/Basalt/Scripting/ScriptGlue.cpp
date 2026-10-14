@@ -1,5 +1,6 @@
 #include "Basalt/Scripting/ScriptGlue.h"
 
+#include "Basalt/Animation/AnimationSystem.h"
 #include "Basalt/Audio/AudioRules.h"
 #include "Basalt/Audio/AudioSystem.h"
 #include "Basalt/Core/Assert.h"
@@ -360,6 +361,14 @@ namespace Basalt {
 			return entity;
 		}
 
+		AnimationSystem& RequireAnimations(ScriptContext& context)
+		{
+			auto* system = RequireScene(context).GetAnimationSystem();
+			if (!system)
+				throw std::runtime_error("animation requires a running scene");
+			return *system;
+		}
+
 		// The entity, with a ParticleEmitter the particle system knows. Every emitter registers when its
 		// component is added, so a missing registration is an engine bug, reported rather than ignored.
 		Entity RequireEmitter(ScriptContext& context, const ScriptEntity& self, const char* function)
@@ -528,7 +537,10 @@ namespace Basalt {
 
 										   "PlayAudio", [&context](const ScriptEntity& self) { return RequireAudio(context).Play(RequireEntityWith<AudioSourceComponent>(self, "PlayAudio", "AudioSource")); }, "StopAudio", [&context](const ScriptEntity& self) { RequireAudio(context).Stop(RequireEntityWith<AudioSourceComponent>(self, "StopAudio", "AudioSource")); }, "IsAudioPlaying", [&context](const ScriptEntity& self) { return RequireAudio(context).IsPlaying(self.ResolveOrThrow()); },
 
-										   "PlayParticles", [&context](const ScriptEntity& self) { RequireParticles(context).Play(RequireEmitter(context, self, "PlayParticles")); }, "StopParticles", [&context](const ScriptEntity& self, const sol::object& clear) {
+										   "PlayAnimation", [&context](const ScriptEntity& self, const sol::optional<std::string>& clip) { return RequireAnimations(context).Play(RequireEntityWith<AnimatorComponent>(self, "PlayAnimation", "Animator"), clip.value_or("")); }, "CrossFadeAnimation", [&context](const ScriptEntity& self, const std::string& clip, float seconds) { return RequireAnimations(context).CrossFade(RequireEntityWith<AnimatorComponent>(self, "CrossFadeAnimation", "Animator"), clip, seconds); }, "BlendAnimations", [&context](const ScriptEntity& self, const std::string& first, const std::string& second, float weight) { return RequireAnimations(context).Blend(RequireEntityWith<AnimatorComponent>(self, "BlendAnimations", "Animator"), first, second, weight); }, "PauseAnimation", [&context](const ScriptEntity& self, const sol::object& paused) {
+					if (paused.valid() && paused.get_type() != sol::type::boolean)
+						throw std::runtime_error("PauseAnimation: paused must be true, false or nil");
+					RequireAnimations(context).Pause(RequireEntityWith<AnimatorComponent>(self, "PauseAnimation", "Animator"), !paused.valid() || paused.as<bool>()); }, "StopAnimation", [&context](const ScriptEntity& self) { RequireAnimations(context).Stop(RequireEntityWith<AnimatorComponent>(self, "StopAnimation", "Animator")); }, "SetAnimationTime", [&context](const ScriptEntity& self, float seconds) { return RequireAnimations(context).Seek(RequireEntityWith<AnimatorComponent>(self, "SetAnimationTime", "Animator"), seconds); }, "GetAnimationTime", [&context](const ScriptEntity& self) { return RequireAnimations(context).GetTime(RequireEntityWith<AnimatorComponent>(self, "GetAnimationTime", "Animator")); }, "GetAnimationDuration", [&context](const ScriptEntity& self) { return RequireAnimations(context).GetDuration(RequireEntityWith<AnimatorComponent>(self, "GetAnimationDuration", "Animator")); }, "IsAnimationPlaying", [&context](const ScriptEntity& self) { return RequireAnimations(context).IsPlaying(RequireEntityWith<AnimatorComponent>(self, "IsAnimationPlaying", "Animator")); }, "GetAnimationClips", [&context](const ScriptEntity& self) { return sol::as_table(RequireAnimations(context).GetClips(RequireEntityWith<AnimatorComponent>(self, "GetAnimationClips", "Animator"))); }, "PlayParticles", [&context](const ScriptEntity& self) { RequireParticles(context).Play(RequireEmitter(context, self, "PlayParticles")); }, "StopParticles", [&context](const ScriptEntity& self, const sol::object& clear) {
 					Entity entity = RequireEmitter(context, self, "StopParticles");
 					// Only booleans: through sol::optional<bool>, a truthy 1 or "yes" would silently have meant false.
 					if (clear.valid() && clear.get_type() != sol::type::boolean)

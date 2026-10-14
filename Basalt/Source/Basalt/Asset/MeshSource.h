@@ -11,7 +11,7 @@
 
 namespace Basalt {
 
-	// Interleaved vertex layout shared by all meshes and the renderer (48 bytes).
+	// Interleaved vertex layout shared by all meshes and the renderer (80 bytes).
 	struct Vertex
 	{
 		glm::vec3 Position = { 0.0f, 0.0f, 0.0f };
@@ -19,8 +19,10 @@ namespace Basalt {
 		// xyz = tangent, w = bitangent sign (glTF convention).
 		glm::vec4 Tangent = { 1.0f, 0.0f, 0.0f, 1.0f };
 		glm::vec2 TexCoord = { 0.0f, 0.0f };
+		glm::uvec4 Joints = glm::uvec4(0);
+		glm::vec4 Weights = glm::vec4(0.0f);
 	};
-	static_assert(sizeof(Vertex) == 48);
+	static_assert(sizeof(Vertex) == 80);
 
 	enum class AlphaMode
 	{
@@ -74,9 +76,51 @@ namespace Basalt {
 		std::string Name;
 		int32_t Parent = -1;
 		int32_t MeshIndex = -1;
+		int32_t SkinIndex = -1;
+		bool Active = true;
+		bool HasMatrix = false;
+		glm::mat4 Matrix = glm::mat4(1);
 		glm::vec3 Translation = { 0.0f, 0.0f, 0.0f };
 		glm::quat Rotation = { 1.0f, 0.0f, 0.0f, 0.0f };
 		glm::vec3 Scale = { 1.0f, 1.0f, 1.0f };
+	};
+
+	// Joint indices address Nodes; inverse bind matrices map mesh positions into joint space.
+	struct MeshSkin
+	{
+		std::vector<uint32_t> Joints;
+		std::vector<glm::mat4> InverseBindMatrices;
+	};
+
+	enum class AnimationPath
+	{
+		Translation,
+		Rotation,
+		Scale
+	};
+	enum class AnimationInterpolation
+	{
+		Step,
+		Linear,
+		CubicSpline
+	};
+
+	// Cubic values store incoming tangent, value, outgoing tangent for each key.
+	struct AnimationTrack
+	{
+		uint32_t Node = 0;
+		AnimationPath Path = AnimationPath::Translation;
+		AnimationInterpolation Interpolation = AnimationInterpolation::Linear;
+		std::vector<float> Times;
+		std::vector<glm::vec4> Values;
+	};
+
+	// Named glTF clip. Duration is the last key time, in seconds.
+	struct AnimationClip
+	{
+		std::string Name;
+		float Duration = 0.0f;
+		std::vector<AnimationTrack> Tracks;
 	};
 
 	// CPU-side geometry of a mesh asset (a glTF file or a built-in primitive). GPU buffers are created
@@ -90,6 +134,10 @@ namespace Basalt {
 		std::vector<MeshData> Meshes;
 		std::vector<MaterialData> Materials;
 		std::vector<MeshNode> Nodes;
+		std::vector<MeshSkin> Skins;
+		std::vector<AnimationClip> Animations;
+		// Parent-before-child traversal, independent of glTF node array ordering.
+		std::vector<uint32_t> NodeOrder;
 		AABB Bounds;
 		// Encoded bytes of images embedded in the file (glTF "#image/<n>" keys); empty for external images.
 		std::vector<std::vector<uint8_t>> EmbeddedImages;

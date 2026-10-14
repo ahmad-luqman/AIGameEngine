@@ -1,9 +1,12 @@
 #version 450
 #include "Common.glsl"
+#include "Skinning.glsl"
 
 // Shadow pass for alpha-tested materials: passes UVs so the fragment shader can discard.
 layout(location = 0) in vec3 a_Position;
 layout(location = 1) in vec2 a_TexCoord;
+layout(location = 2) in uvec4 a_Joints;
+layout(location = 3) in vec4 a_Weights;
 
 layout(location = 0) out vec2 v_TexCoord;
 layout(location = 1) flat out uint v_MaterialIndex;
@@ -13,5 +16,5 @@ void main()
 	DrawData draw = u_Draws.Draws[u_Push.DrawIndex];
 	v_TexCoord = a_TexCoord;
 	v_MaterialIndex = draw.Indices.x;
-	gl_Position = ShadowViewProjection(u_Push.ShadowViewIndex) * draw.Model * vec4(a_Position, 1.0);
+	gl_Position = ShadowViewProjection(u_Push.ShadowViewIndex) * draw.Model * SkinMatrix(draw, a_Joints, a_Weights) * vec4(a_Position, 1.0);
 }

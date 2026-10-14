@@ -48,6 +48,8 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	endfunction()
 	basalt_add_gpu_test(LightClustersGPU Rendering/LightClustersGPU.cpp 120)
 	basalt_add_gpu_test(FSR1GPU Rendering/FSR1GPU.cpp 60)
+	basalt_add_gpu_test(AnimationGPU Rendering/AnimationGPU.cpp 120)
+	target_compile_definitions(BasaltAnimationGPU PRIVATE BASALT_ANIMATION_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Data/Animation" BASALT_ANIMATION_OUTPUT_DIR="${CMAKE_CURRENT_BINARY_DIR}/Animation")
 	set(basaltRenderArgs --project "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest" --frames 90 --width 1280 --height 720 --require-validation)
 
 	# Golden images: each debug view is rendered offscreen, then compared with the reference for this driver
@@ -62,7 +64,7 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	set(basaltGoldenOutput "${CMAKE_CURRENT_BINARY_DIR}/Golden")
 	file(MAKE_DIRECTORY "${basaltGoldenOutput}")
 
-	set(basaltGpuTests FSR1GPU LightClustersGPU)
+	set(basaltGpuTests FSR1GPU LightClustersGPU AnimationGPU)
 	# "Scaled" is the lit image rendered at half resolution and upsampled by the tonemap pass (render scale).
 	# "Dynamic" reaches the same image through dynamic resolution: an unreachable frame-rate target drops the
 	# scale to its 0.5 minimum (once GPU timer results arrive), and the scene renders into the top-left of
