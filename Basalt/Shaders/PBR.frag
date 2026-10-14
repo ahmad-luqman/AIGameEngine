@@ -3,6 +3,10 @@
 #include "Material.glsl"
 #include "PBR.glsl"
 #include "Shadows.glsl"
+#include "LightClusters.glsl"
+
+layout(std430, set = 0, binding = 15) readonly buffer ClusterCounts { uint Counts[]; } u_Counts;
+layout(std430, set = 0, binding = 16) readonly buffer ClusterIndices { uint Indices[]; } u_Indices;
 
 layout(set = 0, binding = 5) uniform textureCube u_IrradianceMap;
 layout(set = 0, binding = 6) uniform textureCube u_PrefilteredMap;
@@ -42,9 +46,20 @@ void main()
 
 	// Additional directional lights (unshadowed), then point and spot lights.
 	uint lightCount = uint(u_View.EnvironmentParams.w);
+	uint cellIndex = 0u;
+	if (u_View.ClusterGrid.w != 0u)
+	{
+		// Use the active render area, not the backing allocation or output dimensions.
+		uvec2 tile = min(uvec2(gl_FragCoord.xy / u_View.ViewportSize.xy * vec2(u_View.ClusterGrid.xy)), u_View.ClusterGrid.xy - 1u);
+		float depth = -(u_View.View * vec4(v_WorldPosition, 1.0)).z;
+		uint slice = ClusterSlice(u_View.ClusterDepths, depth, u_View.ClusterGrid.z);
+		cellIndex = ClusterIndex(uvec3(tile, slice), u_View.ClusterGrid.xyz);
+		lightCount = u_Counts.Counts[cellIndex];
+	}
 	for (uint i = 0u; i < lightCount; i++)
 	{
-		LightData light = u_Lights.Lights[i];
+		uint lightIndex = u_View.ClusterGrid.w != 0u ? u_Indices.Indices[cellIndex * MAX_LIGHTS + i] : i;
+		LightData light = u_Lights.Lights[lightIndex];
 		if (light.Color.w > 1.5)
 		{
 			color += EvaluateLight(N, V, -normalize(light.Direction.xyz), light.Color.rgb, surface.Albedo, surface.Metallic, surface.Roughness, F0);

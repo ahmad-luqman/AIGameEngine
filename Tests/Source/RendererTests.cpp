@@ -772,9 +772,10 @@ TEST_SUITE("SceneRenderer")
 		CHECK(stats["gpu"]["timers"] == false);
 		CHECK(stats["gpu"]["frames"] == 0);
 		CHECK(stats["gpu"]["droppedFrames"] == 0);
-		REQUIRE(stats["gpu"]["passes"].size() == 9);
+		REQUIRE(stats["gpu"]["passes"].size() == 10);
 		CHECK(stats["gpu"]["passes"][0]["name"] == "Environment");
 		CHECK(stats["gpu"]["passes"][1]["name"] == "Uploads");
+		CHECK(stats["gpu"]["passes"][5]["name"] == "Clusters");
 		for (const char* key : { "viewport", "renderSize", "renderScale", "currentRenderScale", "drawCalls", "shadowDrawCalls", "culledSubmeshes", "lights", "materials" })
 		{
 			INFO(key);
@@ -799,11 +800,11 @@ TEST_SUITE("SceneRenderer")
 		CHECK(*contents == "previous image");
 	}
 
-	TEST_CASE("Dynamic resolution steers by the frame time without the environment bake and uploads")
+	TEST_CASE("Dynamic resolution excludes environment uploads and the fixed cluster grid")
 	{
 		SceneRenderer renderer(nullptr);
 		const std::vector<GpuPassTiming>& passes = renderer.GetGpuTimings().Passes;
-		REQUIRE(passes.size() == 9);
+		REQUIRE(passes.size() == 10);
 		GpuFrameSample sample;
 		sample.FrameMilliseconds = 20.0f;
 		sample.PassMilliseconds.assign(passes.size(), 1.0f);
@@ -813,8 +814,10 @@ TEST_SUITE("SceneRenderer")
 				sample.PassMilliseconds[i] = 8.0f;
 			if (passes[i].Name == "Uploads")
 				sample.PassMilliseconds[i] = 4.0f;
+			if (passes[i].Name == "Clusters")
+				sample.PassMilliseconds[i] = 2.0f;
 		}
-		CHECK(SceneRenderer::GetDynamicResolutionMilliseconds(sample) == doctest::Approx(8.0f));
+		CHECK(SceneRenderer::GetDynamicResolutionMilliseconds(sample) == doctest::Approx(6.0f));
 	}
 
 	TEST_CASE("Dynamic resolution settings are sanitized by the renderer, with a warning")

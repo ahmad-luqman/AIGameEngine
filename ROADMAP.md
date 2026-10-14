@@ -55,9 +55,6 @@ The features most games need, roughly in order of impact.
 
 ### Rendering
 
-- **Clustered forward lighting — M.** Today every pixel loops over all point and spot lights (up to 256).
-  Build a froxel grid (for example 16×9×24) in a compute pass and give each cluster a light list. This
-  keeps the cost per pixel bounded with hundreds of lights.
 - **Particle follow-ups — M.** `ParticleEmitterComponent` (Particles/ParticleSystem) covers CPU simulation,
   bursts, shapes, start-to-end color and size, alpha/additive billboards and Lua control. Missing: soft
   particles (fade against scene depth; needs a depth copy, since the transparent pass has depth attached),

@@ -1,3 +1,35 @@
+# Clustered forward lighting
+
+The PBR pass uses a 16×9×24 camera-frustum grid. Perspective cameras have logarithmic depth slices;
+orthographic cameras have linear slices, including negative near planes. A compute workgroup builds
+each cell's ordered light list before lighting. Point and spot lights use conservative range spheres;
+additional directional lights appear in every cell. The primary sun retains its separate cascade path.
+
+Opaque, masked and transparent materials use the same lists. Culling covers the entire frustum rather
+than prepass depth, so transparent surfaces still receive their lights. Fragment lookup uses the current
+render area (top-left origin), independent of backing target size, render scale and output size.
+World-space planes also support translated, rotated and scaled camera transforms.
+
+The existing 256-light scene budget is unchanged. Each cell has 256 index slots plus a count: about
+3.39 MiB per renderer. There is no smaller per-cell cap that could silently lose lights. Lists preserve
+the scene light-buffer order and shadow-map indices. Empty counts are rewritten every frame; unused
+indices are never read. Resources allocate during renderer initialization; creation failures log their
+stage and fail initialization. nvrhi tracks compute-write to fragment-read transitions.
+
+Clustering is automatic and adds no serialized settings. Dense overlapping lights can still fill a
+cell; conservative spot spheres trade extra candidates for reliable coverage. The fixed grid avoids
+per-pixel iteration over lights in unrelated cells, but cannot guarantee faster rendering for every
+scene. The **Clusters** GPU timing appears alongside **Lighting** in the existing statistics and runtime
+logs. Dynamic resolution excludes this fixed-grid cost from its scale-dependent feedback.
+`SceneRenderer::SetClusteredLighting(false)` selects the original all-lights path for C++ diagnostics
+and image/performance comparisons.
+
+Headless tests cover depth partitions and conservative cell boundaries. `LightClustersGPU` compares
+all GPU lists with CPU plane tests, checks full-capacity and empty/reused buffers, and compares rendered
+point/spot/directional lighting with the all-lights reference. It exercises local shadows, transparent
+materials, camera changes, odd viewports, reduced render areas, dynamic resolution and moving lights.
+The test runs with Vulkan validation on MoltenVK locally and lavapipe in CI; existing goldens are unchanged.
+
 # Spatial upscaling (FSR 1)
 
 Scene settings select the upscaler through the editor's Renderer settings or automation:

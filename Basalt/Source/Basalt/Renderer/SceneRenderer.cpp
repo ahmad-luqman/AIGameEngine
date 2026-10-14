@@ -5,6 +5,7 @@
 #include "Basalt/Core/Log.h"
 #include "Basalt/Particles/ParticleSystem.h"
 #include "Basalt/Renderer/DebugLineRenderer.h"
+#include "Basalt/Renderer/LightClusters.h"
 #include "Basalt/Renderer/Fsr1Upscaler.h"
 #include "Basalt/Renderer/RenderMath.h"
 #include "Basalt/Renderer/LocalShadows.h"
@@ -37,7 +38,7 @@ namespace Basalt {
 		constexpr uint32_t PrefilteredMips = 6;
 		constexpr uint32_t BRDFLutSize = 256;
 		constexpr uint32_t SSAOKernelSize = 24;
-		constexpr uint32_t MaxLights = 256;
+		constexpr uint32_t MaxLights = MaxClusterLights;
 		constexpr uint64_t MaterialSetRetentionFrames = 120;
 		constexpr uint32_t ParticleTextureSize = 64;
 		// Billboards drawn per frame, at most (a 32 MB upload; the buffer grows to twice that); beyond it whole
@@ -57,13 +58,14 @@ namespace Basalt {
 			PassShadows,
 			PassPrepass,
 			PassSSAO,
+			PassClusters,
 			PassLighting,
 			PassTonemap,
 			PassOverlayDepth,
 			PassDebugLines,
 			PassCount
 		};
-		constexpr const char* ScenePassNames[] = { "Environment", "Uploads", "Shadows", "Prepass", "SSAO", "Lighting", "Tonemap", "OverlayDepth", "DebugLines" };
+		constexpr const char* ScenePassNames[] = { "Environment", "Uploads", "Shadows", "Prepass", "SSAO", "Clusters", "Lighting", "Tonemap", "OverlayDepth", "DebugLines" };
 		// A C array, not std::array<..., PassCount>, which would accept too few names (filling the rest with null).
 		static_assert(std::size(ScenePassNames) == PassCount, "one name per ScenePass");
 
@@ -121,8 +123,10 @@ namespace Basalt {
 			glm::vec4 EnvironmentParams;
 			glm::vec4 CameraClip;
 			GpuDirectionalLight Sun;
+			glm::uvec4 ClusterGrid;
+			glm::vec4 ClusterDepths;
 		};
-		static_assert(sizeof(GpuViewConstants) == 720, "GpuViewConstants must match the std140 ViewConstants block");
+		static_assert(sizeof(GpuViewConstants) == 752, "GpuViewConstants must match the std140 ViewConstants block");
 
 		struct GpuDrawData
 		{
@@ -320,6 +324,7 @@ namespace Basalt {
 		nvrhi::BufferHandle ViewConstantsBuffer;
 		nvrhi::BufferHandle SsaoConstantsBuffer;
 		nvrhi::BufferHandle DrawBuffer, MaterialBuffer, LightBuffer;
+		LightClusters Clusters;
 		nvrhi::TextureHandle ShadowMap;
 		nvrhi::TextureHandle LocalShadowAtlas;
 		nvrhi::FramebufferHandle LocalShadowFramebuffer;
@@ -484,6 +489,8 @@ namespace Basalt {
 			nvrhi::BindingLayoutItem::Texture_SRV(12),
 			nvrhi::BindingLayoutItem::Texture_SRV(13),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(14),
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(15),
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(16),
 		};
 		impl.FrameLayout = device->createBindingLayout(frameDesc);
 		// Shadow passes must not bind the depth textures they write as SRVs. In particular, switching
@@ -597,6 +604,11 @@ namespace Basalt {
 		impl.DrawBuffer = EnsureStructuredBuffer(device, nullptr, sizeof(GpuDrawData) * 256, sizeof(GpuDrawData), "DrawBuffer");
 		impl.MaterialBuffer = EnsureStructuredBuffer(device, nullptr, sizeof(GpuMaterialData) * 256, sizeof(GpuMaterialData), "MaterialBuffer");
 		impl.LightBuffer = EnsureStructuredBuffer(device, nullptr, sizeof(GpuLightData) * MaxLights, sizeof(GpuLightData), "LightBuffer");
+		if (!impl.LightBuffer || !impl.Clusters.Initialize(device, impl.LightBuffer))
+		{
+			BS_CORE_ERROR("SceneRenderer: failed to initialize clustered lighting");
+			return false;
+		}
 
 		nvrhi::TextureDesc shadowDesc;
 		shadowDesc.width = ShadowMapSize;
@@ -774,8 +786,9 @@ namespace Basalt {
 	float SceneRenderer::GetDynamicResolutionMilliseconds(const GpuFrameSample& sample)
 	{
 		// The environment bake runs once per sky change and uploads follow asset streaming; no resolution would
-		// absorb either (a first frame full of uploads would otherwise drop to the minimum).
-		return sample.MillisecondsWithout({ PassEnvironment, PassUploads });
+		// absorb either (a first frame full of uploads would otherwise drop to the minimum). The fixed
+		// cluster grid also costs the same at every render scale.
+		return sample.MillisecondsWithout({ PassEnvironment, PassUploads, PassClusters });
 	}
 
 	void SceneRenderer::ReportDynamicResolutionState()
@@ -1292,6 +1305,8 @@ namespace Basalt {
 		view.AmbientColor = glm::vec4(settings.AmbientColor, iblIntensity);
 		view.EnvironmentParams = glm::vec4(skyLight ? glm::radians(skyLight->Rotation) : 0.0f, static_cast<float>(PrefilteredMips), settings.SSAOEnabled ? 1.0f : 0.0f, static_cast<float>(lights.size()));
 		view.Sun = sun;
+		view.ClusterGrid = glm::uvec4(LightClusterDimensions, m_ClusteredLighting ? 1u : 0u);
+		view.ClusterDepths = LightClusterDepths(camera.Near, camera.Far, IsOrthographic(camera.Projection));
 
 		const bool shadowsActive = sun.Direction.w > 0.5f && sun.Color.w > 0.5f;
 		if (shadowsActive)
@@ -1613,7 +1628,9 @@ namespace Basalt {
 														   .addItem(nvrhi::BindingSetItem::Sampler(11, impl.PointClamp))
 														   .addItem(nvrhi::BindingSetItem::Texture_SRV(12, impl.Env.Cube, nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::TextureCube))
 														   .addItem(nvrhi::BindingSetItem::Texture_SRV(13, impl.LocalShadowAtlas))
-														   .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(14, impl.LocalShadowBuffer)),
+														   .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(14, impl.LocalShadowBuffer))
+														   .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(15, impl.Clusters.GetCounts()))
+														   .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(16, impl.Clusters.GetIndices())),
 													   impl.FrameLayout);
 			impl.ShadowFrameSet = m_Device->createBindingSet(commonFrameDesc
 																 .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(14, impl.LocalShadowBuffer)),
@@ -1722,6 +1739,13 @@ namespace Basalt {
 			fullscreen(impl.SsaoBlurPipeline, impl.SsaoBlurFramebuffer, impl.BlurHorizontalSet, renderViewport, &blur, sizeof(blur));
 			blur.Direction = { 0.0f, 1.0f / static_cast<float>(m_TargetHeight) };
 			fullscreen(impl.SsaoBlurPipeline, impl.SsaoFramebuffer, impl.BlurVerticalSet, renderViewport, &blur, sizeof(blur));
+		}
+
+		// Build against the complete frustum, not the prepass depth: transparent surfaces need lists too.
+		if (m_ClusteredLighting)
+		{
+			const GpuPassScope pass(profiler, commandList, PassClusters);
+			impl.Clusters.Build(commandList, camera.View, camera.Projection, view.ClusterDepths, static_cast<uint32_t>(view.EnvironmentParams.w));
 		}
 
 		// --- Lighting (opaque), skybox, transparent -----------------------------------------------
