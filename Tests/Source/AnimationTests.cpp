@@ -243,7 +243,7 @@ TEST_SUITE("Animation")
 		SUBCASE("unbounded zero-initialized times")
 		{
 			const auto animation = data["animations"][0];
-			data["animations"] = { animation };
+			data["animations"] = nlohmann::json::array({ animation });
 			data["accessors"][7].erase("bufferView");
 			data["accessors"][7]["count"] = 1000000000;
 			data["accessors"][8].erase("bufferView");
@@ -953,7 +953,7 @@ TEST_SUITE("Animation")
 		data.erase("skins");
 		data["nodes"][1].erase("skin");
 		const auto step = data["animations"][1];
-		data["animations"] = { step };
+		data["animations"] = nlohmann::json::array({ step });
 		data["animations"][0]["channels"][0]["target"]["node"] = 1;
 		const auto path = directory.GetPath() / "Rigid.gltf";
 		REQUIRE(FileSystem::WriteTextFile(path, data.dump()));
