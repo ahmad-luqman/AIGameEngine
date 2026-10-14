@@ -103,6 +103,7 @@ namespace Basalt {
 			{ "failed", statistics.Failed },
 			{ "fsr1Active", statistics.FSR1Active },
 			{ "culledSubmeshes", statistics.CulledSubmeshes },
+			{ "skinMatrices", statistics.SkinMatrices },
 			{ "particles", statistics.Particles },
 			{ "particlesSkipped", statistics.ParticlesSkipped },
 			{ "lights", statistics.Lights },

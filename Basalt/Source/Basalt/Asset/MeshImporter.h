@@ -19,7 +19,7 @@ namespace Basalt {
 		// key: the project-relative asset key used to name embedded textures ("<key>#image/<n>").
 		static Ref<MeshSource> LoadGltf(const std::filesystem::path& path, const std::string& key, std::string& outError);
 
-		// Recreates the mesh's node hierarchy as entities (one per node, MeshComponents on mesh nodes).
+		// Static models become an editable entity hierarchy; skinned/animated models use one Animator root.
 		// Returns the root entity named after the file.
 		static Entity InstantiateHierarchy(Scene& scene, const MeshSource& source, const std::string& name, Entity parent);
 	};

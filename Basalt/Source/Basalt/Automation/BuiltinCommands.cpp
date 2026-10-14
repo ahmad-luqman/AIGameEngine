@@ -1,3 +1,4 @@
+#include "Basalt/Animation/AnimatedModel.h"
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Asset/ImageUtils.h"
 #include "Basalt/Asset/TextureSource.h"
@@ -618,14 +619,22 @@ namespace Basalt {
 				return SceneSerializer::SerializeScene(RequireScene(session));
 			});
 
-			Add(registry, "scene.info", "Summary of the open scene: name, path, entity count, state, unsaved changes, rigid bodies on undefined physics layers.", {}, [](AutomationSession& session, const json&) {
+			Add(registry, "scene.info", "Summary of the open scene: name, path, entity count, state, unsaved changes, undefined physics layers and animation authoring warnings.", {}, [](AutomationSession& session, const json&) {
 				Scene& scene = RequireScene(session);
+				json animationWarnings = json::array();
+				for (auto handle : scene.GetRegistry().view<IDComponent>())
+				{
+					Entity entity(handle, &scene);
+					for (const auto& warning : GetAnimationWarnings(entity))
+						animationWarnings.push_back({ { "entity", static_cast<uint64_t>(entity.GetUUID()) }, { "name", entity.GetName() }, { "message", warning } });
+				}
 				return json{
 					{ "name", scene.GetName() },
 					{ "path", session.GetScenePath() },
 					{ "entities", scene.GetEntityCount() },
 					{ "playing", session.IsPlaying() },
 					{ "dirty", session.IsDirty() },
+					{ "animationWarnings", animationWarnings },
 					{ "unknownPhysicsLayers", FindUnknownPhysicsLayers(scene, ActivePhysicsLayers()) },
 				};
 			});
@@ -849,7 +858,7 @@ namespace Basalt {
 				return json{ { "path", path }, { "content", *text } };
 			});
 
-			Add(registry, "asset.import_model", "Instantiates a glTF model's node hierarchy into the scene.", { { "path", "string, .gltf/.glb or builtin://Cube" }, { "parent", "ID or name, optional" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "asset.import_model", "Imports a static model as an entity hierarchy, or a skinned/animated model as one Animator root.", { { "path", "string, .gltf/.glb or builtin://Cube" }, { "parent", "ID or name, optional" } }, [](AutomationSession& session, const json& params) {
 				Scene& scene = RequireScene(session);
 				Entity parent = params.contains("parent") && !params["parent"].is_null() ? ResolveEntity(scene, params["parent"], "parent") : Entity{};
 				std::string error;

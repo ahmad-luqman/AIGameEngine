@@ -55,6 +55,10 @@ The features most games need, roughly in order of impact.
 
 ### Rendering
 
+- **Animation follow-ups — L.** Skeletal playback, local blends and crossfades are implemented. Add
+  morph targets, bone attachments, root-motion extraction, retargeting and an animation state machine.
+  For large crowds, replace per-vertex CPU bounds with cached joint influence bounds or GPU culling.
+
 - **Particle follow-ups — M.** `ParticleEmitterComponent` (Particles/ParticleSystem) covers CPU simulation,
   bursts, shapes, start-to-end color and size, alpha/additive billboards and Lua control. Missing: soft
   particles (fade against scene depth; needs a depth copy, since the transparent pass has depth attached),

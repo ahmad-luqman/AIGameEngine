@@ -562,7 +562,7 @@ namespace Basalt {
 			m_ScriptEngine->LateUpdate(ts);
 		// After every system that moves entities, so particles leave from where the emitter is this frame.
 		m_ParticleSystem->Update(ts);
-		m_AnimationSystem->Update(ts.GetSeconds());
+		m_AnimationSystem->Update(ts);
 		if (m_State == SceneState::Play)
 			m_AudioSystem->Update(ts);
 		m_DeferDestruction--;

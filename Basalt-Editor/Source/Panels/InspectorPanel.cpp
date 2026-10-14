@@ -2,6 +2,7 @@
 
 #include "Panels/JsonWidgets.h"
 
+#include "Basalt/Animation/AnimatedModel.h"
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Math/Math.h"
@@ -206,6 +207,9 @@ namespace Basalt {
 				m_Context.CommitHistory();
 		}
 		ImGui::TextDisabled("ID %llu", static_cast<unsigned long long>(id));
+
+		for (const auto& warning : GetAnimationWarnings(entity))
+			ImGui::TextWrapped("%s", warning.c_str());
 
 		std::string componentToRemove;
 		for (const ComponentInfo& info : ComponentRegistry::GetAll())

@@ -70,26 +70,31 @@ namespace Basalt {
 		AABB Bounds;
 	};
 
-	// Node of an imported scene hierarchy, used to recreate it as entities.
+	// Imported node, instantiated for static assets or sampled internally by Animator.
 	struct MeshNode
 	{
 		std::string Name;
 		int32_t Parent = -1;
 		int32_t MeshIndex = -1;
 		int32_t SkinIndex = -1;
-		bool Active = true;
+		bool Active = true; // In the default glTF scene (all nodes still participate in joint transforms).
 		bool HasMatrix = false;
-		glm::mat4 Matrix = glm::mat4(1);
+		glm::mat4 Matrix = glm::mat4(1); // Used verbatim when HasMatrix; such nodes cannot be animation targets.
 		glm::vec3 Translation = { 0.0f, 0.0f, 0.0f };
 		glm::quat Rotation = { 1.0f, 0.0f, 0.0f, 0.0f };
 		glm::vec3 Scale = { 1.0f, 1.0f, 1.0f };
 	};
 
-	// Joint indices address Nodes; inverse bind matrices map mesh positions into joint space.
+	// One skin joint and the matching bind-vertex-to-joint transform.
+	struct SkinJoint
+	{
+		uint32_t Node = 0;
+		glm::mat4 InverseBind = glm::mat4(1);
+	};
+	// Joints reference MeshSource::Nodes; keeping each inverse bind with its index prevents mismatches.
 	struct MeshSkin
 	{
-		std::vector<uint32_t> Joints;
-		std::vector<glm::mat4> InverseBindMatrices;
+		std::vector<SkinJoint> Joints;
 	};
 
 	enum class AnimationPath
@@ -136,13 +141,19 @@ namespace Basalt {
 		std::vector<MeshNode> Nodes;
 		std::vector<MeshSkin> Skins;
 		std::vector<AnimationClip> Animations;
-		// Parent-before-child traversal, independent of glTF node array ordering.
+		// Unsupported influence sets retain geometry for static MeshComponents, but cannot be animated.
+		bool AnimationUnsupported = false;
+		// Parent-before-child traversal, independent of glTF node array ordering. Builders must call
+		// FinalizeHierarchy after setting Nodes and before any pose evaluation.
 		std::vector<uint32_t> NodeOrder;
 		AABB Bounds;
 		// Encoded bytes of images embedded in the file (glTF "#image/<n>" keys); empty for external images.
 		std::vector<std::vector<uint8_t>> EmbeddedImages;
 		// Asset key this source was loaded from ("Assets/Models/Ship.gltf", "builtin://Cube").
 		std::string Key;
+
+		// Rebuilds NodeOrder; returns false for an invalid parent or cycle.
+		bool FinalizeHierarchy();
 
 		// Adds a submesh from raw geometry, updating bounds. Returns the submesh index.
 		uint32_t AddSubmesh(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, uint32_t materialIndex);

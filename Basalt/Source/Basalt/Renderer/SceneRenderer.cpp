@@ -1,5 +1,6 @@
 #include "Basalt/Renderer/SceneRenderer.h"
 
+#include "Basalt/Animation/AnimatedModel.h"
 #include "Basalt/Animation/AnimationPose.h"
 #include "Basalt/Animation/AnimationSystem.h"
 #include "Basalt/Asset/AssetManager.h"
@@ -396,6 +397,7 @@ namespace Basalt {
 		uint64_t FrameCounter = 0;
 		bool FrameSetDirty = true;
 		bool ReportedFrameSetFailure = false;
+		bool ReportedDrawBufferFailure = false;
 		bool ReportedShadowAtlasFailure = false;
 		bool ReportedShadowOverflow = false;
 		bool ReportedLightOverflow = false;
@@ -1429,17 +1431,12 @@ namespace Basalt {
 		};
 
 		const glm::vec3 cameraForward = -glm::vec3(view.InverseView[2]);
-		auto addMesh = [&](Entity entity, const Ref<MeshSource>& source, uint32_t meshIndex, const glm::mat4& model, bool castShadows, const std::vector<glm::mat4>& palette) {
+		auto addMesh = [&](Entity entity, const Ref<MeshSource>& source, uint32_t meshIndex, const glm::mat4& model, bool castShadows, const std::vector<glm::mat4>& palette, uint32_t& paletteOffset) {
 			if (!source || meshIndex >= source->Meshes.size())
 				return;
 			const GpuMesh* gpuMesh = m_Resources->GetMesh(source, commandList);
 			if (!gpuMesh)
 				return;
-			// Palettes share the draw SSBO, preserving Vulkan's minimum storage-buffer descriptor budget.
-			const uint32_t paletteOffset = static_cast<uint32_t>(draws.size());
-			for (const auto& joint : palette)
-				draws.push_back({ joint, glm::mat4(1), glm::uvec4(0) });
-
 			const glm::mat4 normalMatrix = glm::transpose(glm::inverse(model));
 			const auto* materialOverride = entity.TryGetComponent<MaterialComponent>();
 
@@ -1494,8 +1491,23 @@ namespace Basalt {
 					set = materialSet(albedo, normal, mr, occlusion, emissive);
 				}
 
+				// Transparent geometry cannot keep an off-camera draw alive through shadow visibility.
+				if (!visible && blend)
+				{
+					m_Statistics.CulledSubmeshes++;
+					continue;
+				}
 				const uint32_t materialIndex = static_cast<uint32_t>(materials.size());
 				materials.push_back(material);
+				// Upload each instance's skin once, only if a camera or shadow pass needs it.
+				// Palettes share the draw SSBO to retain the portable storage-buffer descriptor count.
+				if (!palette.empty() && paletteOffset == UINT32_MAX)
+				{
+					paletteOffset = static_cast<uint32_t>(draws.size());
+					for (const auto& joint : palette)
+						draws.push_back({ joint, glm::mat4(1), glm::uvec4(0) });
+					m_Statistics.SkinMatrices += static_cast<uint32_t>(palette.size());
+				}
 				const uint32_t drawIndex = static_cast<uint32_t>(draws.size());
 				draws.push_back({ model, normalMatrix, glm::uvec4(materialIndex, 0, paletteOffset, static_cast<uint32_t>(palette.size())) });
 
@@ -1516,38 +1528,22 @@ namespace Basalt {
 				items.push_back(item);
 			}
 		};
+		uint32_t unusedPaletteOffset = 0;
 		for (auto handle : scene.GetAllEntitiesWith<MeshComponent>())
 		{
 			Entity entity(handle, &scene);
 			const auto& component = entity.GetComponent<MeshComponent>();
-			addMesh(entity, AssetManager::GetMesh(component.Mesh), component.MeshIndex, scene.GetWorldTransform(entity), component.CastShadows, {});
+			addMesh(entity, AssetManager::GetMesh(component.Mesh), component.MeshIndex, scene.GetWorldTransform(entity), component.CastShadows, {}, unusedPaletteOffset);
 		}
 		for (auto handle : scene.GetAllEntitiesWith<AnimatorComponent>())
 		{
 			Entity entity(handle, &scene);
 			const auto& component = entity.GetComponent<AnimatorComponent>();
-			const auto source = AssetManager::GetMesh(component.Mesh);
-			if (!source)
-				continue;
-			std::vector<glm::mat4> rest;
-			const std::vector<glm::mat4>* globals = scene.GetAnimationSystem() ? scene.GetAnimationSystem()->GetPose(entity) : nullptr;
-			if (!globals)
-			{
-				if (!EvaluateAnimation(*source, nullptr, 0, rest))
-					continue;
-				globals = &rest;
-			}
-			const glm::mat4 root = scene.GetWorldTransform(entity);
-			for (size_t i = 0; i < source->Nodes.size(); i++)
-			{
-				const auto& node = source->Nodes[i];
-				if (!node.Active || node.MeshIndex < 0)
-					continue;
-				const auto palette = node.SkinIndex >= 0 ? BuildSkinPalette(source->Skins[node.SkinIndex], *globals) : std::vector<glm::mat4>{};
-				if (node.SkinIndex >= 0 && palette.empty())
-					continue;
-				addMesh(entity, source, static_cast<uint32_t>(node.MeshIndex), palette.empty() ? root * (*globals)[i] : root, component.CastShadows, palette);
-			}
+			std::unordered_map<int32_t, uint32_t> paletteOffsets;
+			ForEachAnimatedMesh(entity, [&](const Ref<MeshSource>& source, const MeshNode& node, const glm::mat4& model, const std::vector<glm::mat4>& palette) {
+				uint32_t& offset = node.SkinIndex < 0 ? unusedPaletteOffset : paletteOffsets.try_emplace(node.SkinIndex, UINT32_MAX).first->second;
+				addMesh(entity, source, static_cast<uint32_t>(node.MeshIndex), model, component.CastShadows, palette, offset);
+			});
 		}
 		m_Statistics.Materials = static_cast<uint32_t>(materials.size());
 
@@ -1630,11 +1626,14 @@ namespace Basalt {
 		impl.MaterialBuffer = EnsureStructuredBuffer(m_Device, impl.MaterialBuffer, materials.size() * sizeof(GpuMaterialData), sizeof(GpuMaterialData), "MaterialBuffer");
 		if (!impl.DrawBuffer || !impl.MaterialBuffer)
 		{
-			BS_CORE_ERROR("SceneRenderer: failed to allocate draw/palette or material buffer");
+			if (!impl.ReportedDrawBufferFailure)
+				BS_CORE_ERROR("SceneRenderer: failed to allocate draw/palette ({} bytes) or material buffer ({} bytes)", draws.size() * sizeof(GpuDrawData), materials.size() * sizeof(GpuMaterialData));
+			impl.ReportedDrawBufferFailure = true;
 			uploadsPass.reset();
 			abortFrame();
 			return;
 		}
+		impl.ReportedDrawBufferFailure = false;
 		if (impl.DrawBuffer != previousDraws || impl.MaterialBuffer != previousMaterials)
 			impl.FrameSetDirty = true;
 		commandList->writeBuffer(impl.DrawBuffer, draws.data(), draws.size() * sizeof(GpuDrawData));

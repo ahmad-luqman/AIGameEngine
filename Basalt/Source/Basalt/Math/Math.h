@@ -10,6 +10,13 @@ namespace Basalt::Math {
 	// are then still well-defined (translation preserved, identity rotation).
 	bool DecomposeTransform(const glm::mat4& transform, glm::vec3& outTranslation, glm::quat& outRotation, glm::vec3& outScale);
 
+	// Strict TRS decomposition for imported affine matrices, including zero-scale axes; rejects shear.
+	bool DecomposeAffineTransform(const glm::mat4& transform, glm::vec3& outTranslation, glm::quat& outRotation, glm::vec3& outScale);
+	bool IsFinite(const glm::mat4& matrix);
+
+	// Normalizes an xyzw rotation, leaving it unchanged when its length is non-finite or too small.
+	bool NormalizeQuaternion(glm::vec4& rotation, float minimumLength = 1e-6f);
+
 	glm::mat4 ComposeTransform(const glm::vec3& translation, const glm::quat& rotation, const glm::vec3& scale);
 
 	// Euler angles in radians (pitch = X, yaw = Y, roll = Z), applied in the order used by glm::quat(eulerAngles).

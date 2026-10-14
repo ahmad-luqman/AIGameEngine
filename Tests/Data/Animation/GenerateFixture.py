@@ -1,4 +1,6 @@
-"""Rebuild the authored, redistributable two-joint glTF test model (no external assets)."""
+"""Rebuild the authored two-joint model in Animation, FeatureTest and the FuzzGltf corpus.
+The fuzz copy has a zero prefix: the harness uses that byte to select JSON rather than GLB.
+"""
 import base64
 import json
 import math

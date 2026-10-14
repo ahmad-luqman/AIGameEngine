@@ -2,7 +2,40 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <cmath>
+
 namespace Basalt::Math {
+
+	namespace {
+		glm::quat RotationFromAxes(glm::vec3 (&axes)[3], glm::vec3& scale)
+		{
+			// A mirrored basis is represented as a negative X scale.
+			if (glm::dot(glm::cross(axes[0], axes[1]), axes[2]) < 0)
+			{
+				scale.x = -scale.x;
+				axes[0] = -axes[0];
+			}
+			return glm::normalize(glm::quat_cast(glm::mat3(axes[0], axes[1], axes[2])));
+		}
+	}
+
+	bool NormalizeQuaternion(glm::vec4& rotation, float minimumLength)
+	{
+		const float length = glm::length(rotation);
+		if (!std::isfinite(length) || length < minimumLength)
+			return false;
+		rotation /= length;
+		return true;
+	}
+
+	bool IsFinite(const glm::mat4& matrix)
+	{
+		for (int c = 0; c < 4; c++)
+			for (int r = 0; r < 4; r++)
+				if (!std::isfinite(matrix[c][r]))
+					return false;
+		return true;
+	}
 
 	bool DecomposeTransform(const glm::mat4& transform, glm::vec3& outTranslation, glm::quat& outRotation, glm::vec3& outScale)
 	{
@@ -26,15 +59,55 @@ namespace Basalt::Math {
 
 		for (int i = 0; i < 3; i++)
 			axes[i] /= scale[i];
-		// A mirrored basis is represented as a negative X scale.
-		if (glm::dot(glm::cross(axes[0], axes[1]), axes[2]) < 0.0f)
-		{
-			scale.x = -scale.x;
-			axes[0] = -axes[0];
-		}
-
+		outRotation = RotationFromAxes(axes, scale);
 		outScale = scale;
-		outRotation = glm::normalize(glm::quat_cast(glm::mat3(axes[0], axes[1], axes[2])));
+		return true;
+	}
+
+	// A zero scale leaves some rotation axes unconstrained. Complete those axes with an orthonormal
+	// basis so static hierarchy entities reconstruct the authored matrix too, not only Animator poses.
+	bool DecomposeAffineTransform(const glm::mat4& matrix, glm::vec3& outTranslation, glm::quat& outRotation, glm::vec3& outScale)
+	{
+		if (matrix[0].w != 0 || matrix[1].w != 0 || matrix[2].w != 0 || matrix[3].w != 1)
+			return false;
+		glm::vec3 axes[3];
+		int nonzero = 0, present = 0, missing = 0;
+		for (int i = 0; i < 3; i++)
+		{
+			axes[i] = glm::vec3(matrix[i]);
+			const float length = std::hypot(axes[i].x, axes[i].y, axes[i].z);
+			if (!std::isfinite(length))
+				return false;
+			outScale[i] = length;
+			if (length > 0)
+			{
+				axes[i] /= length;
+				present = i;
+				nonzero++;
+			}
+			else
+				missing = i;
+		}
+		if (nonzero == 0)
+		{
+			axes[0] = { 1, 0, 0 };
+			axes[1] = { 0, 1, 0 };
+			axes[2] = { 0, 0, 1 };
+		}
+		else if (nonzero == 1)
+		{
+			const glm::vec3 helper = std::abs(axes[present].x) < .9f ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
+			axes[(present + 1) % 3] = glm::normalize(glm::cross(axes[present], helper));
+			axes[(present + 2) % 3] = glm::cross(axes[present], axes[(present + 1) % 3]);
+		}
+		else if (nonzero == 2)
+			axes[missing] = glm::cross(axes[(missing + 1) % 3], axes[(missing + 2) % 3]);
+		// glTF node matrices must be decomposable into TRS; shear is not a node transform.
+		for (int i = 0; i < 3; i++)
+			if (std::abs(glm::dot(axes[i], axes[(i + 1) % 3])) > 1e-4f || std::abs(glm::length(axes[i]) - 1) > 1e-4f)
+				return false;
+		outTranslation = glm::vec3(matrix[3]);
+		outRotation = RotationFromAxes(axes, outScale);
 		return true;
 	}
 

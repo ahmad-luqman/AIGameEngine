@@ -43,7 +43,7 @@ layout(set = 0, binding = 0) uniform ViewConstants
 struct DrawData
 {
 	mat4 Model;
-	mat4 Normal;          // inverse-transpose of Model (upper 3x3 used)
+	mat4 Normal;          // draw records: inverse-transpose of Model; unused for palette records
 	uvec4 Indices;        // x: material index; zw: joint palette offset/count (0 count = rigid)
 };
 

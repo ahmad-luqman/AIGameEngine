@@ -100,7 +100,8 @@ per-entity clocks, local poses and composed node transforms while a scene plays 
 component registry exposes setup through scene files, prefabs, the inspector, Lua and automation.
 `asset.import_model` creates an Animator root for animated/skinned assets; static assets retain their
 editable entity hierarchy. A Material on the root overrides imported materials. Editor picking,
-focus and selection outlines use the current animated model bounds.
+focus and selection outlines use the current animated model bounds. The inspector and `scene.info`
+report missing clips/assets and Mesh/Animator combinations that can draw unexpected geometry.
 
 TRS tracks support STEP, LINEAR (shortest-arc quaternion slerp), and CUBICSPLINE (time-scaled Hermite
 with normalized quaternion results). Missing channels retain authored node values. Blends and
@@ -111,23 +112,29 @@ Vertices carry four joint indices and normalized nonnegative weights. Vertex-sta
 skinning uses `jointGlobal * inverseBind`; as glTF requires, the skinned mesh node transform does not
 move the skin a second time. The Basalt entity world transform applies after skinning. Rigid animated
 nodes use their evaluated node transform. Normals use a scale-normalized cofactor form of the inverse transpose of the blended linear
-transform, preserving rotation even for very small rig units; tangents use its linear transform and preserve reflection handedness. Degenerate skin
+transform, preserving rotation even for very small rig units; tangents use its linear transform and preserve reflection handedness in the skin transform (negative entity scale retains the existing static-mesh tangent convention). Degenerate skin
 transforms have a finite normal fallback. The same palette and position operation feed PBR, depth/
 normal prepass, opaque and masked cascades, and point/spot shadows. Transparent meshes use skinning
 but retain the renderer's no-transparent-shadow policy.
 
 Palettes occupy records in the existing draw SSBO, with per-draw offset/count metadata. This keeps
 the frame at four storage-buffer bindings and supports independent instances without mutable GPU
-asset data. Vertex stride is 80 bytes for both rigid and skinned geometry. Palette upload storage grows
+asset data. Mesh nodes sharing a skin reuse one palette per instance, uploaded only if a camera or shadow
+pass needs it; `render.stats.skinMatrices` reports the uploaded matrix count. Vertex stride is 80 bytes for both rigid and skinned geometry. Palette upload storage grows
 with demand and uses nvrhi resource lifetime tracking; allocation failure fails the frame explicitly.
 Exact submesh bounds are computed on the CPU from the current palette for camera and shadow culling.
 This adds work proportional to animated vertex count, in addition to GPU skinning; large crowds would
 benefit from cached joint influence bounds or GPU culling.
 
 Import rejects malformed weights/joints, invalid track shapes/times/quaternions, cyclic hierarchies,
-and unsupported extra influence sets or morph-weight animation. Sparse accessors and normalized
-unsigned byte/short weights are supported. Limits are 65,536 nodes and joints per skin, 4,096 skins
-and clips, and 64 MiB of decoded skin/animation floats (repeated sampler references count separately).
+animated matrix nodes and duplicate node/path targets. Unsupported morph-weight and pointer channels
+are warned about and skipped; extra influence sets retain static geometry with a warning and disable
+Animator playback for that asset. Sparse accessors, normalized unsigned byte/short weights and
+normalized signed/unsigned byte/short rotation keys are supported. Animated/skinned models are limited
+to 65,536 nodes per model; each skin is limited to 65,536 joints. Other limits are 4,096 skins
+and clips, 65,536 skin-joint references summed over active mesh nodes, and 64 MiB of decoded skin/animation
+floats (repeated sampler references count separately). The combined joint-reference limit bounds
+work for assets that reuse a large skin across many nodes.
 Non-finite evaluated hierarchies or palettes log once per failure episode and display the validated rest pose.
 A skin may use the first N matrices of a larger inverse-bind accessor; absent inverse binds are
 identity. Duplicate clip names get deterministic suffixes. There is no morph-target deformation,

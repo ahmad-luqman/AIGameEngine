@@ -37,6 +37,18 @@ namespace {
 
 TEST_SUITE("Automation")
 {
+	TEST_CASE("Scene info reports Animator authoring warnings without requiring Play")
+	{
+		CommandRegistry registry;
+		AutomationSession session;
+		Run(registry, session, "scene.new", { { "name", "AnimationWarnings" }, { "empty", true } });
+		Run(registry, session, "entity.create", { { "name", "EmptyRig" } });
+		Run(registry, session, "component.set", { { "entity", "EmptyRig" }, { "component", "Animator" }, { "data", json::object() } });
+		const auto warnings = Run(registry, session, "scene.info")["animationWarnings"];
+		REQUIRE(warnings.size() == 1);
+		CHECK(warnings[0]["name"] == "EmptyRig");
+		CHECK(warnings[0]["message"] == "Animator Mesh is empty");
+	}
 	TEST_CASE("Protocol: unknown commands, malformed requests, batches")
 	{
 		CommandRegistry registry;

@@ -255,6 +255,7 @@ TEST_SUITE("Serialization")
 		entity.GetComponent<BoxColliderComponent>() = { .HalfExtents = { 1.0f, 2.0f, 3.0f }, .OverrideMaterial = true, .Friction = 0.125f, .Restitution = 0.5f };
 		entity.GetComponent<SphereColliderComponent>().Friction = 0.9f;
 		entity.GetComponent<CapsuleColliderComponent>().Restitution = 0.3f;
+		entity.GetComponent<AnimatorComponent>() = { "Assets/Models/Fox.glb", "Run", 2.5f, false, false, false };
 		entity.GetComponent<MaterialComponent>().AlbedoColor = { 0.1f, 0.2f, 0.3f, 0.4f };
 		entity.GetComponent<ParticleEmitterComponent>() = { .PlayOnStart = false,
 															.Looping = false,
