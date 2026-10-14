@@ -51,6 +51,58 @@ namespace Basalt {
 			}
 		}
 
+		// A zero scale leaves some rotation axes unconstrained. Complete those axes with an orthonormal
+		// basis so static hierarchy entities reconstruct the authored matrix too, not only Animator poses.
+		bool DecomposeNodeMatrix(const glm::mat4& matrix, MeshNode& node)
+		{
+			if (matrix[0].w != 0 || matrix[1].w != 0 || matrix[2].w != 0 || matrix[3].w != 1)
+				return false;
+			glm::vec3 axes[3];
+			int nonzero = 0, present = 0, missing = 0;
+			for (int i = 0; i < 3; i++)
+			{
+				axes[i] = glm::vec3(matrix[i]);
+				const float length = std::hypot(axes[i].x, axes[i].y, axes[i].z);
+				if (!std::isfinite(length))
+					return false;
+				node.Scale[i] = length;
+				if (length > 0)
+				{
+					axes[i] /= length;
+					present = i;
+					nonzero++;
+				}
+				else
+					missing = i;
+			}
+			if (nonzero == 0)
+			{
+				axes[0] = { 1, 0, 0 };
+				axes[1] = { 0, 1, 0 };
+				axes[2] = { 0, 0, 1 };
+			}
+			else if (nonzero == 1)
+			{
+				const glm::vec3 helper = std::abs(axes[present].x) < .9f ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
+				axes[(present + 1) % 3] = glm::normalize(glm::cross(axes[present], helper));
+				axes[(present + 2) % 3] = glm::cross(axes[present], axes[(present + 1) % 3]);
+			}
+			else if (nonzero == 2)
+				axes[missing] = glm::cross(axes[(missing + 1) % 3], axes[(missing + 2) % 3]);
+			// glTF node matrices must be decomposable into TRS; shear is not a node transform.
+			for (int i = 0; i < 3; i++)
+				if (std::abs(glm::dot(axes[i], axes[(i + 1) % 3])) > 1e-4f || std::abs(glm::length(axes[i]) - 1) > 1e-4f)
+					return false;
+			if (glm::dot(glm::cross(axes[0], axes[1]), axes[2]) < 0)
+			{
+				node.Scale.x = -node.Scale.x;
+				axes[0] = -axes[0];
+			}
+			node.Translation = glm::vec3(matrix[3]);
+			node.Rotation = glm::normalize(glm::quat_cast(glm::mat3(axes[0], axes[1], axes[2])));
+			return true;
+		}
+
 		bool IsDataUri(const char* uri);
 
 		// glTF files are untrusted: an external buffer or image URI may only name a file inside the active
@@ -443,7 +495,7 @@ namespace Basalt {
 				std::memcpy(&matrix, node.matrix, sizeof(float) * 16);
 				result.HasMatrix = true;
 				result.Matrix = matrix;
-				if (!Math::DecomposeTransform(matrix, result.Translation, result.Rotation, result.Scale))
+				if (!DecomposeNodeMatrix(matrix, result))
 				{
 					outError = key + ": node matrix cannot be decomposed";
 					return nullptr;
