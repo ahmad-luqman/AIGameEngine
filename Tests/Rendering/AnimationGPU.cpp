@@ -95,6 +95,27 @@ TEST_CASE("GPU skinning matches CPU posed geometry in lighting, normals, depth a
 	gpuScene.OnSimulationStart();
 	auto source = AssetManager::GetMesh(fixture.string());
 	REQUIRE(source);
+	bool smallUnits = false;
+	SUBCASE("Ordinary rig units") {}
+	SUBCASE("Small rig units compensated by entity scale")
+	{
+		smallUnits = true;
+		source->Nodes[2].Scale = glm::vec3(.001f);
+		// Rotate out of plane so losing the joint rotation changes the normal image.
+		source->Animations[0].Tracks[0].Values[1] = { 0, std::sqrt(.5f), 0, std::sqrt(.5f) };
+	}
+	SUBCASE("Nonuniform small rig units retain the surface normal")
+	{
+		smallUnits = true;
+		source->Nodes[2].Scale = { .001f, .001f, 1 };
+	}
+	if (smallUnits)
+	{
+		rig.GetTransform().Scale *= 1000;
+		reference.GetTransform().Scale *= 1000;
+		second.GetTransform().Scale *= 1000;
+		REQUIRE(gpuScene.GetAnimationSystem()->Seek(second, 0));
+	}
 	SceneRenderer gpuRenderer(graphics->GetDevice()), cpuRenderer(graphics->GetDevice());
 	REQUIRE(gpuRenderer.Initialize());
 	REQUIRE(cpuRenderer.Initialize());
@@ -156,18 +177,21 @@ TEST_CASE("GPU skinning matches CPU posed geometry in lighting, normals, depth a
 				}
 			}
 		}
-	// Frame only the bent tip: the bind-pose box is entirely outside this camera.
-	source->Materials[0].Alpha = AlphaMode::Opaque;
-	AssetManager::GetMesh(referencePath.string())->Materials = source->Materials;
-	gpuScene.GetRendererSettings().DebugView = RendererDebugView::None;
-	cpuScene.GetRendererSettings().DebugView = RendererDebugView::None;
-	camera.Position = { -.8f, 1.2f, 4 };
-	camera.View = glm::lookAt(camera.Position, glm::vec3(-.8f, 1.2f, 0), glm::vec3(0, 1, 0));
-	camera.Projection = glm::ortho(-.3f, .3f, -.3f, .3f, .1f, 10.0f);
-	camera.Far = 10;
-	const auto tipGPU = Capture(gpuRenderer, gpuScene, camera);
-	const auto tipCPU = Capture(cpuRenderer, cpuScene, camera);
-	Compare(tipGPU, tipCPU);
+	if (!smallUnits)
+	{
+		// Frame only the bent tip: the bind-pose box is entirely outside this camera.
+		source->Materials[0].Alpha = AlphaMode::Opaque;
+		AssetManager::GetMesh(referencePath.string())->Materials = source->Materials;
+		gpuScene.GetRendererSettings().DebugView = RendererDebugView::None;
+		cpuScene.GetRendererSettings().DebugView = RendererDebugView::None;
+		camera.Position = { -.8f, 1.2f, 4 };
+		camera.View = glm::lookAt(camera.Position, glm::vec3(-.8f, 1.2f, 0), glm::vec3(0, 1, 0));
+		camera.Projection = glm::ortho(-.3f, .3f, -.3f, .3f, .1f, 10.0f);
+		camera.Far = 10;
+		const auto tipGPU = Capture(gpuRenderer, gpuScene, camera);
+		const auto tipCPU = Capture(cpuRenderer, cpuScene, camera);
+		Compare(tipGPU, tipCPU);
+	}
 	gpuScene.OnSimulationStop();
 	graphics->GetDevice()->waitForIdle();
 	CHECK(graphics->GetValidationErrorCount() == 0);

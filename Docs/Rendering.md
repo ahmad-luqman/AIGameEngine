@@ -110,8 +110,8 @@ section “Skeletal animation” defines playback and transition behavior.
 Vertices carry four joint indices and normalized nonnegative weights. Vertex-stage linear blend
 skinning uses `jointGlobal * inverseBind`; as glTF requires, the skinned mesh node transform does not
 move the skin a second time. The Basalt entity world transform applies after skinning. Rigid animated
-nodes use their evaluated node transform. Normals use the inverse transpose of the blended linear
-transform; tangents use its linear transform and preserve reflection handedness. Degenerate skin
+nodes use their evaluated node transform. Normals use a scale-normalized cofactor form of the inverse transpose of the blended linear
+transform, preserving rotation even for very small rig units; tangents use its linear transform and preserve reflection handedness. Degenerate skin
 transforms have a finite normal fallback. The same palette and position operation feed PBR, depth/
 normal prepass, opaque and masked cascades, and point/spot shadows. Transparent meshes use skinning
 but retain the renderer's no-transparent-shadow policy.
