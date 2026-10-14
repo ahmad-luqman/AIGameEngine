@@ -25,15 +25,20 @@ void main()
 	vec4 world = draw.Model * skin * vec4(a_Position, 1.0);
 	v_WorldPosition = world.xyz;
 	mat3 linear = mat3(skin);
-	float determinant = determinant(linear);
-	// Zero scales and collapsing blends have no inverse; retain a finite direction.
-	mat3 skinNormal = abs(determinant) > 1e-8 ? transpose(inverse(linear)) : mat3(1.0);
-	vec3 normal = mat3(draw.Normal) * skinNormal * a_Normal;
-	v_Normal = dot(normal, normal) > 1e-16 ? normalize(normal) : vec3(0.0, 1.0, 0.0);
+	// Cofactors give the inverse-transpose direction without division by a tiny determinant.
+	// Normalize the matrix scale first so small-unit rigs retain their joint rotation.
+	vec3 largest = max(max(abs(linear[0]), abs(linear[1])), abs(linear[2]));
+	float scale = max(largest.x, max(largest.y, largest.z));
+	mat3 stable = scale > 0.0 ? linear / scale : mat3(0.0);
+	float orientation = determinant(stable);
+	mat3 cofactors = mat3(cross(stable[1], stable[2]), cross(stable[2], stable[0]), cross(stable[0], stable[1]));
+	vec3 normal = mat3(draw.Normal) * cofactors * a_Normal * (orientation < 0.0 ? -1.0 : 1.0);
+	float normalScale = max(abs(normal.x), max(abs(normal.y), abs(normal.z)));
+	v_Normal = normalScale > 0.0 ? normalize(normal / normalScale) : vec3(0.0, 1.0, 0.0);
 	vec3 tangent = mat3(draw.Model) * linear * a_Tangent.xyz;
-	if (dot(tangent, tangent) < 1e-16)
-		tangent = cross(v_Normal, abs(v_Normal.x) < 0.9 ? vec3(1,0,0) : vec3(0,1,0));
-	v_Tangent = vec4(normalize(tangent), a_Tangent.w * (determinant < 0.0 ? -1.0 : 1.0));
+	float tangentScale = max(abs(tangent.x), max(abs(tangent.y), abs(tangent.z)));
+	tangent = tangentScale > 0.0 ? tangent / tangentScale : cross(v_Normal, abs(v_Normal.x) < 0.9 ? vec3(1,0,0) : vec3(0,1,0));
+	v_Tangent = vec4(normalize(tangent), a_Tangent.w * (orientation < 0.0 ? -1.0 : 1.0));
 	v_TexCoord = a_TexCoord;
 	v_MaterialIndex = draw.Indices.x;
 	gl_Position = u_View.ViewProjection * world;
