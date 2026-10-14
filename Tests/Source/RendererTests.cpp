@@ -800,7 +800,7 @@ TEST_SUITE("SceneRenderer")
 		CHECK(*contents == "previous image");
 	}
 
-	TEST_CASE("Dynamic resolution excludes environment uploads and the fixed cluster grid")
+	TEST_CASE("Dynamic resolution excludes environment uploads but includes recurring cluster work")
 	{
 		SceneRenderer renderer(nullptr);
 		const std::vector<GpuPassTiming>& passes = renderer.GetGpuTimings().Passes;
@@ -817,7 +817,7 @@ TEST_SUITE("SceneRenderer")
 			if (passes[i].Name == "Clusters")
 				sample.PassMilliseconds[i] = 2.0f;
 		}
-		CHECK(SceneRenderer::GetDynamicResolutionMilliseconds(sample) == doctest::Approx(6.0f));
+		CHECK(SceneRenderer::GetDynamicResolutionMilliseconds(sample) == doctest::Approx(8.0f));
 	}
 
 	TEST_CASE("Dynamic resolution settings are sanitized by the renderer, with a warning")

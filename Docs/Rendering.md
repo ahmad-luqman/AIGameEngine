@@ -23,7 +23,8 @@ to fragment-read transitions.
 Clustering is automatic and adds no serialized settings. Dense overlapping lights can cause a cell to visit all 256 lights; conservative spot spheres trade extra candidates for reliable coverage. The fixed grid avoids
 per-pixel iteration over lights in unrelated cells, but cannot guarantee faster rendering for every
 scene. The **Clusters** GPU timing appears alongside **Lighting** in the statistics and runtime
-logs. Dynamic resolution excludes this fixed-grid cost from its scale-dependent feedback.
+logs. Dynamic resolution includes this recurring cost in its frame budget, even though the grid size
+does not change with render scale.
 `SceneRenderer::SetClusteredLighting(false)` selects the all-lights reference path for C++ diagnostics
 and image/performance comparisons. `SetVisualizeLightCount(true)` replaces PBR color with the fraction
 of the light budget actually visited by each fragment, making list consumption observable.

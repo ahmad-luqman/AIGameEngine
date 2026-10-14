@@ -99,8 +99,8 @@ namespace Basalt {
 		DynamicResolutionState GetDynamicResolutionState() const;
 		bool IsDynamicResolutionActive() const;
 		const DynamicResolutionSampleCounts& GetDynamicResolutionSamples() const { return m_Diagnostics.Samples; }
-		// The part of a frame's GPU time dynamic resolution steers by: without the passes no render scale
-		// affects (the environment bake, uploads and fixed cluster grid).
+		// GPU frame time without transient environment baking and uploads. Recurring cluster work stays
+		// in the frame budget even though its cost is independent of render scale.
 		static float GetDynamicResolutionMilliseconds(const GpuFrameSample& sample);
 		// Scale of the last rendered frame (below the render scale while dynamic resolution has lowered it; a
 		// resize keeps it). Between a resize and the next Render it reads GetRenderScale(). GetRenderWidth/Height
