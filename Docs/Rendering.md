@@ -8,29 +8,34 @@ additional directional lights appear in every cell. The primary sun retains its 
 Opaque, masked and transparent materials use the same lists. Culling covers the entire frustum rather
 than prepass depth, so transparent surfaces still receive their lights. Fragment lookup uses the current
 render area (top-left origin), independent of backing target size, render scale and output size.
-World-space planes also support translated, rotated and scaled camera transforms.
+World-space planes also support translated, rotated and scaled camera transforms. Edge depth cells
+are unbounded on their outer side, matching clamped fragment lookup even if camera metadata differs
+from the projection. Invalid depth intervals are logged and replaced by [0.1, 1000].
 
-The existing 256-light scene budget is unchanged. Each cell has 256 index slots plus a count: about
+The scene buffer holds up to 256 lights, in addition to the primary sun. Each cell has 256 index slots plus a count: about
 3.39 MiB for lists per renderer. Lists and the 16 KiB light-record prefix share a single storage
-buffer, keeping the frame layout at four storage-buffer descriptors (Vulkan core's per-stage minimum). There is no smaller per-cell cap that could silently lose lights. Lists preserve
-the scene light-buffer order and shadow-map indices. Empty counts are rewritten every frame; unused
+buffer, keeping the frame layout at four storage-buffer descriptors (Vulkan core's per-stage minimum). There is no smaller per-cell cap that could silently lose lights. Lists reference the scene light records, including their shadow-map indices; stable order preserves
+floating-point accumulation for exact image comparisons. Empty counts are rewritten every frame; unused
 indices are never read. Resources allocate during renderer initialization; creation failures log their
 stage and fail initialization. The compute pass reads the record prefix and writes only the list suffix; nvrhi tracks compute-write
 to fragment-read transitions.
 
-Clustering is automatic and adds no serialized settings. Dense overlapping lights can still fill a
-cell; conservative spot spheres trade extra candidates for reliable coverage. The fixed grid avoids
+Clustering is automatic and adds no serialized settings. Dense overlapping lights can cause a cell to visit all 256 lights; conservative spot spheres trade extra candidates for reliable coverage. The fixed grid avoids
 per-pixel iteration over lights in unrelated cells, but cannot guarantee faster rendering for every
-scene. The **Clusters** GPU timing appears alongside **Lighting** in the existing statistics and runtime
+scene. The **Clusters** GPU timing appears alongside **Lighting** in the statistics and runtime
 logs. Dynamic resolution excludes this fixed-grid cost from its scale-dependent feedback.
-`SceneRenderer::SetClusteredLighting(false)` selects the original all-lights path for C++ diagnostics
-and image/performance comparisons.
+`SceneRenderer::SetClusteredLighting(false)` selects the all-lights reference path for C++ diagnostics
+and image/performance comparisons. `SetVisualizeLightCount(true)` replaces PBR color with the fraction
+of the light budget actually visited by each fragment, making list consumption observable.
 
 Headless tests cover depth partitions and conservative cell boundaries. `LightClustersGPU` compares
-all GPU lists with CPU plane tests, checks full-capacity and empty/reused buffers, and compares rendered
+GPU lists with CPU plane tests using a narrow floating-point tolerance band, checks full-capacity and empty/reused buffers, and compares rendered
 point/spot/directional lighting with the all-lights reference. It exercises local shadows, transparent
 materials, camera changes, odd viewports, reduced render areas, dynamic resolution and moving lights.
-The test runs with Vulkan validation on MoltenVK locally and lavapipe in CI; existing goldens are unchanged.
+Sparse influence spheres test tile/depth boundaries and the per-fragment count diagnostic; a one-cell
+sphere pins x/y culling tightness. Both builder and scene over-budget cases are tested. The GPU test
+requests synchronization validation with `VK_LAYER_ENABLES` as well as core validation on MoltenVK
+locally and lavapipe in CI; golden comparisons cover the feature scene.
 
 # Spatial upscaling (FSR 1)
 

@@ -5,8 +5,8 @@
 #include "Basalt/Core/Log.h"
 #include "Basalt/Particles/ParticleSystem.h"
 #include "Basalt/Renderer/DebugLineRenderer.h"
-#include "Basalt/Renderer/LightClusters.h"
 #include "Basalt/Renderer/Fsr1Upscaler.h"
+#include "Basalt/Renderer/LightClusters.h"
 #include "Basalt/Renderer/RenderMath.h"
 #include "Basalt/Renderer/LocalShadows.h"
 #include "Basalt/Renderer/SceneLights.h"
@@ -38,7 +38,7 @@ namespace Basalt {
 		constexpr uint32_t PrefilteredMips = 6;
 		constexpr uint32_t BRDFLutSize = 256;
 		constexpr uint32_t SSAOKernelSize = 24;
-		constexpr uint32_t MaxLights = MaxClusterLights;
+		constexpr uint32_t MaxLights = MaxSceneLights;
 		constexpr uint64_t MaterialSetRetentionFrames = 120;
 		constexpr uint32_t ParticleTextureSize = 64;
 		// Billboards drawn per frame, at most (a 32 MB upload; the buffer grows to twice that); beyond it whole
@@ -595,10 +595,7 @@ namespace Basalt {
 		impl.DrawBuffer = EnsureStructuredBuffer(device, nullptr, sizeof(GpuDrawData) * 256, sizeof(GpuDrawData), "DrawBuffer");
 		impl.MaterialBuffer = EnsureStructuredBuffer(device, nullptr, sizeof(GpuMaterialData) * 256, sizeof(GpuMaterialData), "MaterialBuffer");
 		if (!impl.Clusters.Initialize(device))
-		{
-			BS_CORE_ERROR("SceneRenderer: failed to initialize clustered lighting");
 			return false;
-		}
 		impl.LightBuffer = impl.Clusters.GetBuffer();
 
 		nvrhi::TextureDesc shadowDesc;
@@ -1021,6 +1018,7 @@ namespace Basalt {
 		impl.FrameCounter++;
 		m_Statistics = {};
 		const RendererSettings& settings = scene.GetRendererSettings();
+		const bool orthographic = IsOrthographic(camera.Projection);
 		auto abortFrame = [&]() {
 			m_Statistics.Failed = true;
 			profiler.EndFrame(commandList, 0);
@@ -1063,7 +1061,7 @@ namespace Basalt {
 					continue;
 				}
 				const DirectionalLightInfo& light = directionalLights[i];
-				lights.push_back({ glm::vec4(0.0f), glm::vec4(light.Radiance, 2.0f), glm::vec4(light.Direction, 0.0f), glm::vec4(0.0f) });
+				lights.push_back({ glm::vec4(0.0f), glm::vec4(light.Radiance, static_cast<float>(GpuLightType::Directional)), glm::vec4(light.Direction, 0.0f), glm::vec4(0.0f) });
 			}
 			auto pointView = scene.GetAllEntitiesWith<PointLightComponent>();
 			for (entt::entity handle : pointView)
@@ -1077,7 +1075,7 @@ namespace Basalt {
 				const glm::vec3 position(scene.GetWorldTransform({ handle, &scene })[3]);
 				requestShadow(light, { Entity(handle, &scene).GetUUID(), 0, LocalShadowType::Point, position, light.Radius });
 				const float softness = SanitizeLocalShadowSoftness(light.ShadowSoftness);
-				lights.push_back({ glm::vec4(position, light.Radius), glm::vec4(light.Color * light.Intensity, 0.0f), glm::vec4(0.0f), glm::vec4(0.0f, 0.0f, softness, 0.0f) });
+				lights.push_back({ glm::vec4(position, light.Radius), glm::vec4(light.Color * light.Intensity, static_cast<float>(GpuLightType::Point)), glm::vec4(0.0f), glm::vec4(0.0f, 0.0f, softness, 0.0f) });
 			}
 			auto spotView = scene.GetAllEntitiesWith<SpotLightComponent>();
 			for (entt::entity handle : spotView)
@@ -1102,10 +1100,11 @@ namespace Basalt {
 				const float inner = glm::cos(glm::radians(std::clamp(light.InnerConeAngle, 0.0f, outerDegrees)));
 				requestShadow(light, { Entity(handle, &scene).GetUUID(), 0, LocalShadowType::Spot, glm::vec3(world[3]), light.Range, direction, outerDegrees });
 				const float softness = SanitizeLocalShadowSoftness(light.ShadowSoftness);
-				lights.push_back({ glm::vec4(glm::vec3(world[3]), light.Range), glm::vec4(light.Color * light.Intensity, 1.0f), glm::vec4(direction, outer), glm::vec4(std::max(inner, outer + 1e-4f), 0.0f, softness, 0.0f) });
+				lights.push_back({ glm::vec4(glm::vec3(world[3]), light.Range), glm::vec4(light.Color * light.Intensity, static_cast<float>(GpuLightType::Spot)), glm::vec4(direction, outer), glm::vec4(std::max(inner, outer + 1e-4f), 0.0f, softness, 0.0f) });
 			}
 		}
-		m_Statistics.Lights += static_cast<uint32_t>(lights.size());
+		const uint32_t bufferedLightCount = static_cast<uint32_t>(lights.size());
+		m_Statistics.Lights += bufferedLightCount;
 		if (m_Statistics.LightsSkipped && !impl.ReportedLightOverflow)
 			BS_CORE_WARN("SceneRenderer: light budget {} exceeded; {} lights skipped", MaxLights, m_Statistics.LightsSkipped);
 		impl.ReportedLightOverflow = m_Statistics.LightsSkipped > 0;
@@ -1294,10 +1293,11 @@ namespace Basalt {
 		const glm::vec2 uvScale(static_cast<float>(m_RenderWidth) / static_cast<float>(m_TargetWidth), static_cast<float>(m_RenderHeight) / static_cast<float>(m_TargetHeight));
 		const float iblIntensity = skyLight ? skyLight->Intensity : 1.0f;
 		view.AmbientColor = glm::vec4(settings.AmbientColor, iblIntensity);
-		view.EnvironmentParams = glm::vec4(skyLight ? glm::radians(skyLight->Rotation) : 0.0f, static_cast<float>(PrefilteredMips), settings.SSAOEnabled ? 1.0f : 0.0f, static_cast<float>(lights.size()));
+		view.EnvironmentParams = glm::vec4(skyLight ? glm::radians(skyLight->Rotation) : 0.0f, static_cast<float>(PrefilteredMips), settings.SSAOEnabled ? 1.0f : 0.0f, static_cast<float>(bufferedLightCount));
 		view.Sun = sun;
 		view.ClusterGrid = glm::uvec4(LightClusterDimensions, m_ClusteredLighting ? 1u : 0u);
-		view.ClusterDepths = LightClusterDepths(camera.Near, camera.Far, IsOrthographic(camera.Projection));
+		view.ClusterDepths = LightClusterDepths(camera.Near, camera.Far, orthographic);
+		view.ClusterDepths.w = m_VisualizeLightCount ? 1.0f : 0.0f;
 
 		const bool shadowsActive = sun.Direction.w > 0.5f && sun.Color.w > 0.5f;
 		if (shadowsActive)
@@ -1305,7 +1305,7 @@ namespace Basalt {
 			// Split the camera frustum (up to ShadowDistance) into cascades.
 			const float nearClip = camera.Near;
 			const float farClip = std::min(camera.Far, std::max(settings.ShadowDistance, nearClip + 1.0f));
-			const auto splits = ComputeCascadeSplits<MaxCascades>(nearClip, farClip, settings.CascadeSplitLambda, IsOrthographic(camera.Projection));
+			const auto splits = ComputeCascadeSplits<MaxCascades>(nearClip, farClip, settings.CascadeSplitLambda, orthographic);
 			view.CascadeSplits = glm::vec4(splits[0], splits[1], splits[2], splits[3]);
 
 			// Frustum corners at the camera's near and far planes.
@@ -1722,9 +1722,9 @@ namespace Basalt {
 			commandList->writeBuffer(impl.SsaoConstantsBuffer, &impl.SsaoConstants, sizeof(GpuSSAOConstants));
 
 			fullscreen(impl.SsaoPipeline, impl.SsaoFramebuffer, impl.SsaoSet, renderViewport, nullptr, 0);
-			const float orthographic = IsOrthographic(camera.Projection) ? 1.0f : 0.0f;
+			const float orthographicFlag = orthographic ? 1.0f : 0.0f;
 			// Blur steps are one target texel: the targets, not the render area, set the texel size.
-			BlurPush blur{ { 1.0f / static_cast<float>(m_TargetWidth), 0.0f }, camera.Near, camera.Far, orthographic, 0.0f, uvScale };
+			BlurPush blur{ { 1.0f / static_cast<float>(m_TargetWidth), 0.0f }, camera.Near, camera.Far, orthographicFlag, 0.0f, uvScale };
 			fullscreen(impl.SsaoBlurPipeline, impl.SsaoBlurFramebuffer, impl.BlurHorizontalSet, renderViewport, &blur, sizeof(blur));
 			blur.Direction = { 0.0f, 1.0f / static_cast<float>(m_TargetHeight) };
 			fullscreen(impl.SsaoBlurPipeline, impl.SsaoFramebuffer, impl.BlurVerticalSet, renderViewport, &blur, sizeof(blur));
@@ -1733,8 +1733,16 @@ namespace Basalt {
 		// Build against the complete frustum, not the prepass depth: transparent surfaces need lists too.
 		if (m_ClusteredLighting)
 		{
-			const GpuPassScope pass(profiler, commandList, PassClusters);
-			impl.Clusters.Build(commandList, camera.View, camera.Projection, view.ClusterDepths, static_cast<uint32_t>(view.EnvironmentParams.w));
+			bool built = false;
+			{
+				const GpuPassScope pass(profiler, commandList, PassClusters);
+				built = impl.Clusters.Build(commandList, camera.View, camera.Projection, view.ClusterDepths, bufferedLightCount);
+			}
+			if (!built)
+			{
+				abortFrame();
+				return;
+			}
 		}
 
 		// --- Lighting (opaque), skybox, transparent -----------------------------------------------

@@ -1,3 +1,5 @@
+// Depth tuple: near, far, orthographic (0/1), fragment count-diagnostic flag. Mirrors LightClusters.cpp.
+// Logarithmic perspective slices concentrate cells near the eye; orthographic slices are linear.
 #ifndef BASALT_LIGHT_CLUSTERS_GLSL
 #define BASALT_LIGHT_CLUSTERS_GLSL
 
@@ -17,6 +19,11 @@ uint ClusterSlice(vec4 depths, float viewDepth, uint slices)
 uint ClusterIndex(uvec3 cell, uvec3 grid)
 {
 	return (cell.z * grid.y + cell.y) * grid.x + cell.x;
+}
+
+uint ClusterListOffset(uint index)
+{
+	return index * (MAX_LIGHTS + 1u);
 }
 
 #endif

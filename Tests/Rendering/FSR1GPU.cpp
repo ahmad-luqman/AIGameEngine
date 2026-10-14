@@ -1,6 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include "GPUFixture.h"
+
 #include <Basalt/Core/Log.h>
 #include <Basalt/Renderer/Fsr1Settings.h>
 #include <Basalt/Renderer/Fsr1Upscaler.h>
@@ -22,13 +24,7 @@ using namespace Basalt;
 
 TEST_CASE("FSR 1 clamps every tap to the active area including degenerate dimensions")
 {
-	Log::Init();
-	REQUIRE(VulkanLoader::Load());
-	GraphicsDeviceSpecification spec;
-	spec.EnableValidation = true;
-	auto graphics = GraphicsDevice::CreateOffscreen(64, 64, spec);
-	REQUIRE(graphics);
-	REQUIRE(graphics->IsValidationActive());
+	auto graphics = CreateTestGraphics();
 	nvrhi::IDevice* device = graphics->GetDevice();
 	const auto fullscreen = CreateEmbeddedShader(device, "Fullscreen.vert", nvrhi::ShaderType::Vertex);
 	const auto sampler = device->createSampler(nvrhi::SamplerDesc().setAllFilters(false).setAllAddressModes(nvrhi::SamplerAddressMode::Clamp));

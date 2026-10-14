@@ -1,6 +1,11 @@
 #ifndef BASALT_LIGHT_DATA_GLSL
 #define BASALT_LIGHT_DATA_GLSL
 
+// Match GpuLightType in LightClusters.h.
+const float LIGHT_TYPE_POINT = 0.0;
+const float LIGHT_TYPE_SPOT = 1.0;
+const float LIGHT_TYPE_DIRECTIONAL = 2.0;
+
 struct LightData
 {
 	vec4 Position;        // xyz, w: range (point, spot)
