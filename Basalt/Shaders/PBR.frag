@@ -31,11 +31,12 @@ void main()
 	vec3 V = normalize(u_View.CameraPosition.xyz - v_WorldPosition);
 	vec3 F0 = mix(vec3(0.04), surface.Albedo, surface.Metallic);
 	vec3 color = vec3(0.0);
+	float viewDepth = -(u_View.View * vec4(v_WorldPosition, 1.0)).z;
+	bool clustered = u_View.ClusterGrid.w != 0u;
 
 	// Directional light with cascaded soft shadows.
 	if (u_View.Sun.Direction.w > 0.5)
 	{
-		float viewDepth = -(u_View.View * vec4(v_WorldPosition, 1.0)).z;
 		float shadow = ComputeShadow(v_WorldPosition, geometricNormal, viewDepth, gl_FragCoord.xy);
 		vec3 L = -normalize(u_View.Sun.Direction.xyz);
 		color += EvaluateLight(N, V, L, u_View.Sun.Color.rgb * shadow, surface.Albedo, surface.Metallic, surface.Roughness, F0);
@@ -44,20 +45,21 @@ void main()
 	// Additional directional lights (unshadowed), then point and spot lights.
 	uint lightCount = uint(u_View.EnvironmentParams.w);
 	uint clusterOffset = 0u;
-	if (u_View.ClusterGrid.w != 0u)
+	if (clustered)
 	{
 		// Use the active render area, not the backing allocation or output dimensions.
 		uvec2 tile = min(uvec2(gl_FragCoord.xy / u_View.ViewportSize.xy * vec2(u_View.ClusterGrid.xy)), u_View.ClusterGrid.xy - 1u);
-		float depth = -(u_View.View * vec4(v_WorldPosition, 1.0)).z;
-		uint slice = ClusterSlice(u_View.ClusterDepths, depth, u_View.ClusterGrid.z);
-		clusterOffset = ClusterIndex(uvec3(tile, slice), u_View.ClusterGrid.xyz) * (MAX_LIGHTS + 1u);
+		uint slice = ClusterSlice(u_View.ClusterDepths, viewDepth, u_View.ClusterGrid.z);
+		clusterOffset = ClusterListOffset(ClusterIndex(uvec3(tile, slice), u_View.ClusterGrid.xyz));
 		lightCount = u_Lights.ClusterWords[clusterOffset];
 	}
+	uint visitedLights = 0u;
 	for (uint i = 0u; i < lightCount; i++)
 	{
-		uint lightIndex = u_View.ClusterGrid.w != 0u ? u_Lights.ClusterWords[clusterOffset + 1u + i] : i;
+		visitedLights++;
+		uint lightIndex = clustered ? u_Lights.ClusterWords[clusterOffset + 1u + i] : i;
 		LightData light = u_Lights.Lights[lightIndex];
-		if (light.Color.w > 1.5)
+		if (light.Color.w == LIGHT_TYPE_DIRECTIONAL)
 		{
 			color += EvaluateLight(N, V, -normalize(light.Direction.xyz), light.Color.rgb, surface.Albedo, surface.Metallic, surface.Roughness, F0);
 			continue;
@@ -68,7 +70,7 @@ void main()
 			continue;
 		vec3 L = toLight / max(distance, 1e-4);
 		float attenuation = RangeAttenuation(distance, light.Position.w);
-		if (light.Color.w > 0.5)
+		if (light.Color.w == LIGHT_TYPE_SPOT)
 		{
 			float cosAngle = dot(-L, normalize(light.Direction.xyz));
 			attenuation *= smoothstep(light.Direction.w, light.Params.x, cosAngle);
@@ -76,6 +78,12 @@ void main()
 		if (attenuation > 0.0)
 			attenuation *= ComputeLocalShadow(light, v_WorldPosition, geometricNormal);
 		color += EvaluateLight(N, V, L, light.Color.rgb * attenuation, surface.Albedo, surface.Metallic, surface.Roughness, F0);
+	}
+
+	if (u_View.ClusterDepths.w > 0.5)
+	{
+		o_Color = vec4(vec3(float(visitedLights) / float(MAX_LIGHTS)), 1.0);
+		return;
 	}
 
 	// Image-based ambient lighting (diffuse irradiance + split-sum specular), occluded by SSAO.

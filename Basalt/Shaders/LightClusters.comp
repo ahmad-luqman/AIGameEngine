@@ -1,4 +1,7 @@
 #version 450
+// One workgroup per frustum cell; parallel sphere tests followed by stable compaction.
+#define BASALT_LIGHT_BUFFER_WRITABLE
+#include "LightData.glsl"
 #include "LightClusters.glsl"
 
 layout(local_size_x = 64) in;
@@ -7,55 +10,60 @@ layout(set = 0, binding = 0) uniform ClusterConstants
 	mat4 ViewProjection;
 	mat4 View;
 	vec4 Depths;
-	uvec4 Grid; // xyz: dimensions, w: light count (at most MAX_LIGHTS)
+	uvec4 GridAndLightCount; // xyz: dimensions, w: light count (at most MAX_LIGHTS)
 } u_Clusters;
-#define BASALT_LIGHT_BUFFER_WRITABLE
-#include "LightData.glsl"
 shared vec4 s_Planes[6];
 shared uint s_Visible[MAX_LIGHTS];
+
+bool SphereVisible(vec4 sphere)
+{
+	// Retain boundary contacts even when fragment lookup rounds to the adjacent cell.
+	float tolerance = 1e-4 * max(1.0, length(sphere.xyz) + abs(sphere.w));
+	for (uint p = 0u; p < 6u; p++)
+		if (dot(s_Planes[p], vec4(sphere.xyz, 1.0)) < -sphere.w - tolerance)
+			return false;
+	return true;
+}
 
 void main()
 {
 	uvec3 cell = gl_WorkGroupID;
 	uint lane = gl_LocalInvocationIndex;
+	uint lightCount = min(u_Clusters.GridAndLightCount.w, uint(MAX_LIGHTS));
 	if (lane == 0u)
 	{
 		mat4 rows = transpose(u_Clusters.ViewProjection);
 		vec4 depthRow = -transpose(u_Clusters.View)[2];
-		vec2 lower = vec2(cell.xy) / vec2(u_Clusters.Grid.xy);
-		vec2 upper = vec2(cell.xy + 1u) / vec2(u_Clusters.Grid.xy);
+		vec2 lower = vec2(cell.xy) / vec2(u_Clusters.GridAndLightCount.xy);
+		vec2 upper = vec2(cell.xy + 1u) / vec2(u_Clusters.GridAndLightCount.xy);
 		s_Planes[0] = rows[0] - (2.0 * lower.x - 1.0) * rows[3];
 		s_Planes[1] = (2.0 * upper.x - 1.0) * rows[3] - rows[0];
 		// Fragment coordinates start at the top left; clip space is +Y up.
 		s_Planes[2] = rows[1] - (1.0 - 2.0 * upper.y) * rows[3];
 		s_Planes[3] = (1.0 - 2.0 * lower.y) * rows[3] - rows[1];
-		s_Planes[4] = depthRow - vec4(0, 0, 0, ClusterBoundary(u_Clusters.Depths, cell.z, u_Clusters.Grid.z));
-		s_Planes[5] = vec4(0, 0, 0, ClusterBoundary(u_Clusters.Depths, cell.z + 1u, u_Clusters.Grid.z)) - depthRow;
+		s_Planes[4] = depthRow - vec4(0, 0, 0, ClusterBoundary(u_Clusters.Depths, cell.z, u_Clusters.GridAndLightCount.z));
+		s_Planes[5] = vec4(0, 0, 0, ClusterBoundary(u_Clusters.Depths, cell.z + 1u, u_Clusters.GridAndLightCount.z)) - depthRow;
 		for (uint p = 0u; p < 6u; p++)
 			s_Planes[p] /= length(s_Planes[p].xyz);
+		// Fragment lookup clamps to edge slices; leave their outer depth planes unbounded.
+		if (cell.z == 0u) s_Planes[4] = vec4(0);
+		if (cell.z + 1u == u_Clusters.GridAndLightCount.z) s_Planes[5] = vec4(0);
 	}
 	barrier();
-	for (uint i = lane; i < u_Clusters.Grid.w; i += 64u)
+	for (uint i = lane; i < lightCount; i += gl_WorkGroupSize.x)
 	{
 		LightData light = u_Lights.Lights[i];
-		bool visible = true;
-		if (light.Color.w < 1.5)
-		{
-			// Spot cones fit inside their range sphere. False positives cost work, false negatives lose light.
-			float tolerance = 1e-4 * max(1.0, length(light.Position.xyz) + abs(light.Position.w));
-			for (uint p = 0u; p < 6u; p++)
-				if (dot(s_Planes[p], vec4(light.Position.xyz, 1.0)) < -light.Position.w - tolerance)
-					visible = false;
-		}
+		// Spot cones fit inside their range sphere. False positives only cost extra shading work.
+		bool visible = light.Color.w == LIGHT_TYPE_DIRECTIONAL || SphereVisible(light.Position);
 		s_Visible[i] = visible ? 1u : 0u;
 	}
 	barrier();
 	if (lane == 0u)
 	{
-		uint wordOffset = ClusterIndex(cell, u_Clusters.Grid.xyz) * (MAX_LIGHTS + 1u);
+		uint wordOffset = ClusterListOffset(ClusterIndex(cell, u_Clusters.GridAndLightCount.xyz));
 		uint count = 0u;
-		// Stable compaction preserves floating-point accumulation order and local-shadow indices.
-		for (uint i = 0u; i < u_Clusters.Grid.w; i++)
+		// Stable order makes floating-point accumulation match the all-lights reference exactly.
+		for (uint i = 0u; i < lightCount; i++)
 			if (s_Visible[i] != 0u)
 				u_Lights.ClusterWords[wordOffset + 1u + count++] = i;
 		u_Lights.ClusterWords[wordOffset] = count;

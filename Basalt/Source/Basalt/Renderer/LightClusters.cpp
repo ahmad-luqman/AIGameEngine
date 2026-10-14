@@ -1,6 +1,5 @@
 #include "Basalt/Renderer/LightClusters.h"
 
-#include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Renderer/ShaderUtils.h"
 
@@ -9,8 +8,24 @@
 
 namespace Basalt {
 
+	namespace {
+		struct ClusterConstants
+		{
+			glm::mat4 ViewProjection, View;
+			glm::vec4 Depths;
+			glm::uvec4 GridAndLightCount;
+		};
+		static_assert(sizeof(ClusterConstants) == 160);
+	}
+
 	glm::vec4 LightClusterDepths(float nearClip, float farClip, bool orthographic)
 	{
+		if (!std::isfinite(nearClip) || !std::isfinite(farClip) || nearClip >= farClip || (!orthographic && nearClip <= 0.0f) || !std::isfinite(farClip - nearClip) || (!orthographic && !std::isfinite(farClip / nearClip)))
+		{
+			BS_CORE_WARN("SceneRenderer: invalid cluster depth range [{}, {}]; using [0.1, 1000]", nearClip, farClip);
+			nearClip = 0.1f;
+			farClip = 1000.0f;
+		}
 		return { nearClip, farClip, orthographic ? 1.0f : 0.0f, 0.0f };
 	}
 
@@ -41,27 +56,45 @@ namespace Basalt {
 										 glm::vec4(0, 0, 0, LightClusterBoundary(depths, cell.z + 1)) - depthRow };
 		for (auto& plane : planes)
 			plane /= glm::length(glm::vec3(plane));
+		// Lookup clamps out-of-range depths into the edge cells, so those cells must be unbounded.
+		if (cell.z == 0)
+			planes[4] = glm::vec4(0);
+		if (cell.z + 1 == LightClusterDimensions.z)
+			planes[5] = glm::vec4(0);
 		return planes;
 	}
 
-	bool LightClusterIntersects(const std::array<glm::vec4, 6>& planes, glm::vec3 position, float radius)
+	bool LightClusterIntersects(const std::array<glm::vec4, 6>& planes, glm::vec3 position, float radius, float relativeTolerance)
 	{
-		// Expand rather than risk losing a light on a plane due to CPU/GPU rounding.
-		const float tolerance = 1e-4f * std::max(1.0f, glm::length(position) + std::abs(radius));
+		// Plane tests and fragment tile/slice lookup can round a boundary in opposite directions.
+		const float tolerance = relativeTolerance * std::max(1.0f, glm::length(position) + std::abs(radius));
 		for (const auto& plane : planes)
 			if (glm::dot(plane, glm::vec4(position, 1)) < -radius - tolerance)
 				return false;
 		return true;
 	}
 
+	uint32_t LightClusterIndex(glm::uvec3 cell)
+	{
+		return (cell.z * LightClusterDimensions.y + cell.y) * LightClusterDimensions.x + cell.x;
+	}
+
+	uint32_t LightClusterListOffset(uint32_t index)
+	{
+		return index * LightClusterStride;
+	}
+
 	bool LightClusters::Initialize(nvrhi::IDevice* device)
 	{
+		// A failed retry must not leave old bindings looking usable with partially replaced resources.
+		m_Set = nullptr;
+		m_Pipeline = nullptr;
 		auto fail = [](const char* stage) {
 			BS_CORE_ERROR("SceneRenderer: failed to create light clusters ({})", stage);
 			return false;
 		};
 		nvrhi::BufferDesc desc;
-		desc.byteSize = 160;
+		desc.byteSize = sizeof(ClusterConstants);
 		desc.isConstantBuffer = true;
 		desc.initialState = nvrhi::ResourceStates::ConstantBuffer;
 		desc.keepInitialState = true;
@@ -83,34 +116,43 @@ namespace Basalt {
 		layout.bindings = { nvrhi::BindingLayoutItem::ConstantBuffer(0), nvrhi::BindingLayoutItem::StructuredBuffer_UAV(3) };
 		m_Layout = device->createBindingLayout(layout);
 		const auto shader = CreateEmbeddedShader(device, "LightClusters.comp", nvrhi::ShaderType::Compute);
-		if (!m_Layout || !shader)
-			return fail("layout/shader");
+		if (!m_Layout)
+			return fail("layout");
+		if (!shader)
+			return fail("shader");
 		m_Set = device->createBindingSet(nvrhi::BindingSetDesc()
 											 .addItem(nvrhi::BindingSetItem::ConstantBuffer(0, m_Constants))
 											 .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(3, m_Buffer)),
 										 m_Layout);
+		if (!m_Set)
+			return fail("bindings");
 		nvrhi::ComputePipelineDesc pipeline;
 		pipeline.CS = shader;
 		pipeline.bindingLayouts = { m_Layout };
 		m_Pipeline = device->createComputePipeline(pipeline);
-		return (m_Set && m_Pipeline) || fail("bindings/pipeline");
+		if (!m_Pipeline)
+			return fail("pipeline");
+		return true;
 	}
 
-	void LightClusters::Build(nvrhi::ICommandList* commands, const glm::mat4& view, const glm::mat4& projection,
+	bool LightClusters::Build(nvrhi::ICommandList* commands, const glm::mat4& view, const glm::mat4& projection,
 							  const glm::vec4& depths, uint32_t lightCount)
 	{
-		BS_CORE_ASSERT(lightCount <= MaxClusterLights, "cluster lists cover the scene light budget");
-		struct Constants
+		if (!IsValid())
 		{
-			glm::mat4 ViewProjection, View;
-			glm::vec4 Depths;
-			glm::uvec4 Grid;
-		};
-		static_assert(sizeof(Constants) == 160);
-		const Constants constants{ projection * view, view, depths, glm::uvec4(LightClusterDimensions, lightCount) };
+			BS_CORE_ERROR("SceneRenderer: cannot build light clusters before successful initialization");
+			return false;
+		}
+		if (lightCount > MaxSceneLights)
+		{
+			BS_CORE_WARN("SceneRenderer: cluster light count {} exceeds {}; clamping", lightCount, MaxSceneLights);
+			lightCount = MaxSceneLights;
+		}
+		const ClusterConstants constants{ projection * view, view, depths, glm::uvec4(LightClusterDimensions, lightCount) };
 		commands->writeBuffer(m_Constants, &constants, sizeof(constants));
 		commands->setComputeState(nvrhi::ComputeState().setPipeline(m_Pipeline).addBindingSet(m_Set));
 		commands->dispatch(LightClusterDimensions.x, LightClusterDimensions.y, LightClusterDimensions.z);
+		return true;
 	}
 
 }

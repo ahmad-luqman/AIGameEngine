@@ -173,7 +173,7 @@ Other rules:
 
 ## Documentation
 
-- Rendering: `Docs/Rendering.md` (FSR 1 settings, pipeline, diagnostics and GPU tests).
+- Rendering: `Docs/Rendering.md` (clustered lighting, FSR 1 settings, diagnostics and GPU tests).
 - Lua API: `Docs/ScriptingAPI.md` (update with every binding change).
 - `Docs/AutomationCommands.md` and `Docs/Components.md` are generated: run
   `python3 scripts/generate_docs.py` after changing commands or components.

@@ -134,7 +134,7 @@ float ComputeLocalShadow(LightData light, vec3 worldPosition, vec3 normal)
 		L * u_View.CameraClip.z * light.Position.w;
 	uint index = uint(light.Params.y) - 1u;
 	// Type 0 is a point: its six maps follow PointShadowFace order; spots own only the base map.
-	if (light.Color.w < 0.5)
+	if (light.Color.w == LIGHT_TYPE_POINT)
 		index += PointShadowFace(position - light.Position.xyz);
 	LocalShadowMap map = u_LocalShadows.Maps[index];
 	vec4 clip = map.ViewProjection * vec4(position, 1.0);

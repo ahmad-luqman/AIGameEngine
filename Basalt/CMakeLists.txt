@@ -69,6 +69,7 @@ file(GLOB BASALT_SHADER_SOURCES CONFIGURE_DEPENDS
 
 # One source for the C++/GLSL cascade array length and shadow-view index encoding.
 set(BASALT_SHADOW_CASCADES 4)
+# One scene-light budget for C++/GLSL. PUBLIC because LightClusters.h exposes buffer dimensions.
 set(BASALT_MAX_LIGHTS 256)
 target_compile_definitions(Basalt PUBLIC BS_MAX_LIGHTS=${BASALT_MAX_LIGHTS})
 target_compile_definitions(Basalt PRIVATE BS_SHADOW_CASCADE_COUNT=${BASALT_SHADOW_CASCADES})

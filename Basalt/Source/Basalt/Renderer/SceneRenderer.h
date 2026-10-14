@@ -64,7 +64,7 @@ namespace Basalt {
 
 	// Renders a Scene from a camera into an internal LDR image:
 	//   directional cascades + point/spot shadow atlas -> depth/normal prepass -> SSAO (+ bilateral blur) ->
-	//   clustered forward PBR with IBL (opaque) -> skybox -> transparent PBR and particle billboards -> exposure +
+	//   cluster light-list build -> clustered forward PBR with IBL (opaque) -> skybox -> transparent PBR and particle billboards -> exposure +
 	//   tonemapping + sRGB encode -> optional EASU + RCAS -> dithering -> output-resolution overlays.
 	// The scene renders at the current render scale; either tonemap resamples directly to the viewport
 	// or FSR 1 upscales its perceptual-color output. With dynamic resolution the scale follows the GPU time
@@ -112,6 +112,10 @@ namespace Basalt {
 		// Clustered lighting is enabled by default. Disabling selects the all-lights diagnostic reference
 		// for image comparisons and profiling; it is not a serialized scene setting.
 		void SetClusteredLighting(bool enabled) { m_ClusteredLighting = enabled; }
+		bool IsClusteredLighting() const { return m_ClusteredLighting; }
+		// Diagnostic grayscale: fraction of the scene budget visited by the fragment's light loop.
+		// This replaces PBR color, letting GPU tests verify list consumption as well as list construction.
+		void SetVisualizeLightCount(bool enabled) { m_VisualizeLightCount = enabled; }
 
 		// Records and submits all passes for one frame.
 		void Render(Scene& scene, const RenderCamera& camera);
@@ -162,6 +166,7 @@ namespace Basalt {
 		uint32_t m_Height = 0;
 		float m_RenderScale = 1.0f;
 		bool m_ClusteredLighting = true;
+		bool m_VisualizeLightCount = false;
 		// Size of the scene targets: the viewport size times the render scale.
 		uint32_t m_TargetWidth = 0;
 		uint32_t m_TargetHeight = 0;

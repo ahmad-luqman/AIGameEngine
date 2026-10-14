@@ -37,7 +37,7 @@ layout(set = 0, binding = 0) uniform ViewConstants
 	vec4 CameraClip;      // x: near, y: far, zw: local biases (available without a Sun); z uses range-relative world distance, unlike Sun.ShadowParams.x
 	DirectionalLight Sun;
 	uvec4 ClusterGrid;    // xyz dimensions, w: clustered lookup enabled (0 = diagnostic all-lights path)
-	vec4 ClusterDepths;   // near, far, orthographic, unused
+	vec4 ClusterDepths;   // near, far, orthographic, visualize visited-light count
 } u_View;
 
 struct DrawData

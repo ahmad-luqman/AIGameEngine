@@ -5,15 +5,24 @@
 
 #include <array>
 #include <cstdint>
+#include <cstddef>
 
 namespace Basalt {
 
-	inline constexpr uint32_t MaxClusterLights = BS_MAX_LIGHTS;
+	inline constexpr uint32_t MaxSceneLights = BS_MAX_LIGHTS;
 	inline constexpr glm::uvec3 LightClusterDimensions{ 16, 9, 24 };
 	inline constexpr uint32_t LightClusterCount = LightClusterDimensions.x * LightClusterDimensions.y * LightClusterDimensions.z;
 
-	// Shared std430 light record; the packed buffer starts with MaxClusterLights of these,
-	// followed by one count and MaxClusterLights indices per cell (uint32 words).
+	// Encoded in GpuLightData::Color.w; keep Include/LightData.glsl in sync.
+	enum class GpuLightType : uint32_t
+	{
+		Point = 0,
+		Spot = 1,
+		Directional = 2
+	};
+
+	// Shared std430 light record; the packed buffer starts with MaxSceneLights of these,
+	// followed by one count and MaxSceneLights indices per cell (uint32 words).
 	struct GpuLightData
 	{
 		glm::vec4 Position;
@@ -22,10 +31,14 @@ namespace Basalt {
 		glm::vec4 Params;
 	};
 	static_assert(sizeof(GpuLightData) == 64);
-	inline constexpr uint32_t LightClusterWordOffset = sizeof(GpuLightData) * MaxClusterLights / sizeof(uint32_t);
-	inline constexpr uint32_t LightClusterStride = MaxClusterLights + 1;
+	static_assert(offsetof(GpuLightData, Position) == 0 && offsetof(GpuLightData, Color) == 16);
+	static_assert(offsetof(GpuLightData, Direction) == 32 && offsetof(GpuLightData, Params) == 48);
+	inline constexpr uint32_t LightClusterWordOffset = sizeof(GpuLightData) * MaxSceneLights / sizeof(uint32_t);
+	inline constexpr uint32_t LightClusterStride = MaxSceneLights + 1;
 
-	// Camera-space depth partition shared with the cluster builder and fragment lookup.
+	// Headless mirrors of the GPU partition/plane math, used as independent test oracles.
+	// GPU depth tuple: near, far, orthographic (0/1), fragment count-diagnostic flag. Perspective requires 0 < near < far;
+	// malformed ranges are logged and replaced with a finite default interval.
 	// Orthographic near planes may be negative; only perspective uses logarithmic depth.
 	glm::vec4 LightClusterDepths(float nearClip, float farClip, bool orthographic);
 	float LightClusterBoundary(const glm::vec4& depths, uint32_t slice);
@@ -33,7 +46,9 @@ namespace Basalt {
 	// World-space inward planes; a sphere test conservatively bounds point and spot influence.
 	std::array<glm::vec4, 6> LightClusterPlanes(const glm::mat4& view, const glm::mat4& projection,
 												const glm::vec4& depths, glm::uvec3 cell);
-	bool LightClusterIntersects(const std::array<glm::vec4, 6>& planes, glm::vec3 position, float radius);
+	bool LightClusterIntersects(const std::array<glm::vec4, 6>& planes, glm::vec3 position, float radius, float relativeTolerance = 1e-4f);
+	uint32_t LightClusterIndex(glm::uvec3 cell);
+	uint32_t LightClusterListOffset(uint32_t index);
 
 	// Builds ordered per-cell light lists on the GPU. Every cell can hold the full scene budget,
 	// so there is no truncation or overflow fallback. Light records and lists share one buffer to
@@ -44,8 +59,9 @@ namespace Basalt {
 	{
 	public:
 		bool Initialize(nvrhi::IDevice* device);
-		void Build(nvrhi::ICommandList* commands, const glm::mat4& view, const glm::mat4& projection,
+		bool Build(nvrhi::ICommandList* commands, const glm::mat4& view, const glm::mat4& projection,
 				   const glm::vec4& depths, uint32_t lightCount);
+		bool IsValid() const { return m_Set && m_Pipeline; }
 		nvrhi::IBuffer* GetBuffer() const { return m_Buffer; }
 
 	private:
