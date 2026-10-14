@@ -31,6 +31,7 @@ namespace Basalt {
 		auto fail = [&](const std::string& reason) { outError = source.Key + ": " + reason; return false; };
 		// Iterative traversal avoids stack growth for adversarially deep hierarchies.
 		std::vector<std::vector<uint32_t>> children(source.Nodes.size());
+		source.NodeOrder.reserve(source.Nodes.size());
 		for (size_t i = 0; i < source.Nodes.size(); i++)
 		{
 			const auto& node = source.Nodes[i];
@@ -42,10 +43,8 @@ namespace Basalt {
 				return fail("invalid node parent");
 		}
 		for (size_t i = 0; i < source.NodeOrder.size(); i++)
-		{
-			const auto& next = children[source.NodeOrder[i]];
-			source.NodeOrder.insert(source.NodeOrder.end(), next.begin(), next.end());
-		}
+			for (uint32_t child : children[source.NodeOrder[i]])
+				source.NodeOrder.push_back(child);
 		if (source.NodeOrder.size() != source.Nodes.size())
 			return fail("cyclic node hierarchy");
 		if (data.scene)
