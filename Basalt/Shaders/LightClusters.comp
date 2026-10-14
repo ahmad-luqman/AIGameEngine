@@ -9,11 +9,8 @@ layout(set = 0, binding = 0) uniform ClusterConstants
 	vec4 Depths;
 	uvec4 Grid; // xyz: dimensions, w: light count (at most MAX_LIGHTS)
 } u_Clusters;
+#define BASALT_LIGHT_BUFFER_WRITABLE
 #include "LightData.glsl"
-layout(std430, set = 0, binding = 3) readonly buffer LightBuffer { LightData Lights[]; } u_Lights;
-layout(std430, set = 0, binding = 15) writeonly buffer ClusterCounts { uint Counts[]; } u_Counts;
-layout(std430, set = 0, binding = 16) writeonly buffer ClusterIndices { uint Indices[]; } u_Indices;
-
 shared vec4 s_Planes[6];
 shared uint s_Visible[MAX_LIGHTS];
 
@@ -55,12 +52,12 @@ void main()
 	barrier();
 	if (lane == 0u)
 	{
-		uint cellIndex = ClusterIndex(cell, u_Clusters.Grid.xyz);
+		uint wordOffset = ClusterIndex(cell, u_Clusters.Grid.xyz) * (MAX_LIGHTS + 1u);
 		uint count = 0u;
 		// Stable compaction preserves floating-point accumulation order and local-shadow indices.
 		for (uint i = 0u; i < u_Clusters.Grid.w; i++)
 			if (s_Visible[i] != 0u)
-				u_Indices.Indices[cellIndex * MAX_LIGHTS + count++] = i;
-		u_Counts.Counts[cellIndex] = count;
+				u_Lights.ClusterWords[wordOffset + 1u + count++] = i;
+		u_Lights.ClusterWords[wordOffset] = count;
 	}
 }

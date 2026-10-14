@@ -54,7 +54,7 @@ namespace Basalt {
 		return true;
 	}
 
-	bool LightClusters::Initialize(nvrhi::IDevice* device, nvrhi::IBuffer* lights)
+	bool LightClusters::Initialize(nvrhi::IDevice* device)
 	{
 		auto fail = [](const char* stage) {
 			BS_CORE_ERROR("SceneRenderer: failed to create light clusters ({})", stage);
@@ -74,26 +74,20 @@ namespace Basalt {
 		desc.canHaveUAVs = true;
 		desc.initialState = nvrhi::ResourceStates::ShaderResource;
 		desc.keepInitialState = true;
-		desc.byteSize = sizeof(uint32_t) * LightClusterCount;
-		desc.debugName = "ClusterCounts";
-		m_Counts = device->createBuffer(desc);
-		desc.byteSize *= MaxClusterLights;
-		desc.debugName = "ClusterIndices";
-		m_Indices = device->createBuffer(desc);
-		if (!m_Counts || !m_Indices)
-			return fail("lists");
+		desc.byteSize = sizeof(uint32_t) * (LightClusterWordOffset + LightClusterCount * LightClusterStride);
+		desc.debugName = "ClusteredLightBuffer";
+		m_Buffer = device->createBuffer(desc);
+		if (!m_Buffer)
+			return fail("light records/lists");
 		auto layout = MakeLayout(0, nvrhi::ShaderType::Compute);
-		layout.bindings = { nvrhi::BindingLayoutItem::ConstantBuffer(0), nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3),
-							nvrhi::BindingLayoutItem::StructuredBuffer_UAV(15), nvrhi::BindingLayoutItem::StructuredBuffer_UAV(16) };
+		layout.bindings = { nvrhi::BindingLayoutItem::ConstantBuffer(0), nvrhi::BindingLayoutItem::StructuredBuffer_UAV(3) };
 		m_Layout = device->createBindingLayout(layout);
 		const auto shader = CreateEmbeddedShader(device, "LightClusters.comp", nvrhi::ShaderType::Compute);
 		if (!m_Layout || !shader)
 			return fail("layout/shader");
 		m_Set = device->createBindingSet(nvrhi::BindingSetDesc()
 											 .addItem(nvrhi::BindingSetItem::ConstantBuffer(0, m_Constants))
-											 .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(3, lights))
-											 .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(15, m_Counts))
-											 .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(16, m_Indices)),
+											 .addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(3, m_Buffer)),
 										 m_Layout);
 		nvrhi::ComputePipelineDesc pipeline;
 		pipeline.CS = shader;

@@ -11,10 +11,12 @@ render area (top-left origin), independent of backing target size, render scale 
 World-space planes also support translated, rotated and scaled camera transforms.
 
 The existing 256-light scene budget is unchanged. Each cell has 256 index slots plus a count: about
-3.39 MiB per renderer. There is no smaller per-cell cap that could silently lose lights. Lists preserve
+3.39 MiB for lists per renderer. Lists and the 16 KiB light-record prefix share a single storage
+buffer, keeping the frame layout at four storage-buffer descriptors (Vulkan core's per-stage minimum). There is no smaller per-cell cap that could silently lose lights. Lists preserve
 the scene light-buffer order and shadow-map indices. Empty counts are rewritten every frame; unused
 indices are never read. Resources allocate during renderer initialization; creation failures log their
-stage and fail initialization. nvrhi tracks compute-write to fragment-read transitions.
+stage and fail initialization. The compute pass reads the record prefix and writes only the list suffix; nvrhi tracks compute-write
+to fragment-read transitions.
 
 Clustering is automatic and adds no serialized settings. Dense overlapping lights can still fill a
 cell; conservative spot spheres trade extra candidates for reliable coverage. The fixed grid avoids

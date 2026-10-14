@@ -1,9 +1,8 @@
 // Shared declarations for scene shaders. Binding layout (see SceneRenderer.cpp, keep in sync):
-//   set 0 (frame):    0 ViewConstants (UBO), 1 Draws (SSBO), 2 Materials (SSBO), 3 Lights (SSBO),
+//   set 0 (frame):    0 ViewConstants (UBO), 1 Draws (SSBO), 2 Materials (SSBO), 3 Lights + cluster lists (SSBO),
 //                     4 shadow map array, 5 irradiance cube, 6 prefiltered cube, 7 BRDF LUT, 8 SSAO,
 //                     9 linear clamp sampler, 10 shadow comparison sampler, 11 point clamp sampler,
 //                     12 environment cube, 13 local shadow atlas, 14 local shadow maps (SSBO),
-//                     15 cluster counts (SSBO), 16 cluster indices (SSBO),
 //                     push constants (DrawPush)
 // Shadow pipelines use a reduced set 0: push constants, 0, 1, 2 and 14 only.
 //   set 1 (material): 0 albedo, 1 normal, 2 metallic-roughness, 3 occlusion, 4 emissive, 5 material sampler
@@ -66,11 +65,6 @@ layout(std430, set = 0, binding = 2) readonly buffer MaterialBuffer
 } u_Materials;
 
 #include "LightData.glsl"
-
-layout(std430, set = 0, binding = 3) readonly buffer LightBuffer
-{
-	LightData Lights[];
-} u_Lights;
 
 struct LocalShadowMap
 {

@@ -13,19 +13,13 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstring>
 #include <vector>
 
 using namespace Basalt;
 
 namespace {
-	// Same std430 light record consumed by the scene and compute shaders.
-	struct TestLight
-	{
-		glm::vec4 Position, Color, Direction, Params;
-	};
-	static_assert(sizeof(TestLight) == 64);
-
 	std::vector<uint32_t> ReadBuffer(nvrhi::IDevice* device, nvrhi::IBuffer* source)
 	{
 		nvrhi::BufferDesc desc;
@@ -59,18 +53,12 @@ TEST_CASE("GPU cluster lists match conservative CPU planes and preserve every in
 	REQUIRE(graphics);
 	REQUIRE(graphics->IsValidationActive());
 	nvrhi::IDevice* device = graphics->GetDevice();
-	nvrhi::BufferDesc desc;
-	desc.byteSize = sizeof(TestLight) * MaxClusterLights;
-	desc.structStride = sizeof(TestLight);
-	desc.initialState = nvrhi::ResourceStates::ShaderResource;
-	desc.keepInitialState = true;
-	const auto buffer = device->createBuffer(desc);
-	REQUIRE(buffer);
 	LightClusters clusters;
-	REQUIRE(clusters.Initialize(device, buffer));
+	REQUIRE(clusters.Initialize(device));
+	nvrhi::IBuffer* buffer = clusters.GetBuffer();
 	const auto commands = device->createCommandList();
 	REQUIRE(commands);
-	std::array<TestLight, MaxClusterLights> lights{};
+	std::array<GpuLightData, MaxClusterLights> lights{};
 	for (uint32_t i = 0; i < MaxClusterLights; i++)
 	{
 		lights[i].Position = { static_cast<float>(i % 9) - 4.0f, static_cast<float>((i / 9) % 7) - 3.0f, -0.3f - static_cast<float>(i) * 0.2f, 0.3f + static_cast<float>(i % 5) };
@@ -89,8 +77,9 @@ TEST_CASE("GPU cluster lists match conservative CPU planes and preserve every in
 			clusters.Build(commands, view, projection, depths, MaxClusterLights);
 			commands->close();
 			device->executeCommandList(commands);
-			const auto counts = ReadBuffer(device, clusters.GetCounts());
-			const auto indices = ReadBuffer(device, clusters.GetIndices());
+			const auto data = ReadBuffer(device, clusters.GetBuffer());
+			const auto uploaded = std::bit_cast<std::array<uint32_t, LightClusterWordOffset>>(lights);
+			CHECK(std::equal(uploaded.begin(), uploaded.end(), data.begin()));
 			uint64_t total = 0;
 			for (uint32_t z = 0; z < LightClusterDimensions.z; z++)
 				for (uint32_t y = 0; y < LightClusterDimensions.y; y++)
@@ -102,12 +91,12 @@ TEST_CASE("GPU cluster lists match conservative CPU planes and preserve every in
 						for (uint32_t i = 0; i < MaxClusterLights; i++)
 							if (lights[i].Color.w > 1.5f || LightClusterIntersects(planes, glm::vec3(lights[i].Position), lights[i].Position.w))
 							{
-								REQUIRE(expected < counts[cell]);
-								REQUIRE(indices[cell * MaxClusterLights + expected] == i);
+								REQUIRE(expected < data[LightClusterWordOffset + cell * LightClusterStride]);
+								REQUIRE(data[LightClusterWordOffset + cell * LightClusterStride + 1 + expected] == i);
 								expected++;
 							}
-						REQUIRE(counts[cell] == expected);
-						total += counts[cell];
+						REQUIRE(data[LightClusterWordOffset + cell * LightClusterStride] == expected);
+						total += data[LightClusterWordOffset + cell * LightClusterStride];
 					}
 			CHECK(total < static_cast<uint64_t>(LightClusterCount) * MaxClusterLights / 2);
 		}
@@ -121,13 +110,14 @@ TEST_CASE("GPU cluster lists match conservative CPU planes and preserve every in
 		clusters.Build(commands, glm::mat4(1), glm::perspective(glm::radians(60.0f), 1.0f, 0.1f, 100.0f), LightClusterDepths(0.1f, 100.0f, false), count);
 		commands->close();
 		device->executeCommandList(commands);
-		const auto counts = ReadBuffer(device, clusters.GetCounts());
-		const auto indices = ReadBuffer(device, clusters.GetIndices());
+		const auto data = ReadBuffer(device, clusters.GetBuffer());
+		const auto uploaded = std::bit_cast<std::array<uint32_t, LightClusterWordOffset>>(lights);
+		CHECK(std::equal(uploaded.begin(), uploaded.end(), data.begin()));
 		for (uint32_t cell = 0; cell < LightClusterCount; cell++)
 		{
-			REQUIRE(counts[cell] == count);
+			REQUIRE(data[LightClusterWordOffset + cell * LightClusterStride] == count);
 			for (uint32_t i = 0; i < count; i++)
-				REQUIRE(indices[cell * MaxClusterLights + i] == i);
+				REQUIRE(data[LightClusterWordOffset + cell * LightClusterStride + 1 + i] == i);
 		}
 	}
 	graphics->WaitIdle();
