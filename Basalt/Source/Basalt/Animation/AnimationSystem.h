@@ -2,6 +2,7 @@
 
 #include "Basalt/Animation/AnimationPose.h"
 #include "Basalt/Core/UUID.h"
+#include "Basalt/Core/Timestep.h"
 #include "Basalt/Scene/Components.h"
 
 #include <entt/entt.hpp>
@@ -19,7 +20,7 @@ namespace Basalt {
 	public:
 		explicit AnimationSystem(Scene& scene);
 		~AnimationSystem();
-		void Update(float seconds);
+		void Update(Timestep timestep);
 		bool Play(Entity entity, const std::string& clip);
 		bool CrossFade(Entity entity, const std::string& clip, float seconds);
 		bool Blend(Entity entity, const std::string& first, const std::string& second, float weight);
@@ -30,6 +31,8 @@ namespace Basalt {
 		float GetDuration(Entity entity);
 		bool IsPlaying(Entity entity);
 		std::vector<std::string> GetClips(Entity entity);
+		// Getters resolve assets/configuration lazily and may reset playback. The vector object survives
+		// updates; its contents change each sample. Removal, reload or system destruction invalidates it.
 		const std::vector<glm::mat4>* GetPose(Entity entity);
 
 	private:
@@ -38,9 +41,9 @@ namespace Basalt {
 			entt::entity Handle = entt::null;
 			Ref<MeshSource> Source;
 			std::string ConfiguredClip;
-			const AnimationClip* Clip = nullptr;
+			int32_t Clip = -1;
 			double Time = 0;
-			const AnimationClip* Outgoing = nullptr;
+			int32_t Outgoing = -1;
 			double OutgoingTime = 0;
 			float BlendWeight = 1;
 			double FadeTime = 0;
@@ -50,12 +53,16 @@ namespace Basalt {
 			bool Playing = false;
 			bool Rest = false;
 			bool InvalidPose = false;
+			bool InvalidSpeed = false;
+			std::string EntityName;
 			std::vector<glm::mat4> Globals;
 		};
 		Playback* Ensure(Entity entity);
 		static void Evaluate(Playback& playback);
+		static void ClearTransition(Playback& playback);
 		void OnDestroy(entt::registry& registry, entt::entity handle);
 		Scene& m_Scene;
 		std::unordered_map<UUID, Playback> m_Playback;
+		std::unordered_map<entt::entity, bool> m_EmptyMeshes;
 	};
 }

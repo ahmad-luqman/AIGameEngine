@@ -1,9 +1,7 @@
 #include "Basalt/Animation/AnimationPose.h"
 
-#include "Basalt/Animation/AnimationSystem.h"
-#include "Basalt/Asset/AssetManager.h"
-#include "Basalt/Scene/Entity.h"
-#include "Basalt/Scene/Scene.h"
+#include "Basalt/Core/Assert.h"
+#include "Basalt/Math/Math.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -23,6 +21,7 @@ namespace Basalt {
 			const bool cubic = track.Interpolation == AnimationInterpolation::CubicSpline;
 			const size_t stride = cubic ? 3 : 1;
 			const size_t offset = cubic ? 1 : 0;
+			BS_CORE_ASSERT(!track.Times.empty() && track.Values.size() == track.Times.size() * stride);
 			const auto upper = std::upper_bound(track.Times.begin(), track.Times.end(), time);
 			if (upper == track.Times.begin())
 				return track.Values[offset];
@@ -52,8 +51,8 @@ namespace Basalt {
 				value = glm::mix(a, b, t);
 			if (track.Path == AnimationPath::Rotation)
 			{
-				const float length = glm::length(value);
-				value = std::isfinite(length) && length > 1e-8f ? value / length : a;
+				if (!Math::NormalizeQuaternion(value, 1e-8f))
+					value = a;
 			}
 			return value;
 		}
@@ -63,11 +62,7 @@ namespace Basalt {
 	{
 		AnimationLocalPose pose;
 		for (const auto& node : source.Nodes)
-		{
-			pose.Translations.push_back(node.Translation);
-			pose.Rotations.push_back(node.Rotation);
-			pose.Scales.push_back(node.Scale);
-		}
+			pose.Nodes.push_back({ node.Translation, node.Rotation, node.Scale });
 		if (clip)
 			for (const auto& track : clip->Tracks)
 			{
@@ -75,13 +70,13 @@ namespace Basalt {
 				switch (track.Path)
 				{
 					case AnimationPath::Translation:
-						pose.Translations[track.Node] = glm::vec3(value);
+						pose.Nodes[track.Node].Translation = glm::vec3(value);
 						break;
 					case AnimationPath::Rotation:
-						pose.Rotations[track.Node] = Quaternion(value);
+						pose.Nodes[track.Node].Rotation = Quaternion(value);
 						break;
 					case AnimationPath::Scale:
-						pose.Scales[track.Node] = glm::vec3(value);
+						pose.Nodes[track.Node].Scale = glm::vec3(value);
 						break;
 				}
 			}
@@ -90,25 +85,26 @@ namespace Basalt {
 
 	void BlendAnimationPose(AnimationLocalPose& target, const AnimationLocalPose& from, float weight)
 	{
-		for (size_t i = 0; i < target.Translations.size(); i++)
+		BS_CORE_ASSERT(target.Nodes.size() == from.Nodes.size());
+		for (size_t i = 0; i < target.Nodes.size(); i++)
 		{
-			target.Translations[i] = glm::mix(from.Translations[i], target.Translations[i], weight);
-			target.Rotations[i] = glm::normalize(glm::slerp(from.Rotations[i], target.Rotations[i], weight));
-			target.Scales[i] = glm::mix(from.Scales[i], target.Scales[i], weight);
+			target.Nodes[i].Translation = glm::mix(from.Nodes[i].Translation, target.Nodes[i].Translation, weight);
+			target.Nodes[i].Rotation = glm::normalize(glm::slerp(from.Nodes[i].Rotation, target.Nodes[i].Rotation, weight));
+			target.Nodes[i].Scale = glm::mix(from.Nodes[i].Scale, target.Nodes[i].Scale, weight);
 		}
 	}
 
 	bool ComposeAnimationPose(const MeshSource& source, const AnimationLocalPose& pose, std::vector<glm::mat4>& globals)
 	{
+		BS_CORE_ASSERT(source.NodeOrder.size() == source.Nodes.size());
+		BS_CORE_ASSERT(pose.Nodes.size() == source.Nodes.size());
 		globals.resize(source.Nodes.size());
 		for (uint32_t i : source.NodeOrder)
 		{
-			const glm::mat4 local = source.Nodes[i].HasMatrix ? source.Nodes[i].Matrix : glm::translate(glm::mat4(1), pose.Translations[i]) * glm::mat4_cast(pose.Rotations[i]) * glm::scale(glm::mat4(1), pose.Scales[i]);
+			const glm::mat4 local = source.Nodes[i].HasMatrix ? source.Nodes[i].Matrix : Math::ComposeTransform(pose.Nodes[i].Translation, pose.Nodes[i].Rotation, pose.Nodes[i].Scale);
 			globals[i] = source.Nodes[i].Parent >= 0 ? globals[source.Nodes[i].Parent] * local : local;
-			for (int c = 0; c < 4; c++)
-				for (int r = 0; r < 4; r++)
-					if (!std::isfinite(globals[i][c][r]))
-						return false;
+			if (!Math::IsFinite(globals[i]))
+				return false;
 		}
 		return true;
 	}
@@ -118,54 +114,15 @@ namespace Basalt {
 		return ComposeAnimationPose(source, SampleAnimation(source, clip, time), globals);
 	}
 
-	AABB AnimatedModelBounds(Entity entity)
-	{
-		AABB bounds;
-		const auto* animator = entity.TryGetComponent<AnimatorComponent>();
-		const auto source = animator ? AssetManager::GetMesh(animator->Mesh) : nullptr;
-		if (!source)
-			return bounds;
-		auto& scene = *entity.GetScene();
-		std::vector<glm::mat4> rest;
-		const auto* globals = scene.GetAnimationSystem() ? scene.GetAnimationSystem()->GetPose(entity) : nullptr;
-		if (!globals)
-		{
-			if (!EvaluateAnimation(*source, nullptr, 0, rest))
-				return bounds;
-			globals = &rest;
-		}
-		const glm::mat4 root = scene.GetWorldTransform(entity);
-		for (size_t i = 0; i < source->Nodes.size(); i++)
-		{
-			const auto& node = source->Nodes[i];
-			if (!node.Active || node.MeshIndex < 0)
-				continue;
-			const auto& mesh = source->Meshes[node.MeshIndex];
-			if (node.SkinIndex < 0)
-				bounds.Expand(mesh.Bounds.Transformed(root * (*globals)[i]));
-			else
-			{
-				const auto palette = BuildSkinPalette(source->Skins[node.SkinIndex], *globals);
-				if (palette.empty())
-					continue;
-				for (uint32_t submesh : mesh.Submeshes)
-					bounds.Expand(SkinBounds(*source, source->Submeshes[submesh], palette).Transformed(root));
-			}
-		}
-		return bounds;
-	}
-
 	std::vector<glm::mat4> BuildSkinPalette(const MeshSkin& skin, const std::vector<glm::mat4>& globals)
 	{
 		std::vector<glm::mat4> result;
 		result.reserve(skin.Joints.size());
-		for (size_t i = 0; i < skin.Joints.size(); i++)
+		for (const auto& joint : skin.Joints)
 		{
-			const glm::mat4 matrix = globals[skin.Joints[i]] * skin.InverseBindMatrices[i];
-			for (int c = 0; c < 4; c++)
-				for (int r = 0; r < 4; r++)
-					if (!std::isfinite(matrix[c][r]))
-						return {};
+			const glm::mat4 matrix = globals[joint.Node] * joint.InverseBind;
+			if (!Math::IsFinite(matrix))
+				return {};
 			result.push_back(matrix);
 		}
 		return result;

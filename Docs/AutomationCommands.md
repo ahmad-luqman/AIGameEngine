@@ -11,7 +11,7 @@ succeeds only if its command fails with an error containing `<text>` (used by te
 
 ### `asset.import_model`
 
-Instantiates a glTF model's node hierarchy into the scene.
+Imports a static model as an entity hierarchy, or a skinned/animated model as one Animator root.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -376,7 +376,7 @@ Hash of the current scene state (the play copy while playing); equal states give
 
 ### `scene.info`
 
-Summary of the open scene: name, path, entity count, state, unsaved changes, rigid bodies on undefined physics layers.
+Summary of the open scene: name, path, entity count, state, unsaved changes, undefined physics layers and animation authoring warnings.
 
 ### `scene.new`
 

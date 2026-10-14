@@ -29,7 +29,7 @@ namespace Basalt {
 		static void Reload(const std::string& key);
 		static void Clear();
 
-		// Loads a model and instantiates its node hierarchy into the scene. Returns the root entity.
+		// Imports a static entity hierarchy or a single Animator root for a skinned/animated model.
 		static Entity ImportModel(Scene& scene, const std::string& key, Entity parent, std::string& outError);
 
 		// Project-relative paths of every file under the asset directory with one of the extensions

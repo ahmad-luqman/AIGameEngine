@@ -130,6 +130,9 @@ Entity handles store an ID and stay safe to hold: using a destroyed entity raise
 | `e:PlayAudio()`, `e:StopAudio()`, `e:IsAudioPlaying()` | The entity's AudioSource |
 | `e:PlayParticles()`, `e:StopParticles([clear])`, `e:EmitParticles(count)` | The entity's ParticleEmitter (see Particles; `clear` is a boolean). Errors without a ParticleEmitter |
 | `e:IsEmittingParticles()`, `e:GetParticleCount()` | Whether the ParticleEmitter is playing, and its live particles (false/0 without one) |
+| `e:PlayAnimation([clip])`, `e:CrossFadeAnimation(clip, seconds)`, `e:BlendAnimations(first, second, weight)` | Animator playback and transitions; see Skeletal animation |
+| `e:PauseAnimation([paused])`, `e:StopAnimation()`, `e:SetAnimationTime(seconds)` | Animator pause, stop and seek |
+| `e:GetAnimationClips()`, `e:GetAnimationTime()`, `e:GetAnimationDuration()`, `e:IsAnimationPlaying()` | Animator queries |
 | `e:GetScript()` | The entity's script instance (call its functions, read its fields) |
 | `e:Destroy()` | Destroy at the end of the frame (with children) |
 
@@ -892,17 +895,22 @@ The inspector, component commands and generic Lua component access share these f
 local actor = Scene.CreateEntity("Fox")
 actor:AddComponent("Animator", { Mesh = "Assets/Models/Fox.glb", Clip = "Walk" })
 actor:CrossFadeAnimation("Run", 0.25)
--- A persistent two-clip blend; updating the same pair's weight preserves both clocks.
+```
+
+Alternatively, use a persistent two-clip blend. Starting it replaces any crossfade; later updates to
+the same pair preserve both clocks:
+
+```lua
 actor:BlendAnimations("Walk", "Run", 0.7)
 ```
 
 | Function | Behavior |
 |---|---|
 | `e:GetAnimationClips()` | Array of selectable clip names. Unnamed clips use `AnimationN`; duplicates receive numeric suffixes. |
-| `e:PlayAnimation([clip])` | Restarts the selected clip at 0, clears blending, returns success. Omitted/empty selects the first clip. |
-| `e:CrossFadeAnimation(clip, seconds)` | Starts the target at 0 and fades from the current pose. Both clips advance; interrupted fades start from a snapshot of their visible pose. Zero duration acts as Play. Returns success. |
+| `e:PlayAnimation([clip])` | Restarts the selected clip at 0, clears blending, returns success. Omitted/nil/empty selects the first clip; other argument types raise an error. |
+| `e:CrossFadeAnimation(clip, seconds)` | Starts the target at 0 and fades from the current pose. When leaving a single clip, outgoing and target clocks advance. Interrupted fades, blends, and stopped poses fade from a fixed snapshot of the visible pose. Zero duration acts as Play. Returns success. |
 | `e:BlendAnimations(first, second, weight)` | Persistent local-TRS blend, weight 0..1 toward the second clip. New pairs start at 0; changing only weight preserves both clocks. Returns success. |
-| `e:PauseAnimation([paused])` | Freezes/resumes clocks and transitions. Defaults to true; only boolean or nil accepted. |
+| `e:PauseAnimation([paused])` | Freezes/resumes active clocks and transitions. False does not restart a stopped animator; use PlayAnimation. Defaults to true; only boolean or nil accepted. |
 | `e:StopAnimation()` | Stops, clears blending, resets time, and displays the authored rest pose. |
 | `e:SetAnimationTime(seconds)` | Seeks to nonnegative finite seconds, clamped to each active clip's duration, without changing pause state or fade progress. Returns success. |
 | `e:GetAnimationTime()` | Target/current clip time in seconds (the second clip for a persistent blend). |
@@ -911,8 +919,10 @@ actor:BlendAnimations("Walk", "Run", 0.7)
 
 All functions require a running scene and an Animator on the entity. A missing asset yields empty
 clips, zero times, false queries/operations. Unknown clips or invalid numeric parameters return false
-without changing existing playback. Non-looping clips hold their final pose; looping clocks wrap by
-clip duration, including large timesteps. Crossfade duration is scene time, independent of Speed.
+without changing existing playback. Failures are logged with the operation and clip name or invalid value. Non-looping clips hold their final pose; looping clocks wrap by
+clip duration, including large timesteps. Enabling Looping after a clip finishes does not restart it;
+call PlayAnimation. Play, CrossFade and Blend unpause playback. Empty clip names select the first
+clip in all three operations. Crossfade duration is scene time, independent of Speed.
 `Speed` and `Looping` updates apply immediately; changing `Mesh` or the configured `Clip`, asset reload,
 or removing/re-adding Animator resets playback according to `PlayOnStart`. With PlayOnStart false,
 the selected clip is held at time 0 until played. Edit mode shows the authored rest pose.

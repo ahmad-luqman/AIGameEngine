@@ -776,7 +776,7 @@ TEST_SUITE("SceneRenderer")
 		CHECK(stats["gpu"]["passes"][0]["name"] == "Environment");
 		CHECK(stats["gpu"]["passes"][1]["name"] == "Uploads");
 		CHECK(stats["gpu"]["passes"][5]["name"] == "Clusters");
-		for (const char* key : { "viewport", "renderSize", "renderScale", "currentRenderScale", "drawCalls", "shadowDrawCalls", "culledSubmeshes", "lights", "materials" })
+		for (const char* key : { "viewport", "renderSize", "renderScale", "currentRenderScale", "drawCalls", "shadowDrawCalls", "culledSubmeshes", "skinMatrices", "lights", "materials" })
 		{
 			INFO(key);
 			CHECK(stats.contains(key));

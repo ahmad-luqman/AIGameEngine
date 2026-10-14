@@ -51,58 +51,6 @@ namespace Basalt {
 			}
 		}
 
-		// A zero scale leaves some rotation axes unconstrained. Complete those axes with an orthonormal
-		// basis so static hierarchy entities reconstruct the authored matrix too, not only Animator poses.
-		bool DecomposeNodeMatrix(const glm::mat4& matrix, MeshNode& node)
-		{
-			if (matrix[0].w != 0 || matrix[1].w != 0 || matrix[2].w != 0 || matrix[3].w != 1)
-				return false;
-			glm::vec3 axes[3];
-			int nonzero = 0, present = 0, missing = 0;
-			for (int i = 0; i < 3; i++)
-			{
-				axes[i] = glm::vec3(matrix[i]);
-				const float length = std::hypot(axes[i].x, axes[i].y, axes[i].z);
-				if (!std::isfinite(length))
-					return false;
-				node.Scale[i] = length;
-				if (length > 0)
-				{
-					axes[i] /= length;
-					present = i;
-					nonzero++;
-				}
-				else
-					missing = i;
-			}
-			if (nonzero == 0)
-			{
-				axes[0] = { 1, 0, 0 };
-				axes[1] = { 0, 1, 0 };
-				axes[2] = { 0, 0, 1 };
-			}
-			else if (nonzero == 1)
-			{
-				const glm::vec3 helper = std::abs(axes[present].x) < .9f ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
-				axes[(present + 1) % 3] = glm::normalize(glm::cross(axes[present], helper));
-				axes[(present + 2) % 3] = glm::cross(axes[present], axes[(present + 1) % 3]);
-			}
-			else if (nonzero == 2)
-				axes[missing] = glm::cross(axes[(missing + 1) % 3], axes[(missing + 2) % 3]);
-			// glTF node matrices must be decomposable into TRS; shear is not a node transform.
-			for (int i = 0; i < 3; i++)
-				if (std::abs(glm::dot(axes[i], axes[(i + 1) % 3])) > 1e-4f || std::abs(glm::length(axes[i]) - 1) > 1e-4f)
-					return false;
-			if (glm::dot(glm::cross(axes[0], axes[1]), axes[2]) < 0)
-			{
-				node.Scale.x = -node.Scale.x;
-				axes[0] = -axes[0];
-			}
-			node.Translation = glm::vec3(matrix[3]);
-			node.Rotation = glm::normalize(glm::quat_cast(glm::mat3(axes[0], axes[1], axes[2])));
-			return true;
-		}
-
 		bool IsDataUri(const char* uri);
 
 		// glTF files are untrusted: an external buffer or image URI may only name a file inside the active
@@ -293,9 +241,9 @@ namespace Basalt {
 		if (!data)
 			return nullptr;
 
-		if (data->nodes_count > 65536 || data->skins_count > 4096 || data->animations_count > 4096)
+		if (((data->skins_count || data->animations_count) && data->nodes_count > 65536) || data->skins_count > 4096 || data->animations_count > 4096)
 		{
-			outError = key + ": exceeds animation limits (65536 nodes, 4096 skins/clips)";
+			outError = key + ": exceeds model limits (65536 nodes, 4096 skins/clips)";
 			return nullptr;
 		}
 		Ref<MeshSource> source = CreateRef<MeshSource>();
@@ -357,8 +305,8 @@ namespace Basalt {
 					const cgltf_attribute& attribute = primitive.attributes[a];
 					if ((attribute.type == cgltf_attribute_type_joints || attribute.type == cgltf_attribute_type_weights) && attribute.index != 0)
 					{
-						outError = key + ": more than four skin influences per vertex are not supported";
-						return nullptr;
+						source->AnimationUnsupported = true;
+						continue;
 					}
 					if (attribute.type == cgltf_attribute_type_joints)
 						joints = attribute.data;
@@ -398,7 +346,7 @@ namespace Basalt {
 						  ((weights->component_type == cgltf_component_type_r_8u || weights->component_type == cgltf_component_type_r_16u) && weights->normalized)) ||
 						!ReadAccessor(joints, jointData, 4) || !ReadAccessor(weights, weightData, 4))
 					{
-						outError = key + ": invalid joint/weight accessor";
+						outError = key + ": mesh '" + meshData.Name + "' primitive " + std::to_string(primitiveIndex) + ": invalid joint/weight accessor";
 						return nullptr;
 					}
 					for (size_t v = 0; v < vertices.size(); v++)
@@ -407,14 +355,14 @@ namespace Basalt {
 						{
 							if (!std::isfinite(weightData[v][k]) || weightData[v][k] < 0.0f)
 							{
-								outError = key + ": skin weights must be finite and nonnegative";
+								outError = key + ": mesh '" + meshData.Name + "' primitive " + std::to_string(primitiveIndex) + ": skin weights must be finite and nonnegative";
 								return nullptr;
 							}
 						}
 						const float sum = glm::dot(weightData[v], glm::vec4(1));
 						if (!std::isfinite(sum) || sum <= 0.0f)
 						{
-							outError = key + ": skin weights must have a positive finite sum";
+							outError = key + ": mesh '" + meshData.Name + "' primitive " + std::to_string(primitiveIndex) + ": skin weights must have a positive finite sum";
 							return nullptr;
 						}
 						vertices[v].Joints = glm::uvec4(jointData[v]);
@@ -495,7 +443,7 @@ namespace Basalt {
 				std::memcpy(&matrix, node.matrix, sizeof(float) * 16);
 				result.HasMatrix = true;
 				result.Matrix = matrix;
-				if (!DecomposeNodeMatrix(matrix, result))
+				if (!Math::DecomposeAffineTransform(matrix, result.Translation, result.Rotation, result.Scale))
 				{
 					outError = key + ": node matrix cannot be decomposed";
 					return nullptr;
@@ -510,13 +458,13 @@ namespace Basalt {
 				if (node.has_scale)
 					result.Scale = { node.scale[0], node.scale[1], node.scale[2] };
 			}
-			const float rotationLength = glm::length(result.Rotation);
-			if (!std::isfinite(rotationLength) || rotationLength < 1e-6f)
+			glm::vec4 rotation(result.Rotation.x, result.Rotation.y, result.Rotation.z, result.Rotation.w);
+			if (!Math::NormalizeQuaternion(rotation))
 			{
 				outError = key + ": invalid node rotation";
 				return nullptr;
 			}
-			result.Rotation /= rotationLength;
+			result.Rotation = glm::quat(rotation.w, rotation.x, rotation.y, rotation.z);
 			source->Nodes.push_back(std::move(result));
 		}
 		// A file with meshes but no nodes still gets something to instantiate.
@@ -528,6 +476,8 @@ namespace Basalt {
 
 		if (!ImportAnimations(*data, *source, outError))
 			return nullptr;
+		if (source->AnimationUnsupported)
+			BS_CORE_WARN("MeshImporter: {}: more than four skin influences per vertex; retaining static geometry only", key);
 
 		std::vector<glm::mat4> rest;
 		if (!EvaluateAnimation(*source, nullptr, 0, rest))
@@ -563,7 +513,7 @@ namespace Basalt {
 		if (parent)
 			scene.SetParent(root, parent, false);
 
-		if (!source.Skins.empty() || !source.Animations.empty())
+		if (!source.AnimationUnsupported && (!source.Skins.empty() || !source.Animations.empty()))
 		{
 			root.AddComponent<AnimatorComponent>().Mesh = source.Key;
 			return root;

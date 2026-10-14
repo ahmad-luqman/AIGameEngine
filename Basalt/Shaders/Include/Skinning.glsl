@@ -10,3 +10,10 @@ mat4 SkinMatrix(DrawData draw, uvec4 joints, vec4 weights)
 			skin += weights[i] * u_Draws.Draws[draw.Indices.z + joints[i]].Model;
 	return skin;
 }
+
+// Normalize directions without squared-length underflow for very small rig units.
+vec3 StableNormalize(vec3 value, vec3 fallback)
+{
+	float scale = max(abs(value.x), max(abs(value.y), abs(value.z)));
+	return scale > 0.0 ? normalize(value / scale) : normalize(fallback);
+}

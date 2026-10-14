@@ -1,5 +1,8 @@
 #include "Basalt/Asset/AnimationImporter.h"
 
+#include "Basalt/Core/Log.h"
+#include "Basalt/Math/Math.h"
+
 #include <cgltf.h>
 #include <glm/gtc/type_ptr.hpp>
 
@@ -10,198 +13,262 @@
 namespace Basalt {
 
 	namespace {
-		bool Read(const cgltf_accessor* accessor, cgltf_type type, std::vector<float>& values, size_t& remainingFloats)
+		// Accounts for decoded values, padded vec3 slots and implicit inverse-bind matrices.
+		class FloatBudget
 		{
-			if (!accessor || accessor->type != type || accessor->component_type != cgltf_component_type_r_32f || accessor->normalized)
+		public:
+			bool Fits(size_t count, size_t width = 1) const { return count <= m_Remaining / width; }
+			bool Consume(size_t count, size_t width = 1)
+			{
+				if (!Fits(count, width))
+				{
+					m_Exceeded = true;
+					return false;
+				}
+				m_Remaining -= count * width;
+				return true;
+			}
+			bool Exceeded() const { return m_Exceeded; }
+
+		private:
+			size_t m_Remaining = size_t{ 16 } * 1024 * 1024;
+			bool m_Exceeded = false;
+		};
+
+		bool Read(const cgltf_accessor* accessor, cgltf_type type, std::vector<float>& values, FloatBudget& budget, bool allowQuantized = false)
+		{
+			if (!accessor || accessor->type != type)
+				return false;
+			const bool floating = accessor->component_type == cgltf_component_type_r_32f && !accessor->normalized;
+			const bool quantized = allowQuantized && accessor->normalized &&
+								   (accessor->component_type == cgltf_component_type_r_8 || accessor->component_type == cgltf_component_type_r_8u ||
+									accessor->component_type == cgltf_component_type_r_16 || accessor->component_type == cgltf_component_type_r_16u);
+			if (!floating && !quantized)
 				return false;
 			const size_t width = cgltf_num_components(type);
-			if (accessor->count > remainingFloats / width)
+			if (!budget.Consume(accessor->count, width))
 				return false;
-			remainingFloats -= accessor->count * width;
 			values.resize(accessor->count * width);
 			return cgltf_accessor_unpack_floats(accessor, values.data(), values.size()) == values.size() &&
 				   std::all_of(values.begin(), values.end(), [](float v) { return std::isfinite(v); });
 		}
 	}
 
+	namespace {
+		// Imports validated hierarchy, skins and tracks under one decoded-data budget.
+		class AnimationImport
+		{
+		public:
+			AnimationImport(const cgltf_data& data, MeshSource& source, std::string& error)
+				: m_Data(data)
+				, m_Source(source)
+				, m_Error(error)
+			{}
+			bool Run() { return Hierarchy() && Skins() && Vertices() && Tracks(); }
+
+		private:
+			bool Fail(const std::string& reason)
+			{
+				m_Error = m_Source.Key + ": " + m_Context + (m_Budget.Exceeded() ? "decoded animation budget exceeded: " : "") + reason;
+				return false;
+			}
+			bool Hierarchy()
+			{
+				if (!m_Source.FinalizeHierarchy())
+					return Fail("invalid or cyclic node hierarchy");
+				if (m_Data.scene)
+				{
+					for (auto& node : m_Source.Nodes)
+						node.Active = false;
+					for (size_t i = 0; i < m_Data.scene->nodes_count; i++)
+						m_Source.Nodes[m_Data.scene->nodes[i] - m_Data.nodes].Active = true;
+					for (uint32_t i : m_Source.NodeOrder)
+						if (m_Source.Nodes[i].Parent >= 0 && m_Source.Nodes[m_Source.Nodes[i].Parent].Active)
+							m_Source.Nodes[i].Active = true;
+				}
+				return true;
+			}
+			bool Skins()
+			{
+				for (size_t i = 0; i < m_Data.skins_count; i++)
+				{
+					const auto& input = m_Data.skins[i];
+					m_Context = "skin " + std::to_string(i) + (input.name ? " (" + std::string(input.name) + ")" : "") + ": ";
+					if (input.joints_count == 0 || input.joints_count > 65536)
+						return Fail("skin must contain 1..65536 joints");
+					MeshSkin skin;
+					std::set<uint32_t> unique;
+					for (size_t j = 0; j < input.joints_count; j++)
+					{
+						const auto index = static_cast<uint32_t>(input.joints[j] - m_Data.nodes);
+						if (!unique.insert(index).second)
+							return Fail("duplicate skin joint");
+						skin.Joints.push_back({ index, glm::mat4(1) });
+					}
+					if (!m_Budget.Fits(input.joints_count, 16))
+						return Fail("skin data exceeds the decoded animation budget");
+					if (!input.inverse_bind_matrices)
+						m_Budget.Consume(input.joints_count, 16);
+					if (input.inverse_bind_matrices)
+					{
+						std::vector<float> values;
+						if (input.inverse_bind_matrices->count < input.joints_count || !Read(input.inverse_bind_matrices, cgltf_type_mat4, values, m_Budget))
+							return Fail("invalid inverse bind matrices");
+						for (size_t j = 0; j < input.joints_count; j++)
+						{
+							auto matrix = glm::make_mat4(values.data() + j * 16);
+							if (matrix[0].w != 0 || matrix[1].w != 0 || matrix[2].w != 0 || matrix[3].w != 1)
+								return Fail("inverse bind matrix must be affine");
+							skin.Joints[j].InverseBind = matrix;
+						}
+					}
+					m_Source.Skins.push_back(std::move(skin));
+				}
+				return true;
+			}
+			bool Vertices()
+			{
+				// Bound per-model skinning work even when many mesh nodes reference the same large skin.
+				size_t remainingJointReferences = 65536;
+				for (const auto& node : m_Source.Nodes)
+				{
+					if (node.SkinIndex < 0 || node.MeshIndex < 0)
+						continue;
+					const auto& skin = m_Source.Skins[node.SkinIndex];
+					m_Context = "node '" + node.Name + "' mesh " + std::to_string(node.MeshIndex) + ": ";
+					if (node.Active)
+					{
+						if (skin.Joints.size() > remainingJointReferences)
+							return Fail("model exceeds 65536 skin joint references across active mesh nodes");
+						remainingJointReferences -= skin.Joints.size();
+					}
+					for (uint32_t submeshIndex : m_Source.Meshes[node.MeshIndex].Submeshes)
+					{
+						const auto& submesh = m_Source.Submeshes[submeshIndex];
+						for (size_t v = submesh.BaseVertex; v < static_cast<size_t>(submesh.BaseVertex) + submesh.VertexCount; v++)
+						{
+							const auto& vertex = m_Source.Vertices[v];
+							if (glm::dot(vertex.Weights, glm::vec4(1)) <= 0)
+								return Fail("skinned primitive needs JOINTS_0 and WEIGHTS_0");
+							for (int k = 0; k < 4; k++)
+								if (vertex.Joints[k] >= skin.Joints.size())
+									return Fail("vertex joint index exceeds skin joint count");
+						}
+					}
+				}
+				return true;
+			}
+			bool Tracks()
+			{
+				std::set<std::string> clipNames;
+				for (size_t i = 0; i < m_Data.animations_count; i++)
+				{
+					const auto& input = m_Data.animations[i];
+					AnimationClip clip;
+					clip.Name = input.name && input.name[0] ? input.name : "Animation" + std::to_string(i);
+					// Names are the public selection key; make duplicates deterministic and selectable.
+					const std::string baseName = clip.Name;
+					for (size_t suffix = 1; !clipNames.insert(clip.Name).second; suffix++)
+						clip.Name = baseName + "_" + std::to_string(suffix);
+					std::set<std::pair<uint32_t, AnimationPath>> targets;
+					for (size_t c = 0; c < input.channels_count; c++)
+					{
+						const auto& channel = input.channels[c];
+						m_Context = "clip '" + clip.Name + "' channel " + std::to_string(c) + ": ";
+						if (!channel.target_node || channel.target_path == cgltf_animation_path_type_weights)
+						{
+							BS_CORE_WARN("MeshImporter: {}: clip '{}' channel {}: skipping unsupported {} animation", m_Source.Key, clip.Name, c, !channel.target_node ? "pointer" : "morph-weight");
+							continue;
+						}
+						if (!channel.sampler)
+							return Fail("animation channel needs a target and sampler");
+						if (channel.target_node->has_matrix)
+							return Fail("animated node must use TRS, not matrix");
+						AnimationTrack track;
+						track.Node = static_cast<uint32_t>(channel.target_node - m_Data.nodes);
+						switch (channel.target_path)
+						{
+							case cgltf_animation_path_type_translation:
+								track.Path = AnimationPath::Translation;
+								break;
+							case cgltf_animation_path_type_rotation:
+								track.Path = AnimationPath::Rotation;
+								break;
+							case cgltf_animation_path_type_scale:
+								track.Path = AnimationPath::Scale;
+								break;
+							default:
+								return Fail("morph-weight animation is not supported");
+						}
+						if (!targets.emplace(track.Node, track.Path).second)
+							return Fail("duplicate animation target");
+						const auto& sampler = *channel.sampler;
+						switch (sampler.interpolation)
+						{
+							case cgltf_interpolation_type_step:
+								track.Interpolation = AnimationInterpolation::Step;
+								break;
+							case cgltf_interpolation_type_linear:
+								track.Interpolation = AnimationInterpolation::Linear;
+								break;
+							case cgltf_interpolation_type_cubic_spline:
+								track.Interpolation = AnimationInterpolation::CubicSpline;
+								break;
+							default:
+								return Fail("unsupported animation interpolation");
+						}
+						if (!Read(sampler.input, cgltf_type_scalar, track.Times, m_Budget) || track.Times.empty())
+							return Fail("invalid animation times");
+						float previous = -1;
+						for (float time : track.Times)
+						{
+							if (time < 0 || time <= previous)
+								return Fail("animation times must be nonnegative and strictly increasing");
+							previous = time;
+						}
+						clip.Duration = std::max(clip.Duration, track.Times.back());
+						const bool rotation = track.Path == AnimationPath::Rotation;
+						const bool cubic = track.Interpolation == AnimationInterpolation::CubicSpline;
+						std::vector<float> values;
+						if (!Read(sampler.output, rotation ? cgltf_type_vec4 : cgltf_type_vec3, values, m_Budget, rotation) || sampler.output->count != track.Times.size() * (cubic ? 3 : 1))
+							return Fail("invalid animation values");
+						const size_t width = rotation ? 4 : 3;
+						// vec3 tracks are stored in vec4 slots; charge their padding too.
+						if (!rotation)
+						{
+							if (!m_Budget.Consume(sampler.output->count))
+								return Fail("animation values exceed the decoded animation budget");
+						}
+						for (size_t v = 0; v < sampler.output->count; v++)
+						{
+							glm::vec4 value(0);
+							for (size_t k = 0; k < width; k++)
+								value[static_cast<int>(k)] = values[v * width + k];
+							if (rotation && (!cubic || v % 3 == 1))
+							{
+								if (!Math::NormalizeQuaternion(value))
+									return Fail("invalid animation quaternion");
+							}
+							track.Values.push_back(value);
+						}
+						clip.Tracks.push_back(std::move(track));
+					}
+					if (!clip.Tracks.empty())
+						m_Source.Animations.push_back(std::move(clip));
+				}
+				return true;
+			}
+
+			const cgltf_data& m_Data;
+			MeshSource& m_Source;
+			std::string& m_Error;
+			std::string m_Context;
+			FloatBudget m_Budget;
+		};
+	}
+
 	bool ImportAnimations(const cgltf_data& data, MeshSource& source, std::string& outError)
 	{
-		// At most 64 MiB of decoded animation/skin floats per asset, including repeated sampler references.
-		size_t remainingFloats = size_t{ 16 } * 1024 * 1024;
-		auto fail = [&](const std::string& reason) { outError = source.Key + ": " + reason; return false; };
-		// Iterative traversal avoids stack growth for adversarially deep hierarchies.
-		std::vector<std::vector<uint32_t>> children(source.Nodes.size());
-		source.NodeOrder.reserve(source.Nodes.size());
-		for (size_t i = 0; i < source.Nodes.size(); i++)
-		{
-			const auto& node = source.Nodes[i];
-			if (node.Parent < 0)
-				source.NodeOrder.push_back(static_cast<uint32_t>(i));
-			else if (static_cast<size_t>(node.Parent) < source.Nodes.size())
-				children[node.Parent].push_back(static_cast<uint32_t>(i));
-			else
-				return fail("invalid node parent");
-		}
-		for (size_t i = 0; i < source.NodeOrder.size(); i++)
-			for (uint32_t child : children[source.NodeOrder[i]])
-				source.NodeOrder.push_back(child);
-		if (source.NodeOrder.size() != source.Nodes.size())
-			return fail("cyclic node hierarchy");
-		if (data.scene)
-		{
-			for (auto& node : source.Nodes)
-				node.Active = false;
-			for (size_t i = 0; i < data.scene->nodes_count; i++)
-				source.Nodes[data.scene->nodes[i] - data.nodes].Active = true;
-			for (uint32_t i : source.NodeOrder)
-				if (source.Nodes[i].Parent >= 0 && source.Nodes[source.Nodes[i].Parent].Active)
-					source.Nodes[i].Active = true;
-		}
-		for (size_t i = 0; i < data.skins_count; i++)
-		{
-			const auto& input = data.skins[i];
-			if (input.joints_count == 0 || input.joints_count > 65536)
-				return fail("skin must contain 1..65536 joints");
-			MeshSkin skin;
-			std::set<uint32_t> unique;
-			for (size_t j = 0; j < input.joints_count; j++)
-			{
-				const auto index = static_cast<uint32_t>(input.joints[j] - data.nodes);
-				if (!unique.insert(index).second)
-					return fail("duplicate skin joint");
-				skin.Joints.push_back(index);
-			}
-			if (input.joints_count > remainingFloats / 16)
-				return fail("skin data exceeds the decoded animation budget");
-			if (!input.inverse_bind_matrices)
-				remainingFloats -= input.joints_count * 16;
-			skin.InverseBindMatrices.assign(input.joints_count, glm::mat4(1));
-			if (input.inverse_bind_matrices)
-			{
-				std::vector<float> values;
-				if (input.inverse_bind_matrices->count < input.joints_count || !Read(input.inverse_bind_matrices, cgltf_type_mat4, values, remainingFloats))
-					return fail("invalid inverse bind matrices");
-				for (size_t j = 0; j < input.joints_count; j++)
-				{
-					auto matrix = glm::make_mat4(values.data() + j * 16);
-					if (matrix[0].w != 0 || matrix[1].w != 0 || matrix[2].w != 0 || matrix[3].w != 1)
-						return fail("inverse bind matrix must be affine");
-					skin.InverseBindMatrices[j] = matrix;
-				}
-			}
-			source.Skins.push_back(std::move(skin));
-		}
-		for (const auto& node : source.Nodes)
-		{
-			if (node.SkinIndex < 0 || node.MeshIndex < 0)
-				continue;
-			const auto& skin = source.Skins[node.SkinIndex];
-			for (uint32_t submeshIndex : source.Meshes[node.MeshIndex].Submeshes)
-			{
-				const auto& submesh = source.Submeshes[submeshIndex];
-				for (size_t v = submesh.BaseVertex; v < static_cast<size_t>(submesh.BaseVertex) + submesh.VertexCount; v++)
-				{
-					const auto& vertex = source.Vertices[v];
-					if (glm::dot(vertex.Weights, glm::vec4(1)) <= 0)
-						return fail("skinned primitive needs JOINTS_0 and WEIGHTS_0");
-					for (int k = 0; k < 4; k++)
-						if (vertex.Joints[k] >= skin.Joints.size())
-							return fail("vertex joint index exceeds skin joint count");
-				}
-			}
-		}
-		std::set<std::string> clipNames;
-		for (size_t i = 0; i < data.animations_count; i++)
-		{
-			const auto& input = data.animations[i];
-			AnimationClip clip;
-			clip.Name = input.name && input.name[0] ? input.name : "Animation" + std::to_string(i);
-			// Names are the public selection key; make duplicates deterministic and selectable.
-			const std::string baseName = clip.Name;
-			for (size_t suffix = 1; !clipNames.insert(clip.Name).second; suffix++)
-				clip.Name = baseName + "_" + std::to_string(suffix);
-			std::set<std::pair<uint32_t, AnimationPath>> targets;
-			for (size_t c = 0; c < input.channels_count; c++)
-			{
-				const auto& channel = input.channels[c];
-				if (!channel.target_node || !channel.sampler)
-					return fail("animation channel needs a target and sampler");
-				if (channel.target_node->has_matrix)
-					return fail("animated node must use TRS, not matrix");
-				AnimationTrack track;
-				track.Node = static_cast<uint32_t>(channel.target_node - data.nodes);
-				switch (channel.target_path)
-				{
-					case cgltf_animation_path_type_translation:
-						track.Path = AnimationPath::Translation;
-						break;
-					case cgltf_animation_path_type_rotation:
-						track.Path = AnimationPath::Rotation;
-						break;
-					case cgltf_animation_path_type_scale:
-						track.Path = AnimationPath::Scale;
-						break;
-					default:
-						return fail("morph-weight animation is not supported");
-				}
-				if (!targets.emplace(track.Node, track.Path).second)
-					return fail("duplicate animation target");
-				const auto& sampler = *channel.sampler;
-				switch (sampler.interpolation)
-				{
-					case cgltf_interpolation_type_step:
-						track.Interpolation = AnimationInterpolation::Step;
-						break;
-					case cgltf_interpolation_type_linear:
-						track.Interpolation = AnimationInterpolation::Linear;
-						break;
-					case cgltf_interpolation_type_cubic_spline:
-						track.Interpolation = AnimationInterpolation::CubicSpline;
-						break;
-					default:
-						return fail("unsupported animation interpolation");
-				}
-				if (!Read(sampler.input, cgltf_type_scalar, track.Times, remainingFloats) || track.Times.empty())
-					return fail("invalid animation times");
-				float previous = -1;
-				for (float time : track.Times)
-				{
-					if (time < 0 || time <= previous)
-						return fail("animation times must be nonnegative and strictly increasing");
-					previous = time;
-				}
-				clip.Duration = std::max(clip.Duration, track.Times.back());
-				const bool rotation = track.Path == AnimationPath::Rotation;
-				const bool cubic = track.Interpolation == AnimationInterpolation::CubicSpline;
-				std::vector<float> values;
-				if (!Read(sampler.output, rotation ? cgltf_type_vec4 : cgltf_type_vec3, values, remainingFloats) || sampler.output->count != track.Times.size() * (cubic ? 3 : 1))
-					return fail("invalid animation values");
-				const size_t width = rotation ? 4 : 3;
-				// vec3 tracks are stored in vec4 slots; charge their padding too.
-				if (!rotation)
-				{
-					if (sampler.output->count > remainingFloats)
-						return fail("animation values exceed the decoded animation budget");
-					remainingFloats -= sampler.output->count;
-				}
-				for (size_t v = 0; v < sampler.output->count; v++)
-				{
-					glm::vec4 value(0);
-					for (size_t k = 0; k < width; k++)
-						value[static_cast<int>(k)] = values[v * width + k];
-					if (rotation && (!cubic || v % 3 == 1))
-					{
-						const float length = glm::length(value);
-						if (!std::isfinite(length) || length < 1e-6f)
-							return fail("invalid animation quaternion");
-						value /= length;
-					}
-					track.Values.push_back(value);
-				}
-				clip.Tracks.push_back(std::move(track));
-			}
-			source.Animations.push_back(std::move(clip));
-		}
-		return true;
+		return AnimationImport(data, source, outError).Run();
 	}
 }

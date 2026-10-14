@@ -1051,7 +1051,7 @@ namespace Basalt {
 
 		std::string Validate(const AnimatorComponent& c)
 		{
-			if (!std::isfinite(c.Speed) || c.Speed < 0.0f || c.Speed > 100.0f)
+			if (!std::isfinite(c.Speed) || c.Speed < 0.0f || c.Speed > MaxAnimatorSpeed)
 				return "Speed must be finite and between 0 and 100";
 			return {};
 		}

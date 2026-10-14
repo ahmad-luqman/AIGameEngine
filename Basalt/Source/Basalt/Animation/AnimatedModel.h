@@ -1,0 +1,16 @@
+#pragma once
+
+#include "Basalt/Asset/MeshSource.h"
+
+#include <functional>
+
+namespace Basalt {
+	class Entity;
+	// Visits active mesh nodes in world space using the running pose or edit-mode rest pose.
+	// Palettes are shared per skin for this visit; callback references expire when the call returns.
+	void ForEachAnimatedMesh(Entity entity, const std::function<void(const Ref<MeshSource>&, const MeshNode&, const glm::mat4&, const std::vector<glm::mat4>&)>& visit);
+	// World bounds used by editor picking, focus and selection.
+	AABB AnimatedModelBounds(Entity entity);
+	// Non-fatal authoring diagnostics, shared by the inspector and scene.info automation.
+	std::vector<std::string> GetAnimationWarnings(Entity entity);
+}

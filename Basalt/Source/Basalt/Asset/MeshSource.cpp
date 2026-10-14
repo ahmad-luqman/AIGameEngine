@@ -4,6 +4,24 @@
 
 namespace Basalt {
 
+	bool MeshSource::FinalizeHierarchy()
+	{
+		NodeOrder.clear();
+		NodeOrder.reserve(Nodes.size());
+		std::vector<std::vector<uint32_t>> children(Nodes.size());
+		for (size_t i = 0; i < Nodes.size(); i++)
+			if (Nodes[i].Parent < 0)
+				NodeOrder.push_back(static_cast<uint32_t>(i));
+			else if (static_cast<size_t>(Nodes[i].Parent) < Nodes.size())
+				children[Nodes[i].Parent].push_back(static_cast<uint32_t>(i));
+			else
+				return false;
+		for (size_t i = 0; i < NodeOrder.size(); i++)
+			for (uint32_t child : children[NodeOrder[i]])
+				NodeOrder.push_back(child);
+		return NodeOrder.size() == Nodes.size();
+	}
+
 	uint32_t MeshSource::AddSubmesh(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, uint32_t materialIndex)
 	{
 		Submesh submesh;
@@ -121,7 +139,7 @@ namespace Basalt {
 				const uint32_t submesh = source->AddSubmesh(vertices, indices, 0);
 				source->Meshes.push_back(MeshData{ name, { submesh }, {} });
 				source->Nodes.push_back(MeshNode{ .Name = name, .MeshIndex = 0 });
-				source->NodeOrder.push_back(0);
+				source->FinalizeHierarchy();
 				source->UpdateBounds();
 				return source;
 			}

@@ -73,6 +73,8 @@ namespace Basalt {
 		bool CastShadows = true;
 	};
 
+	inline constexpr float MaxAnimatorSpeed = 100.0f;
+
 	// Draws an entire glTF model with independent skeletal/TRS animation playback.
 	struct AnimatorComponent
 	{

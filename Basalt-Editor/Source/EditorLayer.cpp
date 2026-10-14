@@ -2,6 +2,7 @@
 
 #include "Panels/JsonWidgets.h"
 
+#include "Basalt/Animation/AnimatedModel.h"
 #include "Basalt/Animation/AnimationPose.h"
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Core/Application.h"
