@@ -114,6 +114,8 @@ namespace Basalt {
 		void DestroyEntity(Entity entity);
 		// Copies the entity and its descendants with new UUIDs. The copy gets the same parent.
 		Entity DuplicateEntity(Entity entity);
+		// Copies the selected forest with one reference map. Selected descendants inherit their root's copy.
+		std::vector<Entity> DuplicateEntities(const std::vector<Entity>& entities);
 
 		Entity GetEntityByUUID(UUID uuid);
 		Entity FindEntityByName(std::string_view name);

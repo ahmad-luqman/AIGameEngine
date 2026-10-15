@@ -50,7 +50,9 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   survive.
 - **Automation first.** `CommandRegistry` (Automation/BuiltinCommands.cpp) is the API for tools and AI
   agents. The editor performs its edits through the same commands, so the GUI cannot do anything the
-  API cannot. Hosts: `basalt` CLI (headless) and the editor's TCP server (127.0.0.1:7420, adds
+  API cannot. Edit-mode scene mutations must call `AutomationSession::MarkDirty` (or `MarkEdited` in
+  built-in commands); its revision counter tells editor history which commands need capture. Hosts:
+  `basalt` CLI (headless) and the editor's TCP server (127.0.0.1:7420, adds
   `editor.*` commands and screenshots). Docs: Docs/AutomationCommands.md (generated), Docs/MCP.md (agent setup/protocol). CommandInfo declares
   InputSchema: validation, help and MCP tool definitions share it; editor TCP clients can use MCP too.
 - **Headless core.** Everything except Renderer/ImGui/Window runs without a GPU; unit tests, the CLI and

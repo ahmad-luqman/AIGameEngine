@@ -20,6 +20,7 @@ namespace Basalt {
 		m_Scene = scene;
 		m_ScenePath = scenePath;
 		m_Selection.clear();
+		++m_EditRevision;
 		m_Dirty = false;
 		if (OnSceneChanged)
 			OnSceneChanged();

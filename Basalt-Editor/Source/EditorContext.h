@@ -45,6 +45,7 @@ namespace Basalt {
 	private:
 		bool m_UICommand = false;
 		bool m_TransactionWasDirty = false;
+		uint64_t m_CommandRevision = 0;
 		std::string m_PendingName;
 		std::string m_FieldName;
 	};

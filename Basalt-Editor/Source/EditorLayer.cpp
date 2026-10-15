@@ -313,7 +313,6 @@ namespace Basalt {
 			if (m_GizmoWasUsing)
 				FinishGizmo(false);
 			const std::string response = connection->HandleRequest(m_Commands, m_Session, request);
-			m_Context.CommitHistory();
 			promise->set_value(response);
 		});
 		while (future.wait_for(std::chrono::milliseconds(50)) != std::future_status::ready)

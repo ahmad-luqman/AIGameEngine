@@ -98,7 +98,7 @@ namespace Basalt {
 					bounds = source->Meshes[mesh->MeshIndex].Bounds.Transformed(world);
 			}
 			if (entity.HasComponent<AnimatorComponent>())
-				bounds = AnimatedModelBounds(entity);
+				bounds.Expand(AnimatedModelBounds(entity));
 			if (!bounds.IsValid())
 			{
 				bounds.Expand(glm::vec3(world[3]) - glm::vec3(.25f));
@@ -229,12 +229,19 @@ namespace Basalt {
 								   RequireEditableSelection(session);
 								   const auto roots = SelectionRoots(*session.GetScene(), session.GetSelections());
 								   std::vector<UUID> copies;
-								   for (UUID id : roots)
+								   if (duplicate)
 								   {
-									   const auto result = registry.Execute(session, duplicate ? "entity.duplicate" : "entity.destroy", { { "entity", static_cast<uint64_t>(id) } });
-									   if (duplicate)
-										   copies.emplace_back(result["id"].get<uint64_t>());
+									   std::vector<Entity> entities;
+									   entities.reserve(roots.size());
+									   for (UUID id : roots)
+										   entities.push_back(session.GetScene()->GetEntityByUUID(id));
+									   for (Entity copy : session.GetScene()->DuplicateEntities(entities))
+										   copies.push_back(copy.GetUUID());
+									   session.MarkDirty();
 								   }
+								   else
+									   for (UUID id : roots)
+										   registry.Execute(session, "entity.destroy", { { "entity", static_cast<uint64_t>(id) } });
 								   session.SetSelections(copies);
 								   return SelectionResult(session);
 							   } });
