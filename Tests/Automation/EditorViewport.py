@@ -186,13 +186,33 @@ def main():
                     half_uv = (native_uv + displayed_uv) / 2 - .5
                     scale_x = half_uv * 4 * 4.5 * math.tan(math.radians(25)) * width / height
                     call("component.set", {"entity": thin, "component": "Transform", "data": {"Scale": [scale_x, 1, 1]}})
-                    expected = thin if displayed_uv - .5 < half_uv else 0
-                    # Change the configured maximum before the next frame. The still-displayed .5 scale
-                    # must govern this pick, just as it does when dynamic resolution lowers the viewport.
+                    sample_xs = list(range(width // 2 - 8, width // 2 + 9))
+                    def sample_mask():
+                        return [r["entity"] for r in batch([
+                            ("editor.pick", {"x": sample_x, "y": height // 2, "select": False})
+                            for sample_x in sample_xs])]
+                    reduced = sample_mask()
+                    call("project.set", {"renderScale": 1})
+                    deadline = time.monotonic() + 20
+                    while call("editor.viewport")["renderWidth"] != width:
+                        require(time.monotonic() < deadline, "Editor did not display native render scale")
+                        time.sleep(.05)
+                    native = sample_mask()
+                    different = [i for i in range(len(sample_xs)) if reduced[i] != native[i]]
+                    require(different, f"Thin silhouette must distinguish sampling grids: {view}, {reduced}, {native}")
+                    call("project.set", {"renderScale": .5})
+                    deadline = time.monotonic() + 20
+                    while call("editor.viewport")["renderWidth"] != view["renderWidth"]:
+                        require(time.monotonic() < deadline, "Editor did not restore reduced render scale")
+                        time.sleep(.05)
+                    # Compare observed raster coverage rather than an analytic edge expectation: hardware
+                    # subpixel precision and viewport rounding may choose either side of a narrow silhouette.
+                    # A queued setting change must still use the displayed grid, not the next frame's grid.
+                    index = different[0]
                     picked = batch([("project.set", {"renderScale": 1}),
-                                    ("editor.pick", {"x": edge_x, "y": height // 2, "select": False})])[1]
-                    require(picked["entity"] == expected,
-                            "Editor picking disagrees with reduced-resolution silhouette")
+                                    ("editor.pick", {"x": sample_xs[index], "y": height // 2, "select": False})])[1]
+                    require(picked["entity"] == reduced[index],
+                            f"Picking used next-frame scale: got {picked}, reduced={reduced[index]}, native={native[index]}, viewport={view}")
                     call("entity.destroy", {"entity": thin})
                     call("play.start")
                     call("editor.vertex_snap", {"source": [0, 0], "target": [0, 0]}, error="only available in edit mode")
