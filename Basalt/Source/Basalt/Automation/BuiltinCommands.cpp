@@ -4,6 +4,7 @@
 #include "Basalt/Asset/TextureSource.h"
 #include "Basalt/Automation/AutomationSession.h"
 #include "Basalt/Automation/CommandRegistry.h"
+#include "Basalt/Automation/CommandSchema.h"
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Input.h"
@@ -36,6 +37,7 @@ namespace Basalt {
 	namespace {
 
 		using json = nlohmann::json;
+		namespace Schema = CommandSchema;
 
 		// --- Parameter helpers ----------------------------------------------------------------------
 
@@ -224,9 +226,9 @@ namespace Basalt {
 			return path;
 		}
 
-		void Add(CommandRegistry& registry, std::string name, std::string description, std::map<std::string, std::string> parameters, std::function<json(AutomationSession&, const json&)> handler)
+		void Add(CommandRegistry& registry, std::string name, std::string description, json inputSchema, std::function<json(AutomationSession&, const json&)> handler)
 		{
-			registry.Register({ std::move(name), std::move(description), std::move(parameters), std::move(handler) });
+			registry.Register({ std::move(name), std::move(description), std::move(inputSchema), std::move(handler) });
 		}
 
 		void ApplyKeyInput(const json& params)
@@ -377,21 +379,34 @@ namespace Basalt {
 
 		void RegisterGeneral(CommandRegistry& registry)
 		{
-			Add(registry, "help", "Lists every command with its description and parameters.", {}, [&registry](AutomationSession&, const json&) {
+			Add(registry, "help", "Lists commands, or describes one command with its parameter schema.", Schema::Object({ { "command", Schema::String("Command name to describe", true) } }), [&registry](AutomationSession&, const json& params) {
+				const auto describe = [](const CommandInfo& info) {
+					json parameters = json::object();
+					for (const auto& [name, schema] : info.InputSchema["properties"].items())
+						parameters[name] = schema.value("description", "");
+					return json{ { "command", info.Name }, { "description", info.Description }, { "params", parameters }, { "inputSchema", info.InputSchema } };
+				};
+				if (params.contains("command"))
+				{
+					const auto* info = registry.Find(params["command"].get<std::string>());
+					if (!info)
+						throw CommandError("unknown command '" + params["command"].get<std::string>() + "'");
+					return describe(*info);
+				}
 				json commands = json::array();
 				for (const auto& [name, info] : registry.GetCommands())
-					commands.push_back({ { "command", name }, { "description", info.Description }, { "params", info.Parameters } });
+					commands.push_back(describe(info));
 				return json{ { "commands", commands } };
 			});
 
-			Add(registry, "component.types", "Lists every component type with its fields (for component.add/set).", {}, [](AutomationSession&, const json&) {
+			Add(registry, "component.types", "Lists every component type with its fields (for component.add/set).", Schema::Object(), [](AutomationSession&, const json&) {
 				json types = json::array();
 				for (const ComponentInfo& info : ComponentRegistry::GetAll())
 					types.push_back({ { "name", info.Name }, { "fields", info.Fields }, { "core", info.IsCore } });
 				return json{ { "components", types } };
 			});
 
-			Add(registry, "log.get", "Returns engine log messages logged after index 'since'.", { { "since", "integer, cursor from a previous call (default 0)" }, { "errorsOnly", "bool" } }, [](AutomationSession&, const json& params) {
+			Add(registry, "log.get", "Returns engine log messages logged after index 'since'.", Schema::Object({ { "since", Schema::Nullable(Schema::Integer("integer, cursor from a previous call (default 0)", 0, INT64_MAX)) }, { "errorsOnly", Schema::Nullable(Schema::Boolean("bool")) } }), [](AutomationSession&, const json& params) {
 				const uint64_t since = static_cast<uint64_t>(OptionalInteger(params, "since", 0, 0, INT64_MAX));
 				const bool errorsOnly = OptionalBool(params, "errorsOnly", false);
 				uint64_t next = 0;
@@ -421,7 +436,7 @@ namespace Basalt {
 
 		void RegisterProject(CommandRegistry& registry)
 		{
-			Add(registry, "project.create", "Creates a new project directory (Project.bproject + Assets/) and opens it.", { { "path", "string, project directory" }, { "name", "string" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "project.create", "Creates a new project directory (Project.bproject + Assets/) and opens it.", Schema::Object({ { "path", Schema::String("string, project directory", true) }, { "name", Schema::Nullable(Schema::String("string")) } }, { "path" }), [](AutomationSession& session, const json& params) {
 				std::string error;
 				Ref<Project> project = Project::Create(RequireString(params, "path"), OptionalString(params, "name", "Game"), error);
 				if (!project)
@@ -433,7 +448,7 @@ namespace Basalt {
 				return json{ { "directory", project->GetDirectory().string() } };
 			});
 
-			Add(registry, "project.open", "Opens a project (directory or .bproject file) and its start scene.", { { "path", "string" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "project.open", "Opens a project (directory or .bproject file) and its start scene.", Schema::Object({ { "path", Schema::String("string", true) } }, { "path" }), [](AutomationSession& session, const json& params) {
 				std::string error;
 				Ref<Project> project = Project::Load(RequireString(params, "path"), error);
 				if (!project)
@@ -456,7 +471,7 @@ namespace Basalt {
 				return json{ { "name", project->GetConfig().Name }, { "scene", startScene } };
 			});
 
-			Add(registry, "project.info", "Returns the active project's settings.", {}, [](AutomationSession&, const json&) {
+			Add(registry, "project.info", "Returns the active project's settings.", Schema::Object(), [](AutomationSession&, const json&) {
 				Ref<Project> project = RequireProject();
 				const ProjectConfig& config = project->GetConfig();
 				return json{
@@ -475,7 +490,7 @@ namespace Basalt {
 				};
 			});
 
-			Add(registry, "project.set", "Changes project settings and saves the project file.", { { "name", "string" }, { "startScene", "string, project-relative scene" }, { "windowWidth", "integer" }, { "windowHeight", "integer" }, { "fullscreen", "bool" }, { "renderScale", "number in [0.25, 2], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution)" }, { "dynamicResolution", "bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries)" }, { "targetFrameRate", "number in [10, 1000]; dynamic resolution keeps the scene's GPU time within this frame rate's frame time" }, { "minRenderScale", "number in [0.25, 2], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning)" }, { "physicsLayers", "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play" }, { "randomSeed", "integer in [0, 4294967295], seeds Lua's random numbers, particle emitters and runtime entity UUIDs; applies from the next play" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "project.set", "Changes project settings and saves the project file.", Schema::Object({ { "name", Schema::Nullable(Schema::String("string")) }, { "startScene", Schema::Nullable(Schema::String("string, project-relative scene")) }, { "windowWidth", Schema::Nullable(Schema::Integer("integer", 64, 16384)) }, { "windowHeight", Schema::Nullable(Schema::Integer("integer", 64, 16384)) }, { "fullscreen", Schema::Nullable(Schema::Boolean("bool")) }, { "renderScale", Schema::Nullable(Schema::Number("number in [0.25, 2], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution)", 0.25, 2.0)) }, { "dynamicResolution", Schema::Nullable(Schema::Boolean("bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries)")) }, { "targetFrameRate", Schema::Nullable(Schema::Number("number in [10, 1000]; dynamic resolution keeps the scene's GPU time within this frame rate's frame time", 10.0, 1000.0)) }, { "minRenderScale", Schema::Nullable(Schema::Number("number in [0.25, 2], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning)", 0.25, 2.0)) }, { "physicsLayers", json{ { "type", "object" }, { "description", "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play" } } }, { "randomSeed", Schema::Nullable(Schema::Integer("integer in [0, 4294967295], seeds Lua's random numbers, particle emitters and runtime entity UUIDs; applies from the next play", 0, UINT32_MAX)) } }), [](AutomationSession& session, const json& params) {
 				Ref<Project> project = RequireProject();
 				// Every value is read and validated before any is assigned, so a bad parameter leaves the
 				// project untouched.
@@ -514,7 +529,7 @@ namespace Basalt {
 				return result;
 			});
 
-			Add(registry, "project.export", "Exports a standalone, distributable build of the game (runtime + assets).", { { "output", "string, output directory" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "project.export", "Exports a standalone, distributable build of the game (runtime + assets).", Schema::Object({ { "output", Schema::String("string, output directory", true) } }, { "output" }), [](AutomationSession& session, const json& params) {
 				Ref<Project> project = RequireProject();
 				if (session.IsDirty())
 					throw CommandError("the open scene has unsaved changes; run scene.save first");
@@ -527,7 +542,7 @@ namespace Basalt {
 
 		void RegisterScene(CommandRegistry& registry)
 		{
-			Add(registry, "scene.new", "Replaces the open scene with an empty one (with a camera and sun unless empty=true).", { { "name", "string" }, { "empty", "bool" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "scene.new", "Replaces the open scene with an empty one (with a camera and sun unless empty=true).", Schema::Object({ { "name", Schema::Nullable(Schema::String("string")) }, { "empty", Schema::Nullable(Schema::Boolean("bool")) } }), [](AutomationSession& session, const json& params) {
 				Ref<Scene> scene = CreateRef<Scene>(OptionalString(params, "name", "Untitled"));
 				if (!OptionalBool(params, "empty", false))
 				{
@@ -545,7 +560,7 @@ namespace Basalt {
 				return json{ { "entities", scene->GetEntityCount() } };
 			});
 
-			Add(registry, "scene.open", "Opens a scene file (project-relative path).", { { "path", "string" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "scene.open", "Opens a scene file (project-relative path).", Schema::Object({ { "path", Schema::String("string", true) } }, { "path" }), [](AutomationSession& session, const json& params) {
 				const std::string path = ProjectRelative(RequireString(params, "path"));
 				std::string error;
 				Ref<Scene> scene = SceneSerializer::LoadScene(Project::ResolvePath(path), error);
@@ -555,7 +570,7 @@ namespace Basalt {
 				return json{ { "name", scene->GetName() }, { "entities", scene->GetEntityCount() } };
 			});
 
-			Add(registry, "scene.save", "Saves the edit scene (to 'path', or the path it was opened from).", { { "path", "string, project-relative, optional" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "scene.save", "Saves the edit scene (to 'path', or the path it was opened from).", Schema::Object({ { "path", Schema::Nullable(Schema::String("string, project-relative, optional")) } }), [](AutomationSession& session, const json& params) {
 				std::string path = OptionalString(params, "path", session.GetScenePath());
 				if (path.empty())
 					throw CommandError("the scene has never been saved; pass 'path' (e.g. 'Assets/Scenes/Main.bscene')");
@@ -568,15 +583,14 @@ namespace Basalt {
 				return json{ { "path", path } };
 			});
 
-			Add(registry, "scene.hash", "Hash of the current scene state (the play copy while playing); equal states give equal hashes, whatever the entity UUIDs.", { { "expectHash", "string: fail unless the hash equals this one (16 lowercase hex digits)" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "scene.hash", "Hash of the current scene state (the play copy while playing); equal states give equal hashes, whatever the entity UUIDs.", Schema::Object({ { "expectHash", Schema::String("string: fail unless the hash equals this one (16 lowercase hex digits)", true) } }), [](AutomationSession& session, const json& params) {
 				const std::string hash = SceneSerializer::ComputeStateHash(RequireScene(session));
 				CheckExpectedHash(params, hash);
 				return json{ { "hash", hash } };
 			});
 
 			Add(registry, "ui.layout",
-				"Lays out the current scene's UI components (the play copy while playing) for a viewport of width x height pixels: the canvas size, every visible UI entity's rect [x, y, width, height] in canvas units in draw order (widgets add their kind, values, target, callback and, while playing, state and focus), the host's view that maps the mouse onto the canvas for the widgets (`view`: origin and size in mouse coordinates and whether widgets take pointer and navigation input; headless, mouse positions are canvas units), and the problems that make UI draw or behave differently than authored (an image that does not load and draws its Color, a font that does not load and falls back to the built-in one or has glyphs that draw blank, an entity with several widget components, a widget callback whose target is missing or has no Script).",
-				{ { "width", "integer, viewport pixels (default 1920)" }, { "height", "integer, viewport pixels (default 1080)" } }, [](AutomationSession& session, const json& params) {
+				"Lays out the current scene's UI components (the play copy while playing) for a viewport of width x height pixels: the canvas size, every visible UI entity's rect [x, y, width, height] in canvas units in draw order (widgets add their kind, values, target, callback and, while playing, state and focus), the host's view that maps the mouse onto the canvas for the widgets (`view`: origin and size in mouse coordinates and whether widgets take pointer and navigation input; headless, mouse positions are canvas units), and the problems that make UI draw or behave differently than authored (an image that does not load and draws its Color, a font that does not load and falls back to the built-in one or has glyphs that draw blank, an entity with several widget components, a widget callback whose target is missing or has no Script).", Schema::Object({ { "width", Schema::Nullable(Schema::Integer("integer, viewport pixels (default 1920)", 1, 65536)) }, { "height", Schema::Nullable(Schema::Integer("integer, viewport pixels (default 1080)", 1, 65536)) } }), [](AutomationSession& session, const json& params) {
 					const auto width = static_cast<float>(OptionalInteger(params, "width", 1920, 1, 65536));
 					const auto height = static_cast<float>(OptionalInteger(params, "height", 1080, 1, 65536));
 					const glm::vec2 canvas = GameUI::GetCanvasSize({ width, height });
@@ -615,11 +629,11 @@ namespace Basalt {
 					return json{ { "canvas", { canvas.x, canvas.y } }, { "items", items }, { "view", view }, { "problems", problems } };
 				});
 
-			Add(registry, "scene.get", "Returns the whole open scene as JSON (same format as .bscene files).", {}, [](AutomationSession& session, const json&) {
+			Add(registry, "scene.get", "Returns the whole open scene as JSON (same format as .bscene files).", Schema::Object(), [](AutomationSession& session, const json&) {
 				return SceneSerializer::SerializeScene(RequireScene(session));
 			});
 
-			Add(registry, "scene.info", "Summary of the open scene: name, path, entity count, state, unsaved changes, undefined physics layers and animation authoring warnings.", {}, [](AutomationSession& session, const json&) {
+			Add(registry, "scene.info", "Summary of the open scene: name, path, entity count, state, unsaved changes, undefined physics layers and animation authoring warnings.", Schema::Object(), [](AutomationSession& session, const json&) {
 				Scene& scene = RequireScene(session);
 				json animationWarnings = json::array();
 				for (auto handle : scene.GetRegistry().view<IDComponent>())
@@ -639,7 +653,7 @@ namespace Basalt {
 				};
 			});
 
-			Add(registry, "scene.settings", "Patches scene-level settings: {Renderer: {...}, Physics: {...}, Name}.", { { "Renderer", "object, e.g. {Exposure, Tonemapper, FSR1Enabled, FSR1Sharpness, SSAOEnabled, ShadowDistance}; FSR1Sharpness: " + Fsr1SharpnessRange() }, { "Physics", "object, e.g. {Gravity: [0,-9.81,0]}" }, { "Name", "string" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "scene.settings", "Patches scene-level settings: {Renderer: {...}, Physics: {...}, Name}.", Schema::Object({ { "Renderer", json{ { "type", "object" }, { "description", "object, e.g. {Exposure, Tonemapper, FSR1Enabled, FSR1Sharpness, SSAOEnabled, ShadowDistance}; FSR1Sharpness: " + Fsr1SharpnessRange() } } }, { "Physics", json{ { "type", "object" }, { "description", "object, e.g. {Gravity: [0,-9.81,0]}" } } }, { "Name", Schema::String("string") } }), [](AutomationSession& session, const json& params) {
 				Scene& scene = RequireScene(session);
 				json patch = json::object();
 				for (const char* key : { "Renderer", "Physics", "Name" })
@@ -671,7 +685,7 @@ namespace Basalt {
 
 		void RegisterEntity(CommandRegistry& registry)
 		{
-			Add(registry, "entity.create", "Creates an entity, optionally with a parent and components ({\"Mesh\": {...}, ...}).", { { "name", "string" }, { "parent", "entity ID or name" }, { "components", "object: component name -> fields; entity references (Joint BodyEntity, ConnectedEntity) take an ID or name" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "entity.create", "Creates an entity, optionally with a parent and components ({\"Mesh\": {...}, ...}).", Schema::Object({ { "name", Schema::Nullable(Schema::String("string")) }, { "parent", Schema::Nullable(Schema::Entity("entity ID or name")) }, { "components", Schema::Nullable(json{ { "type", "object" }, { "description", "object: component name -> fields; entity references (Joint BodyEntity, ConnectedEntity) take an ID or name" } }) } }), [](AutomationSession& session, const json& params) {
 				Scene& scene = RequireScene(session);
 				Entity parent = params.contains("parent") && !params["parent"].is_null() ? ResolveEntity(scene, params["parent"], "parent") : Entity{};
 				// References are resolved before the entity exists, so a name never resolves to the entity
@@ -701,7 +715,7 @@ namespace Basalt {
 				return EntitySummary(entity);
 			});
 
-			Add(registry, "entity.destroy", "Destroys an entity and its children.", { { "entity", "ID or name" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "entity.destroy", "Destroys an entity and its children.", Schema::Object({ { "entity", Schema::Entity("ID or name") } }, { "entity" }), [](AutomationSession& session, const json& params) {
 				Entity entity = RequireEntity(session, params);
 				const uint64_t id = entity.GetUUID();
 				RequireScene(session).DestroyEntity(entity);
@@ -709,11 +723,11 @@ namespace Basalt {
 				return json{ { "destroyed", id } };
 			});
 
-			Add(registry, "entity.get", "Returns an entity with all component data.", { { "entity", "ID or name" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "entity.get", "Returns an entity with all component data.", Schema::Object({ { "entity", Schema::Entity("ID or name") } }, { "entity" }), [](AutomationSession& session, const json& params) {
 				return SceneSerializer::SerializeEntity(RequireEntity(session, params));
 			});
 
-			Add(registry, "entity.list", "Lists entities (hierarchy order) with their components; optional name substring / component filter.", { { "nameContains", "string" }, { "component", "string" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "entity.list", "Lists entities (hierarchy order) with their components; optional name substring / component filter.", Schema::Object({ { "nameContains", Schema::Nullable(Schema::String("string")) }, { "component", Schema::Nullable(Schema::String("string")) } }), [](AutomationSession& session, const json& params) {
 				Scene& scene = RequireScene(session);
 				const std::string contains = OptionalString(params, "nameContains");
 				const std::string component = OptionalString(params, "component");
@@ -736,14 +750,14 @@ namespace Basalt {
 				return json{ { "entities", entities } };
 			});
 
-			Add(registry, "entity.rename", "Renames an entity.", { { "entity", "ID or name" }, { "name", "string" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "entity.rename", "Renames an entity.", Schema::Object({ { "entity", Schema::Entity("ID or name") }, { "name", Schema::String("string", true) } }, { "entity", "name" }), [](AutomationSession& session, const json& params) {
 				Entity entity = RequireEntity(session, params);
 				entity.GetComponent<TagComponent>().Tag = RequireString(params, "name");
 				MarkEdited(session);
 				return EntitySummary(entity);
 			});
 
-			Add(registry, "entity.set_parent", "Re-parents an entity (parent null = root), keeping its world transform unless keepWorld=false.", { { "entity", "ID or name" }, { "parent", "ID, name or null" }, { "keepWorld", "bool (default true)" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "entity.set_parent", "Re-parents an entity (parent null = root), keeping its world transform unless keepWorld=false.", Schema::Object({ { "entity", Schema::Entity("ID or name") }, { "parent", Schema::Nullable(Schema::Entity("ID, name or null")) }, { "keepWorld", Schema::Nullable(Schema::Boolean("bool (default true)")) } }, { "entity" }), [](AutomationSession& session, const json& params) {
 				Scene& scene = RequireScene(session);
 				Entity entity = RequireEntity(session, params);
 				Entity parent = params.contains("parent") && !params["parent"].is_null() ? ResolveEntity(scene, params["parent"], "parent") : Entity{};
@@ -753,7 +767,7 @@ namespace Basalt {
 				return EntitySummary(entity);
 			});
 
-			Add(registry, "entity.duplicate", "Duplicates an entity and its children (new IDs).", { { "entity", "ID or name" }, { "name", "string, optional" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "entity.duplicate", "Duplicates an entity and its children (new IDs).", Schema::Object({ { "entity", Schema::Entity("ID or name") }, { "name", Schema::String("string, optional", true) } }, { "entity" }), [](AutomationSession& session, const json& params) {
 				Scene& scene = RequireScene(session);
 				Entity copy = scene.DuplicateEntity(RequireEntity(session, params));
 				if (params.contains("name"))
@@ -762,7 +776,7 @@ namespace Basalt {
 				return EntitySummary(copy);
 			});
 
-			Add(registry, "entity.transform", "Returns local and world transforms of an entity.", { { "entity", "ID or name" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "entity.transform", "Returns local and world transforms of an entity.", Schema::Object({ { "entity", Schema::Entity("ID or name") } }, { "entity" }), [](AutomationSession& session, const json& params) {
 				Scene& scene = RequireScene(session);
 				Entity entity = RequireEntity(session, params);
 				glm::vec3 position;
@@ -779,7 +793,7 @@ namespace Basalt {
 
 		void RegisterComponents(CommandRegistry& registry)
 		{
-			Add(registry, "component.set", "Adds the component if missing and sets the given fields (others keep their values).", { { "entity", "ID or name" }, { "component", "string, e.g. 'RigidBody'" }, { "data", "object of fields; entity references (Joint BodyEntity, ConnectedEntity) take an ID or name" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "component.set", "Adds the component if missing and sets the given fields (others keep their values).", Schema::Object({ { "entity", Schema::Entity("ID or name") }, { "component", Schema::String("string, e.g. 'RigidBody'", true) }, { "data", json{ { "type", "object" }, { "description", "object of fields; entity references (Joint BodyEntity, ConnectedEntity) take an ID or name" } } } }, { "entity", "component", "data" }), [](AutomationSession& session, const json& params) {
 				Entity entity = RequireEntity(session, params);
 				const std::string name = RequireString(params, "component");
 				std::string error;
@@ -792,7 +806,7 @@ namespace Basalt {
 				return ComponentRegistry::Find(name)->Serialize(entity);
 			});
 
-			Add(registry, "component.get", "Returns one component's fields.", { { "entity", "ID or name" }, { "component", "string" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "component.get", "Returns one component's fields.", Schema::Object({ { "entity", Schema::Entity("ID or name") }, { "component", Schema::String("string", true) } }, { "entity", "component" }), [](AutomationSession& session, const json& params) {
 				Entity entity = RequireEntity(session, params);
 				const std::string name = RequireString(params, "component");
 				const ComponentInfo* info = ComponentRegistry::Find(name);
@@ -803,7 +817,7 @@ namespace Basalt {
 				return info->Serialize(entity);
 			});
 
-			Add(registry, "component.remove", "Removes a component.", { { "entity", "ID or name" }, { "component", "string" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "component.remove", "Removes a component.", Schema::Object({ { "entity", Schema::Entity("ID or name") }, { "component", Schema::String("string", true) } }, { "entity", "component" }), [](AutomationSession& session, const json& params) {
 				Entity entity = RequireEntity(session, params);
 				const std::string name = RequireString(params, "component");
 				const ComponentInfo* info = ComponentRegistry::Find(name);
@@ -821,7 +835,7 @@ namespace Basalt {
 
 		void RegisterAssets(CommandRegistry& registry)
 		{
-			Add(registry, "asset.list", "Lists project asset files, optionally filtered by extensions (e.g. ['.lua']).", { { "extensions", "array of strings" } }, [](AutomationSession&, const json& params) {
+			Add(registry, "asset.list", "Lists project asset files, optionally filtered by extensions (e.g. ['.lua']).", Schema::Object({ { "extensions", json{ { "type", "array" }, { "description", "array of strings" }, { "items", Schema::String() } } } }), [](AutomationSession&, const json& params) {
 				RequireProject();
 				std::vector<std::string> extensions;
 				if (auto it = params.find("extensions"); it != params.end())
@@ -838,7 +852,7 @@ namespace Basalt {
 				return json{ { "assets", AssetManager::ListAssets(extensions) } };
 			});
 
-			Add(registry, "asset.write", "Writes a text asset (script, prefab, scene...) to a project-relative path.", { { "path", "string" }, { "content", "string" } }, [](AutomationSession&, const json& params) {
+			Add(registry, "asset.write", "Writes a text asset (script, prefab, scene...) to a project-relative path.", Schema::Object({ { "path", Schema::String("string", true) }, { "content", Schema::String("string") } }, { "path", "content" }), [](AutomationSession&, const json& params) {
 				RequireProject();
 				const std::string path = ProjectRelative(RequireString(params, "path"));
 				const json& content = Require(params, "content");
@@ -850,7 +864,7 @@ namespace Basalt {
 				return json{ { "path", path }, { "bytes", content.get<std::string>().size() } };
 			});
 
-			Add(registry, "asset.read", "Reads a text asset.", { { "path", "string" } }, [](AutomationSession&, const json& params) {
+			Add(registry, "asset.read", "Reads a text asset.", Schema::Object({ { "path", Schema::String("string", true) } }, { "path" }), [](AutomationSession&, const json& params) {
 				const std::string path = ProjectRelative(RequireString(params, "path"));
 				const auto text = FileSystem::ReadTextFile(Project::ResolvePath(path));
 				if (!text)
@@ -858,7 +872,7 @@ namespace Basalt {
 				return json{ { "path", path }, { "content", *text } };
 			});
 
-			Add(registry, "asset.import_model", "Imports a static model as an entity hierarchy, or a skinned/animated model as one Animator root.", { { "path", "string, .gltf/.glb or builtin://Cube" }, { "parent", "ID or name, optional" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "asset.import_model", "Imports a static model as an entity hierarchy, or a skinned/animated model as one Animator root.", Schema::Object({ { "path", Schema::String("string, .gltf/.glb or builtin://Cube", true) }, { "parent", Schema::Nullable(Schema::Entity("ID or name, optional")) } }, { "path" }), [](AutomationSession& session, const json& params) {
 				Scene& scene = RequireScene(session);
 				Entity parent = params.contains("parent") && !params["parent"].is_null() ? ResolveEntity(scene, params["parent"], "parent") : Entity{};
 				std::string error;
@@ -869,7 +883,7 @@ namespace Basalt {
 				return EntitySummary(root);
 			});
 
-			Add(registry, "prefab.create", "Saves an entity tree as a prefab file.", { { "entity", "ID or name" }, { "path", "string, e.g. 'Assets/Prefabs/Enemy.bprefab'" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "prefab.create", "Saves an entity tree as a prefab file.", Schema::Object({ { "entity", Schema::Entity("ID or name") }, { "path", Schema::String("string, e.g. 'Assets/Prefabs/Enemy.bprefab'", true) } }, { "entity", "path" }), [](AutomationSession& session, const json& params) {
 				Entity entity = RequireEntity(session, params);
 				const std::string path = ProjectRelative(RequireString(params, "path"));
 				std::string error;
@@ -878,7 +892,7 @@ namespace Basalt {
 				return json{ { "path", path } };
 			});
 
-			Add(registry, "prefab.instantiate", "Instantiates a prefab into the scene.", { { "path", "string" }, { "parent", "ID or name, optional" }, { "position", "[x, y, z], optional" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "prefab.instantiate", "Instantiates a prefab into the scene.", Schema::Object({ { "path", Schema::String("string", true) }, { "parent", Schema::Nullable(Schema::Entity("ID or name, optional")) }, { "position", Schema::Vector("[x, y, z], optional", 3) } }, { "path" }), [](AutomationSession& session, const json& params) {
 				Scene& scene = RequireScene(session);
 				const std::string path = ProjectRelative(RequireString(params, "path"));
 				Entity parent = params.contains("parent") && !params["parent"].is_null() ? ResolveEntity(scene, params["parent"], "parent") : Entity{};
@@ -906,7 +920,7 @@ namespace Basalt {
 				return EntitySummary(root);
 			});
 
-			Add(registry, "script.check", "Compiles a Lua script in isolation and returns its Properties, or the error.", { { "path", "string" } }, [](AutomationSession&, const json& params) {
+			Add(registry, "script.check", "Compiles a Lua script in isolation and returns its Properties, or the error.", Schema::Object({ { "path", Schema::String("string", true) } }, { "path" }), [](AutomationSession&, const json& params) {
 				const std::string path = ProjectRelative(RequireString(params, "path"));
 				std::string error;
 				const auto properties = ScriptEngine::LoadScriptProperties(path, error);
@@ -918,19 +932,19 @@ namespace Basalt {
 
 		void RegisterPlay(CommandRegistry& registry)
 		{
-			Add(registry, "play.start", "Starts play mode on a copy of the scene (scripts, physics, audio run).", {}, [](AutomationSession& session, const json&) {
+			Add(registry, "play.start", "Starts play mode on a copy of the scene (scripts, physics, audio run).", Schema::Object(), [](AutomationSession& session, const json&) {
 				std::string error;
 				if (!session.StartPlay(error))
 					throw CommandError(error);
 				return json{ { "playing", true } };
 			});
 
-			Add(registry, "play.stop", "Stops play mode and restores the edit scene.", {}, [](AutomationSession& session, const json&) {
+			Add(registry, "play.stop", "Stops play mode and restores the edit scene.", Schema::Object(), [](AutomationSession& session, const json&) {
 				session.StopPlay();
 				return json{ { "playing", false } };
 			});
 
-			Add(registry, "play.step", "Advances play mode by N fixed frames (default dt 1/60) and reports script errors and the playing scene (which Lua Scene.Load may switch).", { { "frames", "integer (default 1)" }, { "dt", "number, seconds per frame" }, { "assertNoErrors", "bool: fail the command if any script error occurred" }, { "hash", "bool: also return stateHash (see scene.hash)" }, { "expectHash", "string: fail unless the state hash after the step (which has run either way) equals this one; also returns stateHash" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "play.step", "Advances play mode by N fixed frames (default dt 1/60) and reports script errors and the playing scene (which Lua Scene.Load may switch).", Schema::Object({ { "frames", Schema::Nullable(Schema::Integer("integer (default 1)", 1, 100000)) }, { "dt", json{ { "type", "number" }, { "description", "number, seconds per frame" }, { "exclusiveMinimum", 0.0 }, { "maximum", 0.25 } } }, { "assertNoErrors", Schema::Nullable(Schema::Boolean("bool: fail the command if any script error occurred")) }, { "hash", Schema::Nullable(Schema::Boolean("bool: also return stateHash (see scene.hash)")) }, { "expectHash", Schema::String("string: fail unless the state hash after the step (which has run either way) equals this one; also returns stateHash", true) } }), [](AutomationSession& session, const json& params) {
 				if (!session.IsPlaying())
 					throw CommandError("not playing (use play.start)");
 				const uint32_t frames = static_cast<uint32_t>(OptionalInteger(params, "frames", 1, 1, 100000));
@@ -955,7 +969,7 @@ namespace Basalt {
 				return result;
 			});
 
-			Add(registry, "replay.record_start", "Starts recording input.key/input.mouse/input.gamepad commands with the play frame they arrive on. The mouse position and the injected gamepads (with what they hold) are recorded as they are on that frame, and the host's view (where mouse positions land on the UI canvas) whenever it changes, so replays map them the same way in any host. Physical gamepads are not recorded (replays run without them): they are listed in physicalGamepads.", {}, [](AutomationSession& session, const json&) {
+			Add(registry, "replay.record_start", "Starts recording input.key/input.mouse/input.gamepad commands with the play frame they arrive on. The mouse position and the injected gamepads (with what they hold) are recorded as they are on that frame, and the host's view (where mouse positions land on the UI canvas) whenever it changes, so replays map them the same way in any host. Physical gamepads are not recorded (replays run without them): they are listed in physicalGamepads.", Schema::Object(), [](AutomationSession& session, const json&) {
 				session.StartRecording();
 				json physical = json::array();
 				for (uint32_t index = 0; index < Input::MaxGamepads; index++)
@@ -968,7 +982,7 @@ namespace Basalt {
 				return json{ { "recording", true }, { "physicalGamepads", physical } };
 			});
 
-			Add(registry, "replay.record_stop", "Stops recording and writes the replay file (project-relative path, e.g. 'Replays/run.breplay').", { { "path", "string" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "replay.record_stop", "Stops recording and writes the replay file (project-relative path, e.g. 'Replays/run.breplay').", Schema::Object({ { "path", Schema::String("string", true) } }, { "path" }), [](AutomationSession& session, const json& params) {
 				RequireProject();
 				const std::string path = ProjectRelative(RequireString(params, "path"));
 				if (!session.IsRecording())
@@ -989,123 +1003,121 @@ namespace Basalt {
 				return json{ { "path", path }, { "events", events.size() }, { "frames", frames } };
 			});
 
-			Add(registry, "replay.run", "Restarts play from the edit scene with no input held, re-applies a replay's inputs (and recorded host views) on their frames without physical gamepads, and returns the state hash. Play keeps running afterwards for inspection; the host view and gamepads are restored.",
-				{ { "path", "string, replay file" }, { "frames", "integer, default: the recorded length" }, { "assertNoErrors", "bool" }, { "assertHash", "bool: fail unless the final state hash equals the recorded one" } }, [](AutomationSession& session, const json& params) {
-					RequireProject();
-					const std::string path = ProjectRelative(RequireString(params, "path"));
-					const auto text = FileSystem::ReadTextFile(Project::ResolvePath(path));
-					if (!text)
-						throw CommandError("cannot read '" + path + "'");
-					const json replay = ParseJson(*text);
-					if (!replay.is_object() || replay.value("Format", "") != "BasaltReplay" || !replay.contains("Events") || !replay["Events"].is_array())
-						throw CommandError("'" + path + "' is not a Basalt replay file");
-					// Replays from before seeds were stored ran with Random::DefaultSeed, the only seed there was.
-					const auto storedSeed = replay.find("RandomSeed");
-					uint32_t recordedSeed = Random::DefaultSeed;
-					if (storedSeed != replay.end() && !JsonToUInt32(*storedSeed, recordedSeed))
-						throw CommandError("'" + path + "' has an invalid RandomSeed (must be an integer between 0 and " + std::to_string(std::numeric_limits<uint32_t>::max()) + ")");
-					// The replay restarts play, which seeds from the project.
-					if (const uint32_t projectSeed = Project::GetActiveRandomSeed(); recordedSeed != projectSeed)
-					{
-						const std::string recordedWith = storedSeed != replay.end() ? "was recorded with random seed " + std::to_string(recordedSeed) : "has no RandomSeed (it was recorded before seeds were stored, with the default seed " + std::to_string(recordedSeed) + ")";
-						throw CommandError("'" + path + "' " + recordedWith + " but the project uses " + std::to_string(projectSeed) + " (project.set randomSeed)");
-					}
-					const int64_t recorded = replay.value("Frames", int64_t{ 0 });
-					const uint32_t frames = static_cast<uint32_t>(OptionalInteger(params, "frames", recorded, 0, 10000000));
+			Add(registry, "replay.run", "Restarts play from the edit scene with no input held, re-applies a replay's inputs (and recorded host views) on their frames without physical gamepads, and returns the state hash. Play keeps running afterwards for inspection; the host view and gamepads are restored.", Schema::Object({ { "path", Schema::String("string, replay file", true) }, { "frames", Schema::Nullable(Schema::Integer("integer, default: the recorded length", 0, 10000000)) }, { "assertNoErrors", Schema::Nullable(Schema::Boolean("bool")) }, { "assertHash", Schema::Nullable(Schema::Boolean("bool: fail unless the final state hash equals the recorded one")) } }, { "path" }), [](AutomationSession& session, const json& params) {
+				RequireProject();
+				const std::string path = ProjectRelative(RequireString(params, "path"));
+				const auto text = FileSystem::ReadTextFile(Project::ResolvePath(path));
+				if (!text)
+					throw CommandError("cannot read '" + path + "'");
+				const json replay = ParseJson(*text);
+				if (!replay.is_object() || replay.value("Format", "") != "BasaltReplay" || !replay.contains("Events") || !replay["Events"].is_array())
+					throw CommandError("'" + path + "' is not a Basalt replay file");
+				// Replays from before seeds were stored ran with Random::DefaultSeed, the only seed there was.
+				const auto storedSeed = replay.find("RandomSeed");
+				uint32_t recordedSeed = Random::DefaultSeed;
+				if (storedSeed != replay.end() && !JsonToUInt32(*storedSeed, recordedSeed))
+					throw CommandError("'" + path + "' has an invalid RandomSeed (must be an integer between 0 and " + std::to_string(std::numeric_limits<uint32_t>::max()) + ")");
+				// The replay restarts play, which seeds from the project.
+				if (const uint32_t projectSeed = Project::GetActiveRandomSeed(); recordedSeed != projectSeed)
+				{
+					const std::string recordedWith = storedSeed != replay.end() ? "was recorded with random seed " + std::to_string(recordedSeed) : "has no RandomSeed (it was recorded before seeds were stored, with the default seed " + std::to_string(recordedSeed) + ")";
+					throw CommandError("'" + path + "' " + recordedWith + " but the project uses " + std::to_string(projectSeed) + " (project.set randomSeed)");
+				}
+				const int64_t recorded = replay.value("Frames", int64_t{ 0 });
+				const uint32_t frames = static_cast<uint32_t>(OptionalInteger(params, "frames", recorded, 0, 10000000));
 
-					session.StopPlay();
-					// A replay starts from no input (whether or not play was running): no keys or buttons held, no mouse
-					// position, no injected gamepads. It runs with the view it recorded ("view" events; the headless view
-					// for recordings without one) whatever the host, and with only the gamepads it injects, so it plays
-					// the same in the editor and headless.
-					Input::Reset();
-					Input::ResetMousePosition();
-					Input::ForgetInjectedGamepads();
-					struct RestoreHost
+				session.StopPlay();
+				// A replay starts from no input (whether or not play was running): no keys or buttons held, no mouse
+				// position, no injected gamepads. It runs with the view it recorded ("view" events; the headless view
+				// for recordings without one) whatever the host, and with only the gamepads it injects, so it plays
+				// the same in the editor and headless.
+				Input::Reset();
+				Input::ResetMousePosition();
+				Input::ForgetInjectedGamepads();
+				struct RestoreHost
+				{
+					GameUI::HostState Host = GameUI::GetHostState();
+					bool DeviceGamepads = Input::IsDeviceGamepadsEnabled();
+					~RestoreHost()
 					{
-						GameUI::HostState Host = GameUI::GetHostState();
-						bool DeviceGamepads = Input::IsDeviceGamepadsEnabled();
-						~RestoreHost()
+						GameUI::SetHostState(Host);
+						Input::SetDeviceGamepadsEnabled(DeviceGamepads);
+					}
+				} restore;
+				GameUI::SetHostState({});
+				Input::SetDeviceGamepadsEnabled(false);
+				std::string error;
+				if (!session.StartPlay(error))
+					throw CommandError(error);
+				const json& events = replay["Events"];
+				size_t next = 0;
+				for (uint32_t frame = 0; frame <= frames; frame++)
+				{
+					// Events recorded at frame N were applied before the update that produced frame N + 1.
+					for (; next < events.size() && events[next].value("frame", uint64_t{ 0 }) <= frame; next++)
+					{
+						const json& event = events[next];
+						const std::string command = event.value("command", "");
+						const json eventParams = event.value("params", json::object());
+						try
 						{
-							GameUI::SetHostState(Host);
-							Input::SetDeviceGamepadsEnabled(DeviceGamepads);
+							if (command == "input.key")
+								ApplyKeyInput(eventParams);
+							else if (command == "input.mouse")
+								ApplyMouseInput(eventParams);
+							else if (command == "input.gamepad")
+								ApplyGamepadInput(eventParams);
+							else if (command == "view")
+								ApplyViewEvent(eventParams);
+							else
+								throw CommandError("unknown command '" + command + "'");
 						}
-					} restore;
-					GameUI::SetHostState({});
-					Input::SetDeviceGamepadsEnabled(false);
-					std::string error;
-					if (!session.StartPlay(error))
-						throw CommandError(error);
-					const json& events = replay["Events"];
-					size_t next = 0;
-					for (uint32_t frame = 0; frame <= frames; frame++)
-					{
-						// Events recorded at frame N were applied before the update that produced frame N + 1.
-						for (; next < events.size() && events[next].value("frame", uint64_t{ 0 }) <= frame; next++)
+						catch (const CommandError& e)
 						{
-							const json& event = events[next];
-							const std::string command = event.value("command", "");
-							const json eventParams = event.value("params", json::object());
-							try
-							{
-								if (command == "input.key")
-									ApplyKeyInput(eventParams);
-								else if (command == "input.mouse")
-									ApplyMouseInput(eventParams);
-								else if (command == "input.gamepad")
-									ApplyGamepadInput(eventParams);
-								else if (command == "view")
-									ApplyViewEvent(eventParams);
-								else
-									throw CommandError("unknown command '" + command + "'");
-							}
-							catch (const CommandError& e)
-							{
-								throw CommandError(fmt::format("'{}' event {} (frame {}, {}): {}", path, next, frame, command, e.what()));
-							}
+							throw CommandError(fmt::format("'{}' event {} (frame {}, {}): {}", path, next, frame, command, e.what()));
 						}
-						if (frame < frames)
-							session.Step(1, 1.0f / 60.0f);
 					}
+					if (frame < frames)
+						session.Step(1, 1.0f / 60.0f);
+				}
 
-					Scene& scene = RequireScene(session);
-					json errors = scene.GetScriptEngine() ? json(scene.GetScriptEngine()->GetErrors()) : json::array();
-					if (OptionalBool(params, "assertNoErrors", false) && !errors.empty())
-						throw CommandError("script errors: " + errors.dump());
-					const std::string hash = SceneSerializer::ComputeStateHash(scene);
-					const std::string recordedHash = replay.value("StateHash", "");
-					if (OptionalBool(params, "assertHash", false))
-					{
-						if (recordedHash.empty() || frames != static_cast<uint32_t>(recorded))
-							throw CommandError("assertHash needs the full recorded length of a replay that stored a StateHash");
-						if (hash != recordedHash)
-							throw CommandError("replay diverged: state hash " + hash + ", recorded " + recordedHash);
-					}
-					return json{ { "frame", scene.GetFrameCount() }, { "stateHash", hash }, { "recordedHash", recordedHash }, { "scriptErrors", errors } };
-				});
+				Scene& scene = RequireScene(session);
+				json errors = scene.GetScriptEngine() ? json(scene.GetScriptEngine()->GetErrors()) : json::array();
+				if (OptionalBool(params, "assertNoErrors", false) && !errors.empty())
+					throw CommandError("script errors: " + errors.dump());
+				const std::string hash = SceneSerializer::ComputeStateHash(scene);
+				const std::string recordedHash = replay.value("StateHash", "");
+				if (OptionalBool(params, "assertHash", false))
+				{
+					if (recordedHash.empty() || frames != static_cast<uint32_t>(recorded))
+						throw CommandError("assertHash needs the full recorded length of a replay that stored a StateHash");
+					if (hash != recordedHash)
+						throw CommandError("replay diverged: state hash " + hash + ", recorded " + recordedHash);
+				}
+				return json{ { "frame", scene.GetFrameCount() }, { "stateHash", hash }, { "recordedHash", recordedHash }, { "scriptErrors", errors } };
+			});
 
-			Add(registry, "input.key", "Sets a key's state for play mode (e.g. {key: 'Space', down: true}). Recorded while replay recording is on.", { { "key", "string key name" }, { "down", "bool" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "input.key", "Sets a key's state for play mode (e.g. {key: 'Space', down: true}). Recorded while replay recording is on.", Schema::Object({ { "key", Schema::String("string key name", true) }, { "down", Schema::Nullable(Schema::Boolean("bool")) } }, { "key" }), [](AutomationSession& session, const json& params) {
 				ApplyKeyInput(params);
 				session.RecordInput("input.key", params);
 				return json::object();
 			});
 
-			Add(registry, "input.mouse", "Sets mouse position and/or a button state for play mode. Recorded while replay recording is on.", { { "position", "[x, y]" }, { "button", "string (Left, Right, Middle)" }, { "down", "bool" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "input.mouse", "Sets mouse position and/or a button state for play mode. Recorded while replay recording is on.", Schema::Object({ { "position", Schema::Vector("[x, y]", 2) }, { "button", Schema::String("string (Left, Right, Middle)", true) }, { "down", Schema::Nullable(Schema::Boolean("bool")) } }), [](AutomationSession& session, const json& params) {
 				ApplyMouseInput(params);
 				session.RecordInput("input.mouse", params);
 				return json::object();
 			});
 
 			Add(registry, "input.gamepad",
-				"Connects, disconnects or drives an injected gamepad for play mode (e.g. {index: 0, connected: true}, {button: 'A', down: true}, {axis: 'LeftX', value: -1}). A device poll never overrides an injected gamepad. Recorded while replay recording is on.",
-				{ { "index", "integer 0-15 (default 0)" }, { "connected", "bool" }, { "name", "string, the gamepad's name when connecting" }, { "button", "string (A, B, X, Y, LeftBumper, RightBumper, Back, Start, Guide, LeftThumb, RightThumb, DPadUp, DPadRight, DPadDown, DPadLeft)" }, { "down", "bool (default true)" }, { "axis", "string (LeftX, LeftY, RightX, RightY, LeftTrigger, RightTrigger)" }, { "value", "number: sticks -1..1 (+Y down), triggers 0..1" } },
+				"Connects, disconnects or drives an injected gamepad for play mode (e.g. {index: 0, connected: true}, {button: 'A', down: true}, {axis: 'LeftX', value: -1}). A device poll never overrides an injected gamepad. Recorded while replay recording is on.", Schema::Object({ { "index", Schema::Nullable(Schema::Integer("integer 0-15 (default 0)", 0, 15)) }, { "connected", Schema::Nullable(Schema::Boolean("bool")) }, { "name", Schema::String("string, the gamepad's name when connecting", true) }, { "button", Schema::String("string (A, B, X, Y, LeftBumper, RightBumper, Back, Start, Guide, LeftThumb, RightThumb, DPadUp, DPadRight, DPadDown, DPadLeft)", true) }, { "down", Schema::Nullable(Schema::Boolean("bool (default true)")) }, { "axis", Schema::String("string (LeftX, LeftY, RightX, RightY, LeftTrigger, RightTrigger)", true) }, { "value", Schema::Number("number: sticks -1..1 (+Y down), triggers 0..1", -1.0, 1.0) } }),
 				[](AutomationSession& session, const json& params) {
 					ApplyGamepadInput(params);
 					session.RecordInput("input.gamepad", params);
 					return json::object();
 				});
 
-			Add(registry, "lua.exec", "Runs Lua in the playing scene's script state; returns the value of the expression.", { { "code", "string" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "lua.exec", "Runs Lua in the playing scene's script state; returns the value of the expression.", Schema::Object({ { "code", Schema::String("string", true) } }, { "code" }), [](AutomationSession& session, const json& params) {
 				Scene& scene = RequireScene(session);
 				if (!session.IsPlaying() || !scene.GetScriptEngine())
 					throw CommandError("not playing (use play.start)");
@@ -1115,7 +1127,7 @@ namespace Basalt {
 				return json{ { "result", result } };
 			});
 
-			Add(registry, "render.screenshot", "Renders the current scene from its primary camera, with its game UI, to a PNG (editor / GPU hosts only).", { { "path", "string, output .png" }, { "width", "integer" }, { "height", "integer" } }, [](AutomationSession& session, const json& params) {
+			Add(registry, "render.screenshot", "Renders the current scene from its primary camera, with its game UI, to a PNG (editor / GPU hosts only).", Schema::Object({ { "path", Schema::String("string, output .png", true) }, { "width", Schema::Nullable(Schema::Integer("integer", 16, 8192)) }, { "height", Schema::Nullable(Schema::Integer("integer", 16, 8192)) } }, { "path" }), [](AutomationSession& session, const json& params) {
 				if (!session.Screenshot)
 					throw CommandError("screenshots need a GPU host (the editor, or 'BasaltRuntime --frames N --screenshot out.png'); this host is '" + session.HostName + "'");
 				const std::string path = RequireString(params, "path");
@@ -1127,7 +1139,7 @@ namespace Basalt {
 				return json{ { "path", path } };
 			});
 
-			Add(registry, "render.stats", "Returns the scene renderer's statistics: viewport and render size, render scale and dynamic resolution state, draw and culling counts, and the GPU time of each pass averaged over recent frames (editor / GPU hosts only).", {}, [](AutomationSession& session, const json&) {
+			Add(registry, "render.stats", "Returns the scene renderer's statistics: viewport and render size, render scale and dynamic resolution state, draw and culling counts, and the GPU time of each pass averaged over recent frames (editor / GPU hosts only).", Schema::Object(), [](AutomationSession& session, const json&) {
 				if (!session.RenderStats)
 					throw CommandError("render statistics need a GPU host (the editor); this host is '" + session.HostName + "'");
 				json stats;
@@ -1138,8 +1150,7 @@ namespace Basalt {
 			});
 
 			// Headless, so tests and agents can check renders from any host (golden-image tests use it).
-			Add(registry, "image.compare", "Compares a PNG with a reference image within a tolerance; optionally writes a diff image and fails on mismatch.",
-				{ { "actual", "string, image path (relative paths are project-relative)" }, { "reference", "string, image path" }, { "diff", "string, output .png, optional" }, { "pixelThreshold", "integer 0-255, default 8" }, { "maxPercent", "number, default 0.5" }, { "assertMatch", "bool, default false" } },
+			Add(registry, "image.compare", "Compares a PNG with a reference image within a tolerance; optionally writes a diff image and fails on mismatch.", Schema::Object({ { "actual", Schema::String("string, image path (relative paths are project-relative)", true) }, { "reference", Schema::String("string, image path", true) }, { "diff", Schema::Nullable(Schema::String("string, output .png, optional")) }, { "pixelThreshold", Schema::Nullable(Schema::Integer("integer 0-255, default 8", 0, 255)) }, { "maxPercent", Schema::Nullable(Schema::Number("number, default 0.5", 0.0, 100.0)) }, { "assertMatch", Schema::Nullable(Schema::Boolean("bool, default false")) } }, { "actual", "reference" }),
 				[](AutomationSession&, const json& params) {
 					const std::filesystem::path actualPath = Project::ResolvePath(RequireString(params, "actual"));
 					const std::filesystem::path referencePath = Project::ResolvePath(RequireString(params, "reference"));

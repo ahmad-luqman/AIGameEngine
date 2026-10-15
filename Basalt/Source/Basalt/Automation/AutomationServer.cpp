@@ -76,7 +76,7 @@ namespace Basalt {
 		Stop();
 	}
 
-	bool AutomationServer::Start(uint16_t port, RequestHandler handler, std::string& outError)
+	bool AutomationServer::Start(uint16_t port, RequestHandler handler, std::string& outError, std::function<void()> onConnect)
 	{
 		if (m_Running)
 		{
@@ -130,6 +130,7 @@ namespace Basalt {
 		m_Port = ntohs(address.sin_port);
 		m_ListenSocket = static_cast<intptr_t>(listenSocket);
 		m_Handler = std::move(handler);
+		m_OnConnect = std::move(onConnect);
 		m_Stopping = false;
 		m_Running = true;
 		m_Thread = std::thread([this]() { Run(); });
@@ -166,6 +167,8 @@ namespace Basalt {
 			int noSigPipe = 1;
 			setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, sizeof(noSigPipe));
 #endif
+			if (m_OnConnect)
+				m_OnConnect();
 			ServeClient(static_cast<intptr_t>(client));
 			CloseSocket(client);
 		}
@@ -192,7 +195,9 @@ namespace Basalt {
 			buffer.append(chunk, static_cast<size_t>(received));
 			if (buffer.size() > MaxLineBytes)
 			{
-				SendAll(client, "{\"ok\":false,\"error\":\"request too large\"}\n");
+				// The handler owns the protocol (legacy automation or MCP). Do not emit an
+				// unframed/protocol-specific error here, especially through a stdio bridge.
+				BS_CORE_WARN("Automation: closing connection with an oversized request");
 				return;
 			}
 
@@ -205,7 +210,8 @@ namespace Basalt {
 					line.pop_back();
 				if (line.empty())
 					continue;
-				if (!SendAll(client, m_Handler(line) + "\n"))
+				const std::string response = m_Handler(line);
+				if (!response.empty() && !SendAll(client, response + "\n"))
 					return;
 			}
 		}

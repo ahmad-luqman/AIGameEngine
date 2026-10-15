@@ -1,7 +1,10 @@
 #include "Basalt/Automation/CommandRegistry.h"
 
 #include "Basalt/Automation/AutomationSession.h"
+#include "Basalt/Automation/CommandSchema.h"
 #include "Basalt/Core/Log.h"
+
+#include <algorithm>
 
 namespace Basalt {
 
@@ -12,6 +15,13 @@ namespace Basalt {
 
 	void CommandRegistry::Register(CommandInfo command)
 	{
+		if (command.Name.empty() || command.Name.size() > 128 || !command.Handler || !std::all_of(command.Name.begin(), command.Name.end(), [](unsigned char c) {
+				return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.';
+			}))
+			throw std::invalid_argument("command needs a handler and an MCP-compatible name");
+		CommandSchema::CheckDefinition(command.InputSchema);
+		if (command.InputSchema.value("type", "") != "object" || !command.InputSchema.contains("properties") || command.InputSchema.value("additionalProperties", true))
+			throw std::invalid_argument("command schema must be a closed object with properties");
 		const std::string name = command.Name;
 		m_Commands[name] = std::move(command);
 	}
@@ -33,26 +43,29 @@ namespace Basalt {
 		// runs.
 		for (const auto& [key, value] : params.items())
 		{
-			if (!info->Parameters.contains(key))
+			if (!info->InputSchema["properties"].contains(key))
 			{
 				std::string message = "unknown parameter '";
 				message.append(key).append("' for ").append(command);
-				if (info->Parameters.empty())
+				if (info->InputSchema["properties"].empty())
 					message += " (it takes none)";
 				else
 				{
 					message += " (expected: ";
-					for (auto it = info->Parameters.begin(); it != info->Parameters.end(); ++it)
+					for (auto it = info->InputSchema["properties"].begin(); it != info->InputSchema["properties"].end(); ++it)
 					{
-						if (it != info->Parameters.begin())
+						if (it != info->InputSchema["properties"].begin())
 							message += ", ";
-						message += it->first;
+						message += it.key();
 					}
 					message += ')';
 				}
 				throw CommandError(message);
 			}
 		}
+		std::string error;
+		if (!CommandSchema::Validate(info->InputSchema, params, error))
+			throw CommandError(error);
 		return info->Handler(session, params);
 	}
 

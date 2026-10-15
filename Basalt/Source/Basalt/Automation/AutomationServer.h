@@ -9,7 +9,7 @@
 namespace Basalt {
 
 	// Line-based TCP server for the automation protocol, bound to 127.0.0.1 only. Each line received is a
-	// JSON request; the handler's return value is sent back followed by a newline. Clients are served one
+	// JSON request; a non-empty handler result is sent back followed by a newline. Clients are served one
 	// at a time on a background thread; the handler decides how to reach the main thread.
 	//
 	// Example (shell): echo '{"command":"scene.info"}' | nc 127.0.0.1 7420
@@ -27,7 +27,7 @@ namespace Basalt {
 		AutomationServer& operator=(const AutomationServer&) = delete;
 
 		// Port 0 picks a free port (see GetPort).
-		bool Start(uint16_t port, RequestHandler handler, std::string& outError);
+		bool Start(uint16_t port, RequestHandler handler, std::string& outError, std::function<void()> onConnect = {});
 		void Stop();
 
 		bool IsRunning() const { return m_Running; }
@@ -41,6 +41,7 @@ namespace Basalt {
 
 	private:
 		RequestHandler m_Handler;
+		std::function<void()> m_OnConnect;
 		std::thread m_Thread;
 		std::atomic<bool> m_Running = false;
 		std::atomic<bool> m_Stopping = false;

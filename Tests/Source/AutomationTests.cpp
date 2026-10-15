@@ -2,6 +2,8 @@
 
 #include <Basalt/Automation/AutomationSession.h>
 #include <Basalt/Automation/CommandRegistry.h>
+#include <Basalt/Automation/McpServer.h>
+#include <Basalt/Core/JsonUtils.h>
 #include <Basalt/Core/FileSystem.h>
 #include <Basalt/Core/Input.h>
 #include <Basalt/Project/Project.h>
@@ -667,6 +669,26 @@ TEST_SUITE("Automation")
 		CHECK_FALSE(duplicate.Start(server.GetPort(), [](const std::string&) { return std::string(); }, error));
 		server.Stop();
 		CHECK_FALSE(server.IsRunning());
+	}
+
+	TEST_CASE("MCP TCP notifications are silent and reconnects require initialization")
+	{
+		CommandRegistry registry;
+		AutomationSession session;
+		McpServer mcp;
+		AutomationServer server;
+		std::string error;
+		REQUIRE(server.Start(0, [&](const std::string& request) {
+            const auto response = mcp.HandleRequest(registry, session, ParseJson(request));
+            return response ? response->dump() : std::string(); }, error, [&]() { mcp.Reset(); }));
+		const json initialized = ParseJson(SendLine(server.GetPort(), R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}})"));
+		CHECK(initialized["result"]["protocolVersion"] == McpServer::ProtocolVersion);
+		const json reconnected = ParseJson(SendLine(server.GetPort(), R"({"jsonrpc":"2.0","method":"notifications/initialized"})"
+																	  "\n"
+																	  R"({"jsonrpc":"2.0","id":2,"method":"tools/list"})"));
+		CHECK(reconnected["id"] == 2);
+		CHECK(reconnected["error"]["code"] == -32600);
+		server.Stop();
 	}
 
 	TEST_CASE("Exporter refuses unsafe or incomplete exports")

@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":"fuzz","method":"tools/call","params":{"name":"help","arguments":{"command":"entity.create"}}}

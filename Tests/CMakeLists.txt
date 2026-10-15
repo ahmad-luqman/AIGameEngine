@@ -33,6 +33,9 @@ option(BASALT_GPU_TESTS "Register tests that need a GPU" OFF)
 # Python is optional; headless checks also guard the GPU harness against false passes.
 find_package(Python3 QUIET COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
+	add_test(NAME McpIntegration
+		COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/Automation/McpIntegration.py" $<TARGET_FILE:BasaltCLI>)
+	set_tests_properties(McpIntegration PROPERTIES LABELS integration TIMEOUT 90 ENVIRONMENT "BASALT_USER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/McpUserData")
 	add_test(NAME LocalShadowHarness
 		COMMAND "${Python3_EXECUTABLE}" -O "${CMAKE_CURRENT_SOURCE_DIR}/Rendering/LocalShadowsTests.py")
 	set_tests_properties(LocalShadowHarness PROPERTIES LABELS unit TIMEOUT 30)
