@@ -2,6 +2,9 @@
 
 #include "Basalt/Core/Input.h"
 #include "Basalt/Scene/Scene.h"
+#include "Basalt/Scene/Entity.h"
+
+#include <algorithm>
 
 namespace Basalt {
 
@@ -16,10 +19,34 @@ namespace Basalt {
 		m_EditScene = scene;
 		m_Scene = scene;
 		m_ScenePath = scenePath;
-		m_Selection = 0;
+		m_Selection.clear();
 		m_Dirty = false;
 		if (OnSceneChanged)
 			OnSceneChanged();
+	}
+
+	void AutomationSession::SetSelection(UUID selection)
+	{
+		SetSelections(selection.IsValid() ? std::vector<UUID>{ selection } : std::vector<UUID>{});
+	}
+
+	void AutomationSession::SetSelections(const std::vector<UUID>& selection)
+	{
+		std::vector<UUID> valid;
+		for (UUID id : selection)
+			if (m_Scene->GetEntityByUUID(id) && std::find(valid.begin(), valid.end(), id) == valid.end())
+				valid.push_back(id);
+		m_Selection = std::move(valid);
+	}
+
+	bool AutomationSession::IsSelected(UUID entity) const
+	{
+		return std::find(m_Selection.begin(), m_Selection.end(), entity) != m_Selection.end();
+	}
+
+	void AutomationSession::PruneSelection()
+	{
+		std::erase_if(m_Selection, [this](UUID id) { return !m_Scene->GetEntityByUUID(id); });
 	}
 
 	bool AutomationSession::StartPlay(std::string& outError, bool simulate)
@@ -48,6 +75,7 @@ namespace Basalt {
 		else
 			m_Scene->OnRuntimeStop();
 		m_Scene = m_EditScene;
+		PruneSelection();
 		// Like held keys, injected gamepads belong to the play session.
 		Input::Reset();
 		Input::ForgetInjectedGamepads();

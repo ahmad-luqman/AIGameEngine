@@ -23,6 +23,7 @@ namespace Basalt {
 		void OnImGuiRender();
 
 	private:
+		void DrawMultiSelection();
 		void DrawScriptProperties(Entity entity, const nlohmann::json& component);
 		// A combo that sets a UIRect's anchors and pivot to a named spot of the parent rect, or stretches it,
 		// keeping the rect where it is (ApplyUIAnchorPreset).

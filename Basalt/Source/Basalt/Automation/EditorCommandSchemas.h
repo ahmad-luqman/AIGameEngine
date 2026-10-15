@@ -9,6 +9,10 @@ namespace Basalt::EditorCommandSchemas {
 	nlohmann::json VertexSnap();
 	nlohmann::json Select();
 	nlohmann::json Camera();
+	nlohmann::json Transform();
+	nlohmann::json ComponentSet();
+	nlohmann::json BoxSelect();
+	nlohmann::json Transaction();
 	nlohmann::json Undo();
 	nlohmann::json Redo();
 	nlohmann::json WindowScreenshot();

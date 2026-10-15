@@ -220,3 +220,52 @@ TEST_CASE("Viewport picking follows animated geometry and all mesh nodes map to 
 	CHECK(graphics->GetValidationErrorCount() == 0);
 	AssetManager::Clear();
 }
+
+TEST_CASE("Viewport multi-selection outlines both surfaces and retains full UUID picking")
+{
+	auto graphics = CreateTestGraphics();
+	Scene scene;
+	scene.GetRendererSettings().SSAOEnabled = false;
+	scene.GetRendererSettings().ShadowsEnabled = false;
+	auto a = scene.CreateEntityWithUUID(UUID(0xf123456789abcdefULL), "Left");
+	auto b = scene.CreateEntityWithUUID(UUID(0xabcdef9876543210ULL), "Right");
+	for (Entity entity : { a, b })
+		entity.AddComponent<MeshComponent>().Mesh = "builtin://Cube";
+	a.GetTransform().Translation.x = -1;
+	b.GetTransform().Translation.x = 1;
+	RenderCamera camera;
+	camera.Position = { 0, 0, 5 };
+	camera.View = glm::lookAtRH(camera.Position, glm::vec3(0), glm::vec3(0, 1, 0));
+	camera.Projection = glm::orthoRH_ZO(-2.0f, 2.0f, -2.0f, 2.0f, .1f, 20.0f);
+	camera.Far = 20;
+	SceneRenderer renderer(graphics->GetDevice(), { .Picking = true });
+	REQUIRE(renderer.Initialize());
+	renderer.SetViewportSize(100, 100);
+	for (float scale : { 1.0f, .5f, 1.5f })
+	{
+		renderer.SetRenderScale(scale);
+		renderer.SetSelections({});
+		const auto plain = Capture(renderer, scene, camera);
+		renderer.SetSelections({ a.GetUUID(), b.GetUUID(), a.GetUUID() });
+		const auto selected = Capture(renderer, scene, camera);
+		ExpectPick(renderer, 25, 50, a.GetUUID());
+		ExpectPick(renderer, 75, 50, b.GetUUID());
+		size_t left = 0, right = 0;
+		for (size_t i = 0; i < selected.size(); i += 4)
+			if (selected[i] != plain[i] || selected[i + 1] != plain[i + 1] || selected[i + 2] != plain[i + 2])
+			{
+				CHECK(selected[i] == 255);
+				CHECK(selected[i + 1] >= 190);
+				CHECK(selected[i + 2] <= 26);
+				if ((i / 4) % 100 < 50)
+					++left;
+				else
+					++right;
+			}
+		CHECK(left > 100);
+		CHECK(right > 100);
+		renderer.SetSelections({});
+		CHECK(Capture(renderer, scene, camera) == plain);
+	}
+	CHECK(graphics->GetValidationErrorCount() == 0);
+}

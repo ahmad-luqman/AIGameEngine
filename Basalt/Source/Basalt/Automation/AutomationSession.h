@@ -10,6 +10,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace Basalt {
 
@@ -34,8 +35,12 @@ namespace Basalt {
 		void MarkDirty() { m_Dirty = true; }
 		void ClearDirty() { m_Dirty = false; }
 
-		UUID GetSelection() const { return m_Selection; }
-		void SetSelection(UUID selection) { m_Selection = selection; }
+		UUID GetSelection() const { return m_Selection.empty() ? UUID(0) : m_Selection.back(); }
+		const std::vector<UUID>& GetSelections() const { return m_Selection; }
+		void SetSelection(UUID selection);
+		void SetSelections(const std::vector<UUID>& selection);
+		bool IsSelected(UUID entity) const;
+		void PruneSelection();
 
 		// --- Play mode ------------------------------------------------------------------------------
 		// Plays a copy of the edit scene (edits made while playing are discarded on stop). With simulate,
@@ -73,13 +78,18 @@ namespace Basalt {
 		std::function<void()> OnSceneChanged;
 		// Name of the host for diagnostics ("cli", "editor").
 		std::string HostName = "cli";
+		// Hosts observe validated top-level commands, including requests dispatched through MCP.
+		std::function<void(const std::string&, const nlohmann::json&)> BeforeCommand;
+		std::function<void(const std::string&, const nlohmann::json&)> AfterCommand;
 
 	private:
 		Ref<Scene> m_EditScene;
 		// Equals m_EditScene while editing, the running copy while playing.
 		Ref<Scene> m_Scene;
 		std::string m_ScenePath;
-		UUID m_Selection = 0;
+		std::vector<UUID> m_Selection;
+		friend class CommandRegistry;
+		size_t m_CommandDepth = 0;
 		bool m_Dirty = false;
 		// Array of { "frame", "command", "params" } while recording, null otherwise.
 		nlohmann::json m_Recording;

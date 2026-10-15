@@ -6,6 +6,7 @@
 #include "Basalt/Animation/AnimationPose.h"
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Automation/EditorCommandSchemas.h"
+#include "Basalt/Automation/EditorSelection.h"
 #include "Basalt/Core/Application.h"
 #include "Basalt/Core/Input.h"
 #include "Basalt/Core/JsonUtils.h"
@@ -309,6 +310,8 @@ namespace Basalt {
 		auto promise = std::make_shared<std::promise<std::string>>();
 		std::future<std::string> future = promise->get_future();
 		Application::Get().SubmitToMainThread([this, connection, request, promise]() {
+			if (m_GizmoWasUsing)
+				FinishGizmo(false);
 			const std::string response = connection->HandleRequest(m_Commands, m_Session, request);
 			m_Context.CommitHistory();
 			promise->set_value(response);
@@ -328,6 +331,8 @@ namespace Basalt {
 								 if (!m_ViewportSettings.Apply(params, error))
 									 throw CommandError(error);
 								 auto result = m_ViewportSettings.Get();
+								 result["logicalWidth"] = m_ViewportSize.x;
+								 result["logicalHeight"] = m_ViewportSize.y;
 								 result["width"] = m_Renderer ? m_Renderer->GetViewportWidth() : 0;
 								 result["height"] = m_Renderer ? m_Renderer->GetViewportHeight() : 0;
 								 result["renderWidth"] = m_Renderer ? m_Renderer->GetRenderWidth() : 0;
@@ -345,6 +350,8 @@ namespace Basalt {
 		m_Commands.Register({ "editor.vertex_snap", "Moves the selected entity from a source vertex to the nearest target vertex within 16 viewport pixels; excludes its descendants.", EditorCommandSchemas::VertexSnap(), [this](AutomationSession& session, const nlohmann::json& params) {
 								 if (session.IsPlaying())
 									 throw CommandError("vertex snapping is only available in edit mode");
+								 if (session.GetSelections().size() > 1)
+									 throw CommandError("vertex snapping requires exactly one selected entity");
 								 Scene& scene = *session.GetScene();
 								 Entity entity = scene.GetEntityByUUID(session.GetSelection());
 								 if (!entity || entity.HasComponent<UIRectComponent>() || (!entity.HasComponent<MeshComponent>() && !entity.HasComponent<AnimatorComponent>()))
@@ -374,16 +381,44 @@ namespace Basalt {
 								 return m_Commands.Execute(session, "component.set", { { "entity", static_cast<uint64_t>(entity.GetUUID()) }, { "component", "Transform" }, { "data", { { "Translation", { translation->x, translation->y, translation->z } } } } });
 							 } });
 
-		m_Commands.Register({ "editor.select", "Selects an entity in the editor (null clears the selection).", EditorCommandSchemas::Select(), [this](AutomationSession& session, const nlohmann::json& params) {
-								 const nlohmann::json& reference = params.contains("entity") ? params["entity"] : nlohmann::json();
-								 if (reference.is_null())
+		RegisterEditorSelectionCommands(m_Commands);
+		m_Commands.Register({ "editor.history", "Returns named undo/redo entries, cursor, active transaction and retained patch bytes.", EditorCommandSchemas::Undo(), [this](AutomationSession&, const nlohmann::json&) { return m_History.Describe(); } });
+		m_Commands.Register({ "editor.transaction", "Begins, commits or cancels one named scene edit. Finish before saving, replacing the scene or playing.", EditorCommandSchemas::Transaction(), [this](AutomationSession& session, const nlohmann::json& params) {
+								 if (session.IsPlaying())
+									 throw CommandError("transactions are only available in edit mode");
+								 const std::string action = params["action"].get<std::string>();
+								 if (action == "begin")
 								 {
-									 session.SetSelection(0);
-									 return nlohmann::json::object();
+									 if (!params.contains("name"))
+										 throw CommandError("begin requires a name");
+									 if (!m_Context.BeginTransaction(params["name"].get<std::string>()))
+										 throw CommandError("a transaction is already active");
 								 }
-								 const nlohmann::json entity = m_Commands.Execute(session, "entity.get", { { "entity", reference } });
-								 session.SetSelection(entity["ID"].get<uint64_t>());
-								 return nlohmann::json{ { "selected", entity["ID"] } };
+								 else
+								 {
+									 if (!m_History.IsActive())
+										 throw CommandError("no active transaction");
+									 if (action == "commit")
+										 m_Context.EndTransaction();
+									 else if (!m_Context.CancelTransaction([this](const auto& state) { return RestoreState(state); }))
+										 throw CommandError("transaction restore failed");
+								 }
+								 return m_History.Describe();
+							 } });
+		m_Commands.Register({ "editor.box_select", "Selects entities whose world bounds intersect a viewport rectangle, including occluded entities; UI rects use hierarchy selection.", EditorCommandSchemas::BoxSelect(), [this](AutomationSession& session, const nlohmann::json& params) {
+								 if (session.IsPlaying())
+									 throw CommandError("box selection is only available in edit mode");
+								 const auto read = [&](const char* key) {
+									 glm::vec2 point;
+									 if (!JsonToFloat(params[key][0], point.x) || !JsonToFloat(params[key][1], point.y) || point.x < 0 || point.y < 0 || point.x > m_ViewportSize.x || point.y > m_ViewportSize.y)
+										 throw CommandError("rectangle outside logical viewport");
+									 return point;
+								 };
+								 const auto ids = SelectViewportBox(*session.GetScene(), m_Camera.GetProjection() * m_Camera.GetView(), m_ViewportSize, read("start"), read("end"));
+								 auto entities = nlohmann::json::array();
+								 for (UUID id : ids)
+									 entities.push_back(static_cast<uint64_t>(id));
+								 return m_Commands.Execute(session, "editor.select", { { "entities", entities }, { "mode", params.value("mode", std::string("replace")) } });
 							 } });
 
 		m_Commands.Register({ "editor.camera", "Moves the editor camera (position + target), or returns it when called without params.", EditorCommandSchemas::Camera(), [this](AutomationSession&, const nlohmann::json& params) {
@@ -407,8 +442,9 @@ namespace Basalt {
 									 throw CommandError("undo is not available while playing");
 								 if (!m_History.CanUndo())
 									 throw CommandError("nothing to undo");
-								 Undo();
-								 return nlohmann::json{ { "canUndo", m_History.CanUndo() }, { "canRedo", m_History.CanRedo() } };
+								 if (!Undo())
+									 throw CommandError("undo restore failed");
+								 return m_History.Describe();
 							 } });
 
 		m_Commands.Register({ "editor.redo", "Redoes the last undone edit (edit mode only).", EditorCommandSchemas::Redo(), [this](AutomationSession& session, const nlohmann::json&) {
@@ -416,8 +452,9 @@ namespace Basalt {
 									 throw CommandError("redo is not available while playing");
 								 if (!m_History.CanRedo())
 									 throw CommandError("nothing to redo");
-								 Redo();
-								 return nlohmann::json{ { "canUndo", m_History.CanUndo() }, { "canRedo", m_History.CanRedo() } };
+								 if (!Redo())
+									 throw CommandError("redo restore failed");
+								 return m_History.Describe();
 							 } });
 
 		m_Commands.Register({ "editor.window_screenshot", "Captures the whole editor window (all panels) to a PNG at the end of the current frame.", EditorCommandSchemas::WindowScreenshot(), [](AutomationSession&, const nlohmann::json& params) {
@@ -445,6 +482,8 @@ namespace Basalt {
 		if (m_Renderer)
 			m_Renderer->InvalidatePicking();
 		CancelVertexSnap();
+		m_BoxStart.reset();
+		m_GizmoCancelled = m_GizmoWasUsing;
 		m_History.Reset(SceneSerializer::SerializeScene(*m_Session.GetEditScene()));
 		m_Paused = false;
 	}
@@ -486,7 +525,7 @@ namespace Basalt {
 		std::vector<DebugLineVertex> pending = DebugDraw::TakeLines();
 		if (useEditorCamera && !m_Session.IsPlaying())
 			DrawEditorOverlays();
-		m_CaptureRenderer->SetSelection(useEditorCamera && !IsGameRunning() && m_ViewportSettings.Options().SelectionOutline ? m_Session.GetSelection() : UUID(0));
+		m_CaptureRenderer->SetSelections(useEditorCamera && !IsGameRunning() && m_ViewportSettings.Options().SelectionOutline ? m_Session.GetSelections() : std::vector<UUID>{});
 		m_CaptureRenderer->Render(scene, *camera);
 		DebugDraw::Clear();
 		for (size_t i = 0; i + 1 < pending.size(); i += 2)
@@ -505,6 +544,11 @@ namespace Basalt {
 	{
 		if (m_Session.IsPlaying())
 			return;
+		if (m_GizmoWasUsing)
+			FinishGizmo(false);
+		if (m_History.IsActive())
+			m_Context.EndTransaction();
+		m_Context.CommitHistory();
 		std::string error;
 		if (!m_Session.StartPlay(error, simulate))
 		{
@@ -521,7 +565,7 @@ namespace Basalt {
 		m_Paused = false;
 	}
 
-	void EditorLayer::RestoreState(const nlohmann::json& state)
+	bool EditorLayer::RestoreState(const nlohmann::json& state)
 	{
 		CancelVertexSnap();
 		if (m_Renderer)
@@ -531,9 +575,9 @@ namespace Basalt {
 		if (!SceneSerializer::DeserializeScene(*scene, state, error))
 		{
 			m_Context.SetStatus("Undo failed: " + error, true);
-			return;
+			return false;
 		}
-		const UUID selection = m_Session.GetSelection();
+		const auto selection = m_Session.GetSelections();
 		const std::string path = m_Session.GetScenePath();
 		// SetEditScene resets the history through OnSceneChanged; keep the current one instead.
 		auto callback = std::move(m_Session.OnSceneChanged);
@@ -541,22 +585,26 @@ namespace Basalt {
 		m_Session.SetEditScene(scene, path);
 		m_Session.OnSceneChanged = std::move(callback);
 		m_Session.MarkDirty();
-		if (scene->GetEntityByUUID(selection))
-			m_Session.SetSelection(selection);
+		m_Session.SetSelections(selection);
+		return true;
 	}
 
-	void EditorLayer::Undo()
+	bool EditorLayer::Undo()
 	{
+		m_Context.FinishFieldEdit();
+		m_Context.CommitHistory();
 		if (m_Session.IsPlaying() || !m_History.CanUndo())
-			return;
-		RestoreState(m_History.Undo());
+			return false;
+		return m_History.Undo([this](const auto& state) { return RestoreState(state); });
 	}
 
-	void EditorLayer::Redo()
+	bool EditorLayer::Redo()
 	{
+		m_Context.FinishFieldEdit();
+		m_Context.CommitHistory();
 		if (m_Session.IsPlaying() || !m_History.CanRedo())
-			return;
-		RestoreState(m_History.Redo());
+			return false;
+		return m_History.Redo([this](const auto& state) { return RestoreState(state); });
 	}
 
 	void EditorLayer::SaveScene()
@@ -637,7 +685,7 @@ namespace Basalt {
 	{
 		HandleShortcuts();
 		m_Camera.SetViewportSize(static_cast<uint32_t>(m_ViewportSize.x), static_cast<uint32_t>(m_ViewportSize.y));
-		if (!m_VertexSnapDrag)
+		if (!m_VertexSnapDrag && !m_GizmoWasUsing && !m_BoxStart)
 			m_Camera.OnUpdate(ts, m_ViewportHovered, m_ViewportFocused);
 
 		if (m_Session.IsPlaying())
@@ -676,7 +724,7 @@ namespace Basalt {
 		{
 			const glm::mat4 world = scene.GetWorldTransform(entity);
 			const glm::vec3 position(world[3]);
-			const bool selected = entity.GetUUID() == m_Session.GetSelection();
+			const bool selected = m_Session.IsSelected(entity.GetUUID());
 
 			if (options.LightGizmos)
 			{
@@ -780,7 +828,7 @@ namespace Basalt {
 			if (!playing)
 				DrawEditorOverlays();
 		}
-		m_Renderer->SetSelection(!playing && m_ViewportSettings.Options().SelectionOutline ? m_Session.GetSelection() : UUID(0));
+		m_Renderer->SetSelections(!playing && m_ViewportSettings.Options().SelectionOutline ? m_Session.GetSelections() : std::vector<UUID>{});
 		m_Renderer->Render(scene, *camera);
 
 		// UI components show in every mode, so layouts can be authored without playing; the scripts'
@@ -815,11 +863,8 @@ namespace Basalt {
 			m_Session.IsPlaying() ? Stop() : Play(false);
 		if (control && Input::IsKeyPressed(KeyCode::D) && m_Session.GetSelection().IsValid())
 		{
-			if (auto result = m_Context.Execute("entity.duplicate", { { "entity", static_cast<uint64_t>(m_Session.GetSelection()) } }))
-			{
-				m_Session.SetSelection((*result)["id"].get<uint64_t>());
-				m_Context.CommitHistory();
-			}
+			m_Context.Execute("editor.duplicate");
+			m_Context.CommitHistory();
 		}
 		if (!m_VertexSnapDrag && !control && !flying && !m_Session.IsPlaying() && !ImGuizmo::IsUsing() && !ImGui::IsAnyItemActive() && (m_ViewportFocused || m_ViewportHovered))
 		{
@@ -830,11 +875,8 @@ namespace Basalt {
 				FocusSelection();
 			if (Input::IsKeyPressed(KeyCode::Delete) && m_Session.GetSelection().IsValid())
 			{
-				if (m_Context.Execute("entity.destroy", { { "entity", static_cast<uint64_t>(m_Session.GetSelection()) } }))
-				{
-					m_Session.SetSelection(0);
-					m_Context.CommitHistory();
-				}
+				m_Context.Execute("editor.delete");
+				m_Context.CommitHistory();
 			}
 		}
 	}
@@ -906,11 +948,18 @@ namespace Basalt {
 			return;
 		const uint32_t x = static_cast<uint32_t>(mouse.x * static_cast<float>(m_Renderer->GetViewportWidth()) / m_ViewportSize.x);
 		const uint32_t y = static_cast<uint32_t>(mouse.y * static_cast<float>(m_Renderer->GetViewportHeight()) / m_ViewportSize.y);
-		m_Context.Execute("editor.pick", { { "x", x }, { "y", y } });
+		if (const auto result = m_Context.Execute("editor.pick", { { "x", x }, { "y", y }, { "select", false } }))
+		{
+			const auto& io = ImGui::GetIO();
+			const uint64_t id = (*result)["entity"].get<uint64_t>();
+			m_Context.Execute("editor.select", { { "entity", id ? nlohmann::json(id) : nlohmann::json() }, { "mode", io.KeyCtrl || io.KeySuper ? "toggle" : io.KeyShift ? "add"
+																																										: "replace" } });
+		}
 	}
 
 	void EditorLayer::OnImGuiRender()
 	{
+		m_Session.PruneSelection();
 		// Leave room for the status bar at the bottom of the window.
 		const ImGuiID dockspace = ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
 		BuildDefaultLayout(dockspace);
@@ -923,6 +972,8 @@ namespace Basalt {
 		DrawSceneSettingsPanel();
 		DrawStatusBar();
 		DrawModals();
+		if (!ImGui::IsAnyItemActive())
+			m_Context.FinishFieldEdit();
 	}
 
 	void EditorLayer::BuildDefaultLayout(unsigned int dockspaceId)
@@ -993,9 +1044,9 @@ namespace Basalt {
 
 		if (ImGui::BeginMenu("Edit"))
 		{
-			if (ImGui::MenuItem("Undo", "Ctrl+Z", false, m_History.CanUndo() && !m_Session.IsPlaying()))
+			if (ImGui::MenuItem(("Undo " + m_History.UndoName()).c_str(), "Ctrl+Z", false, m_History.CanUndo() && !m_Session.IsPlaying()))
 				Undo();
-			if (ImGui::MenuItem("Redo", "Ctrl+Y", false, m_History.CanRedo() && !m_Session.IsPlaying()))
+			if (ImGui::MenuItem(("Redo " + m_History.RedoName()).c_str(), "Ctrl+Y", false, m_History.CanRedo() && !m_Session.IsPlaying()))
 				Redo();
 			ImGui::EndMenu();
 		}
@@ -1163,6 +1214,22 @@ namespace Basalt {
 		}
 	}
 
+	void EditorLayer::FinishGizmo(bool cancel)
+	{
+		if (m_GizmoWasUsing && !m_GizmoCancelled && m_History.IsActive())
+		{
+			if (cancel)
+				m_Context.CancelTransaction([this](const auto& state) { return RestoreState(state); });
+			else
+				m_Context.EndTransaction();
+		}
+		// ImGuizmo otherwise processes mouse-up only inside Manipulate, which may no longer be eligible.
+		ImGuizmo::Enable(false);
+		ImGuizmo::Enable(true);
+		m_GizmoWasUsing = false;
+		m_GizmoCancelled = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+	}
+
 	void EditorLayer::DrawViewport()
 	{
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
@@ -1172,7 +1239,12 @@ namespace Basalt {
 
 		const ImVec2 available = ImGui::GetContentRegionAvail();
 		if (m_ViewportSize != glm::vec2(std::max(available.x, 16.0f), std::max(available.y, 16.0f)))
+		{
 			CancelVertexSnap();
+			m_BoxStart.reset();
+			if (m_GizmoWasUsing)
+				FinishGizmo(true);
+		}
 		m_ViewportSize = { std::max(available.x, 16.0f), std::max(available.y, 16.0f) };
 		const ImVec2 cursor = ImGui::GetCursorScreenPos();
 		m_ViewportMin = { cursor.x, cursor.y };
@@ -1216,8 +1288,11 @@ namespace Basalt {
 			ImGui::EndDragDropTarget();
 		}
 
-		// Gizmo for the selected entity (edit mode only: play-mode edits are discarded anyway). UI rects are
-		// placed by their UIRect, not their transform.
+		// UI rects are placed by their UIRect; selected world entities share one pivot.
+		if (m_GizmoWasUsing && (m_Session.IsPlaying() || m_ViewportSettings.Options().Operation == GizmoOperation::None || m_GizmoSelection != m_Session.GetSelections() || Input::IsKeyPressed(KeyCode::Escape)))
+			FinishGizmo(true);
+		if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+			m_GizmoCancelled = false;
 		Scene& scene = *m_Session.GetScene();
 		Entity selected = scene.GetEntityByUUID(m_Session.GetSelection());
 		const auto options = m_ViewportSettings.Options();
@@ -1236,49 +1311,82 @@ namespace Basalt {
 			case GizmoOperation::None:
 				break;
 		}
-		const bool vertexSnap = !ImGuizmo::IsUsing() && !m_Session.IsPlaying() && !io.WantTextInput && !ImGui::IsAnyItemActive() && (options.VertexSnap || Input::IsKeyDown(KeyCode::V));
+		const bool vertexSnap = m_Session.GetSelections().size() == 1 && !ImGuizmo::IsUsing() && !m_Session.IsPlaying() && !io.WantTextInput && !ImGui::IsAnyItemActive() && (options.VertexSnap || Input::IsKeyDown(KeyCode::V));
 		bool gizmoActive = false;
-		if (!vertexSnap && selected && gizmoOperation != 0 && !m_Session.IsPlaying() && !selected.HasComponent<UIRectComponent>())
+		if (!m_GizmoCancelled && !vertexSnap && selected && gizmoOperation != 0 && !m_Session.IsPlaying() && !selected.HasComponent<UIRectComponent>())
 		{
 			ImGuizmo::SetOrthographic(false);
 			ImGuizmo::SetDrawlist();
 			ImGuizmo::SetRect(cursor.x, cursor.y, available.x, available.y);
 			const glm::mat4 view = m_Camera.GetView();
 			const glm::mat4 projection = m_Camera.GetProjection();
-			glm::mat4 world = scene.GetWorldTransform(selected);
+			glm::mat4 world = m_GizmoWasUsing ? m_GizmoPivot : SelectionPivot(scene, m_Session.GetSelections(), options.Space == GizmoSpace::Local || options.Operation == GizmoOperation::Scale);
+			const glm::mat4 previous = world;
 
 			const bool snap = options.Snap || io.KeyCtrl || io.KeySuper;
 			const float snapValue = options.StepFor(options.Operation);
 			const float snapValues[3] = { snapValue, snapValue, snapValue };
-			if (ImGuizmo::Manipulate(glm::value_ptr(view), glm::value_ptr(projection), static_cast<ImGuizmo::OPERATION>(gizmoOperation), options.Space == GizmoSpace::World ? ImGuizmo::WORLD : ImGuizmo::LOCAL, glm::value_ptr(world), nullptr, snap ? snapValues : nullptr))
+			const bool changed = ImGuizmo::Manipulate(glm::value_ptr(view), glm::value_ptr(projection), static_cast<ImGuizmo::OPERATION>(gizmoOperation), options.Space == GizmoSpace::World ? ImGuizmo::WORLD : ImGuizmo::LOCAL, glm::value_ptr(world), nullptr, snap ? snapValues : nullptr);
+			// Pressing a handle starts IsUsing before Manipulate reports the first changed matrix.
+			if (ImGuizmo::IsUsing() && !m_GizmoWasUsing && !m_GizmoCancelled)
 			{
-				Entity parent = selected.GetParent();
-				const glm::mat4 local = parent ? glm::inverse(scene.GetWorldTransform(parent)) * world : world;
-				glm::vec3 translation;
-				glm::quat rotation;
-				glm::vec3 scale;
-				if (Math::DecomposeTransform(local, translation, rotation, scale))
+				m_Context.FinishFieldEdit();
+				std::string name = "Move Selection";
+				if (options.Operation == GizmoOperation::Rotate)
+					name = "Rotate Selection";
+				if (options.Operation == GizmoOperation::Scale)
+					name = "Scale Selection";
+				m_GizmoCancelled = !m_Context.BeginTransaction(name);
+				m_GizmoSelection = m_Session.GetSelections();
+				m_GizmoPivot = previous;
+				if (m_GizmoCancelled)
 				{
-					const glm::vec3 euler = glm::degrees(Math::EulerFromQuat(rotation));
-					m_Context.Execute("component.set", { { "entity", static_cast<uint64_t>(selected.GetUUID()) }, { "component", "Transform" }, { "data", { { "Translation", { translation.x, translation.y, translation.z } }, { "Rotation", { euler.x, euler.y, euler.z } }, { "Scale", { scale.x, scale.y, scale.z } } } } });
+					ImGuizmo::Enable(false);
+					ImGuizmo::Enable(true);
 				}
+			}
+			if (changed && !m_GizmoCancelled)
+			{
+				const glm::mat4 delta = world * glm::inverse(previous);
+				auto matrix = nlohmann::json::array();
+				for (int c = 0; c < 4; ++c)
+					for (int r = 0; r < 4; ++r)
+						matrix.push_back(delta[c][r]);
+				if (m_Context.Execute("editor.transform", { { "delta", matrix } }))
+					m_GizmoPivot = world;
 			}
 			gizmoActive = ImGuizmo::IsOver() || ImGuizmo::IsUsing();
 		}
 		const bool using_ = ImGuizmo::IsUsing();
 		if (m_GizmoWasUsing && !using_)
-			m_Context.CommitHistory();
+			FinishGizmo(false);
 		m_GizmoWasUsing = using_;
 
 		HandleVertexSnapDrag(selected, vertexSnap, { cursor.x, cursor.y });
 
-		// Click to select.
-		if (!m_VertexSnapDrag && !IsGameRunning() && m_ViewportHovered && !gizmoActive && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().KeyAlt)
+		if (!m_VertexSnapDrag && !m_Session.IsPlaying() && m_ViewportHovered && !gizmoActive && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt)
+			m_BoxStart = glm::vec2(io.MousePos.x - cursor.x, io.MousePos.y - cursor.y);
+		if (m_BoxStart)
 		{
-			const ImVec2 mouse = ImGui::GetMousePos();
-			const glm::vec2 local(mouse.x - cursor.x, mouse.y - cursor.y);
-			if (local.x >= 0.0f && local.y >= 0.0f && local.x < available.x && local.y < available.y)
-				HandleViewportClick(local);
+			const glm::vec2 local = glm::clamp(glm::vec2(io.MousePos.x - cursor.x, io.MousePos.y - cursor.y), glm::vec2(0), m_ViewportSize);
+			const bool dragged = ImGui::IsMouseDragging(ImGuiMouseButton_Left, 4.0f);
+			if (dragged)
+			{
+				const glm::vec2 low = glm::min(*m_BoxStart, local), high = glm::max(*m_BoxStart, local);
+				ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(cursor.x + low.x, cursor.y + low.y), ImVec2(cursor.x + high.x, cursor.y + high.y), IM_COL32(255, 192, 26, 30));
+				ImGui::GetWindowDrawList()->AddRect(ImVec2(cursor.x + low.x, cursor.y + low.y), ImVec2(cursor.x + high.x, cursor.y + high.y), IM_COL32(255, 192, 26, 255));
+			}
+			if (Input::IsKeyPressed(KeyCode::Escape) || m_Session.IsPlaying() || (!ImGui::IsMouseDown(ImGuiMouseButton_Left) && !ImGui::IsMouseReleased(ImGuiMouseButton_Left)))
+				m_BoxStart.reset();
+			else if (ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+			{
+				if (glm::length(local - *m_BoxStart) >= 4.0f)
+					m_Context.Execute("editor.box_select", { { "start", { m_BoxStart->x, m_BoxStart->y } }, { "end", { local.x, local.y } }, { "mode", io.KeyCtrl || io.KeySuper ? "toggle" : io.KeyShift ? "add"
+																																																		  : "replace" } });
+				else if (m_ViewportHovered)
+					HandleViewportClick(local);
+				m_BoxStart.reset();
+			}
 		}
 
 		ImGui::End();
@@ -1410,10 +1518,7 @@ namespace Basalt {
 			for (auto it = values.begin(); it != values.end(); ++it)
 			{
 				const JsonFieldResult result = DrawJsonField(it.key(), it.value(), it.key() == "Tonemapper" ? &s_Tonemappers : nullptr);
-				if (result.Changed)
-					m_Context.Execute("scene.settings", { { group, { { it.key(), it.value() } } } });
-				if (result.Committed)
-					m_Context.CommitHistory();
+				m_Context.EditField("scene.settings", { { group, { { it.key(), it.value() } } } }, result.Changed, result.Committed);
 			}
 			ImGui::PopID();
 		}

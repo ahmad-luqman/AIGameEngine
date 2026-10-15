@@ -129,8 +129,9 @@ namespace Basalt {
 		// This replaces PBR color, letting GPU tests verify list consumption as well as list construction.
 		void SetVisualizeLightCount(bool enabled) { m_VisualizeLightCount = enabled; }
 
-		// Selection uses the same visible-surface IDs as picking. Zero disables the outline. No effect unless Picking is enabled.
-		void SetSelection(UUID entity) { m_Selection = entity; }
+		// Selection uses the same visible-surface IDs as picking. An empty selection disables outlines. No effect unless Picking is enabled.
+		void SetSelection(UUID entity) { m_Selection = entity.IsValid() ? std::vector<UUID>{ entity } : std::vector<UUID>{}; }
+		void SetSelections(const std::vector<UUID>& entities) { m_Selection = entities; }
 		// Copies one texel on demand, in integer output-image coordinates (top-left origin).
 		// Synchronous: waits for the whole device, not just the copied texel.
 		// nullopt means unavailable/failed; UUID 0 means background. Valid only after a successful Render.
@@ -188,7 +189,7 @@ namespace Basalt {
 		uint32_t m_Height = 0;
 		float m_RenderScale = 1.0f;
 		bool m_Picking = false;
-		UUID m_Selection = 0;
+		std::vector<UUID> m_Selection;
 		bool m_ClusteredLighting = true;
 		bool m_VisualizeLightCount = false;
 		// Size of the scene targets: the viewport size times the render scale.

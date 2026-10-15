@@ -2,7 +2,7 @@
 
 #include "EditorCamera.h"
 #include "EditorContext.h"
-#include "EditorHistory.h"
+#include "Basalt/Automation/EditorHistory.h"
 #include "Panels/ConsolePanel.h"
 #include "Panels/ContentBrowserPanel.h"
 #include "Panels/InspectorPanel.h"
@@ -72,6 +72,7 @@ namespace Basalt {
 		UUID PickViewport(uint32_t x, uint32_t y);
 		bool PrepareCaptureRenderer(uint32_t width, uint32_t height, float scale, std::string& error);
 		void HandleVertexSnapDrag(Entity selected, bool enabled, const glm::vec2& origin);
+		void FinishGizmo(bool cancel);
 		void CancelVertexSnap() { m_VertexSnapDrag.reset(); }
 		void HandleViewportClick(const glm::vec2& mouse);
 		void HandleAssetDrop(const std::string& path);
@@ -79,9 +80,9 @@ namespace Basalt {
 
 		void Play(bool simulate);
 		void Stop();
-		void Undo();
-		void Redo();
-		void RestoreState(const nlohmann::json& state);
+		bool Undo();
+		bool Redo();
+		bool RestoreState(const nlohmann::json& state);
 		void SaveScene();
 		void FocusSelection();
 		void UpdateWindowTitle();
@@ -121,6 +122,10 @@ namespace Basalt {
 		};
 		std::optional<VertexSnapDrag> m_VertexSnapDrag;
 		bool m_GizmoWasUsing = false;
+		bool m_GizmoCancelled = false;
+		glm::mat4 m_GizmoPivot{ 1 };
+		std::vector<UUID> m_GizmoSelection;
+		std::optional<glm::vec2> m_BoxStart;
 		bool m_Paused = false;
 		RendererDebugView m_DebugView = RendererDebugView::None;
 

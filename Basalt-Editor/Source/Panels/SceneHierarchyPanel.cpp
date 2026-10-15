@@ -65,17 +65,36 @@ namespace Basalt {
 	void SceneHierarchyPanel::DrawEntityNode(Entity entity)
 	{
 		const UUID uuid = entity.GetUUID();
+		m_Visible.push_back(uuid);
 		const std::vector<Entity> children = entity.GetChildren();
 
 		ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_OpenOnDoubleClick;
-		if (m_Context.Session.GetSelection() == uuid)
+		if (m_Context.Session.IsSelected(uuid))
 			flags |= ImGuiTreeNodeFlags_Selected;
 		if (children.empty())
 			flags |= ImGuiTreeNodeFlags_Leaf;
 
 		const bool open = ImGui::TreeNodeEx(reinterpret_cast<void*>(static_cast<uintptr_t>(static_cast<uint64_t>(uuid))), flags, "%s", entity.GetName().c_str());
-		if (ImGui::IsItemClicked(ImGuiMouseButton_Left) || ImGui::IsItemClicked(ImGuiMouseButton_Right))
-			m_Context.Session.SetSelection(uuid);
+		if ((ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGui::IsItemToggledOpen()) || (ImGui::IsItemClicked(ImGuiMouseButton_Right) && !m_Context.Session.IsSelected(uuid)))
+		{
+			const auto& io = ImGui::GetIO();
+			const auto anchor = std::find(m_PreviousVisible.begin(), m_PreviousVisible.end(), m_Anchor);
+			const auto clicked = std::find(m_PreviousVisible.begin(), m_PreviousVisible.end(), uuid);
+			if (io.KeyShift && anchor != m_PreviousVisible.end() && clicked != m_PreviousVisible.end())
+			{
+				auto ids = nlohmann::json::array();
+				for (auto it = std::min(anchor, clicked); it <= std::max(anchor, clicked); ++it)
+					if (*it != uuid)
+						ids.push_back(static_cast<uint64_t>(*it));
+				ids.push_back(static_cast<uint64_t>(uuid));
+				m_Context.Execute("editor.select", { { "entities", ids }, { "mode", io.KeyCtrl || io.KeySuper ? "add" : "replace" } });
+			}
+			else
+			{
+				m_Context.Execute("editor.select", { { "entity", static_cast<uint64_t>(uuid) }, { "mode", io.KeyCtrl || io.KeySuper ? "toggle" : "replace" } });
+				m_Anchor = uuid;
+			}
+		}
 
 		if (ImGui::BeginDragDropSource())
 		{
@@ -102,13 +121,10 @@ namespace Basalt {
 				DrawCreateMenu(entity);
 				ImGui::EndMenu();
 			}
-			if (ImGui::MenuItem("Duplicate", "Ctrl+D"))
+			if (ImGui::MenuItem("Duplicate Selection", "Ctrl+D"))
 			{
-				if (auto result = m_Context.Execute("entity.duplicate", { { "entity", static_cast<uint64_t>(uuid) } }))
-				{
-					m_Context.Session.SetSelection((*result)["id"].get<uint64_t>());
-					m_Context.CommitHistory();
-				}
+				m_Context.Execute("editor.duplicate");
+				m_Context.CommitHistory();
 			}
 			if (ImGui::MenuItem("Unparent", nullptr, false, static_cast<bool>(entity.GetParent())))
 			{
@@ -131,6 +147,8 @@ namespace Basalt {
 	void SceneHierarchyPanel::OnImGuiRender()
 	{
 		ImGui::Begin("Hierarchy");
+		m_PreviousVisible = std::move(m_Visible);
+		m_Visible.clear();
 		Scene* scene = m_Context.Session.GetScene().get();
 		if (scene)
 		{
@@ -151,7 +169,7 @@ namespace Basalt {
 				ImGui::EndDragDropTarget();
 			}
 			if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
-				m_Context.Session.SetSelection(0);
+				m_Context.Execute("editor.select");
 
 			if (ImGui::BeginPopupContextWindow("HierarchyContext", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
 			{
@@ -162,12 +180,8 @@ namespace Basalt {
 
 		if (m_PendingDelete.IsValid())
 		{
-			if (m_Context.Execute("entity.destroy", { { "entity", static_cast<uint64_t>(m_PendingDelete) } }))
-			{
-				if (m_Context.Session.GetSelection() == m_PendingDelete)
-					m_Context.Session.SetSelection(0);
-				m_Context.CommitHistory();
-			}
+			m_Context.Execute("editor.delete");
+			m_Context.CommitHistory();
 			m_PendingDelete = 0;
 		}
 		ImGui::End();

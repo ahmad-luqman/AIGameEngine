@@ -166,7 +166,9 @@ render scale (including dynamic reduction), preserving pending debug lines
 and the displayed viewport texture. Thus same-frame mutations and minimized windows cannot use stale
 IDs. A vanished nonzero UUID is an error, not background. Picking is disabled in game Play mode.
 
-Selection is a visible-surface outline: a 3x3 edge test on the same ID target writes an amber border
+Selection is a visible-surface outline: selected tokens carry a reserved high bit, stripped during
+UUID readback. One 3x3 edge pass on that bit outlines the union of all selected surfaces, independent
+of selection size, and writes an amber border
 after tonemapping, FSR and debug lines, before the game/editor UI composite. It marks visible
 silhouettes and occlusion boundaries, without an x-ray outline around fully hidden geometry. The
 border is one output pixel on each side of an edge, independent of render scale. Samples outside
