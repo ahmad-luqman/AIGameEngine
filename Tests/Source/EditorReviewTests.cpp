@@ -333,3 +333,30 @@ TEST_CASE("Editor every scene-mutating command increments revision and creates o
 	mutate("editor.delete", json::object());
 	Project::SetActive(nullptr);
 }
+
+TEST_CASE("Editor duplicate during a gizmo drag commits movement before changing selection")
+{
+	EditorFixture test;
+	const auto original = test.Run("entity.create", { { "name", "Original" } })["id"].get<uint64_t>();
+	test.Run("editor.select", { { "entity", original } });
+	const auto entries = test.History.GetSize();
+	REQUIRE(test.Context.BeginTransaction("Move Selection", EditorContext::TransactionKind::Gizmo));
+	REQUIRE(test.Context.Execute("editor.transform", { { "delta", MatrixJson(glm::translate(glm::mat4(1), { 1, 0, 0 })) } }));
+	REQUIRE(test.Context.Execute("editor.duplicate"));
+	test.Context.CommitHistory();
+	CHECK_FALSE(test.History.IsActive());
+	CHECK(test.History.GetSize() == entries + 2);
+	CHECK(test.History.Describe()["entries"][entries]["name"] == "Move Selection");
+	CHECK(test.History.UndoName() == "Duplicate Entities");
+	const auto copy = test.Session.GetSelection();
+	REQUIRE(copy != UUID(original));
+	// The viewport observes the changed selection later in the frame and abandons the old gizmo.
+	test.Context.FinishGizmoTransaction(true, test.Restore());
+	REQUIRE(test.Session.GetScene()->GetEntityCount() == 2);
+	CHECK(test.Session.GetScene()->GetEntityByUUID(copy).GetTransform().Translation.x == doctest::Approx(1));
+	REQUIRE(test.History.Undo(test.Restore()));
+	CHECK(test.Session.GetScene()->GetEntityCount() == 1);
+	CHECK(test.Session.GetScene()->GetEntityByUUID(original).GetTransform().Translation.x == doctest::Approx(1));
+	REQUIRE(test.History.Undo(test.Restore()));
+	CHECK(test.Session.GetScene()->GetEntityByUUID(original).GetTransform().Translation.x == doctest::Approx(0));
+}
