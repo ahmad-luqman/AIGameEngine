@@ -272,8 +272,7 @@ namespace Basalt {
 				if (!reader.Finish(outError))
 					return false;
 
-				const UUID uuid = (remapIDs || id == 0) ? UUID() : UUID(id);
-				Entity entity = scene.CreateEntityWithUUID(uuid, name);
+				Entity entity = (remapIDs || id == 0) ? scene.CreateEntity(name) : scene.CreateEntityWithUUID(UUID(id), name);
 				idMap[id != 0 ? id : static_cast<uint64_t>(entity.GetUUID())] = entity.GetUUID();
 				outCreated.push_back(entity);
 

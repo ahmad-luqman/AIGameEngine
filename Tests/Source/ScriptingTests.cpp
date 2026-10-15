@@ -41,6 +41,67 @@ namespace {
 
 TEST_SUITE("Scripting")
 {
+	TEST_CASE("Spawned script and compound contact callbacks repeat in the same order")
+	{
+		BasaltTest::TempProject project("RuntimeContactOrder");
+		const std::string script = project.WriteFile("Assets/Scripts/Order.lua", R"(
+			local Order = {}
+			function Order:OnCreate() Trace = (Trace or "") .. "C" .. self.Entity.Name .. ";" end
+			function Order:OnTriggerEnter(other)
+				Trace = Trace .. "B" .. self.Entity.Name .. other.Name .. ";"
+				Begins = (Begins or 0) + 1
+			end
+			function Order:OnTriggerExit(other)
+				Trace = Trace .. "E" .. self.Entity.Name .. other.Name .. ";"
+				Ends = (Ends or 0) + 1
+			end
+			return Order
+		)");
+		auto run = [&]() {
+			Scene scene;
+			scene.OnRuntimeStart();
+			Entity zone = AddScripted(scene, "Zone", script);
+			zone.AddComponent<RigidBodyComponent>().IsTrigger = true;
+			zone.AddComponent<BoxColliderComponent>().HalfExtents = { 10.0f, 0.5f, 10.0f };
+			std::vector<Entity> boxes;
+			for (int i = 0; i < 4; ++i)
+			{
+				Entity body = AddScripted(scene, "Body" + std::to_string(i), script);
+				body.GetTransform().Translation.x = static_cast<float>(i * 2);
+				auto& rigidBody = body.AddComponent<RigidBodyComponent>();
+				rigidBody.Type = RigidBodyType::Kinematic;
+				body.AddComponent<BoxColliderComponent>();
+				body.AddComponent<SphereColliderComponent>().Radius = 0.2f;
+				boxes.push_back(body);
+			}
+			scene.OnUpdate(Step);
+			CHECK(BasaltTest::Eval(scene, "return Begins") == "8");
+			// One compound child leaves while the other still touches: no entity-pair end yet.
+			for (Entity body : boxes)
+				body.GetTransform().Translation.y = 0.8f;
+			scene.OnUpdate(Step);
+			scene.OnUpdate(Step);
+			CHECK(BasaltTest::Eval(scene, "return Ends or 0") == "0");
+			// A rebuild releases every sub-shape once, then starts one new pair per entity.
+			scene.GetPhysicsWorld()->RecreateBody(zone);
+			CHECK(BasaltTest::Eval(scene, "return Ends") == "8");
+			scene.OnUpdate(Step);
+			CHECK(BasaltTest::Eval(scene, "return Begins") == "16");
+			for (Entity body : boxes)
+				body.GetTransform().Translation.y = 3.0f;
+			scene.OnUpdate(Step);
+			scene.OnUpdate(Step);
+			CHECK(BasaltTest::Eval(scene, "return Ends") == "16");
+			CHECK(scene.GetScriptEngine()->GetErrors().empty());
+			const std::string trace = BasaltTest::Eval(scene, "return Trace");
+			scene.OnRuntimeStop();
+			return trace;
+		};
+		const std::string first = run();
+		CHECK(run() == first);
+		CHECK(run() == first);
+	}
+
 	TEST_CASE("Script lifecycle, properties and per-entity overrides")
 	{
 		BasaltTest::TempProject project("ScriptLifecycle");

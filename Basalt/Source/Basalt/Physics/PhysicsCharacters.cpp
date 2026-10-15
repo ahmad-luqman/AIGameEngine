@@ -41,28 +41,28 @@ namespace Basalt {
 		return m_Owner.ObjectLayerPairFilter.ShouldCollide(MakeObjectLayer(true, self->second.Layer), MakeObjectLayer(true, other->second.Layer));
 	}
 
-	void PhysicsWorld::Impl::ConfigureCharacter(CharacterRecord& record, const std::function<void(const std::string&)>& warn)
+	void PhysicsWorld::Impl::ConfigureCharacter(CharacterRecord& record, std::vector<std::string>& warnings)
 	{
 		const CharacterControllerComponent& c = record.Settings;
 		// Below about 0.8 degrees Jolt switches the slope check off and every slope becomes walkable.
 		const float slope = std::isfinite(c.SlopeLimit) ? std::clamp(c.SlopeLimit, 1.0f, 90.0f) : 45.0f;
 		if (slope != c.SlopeLimit)
-			warn(fmt::format("SlopeLimit {} must be within [1, 90] degrees; using {}", c.SlopeLimit, slope));
+			warnings.emplace_back(fmt::format("SlopeLimit {} must be within [1, 90] degrees; using {}", c.SlopeLimit, slope));
 		record.Character->SetMaxSlopeAngle(glm::radians(slope));
 		const float strength = std::isfinite(c.MaxStrength) && c.MaxStrength >= 0.0f ? c.MaxStrength : 0.0f;
 		if (strength != c.MaxStrength)
-			warn(fmt::format("MaxStrength {} must be a finite, non-negative force; using 0", c.MaxStrength));
+			warnings.emplace_back(fmt::format("MaxStrength {} must be a finite, non-negative force; using 0", c.MaxStrength));
 		record.Character->SetMaxStrength(strength);
 		const float mass = std::isfinite(c.Mass) && c.Mass >= 0.0f ? c.Mass : 0.0f;
 		if (mass != c.Mass)
-			warn(fmt::format("Mass {} must be a finite, non-negative mass; using 0", c.Mass));
+			warnings.emplace_back(fmt::format("Mass {} must be a finite, non-negative mass; using 0", c.Mass));
 		record.Character->SetMass(mass);
 		record.StepHeight = std::isfinite(c.StepHeight) && c.StepHeight >= 0.0f ? c.StepHeight : 0.0f;
 		if (record.StepHeight != c.StepHeight)
-			warn(fmt::format("StepHeight {} must be a finite, non-negative distance; using 0", c.StepHeight));
+			warnings.emplace_back(fmt::format("StepHeight {} must be a finite, non-negative distance; using 0", c.StepHeight));
 		record.GravityFactor = std::isfinite(c.GravityFactor) ? c.GravityFactor : 1.0f;
 		if (record.GravityFactor != c.GravityFactor)
-			warn(fmt::format("GravityFactor {} is not finite; using 1", c.GravityFactor));
+			warnings.emplace_back(fmt::format("GravityFactor {} is not finite; using 1", c.GravityFactor));
 	}
 
 	void PhysicsWorld::Impl::UpdateSupportingVolume(CharacterRecord& record)
@@ -84,7 +84,7 @@ namespace Basalt {
 		return true;
 	}
 
-	void PhysicsWorld::Impl::RemoveCharacter(Scene* scene, UUID uuid)
+	void PhysicsWorld::Impl::RemoveCharacter(UUID uuid)
 	{
 		auto it = Characters.find(uuid);
 		if (it == Characters.end())
@@ -98,7 +98,7 @@ namespace Basalt {
 		}
 		// The character destroys its inner body.
 		Characters.erase(it);
-		EndContacts(scene, uuid, false);
+		EndContacts(uuid, false);
 	}
 
 	void PhysicsWorld::Impl::OnCharacterChanged(entt::registry& registry, entt::entity entity)
@@ -107,20 +107,19 @@ namespace Basalt {
 			DirtyCharacters.Insert(id->ID);
 	}
 
-	void PhysicsWorld::RecreateCharacter(Entity entity)
+	void PhysicsWorld::Impl::RecreateCharacter(Entity entity)
 	{
-		Impl& impl = *m_Impl;
 		JPH::Vec3 previousVelocity = JPH::Vec3::sZero();
 		glm::vec3 moveVelocity(0.0f);
 		if (entity)
 		{
-			auto existing = impl.Characters.find(entity.GetUUID());
-			if (existing != impl.Characters.end())
+			auto existing = Characters.find(entity.GetUUID());
+			if (existing != Characters.end())
 			{
 				// Rebuilding (e.g. after a collider change) keeps the character moving.
 				previousVelocity = existing->second.Character->GetLinearVelocity();
 				moveVelocity = existing->second.MoveVelocity;
-				impl.RemoveCharacter(m_Scene, entity.GetUUID());
+				RemoveCharacter(entity.GetUUID());
 			}
 		}
 		if (!entity || !entity.HasComponent<CharacterControllerComponent>())
@@ -129,65 +128,65 @@ namespace Basalt {
 		const auto& controller = entity.GetComponent<CharacterControllerComponent>();
 		// Problems with the settings, joined with "; " and logged when they differ from the last ones logged.
 		std::vector<std::string> warnings;
-		auto warn = [&warnings](const std::string& warning) { warnings.push_back(warning); };
-		auto report = [&]() { impl.CharacterWarnings.Report(entity, warnings); };
+		auto report = [&]() { CharacterWarnings.Report(entity, warnings); };
 		if (entity.HasComponent<RigidBodyComponent>())
-			warn("its RigidBody is ignored (the character controller replaces it)");
+			warnings.emplace_back("its RigidBody is ignored (the character controller replaces it)");
 
 		glm::vec3 position;
 		glm::quat rotation;
 		glm::vec3 scale;
-		if (!Math::DecomposeTransform(m_Scene->GetWorldTransform(entity), position, rotation, scale))
+		if (!Math::DecomposeTransform(ScenePtr->GetWorldTransform(entity), position, rotation, scale))
 		{
-			warn("degenerate transform; no character created");
+			warnings.emplace_back("degenerate transform; no character created");
 			report();
-			impl.Unbuilt.insert(entity.GetUUID());
+			Unbuilt.insert(entity.GetUUID());
 			return;
 		}
-		impl.Unbuilt.erase(entity.GetUUID());
+		Unbuilt.erase(entity.GetUUID());
 		// The collider shapes, scaled as for a rigid body, and the smaller inner body's (InnerShapeFraction).
 		// Characters move by shape casts, which need a convex mesh collider.
-		const ColliderShape colliders = BuildColliderShape(entity, scale, 1.0f, "a character", false, false, warn);
+		const ColliderShape colliders = BuildColliderShape(entity, scale, 1.0f, "a character", false, false, warnings);
 		if (!colliders.Shape)
 		{
-			warn("no character created");
+			warnings.emplace_back("no character created");
 			report();
 			return;
 		}
 		// Same colliders, so its warnings would only repeat the outer shape's.
-		const ColliderShape inner = BuildColliderShape(entity, scale, InnerShapeFraction, "a character", false, false, [](const std::string&) {});
+		std::vector<std::string> ignoredWarnings;
+		const ColliderShape inner = BuildColliderShape(entity, scale, InnerShapeFraction, "a character", false, false, ignoredWarnings);
 		if (!inner.Shape)
 		{
-			warn("failed to build its inner shape; no character created");
+			warnings.emplace_back("failed to build its inner shape; no character created");
 			report();
 			return;
 		}
 		const JPH::RefConst<JPH::Shape> shape = colliders.Shape;
 
 		uint32_t layer = 0;
-		if (const auto index = impl.Layers.Find(controller.Layer))
+		if (const auto index = Layers.Find(controller.Layer))
 			layer = *index;
 		else
-			warn("unknown physics layer '" + controller.Layer + "', using Default");
+			warnings.emplace_back("unknown physics layer '" + controller.Layer + "', using Default");
 
 		JPH::CharacterVirtualSettings settings;
 		settings.mShape = shape;
 		settings.mInnerBodyShape = inner.Shape;
 		settings.mInnerBodyLayer = MakeObjectLayer(true, layer);
-		const glm::vec3 gravity = FromJolt(impl.System->GetGravity());
+		const glm::vec3 gravity = FromJolt(System->GetGravity());
 		settings.mUp = glm::length(gravity) > 1e-6f ? ToJolt(-glm::normalize(gravity)) : JPH::Vec3::sAxisY();
-		auto* character = new JPH::CharacterVirtual(&settings, ToJolt(position), ToJolt(rotation), static_cast<uint64_t>(entity.GetUUID()), impl.System.get());
+		auto* character = new JPH::CharacterVirtual(&settings, ToJolt(position), ToJolt(rotation), static_cast<uint64_t>(entity.GetUUID()), System.get());
 		character->SetLinearVelocity(previousVelocity);
-		character->SetCharacterVsCharacterCollision(&impl.CharacterCollision);
-		character->SetListener(&impl.CharacterLayers);
+		character->SetCharacterVsCharacterCollision(&CharacterCollision);
+		character->SetListener(&CharacterLayers);
 
-		Impl::CharacterRecord& record = impl.Characters[entity.GetUUID()];
+		Impl::CharacterRecord& record = Characters[entity.GetUUID()];
 		record.Character = character;
-		impl.CharacterCollision.Add(character);
+		CharacterCollision.Add(character);
 		record.Settings = controller;
 		record.Layer = layer;
 		record.BorrowedMesh = colliders.BorrowedMesh;
-		// A copy: warn and report keep using warnings below.
+		// A copy: configuration and reporting keep using warnings below.
 		record.BuildWarnings = warnings; // NOLINT(performance-use-std-move)
 		record.MoveVelocity = moveVelocity;
 		record.LastPosition = position;
@@ -201,33 +200,32 @@ namespace Basalt {
 		// queries, triggers and other bodies cannot see it.
 		if (!character->GetInnerBodyID().IsInvalid())
 		{
-			impl.BodyToEntity[character->GetInnerBodyID().GetIndexAndSequenceNumber()] = entity.GetUUID();
+			BodyToEntity[character->GetInnerBodyID().GetIndexAndSequenceNumber()] = entity.GetUUID();
 			// Jolt created the inner body, not RecreateBody: its slot may still hold an earlier body's modes.
-			impl.ContactListener.Materials[character->GetInnerBodyID().GetIndex()] = {};
+			ContactListener.Materials[character->GetInnerBodyID().GetIndex()] = {};
 		}
 		else
 			BS_CORE_ERROR("Physics: body limit reached; character '{}' has no body other bodies can touch", entity.GetName());
-		Impl::ConfigureCharacter(record, warn);
+		Impl::ConfigureCharacter(record, warnings);
 		report();
 
 		// A new character starts in the air; find its ground now so a rebuild (e.g. a crouch changing the
 		// collider) does not lose a step of IsGrounded or a jump.
 		const JPH::ObjectLayer objectLayer = MakeObjectLayer(true, layer);
-		character->RefreshContacts(JPH::DefaultBroadPhaseLayerFilter(impl.ObjectVsBroadPhaseLayerFilter, objectLayer), JPH::DefaultObjectLayerFilter(impl.ObjectLayerPairFilter, objectLayer), impl.CharacterBodyFilter, JPH::ShapeFilter(),
-								   *impl.TempAllocator);
+		character->RefreshContacts(JPH::DefaultBroadPhaseLayerFilter(ObjectVsBroadPhaseLayerFilter, objectLayer), JPH::DefaultObjectLayerFilter(ObjectLayerPairFilter, objectLayer), CharacterBodyFilter, JPH::ShapeFilter(),
+								   *TempAllocator);
 	}
 
-	void PhysicsWorld::ResizeCharacter(Entity entity, const glm::vec3& scale)
+	void PhysicsWorld::Impl::ResizeCharacter(Entity entity, const glm::vec3& scale)
 	{
-		Impl& impl = *m_Impl;
-		auto found = impl.Characters.find(entity.GetUUID());
-		if (found == impl.Characters.end())
+		auto found = Characters.find(entity.GetUUID());
+		if (found == Characters.end())
 			return;
 		Impl::CharacterRecord& record = found->second;
 		// The same colliders the character was built from, so their warnings would only repeat.
-		auto silent = [](const std::string&) {};
-		const ColliderShape outer = BuildColliderShape(entity, scale, 1.0f, "a character", false, false, silent);
-		const ColliderShape inner = BuildColliderShape(entity, scale, InnerShapeFraction, "a character", false, false, silent);
+		std::vector<std::string> ignoredWarnings;
+		const ColliderShape outer = BuildColliderShape(entity, scale, 1.0f, "a character", false, false, ignoredWarnings);
+		const ColliderShape inner = BuildColliderShape(entity, scale, InnerShapeFraction, "a character", false, false, ignoredWarnings);
 		if (!outer.Shape || !inner.Shape)
 		{
 			RecreateCharacter(entity);
@@ -238,8 +236,8 @@ namespace Basalt {
 		const JPH::ObjectLayer layer = MakeObjectLayer(true, record.Layer);
 		// Switches whatever the new shape overlaps (FLT_MAX); the next update pushes a grown character out. The
 		// character keeps its contacts and ground.
-		character.SetShape(outer.Shape, FLT_MAX, JPH::DefaultBroadPhaseLayerFilter(impl.ObjectVsBroadPhaseLayerFilter, layer), JPH::DefaultObjectLayerFilter(impl.ObjectLayerPairFilter, layer), impl.CharacterBodyFilter, JPH::ShapeFilter(),
-						   *impl.TempAllocator);
+		character.SetShape(outer.Shape, FLT_MAX, JPH::DefaultBroadPhaseLayerFilter(ObjectVsBroadPhaseLayerFilter, layer), JPH::DefaultObjectLayerFilter(ObjectLayerPairFilter, layer), CharacterBodyFilter, JPH::ShapeFilter(),
+						   *TempAllocator);
 		character.SetInnerBodyShape(inner.Shape);
 		record.Bounds = outer.Shape->GetLocalBounds();
 		record.Bounds.Translate(outer.Shape->GetCenterOfMass());
@@ -247,15 +245,14 @@ namespace Basalt {
 		record.BuiltScale = scale;
 	}
 
-	void PhysicsWorld::ApplyCharacterSettings(Entity entity)
+	void PhysicsWorld::Impl::ApplyCharacterSettings(Entity entity)
 	{
-		Impl& impl = *m_Impl;
-		auto it = impl.Characters.find(entity.GetUUID());
+		auto it = Characters.find(entity.GetUUID());
 		if (!entity.HasComponent<CharacterControllerComponent>())
 			return;
 		const auto& controller = entity.GetComponent<CharacterControllerComponent>();
 		// A character that could not be built may be buildable now; the layer is baked into the inner body.
-		if (it == impl.Characters.end() || controller.Layer != it->second.Settings.Layer)
+		if (it == Characters.end() || controller.Layer != it->second.Settings.Layer)
 		{
 			RecreateCharacter(entity);
 			return;
@@ -266,23 +263,22 @@ namespace Basalt {
 			return;
 		record.Settings = controller;
 		std::vector<std::string> warnings = record.BuildWarnings;
-		Impl::ConfigureCharacter(record, [&warnings](const std::string& warning) { warnings.push_back(warning); });
-		impl.CharacterWarnings.Report(entity, warnings);
+		Impl::ConfigureCharacter(record, warnings);
+		CharacterWarnings.Report(entity, warnings);
 	}
 
-	void PhysicsWorld::UpdateCharacters(float fixedStep)
+	void PhysicsWorld::Impl::UpdateCharacters(float fixedStep)
 	{
-		Impl& impl = *m_Impl;
-		if (impl.Characters.empty())
+		if (Characters.empty())
 			return;
-		BS_CORE_ASSERT(impl.CharacterCollision.mCharacters.size() == impl.Characters.size(), "CharacterCollision is out of sync with the characters");
-		const JPH::Vec3 sceneGravity = impl.System->GetGravity();
+		BS_CORE_ASSERT(CharacterCollision.mCharacters.size() == Characters.size(), "CharacterCollision is out of sync with the characters");
+		const JPH::Vec3 sceneGravity = System->GetGravity();
 		// Registry order, not hash order: characters push bodies, so the order shows in replays.
-		for (entt::entity handle : m_Scene->GetAllEntitiesWith<CharacterControllerComponent>())
+		for (entt::entity handle : ScenePtr->GetAllEntitiesWith<CharacterControllerComponent>())
 		{
-			Entity entity(handle, m_Scene);
-			auto it = impl.Characters.find(entity.GetUUID());
-			if (it == impl.Characters.end())
+			Entity entity(handle, ScenePtr);
+			auto it = Characters.find(entity.GetUUID());
+			if (it == Characters.end())
 				continue;
 			Impl::CharacterRecord& record = it->second;
 			JPH::CharacterVirtual& character = *record.Character;
@@ -290,13 +286,13 @@ namespace Basalt {
 			glm::vec3 position;
 			glm::quat rotation;
 			glm::vec3 scale;
-			if (!Math::DecomposeTransform(m_Scene->GetWorldTransform(entity), position, rotation, scale))
+			if (!Math::DecomposeTransform(ScenePtr->GetWorldTransform(entity), position, rotation, scale))
 			{
 				if (!record.Degenerate)
 				{
 					std::vector<std::string> warnings = record.BuildWarnings;
 					warnings.emplace_back("degenerate transform (e.g. a zero scale); the character does not move");
-					impl.CharacterWarnings.Report(entity, warnings);
+					CharacterWarnings.Report(entity, warnings);
 				}
 				record.Degenerate = true;
 				continue;
@@ -304,13 +300,13 @@ namespace Basalt {
 			if (record.Degenerate)
 			{
 				record.Degenerate = false;
-				impl.CharacterWarnings.Report(entity, record.BuildWarnings);
+				CharacterWarnings.Report(entity, record.BuildWarnings);
 			}
 			const JPH::ObjectLayer layer = MakeObjectLayer(true, record.Layer);
-			const JPH::DefaultBroadPhaseLayerFilter broadPhaseFilter(impl.ObjectVsBroadPhaseLayerFilter, layer);
-			const JPH::DefaultObjectLayerFilter objectLayerFilter(impl.ObjectLayerPairFilter, layer);
+			const JPH::DefaultBroadPhaseLayerFilter broadPhaseFilter(ObjectVsBroadPhaseLayerFilter, layer);
+			const JPH::DefaultObjectLayerFilter objectLayerFilter(ObjectLayerPairFilter, layer);
 			// Other characters are met through CharacterCollision, not their inner bodies.
-			const JPH::BodyFilter& bodyFilter = impl.CharacterBodyFilter;
+			const JPH::BodyFilter& bodyFilter = CharacterBodyFilter;
 			const JPH::ShapeFilter shapeFilter;
 
 			// A script that moved the transform teleports the character (whose old ground no longer holds it);
@@ -318,7 +314,7 @@ namespace Basalt {
 			if (glm::any(glm::greaterThan(glm::abs(position - record.LastPosition), glm::vec3(1e-5f))))
 			{
 				character.SetPosition(ToJolt(position));
-				character.RefreshContacts(broadPhaseFilter, objectLayerFilter, bodyFilter, shapeFilter, *impl.TempAllocator);
+				character.RefreshContacts(broadPhaseFilter, objectLayerFilter, bodyFilter, shapeFilter, *TempAllocator);
 			}
 			if (glm::abs(glm::dot(rotation, record.LastRotation)) < 1.0f - 1e-6f)
 				character.SetRotation(ToJolt(rotation));
@@ -358,7 +354,7 @@ namespace Basalt {
 			update.mStickToFloorStepDown = -up * record.StepHeight;
 			update.mWalkStairsStepUp = up * record.StepHeight;
 			const JPH::RVec3 before = character.GetPosition();
-			character.ExtendedUpdate(fixedStep, gravity, update, broadPhaseFilter, objectLayerFilter, bodyFilter, shapeFilter, *impl.TempAllocator);
+			character.ExtendedUpdate(fixedStep, gravity, update, broadPhaseFilter, objectLayerFilter, bodyFilter, shapeFilter, *TempAllocator);
 			const JPH::Vec3 moved = JPH::Vec3(character.GetPosition() - before);
 			record.ActualVelocity = FromJolt(moved / fixedStep);
 

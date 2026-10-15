@@ -181,39 +181,8 @@ namespace Basalt {
 		static void ClearMeshShapeCache();
 
 	private:
-		// Rebuilds (or removes) the entity's character; keeps its velocity and the last Move velocity.
-		void RecreateCharacter(Entity entity);
-		// Rebuilds bodies and characters whose components changed, applies changed character settings, resizes
-		// rescaled ones and rebuilds dirty joints (the start of every Step, and OnSceneLoaded).
-		void ApplyPendingChanges();
-		// Colliders are sized by the entity's world scale, which a script, an animation or a parent can change
-		// without touching a physics component. Once per Step (and on a scene load), after dirty entities are
-		// rebuilt, bodies and characters whose scale differs from the one they were built with get a new shape in
-		// place, keeping their contacts (so an animated scale does not end and restart every overlap each frame);
-		// a body's joints are rebuilt from the current poses, since their anchors scale with it.
-		// Entities left without a body by a degenerate transform are built once it decomposes again.
-		void ApplyScaleChanges();
-		void ResizeBody(Entity entity, const glm::vec3& scale);
-		void ResizeCharacter(Entity entity, const glm::vec3& scale);
-		// Applies changed CharacterController settings in place, rebuilding only when the layer changed.
-		void ApplyCharacterSettings(Entity entity);
-		void UpdateCharacters(float fixedStep);
-		void RebuildDirtyJoints();
-		// Marks every joint moving or connected to the entity's body for a rebuild (it was just created).
-		void MarkJointsDirty(UUID uuid);
-		// Builds the entity's constraint; problems are appended to warnings.
-		void CreateJoint(Entity entity, std::vector<std::string>& warnings);
-		// Applies the fields of a live joint that do not need a rebuild (limits, motor, break thresholds,
-		// collision).
-		void ApplyJointSettings(Entity entity, std::vector<std::string>& warnings);
-		// Removes joints whose constraint force or torque exceeded their break thresholds in the last step.
-		void CheckBrokenJoints(float fixedStep);
-		void DispatchContacts(float fixedStep);
-
-	private:
 		struct Impl;
 		Scope<Impl> m_Impl;
-		Scene* m_Scene = nullptr;
 		float m_Accumulator = 0.0f;
 		uint64_t m_StepCount = 0;
 	};
