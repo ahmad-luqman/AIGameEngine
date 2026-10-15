@@ -156,18 +156,27 @@ token. Zero is background. Transparent meshes then write the nearest surface wit
 into the ID target, using a copy of scene depth so SSAO, lighting and overlays retain their original
 depth. Particles and game UI do not write mesh IDs.
 
-`Pick(x,y)` copies one texel to staging memory and waits for the GPU only when requested. Coordinates
+`PickSurface(x,y)` copies one ID texel and its D32 depth in one submission, then waits for the
+whole device to become idle. `Pick(x,y)` returns just the UUID from that sample. Coordinates
 are output-image pixels, top-left origin; they map to the active render area, including dynamic
 resolution inside larger allocations. A failed/unrendered/resized frame yields no result, distinct
-from background. Scene replacement invalidates the editor's pick data, and the editor checks the
-returned UUID against the current scene. Picking is disabled in game Play mode.
+from background. `InvalidatePicking()` discards the mapping on scene replacement. The editor command
+renders the current scene/camera on demand into the capture renderer at the viewport’s current
+render scale (including dynamic reduction), preserving pending debug lines
+and the displayed viewport texture. Thus same-frame mutations and minimized windows cannot use stale
+IDs. A vanished nonzero UUID is an error, not background. Picking is disabled in game Play mode.
 
 Selection is a visible-surface outline: a 3x3 edge test on the same ID target writes an amber border
 after tonemapping, FSR and debug lines, before the game/editor UI composite. It marks visible
 silhouettes and occlusion boundaries, without an x-ray outline around fully hidden geometry. The
-border is one output pixel on each side of an edge, independent of render scale. Editor screenshots
-include it; game-camera screenshots do not. Light and camera helper bounds remain clickable over
-background pixels when their overlays are enabled; mesh bounds no longer substitute for geometry.
+border is one output pixel on each side of an edge, independent of render scale. Samples outside
+the viewport clamp to its edge so a clipped surface does not outline the image border. Editor screenshots
+include it outside game Play mode; game-camera screenshots do not. Enabled light, camera and audio
+helper bounds compete with the mesh surface depth using the exact sampled texel UV and camera ray;
+helpers behind a mesh cannot intercept its pick. Mesh bounds no longer substitute for geometry.
+The separate Selection Bounds overlay restores selected mesh AABB feedback when desired; it does
+not participate in picking. Colliders, selected particle shapes, and audio gizmos have independent
+switches. Selection is also shown in the hierarchy and inspector when all viewport feedback is off.
 
 `ViewportGPU` verifies ID/UUID mapping, overlap/occlusion, transparent and masked surfaces, outlines,
 odd and tiny viewports, fixed scales, dynamic render-area reuse, animated poses, resize/invalidation,
@@ -175,4 +184,5 @@ and runtime opt-out with Vulkan synchronization validation. `EditorViewport` dri
 host to check settings, picking, captures, vertex snapping and undo/redo. It needs a display (Linux CI
 uses Xvfb) and writes its captures/log to `build/Tests/Viewport/`. Some older MoltenVK builds emit a
 spurious integer-attachment blending warning even with blending disabled; this is separate from
-Khronos validation errors and is fixed upstream in MoltenVK's September 2026 changes.
+Khronos validation errors. The [upstream MoltenVK fix](https://github.com/KhronosGroup/MoltenVK/commit/f92b64c3a5084c6cfa78f581e0b863b40d2d16fa)
+checks `pCA->blendEnable` before rejecting an integer attachment.

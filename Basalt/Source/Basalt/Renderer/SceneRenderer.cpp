@@ -33,6 +33,69 @@ namespace Basalt {
 
 	namespace {
 
+		struct OutlinePush
+		{
+			glm::uvec2 RenderSize, OutputSize;
+			uint32_t Selected, Padding;
+		};
+		static_assert(sizeof(OutlinePush) == 24);
+
+		// Batch readbacks share one submission and device wait, including the ID/depth pair.
+		struct ReadbackRegion
+		{
+			nvrhi::ITexture* Texture;
+			nvrhi::TextureSlice Slice;
+			std::vector<uint8_t> Pixels;
+		};
+
+		bool ReadTextureRegions(nvrhi::IDevice* device, std::vector<ReadbackRegion>& regions)
+		{
+			auto commandList = device->createCommandList();
+			if (!commandList)
+			{
+				BS_CORE_ERROR("SceneRenderer: failed to create readback command list");
+				return false;
+			}
+			std::vector<nvrhi::StagingTextureHandle> staging;
+			for (const auto& region : regions)
+			{
+				nvrhi::TextureDesc desc;
+				desc.width = region.Slice.width;
+				desc.height = region.Slice.height;
+				desc.format = region.Texture->getDesc().format;
+				desc.debugName = "ViewportReadback";
+				staging.push_back(device->createStagingTexture(desc, nvrhi::CpuAccessMode::Read));
+				if (!staging.back())
+				{
+					BS_CORE_ERROR("SceneRenderer: failed to allocate texture readback");
+					return false;
+				}
+			}
+			commandList->open();
+			for (size_t i = 0; i < regions.size(); i++)
+				commandList->copyTexture(staging[i], nvrhi::TextureSlice(), regions[i].Texture, regions[i].Slice);
+			commandList->close();
+			device->executeCommandList(commandList);
+			device->waitForIdle();
+			for (size_t i = 0; i < regions.size(); i++)
+			{
+				auto& region = regions[i];
+				size_t rowPitch = 0;
+				const auto* data = static_cast<const uint8_t*>(device->mapStagingTexture(staging[i], nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &rowPitch));
+				if (!data)
+				{
+					BS_CORE_ERROR("SceneRenderer: failed to map texture readback");
+					return false;
+				}
+				const size_t rowBytes = static_cast<size_t>(region.Slice.width) * nvrhi::getFormatInfo(region.Texture->getDesc().format).bytesPerBlock;
+				region.Pixels.resize(rowBytes * region.Slice.height);
+				for (uint32_t y = 0; y < region.Slice.height; y++)
+					std::memcpy(region.Pixels.data() + y * rowBytes, data + y * rowPitch, rowBytes);
+				device->unmapStagingTexture(staging[i]);
+			}
+			return true;
+		}
+
 		constexpr uint32_t MaxCascades = BS_SHADOW_CASCADE_COUNT;
 		constexpr uint32_t ShadowMapSize = 2048;
 		constexpr uint32_t EnvironmentSize = 512;
@@ -467,12 +530,9 @@ namespace Basalt {
 			impl.DepthNormalPickPS = CreateEmbeddedShader(device, "DepthNormalPick.frag", nvrhi::ShaderType::Pixel);
 			impl.PickPS = CreateEmbeddedShader(device, "Pick.frag", nvrhi::ShaderType::Pixel);
 			impl.OutlinePS = CreateEmbeddedShader(device, "SelectionOutline.frag", nvrhi::ShaderType::Pixel);
-			nvrhi::BindingLayoutDesc layout;
-			layout.visibility = nvrhi::ShaderType::Pixel;
-			layout.bindingOffsets = ZeroBindingOffsets;
-			layout.registerSpaceIsDescriptorSet = true;
+			auto layout = MakeLayout(0, nvrhi::ShaderType::Pixel);
 			layout.addItem(nvrhi::BindingLayoutItem::Texture_SRV(0));
-			layout.addItem(nvrhi::BindingLayoutItem::PushConstants(1, 24));
+			layout.addItem(nvrhi::BindingLayoutItem::PushConstants(PushConstantSlot, sizeof(OutlinePush)));
 			impl.OutlineLayout = device->createBindingLayout(layout);
 			if (!impl.DepthNormalPickPS || !impl.PickPS || !impl.OutlinePS || !impl.OutlineLayout)
 			{
@@ -940,7 +1000,7 @@ namespace Basalt {
 			}
 			prepassDesc.addColorAttachment(impl.EntityIds);
 			impl.PickFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(impl.EntityIds).setDepthAttachment(impl.PickDepth));
-			impl.OutlineSet = m_Device->createBindingSet(nvrhi::BindingSetDesc().addItem(nvrhi::BindingSetItem::Texture_SRV(0, impl.EntityIds)).addItem(nvrhi::BindingSetItem::PushConstants(1, 24)), impl.OutlineLayout);
+			impl.OutlineSet = m_Device->createBindingSet(nvrhi::BindingSetDesc().addItem(nvrhi::BindingSetItem::Texture_SRV(0, impl.EntityIds)).addItem(nvrhi::BindingSetItem::PushConstants(PushConstantSlot, sizeof(OutlinePush))), impl.OutlineLayout);
 		}
 		impl.PrepassFramebuffer = m_Device->createFramebuffer(prepassDesc);
 		if (m_Picking && (!impl.PrepassFramebuffer || !impl.PickFramebuffer || !impl.OutlineSet))
@@ -992,13 +1052,7 @@ namespace Basalt {
 
 		if (m_Picking)
 		{
-			nvrhi::GraphicsPipelineDesc desc;
-			desc.VS = impl.FullscreenVS;
-			desc.PS = impl.OutlinePS;
-			desc.bindingLayouts = { impl.OutlineLayout };
-			desc.renderState.rasterState.setCullNone();
-			desc.renderState.depthStencilState.setDepthTestEnable(false).setDepthWriteEnable(false);
-			impl.OutlinePipeline = m_Device->createGraphicsPipeline(desc, impl.OutputFramebuffer->getFramebufferInfo());
+			impl.OutlinePipeline = CreateFullscreenPipeline(m_Device, impl.FullscreenVS, impl.OutlinePS, impl.OutlineLayout, impl.OutputFramebuffer);
 			if (!impl.PickFramebuffer || !impl.OutlineSet || !impl.OutlinePipeline || !impl.PickPipeline[0] || !impl.PickPipeline[1] || !impl.PrepassPipeline[0] || !impl.PrepassPipeline[1])
 			{
 				BS_CORE_ERROR("SceneRenderer: failed to create picking pipelines/bindings");
@@ -2010,12 +2064,6 @@ namespace Basalt {
 			const auto it = pickIds.find(m_Selection);
 			if (it != pickIds.end())
 			{
-				struct OutlinePush
-				{
-					glm::uvec2 RenderSize, OutputSize;
-					uint32_t Selected, Padding;
-				};
-				static_assert(sizeof(OutlinePush) == 24);
 				const OutlinePush push{ { m_RenderWidth, m_RenderHeight }, { m_Width, m_Height }, it->second, 0 };
 				fullscreen(impl.OutlinePipeline, impl.OutputFramebuffer, impl.OutlineSet, outputViewport, &push, sizeof(push));
 			}
@@ -2078,79 +2126,48 @@ namespace Basalt {
 
 	std::optional<UUID> SceneRenderer::Pick(uint32_t x, uint32_t y)
 	{
+		const auto sample = PickSurface(x, y);
+		return sample ? std::optional<UUID>(sample->EntityId) : std::nullopt;
+	}
+
+	std::optional<ViewportPick> SceneRenderer::PickSurface(uint32_t x, uint32_t y)
+	{
 		Impl& impl = *m_Impl;
 		if (!impl.PickReady || m_Statistics.Failed || x >= m_Width || y >= m_Height)
 			return std::nullopt;
-		nvrhi::TextureDesc desc;
-		desc.width = desc.height = 1;
-		desc.format = nvrhi::Format::R32_UINT;
-		desc.debugName = "PickReadback";
-		auto staging = m_Device->createStagingTexture(desc, nvrhi::CpuAccessMode::Read);
-		auto commandList = m_Device->createCommandList();
-		if (!staging || !commandList)
-		{
-			BS_CORE_ERROR("SceneRenderer: failed to allocate picking readback");
-			return std::nullopt;
-		}
 		nvrhi::TextureSlice source;
 		source.x = std::min(static_cast<uint32_t>((static_cast<double>(x) + 0.5) * m_RenderWidth / m_Width), m_RenderWidth - 1);
 		source.y = std::min(static_cast<uint32_t>((static_cast<double>(y) + 0.5) * m_RenderHeight / m_Height), m_RenderHeight - 1);
 		source.width = source.height = source.depth = 1;
-		commandList->open();
-		commandList->copyTexture(staging, nvrhi::TextureSlice(), impl.EntityIds, source);
-		commandList->close();
-		m_Device->executeCommandList(commandList);
-		m_Device->waitForIdle();
-		size_t rowPitch = 0;
-		const void* data = m_Device->mapStagingTexture(staging, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &rowPitch);
-		if (!data)
+		std::vector<ReadbackRegion> regions{ { impl.EntityIds, source, {} }, { impl.PickDepth, source, {} } };
+		if (!ReadTextureRegions(m_Device, regions))
+			return std::nullopt;
+		uint32_t token = 0;
+		float depth = 1;
+		std::memcpy(&token, regions[0].Pixels.data(), sizeof(token));
+		std::memcpy(&depth, regions[1].Pixels.data(), sizeof(depth));
+		if (token >= impl.PickEntities.size() || !std::isfinite(depth) || depth < 0 || depth > 1)
 		{
-			BS_CORE_ERROR("SceneRenderer: failed to map picking readback");
+			BS_CORE_ERROR("SceneRenderer: invalid picking token/depth {}/{}", token, depth);
 			return std::nullopt;
 		}
-		uint32_t id = 0;
-		std::memcpy(&id, data, sizeof(id));
-		m_Device->unmapStagingTexture(staging);
-		if (id >= impl.PickEntities.size())
-		{
-			BS_CORE_ERROR("SceneRenderer: invalid picking token {}", id);
-			return std::nullopt;
-		}
-		return impl.PickEntities[id];
+		return ViewportPick{ impl.PickEntities[token], depth, { (static_cast<float>(source.x) + 0.5f) / static_cast<float>(m_RenderWidth), (static_cast<float>(source.y) + 0.5f) / static_cast<float>(m_RenderHeight) } };
 	}
 
 	bool SceneRenderer::ReadOutputPixels(std::vector<uint8_t>& outPixels, uint32_t& outWidth, uint32_t& outHeight)
 	{
 		if (!m_OutputTexture)
 			return false;
-
-		nvrhi::TextureDesc desc = m_OutputTexture->getDesc();
-		desc.isRenderTarget = false;
-		desc.debugName = "OutputReadback";
-		desc.initialState = nvrhi::ResourceStates::CopyDest;
-		desc.keepInitialState = true;
-		nvrhi::StagingTextureHandle staging = m_Device->createStagingTexture(desc, nvrhi::CpuAccessMode::Read);
-		if (!staging)
+		nvrhi::TextureSlice slice;
+		slice.width = m_Width;
+		slice.height = m_Height;
+		slice.depth = 1;
+		std::vector<ReadbackRegion> regions{ { m_OutputTexture, slice, {} } };
+		if (!ReadTextureRegions(m_Device, regions))
 			return false;
-
-		nvrhi::CommandListHandle commandList = m_Device->createCommandList();
-		commandList->open();
-		commandList->copyTexture(staging, nvrhi::TextureSlice(), m_OutputTexture, nvrhi::TextureSlice());
-		commandList->close();
-		m_Device->executeCommandList(commandList);
-		m_Device->waitForIdle();
-
-		size_t rowPitch = 0;
-		const auto* data = static_cast<const uint8_t*>(m_Device->mapStagingTexture(staging, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &rowPitch));
-		if (!data)
-			return false;
-
-		outWidth = desc.width;
-		outHeight = desc.height;
-		outPixels.resize(static_cast<size_t>(outWidth) * outHeight * 4);
-		for (uint32_t y = 0; y < outHeight; y++)
-			std::memcpy(outPixels.data() + static_cast<size_t>(y) * outWidth * 4, data + y * rowPitch, static_cast<size_t>(outWidth) * 4);
-		m_Device->unmapStagingTexture(staging);
+		outWidth = m_Width;
+		outHeight = m_Height;
+		outPixels = std::move(regions[0].Pixels);
 		return true;
 	}
 

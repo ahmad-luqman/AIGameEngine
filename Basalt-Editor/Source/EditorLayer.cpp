@@ -330,15 +330,14 @@ namespace Basalt {
 								 auto result = m_ViewportSettings.Get();
 								 result["width"] = m_Renderer ? m_Renderer->GetViewportWidth() : 0;
 								 result["height"] = m_Renderer ? m_Renderer->GetViewportHeight() : 0;
+								 result["renderWidth"] = m_Renderer ? m_Renderer->GetRenderWidth() : 0;
+								 result["renderHeight"] = m_Renderer ? m_Renderer->GetRenderHeight() : 0;
 								 return result;
 							 } });
-		m_Commands.Register({ "editor.pick", "Reads a mesh entity from the current viewport; background is 0. Selects unless select=false.", EditorCommandSchemas::Pick(), [this](AutomationSession& session, const nlohmann::json& params) {
+		m_Commands.Register({ "editor.pick", "Picks current mesh surfaces and enabled light/camera/audio helpers; background is 0. Selects unless select=false.", EditorCommandSchemas::Pick(), [this](AutomationSession& session, const nlohmann::json& params) {
 								 if (IsGameRunning() || !m_Renderer)
 									 throw CommandError("picking requires a scene viewport");
-								 const auto hit = m_Renderer->Pick(params["x"].get<uint32_t>(), params["y"].get<uint32_t>());
-								 if (!hit)
-									 throw CommandError("picking unavailable: render a valid frame and use in-bounds output pixels");
-								 const UUID id = session.GetScene()->GetEntityByUUID(*hit) ? *hit : UUID(0);
+								 const UUID id = PickViewport(params["x"].get<uint32_t>(), params["y"].get<uint32_t>());
 								 if (params.value("select", true))
 									 session.SetSelection(id);
 								 return nlohmann::json{ { "entity", static_cast<uint64_t>(id) } };
@@ -348,15 +347,27 @@ namespace Basalt {
 									 throw CommandError("vertex snapping is only available in edit mode");
 								 Scene& scene = *session.GetScene();
 								 Entity entity = scene.GetEntityByUUID(session.GetSelection());
-								 if (!entity || entity.HasComponent<UIRectComponent>())
+								 if (!entity || entity.HasComponent<UIRectComponent>() || (!entity.HasComponent<MeshComponent>() && !entity.HasComponent<AnimatorComponent>()))
 									 throw CommandError("select a mesh entity before vertex snapping");
 								 const glm::mat4 viewProjection = m_Camera.GetProjection() * m_Camera.GetView();
 								 const glm::vec2 from(params["source"][0].get<float>(), params["source"][1].get<float>());
 								 const glm::vec2 to(params["target"][0].get<float>(), params["target"][1].get<float>());
+								 const auto inBounds = [this](const glm::vec2& point) { return point.x >= 0 && point.y >= 0 && point.x < m_ViewportSize.x && point.y < m_ViewportSize.y; };
+								 if (!inBounds(from) || !inBounds(to))
+									 throw CommandError("vertex snap coordinates must be inside the logical viewport");
+								 bool hasGeometry = false;
+								 if (const auto* mesh = entity.TryGetComponent<MeshComponent>())
+									 if (const auto asset = AssetManager::GetMesh(mesh->Mesh))
+										 hasGeometry = mesh->MeshIndex < asset->Meshes.size();
+								 ForEachAnimatedMesh(entity, [&](const Ref<MeshSource>&, const MeshNode&, const glm::mat4&, const std::vector<glm::mat4>&) { hasGeometry = true; });
+								 if (!hasGeometry)
+									 throw CommandError("selected mesh asset is unavailable or its mesh index is invalid");
 								 const auto source = FindViewportVertex(entity, viewProjection, m_ViewportSize, from);
+								 if (!source)
+									 throw CommandError("no source vertex within 16 pixels; check the selected mesh asset and its visibility");
 								 const auto target = FindVertexSnapTarget(scene, entity, viewProjection, m_ViewportSize, to);
-								 if (!source || !target)
-									 throw CommandError("no mesh vertex within 16 pixels of source or target");
+								 if (!target)
+									 throw CommandError("no target vertex within 16 pixels on another loaded mesh");
 								 const auto translation = VertexSnapTranslation(scene, entity, source->World, target->World);
 								 if (!translation)
 									 throw CommandError("vertex snap requires a finite, invertible parent transform");
@@ -383,7 +394,7 @@ namespace Basalt {
 								 {
 									 const glm::vec3 position = params.contains("position") ? readVector(params["position"]) : m_Camera.GetPosition();
 									 const glm::vec3 target = params.contains("target") ? readVector(params["target"]) : m_Camera.GetFocalPoint();
-									 m_VertexSnapStart.reset();
+									 CancelVertexSnap();
 									 m_Camera.LookAt(position, target);
 								 }
 								 const glm::vec3 position = m_Camera.GetPosition();
@@ -433,9 +444,26 @@ namespace Basalt {
 	{
 		if (m_Renderer)
 			m_Renderer->InvalidatePicking();
-		m_VertexSnapStart.reset();
+		CancelVertexSnap();
 		m_History.Reset(SceneSerializer::SerializeScene(*m_Session.GetEditScene()));
 		m_Paused = false;
+	}
+
+	bool EditorLayer::PrepareCaptureRenderer(uint32_t width, uint32_t height, float scale, std::string& error)
+	{
+		if (!m_CaptureRenderer)
+		{
+			m_CaptureRenderer = CreateScope<SceneRenderer>(Application::Get().GetGraphicsDevice()->GetDevice(), SceneRendererSpecification{ .Picking = true });
+			if (!m_CaptureRenderer->Initialize())
+			{
+				m_CaptureRenderer.reset();
+				error = "capture renderer initialization failed";
+				return false;
+			}
+		}
+		m_CaptureRenderer->SetRenderScale(scale);
+		m_CaptureRenderer->SetViewportSize(width, height);
+		return true;
 	}
 
 	bool EditorLayer::RenderToFile(const std::filesystem::path& path, uint32_t width, uint32_t height, bool useEditorCamera, std::string& outError)
@@ -451,24 +479,14 @@ namespace Basalt {
 			camera = editorCamera.GetRenderCamera();
 		}
 
-		if (!m_CaptureRenderer)
-		{
-			m_CaptureRenderer = CreateScope<SceneRenderer>(Application::Get().GetGraphicsDevice()->GetDevice(), SceneRendererSpecification{ .Picking = true });
-			if (!m_CaptureRenderer->Initialize())
-			{
-				m_CaptureRenderer.reset();
-				outError = "capture renderer initialization failed";
-				return false;
-			}
-		}
-		m_CaptureRenderer->SetRenderScale(ActiveRenderScale());
-		m_CaptureRenderer->SetViewportSize(width, height);
+		if (!PrepareCaptureRenderer(width, height, ActiveRenderScale(), outError))
+			return false;
 
 		// Debug lines belong to the viewport frame; draw editor overlays only for editor-camera shots.
 		std::vector<DebugLineVertex> pending = DebugDraw::TakeLines();
 		if (useEditorCamera && !m_Session.IsPlaying())
 			DrawEditorOverlays();
-		m_CaptureRenderer->SetSelection(useEditorCamera && m_ViewportSettings.Get()["selectionOutline"].get<bool>() ? m_Session.GetSelection() : UUID(0));
+		m_CaptureRenderer->SetSelection(useEditorCamera && !IsGameRunning() && m_ViewportSettings.Options().SelectionOutline ? m_Session.GetSelection() : UUID(0));
 		m_CaptureRenderer->Render(scene, *camera);
 		DebugDraw::Clear();
 		for (size_t i = 0; i + 1 < pending.size(); i += 2)
@@ -505,7 +523,7 @@ namespace Basalt {
 
 	void EditorLayer::RestoreState(const nlohmann::json& state)
 	{
-		m_VertexSnapStart.reset();
+		CancelVertexSnap();
 		if (m_Renderer)
 			m_Renderer->InvalidatePicking();
 		Ref<Scene> scene = CreateRef<Scene>();
@@ -619,7 +637,7 @@ namespace Basalt {
 	{
 		HandleShortcuts();
 		m_Camera.SetViewportSize(static_cast<uint32_t>(m_ViewportSize.x), static_cast<uint32_t>(m_ViewportSize.y));
-		if (!m_VertexSnapStart)
+		if (!m_VertexSnapDrag)
 			m_Camera.OnUpdate(ts, m_ViewportHovered, m_ViewportFocused);
 
 		if (m_Session.IsPlaying())
@@ -639,7 +657,8 @@ namespace Basalt {
 	void EditorLayer::DrawEditorOverlays()
 	{
 		Scene& scene = *m_Session.GetScene();
-		if (m_ViewportSettings.Get()["grid"].get<bool>())
+		const auto options = m_ViewportSettings.Options();
+		if (options.Grid)
 		{
 			const int extent = 20;
 			for (int i = -extent; i <= extent; i++)
@@ -659,7 +678,7 @@ namespace Basalt {
 			const glm::vec3 position(world[3]);
 			const bool selected = entity.GetUUID() == m_Session.GetSelection();
 
-			if (m_ViewportSettings.Get()["lightGizmos"].get<bool>())
+			if (options.LightGizmos)
 			{
 				if (entity.HasComponent<DirectionalLightComponent>())
 					DebugDraw::Arrow(position, position + glm::normalize(glm::vec3(world * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f))) * 1.5f, s_LightColor);
@@ -671,13 +690,13 @@ namespace Basalt {
 					DebugDraw::Arrow(position, position + direction * (selected ? spot->Range : 1.0f), s_LightColor);
 				}
 			}
-			if (m_ViewportSettings.Get()["cameraGizmos"].get<bool>())
+			if (options.CameraGizmos)
 			{
 				if (const auto* camera = entity.TryGetComponent<CameraComponent>())
 					DrawCameraFrustum(Math::ComposeTransform(position, glm::quat_cast(glm::mat3(glm::normalize(glm::vec3(world[0])), glm::normalize(glm::vec3(world[1])), glm::normalize(glm::vec3(world[2])))), glm::vec3(1.0f)), *camera, selected ? s_SelectionColor : s_CameraColor);
 			}
 
-			if (m_ViewportSettings.Get()["colliders"].get<bool>())
+			if (options.Colliders)
 			{
 				const glm::vec4 color = selected ? s_SelectionColor : s_ColliderColor;
 				glm::vec3 translation;
@@ -716,7 +735,18 @@ namespace Basalt {
 				}
 			}
 
-			if (selected && m_ViewportSettings.Get()["colliders"].get<bool>())
+			if (options.AudioGizmos && entity.HasComponent<AudioSourceComponent>())
+				DebugDraw::Sphere(position, 0.2f, selected ? s_SelectionColor : s_CameraColor, 12);
+			if (selected && options.SelectionBounds)
+			{
+				if (const auto* mesh = entity.TryGetComponent<MeshComponent>())
+					if (const auto source = AssetManager::GetMesh(mesh->Mesh); source && mesh->MeshIndex < source->Meshes.size())
+						DebugDraw::Box(source->Meshes[mesh->MeshIndex].Bounds.Transformed(world), s_SelectionColor);
+				const auto bounds = AnimatedModelBounds(entity);
+				if (bounds.IsValid())
+					DebugDraw::Box(bounds, s_SelectionColor);
+			}
+			if (selected && options.ParticleGizmos)
 				if (const auto* emitter = entity.TryGetComponent<ParticleEmitterComponent>())
 					DrawParticleEmitter(world, *emitter, s_SelectionColor);
 		}
@@ -738,7 +768,8 @@ namespace Basalt {
 		scene.GetRendererSettings().DebugView = m_DebugView;
 
 		const bool playing = IsGameRunning();
-		if (!m_ViewportSettings.Get()["debugLines"].get<bool>())
+		// Discard scripted lines before adding editor helpers, whose visibility switches are independent.
+		if (!m_ViewportSettings.Options().DebugLines)
 			DebugDraw::TakeLines();
 		std::optional<RenderCamera> camera;
 		if (playing)
@@ -749,7 +780,7 @@ namespace Basalt {
 			if (!playing)
 				DrawEditorOverlays();
 		}
-		m_Renderer->SetSelection(!playing && m_ViewportSettings.Get()["selectionOutline"].get<bool>() ? m_Session.GetSelection() : UUID(0));
+		m_Renderer->SetSelection(!playing && m_ViewportSettings.Options().SelectionOutline ? m_Session.GetSelection() : UUID(0));
 		m_Renderer->Render(scene, *camera);
 
 		// UI components show in every mode, so layouts can be authored without playing; the scripts'
@@ -790,16 +821,11 @@ namespace Basalt {
 				m_Context.CommitHistory();
 			}
 		}
-		if (!m_VertexSnapStart && !control && !flying && !m_Session.IsPlaying() && !ImGuizmo::IsUsing() && !ImGui::IsAnyItemActive() && (m_ViewportFocused || m_ViewportHovered))
+		if (!m_VertexSnapDrag && !control && !flying && !m_Session.IsPlaying() && !ImGuizmo::IsUsing() && !ImGui::IsAnyItemActive() && (m_ViewportFocused || m_ViewportHovered))
 		{
-			if (Input::IsKeyPressed(KeyCode::Q))
-				m_Context.Execute("editor.viewport", { { "operation", "None" } });
-			if (Input::IsKeyPressed(KeyCode::W))
-				m_Context.Execute("editor.viewport", { { "operation", "Translate" } });
-			if (Input::IsKeyPressed(KeyCode::E))
-				m_Context.Execute("editor.viewport", { { "operation", "Rotate" } });
-			if (Input::IsKeyPressed(KeyCode::R))
-				m_Context.Execute("editor.viewport", { { "operation", "Scale" } });
+			for (const auto& operation : GizmoOperations)
+				if (Input::IsKeyPressed(static_cast<KeyCode>(operation.Shortcut)))
+					m_Context.Execute("editor.viewport", { { "operation", operation.Name } });
 			if (Input::IsKeyPressed(KeyCode::F))
 				FocusSelection();
 			if (Input::IsKeyPressed(KeyCode::Delete) && m_Session.GetSelection().IsValid())
@@ -813,47 +839,74 @@ namespace Basalt {
 		}
 	}
 
-	void EditorLayer::HandleViewportClick(const glm::vec2& mouse)
+	UUID EditorLayer::PickViewport(uint32_t x, uint32_t y)
 	{
-		if (IsGameRunning() || !m_Renderer)
-			return;
-		const uint32_t x = static_cast<uint32_t>(mouse.x * static_cast<float>(m_Renderer->GetViewportWidth()) / m_ViewportSize.x);
-		const uint32_t y = static_cast<uint32_t>(mouse.y * static_cast<float>(m_Renderer->GetViewportHeight()) / m_ViewportSize.y);
-		const auto result = m_Context.Execute("editor.pick", { { "x", x }, { "y", y } });
-		if (!result || (*result)["entity"].get<uint64_t>() != 0)
-			return;
+		const uint32_t width = m_Renderer->GetViewportWidth();
+		const uint32_t height = m_Renderer->GetViewportHeight();
+		if (width == 0 || height == 0)
+			throw CommandError("picking unavailable: viewport has not been sized");
+		if (x >= width || y >= height)
+			throw CommandError("pick coordinates outside " + std::to_string(width) + "x" + std::to_string(height) + " output viewport");
+		std::string error;
+		if (!PrepareCaptureRenderer(width, height, m_Renderer->GetCurrentRenderScale(), error))
+			throw CommandError(error);
 		Scene& scene = *m_Session.GetScene();
-		const glm::vec2 ndc((mouse.x / m_ViewportSize.x) * 2.0f - 1.0f, 1.0f - (mouse.y / m_ViewportSize.y) * 2.0f);
-		const glm::mat4 inverse = glm::inverse(m_Camera.GetProjection() * m_Camera.GetView());
-		glm::vec4 nearPoint = inverse * glm::vec4(ndc, 0.0f, 1.0f);
-		glm::vec4 farPoint = inverse * glm::vec4(ndc, 1.0f, 1.0f);
-		const glm::vec3 origin = glm::vec3(nearPoint) / nearPoint.w;
-		const glm::vec3 direction = glm::normalize(glm::vec3(farPoint) / farPoint.w - origin);
+		EditorCamera camera = m_Camera;
+		camera.SetViewportSize(width, height);
+		// Commands may run before BeginFrame, including while minimized. Refresh owned capture targets
+		// without touching the viewport texture already referenced by ImGui or consuming pending lines.
+		const auto pending = DebugDraw::TakeLines();
+		m_CaptureRenderer->SetSelection(0);
+		m_CaptureRenderer->Render(scene, camera.GetRenderCamera());
+		DebugDraw::Clear();
+		for (size_t i = 0; i + 1 < pending.size(); i += 2)
+			DebugDraw::Line(pending[i].Position, pending[i + 1].Position, pending[i].Color);
+		if (m_CaptureRenderer->GetStatistics().Failed)
+			throw CommandError("picking render failed; see Console");
+		const auto hit = m_CaptureRenderer->PickSurface(x, y);
+		if (!hit)
+			throw CommandError("picking readback failed; see Console");
+		if (hit->EntityId.IsValid() && !scene.GetEntityByUUID(hit->EntityId))
+			throw CommandError("picked entity no longer exists; retry with the current scene");
 
-		UUID best = 0;
-		float bestDistance = std::numeric_limits<float>::max();
+		const glm::vec2 ndc(hit->UV.x * 2 - 1, 1 - hit->UV.y * 2);
+		const glm::mat4 inverse = glm::inverse(camera.GetProjection() * camera.GetView());
+		const auto unproject = [&](float depth) {
+			const glm::vec4 point = inverse * glm::vec4(ndc, depth, 1);
+			return glm::vec3(point) / point.w;
+		};
+		const glm::vec3 origin = unproject(0);
+		const glm::vec3 direction = glm::normalize(unproject(1) - origin);
+		UUID best = hit->EntityId;
+		float bestDistance = glm::length(unproject(hit->Depth) - origin);
+		const auto options = m_ViewportSettings.Options();
 		for (Entity entity : scene.GetAllEntitiesOrdered())
 		{
-			const glm::mat4 world = scene.GetWorldTransform(entity);
-			// Non-mesh helpers retain a small bounds fallback only over background pixels.
-			AABB bounds;
-			const bool light = m_ViewportSettings.Get()["lightGizmos"].get<bool>() && (entity.HasComponent<PointLightComponent>() || entity.HasComponent<SpotLightComponent>() || entity.HasComponent<DirectionalLightComponent>());
-			const bool camera = m_ViewportSettings.Get()["cameraGizmos"].get<bool>() && entity.HasComponent<CameraComponent>();
-			if (!entity.HasComponent<MeshComponent>() && !entity.HasComponent<AnimatorComponent>() && (light || camera))
-			{
-				const glm::vec3 position(world[3]);
-				bounds.Expand(position - glm::vec3(0.25f));
-				bounds.Expand(position + glm::vec3(0.25f));
-			}
-			if (!bounds.IsValid())
+			const bool light = options.LightGizmos && (entity.HasComponent<PointLightComponent>() || entity.HasComponent<SpotLightComponent>() || entity.HasComponent<DirectionalLightComponent>());
+			const bool cameraHelper = options.CameraGizmos && entity.HasComponent<CameraComponent>();
+			const bool audio = options.AudioGizmos && entity.HasComponent<AudioSourceComponent>();
+			if (entity.HasComponent<MeshComponent>() || entity.HasComponent<AnimatorComponent>() || !(light || cameraHelper || audio))
 				continue;
+			const glm::vec3 position(scene.GetWorldTransform(entity)[3]);
+			AABB bounds;
+			bounds.Expand(position - glm::vec3(0.25f));
+			bounds.Expand(position + glm::vec3(0.25f));
 			if (auto distance = IntersectRay(origin, direction, bounds); distance && *distance < bestDistance)
 			{
 				bestDistance = *distance;
 				best = entity.GetUUID();
 			}
 		}
-		m_Context.Execute("editor.select", { { "entity", best.IsValid() ? nlohmann::json(static_cast<uint64_t>(best)) : nlohmann::json() } });
+		return best;
+	}
+
+	void EditorLayer::HandleViewportClick(const glm::vec2& mouse)
+	{
+		if (IsGameRunning() || !m_Renderer)
+			return;
+		const uint32_t x = static_cast<uint32_t>(mouse.x * static_cast<float>(m_Renderer->GetViewportWidth()) / m_ViewportSize.x);
+		const uint32_t y = static_cast<uint32_t>(mouse.y * static_cast<float>(m_Renderer->GetViewportHeight()) / m_ViewportSize.y);
+		m_Context.Execute("editor.pick", { { "x", x }, { "y", y } });
 	}
 
 	void EditorLayer::OnImGuiRender()
@@ -1055,7 +1108,7 @@ namespace Basalt {
 	{
 		const auto& options = m_ViewportSettings.Get();
 		for (const auto& [key, label] : std::initializer_list<std::pair<const char*, const char*>>{
-				 { "grid", "Grid" }, { "colliders", "Colliders" }, { "lightGizmos", "Light Gizmos" }, { "cameraGizmos", "Camera Gizmos" }, { "uiBounds", "UI Bounds" }, { "debugLines", "Debug Lines" }, { "selectionOutline", "Selection Outline" } })
+				 { "grid", "Grid" }, { "colliders", "Colliders" }, { "lightGizmos", "Light Gizmos" }, { "cameraGizmos", "Camera Gizmos" }, { "audioGizmos", "Audio Gizmos" }, { "particleGizmos", "Particle Gizmos" }, { "selectionBounds", "Selection Bounds" }, { "uiBounds", "UI Bounds" }, { "debugLines", "Debug Lines" }, { "selectionOutline", "Selection Outline" } })
 		{
 			bool enabled = options[key].get<bool>();
 			if (ImGui::MenuItem(label, nullptr, &enabled))
@@ -1067,10 +1120,10 @@ namespace Basalt {
 	{
 		const auto& options = m_ViewportSettings.Get();
 		ImGui::BeginDisabled(m_Session.IsPlaying() || ImGuizmo::IsUsing());
-		for (const char* name : { "None", "Translate", "Rotate", "Scale" })
+		for (const auto& operation : GizmoOperations)
 		{
-			if (ImGui::RadioButton(name, options["operation"] == name))
-				m_Context.Execute("editor.viewport", { { "operation", name } });
+			if (ImGui::RadioButton(operation.Name, options["operation"] == operation.Name))
+				m_Context.Execute("editor.viewport", { { "operation", operation.Name } });
 			ImGui::SameLine();
 		}
 		if (ImGui::Button(options["space"].get<std::string>().c_str()))
@@ -1096,6 +1149,7 @@ namespace Basalt {
 			}
 			ImGui::TextDisabled("Ctrl: step snap. V + drag: vertex to vertex.");
 			ImGui::TextDisabled("Scale always uses local axes.");
+			ImGui::TextDisabled("Vertex snapping overrides Q/W/E/R; clicking away selects.");
 			ImGui::EndPopup();
 		}
 		ImGui::EndDisabled();
@@ -1118,7 +1172,7 @@ namespace Basalt {
 
 		const ImVec2 available = ImGui::GetContentRegionAvail();
 		if (m_ViewportSize != glm::vec2(std::max(available.x, 16.0f), std::max(available.y, 16.0f)))
-			m_VertexSnapStart.reset();
+			CancelVertexSnap();
 		m_ViewportSize = { std::max(available.x, 16.0f), std::max(available.y, 16.0f) };
 		const ImVec2 cursor = ImGui::GetCursorScreenPos();
 		m_ViewportMin = { cursor.x, cursor.y };
@@ -1126,8 +1180,12 @@ namespace Basalt {
 		m_ViewportHovered = false;
 
 		if (m_Renderer && m_Renderer->GetOutputTexture())
+		{
 			ImGui::Image(ImTextureRef(reinterpret_cast<ImTextureID>(m_Renderer->GetOutputTexture())), available);
-		m_ViewportHovered = ImGui::IsItemHovered();
+			m_ViewportHovered = ImGui::IsItemHovered();
+		}
+		else
+			ImGui::Dummy(available);
 		Application::Get().GetImGuiLayer()->SetBlockEvents(!m_ViewportHovered && !m_ViewportFocused);
 		GameUI::SetViewportSize({ available.x, available.y });
 		GameUI::SetViewportOrigin({ cursor.x, cursor.y });
@@ -1148,7 +1206,7 @@ namespace Basalt {
 			drawList->AddRectFilled(cursor, ImVec2(cursor.x + available.x, cursor.y + 28.0f), IM_COL32(100, 15, 15, 235));
 			drawList->AddText(ImVec2(cursor.x + 8.0f, cursor.y + 6.0f), IM_COL32_WHITE, "Rendering failed. See Console.");
 		}
-		if (m_ViewportSettings.Get()["uiBounds"].get<bool>() && !IsGameRunning())
+		if (m_ViewportSettings.Options().UIBounds && !IsGameRunning())
 			DrawUIBounds({ cursor.x, cursor.y }, { available.x, available.y });
 
 		if (ImGui::BeginDragDropTarget())
@@ -1162,12 +1220,23 @@ namespace Basalt {
 		// placed by their UIRect, not their transform.
 		Scene& scene = *m_Session.GetScene();
 		Entity selected = scene.GetEntityByUUID(m_Session.GetSelection());
-		const auto& options = m_ViewportSettings.Get();
-		const std::string operationName = options["operation"].get<std::string>();
-		const int gizmoOperation = operationName == "Translate" ? ImGuizmo::TRANSLATE : operationName == "Rotate" ? ImGuizmo::ROTATE
-																					: operationName == "Scale"    ? ImGuizmo::SCALE
-																												  : 0;
-		const bool vertexSnap = !ImGuizmo::IsUsing() && !m_Session.IsPlaying() && (options["vertexSnap"].get<bool>() || Input::IsKeyDown(KeyCode::V));
+		const auto options = m_ViewportSettings.Options();
+		int gizmoOperation = 0;
+		switch (options.Operation)
+		{
+			case GizmoOperation::Translate:
+				gizmoOperation = ImGuizmo::TRANSLATE;
+				break;
+			case GizmoOperation::Rotate:
+				gizmoOperation = ImGuizmo::ROTATE;
+				break;
+			case GizmoOperation::Scale:
+				gizmoOperation = ImGuizmo::SCALE;
+				break;
+			case GizmoOperation::None:
+				break;
+		}
+		const bool vertexSnap = !ImGuizmo::IsUsing() && !m_Session.IsPlaying() && !io.WantTextInput && !ImGui::IsAnyItemActive() && (options.VertexSnap || Input::IsKeyDown(KeyCode::V));
 		bool gizmoActive = false;
 		if (!vertexSnap && selected && gizmoOperation != 0 && !m_Session.IsPlaying() && !selected.HasComponent<UIRectComponent>())
 		{
@@ -1178,12 +1247,10 @@ namespace Basalt {
 			const glm::mat4 projection = m_Camera.GetProjection();
 			glm::mat4 world = scene.GetWorldTransform(selected);
 
-			const bool snap = options["snap"].get<bool>() || io.KeyCtrl || io.KeySuper;
-			const float snapValue = options[gizmoOperation == ImGuizmo::ROTATE ? "rotationStep" : gizmoOperation == ImGuizmo::SCALE ? "scaleStep"
-																																	: "translationStep"]
-										.get<float>();
+			const bool snap = options.Snap || io.KeyCtrl || io.KeySuper;
+			const float snapValue = options.StepFor(options.Operation);
 			const float snapValues[3] = { snapValue, snapValue, snapValue };
-			if (ImGuizmo::Manipulate(glm::value_ptr(view), glm::value_ptr(projection), static_cast<ImGuizmo::OPERATION>(gizmoOperation), options["space"] == "World" ? ImGuizmo::WORLD : ImGuizmo::LOCAL, glm::value_ptr(world), nullptr, snap ? snapValues : nullptr))
+			if (ImGuizmo::Manipulate(glm::value_ptr(view), glm::value_ptr(projection), static_cast<ImGuizmo::OPERATION>(gizmoOperation), options.Space == GizmoSpace::World ? ImGuizmo::WORLD : ImGuizmo::LOCAL, glm::value_ptr(world), nullptr, snap ? snapValues : nullptr))
 			{
 				Entity parent = selected.GetParent();
 				const glm::mat4 local = parent ? glm::inverse(scene.GetWorldTransform(parent)) * world : world;
@@ -1203,42 +1270,10 @@ namespace Basalt {
 			m_Context.CommitHistory();
 		m_GizmoWasUsing = using_;
 
-		// Vertex snapping commits one command on release, so cancel/focus loss cannot leave half an edit.
-		if (!vertexSnap || !selected || selected.GetUUID() != m_VertexSnapEntity || Input::IsKeyPressed(KeyCode::Escape))
-			m_VertexSnapStart.reset();
-		if (vertexSnap && selected && m_ViewportHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt)
-		{
-			const glm::vec2 local(io.MousePos.x - cursor.x, io.MousePos.y - cursor.y);
-			if (FindViewportVertex(selected, m_Camera.GetProjection() * m_Camera.GetView(), m_ViewportSize, local))
-			{
-				m_VertexSnapStart = local;
-				m_VertexSnapEntity = selected.GetUUID();
-			}
-		}
-		if (vertexSnap && selected && m_ViewportHovered)
-		{
-			const glm::vec2 local(io.MousePos.x - cursor.x, io.MousePos.y - cursor.y);
-			const glm::mat4 viewProjection = m_Camera.GetProjection() * m_Camera.GetView();
-			const auto candidate = m_VertexSnapStart ? FindVertexSnapTarget(scene, selected, viewProjection, m_ViewportSize, local) : FindViewportVertex(selected, viewProjection, m_ViewportSize, local);
-			if (candidate)
-				ImGui::GetWindowDrawList()->AddCircle(ImVec2(cursor.x + candidate->Screen.x, cursor.y + candidate->Screen.y), 5.0f, IM_COL32(255, 192, 26, 255), 12, 2.0f);
-			if (m_VertexSnapStart)
-				ImGui::GetWindowDrawList()->AddLine(ImVec2(cursor.x + m_VertexSnapStart->x, cursor.y + m_VertexSnapStart->y), io.MousePos, IM_COL32(255, 192, 26, 255));
-		}
-		if (m_VertexSnapStart && ImGui::IsMouseReleased(ImGuiMouseButton_Left))
-		{
-			if (m_ViewportHovered)
-			{
-				m_Context.Execute("editor.vertex_snap", { { "source", { m_VertexSnapStart->x, m_VertexSnapStart->y } }, { "target", { io.MousePos.x - cursor.x, io.MousePos.y - cursor.y } } });
-				m_Context.CommitHistory();
-			}
-			m_VertexSnapStart.reset();
-		}
-		if (m_VertexSnapStart && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
-			m_VertexSnapStart.reset();
+		HandleVertexSnapDrag(selected, vertexSnap, { cursor.x, cursor.y });
 
 		// Click to select.
-		if (!vertexSnap && !IsGameRunning() && m_ViewportHovered && !gizmoActive && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().KeyAlt)
+		if (!m_VertexSnapDrag && !IsGameRunning() && m_ViewportHovered && !gizmoActive && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().KeyAlt)
 		{
 			const ImVec2 mouse = ImGui::GetMousePos();
 			const glm::vec2 local(mouse.x - cursor.x, mouse.y - cursor.y);
@@ -1248,6 +1283,43 @@ namespace Basalt {
 
 		ImGui::End();
 		ImGui::PopStyleVar();
+	}
+
+	void EditorLayer::HandleVertexSnapDrag(Entity selected, bool enabled, const glm::vec2& origin)
+	{
+		const auto& io = ImGui::GetIO();
+		const glm::vec2 local(io.MousePos.x - origin.x, io.MousePos.y - origin.y);
+		const glm::mat4 viewProjection = m_Camera.GetProjection() * m_Camera.GetView();
+		Scene& scene = *m_Session.GetScene();
+		// Vertex snapping commits one command on release, so cancel/focus loss cannot leave half an edit.
+		if (!enabled || !selected || (m_VertexSnapDrag && selected.GetUUID() != m_VertexSnapDrag->EntityId) || !m_ViewportHovered || Input::IsKeyPressed(KeyCode::Escape))
+			CancelVertexSnap();
+		if (enabled && selected && m_ViewportHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt)
+		{
+			if (FindViewportVertex(selected, viewProjection, m_ViewportSize, local))
+			{
+				m_VertexSnapDrag = VertexSnapDrag{ selected.GetUUID(), local };
+			}
+		}
+		if (enabled && selected && m_ViewportHovered)
+		{
+			const auto candidate = m_VertexSnapDrag ? FindVertexSnapTarget(scene, selected, viewProjection, m_ViewportSize, local) : FindViewportVertex(selected, viewProjection, m_ViewportSize, local);
+			if (candidate)
+				ImGui::GetWindowDrawList()->AddCircle(ImVec2(origin.x + candidate->Screen.x, origin.y + candidate->Screen.y), 5.0f, IM_COL32(255, 192, 26, 255), 12, 2.0f);
+			if (m_VertexSnapDrag)
+				ImGui::GetWindowDrawList()->AddLine(ImVec2(origin.x + m_VertexSnapDrag->Source.x, origin.y + m_VertexSnapDrag->Source.y), io.MousePos, IM_COL32(255, 192, 26, 255));
+		}
+		if (m_VertexSnapDrag && ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+		{
+			if (m_ViewportHovered)
+			{
+				m_Context.Execute("editor.vertex_snap", { { "source", { m_VertexSnapDrag->Source.x, m_VertexSnapDrag->Source.y } }, { "target", { io.MousePos.x - origin.x, io.MousePos.y - origin.y } } });
+				m_Context.CommitHistory();
+			}
+			CancelVertexSnap();
+		}
+		if (m_VertexSnapDrag && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
+			CancelVertexSnap();
 	}
 
 	void EditorLayer::DrawGameUIOverCapture(Scene& scene, uint32_t width, uint32_t height)

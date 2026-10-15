@@ -1,5 +1,7 @@
 #include <doctest/doctest.h>
 
+#include <Basalt/Animation/AnimationSystem.h>
+#include <Basalt/Asset/AssetManager.h>
 #include <Basalt/Automation/CommandSchema.h>
 #include <Basalt/Automation/EditorCommandSchemas.h>
 #include <Basalt/Automation/ViewportSettings.h>
@@ -19,24 +21,38 @@ TEST_CASE("Viewport preferences validate patches atomically and retain independe
 	std::string error;
 	REQUIRE(CommandSchema::CheckDefinition(ViewportSettings::Schema(), error));
 	const auto defaults = settings.Get();
-	for (const auto& bad : { nlohmann::json{ { "space", "world" } }, nlohmann::json{ { "translationStep", 0 } }, nlohmann::json{ { "rotationStep", 361 } }, nlohmann::json{ { "scaleStep", -1 } }, nlohmann::json{ { "grid", nullptr } }, nlohmann::json{ { "snap", true }, { "typo", true } } })
+	CHECK(CommandSchema::Validate(ViewportSettings::Schema(), defaults, error));
+	CHECK(defaults.size() == ViewportSettings::Schema()["properties"].size());
+	for (const auto& [key, value] : defaults.items())
+		CHECK(ViewportSettings::Schema()["properties"].contains(key));
+	for (const auto& bad : { nlohmann::json::array(), nlohmann::json{ { "grid", 1 } }, nlohmann::json{ { "translationStep", "1" } }, nlohmann::json{ { "space", "world" } }, nlohmann::json{ { "translationStep", 0 } }, nlohmann::json{ { "rotationStep", 361 } }, nlohmann::json{ { "scaleStep", -1 } }, nlohmann::json{ { "grid", nullptr } }, nlohmann::json{ { "snap", true }, { "typo", true } } })
 	{
 		CHECK_FALSE(settings.Apply(bad, error));
 		CHECK(settings.Get() == defaults);
 		CHECK_FALSE(error.empty());
 	}
 	CHECK(settings.Apply({ { "space", "World" }, { "operation", "Scale" }, { "translationStep", 2.5 }, { "rotationStep", 30 }, { "scaleStep", 0.25 }, { "lightGizmos", false }, { "debugLines", false } }, error));
-	CHECK(settings.Get()["space"] == "World");
+	CHECK(settings.Options().Space == GizmoSpace::World);
+	CHECK(settings.Options().Operation == GizmoOperation::Scale);
+	CHECK(settings.Options().StepFor(GizmoOperation::Scale) == doctest::Approx(.25));
 	CHECK(settings.Get()["translationStep"] == 2.5);
 	CHECK(settings.Get()["cameraGizmos"] == true);
 	CHECK(settings.Get()["grid"] == true);
 	CHECK_FALSE(settings.Apply({ { "translationStep", std::numeric_limits<double>::infinity() } }, error));
 	CHECK(settings.Get()["translationStep"] == 2.5);
+	CHECK(settings.Apply({ { "rotationStep", 360 } }, error));
+	CHECK(settings.Options().StepFor(GizmoOperation::Rotate) == 360);
+}
+
+TEST_CASE("Viewport command schemas distinguish integer output pixels from logical vertex coordinates")
+{
+	std::string error;
 	CHECK(CommandSchema::Validate(EditorCommandSchemas::Pick(), { { "x", 0 }, { "y", 100 }, { "select", false } }, error));
 	CHECK_FALSE(CommandSchema::Validate(EditorCommandSchemas::Pick(), { { "x", -1 }, { "y", 0 } }, error));
 	CHECK_FALSE(CommandSchema::Validate(EditorCommandSchemas::Pick(), { { "x", 0.5 }, { "y", 0 } }, error));
 	CHECK(CommandSchema::Validate(EditorCommandSchemas::VertexSnap(), { { "source", { 0, 0 } }, { "target", { 1, 2 } } }, error));
 	CHECK_FALSE(CommandSchema::Validate(EditorCommandSchemas::VertexSnap(), { { "source", { 0, 0 } } }, error));
+	CHECK_FALSE(CommandSchema::Validate(EditorCommandSchemas::VertexSnap(), { { "source", { 0, 0, 0 } }, { "target", { 1, 2 } } }, error));
 }
 
 TEST_CASE("Vertex snapping uses projected geometry and preserves parented rotation and scale")
@@ -53,6 +69,8 @@ TEST_CASE("Vertex snapping uses projected geometry and preserves parented rotati
 	CHECK(vertex->World.y == doctest::Approx(0.5));
 	CHECK(vertex->World.z == doctest::Approx(0.5));
 	CHECK_FALSE(FindViewportVertex(source, projection * view, size, { 100, 100 }));
+	CHECK(FindViewportVertex(source, projection * view, size, { 141, 75 }, 16));
+	CHECK_FALSE(FindViewportVertex(source, projection * view, size, { 141, 75 }, 15.99f));
 	CHECK_FALSE(FindViewportVertex(source, projection * view, { 0, 200 }, { 125, 75 }));
 	auto child = scene.CreateEntity("Child");
 	child.AddComponent<MeshComponent>().Mesh = "builtin://Cube";
@@ -98,4 +116,54 @@ TEST_CASE("Vertex snap targets resolve overlapping screen vertices by depth acro
 	const auto hit = FindVertexSnapTarget(scene, moved, vp, { 200, 200 }, { 125, 75 });
 	REQUIRE(hit);
 	CHECK(hit->EntityId == near.GetUUID());
+}
+
+TEST_CASE("Vertex snapping rejects perspective points behind the camera and uses an inclusive radius")
+{
+	Scene scene;
+	auto entity = scene.CreateEntity("Cube");
+	entity.AddComponent<MeshComponent>().Mesh = "builtin://Cube";
+	entity.GetTransform().Translation.z = -2;
+	const auto vp = glm::perspectiveRH_ZO(glm::radians(90.0f), 1.0f, .1f, 10.0f);
+	const glm::vec2 pixel(100 + 100.0f / 3, 100 - 100.0f / 3);
+	const auto hit = FindViewportVertex(entity, vp, { 200, 200 }, pixel);
+	REQUIRE(hit);
+	CHECK(hit->World.z == doctest::Approx(-1.5));
+	CHECK(FindViewportVertex(entity, vp, { 200, 200 }, pixel + glm::vec2(16, 0), 16.001f));
+	CHECK_FALSE(FindViewportVertex(entity, vp, { 200, 200 }, pixel + glm::vec2(16, 0), 15.99f));
+	entity.GetTransform().Translation.z = 2;
+	CHECK_FALSE(FindViewportVertex(entity, vp, { 200, 200 }, pixel));
+	CHECK_FALSE(FindViewportVertex(entity, vp, { 200, 200 }, { -1, 100 }));
+	CHECK_FALSE(FindViewportVertex(entity, vp, { 200, 200 }, { 200, 100 }));
+}
+
+TEST_CASE("Vertex snapping follows the current skinned pose and skips vertices without valid influences")
+{
+	Scene scene;
+	auto rig = scene.CreateEntity("Rig");
+	const std::string path = std::string(BASALT_TEST_DATA_DIR) + "/Animation/TwoJoint.gltf";
+	rig.AddComponent<AnimatorComponent>().Mesh = path;
+	const auto vp = glm::orthoRH_ZO(-2.0f, 2.0f, -2.0f, 2.0f, .1f, 10.0f) * glm::lookAtRH(glm::vec3(0, 1, 4), glm::vec3(0, 1, 0), glm::vec3(0, 1, 0));
+	const auto rest = FindViewportVertex(rig, vp, { 200, 200 }, { 112.5f, 50 });
+	REQUIRE(rest);
+	CHECK(rest->World.x == doctest::Approx(.25));
+	CHECK(rest->World.y == doctest::Approx(2));
+	scene.OnSimulationStart();
+	REQUIRE(scene.GetAnimationSystem()->Play(rig, "Bend"));
+	REQUIRE(scene.GetAnimationSystem()->Seek(rig, 1));
+	const auto posed = FindViewportVertex(rig, vp, { 200, 200 }, { 50, 87.5f });
+	REQUIRE(posed);
+	CHECK(posed->World.x == doctest::Approx(-1));
+	CHECK(posed->World.y == doctest::Approx(1.25));
+	CHECK_FALSE(FindViewportVertex(rig, vp, { 200, 200 }, rest->Screen));
+	scene.OnSimulationStop();
+	CHECK(FindViewportVertex(rig, vp, { 200, 200 }, rest->Screen));
+	// Import already rejects these influences; defend against malformed in-memory geometry as well.
+	auto mesh = AssetManager::GetMesh(path);
+	REQUIRE(mesh);
+	const auto saved = mesh->Vertices;
+	for (auto& vertex : mesh->Vertices)
+		vertex.Weights = glm::vec4(0);
+	CHECK_FALSE(FindViewportVertex(rig, vp, { 200, 200 }, { 100, 150 }));
+	mesh->Vertices = saved;
 }

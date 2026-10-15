@@ -20,6 +20,14 @@ struct Surface
 	vec3 Emissive;
 };
 
+float MaterialAlpha(MaterialData material, vec2 uv)
+{
+	float alpha = material.AlbedoColor.a;
+	if ((uint(material.Params.w) & MATERIAL_HAS_ALBEDO_MAP) != 0u)
+		alpha *= texture(sampler2D(u_AlbedoMap, u_MaterialSampler), uv).a;
+	return alpha;
+}
+
 Surface EvaluateSurface(MaterialData material, vec3 normal, vec4 tangent, vec2 uv, bool frontFacing)
 {
 	uint flags = uint(material.Params.w);

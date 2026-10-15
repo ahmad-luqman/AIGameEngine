@@ -1,3 +1,4 @@
+// Both prepass variants share skin/material coverage; the editor variant additionally writes IDs.
 #include "Common.glsl"
 #include "Material.glsl"
 

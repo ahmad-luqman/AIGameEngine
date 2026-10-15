@@ -29,9 +29,15 @@ namespace Basalt {
 					if (!palette.empty())
 					{
 						glm::mat4 skin(0);
+						float totalWeight = 0;
 						for (int j = 0; j < 4; j++)
 							if (vertex.Weights[j] > 0 && vertex.Joints[j] < palette.size())
+							{
 								skin += palette[vertex.Joints[j]] * vertex.Weights[j];
+								totalWeight += vertex.Weights[j];
+							}
+						if (!(totalWeight > 0))
+							continue;
 						local = skin * local;
 					}
 					const glm::vec3 world(model * local);
@@ -57,18 +63,14 @@ namespace Basalt {
 		return best;
 	}
 
-	std::optional<ViewportVertex> FindVertexSnapTarget(Scene& scene, Entity moved, const glm::mat4& viewProjection, const glm::vec2& size, const glm::vec2& pixel)
+	std::optional<ViewportVertex> FindVertexSnapTarget(Scene& scene, Entity moved, const glm::mat4& viewProjection, const glm::vec2& size, const glm::vec2& pixel, float radius)
 	{
 		std::optional<ViewportVertex> best;
 		for (Entity entity : scene.GetAllEntitiesOrdered())
 		{
-			bool related = false;
-			for (Entity parent = entity; parent; parent = parent.GetParent())
-				if (parent == moved)
-					related = true;
-			if (related)
+			if (entity == moved || scene.IsDescendantOf(entity, moved))
 				continue;
-			auto candidate = FindViewportVertex(entity, viewProjection, size, pixel);
+			auto candidate = FindViewportVertex(entity, viewProjection, size, pixel, radius);
 			if (candidate && (!best || candidate->Distance < best->Distance || (candidate->Distance == best->Distance && candidate->Depth < best->Depth)))
 				best = candidate;
 		}

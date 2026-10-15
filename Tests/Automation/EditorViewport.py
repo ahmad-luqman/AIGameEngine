@@ -10,6 +10,9 @@ import sys
 import tempfile
 import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Rendering"))
+from LocalShadows import read_png
+
 
 def require(value, message):
     if not value:
@@ -46,12 +49,14 @@ def main():
                     connection.settimeout(30)
                     stream = connection.makefile("rwb")
 
-                    def call(command, params=None, error=False):
+                    def call(command, params=None, error=None):
                         stream.write((json.dumps({"command": command, "params": params or {}}) + "\n").encode())
                         stream.flush()
                         response = json.loads(stream.readline())
-                        require(response.get("ok") != error, f"{command}: {response}")
-                        return response.get("result") if not error else response
+                        require(response.get("ok") == (error is None), f"{command}: {response}")
+                        if error is not None:
+                            require(error in response.get("error", ""), f"{command}: expected {error!r}, got {response}")
+                        return response.get("result") if error is None else response
 
                     call("scene.new", {"empty": True})
                     a = call("entity.create", {"name": "Source"})["id"]
@@ -64,7 +69,7 @@ def main():
                                                         "rotationStep": 30, "scaleStep": 0.2, "grid": False, "colliders": False,
                                                         "lightGizmos": False, "cameraGizmos": False, "uiBounds": False, "debugLines": False})
                     require(settings["space"] == "World" and settings["translationStep"] == 0.25, "Viewport patch failed")
-                    call("editor.viewport", {"grid": True, "scaleStep": 0}, error=True)
+                    call("editor.viewport", {"grid": True, "scaleStep": 0}, error="scaleStep")
                     require(call("editor.viewport")["grid"] is False, "Invalid patch was partially applied")
                     width, height = settings["width"], settings["height"]
                     require(width > 16 and height > 16, "Viewport is not visible")
@@ -74,11 +79,17 @@ def main():
                         return [width / 2 + x * focal / (5 - z), height / 2 - y * focal / (5 - z)]
                     x, y = project(-0.8, 0, .5)
                     require(call("editor.pick", {"x": int(x), "y": int(y)})["entity"] == a, "Mesh pick missed source")
-                    call("editor.pick", {"x": width, "y": 0}, error=True)
+                    call("editor.pick", {"x": width, "y": 0}, error="outside")
                     call("editor.screenshot", {"path": str(Path(output, "outlined.png")), "width": 640, "height": 480})
                     call("editor.viewport", {"selectionOutline": False})
                     call("editor.screenshot", {"path": str(Path(output, "plain.png")), "width": 640, "height": 480})
-                    require(Path(output, "outlined.png").read_bytes() != Path(output, "plain.png").read_bytes(), "Outline did not change capture")
+                    outlined = read_png(Path(output, "outlined.png"))[2]
+                    plain = read_png(Path(output, "plain.png"))[2]
+                    differences = [p for p, q in zip(outlined, plain) if p != q]
+                    require(len(differences) > 100, "Outline is missing")
+                    require(all(p[0] == 255 and 190 <= p[1] <= 192 and p[2] <= 26 for p in differences), "Capture changes are not amber outline pixels")
+                    call("editor.screenshot", {"path": str(Path(output, "plain-repeat.png")), "width": 640, "height": 480})
+                    require(read_png(Path(output, "plain-repeat.png"))[2] == plain, "Disabled outline capture is unstable")
                     call("editor.viewport", {"selectionOutline": True})
                     call("editor.vertex_snap", {"source": project(-.3, .5, .5), "target": project(.3, .5, .5)})
                     def translation():
@@ -89,9 +100,103 @@ def main():
                     require(abs(translation()[0] + .8) < 1e-4, "Snap did not undo as one edit")
                     call("editor.redo")
                     require(abs(translation()[0] + .2) < 1e-4, "Snap did not redo")
+
+                    # A batch runs on the main thread with no viewport frame between mutations and picks.
+                    def batch(requests):
+                        stream.write((json.dumps([{"command": c, "params": p} for c, p in requests]) + "\n").encode())
+                        stream.flush()
+                        responses = json.loads(stream.readline())
+                        require(all(r.get("ok") for r in responses), f"Batch failed: {responses}")
+                        return [r["result"] for r in responses]
+
+                    def pick_at(px, py):
+                        return {"x": int(px), "y": int(py), "select": False}
+
+                    px, py = project(-.2, 0, .5)
+                    query = pick_at(px, py)
+                    for component, toggle in [("PointLight", "lightGizmos"), ("Camera", "cameraGizmos"), ("AudioSource", "audioGizmos")]:
+                        helper = call("entity.create", {"name": component})["id"]
+                        call("component.set", {"entity": helper, "component": component, "data": {}})
+                        call("editor.viewport", {toggle: True})
+                        results = batch([
+                            ("component.set", {"entity": helper, "component": "Transform", "data": {"Translation": [-.2, 0, 2]}}),
+                            ("editor.pick", query),
+                            ("component.set", {"entity": helper, "component": "Transform", "data": {"Translation": [-.2, 0, -2]}}),
+                            ("editor.pick", query),
+                        ])
+                        require(results[1]["entity"] == helper, f"{component} in front of mesh is not selectable")
+                        require(results[3]["entity"] == a, f"Occluded {component} intercepted mesh pick")
+                        call("component.set", {"entity": helper, "component": "Transform", "data": {"Translation": [-.2, 0, 2]}})
+                        call("editor.viewport", {toggle: False})
+                        require(call("editor.pick", query)["entity"] == a, f"Hidden {component} intercepted mesh pick")
+                        call("entity.destroy", {"entity": helper})
+
+                    # Source selection survives select=false and failures; target/background queries do not change it.
+                    call("editor.select", {"entity": a})
+                    qx, qy = project(.8, 0, .5)
+                    require(call("editor.pick", pick_at(qx, qy))["entity"] == b, "Target query failed")
+                    require(call("editor.pick", {"x": 0, "y": 0, "select": False})["entity"] == 0, "Background query failed")
+                    call("editor.vertex_snap", {"source": project(-.7, .5, .5), "target": project(1.3, .5, .5)})
+                    require(abs(translation()[0] - 1.8) < 1e-4, "select=false changed the selected source")
+                    call("editor.undo")
+                    call("component.set", {"entity": a, "component": "Mesh", "data": {"MeshIndex": 999}})
+                    call("editor.vertex_snap", {"source": [0, 0], "target": [0, 0]}, error="mesh index is invalid")
+                    call("component.set", {"entity": a, "component": "Mesh", "data": {"MeshIndex": 0}})
+                    call("editor.vertex_snap", {"source": [0, 0], "target": [0, 0]}, error="no source vertex")
+                    call("editor.vertex_snap", {"source": project(.3, .5, .5), "target": [0, 0]}, error="no target vertex")
+                    call("editor.vertex_snap", {"source": [-1, 0], "target": [0, 0]}, error="inside the logical viewport")
+                    call("editor.select", {"entity": None})
+                    call("editor.vertex_snap", {"source": [0, 0], "target": [0, 0]}, error="select a mesh entity")
+                    call("component.set", {"entity": a, "component": "UIRect", "data": {}})
+                    call("editor.select", {"entity": a})
+                    call("editor.vertex_snap", {"source": [0, 0], "target": [0, 0]}, error="select a mesh entity")
+                    call("component.remove", {"entity": a, "component": "UIRect"})
+                    results = batch([
+                        ("component.set", {"entity": a, "component": "Transform", "data": {"Translation": [20, 0, 0]}}),
+                        ("editor.pick", query),
+                        ("component.set", {"entity": a, "component": "Transform", "data": {"Translation": [-.2, 0, 0]}}),
+                        ("editor.pick", query),
+                        ("editor.camera", {"position": [20, 0, 5], "target": [20, 0, 0]}),
+                        ("editor.pick", query),
+                        ("editor.camera", {"position": [0, 0, 5], "target": [0, 0, 0]}),
+                        ("entity.destroy", {"entity": a}),
+                        ("editor.pick", query),
+                    ])
+                    require([results[i]["entity"] for i in [1, 3, 5, 8]] == [0, a, 0, 0], "Picking reused stale transform/camera/deletion data")
+                    call("editor.pick", {"x": 0, "y": 0})
+                    call("editor.vertex_snap", {"source": [0, 0], "target": [0, 0]}, error="select a mesh entity")
+
+                    call("project.set", {"renderScale": .5})
+                    deadline = time.monotonic() + 20
+                    while True:
+                        view = call("editor.viewport")
+                        if view["renderWidth"] == int(width * .5 + .5) and view["renderHeight"] == int(height * .5 + .5):
+                            break
+                        require(time.monotonic() < deadline, "Editor did not display the reduced render scale")
+                        time.sleep(.05)
+                    thin = call("entity.create", {"name": "Thin"})["id"]
+                    call("component.set", {"entity": thin, "component": "Mesh", "data": {"Mesh": "builtin://Cube"}})
+                    # Choose a silhouette between a native pixel ray and the displayed reduced-resolution texel ray.
+                    # A capture renderer accidentally using the project maximum scale returns the opposite answer.
+                    edge_x = width // 2 + 4
+                    native_uv = (edge_x + .5) / width
+                    render_x = int((edge_x + .5) * view["renderWidth"] / width)
+                    displayed_uv = (render_x + .5) / view["renderWidth"]
+                    require(abs(native_uv - displayed_uv) > 1e-7, "Test needs distinct native and reduced sample rays")
+                    half_uv = (native_uv + displayed_uv) / 2 - .5
+                    scale_x = half_uv * 4 * 4.5 * math.tan(math.radians(25)) * width / height
+                    call("component.set", {"entity": thin, "component": "Transform", "data": {"Scale": [scale_x, 1, 1]}})
+                    expected = thin if displayed_uv - .5 < half_uv else 0
+                    # Change the configured maximum before the next frame. The still-displayed .5 scale
+                    # must govern this pick, just as it does when dynamic resolution lowers the viewport.
+                    picked = batch([("project.set", {"renderScale": 1}),
+                                    ("editor.pick", {"x": edge_x, "y": height // 2, "select": False})])[1]
+                    require(picked["entity"] == expected,
+                            "Editor picking disagrees with reduced-resolution silhouette")
+                    call("entity.destroy", {"entity": thin})
                     call("play.start")
-                    call("editor.vertex_snap", {"source": [0, 0], "target": [0, 0]}, error=True)
-                    call("editor.pick", {"x": 0, "y": 0}, error=True)
+                    call("editor.vertex_snap", {"source": [0, 0], "target": [0, 0]}, error="only available in edit mode")
+                    call("editor.pick", {"x": 0, "y": 0}, error="requires a scene viewport")
                     call("play.stop")
                     call("editor.viewport", {"operation": "Translate"})
                     call("editor.window_screenshot", {"path": str(Path(output, "window.png"))})

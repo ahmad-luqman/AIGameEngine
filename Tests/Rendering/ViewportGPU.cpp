@@ -64,6 +64,11 @@ TEST_CASE("Viewport ID prepass selects visible surfaces across scaling, transpar
 		renderer.SetSelection(0);
 		const auto plain = Capture(renderer, scene, camera);
 		ExpectPick(renderer, 50, 37, front.GetUUID());
+		const auto sample = renderer.PickSurface(50, 37);
+		REQUIRE(sample);
+		CHECK(sample->Depth == doctest::Approx((2.5f - .1f) / (20 - .1f)));
+		CHECK(sample->UV.x >= 0);
+		CHECK(sample->UV.x < 1);
 		ExpectPick(renderer, 50, 65, back.GetUUID());
 		ExpectPick(renderer, 5, 5, UUID(0));
 		CHECK_FALSE(renderer.Pick(101, 0));
@@ -99,6 +104,24 @@ TEST_CASE("Viewport ID prepass selects visible surfaces across scaling, transpar
 		ExpectPick(renderer, 50, 65, back.GetUUID());
 	}
 	CHECK(renderer.GetRenderWidth() < renderer.GetViewportWidth());
+	// A fresh capture at the effective scale must preserve the dynamically reduced picking grid.
+	SceneRenderer capture(graphics->GetDevice(), { .Picking = true });
+	REQUIRE(capture.Initialize());
+	capture.SetRenderScale(renderer.GetCurrentRenderScale());
+	capture.SetViewportSize(101, 99);
+	capture.Render(scene, camera);
+	CHECK(capture.GetRenderWidth() == renderer.GetRenderWidth());
+	CHECK(capture.GetRenderHeight() == renderer.GetRenderHeight());
+	for (uint32_t x = 30; x < 70; x++)
+	{
+		const auto shown = renderer.PickSurface(x, 37);
+		const auto refreshed = capture.PickSurface(x, 37);
+		REQUIRE(shown);
+		REQUIRE(refreshed);
+		CHECK(shown->EntityId == refreshed->EntityId);
+		CHECK(shown->UV == refreshed->UV);
+		CHECK(shown->Depth == doctest::Approx(refreshed->Depth));
+	}
 	renderer.SetDynamicResolution({});
 	// Transparent nearest-surface picking must not replace the scene depth used by lighting.
 	front.AddComponent<MaterialComponent>().AlbedoColor.a = 0.5f;
@@ -115,11 +138,18 @@ TEST_CASE("Viewport ID prepass selects visible surfaces across scaling, transpar
 	// Masked foreground fragments expose a different opaque background ID.
 	back.AddComponent<MaterialComponent>();
 	auto mesh = AssetManager::GetMesh("builtin://Cube");
+	const auto savedMaterial = mesh->Materials[0];
 	mesh->Materials[0].Alpha = AlphaMode::Mask;
 	mesh->Materials[0].AlbedoColor.a = 0.0f;
 	renderer.Render(scene, camera);
 	ExpectPick(renderer, 50, 37, back.GetUUID());
-	mesh->Materials[0] = MaterialData{};
+	mesh->Materials[0] = savedMaterial;
+	// A selected surface covering the viewport must not outline the image boundary.
+	front.GetTransform().Scale = { 10, 10, 1 };
+	renderer.SetSelection(0);
+	const auto clipped = Capture(renderer, scene, camera);
+	renderer.SetSelection(front.GetUUID());
+	CHECK(Capture(renderer, scene, camera) == clipped);
 	// A fully occluded selection has no silhouette in the visible-surface ID target.
 	front.GetTransform().Scale = glm::vec3(4);
 	renderer.SetSelection(0);
