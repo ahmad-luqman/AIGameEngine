@@ -188,6 +188,30 @@ TEST_SUITE("Physics")
 		CHECK(BasaltTest::CountLogMessages(since, "Physics: joint on 'Warned': first") == 2);
 	}
 
+	TEST_CASE("RecreateBody rejects foreign entities with matching UUIDs and different registry handles")
+	{
+		Scene scene;
+		Entity local = CreateWeightlessBox(scene, { 0.0f, 0.0f, 0.0f });
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		physics.SetLinearVelocity(local, { 1.0f, 0.0f, 0.0f });
+		Scene foreign;
+		foreign.CreateEntity("Padding");
+		Entity other = foreign.CreateEntityWithUUID(local.GetUUID(), "Foreign");
+		other.GetTransform().Translation = { 10.0f, 0.0f, 0.0f };
+		other.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+		other.AddComponent<BoxColliderComponent>();
+		REQUIRE(static_cast<entt::entity>(other) != static_cast<entt::entity>(local));
+		physics.RecreateBody(other);
+		CHECK(physics.GetBodyCount() == 1);
+		CHECK(physics.HasBody(local));
+		CHECK_FALSE(physics.HasBody(other));
+		CHECK(physics.GetLinearVelocity(local) == glm::vec3(1.0f, 0.0f, 0.0f));
+		CHECK(physics.OverlapSphere({ 0.0f, 0.0f, 0.0f }, 0.1f) == std::vector<UUID>{ local.GetUUID() });
+		CHECK(physics.OverlapSphere({ 10.0f, 0.0f, 0.0f }, 0.1f).empty());
+		scene.OnSimulationStop();
+	}
+
 	TEST_CASE("Runtime body records survive rebuilds but never cross scene copies or sessions")
 	{
 		Ref<Scene> scene = CreateRef<Scene>();
