@@ -55,10 +55,6 @@ The features most games need, roughly in order of impact.
 
 ### Rendering
 
-- **Animation follow-ups — L.** Skeletal playback, local blends and crossfades are implemented. Add
-  morph targets, bone attachments, root-motion extraction, retargeting and an animation state machine.
-  For large crowds, replace per-vertex CPU bounds with cached joint influence bounds or GPU culling.
-
 - **Particle follow-ups — M.** `ParticleEmitterComponent` (Particles/ParticleSystem) covers CPU simulation,
   bursts, shapes, start-to-end color and size, alpha/additive billboards and Lua control. Missing: soft
   particles (fade against scene depth; needs a depth copy, since the transparent pass has depth attached),
@@ -79,6 +75,63 @@ The features most games need, roughly in order of impact.
 - **Reflection probes and SSR — L.** Local box-projected cubemap probes captured in the editor, then
   screen-space reflections for contact detail.
 - **Decals and text in 3D — L each.**
+
+### Animation
+
+Skeletal playback, crossfades and a two-clip weighted blend (`AnimationSystem`) are implemented; physics
+already provides character controllers (`MoveCharacter`, `IsCharacterGrounded`, ground normal) and
+raycasts. The items below turn that into natural character movement (walk, run, jump, uneven ground), in
+order of impact.
+
+- **Animation events — S.** Named markers on a clip's timeline (footsteps, attack hit frames, VFX cues),
+  declared per clip on the `Animator` (needs the array-of-objects inspector widget, see Particles) and
+  delivered to scripts as `OnAnimationEvent(name, clip)`. Fire every marker crossed in a frame, including
+  across a loop wrap, a seek and during crossfades (outgoing clip events optional).
+- **Bone attachments — S.** `e:GetBoneTransform(joint)` (world space) and a component that keeps an
+  entity attached to a joint of another entity's `Animator` (weapon in hand, hat on head), updated after
+  the pose is sampled and before transforms are consumed by physics and rendering.
+- **Blend spaces and speed sync — M.** Generalize `Blend` to 1D and 2D blend spaces: N clips placed on
+  parameter axes (speed for idle/walk/jog/run, speed × direction for strafing), weighted by the parameter
+  value. Synchronize the clips by normalized time (phase) so feet stay in step, and add an Animator
+  playback-speed mode that matches the clip to the character's actual velocity to prevent foot sliding.
+- **Animation state machine — L.** A data-driven graph (project asset, edited through automation commands
+  so agents can author it) of states (a clip or blend space) and transitions with conditions on named
+  parameters (`Speed`, `Grounded`) and triggers (`Jump`), crossfade durations and exit times. Lua:
+  `e:SetAnimationParameter(name, value)`, `e:SetAnimationTrigger(name)`, `e:GetAnimationState()`. Jumps
+  split into takeoff, an in-air loop and landing because airtime comes from physics. A visual graph editor
+  is a P2 follow-up.
+- **Root motion — M.** Extract the root joint's horizontal translation and yaw delta per frame, remove
+  them from the displayed pose, and apply them through `MoveCharacter` (or the transform when the entity
+  has no character) when the Animator enables `RootMotion`. Per-state opt-in once the state machine exists
+  (attacks, vaults, climbing), so locomotion can stay physics-driven.
+- **Inverse kinematics — M.** Analytic two-bone IK (legs, arms), look-at/aim chains (head and spine) and
+  foot placement: raycast under each foot, solve leg IK so the foot lands on the surface, lower the
+  pelvis by the largest offset and align feet to the ground normal, with smoothed weights so feet don't
+  pop. Runs after sampling and before skinning; targets and weights settable from Lua.
+- **Layers, masks and additive clips — M.** Ordered animation layers with per-joint masks (upper body
+  aims or waves while the legs run) and additive layers (breathing, recoil, lean) applied as deltas from a
+  reference pose on top of the base pose.
+- **Ragdolls — M.** Build a Jolt `Ragdoll` from the skeleton (a capsule per bone with swing-twist limits,
+  generated from the joint hierarchy with editable sizes and limits), switch an Animator to it on death or
+  a big hit, and blend back to animation with a get-up clip. Follow-up: powered (active) ragdolls that
+  track the animated pose with motors (`Ragdoll::DriveToPoseUsingMotors`) for stumbles and hit reactions.
+  Add a ragdoll to the determinism batch.
+- **Morph targets — M.** glTF morph targets (facial expressions, corrective shapes): blend position and
+  normal deltas in the skinning shader, animate weights from glTF `weights` channels and from Lua.
+- **Retargeting — M.** Play clips authored for one skeleton on another with different proportions: a
+  humanoid joint map (name mapping plus rest-pose rotation correction) and translation scaled by limb
+  length, so a shared clip library (e.g. Mixamo) can drive any character.
+- **Spring bones — S.** Procedural secondary motion for hair, tails, ears and capes: damped springs on
+  selected joint chains, applied after the animated pose, with optional sphere/capsule colliders.
+- **Property animation — M.** Keyframe tracks for any component field through the `ComponentRegistry`
+  JSON path (doors, platforms, light flicker, UI transitions, cutscene cameras) with the same playback
+  controls as skeletal clips, so non-character motion does not need per-frame Lua.
+- **Crowd performance — M.** Replace per-vertex CPU bounds with cached joint influence bounds or GPU
+  culling, update distant animators at a reduced rate (animation LOD), and evaluate poses on the job
+  system (see Engine internals).
+- **Later: motion matching and procedural creatures — L each.** Motion matching (search a mocap database
+  every few frames for the pose and future trajectory that best match the desired movement) once the state
+  machine and root motion exist; procedural leg stepping for multi-legged creatures built on IK.
 
 ### Scripting
 
@@ -209,7 +262,8 @@ more reliable.
 - **Marble Run sample — M.** A physics showcase (joints, trigger zones, particles, spatial audio,
   UI components) built through the automation API, with a ctest gameplay test. Exercises most of P1.
 - **Tetris polish — S.** Line-clear particles and screen shake once particles exist.
-- **More samples — M each.** Breakout (physics + UI), a 3D platformer (character controller + camera),
+- **More samples — M each.** Breakout (physics + UI), a 3D platformer (character controller + camera +
+  an animated character whose walk/run/jump go through the animation state machine, foot IK and root motion),
   and a small first-person scene (mouse look + raycasts + audio). Each one is built through the
   automation API and adds a ctest gameplay test, which also checks the API is sufficient.
 
