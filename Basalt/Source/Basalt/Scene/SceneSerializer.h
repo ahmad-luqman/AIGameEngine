@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace Basalt {
 
@@ -59,6 +60,9 @@ namespace Basalt {
 		static std::string ComputeStateHash(Scene& scene);
 		// Applies an entity object's "Name" and "Components" to an existing entity.
 		static bool DeserializeEntityComponents(Entity entity, const nlohmann::json& data, std::string& outError);
+
+	private:
+		static bool CreateEntities(Scene& scene, const nlohmann::json& entities, bool remapIDs, Entity rootParent, std::vector<Entity>& outCreated, std::string& outError);
 	};
 
 }

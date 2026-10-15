@@ -177,6 +177,50 @@ TEST_SUITE("Scene")
 		CHECK(editA.CreateEntity().GetUUID() != editB.CreateEntity().GetUUID());
 	}
 
+	TEST_CASE("Scene loads reserve every saved ID before generating omitted or zero IDs")
+	{
+		BasaltTest::TempProject project("LoadedIDReservation");
+		Project::GetActive()->GetConfig().RandomSeed = 1234;
+		constexpr uint64_t FirstDraw = 3532910284440527571ULL;
+		for (bool omitted : { false, true })
+		{
+			auto data = nlohmann::json::parse(R"({"Entities":[
+				{"ID":0,"Name":"Generated","Components":{"Joint":{"ConnectedEntity":3532910284440527571}}},
+				{"ID":3532910284440527571,"Name":"Saved"},
+				{"ID":42,"Name":"Child","Parent":3532910284440527571}]})");
+			if (omitted)
+				data["Entities"][0].erase("ID");
+			project.WriteFile("Assets/Scenes/Reservation.bscene", data.dump());
+			Scene scene;
+			scene.OnRuntimeStart();
+			CHECK(BasaltTest::Eval(scene, "Scene.Load('Assets/Scenes/Reservation.bscene')") == "");
+			scene.OnUpdate(BasaltTest::Step);
+			Entity saved = scene.FindEntityByName("Saved");
+			Entity generated = scene.FindEntityByName("Generated");
+			REQUIRE(saved);
+			REQUIRE(generated);
+			CHECK(static_cast<uint64_t>(saved.GetUUID()) == FirstDraw);
+			CHECK(generated.GetUUID() != saved.GetUUID());
+			CHECK(scene.GetEntityByUUID(generated.GetComponent<JointComponent>().ConnectedEntity) == saved);
+			CHECK(scene.FindEntityByName("Child").GetParent() == saved);
+			scene.OnRuntimeStop();
+		}
+
+		// Prefab source IDs must not reserve draws: they are remapped together with their references.
+		Scene prefabScene;
+		prefabScene.OnRuntimeStart();
+		const auto entities = nlohmann::json::parse(R"([
+			{"ID":3532910284440527571,"Name":"Root"},
+			{"ID":42,"Name":"Child","Parent":3532910284440527571,"Components":{"Joint":{"ConnectedEntity":3532910284440527571}}}])");
+		std::string error;
+		Entity root = SceneSerializer::DeserializeEntityTree(prefabScene, entities, {}, error);
+		REQUIRE_MESSAGE(root, error);
+		CHECK(static_cast<uint64_t>(root.GetUUID()) == FirstDraw);
+		REQUIRE(root.GetChildren().size() == 1);
+		CHECK(root.GetChildren()[0].GetComponent<JointComponent>().ConnectedEntity == root.GetUUID());
+		prefabScene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Duplicate source IDs are rejected before creating scene or prefab entities")
 	{
 		BasaltTest::TempProject project("DuplicateSourceIDs");
