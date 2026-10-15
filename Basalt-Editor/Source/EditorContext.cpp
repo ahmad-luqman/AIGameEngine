@@ -26,6 +26,11 @@ namespace Basalt {
 
 	void EditorContext::BeforeCommand(const CommandInfo& command, const nlohmann::json& params)
 	{
+		// Duplication replaces the selection. Finish its drag first so viewport cancellation cannot
+		// roll back both the movement and the newly created copies.
+		if (m_Transaction && m_Transaction->Kind == TransactionKind::Gizmo && command.Name == "editor.duplicate")
+			if (!EndTransaction())
+				throw CommandError(StatusMessage);
 		const std::string name = EditorHistory::CommandName(command.Name, params);
 		const bool finishTransaction = command.Name == "editor.transaction" && params.value("action", std::string()) != "begin";
 		if (!finishTransaction && m_Transaction && m_Transaction->Kind == TransactionKind::Field && (!m_UICommand || History.TransactionName() != name))
