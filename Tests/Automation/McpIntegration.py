@@ -53,6 +53,26 @@ def main():
             require(result["isError"] == (identifier == 11), f"Unexpected tool result {identifier}: {result}")
         require(by_id[5]["result"]["structuredContent"]["name"] == "MCP-created", "Missing structured result")
         require(pathlib.Path(temp, "Assets/Scenes/MCP.bscene").is_file(), "Scene was not persisted")
+        # Clean EOF during Play must save earlier edit-mode work, and discard the play copy.
+        edits = messages[:2] + [
+            request(20, "tools/call", {"name": "entity.create", "arguments": {"name": "Saved-on-EOF"}}),
+            request(21, "tools/call", {"name": "play.start"}),
+            request(22, "tools/call", {"name": "entity.create", "arguments": {"name": "Play-only"}}),
+        ]
+        edit_payload = "\n".join(json.dumps(message) for message in edits) + "\n"
+        command = [basalt, "--project", temp, "--scene", "Assets/Scenes/MCP.bscene", "mcp"]
+        saved = subprocess.run(command, input=edit_payload, text=True, capture_output=True, timeout=60)
+        require(saved.returncode == 0, saved.stderr)
+        require(all(not reply.get("result", {}).get("isError", False)
+                    for reply in map(json.loads, saved.stdout.splitlines())), saved.stdout)
+        persisted = pathlib.Path(temp, "Assets/Scenes/MCP.bscene").read_text()
+        require("Saved-on-EOF" in persisted and "Play-only" not in persisted, "EOF saved the wrong scene")
+        partial = subprocess.run(command, input=edit_payload.replace("Saved-on-EOF", "Must-not-save") + "{",
+                                 text=True, capture_output=True, timeout=60)
+        require(partial.returncode != 0 and "incomplete final frame" in partial.stderr
+                and "not auto-saved" in partial.stderr, "Missing transport/save diagnostics")
+        require("Must-not-save" not in pathlib.Path(temp, "Assets/Scenes/MCP.bscene").read_text(),
+                "Failed session unexpectedly auto-saved")
         help_result = subprocess.run([basalt, "help", "entity.create"], capture_output=True, text=True, check=True, timeout=30)
         schema = json.loads(help_result.stdout)["result"]["inputSchema"]
         tool = next(tool for tool in by_id[2]["result"]["tools"] if tool["name"] == "entity.create")

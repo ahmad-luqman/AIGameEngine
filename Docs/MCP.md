@@ -26,10 +26,13 @@ stay in memory until `scene.save`; with `--scene`, the CLI also saves dirty edit
 shuts down the process. A failed tool call does not end the session or prevent later calls.
 
 The stdio transport accepts newline-delimited UTF-8 JSON-RPC messages, with a 64 MiB per-line limit
-and the engine's 128-level JSON nesting limit. Logs, including Lua `print`, go to stderr. Stdout contains
-only MCP replies; notifications receive no reply. An oversized line or incomplete final frame exits
-with failure; syntax errors (including empty LF/CRLF frames) receive `-32700` and the connection stays usable. Project/scene startup
-failures exit nonzero and report to stderr without writing a non-MCP response to stdout.
+and the engine's 128-level JSON nesting limit. Logs go to stderr; add `--verbose` to include Info
+messages such as Lua `print`. Stdout contains only MCP replies; notifications receive no reply. An
+oversized line closes the transport without a reply. Oversized or incomplete final frames and I/O
+failures log a reason to stderr and exit nonzero; requested auto-save is skipped with a diagnostic
+when edits remain. Syntax errors (including empty LF/CRLF frames) receive `-32700` and the connection
+stays usable. Project/scene startup failures exit nonzero and report to stderr without writing a
+non-MCP response to stdout.
 
 ## Running editor
 
@@ -48,10 +51,13 @@ a **custom TCP transport**, not an HTTP endpoint. Standard stdio clients can use
 ```
 
 Start the editor first. The bridge only forwards bytes between stdio and loopback TCP. The editor
-serves one connection at a time and closes oversized requests without a reply; close the client/bridge to release it. A new TCP connection must
-initialize again. MCP messages select MCP mode for that connection; legacy automation clients keep
-the original `{command, params}` protocol. Command execution and undo-history commits stay on the
-editor's main thread. The loopback server gives clients the same editing, file-writing and Lua
+serves one connection at a time; a second client waits until the first disconnects. Close other clients
+or bridges if initialization is waiting. Oversized requests close without a reply and log the size
+and limit in the editor. A new TCP connection must initialize again. The first parsed object containing
+`jsonrpc` or `method` selects MCP; a malformed first frame containing either quoted key also selects
+MCP and receives a parse error. Other parsed values select the original `{command, params}` protocol.
+Blank or unidentifiable malformed frames leave detection open. The selected protocol lasts until
+disconnect. Command execution and undo-history commits stay on the editor's main thread. The loopback server gives clients the same editing, file-writing and Lua
 execution authority as the existing automation API; use it for trusted local clients.
 
 ## Protocol
@@ -93,13 +99,17 @@ The legacy JSON request for one command's help is
 Schema builders and validation live in `Automation/CommandSchema.*`. The supported vocabulary is
 `type`, `description`, `properties`, `required`, boolean `additionalProperties`, `items`, `minItems`,
 `maxItems`, `minLength`, `minimum`, `maximum`, `exclusiveMinimum`, `enum` and `anyOf`. Unsupported
-keywords fail at registration. This is a deliberately bounded validator for engine-owned schemas,
+keywords fail at registration. Invalid and duplicate registrations log an error and return false.
+This is a deliberately bounded validator for engine-owned schemas,
 not a general-purpose loader for arbitrary user schemas. Integer command parameters require integer
 JSON tokens; values such as `1.0` are not coerced. Numeric validation rejects non-finite values and
 checks signed/unsigned integer bounds without wrapping. Vector elements must fit in a float.
 
 Top-level properties are closed: misspelled parameters fail. Optional parameters preserve their
-existing null fallback where supported; required strings are non-empty (except text asset content).
+existing null fallback where supported; `anyOf` with `type: null` explicitly marks those properties.
+For example, `entity.create.name` accepts null; `entity.duplicate.name`, `play.step.dt`,
+`input.mouse.position` and `input.gamepad.connected` do not. Omit an optional property to use its default.
+Required strings are non-empty (except text asset content).
 Schemas do not inject defaults. Scene settings, physics layers and component payloads remain objects
 whose detailed fields are validated by their existing shared readers, avoiding a second component
 data contract. Case-insensitive key/button/axis names, relationships between parameters (such as a

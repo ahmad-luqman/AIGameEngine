@@ -2,6 +2,8 @@
 
 #include "Basalt/Automation/CommandRegistry.h"
 #include "Basalt/Core/JsonUtils.h"
+#include "Basalt/Core/Log.h"
+#include "Basalt/Automation/AutomationLimits.h"
 
 #include <istream>
 #include <ostream>
@@ -12,16 +14,15 @@ namespace Basalt {
 
 	bool McpServer::Serve(std::istream& input, std::ostream& output, const CommandRegistry& registry, AutomationSession& session)
 	{
-		constexpr size_t MaxLineBytes = size_t{ 64 } * 1024 * 1024;
 		std::string line;
 		char byte;
 		while (input.get(byte))
 		{
 			if (byte != '\n')
 			{
-				if (line.size() == MaxLineBytes)
+				if (line.size() == MaxAutomationLineBytes)
 				{
-					output << Error(nullptr, -32600, "Request too large").dump() << std::endl;
+					BS_CORE_ERROR("MCP: request exceeds {} byte frame limit", MaxAutomationLineBytes);
 					return false;
 				}
 				line.push_back(byte);
@@ -33,10 +34,28 @@ namespace Basalt {
 				output << response->dump(-1, ' ', false, json::error_handler_t::replace) << std::endl;
 			line.clear();
 			if (!output)
+			{
+				BS_CORE_ERROR("MCP: failed to write response to stdout");
 				return false;
+			}
 		}
 		// A trailing partial frame is never executed: stdio messages must end in a newline.
-		return input.eof() && line.empty() && static_cast<bool>(output);
+		if (!input.eof() || input.bad())
+		{
+			BS_CORE_ERROR("MCP: failed to read stdin");
+			return false;
+		}
+		if (!line.empty())
+		{
+			BS_CORE_ERROR("MCP: incomplete final frame (missing newline)");
+			return false;
+		}
+		if (!output)
+		{
+			BS_CORE_ERROR("MCP: stdout is unavailable");
+			return false;
+		}
+		return true;
 	}
 
 	json McpServer::Error(const json& id, int code, const std::string& message)
@@ -52,12 +71,12 @@ namespace Basalt {
 			return Error(nullptr, -32600, "Expected a JSON-RPC request object (batches are not supported)");
 		const bool hasID = request.contains("id");
 		const json id = request.value("id", json());
-		if (hasID && !id.is_string() && !id.is_number_integer())
-			return Error(nullptr, -32600, "Request id must be a string or integer");
 		// The server issues no requests, so unsolicited client responses have nothing to complete.
 		// Never answer a response with another response (which could create an error loop).
 		if (hasID && request.value("jsonrpc", json()) == "2.0" && !request.contains("method") && (request.contains("result") != request.contains("error")))
 			return std::nullopt;
+		if (hasID && !id.is_string() && !id.is_number_integer())
+			return Error(nullptr, -32600, "Request id must be a string or integer");
 		if (!request.contains("jsonrpc") || request["jsonrpc"] != "2.0" || !request.contains("method") || !request["method"].is_string())
 			return Error(id, -32600, "Expected jsonrpc 2.0 and a string method");
 		const std::string method = request["method"].get<std::string>();
@@ -84,7 +103,7 @@ namespace Basalt {
 			if (!client.contains("name") || !client["name"].is_string() || !client.contains("version") || !client["version"].is_string())
 				return Error(id, -32602, "clientInfo requires string name and version");
 			m_State = State::Initializing;
-			return result({ { "protocolVersion", ProtocolVersion }, { "capabilities", { { "tools", json::object() } } }, { "serverInfo", { { "name", "basalt" }, { "version", "1.0.0" } } } });
+			return result({ { "protocolVersion", ProtocolVersion }, { "capabilities", { { "tools", json::object() } } }, { "serverInfo", { { "name", "basalt" }, { "version", BS_VERSION } } } });
 		}
 		if (m_State != State::Ready)
 			return Error(id, -32600, "Initialize the connection and send notifications/initialized first");

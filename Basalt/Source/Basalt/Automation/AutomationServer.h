@@ -8,7 +8,7 @@
 
 namespace Basalt {
 
-	// Line-based TCP server for the automation protocol, bound to 127.0.0.1 only. Each line received is a
+	// Line-based TCP server for legacy automation and MCP, bound to 127.0.0.1 only. Each line received is a
 	// JSON request; a non-empty handler result is sent back followed by a newline. Clients are served one
 	// at a time on a background thread; the handler decides how to reach the main thread.
 	//
@@ -17,6 +17,8 @@ namespace Basalt {
 	{
 	public:
 		using RequestHandler = std::function<std::string(const std::string& request)>;
+
+		using HandlerFactory = std::function<RequestHandler()>;
 
 		static constexpr uint16_t DefaultPort = 7420;
 
@@ -27,7 +29,9 @@ namespace Basalt {
 		AutomationServer& operator=(const AutomationServer&) = delete;
 
 		// Port 0 picks a free port (see GetPort).
-		bool Start(uint16_t port, RequestHandler handler, std::string& outError, std::function<void()> onConnect = {});
+		bool Start(uint16_t port, RequestHandler handler, std::string& outError);
+		// Called on the server thread once per accepted client; the returned handler owns connection state.
+		bool StartWithFactory(uint16_t port, HandlerFactory factory, std::string& outError);
 		void Stop();
 
 		bool IsRunning() const { return m_Running; }
@@ -37,11 +41,10 @@ namespace Basalt {
 
 	private:
 		void Run();
-		void ServeClient(intptr_t client);
+		void ServeClient(intptr_t client, const RequestHandler& handler);
 
 	private:
-		RequestHandler m_Handler;
-		std::function<void()> m_OnConnect;
+		HandlerFactory m_Factory;
 		std::thread m_Thread;
 		std::atomic<bool> m_Running = false;
 		std::atomic<bool> m_Stopping = false;

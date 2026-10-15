@@ -309,7 +309,7 @@ Adds the component if missing and sets the given fields (others keep their value
 
 ### `component.types`
 
-Lists every component type with its fields (for component.add/set).
+Lists every component type with its fields (for component.set).
 
 <details><summary>Parameter JSON Schema</summary>
 
@@ -892,16 +892,8 @@ Connects, disconnects or drives an injected gamepad for play mode (e.g. {index: 
       "type": "string"
     },
     "connected": {
-      "anyOf": [
-        {
-          "description": "bool",
-          "type": "boolean"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "bool"
+      "description": "bool",
+      "type": "boolean"
     },
     "down": {
       "anyOf": [
@@ -1900,7 +1892,7 @@ Summary of the open scene: name, path, entity count, state, unsaved changes, und
 
 ### `scene.new`
 
-Replaces the open scene with an empty one (with a camera and sun unless empty=true).
+Replaces the open scene with an empty one (with a camera, sun and sky unless empty=true).
 
 | Parameter | Type / description |
 |-----------|--------------------|
