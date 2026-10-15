@@ -23,8 +23,8 @@ namespace Basalt {
 	{
 		std::string Name;
 		std::string Description;
-		// Human-readable parameter documentation: name -> "type, description".
-		std::map<std::string, std::string> Parameters;
+		// The same schema validates requests and is published by help and MCP tools/list.
+		nlohmann::json InputSchema;
 		std::function<nlohmann::json(AutomationSession&, const nlohmann::json&)> Handler;
 	};
 

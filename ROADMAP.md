@@ -241,11 +241,6 @@ What makes the editor feel finished. Most items are small; do them as one milest
 The specification asks for an editor that an AI agent can fully control. These items make that faster and
 more reliable.
 
-- **MCP server — M.** Expose the `CommandRegistry` as a Model Context Protocol server (stdio transport in
-  `basalt mcp`, plus the editor's TCP server), generating tool schemas from the command definitions.
-  Agents then get typed commands without reading the docs first.
-- **Command parameter schemas — S.** Give every command a JSON Schema for its parameters; validate
-  requests against it and include it in `Docs/AutomationCommands.md` and `basalt help <command>`.
 - **Event subscriptions — S.** `events.subscribe` on the TCP server to stream log lines, script errors,
   play-state changes and collision events, instead of polling `log.get`.
 - **Scene diff and assertions — S.** `scene.diff` (between two saved scenes or snapshots) and

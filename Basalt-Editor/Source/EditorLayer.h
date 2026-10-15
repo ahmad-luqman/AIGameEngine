@@ -11,6 +11,7 @@
 #include "Basalt/Automation/AutomationServer.h"
 #include "Basalt/Automation/AutomationSession.h"
 #include "Basalt/Automation/CommandRegistry.h"
+#include "Basalt/Automation/McpServer.h"
 #include "Basalt/Core/Layer.h"
 #include "Basalt/Renderer/SceneRenderer.h"
 #include "Basalt/UI/UIRenderer.h"
@@ -84,6 +85,8 @@ namespace Basalt {
 	private:
 		EditorOptions m_Options;
 		CommandRegistry m_Commands;
+		McpServer m_McpServer;
+		bool m_McpConnection = false;
 		AutomationSession m_Session;
 		EditorHistory m_History;
 		EditorContext m_Context;

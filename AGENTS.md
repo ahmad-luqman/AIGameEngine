@@ -51,7 +51,8 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
 - **Automation first.** `CommandRegistry` (Automation/BuiltinCommands.cpp) is the API for tools and AI
   agents. The editor performs its edits through the same commands, so the GUI cannot do anything the
   API cannot. Hosts: `basalt` CLI (headless) and the editor's TCP server (127.0.0.1:7420, adds
-  `editor.*` commands and screenshots). Docs: Docs/AutomationCommands.md (generated).
+  `editor.*` commands and screenshots). Docs: Docs/AutomationCommands.md (generated), Docs/MCP.md (agent setup/protocol). CommandInfo declares
+  InputSchema: validation, help and MCP tool definitions share it; editor TCP clients can use MCP too.
 - **Headless core.** Everything except Renderer/ImGui/Window runs without a GPU; unit tests, the CLI and
   the feature test rely on that.
 
@@ -61,7 +62,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
 |--------|---------|
 | `BasaltEditor [--project P] [--port N\|--no-server] [--gpu G]` | Editor GUI + automation server |
 | `BasaltRuntime [--project P] [--scene S] [--width W --height H] [--frames N [--screenshot out.png] [--require-validation]] [--offscreen] [--debug-view V] [--render-scale S] [--dynamic-resolution FPS] [--min-render-scale S] [--gpu G] [--no-vsync]` | Plays the project's start scene; exported games are this binary renamed |
-| `basalt [--project P] [--scene S] [--no-save] [--verbose] <command> [json] \| batch <file> \| serve` | Headless automation CLI |
+| `basalt [--project P] [--scene S] [--no-save] [--verbose] <command> [json] \| batch <file> \| serve \| mcp` | Headless automation CLI |
 | `BasaltTests` | Unit tests |
 
 ## Building and testing

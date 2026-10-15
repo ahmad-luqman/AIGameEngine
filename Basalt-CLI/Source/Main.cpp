@@ -2,6 +2,7 @@
 //
 //   basalt [options] <command> [params-json]   run one command, print the response
 //   basalt [options] batch <file.json | ->     run an array of requests, print an array of responses
+//   basalt [options] mcp                       MCP JSON-RPC on stdin/stdout
 //   basalt [options] serve                     JSON requests on stdin (one per line), responses on stdout
 //
 // Options:
@@ -16,6 +17,7 @@
 #include "Basalt/Audio/AudioEngine.h"
 #include "Basalt/Automation/AutomationSession.h"
 #include "Basalt/Automation/CommandRegistry.h"
+#include "Basalt/Automation/McpServer.h"
 #include "Basalt/Core/CommandLine.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/JsonUtils.h"
@@ -32,7 +34,7 @@ namespace {
 	{
 		std::cerr << "usage: basalt [--project <dir>] [--scene <path>] [--no-save] [--verbose] <command> [params-json]\n"
 				  << "       basalt [...] batch <requests.json | ->\n"
-				  << "       basalt [...] serve\n"
+				  << "       basalt [...] serve | mcp\n"
 				  << "Run 'basalt help' to list commands.\n";
 	}
 
@@ -77,6 +79,7 @@ int main(int argc, char** argv)
 		return 2;
 	}
 
+	const std::string& mode = positional[0];
 	AudioEngine::Init(true);
 	CommandRegistry registry;
 	AutomationSession session;
@@ -96,7 +99,7 @@ int main(int argc, char** argv)
 		const nlohmann::json response = run({ { "command", "project.open" }, { "params", { { "path", *project } } } });
 		if (!response.value("ok", false))
 		{
-			std::cout << response.dump(2) << std::endl;
+			(mode == "mcp" ? std::cerr : std::cout) << response.dump(2) << std::endl;
 			return 1;
 		}
 	}
@@ -105,14 +108,19 @@ int main(int argc, char** argv)
 		const nlohmann::json response = run({ { "command", "scene.open" }, { "params", { { "path", *scene } } } });
 		if (!response.value("ok", false))
 		{
-			std::cout << response.dump(2) << std::endl;
+			(mode == "mcp" ? std::cerr : std::cout) << response.dump(2) << std::endl;
 			return 1;
 		}
 	}
 	const bool autoSave = commandLine.GetValue("scene").has_value() && !commandLine.HasFlag("no-save");
 
-	const std::string& mode = positional[0];
-	if (mode == "serve")
+	if (mode == "mcp")
+	{
+		McpServer server;
+		if (!server.Serve(std::cin, std::cout, registry, session))
+			exitCode = 1;
+	}
+	else if (mode == "serve")
 	{
 		std::string line;
 		while (std::getline(std::cin, line))
@@ -155,6 +163,8 @@ int main(int argc, char** argv)
 		if (positional.size() >= 2)
 		{
 			params = ParseJson(positional[1]);
+			if (mode == "help" && params.is_discarded())
+				params = { { "command", positional[1] } };
 			if (params.is_discarded() || !params.is_object())
 			{
 				std::cerr << "basalt: params must be a JSON object, e.g. '{\"name\": \"Player\"}'\n";

@@ -5,6 +5,7 @@
 #include "Basalt/Animation/AnimatedModel.h"
 #include "Basalt/Animation/AnimationPose.h"
 #include "Basalt/Asset/AssetManager.h"
+#include "Basalt/Automation/CommandSchema.h"
 #include "Basalt/Core/Application.h"
 #include "Basalt/Core/Input.h"
 #include "Basalt/Core/JsonUtils.h"
@@ -279,7 +280,7 @@ namespace Basalt {
 		if (m_Options.AutomationPort != 0)
 		{
 			std::string error;
-			if (!m_Server.Start(m_Options.AutomationPort, [this](const std::string& request) { return HandleAutomationRequest(request); }, error))
+			if (!m_Server.Start(m_Options.AutomationPort, [this](const std::string& request) { return HandleAutomationRequest(request); }, error, [this]() { m_McpServer.Reset(); m_McpConnection = false; }))
 				BS_CORE_ERROR("Editor: automation server not started: {}", error);
 		}
 
@@ -303,15 +304,17 @@ namespace Basalt {
 	{
 		// Runs on the server thread: hand the request to the main thread and wait for the answer.
 		const nlohmann::json parsed = ParseJson(request);
+		if (parsed.is_object() && (parsed.contains("jsonrpc") || parsed.contains("method")))
+			m_McpConnection = true;
 		if (parsed.is_discarded())
-			return R"({"ok":false,"error":"invalid JSON"})";
+			return m_McpConnection ? McpServer::Error(nullptr, -32700, "Parse error").dump() : R"({"ok":false,"error":"invalid JSON"})";
 
 		auto promise = std::make_shared<std::promise<std::string>>();
 		std::future<std::string> future = promise->get_future();
 		Application::Get().SubmitToMainThread([this, parsed, promise]() {
-			const nlohmann::json response = m_Commands.HandleRequest(m_Session, parsed);
+			const std::optional<nlohmann::json> response = m_McpConnection ? m_McpServer.HandleRequest(m_Commands, m_Session, parsed) : std::optional<nlohmann::json>{ m_Commands.HandleRequest(m_Session, parsed) };
 			m_Context.CommitHistory();
-			promise->set_value(response.dump());
+			promise->set_value(response ? response->dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) : "");
 		});
 		while (future.wait_for(std::chrono::milliseconds(50)) != std::future_status::ready)
 		{
@@ -323,7 +326,8 @@ namespace Basalt {
 
 	void EditorLayer::RegisterEditorCommands()
 	{
-		m_Commands.Register({ "editor.select", "Selects an entity in the editor (null clears the selection).", { { "entity", "ID, name or null" } }, [this](AutomationSession& session, const nlohmann::json& params) {
+		namespace Schema = CommandSchema;
+		m_Commands.Register({ "editor.select", "Selects an entity in the editor (null clears the selection).", Schema::Object({ { "entity", Schema::Nullable(Schema::Entity("ID, name or null")) } }), [this](AutomationSession& session, const nlohmann::json& params) {
 								 const nlohmann::json& reference = params.contains("entity") ? params["entity"] : nlohmann::json();
 								 if (reference.is_null())
 								 {
@@ -335,7 +339,7 @@ namespace Basalt {
 								 return nlohmann::json{ { "selected", entity["ID"] } };
 							 } });
 
-		m_Commands.Register({ "editor.camera", "Moves the editor camera (position + target), or returns it when called without params.", { { "position", "[x, y, z]" }, { "target", "[x, y, z]" } }, [this](AutomationSession&, const nlohmann::json& params) {
+		m_Commands.Register({ "editor.camera", "Moves the editor camera (position + target), or returns it when called without params.", Schema::Object({ { "position", Schema::Vector("[x, y, z]", 3) }, { "target", Schema::Vector("[x, y, z]", 3) } }), [this](AutomationSession&, const nlohmann::json& params) {
 								 auto readVector = [](const nlohmann::json& value, const char* name) {
 									 if (!value.is_array() || value.size() != 3 || !value[0].is_number() || !value[1].is_number() || !value[2].is_number())
 										 throw CommandError(std::string("'") + name + "' must be [x, y, z]");
@@ -352,7 +356,7 @@ namespace Basalt {
 								 return nlohmann::json{ { "position", { position.x, position.y, position.z } }, { "target", { target.x, target.y, target.z } } };
 							 } });
 
-		m_Commands.Register({ "editor.undo", "Undoes the last edit to the scene (edit mode only).", {}, [this](AutomationSession& session, const nlohmann::json&) {
+		m_Commands.Register({ "editor.undo", "Undoes the last edit to the scene (edit mode only).", Schema::Object(), [this](AutomationSession& session, const nlohmann::json&) {
 								 if (session.IsPlaying())
 									 throw CommandError("undo is not available while playing");
 								 if (!m_History.CanUndo())
@@ -361,7 +365,7 @@ namespace Basalt {
 								 return nlohmann::json{ { "canUndo", m_History.CanUndo() }, { "canRedo", m_History.CanRedo() } };
 							 } });
 
-		m_Commands.Register({ "editor.redo", "Redoes the last undone edit (edit mode only).", {}, [this](AutomationSession& session, const nlohmann::json&) {
+		m_Commands.Register({ "editor.redo", "Redoes the last undone edit (edit mode only).", Schema::Object(), [this](AutomationSession& session, const nlohmann::json&) {
 								 if (session.IsPlaying())
 									 throw CommandError("redo is not available while playing");
 								 if (!m_History.CanRedo())
@@ -370,7 +374,7 @@ namespace Basalt {
 								 return nlohmann::json{ { "canUndo", m_History.CanUndo() }, { "canRedo", m_History.CanRedo() } };
 							 } });
 
-		m_Commands.Register({ "editor.window_screenshot", "Captures the whole editor window (all panels) to a PNG at the end of the current frame.", { { "path", "string, .png" } }, [](AutomationSession&, const nlohmann::json& params) {
+		m_Commands.Register({ "editor.window_screenshot", "Captures the whole editor window (all panels) to a PNG at the end of the current frame.", Schema::Object({ { "path", Schema::String("string, .png", true) } }, { "path" }), [](AutomationSession&, const nlohmann::json& params) {
 								 if (!params.contains("path") || !params["path"].is_string())
 									 throw CommandError("missing parameter 'path'");
 								 const std::filesystem::path path = params["path"].get<std::string>();
@@ -382,7 +386,7 @@ namespace Basalt {
 								 return nlohmann::json{ { "path", path.string() }, { "note", "written at the end of the current frame" } };
 							 } });
 
-		m_Commands.Register({ "editor.screenshot", "Renders the scene from the editor camera (with editor overlays and the game UI) to a PNG.", { { "path", "string, .png" }, { "width", "integer" }, { "height", "integer" } }, [this](AutomationSession&, const nlohmann::json& params) {
+		m_Commands.Register({ "editor.screenshot", "Renders the scene from the editor camera (with editor overlays and the game UI) to a PNG.", Schema::Object({ { "path", Schema::String("string, .png", true) }, { "width", Schema::Integer("integer", 16, 8192) }, { "height", Schema::Integer("integer", 16, 8192) } }, { "path" }), [this](AutomationSession&, const nlohmann::json& params) {
 								 if (!params.contains("path") || !params["path"].is_string())
 									 throw CommandError("missing parameter 'path'");
 								 const uint32_t width = params.value("width", 1280u);
