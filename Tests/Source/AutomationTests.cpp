@@ -682,7 +682,7 @@ TEST_SUITE("Automation")
             const auto response = mcp.HandleRequest(registry, session, ParseJson(request));
             return response ? response->dump() : std::string(); }, error, [&]() { mcp.Reset(); }));
 		const json initialized = ParseJson(SendLine(server.GetPort(), R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}})"));
-		CHECK(initialized["result"]["protocolVersion"] == McpServer::ProtocolVersion);
+		CHECK(initialized["result"]["protocolVersion"].get<std::string>() == std::string(McpServer::ProtocolVersion));
 		const json reconnected = ParseJson(SendLine(server.GetPort(), R"({"jsonrpc":"2.0","method":"notifications/initialized"})"
 																	  "\n"
 																	  R"({"jsonrpc":"2.0","id":2,"method":"tools/list"})"));
