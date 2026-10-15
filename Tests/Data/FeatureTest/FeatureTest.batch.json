@@ -39,7 +39,7 @@
 	{ "id": "widget-pad-disconnect-frame", "command": "play.step", "params": { "frames": 1, "assertNoErrors": true } },
 	{ "id": "widget-check", "command": "lua.exec", "params": { "code": "FeatureTest.CheckWidgets()" } },
 	{ "id": "runtime-spawns", "command": "lua.exec", "params": { "code": "FeatureTest.BeginRuntimeSpawnCheck()" } },
-	{ "id": "runtime-spawns-step", "command": "play.step", "params": { "frames": 3, "assertNoErrors": true } },
+	{ "id": "runtime-spawns-step", "command": "play.step", "params": { "frames": 30, "assertNoErrors": true } },
 	{ "id": "runtime-spawns-check", "command": "lua.exec", "params": { "code": "FeatureTest.CheckRuntimeSpawns()" } },
 	{ "id": "stop", "command": "play.stop" },
 	{ "id": "switch-open", "command": "scene.open", "params": { "path": "Assets/Scenes/SceneSwitchA.bscene" } },

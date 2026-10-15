@@ -101,53 +101,59 @@ namespace Basalt {
 		return scene;
 	}
 
-	void Scene::ResetRuntimeUUIDs()
+	void Scene::StartRandomSession()
 	{
-		m_EntityRandom.Seed(m_RandomSeed);
-		m_IssuedRuntimeUUIDs.clear();
-		// Even an authored entity destroyed before the first draw must not alias a later spawn.
+		m_RandomSeed = Project::GetActiveRandomSeed();
+		m_SessionIdentity.emplace(m_RandomSeed);
+		// Authored entities never pass through the stream; reserve their IDs so a destroyed one is
+		// never reissued to a later spawn by this generator.
 		for (const auto& [uuid, handle] : m_EntityMap)
-			m_IssuedRuntimeUUIDs.insert(uuid);
+			m_SessionIdentity->Reserve(uuid);
+	}
+
+	UUID Scene::SessionIdentity::Next(const Scene& scene)
+	{
+		for (;;)
+		{
+			// Explicit high/low draw order and raw outputs give the same bits on every platform.
+			const uint64_t high = Stream.NextUInt32();
+			const uint64_t low = Stream.NextUInt32();
+			const UUID uuid = (high << 32) | low;
+			if (uuid.IsValid() && !Reserved.contains(uuid) && !scene.m_EntityMap.contains(uuid))
+				return uuid;
+		}
 	}
 
 	UUID Scene::GenerateEntityUUID()
 	{
-		for (;;)
-		{
-			UUID uuid = 0;
-			if (IsRunning())
-			{
-				// Explicit high/low draw order and raw outputs give the same bits on every platform.
-				const uint64_t high = m_EntityRandom.NextUInt32();
-				const uint64_t low = m_EntityRandom.NextUInt32();
-				uuid = (high << 32) | low;
-			}
-			else
-				uuid = UUID();
-			if (!uuid.IsValid() || m_EntityMap.contains(uuid))
-				continue;
-			if (IsRunning() && !m_IssuedRuntimeUUIDs.insert(uuid).second)
-				continue;
-			return uuid;
-		}
+		if (m_SessionIdentity)
+			return m_SessionIdentity->Next(*this);
+		UUID uuid;
+		while (!uuid.IsValid() || m_EntityMap.contains(uuid))
+			uuid = UUID();
+		return uuid;
 	}
 
 	Entity Scene::CreateEntity(const std::string& name)
 	{
-		return CreateEntityWithUUID(GenerateEntityUUID(), name);
+		return CreateEntityInternal(GenerateEntityUUID(), name);
 	}
 
 	Entity Scene::CreateEntityWithUUID(UUID uuid, const std::string& name)
 	{
 		if (!uuid.IsValid() || m_EntityMap.contains(uuid))
 		{
-			BS_CORE_WARN("Scene: UUID {} is invalid or already in use; generating a new one", static_cast<uint64_t>(uuid));
-			uuid = GenerateEntityUUID();
+			const UUID replacement = GenerateEntityUUID();
+			BS_CORE_WARN("Scene: UUID {} for '{}' is invalid or already in use; using {}", static_cast<uint64_t>(uuid), name, static_cast<uint64_t>(replacement));
+			uuid = replacement;
 		}
+		else if (m_SessionIdentity)
+			m_SessionIdentity->Reserve(uuid);
+		return CreateEntityInternal(uuid, name);
+	}
 
-		if (IsRunning())
-			m_IssuedRuntimeUUIDs.insert(uuid);
-
+	Entity Scene::CreateEntityInternal(UUID uuid, const std::string& name)
+	{
 		Entity entity(m_Registry.create(), this);
 		entity.AddComponent<IDComponent>(uuid);
 		entity.AddComponent<TagComponent>(name.empty() ? std::string("Entity") : name);
@@ -484,8 +490,7 @@ namespace Basalt {
 		m_FrameCount = 0;
 		// A play session never shows the previous session's immediate-mode UI (e.g. when it starts paused).
 		GameUI::BeginFrame();
-		m_RandomSeed = Project::GetActiveRandomSeed();
-		ResetRuntimeUUIDs();
+		StartRandomSession();
 		m_QuitRequested = false;
 		m_Paused = false;
 		m_StepFrames = 0;
@@ -532,6 +537,7 @@ namespace Basalt {
 		m_AudioSystem.reset();
 		m_PhysicsWorld.reset();
 		m_State = SceneState::Edit;
+		m_SessionIdentity.reset();
 		m_PendingLoad.reset();
 		m_PersistentEntities.clear();
 		FlushPendingDestruction();
@@ -545,8 +551,7 @@ namespace Basalt {
 		m_State = SceneState::Simulate;
 		m_Time = 0.0f;
 		m_FrameCount = 0;
-		m_RandomSeed = Project::GetActiveRandomSeed();
-		ResetRuntimeUUIDs();
+		StartRandomSession();
 		m_Paused = false;
 		m_StepFrames = 0;
 		m_PhysicsWorld = CreateScope<PhysicsWorld>(this);
@@ -567,6 +572,7 @@ namespace Basalt {
 		m_PhysicsWorld.reset();
 		m_PendingDestruction.clear();
 		m_State = SceneState::Edit;
+		m_SessionIdentity.reset();
 	}
 
 	void Scene::OnUpdate(Timestep ts)

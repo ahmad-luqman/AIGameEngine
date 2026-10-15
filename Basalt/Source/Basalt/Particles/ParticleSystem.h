@@ -75,8 +75,8 @@ namespace Basalt {
 	//
 	// Determinism: each emitter draws from its own Random, seeded from the session's seed
 	// (Scene::GetRandomSeed, the project's RandomSeed) and the emitter's registration order: scene emitters
-	// by UUID at Start, then emitters added during play in the order they appear, never by a runtime spawn's
-	// random UUID. A session with the same inputs and time steps therefore produces the same particles on
+	// by UUID at Start, then emitters added during play in the order they appear, independent of the spawned entity's
+	// UUID. A session with the same inputs and time steps therefore produces the same particles on
 	// the same platform (shape sampling uses sin/cos/cbrt, which differ between C libraries), and emitting
 	// never shifts Lua's random sequence.
 	class ParticleSystem

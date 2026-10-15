@@ -100,9 +100,12 @@ Entities created during Play or Simulate (including prefab instances and duplica
 UUID stream seeded from the session's `RandomSeed`. The same starting scene, seed and creation sequence
 produce the same IDs, making UUID-ordered joint removal, ignored-pair activation, contact callbacks and
 pending script creation reproducible. Lua and particle random draws do not consume this stream.
-`Scene.Load` continues it; a new session resets it. Zero, existing IDs and IDs already issued during the
-session are skipped. Authored IDs are preserved, and entities created in Edit still receive random IDs.
-Explicitly restoring an authored ID on a scene load preserves that ID as before.
+`Scene.Load` continues it; a new session resets it. Zero, live IDs and non-generated IDs reserved during
+the session (authored, explicitly assigned, loaded, or present at session start) are skipped. Reservations
+constrain the generator only and are released on stop. Generated IDs are not retained after destruction,
+so an extremely unlikely repeated random value could reuse a retired generated ID without growing memory
+for every spawn. Entities loaded from a scene keep their saved IDs; prefab instances receive new ones
+from the stream. Explicitly loaded IDs can reuse retired IDs. Edit-mode creation still uses random IDs.
 
 ## Entity
 

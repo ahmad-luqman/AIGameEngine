@@ -12,17 +12,16 @@ destroys bodies and spawns new ones (whose physics is added in a different order
 the rebuild order shows in the hash), changes a joint's axis and a character's collider.
 
 After the original checkpoints, a Lua fixture spawns a jointed compound-body chain inside a trigger.
-Its pending `OnCreate` and contact callbacks fold their order into a marker transform; trigger callbacks
+Its script creations (`OnCreate`) and trigger enter/exit callbacks fold their order into a marker transform; trigger callbacks
 spawn additional scripted, jointed bodies. Further checkpoints enable collisions, rebuild colliders,
 remove connected bodies and move the trigger away while waking the survivors. Thus hashes check both
-physics state and callback order, with assertions that the callbacks actually ran. The original
-checkpoints are unchanged by the physics-internals refactor and seeded runtime UUIDs.
+physics state and callback order, with assertions that the callbacks actually ran.
 
 It avoids what is not portable: no platform-dependent Lua math, no rotations in the file or the batch
 (Euler angles go through each platform's `sin`/`cos`), no six-DOF Position motors on rotation axes (their target is an Euler
 orientation), and only colliders whose shapes need no trig (box, sphere, capsule, `builtin://Cube`).
 
-If a deliberate change to physics, scene serialization or the component registry alters the result, run
+If a deliberate change to physics, the runtime UUID stream, scene serialization or the component registry alters the result, run
 the batch and copy the new hashes from the errors (the batch keeps going after a mismatch):
 
 ```bash

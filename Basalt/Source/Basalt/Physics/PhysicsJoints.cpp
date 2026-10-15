@@ -612,12 +612,12 @@ namespace Basalt {
 
 	bool PhysicsWorld::HasJoint(Entity entity) const
 	{
-		return entity && m_Impl->Joints.contains(entity.GetUUID());
+		return m_Impl->Owns(entity) && m_Impl->Joints.contains(entity.GetUUID());
 	}
 
 	std::optional<float> PhysicsWorld::GetJointPosition(Entity entity) const
 	{
-		if (!entity)
+		if (!m_Impl->Owns(entity))
 			return std::nullopt;
 		auto it = m_Impl->Joints.find(entity.GetUUID());
 		if (it == m_Impl->Joints.end())
@@ -641,7 +641,7 @@ namespace Basalt {
 
 	std::optional<glm::vec3> PhysicsWorld::GetJointRotation(Entity entity) const
 	{
-		if (!entity)
+		if (!m_Impl->Owns(entity))
 			return std::nullopt;
 		auto it = m_Impl->Joints.find(entity.GetUUID());
 		if (it == m_Impl->Joints.end())

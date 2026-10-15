@@ -53,7 +53,7 @@ namespace Basalt {
 		static nlohmann::json SerializeEntity(Entity entity);
 
 		// 64-bit hash (16 hex digits) of the serialized scene state, for determinism and replay checks.
-		// Entity UUIDs (random for runtime spawns) are replaced by hierarchy-order indices wherever they
+		// Entity UUIDs (seeded during Play/Simulate) are replaced by hierarchy-order indices wherever they
 		// appear, so two runs that reach the same state hash equally. Transform rotations are hashed as
 		// quaternions rather than the file's Euler angles, so equal physics states hash equally on every platform.
 		static std::string ComputeStateHash(Scene& scene);

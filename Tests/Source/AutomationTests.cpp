@@ -509,7 +509,7 @@ TEST_SUITE("Automation")
 		BasaltTest::TempProject temp("AutomationReplay");
 		CommandRegistry registry;
 		AutomationSession session;
-		// Moves on key presses and spawns an entity (with a random UUID) on every jump.
+		// Moves on key presses and spawns an entity (with a seeded runtime UUID) on every jump.
 		Run(registry, session, "asset.write", { { "path", "Assets/Scripts/Mover.lua" }, { "content", R"(
 			local M = {}
 			function M:OnUpdate(dt)
