@@ -167,3 +167,37 @@ TEST_CASE("Vertex snapping follows the current skinned pose and skips vertices w
 	CHECK_FALSE(FindViewportVertex(rig, vp, { 200, 200 }, { 100, 150 }));
 	mesh->Vertices = saved;
 }
+
+TEST_CASE("Vertex snapping ignores unused accessor vertices and follows indexed submesh ranges")
+{
+	Scene scene;
+	auto entity = scene.CreateEntity("Indexed");
+	entity.AddComponent<MeshComponent>().Mesh = "builtin://Cube";
+	auto mesh = AssetManager::GetMesh("builtin://Cube");
+	REQUIRE(mesh);
+	REQUIRE(mesh->Submeshes.size() == 1);
+	const auto savedVertices = mesh->Vertices;
+	const auto savedIndices = mesh->Indices;
+	const auto savedSubmesh = mesh->Submeshes[0];
+	auto& submesh = mesh->Submeshes[0];
+	const uint32_t unused = submesh.VertexCount;
+	// Offset both ranges and place an unused vertex at the center of the visible face.
+	mesh->Vertices.insert(mesh->Vertices.begin(), Vertex{});
+	submesh.BaseVertex++;
+	mesh->Indices.insert(mesh->Indices.begin(), 0);
+	submesh.BaseIndex++;
+	mesh->Vertices.push_back(Vertex{ .Position = { 0, 0, .5f } });
+	submesh.VertexCount++;
+	const auto vp = glm::orthoRH_ZO(-2.0f, 2.0f, -2.0f, 2.0f, .1f, 10.0f) * glm::lookAtRH(glm::vec3(0, 0, 4), glm::vec3(0), glm::vec3(0, 1, 0));
+	CHECK_FALSE(FindViewportVertex(entity, vp, { 200, 200 }, { 100, 100 }));
+	CHECK(FindViewportVertex(entity, vp, { 200, 200 }, { 125, 75 }));
+	mesh->Indices.insert(mesh->Indices.end(), { unused, 0, 1 });
+	submesh.IndexCount += 3;
+	const auto referenced = FindViewportVertex(entity, vp, { 200, 200 }, { 100, 100 });
+	CHECK(referenced.has_value());
+	if (referenced)
+		CHECK(referenced->World == glm::vec3(0, 0, .5f));
+	mesh->Vertices = savedVertices;
+	mesh->Indices = savedIndices;
+	submesh = savedSubmesh;
+}

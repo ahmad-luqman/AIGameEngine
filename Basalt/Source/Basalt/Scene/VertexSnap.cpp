@@ -22,9 +22,15 @@ namespace Basalt {
 			for (uint32_t submeshIndex : source->Meshes[meshIndex].Submeshes)
 			{
 				const Submesh& submesh = source->Submeshes[submeshIndex];
-				for (uint32_t i = 0; i < submesh.VertexCount; i++)
+				// Accessors may contain unused vertices; only indexed geometry offers snap targets.
+				std::vector<bool> used(submesh.VertexCount, false);
+				for (uint32_t i = 0; i < submesh.IndexCount; i++)
 				{
-					const Vertex& vertex = source->Vertices[submesh.BaseVertex + i];
+					const uint32_t index = source->Indices[submesh.BaseIndex + i];
+					if (index >= submesh.VertexCount || used[index])
+						continue;
+					used[index] = true;
+					const Vertex& vertex = source->Vertices[submesh.BaseVertex + index];
 					glm::vec4 local(vertex.Position, 1);
 					if (!palette.empty())
 					{
