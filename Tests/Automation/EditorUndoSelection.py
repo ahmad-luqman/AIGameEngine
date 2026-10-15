@@ -22,7 +22,7 @@ def check_undo_selection(call, require, output, project):
     call("play.start", error="active transaction")
     call("scene.new", {"empty": True}, error="active transaction")
     call("scene.save", {"path": "Assets/Scenes/Forbidden.bscene"}, error="active transaction")
-    call("editor.undo", error="nothing to undo")
+    call("editor.undo", error="active transaction")
     committed = call("editor.transaction", {"action": "commit"})
     require(committed["undo"] == "Move Both" and len(committed["entries"]) == len(initial["entries"]) + 1, "Group transaction granularity failed")
 
@@ -83,13 +83,46 @@ def check_undo_selection(call, require, output, project):
     call("editor.select", {"entities": [a, b]})
     call("play.start")
     import time
-    time.sleep(.25)
+    deadline = time.monotonic() + 5
+    while call("scene.info")["entities"] != 1:
+        require(time.monotonic() < deadline, "Runtime script did not destroy the selected tree")
+        time.sleep(.01)
     call("editor.window_screenshot", {"path": str(Path(output, "runtime-pruned-selection.png"))})
     call("entity.get", {"entity": a}, error="no entity with ID")
     call("editor.transaction", {"action": "begin", "name": "Invalid"}, error="edit mode")
     call("editor.transform", {"delta": delta}, error="edit mode")
     call("editor.component_set", {"component": "Transform", "data": {}}, error="edit mode")
     call("editor.box_select", {"start": [0, 0], "end": [width, height]}, error="edit mode")
+    # Delete/duplicate continue to edit only the running copy.
+    call("editor.select", {"entity": b})
+    require(len(call("editor.duplicate")["entities"]) == 1, "Play duplicate failed")
+    call("editor.delete")
+    require(call("scene.info")["entities"] == 1, "Play delete changed the wrong scene")
     call("play.stop")
+    require(call("scene.info")["entities"] == 3, "Play edits escaped into the edit scene")
     call("scene.new", {"empty": True})
     require(call("editor.history")["entries"] == [], "Scene switch retained old patches")
+
+    # Nonzero rotations normalize during restoration; they must never author history entries.
+    rotated = call("entity.create", {"name": "Rotated", "components": {"Transform": {"Rotation": [7, 35, 13]}}})["id"]
+    call("component.set", {"entity": rotated, "component": "Transform", "data": {"Translation": [2, 0, 0]}})
+    original_entries = call("editor.history")["entries"]
+    for _ in range(3):
+        history = call("editor.undo")
+        require(history["canRedo"] and history["entries"] == original_entries, "Rotated undo authored a fake entry")
+        call("editor.transaction", {"action": "begin", "name": "Empty after restore"})
+        call("editor.transaction", {"action": "commit"})
+        call("component.set", {"entity": rotated, "component": "Transform", "data": {"Translation": [0, 0, 0]}})
+        require(call("editor.history")["canRedo"], "Empty/no-op restored edit discarded redo")
+        call("editor.transaction", {"action": "begin", "name": "Cancel rotated"})
+        call("component.set", {"entity": rotated, "component": "Transform", "data": {"Translation": [4, 0, 0]}})
+        call("editor.transaction", {"action": "cancel"})
+        require(call("editor.history")["canRedo"], "Rotated cancellation authored a fake entry")
+        call("editor.redo")
+        require(pos(rotated) == [2, 0, 0], "Rotated redo did not restore translation")
+    call("editor.undo")
+    call("editor.select", {"entity": rotated})
+    call("editor.undo")
+    require(call("editor.select", {"mode": "add"})["entities"] == [], "Undo creation retained stale selection")
+    call("editor.transaction", {"action": "commit"}, error="no active transaction")
+    call("editor.transaction", {"action": "cancel"}, error="no active transaction")

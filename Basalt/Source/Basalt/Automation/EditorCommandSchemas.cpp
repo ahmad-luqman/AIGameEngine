@@ -16,11 +16,18 @@ namespace Basalt::EditorCommandSchemas {
 		return Schema::Object({ { "source", Schema::Vector("Logical viewport coordinates [x,y], may be fractional, on the selected mesh", 2) }, { "target", Schema::Vector("Logical viewport coordinates [x,y], may be fractional, on another mesh", 2) } }, { "source", "target" });
 	}
 
+	namespace {
+		nlohmann::json SelectionModeSchema()
+		{
+			auto mode = Schema::String("Selection operation (default replace)");
+			mode["enum"] = { "replace", "add", "toggle" };
+			return mode;
+		}
+	}
+
 	nlohmann::json Select()
 	{
-		auto mode = Schema::String("Selection operation (default replace)");
-		mode["enum"] = { "replace", "add", "toggle" };
-		return Schema::Object({ { "entity", Schema::Nullable(Schema::Entity("ID, name or null")) }, { "entities", { { "type", "array" }, { "items", Schema::Entity("ID or name") }, { "maxItems", 10000 } } }, { "mode", mode } });
+		return Schema::Object({ { "entity", Schema::Nullable(Schema::Entity("ID, name or null")) }, { "entities", { { "type", "array" }, { "items", Schema::Entity("ID or name") }, { "maxItems", 10000 } } }, { "mode", SelectionModeSchema() } });
 	}
 
 	nlohmann::json Transform()
@@ -35,7 +42,7 @@ namespace Basalt::EditorCommandSchemas {
 
 	nlohmann::json BoxSelect()
 	{
-		return Schema::Object({ { "start", Schema::Vector("Logical viewport [x,y], top-left origin", 2) }, { "end", Schema::Vector("Logical viewport [x,y], top-left origin", 2) }, { "mode", Select()["properties"]["mode"] } }, { "start", "end" });
+		return Schema::Object({ { "start", Schema::Vector("Logical viewport [x,y], top-left origin", 2) }, { "end", Schema::Vector("Logical viewport [x,y], top-left origin", 2) }, { "mode", SelectionModeSchema() } }, { "start", "end" });
 	}
 
 	nlohmann::json Transaction()

@@ -226,9 +226,9 @@ namespace Basalt {
 			return path;
 		}
 
-		void Add(CommandRegistry& registry, std::string name, std::string description, json inputSchema, std::function<json(AutomationSession&, const json&)> handler)
+		void Add(CommandRegistry& registry, std::string name, std::string description, json inputSchema, std::function<json(AutomationSession&, const json&)> handler, CommandPolicy policy = CommandPolicy::Normal)
 		{
-			registry.Register({ std::move(name), std::move(description), std::move(inputSchema), std::move(handler) });
+			registry.Register({ std::move(name), std::move(description), std::move(inputSchema), std::move(handler), policy });
 		}
 
 		void ApplyKeyInput(const json& params)
@@ -445,8 +445,7 @@ namespace Basalt {
 				AssetManager::Clear();
 				PhysicsWorld::ClearMeshShapeCache();
 				session.SetEditScene(CreateRef<Scene>("Untitled"), "");
-				return json{ { "directory", project->GetDirectory().string() } };
-			});
+				return json{ { "directory", project->GetDirectory().string() } }; }, CommandPolicy::EditBoundary);
 
 			Add(registry, "project.open", "Opens a project (directory or .bproject file) and its start scene.", Schema::Object({ { "path", Schema::String("string", true) } }, { "path" }), [](AutomationSession& session, const json& params) {
 				std::string error;
@@ -468,8 +467,7 @@ namespace Basalt {
 				{
 					session.SetEditScene(CreateRef<Scene>("Untitled"), "");
 				}
-				return json{ { "name", project->GetConfig().Name }, { "scene", startScene } };
-			});
+				return json{ { "name", project->GetConfig().Name }, { "scene", startScene } }; }, CommandPolicy::EditBoundary);
 
 			Add(registry, "project.info", "Returns the active project's settings.", Schema::Object(), [](AutomationSession&, const json&) {
 				Ref<Project> project = RequireProject();
@@ -557,8 +555,7 @@ namespace Basalt {
 				}
 				session.SetEditScene(scene, "");
 				session.MarkDirty();
-				return json{ { "entities", scene->GetEntityCount() } };
-			});
+				return json{ { "entities", scene->GetEntityCount() } }; }, CommandPolicy::EditBoundary);
 
 			Add(registry, "scene.open", "Opens a scene file (project-relative path).", Schema::Object({ { "path", Schema::String("string", true) } }, { "path" }), [](AutomationSession& session, const json& params) {
 				const std::string path = ProjectRelative(RequireString(params, "path"));
@@ -567,8 +564,7 @@ namespace Basalt {
 				if (!scene)
 					throw CommandError(error);
 				session.SetEditScene(scene, path);
-				return json{ { "name", scene->GetName() }, { "entities", scene->GetEntityCount() } };
-			});
+				return json{ { "name", scene->GetName() }, { "entities", scene->GetEntityCount() } }; }, CommandPolicy::EditBoundary);
 
 			Add(registry, "scene.save", "Saves the edit scene (to 'path', or the path it was opened from).", Schema::Object({ { "path", Schema::Nullable(Schema::String("string, project-relative, optional")) } }), [](AutomationSession& session, const json& params) {
 				std::string path = OptionalString(params, "path", session.GetScenePath());
@@ -580,8 +576,7 @@ namespace Basalt {
 					throw CommandError(error);
 				session.SetScenePath(path);
 				session.ClearDirty();
-				return json{ { "path", path } };
-			});
+				return json{ { "path", path } }; }, CommandPolicy::EditBoundary);
 
 			Add(registry, "scene.hash", "Hash of the current scene state (the play copy while playing); equal states give equal hashes, whatever the entity UUIDs.", Schema::Object({ { "expectHash", Schema::String("string: fail unless the hash equals this one (16 lowercase hex digits)", true) } }), [](AutomationSession& session, const json& params) {
 				const std::string hash = SceneSerializer::ComputeStateHash(RequireScene(session));
@@ -931,8 +926,7 @@ namespace Basalt {
 				std::string error;
 				if (!session.StartPlay(error))
 					throw CommandError(error);
-				return json{ { "playing", true } };
-			});
+				return json{ { "playing", true } }; }, CommandPolicy::EditBoundary);
 
 			Add(registry, "play.stop", "Stops play mode and restores the edit scene.", Schema::Object(), [](AutomationSession& session, const json&) {
 				session.StopPlay();
@@ -1090,8 +1084,7 @@ namespace Basalt {
 					if (hash != recordedHash)
 						throw CommandError("replay diverged: state hash " + hash + ", recorded " + recordedHash);
 				}
-				return json{ { "frame", scene.GetFrameCount() }, { "stateHash", hash }, { "recordedHash", recordedHash }, { "scriptErrors", errors } };
-			});
+				return json{ { "frame", scene.GetFrameCount() }, { "stateHash", hash }, { "recordedHash", recordedHash }, { "scriptErrors", errors } }; }, CommandPolicy::EditBoundary);
 
 			Add(registry, "input.key", "Sets a key's state for play mode (e.g. {key: 'Space', down: true}). Recorded while replay recording is on.", Schema::Object({ { "key", Schema::String("string key name", true) }, { "down", Schema::Nullable(Schema::Boolean("bool")) } }, { "key" }), [](AutomationSession& session, const json& params) {
 				ApplyKeyInput(params);

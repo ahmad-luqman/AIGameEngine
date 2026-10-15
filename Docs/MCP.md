@@ -160,7 +160,6 @@ changing selection, camera commands, viewport resize, or leaving the viewport ca
 Releasing V cancels only when sticky Vertex snapping is off. The camera stays fixed during this gesture. The Overlays popup and View menu
 share the same switches; Debug Lines controls scripted debug lines independently of grid/helpers.
 
-
 ## Selection and undo transactions
 
 `editor.select` accepts either `entity` (ID/name/null) or `entities` (an array of IDs/names), plus
@@ -172,11 +171,12 @@ preserves surviving selected UUIDs; scene replacement clears selection and histo
 
 Ctrl/Cmd-click toggles hierarchy/viewport selection. Shift-click selects a visible hierarchy range;
 Shift-click in the viewport adds a hit. Drag a rectangle in the viewport to replace selection; Shift
-adds, Ctrl/Cmd toggles. Box selection intersects world bounds with the rectangle's camera frustum and
+adds, Ctrl/Cmd toggles. Box selection conservatively intersects world bounds with the rectangle's camera frustum and
 includes occluded entities. Meshes use their bounds, animated models use current pose bounds, and
 other entities use a 0.5-unit helper box. UI rects are selected through the hierarchy. Escape cancels a
 rectangle. `editor.box_select {"start":[x,y],"end":[x,y],"mode":"replace"}` exposes the same operation in
-logical viewport pixels, top-left origin; either drag direction works.
+logical viewport pixels, top-left origin; either drag direction works. Click/box selection also works
+in Simulate, where it operates on the simulation copy.
 
 The group gizmo uses the mean selected world position as its pivot, with world axes or the active
 entity's local orientation. Translate, rotate and scale affect selected root trees; a selected child
@@ -193,12 +193,16 @@ the active value and a mixed label; an edit replaces that entire field on every 
 component before applying any. Continuous field edits are single undo steps. `editor.delete` and
 `editor.duplicate` operate on selected root trees as one step; duplicate selects the copied roots.
 References between copied trees are remapped to the corresponding copies; references outside the
-selected forest keep their original targets. These group editing commands and box selection are edit-mode only.
+selected forest keep their original targets. Delete/duplicate also work on the running Play/Simulate
+copy, without dirtying the edit scene or adding undo entries. Group transforms and shared component
+edits require edit mode.
 
 Menus show names such as **Undo Set Material AlbedoColor**. `editor.history {}` returns `undo`, `redo`,
 `canUndo`, `canRedo`, `transaction`, `index`, `entries` (names and retained bytes), and `patchBytes`.
 `editor.undo {}` and `editor.redo {}` restore one entry and return the same history description.
-A failed restoration leaves the history cursor unchanged.
+A failed restoration leaves the history cursor unchanged and reports its reason in the response,
+status bar and Console. A failed gizmo cancellation commits the gesture as one undo step instead;
+the status bar explains how to retry Undo.
 
 To group automation edits across requests:
 
@@ -210,15 +214,19 @@ To group automation edits across requests:
 ```
 
 Use `action:"cancel"` to restore the pre-transaction scene. Transactions are global to the editor
-session, do not nest, and must finish before saving, replacing the scene, playing, or undo/redo.
+session, do not nest, and must finish before saving, replacing the scene, playing (including replay),
+or undo/redo. They survive client disconnects. The status bar displays the active name with Commit
+and Cancel controls; the Edit menu offers the same recovery actions. GUI Play/Simulate rejects an
+open automation transaction, just like `play.start`; GUI edits cannot join it. Selection and viewport
+options remain available.
 A failed command leaves prior successful edits in the transaction so the caller can fix the request
 or cancel. Empty/cancelled transactions preserve redo; a new committed change discards the redo branch.
-A batch without an explicit transaction retains one entry per top-level mutating command. Read-only,
-failed and no-op commands add no entries. Read-only polling does not serialize the scene; authored
+A batch without an explicit transaction retains one entry per top-level mutating command. Read-only and no-op commands add no entries. A command that fails after making changes still records
+those changes under its own name (or inside the active transaction). Read-only polling does not serialize the scene; authored
 edit revisions trigger history capture. Project files and external assets are outside scene undo.
 
 History retains one current scene plus forward/inverse JSON patches, with UUID keys and successor
 links preserving hierarchy order. Retention is capped at 128 entries and 32 MiB of serialized patch
 and label payloads; oldest entries are evicted. An individual edit exceeding the entire budget clears
-retained history and cannot be undone. Scene serialization/diffing and restore still take time
-proportional to scene size; the improvement bounds retained history memory, not edit-time work.
+retained history and cannot be undone; a Console warning and status message report this. Scene
+serialization/diffing and restoration take time proportional to scene size.

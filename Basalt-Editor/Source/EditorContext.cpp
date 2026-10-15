@@ -1,5 +1,6 @@
 #include "EditorContext.h"
 
+#include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Scene/SceneSerializer.h"
 
@@ -12,81 +13,179 @@ namespace Basalt {
 		, Session(session)
 		, History(history)
 	{
-		Session.BeforeCommand = [this](const std::string& command, const nlohmann::json& params) {
-			const std::string name = EditorHistory::CommandName(command, params);
-			if (!m_FieldName.empty() && (!m_UICommand || m_FieldName != name))
-				FinishFieldEdit();
-			if (!m_UICommand || name != m_PendingName)
-				CommitHistory();
-			if (History.IsActive() && (command == "scene.new" || command == "scene.open" || command == "project.open" || command == "project.create" || command == "play.start" || command == "play.simulate" || command == "scene.save" || command == "scene.save_as"))
-				throw CommandError("finish or cancel the active transaction first");
-			m_CommandRevision = Session.GetEditRevision();
-		};
-		Session.AfterCommand = [this](const std::string& command, const nlohmann::json& params) {
-			Session.PruneSelection();
-			if (Session.GetEditRevision() != m_CommandRevision)
-			{
-				m_PendingName = EditorHistory::CommandName(command, params);
-				if (!m_UICommand)
-					CommitHistory();
-			}
-		};
+		const bool attached = Session.AttachCommandObserver(*this);
+		BS_CORE_ASSERT(attached, "EditorContext requires exclusive command observation");
+		if (!attached)
+			BS_CORE_ERROR("EditorContext could not attach its command observer");
 	}
 
 	EditorContext::~EditorContext()
 	{
-		Session.BeforeCommand = nullptr;
-		Session.AfterCommand = nullptr;
+		Session.DetachCommandObserver(*this);
 	}
 
-	bool EditorContext::BeginTransaction(const std::string& name)
+	void EditorContext::BeforeCommand(const CommandInfo& command, const nlohmann::json& params)
+	{
+		const std::string name = EditorHistory::CommandName(command.Name, params);
+		const bool finishTransaction = command.Name == "editor.transaction" && params.value("action", std::string()) != "begin";
+		if (!finishTransaction && m_Transaction && m_Transaction->Kind == TransactionKind::Field && (!m_UICommand || History.TransactionName() != name))
+			FinishFieldEdit();
+		if (!m_UICommand || name != m_PendingName)
+			CommitHistory();
+		if (History.IsActive() && command.Policy == CommandPolicy::EditBoundary)
+			throw CommandError(TransactionError());
+		if (m_UICommand && HasAutomationTransaction() && command.Policy != CommandPolicy::HistoryControl && command.Name != "editor.select" && command.Name != "editor.pick" && command.Name != "editor.box_select" && command.Name != "editor.viewport")
+			throw CommandError(TransactionError());
+		m_CommandRevision = Session.GetEditRevision();
+	}
+
+	void EditorContext::AfterCommand(const CommandInfo& command, const nlohmann::json& params) noexcept
+	{
+		try
+		{
+			Session.PruneSelection();
+			if (command.Policy != CommandPolicy::HistoryControl && Session.GetEditRevision() != m_CommandRevision)
+			{
+				m_PendingName = EditorHistory::CommandName(command.Name, params);
+				if (!m_UICommand)
+					CommitHistory();
+			}
+		}
+		catch (const std::exception& error)
+		{
+			BS_CORE_ERROR("Editor history capture after {} failed: {}", command.Name, error.what());
+		}
+	}
+
+	bool EditorContext::HasAutomationTransaction() const
+	{
+		return m_Transaction && m_Transaction->Kind == TransactionKind::Automation;
+	}
+
+	std::string EditorContext::TransactionError() const
+	{
+		return "finish or cancel active transaction '" + History.TransactionName() + "' first (Edit menu or editor.transaction)";
+	}
+
+	bool EditorContext::CanStartPlay(std::string& error)
+	{
+		if (!History.IsActive())
+			return true;
+		error = TransactionError();
+		return false;
+	}
+
+	void EditorContext::OnSceneChanged()
+	{
+		m_Transaction.reset();
+		m_PendingName.clear();
+		m_FailedField.clear();
+		m_CommandRevision = Session.GetEditRevision();
+	}
+
+	bool EditorContext::BeginTransaction(const std::string& name, TransactionKind kind)
 	{
 		if (Session.IsPlaying())
 			return false;
 		CommitHistory();
 		if (!History.Begin(name))
+		{
+			SetStatus(TransactionError(), true);
 			return false;
-		m_TransactionWasDirty = Session.IsDirty();
+		}
+		m_Transaction = Transaction{ kind, Session.IsDirty() };
 		return true;
 	}
 
-	void EditorContext::EndTransaction()
+	void EditorContext::ReportHistory(bool success)
 	{
-		History.End(SceneSerializer::SerializeScene(*Session.GetEditScene()));
-		m_PendingName.clear();
+		if (!success)
+			SetStatus(History.GetError(), true);
+		else if (!History.GetWarning().empty())
+			SetStatus(History.GetWarning(), true);
+	}
+
+	bool EditorContext::EndTransaction()
+	{
+		if (!History.IsActive())
+			return false;
+		try
+		{
+			const bool success = History.End(SceneSerializer::SerializeScene(*Session.GetEditScene()));
+			ReportHistory(success);
+			if (!success)
+				return false;
+			m_Transaction.reset();
+			m_PendingName.clear();
+			return true;
+		}
+		catch (const std::exception& error)
+		{
+			BS_CORE_ERROR("History commit failed: {}", error.what());
+			SetStatus(std::string("Commit failed: ") + error.what(), true);
+			return false;
+		}
 	}
 
 	bool EditorContext::CancelTransaction(const EditorHistory::Restore& restore)
 	{
-		if (!History.Cancel(restore))
+		const bool success = History.Cancel(restore);
+		ReportHistory(success);
+		if (!success)
 			return false;
-		if (!m_TransactionWasDirty)
+		if (m_Transaction && !m_Transaction->WasDirty)
 			Session.ClearDirty();
-		m_FieldName.clear();
+		m_Transaction.reset();
 		m_PendingName.clear();
+		m_FailedField.clear();
 		return true;
+	}
+
+	void EditorContext::FinishGizmoTransaction(bool cancel, const EditorHistory::Restore& restore)
+	{
+		if (!m_Transaction || m_Transaction->Kind != TransactionKind::Gizmo)
+			return;
+		if (!cancel)
+		{
+			EndTransaction();
+			return;
+		}
+		if (CancelTransaction(restore))
+			return;
+		const std::string error = History.GetError();
+		const bool committed = EndTransaction();
+		SetStatus(error + (committed ? "; gesture committed instead, use Undo to retry" : "; use Edit > Commit/Cancel Transaction to recover"), true);
 	}
 
 	void EditorContext::FinishFieldEdit()
 	{
-		if (!m_FieldName.empty())
-		{
-			if (History.IsActive())
-				EndTransaction();
-			m_FieldName.clear();
-		}
+		if (m_Transaction && m_Transaction->Kind == TransactionKind::Field)
+			EndTransaction();
+		m_FailedField.clear();
 	}
 
 	void EditorContext::EditField(const std::string& command, const nlohmann::json& params, bool changed, bool committed)
 	{
 		const std::string name = EditorHistory::CommandName(command, params);
-		if (changed)
+		if (changed && m_FailedField != name)
 		{
-			if (m_FieldName != name)
-				FinishFieldEdit();
-			if (!History.IsActive() && BeginTransaction(name))
-				m_FieldName = name;
-			Execute(command, params);
+			if (HasAutomationTransaction())
+			{
+				SetStatus(TransactionError(), true);
+				m_FailedField = name;
+			}
+			else
+			{
+				if (History.TransactionName() != name)
+					FinishFieldEdit();
+				if (!History.IsActive())
+					BeginTransaction(name, TransactionKind::Field);
+				if (!Execute(command, params))
+				{
+					FinishFieldEdit();
+					m_FailedField = name;
+				}
+			}
 		}
 		if (committed)
 			FinishFieldEdit();
@@ -109,10 +208,19 @@ namespace Basalt {
 
 	void EditorContext::CommitHistory()
 	{
-		if (!m_PendingName.empty() && !Session.IsPlaying() && !History.IsActive())
+		if (m_PendingName.empty() || Session.IsPlaying() || History.IsActive())
+			return;
+		try
 		{
-			History.Commit(SceneSerializer::SerializeScene(*Session.GetEditScene()), m_PendingName);
-			m_PendingName.clear();
+			const bool success = History.Commit(SceneSerializer::SerializeScene(*Session.GetEditScene()), m_PendingName);
+			ReportHistory(success);
+			if (success)
+				m_PendingName.clear();
+		}
+		catch (const std::exception& error)
+		{
+			BS_CORE_ERROR("History capture failed: {}", error.what());
+			SetStatus(std::string("Capture failed: ") + error.what(), true);
 		}
 	}
 
@@ -120,7 +228,7 @@ namespace Basalt {
 	{
 		StatusMessage = message;
 		StatusIsError = isError;
-		StatusTime = ImGui::GetTime();
+		StatusTime = ImGui::GetCurrentContext() ? ImGui::GetTime() : 0;
 	}
 
 }

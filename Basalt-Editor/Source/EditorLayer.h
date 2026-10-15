@@ -82,7 +82,7 @@ namespace Basalt {
 		void Stop();
 		bool Undo();
 		bool Redo();
-		bool RestoreState(const nlohmann::json& state);
+		bool RestoreState(nlohmann::json& state, std::string& error);
 		void SaveScene();
 		void FocusSelection();
 		void UpdateWindowTitle();

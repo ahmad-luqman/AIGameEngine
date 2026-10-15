@@ -34,12 +34,15 @@ namespace Basalt {
 
 	namespace {
 
+		// One mask bit lets the outline pass cover every selected entity without extra draw passes.
 		constexpr uint32_t SelectedTokenBit = 0x80000000u;
+		constexpr uint32_t MaxPickToken = SelectedTokenBit - 1;
+		static_assert(MaxPickToken < SelectedTokenBit && (MaxPickToken & SelectedTokenBit) == 0);
 
 		struct OutlinePush
 		{
 			glm::uvec2 RenderSize, OutputSize;
-			uint32_t Selected, Padding;
+			uint32_t SelectionMask, Padding;
 		};
 		static_assert(sizeof(OutlinePush) == 24);
 
@@ -1576,6 +1579,11 @@ namespace Basalt {
 			uint32_t pickId = 0;
 			if (m_Picking)
 			{
+				if (impl.PickEntities.size() > MaxPickToken && !pickIds.contains(entity.GetUUID()))
+				{
+					BS_CORE_ERROR("SceneRenderer: picking token capacity exceeded");
+					return;
+				}
 				auto [it, inserted] = pickIds.try_emplace(entity.GetUUID(), static_cast<uint32_t>(impl.PickEntities.size()));
 				if (inserted)
 					impl.PickEntities.push_back(entity.GetUUID());

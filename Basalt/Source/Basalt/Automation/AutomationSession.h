@@ -11,10 +11,23 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <unordered_set>
 
 namespace Basalt {
 
 	class Scene;
+	struct CommandInfo;
+
+	// One host owns command observation. Rejected BeforeCommand calls never reach the handler;
+	// AfterCommand runs after successful or throwing handlers, with nesting depth already restored.
+	class CommandObserver
+	{
+	public:
+		virtual ~CommandObserver() = default;
+		virtual void BeforeCommand(const CommandInfo& command, const nlohmann::json& params) = 0;
+		virtual void AfterCommand(const CommandInfo& command, const nlohmann::json& params) noexcept = 0;
+		virtual bool CanStartPlay(std::string& error) = 0;
+	};
 
 	// Editing state that automation commands operate on: the open scene, its file, the selection and the
 	// play state. Hosts (CLI, editor) can plug in capabilities that need more than the engine core, such
@@ -84,9 +97,9 @@ namespace Basalt {
 		std::function<void()> OnSceneChanged;
 		// Name of the host for diagnostics ("cli", "editor").
 		std::string HostName = "cli";
-		// Hosts observe validated top-level commands, including requests dispatched through MCP.
-		std::function<void(const std::string&, const nlohmann::json&)> BeforeCommand;
-		std::function<void(const std::string&, const nlohmann::json&)> AfterCommand;
+		// Only the attached owner may detach itself; attaching a second observer is rejected.
+		bool AttachCommandObserver(CommandObserver& observer);
+		void DetachCommandObserver(CommandObserver& observer);
 
 	private:
 		Ref<Scene> m_EditScene;
@@ -94,7 +107,10 @@ namespace Basalt {
 		Ref<Scene> m_Scene;
 		std::string m_ScenePath;
 		std::vector<UUID> m_Selection;
+		std::unordered_set<UUID> m_SelectionSet;
+		CommandObserver* m_CommandObserver = nullptr;
 		friend class CommandRegistry;
+		// Nested implementation commands keep the outer command's undo label and capture boundary.
 		size_t m_CommandDepth = 0;
 		bool m_Dirty = false;
 		uint64_t m_EditRevision = 0;

@@ -32,7 +32,7 @@ TEST_CASE("Editor history transactions keep labels, branch correctly and restore
 {
 	EditorHistory history;
 	json state{ { "value", 0 } };
-	const auto restore = [&](const json& next) { state = next; return true; };
+	const auto restore = [&](const json& next, std::string&) { state = next; return true; };
 	history.Reset(state);
 	CHECK_FALSE(history.Undo(restore));
 	REQUIRE(history.Begin("Move Selection"));
@@ -44,7 +44,7 @@ TEST_CASE("Editor history transactions keep labels, branch correctly and restore
 	REQUIRE(history.End({ { "value", 10 } }));
 	CHECK(history.GetSize() == 1);
 	CHECK(history.UndoName() == "Move Selection");
-	CHECK_FALSE(history.Undo([](const json&) { return false; }));
+	CHECK_FALSE(history.Undo([](const json&, std::string&) { return false; }));
 	CHECK(history.UndoName() == "Move Selection");
 	REQUIRE(history.Undo(restore));
 	CHECK(state["value"] == 0);
@@ -52,7 +52,7 @@ TEST_CASE("Editor history transactions keep labels, branch correctly and restore
 	history.Commit(state, "no-op preserves redo");
 	CHECK(history.CanRedo());
 	REQUIRE(history.Begin("Cancelled"));
-	CHECK_FALSE(history.Cancel([](const json&) { return false; }));
+	CHECK_FALSE(history.Cancel([](const json&, std::string&) { return false; }));
 	CHECK(history.IsActive());
 	REQUIRE(history.Cancel(restore));
 	CHECK(history.CanRedo());
@@ -86,7 +86,7 @@ TEST_CASE("Editor history patches preserve hierarchy ordering, settings, referen
 	const json after = SceneSerializer::SerializeScene(scene);
 	history.Commit(after, "Complex Edit");
 	json restored;
-	const auto restore = [&](const json& value) {
+	const auto restore = [&](const json& value, std::string&) {
 		Scene loaded;
 		std::string error;
 		REQUIRE(SceneSerializer::DeserializeScene(loaded, value, error));
@@ -118,16 +118,24 @@ TEST_CASE("Editor history retains bounded patch payloads instead of whole scene 
 	history.Commit(state, "Delete First");
 	CHECK(history.GetPatchBytes() < bytes + 5000);
 	size_t undos = 0;
-	while (history.Undo([](const json&) { return true; }))
+	json oldest;
+	while (history.Undo([&](json& stateBefore, std::string&) { oldest = stateBefore; return true; }))
 		++undos;
 	CHECK(undos == EditorHistory::MaxEntries);
+	CHECK(oldest["Entities"][500]["Value"] == 11);
 	// An edit larger than the entire budget is deliberately not retained.
 	history.Reset(json::object());
+	REQUIRE(history.Commit({ { "small", 1 } }, "Small before oversized"));
 	history.Commit({ { "huge", std::string(EditorHistory::MaxPatchBytes + 1, 'x') } }, "Oversized");
 	CHECK(history.GetPatchBytes() <= EditorHistory::MaxPatchBytes);
 	CHECK_FALSE(history.CanUndo());
-	history.Commit({ { "huge", "small" } }, "Shrink");
-	CHECK(history.GetPatchBytes() <= EditorHistory::MaxPatchBytes);
+	CHECK(history.GetWarning() == "Edit too large to undo; history cleared");
+	CHECK(history.GetPatchBytes() == 0);
+	// A small unrelated field edit is undoable even while the scene retains the huge payload.
+	REQUIRE(history.Commit({ { "huge", std::string(EditorHistory::MaxPatchBytes + 1, 'x') }, { "small", 2 } }, "Small after oversized"));
+	CHECK(history.GetSize() == 1);
+	CHECK(history.UndoName() == "Small after oversized");
+	CHECK(history.GetPatchBytes() < 1000);
 }
 
 TEST_CASE("Editor selection resolves atomically, orders the active entity and prunes stale UUIDs")
