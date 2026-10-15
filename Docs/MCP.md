@@ -120,3 +120,34 @@ Add new commands with an explicit `CommandInfo::InputSchema`; use the builders t
 readable. Add unit tests for validation before mutation and add automation-visible checks to the
 feature-test batch. `McpIntegration` exercises the real subprocess transport and project editing;
 `FuzzMcp` covers protocol parsing/lifecycle and safe read-only tool calls.
+
+## Viewport authoring tools
+
+The editor exposes three additional tools through both legacy TCP requests and MCP. Their schemas
+are available through `help` / `tools/list`; they are editor-only and are not part of the headless CLI.
+
+- `editor.viewport {}` returns transient gizmo/overlay preferences plus the rendered `width` and
+  `height`. A patch can set `operation` (`None`, `Translate`, `Rotate`, `Scale`), `space` (`Local`,
+  `World`), `snap`, `translationStep` (0.0001–10000 units), `rotationStep` (0.0001–360 degrees),
+  `scaleStep` (0.0001–100), or `vertexSnap`. Independent overlay switches are `grid`, `colliders`,
+  `lightGizmos`, `cameraGizmos`, `uiBounds`, `debugLines`, and `selectionOutline`. Invalid patches are
+  atomic. These preferences last for the editor session and do not modify project/scene files.
+- `editor.pick {"x":200,"y":150,"select":true}` reads the last rendered mesh ID at an output pixel.
+  It returns `{"entity":<UUID>}` (0 for background), and selects by default. `select:false` only queries.
+  Out-of-bounds/unavailable frames and game Play mode report errors without changing selection.
+- `editor.vertex_snap {"source":[x,y],"target":[x,y]}` translates the selected mesh entity to align
+  the nearest source and target vertices within 16 viewport pixels. Coordinates use the displayed
+  viewport's logical pixels, top-left origin. The target excludes the selected entity and its
+  descendants. Vertices use current geometry, including animation poses, and must project inside the
+  camera clip volume; this is projected-vertex snapping, so it can find a vertex behind another mesh.
+  Equal screen distances prefer the vertex nearer the camera. The move preserves local rotation and
+  scale, supports transformed parents, rejects singular parents, and is one undoable edit. It is
+  unavailable in Play/Simulate or for UI rects.
+
+The viewport toolbar exposes the same preferences. Q/W/E/R select the gizmo operation when the
+viewport has focus and text editing/camera flight are inactive. World/local changes translation and
+rotation axes; ImGuizmo scaling follows local axes. Ctrl/Cmd temporarily enables step snapping. Hold
+V (or enable Vertex snapping) and drag from a highlighted source vertex to a highlighted target;
+release to commit. Escape, releasing V, changing selection, or leaving the viewport before release
+cancels the gesture. The camera stays fixed during this gesture. The Overlays popup and View menu
+share the same switches; Debug Lines controls scripted debug lines independently of grid/helpers.
