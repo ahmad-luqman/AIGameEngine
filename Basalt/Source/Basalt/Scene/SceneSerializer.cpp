@@ -240,97 +240,6 @@ namespace Basalt {
 			return true;
 		}
 
-		// Creates the entities of an "Entities" array. When remapIDs is set every entity gets a fresh UUID
-		// and parent references are translated. Returns the created entities in array order.
-		bool CreateEntities(Scene& scene, const json& entities, bool remapIDs, Entity rootParent, std::vector<Entity>& outCreated, std::string& outError)
-		{
-			if (!entities.is_array())
-			{
-				outError = "'Entities' must be an array";
-				return false;
-			}
-
-			std::unordered_set<uint64_t> sourceIDs;
-			for (size_t i = 0; i < entities.size(); ++i)
-			{
-				uint64_t id = 0;
-				ObjectReader reader(entities[i], "entity #" + std::to_string(i));
-				if (!reader.IsObject(outError) || !reader.Id("ID", id, outError))
-					return false;
-				if (id != 0 && !sourceIDs.insert(id).second)
-				{
-					outError = "entity #" + std::to_string(i) + " has duplicate ID " + std::to_string(id);
-					return false;
-				}
-			}
-
-			std::unordered_map<UUID, UUID> idMap;
-			std::vector<std::pair<Entity, uint64_t>> parentLinks;
-
-			for (size_t i = 0; i < entities.size(); i++)
-			{
-				const json& entityData = entities[i];
-				const std::string context = "entity #" + std::to_string(i);
-				if (!entityData.is_object())
-				{
-					outError = context + " must be an object";
-					return false;
-				}
-
-				uint64_t id = 0;
-				std::string name = "Entity";
-				uint64_t parentID = 0;
-				ObjectReader reader(entityData, context);
-				if (!reader.Id("ID", id, outError) || !reader.String("Name", name, outError) || !reader.Id("Parent", parentID, outError))
-					return false;
-				reader.Take("Components");
-				if (!reader.Finish(outError))
-					return false;
-
-				Entity entity = (remapIDs || id == 0) ? scene.CreateEntity(name) : scene.CreateEntityWithUUID(UUID(id), name);
-				idMap[id != 0 ? id : static_cast<uint64_t>(entity.GetUUID())] = entity.GetUUID();
-				outCreated.push_back(entity);
-
-				if (!SceneSerializer::DeserializeEntityComponents(entity, entityData, outError))
-				{
-					outError = std::string(context).append(" ('").append(name).append("'): ").append(outError);
-					return false;
-				}
-				parentLinks.emplace_back(entity, parentID);
-			}
-
-			// Parent after creation so forward references work; array order is preserved for siblings.
-			for (auto& [entity, parentID] : parentLinks)
-			{
-				if (parentID == 0)
-				{
-					if (rootParent)
-						scene.SetParent(entity, rootParent, false);
-					continue;
-				}
-				auto it = idMap.find(parentID);
-				Entity parent = it != idMap.end() ? scene.GetEntityByUUID(it->second) : Entity{};
-				if (!parent)
-				{
-					outError = "entity '" + entity.GetName() + "' references unknown parent " + std::to_string(parentID);
-					return false;
-				}
-				if (!scene.SetParent(entity, parent, false))
-				{
-					outError = "entity '" + entity.GetName() + "' has an invalid parent (cycle, self-reference, or hierarchy deeper than " + std::to_string(Scene::MaxHierarchyDepth) + " levels)";
-					return false;
-				}
-			}
-
-			// Entity references between the new entities follow them to their fresh UUIDs.
-			if (remapIDs)
-			{
-				for (Entity entity : outCreated)
-					ComponentRegistry::RemapEntityReferences(entity, idMap);
-			}
-			return true;
-		}
-
 		void SerializeTreeInto(Entity entity, json& entities)
 		{
 			entities.push_back(SceneSerializer::SerializeEntity(entity));
@@ -338,6 +247,104 @@ namespace Basalt {
 				SerializeTreeInto(child, entities);
 		}
 
+	}
+
+	// Creates the entities in array order, remapping IDs and references for prefab instances.
+	bool SceneSerializer::CreateEntities(Scene& scene, const json& entities, bool remapIDs, Entity rootParent, std::vector<Entity>& outCreated, std::string& outError)
+	{
+		if (!entities.is_array())
+		{
+			outError = "'Entities' must be an array";
+			return false;
+		}
+
+		std::unordered_set<uint64_t> sourceIDs;
+		for (size_t i = 0; i < entities.size(); ++i)
+		{
+			uint64_t id = 0;
+			ObjectReader reader(entities[i], "entity #" + std::to_string(i));
+			if (!reader.IsObject(outError) || !reader.Id("ID", id, outError))
+				return false;
+			if (id != 0 && !sourceIDs.insert(id).second)
+			{
+				outError = "entity #" + std::to_string(i) + " has duplicate ID " + std::to_string(id);
+				return false;
+			}
+		}
+
+		// A generated ID earlier in the file must not consume a later entity's saved ID. Prefab
+		// source IDs are only remapping keys, so reserving them would unnecessarily change its draws.
+		if (!remapIDs && scene.m_SessionIdentity)
+		{
+			for (uint64_t id : sourceIDs)
+				scene.m_SessionIdentity->Reserve(UUID(id));
+		}
+
+		std::unordered_map<UUID, UUID> idMap;
+		std::vector<std::pair<Entity, uint64_t>> parentLinks;
+
+		for (size_t i = 0; i < entities.size(); i++)
+		{
+			const json& entityData = entities[i];
+			const std::string context = "entity #" + std::to_string(i);
+			if (!entityData.is_object())
+			{
+				outError = context + " must be an object";
+				return false;
+			}
+
+			uint64_t id = 0;
+			std::string name = "Entity";
+			uint64_t parentID = 0;
+			ObjectReader reader(entityData, context);
+			if (!reader.Id("ID", id, outError) || !reader.String("Name", name, outError) || !reader.Id("Parent", parentID, outError))
+				return false;
+			reader.Take("Components");
+			if (!reader.Finish(outError))
+				return false;
+
+			Entity entity = (remapIDs || id == 0) ? scene.CreateEntity(name) : scene.CreateEntityWithUUID(UUID(id), name);
+			idMap[id != 0 ? id : static_cast<uint64_t>(entity.GetUUID())] = entity.GetUUID();
+			outCreated.push_back(entity);
+
+			if (!SceneSerializer::DeserializeEntityComponents(entity, entityData, outError))
+			{
+				outError = std::string(context).append(" ('").append(name).append("'): ").append(outError);
+				return false;
+			}
+			parentLinks.emplace_back(entity, parentID);
+		}
+
+		// Parent after creation so forward references work; array order is preserved for siblings.
+		for (auto& [entity, parentID] : parentLinks)
+		{
+			if (parentID == 0)
+			{
+				if (rootParent)
+					scene.SetParent(entity, rootParent, false);
+				continue;
+			}
+			auto it = idMap.find(parentID);
+			Entity parent = it != idMap.end() ? scene.GetEntityByUUID(it->second) : Entity{};
+			if (!parent)
+			{
+				outError = "entity '" + entity.GetName() + "' references unknown parent " + std::to_string(parentID);
+				return false;
+			}
+			if (!scene.SetParent(entity, parent, false))
+			{
+				outError = "entity '" + entity.GetName() + "' has an invalid parent (cycle, self-reference, or hierarchy deeper than " + std::to_string(Scene::MaxHierarchyDepth) + " levels)";
+				return false;
+			}
+		}
+
+		// Entity references between the new entities follow them to their fresh UUIDs.
+		if (remapIDs)
+		{
+			for (Entity entity : outCreated)
+				ComponentRegistry::RemapEntityReferences(entity, idMap);
+		}
+		return true;
 	}
 
 	json SceneSerializer::SerializeEntity(Entity entity)
