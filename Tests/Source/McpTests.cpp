@@ -30,7 +30,7 @@ namespace {
 		const auto response = server.HandleRequest(registry, session, Initialize());
 		REQUIRE(response);
 		REQUIRE(response->contains("result"));
-		CHECK((*response)["result"]["protocolVersion"] == McpServer::ProtocolVersion);
+		CHECK((*response)["result"]["protocolVersion"].get<std::string>() == std::string(McpServer::ProtocolVersion));
 		CHECK_FALSE(server.HandleRequest(registry, session, { { "jsonrpc", "2.0" }, { "method", "notifications/initialized" } }));
 	}
 }
@@ -47,7 +47,7 @@ TEST_SUITE("MCP")
 		CHECK((*server.HandleRequest(registry, session, Request("initialize")))["error"]["code"] == -32602);
 		auto initialize = Initialize();
 		initialize["params"]["protocolVersion"] = "future-version";
-		CHECK((*server.HandleRequest(registry, session, initialize))["result"]["protocolVersion"] == McpServer::ProtocolVersion);
+		CHECK((*server.HandleRequest(registry, session, initialize))["result"]["protocolVersion"].get<std::string>() == std::string(McpServer::ProtocolVersion));
 		CHECK((*server.HandleRequest(registry, session, Request("tools/list")))["error"]["code"] == -32600);
 		CHECK_FALSE(server.HandleRequest(registry, session, { { "jsonrpc", "2.0" }, { "method", "notifications/initialized" } }));
 		CHECK((*server.HandleRequest(registry, session, Initialize()))["error"]["code"] == -32600);
