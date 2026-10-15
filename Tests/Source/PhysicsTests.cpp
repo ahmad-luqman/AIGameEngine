@@ -188,6 +188,43 @@ TEST_SUITE("Physics")
 		CHECK(BasaltTest::CountLogMessages(since, "Physics: joint on 'Warned': first") == 2);
 	}
 
+	TEST_CASE("Runtime body records survive rebuilds but never cross scene copies or sessions")
+	{
+		Ref<Scene> scene = CreateRef<Scene>();
+		CreateGround(*scene);
+		Entity box = CreateBox(*scene, { 0.0f, 5.0f, 0.0f });
+		scene->OnSimulationStart();
+		PhysicsWorld& physics = *scene->GetPhysicsWorld();
+		REQUIRE(physics.GetBodyCount() == 2);
+		physics.SetLinearVelocity(box, { 1.0f, 0.0f, 0.0f });
+		physics.RecreateBody(box);
+		CHECK(physics.GetBodyCount() == 2);
+		CHECK(physics.GetLinearVelocity(box).x == 1.0f);
+		Ref<Scene> copy = Scene::Copy(scene);
+		Entity copiedBox = copy->GetEntityByUUID(box.GetUUID());
+		copy->OnSimulationStart();
+		CHECK(copy->GetPhysicsWorld()->GetBodyCount() == 2);
+		CHECK(copy->GetPhysicsWorld()->GetLinearVelocity(copiedBox) == glm::vec3(0.0f));
+		CHECK_FALSE(physics.HasBody(copiedBox));
+		copy->DestroyEntity(copiedBox);
+		CHECK(copy->GetPhysicsWorld()->GetBodyCount() == 1);
+		CHECK(physics.HasBody(box));
+		copy->OnSimulationStop();
+		scene->OnSimulationStop();
+		scene->OnSimulationStart();
+		CHECK(scene->GetPhysicsWorld()->GetBodyCount() == 2);
+		CHECK(scene->GetPhysicsWorld()->GetLinearVelocity(box) == glm::vec3(0.0f));
+		box.RemoveComponent<RigidBodyComponent>();
+		scene->OnUpdate(Step);
+		CHECK_FALSE(scene->GetPhysicsWorld()->HasBody(box));
+		CHECK(scene->GetPhysicsWorld()->GetBodyCount() == 1);
+		box.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+		scene->OnUpdate(Step);
+		CHECK(scene->GetPhysicsWorld()->HasBody(box));
+		CHECK(scene->GetPhysicsWorld()->GetBodyCount() == 2);
+		scene->OnSimulationStop();
+	}
+
 	TEST_CASE("A dynamic box falls under gravity and rests on static ground")
 	{
 		Scene scene;

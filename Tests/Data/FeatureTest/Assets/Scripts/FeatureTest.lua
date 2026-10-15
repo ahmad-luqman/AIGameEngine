@@ -824,4 +824,33 @@ function Driver:OnDestroy()
 	FeatureTestEvents.DriverDestroyed = true
 end
 
+-- Invoked by the batch after the visual/gameplay checks; these bodies have no rendering components.
+function FeatureTest.BeginRuntimeSpawnCheck()
+	FeatureTest.RuntimeCreates = 0
+	FeatureTest.RuntimeContacts = 0
+	local zone = Scene.CreateEntity("RuntimeSpawnZone")
+	zone.Translation = Vec3(1000, 0, 0)
+	zone:AddComponent("RigidBody", { IsTrigger = true })
+	zone:AddComponent("BoxCollider", { HalfExtents = Vec3(10, 1, 10) })
+	for i = 1, 3 do
+		local body = Scene.CreateEntity("RuntimeSpawn" .. i)
+		body.Translation = Vec3(1000 + i * 2, 0, 0)
+		body:AddComponent("RigidBody", { Type = "Dynamic", GravityFactor = 0 })
+		body:AddComponent("BoxCollider")
+		body:AddComponent("SphereCollider")
+		body:AddComponent("Script", { Script = "Assets/Scripts/RuntimeSpawnContact.lua" })
+	end
+end
+
+function FeatureTest.CheckRuntimeSpawns()
+	Check("Pending runtime scripts all create", FeatureTest.RuntimeCreates == 3)
+	Check("Spawned compound contacts coalesce", FeatureTest.RuntimeContacts == 3)
+	for i = 1, 3 do
+		local body = Scene.FindEntityByName("RuntimeSpawn" .. i)
+		local child = Scene.FindEntityByName("RuntimeSpawn" .. i .. "Child")
+		Check("Contact-driven spawn has a distinct identity", child ~= nil and child.ID ~= body.ID)
+		Check("Spawned joint preserves its entity reference", child:GetComponent("Joint").ConnectedEntity == body.ID)
+	end
+end
+
 return Driver

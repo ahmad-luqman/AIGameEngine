@@ -12,10 +12,10 @@
 
 #include <array>
 #include <cstdint>
-#include <functional>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace Basalt::PhysicsInternal {
 
@@ -40,7 +40,7 @@ namespace Basalt::PhysicsInternal {
 	// An entity's colliders combined into one shape, shared by rigid bodies and characters.
 	struct ColliderShape
 	{
-		// Null when no collider is valid (the reasons went to warn).
+		// Null when no collider is valid (the reasons went to warnings).
 		JPH::Ref<JPH::Shape> Shape;
 		// A MeshCollider contributed an exact triangle mesh (which has no volume).
 		bool HasTriangleMesh = false;
@@ -52,12 +52,12 @@ namespace Basalt::PhysicsInternal {
 	// Clamps friction to >= 0 and restitution to [0, 1] with a warning each, so the combine modes cannot invert
 	// Jolt's friction clamp or add energy on every bounce. `owner` prefixes the warnings ("BoxCollider ", or ""
 	// for the RigidBody). The result has Override set.
-	ColliderMaterial SanitizeSurface(float friction, float restitution, const std::string& owner, const std::function<void(const std::string&)>& warn);
+	ColliderMaterial SanitizeSurface(float friction, float restitution, const std::string& owner, std::vector<std::string>& warnings);
 
 	// Builds the entity's box, sphere, capsule and mesh colliders, scaled by its world scale (signed: mesh
 	// colliders keep a mirroring) and by sizeFraction (a character's inner body is a little smaller).
 	// convexReason, when set, forces mesh colliders onto their convex hull and names who needs it. Without
 	// useMaterials (characters) collider materials are not read, and an OverrideMaterial is reported as ignored.
-	ColliderShape BuildColliderShape(Entity entity, const glm::vec3& signedScale, float sizeFraction, const char* convexReason, bool isTrigger, bool useMaterials, const std::function<void(const std::string&)>& warn);
+	ColliderShape BuildColliderShape(Entity entity, const glm::vec3& signedScale, float sizeFraction, const char* convexReason, bool isTrigger, bool useMaterials, std::vector<std::string>& warnings);
 
 }

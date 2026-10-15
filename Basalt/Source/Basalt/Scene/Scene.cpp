@@ -101,9 +101,40 @@ namespace Basalt {
 		return scene;
 	}
 
+	void Scene::ResetRuntimeUUIDs()
+	{
+		m_EntityRandom.Seed(m_RandomSeed);
+		m_IssuedRuntimeUUIDs.clear();
+		// Even an authored entity destroyed before the first draw must not alias a later spawn.
+		for (const auto& [uuid, handle] : m_EntityMap)
+			m_IssuedRuntimeUUIDs.insert(uuid);
+	}
+
+	UUID Scene::GenerateEntityUUID()
+	{
+		for (;;)
+		{
+			UUID uuid = 0;
+			if (IsRunning())
+			{
+				// Explicit high/low draw order and raw outputs give the same bits on every platform.
+				const uint64_t high = m_EntityRandom.NextUInt32();
+				const uint64_t low = m_EntityRandom.NextUInt32();
+				uuid = (high << 32) | low;
+			}
+			else
+				uuid = UUID();
+			if (!uuid.IsValid() || m_EntityMap.contains(uuid))
+				continue;
+			if (IsRunning() && !m_IssuedRuntimeUUIDs.insert(uuid).second)
+				continue;
+			return uuid;
+		}
+	}
+
 	Entity Scene::CreateEntity(const std::string& name)
 	{
-		return CreateEntityWithUUID(UUID(), name);
+		return CreateEntityWithUUID(GenerateEntityUUID(), name);
 	}
 
 	Entity Scene::CreateEntityWithUUID(UUID uuid, const std::string& name)
@@ -111,8 +142,11 @@ namespace Basalt {
 		if (!uuid.IsValid() || m_EntityMap.contains(uuid))
 		{
 			BS_CORE_WARN("Scene: UUID {} is invalid or already in use; generating a new one", static_cast<uint64_t>(uuid));
-			uuid = UUID();
+			uuid = GenerateEntityUUID();
 		}
+
+		if (IsRunning())
+			m_IssuedRuntimeUUIDs.insert(uuid);
 
 		Entity entity(m_Registry.create(), this);
 		entity.AddComponent<IDComponent>(uuid);
@@ -451,6 +485,7 @@ namespace Basalt {
 		// A play session never shows the previous session's immediate-mode UI (e.g. when it starts paused).
 		GameUI::BeginFrame();
 		m_RandomSeed = Project::GetActiveRandomSeed();
+		ResetRuntimeUUIDs();
 		m_QuitRequested = false;
 		m_Paused = false;
 		m_StepFrames = 0;
@@ -511,6 +546,7 @@ namespace Basalt {
 		m_Time = 0.0f;
 		m_FrameCount = 0;
 		m_RandomSeed = Project::GetActiveRandomSeed();
+		ResetRuntimeUUIDs();
 		m_Paused = false;
 		m_StepFrames = 0;
 		m_PhysicsWorld = CreateScope<PhysicsWorld>(this);

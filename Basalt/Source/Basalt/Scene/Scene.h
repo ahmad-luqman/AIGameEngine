@@ -237,6 +237,8 @@ namespace Basalt {
 		void ReportLoadProblem(const std::string& message);
 		void DestroyEntityImmediate(Entity entity);
 		void FlushPendingDestruction();
+		void ResetRuntimeUUIDs();
+		UUID GenerateEntityUUID();
 		void RemoveFromParent(Entity entity);
 		// Records source UUID -> copy UUID for every copied entity in outCopies.
 		Entity CopyEntityRecursive(Entity source, Entity parent, std::unordered_map<UUID, UUID>& outCopies);
@@ -256,6 +258,9 @@ namespace Basalt {
 		float m_Time = 0.0f;
 		uint64_t m_FrameCount = 0;
 		uint32_t m_RandomSeed = Random::DefaultSeed;
+		// Independent of gameplay random draws; retained across Scene.Load, reset only for a new session.
+		Random m_EntityRandom;
+		std::unordered_set<UUID> m_IssuedRuntimeUUIDs;
 		bool m_QuitRequested = false;
 		std::vector<UUID> m_PendingDestruction;
 		Scope<PendingLoad> m_PendingLoad;

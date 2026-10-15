@@ -96,9 +96,13 @@ whose trigonometric and exponential functions can differ in the last bit between
   (their target is an Euler orientation).
 
 `Math.Radians` and `Math.Degrees` are plain multiplications, and physics-produced motion is portable.
-Entities spawned during play get random UUIDs, and some engine orders (joint removal, contact callbacks,
-the creation order of new script instances) still follow UUID values, so a game that spawns jointed or
-contact-driven entities at runtime is not yet reproducible run to run.
+Entities created during Play or Simulate (including prefab instances and duplicates) use a dedicated
+UUID stream seeded from the session's `RandomSeed`. The same starting scene, seed and creation sequence
+produce the same IDs, making UUID-ordered joint removal, ignored-pair activation, contact callbacks and
+pending script creation reproducible. Lua and particle random draws do not consume this stream.
+`Scene.Load` continues it; a new session resets it. Zero, existing IDs and IDs already issued during the
+session are skipped. Authored IDs are preserved, and entities created in Edit still receive random IDs.
+Explicitly restoring an authored ID on a scene load preserves that ID as before.
 
 ## Entity
 

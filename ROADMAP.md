@@ -29,13 +29,6 @@ P2 editor feel → the Marble Run sample. Run each milestone as one long autonom
 These close the gap between "works on the developer's machine" and "production-grade". Do them before
 adding features.
 
-### Reproducible runtime spawns — S
-Physics is deterministic across platforms (`Tests/Data/Determinism`), but entities spawned during play get
-random UUIDs, and a few orders still follow UUID values: joint removal (`RemoveJointsOfBody`), ignored-pair
-activation (`UpdateIgnoredPairs`), contact callbacks (`DispatchContacts`) and the creation of pending script
-instances. Order them by a deterministic key (registry or spawn order), or give play mode a seeded UUID
-generator, and extend the determinism batch with spawned jointed, contact-driven entities.
-
 ### Real-GPU smoke tests on Windows and Linux — S (manual) / M (automated)
 Lavapipe does not catch driver-specific bugs. The procedure and results table are in
 `Docs/TestedHardware.md` (`--offscreen`, `--gpu`, golden comparison, interactive checklist). Remaining:
@@ -283,13 +276,6 @@ more reliable.
   in the stats overlay and `render.stats`.
 - **Performance benchmarks — M.** A benchmark scene with thousands of entities, many lights and physics
   bodies, run in Release on CI with frame-time thresholds to catch regressions.
-- **Physics internals follow-ups — S.** After the PhysicsWorld split: give `PhysicsWorld::Impl` the
-  `Scene*` and move the private helpers (`RecreateCharacter`, `CreateJoint`, `DispatchContacts`, ...) onto
-  it so `PhysicsWorld.h` holds only the API; move contact tracking (`EndContacts`, `DispatchContacts` and
-  their state) into its own file with one pair-count release helper; collect warnings one way
-  (`std::vector<std::string>&` instead of `warn` callbacks in `BuildColliderShape`/`ConfigureCharacter`);
-  store `BodyRecord` as an EnTT component so the per-step push and write-back loops become ordered view walks
-  without map lookups.
 
 ---
 

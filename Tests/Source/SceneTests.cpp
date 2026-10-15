@@ -59,6 +59,91 @@ namespace {
 
 TEST_SUITE("Scene")
 {
+	TEST_CASE("Runtime UUIDs repeat across copies and simulation, skip collisions and ignore gameplay draws")
+	{
+		BasaltTest::TempProject project("RuntimeUUIDs");
+		Project::GetActive()->GetConfig().RandomSeed = 1234;
+		Ref<Scene> edit = CreateRef<Scene>();
+		Entity root = edit->CreateEntityWithUUID(42, "Root");
+		edit->CreateChildEntity(root, "Child");
+		std::string error;
+		const auto path = project.GetDirectory() / "Assets/Prefabs/IDs.bprefab";
+		REQUIRE(SceneSerializer::SavePrefab(root, path, error));
+		auto run = [&](bool simulate, bool draw) {
+			Ref<Scene> scene = Scene::Copy(edit);
+			if (simulate)
+				scene->OnSimulationStart();
+			else
+				scene->OnRuntimeStart();
+			if (draw)
+				CHECK(BasaltTest::Eval(*scene, "for i = 1, 100 do math.random() end Math.Seed(99)") == "");
+			std::vector<uint64_t> ids;
+			Entity spawned = scene->CreateEntity("Spawned");
+			ids.push_back(spawned.GetUUID());
+			scene->DestroyEntity(spawned);
+			ids.push_back(scene->CreateEntityWithUUID(42, "Duplicate").GetUUID());
+			ids.push_back(scene->CreateEntityWithUUID(0, "Invalid").GetUUID());
+			Entity prefab = SceneSerializer::InstantiatePrefab(*scene, path, "Assets/Prefabs/IDs.bprefab", {}, error);
+			REQUIRE_MESSAGE(prefab, error);
+			ids.push_back(prefab.GetUUID());
+			ids.push_back(prefab.GetChildren()[0].GetUUID());
+			Entity copy = scene->DuplicateEntity(prefab);
+			ids.push_back(copy.GetUUID());
+			ids.push_back(copy.GetChildren()[0].GetUUID());
+			CHECK(std::set<uint64_t>(ids.begin(), ids.end()).size() == ids.size());
+			CHECK(scene->GetEntityByUUID(42).GetName() == "Root");
+			if (simulate)
+				scene->OnSimulationStop();
+			else
+				scene->OnRuntimeStop();
+			return ids;
+		};
+		const auto baseline = run(false, false);
+		CHECK(baseline[0] == 3532910284440527571ULL);
+		CHECK(run(false, true) == baseline);
+		CHECK(run(true, false) == baseline);
+		// An authored ID equal to the next draw stays reserved after its entity is destroyed.
+		Scene collision;
+		collision.CreateEntityWithUUID(baseline[0], "Reserved");
+		collision.OnSimulationStart();
+		collision.DestroyEntity(collision.GetEntityByUUID(baseline[0]));
+		CHECK(static_cast<uint64_t>(collision.CreateEntity().GetUUID()) == baseline[1]);
+		collision.OnSimulationStop();
+		Scene retired;
+		retired.OnSimulationStart();
+		CHECK(static_cast<uint64_t>(retired.CreateEntity().GetUUID()) == baseline[0]);
+		retired.DestroyEntity(retired.CreateEntityWithUUID(baseline[1]));
+		CHECK(static_cast<uint64_t>(retired.CreateEntity().GetUUID()) == baseline[2]);
+		retired.OnSimulationStop();
+		Project::GetActive()->GetConfig().RandomSeed = 5678;
+		CHECK(run(false, false) != baseline);
+	}
+
+	TEST_CASE("Runtime UUID stream survives Scene.Load and never aliases an unloaded spawn")
+	{
+		BasaltTest::TempProject project("RuntimeUUIDLoad");
+		project.WriteFile("Assets/Scenes/Empty.bscene", R"({"Name":"Empty","Entities":[]})");
+		std::vector<uint64_t> baseline;
+		{
+			Scene scene;
+			scene.OnRuntimeStart();
+			for (int i = 0; i < 3; ++i)
+				baseline.push_back(scene.CreateEntity().GetUUID());
+			scene.OnRuntimeStop();
+		}
+		Scene scene;
+		scene.OnRuntimeStart();
+		Entity first = scene.CreateEntity("First");
+		CHECK(static_cast<uint64_t>(first.GetUUID()) == baseline[0]);
+		CHECK(BasaltTest::Eval(scene, "Scene.Load('Assets/Scenes/Empty.bscene')") == "");
+		scene.OnUpdate(BasaltTest::Step);
+		CHECK_FALSE(scene.GetEntityByUUID(baseline[0]));
+		Project::GetActive()->GetConfig().RandomSeed++;
+		CHECK(static_cast<uint64_t>(scene.CreateEntity().GetUUID()) == baseline[1]);
+		CHECK(static_cast<uint64_t>(scene.CreateEntity().GetUUID()) == baseline[2]);
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Entities have core components and are found by UUID and name")
 	{
 		Scene scene;

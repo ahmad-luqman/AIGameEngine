@@ -1,7 +1,7 @@
 #pragma once
 
 // Internal to the physics module: PhysicsWorld's state, shared by its source files (PhysicsWorld.cpp,
-// PhysicsJoints.cpp, PhysicsCharacters.cpp, PhysicsQueries.cpp).
+// PhysicsJoints.cpp, PhysicsCharacters.cpp, PhysicsContacts.cpp, PhysicsQueries.cpp).
 
 #include "Basalt/Physics/PhysicsWorld.h"
 
@@ -26,12 +26,9 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
-#include <functional>
-#include <map>
 #include <optional>
 #include <set>
 #include <string>
-#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -41,6 +38,40 @@ namespace Basalt {
 
 	struct PhysicsWorld::Impl
 	{
+		explicit Impl(Scene* scene);
+		~Impl();
+
+		Scene* ScenePtr;
+		void RecreateBody(Entity entity);
+		// Rebuilds (or removes) the entity's character; keeps its velocity and the last Move velocity.
+		void RecreateCharacter(Entity entity);
+		// Rebuilds bodies and characters whose components changed, applies changed character settings, resizes
+		// rescaled ones and rebuilds dirty joints (the start of every Step, and OnSceneLoaded).
+		void ApplyPendingChanges();
+		// Colliders are sized by the entity's world scale, which a script, an animation or a parent can change
+		// without touching a physics component. Once per Step (and on a scene load), after dirty entities are
+		// rebuilt, bodies and characters whose scale differs from the one they were built with get a new shape in
+		// place, keeping their contacts (so an animated scale does not end and restart every overlap each frame);
+		// a body's joints are rebuilt from the current poses, since their anchors scale with it.
+		// Entities left without a body by a degenerate transform are built once it decomposes again.
+		void ApplyScaleChanges();
+		void ResizeBody(Entity entity, const glm::vec3& scale);
+		void ResizeCharacter(Entity entity, const glm::vec3& scale);
+		// Applies changed CharacterController settings in place, rebuilding only when the layer changed.
+		void ApplyCharacterSettings(Entity entity);
+		void UpdateCharacters(float fixedStep);
+		void RebuildDirtyJoints();
+		// Marks every joint moving or connected to the entity's body for a rebuild (it was just created).
+		void MarkJointsDirty(UUID uuid);
+		// Builds the entity's constraint; problems are appended to warnings.
+		void CreateJoint(Entity entity, std::vector<std::string>& warnings);
+		// Applies the fields of a live joint that do not need a rebuild (limits, motor, break thresholds,
+		// collision).
+		void ApplyJointSettings(Entity entity, std::vector<std::string>& warnings);
+		// Removes joints whose constraint force or torque exceeded their break thresholds in the last step.
+		void CheckBrokenJoints(float fixedStep);
+		void DispatchContacts(float fixedStep);
+
 		struct BodyRecord
 		{
 			JPH::BodyID ID;
@@ -52,7 +83,7 @@ namespace Basalt {
 			// Pose last written to / read from the entity, used to detect transforms changed by scripts.
 			glm::vec3 LastPosition = { 0.0f, 0.0f, 0.0f };
 			glm::quat LastRotation = { 1.0f, 0.0f, 0.0f, 0.0f };
-			// The world scale the colliders were built with (see PhysicsWorld::ApplyScaleChanges).
+			// The world scale the colliders were built with (see ApplyScaleChanges).
 			glm::vec3 BuiltScale = { 1.0f, 1.0f, 1.0f };
 			// Set while the entity's transform cannot be decomposed (e.g. a zero scale): the body keeps its shape
 			// and simulates on, but its pose is not written back (warned once per episode).
@@ -141,7 +172,8 @@ namespace Basalt {
 			const Impl& m_Owner;
 		};
 
-		std::unordered_map<UUID, BodyRecord> Bodies;
+		// Runtime-only components; never copied or serialized with scene data.
+		BodyRecord* FindBody(UUID uuid) const;
 		std::unordered_map<UUID, CharacterRecord> Characters;
 		// Characters meet each other's full shapes through this list, and a moving one pushes the other with its
 		// velocity (in the pushed character's own update). They skip each other's inner bodies, which Jolt
@@ -176,22 +208,16 @@ namespace Basalt {
 		PhysicsInternal::WarningLog BodyWarnings{ "entity", true };
 		// Set while Start() creates every body; it marks all joints dirty itself afterwards.
 		bool Starting = false;
-		// Jolt reports contacts per sub-shape pair; entities see one begin/end per entity pair. Keys are
-		// (entity A, sub-shape A, entity B, sub-shape B) with A < B; PairCounts counts keys per entity pair.
-		using ContactKey = std::tuple<uint64_t, uint32_t, uint64_t, uint32_t>;
 		using EntityPair = std::pair<uint64_t, uint64_t>;
-		std::set<ContactKey> ActiveContacts;
-		std::map<EntityPair, int> PairCounts;
 		// Entity pairs (lower UUID first) joined by a joint with EnableCollision off. Read by Jolt worker
 		// threads during Update, so it only changes between steps.
 		std::set<EntityPair> IgnoredPairs;
-		// Contacts whose removal was reported because a body fell asleep. They stay active; once both bodies
-		// are awake again, a contact that Jolt does not re-report has really ended.
-		std::set<ContactKey> SuspendedContacts;
+		struct ContactState;
+		Scope<ContactState> Contacts;
 
 		// Applies the record's Settings that a live character can change, sanitizing out-of-range values
-		// (reported through warn).
-		static void ConfigureCharacter(CharacterRecord& record, const std::function<void(const std::string&)>& warn);
+		// (appended to warnings).
+		static void ConfigureCharacter(CharacterRecord& record, std::vector<std::string>& warnings);
 
 		// Only contacts on the lower part of the shape can be ground; others are walls or ceilings. "Lower" is
 		// along the character's up axis (against gravity) in its local space, so a turned gravity or a tilted
@@ -218,13 +244,13 @@ namespace Basalt {
 
 		// Removes a body. Contacts it had are ended now (Jolt's removal callbacks for a destroyed body can
 		// no longer be mapped to an entity), and surviving entities are notified.
-		void RemoveBody(Scene* scene, UUID uuid);
+		void RemoveBody(UUID uuid);
 
 		// Removes a character and its inner body, ending its contacts like RemoveBody.
-		void RemoveCharacter(Scene* scene, UUID uuid);
+		void RemoveCharacter(UUID uuid);
 
 		// Ends every contact of an entity whose body is gone and notifies the surviving entities.
-		void EndContacts(Scene* scene, UUID uuid, bool trigger);
+		void EndContacts(UUID uuid, bool trigger);
 
 		// Where two entities whose contact just ended parted: the closest points of their bodies (see
 		// ContactInfo), relative to the first. nullopt when either has no body or they are already far apart.
