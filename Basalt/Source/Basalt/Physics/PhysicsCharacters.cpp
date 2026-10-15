@@ -77,7 +77,7 @@ namespace Basalt {
 
 	bool PhysicsWorld::Impl::WarnIfCharacter(Entity entity, const char* call)
 	{
-		if (!Characters.contains(entity.GetUUID()))
+		if (!Owns(entity) || !Characters.contains(entity.GetUUID()))
 			return false;
 		if (WarnedCharacterBodyCalls.insert(entity.GetUUID()).second)
 			BS_CORE_WARN("Physics: {} does nothing on character '{}' (it has a CharacterController); use Move", call, entity.GetName());
@@ -222,10 +222,12 @@ namespace Basalt {
 		if (found == Characters.end())
 			return;
 		Impl::CharacterRecord& record = found->second;
-		// The same colliders the character was built from, so their warnings would only repeat.
-		std::vector<std::string> ignoredWarnings;
-		const ColliderShape outer = BuildColliderShape(entity, scale, 1.0f, "a character", false, false, ignoredWarnings);
-		const ColliderShape inner = BuildColliderShape(entity, scale, InnerShapeFraction, "a character", false, false, ignoredWarnings);
+		std::vector<std::string> warnings;
+		const ColliderShape outer = BuildColliderShape(entity, scale, 1.0f, "a character", false, false, warnings);
+		const ColliderShape inner = BuildColliderShape(entity, scale, InnerShapeFraction, "a character", false, false, warnings);
+		std::ranges::sort(warnings);
+		warnings.erase(std::unique(warnings.begin(), warnings.end()), warnings.end());
+		ResizeWarnings.Report(entity, warnings);
 		if (!outer.Shape || !inner.Shape)
 		{
 			RecreateCharacter(entity);
@@ -377,11 +379,13 @@ namespace Basalt {
 
 	bool PhysicsWorld::HasCharacter(Entity entity) const
 	{
-		return entity && m_Impl->Characters.contains(entity.GetUUID());
+		return m_Impl->Owns(entity) && m_Impl->Characters.contains(entity.GetUUID());
 	}
 
 	void PhysicsWorld::MoveCharacter(Entity entity, const glm::vec3& velocity)
 	{
+		if (!m_Impl->Owns(entity))
+			return;
 		auto it = m_Impl->Characters.find(entity.GetUUID());
 		if (it != m_Impl->Characters.end() && IsFiniteVec(velocity))
 			it->second.MoveVelocity = velocity;
@@ -389,12 +393,16 @@ namespace Basalt {
 
 	bool PhysicsWorld::IsCharacterGrounded(Entity entity) const
 	{
+		if (!m_Impl->Owns(entity))
+			return false;
 		auto it = m_Impl->Characters.find(entity.GetUUID());
 		return it != m_Impl->Characters.end() && it->second.Character->GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround;
 	}
 
 	std::optional<glm::vec3> PhysicsWorld::GetCharacterGroundNormal(Entity entity) const
 	{
+		if (!m_Impl->Owns(entity))
+			return std::nullopt;
 		auto it = m_Impl->Characters.find(entity.GetUUID());
 		if (it == m_Impl->Characters.end() || !it->second.Character->IsSupported())
 			return std::nullopt;

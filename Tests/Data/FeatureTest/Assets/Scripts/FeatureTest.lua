@@ -824,7 +824,8 @@ function Driver:OnDestroy()
 	FeatureTestEvents.DriverDestroyed = true
 end
 
--- Invoked by the batch after the visual/gameplay checks; these bodies have no rendering components.
+-- Invoked after the visual/gameplay checks. Bodies at x=1000 cannot touch the feature scene;
+-- zero gravity keeps the parents inside the trigger. They have no rendering components.
 function FeatureTest.BeginRuntimeSpawnCheck()
 	FeatureTest.RuntimeCreates = 0
 	FeatureTest.RuntimeContacts = 0
@@ -843,13 +844,16 @@ function FeatureTest.BeginRuntimeSpawnCheck()
 end
 
 function FeatureTest.CheckRuntimeSpawns()
-	Check("Pending runtime scripts all create", FeatureTest.RuntimeCreates == 3)
+	Check("Runtime scripts all create", FeatureTest.RuntimeCreates == 3)
 	Check("Spawned compound contacts coalesce", FeatureTest.RuntimeContacts == 3)
 	for i = 1, 3 do
 		local body = Scene.FindEntityByName("RuntimeSpawn" .. i)
 		local child = Scene.FindEntityByName("RuntimeSpawn" .. i .. "Child")
-		Check("Contact-driven spawn has a distinct identity", child ~= nil and child.ID ~= body.ID)
-		Check("Spawned joint preserves its entity reference", child:GetComponent("Joint").ConnectedEntity == body.ID)
+		Check("Contact-driven spawn exists", child ~= nil and body ~= nil)
+		if child and body then
+			Check("Spawned joint is live", child:HasJoint())
+			Check("Spawned fixed joint holds its offset", math.abs((child.Translation - body.Translation).y - 2) < 0.05)
+		end
 	end
 end
 

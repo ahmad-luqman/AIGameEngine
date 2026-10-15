@@ -41,37 +41,10 @@ namespace Basalt {
 		explicit Impl(Scene* scene);
 		~Impl();
 
-		Scene* ScenePtr;
-		void RecreateBody(Entity entity);
-		// Rebuilds (or removes) the entity's character; keeps its velocity and the last Move velocity.
-		void RecreateCharacter(Entity entity);
-		// Rebuilds bodies and characters whose components changed, applies changed character settings, resizes
-		// rescaled ones and rebuilds dirty joints (the start of every Step, and OnSceneLoaded).
-		void ApplyPendingChanges();
-		// Colliders are sized by the entity's world scale, which a script, an animation or a parent can change
-		// without touching a physics component. Once per Step (and on a scene load), after dirty entities are
-		// rebuilt, bodies and characters whose scale differs from the one they were built with get a new shape in
-		// place, keeping their contacts (so an animated scale does not end and restart every overlap each frame);
-		// a body's joints are rebuilt from the current poses, since their anchors scale with it.
-		// Entities left without a body by a degenerate transform are built once it decomposes again.
-		void ApplyScaleChanges();
-		void ResizeBody(Entity entity, const glm::vec3& scale);
-		void ResizeCharacter(Entity entity, const glm::vec3& scale);
-		// Applies changed CharacterController settings in place, rebuilding only when the layer changed.
-		void ApplyCharacterSettings(Entity entity);
-		void UpdateCharacters(float fixedStep);
-		void RebuildDirtyJoints();
-		// Marks every joint moving or connected to the entity's body for a rebuild (it was just created).
-		void MarkJointsDirty(UUID uuid);
-		// Builds the entity's constraint; problems are appended to warnings.
-		void CreateJoint(Entity entity, std::vector<std::string>& warnings);
-		// Applies the fields of a live joint that do not need a rebuild (limits, motor, break thresholds,
-		// collision).
-		void ApplyJointSettings(Entity entity, std::vector<std::string>& warnings);
-		// Removes joints whose constraint force or torque exceeded their break thresholds in the last step.
-		void CheckBrokenJoints(float fixedStep);
-		void DispatchContacts(float fixedStep);
+		// The owning scene outlives this world; one world owns the registry's runtime records.
+		Scene* const ScenePtr;
 
+		// Runtime-only EnTT component; never copied or serialized with scene data.
 		struct BodyRecord
 		{
 			JPH::BodyID ID;
@@ -172,8 +145,6 @@ namespace Basalt {
 			const Impl& m_Owner;
 		};
 
-		// Runtime-only components; never copied or serialized with scene data.
-		BodyRecord* FindBody(UUID uuid) const;
 		std::unordered_map<UUID, CharacterRecord> Characters;
 		// Characters meet each other's full shapes through this list, and a moving one pushes the other with its
 		// velocity (in the pushed character's own update). They skip each other's inner bodies, which Jolt
@@ -206,6 +177,8 @@ namespace Basalt {
 		PhysicsLayers Layers;
 		// Body warnings (e.g. an unknown layer or an ignored Continuous).
 		PhysicsInternal::WarningLog BodyWarnings{ "entity", true };
+		// Shape cooking can fail at a new scale even when the collider components are unchanged.
+		PhysicsInternal::WarningLog ResizeWarnings{ "resized entity", true };
 		// Set while Start() creates every body; it marks all joints dirty itself afterwards.
 		bool Starting = false;
 		using EntityPair = std::pair<uint64_t, uint64_t>;
@@ -213,7 +186,52 @@ namespace Basalt {
 		// threads during Update, so it only changes between steps.
 		std::set<EntityPair> IgnoredPairs;
 		struct ContactState;
+		// Keep contact bookkeeping local to PhysicsContacts.cpp; Impl construction/destruction is defined there.
 		Scope<ContactState> Contacts;
+
+		// Rebuilds the entity's body, preserving velocity and ending contacts of the old shape.
+		void RecreateBody(Entity entity);
+		// Rebuilds (or removes) the entity's character; keeps its velocity and the last Move velocity.
+		void RecreateCharacter(Entity entity);
+		// Rebuilds bodies and characters whose components changed, applies changed character settings, resizes
+		// rescaled ones and rebuilds dirty joints (the start of every Step, and OnSceneLoaded).
+		void ApplyPendingChanges();
+		// Colliders are sized by the entity's world scale, which a script, an animation or a parent can change
+		// without touching a physics component. Once per Step (and on a scene load), after dirty entities are
+		// rebuilt, bodies and characters whose scale differs from the one they were built with get a new shape in
+		// place, keeping their contacts (so an animated scale does not end and restart every overlap each frame);
+		// a body's joints are rebuilt from the current poses, since their anchors scale with it.
+		// Entities left without a body by a degenerate transform are built once it decomposes again.
+		void ApplyScaleChanges();
+		void ResizeBody(Entity entity, const glm::vec3& scale);
+		void ResizeCharacter(Entity entity, const glm::vec3& scale);
+		// Applies changed CharacterController settings in place, rebuilding only when the layer changed.
+		void ApplyCharacterSettings(Entity entity);
+		void UpdateCharacters(float fixedStep);
+		void RebuildDirtyJoints();
+		// Marks every joint moving or connected to the entity's body for a rebuild (it was just created).
+		void MarkJointsDirty(UUID uuid);
+		// Builds the entity's constraint; problems are appended to warnings.
+		void CreateJoint(Entity entity, std::vector<std::string>& warnings);
+		// Applies the fields of a live joint that do not need a rebuild (limits, motor, break thresholds,
+		// collision).
+		void ApplyJointSettings(Entity entity, std::vector<std::string>& warnings);
+		// Removes joints whose constraint force or torque exceeded their break thresholds in the last step.
+		void CheckBrokenJoints(float fixedStep);
+		void DispatchContacts(float fixedStep);
+
+		bool Owns(Entity entity) const { return entity.GetScene() == ScenePtr && entity; }
+		// Borrowed pointers must not survive mutations of the registry's BodyRecord pool.
+		BodyRecord* FindBody(Entity entity) const;
+		BodyRecord* FindBody(UUID uuid) const;
+		BodyRecord* MutableBody(Entity entity, const char* call);
+		auto BodyView() const
+		{
+			auto view = ScenePtr->GetRegistry().view<RigidBodyComponent, BodyRecord>();
+			// Rebuilds reorder BodyRecord storage; activation must follow the authored component order.
+			view.use<RigidBodyComponent>();
+			return view;
+		}
 
 		// Applies the record's Settings that a live character can change, sanitizing out-of-range values
 		// (appended to warnings).

@@ -65,7 +65,7 @@ TEST_SUITE("Scene")
 		Project::GetActive()->GetConfig().RandomSeed = 1234;
 		Ref<Scene> edit = CreateRef<Scene>();
 		Entity root = edit->CreateEntityWithUUID(42, "Root");
-		edit->CreateChildEntity(root, "Child");
+		edit->SetParent(edit->CreateEntityWithUUID(43, "Child"), root, false);
 		std::string error;
 		const auto path = project.GetDirectory() / "Assets/Prefabs/IDs.bprefab";
 		REQUIRE(SceneSerializer::SavePrefab(root, path, error));
@@ -99,6 +99,7 @@ TEST_SUITE("Scene")
 			return ids;
 		};
 		const auto baseline = run(false, false);
+		// Pins seed 1234, Random's mt19937 algorithm, and the high-then-low 32-bit draw layout.
 		CHECK(baseline[0] == 3532910284440527571ULL);
 		CHECK(run(false, true) == baseline);
 		CHECK(run(true, false) == baseline);
@@ -119,7 +120,7 @@ TEST_SUITE("Scene")
 		CHECK(run(false, false) != baseline);
 	}
 
-	TEST_CASE("Runtime UUID stream survives Scene.Load and never aliases an unloaded spawn")
+	TEST_CASE("Runtime UUID stream continues across Scene.Load")
 	{
 		BasaltTest::TempProject project("RuntimeUUIDLoad");
 		project.WriteFile("Assets/Scenes/Empty.bscene", R"({"Name":"Empty","Entities":[]})");
@@ -138,9 +139,58 @@ TEST_SUITE("Scene")
 		CHECK(BasaltTest::Eval(scene, "Scene.Load('Assets/Scenes/Empty.bscene')") == "");
 		scene.OnUpdate(BasaltTest::Step);
 		CHECK_FALSE(scene.GetEntityByUUID(baseline[0]));
+		// Editing the project seed during play takes effect only on the next session.
 		Project::GetActive()->GetConfig().RandomSeed++;
 		CHECK(static_cast<uint64_t>(scene.CreateEntity().GetUUID()) == baseline[1]);
 		CHECK(static_cast<uint64_t>(scene.CreateEntity().GetUUID()) == baseline[2]);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Runtime identity starts before OnCreate and resets when the same scene restarts")
+	{
+		BasaltTest::TempProject project("RuntimeIdentityRestart");
+		Project::GetActive()->GetConfig().RandomSeed = 1234;
+		const std::string script = project.WriteFile("Assets/Scripts/Spawn.lua", R"(
+			return { OnCreate = function(self) Scene.CreateEntity("CreatedAtStart") end }
+		)");
+		Scene scene;
+		scene.CreateEntityWithUUID(42, "Spawner").AddComponent<ScriptComponent>().Script = script;
+		for (int run = 0; run < 2; ++run)
+		{
+			scene.OnRuntimeStart();
+			Entity spawned = scene.FindEntityByName("CreatedAtStart");
+			REQUIRE(spawned);
+			CHECK(static_cast<uint64_t>(spawned.GetUUID()) == 3532910284440527571ULL);
+			scene.DestroyEntity(spawned);
+			scene.OnRuntimeStop();
+		}
+		for (int run = 0; run < 2; ++run)
+		{
+			scene.OnSimulationStart();
+			Entity spawned = scene.CreateEntity();
+			CHECK(static_cast<uint64_t>(spawned.GetUUID()) == 3532910284440527571ULL);
+			scene.DestroyEntity(spawned);
+			scene.OnSimulationStop();
+		}
+		Scene editA;
+		Scene editB;
+		CHECK(editA.CreateEntity().GetUUID() != editB.CreateEntity().GetUUID());
+	}
+
+	TEST_CASE("Duplicate source IDs are rejected before creating scene or prefab entities")
+	{
+		BasaltTest::TempProject project("DuplicateSourceIDs");
+		const auto data = nlohmann::json::parse(R"({"Entities":[{"ID":42,"Name":"A"},{"ID":42,"Name":"B"}]})");
+		Scene scene;
+		std::string error;
+		CHECK_FALSE(SceneSerializer::DeserializeScene(scene, data, error));
+		CHECK(error.find("duplicate ID 42") != std::string::npos);
+		CHECK(scene.GetEntityCount() == 0);
+		project.WriteFile("Assets/Prefabs/Duplicate.bprefab", data.dump());
+		scene.OnRuntimeStart();
+		CHECK_FALSE(SceneSerializer::InstantiatePrefab(scene, project.GetDirectory() / "Assets/Prefabs/Duplicate.bprefab", "Assets/Prefabs/Duplicate.bprefab", {}, error));
+		CHECK(error.find("duplicate ID 42") != std::string::npos);
+		CHECK(scene.GetEntityCount() == 0);
 		scene.OnRuntimeStop();
 	}
 

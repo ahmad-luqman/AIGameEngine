@@ -19,6 +19,6 @@
 	{"id": "spawn-rebuilt", "command": "play.step", "params": {"frames": 60, "assertNoErrors": true, "expectHash": "1c1a083a49e26b11"}},
 	{"id": "spawn-exit-zone", "command": "lua.exec", "params": {"code": "Scene.FindEntityByName('ReplayZone').Translation = Vec3(100, 3, 0) for _, i in ipairs({1, 2, 4}) do Scene.FindEntityByName('ReplayBody' .. i):SetLinearVelocity(Vec3(0, 0.1, 0)) end"}},
 	{"id": "spawn-ended", "command": "play.step", "params": {"frames": 2, "assertNoErrors": true, "expectHash": "8a66818455f22275"}},
-	{"id": "check-spawn-ends", "command": "lua.exec", "params": {"code": "assert(ReplayExits >= 4, 'rebuilt and destroyed contacts must end')"}},
+	{"id": "check-spawn-ends", "command": "lua.exec", "params": {"code": "assert(ReplayExits == 5, 'rebuilt and destroyed contacts must end')"}},
 	{ "id": "stop", "command": "play.stop" }
 ]

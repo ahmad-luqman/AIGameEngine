@@ -20,26 +20,36 @@ namespace Basalt {
 
 	using namespace PhysicsInternal;
 
+	PhysicsWorld::Impl::BodyRecord* PhysicsWorld::Impl::FindBody(Entity entity) const
+	{
+		return Owns(entity) ? ScenePtr->GetRegistry().try_get<BodyRecord>(entity) : nullptr;
+	}
+
 	PhysicsWorld::Impl::BodyRecord* PhysicsWorld::Impl::FindBody(UUID uuid) const
 	{
-		Entity entity = ScenePtr->GetEntityByUUID(uuid);
-		return entity ? ScenePtr->GetRegistry().try_get<BodyRecord>(entity) : nullptr;
+		return FindBody(ScenePtr->GetEntityByUUID(uuid));
+	}
+
+	PhysicsWorld::Impl::BodyRecord* PhysicsWorld::Impl::MutableBody(Entity entity, const char* call)
+	{
+		return Owns(entity) && !WarnIfCharacter(entity, call) ? FindBody(entity) : nullptr;
 	}
 
 	void PhysicsWorld::Impl::RemoveBody(UUID uuid)
 	{
-		auto* it = FindBody(uuid);
-		if (it == nullptr)
+		Entity entity = ScenePtr->GetEntityByUUID(uuid);
+		auto* record = FindBody(entity);
+		if (!record)
 			return;
-		const bool trigger = it->IsTrigger;
+		const bool trigger = record->IsTrigger;
 		RemoveJointsOfBody(uuid);
 		JPH::BodyInterface& bodies = System->GetBodyInterface();
-		BodyToEntity.erase(it->ID.GetIndexAndSequenceNumber());
-		// Jolt reuses the index for the next body; whatever creates it must not inherit these modes.
-		ContactListener.Materials[it->ID.GetIndex()] = {};
-		bodies.RemoveBody(it->ID);
-		bodies.DestroyBody(it->ID);
-		ScenePtr->GetRegistry().remove<BodyRecord>(ScenePtr->GetEntityByUUID(uuid));
+		BodyToEntity.erase(record->ID.GetIndexAndSequenceNumber());
+		// Jolt reuses the index; the next body must not inherit these material modes.
+		ContactListener.Materials[record->ID.GetIndex()] = {};
+		bodies.RemoveBody(record->ID);
+		bodies.DestroyBody(record->ID);
+		ScenePtr->GetRegistry().remove<BodyRecord>(entity);
 		EndContacts(uuid, trigger);
 	}
 
@@ -170,20 +180,21 @@ namespace Basalt {
 
 	void PhysicsWorld::Start()
 	{
-		auto view = m_Impl->ScenePtr->GetAllEntitiesWith<RigidBodyComponent>();
-		m_Impl->Starting = true;
+		Impl& impl = *m_Impl;
+		auto view = impl.ScenePtr->GetAllEntitiesWith<RigidBodyComponent>();
+		impl.Starting = true;
 		for (entt::entity handle : view)
-			m_Impl->RecreateBody({ handle, m_Impl->ScenePtr });
-		for (entt::entity handle : m_Impl->ScenePtr->GetAllEntitiesWith<CharacterControllerComponent>())
-			m_Impl->RecreateCharacter({ handle, m_Impl->ScenePtr });
-		m_Impl->Starting = false;
-		m_Impl->DirtyEntities.Clear();
-		m_Impl->DirtyCharacters.Clear();
+			impl.RecreateBody({ handle, impl.ScenePtr });
+		for (entt::entity handle : impl.ScenePtr->GetAllEntitiesWith<CharacterControllerComponent>())
+			impl.RecreateCharacter({ handle, impl.ScenePtr });
+		impl.Starting = false;
+		impl.DirtyEntities.Clear();
+		impl.DirtyCharacters.Clear();
 		// Joints need both of their bodies, so they are built after every body exists.
-		for (entt::entity handle : m_Impl->ScenePtr->GetAllEntitiesWith<JointComponent>())
-			m_Impl->DirtyJoints.insert(Entity(handle, m_Impl->ScenePtr).GetUUID());
-		m_Impl->RebuildDirtyJoints();
-		m_Impl->System->OptimizeBroadPhase();
+		for (entt::entity handle : impl.ScenePtr->GetAllEntitiesWith<JointComponent>())
+			impl.DirtyJoints.insert(Entity(handle, impl.ScenePtr).GetUUID());
+		impl.RebuildDirtyJoints();
+		impl.System->OptimizeBroadPhase();
 	}
 
 	void PhysicsWorld::RecreateBody(Entity entity)
@@ -194,24 +205,24 @@ namespace Basalt {
 	void PhysicsWorld::Impl::RecreateBody(Entity entity)
 	{
 		// UUIDs can match across scene copies, but EnTT handles belong to only one registry.
-		if (!entity || entity.GetScene() != ScenePtr)
+		if (!Owns(entity))
+		{
+			BS_CORE_WARN("Physics: cannot rebuild {} entity '{}'", entity ? "foreign" : "invalid", entity ? entity.GetName() : "<invalid>");
 			return;
+		}
 		JPH::BodyInterface& bodies = System->GetBodyInterface();
 		JPH::Vec3 previousLinearVelocity = JPH::Vec3::sZero();
 		JPH::Vec3 previousAngularVelocity = JPH::Vec3::sZero();
 
-		if (entity)
+		if (auto* existing = FindBody(entity))
 		{
-			auto* existing = FindBody(entity.GetUUID());
-			if (existing != nullptr)
-			{
-				// Rebuilding (e.g. after a collider or rigid body change) keeps the body moving.
-				previousLinearVelocity = bodies.GetLinearVelocity(existing->ID);
-				previousAngularVelocity = bodies.GetAngularVelocity(existing->ID);
-				RemoveBody(entity.GetUUID());
-			}
+			// Rebuilding (e.g. after a collider or rigid body change) keeps the body moving.
+			previousLinearVelocity = bodies.GetLinearVelocity(existing->ID);
+			previousAngularVelocity = bodies.GetAngularVelocity(existing->ID);
+			RemoveBody(entity.GetUUID());
 		}
 
+		// Removing a body dispatches contact exits, whose scripts can destroy the entity.
 		// A character controller replaces the body (RecreateCharacter reports the ignored RigidBody).
 		if (!entity || !entity.HasComponent<RigidBodyComponent>() || entity.HasComponent<CharacterControllerComponent>())
 			return;
@@ -383,9 +394,9 @@ namespace Basalt {
 			return;
 		Impl::BodyRecord& record = *found;
 		const bool dynamic = record.Type == RigidBodyType::Dynamic;
-		// The same colliders the body was built from, so their warnings would only repeat.
-		std::vector<std::string> ignoredWarnings;
-		const ColliderShape colliders = BuildColliderShape(entity, scale, 1.0f, dynamic ? "a dynamic body" : nullptr, record.IsTrigger, true, ignoredWarnings);
+		std::vector<std::string> warnings;
+		const ColliderShape colliders = BuildColliderShape(entity, scale, 1.0f, dynamic ? "a dynamic body" : nullptr, record.IsTrigger, true, warnings);
+		ResizeWarnings.Report(entity, warnings);
 		if (!colliders.Shape)
 		{
 			RecreateBody(entity);
@@ -395,9 +406,13 @@ namespace Basalt {
 		// Joint anchors are scaled with the body (see CreateJoint), so its joints are rebuilt from the current
 		// poses before the next step, as after any rebuild. Constraints must go before their body's shape changes.
 		RemoveJointsOfBody(entity.GetUUID());
-		// Jolt keeps the body's position (its origin) and re-evaluates its contacts without ending them. The
-		// collider set is unchanged, so the contact listener's materials (indexed by child) still match.
+		// Jolt keeps the body's position (its origin) and re-evaluates its contacts without ending them.
+		// Shape cooking can omit a failed child, so replace its material table as well.
 		System->GetBodyInterface().SetShape(record.ID, colliders.Shape, false, JPH::EActivation::Activate);
+		BodyMaterial& material = ContactListener.Materials[record.ID.GetIndex()];
+		material.Colliders.reset();
+		if (std::ranges::any_of(colliders.Materials, &ColliderMaterial::Override))
+			material.Colliders = CreateScope<const ColliderMaterials>(colliders.Materials);
 		if (dynamic)
 		{
 			// As in RecreateBody: the new shape's inertia at the component's mass, not at Jolt's density.
@@ -415,6 +430,8 @@ namespace Basalt {
 
 	void PhysicsWorld::OnEntityDestroyed(Entity entity)
 	{
+		if (!m_Impl->Owns(entity))
+			return;
 		m_Impl->RemoveBody(entity.GetUUID());
 		m_Impl->RemoveCharacter(entity.GetUUID());
 		m_Impl->RemoveJoint(entity.GetUUID());
@@ -422,12 +439,13 @@ namespace Basalt {
 		m_Impl->DirtyJoints.erase(entity.GetUUID());
 		m_Impl->JointWarnings.Forget(entity.GetUUID());
 		m_Impl->BodyWarnings.Forget(entity.GetUUID());
+		m_Impl->ResizeWarnings.Forget(entity.GetUUID());
 		m_Impl->Unbuilt.erase(entity.GetUUID());
 	}
 
 	bool PhysicsWorld::HasBody(Entity entity) const
 	{
-		return entity && entity.GetScene() == m_Impl->ScenePtr && entity.HasComponent<Impl::BodyRecord>();
+		return m_Impl->FindBody(entity) != nullptr;
 	}
 
 	void PhysicsWorld::OnSceneLoaded()
@@ -450,8 +468,9 @@ namespace Basalt {
 			}
 			else
 			{
-				RemoveBody(uuid);
 				RemoveCharacter(uuid);
+				// Scene destruction must notify us before removing the runtime BodyRecord.
+				BS_CORE_ASSERT(std::ranges::none_of(BodyToEntity, [uuid](const auto& entry) { return entry.second == uuid; }), "Entity destroyed without physics notification");
 			}
 		}
 		for (UUID uuid : DirtyCharacters.Take())
@@ -467,27 +486,26 @@ namespace Basalt {
 	{
 		Impl& impl = *m_Impl;
 		JPH::BodyInterface& bodies = impl.System->GetBodyInterface();
-		const PhysicsSettings& settings = m_Impl->ScenePtr->GetPhysicsSettings();
+		const PhysicsSettings& settings = impl.ScenePtr->GetPhysicsSettings();
 		const float fixedStep = settings.FixedTimestep > 0.0f ? settings.FixedTimestep : 1.0f / 60.0f;
 
-		m_Impl->ApplyPendingChanges();
+		impl.ApplyPendingChanges();
 
 		m_Accumulator += ts.GetSeconds();
 		uint32_t steps = 0;
 		while (m_Accumulator >= fixedStep && steps < settings.MaxStepsPerFrame)
 		{
-			auto bodyView = m_Impl->ScenePtr->GetRegistry().view<RigidBodyComponent, Impl::BodyRecord>();
-			bodyView.use<RigidBodyComponent>();
+			auto bodyView = impl.BodyView();
 			// Push entity-side transform changes into the simulation, in registry order: activating bodies
 			// orders Jolt's active list, so a hash order would differ between standard libraries.
 			for (auto [handle, rigidBody, record] : bodyView.each())
 			{
-				Entity entity(handle, m_Impl->ScenePtr);
+				Entity entity(handle, impl.ScenePtr);
 
 				glm::vec3 position;
 				glm::quat rotation;
 				glm::vec3 scale;
-				if (!Math::DecomposeTransform(m_Impl->ScenePtr->GetWorldTransform(entity), position, rotation, scale))
+				if (!Math::DecomposeTransform(impl.ScenePtr->GetWorldTransform(entity), position, rotation, scale))
 					continue;
 
 				const bool moved = glm::any(glm::greaterThan(glm::abs(position - record.LastPosition), glm::vec3(1e-5f))) || glm::abs(glm::dot(rotation, record.LastRotation)) < 1.0f - 1e-6f;
@@ -505,7 +523,7 @@ namespace Basalt {
 			}
 
 			// Characters move before the bodies step, as Jolt expects.
-			m_Impl->UpdateCharacters(fixedStep);
+			impl.UpdateCharacters(fixedStep);
 
 			impl.System->Update(fixedStep, 1, impl.TempAllocator.get(), impl.JobSystem.get());
 			m_Accumulator -= fixedStep;
@@ -518,9 +536,9 @@ namespace Basalt {
 			std::vector<std::pair<uint32_t, Entity>> movedBodies;
 			for (auto [handle, rigidBody, record] : bodyView.each())
 			{
-				Entity entity(handle, m_Impl->ScenePtr);
+				Entity entity(handle, impl.ScenePtr);
 				if (record.Type == RigidBodyType::Dynamic)
-					movedBodies.emplace_back(m_Impl->ScenePtr->GetDepth(entity), entity);
+					movedBodies.emplace_back(impl.ScenePtr->GetDepth(entity), entity);
 			}
 			std::ranges::stable_sort(movedBodies, {}, &std::pair<uint32_t, Entity>::first);
 			for (auto& [depth, entity] : movedBodies)
@@ -546,8 +564,8 @@ namespace Basalt {
 				record.LastRotation = rotation;
 			}
 
-			m_Impl->CheckBrokenJoints(fixedStep);
-			m_Impl->DispatchContacts(fixedStep);
+			impl.CheckBrokenJoints(fixedStep);
+			impl.DispatchContacts(fixedStep);
 		}
 
 		// Never let a long stall build an unbounded backlog of steps.
@@ -557,65 +575,57 @@ namespace Basalt {
 
 	void PhysicsWorld::AddForce(Entity entity, const glm::vec3& force)
 	{
-		if (m_Impl->WarnIfCharacter(entity, "AddForce"))
-			return;
-		auto* it = m_Impl->FindBody(entity.GetUUID());
-		if (it != nullptr)
-			m_Impl->System->GetBodyInterface().AddForce(it->ID, ToJolt(force));
+		auto* body = m_Impl->MutableBody(entity, "AddForce");
+		if (body != nullptr)
+			m_Impl->System->GetBodyInterface().AddForce(body->ID, ToJolt(force));
 	}
 
 	void PhysicsWorld::AddImpulse(Entity entity, const glm::vec3& impulse)
 	{
-		if (m_Impl->WarnIfCharacter(entity, "AddImpulse"))
-			return;
-		auto* it = m_Impl->FindBody(entity.GetUUID());
-		if (it != nullptr)
-			m_Impl->System->GetBodyInterface().AddImpulse(it->ID, ToJolt(impulse));
+		auto* body = m_Impl->MutableBody(entity, "AddImpulse");
+		if (body != nullptr)
+			m_Impl->System->GetBodyInterface().AddImpulse(body->ID, ToJolt(impulse));
 	}
 
 	void PhysicsWorld::AddTorque(Entity entity, const glm::vec3& torque)
 	{
-		if (m_Impl->WarnIfCharacter(entity, "AddTorque"))
-			return;
-		auto* it = m_Impl->FindBody(entity.GetUUID());
-		if (it != nullptr)
-			m_Impl->System->GetBodyInterface().AddTorque(it->ID, ToJolt(torque));
+		auto* body = m_Impl->MutableBody(entity, "AddTorque");
+		if (body != nullptr)
+			m_Impl->System->GetBodyInterface().AddTorque(body->ID, ToJolt(torque));
 	}
 
 	void PhysicsWorld::SetLinearVelocity(Entity entity, const glm::vec3& velocity)
 	{
-		if (m_Impl->WarnIfCharacter(entity, "SetLinearVelocity"))
-			return;
-		auto* it = m_Impl->FindBody(entity.GetUUID());
-		if (it != nullptr)
-			m_Impl->System->GetBodyInterface().SetLinearVelocity(it->ID, ToJolt(velocity));
+		auto* body = m_Impl->MutableBody(entity, "SetLinearVelocity");
+		if (body != nullptr)
+			m_Impl->System->GetBodyInterface().SetLinearVelocity(body->ID, ToJolt(velocity));
 	}
 
 	glm::vec3 PhysicsWorld::GetLinearVelocity(Entity entity) const
 	{
+		if (!m_Impl->Owns(entity))
+			return glm::vec3(0.0f);
 		if (auto character = m_Impl->Characters.find(entity.GetUUID()); character != m_Impl->Characters.end())
 			return character->second.ActualVelocity;
-		auto* it = m_Impl->FindBody(entity.GetUUID());
-		if (it == nullptr)
+		auto* body = m_Impl->FindBody(entity);
+		if (body == nullptr)
 			return glm::vec3(0.0f);
-		return FromJolt(m_Impl->System->GetBodyInterface().GetLinearVelocity(it->ID));
+		return FromJolt(m_Impl->System->GetBodyInterface().GetLinearVelocity(body->ID));
 	}
 
 	void PhysicsWorld::SetAngularVelocity(Entity entity, const glm::vec3& velocity)
 	{
-		if (m_Impl->WarnIfCharacter(entity, "SetAngularVelocity"))
-			return;
-		auto* it = m_Impl->FindBody(entity.GetUUID());
-		if (it != nullptr)
-			m_Impl->System->GetBodyInterface().SetAngularVelocity(it->ID, ToJolt(velocity));
+		auto* body = m_Impl->MutableBody(entity, "SetAngularVelocity");
+		if (body != nullptr)
+			m_Impl->System->GetBodyInterface().SetAngularVelocity(body->ID, ToJolt(velocity));
 	}
 
 	glm::vec3 PhysicsWorld::GetAngularVelocity(Entity entity) const
 	{
-		auto* it = m_Impl->FindBody(entity.GetUUID());
-		if (it == nullptr)
+		auto* body = m_Impl->FindBody(entity);
+		if (body == nullptr)
 			return glm::vec3(0.0f);
-		return FromJolt(m_Impl->System->GetBodyInterface().GetAngularVelocity(it->ID));
+		return FromJolt(m_Impl->System->GetBodyInterface().GetAngularVelocity(body->ID));
 	}
 
 	const PhysicsLayers& PhysicsWorld::GetLayers() const

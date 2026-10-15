@@ -163,7 +163,7 @@ namespace Basalt {
 		float GetTime() const { return m_Time; }
 		// Number of OnUpdate calls that advanced the simulation since the runtime started.
 		uint64_t GetFrameCount() const { return m_FrameCount; }
-		// Starting seed of the gameplay random streams of this play/simulate session (Lua, particle emitters;
+		// Starting seed of the gameplay random streams of this play/simulate session (Lua, particles, runtime UUIDs;
 		// scripts may reseed Lua's): the project's RandomSeed when the session started, so changing the
 		// project setting mid-session (it applies from the next play) cannot split one session over two
 		// seeds. Meaningful while running; outside play it is the last session's.
@@ -237,7 +237,22 @@ namespace Basalt {
 		void ReportLoadProblem(const std::string& message);
 		void DestroyEntityImmediate(Entity entity);
 		void FlushPendingDestruction();
-		void ResetRuntimeUUIDs();
+		// Session-owned identity stream. Only non-generated IDs need a permanent reservation; live
+		// generated IDs are protected by the entity map without retaining every retired spawn forever.
+		struct SessionIdentity
+		{
+			explicit SessionIdentity(uint32_t seed)
+				: Stream(seed)
+			{}
+			UUID Next(const Scene& scene);
+			void Reserve(UUID uuid) { Reserved.insert(uuid); }
+			Random Stream;
+			// Constrains generated IDs only: loading an explicit saved ID may reuse a retired ID.
+			std::unordered_set<UUID> Reserved;
+		};
+
+		void StartRandomSession();
+		Entity CreateEntityInternal(UUID uuid, const std::string& name);
 		UUID GenerateEntityUUID();
 		void RemoveFromParent(Entity entity);
 		// Records source UUID -> copy UUID for every copied entity in outCopies.
@@ -258,9 +273,8 @@ namespace Basalt {
 		float m_Time = 0.0f;
 		uint64_t m_FrameCount = 0;
 		uint32_t m_RandomSeed = Random::DefaultSeed;
-		// Independent of gameplay random draws; retained across Scene.Load, reset only for a new session.
-		Random m_EntityRandom;
-		std::unordered_set<UUID> m_IssuedRuntimeUUIDs;
+		// Independent of gameplay draws; continues across Scene.Load and is released on stop.
+		std::optional<SessionIdentity> m_SessionIdentity;
 		bool m_QuitRequested = false;
 		std::vector<UUID> m_PendingDestruction;
 		Scope<PendingLoad> m_PendingLoad;

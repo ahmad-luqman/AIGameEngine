@@ -2,6 +2,7 @@
 local Spawn = {}
 
 local function record(value)
+	-- A prime below 2^24 keeps the stored trace exactly representable in a float Translation.
 	ReplayTrace = (ReplayTrace * 17 + value) % 1000003
 	Scene.FindEntityByName("ReplayTrace").Translation = Vec3(ReplayTrace, ReplayCreates, ReplayContacts)
 end

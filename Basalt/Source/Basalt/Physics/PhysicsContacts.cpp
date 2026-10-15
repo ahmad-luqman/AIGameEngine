@@ -18,19 +18,36 @@ namespace Basalt {
 	// suspended contacts until both bodies wake and Jolt can confirm whether they still touch.
 	struct PhysicsWorld::Impl::ContactState
 	{
+		// Lower entity UUID, its sub-shape, higher entity UUID, its sub-shape.
 		using ContactKey = std::tuple<uint64_t, uint32_t, uint64_t, uint32_t>;
 		std::set<ContactKey> ActiveContacts;
+		// Number of active sub-shape keys for each entity pair.
 		std::map<EntityPair, int> PairCounts;
+		// A subset of ActiveContacts: Jolt removes sleeping contacts without physical separation.
 		std::set<ContactKey> SuspendedContacts;
+
+		void Acquire(const ContactKey& key)
+		{
+			SuspendedContacts.erase(key);
+			if (ActiveContacts.insert(key).second)
+				PairCounts[EntityPair(std::get<0>(key), std::get<2>(key))]++;
+		}
 
 		// Returns true only when the last sub-shape contact of a pair was released.
 		bool Release(const ContactKey& key)
 		{
+			SuspendedContacts.erase(key);
 			if (ActiveContacts.erase(key) == 0)
 				return false;
 			const EntityPair pair(std::get<0>(key), std::get<2>(key));
 			auto count = PairCounts.find(pair);
 			BS_CORE_ASSERT(count != PairCounts.end() && count->second > 0, "Uncounted active contact");
+			if (count == PairCounts.end() || count->second <= 0)
+			{
+				BS_CORE_ERROR("Physics: uncounted active contact between {} and {}", pair.first, pair.second);
+				PairCounts.erase(pair);
+				return true;
+			}
 			if (--count->second != 0)
 				return false;
 			PairCounts.erase(count);
@@ -42,14 +59,16 @@ namespace Basalt {
 		: ScenePtr(scene)
 		, Contacts(CreateScope<ContactState>())
 	{
+		BS_CORE_ASSERT(ScenePtr, "PhysicsWorld requires an owning scene");
+		BS_CORE_ASSERT(ScenePtr->GetRegistry().view<BodyRecord>().empty(), "Only one PhysicsWorld may own a scene registry");
 	}
 
 	PhysicsWorld::Impl::~Impl() = default;
 
 	bool PhysicsWorld::Impl::IsTrigger(UUID uuid) const
 	{
-		auto* it = FindBody(uuid);
-		return it != nullptr && it->IsTrigger;
+		auto* body = FindBody(uuid);
+		return body != nullptr && body->IsTrigger;
 	}
 
 	void PhysicsWorld::Impl::EndContacts(UUID uuid, bool trigger)
@@ -65,7 +84,6 @@ namespace Basalt {
 			}
 			const EntityPair pair(std::get<0>(*key), std::get<2>(*key));
 			const auto removed = *key++;
-			Contacts->SuspendedContacts.erase(removed);
 			if (Contacts->Release(removed))
 				ended.insert(pair);
 		}
@@ -134,11 +152,8 @@ namespace Basalt {
 		std::sort(events.begin(), events.end(), [](const RawContactEvent& a, const RawContactEvent& b) { return a.Tie() < b.Tie(); });
 
 		// A body that falls asleep reports its contacts as removed; it is still touching, so keep them.
-		auto isSleeping = [&](uint32_t body) {
-			auto entity = BodyToEntity.find(body);
-			if (entity == BodyToEntity.end())
-				return false;
-			auto* record = FindBody(entity->second);
+		auto isEntitySleeping = [&](UUID uuid) {
+			auto* record = FindBody(uuid);
 			return record != nullptr && record->Type != RigidBodyType::Static && !bodies.IsActive(record->ID);
 		};
 
@@ -173,7 +188,7 @@ namespace Basalt {
 			const ContactState::ContactKey key(a, subA, b, subB);
 			const Impl::EntityPair pair(a, b);
 
-			if (!event.Added && (isSleeping(event.Body1) || isSleeping(event.Body2)))
+			if (!event.Added && (isEntitySleeping(first->second) || isEntitySleeping(second->second)))
 			{
 				if (Contacts->ActiveContacts.contains(key))
 					Contacts->SuspendedContacts.insert(key);
@@ -185,9 +200,7 @@ namespace Basalt {
 			{
 				if (!change.Begin || contact.Impulse > change.Begin->Impulse)
 					change.Begin = contact;
-				Contacts->SuspendedContacts.erase(key);
-				if (Contacts->ActiveContacts.insert(key).second)
-					Contacts->PairCounts[pair]++;
+				Contacts->Acquire(key);
 			}
 			else
 			{
@@ -196,10 +209,6 @@ namespace Basalt {
 		}
 
 		// Suspended contacts whose bodies are awake again and were not re-reported this step have ended.
-		auto isEntitySleeping = [&](uint64_t uuid) {
-			auto* record = FindBody(uuid);
-			return record != nullptr && record->Type != RigidBodyType::Static && !bodies.IsActive(record->ID);
-		};
 		for (auto key = Contacts->SuspendedContacts.begin(); key != Contacts->SuspendedContacts.end();)
 		{
 			if (isEntitySleeping(std::get<0>(*key)) || isEntitySleeping(std::get<2>(*key)))
@@ -209,8 +218,8 @@ namespace Basalt {
 			}
 			const Impl::EntityPair pair(std::get<0>(*key), std::get<2>(*key));
 			touched.try_emplace(pair, PairChange{ Contacts->PairCounts.contains(pair), std::nullopt });
-			Contacts->Release(*key);
-			key = Contacts->SuspendedContacts.erase(key);
+			const auto removed = *key++;
+			Contacts->Release(removed);
 		}
 
 		ScriptEngine* scriptEngine = ScenePtr->GetScriptEngine();

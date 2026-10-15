@@ -39,7 +39,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   only while a scene plays (physics, animation and particles also while it simulates) and key their state by entity
   UUID; they react to EnTT component signals. `UIInteraction` (widget hover, hold and focus) exists only in Play
   and re-reads the widgets every frame. Gameplay random streams (Lua's random numbers, particle
-  emitters) are seeded from the session's seed, `Scene::GetRandomSeed` (the project's `RandomSeed`).
+  emitters and runtime entity UUIDs) are seeded from the session's seed, `Scene::GetRandomSeed` (the project's `RandomSeed`).
 - **Play mode runs a copy.** `Scene::Copy` duplicates the edit scene (same UUIDs) for play/simulate;
   stopping discards it.
 - **Gameplay services live in the ScriptEngine.** Timers and coroutines (`ScriptTasks`) and events
@@ -158,7 +158,7 @@ Other rules:
   `Check(...)` for every new API function and put every new component in the scene.
 - `PhysicsDeterminism` (`Tests/Data/Determinism`) pins the state hashes of a physics-heavy scene, which
   must match on every CI platform and configuration (Debug, Release, ASan, coverage). Deliberate changes to
-  physics, scene serialization or the component registry legitimately move them: update the expected
+  physics, the runtime UUID stream, scene serialization or the component registry legitimately move them: update the expected
   hashes (see its README). An unexplained change is a determinism bug.
 - GPU tests (label `gpu`) are registered by `scripts/build.sh` unless `CI` is set (CI registers them
   explicitly in its lavapipe job): they render the feature scene and fail on any validation error — and

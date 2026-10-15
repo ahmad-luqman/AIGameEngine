@@ -14,6 +14,7 @@
 
 #include <glm/gtc/quaternion.hpp>
 
+#include <array>
 #include <cmath>
 #include <limits>
 #include <string>
@@ -751,7 +752,7 @@ TEST_SUITE("Particles")
 		scene.OnRuntimeStop();
 	}
 
-	TEST_CASE("Emitters spawned during play with random UUIDs repeat in every session")
+	TEST_CASE("Emitters spawned during play with different explicit UUIDs repeat in every session")
 	{
 		ParticleEmitterComponent emitter = QuietEmitter();
 		emitter.PlayOnStart = true;
@@ -759,15 +760,15 @@ TEST_SUITE("Particles")
 		emitter.Shape = ParticleEmitterShape::Sphere;
 		emitter.SpeedMin = 0.5f;
 		emitter.SpeedMax = 1.5f;
-		auto run = [&emitter]() {
+		auto run = [&emitter](const std::array<uint64_t, 3>& ids) {
 			Scene scene;
 			AddEmitter(scene, "SceneEmitter", emitter);
 			scene.OnRuntimeStart();
 			StepFrames(scene, 5);
 			for (int i = 0; i < 3; i++)
 			{
-				// CreateEntity draws a fresh random UUID every session.
-				Entity spawned = scene.CreateEntity("Spawned");
+				// Deliberately vary UUIDs without changing the particle seed or registration order.
+				Entity spawned = scene.CreateEntityWithUUID(ids[static_cast<size_t>(i)], "Spawned");
 				spawned.GetTransform().Translation = { 2.0f * static_cast<float>(i), 0.0f, 0.0f };
 				spawned.AddComponent<ParticleEmitterComponent>(emitter);
 			}
@@ -776,9 +777,9 @@ TEST_SUITE("Particles")
 			scene.OnRuntimeStop();
 			return snapshot;
 		};
-		const std::vector<float> first = run();
+		const std::vector<float> first = run({ 100, 42, 9000 });
 		CHECK_FALSE(first.empty());
-		CHECK(run() == first);
+		CHECK(run({ 5, 8001, 2 }) == first);
 	}
 
 	TEST_CASE("Particles repeat across sessions of one scene, its play copy, and after simulating")

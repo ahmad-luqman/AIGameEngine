@@ -212,6 +212,98 @@ TEST_SUITE("Physics")
 		scene.OnSimulationStop();
 	}
 
+	TEST_CASE("Physics entity APIs reject null and foreign entities sharing body character and joint IDs")
+	{
+		Scene scene;
+		Entity body = CreateWeightlessBox(scene, { 0.0f, 4.0f, 0.0f });
+		body.GetComponent<RigidBodyComponent>().LinearDamping = 0.0f;
+		body.GetComponent<RigidBodyComponent>().AngularDamping = 0.0f;
+		HangFromWorld(body, JointType::Hinge);
+		Entity character = scene.CreateEntity("Character");
+		character.GetTransform().Translation = { 10.0f, 4.0f, 0.0f };
+		character.AddComponent<CharacterControllerComponent>().GravityFactor = 0.0f;
+		character.AddComponent<CapsuleColliderComponent>();
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		physics.SetLinearVelocity(body, { 1.0f, 0.0f, 0.0f });
+		physics.SetAngularVelocity(body, { 0.0f, 2.0f, 0.0f });
+		Scene foreign;
+		foreign.CreateEntity("Padding");
+		Entity foreignBody = foreign.CreateEntityWithUUID(body.GetUUID());
+		Entity foreignCharacter = foreign.CreateEntityWithUUID(character.GetUUID());
+		for (Entity entity : { Entity{}, foreignBody, foreignCharacter })
+		{
+			physics.RecreateBody(entity);
+			physics.AddForce(entity, { 100.0f, 0.0f, 0.0f });
+			physics.AddImpulse(entity, { 100.0f, 0.0f, 0.0f });
+			physics.AddTorque(entity, { 100.0f, 0.0f, 0.0f });
+			physics.SetLinearVelocity(entity, { 10.0f, 0.0f, 0.0f });
+			physics.SetAngularVelocity(entity, { 10.0f, 0.0f, 0.0f });
+			physics.MoveCharacter(entity, { 10.0f, 0.0f, 0.0f });
+			physics.OnEntityDestroyed(entity);
+			CHECK_FALSE(physics.HasBody(entity));
+			CHECK_FALSE(physics.HasCharacter(entity));
+			CHECK_FALSE(physics.HasJoint(entity));
+			CHECK_FALSE(physics.IsCharacterGrounded(entity));
+			CHECK_FALSE(physics.GetCharacterGroundNormal(entity));
+			CHECK_FALSE(physics.GetJointPosition(entity));
+			CHECK_FALSE(physics.GetJointRotation(entity));
+			CHECK(physics.GetLinearVelocity(entity) == glm::vec3(0.0f));
+			CHECK(physics.GetAngularVelocity(entity) == glm::vec3(0.0f));
+		}
+		CHECK(physics.GetLinearVelocity(body) == glm::vec3(1.0f, 0.0f, 0.0f));
+		CHECK(physics.GetAngularVelocity(body) == glm::vec3(0.0f, 2.0f, 0.0f));
+		physics.SetLinearVelocity(body, glm::vec3(0.0f));
+		physics.SetAngularVelocity(body, glm::vec3(0.0f));
+		scene.OnUpdate(Step);
+		CHECK(physics.HasBody(body));
+		CHECK(physics.HasCharacter(character));
+		CHECK(physics.HasJoint(body));
+		CHECK(physics.GetJointPosition(body).has_value());
+		CHECK(physics.GetLinearVelocity(body) == glm::vec3(0.0f));
+		CHECK(physics.GetAngularVelocity(body) == glm::vec3(0.0f));
+		CHECK(character.GetTransform().Translation == glm::vec3(10.0f, 4.0f, 0.0f));
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Shape resize reports lost compound children once and again after recovery")
+	{
+		BasaltTest::TempProject project("ResizeWarnings");
+		for (bool character : { false, true })
+		{
+			Scene scene;
+			Entity entity = scene.CreateEntity("ResizedCompound");
+			entity.AddComponent<BoxColliderComponent>();
+			auto& mesh = entity.AddComponent<MeshColliderComponent>();
+			mesh.Mesh = "builtin://Cube";
+			mesh.Convex = true;
+			if (character)
+				entity.AddComponent<CharacterControllerComponent>().GravityFactor = 0.0f;
+			else
+				entity.AddComponent<RigidBodyComponent>();
+			scene.OnSimulationStart();
+			const uint64_t since = Log::GetHistory().GetTotalCount();
+			// A collider may become unavailable between builds. Mutate the source directly so scaling,
+			// rather than the component signal's full rebuild, exercises the resize diagnostics.
+			mesh.Mesh = "Assets/Models/Missing.gltf";
+			for (float scale : { 2.0f, 3.0f })
+			{
+				entity.GetTransform().Scale = glm::vec3(scale);
+				scene.OnUpdate(Step);
+			}
+			CHECK(BasaltTest::CountLogMessages(since, "Physics: resized entity 'ResizedCompound': MeshCollider ignored") == 1);
+			mesh.Mesh = "builtin://Cube";
+			entity.GetTransform().Scale = glm::vec3(1.0f);
+			scene.OnUpdate(Step);
+			mesh.Mesh = "Assets/Models/Missing.gltf";
+			entity.GetTransform().Scale = glm::vec3(2.0f);
+			scene.OnUpdate(Step);
+			CHECK(BasaltTest::CountLogMessages(since, "Physics: resized entity 'ResizedCompound': MeshCollider ignored") == 2);
+			CHECK((character ? scene.GetPhysicsWorld()->HasCharacter(entity) : scene.GetPhysicsWorld()->HasBody(entity)));
+			scene.OnSimulationStop();
+		}
+	}
+
 	TEST_CASE("Runtime body records survive rebuilds but never cross scene copies or sessions")
 	{
 		Ref<Scene> scene = CreateRef<Scene>();
@@ -232,6 +324,7 @@ TEST_SUITE("Physics")
 		CHECK_FALSE(physics.HasBody(copiedBox));
 		copy->DestroyEntity(copiedBox);
 		CHECK(copy->GetPhysicsWorld()->GetBodyCount() == 1);
+		CHECK(copy->GetPhysicsWorld()->OverlapSphere({ 0.0f, 5.0f, 0.0f }, 0.1f).empty());
 		CHECK(physics.HasBody(box));
 		copy->OnSimulationStop();
 		scene->OnSimulationStop();
@@ -241,6 +334,7 @@ TEST_SUITE("Physics")
 		box.RemoveComponent<RigidBodyComponent>();
 		scene->OnUpdate(Step);
 		CHECK_FALSE(scene->GetPhysicsWorld()->HasBody(box));
+		CHECK(scene->GetPhysicsWorld()->OverlapSphere({ 0.0f, 5.0f, 0.0f }, 0.1f).empty());
 		CHECK(scene->GetPhysicsWorld()->GetBodyCount() == 1);
 		box.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
 		scene->OnUpdate(Step);
@@ -828,16 +922,15 @@ TEST_SUITE("Physics")
 
 	TEST_CASE("Bodies added during play are created in the order they were marked, whatever their UUIDs")
 	{
-		// Spawned entities get random UUIDs. Body creation order steers Jolt, so if it followed hash order the
-		// same input would end differently from run to run.
-		auto run = []() {
+		// Use different explicit ID permutations: seeded runtime IDs would otherwise mask hash ordering.
+		auto run = [](uint64_t runIndex) {
 			Scene scene;
 			CreateGround(scene);
 			scene.OnSimulationStart();
 			std::vector<Entity> boxes;
 			for (int i = 0; i < 6; i++)
 			{
-				Entity box = scene.CreateEntity("Spawned");
+				Entity box = scene.CreateEntityWithUUID(100 + runIndex * 100 + ((static_cast<uint64_t>(i) * (runIndex * 2 + 1)) % 7), "Spawned");
 				box.GetTransform().Translation = { 0.11f * static_cast<float>(i), 0.5f + 0.95f * static_cast<float>(i), 0.07f * static_cast<float>(i) };
 				boxes.push_back(box);
 			}
@@ -855,9 +948,44 @@ TEST_SUITE("Physics")
 			scene.OnSimulationStop();
 			return positions;
 		};
-		const std::vector<glm::vec3> first = run();
-		for (int i = 0; i < 3; i++)
-			CHECK(run() == first);
+		const std::vector<glm::vec3> first = run(0);
+		for (uint64_t i = 1; i < 3; i++)
+			CHECK(run(i) == first);
+	}
+
+	TEST_CASE("Body state survives rebuild and wake regardless of ignored character rigid bodies")
+	{
+		auto run = [](bool extraRigidBody) {
+			Scene scene;
+			CreateGround(scene);
+			Entity character = scene.CreateEntity("DistantCharacter");
+			character.GetTransform().Translation = { 100.0f, 10.0f, 0.0f };
+			character.AddComponent<CharacterControllerComponent>().GravityFactor = 0.0f;
+			character.AddComponent<CapsuleColliderComponent>();
+			// A character ignores its RigidBody. Only the relative storage sizes change, which must not
+			// change which pool drives the view (EnTT otherwise chooses the smallest one).
+			if (extraRigidBody)
+				character.AddComponent<RigidBodyComponent>();
+			std::vector<Entity> boxes;
+			boxes.reserve(8);
+			for (int i = 0; i < 8; ++i)
+				boxes.push_back(CreateBox(scene, { 0.0f, 0.5f + static_cast<float>(i), 0.0f }));
+			scene.OnSimulationStart();
+			for (int i : { 5, 1, 7 })
+				scene.GetPhysicsWorld()->RecreateBody(boxes[static_cast<size_t>(i)]);
+			Simulate(scene, 5.0f);
+			// Wake the settled stack by teleporting it into a slightly overlapping, leaning stack.
+			for (size_t i = 0; i < boxes.size(); ++i)
+				boxes[i].GetTransform().Translation = { 0.12f * static_cast<float>(i), 1.0f + 0.9f * static_cast<float>(i), 0.03f * static_cast<float>(i) };
+			Simulate(scene, 1.0f);
+			std::vector<glm::vec3> result;
+			result.reserve(boxes.size());
+			for (Entity box : boxes)
+				result.push_back(box.GetTransform().Translation);
+			scene.OnSimulationStop();
+			return result;
+		};
+		CHECK(run(false) == run(true));
 	}
 
 	TEST_CASE("Dynamic bodies parented to dynamic bodies write back parent-first")

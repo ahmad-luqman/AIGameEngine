@@ -98,8 +98,38 @@ TEST_SUITE("Scripting")
 			return trace;
 		};
 		const std::string first = run();
+		CHECK(first ==
+			  "CBody3;CBody1;CBody2;CZone;CBody0;BBody3Zone;BZoneBody3;BBody1Zone;"
+			  "BZoneBody1;BBody2Zone;BZoneBody2;BZoneBody0;BBody0Zone;EBody3Zone;EZoneBody3;EBody1Zone;"
+			  "EZoneBody1;EBody2Zone;EZoneBody2;EZoneBody0;EBody0Zone;BBody3Zone;BZoneBody3;BBody1Zone;"
+			  "BZoneBody1;BBody2Zone;BZoneBody2;BZoneBody0;BBody0Zone;EBody3Zone;EZoneBody3;EBody1Zone;"
+			  "EZoneBody1;EBody2Zone;EZoneBody2;EZoneBody0;EBody0Zone;");
 		CHECK(run() == first);
 		CHECK(run() == first);
+	}
+
+	TEST_CASE("Rebuilding a body remains safe when its contact exit destroys its entity")
+	{
+		BasaltTest::TempProject project("RebuildExitDestroy");
+		const std::string script = project.WriteFile("Assets/Scripts/DestroyOnExit.lua", R"(
+			return { OnTriggerExit = function(self, other) self.Entity:Destroy() end }
+		)");
+		Scene scene;
+		Entity zone = AddScripted(scene, "Zone", script);
+		zone.AddComponent<RigidBodyComponent>().IsTrigger = true;
+		zone.AddComponent<BoxColliderComponent>();
+		Entity body = scene.CreateEntity("Body");
+		body.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
+		body.AddComponent<BoxColliderComponent>();
+		scene.OnRuntimeStart();
+		scene.OnUpdate(Step);
+		REQUIRE(scene.GetPhysicsWorld()->HasBody(zone));
+		// Public C++ calls outside OnUpdate do not defer destruction during contact callbacks.
+		scene.GetPhysicsWorld()->RecreateBody(zone);
+		CHECK_FALSE(zone);
+		CHECK(scene.GetPhysicsWorld()->GetBodyCount() == 1);
+		CHECK(scene.GetScriptEngine()->GetErrors().empty());
+		scene.OnRuntimeStop();
 	}
 
 	TEST_CASE("Script lifecycle, properties and per-entity overrides")

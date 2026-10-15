@@ -11,6 +11,7 @@
 #include <set>
 #include <system_error>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace Basalt {
 
@@ -247,6 +248,20 @@ namespace Basalt {
 			{
 				outError = "'Entities' must be an array";
 				return false;
+			}
+
+			std::unordered_set<uint64_t> sourceIDs;
+			for (size_t i = 0; i < entities.size(); ++i)
+			{
+				uint64_t id = 0;
+				ObjectReader reader(entities[i], "entity #" + std::to_string(i));
+				if (!reader.IsObject(outError) || !reader.Id("ID", id, outError))
+					return false;
+				if (id != 0 && !sourceIDs.insert(id).second)
+				{
+					outError = "entity #" + std::to_string(i) + " has duplicate ID " + std::to_string(id);
+					return false;
+				}
 			}
 
 			std::unordered_map<UUID, UUID> idMap;

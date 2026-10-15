@@ -1,3 +1,4 @@
+-- Contact-driven spawn fixture invoked by FeatureTest.BeginRuntimeSpawnCheck.
 local Contact = {}
 function Contact:OnCreate()
 	FeatureTest.RuntimeCreates = FeatureTest.RuntimeCreates + 1
