@@ -271,15 +271,31 @@ namespace Basalt {
 
 	Entity Scene::DuplicateEntity(Entity entity)
 	{
-		if (!entity || entity.GetScene() != this)
-			return {};
+		const auto copies = DuplicateEntities({ entity });
+		return copies.empty() ? Entity{} : copies.front();
+	}
 
+	std::vector<Entity> Scene::DuplicateEntities(const std::vector<Entity>& entities)
+	{
+		for (Entity entity : entities)
+			if (!entity || entity.GetScene() != this)
+				return {};
+		std::vector<Entity> roots;
+		for (Entity entity : entities)
+		{
+			const bool inherited = std::any_of(entities.begin(), entities.end(), [&](Entity other) { return entity != other && IsDescendantOf(entity, other); });
+			if (!inherited && std::find(roots.begin(), roots.end(), entity) == roots.end())
+				roots.push_back(entity);
+		}
 		std::unordered_map<UUID, UUID> copies;
-		Entity copy = CopyEntityRecursive(entity, entity.GetParent(), copies);
-		// Joints between entities of the duplicated tree connect the copies to each other.
+		std::vector<Entity> result;
+		result.reserve(roots.size());
+		for (Entity root : roots)
+			result.push_back(CopyEntityRecursive(root, root.GetParent(), copies));
+		// References between separate selected trees must also connect the copies to each other.
 		for (const auto& [source, copied] : copies)
 			ComponentRegistry::RemapEntityReferences(GetEntityByUUID(copied), copies);
-		return copy;
+		return result;
 	}
 
 	Entity Scene::GetEntityByUUID(UUID uuid)

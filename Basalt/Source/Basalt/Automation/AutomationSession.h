@@ -32,7 +32,13 @@ namespace Basalt {
 		void SetScenePath(const std::string& path) { m_ScenePath = path; }
 
 		bool IsDirty() const { return m_Dirty; }
-		void MarkDirty() { m_Dirty = true; }
+		void MarkDirty()
+		{
+			m_Dirty = true;
+			++m_EditRevision;
+		}
+		// Counts authored edits even when already dirty; hosts can avoid capturing history for read-only calls.
+		uint64_t GetEditRevision() const { return m_EditRevision; }
 		void ClearDirty() { m_Dirty = false; }
 
 		UUID GetSelection() const { return m_Selection.empty() ? UUID(0) : m_Selection.back(); }
@@ -91,6 +97,7 @@ namespace Basalt {
 		friend class CommandRegistry;
 		size_t m_CommandDepth = 0;
 		bool m_Dirty = false;
+		uint64_t m_EditRevision = 0;
 		// Array of { "frame", "command", "params" } while recording, null otherwise.
 		nlohmann::json m_Recording;
 		std::optional<uint32_t> m_RecordingSeed;

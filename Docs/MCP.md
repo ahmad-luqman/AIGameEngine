@@ -192,7 +192,8 @@ the active value and a mixed label; an edit replaces that entire field on every 
 `editor.component_set {"component":"Material","data":{"Roughness":0.7}}` validates every merged
 component before applying any. Continuous field edits are single undo steps. `editor.delete` and
 `editor.duplicate` operate on selected root trees as one step; duplicate selects the copied roots.
-These group editing commands and box selection are edit-mode only.
+References between copied trees are remapped to the corresponding copies; references outside the
+selected forest keep their original targets. These group editing commands and box selection are edit-mode only.
 
 Menus show names such as **Undo Set Material AlbedoColor**. `editor.history {}` returns `undo`, `redo`,
 `canUndo`, `canRedo`, `transaction`, `index`, `entries` (names and retained bytes), and `patchBytes`.
@@ -213,7 +214,8 @@ session, do not nest, and must finish before saving, replacing the scene, playin
 A failed command leaves prior successful edits in the transaction so the caller can fix the request
 or cancel. Empty/cancelled transactions preserve redo; a new committed change discards the redo branch.
 A batch without an explicit transaction retains one entry per top-level mutating command. Read-only,
-failed and no-op commands add no entries. Project files and external assets are outside scene undo.
+failed and no-op commands add no entries. Read-only polling does not serialize the scene; authored
+edit revisions trigger history capture. Project files and external assets are outside scene undo.
 
 History retains one current scene plus forward/inverse JSON patches, with UUID keys and successor
 links preserving hierarchy order. Retention is capped at 128 entries and 32 MiB of serialized patch

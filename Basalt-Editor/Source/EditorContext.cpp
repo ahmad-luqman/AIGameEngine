@@ -20,12 +20,16 @@ namespace Basalt {
 				CommitHistory();
 			if (History.IsActive() && (command == "scene.new" || command == "scene.open" || command == "project.open" || command == "project.create" || command == "play.start" || command == "play.simulate" || command == "scene.save" || command == "scene.save_as"))
 				throw CommandError("finish or cancel the active transaction first");
+			m_CommandRevision = Session.GetEditRevision();
 		};
 		Session.AfterCommand = [this](const std::string& command, const nlohmann::json& params) {
 			Session.PruneSelection();
-			m_PendingName = EditorHistory::CommandName(command, params);
-			if (!m_UICommand)
-				CommitHistory();
+			if (Session.GetEditRevision() != m_CommandRevision)
+			{
+				m_PendingName = EditorHistory::CommandName(command, params);
+				if (!m_UICommand)
+					CommitHistory();
+			}
 		};
 	}
 
@@ -105,7 +109,7 @@ namespace Basalt {
 
 	void EditorContext::CommitHistory()
 	{
-		if (!Session.IsPlaying() && !History.IsActive())
+		if (!m_PendingName.empty() && !Session.IsPlaying() && !History.IsActive())
 		{
 			History.Commit(SceneSerializer::SerializeScene(*Session.GetEditScene()), m_PendingName);
 			m_PendingName.clear();

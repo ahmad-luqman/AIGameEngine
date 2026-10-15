@@ -307,3 +307,60 @@ TEST_CASE("Editor command dispatch names UI and TCP edits and scopes transaction
 	CHECK(history.Describe()["entries"][4]["name"] == "Rename Entity");
 	ImGui::DestroyContext();
 }
+
+TEST_CASE("Editor duplicated forests remap cross-root references and preserve external targets")
+{
+	CommandRegistry commands;
+	RegisterEditorSelectionCommands(commands);
+	AutomationSession session;
+	Scene& scene = *session.GetScene();
+	auto a = scene.CreateEntity("A"), b = scene.CreateEntity("B"), external = scene.CreateEntity("External");
+	auto childA = scene.CreateChildEntity(a, "Child A"), childB = scene.CreateChildEntity(b, "Child B");
+	a.AddComponent<JointComponent>().ConnectedEntity = childB.GetUUID();
+	childA.AddComponent<JointComponent>().ConnectedEntity = b.GetUUID();
+	childB.AddComponent<JointComponent>().ConnectedEntity = external.GetUUID();
+	session.SetSelections({ childA.GetUUID(), a.GetUUID(), b.GetUUID() });
+	const auto result = commands.Execute(session, "editor.duplicate", json::object());
+	REQUIRE(result["entities"].size() == 2);
+	const Entity copyA = scene.GetEntityByUUID(result["entities"][0].get<uint64_t>());
+	const Entity copyB = scene.GetEntityByUUID(result["entities"][1].get<uint64_t>());
+	REQUIRE(copyA.GetChildren().size() == 1);
+	REQUIRE(copyB.GetChildren().size() == 1);
+	CHECK(copyA.GetComponent<JointComponent>().ConnectedEntity == copyB.GetChildren()[0].GetUUID());
+	CHECK(copyA.GetChildren()[0].GetComponent<JointComponent>().ConnectedEntity == copyB.GetUUID());
+	CHECK(copyB.GetChildren()[0].GetComponent<JointComponent>().ConnectedEntity == external.GetUUID());
+	CHECK(a.GetComponent<JointComponent>().ConnectedEntity == childB.GetUUID());
+}
+
+TEST_CASE("Editor box selection retains static mesh bounds with an empty animator")
+{
+	Scene scene;
+	auto entity = scene.CreateEntity("Combined");
+	entity.AddComponent<MeshComponent>().Mesh = "builtin://Cube";
+	entity.AddComponent<AnimatorComponent>();
+	entity.GetTransform().Scale = { 4, 1, 1 };
+	const auto view = glm::lookAtRH(glm::vec3(0, 0, 5), glm::vec3(0), glm::vec3(0, 1, 0));
+	const auto projection = glm::orthoRH_ZO(-3.0f, 3.0f, -3.0f, 3.0f, .1f, 20.0f);
+	CHECK(SelectViewportBox(scene, projection * view, { 300, 300 }, { 230, 130 }, { 240, 170 }) == std::vector<UUID>{ entity.GetUUID() });
+}
+
+TEST_CASE("Editor polling does not capture unmarked viewport state or change history")
+{
+	CommandRegistry commands;
+	AutomationSession session;
+	EditorHistory history;
+	EditorContext context(commands, session, history);
+	auto entity = session.GetScene()->CreateEntity("Entity");
+	history.Reset(SceneSerializer::SerializeScene(*session.GetScene()));
+	// Rendering can update derived scene state without authoring an edit. Polling must not snapshot it.
+	entity.GetTransform().Translation.x = 1;
+	const auto revision = session.GetEditRevision();
+	for (const char* command : { "scene.get", "scene.info", "log.get", "component.types" })
+		REQUIRE(commands.HandleRequest(session, { { "command", command } })["ok"] == true);
+	CHECK(session.GetEditRevision() == revision);
+	CHECK(history.GetSize() == 0);
+	entity.GetTransform().Translation.x = 0;
+	REQUIRE(commands.HandleRequest(session, { { "command", "entity.rename" }, { "params", { { "entity", "Entity" }, { "name", "New" } } } })["ok"] == true);
+	CHECK(history.GetSize() == 1);
+	CHECK(history.UndoName() == "Rename Entity");
+}
