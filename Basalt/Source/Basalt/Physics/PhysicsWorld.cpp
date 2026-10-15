@@ -193,6 +193,9 @@ namespace Basalt {
 
 	void PhysicsWorld::Impl::RecreateBody(Entity entity)
 	{
+		// UUIDs can match across scene copies, but EnTT handles belong to only one registry.
+		if (!entity || entity.GetScene() != ScenePtr)
+			return;
 		JPH::BodyInterface& bodies = System->GetBodyInterface();
 		JPH::Vec3 previousLinearVelocity = JPH::Vec3::sZero();
 		JPH::Vec3 previousAngularVelocity = JPH::Vec3::sZero();
