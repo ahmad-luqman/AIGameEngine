@@ -8,12 +8,12 @@ namespace Basalt::EditorCommandSchemas {
 
 	nlohmann::json Pick()
 	{
-		return Schema::Object({ { "x", Schema::Integer("Viewport output pixel, left origin", 0, 16383) }, { "y", Schema::Integer("Viewport output pixel, top origin", 0, 16383) }, { "select", Schema::Boolean("Select the hit entity (default true)") } }, { "x", "y" });
+		return Schema::Object({ { "x", Schema::Integer("Integer viewport output pixel, left origin", 0, 16383) }, { "y", Schema::Integer("Integer viewport output pixel, top origin", 0, 16383) }, { "select", Schema::Boolean("Select the hit entity (default true)") } }, { "x", "y" });
 	}
 
 	nlohmann::json VertexSnap()
 	{
-		return Schema::Object({ { "source", Schema::Vector("Source pixel [x,y] on the selected mesh", 2) }, { "target", Schema::Vector("Target pixel [x,y] on another mesh", 2) } }, { "source", "target" });
+		return Schema::Object({ { "source", Schema::Vector("Logical viewport coordinates [x,y], may be fractional, on the selected mesh", 2) }, { "target", Schema::Vector("Logical viewport coordinates [x,y], may be fractional, on another mesh", 2) } }, { "source", "target" });
 	}
 
 	nlohmann::json Select()

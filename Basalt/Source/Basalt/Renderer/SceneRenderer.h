@@ -56,6 +56,14 @@ namespace Basalt {
 		uint64_t Rejected = 0;
 	};
 
+	// Visible surface at the sampled render texel. UV uses top-left origin; depth is in 0..1.
+	struct ViewportPick
+	{
+		UUID EntityId = 0;
+		float Depth = 1;
+		glm::vec2 UV = glm::vec2(0);
+	};
+
 	struct SceneRendererSpecification
 	{
 		// Time the passes with GPU timer queries (GraphicsDevice::SupportsTimerQueries). Needed for
@@ -121,11 +129,14 @@ namespace Basalt {
 		// This replaces PBR color, letting GPU tests verify list consumption as well as list construction.
 		void SetVisualizeLightCount(bool enabled) { m_VisualizeLightCount = enabled; }
 
-		// Selection uses the same visible-surface IDs as picking. Zero disables the outline.
+		// Selection uses the same visible-surface IDs as picking. Zero disables the outline. No effect unless Picking is enabled.
 		void SetSelection(UUID entity) { m_Selection = entity; }
-		// Synchronous one-pixel readback on demand, in output-image coordinates (top-left origin).
+		// Copies one texel on demand, in integer output-image coordinates (top-left origin).
+		// Synchronous: waits for the whole device, not just the copied texel.
 		// nullopt means unavailable/failed; UUID 0 means background. Valid only after a successful Render.
 		std::optional<UUID> Pick(uint32_t x, uint32_t y);
+		std::optional<ViewportPick> PickSurface(uint32_t x, uint32_t y);
+		// Call when replacing a scene; mappings otherwise describe the last successful Render.
 		void InvalidatePicking();
 
 		// Records and submits all passes for one frame.

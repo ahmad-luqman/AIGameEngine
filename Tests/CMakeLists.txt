@@ -161,6 +161,8 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 					$<TARGET_FILE:BasaltEditor> $<TARGET_FILE:BasaltCLI> "${CMAKE_CURRENT_BINARY_DIR}/Viewport")
 			set_tests_properties(EditorViewport PROPERTIES TIMEOUT 120)
 			list(APPEND basaltGpuTests EditorViewport)
+		elseif(TARGET BasaltEditor)
+			message(WARNING "EditorViewport is not registered: install xvfb-run or provide DISPLAY for the editor integration test")
 		endif()
 		# -B keeps helper bytecode out of the source tree; -O verifies checks survive Python optimization.
 		add_test(NAME FSR1Render

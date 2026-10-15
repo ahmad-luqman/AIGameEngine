@@ -127,14 +127,20 @@ The editor exposes three additional tools through both legacy TCP requests and M
 are available through `help` / `tools/list`; they are editor-only and are not part of the headless CLI.
 
 - `editor.viewport {}` returns transient gizmo/overlay preferences plus the rendered `width` and
-  `height`. A patch can set `operation` (`None`, `Translate`, `Rotate`, `Scale`), `space` (`Local`,
+  `height`, plus active `renderWidth`/`renderHeight` (which can shrink with dynamic resolution). A patch can set `operation` (`None`, `Translate`, `Rotate`, `Scale`), `space` (`Local`,
   `World`), `snap`, `translationStep` (0.0001–10000 units), `rotationStep` (0.0001–360 degrees),
   `scaleStep` (0.0001–100), or `vertexSnap`. Independent overlay switches are `grid`, `colliders`,
-  `lightGizmos`, `cameraGizmos`, `uiBounds`, `debugLines`, and `selectionOutline`. Invalid patches are
+  `lightGizmos`, `cameraGizmos`, `audioGizmos`, `particleGizmos`, `uiBounds`, `debugLines`,
+  `selectionOutline`, and `selectionBounds`. Selection bounds are off by default; enable them for
+  mesh AABB feedback alongside or instead of the visible-surface outline. Collider visibility applies
+  to selected entities too; particle emitter shapes have their own switch. Invalid patches are
   atomic. These preferences last for the editor session and do not modify project/scene files.
-- `editor.pick {"x":200,"y":150,"select":true}` reads the last rendered mesh ID at an output pixel.
+- `editor.pick {"x":200,"y":150,"select":true}` renders the current scene and picks at an integer output pixel.
   It returns `{"entity":<UUID>}` (0 for background), and selects by default. `select:false` only queries.
-  Out-of-bounds/unavailable frames and game Play mode report errors without changing selection.
+  Enabled light, camera and audio helpers use bounds tested against the mesh surface depth.
+  Out-of-bounds coordinates, render/readback failures and game Play mode report errors without changing
+  selection. On-demand rendering also handles queued edits and camera changes before the next frame,
+  including when the window is minimized. It copies one ID/depth texel and waits for the whole GPU.
 - `editor.vertex_snap {"source":[x,y],"target":[x,y]}` translates the selected mesh entity to align
   the nearest source and target vertices within 16 viewport pixels. Coordinates use the displayed
   viewport's logical pixels, top-left origin. The target excludes the selected entity and its
@@ -145,9 +151,11 @@ are available through `help` / `tools/list`; they are editor-only and are not pa
   unavailable in Play/Simulate or for UI rects.
 
 The viewport toolbar exposes the same preferences. Q/W/E/R select the gizmo operation when the
-viewport has focus and text editing/camera flight are inactive. World/local changes translation and
+viewport is focused or hovered and text editing/camera flight are inactive. World/local changes translation and
 rotation axes; ImGuizmo scaling follows local axes. Ctrl/Cmd temporarily enables step snapping. Hold
 V (or enable Vertex snapping) and drag from a highlighted source vertex to a highlighted target;
-release to commit. Escape, releasing V, changing selection, or leaving the viewport before release
-cancels the gesture. The camera stays fixed during this gesture. The Overlays popup and View menu
+release to commit. This mode temporarily overrides every gizmo operation, including None; a click
+away from a source vertex still selects. V is ignored during text input or active UI edits. Escape,
+changing selection, camera commands, viewport resize, or leaving the viewport cancels the gesture.
+Releasing V cancels only when sticky Vertex snapping is off. The camera stays fixed during this gesture. The Overlays popup and View menu
 share the same switches; Debug Lines controls scripted debug lines independently of grid/helpers.

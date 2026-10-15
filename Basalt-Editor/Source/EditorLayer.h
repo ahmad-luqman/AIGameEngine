@@ -69,6 +69,10 @@ namespace Basalt {
 		bool IsGameRunning() const { return m_Session.IsPlaying() && !m_Session.IsSimulating(); }
 		// Outlines every UI rect over the viewport (the selected entity's with its pivot and anchors).
 		void DrawUIBounds(const glm::vec2& origin, const glm::vec2& size);
+		UUID PickViewport(uint32_t x, uint32_t y);
+		bool PrepareCaptureRenderer(uint32_t width, uint32_t height, float scale, std::string& error);
+		void HandleVertexSnapDrag(Entity selected, bool enabled, const glm::vec2& origin);
+		void CancelVertexSnap() { m_VertexSnapDrag.reset(); }
 		void HandleViewportClick(const glm::vec2& mouse);
 		void HandleAssetDrop(const std::string& path);
 		void OpenAsset(const std::string& path);
@@ -110,8 +114,12 @@ namespace Basalt {
 		bool m_ViewportHovered = false;
 		bool m_ViewportFocused = false;
 		ViewportSettings m_ViewportSettings;
-		std::optional<glm::vec2> m_VertexSnapStart;
-		UUID m_VertexSnapEntity = 0;
+		struct VertexSnapDrag
+		{
+			UUID EntityId;
+			glm::vec2 Source;
+		};
+		std::optional<VertexSnapDrag> m_VertexSnapDrag;
 		bool m_GizmoWasUsing = false;
 		bool m_Paused = false;
 		RendererDebugView m_DebugView = RendererDebugView::None;
