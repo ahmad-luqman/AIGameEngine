@@ -3,6 +3,8 @@
 	{ "id": "schema-type", "command": "entity.create", "params": { "name": 42 }, "expectError": "must be a string" },
 	{ "id": "schema-required", "command": "component.set", "params": { "entity": "unused", "component": "Transform" }, "expectError": "missing parameter 'data'" },
 	{ "id": "schema-range", "command": "play.step", "params": { "frames": 100001 }, "expectError": "must be in" },
+	{ "id": "schema-dt", "command": "play.step", "params": { "dt": 0 }, "expectError": "must be >" },
+	{ "id": "schema-connected", "command": "input.gamepad", "params": { "connected": null }, "expectError": "must be true or false" },
 	{ "id": "open", "command": "scene.open", "params": { "path": "Assets/Scenes/FeatureTest.bscene" } },
 	{ "id": "key", "command": "input.key", "params": { "key": "Space", "down": true } },
 	{ "id": "mouse", "command": "input.mouse", "params": { "position": [320, 240], "button": "Left", "down": true } },

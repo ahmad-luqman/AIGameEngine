@@ -4,11 +4,29 @@
 #include <cmath>
 #include <limits>
 #include <set>
-#include <stdexcept>
 
 namespace Basalt::CommandSchema {
 
 	using json = nlohmann::json;
+
+	namespace {
+
+		// Compare signed/unsigned integer bounds exactly, including on Apple arm64 and MSVC
+		// where long double has double precision. Mixed floating-point values use host precision.
+		bool Less(const json& a, const json& b)
+		{
+			if (a.is_number_integer() && b.is_number_integer())
+			{
+				if (a.is_number_unsigned() && !b.is_number_unsigned())
+					return b.get<int64_t>() >= 0 && a.get<uint64_t>() < static_cast<uint64_t>(b.get<int64_t>());
+				if (!a.is_number_unsigned() && b.is_number_unsigned())
+					return a.get<int64_t>() < 0 || static_cast<uint64_t>(a.get<int64_t>()) < b.get<uint64_t>();
+				return a < b;
+			}
+			return a.get<long double>() < b.get<long double>();
+		}
+
+	}
 
 	json String(const std::string& description, bool nonEmpty)
 	{
@@ -54,58 +72,82 @@ namespace Basalt::CommandSchema {
 		return { { "type", "object" }, { "properties", std::move(properties) }, { "required", required }, { "additionalProperties", false } };
 	}
 
-	void CheckDefinition(const json& schema)
+	bool CheckDefinition(const json& schema, std::string& outError)
 	{
+		const auto fail = [&](const std::string& message) { outError = message; return false; };
 		if (!schema.is_object())
-			throw std::invalid_argument("command schema must be an object");
-		static const std::set<std::string> keywords = { "type", "description", "properties", "required", "additionalProperties", "items", "minItems", "maxItems", "minLength", "minimum", "maximum", "exclusiveMinimum", "enum", "anyOf" };
+			return fail("command schema must be an object");
+		static const std::set<std::string> s_Keywords = { "type", "description", "properties", "required", "additionalProperties", "items", "minItems", "maxItems", "minLength", "minimum", "maximum", "exclusiveMinimum", "enum", "anyOf" };
 		for (const auto& [key, value] : schema.items())
 		{
-			if (!keywords.contains(key))
-				throw std::invalid_argument("unsupported command schema keyword: " + key);
+			if (!s_Keywords.contains(key))
+				return fail("unsupported command schema keyword: " + key);
 			if (key == "properties")
 			{
 				if (!value.is_object())
-					throw std::invalid_argument("schema properties must be an object");
+					return fail("schema properties must be an object");
 				for (const auto& child : value)
-					CheckDefinition(child);
+					if (!CheckDefinition(child, outError))
+						return false;
 			}
 			else if (key == "items")
-				CheckDefinition(value);
+			{
+				if (!CheckDefinition(value, outError))
+					return false;
+			}
 			else if (key == "anyOf")
 			{
 				if (!value.is_array() || value.empty())
-					throw std::invalid_argument("schema anyOf must be a non-empty array");
+					return fail("schema anyOf must be a non-empty array");
 				for (const auto& child : value)
-					CheckDefinition(child);
+					if (!CheckDefinition(child, outError))
+						return false;
 			}
 			else if (key == "type")
 			{
-				static const std::set<std::string> types = { "object", "array", "string", "integer", "number", "boolean", "null" };
-				if (!value.is_string() || !types.contains(value.get<std::string>()))
-					throw std::invalid_argument("unsupported command schema type");
+				static const std::set<std::string> s_Types = { "object", "array", "string", "integer", "number", "boolean", "null" };
+				if (!value.is_string() || !s_Types.contains(value.get<std::string>()))
+					return fail("unsupported command schema type");
 			}
 			else if (key == "required")
 			{
 				if (!value.is_array())
-					throw std::invalid_argument("schema required must be an array");
+					return fail("schema required must be an array");
 				for (const auto& name : value)
 				{
 					if (!name.is_string() || !schema.contains("properties") || !schema["properties"].contains(name.get<std::string>()))
-						throw std::invalid_argument("required property missing from schema");
+						return fail("required property missing from schema");
 				}
 			}
 			else if (key == "additionalProperties" && !value.is_boolean())
-				throw std::invalid_argument("schema additionalProperties must be boolean");
+				return fail("schema additionalProperties must be boolean");
 			else if (key == "description" && !value.is_string())
-				throw std::invalid_argument("schema description must be a string");
+				return fail("schema description must be a string");
 			else if (key == "enum" && (!value.is_array() || value.empty()))
-				throw std::invalid_argument("schema enum must be a non-empty array");
+				return fail("schema enum must be a non-empty array");
 			else if ((key == "minimum" || key == "maximum" || key == "exclusiveMinimum") && (!value.is_number() || !std::isfinite(value.get<double>())))
-				throw std::invalid_argument("schema numeric bound must be finite");
+				return fail("schema numeric bound must be finite");
 			else if ((key == "minItems" || key == "maxItems" || key == "minLength") && (!value.is_number_integer() || value.get<double>() < 0))
-				throw std::invalid_argument("schema size bound must be a non-negative integer");
+				return fail("schema size bound must be a non-negative integer");
 		}
+		if (schema.contains("minimum") && schema.contains("maximum") && Less(schema["maximum"], schema["minimum"]))
+			return fail("schema minimum exceeds maximum");
+		if (schema.contains("exclusiveMinimum") && schema.contains("maximum") && !Less(schema["exclusiveMinimum"], schema["maximum"]))
+			return fail("schema exclusiveMinimum must be below maximum");
+		if (schema.contains("minItems") && schema.contains("maxItems") && Less(schema["maxItems"], schema["minItems"]))
+			return fail("schema minItems exceeds maxItems");
+		if (schema.contains("enum"))
+		{
+			json constraints = schema;
+			constraints.erase("enum");
+			for (const auto& value : schema["enum"])
+			{
+				std::string error;
+				if (!Validate(constraints, value, error))
+					return fail("schema enum value violates its constraints: " + error);
+			}
+		}
+		return true;
 	}
 
 	bool Validate(const json& schema, const json& value, std::string& outError, const std::string& path)
@@ -118,13 +160,12 @@ namespace Basalt::CommandSchema {
 			std::string errors;
 			for (const auto& choice : schema["anyOf"])
 			{
-				matched = matched || Validate(choice, value, ignored, path);
-				if (!matched)
-				{
-					if (!errors.empty())
-						errors += "; or ";
-					errors += ignored;
-				}
+				matched = Validate(choice, value, ignored, path);
+				if (matched)
+					break;
+				if (!errors.empty())
+					errors += "; or ";
+				errors += ignored;
 			}
 			if (!matched)
 			{
@@ -145,26 +186,13 @@ namespace Basalt::CommandSchema {
 		}
 		if (value.is_number())
 		{
-			// long double avoids wrapping uint64 values into int64 and preserves integer bounds on supported
-			// Unix targets. Integer-to-integer comparisons below also stay exact on MSVC (double long double).
-			const auto less = [](const json& a, const json& b) {
-				if (a.is_number_integer() && b.is_number_integer())
-				{
-					if (a.is_number_unsigned() && !b.is_number_unsigned())
-						return b.get<int64_t>() >= 0 && a.get<uint64_t>() < static_cast<uint64_t>(b.get<int64_t>());
-					if (!a.is_number_unsigned() && b.is_number_unsigned())
-						return a.get<int64_t>() < 0 || static_cast<uint64_t>(a.get<int64_t>()) < b.get<uint64_t>();
-					return a < b;
-				}
-				return a.get<long double>() < b.get<long double>();
-			};
 			if (!std::isfinite(value.get<double>()))
 				return fail("must be finite");
-			if (schema.contains("minimum") && less(value, schema["minimum"]))
+			if (schema.contains("minimum") && Less(value, schema["minimum"]))
 				return fail("must be in [" + schema["minimum"].dump() + ", " + schema.value("maximum", json("unbounded")).dump() + "]");
-			if (schema.contains("maximum") && less(schema["maximum"], value))
+			if (schema.contains("maximum") && Less(schema["maximum"], value))
 				return fail("must be in [" + schema.value("minimum", json("unbounded")).dump() + ", " + schema["maximum"].dump() + "]");
-			if (schema.contains("exclusiveMinimum") && !less(schema["exclusiveMinimum"], value))
+			if (schema.contains("exclusiveMinimum") && !Less(schema["exclusiveMinimum"], value))
 				return fail("must be > " + schema["exclusiveMinimum"].dump());
 		}
 		if (value.is_string() && schema.contains("minLength"))
@@ -180,11 +208,12 @@ namespace Basalt::CommandSchema {
 			{
 				if (!value.contains(name.get<std::string>()))
 				{
-					outError = "missing parameter '" + name.get<std::string>() + "'";
+					outError = "missing parameter '" + (path == "params" ? name.get<std::string>() : path + "." + name.get<std::string>()) + "'";
 					return false;
 				}
 			}
-			const json properties = schema.value("properties", json::object());
+			static const json s_EmptyProperties = json::object();
+			const json& properties = schema.contains("properties") ? schema["properties"] : s_EmptyProperties;
 			for (const auto& [key, child] : value.items())
 			{
 				if (properties.contains(key))

@@ -11,7 +11,7 @@
 #include "Basalt/Automation/AutomationServer.h"
 #include "Basalt/Automation/AutomationSession.h"
 #include "Basalt/Automation/CommandRegistry.h"
-#include "Basalt/Automation/McpServer.h"
+#include "Basalt/Automation/AutomationConnection.h"
 #include "Basalt/Core/Layer.h"
 #include "Basalt/Renderer/SceneRenderer.h"
 #include "Basalt/UI/UIRenderer.h"
@@ -80,13 +80,11 @@ namespace Basalt {
 		void UpdateWindowTitle();
 
 		bool RenderToFile(const std::filesystem::path& path, uint32_t width, uint32_t height, bool useEditorCamera, std::string& outError);
-		std::string HandleAutomationRequest(const std::string& request);
+		std::string HandleAutomationRequest(const std::shared_ptr<AutomationConnection>& connection, const std::string& request);
 
 	private:
 		EditorOptions m_Options;
 		CommandRegistry m_Commands;
-		McpServer m_McpServer;
-		bool m_McpConnection = false;
 		AutomationSession m_Session;
 		EditorHistory m_History;
 		EditorContext m_Context;

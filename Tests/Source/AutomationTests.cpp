@@ -3,9 +3,11 @@
 #include <Basalt/Automation/AutomationSession.h>
 #include <Basalt/Automation/CommandRegistry.h>
 #include <Basalt/Automation/McpServer.h>
+#include <Basalt/Automation/AutomationConnection.h>
 #include <Basalt/Core/JsonUtils.h>
 #include <Basalt/Core/FileSystem.h>
 #include <Basalt/Core/Input.h>
+#include <Basalt/Core/Log.h>
 #include <Basalt/Project/Project.h>
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
@@ -301,6 +303,7 @@ TEST_SUITE("Automation")
 
 		Run(registry, session, "entity.duplicate", { { "entity", "Gun" }, { "name", "Gun2" } });
 		Run(registry, session, "entity.rename", { { "entity", "Gun2" }, { "name", "Sword" } });
+		Run(registry, session, "entity.set_parent", { { "entity", "Sword" }, { "parent", "Player" }, { "keepWorld", false } });
 		Run(registry, session, "prefab.create", { { "entity", "Player" }, { "path", "Assets/Prefabs/Player.bprefab" } });
 		const json clone = Run(registry, session, "prefab.instantiate", { { "path", "Assets/Prefabs/Player.bprefab" }, { "position", { 5, 0, 0 } } });
 		CHECK(Run(registry, session, "entity.transform", { { "entity", clone["id"] } })["world"]["Translation"][0] == 5.0);
@@ -415,9 +418,11 @@ TEST_SUITE("Automation")
 
 		CHECK(RunError(registry, session, "play.step").find("not playing") != std::string::npos);
 		Run(registry, session, "play.start");
+		CHECK(RunError(registry, session, "input.gamepad", { { "connected", nullptr } }).find("must be true or false") != std::string::npos);
+		CHECK_FALSE(Input::IsGamepadConnected(0));
 		CHECK(RunError(registry, session, "play.start").find("already playing") != std::string::npos);
 		Run(registry, session, "input.key", { { "key", "Space" }, { "down", true } });
-		const json step = Run(registry, session, "play.step", { { "frames", 3 } });
+		const json step = Run(registry, session, "play.step", { { "frames", 3 }, { "dt", 0.001 } });
 		CHECK(step["frame"] == 3);
 		CHECK(step["scriptErrors"].empty());
 		// The playing scene, which Lua Scene.Load may have switched (an unsaved scene has no path).
@@ -675,12 +680,11 @@ TEST_SUITE("Automation")
 	{
 		CommandRegistry registry;
 		AutomationSession session;
-		McpServer mcp;
 		AutomationServer server;
 		std::string error;
-		REQUIRE(server.Start(0, [&](const std::string& request) {
-            const auto response = mcp.HandleRequest(registry, session, ParseJson(request));
-            return response ? response->dump() : std::string(); }, error, [&]() { mcp.Reset(); }));
+		REQUIRE(server.StartWithFactory(0, [&]() {
+            auto connection = std::make_shared<AutomationConnection>();
+            return [&, connection](const std::string& request) { return connection->HandleRequest(registry, session, request); }; }, error));
 		const json initialized = ParseJson(SendLine(server.GetPort(), R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}})"));
 		CHECK(initialized["result"]["protocolVersion"].get<std::string>() == std::string(McpServer::ProtocolVersion));
 		const json reconnected = ParseJson(SendLine(server.GetPort(), R"({"jsonrpc":"2.0","method":"notifications/initialized"})"
@@ -691,7 +695,7 @@ TEST_SUITE("Automation")
 		for (const std::string& blank : { std::string(), std::string("\r") })
 		{
 			// Follow with a ping so an old server that swallowed blank frames also finishes the test.
-			const auto response = ParseJson(SendLine(server.GetPort(), blank + "\n" + R"({"jsonrpc":"2.0","id":3,"method":"ping"})"));
+			const auto response = ParseJson(SendLine(server.GetPort(), std::string(R"({"jsonrpc":"2.0","method":"notifications/initialized"})") + "\n" + blank + "\n" + R"({"jsonrpc":"2.0","id":3,"method":"ping"})"));
 			CHECK(response.contains("error"));
 			if (response.contains("error"))
 				CHECK(response["error"]["code"] == -32700);
@@ -1019,4 +1023,17 @@ TEST_SUITE("Automation")
 		CHECK(problems[1]["name"] == "Label");
 		CHECK(problems[1]["problem"].get<std::string>().find("not a TrueType font") != std::string::npos);
 	}
+}
+
+TEST_CASE("Log cursors and error filters retain their schema-to-handler contract")
+{
+	CommandRegistry registry;
+	AutomationSession session;
+	const auto cursor = Run(registry, session, "log.get")["next"];
+	BS_CORE_WARN("Schema log warning");
+	BS_CORE_ERROR("Schema log error");
+	const auto result = Run(registry, session, "log.get", { { "since", cursor }, { "errorsOnly", true } });
+	REQUIRE(result["messages"].size() == 1);
+	CHECK(result["messages"][0]["text"] == "Schema log error");
+	CHECK(result["next"] > cursor);
 }

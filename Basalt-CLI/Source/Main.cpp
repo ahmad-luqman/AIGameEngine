@@ -8,11 +8,12 @@
 // Options:
 //   --project <dir>   open this project first
 //   --scene <path>    open this project-relative scene first; it is saved automatically after
-//                     successful commands that changed it (use --no-save to prevent that)
+//                     successful commands or clean MCP EOF (use --no-save to prevent that)
 //   --no-save         never save automatically
 //   --verbose         also print engine info logs (stderr)
 //
-// Responses go to stdout as JSON; logs go to stderr. Exit code: 0 if every command succeeded.
+// Responses go to stdout as JSON; logs go to stderr. Legacy modes fail if any command fails.
+// MCP tool errors are replies; only startup, transport or auto-save failure makes the process fail.
 
 #include "Basalt/Audio/AudioEngine.h"
 #include "Basalt/Automation/AutomationSession.h"
@@ -53,13 +54,14 @@ namespace {
 	}
 
 	// Saves the scene opened with --scene after changes, so one-shot invocations persist their work.
-	void AutoSave(const CommandRegistry& registry, AutomationSession& session, bool enabled)
+	bool AutoSave(const CommandRegistry& registry, AutomationSession& session, bool enabled)
 	{
-		if (!enabled || !session.IsDirty() || session.GetScenePath().empty() || session.IsPlaying())
-			return;
+		if (!enabled || !session.IsDirty() || session.GetScenePath().empty())
+			return true;
 		const nlohmann::json response = registry.HandleRequest(session, { { "command", "scene.save" } });
 		if (!response.value("ok", false))
 			std::cerr << "basalt: auto-save failed: " << response.value("error", "") << "\n";
+		return response.value("ok", false);
 	}
 
 }
@@ -174,8 +176,11 @@ int main(int argc, char** argv)
 		std::cout << run({ { "command", mode }, { "params", params } }).dump(2) << std::endl;
 	}
 
-	AutoSave(registry, session, autoSave && exitCode == 0);
 	session.StopPlay();
+	if (autoSave && session.IsDirty() && exitCode != 0)
+		std::cerr << "basalt: dirty scene was not auto-saved because the session failed\n";
+	if (!AutoSave(registry, session, autoSave && exitCode == 0))
+		exitCode = 1;
 	AudioEngine::Shutdown();
 	Log::Shutdown();
 	return exitCode;

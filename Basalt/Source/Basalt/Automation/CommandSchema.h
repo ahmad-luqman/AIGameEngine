@@ -21,7 +21,7 @@ namespace Basalt::CommandSchema {
 	nlohmann::json Object(nlohmann::json properties = nlohmann::json::object(), std::initializer_list<const char*> required = {});
 
 	// Reject unsupported schema keywords at registration rather than silently skipping constraints.
-	void CheckDefinition(const nlohmann::json& schema);
+	bool CheckDefinition(const nlohmann::json& schema, std::string& outError);
 	// Returns an actionable parameter path on failure. Does not coerce values or insert defaults.
 	bool Validate(const nlohmann::json& schema, const nlohmann::json& value, std::string& outError, const std::string& path = "params");
 

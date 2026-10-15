@@ -42,7 +42,8 @@ namespace Basalt {
 	public:
 		CommandRegistry();
 
-		void Register(CommandInfo command);
+		// Logs and rejects invalid or duplicate definitions without replacing an existing command.
+		bool Register(CommandInfo command);
 		const CommandInfo* Find(const std::string& name) const;
 		const std::map<std::string, CommandInfo>& GetCommands() const { return m_Commands; }
 

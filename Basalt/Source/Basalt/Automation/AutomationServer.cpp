@@ -1,5 +1,6 @@
 #include "Basalt/Automation/AutomationServer.h"
 
+#include "Basalt/Automation/AutomationLimits.h"
 #include "Basalt/Core/Base.h"
 #include "Basalt/Core/Log.h"
 
@@ -76,7 +77,12 @@ namespace Basalt {
 		Stop();
 	}
 
-	bool AutomationServer::Start(uint16_t port, RequestHandler handler, std::string& outError, std::function<void()> onConnect)
+	bool AutomationServer::Start(uint16_t port, RequestHandler handler, std::string& outError)
+	{
+		return StartWithFactory(port, [handler = std::move(handler)]() { return handler; }, outError);
+	}
+
+	bool AutomationServer::StartWithFactory(uint16_t port, HandlerFactory factory, std::string& outError)
 	{
 		if (m_Running)
 		{
@@ -129,8 +135,7 @@ namespace Basalt {
 		getsockname(listenSocket, reinterpret_cast<sockaddr*>(&address), &length);
 		m_Port = ntohs(address.sin_port);
 		m_ListenSocket = static_cast<intptr_t>(listenSocket);
-		m_Handler = std::move(handler);
-		m_OnConnect = std::move(onConnect);
+		m_Factory = std::move(factory);
 		m_Stopping = false;
 		m_Running = true;
 		m_Thread = std::thread([this]() { Run(); });
@@ -167,17 +172,14 @@ namespace Basalt {
 			int noSigPipe = 1;
 			setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, sizeof(noSigPipe));
 #endif
-			if (m_OnConnect)
-				m_OnConnect();
-			ServeClient(static_cast<intptr_t>(client));
+			ServeClient(static_cast<intptr_t>(client), m_Factory());
 			CloseSocket(client);
 		}
 	}
 
-	void AutomationServer::ServeClient(intptr_t clientHandle)
+	void AutomationServer::ServeClient(intptr_t clientHandle, const RequestHandler& handler)
 	{
 		const SocketHandle client = ToSocket(clientHandle);
-		constexpr size_t MaxLineBytes = size_t{ 64 } * 1024 * 1024;
 		std::string buffer;
 		char chunk[4096];
 
@@ -193,24 +195,27 @@ namespace Basalt {
 			if (received <= 0)
 				return; // closed or error
 			buffer.append(chunk, static_cast<size_t>(received));
-			if (buffer.size() > MaxLineBytes)
-			{
-				// The handler owns the protocol (legacy automation or MCP). Do not emit an
-				// unframed/protocol-specific error here, especially through a stdio bridge.
-				BS_CORE_WARN("Automation: closing connection with an oversized request");
-				return;
-			}
 
 			size_t newline;
 			while ((newline = buffer.find('\n')) != std::string::npos)
 			{
+				if (newline > MaxAutomationLineBytes)
+				{
+					BS_CORE_WARN("Automation: closing connection; frame size {} exceeds {} byte limit", newline, MaxAutomationLineBytes);
+					return;
+				}
 				std::string line = buffer.substr(0, newline);
 				buffer.erase(0, newline + 1);
 				if (!line.empty() && line.back() == '\r')
 					line.pop_back();
-				const std::string response = m_Handler(line);
+				const std::string response = handler(line);
 				if (!response.empty() && !SendAll(client, response + "\n"))
 					return;
+			}
+			if (buffer.size() > MaxAutomationLineBytes)
+			{
+				BS_CORE_WARN("Automation: closing connection; frame size {} exceeds {} byte limit", buffer.size(), MaxAutomationLineBytes);
+				return;
 			}
 		}
 	}

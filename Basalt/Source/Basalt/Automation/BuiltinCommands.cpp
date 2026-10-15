@@ -399,7 +399,7 @@ namespace Basalt {
 				return json{ { "commands", commands } };
 			});
 
-			Add(registry, "component.types", "Lists every component type with its fields (for component.add/set).", Schema::Object(), [](AutomationSession&, const json&) {
+			Add(registry, "component.types", "Lists every component type with its fields (for component.set).", Schema::Object(), [](AutomationSession&, const json&) {
 				json types = json::array();
 				for (const ComponentInfo& info : ComponentRegistry::GetAll())
 					types.push_back({ { "name", info.Name }, { "fields", info.Fields }, { "core", info.IsCore } });
@@ -490,7 +490,7 @@ namespace Basalt {
 				};
 			});
 
-			Add(registry, "project.set", "Changes project settings and saves the project file.", Schema::Object({ { "name", Schema::Nullable(Schema::String("string")) }, { "startScene", Schema::Nullable(Schema::String("string, project-relative scene")) }, { "windowWidth", Schema::Nullable(Schema::Integer("integer", 64, 16384)) }, { "windowHeight", Schema::Nullable(Schema::Integer("integer", 64, 16384)) }, { "fullscreen", Schema::Nullable(Schema::Boolean("bool")) }, { "renderScale", Schema::Nullable(Schema::Number("number in [0.25, 2], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution)", 0.25, 2.0)) }, { "dynamicResolution", Schema::Nullable(Schema::Boolean("bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries)")) }, { "targetFrameRate", Schema::Nullable(Schema::Number("number in [10, 1000]; dynamic resolution keeps the scene's GPU time within this frame rate's frame time", 10.0, 1000.0)) }, { "minRenderScale", Schema::Nullable(Schema::Number("number in [0.25, 2], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning)", 0.25, 2.0)) }, { "physicsLayers", json{ { "type", "object" }, { "description", "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play" } } }, { "randomSeed", Schema::Nullable(Schema::Integer("integer in [0, 4294967295], seeds Lua's random numbers, particle emitters and runtime entity UUIDs; applies from the next play", 0, UINT32_MAX)) } }), [](AutomationSession& session, const json& params) {
+			Add(registry, "project.set", "Changes project settings and saves the project file.", Schema::Object({ { "name", Schema::Nullable(Schema::String("string")) }, { "startScene", Schema::Nullable(Schema::String("string, project-relative scene")) }, { "windowWidth", Schema::Nullable(Schema::Integer("integer", 64, 16384)) }, { "windowHeight", Schema::Nullable(Schema::Integer("integer", 64, 16384)) }, { "fullscreen", Schema::Nullable(Schema::Boolean("bool")) }, { "renderScale", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution)", MinRenderScale, MaxRenderScale), MinRenderScale, MaxRenderScale)) }, { "dynamicResolution", Schema::Nullable(Schema::Boolean("bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries)")) }, { "targetFrameRate", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}]; dynamic resolution keeps the scene's GPU time within this frame rate's frame time", MinTargetFrameRate, MaxTargetFrameRate), MinTargetFrameRate, MaxTargetFrameRate)) }, { "minRenderScale", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning)", MinRenderScale, MaxRenderScale), MinRenderScale, MaxRenderScale)) }, { "physicsLayers", json{ { "type", "object" }, { "description", "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play" } } }, { "randomSeed", Schema::Nullable(Schema::Integer("integer in [0, 4294967295], seeds Lua's random numbers, particle emitters and runtime entity UUIDs; applies from the next play", 0, UINT32_MAX)) } }), [](AutomationSession& session, const json& params) {
 				Ref<Project> project = RequireProject();
 				// Every value is read and validated before any is assigned, so a bad parameter leaves the
 				// project untouched.
@@ -542,7 +542,7 @@ namespace Basalt {
 
 		void RegisterScene(CommandRegistry& registry)
 		{
-			Add(registry, "scene.new", "Replaces the open scene with an empty one (with a camera and sun unless empty=true).", Schema::Object({ { "name", Schema::Nullable(Schema::String("string")) }, { "empty", Schema::Nullable(Schema::Boolean("bool")) } }), [](AutomationSession& session, const json& params) {
+			Add(registry, "scene.new", "Replaces the open scene with an empty one (with a camera, sun and sky unless empty=true).", Schema::Object({ { "name", Schema::Nullable(Schema::String("string")) }, { "empty", Schema::Nullable(Schema::Boolean("bool")) } }), [](AutomationSession& session, const json& params) {
 				Ref<Scene> scene = CreateRef<Scene>(OptionalString(params, "name", "Untitled"));
 				if (!OptionalBool(params, "empty", false))
 				{
@@ -660,11 +660,6 @@ namespace Basalt {
 				{
 					if (params.contains(key))
 						patch[key] = params[key];
-				}
-				for (auto it = params.begin(); it != params.end(); ++it)
-				{
-					if (!patch.contains(it.key()))
-						throw CommandError("unknown setting group '" + it.key() + "' (valid: Renderer, Physics, Name)");
 				}
 				// Validate against a scratch scene first so a bad patch changes nothing.
 				Scene scratch;
@@ -951,6 +946,7 @@ namespace Basalt {
 				float dt = 1.0f / 60.0f;
 				if (auto it = params.find("dt"); it != params.end())
 				{
+					// A positive JSON double can still underflow to zero in the float timestep.
 					if (!JsonToFloat(*it, dt) || dt <= 0.0f || dt > 0.25f)
 						throw CommandError("'dt' must be a number in (0, 0.25]");
 				}
@@ -1110,7 +1106,7 @@ namespace Basalt {
 			});
 
 			Add(registry, "input.gamepad",
-				"Connects, disconnects or drives an injected gamepad for play mode (e.g. {index: 0, connected: true}, {button: 'A', down: true}, {axis: 'LeftX', value: -1}). A device poll never overrides an injected gamepad. Recorded while replay recording is on.", Schema::Object({ { "index", Schema::Nullable(Schema::Integer("integer 0-15 (default 0)", 0, 15)) }, { "connected", Schema::Nullable(Schema::Boolean("bool")) }, { "name", Schema::String("string, the gamepad's name when connecting", true) }, { "button", Schema::String("string (A, B, X, Y, LeftBumper, RightBumper, Back, Start, Guide, LeftThumb, RightThumb, DPadUp, DPadRight, DPadDown, DPadLeft)", true) }, { "down", Schema::Nullable(Schema::Boolean("bool (default true)")) }, { "axis", Schema::String("string (LeftX, LeftY, RightX, RightY, LeftTrigger, RightTrigger)", true) }, { "value", Schema::Number("number: sticks -1..1 (+Y down), triggers 0..1", -1.0, 1.0) } }),
+				"Connects, disconnects or drives an injected gamepad for play mode (e.g. {index: 0, connected: true}, {button: 'A', down: true}, {axis: 'LeftX', value: -1}). A device poll never overrides an injected gamepad. Recorded while replay recording is on.", Schema::Object({ { "index", Schema::Nullable(Schema::Integer(fmt::format("integer 0-{} (default 0)", Input::MaxGamepads - 1), 0, Input::MaxGamepads - 1)) }, { "connected", Schema::Boolean("bool") }, { "name", Schema::String("string, the gamepad's name when connecting", true) }, { "button", Schema::String("string (A, B, X, Y, LeftBumper, RightBumper, Back, Start, Guide, LeftThumb, RightThumb, DPadUp, DPadRight, DPadDown, DPadLeft)", true) }, { "down", Schema::Nullable(Schema::Boolean("bool (default true)")) }, { "axis", Schema::String("string (LeftX, LeftY, RightX, RightY, LeftTrigger, RightTrigger)", true) }, { "value", Schema::Number("number: sticks -1..1 (+Y down), triggers 0..1", -1.0, 1.0) } }),
 				[](AutomationSession& session, const json& params) {
 					ApplyGamepadInput(params);
 					session.RecordInput("input.gamepad", params);

@@ -13,17 +13,23 @@ namespace Basalt {
 		RegisterBuiltinCommands(*this);
 	}
 
-	void CommandRegistry::Register(CommandInfo command)
+	bool CommandRegistry::Register(CommandInfo command)
 	{
+		const auto fail = [&](const std::string& error) { BS_CORE_ERROR("Automation: cannot register command '{}': {}", command.Name, error); return false; };
 		if (command.Name.empty() || command.Name.size() > 128 || !command.Handler || !std::all_of(command.Name.begin(), command.Name.end(), [](unsigned char c) {
 				return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.';
 			}))
-			throw std::invalid_argument("command needs a handler and an MCP-compatible name");
-		CommandSchema::CheckDefinition(command.InputSchema);
+			return fail("command needs a handler and an MCP-compatible name");
+		std::string error;
+		if (!CommandSchema::CheckDefinition(command.InputSchema, error))
+			return fail(error);
 		if (command.InputSchema.value("type", "") != "object" || !command.InputSchema.contains("properties") || command.InputSchema.value("additionalProperties", true))
-			throw std::invalid_argument("command schema must be a closed object with properties");
+			return fail("command schema must be a closed object with properties");
+		if (m_Commands.contains(command.Name))
+			return fail("duplicate command name");
 		const std::string name = command.Name;
-		m_Commands[name] = std::move(command);
+		m_Commands.emplace(name, std::move(command));
+		return true;
 	}
 
 	const CommandInfo* CommandRegistry::Find(const std::string& name) const
@@ -39,8 +45,7 @@ namespace Basalt {
 			throw CommandError("unknown command '" + command + "' (run 'help' to list commands)");
 		if (!params.is_object())
 			throw CommandError("'params' must be a JSON object");
-		// A misspelled or misplaced parameter would otherwise be ignored silently, e.g. a hash check that never
-		// runs.
+		// Keep the legacy diagnostic listing available parameters before the general schema validator.
 		for (const auto& [key, value] : params.items())
 		{
 			if (!info->InputSchema["properties"].contains(key))
