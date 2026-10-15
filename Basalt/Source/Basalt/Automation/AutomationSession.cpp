@@ -20,6 +20,7 @@ namespace Basalt {
 		m_Scene = scene;
 		m_ScenePath = scenePath;
 		m_Selection.clear();
+		m_SelectionSet.clear();
 		++m_EditRevision;
 		m_Dirty = false;
 		if (OnSceneChanged)
@@ -34,24 +35,49 @@ namespace Basalt {
 	void AutomationSession::SetSelections(const std::vector<UUID>& selection)
 	{
 		std::vector<UUID> valid;
+		valid.reserve(selection.size());
+		std::unordered_set<UUID> membership;
+		membership.reserve(selection.size());
 		for (UUID id : selection)
-			if (m_Scene->GetEntityByUUID(id) && std::find(valid.begin(), valid.end(), id) == valid.end())
+			if (m_Scene->GetEntityByUUID(id) && membership.insert(id).second)
 				valid.push_back(id);
 		m_Selection = std::move(valid);
+		m_SelectionSet = std::move(membership);
 	}
 
 	bool AutomationSession::IsSelected(UUID entity) const
 	{
-		return std::find(m_Selection.begin(), m_Selection.end(), entity) != m_Selection.end();
+		return m_SelectionSet.contains(entity);
 	}
 
 	void AutomationSession::PruneSelection()
 	{
-		std::erase_if(m_Selection, [this](UUID id) { return !m_Scene->GetEntityByUUID(id); });
+		std::erase_if(m_Selection, [this](UUID id) {
+			if (m_Scene->GetEntityByUUID(id))
+				return false;
+			m_SelectionSet.erase(id);
+			return true;
+		});
+	}
+
+	bool AutomationSession::AttachCommandObserver(CommandObserver& observer)
+	{
+		if (m_CommandObserver)
+			return false;
+		m_CommandObserver = &observer;
+		return true;
+	}
+
+	void AutomationSession::DetachCommandObserver(CommandObserver& observer)
+	{
+		if (m_CommandObserver == &observer)
+			m_CommandObserver = nullptr;
 	}
 
 	bool AutomationSession::StartPlay(std::string& outError, bool simulate)
 	{
+		if (m_CommandObserver && !m_CommandObserver->CanStartPlay(outError))
+			return false;
 		if (IsPlaying())
 		{
 			outError = "already playing";

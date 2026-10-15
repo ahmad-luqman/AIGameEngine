@@ -131,8 +131,8 @@ namespace Basalt {
 				if (m_Context.Execute("entity.set_parent", { { "entity", static_cast<uint64_t>(uuid) }, { "parent", nullptr } }))
 					m_Context.CommitHistory();
 			}
-			if (ImGui::MenuItem("Delete", "Del"))
-				m_PendingDelete = uuid;
+			if (ImGui::MenuItem("Delete Selection", "Del"))
+				m_PendingDelete = true;
 			ImGui::EndPopup();
 		}
 
@@ -178,11 +178,11 @@ namespace Basalt {
 			}
 		}
 
-		if (m_PendingDelete.IsValid())
+		if (m_PendingDelete)
 		{
 			m_Context.Execute("editor.delete");
 			m_Context.CommitHistory();
-			m_PendingDelete = 0;
+			m_PendingDelete = false;
 		}
 		ImGui::End();
 	}

@@ -1,9 +1,8 @@
 #pragma once
 
-#include "Basalt/Automation/EditorHistory.h"
-
 #include "Basalt/Automation/AutomationSession.h"
 #include "Basalt/Automation/CommandRegistry.h"
+#include "Basalt/Automation/EditorHistory.h"
 
 #include <nlohmann/json.hpp>
 
@@ -12,42 +11,61 @@
 
 namespace Basalt {
 
-	// State shared by editor panels. All scene edits go through the automation commands, so the GUI and
-	// AI agents (TCP / CLI) use exactly the same, validated code paths.
-	class EditorContext
+	// Shares validated command edits between panels and automation. Owns the session's command observer
+	// and transaction ownership, capturing edits on successful and failed command completion.
+	class EditorContext : public CommandObserver
 	{
 	public:
+		enum class TransactionKind
+		{
+			Automation,
+			Field,
+			Gizmo
+		};
+
 		EditorContext(CommandRegistry& commands, AutomationSession& session, EditorHistory& history);
-		~EditorContext();
+		~EditorContext() override;
 		EditorContext(const EditorContext&) = delete;
 		EditorContext& operator=(const EditorContext&) = delete;
-		bool BeginTransaction(const std::string& name);
-		void EndTransaction();
+		bool BeginTransaction(const std::string& name, TransactionKind kind = TransactionKind::Automation);
+		bool EndTransaction();
 		bool CancelTransaction(const EditorHistory::Restore& restore);
+		// A failed gesture cancel falls back to a committed edit so Undo/save remain recoverable.
+		void FinishGizmoTransaction(bool cancel, const EditorHistory::Restore& restore);
+		bool HasAutomationTransaction() const;
+		std::string TransactionError() const;
+		bool CanStartPlay(std::string& error) override;
+		void OnSceneChanged();
 		void EditField(const std::string& command, const nlohmann::json& params, bool changed, bool committed);
 		void FinishFieldEdit();
 
-		// Runs a command. On failure the error is shown in the status bar and nullopt returned.
+		// Runs a GUI command. On failure the error is logged/shown and nullopt returned.
 		std::optional<nlohmann::json> Execute(const std::string& command, const nlohmann::json& params = nlohmann::json::object());
-		// Records the edit scene in the undo history (call when an edit is complete, e.g. a drag ends).
+		// Captures a pending authored GUI edit once, outside transactions; otherwise a no-op.
 		void CommitHistory();
-
 		void SetStatus(const std::string& message, bool isError);
 
 		CommandRegistry& Commands;
 		AutomationSession& Session;
 		EditorHistory& History;
-
 		std::string StatusMessage;
 		bool StatusIsError = false;
 		double StatusTime = 0.0;
 
 	private:
+		void BeforeCommand(const CommandInfo& command, const nlohmann::json& params) override;
+		void AfterCommand(const CommandInfo& command, const nlohmann::json& params) noexcept override;
+		void ReportHistory(bool success);
+		struct Transaction
+		{
+			TransactionKind Kind;
+			bool WasDirty;
+		};
+		std::optional<Transaction> m_Transaction;
 		bool m_UICommand = false;
-		bool m_TransactionWasDirty = false;
 		uint64_t m_CommandRevision = 0;
 		std::string m_PendingName;
-		std::string m_FieldName;
+		std::string m_FailedField;
 	};
 
 	// Drag-and-drop payload type carrying a project-relative asset path.

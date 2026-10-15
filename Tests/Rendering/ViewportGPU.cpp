@@ -61,7 +61,7 @@ TEST_CASE("Viewport ID prepass selects visible surfaces across scaling, transpar
 		renderer.SetRenderScale(scale);
 		renderer.SetViewportSize(101, 99);
 		CHECK_FALSE(renderer.Pick(0, 0));
-		renderer.SetSelection(0);
+		renderer.SetSelections({});
 		const auto plain = Capture(renderer, scene, camera);
 		ExpectPick(renderer, 50, 37, front.GetUUID());
 		const auto sample = renderer.PickSurface(50, 37);
@@ -73,7 +73,7 @@ TEST_CASE("Viewport ID prepass selects visible surfaces across scaling, transpar
 		ExpectPick(renderer, 5, 5, UUID(0));
 		CHECK_FALSE(renderer.Pick(101, 0));
 		CHECK_FALSE(renderer.Pick(0, 99));
-		renderer.SetSelection(front.GetUUID());
+		renderer.SetSelections({ front.GetUUID() });
 		const auto outlined = Capture(renderer, scene, camera);
 		size_t changes = 0;
 		for (size_t i = 0; i < plain.size(); i += 4)
@@ -87,7 +87,7 @@ TEST_CASE("Viewport ID prepass selects visible surfaces across scaling, transpar
 		CHECK(changes > 100);
 		CHECK(changes < 500);
 		ExpectPick(renderer, 50, 37, front.GetUUID());
-		renderer.SetSelection(0);
+		renderer.SetSelections({});
 		CHECK(Capture(renderer, scene, camera) == plain);
 	}
 	// Dynamic render area shrinks inside the same allocation; output coordinates must still agree.
@@ -146,17 +146,17 @@ TEST_CASE("Viewport ID prepass selects visible surfaces across scaling, transpar
 	mesh->Materials[0] = savedMaterial;
 	// A selected surface covering the viewport must not outline the image boundary.
 	front.GetTransform().Scale = { 10, 10, 1 };
-	renderer.SetSelection(0);
+	renderer.SetSelections({});
 	const auto clipped = Capture(renderer, scene, camera);
-	renderer.SetSelection(front.GetUUID());
+	renderer.SetSelections({ front.GetUUID() });
 	CHECK(Capture(renderer, scene, camera) == clipped);
 	// A fully occluded selection has no silhouette in the visible-surface ID target.
 	front.GetTransform().Scale = glm::vec3(4);
-	renderer.SetSelection(0);
+	renderer.SetSelections({});
 	const auto occluded = Capture(renderer, scene, camera);
-	renderer.SetSelection(back.GetUUID());
+	renderer.SetSelections({ back.GetUUID() });
 	CHECK(Capture(renderer, scene, camera) == occluded);
-	renderer.SetSelection(0);
+	renderer.SetSelections({});
 	front.GetTransform().Scale = glm::vec3(1);
 	front.GetTransform().Translation.x = 10;
 	renderer.Render(scene, camera);

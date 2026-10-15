@@ -24,7 +24,7 @@ system, command line), `Events`, `Math`, `Renderer` (device, scene renderer, IBL
 cache), `Physics` (Jolt), `Audio` (miniaudio), `Particles` (CPU particle simulation), `Animation` (glTF TRS sampling, blends, crossfades and per-entity playback), `UI` (game UI: UI
 component layout, widgets and their mouse/keyboard/gamepad interaction, immediate-mode `UI.*`, TrueType fonts;
 drawn through ImGui after the scene), `Scripting` (Lua 5.4 + sol2; timers, coroutines, events), `Project`
-(project files, exporter, save data), `Automation` (command API, session, TCP server).
+(project files, exporter, save data), `Automation` (command API, session, TCP server, editor history and selection).
 
 Other directories: `Docs/` (scripting API, rendering guide, generated command/component references), `Tests/Data/FeatureTest`
 (the project that exercises every feature).
@@ -51,7 +51,9 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
 - **Automation first.** `CommandRegistry` (Automation/BuiltinCommands.cpp) is the API for tools and AI
   agents. The editor performs its edits through the same commands, so the GUI cannot do anything the
   API cannot. Edit-mode scene mutations must call `AutomationSession::MarkDirty` (or `MarkEdited` in
-  built-in commands); its revision counter tells editor history which commands need capture. Hosts:
+  built-in commands); its revision counter tells editor history which commands need capture, including
+  partial edits before a failure. Commands that save/replace edit state or start/restart Play declare
+  `CommandPolicy::EditBoundary`; undo/redo/transaction commands declare `HistoryControl`. Hosts:
   `basalt` CLI (headless) and the editor's TCP server (127.0.0.1:7420, adds
   `editor.*` commands and screenshots). Docs: Docs/AutomationCommands.md (generated), Docs/MCP.md (agent setup/protocol). CommandInfo declares
   InputSchema: validation, help and MCP tool definitions share it; editor TCP clients can use MCP too.

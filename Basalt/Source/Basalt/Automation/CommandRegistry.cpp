@@ -5,6 +5,7 @@
 #include "Basalt/Core/Log.h"
 
 #include <algorithm>
+#include <exception>
 
 namespace Basalt {
 
@@ -72,22 +73,36 @@ namespace Basalt {
 		if (!CommandSchema::Validate(info->InputSchema, params, error))
 			throw CommandError(error);
 		const bool outer = session.m_CommandDepth == 0;
-		if (outer && session.BeforeCommand)
-			session.BeforeCommand(command, params);
-		++session.m_CommandDepth;
+		CommandObserver* observer = outer ? session.m_CommandObserver : nullptr;
+		if (observer)
+			observer->BeforeCommand(*info, params);
 		nlohmann::json result;
-		try
+		std::exception_ptr failure;
 		{
-			result = info->Handler(session, params);
+			struct DepthGuard
+			{
+				size_t& Depth;
+				explicit DepthGuard(size_t& depth)
+					: Depth(depth)
+				{
+					++Depth;
+				}
+				~DepthGuard() { --Depth; }
+			} depthGuard(session.m_CommandDepth);
+			try
+			{
+				result = info->Handler(session, params);
+			}
+			catch (...)
+			{
+				failure = std::current_exception();
+			}
 		}
-		catch (...)
-		{
-			--session.m_CommandDepth;
-			throw;
-		}
-		--session.m_CommandDepth;
-		if (outer && session.AfterCommand)
-			session.AfterCommand(command, params);
+		// Capture partial edits under the failed command's name without masking its original error.
+		if (observer)
+			observer->AfterCommand(*info, params);
+		if (failure)
+			std::rethrow_exception(failure);
 		return result;
 	}
 

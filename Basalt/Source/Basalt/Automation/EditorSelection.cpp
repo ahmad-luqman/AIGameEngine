@@ -11,15 +11,18 @@
 #include "Basalt/Scene/ComponentRegistry.h"
 #include "Basalt/Scene/Scene.h"
 
+#include <glm/gtc/matrix_inverse.hpp>
+
 #include <algorithm>
+#include <unordered_set>
 #include <array>
 
 namespace Basalt {
 
 	namespace {
-		void RequireEditableSelection(AutomationSession& session)
+		void RequireSelection(AutomationSession& session, bool editOnly = true)
 		{
-			if (session.IsPlaying())
+			if (editOnly && session.IsPlaying())
 				throw CommandError("selection edits are only available in edit mode");
 			session.PruneSelection();
 			if (session.GetSelections().empty())
@@ -34,23 +37,19 @@ namespace Basalt {
 
 	std::vector<UUID> SelectionRoots(Scene& scene, const std::vector<UUID>& selection)
 	{
-		std::vector<UUID> roots;
+		std::vector<Entity> entities;
+		entities.reserve(selection.size());
 		for (UUID id : selection)
-		{
-			Entity entity = scene.GetEntityByUUID(id);
-			if (!entity)
-				continue;
-			bool inherited = false;
-			for (Entity parent = entity.GetParent(); parent; parent = parent.GetParent())
-				if (std::find(selection.begin(), selection.end(), parent.GetUUID()) != selection.end())
-				{
-					inherited = true;
-					break;
-				}
-			if (!inherited && std::find(roots.begin(), roots.end(), id) == roots.end())
-				roots.push_back(id);
-		}
+			entities.push_back(scene.GetEntityByUUID(id));
+		std::vector<UUID> roots;
+		for (Entity entity : scene.GetEntityRoots(entities))
+			roots.push_back(entity.GetUUID());
 		return roots;
+	}
+
+	glm::mat4 SelectionDelta(const glm::mat4& previous, const glm::mat4& next)
+	{
+		return next * glm::affineInverse(previous);
 	}
 
 	glm::mat4 SelectionPivot(Scene& scene, const std::vector<UUID>& selection, bool local)
@@ -70,7 +69,7 @@ namespace Basalt {
 			++count;
 			glm::vec3 translation, scale;
 			glm::quat rotation;
-			if (local && Math::IsFinite(world) && Math::DecomposeTransform(world, translation, rotation, scale))
+			if (local && id == selection.back() && Math::DecomposeTransform(world, translation, rotation, scale))
 				orientation = rotation;
 		}
 		return Math::ComposeTransform(glm::vec3(count ? center / static_cast<double>(count) : center), orientation, glm::vec3(1));
@@ -131,38 +130,44 @@ namespace Basalt {
 		return { { "selected", static_cast<uint64_t>(session.GetSelection()) }, { "entities", entities } };
 	}
 
+	nlohmann::json ApplySelection(AutomationSession& session, const std::vector<UUID>& ids, const std::string& mode)
+	{
+		if (mode != "replace" && mode != "add" && mode != "toggle")
+			throw CommandError("invalid selection mode");
+		std::vector<UUID> selection = mode == "replace" ? std::vector<UUID>{} : session.GetSelections();
+		std::unordered_set<UUID> members(selection.begin(), selection.end()), seen;
+		for (UUID id : ids)
+		{
+			if (!seen.insert(id).second)
+				continue;
+			if (mode == "toggle" && members.erase(id))
+				continue;
+			if (members.insert(id).second)
+				selection.push_back(id);
+		}
+		std::erase_if(selection, [&](UUID id) { return !members.contains(id); });
+		session.SetSelections(selection);
+		return SelectionResult(session);
+	}
+
 	void RegisterEditorSelectionCommands(CommandRegistry& registry)
 	{
 		using json = nlohmann::json;
-		registry.Register({ "editor.select", "Replaces, adds or toggles an ordered selection. Last entity is active; null or no references clears it.", EditorCommandSchemas::Select(), [&registry](AutomationSession& session, const json& params) {
+		registry.Register({ "editor.select", "Replaces, adds or toggles an ordered selection. Last entity is active; empty references clear only in replace mode.", EditorCommandSchemas::Select(), [&registry](AutomationSession& session, const json& params) {
 							   if (params.contains("entity") && params.contains("entities"))
 								   throw CommandError("use entity or entities, not both");
 							   auto references = params.value("entities", json::array());
 							   if (params.contains("entity") && !params["entity"].is_null())
 								   references.push_back(params["entity"]);
 							   std::vector<UUID> resolved;
+							   resolved.reserve(references.size());
 							   for (const auto& reference : references)
-							   {
-								   const UUID id = registry.Execute(session, "entity.get", { { "entity", reference } })["ID"].get<uint64_t>();
-								   if (std::find(resolved.begin(), resolved.end(), id) == resolved.end())
-									   resolved.push_back(id);
-							   }
-							   const std::string mode = params.value("mode", std::string("replace"));
-							   std::vector<UUID> selection = mode == "replace" ? std::vector<UUID>{} : session.GetSelections();
-							   for (UUID id : resolved)
-							   {
-								   auto it = std::find(selection.begin(), selection.end(), id);
-								   if (mode == "toggle" && it != selection.end())
-									   selection.erase(it);
-								   else if (it == selection.end())
-									   selection.push_back(id);
-							   }
-							   session.SetSelections(selection);
-							   return SelectionResult(session);
+								   resolved.emplace_back(registry.Execute(session, "entity.get", { { "entity", reference } })["ID"].get<uint64_t>());
+							   return ApplySelection(session, resolved, params.value("mode", std::string("replace")));
 						   } });
 
 		registry.Register({ "editor.transform", "Applies a column-major world delta matrix to selected roots atomically. Selected descendants inherit once; shear is rejected.", EditorCommandSchemas::Transform(), [&registry](AutomationSession& session, const json& params) {
-							   RequireEditableSelection(session);
+							   RequireSelection(session);
 							   glm::mat4 delta(1);
 							   for (int c = 0; c < 4; ++c)
 								   for (int r = 0; r < 4; ++r)
@@ -179,7 +184,7 @@ namespace Basalt {
 								   glm::mat4 local = delta * scene.GetWorldTransform(entity);
 								   if (const Entity parent = entity.GetParent())
 								   {
-									   const glm::mat4 inverse = glm::inverse(scene.GetWorldTransform(parent));
+									   const glm::mat4 inverse = glm::affineInverse(scene.GetWorldTransform(parent));
 									   if (!Math::IsFinite(inverse))
 										   throw CommandError("selection has a singular parent transform");
 									   local = inverse * local;
@@ -196,7 +201,7 @@ namespace Basalt {
 						   } });
 
 		registry.Register({ "editor.component_set", "Sets shared component fields on every selected entity atomically; all must already have the component.", EditorCommandSchemas::ComponentSet(), [&registry](AutomationSession& session, const json& params) {
-							   RequireEditableSelection(session);
+							   RequireSelection(session);
 							   const std::string name = params["component"].get<std::string>();
 							   const ComponentInfo* info = ComponentRegistry::Find(name);
 							   if (!info)
@@ -224,27 +229,31 @@ namespace Basalt {
 							   return SelectionResult(session);
 						   } });
 
-		for (bool duplicate : { false, true })
-			registry.Register({ duplicate ? "editor.duplicate" : "editor.delete", duplicate ? "Duplicates selected root trees as one edit and selects their copies." : "Deletes selected root trees as one edit.", CommandSchema::Object(), [&registry, duplicate](AutomationSession& session, const json&) {
-								   RequireEditableSelection(session);
-								   const auto roots = SelectionRoots(*session.GetScene(), session.GetSelections());
-								   std::vector<UUID> copies;
-								   if (duplicate)
-								   {
-									   std::vector<Entity> entities;
-									   entities.reserve(roots.size());
-									   for (UUID id : roots)
-										   entities.push_back(session.GetScene()->GetEntityByUUID(id));
-									   for (Entity copy : session.GetScene()->DuplicateEntities(entities))
-										   copies.push_back(copy.GetUUID());
-									   session.MarkDirty();
-								   }
-								   else
-									   for (UUID id : roots)
-										   registry.Execute(session, "entity.destroy", { { "entity", static_cast<uint64_t>(id) } });
-								   session.SetSelections(copies);
-								   return SelectionResult(session);
-							   } });
+		registry.Register({ "editor.delete", "Deletes selected root trees as one edit, or from the running copy during Play/Simulate.", CommandSchema::Object(), [&registry](AutomationSession& session, const json&) {
+							   RequireSelection(session, false);
+							   for (UUID id : SelectionRoots(*session.GetScene(), session.GetSelections()))
+								   registry.Execute(session, "entity.destroy", { { "entity", static_cast<uint64_t>(id) } });
+							   session.SetSelections({});
+							   return SelectionResult(session);
+						   } });
+		registry.Register({ "editor.duplicate", "Duplicates the selected forest and selects its roots; Play/Simulate changes only the running copy.", CommandSchema::Object(), [](AutomationSession& session, const json&) {
+							   RequireSelection(session, false);
+							   std::vector<Entity> entities;
+							   entities.reserve(session.GetSelections().size());
+							   for (UUID id : session.GetSelections())
+								   entities.push_back(session.GetScene()->GetEntityByUUID(id));
+							   const auto duplicated = session.GetScene()->DuplicateEntities(entities);
+							   if (duplicated.empty())
+								   throw CommandError("could not duplicate selected entities");
+							   std::vector<UUID> copies;
+							   copies.reserve(duplicated.size());
+							   for (Entity copy : duplicated)
+								   copies.push_back(copy.GetUUID());
+							   if (!session.IsPlaying())
+								   session.MarkDirty();
+							   session.SetSelections(copies);
+							   return SelectionResult(session);
+						   } });
 	}
 
 }

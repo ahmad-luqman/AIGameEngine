@@ -130,7 +130,6 @@ namespace Basalt {
 		void SetVisualizeLightCount(bool enabled) { m_VisualizeLightCount = enabled; }
 
 		// Selection uses the same visible-surface IDs as picking. An empty selection disables outlines. No effect unless Picking is enabled.
-		void SetSelection(UUID entity) { m_Selection = entity.IsValid() ? std::vector<UUID>{ entity } : std::vector<UUID>{}; }
 		void SetSelections(const std::vector<UUID>& entities) { m_Selection = entities; }
 		// Copies one texel on demand, in integer output-image coordinates (top-left origin).
 		// Synchronous: waits for the whole device, not just the copied texel.

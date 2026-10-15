@@ -19,6 +19,14 @@ namespace Basalt {
 		using std::runtime_error::runtime_error;
 	};
 
+	// Boundary commands cannot run inside an editor transaction; history controls never author edits.
+	enum class CommandPolicy
+	{
+		Normal,
+		EditBoundary,
+		HistoryControl
+	};
+
 	struct CommandInfo
 	{
 		std::string Name;
@@ -26,6 +34,7 @@ namespace Basalt {
 		// The same schema validates requests and is published by help and MCP tools/list.
 		nlohmann::json InputSchema;
 		std::function<nlohmann::json(AutomationSession&, const nlohmann::json&)> Handler;
+		CommandPolicy Policy = CommandPolicy::Normal;
 	};
 
 	// The automation API: named commands taking and returning JSON. Used by the basalt CLI and by the

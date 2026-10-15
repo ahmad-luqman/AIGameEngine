@@ -92,7 +92,10 @@ def main():
                     call("editor.screenshot", {"path": str(Path(output, "plain-repeat.png")), "width": 640, "height": 480})
                     require(read_png(Path(output, "plain-repeat.png"))[2] == plain, "Disabled outline capture is unstable")
                     call("editor.viewport", {"selectionOutline": True})
+                    snap_entries = len(call("editor.history")["entries"])
                     call("editor.vertex_snap", {"source": project(-.3, .5, .5), "target": project(.3, .5, .5)})
+                    snap_history = call("editor.history")
+                    require(len(snap_history["entries"]) == snap_entries + 1 and snap_history["undo"] == "Vertex Snap", "Vertex snap did not create its own named entry")
                     def translation():
                         return call("entity.get", {"entity": a})["Components"]["Transform"]["Translation"]
                     moved = translation()

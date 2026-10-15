@@ -16,6 +16,7 @@
 #include "Basalt/UI/UIInteraction.h"
 
 #include <algorithm>
+#include <unordered_set>
 #include <filesystem>
 #include <functional>
 
@@ -280,13 +281,7 @@ namespace Basalt {
 		for (Entity entity : entities)
 			if (!entity || entity.GetScene() != this)
 				return {};
-		std::vector<Entity> roots;
-		for (Entity entity : entities)
-		{
-			const bool inherited = std::any_of(entities.begin(), entities.end(), [&](Entity other) { return entity != other && IsDescendantOf(entity, other); });
-			if (!inherited && std::find(roots.begin(), roots.end(), entity) == roots.end())
-				roots.push_back(entity);
-		}
+		const auto roots = GetEntityRoots(entities);
 		std::unordered_map<UUID, UUID> copies;
 		std::vector<Entity> result;
 		result.reserve(roots.size());
@@ -296,6 +291,33 @@ namespace Basalt {
 		for (const auto& [source, copied] : copies)
 			ComponentRegistry::RemapEntityReferences(GetEntityByUUID(copied), copies);
 		return result;
+	}
+
+	std::vector<Entity> Scene::GetEntityRoots(const std::vector<Entity>& entities)
+	{
+		std::unordered_set<UUID> members;
+		members.reserve(entities.size());
+		for (Entity entity : entities)
+			if (entity && entity.GetScene() == this)
+				members.insert(entity.GetUUID());
+		std::unordered_set<UUID> emitted;
+		std::vector<Entity> roots;
+		for (Entity entity : entities)
+		{
+			if (!entity || entity.GetScene() != this || !emitted.insert(entity.GetUUID()).second)
+				continue;
+			bool inherited = false;
+			// Walking ancestors avoids comparing every pair in a large, flat forest.
+			for (Entity parent = entity.GetParent(); parent; parent = parent.GetParent())
+				if (members.contains(parent.GetUUID()))
+				{
+					inherited = true;
+					break;
+				}
+			if (!inherited)
+				roots.push_back(entity);
+		}
+		return roots;
 	}
 
 	Entity Scene::GetEntityByUUID(UUID uuid)

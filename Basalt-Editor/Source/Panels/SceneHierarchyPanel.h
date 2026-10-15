@@ -23,7 +23,7 @@ namespace Basalt {
 
 	private:
 		EditorContext& m_Context;
-		UUID m_PendingDelete = 0;
+		bool m_PendingDelete = false;
 		UUID m_Anchor = 0;
 		std::vector<UUID> m_Visible, m_PreviousVisible;
 	};

@@ -183,7 +183,7 @@ namespace Basalt {
 		const auto selection = m_Context.Session.GetSelections();
 		ImGui::Text("%zu entities selected", selection.size());
 		ImGui::TextWrapped("Shared components only. Mixed fields show the active entity's value; editing replaces that field on every selection.");
-		ImGui::BeginDisabled(m_Context.Session.IsPlaying());
+		ImGui::BeginDisabled(m_Context.Session.IsPlaying() || m_Context.HasAutomationTransaction());
 		for (const auto& info : ComponentRegistry::GetAll())
 		{
 			if (info.Name == "Tag" || !std::all_of(selection.begin(), selection.end(), [&](UUID id) { const Entity entity = scene.GetEntityByUUID(id); return entity && info.Has(entity); }))
@@ -191,12 +191,16 @@ namespace Basalt {
 			ImGui::PushID(info.Name.c_str());
 			if (ImGui::CollapsingHeader(info.Name.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
 			{
-				auto data = info.Serialize(scene.GetEntityByUUID(m_Context.Session.GetSelection()));
+				std::vector<nlohmann::json> values;
+				values.reserve(selection.size());
+				for (UUID id : selection)
+					values.push_back(info.Serialize(scene.GetEntityByUUID(id)));
+				auto data = values.back();
 				for (const auto& field : info.Fields)
 				{
 					if (!data.contains(field))
 						continue;
-					const bool mixed = std::any_of(selection.begin(), selection.end(), [&](UUID id) { return info.Serialize(scene.GetEntityByUUID(id))[field] != data[field]; });
+					const bool mixed = std::any_of(values.begin(), values.end(), [&](const auto& value) { return value[field] != data[field]; });
 					if (mixed)
 						ImGui::TextDisabled("%s (mixed)", field.c_str());
 					const auto options = info.EnumOptions.find(field);
@@ -212,6 +216,8 @@ namespace Basalt {
 	void InspectorPanel::OnImGuiRender()
 	{
 		ImGui::Begin("Inspector");
+		if (m_Context.HasAutomationTransaction())
+			ImGui::TextWrapped("Finish the active transaction using Commit/Cancel in the status bar to edit components.");
 		if (m_Context.Session.GetSelections().size() > 1)
 		{
 			DrawMultiSelection();
@@ -227,6 +233,7 @@ namespace Basalt {
 			return;
 		}
 
+		ImGui::BeginDisabled(m_Context.HasAutomationTransaction());
 		const uint64_t id = entity.GetUUID();
 		std::string name = entity.GetName();
 		ImGui::SetNextItemWidth(-1.0f);
@@ -392,6 +399,7 @@ namespace Basalt {
 			ImGui::EndPopup();
 		}
 
+		ImGui::EndDisabled();
 		ImGui::End();
 	}
 

@@ -5,7 +5,7 @@ layout(push_constant) uniform OutlinePush
 {
 	uvec2 RenderSize;
 	uvec2 OutputSize;
-	uint Selected;
+	uint SelectionMask;
 	uint Padding;
 } u_Push;
 layout(location = 0) out vec4 o_Color;
@@ -16,7 +16,7 @@ bool SelectedAt(ivec2 pixel)
 	ivec2 texel = ivec2((vec2(pixel) + 0.5) * vec2(u_Push.RenderSize) / vec2(u_Push.OutputSize));
 	texel = clamp(texel, ivec2(0), ivec2(u_Push.RenderSize) - 1);
 	// The high bit marks selection; low bits remain the full frame-local picking token.
-	return (texelFetch(u_Ids, texel, 0).r & u_Push.Selected) != 0u;
+	return (texelFetch(u_Ids, texel, 0).r & u_Push.SelectionMask) != 0u;
 }
 void main()
 {
