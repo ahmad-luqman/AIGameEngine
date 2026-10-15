@@ -688,6 +688,14 @@ TEST_SUITE("Automation")
 																	  R"({"jsonrpc":"2.0","id":2,"method":"tools/list"})"));
 		CHECK(reconnected["id"] == 2);
 		CHECK(reconnected["error"]["code"] == -32600);
+		for (const std::string& blank : { std::string(), std::string("\r") })
+		{
+			// Follow with a ping so an old server that swallowed blank frames also finishes the test.
+			const auto response = ParseJson(SendLine(server.GetPort(), blank + "\n" + R"({"jsonrpc":"2.0","id":3,"method":"ping"})"));
+			CHECK(response.contains("error"));
+			if (response.contains("error"))
+				CHECK(response["error"]["code"] == -32700);
+		}
 		server.Stop();
 	}
 

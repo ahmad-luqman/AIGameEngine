@@ -303,6 +303,9 @@ namespace Basalt {
 	std::string EditorLayer::HandleAutomationRequest(const std::string& request)
 	{
 		// Runs on the server thread: hand the request to the main thread and wait for the answer.
+		// Keep legacy blank-line behavior; established MCP connections must receive a parse error.
+		if (request.empty() && !m_McpConnection)
+			return "";
 		const nlohmann::json parsed = ParseJson(request);
 		if (parsed.is_object() && (parsed.contains("jsonrpc") || parsed.contains("method")))
 			m_McpConnection = true;

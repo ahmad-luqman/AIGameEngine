@@ -128,7 +128,7 @@ TEST_SUITE("MCP")
 		CommandRegistry registry;
 		AutomationSession session;
 		McpServer server;
-		std::istringstream input(Initialize().dump() + "\r\n{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n{bad}\n" + Request("tools/list").dump() + "\n");
+		std::istringstream input(Initialize().dump() + "\r\n{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n\n\r\n{bad}\n" + Request("tools/list").dump() + "\n");
 		std::ostringstream output;
 		CHECK(server.Serve(input, output, registry, session));
 		std::istringstream responses(output.str());
@@ -136,10 +136,12 @@ TEST_SUITE("MCP")
 		std::vector<json> parsed;
 		while (std::getline(responses, line))
 			parsed.push_back(ParseJson(line));
-		REQUIRE(parsed.size() == 3);
+		REQUIRE(parsed.size() == 5);
 		CHECK(parsed[0].contains("result"));
 		CHECK(parsed[1]["error"]["code"] == -32700);
-		CHECK(parsed[2]["result"]["tools"].is_array());
+		CHECK(parsed[2]["error"]["code"] == -32700);
+		CHECK(parsed[3]["error"]["code"] == -32700);
+		CHECK(parsed[4]["result"]["tools"].is_array());
 		std::istringstream partial(Request("ping").dump());
 		std::ostringstream ignored;
 		CHECK_FALSE(server.Serve(partial, ignored, registry, session));
