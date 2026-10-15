@@ -182,7 +182,7 @@ jobs:
       - name: Install dependencies
         timeout-minutes: 20
         run: |
-          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 mesa-vulkan-drivers vulkan-validationlayers vulkan-tools libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
+          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 mesa-vulkan-drivers vulkan-validationlayers vulkan-tools xvfb xauth libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
       # Load only lavapipe, so the run never depends on what else the runner image installs. The manifest's
       # file name differs between Mesa packages, so find it instead of hard-coding it.
@@ -218,7 +218,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: lavapipe-screenshots
-          path: build/Tests/Golden/**/*.png
+          path: |
+            build/Tests/Golden/**/*.png
+            build/Tests/Viewport/*
           if-no-files-found: warn
 
   # Short libFuzzer run of every target on each push (scripts/fuzz.sh); longer runs happen nightly

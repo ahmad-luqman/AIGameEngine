@@ -50,6 +50,8 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 		set_tests_properties(${name} PROPERTIES TIMEOUT ${timeout})
 	endfunction()
 	basalt_add_gpu_test(LightClustersGPU Rendering/LightClustersGPU.cpp 120)
+	basalt_add_gpu_test(ViewportGPU Rendering/ViewportGPU.cpp 120)
+	target_compile_definitions(BasaltViewportGPU PRIVATE BASALT_ANIMATION_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Data/Animation")
 	basalt_add_gpu_test(FSR1GPU Rendering/FSR1GPU.cpp 60)
 	basalt_add_gpu_test(AnimationGPU Rendering/AnimationGPU.cpp 120)
 	target_compile_definitions(BasaltAnimationGPU PRIVATE BASALT_ANIMATION_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Data/Animation" BASALT_ANIMATION_OUTPUT_DIR="${CMAKE_CURRENT_BINARY_DIR}/Animation")
@@ -67,7 +69,7 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	set(basaltGoldenOutput "${CMAKE_CURRENT_BINARY_DIR}/Golden")
 	file(MAKE_DIRECTORY "${basaltGoldenOutput}")
 
-	set(basaltGpuTests FSR1GPU LightClustersGPU AnimationGPU)
+	set(basaltGpuTests ViewportGPU FSR1GPU LightClustersGPU AnimationGPU)
 	# "Scaled" is the lit image rendered at half resolution and upsampled by the tonemap pass (render scale).
 	# "Dynamic" reaches the same image through dynamic resolution: an unreachable frame-rate target drops the
 	# scale to its 0.5 minimum (once GPU timer results arrive), and the scene renders into the top-left of
@@ -145,6 +147,21 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 		list(APPEND basaltGpuTests FeatureTestRenderWindowed)
 	endif()
 	if(Python3_Interpreter_FOUND)
+		# Exercise the actual editor host. Linux CI supplies a virtual display; macOS uses the desktop.
+		set(basaltEditorDisplay "")
+		if(UNIX AND NOT APPLE)
+			find_program(BASALT_XVFB_RUN xvfb-run)
+			if(BASALT_XVFB_RUN)
+				set(basaltEditorDisplay "${BASALT_XVFB_RUN}" -a -s "-screen 0 1280x900x24")
+			endif()
+		endif()
+		if(TARGET BasaltEditor AND (APPLE OR WIN32 OR BASALT_XVFB_RUN OR DEFINED ENV{DISPLAY}))
+			add_test(NAME EditorViewport
+				COMMAND ${basaltEditorDisplay} "${Python3_EXECUTABLE}" -B -O "${CMAKE_CURRENT_SOURCE_DIR}/Automation/EditorViewport.py"
+					$<TARGET_FILE:BasaltEditor> $<TARGET_FILE:BasaltCLI> "${CMAKE_CURRENT_BINARY_DIR}/Viewport")
+			set_tests_properties(EditorViewport PROPERTIES TIMEOUT 120)
+			list(APPEND basaltGpuTests EditorViewport)
+		endif()
 		# -B keeps helper bytecode out of the source tree; -O verifies checks survive Python optimization.
 		add_test(NAME FSR1Render
 			COMMAND "${Python3_EXECUTABLE}" -B -O "${CMAKE_CURRENT_SOURCE_DIR}/Rendering/FSR1.py"
@@ -163,7 +180,7 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	endif()
 	set_tests_properties(${basaltGpuTests} PROPERTIES LABELS gpu)
 	# Explicitly enable synchronization validation for the compute-write -> fragment-read path.
-	set_property(TEST LightClustersGPU APPEND PROPERTY ENVIRONMENT "VK_LAYER_ENABLES=VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT")
+	set_property(TEST LightClustersGPU ViewportGPU APPEND PROPERTY ENVIRONMENT "VK_LAYER_ENABLES=VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT")
 	if(APPLE)
 		# Homebrew's validation layer manifest names its library without a path (Apple silicon and Intel prefixes).
 		set_property(TEST ${basaltGpuTests} APPEND PROPERTY ENVIRONMENT "DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib:/usr/local/lib")

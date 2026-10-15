@@ -290,6 +290,14 @@ namespace Basalt {
 	{
 		nvrhi::CommandListHandle CommandList;
 		DebugLineRenderer Lines;
+		nvrhi::TextureHandle EntityIds, PickDepth;
+		nvrhi::FramebufferHandle PickFramebuffer;
+		nvrhi::ShaderHandle DepthNormalPickPS, PickPS, OutlinePS;
+		nvrhi::BindingLayoutHandle OutlineLayout;
+		nvrhi::BindingSetHandle OutlineSet;
+		nvrhi::GraphicsPipelineHandle PickPipeline[2], OutlinePipeline;
+		std::vector<UUID> PickEntities;
+		bool PickReady = false;
 
 		// Shaders
 		nvrhi::ShaderHandle ShadowMaskedVS, ShadowMaskedPS;
@@ -409,6 +417,7 @@ namespace Basalt {
 		, m_Device(device)
 		, m_Resources(CreateScope<RenderResources>(device))
 		, m_Profiler(device, std::vector<std::string>(std::begin(ScenePassNames), std::end(ScenePassNames)), specification.GpuTimers)
+		, m_Picking(specification.Picking)
 	{
 	}
 
@@ -451,6 +460,25 @@ namespace Basalt {
 		{
 			if (!shader)
 				return false;
+		}
+
+		if (m_Picking)
+		{
+			impl.DepthNormalPickPS = CreateEmbeddedShader(device, "DepthNormalPick.frag", nvrhi::ShaderType::Pixel);
+			impl.PickPS = CreateEmbeddedShader(device, "Pick.frag", nvrhi::ShaderType::Pixel);
+			impl.OutlinePS = CreateEmbeddedShader(device, "SelectionOutline.frag", nvrhi::ShaderType::Pixel);
+			nvrhi::BindingLayoutDesc layout;
+			layout.visibility = nvrhi::ShaderType::Pixel;
+			layout.bindingOffsets = ZeroBindingOffsets;
+			layout.registerSpaceIsDescriptorSet = true;
+			layout.addItem(nvrhi::BindingLayoutItem::Texture_SRV(0));
+			layout.addItem(nvrhi::BindingLayoutItem::PushConstants(1, 24));
+			impl.OutlineLayout = device->createBindingLayout(layout);
+			if (!impl.DepthNormalPickPS || !impl.PickPS || !impl.OutlinePS || !impl.OutlineLayout)
+			{
+				BS_CORE_ERROR("SceneRenderer: failed to initialize picking shaders/layout");
+				return false;
+			}
 		}
 
 		// --- Input layouts ------------------------------------------------------------------------
@@ -855,6 +883,7 @@ namespace Basalt {
 
 		Impl& impl = *m_Impl;
 		m_Device->waitForIdle();
+		InvalidatePicking();
 		impl.Upscaler.Reset();
 		impl.FsrTonemapPipeline = nullptr;
 		impl.FsrTonemapFailed = false;
@@ -897,7 +926,29 @@ namespace Basalt {
 		// is resampled to the output size (see the depth upsample pass in Render).
 		impl.OverlayDepth = scaled ? makeTarget(nvrhi::Format::D32, "OverlayDepth", true, true) : nullptr;
 
-		impl.PrepassFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(impl.NormalTexture).setDepthAttachment(m_DepthTexture));
+		nvrhi::FramebufferDesc prepassDesc;
+		prepassDesc.addColorAttachment(impl.NormalTexture).setDepthAttachment(m_DepthTexture);
+		if (m_Picking)
+		{
+			impl.EntityIds = makeTarget(nvrhi::Format::R32_UINT, "EntityIds");
+			impl.PickDepth = makeTarget(nvrhi::Format::D32, "PickDepth", true);
+			if (!impl.EntityIds || !impl.PickDepth)
+			{
+				BS_CORE_ERROR("SceneRenderer: failed to allocate picking targets");
+				m_OutputTexture = nullptr;
+				return;
+			}
+			prepassDesc.addColorAttachment(impl.EntityIds);
+			impl.PickFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(impl.EntityIds).setDepthAttachment(impl.PickDepth));
+			impl.OutlineSet = m_Device->createBindingSet(nvrhi::BindingSetDesc().addItem(nvrhi::BindingSetItem::Texture_SRV(0, impl.EntityIds)).addItem(nvrhi::BindingSetItem::PushConstants(1, 24)), impl.OutlineLayout);
+		}
+		impl.PrepassFramebuffer = m_Device->createFramebuffer(prepassDesc);
+		if (m_Picking && (!impl.PrepassFramebuffer || !impl.PickFramebuffer || !impl.OutlineSet))
+		{
+			BS_CORE_ERROR("SceneRenderer: failed to create picking framebuffer/bindings");
+			m_OutputTexture = nullptr;
+			return;
+		}
 		impl.LightingFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(impl.HdrTexture).setDepthAttachment(m_DepthTexture));
 		impl.SsaoFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(impl.SsaoTexture));
 		impl.SsaoBlurFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(impl.SsaoBlurTexture));
@@ -932,9 +983,28 @@ namespace Basalt {
 		};
 		for (int doubleSided = 0; doubleSided < 2; doubleSided++)
 		{
-			impl.PrepassPipeline[doubleSided] = meshPipeline(impl.DepthNormalPS, impl.PrepassFramebuffer, doubleSided, true, false);
+			impl.PrepassPipeline[doubleSided] = meshPipeline(m_Picking ? impl.DepthNormalPickPS : impl.DepthNormalPS, impl.PrepassFramebuffer, doubleSided, true, false);
+			if (m_Picking && impl.PickFramebuffer)
+				impl.PickPipeline[doubleSided] = meshPipeline(impl.PickPS, impl.PickFramebuffer, doubleSided, true, false);
 			impl.OpaquePipeline[doubleSided] = meshPipeline(impl.PbrPS, impl.LightingFramebuffer, doubleSided, false, false);
 			impl.TransparentPipeline[doubleSided] = meshPipeline(impl.PbrPS, impl.LightingFramebuffer, doubleSided, false, true);
+		}
+
+		if (m_Picking)
+		{
+			nvrhi::GraphicsPipelineDesc desc;
+			desc.VS = impl.FullscreenVS;
+			desc.PS = impl.OutlinePS;
+			desc.bindingLayouts = { impl.OutlineLayout };
+			desc.renderState.rasterState.setCullNone();
+			desc.renderState.depthStencilState.setDepthTestEnable(false).setDepthWriteEnable(false);
+			impl.OutlinePipeline = m_Device->createGraphicsPipeline(desc, impl.OutputFramebuffer->getFramebufferInfo());
+			if (!impl.PickFramebuffer || !impl.OutlineSet || !impl.OutlinePipeline || !impl.PickPipeline[0] || !impl.PickPipeline[1] || !impl.PrepassPipeline[0] || !impl.PrepassPipeline[1])
+			{
+				BS_CORE_ERROR("SceneRenderer: failed to create picking pipelines/bindings");
+				m_OutputTexture = nullptr;
+				return;
+			}
 		}
 
 		// Billboards: depth-tested against the scene but not written (they are blended); no face culling.
@@ -1015,8 +1085,14 @@ namespace Basalt {
 
 	void SceneRenderer::Render(Scene& scene, const RenderCamera& camera)
 	{
+		InvalidatePicking();
 		Impl& impl = *m_Impl;
 		ResizeTargets(m_Width, m_Height);
+		if (!m_OutputTexture)
+		{
+			m_Statistics.Failed = true;
+			return;
+		}
 
 		nvrhi::ICommandList* commandList = impl.CommandList;
 		commandList->open();
@@ -1391,6 +1467,8 @@ namespace Basalt {
 		std::vector<GpuDrawData>& draws = impl.Draws;
 		std::vector<GpuMaterialData>& materials = impl.Materials;
 		std::vector<DrawItem>& items = impl.Items;
+		impl.PickEntities = { UUID(0) };
+		std::unordered_map<UUID, uint32_t> pickIds;
 		draws.clear();
 		materials.clear();
 		items.clear();
@@ -1437,6 +1515,14 @@ namespace Basalt {
 			const GpuMesh* gpuMesh = m_Resources->GetMesh(source, commandList);
 			if (!gpuMesh)
 				return;
+			uint32_t pickId = 0;
+			if (m_Picking)
+			{
+				auto [it, inserted] = pickIds.try_emplace(entity.GetUUID(), static_cast<uint32_t>(impl.PickEntities.size()));
+				if (inserted)
+					impl.PickEntities.push_back(entity.GetUUID());
+				pickId = it->second;
+			}
 			const glm::mat4 normalMatrix = glm::transpose(glm::inverse(model));
 			const auto* materialOverride = entity.TryGetComponent<MaterialComponent>();
 
@@ -1509,7 +1595,7 @@ namespace Basalt {
 					m_Statistics.SkinMatrices += static_cast<uint32_t>(palette.size());
 				}
 				const uint32_t drawIndex = static_cast<uint32_t>(draws.size());
-				draws.push_back({ model, normalMatrix, glm::uvec4(materialIndex, 0, paletteOffset, static_cast<uint32_t>(palette.size())) });
+				draws.push_back({ model, normalMatrix, glm::uvec4(materialIndex, pickId, paletteOffset, static_cast<uint32_t>(palette.size())) });
 
 				DrawItem item;
 				item.Mesh = gpuMesh;
@@ -1743,6 +1829,8 @@ namespace Basalt {
 		{
 			const GpuPassScope pass(profiler, commandList, PassPrepass);
 			// Clears cover the whole targets, also outside a dynamic-resolution render area; nothing reads there.
+			if (m_Picking)
+				commandList->clearTextureUInt(impl.EntityIds, nvrhi::AllSubresources, 0);
 			commandList->clearDepthStencilTexture(m_DepthTexture, nvrhi::AllSubresources, true, 1.0f, false, 0);
 			commandList->clearTextureFloat(impl.NormalTexture, nvrhi::AllSubresources, nvrhi::Color(0.0f, 0.0f, 1.0f, 0.0f));
 			for (const DrawItem& item : items)
@@ -1751,6 +1839,15 @@ namespace Basalt {
 					continue;
 				drawItem(item, impl.PrepassPipeline[item.DoubleSided ? 1 : 0], impl.PrepassFramebuffer, renderViewport, 0, true);
 			}
+		}
+
+		// Transparent selection gets its own nearest-surface depth, leaving lighting/SSAO depth intact.
+		if (m_Picking)
+		{
+			commandList->copyTexture(impl.PickDepth, nvrhi::TextureSlice(), m_DepthTexture, nvrhi::TextureSlice());
+			for (const DrawItem& item : items)
+				if (item.Blend && item.WorldBounds.IsValid())
+					drawItem(item, impl.PickPipeline[item.DoubleSided ? 1 : 0], impl.PickFramebuffer, renderViewport, 0, true);
 		}
 
 		// --- SSAO ---------------------------------------------------------------------------------
@@ -1908,9 +2005,27 @@ namespace Basalt {
 			impl.Lines.Render(commandList, m_OverlayFramebuffer, view.ViewProjection, lines);
 		}
 
+		if (m_Picking && m_Selection.IsValid())
+		{
+			const auto it = pickIds.find(m_Selection);
+			if (it != pickIds.end())
+			{
+				struct OutlinePush
+				{
+					glm::uvec2 RenderSize, OutputSize;
+					uint32_t Selected, Padding;
+				};
+				static_assert(sizeof(OutlinePush) == 24);
+				const OutlinePush push{ { m_RenderWidth, m_RenderHeight }, { m_Width, m_Height }, it->second, 0 };
+				fullscreen(impl.OutlinePipeline, impl.OutputFramebuffer, impl.OutlineSet, outputViewport, &push, sizeof(push));
+			}
+		}
+
 		profiler.EndFrame(commandList, static_cast<uint64_t>(m_RenderWidth) * m_RenderHeight);
 		commandList->close();
 		m_Device->executeCommandList(commandList);
+
+		impl.PickReady = m_Picking;
 
 		// Release cached binding sets (and the textures they reference) that are no longer used.
 		auto isStale = [&](const auto& entry) { return impl.FrameCounter - entry.second.LastUsed > MaterialSetRetentionFrames; };
@@ -1953,6 +2068,55 @@ namespace Basalt {
 
 		const glm::vec2 unused(0.0f);
 		DrawFullscreen(commandList, it->second, target, impl.BlitSet, nvrhi::Viewport(static_cast<float>(info.width), static_cast<float>(info.height)), &unused, TextureSamplerPushSize);
+	}
+
+	void SceneRenderer::InvalidatePicking()
+	{
+		m_Impl->PickReady = false;
+		m_Impl->PickEntities.clear();
+	}
+
+	std::optional<UUID> SceneRenderer::Pick(uint32_t x, uint32_t y)
+	{
+		Impl& impl = *m_Impl;
+		if (!impl.PickReady || m_Statistics.Failed || x >= m_Width || y >= m_Height)
+			return std::nullopt;
+		nvrhi::TextureDesc desc;
+		desc.width = desc.height = 1;
+		desc.format = nvrhi::Format::R32_UINT;
+		desc.debugName = "PickReadback";
+		auto staging = m_Device->createStagingTexture(desc, nvrhi::CpuAccessMode::Read);
+		auto commandList = m_Device->createCommandList();
+		if (!staging || !commandList)
+		{
+			BS_CORE_ERROR("SceneRenderer: failed to allocate picking readback");
+			return std::nullopt;
+		}
+		nvrhi::TextureSlice source;
+		source.x = std::min(static_cast<uint32_t>((static_cast<double>(x) + 0.5) * m_RenderWidth / m_Width), m_RenderWidth - 1);
+		source.y = std::min(static_cast<uint32_t>((static_cast<double>(y) + 0.5) * m_RenderHeight / m_Height), m_RenderHeight - 1);
+		source.width = source.height = source.depth = 1;
+		commandList->open();
+		commandList->copyTexture(staging, nvrhi::TextureSlice(), impl.EntityIds, source);
+		commandList->close();
+		m_Device->executeCommandList(commandList);
+		m_Device->waitForIdle();
+		size_t rowPitch = 0;
+		const void* data = m_Device->mapStagingTexture(staging, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &rowPitch);
+		if (!data)
+		{
+			BS_CORE_ERROR("SceneRenderer: failed to map picking readback");
+			return std::nullopt;
+		}
+		uint32_t id = 0;
+		std::memcpy(&id, data, sizeof(id));
+		m_Device->unmapStagingTexture(staging);
+		if (id >= impl.PickEntities.size())
+		{
+			BS_CORE_ERROR("SceneRenderer: invalid picking token {}", id);
+			return std::nullopt;
+		}
+		return impl.PickEntities[id];
 	}
 
 	bool SceneRenderer::ReadOutputPixels(std::vector<uint8_t>& outPixels, uint32_t& outWidth, uint32_t& outHeight)

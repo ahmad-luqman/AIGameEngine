@@ -3,6 +3,7 @@
 #include <Basalt/Automation/AutomationSession.h>
 #include <Basalt/Automation/AutomationConnection.h>
 #include <Basalt/Automation/EditorCommandSchemas.h>
+#include <Basalt/Automation/ViewportSettings.h>
 #include <Basalt/Core/Log.h>
 #include <Basalt/Automation/CommandRegistry.h>
 #include <Basalt/Automation/CommandSchema.h>
@@ -315,13 +316,13 @@ TEST_CASE("All editor tool schemas reject invalid values before the host handler
 	bool called = false;
 	const auto handler = [&](AutomationSession&, const json& params) { called = true; return params; };
 	const std::vector<std::pair<std::string, json>> schemas = {
-		{ "editor.select", EditorCommandSchemas::Select() }, { "editor.camera", EditorCommandSchemas::Camera() }, { "editor.undo", EditorCommandSchemas::Undo() }, { "editor.redo", EditorCommandSchemas::Redo() }, { "editor.screenshot", EditorCommandSchemas::Screenshot() }, { "editor.window_screenshot", EditorCommandSchemas::WindowScreenshot() }
+		{ "editor.viewport", ViewportSettings::Schema() }, { "editor.pick", EditorCommandSchemas::Pick() }, { "editor.vertex_snap", EditorCommandSchemas::VertexSnap() }, { "editor.select", EditorCommandSchemas::Select() }, { "editor.camera", EditorCommandSchemas::Camera() }, { "editor.undo", EditorCommandSchemas::Undo() }, { "editor.redo", EditorCommandSchemas::Redo() }, { "editor.screenshot", EditorCommandSchemas::Screenshot() }, { "editor.window_screenshot", EditorCommandSchemas::WindowScreenshot() }
 	};
 	McpServer server;
 	for (const auto& [name, schema] : schemas)
 		REQUIRE(registry.Register({ name, "Editor host", schema, handler }));
 	Start(server, registry, session);
-	CHECK(Reply(server, registry, session, Request("tools/list"))["result"]["tools"].size() == 53);
+	CHECK(Reply(server, registry, session, Request("tools/list"))["result"]["tools"].size() == 56);
 	for (const auto& [name, schema] : schemas)
 	{
 		INFO(name);
@@ -329,6 +330,10 @@ TEST_CASE("All editor tool schemas reject invalid values before the host handler
 		CHECK(registry.HandleRequest(session, { { "command", name }, { "params", { { "typo", true } } } })["ok"] == false);
 		CHECK_FALSE(called);
 		json valid = schema["required"].empty() ? json::object() : json{ { "path", "capture.png" } };
+		if (name == "editor.pick")
+			valid = { { "x", 0 }, { "y", 0 } };
+		if (name == "editor.vertex_snap")
+			valid = { { "source", { 0, 0 } }, { "target", { 1, 1 } } };
 		CHECK(registry.HandleRequest(session, { { "command", name }, { "params", valid } })["ok"] == true);
 		CHECK(called);
 	}

@@ -9,6 +9,7 @@
 #include "Panels/SceneHierarchyPanel.h"
 
 #include "Basalt/Automation/AutomationServer.h"
+#include "Basalt/Automation/ViewportSettings.h"
 #include "Basalt/Automation/AutomationSession.h"
 #include "Basalt/Automation/CommandRegistry.h"
 #include "Basalt/Automation/AutomationConnection.h"
@@ -53,6 +54,8 @@ namespace Basalt {
 		void DrawMenuBar();
 		void DrawViewport();
 		void DrawToolbar();
+		void DrawViewportOptions();
+		void DrawOverlayMenu();
 		void DrawSceneSettingsPanel();
 		void DrawStatusBar();
 		void DrawModals();
@@ -106,13 +109,11 @@ namespace Basalt {
 		glm::vec2 m_ViewportMin = { 0.0f, 0.0f };
 		bool m_ViewportHovered = false;
 		bool m_ViewportFocused = false;
-		int m_GizmoOperation = 7; // ImGuizmo::TRANSLATE
+		ViewportSettings m_ViewportSettings;
+		std::optional<glm::vec2> m_VertexSnapStart;
+		UUID m_VertexSnapEntity = 0;
 		bool m_GizmoWasUsing = false;
 		bool m_Paused = false;
-		bool m_ShowGrid = true;
-		bool m_ShowColliders = true;
-		bool m_ShowLightGizmos = true;
-		bool m_ShowUIBounds = true;
 		RendererDebugView m_DebugView = RendererDebugView::None;
 
 		enum class PromptKind

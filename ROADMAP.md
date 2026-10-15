@@ -164,15 +164,8 @@ order of impact.
 
 What makes the editor feel finished. Most items are small; do them as one milestone.
 
-- **Viewport picking — S.** Click to select: render entity IDs into an R32_UINT target in the depth
-  prepass and read back the pixel under the cursor. Today selection works only from the hierarchy.
-- **Selection outline — S.** Draw the selected entity's silhouette into a mask and run an edge-detect
-  pass before the UI composite.
-- **Gizmo options — S.** World/local toggle (the gizmo is local only today), Q/W/E/R shortcuts, snap
-  step sizes in the toolbar (Ctrl-snapping already exists), and vertex snapping.
 - **Named undo — S.** Each history entry records the command that made it, so menus read "Undo Set
   Material AlbedoColor", and a whole gizmo drag or slider drag is one step.
-- **Viewport overlays menu — S.** Toggles for colliders, light and camera icons, the grid and debug lines.
 - **Game view — M.** A play viewport rendered at the project's game resolution with the correct aspect
   ratio, next to the scene view, showing "Edit mode" when not playing.
 - **Post-process component, FXAA and bloom — M.** `PostProcessComponent` holding the tonemapper choice,

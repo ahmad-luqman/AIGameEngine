@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Basalt/Core/Base.h"
+#include "Basalt/Core/UUID.h"
 #include "Basalt/Renderer/DynamicResolution.h"
 #include "Basalt/Renderer/GpuProfiler.h"
 #include "Basalt/Renderer/RenderResources.h"
@@ -61,6 +62,8 @@ namespace Basalt {
 		// GetGpuTimings and dynamic resolution; renderers whose output must not depend on GPU speed (the
 		// editor's screenshots) leave it off.
 		bool GpuTimers = false;
+		// Editor-only entity IDs; runtime renderers allocate no picking resources.
+		bool Picking = false;
 	};
 
 	// Renders a Scene from a camera into an internal LDR image:
@@ -118,6 +121,13 @@ namespace Basalt {
 		// This replaces PBR color, letting GPU tests verify list consumption as well as list construction.
 		void SetVisualizeLightCount(bool enabled) { m_VisualizeLightCount = enabled; }
 
+		// Selection uses the same visible-surface IDs as picking. Zero disables the outline.
+		void SetSelection(UUID entity) { m_Selection = entity; }
+		// Synchronous one-pixel readback on demand, in output-image coordinates (top-left origin).
+		// nullopt means unavailable/failed; UUID 0 means background. Valid only after a successful Render.
+		std::optional<UUID> Pick(uint32_t x, uint32_t y);
+		void InvalidatePicking();
+
 		// Records and submits all passes for one frame.
 		void Render(Scene& scene, const RenderCamera& camera);
 
@@ -166,6 +176,8 @@ namespace Basalt {
 		uint32_t m_Width = 0;
 		uint32_t m_Height = 0;
 		float m_RenderScale = 1.0f;
+		bool m_Picking = false;
+		UUID m_Selection = 0;
 		bool m_ClusteredLighting = true;
 		bool m_VisualizeLightCount = false;
 		// Size of the scene targets: the viewport size times the render scale.
