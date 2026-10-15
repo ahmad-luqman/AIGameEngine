@@ -39,14 +39,14 @@ def main():
             request(11, "tools/call", {"name": "entity.create", "arguments": {"name": False}}),
             request(12, "tools/call", {"name": "scene.save", "arguments": {"path": "Assets/Scenes/MCP.bscene"}}),
         ]
-        payload = "\n".join(json.dumps(message) for message in messages) + "\n{bad}\n" + json.dumps(request(13, "ping")) + "\n"
+        payload = "\n".join(json.dumps(message) for message in messages) + "\n\n\r\n{bad}\n" + json.dumps(request(13, "ping")) + "\n"
         process = subprocess.run([basalt, "--verbose", "mcp"], input=payload, text=True, capture_output=True, timeout=60)
         require(process.returncode == 0, process.stderr)
         replies = [json.loads(line) for line in process.stdout.splitlines()]
-        require(len(replies) == 14, f"Unexpected stdout messages: {process.stdout}")
+        require(len(replies) == 16, f"Unexpected stdout messages: {process.stdout}")
         require(all(reply.get("jsonrpc") == "2.0" for reply in replies), "Non-MCP stdout")
         by_id = {reply["id"]: reply for reply in replies}
-        require(by_id[None]["error"]["code"] == -32700, "Missing parse error")
+        require(sum(reply.get("error", {}).get("code") == -32700 for reply in replies) == 3, "Missing blank/malformed frame errors")
         require(by_id[13]["result"] == {}, "Did not recover after parse error")
         for identifier in range(3, 13):
             result = by_id[identifier]["result"]

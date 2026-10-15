@@ -28,7 +28,7 @@ shuts down the process. A failed tool call does not end the session or prevent l
 The stdio transport accepts newline-delimited UTF-8 JSON-RPC messages, with a 64 MiB per-line limit
 and the engine's 128-level JSON nesting limit. Logs, including Lua `print`, go to stderr. Stdout contains
 only MCP replies; notifications receive no reply. An oversized line or incomplete final frame exits
-with failure; syntax errors receive `-32700` and the connection stays usable. Project/scene startup
+with failure; syntax errors (including empty LF/CRLF frames) receive `-32700` and the connection stays usable. Project/scene startup
 failures exit nonzero and report to stderr without writing a non-MCP response to stdout.
 
 ## Running editor

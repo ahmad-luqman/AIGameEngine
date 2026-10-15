@@ -208,8 +208,6 @@ namespace Basalt {
 				buffer.erase(0, newline + 1);
 				if (!line.empty() && line.back() == '\r')
 					line.pop_back();
-				if (line.empty())
-					continue;
 				const std::string response = m_Handler(line);
 				if (!response.empty() && !SendAll(client, response + "\n"))
 					return;

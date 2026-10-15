@@ -29,11 +29,8 @@ namespace Basalt {
 			}
 			if (!line.empty() && line.back() == '\r')
 				line.pop_back();
-			if (!line.empty())
-			{
-				if (const auto response = HandleRequest(registry, session, ParseJson(line)))
-					output << response->dump(-1, ' ', false, json::error_handler_t::replace) << std::endl;
-			}
+			if (const auto response = HandleRequest(registry, session, ParseJson(line)))
+				output << response->dump(-1, ' ', false, json::error_handler_t::replace) << std::endl;
 			line.clear();
 			if (!output)
 				return false;
