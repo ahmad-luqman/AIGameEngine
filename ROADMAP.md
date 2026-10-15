@@ -164,8 +164,6 @@ order of impact.
 
 What makes the editor feel finished. Most items are small; do them as one milestone.
 
-- **Named undo — S.** Each history entry records the command that made it, so menus read "Undo Set
-  Material AlbedoColor", and a whole gizmo drag or slider drag is one step.
 - **Game view — M.** A play viewport rendered at the project's game resolution with the correct aspect
   ratio, next to the scene view, showing "Edit mode" when not playing.
 - **Post-process component, FXAA and bloom — M.** `PostProcessComponent` holding the tonemapper choice,
@@ -184,12 +182,8 @@ What makes the editor feel finished. Most items are small; do them as one milest
 
 - **Native file dialogs — S.** Add nativefiledialog-extended (pinned) for Open/Save/Import, keeping the
   text-box fallback for headless and Linux systems without a portal.
-- **Multi-select — M.** Select several entities in the hierarchy and viewport (box select), move them
-  with one gizmo, edit shared fields in the inspector. The `editor.select` command takes a list.
 - **Prefab editing and overrides — L.** Open a prefab in an isolated scene, save, and propagate changes
   to instances while keeping per-instance overrides (track overridden fields in `PrefabComponent`).
-- **Undo with diffs — M.** Snapshot undo copies the whole scene per edit (builds on named undo). Store per-command JSON patches
-  (`component.set` already knows old and new values) to bound memory on large scenes.
 - **Editor preferences — S.** Persist camera speed, layout, recent projects and theme per user.
 - **Play-mode stats overlay — S.** Frame time, draw calls, triangle count, physics bodies and Lua
   memory.

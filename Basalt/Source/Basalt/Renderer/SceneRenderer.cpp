@@ -28,10 +28,13 @@
 #include <cmath>
 #include <map>
 #include <variant>
+#include <unordered_set>
 
 namespace Basalt {
 
 	namespace {
+
+		constexpr uint32_t SelectedTokenBit = 0x80000000u;
 
 		struct OutlinePush
 		{
@@ -1523,6 +1526,7 @@ namespace Basalt {
 		std::vector<DrawItem>& items = impl.Items;
 		impl.PickEntities = { UUID(0) };
 		std::unordered_map<UUID, uint32_t> pickIds;
+		const std::unordered_set<UUID> selectedIds(m_Selection.begin(), m_Selection.end());
 		draws.clear();
 		materials.clear();
 		items.clear();
@@ -1575,7 +1579,7 @@ namespace Basalt {
 				auto [it, inserted] = pickIds.try_emplace(entity.GetUUID(), static_cast<uint32_t>(impl.PickEntities.size()));
 				if (inserted)
 					impl.PickEntities.push_back(entity.GetUUID());
-				pickId = it->second;
+				pickId = it->second | (selectedIds.contains(entity.GetUUID()) ? SelectedTokenBit : 0u);
 			}
 			const glm::mat4 normalMatrix = glm::transpose(glm::inverse(model));
 			const auto* materialOverride = entity.TryGetComponent<MaterialComponent>();
@@ -2059,14 +2063,11 @@ namespace Basalt {
 			impl.Lines.Render(commandList, m_OverlayFramebuffer, view.ViewProjection, lines);
 		}
 
-		if (m_Picking && m_Selection.IsValid())
+		// One outline pass for the union of selected surfaces, independent of selection size.
+		if (m_Picking && !m_Selection.empty())
 		{
-			const auto it = pickIds.find(m_Selection);
-			if (it != pickIds.end())
-			{
-				const OutlinePush push{ { m_RenderWidth, m_RenderHeight }, { m_Width, m_Height }, it->second, 0 };
-				fullscreen(impl.OutlinePipeline, impl.OutputFramebuffer, impl.OutlineSet, outputViewport, &push, sizeof(push));
-			}
+			const OutlinePush push{ { m_RenderWidth, m_RenderHeight }, { m_Width, m_Height }, SelectedTokenBit, 0 };
+			fullscreen(impl.OutlinePipeline, impl.OutputFramebuffer, impl.OutlineSet, outputViewport, &push, sizeof(push));
 		}
 
 		profiler.EndFrame(commandList, static_cast<uint64_t>(m_RenderWidth) * m_RenderHeight);
@@ -2146,6 +2147,7 @@ namespace Basalt {
 		float depth = 1;
 		std::memcpy(&token, regions[0].Pixels.data(), sizeof(token));
 		std::memcpy(&depth, regions[1].Pixels.data(), sizeof(depth));
+		token &= ~SelectedTokenBit;
 		if (token >= impl.PickEntities.size() || !std::isfinite(depth) || depth < 0 || depth > 1)
 		{
 			BS_CORE_ERROR("SceneRenderer: invalid picking token/depth {}/{}", token, depth);

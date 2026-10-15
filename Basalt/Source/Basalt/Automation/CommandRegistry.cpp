@@ -71,7 +71,24 @@ namespace Basalt {
 		std::string error;
 		if (!CommandSchema::Validate(info->InputSchema, params, error))
 			throw CommandError(error);
-		return info->Handler(session, params);
+		const bool outer = session.m_CommandDepth == 0;
+		if (outer && session.BeforeCommand)
+			session.BeforeCommand(command, params);
+		++session.m_CommandDepth;
+		nlohmann::json result;
+		try
+		{
+			result = info->Handler(session, params);
+		}
+		catch (...)
+		{
+			--session.m_CommandDepth;
+			throw;
+		}
+		--session.m_CommandDepth;
+		if (outer && session.AfterCommand)
+			session.AfterCommand(command, params);
+		return result;
 	}
 
 	nlohmann::json CommandRegistry::HandleRequest(AutomationSession& session, const nlohmann::json& request) const

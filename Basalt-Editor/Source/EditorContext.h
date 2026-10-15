@@ -1,6 +1,6 @@
 #pragma once
 
-#include "EditorHistory.h"
+#include "Basalt/Automation/EditorHistory.h"
 
 #include "Basalt/Automation/AutomationSession.h"
 #include "Basalt/Automation/CommandRegistry.h"
@@ -17,12 +17,15 @@ namespace Basalt {
 	class EditorContext
 	{
 	public:
-		EditorContext(CommandRegistry& commands, AutomationSession& session, EditorHistory& history)
-			: Commands(commands)
-			, Session(session)
-			, History(history)
-		{
-		}
+		EditorContext(CommandRegistry& commands, AutomationSession& session, EditorHistory& history);
+		~EditorContext();
+		EditorContext(const EditorContext&) = delete;
+		EditorContext& operator=(const EditorContext&) = delete;
+		bool BeginTransaction(const std::string& name);
+		void EndTransaction();
+		bool CancelTransaction(const EditorHistory::Restore& restore);
+		void EditField(const std::string& command, const nlohmann::json& params, bool changed, bool committed);
+		void FinishFieldEdit();
 
 		// Runs a command. On failure the error is shown in the status bar and nullopt returned.
 		std::optional<nlohmann::json> Execute(const std::string& command, const nlohmann::json& params = nlohmann::json::object());
@@ -38,6 +41,12 @@ namespace Basalt {
 		std::string StatusMessage;
 		bool StatusIsError = false;
 		double StatusTime = 0.0;
+
+	private:
+		bool m_UICommand = false;
+		bool m_TransactionWasDirty = false;
+		std::string m_PendingName;
+		std::string m_FieldName;
 	};
 
 	// Drag-and-drop payload type carrying a project-relative asset path.

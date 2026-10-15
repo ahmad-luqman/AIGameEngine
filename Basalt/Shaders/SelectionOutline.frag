@@ -15,7 +15,8 @@ bool SelectedAt(ivec2 pixel)
 	pixel = clamp(pixel, ivec2(0), ivec2(u_Push.OutputSize) - 1);
 	ivec2 texel = ivec2((vec2(pixel) + 0.5) * vec2(u_Push.RenderSize) / vec2(u_Push.OutputSize));
 	texel = clamp(texel, ivec2(0), ivec2(u_Push.RenderSize) - 1);
-	return texelFetch(u_Ids, texel, 0).r == u_Push.Selected;
+	// The high bit marks selection; low bits remain the full frame-local picking token.
+	return (texelFetch(u_Ids, texel, 0).r & u_Push.Selected) != 0u;
 }
 void main()
 {

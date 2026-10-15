@@ -123,11 +123,11 @@ feature-test batch. `McpIntegration` exercises the real subprocess transport and
 
 ## Viewport authoring tools
 
-The editor exposes three additional tools through both legacy TCP requests and MCP. Their schemas
+The editor exposes authoring tools through both legacy TCP requests and MCP. Their schemas
 are available through `help` / `tools/list`; they are editor-only and are not part of the headless CLI.
 
 - `editor.viewport {}` returns transient gizmo/overlay preferences plus the rendered `width` and
-  `height`, plus active `renderWidth`/`renderHeight` (which can shrink with dynamic resolution). A patch can set `operation` (`None`, `Translate`, `Rotate`, `Scale`), `space` (`Local`,
+  `height`, logical `logicalWidth`/`logicalHeight`, plus active `renderWidth`/`renderHeight` (which can shrink with dynamic resolution). A patch can set `operation` (`None`, `Translate`, `Rotate`, `Scale`), `space` (`Local`,
   `World`), `snap`, `translationStep` (0.0001–10000 units), `rotationStep` (0.0001–360 degrees),
   `scaleStep` (0.0001–100), or `vertexSnap`. Independent overlay switches are `grid`, `colliders`,
   `lightGizmos`, `cameraGizmos`, `audioGizmos`, `particleGizmos`, `uiBounds`, `debugLines`,
@@ -148,7 +148,7 @@ are available through `help` / `tools/list`; they are editor-only and are not pa
   camera clip volume; this is projected-vertex snapping, so it can find a vertex behind another mesh.
   Equal screen distances prefer the vertex nearer the camera. The move preserves local rotation and
   scale, supports transformed parents, rejects singular parents, and is one undoable edit. It is
-  unavailable in Play/Simulate or for UI rects.
+  unavailable in Play/Simulate, for UI rects, or with more than one selected entity.
 
 The viewport toolbar exposes the same preferences. Q/W/E/R select the gizmo operation when the
 viewport is focused or hovered and text editing/camera flight are inactive. World/local changes translation and
@@ -159,3 +159,64 @@ away from a source vertex still selects. V is ignored during text input or activ
 changing selection, camera commands, viewport resize, or leaving the viewport cancels the gesture.
 Releasing V cancels only when sticky Vertex snapping is off. The camera stays fixed during this gesture. The Overlays popup and View menu
 share the same switches; Debug Lines controls scripted debug lines independently of grid/helpers.
+
+
+## Selection and undo transactions
+
+`editor.select` accepts either `entity` (ID/name/null) or `entities` (an array of IDs/names), plus
+`mode`: `replace` (default), `add`, or `toggle`. References are all resolved before selection changes;
+duplicates are ignored. The last entry is the active entity and supplies local gizmo axes. The result
+contains `entities` and the active `selected` UUID (0 when empty). With no references, replace clears
+selection. Selection is transient, never marks the scene dirty, and is not an undo entry. Undo/redo
+preserves surviving selected UUIDs; scene replacement clears selection and history.
+
+Ctrl/Cmd-click toggles hierarchy/viewport selection. Shift-click selects a visible hierarchy range;
+Shift-click in the viewport adds a hit. Drag a rectangle in the viewport to replace selection; Shift
+adds, Ctrl/Cmd toggles. Box selection intersects world bounds with the rectangle's camera frustum and
+includes occluded entities. Meshes use their bounds, animated models use current pose bounds, and
+other entities use a 0.5-unit helper box. UI rects are selected through the hierarchy. Escape cancels a
+rectangle. `editor.box_select {"start":[x,y],"end":[x,y],"mode":"replace"}` exposes the same operation in
+logical viewport pixels, top-left origin; either drag direction works.
+
+The group gizmo uses the mean selected world position as its pivot, with world axes or the active
+entity's local orientation. Translate, rotate and scale affect selected root trees; a selected child
+of a selected ancestor inherits the change once. A press/hold/drag/release is one named transaction.
+Escape, resize, or losing the selection cancels it. External automation first finishes a pending GUI
+gizmo/inspector edit. Scaling follows local axes. Transforms that would require shear, non-finite
+values or a singular parent fail before any member changes. UI rects use their canvas fields.
+`editor.transform {"delta":[16 floats]}` applies the same column-major world delta matrix. For example,
+`[1,0,0,0, 0,1,0,0, 0,0,1,0, 2,0,0,1]` translates the group by two world X units.
+
+The multi-selection inspector displays components shared by all selected entities. Mixed fields show
+the active value and a mixed label; an edit replaces that entire field on every selected entity.
+`editor.component_set {"component":"Material","data":{"Roughness":0.7}}` validates every merged
+component before applying any. Continuous field edits are single undo steps. `editor.delete` and
+`editor.duplicate` operate on selected root trees as one step; duplicate selects the copied roots.
+These group editing commands and box selection are edit-mode only.
+
+Menus show names such as **Undo Set Material AlbedoColor**. `editor.history {}` returns `undo`, `redo`,
+`canUndo`, `canRedo`, `transaction`, `index`, `entries` (names and retained bytes), and `patchBytes`.
+`editor.undo {}` and `editor.redo {}` restore one entry and return the same history description.
+A failed restoration leaves the history cursor unchanged.
+
+To group automation edits across requests:
+
+```json
+{"command":"editor.transaction","params":{"action":"begin","name":"Arrange Lights"}}
+{"command":"component.set","params":{"entity":"Key","component":"Transform","data":{"Translation":[2,3,1]}}}
+{"command":"component.set","params":{"entity":"Fill","component":"Transform","data":{"Translation":[-2,2,1]}}}
+{"command":"editor.transaction","params":{"action":"commit"}}
+```
+
+Use `action:"cancel"` to restore the pre-transaction scene. Transactions are global to the editor
+session, do not nest, and must finish before saving, replacing the scene, playing, or undo/redo.
+A failed command leaves prior successful edits in the transaction so the caller can fix the request
+or cancel. Empty/cancelled transactions preserve redo; a new committed change discards the redo branch.
+A batch without an explicit transaction retains one entry per top-level mutating command. Read-only,
+failed and no-op commands add no entries. Project files and external assets are outside scene undo.
+
+History retains one current scene plus forward/inverse JSON patches, with UUID keys and successor
+links preserving hierarchy order. Retention is capped at 128 entries and 32 MiB of serialized patch
+and label payloads; oldest entries are evicted. An individual edit exceeding the entire budget clears
+retained history and cannot be undone. Scene serialization/diffing and restore still take time
+proportional to scene size; the improvement bounds retained history memory, not edit-time work.

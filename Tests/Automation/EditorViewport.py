@@ -12,6 +12,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Rendering"))
 from LocalShadows import read_png
+from EditorUndoSelection import check_undo_selection
 
 
 def require(value, message):
@@ -209,10 +210,15 @@ def main():
                     # subpixel precision and viewport rounding may choose either side of a narrow silhouette.
                     # A queued setting change must still use the displayed grid, not the next frame's grid.
                     index = different[0]
-                    picked = batch([("project.set", {"renderScale": 1}),
-                                    ("editor.pick", {"x": sample_xs[index], "y": height // 2, "select": False})])[1]
-                    require(picked["entity"] == reduced[index],
-                            f"Picking used next-frame scale: got {picked}, reduced={reduced[index]}, native={native[index]}, viewport={view}")
+                    transition = batch([("editor.viewport", {}),
+                                        ("editor.pick", {"x": sample_xs[index], "y": height // 2, "select": False}),
+                                        ("project.set", {"renderScale": 1}),
+                                        ("editor.pick", {"x": sample_xs[index], "y": height // 2, "select": False}),
+                                        ("editor.viewport", {})])
+                    require(transition[0]["renderWidth"] == view["renderWidth"], f"Reduced viewport changed before batch: {transition}")
+                    require(transition[1]["entity"] == reduced[index], f"Reduced pick changed before setting update: {transition}, reduced={reduced}, native={native}")
+                    require(transition[3]["entity"] == reduced[index],
+                            f"Picking used next-frame scale: transition={transition}, reduced={reduced[index]}, native={native[index]}, viewport={view}")
                     call("entity.destroy", {"entity": thin})
                     call("play.start")
                     call("editor.vertex_snap", {"source": [0, 0], "target": [0, 0]}, error="only available in edit mode")
@@ -221,6 +227,7 @@ def main():
                     call("editor.viewport", {"operation": "Translate"})
                     call("editor.window_screenshot", {"path": str(Path(output, "window.png"))})
                     call("editor.viewport")
+                    check_undo_selection(call, require, output, temp)
                     errors = call("log.get", {"errorsOnly": True})
                     require(not errors["messages"], f"Editor logged errors: {errors}")
             finally:

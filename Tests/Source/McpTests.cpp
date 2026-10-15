@@ -316,13 +316,13 @@ TEST_CASE("All editor tool schemas reject invalid values before the host handler
 	bool called = false;
 	const auto handler = [&](AutomationSession&, const json& params) { called = true; return params; };
 	const std::vector<std::pair<std::string, json>> schemas = {
-		{ "editor.viewport", ViewportSettings::Schema() }, { "editor.pick", EditorCommandSchemas::Pick() }, { "editor.vertex_snap", EditorCommandSchemas::VertexSnap() }, { "editor.select", EditorCommandSchemas::Select() }, { "editor.camera", EditorCommandSchemas::Camera() }, { "editor.undo", EditorCommandSchemas::Undo() }, { "editor.redo", EditorCommandSchemas::Redo() }, { "editor.screenshot", EditorCommandSchemas::Screenshot() }, { "editor.window_screenshot", EditorCommandSchemas::WindowScreenshot() }
+		{ "editor.history", EditorCommandSchemas::Undo() }, { "editor.transaction", EditorCommandSchemas::Transaction() }, { "editor.transform", EditorCommandSchemas::Transform() }, { "editor.component_set", EditorCommandSchemas::ComponentSet() }, { "editor.box_select", EditorCommandSchemas::BoxSelect() }, { "editor.delete", EditorCommandSchemas::Undo() }, { "editor.duplicate", EditorCommandSchemas::Undo() }, { "editor.viewport", ViewportSettings::Schema() }, { "editor.pick", EditorCommandSchemas::Pick() }, { "editor.vertex_snap", EditorCommandSchemas::VertexSnap() }, { "editor.select", EditorCommandSchemas::Select() }, { "editor.camera", EditorCommandSchemas::Camera() }, { "editor.undo", EditorCommandSchemas::Undo() }, { "editor.redo", EditorCommandSchemas::Redo() }, { "editor.screenshot", EditorCommandSchemas::Screenshot() }, { "editor.window_screenshot", EditorCommandSchemas::WindowScreenshot() }
 	};
 	McpServer server;
 	for (const auto& [name, schema] : schemas)
 		REQUIRE(registry.Register({ name, "Editor host", schema, handler }));
 	Start(server, registry, session);
-	CHECK(Reply(server, registry, session, Request("tools/list"))["result"]["tools"].size() == 56);
+	CHECK(Reply(server, registry, session, Request("tools/list"))["result"]["tools"].size() == 63);
 	for (const auto& [name, schema] : schemas)
 	{
 		INFO(name);
@@ -330,6 +330,14 @@ TEST_CASE("All editor tool schemas reject invalid values before the host handler
 		CHECK(registry.HandleRequest(session, { { "command", name }, { "params", { { "typo", true } } } })["ok"] == false);
 		CHECK_FALSE(called);
 		json valid = schema["required"].empty() ? json::object() : json{ { "path", "capture.png" } };
+		if (name == "editor.transaction")
+			valid = { { "action", "begin" }, { "name", "Edit" } };
+		if (name == "editor.transform")
+			valid = { { "delta", { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1 } } };
+		if (name == "editor.component_set")
+			valid = { { "component", "Transform" }, { "data", json::object() } };
+		if (name == "editor.box_select")
+			valid = { { "start", { 0, 0 } }, { "end", { 10, 10 } } };
 		if (name == "editor.pick")
 			valid = { { "x", 0 }, { "y", 0 } };
 		if (name == "editor.vertex_snap")

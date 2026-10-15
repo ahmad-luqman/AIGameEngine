@@ -110,16 +110,7 @@ namespace Basalt {
 				}
 				ImGui::EndPopup();
 			}
-			if (apply)
-			{
-				m_Context.Execute("component.set", { { "entity", static_cast<uint64_t>(entity.GetUUID()) }, { "component", "Script" }, { "data", { { "Properties", newOverrides } } } });
-				if (result.Committed || !result.Changed)
-					m_Context.CommitHistory();
-			}
-			else if (result.Committed)
-			{
-				m_Context.CommitHistory();
-			}
+			m_Context.EditField("component.set", { { "entity", static_cast<uint64_t>(entity.GetUUID()) }, { "component", "Script" }, { "data", { { "Properties", newOverrides } } } }, apply, result.Committed || (apply && !result.Changed));
 		}
 	}
 
@@ -186,9 +177,47 @@ namespace Basalt {
 		}
 	}
 
+	void InspectorPanel::DrawMultiSelection()
+	{
+		Scene& scene = *m_Context.Session.GetScene();
+		const auto selection = m_Context.Session.GetSelections();
+		ImGui::Text("%zu entities selected", selection.size());
+		ImGui::TextWrapped("Shared components only. Mixed fields show the active entity's value; editing replaces that field on every selection.");
+		ImGui::BeginDisabled(m_Context.Session.IsPlaying());
+		for (const auto& info : ComponentRegistry::GetAll())
+		{
+			if (info.Name == "Tag" || !std::all_of(selection.begin(), selection.end(), [&](UUID id) { const Entity entity = scene.GetEntityByUUID(id); return entity && info.Has(entity); }))
+				continue;
+			ImGui::PushID(info.Name.c_str());
+			if (ImGui::CollapsingHeader(info.Name.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
+			{
+				auto data = info.Serialize(scene.GetEntityByUUID(m_Context.Session.GetSelection()));
+				for (const auto& field : info.Fields)
+				{
+					if (!data.contains(field))
+						continue;
+					const bool mixed = std::any_of(selection.begin(), selection.end(), [&](UUID id) { return info.Serialize(scene.GetEntityByUUID(id))[field] != data[field]; });
+					if (mixed)
+						ImGui::TextDisabled("%s (mixed)", field.c_str());
+					const auto options = info.EnumOptions.find(field);
+					const auto result = DrawJsonField(field, data[field], options == info.EnumOptions.end() ? nullptr : &options->second);
+					m_Context.EditField("editor.component_set", { { "component", info.Name }, { "data", { { field, data[field] } } } }, result.Changed, result.Committed);
+				}
+			}
+			ImGui::PopID();
+		}
+		ImGui::EndDisabled();
+	}
+
 	void InspectorPanel::OnImGuiRender()
 	{
 		ImGui::Begin("Inspector");
+		if (m_Context.Session.GetSelections().size() > 1)
+		{
+			DrawMultiSelection();
+			ImGui::End();
+			return;
+		}
 		Scene* scene = m_Context.Session.GetScene().get();
 		Entity entity = scene ? scene->GetEntityByUUID(m_Context.Session.GetSelection()) : Entity{};
 		if (!entity)
@@ -285,10 +314,7 @@ namespace Basalt {
 						ImGui::TextWrapped("%s is ignored by this joint", field.c_str());
 						ImGui::PopStyleColor();
 					}
-					if (result.Changed)
-						m_Context.Execute("component.set", { { "entity", id }, { "component", info.Name }, { "data", { { field, data[field] } } } });
-					if (result.Committed)
-						m_Context.CommitHistory();
+					m_Context.EditField("component.set", { { "entity", id }, { "component", info.Name }, { "data", { { field, data[field] } } } }, result.Changed, result.Committed);
 				}
 				if (info.Name == "Script")
 					DrawScriptProperties(entity, data);
