@@ -304,7 +304,10 @@ namespace Basalt {
 				return false;
 
 			Entity entity = (remapIDs || id == 0) ? scene.CreateEntity(name) : scene.CreateEntityWithUUID(UUID(id), name);
-			idMap[id != 0 ? id : static_cast<uint64_t>(entity.GetUUID())] = entity.GetUUID();
+			// Generated IDs are destinations, never serialized source keys: they may equal another
+			// entity's source ID when prefabs are remapped.
+			if (id != 0)
+				idMap.emplace(id, entity.GetUUID());
 			outCreated.push_back(entity);
 
 			if (!SceneSerializer::DeserializeEntityComponents(entity, entityData, outError))

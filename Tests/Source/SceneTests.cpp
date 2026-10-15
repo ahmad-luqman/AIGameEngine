@@ -221,6 +221,33 @@ TEST_SUITE("Scene")
 		prefabScene.OnRuntimeStop();
 	}
 
+	TEST_CASE("Generated prefab IDs never overwrite source-ID remapping keys")
+	{
+		BasaltTest::TempProject project("PrefabSourceIDReservation");
+		Project::GetActive()->GetConfig().RandomSeed = 1234;
+		for (bool omitted : { false, true })
+		{
+			// The root's source ID equals the second stream draw, which the anonymous child receives.
+			// Only explicit source IDs identify serialized reference targets; generated IDs are values.
+			auto entities = nlohmann::json::parse(R"([
+				{"ID":11475881202261285941,"Name":"Root"},
+				{"ID":0,"Name":"Child","Parent":11475881202261285941,"Components":{"Joint":{"ConnectedEntity":11475881202261285941}}}])");
+			if (omitted)
+				entities[1].erase("ID");
+			Scene scene;
+			scene.OnRuntimeStart();
+			std::string error;
+			Entity root = SceneSerializer::DeserializeEntityTree(scene, entities, {}, error);
+			REQUIRE_MESSAGE(root, error);
+			REQUIRE(root.GetChildren().size() == 1);
+			Entity child = root.GetChildren()[0];
+			CHECK(static_cast<uint64_t>(root.GetUUID()) == 3532910284440527571ULL);
+			CHECK(static_cast<uint64_t>(child.GetUUID()) == 11475881202261285941ULL);
+			CHECK(child.GetComponent<JointComponent>().ConnectedEntity == root.GetUUID());
+			scene.OnRuntimeStop();
+		}
+	}
+
 	TEST_CASE("Duplicate source IDs are rejected before creating scene or prefab entities")
 	{
 		BasaltTest::TempProject project("DuplicateSourceIDs");
