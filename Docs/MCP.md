@@ -181,6 +181,16 @@ switched to the game camera in Play. Only the tab in front renders.
   window (`Viewport`, `Game`, `Hierarchy`, `Inspector`, `Scene`, `Content Browser`, `Console`,
   `Project Settings`; only Project Settings can be closed) and returns `{name, open}`.
 
+- `editor.thumbnail {"path":"Assets/Models/Ship.glb","output":"ship.png","refresh":false}` makes (or reads from
+  the cache) the content-browser preview of an image, `.hdr` environment, `.gltf`/`.glb` model or `.bprefab`
+  and returns `kind` (`Image`, `Environment`, `Model`, `Prefab`), `width`/`height` (at most 128), `cached`,
+  `cachePath` and `details` (the tooltip's lines). Other files report that they have no preview.
+- `editor.material_preview {"entity":"Ball","output":"ball.png"}` renders an entity's Material on a sphere,
+  as the inspector shows it (128x128).
+
+The content browser shows these previews in each row (icon size slider in its header), a larger one with
+details on hover (a model's materials as spheres), and its context menu clears the cache.
+
 **Edit > Project Settings** edits the project file through `project.set` (name, start scene, game
 resolution, fullscreen, random seed, physics step, graphics defaults, physics layers and the collision
 matrix) and lists `project.validate` issues; a scene's own physics step is shown and can be removed

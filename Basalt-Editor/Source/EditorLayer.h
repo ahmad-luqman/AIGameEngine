@@ -2,6 +2,7 @@
 
 #include "EditorCamera.h"
 #include "EditorContext.h"
+#include "ThumbnailManager.h"
 #include "Basalt/Automation/EditorHistory.h"
 #include "Panels/ConsolePanel.h"
 #include "Panels/ContentBrowserPanel.h"
@@ -16,6 +17,7 @@
 #include "Basalt/Automation/CommandRegistry.h"
 #include "Basalt/Automation/AutomationConnection.h"
 #include "Basalt/Core/Layer.h"
+#include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/DebugDraw.h"
 #include "Basalt/Renderer/SceneRenderer.h"
 #include "Basalt/UI/UIRenderer.h"
@@ -66,6 +68,8 @@ namespace Basalt {
 		// primary camera, labelled with the mode.
 		void DrawGameView();
 		void DrawGameViewOptions();
+		// The selected entity's material on a sphere, at the top of the inspector's Material section.
+		void DrawMaterialPreview(Entity entity);
 		void DrawToolbar();
 		void DrawViewportOptions();
 		void DrawOverlayMenu();
@@ -135,6 +139,9 @@ namespace Basalt {
 		Scope<SceneRenderer> m_Renderer;
 		Scope<SceneRenderer> m_CaptureRenderer;
 		Scope<SceneRenderer> m_GameRenderer;
+		Scope<ThumbnailManager> m_Thumbnails;
+		// The project the thumbnails belong to; another project starts them afresh.
+		const Project* m_ThumbnailProject = nullptr;
 		nvrhi::CommandListHandle m_CommandList;
 		// The viewport's game UI: built in OnRender, drawn over the viewport image in DrawViewport.
 		UIFrame m_UIFrame;

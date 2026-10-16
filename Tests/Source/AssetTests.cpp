@@ -4,6 +4,7 @@
 #include <Basalt/Asset/ImageUtils.h>
 #include <Basalt/Asset/TextureSource.h>
 #include <Basalt/Asset/MeshImporter.h>
+#include <Basalt/Asset/Thumbnails.h>
 #include <Basalt/Scene/Scene.h>
 
 #include "TestUtils.h"
@@ -11,6 +12,7 @@
 #include <stb_image_write.h>
 
 #include <cstring>
+#include <thread>
 #include <glm/gtc/epsilon.hpp>
 
 using namespace Basalt;
@@ -791,5 +793,150 @@ TEST_SUITE("Assets")
 		TextureSource hdr = a;
 		hdr.Format = TextureFormat::RGBA32F;
 		CHECK_FALSE(CompareImages(hdr, a, {}, false).Matches);
+	}
+
+	TEST_CASE("Thumbnail kinds follow the file type")
+	{
+		CHECK(ClassifyThumbnail("Assets/Textures/Wall.PNG") == ThumbnailKind::Image);
+		CHECK(ClassifyThumbnail("a.jpeg") == ThumbnailKind::Image);
+		CHECK(ClassifyThumbnail("Assets/Sky.hdr") == ThumbnailKind::Environment);
+		CHECK(ClassifyThumbnail("Ship.glb") == ThumbnailKind::Model);
+		CHECK(ClassifyThumbnail("Ship.gltf") == ThumbnailKind::Model);
+		CHECK(ClassifyThumbnail("Enemy.bprefab") == ThumbnailKind::Prefab);
+		for (const char* none : { "Main.bscene", "Player.lua", "Beep.wav", "Font.ttf", "README", "Assets/Models" })
+			CHECK(ClassifyThumbnail(none) == ThumbnailKind::None);
+		CHECK(IsRenderedThumbnail(ThumbnailKind::Model));
+		CHECK_FALSE(IsRenderedThumbnail(ThumbnailKind::Environment));
+	}
+
+	TEST_CASE("Image thumbnails average source pixels and keep the aspect ratio")
+	{
+		// 4x2: left half black, right half white; one red pixel.
+		std::vector<uint8_t> pixels;
+		for (uint32_t y = 0; y < 2; y++)
+			for (uint32_t x = 0; x < 4; x++)
+			{
+				const uint8_t value = x < 2 ? 0 : 255;
+				pixels.insert(pixels.end(), { value, value, value, 255 });
+			}
+		ThumbnailImage half = DownsampleImage(pixels, 4, 2, 2, 1);
+		REQUIRE(half.Width == 2);
+		REQUIRE(half.Height == 1);
+		CHECK(half.Pixels == std::vector<uint8_t>{ 0, 0, 0, 255, 255, 255, 255, 255 });
+		ThumbnailImage single = DownsampleImage(pixels, 4, 2, 1, 1);
+		CHECK(single.Pixels[0] == 128);
+		// Never upscaled; bad input gives an empty image.
+		CHECK(DownsampleImage(pixels, 4, 2, 64, 64).Width == 4);
+		CHECK(DownsampleImage(pixels, 4, 3, 2, 2).Pixels.empty());
+
+		TextureSource wide;
+		wide.Width = 300;
+		wide.Height = 100;
+		wide.Pixels.assign(static_cast<size_t>(300) * 100 * 4, 200);
+		ThumbnailImage fitted = MakeImageThumbnail(wide, 128);
+		CHECK(fitted.Width == 128);
+		CHECK(fitted.Height == 43);
+		CHECK(fitted.Pixels[0] == 200);
+		TextureSource tall = wide;
+		std::swap(tall.Width, tall.Height);
+		fitted = MakeImageThumbnail(tall, 64);
+		CHECK(fitted.Width == 21);
+		CHECK(fitted.Height == 64);
+		TextureSource tiny = wide;
+		tiny.Width = tiny.Height = 2;
+		tiny.Pixels.resize(16);
+		CHECK(MakeImageThumbnail(tiny, 128).Width == 2);
+	}
+
+	TEST_CASE("HDR thumbnails tonemap linear radiance monotonically and ignore non-finite texels")
+	{
+		TextureSource hdr;
+		hdr.Format = TextureFormat::RGBA32F;
+		hdr.Width = 5;
+		hdr.Height = 1;
+		const float values[5] = { 0.0f, 0.18f, 1.0f, 16.0f, std::numeric_limits<float>::infinity() };
+		for (const float value : values)
+		{
+			const float texel[4] = { value, value * 0.5f, std::nanf(""), 1.0f };
+			const auto* bytes = reinterpret_cast<const uint8_t*>(texel);
+			hdr.Pixels.insert(hdr.Pixels.end(), bytes, bytes + sizeof(texel));
+		}
+		const ThumbnailImage image = MakeImageThumbnail(hdr, 8);
+		REQUIRE(image.Width == 5);
+		CHECK(image.Pixels[0] == 0);
+		CHECK(image.Pixels[4] > image.Pixels[0]);
+		CHECK(image.Pixels[8] > image.Pixels[4]);
+		CHECK(image.Pixels[12] > image.Pixels[8]);
+		CHECK(image.Pixels[12] > 245); // bright light approaches white without wrapping
+		CHECK(image.Pixels[16] == 0);  // infinity counts as black
+		for (size_t pixel = 0; pixel < 5; pixel++)
+		{
+			CHECK(image.Pixels[pixel * 4 + 2] == 0); // NaN channel
+			CHECK(image.Pixels[pixel * 4 + 3] == 255);
+		}
+		// Averaging happens in linear light before tonemapping: a black and a bright texel preview as their mean.
+		TextureSource pair = hdr;
+		pair.Width = 2;
+		pair.Pixels.resize(32);
+		const float dark[4] = { 0, 0, 0, 1 }, bright[4] = { 4, 4, 4, 1 };
+		std::memcpy(pair.Pixels.data(), dark, 16);
+		std::memcpy(pair.Pixels.data() + 16, bright, 16);
+		TextureSource mean = hdr;
+		mean.Width = 1;
+		mean.Pixels.resize(16);
+		const float middle[4] = { 2, 2, 2, 1 };
+		std::memcpy(mean.Pixels.data(), middle, 16);
+		CHECK(MakeImageThumbnail(pair, 1).Pixels == MakeImageThumbnail(mean, 1).Pixels);
+	}
+
+	TEST_CASE("The thumbnail cache stores previews per source version and prunes removed sources")
+	{
+		BasaltTest::TempDirectory project("ThumbnailCache");
+		const std::filesystem::path directory = ThumbnailCache::DirectoryFor(project.GetPath());
+		CHECK(directory == project.GetPath() / "Cache" / "Thumbnails");
+		ThumbnailCache cache(directory);
+		CHECK(ThumbnailCache::MakeKey(project.GetPath(), "Assets/Missing.png").empty());
+
+		REQUIRE(FileSystem::WriteTextFile(project.GetPath() / "Assets/Wall.png", "v1"));
+		REQUIRE(FileSystem::WriteTextFile(project.GetPath() / "Assets/Other.png", "v1"));
+		const std::string key = ThumbnailCache::MakeKey(project.GetPath(), "Assets/Wall.png");
+		REQUIRE_FALSE(key.empty());
+		CHECK_FALSE(cache.Load("Assets/Wall.png", key));
+		const ThumbnailImage image{ 2, 1, { 10, 20, 30, 255, 40, 50, 60, 128 } };
+		std::string error;
+		REQUIRE_MESSAGE(cache.Store("Assets/Wall.png", key, { image, { "2 x 1", "RGBA" } }, error), error);
+		REQUIRE(cache.Store("Assets/Other.png", ThumbnailCache::MakeKey(project.GetPath(), "Assets/Other.png"), { image, {} }, error));
+		const auto loaded = cache.Load("Assets/Wall.png", key);
+		REQUIRE(loaded);
+		CHECK(loaded->Image.Width == 2);
+		CHECK(loaded->Image.Pixels == image.Pixels);
+		CHECK(loaded->Details == std::vector<std::string>{ "2 x 1", "RGBA" });
+		CHECK(cache.Load("Assets/Other.png", ThumbnailCache::MakeKey(project.GetPath(), "Assets/Other.png"))->Details.empty());
+		// A key that only starts like the stored one does not match.
+		CHECK_FALSE(cache.Load("Assets/Wall.png", key.substr(0, key.size() - 1)));
+		CHECK(cache.GetImagePath("Assets/Wall.png").parent_path() == directory);
+		CHECK(cache.GetImagePath("Assets/Wall.png") != cache.GetImagePath("Assets/Other.png"));
+
+		// Rewriting the source (new size or modification time) makes the entry stale.
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		REQUIRE(FileSystem::WriteTextFile(project.GetPath() / "Assets/Wall.png", "version 2"));
+		const std::string changed = ThumbnailCache::MakeKey(project.GetPath(), "Assets/Wall.png");
+		CHECK(changed != key);
+		CHECK_FALSE(cache.Load("Assets/Wall.png", changed));
+		CHECK_FALSE(cache.Load("Assets/Wall.png", ""));
+
+		std::filesystem::remove(project.GetPath() / "Assets/Other.png");
+		CHECK(cache.Prune(project.GetPath(), false) == 1);
+		CHECK_FALSE(std::filesystem::exists(cache.GetImagePath("Assets/Other.png")));
+		CHECK(std::filesystem::exists(cache.GetImagePath("Assets/Wall.png")));
+		CHECK(cache.Prune(project.GetPath(), true) == 1);
+		CHECK_FALSE(std::filesystem::exists(cache.GetImagePath("Assets/Wall.png")));
+	}
+
+	TEST_CASE("New projects keep editor caches out of version control")
+	{
+		BasaltTest::TempProject temp("ProjectGitignore");
+		REQUIRE(temp.IsValid());
+		CHECK(FileSystem::ReadTextFile(temp.GetDirectory() / ".gitignore").value_or("") == "Cache/\n");
 	}
 }

@@ -43,6 +43,10 @@ namespace Basalt {
 			}
 		}
 
+		// Editor caches (thumbnails) are rebuilt from the assets and never belong in version control.
+		if (!FileSystem::Exists(absolute / ".gitignore") && !FileSystem::WriteTextFile(absolute / ".gitignore", "Cache/\n", outError))
+			return nullptr;
+
 		Ref<Project> project = CreateRef<Project>();
 		project->m_Directory = absolute;
 		project->m_Config.Name = name;

@@ -1,0 +1,371 @@
+#include "ThumbnailManager.h"
+
+#include "Basalt/Asset/AssetManager.h"
+#include "Basalt/Asset/MeshSource.h"
+#include "Basalt/Asset/TextureSource.h"
+#include "Basalt/Core/FileSystem.h"
+#include "Basalt/Core/JsonUtils.h"
+#include "Basalt/Core/Log.h"
+#include "Basalt/Project/Project.h"
+
+#include <spdlog/fmt/fmt.h>
+
+#include <chrono>
+
+namespace Basalt {
+
+	namespace {
+
+		// How often a shown preview checks whether its file changed.
+		constexpr double RecheckSeconds = 2.0;
+		// CPU work per frame (image decoding, cached previews); a GPU render always ends the frame's work.
+		constexpr std::chrono::milliseconds FrameBudget{ 8 };
+		const std::string s_MaterialPrefix = "material:";
+
+		double Now()
+		{
+			return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+		}
+
+		// Every value a material preview shows, exactly (fmt prints floats so they read back the same).
+		std::string MaterialKey(const MaterialComponent& m)
+		{
+			return fmt::format("{} {} {} {} {} {} {} {} {} {}|{}|{}|{}|{}|{}", m.AlbedoColor.r, m.AlbedoColor.g, m.AlbedoColor.b, m.AlbedoColor.a, m.Metallic, m.Roughness, m.EmissiveColor.r, m.EmissiveColor.g, m.EmissiveColor.b, m.EmissiveIntensity, m.AlbedoMap, m.NormalMap, m.MetallicRoughnessMap, m.OcclusionMap, m.EmissiveMap);
+		}
+
+		std::vector<std::string> ModelDetails(const MeshSource& mesh)
+		{
+			const size_t triangles = mesh.Indices.size() / 3;
+			std::vector<std::string> details = { fmt::format("{} mesh(es), {} material(s)", mesh.Meshes.size(), mesh.Materials.size()), fmt::format("{} vertices, {} triangles", mesh.Vertices.size(), triangles) };
+			if (!mesh.Skins.empty() || !mesh.Animations.empty())
+				details.push_back(fmt::format("{} skin(s), {} animation(s)", mesh.Skins.size(), mesh.Animations.size()));
+			return details;
+		}
+
+	}
+
+	ThumbnailManager::ThumbnailManager(nvrhi::IDevice* device)
+		: m_Device(device)
+	{
+	}
+
+	ThumbnailManager::~ThumbnailManager() = default;
+
+	std::optional<ThumbnailCache> ThumbnailManager::GetCache() const
+	{
+		const Ref<Project>& project = Project::GetActive();
+		if (!project)
+			return std::nullopt;
+		return ThumbnailCache(ThumbnailCache::DirectoryFor(project->GetDirectory()));
+	}
+
+	ThumbnailManager::Slot* ThumbnailManager::Touch(const std::string& id)
+	{
+		Slot& slot = m_Slots[id];
+		slot.LastUsed = m_Frame;
+		return &slot;
+	}
+
+	const ThumbnailManager::Preview* ThumbnailManager::Get(const std::string& relativePath)
+	{
+		const ThumbnailKind kind = ClassifyThumbnail(relativePath);
+		const Ref<Project>& project = Project::GetActive();
+		if (kind == ThumbnailKind::None || !project)
+			return nullptr;
+		Slot& slot = *Touch(relativePath);
+		slot.Data.Kind = kind;
+		if (const double now = Now(); now - slot.LastChecked >= RecheckSeconds || slot.LastChecked < 0.0)
+		{
+			slot.LastChecked = now;
+			const std::string key = ThumbnailCache::MakeKey(project->GetDirectory(), relativePath);
+			if (key.empty())
+			{
+				slot.Data.Status = State::Failed;
+				slot.Data.Error = "the file is missing";
+			}
+			else if (key != slot.Key)
+			{
+				// The old image stays on screen until the new one is ready.
+				slot.Key = key;
+				if (slot.Data.Status == State::Failed)
+					slot.Data.Status = State::Pending;
+				if (!slot.Queued)
+				{
+					slot.Queued = true;
+					m_Queue.push_back(relativePath);
+				}
+			}
+		}
+		return &slot.Data;
+	}
+
+	const ThumbnailManager::Preview* ThumbnailManager::GetMaterial(const std::string& id, const MaterialComponent& material)
+	{
+		const std::string slotId = s_MaterialPrefix + id;
+		Slot& slot = *Touch(slotId);
+		slot.IsMaterial = true;
+		if (const std::string key = MaterialKey(material); key != slot.Key)
+		{
+			slot.Key = key;
+			slot.Material = material;
+			if (!slot.Queued)
+			{
+				slot.Queued = true;
+				m_Queue.push_back(slotId);
+			}
+		}
+		return &slot.Data;
+	}
+
+	void ThumbnailManager::Update()
+	{
+		m_Frame++;
+		const auto start = std::chrono::steady_clock::now();
+		while (!m_Queue.empty() && std::chrono::steady_clock::now() - start < FrameBudget)
+		{
+			const std::string id = m_Queue.front();
+			m_Queue.pop_front();
+			const auto it = m_Slots.find(id);
+			// Evicted or cleared while waiting.
+			if (it == m_Slots.end() || !it->second.Queued)
+				continue;
+			it->second.Queued = false;
+			if (Process(id, it->second))
+				break;
+		}
+		EvictLeastRecentlyUsed();
+	}
+
+	bool ThumbnailManager::Process(const std::string& id, Slot& slot)
+	{
+		std::string error;
+		if (slot.IsMaterial)
+		{
+			if (const auto image = RenderMaterial(slot.Material, error))
+				Upload(slot, *image);
+			else
+			{
+				slot.Data.Status = State::Failed;
+				slot.Data.Error = error;
+			}
+			return true;
+		}
+		const auto cache = GetCache();
+		if (!cache)
+			return false;
+		// The file may have changed since it was queued (even while it was being written): store under the version
+		// actually previewed, never an older key.
+		slot.Key = ThumbnailCache::MakeKey(Project::GetActive()->GetDirectory(), id);
+		if (slot.Key.empty())
+		{
+			slot.Data.Status = State::Failed;
+			slot.Data.Error = "the file is missing";
+			return false;
+		}
+		if (const auto entry = cache->Load(id, slot.Key))
+		{
+			slot.Data.Details = entry->Details;
+			Upload(slot, entry->Image);
+			return false;
+		}
+		const auto entry = Make(id, slot.Data.Kind, error);
+		if (!entry)
+		{
+			slot.Data.Status = State::Failed;
+			slot.Data.Error = error;
+			return IsRenderedThumbnail(slot.Data.Kind);
+		}
+		// The disk cache only saves time later; a preview that cannot be stored is still shown.
+		if (!cache->Store(id, slot.Key, *entry, error))
+			BS_CORE_WARN("Thumbnails: cannot cache the preview of '{}': {}", id, error);
+		slot.Data.Details = entry->Details;
+		Upload(slot, entry->Image);
+		return IsRenderedThumbnail(slot.Data.Kind);
+	}
+
+	bool ThumbnailManager::EnsureRenderer(std::string& outError)
+	{
+		if (m_Renderer)
+			return true;
+		if (m_RendererFailed || !m_Device)
+		{
+			outError = "the preview renderer is not available";
+			return false;
+		}
+		auto renderer = CreateScope<PreviewRenderer>(m_Device);
+		if (!renderer->Initialize())
+		{
+			// Logged once: every later preview reports the same error instead of retrying.
+			BS_CORE_ERROR("Thumbnails: the preview renderer failed to initialize");
+			m_RendererFailed = true;
+			outError = "the preview renderer failed to initialize";
+			return false;
+		}
+		m_Renderer = std::move(renderer);
+		return true;
+	}
+
+	std::optional<ThumbnailCache::Entry> ThumbnailManager::Make(const std::string& relativePath, ThumbnailKind kind, std::string& outError)
+	{
+		switch (kind)
+		{
+			case ThumbnailKind::Image:
+			case ThumbnailKind::Environment:
+			{
+				// Loaded directly, not through AssetManager: browsing must not keep every image (or a 100 MB HDRI) in memory.
+				const Ref<TextureSource> source = TextureSource::LoadFromFile(Project::ResolvePath(relativePath), outError);
+				if (!source)
+					return std::nullopt;
+				ThumbnailImage image = MakeImageThumbnail(*source, PreviewRenderer::OutputSize);
+				return ThumbnailCache::Entry{ std::move(image), { fmt::format("{} x {}{}", source->Width, source->Height, source->Format == TextureFormat::RGBA32F ? " HDR" : "") } };
+			}
+			case ThumbnailKind::Model:
+			{
+				if (!EnsureRenderer(outError))
+					return std::nullopt;
+				auto image = m_Renderer->RenderModel(relativePath, outError);
+				if (!image)
+					return std::nullopt;
+				const Ref<MeshSource> mesh = AssetManager::GetMesh(relativePath);
+				return ThumbnailCache::Entry{ std::move(*image), mesh ? ModelDetails(*mesh) : std::vector<std::string>{} };
+			}
+			case ThumbnailKind::Prefab:
+			{
+				if (!EnsureRenderer(outError))
+					return std::nullopt;
+				auto image = m_Renderer->RenderPrefab(relativePath, outError);
+				if (!image)
+					return std::nullopt;
+				const auto text = FileSystem::ReadTextFile(Project::ResolvePath(relativePath));
+				const nlohmann::json data = text ? ParseJson(*text) : nlohmann::json();
+				const auto entities = data.is_object() ? data.find("Entities") : data.end();
+				std::vector<std::string> details;
+				if (entities != data.end() && entities->is_array())
+					details.push_back(fmt::format("{} entit{}", entities->size(), entities->size() == 1 ? "y" : "ies"));
+				return ThumbnailCache::Entry{ std::move(*image), std::move(details) };
+			}
+			case ThumbnailKind::None:
+				break;
+		}
+		outError = "no preview for this file type";
+		return std::nullopt;
+	}
+
+	std::optional<ThumbnailImage> ThumbnailManager::RenderMaterial(const MaterialComponent& material, std::string& outError)
+	{
+		if (!EnsureRenderer(outError))
+			return std::nullopt;
+		return m_Renderer->RenderMaterial(material, outError);
+	}
+
+	std::optional<ThumbnailManager::Generated> ThumbnailManager::Generate(const std::string& relativePath, bool refresh, std::string& outError)
+	{
+		const ThumbnailKind kind = ClassifyThumbnail(relativePath);
+		const auto cache = GetCache();
+		if (!cache)
+		{
+			outError = "no project is open";
+			return std::nullopt;
+		}
+		if (kind == ThumbnailKind::None)
+		{
+			outError = "'" + relativePath + "' has no preview (images, .hdr environments, models and prefabs do)";
+			return std::nullopt;
+		}
+		const std::string key = ThumbnailCache::MakeKey(Project::GetActive()->GetDirectory(), relativePath);
+		if (key.empty())
+		{
+			outError = "no file at '" + relativePath + "'";
+			return std::nullopt;
+		}
+		Generated result;
+		result.Kind = kind;
+		result.CachePath = cache->GetImagePath(relativePath);
+		if (!refresh)
+			if (auto entry = cache->Load(relativePath, key))
+			{
+				result.Image = std::move(entry->Image);
+				result.Details = std::move(entry->Details);
+				result.Cached = true;
+				return result;
+			}
+		auto entry = Make(relativePath, kind, outError);
+		if (!entry)
+			return std::nullopt;
+		if (!cache->Store(relativePath, key, *entry, outError))
+			return std::nullopt;
+		// The browser picks up the new image from the cache.
+		if (const auto it = m_Slots.find(relativePath); it != m_Slots.end())
+		{
+			it->second.Key.clear();
+			it->second.LastChecked = -1.0;
+		}
+		result.Image = std::move(entry->Image);
+		result.Details = std::move(entry->Details);
+		return result;
+	}
+
+	void ThumbnailManager::Upload(Slot& slot, const ThumbnailImage& image)
+	{
+		if (image.Width == 0 || image.Height == 0 || image.Pixels.size() < static_cast<size_t>(image.Width) * image.Height * 4)
+		{
+			slot.Data.Status = State::Failed;
+			slot.Data.Error = "the preview is empty";
+			return;
+		}
+		nvrhi::TextureDesc desc;
+		desc.width = image.Width;
+		desc.height = image.Height;
+		desc.format = nvrhi::Format::RGBA8_UNORM;
+		desc.initialState = nvrhi::ResourceStates::ShaderResource;
+		desc.keepInitialState = true;
+		desc.debugName = "Thumbnail";
+		nvrhi::TextureHandle texture = m_Device->createTexture(desc);
+		if (!texture)
+		{
+			slot.Data.Status = State::Failed;
+			slot.Data.Error = "cannot create the preview texture";
+			return;
+		}
+		if (!m_UploadList)
+			m_UploadList = m_Device->createCommandList();
+		m_UploadList->open();
+		m_UploadList->writeTexture(texture, 0, 0, image.Pixels.data(), static_cast<size_t>(image.Width) * 4);
+		m_UploadList->close();
+		m_Device->executeCommandList(m_UploadList);
+		// ImGui keeps a reference to a texture drawn this frame, so replacing it here is safe.
+		slot.Data.Texture = texture;
+		slot.Data.Width = image.Width;
+		slot.Data.Height = image.Height;
+		slot.Data.Status = State::Ready;
+		slot.Data.Error.clear();
+	}
+
+	void ThumbnailManager::EvictLeastRecentlyUsed()
+	{
+		size_t textures = 0;
+		for (const auto& [id, slot] : m_Slots)
+			textures += slot.Data.Texture ? 1 : 0;
+		while (textures > MaxTextures)
+		{
+			auto oldest = m_Slots.end();
+			for (auto it = m_Slots.begin(); it != m_Slots.end(); ++it)
+				if (it->second.Data.Texture && (oldest == m_Slots.end() || it->second.LastUsed < oldest->second.LastUsed))
+					oldest = it;
+			// Never drop a preview shown this frame.
+			if (oldest == m_Slots.end() || oldest->second.LastUsed >= m_Frame)
+				break;
+			m_Slots.erase(oldest);
+			textures--;
+		}
+	}
+
+	size_t ThumbnailManager::Clear(bool deleteCache)
+	{
+		m_Slots.clear();
+		m_Queue.clear();
+		const auto cache = GetCache();
+		return deleteCache && cache ? cache->Prune(Project::GetActive()->GetDirectory(), true) : 0;
+	}
+
+}

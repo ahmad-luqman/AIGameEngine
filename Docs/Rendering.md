@@ -240,7 +240,8 @@ from background. `InvalidatePicking()` discards the mapping on scene replacement
 renders the current scene/camera on demand into the capture renderer at the viewport’s current
 render scale (including dynamic reduction), preserving pending debug lines
 and the displayed viewport texture. Thus same-frame mutations and minimized windows cannot use stale
-IDs. A vanished nonzero UUID is an error, not background. Picking is disabled in game Play mode.
+IDs. A vanished nonzero UUID is an error, not background. The scene view keeps the editor camera in
+every mode, so picking also works in Play.
 
 Selection is a visible-surface outline: selected tokens carry a reserved high bit, stripped during
 UUID readback. One 3x3 edge pass on that bit outlines the union of all selected surfaces, independent
@@ -264,3 +265,28 @@ uses Xvfb) and writes its captures/log to `build/Tests/Viewport/`. Some older Mo
 spurious integer-attachment blending warning even with blending disabled; this is separate from
 Khronos validation errors. The [upstream MoltenVK fix](https://github.com/KhronosGroup/MoltenVK/commit/f92b64c3a5084c6cfa78f581e0b863b40d2d16fa)
 checks `pCA->blendEnable` before rejecting an integer attachment.
+
+# Editor views and previews
+
+The editor runs up to four `SceneRenderer`s; each owns its render targets, a 64 MiB cascaded shadow map and
+GPU copies of the assets it draws.
+
+- **Scene view** (picking, GPU timers): the editor camera at the panel's size, with editor helpers.
+- **Game view** (GPU timers, created when the Game tab is first shown): the primary camera at the project's
+  window size (or a session override), letterboxed in the panel. Render scale, dynamic resolution and FSR
+  follow the Play preferences as in the runtime; the debug view never applies. The scene's cameras take the
+  game's aspect ratio every frame. Only the tab in front renders, so the Scene/Game pair costs one view.
+  Script debug lines are drawn in both views; editor helpers only in the scene view.
+- **Capture renderer** (picking, created on first use): screenshots and picking.
+- **Preview renderer** (`PreviewRenderer`, no timers or picking, created on first preview): content-browser
+  thumbnails of models and prefabs and material spheres. It renders a fresh studio scene (procedural sky,
+  one key light) at 256x256 and averages it down to 128x128, then releases the GPU copies of what it drew.
+  At most one preview is rendered per frame; each waits for the GPU (readback). Images and `.hdr`
+  environments are previewed on the CPU (an HDR is tonemapped with the ACES fit). Previews are cached in
+  `<project>/Cache/Thumbnails` (outside `Assets/`, so never exported; new projects ignore `Cache/` in git) and
+  remade when the source file's size or modification time changes. Model and prefab previews load the
+  model into `AssetManager`, which keeps it; textures referenced by a material are not tracked, so editing one
+  does not refresh previews that use it (Clear Thumbnail Cache does).
+
+`PreviewRendererGPU` checks framing, determinism, material colour and emission, failures and that pending
+debug lines survive a preview, with Vulkan validation required.

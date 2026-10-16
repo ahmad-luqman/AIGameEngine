@@ -59,6 +59,9 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	endfunction()
 	basalt_add_gpu_test(LightClustersGPU Rendering/LightClustersGPU.cpp 120)
 	basalt_add_gpu_test(ViewportGPU Rendering/ViewportGPU.cpp 120)
+	basalt_add_gpu_test(PreviewRendererGPU Rendering/PreviewRendererGPU.cpp 120)
+	file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/Previews")
+	target_compile_definitions(BasaltPreviewRendererGPU PRIVATE BASALT_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Data" BASALT_PREVIEW_OUTPUT_DIR="${CMAKE_CURRENT_BINARY_DIR}/Previews")
 	target_compile_definitions(BasaltViewportGPU PRIVATE BASALT_ANIMATION_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Data/Animation")
 	basalt_add_gpu_test(FSR1GPU Rendering/FSR1GPU.cpp 60)
 	basalt_add_gpu_test(PostProcessGPU Rendering/PostProcessGPU.cpp 120)
@@ -79,7 +82,7 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	set(basaltGoldenOutput "${CMAKE_CURRENT_BINARY_DIR}/Golden")
 	file(MAKE_DIRECTORY "${basaltGoldenOutput}")
 
-	set(basaltGpuTests PostProcessGPU ViewportGPU FSR1GPU LightClustersGPU AnimationGPU)
+	set(basaltGpuTests PostProcessGPU ViewportGPU FSR1GPU LightClustersGPU AnimationGPU PreviewRendererGPU)
 	# "Scaled" is the lit image rendered at half resolution and upsampled by the tonemap pass (render scale).
 	# "Dynamic" reaches the same image through dynamic resolution: an unreachable frame-rate target drops the
 	# scale to its 0.5 minimum (once GPU timer results arrive), and the scene renders into the top-left of
@@ -192,7 +195,7 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	endif()
 	set_tests_properties(${basaltGpuTests} PROPERTIES LABELS gpu)
 	# Explicitly enable synchronization validation for the compute-write -> fragment-read path.
-	set_property(TEST PostProcessGPU LightClustersGPU ViewportGPU APPEND PROPERTY ENVIRONMENT "VK_LAYER_ENABLES=VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT")
+	set_property(TEST PostProcessGPU LightClustersGPU ViewportGPU PreviewRendererGPU APPEND PROPERTY ENVIRONMENT "VK_LAYER_ENABLES=VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT")
 	if(APPLE)
 		# Homebrew's validation layer manifest names its library without a path (Apple silicon and Intel prefixes).
 		set_property(TEST ${basaltGpuTests} APPEND PROPERTY ENVIRONMENT "DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib:/usr/local/lib")

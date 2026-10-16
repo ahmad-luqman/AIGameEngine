@@ -44,6 +44,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
 - **Play mode runs a copy.** `Scene::Copy` duplicates the edit scene (same UUIDs) for play/simulate;
   stopping discards it. In the editor the game runs in the Game tab (primary camera at the project's window
   size, letterboxed, owning the game UI's input); the scene view keeps the editor camera in every mode.
+  Content-browser previews are cached in `<project>/Cache/Thumbnails`, outside `Assets/` (never exported).
 - **Gameplay services live in the ScriptEngine.** Timers and coroutines (`ScriptTasks`) and events
   (`ScriptEvents`) belong to the script instance that created them and end with it; `Storage` save data
   (`Project/SaveData`) goes to the per-user data directory (`Platform::GetUserDataDirectory`, overridden by

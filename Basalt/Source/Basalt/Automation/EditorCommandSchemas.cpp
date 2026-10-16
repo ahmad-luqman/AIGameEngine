@@ -88,4 +88,14 @@ namespace Basalt::EditorCommandSchemas {
 		return Schema::Object({ { "name", name }, { "open", Schema::Boolean("Open or close the window (only Project Settings can be closed)") }, { "focus", Schema::Boolean("Bring the window (or its tab) to the front") } }, { "name" });
 	}
 
+	nlohmann::json Thumbnail()
+	{
+		return Schema::Object({ { "path", Schema::String("Project-relative image, .hdr, .gltf/.glb or .bprefab", true) }, { "output", Schema::String("Also write the preview to this .png", true) }, { "refresh", Schema::Boolean("Make it again even when the cache is current") } }, { "path" });
+	}
+
+	nlohmann::json MaterialPreview()
+	{
+		return Schema::Object({ { "entity", Schema::Entity("ID or name of an entity with a Material component") }, { "output", Schema::String(".png to write", true) } }, { "entity", "output" });
+	}
+
 }

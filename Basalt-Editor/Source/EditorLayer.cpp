@@ -299,6 +299,12 @@ namespace Basalt {
 		};
 		RegisterEditorCommands();
 		m_ContentBrowserPanel.OnOpenAsset = [this](const std::string& path) { OpenAsset(path); };
+		m_Thumbnails = CreateScope<ThumbnailManager>(device->GetDevice());
+		m_ContentBrowserPanel.SetThumbnails(m_Thumbnails.get());
+		m_InspectorPanel.DrawComponentPreview = [this](Entity entity, const std::string& component) {
+			if (component == "Material")
+				DrawMaterialPreview(entity);
+		};
 
 		if (!m_Options.ProjectPath.empty())
 			m_Context.Execute("project.open", { { "path", m_Options.ProjectPath } });
@@ -327,6 +333,9 @@ namespace Basalt {
 			Application::Get().GetGraphicsDevice()->WaitIdle();
 		m_UIFrame.Clear();
 		m_GameUIFrame.Clear();
+		m_ContentBrowserPanel.SetThumbnails(nullptr);
+		m_InspectorPanel.DrawComponentPreview = nullptr;
+		m_Thumbnails.reset();
 		m_GameRenderer.reset();
 		m_CaptureRenderer.reset();
 		m_Renderer.reset();
@@ -521,6 +530,36 @@ namespace Basalt {
 									 result["path"] = *path;
 								 }
 								 return result;
+							 } });
+
+		m_Commands.Register({ "editor.thumbnail", "Makes (or reads from the cache) the content-browser preview of an image, .hdr environment, model or prefab and returns {kind, width, height, cached, cachePath, details}; output also writes it to a PNG, refresh ignores the cache.", EditorCommandSchemas::Thumbnail(), [this](AutomationSession&, const nlohmann::json& params) {
+								 const std::string path = params["path"].get<std::string>();
+								 std::string error;
+								 const auto generated = m_Thumbnails->Generate(path, params.value("refresh", false), error);
+								 if (!generated)
+									 throw CommandError(error);
+								 nlohmann::json result{ { "kind", ThumbnailKindName(generated->Kind) }, { "width", generated->Image.Width }, { "height", generated->Image.Height }, { "cached", generated->Cached }, { "cachePath", generated->CachePath.string() }, { "details", generated->Details } };
+								 if (const auto output = params.find("output"); output != params.end())
+								 {
+									 if (!WritePng(output->get<std::string>(), generated->Image.Pixels, generated->Image.Width, generated->Image.Height, error))
+										 throw CommandError(error);
+									 result["output"] = *output;
+								 }
+								 return result;
+							 } });
+
+		m_Commands.Register({ "editor.material_preview", "Renders an entity's Material component on a sphere (the inspector's preview) to a PNG.", EditorCommandSchemas::MaterialPreview(), [this](AutomationSession& session, const nlohmann::json& params) {
+								 const UUID id = m_Commands.Execute(session, "entity.get", { { "entity", params["entity"] } })["ID"].get<uint64_t>();
+								 const Entity entity = session.GetScene()->GetEntityByUUID(id);
+								 if (!entity.HasComponent<MaterialComponent>())
+									 throw CommandError("'" + entity.GetName() + "' has no Material component");
+								 std::string error;
+								 const auto image = m_Thumbnails->RenderMaterial(entity.GetComponent<MaterialComponent>(), error);
+								 if (!image)
+									 throw CommandError(error);
+								 if (!WritePng(params["output"].get<std::string>(), image->Pixels, image->Width, image->Height, error))
+									 throw CommandError(error);
+								 return nlohmann::json{ { "output", params["output"] }, { "width", image->Width }, { "height", image->Height } };
 							 } });
 
 		m_Commands.Register({ "editor.panel", "Opens, closes or focuses an editor window (e.g. focus the Game view, open Project Settings) and returns {name, open}.", EditorCommandSchemas::Panel(), [this](AutomationSession&, const nlohmann::json& params) {
@@ -936,11 +975,20 @@ namespace Basalt {
 		m_UIFrame.Build(m_DebugView == RendererDebugView::None && !playing ? &scene : nullptr, m_ViewportSize, false);
 		m_GameUIFrame.Build(m_GameHasCamera ? &scene : nullptr, glm::max(m_GameImageSize, glm::vec2(1.0f)), playing);
 
+		// Previews render on their own command lists, before this frame's list opens.
+		if (m_ThumbnailProject != Project::GetActive().get())
+		{
+			m_Thumbnails->Clear(false);
+			m_ThumbnailProject = Project::GetActive().get();
+		}
+		m_Thumbnails->Update();
+
 		// The dockspace covers the window, but clear the back buffer so no stale content shows through.
 		m_CommandList->open();
 		m_UIFrame.Prepare([&](const std::string& path) { return m_Renderer->GetUITexture(path, m_CommandList); });
 		if (m_GameRenderer)
 			m_GameUIFrame.Prepare([&](const std::string& path) { return m_GameRenderer->GetUITexture(path, m_CommandList); });
+
 		nvrhi::utils::ClearColorAttachment(m_CommandList, device->GetCurrentFramebuffer(), 0, nvrhi::Color(0.08f, 0.08f, 0.09f, 1.0f));
 		m_CommandList->close();
 		device->GetDevice()->executeCommandList(m_CommandList);
@@ -1754,6 +1802,21 @@ namespace Basalt {
 		{
 			ImGui::SameLine();
 			ImGui::TextDisabled("render %ux%u", m_GameRenderer->GetRenderWidth(), m_GameRenderer->GetRenderHeight());
+		}
+	}
+
+	void EditorLayer::DrawMaterialPreview(Entity entity)
+	{
+		static constexpr float Size = 96.0f;
+		const ThumbnailManager::Preview* preview = m_Thumbnails->GetMaterial(std::to_string(static_cast<uint64_t>(entity.GetUUID())), entity.GetComponent<MaterialComponent>());
+		const ImVec2 origin = ImGui::GetCursorScreenPos();
+		ImGui::Dummy(ImVec2(Size, Size));
+		if (preview->Texture)
+			ImGui::GetWindowDrawList()->AddImage(ImTextureRef(reinterpret_cast<ImTextureID>(preview->Texture.Get())), origin, ImVec2(origin.x + Size, origin.y + Size));
+		if (preview->Status == ThumbnailManager::State::Failed && ImGui::BeginItemTooltip())
+		{
+			ImGui::Text("No preview: %s", preview->Error.c_str());
+			ImGui::EndTooltip();
 		}
 	}
 
