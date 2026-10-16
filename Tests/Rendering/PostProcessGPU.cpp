@@ -12,6 +12,7 @@
 #include <Basalt/Scene/Entity.h>
 
 #include <algorithm>
+#include <limits>
 #include <numeric>
 
 using namespace Basalt;
@@ -260,10 +261,17 @@ TEST_CASE("Histogram and bloom ignore poisoned texels outside the active render 
 				CAPTURE(bloom);
 				CAPTURE(automatic);
 				const auto tight = render(area, area, 0, bloom, automatic);
-				const auto padded = render({ 79, 73 }, area, 1000, bloom, automatic);
-				REQUIRE(tight.size() == padded.size());
-				for (size_t i = 0; i < tight.size(); ++i)
-					CHECK(glm::unpackHalf1x16(tight[i]) == doctest::Approx(glm::unpackHalf1x16(padded[i])).epsilon(0.003));
+				for (float poison : { 1000.0f, std::numeric_limits<float>::quiet_NaN() })
+				{
+					CAPTURE(poison);
+					const auto padded = render({ 79, 73 }, area, poison, bloom, automatic);
+					REQUIRE(tight.size() == padded.size());
+					for (size_t i = 0; i < tight.size(); ++i)
+					{
+						CAPTURE(i);
+						CHECK(glm::unpackHalf1x16(tight[i]) == doctest::Approx(glm::unpackHalf1x16(padded[i])).epsilon(0.003));
+					}
+				}
 			}
 	const auto black = render({ 17, 13 }, { 7, 9 }, 1000, false, true, 0);
 	for (size_t i = 0; i < black.size(); i += 4)

@@ -9,7 +9,7 @@ layout(set = 0, binding = 1) uniform sampler u_PointClamp;
 layout(set = 0, binding = 2) uniform texture2D u_SSAO;
 layout(set = 0, binding = 3) uniform texture2D u_Normals;
 layout(set = 0, binding = 4) uniform texture2D u_Depth;
-// Linear when the scene renders at a different size than the output (render scale), point otherwise.
+// Sampler used by the explicit render-area resampling helper.
 layout(set = 0, binding = 5) uniform sampler u_ColorSampler;
 
 layout(push_constant) uniform TonemapPush
@@ -17,7 +17,7 @@ layout(push_constant) uniform TonemapPush
 	float Exposure;
 	uint Operator;      // 0 None, 1 Reinhard, 2 ACES, 3 AgX
 	uint DebugView;     // 0 final, 1 SSAO, 2 view-space normals, 3 depth
-	uint FSR1Input;     // 1:1 texelFetch, no dither; also aligns UVScale to 8 bytes in C++/std430
+	uint OutputMode;    // 0 filtered final, 1 exact intermediate (no dither), 2 exact final
 	vec2 UVScale;       // render size / target size (RenderArea.glsl)
 } u_Push;
 
@@ -83,9 +83,9 @@ void main()
 		return;
 	}
 
-	vec3 color = (u_Push.FSR1Input != 0u
+	vec3 color = (u_Push.OutputMode != 0u
 		? texelFetch(sampler2D(u_HDR, u_PointClamp), ivec2(gl_FragCoord.xy), 0).rgb
-		: textureLod(sampler2D(u_HDR, u_ColorSampler), uv, 0.0).rgb) * u_Push.Exposure;
+		: SampleRenderArea(u_HDR, u_ColorSampler, v_TexCoord, round(u_Push.UVScale * vec2(textureSize(sampler2D(u_HDR, u_ColorSampler), 0)))).rgb) * u_Push.Exposure;
 	if (u_Push.Operator == 1u)
 		color = color / (1.0 + color);
 	else if (u_Push.Operator == 2u)
@@ -95,7 +95,7 @@ void main()
 	color = LinearToSRGB(clamp(color, 0.0, 1.0));
 
 	// Uniform dither reduces banding at the final 8-bit output conversion.
-	if (u_Push.FSR1Input == 0u)
+	if (u_Push.OutputMode != 1u)
 		color += OutputDither(gl_FragCoord.xy);
 	o_Color = vec4(color, 1.0);
 }
