@@ -219,7 +219,8 @@ namespace Basalt {
 			return data;
 		}
 
-		bool DeserializePhysicsSettings(const json& data, PhysicsSettings& s, std::string& outError)
+		// fileVersion: the scene file's format version (patches use the current one).
+		bool DeserializePhysicsSettings(const json& data, PhysicsSettings& s, int64_t fileVersion, std::string& outError)
 		{
 			ObjectReader reader(data, "Physics");
 			if (!reader.IsObject(outError))
@@ -237,6 +238,9 @@ namespace Basalt {
 			if (!reader.Vec3("Gravity", s.Gravity, outError) || !reader.Integer("MaxStepsPerFrame", maxSteps, 1, 64, outError) || !reader.Finish(outError))
 				return false;
 			s.MaxStepsPerFrame = static_cast<uint32_t>(maxSteps);
+			// Version 1 wrote the step into every scene; its default was never a deliberate override.
+			if (fileVersion < 2 && fixedTimestep == DefaultFixedTimestep)
+				fixedTimestep = 0.0f;
 			s.FixedTimestep = fixedTimestep;
 			return true;
 		}
@@ -449,7 +453,7 @@ namespace Basalt {
 		scene.SetName(name);
 		if (renderer && !DeserializeRendererSettings(*renderer, scene.GetRendererSettings(), outError))
 			return false;
-		if (physics && !DeserializePhysicsSettings(*physics, scene.GetPhysicsSettings(), outError))
+		if (physics && !DeserializePhysicsSettings(*physics, scene.GetPhysicsSettings(), version, outError))
 			return false;
 		if (!entities)
 			return true;
@@ -632,7 +636,11 @@ namespace Basalt {
 	std::string SceneSerializer::ComputeStateHash(Scene& scene)
 	{
 		nlohmann::json data = SerializeScene(scene);
-		// The step the simulation actually uses, whether the scene or the project chose it.
+		// State, not file format: a format version bump must not move pinned hashes.
+		data.erase("Format");
+		data.erase("Version");
+		// Files store the step only as a scene override; hash the step the simulation actually uses, so a project
+		// change moves the hash too.
 		data["Physics"]["FixedTimestep"] = scene.GetFixedTimestep();
 		ReplaceEulerRotations(data, scene);
 		std::unordered_map<uint64_t, uint64_t> indices;

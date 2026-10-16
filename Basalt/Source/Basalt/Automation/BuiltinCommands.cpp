@@ -581,8 +581,14 @@ namespace Basalt {
 				// Valid but useless, and a headless host has no renderer to warn about it later.
 				const ProjectConfig& saved = project->GetConfig();
 				const DynamicResolutionState dynamicState = GetDynamicResolutionState(saved.Graphics.DynamicResolution, saved.Graphics.RenderScale, true);
+				json warnings = json::array();
 				if (dynamicState == DynamicResolutionState::EmptyRange)
-					result["warnings"] = json::array({ "dynamic resolution " + DescribeDynamicResolutionState(dynamicState, saved.Graphics.DynamicResolution, saved.Graphics.RenderScale) });
+					warnings.push_back("dynamic resolution " + DescribeDynamicResolutionState(dynamicState, saved.Graphics.DynamicResolution, saved.Graphics.RenderScale));
+				// The project step does not reach a scene with its own; say so rather than appear to do nothing.
+				if (params.contains("fixedTimestep") && session.GetScene() && session.GetScene()->GetPhysicsSettings().FixedTimestep > 0.0f)
+					warnings.push_back(fmt::format("the open scene keeps its own physics step ({} s); remove it with scene.settings {{\"Physics\": {{\"FixedTimestep\": null}}}}", session.GetScene()->GetPhysicsSettings().FixedTimestep));
+				if (!warnings.empty())
+					result["warnings"] = warnings;
 				// Renaming or removing a layer strands bodies on it; report them now rather than at play time.
 				if (session.GetScene())
 					result["unknownPhysicsLayers"] = UnknownPhysicsLayersJson(*session.GetScene(), project->GetConfig().Physics);

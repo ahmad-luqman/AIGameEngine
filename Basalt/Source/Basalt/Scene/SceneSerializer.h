@@ -17,15 +17,18 @@ namespace Basalt {
 	// JSON (de)serialization of scenes (.bscene) and prefabs (.bprefab).
 	//
 	// Scene file layout:
-	//   { "Format": "BasaltScene", "Version": 1, "Name": "...",
+	//   { "Format": "BasaltScene", "Version": 2, "Name": "...",
 	//     "Renderer": { ...RendererSettings... }, "Physics": { "Gravity": [x,y,z], ... },
 	//     "Entities": [ { "ID": 123, "Name": "Player", "Parent": 0, "Components": { "Transform": {...}, ... } } ] }
 	// Entities are written parents-first in hierarchy order; "Parent" is 0 for roots.
 	// A prefab has the same "Entities" array; the first entity is the prefab root.
+	//
+	// Versions: 2 writes Physics.FixedTimestep only as a scene override of the project's step. Version 1 always
+	// wrote it, so a version-1 file holding the old default (1/60 s) is read as "no override".
 	class SceneSerializer
 	{
 	public:
-		static constexpr int FormatVersion = 1;
+		static constexpr int FormatVersion = 2;
 
 		static nlohmann::json SerializeScene(Scene& scene);
 		// Clears nothing: entities are added to the (normally empty) scene. Returns false on invalid data,
@@ -53,7 +56,9 @@ namespace Basalt {
 
 		static nlohmann::json SerializeEntity(Entity entity);
 
-		// 64-bit hash (16 hex digits) of the serialized scene state, for determinism and replay checks.
+		// 64-bit hash (16 hex digits) of the serialized scene state, for determinism and replay checks. It covers
+		// state, not file format (Format and Version are left out), and the physics step the simulation uses (the
+		// scene's override or the project's), so changing either moves the hash.
 		// Entity UUIDs (seeded during Play/Simulate) are replaced by hierarchy-order indices wherever they
 		// appear, so two runs that reach the same state hash equally. Transform rotations are hashed as
 		// quaternions rather than the file's Euler angles, so equal physics states hash equally on every platform.

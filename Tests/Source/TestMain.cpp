@@ -43,8 +43,8 @@ namespace {
 			}
 			else if (action == "env")
 			{
-				const char* variable = std::getenv(value);
-				std::printf("%s=%s\n", value, variable ? variable : "<unset>");
+				const auto variable = Basalt::Platform::GetEnvVar(value);
+				std::printf("%s=%s\n", value, variable ? variable->c_str() : "<unset>");
 				i++;
 			}
 			else if (action == "cwd")
