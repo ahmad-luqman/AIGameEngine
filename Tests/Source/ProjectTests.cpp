@@ -326,7 +326,7 @@ TEST_SUITE("Project")
 	{
 		BasaltTest::TempProject temp("FixedTimestep");
 		REQUIRE(temp.IsValid());
-		Ref<Project> project = Project::GetActive();
+		const Ref<Project>& project = Project::GetActive();
 		CHECK(project->GetConfig().FixedTimestep == DefaultFixedTimestep);
 
 		Scene scene;
@@ -436,7 +436,7 @@ TEST_SUITE("Project")
 	{
 		BasaltTest::TempProject temp("ValidateProblems");
 		REQUIRE(temp.IsValid());
-		Ref<Project> project = Project::GetActive();
+		const Ref<Project>& project = Project::GetActive();
 		CHECK(Contains(Messages(ValidateProject(*project), ValidationSeverity::Error), "no StartScene"));
 
 		temp.WriteFile("Assets/Textures/Wall.png", "x");

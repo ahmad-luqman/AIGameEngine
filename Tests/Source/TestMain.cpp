@@ -20,6 +20,11 @@ namespace {
 	// `BasaltTests --basalt-child <actions...>` acts as a child process for the RunProcess tests, so they need no
 	// shell or other platform tool. Actions run in order: print <text> (stdout), error <text> (stderr), env <name>, cwd, sleep
 	// <ms>, spam <bytes>, args (prints every remaining argument on its own line), exit <code>.
+	int Number(const char* text)
+	{
+		return static_cast<int>(std::strtol(text, nullptr, 10));
+	}
+
 	int RunChild(int argc, char** argv)
 	{
 		for (int i = 2; i < argc; i++)
@@ -47,12 +52,12 @@ namespace {
 			else if (action == "sleep")
 			{
 				std::fflush(stdout);
-				std::this_thread::sleep_for(std::chrono::milliseconds(std::atoi(value)));
+				std::this_thread::sleep_for(std::chrono::milliseconds(Number(value)));
 				i++;
 			}
 			else if (action == "spam")
 			{
-				std::fputs(std::string(static_cast<size_t>(std::atoi(value)), 'x').c_str(), stdout);
+				std::fputs(std::string(static_cast<size_t>(Number(value)), 'x').c_str(), stdout);
 				i++;
 			}
 			else if (action == "args")
@@ -63,7 +68,7 @@ namespace {
 			else if (action == "exit")
 			{
 				std::fflush(stdout);
-				return std::atoi(value);
+				return Number(value);
 			}
 		}
 		return 0;
