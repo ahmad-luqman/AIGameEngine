@@ -16,9 +16,7 @@ layout(location = 0) in vec2 v_TexCoord;
 layout(location = 0) out vec4 o_Color;
 vec3 Sample(vec2 uv)
 {
-	vec2 extent = vec2(textureSize(sampler2D(u_Source, u_LinearClamp), 0));
-	vec2 scale = u_Push.SourceSize / extent;
-	return textureLod(sampler2D(u_Source, u_LinearClamp), ClampToRenderArea(uv * scale, scale, ivec2(extent)), 0).rgb;
+	return SampleRenderArea(u_Source, u_LinearClamp, uv, u_Push.SourceSize).rgb;
 }
 void main()
 {
@@ -30,9 +28,7 @@ void main()
 		for (int y = -1; y <= 1; ++y)
 			for (int x = -1; x <= 1; ++x)
 				c += Sample(v_TexCoord + vec2(x, y) * texel) * float((x == 0 ? 2 : 1) * (y == 0 ? 2 : 1)) / 16.0;
-		vec2 extent = vec2(textureSize(sampler2D(u_Base, u_LinearClamp), 0));
-		vec2 scale = u_Push.BaseSize / extent;
-		vec3 base = textureLod(sampler2D(u_Base, u_LinearClamp), ClampToRenderArea(v_TexCoord * scale, scale, ivec2(extent)), 0).rgb;
+		vec3 base = SampleRenderArea(u_Base, u_LinearClamp, v_TexCoord, u_Push.BaseSize).rgb;
 		c = mix(base, c, u_Push.Scatter);
 	}
 	else

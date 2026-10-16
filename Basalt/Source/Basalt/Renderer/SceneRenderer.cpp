@@ -242,7 +242,7 @@ namespace Basalt {
 			float Exposure;
 			uint32_t Operator;
 			uint32_t DebugView;
-			uint32_t FSR1Input;
+			uint32_t OutputMode;
 			glm::vec2 UVScale;
 		};
 		static_assert(sizeof(TonemapPush) == 24);
@@ -2145,7 +2145,8 @@ namespace Basalt {
 		// --- Tonemap + optional FSR 1 (included in the dynamic-resolution GPU cost) -----------------
 		{
 			const GpuPassScope pass(profiler, commandList, PassTonemap);
-			const TonemapPush push = { settings.Exposure, static_cast<uint32_t>(settings.Tonemap), static_cast<uint32_t>(settings.DebugView), (fsr1 || fxaa) ? 1u : 0u, uvScale };
+			const uint32_t outputMode = (fsr1 || fxaa) ? 1u : (m_RenderWidth == m_Width && m_RenderHeight == m_Height ? 2u : 0u);
+			const TonemapPush push = { settings.Exposure, static_cast<uint32_t>(settings.Tonemap), static_cast<uint32_t>(settings.DebugView), outputMode, uvScale };
 			if (fxaa)
 			{
 				fullscreen(impl.FxaaTonemapPipeline, impl.PostProcess.GetFXAAInput(), impl.TonemapSet, renderViewport, &push, sizeof(push));
