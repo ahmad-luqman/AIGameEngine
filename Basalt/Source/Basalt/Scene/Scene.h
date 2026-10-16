@@ -30,6 +30,7 @@ namespace Basalt {
 	class ParticleSystem;
 	class AnimationSystem;
 	class UIInteraction;
+	class SceneEventListener;
 
 	// Intermediate images the renderer can display instead of the final image (diagnostics).
 	enum class RendererDebugView
@@ -210,6 +211,9 @@ namespace Basalt {
 
 		PhysicsWorld* GetPhysicsWorld() const { return m_PhysicsWorld.get(); }
 		ScriptEngine* GetScriptEngine() const { return m_ScriptEngine.get(); }
+		// Non-owning; null for none. Not copied by Copy: tools attach it to the copy they play.
+		void SetEventListener(SceneEventListener* listener) { m_EventListener = listener; }
+		SceneEventListener* GetEventListener() const { return m_EventListener; }
 		// The script errors of the last Play session, including those OnDestroy raised while it stopped (the script
 		// engine itself is gone by then). Cleared when Play starts.
 		const std::vector<std::string>& GetStoppedSessionScriptErrors() const { return m_StoppedSessionScriptErrors; }
@@ -307,6 +311,7 @@ namespace Basalt {
 		// Roots marked with SetPersistent; runtime-only (cleared when play starts or stops, never saved).
 		std::unordered_set<UUID> m_PersistentEntities;
 		std::string m_Path;
+		SceneEventListener* m_EventListener = nullptr;
 
 		uint32_t m_ViewportWidth = 0;
 		uint32_t m_ViewportHeight = 0;

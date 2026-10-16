@@ -1,16 +1,105 @@
 #include "Basalt/Automation/AutomationSession.h"
 
+#include "Basalt/Automation/AutomationEvents.h"
 #include "Basalt/Core/Input.h"
-#include "Basalt/Scene/Scene.h"
 #include "Basalt/Scene/Entity.h"
+#include "Basalt/Scene/Scene.h"
+#include "Basalt/Scene/SceneEventListener.h"
 
 #include <algorithm>
 
 namespace Basalt {
 
+	namespace {
+
+		nlohmann::json EntityRef(Entity entity)
+		{
+			return { { "id", static_cast<uint64_t>(entity.GetUUID()) }, { "name", entity.GetName() } };
+		}
+
+		const char* ContactTypeName(ContactEventType type)
+		{
+			switch (type)
+			{
+				case ContactEventType::CollisionBegin:
+					return "collisionBegin";
+				case ContactEventType::CollisionEnd:
+					return "collisionEnd";
+				case ContactEventType::TriggerEnter:
+					return "triggerEnter";
+				case ContactEventType::TriggerExit:
+					return "triggerExit";
+			}
+			return "unknown";
+		}
+
+	}
+
+	// Turns the play scene's contacts and script errors into automation events.
+	class AutomationSession::SceneEvents final : public SceneEventListener
+	{
+	public:
+		explicit SceneEvents(AutomationEventHub& hub)
+			: m_Hub(hub)
+		{
+		}
+
+		void OnContact(Scene& scene, ContactEventType type, Entity first, Entity second, const std::optional<ContactInfo>& contact) override
+		{
+			if (!m_Hub.Wants(AutomationEventType::Collision))
+				return;
+			nlohmann::json event = { { "type", ContactTypeName(type) }, { "frame", scene.GetFrameCount() }, { "a", EntityRef(first) }, { "b", EntityRef(second) } };
+			if (contact)
+			{
+				event["point"] = { contact->Point.x, contact->Point.y, contact->Point.z };
+				event["normal"] = { contact->Normal.x, contact->Normal.y, contact->Normal.z };
+				event["impulse"] = contact->Impulse;
+			}
+			m_Hub.Publish(AutomationEventType::Collision, std::move(event));
+		}
+
+		void OnScriptError(Scene& scene, const std::string& message) override
+		{
+			if (m_Hub.Wants(AutomationEventType::ScriptError))
+				m_Hub.Publish(AutomationEventType::ScriptError, { { "message", message }, { "frame", scene.GetFrameCount() } });
+		}
+
+	private:
+		AutomationEventHub& m_Hub;
+	};
+
 	AutomationSession::AutomationSession()
+		: m_Events(CreateRef<AutomationEventHub>())
+		, m_SceneEvents(CreateScope<SceneEvents>(*m_Events))
 	{
 		SetEditScene(CreateRef<Scene>("Untitled"), "");
+	}
+
+	AutomationSession::~AutomationSession()
+	{
+		// The play copy reports to m_SceneEvents until it is gone.
+		if (IsPlaying())
+			m_Scene->SetEventListener(nullptr);
+	}
+
+	bool AutomationSession::SetSnapshot(const std::string& name, nlohmann::json state)
+	{
+		if (!m_Snapshots.contains(name) && m_Snapshots.size() >= MaxSnapshots)
+			return false;
+		m_Snapshots[name] = std::move(state);
+		return true;
+	}
+
+	const nlohmann::json* AutomationSession::FindSnapshot(const std::string& name) const
+	{
+		auto it = m_Snapshots.find(name);
+		return it == m_Snapshots.end() ? nullptr : &it->second;
+	}
+
+	void AutomationSession::PublishPlayState(const char* state)
+	{
+		if (m_Events->Wants(AutomationEventType::PlayState))
+			m_Events->Publish(AutomationEventType::PlayState, { { "state", state }, { "scene", m_Scene ? m_Scene->GetName() : std::string() } });
 	}
 
 	void AutomationSession::SetEditScene(const Ref<Scene>& scene, const std::string& scenePath)
@@ -84,12 +173,15 @@ namespace Basalt {
 			return false;
 		}
 		m_Scene = Scene::Copy(m_EditScene);
+		// Before the systems start, so errors of the first OnCreate calls are reported too.
+		m_Scene->SetEventListener(m_SceneEvents.get());
 		if (simulate)
 			m_Scene->OnSimulationStart();
 		else
 			m_Scene->OnRuntimeStart();
 		if (IsRecording() && !m_RecordingSeed)
 			m_RecordingSeed = m_Scene->GetRandomSeed();
+		PublishPlayState(simulate ? "simulate" : "play");
 		return true;
 	}
 
@@ -101,11 +193,22 @@ namespace Basalt {
 			m_Scene->OnSimulationStop();
 		else
 			m_Scene->OnRuntimeStop();
+		// Hosts may keep the stopped copy alive a little longer (renderers); it must not report anymore.
+		m_Scene->SetEventListener(nullptr);
 		m_Scene = m_EditScene;
+		PublishPlayState("stop");
 		PruneSelection();
 		// Like held keys, injected gamepads belong to the play session.
 		Input::Reset();
 		Input::ForgetInjectedGamepads();
+	}
+
+	void AutomationSession::SetPaused(bool paused)
+	{
+		if (!IsPlaying() || m_Scene->IsPaused() == paused)
+			return;
+		m_Scene->SetPaused(paused);
+		PublishPlayState(paused ? "pause" : "resume");
 	}
 
 	bool AutomationSession::IsPlaying() const

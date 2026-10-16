@@ -1,9 +1,12 @@
 #include "Basalt/Renderer/GraphicsDevice.h"
 
 #include "Basalt/Core/Assert.h"
+#include "Basalt/Core/FileSystem.h"
+#include "Basalt/Core/Platform.h"
 #include "Basalt/Core/Window.h"
 #include "Basalt/Renderer/DeviceSelection.h"
 #include "Basalt/Renderer/GpuProfiler.h"
+#include "Basalt/Renderer/ValidationLayerManifest.h"
 #include "Basalt/Renderer/VulkanHeaders.h"
 #include "Basalt/Renderer/VulkanLoader.h"
 
@@ -13,6 +16,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <filesystem>
 #include <optional>
 #include <queue>
 #include <unordered_set>
@@ -21,6 +25,34 @@
 namespace Basalt {
 
 	namespace {
+
+#if defined(BS_PLATFORM_MACOS) && !defined(BS_DIST)
+		// Makes Homebrew's validation layer loadable without DYLD_FALLBACK_LIBRARY_PATH (see ValidationLayerManifest).
+		// Development builds only: Dist never enables validation.
+		void AddHomebrewValidationLayer()
+		{
+			static constexpr const char* Variable = "VK_ADD_LAYER_PATH";
+			std::error_code ec;
+			const std::filesystem::path temp = std::filesystem::temp_directory_path(ec);
+			if (ec)
+				return;
+			std::string error;
+			const std::optional<std::filesystem::path> directory = ValidationLayerManifest::WriteAbsoluteCopy("/opt/homebrew", temp / "basalt-vulkan-layers", error);
+			if (!directory)
+			{
+				if (!error.empty())
+					BS_CORE_WARN("GraphicsDevice: cannot prepare Homebrew's validation layer: {}", error);
+				return;
+			}
+			const std::string path = FileSystem::PathToUtf8(*directory);
+			const std::optional<std::string> existing = Platform::GetEnvVar(Variable);
+			if (existing && existing->find(path) != std::string::npos)
+				return;
+			// Paths the user set keep precedence.
+			if (!Platform::SetEnvVar(Variable, existing && !existing->empty() ? *existing + ":" + path : path))
+				BS_CORE_WARN("GraphicsDevice: cannot set {}", Variable);
+		}
+#endif
 
 		constexpr uint32_t RequiredApiVersion = VK_API_VERSION_1_3;
 
@@ -278,6 +310,10 @@ namespace Basalt {
 		}
 
 		// --- Instance ---------------------------------------------------------------------------
+#if defined(BS_PLATFORM_MACOS) && !defined(BS_DIST)
+		if (m_Specification.EnableValidation)
+			AddHomebrewValidationLayer();
+#endif
 		const auto availableExtensions = vk::enumerateInstanceExtensionProperties();
 		const auto availableLayers = vk::enumerateInstanceLayerProperties();
 
@@ -339,10 +375,11 @@ namespace Basalt {
 		vk::Result instanceResult = vk::createInstance(&instanceInfo, nullptr, &impl.Instance);
 		if (instanceResult == vk::Result::eErrorLayerNotPresent && validationEnabled)
 		{
-			// The layer manifest exists but its library failed to load (on macOS/Homebrew this happens when
-			// /opt/homebrew/lib is not on the dyld search path). Continue without validation.
+			// The layer manifest exists but its library failed to load: a manifest naming a library the dynamic
+			// linker cannot find (Homebrew's is repaired above), or a broken install. Continue without validation.
 			BS_CORE_WARN("GraphicsDevice: VK_LAYER_KHRONOS_validation failed to load; continuing without validation. "
-						 "On macOS with Homebrew, run with DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib");
+						 "Its manifest names a library the loader cannot open; reinstall the layer, or add the library's "
+						 "folder to the dynamic linker's search path");
 			layers.clear();
 			validationEnabled = false;
 			instanceInfo.enabledLayerCount = 0;

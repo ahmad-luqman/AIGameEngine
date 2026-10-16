@@ -8,6 +8,156 @@ See `.claude/skills/basalt-make-game/SKILL.md` for the workflow and [MCP.md](MCP
 Commands reject parameters they do not list. In a batch, a request with `"expectError": "<text>"`
 succeeds only if its command fails with an error containing `<text>` (used by tests).
 
+## assert
+
+### `assert.component`
+
+Fails unless the entity has the component and, for each given field, the value component.get returns (numbers within 'tolerance', vectors element-wise; objects may have more keys than given). With exists=false, fails if the entity has the component. Returns the component's fields. The error lists every mismatch.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `component` | string, e.g. 'Transform' |
+| `entity` | ID or name |
+| `exists` | bool (default true) |
+| `fields` | object of expected field values (component.get format; entity references take an ID or name) |
+| `tolerance` | number (default 0.0001) |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "component": {
+      "description": "string, e.g. 'Transform'",
+      "minLength": 1,
+      "type": "string"
+    },
+    "entity": {
+      "anyOf": [
+        {
+          "description": "",
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "description": "",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        }
+      ],
+      "description": "ID or name"
+    },
+    "exists": {
+      "anyOf": [
+        {
+          "description": "bool (default true)",
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "bool (default true)"
+    },
+    "fields": {
+      "description": "object of expected field values (component.get format; entity references take an ID or name)",
+      "type": "object"
+    },
+    "tolerance": {
+      "anyOf": [
+        {
+          "description": "number (default 0.0001)",
+          "maximum": 1000000000.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "number (default 0.0001)"
+    }
+  },
+  "required": [
+    "entity",
+    "component"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
+### `assert.entity_exists`
+
+Fails unless the current scene (the play copy while playing) has the entity: by ID, or by name (any number of entities with that name). With exists=false, fails if it does exist; with count, unless exactly that many entities have the name (or ID). Returns {count, ids}.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `count` | integer, exact number of matching entities |
+| `entity` | ID or name |
+| `exists` | bool (default true) |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "count": {
+      "anyOf": [
+        {
+          "description": "integer, exact number of matching entities",
+          "maximum": 1000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "integer, exact number of matching entities"
+    },
+    "entity": {
+      "anyOf": [
+        {
+          "description": "",
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "description": "",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        }
+      ],
+      "description": "ID or name"
+    },
+    "exists": {
+      "anyOf": [
+        {
+          "description": "bool (default true)",
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "bool (default true)"
+    }
+  },
+  "required": [
+    "entity"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
 ## asset
 
 ### `asset.import_model`
@@ -309,7 +459,7 @@ Adds the component if missing and sets the given fields (others keep their value
 
 ### `component.types`
 
-Lists every component type with its fields (for component.set).
+Lists every component type with its fields (for component.set): their names in order, each field's JSON type ('number', 'integer', 'boolean', 'string', 'object', 'entity', 'enum', or an array such as 'number[3]'), the values of enum fields, and the fields that reference entities.
 
 <details><summary>Parameter JSON Schema</summary>
 
@@ -736,6 +886,156 @@ Returns local and world transforms of an entity.
 
 </details>
 
+## events
+
+### `events.poll`
+
+Returns (and removes) the events a polled subscription collected, oldest first, with 'dropped': how many were lost because more than 1024 were waiting.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `assertTypes` | array of event types: fail unless the returned events include each |
+| `max` | integer (default 1024) |
+| `subscription` | integer, from events.subscribe |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "assertTypes": {
+      "description": "array of event types: fail unless the returned events include each",
+      "items": {
+        "description": "",
+        "enum": [
+          "log",
+          "scriptError",
+          "playState",
+          "collision"
+        ],
+        "type": "string"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "max": {
+      "anyOf": [
+        {
+          "description": "integer (default 1024)",
+          "maximum": 1024,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "integer (default 1024)"
+    },
+    "subscription": {
+      "description": "integer, from events.subscribe",
+      "maximum": 18446744073709551615,
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "subscription"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
+### `events.subscribe`
+
+Starts collecting events: log lines, script errors, play-state changes (play, simulate, pause, resume, stop) and collisions (begin/end, trigger enter/exit, in Play and Simulate). On the editor's TCP server (line protocol) they stream to the connection as {"event": ...} lines without 'ok', and end with it; elsewhere (CLI, MCP) read them with events.poll. Returns {subscription, types, minLevel, streamed}.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `minLevel` | string, lowest log level delivered: trace, info (default), warn, error, critical |
+| `types` | array of event types: log, scriptError, playState, collision (default all) |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "minLevel": {
+      "anyOf": [
+        {
+          "description": "string, lowest log level delivered: trace, info (default), warn, error, critical",
+          "enum": [
+            "trace",
+            "info",
+            "warn",
+            "error",
+            "critical"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "string, lowest log level delivered: trace, info (default), warn, error, critical"
+    },
+    "types": {
+      "description": "array of event types: log, scriptError, playState, collision (default all)",
+      "items": {
+        "description": "",
+        "enum": [
+          "log",
+          "scriptError",
+          "playState",
+          "collision"
+        ],
+        "type": "string"
+      },
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+</details>
+
+### `events.unsubscribe`
+
+Ends an event subscription and discards its queued events.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `subscription` | integer, from events.subscribe |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "subscription": {
+      "description": "integer, from events.subscribe",
+      "maximum": 18446744073709551615,
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "subscription"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
 ## help
 
 ### `help`
@@ -769,7 +1069,7 @@ Lists commands, or describes one command with its parameter schema.
 
 ### `image.compare`
 
-Compares a PNG with a reference image within a tolerance; optionally writes a diff image and fails on mismatch.
+Compares a PNG with a reference image within a tolerance; optionally writes a diff image and fails on mismatch. similarity is 1 - meanDelta / 255 (1 = identical, 0 when the sizes differ).
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -1858,6 +2158,135 @@ Checks that the project would export and start: settings, start scene, every sce
 
 ## render
 
+### `render.compare`
+
+Renders the current scene like render.screenshot and compares the image with a reference like image.compare (editor / GPU hosts only). Returns the image.compare result with the rendered image's path ('actual').
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `assertMatch` | bool, default false |
+| `diff` | string, output .png, optional |
+| `height` | integer (default 720) |
+| `maxPercent` | number, default 0.5 |
+| `output` | string, where the render is written (default Cache/RenderCompare.png) |
+| `pixelThreshold` | integer 0-255, default 8 |
+| `reference` | string, reference image path (relative paths are project-relative) |
+| `width` | integer (default 1280) |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "assertMatch": {
+      "anyOf": [
+        {
+          "description": "bool, default false",
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "bool, default false"
+    },
+    "diff": {
+      "anyOf": [
+        {
+          "description": "string, output .png, optional",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "string, output .png, optional"
+    },
+    "height": {
+      "anyOf": [
+        {
+          "description": "integer (default 720)",
+          "maximum": 8192,
+          "minimum": 16,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "integer (default 720)"
+    },
+    "maxPercent": {
+      "anyOf": [
+        {
+          "description": "number, default 0.5",
+          "maximum": 100.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "number, default 0.5"
+    },
+    "output": {
+      "anyOf": [
+        {
+          "description": "string, where the render is written (default Cache/RenderCompare.png)",
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "string, where the render is written (default Cache/RenderCompare.png)"
+    },
+    "pixelThreshold": {
+      "anyOf": [
+        {
+          "description": "integer 0-255, default 8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "integer 0-255, default 8"
+    },
+    "reference": {
+      "description": "string, reference image path (relative paths are project-relative)",
+      "minLength": 1,
+      "type": "string"
+    },
+    "width": {
+      "anyOf": [
+        {
+          "description": "integer (default 1280)",
+          "maximum": 8192,
+          "minimum": 16,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "integer (default 1280)"
+    }
+  },
+  "required": [
+    "reference"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
 ### `render.screenshot`
 
 Renders the current scene from its primary camera (the editor camera when the scene has none), with its game UI, to a PNG (editor / GPU hosts only). The editor's debug view applies; editor.game_view's path never uses one and fails without a primary camera.
@@ -2053,6 +2482,77 @@ Restarts play from the edit scene with no input held, re-applies a replay's inpu
 </details>
 
 ## scene
+
+### `scene.diff`
+
+Compares two scene states: 'from' and 'to' each name a snapshot (scene.snapshot) or a scene file (a project-relative path ending in .bscene); 'to' defaults to the current scene (the play copy while playing). Entities are matched by ID. Returns {equal, settings, added, removed, changed}: settings and each changed entity's changes are [{path, from, to}] (e.g. 'Transform.Translation'; a component name with from or to null when it was added or removed).
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `assertEqual` | bool: fail unless the states are equal; the error lists the first differences |
+| `from` | string, snapshot name or .bscene path |
+| `to` | string, snapshot name or .bscene path (default: the current scene) |
+| `tolerance` | number, numbers this close count as equal (default 0) |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "assertEqual": {
+      "anyOf": [
+        {
+          "description": "bool: fail unless the states are equal; the error lists the first differences",
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "bool: fail unless the states are equal; the error lists the first differences"
+    },
+    "from": {
+      "description": "string, snapshot name or .bscene path",
+      "minLength": 1,
+      "type": "string"
+    },
+    "to": {
+      "anyOf": [
+        {
+          "description": "string, snapshot name or .bscene path (default: the current scene)",
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "string, snapshot name or .bscene path (default: the current scene)"
+    },
+    "tolerance": {
+      "anyOf": [
+        {
+          "description": "number, numbers this close count as equal (default 0)",
+          "maximum": 1000000000.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "number, numbers this close count as equal (default 0)"
+    }
+  },
+  "required": [
+    "from"
+  ],
+  "type": "object"
+}
+```
+
+</details>
 
 ### `scene.get`
 
@@ -2255,6 +2755,35 @@ Patches scene-level settings: {Renderer: {...}, Physics: {...}, Name}.
     }
   },
   "required": [],
+  "type": "object"
+}
+```
+
+</details>
+
+### `scene.snapshot`
+
+Stores the current scene state (the play copy while playing) under a name for scene.diff. Snapshots live in memory for the session (at most 32 names), survive play stop and scene changes, and a name can be reused to replace one.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `name` | string, snapshot name (not ending in .bscene) |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "description": "string, snapshot name (not ending in .bscene)",
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "name"
+  ],
   "type": "object"
 }
 ```

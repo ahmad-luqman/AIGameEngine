@@ -687,7 +687,7 @@ TEST_SUITE("Automation")
 		std::string error;
 		REQUIRE(server.StartWithFactory(0, [&]() {
             auto connection = std::make_shared<AutomationConnection>();
-            return [&, connection](const std::string& request) { return connection->HandleRequest(registry, session, request); }; }, error));
+            return AutomationServer::ClientHandler{ [&, connection](const std::string& request) { return connection->HandleRequest(registry, session, request); }, nullptr }; }, error));
 		const json initialized = ParseJson(SendLine(server.GetPort(), R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}})"));
 		CHECK(initialized["result"]["protocolVersion"].get<std::string>() == std::string(McpServer::ProtocolVersion));
 		const json reconnected = ParseJson(SendLine(server.GetPort(), R"({"jsonrpc":"2.0","method":"notifications/initialized"})"

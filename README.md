@@ -15,7 +15,7 @@ scripts/build.sh            # Debug build into build/ (Release / Dist: scripts/b
 scripts/test.sh             # unit tests, feature test, sample game, GPU render test
 ```
 
-macOS with Homebrew: Vulkan validation layers load only with `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib`.
+macOS with Homebrew: development builds load Homebrew's Vulkan validation layer by themselves (no environment setup).
 
 ## Use
 

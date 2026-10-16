@@ -34,8 +34,6 @@ def main():
             reserve.bind(("127.0.0.1", 0))
             port = reserve.getsockname()[1]
         env = dict(os.environ, BASALT_USER_DATA_DIR=str(Path(temp, "UserData")))
-        if sys.platform == "darwin":
-            env["DYLD_FALLBACK_LIBRARY_PATH"] = "/opt/homebrew/lib:/usr/local/lib"
         log_path = Path(output, "editor.log")
         with log_path.open("w") as log:
             process = subprocess.Popen([editor, "--project", temp, "--port", str(port)], cwd=temp, stdout=log, stderr=log, env=env)
@@ -54,14 +52,20 @@ def main():
                     connection.settimeout(30)
                     stream = connection.makefile("rwb")
 
+                    events = []
+
                     def call(command, params=None, error=None):
                         stream.write((json.dumps({"command": command, "params": params or {}}) + "\n").encode())
                         stream.flush()
-                        response = json.loads(stream.readline())
+                        # Frames without "ok" are events of this connection's subscriptions (events.subscribe).
+                        while "ok" not in (response := json.loads(stream.readline())):
+                            events.append(response)
                         require(response.get("ok") == (error is None), f"{command}: {response}")
                         if error is not None:
                             require(error in response.get("error", ""), f"{command}: expected {error!r}, got {response}")
                         return response.get("result") if error is None else response
+
+                    call.events = events
 
                     call("scene.new", {"empty": True})
                     a = call("entity.create", {"name": "Source"})["id"]

@@ -9,6 +9,7 @@
 #include <Basalt/Renderer/RenderMath.h>
 #include <Basalt/Renderer/RenderUtils.h>
 #include <Basalt/Renderer/SceneLights.h>
+#include <Basalt/Renderer/ValidationLayerManifest.h>
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
 
@@ -865,5 +866,49 @@ TEST_SUITE("SceneRenderer")
 		DebugDraw::RestoreLines(std::vector<DebugLineVertex>(DebugDraw::MaxLines * 2 + 6, lines[0]));
 		CHECK(DebugDraw::GetLineCount() == DebugDraw::MaxLines);
 		DebugDraw::Clear();
+	}
+}
+
+TEST_SUITE("ValidationLayerManifest")
+{
+	TEST_CASE("A layer manifest naming its library without a path gets a copy with the absolute path")
+	{
+		BasaltTest::TempDirectory prefix("LayerPrefix");
+		BasaltTest::TempDirectory output("LayerOutput");
+		const std::filesystem::path manifest = prefix.GetPath() / "share" / "vulkan" / "explicit_layer.d" / ValidationLayerManifest::FileName;
+		std::string error;
+		// No manifest: nothing to do, and no error.
+		CHECK_FALSE(ValidationLayerManifest::WriteAbsoluteCopy(prefix.GetPath(), output.GetPath(), error));
+		CHECK(error.empty());
+
+		REQUIRE(FileSystem::WriteTextFile(manifest, R"({"file_format_version":"1.2.0","layer":{"name":"VK_LAYER_KHRONOS_validation","library_path":"libVkLayer_khronos_validation.dylib","api_version":"1.4.0"}})"));
+		// The library is missing: pointing at it would not help.
+		CHECK_FALSE(ValidationLayerManifest::WriteAbsoluteCopy(prefix.GetPath(), output.GetPath(), error));
+		CHECK(error.empty());
+
+		const std::filesystem::path library = prefix.GetPath() / "lib" / "libVkLayer_khronos_validation.dylib";
+		REQUIRE(FileSystem::WriteTextFile(library, "binary"));
+		const std::optional<std::filesystem::path> directory = ValidationLayerManifest::WriteAbsoluteCopy(prefix.GetPath(), output.GetPath() / "Layers", error);
+		REQUIRE_MESSAGE(directory, error);
+		CHECK(*directory == output.GetPath() / "Layers");
+		const nlohmann::json copy = nlohmann::json::parse(*FileSystem::ReadTextFile(*directory / ValidationLayerManifest::FileName));
+		CHECK(copy["layer"]["library_path"] == FileSystem::PathToUtf8(library));
+		CHECK(copy["layer"]["name"] == "VK_LAYER_KHRONOS_validation");
+		CHECK(copy["file_format_version"] == "1.2.0");
+
+		// An up-to-date copy is reused as it is.
+		const auto written = std::filesystem::last_write_time(*directory / ValidationLayerManifest::FileName);
+		CHECK(ValidationLayerManifest::WriteAbsoluteCopy(prefix.GetPath(), output.GetPath() / "Layers", error));
+		CHECK(std::filesystem::last_write_time(*directory / ValidationLayerManifest::FileName) == written);
+		CHECK(std::distance(std::filesystem::directory_iterator(*directory), std::filesystem::directory_iterator()) == 1);
+
+		// A manifest that already names an absolute path works as installed.
+		REQUIRE(FileSystem::WriteTextFile(manifest, nlohmann::json({ { "layer", { { "library_path", FileSystem::PathToUtf8(library) } } } }).dump()));
+		CHECK_FALSE(ValidationLayerManifest::WriteAbsoluteCopy(prefix.GetPath(), output.GetPath(), error));
+		CHECK(error.empty());
+
+		REQUIRE(FileSystem::WriteTextFile(manifest, "{ not json"));
+		CHECK_FALSE(ValidationLayerManifest::WriteAbsoluteCopy(prefix.GetPath(), output.GetPath(), error));
+		CHECK(error.find("has no layer.library_path") != std::string::npos);
 	}
 }

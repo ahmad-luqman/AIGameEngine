@@ -6,6 +6,7 @@
 #include <Basalt/Physics/PhysicsWorld.h>
 #include <Basalt/Project/Project.h>
 #include <Basalt/Project/SaveData.h>
+#include <Basalt/Scene/ComponentRegistry.h>
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
 #include <Basalt/Scene/SceneSerializer.h>
@@ -14,8 +15,14 @@
 
 #include "TestUtils.h"
 
+#include <spdlog/fmt/fmt.h>
+
 #include <array>
 #include <filesystem>
+#include <map>
+#include <regex>
+#include <set>
+#include <sstream>
 
 using namespace Basalt;
 
@@ -2136,5 +2143,208 @@ TEST_SUITE("Gameplay scripting")
 		// The others raise.
 		CHECK(BasaltTest::Eval(scene, "Storage.Set('x', 1)").find("error: ") == 0);
 		scene.OnRuntimeStop();
+	}
+}
+
+namespace {
+
+	// What Docs/basalt.d.lua declares, read line by line (see the conventions in its header).
+	struct LuaDefinitions
+	{
+		// Class name -> field name -> the rest of the line (type, then an optional description).
+		std::map<std::string, std::map<std::string, std::string>> Fields;
+		// Class name -> members declared with function X.Y( or function X:Y(.
+		std::map<std::string, std::set<std::string>> Functions;
+		// Names declared as globals: X = {} and function X(.
+		std::set<std::string> Tables;
+		std::set<std::string> GlobalFunctions;
+
+		std::set<std::string> Members(const std::string& name) const
+		{
+			std::set<std::string> members;
+			if (auto it = Fields.find(name); it != Fields.end())
+				for (const auto& [field, rest] : it->second)
+					members.insert(field);
+			if (auto it = Functions.find(name); it != Functions.end())
+				members.insert(it->second.begin(), it->second.end());
+			return members;
+		}
+	};
+
+	LuaDefinitions ParseLuaDefinitions(const std::string& text)
+	{
+		static const std::regex s_Class(R"(^---@class (\w+))");
+		static const std::regex s_Field(R"(^---@field (\w+)\?? (.*)$)");
+		static const std::regex s_Table(R"(^(\w+) = \{\}$)");
+		static const std::regex s_Member(R"(^function (\w+)[.:](\w+)\()");
+		static const std::regex s_Function(R"(^function (\w+)\()");
+		LuaDefinitions definitions;
+		std::string currentClass;
+		std::istringstream lines(text);
+		std::string line;
+		std::smatch match;
+		while (std::getline(lines, line))
+		{
+			if (std::regex_search(line, match, s_Class))
+				currentClass = match[1];
+			else if (std::regex_search(line, match, s_Field) && !currentClass.empty())
+				definitions.Fields[currentClass][match[1]] = match[2];
+			else if (!line.starts_with("---"))
+				currentClass.clear();
+			if (std::regex_search(line, match, s_Table))
+				definitions.Tables.insert(match[1]);
+			else if (std::regex_search(line, match, s_Member))
+				definitions.Functions[match[1]].insert(match[2]);
+			else if (std::regex_search(line, match, s_Function))
+				definitions.GlobalFunctions.insert(match[1]);
+		}
+		return definitions;
+	}
+
+	// The LuaLS type of a component field, as scripts/generate_docs.py writes it.
+	std::string LuaFieldType(const ComponentInfo& info, const std::string& field)
+	{
+		const std::string& kind = info.FieldTypes.at(field);
+		const size_t bracket = kind.find('[');
+		const std::string base = kind.substr(0, bracket);
+		const bool array = bracket != std::string::npos;
+		if (base == "enum")
+		{
+			std::string options;
+			for (const std::string& option : info.EnumOptions.at(field))
+				options += (options.empty() ? "\"" : "|\"") + option + "\"";
+			return array ? "(" + options + ")[]" : options;
+		}
+		static const std::map<std::string, std::string> s_Scalars = { { "number", "number" }, { "integer", "integer" }, { "boolean", "boolean" }, { "string", "string" }, { "object", "table" }, { "entity", "integer" } };
+		return s_Scalars.at(base) + (array ? "[]" : "");
+	}
+
+	std::string Difference(const std::set<std::string>& a, const std::set<std::string>& b)
+	{
+		std::string missing;
+		for (const std::string& name : a)
+		{
+			if (!b.contains(name))
+				missing += (missing.empty() ? "" : ", ") + name;
+		}
+		return missing;
+	}
+
+	// Every global the bindings add (Basalt's are PascalCase; Lua's own are lowercase) as "G name kind", every key
+	// of a plain table as "T table key", and every member of a usertype's instances as "U type member".
+	constexpr const char* s_IntrospectBindings = R"(
+		local instances = {
+			Vec2 = function() return Vec2(1, 2) end,
+			Vec3 = function() return Vec3(1, 2, 3) end,
+			Vec4 = function() return Vec4(1, 2, 3, 4) end,
+			Quat = function() return Quat.Identity() end,
+			Entity = function() return Scene.CreateEntity("LuaTypes") end,
+			TaskHandle = function() return Timer.After(100, function() end) end,
+			EventHandle = function() return Events.On("LuaTypes", function() end) end,
+		}
+		local out = {}
+		for name, value in pairs(_G) do
+			if type(name) == "string" and name:match("^%u") then
+				if type(value) == "function" then
+					out[#out + 1] = "G " .. name .. " function"
+				elseif type(value) == "table" and getmetatable(value) == nil then
+					out[#out + 1] = "G " .. name .. " table"
+					for key in pairs(value) do out[#out + 1] = "T " .. name .. " " .. tostring(key) end
+				elseif instances[name] then
+					out[#out + 1] = "G " .. name .. " usertype"
+					for key in pairs(getmetatable(instances[name]())) do
+						if type(key) == "string" and not key:match("^__") and key ~= "class_cast" and key ~= "class_check" and key ~= "new" then
+							out[#out + 1] = "U " .. name .. " " .. key
+						end
+					end
+				else
+					out[#out + 1] = "G " .. name .. " unknown"
+				end
+			end
+		end
+		return table.concat(out, "\n")
+	)";
+
+}
+
+TEST_SUITE("Scripting")
+{
+	// Docs/basalt.d.lua is written by hand (signatures live only in the C++ bindings) except its component section;
+	// this keeps both in sync with what the engine binds.
+	TEST_CASE("LuaTypeDefinitions: Docs/basalt.d.lua declares exactly the bound Lua API and every component")
+	{
+		const std::optional<std::string> text = FileSystem::ReadTextFile(std::filesystem::path(BASALT_SOURCE_DIR) / "Docs" / "basalt.d.lua");
+		REQUIRE(text);
+		const LuaDefinitions definitions = ParseLuaDefinitions(*text);
+
+		Scene scene;
+		scene.OnRuntimeStart();
+		// The definitions are Lua too: they must compile (editors would report a syntax error as broken types).
+		REQUIRE(text->find("]=====]") == std::string::npos);
+		CHECK(BasaltTest::Eval(scene, fmt::format("local _, problem = load([=====[{}]=====], 'basalt.d.lua') return tostring(problem)", *text)) == "nil");
+		const std::string introspected = BasaltTest::Eval(scene, s_IntrospectBindings);
+		REQUIRE_FALSE(introspected.starts_with("error: "));
+
+		std::map<std::string, std::string> globals;
+		std::map<std::string, std::set<std::string>> bound;
+		std::istringstream lines(introspected);
+		std::string kind, owner, member;
+		while (lines >> kind >> owner >> member)
+		{
+			if (kind == "G")
+				globals[owner] = member;
+			else
+				bound[owner].insert(member);
+		}
+		REQUIRE(globals.size() > 15);
+
+		std::set<std::string> boundTables, boundFunctions;
+		for (const auto& [name, type] : globals)
+		{
+			INFO("global ", name);
+			CHECK_MESSAGE(type != "unknown", "a usertype without an instance in the test: add one to s_IntrospectBindings");
+			(type == "function" ? boundFunctions : boundTables).insert(name);
+		}
+		CHECK_MESSAGE(Difference(boundTables, definitions.Tables).empty(), "bound but not declared as X = {}: ", Difference(boundTables, definitions.Tables));
+		CHECK_MESSAGE(Difference(definitions.Tables, boundTables).empty(), "declared but not bound: ", Difference(definitions.Tables, boundTables));
+		CHECK_MESSAGE(Difference(boundFunctions, definitions.GlobalFunctions).empty(), "bound global functions not declared: ", Difference(boundFunctions, definitions.GlobalFunctions));
+		std::set<std::string> declaredFunctions = definitions.GlobalFunctions;
+		declaredFunctions.erase("print");
+		CHECK_MESSAGE(Difference(declaredFunctions, boundFunctions).empty(), "declared global functions not bound: ", Difference(declaredFunctions, boundFunctions));
+
+		for (const std::string& name : boundTables)
+		{
+			INFO("global ", name);
+			const std::set<std::string> declared = definitions.Members(name);
+			CHECK_MESSAGE(Difference(bound[name], declared).empty(), "bound but not declared: ", Difference(bound[name], declared));
+			CHECK_MESSAGE(Difference(declared, bound[name]).empty(), "declared but not bound: ", Difference(declared, bound[name]));
+		}
+		// Static functions of usertypes (Quat.Identity) are not enumerable on the type itself: they must resolve.
+		for (const auto& [name, functions] : definitions.Functions)
+		{
+			if (globals.contains(name) && globals[name] == "usertype")
+				for (const std::string& function : functions)
+				{
+					const std::string check = fmt::format("return {}.{} ~= nil", name, function);
+					CHECK_MESSAGE(BasaltTest::Eval(scene, check) == "true", name, ".", function, " is not bound");
+				}
+		}
+		scene.OnRuntimeStop();
+
+		for (const ComponentInfo& info : ComponentRegistry::GetAll())
+		{
+			INFO("component ", info.Name);
+			const auto declared = definitions.Fields.find(info.Name + "Component");
+			REQUIRE_MESSAGE(declared != definitions.Fields.end(), "no ---@class ", info.Name, "Component: run scripts/generate_docs.py");
+			std::set<std::string> fields(info.Fields.begin(), info.Fields.end());
+			std::set<std::string> declaredFields;
+			for (const auto& [field, type] : declared->second)
+			{
+				declaredFields.insert(field);
+				if (fields.contains(field))
+					CHECK_MESSAGE(type == LuaFieldType(info, field), field, " is declared as ", type, ", expected ", LuaFieldType(info, field));
+			}
+			CHECK(declaredFields == fields);
+		}
 	}
 }

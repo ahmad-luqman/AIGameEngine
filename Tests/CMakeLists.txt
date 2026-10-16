@@ -9,7 +9,7 @@ target_link_libraries(BasaltTests PRIVATE Basalt doctest::doctest BasaltStb)
 if(WIN32)
 	target_link_libraries(BasaltTests PRIVATE ws2_32)
 endif()
-target_compile_definitions(BasaltTests PRIVATE BASALT_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Data")
+target_compile_definitions(BasaltTests PRIVATE BASALT_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Data" BASALT_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
 add_test(NAME BasaltTests COMMAND BasaltTests --reporters=console --no-intro=true WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 
@@ -44,6 +44,10 @@ if(Python3_Interpreter_FOUND)
 				"${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest/Assets/Models/TexturedCube.glb")
 		set_tests_properties(ExportSmoke PROPERTIES LABELS integration TIMEOUT 300)
 	endif()
+	# Docs/AutomationCommands.md, Docs/Components.md and basalt.d.lua's component section must match the engine.
+	add_test(NAME GeneratedDocs
+		COMMAND "${Python3_EXECUTABLE}" -B "${PROJECT_SOURCE_DIR}/scripts/generate_docs.py" --check $<TARGET_FILE:BasaltCLI>)
+	set_tests_properties(GeneratedDocs PROPERTIES LABELS unit TIMEOUT 60)
 	add_test(NAME LocalShadowHarness
 		COMMAND "${Python3_EXECUTABLE}" -O "${CMAKE_CURRENT_SOURCE_DIR}/Rendering/LocalShadowsTests.py")
 	set_tests_properties(LocalShadowHarness PROPERTIES LABELS unit TIMEOUT 30)
@@ -197,10 +201,6 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	set_tests_properties(${basaltGpuTests} PROPERTIES LABELS gpu)
 	# Explicitly enable synchronization validation for the compute-write -> fragment-read path.
 	set_property(TEST PostProcessGPU LightClustersGPU ViewportGPU PreviewRendererGPU APPEND PROPERTY ENVIRONMENT "VK_LAYER_ENABLES=VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT")
-	if(APPLE)
-		# Homebrew's validation layer manifest names its library without a path (Apple silicon and Intel prefixes).
-		set_property(TEST ${basaltGpuTests} APPEND PROPERTY ENVIRONMENT "DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib:/usr/local/lib")
-	endif()
 endif()
 
 # Runtime option validation: bad values must stop the run before a window or GPU is needed (an ignored

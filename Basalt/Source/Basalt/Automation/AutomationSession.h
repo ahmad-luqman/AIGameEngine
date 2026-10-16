@@ -8,6 +8,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -17,6 +18,7 @@ namespace Basalt {
 
 	class Scene;
 	struct CommandInfo;
+	class AutomationEventHub;
 
 	// One host owns command observation. Rejected BeforeCommand calls never reach the handler;
 	// AfterCommand runs after successful or throwing handlers, with nesting depth already restored.
@@ -35,7 +37,12 @@ namespace Basalt {
 	class AutomationSession
 	{
 	public:
+		static constexpr size_t MaxSnapshots = 32;
+
 		AutomationSession();
+		~AutomationSession();
+		AutomationSession(const AutomationSession&) = delete;
+		AutomationSession& operator=(const AutomationSession&) = delete;
 
 		const Ref<Scene>& GetScene() const { return m_Scene; }
 		// The scene being edited (not the play-mode copy).
@@ -71,6 +78,21 @@ namespace Basalt {
 		bool IsSimulating() const;
 		// Advances the play scene by whole fixed frames (deterministic).
 		void Step(uint32_t frames, float frameTime);
+		// Pauses or resumes the play scene (the editor's Pause button); no-op when not playing or unchanged.
+		void SetPaused(bool paused);
+
+		// --- Events and snapshots --------------------------------------------------------------------
+		// Log lines, script errors, play-state changes and collisions of this session (events.subscribe). Shared
+		// with connections that stream it from the server thread.
+		const Ref<AutomationEventHub>& GetEvents() const { return m_Events; }
+		// The connection a request is being handled for (0: none, e.g. the CLI), so events.subscribe can stream
+		// to it. Set by AutomationConnection around each request.
+		uint64_t GetEventStreamOwner() const { return m_EventStreamOwner; }
+		void SetEventStreamOwner(uint64_t owner) { m_EventStreamOwner = owner; }
+		// Named scene states (scene.snapshot) that scene.diff compares; they survive play stop and scene changes.
+		// False when MaxSnapshots other names are stored.
+		bool SetSnapshot(const std::string& name, nlohmann::json state);
+		const nlohmann::json* FindSnapshot(const std::string& name) const;
 
 		// --- Input recording (replays) ---------------------------------------------------------------
 		// While recording, input commands are stored with the play frame they arrived on, so replaying
@@ -102,6 +124,14 @@ namespace Basalt {
 		void DetachCommandObserver(CommandObserver& observer);
 
 	private:
+		class SceneEvents;
+		void PublishPlayState(const char* state);
+
+		// Declared before the scenes so a playing scene never outlives the listener it reports to.
+		Ref<AutomationEventHub> m_Events;
+		Scope<SceneEvents> m_SceneEvents;
+		uint64_t m_EventStreamOwner = 0;
+		std::map<std::string, nlohmann::json> m_Snapshots;
 		Ref<Scene> m_EditScene;
 		// Equals m_EditScene while editing, the running copy while playing.
 		Ref<Scene> m_Scene;

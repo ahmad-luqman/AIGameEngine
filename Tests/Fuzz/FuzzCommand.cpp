@@ -1,6 +1,7 @@
 // Automation requests (TCP server / CLI) through CommandRegistry::HandleRequest. Only commands that act on
-// the in-memory session are allowed: no file system access, no Lua execution (an infinite loop would hang
-// the fuzzer), and play.step is capped so a single input cannot run for minutes.
+// the in-memory session are allowed: no file system access (scene.diff only between snapshots), no Lua
+// execution (an infinite loop would hang the fuzzer), and play.step is capped so a single input cannot run
+// for minutes.
 #include "FuzzCommon.h"
 
 #include <Basalt/Automation/AutomationSession.h>
@@ -19,7 +20,8 @@ namespace {
 		static const std::set<std::string> allowed = {
 			"help", "log.get", "project.info", "scene.get", "scene.hash", "scene.info", "scene.new", "scene.settings", "entity.create", "entity.destroy",
 			"entity.duplicate", "entity.get", "entity.list", "entity.rename", "entity.set_parent", "entity.transform", "component.get", "component.remove",
-			"component.set", "component.types", "play.start", "play.step", "play.stop", "input.key", "input.mouse", "input.gamepad", "ui.layout", "replay.record_start"
+			"component.set", "component.types", "play.start", "play.step", "play.stop", "input.key", "input.mouse", "input.gamepad", "ui.layout", "replay.record_start",
+			"scene.snapshot", "scene.diff", "assert.entity_exists", "assert.component", "events.subscribe", "events.poll", "events.unsubscribe"
 		};
 		if (!request.is_object() || !request.contains("command") || !request["command"].is_string())
 			return true; // malformed requests exercise the protocol error paths
@@ -30,6 +32,12 @@ namespace {
 			const nlohmann::json& params = request["params"];
 			if (params.contains("frames") && params["frames"].is_number() && params["frames"].get<double>() > 30)
 				return false;
+			// Names ending in .bscene are scene files.
+			for (const char* scene : { "from", "to" })
+			{
+				if (params.contains(scene) && params[scene].is_string() && params[scene].get<std::string>().ends_with(".bscene"))
+					return false;
+			}
 		}
 		return true;
 	}

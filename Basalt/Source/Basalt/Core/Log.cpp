@@ -69,6 +69,11 @@ namespace Basalt {
 
 	void LogHistory::Push(LogMessage message)
 	{
+		{
+			std::scoped_lock listenerLock(m_ListenerMutex);
+			for (const auto& [id, listener] : m_Listeners)
+				listener(message);
+		}
 		std::scoped_lock lock(m_Mutex);
 		if (message.Level >= LogLevel::Error)
 			m_ErrorCount++;
@@ -92,6 +97,20 @@ namespace Basalt {
 		m_Head = 0;
 		m_ErrorCount = 0;
 		// m_TotalCount keeps increasing so "since" cursors held by readers stay valid.
+	}
+
+	uint64_t LogHistory::AddListener(Listener listener)
+	{
+		std::scoped_lock lock(m_ListenerMutex);
+		const uint64_t id = m_NextListenerId++;
+		m_Listeners.emplace_back(id, std::move(listener));
+		return id;
+	}
+
+	void LogHistory::RemoveListener(uint64_t id)
+	{
+		std::scoped_lock lock(m_ListenerMutex);
+		std::erase_if(m_Listeners, [id](const auto& entry) { return entry.first == id; });
 	}
 
 	std::vector<LogMessage> LogHistory::GetMessagesSince(uint64_t sinceIndex, uint64_t& outNextIndex) const

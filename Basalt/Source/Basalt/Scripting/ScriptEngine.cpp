@@ -8,6 +8,7 @@
 #include "Basalt/Project/SaveData.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
+#include "Basalt/Scene/SceneEventListener.h"
 #include "Basalt/Scripting/LuaJson.h"
 #include "Basalt/Scripting/ScriptEvents.h"
 #include "Basalt/Scripting/ScriptGlue.h"
@@ -386,6 +387,8 @@ namespace Basalt {
 	{
 		BS_CORE_ERROR("Script error: {}", message);
 		m_Errors.push_back(message);
+		if (SceneEventListener* listener = m_Scene ? m_Scene->GetEventListener() : nullptr)
+			listener->OnScriptError(*m_Scene, message);
 	}
 
 	void ScriptEngine::EnsureInstance(Entity entity)

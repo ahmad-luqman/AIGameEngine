@@ -832,3 +832,23 @@ TEST_SUITE("Core")
 		CHECK(result.Error.find("cannot start") != std::string::npos);
 	}
 }
+
+TEST_SUITE("Core")
+{
+	TEST_CASE("Log history listeners see every message pushed until they are removed")
+	{
+		LogHistory history(4);
+		std::vector<std::string> seen;
+		const uint64_t first = history.AddListener([&](const LogMessage& message) { seen.push_back(message.Text); });
+		const uint64_t second = history.AddListener([&](const LogMessage& message) { seen.push_back("2:" + message.Text); });
+		CHECK(first != second);
+		history.Push({ LogLevel::Info, "BASALT", "a" });
+		history.RemoveListener(first);
+		history.Push({ LogLevel::Error, "BASALT", "b" });
+		history.RemoveListener(second);
+		history.RemoveListener(second);
+		history.Push({ LogLevel::Warn, "BASALT", "c" });
+		CHECK(seen == std::vector<std::string>{ "a", "2:a", "2:b" });
+		CHECK(history.GetTotalCount() == 3);
+	}
+}

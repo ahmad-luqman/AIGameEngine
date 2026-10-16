@@ -343,7 +343,10 @@ namespace Basalt {
 			std::string error;
 			if (!m_Server.StartWithFactory(m_Options.AutomationPort, [this]() {
 				auto connection = std::make_shared<AutomationConnection>();
-				return [this, connection](const std::string& request) { return HandleAutomationRequest(connection, request); }; }, error))
+				return AutomationServer::ClientHandler{
+					[this, connection](const std::string& request) { return HandleAutomationRequest(connection, request); },
+					[connection]() { return connection->TakePendingEvents(); },
+				}; }, error))
 				BS_CORE_ERROR("Editor: automation server not started: {}", error);
 		}
 
@@ -1425,7 +1428,7 @@ namespace Basalt {
 			if (ImGui::Button(m_Paused ? "Resume" : "Pause", ImVec2(buttonWidth, 0.0f)))
 			{
 				m_Paused = !m_Paused;
-				m_Session.GetScene()->SetPaused(m_Paused);
+				m_Session.SetPaused(m_Paused);
 			}
 			ImGui::SameLine();
 			ImGui::BeginDisabled(!m_Paused);

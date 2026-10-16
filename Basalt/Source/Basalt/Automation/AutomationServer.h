@@ -9,8 +9,9 @@
 namespace Basalt {
 
 	// Line-based TCP server for legacy automation and MCP, bound to 127.0.0.1 only. Each line received is a
-	// JSON request; a non-empty handler result is sent back followed by a newline. Clients are served one
-	// at a time on a background thread; the handler decides how to reach the main thread.
+	// JSON request; a non-empty handler result is sent back followed by a newline. A client may also be sent
+	// frames it did not ask for (event subscriptions). Clients are served one at a time on a background
+	// thread; the handler decides how to reach the main thread.
 	//
 	// Example (shell): echo '{"command":"scene.info"}' | nc 127.0.0.1 7420
 	class AutomationServer
@@ -18,7 +19,16 @@ namespace Basalt {
 	public:
 		using RequestHandler = std::function<std::string(const std::string& request)>;
 
-		using HandlerFactory = std::function<RequestHandler()>;
+		// One client's callbacks, both run on the server thread.
+		struct ClientHandler
+		{
+			RequestHandler OnRequest;
+			// Optional: newline-terminated frames to send unprompted, or "". Called after every response and
+			// about every 100 ms while the client is idle.
+			std::function<std::string()> TakePending;
+		};
+
+		using HandlerFactory = std::function<ClientHandler()>;
 
 		static constexpr uint16_t DefaultPort = 7420;
 
@@ -41,7 +51,7 @@ namespace Basalt {
 
 	private:
 		void Run();
-		void ServeClient(intptr_t client, const RequestHandler& handler);
+		void ServeClient(intptr_t client, const ClientHandler& handler);
 
 	private:
 		HandlerFactory m_Factory;
