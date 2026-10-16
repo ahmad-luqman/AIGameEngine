@@ -23,6 +23,7 @@ namespace Basalt {
 		RendererDebugView DebugView = RendererDebugView::None;
 		// The project's RenderScale unless --render-scale overrides it.
 		float RenderScale = 1.0f;
+		bool VSync = true;
 		// The project's settings unless --dynamic-resolution / --min-render-scale override them.
 		DynamicResolutionSettings DynamicResolution;
 		// --dynamic-resolution asked for it explicitly: a --frames run fails (exit code 6) when dynamic
@@ -56,6 +57,7 @@ namespace Basalt {
 		// The game UI of the frame being rendered (built in OnRender, drawn in OnImGuiRender).
 		UIFrame m_UIFrame;
 		uint64_t m_Frame = 0;
+		float m_RenderDeltaTime = 0.0f;
 		bool m_WarnedNoCamera = false;
 	};
 

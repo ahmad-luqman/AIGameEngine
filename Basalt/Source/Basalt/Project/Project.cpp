@@ -30,6 +30,21 @@ namespace Basalt {
 
 	Ref<Project> Project::s_ActiveProject;
 
+	GraphicsSettings Project::GetActiveGraphicsSettings()
+	{
+		GraphicsSettings result;
+		if (s_ActiveProject)
+		{
+			const auto& c = s_ActiveProject->m_Config;
+			result.VSync = c.VSync;
+			result.RenderScale = c.RenderScale;
+			result.ShadowQuality = c.ShadowQuality;
+			result.SSAOQuality = c.SSAOQuality;
+			result.DynamicResolution = c.DynamicResolution;
+		}
+		return result;
+	}
+
 	Ref<Project> Project::Create(const std::filesystem::path& directory, const std::string& name, std::string& outError)
 	{
 		std::error_code error;
@@ -100,6 +115,17 @@ namespace Basalt {
 			outError = "invalid project file '" + filePath.string() + "': " + e.what();
 			return nullptr;
 		}
+		GraphicsSettings graphics;
+		nlohmann::json graphicsPatch = nlohmann::json::object();
+		for (const char* key : { "VSync", "ShadowQuality", "SSAOQuality" })
+			if (data.contains(key))
+				graphicsPatch[key] = data[key];
+		if (!PatchGraphicsSettings(graphicsPatch, graphics, outError))
+			return nullptr;
+		config.VSync = graphics.VSync;
+		config.ShadowQuality = graphics.ShadowQuality;
+		config.SSAOQuality = graphics.SSAOQuality;
+
 		if (const auto dynamic = data.find("DynamicResolution"); dynamic != data.end())
 		{
 			// Named explicitly: nlohmann's type error would not say which key is wrong.
@@ -142,6 +168,9 @@ namespace Basalt {
 			{ "WindowWidth", m_Config.WindowWidth },
 			{ "WindowHeight", m_Config.WindowHeight },
 			{ "Fullscreen", m_Config.Fullscreen },
+			{ "VSync", m_Config.VSync },
+			{ "ShadowQuality", GraphicsQualityNames[static_cast<size_t>(m_Config.ShadowQuality)] },
+			{ "SSAOQuality", GraphicsQualityNames[static_cast<size_t>(m_Config.SSAOQuality)] },
 			{ "RenderScale", m_Config.RenderScale },
 			{ "DynamicResolution", m_Config.DynamicResolution.Enabled },
 			{ "TargetFrameRate", m_Config.DynamicResolution.TargetFrameRate },

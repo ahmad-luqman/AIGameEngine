@@ -3,7 +3,7 @@
 #include "Basalt/Core/Base.h"
 #include "Basalt/Math/Random.h"
 #include "Basalt/Physics/PhysicsLayers.h"
-#include "Basalt/Renderer/DynamicResolution.h"
+#include "Basalt/Renderer/GraphicsSettings.h"
 
 #include <filesystem>
 #include <string>
@@ -19,6 +19,9 @@ namespace Basalt {
 		uint32_t WindowWidth = 1600;
 		uint32_t WindowHeight = 900;
 		bool Fullscreen = false;
+		bool VSync = true;
+		GraphicsQuality ShadowQuality = GraphicsQuality::High;
+		GraphicsQuality SSAOQuality = GraphicsQuality::High;
 		// Fraction of the window resolution the scene renders at (MinRenderScale..MaxRenderScale); the
 		// tonemap pass resamples it to the window. Below 1 trades sharpness for GPU time.
 		float RenderScale = 1.0f;
@@ -50,6 +53,7 @@ namespace Basalt {
 		static void SetActive(const Ref<Project>& project) { s_ActiveProject = project; }
 		static const Ref<Project>& GetActive() { return s_ActiveProject; }
 		// The active project's RandomSeed, or Random::DefaultSeed without an active project (tests, tools).
+		static GraphicsSettings GetActiveGraphicsSettings();
 		static uint32_t GetActiveRandomSeed() { return s_ActiveProject ? s_ActiveProject->m_Config.RandomSeed : Random::DefaultSeed; }
 
 		// Resolves a project-relative path against the active project directory, or the working directory

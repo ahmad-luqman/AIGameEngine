@@ -1,0 +1,1 @@
+{"command":"project.set","params":{"graphics":{"VSync":false,"RenderScale":0.5,"SSAOQuality":"Low","ShadowQuality":"Off","DynamicResolution":true,"TargetFrameRate":60,"MinRenderScale":0.25}}}

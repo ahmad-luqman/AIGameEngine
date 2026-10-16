@@ -125,7 +125,8 @@ namespace Basalt {
 		};
 		specification.WindowWidth = readSize("width", project->GetConfig().WindowWidth);
 		specification.WindowHeight = readSize("height", project->GetConfig().WindowHeight);
-		specification.VSync = !commandLine.HasFlag("no-vsync");
+		specification.VSync = project->GetConfig().VSync && !commandLine.HasFlag("no-vsync");
+		options.VSync = specification.VSync;
 		specification.Headless = commandLine.HasFlag("headless");
 		specification.Offscreen = commandLine.HasFlag("offscreen");
 		if (specification.Headless && specification.Offscreen)

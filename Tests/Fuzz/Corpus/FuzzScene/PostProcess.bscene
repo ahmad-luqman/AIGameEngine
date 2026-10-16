@@ -1,0 +1,1 @@
+{"Format":"BasaltScene","Version":1,"Entities":[{"ID":1,"Components":{"PostProcess":{"AutoExposure":true,"MinExposure":0.25,"MaxExposure":4,"BloomEnabled":true,"FXAAEnabled":true,"Priority":1}}}]}

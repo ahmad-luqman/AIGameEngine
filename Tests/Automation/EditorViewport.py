@@ -13,6 +13,7 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Rendering"))
 from LocalShadows import read_png
 from EditorUndoSelection import check_undo_selection
+from EditorPostProcess import check_post_process
 
 
 def require(value, message):
@@ -231,6 +232,7 @@ def main():
                     call("editor.window_screenshot", {"path": str(Path(output, "window.png"))})
                     call("editor.viewport")
                     check_undo_selection(call, require, output, temp)
+                    check_post_process(call, require, output)
                     errors = call("log.get", {"errorsOnly": True})
                     require(not errors["messages"], f"Editor logged errors: {errors}")
             finally:

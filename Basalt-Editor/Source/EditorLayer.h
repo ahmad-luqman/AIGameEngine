@@ -47,6 +47,8 @@ namespace Basalt {
 		void OnImGuiRender() override;
 
 	private:
+		float m_RenderDeltaTime = 0.0f;
+		std::optional<bool> m_PrePlayVSync;
 		void RegisterEditorCommands();
 		void OnSceneChanged();
 

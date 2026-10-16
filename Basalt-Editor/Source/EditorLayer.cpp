@@ -77,16 +77,20 @@ namespace Basalt {
 		const glm::vec4 s_CameraColor(0.7f, 0.7f, 1.0f, 0.8f);
 
 		// The viewport and screenshots render like the exported game: at the project's render scale.
-		float ActiveRenderScale()
+		float ActiveRenderScale(const Scene* scene)
 		{
+			if (scene && scene->GetState() == SceneState::Play)
+				return scene->GetGraphicsSettings().RenderScale;
 			const Ref<Project>& project = Project::GetActive();
 			return project ? project->GetConfig().RenderScale : 1.0f;
 		}
 
 		// Only the viewport follows the project's dynamic resolution; screenshots render at the full render
 		// scale, so they do not depend on how fast the GPU was.
-		DynamicResolutionSettings ActiveDynamicResolution()
+		DynamicResolutionSettings ActiveDynamicResolution(const Scene* scene)
 		{
+			if (scene && scene->GetState() == SceneState::Play)
+				return scene->GetGraphicsSettings().DynamicResolution;
 			const Ref<Project>& project = Project::GetActive();
 			return project ? project->GetConfig().DynamicResolution : DynamicResolutionSettings{};
 		}
@@ -554,7 +558,7 @@ namespace Basalt {
 			camera = editorCamera.GetRenderCamera();
 		}
 
-		if (!PrepareCaptureRenderer(width, height, ActiveRenderScale(), outError))
+		if (!PrepareCaptureRenderer(width, height, ActiveRenderScale(m_Session.GetScene().get()), outError))
 			return false;
 
 		// Debug lines belong to the viewport frame; draw editor overlays only for editor-camera shots.
@@ -562,6 +566,7 @@ namespace Basalt {
 		if (useEditorCamera && !m_Session.IsPlaying())
 			DrawEditorOverlays();
 		m_CaptureRenderer->SetSelections(useEditorCamera && !IsGameRunning() && m_ViewportSettings.Options().SelectionOutline ? m_Session.GetSelections() : std::vector<UUID>{});
+		m_CaptureRenderer->ResetExposure();
 		m_CaptureRenderer->Render(scene, *camera);
 		DebugDraw::Clear();
 		for (size_t i = 0; i + 1 < pending.size(); i += 2)
@@ -726,6 +731,7 @@ namespace Basalt {
 
 	void EditorLayer::OnUpdate(Timestep ts)
 	{
+		m_RenderDeltaTime = ts;
 		HandleShortcuts();
 		m_Camera.SetViewportSize(static_cast<uint32_t>(m_ViewportSize.x), static_cast<uint32_t>(m_ViewportSize.y));
 		if (!m_VertexSnapDrag && !m_GizmoWasUsing && !m_BoxStart)
@@ -851,14 +857,25 @@ namespace Basalt {
 
 		const uint32_t width = std::max(1u, static_cast<uint32_t>(m_ViewportSize.x));
 		const uint32_t height = std::max(1u, static_cast<uint32_t>(m_ViewportSize.y));
-		m_Renderer->SetRenderScale(ActiveRenderScale());
-		m_Renderer->SetDynamicResolution(ActiveDynamicResolution());
+		m_Renderer->SetRenderScale(ActiveRenderScale(m_Session.GetScene().get()));
+		m_Renderer->SetDynamicResolution(ActiveDynamicResolution(m_Session.GetScene().get()));
 		m_Renderer->SetViewportSize(width, height);
 		Scene& scene = *m_Session.GetScene();
 		scene.OnViewportResize(width, height);
 		scene.GetRendererSettings().DebugView = m_DebugView;
 
 		const bool playing = IsGameRunning();
+		if (playing)
+		{
+			if (!m_PrePlayVSync)
+				m_PrePlayVSync = device->IsVSync();
+			device->SetVSync(scene.GetGraphicsSettings().VSync);
+		}
+		else if (m_PrePlayVSync)
+		{
+			device->SetVSync(*m_PrePlayVSync);
+			m_PrePlayVSync.reset();
+		}
 		// Discard scripted lines before adding editor helpers, whose visibility switches are independent.
 		if (!m_ViewportSettings.Options().DebugLines)
 			DebugDraw::TakeLines();
@@ -872,7 +889,7 @@ namespace Basalt {
 				DrawEditorOverlays();
 		}
 		m_Renderer->SetSelections(!playing && m_ViewportSettings.Options().SelectionOutline ? m_Session.GetSelections() : std::vector<UUID>{});
-		m_Renderer->Render(scene, *camera);
+		m_Renderer->Render(scene, *camera, m_RenderDeltaTime);
 
 		// UI components show in every mode, so layouts can be authored without playing; the scripts'
 		// immediate-mode UI only exists while playing. Debug views show the renderer's raw buffers.
@@ -945,6 +962,7 @@ namespace Basalt {
 		// without touching the viewport texture already referenced by ImGui or consuming pending lines.
 		const auto pending = DebugDraw::TakeLines();
 		m_CaptureRenderer->SetSelections({});
+		m_CaptureRenderer->ResetExposure();
 		m_CaptureRenderer->Render(scene, camera.GetRenderCamera());
 		DebugDraw::Clear();
 		for (size_t i = 0; i + 1 < pending.size(); i += 2)
@@ -1118,9 +1136,9 @@ namespace Basalt {
 				ImGui::EndMenu();
 			}
 			// A project setting (it ships with the game), so it goes through project.set like any other.
-			if (ImGui::BeginMenu("Render Scale", static_cast<bool>(Project::GetActive())))
+			if (ImGui::BeginMenu("Render Scale", Project::GetActive() && !m_Session.IsPlaying()))
 			{
-				const float current = ActiveRenderScale();
+				const float current = ActiveRenderScale(m_Session.GetScene().get());
 				for (const float scale : { 0.5f, 0.75f, 1.0f, 1.5f, 2.0f })
 				{
 					const std::string label = std::to_string(static_cast<int>(scale * 100.0f)) + "%";
@@ -1129,9 +1147,9 @@ namespace Basalt {
 				}
 				ImGui::EndMenu();
 			}
-			if (ImGui::BeginMenu("Dynamic Resolution", static_cast<bool>(Project::GetActive())))
+			if (ImGui::BeginMenu("Dynamic Resolution", Project::GetActive() && !m_Session.IsPlaying()))
 			{
-				const DynamicResolutionSettings current = ActiveDynamicResolution();
+				const DynamicResolutionSettings current = ActiveDynamicResolution(m_Session.GetScene().get());
 				// With a tolerance, so values that went through JSON still tick their preset (a hand-edited 59.94
 				// ticks none).
 				auto matches = [](float a, float b) { return std::abs(a - b) < 1e-3f; };
@@ -1555,6 +1573,14 @@ namespace Basalt {
 			ImGui::PushID(group);
 			nlohmann::json values = state[group];
 			static const std::vector<std::string> s_Tonemappers = { "None", "Reinhard", "ACES", "AgX" };
+			UUID postProcessId = 0;
+			ResolvePostProcess(scene, &postProcessId);
+			if (postProcessId != 0 && std::string_view(group) == "Renderer")
+			{
+				ImGui::TextDisabled("Post-processing is controlled by the active PostProcess component.");
+				for (const char* key : { "Exposure", "Tonemapper", "SSAOEnabled", "SSAORadius", "SSAOIntensity", "SSAOBias" })
+					values.erase(key);
+			}
 			for (auto it = values.begin(); it != values.end(); ++it)
 			{
 				const JsonFieldResult result = DrawJsonField(it.key(), it.value(), it.key() == "Tonemapper" ? &s_Tonemappers : nullptr);

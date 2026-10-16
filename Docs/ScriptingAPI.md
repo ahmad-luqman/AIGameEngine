@@ -939,3 +939,35 @@ State belongs to the play scene and is not serialized or included in `scene.hash
 Persistent entities retain playback across `Scene.Load`. Bone nodes remain internal to the model:
 there are no bone attachments, animation events, retargeting or root-motion extraction. Animated
 node motion is relative to the entity; physics uses the entity's colliders, not deformed triangles.
+
+## Graphics settings
+
+`Graphics.GetSettings()` returns a copy of the current Play-session preferences. `Graphics.SetSettings(patch)`
+atomically updates any subset, rejecting unknown fields, invalid types, nonfinite numbers and bad ranges:
+
+| Key | Values/default |
+|---|---|
+| `VSync` | Boolean; project default true |
+| `RenderScale` | 0.25–2; default 1 |
+| `ShadowQuality` | `"Off"`, `"Low"`, `"High"`; default `"High"` |
+| `SSAOQuality` | `"Off"`, `"Low"`, `"High"`; default `"High"` |
+| `DynamicResolution` | Boolean; default false |
+| `TargetFrameRate` | 10–1,000,000; default 60 (project defaults are limited to 1000; larger session values support diagnostic runs) |
+| `MinRenderScale` | 0.25–2; default 0.5 |
+
+Settings start from the project (plus runtime command-line overrides), apply on the next rendered frame,
+survive `Scene.Load`, and reset on restarting Play. They do not modify saved project or scene data. Use
+`Storage` explicitly if player preferences should persist. Headless scripts can use the same API.
+
+```lua
+local preferences = Graphics.GetSettings()
+Graphics.SetSettings({ VSync = false, RenderScale = 0.75, SSAOQuality = "Low" })
+-- PostProcess is authored scene data, available through the shared component API:
+local post = Scene.FindEntityByName("PostProcessing")
+post:SetComponent("PostProcess", { BloomEnabled = true, FXAAEnabled = true, AutoExposure = true })
+```
+
+The highest-priority enabled PostProcess component wins (lowest UUID breaks ties). Its settings include
+`Exposure`, `Tonemapper`, SSAO radius/intensity/bias, auto-exposure limits/compensation/adaptation, and bloom
+threshold/intensity/scatter. See [Components](Components.md) for the field list and [Rendering](Rendering.md)
+for ordering, quality levels, legacy fallback and exposure lifecycle.

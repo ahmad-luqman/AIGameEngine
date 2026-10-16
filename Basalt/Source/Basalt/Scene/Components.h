@@ -5,6 +5,7 @@
 #include "Basalt/Math/Math.h"
 #include "Basalt/Physics/PhysicsMaterial.h"
 #include "Basalt/Scene/SceneCamera.h"
+#include "Basalt/Renderer/PostProcessSettings.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -54,6 +55,29 @@ namespace Basalt {
 	{
 		UUID Parent = 0;
 		std::vector<UUID> Children;
+	};
+
+	// Global post-processing; runtime exposure history belongs to each renderer, never to this data.
+	struct PostProcessComponent
+	{
+		bool Enabled = true;
+		uint32_t Priority = 0;
+		Tonemapper Tonemap = Tonemapper::ACES;
+		float Exposure = 1.0f;
+		bool AutoExposure = false;
+		float MinExposure = 0.0625f;
+		float MaxExposure = 16.0f;
+		float ExposureCompensation = 0.0f;
+		float AdaptationSpeed = 3.0f;
+		bool SSAOEnabled = true;
+		float SSAORadius = 0.5f;
+		float SSAOIntensity = 1.0f;
+		float SSAOBias = 0.025f;
+		bool FXAAEnabled = false;
+		bool BloomEnabled = false;
+		float BloomThreshold = 1.0f;
+		float BloomIntensity = 0.1f;
+		float BloomScatter = 0.7f;
 	};
 
 	struct CameraComponent
@@ -683,6 +707,7 @@ namespace Basalt {
 		PointLightComponent,
 		SpotLightComponent,
 		SkyLightComponent,
+		PostProcessComponent,
 		RigidBodyComponent,
 		BoxColliderComponent,
 		SphereColliderComponent,

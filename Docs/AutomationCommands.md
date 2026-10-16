@@ -1471,6 +1471,7 @@ Changes project settings and saves the project file.
 |-----------|--------------------|
 | `dynamicResolution` | bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries) |
 | `fullscreen` | bool |
+| `graphics` |  |
 | `minRenderScale` | number in [0.25, 2], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning) |
 | `name` | string |
 | `physicsLayers` | object {Names: ["Default", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play |
@@ -1510,6 +1511,47 @@ Changes project settings and saves the project file.
         }
       ],
       "description": "bool"
+    },
+    "graphics": {
+      "additionalProperties": false,
+      "properties": {
+        "DynamicResolution": {
+          "description": "bool",
+          "type": "boolean"
+        },
+        "MinRenderScale": {
+          "description": "minimum scale",
+          "maximum": 2.0,
+          "minimum": 0.25,
+          "type": "number"
+        },
+        "RenderScale": {
+          "description": "resolution scale",
+          "maximum": 2.0,
+          "minimum": 0.25,
+          "type": "number"
+        },
+        "SSAOQuality": {
+          "description": "Off, Low or High",
+          "type": "string"
+        },
+        "ShadowQuality": {
+          "description": "Off, Low or High",
+          "type": "string"
+        },
+        "TargetFrameRate": {
+          "description": "target FPS",
+          "maximum": 1000.0,
+          "minimum": 10.0,
+          "type": "number"
+        },
+        "VSync": {
+          "description": "bool",
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
     },
     "minRenderScale": {
       "anyOf": [

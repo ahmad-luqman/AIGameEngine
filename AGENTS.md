@@ -40,6 +40,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   UUID; they react to EnTT component signals. `UIInteraction` (widget hover, hold and focus) exists only in Play
   and re-reads the widgets every frame. Gameplay random streams (Lua's random numbers, particle
   emitters and runtime entity UUIDs) are seeded from the session's seed, `Scene::GetRandomSeed` (the project's `RandomSeed`).
+- **Post-processing.** The highest-priority enabled `PostProcessComponent` (lowest UUID on ties) overrides legacy scene exposure/tonemapper/SSAO settings. Bloom and histogram exposure precede tonemapping; FXAA precedes FSR and overlays. Exposure history belongs to each renderer; captures reset it. `Graphics` Lua preferences are a session copy of project defaults and survive `Scene.Load` without saving the project.
 - **Play mode runs a copy.** `Scene::Copy` duplicates the edit scene (same UUIDs) for play/simulate;
   stopping discards it.
 - **Gameplay services live in the ScriptEngine.** Timers and coroutines (`ScriptTasks`) and events

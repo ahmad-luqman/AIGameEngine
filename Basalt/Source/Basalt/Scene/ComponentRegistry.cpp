@@ -401,6 +401,28 @@ namespace Basalt {
 			r.Field("ShadowSoftness", c.ShadowSoftness);
 		}
 
+		void Fields(FieldReader& r, PostProcessComponent& c)
+		{
+			r.Field("Enabled", c.Enabled);
+			r.Field("Priority", c.Priority);
+			r.EnumField("Tonemapper", c.Tonemap, TonemapperNames);
+			r.Field("Exposure", c.Exposure);
+			r.Field("AutoExposure", c.AutoExposure);
+			r.Field("MinExposure", c.MinExposure);
+			r.Field("MaxExposure", c.MaxExposure);
+			r.Field("ExposureCompensation", c.ExposureCompensation);
+			r.Field("AdaptationSpeed", c.AdaptationSpeed);
+			r.Field("SSAOEnabled", c.SSAOEnabled);
+			r.Field("SSAORadius", c.SSAORadius);
+			r.Field("SSAOIntensity", c.SSAOIntensity);
+			r.Field("SSAOBias", c.SSAOBias);
+			r.Field("FXAAEnabled", c.FXAAEnabled);
+			r.Field("BloomEnabled", c.BloomEnabled);
+			r.Field("BloomThreshold", c.BloomThreshold);
+			r.Field("BloomIntensity", c.BloomIntensity);
+			r.Field("BloomScatter", c.BloomScatter);
+		}
+
 		void Fields(FieldReader& r, SkyLightComponent& c)
 		{
 			r.Field("EnvironmentMap", c.EnvironmentMap);
@@ -725,6 +747,30 @@ namespace Basalt {
 			return { { "Color", ToJson(c.Color) }, { "Intensity", c.Intensity }, { "Range", c.Range }, { "InnerConeAngle", c.InnerConeAngle }, { "OuterConeAngle", c.OuterConeAngle }, { "CastShadows", c.CastShadows }, { "ShadowSoftness", c.ShadowSoftness } };
 		}
 
+		json Write(const PostProcessComponent& c)
+		{
+			return {
+				{ "Enabled", c.Enabled },
+				{ "Priority", c.Priority },
+				{ "Tonemapper", TonemapperNames[static_cast<int>(c.Tonemap)] },
+				{ "Exposure", c.Exposure },
+				{ "AutoExposure", c.AutoExposure },
+				{ "MinExposure", c.MinExposure },
+				{ "MaxExposure", c.MaxExposure },
+				{ "ExposureCompensation", c.ExposureCompensation },
+				{ "AdaptationSpeed", c.AdaptationSpeed },
+				{ "SSAOEnabled", c.SSAOEnabled },
+				{ "SSAORadius", c.SSAORadius },
+				{ "SSAOIntensity", c.SSAOIntensity },
+				{ "SSAOBias", c.SSAOBias },
+				{ "FXAAEnabled", c.FXAAEnabled },
+				{ "BloomEnabled", c.BloomEnabled },
+				{ "BloomThreshold", c.BloomThreshold },
+				{ "BloomIntensity", c.BloomIntensity },
+				{ "BloomScatter", c.BloomScatter },
+			};
+		}
+
 		json Write(const SkyLightComponent& c)
 		{
 			return { { "EnvironmentMap", c.EnvironmentMap }, { "Intensity", c.Intensity }, { "Rotation", c.Rotation }, { "ShowBackground", c.ShowBackground } };
@@ -1030,6 +1076,11 @@ namespace Basalt {
 			return {};
 		}
 
+		std::string Validate(const PostProcessComponent& c)
+		{
+			return ValidatePostProcess(c);
+		}
+
 		std::string Validate(const PointLightComponent& light)
 		{
 			if (!std::isfinite(light.Radius) || light.Radius < 0.0f)
@@ -1212,6 +1263,7 @@ namespace Basalt {
 			infos.push_back(MakeInfo<PointLightComponent>("PointLight"));
 			infos.push_back(MakeInfo<SpotLightComponent>("SpotLight"));
 			infos.push_back(MakeInfo<SkyLightComponent>("SkyLight"));
+			infos.push_back(MakeInfo<PostProcessComponent>("PostProcess"));
 			infos.push_back(MakeInfo<RigidBodyComponent>("RigidBody"));
 			infos.push_back(MakeInfo<BoxColliderComponent>("BoxCollider"));
 			infos.push_back(MakeInfo<SphereColliderComponent>("SphereCollider"));

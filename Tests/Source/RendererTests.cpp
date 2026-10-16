@@ -772,7 +772,7 @@ TEST_SUITE("SceneRenderer")
 		CHECK(stats["gpu"]["timers"] == false);
 		CHECK(stats["gpu"]["frames"] == 0);
 		CHECK(stats["gpu"]["droppedFrames"] == 0);
-		REQUIRE(stats["gpu"]["passes"].size() == 10);
+		REQUIRE(stats["gpu"]["passes"].size() == 11);
 		CHECK(stats["gpu"]["passes"][0]["name"] == "Environment");
 		CHECK(stats["gpu"]["passes"][1]["name"] == "Uploads");
 		CHECK(stats["gpu"]["passes"][5]["name"] == "Clusters");
@@ -804,7 +804,7 @@ TEST_SUITE("SceneRenderer")
 	{
 		SceneRenderer renderer(nullptr);
 		const std::vector<GpuPassTiming>& passes = renderer.GetGpuTimings().Passes;
-		REQUIRE(passes.size() == 10);
+		REQUIRE(passes.size() == 11);
 		GpuFrameSample sample;
 		sample.FrameMilliseconds = 20.0f;
 		sample.PassMilliseconds.assign(passes.size(), 1.0f);
