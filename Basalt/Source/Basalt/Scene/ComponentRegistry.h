@@ -39,6 +39,10 @@ namespace Basalt {
 		std::function<bool(Entity, const nlohmann::json&, std::string& outError)> Deserialize;
 		// Field names accepted by Deserialize, for error messages and tooling.
 		std::vector<std::string> Fields;
+		// JSON type of each field, for tooling (component.types, the Lua type definitions): "number", "integer",
+		// "boolean", "string", "object", "entity" (a UUID, 0 = none), "enum" (a string of EnumOptions), or an
+		// array of one of them with its length, e.g. "number[3]" (vectors, colors, Euler degrees) or "enum[3]".
+		std::map<std::string, std::string> FieldTypes;
 		// Valid values of string-enum fields (e.g. RigidBody "Type"), for inspectors and validation messages.
 		std::map<std::string, std::vector<std::string>> EnumOptions;
 		// Fields that hold an entity UUID (collected from the field list). Tools may let users name entities

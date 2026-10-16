@@ -17,7 +17,6 @@ A showcase of the `Joint` component, built only through the automation API (`bui
 `Assets/Scripts/Director.lua` sets the motor targets every frame with `SetComponent` (cheap: the live joint
 is updated in place), knocks the ladder, arm and bungee, draws the cables and shows the HUD; `Weld.lua` counts `OnJointBreak` callbacks.
 
-Play: `build/bin/BasaltRuntime --project Samples/Joints` (on macOS with Homebrew Vulkan, prefix with
-`DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib` to get the validation layer).
+Play: `build/bin/BasaltRuntime --project Samples/Joints`.
 Rebuild the scene: `build/bin/basalt --project Samples/Joints batch Samples/Joints/build_scene.json`.
 Checks: `test_game.json` (run by ctest as `SampleJoints`).

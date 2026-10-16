@@ -1,5 +1,6 @@
 #include "Basalt/Physics/PhysicsWorldImpl.h"
 
+#include "Basalt/Scene/SceneEventListener.h"
 #include "Basalt/Scripting/ScriptEngine.h"
 
 #include <Jolt/Physics/Collision/CollideShape.h>
@@ -89,14 +90,20 @@ namespace Basalt {
 		}
 
 		ScriptEngine* scriptEngine = ScenePtr->GetScriptEngine();
+		SceneEventListener* listener = ScenePtr->GetEventListener();
 		for (const EntityPair& pair : ended)
 		{
 			const UUID other = pair.first == id ? UUID(pair.second) : UUID(pair.first);
 			const bool isTrigger = trigger || IsTrigger(other);
 			Entity a = ScenePtr->GetEntityByUUID(pair.first);
 			Entity b = ScenePtr->GetEntityByUUID(pair.second);
-			if (scriptEngine && a && b)
-				scriptEngine->OnContactEvent(isTrigger ? ContactEventType::TriggerExit : ContactEventType::CollisionEnd, a, b, std::nullopt);
+			if (!a || !b)
+				continue;
+			const ContactEventType type = isTrigger ? ContactEventType::TriggerExit : ContactEventType::CollisionEnd;
+			if (listener)
+				listener->OnContact(*ScenePtr, type, a, b, std::nullopt);
+			if (scriptEngine)
+				scriptEngine->OnContactEvent(type, a, b, std::nullopt);
 		}
 	}
 
@@ -223,7 +230,9 @@ namespace Basalt {
 		}
 
 		ScriptEngine* scriptEngine = ScenePtr->GetScriptEngine();
-		if (!scriptEngine)
+		SceneEventListener* listener = ScenePtr->GetEventListener();
+		// Simulate runs no scripts, but a listener still observes the contacts.
+		if (!scriptEngine && !listener)
 			return;
 		for (const auto& [pair, change] : touched)
 		{
@@ -241,7 +250,10 @@ namespace Basalt {
 			else
 				type = isActive ? ContactEventType::CollisionBegin : ContactEventType::CollisionEnd;
 			const std::optional<ContactInfo> contact = isActive ? change.Begin : SeparationContact(UUID(pair.first), UUID(pair.second), fixedStep);
-			scriptEngine->OnContactEvent(type, entityA, entityB, contact);
+			if (listener)
+				listener->OnContact(*ScenePtr, type, entityA, entityB, contact);
+			if (scriptEngine)
+				scriptEngine->OnContactEvent(type, entityA, entityB, contact);
 		}
 	}
 

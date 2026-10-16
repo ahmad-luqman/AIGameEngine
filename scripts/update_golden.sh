@@ -16,9 +16,6 @@ if [[ -z "$driver" ]]; then
 fi
 cmake --build "$buildDir"
 
-if [[ "$(uname)" == "Darwin" ]]; then
-	export DYLD_FALLBACK_LIBRARY_PATH="${DYLD_FALLBACK_LIBRARY_PATH:-/opt/homebrew/lib:/usr/local/lib}"
-fi
 # Only the renders: the comparisons would fail against the old references.
 ctest --test-dir "$buildDir" --output-on-failure -R '^FeatureTestRender(_[A-Za-z]+)?$'
 

@@ -75,13 +75,33 @@ Tool names retain command names, including dots. Successes include JSON text con
 results, the same value in `structuredContent`. Command validation and execution failures return
 `isError: true` with actionable text. Unknown tools and malformed call envelopes return JSON-RPC
 `-32602`; unknown methods return `-32601`. Notifications never execute commands. JSON-RPC batches,
-resources, prompts, subscriptions, cancellation of running synchronous calls and asynchronous tasks
+resources, prompts, MCP subscriptions and notifications (use `events.poll`), cancellation of running synchronous calls and asynchronous tasks
 are not implemented. Tools can take time (for example `play.step`); client timeouts should allow for
 that. A client disconnect does not roll back an in-progress command.
 
 Protocol references: [lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle),
 [tools](https://modelcontextprotocol.io/specification/2025-11-25/server/tools), and
 [transports](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports).
+
+## Events, snapshots and assertions
+
+Agents can follow a running game and check it without polling or screenshots:
+
+- `events.subscribe {types?, minLevel?}` collects log lines, script errors, play-state changes (`play`, `simulate`,
+  `pause`, `resume`, `stop`) and collisions (`collisionBegin`/`collisionEnd`/`triggerEnter`/`triggerExit` with both
+  entities, the frame and the contact). On the editor's legacy line protocol the subscription **streams**: event
+  frames arrive on the same connection after a response or within about 100 ms when idle, as JSON lines with an
+  `event` key and no `ok` key (`{"event":"collision","subscription":1,"seq":7,"type":"collisionBegin",...}`), and the
+  subscription ends when the connection closes. A client that reads one line per request must set such frames aside
+  (see `Tests/Automation/EditorViewport.py`). The server serves one connection at a time, so subscribe on the
+  connection that sends the commands. MCP clients and the CLI get polled subscriptions instead:
+  `events.poll {subscription}` returns the queued events (at most 1024 wait; `dropped` counts the rest).
+- `scene.snapshot {name}` keeps the current state in memory; `scene.diff {from, to?}` compares two snapshots or
+  `.bscene` files (or a snapshot with the current scene) by entity ID and lists every changed field.
+- `assert.entity_exists` and `assert.component` fail with `assertion failed: ...` unless the scene matches, so a batch
+  file or tool-call sequence reads as a specification (`expectError` turns an expected failure into a pass).
+- `render.compare {reference}` renders the current scene and compares it with a reference image (editor only);
+  `image.compare` compares two files on any host. Both report `similarity` (1 = identical).
 
 ## Schemas and help
 

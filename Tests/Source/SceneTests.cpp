@@ -7,6 +7,7 @@
 #include <Basalt/Scene/JointFields.h>
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
+#include <Basalt/Scene/SceneDiff.h>
 #include <Basalt/Scene/SceneSerializer.h>
 #include <Basalt/Scripting/ScriptEngine.h>
 
@@ -1540,5 +1541,79 @@ TEST_SUITE("Scene loading")
 		REQUIRE(child);
 		CHECK(child.GetParent() == scene->FindEntityByName("Keeper"));
 		scene->OnRuntimeStop();
+	}
+}
+
+TEST_SUITE("Scene diff")
+{
+	TEST_CASE("DiffScenes matches entities by ID and reports field paths")
+	{
+		using json = nlohmann::json;
+		const json from = { { "Format", "BasaltScene" }, { "Version", 1 }, { "Name", "A" }, { "Entities", { { { "ID", 1 }, { "Name", "One" }, { "Parent", 0 }, { "Components", { { "Transform", { { "Translation", { 0.0, 0.0, 0.0 } } } } } } }, { { "ID", 2 }, { "Name", "Two" }, { "Parent", 0 }, { "Components", json::object() } } } } };
+		json to = from;
+		to["Version"] = 2;
+		to["Name"] = "B";
+		to["Entities"][0]["Name"] = "Uno";
+		to["Entities"][0]["Parent"] = 2;
+		to["Entities"][0]["Components"]["Transform"]["Translation"] = { 0.0, 0.5, 0.0 };
+		to["Entities"][1]["Components"]["Tag"] = { { "Tag", "x" } };
+		std::string error;
+		const std::optional<json> diff = DiffScenes(from, to, {}, error);
+		REQUIRE(diff);
+		CHECK((*diff)["equal"] == false);
+		// Format and Version never count.
+		CHECK((*diff)["settings"] == json::array({ { { "path", "Name" }, { "from", "A" }, { "to", "B" } } }));
+		REQUIRE((*diff)["changed"].size() == 2);
+		const json& one = (*diff)["changed"][0];
+		CHECK(one["name"] == "Uno");
+		CHECK(one["changes"] == json::array({ { { "path", "Name" }, { "from", "One" }, { "to", "Uno" } }, { { "path", "Parent" }, { "from", 0 }, { "to", 2 } }, { { "path", "Transform.Translation" }, { "from", { 0.0, 0.0, 0.0 } }, { "to", { 0.0, 0.5, 0.0 } } } }));
+		CHECK((*diff)["changed"][1]["changes"] == json::array({ { { "path", "Tag" }, { "from", nullptr }, { "to", { { "Tag", "x" } } } } }));
+
+		SceneDiffOptions loose;
+		loose.Tolerance = 0.6;
+		to["Name"] = "A";
+		to["Entities"][0]["Name"] = "One";
+		to["Entities"][0]["Parent"] = 0;
+		to["Entities"][1]["Components"].erase("Tag");
+		CHECK((*DiffScenes(from, to, loose, error))["equal"] == true);
+		CHECK((*DiffScenes(from, to, {}, error))["equal"] == false);
+
+		const std::string text = DescribeSceneDiff(*diff, 2);
+		CHECK(text == "scene Name: \"A\" -> \"B\"\n'Uno' Name: \"One\" -> \"Uno\"\n(3 more)");
+	}
+
+	TEST_CASE("DiffScenes rejects input that is not a scene")
+	{
+		using json = nlohmann::json;
+		std::string error;
+		CHECK_FALSE(DiffScenes(json::array(), json::object(), {}, error));
+		CHECK(error == "the first scene is not a JSON object");
+		CHECK_FALSE(DiffScenes(json::object(), { { "Entities", 3 } }, {}, error));
+		CHECK(error == "the second scene's Entities is not an array");
+		CHECK_FALSE(DiffScenes({ { "Entities", { { { "Name", "x" } } } } }, json::object(), {}, error));
+		CHECK(error == "entity #0 of the first scene has no numeric ID");
+		CHECK_FALSE(DiffScenes(json::object(), { { "Entities", { { { "ID", 4 } }, { { "ID", 4 } } } } }, {}, error));
+		CHECK(error == "the second scene has two entities with ID 4");
+		// No entities at all is an empty scene.
+		CHECK((*DiffScenes(json::object(), { { "Entities", nullptr } }, {}, error))["equal"] == true);
+	}
+
+	TEST_CASE("JSON comparisons treat integers exactly and floats within the tolerance")
+	{
+		using json = nlohmann::json;
+		// 2^53 + 1 is not representable as a double; IDs must still differ.
+		CHECK_FALSE(JsonNearlyEqual(json(9007199254740993ull), json(9007199254740992ull), 1.0));
+		CHECK(JsonNearlyEqual(json(1), json(1.05), 0.1));
+		CHECK_FALSE(JsonNearlyEqual(json({ 1.0, 2.0 }), json({ 1.0 }), 1.0));
+		CHECK_FALSE(JsonNearlyEqual(json({ { "a", 1 } }), json({ { "a", 1 }, { "b", 2 } }), 0.0));
+		CHECK(JsonNearlyEqual(json("x"), json("x"), 0.0));
+		CHECK_FALSE(JsonNearlyEqual(json("1"), json(1), 0.0));
+
+		std::vector<std::string> mismatches;
+		const json actual = { { "Color", { 1.0, 0.5, 0.25 } }, { "Intensity", 2.0 }, { "Extra", true }, { "Nested", { { "Inner", "a" } } } };
+		MatchJsonSubset(actual, { { "Color", { 1.0, 0.5, 0.25 } }, { "Extra", true } }, 0.0, "Light", mismatches);
+		CHECK(mismatches.empty());
+		MatchJsonSubset(actual, { { "Color", { 1.0, 0.6, 0.25 } }, { "Intensity", 2.0 }, { "Missing", 1 }, { "Nested", { { "Inner", "b" } } }, { "Extra", { true } } }, 0.0, "Light", mismatches);
+		CHECK(mismatches == std::vector<std::string>{ "Light.Color is [1.0,0.5,0.25], expected [1.0,0.6,0.25]", "Light.Extra is true, expected [true]", "Light.Missing is missing", "Light.Nested.Inner is \"a\", expected \"b\"" });
 	}
 }

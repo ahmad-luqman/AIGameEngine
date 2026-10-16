@@ -1,9 +1,54 @@
 #include "Basalt/Automation/AutomationConnection.h"
 
+#include "Basalt/Automation/AutomationEvents.h"
+#include "Basalt/Automation/AutomationSession.h"
 #include "Basalt/Automation/CommandRegistry.h"
 #include "Basalt/Core/JsonUtils.h"
 
 namespace Basalt {
+
+	namespace {
+
+		std::atomic<uint64_t> s_NextStreamOwner = 1;
+
+		// Makes the session attribute event subscriptions to one connection for the duration of a request.
+		class StreamOwnerScope
+		{
+		public:
+			StreamOwnerScope(AutomationSession& session, uint64_t owner)
+				: m_Session(session)
+				, m_Previous(session.GetEventStreamOwner())
+			{
+				m_Session.SetEventStreamOwner(owner);
+			}
+			~StreamOwnerScope() { m_Session.SetEventStreamOwner(m_Previous); }
+			StreamOwnerScope(const StreamOwnerScope&) = delete;
+			StreamOwnerScope& operator=(const StreamOwnerScope&) = delete;
+
+		private:
+			AutomationSession& m_Session;
+			uint64_t m_Previous;
+		};
+
+	}
+
+	AutomationConnection::AutomationConnection()
+		: m_StreamOwner(s_NextStreamOwner.fetch_add(1))
+	{
+	}
+
+	AutomationConnection::~AutomationConnection()
+	{
+		std::scoped_lock lock(m_EventsMutex);
+		if (m_Events)
+			m_Events->RemoveOwner(m_StreamOwner);
+	}
+
+	std::string AutomationConnection::TakePendingEvents()
+	{
+		std::scoped_lock lock(m_EventsMutex);
+		return m_Events ? m_Events->TakeStreamed(m_StreamOwner) : std::string();
+	}
 
 	AutomationConnection::Protocol AutomationConnection::SelectProtocol(const std::string& line, const nlohmann::json& parsed) const
 	{
@@ -31,6 +76,18 @@ namespace Basalt {
 			return "";
 		if (parsed.is_discarded())
 			return R"({"ok":false,"error":"invalid JSON"})";
+		{
+			std::scoped_lock lock(m_EventsMutex);
+			if (m_Events != session.GetEvents())
+			{
+				// A different session (never the case in one editor) would strand subscriptions in the old hub.
+				if (m_Events)
+					m_Events->RemoveOwner(m_StreamOwner);
+				m_Events = session.GetEvents();
+			}
+		}
+		// Only legacy clients read unsolicited event frames; MCP subscriptions are polled (events.poll).
+		StreamOwnerScope owner(session, m_StreamOwner);
 		return registry.HandleRequest(session, parsed).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 	}
 

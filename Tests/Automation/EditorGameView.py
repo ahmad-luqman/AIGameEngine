@@ -52,6 +52,11 @@ def check_game_view(call, require, output):
     reference = Path(output, "game-reference.png")
     call("render.screenshot", {"path": str(reference), "width": 640, "height": 360})
     call("image.compare", {"actual": str(game), "reference": str(reference), "assertMatch": True})
+    # render.compare renders and compares in one step.
+    compared = call("render.compare", {"reference": str(game), "output": str(Path(output, "game-compare.png")), "width": 640, "height": 360, "assertMatch": True})
+    require(compared["similarity"] > .99 and compared["actual"] == str(Path(output, "game-compare.png")), f"render.compare: {compared}")
+    compared = call("render.compare", {"reference": str(game), "output": str(Path(output, "game-compare-small.png")), "width": 320, "height": 180})
+    require(not compared["sizeMatches"] and compared["similarity"] == 0, f"render.compare at another size: {compared}")
     side = Path(output, "game-editor-camera.png")
     call("editor.screenshot", {"path": str(side), "width": 640, "height": 360})
     require(not call("image.compare", {"actual": str(game), "reference": str(side)})["matches"], "the Game view showed the editor camera")
@@ -87,6 +92,8 @@ def check_game_view(call, require, output):
     # editor camera, and Stop returns to it.
     call("editor.panel", {"name": "Viewport", "focus": True})
     wait_for(call, require, lambda s: not s["visible"] and s["status"] == "notRendered", "the scene view did not come to the front")
+    subscription = call("events.subscribe", {"types": ["playState"]})
+    require(subscription["streamed"], f"the editor's TCP connection did not stream events: {subscription}")
     call("play.start")
     state = wait_for(call, require, lambda s: s["mode"] == "Play" and s["visible"], "Play did not bring the Game view forward")
     played = Path(output, "game-play.png")
@@ -106,6 +113,10 @@ def check_game_view(call, require, output):
     require(picked["entity"] == cube, f"the scene view did not keep the editor camera in Play: {picked}")
     call("play.stop")
     wait_for(call, require, lambda s: s["mode"] == "Edit" and not s["visible"], "Stop did not return to the scene view")
+    # The play-state events arrived on this connection between the responses.
+    states = [event["state"] for event in call.events if event.get("event") == "playState" and event.get("subscription") == subscription["subscription"]]
+    require(states == ["play", "stop"], f"streamed play-state events: {call.events}")
+    call("events.unsubscribe", {"subscription": subscription["subscription"]})
     call("entity.destroy", {"entity": camera})
     require(not call("editor.game_view")["hasCamera"], "a destroyed camera still counts as primary")
 

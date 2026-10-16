@@ -28,7 +28,8 @@ namespace Basalt {
 	//   function Player:OnLateUpdate(dt) end      -- after physics
 	//   function Player:OnDestroy() end
 	//   function Player:OnCollisionBegin(other, contact) end
-	//   function Player:OnCollisionEnd(other) end  -- likewise OnTriggerEnter, OnTriggerExit (no contact)
+	//   function Player:OnCollisionEnd(other, contact) end  -- likewise OnTriggerEnter/Exit; end and exit
+	//                                                       -- contacts may be nil (see ContactInfo)
 	//   function Player:OnJointBreak(other) end    -- other is the far body; nil for a joint to the world
 	//   function Player:OnGamepadConnected(index) end  -- also for gamepads connected before the instance started;
 	//                                                  -- likewise OnGamepadDisconnected

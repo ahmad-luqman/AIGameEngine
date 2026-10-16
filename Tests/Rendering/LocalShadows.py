@@ -9,12 +9,10 @@ import argparse
 import copy
 import json
 import math
-import os
 from pathlib import Path
 import re
 import struct
 import subprocess
-import sys
 import zlib
 
 
@@ -39,11 +37,7 @@ def check(condition, message):
 
 
 def run(command):
-    env = dict(os.environ)
-    # macOS needs this for Homebrew validation layers; SIP can strip an inherited DYLD variable.
-    if sys.platform == "darwin":
-        env.setdefault("DYLD_FALLBACK_LIBRARY_PATH", "/opt/homebrew/lib:/usr/local/lib")
-    result = subprocess.run(command, text=True, capture_output=True, env=env, timeout=60)
+    result = subprocess.run(command, text=True, capture_output=True, timeout=60)
     if result.returncode:
         raise RuntimeError(f"{' '.join(map(str, command))}\n{result.stdout}\n{result.stderr}")
     return result

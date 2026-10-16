@@ -79,7 +79,7 @@ namespace Basalt {
 
 	bool AutomationServer::Start(uint16_t port, RequestHandler handler, std::string& outError)
 	{
-		return StartWithFactory(port, [handler = std::move(handler)]() { return handler; }, outError);
+		return StartWithFactory(port, [handler = std::move(handler)]() { return ClientHandler{ handler, nullptr }; }, outError);
 	}
 
 	bool AutomationServer::StartWithFactory(uint16_t port, HandlerFactory factory, std::string& outError)
@@ -177,11 +177,17 @@ namespace Basalt {
 		}
 	}
 
-	void AutomationServer::ServeClient(intptr_t clientHandle, const RequestHandler& handler)
+	void AutomationServer::ServeClient(intptr_t clientHandle, const ClientHandler& handler)
 	{
 		const SocketHandle client = ToSocket(clientHandle);
 		std::string buffer;
 		char chunk[4096];
+		const auto sendPending = [&]() {
+			if (!handler.TakePending)
+				return true;
+			const std::string frames = handler.TakePending();
+			return frames.empty() || SendAll(client, frames);
+		};
 
 		while (!m_Stopping)
 		{
@@ -189,7 +195,11 @@ namespace Basalt {
 			if (ready < 0)
 				return;
 			if (ready == 0)
+			{
+				if (!sendPending())
+					return;
 				continue;
+			}
 
 			const auto received = recv(client, chunk, sizeof(chunk), 0);
 			if (received <= 0)
@@ -208,8 +218,10 @@ namespace Basalt {
 				buffer.erase(0, newline + 1);
 				if (!line.empty() && line.back() == '\r')
 					line.pop_back();
-				const std::string response = handler(line);
+				const std::string response = handler.OnRequest(line);
 				if (!response.empty() && !SendAll(client, response + "\n"))
+					return;
+				if (!sendPending())
 					return;
 			}
 			if (buffer.size() > MaxAutomationLineBytes)

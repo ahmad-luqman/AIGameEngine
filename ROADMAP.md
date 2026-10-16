@@ -132,8 +132,6 @@ order of impact.
   existing instances (keeping their fields), then call an optional `OnReload`. Also refresh the
   inspector's cached script properties when the file is saved (today they stay cached until restart).
   Saves a lot of iteration time, including for AI agents.
-- **Lua type definitions — S.** Generate `Docs/basalt.d.lua` (LuaLS `---@class` annotations) from the
-  bindings so editors and AI agents get completion and type checks. Add a ctest that keeps it in sync.
 
 ### Input
 
@@ -221,14 +219,9 @@ with a smoke test have shipped. Follow-ups:
 The specification asks for an editor that an AI agent can fully control. These items make that faster and
 more reliable.
 
-- **Event subscriptions — S.** `events.subscribe` on the TCP server to stream log lines, script errors,
-  play-state changes and collision events, instead of polling `log.get`.
-- **Scene diff and assertions — S.** `scene.diff` (between two saved scenes or snapshots) and
-  `assert.*` commands (`assert.entity_exists`, `assert.component`) so game tests read as specifications.
-- **Visual checks — S.** `render.compare` to compare a screenshot with a reference image and return a
-  similarity score. This reuses the golden-image code from P0.
 - **Marble Run sample — M.** A physics showcase (joints, trigger zones, particles, spatial audio,
-  UI components) built through the automation API, with a ctest gameplay test. Exercises most of P1.
+  UI components) built through the automation API, with a ctest gameplay test written as `assert.*`,
+  `events.poll` and `scene.diff` checks. Exercises most of P1.
 - **Tetris polish — S.** Line-clear particles and screen shake once particles exist.
 - **More samples — M each.** Breakout (physics + UI), a 3D platformer (character controller + camera +
   an animated character whose walk/run/jump go through the animation state machine, foot IK and root motion),
@@ -256,10 +249,6 @@ more reliable.
 
 ## Platform notes
 
-- **macOS validation layer path.** The Homebrew validation layer only loads with
-  `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib`. The engine could add `/opt/homebrew/lib` to the layer
-  search itself (or point `VK_ADD_LAYER_PATH` at a layer manifest with absolute library paths) when it
-  detects a Homebrew installation in non-Dist builds.
 - **Wayland.** GLFW 3.4 supports Wayland; test the editor under a Wayland session on Ubuntu 24.04 and
   document any issues (window decorations, cursor capture, clipboard).
 - **HDR output — L.** Use an HDR10 / scRGB swapchain where available (Windows, macOS EDR) with a

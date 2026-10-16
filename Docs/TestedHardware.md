@@ -61,8 +61,8 @@ Run all steps on each GPU. Steps 1–3 are automated; step 4 needs a person at t
   with GPU access (Amazon DCV, not plain RDP). Use AWS's GRID driver on NVIDIA instances (the default
   datacenter driver can leave the GPU in compute-only mode on Windows) and AMD's driver or Mesa RADV on
   `g4ad`. New accounts usually need a quota increase for "Running On-Demand G and VT instances".
-- **macOS:** Homebrew `molten-vk`, `vulkan-loader` and `vulkan-validationlayers`; run with
-  `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib` so the validation layer loads.
+- **macOS:** Homebrew `molten-vk`, `vulkan-loader` and `vulkan-validationlayers`; development builds load the
+  validation layer without extra environment variables.
 
 ## Results
 

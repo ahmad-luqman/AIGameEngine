@@ -5,9 +5,9 @@ description: Diagnose rendering problems in Basalt (black/inside-out/flipped ima
 
 # Debugging rendering
 
-1. **Reproduce with a screenshot** (macOS/Homebrew needs the dyld path for validation layers):
+1. **Reproduce with a screenshot** (validation layers load by themselves, Homebrew's included):
    ```bash
-   DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib build/bin/BasaltRuntime --project P --frames 30 \
+   build/bin/BasaltRuntime --project P --frames 30 \
        --screenshot /tmp/shot.png [--debug-view SSAO|Normals|Depth]
    ```
    Exit code 3 means GPU validation errors occurred: read the `[Vulkan]`/`[nvrhi]` log lines first.

@@ -19,6 +19,7 @@
 #include <iterator>
 #include <optional>
 #include <stdexcept>
+#include <type_traits>
 #include <unordered_set>
 #include <utility>
 
@@ -41,10 +42,12 @@ namespace Basalt {
 			std::vector<std::string>& GetFieldNames() { return m_FieldNames; }
 			std::map<std::string, std::vector<std::string>>& GetEnumOptions() { return m_EnumOptions; }
 			std::vector<std::string>& GetEntityFields() { return m_EntityFields; }
+			std::map<std::string, std::string>& GetFieldTypes() { return m_FieldTypes; }
 
 			template<typename T>
 			void Field(const char* name, T& value)
 			{
+				m_FieldTypes[name] = TypeName<T>();
 				const json* element = Find(name);
 				if (element)
 					Read(name, *element, value);
@@ -55,6 +58,7 @@ namespace Basalt {
 			void Field(const char* name, UUID& value)
 			{
 				m_EntityFields.emplace_back(name);
+				m_FieldTypes[name] = "entity";
 				const json* element = Find(name);
 				if (element)
 					Read(name, *element, value);
@@ -63,6 +67,7 @@ namespace Basalt {
 			// Rotation stored as Euler angles in degrees.
 			void RotationField(const char* name, glm::quat& value)
 			{
+				m_FieldTypes[name] = "number[3]";
 				const json* element = Find(name);
 				if (!element)
 					return;
@@ -74,6 +79,7 @@ namespace Basalt {
 			// Angle stored in degrees, held in radians.
 			void AngleField(const char* name, float& radiansValue)
 			{
+				m_FieldTypes[name] = "number";
 				const json* element = Find(name);
 				if (!element)
 					return;
@@ -86,6 +92,7 @@ namespace Basalt {
 			void EnumField(const char* name, E& value, const char* const (&names)[N])
 			{
 				m_EnumOptions[name] = std::vector<std::string>(std::begin(names), std::end(names));
+				m_FieldTypes[name] = "enum";
 				const json* element = Find(name);
 				if (element)
 					value = ReadEnum<E>(name, *element, names);
@@ -97,6 +104,7 @@ namespace Basalt {
 			void EnumArrayField(const char* name, std::array<E, Count>& value, const char* const (&names)[N])
 			{
 				m_EnumOptions[name] = std::vector<std::string>(std::begin(names), std::end(names));
+				m_FieldTypes[name] = "enum[" + std::to_string(Count) + "]";
 				const json* element = Find(name);
 				if (!element)
 					return;
@@ -140,6 +148,28 @@ namespace Basalt {
 			}
 
 		private:
+			// The JSON type a Read overload accepts (see ComponentInfo::FieldTypes).
+			template<typename T>
+			static std::string TypeName()
+			{
+				if constexpr (std::is_same_v<T, float>)
+					return "number";
+				else if constexpr (std::is_same_v<T, uint32_t>)
+					return "integer";
+				else if constexpr (std::is_same_v<T, bool>)
+					return "boolean";
+				else if constexpr (std::is_same_v<T, std::string>)
+					return "string";
+				else if constexpr (std::is_same_v<T, json>)
+					return "object";
+				else if constexpr (std::is_same_v<T, glm::vec2> || std::is_same_v<T, glm::vec3> || std::is_same_v<T, glm::vec4>)
+					return "number[" + std::to_string(T::length()) + "]";
+				else if constexpr (std::is_same_v<T, glm::bvec2> || std::is_same_v<T, glm::bvec3> || std::is_same_v<T, glm::bvec4>)
+					return "boolean[" + std::to_string(T::length()) + "]";
+				else
+					static_assert(sizeof(T) == 0, "add the field type to TypeName");
+			}
+
 			template<typename E, size_t N>
 			static E ReadEnum(const char* name, const json& element, const char* const (&names)[N])
 			{
@@ -240,6 +270,7 @@ namespace Basalt {
 			std::vector<std::string> m_FieldNames;
 			std::map<std::string, std::vector<std::string>> m_EnumOptions;
 			std::vector<std::string> m_EntityFields;
+			std::map<std::string, std::string> m_FieldTypes;
 		};
 
 		template<glm::length_t L>
@@ -1028,17 +1059,17 @@ namespace Basalt {
 			c.FixedAspectRatio = f.FixedAspectRatio;
 		}
 
+		// Fills the info's field names, types, enum options and entity fields from the component's field list.
 		template<typename T>
-		std::vector<std::string> CollectFieldNames(std::map<std::string, std::vector<std::string>>* outEnumOptions = nullptr, std::vector<std::string>* outEntityFields = nullptr)
+		void CollectFields(ComponentInfo& info)
 		{
 			FieldReader collector(nullptr);
 			T dummy{};
 			Fields(collector, dummy);
-			if (outEnumOptions)
-				*outEnumOptions = collector.GetEnumOptions();
-			if (outEntityFields)
-				*outEntityFields = collector.GetEntityFields();
-			return collector.GetFieldNames();
+			info.Fields = collector.GetFieldNames();
+			info.FieldTypes = collector.GetFieldTypes();
+			info.EnumOptions = collector.GetEnumOptions();
+			info.EntityFields = collector.GetEntityFields();
 		}
 
 		// Rewrites a component's entity references through its JSON form, so every component with UUID
@@ -1148,7 +1179,7 @@ namespace Basalt {
 			ComponentInfo info;
 			info.Name = name;
 			info.IsCore = isCore;
-			info.Fields = CollectFieldNames<T>(&info.EnumOptions, &info.EntityFields);
+			CollectFields<T>(info);
 			info.Has = [](Entity entity) { return entity.HasComponent<T>(); };
 			info.Add = [](Entity entity) {
 				if (!entity.HasComponent<T>())
@@ -1197,7 +1228,7 @@ namespace Basalt {
 		{
 			ComponentInfo info;
 			info.Name = "Camera";
-			info.Fields = CollectFieldNames<CameraFields>(&info.EnumOptions);
+			CollectFields<CameraFields>(info);
 			info.Has = [](Entity entity) { return entity.HasComponent<CameraComponent>(); };
 			info.Add = [](Entity entity) {
 				if (!entity.HasComponent<CameraComponent>())

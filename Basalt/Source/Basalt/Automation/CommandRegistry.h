@@ -65,7 +65,7 @@ namespace Basalt {
 	};
 
 	// Registers every engine command (project, scene, entity, component, prefab, asset, script, play,
-	// input, log). Defined in BuiltinCommands.cpp.
+	// input, render, log, assertions, events). Defined in BuiltinCommands.cpp.
 	void RegisterBuiltinCommands(CommandRegistry& registry);
 
 }

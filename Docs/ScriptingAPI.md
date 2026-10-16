@@ -5,6 +5,13 @@ Gameplay code is written in Lua 5.4. A script is attached to an entity with a `S
 calls every function on this page (checking its effect wherever it can be observed headlessly) and is the
 best executable reference.
 
+**Editor support.** [`basalt.d.lua`](basalt.d.lua) declares the whole API (and every component's fields) for
+[lua-language-server](https://luals.github.io/): completion, hover docs and type checks in VS Code, Neovim and other
+editors. The repository's `.luarc.json` loads it; in a game project add the file to `workspace.library` and annotate a
+script class with `---@class Player: BasaltScript` (new scripts from the editor's content browser start that way). The
+`LuaTypeDefinitions` unit test fails when a binding is added without a declaration, and `scripts/generate_docs.py`
+regenerates the component section.
+
 ## Script structure
 
 A script file returns a *class* table. Every entity using the script gets its own instance (`self`).
@@ -76,7 +83,7 @@ return Player
 `Quat.LookRotation(forward [, up])`, `Quat.Slerp(a, b, t)`.
 
 `Math.Pi`, `Math.Radians(deg)`, `Math.Degrees(rad)`, `Math.Clamp(v, min, max)`, `Math.Lerp(a, b, t)`,
-`Math.Sign(v)`, `Math.Seed(n)`, `Math.Random()` (0..1), `Math.Random(min, max)`, `Math.RandomInt(min, max)`.
+`Math.Sign(v)`, `Math.Seed(n)`, `Math.Random()` (in [0, 1)), `Math.Random(min, max)`, `Math.RandomInt(min, max)`.
 Random numbers are deterministic: each play session starts from the project's `RandomSeed`
 (`project.set randomSeed`, applied from the next play; `project.info` shows it, by default 9067031) and
 produces the same sequence on every platform. Lua's `math.random`/`math.randomseed` use the same generator

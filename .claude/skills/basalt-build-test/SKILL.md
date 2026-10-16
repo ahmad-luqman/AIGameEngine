@@ -10,7 +10,7 @@ description: Build Basalt, run its unit tests and format check, and verify rende
    - Filter unit tests: `./build/bin/BasaltTests -tc="*Scene*"`; list them: `--list-test-cases`.
 3. If the change touches rendering, the editor, or the runtime, launch it with validation:
    ```bash
-   DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib ./build/bin/BasaltRuntime   # macOS/Homebrew
+   ./build/bin/BasaltRuntime   # macOS/Homebrew: the engine finds Homebrew's layer itself
    ```
    The log must contain `validation enabled` and no `[Vulkan]` / `[nvrhi]` error lines.
 4. Release build sanity check for larger changes: `scripts/build.sh Release`.

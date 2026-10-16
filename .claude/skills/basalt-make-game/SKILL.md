@@ -90,13 +90,33 @@ check every response.
 `play.step` reports `scriptErrors` (with file:line). Expose game state as script fields so `lua.exec`
 can assert on it. Play mode runs on a copy; the saved scene is never modified by playing.
 
+Write gameplay checks as assertions, so a batch reads as the game's specification and fails with the reason:
+```json
+[
+  {"command": "events.subscribe", "params": {"types": ["collision", "scriptError", "playState"]}},
+  {"command": "scene.snapshot", "params": {"name": "start"}},
+  {"command": "play.start"},
+  {"command": "play.step", "params": {"frames": 120, "assertNoErrors": true}},
+  {"command": "assert.entity_exists", "params": {"entity": "Enemy", "count": 3}},
+  {"command": "assert.component", "params": {"entity": "Ball", "component": "Transform", "fields": {"Translation": [0, 0.5, 0]}, "tolerance": 0.01}},
+  {"command": "events.poll", "params": {"subscription": 1, "assertTypes": ["collision"]}},
+  {"command": "scene.diff", "params": {"from": "start", "tolerance": 0.001}}
+]
+```
+`scene.diff` lists exactly what playing changed (entities added/removed, fields with before and after); add
+`"expectError": "assertion failed"` to a request that must fail. Subscription IDs start at 1 in each CLI run.
+Editor scripts get completion and type checks from `Docs/basalt.d.lua` (lua-language-server).
+
 ## 5. Look at it
 
 - `build/bin/BasaltRuntime --project P --frames 60 --screenshot shot.png` renders the start scene after
-  60 frames (macOS/Homebrew: prefix `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib`). Read the PNG to check.
+  60 frames. Read the PNG to check.
 - In a running editor (`build/bin/BasaltEditor --project P`), send the same commands over TCP
   (`echo '{"command":"..."}' | nc 127.0.0.1 7420`) plus `editor.screenshot` (editor camera),
-  `editor.window_screenshot` (whole UI), `editor.camera`, `editor.select`, `render.screenshot`.
+  `editor.window_screenshot` (whole UI), `editor.camera`, `editor.select`, `render.screenshot`, and
+  `render.compare {"reference": "Golden/Level1.png"}` (render and compare, with a `similarity` score). An
+  `events.subscribe` on that connection streams log lines, script errors, play-state changes and collisions as
+  extra lines (with an `event` key, no `ok`) instead of polling `log.get`.
 
 ## 6. Ship it
 

@@ -4,8 +4,10 @@
 
 #include <spdlog/spdlog.h>
 
+#include <functional>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace Basalt {
@@ -33,8 +35,17 @@ namespace Basalt {
 	public:
 		explicit LogHistory(size_t capacity = 2048);
 
+		using Listener = std::function<void(const LogMessage& message)>;
+
 		void Push(LogMessage message);
 		void Clear();
+
+		// Calls the listener with every message pushed from now on, on the pushing thread (any thread, possibly
+		// several at once). A listener must not log: that would re-enter Push and deadlock. Returns the ID for
+		// RemoveListener.
+		uint64_t AddListener(Listener listener);
+		// When this returns, no call of the listener is running or will start.
+		void RemoveListener(uint64_t id);
 
 		// Returns every message with an index >= sinceIndex, plus the index to pass next time.
 		std::vector<LogMessage> GetMessagesSince(uint64_t sinceIndex, uint64_t& outNextIndex) const;
@@ -49,6 +60,10 @@ namespace Basalt {
 		size_t m_Head = 0;
 		uint64_t m_TotalCount = 0;
 		size_t m_ErrorCount = 0;
+		// Separate from m_Mutex so listeners can run without blocking readers of the history.
+		std::mutex m_ListenerMutex;
+		std::vector<std::pair<uint64_t, Listener>> m_Listeners;
+		uint64_t m_NextListenerId = 1;
 	};
 
 	// Engine-wide logging (spdlog). Messages go to the console, an optional file, and LogHistory.

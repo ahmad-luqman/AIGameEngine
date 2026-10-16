@@ -63,6 +63,10 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   `basalt` CLI (headless) and the editor's TCP server (127.0.0.1:7420, adds
   `editor.*` commands and screenshots). Docs: Docs/AutomationCommands.md (generated), Docs/MCP.md (agent setup/protocol). CommandInfo declares
   InputSchema: validation, help and MCP tool definitions share it; editor TCP clients can use MCP too.
+  `AutomationEventHub` (owned by the session, thread-safe) feeds `events.*`: the session's `SceneEventListener` on the
+  play copy reports contacts and script errors, a `LogHistory` listener log lines; legacy TCP connections stream
+  their subscriptions (`AutomationServer::ClientHandler::TakePending`). Agent checks: `scene.snapshot`/`scene.diff`
+  (`Scene/SceneDiff`), `assert.*`, `render.compare`.
 - **Headless core.** Everything except Renderer/ImGui/Window runs without a GPU; unit tests, the CLI and
   the feature test rely on that.
 
@@ -94,9 +98,9 @@ scripts/test.sh             # build + ctest (unit tests, format check, ...)
   untrusted input (`scripts/fuzz.sh`, `Tests/Fuzz/`; nightly long runs). Parse untrusted JSON with
   `ParseJson` and read floats with `JsonToFloat` (`Basalt/Core/JsonUtils.h`). Tests carry ctest labels
   (`unit`, `integration`, `gpu`, `format`) for `ctest -L/-LE`. Details: the basalt-build-test skill.
-- **macOS + Homebrew:** the Vulkan validation layer only loads when
-  `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib` is set. Without it the engine logs a warning and runs
-  without validation. Always set it when testing rendering changes.
+- **macOS + Homebrew:** Homebrew's validation layer manifest names its library without a path, so non-Dist
+  builds point `VK_ADD_LAYER_PATH` at a copy with the absolute path (`Renderer/ValidationLayerManifest`); no
+  `DYLD_FALLBACK_LIBRARY_PATH` is needed. Check the log for `validation enabled` when testing rendering changes.
 
 ## Code style (Hazel conventions)
 
@@ -185,9 +189,11 @@ Other rules:
 ## Documentation
 
 - Rendering: `Docs/Rendering.md` (clustered lighting, FSR 1 settings, diagnostics and GPU tests).
-- Lua API: `Docs/ScriptingAPI.md` (update with every binding change).
-- `Docs/AutomationCommands.md` and `Docs/Components.md` are generated: run
-  `python3 scripts/generate_docs.py` after changing commands or components.
+- Lua API: `Docs/ScriptingAPI.md` and the LuaLS definitions `Docs/basalt.d.lua` (update both with every binding change;
+  the `LuaTypeDefinitions` test checks the definitions).
+- `Docs/AutomationCommands.md`, `Docs/Components.md` and the component section of `Docs/basalt.d.lua` are
+  generated: run `python3 scripts/generate_docs.py` after changing commands or components (the `GeneratedDocs`
+  ctest fails while they are stale).
 - Skills in `.claude/skills/`: build/test, code review, make-game (AI workflow), add-component,
   debug-rendering.
 - `ROADMAP.md`: prioritized list of missing features and verification work. Remove an item when it ships.
