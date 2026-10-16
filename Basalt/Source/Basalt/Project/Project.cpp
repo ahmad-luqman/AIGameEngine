@@ -7,6 +7,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <sstream>
 #include <system_error>
 
 namespace Basalt {
@@ -53,7 +54,18 @@ namespace Basalt {
 			return nullptr;
 		}
 		std::string ignore = existing.value_or("");
-		if (("\n" + ignore).find("\nCache/") == std::string::npos)
+		const auto ignoresCache = [](const std::string& text) {
+			std::istringstream lines(text);
+			for (std::string line; std::getline(lines, line);)
+			{
+				if (!line.empty() && line.back() == '\r')
+					line.pop_back();
+				if (line == "Cache/" || line == "Cache" || line == "/Cache/" || line == "/Cache")
+					return true;
+			}
+			return false;
+		};
+		if (!ignoresCache(ignore))
 		{
 			if (!ignore.empty() && ignore.back() != '\n')
 				ignore += '\n';

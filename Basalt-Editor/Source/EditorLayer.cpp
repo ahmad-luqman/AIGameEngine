@@ -18,6 +18,7 @@
 #include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/DebugDraw.h"
 #include "Basalt/Renderer/GraphicsDevice.h"
+#include "Basalt/Renderer/RenderMath.h"
 #include "Basalt/Renderer/RenderUtils.h"
 #include "Basalt/Scene/ComponentRegistry.h"
 #include "Basalt/Scene/Entity.h"
@@ -80,6 +81,9 @@ namespace Basalt {
 		const glm::vec4 s_CameraColor(0.7f, 0.7f, 1.0f, 0.8f);
 
 		// Viewports and captures use the Play preferences or, outside Play, the project defaults.
+		// The Game view renders at the project's window size: every allowed size must be a valid render target.
+		static_assert(ProjectConfig::MaxWindowSize <= MaxRenderTargetSize);
+
 		// Sets the scene's debug view for one render and restores the previous one afterwards, even on an early return.
 		class ScopedDebugView
 		{
@@ -536,7 +540,7 @@ namespace Basalt {
 								 if (!m_GameView.Apply(params, error))
 									 throw CommandError(error);
 								 if (params.value("focus", false))
-									 m_PendingFocus.emplace_back("Game");
+									 m_PendingFocus.emplace_back(EditorCommandSchemas::GameTitle);
 								 nlohmann::json result = GetGameViewState();
 								 if (const auto path = params.find("path"); path != params.end())
 								 {
@@ -847,10 +851,10 @@ namespace Basalt {
 			if (running)
 			{
 				m_ReturnToViewport = m_ViewportVisible;
-				m_PendingFocus.emplace_back("Game");
+				m_PendingFocus.emplace_back(EditorCommandSchemas::GameTitle);
 			}
 			else if (m_ReturnToViewport)
-				m_PendingFocus.emplace_back("Viewport");
+				m_PendingFocus.emplace_back(EditorCommandSchemas::ViewportTitle);
 			m_GameWasRunning = running;
 		}
 
@@ -1216,7 +1220,7 @@ namespace Basalt {
 		m_ContentBrowserPanel.OnImGuiRender();
 		m_ConsolePanel.OnImGuiRender();
 		DrawSceneSettingsPanel();
-		DockNextToOnFirstUse(EditorCommandSchemas::ProjectSettingsTitle, "Inspector");
+		DockNextToOnFirstUse(EditorCommandSchemas::ProjectSettingsTitle, EditorCommandSchemas::InspectorTitle);
 		m_ProjectSettingsPanel.OnImGuiRender(m_ProjectSettingsOpen);
 		DrawStatusBar();
 		DrawModals();
@@ -1256,16 +1260,16 @@ namespace Basalt {
 		ImGuiID rightBottom = 0;
 		const ImGuiID rightTop = ImGui::DockBuilderSplitNode(right, ImGuiDir_Up, 0.6f, nullptr, &rightBottom);
 
-		ImGui::DockBuilderDockWindow("Hierarchy", left);
-		ImGui::DockBuilderDockWindow("Inspector", rightTop);
-		ImGui::DockBuilderDockWindow("Scene", rightBottom);
-		ImGui::DockBuilderDockWindow("Content Browser", bottom);
-		ImGui::DockBuilderDockWindow("Console", bottom);
-		ImGui::DockBuilderDockWindow("Game", center);
+		ImGui::DockBuilderDockWindow(EditorCommandSchemas::HierarchyTitle, left);
+		ImGui::DockBuilderDockWindow(EditorCommandSchemas::InspectorTitle, rightTop);
+		ImGui::DockBuilderDockWindow(EditorCommandSchemas::SceneTitle, rightBottom);
+		ImGui::DockBuilderDockWindow(EditorCommandSchemas::ContentBrowserTitle, bottom);
+		ImGui::DockBuilderDockWindow(EditorCommandSchemas::ConsoleTitle, bottom);
+		ImGui::DockBuilderDockWindow(EditorCommandSchemas::GameTitle, center);
 		// Docked last and focused, so the scene view starts in front.
-		ImGui::DockBuilderDockWindow("Viewport", center);
+		ImGui::DockBuilderDockWindow(EditorCommandSchemas::ViewportTitle, center);
 		ImGui::DockBuilderFinish(dockspaceId);
-		m_PendingFocus.emplace_back("Viewport");
+		m_PendingFocus.emplace_back(EditorCommandSchemas::ViewportTitle);
 	}
 
 	void EditorLayer::DrawMenuBar()
@@ -1502,7 +1506,7 @@ namespace Basalt {
 	void EditorLayer::DrawViewport()
 	{
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-		m_ViewportVisible = ImGui::Begin("Viewport");
+		m_ViewportVisible = ImGui::Begin(EditorCommandSchemas::ViewportTitle);
 		if (!m_ViewportVisible)
 		{
 			// Behind the Game tab (or collapsed): end any drag, keep the last size for picking.
@@ -1733,10 +1737,10 @@ namespace Basalt {
 	void EditorLayer::DrawGameView()
 	{
 		// A new Game tab joins the scene view's dock node, behind it.
-		if (DockNextToOnFirstUse("Game", "Viewport"))
-			m_PendingFocus.emplace_back("Viewport");
+		if (DockNextToOnFirstUse(EditorCommandSchemas::GameTitle, EditorCommandSchemas::ViewportTitle))
+			m_PendingFocus.emplace_back(EditorCommandSchemas::ViewportTitle);
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-		m_GameViewVisible = ImGui::Begin("Game");
+		m_GameViewVisible = ImGui::Begin(EditorCommandSchemas::GameTitle);
 		m_GameViewHovered = false;
 		m_GameViewFocused = m_GameViewVisible && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
 		if (m_GameViewVisible)
@@ -1776,8 +1780,11 @@ namespace Basalt {
 				case GameViewStatus::RenderFailed:
 					message = "Rendering failed. See Console.";
 					break;
-				case GameViewStatus::NotRendered:
 				case GameViewStatus::Rendered:
+					if (!m_GameRenderer->GetOutputTexture())
+						message = "The renderer produced no image. See Console.";
+					break;
+				case GameViewStatus::NotRendered:
 					break;
 			}
 			if (message)
@@ -1947,7 +1954,7 @@ namespace Basalt {
 
 	void EditorLayer::DrawSceneSettingsPanel()
 	{
-		ImGui::Begin("Scene");
+		ImGui::Begin(EditorCommandSchemas::SceneTitle);
 		Scene& scene = *m_Session.GetScene();
 		const nlohmann::json state = SceneSerializer::SerializeScene(scene);
 

@@ -63,6 +63,11 @@ def check_thumbnails(call, require, output, project):
     Path(project, "Assets/Scripts/Note.lua").write_text("return {}\n")
     call("editor.thumbnail", {"path": "Assets/Scripts/Note.lua"}, error="has no preview")
     call("editor.thumbnail", {"path": "Assets/Missing.png"}, error="the file is missing")
+    for outside in ("Assets/../Project.bproject.png", "../Outside.png", "Checker.png"):
+        call("editor.thumbnail", {"path": outside}, error="is not inside Assets/")
+    # A file with an image extension that is not an image fails with the decoder's reason, and is not cached.
+    Path(project, "Assets/Broken.png").write_bytes(b"not a png")
+    call("editor.thumbnail", {"path": "Assets/Broken.png"}, error="Broken.png")
 
     # The inspector's material sphere.
     call("scene.new", {"empty": True})

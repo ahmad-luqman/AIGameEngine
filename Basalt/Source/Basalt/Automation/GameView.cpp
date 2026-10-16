@@ -14,7 +14,6 @@ namespace Basalt {
 		const glm::vec2 gameSize(static_cast<float>(game.x), static_cast<float>(game.y));
 		const float scale = std::min(panel.x / gameSize.x, panel.y / gameSize.y);
 		GameViewRect rect;
-		rect.Scale = scale;
 		rect.Size = gameSize * scale;
 		rect.Origin = (panel - rect.Size) * 0.5f;
 		return rect;

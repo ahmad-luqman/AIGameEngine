@@ -25,6 +25,9 @@ namespace Basalt {
 		std::chrono::milliseconds Timeout{ 60000 };
 		// Combined stdout/stderr beyond this keeps only its last bytes (the end of a log explains a failure).
 		size_t MaxOutputBytes = size_t{ 64 } * 1024;
+		// The output goes to a temporary file while the child runs; a child that writes more than this is stopped
+		// (OutputLimit), so a runaway log cannot fill the disk before the timeout.
+		uint64_t MaxOutputFileBytes = uint64_t{ 256 } * 1024 * 1024;
 	};
 
 	enum class ProcessOutcome : uint8_t
@@ -40,7 +43,9 @@ namespace Basalt {
 		// status could not be read. Error says which; ExitCode is meaningless.
 		Failed,
 		// The child was killed after Timeout; ExitCode is meaningless.
-		TimedOut
+		TimedOut,
+		// The child was killed for writing more than MaxOutputFileBytes; ExitCode is meaningless.
+		OutputLimit
 	};
 
 	// How a RunProcess child ended, with its output.
@@ -61,7 +66,8 @@ namespace Basalt {
 	// ends. Used by tools that check a build (the export smoke test). The child inherits the environment (plus
 	// spec.Environment) but no other open files or handles (POSIX closes descriptors up to 65536): its stdin is
 	// the null device and stdout/stderr go to a temporary file rather than a pipe, so a chatty child can never
-	// block on a full pipe while the caller waits for it to exit. Never throws.
+	// block on a full pipe while the caller waits for it to exit (the file is bounded by MaxOutputFileBytes).
+	// Never throws.
 	ProcessResult RunProcess(const ProcessSpec& spec);
 
 }

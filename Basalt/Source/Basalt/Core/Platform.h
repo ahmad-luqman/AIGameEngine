@@ -6,13 +6,14 @@
 
 namespace Basalt::Platform {
 
-	// Value of an environment variable, or nullopt if it is not set.
+	// Value of an environment variable, or nullopt if it is not set. Names and values are UTF-8 on every platform
+	// (Windows reads and writes the wide environment, which child processes inherit).
 	std::optional<std::string> GetEnvVar(const char* name);
 	// Sets the variable only if it is not already set. Returns false on failure.
 	bool SetEnvVarIfUnset(const char* name, const std::string& value);
 
-	// Sets (or with UnsetEnvVar removes) a variable for this process. Returns false on failure. On Windows an
-	// empty value removes the variable.
+	// Sets (or with UnsetEnvVar removes) a variable for this process. Returns false on failure (including text that
+	// is not valid UTF-8 on Windows). On Windows an empty value removes the variable.
 	bool SetEnvVar(const char* name, const std::string& value);
 	bool UnsetEnvVar(const char* name);
 

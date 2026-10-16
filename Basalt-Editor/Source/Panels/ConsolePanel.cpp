@@ -1,5 +1,6 @@
 #include "Panels/ConsolePanel.h"
 
+#include "Basalt/Automation/EditorCommandSchemas.h"
 #include "Basalt/Core/Log.h"
 
 #include <imgui.h>
@@ -9,7 +10,7 @@ namespace Basalt {
 
 	void ConsolePanel::OnImGuiRender()
 	{
-		ImGui::Begin("Console");
+		ImGui::Begin(EditorCommandSchemas::ConsoleTitle);
 		if (ImGui::Button("Clear"))
 			m_ClearedAt = Log::GetHistory().GetTotalCount();
 		ImGui::SameLine();

@@ -13,11 +13,9 @@ namespace Basalt {
 	// Where the Game view shows its image inside the panel.
 	struct GameViewRect
 	{
-		// Top-left corner, relative to the panel's content origin, in screen units.
+		// Top-left corner, relative to the panel's content origin, in logical (ImGui) units, as is Size.
 		glm::vec2 Origin{ 0.0f };
 		glm::vec2 Size{ 0.0f };
-		// Screen units per game pixel (below 1 when the panel is smaller than the game resolution).
-		float Scale = 0.0f;
 	};
 
 	// The largest rectangle with the game's aspect ratio that fits the panel, centred (bars fill the rest).
@@ -42,9 +40,9 @@ namespace Basalt {
 
 		glm::uvec2 Resolve(const ProjectConfig* project) const;
 		const std::optional<glm::uvec2>& GetOverride() const { return m_Override; }
-		void SetOverride(std::optional<glm::uvec2> resolution) { m_Override = resolution; }
 
 	private:
+		// Only Apply sets it, so it is always within [MinResolution, MaxResolution].
 		std::optional<glm::uvec2> m_Override;
 	};
 

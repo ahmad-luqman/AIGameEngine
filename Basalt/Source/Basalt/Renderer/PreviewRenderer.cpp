@@ -2,6 +2,7 @@
 
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Asset/MeshSource.h"
+#include "Basalt/Core/Log.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/DebugDraw.h"
 #include "Basalt/Renderer/SceneRenderer.h"
@@ -141,6 +142,9 @@ namespace Basalt {
 			outError = problem.empty() ? "nothing to show (no meshes)" : "nothing to show: " + problem;
 			return std::nullopt;
 		}
+		// Some meshes drew: the preview is still useful, but say why it may look incomplete.
+		if (!problem.empty())
+			BS_CORE_WARN("Preview: part of the scene is missing: {}", problem);
 		// The bounding sphere (half the box diagonal) fills the view; the floor keeps a point-sized model from giving
 		// a zero distance.
 		const float radius = std::max(glm::length(bounds.GetExtents()), 1e-3f);

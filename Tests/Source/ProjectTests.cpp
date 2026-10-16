@@ -346,6 +346,14 @@ TEST_SUITE("Project")
 		// The scene's own value wins.
 		scene.GetPhysicsSettings().FixedTimestep = 0.005f;
 		CHECK(scene.GetFixedTimestep() == 0.005f);
+		// Values loading and scene.settings refuse (set from C++) follow the project instead.
+		for (const float invalid : { std::numeric_limits<float>::quiet_NaN(), 0.5f, -1.0f })
+		{
+			scene.GetPhysicsSettings().FixedTimestep = invalid;
+			CHECK_FALSE(scene.GetPhysicsSettings().HasFixedTimestepOverride());
+			CHECK(scene.GetFixedTimestep() == 0.02f);
+		}
+		scene.GetPhysicsSettings().FixedTimestep = 0.0f;
 
 		// The project file keeps it; bad values are rejected on load.
 		std::string error;
@@ -674,7 +682,7 @@ TEST_SUITE("Project")
 		const std::filesystem::path game = FileSystem::GetExecutableDirectory() / "BasaltTests";
 #endif
 		const SmokeTestResult result = RunSmokeTest(game, 10, std::chrono::seconds(30));
-		CHECK_FALSE(result.Passed);
+		CHECK_FALSE(result.Passed());
 		CHECK(result.Process.Outcome == ProcessOutcome::Crashed);
 		CHECK(result.Summary.rfind("the game crashed: ", 0) == 0);
 		CHECK(result.Process.Output.find("playing") != std::string::npos);
@@ -685,7 +693,7 @@ TEST_SUITE("Project")
 		CHECK(report["outcome"] == "crashed");
 		CHECK_FALSE(report["exitCode"].is_null());
 		CHECK(report["passed"] == false);
-		CHECK_FALSE(RunSmokeTest(game, 0, std::chrono::seconds(30)).Passed);
+		CHECK_FALSE(RunSmokeTest(game, 0, std::chrono::seconds(30)).Passed());
 	}
 
 	TEST_CASE("LastLines keeps the end of a log")

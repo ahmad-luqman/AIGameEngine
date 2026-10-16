@@ -68,6 +68,10 @@ namespace Basalt {
 			m_Validation.reset();
 			m_Warnings.clear();
 			m_Rename.reset();
+			m_Edit = {};
+			m_EditingName = false;
+			m_NameBuffer.clear();
+			m_NewLayerName.clear();
 		}
 		// Project settings are not scene state, so they are saved at once and stay out of scene undo history.
 		ImGui::TextDisabled("Saved to %s as you edit (not undoable).", Project::FileName);

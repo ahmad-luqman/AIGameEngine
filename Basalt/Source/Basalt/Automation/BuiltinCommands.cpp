@@ -148,10 +148,13 @@ namespace Basalt {
 				case ProcessOutcome::TimedOut:
 					outcome = "timedOut";
 					break;
+				case ProcessOutcome::OutputLimit:
+					outcome = "outputLimit";
+					break;
 				case ProcessOutcome::Failed:
 					break;
 			}
-			return { { "passed", result.Passed }, { "outcome", outcome }, { "exitCode", exitCode }, { "summary", result.Summary }, { "log", LastLines(result.Process.Output, LogLines) } };
+			return { { "passed", result.Passed() }, { "outcome", outcome }, { "exitCode", exitCode }, { "summary", result.Summary }, { "log", LastLines(result.Process.Output, LogLines) } };
 		}
 
 		constexpr int64_t DefaultSmokeTestFrames = 120;
@@ -617,7 +620,7 @@ namespace Basalt {
 				return result;
 			});
 
-			Add(registry, "project.validate", "Checks that the project would export and start: settings, start scene, every scene and prefab (loads; referenced asset files exist inside Assets/ with the exact letter case; a bare file name without a folder only warns), every Lua script (compiles) and the scripts Script components use (load as script classes). Returns {valid, errors, warnings, omitted, issues: [{severity, file, message}]}.", Schema::Object({ { "assertValid", Schema::Nullable(Schema::Boolean("bool: fail the command when there is an error-severity issue")) } }), [](AutomationSession&, const json& params) {
+			Add(registry, "project.validate", "Checks that the project would export and start: settings, start scene, every scene and prefab (loads; referenced asset files exist inside Assets/ with the exact letter case; path fields must name files inside Assets/ with forward slashes; other component text naming a missing Assets/ file is a warning), every Lua script (compiles) and the scripts Script components use (load as script classes). Returns {valid, errors, warnings, omitted, issues: [{severity, file, message}]}.", Schema::Object({ { "assertValid", Schema::Nullable(Schema::Boolean("bool: fail the command when there is an error-severity issue")) } }), [](AutomationSession&, const json& params) {
 				const ValidationReport report = ValidateProject(*RequireProject());
 				if (OptionalBool(params, "assertValid", false) && !report.IsValid())
 					throw CommandError(DescribeValidationErrors(report));
@@ -643,25 +646,29 @@ namespace Basalt {
 				ExportResult result = Exporter::Export(*project, RequireString(params, "output"));
 				if (!result.Success)
 					throw CommandError(result.Error);
-				json response{ { "executable", result.ExecutablePath.string() }, { "files", result.FileCount }, { "validation", validation } };
+				json response{ { "executable", FileSystem::PathToUtf8(result.ExecutablePath) }, { "files", result.FileCount }, { "validation", validation } };
 				if (smokeFrames > 0)
 				{
 					const SmokeTestResult smoke = RunSmokeTest(result.ExecutablePath, static_cast<uint32_t>(smokeFrames), SecondsToMilliseconds(smokeSeconds));
-					if (!smoke.Passed)
-						throw CommandError("exported to '" + result.ExecutablePath.parent_path().string() + "', but the " + SmokeTestFailure(smoke));
+					if (!smoke.Passed())
+						throw CommandError("exported to '" + FileSystem::PathToUtf8(result.ExecutablePath.parent_path()) + "', but the " + SmokeTestFailure(smoke));
 					response["smokeTest"] = SmokeTestJson(smoke);
 				}
 				return response;
 			});
 
-			Add(registry, "project.smoke_test", "Runs an exported game headless (no GPU needed) for up to N frames at the runtime's fixed 1/60 s step and reports whether it exited cleanly: exit code 0 and no script errors within the timeout. Returns {passed, outcome: exited|crashed|timedOut|failed, exitCode (null unless it exited or crashed), summary, log}.", Schema::Object({ { "executable", Schema::String("string, the exported game's executable (project.export's executable)", true) }, { "frames", Schema::Nullable(Schema::Integer("integer (default 120)", 1, MaxSmokeTestFrames)) }, { "timeout", Schema::Nullable(Schema::Number("number of seconds (default 60)", 1, MaxSmokeTestSeconds)) }, { "assertPassed", Schema::Nullable(Schema::Boolean("bool: fail the command when the smoke test fails")) } }, { "executable" }), [](AutomationSession&, const json& params) {
-				const std::filesystem::path executable = RequireString(params, "executable");
+			Add(registry, "project.smoke_test", "Runs an exported game headless (no GPU needed) for up to N frames at the runtime's fixed 1/60 s step and reports whether it exited cleanly: exit code 0 and no script errors within the timeout. Returns {passed, outcome: exited|crashed|timedOut|outputLimit (stopped after 256 MiB of output)|failed, exitCode (null unless it exited or crashed), summary, log}.", Schema::Object({ { "executable", Schema::String("string, the exported game's executable (project.export's executable); a relative path is relative to the current working directory", true) }, { "frames", Schema::Nullable(Schema::Integer("integer (default 120)", 1, MaxSmokeTestFrames)) }, { "timeout", Schema::Nullable(Schema::Number("number of seconds (default 60)", 1, MaxSmokeTestSeconds)) }, { "assertPassed", Schema::Nullable(Schema::Boolean("bool: fail the command when the smoke test fails")) } }, { "executable" }), [](AutomationSession&, const json& params) {
+				// Relative paths resolve against the working directory of the process running the command.
+				const std::filesystem::path executable = FileSystem::PathFromUtf8(RequireString(params, "executable"));
 				std::error_code error;
-				if (!std::filesystem::is_regular_file(executable, error))
-					throw CommandError("no executable at '" + executable.string() + "'");
+				const bool isFile = std::filesystem::is_regular_file(executable, error);
+				if (error && error != std::errc::no_such_file_or_directory)
+					throw CommandError("cannot check '" + FileSystem::PathToUtf8(executable) + "': " + error.message());
+				if (!isFile)
+					throw CommandError("no executable at '" + FileSystem::PathToUtf8(executable) + "'");
 				const auto frames = static_cast<uint32_t>(OptionalInteger(params, "frames", DefaultSmokeTestFrames, 1, MaxSmokeTestFrames));
 				const SmokeTestResult smoke = RunSmokeTest(executable, frames, SecondsToMilliseconds(OptionalNumber(params, "timeout", DefaultSmokeTestSeconds, 1, MaxSmokeTestSeconds)));
-				if (OptionalBool(params, "assertPassed", false) && !smoke.Passed)
+				if (OptionalBool(params, "assertPassed", false) && !smoke.Passed())
 					throw CommandError(SmokeTestFailure(smoke));
 				return SmokeTestJson(smoke);
 			});

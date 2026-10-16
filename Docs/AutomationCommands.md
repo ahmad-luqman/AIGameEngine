@@ -1752,12 +1752,12 @@ Changes project settings and saves the project file.
 
 ### `project.smoke_test`
 
-Runs an exported game headless (no GPU needed) for up to N frames at the runtime's fixed 1/60 s step and reports whether it exited cleanly: exit code 0 and no script errors within the timeout. Returns {passed, outcome: exited|crashed|timedOut|failed, exitCode (null unless it exited or crashed), summary, log}.
+Runs an exported game headless (no GPU needed) for up to N frames at the runtime's fixed 1/60 s step and reports whether it exited cleanly: exit code 0 and no script errors within the timeout. Returns {passed, outcome: exited|crashed|timedOut|outputLimit (stopped after 256 MiB of output)|failed, exitCode (null unless it exited or crashed), summary, log}.
 
 | Parameter | Type / description |
 |-----------|--------------------|
 | `assertPassed` | bool: fail the command when the smoke test fails |
-| `executable` | string, the exported game's executable (project.export's executable) |
+| `executable` | string, the exported game's executable (project.export's executable); a relative path is relative to the current working directory |
 | `frames` | integer (default 120) |
 | `timeout` | number of seconds (default 60) |
 
@@ -1780,7 +1780,7 @@ Runs an exported game headless (no GPU needed) for up to N frames at the runtime
       "description": "bool: fail the command when the smoke test fails"
     },
     "executable": {
-      "description": "string, the exported game's executable (project.export's executable)",
+      "description": "string, the exported game's executable (project.export's executable); a relative path is relative to the current working directory",
       "minLength": 1,
       "type": "string"
     },
@@ -1824,7 +1824,7 @@ Runs an exported game headless (no GPU needed) for up to N frames at the runtime
 
 ### `project.validate`
 
-Checks that the project would export and start: settings, start scene, every scene and prefab (loads; referenced asset files exist inside Assets/ with the exact letter case; a bare file name without a folder only warns), every Lua script (compiles) and the scripts Script components use (load as script classes). Returns {valid, errors, warnings, omitted, issues: [{severity, file, message}]}.
+Checks that the project would export and start: settings, start scene, every scene and prefab (loads; referenced asset files exist inside Assets/ with the exact letter case; path fields must name files inside Assets/ with forward slashes; other component text naming a missing Assets/ file is a warning), every Lua script (compiles) and the scripts Script components use (load as script classes). Returns {valid, errors, warnings, omitted, issues: [{severity, file, message}]}.
 
 | Parameter | Type / description |
 |-----------|--------------------|

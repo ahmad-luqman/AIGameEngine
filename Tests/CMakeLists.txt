@@ -248,7 +248,11 @@ if(TARGET BasaltRuntime)
 	add_test(NAME RuntimeOption_fail-on-script-errors-needs-frames
 		COMMAND "${CMAKE_COMMAND}" "-DCOMMAND=$<TARGET_FILE:BasaltRuntime>;--project;${CMAKE_CURRENT_SOURCE_DIR}/Data/ScriptError;--headless;--fail-on-script-errors"
 			-DEXPECTED=1 "-DMATCH=--fail-on-script-errors needs --frames" -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectExitCode.cmake")
-	list(APPEND basaltRuntimeOptionTests RuntimeOption_fail-on-script-errors RuntimeOption_script-errors-ignored RuntimeOption_fail-on-script-errors-needs-frames)
+	# Errors OnDestroy raises as the run ends count too.
+	add_test(NAME RuntimeOption_fail-on-script-errors-ondestroy
+		COMMAND "${CMAKE_COMMAND}" "-DCOMMAND=$<TARGET_FILE:BasaltRuntime>;--project;${CMAKE_CURRENT_SOURCE_DIR}/Data/ScriptError;--scene;Assets/Scenes/OnDestroy.bscene;--headless;--frames;5;--fail-on-script-errors"
+			-DEXPECTED=7 "-DMATCH=1 script error[(]s[)] occurred; the first: .*deliberate OnDestroy error" -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectExitCode.cmake")
+	list(APPEND basaltRuntimeOptionTests RuntimeOption_fail-on-script-errors RuntimeOption_script-errors-ignored RuntimeOption_fail-on-script-errors-needs-frames RuntimeOption_fail-on-script-errors-ondestroy)
 	set_tests_properties(${basaltRuntimeOptionTests} PROPERTIES LABELS integration TIMEOUT 60)
 endif()
 
