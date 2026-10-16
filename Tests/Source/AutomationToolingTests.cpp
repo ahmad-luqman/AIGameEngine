@@ -286,7 +286,7 @@ TEST_SUITE("Automation")
 		// A successful poll takes the events, so each one below gets a subscription of its own; failing polls share one.
 		const json types = { "collision", "playState" };
 		const uint64_t raw = Subscribe(registry, session, types);
-		constexpr int PassingPolls = 9;
+		constexpr int PassingPolls = 10;
 		std::vector<uint64_t> fresh;
 		fresh.reserve(PassingPolls);
 		for (int i = 0; i < PassingPolls; i++)
@@ -397,6 +397,8 @@ TEST_SUITE("Automation")
 		CHECK(Contains(fails({ { "expect", json::array() } }), "parameter 'expect'"));
 		CHECK(Contains(fails({ { "expect", json(65, stopped) } }), "parameter 'expect'"));
 		CHECK(fails({ { "tolerance", 0.1 } }) == "parameter 'tolerance' needs 'expect'");
+		// ...but a null one (how schema-driven clients send an unset optional) is the same as none: a plain poll.
+		CHECK(passes({ { "tolerance", nullptr } })["events"].size() == rawEvents.size());
 		CHECK(fresh.empty());
 		const json all = Poll(registry, session, failing);
 		CHECK(all["events"].size() == rawEvents.size());

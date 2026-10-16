@@ -1808,7 +1808,7 @@ namespace Basalt {
 					if (const auto kind = patterns[i].find("event"); kind != patterns[i].end() && (!kind->is_string() || !AutomationEventTypeFromName(kind->get<std::string>())))
 						throw CommandError(fmt::format("parameter 'expect[{}].event' must be one of: {}", i, typeList));
 				}
-				if (params.contains("tolerance") && patterns.empty())
+				if (HasParam(params, "tolerance") && patterns.empty())
 					throw CommandError("parameter 'tolerance' needs 'expect'");
 				const double tolerance = MatchTolerance(params);
 				// Built before the poll: the check runs under the hub's lock.
