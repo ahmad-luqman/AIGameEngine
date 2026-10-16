@@ -111,12 +111,12 @@ TEST_SUITE("Automation")
 		std::string error;
 		const Ref<Project> loaded = Project::Load(temp.GetDirectory(), error);
 		REQUIRE(loaded);
-		CHECK(loaded->GetConfig().RenderScale == 0.75f);
+		CHECK(loaded->GetConfig().Graphics.RenderScale == 0.75f);
 
 		// Older project files have no RenderScale: full resolution.
 		temp.WriteFile(Project::FileName, R"({"Name": "Old"})");
 		REQUIRE(Project::Load(temp.GetDirectory(), error));
-		CHECK(Project::Load(temp.GetDirectory(), error)->GetConfig().RenderScale == 1.0f);
+		CHECK(Project::Load(temp.GetDirectory(), error)->GetConfig().Graphics.RenderScale == 1.0f);
 		for (const char* bad : { R"({"RenderScale": 0})", R"({"RenderScale": 3})", R"({"RenderScale": "1"})", R"({"RenderScale": 1e300})" })
 		{
 			INFO(bad);
@@ -202,7 +202,7 @@ TEST_SUITE("Automation")
 		const Ref<Project> loaded = Project::Load(temp.GetDirectory(), error);
 		REQUIRE(loaded);
 		const DynamicResolutionSettings expected{ true, 120.0f, 0.75f };
-		CHECK(loaded->GetConfig().DynamicResolution == expected);
+		CHECK(loaded->GetConfig().Graphics.DynamicResolution == expected);
 
 		// Valid but useless: a minimum at or above the render scale leaves nothing to adjust, which headless
 		// hosts (no renderer to warn) learn from the result.
@@ -215,7 +215,10 @@ TEST_SUITE("Automation")
 		temp.WriteFile(Project::FileName, R"({"Name": "Old"})");
 		const Ref<Project> old = Project::Load(temp.GetDirectory(), error);
 		REQUIRE(old);
-		CHECK(old->GetConfig().DynamicResolution == DynamicResolutionSettings{});
+		CHECK(old->GetConfig().Graphics.DynamicResolution == DynamicResolutionSettings{});
+		CHECK(old->GetConfig().Graphics.VSync);
+		CHECK(old->GetConfig().Graphics.ShadowQuality == GraphicsQuality::High);
+		CHECK(old->GetConfig().Graphics.SSAOQuality == GraphicsQuality::High);
 		for (const char* file : { R"({"DynamicResolution": 1})", R"({"DynamicResolution": {"Enabled": true}})", R"({"TargetFrameRate": 0})", R"({"TargetFrameRate": 1e300})", R"({"TargetFrameRate": "60"})", R"({"MinRenderScale": 0.2})", R"({"MinRenderScale": null})" })
 		{
 			INFO(file);

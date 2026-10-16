@@ -11,7 +11,8 @@ vec2 ClampToRenderArea(vec2 targetUV, vec2 uvScale, ivec2 targetSize)
 }
 
 // Clamp integer taps as well as coordinates: filtering at an edge centre can still touch undefined
-// padding (including NaNs), especially when an active dimension is one pixel.
+// padding (including NaNs), especially when an active dimension is one pixel. The sampler is only
+// required to form a combined sampler; texelFetch ignores its filtering and addressing state.
 vec4 SampleRenderArea(texture2D source, sampler sourceSampler, vec2 uv, vec2 activeSize)
 {
 	vec2 position = clamp(uv * activeSize - 0.5, vec2(0), activeSize - 1.0);

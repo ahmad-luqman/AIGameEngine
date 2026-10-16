@@ -1,6 +1,7 @@
 #include "Basalt/Renderer/PostProcessStack.h"
 
 #include "Basalt/Core/Log.h"
+#include "Basalt/Core/Assert.h"
 #include "Basalt/Renderer/ShaderUtils.h"
 #include "Basalt/Scene/Components.h"
 
@@ -9,24 +10,36 @@
 
 namespace Basalt {
 	namespace {
+		constexpr uint32_t HistogramBins = 256;
+		constexpr uint32_t HistogramGroupSize = 16;
+		enum class BloomMode : uint32_t
+		{
+			Prefilter,
+			Downsample,
+			Upsample
+		};
+		// Matches BloomPush in Bloom.frag.
 		struct BloomPush
 		{
 			glm::vec2 SourceSize, BaseSize;
 			float Threshold, Scatter;
-			uint32_t Mode;
+			BloomMode Mode;
 		};
+		// Matches ExposurePush in Include/Exposure.glsl.
 		struct ExposurePush
 		{
 			glm::uvec2 Size;
 			float MinExposure, MaxExposure, Compensation, Blend;
 			uint32_t Reset;
 		};
+		// Matches CompositePush in PostProcessComposite.frag.
 		struct CompositePush
 		{
 			glm::vec2 BloomSize;
 			float BloomIntensity;
 			uint32_t AutoExposure;
 		};
+		// Matches FxaaPush in FXAA.frag.
 		struct FxaaPush
 		{
 			glm::vec2 RenderSize;
@@ -41,7 +54,7 @@ namespace Basalt {
 
 	bool PostProcessStack::Fail(const char* stage)
 	{
-		BS_CORE_ERROR("SceneRenderer: failed to create post-process {}", stage);
+		BS_CORE_ERROR("PostProcessStack: failed to create {}", stage);
 		m_Failed = true;
 		return false;
 	}
@@ -104,7 +117,7 @@ namespace Basalt {
 		if (!m_BloomPipeline || !m_CompositePipeline || !m_HistogramPipeline || !m_ReducePipeline)
 			return Fail("pipelines");
 		nvrhi::BufferDesc buffer;
-		buffer.byteSize = 256 * sizeof(uint32_t);
+		buffer.byteSize = HistogramBins * sizeof(uint32_t);
 		buffer.structStride = sizeof(uint32_t);
 		buffer.canHaveUAVs = true;
 		buffer.initialState = nvrhi::ResourceStates::UnorderedAccess;
@@ -117,7 +130,7 @@ namespace Basalt {
 		if (!m_ExposureSet)
 			return Fail("exposure bindings");
 		// Separate images avoid read/write aliasing on an upsample; levels retain allocations during dynamic scaling.
-		for (uint32_t i = 0; i < 6; ++i)
+		for (uint32_t i = 0; i < MaxBloomLevels; ++i)
 		{
 			size = Half(size);
 			BloomLevel level;
@@ -150,6 +163,7 @@ namespace Basalt {
 
 	void PostProcessStack::RenderHDR(nvrhi::ICommandList* commands, glm::uvec2 size, const PostProcessComponent& settings, float deltaTime, bool resetExposure)
 	{
+		BS_CORE_ASSERT(m_CompositeSet, "Prepare must succeed before RenderHDR");
 		if (settings.AutoExposure)
 		{
 			commands->clearBufferUInt(m_Histogram, 0);
@@ -160,8 +174,8 @@ namespace Basalt {
 			state.bindings = { m_ExposureSet };
 			commands->setComputeState(state);
 			commands->setPushConstants(&push, sizeof(push));
-			commands->dispatch((size.x + 15) / 16, (size.y + 15) / 16, 1);
-			// nvrhi skips automatic barriers when only the pipeline changes with identical bindings.
+			commands->dispatch((size.x + HistogramGroupSize - 1) / HistogramGroupSize, (size.y + HistogramGroupSize - 1) / HistogramGroupSize, 1);
+			// The histogram writes must be visible to reduction even though both pipelines reuse the same UAV bindings.
 			commands->setBufferState(m_Histogram, nvrhi::ResourceStates::UnorderedAccess);
 			commands->commitBarriers();
 			state.pipeline = m_ReducePipeline;
@@ -172,15 +186,15 @@ namespace Basalt {
 		else
 			commands->clearTextureFloat(m_Exposure, nvrhi::AllSubresources, nvrhi::Color(1));
 		m_AutoLastFrame = settings.AutoExposure;
-		std::vector<glm::uvec2> sizes;
+		std::array<glm::uvec2, MaxBloomLevels> sizes{};
 		glm::uvec2 sourceSize = size;
 		for (size_t i = 0; i < m_Bloom.size(); ++i)
 		{
 			const glm::uvec2 levelSize = Half(sourceSize);
-			sizes.push_back(levelSize);
+			sizes[i] = levelSize;
 			if (settings.BloomEnabled)
 			{
-				const BloomPush push{ glm::vec2(sourceSize), {}, settings.BloomThreshold, settings.BloomScatter, i == 0 ? 0u : 1u };
+				const BloomPush push{ glm::vec2(sourceSize), {}, settings.BloomThreshold, settings.BloomScatter, i == 0 ? BloomMode::Prefilter : BloomMode::Downsample };
 				DrawFullscreen(commands, m_BloomPipeline, m_Bloom[i].DownFramebuffer, m_Bloom[i].DownSet, nvrhi::Viewport(static_cast<float>(levelSize.x), static_cast<float>(levelSize.y)), &push, sizeof(push));
 			}
 			sourceSize = levelSize;
@@ -189,8 +203,8 @@ namespace Basalt {
 		{
 			for (size_t i = m_Bloom.size(); i-- > 0;)
 			{
-				const auto source = i + 1 < sizes.size() ? sizes[i + 1] : sizes[i];
-				const BloomPush push{ glm::vec2(source), glm::vec2(sizes[i]), 0, settings.BloomScatter, 2 };
+				const auto source = i + 1 < m_Bloom.size() ? sizes[i + 1] : sizes[i];
+				const BloomPush push{ glm::vec2(source), glm::vec2(sizes[i]), 0, settings.BloomScatter, BloomMode::Upsample };
 				DrawFullscreen(commands, m_BloomPipeline, m_Bloom[i].UpFramebuffer, m_Bloom[i].UpSet, nvrhi::Viewport(static_cast<float>(sizes[i].x), static_cast<float>(sizes[i].y)), &push, sizeof(push));
 			}
 		}
@@ -202,6 +216,7 @@ namespace Basalt {
 
 	bool PostProcessStack::PrepareFXAA(nvrhi::IFramebuffer* output)
 	{
+		BS_CORE_ASSERT(m_CompositeSet, "Prepare must succeed before PrepareFXAA");
 		if (m_Failed)
 			return false;
 		if (!m_FxaaInput)
@@ -224,19 +239,25 @@ namespace Basalt {
 				return Fail("FXAA bindings");
 		}
 		const auto format = output->getFramebufferInfo().colorFormats[0];
-		if (m_FxaaPipeline && m_FxaaFormat == format)
+		if (const auto found = m_FxaaPipelines.find(format); found != m_FxaaPipelines.end())
+		{
+			m_FxaaPipeline = found->second;
 			return true;
-		m_FxaaFormat = format;
+		}
 		// Output can switch between the UNORM final image and FSR's float input.
 		const auto shader = CreateEmbeddedShader(m_Device, "FXAA.frag", nvrhi::ShaderType::Pixel);
 		if (!shader)
 			return Fail("FXAA shader");
 		m_FxaaPipeline = CreateFullscreenPipeline(m_Device, m_Fullscreen, shader, m_FxaaLayout, output);
-		return m_FxaaPipeline ? true : Fail("FXAA pipeline");
+		if (!m_FxaaPipeline)
+			return Fail("FXAA pipeline");
+		m_FxaaPipelines.emplace(format, m_FxaaPipeline);
+		return true;
 	}
 
 	void PostProcessStack::RenderFXAA(nvrhi::ICommandList* commands, nvrhi::IFramebuffer* output, glm::uvec2 size, bool finalOutput)
 	{
+		BS_CORE_ASSERT(m_FxaaPipeline, "PrepareFXAA must succeed before RenderFXAA");
 		const FxaaPush push{ glm::vec2(size), finalOutput ? 1u : 0u };
 		const auto viewport = finalOutput ? output->getFramebufferInfo().getViewport() : nvrhi::Viewport(static_cast<float>(size.x), static_cast<float>(size.y));
 		DrawFullscreen(commands, m_FxaaPipeline, output, m_FxaaSet, viewport, &push, sizeof(push));

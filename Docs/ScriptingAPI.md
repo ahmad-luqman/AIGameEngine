@@ -562,7 +562,7 @@ end
 
 A `ParticleEmitter` component emits camera-facing billboards while the scene plays (and while the editor
 simulates). Particles are simulated on the CPU and drawn unlit, sorted with transparent meshes; their
-colors are linear HDR, so values above 1 stay bright after exposure and tonemapping (there is no bloom).
+colors are linear HDR, so values above 1 stay bright after exposure and tonemapping (and contribute to bloom when the active PostProcess component enables it).
 Use `Blend = "Additive"` for sparks and fire, `"Alpha"` for smoke. `Texture` is a project-relative image
 (its alpha is coverage); without one particles are soft discs.
 
@@ -952,7 +952,7 @@ atomically updates any subset, rejecting unknown fields, invalid types, nonfinit
 | `ShadowQuality` | `"Off"`, `"Low"`, `"High"`; default `"High"` |
 | `SSAOQuality` | `"Off"`, `"Low"`, `"High"`; default `"High"` |
 | `DynamicResolution` | Boolean; default false |
-| `TargetFrameRate` | 10–1,000,000; default 60 (project defaults are limited to 1000; larger session values support diagnostic runs) |
+| `TargetFrameRate` | 10–1,000,000; default 60 (project defaults are limited to 1000; larger values in all Play sessions, including editor Play, support diagnostic runs) |
 | `MinRenderScale` | 0.25–2; default 0.5 |
 
 Settings start from the project (plus runtime command-line overrides), apply on the next rendered frame,
@@ -971,3 +971,6 @@ The highest-priority enabled PostProcess component wins (lowest UUID breaks ties
 `Exposure`, `Tonemapper`, SSAO radius/intensity/bias, auto-exposure limits/compensation/adaptation, and bloom
 threshold/intensity/scatter. See [Components](Components.md) for the field list and [Rendering](Rendering.md)
 for ordering, quality levels, legacy fallback and exposure lifecycle.
+
+Explicit runtime CLI graphics flags remain host overrides above Lua preferences; `Graphics.GetSettings()`
+reports the stored session preferences. Unspecified settings remain script-controlled.

@@ -83,10 +83,14 @@ namespace Basalt {
 			BS_CORE_CRITICAL("Unknown --debug-view '{}' (valid: None, SSAO, Normals, Depth)", debugView);
 			return nullptr;
 		}
-		options.RenderScale = project->GetConfig().RenderScale;
+		options.RenderScale = project->GetConfig().Graphics.RenderScale;
 		if (!ReadScaleOption(commandLine, "render-scale", options.RenderScale))
 			return nullptr;
-		options.DynamicResolution = project->GetConfig().DynamicResolution;
+		if (commandLine.GetValue("render-scale"))
+			options.Overrides.RenderScale = options.RenderScale;
+		if (commandLine.HasFlag("no-vsync"))
+			options.Overrides.VSync = false;
+		options.DynamicResolution = project->GetConfig().Graphics.DynamicResolution;
 		if (commandLine.GetValue("dynamic-resolution"))
 		{
 			// Above the project range on purpose: an unreachable target pins the lowest scale, which the GPU
@@ -100,11 +104,17 @@ namespace Basalt {
 			}
 			options.DynamicResolution.Enabled = *frameRate != 0.0f;
 			options.RequireDynamicResolution = options.DynamicResolution.Enabled;
+			options.Overrides.DynamicResolution = options.DynamicResolution.Enabled;
 			if (options.DynamicResolution.Enabled)
+			{
 				options.DynamicResolution.TargetFrameRate = *frameRate;
+				options.Overrides.TargetFrameRate = frameRate;
+			}
 		}
 		if (!ReadScaleOption(commandLine, "min-render-scale", options.DynamicResolution.MinScale))
 			return nullptr;
+		if (commandLine.GetValue("min-render-scale"))
+			options.Overrides.MinRenderScale = options.DynamicResolution.MinScale;
 		if (commandLine.GetValue("min-render-scale") && !options.DynamicResolution.Enabled)
 			BS_CORE_WARN("--min-render-scale has no effect: dynamic resolution is off (enable it in the project or with --dynamic-resolution <fps>)");
 
@@ -125,7 +135,7 @@ namespace Basalt {
 		};
 		specification.WindowWidth = readSize("width", project->GetConfig().WindowWidth);
 		specification.WindowHeight = readSize("height", project->GetConfig().WindowHeight);
-		specification.VSync = project->GetConfig().VSync && !commandLine.HasFlag("no-vsync");
+		specification.VSync = project->GetConfig().Graphics.VSync && !commandLine.HasFlag("no-vsync");
 		options.VSync = specification.VSync;
 		specification.Headless = commandLine.HasFlag("headless");
 		specification.Offscreen = commandLine.HasFlag("offscreen");

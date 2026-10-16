@@ -88,7 +88,7 @@ namespace {
 	{
 		renderer.SetClusteredLighting(clustered);
 		REQUIRE(renderer.IsClusteredLighting() == clustered);
-		renderer.Render(scene, camera);
+		renderer.Render(scene, camera, 0.0f);
 		REQUIRE_FALSE(renderer.GetStatistics().Failed);
 		REQUIRE(renderer.GetStatistics().DrawCalls > 0);
 		REQUIRE(renderer.GetStatistics().LightsSkipped == expectedSkipped);

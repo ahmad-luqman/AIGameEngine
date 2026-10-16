@@ -554,6 +554,11 @@ namespace Basalt {
 				presentMode = vk::PresentModeKHR::eMailbox;
 			else if (supports(vk::PresentModeKHR::eImmediate))
 				presentMode = vk::PresentModeKHR::eImmediate;
+			else if (!m_WarnedVSyncFallback)
+			{
+				BS_CORE_WARN("GraphicsDevice: VSync=false requested, but this surface supports only synchronized FIFO presentation");
+				m_WarnedVSyncFallback = true;
+			}
 		}
 
 		vk::Extent2D extent = capabilities.currentExtent;

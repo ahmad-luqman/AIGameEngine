@@ -47,7 +47,9 @@ namespace Basalt {
 		void OnImGuiRender() override;
 
 	private:
+		// Frame delta for exposure adaptation; captures explicitly use zero after resetting history.
 		float m_RenderDeltaTime = 0.0f;
+		// Restore the editor presentation preference after discarding the Play session.
 		std::optional<bool> m_PrePlayVSync;
 		void RegisterEditorCommands();
 		void OnSceneChanged();

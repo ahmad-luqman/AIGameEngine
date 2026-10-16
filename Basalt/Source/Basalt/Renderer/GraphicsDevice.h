@@ -100,6 +100,7 @@ namespace Basalt {
 		uint64_t m_FrameIndex = 0;
 		std::string m_AdapterName;
 		bool m_SwapchainDirty = false;
+		bool m_WarnedVSyncFallback = false;
 		bool m_ValidationActive = false;
 		bool m_TimerQueriesSupported = false;
 		CaptureCallback m_PendingCapture;

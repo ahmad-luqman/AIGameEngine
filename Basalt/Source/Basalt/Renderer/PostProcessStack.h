@@ -3,6 +3,8 @@
 #include <glm/glm.hpp>
 #include <nvrhi/nvrhi.h>
 
+#include <array>
+#include <map>
 #include <vector>
 
 namespace Basalt {
@@ -19,6 +21,7 @@ namespace Basalt {
 		nvrhi::IFramebuffer* GetFXAAInput() const { return m_FxaaInput; }
 		void RenderFXAA(nvrhi::ICommandList* commands, nvrhi::IFramebuffer* output, glm::uvec2 size, bool finalOutput);
 		void Reset() { *this = PostProcessStack{}; }
+		// Failed allocations stay failed until all effects are disabled and re-enabled, or targets change.
 		void Retry()
 		{
 			if (m_Failed)
@@ -26,6 +29,7 @@ namespace Basalt {
 		}
 
 	private:
+		static constexpr size_t MaxBloomLevels = 6;
 		bool Fail(const char* stage);
 		nvrhi::IDevice* m_Device = nullptr;
 		nvrhi::TextureHandle m_Source, m_Composite, m_Exposure;
@@ -34,7 +38,8 @@ namespace Basalt {
 		nvrhi::FramebufferHandle m_CompositeFramebuffer, m_FxaaInput;
 		nvrhi::BindingLayoutHandle m_BloomLayout, m_CompositeLayout, m_ExposureLayout, m_FxaaLayout;
 		nvrhi::GraphicsPipelineHandle m_BloomPipeline, m_CompositePipeline, m_FxaaPipeline;
-		nvrhi::Format m_FxaaFormat = nvrhi::Format::UNKNOWN;
+		// Retain both native-output and FSR-input pipelines across dynamic-resolution crossings.
+		std::map<nvrhi::Format, nvrhi::GraphicsPipelineHandle> m_FxaaPipelines;
 		nvrhi::BindingSetHandle m_CompositeSet, m_ExposureSet, m_FxaaSet;
 		nvrhi::BufferHandle m_Histogram;
 		nvrhi::ComputePipelineHandle m_HistogramPipeline, m_ReducePipeline;

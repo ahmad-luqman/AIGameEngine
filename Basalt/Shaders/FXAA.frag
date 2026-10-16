@@ -1,4 +1,5 @@
 #version 450
+// FXAA-style directional luma filter with a two/four-tap blend and contrast rejection.
 #include "RenderArea.glsl"
 #include "Dither.glsl"
 layout(set = 0, binding = 0) uniform texture2D u_Color;

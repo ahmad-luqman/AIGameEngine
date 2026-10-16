@@ -1,4 +1,5 @@
 #version 450
+// Adds HDR bloom and applies metered exposure before tonemapping.
 #include "RenderArea.glsl"
 layout(set = 0, binding = 0) uniform texture2D u_HDR;
 layout(set = 0, binding = 1) uniform sampler u_LinearClamp;

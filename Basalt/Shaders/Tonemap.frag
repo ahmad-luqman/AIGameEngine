@@ -3,13 +3,13 @@
 #include "Dither.glsl"
 
 // HDR -> perceptual color: exposure, tonemapping and sRGB encoding. The direct-output path also
-// resamples and dithers; FSR input is read 1:1 and leaves the final dither to RCAS.
+// resamples and dithers; FXAA/FSR input is read 1:1 and leaves final dithering to FXAA or RCAS.
 layout(set = 0, binding = 0) uniform texture2D u_HDR;
 layout(set = 0, binding = 1) uniform sampler u_PointClamp;
 layout(set = 0, binding = 2) uniform texture2D u_SSAO;
 layout(set = 0, binding = 3) uniform texture2D u_Normals;
 layout(set = 0, binding = 4) uniform texture2D u_Depth;
-// Sampler used by the explicit render-area resampling helper.
+// Combined-sampler binding requirement only: explicit texelFetch filtering ignores its filter state.
 layout(set = 0, binding = 5) uniform sampler u_ColorSampler;
 
 layout(push_constant) uniform TonemapPush

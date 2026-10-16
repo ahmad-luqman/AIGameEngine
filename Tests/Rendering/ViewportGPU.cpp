@@ -18,7 +18,7 @@ using namespace Basalt;
 namespace {
 	std::vector<uint8_t> Capture(SceneRenderer& renderer, Scene& scene, const RenderCamera& camera)
 	{
-		renderer.Render(scene, camera);
+		renderer.Render(scene, camera, 0.0f);
 		REQUIRE_FALSE(renderer.GetStatistics().Failed);
 		std::vector<uint8_t> pixels;
 		uint32_t width = 0, height = 0;
@@ -97,7 +97,7 @@ TEST_CASE("Viewport ID prepass selects visible surfaces across scaling, transpar
 	auto* depth = renderer.GetDepthTexture();
 	for (int frame = 0; frame < 40; frame++)
 	{
-		renderer.Render(scene, camera);
+		renderer.Render(scene, camera, 0.0f);
 		graphics->WaitIdle();
 		CHECK(renderer.GetDepthTexture() == depth);
 		ExpectPick(renderer, 50, 37, front.GetUUID());
@@ -109,7 +109,7 @@ TEST_CASE("Viewport ID prepass selects visible surfaces across scaling, transpar
 	REQUIRE(capture.Initialize());
 	capture.SetRenderScale(renderer.GetCurrentRenderScale());
 	capture.SetViewportSize(101, 99);
-	capture.Render(scene, camera);
+	capture.Render(scene, camera, 0.0f);
 	CHECK(capture.GetRenderWidth() == renderer.GetRenderWidth());
 	CHECK(capture.GetRenderHeight() == renderer.GetRenderHeight());
 	for (uint32_t x = 30; x < 70; x++)
@@ -125,14 +125,14 @@ TEST_CASE("Viewport ID prepass selects visible surfaces across scaling, transpar
 	renderer.SetDynamicResolution({});
 	// Transparent nearest-surface picking must not replace the scene depth used by lighting.
 	front.AddComponent<MaterialComponent>().AlbedoColor.a = 0.5f;
-	renderer.Render(scene, camera);
+	renderer.Render(scene, camera, 0.0f);
 	ExpectPick(renderer, 50, 37, front.GetUUID());
 	SceneRenderer reference(graphics->GetDevice());
 	REQUIRE(reference.Initialize());
 	reference.SetViewportSize(101, 99);
 	CHECK(Capture(renderer, scene, camera) == Capture(reference, scene, camera));
 	front.GetComponent<MaterialComponent>().AlbedoColor.a = 0.05f;
-	renderer.Render(scene, camera);
+	renderer.Render(scene, camera, 0.0f);
 	ExpectPick(renderer, 50, 37, back.GetUUID());
 	front.RemoveComponent<MaterialComponent>();
 	// Masked foreground fragments expose a different opaque background ID.
@@ -141,7 +141,7 @@ TEST_CASE("Viewport ID prepass selects visible surfaces across scaling, transpar
 	const auto savedMaterial = mesh->Materials[0];
 	mesh->Materials[0].Alpha = AlphaMode::Mask;
 	mesh->Materials[0].AlbedoColor.a = 0.0f;
-	renderer.Render(scene, camera);
+	renderer.Render(scene, camera, 0.0f);
 	ExpectPick(renderer, 50, 37, back.GetUUID());
 	mesh->Materials[0] = savedMaterial;
 	// A selected surface covering the viewport must not outline the image boundary.
@@ -159,20 +159,20 @@ TEST_CASE("Viewport ID prepass selects visible surfaces across scaling, transpar
 	renderer.SetSelections({});
 	front.GetTransform().Scale = glm::vec3(1);
 	front.GetTransform().Translation.x = 10;
-	renderer.Render(scene, camera);
+	renderer.Render(scene, camera, 0.0f);
 	ExpectPick(renderer, 50, 37, back.GetUUID());
 	scene.DestroyEntity(back);
-	renderer.Render(scene, camera);
+	renderer.Render(scene, camera, 0.0f);
 	ExpectPick(renderer, 50, 37, UUID(0));
 	renderer.InvalidatePicking();
 	CHECK_FALSE(renderer.Pick(50, 37));
 	renderer.SetViewportSize(1, 1);
-	renderer.Render(scene, camera);
+	renderer.Render(scene, camera, 0.0f);
 	ExpectPick(renderer, 0, 0, UUID(0));
 	SceneRenderer runtime(graphics->GetDevice());
 	REQUIRE(runtime.Initialize());
 	runtime.SetViewportSize(16, 16);
-	runtime.Render(scene, camera);
+	runtime.Render(scene, camera, 0.0f);
 	CHECK_FALSE(runtime.Pick(0, 0));
 	CHECK(graphics->GetValidationErrorCount() == 0);
 	AssetManager::Clear();
@@ -195,7 +195,7 @@ TEST_CASE("Viewport picking follows animated geometry and all mesh nodes map to 
 	REQUIRE(renderer.Initialize());
 	renderer.SetViewportSize(64, 64);
 	auto mask = [&]() {
-		renderer.Render(scene, camera);
+		renderer.Render(scene, camera, 0.0f);
 		REQUIRE_FALSE(renderer.GetStatistics().Failed);
 		std::vector<bool> result;
 		for (uint32_t y = 2; y < 64; y += 4)

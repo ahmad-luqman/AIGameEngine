@@ -1,24 +1,24 @@
 #include "Basalt/Renderer/SceneRenderer.h"
 
-#include "Basalt/Project/Project.h"
-#include "Basalt/Renderer/PostProcessStack.h"
 #include "Basalt/Animation/AnimatedModel.h"
 #include "Basalt/Animation/AnimationPose.h"
 #include "Basalt/Animation/AnimationSystem.h"
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Log.h"
+#include "Basalt/Math/Random.h"
 #include "Basalt/Particles/ParticleSystem.h"
+#include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/DebugLineRenderer.h"
 #include "Basalt/Renderer/Fsr1Upscaler.h"
 #include "Basalt/Renderer/LightClusters.h"
-#include "Basalt/Renderer/RenderMath.h"
 #include "Basalt/Renderer/LocalShadows.h"
+#include "Basalt/Renderer/PostProcessStack.h"
+#include "Basalt/Renderer/RenderMath.h"
 #include "Basalt/Renderer/SceneLights.h"
 #include "Basalt/Renderer/ShaderUtils.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
-#include "Basalt/Math/Random.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -424,10 +424,27 @@ namespace Basalt {
 		std::string EnvironmentKey = "\x01"; // never a valid key: forces the first build
 		Environment Env;
 
+		nvrhi::BindingSetHandle CreateTonemapSet(nvrhi::IDevice* device, nvrhi::ITexture* source, nvrhi::ITexture* depth) const
+		{
+			return device->createBindingSet(nvrhi::BindingSetDesc()
+												.addItem(nvrhi::BindingSetItem::PushConstants(PushConstantSlot, sizeof(TonemapPush)))
+												.addItem(nvrhi::BindingSetItem::Texture_SRV(0, source))
+												.addItem(nvrhi::BindingSetItem::Sampler(1, PointClamp))
+												.addItem(nvrhi::BindingSetItem::Texture_SRV(2, SsaoTexture))
+												.addItem(nvrhi::BindingSetItem::Texture_SRV(3, NormalTexture))
+												.addItem(nvrhi::BindingSetItem::Texture_SRV(4, depth))
+												// The shader uses explicit texelFetch sampling.
+												.addItem(nvrhi::BindingSetItem::Sampler(5, PointClamp)),
+											TonemapLayout);
+		}
+
 		PostProcessStack PostProcess;
 		nvrhi::GraphicsPipelineHandle FxaaTonemapPipeline;
 		nvrhi::TextureHandle TonemapSource;
-		const Scene* ExposureScene = nullptr;
+		std::string InvalidPostProcessError;
+		UUID InvalidPostProcessEntity = 0;
+		bool TonemapSetFailed = false;
+		bool FxaaTonemapFailed = false;
 		uint64_t ExposureRevision = 0;
 		UUID ExposureComponent = 0;
 		bool PostProcessWasActive = false;
@@ -964,6 +981,8 @@ namespace Basalt {
 		impl.Upscaler.Reset();
 		impl.FsrTonemapPipeline = nullptr;
 		impl.FxaaTonemapPipeline = nullptr;
+		impl.FxaaTonemapFailed = false;
+		impl.TonemapSetFailed = false;
 		impl.TonemapSource = nullptr;
 		impl.PostProcess.Reset();
 		impl.FsrTonemapFailed = false;
@@ -1132,17 +1151,16 @@ namespace Basalt {
 															  .addItem(nvrhi::BindingSetItem::Texture_SRV(1, m_DepthTexture))
 															  .addItem(nvrhi::BindingSetItem::Sampler(2, impl.PointClamp)),
 														  impl.BlurLayout);
-		impl.TonemapSet = m_Device->createBindingSet(nvrhi::BindingSetDesc()
-														 .addItem(nvrhi::BindingSetItem::PushConstants(PushConstantSlot, sizeof(TonemapPush)))
-														 .addItem(nvrhi::BindingSetItem::Texture_SRV(0, impl.HdrTexture))
-														 .addItem(nvrhi::BindingSetItem::Sampler(1, impl.PointClamp))
-														 .addItem(nvrhi::BindingSetItem::Texture_SRV(2, impl.SsaoTexture))
-														 .addItem(nvrhi::BindingSetItem::Texture_SRV(3, impl.NormalTexture))
-														 .addItem(nvrhi::BindingSetItem::Texture_SRV(4, m_DepthTexture))
-														 // Bilinear only when resampling: at native size it would equal point sampling, at best.
-														 .addItem(nvrhi::BindingSetItem::Sampler(5, scaled ? impl.LinearClamp : impl.PointClamp)),
-													 impl.TonemapLayout);
-		impl.TonemapSource = impl.HdrTexture;
+		impl.TonemapSet = impl.CreateTonemapSet(m_Device, impl.HdrTexture, m_DepthTexture);
+		if (impl.TonemapSet)
+			impl.TonemapSource = impl.HdrTexture;
+		else
+		{
+			BS_CORE_ERROR("SceneRenderer: failed to create initial tonemap bindings");
+			impl.TonemapSetFailed = true;
+			// Keep the source unset so Render's failed-set gate aborts before any tonemap draw.
+			impl.TonemapSource = nullptr;
+		}
 		impl.DepthUpsampleSet = scaled ? m_Device->createBindingSet(nvrhi::BindingSetDesc()
 																		.addItem(nvrhi::BindingSetItem::PushConstants(0, TextureSamplerPushSize))
 																		.addItem(nvrhi::BindingSetItem::Texture_SRV(0, m_DepthTexture))
@@ -1160,7 +1178,7 @@ namespace Basalt {
 
 	void SceneRenderer::ResetExposure()
 	{
-		m_Impl->ExposureScene = nullptr;
+		m_Impl->ExposureRevision = 0;
 	}
 
 	void SceneRenderer::Render(Scene& scene, const RenderCamera& camera, float deltaTime)
@@ -1183,13 +1201,8 @@ namespace Basalt {
 		RendererSettings settings = scene.GetRendererSettings();
 		UUID postProcessId = 0;
 		const PostProcessComponent post = ResolvePostProcess(scene, &postProcessId);
-		settings.Exposure = post.Exposure;
-		settings.Tonemap = post.Tonemap;
-		settings.SSAOEnabled = post.SSAOEnabled;
-		settings.SSAORadius = post.SSAORadius;
-		settings.SSAOIntensity = post.SSAOIntensity;
-		settings.SSAOBias = post.SSAOBias;
-		const auto graphics = scene.GetState() == SceneState::Play ? scene.GetGraphicsSettings() : Project::GetActiveGraphicsSettings();
+		CopyPostProcessSettings(post, settings);
+		const auto graphics = scene.GetEffectiveGraphicsSettings();
 		settings.SSAOEnabled = settings.SSAOEnabled && graphics.SSAOQuality != GraphicsQuality::Off;
 		settings.ShadowsEnabled = settings.ShadowsEnabled && graphics.ShadowQuality != GraphicsQuality::Off;
 		const bool orthographic = IsOrthographic(camera.Projection);
@@ -1202,10 +1215,15 @@ namespace Basalt {
 
 		if (const auto error = ValidatePostProcess(post); postProcessId != 0 && !error.empty())
 		{
-			BS_CORE_ERROR("SceneRenderer: invalid post-process settings: {}", error);
+			if (impl.InvalidPostProcessError != error || impl.InvalidPostProcessEntity != postProcessId)
+				BS_CORE_ERROR("SceneRenderer: invalid PostProcess on entity {}: {}", static_cast<uint64_t>(postProcessId), error);
+			impl.InvalidPostProcessError = error;
+			impl.InvalidPostProcessEntity = postProcessId;
 			abortFrame();
 			return;
 		}
+
+		impl.InvalidPostProcessError.clear();
 
 		// --- Lights -------------------------------------------------------------------------------
 		// The primary directional light (with shadow cascades) goes into the view constants; the other
@@ -2060,37 +2078,39 @@ namespace Basalt {
 		if (postActive)
 		{
 			if (postActivated)
+			{
 				impl.PostProcess.Retry();
+				impl.TonemapSetFailed = false;
+				impl.FxaaTonemapFailed = false;
+			}
 			if (!impl.PostProcess.Prepare(m_Device, impl.HdrTexture, impl.FullscreenVS, impl.LinearClamp))
 			{
 				abortFrame();
 				return;
 			}
 			const GpuPassScope pass(profiler, commandList, PassPostProcess);
-			const bool resetExposure = postActivated || impl.ExposureScene != &scene || impl.ExposureRevision != scene.GetRenderRevision() || impl.ExposureComponent != postProcessId;
+			const bool resetExposure = postActivated || impl.ExposureRevision != scene.GetRenderRevision() || impl.ExposureComponent != postProcessId;
 			impl.PostProcess.RenderHDR(commandList, { m_RenderWidth, m_RenderHeight }, post, deltaTime, resetExposure);
-			impl.ExposureScene = &scene;
 			impl.ExposureRevision = scene.GetRenderRevision();
 			impl.ExposureComponent = postProcessId;
 			tonemapSource = impl.PostProcess.GetHDR();
 		}
 		if (impl.TonemapSource != tonemapSource)
 		{
-			impl.TonemapSet = m_Device->createBindingSet(nvrhi::BindingSetDesc()
-															 .addItem(nvrhi::BindingSetItem::PushConstants(PushConstantSlot, sizeof(TonemapPush)))
-															 .addItem(nvrhi::BindingSetItem::Texture_SRV(0, tonemapSource))
-															 .addItem(nvrhi::BindingSetItem::Sampler(1, impl.PointClamp))
-															 .addItem(nvrhi::BindingSetItem::Texture_SRV(2, impl.SsaoTexture))
-															 .addItem(nvrhi::BindingSetItem::Texture_SRV(3, impl.NormalTexture))
-															 .addItem(nvrhi::BindingSetItem::Texture_SRV(4, m_DepthTexture))
-															 .addItem(nvrhi::BindingSetItem::Sampler(5, impl.LinearClamp)),
-														 impl.TonemapLayout);
-			if (!impl.TonemapSet)
+			if (impl.TonemapSetFailed)
 			{
+				abortFrame();
+				return;
+			}
+			const auto tonemapSet = impl.CreateTonemapSet(m_Device, tonemapSource, m_DepthTexture);
+			if (!tonemapSet)
+			{
+				impl.TonemapSetFailed = true;
 				BS_CORE_ERROR("SceneRenderer: failed to create post-process tonemap bindings");
 				abortFrame();
 				return;
 			}
+			impl.TonemapSet = tonemapSet;
 			impl.TonemapSource = tonemapSource;
 		}
 
@@ -2109,7 +2129,7 @@ namespace Basalt {
 				abortFrame();
 				return;
 			}
-			if (!impl.FsrTonemapPipeline && !impl.FsrTonemapFailed)
+			if (!fxaa && !impl.FsrTonemapPipeline && !impl.FsrTonemapFailed)
 			{
 				impl.FsrTonemapPipeline = CreateFullscreenPipeline(m_Device, impl.FullscreenVS, impl.TonemapPS, impl.TonemapLayout, impl.Upscaler.GetInputFramebuffer());
 				if (!impl.FsrTonemapPipeline)
@@ -2118,7 +2138,7 @@ namespace Basalt {
 					impl.FsrTonemapFailed = true;
 				}
 			}
-			if (impl.FsrTonemapFailed)
+			if (!fxaa && impl.FsrTonemapFailed)
 			{
 				abortFrame();
 				return;
@@ -2132,11 +2152,13 @@ namespace Basalt {
 				abortFrame();
 				return;
 			}
-			if (!impl.FxaaTonemapPipeline)
+			if (!impl.FxaaTonemapPipeline && !impl.FxaaTonemapFailed)
 				impl.FxaaTonemapPipeline = CreateFullscreenPipeline(m_Device, impl.FullscreenVS, impl.TonemapPS, impl.TonemapLayout, impl.PostProcess.GetFXAAInput());
 			if (!impl.FxaaTonemapPipeline)
 			{
-				BS_CORE_ERROR("SceneRenderer: failed to create FXAA tonemap pipeline");
+				if (!impl.FxaaTonemapFailed)
+					BS_CORE_ERROR("SceneRenderer: failed to create FXAA tonemap pipeline");
+				impl.FxaaTonemapFailed = true;
 				abortFrame();
 				return;
 			}
@@ -2147,20 +2169,16 @@ namespace Basalt {
 			const GpuPassScope pass(profiler, commandList, PassTonemap);
 			const uint32_t outputMode = (fsr1 || fxaa) ? 1u : (m_RenderWidth == m_Width && m_RenderHeight == m_Height ? 2u : 0u);
 			const TonemapPush push = { settings.Exposure, static_cast<uint32_t>(settings.Tonemap), static_cast<uint32_t>(settings.DebugView), outputMode, uvScale };
+			const auto tonemapPipeline = fxaa ? impl.FxaaTonemapPipeline : (fsr1 ? impl.FsrTonemapPipeline : impl.TonemapPipeline);
+			nvrhi::IFramebuffer* tonemapTarget = fxaa ? impl.PostProcess.GetFXAAInput() : (fsr1 ? impl.Upscaler.GetInputFramebuffer() : impl.OutputFramebuffer.Get());
+			fullscreen(tonemapPipeline, tonemapTarget, impl.TonemapSet, (fxaa || fsr1) ? renderViewport : outputViewport, &push, sizeof(push));
 			if (fxaa)
-			{
-				fullscreen(impl.FxaaTonemapPipeline, impl.PostProcess.GetFXAAInput(), impl.TonemapSet, renderViewport, &push, sizeof(push));
 				impl.PostProcess.RenderFXAA(commandList, fsr1 ? impl.Upscaler.GetInputFramebuffer() : impl.OutputFramebuffer.Get(), { m_RenderWidth, m_RenderHeight }, !fsr1);
-			}
 			if (fsr1)
 			{
-				if (!fxaa)
-					fullscreen(impl.FsrTonemapPipeline, impl.Upscaler.GetInputFramebuffer(), impl.TonemapSet, renderViewport, &push, sizeof(push));
 				impl.Upscaler.Render(commandList, impl.OutputFramebuffer, { m_RenderWidth, m_RenderHeight }, settings.FSR1Sharpness);
 				m_Statistics.FSR1Active = true;
 			}
-			else if (!fxaa)
-				fullscreen(impl.TonemapPipeline, impl.OutputFramebuffer, impl.TonemapSet, outputViewport, &push, sizeof(push));
 		}
 
 		// --- Overlay depth (scaled or dynamic-resolution targets only) -----------------------------

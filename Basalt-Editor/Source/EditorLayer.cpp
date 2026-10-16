@@ -76,23 +76,16 @@ namespace Basalt {
 		const glm::vec4 s_LightColor(1.0f, 0.9f, 0.4f, 0.8f);
 		const glm::vec4 s_CameraColor(0.7f, 0.7f, 1.0f, 0.8f);
 
-		// The viewport and screenshots render like the exported game: at the project's render scale.
+		// Viewports and captures use the Play preferences or, outside Play, the project defaults.
 		float ActiveRenderScale(const Scene* scene)
 		{
-			if (scene && scene->GetState() == SceneState::Play)
-				return scene->GetGraphicsSettings().RenderScale;
-			const Ref<Project>& project = Project::GetActive();
-			return project ? project->GetConfig().RenderScale : 1.0f;
+			return (scene ? scene->GetEffectiveGraphicsSettings() : Project::GetActiveGraphicsSettings()).RenderScale;
 		}
 
-		// Only the viewport follows the project's dynamic resolution; screenshots render at the full render
-		// scale, so they do not depend on how fast the GPU was.
+		// Captures use the full effective scale instead of GPU timing feedback, so images are repeatable.
 		DynamicResolutionSettings ActiveDynamicResolution(const Scene* scene)
 		{
-			if (scene && scene->GetState() == SceneState::Play)
-				return scene->GetGraphicsSettings().DynamicResolution;
-			const Ref<Project>& project = Project::GetActive();
-			return project ? project->GetConfig().DynamicResolution : DynamicResolutionSettings{};
+			return (scene ? scene->GetEffectiveGraphicsSettings() : Project::GetActiveGraphicsSettings()).DynamicResolution;
 		}
 
 		// Ray/AABB slab test. Returns the entry distance, or nothing.
@@ -567,7 +560,7 @@ namespace Basalt {
 			DrawEditorOverlays();
 		m_CaptureRenderer->SetSelections(useEditorCamera && !IsGameRunning() && m_ViewportSettings.Options().SelectionOutline ? m_Session.GetSelections() : std::vector<UUID>{});
 		m_CaptureRenderer->ResetExposure();
-		m_CaptureRenderer->Render(scene, *camera);
+		m_CaptureRenderer->Render(scene, *camera, 0.0f);
 		DebugDraw::Clear();
 		for (size_t i = 0; i + 1 < pending.size(); i += 2)
 			DebugDraw::Line(pending[i].Position, pending[i + 1].Position, pending[i].Color);
@@ -963,7 +956,7 @@ namespace Basalt {
 		const auto pending = DebugDraw::TakeLines();
 		m_CaptureRenderer->SetSelections({});
 		m_CaptureRenderer->ResetExposure();
-		m_CaptureRenderer->Render(scene, camera.GetRenderCamera());
+		m_CaptureRenderer->Render(scene, camera.GetRenderCamera(), 0.0f);
 		DebugDraw::Clear();
 		for (size_t i = 0; i + 1 < pending.size(); i += 2)
 			DebugDraw::Line(pending[i].Position, pending[i + 1].Position, pending[i].Color);
@@ -1572,13 +1565,14 @@ namespace Basalt {
 				continue;
 			ImGui::PushID(group);
 			nlohmann::json values = state[group];
-			static const std::vector<std::string> s_Tonemappers = { "None", "Reinhard", "ACES", "AgX" };
+			static const std::vector<std::string> s_Tonemappers(std::begin(TonemapperNames), std::end(TonemapperNames));
 			UUID postProcessId = 0;
-			ResolvePostProcess(scene, &postProcessId);
+			if (std::string_view(group) == "Renderer")
+				ResolvePostProcess(scene, &postProcessId);
 			if (postProcessId != 0 && std::string_view(group) == "Renderer")
 			{
 				ImGui::TextDisabled("Post-processing is controlled by the active PostProcess component.");
-				for (const char* key : { "Exposure", "Tonemapper", "SSAOEnabled", "SSAORadius", "SSAOIntensity", "SSAOBias" })
+				for (const char* key : PostProcessOverrideKeys)
 					values.erase(key);
 			}
 			for (auto it = values.begin(); it != values.end(); ++it)

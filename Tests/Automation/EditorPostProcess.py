@@ -23,7 +23,10 @@ def check_post_process(call, require, output):
 
     initial = capture("post-initial")
     call("component.set", {"entity": cube, "component": "Material", "data": {"EmissiveIntensity": .05}})
-    require(capture("post-dark") != initial, "Exposure/bloom did not respond to the changed scene")
+    dark = capture("post-dark")
+    call("component.set", {"entity": post, "component": "PostProcess", "data": {"Enabled": False}})
+    require(capture("post-dark-disabled") != dark, "Post-processing did not affect the same dark scene")
+    call("component.set", {"entity": post, "component": "PostProcess", "data": {"Enabled": True}})
     call("editor.camera", {"position": [0, 0, 2], "target": [0, 0, 0]})
     view = call("editor.viewport")
     call("editor.pick", {"x": view["width"] // 2, "y": view["height"] // 2, "select": False})
@@ -42,8 +45,10 @@ def check_post_process(call, require, output):
         require(time.monotonic() < deadline, "Lua graphics scale did not reach editor renderer")
         time.sleep(.05)
     require(call("project.info")["graphics"]["RenderScale"] == 1, "Lua graphics saved project defaults")
+    call("project.set", {"graphics": {"RenderScale": .75}})
+    require(call("lua.exec", {"code": "return Graphics.GetSettings().RenderScale"})["result"] == "0.5", "Project edit changed the running session")
     call("play.stop")
     deadline = time.monotonic() + 15
-    while call("editor.viewport")["renderWidth"] != view["width"]:
+    while call("editor.viewport")["renderWidth"] != max(1, int(view["width"] * .75 + .5)):
         require(time.monotonic() < deadline, "Stopping Play did not restore project graphics scale")
         time.sleep(.05)
