@@ -226,6 +226,19 @@ if(TARGET BasaltRuntime)
 		COMMAND BasaltRuntime --project "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest" --headless --frames 1 --dynamic-resolution 0 --min-render-scale 0.5)
 	set_tests_properties(RuntimeOption_min-render-scale-unused PROPERTIES PASS_REGULAR_EXPRESSION "--min-render-scale has no effect")
 	list(APPEND basaltRuntimeOptionTests RuntimeOption_min-render-scale-unused)
+	# Script errors never stop a game, so only --fail-on-script-errors turns them into a failed run (exit code 7,
+	# what the export smoke test relies on); without it the same run exits 0.
+	add_test(NAME RuntimeOption_fail-on-script-errors
+		COMMAND "${CMAKE_COMMAND}" "-DCOMMAND=$<TARGET_FILE:BasaltRuntime>;--project;${CMAKE_CURRENT_SOURCE_DIR}/Data/ScriptError;--headless;--frames;5;--fail-on-script-errors"
+			-DEXPECTED=7 "-DMATCH=[0-9]+ script error[(]s[)] occurred; the first: .*deliberate script error" -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectExitCode.cmake")
+	add_test(NAME RuntimeOption_script-errors-ignored
+		COMMAND "${CMAKE_COMMAND}" "-DCOMMAND=$<TARGET_FILE:BasaltRuntime>;--project;${CMAKE_CURRENT_SOURCE_DIR}/Data/ScriptError;--headless;--frames;5"
+			-DEXPECTED=0 "-DMATCH=deliberate script error" -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectExitCode.cmake")
+	add_test(NAME RuntimeOption_fail-on-script-errors-needs-frames
+		COMMAND BasaltRuntime --project "${CMAKE_CURRENT_SOURCE_DIR}/Data/ScriptError" --headless --fail-on-script-errors)
+	set_tests_properties(RuntimeOption_fail-on-script-errors-needs-frames PROPERTIES PASS_REGULAR_EXPRESSION "--fail-on-script-errors needs --frames"
+		FAIL_REGULAR_EXPRESSION "Runtime: playing")
+	list(APPEND basaltRuntimeOptionTests RuntimeOption_fail-on-script-errors RuntimeOption_script-errors-ignored RuntimeOption_fail-on-script-errors-needs-frames)
 	set_tests_properties(${basaltRuntimeOptionTests} PROPERTIES LABELS integration TIMEOUT 60)
 endif()
 

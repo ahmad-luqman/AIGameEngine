@@ -20,6 +20,9 @@ namespace Basalt {
 		std::string ScreenshotPath;
 		// Fail (exit code 5) when GPU validation is not active, so validation-based tests cannot pass vacuously.
 		bool RequireValidation = false;
+		// Fail (exit code 7) when a script reported an error during the run (export smoke tests). Script errors
+		// never stop a game, so without this a broken script would still exit 0.
+		bool FailOnScriptErrors = false;
 		RendererDebugView DebugView = RendererDebugView::None;
 		// The project's RenderScale unless --render-scale overrides it.
 		float RenderScale = 1.0f;

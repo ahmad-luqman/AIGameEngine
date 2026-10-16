@@ -1,0 +1,9 @@
+{
+	"Format": "BasaltScene",
+	"Version": 1,
+	"Name": "Main",
+	"Entities": [
+		{ "ID": 1, "Name": "Broken", "Components": {
+			"Script": { "Script": "Assets/Scripts/Broken.lua" } } }
+	]
+}

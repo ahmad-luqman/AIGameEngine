@@ -6,6 +6,7 @@
 #include "Basalt/Renderer/GraphicsDevice.h"
 #include "Basalt/Renderer/RenderUtils.h"
 #include "Basalt/Scene/SceneSerializer.h"
+#include "Basalt/Scripting/ScriptEngine.h"
 #include "Basalt/UI/GameUI.h"
 
 #include <imgui.h>
@@ -179,8 +180,16 @@ namespace Basalt {
 			if (application.GetExitCode() == 0)
 				application.SetExitCode(exitCode);
 		};
+		if (m_Options.MaxFrames == 0)
+			return;
+		if (const ScriptEngine* scripts = m_Scene ? m_Scene->GetScriptEngine() : nullptr; m_Options.FailOnScriptErrors && scripts && !scripts->GetErrors().empty())
+		{
+			const auto& errors = scripts->GetErrors();
+			BS_CORE_ERROR("Runtime: {} script error(s) occurred; the first: {}", errors.size(), errors.front());
+			fail(7);
+		}
 		const GraphicsDevice* device = application.GetGraphicsDevice();
-		if (m_Options.MaxFrames == 0 || !device)
+		if (!device)
 			return;
 		if (m_Renderer)
 			CheckRendererResults(fail);

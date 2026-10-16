@@ -8,10 +8,13 @@
 #include <Basalt/Core/LayerStack.h>
 #include <Basalt/Core/Log.h>
 #include <Basalt/Core/MouseCodes.h>
+#include <Basalt/Core/Process.h>
 #include <Basalt/Core/UUID.h>
 #include <Basalt/Events/ApplicationEvent.h>
 #include <Basalt/Events/KeyEvent.h>
 #include <Basalt/Events/MouseEvent.h>
+
+#include "TestUtils.h"
 
 #include <filesystem>
 #include <limits>
@@ -601,5 +604,96 @@ TEST_SUITE("Core")
 		CHECK_FALSE(ParseJson(nested(MaxJsonDepth)).is_discarded());
 		CHECK(ParseJson(nested(MaxJsonDepth + 1)).is_discarded());
 		CHECK(ParseJson(nested(1000000)).is_discarded());
+	}
+
+	// The test binary doubles as the child (TestMain.cpp: --basalt-child), so no shell is needed on any platform.
+	ProcessSpec ChildProcess(std::vector<std::string> actions)
+	{
+		ProcessSpec spec;
+#if defined(_WIN32)
+		spec.Executable = FileSystem::GetExecutableDirectory() / "BasaltTests.exe";
+#else
+		spec.Executable = FileSystem::GetExecutableDirectory() / "BasaltTests";
+#endif
+		spec.Arguments = { "--basalt-child" };
+		spec.Arguments.insert(spec.Arguments.end(), actions.begin(), actions.end());
+		spec.Timeout = std::chrono::milliseconds(30000);
+		return spec;
+	}
+
+	TEST_CASE("RunProcess reports the exit code and captures stdout and stderr")
+	{
+		const ProcessResult result = RunProcess(ChildProcess({ "print", "to stdout", "error", "to stderr", "exit", "7" }));
+		CHECK(result.Outcome == ProcessOutcome::Exited);
+		CHECK(result.ExitCode == 7);
+		CHECK_FALSE(result.Succeeded());
+		CHECK(result.Output.find("to stdout") != std::string::npos);
+		CHECK(result.Output.find("to stderr") != std::string::npos);
+		CHECK(result.Error.empty());
+
+		const ProcessResult success = RunProcess(ChildProcess({ "exit", "0" }));
+		CHECK(success.Succeeded());
+	}
+
+	TEST_CASE("RunProcess passes arguments with spaces, quotes and backslashes unchanged")
+	{
+		const std::vector<std::string> arguments = { "two words", "quote\"inside", "trailing\\", "back\\\"slash", "", "plain" };
+		std::vector<std::string> actions = { "args" };
+		actions.insert(actions.end(), arguments.begin(), arguments.end());
+		const ProcessResult result = RunProcess(ChildProcess(actions));
+		REQUIRE(result.Succeeded());
+		std::string expected;
+		for (const std::string& argument : arguments)
+			expected += "[" + argument + "]\n";
+		std::string output = result.Output;
+		std::erase(output, '\r');
+		CHECK(output == expected);
+	}
+
+	TEST_CASE("RunProcess runs in the requested working directory")
+	{
+		BasaltTest::TempDirectory directory("ProcessWorkingDirectory");
+		ProcessSpec spec = ChildProcess({ "cwd" });
+		spec.WorkingDirectory = directory.GetPath();
+		const ProcessResult result = RunProcess(spec);
+		REQUIRE(result.Succeeded());
+		CHECK(std::filesystem::equivalent(std::filesystem::path(result.Output.substr(0, result.Output.find_first_of("\r\n"))), directory.GetPath()));
+
+		spec.WorkingDirectory = directory.GetPath() / "missing";
+		const ProcessResult missing = RunProcess(spec);
+		CHECK(missing.Outcome == ProcessOutcome::Failed);
+		CHECK_FALSE(missing.Error.empty());
+	}
+
+	TEST_CASE("RunProcess keeps the end of long output")
+	{
+		ProcessSpec spec = ChildProcess({ "spam", "100000", "print", "THE END" });
+		spec.MaxOutputBytes = 1000;
+		const ProcessResult result = RunProcess(spec);
+		REQUIRE(result.Succeeded());
+		CHECK(result.Output.size() == 1000);
+		CHECK(result.Output.find("THE END") != std::string::npos);
+	}
+
+	TEST_CASE("RunProcess kills a child that outlives its timeout")
+	{
+		ProcessSpec spec = ChildProcess({ "print", "started", "sleep", "20000", "exit", "0" });
+		spec.Timeout = std::chrono::milliseconds(300);
+		const auto start = std::chrono::steady_clock::now();
+		const ProcessResult result = RunProcess(spec);
+		CHECK(result.Outcome == ProcessOutcome::TimedOut);
+		CHECK_FALSE(result.Succeeded());
+		CHECK(result.Output.find("started") != std::string::npos);
+		CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(10));
+	}
+
+	TEST_CASE("RunProcess distinguishes a program that cannot start from one that fails")
+	{
+		ProcessSpec spec;
+		spec.Executable = FileSystem::GetExecutableDirectory() / "NoSuchProgram-Basalt";
+		const ProcessResult result = RunProcess(spec);
+		CHECK(result.Outcome == ProcessOutcome::Failed);
+		CHECK_FALSE(result.Succeeded());
+		CHECK(result.Error.find("cannot start") != std::string::npos);
 	}
 }
