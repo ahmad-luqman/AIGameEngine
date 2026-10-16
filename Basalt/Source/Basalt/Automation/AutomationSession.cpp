@@ -6,6 +6,8 @@
 #include "Basalt/Scene/Scene.h"
 #include "Basalt/Scene/SceneEventListener.h"
 
+#include <spdlog/fmt/fmt.h>
+
 #include <algorithm>
 
 namespace Basalt {
@@ -77,15 +79,35 @@ namespace Basalt {
 
 	AutomationSession::~AutomationSession()
 	{
-		// The play copy reports to m_SceneEvents until it is gone.
-		if (IsPlaying())
+		// A play copy reports to m_SceneEvents, which goes with the session; hosts may still hold the copy.
+		if (m_Scene && m_Scene != m_EditScene)
 			m_Scene->SetEventListener(nullptr);
 	}
 
-	bool AutomationSession::SetSnapshot(const std::string& name, nlohmann::json state)
+	AutomationSession::EventClientScope::EventClientScope(AutomationSession& session, EventClient client)
+		: m_Session(session)
+		, m_Previous(session.m_EventClient)
 	{
-		if (!m_Snapshots.contains(name) && m_Snapshots.size() >= MaxSnapshots)
+		m_Session.m_EventClient = client;
+	}
+
+	AutomationSession::EventClientScope::~EventClientScope()
+	{
+		m_Session.m_EventClient = m_Previous;
+	}
+
+	bool AutomationSession::SetSnapshot(const std::string& name, nlohmann::json state, std::string& outError)
+	{
+		if (name.ends_with(".bscene"))
+		{
+			outError = "snapshot names cannot end in '.bscene' (scene.diff reads such names as scene files)";
 			return false;
+		}
+		if (!m_Snapshots.contains(name) && m_Snapshots.size() >= MaxSnapshots)
+		{
+			outError = fmt::format("too many snapshots (at most {}); reuse a name", MaxSnapshots);
+			return false;
+		}
 		m_Snapshots[name] = std::move(state);
 		return true;
 	}
@@ -96,10 +118,10 @@ namespace Basalt {
 		return it == m_Snapshots.end() ? nullptr : &it->second;
 	}
 
-	void AutomationSession::PublishPlayState(const char* state)
+	void AutomationSession::PublishPlayState(PlayStateChange change)
 	{
 		if (m_Events->Wants(AutomationEventType::PlayState))
-			m_Events->Publish(AutomationEventType::PlayState, { { "state", state }, { "scene", m_Scene ? m_Scene->GetName() : std::string() } });
+			m_Events->Publish(AutomationEventType::PlayState, { { "state", PlayStateChangeName(change) }, { "scene", m_Scene ? m_Scene->GetName() : std::string() } });
 	}
 
 	void AutomationSession::SetEditScene(const Ref<Scene>& scene, const std::string& scenePath)
@@ -173,15 +195,15 @@ namespace Basalt {
 			return false;
 		}
 		m_Scene = Scene::Copy(m_EditScene);
-		// Before the systems start, so errors of the first OnCreate calls are reported too.
+		// Before the systems start, so errors of the first OnCreate calls are reported too, after the play event.
 		m_Scene->SetEventListener(m_SceneEvents.get());
+		PublishPlayState(simulate ? PlayStateChange::Simulate : PlayStateChange::Play);
 		if (simulate)
 			m_Scene->OnSimulationStart();
 		else
 			m_Scene->OnRuntimeStart();
 		if (IsRecording() && !m_RecordingSeed)
 			m_RecordingSeed = m_Scene->GetRandomSeed();
-		PublishPlayState(simulate ? "simulate" : "play");
 		return true;
 	}
 
@@ -196,7 +218,7 @@ namespace Basalt {
 		// Hosts may keep the stopped copy alive a little longer (renderers); it must not report anymore.
 		m_Scene->SetEventListener(nullptr);
 		m_Scene = m_EditScene;
-		PublishPlayState("stop");
+		PublishPlayState(PlayStateChange::Stop);
 		PruneSelection();
 		// Like held keys, injected gamepads belong to the play session.
 		Input::Reset();
@@ -208,7 +230,7 @@ namespace Basalt {
 		if (!IsPlaying() || m_Scene->IsPaused() == paused)
 			return;
 		m_Scene->SetPaused(paused);
-		PublishPlayState(paused ? "pause" : "resume");
+		PublishPlayState(paused ? PlayStateChange::Pause : PlayStateChange::Resume);
 	}
 
 	bool AutomationSession::IsPlaying() const

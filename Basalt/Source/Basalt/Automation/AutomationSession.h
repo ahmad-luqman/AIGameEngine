@@ -19,6 +19,7 @@ namespace Basalt {
 	class Scene;
 	struct CommandInfo;
 	class AutomationEventHub;
+	enum class PlayStateChange : uint8_t;
 
 	// One host owns command observation. Rejected BeforeCommand calls never reach the handler;
 	// AfterCommand runs after successful or throwing handlers, with nesting depth already restored.
@@ -82,16 +83,37 @@ namespace Basalt {
 		void SetPaused(bool paused);
 
 		// --- Events and snapshots --------------------------------------------------------------------
-		// Log lines, script errors, play-state changes and collisions of this session (events.subscribe). Shared
-		// with connections that stream it from the server thread.
+		// Log lines, script errors, play-state changes and collisions of this session (events.subscribe). Created by
+		// the session and shared with the connections that drain it from the server thread.
 		const Ref<AutomationEventHub>& GetEvents() const { return m_Events; }
-		// The connection a request is being handled for (0: none, e.g. the CLI), so events.subscribe can stream
-		// to it. Set by AutomationConnection around each request.
-		uint64_t GetEventStreamOwner() const { return m_EventStreamOwner; }
-		void SetEventStreamOwner(uint64_t owner) { m_EventStreamOwner = owner; }
+
+		// The client a request is handled for: the subscriptions it creates end with it (Owner, 0 for none: the CLI,
+		// `basalt serve` and stdio MCP end with the process), and stream to it when it reads unsolicited frames.
+		struct EventClient
+		{
+			uint64_t Owner = 0;
+			bool Streams = false;
+		};
+		const EventClient& GetEventClient() const { return m_EventClient; }
+		// Attributes the requests handled during its lifetime to a client (AutomationConnection), then restores
+		// the previous one.
+		class [[nodiscard]] EventClientScope
+		{
+		public:
+			EventClientScope(AutomationSession& session, EventClient client);
+			~EventClientScope();
+			EventClientScope(const EventClientScope&) = delete;
+			EventClientScope& operator=(const EventClientScope&) = delete;
+
+		private:
+			AutomationSession& m_Session;
+			EventClient m_Previous;
+		};
+
 		// Named scene states (scene.snapshot) that scene.diff compares; they survive play stop and scene changes.
-		// False when MaxSnapshots other names are stored.
-		bool SetSnapshot(const std::string& name, nlohmann::json state);
+		// False (with outError) for a name ending in .bscene (scene.diff reads those as files) or when MaxSnapshots
+		// other names are stored. Pointers FindSnapshot returns stay valid until that name is replaced.
+		bool SetSnapshot(const std::string& name, nlohmann::json state, std::string& outError);
 		const nlohmann::json* FindSnapshot(const std::string& name) const;
 
 		// --- Input recording (replays) ---------------------------------------------------------------
@@ -125,12 +147,13 @@ namespace Basalt {
 
 	private:
 		class SceneEvents;
-		void PublishPlayState(const char* state);
+		void PublishPlayState(PlayStateChange change);
 
-		// Declared before the scenes so a playing scene never outlives the listener it reports to.
+		// Declared before the scenes, so the session's own scene references go first; ~AutomationSession detaches the
+		// listener from a play copy someone else may still hold.
 		Ref<AutomationEventHub> m_Events;
 		Scope<SceneEvents> m_SceneEvents;
-		uint64_t m_EventStreamOwner = 0;
+		EventClient m_EventClient;
 		std::map<std::string, nlohmann::json> m_Snapshots;
 		Ref<Scene> m_EditScene;
 		// Equals m_EditScene while editing, the running copy while playing.

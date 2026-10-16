@@ -1,51 +1,50 @@
 #include "Basalt/Automation/AutomationEvents.h"
 
+#include "Basalt/Core/Assert.h"
+#include "Basalt/Core/EnumNames.h"
+
 #include <algorithm>
-#include <array>
+#include <iterator>
+#include <utility>
 
 namespace Basalt {
 
 	namespace {
 
-		constexpr std::array<const char*, static_cast<size_t>(AutomationEventType::Count)> s_TypeNames = { "log", "scriptError", "playState", "collision" };
-		constexpr std::array<const char*, 5> s_LevelNames = { "trace", "info", "warn", "error", "critical" };
+		constexpr const char* const EventTypeNames[] = { "log", "scriptError", "playState", "collision" };
+		static_assert(std::size(EventTypeNames) == static_cast<size_t>(AutomationEventType::Count), "one name per event type");
+		constexpr const char* const PlayStateNames[] = { "play", "simulate", "pause", "resume", "stop" };
+		static_assert(std::size(PlayStateNames) == static_cast<size_t>(PlayStateChange::Stop) + 1, "one name per play-state change");
 
 	}
 
 	const char* AutomationEventTypeName(AutomationEventType type)
 	{
-		return s_TypeNames[static_cast<size_t>(type)];
+		const char* name = EnumNameOrNull(EventTypeNames, type);
+		BS_CORE_ASSERT(name, "not an event type");
+		return name ? name : "unknown";
 	}
 
 	std::optional<AutomationEventType> AutomationEventTypeFromName(std::string_view name)
 	{
-		for (size_t i = 0; i < s_TypeNames.size(); i++)
-		{
-			if (name == s_TypeNames[i])
-				return static_cast<AutomationEventType>(i);
-		}
-		return std::nullopt;
+		return EnumFromName<AutomationEventType>(EventTypeNames, name);
 	}
 
-	const char* LogLevelName(LogLevel level)
+	std::span<const char* const> AutomationEventTypeNames()
 	{
-		return s_LevelNames[static_cast<size_t>(level)];
+		return EventTypeNames;
 	}
 
-	std::optional<LogLevel> LogLevelFromName(std::string_view name)
+	const char* PlayStateChangeName(PlayStateChange change)
 	{
-		for (size_t i = 0; i < s_LevelNames.size(); i++)
-		{
-			if (name == s_LevelNames[i])
-				return static_cast<LogLevel>(i);
-		}
-		return std::nullopt;
+		const char* name = EnumNameOrNull(PlayStateNames, change);
+		return name ? name : "unknown";
 	}
 
 	AutomationEventHub::AutomationEventHub()
 	{
 		// Registered for the hub's lifetime and filtered by the wanted types, so subscribing never races with
-		// adding or removing the listener. Runs on the logging thread; Publish does not log.
+		// adding or removing the listener. Runs on whichever thread logs; Publish does not log.
 		m_LogListener = Log::GetHistory().AddListener([this](const LogMessage& message) {
 			if (!Wants(AutomationEventType::Log))
 				return;
@@ -58,13 +57,20 @@ namespace Basalt {
 		Log::GetHistory().RemoveListener(m_LogListener);
 	}
 
-	std::optional<uint64_t> AutomationEventHub::Subscribe(const Filter& filter, uint64_t owner)
+	std::optional<uint64_t> AutomationEventHub::Subscribe(const Filter& filter, uint64_t owner, Delivery delivery)
 	{
+		BS_CORE_ASSERT((filter.Types & AllTypes) != 0, "a subscription must want some event type");
+		BS_CORE_ASSERT(delivery == Delivery::Polled || owner != 0, "a streamed subscription needs an owner that drains it");
 		std::scoped_lock lock(m_Mutex);
 		if (m_Subscriptions.size() >= MaxSubscriptions)
 			return std::nullopt;
 		const uint64_t id = m_NextId++;
-		m_Subscriptions[id] = Subscription{ filter, owner, {}, 0 };
+		Subscription subscription;
+		subscription.Wanted = filter;
+		subscription.Wanted.Types &= AllTypes;
+		subscription.Owner = owner;
+		subscription.Mode = delivery;
+		m_Subscriptions.emplace(id, std::move(subscription));
 		UpdateWantedTypes();
 		return id;
 	}
@@ -92,23 +98,21 @@ namespace Basalt {
 		return m_Subscriptions.size();
 	}
 
-	AutomationEventHub::PollStatus AutomationEventHub::Poll(uint64_t id, size_t max, std::vector<nlohmann::json>& outEvents, uint64_t& outDropped)
+	AutomationEventHub::PollStatus AutomationEventHub::Poll(uint64_t id, size_t max, std::vector<nlohmann::json>& outEvents, uint64_t& outDropped, const std::function<bool(const std::vector<nlohmann::json>&)>& accept)
 	{
 		std::scoped_lock lock(m_Mutex);
 		auto it = m_Subscriptions.find(id);
 		if (it == m_Subscriptions.end())
 			return PollStatus::UnknownSubscription;
 		Subscription& subscription = it->second;
-		if (subscription.Owner != 0)
+		if (subscription.Mode == Delivery::Streamed)
 			return PollStatus::Streamed;
-		const size_t count = std::min(max, subscription.Queue.size());
-		outEvents.reserve(outEvents.size() + count);
-		for (size_t i = 0; i < count; i++)
-		{
-			outEvents.push_back(std::move(subscription.Queue.front()));
-			subscription.Queue.pop_front();
-		}
+		const auto count = static_cast<std::ptrdiff_t>(std::min(max, subscription.Queue.size()));
+		outEvents.assign(subscription.Queue.begin(), subscription.Queue.begin() + count);
 		outDropped = subscription.Dropped;
+		if (accept && !accept(outEvents))
+			return PollStatus::Rejected;
+		subscription.Queue.erase(subscription.Queue.begin(), subscription.Queue.begin() + count);
 		subscription.Dropped = 0;
 		return PollStatus::Ok;
 	}
@@ -117,25 +121,36 @@ namespace Basalt {
 	{
 		if (owner == 0)
 			return {};
-		std::string frames;
-		std::scoped_lock lock(m_Mutex);
-		for (auto& [id, subscription] : m_Subscriptions)
+		struct Pending
 		{
-			if (subscription.Owner != owner)
-				continue;
-			if (subscription.Dropped > 0)
+			uint64_t Subscription;
+			uint64_t Dropped;
+			std::deque<nlohmann::json> Events;
+		};
+		std::vector<Pending> pending;
+		{
+			// Only move the queues out under the lock: serializing can take a while, and publishers (any logging
+			// thread) wait for the lock.
+			std::scoped_lock lock(m_Mutex);
+			for (auto& [id, subscription] : m_Subscriptions)
 			{
-				const nlohmann::json dropped = { { "event", "dropped" }, { "subscription", id }, { "count", subscription.Dropped } };
-				frames += dropped.dump() + "\n";
+				if (subscription.Owner != owner || subscription.Mode != Delivery::Streamed || (subscription.Queue.empty() && subscription.Dropped == 0))
+					continue;
+				pending.push_back({ id, subscription.Dropped, std::exchange(subscription.Queue, {}) });
 				subscription.Dropped = 0;
 			}
-			for (nlohmann::json& event : subscription.Queue)
+		}
+		std::string frames;
+		for (Pending& subscription : pending)
+		{
+			if (subscription.Dropped > 0)
+				frames += nlohmann::json({ { "event", "dropped" }, { "subscription", subscription.Subscription }, { "count", subscription.Dropped } }).dump() + "\n";
+			for (nlohmann::json& event : subscription.Events)
 			{
-				event["subscription"] = id;
+				event["subscription"] = subscription.Subscription;
 				// Text from scripts or files may not be valid UTF-8; the frame must still be valid JSON.
 				frames += event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
 			}
-			subscription.Queue.clear();
 		}
 		return frames;
 	}
@@ -149,9 +164,7 @@ namespace Basalt {
 		payload["seq"] = m_NextSequence++;
 		for (auto& [id, subscription] : m_Subscriptions)
 		{
-			if ((subscription.Wanted.Types & Bit(type)) == 0)
-				continue;
-			if (type == AutomationEventType::Log && level < subscription.Wanted.MinLevel)
+			if (!subscription.Wanted.Accepts(type, level))
 				continue;
 			if (subscription.Queue.size() >= MaxQueuedEvents)
 			{

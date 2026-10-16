@@ -2207,19 +2207,36 @@ namespace {
 	// The LuaLS type of a component field, as scripts/generate_docs.py writes it.
 	std::string LuaFieldType(const ComponentInfo& info, const std::string& field)
 	{
-		const std::string& kind = info.FieldTypes.at(field);
-		const size_t bracket = kind.find('[');
-		const std::string base = kind.substr(0, bracket);
-		const bool array = bracket != std::string::npos;
-		if (base == "enum")
+		const ComponentFieldType& type = info.FieldTypes.at(field);
+		const bool array = type.Count > 0;
+		std::string scalar;
+		switch (type.Kind)
 		{
-			std::string options;
-			for (const std::string& option : info.EnumOptions.at(field))
-				options += (options.empty() ? "\"" : "|\"") + option + "\"";
-			return array ? "(" + options + ")[]" : options;
+			case ComponentFieldKind::Number:
+				scalar = "number";
+				break;
+			case ComponentFieldKind::Integer:
+			case ComponentFieldKind::Entity:
+				scalar = "integer";
+				break;
+			case ComponentFieldKind::Boolean:
+				scalar = "boolean";
+				break;
+			case ComponentFieldKind::String:
+				scalar = "string";
+				break;
+			case ComponentFieldKind::Object:
+				scalar = "table";
+				break;
+			case ComponentFieldKind::Enum:
+			{
+				std::string options;
+				for (const std::string& option : info.EnumOptions.at(field))
+					options += (options.empty() ? "\"" : "|\"") + option + "\"";
+				return array ? "(" + options + ")[]" : options;
+			}
 		}
-		static const std::map<std::string, std::string> s_Scalars = { { "number", "number" }, { "integer", "integer" }, { "boolean", "boolean" }, { "string", "string" }, { "object", "table" }, { "entity", "integer" } };
-		return s_Scalars.at(base) + (array ? "[]" : "");
+		return scalar + (array ? "[]" : "");
 	}
 
 	std::string Difference(const std::set<std::string>& a, const std::set<std::string>& b)
@@ -2235,7 +2252,7 @@ namespace {
 
 	// Every global the bindings add (Basalt's are PascalCase; Lua's own are lowercase) as "G name kind", every key
 	// of a plain table as "T table key", and every member of a usertype's instances as "U type member".
-	constexpr const char* s_IntrospectBindings = R"(
+	constexpr const char* IntrospectBindings = R"(
 		local instances = {
 			Vec2 = function() return Vec2(1, 2) end,
 			Vec3 = function() return Vec3(1, 2, 3) end,
@@ -2285,7 +2302,7 @@ TEST_SUITE("Scripting")
 		// The definitions are Lua too: they must compile (editors would report a syntax error as broken types).
 		REQUIRE(text->find("]=====]") == std::string::npos);
 		CHECK(BasaltTest::Eval(scene, fmt::format("local _, problem = load([=====[{}]=====], 'basalt.d.lua') return tostring(problem)", *text)) == "nil");
-		const std::string introspected = BasaltTest::Eval(scene, s_IntrospectBindings);
+		const std::string introspected = BasaltTest::Eval(scene, IntrospectBindings);
 		REQUIRE_FALSE(introspected.starts_with("error: "));
 
 		std::map<std::string, std::string> globals;
@@ -2305,27 +2322,32 @@ TEST_SUITE("Scripting")
 		for (const auto& [name, type] : globals)
 		{
 			INFO("global ", name);
-			CHECK_MESSAGE(type != "unknown", "a usertype without an instance in the test: add one to s_IntrospectBindings");
+			CHECK_MESSAGE(type != "unknown", "a usertype without an instance in the test: add one to IntrospectBindings");
 			(type == "function" ? boundFunctions : boundTables).insert(name);
 		}
-		CHECK_MESSAGE(Difference(boundTables, definitions.Tables).empty(), "bound but not declared as X = {}: ", Difference(boundTables, definitions.Tables));
-		CHECK_MESSAGE(Difference(definitions.Tables, boundTables).empty(), "declared but not bound: ", Difference(definitions.Tables, boundTables));
-		CHECK_MESSAGE(Difference(boundFunctions, definitions.GlobalFunctions).empty(), "bound global functions not declared: ", Difference(boundFunctions, definitions.GlobalFunctions));
+		// Every name in `names` must be in `in`.
+		const auto checkCovered = [](const std::set<std::string>& names, const std::set<std::string>& in, const char* what) {
+			const std::string missing = Difference(names, in);
+			CHECK_MESSAGE(missing.empty(), what, ": ", missing);
+		};
+		checkCovered(boundTables, definitions.Tables, "bound but not declared as X = {}");
+		checkCovered(definitions.Tables, boundTables, "declared but not bound");
+		checkCovered(boundFunctions, definitions.GlobalFunctions, "bound global functions not declared");
 		std::set<std::string> declaredFunctions = definitions.GlobalFunctions;
 		declaredFunctions.erase("print");
-		CHECK_MESSAGE(Difference(declaredFunctions, boundFunctions).empty(), "declared global functions not bound: ", Difference(declaredFunctions, boundFunctions));
+		checkCovered(declaredFunctions, boundFunctions, "declared global functions not bound");
 
 		for (const std::string& name : boundTables)
 		{
 			INFO("global ", name);
 			const std::set<std::string> declared = definitions.Members(name);
-			CHECK_MESSAGE(Difference(bound[name], declared).empty(), "bound but not declared: ", Difference(bound[name], declared));
-			CHECK_MESSAGE(Difference(declared, bound[name]).empty(), "declared but not bound: ", Difference(declared, bound[name]));
+			checkCovered(bound[name], declared, "bound but not declared");
+			checkCovered(declared, bound[name], "declared but not bound");
 		}
 		// Static functions of usertypes (Quat.Identity) are not enumerable on the type itself: they must resolve.
 		for (const auto& [name, functions] : definitions.Functions)
 		{
-			if (globals.contains(name) && globals[name] == "usertype")
+			if (const auto global = globals.find(name); global != globals.end() && global->second == "usertype")
 				for (const std::string& function : functions)
 				{
 					const std::string check = fmt::format("return {}.{} ~= nil", name, function);

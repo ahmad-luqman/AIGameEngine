@@ -269,6 +269,8 @@ namespace Basalt {
 
 		// Ends every contact of an entity whose body is gone and notifies the surviving entities.
 		void EndContacts(UUID uuid, bool trigger);
+		// Reports one contact transition to the scene's event listener, then to the scripts.
+		void DispatchContact(ContactEventType type, Entity first, Entity second, const std::optional<ContactInfo>& contact);
 
 		// Where two entities whose contact just ended parted: the closest points of their bodies (see
 		// ContactInfo), relative to the first. nullopt when either has no body or they are already far apart.

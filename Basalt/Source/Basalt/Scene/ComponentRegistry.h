@@ -23,6 +23,31 @@ namespace Basalt {
 	// its defaults and the given keys (one construction, no separate update). Unknown keys, wrong value
 	// types and values the component's rules reject fail with a descriptive error, leaving the entity
 	// unchanged.
+	enum class ComponentFieldKind : uint8_t
+	{
+		Number = 0,
+		Integer,
+		Boolean,
+		String,
+		Object,
+		// An entity UUID (0 = none).
+		Entity,
+		// A string of ComponentInfo::EnumOptions.
+		Enum
+	};
+
+	// The JSON type of a component field: a kind, or an array of Count values of that kind (vectors, colors, Euler
+	// degrees, per-axis enums).
+	struct ComponentFieldType
+	{
+		ComponentFieldKind Kind = ComponentFieldKind::Number;
+		uint8_t Count = 0;
+
+		// "number", "integer", "boolean", "string", "object", "entity" or "enum", with "[Count]" for an array.
+		std::string ToString() const;
+		bool operator==(const ComponentFieldType&) const = default;
+	};
+
 	struct ComponentInfo
 	{
 		// Name used in files and APIs, e.g. "Transform", "RigidBody".
@@ -39,10 +64,8 @@ namespace Basalt {
 		std::function<bool(Entity, const nlohmann::json&, std::string& outError)> Deserialize;
 		// Field names accepted by Deserialize, for error messages and tooling.
 		std::vector<std::string> Fields;
-		// JSON type of each field, for tooling (component.types, the Lua type definitions): "number", "integer",
-		// "boolean", "string", "object", "entity" (a UUID, 0 = none), "enum" (a string of EnumOptions), or an
-		// array of one of them with its length, e.g. "number[3]" (vectors, colors, Euler degrees) or "enum[3]".
-		std::map<std::string, std::string> FieldTypes;
+		// JSON type of each field, for tooling (component.types, the Lua type definitions).
+		std::map<std::string, ComponentFieldType> FieldTypes;
 		// Valid values of string-enum fields (e.g. RigidBody "Type"), for inspectors and validation messages.
 		std::map<std::string, std::vector<std::string>> EnumOptions;
 		// Fields that hold an entity UUID (collected from the field list). Tools may let users name entities

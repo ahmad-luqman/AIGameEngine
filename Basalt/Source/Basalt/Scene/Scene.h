@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Base.h"
 #include "Basalt/Core/Timestep.h"
 #include "Basalt/Core/UUID.h"
@@ -211,8 +212,13 @@ namespace Basalt {
 
 		PhysicsWorld* GetPhysicsWorld() const { return m_PhysicsWorld.get(); }
 		ScriptEngine* GetScriptEngine() const { return m_ScriptEngine.get(); }
-		// Non-owning; null for none. Not copied by Copy: tools attach it to the copy they play.
-		void SetEventListener(SceneEventListener* listener) { m_EventListener = listener; }
+		// Non-owning; null for none. One at a time: replacing a listener with another is a programmer error. Not
+		// copied by Copy: tools attach it to the copy they play.
+		void SetEventListener(SceneEventListener* listener)
+		{
+			BS_CORE_ASSERT(!listener || !m_EventListener || listener == m_EventListener, "a scene has one event listener");
+			m_EventListener = listener;
+		}
 		SceneEventListener* GetEventListener() const { return m_EventListener; }
 		// The script errors of the last Play session, including those OnDestroy raised while it stopped (the script
 		// engine itself is gone by then). Cleared when Play starts.

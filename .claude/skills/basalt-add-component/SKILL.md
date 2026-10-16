@@ -26,8 +26,10 @@ description: Add a new component type to the Basalt engine end to end (data, ser
    `SceneHierarchyPanel.cpp` if users create it often, and an overlay in `EditorLayer::DrawEditorOverlays`
    if it has a spatial extent.
 5. **Lua** — generic access works automatically (`AddComponent/GetComponent/SetComponent`). Add typed
-   helpers to `ScriptGlue.cpp` only for hot paths, and document them in Docs/ScriptingAPI.md.
+   helpers to `ScriptGlue.cpp` only for hot paths, document them in Docs/ScriptingAPI.md and declare them in
+   Docs/basalt.d.lua (the `LuaTypeDefinitions` test fails otherwise).
 6. **Tests** — round-trip is covered by `SceneTests.cpp` ("Every registered component round-trips"); add
    behaviour tests for the consuming system; add the component to `Tests/Data/FeatureTest` (scene +
    `FeatureTest.lua` list of component names) and run `scripts/test.sh`.
-7. **Docs** — `python3 scripts/generate_docs.py` regenerates Docs/Components.md.
+7. **Docs** — `python3 scripts/generate_docs.py` regenerates Docs/Components.md, Docs/AutomationCommands.md and the
+   component section of Docs/basalt.d.lua (the `GeneratedDocs` ctest fails while they are stale).

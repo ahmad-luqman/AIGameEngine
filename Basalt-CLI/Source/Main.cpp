@@ -31,6 +31,12 @@ using namespace Basalt;
 
 namespace {
 
+	// Script errors, log lines and names in responses may not be valid UTF-8; the output must still be JSON.
+	std::string Dump(const nlohmann::json& response, int indent)
+	{
+		return response.dump(indent, ' ', false, nlohmann::json::error_handler_t::replace);
+	}
+
 	void PrintUsage()
 	{
 		std::cerr << "usage: basalt [--project <dir>] [--scene <path>] [--no-save] [--verbose] <command> [params-json]\n"
@@ -101,7 +107,7 @@ int main(int argc, char** argv)
 		const nlohmann::json response = run({ { "command", "project.open" }, { "params", { { "path", *project } } } });
 		if (!response.value("ok", false))
 		{
-			(mode == "mcp" ? std::cerr : std::cout) << response.dump(2) << std::endl;
+			(mode == "mcp" ? std::cerr : std::cout) << Dump(response, 2) << std::endl;
 			return 1;
 		}
 	}
@@ -110,7 +116,7 @@ int main(int argc, char** argv)
 		const nlohmann::json response = run({ { "command", "scene.open" }, { "params", { { "path", *scene } } } });
 		if (!response.value("ok", false))
 		{
-			(mode == "mcp" ? std::cerr : std::cout) << response.dump(2) << std::endl;
+			(mode == "mcp" ? std::cerr : std::cout) << Dump(response, 2) << std::endl;
 			return 1;
 		}
 	}
@@ -131,7 +137,7 @@ int main(int argc, char** argv)
 				continue;
 			const nlohmann::json request = ParseJson(line);
 			const nlohmann::json response = request.is_discarded() ? nlohmann::json{ { "ok", false }, { "error", "invalid JSON" } } : run(request);
-			std::cout << response.dump() << std::endl;
+			std::cout << Dump(response, -1) << std::endl;
 		}
 	}
 	else if (mode == "batch")
@@ -157,7 +163,7 @@ int main(int argc, char** argv)
 			std::cerr << "basalt: batch input is not valid JSON\n";
 			return 2;
 		}
-		std::cout << run(requests).dump(2) << std::endl;
+		std::cout << Dump(run(requests), 2) << std::endl;
 	}
 	else
 	{
@@ -173,7 +179,7 @@ int main(int argc, char** argv)
 				return 2;
 			}
 		}
-		std::cout << run({ { "command", mode }, { "params", params } }).dump(2) << std::endl;
+		std::cout << Dump(run({ { "command", mode }, { "params", params } }), 2) << std::endl;
 	}
 
 	session.StopPlay();

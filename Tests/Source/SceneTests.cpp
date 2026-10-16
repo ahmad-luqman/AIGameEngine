@@ -1598,6 +1598,37 @@ TEST_SUITE("Scene diff")
 		CHECK((*DiffScenes(json::object(), { { "Entities", nullptr } }, {}, error))["equal"] == true);
 	}
 
+	TEST_CASE("DiffScenes reports a different entity order, ignoring entities only one side has")
+	{
+		using json = nlohmann::json;
+		const auto scene = [](std::initializer_list<int> ids) {
+			json entities = json::array();
+			for (int id : ids)
+				entities.push_back({ { "ID", id }, { "Name", "E" + std::to_string(id) } });
+			return json{ { "Entities", entities } };
+		};
+		std::string error;
+		CHECK((*DiffScenes(scene({ 1, 2, 3 }), scene({ 1, 2, 3 }), {}, error))["reordered"] == false);
+		CHECK((*DiffScenes(scene({ 1, 2, 3 }), scene({ 1, 3 }), {}, error))["reordered"] == false);
+		CHECK((*DiffScenes(scene({ 1, 3 }), scene({ 4, 1, 2, 3 }), {}, error))["reordered"] == false);
+		const json swapped = *DiffScenes(scene({ 1, 2, 3 }), scene({ 1, 3, 2 }), {}, error);
+		CHECK(swapped["reordered"] == true);
+		CHECK(swapped["equal"] == false);
+		CHECK(DescribeSceneDiff(swapped) == "the entities are in a different order");
+	}
+
+	TEST_CASE("DescribeSceneDiff reads any JSON and cuts long values on character boundaries")
+	{
+		using json = nlohmann::json;
+		CHECK(DescribeSceneDiff(json()).empty());
+		CHECK(DescribeSceneDiff(json::array({ 1, 2 })).empty());
+		CHECK(DescribeSceneDiff({ { "changed", { { { "name", 5 } }, 7 } }, { "added", { "x" } } }) == "added '' (null)");
+		// The quote and 75 ASCII characters, then a two-byte character straddling the 77-byte cut.
+		const std::string text = std::string(75, 'a') + "\xC3\xA9" + "tail";
+		const std::string line = DescribeSceneDiff({ { "settings", { { { "path", "Name" }, { "from", text }, { "to", "b" } } } } });
+		CHECK(line == "scene Name: \"" + std::string(75, 'a') + "... -> \"b\"");
+	}
+
 	TEST_CASE("JSON comparisons treat integers exactly and floats within the tolerance")
 	{
 		using json = nlohmann::json;

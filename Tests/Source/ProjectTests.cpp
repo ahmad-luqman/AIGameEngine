@@ -106,7 +106,7 @@ TEST_SUITE("Project")
 		REQUIRE_MESSAGE(data.Save(error), error);
 		REQUIRE(data.Set("Score", 42, error));
 		REQUIRE_MESSAGE(data.Save(error), error);
-		CHECK_FALSE(std::filesystem::exists(path.string() + ".tmp"));
+		CHECK_FALSE(BasaltTest::HasTempFiles(path.parent_path()));
 
 		SaveData reloaded(path);
 		REQUIRE_MESSAGE(reloaded.Load(error), error);

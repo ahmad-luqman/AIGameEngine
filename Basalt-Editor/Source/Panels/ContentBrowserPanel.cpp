@@ -21,7 +21,7 @@ namespace Basalt {
 
 	namespace {
 
-		const char* s_ScriptTemplate = R"(-- %s: attach to an entity with a Script component. Editor types: Basalt's Docs/basalt.d.lua.
+		const char* s_ScriptTemplate = R"(-- %s: attach to an entity with a Script component. Code-editor types (lua-language-server): Basalt's Docs/basalt.d.lua.
 ---@class %s: BasaltScript
 local %s = {}
 

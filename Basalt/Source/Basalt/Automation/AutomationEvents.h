@@ -7,9 +7,11 @@
 #include <atomic>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -28,9 +30,19 @@ namespace Basalt {
 	// Wire names ("log", "scriptError", "playState", "collision"), used in filters and in each event's "event" key.
 	const char* AutomationEventTypeName(AutomationEventType type);
 	std::optional<AutomationEventType> AutomationEventTypeFromName(std::string_view name);
-	// Lowercase log level names ("trace" ... "critical"), as log.get reports them.
-	const char* LogLevelName(LogLevel level);
-	std::optional<LogLevel> LogLevelFromName(std::string_view name);
+	// Every type's wire name in enum order (command schemas list them).
+	std::span<const char* const> AutomationEventTypeNames();
+
+	// The play-state changes playState events report ("play", "simulate", "pause", "resume", "stop").
+	enum class PlayStateChange : uint8_t
+	{
+		Play = 0,
+		Simulate,
+		Pause,
+		Resume,
+		Stop
+	};
+	const char* PlayStateChangeName(PlayStateChange change);
 
 	// Fans engine events (log lines, script errors, play-state changes, collisions) out to automation
 	// subscriptions, so tools follow a running game without polling log.get. Thread-safe: log lines arrive on any
@@ -43,22 +55,39 @@ namespace Basalt {
 	public:
 		static constexpr size_t MaxQueuedEvents = 1024;
 		static constexpr size_t MaxSubscriptions = 64;
+		static constexpr uint32_t TypeBit(AutomationEventType type) { return 1u << static_cast<uint32_t>(type); }
 		static constexpr uint32_t AllTypes = (1u << static_cast<uint32_t>(AutomationEventType::Count)) - 1;
 
 		struct Filter
 		{
-			// Bit (1 << AutomationEventType) per wanted type.
+			// TypeBit per wanted type.
 			uint32_t Types = AllTypes;
 			// Log events below this level are skipped (other types have no level).
 			LogLevel MinLevel = LogLevel::Info;
+
+			bool Accepts(AutomationEventType type, LogLevel level) const
+			{
+				return (Types & TypeBit(type)) != 0 && (type != AutomationEventType::Log || level >= MinLevel);
+			}
+		};
+
+		// How a subscription's events leave the hub.
+		enum class Delivery
+		{
+			// Read with Poll (events.poll).
+			Polled,
+			// Sent by the owner's connection (TakeStreamed); Poll refuses it, so nobody else steals the events.
+			Streamed
 		};
 
 		enum class PollStatus
 		{
 			Ok,
 			UnknownSubscription,
-			// The subscription belongs to a connection that streams it; polling would steal its events.
-			Streamed
+			// The subscription streams to its connection.
+			Streamed,
+			// The accept check refused the events; they stay queued.
+			Rejected
 		};
 
 		AutomationEventHub();
@@ -66,24 +95,28 @@ namespace Basalt {
 		AutomationEventHub(const AutomationEventHub&) = delete;
 		AutomationEventHub& operator=(const AutomationEventHub&) = delete;
 
-		// owner 0: drained with Poll. Any other owner: a connection that drains it with TakeStreamed. Returns the
-		// subscription ID (never 0), or nullopt when MaxSubscriptions are active.
-		std::optional<uint64_t> Subscribe(const Filter& filter, uint64_t owner);
+		// The owner is the client whose subscriptions end with it (RemoveOwner); 0 for none, whose subscriptions last
+		// until unsubscribed or the hub goes (the CLI's, which end with the process). A streamed subscription needs an
+		// owner. Returns the subscription ID (never 0), or nullopt when MaxSubscriptions are active.
+		std::optional<uint64_t> Subscribe(const Filter& filter, uint64_t owner, Delivery delivery);
 		bool Unsubscribe(uint64_t id);
 		// Ends every subscription of an owner (its connection closed).
 		void RemoveOwner(uint64_t owner);
 		size_t GetSubscriptionCount() const;
 
-		// Moves up to `max` queued events out of a polled subscription, oldest first; outDropped is the number
-		// lost to the queue limit since the previous poll.
-		PollStatus Poll(uint64_t id, size_t max, std::vector<nlohmann::json>& outEvents, uint64_t& outDropped);
-		// Every event queued for the owner's subscriptions as newline-terminated JSON frames, each with its
-		// "subscription"; a dropped count becomes a {"event":"dropped"} frame. Empty when nothing is pending.
+		// Moves up to `max` queued events out of a polled subscription, oldest first; outDropped is the number lost to
+		// the queue limit since the previous successful poll. With `accept`, the events leave the queue only when it
+		// returns true for them (Rejected otherwise, with outEvents still filled); it runs under the hub's lock.
+		PollStatus Poll(uint64_t id, size_t max, std::vector<nlohmann::json>& outEvents, uint64_t& outDropped, const std::function<bool(const std::vector<nlohmann::json>&)>& accept = {});
+		// Every event queued for the owner's streamed subscriptions as newline-terminated JSON frames, each with its
+		// "subscription", grouped by subscription (order across subscriptions by "seq"); a dropped count becomes a
+		// {"event":"dropped"} frame before them. Empty when nothing is pending.
 		std::string TakeStreamed(uint64_t owner);
 
 		// Cheap check publishers make before building an event.
-		bool Wants(AutomationEventType type) const { return (m_WantedTypes.load(std::memory_order_relaxed) & Bit(type)) != 0; }
-		// Adds "event" and "seq" to the payload and queues it for every subscription that wants it.
+		bool Wants(AutomationEventType type) const { return (m_WantedTypes.load(std::memory_order_relaxed) & TypeBit(type)) != 0; }
+		// Adds "event" and "seq" (one counter for the hub, so a subscription sees gaps) to the payload and queues it for
+		// every subscription that wants it. Never logs: it runs inside log listeners.
 		void Publish(AutomationEventType type, nlohmann::json payload, LogLevel level = LogLevel::Info);
 
 	private:
@@ -91,11 +124,11 @@ namespace Basalt {
 		{
 			Filter Wanted;
 			uint64_t Owner = 0;
+			Delivery Mode = Delivery::Polled;
 			std::deque<nlohmann::json> Queue;
 			uint64_t Dropped = 0;
 		};
 
-		static uint32_t Bit(AutomationEventType type) { return 1u << static_cast<uint32_t>(type); }
 		// Call with m_Mutex held.
 		void UpdateWantedTypes();
 

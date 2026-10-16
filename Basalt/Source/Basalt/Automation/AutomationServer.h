@@ -19,12 +19,19 @@ namespace Basalt {
 	public:
 		using RequestHandler = std::function<std::string(const std::string& request)>;
 
+		// How long the server waits for a client between checks for stop and for unsolicited frames.
+		static constexpr int IdlePollMilliseconds = 100;
+		// A client that accepts no data for this long (it stopped reading its event stream) is disconnected, so it
+		// cannot block the server thread or Stop().
+		static constexpr int SendTimeoutMilliseconds = 5000;
+
 		// One client's callbacks, both run on the server thread.
 		struct ClientHandler
 		{
+			// Required.
 			RequestHandler OnRequest;
-			// Optional: newline-terminated frames to send unprompted, or "". Called after every response and
-			// about every 100 ms while the client is idle.
+			// Optional: newline-terminated frames to send unprompted, or "". Called after every request line and
+			// every IdlePollMilliseconds while the client is idle.
 			std::function<std::string()> TakePending;
 		};
 

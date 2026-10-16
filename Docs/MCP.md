@@ -92,14 +92,20 @@ Agents can follow a running game and check it without polling or screenshots:
   entities, the frame and the contact). On the editor's legacy line protocol the subscription **streams**: event
   frames arrive on the same connection after a response or within about 100 ms when idle, as JSON lines with an
   `event` key and no `ok` key (`{"event":"collision","subscription":1,"seq":7,"type":"collisionBegin",...}`), and the
-  subscription ends when the connection closes. A client that reads one line per request must set such frames aside
+  subscription ends when the connection closes. A connection that falls behind gets
+  `{"event":"dropped","subscription":N,"count":K}` before the remaining events. `seq` counts every event of the
+  session, so one subscription sees gaps. A client that reads one line per request must set such frames aside
   (see `Tests/Automation/EditorViewport.py`). The server serves one connection at a time, so subscribe on the
-  connection that sends the commands. MCP clients and the CLI get polled subscriptions instead:
-  `events.poll {subscription}` returns the queued events (at most 1024 wait; `dropped` counts the rest).
+  connection that sends the commands. MCP clients and the CLI get polled subscriptions instead (an MCP client's
+  still end with its TCP connection): `events.poll {subscription}` returns the queued events (at most 1024 wait;
+  `dropped` counts the rest; with `assertTypes` it fails, leaving them queued, unless every listed type is there).
+  `pause` and `resume` come from the editor's Pause button; no command pauses.
 - `scene.snapshot {name}` keeps the current state in memory; `scene.diff {from, to?}` compares two snapshots or
-  `.bscene` files (or a snapshot with the current scene) by entity ID and lists every changed field.
-- `assert.entity_exists` and `assert.component` fail with `assertion failed: ...` unless the scene matches, so a batch
-  file or tool-call sequence reads as a specification (`expectError` turns an expected failure into a pass).
+  `.bscene` files (omit `to` to compare with the current scene) by entity ID and lists every changed field, and
+  whether the entities were reordered.
+- `assert.entity_exists` and `assert.component` fail with `assertion failed: ...` unless the scene matches (for
+  `assert.component` that includes a missing or ambiguous entity), so a batch file or tool-call sequence reads as a
+  specification (`expectError` turns an expected failure into a pass).
 - `render.compare {reference}` renders the current scene and compares it with a reference image (editor only);
   `image.compare` compares two files on any host. Both report `similarity` (1 = identical).
 

@@ -6,7 +6,9 @@
 
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -20,6 +22,10 @@ namespace Basalt {
 		Error,
 		Critical
 	};
+
+	// Lowercase level names ("trace" ... "critical"), as log.get and automation events report them.
+	const char* LogLevelName(LogLevel level);
+	std::optional<LogLevel> LogLevelFromName(std::string_view name);
 
 	struct LogMessage
 	{
@@ -37,12 +43,13 @@ namespace Basalt {
 
 		using Listener = std::function<void(const LogMessage& message)>;
 
-		void Push(LogMessage message);
+		void Push(const LogMessage& message);
 		void Clear();
 
-		// Calls the listener with every message pushed from now on, on the pushing thread (any thread, possibly
-		// several at once). A listener must not log: that would re-enter Push and deadlock. Returns the ID for
-		// RemoveListener.
+		// Calls the listener with every message pushed from now on, after the history stores it, on the pushing
+		// thread (any thread; one call at a time, under the listener lock). A listener must be quick and must not
+		// add or remove listeners (that deadlocks); messages it logs itself reach the history but no listener.
+		// Exceptions it throws are reported on stderr and dropped. Returns the ID for RemoveListener.
 		uint64_t AddListener(Listener listener);
 		// When this returns, no call of the listener is running or will start.
 		void RemoveListener(uint64_t id);

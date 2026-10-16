@@ -33,6 +33,7 @@
 #include <algorithm>
 #include <chrono>
 #include <limits>
+#include <map>
 #include <optional>
 #include <system_error>
 #include <unordered_map>
@@ -106,6 +107,13 @@ namespace Basalt {
 			if (!it->is_boolean())
 				throw CommandError(std::string("parameter '") + name + "' must be true or false");
 			return it->get<bool>();
+		}
+
+		// Whether an optional parameter was given (absent and null mean "not given", as for the Optional* helpers).
+		bool HasParam(const json& params, const char* name)
+		{
+			auto it = params.find(name);
+			return it != params.end() && !it->is_null();
 		}
 
 		const PhysicsLayers& ActivePhysicsLayers()
@@ -210,26 +218,34 @@ namespace Basalt {
 			return project;
 		}
 
-		// Entities are addressed by numeric ID or by (unique) name.
-		Entity ResolveEntity(Scene& scene, const json& reference, const char* parameter = "entity")
+		// Every entity a reference names: the one with a numeric ID, or all with a name. outDescription reads
+		// "with ID 5" or "named 'Door'", for messages.
+		std::vector<Entity> FindEntities(Scene& scene, const json& reference, const char* parameter, std::string& outDescription)
 		{
 			if (reference.is_number_unsigned() || reference.is_number_integer())
 			{
+				outDescription = "with ID " + std::to_string(reference.get<uint64_t>());
 				Entity entity = scene.GetEntityByUUID(reference.get<uint64_t>());
-				if (!entity)
-					throw CommandError("no entity with ID " + std::to_string(reference.get<uint64_t>()));
-				return entity;
+				return entity ? std::vector<Entity>{ entity } : std::vector<Entity>{};
 			}
 			if (reference.is_string())
 			{
-				const std::vector<Entity> matches = scene.FindEntitiesByName(reference.get<std::string>());
-				if (matches.empty())
-					throw CommandError("no entity named '" + reference.get<std::string>() + "'");
-				if (matches.size() > 1)
-					throw CommandError("several entities are named '" + reference.get<std::string>() + "'; use the numeric ID");
-				return matches.front();
+				outDescription = "named '" + reference.get<std::string>() + "'";
+				return scene.FindEntitiesByName(reference.get<std::string>());
 			}
 			throw CommandError(std::string("parameter '") + parameter + "' must be an entity ID (number) or name (string)");
+		}
+
+		// Entities are addressed by numeric ID or by (unique) name.
+		Entity ResolveEntity(Scene& scene, const json& reference, const char* parameter = "entity")
+		{
+			std::string description;
+			const std::vector<Entity> matches = FindEntities(scene, reference, parameter, description);
+			if (matches.empty())
+				throw CommandError("no entity " + description);
+			if (matches.size() > 1)
+				throw CommandError("several entities are " + description + "; use the numeric ID");
+			return matches.front();
 		}
 
 		// Component data may name entities in reference fields (Joint "ConnectedEntity": "Door"); files and
@@ -256,6 +272,14 @@ namespace Basalt {
 		Entity RequireEntity(AutomationSession& session, const json& params, const char* name = "entity")
 		{
 			return ResolveEntity(RequireScene(session), Require(params, name), name);
+		}
+
+		const ComponentInfo& RequireComponentInfo(const std::string& name)
+		{
+			const ComponentInfo* info = ComponentRegistry::Find(name);
+			if (!info)
+				throw CommandError("unknown component '" + name + "' (valid: " + ComponentRegistry::GetNameList() + ")");
+			return *info;
 		}
 
 		json EntitySummary(Entity entity)
@@ -467,7 +491,12 @@ namespace Basalt {
 			Add(registry, "component.types", "Lists every component type with its fields (for component.set): their names in order, each field's JSON type ('number', 'integer', 'boolean', 'string', 'object', 'entity', 'enum', or an array such as 'number[3]'), the values of enum fields, and the fields that reference entities.", Schema::Object(), [](AutomationSession&, const json&) {
 				json types = json::array();
 				for (const ComponentInfo& info : ComponentRegistry::GetAll())
-					types.push_back({ { "name", info.Name }, { "fields", info.Fields }, { "types", info.FieldTypes }, { "enums", info.EnumOptions }, { "entityFields", info.EntityFields }, { "core", info.IsCore } });
+				{
+					json fieldTypes = json::object();
+					for (const auto& [field, type] : info.FieldTypes)
+						fieldTypes[field] = type.ToString();
+					types.push_back({ { "name", info.Name }, { "fields", info.Fields }, { "types", fieldTypes }, { "enums", info.EnumOptions }, { "entityFields", info.EntityFields }, { "core", info.IsCore } });
+				}
 				return json{ { "components", types } };
 			});
 
@@ -476,12 +505,11 @@ namespace Basalt {
 				const bool errorsOnly = OptionalBool(params, "errorsOnly", false);
 				uint64_t next = 0;
 				json messages = json::array();
-				static const char* s_Levels[] = { "trace", "info", "warn", "error", "critical" };
 				for (const LogMessage& message : Log::GetHistory().GetMessagesSince(since, next))
 				{
 					if (errorsOnly && message.Level < LogLevel::Error)
 						continue;
-					messages.push_back({ { "level", s_Levels[static_cast<int>(message.Level)] }, { "logger", message.LoggerName }, { "text", message.Text } });
+					messages.push_back({ { "level", LogLevelName(message.Level) }, { "logger", message.LoggerName }, { "text", message.Text } });
 				}
 				return json{ { "messages", messages }, { "next", next } };
 			});
@@ -738,19 +766,17 @@ namespace Basalt {
 				return json{ { "hash", hash } };
 			});
 
-			Add(registry, "scene.snapshot", "Stores the current scene state (the play copy while playing) under a name for scene.diff. Snapshots live in memory for the session (at most 32 names), survive play stop and scene changes, and a name can be reused to replace one.", Schema::Object({ { "name", Schema::String("string, snapshot name (not ending in .bscene)", true) } }, { "name" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "scene.snapshot", fmt::format("Stores the current scene state (the play copy while playing) under a name for scene.diff. Snapshots live in memory for the session (at most {} names), survive play stop and scene changes, and a name can be reused to replace one.", AutomationSession::MaxSnapshots), Schema::Object({ { "name", Schema::String("string, snapshot name (not ending in .bscene)", true) } }, { "name" }), [](AutomationSession& session, const json& params) {
 				const std::string name = RequireString(params, "name");
-				if (name.ends_with(".bscene"))
-					throw CommandError("snapshot names cannot end in '.bscene' (scene.diff reads such names as scene files)");
-				Scene& scene = RequireScene(session);
-				json state = SceneSerializer::SerializeScene(scene);
+				json state = SceneSerializer::SerializeScene(RequireScene(session));
 				const size_t entities = state["Entities"].size();
-				if (!session.SetSnapshot(name, std::move(state)))
-					throw CommandError(fmt::format("too many snapshots (at most {}); reuse a name", AutomationSession::MaxSnapshots));
+				std::string error;
+				if (!session.SetSnapshot(name, std::move(state), error))
+					throw CommandError(error);
 				return json{ { "name", name }, { "entities", entities } };
 			});
 
-			Add(registry, "scene.diff", "Compares two scene states: 'from' and 'to' each name a snapshot (scene.snapshot) or a scene file (a project-relative path ending in .bscene); 'to' defaults to the current scene (the play copy while playing). Entities are matched by ID. Returns {equal, settings, added, removed, changed}: settings and each changed entity's changes are [{path, from, to}] (e.g. 'Transform.Translation'; a component name with from or to null when it was added or removed).", Schema::Object({ { "from", Schema::String("string, snapshot name or .bscene path", true) }, { "to", Schema::Nullable(Schema::String("string, snapshot name or .bscene path (default: the current scene)", true)) }, { "tolerance", Schema::Nullable(Schema::Number("number, numbers this close count as equal (default 0)", 0.0, 1.0e9)) }, { "assertEqual", Schema::Nullable(Schema::Boolean("bool: fail unless the states are equal; the error lists the first differences")) } }, { "from" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "scene.diff", "Compares two scene states: 'from' and 'to' each name a snapshot (scene.snapshot) or a scene file (a project-relative path ending in .bscene); 'to' defaults to the current scene (the play copy while playing). Entities are matched by ID. Returns {equal, settings, added, removed, changed, reordered}: settings and each changed entity's changes are [{path, from, to}] (e.g. 'Transform.Translation'; a component name with from null when it was added, to null when removed); reordered is true when the entities both states have appear in a different order (sibling and UI draw order).", Schema::Object({ { "from", Schema::String("string, snapshot name or .bscene path", true) }, { "to", Schema::Nullable(Schema::String("string, snapshot name or .bscene path (default: the current scene)", true)) }, { "tolerance", Schema::Nullable(Schema::Number("number, numbers this close count as equal (default 0)", 0.0, 1.0e9)) }, { "assertEqual", Schema::Nullable(Schema::Boolean("bool: fail unless the states are equal; the error lists the first differences")) } }, { "from" }), [](AutomationSession& session, const json& params) {
 				const json from = LoadSceneState(session, RequireString(params, "from"));
 				const std::string toName = OptionalString(params, "to");
 				const json to = toName.empty() ? SceneSerializer::SerializeScene(RequireScene(session)) : LoadSceneState(session, toName);
@@ -995,25 +1021,21 @@ namespace Basalt {
 			Add(registry, "component.get", "Returns one component's fields.", Schema::Object({ { "entity", Schema::Entity("ID or name") }, { "component", Schema::String("string", true) } }, { "entity", "component" }), [](AutomationSession& session, const json& params) {
 				Entity entity = RequireEntity(session, params);
 				const std::string name = RequireString(params, "component");
-				const ComponentInfo* info = ComponentRegistry::Find(name);
-				if (!info)
-					throw CommandError("unknown component '" + name + "' (valid: " + ComponentRegistry::GetNameList() + ")");
-				if (!info->Has(entity))
+				const ComponentInfo& info = RequireComponentInfo(name);
+				if (!info.Has(entity))
 					throw CommandError("entity '" + entity.GetName() + "' has no " + name + " component");
-				return info->Serialize(entity);
+				return info.Serialize(entity);
 			});
 
 			Add(registry, "component.remove", "Removes a component.", Schema::Object({ { "entity", Schema::Entity("ID or name") }, { "component", Schema::String("string", true) } }, { "entity", "component" }), [](AutomationSession& session, const json& params) {
 				Entity entity = RequireEntity(session, params);
 				const std::string name = RequireString(params, "component");
-				const ComponentInfo* info = ComponentRegistry::Find(name);
-				if (!info)
-					throw CommandError("unknown component '" + name + "'");
-				if (info->IsCore)
+				const ComponentInfo& info = RequireComponentInfo(name);
+				if (info.IsCore)
 					throw CommandError("component '" + name + "' cannot be removed");
-				if (!info->Has(entity))
+				if (!info.Has(entity))
 					throw CommandError("entity '" + entity.GetName() + "' has no " + name + " component");
-				info->Remove(entity);
+				info.Remove(entity);
 				MarkEdited(session);
 				return json::object();
 			});
@@ -1127,6 +1149,13 @@ namespace Basalt {
 			};
 		}
 
+		// The wording is stable: the golden-image ctests skip (not fail) on a missing reference.
+		void RequireReferenceImage(const std::filesystem::path& referencePath)
+		{
+			if (!std::filesystem::exists(referencePath))
+				throw CommandError("reference image not found: '" + referencePath.string() + "'");
+		}
+
 		json CompareImageFiles(const std::filesystem::path& actualPath, const std::filesystem::path& referencePath, const json& params)
 		{
 			ImageCompareOptions options;
@@ -1136,9 +1165,7 @@ namespace Basalt {
 			const std::filesystem::path diffPath = diffParam.empty() ? std::filesystem::path() : Project::ResolvePath(diffParam);
 
 			std::string error;
-			// The wording is stable: the golden-image ctests skip (not fail) on a missing reference.
-			if (!std::filesystem::exists(referencePath))
-				throw CommandError("reference image not found: '" + referencePath.string() + "'");
+			RequireReferenceImage(referencePath);
 			Ref<TextureSource> reference = TextureSource::LoadFromFile(referencePath, error);
 			if (!reference)
 				throw CommandError("cannot load reference image: " + error);
@@ -1147,8 +1174,19 @@ namespace Basalt {
 				throw CommandError("cannot load image: " + error);
 
 			ImageCompareResult result = CompareImages(*actual, *reference, options, !diffPath.empty());
-			if (!diffPath.empty() && result.SizeMatches && !WritePng(diffPath, result.DiffImage, result.Width, result.Height, error))
-				throw CommandError(error);
+			json diff = nullptr;
+			if (!diffPath.empty() && result.SizeMatches)
+			{
+				if (!WritePng(diffPath, result.DiffImage, result.Width, result.Height, error))
+					throw CommandError(error);
+				diff = FileSystem::PathToUtf8(diffPath);
+			}
+			else if (!diffPath.empty())
+			{
+				// No diff of images of different sizes; an older one must not pass for this comparison's.
+				std::error_code ignored;
+				std::filesystem::remove(diffPath, ignored);
+			}
 
 			json response = {
 				{ "matches", result.Matches },
@@ -1159,9 +1197,11 @@ namespace Basalt {
 				{ "meanDelta", result.MeanDelta },
 				{ "differingPercent", result.DifferingPercent },
 				{ "similarity", result.SizeMatches ? 1.0 - result.MeanDelta / 255.0 : 0.0 },
+				{ "actual", FileSystem::PathToUtf8(actualPath) },
+				{ "diff", diff },
 			};
 			if (OptionalBool(params, "assertMatch", false) && !result.Matches)
-				throw CommandError("images differ: " + response.dump());
+				throw CommandError("images differ: " + response.dump(-1, ' ', false, json::error_handler_t::replace));
 			return response;
 		}
 
@@ -1387,35 +1427,26 @@ namespace Basalt {
 			const json compareProperties = ImageCompareProperties();
 			json compareSchema = Schema::Object({ { "actual", Schema::String("string, image path (relative paths are project-relative)", true) }, { "reference", Schema::String("string, image path", true) } }, { "actual", "reference" });
 			compareSchema["properties"].update(compareProperties);
-			Add(registry, "image.compare", "Compares a PNG with a reference image within a tolerance; optionally writes a diff image and fails on mismatch. similarity is 1 - meanDelta / 255 (1 = identical, 0 when the sizes differ).", std::move(compareSchema),
+			Add(registry, "image.compare", "Compares a PNG with a reference image within a tolerance; optionally writes a diff image (not when the sizes differ: 'diff' is then null) and fails on mismatch. similarity is 1 - meanDelta / 255 (1 = identical, 0 when the sizes differ); actual and diff are the resolved paths.", std::move(compareSchema),
 				[](AutomationSession&, const json& params) {
 					return CompareImageFiles(Project::ResolvePath(RequireString(params, "actual")), Project::ResolvePath(RequireString(params, "reference")), params);
 				});
 
-			json renderCompareSchema = Schema::Object({ { "reference", Schema::String("string, reference image path (relative paths are project-relative)", true) }, { "output", Schema::Nullable(Schema::String("string, where the render is written (default Cache/RenderCompare.png)", true)) }, { "width", Schema::Nullable(Schema::Integer("integer (default 1280)", 16, 8192)) }, { "height", Schema::Nullable(Schema::Integer("integer (default 720)", 16, 8192)) } }, { "reference" });
+			json renderCompareSchema = Schema::Object({ { "reference", Schema::String("string, reference image path (relative paths are project-relative)", true) }, { "output", Schema::Nullable(Schema::String("string, where the render is written (default Cache/RenderCompare.png; relative paths are project-relative)", true)) }, { "width", Schema::Nullable(Schema::Integer("integer (default 1280)", 16, 8192)) }, { "height", Schema::Nullable(Schema::Integer("integer (default 720)", 16, 8192)) } }, { "reference" });
 			renderCompareSchema["properties"].update(compareProperties);
-			Add(registry, "render.compare", "Renders the current scene like render.screenshot and compares the image with a reference like image.compare (editor / GPU hosts only). Returns the image.compare result with the rendered image's path ('actual').", std::move(renderCompareSchema), [](AutomationSession& session, const json& params) {
+			Add(registry, "render.compare", "Renders the current scene like render.screenshot and compares the image with a reference like image.compare (editor / GPU hosts only). Returns the image.compare result; 'actual' is where the render was written.", std::move(renderCompareSchema), [](AutomationSession& session, const json& params) {
 				if (!session.Screenshot)
 					throw CommandError("render.compare needs a GPU host (the editor); this host is '" + session.HostName + "'. Headless, compare a 'BasaltRuntime --frames N --screenshot' image with image.compare");
-				const std::string output = OptionalString(params, "output", "Cache/RenderCompare.png");
-				const std::filesystem::path outputPath = Project::ResolvePath(output);
+				const std::filesystem::path outputPath = Project::ResolvePath(OptionalString(params, "output", "Cache/RenderCompare.png"));
 				const uint32_t width = static_cast<uint32_t>(OptionalInteger(params, "width", 1280, 16, 8192));
 				const uint32_t height = static_cast<uint32_t>(OptionalInteger(params, "height", 720, 16, 8192));
 				const std::filesystem::path referencePath = Project::ResolvePath(RequireString(params, "reference"));
-				// Checked before rendering, with image.compare's wording, so a missing reference costs no render.
-				if (!std::filesystem::exists(referencePath))
-					throw CommandError("reference image not found: '" + referencePath.string() + "'");
-				std::error_code ec;
-				if (outputPath.has_parent_path())
-					std::filesystem::create_directories(outputPath.parent_path(), ec);
-				if (ec)
-					throw CommandError("cannot create the folder for '" + outputPath.string() + "': " + ec.message());
+				// Before rendering, so a missing reference costs no render. The screenshot creates the output folder.
+				RequireReferenceImage(referencePath);
 				std::string error;
 				if (!session.Screenshot(outputPath, width, height, error))
 					throw CommandError(error);
-				json result = CompareImageFiles(outputPath, referencePath, params);
-				result["actual"] = output;
-				return result;
+				return CompareImageFiles(outputPath, referencePath, params);
 			});
 		}
 
@@ -1423,29 +1454,33 @@ namespace Basalt {
 		// Checks that read like a game test's specification. They fail with "assertion failed: ..." so a batch
 		// can expect the failure (expectError) and a log shows what was wrong.
 
+		std::string EntityLabel(Entity entity)
+		{
+			return fmt::format("'{}' (ID {})", entity.GetName(), static_cast<uint64_t>(entity.GetUUID()));
+		}
+
+		// Runs a lookup whose failure means the scene does not match the assertion: the error gets its prefix.
+		template<typename F>
+		auto Asserting(F&& lookup)
+		{
+			try
+			{
+				return lookup();
+			}
+			catch (const CommandError& e)
+			{
+				throw CommandError(std::string("assertion failed: ") + e.what());
+			}
+		}
+
 		void RegisterAssertions(CommandRegistry& registry)
 		{
 			Add(registry, "assert.entity_exists", "Fails unless the current scene (the play copy while playing) has the entity: by ID, or by name (any number of entities with that name). With exists=false, fails if it does exist; with count, unless exactly that many entities have the name (or ID). Returns {count, ids}.", Schema::Object({ { "entity", Schema::Entity("ID or name") }, { "exists", Schema::Nullable(Schema::Boolean("bool (default true)")) }, { "count", Schema::Nullable(Schema::Integer("integer, exact number of matching entities", 0, 1000000)) } }, { "entity" }), [](AutomationSession& session, const json& params) {
-				Scene& scene = RequireScene(session);
-				const json& reference = Require(params, "entity");
-				std::vector<Entity> matches;
-				std::string what;
-				if (reference.is_number_integer() || reference.is_number_unsigned())
-				{
-					what = "with ID " + std::to_string(reference.get<uint64_t>());
-					if (Entity entity = scene.GetEntityByUUID(reference.get<uint64_t>()))
-						matches.push_back(entity);
-				}
-				else
-				{
-					what = "named '" + reference.get<std::string>() + "'";
-					matches = scene.FindEntitiesByName(reference.get<std::string>());
-				}
-				const bool hasCount = params.contains("count") && !params["count"].is_null();
-				const bool hasExists = params.contains("exists") && !params["exists"].is_null();
-				if (hasCount && hasExists)
+				if (HasParam(params, "count") && HasParam(params, "exists"))
 					throw CommandError("pass either 'exists' or 'count', not both");
-				if (hasCount)
+				std::string what;
+				const std::vector<Entity> matches = FindEntities(RequireScene(session), Require(params, "entity"), "entity", what);
+				if (HasParam(params, "count"))
 				{
 					const auto expected = static_cast<size_t>(OptionalInteger(params, "count", 0, 0, 1000000));
 					if (matches.size() != expected)
@@ -1464,36 +1499,34 @@ namespace Basalt {
 				return json{ { "count", matches.size() }, { "ids", ids } };
 			});
 
-			Add(registry, "assert.component", "Fails unless the entity has the component and, for each given field, the value component.get returns (numbers within 'tolerance', vectors element-wise; objects may have more keys than given). With exists=false, fails if the entity has the component. Returns the component's fields. The error lists every mismatch.", Schema::Object({ { "entity", Schema::Entity("ID or name") }, { "component", Schema::String("string, e.g. 'Transform'", true) }, { "fields", json{ { "type", "object" }, { "description", "object of expected field values (component.get format; entity references take an ID or name)" } } }, { "tolerance", Schema::Nullable(Schema::Number("number (default 0.0001)", 0.0, 1.0e9)) }, { "exists", Schema::Nullable(Schema::Boolean("bool (default true)")) } }, { "entity", "component" }), [](AutomationSession& session, const json& params) {
-				Entity entity = RequireEntity(session, params);
+			Add(registry, "assert.component", "Fails unless the entity (which must exist, with a unique name) has the component and, for each given field, the value component.get returns: floats within 'tolerance', integers and everything else exactly, vectors element-wise, objects may have more keys than given. With exists=false, fails if the entity has the component. Returns the component's fields. The error lists every mismatch.", Schema::Object({ { "entity", Schema::Entity("ID or name") }, { "component", Schema::String("string, e.g. 'Transform'", true) }, { "fields", json{ { "type", "object" }, { "description", "object of expected field values (component.get format; entity references take an ID or name)" } } }, { "tolerance", Schema::Nullable(Schema::Number("number (default 0.0001)", 0.0, 1.0e9)) }, { "exists", Schema::Nullable(Schema::Boolean("bool (default true)")) } }, { "entity", "component" }), [](AutomationSession& session, const json& params) {
+				Entity entity = Asserting([&]() { return RequireEntity(session, params); });
 				const std::string name = RequireString(params, "component");
-				const ComponentInfo* info = ComponentRegistry::Find(name);
-				if (!info)
-					throw CommandError("unknown component '" + name + "' (valid: " + ComponentRegistry::GetNameList() + ")");
+				const ComponentInfo& info = RequireComponentInfo(name);
 				const bool hasFields = params.contains("fields");
 				if (!OptionalBool(params, "exists", true))
 				{
 					if (hasFields)
 						throw CommandError("'fields' cannot be checked with exists=false");
-					if (info->Has(entity))
-						throw CommandError("assertion failed: '" + entity.GetName() + "' has a " + name + " component");
+					if (info.Has(entity))
+						throw CommandError("assertion failed: " + EntityLabel(entity) + " has a " + name + " component");
 					return json::object();
 				}
-				if (!info->Has(entity))
-					throw CommandError("assertion failed: '" + entity.GetName() + "' has no " + name + " component");
-				json data = info->Serialize(entity);
+				if (!info.Has(entity))
+					throw CommandError("assertion failed: " + EntityLabel(entity) + " has no " + name + " component");
+				json data = info.Serialize(entity);
 				if (!hasFields)
 					return data;
 				for (const auto& [field, value] : params["fields"].items())
 				{
-					if (std::ranges::find(info->Fields, field) == info->Fields.end())
-						throw CommandError(fmt::format("unknown field '{}' for {} (valid: {})", field, name, fmt::join(info->Fields, ", ")));
+					if (std::ranges::find(info.Fields, field) == info.Fields.end())
+						throw CommandError(fmt::format("unknown field '{}' for {} (valid: {})", field, name, fmt::join(info.Fields, ", ")));
 				}
-				const json expected = ResolveEntityFields(RequireScene(session), name, params["fields"]);
+				const json expected = Asserting([&]() { return ResolveEntityFields(RequireScene(session), name, params["fields"]); });
 				std::vector<std::string> mismatches;
 				MatchJsonSubset(data, expected, OptionalNumber(params, "tolerance", 1.0e-4, 0.0, 1.0e9), name, mismatches);
 				if (!mismatches.empty())
-					throw CommandError(fmt::format("assertion failed: '{}' {}", entity.GetName(), fmt::join(mismatches, "; ")));
+					throw CommandError(fmt::format("assertion failed: {} {}", EntityLabel(entity), fmt::join(mismatches, "; ")));
 				return data;
 			});
 		}
@@ -1503,64 +1536,93 @@ namespace Basalt {
 		void RegisterEvents(CommandRegistry& registry)
 		{
 			json types = Schema::String("");
-			types["enum"] = { "log", "scriptError", "playState", "collision" };
-			json typesSchema = { { "type", "array" }, { "description", "array of event types: log, scriptError, playState, collision (default all)" }, { "items", types }, { "minItems", 1 } };
-			json minLevel = Schema::String("string, lowest log level delivered: trace, info (default), warn, error, critical");
-			minLevel["enum"] = { "trace", "info", "warn", "error", "critical" };
-			Add(registry, "events.subscribe", "Starts collecting events: log lines, script errors, play-state changes (play, simulate, pause, resume, stop) and collisions (begin/end, trigger enter/exit, in Play and Simulate). On the editor's TCP server (line protocol) they stream to the connection as {\"event\": ...} lines without 'ok', and end with it; elsewhere (CLI, MCP) read them with events.poll. Returns {subscription, types, minLevel, streamed}.", Schema::Object({ { "types", typesSchema }, { "minLevel", Schema::Nullable(minLevel) } }), [](AutomationSession& session, const json& params) {
+			types["enum"] = json::array();
+			for (const char* name : AutomationEventTypeNames())
+				types["enum"].push_back(name);
+			const std::string typeList = fmt::format("{}", fmt::join(AutomationEventTypeNames(), ", "));
+			json typesSchema = { { "type", "array" }, { "description", "array of event types: " + typeList + " (default all)" }, { "items", types }, { "minItems", 1 } };
+			json minLevel = Schema::String("string, lowest log level delivered (default info)");
+			minLevel["enum"] = json::array();
+			for (auto level = static_cast<int>(LogLevel::Trace); level <= static_cast<int>(LogLevel::Critical); level++)
+				minLevel["enum"].push_back(LogLevelName(static_cast<LogLevel>(level)));
+			Add(registry, "events.subscribe", "Starts collecting events: log lines, script errors, play-state changes (play, simulate, stop; pause and resume from the editor's Pause button) and collisions (collisionBegin/End and triggerEnter/Exit, in Play and Simulate). On the editor's TCP server a line-protocol connection receives them as {\"event\": ...} lines without 'ok' (and {\"event\": \"dropped\"} when it falls behind); MCP and CLI clients read them with events.poll. A TCP connection's subscriptions end with it. Returns {subscription, types, minLevel, streamed}.", Schema::Object({ { "types", typesSchema }, { "minLevel", Schema::Nullable(minLevel) } }), [](AutomationSession& session, const json& params) {
 				AutomationEventHub::Filter filter;
 				if (auto it = params.find("types"); it != params.end())
 				{
 					filter.Types = 0;
 					for (const json& name : *it)
-						filter.Types |= 1u << static_cast<uint32_t>(*AutomationEventTypeFromName(name.get<std::string>()));
+					{
+						const std::optional<AutomationEventType> type = AutomationEventTypeFromName(name.get<std::string>());
+						if (!type)
+							throw CommandError("unknown event type " + name.dump());
+						filter.Types |= AutomationEventHub::TypeBit(*type);
+					}
 				}
 				if (const std::string level = OptionalString(params, "minLevel"); !level.empty())
-					filter.MinLevel = *LogLevelFromName(level);
-				const uint64_t owner = session.GetEventStreamOwner();
-				const std::optional<uint64_t> id = session.GetEvents()->Subscribe(filter, owner);
+				{
+					const std::optional<LogLevel> parsed = LogLevelFromName(level);
+					if (!parsed)
+						throw CommandError("unknown log level '" + level + "'");
+					filter.MinLevel = *parsed;
+				}
+				const AutomationSession::EventClient& client = session.GetEventClient();
+				const auto delivery = client.Streams ? AutomationEventHub::Delivery::Streamed : AutomationEventHub::Delivery::Polled;
+				const std::optional<uint64_t> id = session.GetEvents()->Subscribe(filter, client.Owner, delivery);
 				if (!id)
 					throw CommandError(fmt::format("too many event subscriptions (at most {}); end one with events.unsubscribe", AutomationEventHub::MaxSubscriptions));
 				json names = json::array();
 				for (uint32_t type = 0; type < static_cast<uint32_t>(AutomationEventType::Count); type++)
 				{
-					if (filter.Types & (1u << type))
+					if (filter.Types & AutomationEventHub::TypeBit(static_cast<AutomationEventType>(type)))
 						names.push_back(AutomationEventTypeName(static_cast<AutomationEventType>(type)));
 				}
-				return json{ { "subscription", *id }, { "types", names }, { "minLevel", LogLevelName(filter.MinLevel) }, { "streamed", owner != 0 } };
+				return json{ { "subscription", *id }, { "types", names }, { "minLevel", LogLevelName(filter.MinLevel) }, { "streamed", client.Streams } };
 			});
 
 			json assertTypes = typesSchema;
-			assertTypes["description"] = "array of event types: fail unless the returned events include each";
-			Add(registry, "events.poll", "Returns (and removes) the events a polled subscription collected, oldest first, with 'dropped': how many were lost because more than 1024 were waiting.", Schema::Object({ { "subscription", Schema::Integer("integer, from events.subscribe", 1, UINT64_MAX) }, { "max", Schema::Nullable(Schema::Integer("integer (default 1024)", 1, AutomationEventHub::MaxQueuedEvents)) }, { "assertTypes", assertTypes } }, { "subscription" }), [](AutomationSession& session, const json& params) {
+			assertTypes["description"] = "array of event types: fail unless the returned events include each; the events then stay queued";
+			Add(registry, "events.poll", fmt::format("Returns (and removes) up to 'max' events a polled subscription collected, oldest first, with 'dropped': how many were lost because more than {} were waiting.", AutomationEventHub::MaxQueuedEvents), Schema::Object({ { "subscription", Schema::Integer("integer, from events.subscribe", 1, UINT64_MAX) }, { "max", Schema::Nullable(Schema::Integer(fmt::format("integer (default {})", AutomationEventHub::MaxQueuedEvents), 1, AutomationEventHub::MaxQueuedEvents)) }, { "assertTypes", assertTypes } }, { "subscription" }), [](AutomationSession& session, const json& params) {
 				const uint64_t id = Require(params, "subscription").get<uint64_t>();
 				const auto max = static_cast<size_t>(OptionalInteger(params, "max", AutomationEventHub::MaxQueuedEvents, 1, AutomationEventHub::MaxQueuedEvents));
+				std::vector<std::string> missing;
+				const auto hasEveryType = [&](const std::vector<json>& events) {
+					missing.clear();
+					if (auto it = params.find("assertTypes"); it != params.end())
+					{
+						for (const json& type : *it)
+						{
+							if (std::ranges::none_of(events, [&type](const json& event) { return json(event.value("event", "")) == type; }))
+								missing.push_back(type.get<std::string>());
+						}
+					}
+					return missing.empty();
+				};
 				std::vector<json> events;
 				uint64_t dropped = 0;
-				switch (session.GetEvents()->Poll(id, max, events, dropped))
+				switch (session.GetEvents()->Poll(id, max, events, dropped, hasEveryType))
 				{
 					case AutomationEventHub::PollStatus::UnknownSubscription:
 						throw CommandError("no event subscription " + std::to_string(id));
 					case AutomationEventHub::PollStatus::Streamed:
 						throw CommandError("event subscription " + std::to_string(id) + " streams to its connection; it cannot be polled");
+					case AutomationEventHub::PollStatus::Rejected:
+					{
+						std::map<std::string, size_t> counts;
+						for (const json& event : events)
+							counts[event.value("event", "")]++;
+						std::vector<std::string> kinds;
+						kinds.reserve(counts.size());
+						for (const auto& [kind, count] : counts)
+							kinds.push_back(fmt::format("{} {}", count, kind));
+						throw CommandError(fmt::format("assertion failed: no {} event among the {} queued ({}; {} dropped); they stay queued", fmt::join(missing, ", "), events.size(), kinds.empty() ? std::string("none") : fmt::format("{}", fmt::join(kinds, ", ")), dropped));
+					}
 					case AutomationEventHub::PollStatus::Ok:
 						break;
-				}
-				if (auto it = params.find("assertTypes"); it != params.end())
-				{
-					std::vector<std::string> missing;
-					for (const json& type : *it)
-					{
-						if (std::ranges::none_of(events, [&type](const json& event) { return event["event"] == type; }))
-							missing.push_back(type.get<std::string>());
-					}
-					if (!missing.empty())
-						throw CommandError(fmt::format("assertion failed: no {} event among the {} polled", fmt::join(missing, ", "), events.size()));
 				}
 				return json{ { "events", events }, { "dropped", dropped } };
 			});
 
-			Add(registry, "events.unsubscribe", "Ends an event subscription and discards its queued events.", Schema::Object({ { "subscription", Schema::Integer("integer, from events.subscribe", 1, UINT64_MAX) } }, { "subscription" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "events.unsubscribe", "Ends an event subscription (any client's) and discards its queued events.", Schema::Object({ { "subscription", Schema::Integer("integer, from events.subscribe", 1, UINT64_MAX) } }, { "subscription" }), [](AutomationSession& session, const json& params) {
 				const uint64_t id = Require(params, "subscription").get<uint64_t>();
 				if (!session.GetEvents()->Unsubscribe(id))
 					throw CommandError("no event subscription " + std::to_string(id));

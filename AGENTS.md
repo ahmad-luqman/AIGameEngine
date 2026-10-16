@@ -63,7 +63,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   `basalt` CLI (headless) and the editor's TCP server (127.0.0.1:7420, adds
   `editor.*` commands and screenshots). Docs: Docs/AutomationCommands.md (generated), Docs/MCP.md (agent setup/protocol). CommandInfo declares
   InputSchema: validation, help and MCP tool definitions share it; editor TCP clients can use MCP too.
-  `AutomationEventHub` (owned by the session, thread-safe) feeds `events.*`: the session's `SceneEventListener` on the
+  `AutomationEventHub` (created by the session, shared with TCP connections, thread-safe) feeds `events.*`: the session's `SceneEventListener` on the
   play copy reports contacts and script errors, a `LogHistory` listener log lines; legacy TCP connections stream
   their subscriptions (`AutomationServer::ClientHandler::TakePending`). Agent checks: `scene.snapshot`/`scene.diff`
   (`Scene/SceneDiff`), `assert.*`, `render.compare`.
@@ -99,7 +99,8 @@ scripts/test.sh             # build + ctest (unit tests, format check, ...)
   `ParseJson` and read floats with `JsonToFloat` (`Basalt/Core/JsonUtils.h`). Tests carry ctest labels
   (`unit`, `integration`, `gpu`, `format`) for `ctest -L/-LE`. Details: the basalt-build-test skill.
 - **macOS + Homebrew:** Homebrew's validation layer manifest names its library without a path, so non-Dist
-  builds point `VK_ADD_LAYER_PATH` at a copy with the absolute path (`Renderer/ValidationLayerManifest`); no
+  builds point `VK_ADD_LAYER_PATH` at a copy with the absolute path (`Renderer/ValidationLayerManifest`; prefixes
+  `$HOMEBREW_PREFIX`, `/opt/homebrew`, `/usr/local`); no
   `DYLD_FALLBACK_LIBRARY_PATH` is needed. Check the log for `validation enabled` when testing rendering changes.
 
 ## Code style (Hazel conventions)
@@ -190,7 +191,7 @@ Other rules:
 
 - Rendering: `Docs/Rendering.md` (clustered lighting, FSR 1 settings, diagnostics and GPU tests).
 - Lua API: `Docs/ScriptingAPI.md` and the LuaLS definitions `Docs/basalt.d.lua` (update both with every binding change;
-  the `LuaTypeDefinitions` test checks the definitions).
+  the `LuaTypeDefinitions` test checks that declared names and component fields match; signatures are kept by hand).
 - `Docs/AutomationCommands.md`, `Docs/Components.md` and the component section of `Docs/basalt.d.lua` are
   generated: run `python3 scripts/generate_docs.py` after changing commands or components (the `GeneratedDocs`
   ctest fails while they are stale).

@@ -12,7 +12,7 @@ succeeds only if its command fails with an error containing `<text>` (used by te
 
 ### `assert.component`
 
-Fails unless the entity has the component and, for each given field, the value component.get returns (numbers within 'tolerance', vectors element-wise; objects may have more keys than given). With exists=false, fails if the entity has the component. Returns the component's fields. The error lists every mismatch.
+Fails unless the entity (which must exist, with a unique name) has the component and, for each given field, the value component.get returns: floats within 'tolerance', integers and everything else exactly, vectors element-wise, objects may have more keys than given. With exists=false, fails if the entity has the component. Returns the component's fields. The error lists every mismatch.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -890,11 +890,11 @@ Returns local and world transforms of an entity.
 
 ### `events.poll`
 
-Returns (and removes) the events a polled subscription collected, oldest first, with 'dropped': how many were lost because more than 1024 were waiting.
+Returns (and removes) up to 'max' events a polled subscription collected, oldest first, with 'dropped': how many were lost because more than 1024 were waiting.
 
 | Parameter | Type / description |
 |-----------|--------------------|
-| `assertTypes` | array of event types: fail unless the returned events include each |
+| `assertTypes` | array of event types: fail unless the returned events include each; the events then stay queued |
 | `max` | integer (default 1024) |
 | `subscription` | integer, from events.subscribe |
 
@@ -905,7 +905,7 @@ Returns (and removes) the events a polled subscription collected, oldest first, 
   "additionalProperties": false,
   "properties": {
     "assertTypes": {
-      "description": "array of event types: fail unless the returned events include each",
+      "description": "array of event types: fail unless the returned events include each; the events then stay queued",
       "items": {
         "description": "",
         "enum": [
@@ -951,11 +951,11 @@ Returns (and removes) the events a polled subscription collected, oldest first, 
 
 ### `events.subscribe`
 
-Starts collecting events: log lines, script errors, play-state changes (play, simulate, pause, resume, stop) and collisions (begin/end, trigger enter/exit, in Play and Simulate). On the editor's TCP server (line protocol) they stream to the connection as {"event": ...} lines without 'ok', and end with it; elsewhere (CLI, MCP) read them with events.poll. Returns {subscription, types, minLevel, streamed}.
+Starts collecting events: log lines, script errors, play-state changes (play, simulate, stop; pause and resume from the editor's Pause button) and collisions (collisionBegin/End and triggerEnter/Exit, in Play and Simulate). On the editor's TCP server a line-protocol connection receives them as {"event": ...} lines without 'ok' (and {"event": "dropped"} when it falls behind); MCP and CLI clients read them with events.poll. A TCP connection's subscriptions end with it. Returns {subscription, types, minLevel, streamed}.
 
 | Parameter | Type / description |
 |-----------|--------------------|
-| `minLevel` | string, lowest log level delivered: trace, info (default), warn, error, critical |
+| `minLevel` | string, lowest log level delivered (default info) |
 | `types` | array of event types: log, scriptError, playState, collision (default all) |
 
 <details><summary>Parameter JSON Schema</summary>
@@ -967,7 +967,7 @@ Starts collecting events: log lines, script errors, play-state changes (play, si
     "minLevel": {
       "anyOf": [
         {
-          "description": "string, lowest log level delivered: trace, info (default), warn, error, critical",
+          "description": "string, lowest log level delivered (default info)",
           "enum": [
             "trace",
             "info",
@@ -981,7 +981,7 @@ Starts collecting events: log lines, script errors, play-state changes (play, si
           "type": "null"
         }
       ],
-      "description": "string, lowest log level delivered: trace, info (default), warn, error, critical"
+      "description": "string, lowest log level delivered (default info)"
     },
     "types": {
       "description": "array of event types: log, scriptError, playState, collision (default all)",
@@ -1008,7 +1008,7 @@ Starts collecting events: log lines, script errors, play-state changes (play, si
 
 ### `events.unsubscribe`
 
-Ends an event subscription and discards its queued events.
+Ends an event subscription (any client's) and discards its queued events.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -1069,7 +1069,7 @@ Lists commands, or describes one command with its parameter schema.
 
 ### `image.compare`
 
-Compares a PNG with a reference image within a tolerance; optionally writes a diff image and fails on mismatch. similarity is 1 - meanDelta / 255 (1 = identical, 0 when the sizes differ).
+Compares a PNG with a reference image within a tolerance; optionally writes a diff image (not when the sizes differ: 'diff' is then null) and fails on mismatch. similarity is 1 - meanDelta / 255 (1 = identical, 0 when the sizes differ); actual and diff are the resolved paths.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2160,7 +2160,7 @@ Checks that the project would export and start: settings, start scene, every sce
 
 ### `render.compare`
 
-Renders the current scene like render.screenshot and compares the image with a reference like image.compare (editor / GPU hosts only). Returns the image.compare result with the rendered image's path ('actual').
+Renders the current scene like render.screenshot and compares the image with a reference like image.compare (editor / GPU hosts only). Returns the image.compare result; 'actual' is where the render was written.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2168,7 +2168,7 @@ Renders the current scene like render.screenshot and compares the image with a r
 | `diff` | string, output .png, optional |
 | `height` | integer (default 720) |
 | `maxPercent` | number, default 0.5 |
-| `output` | string, where the render is written (default Cache/RenderCompare.png) |
+| `output` | string, where the render is written (default Cache/RenderCompare.png; relative paths are project-relative) |
 | `pixelThreshold` | integer 0-255, default 8 |
 | `reference` | string, reference image path (relative paths are project-relative) |
 | `width` | integer (default 1280) |
@@ -2234,7 +2234,7 @@ Renders the current scene like render.screenshot and compares the image with a r
     "output": {
       "anyOf": [
         {
-          "description": "string, where the render is written (default Cache/RenderCompare.png)",
+          "description": "string, where the render is written (default Cache/RenderCompare.png; relative paths are project-relative)",
           "minLength": 1,
           "type": "string"
         },
@@ -2242,7 +2242,7 @@ Renders the current scene like render.screenshot and compares the image with a r
           "type": "null"
         }
       ],
-      "description": "string, where the render is written (default Cache/RenderCompare.png)"
+      "description": "string, where the render is written (default Cache/RenderCompare.png; relative paths are project-relative)"
     },
     "pixelThreshold": {
       "anyOf": [
@@ -2485,7 +2485,7 @@ Restarts play from the edit scene with no input held, re-applies a replay's inpu
 
 ### `scene.diff`
 
-Compares two scene states: 'from' and 'to' each name a snapshot (scene.snapshot) or a scene file (a project-relative path ending in .bscene); 'to' defaults to the current scene (the play copy while playing). Entities are matched by ID. Returns {equal, settings, added, removed, changed}: settings and each changed entity's changes are [{path, from, to}] (e.g. 'Transform.Translation'; a component name with from or to null when it was added or removed).
+Compares two scene states: 'from' and 'to' each name a snapshot (scene.snapshot) or a scene file (a project-relative path ending in .bscene); 'to' defaults to the current scene (the play copy while playing). Entities are matched by ID. Returns {equal, settings, added, removed, changed, reordered}: settings and each changed entity's changes are [{path, from, to}] (e.g. 'Transform.Translation'; a component name with from null when it was added, to null when removed); reordered is true when the entities both states have appear in a different order (sibling and UI draw order).
 
 | Parameter | Type / description |
 |-----------|--------------------|

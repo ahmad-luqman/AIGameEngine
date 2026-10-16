@@ -42,12 +42,12 @@ namespace Basalt {
 			std::vector<std::string>& GetFieldNames() { return m_FieldNames; }
 			std::map<std::string, std::vector<std::string>>& GetEnumOptions() { return m_EnumOptions; }
 			std::vector<std::string>& GetEntityFields() { return m_EntityFields; }
-			std::map<std::string, std::string>& GetFieldTypes() { return m_FieldTypes; }
+			std::map<std::string, ComponentFieldType>& GetFieldTypes() { return m_FieldTypes; }
 
 			template<typename T>
 			void Field(const char* name, T& value)
 			{
-				m_FieldTypes[name] = TypeName<T>();
+				Describe(name, TypeOf<T>());
 				const json* element = Find(name);
 				if (element)
 					Read(name, *element, value);
@@ -57,8 +57,9 @@ namespace Basalt {
 			// copies can remap the reference.
 			void Field(const char* name, UUID& value)
 			{
-				m_EntityFields.emplace_back(name);
-				m_FieldTypes[name] = "entity";
+				if (IsCollecting())
+					m_EntityFields.emplace_back(name);
+				Describe(name, { ComponentFieldKind::Entity });
 				const json* element = Find(name);
 				if (element)
 					Read(name, *element, value);
@@ -67,7 +68,7 @@ namespace Basalt {
 			// Rotation stored as Euler angles in degrees.
 			void RotationField(const char* name, glm::quat& value)
 			{
-				m_FieldTypes[name] = "number[3]";
+				Describe(name, { ComponentFieldKind::Number, 3 });
 				const json* element = Find(name);
 				if (!element)
 					return;
@@ -79,7 +80,7 @@ namespace Basalt {
 			// Angle stored in degrees, held in radians.
 			void AngleField(const char* name, float& radiansValue)
 			{
-				m_FieldTypes[name] = "number";
+				Describe(name, { ComponentFieldKind::Number });
 				const json* element = Find(name);
 				if (!element)
 					return;
@@ -91,8 +92,7 @@ namespace Basalt {
 			template<typename E, size_t N>
 			void EnumField(const char* name, E& value, const char* const (&names)[N])
 			{
-				m_EnumOptions[name] = std::vector<std::string>(std::begin(names), std::end(names));
-				m_FieldTypes[name] = "enum";
+				DescribeEnum(name, { ComponentFieldKind::Enum }, names);
 				const json* element = Find(name);
 				if (element)
 					value = ReadEnum<E>(name, *element, names);
@@ -103,8 +103,7 @@ namespace Basalt {
 			template<typename E, size_t Count, size_t N>
 			void EnumArrayField(const char* name, std::array<E, Count>& value, const char* const (&names)[N])
 			{
-				m_EnumOptions[name] = std::vector<std::string>(std::begin(names), std::end(names));
-				m_FieldTypes[name] = "enum[" + std::to_string(Count) + "]";
+				DescribeEnum(name, { ComponentFieldKind::Enum, static_cast<uint8_t>(Count) }, names);
 				const json* element = Find(name);
 				if (!element)
 					return;
@@ -148,26 +147,44 @@ namespace Basalt {
 			}
 
 		private:
+			// Collect mode (no data) records what tools need about each field; reads skip that bookkeeping.
+			bool IsCollecting() const { return m_Data == nullptr; }
+
+			void Describe(const char* name, ComponentFieldType type)
+			{
+				if (IsCollecting())
+					m_FieldTypes[name] = type;
+			}
+
+			template<size_t N>
+			void DescribeEnum(const char* name, ComponentFieldType type, const char* const (&names)[N])
+			{
+				if (!IsCollecting())
+					return;
+				m_FieldTypes[name] = type;
+				m_EnumOptions[name] = std::vector<std::string>(std::begin(names), std::end(names));
+			}
+
 			// The JSON type a Read overload accepts (see ComponentInfo::FieldTypes).
 			template<typename T>
-			static std::string TypeName()
+			static constexpr ComponentFieldType TypeOf()
 			{
 				if constexpr (std::is_same_v<T, float>)
-					return "number";
+					return { ComponentFieldKind::Number };
 				else if constexpr (std::is_same_v<T, uint32_t>)
-					return "integer";
+					return { ComponentFieldKind::Integer };
 				else if constexpr (std::is_same_v<T, bool>)
-					return "boolean";
+					return { ComponentFieldKind::Boolean };
 				else if constexpr (std::is_same_v<T, std::string>)
-					return "string";
+					return { ComponentFieldKind::String };
 				else if constexpr (std::is_same_v<T, json>)
-					return "object";
+					return { ComponentFieldKind::Object };
 				else if constexpr (std::is_same_v<T, glm::vec2> || std::is_same_v<T, glm::vec3> || std::is_same_v<T, glm::vec4>)
-					return "number[" + std::to_string(T::length()) + "]";
+					return { ComponentFieldKind::Number, static_cast<uint8_t>(T::length()) };
 				else if constexpr (std::is_same_v<T, glm::bvec2> || std::is_same_v<T, glm::bvec3> || std::is_same_v<T, glm::bvec4>)
-					return "boolean[" + std::to_string(T::length()) + "]";
+					return { ComponentFieldKind::Boolean, static_cast<uint8_t>(T::length()) };
 				else
-					static_assert(sizeof(T) == 0, "add the field type to TypeName");
+					static_assert(sizeof(T) == 0, "add the field type to TypeOf");
 			}
 
 			template<typename E, size_t N>
@@ -183,7 +200,8 @@ namespace Basalt {
 
 			const json* Find(const char* name)
 			{
-				m_FieldNames.emplace_back(name);
+				if (IsCollecting())
+					m_FieldNames.emplace_back(name);
 				if (!m_Data)
 					return nullptr;
 				auto it = m_Data->find(name);
@@ -270,7 +288,7 @@ namespace Basalt {
 			std::vector<std::string> m_FieldNames;
 			std::map<std::string, std::vector<std::string>> m_EnumOptions;
 			std::vector<std::string> m_EntityFields;
-			std::map<std::string, std::string> m_FieldTypes;
+			std::map<std::string, ComponentFieldType> m_FieldTypes;
 		};
 
 		template<glm::length_t L>
@@ -1316,6 +1334,16 @@ namespace Basalt {
 			return infos;
 		}
 
+	}
+
+	std::string ComponentFieldType::ToString() const
+	{
+		static constexpr const char* const Names[] = { "number", "integer", "boolean", "string", "object", "entity", "enum" };
+		const char* name = EnumNameOrNull(Names, Kind);
+		std::string text = name ? name : "unknown";
+		if (Count > 0)
+			text += "[" + std::to_string(Count) + "]";
+		return text;
 	}
 
 	const std::vector<ComponentInfo>& ComponentRegistry::GetAll()

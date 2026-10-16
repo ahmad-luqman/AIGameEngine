@@ -1,12 +1,24 @@
 #include "Basalt/Core/Log.h"
 
+#include "Basalt/Core/EnumNames.h"
+
 #include <spdlog/sinks/base_sink.h>
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 
+#include <cstdio>
+#include <exception>
+#include <iterator>
+
 namespace Basalt {
 
 	namespace {
+
+		constexpr const char* const LevelNames[] = { "trace", "info", "warn", "error", "critical" };
+		static_assert(std::size(LevelNames) == static_cast<size_t>(LogLevel::Critical) + 1, "one name per LogLevel");
+
+		// Set while this thread runs listeners: a listener that logs must not re-enter them (or their lock).
+		thread_local bool s_InListener = false;
 
 		LogLevel ToLogLevel(spdlog::level::level_enum level)
 		{
@@ -44,7 +56,7 @@ namespace Basalt {
 				message.Level = ToLogLevel(msg.level);
 				message.LoggerName = std::string(msg.logger_name.data(), msg.logger_name.size());
 				message.Text = std::string(msg.payload.data(), msg.payload.size());
-				m_History.Push(std::move(message));
+				m_History.Push(message);
 			}
 
 			void flush_() override {}
@@ -61,33 +73,65 @@ namespace Basalt {
 
 	}
 
+	const char* LogLevelName(LogLevel level)
+	{
+		const char* name = EnumNameOrNull(LevelNames, level);
+		return name ? name : "unknown";
+	}
+
+	std::optional<LogLevel> LogLevelFromName(std::string_view name)
+	{
+		return EnumFromName<LogLevel>(LevelNames, name);
+	}
+
 	LogHistory::LogHistory(size_t capacity)
 		: m_Capacity(capacity > 0 ? capacity : 1)
 	{
 		m_Messages.reserve(m_Capacity);
 	}
 
-	void LogHistory::Push(LogMessage message)
+	void LogHistory::Push(const LogMessage& message)
 	{
+		{
+			std::scoped_lock lock(m_Mutex);
+			if (message.Level >= LogLevel::Error)
+				m_ErrorCount++;
+
+			if (m_Messages.size() < m_Capacity)
+			{
+				m_Messages.push_back(message);
+			}
+			else
+			{
+				m_Messages[m_Head] = message;
+				m_Head = (m_Head + 1) % m_Capacity;
+			}
+			m_TotalCount++;
+		}
+		// After storing, so a failing listener cannot lose the message for log.get and error counts.
+		if (s_InListener)
+			return;
+		s_InListener = true;
 		{
 			std::scoped_lock listenerLock(m_ListenerMutex);
 			for (const auto& [id, listener] : m_Listeners)
-				listener(message);
+			{
+				try
+				{
+					listener(message);
+				}
+				catch (const std::exception& e)
+				{
+					// Logging the failure would re-enter the listeners.
+					std::fprintf(stderr, "LogHistory: a listener failed: %s\n", e.what());
+				}
+				catch (...)
+				{
+					std::fprintf(stderr, "LogHistory: a listener failed\n");
+				}
+			}
 		}
-		std::scoped_lock lock(m_Mutex);
-		if (message.Level >= LogLevel::Error)
-			m_ErrorCount++;
-
-		if (m_Messages.size() < m_Capacity)
-		{
-			m_Messages.push_back(std::move(message));
-		}
-		else
-		{
-			m_Messages[m_Head] = std::move(message);
-			m_Head = (m_Head + 1) % m_Capacity;
-		}
-		m_TotalCount++;
+		s_InListener = false;
 	}
 
 	void LogHistory::Clear()
