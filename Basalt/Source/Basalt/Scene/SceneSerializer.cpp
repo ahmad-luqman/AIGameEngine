@@ -2,6 +2,7 @@
 
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/JsonUtils.h"
+#include "Basalt/Core/EnumNames.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Scene/ComponentRegistry.h"
@@ -152,7 +153,7 @@ namespace Basalt {
 		{
 			return {
 				{ "Exposure", s.Exposure },
-				{ "Tonemapper", TonemapperNames[static_cast<int>(s.Tonemap)] },
+				{ "Tonemapper", TonemapperName(s.Tonemap) },
 				{ "FSR1Enabled", s.FSR1Enabled },
 				{ "FSR1Sharpness", s.FSR1Sharpness },
 				{ "SSAOEnabled", s.SSAOEnabled },
@@ -180,20 +181,13 @@ namespace Basalt {
 				return false;
 			if (!tonemapper.empty())
 			{
-				bool found = false;
-				for (int i = 0; i < 4; i++)
-				{
-					if (tonemapper == TonemapperNames[i])
-					{
-						s.Tonemap = static_cast<Tonemapper>(i);
-						found = true;
-					}
-				}
-				if (!found)
+				const auto parsed = EnumFromName<Tonemapper>(TonemapperNames, tonemapper);
+				if (!parsed)
 				{
 					outError = "Renderer: unknown tonemapper '" + tonemapper + "' (valid: None, Reinhard, ACES, AgX)";
 					return false;
 				}
+				s.Tonemap = *parsed;
 			}
 			const bool ok = reader.Bool("FSR1Enabled", s.FSR1Enabled, outError) && reader.Float("FSR1Sharpness", s.FSR1Sharpness, outError) && reader.Bool("SSAOEnabled", s.SSAOEnabled, outError) && reader.Float("SSAORadius", s.SSAORadius, outError) && reader.Float("SSAOIntensity", s.SSAOIntensity, outError) && reader.Float("SSAOBias", s.SSAOBias, outError) && reader.Bool("ShadowsEnabled", s.ShadowsEnabled, outError) && reader.Float("ShadowDistance", s.ShadowDistance, outError) && reader.Float("ShadowBias", s.ShadowBias, outError) && reader.Float("ShadowNormalBias", s.ShadowNormalBias, outError) && reader.Float("CascadeSplitLambda", s.CascadeSplitLambda, outError) && reader.Vec3("AmbientColor", s.AmbientColor, outError) && reader.Finish(outError);
 			if (!ok)

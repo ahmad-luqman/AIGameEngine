@@ -145,6 +145,7 @@ namespace Basalt {
 		uint32_t GetViewportHeight() const { return m_ViewportHeight; }
 
 		// --- Runtime ---------------------------------------------------------------------------
+		// nullopt copies the active project defaults before scripts start.
 		void OnRuntimeStart(std::optional<GraphicsSettings> graphics = std::nullopt);
 		void OnRuntimeStop();
 		void OnSimulationStart();
@@ -211,6 +212,8 @@ namespace Basalt {
 		// Transient preferences; initialized before scripts start and preserved across Scene.Load.
 		const GraphicsSettings& GetGraphicsSettings() const { return m_GraphicsSettings; }
 		bool SetGraphicsSettings(const nlohmann::json& patch, std::string& error);
+		// Play preferences while playing, otherwise active project defaults.
+		GraphicsSettings GetEffectiveGraphicsSettings() const;
 		// Unique across scene instances and increments on Play/reload; resets renderer history even after address reuse.
 		uint64_t GetRenderRevision() const { return m_RenderRevision; }
 		RendererSettings& GetRendererSettings() { return m_RendererSettings; }
@@ -291,6 +294,7 @@ namespace Basalt {
 		uint32_t m_ViewportHeight = 0;
 
 		RendererSettings m_RendererSettings;
+		void BumpRenderRevision();
 		uint64_t m_RenderRevision = 0;
 		GraphicsSettings m_GraphicsSettings;
 		PhysicsSettings m_PhysicsSettings;

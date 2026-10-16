@@ -67,7 +67,7 @@ namespace Basalt {
 	Scene::Scene(std::string name)
 		: m_Name(std::move(name))
 	{
-		m_RenderRevision = ++s_RenderRevision;
+		BumpRenderRevision();
 	}
 
 	Scene::~Scene()
@@ -84,6 +84,7 @@ namespace Basalt {
 
 	Ref<Scene> Scene::Copy(const Ref<Scene>& other)
 	{
+		// A copy starts in Edit state; its next Play must take fresh project preferences, not the source session.
 		Ref<Scene> scene = CreateRef<Scene>(other->m_Name);
 		scene->m_RendererSettings = other->m_RendererSettings;
 		scene->m_PhysicsSettings = other->m_PhysicsSettings;
@@ -522,6 +523,16 @@ namespace Basalt {
 		}
 	}
 
+	void Scene::BumpRenderRevision()
+	{
+		m_RenderRevision = ++s_RenderRevision;
+	}
+
+	GraphicsSettings Scene::GetEffectiveGraphicsSettings() const
+	{
+		return m_State == SceneState::Play ? m_GraphicsSettings : Project::GetActiveGraphicsSettings();
+	}
+
 	bool Scene::SetGraphicsSettings(const nlohmann::json& patch, std::string& error)
 	{
 		if (m_State != SceneState::Play)
@@ -529,7 +540,12 @@ namespace Basalt {
 			error = "graphics settings require Play mode";
 			return false;
 		}
-		return PatchGraphicsSettings(patch, m_GraphicsSettings, error, UnreachableTargetFrameRate);
+		if (!PatchGraphicsSettings(patch, m_GraphicsSettings, error, UnreachableTargetFrameRate))
+			return false;
+		const auto state = GetDynamicResolutionState(m_GraphicsSettings.DynamicResolution, m_GraphicsSettings.RenderScale, true);
+		if (state == DynamicResolutionState::EmptyRange)
+			BS_CORE_WARN("Graphics.SetSettings: dynamic resolution {}", DescribeDynamicResolutionState(state, m_GraphicsSettings.DynamicResolution, m_GraphicsSettings.RenderScale));
+		return true;
 	}
 
 	void Scene::OnRuntimeStart(std::optional<GraphicsSettings> graphics)
@@ -539,7 +555,7 @@ namespace Basalt {
 
 		m_GraphicsSettings = graphics.value_or(Project::GetActiveGraphicsSettings());
 		m_State = SceneState::Play;
-		m_RenderRevision = ++s_RenderRevision;
+		BumpRenderRevision();
 		m_Time = 0.0f;
 		m_FrameCount = 0;
 		// A play session never shows the previous session's immediate-mode UI (e.g. when it starts paused).
@@ -839,7 +855,7 @@ namespace Basalt {
 		// viewing aid, not scene data, so it stays).
 		const RendererDebugView debugView = m_RendererSettings.DebugView;
 		m_RendererSettings = RendererSettings{};
-		m_RenderRevision = ++s_RenderRevision;
+		BumpRenderRevision();
 		m_RendererSettings.DebugView = debugView;
 		m_PhysicsSettings = PhysicsSettings{};
 		m_Name = std::filesystem::path(load->Path).stem().string();

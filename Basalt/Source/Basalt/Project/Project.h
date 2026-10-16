@@ -10,6 +10,7 @@
 
 namespace Basalt {
 
+	// Saved project defaults shared by the editor, runtime and authoring tools.
 	struct ProjectConfig
 	{
 		std::string Name = "Untitled";
@@ -19,15 +20,8 @@ namespace Basalt {
 		uint32_t WindowWidth = 1600;
 		uint32_t WindowHeight = 900;
 		bool Fullscreen = false;
-		bool VSync = true;
-		GraphicsQuality ShadowQuality = GraphicsQuality::High;
-		GraphicsQuality SSAOQuality = GraphicsQuality::High;
-		// Fraction of the window resolution the scene renders at (MinRenderScale..MaxRenderScale); the
-		// tonemap pass resamples it to the window. Below 1 trades sharpness for GPU time.
-		float RenderScale = 1.0f;
-		// Lowers the render scale (to no less than DynamicResolution.MinScale, the project key MinRenderScale)
-		// when the GPU cannot hold the target frame rate; RenderScale is then the highest scale.
-		DynamicResolutionSettings DynamicResolution;
+		// Defaults copied into each Play session; the project file keeps these keys flat.
+		GraphicsSettings Graphics;
 		// Collision layers and matrix used by every scene of the project.
 		PhysicsLayers Physics;
 		// Seeds the gameplay random streams of play sessions (Lua's Math.Random/math.random, particle emitters,
@@ -52,8 +46,9 @@ namespace Basalt {
 
 		static void SetActive(const Ref<Project>& project) { s_ActiveProject = project; }
 		static const Ref<Project>& GetActive() { return s_ActiveProject; }
-		// The active project's RandomSeed, or Random::DefaultSeed without an active project (tests, tools).
+		// Graphics defaults for Edit mode and new Play sessions, including when no project is active.
 		static GraphicsSettings GetActiveGraphicsSettings();
+		// The active project's RandomSeed, or Random::DefaultSeed without an active project (tests, tools).
 		static uint32_t GetActiveRandomSeed() { return s_ActiveProject ? s_ActiveProject->m_Config.RandomSeed : Random::DefaultSeed; }
 
 		// Resolves a project-relative path against the active project directory, or the working directory

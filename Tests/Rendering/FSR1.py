@@ -20,21 +20,35 @@ def main():
     # The render fixture is static, unlike the gameplay scene, so different frame counts compare exactly.
     fixture = json.loads((source / 'Assets/Scenes/RenderTest.bscene').read_text())
 
-    def render(name, enabled=True, scale=0.5, sharpness=0.2, dynamic=False, view='None', size=(321, 181), ssao=False, ceiling=1):
+    def render(name, enabled=True, scale=0.5, sharpness=0.2, dynamic=False, view='None', size=(321, 181), ssao=False, ceiling=1, script_override=False):
         scene = copy.deepcopy(fixture)
         scene['Renderer'].update(FSR1Enabled=enabled, FSR1Sharpness=sharpness, SSAOEnabled=ssao)
+        if script_override:
+            script = args.output / 'OverrideGraphics.lua'
+            script.write_text("""local Driver = {}
+function Driver:OnCreate()
+    Graphics.SetSettings({VSync=true,RenderScale=1,DynamicResolution=false,TargetFrameRate=60,MinRenderScale=0.5})
+    Log.Info("CLI_OVERRIDE_SCRIPT_RAN")
+end
+return Driver
+""")
+            scene['Entities'].append({'ID': 999900, 'Name': 'OverrideGraphics', 'Components': {
+                'Script': {'Script': str(script.resolve())}}})
         scene_path = args.output / f'{name}.bscene'
         scene_path.write_text(json.dumps(scene))
         image = args.output / f'{name}.png'
         command = [args.runtime, '--project', str(source), '--scene', str(scene_path.resolve()),
                    '--offscreen', '--frames', '90' if dynamic else '6', '--width', str(size[0]),
                    '--height', str(size[1]), '--require-validation', '--screenshot', str(image),
-                   '--debug-view', view, '--render-scale', str(ceiling) if dynamic else str(scale)]
+                   '--no-vsync', '--debug-view', view, '--render-scale', str(ceiling) if dynamic else str(scale)]
         if dynamic:
             # An unreachable FPS budget forces the controller to the requested minimum scale.
             command += ['--dynamic-resolution', '1000000', '--min-render-scale', str(scale)]
         capture(command, image)
         log = image.with_suffix('.log').read_text()
+        if script_override:
+            check('CLI_OVERRIDE_SCRIPT_RAN' in log, 'override regression script did not run')
+            check('vsync=0' in log, 'Lua changed an explicit --no-vsync override')
         active = re.search(r'fsr1=(0|1)\b', log)
         expected_active = enabled and view == 'None' and scale < 1
         check(active is not None and bool(int(active[1])) == expected_active, f'{name}: FSR activity was not confirmed')
@@ -57,6 +71,11 @@ def main():
         fixed = render(f'fixed_{scale}', scale=scale)
         dynamic = render(f'dynamic_{scale}', scale=scale, dynamic=True)
         check(difference(fixed, dynamic) == 0, f'FSR reads outside the render area at {scale}')
+    check(difference(render('cli_fixed_reference'), render('cli_fixed_override', script_override=True)) == 0,
+          'Lua changed an explicit --render-scale override')
+    check(difference(render('cli_dynamic_reference', scale=0.25, dynamic=True),
+                     render('cli_dynamic_override', scale=0.25, dynamic=True, script_override=True)) == 0,
+          'Lua changed explicit dynamic-resolution CLI overrides')
     check(difference(render('ssao_fixed', size=(320, 180), ssao=True),
                      render('ssao_dynamic', dynamic=True, size=(320, 180), ssao=True)) == 0,
           'full-stack dynamic FSR differs with SSAO')

@@ -201,7 +201,7 @@ TEST_CASE("FSR 1 clamps every tap to the active area including degenerate dimens
 		renderer.SetDynamicResolution({ dynamic, 1000000.0f, 0.25f });
 		renderer.SetRenderScale(scale);
 		renderer.SetViewportSize(size.x, size.y);
-		renderer.Render(scene, camera);
+		renderer.Render(scene, camera, 0.0f);
 		REQUIRE_FALSE(renderer.GetStatistics().Failed);
 		CHECK(renderer.GetStatistics().FSR1Active);
 		CHECK(renderer.IsDynamicResolutionActive() == dynamic);
@@ -230,7 +230,7 @@ TEST_CASE("FSR 1 clamps every tap to the active area including degenerate dimens
 			CHECK(resized.GetRenderWidth() == fresh.GetRenderWidth());
 			CHECK(resized.GetRenderHeight() == fresh.GetRenderHeight());
 			scene.GetRendererSettings().FSR1Enabled = false;
-			resized.Render(scene, camera);
+			resized.Render(scene, camera, 0.0f);
 			CHECK_FALSE(resized.GetStatistics().FSR1Active);
 			scene.GetRendererSettings().FSR1Enabled = true;
 			CHECK((readScene(resized, size, scale, false) == expected));

@@ -752,7 +752,7 @@ namespace Basalt {
 			return {
 				{ "Enabled", c.Enabled },
 				{ "Priority", c.Priority },
-				{ "Tonemapper", TonemapperNames[static_cast<int>(c.Tonemap)] },
+				{ "Tonemapper", EnumName(TonemapperNames, c.Tonemap) },
 				{ "Exposure", c.Exposure },
 				{ "AutoExposure", c.AutoExposure },
 				{ "MinExposure", c.MinExposure },

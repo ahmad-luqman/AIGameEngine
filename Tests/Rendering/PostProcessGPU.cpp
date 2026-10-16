@@ -3,15 +3,17 @@
 
 #include "GPUFixture.h"
 
-#include <Basalt/Renderer/RenderUtils.h>
+#include <Basalt/Project/Project.h>
 #include <Basalt/Renderer/PostProcessStack.h>
+#include <Basalt/Renderer/RenderUtils.h>
 #include <Basalt/Renderer/ShaderUtils.h>
-#include <glm/gtc/packing.hpp>
-#include <glm/gtc/matrix_transform.hpp>
-#include <cstring>
 #include <Basalt/Scene/Entity.h>
 
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/packing.hpp>
+
 #include <algorithm>
+#include <cstring>
 #include <limits>
 #include <numeric>
 
@@ -69,6 +71,25 @@ TEST_CASE("Post-process effects operate in order, reset exposure and bypass diag
 	auto& post = scene.CreateEntity("Post").AddComponent<PostProcessComponent>();
 	post.SSAOEnabled = false;
 	CHECK(Capture(renderer, scene, camera) == legacy);
+	// Authored exposure/tonemapper must win even when legacy values differ.
+	scene.GetRendererSettings().Exposure = 4;
+	scene.GetRendererSettings().Tonemap = Tonemapper::None;
+	post.Enabled = false;
+	const auto overrideReference = Capture(renderer, scene, camera);
+	scene.GetRendererSettings().Exposure = 0.5f;
+	scene.GetRendererSettings().Tonemap = Tonemapper::Reinhard;
+	post.Enabled = true;
+	post.Exposure = 4;
+	post.Tonemap = Tonemapper::None;
+	CHECK(Capture(renderer, scene, camera) == overrideReference);
+	post.Exposure = std::numeric_limits<float>::quiet_NaN();
+	renderer.Render(scene, camera, 0);
+	CHECK(renderer.GetStatistics().Failed);
+	post.Enabled = false;
+	Capture(renderer, scene, camera);
+	post = PostProcessComponent{};
+	post.SSAOEnabled = false;
+	scene.GetRendererSettings() = fallback;
 	post.BloomEnabled = true;
 	post.BloomIntensity = 0.5f;
 	const auto bloom = Capture(renderer, scene, camera);
@@ -118,6 +139,23 @@ TEST_CASE("Post-process effects operate in order, reset exposure and bypass diag
 	Capture(renderer, scene, camera);
 	post.AutoExposure = true;
 	CHECK(Capture(renderer, scene, camera, 0) == reset);
+	// Selecting a different component resets adapted history without an explicit capture reset.
+	auto contender = scene.CreateEntity("OtherPost");
+	auto& other = contender.AddComponent<PostProcessComponent>();
+	other = post;
+	other.Enabled = false;
+	material.EmissiveIntensity = 0.25f;
+	for (int i = 0; i < 20; ++i)
+		Capture(renderer, scene, camera, 0.1f);
+	material.EmissiveIntensity = 4;
+	const auto beforeSelection = Capture(renderer, scene, camera, 0);
+	other.Enabled = true;
+	other.Priority = post.Priority + 1;
+	const auto selectionReset = Capture(renderer, scene, camera, 0);
+	CHECK(selectionReset != beforeSelection);
+	renderer.ResetExposure();
+	CHECK(Capture(renderer, scene, camera, 0) == selectionReset);
+	other.Enabled = false;
 	post.MinExposure = post.MaxExposure = 1;
 	const auto clamped = Capture(renderer, scene, camera);
 	post.AutoExposure = false;
@@ -180,7 +218,7 @@ TEST_CASE("Post-processing survives resize and matches tight and dynamic allocat
 			const auto expected = Capture(tight, scene, camera);
 			CHECK(renderer.GetRenderWidth() == tight.GetRenderWidth());
 			CHECK(renderer.GetRenderHeight() == tight.GetRenderHeight());
-			// Half-float interpolation may round one final byte differently for non-power-of-two UV scales.
+			// Half-float interpolation can differ by up to two final byte values for non-power-of-two UV scales.
 			REQUIRE(padded.size() == expected.size());
 			int largest = 0;
 			for (size_t i = 0; i < padded.size(); ++i)
@@ -202,7 +240,7 @@ TEST_CASE("Histogram and bloom ignore poisoned texels outside the active render 
 	PostProcessStack stack;
 	const auto commands = device->createCommandList();
 	REQUIRE(commands);
-	auto render = [&](glm::uvec2 target, glm::uvec2 area, float poison, bool bloom, bool automatic, float input = 0.5f) {
+	auto render = [&](glm::uvec2 target, glm::uvec2 area, float poison, bool bloom, bool automatic, float input = 0.5f, float activePoison = 0.0f, bool poisonActive = false) {
 		nvrhi::TextureDesc desc;
 		desc.width = target.x;
 		desc.height = target.y;
@@ -216,7 +254,9 @@ TEST_CASE("Histogram and bloom ignore poisoned texels outside the active render 
 		for (uint32_t y = 0; y < target.y; ++y)
 			for (uint32_t x = 0; x < target.x; ++x)
 			{
-				const float value = x < area.x && y < area.y ? input * (x > y ? 4.0f : 1.0f) : poison;
+				float value = x < area.x && y < area.y ? input * (x > y ? 4.0f : 1.0f) : poison;
+				if (poisonActive && x == area.x / 2 && y == area.y / 2)
+					value = activePoison;
 				const size_t offset = (static_cast<size_t>(y) * target.x + x) * 4;
 				for (size_t c = 0; c < 3; ++c)
 					pixels[offset + c] = glm::packHalf1x16(value);
@@ -273,6 +313,22 @@ TEST_CASE("Histogram and bloom ignore poisoned texels outside the active render 
 					}
 				}
 			}
+	for (float invalid : { std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity() })
+	{
+		const auto reference = render({ 17, 13 }, { 17, 13 }, 0, false, true, 0.5f, 0.0f, true);
+		const auto metered = render({ 17, 13 }, { 17, 13 }, 0, false, true, 0.5f, invalid, true);
+		for (size_t i = 0; i < reference.size(); i += 4)
+			if (i / 4 != 6 * 17 + 8)
+				CHECK(glm::unpackHalf1x16(reference[i]) == doctest::Approx(glm::unpackHalf1x16(metered[i])).epsilon(0.003));
+		const auto result = render({ 17, 13 }, { 17, 13 }, 0, true, false, 0.5f, invalid, true);
+		for (size_t i = 0; i < result.size(); i += 4)
+		{
+			if (i / 4 == 6 * 17 + 8)
+				continue; // The original invalid HDR pixel itself is outside bloom's responsibility.
+			CHECK(std::isfinite(glm::unpackHalf1x16(result[i])));
+			CHECK(glm::unpackHalf1x16(result[i]) < 4.0f);
+		}
+	}
 	const auto black = render({ 17, 13 }, { 7, 9 }, 1000, false, true, 0);
 	for (size_t i = 0; i < black.size(); i += 4)
 		CHECK(black[i] == 0);
@@ -332,6 +388,19 @@ TEST_CASE("Session quality settings cap authored shadows and SSAO at render time
 	post.SSAOEnabled = false;
 	CHECK(Capture(renderer, scene, camera) == aoOff);
 	scene.OnRuntimeStop();
+	// Own the old project while SetActive replaces the global reference.
+	Ref<Project> previousProject = Project::GetActive(); // NOLINT(performance-unnecessary-copy-initialization): SetActive replaces the referenced global.
+	auto project = CreateRef<Project>();
+	project->GetConfig().Graphics.ShadowQuality = GraphicsQuality::Off;
+	project->GetConfig().Graphics.SSAOQuality = GraphicsQuality::Off;
+	Project::SetActive(project);
+	post.SSAOEnabled = true;
+	CHECK(Capture(renderer, scene, camera) == aoOff);
+	scene.GetRendererSettings().DebugView = RendererDebugView::None;
+	Capture(renderer, scene, camera);
+	CHECK(renderer.GetStatistics().ShadowDrawCalls == 0);
+	CHECK(renderer.GetStatistics().LocalShadowMaps == 0);
+	Project::SetActive(previousProject);
 	graphics->WaitIdle();
 	CHECK(graphics->GetValidationErrorCount() == 0);
 }

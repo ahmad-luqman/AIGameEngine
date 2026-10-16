@@ -11,8 +11,11 @@ description: Diagnose rendering problems in Basalt (black/inside-out/flipped ima
        --screenshot /tmp/shot.png [--debug-view SSAO|Normals|Depth]
    ```
    Exit code 3 means GPU validation errors occurred: read the `[Vulkan]`/`[nvrhi]` log lines first.
-2. **Isolate passes** with `--debug-view` and by toggling `scene.settings`
-   `{"Renderer": {"SSAOEnabled": false}}` / `{"ShadowsEnabled": false}` in a copy of the scene. Check the
+2. **Isolate passes** with `--debug-view`. When an enabled `PostProcess` component wins, edit its
+   `SSAOEnabled`, `BloomEnabled`, `AutoExposure` and `FXAAEnabled` fields through `component.set`.
+   Otherwise `scene.settings {"Renderer": {"SSAOEnabled": false}}` edits the legacy fallback.
+   Shadows remain `scene.settings {"Renderer": {"ShadowsEnabled": false}}`. Check `project.info.graphics`
+   (or `Graphics.GetSettings()` in Play): `SSAOQuality`/`ShadowQuality: Off` cap these effects. Check the
    project's `RenderScale` too (`project.info`; override with `--render-scale 1`): below 1 the scene renders
    smaller and is upsampled. Bilinear remains the default, so soft or stair-stepped edges are expected. Scene `Renderer.FSR1Enabled` selects FSR 1 below native size;
    `FSR1Sharpness` is RCAS attenuation in stops (0 strongest, 2 weakest, default 0.2). It runs after

@@ -63,7 +63,7 @@ Write `build_scene.json` (an array of requests) and run `$B --project P batch bu
   {"command": "entity.create", "params": {"name": "Game", "components": {"Script": {"Script": "Assets/Scripts/Game.lua"}}}},
   {"command": "entity.create", "params": {"name": "Camera", "components": {
      "Transform": {"Translation": [5, 10, 25]}, "Camera": {"Projection": "Orthographic", "OrthoSize": 24}}}},
-  {"command": "scene.settings", "params": {"Renderer": {"Exposure": 1.0}}},
+  {"command": "entity.create", "params": {"name": "PostProcessing", "components": {"PostProcess": {"Exposure": 1.0}}}},
   {"command": "scene.save", "params": {"path": "Assets/Scenes/Main.bscene"}},
   {"command": "project.set", "params": {"startScene": "Assets/Scenes/Main.bscene"}}
 ]

@@ -51,8 +51,6 @@ namespace Basalt {
 				application.Close();
 				return;
 			}
-			m_Renderer->SetRenderScale(m_Options.RenderScale);
-			m_Renderer->SetDynamicResolution(m_Options.DynamicResolution);
 			m_CommandList = device->GetDevice()->createCommandList();
 			m_Scene->OnViewportResize(device->GetBackBufferWidth(), device->GetBackBufferHeight());
 		}
@@ -62,7 +60,7 @@ namespace Basalt {
 		graphics.RenderScale = m_Options.RenderScale;
 		graphics.VSync = m_Options.VSync;
 		graphics.DynamicResolution = m_Options.DynamicResolution;
-		m_Scene->OnRuntimeStart(graphics);
+		m_Scene->OnRuntimeStart(m_Options.Overrides.Apply(graphics));
 		BS_CORE_INFO("Runtime: playing '{}'", m_Options.ScenePath);
 	}
 
@@ -112,9 +110,10 @@ namespace Basalt {
 		GameUI::SetViewportSize(viewportSize);
 		GameUI::SetViewportOrigin({ 0.0f, 0.0f });
 		m_Scene->OnViewportResize(width, height);
-		m_Renderer->SetRenderScale(m_Scene->GetGraphicsSettings().RenderScale);
-		m_Renderer->SetDynamicResolution(m_Scene->GetGraphicsSettings().DynamicResolution);
-		device->SetVSync(m_Scene->GetGraphicsSettings().VSync);
+		const auto graphics = m_Options.Overrides.Apply(m_Scene->GetEffectiveGraphicsSettings());
+		m_Renderer->SetRenderScale(graphics.RenderScale);
+		m_Renderer->SetDynamicResolution(graphics.DynamicResolution);
+		device->SetVSync(graphics.VSync);
 		m_Renderer->SetViewportSize(width, height);
 
 		const auto camera = GetPrimaryRenderCamera(*m_Scene, width, height);
@@ -200,8 +199,8 @@ namespace Basalt {
 	void RuntimeLayer::CheckRendererResults(const std::function<void(int)>& fail)
 	{
 		const auto& stats = m_Renderer->GetStatistics();
-		BS_CORE_INFO("Runtime: render stats localShadowMaps={} localShadowsSkipped={} lightsSkipped={} localShadowAtlasSize={} fsr1={}",
-					 stats.LocalShadowMaps, stats.LocalShadowsSkipped, stats.LightsSkipped, stats.LocalShadowAtlasSize, stats.FSR1Active ? 1 : 0);
+		BS_CORE_INFO("Runtime: render stats localShadowMaps={} localShadowsSkipped={} lightsSkipped={} localShadowAtlasSize={} fsr1={} vsync={}",
+					 stats.LocalShadowMaps, stats.LocalShadowsSkipped, stats.LightsSkipped, stats.LocalShadowAtlasSize, stats.FSR1Active ? 1 : 0, Application::Get().GetGraphicsDevice()->IsVSync() ? 1 : 0);
 		const bool timers = m_Renderer->HasGpuTimers();
 		const GpuTimings& timings = m_Renderer->GetGpuTimings();
 		const std::string text = FormatGpuTimings(timings, timers);

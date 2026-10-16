@@ -23,7 +23,9 @@ namespace Basalt {
 		RendererDebugView DebugView = RendererDebugView::None;
 		// The project's RenderScale unless --render-scale overrides it.
 		float RenderScale = 1.0f;
+		// Initial project/CLI preference; explicit CLI choices also persist in Overrides.
 		bool VSync = true;
+		GraphicsOverrides Overrides;
 		// The project's settings unless --dynamic-resolution / --min-render-scale override them.
 		DynamicResolutionSettings DynamicResolution;
 		// --dynamic-resolution asked for it explicitly: a --frames run fails (exit code 6) when dynamic

@@ -1,4 +1,5 @@
 #version 450
+// HDR threshold extraction and normalized downsample/upsample bloom.
 #include "RenderArea.glsl"
 layout(set = 0, binding = 0) uniform texture2D u_Source;
 layout(set = 0, binding = 1) uniform sampler u_LinearClamp;
@@ -9,14 +10,16 @@ layout(push_constant) uniform BloomPush
 	vec2 BaseSize;
 	float Threshold;
 	float Scatter;
-	uint Mode;
+	uint Mode; // 0 prefilter, 1 downsample, 2 upsample (BloomMode in PostProcessStack.cpp)
 }
 u_Push;
 layout(location = 0) in vec2 v_TexCoord;
 layout(location = 0) out vec4 o_Color;
 vec3 Sample(vec2 uv)
 {
-	return SampleRenderArea(u_Source, u_LinearClamp, uv, u_Push.SourceSize).rgb;
+	vec3 color = SampleRenderArea(u_Source, u_LinearClamp, uv, u_Push.SourceSize).rgb;
+	// Invalid HDR inputs must not contaminate the entire bloom pyramid.
+	return mix(color, vec3(0), bvec3(isnan(color.x) || isinf(color.x), isnan(color.y) || isinf(color.y), isnan(color.z) || isinf(color.z)));
 }
 void main()
 {

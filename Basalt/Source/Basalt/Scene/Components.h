@@ -4,8 +4,8 @@
 #include "Basalt/Core/UUID.h"
 #include "Basalt/Math/Math.h"
 #include "Basalt/Physics/PhysicsMaterial.h"
-#include "Basalt/Scene/SceneCamera.h"
 #include "Basalt/Renderer/PostProcessSettings.h"
+#include "Basalt/Scene/SceneCamera.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -58,11 +58,13 @@ namespace Basalt {
 	};
 
 	// Global post-processing; runtime exposure history belongs to each renderer, never to this data.
+	// Equal priorities choose the lowest randomly assigned UUID. Disabling all components restores legacy settings.
 	struct PostProcessComponent
 	{
 		bool Enabled = true;
 		uint32_t Priority = 0;
 		Tonemapper Tonemap = Tonemapper::ACES;
+		// Manual multiplier, also applied on top of metered auto exposure.
 		float Exposure = 1.0f;
 		bool AutoExposure = false;
 		float MinExposure = 0.0625f;

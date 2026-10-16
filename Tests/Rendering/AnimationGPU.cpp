@@ -26,7 +26,7 @@ namespace {
 	};
 	std::vector<uint8_t> Capture(SceneRenderer& renderer, Scene& scene, const RenderCamera& camera)
 	{
-		renderer.Render(scene, camera);
+		renderer.Render(scene, camera, 0.0f);
 		REQUIRE_FALSE(renderer.GetStatistics().Failed);
 		REQUIRE(renderer.GetStatistics().DrawCalls > 0);
 		std::vector<uint8_t> pixels;

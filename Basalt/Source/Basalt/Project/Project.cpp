@@ -11,38 +11,11 @@
 
 namespace Basalt {
 
-	namespace {
-
-		// Reads an optional number in [min, max] into `value`; false (with outError) when the key is present but
-		// not such a number.
-		bool ReadBoundedFloat(const nlohmann::json& data, const char* key, float min, float max, float& value, const std::filesystem::path& filePath, std::string& outError)
-		{
-			const auto it = data.find(key);
-			if (it == data.end())
-				return true;
-			if (JsonToFloat(*it, value) && value >= min && value <= max)
-				return true;
-			outError = fmt::format("invalid project file '{}': {} must be a number in [{}, {}]", filePath.string(), key, min, max);
-			return false;
-		}
-
-	}
-
 	Ref<Project> Project::s_ActiveProject;
 
 	GraphicsSettings Project::GetActiveGraphicsSettings()
 	{
-		GraphicsSettings result;
-		if (s_ActiveProject)
-		{
-			const auto& c = s_ActiveProject->m_Config;
-			result.VSync = c.VSync;
-			result.RenderScale = c.RenderScale;
-			result.ShadowQuality = c.ShadowQuality;
-			result.SSAOQuality = c.SSAOQuality;
-			result.DynamicResolution = c.DynamicResolution;
-		}
-		return result;
+		return s_ActiveProject ? s_ActiveProject->m_Config.Graphics : GraphicsSettings{};
 	}
 
 	Ref<Project> Project::Create(const std::filesystem::path& directory, const std::string& name, std::string& outError)
@@ -115,31 +88,15 @@ namespace Basalt {
 			outError = "invalid project file '" + filePath.string() + "': " + e.what();
 			return nullptr;
 		}
-		GraphicsSettings graphics;
 		nlohmann::json graphicsPatch = nlohmann::json::object();
-		for (const char* key : { "VSync", "ShadowQuality", "SSAOQuality" })
+		for (const char* key : { "VSync", "ShadowQuality", "SSAOQuality", "RenderScale", "DynamicResolution", "TargetFrameRate", "MinRenderScale" })
 			if (data.contains(key))
 				graphicsPatch[key] = data[key];
-		if (!PatchGraphicsSettings(graphicsPatch, graphics, outError))
-			return nullptr;
-		config.VSync = graphics.VSync;
-		config.ShadowQuality = graphics.ShadowQuality;
-		config.SSAOQuality = graphics.SSAOQuality;
-
-		if (const auto dynamic = data.find("DynamicResolution"); dynamic != data.end())
+		if (!PatchGraphicsSettings(graphicsPatch, config.Graphics, outError))
 		{
-			// Named explicitly: nlohmann's type error would not say which key is wrong.
-			if (!dynamic->is_boolean())
-			{
-				outError = fmt::format("invalid project file '{}': DynamicResolution must be true or false (TargetFrameRate and MinRenderScale are separate keys)", filePath.string());
-				return nullptr;
-			}
-			config.DynamicResolution.Enabled = dynamic->get<bool>();
-		}
-		if (!ReadBoundedFloat(data, "RenderScale", MinRenderScale, MaxRenderScale, config.RenderScale, filePath, outError) ||
-			!ReadBoundedFloat(data, "TargetFrameRate", MinTargetFrameRate, MaxTargetFrameRate, config.DynamicResolution.TargetFrameRate, filePath, outError) ||
-			!ReadBoundedFloat(data, "MinRenderScale", MinRenderScale, MaxRenderScale, config.DynamicResolution.MinScale, filePath, outError))
+			outError = fmt::format("invalid project file '{}': {}", filePath.string(), outError);
 			return nullptr;
+		}
 		if (const auto seed = data.find("RandomSeed"); seed != data.end() && !JsonToUInt32(*seed, config.RandomSeed))
 		{
 			outError = fmt::format("invalid project file '{}': RandomSeed must be an integer between 0 and {}", filePath.string(), UINT32_MAX);
@@ -168,13 +125,13 @@ namespace Basalt {
 			{ "WindowWidth", m_Config.WindowWidth },
 			{ "WindowHeight", m_Config.WindowHeight },
 			{ "Fullscreen", m_Config.Fullscreen },
-			{ "VSync", m_Config.VSync },
-			{ "ShadowQuality", GraphicsQualityNames[static_cast<size_t>(m_Config.ShadowQuality)] },
-			{ "SSAOQuality", GraphicsQualityNames[static_cast<size_t>(m_Config.SSAOQuality)] },
-			{ "RenderScale", m_Config.RenderScale },
-			{ "DynamicResolution", m_Config.DynamicResolution.Enabled },
-			{ "TargetFrameRate", m_Config.DynamicResolution.TargetFrameRate },
-			{ "MinRenderScale", m_Config.DynamicResolution.MinScale },
+			{ "VSync", m_Config.Graphics.VSync },
+			{ "ShadowQuality", GraphicsQualityName(m_Config.Graphics.ShadowQuality) },
+			{ "SSAOQuality", GraphicsQualityName(m_Config.Graphics.SSAOQuality) },
+			{ "RenderScale", m_Config.Graphics.RenderScale },
+			{ "DynamicResolution", m_Config.Graphics.DynamicResolution.Enabled },
+			{ "TargetFrameRate", m_Config.Graphics.DynamicResolution.TargetFrameRate },
+			{ "MinRenderScale", m_Config.Graphics.DynamicResolution.MinScale },
 			{ "PhysicsLayers", m_Config.Physics.ToJson() },
 			{ "RandomSeed", m_Config.RandomSeed },
 		};
