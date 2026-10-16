@@ -4,12 +4,16 @@
 #include "Basalt/Asset/TextureSource.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Hash.h"
+#include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
+
+#include <cgltf.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <set>
 #include <string_view>
 #include <system_error>
 
@@ -75,7 +79,8 @@ namespace Basalt {
 			KeyFile file{ text.substr(0, separator), {} };
 			if (file.Key.empty())
 				return std::nullopt;
-			for (size_t start = separator == std::string::npos ? text.size() : separator + DetailsSeparator.size(); start < text.size();)
+			const size_t detailsStart = separator == std::string::npos ? text.size() : separator + DetailsSeparator.size();
+			for (size_t start = detailsStart; start < text.size();)
 			{
 				const size_t end = std::min(text.find('\n', start), text.size());
 				file.Details.push_back(text.substr(start, end - start));
@@ -87,6 +92,43 @@ namespace Basalt {
 		std::filesystem::path KeyPathOf(const std::filesystem::path& image)
 		{
 			return std::filesystem::path(image).replace_extension(".key");
+		}
+
+		// "<size>\n<modification time>" of a file, or nullopt (with the error).
+		std::optional<std::string> FileStamp(const std::filesystem::path& path, std::error_code& outError)
+		{
+			const auto size = std::filesystem::file_size(path, outError);
+			if (outError)
+				return std::nullopt;
+			const auto time = std::filesystem::last_write_time(path, outError);
+			if (outError)
+				return std::nullopt;
+			return std::to_string(size) + "\n" + std::to_string(std::chrono::duration_cast<std::chrono::nanoseconds>(time.time_since_epoch()).count());
+		}
+
+		// A glTF's external buffers and images (not data: URIs), project-relative. The JSON is parsed, the buffers are
+		// not loaded.
+		void AddModelDependencies(const std::filesystem::path& projectDirectory, const std::string& model, std::set<std::string>& outDependencies)
+		{
+			cgltf_options options = {};
+			cgltf_data* data = nullptr;
+			const std::string path = FileSystem::PathToUtf8(projectDirectory / FileSystem::PathFromUtf8(model));
+			if (cgltf_parse_file(&options, path.c_str(), &data) != cgltf_result_success)
+				return;
+			const std::filesystem::path folder = FileSystem::PathFromUtf8(model).parent_path();
+			const auto add = [&](const char* uri) {
+				if (!uri || std::string_view(uri).rfind("data:", 0) == 0)
+					return;
+				std::string decoded = uri;
+				cgltf_decode_uri(decoded.data());
+				decoded.resize(std::strlen(decoded.c_str()));
+				outDependencies.insert(FileSystem::PathToUtf8((folder / FileSystem::PathFromUtf8(decoded)).lexically_normal().generic_u8string()));
+			};
+			for (cgltf_size i = 0; i < data->buffers_count; i++)
+				add(data->buffers[i].uri);
+			for (cgltf_size i = 0; i < data->images_count; i++)
+				add(data->images[i].uri);
+			cgltf_free(data);
 		}
 
 	}
@@ -209,16 +251,61 @@ namespace Basalt {
 	std::optional<std::string> ThumbnailCache::MakeKey(const std::string& relativePath, std::string& outError) const
 	{
 		std::error_code error;
-		const std::filesystem::path path = m_ProjectDirectory / FileSystem::PathFromUtf8(relativePath);
-		const auto size = std::filesystem::file_size(path, error);
-		const auto time = error ? std::filesystem::file_time_type() : std::filesystem::last_write_time(path, error);
-		if (error)
+		const std::optional<std::string> stamp = FileStamp(m_ProjectDirectory / FileSystem::PathFromUtf8(relativePath), error);
+		if (!stamp)
 		{
 			outError = error == std::errc::no_such_file_or_directory ? "the file is missing" : "cannot read the file: " + error.message();
 			return std::nullopt;
 		}
-		const auto nanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(time.time_since_epoch()).count();
-		return relativePath + "\n" + std::to_string(size) + "\n" + std::to_string(nanoseconds) + "\n" + std::to_string(static_cast<int>(ClassifyThumbnail(relativePath))) + "\n" + std::to_string(Version);
+		std::string key = relativePath + "\n" + *stamp + "\n" + std::to_string(static_cast<int>(ClassifyThumbnail(relativePath))) + "\n" + std::to_string(Version);
+		// A missing dependency is part of the version too: the preview made without it differs.
+		for (const std::string& dependency : GetDependencies(relativePath))
+		{
+			std::error_code dependencyError;
+			key += "\n" + dependency + " " + FileStamp(m_ProjectDirectory / FileSystem::PathFromUtf8(dependency), dependencyError).value_or("missing");
+		}
+		return key;
+	}
+
+	std::vector<std::string> ThumbnailCache::GetDependencies(const std::string& relativePath) const
+	{
+		std::set<std::string> dependencies;
+		switch (ClassifyThumbnail(relativePath))
+		{
+			case ThumbnailKind::Model:
+				AddModelDependencies(m_ProjectDirectory, relativePath, dependencies);
+				break;
+			case ThumbnailKind::Prefab:
+			{
+				const auto text = FileSystem::ReadTextFile(m_ProjectDirectory / FileSystem::PathFromUtf8(relativePath));
+				const nlohmann::json data = text ? ParseJson(*text) : nlohmann::json();
+				const auto entities = data.is_object() ? data.find("Entities") : data.end();
+				if (entities == data.end() || !entities->is_array())
+					break;
+				for (const auto& entity : *entities)
+				{
+					const auto components = entity.is_object() ? entity.find("Components") : entity.end();
+					if (components == entity.end() || !components->is_object())
+						continue;
+					for (const auto& [component, fields] : components->items())
+						if (fields.is_object())
+							for (const auto& [field, value] : fields.items())
+								if (value.is_string() && value.get_ref<const std::string&>().rfind("Assets/", 0) == 0)
+								{
+									const std::string file = value.get<std::string>().substr(0, value.get_ref<const std::string&>().find('#'));
+									dependencies.insert(file);
+									if (ClassifyThumbnail(file) == ThumbnailKind::Model)
+										AddModelDependencies(m_ProjectDirectory, file, dependencies);
+								}
+				}
+				break;
+			}
+			case ThumbnailKind::Image:
+			case ThumbnailKind::Environment:
+			case ThumbnailKind::None:
+				break;
+		}
+		return { dependencies.begin(), dependencies.end() };
 	}
 
 	std::filesystem::path ThumbnailCache::GetImagePath(const std::string& relativePath) const
@@ -260,16 +347,17 @@ namespace Basalt {
 			return false;
 		}
 		const std::filesystem::path path = GetImagePath(relativePath);
+		const std::filesystem::path keyPath = KeyPathOf(path);
 		// The key goes last, so an interrupted store leaves an entry that no longer matches, never a wrong image.
-		std::filesystem::remove(KeyPathOf(path), error);
+		std::filesystem::remove(keyPath, error);
 		if (error)
 		{
-			outError = "cannot replace '" + FileSystem::PathToUtf8(KeyPathOf(path)) + "': " + error.message();
+			outError = "cannot replace '" + FileSystem::PathToUtf8(keyPath) + "': " + error.message();
 			return false;
 		}
 		if (!WritePng(path, entry.Image.Pixels, entry.Image.Width, entry.Image.Height, outError))
 			return false;
-		return FileSystem::WriteTextFile(KeyPathOf(path), FormatKeyFile(key, entry.Details), outError);
+		return FileSystem::WriteTextFile(keyPath, FormatKeyFile(key, entry.Details), outError);
 	}
 
 	size_t ThumbnailCache::PruneMissing() const

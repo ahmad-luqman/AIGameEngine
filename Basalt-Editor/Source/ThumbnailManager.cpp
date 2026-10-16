@@ -21,8 +21,7 @@ namespace Basalt {
 		constexpr double RecheckSeconds = 2.0;
 		// CPU work per frame (image decoding, cached previews); a GPU render always ends the frame's work.
 		constexpr std::chrono::milliseconds FrameBudget{ 8 };
-		// File slots are keyed by their project-relative path, which always starts with "Assets/", so material slots
-		// cannot collide with them.
+		// Content-browser paths start with "Assets/", so material slots (and their prefix) cannot collide with them.
 		const std::string s_MaterialPrefix = "material:";
 
 		double Now()
@@ -98,10 +97,14 @@ namespace Basalt {
 			std::string error;
 			const auto key = cache->MakeKey(relativePath, error);
 			if (!key)
+			{
+				slot.SourceMissing = true;
 				Fail(slot, error);
-			else if (*key != slot.Key)
+			}
+			else if (*key != slot.Key || slot.SourceMissing)
 			{
 				// The old image stays on screen until the new one is ready.
+				slot.SourceMissing = false;
 				slot.Data.Status = State::Pending;
 				Enqueue(relativePath, slot);
 			}
@@ -127,21 +130,25 @@ namespace Basalt {
 
 	void ThumbnailManager::RequestClear(bool deleteCache)
 	{
-		m_ClearRequest = m_ClearRequest.value_or(false) || deleteCache;
+		if (deleteCache || m_ClearRequest == ClearRequest::None)
+			m_ClearRequest = deleteCache ? ClearRequest::PreviewsAndCache : ClearRequest::Previews;
 	}
 
 	void ThumbnailManager::Update()
 	{
-		// Here, outside the ImGui pass: a texture a panel already drew this frame stays alive until it is rendered.
-		if (Project::GetActive().get() != m_Project)
+		// Clears are applied here rather than when requested: the ImGui pass that requested one may already have drawn
+		// textures it frees, and those must survive until that frame renders.
+		if (Project::GetActive() != m_Project.lock())
 		{
 			Clear();
-			m_Project = Project::GetActive().get();
+			// A clear requested for the previous project must not delete the new one's cache.
+			m_ClearRequest = ClearRequest::None;
+			m_Project = Project::GetActive();
 		}
-		if (m_ClearRequest)
+		if (m_ClearRequest != ClearRequest::None)
 		{
-			const bool deleteCache = *m_ClearRequest;
-			m_ClearRequest.reset();
+			const bool deleteCache = m_ClearRequest == ClearRequest::PreviewsAndCache;
+			m_ClearRequest = ClearRequest::None;
 			Clear();
 			if (const auto cache = GetCache(); deleteCache && cache)
 				BS_CORE_INFO("Thumbnails: removed {} cached file(s); previews are made again", cache->Clear());
@@ -186,8 +193,8 @@ namespace Basalt {
 		const auto cache = GetCache();
 		if (!cache)
 			return false;
-		// The file may have changed since it was queued (even while it was being written): store under the version
-		// actually previewed, never an older key.
+		// Re-read the key just before reading the file: a write during the preview then leaves a key that no longer
+		// matches, and the preview is made again.
 		const auto key = cache->MakeKey(id, error);
 		if (!key)
 		{
@@ -202,9 +209,14 @@ namespace Basalt {
 			Upload(slot, entry->Image);
 			return false;
 		}
-		// AssetManager keeps the model it loaded for an earlier preview (or the open scene): read the new file.
-		if (sourceChanged && slot.Data.Kind == ThumbnailKind::Model)
+		// AssetManager keeps what it loaded for an earlier preview (or the open scene): read the changed files again.
+		// (This also reloads them for the open scene, which is what a changed file means there too.)
+		if (sourceChanged && IsRenderedThumbnail(slot.Data.Kind))
+		{
 			AssetManager::Reload(id);
+			for (const std::string& dependency : cache->GetDependencies(id))
+				AssetManager::Reload(dependency);
+		}
 		const auto entry = Make(id, slot.Data.Kind, error);
 		if (!entry)
 		{
@@ -324,19 +336,23 @@ namespace Basalt {
 		Generated result;
 		result.Kind = kind;
 		result.CachePath = cache->GetImagePath(relativePath);
-		if (!refresh)
+		if (refresh)
 		{
-			if (auto entry = cache->Load(relativePath, *key))
+			// A refresh reads the model (and what it uses) again, whatever AssetManager holds.
+			if (IsRenderedThumbnail(kind))
 			{
-				result.Image = std::move(entry->Image);
-				result.Details = std::move(entry->Details);
-				result.Cached = true;
-				return result;
+				AssetManager::Reload(relativePath);
+				for (const std::string& dependency : cache->GetDependencies(relativePath))
+					AssetManager::Reload(dependency);
 			}
 		}
-		// A refresh reads the model file again, whatever AssetManager holds.
-		if (refresh && kind == ThumbnailKind::Model)
-			AssetManager::Reload(relativePath);
+		else if (auto entry = cache->Load(relativePath, *key))
+		{
+			result.Image = std::move(entry->Image);
+			result.Details = std::move(entry->Details);
+			result.Cached = true;
+			return result;
+		}
 		auto entry = Make(relativePath, kind, outError);
 		if (!entry)
 			return std::nullopt;
@@ -372,6 +388,7 @@ namespace Basalt {
 			m_UploadList = m_Device->createCommandList();
 		if (!texture || !m_UploadList)
 		{
+			BS_CORE_WARN("Thumbnails: cannot create a {}x{} preview texture", image.Width, image.Height);
 			Fail(slot, "cannot create the preview texture");
 			return;
 		}

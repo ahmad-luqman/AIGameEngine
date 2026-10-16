@@ -33,6 +33,9 @@ namespace Basalt {
 		static std::filesystem::path PathFromUtf8(const std::string& text);
 		// The extension in lower case (".png" for "Wall.PNG"), for matching file types.
 		static std::string GetLowercaseExtension(const std::filesystem::path& path);
+		// A-Z folded to a-z, other bytes (UTF-8 included) unchanged, whatever the C locale: for case-insensitive file
+		// name and extension matches.
+		static std::string ToLowerAscii(std::string text);
 
 	private:
 		static bool WriteAtomically(const std::filesystem::path& path, const void* data, size_t size, std::string& outError);

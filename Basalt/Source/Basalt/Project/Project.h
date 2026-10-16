@@ -56,7 +56,8 @@ namespace Basalt {
 		static const Ref<Project>& GetActive() { return s_ActiveProject; }
 		// Graphics defaults for Edit mode and new Play sessions, including when no project is active.
 		static GraphicsSettings GetActiveGraphicsSettings();
-		// The active project's settings, or nullptr without an active project.
+		// The active project's settings, or nullptr without an active project. Valid until the active project
+		// changes; do not keep it.
 		static const ProjectConfig* GetActiveConfig() { return s_ActiveProject ? &s_ActiveProject->m_Config : nullptr; }
 		// The active project's RandomSeed, or Random::DefaultSeed without an active project (tests, tools).
 		static uint32_t GetActiveRandomSeed() { return s_ActiveProject ? s_ActiveProject->m_Config.RandomSeed : Random::DefaultSeed; }

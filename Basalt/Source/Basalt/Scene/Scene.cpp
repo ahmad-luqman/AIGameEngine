@@ -109,7 +109,7 @@ namespace Basalt {
 
 	float Scene::GetFixedTimestep() const
 	{
-		if (m_PhysicsSettings.FixedTimestep > 0.0f)
+		if (m_PhysicsSettings.HasFixedTimestepOverride())
 			return m_PhysicsSettings.FixedTimestep;
 		return m_SessionFixedTimestep > 0.0f ? m_SessionFixedTimestep : Project::GetActiveFixedTimestep();
 	}

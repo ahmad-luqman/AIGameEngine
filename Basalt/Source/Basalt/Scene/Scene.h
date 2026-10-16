@@ -75,6 +75,8 @@ namespace Basalt {
 		// Variable frame times are accumulated into fixed steps (see Scene::GetFixedTimestep).
 		float FixedTimestep = 0.0f;
 		uint32_t MaxStepsPerFrame = 8;
+
+		bool HasFixedTimestepOverride() const { return FixedTimestep > 0.0f; }
 	};
 
 	enum class SceneState

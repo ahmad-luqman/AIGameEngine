@@ -35,7 +35,7 @@ def check_game_view(call, require, output):
     call("project.set", {"windowWidth": 640, "windowHeight": 360, "graphics": {"RenderScale": 1}})
     state = call("editor.game_view", {"focus": True})
     require(state["width"] == 640 and state["height"] == 360 and state["override"] is None, f"project resolution: {state}")
-    state = wait_for(call, require, lambda s: s["visible"] and s["imageRect"]["width"] > 1 and s["renderWidth"] == 640, "the Game view did not come to the front")
+    state = wait_for(call, require, lambda s: s["visible"] and s["imageRect"]["width"] > 1 and s["renderWidth"] == 640 and s["status"] == "rendered", "the Game view did not come to the front")
     require(state["hasCamera"] and state["mode"] == "Edit", f"edit-mode preview: {state}")
     rect = state["imageRect"]
     require(abs(rect["width"] / rect["height"] - 16 / 9) < .01, f"letterbox lost the aspect ratio: {state}")
@@ -86,7 +86,7 @@ def check_game_view(call, require, output):
     # Play runs the game in the Game view, brought forward from behind the scene view; the scene view keeps the
     # editor camera, and Stop returns to it.
     call("editor.panel", {"name": "Viewport", "focus": True})
-    wait_for(call, require, lambda s: not s["visible"], "the scene view did not come to the front")
+    wait_for(call, require, lambda s: not s["visible"] and s["status"] == "notRendered", "the scene view did not come to the front")
     call("play.start")
     state = wait_for(call, require, lambda s: s["mode"] == "Play" and s["visible"], "Play did not bring the Game view forward")
     played = Path(output, "game-play.png")
@@ -108,3 +108,22 @@ def check_game_view(call, require, output):
     wait_for(call, require, lambda s: s["mode"] == "Edit" and not s["visible"], "Stop did not return to the scene view")
     call("entity.destroy", {"entity": camera})
     require(not call("editor.game_view")["hasCamera"], "a destroyed camera still counts as primary")
+
+    # Without a camera the Game view says so, and still shows the game UI (a menu scene may have none).
+    menu = call("entity.create", {"name": "GameMenu"})["id"]
+    call("component.set", {"entity": menu, "component": "UIRect", "data": {"AnchorMin": [.5, .5], "AnchorMax": [.5, .5], "Pivot": [.5, .5], "Position": [0, 0], "Size": [160, 120]}})
+    call("component.set", {"entity": menu, "component": "UIImage", "data": {"Color": [0, 0, 1, 1]}})
+    call("editor.panel", {"name": "Game", "focus": True})
+    wait_for(call, require, lambda s: s["visible"] and s["status"] == "noCamera", "the Game view did not report the missing camera")
+    window = Path(output, "game-no-camera.png")
+    call("editor.window_screenshot", {"path": str(window)})
+    # The screenshot is written at the end of the frame: the next request waits for it.
+    state = call("editor.game_view")
+    window_width, _, window_pixels = read_png(window)
+    scale = window_width / state["windowSize"][0]
+    rect = state["imageRect"]
+    # Below the centred "No primary camera" message, still inside the panel.
+    x, y = rect["x"] + rect["width"] / 2 - 10, rect["y"] + rect["height"] / 2 + 22
+    pixel = window_pixels[int(y * scale) * window_width + int(x * scale)]
+    require(pixel[2] > 150 and pixel[0] < 80, f"the game UI is missing without a camera: {pixel}")
+    call("entity.destroy", {"entity": menu})

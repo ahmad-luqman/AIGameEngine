@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest/doctest.h>
 
+#include <Basalt/Core/Base.h>
 #include <Basalt/Core/Log.h>
 #include <Basalt/Core/Platform.h>
 
@@ -10,10 +11,18 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <vector>
+
+#if defined(_WIN32)
+	#include <windows.h>
+#else
+	#include <fcntl.h>
+#endif
 
 namespace {
 
@@ -23,15 +32,18 @@ namespace {
 	}
 
 	// `BasaltTests --basalt-child <actions...>` acts as a child process for the RunProcess tests, so they need no
-	// shell or other platform tool. Actions run in order: print <text> (stdout), error <text> (stderr), env <name>,
-	// cwd, crash (an access violation exit code on Windows, SIGABRT elsewhere), sleep <ms>, spam <bytes>, args
-	// (prints every remaining argument on its own line), exit <code>.
-	int RunChild(int argc, char** argv)
+	// shell or other platform tool. With BASALT_TEST_CHILD_ACTIONS set (space-separated actions), it does the same
+	// whatever its arguments, standing in for an exported game (smoke tests). Actions run in order:
+	// print <text> (stdout), error <text> (stderr), env <name>, cwd, sleep <ms>, spam <bytes>, utf8 <count>
+	// (prints "é" count times), invalid (prints bytes that are not UTF-8), fd <descriptor> (POSIX: whether it is
+	// open), crash (a real access violation on Windows, SIGABRT elsewhere), trap (BS_DEBUGBREAK), args (prints
+	// every remaining argument on its own line), exit <code>.
+	int RunChild(const std::vector<std::string>& actions)
 	{
-		for (int i = 2; i < argc; i++)
+		for (size_t i = 0; i < actions.size(); i++)
 		{
-			const std::string_view action = argv[i];
-			const char* value = i + 1 < argc ? argv[i + 1] : "";
+			const std::string_view action = actions[i];
+			const char* value = i + 1 < actions.size() ? actions[i + 1].c_str() : "";
 			if (action == "print")
 			{
 				std::printf("%s\n", value);
@@ -61,20 +73,40 @@ namespace {
 				std::fputs(std::string(static_cast<size_t>(Number(value)), 'x').c_str(), stdout);
 				i++;
 			}
+			else if (action == "utf8")
+			{
+				for (int count = Number(value); count > 0; count--)
+					std::fputs("\xC3\xA9", stdout);
+				i++;
+			}
+			else if (action == "invalid")
+				std::fputs("[\xFF\xFE]", stdout);
+			else if (action == "fd")
+			{
+#if defined(_WIN32)
+				std::printf("fd n/a\n");
+#else
+				std::printf("fd %s\n", fcntl(Number(value), F_GETFD) >= 0 ? "open" : "closed");
+#endif
+				i++;
+			}
 			else if (action == "args")
 			{
-				while (++i < argc)
-					std::printf("[%s]\n", argv[i]);
+				while (++i < actions.size())
+					std::printf("[%s]\n", actions[i].c_str());
 			}
 			else if (action == "crash")
 			{
 				std::fflush(stdout);
 #if defined(_WIN32)
-				// What an access violation ends a process with (no debugger or error dialog involved).
-				std::_Exit(static_cast<int>(0xC0000005u));
-#else
-				std::abort();
+				RaiseException(EXCEPTION_ACCESS_VIOLATION, 0, 0, nullptr);
 #endif
+				std::abort();
+			}
+			else if (action == "trap")
+			{
+				std::fflush(stdout);
+				BS_DEBUGBREAK();
 			}
 			else if (action == "exit")
 			{
@@ -89,8 +121,16 @@ namespace {
 
 int main(int argc, char** argv)
 {
+	if (const auto actions = Basalt::Platform::GetEnvVar("BASALT_TEST_CHILD_ACTIONS"))
+	{
+		std::vector<std::string> list;
+		std::istringstream stream(*actions);
+		for (std::string action; stream >> action;)
+			list.push_back(action);
+		return RunChild(list);
+	}
 	if (argc > 1 && std::string_view(argv[1]) == "--basalt-child")
-		return RunChild(argc, argv);
+		return RunChild(std::vector<std::string>(argv + 2, argv + argc));
 	Basalt::Log::Init();
 	// Keep test output readable: engine logs still reach LogHistory, but only warnings hit the console.
 	Basalt::Log::SetConsoleLevel(Basalt::LogLevel::Warn);

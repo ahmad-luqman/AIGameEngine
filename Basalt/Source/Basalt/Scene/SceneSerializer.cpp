@@ -9,6 +9,7 @@
 #include "Basalt/Scene/ComponentRegistry.h"
 #include "Basalt/Scene/Scene.h"
 
+#include <cmath>
 #include <ranges>
 #include <set>
 #include <system_error>
@@ -215,12 +216,13 @@ namespace Basalt {
 		{
 			json data = { { "Gravity", Vec3ToJson(s.Gravity) }, { "MaxStepsPerFrame", s.MaxStepsPerFrame } };
 			// Written only as an override: a scene without one follows the project's step.
-			if (s.FixedTimestep > 0.0f)
+			if (s.HasFixedTimestepOverride())
 				data["FixedTimestep"] = s.FixedTimestep;
 			return data;
 		}
 
-		// fileVersion: the scene file's format version (patches use the current one).
+		// fileVersion: the scene file's format version; data without a Version key (scene.settings patches) counts as
+		// the current version.
 		bool DeserializePhysicsSettings(const json& data, PhysicsSettings& s, int64_t fileVersion, std::string& outError)
 		{
 			ObjectReader reader(data, "Physics");
@@ -239,8 +241,9 @@ namespace Basalt {
 			if (!reader.Vec3("Gravity", s.Gravity, outError) || !reader.Integer("MaxStepsPerFrame", maxSteps, 1, 64, outError) || !reader.Finish(outError))
 				return false;
 			s.MaxStepsPerFrame = static_cast<uint32_t>(maxSteps);
-			// Version 1 wrote the step into every scene; its default was never a deliberate override.
-			if (fileVersion < 2 && fixedTimestep == DefaultFixedTimestep)
+			// Version 1 wrote the step into every scene; its default was never a deliberate override. (A tolerance: a
+			// hand-written 0.0166667 meant the default too.)
+			if (fileVersion < 2 && std::abs(fixedTimestep - DefaultFixedTimestep) < 1e-6f)
 				fixedTimestep = 0.0f;
 			s.FixedTimestep = fixedTimestep;
 			return true;
@@ -640,8 +643,8 @@ namespace Basalt {
 		// State, not file format: a format version bump must not move pinned hashes.
 		data.erase("Format");
 		data.erase("Version");
-		// Files store the step only as a scene override; hash the step the simulation actually uses, so a project
-		// change moves the hash too.
+		// Files store the step only as a scene override; hash the step the simulation actually uses, so a change of
+		// the project's step (outside a session) moves the hash too.
 		data["Physics"]["FixedTimestep"] = scene.GetFixedTimestep();
 		ReplaceEulerRotations(data, scene);
 		std::unordered_map<uint64_t, uint64_t> indices;

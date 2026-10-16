@@ -7,9 +7,10 @@
 
 #include <array>
 #include <cstddef>
-
+#include <memory>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace Basalt {
@@ -50,8 +51,11 @@ namespace Basalt {
 		template<typename T, size_t N, typename DrawField>
 		bool EditCommitted(const char* label, std::array<T, N>& values, DrawField&& draw)
 		{
+			static_assert(std::is_arithmetic_v<T>, "the edit is kept as doubles");
+			static_assert(N <= std::tuple_size_v<decltype(FieldEdit::Values)>, "FieldEdit holds at most two values");
 			const ImGuiID id = ImGui::GetID(label);
-			if (m_Edit.Id == id)
+			const bool tracked = m_Edit.Id == id;
+			if (tracked)
 				for (size_t i = 0; i < N; i++)
 					values[i] = static_cast<T>(m_Edit.Values[i]);
 			draw(label, values.data());
@@ -62,9 +66,19 @@ namespace Basalt {
 					m_Edit.Values[i] = static_cast<double>(values[i]);
 				return false;
 			}
-			const bool committed = m_Edit.Id == id && ImGui::IsItemDeactivatedAfterEdit();
-			if (m_Edit.Id == id)
+			if (tracked)
 				m_Edit.Id = 0;
+			// Committed whenever ImGui says the edit ended, even if this field's values were not kept (another field
+			// took the slot the same frame): the caller then sees the drawn values, at worst an unchanged setting.
+			return ImGui::IsItemDeactivatedAfterEdit();
+		}
+
+		template<typename T, typename DrawField>
+		bool EditCommitted(const char* label, T& value, DrawField&& draw)
+		{
+			std::array<T, 1> values = { value };
+			const bool committed = EditCommitted(label, values, std::forward<DrawField>(draw));
+			value = values[0];
 			return committed;
 		}
 
@@ -83,7 +97,8 @@ namespace Basalt {
 		};
 
 		EditorContext& m_Context;
-		const Project* m_Project = nullptr;
+		// The project shown (weak, so a new project at the same address still counts as another).
+		std::weak_ptr<Project> m_Project;
 		std::string m_NameBuffer;
 		bool m_EditingName = false;
 		FieldEdit m_Edit;

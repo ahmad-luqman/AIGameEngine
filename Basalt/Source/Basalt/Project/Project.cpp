@@ -46,7 +46,13 @@ namespace Basalt {
 		// Editor caches (thumbnails) are rebuilt from the assets and never belong in version control; keep an existing
 		// ignore file (a fresh repository's, say) and add the rule.
 		const std::filesystem::path ignorePath = absolute / ".gitignore";
-		std::string ignore = FileSystem::ReadTextFile(ignorePath).value_or("");
+		const auto existing = FileSystem::ReadTextFile(ignorePath);
+		if (!existing && FileSystem::Exists(ignorePath))
+		{
+			outError = "cannot read '" + ignorePath.string() + "' to add the Cache/ rule";
+			return nullptr;
+		}
+		std::string ignore = existing.value_or("");
 		if (("\n" + ignore).find("\nCache/") == std::string::npos)
 		{
 			if (!ignore.empty() && ignore.back() != '\n')
@@ -91,8 +97,6 @@ namespace Basalt {
 		{
 			config.Name = data.value("Name", config.Name);
 			config.StartScene = data.value("StartScene", config.StartScene);
-			config.WindowWidth = data.value("WindowWidth", config.WindowWidth);
-			config.WindowHeight = data.value("WindowHeight", config.WindowHeight);
 			config.Fullscreen = data.value("Fullscreen", config.Fullscreen);
 		}
 		catch (const nlohmann::json::exception& e)
@@ -113,6 +117,16 @@ namespace Basalt {
 		{
 			outError = fmt::format("invalid project file '{}': RandomSeed must be an integer between 0 and {}", filePath.string(), UINT32_MAX);
 			return nullptr;
+		}
+		// The window size reaches the runtime's window unchecked otherwise (a negative value would wrap around).
+		for (const auto& [key, size] : { std::pair{ "WindowWidth", &config.WindowWidth }, std::pair{ "WindowHeight", &config.WindowHeight } })
+		{
+			const auto value = data.find(key);
+			if (value != data.end() && (!JsonToUInt32(*value, *size) || *size < ProjectConfig::MinWindowSize || *size > ProjectConfig::MaxWindowSize))
+			{
+				outError = fmt::format("invalid project file '{}': {} must be an integer in [{}, {}]", filePath.string(), key, ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize);
+				return nullptr;
+			}
 		}
 		if (const auto step = data.find("FixedTimestep"); step != data.end() && (!JsonToFloat(*step, config.FixedTimestep) || !IsValidFixedTimestep(config.FixedTimestep)))
 		{

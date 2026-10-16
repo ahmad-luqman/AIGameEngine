@@ -285,11 +285,13 @@ GPU copies of the assets it draws.
   At most one preview is rendered per frame; each waits for the GPU (readback). Images and `.hdr`
   environments are previewed on the CPU (an HDR is tonemapped with the ACES fit). Previews are cached in
   `<project>/Cache/Thumbnails` (outside `Assets/`, so never exported; new projects ignore `Cache/` in git) and
-  remade when the source file's size or modification time changes (a changed model is read again). Only rows on
-  screen ask for previews, and at most 512 textures are kept. Material spheres update once a material stops
-  changing for a frame. Model and prefab previews load the model into `AssetManager`, which keeps it; textures
-  referenced by a material, and models inside a prefab, are not tracked, so editing one does not refresh the
-  previews that use it (Clear Thumbnail Cache does).
+  remade when the size or modification time changes of the source file or of a file its preview reads: a
+  glTF's external buffers and images, a prefab's models (and theirs). Only then are the model and those files
+  read into `AssetManager` again (which also updates the open scene), as with `editor.thumbnail` `refresh`; a
+  preview the cache still matches reuses what `AssetManager` holds. A file that disappears and comes back is
+  previewed again. Only rows on screen ask for previews, and at most 512 textures are kept. Material spheres
+  update once a material stops changing for a frame. Clear Thumbnail Cache forgets every preview and deletes the
+  cached files but does not reload models already in `AssetManager`.
 
 `PreviewRendererGPU` checks framing, determinism, material colour and emission, failures and that pending
 debug lines survive a preview, with Vulkan validation required.

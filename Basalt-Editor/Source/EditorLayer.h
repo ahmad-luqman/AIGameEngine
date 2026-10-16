@@ -117,7 +117,9 @@ namespace Basalt {
 		void UpdateWindowTitle();
 
 		// What a capture shows: the scene view (editor camera and helpers), the primary camera at any size
-		// (render.screenshot; the editor camera without one), or exactly what the Game view shows.
+		// (render.screenshot; the editor camera without one, and the scene view's debug view), or the Game view's
+		// image (primary camera at the game resolution, game UI, never a debug view; it fails without a camera).
+		// Every capture resets exposure and renders at the session's render scale.
 		enum class CaptureView
 		{
 			SceneView,
@@ -175,6 +177,9 @@ namespace Basalt {
 			RenderFailed
 		};
 		GameViewStatus m_GameViewStatus = GameViewStatus::NotRendered;
+		// The Game view renderer failed to initialize: not tried again this session.
+		bool m_GameRendererFailed = false;
+		static const char* GameViewStatusName(GameViewStatus status);
 		// Play brings the Game tab to the front; Stop returns to the scene view if it was in front before.
 		bool m_GameWasRunning = false;
 		bool m_ReturnToViewport = false;

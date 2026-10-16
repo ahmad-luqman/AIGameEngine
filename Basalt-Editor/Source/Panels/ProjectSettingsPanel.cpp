@@ -62,9 +62,9 @@ namespace Basalt {
 			return;
 		}
 		// Another project: nothing shown so far applies to it.
-		if (project.get() != m_Project)
+		if (project != m_Project.lock())
 		{
-			m_Project = project.get();
+			m_Project = project;
 			m_Validation.reset();
 			m_Warnings.clear();
 			m_Rename.reset();
@@ -146,9 +146,11 @@ namespace Basalt {
 		if (EditCommitted("Custom", size, [](const char* id, int* values) { ImGui::InputInt2(id, values); }))
 		{
 			const auto clamp = [](int value) { return std::clamp(value, static_cast<int>(ProjectConfig::MinWindowSize), static_cast<int>(ProjectConfig::MaxWindowSize)); };
-			if (clamp(size[0]) != size[0] || clamp(size[1]) != size[1])
-				m_Context.SetStatus(fmt::format("Window sizes are {} to {} pixels; using {} x {}", ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize, clamp(size[0]), clamp(size[1])), true);
-			Set({ { "windowWidth", clamp(size[0]) }, { "windowHeight", clamp(size[1]) } });
+			const std::array<int, 2> clamped = { clamp(size[0]), clamp(size[1]) };
+			if (clamped != size)
+				m_Context.SetStatus(fmt::format("Window sizes are {} to {} pixels; using {} x {}", ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize, clamped[0], clamped[1]), true);
+			if (clamped[0] != static_cast<int>(config.WindowWidth) || clamped[1] != static_cast<int>(config.WindowHeight))
+				Set({ { "windowWidth", clamped[0] }, { "windowHeight", clamped[1] } });
 		}
 		bool fullscreen = config.Fullscreen;
 		if (ImGui::Checkbox("Fullscreen", &fullscreen))
@@ -159,9 +161,9 @@ namespace Basalt {
 	{
 		if (!ImGui::CollapsingHeader("Simulation", ImGuiTreeNodeFlags_DefaultOpen))
 			return;
-		std::array<uint32_t, 1> seed = { config.RandomSeed };
-		if (EditCommitted("Random Seed", seed, [](const char* id, uint32_t* value) { ImGui::InputScalar(id, ImGuiDataType_U32, value); }) && seed[0] != config.RandomSeed)
-			Set({ { "randomSeed", seed[0] } });
+		uint32_t seed = config.RandomSeed;
+		if (EditCommitted("Random Seed", seed, [](const char* id, uint32_t* value) { ImGui::InputScalar(id, ImGuiDataType_U32, value); }) && seed != config.RandomSeed)
+			Set({ { "randomSeed", seed } });
 		ImGui::SameLine();
 		if (ImGui::Button("Randomize"))
 			Set({ { "randomSeed", std::random_device{}() } });
@@ -182,11 +184,11 @@ namespace Basalt {
 			}
 			ImGui::EndCombo();
 		}
-		std::array<float, 1> custom = { step };
-		if (EditCommitted("Step Seconds", custom, [](const char* id, float* value) { ImGui::InputFloat(id, value, 0.0f, 0.0f, "%.5f"); }) && custom[0] != step)
+		float custom = step;
+		if (EditCommitted("Step Seconds", custom, [](const char* id, float* value) { ImGui::InputFloat(id, value, 0.0f, 0.0f, "%.5f"); }) && custom != step)
 		{
-			if (IsValidFixedTimestep(custom[0]))
-				Set({ { "fixedTimestep", custom[0] } });
+			if (IsValidFixedTimestep(custom))
+				Set({ { "fixedTimestep", custom } });
 			else
 				m_Context.SetStatus(fmt::format("The physics step must be in (0, {}] seconds", MaxFixedTimestep), true);
 		}
@@ -194,7 +196,7 @@ namespace Basalt {
 		// A scene may keep its own step (scene.settings); show it, since it hides the project value.
 		Scene& scene = *m_Context.Session.GetScene();
 		const float sceneStep = scene.GetPhysicsSettings().FixedTimestep;
-		bool overrides = sceneStep > 0.0f;
+		bool overrides = scene.GetPhysicsSettings().HasFixedTimestepOverride();
 		if (ImGui::Checkbox("Open scene uses its own step", &overrides))
 		{
 			m_Context.Execute("scene.settings", { { "Physics", { { "FixedTimestep", overrides ? nlohmann::json(step) : nlohmann::json() } } } });
@@ -217,9 +219,9 @@ namespace Basalt {
 		bool vsync = graphics.VSync;
 		if (ImGui::Checkbox("VSync", &vsync))
 			Set({ { "graphics", { { "VSync", vsync } } } });
-		std::array<float, 1> scale = { graphics.RenderScale };
-		if (EditCommitted("Render Scale", scale, [](const char* id, float* value) { ImGui::SliderFloat(id, value, MinRenderScale, MaxRenderScale, "%.2f"); }))
-			Set({ { "graphics", { { "RenderScale", scale[0] } } } });
+		float scale = graphics.RenderScale;
+		if (EditCommitted("Render Scale", scale, [](const char* id, float* value) { ImGui::SliderFloat(id, value, MinRenderScale, MaxRenderScale, "%.2f"); }) && scale != graphics.RenderScale)
+			Set({ { "graphics", { { "RenderScale", scale } } } });
 		for (const auto& [key, quality] : { std::pair{ "ShadowQuality", graphics.ShadowQuality }, std::pair{ "SSAOQuality", graphics.SSAOQuality } })
 		{
 			int index = static_cast<int>(quality);
@@ -230,12 +232,12 @@ namespace Basalt {
 		if (ImGui::Checkbox("Dynamic Resolution", &dynamic))
 			Set({ { "graphics", { { "DynamicResolution", dynamic } } } });
 		ImGui::BeginDisabled(!dynamic);
-		std::array<float, 1> target = { graphics.DynamicResolution.TargetFrameRate };
-		if (EditCommitted("Target Frame Rate", target, [](const char* id, float* value) { ImGui::SliderFloat(id, value, MinTargetFrameRate, MaxTargetFrameRate, "%.0f FPS"); }))
-			Set({ { "graphics", { { "TargetFrameRate", target[0] } } } });
-		std::array<float, 1> minimum = { graphics.DynamicResolution.MinScale };
-		if (EditCommitted("Lowest Render Scale", minimum, [](const char* id, float* value) { ImGui::SliderFloat(id, value, MinRenderScale, MaxRenderScale, "%.2f"); }))
-			Set({ { "graphics", { { "MinRenderScale", minimum[0] } } } });
+		float target = graphics.DynamicResolution.TargetFrameRate;
+		if (EditCommitted("Target Frame Rate", target, [](const char* id, float* value) { ImGui::SliderFloat(id, value, MinTargetFrameRate, MaxTargetFrameRate, "%.0f FPS"); }) && target != graphics.DynamicResolution.TargetFrameRate)
+			Set({ { "graphics", { { "TargetFrameRate", target } } } });
+		float minimum = graphics.DynamicResolution.MinScale;
+		if (EditCommitted("Lowest Render Scale", minimum, [](const char* id, float* value) { ImGui::SliderFloat(id, value, MinRenderScale, MaxRenderScale, "%.2f"); }) && minimum != graphics.DynamicResolution.MinScale)
+			Set({ { "graphics", { { "MinRenderScale", minimum } } } });
 		ImGui::EndDisabled();
 	}
 
@@ -248,6 +250,9 @@ namespace Basalt {
 		std::string error;
 
 		const auto& names = layers.GetNames();
+		// A layer removed through automation while being renamed: nothing left to rename.
+		if (m_Rename && m_Rename->Index >= layers.GetCount())
+			m_Rename.reset();
 		for (uint32_t i = 0; i < layers.GetCount(); i++)
 		{
 			ImGui::PushID(static_cast<int>(i));
@@ -265,11 +270,11 @@ namespace Basalt {
 				if (ImGui::IsItemDeactivatedAfterEdit() && m_Rename && m_Rename->Index == i)
 				{
 					// Only the layer the edit began on (the list may have changed through automation meanwhile).
-					PhysicsLayers changed = layers;
 					if (names[i] != m_Rename->Original)
 						m_Context.SetStatus("The layers changed while renaming; the rename was dropped", true);
 					else if (m_Rename->Buffer != names[i])
 					{
+						PhysicsLayers changed = layers;
 						if (changed.Rename(i, m_Rename->Buffer, error))
 							apply(changed);
 						else

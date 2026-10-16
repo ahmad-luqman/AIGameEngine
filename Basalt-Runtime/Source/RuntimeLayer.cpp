@@ -187,7 +187,8 @@ namespace Basalt {
 		{
 			if (const ScriptEngine* scripts = m_Scene->GetScriptEngine(); scripts && !scripts->GetErrors().empty())
 			{
-				BS_CORE_ERROR("Runtime: {} script error(s) occurred; the first: {}", scripts->GetErrors().size(), scripts->GetErrors().front());
+				const auto& errors = scripts->GetErrors();
+				BS_CORE_ERROR("Runtime: {} script error(s) occurred; the first: {}", errors.size(), errors.front());
 				fail(7);
 			}
 		}

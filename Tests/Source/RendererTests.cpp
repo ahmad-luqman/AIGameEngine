@@ -859,6 +859,11 @@ TEST_SUITE("SceneRenderer")
 		DebugDraw::Clear();
 		DebugDraw::AddLines({ lines[0] });
 		CHECK(DebugDraw::GetLineCount() == 0);
+		// RestoreLines too keeps whole lines, up to the cap.
+		DebugDraw::RestoreLines({ lines[0], lines[1], lines[2] });
+		CHECK(DebugDraw::TakeLines().size() == 2);
+		DebugDraw::RestoreLines(std::vector<DebugLineVertex>(DebugDraw::MaxLines * 2 + 6, lines[0]));
+		CHECK(DebugDraw::GetLineCount() == DebugDraw::MaxLines);
 		DebugDraw::Clear();
 	}
 }
