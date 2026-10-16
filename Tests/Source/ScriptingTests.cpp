@@ -2185,6 +2185,9 @@ namespace {
 		std::smatch match;
 		while (std::getline(lines, line))
 		{
+			// Windows checkouts may convert the file to CRLF line endings.
+			if (!line.empty() && line.back() == '\r')
+				line.pop_back();
 			if (std::regex_search(line, match, s_Class))
 				currentClass = match[1];
 			else if (std::regex_search(line, match, s_Field) && !currentClass.empty())
