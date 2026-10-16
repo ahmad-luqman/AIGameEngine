@@ -18,6 +18,8 @@ namespace Basalt::EditorCommandSchemas {
 	nlohmann::json WindowScreenshot();
 	nlohmann::json Screenshot();
 	nlohmann::json Panel();
+	nlohmann::json Thumbnail();
+	nlohmann::json MaterialPreview();
 
 	// Editor windows editor.panel can show and focus (their ImGui window titles).
 	inline constexpr const char* PanelNames[] = { "Viewport", "Game", "Hierarchy", "Inspector", "Scene", "Content Browser", "Console", "Project Settings" };

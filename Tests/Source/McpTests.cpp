@@ -317,13 +317,13 @@ TEST_CASE("All editor tool schemas reject invalid values before the host handler
 	bool called = false;
 	const auto handler = [&](AutomationSession&, const json& params) { called = true; return params; };
 	const std::vector<std::pair<std::string, json>> schemas = {
-		{ "editor.history", EditorCommandSchemas::Undo() }, { "editor.transaction", EditorCommandSchemas::Transaction() }, { "editor.transform", EditorCommandSchemas::Transform() }, { "editor.component_set", EditorCommandSchemas::ComponentSet() }, { "editor.box_select", EditorCommandSchemas::BoxSelect() }, { "editor.delete", EditorCommandSchemas::Undo() }, { "editor.duplicate", EditorCommandSchemas::Undo() }, { "editor.viewport", ViewportSettings::Schema() }, { "editor.pick", EditorCommandSchemas::Pick() }, { "editor.vertex_snap", EditorCommandSchemas::VertexSnap() }, { "editor.select", EditorCommandSchemas::Select() }, { "editor.camera", EditorCommandSchemas::Camera() }, { "editor.undo", EditorCommandSchemas::Undo() }, { "editor.redo", EditorCommandSchemas::Redo() }, { "editor.screenshot", EditorCommandSchemas::Screenshot() }, { "editor.window_screenshot", EditorCommandSchemas::WindowScreenshot() }, { "editor.panel", EditorCommandSchemas::Panel() }, { "editor.game_view", GameViewSettings::Schema() }
+		{ "editor.history", EditorCommandSchemas::Undo() }, { "editor.transaction", EditorCommandSchemas::Transaction() }, { "editor.transform", EditorCommandSchemas::Transform() }, { "editor.component_set", EditorCommandSchemas::ComponentSet() }, { "editor.box_select", EditorCommandSchemas::BoxSelect() }, { "editor.delete", EditorCommandSchemas::Undo() }, { "editor.duplicate", EditorCommandSchemas::Undo() }, { "editor.viewport", ViewportSettings::Schema() }, { "editor.pick", EditorCommandSchemas::Pick() }, { "editor.vertex_snap", EditorCommandSchemas::VertexSnap() }, { "editor.select", EditorCommandSchemas::Select() }, { "editor.camera", EditorCommandSchemas::Camera() }, { "editor.undo", EditorCommandSchemas::Undo() }, { "editor.redo", EditorCommandSchemas::Redo() }, { "editor.screenshot", EditorCommandSchemas::Screenshot() }, { "editor.window_screenshot", EditorCommandSchemas::WindowScreenshot() }, { "editor.panel", EditorCommandSchemas::Panel() }, { "editor.game_view", GameViewSettings::Schema() }, { "editor.thumbnail", EditorCommandSchemas::Thumbnail() }, { "editor.material_preview", EditorCommandSchemas::MaterialPreview() }
 	};
 	McpServer server;
 	for (const auto& [name, schema] : schemas)
 		REQUIRE(registry.Register({ name, "Editor host", schema, handler }));
 	Start(server, registry, session);
-	CHECK(Reply(server, registry, session, Request("tools/list"))["result"]["tools"].size() == 67);
+	CHECK(Reply(server, registry, session, Request("tools/list"))["result"]["tools"].size() == 69);
 	for (const auto& [name, schema] : schemas)
 	{
 		INFO(name);
@@ -343,6 +343,8 @@ TEST_CASE("All editor tool schemas reject invalid values before the host handler
 			valid = { { "x", 0 }, { "y", 0 } };
 		if (name == "editor.vertex_snap")
 			valid = { { "source", { 0, 0 } }, { "target", { 1, 1 } } };
+		if (name == "editor.material_preview")
+			valid = { { "entity", "Ball" }, { "output", "ball.png" } };
 		if (name == "editor.panel")
 			valid = { { "name", "Project Settings" }, { "open", true } };
 		CHECK(registry.HandleRequest(session, { { "command", name }, { "params", valid } })["ok"] == true);

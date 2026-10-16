@@ -6,6 +6,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <string>
 #include <unordered_map>
 
 namespace Basalt {
@@ -21,6 +22,9 @@ namespace Basalt {
 		}
 
 		void OnImGuiRender();
+
+		// Draws extra content at the top of an open component section (the editor shows a material preview).
+		std::function<void(Entity entity, const std::string& component)> DrawComponentPreview;
 
 	private:
 		void DrawMultiSelection();

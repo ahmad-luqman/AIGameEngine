@@ -272,6 +272,8 @@ namespace Basalt {
 				const std::vector<std::string> ignoredJointFields = isJoint ? GetIgnoredJointFields(joint) : std::vector<std::string>{};
 				if (info.Name == "UIRect")
 					DrawAnchorPresets(entity);
+				if (DrawComponentPreview)
+					DrawComponentPreview(entity, info.Name);
 				for (const std::string& field : info.Fields)
 				{
 					if (!data.contains(field))

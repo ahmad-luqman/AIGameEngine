@@ -162,17 +162,16 @@ order of impact.
 
 ### Editor feel and visual quality
 
-What makes the editor feel finished. Most items are small; do them as one milestone.
+The Game view, asset thumbnails and material previews, the project settings panel and export validation
+with a smoke test have shipped. Follow-ups:
 
-- **Game view — M.** A play viewport rendered at the project's game resolution with the correct aspect
-  ratio, next to the scene view, showing "Edit mode" when not playing.
-- **Asset thumbnails and material preview — M.** Render small previews of meshes, materials and HDRIs
-  into a cache for the content browser, with hover previews.
-- **Project settings panel — S.** Fixed timestep, random seed, game resolution, and an editor for the
-  physics layers and their collision matrix (layers and the seed are already settable with
-  `project.set physicsLayers` / `randomSeed`), all through `project.*` commands.
-- **Export validation and smoke test — S.** Validate the project before export, then run the exported
-  runtime headless for N frames and report its exit code (also an automation command).
+- **Game view input — S.** Lua `Input.GetMousePosition` still reports window coordinates in the editor;
+  map it to the Game view's image (game pixels) while it hosts the game, and route keyboard input to the
+  game only while the Game view has focus (today scripts see every key, as in the runtime window).
+- **Material assets — L.** A `.bmaterial` file type that MaterialComponent can reference, with
+  content-browser thumbnails (previews cover MaterialComponent and glTF materials today).
+- **Preview invalidation — S.** Refresh model and material previews when a texture they use changes, and
+  release preview-only models from `AssetManager`.
 
 ### Editor workflow
 

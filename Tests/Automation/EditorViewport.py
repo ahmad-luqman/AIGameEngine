@@ -16,6 +16,7 @@ from EditorUndoSelection import check_undo_selection
 from EditorPostProcess import check_post_process
 from EditorProjectSettings import check_project_settings
 from EditorGameView import check_game_view
+from EditorThumbnails import check_thumbnails
 
 
 def require(value, message):
@@ -237,6 +238,7 @@ def main():
                     check_undo_selection(call, require, output, temp)
                     check_post_process(call, require, output)
                     check_game_view(call, require, output)
+                    check_thumbnails(call, require, output, temp)
                     check_project_settings(call, require, output)
                     errors = call("log.get", {"errorsOnly": True})
                     require(not errors["messages"], f"Editor logged errors: {errors}")
