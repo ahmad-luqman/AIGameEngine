@@ -191,7 +191,7 @@ Other rules:
 
 - Rendering: `Docs/Rendering.md` (clustered lighting, FSR 1 settings, diagnostics and GPU tests).
 - Lua API: `Docs/ScriptingAPI.md` and the LuaLS definitions `Docs/basalt.d.lua` (update both with every binding change;
-  the `LuaTypeDefinitions` test checks that declared names and component fields match; signatures are kept by hand).
+  the `LuaTypeDefinitions` test checks declared names and component fields and types; signatures are kept by hand).
 - `Docs/AutomationCommands.md`, `Docs/Components.md` and the component section of `Docs/basalt.d.lua` are
   generated: run `python3 scripts/generate_docs.py` after changing commands or components (the `GeneratedDocs`
   ctest fails while they are stale).

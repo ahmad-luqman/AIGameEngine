@@ -53,15 +53,23 @@ namespace BasaltTest {
 	class LineClient
 	{
 	public:
-		explicit LineClient(uint16_t port)
+		// receiveBuffer > 0 shrinks the socket's receive buffer (before connecting), so a client that does not read
+		// makes the server's sends back up quickly.
+		explicit LineClient(uint16_t port, int receiveBuffer = 0)
 			: m_Socket(socket(AF_INET, SOCK_STREAM, IPPROTO_TCP))
 		{
+			if (receiveBuffer > 0)
+				setsockopt(m_Socket, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const char*>(&receiveBuffer), sizeof(receiveBuffer));
 			sockaddr_in address;
 			std::memset(&address, 0, sizeof(address));
 			address.sin_family = AF_INET;
 			address.sin_port = htons(port);
 			address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 			m_Connected = connect(m_Socket, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0;
+#if defined(__APPLE__)
+			int noSigPipe = 1;
+			setsockopt(m_Socket, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, sizeof(noSigPipe));
+#endif
 #if defined(_WIN32)
 			DWORD timeout = 5000;
 			setsockopt(m_Socket, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout), sizeof(timeout));
@@ -79,7 +87,13 @@ namespace BasaltTest {
 		bool Send(const std::string& line)
 		{
 			const std::string payload = line + "\n";
-			return m_Connected && send(m_Socket, payload.data(), static_cast<int>(payload.size()), 0) == static_cast<int>(payload.size());
+#if defined(__linux__)
+			// A send after the server closed the connection must fail, not raise SIGPIPE and end the test run.
+			constexpr int flags = MSG_NOSIGNAL;
+#else
+			constexpr int flags = 0;
+#endif
+			return m_Connected && send(m_Socket, payload.data(), static_cast<int>(payload.size()), flags) == static_cast<int>(payload.size());
 		}
 
 		// The next line, or "" when none arrives in time (or the connection closed).

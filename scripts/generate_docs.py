@@ -20,17 +20,21 @@ LUA_END = "-- END GENERATED: components"
 
 def run(command):
     try:
-        result = subprocess.run([basalt, command], capture_output=True, text=True)
+        result = subprocess.run([basalt, command], capture_output=True, text=True, timeout=120)
     except OSError as error:
         raise SystemExit(f"cannot run '{basalt}' (build it first, or pass its path): {error}")
+    except subprocess.TimeoutExpired:
+        raise SystemExit(f"'{basalt} {command}' did not finish within 120 s")
     if result.returncode != 0:
         raise SystemExit(f"'{basalt} {command}' exited with {result.returncode}\nstderr:\n{result.stderr}\nstdout:\n{result.stdout[:2000]}")
     try:
         response = json.loads(result.stdout)
     except json.JSONDecodeError as error:
         raise SystemExit(f"'{basalt} {command}' did not print JSON ({error}):\n{result.stdout[:2000]}")
-    if not response.get("ok"):
+    if not isinstance(response, dict) or not response.get("ok") or not isinstance(response.get("result"), dict):
         raise SystemExit(f"basalt {command} failed: {response}")
+    if result.stderr.strip():
+        print(result.stderr.strip(), file=sys.stderr)
     return response["result"]
 
 def automation_commands(commands):

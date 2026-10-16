@@ -21,7 +21,7 @@
 	{ "id": "run", "command": "play.step", "params": { "frames": 169, "assertNoErrors": true } },
 	{ "id": "events-poll", "command": "events.poll", "params": { "subscription": 1, "assertTypes": ["playState", "collision"] } },
 	{ "id": "diff-play-differs", "command": "scene.diff", "params": { "from": "edit", "assertEqual": true }, "expectError": "'Ball' Transform.Translation" },
-	{ "id": "assert-ball-fell", "command": "assert.component", "params": { "entity": "Ball", "component": "Transform", "fields": { "Translation": [3, 7, 0] } }, "expectError": "assertion failed: 'Ball' (ID 11) Transform.Translation is " },
+	{ "id": "assert-ball-fell", "command": "assert.component", "params": { "entity": "Ball", "component": "Transform", "fields": { "Translation": [3, 7, 0] } }, "expectError": "Transform.Translation is [3.0," },
 	{ "id": "assert-ball-body", "command": "assert.component", "params": { "entity": "Ball", "component": "RigidBody", "fields": { "Type": "Dynamic" } } },
 	{ "id": "report", "command": "lua.exec", "params": { "code": "FeatureTest.Report()" } },
 	{ "id": "widget-press", "command": "input.mouse", "params": { "position": [200, 460], "button": "Left", "down": true } },

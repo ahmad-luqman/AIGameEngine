@@ -871,6 +871,14 @@ TEST_SUITE("SceneRenderer")
 
 TEST_SUITE("ValidationLayerManifest")
 {
+	// A fake Homebrew prefix with the validation layer's manifest (library_path as given) and, optionally, its library.
+	void MakeLayerPrefix(const std::filesystem::path& prefix, const std::string& libraryPath, bool withLibrary)
+	{
+		REQUIRE(FileSystem::WriteTextFile(prefix / "share" / "vulkan" / "explicit_layer.d" / ValidationLayerManifest::FileName, nlohmann::json({ { "file_format_version", "1.2.0" }, { "layer", { { "name", "VK_LAYER_KHRONOS_validation" }, { "library_path", libraryPath }, { "api_version", "1.4.0" } } } }).dump()));
+		if (withLibrary)
+			REQUIRE(FileSystem::WriteTextFile(prefix / "lib" / "libVkLayer_khronos_validation.dylib", "binary"));
+	}
+
 	TEST_CASE("A layer manifest naming its library without a path gets a copy with the absolute path")
 	{
 		using ValidationLayerManifest::CopyOutcome;
@@ -882,32 +890,39 @@ TEST_SUITE("ValidationLayerManifest")
 		CHECK(result.Outcome == CopyOutcome::NotNeeded);
 		CHECK(result.Message.empty());
 
-		REQUIRE(FileSystem::WriteTextFile(manifest, R"({"file_format_version":"1.2.0","layer":{"name":"VK_LAYER_KHRONOS_validation","library_path":"libVkLayer_khronos_validation.dylib","api_version":"1.4.0"}})"));
+		MakeLayerPrefix(prefix.GetPath(), "libVkLayer_khronos_validation.dylib", false);
 		// The library is missing: pointing at it would not help, and the message says why.
 		result = ValidationLayerManifest::WriteAbsoluteCopy(prefix.GetPath(), output.GetPath());
 		CHECK(result.Outcome == CopyOutcome::NotNeeded);
 		CHECK(result.Message.find("names libVkLayer_khronos_validation.dylib, but") != std::string::npos);
 
+		MakeLayerPrefix(prefix.GetPath(), "libVkLayer_khronos_validation.dylib", true);
 		const std::filesystem::path library = prefix.GetPath() / "lib" / "libVkLayer_khronos_validation.dylib";
-		REQUIRE(FileSystem::WriteTextFile(library, "binary"));
-		result = ValidationLayerManifest::WriteAbsoluteCopy(prefix.GetPath(), output.GetPath() / "Layers");
+		const std::filesystem::path layers = output.GetPath() / "Layers";
+		result = ValidationLayerManifest::WriteAbsoluteCopy(prefix.GetPath(), layers);
 		REQUIRE_MESSAGE(result.Outcome == CopyOutcome::Written, result.Message);
-		CHECK(result.Directory == output.GetPath() / "Layers");
-		const nlohmann::json copy = nlohmann::json::parse(*FileSystem::ReadTextFile(result.Directory / ValidationLayerManifest::FileName));
+		const nlohmann::json copy = nlohmann::json::parse(*FileSystem::ReadTextFile(layers / ValidationLayerManifest::FileName));
 		CHECK(copy["layer"]["library_path"] == FileSystem::PathToUtf8(library));
 		CHECK(copy["layer"]["name"] == "VK_LAYER_KHRONOS_validation");
 		CHECK(copy["file_format_version"] == "1.2.0");
 
 		// An up-to-date copy is reused as it is, and no temporary file is left behind.
-		const auto written = std::filesystem::last_write_time(result.Directory / ValidationLayerManifest::FileName);
-		CHECK(ValidationLayerManifest::WriteAbsoluteCopy(prefix.GetPath(), output.GetPath() / "Layers").Outcome == CopyOutcome::Written);
-		CHECK(std::filesystem::last_write_time(result.Directory / ValidationLayerManifest::FileName) == written);
-		CHECK(std::distance(std::filesystem::directory_iterator(result.Directory), std::filesystem::directory_iterator()) == 1);
+		const auto written = std::filesystem::last_write_time(layers / ValidationLayerManifest::FileName);
+		CHECK(ValidationLayerManifest::WriteAbsoluteCopy(prefix.GetPath(), layers).Outcome == CopyOutcome::Written);
+		CHECK(std::filesystem::last_write_time(layers / ValidationLayerManifest::FileName) == written);
+		CHECK(std::distance(std::filesystem::directory_iterator(layers), std::filesystem::directory_iterator()) == 1);
+		// A stale copy is replaced.
+		REQUIRE(FileSystem::WriteTextFile(layers / ValidationLayerManifest::FileName, "stale"));
+		CHECK(ValidationLayerManifest::WriteAbsoluteCopy(prefix.GetPath(), layers).Outcome == CopyOutcome::Written);
+		CHECK(nlohmann::json::parse(*FileSystem::ReadTextFile(layers / ValidationLayerManifest::FileName)) == copy);
+		CHECK_FALSE(BasaltTest::HasTempFiles(layers));
 
 		// A path that is absolute, or names a folder, works as installed.
-		REQUIRE(FileSystem::WriteTextFile(manifest, nlohmann::json({ { "layer", { { "library_path", FileSystem::PathToUtf8(library) } } } }).dump()));
-		CHECK(ValidationLayerManifest::WriteAbsoluteCopy(prefix.GetPath(), output.GetPath()).Outcome == CopyOutcome::NotNeeded);
-		REQUIRE(FileSystem::WriteTextFile(manifest, R"({"layer":{"library_path":"../lib/libVkLayer_khronos_validation.dylib"}})"));
+		MakeLayerPrefix(prefix.GetPath(), FileSystem::PathToUtf8(library), true);
+		result = ValidationLayerManifest::WriteAbsoluteCopy(prefix.GetPath(), output.GetPath());
+		CHECK(result.Outcome == CopyOutcome::NotNeeded);
+		CHECK(result.Message.empty());
+		MakeLayerPrefix(prefix.GetPath(), "../lib/libVkLayer_khronos_validation.dylib", true);
 		CHECK(ValidationLayerManifest::WriteAbsoluteCopy(prefix.GetPath(), output.GetPath()).Outcome == CopyOutcome::NotNeeded);
 
 		REQUIRE(FileSystem::WriteTextFile(manifest, "{ not json"));
@@ -920,11 +935,35 @@ TEST_SUITE("ValidationLayerManifest")
 		CHECK(result.Message.find("has no layer.library_path") != std::string::npos);
 
 		// A copy that cannot be written (its folder is a file) fails with the reason.
-		REQUIRE(FileSystem::WriteTextFile(manifest, R"({"layer":{"library_path":"libVkLayer_khronos_validation.dylib"}})"));
+		MakeLayerPrefix(prefix.GetPath(), "libVkLayer_khronos_validation.dylib", true);
 		REQUIRE(FileSystem::WriteTextFile(output.GetPath() / "Blocked", "file"));
 		result = ValidationLayerManifest::WriteAbsoluteCopy(prefix.GetPath(), output.GetPath() / "Blocked");
 		CHECK(result.Outcome == CopyOutcome::Failed);
-		CHECK_FALSE(result.Message.empty());
+		CHECK(result.Message.find("cannot create the folder") != std::string::npos);
+	}
+
+	TEST_CASE("The first Homebrew prefix with a usable layer gets the copy, in a folder of its own")
+	{
+		BasaltTest::TempDirectory broken("LayerBroken");
+		BasaltTest::TempDirectory missing("LayerMissing");
+		BasaltTest::TempDirectory good("LayerGood");
+		BasaltTest::TempDirectory output("LayerFirstOutput");
+		REQUIRE(FileSystem::WriteTextFile(broken.GetPath() / "share" / "vulkan" / "explicit_layer.d" / ValidationLayerManifest::FileName, "{ not json"));
+		MakeLayerPrefix(good.GetPath(), "libVkLayer_khronos_validation.dylib", true);
+		std::vector<std::string> messages;
+		const std::optional<std::filesystem::path> directory = ValidationLayerManifest::FirstAbsoluteCopy({ broken.GetPath(), missing.GetPath(), good.GetPath() }, output.GetPath(), messages);
+		REQUIRE(directory);
+		CHECK(*directory == ValidationLayerManifest::CopyDirectory(output.GetPath(), good.GetPath()));
+		CHECK(FileSystem::Exists(*directory / ValidationLayerManifest::FileName));
+		// The broken prefix is reported; the one without a manifest is not.
+		REQUIRE(messages.size() == 1);
+		CHECK(messages[0].find("is not valid JSON") != std::string::npos);
+
+		CHECK(ValidationLayerManifest::CopyDirectory(output.GetPath(), good.GetPath()) != ValidationLayerManifest::CopyDirectory(output.GetPath(), broken.GetPath()));
+		CHECK(ValidationLayerManifest::CopyDirectory(output.GetPath(), "/opt/homebrew/") == ValidationLayerManifest::CopyDirectory(output.GetPath(), "/opt/homebrew"));
+		messages.clear();
+		CHECK_FALSE(ValidationLayerManifest::FirstAbsoluteCopy({ missing.GetPath() }, output.GetPath(), messages));
+		CHECK(messages.empty());
 	}
 
 	TEST_CASE("Homebrew prefixes and layer search paths")
@@ -932,6 +971,7 @@ TEST_SUITE("ValidationLayerManifest")
 		using ValidationLayerManifest::AppendSearchPath;
 		CHECK(ValidationLayerManifest::HomebrewPrefixes(std::nullopt) == std::vector<std::filesystem::path>{ "/opt/homebrew", "/usr/local" });
 		CHECK(ValidationLayerManifest::HomebrewPrefixes("/usr/local") == std::vector<std::filesystem::path>{ "/usr/local", "/opt/homebrew" });
+		CHECK(ValidationLayerManifest::HomebrewPrefixes("/opt/homebrew/") == std::vector<std::filesystem::path>{ "/opt/homebrew", "/usr/local" });
 		CHECK(ValidationLayerManifest::HomebrewPrefixes("/Users/me/brew") == std::vector<std::filesystem::path>{ "/Users/me/brew", "/opt/homebrew", "/usr/local" });
 		CHECK(ValidationLayerManifest::HomebrewPrefixes("") == std::vector<std::filesystem::path>{ "/opt/homebrew", "/usr/local" });
 
@@ -939,8 +979,10 @@ TEST_SUITE("ValidationLayerManifest")
 		CHECK(AppendSearchPath("/mine", "/tmp/layers", ':') == "/mine:/tmp/layers");
 		CHECK(AppendSearchPath("/mine:/tmp/layers", "/tmp/layers", ':') == "/mine:/tmp/layers");
 		CHECK(AppendSearchPath("/tmp/layers:/mine", "/tmp/layers", ':') == "/tmp/layers:/mine");
-		// Only whole entries count.
+		// Only whole entries count, and empty ones go.
 		CHECK(AppendSearchPath("/tmp/layers-old", "/tmp/layers", ':') == "/tmp/layers-old:/tmp/layers");
+		CHECK(AppendSearchPath("/mine:", "/tmp/layers", ':') == "/mine:/tmp/layers");
+		CHECK(AppendSearchPath("::/mine", "/tmp/layers", ':') == "/mine:/tmp/layers");
 		CHECK(AppendSearchPath("C:\\a;D:\\b", "D:\\b", ';') == "C:\\a;D:\\b");
 	}
 }

@@ -5,9 +5,14 @@
 
 #include <spdlog/fmt/fmt.h>
 
+#if defined(_WIN32)
+	#include <process.h>
+#else
+	#include <unistd.h>
+#endif
+
 #include <atomic>
 #include <cerrno>
-#include <chrono>
 #include <fstream>
 #include <system_error>
 
@@ -81,12 +86,25 @@ namespace Basalt {
 	{
 		std::error_code error;
 		if (path.has_parent_path())
+		{
 			std::filesystem::create_directories(path.parent_path(), error);
+			if (error)
+			{
+				outError = "cannot create the folder '" + PathToUtf8(path.parent_path()) + "': " + error.message();
+				return false;
+			}
+		}
 
-		// A name of its own per write: several processes (parallel test runs) may replace the same file at once.
+		// A name of its own per write (process, then a counter): several processes (parallel test runs) may replace the
+		// same file at once.
 		static std::atomic<uint64_t> s_TempCounter = 0;
+#if defined(_WIN32)
+		const int processId = _getpid();
+#else
+		const int processId = static_cast<int>(getpid());
+#endif
 		std::filesystem::path tempPath = path;
-		tempPath += fmt::format(".{}-{}.tmp", std::chrono::steady_clock::now().time_since_epoch().count(), s_TempCounter.fetch_add(1));
+		tempPath += fmt::format(".{}-{}.tmp", processId, s_TempCounter.fetch_add(1));
 		{
 			errno = 0;
 			std::ofstream stream(tempPath, std::ios::out | std::ios::binary | std::ios::trunc);

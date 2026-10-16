@@ -894,7 +894,7 @@ Returns (and removes) up to 'max' events a polled subscription collected, oldest
 
 | Parameter | Type / description |
 |-----------|--------------------|
-| `assertTypes` | array of event types: fail unless the returned events include each; the events then stay queued |
+| `assertTypes` | array of event types: fail unless the first 'max' queued events include each; on failure they stay queued |
 | `max` | integer (default 1024) |
 | `subscription` | integer, from events.subscribe |
 
@@ -905,7 +905,7 @@ Returns (and removes) up to 'max' events a polled subscription collected, oldest
   "additionalProperties": false,
   "properties": {
     "assertTypes": {
-      "description": "array of event types: fail unless the returned events include each; the events then stay queued",
+      "description": "array of event types: fail unless the first 'max' queued events include each; on failure they stay queued",
       "items": {
         "description": "",
         "enum": [
@@ -955,7 +955,7 @@ Starts collecting events: log lines, script errors, play-state changes (play, si
 
 | Parameter | Type / description |
 |-----------|--------------------|
-| `minLevel` | string, lowest log level delivered (default info) |
+| `minLevel` | string, lowest log level delivered: trace, info, warn, error, critical (default info) |
 | `types` | array of event types: log, scriptError, playState, collision (default all) |
 
 <details><summary>Parameter JSON Schema</summary>
@@ -967,7 +967,7 @@ Starts collecting events: log lines, script errors, play-state changes (play, si
     "minLevel": {
       "anyOf": [
         {
-          "description": "string, lowest log level delivered (default info)",
+          "description": "string, lowest log level delivered: trace, info, warn, error, critical (default info)",
           "enum": [
             "trace",
             "info",
@@ -981,7 +981,7 @@ Starts collecting events: log lines, script errors, play-state changes (play, si
           "type": "null"
         }
       ],
-      "description": "string, lowest log level delivered (default info)"
+      "description": "string, lowest log level delivered: trace, info, warn, error, critical (default info)"
     },
     "types": {
       "description": "array of event types: log, scriptError, playState, collision (default all)",
@@ -2492,7 +2492,7 @@ Compares two scene states: 'from' and 'to' each name a snapshot (scene.snapshot)
 | `assertEqual` | bool: fail unless the states are equal; the error lists the first differences |
 | `from` | string, snapshot name or .bscene path |
 | `to` | string, snapshot name or .bscene path (default: the current scene) |
-| `tolerance` | number, numbers this close count as equal (default 0) |
+| `tolerance` | number, floats this close count as equal; integers compare exactly (default 0) |
 
 <details><summary>Parameter JSON Schema</summary>
 
@@ -2533,7 +2533,7 @@ Compares two scene states: 'from' and 'to' each name a snapshot (scene.snapshot)
     "tolerance": {
       "anyOf": [
         {
-          "description": "number, numbers this close count as equal (default 0)",
+          "description": "number, floats this close count as equal; integers compare exactly (default 0)",
           "maximum": 1000000000.0,
           "minimum": 0.0,
           "type": "number"
@@ -2542,7 +2542,7 @@ Compares two scene states: 'from' and 'to' each name a snapshot (scene.snapshot)
           "type": "null"
         }
       ],
-      "description": "number, numbers this close count as equal (default 0)"
+      "description": "number, floats this close count as equal; integers compare exactly (default 0)"
     }
   },
   "required": [

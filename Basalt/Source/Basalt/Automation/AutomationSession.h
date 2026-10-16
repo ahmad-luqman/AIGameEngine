@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Basalt/Automation/AutomationEvents.h"
 #include "Basalt/Core/Base.h"
 #include "Basalt/Core/UUID.h"
 #include "Basalt/UI/GameUI.h"
@@ -18,8 +19,6 @@ namespace Basalt {
 
 	class Scene;
 	struct CommandInfo;
-	class AutomationEventHub;
-	enum class PlayStateChange : uint8_t;
 
 	// One host owns command observation. Rejected BeforeCommand calls never reach the handler;
 	// AfterCommand runs after successful or throwing handlers, with nesting depth already restored.
@@ -92,7 +91,8 @@ namespace Basalt {
 		struct EventClient
 		{
 			uint64_t Owner = 0;
-			bool Streams = false;
+			// Streamed needs an Owner (its connection drains the events).
+			AutomationEventDelivery Delivery = AutomationEventDelivery::Polled;
 		};
 		const EventClient& GetEventClient() const { return m_EventClient; }
 		// Attributes the requests handled during its lifetime to a client (AutomationConnection), then restores
@@ -112,8 +112,11 @@ namespace Basalt {
 
 		// Named scene states (scene.snapshot) that scene.diff compares; they survive play stop and scene changes.
 		// False (with outError) for a name ending in .bscene (scene.diff reads those as files) or when MaxSnapshots
-		// other names are stored. Pointers FindSnapshot returns stay valid until that name is replaced.
+		// other names are stored. Pointers FindSnapshot returns stay valid for the session's lifetime; replacing a
+		// name changes what they point to.
 		bool SetSnapshot(const std::string& name, nlohmann::json state, std::string& outError);
+		// SetSnapshot's checks without a state, so callers can fail before serializing a scene.
+		bool CanSetSnapshot(const std::string& name, std::string& outError) const;
 		const nlohmann::json* FindSnapshot(const std::string& name) const;
 
 		// --- Input recording (replays) ---------------------------------------------------------------

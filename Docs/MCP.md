@@ -96,8 +96,8 @@ Agents can follow a running game and check it without polling or screenshots:
   `{"event":"dropped","subscription":N,"count":K}` before the remaining events. `seq` counts every event of the
   session, so one subscription sees gaps. A client that reads one line per request must set such frames aside
   (see `Tests/Automation/EditorViewport.py`). The server serves one connection at a time, so subscribe on the
-  connection that sends the commands. MCP clients and the CLI get polled subscriptions instead (an MCP client's
-  still end with its TCP connection): `events.poll {subscription}` returns the queued events (at most 1024 wait;
+  connection that sends the commands. MCP clients and the CLI get polled subscriptions instead (on the editor's TCP
+  server an MCP client's still end with its connection; `basalt mcp`'s end with the process): `events.poll {subscription}` returns the queued events (at most 1024 wait;
   `dropped` counts the rest; with `assertTypes` it fails, leaving them queued, unless every listed type is there).
   `pause` and `resume` come from the editor's Pause button; no command pauses.
 - `scene.snapshot {name}` keeps the current state in memory; `scene.diff {from, to?}` compares two snapshots or

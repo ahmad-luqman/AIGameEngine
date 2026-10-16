@@ -106,7 +106,7 @@ Write gameplay checks as assertions, so a batch reads as the game's specificatio
 `scene.diff` lists exactly what playing changed (entities added/removed, fields with before and after); add
 `"expectError": "assertion failed"` to a request that must fail. Subscription IDs start at 1 in each CLI run.
 Game scripts get completion and type checks in code editors from `Docs/basalt.d.lua` (lua-language-server): add it
-to the project's `workspace.library`.
+to `workspace.library` in the project's `.luarc.json`.
 
 ## 5. Look at it
 

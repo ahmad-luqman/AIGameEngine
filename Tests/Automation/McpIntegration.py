@@ -79,6 +79,15 @@ def main():
         require(tool["inputSchema"] == schema, "CLI and MCP schema drift")
         failure = subprocess.run([basalt, "--project", str(pathlib.Path(temp, "missing")), "mcp"], capture_output=True, text=True, timeout=30)
         require(failure.returncode != 0 and not failure.stdout, "Startup failure polluted MCP stdout")
+        # Text that is not UTF-8 (here a Lua string) still prints as JSON, with replacement characters.
+        invalid = [{"command": "scene.new", "params": {"empty": True}}, {"command": "play.start"},
+                   {"command": "lua.exec", "params": {"code": "return 'bad \\255 byte'"}}]
+        batch = subprocess.run([basalt, "--no-save", "batch", "-"], input=json.dumps(invalid).encode(), capture_output=True, timeout=60)
+        require(batch.returncode == 0, batch.stderr.decode("utf-8", "replace"))
+        replies = json.loads(batch.stdout.decode("utf-8"))
+        require(replies[2]["result"]["result"] == "bad \ufffd byte", f"invalid UTF-8 output: {replies[2]}")
+        single = subprocess.run([basalt, "lua.exec", json.dumps({"code": "return 1"})], capture_output=True, timeout=60)
+        require(single.returncode != 0 and json.loads(single.stdout.decode("utf-8"))["ok"] is False, "one-shot output is not JSON")
     print("MCP stdio integration passed")
 
 

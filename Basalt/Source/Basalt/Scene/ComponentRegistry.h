@@ -15,14 +15,6 @@ namespace Basalt {
 
 	class Entity;
 
-	// Uniform, name-based access to every serializable component. Scene files, prefabs, editor undo
-	// snapshots, Lua (Entity:GetComponent/SetComponent) and the automation API all go through these
-	// functions, so a component behaves identically everywhere.
-	//
-	// Deserialize merges: only keys present in the JSON are changed, and a missing component is added with
-	// its defaults and the given keys (one construction, no separate update). Unknown keys, wrong value
-	// types and values the component's rules reject fail with a descriptive error, leaving the entity
-	// unchanged.
 	enum class ComponentFieldKind : uint8_t
 	{
 		Number = 0,
@@ -33,11 +25,11 @@ namespace Basalt {
 		// An entity UUID (0 = none).
 		Entity,
 		// A string of ComponentInfo::EnumOptions.
-		Enum
+		Enum // keep last: ComponentFieldType::ToString has one name per kind
 	};
 
-	// The JSON type of a component field: a kind, or an array of Count values of that kind (vectors, colors, Euler
-	// degrees, per-axis enums).
+	// The JSON type of a component field: one value of a kind (Count 0), or an array of Count values of that kind
+	// (vectors, colors, Euler degrees, boolean vectors, per-axis enums).
 	struct ComponentFieldType
 	{
 		ComponentFieldKind Kind = ComponentFieldKind::Number;
@@ -45,9 +37,16 @@ namespace Basalt {
 
 		// "number", "integer", "boolean", "string", "object", "entity" or "enum", with "[Count]" for an array.
 		std::string ToString() const;
-		bool operator==(const ComponentFieldType&) const = default;
 	};
 
+	// Uniform, name-based access to every serializable component. Scene files, prefabs, editor undo
+	// snapshots, Lua (Entity:GetComponent/SetComponent) and the automation API all go through these
+	// functions, so a component behaves identically everywhere.
+	//
+	// Deserialize merges: only keys present in the JSON are changed, and a missing component is added with
+	// its defaults and the given keys (one construction, no separate update). Unknown keys, wrong value
+	// types and values the component's rules reject fail with a descriptive error, leaving the entity
+	// unchanged.
 	struct ComponentInfo
 	{
 		// Name used in files and APIs, e.g. "Transform", "RigidBody".

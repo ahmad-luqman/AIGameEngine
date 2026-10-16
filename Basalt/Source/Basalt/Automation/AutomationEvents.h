@@ -7,7 +7,6 @@
 #include <atomic>
 #include <cstdint>
 #include <deque>
-#include <functional>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -40,9 +39,19 @@ namespace Basalt {
 		Simulate,
 		Pause,
 		Resume,
-		Stop
+		Stop,
+		Count
 	};
 	const char* PlayStateChangeName(PlayStateChange change);
+
+	// How a subscription's events leave the hub.
+	enum class AutomationEventDelivery : uint8_t
+	{
+		// Read with AutomationEventHub::Poll (events.poll).
+		Polled = 0,
+		// Sent by the owner's connection (TakeStreamed); Poll refuses it, so nobody else steals the events.
+		Streamed
+	};
 
 	// Fans engine events (log lines, script errors, play-state changes, collisions) out to automation
 	// subscriptions, so tools follow a running game without polling log.get. Thread-safe: log lines arrive on any
@@ -71,14 +80,7 @@ namespace Basalt {
 			}
 		};
 
-		// How a subscription's events leave the hub.
-		enum class Delivery
-		{
-			// Read with Poll (events.poll).
-			Polled,
-			// Sent by the owner's connection (TakeStreamed); Poll refuses it, so nobody else steals the events.
-			Streamed
-		};
+		using Delivery = AutomationEventDelivery;
 
 		enum class PollStatus
 		{
@@ -86,7 +88,7 @@ namespace Basalt {
 			UnknownSubscription,
 			// The subscription streams to its connection.
 			Streamed,
-			// The accept check refused the events; they stay queued.
+			// The events lack a required type; they stay queued.
 			Rejected
 		};
 
@@ -97,20 +99,22 @@ namespace Basalt {
 
 		// The owner is the client whose subscriptions end with it (RemoveOwner); 0 for none, whose subscriptions last
 		// until unsubscribed or the hub goes (the CLI's, which end with the process). A streamed subscription needs an
-		// owner. Returns the subscription ID (never 0), or nullopt when MaxSubscriptions are active.
+		// owner to drain it. Returns the subscription ID (never 0), or nullopt when MaxSubscriptions are active or a
+		// streamed subscription has no owner.
 		std::optional<uint64_t> Subscribe(const Filter& filter, uint64_t owner, Delivery delivery);
 		bool Unsubscribe(uint64_t id);
 		// Ends every subscription of an owner (its connection closed).
 		void RemoveOwner(uint64_t owner);
 		size_t GetSubscriptionCount() const;
 
-		// Moves up to `max` queued events out of a polled subscription, oldest first; outDropped is the number lost to
-		// the queue limit since the previous successful poll. With `accept`, the events leave the queue only when it
-		// returns true for them (Rejected otherwise, with outEvents still filled); it runs under the hub's lock.
-		PollStatus Poll(uint64_t id, size_t max, std::vector<nlohmann::json>& outEvents, uint64_t& outDropped, const std::function<bool(const std::vector<nlohmann::json>&)>& accept = {});
+		// Replaces outEvents with up to `max` queued events of a polled subscription, oldest first, and removes them;
+		// outDropped is the number lost to the queue limit since the previous successful poll. With requiredTypes
+		// (TypeBits), the events stay queued unless they include every required type: Rejected, with outEvents and
+		// outDropped filled so the caller can say what was there.
+		PollStatus Poll(uint64_t id, size_t max, std::vector<nlohmann::json>& outEvents, uint64_t& outDropped, uint32_t requiredTypes = 0);
 		// Every event queued for the owner's streamed subscriptions as newline-terminated JSON frames, each with its
-		// "subscription", grouped by subscription (order across subscriptions by "seq"); a dropped count becomes a
-		// {"event":"dropped"} frame before them. Empty when nothing is pending.
+		// "subscription": grouped by subscription in ID order, each oldest first (clients order across subscriptions by
+		// "seq"); a dropped count becomes a {"event":"dropped"} frame before them. Empty when nothing is pending.
 		std::string TakeStreamed(uint64_t owner);
 
 		// Cheap check publishers make before building an event.

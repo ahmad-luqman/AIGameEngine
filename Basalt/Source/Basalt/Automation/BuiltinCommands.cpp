@@ -768,15 +768,17 @@ namespace Basalt {
 
 			Add(registry, "scene.snapshot", fmt::format("Stores the current scene state (the play copy while playing) under a name for scene.diff. Snapshots live in memory for the session (at most {} names), survive play stop and scene changes, and a name can be reused to replace one.", AutomationSession::MaxSnapshots), Schema::Object({ { "name", Schema::String("string, snapshot name (not ending in .bscene)", true) } }, { "name" }), [](AutomationSession& session, const json& params) {
 				const std::string name = RequireString(params, "name");
+				std::string error;
+				if (!session.CanSetSnapshot(name, error))
+					throw CommandError(error);
 				json state = SceneSerializer::SerializeScene(RequireScene(session));
 				const size_t entities = state["Entities"].size();
-				std::string error;
 				if (!session.SetSnapshot(name, std::move(state), error))
 					throw CommandError(error);
 				return json{ { "name", name }, { "entities", entities } };
 			});
 
-			Add(registry, "scene.diff", "Compares two scene states: 'from' and 'to' each name a snapshot (scene.snapshot) or a scene file (a project-relative path ending in .bscene); 'to' defaults to the current scene (the play copy while playing). Entities are matched by ID. Returns {equal, settings, added, removed, changed, reordered}: settings and each changed entity's changes are [{path, from, to}] (e.g. 'Transform.Translation'; a component name with from null when it was added, to null when removed); reordered is true when the entities both states have appear in a different order (sibling and UI draw order).", Schema::Object({ { "from", Schema::String("string, snapshot name or .bscene path", true) }, { "to", Schema::Nullable(Schema::String("string, snapshot name or .bscene path (default: the current scene)", true)) }, { "tolerance", Schema::Nullable(Schema::Number("number, numbers this close count as equal (default 0)", 0.0, 1.0e9)) }, { "assertEqual", Schema::Nullable(Schema::Boolean("bool: fail unless the states are equal; the error lists the first differences")) } }, { "from" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "scene.diff", "Compares two scene states: 'from' and 'to' each name a snapshot (scene.snapshot) or a scene file (a project-relative path ending in .bscene); 'to' defaults to the current scene (the play copy while playing). Entities are matched by ID. Returns {equal, settings, added, removed, changed, reordered}: settings and each changed entity's changes are [{path, from, to}] (e.g. 'Transform.Translation'; a component name with from null when it was added, to null when removed); reordered is true when the entities both states have appear in a different order (sibling and UI draw order).", Schema::Object({ { "from", Schema::String("string, snapshot name or .bscene path", true) }, { "to", Schema::Nullable(Schema::String("string, snapshot name or .bscene path (default: the current scene)", true)) }, { "tolerance", Schema::Nullable(Schema::Number("number, floats this close count as equal; integers compare exactly (default 0)", 0.0, 1.0e9)) }, { "assertEqual", Schema::Nullable(Schema::Boolean("bool: fail unless the states are equal; the error lists the first differences")) } }, { "from" }), [](AutomationSession& session, const json& params) {
 				const json from = LoadSceneState(session, RequireString(params, "from"));
 				const std::string toName = OptionalString(params, "to");
 				const json to = toName.empty() ? SceneSerializer::SerializeScene(RequireScene(session)) : LoadSceneState(session, toName);
@@ -1175,17 +1177,25 @@ namespace Basalt {
 
 			ImageCompareResult result = CompareImages(*actual, *reference, options, !diffPath.empty());
 			json diff = nullptr;
-			if (!diffPath.empty() && result.SizeMatches)
+			if (!diffPath.empty())
 			{
-				if (!WritePng(diffPath, result.DiffImage, result.Width, result.Height, error))
-					throw CommandError(error);
-				diff = FileSystem::PathToUtf8(diffPath);
-			}
-			else if (!diffPath.empty())
-			{
-				// No diff of images of different sizes; an older one must not pass for this comparison's.
-				std::error_code ignored;
-				std::filesystem::remove(diffPath, ignored);
+				if (result.SizeMatches)
+				{
+					if (!WritePng(diffPath, result.DiffImage, result.Width, result.Height, error))
+						throw CommandError(error);
+					diff = FileSystem::PathToUtf8(diffPath.lexically_normal());
+				}
+				else
+				{
+					// No diff of images of different sizes; an older one must not pass for this comparison's. Only a file,
+					// and never one of the compared images.
+					std::error_code removeError;
+					const bool compared = diffPath.lexically_normal() == actualPath.lexically_normal() || diffPath.lexically_normal() == referencePath.lexically_normal();
+					if (!compared && std::filesystem::is_regular_file(diffPath, removeError))
+						std::filesystem::remove(diffPath, removeError);
+					if (removeError)
+						BS_CORE_WARN("image.compare: cannot remove the old diff image '{}': {}", FileSystem::PathToUtf8(diffPath), removeError.message());
+				}
 			}
 
 			json response = {
@@ -1197,7 +1207,7 @@ namespace Basalt {
 				{ "meanDelta", result.MeanDelta },
 				{ "differingPercent", result.DifferingPercent },
 				{ "similarity", result.SizeMatches ? 1.0 - result.MeanDelta / 255.0 : 0.0 },
-				{ "actual", FileSystem::PathToUtf8(actualPath) },
+				{ "actual", FileSystem::PathToUtf8(actualPath.lexically_normal()) },
 				{ "diff", diff },
 			};
 			if (OptionalBool(params, "assertMatch", false) && !result.Matches)
@@ -1233,7 +1243,7 @@ namespace Basalt {
 				Scene& scene = RequireScene(session);
 				json errors = scene.GetScriptEngine() ? json(scene.GetScriptEngine()->GetErrors()) : json::array();
 				if (OptionalBool(params, "assertNoErrors", false) && !errors.empty())
-					throw CommandError("script errors: " + errors.dump());
+					throw CommandError("script errors: " + errors.dump(-1, ' ', false, json::error_handler_t::replace));
 				json result = { { "time", scene.GetTime() }, { "frame", scene.GetFrameCount() }, { "scriptErrors", errors }, { "quitRequested", scene.IsQuitRequested() }, { "scene", scene.GetName() }, { "scenePath", scene.GetPath() } };
 				if (OptionalBool(params, "hash", false) || params.contains("expectHash"))
 				{
@@ -1253,7 +1263,7 @@ namespace Basalt {
 						physical.push_back(index);
 				}
 				if (!physical.empty())
-					BS_CORE_WARN("replay.record_start: physical gamepads {} are connected; replays run without them, so their input will not replay", physical.dump());
+					BS_CORE_WARN("replay.record_start: physical gamepads {} are connected; replays run without them, so their input will not replay", physical.dump(-1, ' ', false, json::error_handler_t::replace));
 				return json{ { "recording", true }, { "physicalGamepads", physical } };
 			});
 
@@ -1359,7 +1369,7 @@ namespace Basalt {
 				Scene& scene = RequireScene(session);
 				json errors = scene.GetScriptEngine() ? json(scene.GetScriptEngine()->GetErrors()) : json::array();
 				if (OptionalBool(params, "assertNoErrors", false) && !errors.empty())
-					throw CommandError("script errors: " + errors.dump());
+					throw CommandError("script errors: " + errors.dump(-1, ' ', false, json::error_handler_t::replace));
 				const std::string hash = SceneSerializer::ComputeStateHash(scene);
 				const std::string recordedHash = replay.value("StateHash", "");
 				if (OptionalBool(params, "assertHash", false))
@@ -1500,7 +1510,8 @@ namespace Basalt {
 			});
 
 			Add(registry, "assert.component", "Fails unless the entity (which must exist, with a unique name) has the component and, for each given field, the value component.get returns: floats within 'tolerance', integers and everything else exactly, vectors element-wise, objects may have more keys than given. With exists=false, fails if the entity has the component. Returns the component's fields. The error lists every mismatch.", Schema::Object({ { "entity", Schema::Entity("ID or name") }, { "component", Schema::String("string, e.g. 'Transform'", true) }, { "fields", json{ { "type", "object" }, { "description", "object of expected field values (component.get format; entity references take an ID or name)" } } }, { "tolerance", Schema::Nullable(Schema::Number("number (default 0.0001)", 0.0, 1.0e9)) }, { "exists", Schema::Nullable(Schema::Boolean("bool (default true)")) } }, { "entity", "component" }), [](AutomationSession& session, const json& params) {
-				Entity entity = Asserting([&]() { return RequireEntity(session, params); });
+				Scene& scene = RequireScene(session);
+				Entity entity = Asserting([&]() { return ResolveEntity(scene, Require(params, "entity")); });
 				const std::string name = RequireString(params, "component");
 				const ComponentInfo& info = RequireComponentInfo(name);
 				const bool hasFields = params.contains("fields");
@@ -1522,7 +1533,7 @@ namespace Basalt {
 					if (std::ranges::find(info.Fields, field) == info.Fields.end())
 						throw CommandError(fmt::format("unknown field '{}' for {} (valid: {})", field, name, fmt::join(info.Fields, ", ")));
 				}
-				const json expected = Asserting([&]() { return ResolveEntityFields(RequireScene(session), name, params["fields"]); });
+				const json expected = Asserting([&]() { return ResolveEntityFields(scene, name, params["fields"]); });
 				std::vector<std::string> mismatches;
 				MatchJsonSubset(data, expected, OptionalNumber(params, "tolerance", 1.0e-4, 0.0, 1.0e9), name, mismatches);
 				if (!mismatches.empty())
@@ -1533,6 +1544,35 @@ namespace Basalt {
 
 		// --- Events --------------------------------------------------------------------------------
 
+		// The required types (TypeBits) none of the events has, by name.
+		std::vector<std::string> MissingEventTypes(const std::vector<json>& events, uint32_t requiredTypes)
+		{
+			std::vector<std::string> missing;
+			for (uint32_t index = 0; index < static_cast<uint32_t>(AutomationEventType::Count); index++)
+			{
+				const auto type = static_cast<AutomationEventType>(index);
+				const char* name = AutomationEventTypeName(type);
+				if ((requiredTypes & AutomationEventHub::TypeBit(type)) && std::ranges::none_of(events, [name](const json& event) { return event.value("event", "") == name; }))
+					missing.emplace_back(name);
+			}
+			return missing;
+		}
+
+		// "2 playState, 1 log", or "none".
+		std::string DescribeEventCounts(const std::vector<json>& events)
+		{
+			std::map<std::string, size_t> counts;
+			for (const json& event : events)
+				counts[event.value("event", "")]++;
+			if (counts.empty())
+				return "none";
+			std::vector<std::string> kinds;
+			kinds.reserve(counts.size());
+			for (const auto& [kind, count] : counts)
+				kinds.push_back(fmt::format("{} {}", count, kind));
+			return fmt::format("{}", fmt::join(kinds, ", "));
+		}
+
 		void RegisterEvents(CommandRegistry& registry)
 		{
 			json types = Schema::String("");
@@ -1541,10 +1581,11 @@ namespace Basalt {
 				types["enum"].push_back(name);
 			const std::string typeList = fmt::format("{}", fmt::join(AutomationEventTypeNames(), ", "));
 			json typesSchema = { { "type", "array" }, { "description", "array of event types: " + typeList + " (default all)" }, { "items", types }, { "minItems", 1 } };
-			json minLevel = Schema::String("string, lowest log level delivered (default info)");
-			minLevel["enum"] = json::array();
+			std::vector<std::string> levels;
 			for (auto level = static_cast<int>(LogLevel::Trace); level <= static_cast<int>(LogLevel::Critical); level++)
-				minLevel["enum"].push_back(LogLevelName(static_cast<LogLevel>(level)));
+				levels.emplace_back(LogLevelName(static_cast<LogLevel>(level)));
+			json minLevel = Schema::String(fmt::format("string, lowest log level delivered: {} (default info)", fmt::join(levels, ", ")));
+			minLevel["enum"] = levels;
 			Add(registry, "events.subscribe", "Starts collecting events: log lines, script errors, play-state changes (play, simulate, stop; pause and resume from the editor's Pause button) and collisions (collisionBegin/End and triggerEnter/Exit, in Play and Simulate). On the editor's TCP server a line-protocol connection receives them as {\"event\": ...} lines without 'ok' (and {\"event\": \"dropped\"} when it falls behind); MCP and CLI clients read them with events.poll. A TCP connection's subscriptions end with it. Returns {subscription, types, minLevel, streamed}.", Schema::Object({ { "types", typesSchema }, { "minLevel", Schema::Nullable(minLevel) } }), [](AutomationSession& session, const json& params) {
 				AutomationEventHub::Filter filter;
 				if (auto it = params.find("types"); it != params.end())
@@ -1566,8 +1607,7 @@ namespace Basalt {
 					filter.MinLevel = *parsed;
 				}
 				const AutomationSession::EventClient& client = session.GetEventClient();
-				const auto delivery = client.Streams ? AutomationEventHub::Delivery::Streamed : AutomationEventHub::Delivery::Polled;
-				const std::optional<uint64_t> id = session.GetEvents()->Subscribe(filter, client.Owner, delivery);
+				const std::optional<uint64_t> id = session.GetEvents()->Subscribe(filter, client.Owner, client.Delivery);
 				if (!id)
 					throw CommandError(fmt::format("too many event subscriptions (at most {}); end one with events.unsubscribe", AutomationEventHub::MaxSubscriptions));
 				json names = json::array();
@@ -1576,46 +1616,36 @@ namespace Basalt {
 					if (filter.Types & AutomationEventHub::TypeBit(static_cast<AutomationEventType>(type)))
 						names.push_back(AutomationEventTypeName(static_cast<AutomationEventType>(type)));
 				}
-				return json{ { "subscription", *id }, { "types", names }, { "minLevel", LogLevelName(filter.MinLevel) }, { "streamed", client.Streams } };
+				return json{ { "subscription", *id }, { "types", names }, { "minLevel", LogLevelName(filter.MinLevel) }, { "streamed", client.Delivery == AutomationEventDelivery::Streamed } };
 			});
 
 			json assertTypes = typesSchema;
-			assertTypes["description"] = "array of event types: fail unless the returned events include each; the events then stay queued";
+			assertTypes["description"] = "array of event types: fail unless the first 'max' queued events include each; on failure they stay queued";
 			Add(registry, "events.poll", fmt::format("Returns (and removes) up to 'max' events a polled subscription collected, oldest first, with 'dropped': how many were lost because more than {} were waiting.", AutomationEventHub::MaxQueuedEvents), Schema::Object({ { "subscription", Schema::Integer("integer, from events.subscribe", 1, UINT64_MAX) }, { "max", Schema::Nullable(Schema::Integer(fmt::format("integer (default {})", AutomationEventHub::MaxQueuedEvents), 1, AutomationEventHub::MaxQueuedEvents)) }, { "assertTypes", assertTypes } }, { "subscription" }), [](AutomationSession& session, const json& params) {
 				const uint64_t id = Require(params, "subscription").get<uint64_t>();
 				const auto max = static_cast<size_t>(OptionalInteger(params, "max", AutomationEventHub::MaxQueuedEvents, 1, AutomationEventHub::MaxQueuedEvents));
-				std::vector<std::string> missing;
-				const auto hasEveryType = [&](const std::vector<json>& events) {
-					missing.clear();
-					if (auto it = params.find("assertTypes"); it != params.end())
+				uint32_t requiredTypes = 0;
+				if (auto it = params.find("assertTypes"); it != params.end())
+				{
+					for (const json& name : *it)
 					{
-						for (const json& type : *it)
-						{
-							if (std::ranges::none_of(events, [&type](const json& event) { return json(event.value("event", "")) == type; }))
-								missing.push_back(type.get<std::string>());
-						}
+						const std::optional<AutomationEventType> type = AutomationEventTypeFromName(name.get<std::string>());
+						if (!type)
+							throw CommandError("unknown event type " + name.dump());
+						requiredTypes |= AutomationEventHub::TypeBit(*type);
 					}
-					return missing.empty();
-				};
+				}
 				std::vector<json> events;
 				uint64_t dropped = 0;
-				switch (session.GetEvents()->Poll(id, max, events, dropped, hasEveryType))
+				switch (session.GetEvents()->Poll(id, max, events, dropped, requiredTypes))
 				{
 					case AutomationEventHub::PollStatus::UnknownSubscription:
 						throw CommandError("no event subscription " + std::to_string(id));
 					case AutomationEventHub::PollStatus::Streamed:
 						throw CommandError("event subscription " + std::to_string(id) + " streams to its connection; it cannot be polled");
 					case AutomationEventHub::PollStatus::Rejected:
-					{
-						std::map<std::string, size_t> counts;
-						for (const json& event : events)
-							counts[event.value("event", "")]++;
-						std::vector<std::string> kinds;
-						kinds.reserve(counts.size());
-						for (const auto& [kind, count] : counts)
-							kinds.push_back(fmt::format("{} {}", count, kind));
-						throw CommandError(fmt::format("assertion failed: no {} event among the {} queued ({}; {} dropped); they stay queued", fmt::join(missing, ", "), events.size(), kinds.empty() ? std::string("none") : fmt::format("{}", fmt::join(kinds, ", ")), dropped));
-					}
+						// Only the first 'max' are examined; say so when there may be more.
+						throw CommandError(fmt::format("assertion failed: no {} event among the {}{} queued ({}; {} dropped); they stay queued", fmt::join(MissingEventTypes(events, requiredTypes), ", "), events.size() == max ? "first " : "", events.size(), DescribeEventCounts(events), dropped));
 					case AutomationEventHub::PollStatus::Ok:
 						break;
 				}
