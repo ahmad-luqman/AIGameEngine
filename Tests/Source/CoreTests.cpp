@@ -665,6 +665,20 @@ TEST_SUITE("Core")
 		CHECK_FALSE(missing.Error.empty());
 	}
 
+	TEST_CASE("RunProcess passes the environment with overrides")
+	{
+		const BasaltTest::ScopedEnvVar kept("BASALT_PROCESS_TEST_KEPT", "kept");
+		const BasaltTest::ScopedEnvVar replaced("BASALT_PROCESS_TEST_REPLACED", "old");
+		ProcessSpec spec = ChildProcess({ "env", "BASALT_PROCESS_TEST_KEPT", "env", "BASALT_PROCESS_TEST_REPLACED", "env", "BASALT_PROCESS_TEST_ADDED" });
+		spec.Environment = { { "BASALT_PROCESS_TEST_REPLACED", "new value" }, { "BASALT_PROCESS_TEST_ADDED", "added" } };
+		const ProcessResult result = RunProcess(spec);
+		REQUIRE(result.Succeeded());
+		CHECK(result.Output.find("BASALT_PROCESS_TEST_KEPT=kept") != std::string::npos);
+		CHECK(result.Output.find("BASALT_PROCESS_TEST_REPLACED=new value") != std::string::npos);
+		CHECK(result.Output.find("BASALT_PROCESS_TEST_ADDED=added") != std::string::npos);
+		CHECK(result.Output.find("=old") == std::string::npos);
+	}
+
 	TEST_CASE("RunProcess keeps the end of long output")
 	{
 		ProcessSpec spec = ChildProcess({ "spam", "100000", "print", "THE END" });

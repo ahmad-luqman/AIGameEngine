@@ -1390,11 +1390,14 @@ Creates a new project directory (Project.bproject + Assets/) and opens it.
 
 ### `project.export`
 
-Exports a standalone, distributable build of the game (runtime + assets).
+Validates the project (unless validate is false), exports a standalone, distributable build of the game (runtime + assets) and optionally smoke-tests it: runs the exported game headless for smokeTestFrames frames and fails unless it exits cleanly without script errors.
 
 | Parameter | Type / description |
 |-----------|--------------------|
 | `output` | string, output directory |
+| `smokeTestFrames` | integer (default 0: no smoke test), frames the exported game runs headless |
+| `smokeTestTimeout` | number of seconds (default 60) before the smoke test is stopped and fails |
+| `validate` | bool (default true): refuse to export when project.validate finds an error |
 
 <details><summary>Parameter JSON Schema</summary>
 
@@ -1406,6 +1409,46 @@ Exports a standalone, distributable build of the game (runtime + assets).
       "description": "string, output directory",
       "minLength": 1,
       "type": "string"
+    },
+    "smokeTestFrames": {
+      "anyOf": [
+        {
+          "description": "integer (default 0: no smoke test), frames the exported game runs headless",
+          "maximum": 100000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "integer (default 0: no smoke test), frames the exported game runs headless"
+    },
+    "smokeTestTimeout": {
+      "anyOf": [
+        {
+          "description": "number of seconds (default 60) before the smoke test is stopped and fails",
+          "maximum": 3600.0,
+          "minimum": 1.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "number of seconds (default 60) before the smoke test is stopped and fails"
+    },
+    "validate": {
+      "anyOf": [
+        {
+          "description": "bool (default true): refuse to export when project.validate finds an error",
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "bool (default true): refuse to export when project.validate finds an error"
     }
   },
   "required": [
@@ -1470,6 +1513,7 @@ Changes project settings and saves the project file.
 | Parameter | Type / description |
 |-----------|--------------------|
 | `dynamicResolution` | bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries) |
+| `fixedTimestep` | number of seconds in (0, 0.25], the physics step of every scene that does not override it (scene.settings Physics.FixedTimestep); applies from the next play |
 | `fullscreen` | bool |
 | `graphics` | Project graphics defaults; applies to the next Play session. Do not repeat a setting through its top-level alias. |
 | `minRenderScale` | number in [0.25, 2], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning) |
@@ -1499,6 +1543,20 @@ Changes project settings and saves the project file.
         }
       ],
       "description": "bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries)"
+    },
+    "fixedTimestep": {
+      "anyOf": [
+        {
+          "description": "number of seconds in (0, 0.25], the physics step of every scene that does not override it (scene.settings Physics.FixedTimestep); applies from the next play",
+          "exclusiveMinimum": 0.0,
+          "maximum": 0.25,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "number of seconds in (0, 0.25], the physics step of every scene that does not override it (scene.settings Physics.FixedTimestep); applies from the next play"
     },
     "fullscreen": {
       "anyOf": [
@@ -1683,6 +1741,112 @@ Changes project settings and saves the project file.
         }
       ],
       "description": "integer"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+</details>
+
+### `project.smoke_test`
+
+Runs an exported game headless (no GPU needed) for N fixed frames and reports whether it exited cleanly: exit code 0 and no script errors within the timeout. Returns {passed, outcome: exited|timedOut|failed, exitCode, summary, log}.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `assertPassed` | bool: fail the command when the smoke test fails |
+| `executable` | string, the exported game's executable (project.export's executable) |
+| `frames` | integer (default 120) |
+| `timeout` | number of seconds (default 60) |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "assertPassed": {
+      "anyOf": [
+        {
+          "description": "bool: fail the command when the smoke test fails",
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "bool: fail the command when the smoke test fails"
+    },
+    "executable": {
+      "description": "string, the exported game's executable (project.export's executable)",
+      "minLength": 1,
+      "type": "string"
+    },
+    "frames": {
+      "anyOf": [
+        {
+          "description": "integer (default 120)",
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "integer (default 120)"
+    },
+    "timeout": {
+      "anyOf": [
+        {
+          "description": "number of seconds (default 60)",
+          "maximum": 3600.0,
+          "minimum": 1.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "number of seconds (default 60)"
+    }
+  },
+  "required": [
+    "executable"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
+### `project.validate`
+
+Checks that the project would export and start: settings, start scene, every scene and prefab (loads; referenced asset files exist inside Assets/ with the exact letter case), and every Lua script (compiles). Returns {valid, errors, warnings, omitted, issues: [{severity, file, message}]}.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `assertValid` | bool: fail the command when there is an error-severity issue |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "assertValid": {
+      "anyOf": [
+        {
+          "description": "bool: fail the command when there is an error-severity issue",
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "bool: fail the command when there is an error-severity issue"
     }
   },
   "required": [],
@@ -1936,7 +2100,7 @@ Hash of the current scene state (the play copy while playing); equal states give
 
 ### `scene.info`
 
-Summary of the open scene: name, path, entity count, state, unsaved changes, undefined physics layers and animation authoring warnings.
+Summary of the open scene: name, path, entity count, state, unsaved changes, undefined physics layers, animation authoring warnings and the physics step (fixedTimestep, and fixedTimestepOverride when the scene sets its own).
 
 <details><summary>Parameter JSON Schema</summary>
 
@@ -2068,7 +2232,7 @@ Patches scene-level settings: {Renderer: {...}, Physics: {...}, Name}.
 | Parameter | Type / description |
 |-----------|--------------------|
 | `Name` | string |
-| `Physics` | object, e.g. {Gravity: [0,-9.81,0]} |
+| `Physics` | object, e.g. {Gravity: [0,-9.81,0], MaxStepsPerFrame: 8, FixedTimestep: 0.01}; FixedTimestep overrides the project's step for this scene, null removes the override |
 | `Renderer` | object, e.g. {Exposure, Tonemapper, FSR1Enabled, FSR1Sharpness, SSAOEnabled, ShadowDistance}; FSR1Sharpness: [0, 2] stops (0 = strongest) |
 
 <details><summary>Parameter JSON Schema</summary>
@@ -2082,7 +2246,7 @@ Patches scene-level settings: {Renderer: {...}, Physics: {...}, Name}.
       "type": "string"
     },
     "Physics": {
-      "description": "object, e.g. {Gravity: [0,-9.81,0]}",
+      "description": "object, e.g. {Gravity: [0,-9.81,0], MaxStepsPerFrame: 8, FixedTimestep: 0.01}; FixedTimestep overrides the project's step for this scene, null removes the override",
       "type": "object"
     },
     "Renderer": {

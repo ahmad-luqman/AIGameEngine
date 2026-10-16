@@ -24,7 +24,8 @@ build/bin/BasaltEditor --project Samples/Tetris          # editor (automation se
 build/bin/BasaltRuntime --project Samples/Tetris         # play a project
 build/bin/BasaltRuntime --project P --frames 60 --offscreen --screenshot shot.png
 build/bin/basalt help                                    # automation API from the command line
-build/bin/basalt --project Samples/Tetris project.export '{"output": "Dist/Tetris"}'
+build/bin/basalt --project Samples/Tetris project.validate     # missing assets, broken scenes/scripts
+build/bin/basalt --project Samples/Tetris project.export '{"output": "Dist/Tetris", "smokeTestFrames": 120}'
 ```
 
 ## Documentation

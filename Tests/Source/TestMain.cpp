@@ -18,7 +18,7 @@
 namespace {
 
 	// `BasaltTests --basalt-child <actions...>` acts as a child process for the RunProcess tests, so they need no
-	// shell or other platform tool. Actions run in order: print <text> (stdout), error <text> (stderr), cwd, sleep
+	// shell or other platform tool. Actions run in order: print <text> (stdout), error <text> (stderr), env <name>, cwd, sleep
 	// <ms>, spam <bytes>, args (prints every remaining argument on its own line), exit <code>.
 	int RunChild(int argc, char** argv)
 	{
@@ -34,6 +34,12 @@ namespace {
 			else if (action == "error")
 			{
 				std::fprintf(stderr, "%s\n", value);
+				i++;
+			}
+			else if (action == "env")
+			{
+				const char* variable = std::getenv(value);
+				std::printf("%s=%s\n", value, variable ? variable : "<unset>");
 				i++;
 			}
 			else if (action == "cwd")

@@ -487,7 +487,7 @@ namespace Basalt {
 		Impl& impl = *m_Impl;
 		JPH::BodyInterface& bodies = impl.System->GetBodyInterface();
 		const PhysicsSettings& settings = impl.ScenePtr->GetPhysicsSettings();
-		const float fixedStep = settings.FixedTimestep > 0.0f ? settings.FixedTimestep : 1.0f / 60.0f;
+		const float fixedStep = impl.ScenePtr->GetFixedTimestep();
 
 		impl.ApplyPendingChanges();
 

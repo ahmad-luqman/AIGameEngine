@@ -100,6 +100,10 @@ can assert on it. Play mode runs on a copy; the saved scene is never modified by
 
 ## 6. Ship it
 
-`$B --project P project.export '{"output": "Dist/Tetris"}'` produces a standalone folder (runtime renamed
-after the game + assets + MoltenVK on macOS). For release builds export with a `Dist` build of the runtime
+`$B --project P project.validate` lists what would break the exported game (missing or wrongly cased asset
+paths, scenes or prefabs that do not load, scripts that do not compile); fix every error.
+`$B --project P project.export '{"output": "Dist/Tetris", "smokeTestFrames": 120}'` validates again, produces a
+standalone folder (runtime renamed after the game + assets + MoltenVK on macOS) and runs the exported game
+headless for 120 frames: the command fails, with the game's log, if it does not exit cleanly or a script
+reported an error (`project.smoke_test` re-runs that check on any export). For release builds export with a `Dist` build of the runtime
 (`scripts/build.sh Dist`, then run that build's `basalt`).

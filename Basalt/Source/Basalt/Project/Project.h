@@ -2,6 +2,7 @@
 
 #include "Basalt/Core/Base.h"
 #include "Basalt/Math/Random.h"
+#include "Basalt/Physics/FixedTimestep.h"
 #include "Basalt/Physics/PhysicsLayers.h"
 #include "Basalt/Renderer/GraphicsSettings.h"
 
@@ -24,6 +25,9 @@ namespace Basalt {
 		GraphicsSettings Graphics;
 		// Collision layers and matrix used by every scene of the project.
 		PhysicsLayers Physics;
+		// Physics step (seconds) of every scene that does not override it (PhysicsSettings::FixedTimestep).
+		// Applies from the next play.
+		float FixedTimestep = DefaultFixedTimestep;
 		// Seeds the gameplay random streams of play sessions (Lua's Math.Random/math.random, particle emitters,
 		// and runtime entity UUIDs), so a session replays identically. Applies from the next play; changing
 		// it changes the gameplay of scripts that use randomness.
@@ -50,6 +54,8 @@ namespace Basalt {
 		static GraphicsSettings GetActiveGraphicsSettings();
 		// The active project's RandomSeed, or Random::DefaultSeed without an active project (tests, tools).
 		static uint32_t GetActiveRandomSeed() { return s_ActiveProject ? s_ActiveProject->m_Config.RandomSeed : Random::DefaultSeed; }
+		// The active project's FixedTimestep, or DefaultFixedTimestep without an active project.
+		static float GetActiveFixedTimestep() { return s_ActiveProject ? s_ActiveProject->m_Config.FixedTimestep : DefaultFixedTimestep; }
 
 		// Resolves a project-relative path against the active project directory, or the working directory
 		// when no project is active. Absolute paths are returned unchanged.

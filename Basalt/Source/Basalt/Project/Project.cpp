@@ -102,6 +102,11 @@ namespace Basalt {
 			outError = fmt::format("invalid project file '{}': RandomSeed must be an integer between 0 and {}", filePath.string(), UINT32_MAX);
 			return nullptr;
 		}
+		if (const auto step = data.find("FixedTimestep"); step != data.end() && (!JsonToFloat(*step, config.FixedTimestep) || !IsValidFixedTimestep(config.FixedTimestep)))
+		{
+			outError = fmt::format("invalid project file '{}': FixedTimestep must be a number of seconds in (0, {}]", filePath.string(), MaxFixedTimestep);
+			return nullptr;
+		}
 		if (const auto layers = data.find("PhysicsLayers"); layers != data.end())
 		{
 			std::string layerError;
@@ -133,6 +138,7 @@ namespace Basalt {
 			{ "TargetFrameRate", m_Config.Graphics.DynamicResolution.TargetFrameRate },
 			{ "MinRenderScale", m_Config.Graphics.DynamicResolution.MinScale },
 			{ "PhysicsLayers", m_Config.Physics.ToJson() },
+			{ "FixedTimestep", m_Config.FixedTimestep },
 			{ "RandomSeed", m_Config.RandomSeed },
 		};
 		if (!FileSystem::WriteTextFile(GetProjectFilePath(), data.dump(1, '\t')))
