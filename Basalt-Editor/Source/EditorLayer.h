@@ -10,11 +10,13 @@
 #include "Panels/SceneHierarchyPanel.h"
 
 #include "Basalt/Automation/AutomationServer.h"
+#include "Basalt/Automation/GameView.h"
 #include "Basalt/Automation/ViewportSettings.h"
 #include "Basalt/Automation/AutomationSession.h"
 #include "Basalt/Automation/CommandRegistry.h"
 #include "Basalt/Automation/AutomationConnection.h"
 #include "Basalt/Core/Layer.h"
+#include "Basalt/Renderer/DebugDraw.h"
 #include "Basalt/Renderer/SceneRenderer.h"
 #include "Basalt/UI/UIRenderer.h"
 
@@ -23,6 +25,7 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace Basalt {
 
@@ -58,6 +61,11 @@ namespace Basalt {
 		void BuildDefaultLayout(unsigned int dockspaceId);
 		void DrawMenuBar();
 		void DrawViewport();
+		// The Game tab: the primary camera at the game resolution, letterboxed, with the game UI. It is where the
+		// game runs in Play (it owns the game UI's pointer and keyboard); in Edit and Simulate it previews the
+		// primary camera, labelled with the mode.
+		void DrawGameView();
+		void DrawGameViewOptions();
 		void DrawToolbar();
 		void DrawViewportOptions();
 		void DrawOverlayMenu();
@@ -65,13 +73,21 @@ namespace Basalt {
 		void DrawStatusBar();
 		void DrawModals();
 		// Docks a window that has no saved layout yet next to an existing one (new windows in old imgui.ini files).
-		static void DockNextToOnFirstUse(const char* window, const char* neighbour);
+		// True when it docked the window (this frame's Begin creates it there).
+		static bool DockNextToOnFirstUse(const char* window, const char* neighbour);
 		void HandleShortcuts();
 
 		void DrawEditorOverlays();
 		// Draws the scene's game UI over the capture renderer's last image (screenshots show what the viewport
 		// shows).
-		void DrawGameUIOverCapture(Scene& scene, uint32_t width, uint32_t height);
+		void DrawGameUIOverCapture(Scene& scene, SceneRenderer& renderer, uint32_t width, uint32_t height);
+		// The editor camera's view with editor helpers (the scene view, in every mode).
+		void RenderSceneView(Scene& scene, const std::vector<DebugLineVertex>& scriptLines);
+		// Renders the primary camera at the game resolution into m_GameRenderer (created on first use). Captures
+		// reset exposure and skip dynamic resolution, so images are repeatable. False without a primary camera
+		// or when the frame failed.
+		bool RenderGameView(Scene& scene, const std::vector<DebugLineVertex>& scriptLines, float deltaTime, bool capture);
+		nlohmann::json GetGameViewState();
 		// Play mode proper: the game's camera and its immediate-mode UI (not edit mode, not simulate).
 		bool IsGameRunning() const { return m_Session.IsPlaying() && !m_Session.IsSimulating(); }
 		// Outlines every UI rect over the viewport (the selected entity's with its pivot and anchors).
@@ -118,9 +134,27 @@ namespace Basalt {
 		EditorCamera m_Camera;
 		Scope<SceneRenderer> m_Renderer;
 		Scope<SceneRenderer> m_CaptureRenderer;
+		Scope<SceneRenderer> m_GameRenderer;
 		nvrhi::CommandListHandle m_CommandList;
 		// The viewport's game UI: built in OnRender, drawn over the viewport image in DrawViewport.
 		UIFrame m_UIFrame;
+		// The Game view's game UI, laid out for its letterboxed image.
+		UIFrame m_GameUIFrame;
+		GameViewSettings m_GameView;
+		// The image rectangle in screen units (content origin + letterbox) and how the tab was last drawn.
+		glm::vec2 m_GamePanelMin = { 0.0f, 0.0f };
+		glm::vec2 m_GamePanelSize = { 0.0f, 0.0f };
+		glm::vec2 m_GameImageMin = { 0.0f, 0.0f };
+		glm::vec2 m_GameImageSize = { 0.0f, 0.0f };
+		bool m_GameViewVisible = false;
+		bool m_GameViewHovered = false;
+		bool m_GameViewFocused = false;
+		bool m_GameHasCamera = false;
+		bool m_GameRendererFailed = false;
+		// Play brings the Game tab to the front; Stop returns to the scene view if it was in front before.
+		bool m_GameWasRunning = false;
+		bool m_ReturnToViewport = false;
+		bool m_ViewportVisible = true;
 
 		glm::vec2 m_ViewportSize = { 1280.0f, 720.0f };
 		glm::vec2 m_ViewportMin = { 0.0f, 0.0f };

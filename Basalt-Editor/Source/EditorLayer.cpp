@@ -326,6 +326,8 @@ namespace Basalt {
 		if (Application::Get().GetGraphicsDevice())
 			Application::Get().GetGraphicsDevice()->WaitIdle();
 		m_UIFrame.Clear();
+		m_GameUIFrame.Clear();
+		m_GameRenderer.reset();
 		m_CaptureRenderer.reset();
 		m_Renderer.reset();
 		m_CommandList = nullptr;
@@ -366,7 +368,7 @@ namespace Basalt {
 								 return result;
 							 } });
 		m_Commands.Register({ "editor.pick", "Picks current mesh surfaces and enabled light/camera/audio helpers; background is 0. Selects unless select=false.", EditorCommandSchemas::Pick(), [this](AutomationSession& session, const nlohmann::json& params) {
-								 if (IsGameRunning() || !m_Renderer)
+								 if (!m_Renderer)
 									 throw CommandError("picking requires a scene viewport");
 								 const UUID id = PickViewport(params["x"].get<uint32_t>(), params["y"].get<uint32_t>());
 								 if (params.value("select", true))
@@ -436,8 +438,6 @@ namespace Basalt {
 							 },
 							  CommandPolicy::HistoryControl });
 		m_Commands.Register({ "editor.box_select", "Selects entities whose world bounds intersect a viewport rectangle, including occluded entities; UI rects use hierarchy selection.", EditorCommandSchemas::BoxSelect(), [this](AutomationSession& session, const nlohmann::json& params) {
-								 if (session.IsPlaying() && !session.IsSimulating())
-									 throw CommandError("box selection is only available in edit mode or Simulate");
 								 const auto read = [&](const char* key) {
 									 glm::vec2 point;
 									 if (!JsonToFloat(params[key][0], point.x) || !JsonToFloat(params[key][1], point.y) || point.x < 0 || point.y < 0 || point.x > m_ViewportSize.x || point.y > m_ViewportSize.y)
@@ -498,6 +498,29 @@ namespace Basalt {
 										 BS_CORE_ERROR("Window screenshot: {}", error);
 								 });
 								 return nlohmann::json{ { "path", path.string() }, { "note", "written at the end of the current frame" } };
+							 } });
+
+		m_Commands.Register({ "editor.game_view", "Gets or changes the Game view: the resolution it renders at (the project's window size unless overridden for this session), focus, and with path saves its image (primary camera, game UI, no debug view) to a PNG. Returns {visible, mode, width, height, override, hasCamera, imageRect and panelRect (logical units, relative to the editor window, as last drawn), windowSize, renderWidth, renderHeight}.", GameViewSettings::Schema(), [this](AutomationSession& session, const nlohmann::json& params) {
+								 std::string error;
+								 if (!m_GameView.Apply(params, error))
+									 throw CommandError(error);
+								 if (params.value("focus", false))
+									 m_PendingFocus.emplace_back("Game");
+								 nlohmann::json result = GetGameViewState();
+								 if (const auto path = params.find("path"); path != params.end())
+								 {
+									 Scene& scene = *session.GetScene();
+									 // A capture of its own; the frame's pending lines stay for the views.
+									 const DebugLineStash stash;
+									 if (!RenderGameView(scene, {}, 0.0f, true))
+										 throw CommandError(m_GameHasCamera ? "the Game view render failed; see Console" : "the scene has no primary camera");
+									 const glm::uvec2 size = m_GameView.Resolve(Project::GetActive() ? &Project::GetActive()->GetConfig() : nullptr);
+									 DrawGameUIOverCapture(scene, *m_GameRenderer, size.x, size.y);
+									 if (!SaveScreenshot(*m_GameRenderer, path->get<std::string>(), error))
+										 throw CommandError(error);
+									 result["path"] = *path;
+								 }
+								 return result;
 							 } });
 
 		m_Commands.Register({ "editor.panel", "Opens, closes or focuses an editor window (e.g. focus the Game view, open Project Settings) and returns {name, open}.", EditorCommandSchemas::Panel(), [this](AutomationSession&, const nlohmann::json& params) {
@@ -575,23 +598,22 @@ namespace Basalt {
 		if (!PrepareCaptureRenderer(width, height, ActiveRenderScale(m_Session.GetScene().get()), outError))
 			return false;
 
-		// Debug lines belong to the viewport frame; draw editor overlays only for editor-camera shots.
-		std::vector<DebugLineVertex> pending = DebugDraw::TakeLines();
-		if (useEditorCamera && !m_Session.IsPlaying())
-			DrawEditorOverlays();
-		m_CaptureRenderer->SetSelections(useEditorCamera && !IsGameRunning() && m_ViewportSettings.Options().SelectionOutline ? m_Session.GetSelections() : std::vector<UUID>{});
-		m_CaptureRenderer->ResetExposure();
-		m_CaptureRenderer->Render(scene, *camera, 0.0f);
-		DebugDraw::Clear();
-		for (size_t i = 0; i + 1 < pending.size(); i += 2)
-			DebugDraw::Line(pending[i].Position, pending[i + 1].Position, pending[i].Color);
+		{
+			// Debug lines belong to the viewport frame; draw editor overlays only for editor-camera shots.
+			const DebugLineStash stash;
+			if (useEditorCamera && !m_Session.IsPlaying())
+				DrawEditorOverlays();
+			m_CaptureRenderer->SetSelections(useEditorCamera && !IsGameRunning() && m_ViewportSettings.Options().SelectionOutline ? m_Session.GetSelections() : std::vector<UUID>{});
+			m_CaptureRenderer->ResetExposure();
+			m_CaptureRenderer->Render(scene, *camera, 0.0f);
+		}
 		if (m_CaptureRenderer->GetStatistics().Failed)
 		{
 			outError = "capture render failed; see the renderer error in the log";
 			return false;
 		}
 		if (m_DebugView == RendererDebugView::None)
-			DrawGameUIOverCapture(scene, width, height);
+			DrawGameUIOverCapture(scene, *m_CaptureRenderer, width, height);
 		return SaveScreenshot(*m_CaptureRenderer, path, outError);
 	}
 
@@ -751,6 +773,19 @@ namespace Basalt {
 		if (!m_VertexSnapDrag && !m_GizmoWasUsing && !m_BoxStart)
 			m_Camera.OnUpdate(ts, m_ViewportHovered, m_ViewportFocused);
 
+		// However Play starts or stops (toolbar, shortcut, automation), the game takes the front tab while it runs.
+		if (const bool running = IsGameRunning(); running != m_GameWasRunning)
+		{
+			if (running)
+			{
+				m_ReturnToViewport = m_ViewportVisible;
+				m_PendingFocus.emplace_back("Game");
+			}
+			else if (m_ReturnToViewport)
+				m_PendingFocus.emplace_back("Viewport");
+			m_GameWasRunning = running;
+		}
+
 		if (m_Session.IsPlaying())
 		{
 			Scene& scene = *m_Session.GetScene();
@@ -869,15 +904,7 @@ namespace Basalt {
 		if (!m_Renderer || !device)
 			return;
 
-		const uint32_t width = std::max(1u, static_cast<uint32_t>(m_ViewportSize.x));
-		const uint32_t height = std::max(1u, static_cast<uint32_t>(m_ViewportSize.y));
-		m_Renderer->SetRenderScale(ActiveRenderScale(m_Session.GetScene().get()));
-		m_Renderer->SetDynamicResolution(ActiveDynamicResolution(m_Session.GetScene().get()));
-		m_Renderer->SetViewportSize(width, height);
 		Scene& scene = *m_Session.GetScene();
-		scene.OnViewportResize(width, height);
-		scene.GetRendererSettings().DebugView = m_DebugView;
-
 		const bool playing = IsGameRunning();
 		if (playing)
 		{
@@ -890,32 +917,88 @@ namespace Basalt {
 			device->SetVSync(*m_PrePlayVSync);
 			m_PrePlayVSync.reset();
 		}
-		// Discard scripted lines before adding editor helpers, whose visibility switches are independent.
-		if (!m_ViewportSettings.Options().DebugLines)
-			DebugDraw::TakeLines();
-		std::optional<RenderCamera> camera;
-		if (playing)
-			camera = GetPrimaryRenderCamera(scene, width, height);
-		if (!camera)
-		{
-			camera = m_Camera.GetRenderCamera();
-			if (!playing)
-				DrawEditorOverlays();
-		}
-		m_Renderer->SetSelections(!playing && m_ViewportSettings.Options().SelectionOutline ? m_Session.GetSelections() : std::vector<UUID>{});
-		m_Renderer->Render(scene, *camera, m_RenderDeltaTime);
+		// Cameras follow the game's aspect ratio whichever views are shown: scripts read it, and the camera
+		// gizmo shows the frustum the game will see.
+		const glm::uvec2 gameSize = m_GameView.Resolve(Project::GetActive() ? &Project::GetActive()->GetConfig() : nullptr);
+		scene.OnViewportResize(gameSize.x, gameSize.y);
 
-		// UI components show in every mode, so layouts can be authored without playing; the scripts'
-		// immediate-mode UI only exists while playing. Debug views show the renderer's raw buffers.
-		// (Built empty in debug views, so the UI bounds overlay still gets this frame's canvas.)
-		m_UIFrame.Build(m_DebugView == RendererDebugView::None ? &scene : nullptr, m_ViewportSize, playing && m_DebugView == RendererDebugView::None);
+		// Lines from scripts go to both views; editor helpers only to the scene view. A hidden tab renders nothing.
+		const std::vector<DebugLineVertex> scriptLines = DebugDraw::TakeLines();
+		if (m_ViewportVisible)
+			RenderSceneView(scene, scriptLines);
+		if (m_GameViewVisible)
+			RenderGameView(scene, scriptLines, m_RenderDeltaTime, false);
+		DebugDraw::Clear();
+
+		// UI components show in the scene view outside Play, so layouts can be authored without playing (built
+		// empty in debug views, so the UI bounds overlay still gets this frame's canvas). In Play the game UI,
+		// including the scripts' immediate-mode UI, belongs to the Game view.
+		m_UIFrame.Build(m_DebugView == RendererDebugView::None && !playing ? &scene : nullptr, m_ViewportSize, false);
+		m_GameUIFrame.Build(m_GameHasCamera ? &scene : nullptr, glm::max(m_GameImageSize, glm::vec2(1.0f)), playing);
 
 		// The dockspace covers the window, but clear the back buffer so no stale content shows through.
 		m_CommandList->open();
 		m_UIFrame.Prepare([&](const std::string& path) { return m_Renderer->GetUITexture(path, m_CommandList); });
+		if (m_GameRenderer)
+			m_GameUIFrame.Prepare([&](const std::string& path) { return m_GameRenderer->GetUITexture(path, m_CommandList); });
 		nvrhi::utils::ClearColorAttachment(m_CommandList, device->GetCurrentFramebuffer(), 0, nvrhi::Color(0.08f, 0.08f, 0.09f, 1.0f));
 		m_CommandList->close();
 		device->GetDevice()->executeCommandList(m_CommandList);
+	}
+
+	void EditorLayer::RenderSceneView(Scene& scene, const std::vector<DebugLineVertex>& scriptLines)
+	{
+		const uint32_t width = std::max(1u, static_cast<uint32_t>(m_ViewportSize.x));
+		const uint32_t height = std::max(1u, static_cast<uint32_t>(m_ViewportSize.y));
+		m_Renderer->SetRenderScale(ActiveRenderScale(&scene));
+		m_Renderer->SetDynamicResolution(ActiveDynamicResolution(&scene));
+		m_Renderer->SetViewportSize(width, height);
+		scene.GetRendererSettings().DebugView = m_DebugView;
+		// The script lines switch is independent of the editor helpers'.
+		if (m_ViewportSettings.Options().DebugLines)
+			DebugDraw::AddLines(scriptLines);
+		DrawEditorOverlays();
+		m_Renderer->SetSelections(m_ViewportSettings.Options().SelectionOutline ? m_Session.GetSelections() : std::vector<UUID>{});
+		m_Renderer->Render(scene, m_Camera.GetRenderCamera(), m_RenderDeltaTime);
+	}
+
+	bool EditorLayer::RenderGameView(Scene& scene, const std::vector<DebugLineVertex>& scriptLines, float deltaTime, bool capture)
+	{
+		GraphicsDevice* device = Application::Get().GetGraphicsDevice();
+		if (!m_GameRenderer)
+		{
+			// Reported once; the Game view then shows the failure instead of retrying every frame.
+			if (m_GameRendererFailed)
+				return false;
+			// Timers drive dynamic resolution, which the Game view runs as the game would.
+			auto renderer = CreateScope<SceneRenderer>(device->GetDevice(), SceneRendererSpecification{ .GpuTimers = device->SupportsTimerQueries() });
+			if (!renderer->Initialize())
+			{
+				BS_CORE_ERROR("Editor: the Game view renderer failed to initialize");
+				m_GameRendererFailed = true;
+				return false;
+			}
+			m_GameRenderer = std::move(renderer);
+		}
+		const glm::uvec2 size = m_GameView.Resolve(Project::GetActive() ? &Project::GetActive()->GetConfig() : nullptr);
+		DynamicResolutionSettings dynamic = ActiveDynamicResolution(&scene);
+		dynamic.Enabled = dynamic.Enabled && !capture;
+		m_GameRenderer->SetRenderScale(ActiveRenderScale(&scene));
+		m_GameRenderer->SetDynamicResolution(dynamic);
+		m_GameRenderer->SetViewportSize(size.x, size.y);
+		const std::optional<RenderCamera> camera = GetPrimaryRenderCamera(scene, size.x, size.y);
+		m_GameHasCamera = camera.has_value();
+		if (!camera)
+			return false;
+		DebugDraw::AddLines(scriptLines);
+		// What the game shows: the editor's debug view is a scene-view aid.
+		const RendererDebugView debugView = scene.GetRendererSettings().DebugView;
+		scene.GetRendererSettings().DebugView = RendererDebugView::None;
+		if (capture)
+			m_GameRenderer->ResetExposure();
+		m_GameRenderer->Render(scene, *camera, deltaTime);
+		scene.GetRendererSettings().DebugView = debugView;
+		return !m_GameRenderer->GetStatistics().Failed;
 	}
 
 	void EditorLayer::HandleShortcuts()
@@ -974,13 +1057,12 @@ namespace Basalt {
 		camera.SetViewportSize(width, height);
 		// Commands may run before BeginFrame, including while minimized. Refresh owned capture targets
 		// without touching the viewport texture already referenced by ImGui or consuming pending lines.
-		const auto pending = DebugDraw::TakeLines();
-		m_CaptureRenderer->SetSelections({});
-		m_CaptureRenderer->ResetExposure();
-		m_CaptureRenderer->Render(scene, camera.GetRenderCamera(), 0.0f);
-		DebugDraw::Clear();
-		for (size_t i = 0; i + 1 < pending.size(); i += 2)
-			DebugDraw::Line(pending[i].Position, pending[i + 1].Position, pending[i].Color);
+		{
+			const DebugLineStash stash;
+			m_CaptureRenderer->SetSelections({});
+			m_CaptureRenderer->ResetExposure();
+			m_CaptureRenderer->Render(scene, camera.GetRenderCamera(), 0.0f);
+		}
 		if (m_CaptureRenderer->GetStatistics().Failed)
 			throw CommandError("picking render failed; see Console");
 		const auto hit = m_CaptureRenderer->PickSurface(x, y);
@@ -1022,7 +1104,7 @@ namespace Basalt {
 
 	void EditorLayer::HandleViewportClick(const glm::vec2& mouse)
 	{
-		if (IsGameRunning() || !m_Renderer)
+		if (!m_Renderer)
 			return;
 		const uint32_t x = static_cast<uint32_t>(mouse.x * static_cast<float>(m_Renderer->GetViewportWidth()) / m_ViewportSize.x);
 		const uint32_t y = static_cast<uint32_t>(mouse.y * static_cast<float>(m_Renderer->GetViewportHeight()) / m_ViewportSize.y);
@@ -1041,6 +1123,16 @@ namespace Basalt {
 		BuildDefaultLayout(dockspace);
 		DrawMenuBar();
 		DrawViewport();
+		DrawGameView();
+		// Mouse and keyboard reach editor shortcuts only over (or with focus in) a view.
+		Application::Get().GetImGuiLayer()->SetBlockEvents(!m_ViewportHovered && !m_ViewportFocused && !m_GameViewHovered && !m_GameViewFocused);
+		// The game's widgets take the keyboard while the Game view has focus; ImGui's own keyboard navigation would
+		// act on the toolbar at the same time (Space pressing Stop), so it is off then.
+		ImGuiIO& io = ImGui::GetIO();
+		if (IsGameRunning() && m_GameViewFocused)
+			io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
+		else
+			io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 		m_HierarchyPanel.OnImGuiRender();
 		m_InspectorPanel.OnImGuiRender();
 		m_ContentBrowserPanel.OnImGuiRender();
@@ -1057,12 +1149,15 @@ namespace Basalt {
 			m_Context.FinishFieldEdit();
 	}
 
-	void EditorLayer::DockNextToOnFirstUse(const char* window, const char* neighbour)
+	bool EditorLayer::DockNextToOnFirstUse(const char* window, const char* neighbour)
 	{
 		if (ImGui::FindWindowByName(window) || ImGui::FindWindowSettingsByID(ImHashStr(window)))
-			return;
-		if (const ImGuiWindow* other = ImGui::FindWindowByName(neighbour); other && other->DockId != 0)
-			ImGui::SetNextWindowDockID(other->DockId, ImGuiCond_FirstUseEver);
+			return false;
+		const ImGuiWindow* other = ImGui::FindWindowByName(neighbour);
+		if (!other || other->DockId == 0)
+			return false;
+		ImGui::SetNextWindowDockID(other->DockId, ImGuiCond_FirstUseEver);
+		return true;
 	}
 
 	void EditorLayer::BuildDefaultLayout(unsigned int dockspaceId)
@@ -1088,8 +1183,11 @@ namespace Basalt {
 		ImGui::DockBuilderDockWindow("Scene", rightBottom);
 		ImGui::DockBuilderDockWindow("Content Browser", bottom);
 		ImGui::DockBuilderDockWindow("Console", bottom);
+		ImGui::DockBuilderDockWindow("Game", center);
+		// Docked last, so the scene view is the tab in front.
 		ImGui::DockBuilderDockWindow("Viewport", center);
 		ImGui::DockBuilderFinish(dockspaceId);
+		m_PendingFocus.emplace_back("Viewport");
 	}
 
 	void EditorLayer::DrawMenuBar()
@@ -1326,7 +1424,20 @@ namespace Basalt {
 	void EditorLayer::DrawViewport()
 	{
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-		ImGui::Begin("Viewport");
+		m_ViewportVisible = ImGui::Begin("Viewport");
+		if (!m_ViewportVisible)
+		{
+			// Behind the Game tab (or collapsed): end any drag, keep the last size for picking.
+			m_ViewportHovered = m_ViewportFocused = false;
+			CancelVertexSnap();
+			m_BoxStart.reset();
+			if (m_GizmoWasUsing)
+				FinishGizmo(true);
+			m_GizmoWasUsing = false;
+			ImGui::End();
+			ImGui::PopStyleVar();
+			return;
+		}
 		DrawToolbar();
 		DrawViewportOptions();
 
@@ -1351,19 +1462,15 @@ namespace Basalt {
 		}
 		else
 			ImGui::Dummy(available);
-		Application::Get().GetImGuiLayer()->SetBlockEvents(!m_ViewportHovered && !m_ViewportFocused);
-		GameUI::SetViewportSize({ available.x, available.y });
-		GameUI::SetViewportOrigin({ cursor.x, cursor.y });
-		// The game's widgets take the mouse over the view and the keyboard and gamepads while it has focus. ImGui's
-		// own keyboard navigation would act on the toolbar at the same time (Space pressing Stop), so it is off
-		// while the game has the keyboard.
-		GameUI::SetPointerEnabled(m_ViewportHovered);
-		GameUI::SetNavigationEnabled(m_ViewportFocused);
+		// Outside Play the scene view lays out UI components (for authoring); in Play the Game view hosts the UI.
+		if (!IsGameRunning())
+		{
+			GameUI::SetViewportSize({ available.x, available.y });
+			GameUI::SetViewportOrigin({ cursor.x, cursor.y });
+			GameUI::SetPointerEnabled(m_ViewportHovered);
+			GameUI::SetNavigationEnabled(m_ViewportFocused);
+		}
 		ImGuiIO& io = ImGui::GetIO();
-		if (IsGameRunning() && m_ViewportFocused)
-			io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
-		else
-			io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 		m_UIFrame.Draw(ImGui::GetWindowDrawList(), { cursor.x, cursor.y }, { available.x, available.y });
 		if (m_Renderer && m_Renderer->GetStatistics().Failed)
 		{
@@ -1451,7 +1558,7 @@ namespace Basalt {
 
 		HandleVertexSnapDrag(selected, vertexSnap, { cursor.x, cursor.y });
 
-		if (!m_VertexSnapDrag && !IsGameRunning() && m_ViewportHovered && !gizmoActive && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt)
+		if (!m_VertexSnapDrag && m_ViewportHovered && !gizmoActive && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt)
 			m_BoxStart = glm::vec2(io.MousePos.x - cursor.x, io.MousePos.y - cursor.y);
 		if (m_BoxStart)
 		{
@@ -1464,7 +1571,7 @@ namespace Basalt {
 				ImGui::GetWindowDrawList()->AddRectFilled(rectangleMin, rectangleMax, IM_COL32(255, 192, 26, 30));
 				ImGui::GetWindowDrawList()->AddRect(rectangleMin, rectangleMax, IM_COL32(255, 192, 26, 255));
 			}
-			if (Input::IsKeyPressed(KeyCode::Escape) || IsGameRunning() || (!ImGui::IsMouseDown(ImGuiMouseButton_Left) && !ImGui::IsMouseReleased(ImGuiMouseButton_Left)))
+			if (Input::IsKeyPressed(KeyCode::Escape) || (!ImGui::IsMouseDown(ImGuiMouseButton_Left) && !ImGui::IsMouseReleased(ImGuiMouseButton_Left)))
 				m_BoxStart.reset();
 			else if (ImGui::IsMouseReleased(ImGuiMouseButton_Left))
 			{
@@ -1517,7 +1624,7 @@ namespace Basalt {
 			CancelVertexSnap();
 	}
 
-	void EditorLayer::DrawGameUIOverCapture(Scene& scene, uint32_t width, uint32_t height)
+	void EditorLayer::DrawGameUIOverCapture(Scene& scene, SceneRenderer& renderer, uint32_t width, uint32_t height)
 	{
 		ImGuiLayer* imgui = Application::Get().GetImGuiLayer();
 		GraphicsDevice* device = Application::Get().GetGraphicsDevice();
@@ -1531,7 +1638,7 @@ namespace Basalt {
 			return;
 		nvrhi::CommandListHandle commandList = device->GetDevice()->createCommandList();
 		commandList->open();
-		frame.Prepare([&](const std::string& texture) { return m_CaptureRenderer->GetUITexture(texture, commandList); });
+		frame.Prepare([&](const std::string& texture) { return renderer.GetUITexture(texture, commandList); });
 		commandList->close();
 		device->GetDevice()->executeCommandList(commandList);
 
@@ -1542,7 +1649,135 @@ namespace Basalt {
 		frame.Draw(&drawList, { 0.0f, 0.0f }, size);
 		drawList.PopClipRect();
 		drawList.PopTexture();
-		imgui->RenderDrawList(drawList, size, m_CaptureRenderer->GetOverlayFramebuffer());
+		imgui->RenderDrawList(drawList, size, renderer.GetOverlayFramebuffer());
+	}
+
+	void EditorLayer::DrawGameView()
+	{
+		// A new Game tab joins the scene view's dock node, behind it.
+		if (DockNextToOnFirstUse("Game", "Viewport"))
+			m_PendingFocus.emplace_back("Viewport");
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+		m_GameViewVisible = ImGui::Begin("Game");
+		m_GameViewHovered = false;
+		m_GameViewFocused = m_GameViewVisible && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+		if (m_GameViewVisible)
+		{
+			DrawToolbar();
+			DrawGameViewOptions();
+			const ImVec2 available = ImGui::GetContentRegionAvail();
+			const ImVec2 cursor = ImGui::GetCursorScreenPos();
+			const glm::uvec2 resolution = m_GameView.Resolve(Project::GetActive() ? &Project::GetActive()->GetConfig() : nullptr);
+			const GameViewRect rect = FitLetterbox({ available.x, available.y }, resolution);
+			m_GamePanelMin = { cursor.x, cursor.y };
+			m_GamePanelSize = { available.x, available.y };
+			m_GameImageMin = glm::vec2(cursor.x, cursor.y) + rect.Origin;
+			m_GameImageSize = rect.Size;
+			ImDrawList* drawList = ImGui::GetWindowDrawList();
+			// Letterbox bars: what the panel shows outside the game's aspect ratio.
+			drawList->AddRectFilled(cursor, ImVec2(cursor.x + available.x, cursor.y + available.y), IM_COL32(0, 0, 0, 255));
+			const ImVec2 imageMin(m_GameImageMin.x, m_GameImageMin.y);
+			const ImVec2 imageMax(imageMin.x + m_GameImageSize.x, imageMin.y + m_GameImageSize.y);
+			const char* message = nullptr;
+			if (m_GameRendererFailed)
+				message = "The Game view renderer failed to initialize. See Console.";
+			else if (!m_GameHasCamera && m_GameRenderer)
+				message = "No primary camera: add a Camera component with Primary ticked.";
+			if (!message && m_GameRenderer && m_GameRenderer->GetOutputTexture() && rect.Size.x >= 1.0f && rect.Size.y >= 1.0f)
+			{
+				ImGui::SetCursorScreenPos(imageMin);
+				ImGui::Image(ImTextureRef(reinterpret_cast<ImTextureID>(m_GameRenderer->GetOutputTexture())), ImVec2(rect.Size.x, rect.Size.y));
+				m_GameViewHovered = ImGui::IsItemHovered();
+				m_GameUIFrame.Draw(drawList, m_GameImageMin, m_GameImageSize);
+				if (m_GameRenderer->GetStatistics().Failed)
+					message = "Rendering failed. See Console.";
+			}
+			else
+				ImGui::Dummy(available);
+			if (message)
+			{
+				const ImVec2 textSize = ImGui::CalcTextSize(message);
+				drawList->AddText(ImVec2(cursor.x + (available.x - textSize.x) * 0.5f, cursor.y + (available.y - textSize.y) * 0.5f), IM_COL32(230, 120, 120, 255), message);
+			}
+			// Outside Play the image is a preview of the primary camera; say so, as the game is not running.
+			const char* badge = IsGameRunning() ? (m_Paused ? "Paused" : nullptr) : (m_Session.IsSimulating() ? "Simulating (scripts off)" : "Edit mode");
+			if (badge)
+			{
+				const ImVec2 textSize = ImGui::CalcTextSize(badge);
+				const ImVec2 badgeMin(imageMin.x + 8.0f, imageMin.y + 8.0f);
+				drawList->AddRectFilled(badgeMin, ImVec2(badgeMin.x + textSize.x + 12.0f, badgeMin.y + textSize.y + 8.0f), IM_COL32(20, 20, 24, 210), 4.0f);
+				drawList->AddText(ImVec2(badgeMin.x + 6.0f, badgeMin.y + 4.0f), IM_COL32(255, 200, 80, 255), badge);
+			}
+		}
+		// In Play the game UI is laid out over this image and takes the pointer and keyboard here, even while the tab
+		// is hidden (then without input).
+		if (IsGameRunning() && m_GameImageSize.x >= 1.0f && m_GameImageSize.y >= 1.0f)
+		{
+			GameUI::SetViewportSize(m_GameImageSize);
+			GameUI::SetViewportOrigin(m_GameImageMin);
+			GameUI::SetPointerEnabled(m_GameViewHovered);
+			GameUI::SetNavigationEnabled(m_GameViewFocused);
+		}
+		else if (IsGameRunning())
+		{
+			GameUI::SetPointerEnabled(false);
+			GameUI::SetNavigationEnabled(false);
+		}
+		ImGui::End();
+		ImGui::PopStyleVar();
+	}
+
+	void EditorLayer::DrawGameViewOptions()
+	{
+		const ProjectConfig* config = Project::GetActive() ? &Project::GetActive()->GetConfig() : nullptr;
+		const glm::uvec2 resolution = m_GameView.Resolve(config);
+		const std::string label = std::to_string(resolution.x) + "x" + std::to_string(resolution.y) + (m_GameView.GetOverride() ? "" : " (Project)");
+		ImGui::SetNextItemWidth(170.0f);
+		if (ImGui::BeginCombo("##GameResolution", label.c_str()))
+		{
+			if (ImGui::Selectable("Project window size", !m_GameView.GetOverride()))
+				m_Context.Execute("editor.game_view", { { "resolution", nullptr } });
+			for (const glm::uvec2 preset : { glm::uvec2(1280, 720), glm::uvec2(1920, 1080), glm::uvec2(2560, 1440), glm::uvec2(1024, 768), glm::uvec2(1080, 1920), glm::uvec2(720, 1280) })
+			{
+				const std::string name = std::to_string(preset.x) + "x" + std::to_string(preset.y);
+				if (ImGui::Selectable(name.c_str(), m_GameView.GetOverride() == preset))
+					m_Context.Execute("editor.game_view", { { "resolution", { preset.x, preset.y } } });
+			}
+			ImGui::EndCombo();
+		}
+		if (ImGui::BeginItemTooltip())
+		{
+			ImGui::TextUnformatted("The resolution the game renders at. Presets apply to this editor session; the project's\nwindow size (Project Settings) is what the exported game uses.");
+			ImGui::EndTooltip();
+		}
+		if (m_GameRenderer && m_GameHasCamera)
+		{
+			ImGui::SameLine();
+			ImGui::TextDisabled("render %ux%u", m_GameRenderer->GetRenderWidth(), m_GameRenderer->GetRenderHeight());
+		}
+	}
+
+	nlohmann::json EditorLayer::GetGameViewState()
+	{
+		const glm::uvec2 resolution = m_GameView.Resolve(Project::GetActive() ? &Project::GetActive()->GetConfig() : nullptr);
+		const auto& override = m_GameView.GetOverride();
+		const ImGuiViewport* window = ImGui::GetMainViewport();
+		const glm::vec2 windowOrigin(window->Pos.x, window->Pos.y);
+		const glm::vec2 image = m_GameImageMin - windowOrigin;
+		const glm::vec2 panel = m_GamePanelMin - windowOrigin;
+		return {
+			{ "visible", m_GameViewVisible },
+			{ "mode", IsGameRunning() ? "Play" : (m_Session.IsSimulating() ? "Simulate" : "Edit") },
+			{ "width", resolution.x },
+			{ "height", resolution.y },
+			{ "override", override ? nlohmann::json{ override->x, override->y } : nlohmann::json() },
+			{ "hasCamera", static_cast<bool>(m_Session.GetScene()->GetPrimaryCameraEntity()) },
+			{ "imageRect", { { "x", image.x }, { "y", image.y }, { "width", m_GameImageSize.x }, { "height", m_GameImageSize.y } } },
+			{ "panelRect", { { "x", panel.x }, { "y", panel.y }, { "width", m_GamePanelSize.x }, { "height", m_GamePanelSize.y } } },
+			{ "windowSize", { window->Size.x, window->Size.y } },
+			{ "renderWidth", m_GameRenderer ? m_GameRenderer->GetRenderWidth() : 0 },
+			{ "renderHeight", m_GameRenderer ? m_GameRenderer->GetRenderHeight() : 0 },
+		};
 	}
 
 	void EditorLayer::DrawUIBounds(const glm::vec2& origin, const glm::vec2& size)

@@ -37,13 +37,15 @@ def check_post_process(call, require, output):
     call("project.set", {"graphics": {"RenderScale": 1, "DynamicResolution": False}})
     call("play.start")
     call("lua.exec", {"code": "Graphics.SetSettings({RenderScale=0.5,VSync=false,ShadowQuality='Low',SSAOQuality='Off'})"})
+    # Play brings the Game view to the front; it renders the game at its resolution and the session's scale.
     deadline = time.monotonic() + 15
     while True:
-        view = call("editor.viewport")
-        if view["renderWidth"] == max(1, int(view["width"] * .5 + .5)):
+        game = call("editor.game_view")
+        if game["visible"] and game["renderWidth"] == max(1, int(game["width"] * .5 + .5)):
             break
-        require(time.monotonic() < deadline, "Lua graphics scale did not reach editor renderer")
+        require(time.monotonic() < deadline, f"Lua graphics scale did not reach the Game view: {game}")
         time.sleep(.05)
+    view = call("editor.viewport")
     require(call("project.info")["graphics"]["RenderScale"] == 1, "Lua graphics saved project defaults")
     call("project.set", {"graphics": {"RenderScale": .75}})
     require(call("lua.exec", {"code": "return Graphics.GetSettings().RenderScale"})["result"] == "0.5", "Project edit changed the running session")

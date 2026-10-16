@@ -4,6 +4,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <cstddef>
 
 namespace Basalt {
 
@@ -85,6 +86,14 @@ namespace Basalt {
 		std::vector<DebugLineVertex> result;
 		result.swap(s_Vertices);
 		return result;
+	}
+
+	void DebugDraw::AddLines(const std::vector<DebugLineVertex>& vertices)
+	{
+		std::scoped_lock lock(s_Mutex);
+		const size_t room = MaxLines * 2 - std::min(s_Vertices.size(), MaxLines * 2);
+		const size_t count = std::min(vertices.size() - vertices.size() % 2, room);
+		s_Vertices.insert(s_Vertices.end(), vertices.begin(), vertices.begin() + static_cast<std::ptrdiff_t>(count));
 	}
 
 	size_t DebugDraw::GetLineCount()

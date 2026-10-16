@@ -3,6 +3,7 @@
 #include <Basalt/Automation/AutomationSession.h>
 #include <Basalt/Automation/AutomationConnection.h>
 #include <Basalt/Automation/EditorCommandSchemas.h>
+#include <Basalt/Automation/GameView.h>
 #include <Basalt/Automation/ViewportSettings.h>
 #include <Basalt/Core/Log.h>
 #include <Basalt/Automation/CommandRegistry.h>
@@ -316,13 +317,13 @@ TEST_CASE("All editor tool schemas reject invalid values before the host handler
 	bool called = false;
 	const auto handler = [&](AutomationSession&, const json& params) { called = true; return params; };
 	const std::vector<std::pair<std::string, json>> schemas = {
-		{ "editor.history", EditorCommandSchemas::Undo() }, { "editor.transaction", EditorCommandSchemas::Transaction() }, { "editor.transform", EditorCommandSchemas::Transform() }, { "editor.component_set", EditorCommandSchemas::ComponentSet() }, { "editor.box_select", EditorCommandSchemas::BoxSelect() }, { "editor.delete", EditorCommandSchemas::Undo() }, { "editor.duplicate", EditorCommandSchemas::Undo() }, { "editor.viewport", ViewportSettings::Schema() }, { "editor.pick", EditorCommandSchemas::Pick() }, { "editor.vertex_snap", EditorCommandSchemas::VertexSnap() }, { "editor.select", EditorCommandSchemas::Select() }, { "editor.camera", EditorCommandSchemas::Camera() }, { "editor.undo", EditorCommandSchemas::Undo() }, { "editor.redo", EditorCommandSchemas::Redo() }, { "editor.screenshot", EditorCommandSchemas::Screenshot() }, { "editor.window_screenshot", EditorCommandSchemas::WindowScreenshot() }, { "editor.panel", EditorCommandSchemas::Panel() }
+		{ "editor.history", EditorCommandSchemas::Undo() }, { "editor.transaction", EditorCommandSchemas::Transaction() }, { "editor.transform", EditorCommandSchemas::Transform() }, { "editor.component_set", EditorCommandSchemas::ComponentSet() }, { "editor.box_select", EditorCommandSchemas::BoxSelect() }, { "editor.delete", EditorCommandSchemas::Undo() }, { "editor.duplicate", EditorCommandSchemas::Undo() }, { "editor.viewport", ViewportSettings::Schema() }, { "editor.pick", EditorCommandSchemas::Pick() }, { "editor.vertex_snap", EditorCommandSchemas::VertexSnap() }, { "editor.select", EditorCommandSchemas::Select() }, { "editor.camera", EditorCommandSchemas::Camera() }, { "editor.undo", EditorCommandSchemas::Undo() }, { "editor.redo", EditorCommandSchemas::Redo() }, { "editor.screenshot", EditorCommandSchemas::Screenshot() }, { "editor.window_screenshot", EditorCommandSchemas::WindowScreenshot() }, { "editor.panel", EditorCommandSchemas::Panel() }, { "editor.game_view", GameViewSettings::Schema() }
 	};
 	McpServer server;
 	for (const auto& [name, schema] : schemas)
 		REQUIRE(registry.Register({ name, "Editor host", schema, handler }));
 	Start(server, registry, session);
-	CHECK(Reply(server, registry, session, Request("tools/list"))["result"]["tools"].size() == 66);
+	CHECK(Reply(server, registry, session, Request("tools/list"))["result"]["tools"].size() == 67);
 	for (const auto& [name, schema] : schemas)
 	{
 		INFO(name);
