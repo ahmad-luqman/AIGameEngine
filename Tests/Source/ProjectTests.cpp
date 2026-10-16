@@ -388,6 +388,27 @@ TEST_SUITE("Project")
 		CHECK(SceneSerializer::ComputeStateHash(scene) == changedProject);
 	}
 
+	TEST_CASE("Version 1 scenes, which always stored the default step, follow the project's step")
+	{
+		BasaltTest::TempProject temp("FixedTimestepMigration");
+		REQUIRE(temp.IsValid());
+		// What the version 1 serializer wrote into every scene: the 1/60 s default as a float.
+		const auto load = [](int version, double step) {
+			Scene scene;
+			std::string error;
+			const nlohmann::json data = { { "Format", "BasaltScene" }, { "Version", version }, { "Physics", { { "FixedTimestep", step } } } };
+			REQUIRE_MESSAGE(SceneSerializer::DeserializeScene(scene, data, error), error);
+			return scene.GetPhysicsSettings().FixedTimestep;
+		};
+		CHECK(load(1, 0.01666666753590107) == 0.0f);
+		// A version 1 scene that changed the step meant it; so does any version 2 value.
+		CHECK(load(1, 0.01) == 0.01f);
+		CHECK(load(2, 0.01666666753590107) == DefaultFixedTimestep);
+		Scene scene;
+		CHECK(SceneSerializer::SerializeScene(scene)["Version"] == SceneSerializer::FormatVersion);
+		CHECK(SceneSerializer::FormatVersion == 2);
+	}
+
 	TEST_CASE("Fixed timestep commands: project.set and project.info, scene.settings and scene.info")
 	{
 		BasaltTest::TempProject temp("FixedTimestepCommands");
@@ -405,7 +426,14 @@ TEST_SUITE("Project")
 		nlohmann::json info = RunCommand(registry, session, "scene.info");
 		CHECK(info["fixedTimestep"] == 0.02f);
 		CHECK(info["fixedTimestepOverride"].is_null());
+		CHECK_FALSE(RunCommand(registry, session, "project.set", { { "fixedTimestep", 0.02 } }).contains("warnings"));
 		RunCommand(registry, session, "scene.settings", { { "Physics", { { "FixedTimestep", 0.005 } } } });
+		// A scene with its own step ignores the project's: the command says so.
+		const nlohmann::json warned = RunCommand(registry, session, "project.set", { { "fixedTimestep", 0.02 } });
+		REQUIRE(warned.contains("warnings"));
+		CHECK(warned["warnings"][0].get<std::string>().find("keeps its own physics step") != std::string::npos);
+		// Patching other physics settings keeps the override.
+		RunCommand(registry, session, "scene.settings", { { "Physics", { { "Gravity", { 0, -5, 0 } } } } });
 		info = RunCommand(registry, session, "scene.info");
 		CHECK(info["fixedTimestep"] == 0.005f);
 		CHECK(info["fixedTimestepOverride"] == 0.005f);

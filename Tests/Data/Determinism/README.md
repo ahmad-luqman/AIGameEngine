@@ -28,5 +28,7 @@ the batch and copy the new hashes from the errors (the batch keeps going after a
 ./build/bin/basalt --project Tests/Data/Determinism --no-save batch Tests/Data/Determinism/Determinism.batch.json
 ```
 
-A hash after loading that differs means the scene loads differently (file format, transforms); later ones
-mean the simulation diverged.
+A hash after loading that differs means the scene loads differently (transforms, settings); later ones
+mean the simulation diverged. The file format (`Format`, `Version`) is not hashed, so a format version bump
+alone never moves the hashes; the physics step is hashed as the value the simulation uses (scene override or
+project).

@@ -56,26 +56,6 @@ def check_game_view(call, require, output):
     call("editor.screenshot", {"path": str(side), "width": 640, "height": 360})
     require(not call("image.compare", {"actual": str(game), "reference": str(side)})["matches"], "the Game view showed the editor camera")
 
-    # The window shows letterbox bars around the image (black) and the game inside it.
-    window = Path(output, "game-window.png")
-    call("editor.window_screenshot", {"path": str(window)})
-    state = call("editor.game_view")
-    window_width, window_height, window_pixels = read_png(window)
-    scale = window_width / state["windowSize"][0]
-    rect, panel = state["imageRect"], state["panelRect"]
-
-    def sample(x, y):
-        return window_pixels[int(y * scale) * window_width + int(x * scale)]
-
-    centre = sample(rect["x"] + rect["width"] / 2, rect["y"] + rect["height"] / 2)
-    require(centre[0] > 100 and centre[0] > 2 * centre[1], f"the window does not show the game image: {centre}")
-    if rect["x"] - panel["x"] > 4:
-        bar = sample(panel["x"] + 2, rect["y"] + rect["height"] / 2)
-    else:
-        require(rect["y"] - panel["y"] > 4, f"no letterbox bar in a 16:9 image of a non-16:9 panel: {state}")
-        bar = sample(rect["x"] + rect["width"] / 2, panel["y"] + 2)
-    require(max(bar) < 10, f"the letterbox bar is not black: {bar}")
-
     # A session override changes the resolution without touching the project.
     state = call("editor.game_view", {"resolution": [360, 640]})
     require(state["width"] == 360 and state["height"] == 640 and state["override"] == [360, 640], f"override: {state}")
@@ -84,6 +64,23 @@ def check_game_view(call, require, output):
     call("editor.game_view", {"path": str(portrait)})
     require(read_png(portrait)[:2] == (360, 640), "the portrait capture has the wrong size")
     require(call("project.info")["windowWidth"] == 640, "the override changed the project")
+
+    # A portrait game in the (landscape) panel: black bars left and right, the game image between them.
+    window = Path(output, "game-window.png")
+    call("editor.window_screenshot", {"path": str(window)})
+    state = call("editor.game_view")
+    window_width, window_height, window_pixels = read_png(window)
+    scale = window_width / state["windowSize"][0]
+    rect, panel = state["imageRect"], state["panelRect"]
+    require(rect["x"] - panel["x"] > 8, f"no letterbox bars beside a portrait image: {state}")
+
+    def sample(x, y):
+        return window_pixels[int(y * scale) * window_width + int(x * scale)]
+
+    centre = sample(rect["x"] + rect["width"] / 2, rect["y"] + rect["height"] / 2)
+    require(centre[0] > 100 and centre[0] > 2 * centre[1], f"the window does not show the game image: {centre}")
+    bar = sample(panel["x"] + 4, rect["y"] + rect["height"] / 2)
+    require(max(bar) < 10, f"the letterbox bar is not black: {bar}")
     call("editor.game_view", {"resolution": None})
 
     # Play runs the game in the Game view, brought forward from behind the scene view; the scene view keeps the
