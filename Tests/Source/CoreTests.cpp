@@ -18,9 +18,13 @@
 
 #include <csignal>
 #include <nlohmann/json.hpp>
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <limits>
+#include <memory>
+#include <stdexcept>
+#include <thread>
 #include <unordered_set>
 #include <vector>
 
@@ -527,7 +531,7 @@ TEST_SUITE("Core")
 		CHECK_FALSE(FileSystem::ReadTextFile(path).has_value());
 		REQUIRE(FileSystem::WriteTextFile(path, "hello basalt"));
 		CHECK(FileSystem::Exists(path));
-		CHECK_FALSE(FileSystem::Exists(path.string() + ".tmp"));
+		CHECK_FALSE(BasaltTest::HasTempFiles(path.parent_path()));
 		CHECK(FileSystem::ReadTextFile(path).value() == "hello basalt");
 
 		REQUIRE(FileSystem::WriteTextFile(path, "replaced"));
@@ -560,7 +564,7 @@ TEST_SUITE("Core")
 		std::filesystem::create_directories(occupied / "inner");
 		CHECK_FALSE(FileSystem::WriteTextFile(occupied, "data"));
 		CHECK(std::filesystem::is_directory(occupied));
-		CHECK_FALSE(FileSystem::Exists(occupied.string() + ".tmp"));
+		CHECK_FALSE(BasaltTest::HasTempFiles(directory));
 
 		std::filesystem::remove_all(directory);
 	}
@@ -850,5 +854,56 @@ TEST_SUITE("Core")
 		history.Push({ LogLevel::Warn, "BASALT", "c" });
 		CHECK(seen == std::vector<std::string>{ "a", "2:a", "2:b" });
 		CHECK(history.GetTotalCount() == 3);
+	}
+
+	TEST_CASE("Log history keeps messages whose listeners log or throw")
+	{
+		LogHistory history(8);
+		int calls = 0;
+		// A listener that logs re-enters Push: the nested message is stored but not passed to listeners again.
+		const uint64_t echo = history.AddListener([&](const LogMessage& message) {
+			calls++;
+			history.Push({ LogLevel::Info, "BASALT", "echo of " + message.Text });
+		});
+		history.Push({ LogLevel::Info, "BASALT", "first" });
+		CHECK(calls == 1);
+		uint64_t next = 0;
+		std::vector<std::string> texts;
+		for (const LogMessage& message : history.GetMessagesSince(0, next))
+			texts.push_back(message.Text);
+		CHECK(texts == std::vector<std::string>{ "first", "echo of first" });
+		history.RemoveListener(echo);
+
+		// A throwing listener neither loses the message nor stops the others.
+		history.AddListener([](const LogMessage&) { throw std::runtime_error("listener failure"); });
+		int after = 0;
+		history.AddListener([&](const LogMessage&) { after++; });
+		history.Push({ LogLevel::Error, "BASALT", "kept" });
+		CHECK(after == 1);
+		CHECK(history.GetErrorCount() == 1);
+		CHECK(history.GetAll().back().Text == "kept");
+	}
+
+	TEST_CASE("Log history listeners can be removed while other threads log")
+	{
+		LogHistory history(64);
+		std::atomic<bool> running = true;
+		std::thread logger([&]() {
+			while (running)
+				history.Push({ LogLevel::Trace, "BASALT", "background" });
+		});
+		for (int i = 0; i < 200; i++)
+		{
+			auto counter = std::make_shared<std::atomic<int>>(0);
+			const uint64_t id = history.AddListener([counter](const LogMessage&) { counter->fetch_add(1); });
+			std::this_thread::yield();
+			history.RemoveListener(id);
+			// Removed means no call is running or will start.
+			const int seen = counter->load();
+			std::this_thread::yield();
+			CHECK(counter->load() == seen);
+		}
+		running = false;
+		logger.join();
 	}
 }

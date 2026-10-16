@@ -1,6 +1,7 @@
 #include "Basalt/Automation/AutomationServer.h"
 
 #include "Basalt/Automation/AutomationLimits.h"
+#include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Base.h"
 #include "Basalt/Core/Log.h"
 
@@ -163,7 +164,7 @@ namespace Basalt {
 		const SocketHandle listenSocket = ToSocket(m_ListenSocket);
 		while (!m_Stopping)
 		{
-			if (WaitReadable(listenSocket, 100) <= 0)
+			if (WaitReadable(listenSocket, IdlePollMilliseconds) <= 0)
 				continue;
 			SocketHandle client = accept(listenSocket, nullptr, nullptr);
 			if (client == s_InvalidSocket)
@@ -171,6 +172,14 @@ namespace Basalt {
 #if defined(BS_PLATFORM_MACOS)
 			int noSigPipe = 1;
 			setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, sizeof(noSigPipe));
+#endif
+			// Event streams send data the client did not ask for; one that stops reading must not block us forever.
+#if defined(BS_PLATFORM_WINDOWS)
+			const DWORD sendTimeout = SendTimeoutMilliseconds;
+			setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&sendTimeout), sizeof(sendTimeout));
+#else
+			const timeval sendTimeout{ SendTimeoutMilliseconds / 1000, (SendTimeoutMilliseconds % 1000) * 1000 };
+			setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &sendTimeout, sizeof(sendTimeout));
 #endif
 			ServeClient(static_cast<intptr_t>(client), m_Factory());
 			CloseSocket(client);
@@ -182,16 +191,20 @@ namespace Basalt {
 		const SocketHandle client = ToSocket(clientHandle);
 		std::string buffer;
 		char chunk[4096];
+		BS_CORE_ASSERT(handler.OnRequest, "a client handler needs OnRequest");
 		const auto sendPending = [&]() {
 			if (!handler.TakePending)
 				return true;
 			const std::string frames = handler.TakePending();
-			return frames.empty() || SendAll(client, frames);
+			if (frames.empty() || SendAll(client, frames))
+				return true;
+			BS_CORE_WARN("Automation: closing connection; the client did not accept {} bytes of event frames within {} ms", frames.size(), SendTimeoutMilliseconds);
+			return false;
 		};
 
 		while (!m_Stopping)
 		{
-			const int ready = WaitReadable(client, 100);
+			const int ready = WaitReadable(client, IdlePollMilliseconds);
 			if (ready < 0)
 				return;
 			if (ready == 0)

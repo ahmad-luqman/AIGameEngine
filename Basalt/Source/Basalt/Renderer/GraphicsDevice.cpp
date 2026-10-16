@@ -15,6 +15,7 @@
 #include <nvrhi/vulkan.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cstring>
 #include <filesystem>
 #include <optional>
@@ -26,33 +27,49 @@ namespace Basalt {
 
 	namespace {
 
-#if defined(BS_PLATFORM_MACOS) && !defined(BS_DIST)
 		// Makes Homebrew's validation layer loadable without DYLD_FALLBACK_LIBRARY_PATH (see ValidationLayerManifest).
-		// Development builds only: Dist never enables validation.
+		// Development builds on macOS only (Dist never enables validation). Runs before the loader reads the variable
+		// and before other threads exist, so setting it is safe.
 		void AddHomebrewValidationLayer()
 		{
+#if defined(BS_PLATFORM_MACOS) && !defined(BS_DIST)
 			static constexpr const char* Variable = "VK_ADD_LAYER_PATH";
 			std::error_code ec;
+			// $TMPDIR, which macOS makes per user.
 			const std::filesystem::path temp = std::filesystem::temp_directory_path(ec);
 			if (ec)
-				return;
-			std::string error;
-			const std::optional<std::filesystem::path> directory = ValidationLayerManifest::WriteAbsoluteCopy("/opt/homebrew", temp / "basalt-vulkan-layers", error);
-			if (!directory)
 			{
-				if (!error.empty())
-					BS_CORE_WARN("GraphicsDevice: cannot prepare Homebrew's validation layer: {}", error);
+				BS_CORE_WARN("GraphicsDevice: no temporary folder for the validation layer manifest copy: {}", ec.message());
 				return;
 			}
-			const std::string path = FileSystem::PathToUtf8(*directory);
-			const std::optional<std::string> existing = Platform::GetEnvVar(Variable);
-			if (existing && existing->find(path) != std::string::npos)
+			for (const std::filesystem::path& prefix : ValidationLayerManifest::HomebrewPrefixes(Platform::GetEnvVar("HOMEBREW_PREFIX")))
+			{
+				const ValidationLayerManifest::CopyResult copy = ValidationLayerManifest::WriteAbsoluteCopy(prefix, temp / "basalt-vulkan-layers");
+				if (copy.Outcome == ValidationLayerManifest::CopyOutcome::NotNeeded)
+				{
+					if (!copy.Message.empty())
+						BS_CORE_INFO("GraphicsDevice: {}", copy.Message);
+					continue;
+				}
+				if (copy.Outcome == ValidationLayerManifest::CopyOutcome::Failed)
+				{
+					BS_CORE_WARN("GraphicsDevice: cannot prepare Homebrew's validation layer: {}", copy.Message);
+					continue;
+				}
+				const std::string existing = Platform::GetEnvVar(Variable).value_or("");
+				const std::string updated = ValidationLayerManifest::AppendSearchPath(existing, FileSystem::PathToUtf8(copy.Directory), ':');
+				if (updated == existing)
+					return;
+				if (!Platform::SetEnvVar(Variable, updated))
+				{
+					BS_CORE_WARN("GraphicsDevice: cannot set {}: {}", Variable, std::generic_category().message(errno));
+					return;
+				}
+				BS_CORE_TRACE("GraphicsDevice: {} = {} (Homebrew validation layer under {})", Variable, updated, FileSystem::PathToUtf8(prefix));
 				return;
-			// Paths the user set keep precedence.
-			if (!Platform::SetEnvVar(Variable, existing && !existing->empty() ? *existing + ":" + path : path))
-				BS_CORE_WARN("GraphicsDevice: cannot set {}", Variable);
-		}
+			}
 #endif
+		}
 
 		constexpr uint32_t RequiredApiVersion = VK_API_VERSION_1_3;
 
@@ -310,10 +327,8 @@ namespace Basalt {
 		}
 
 		// --- Instance ---------------------------------------------------------------------------
-#if defined(BS_PLATFORM_MACOS) && !defined(BS_DIST)
 		if (m_Specification.EnableValidation)
 			AddHomebrewValidationLayer();
-#endif
 		const auto availableExtensions = vk::enumerateInstanceExtensionProperties();
 		const auto availableLayers = vk::enumerateInstanceLayerProperties();
 
@@ -378,8 +393,8 @@ namespace Basalt {
 			// The layer manifest exists but its library failed to load: a manifest naming a library the dynamic
 			// linker cannot find (Homebrew's is repaired above), or a broken install. Continue without validation.
 			BS_CORE_WARN("GraphicsDevice: VK_LAYER_KHRONOS_validation failed to load; continuing without validation. "
-						 "Its manifest names a library the loader cannot open; reinstall the layer, or add the library's "
-						 "folder to the dynamic linker's search path");
+						 "Its manifest names a library the loader cannot open: reinstall the layer, or add the library's "
+						 "folder to the dynamic linker's search path (macOS: DYLD_FALLBACK_LIBRARY_PATH; Linux: LD_LIBRARY_PATH)");
 			layers.clear();
 			validationEnabled = false;
 			instanceInfo.enabledLayerCount = 0;

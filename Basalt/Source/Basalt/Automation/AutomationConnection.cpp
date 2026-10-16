@@ -9,31 +9,12 @@ namespace Basalt {
 
 	namespace {
 
-		std::atomic<uint64_t> s_NextStreamOwner = 1;
-
-		// Makes the session attribute event subscriptions to one connection for the duration of a request.
-		class StreamOwnerScope
-		{
-		public:
-			StreamOwnerScope(AutomationSession& session, uint64_t owner)
-				: m_Session(session)
-				, m_Previous(session.GetEventStreamOwner())
-			{
-				m_Session.SetEventStreamOwner(owner);
-			}
-			~StreamOwnerScope() { m_Session.SetEventStreamOwner(m_Previous); }
-			StreamOwnerScope(const StreamOwnerScope&) = delete;
-			StreamOwnerScope& operator=(const StreamOwnerScope&) = delete;
-
-		private:
-			AutomationSession& m_Session;
-			uint64_t m_Previous;
-		};
+		std::atomic<uint64_t> s_NextClientId = 1;
 
 	}
 
 	AutomationConnection::AutomationConnection()
-		: m_StreamOwner(s_NextStreamOwner.fetch_add(1))
+		: m_ClientId(s_NextClientId.fetch_add(1))
 	{
 	}
 
@@ -41,13 +22,25 @@ namespace Basalt {
 	{
 		std::scoped_lock lock(m_EventsMutex);
 		if (m_Events)
-			m_Events->RemoveOwner(m_StreamOwner);
+			m_Events->RemoveOwner(m_ClientId);
+	}
+
+	void AutomationConnection::BindEvents(AutomationSession& session)
+	{
+		std::scoped_lock lock(m_EventsMutex);
+		if (m_Events == session.GetEvents())
+			return;
+		// Requests are handled with the session they arrive for; a connection moved to another session (never the
+		// case in one editor) must not strand its subscriptions in the old hub.
+		if (m_Events)
+			m_Events->RemoveOwner(m_ClientId);
+		m_Events = session.GetEvents();
 	}
 
 	std::string AutomationConnection::TakePendingEvents()
 	{
 		std::scoped_lock lock(m_EventsMutex);
-		return m_Events ? m_Events->TakeStreamed(m_StreamOwner) : std::string();
+		return m_Events ? m_Events->TakeStreamed(m_ClientId) : std::string();
 	}
 
 	AutomationConnection::Protocol AutomationConnection::SelectProtocol(const std::string& line, const nlohmann::json& parsed) const
@@ -67,8 +60,11 @@ namespace Basalt {
 		const nlohmann::json parsed = ParseJson(line);
 		const Protocol protocol = SelectProtocol(line, parsed);
 		m_Protocol.store(protocol);
+		BindEvents(session);
 		if (protocol == Protocol::Mcp)
 		{
+			// MCP has no frames for unsolicited events: its subscriptions are polled, but still end with the connection.
+			AutomationSession::EventClientScope client(session, { m_ClientId, false });
 			const auto response = m_Mcp.HandleRequest(registry, session, parsed);
 			return response ? response->dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) : "";
 		}
@@ -76,18 +72,7 @@ namespace Basalt {
 			return "";
 		if (parsed.is_discarded())
 			return R"({"ok":false,"error":"invalid JSON"})";
-		{
-			std::scoped_lock lock(m_EventsMutex);
-			if (m_Events != session.GetEvents())
-			{
-				// A different session (never the case in one editor) would strand subscriptions in the old hub.
-				if (m_Events)
-					m_Events->RemoveOwner(m_StreamOwner);
-				m_Events = session.GetEvents();
-			}
-		}
-		// Only legacy clients read unsolicited event frames; MCP subscriptions are polled (events.poll).
-		StreamOwnerScope owner(session, m_StreamOwner);
+		AutomationSession::EventClientScope client(session, { m_ClientId, true });
 		return registry.HandleRequest(session, parsed).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 	}
 

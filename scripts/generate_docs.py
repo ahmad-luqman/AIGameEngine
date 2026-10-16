@@ -19,8 +19,16 @@ LUA_BEGIN = "-- BEGIN GENERATED: components (scripts/generate_docs.py)"
 LUA_END = "-- END GENERATED: components"
 
 def run(command):
-    output = subprocess.run([basalt, command], check=True, capture_output=True, text=True).stdout
-    response = json.loads(output)
+    try:
+        result = subprocess.run([basalt, command], capture_output=True, text=True)
+    except OSError as error:
+        raise SystemExit(f"cannot run '{basalt}' (build it first, or pass its path): {error}")
+    if result.returncode != 0:
+        raise SystemExit(f"'{basalt} {command}' exited with {result.returncode}\nstderr:\n{result.stderr}\nstdout:\n{result.stdout[:2000]}")
+    try:
+        response = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"'{basalt} {command}' did not print JSON ({error}):\n{result.stdout[:2000]}")
     if not response.get("ok"):
         raise SystemExit(f"basalt {command} failed: {response}")
     return response["result"]
@@ -55,7 +63,7 @@ def automation_commands(commands):
 
 def field_description(component, field):
     kind = component["types"][field]
-    if kind.startswith("enum"):
+    if field in component["enums"]:
         return f"`{field}` ({kind}: {', '.join(component['enums'][field])})"
     return f"`{field}` ({kind})"
 
@@ -101,15 +109,18 @@ def lua_components(components):
     return "\n".join(lines)
 
 def replace_lua_section(text, section):
+    if text.count(LUA_BEGIN) != 1 or text.count(LUA_END) != 1:
+        raise SystemExit(f"Docs/basalt.d.lua: needs exactly one '{LUA_BEGIN}' / '{LUA_END}' marker pair")
     begin = text.find(LUA_BEGIN)
     end = text.find(LUA_END)
-    if begin < 0 or end < begin:
-        raise SystemExit(f"Docs/basalt.d.lua: missing the '{LUA_BEGIN}' / '{LUA_END}' markers")
+    if end < begin:
+        raise SystemExit(f"Docs/basalt.d.lua: '{LUA_END}' comes before '{LUA_BEGIN}'")
     return text[:begin] + section + text[end + len(LUA_END):]
 
 def read(path):
+    """The file's text with LF line endings (checkouts may convert them, e.g. on Windows)."""
     with open(path, encoding="utf-8", newline="") as f:
-        return f.read()
+        return f.read().replace("\r\n", "\n")
 
 commands = run("help")["commands"]
 components = run("component.types")["components"]
@@ -117,13 +128,12 @@ lua_path = os.path.join(root, "Docs", "basalt.d.lua")
 outputs = {
     os.path.join(root, "Docs", "AutomationCommands.md"): automation_commands(commands),
     os.path.join(root, "Docs", "Components.md"): components_markdown(components),
-    lua_path: replace_lua_section(read(lua_path).replace("\r\n", "\n"), lua_components(components)),
+    lua_path: replace_lua_section(read(lua_path), lua_components(components)),
 }
 
 stale = []
 for path, text in outputs.items():
-    # Checkouts may convert line endings (Windows); only the content matters.
-    current = read(path).replace("\r\n", "\n") if os.path.exists(path) else None
+    current = read(path) if os.path.exists(path) else None
     if current == text:
         continue
     if check:

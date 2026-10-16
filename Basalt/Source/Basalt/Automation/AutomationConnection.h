@@ -14,8 +14,8 @@ namespace Basalt {
 
 	// Routes one TCP client's frames to legacy automation or MCP. Execute on the scene-owning thread;
 	// only ShutdownResponse and TakePendingEvents may run concurrently (on the server thread): the first reads
-	// an atomic protocol snapshot, the second the thread-safe event hub. Event subscriptions a legacy client
-	// creates stream to it and end with the connection.
+	// an atomic protocol snapshot, the second the thread-safe event hub. Event subscriptions the client creates
+	// end with the connection; a legacy client's stream to it, an MCP client's are polled.
 	class AutomationConnection
 	{
 	public:
@@ -37,11 +37,12 @@ namespace Basalt {
 			Mcp
 		};
 		Protocol SelectProtocol(const std::string& line, const nlohmann::json& parsed) const;
+		void BindEvents(AutomationSession& session);
 		std::atomic<Protocol> m_Protocol = Protocol::Undetermined;
 		McpServer m_Mcp;
-		// Identifies this connection's event subscriptions in the session's hub.
-		const uint64_t m_StreamOwner;
-		// The hub of the session that handled the last legacy request; read on the server thread.
+		// Owner of this connection's event subscriptions in the session's hub.
+		const uint64_t m_ClientId;
+		// The hub of the session that handled the last request; read on the server thread.
 		std::mutex m_EventsMutex;
 		Ref<AutomationEventHub> m_Events;
 	};

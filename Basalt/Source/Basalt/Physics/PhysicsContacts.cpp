@@ -89,22 +89,23 @@ namespace Basalt {
 				ended.insert(pair);
 		}
 
-		ScriptEngine* scriptEngine = ScenePtr->GetScriptEngine();
-		SceneEventListener* listener = ScenePtr->GetEventListener();
 		for (const EntityPair& pair : ended)
 		{
 			const UUID other = pair.first == id ? UUID(pair.second) : UUID(pair.first);
 			const bool isTrigger = trigger || IsTrigger(other);
 			Entity a = ScenePtr->GetEntityByUUID(pair.first);
 			Entity b = ScenePtr->GetEntityByUUID(pair.second);
-			if (!a || !b)
-				continue;
-			const ContactEventType type = isTrigger ? ContactEventType::TriggerExit : ContactEventType::CollisionEnd;
-			if (listener)
-				listener->OnContact(*ScenePtr, type, a, b, std::nullopt);
-			if (scriptEngine)
-				scriptEngine->OnContactEvent(type, a, b, std::nullopt);
+			if (a && b)
+				DispatchContact(isTrigger ? ContactEventType::TriggerExit : ContactEventType::CollisionEnd, a, b, std::nullopt);
 		}
+	}
+
+	void PhysicsWorld::Impl::DispatchContact(ContactEventType type, Entity first, Entity second, const std::optional<ContactInfo>& contact)
+	{
+		if (SceneEventListener* listener = ScenePtr->GetEventListener())
+			listener->OnContact(*ScenePtr, type, first, second, contact);
+		if (ScriptEngine* scriptEngine = ScenePtr->GetScriptEngine())
+			scriptEngine->OnContactEvent(type, first, second, contact);
 	}
 
 	std::optional<ContactInfo> PhysicsWorld::Impl::SeparationContact(UUID first, UUID second, float fixedStep) const
@@ -229,10 +230,8 @@ namespace Basalt {
 			Contacts->Release(removed);
 		}
 
-		ScriptEngine* scriptEngine = ScenePtr->GetScriptEngine();
-		SceneEventListener* listener = ScenePtr->GetEventListener();
 		// Simulate runs no scripts, but a listener still observes the contacts.
-		if (!scriptEngine && !listener)
+		if (!ScenePtr->GetScriptEngine() && !ScenePtr->GetEventListener())
 			return;
 		for (const auto& [pair, change] : touched)
 		{
@@ -250,10 +249,7 @@ namespace Basalt {
 			else
 				type = isActive ? ContactEventType::CollisionBegin : ContactEventType::CollisionEnd;
 			const std::optional<ContactInfo> contact = isActive ? change.Begin : SeparationContact(UUID(pair.first), UUID(pair.second), fixedStep);
-			if (listener)
-				listener->OnContact(*ScenePtr, type, entityA, entityB, contact);
-			if (scriptEngine)
-				scriptEngine->OnContactEvent(type, entityA, entityB, contact);
+			DispatchContact(type, entityA, entityB, contact);
 		}
 	}
 

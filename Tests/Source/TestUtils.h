@@ -31,6 +31,18 @@ namespace BasaltTest {
 		return directory;
 	}
 
+	// Whether a directory holds a leftover temporary file of FileSystem's atomic writes (*.tmp).
+	inline bool HasTempFiles(const std::filesystem::path& directory)
+	{
+		std::error_code error;
+		for (const auto& entry : std::filesystem::directory_iterator(directory, error))
+		{
+			if (entry.path().extension() == ".tmp")
+				return true;
+		}
+		return false;
+	}
+
 	// A fresh, empty temporary directory (<run directory>/<name>), removed on scope exit.
 	class TempDirectory
 	{

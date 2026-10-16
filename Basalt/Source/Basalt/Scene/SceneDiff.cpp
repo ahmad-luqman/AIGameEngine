@@ -1,5 +1,7 @@
 #include "Basalt/Scene/SceneDiff.h"
 
+#include "Basalt/Core/Assert.h"
+
 #include <spdlog/fmt/fmt.h>
 
 #include <cmath>
@@ -66,7 +68,7 @@ namespace Basalt {
 				const json& entity = (*entities)[i];
 				const auto id = entity.is_object() ? entity.find("ID") : entity.end();
 				const bool numeric = id != entity.end() && (id->is_number_unsigned() || (id->is_number_integer() && id->get<int64_t>() >= 0));
-				if (!entity.is_object() || !numeric)
+				if (!numeric)
 				{
 					outError = fmt::format("entity #{} of the {} scene has no numeric ID", i, side);
 					return false;
@@ -88,7 +90,13 @@ namespace Basalt {
 			return name != entity.end() && name->is_string() ? *name : json("");
 		}
 
-		// The entity's own fields compared as one object, with each component's fields directly under its name.
+		json EntityRef(const IndexedEntity& entity)
+		{
+			return { { "id", entity.ID }, { "name", EntityName(*entity.Data) } };
+		}
+
+		// The entity's own fields compared as one object, with each component's fields directly under its name
+		// (component names and entity keys such as Name and Parent never coincide).
 		json Flatten(const json& entity)
 		{
 			json flat = json::object();
@@ -111,15 +119,45 @@ namespace Basalt {
 		{
 			static constexpr size_t MaxLength = 80;
 			std::string text = value.dump(-1, ' ', false, json::error_handler_t::replace);
-			if (text.size() > MaxLength)
-				text = text.substr(0, MaxLength - 3) + "...";
-			return text;
+			if (text.size() <= MaxLength)
+				return text;
+			// Cut before a UTF-8 continuation byte would split a character.
+			size_t cut = MaxLength - 3;
+			while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80)
+				cut--;
+			return text.substr(0, cut) + "...";
+		}
+
+		std::string Mismatch(const std::string& path, const json& actual, const json& expected)
+		{
+			return fmt::format("{} is {}, expected {}", path, Brief(actual), Brief(expected));
+		}
+
+		// Whether the IDs both sides have appear in the same order on both.
+		bool SameOrder(const std::vector<IndexedEntity>& from, const std::vector<IndexedEntity>& to, const std::unordered_map<uint64_t, const json*>& fromById, const std::unordered_map<uint64_t, const json*>& toById)
+		{
+			auto a = from.begin();
+			auto b = to.begin();
+			while (true)
+			{
+				while (a != from.end() && !toById.contains(a->ID))
+					++a;
+				while (b != to.end() && !fromById.contains(b->ID))
+					++b;
+				if (a == from.end() || b == to.end())
+					return a == from.end() && b == to.end();
+				if (a->ID != b->ID)
+					return false;
+				++a;
+				++b;
+			}
 		}
 
 	}
 
 	bool JsonNearlyEqual(const json& a, const json& b, double tolerance)
 	{
+		BS_CORE_ASSERT(tolerance >= 0.0, "tolerance must not be negative");
 		if (a.is_number() && b.is_number())
 		{
 			// Integers compare exactly: IDs are 64-bit and lose precision as doubles.
@@ -174,11 +212,11 @@ namespace Basalt {
 			for (size_t i = 0; i < expected.size(); i++)
 				MatchJsonSubset(actual[i], expected[i], tolerance, path, elements);
 			if (!elements.empty())
-				outMismatches.push_back(fmt::format("{} is {}, expected {}", path, Brief(actual), Brief(expected)));
+				outMismatches.push_back(Mismatch(path, actual, expected));
 			return;
 		}
 		if (!JsonNearlyEqual(actual, expected, tolerance))
-			outMismatches.push_back(fmt::format("{} is {}, expected {}", path, Brief(actual), Brief(expected)));
+			outMismatches.push_back(Mismatch(path, actual, expected));
 	}
 
 	std::optional<json> DiffScenes(const json& from, const json& to, const SceneDiffOptions& options, std::string& outError)
@@ -206,14 +244,14 @@ namespace Basalt {
 		for (const IndexedEntity& entity : fromOrder)
 		{
 			if (!toById.contains(entity.ID))
-				removed.push_back({ { "id", entity.ID }, { "name", EntityName(*entity.Data) } });
+				removed.push_back(EntityRef(entity));
 		}
 		for (const IndexedEntity& entity : toOrder)
 		{
 			const auto before = fromById.find(entity.ID);
 			if (before == fromById.end())
 			{
-				added.push_back({ { "id", entity.ID }, { "name", EntityName(*entity.Data) } });
+				added.push_back(EntityRef(entity));
 				continue;
 			}
 			json changes = json::array();
@@ -221,35 +259,45 @@ namespace Basalt {
 			if (!changes.empty())
 				changed.push_back({ { "id", entity.ID }, { "name", EntityName(*entity.Data) }, { "changes", std::move(changes) } });
 		}
-		const bool equal = settings.empty() && added.empty() && removed.empty() && changed.empty();
-		return json{ { "equal", equal }, { "settings", std::move(settings) }, { "added", std::move(added) }, { "removed", std::move(removed) }, { "changed", std::move(changed) } };
+		const bool reordered = !SameOrder(fromOrder, toOrder, fromById, toById);
+		const bool equal = settings.empty() && added.empty() && removed.empty() && changed.empty() && !reordered;
+		return json{ { "equal", equal }, { "settings", std::move(settings) }, { "added", std::move(added) }, { "removed", std::move(removed) }, { "changed", std::move(changed) }, { "reordered", reordered } };
 	}
 
 	std::string DescribeSceneDiff(const json& diff, size_t maxLines)
 	{
-		std::vector<std::string> lines;
-		const auto list = [&diff](const char* key) -> const json& {
-			static const json s_Empty = json::array();
-			const auto it = diff.find(key);
-			return it != diff.end() && it->is_array() ? *it : s_Empty;
+		static const json s_Empty = json::array();
+		const auto list = [](const json& object, const char* key) -> const json& {
+			const auto it = object.is_object() ? object.find(key) : object.end();
+			return it != object.end() && it->is_array() ? *it : s_Empty;
 		};
-		for (const json& change : list("settings"))
-			lines.push_back(fmt::format("scene {}: {} -> {}", change.value("path", ""), Brief(change["from"]), Brief(change["to"])));
-		for (const json& entity : list("removed"))
-			lines.push_back(fmt::format("removed '{}' ({})", entity.value("name", ""), entity["id"].dump()));
-		for (const json& entity : list("added"))
-			lines.push_back(fmt::format("added '{}' ({})", entity.value("name", ""), entity["id"].dump()));
-		for (const json& entity : list("changed"))
+		// Values from any JSON: the input need not be a DiffScenes result.
+		const auto field = [](const json& object, const char* key) { return object.is_object() ? object.value(key, json()) : json(); };
+		const auto text = [&field](const json& object, const char* key) {
+			const json value = field(object, key);
+			return value.is_string() ? value.get<std::string>() : std::string();
+		};
+
+		std::vector<std::string> lines;
+		for (const json& change : list(diff, "settings"))
+			lines.push_back(fmt::format("scene {}: {} -> {}", text(change, "path"), Brief(field(change, "from")), Brief(field(change, "to"))));
+		for (const json& entity : list(diff, "removed"))
+			lines.push_back(fmt::format("removed '{}' ({})", text(entity, "name"), Brief(field(entity, "id"))));
+		for (const json& entity : list(diff, "added"))
+			lines.push_back(fmt::format("added '{}' ({})", text(entity, "name"), Brief(field(entity, "id"))));
+		for (const json& entity : list(diff, "changed"))
 		{
-			for (const json& change : entity["changes"])
-				lines.push_back(fmt::format("'{}' {}: {} -> {}", entity.value("name", ""), change.value("path", ""), Brief(change["from"]), Brief(change["to"])));
+			for (const json& change : list(entity, "changes"))
+				lines.push_back(fmt::format("'{}' {}: {} -> {}", text(entity, "name"), text(change, "path"), Brief(field(change, "from")), Brief(field(change, "to"))));
 		}
-		std::string text;
+		if (diff.is_object() && diff.value("reordered", false))
+			lines.emplace_back("the entities are in a different order");
+		std::string result;
 		for (size_t i = 0; i < lines.size() && i < maxLines; i++)
-			text += (i ? "\n" : "") + lines[i];
+			result += (i ? "\n" : "") + lines[i];
 		if (lines.size() > maxLines)
-			text += fmt::format("\n({} more)", lines.size() - maxLines);
-		return text;
+			result += fmt::format("\n({} more)", lines.size() - maxLines);
+		return result;
 	}
 
 }

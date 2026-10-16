@@ -13,6 +13,7 @@
 #include <Basalt/Scene/Scene.h>
 #include <Basalt/UI/GameUI.h>
 
+#include "AutomationTestUtils.h"
 #include "TestUtils.h"
 
 using namespace Basalt;
@@ -20,22 +21,9 @@ using json = nlohmann::json;
 
 namespace {
 
-	// Runs one command and returns its result; fails the test with the error message otherwise.
-	json Run(const CommandRegistry& registry, AutomationSession& session, const std::string& command, const json& params = json::object())
-	{
-		const json response = registry.HandleRequest(session, { { "id", 7 }, { "command", command }, { "params", params } });
-		INFO(command << ": " << response.dump());
-		REQUIRE(response["ok"] == true);
-		CHECK(response["id"] == 7);
-		return response["result"];
-	}
-
-	std::string RunError(const CommandRegistry& registry, AutomationSession& session, const std::string& command, const json& params = json::object())
-	{
-		const json response = registry.HandleRequest(session, { { "command", command }, { "params", params } });
-		REQUIRE(response["ok"] == false);
-		return response["error"].get<std::string>();
-	}
+	using BasaltTest::Run;
+	using BasaltTest::RunError;
+	using BasaltTest::SendLine;
 
 }
 
@@ -602,57 +590,6 @@ TEST_SUITE("Automation")
 
 #include <Basalt/Automation/AutomationServer.h>
 #include <Basalt/Project/Exporter.h>
-
-#if defined(_WIN32)
-	#include <winsock2.h>
-	#include <ws2tcpip.h>
-#else
-	#include <arpa/inet.h>
-	#include <netinet/in.h>
-	#include <sys/socket.h>
-	#include <unistd.h>
-#endif
-
-#include <cstring>
-
-namespace {
-
-	// Minimal blocking client: sends one line and reads one line back.
-	std::string SendLine(uint16_t port, const std::string& line)
-	{
-#if defined(_WIN32)
-		SOCKET client = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-#else
-		int client = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-#endif
-		sockaddr_in address;
-		std::memset(&address, 0, sizeof(address));
-		address.sin_family = AF_INET;
-		address.sin_port = htons(port);
-		address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-		std::string response;
-		if (connect(client, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0)
-		{
-			const std::string payload = line + "\n";
-			send(client, payload.data(), static_cast<int>(payload.size()), 0);
-			char buffer[4096];
-			while (response.find('\n') == std::string::npos)
-			{
-				const auto received = recv(client, buffer, sizeof(buffer), 0);
-				if (received <= 0)
-					break;
-				response.append(buffer, static_cast<size_t>(received));
-			}
-		}
-#if defined(_WIN32)
-		closesocket(client);
-#else
-		close(client);
-#endif
-		return response.substr(0, response.find('\n'));
-	}
-
-}
 
 TEST_SUITE("Automation")
 {

@@ -18,7 +18,8 @@ committing; do not commit "fix later" TODOs for correctness problems.
 - [ ] No asserts on user-data conditions; asserts only for programmer errors.
 - [ ] Ownership is clear (`Scope`/`Ref`/nvrhi handles); no leaks on early-return paths.
 - [ ] GPU resources referenced by in-flight frames are not destroyed early (nvrhi handles defer release; raw Vulkan does not).
-- [ ] Thread safety: anything called from the automation server thread goes through `Application::SubmitToMainThread`.
+- [ ] Thread safety: anything called from the automation server thread goes through `Application::SubmitToMainThread`
+      (the exception: draining the thread-safe `AutomationEventHub` in `ClientHandler::TakePending`).
 - [ ] Shader bindings follow the zero-offset convention; no duplicate slot numbers in one layout.
 
 **Tests**
@@ -28,3 +29,4 @@ committing; do not commit "fix later" TODOs for correctness problems.
 
 **Docs**
 - [ ] AGENTS.md / skills updated when workflows, conventions, or public APIs change.
+- [ ] Lua bindings: Docs/ScriptingAPI.md and Docs/basalt.d.lua; commands and components: `python3 scripts/generate_docs.py`.
