@@ -778,6 +778,16 @@ TEST_SUITE("Automation")
 		CHECK(resized["diff"].is_null());
 		CHECK_FALSE(FileSystem::Exists(project.GetDirectory() / "Diffs" / "Diff.png"));
 
+		// Neither the render nor the diff may replace a compared image.
+		const int rendersBefore = renders;
+		CHECK(Contains(RunError(registry, session, "render.compare", { { "reference", "Reference.png" }, { "output", "Reference.png" } }), "'output' is the reference image"));
+		CHECK(Contains(RunError(registry, session, "render.compare", { { "reference", "Reference.png" }, { "output", "Sub/../Reference.png" } }), "'output' is the reference image"));
+		CHECK(renders == rendersBefore);
+		const std::string referenceBytes = *FileSystem::ReadTextFile(project.GetDirectory() / "Reference.png");
+		CHECK(RunError(registry, session, "render.compare", { { "reference", "Reference.png" }, { "width", 64 }, { "height", 32 }, { "diff", "Reference.png" } }) == "'diff' must not be one of the compared images");
+		CHECK(RunError(registry, session, "image.compare", { { "actual", "Out/Render.png" }, { "reference", "Reference.png" }, { "diff", "Out/Render.png" } }) == "'diff' must not be one of the compared images");
+		CHECK(*FileSystem::ReadTextFile(project.GetDirectory() / "Reference.png") == referenceBytes);
+
 		session.Screenshot = [](const std::filesystem::path&, uint32_t, uint32_t, std::string& outError) {
 			outError = "no camera";
 			return false;

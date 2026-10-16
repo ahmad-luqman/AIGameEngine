@@ -1151,6 +1151,17 @@ namespace Basalt {
 			};
 		}
 
+		// Whether two paths name the same file, whether or not it exists yet (symlinks and '..' resolved).
+		bool SameFile(const std::filesystem::path& a, const std::filesystem::path& b)
+		{
+			std::error_code error;
+			const std::filesystem::path first = std::filesystem::weakly_canonical(a, error);
+			if (error)
+				return a.lexically_normal() == b.lexically_normal();
+			const std::filesystem::path second = std::filesystem::weakly_canonical(b, error);
+			return error ? a.lexically_normal() == b.lexically_normal() : first == second;
+		}
+
 		// The wording is stable: the golden-image ctests skip (not fail) on a missing reference.
 		void RequireReferenceImage(const std::filesystem::path& referencePath)
 		{
@@ -1166,6 +1177,9 @@ namespace Basalt {
 			const std::string diffParam = OptionalString(params, "diff");
 			const std::filesystem::path diffPath = diffParam.empty() ? std::filesystem::path() : Project::ResolvePath(diffParam);
 
+			// The diff must never replace (or, when the sizes differ, delete) one of the compared images.
+			if (!diffPath.empty() && (SameFile(diffPath, actualPath) || SameFile(diffPath, referencePath)))
+				throw CommandError("'diff' must not be one of the compared images");
 			std::string error;
 			RequireReferenceImage(referencePath);
 			Ref<TextureSource> reference = TextureSource::LoadFromFile(referencePath, error);
@@ -1187,11 +1201,9 @@ namespace Basalt {
 				}
 				else
 				{
-					// No diff of images of different sizes; an older one must not pass for this comparison's. Only a file,
-					// and never one of the compared images.
+					// No diff of images of different sizes; an older one must not pass for this comparison's (only a file).
 					std::error_code removeError;
-					const bool compared = diffPath.lexically_normal() == actualPath.lexically_normal() || diffPath.lexically_normal() == referencePath.lexically_normal();
-					if (!compared && std::filesystem::is_regular_file(diffPath, removeError))
+					if (std::filesystem::is_regular_file(diffPath, removeError))
 						std::filesystem::remove(diffPath, removeError);
 					if (removeError)
 						BS_CORE_WARN("image.compare: cannot remove the old diff image '{}': {}", FileSystem::PathToUtf8(diffPath), removeError.message());
@@ -1453,6 +1465,8 @@ namespace Basalt {
 				const std::filesystem::path referencePath = Project::ResolvePath(RequireString(params, "reference"));
 				// Before rendering, so a missing reference costs no render. The screenshot creates the output folder.
 				RequireReferenceImage(referencePath);
+				if (SameFile(outputPath, referencePath))
+					throw CommandError("'output' is the reference image; the render would replace it (pass another 'output')");
 				std::string error;
 				if (!session.Screenshot(outputPath, width, height, error))
 					throw CommandError(error);
