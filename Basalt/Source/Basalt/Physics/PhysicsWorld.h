@@ -121,7 +121,8 @@ namespace Basalt {
 		void SetAngularVelocity(Entity entity, const glm::vec3& velocity);
 		glm::vec3 GetAngularVelocity(Entity entity) const;
 		// Whether the entity's dynamic or kinematic body is asleep: no longer simulated until something wakes it (see
-		// RigidBody.AllowSleeping). False for static bodies and entities without a body. Lua: e:IsSleeping().
+		// RigidBody.AllowSleeping). False for static bodies and entities without a body (Lua's e:IsSleeping() returns nil
+		// for those).
 		bool IsBodySleeping(Entity entity) const;
 
 		// Whether the JointComponent held by this entity is currently a live constraint (false before both

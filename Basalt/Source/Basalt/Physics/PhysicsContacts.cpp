@@ -157,9 +157,6 @@ namespace Basalt {
 		// Worker threads record events in scheduling order; sort so callbacks are deterministic.
 		std::sort(events.begin(), events.end(), [](const RawContactEvent& a, const RawContactEvent& b) { return a.Tie() < b.Tie(); });
 
-		// A body that falls asleep reports its contacts as removed; it is still touching, so keep them.
-		auto isEntitySleeping = [this](UUID uuid) { return IsSleeping(uuid); };
-
 		struct PairChange
 		{
 			bool WasActive = false;
@@ -191,7 +188,8 @@ namespace Basalt {
 			const ContactState::ContactKey key(a, subA, b, subB);
 			const Impl::EntityPair pair(a, b);
 
-			if (!event.Added && (isEntitySleeping(first->second) || isEntitySleeping(second->second)))
+			// A body that falls asleep reports its contacts as removed; it is still touching, so keep them.
+			if (!event.Added && (IsSleeping(FindBody(first->second)) || IsSleeping(FindBody(second->second))))
 			{
 				if (Contacts->ActiveContacts.contains(key))
 					Contacts->SuspendedContacts.insert(key);
@@ -214,7 +212,7 @@ namespace Basalt {
 		// Suspended contacts whose bodies are awake again and were not re-reported this step have ended.
 		for (auto key = Contacts->SuspendedContacts.begin(); key != Contacts->SuspendedContacts.end();)
 		{
-			if (isEntitySleeping(std::get<0>(*key)) || isEntitySleeping(std::get<2>(*key)))
+			if (IsSleeping(FindBody(std::get<0>(*key))) || IsSleeping(FindBody(std::get<2>(*key))))
 			{
 				++key;
 				continue;

@@ -327,8 +327,8 @@ function Entity:SetAngularVelocity(velocity) end
 ---@return Vec3
 function Entity:GetAngularVelocity() end
 
----Whether the body is asleep (no longer simulated until something wakes it; see RigidBody.AllowSleeping). False for static bodies and entities without a body.
----@return boolean
+---Whether the body is asleep (no longer simulated until something wakes it; see RigidBody.AllowSleeping). False for static bodies; nil for entities without a body.
+---@return boolean?
 function Entity:IsSleeping() end
 
 ---Hinge angle (degrees) or slider offset (meters) of the Joint this entity holds; nil otherwise.

@@ -286,15 +286,17 @@ TEST_SUITE("Automation")
 		// A successful poll takes the events, so each one below gets a subscription of its own; failing polls share one.
 		const json types = { "collision", "playState" };
 		const uint64_t raw = Subscribe(registry, session, types);
+		constexpr int PassingPolls = 9;
 		std::vector<uint64_t> fresh;
-		fresh.reserve(7);
-		for (int i = 0; i < 7; i++)
+		fresh.reserve(PassingPolls);
+		for (int i = 0; i < PassingPolls; i++)
 			fresh.push_back(Subscribe(registry, session, types));
 		const uint64_t failing = Subscribe(registry, session, types);
 		Run(registry, session, "play.start");
 		Run(registry, session, "play.step", { { "frames", 150 } });
 		Run(registry, session, "play.stop");
 		auto passes = [&](const json& params) {
+			REQUIRE_FALSE(fresh.empty());
 			json request = params;
 			request["subscription"] = fresh.back();
 			fresh.pop_back();
@@ -340,6 +342,16 @@ TEST_SUITE("Automation")
 		swapped["b"] = { { "name", landing["a"]["name"] } };
 		passes({ { "expect", { withNormal(swapped, -1.0, 0.0) } } });
 		CHECK(Contains(fails({ { "expect", { withNormal(swapped, 1.0, 0.0) } } }), "assertion failed: no event matches"));
+		// Seen from the other body, floats match within 'tolerance' too.
+		passes({ { "expect", { withNormal(swapped, -1.0, 1.0e-3) } }, { "tolerance", 0.01 } });
+		CHECK(Contains(fails({ { "expect", { withNormal(swapped, -1.0, 1.0e-3) } } }), "assertion failed: no event matches"));
+		// The closest event is described in its own terms, from whichever side matches it best: here only the impulse
+		// differs once the bodies are swapped.
+		json wrongImpulse = withNormal(swapped, -1.0, 0.0);
+		wrongImpulse["impulse"] = 12345.0;
+		const std::string impulseError = fails({ { "expect", { wrongImpulse } } });
+		CHECK(Contains(impulseError, "; closest: impulse is "));
+		CHECK_FALSE(Contains(impulseError, "a.name"));
 		// IDs (64-bit, beyond a double's precision) compare exactly, in either order.
 		json byId = landed;
 		byId["b"] = { { "id", landing["a"]["id"] } };
@@ -361,6 +373,8 @@ TEST_SUITE("Automation")
 		const json playState = { { "event", "playState" } };
 		passes({ { "expect", { playState, playState } } });
 		CHECK(Contains(fails({ { "expect", { stopped, stopped } } }), "assertion failed: " + stopped.dump() + " needs an event of its own"));
+		// A general pattern listed first must not take the only event a later, specific one matches (first-fit would).
+		passes({ { "expect", { playState, json{ { "event", "playState" }, { "state", "play" } } } } });
 
 		// A pattern nothing matches fails, names the pattern, says how the closest event of its kind differs and keeps
 		// the events.
@@ -370,13 +384,20 @@ TEST_SUITE("Automation")
 		CHECK(Contains(error, "they stay queued; closest: a.name is "));
 		// Only the first 'max' events count: the stop event comes last.
 		CHECK(Contains(fails({ { "max", 1 }, { "expect", { stopped } } }), "no event matches " + stopped.dump() + " among the first 1 queued (1 playState; 0 dropped); they stay queued; closest: state is \"play\", expected \"stop\""));
+		// Without a queued event of the pattern's kind there is no closest one to describe.
+		CHECK(Contains(fails({ { "expect", { { { "event", "log" }, { "text", "x" } } } } }), "they stay queued"));
+		CHECK_FALSE(Contains(fails({ { "expect", { { { "event", "log" }, { "text", "x" } } } } }), "closest"));
 		// A missing type is reported before a pattern.
 		CHECK(Contains(fails({ { "assertTypes", { "log" } }, { "expect", { goal } } }), "assertion failed: no log event among the "));
-		// Patterns are objects that name a field, 1 to 64 of them.
+		// Patterns are objects that name a field (an event type, if 'event'), 1 to 64 of them; 'tolerance' needs them.
 		CHECK(fails({ { "expect", { "triggerEnter" } } }) == "parameter 'expect[0]' must be an object");
 		CHECK(fails({ { "expect", { stopped, json::object() } } }) == "parameter 'expect[1]' names no field");
+		CHECK(fails({ { "expect", { { { "event", "colision" } } } } }) == "parameter 'expect[0].event' must be one of: log, scriptError, playState, collision");
+		CHECK(fails({ { "expect", { { { "event", 3 } } } } }) == "parameter 'expect[0].event' must be one of: log, scriptError, playState, collision");
 		CHECK(Contains(fails({ { "expect", json::array() } }), "parameter 'expect'"));
 		CHECK(Contains(fails({ { "expect", json(65, stopped) } }), "parameter 'expect'"));
+		CHECK(fails({ { "tolerance", 0.1 } }) == "parameter 'tolerance' needs 'expect'");
+		CHECK(fresh.empty());
 		const json all = Poll(registry, session, failing);
 		CHECK(all["events"].size() == rawEvents.size());
 		CHECK(all["events"].back()["state"] == "stop");
@@ -990,6 +1011,10 @@ TEST_SUITE("Automation")
 		uint64_t received = 0;
 		uint64_t dropped = 0;
 		uint64_t lastSeq = 0;
+		// On a busy machine the loop below can finish before the loggers are scheduled at all (seen on CI's macOS Release
+		// runner): wait until they publish, so the polling really overlaps their logging.
+		while (published.load() < 2)
+			std::this_thread::yield();
 		for (int i = 0; i < 300; i++)
 		{
 			const std::optional<uint64_t> extra = session.GetEvents()->Subscribe({}, 9, AutomationEventHub::Delivery::Streamed);
@@ -1010,10 +1035,6 @@ TEST_SUITE("Automation")
 					received++;
 			}
 		}
-		// On a busy machine the loop can finish before the loggers are scheduled at all (seen on CI's macOS Release
-		// runner): let them publish before stopping them, so the checks below always have lines to account for.
-		while (published.load() < 2)
-			std::this_thread::yield();
 		running = false;
 		for (std::thread& logger : loggers)
 			logger.join();

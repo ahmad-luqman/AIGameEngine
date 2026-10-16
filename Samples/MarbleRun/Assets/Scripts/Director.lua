@@ -21,9 +21,13 @@ local Colors = {
 	{ 0.65, 0.20, 0.80, 1 }
 }
 
--- The course pieces the Director drives; a missing one is a broken scene, reported by name.
-local function Require(name)
-	return Scene.FindEntityByName(name) or error("MarbleRun: the scene has no entity named '" .. name .. "'")
+-- The course pieces the Director drives; a missing one (or one without the component it is driven through) is a
+-- broken scene, reported by name where the Director asked for it.
+local function RequireEntity(name, component)
+	local entity = Scene.FindEntityByName(name)
+	if not entity then error("MarbleRun: the scene has no entity named '" .. name .. "'", 2) end
+	if component and not entity:HasComponent(component) then error("MarbleRun: '" .. name .. "' has no " .. component, 2) end
+	return entity
 end
 
 function Director:OnCreate()
@@ -38,12 +42,12 @@ function Director:OnCreate()
 	self.GateShownOpen = nil
 	-- The lowest seesaw angle so far (degrees; it rests at +10 and tips toward -10 under a marble), read by the test.
 	self.SeesawLowest = 90
-	self.Spawn = Require("Spawn")
-	self.Gate = Require("Gate")
-	self.Spinner = Require("Spinner")
-	self.Seesaw = Require("Seesaw")
-	self.Scoreboard = Require("Scoreboard")
-	self.Progress = Require("Progress")
+	self.Spawn = RequireEntity("Spawn")
+	self.Gate = RequireEntity("Gate", "Joint")
+	self.Spinner = RequireEntity("Spinner", "Joint")
+	self.Seesaw = RequireEntity("Seesaw", "Joint")
+	self.Scoreboard = RequireEntity("Scoreboard", "UIText")
+	self.Progress = RequireEntity("Progress", "UISlider")
 	-- The sensors report through events, so they need not know who keeps score.
 	Events.On("MarbleScored", function()
 		self.Scored = self.Scored + 1
@@ -98,7 +102,8 @@ function Director:UpdateHud()
 	local text = string.format("Scored %d / %d   Lost %d", self.Scored, self.MarbleCount, self.Lost)
 	if self:IsFinished() then text = text .. "   Done!" end
 	self.Scoreboard:SetComponent("UIText", { Text = text })
-	self.Progress:SetComponent("UISlider", { Value = math.min(self.Scored / math.max(self.MarbleCount, 1), 1) })
+	local progress = math.min(self.Scored / math.max(self.MarbleCount, 1), 1)
+	self.Progress:SetComponent("UISlider", { Value = progress })
 end
 
 -- HUD callbacks.
