@@ -562,13 +562,14 @@ TEST_SUITE("Physics")
 		awake.GetComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
 		awake.GetComponent<RigidBodyComponent>().AllowSleeping = false;
 		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
 		Simulate(scene, 3.0f);
-		CHECK(scene.GetPhysicsWorld()->IsBodySleeping(resting));
-		CHECK_FALSE(scene.GetPhysicsWorld()->IsBodySleeping(awake));
+		CHECK(physics.IsBodySleeping(resting));
+		CHECK_FALSE(physics.IsBodySleeping(awake));
 		scene.OnSimulationStop();
 	}
 
-	TEST_CASE("AllowSleeping off on a static body or a trigger is ignored with one warning")
+	TEST_CASE("AllowSleeping off on a static body or a trigger is ignored with a warning for each")
 	{
 		Scene scene;
 		Entity platform = CreateGround(scene);
@@ -576,13 +577,36 @@ TEST_SUITE("Physics")
 		Entity trigger = CreateBox(scene, { 0.0f, 3.0f, 0.0f });
 		trigger.GetComponent<RigidBodyComponent>().IsTrigger = true;
 		trigger.GetComponent<RigidBodyComponent>().AllowSleeping = false;
-		// The default (true) never warns, nor does turning sleeping off where it matters.
+		// The default (true) never warns, on static bodies and triggers either, nor does turning sleeping off where it
+		// matters.
+		CreateGround(scene).GetTransform().Translation.x = 200.0f;
+		Entity defaultTrigger = CreateBox(scene, { 6.0f, 3.0f, 0.0f });
+		defaultTrigger.GetComponent<RigidBodyComponent>().IsTrigger = true;
 		CreateBox(scene, { 3.0f, 3.0f, 0.0f }).GetComponent<RigidBodyComponent>().AllowSleeping = false;
 		const uint64_t since = Log::GetHistory().GetTotalCount();
 		scene.OnSimulationStart();
-		Simulate(scene, 0.1f);
+		Simulate(scene, 3.0f);
 		CHECK(BasaltTest::CountLogMessages(since, "AllowSleeping only affects dynamic and kinematic bodies") == 2);
+		// Triggers never sleep, whatever the setting (the dynamic triggers float in place: they collide with nothing).
+		CHECK_FALSE(scene.GetPhysicsWorld()->IsBodySleeping(trigger));
+		CHECK_FALSE(scene.GetPhysicsWorld()->IsBodySleeping(defaultTrigger));
 		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("IsBodySleeping answers only for the physics world's own scene")
+	{
+		Ref<Scene> edit = CreateRef<Scene>();
+		CreateGround(*edit);
+		Entity box = CreateBox(*edit, { 0.0f, 0.5f, 0.0f });
+		// The play copy keeps the edit scene's UUIDs.
+		Ref<Scene> play = Scene::Copy(edit);
+		play->OnSimulationStart();
+		Simulate(*play, 3.0f);
+		Entity playBox = play->GetEntityByUUID(box.GetUUID());
+		REQUIRE(playBox);
+		CHECK(play->GetPhysicsWorld()->IsBodySleeping(playBox));
+		CHECK_FALSE(play->GetPhysicsWorld()->IsBodySleeping(box));
+		play->OnSimulationStop();
 	}
 
 	TEST_CASE("Continuous on a non-dynamic body or a trigger is ignored with one warning")

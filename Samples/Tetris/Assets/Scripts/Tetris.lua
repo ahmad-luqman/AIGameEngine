@@ -159,7 +159,7 @@ function Tetris:OnLateUpdate(dt)
 		return
 	end
 	self.ShakeTime = self.ShakeTime + dt
-	if not self.Camera then return end
+	if not self:HasCamera() then return end
 	local amount = self.ShakeStrength * self.Trauma * self.Trauma
 	local offset = Vec3(Wave(self.ShakeTime * 7.3) * amount, Wave(self.ShakeTime * 9.7 + 0.25) * amount * 0.8, 0)
 	self.Camera.Translation = self.CameraRest + offset
@@ -168,7 +168,12 @@ end
 function Tetris:StopShake()
 	self.Trauma = 0
 	self.ShakeTime = 0
-	if self.Camera then self.Camera.Translation = self.CameraRest end
+	if self:HasCamera() then self.Camera.Translation = self.CameraRest end
+end
+
+-- The shake is cosmetic: without a camera (none in the scene, or it was destroyed) the game plays on, unshaken.
+function Tetris:HasCamera()
+	return self.Camera ~= nil and self.Camera:IsValid()
 end
 
 function Tetris:Move(dx, dy)
@@ -252,7 +257,7 @@ function Tetris:OnCreate()
 		Blend = "Additive", SimulationSpace = "World" })
 	self.LineBurst:SetParent(self.Entity)
 
-	-- The camera shakes around where the scene placed it; without one the game plays on, unshaken.
+	-- The camera shakes around where the scene placed it.
 	self.Camera = Scene.GetPrimaryCamera()
 	if self.Camera then
 		self.CameraRest = self.Camera.Translation

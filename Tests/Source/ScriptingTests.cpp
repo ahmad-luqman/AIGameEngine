@@ -23,6 +23,7 @@
 #include <regex>
 #include <set>
 #include <sstream>
+#include <tuple>
 
 using namespace Basalt;
 
@@ -886,6 +887,55 @@ TEST_SUITE("Scripting")
 		CHECK_FALSE(left.HasComponent<JointComponent>());
 		CHECK_FALSE(right.HasComponent<JointComponent>());
 		CHECK_FALSE(scene.GetPhysicsWorld()->HasJoint(right));
+		CHECK(scene.GetScriptEngine()->GetErrors().empty());
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Entity:IsSleeping reports sleeping bodies, awake ones and nil without a body")
+	{
+		BasaltTest::TempProject project("ScriptSleep");
+		const std::string script = project.WriteFile("Assets/Scripts/Watcher.lua", R"(
+			local Watcher = {}
+			function Watcher:OnUpdate(dt)
+				self.Resting = Scene.FindEntityByName("Resting"):IsSleeping()
+				self.Awake = Scene.FindEntityByName("Awake"):IsSleeping()
+				self.Floor = Scene.FindEntityByName("Floor"):IsSleeping()
+				self.NoBody = self.Entity:IsSleeping() == nil
+				if self.Resting and not self.Woken then
+					-- A velocity wakes it.
+					Scene.FindEntityByName("Resting"):SetLinearVelocity(Vec3(1, 0, 0))
+					self.Woken = true
+					self.AfterWake = Scene.FindEntityByName("Resting"):IsSleeping()
+				end
+			end
+			return Watcher
+		)");
+
+		Scene scene;
+		Entity floor = scene.CreateEntity("Floor");
+		floor.GetTransform().Translation = { 0.0f, -0.5f, 0.0f };
+		floor.AddComponent<RigidBodyComponent>();
+		floor.AddComponent<BoxColliderComponent>().HalfExtents = { 100.0f, 0.5f, 100.0f };
+		for (const auto& [name, allowSleeping, x] : { std::tuple{ "Resting", true, -2.0f }, std::tuple{ "Awake", false, 2.0f } })
+		{
+			Entity box = scene.CreateEntity(name);
+			box.GetTransform().Translation = { x, 0.5f, 0.0f };
+			auto& rigidBody = box.AddComponent<RigidBodyComponent>();
+			rigidBody.Type = RigidBodyType::Dynamic;
+			rigidBody.AllowSleeping = allowSleeping;
+			box.AddComponent<BoxColliderComponent>();
+		}
+		Entity watcher = AddScripted(scene, "Watcher", script);
+
+		scene.OnRuntimeStart();
+		// Half a second at rest puts a body to sleep.
+		for (int i = 0; i < 90; i++)
+			scene.OnUpdate(Step);
+		CHECK(Field(scene, watcher, "Woken") == true);
+		CHECK(Field(scene, watcher, "AfterWake") == false);
+		CHECK(Field(scene, watcher, "Awake") == false);
+		CHECK(Field(scene, watcher, "Floor") == false);
+		CHECK(Field(scene, watcher, "NoBody") == true);
 		CHECK(scene.GetScriptEngine()->GetErrors().empty());
 		scene.OnRuntimeStop();
 	}

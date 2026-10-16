@@ -224,8 +224,10 @@ namespace Basalt {
 		// Borrowed pointers must not survive mutations of the registry's BodyRecord pool.
 		BodyRecord* FindBody(Entity entity) const;
 		BodyRecord* FindBody(UUID uuid) const;
-		// A dynamic or kinematic body Jolt has put to sleep (static bodies are always inactive in Jolt, not asleep).
-		bool IsSleeping(UUID uuid) const;
+		// Whether a (possibly null) record is a dynamic or kinematic body Jolt has put to sleep; static bodies are always
+		// inactive in Jolt, which is not sleep. Look records up by Entity where the scene matters: the play copy shares the
+		// edit scene's UUIDs.
+		bool IsSleeping(const BodyRecord* record) const;
 		BodyRecord* MutableBody(Entity entity, const char* call);
 		auto BodyView() const
 		{

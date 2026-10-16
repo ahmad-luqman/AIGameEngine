@@ -205,8 +205,9 @@ namespace Basalt {
 		bool Continuous = false;
 		// Lets the physics engine stop simulating the body after it has barely moved for about half a second; it
 		// wakes when something touches, pushes or moves it. Turn it off for bodies that must never stall, such as a
-		// ball slowly turning around on a slope (sleeping freezes it there); what rests on or is jointed to such a body
-		// stays awake with it. Only affects dynamic and kinematic bodies that are not triggers (triggers never sleep).
+		// ball slowly turning around on a slope (sleeping freezes it there); dynamic bodies resting on or jointed to such
+		// a dynamic body stay awake with it (Jolt does not link kinematic bodies into islands). Only affects dynamic and
+		// kinematic bodies that are not triggers (triggers never sleep).
 		bool AllowSleeping = true;
 	};
 

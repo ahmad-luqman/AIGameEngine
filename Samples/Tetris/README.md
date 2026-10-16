@@ -6,7 +6,8 @@ A complete Tetris built only with Basalt's automation API and Lua — the way an
 - `Assets/Scripts/Tetris.lua` — the whole game (7-bag randomizer, wall kicks, line clears, levels). Cleared
   rows burst into sparks (a world-space particle emitter moved to each row) and shake the camera: trauma that
   decays over time, driven by triangle waves rather than `Math.Random`, so the shake never changes which pieces
-  come next, and moves the camera identically on every platform (no `math.sin`), so replays stay portable.
+  come next, and moves the camera identically on every platform (no `math.sin`), so the camera position, and with
+  it a replay's state hash, does not depend on the platform. `test_game.json` pins the shaken camera position.
 - `build_scene.json` — the batch that created `Assets/Scenes/Tetris.bscene`:
   `build/bin/basalt --project Samples/Tetris batch Samples/Tetris/build_scene.json`
 - `test_game.json` — headless gameplay checks (run by ctest as `SampleTetris`).

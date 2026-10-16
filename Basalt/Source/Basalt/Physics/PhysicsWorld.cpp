@@ -276,7 +276,7 @@ namespace Basalt {
 		settings.mGravityFactor = rigidBody.GravityFactor;
 		settings.mIsSensor = rigidBody.IsTrigger;
 		settings.mAllowSleeping = rigidBody.AllowSleeping;
-		// Static bodies never move and Jolt never puts a sensor to sleep, so turning sleeping off there is a mistake.
+		// Static bodies never sleep or wake and Jolt never puts a sensor to sleep, so turning sleeping off there has no effect.
 		if (!rigidBody.AllowSleeping && (motionType == JPH::EMotionType::Static || rigidBody.IsTrigger))
 			warnings.emplace_back("AllowSleeping only affects dynamic and kinematic bodies that are not triggers");
 		// Kinematic triggers must also see static bodies; kinematic bodies are otherwise skipped vs static.
@@ -632,15 +632,15 @@ namespace Basalt {
 		return FromJolt(m_Impl->System->GetBodyInterface().GetAngularVelocity(body->ID));
 	}
 
-	bool PhysicsWorld::Impl::IsSleeping(UUID uuid) const
+	bool PhysicsWorld::Impl::IsSleeping(const BodyRecord* record) const
 	{
-		const BodyRecord* record = FindBody(uuid);
 		return record != nullptr && record->Type != RigidBodyType::Static && !System->GetBodyInterface().IsActive(record->ID);
 	}
 
 	bool PhysicsWorld::IsBodySleeping(Entity entity) const
 	{
-		return m_Impl->Owns(entity) && m_Impl->IsSleeping(entity.GetUUID());
+		// FindBody(Entity) only answers for this world's scene.
+		return m_Impl->IsSleeping(m_Impl->FindBody(entity));
 	}
 
 	const PhysicsLayers& PhysicsWorld::GetLayers() const

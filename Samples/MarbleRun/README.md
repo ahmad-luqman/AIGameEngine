@@ -45,10 +45,11 @@ automation API's assertions rather than Lua:
 - `input.mouse` clicks the Drop button, the middle of the speed slider and the gate checkbox. Headless, the
   canvas is 1920×1080 whatever the project's window size and mouse positions are canvas units (`ui.layout`
   lists the rects); `assert.component` checks what each click changed.
-- The gate is held shut for 16 seconds, so the marbles queue at rest behind it. The hold is checked during the
-  gate cycle's open phase (the cycle is 1 s open, 1.5 s closed, so the step counts are tied to `GateOpenTime` and
-  `GateClosedTime`) through the joint's motor target and the gate's position, and a `lua.exec` checks that no
-  queued marble fell asleep (`e:IsSleeping()`). After the release, the gate is checked open and raised.
+- The gate is held shut for about 16.5 seconds, so the marbles queue at rest behind it. The hold is checked during
+  the gate cycle's open phase (the cycle is 1 s open, 1.5 s closed, so the step counts are tied to `GateOpenTime`
+  and `GateClosedTime`; a `lua.exec` confirms the phase, so a timing change fails loudly instead of passing for the
+  wrong reason) through the joint's motor target and the gate's position, and a `lua.exec` checks that no queued
+  marble fell asleep (`e:IsSleeping()`). After the release, the gate is checked open and raised.
 - `events.poll` with `expect` checks the contacts that matter: a marble landed on the seesaw, entered the
   checkpoint (twice: each pattern needs an event of its own), rolled on the last ramp and hit the gate, and
   later entered the goal. Patterns name a contact's bodies in either order. A second subscription collects log
@@ -56,4 +57,5 @@ automation API's assertions rather than Lua:
 - `scene.diff` against a snapshot taken before play shows the spinner turned (with `expectError`), and that
   stopping restored the edit scene exactly.
 - A few `lua.exec` steps cover what no assertion reaches: the seesaw tipped (the Director records its lowest
-  angle), the sensors' counters (how many particles the bursts emitted) and that the hum is still playing.
+  angle), the sensors' counters (how many particles the bursts emitted), that the hum is still playing, and that a
+  removed marble entering the goal again (or the kill floor) in the same frame counts once.

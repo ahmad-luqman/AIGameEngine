@@ -105,8 +105,9 @@ Agents can follow a running game and check it without polling or screenshots:
   match within `tolerance`, default 0.0001). Contacts list their bodies in entity-ID order, so a collision pattern
   that names `a` or `b` also matches the contact seen from the other body (`a` and `b` swapped, and `normal`,
   which points from `b` toward `a`, reversed): `{"event": "collision", "type": "triggerEnter", "a": {"name":
-  "Goal"}}` asks for a triggerEnter in which Goal is either body. A failed `expect` says how the closest event of
-  the pattern's kind differs from it.
+  "Goal"}}` asks for a triggerEnter in which Goal is either body. A pattern names at least one field, and its
+  `event`, if given, must be an event type. When no event matches a pattern, the failure also says how the closest
+  queued event of the pattern's kind differs from it.
   `pause` and `resume` come from the editor's Pause button; no command pauses.
 - `scene.snapshot {name}` keeps the current state in memory; `scene.diff {from, to?}` compares two snapshots or
   `.bscene` files (omit `to` to compare with the current scene) by entity ID and lists every changed field, and

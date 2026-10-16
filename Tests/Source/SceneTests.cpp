@@ -1675,6 +1675,42 @@ TEST_SUITE("Scene diff")
 		MatchJsonSubset(actual, { { "Color", { 1.0, 0.6, 0.25 } }, { "Intensity", 2.0 }, { "Missing", 1 }, { "Nested", { { "Inner", "b" } } }, { "Extra", { true } } }, 0.0, "Light", mismatches);
 		CHECK(mismatches == std::vector<std::string>{ "Light.Color is [1.0,0.5,0.25], expected [1.0,0.6,0.25]", "Light.Extra is true, expected [true]", "Light.Missing is missing", "Light.Nested.Inner is \"a\", expected \"b\"" });
 	}
+
+	TEST_CASE("JsonContainsSubset agrees with MatchJsonSubset")
+	{
+		using json = nlohmann::json;
+		const json id = json(std::numeric_limits<uint64_t>::max() - 1);
+		struct Case
+		{
+			json Actual, Expected;
+			double Tolerance;
+			bool Contains;
+		};
+		const std::vector<Case> cases = {
+			{ { { "a", 1 }, { "b", 2 } }, { { "a", 1 } }, 0.0, true },                                   // extra keys
+			{ { { "a", 1 } }, { { "b", 1 } }, 0.0, false },                                              // a missing key
+			{ { 1, 2 }, { 1 }, 0.0, false },                                                             // arrays of different length
+			{ { { "a", 1 } }, 1, 0.0, false },                                                           // object against a scalar
+			{ json::array({ { { "x", 1 }, { "y", 2 } } }), json::array({ { { "x", 1 } } }), 0.0, true }, // objects in arrays match as subsets
+			{ 5, json::object(), 0.0, false },                                                           // {} against a non-object
+			{ json::object(), json::object(), 0.0, true },
+			{ id, id, 0.0, true },                                            // 64-bit integers exactly
+			{ id, json(std::numeric_limits<uint64_t>::max()), 1.0e9, false }, // ...whatever the tolerance
+			{ 1.0, 1.05, 0.1, true },                                         // floats within the tolerance
+			{ 1, 1.05, 0.0, false },
+			{ nullptr, nullptr, 0.0, true },
+			{ "1", 1, 0.0, false },                                                       // string against a number
+			{ { { "n", { 0.0, -1.0, 0.0 } } }, { { "n", { 0, -1, 0 } } }, 1.0e-4, true }, // integers in a pattern against floats
+		};
+		for (const Case& test : cases)
+		{
+			INFO(test.Actual.dump() << " contains " << test.Expected.dump());
+			std::vector<std::string> mismatches;
+			MatchJsonSubset(test.Actual, test.Expected, test.Tolerance, "", mismatches);
+			CHECK(mismatches.empty() == test.Contains);
+			CHECK(JsonContainsSubset(test.Actual, test.Expected, test.Tolerance) == test.Contains);
+		}
+	}
 }
 
 TEST_SUITE("Serialization")
