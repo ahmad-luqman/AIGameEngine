@@ -2,7 +2,7 @@
 --
 -- Controls: Left/Right move, Up rotate, Down soft drop, Space hard drop, R restart.
 -- The board is a 10x20 grid of cube entities created at start; cells are shown or hidden and recolored
--- as the game state changes. Game state is exposed as fields (Score, Lines, Level, GameOver) so it can be
+-- as the game state changes. Game state is exposed as fields (Score, Lines, Level, GameOver, Trauma) so it can be
 -- inspected and tested through the automation API. Cleared lines burst into particles and shake the camera.
 
 local Tetris = {}
@@ -14,7 +14,7 @@ Tetris.Properties = {
 	StartInterval = 0.8,  -- seconds per row at level 1
 	RepeatDelay = 0.17,   -- held-key auto-repeat delay
 	RepeatRate = 0.05,
-	ShakeStrength = 0.4,  -- camera offset (world units) at full trauma
+	ShakeStrength = 0.4,  -- largest horizontal camera offset (world units) at full trauma
 	ShakeDecay = 1.0,     -- trauma lost per second
 	BurstParticles = 60,  -- particles per cleared line
 }
@@ -141,9 +141,16 @@ function Tetris:BurstRow(y)
 	self.LineBurst:EmitParticles(self.BurstParticles)
 end
 
+-- A triangle wave in -1..1 with period 1. Only arithmetic and floor, which give the same result on every platform
+-- (math.sin may differ in the last bit), so a shake moves the camera, whose transform is part of the replay hash,
+-- identically everywhere.
+local function Wave(x)
+	return 4 * math.abs(x - math.floor(x) - 0.5) - 1
+end
+
 -- Offsets the camera from its rest position by the current trauma (squared, so small shakes stay subtle) and
--- lets the trauma decay. Driven by sines of the shake's own clock, never by Math.Random: the piece bag draws
--- from that generator, and a shake must not change which pieces come next (replays depend on it).
+-- lets the trauma decay. Driven by waves of the shake's own clock, never by Math.Random or Math.RandomInt: the
+-- piece bag draws from that generator, and a shake must not change which pieces come next (replays depend on it).
 function Tetris:OnLateUpdate(dt)
 	if self.Trauma <= 0 then return end
 	self.Trauma = math.max(0, self.Trauma - self.ShakeDecay * dt)
@@ -152,15 +159,16 @@ function Tetris:OnLateUpdate(dt)
 		return
 	end
 	self.ShakeTime = self.ShakeTime + dt
+	if not self.Camera then return end
 	local amount = self.ShakeStrength * self.Trauma * self.Trauma
-	local offset = Vec3(math.sin(self.ShakeTime * 47) * amount, math.sin(self.ShakeTime * 61 + 1.3) * amount * 0.8, 0)
+	local offset = Vec3(Wave(self.ShakeTime * 7.3) * amount, Wave(self.ShakeTime * 9.7 + 0.25) * amount * 0.8, 0)
 	self.Camera.Translation = self.CameraRest + offset
 end
 
 function Tetris:StopShake()
 	self.Trauma = 0
 	self.ShakeTime = 0
-	self.Camera.Translation = self.CameraRest
+	if self.Camera then self.Camera.Translation = self.CameraRest end
 end
 
 function Tetris:Move(dx, dy)
@@ -244,11 +252,13 @@ function Tetris:OnCreate()
 		Blend = "Additive", SimulationSpace = "World" })
 	self.LineBurst:SetParent(self.Entity)
 
-	-- The camera shakes around where the scene placed it.
-	self.Camera = Scene.FindEntityByName("Camera")
-	self.CameraRest = self.Camera.Translation
-	self.Trauma = 0
-	self.ShakeTime = 0
+	-- The camera shakes around where the scene placed it; without one the game plays on, unshaken.
+	self.Camera = Scene.GetPrimaryCamera()
+	if self.Camera then
+		self.CameraRest = self.Camera.Translation
+	else
+		Log.Warn("Tetris: no primary camera, so cleared lines do not shake the screen")
+	end
 
 	self:Reset()
 	self:Render()

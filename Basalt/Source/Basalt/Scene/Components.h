@@ -203,9 +203,10 @@ namespace Basalt {
 		// Sweeps the body between steps so fast objects (projectiles) do not tunnel through thin geometry.
 		// Costs more per step; only affects dynamic bodies that are not triggers.
 		bool Continuous = false;
-		// Lets the physics engine stop simulating the body after it has barely moved for a while; it wakes when
-		// something touches or pushes it. Turn it off for bodies that must never stall, such as a ball slowly
-		// turning around on a slope (sleeping freezes it there). Only affects dynamic and kinematic bodies.
+		// Lets the physics engine stop simulating the body after it has barely moved for about half a second; it
+		// wakes when something touches, pushes or moves it. Turn it off for bodies that must never stall, such as a
+		// ball slowly turning around on a slope (sleeping freezes it there); what rests on or is jointed to such a body
+		// stays awake with it. Only affects dynamic and kinematic bodies that are not triggers (triggers never sleep).
 		bool AllowSleeping = true;
 	};
 

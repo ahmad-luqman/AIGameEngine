@@ -261,7 +261,8 @@ add_test(NAME SampleTetris
 	COMMAND BasaltCLI --project "${PROJECT_SOURCE_DIR}/Samples/Tetris" batch "${PROJECT_SOURCE_DIR}/Samples/Tetris/test_game.json")
 add_test(NAME SampleJoints
 	COMMAND BasaltCLI --project "${PROJECT_SOURCE_DIR}/Samples/Joints" batch "${PROJECT_SOURCE_DIR}/Samples/Joints/test_game.json")
-# Its checks are written as assert.*, events.poll and scene.diff steps.
+# Marble Run's gameplay checks are mostly automation assertions (assert.*, events.poll expect, scene.diff); see
+# Samples/MarbleRun/README.md.
 add_test(NAME SampleMarbleRun
 	COMMAND BasaltCLI --project "${PROJECT_SOURCE_DIR}/Samples/MarbleRun" batch "${PROJECT_SOURCE_DIR}/Samples/MarbleRun/test_game.json")
 # Determinism: a recorded session must replay to the identical state (same machine), and the committed

@@ -283,15 +283,28 @@ TEST_SUITE("Automation")
 		AutomationSession session;
 		Run(registry, session, "scene.new", { { "empty", true } });
 		AddFallingBall(*session.GetEditScene());
+		// A successful poll takes the events, so each one below gets a subscription of its own; failing polls share one.
 		const json types = { "collision", "playState" };
 		const uint64_t raw = Subscribe(registry, session, types);
-		const uint64_t listed = Subscribe(registry, session, types);
-		const uint64_t swapped = Subscribe(registry, session, types);
-		const uint64_t unswappedNormal = Subscribe(registry, session, types);
-		const uint64_t missing = Subscribe(registry, session, types);
+		std::vector<uint64_t> fresh;
+		fresh.reserve(7);
+		for (int i = 0; i < 7; i++)
+			fresh.push_back(Subscribe(registry, session, types));
+		const uint64_t failing = Subscribe(registry, session, types);
 		Run(registry, session, "play.start");
 		Run(registry, session, "play.step", { { "frames", 150 } });
 		Run(registry, session, "play.stop");
+		auto passes = [&](const json& params) {
+			json request = params;
+			request["subscription"] = fresh.back();
+			fresh.pop_back();
+			return Run(registry, session, "events.poll", request);
+		};
+		auto fails = [&](const json& params) {
+			json request = params;
+			request["subscription"] = failing;
+			return RunError(registry, session, "events.poll", request);
+		};
 
 		json landing;
 		const json rawEvents = Poll(registry, session, raw)["events"];
@@ -302,37 +315,70 @@ TEST_SUITE("Automation")
 		}
 		REQUIRE(landing.is_object());
 		const json& normal = landing["normal"];
+		// The ball lands on the ground: the normal is vertical, so reversing it (below) changes it.
 		REQUIRE(std::abs(normal[1].get<double>()) > 0.5);
+		const json landed = { { "event", "collision" }, { "type", "collisionBegin" } };
+		auto withNormal = [&](const json& pattern, double sign, double offset) {
+			json result = pattern;
+			result["normal"] = json::array();
+			for (const json& component : normal)
+				result["normal"].push_back(sign * component.get<double>() + offset);
+			return result;
+		};
 
-		// Patterns name a subset of the fields; floats match within a tolerance.
-		const json asListed = { { "event", "collision" }, { "type", "collisionBegin" }, { "a", { { "name", landing["a"]["name"] } } }, { "b", { { "name", landing["b"]["name"] } } }, { "normal", normal } };
+		// Patterns name a subset of the fields.
+		json asListed = landed;
+		asListed["a"] = { { "name", landing["a"]["name"] } };
+		asListed["b"] = { { "name", landing["b"]["name"] } };
 		const json stopped = { { "event", "playState" }, { "state", "stop" } };
-		const json polled = Run(registry, session, "events.poll", { { "subscription", listed }, { "expect", { asListed, stopped } } });
-		CHECK(polled["events"].size() > 2);
+		const json polled = passes({ { "expect", { withNormal(asListed, 1.0, 0.0), stopped } } });
+		CHECK(polled["events"].size() == rawEvents.size());
 
-		// The bodies swapped: the normal (from a to b) must be reversed too.
-		json reversedNormal = json::array();
-		for (const json& component : normal)
-			reversedNormal.push_back(-component.get<double>());
-		json bodiesSwapped = { { "event", "collision" }, { "type", "collisionBegin" }, { "a", { { "name", landing["b"]["name"] } } }, { "b", { { "name", landing["a"]["name"] } } }, { "normal", reversedNormal } };
-		Run(registry, session, "events.poll", { { "subscription", swapped }, { "expect", { bodiesSwapped } } });
-		bodiesSwapped["normal"] = normal;
-		CHECK(Contains(RunError(registry, session, "events.poll", { { "subscription", unswappedNormal }, { "expect", { bodiesSwapped } } }), "assertion failed: no event matches"));
+		// The bodies swapped: the normal (which points from b toward a) must be reversed too.
+		json swapped = landed;
+		swapped["a"] = { { "name", landing["b"]["name"] } };
+		swapped["b"] = { { "name", landing["a"]["name"] } };
+		passes({ { "expect", { withNormal(swapped, -1.0, 0.0) } } });
+		CHECK(Contains(fails({ { "expect", { withNormal(swapped, 1.0, 0.0) } } }), "assertion failed: no event matches"));
+		// IDs (64-bit, beyond a double's precision) compare exactly, in either order.
+		json byId = landed;
+		byId["b"] = { { "id", landing["a"]["id"] } };
+		passes({ { "expect", { byId } } });
+		byId["b"]["id"] = landing["a"]["id"].get<uint64_t>() + 1;
+		CHECK(Contains(fails({ { "expect", { byId } } }), "assertion failed: no event matches"));
 
-		// A pattern nothing matches fails, names the pattern and keeps the events.
+		// A pattern naming neither body keeps the published orientation: only the published normal matches.
+		passes({ { "expect", { withNormal(landed, 1.0, 0.0) } } });
+		CHECK(Contains(fails({ { "expect", { withNormal(landed, -1.0, 0.0) } } }), "assertion failed: no event matches"));
+
+		// Floats match within 'tolerance' (default 0.0001).
+		passes({ { "expect", { withNormal(asListed, 1.0, 5.0e-5) } } });
+		CHECK(Contains(fails({ { "expect", { withNormal(asListed, 1.0, 1.0e-3) } } }), "assertion failed: no event matches"));
+		passes({ { "expect", { withNormal(asListed, 1.0, 1.0e-3) } }, { "tolerance", 0.01 } });
+
+		// Each pattern needs an event of its own: two playState patterns take the play and the stop event, but the one
+		// stop event cannot satisfy the same pattern twice.
+		const json playState = { { "event", "playState" } };
+		passes({ { "expect", { playState, playState } } });
+		CHECK(Contains(fails({ { "expect", { stopped, stopped } } }), "assertion failed: " + stopped.dump() + " needs an event of its own"));
+
+		// A pattern nothing matches fails, names the pattern, says how the closest event of its kind differs and keeps
+		// the events.
 		const json goal = { { "event", "collision" }, { "type", "triggerEnter" }, { "a", { { "name", "Goal" } } } };
-		const std::string error = RunError(registry, session, "events.poll", { { "subscription", missing }, { "expect", { stopped, goal } } });
+		const std::string error = fails({ { "expect", { stopped, goal } } });
 		CHECK(Contains(error, "assertion failed: no event matches " + goal.dump() + " among the "));
-		CHECK(Contains(error, "they stay queued"));
+		CHECK(Contains(error, "they stay queued; closest: a.name is "));
 		// Only the first 'max' events count: the stop event comes last.
-		CHECK(Contains(RunError(registry, session, "events.poll", { { "subscription", missing }, { "max", 1 }, { "expect", { stopped } } }), "no event matches " + stopped.dump() + " among the first 1 queued (1 playState; 0 dropped)"));
+		CHECK(Contains(fails({ { "max", 1 }, { "expect", { stopped } } }), "no event matches " + stopped.dump() + " among the first 1 queued (1 playState; 0 dropped); they stay queued; closest: state is \"play\", expected \"stop\""));
 		// A missing type is reported before a pattern.
-		CHECK(Contains(RunError(registry, session, "events.poll", { { "subscription", missing }, { "assertTypes", { "log" } }, { "expect", { goal } } }), "assertion failed: no log event among the "));
-		// Patterns are objects, at least one.
-		CHECK(Contains(RunError(registry, session, "events.poll", { { "subscription", missing }, { "expect", { "triggerEnter" } } }), "expect[0]"));
-		CHECK(Contains(RunError(registry, session, "events.poll", { { "subscription", missing }, { "expect", json::array() } }), "expect"));
-		const json all = Poll(registry, session, missing);
-		CHECK(all["events"].size() == polled["events"].size());
+		CHECK(Contains(fails({ { "assertTypes", { "log" } }, { "expect", { goal } } }), "assertion failed: no log event among the "));
+		// Patterns are objects that name a field, 1 to 64 of them.
+		CHECK(fails({ { "expect", { "triggerEnter" } } }) == "parameter 'expect[0]' must be an object");
+		CHECK(fails({ { "expect", { stopped, json::object() } } }) == "parameter 'expect[1]' names no field");
+		CHECK(Contains(fails({ { "expect", json::array() } }), "parameter 'expect'"));
+		CHECK(Contains(fails({ { "expect", json(65, stopped) } }), "parameter 'expect'"));
+		const json all = Poll(registry, session, failing);
+		CHECK(all["events"].size() == rawEvents.size());
 		CHECK(all["events"].back()["state"] == "stop");
 	}
 
@@ -964,6 +1010,10 @@ TEST_SUITE("Automation")
 					received++;
 			}
 		}
+		// On a busy machine the loop can finish before the loggers are scheduled at all (seen on CI's macOS Release
+		// runner): let them publish before stopping them, so the checks below always have lines to account for.
+		while (published.load() < 2)
+			std::this_thread::yield();
 		running = false;
 		for (std::thread& logger : loggers)
 			logger.join();

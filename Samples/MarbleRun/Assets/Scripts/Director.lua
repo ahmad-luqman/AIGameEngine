@@ -21,20 +21,29 @@ local Colors = {
 	{ 0.65, 0.20, 0.80, 1 }
 }
 
+-- The course pieces the Director drives; a missing one is a broken scene, reported by name.
+local function Require(name)
+	return Scene.FindEntityByName(name) or error("MarbleRun: the scene has no entity named '" .. name .. "'")
+end
+
 function Director:OnCreate()
 	self.Dropped = 0
 	self.Scored = 0
 	self.Lost = 0
-	self.Checkpoints = 0
 	self.DropTimer = self.FirstDrop
 	self.GateTimer = 0
 	self.GateOpen = false
 	self.HoldGate = false
-	self.Spawn = Scene.FindEntityByName("Spawn")
-	self.Gate = Scene.FindEntityByName("Gate")
-	self.Spinner = Scene.FindEntityByName("Spinner")
-	self.Scoreboard = Scene.FindEntityByName("Scoreboard")
-	self.Progress = Scene.FindEntityByName("Progress")
+	-- nil, not false, so the first update always applies the gate's state to its joint.
+	self.GateShownOpen = nil
+	-- The lowest seesaw angle so far (degrees; it rests at +10 and tips toward -10 under a marble), read by the test.
+	self.SeesawLowest = 90
+	self.Spawn = Require("Spawn")
+	self.Gate = Require("Gate")
+	self.Spinner = Require("Spinner")
+	self.Seesaw = Require("Seesaw")
+	self.Scoreboard = Require("Scoreboard")
+	self.Progress = Require("Progress")
 	-- The sensors report through events, so they need not know who keeps score.
 	Events.On("MarbleScored", function()
 		self.Scored = self.Scored + 1
@@ -46,28 +55,28 @@ function Director:OnCreate()
 		Log.Warn("MarbleRun: lost a marble")
 		self:UpdateHud()
 	end)
-	Events.On("CheckpointPassed", function() self.Checkpoints = self.Checkpoints + 1 end)
 	self:UpdateHud()
 end
 
--- Releases the next marble, if any are left. Returns whether one was released.
+-- Releases the next marble, if any are left.
 function Director:Drop()
-	if self.Dropped >= self.MarbleCount then return false end
-	self.Dropped = self.Dropped + 1
+	if self.Dropped >= self.MarbleCount then return end
 	local marble = Scene.Instantiate(MarblePrefab, self.Spawn.WorldPosition)
+	self.Dropped = self.Dropped + 1
 	marble:SetComponent("Material", { AlbedoColor = Colors[(self.Dropped - 1) % #Colors + 1] })
 	self.DropTimer = self.DropInterval
 	self:UpdateHud()
-	return true
 end
 
 function Director:IsFinished()
-	return self.Scored + self.Lost == self.MarbleCount
+	return self.Scored + self.Lost >= self.MarbleCount
 end
 
 function Director:OnUpdate(dt)
-	self.DropTimer = self.DropTimer - dt
-	if self.DropTimer <= 0 then self:Drop() end
+	if self.Dropped < self.MarbleCount then
+		self.DropTimer = self.DropTimer - dt
+		if self.DropTimer <= 0 then self:Drop() end
+	end
 
 	-- The gate opens and closes on a cycle, unless the HUD checkbox holds it shut.
 	self.GateTimer = self.GateTimer - dt
@@ -80,13 +89,16 @@ function Director:OnUpdate(dt)
 		self.GateShownOpen = open
 		self.Gate:SetComponent("Joint", { MotorTarget = open and self.GateLift or 0 })
 	end
+
+	local tilt = self.Seesaw:GetJointPosition()
+	if tilt then self.SeesawLowest = math.min(self.SeesawLowest, tilt) end
 end
 
 function Director:UpdateHud()
 	local text = string.format("Scored %d / %d   Lost %d", self.Scored, self.MarbleCount, self.Lost)
 	if self:IsFinished() then text = text .. "   Done!" end
 	self.Scoreboard:SetComponent("UIText", { Text = text })
-	self.Progress:SetComponent("UISlider", { Value = self.Scored / self.MarbleCount })
+	self.Progress:SetComponent("UISlider", { Value = math.min(self.Scored / math.max(self.MarbleCount, 1), 1) })
 end
 
 -- HUD callbacks.

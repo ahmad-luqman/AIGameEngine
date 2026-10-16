@@ -485,6 +485,7 @@ TEST_SUITE("Serialization")
 		entity.GetComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
 		entity.GetComponent<RigidBodyComponent>().Layer = "Debris";
 		entity.GetComponent<RigidBodyComponent>().Continuous = true;
+		entity.GetComponent<RigidBodyComponent>().AllowSleeping = false;
 		entity.GetComponent<MeshColliderComponent>() = { .Mesh = "Assets/Models/Level.glb", .MeshIndex = 2, .Convex = true, .OverrideMaterial = true, .Friction = 0.25f, .Restitution = 0.75f };
 		entity.GetComponent<BoxColliderComponent>() = { .HalfExtents = { 1.0f, 2.0f, 3.0f }, .OverrideMaterial = true, .Friction = 0.125f, .Restitution = 0.5f };
 		entity.GetComponent<SphereColliderComponent>().Friction = 0.9f;

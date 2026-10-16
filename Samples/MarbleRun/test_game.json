@@ -5,7 +5,7 @@
 	{ "id": "snapshot-edit", "command": "scene.snapshot", "params": { "name": "edit" } },
 	{ "id": "saved-scene-matches", "command": "scene.diff", "params": { "from": "Assets/Scenes/MarbleRun.bscene", "to": "edit", "assertEqual": true } },
 
-	{ "id": "course-pieces", "command": "assert.entity_exists", "params": { "entity": "Goal", "count": 1 } },
+	{ "id": "one-goal", "command": "assert.entity_exists", "params": { "entity": "Goal", "count": 1 } },
 	{ "id": "no-marble-yet", "command": "assert.entity_exists", "params": { "entity": "Marble", "exists": false } },
 	{ "id": "goal-is-trigger", "command": "assert.component", "params": { "entity": "Goal", "component": "RigidBody", "fields": { "IsTrigger": true } } },
 	{ "id": "spinner-motor", "command": "assert.component", "params": { "entity": "Spinner", "component": "Joint", "fields": { "Type": "Hinge", "MotorMode": "Velocity", "MotorTarget": 120 } } },
@@ -21,6 +21,7 @@
 	{ "id": "drop-release", "command": "input.mouse", "params": { "button": "Left", "down": false } },
 	{ "id": "drop-click-frame", "command": "play.step", "params": { "frames": 1, "assertNoErrors": true } },
 	{ "id": "one-marble", "command": "assert.entity_exists", "params": { "entity": "Marble", "count": 1 } },
+	{ "id": "marble-never-sleeps", "command": "assert.component", "params": { "entity": "Marble", "component": "RigidBody", "fields": { "Type": "Dynamic", "AllowSleeping": false } } },
 	{ "id": "hud-start", "command": "assert.component", "params": { "entity": "Scoreboard", "component": "UIText", "fields": { "Text": "Scored 0 / 5   Lost 0" } } },
 
 	{ "id": "speed-press", "command": "input.mouse", "params": { "position": [1636, 312], "button": "Left", "down": true } },
@@ -39,28 +40,33 @@
 	{ "id": "hold-checked", "command": "assert.component", "params": { "entity": "HoldGate", "component": "UICheckbox", "fields": { "Checked": true } } },
 	{ "id": "run-to-open-phase", "command": "play.step", "params": { "frames": 328, "assertNoErrors": true } },
 	{ "id": "gate-held-shut", "command": "assert.component", "params": { "entity": "Gate", "component": "Joint", "fields": { "MotorTarget": 0 } } },
+	{ "id": "gate-down", "command": "assert.component", "params": { "entity": "Gate", "component": "Transform", "fields": { "Translation": [2.5, 4.5629, 0] }, "tolerance": 0.05 } },
+	{ "id": "marbles-queue", "command": "play.step", "params": { "frames": 660, "assertNoErrors": true } },
+	{ "id": "queued-marbles-awake", "command": "lua.exec", "params": { "code": "local resting = 0; for _, marble in ipairs(Scene.FindEntitiesByName('Marble')) do assert(not marble:IsSleeping(), 'a marble fell asleep at ' .. tostring(marble.Translation)); if marble.Translation.x > 1 and marble.Translation.x < 2.5 and marble:GetLinearVelocity():Length() < 0.5 then resting = resting + 1 end end; assert(resting >= 2, 'fewer than 2 marbles wait at the gate: ' .. resting); return resting .. ' marbles wait at the gate'" } },
 	{ "id": "unhold-press", "command": "input.mouse", "params": { "position": [1560, 364], "button": "Left", "down": true } },
 	{ "id": "unhold-press-frame", "command": "play.step", "params": { "frames": 1, "assertNoErrors": true } },
 	{ "id": "unhold-release", "command": "input.mouse", "params": { "button": "Left", "down": false } },
 	{ "id": "unhold-release-frame", "command": "play.step", "params": { "frames": 1, "assertNoErrors": true } },
-	{ "id": "run-to-next-open-phase", "command": "play.step", "params": { "frames": 148, "assertNoErrors": true } },
+	{ "id": "run-to-next-open-phase", "command": "play.step", "params": { "frames": 88, "assertNoErrors": true } },
 	{ "id": "gate-opens-again", "command": "assert.component", "params": { "entity": "Gate", "component": "Joint", "fields": { "MotorTarget": 1 } } },
+	{ "id": "gate-up", "command": "assert.component", "params": { "entity": "Gate", "component": "Transform", "fields": { "Translation": [2.5, 5.5629, 0] }, "tolerance": 0.15 } },
 
 	{ "id": "course-events", "command": "events.poll", "params": { "subscription": 1, "expect": [
 		{ "event": "playState", "state": "play" },
 		{ "event": "collision", "type": "collisionBegin", "a": { "name": "Seesaw" }, "b": { "name": "Marble" } },
 		{ "event": "collision", "type": "triggerEnter", "a": { "name": "Checkpoint" }, "b": { "name": "Marble" } },
-		{ "event": "collision", "type": "collisionBegin", "a": { "name": "Ramp3Deck" }, "b": { "name": "Marble" } }
+		{ "event": "collision", "type": "triggerEnter", "a": { "name": "Checkpoint" }, "b": { "name": "Marble" } },
+		{ "event": "collision", "type": "collisionBegin", "a": { "name": "Ramp3Deck" }, "b": { "name": "Marble" } },
+		{ "event": "collision", "type": "collisionBegin", "a": { "name": "Gate" }, "b": { "name": "Marble" } }
 	] } },
+	{ "id": "seesaw-tipped", "command": "lua.exec", "params": { "code": "local lowest = Scene.FindEntityByName('Director'):GetScript().SeesawLowest; assert(lowest < -5, 'the seesaw never tipped: ' .. lowest); return lowest" } },
+	{ "id": "drain-log", "command": "events.poll", "params": { "subscription": 2 } },
 
 	{ "id": "run-to-the-end", "command": "play.step", "params": { "frames": 1920, "assertNoErrors": true } },
-	{ "id": "goal-events", "command": "events.poll", "params": { "subscription": 1, "assertTypes": ["collision"], "expect": [
+	{ "id": "goal-events", "command": "events.poll", "params": { "subscription": 1, "expect": [
 		{ "event": "collision", "type": "triggerEnter", "a": { "name": "Goal" }, "b": { "name": "Marble" } }
 	] } },
-	{ "id": "scored-log", "command": "events.poll", "params": { "subscription": 2, "expect": [
-		{ "event": "log", "logger": "APP", "text": "MarbleRun: scored 1" },
-		{ "event": "log", "logger": "APP", "text": "MarbleRun: scored 5" }
-	] } },
+	{ "id": "scored-log", "command": "events.poll", "params": { "subscription": 2, "expect": [{ "event": "log", "logger": "APP", "text": "MarbleRun: scored 5" }] } },
 	{ "id": "hud-done", "command": "assert.component", "params": { "entity": "Scoreboard", "component": "UIText", "fields": { "Text": "Scored 5 / 5   Lost 0   Done!" } } },
 	{ "id": "progress-full", "command": "assert.component", "params": { "entity": "Progress", "component": "UISlider", "fields": { "Value": 1 } } },
 	{ "id": "marbles-consumed", "command": "assert.entity_exists", "params": { "entity": "Marble", "exists": false } },

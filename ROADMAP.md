@@ -9,8 +9,7 @@ automation API, docs, and a code review before committing.
 Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or more.
 
 **Execution.** Work in milestones rather than one item at a time: P0 → particles and UI components →
-P2 editor feel → agent-tested samples (part 1, Marble Run and Tetris polish, has shipped; the remaining samples
-are next). Run each milestone as one long autonomous session at high effort
+P2 editor feel → the remaining agent-tested samples. Run each milestone as one long autonomous session at high effort
 (or with multi-agent workflows), and check quality and token cost before starting the next.
 
 ## Current state (baseline)
@@ -20,8 +19,8 @@ are next). Run each milestone as one long autonomous session at high effort
   creation/destruction/prefabs, an editor, export, and a full automation API (CLI + TCP).
 - CI builds and tests on Windows, Ubuntu and macOS (Debug + Release) — but without a GPU. Rendering has
   only been verified on macOS (Apple M4 Max via MoltenVK) with zero validation errors.
-- 105 unit test cases, a feature test with 320 Lua checks, and Tetris, Joints and Marble Run samples with
-  scripted gameplay tests.
+- Over 600 unit test cases, a feature test with over 500 Lua checks, and Tetris, Joints and Marble Run samples
+  with scripted gameplay tests.
 
 ---
 

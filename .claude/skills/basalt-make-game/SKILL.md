@@ -104,7 +104,8 @@ Write gameplay checks as assertions, so a batch reads as the game's specificatio
   {"command": "scene.diff", "params": {"from": "start", "tolerance": 0.001}}
 ]
 ```
-`events.poll`'s `expect` patterns name the fields an event must have (bodies in either order); `assertTypes`
+`events.poll`'s `expect` patterns name the fields an event must have (a contact's bodies in either order, its
+`normal` then reversed); each pattern needs an event of its own, so list one twice to require two. `assertTypes`
 only checks the kinds. `scene.diff` lists exactly what playing changed (entities added/removed, fields with
 before and after); add `"expectError": "assertion failed"` to a request that must fail. Subscription IDs start at
 1 in each CLI run. `Samples/MarbleRun/test_game.json` is a complete example (it also clicks HUD widgets with

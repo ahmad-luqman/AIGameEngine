@@ -717,6 +717,9 @@ function Driver:OnUpdate(dt)
 		Check("Continuous body stops at a thin wall", Scene.FindEntityByName("Bullet").Translation.x < 15)
 		Check("RigidBody Layer and Continuous fields", Scene.FindEntityByName("GhostBox"):GetComponent("RigidBody").Layer == "Ghost" and Scene.FindEntityByName("Bullet"):GetComponent("RigidBody").Continuous)
 		Check("RigidBody AllowSleeping field", Scene.FindEntityByName("Bullet"):GetComponent("RigidBody").AllowSleeping == false and Scene.FindEntityByName("GhostBox"):GetComponent("RigidBody").AllowSleeping == true)
+		-- The bullet (AllowSleeping false) never sleeps; a static body and an entity without a body never count as asleep.
+		-- PhysicsTests and the Marble Run sample check bodies that do fall asleep.
+		Check("Entity:IsSleeping", not Scene.FindEntityByName("Bullet"):IsSleeping() and not Scene.FindEntityByName("Ground"):IsSleeping() and not self.Entity:IsSleeping())
 		Check("Physics.GetLayers", table.concat(Physics.GetLayers(), ",") == "Default,Ghost,Debris")
 
 		-- 29 particle updates (scripts run before particles each frame): the 20-particle burst and 40/s for
