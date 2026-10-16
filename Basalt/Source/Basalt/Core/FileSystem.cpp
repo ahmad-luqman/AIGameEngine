@@ -13,8 +13,10 @@
 
 #include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <fstream>
 #include <system_error>
+#include <thread>
 
 #if defined(BS_PLATFORM_WINDOWS)
 	#include <windows.h>
@@ -128,6 +130,17 @@ namespace Basalt {
 		}
 
 		std::filesystem::rename(tempPath, path, error);
+#if defined(_WIN32)
+		// Windows refuses to replace a file that another writer is replacing (or a scanner has open) at that moment;
+		// such a conflict passes quickly. A directory in the way never does, so only retry while the target is a file.
+		std::error_code ignored;
+		for (int attempt = 0; error && attempt < 50 && !std::filesystem::is_directory(path, ignored); attempt++)
+		{
+			std::this_thread::sleep_for(std::chrono::milliseconds(2));
+			error.clear();
+			std::filesystem::rename(tempPath, path, error);
+		}
+#endif
 		if (error)
 		{
 			outError = "cannot replace '" + path.string() + "': " + error.message();
