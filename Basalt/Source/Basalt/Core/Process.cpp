@@ -27,12 +27,6 @@ extern char** environ;
 
 namespace Basalt {
 
-	namespace {
-
-		constexpr std::chrono::milliseconds PollInterval{ 5 };
-
-	}
-
 #if defined(BS_PLATFORM_WINDOWS)
 
 	namespace {
@@ -232,6 +226,9 @@ namespace Basalt {
 
 	namespace {
 
+		// How often the parent checks whether the child has exited.
+		constexpr std::chrono::milliseconds PollInterval{ 5 };
+
 		// Closes a descriptor when the scope ends.
 		struct FileDescriptor
 		{
@@ -317,7 +314,7 @@ namespace Basalt {
 				variables.emplace_back(text);
 		}
 		for (const auto& [name, value] : spec.Environment)
-			variables.push_back(name + "=" + value);
+			variables.emplace_back(name).append("=").append(value);
 		std::vector<char*> envp;
 		envp.reserve(variables.size() + 1);
 		for (std::string& variable : variables)

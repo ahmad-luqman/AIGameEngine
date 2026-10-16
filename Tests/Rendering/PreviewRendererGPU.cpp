@@ -8,7 +8,9 @@
 #include <Basalt/Renderer/PreviewRenderer.h>
 
 #include <filesystem>
+#include <optional>
 #include <string>
+#include <utility>
 
 using namespace Basalt;
 
@@ -28,6 +30,17 @@ namespace {
 	int Difference(const Rgb& a, const Rgb& b)
 	{
 		return std::abs(a.R - b.R) + std::abs(a.G - b.G) + std::abs(a.B - b.B);
+	}
+
+	// The preview, or a failed test that reports why it was not made.
+	ThumbnailImage Made(std::optional<ThumbnailImage> image, const std::string& error)
+	{
+		if (!image)
+		{
+			FAIL("no preview: ", error);
+			return {};
+		}
+		return std::move(*image);
 	}
 
 	void Save(const ThumbnailImage& image, const char* name)
@@ -68,52 +81,43 @@ TEST_CASE("Previews frame models, prefabs and materials under the studio lightin
 	DebugDraw::Clear();
 	DebugDraw::Line(glm::vec3(-100.0f), glm::vec3(100.0f), glm::vec4(1.0f, 0.0f, 1.0f, 1.0f));
 
-	const auto model = previews.RenderModel("Assets/Models/TexturedCube.glb", error);
-	REQUIRE_MESSAGE(model, error);
-	CheckFramed(*model, "model");
-	Save(*model, "Model.png");
+	const ThumbnailImage model = Made(previews.RenderModel("Assets/Models/TexturedCube.glb", error), error);
+	CheckFramed(model, "model");
+	Save(model, "Model.png");
 	CHECK(DebugDraw::GetLineCount() == 1);
 
 	// Rendering again gives the same image (no exposure or resource history between previews).
-	const auto again = previews.RenderModel("Assets/Models/TexturedCube.glb", error);
-	REQUIRE(again);
-	CHECK(again->Pixels == model->Pixels);
+	CHECK(Made(previews.RenderModel("Assets/Models/TexturedCube.glb", error), error).Pixels == model.Pixels);
 
 	// A built-in mesh is framed the same way as a model file.
-	const auto sphere = previews.RenderModel("builtin://Sphere", error);
-	REQUIRE(sphere);
-	CheckFramed(*sphere, "builtin sphere");
+	CheckFramed(Made(previews.RenderModel("builtin://Sphere", error), error), "builtin sphere");
 
-	const auto prefab = previews.RenderPrefab("Assets/Prefabs/Projectile.bprefab", error);
-	REQUIRE_MESSAGE(prefab, error);
-	CheckFramed(*prefab, "prefab");
-	Save(*prefab, "Prefab.png");
+	const ThumbnailImage prefab = Made(previews.RenderPrefab("Assets/Prefabs/Projectile.bprefab", error), error);
+	CheckFramed(prefab, "prefab");
+	Save(prefab, "Prefab.png");
 	// The projectile is orange (and so bright it nearly saturates).
-	const Rgb projectile = At(*prefab, prefab->Width / 2, prefab->Height / 2);
+	const Rgb projectile = At(prefab, prefab.Width / 2, prefab.Height / 2);
 	CHECK(projectile.R > projectile.B + 30);
 
 	MaterialComponent red;
 	red.AlbedoColor = { 1.0f, 0.05f, 0.05f, 1.0f };
-	const auto redSphere = previews.RenderMaterial(red, error);
-	REQUIRE_MESSAGE(redSphere, error);
-	CheckFramed(*redSphere, "red material");
-	Save(*redSphere, "MaterialRed.png");
-	const Rgb redCentre = At(*redSphere, redSphere->Width / 2, redSphere->Height / 2);
+	const ThumbnailImage redSphere = Made(previews.RenderMaterial(red, error), error);
+	CheckFramed(redSphere, "red material");
+	Save(redSphere, "MaterialRed.png");
+	const Rgb redCentre = At(redSphere, redSphere.Width / 2, redSphere.Height / 2);
 	CHECK(redCentre.R > 2 * redCentre.G);
 	CHECK(redCentre.R > 2 * redCentre.B);
 
 	// Emission shows on top of the lit surface.
 	MaterialComponent dark;
 	dark.AlbedoColor = { 0.1f, 0.1f, 0.1f, 1.0f };
-	const auto plain = previews.RenderMaterial(dark, error);
-	REQUIRE(plain);
+	const ThumbnailImage plain = Made(previews.RenderMaterial(dark, error), error);
 	MaterialComponent glowing = dark;
 	glowing.EmissiveColor = { 0.1f, 0.8f, 0.1f };
-	const auto glow = previews.RenderMaterial(glowing, error);
-	REQUIRE(glow);
-	Save(*glow, "MaterialEmissive.png");
-	const Rgb plainCentre = At(*plain, plain->Width / 2, plain->Height / 2);
-	const Rgb glowCentre = At(*glow, glow->Width / 2, glow->Height / 2);
+	const ThumbnailImage glow = Made(previews.RenderMaterial(glowing, error), error);
+	Save(glow, "MaterialEmissive.png");
+	const Rgb plainCentre = At(plain, plain.Width / 2, plain.Height / 2);
+	const Rgb glowCentre = At(glow, glow.Width / 2, glow.Height / 2);
 	CHECK(glowCentre.G > plainCentre.G + 80);
 	CHECK(glowCentre.G > glowCentre.R + 40);
 
