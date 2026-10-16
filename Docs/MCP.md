@@ -89,7 +89,7 @@ Agents can follow a running game and check it without polling or screenshots:
 
 - `events.subscribe {types?, minLevel?}` collects log lines, script errors, play-state changes (`play`, `simulate`,
   `pause`, `resume`, `stop`) and collisions (`collisionBegin`/`collisionEnd`/`triggerEnter`/`triggerExit` with both
-  entities, the frame and the contact). On the editor's legacy line protocol the subscription **streams**: event
+  entities as `a` and `b`, the frame and the contact: `point`, `normal` pointing from `b` toward `a`, `impulse`). On the editor's legacy line protocol the subscription **streams**: event
   frames arrive on the same connection after a response or within about 100 ms when idle, as JSON lines with an
   `event` key and no `ok` key (`{"event":"collision","subscription":1,"seq":7,"type":"collisionBegin",...}`), and the
   subscription ends when the connection closes. A connection that falls behind gets
@@ -98,10 +98,15 @@ Agents can follow a running game and check it without polling or screenshots:
   (see `Tests/Automation/EditorViewport.py`). The server serves one connection at a time, so subscribe on the
   connection that sends the commands. MCP clients and the CLI get polled subscriptions instead (on the editor's TCP
   server an MCP client's still end with its connection; `basalt mcp`'s end with the process): `events.poll {subscription}` returns the queued events (at most 1024 wait;
-  `dropped` counts the rest; with `assertTypes` it fails, leaving them queued, unless every listed type is there,
-  and with `expect` unless each listed pattern matches an event: every field the pattern names must be equal, so
-  `{"event": "collision", "type": "triggerEnter", "a": {"name": "Goal"}}` asks for an entity named Goal to have
-  been entered; a collision pattern also matches with `a` and `b` swapped, since contacts list their bodies by ID).
+  `dropped` counts the rest). Two options turn a poll into an assertion that fails, leaving the events queued,
+  unless they hold: `assertTypes` lists event types that must be there, and `expect` lists event patterns that must
+  each match an event of its own (list a pattern twice to require two such events). A pattern matches an event that
+  has every field it names, compared as `assert.component` compares fields (objects may have more keys, floats
+  match within `tolerance`, default 0.0001). Contacts list their bodies in entity-ID order, so a collision pattern
+  that names `a` or `b` also matches the contact seen from the other body (`a` and `b` swapped, and `normal`,
+  which points from `b` toward `a`, reversed): `{"event": "collision", "type": "triggerEnter", "a": {"name":
+  "Goal"}}` asks for a triggerEnter in which Goal is either body. A failed `expect` says how the closest event of
+  the pattern's kind differs from it.
   `pause` and `resume` come from the editor's Pause button; no command pauses.
 - `scene.snapshot {name}` keeps the current state in memory; `scene.diff {from, to?}` compares two snapshots or
   `.bscene` files (omit `to` to compare with the current scene) by entity ID and lists every changed field, and

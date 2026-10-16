@@ -135,6 +135,7 @@ Entity handles store an ID and stay safe to hold: using a destroyed entity raise
 | `e:GetParent()`, `e:SetParent(parent or nil)`, `e:GetChildren()`, `e:FindChild(name)` | Hierarchy (SetParent keeps the world transform) |
 | `e:AddForce(v)`, `e:AddImpulse(v)`, `e:AddTorque(v)` | Physics (dynamic bodies) |
 | `e:SetLinearVelocity(v)`, `e:GetLinearVelocity()`, `e:SetAngularVelocity(v)`, `e:GetAngularVelocity()` | Physics velocities (`GetLinearVelocity` also reports how fast a character moved in the last step) |
+| `e:IsSleeping()` | Whether the body is asleep (see `RigidBody.AllowSleeping` below); false for static bodies and entities without a body |
 | `e:Move(velocity)` | Walk a CharacterController with this velocity (m/s) until the next call; an upward part jumps from the ground (see Character controllers). Errors without a CharacterController |
 | `e:IsGrounded()` | The character stands on ground no steeper than its `SlopeLimit` (false without a character) |
 | `e:GetGroundNormal()` | Normal of the ground the character touches (walkable or too steep); nil in the air or without a character |
@@ -368,11 +369,12 @@ scale was zero gets its body once the scale is valid again.
 Set `RigidBody.Continuous = true` on fast dynamic bodies (projectiles) so they cannot pass through thin
 geometry between steps. It costs more per step and has no effect on static, kinematic or trigger bodies.
 
-A body that has barely moved for about half a second falls asleep: it stops being simulated until something
-touches or pushes it (a force, an impulse, a non-zero velocity or a changed joint target wakes it). That saves work in piles of
-resting objects, but it can also freeze a ball that slowly turns around on a slope. Set
-`RigidBody.AllowSleeping = false` on bodies that must never stall (marbles, rolling balls). It has no effect on
-static bodies.
+A body that has barely moved for about half a second falls asleep (`e:IsSleeping()`): it stops being simulated
+until something touches, pushes or moves it (a force, an impulse, a non-zero velocity, setting its transform or a
+changed joint target wakes it). That saves work in piles of resting objects, but it can also freeze a ball that
+slowly turns around on a slope. Set `RigidBody.AllowSleeping = false` on bodies that must never stall (marbles,
+rolling balls); bodies resting on or jointed to one stay awake with it. It has no effect on static or trigger
+bodies (triggers never sleep), and setting it there logs a warning.
 
 ### Queries
 

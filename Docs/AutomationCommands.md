@@ -895,9 +895,10 @@ Returns (and removes) up to 'max' events a polled subscription collected, oldest
 | Parameter | Type / description |
 |-----------|--------------------|
 | `assertTypes` | array of event types: fail unless the first 'max' queued events include each; on failure they stay queued |
-| `expect` | array of event patterns, e.g. {"event": "collision", "type": "triggerEnter", "a": {"name": "Goal"}}: fail unless each matches one of the first 'max' queued events (every field it lists, as assert.component compares them; floats within 0.0001); a collision pattern also matches with a and b swapped. On failure the events stay queued |
+| `expect` | array of event patterns, e.g. {"event": "collision", "type": "triggerEnter", "a": {"name": "Goal"}}: fail unless each pattern matches an event of its own among the first 'max' queued (list a pattern twice to require two such events). A pattern matches an event that has every field it names, compared as assert.component compares fields (floats within 'tolerance'). A collision pattern that names a or b also matches the contact seen from the other body (a and b swapped, 'normal', which points from b toward a, reversed): contacts list their bodies in ID order. On failure the events stay queued |
 | `max` | integer (default 1024) |
 | `subscription` | integer, from events.subscribe |
+| `tolerance` | number, floats in 'expect' patterns match within it (default 0.0001) |
 
 <details><summary>Parameter JSON Schema</summary>
 
@@ -921,7 +922,7 @@ Returns (and removes) up to 'max' events a polled subscription collected, oldest
       "type": "array"
     },
     "expect": {
-      "description": "array of event patterns, e.g. {\"event\": \"collision\", \"type\": \"triggerEnter\", \"a\": {\"name\": \"Goal\"}}: fail unless each matches one of the first 'max' queued events (every field it lists, as assert.component compares them; floats within 0.0001); a collision pattern also matches with a and b swapped. On failure the events stay queued",
+      "description": "array of event patterns, e.g. {\"event\": \"collision\", \"type\": \"triggerEnter\", \"a\": {\"name\": \"Goal\"}}: fail unless each pattern matches an event of its own among the first 'max' queued (list a pattern twice to require two such events). A pattern matches an event that has every field it names, compared as assert.component compares fields (floats within 'tolerance'). A collision pattern that names a or b also matches the contact seen from the other body (a and b swapped, 'normal', which points from b toward a, reversed): contacts list their bodies in ID order. On failure the events stay queued",
       "items": {
         "type": "object"
       },
@@ -948,6 +949,20 @@ Returns (and removes) up to 'max' events a polled subscription collected, oldest
       "maximum": 18446744073709551615,
       "minimum": 1,
       "type": "integer"
+    },
+    "tolerance": {
+      "anyOf": [
+        {
+          "description": "number, floats in 'expect' patterns match within it (default 0.0001)",
+          "maximum": 1000000000.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "number, floats in 'expect' patterns match within it (default 0.0001)"
     }
   },
   "required": [

@@ -39,5 +39,8 @@ namespace Basalt {
 	// compares them. Appends "<path> is <actual>, expected <expected>" (or "<path> is missing")
 	// per mismatch; `path` prefixes them.
 	void MatchJsonSubset(const nlohmann::json& actual, const nlohmann::json& expected, double tolerance, const std::string& path, std::vector<std::string>& outMismatches);
+	// Whether MatchJsonSubset would find no mismatch, without building any message: stops at the first difference and
+	// allocates nothing, for callers that test many values (events.poll's patterns, under the event hub's lock).
+	bool JsonContainsSubset(const nlohmann::json& actual, const nlohmann::json& expected, double tolerance);
 
 }

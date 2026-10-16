@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Generates the sound effects of the Marble Run sample (deterministic, no dependencies).
 
-Run from the repository root:  python3 scripts/generate_sample_assets.py
+Run:  python3 scripts/generate_sample_assets.py  (from any directory; paths are relative to this script)
 """
-import math, os, struct
+import math
+import os
+import struct
 
 RATE = 22050
 ROOT = os.path.join(os.path.dirname(__file__), "..", "Samples", "MarbleRun", "Assets", "Audio")

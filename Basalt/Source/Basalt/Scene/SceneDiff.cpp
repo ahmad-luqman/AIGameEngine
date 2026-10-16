@@ -230,6 +230,30 @@ namespace Basalt {
 			outMismatches.push_back(Mismatch(path, actual, expected));
 	}
 
+	bool JsonContainsSubset(const json& actual, const json& expected, double tolerance)
+	{
+		if (expected.is_object() && actual.is_object())
+		{
+			for (const auto& [key, value] : expected.items())
+			{
+				const auto it = actual.find(key);
+				if (it == actual.end() || !JsonContainsSubset(*it, value, tolerance))
+					return false;
+			}
+			return true;
+		}
+		if (expected.is_array() && actual.is_array() && expected.size() == actual.size())
+		{
+			for (size_t i = 0; i < expected.size(); i++)
+			{
+				if (!JsonContainsSubset(actual[i], expected[i], tolerance))
+					return false;
+			}
+			return true;
+		}
+		return JsonNearlyEqual(actual, expected, tolerance);
+	}
+
 	std::optional<json> DiffScenes(const json& from, const json& to, const SceneDiffOptions& options, std::string& outError)
 	{
 		std::vector<IndexedEntity> fromOrder, toOrder;

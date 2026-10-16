@@ -109,7 +109,8 @@ namespace Basalt {
 		size_t GetSubscriptionCount() const;
 
 		// Decides whether a poll may take the events it would return (events.poll's assertions). It runs with the hub's
-		// lock held, so it must not log or call back into the hub.
+		// lock held, which every thread that logs waits for (log lines are published here), so keep it cheap, and it must
+		// not log or call back into the hub: either would deadlock.
 		using PollCheck = std::function<bool(std::span<const nlohmann::json> events)>;
 
 		// Replaces outEvents with up to `max` queued events of a polled subscription, oldest first, and removes them;

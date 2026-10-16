@@ -542,11 +542,46 @@ TEST_SUITE("Physics")
 		CHECK_FALSE(physics.IsBodySleeping(ground));
 		CHECK_FALSE(physics.IsBodySleeping(scene.CreateEntity("NoBody")));
 
-		// The setting applies when the body is rebuilt from its component.
-		awake.GetComponent<RigidBodyComponent>().AllowSleeping = true;
-		physics.RecreateBody(awake);
+		// Changing the component (as SetComponent and the automation API do) rebuilds the body with the new setting.
+		scene.GetRegistry().patch<RigidBodyComponent>(awake, [](RigidBodyComponent& rigidBody) { rigidBody.AllowSleeping = true; });
 		Simulate(scene, 3.0f);
 		CHECK(physics.IsBodySleeping(awake));
+		// ...including waking a sleeping body that may no longer sleep.
+		scene.GetRegistry().patch<RigidBodyComponent>(sleeper, [](RigidBodyComponent& rigidBody) { rigidBody.AllowSleeping = false; });
+		Simulate(scene, 3.0f);
+		CHECK_FALSE(physics.IsBodySleeping(sleeper));
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("A kinematic body at rest sleeps unless AllowSleeping is off")
+	{
+		Scene scene;
+		Entity resting = CreateBox(scene, { -2.0f, 2.0f, 0.0f });
+		resting.GetComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
+		Entity awake = CreateBox(scene, { 2.0f, 2.0f, 0.0f });
+		awake.GetComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
+		awake.GetComponent<RigidBodyComponent>().AllowSleeping = false;
+		scene.OnSimulationStart();
+		Simulate(scene, 3.0f);
+		CHECK(scene.GetPhysicsWorld()->IsBodySleeping(resting));
+		CHECK_FALSE(scene.GetPhysicsWorld()->IsBodySleeping(awake));
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("AllowSleeping off on a static body or a trigger is ignored with one warning")
+	{
+		Scene scene;
+		Entity platform = CreateGround(scene);
+		platform.GetComponent<RigidBodyComponent>().AllowSleeping = false;
+		Entity trigger = CreateBox(scene, { 0.0f, 3.0f, 0.0f });
+		trigger.GetComponent<RigidBodyComponent>().IsTrigger = true;
+		trigger.GetComponent<RigidBodyComponent>().AllowSleeping = false;
+		// The default (true) never warns, nor does turning sleeping off where it matters.
+		CreateBox(scene, { 3.0f, 3.0f, 0.0f }).GetComponent<RigidBodyComponent>().AllowSleeping = false;
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		scene.OnSimulationStart();
+		Simulate(scene, 0.1f);
+		CHECK(BasaltTest::CountLogMessages(since, "AllowSleeping only affects dynamic and kinematic bodies") == 2);
 		scene.OnSimulationStop();
 	}
 

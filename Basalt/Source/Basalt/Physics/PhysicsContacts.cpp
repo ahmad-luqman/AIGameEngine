@@ -149,8 +149,6 @@ namespace Basalt {
 
 	void PhysicsWorld::Impl::DispatchContacts(float fixedStep)
 	{
-		JPH::BodyInterface& bodies = System->GetBodyInterface();
-
 		std::vector<RawContactEvent> events;
 		{
 			std::scoped_lock lock(ContactListener.Mutex);
@@ -160,10 +158,7 @@ namespace Basalt {
 		std::sort(events.begin(), events.end(), [](const RawContactEvent& a, const RawContactEvent& b) { return a.Tie() < b.Tie(); });
 
 		// A body that falls asleep reports its contacts as removed; it is still touching, so keep them.
-		auto isEntitySleeping = [&](UUID uuid) {
-			auto* record = FindBody(uuid);
-			return record != nullptr && record->Type != RigidBodyType::Static && !bodies.IsActive(record->ID);
-		};
+		auto isEntitySleeping = [this](UUID uuid) { return IsSleeping(uuid); };
 
 		struct PairChange
 		{
