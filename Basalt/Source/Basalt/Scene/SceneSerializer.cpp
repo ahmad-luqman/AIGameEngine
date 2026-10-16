@@ -19,8 +19,6 @@ namespace Basalt {
 
 		using json = nlohmann::json;
 
-		constexpr const char* s_TonemapperNames[] = { "None", "Reinhard", "ACES", "AgX" };
-
 		json Vec3ToJson(const glm::vec3& v)
 		{
 			return json::array({ v.x, v.y, v.z });
@@ -154,7 +152,7 @@ namespace Basalt {
 		{
 			return {
 				{ "Exposure", s.Exposure },
-				{ "Tonemapper", s_TonemapperNames[static_cast<int>(s.Tonemap)] },
+				{ "Tonemapper", TonemapperNames[static_cast<int>(s.Tonemap)] },
 				{ "FSR1Enabled", s.FSR1Enabled },
 				{ "FSR1Sharpness", s.FSR1Sharpness },
 				{ "SSAOEnabled", s.SSAOEnabled },
@@ -185,7 +183,7 @@ namespace Basalt {
 				bool found = false;
 				for (int i = 0; i < 4; i++)
 				{
-					if (tonemapper == s_TonemapperNames[i])
+					if (tonemapper == TonemapperNames[i])
 					{
 						s.Tonemap = static_cast<Tonemapper>(i);
 						found = true;

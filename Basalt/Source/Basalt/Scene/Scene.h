@@ -6,9 +6,12 @@
 #include "Basalt/Math/Random.h"
 #include "Basalt/Physics/PhysicsLayers.h"
 #include "Basalt/Renderer/Fsr1Settings.h"
+#include "Basalt/Renderer/GraphicsSettings.h"
+#include "Basalt/Renderer/PostProcessSettings.h"
 
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
+#include <nlohmann/json_fwd.hpp>
 
 #include <optional>
 #include <string>
@@ -26,14 +29,6 @@ namespace Basalt {
 	class ParticleSystem;
 	class AnimationSystem;
 	class UIInteraction;
-
-	enum class Tonemapper
-	{
-		None = 0,
-		Reinhard,
-		ACES,
-		AgX
-	};
 
 	// Intermediate images the renderer can display instead of the final image (diagnostics).
 	enum class RendererDebugView
@@ -150,7 +145,7 @@ namespace Basalt {
 		uint32_t GetViewportHeight() const { return m_ViewportHeight; }
 
 		// --- Runtime ---------------------------------------------------------------------------
-		void OnRuntimeStart();
+		void OnRuntimeStart(std::optional<GraphicsSettings> graphics = std::nullopt);
 		void OnRuntimeStop();
 		void OnSimulationStart();
 		void OnSimulationStop();
@@ -213,6 +208,11 @@ namespace Basalt {
 
 		const std::string& GetName() const { return m_Name; }
 		void SetName(const std::string& name) { m_Name = name; }
+		// Transient preferences; initialized before scripts start and preserved across Scene.Load.
+		const GraphicsSettings& GetGraphicsSettings() const { return m_GraphicsSettings; }
+		bool SetGraphicsSettings(const nlohmann::json& patch, std::string& error);
+		// Unique across scene instances and increments on Play/reload; resets renderer history even after address reuse.
+		uint64_t GetRenderRevision() const { return m_RenderRevision; }
 		RendererSettings& GetRendererSettings() { return m_RendererSettings; }
 		const RendererSettings& GetRendererSettings() const { return m_RendererSettings; }
 		PhysicsSettings& GetPhysicsSettings() { return m_PhysicsSettings; }
@@ -223,6 +223,7 @@ namespace Basalt {
 		const std::optional<PhysicsLayers>& GetPhysicsLayers() const { return m_PhysicsLayers; }
 
 		entt::registry& GetRegistry() { return m_Registry; }
+		const entt::registry& GetRegistry() const { return m_Registry; }
 
 		template<typename... Components>
 		auto GetAllEntitiesWith()
@@ -290,6 +291,8 @@ namespace Basalt {
 		uint32_t m_ViewportHeight = 0;
 
 		RendererSettings m_RendererSettings;
+		uint64_t m_RenderRevision = 0;
+		GraphicsSettings m_GraphicsSettings;
 		PhysicsSettings m_PhysicsSettings;
 		std::optional<PhysicsLayers> m_PhysicsLayers;
 

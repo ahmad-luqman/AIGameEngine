@@ -56,7 +56,7 @@ The features most games need, roughly in order of impact.
   pass if particle counts demand it.
 - **Temporal anti-aliasing — M.** TAA (jittered projection, motion
   vectors from the depth prepass, history reprojection with neighbourhood clamping), which also
-  stabilizes SSAO and specular shimmer. Builds on FXAA from P2's post-process item. MSAA is an option for
+  stabilizes SSAO and specular shimmer. Builds on the post-process stack’s FXAA. MSAA is an option for
   the forward pass but complicates the SSAO prepass.
 - **glTF extensions — M.** `KHR_texture_transform`, `KHR_materials_emissive_strength`,
   `KHR_materials_clearcoat`, `KHR_materials_transmission` (via the transparent pass),
@@ -166,10 +166,6 @@ What makes the editor feel finished. Most items are small; do them as one milest
 
 - **Game view — M.** A play viewport rendered at the project's game resolution with the correct aspect
   ratio, next to the scene view, showing "Edit mode" when not playing.
-- **Post-process component, FXAA and bloom — M.** `PostProcessComponent` holding the tonemapper choice,
-  exposure (manual, then auto exposure from a luminance histogram), SSAO settings, FXAA and bloom
-  (downsample/upsample chain on the HDR buffer, so emissive materials glow). Replaces the scattered
-  render settings.
 - **Asset thumbnails and material preview — M.** Render small previews of meshes, materials and HDRIs
   into a cache for the content browser, with hover previews.
 - **Project settings panel — S.** Fixed timestep, random seed, game resolution, and an editor for the
@@ -213,8 +209,6 @@ What makes the editor feel finished. Most items are small; do them as one milest
   (a script that takes a Developer ID); Windows `.exe` icon and version resource; Linux AppImage.
 - **Project icon and version — S.** `ProjectConfig.Icon`, `Version` and `Company`, used by the exporter
   and the window title.
-- **Graphics settings — S.** `ProjectConfig` options for VSync, resolution scale, shadow quality and SSAO
-  quality, exposed to Lua so games can offer a settings menu.
 - **Crash reporting — M.** Install crash handlers (minidumps on Windows, signal handlers with a stack
   trace on macOS/Linux), write the last log lines and a crash file next to the executable, and show a
   message box in the runtime.

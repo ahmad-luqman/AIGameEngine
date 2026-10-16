@@ -49,6 +49,7 @@ float SampleCascade(int cascade, vec3 worldPosition, vec3 normal, vec2 fragCoord
 		return 1.0;
 
 	float receiverDepth = coords.z - u_View.Sun.ShadowParams.x;
+	if (u_View.Quality.x > 0.5) return texture(sampler2DArrayShadow(u_ShadowMap,u_ShadowCompareSampler),vec4(uv,float(cascade),receiverDepth));
 	vec2 texelSize = 1.0 / vec2(textureSize(sampler2DArray(u_ShadowMap, u_PointSampler), 0).xy);
 	float angle = InterleavedGradientNoise(fragCoord) * 2.0 * PI;
 	mat2 rotation = mat2(cos(angle), sin(angle), -sin(angle), cos(angle));
@@ -147,6 +148,7 @@ float ComputeLocalShadow(LightData light, vec3 worldPosition, vec3 normal)
 	vec2 texel = 1.0 / vec2(textureSize(sampler2D(u_LocalShadowAtlas, u_PointSampler), 0));
 	vec2 lo = map.AtlasRect.zw + 0.5 * texel;
 	vec2 hi = map.AtlasRect.zw + map.AtlasRect.xy - 0.5 * texel;
+	if (u_View.Quality.x > 0.5) return texture(sampler2DShadow(u_LocalShadowAtlas,u_ShadowCompareSampler),vec3(clamp(uv,lo,hi),coords.z));
 	float lit = 0.0;
 	// Cube faces overlap by six texels, enough for the maximum four-texel kernel plus bilinear PCF.
 	// Clamp every tap to texel centers as a second barrier against sampling an unrelated atlas tile.

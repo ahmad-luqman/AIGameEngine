@@ -479,6 +479,7 @@ namespace Basalt {
 					{ "windowWidth", config.WindowWidth },
 					{ "windowHeight", config.WindowHeight },
 					{ "fullscreen", config.Fullscreen },
+					{ "graphics", SerializeGraphicsSettings(Project::GetActiveGraphicsSettings()) },
 					{ "renderScale", config.RenderScale },
 					{ "dynamicResolution", config.DynamicResolution.Enabled },
 					{ "targetFrameRate", config.DynamicResolution.TargetFrameRate },
@@ -488,7 +489,7 @@ namespace Basalt {
 				};
 			});
 
-			Add(registry, "project.set", "Changes project settings and saves the project file.", Schema::Object({ { "name", Schema::Nullable(Schema::String("string")) }, { "startScene", Schema::Nullable(Schema::String("string, project-relative scene")) }, { "windowWidth", Schema::Nullable(Schema::Integer("integer", 64, 16384)) }, { "windowHeight", Schema::Nullable(Schema::Integer("integer", 64, 16384)) }, { "fullscreen", Schema::Nullable(Schema::Boolean("bool")) }, { "renderScale", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution)", MinRenderScale, MaxRenderScale), MinRenderScale, MaxRenderScale)) }, { "dynamicResolution", Schema::Nullable(Schema::Boolean("bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries)")) }, { "targetFrameRate", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}]; dynamic resolution keeps the scene's GPU time within this frame rate's frame time", MinTargetFrameRate, MaxTargetFrameRate), MinTargetFrameRate, MaxTargetFrameRate)) }, { "minRenderScale", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning)", MinRenderScale, MaxRenderScale), MinRenderScale, MaxRenderScale)) }, { "physicsLayers", json{ { "type", "object" }, { "description", "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play" } } }, { "randomSeed", Schema::Nullable(Schema::Integer("integer in [0, 4294967295], seeds Lua's random numbers, particle emitters and runtime entity UUIDs; applies from the next play", 0, UINT32_MAX)) } }), [](AutomationSession& session, const json& params) {
+			Add(registry, "project.set", "Changes project settings and saves the project file.", Schema::Object({ { "graphics", Schema::Object({ { "VSync", Schema::Boolean("bool") }, { "RenderScale", Schema::Number("resolution scale", MinRenderScale, MaxRenderScale) }, { "ShadowQuality", Schema::String("Off, Low or High") }, { "SSAOQuality", Schema::String("Off, Low or High") }, { "DynamicResolution", Schema::Boolean("bool") }, { "TargetFrameRate", Schema::Number("target FPS", MinTargetFrameRate, MaxTargetFrameRate) }, { "MinRenderScale", Schema::Number("minimum scale", MinRenderScale, MaxRenderScale) } }) }, { "name", Schema::Nullable(Schema::String("string")) }, { "startScene", Schema::Nullable(Schema::String("string, project-relative scene")) }, { "windowWidth", Schema::Nullable(Schema::Integer("integer", 64, 16384)) }, { "windowHeight", Schema::Nullable(Schema::Integer("integer", 64, 16384)) }, { "fullscreen", Schema::Nullable(Schema::Boolean("bool")) }, { "renderScale", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution)", MinRenderScale, MaxRenderScale), MinRenderScale, MaxRenderScale)) }, { "dynamicResolution", Schema::Nullable(Schema::Boolean("bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries)")) }, { "targetFrameRate", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}]; dynamic resolution keeps the scene's GPU time within this frame rate's frame time", MinTargetFrameRate, MaxTargetFrameRate), MinTargetFrameRate, MaxTargetFrameRate)) }, { "minRenderScale", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning)", MinRenderScale, MaxRenderScale), MinRenderScale, MaxRenderScale)) }, { "physicsLayers", json{ { "type", "object" }, { "description", "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play" } } }, { "randomSeed", Schema::Nullable(Schema::Integer("integer in [0, 4294967295], seeds Lua's random numbers, particle emitters and runtime entity UUIDs; applies from the next play", 0, UINT32_MAX)) } }), [](AutomationSession& session, const json& params) {
 				Ref<Project> project = RequireProject();
 				// Every value is read and validated before any is assigned, so a bad parameter leaves the
 				// project untouched.
@@ -511,6 +512,19 @@ namespace Basalt {
 						throw CommandError("physicsLayers: " + error);
 					config.Physics = std::move(*layers);
 				}
+				if (const auto it = params.find("graphics"); it != params.end())
+				{
+					GraphicsSettings graphics{ config.VSync, config.RenderScale, config.ShadowQuality, config.SSAOQuality, config.DynamicResolution };
+					std::string error;
+					if (!PatchGraphicsSettings(*it, graphics, error))
+						throw CommandError(error);
+					config.VSync = graphics.VSync;
+					config.RenderScale = graphics.RenderScale;
+					config.ShadowQuality = graphics.ShadowQuality;
+					config.SSAOQuality = graphics.SSAOQuality;
+					config.DynamicResolution = graphics.DynamicResolution;
+				}
+
 				project->GetConfig() = std::move(config);
 				std::string error;
 				if (!project->Save(error))

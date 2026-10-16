@@ -5,6 +5,7 @@
 	"Renderer": { "Exposure": 0.8, "Tonemapper": "ACES", "SSAOEnabled": true, "ShadowsEnabled": true, "ShadowDistance": 40 },
 	"Physics": { "Gravity": [0, -9.81, 0], "FixedTimestep": 0.016666668, "MaxStepsPerFrame": 8 },
 	"Entities": [
+		{ "ID": 911, "Name": "PostProcessing", "Components": { "PostProcess": { "Enabled": false } } },
 		{ "ID": 910, "Name": "AnimationRig", "Components": {
 			"Transform": { "Translation": [1000, 0, 0] },
 			"Animator": { "Mesh": "Assets/Models/TwoJoint.gltf", "Clip": "Bend" } } },

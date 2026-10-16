@@ -1,3 +1,56 @@
+# Post-processing and graphics preferences
+
+Add a `PostProcess` component to an entity through the inspector, `component.set`, or Lua. It controls
+manual exposure, tonemapper (`None`, `Reinhard`, `ACES`, `AgX`), histogram auto exposure, SSAO, bloom and
+FXAA. The enabled component with the highest `Priority` wins globally; ties use the lowest entity UUID.
+`Priority` is a nonnegative integer (default 0); `Enabled` defaults true. There are no spatial volumes or blends. Without an enabled component, legacy `Renderer` exposure,
+tonemapper and SSAO settings remain the fallback, preserving existing scenes and images. The editor
+hides those fallback controls while a component is active. Shadows and FSR remain scene renderer settings.
+
+The order is HDR opaque/sky/transparent/particles → histogram metering and HDR bloom → exposure,
+tonemapping and sRGB encoding → optional FXAA → optional FSR → final dithering → overlays/UI.
+SSAO remains a pre-lighting effect. Debug views bypass bloom, exposure, FXAA and FSR. All filter taps
+clamp to the active render area, including odd and one-pixel dimensions; dynamic resolution never samples
+unused target pixels. FXAA works on perceptual color at render resolution before upsampling.
+
+`Exposure` is a positive linear multiplier (1 leaves brightness unchanged). With `AutoExposure`, it
+also multiplies the metered exposure. A 256-bin GPU histogram meters pre-bloom HDR luminance over -12 to
++16 EV; black and nonfinite luminance are excluded. The geometric mean targets middle gray (0.18),
+with `ExposureCompensation` in stops and the result clamped to `MinExposure`/`MaxExposure`.
+An all-black frame targets 1 within those bounds. `AdaptationSpeed` is an exponential rate per second;
+0 holds the previous exposure after initialization. Delta time is explicit and clamped to [0,1] seconds.
+First use, scene replacement/load, component selection changes and re-enabling auto exposure start at the
+metered target. History belongs to each renderer; editor screenshots and picks reset it for deterministic
+captures. No histogram readback or CPU stall is used.
+
+Bloom extracts values above `BloomThreshold` in linear HDR, downsamples through up to six half-sized
+levels, then combines normalized tent upsampling with `BloomScatter` (0 keeps finer detail, 1 favors
+broad glow). `BloomIntensity` scales its contribution before tonemapping. Bloom and FXAA default off;
+auto exposure defaults off. New component values are strictly validated atomically; malformed values
+written directly by C++ fail the frame with a diagnostic. Legacy fallback values retain their old ranges.
+Resources allocate when an effect is first enabled and remain cached until target configuration changes.
+Allocation failure fails the frame/capture, logs once per configuration, and retries when effects are
+switched off then on or the targets change. HDR work has a `PostProcess` GPU timing; FXAA is in `Tonemap`.
+
+Project defaults include `VSync`, `RenderScale`, `ShadowQuality`, `SSAOQuality` and the existing dynamic
+resolution settings. Set them with `project.set {"graphics": {...}}`, using those PascalCase keys.
+`project.info.graphics` returns the complete defaults. Existing lower-case render-scale/dynamic-resolution
+parameters remain supported; the nested graphics patch applies last when both are supplied.
+Quality levels are `Off`, `Low`, `High`: SSAO uses 0/8/24 samples, while shadows use no maps, a single
+hardware comparison, or the existing directional PCSS/local 3×3 filters. Quality controls cap authored
+settings; `High` does not force disabled shadows or SSAO on. Shadow-map resolution is unchanged.
+
+Lua `Graphics.GetSettings()` and `Graphics.SetSettings({...})` read/patch a Play-session copy. Changes
+apply on the next render, survive `Scene.Load`, and reset from project defaults on the next Play.
+They do not save the project; games can persist preferences explicitly through `Storage`. Runtime CLI
+scale/dynamic/VSync options initialize the session before scripts start, so scripts may subsequently
+change them. Editor VSync is restored after Play; project scale/dynamic menus are disabled during Play.
+Offscreen/headless sessions retain the same preference values even though VSync has no display effect.
+
+`PostProcessGPU` tests bloom spread and thresholding, FXAA edges, exposure adaptation/reset, debug bypass,
+resize, tiny targets and dynamic allocations with/without FSR, with Vulkan synchronization validation.
+Headless tests cover selection, serialization, atomic validation and Lua session lifetime.
+
 # Clustered forward lighting
 
 The PBR pass uses a 16×9×24 camera-frustum grid. Perspective cameras have logarithmic depth slices;
@@ -60,7 +113,8 @@ when its current scale drops below 1.
 UI, text, debug lines and gizmos are drawn afterward at output resolution. FSR 1 is a spatial upscaler;
 it does not provide temporal antialiasing.
 
-The pipeline is HDR lighting → exposure/tonemapping/sRGB encoding → EASU → RCAS → 8-bit dither → overlays.
+The pipeline includes optional HDR bloom/auto exposure before tonemapping and optional FXAA before EASU,
+then RCAS → 8-bit dither → overlays.
 Intermediate color is stored in RGBA16_FLOAT without sRGB decoding; FSR expects normalized perceptual
 color. The extra targets allocate on first use and remain cached while FSR is off and across dynamic
 render-area changes. Viewport, configured render-scale and active dynamic-mode changes release them.

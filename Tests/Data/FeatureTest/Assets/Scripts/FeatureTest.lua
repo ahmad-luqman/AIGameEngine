@@ -151,7 +151,7 @@ local function TestEntities(self)
 	ExpectError("SetComponent on missing component", function() probe:SetComponent("Camera", {}) end, "no Camera")
 
 	-- Every component type round-trips through Lua.
-	for _, name in ipairs({ "Camera", "Mesh", "Animator", "Material", "DirectionalLight", "PointLight", "SpotLight", "SkyLight", "RigidBody",
+	for _, name in ipairs({ "Camera", "Mesh", "Animator", "Material", "DirectionalLight", "PointLight", "SpotLight", "SkyLight", "PostProcess", "RigidBody",
 		"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "AudioSource", "AudioListener", "ParticleEmitter", "UIRect", "UIImage", "UIText", "UIButton", "UISlider", "UICheckbox", "Prefab" }) do
 		local holder = Scene.CreateEntity("Holder" .. name)
 		Expect("AddComponent " .. name, function() holder:AddComponent(name) end)
@@ -470,9 +470,27 @@ end
 -- Lifecycle
 -- ---------------------------------------------------------------------------------------------
 
+local function TestGraphics()
+ local original = Graphics.GetSettings()
+ Check("Graphics.GetSettings", type(original.VSync) == "boolean" and original.RenderScale > 0)
+ Graphics.SetSettings({ VSync = false, RenderScale = 0.5, ShadowQuality = "Low", SSAOQuality = "Off" })
+ local changed = Graphics.GetSettings()
+ Check("Graphics.SetSettings", not changed.VSync and changed.RenderScale == 0.5 and changed.ShadowQuality == "Low" and changed.SSAOQuality == "Off")
+ ExpectError("Graphics invalid quality", function() Graphics.SetSettings({ShadowQuality="Ultra"}) end, "ShadowQuality")
+ Graphics.SetSettings(original)
+ local entity = Scene.FindEntityByName("PostProcessing")
+ local before = entity:GetComponent("PostProcess")
+ entity:SetComponent("PostProcess", { BloomEnabled=true, FXAAEnabled=true, AutoExposure=true, MinExposure=0.25, MaxExposure=4 })
+ local post = entity:GetComponent("PostProcess")
+ Check("PostProcess settings", post.BloomEnabled and post.FXAAEnabled and post.AutoExposure and post.MinExposure==0.25 and post.MaxExposure==4)
+ ExpectError("PostProcess invalid exposure", function() entity:SetComponent("PostProcess", {MinExposure=8,MaxExposure=1}) end, "MinExposure")
+ entity:SetComponent("PostProcess", before)
+end
+
 function Driver:OnCreate()
 	self.Frame = 0
 	self.Late = 0
+	TestGraphics()
 	TestMath()
 	TestEntities(self)
 	TestSystems(self)

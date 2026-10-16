@@ -76,8 +76,8 @@ namespace Basalt {
 
 	// Renders a Scene from a camera into an internal LDR image:
 	//   directional cascades + point/spot shadow atlas -> depth/normal prepass -> SSAO (+ bilateral blur) ->
-	//   cluster light-list build -> clustered forward PBR with IBL (opaque) -> skybox -> transparent PBR and particle billboards -> exposure +
-	//   tonemapping + sRGB encode -> optional EASU + RCAS -> dithering -> output-resolution overlays.
+	//   cluster light-list build -> clustered forward PBR with IBL (opaque) -> skybox -> transparent PBR and particle billboards ->
+	//   histogram auto exposure + HDR bloom + manual exposure -> tonemapping + sRGB encode -> FXAA -> optional EASU + RCAS -> dithering -> output-resolution overlays.
 	// The scene renders at the current render scale; either tonemap resamples directly to the viewport
 	// or FSR 1 upscales its perceptual-color output. With dynamic resolution the scale follows the GPU time
 	// measured by GpuProfiler; the targets keep the size of the configured render scale and the scene renders into
@@ -139,8 +139,11 @@ namespace Basalt {
 		// Call when replacing a scene; mappings otherwise describe the last successful Render.
 		void InvalidatePicking();
 
+		// Starts the next auto-exposure frame at its metered target (deterministic captures).
+		void ResetExposure();
+
 		// Records and submits all passes for one frame.
-		void Render(Scene& scene, const RenderCamera& camera);
+		void Render(Scene& scene, const RenderCamera& camera, float deltaTime = 1.0f / 60.0f);
 
 		// RGBA8 display-referred image of the last Render (shader resource state), at the viewport size.
 		nvrhi::ITexture* GetOutputTexture() const { return m_OutputTexture; }

@@ -7,6 +7,7 @@
 #include <Basalt/Automation/CommandRegistry.h>
 #include <Basalt/Core/Input.h>
 #include <Basalt/Core/JsonUtils.h>
+#include <Basalt/Renderer/GraphicsSettings.h>
 
 #include <set>
 #include <string>
@@ -42,6 +43,14 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 	nlohmann::json request = Basalt::ParseJson(BasaltFuzz::AsText(data, size));
 	if (request.is_discarded())
 		return 0;
+	// Exercise the project/Lua graphics parser without allowing project.set to write files.
+	if (request.is_object() && request.contains("params") && request["params"].is_object() && request["params"].contains("graphics"))
+	{
+		Basalt::GraphicsSettings graphics;
+		std::string error;
+		if (Basalt::PatchGraphicsSettings(request["params"]["graphics"], graphics, error))
+			Basalt::SerializeGraphicsSettings(graphics);
+	}
 	if (request.is_array())
 	{
 		for (const nlohmann::json& item : request)

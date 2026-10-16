@@ -58,7 +58,11 @@ namespace Basalt {
 		}
 
 		m_Scene->GetRendererSettings().DebugView = m_Options.DebugView;
-		m_Scene->OnRuntimeStart();
+		auto graphics = Project::GetActiveGraphicsSettings();
+		graphics.RenderScale = m_Options.RenderScale;
+		graphics.VSync = m_Options.VSync;
+		graphics.DynamicResolution = m_Options.DynamicResolution;
+		m_Scene->OnRuntimeStart(graphics);
 		BS_CORE_INFO("Runtime: playing '{}'", m_Options.ScenePath);
 	}
 
@@ -78,6 +82,7 @@ namespace Basalt {
 			return;
 
 		m_Scene->OnUpdate(ts);
+		m_RenderDeltaTime = ts;
 		m_Frame++;
 		if (m_Scene->IsQuitRequested())
 			Application::Get().Close();
@@ -107,12 +112,15 @@ namespace Basalt {
 		GameUI::SetViewportSize(viewportSize);
 		GameUI::SetViewportOrigin({ 0.0f, 0.0f });
 		m_Scene->OnViewportResize(width, height);
+		m_Renderer->SetRenderScale(m_Scene->GetGraphicsSettings().RenderScale);
+		m_Renderer->SetDynamicResolution(m_Scene->GetGraphicsSettings().DynamicResolution);
+		device->SetVSync(m_Scene->GetGraphicsSettings().VSync);
 		m_Renderer->SetViewportSize(width, height);
 
 		const auto camera = GetPrimaryRenderCamera(*m_Scene, width, height);
 		if (camera)
 		{
-			m_Renderer->Render(*m_Scene, *camera);
+			m_Renderer->Render(*m_Scene, *camera, m_RenderDeltaTime);
 			if (m_Renderer->GetStatistics().Failed)
 			{
 				application.SetExitCode(1);

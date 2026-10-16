@@ -570,6 +570,19 @@ namespace Basalt {
 					return "Entity(" + (entity ? entity.GetName() : std::string("<destroyed>")) + ", " + std::to_string(static_cast<uint64_t>(self.ID)) + ")"; });
 		}
 
+		void RegisterGraphics(sol::state& lua, ScriptContext& context)
+		{
+			sol::table graphics = lua.create_named_table("Graphics");
+			graphics["GetSettings"] = [&context](sol::this_state state) {
+				return JsonToLua(state, SerializeGraphicsSettings(RequireScene(context).GetGraphicsSettings()));
+			};
+			graphics["SetSettings"] = [&context](const sol::table& settings) {
+				std::string error;
+				if (!RequireScene(context).SetGraphicsSettings(LuaToJson(settings), error))
+					throw std::runtime_error(error);
+			};
+		}
+
 		void RegisterScene(sol::state& lua, ScriptContext& context)
 		{
 			sol::table scene = lua.create_named_table("Scene");
@@ -1102,6 +1115,7 @@ namespace Basalt {
 		RegisterMath(lua, context);
 		RegisterEntity(lua, context);
 		RegisterScene(lua, context);
+		RegisterGraphics(lua, context);
 		RegisterSystems(lua, context);
 		RegisterGameplay(lua, context);
 	}

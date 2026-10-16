@@ -32,6 +32,7 @@ namespace Basalt {
 				{ "Point Light", "Point Light", { { "PointLight", nlohmann::json::object() } } },
 				{ "Spot Light", "Spot Light", { { "SpotLight", nlohmann::json::object() } } },
 				{ "Sky Light", "Sky Light", { { "SkyLight", nlohmann::json::object() } } },
+				{ "Post Process", "PostProcessing", { { "PostProcess", nlohmann::json::object() } } },
 				{ "Audio Source", "Audio Source", { { "AudioSource", nlohmann::json::object() } } },
 				{ "Particle Emitter", "Particle Emitter", { { "ParticleEmitter", nlohmann::json::object() } } },
 				{ "UI Panel", "Panel", { { "UIRect", nlohmann::json::object() }, { "UIImage", { { "Color", { 0.0, 0.0, 0.0, 0.5 } } } } } },

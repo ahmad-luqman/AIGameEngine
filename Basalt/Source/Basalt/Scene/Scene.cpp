@@ -16,6 +16,7 @@
 #include "Basalt/UI/UIInteraction.h"
 
 #include <algorithm>
+#include <atomic>
 #include <unordered_set>
 #include <filesystem>
 #include <functional>
@@ -23,6 +24,8 @@
 namespace Basalt {
 
 	namespace {
+
+		std::atomic<uint64_t> s_RenderRevision{ 0 };
 
 		template<typename... Component>
 		void CopyComponents(ComponentGroup<Component...>, entt::registry& destination, const entt::registry& source, const std::unordered_map<UUID, entt::entity>& destinationMap)
@@ -64,6 +67,7 @@ namespace Basalt {
 	Scene::Scene(std::string name)
 		: m_Name(std::move(name))
 	{
+		m_RenderRevision = ++s_RenderRevision;
 	}
 
 	Scene::~Scene()
@@ -518,12 +522,24 @@ namespace Basalt {
 		}
 	}
 
-	void Scene::OnRuntimeStart()
+	bool Scene::SetGraphicsSettings(const nlohmann::json& patch, std::string& error)
+	{
+		if (m_State != SceneState::Play)
+		{
+			error = "graphics settings require Play mode";
+			return false;
+		}
+		return PatchGraphicsSettings(patch, m_GraphicsSettings, error, UnreachableTargetFrameRate);
+	}
+
+	void Scene::OnRuntimeStart(std::optional<GraphicsSettings> graphics)
 	{
 		if (IsRunning())
 			return;
 
+		m_GraphicsSettings = graphics.value_or(Project::GetActiveGraphicsSettings());
 		m_State = SceneState::Play;
+		m_RenderRevision = ++s_RenderRevision;
 		m_Time = 0.0f;
 		m_FrameCount = 0;
 		// A play session never shows the previous session's immediate-mode UI (e.g. when it starts paused).
@@ -823,6 +839,7 @@ namespace Basalt {
 		// viewing aid, not scene data, so it stays).
 		const RendererDebugView debugView = m_RendererSettings.DebugView;
 		m_RendererSettings = RendererSettings{};
+		m_RenderRevision = ++s_RenderRevision;
 		m_RendererSettings.DebugView = debugView;
 		m_PhysicsSettings = PhysicsSettings{};
 		m_Name = std::filesystem::path(load->Path).stem().string();

@@ -1,0 +1,1 @@
+[{"command":"entity.create","params":{"name":"Entity"}},{"command":"component.set","params":{"entity":"Entity","component":"PostProcess","data":{"AutoExposure":true,"BloomEnabled":true}}}]

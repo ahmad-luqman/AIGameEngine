@@ -1,5 +1,7 @@
 #include "Basalt/Renderer/SceneRenderer.h"
 
+#include "Basalt/Project/Project.h"
+#include "Basalt/Renderer/PostProcessStack.h"
 #include "Basalt/Animation/AnimatedModel.h"
 #include "Basalt/Animation/AnimationPose.h"
 #include "Basalt/Animation/AnimationSystem.h"
@@ -132,12 +134,13 @@ namespace Basalt {
 			PassSSAO,
 			PassClusters,
 			PassLighting,
+			PassPostProcess,
 			PassTonemap,
 			PassOverlayDepth,
 			PassDebugLines,
 			PassCount
 		};
-		constexpr const char* ScenePassNames[] = { "Environment", "Uploads", "Shadows", "Prepass", "SSAO", "Clusters", "Lighting", "Tonemap", "OverlayDepth", "DebugLines" };
+		constexpr const char* ScenePassNames[] = { "Environment", "Uploads", "Shadows", "Prepass", "SSAO", "Clusters", "Lighting", "PostProcess", "Tonemap", "OverlayDepth", "DebugLines" };
 		// A C array, not std::array<..., PassCount>, which would accept too few names (filling the rest with null).
 		static_assert(std::size(ScenePassNames) == PassCount, "one name per ScenePass");
 
@@ -197,8 +200,9 @@ namespace Basalt {
 			GpuDirectionalLight Sun;
 			glm::uvec4 ClusterGrid;
 			glm::vec4 ClusterDepths;
+			glm::vec4 Quality;
 		};
-		static_assert(sizeof(GpuViewConstants) == 752, "GpuViewConstants must match the std140 ViewConstants block");
+		static_assert(sizeof(GpuViewConstants) == 768, "GpuViewConstants must match the std140 ViewConstants block");
 
 		struct GpuDrawData
 		{
@@ -420,6 +424,13 @@ namespace Basalt {
 		std::string EnvironmentKey = "\x01"; // never a valid key: forces the first build
 		Environment Env;
 
+		PostProcessStack PostProcess;
+		nvrhi::GraphicsPipelineHandle FxaaTonemapPipeline;
+		nvrhi::TextureHandle TonemapSource;
+		const Scene* ExposureScene = nullptr;
+		uint64_t ExposureRevision = 0;
+		UUID ExposureComponent = 0;
+		bool PostProcessWasActive = false;
 		Fsr1Upscaler Upscaler;
 		nvrhi::GraphicsPipelineHandle FsrTonemapPipeline;
 		bool FsrTonemapFailed = false;
@@ -952,6 +963,9 @@ namespace Basalt {
 		InvalidatePicking();
 		impl.Upscaler.Reset();
 		impl.FsrTonemapPipeline = nullptr;
+		impl.FxaaTonemapPipeline = nullptr;
+		impl.TonemapSource = nullptr;
+		impl.PostProcess.Reset();
 		impl.FsrTonemapFailed = false;
 		// The smoothed costs are per frame of the old viewport size; results still in flight carry their pixel
 		// count, so they are converted correctly when they arrive.
@@ -1128,6 +1142,7 @@ namespace Basalt {
 														 // Bilinear only when resampling: at native size it would equal point sampling, at best.
 														 .addItem(nvrhi::BindingSetItem::Sampler(5, scaled ? impl.LinearClamp : impl.PointClamp)),
 													 impl.TonemapLayout);
+		impl.TonemapSource = impl.HdrTexture;
 		impl.DepthUpsampleSet = scaled ? m_Device->createBindingSet(nvrhi::BindingSetDesc()
 																		.addItem(nvrhi::BindingSetItem::PushConstants(0, TextureSamplerPushSize))
 																		.addItem(nvrhi::BindingSetItem::Texture_SRV(0, m_DepthTexture))
@@ -1143,7 +1158,12 @@ namespace Basalt {
 		impl.FrameSetDirty = true;
 	}
 
-	void SceneRenderer::Render(Scene& scene, const RenderCamera& camera)
+	void SceneRenderer::ResetExposure()
+	{
+		m_Impl->ExposureScene = nullptr;
+	}
+
+	void SceneRenderer::Render(Scene& scene, const RenderCamera& camera, float deltaTime)
 	{
 		InvalidatePicking();
 		Impl& impl = *m_Impl;
@@ -1160,7 +1180,18 @@ namespace Basalt {
 		UpdateRenderSize(profiler.BeginFrame(commandList));
 		impl.FrameCounter++;
 		m_Statistics = {};
-		const RendererSettings& settings = scene.GetRendererSettings();
+		RendererSettings settings = scene.GetRendererSettings();
+		UUID postProcessId = 0;
+		const PostProcessComponent post = ResolvePostProcess(scene, &postProcessId);
+		settings.Exposure = post.Exposure;
+		settings.Tonemap = post.Tonemap;
+		settings.SSAOEnabled = post.SSAOEnabled;
+		settings.SSAORadius = post.SSAORadius;
+		settings.SSAOIntensity = post.SSAOIntensity;
+		settings.SSAOBias = post.SSAOBias;
+		const auto graphics = scene.GetState() == SceneState::Play ? scene.GetGraphicsSettings() : Project::GetActiveGraphicsSettings();
+		settings.SSAOEnabled = settings.SSAOEnabled && graphics.SSAOQuality != GraphicsQuality::Off;
+		settings.ShadowsEnabled = settings.ShadowsEnabled && graphics.ShadowQuality != GraphicsQuality::Off;
 		const bool orthographic = IsOrthographic(camera.Projection);
 		auto abortFrame = [&]() {
 			m_Statistics.Failed = true;
@@ -1168,6 +1199,13 @@ namespace Basalt {
 			commandList->close();
 			m_Device->executeCommandList(commandList);
 		};
+
+		if (const auto error = ValidatePostProcess(post); postProcessId != 0 && !error.empty())
+		{
+			BS_CORE_ERROR("SceneRenderer: invalid post-process settings: {}", error);
+			abortFrame();
+			return;
+		}
 
 		// --- Lights -------------------------------------------------------------------------------
 		// The primary directional light (with shadow cascades) goes into the view constants; the other
@@ -1441,6 +1479,7 @@ namespace Basalt {
 		view.ClusterGrid = glm::uvec4(LightClusterDimensions, m_ClusteredLighting ? 1u : 0u);
 		view.ClusterDepths = LightClusterDepths(camera.Near, camera.Far, orthographic);
 		view.ClusterDepths.w = m_VisualizeLightCount ? 1.0f : 0.0f;
+		view.Quality = glm::vec4(graphics.ShadowQuality == GraphicsQuality::Low ? 1.0f : 0.0f, 0, 0, 0);
 
 		const bool shadowsActive = sun.Direction.w > 0.5f && sun.Color.w > 0.5f;
 		if (shadowsActive)
@@ -1922,7 +1961,7 @@ namespace Basalt {
 			const GpuPassScope pass(profiler, commandList, PassSSAO);
 			impl.SsaoConstants.Projection = camera.Projection;
 			impl.SsaoConstants.InverseProjection = view.InverseProjection;
-			impl.SsaoConstants.Params = glm::vec4(settings.SSAORadius, settings.SSAOBias, settings.SSAOIntensity, static_cast<float>(SSAOKernelSize));
+			impl.SsaoConstants.Params = glm::vec4(settings.SSAORadius, settings.SSAOBias, settings.SSAOIntensity, graphics.SSAOQuality == GraphicsQuality::Low ? 8.0f : static_cast<float>(SSAOKernelSize));
 			impl.SsaoConstants.ScreenSize = glm::vec4(static_cast<float>(m_RenderWidth), static_cast<float>(m_RenderHeight), static_cast<float>(m_RenderWidth) / 4.0f, static_cast<float>(m_RenderHeight) / 4.0f);
 			impl.SsaoConstants.UVScale = glm::vec4(uvScale, 0.0f, 0.0f);
 			commandList->writeBuffer(impl.SsaoConstantsBuffer, &impl.SsaoConstants, sizeof(GpuSSAOConstants));
@@ -1934,6 +1973,11 @@ namespace Basalt {
 			fullscreen(impl.SsaoBlurPipeline, impl.SsaoBlurFramebuffer, impl.BlurHorizontalSet, renderViewport, &blur, sizeof(blur));
 			blur.Direction = { 0.0f, 1.0f / static_cast<float>(m_TargetHeight) };
 			fullscreen(impl.SsaoBlurPipeline, impl.SsaoFramebuffer, impl.BlurVerticalSet, renderViewport, &blur, sizeof(blur));
+		}
+		else
+		{
+			// Debug views must show disabled occlusion, not the previous enabled frame.
+			commandList->clearTextureFloat(impl.SsaoTexture, nvrhi::AllSubresources, nvrhi::Color(1.0f));
 		}
 
 		// Build against the complete frustum, not the prepass depth: transparent surfaces need lists too.
@@ -2008,6 +2052,48 @@ namespace Basalt {
 			}
 		}
 
+		const bool postActive = settings.DebugView == RendererDebugView::None && (post.BloomEnabled || post.AutoExposure || post.FXAAEnabled);
+		const bool fxaa = postActive && post.FXAAEnabled;
+		const bool postActivated = postActive && !impl.PostProcessWasActive;
+		impl.PostProcessWasActive = postActive;
+		nvrhi::ITexture* tonemapSource = impl.HdrTexture;
+		if (postActive)
+		{
+			if (postActivated)
+				impl.PostProcess.Retry();
+			if (!impl.PostProcess.Prepare(m_Device, impl.HdrTexture, impl.FullscreenVS, impl.LinearClamp))
+			{
+				abortFrame();
+				return;
+			}
+			const GpuPassScope pass(profiler, commandList, PassPostProcess);
+			const bool resetExposure = postActivated || impl.ExposureScene != &scene || impl.ExposureRevision != scene.GetRenderRevision() || impl.ExposureComponent != postProcessId;
+			impl.PostProcess.RenderHDR(commandList, { m_RenderWidth, m_RenderHeight }, post, deltaTime, resetExposure);
+			impl.ExposureScene = &scene;
+			impl.ExposureRevision = scene.GetRenderRevision();
+			impl.ExposureComponent = postProcessId;
+			tonemapSource = impl.PostProcess.GetHDR();
+		}
+		if (impl.TonemapSource != tonemapSource)
+		{
+			impl.TonemapSet = m_Device->createBindingSet(nvrhi::BindingSetDesc()
+															 .addItem(nvrhi::BindingSetItem::PushConstants(PushConstantSlot, sizeof(TonemapPush)))
+															 .addItem(nvrhi::BindingSetItem::Texture_SRV(0, tonemapSource))
+															 .addItem(nvrhi::BindingSetItem::Sampler(1, impl.PointClamp))
+															 .addItem(nvrhi::BindingSetItem::Texture_SRV(2, impl.SsaoTexture))
+															 .addItem(nvrhi::BindingSetItem::Texture_SRV(3, impl.NormalTexture))
+															 .addItem(nvrhi::BindingSetItem::Texture_SRV(4, m_DepthTexture))
+															 .addItem(nvrhi::BindingSetItem::Sampler(5, impl.LinearClamp)),
+														 impl.TonemapLayout);
+			if (!impl.TonemapSet)
+			{
+				BS_CORE_ERROR("SceneRenderer: failed to create post-process tonemap bindings");
+				abortFrame();
+				return;
+			}
+			impl.TonemapSource = tonemapSource;
+		}
+
 		// The current render area selects FSR, even when a dynamic run starts above native size.
 		const bool fsr1 = settings.FSR1Enabled && settings.DebugView == RendererDebugView::None &&
 						  NeedsSpatialUpscale({ m_RenderWidth, m_RenderHeight }, { m_Width, m_Height });
@@ -2039,17 +2125,40 @@ namespace Basalt {
 			}
 		}
 
+		if (fxaa)
+		{
+			if (!impl.PostProcess.PrepareFXAA(fsr1 ? impl.Upscaler.GetInputFramebuffer() : impl.OutputFramebuffer.Get()))
+			{
+				abortFrame();
+				return;
+			}
+			if (!impl.FxaaTonemapPipeline)
+				impl.FxaaTonemapPipeline = CreateFullscreenPipeline(m_Device, impl.FullscreenVS, impl.TonemapPS, impl.TonemapLayout, impl.PostProcess.GetFXAAInput());
+			if (!impl.FxaaTonemapPipeline)
+			{
+				BS_CORE_ERROR("SceneRenderer: failed to create FXAA tonemap pipeline");
+				abortFrame();
+				return;
+			}
+		}
+
 		// --- Tonemap + optional FSR 1 (included in the dynamic-resolution GPU cost) -----------------
 		{
 			const GpuPassScope pass(profiler, commandList, PassTonemap);
-			const TonemapPush push = { settings.Exposure, static_cast<uint32_t>(settings.Tonemap), static_cast<uint32_t>(settings.DebugView), fsr1 ? 1u : 0u, uvScale };
+			const TonemapPush push = { settings.Exposure, static_cast<uint32_t>(settings.Tonemap), static_cast<uint32_t>(settings.DebugView), (fsr1 || fxaa) ? 1u : 0u, uvScale };
+			if (fxaa)
+			{
+				fullscreen(impl.FxaaTonemapPipeline, impl.PostProcess.GetFXAAInput(), impl.TonemapSet, renderViewport, &push, sizeof(push));
+				impl.PostProcess.RenderFXAA(commandList, fsr1 ? impl.Upscaler.GetInputFramebuffer() : impl.OutputFramebuffer.Get(), { m_RenderWidth, m_RenderHeight }, !fsr1);
+			}
 			if (fsr1)
 			{
-				fullscreen(impl.FsrTonemapPipeline, impl.Upscaler.GetInputFramebuffer(), impl.TonemapSet, renderViewport, &push, sizeof(push));
+				if (!fxaa)
+					fullscreen(impl.FsrTonemapPipeline, impl.Upscaler.GetInputFramebuffer(), impl.TonemapSet, renderViewport, &push, sizeof(push));
 				impl.Upscaler.Render(commandList, impl.OutputFramebuffer, { m_RenderWidth, m_RenderHeight }, settings.FSR1Sharpness);
 				m_Statistics.FSR1Active = true;
 			}
-			else
+			else if (!fxaa)
 				fullscreen(impl.TonemapPipeline, impl.OutputFramebuffer, impl.TonemapSet, outputViewport, &push, sizeof(push));
 		}
 
