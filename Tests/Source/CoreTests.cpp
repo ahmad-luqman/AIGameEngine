@@ -688,6 +688,19 @@ TEST_SUITE("Core")
 		CHECK(result.Output.find("=old") == std::string::npos);
 	}
 
+	TEST_CASE("RunProcess stops a child whose output passes the file limit")
+	{
+		// 4 GiB would fill a small disk: the runner must stop it long before (the timeout is only a safety net).
+		ProcessSpec spec = ChildProcess({ "flood", "4294967296" });
+		spec.MaxOutputFileBytes = uint64_t{ 1 } * 1024 * 1024;
+		spec.Timeout = std::chrono::seconds(20);
+		const ProcessResult result = RunProcess(spec);
+		CHECK(result.Outcome == ProcessOutcome::OutputLimit);
+		CHECK(result.Error.find("more than 1048576 bytes of output") != std::string::npos);
+		CHECK(result.Output.size() == spec.MaxOutputBytes);
+		CHECK(result.Output.find_first_not_of('y') == std::string::npos);
+	}
+
 	TEST_CASE("RunProcess keeps the end of long output")
 	{
 		ProcessSpec spec = ChildProcess({ "spam", "100000", "print", "THE END" });
@@ -775,6 +788,16 @@ TEST_SUITE("Core")
 			CHECK(result.Outcome == ProcessOutcome::Failed);
 			CHECK(result.Error.find("invalid environment variable name") != std::string::npos);
 		}
+		// Which of two values for one name wins would differ between platforms (Windows ignores case).
+		spec.Environment = { { "BASALT_TEST_VALUE", "a" }, { "basalt_test_value", "b" } };
+		ProcessResult result = RunProcess(spec);
+		CHECK(result.Outcome == ProcessOutcome::Failed);
+		CHECK(result.Error.find("set twice") != std::string::npos);
+		spec.Environment.clear();
+		spec.Timeout = std::chrono::milliseconds(0);
+		result = RunProcess(spec);
+		CHECK(result.Outcome == ProcessOutcome::Failed);
+		CHECK(result.Error.find("timeout must be positive") != std::string::npos);
 	}
 
 	TEST_CASE("RunProcess resolves a relative executable against the caller's directory, not the child's")

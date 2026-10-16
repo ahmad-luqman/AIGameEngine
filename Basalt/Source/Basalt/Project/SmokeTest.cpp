@@ -97,7 +97,6 @@ namespace Basalt {
 		if (error)
 			BS_CORE_WARN("Smoke test: cannot remove its save data directory '{}': {}", FileSystem::PathToUtf8(userData), error.message());
 
-		result.Passed = result.Process.Succeeded();
 		switch (result.Process.Outcome)
 		{
 			case ProcessOutcome::Failed:
@@ -109,9 +108,12 @@ namespace Basalt {
 			case ProcessOutcome::Crashed:
 				result.Summary = "the game crashed: " + result.Process.Error;
 				break;
+			case ProcessOutcome::OutputLimit:
+				result.Summary = "the game was " + result.Process.Error + " (a runaway log?)";
+				break;
 			case ProcessOutcome::Exited:
 				// --frames is a limit: a game may also quit earlier (Application.Quit), which is still a clean exit.
-				result.Summary = result.Passed ? fmt::format("the game ran (up to {} frames) and exited cleanly", frames) : fmt::format("the game exited with code {}: {}", result.Process.ExitCode, DescribeRuntimeExitCode(result.Process.ExitCode));
+				result.Summary = result.Passed() ? fmt::format("the game ran (up to {} frames) and exited cleanly", frames) : fmt::format("the game exited with code {}: {}", result.Process.ExitCode, DescribeRuntimeExitCode(result.Process.ExitCode));
 				break;
 		}
 		return result;

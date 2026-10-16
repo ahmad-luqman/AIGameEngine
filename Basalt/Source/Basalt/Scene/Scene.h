@@ -4,6 +4,7 @@
 #include "Basalt/Core/Timestep.h"
 #include "Basalt/Core/UUID.h"
 #include "Basalt/Math/Random.h"
+#include "Basalt/Physics/FixedTimestep.h"
 #include "Basalt/Physics/PhysicsLayers.h"
 #include "Basalt/Renderer/Fsr1Settings.h"
 #include "Basalt/Renderer/GraphicsSettings.h"
@@ -76,7 +77,9 @@ namespace Basalt {
 		float FixedTimestep = 0.0f;
 		uint32_t MaxStepsPerFrame = 8;
 
-		bool HasFixedTimestepOverride() const { return FixedTimestep > 0.0f; }
+		// Loading and scene.settings only accept valid steps; anything else (NaN, a value set from C++ out of range)
+		// follows the project.
+		bool HasFixedTimestepOverride() const { return IsValidFixedTimestep(FixedTimestep); }
 	};
 
 	enum class SceneState
@@ -207,6 +210,9 @@ namespace Basalt {
 
 		PhysicsWorld* GetPhysicsWorld() const { return m_PhysicsWorld.get(); }
 		ScriptEngine* GetScriptEngine() const { return m_ScriptEngine.get(); }
+		// The script errors of the last Play session, including those OnDestroy raised while it stopped (the script
+		// engine itself is gone by then). Cleared when Play starts.
+		const std::vector<std::string>& GetStoppedSessionScriptErrors() const { return m_StoppedSessionScriptErrors; }
 		AudioSystem* GetAudioSystem() const { return m_AudioSystem.get(); }
 		// Null in Edit mode; owned by the current Play/Simulate session.
 		AnimationSystem* GetAnimationSystem() const { return m_AnimationSystem.get(); }
@@ -292,6 +298,7 @@ namespace Basalt {
 		uint32_t m_RandomSeed = Random::DefaultSeed;
 		// The project's FixedTimestep when the session started (0 outside a session).
 		float m_SessionFixedTimestep = 0.0f;
+		std::vector<std::string> m_StoppedSessionScriptErrors;
 		// Independent of gameplay draws; continues across Scene.Load and is released on stop.
 		std::optional<SessionIdentity> m_SessionIdentity;
 		bool m_QuitRequested = false;

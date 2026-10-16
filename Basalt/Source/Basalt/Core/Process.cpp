@@ -7,6 +7,7 @@
 	#include <windows.h>
 #else
 	#include <fcntl.h>
+	#include <sys/stat.h>
 	#include <sys/wait.h>
 	#include <unistd.h>
 
@@ -42,15 +43,38 @@ namespace Basalt {
 				outError = "invalid executable path '" + FileSystem::PathToUtf8(spec.Executable) + "'";
 				return false;
 			}
-			for (const auto& [name, value] : spec.Environment)
+			if (spec.Timeout <= std::chrono::milliseconds::zero())
 			{
+				outError = "the timeout must be positive";
+				return false;
+			}
+			if (spec.MaxOutputFileBytes == 0)
+			{
+				outError = "the output file limit must be positive";
+				return false;
+			}
+			for (size_t i = 0; i < spec.Environment.size(); i++)
+			{
+				const std::string& name = spec.Environment[i].first;
 				if (name.empty() || name.find('=') != std::string::npos)
 				{
 					outError = "invalid environment variable name '" + name + "'";
 					return false;
 				}
+				// Which value would win differs between platforms (Windows names ignore case): refuse the ambiguity.
+				for (size_t j = 0; j < i; j++)
+					if (FileSystem::ToLowerAscii(spec.Environment[j].first) == FileSystem::ToLowerAscii(name))
+					{
+						outError = "environment variable '" + name + "' is set twice";
+						return false;
+					}
 			}
 			return true;
+		}
+
+		std::string OutputLimitMessage(const ProcessSpec& spec)
+		{
+			return fmt::format("stopped after writing more than {} bytes of output", spec.MaxOutputFileBytes);
 		}
 
 		// The output tail as valid UTF-8 (it goes into JSON): a cut through a character at the start is dropped,
@@ -111,6 +135,8 @@ namespace Basalt {
 
 		// How long a terminated child may take to go away before the runner gives up on it.
 		constexpr DWORD TerminateWaitMilliseconds = 10000;
+		// How often the parent checks the size of the child's output while waiting.
+		constexpr long long OutputCheckMilliseconds = 50;
 
 		std::string LastErrorMessage(DWORD code)
 		{
@@ -356,13 +382,45 @@ namespace Basalt {
 		HandleGuard processHandle{ process.hProcess };
 		HandleGuard threadHandle{ process.hThread };
 
-		const auto timeout = static_cast<DWORD>(std::clamp<long long>(spec.Timeout.count(), 0, INFINITE - 1));
-		const DWORD wait = WaitForSingleObject(process.hProcess, timeout);
+		// Waits in slices, checking the output file's size between them.
+		const auto deadline = std::chrono::steady_clock::now() + spec.Timeout;
+		DWORD wait = WAIT_TIMEOUT;
+		DWORD waitError = 0;
+		bool outputLimit = false;
+		for (;;)
+		{
+			const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
+			wait = WaitForSingleObject(process.hProcess, static_cast<DWORD>(std::clamp<long long>(left, 0, OutputCheckMilliseconds)));
+			if (wait != WAIT_TIMEOUT)
+			{
+				waitError = GetLastError();
+				break;
+			}
+			if (LARGE_INTEGER size{}; GetFileSizeEx(output.Handle, &size) && static_cast<uint64_t>(size.QuadPart) > spec.MaxOutputFileBytes)
+			{
+				outputLimit = true;
+				break;
+			}
+			if (left <= 0)
+				break;
+		}
 		if (wait != WAIT_OBJECT_0)
 		{
-			const DWORD waitError = GetLastError();
-			result.Outcome = wait == WAIT_TIMEOUT ? ProcessOutcome::TimedOut : ProcessOutcome::Failed;
-			result.Error = wait == WAIT_TIMEOUT ? "killed after " + std::to_string(spec.Timeout.count()) + " ms" : "cannot wait for the process: " + LastErrorMessage(waitError);
+			if (outputLimit)
+			{
+				result.Outcome = ProcessOutcome::OutputLimit;
+				result.Error = OutputLimitMessage(spec);
+			}
+			else if (wait == WAIT_TIMEOUT)
+			{
+				result.Outcome = ProcessOutcome::TimedOut;
+				result.Error = "killed after " + std::to_string(spec.Timeout.count()) + " ms";
+			}
+			else
+			{
+				result.Outcome = ProcessOutcome::Failed;
+				result.Error = "cannot wait for the process: " + LastErrorMessage(waitError);
+			}
 			// A child that exits on its own between the wait and the kill makes TerminateProcess fail harmlessly.
 			if (!TerminateProcess(process.hProcess, 1) && WaitForSingleObject(process.hProcess, 0) != WAIT_OBJECT_0)
 				result.Error += " (and it could not be terminated: " + LastErrorMessage(GetLastError()) + ")";
@@ -610,6 +668,15 @@ namespace Basalt {
 					WaitForChild(pid, status);
 				}
 				result.Error = std::string("cannot wait for the process: ") + std::strerror(waitError);
+				result.Output = ReadTail(output.Value, spec.MaxOutputBytes);
+				return result;
+			}
+			if (struct stat info{}; fstat(output.Value, &info) == 0 && static_cast<uint64_t>(info.st_size) > spec.MaxOutputFileBytes)
+			{
+				kill(pid, SIGKILL);
+				WaitForChild(pid, status);
+				result.Outcome = ProcessOutcome::OutputLimit;
+				result.Error = OutputLimitMessage(spec);
 				result.Output = ReadTail(output.Value, spec.MaxOutputBytes);
 				return result;
 			}

@@ -60,7 +60,7 @@ namespace Basalt {
 	// inside Assets/ (or a builtin:// mesh), with / separators: an error otherwise. Other strings that look like
 	// asset paths ("Assets/Prefabs/Shot.bprefab" in a script property) are checked too but only warn, since they
 	// may be text. Files are checked for existence, not decoded. Headless; reads files but changes nothing.
-	ValidationReport ValidateProject(const Project& project);
+	[[nodiscard]] ValidationReport ValidateProject(const Project& project);
 
 	// A RigidBody or CharacterController that names a layer the project does not define (it plays on Default).
 	struct UnknownPhysicsLayerUse

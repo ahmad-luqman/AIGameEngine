@@ -89,6 +89,12 @@ namespace Basalt {
 			return file;
 		}
 
+		// The project-relative source path: a key's first line (MakeKey).
+		std::string SourceOfKey(const std::string& key)
+		{
+			return key.substr(0, key.find('\n'));
+		}
+
 		std::filesystem::path KeyPathOf(const std::filesystem::path& image)
 		{
 			return std::filesystem::path(image).replace_extension(".key");
@@ -325,7 +331,11 @@ namespace Basalt {
 		std::string error;
 		const Ref<TextureSource> texture = TextureSource::LoadFromFile(image, error);
 		if (!texture || texture->Format != TextureFormat::RGBA8)
+		{
+			// The preview is made again (and the entry replaced), so this costs one render, not a missing preview.
+			BS_CORE_WARN("Thumbnails: the cached preview of '{}' is unreadable ({}); making it again", relativePath, texture ? "not RGBA8" : error);
 			return std::nullopt;
+		}
 		Entry entry{ ThumbnailImage{ texture->Width, texture->Height, texture->Pixels }, keyFile->Details };
 		if (!entry.Image.IsValid())
 			return std::nullopt;
@@ -392,7 +402,7 @@ namespace Basalt {
 			{
 				const auto stored = FileSystem::ReadTextFile(file);
 				const auto keyFile = stored ? ParseKeyFile(*stored) : std::nullopt;
-				const std::string source = keyFile ? keyFile->Key.substr(0, keyFile->Key.find('\n')) : std::string();
+				const std::string source = keyFile ? SourceOfKey(keyFile->Key) : std::string();
 				if (!everything && !source.empty() && FileSystem::Exists(m_ProjectDirectory / FileSystem::PathFromUtf8(source)))
 					continue;
 				remove(file);

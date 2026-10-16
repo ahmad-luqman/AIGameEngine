@@ -68,6 +68,15 @@ namespace {
 				std::this_thread::sleep_for(std::chrono::milliseconds(Number(value)));
 				i++;
 			}
+			else if (action == "flood")
+			{
+				// Writes N bytes in chunks, as a runaway log would, rather than holding them in memory.
+				const std::string chunk(size_t{ 64 } * 1024, 'y');
+				const auto total = static_cast<unsigned long long>(std::strtod(value, nullptr));
+				for (unsigned long long written = 0; written < total; written += chunk.size())
+					std::fwrite(chunk.data(), 1, chunk.size(), stdout);
+				i++;
+			}
 			else if (action == "spam")
 			{
 				std::fputs(std::string(static_cast<size_t>(Number(value)), 'x').c_str(), stdout);

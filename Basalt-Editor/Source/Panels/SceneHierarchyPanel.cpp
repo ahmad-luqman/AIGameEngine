@@ -1,5 +1,6 @@
 #include "Panels/SceneHierarchyPanel.h"
 
+#include "Basalt/Automation/EditorCommandSchemas.h"
 #include "Basalt/Scene/Scene.h"
 
 #include <imgui.h>
@@ -147,7 +148,7 @@ namespace Basalt {
 
 	void SceneHierarchyPanel::OnImGuiRender()
 	{
-		ImGui::Begin("Hierarchy");
+		ImGui::Begin(EditorCommandSchemas::HierarchyTitle);
 		m_PreviousVisible = std::move(m_Visible);
 		m_Visible.clear();
 		Scene* scene = m_Context.Session.GetScene().get();

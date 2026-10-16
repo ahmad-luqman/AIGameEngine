@@ -2,6 +2,7 @@
 
 #include "Panels/JsonWidgets.h"
 
+#include "Basalt/Automation/EditorCommandSchemas.h"
 #include "Basalt/Animation/AnimatedModel.h"
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Core/Assert.h"
@@ -215,7 +216,7 @@ namespace Basalt {
 
 	void InspectorPanel::OnImGuiRender()
 	{
-		ImGui::Begin("Inspector");
+		ImGui::Begin(EditorCommandSchemas::InspectorTitle);
 		if (m_Context.HasAutomationTransaction())
 			ImGui::TextWrapped("Finish the active transaction using Commit/Cancel in the status bar to edit components.");
 		if (m_Context.Session.GetSelections().size() > 1)

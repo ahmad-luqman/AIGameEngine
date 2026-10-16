@@ -213,7 +213,6 @@ TEST_CASE("The Game view letterboxes the game resolution into the panel")
 	CHECK(rect.Size.x == doctest::Approx(300.0f * 16.0f / 9.0f));
 	CHECK(rect.Origin.x == doctest::Approx((1000.0f - rect.Size.x) * 0.5f));
 	CHECK(rect.Origin.y == doctest::Approx(0.0f));
-	CHECK(rect.Scale == doctest::Approx(300.0f / 900.0f));
 	// Taller panel: bars above and below.
 	rect = FitLetterbox({ 400.0f, 1000.0f }, { 1600, 900 });
 	CHECK(rect.Size.x == doctest::Approx(400.0f));
@@ -222,7 +221,7 @@ TEST_CASE("The Game view letterboxes the game resolution into the panel")
 	// Same aspect: no bars; a larger panel scales up.
 	rect = FitLetterbox({ 3200.0f, 1800.0f }, { 1600, 900 });
 	CHECK(rect.Origin == glm::vec2(0.0f));
-	CHECK(rect.Scale == doctest::Approx(2.0f));
+	CHECK(rect.Size == glm::vec2(3200.0f, 1800.0f));
 	// Portrait games keep their aspect too.
 	rect = FitLetterbox({ 800.0f, 800.0f }, { 1080, 1920 });
 	CHECK(rect.Size.x / rect.Size.y == doctest::Approx(1080.0f / 1920.0f));
@@ -232,7 +231,6 @@ TEST_CASE("The Game view letterboxes the game resolution into the panel")
 	{
 		rect = FitLetterbox(panel, game);
 		CHECK(rect.Size == glm::vec2(0.0f));
-		CHECK(rect.Scale == 0.0f);
 	}
 }
 

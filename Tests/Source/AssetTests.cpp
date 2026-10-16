@@ -204,6 +204,23 @@ TEST_SUITE("Assets")
 		CHECK(texture->Pixels[1] == 255);
 	}
 
+	TEST_CASE("FindLoadedMesh only reports meshes already loaded, and never loads one")
+	{
+		AssetManager::Clear();
+		CHECK_FALSE(AssetManager::FindLoadedMesh("builtin://Cube"));
+		// A lookup does not load (the content-browser tooltip relies on this).
+		CHECK_FALSE(AssetManager::FindLoadedMesh("builtin://Cube"));
+		const Ref<MeshSource> loaded = AssetManager::GetMesh("builtin://Cube");
+		REQUIRE(loaded);
+		CHECK(AssetManager::FindLoadedMesh("builtin://Cube") == loaded);
+		// A failed load is not a loaded mesh.
+		CHECK_FALSE(AssetManager::GetMesh("builtin://Teapot"));
+		CHECK_FALSE(AssetManager::FindLoadedMesh("builtin://Teapot"));
+		AssetManager::Reload("builtin://Cube");
+		CHECK_FALSE(AssetManager::FindLoadedMesh("builtin://Cube"));
+		AssetManager::Clear();
+	}
+
 	TEST_CASE("Asset failures are reported and cached until reloaded")
 	{
 		BasaltTest::TempProject project("AssetFailures");
@@ -936,10 +953,12 @@ TEST_SUITE("Assets")
 		// Pruning removes entries of deleted sources, and images an interrupted store left without a key.
 		std::filesystem::remove(project.GetPath() / "Assets/Other.png");
 		REQUIRE(FileSystem::WriteTextFile(cache.GetDirectory() / "0123456789abcdef.png", "orphan"));
+		// Counts are files: Other.png's image and key, and the orphan image.
 		CHECK(cache.PruneMissing() == 3);
 		CHECK_FALSE(std::filesystem::exists(cache.GetImagePath("Assets/Other.png")));
 		CHECK_FALSE(std::filesystem::exists(cache.GetDirectory() / "0123456789abcdef.png"));
 		CHECK(std::filesystem::exists(cache.GetImagePath("Assets/Wall.png")));
+		// Wall.png's image and key.
 		CHECK(cache.Clear() == 2);
 		CHECK_FALSE(std::filesystem::exists(cache.GetImagePath("Assets/Wall.png")));
 		CHECK(cache.Clear() == 0);
@@ -1009,6 +1028,10 @@ TEST_SUITE("Assets")
 		REQUIRE(FileSystem::WriteTextFile(ignored.GetPath() / ".gitignore", "Cache/\nSaved/\n"));
 		REQUIRE(Project::Create(ignored.GetPath(), "Ignored", error));
 		CHECK(FileSystem::ReadTextFile(ignored.GetPath() / ".gitignore").value_or("") == "Cache/\nSaved/\n");
-		Project::SetActive(nullptr);
+		// Only a rule for the folder itself counts: "Cache/Thumbnails" leaves the rest of Cache/ tracked.
+		BasaltTest::TempDirectory partial("ProjectGitignorePartial");
+		REQUIRE(FileSystem::WriteTextFile(partial.GetPath() / ".gitignore", "Cache/Thumbnails\r\n"));
+		REQUIRE(Project::Create(partial.GetPath(), "Partial", error));
+		CHECK(FileSystem::ReadTextFile(partial.GetPath() / ".gitignore").value_or("") == "Cache/Thumbnails\r\nCache/\n");
 	}
 }

@@ -4,6 +4,7 @@
 #include "Panels/PreviewImage.h"
 #include "ThumbnailManager.h"
 
+#include "Basalt/Automation/EditorCommandSchemas.h"
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Asset/MeshSource.h"
 #include "Basalt/Core/FileSystem.h"
@@ -87,7 +88,7 @@ return %s
 
 	void ContentBrowserPanel::OnImGuiRender()
 	{
-		ImGui::Begin("Content Browser");
+		ImGui::Begin(EditorCommandSchemas::ContentBrowserTitle);
 		const Ref<Project>& project = Project::GetActive();
 		if (!project)
 		{

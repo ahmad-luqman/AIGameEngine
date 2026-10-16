@@ -85,6 +85,7 @@ namespace Basalt {
 
 	const ThumbnailManager::Preview* ThumbnailManager::Get(const std::string& relativePath)
 	{
+		BS_CORE_ASSERT(relativePath.starts_with("Assets/"), "thumbnail paths are project-relative asset paths");
 		const ThumbnailKind kind = ClassifyThumbnail(relativePath);
 		const auto cache = GetCache();
 		if (kind == ThumbnailKind::None || !cache)
@@ -280,7 +281,10 @@ namespace Basalt {
 				auto image = m_Renderer->RenderModel(relativePath, outError);
 				if (!image)
 					return std::nullopt;
+				// RenderModel just loaded it; should AssetManager have dropped it since, only the details line is lost.
 				const Ref<MeshSource> mesh = AssetManager::FindLoadedMesh(relativePath);
+				if (!mesh)
+					BS_CORE_WARN("Thumbnails: '{}' rendered but is no longer loaded; its preview has no details", relativePath);
 				return ThumbnailCache::Entry{ std::move(*image), mesh ? ModelDetails(*mesh) : std::vector<std::string>{} };
 			}
 			case ThumbnailKind::Prefab:
@@ -296,6 +300,8 @@ namespace Basalt {
 				std::vector<std::string> details;
 				if (entities != data.end() && entities->is_array())
 					details.push_back(fmt::format("{} entit{}", entities->size(), entities->size() == 1 ? "y" : "ies"));
+				else
+					BS_CORE_WARN("Thumbnails: '{}' rendered but could not be read again for its details (changed meanwhile?)", relativePath);
 				return ThumbnailCache::Entry{ std::move(*image), std::move(details) };
 			}
 			case ThumbnailKind::None:
@@ -324,6 +330,13 @@ namespace Basalt {
 		if (kind == ThumbnailKind::None)
 		{
 			outError = "'" + relativePath + "' has no preview (images, .hdr environments, models and prefabs do)";
+			return std::nullopt;
+		}
+		// Previews are of project assets: never read (or cache) a file elsewhere on disk.
+		const std::filesystem::path normal = FileSystem::PathFromUtf8(relativePath).lexically_normal();
+		if (!relativePath.starts_with("Assets/") || normal.empty() || *normal.begin() != "Assets")
+		{
+			outError = "'" + relativePath + "' is not inside Assets/ (paths are project-relative, like Assets/Models/Ship.glb)";
 			return std::nullopt;
 		}
 		std::string keyError;

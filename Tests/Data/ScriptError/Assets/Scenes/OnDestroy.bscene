@@ -1,0 +1,9 @@
+{
+	"Format": "BasaltScene",
+	"Version": 2,
+	"Name": "OnDestroy",
+	"Entities": [
+		{ "ID": 1, "Name": "BrokenOnDestroy", "Components": {
+			"Script": { "Script": "Assets/Scripts/BrokenOnDestroy.lua" } } }
+	]
+}

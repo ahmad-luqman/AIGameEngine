@@ -45,9 +45,9 @@ namespace Basalt {
 		// keeps its own step).
 		void Set(const nlohmann::json& params);
 
-		// Draws a numeric field and reports its value once, when an edit of it ends. The project is re-read every
-		// frame, so the value being edited is kept here: ImGui does not write a slider's (or a text field's) value
-		// on the frame the edit ends, which is the frame it is committed on.
+		// Draws a numeric field and reports its value once, when an edit of it ends. The field is drawn from the
+		// saved project every frame, which would overwrite what is being typed or dragged, so the value being edited
+		// is kept here and drawn instead until the edit ends.
 		template<typename T, size_t N, typename DrawField>
 		bool EditCommitted(const char* label, std::array<T, N>& values, DrawField&& draw)
 		{
@@ -87,8 +87,8 @@ namespace Basalt {
 			ImGuiID Id = 0;
 			std::array<double, 2> Values{};
 		};
-		// A layer being renamed: which one (by its name when the edit began, so a change to the list meanwhile cannot
-		// rename another layer) and the text typed so far.
+		// A layer being renamed: its index, its name when the edit began (if the layer at that index has another name
+		// by the time the edit ends, the list changed meanwhile and the rename is dropped) and the text typed so far.
 		struct LayerRename
 		{
 			uint32_t Index = 0;
@@ -105,7 +105,7 @@ namespace Basalt {
 		std::string m_NewLayerName;
 		std::optional<LayerRename> m_Rename;
 		std::vector<std::string> m_Warnings;
-		// The last project.validate report, until the settings change.
+		// The last project.validate report, until this panel changes a setting or another project opens.
 		std::optional<nlohmann::json> m_Validation;
 	};
 

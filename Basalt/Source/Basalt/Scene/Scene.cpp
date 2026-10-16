@@ -562,6 +562,7 @@ namespace Basalt {
 			return;
 
 		m_GraphicsSettings = graphics.value_or(Project::GetActiveGraphicsSettings());
+		m_StoppedSessionScriptErrors.clear();
 		m_State = SceneState::Play;
 		BumpRenderRevision();
 		m_Time = 0.0f;
@@ -608,6 +609,7 @@ namespace Basalt {
 		if (m_ScriptEngine)
 			m_ScriptEngine->Stop();
 		m_DeferDestruction--;
+		m_StoppedSessionScriptErrors = m_ScriptEngine ? m_ScriptEngine->GetErrors() : std::vector<std::string>{};
 		m_ScriptEngine.reset();
 		m_UIInteraction.reset();
 		m_ParticleSystem.reset();

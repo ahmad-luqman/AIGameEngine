@@ -182,12 +182,12 @@ namespace Basalt {
 		};
 		if (m_Options.MaxFrames == 0)
 			return;
-		// Errors an OnDestroy raises while the scene stops (after this) are not counted.
 		if (m_Options.FailOnScriptErrors && m_Scene)
 		{
-			if (const ScriptEngine* scripts = m_Scene->GetScriptEngine(); scripts && !scripts->GetErrors().empty())
+			// Stop the game here rather than in OnDetach, so errors its OnDestroy callbacks raise are counted too.
+			m_Scene->OnRuntimeStop();
+			if (const auto& errors = m_Scene->GetStoppedSessionScriptErrors(); !errors.empty())
 			{
-				const auto& errors = scripts->GetErrors();
 				BS_CORE_ERROR("Runtime: {} script error(s) occurred; the first: {}", errors.size(), errors.front());
 				fail(7);
 			}
