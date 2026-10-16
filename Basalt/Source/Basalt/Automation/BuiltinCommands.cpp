@@ -133,9 +133,25 @@ namespace Basalt {
 		json SmokeTestJson(const SmokeTestResult& result)
 		{
 			static constexpr size_t LogLines = 40;
-			const char* outcome = result.Process.Outcome == ProcessOutcome::Exited ? "exited" : result.Process.Outcome == ProcessOutcome::TimedOut ? "timedOut"
-																																				   : "failed";
-			return { { "passed", result.Passed }, { "outcome", outcome }, { "exitCode", result.Process.Outcome == ProcessOutcome::Exited ? json(result.Process.ExitCode) : json() }, { "summary", result.Summary }, { "log", LastLines(result.Process.Output, LogLines) } };
+			const char* outcome = "failed";
+			json exitCode;
+			switch (result.Process.Outcome)
+			{
+				case ProcessOutcome::Exited:
+					outcome = "exited";
+					exitCode = result.Process.ExitCode;
+					break;
+				case ProcessOutcome::Crashed:
+					outcome = "crashed";
+					exitCode = result.Process.ExitCode;
+					break;
+				case ProcessOutcome::TimedOut:
+					outcome = "timedOut";
+					break;
+				case ProcessOutcome::Failed:
+					break;
+			}
+			return { { "passed", result.Passed }, { "outcome", outcome }, { "exitCode", exitCode }, { "summary", result.Summary }, { "log", LastLines(result.Process.Output, LogLines) } };
 		}
 
 		constexpr int64_t DefaultSmokeTestFrames = 120;
@@ -155,8 +171,14 @@ namespace Basalt {
 			std::string text = fmt::format("project validation found {} error(s)", report.GetErrorCount());
 			size_t listed = 0;
 			for (const ValidationIssue& issue : report.GetIssues())
-				if (issue.Severity == ValidationSeverity::Error && listed++ < Listed)
-					text += "\n" + issue.File + ": " + issue.Message;
+			{
+				if (listed == Listed)
+					break;
+				if (issue.Severity != ValidationSeverity::Error)
+					continue;
+				text += "\n" + issue.File + ": " + issue.Message;
+				listed++;
+			}
 			if (report.GetErrorCount() > Listed)
 				text += "\n(run project.validate for the full list)";
 			return text;
@@ -536,15 +558,15 @@ namespace Basalt {
 												   { "TargetFrameRate", Schema::Number("target FPS", MinTargetFrameRate, MaxTargetFrameRate) },
 												   { "MinRenderScale", Schema::Number("minimum scale", MinRenderScale, MaxRenderScale) } });
 			graphicsSchema["description"] = "Project graphics defaults; applies to the next Play session. Do not repeat a setting through its top-level alias.";
-			Add(registry, "project.set", "Changes project settings and saves the project file.", Schema::Object({ { "graphics", Schema::Nullable(graphicsSchema) }, { "name", Schema::Nullable(Schema::String("string")) }, { "startScene", Schema::Nullable(Schema::String("string, project-relative scene")) }, { "windowWidth", Schema::Nullable(Schema::Integer("integer", 64, 16384)) }, { "windowHeight", Schema::Nullable(Schema::Integer("integer", 64, 16384)) }, { "fullscreen", Schema::Nullable(Schema::Boolean("bool")) }, { "renderScale", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution)", MinRenderScale, MaxRenderScale), MinRenderScale, MaxRenderScale)) }, { "dynamicResolution", Schema::Nullable(Schema::Boolean("bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries)")) }, { "targetFrameRate", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}]; dynamic resolution keeps the scene's GPU time within this frame rate's frame time", MinTargetFrameRate, MaxTargetFrameRate), MinTargetFrameRate, MaxTargetFrameRate)) }, { "minRenderScale", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning)", MinRenderScale, MaxRenderScale), MinRenderScale, MaxRenderScale)) }, { "physicsLayers", json{ { "type", "object" }, { "description", "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play" } } }, { "randomSeed", Schema::Nullable(Schema::Integer("integer in [0, 4294967295], seeds Lua's random numbers, particle emitters and runtime entity UUIDs; applies from the next play", 0, UINT32_MAX)) }, { "fixedTimestep", Schema::Nullable(json{ { "type", "number" }, { "description", fmt::format("number of seconds in (0, {}], the physics step of every scene that does not override it (scene.settings Physics.FixedTimestep); applies from the next play", MaxFixedTimestep) }, { "exclusiveMinimum", 0.0 }, { "maximum", MaxFixedTimestep } }) } }), [](AutomationSession& session, const json& params) {
+			Add(registry, "project.set", "Changes project settings and saves the project file.", Schema::Object({ { "graphics", Schema::Nullable(graphicsSchema) }, { "name", Schema::Nullable(Schema::String("string")) }, { "startScene", Schema::Nullable(Schema::String("string, project-relative scene")) }, { "windowWidth", Schema::Nullable(Schema::Integer("integer", ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize)) }, { "windowHeight", Schema::Nullable(Schema::Integer("integer", ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize)) }, { "fullscreen", Schema::Nullable(Schema::Boolean("bool")) }, { "renderScale", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution)", MinRenderScale, MaxRenderScale), MinRenderScale, MaxRenderScale)) }, { "dynamicResolution", Schema::Nullable(Schema::Boolean("bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries)")) }, { "targetFrameRate", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}]; dynamic resolution keeps the scene's GPU time within this frame rate's frame time", MinTargetFrameRate, MaxTargetFrameRate), MinTargetFrameRate, MaxTargetFrameRate)) }, { "minRenderScale", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning)", MinRenderScale, MaxRenderScale), MinRenderScale, MaxRenderScale)) }, { "physicsLayers", json{ { "type", "object" }, { "description", "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play" } } }, { "randomSeed", Schema::Nullable(Schema::Integer("integer in [0, 4294967295], seeds Lua's random numbers, particle emitters and runtime entity UUIDs; applies from the next play", 0, UINT32_MAX)) }, { "fixedTimestep", Schema::Nullable(json{ { "type", "number" }, { "description", fmt::format("number of seconds in (0, {}], the physics step of every scene that does not override it (scene.settings Physics.FixedTimestep); applies from the next play", MaxFixedTimestep) }, { "exclusiveMinimum", 0.0 }, { "maximum", MaxFixedTimestep } }) } }), [](AutomationSession& session, const json& params) {
 				Ref<Project> project = RequireProject();
 				// Every value is read and validated before any is assigned, so a bad parameter leaves the
 				// project untouched.
 				ProjectConfig config = project->GetConfig();
 				config.Name = OptionalString(params, "name", config.Name);
 				config.StartScene = OptionalString(params, "startScene", config.StartScene);
-				config.WindowWidth = static_cast<uint32_t>(OptionalInteger(params, "windowWidth", config.WindowWidth, 64, 16384));
-				config.WindowHeight = static_cast<uint32_t>(OptionalInteger(params, "windowHeight", config.WindowHeight, 64, 16384));
+				config.WindowWidth = static_cast<uint32_t>(OptionalInteger(params, "windowWidth", config.WindowWidth, ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize));
+				config.WindowHeight = static_cast<uint32_t>(OptionalInteger(params, "windowHeight", config.WindowHeight, ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize));
 				config.Fullscreen = OptionalBool(params, "fullscreen", config.Fullscreen);
 				config.Graphics.RenderScale = static_cast<float>(OptionalNumber(params, "renderScale", config.Graphics.RenderScale, MinRenderScale, MaxRenderScale));
 				config.Graphics.DynamicResolution.Enabled = OptionalBool(params, "dynamicResolution", config.Graphics.DynamicResolution.Enabled);
@@ -595,7 +617,7 @@ namespace Basalt {
 				return result;
 			});
 
-			Add(registry, "project.validate", "Checks that the project would export and start: settings, start scene, every scene and prefab (loads; referenced asset files exist inside Assets/ with the exact letter case), and every Lua script (compiles). Returns {valid, errors, warnings, omitted, issues: [{severity, file, message}]}.", Schema::Object({ { "assertValid", Schema::Nullable(Schema::Boolean("bool: fail the command when there is an error-severity issue")) } }), [](AutomationSession&, const json& params) {
+			Add(registry, "project.validate", "Checks that the project would export and start: settings, start scene, every scene and prefab (loads; referenced asset files exist inside Assets/ with the exact letter case; a bare file name without a folder only warns), every Lua script (compiles) and the scripts Script components use (load as script classes). Returns {valid, errors, warnings, omitted, issues: [{severity, file, message}]}.", Schema::Object({ { "assertValid", Schema::Nullable(Schema::Boolean("bool: fail the command when there is an error-severity issue")) } }), [](AutomationSession&, const json& params) {
 				const ValidationReport report = ValidateProject(*RequireProject());
 				if (OptionalBool(params, "assertValid", false) && !report.IsValid())
 					throw CommandError(DescribeValidationErrors(report));
@@ -608,6 +630,8 @@ namespace Basalt {
 					throw CommandError("the open scene has unsaved changes; run scene.save first");
 				const int64_t smokeFrames = OptionalInteger(params, "smokeTestFrames", 0, 0, MaxSmokeTestFrames);
 				const double smokeSeconds = OptionalNumber(params, "smokeTestTimeout", DefaultSmokeTestSeconds, 1, MaxSmokeTestSeconds);
+				if (smokeFrames == 0 && params.contains("smokeTestTimeout") && !params["smokeTestTimeout"].is_null())
+					throw CommandError("smokeTestTimeout needs smokeTestFrames (the number of frames the smoke test runs)");
 				json validation;
 				if (OptionalBool(params, "validate", true))
 				{
@@ -630,7 +654,7 @@ namespace Basalt {
 				return response;
 			});
 
-			Add(registry, "project.smoke_test", "Runs an exported game headless (no GPU needed) for N fixed frames and reports whether it exited cleanly: exit code 0 and no script errors within the timeout. Returns {passed, outcome: exited|timedOut|failed, exitCode, summary, log}.", Schema::Object({ { "executable", Schema::String("string, the exported game's executable (project.export's executable)", true) }, { "frames", Schema::Nullable(Schema::Integer("integer (default 120)", 1, MaxSmokeTestFrames)) }, { "timeout", Schema::Nullable(Schema::Number("number of seconds (default 60)", 1, MaxSmokeTestSeconds)) }, { "assertPassed", Schema::Nullable(Schema::Boolean("bool: fail the command when the smoke test fails")) } }, { "executable" }), [](AutomationSession&, const json& params) {
+			Add(registry, "project.smoke_test", "Runs an exported game headless (no GPU needed) for up to N frames at the runtime's fixed 1/60 s step and reports whether it exited cleanly: exit code 0 and no script errors within the timeout. Returns {passed, outcome: exited|crashed|timedOut|failed, exitCode (null unless it exited or crashed), summary, log}.", Schema::Object({ { "executable", Schema::String("string, the exported game's executable (project.export's executable)", true) }, { "frames", Schema::Nullable(Schema::Integer("integer (default 120)", 1, MaxSmokeTestFrames)) }, { "timeout", Schema::Nullable(Schema::Number("number of seconds (default 60)", 1, MaxSmokeTestSeconds)) }, { "assertPassed", Schema::Nullable(Schema::Boolean("bool: fail the command when the smoke test fails")) } }, { "executable" }), [](AutomationSession&, const json& params) {
 				const std::filesystem::path executable = RequireString(params, "executable");
 				std::error_code error;
 				if (!std::filesystem::is_regular_file(executable, error))
@@ -733,7 +757,7 @@ namespace Basalt {
 				return SceneSerializer::SerializeScene(RequireScene(session));
 			});
 
-			Add(registry, "scene.info", "Summary of the open scene: name, path, entity count, state, unsaved changes, undefined physics layers, animation authoring warnings and the physics step (fixedTimestep, and fixedTimestepOverride when the scene sets its own).", Schema::Object(), [](AutomationSession& session, const json&) {
+			Add(registry, "scene.info", "Summary of the open scene: name, path, entity count, state, unsaved changes, undefined physics layers, animation authoring warnings and the physics step (fixedTimestep: the step in use; fixedTimestepOverride: the scene's own step, or null).", Schema::Object(), [](AutomationSession& session, const json&) {
 				Scene& scene = RequireScene(session);
 				json animationWarnings = json::array();
 				for (auto handle : scene.GetRegistry().view<IDComponent>())

@@ -16,6 +16,8 @@ compile_commands.json
 # Editor runtime state
 imgui.ini
 *.log
+# Content-browser previews the editor caches in a project (Samples, test projects); rebuilt from the assets.
+Cache/Thumbnails/
 
 # Editor swap/backup files
 *.swp

@@ -62,7 +62,7 @@ def check_thumbnails(call, require, output, project):
     require(not call("editor.thumbnail", {"path": "Assets/Checker.png"})["cached"], "a modified image kept its old preview")
     Path(project, "Assets/Scripts/Note.lua").write_text("return {}\n")
     call("editor.thumbnail", {"path": "Assets/Scripts/Note.lua"}, error="has no preview")
-    call("editor.thumbnail", {"path": "Assets/Missing.png"}, error="no file at")
+    call("editor.thumbnail", {"path": "Assets/Missing.png"}, error="the file is missing")
 
     # The inspector's material sphere.
     call("scene.new", {"empty": True})

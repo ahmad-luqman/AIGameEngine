@@ -1752,7 +1752,7 @@ Changes project settings and saves the project file.
 
 ### `project.smoke_test`
 
-Runs an exported game headless (no GPU needed) for N fixed frames and reports whether it exited cleanly: exit code 0 and no script errors within the timeout. Returns {passed, outcome: exited|timedOut|failed, exitCode, summary, log}.
+Runs an exported game headless (no GPU needed) for up to N frames at the runtime's fixed 1/60 s step and reports whether it exited cleanly: exit code 0 and no script errors within the timeout. Returns {passed, outcome: exited|crashed|timedOut|failed, exitCode (null unless it exited or crashed), summary, log}.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -1824,7 +1824,7 @@ Runs an exported game headless (no GPU needed) for N fixed frames and reports wh
 
 ### `project.validate`
 
-Checks that the project would export and start: settings, start scene, every scene and prefab (loads; referenced asset files exist inside Assets/ with the exact letter case), and every Lua script (compiles). Returns {valid, errors, warnings, omitted, issues: [{severity, file, message}]}.
+Checks that the project would export and start: settings, start scene, every scene and prefab (loads; referenced asset files exist inside Assets/ with the exact letter case; a bare file name without a folder only warns), every Lua script (compiles) and the scripts Script components use (load as script classes). Returns {valid, errors, warnings, omitted, issues: [{severity, file, message}]}.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2100,7 +2100,7 @@ Hash of the current scene state (the play copy while playing); equal states give
 
 ### `scene.info`
 
-Summary of the open scene: name, path, entity count, state, unsaved changes, undefined physics layers, animation authoring warnings and the physics step (fixedTimestep, and fixedTimestepOverride when the scene sets its own).
+Summary of the open scene: name, path, entity count, state, unsaved changes, undefined physics layers, animation authoring warnings and the physics step (fixedTimestep: the step in use; fixedTimestepOverride: the scene's own step, or null).
 
 <details><summary>Parameter JSON Schema</summary>
 

@@ -82,17 +82,19 @@ namespace Basalt {
 		void HandleShortcuts();
 
 		void DrawEditorOverlays();
-		// Draws the scene's game UI over the capture renderer's last image (screenshots show what the viewport
-		// shows).
+		// Draws the scene's game UI (UI components, plus the scripts' UI.* output in Play) over `renderer`'s last
+		// image, rasterized at the capture size.
 		void DrawGameUIOverCapture(Scene& scene, SceneRenderer& renderer, uint32_t width, uint32_t height);
 		// The editor camera's view with editor helpers (the scene view, in every mode).
 		void RenderSceneView(Scene& scene, const std::vector<DebugLineVertex>& scriptLines);
-		// Renders the primary camera at the game resolution into m_GameRenderer (created on first use). Captures
-		// reset exposure and skip dynamic resolution, so images are repeatable. False without a primary camera
-		// or when the frame failed.
-		bool RenderGameView(Scene& scene, const std::vector<DebugLineVertex>& scriptLines, float deltaTime, bool capture);
+		// Renders the primary camera at the game resolution into m_GameRenderer (created on first use) and records
+		// the outcome in m_GameViewStatus.
+		void RenderGameView(Scene& scene, const std::vector<DebugLineVertex>& scriptLines);
+		glm::uvec2 GetGameResolution() const { return m_GameView.Resolve(Project::GetActiveConfig()); }
+		// "Play", "Simulate" or "Edit".
+		const char* GetSessionModeName() const;
 		nlohmann::json GetGameViewState();
-		// Play mode proper: the game's camera and its immediate-mode UI (not edit mode, not simulate).
+		// Play mode proper: scripts run and the Game view hosts the game (not edit mode, not simulate).
 		bool IsGameRunning() const { return m_Session.IsPlaying() && !m_Session.IsSimulating(); }
 		// Outlines every UI rect over the viewport (the selected entity's with its pivot and anchors).
 		void DrawUIBounds(const glm::vec2& origin, const glm::vec2& size);
@@ -114,7 +116,15 @@ namespace Basalt {
 		void FocusSelection();
 		void UpdateWindowTitle();
 
-		bool RenderToFile(const std::filesystem::path& path, uint32_t width, uint32_t height, bool useEditorCamera, std::string& outError);
+		// What a capture shows: the scene view (editor camera and helpers), the primary camera at any size
+		// (render.screenshot; the editor camera without one), or exactly what the Game view shows.
+		enum class CaptureView
+		{
+			SceneView,
+			GameCamera,
+			GameView
+		};
+		bool RenderToFile(const std::filesystem::path& path, uint32_t width, uint32_t height, CaptureView view, std::string& outError);
 		std::string HandleAutomationRequest(const std::shared_ptr<AutomationConnection>& connection, const std::string& request);
 
 	private:
@@ -140,15 +150,14 @@ namespace Basalt {
 		Scope<SceneRenderer> m_CaptureRenderer;
 		Scope<SceneRenderer> m_GameRenderer;
 		Scope<ThumbnailManager> m_Thumbnails;
-		// The project the thumbnails belong to; another project starts them afresh.
-		const Project* m_ThumbnailProject = nullptr;
 		nvrhi::CommandListHandle m_CommandList;
 		// The viewport's game UI: built in OnRender, drawn over the viewport image in DrawViewport.
 		UIFrame m_UIFrame;
 		// The Game view's game UI, laid out for its letterboxed image.
 		UIFrame m_GameUIFrame;
 		GameViewSettings m_GameView;
-		// The image rectangle in screen units (content origin + letterbox) and how the tab was last drawn.
+		// The Game panel's content rectangle and the letterboxed image inside it, in ImGui (logical) screen units, and
+		// how the tab was last drawn.
 		glm::vec2 m_GamePanelMin = { 0.0f, 0.0f };
 		glm::vec2 m_GamePanelSize = { 0.0f, 0.0f };
 		glm::vec2 m_GameImageMin = { 0.0f, 0.0f };
@@ -156,8 +165,16 @@ namespace Basalt {
 		bool m_GameViewVisible = false;
 		bool m_GameViewHovered = false;
 		bool m_GameViewFocused = false;
-		bool m_GameHasCamera = false;
-		bool m_GameRendererFailed = false;
+		// How the Game view's last render went (what the tab shows instead of an image when it did not render).
+		enum class GameViewStatus
+		{
+			NotRendered,
+			Rendered,
+			NoCamera,
+			RendererUnavailable,
+			RenderFailed
+		};
+		GameViewStatus m_GameViewStatus = GameViewStatus::NotRendered;
 		// Play brings the Game tab to the front; Stop returns to the scene view if it was in front before.
 		bool m_GameWasRunning = false;
 		bool m_ReturnToViewport = false;

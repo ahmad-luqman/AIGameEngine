@@ -167,10 +167,10 @@ namespace Basalt {
 		// Starting seed of the gameplay random streams of this play/simulate session (Lua, particles, runtime UUIDs;
 		// scripts may reseed Lua's): the project's RandomSeed when the session started, so changing the
 		// project setting mid-session (it applies from the next play) cannot split one session over two
-		// seeds. Meaningful while running; outside play it is the last session's.
+		// seeds. Meaningful while running; outside Play/Simulate it is the last session's.
 		uint32_t GetRandomSeed() const { return m_RandomSeed; }
 		// The physics step this scene simulates with: its own override (PhysicsSettings::FixedTimestep), else
-		// the project's. Like the seed, a session keeps the project value it started with; outside play this
+		// the project's. Like the seed, a session keeps the project value it started with; outside Play/Simulate this
 		// is the project's current value.
 		float GetFixedTimestep() const;
 
@@ -288,7 +288,7 @@ namespace Basalt {
 		float m_Time = 0.0f;
 		uint64_t m_FrameCount = 0;
 		uint32_t m_RandomSeed = Random::DefaultSeed;
-		// The project's FixedTimestep when the session started (0 outside play).
+		// The project's FixedTimestep when the session started (0 outside a session).
 		float m_SessionFixedTimestep = 0.0f;
 		// Independent of gameplay draws; continues across Scene.Load and is released on stop.
 		std::optional<SessionIdentity> m_SessionIdentity;

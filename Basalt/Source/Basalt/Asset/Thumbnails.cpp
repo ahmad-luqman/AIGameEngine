@@ -3,9 +3,10 @@
 #include "Basalt/Asset/ImageUtils.h"
 #include "Basalt/Asset/TextureSource.h"
 #include "Basalt/Core/FileSystem.h"
+#include "Basalt/Core/Hash.h"
+#include "Basalt/Core/Log.h"
 
 #include <algorithm>
-#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -15,13 +16,6 @@
 namespace Basalt {
 
 	namespace {
-
-		std::string LowercaseExtension(const std::string& path)
-		{
-			std::string extension = std::filesystem::path(path).extension().string();
-			std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-			return extension;
-		}
 
 		// Fits width x height into maxSize x maxSize, keeping the aspect ratio and at least one pixel per side.
 		void FitSize(uint32_t width, uint32_t height, uint32_t maxSize, uint32_t& outWidth, uint32_t& outHeight)
@@ -51,35 +45,55 @@ namespace Basalt {
 			return (x * (2.51f * x + 0.03f)) / (x * (2.43f * x + 0.59f) + 0.14f);
 		}
 
-		uint64_t HashPath(const std::string& text)
-		{
-			uint64_t hash = 14695981039346656037ull;
-			for (const char c : text)
-			{
-				hash ^= static_cast<unsigned char>(c);
-				hash *= 1099511628211ull;
-			}
-			return hash;
-		}
-
-		// Separates the key from the details in a .key file (keys never contain it: their lines are a path and numbers).
+		// A .key file: the version key, then (after a separator line) one tooltip detail per line. Keys never
+		// contain the separator (their lines are a path and numbers); details have newlines replaced.
 		constexpr std::string_view DetailsSeparator = "\n--\n";
 
-		std::string EntryName(const std::string& relativePath)
+		struct KeyFile
 		{
-			static constexpr char Digits[] = "0123456789abcdef";
-			uint64_t hash = HashPath(relativePath);
-			std::string name(16, '0');
-			for (int i = 15; i >= 0; i--, hash >>= 4)
-				name[static_cast<size_t>(i)] = Digits[hash & 0xF];
-			return name;
+			std::string Key;
+			std::vector<std::string> Details;
+		};
+
+		std::string FormatKeyFile(const std::string& key, const std::vector<std::string>& details)
+		{
+			std::string text = key;
+			if (!details.empty())
+				text += DetailsSeparator;
+			for (size_t i = 0; i < details.size(); i++)
+			{
+				std::string line = details[i];
+				std::replace(line.begin(), line.end(), '\n', ' ');
+				text += (i ? "\n" : "") + line;
+			}
+			return text;
+		}
+
+		std::optional<KeyFile> ParseKeyFile(const std::string& text)
+		{
+			const size_t separator = text.find(DetailsSeparator);
+			KeyFile file{ text.substr(0, separator), {} };
+			if (file.Key.empty())
+				return std::nullopt;
+			for (size_t start = separator == std::string::npos ? text.size() : separator + DetailsSeparator.size(); start < text.size();)
+			{
+				const size_t end = std::min(text.find('\n', start), text.size());
+				file.Details.push_back(text.substr(start, end - start));
+				start = end + 1;
+			}
+			return file;
+		}
+
+		std::filesystem::path KeyPathOf(const std::filesystem::path& image)
+		{
+			return std::filesystem::path(image).replace_extension(".key");
 		}
 
 	}
 
 	ThumbnailKind ClassifyThumbnail(const std::string& path)
 	{
-		const std::string extension = LowercaseExtension(path);
+		const std::string extension = FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(path));
 		if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".tga" || extension == ".bmp")
 			return ThumbnailKind::Image;
 		if (extension == ".hdr")
@@ -125,12 +139,12 @@ namespace Basalt {
 			{
 				uint32_t x0 = 0, x1 = 0;
 				Span(x, width, image.Width, x0, x1);
-				uint32_t sum[4] = {};
+				uint64_t sum[4] = {};
 				for (uint32_t sy = y0; sy < y1; sy++)
 					for (uint32_t sx = x0; sx < x1; sx++)
 						for (size_t c = 0; c < 4; c++)
 							sum[c] += rgba[(static_cast<size_t>(sy) * width + sx) * 4 + c];
-				const uint32_t count = (y1 - y0) * (x1 - x0);
+				const uint64_t count = static_cast<uint64_t>(y1 - y0) * (x1 - x0);
 				for (size_t c = 0; c < 4; c++)
 					image.Pixels[(static_cast<size_t>(y) * image.Width + x) * 4 + c] = static_cast<uint8_t>((sum[c] + count / 2) / count);
 			}
@@ -181,27 +195,35 @@ namespace Basalt {
 		return image;
 	}
 
+	ThumbnailCache::ThumbnailCache(std::filesystem::path projectDirectory)
+		: m_ProjectDirectory(std::move(projectDirectory))
+		, m_Directory(DirectoryFor(m_ProjectDirectory))
+	{
+	}
+
 	std::filesystem::path ThumbnailCache::DirectoryFor(const std::filesystem::path& projectDirectory)
 	{
 		return projectDirectory / "Cache" / "Thumbnails";
 	}
 
-	std::string ThumbnailCache::MakeKey(const std::filesystem::path& projectDirectory, const std::string& relativePath)
+	std::optional<std::string> ThumbnailCache::MakeKey(const std::string& relativePath, std::string& outError) const
 	{
 		std::error_code error;
-		const std::filesystem::path path = projectDirectory / relativePath;
+		const std::filesystem::path path = m_ProjectDirectory / FileSystem::PathFromUtf8(relativePath);
 		const auto size = std::filesystem::file_size(path, error);
+		const auto time = error ? std::filesystem::file_time_type() : std::filesystem::last_write_time(path, error);
 		if (error)
-			return {};
-		const auto time = std::filesystem::last_write_time(path, error);
-		if (error)
-			return {};
-		return relativePath + "\n" + std::to_string(size) + "\n" + std::to_string(std::chrono::duration_cast<std::chrono::nanoseconds>(time.time_since_epoch()).count()) + "\n" + std::to_string(static_cast<int>(ClassifyThumbnail(relativePath))) + "\n" + std::to_string(Version);
+		{
+			outError = error == std::errc::no_such_file_or_directory ? "the file is missing" : "cannot read the file: " + error.message();
+			return std::nullopt;
+		}
+		const auto nanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(time.time_since_epoch()).count();
+		return relativePath + "\n" + std::to_string(size) + "\n" + std::to_string(nanoseconds) + "\n" + std::to_string(static_cast<int>(ClassifyThumbnail(relativePath))) + "\n" + std::to_string(Version);
 	}
 
 	std::filesystem::path ThumbnailCache::GetImagePath(const std::string& relativePath) const
 	{
-		return m_Directory / (EntryName(relativePath) + ".png");
+		return m_Directory / (ToHex64(HashFnv1a64(relativePath)) + ".png");
 	}
 
 	std::optional<ThumbnailCache::Entry> ThumbnailCache::Load(const std::string& relativePath, const std::string& key) const
@@ -209,27 +231,27 @@ namespace Basalt {
 		if (key.empty())
 			return std::nullopt;
 		const std::filesystem::path image = GetImagePath(relativePath);
-		const auto stored = FileSystem::ReadTextFile(std::filesystem::path(image).replace_extension(".key"));
-		// The key file holds the key, then the details after a separator line.
-		if (!stored || stored->compare(0, key.size(), key) != 0 || (stored->size() > key.size() && stored->compare(key.size(), DetailsSeparator.size(), DetailsSeparator) != 0))
+		const auto stored = FileSystem::ReadTextFile(KeyPathOf(image));
+		const auto keyFile = stored ? ParseKeyFile(*stored) : std::nullopt;
+		if (!keyFile || keyFile->Key != key)
 			return std::nullopt;
 		std::string error;
 		const Ref<TextureSource> texture = TextureSource::LoadFromFile(image, error);
 		if (!texture || texture->Format != TextureFormat::RGBA8)
 			return std::nullopt;
-		Entry entry{ ThumbnailImage{ texture->Width, texture->Height, texture->Pixels }, {} };
-		for (size_t start = key.size() + DetailsSeparator.size(); start < stored->size();)
-		{
-			const size_t end = std::min(stored->find('\n', start), stored->size());
-			entry.Details.push_back(stored->substr(start, end - start));
-			start = end + 1;
-		}
+		Entry entry{ ThumbnailImage{ texture->Width, texture->Height, texture->Pixels }, keyFile->Details };
+		if (!entry.Image.IsValid())
+			return std::nullopt;
 		return entry;
 	}
 
 	bool ThumbnailCache::Store(const std::string& relativePath, const std::string& key, const Entry& entry, std::string& outError) const
 	{
-		const ThumbnailImage& image = entry.Image;
+		if (!entry.Image.IsValid())
+		{
+			outError = "the preview is empty";
+			return false;
+		}
 		std::error_code error;
 		std::filesystem::create_directories(m_Directory, error);
 		if (error)
@@ -239,36 +261,57 @@ namespace Basalt {
 		}
 		const std::filesystem::path path = GetImagePath(relativePath);
 		// The key goes last, so an interrupted store leaves an entry that no longer matches, never a wrong image.
-		std::filesystem::remove(std::filesystem::path(path).replace_extension(".key"), error);
-		if (!WritePng(path, image.Pixels, image.Width, image.Height, outError))
-			return false;
-		std::string text = key;
-		if (!entry.Details.empty())
+		std::filesystem::remove(KeyPathOf(path), error);
+		if (error)
 		{
-			text += DetailsSeparator;
-			for (size_t i = 0; i < entry.Details.size(); i++)
-				text += (i ? "\n" : "") + entry.Details[i];
+			outError = "cannot replace '" + FileSystem::PathToUtf8(KeyPathOf(path)) + "': " + error.message();
+			return false;
 		}
-		return FileSystem::WriteTextFile(std::filesystem::path(path).replace_extension(".key"), text, outError);
+		if (!WritePng(path, entry.Image.Pixels, entry.Image.Width, entry.Image.Height, outError))
+			return false;
+		return FileSystem::WriteTextFile(KeyPathOf(path), FormatKeyFile(key, entry.Details), outError);
 	}
 
-	size_t ThumbnailCache::Prune(const std::filesystem::path& projectDirectory, bool everything) const
+	size_t ThumbnailCache::PruneMissing() const
 	{
-		size_t removed = 0;
+		return Remove(false);
+	}
+
+	size_t ThumbnailCache::Clear() const
+	{
+		return Remove(true);
+	}
+
+	size_t ThumbnailCache::Remove(bool everything) const
+	{
 		std::error_code error;
-		std::vector<std::filesystem::path> keys;
+		std::vector<std::filesystem::path> files;
 		for (auto it = std::filesystem::directory_iterator(m_Directory, error); !error && it != std::filesystem::directory_iterator(); it.increment(error))
-			if (it->path().extension() == ".key")
-				keys.push_back(it->path());
-		for (const std::filesystem::path& keyPath : keys)
+			files.push_back(it->path());
+		if (error && error != std::errc::no_such_file_or_directory)
+			BS_CORE_WARN("Thumbnails: cannot list '{}': {}", FileSystem::PathToUtf8(m_Directory), error.message());
+		size_t removed = 0;
+		const auto remove = [&](const std::filesystem::path& file) {
+			std::error_code removeError;
+			if (std::filesystem::remove(file, removeError))
+				removed++;
+			else if (removeError)
+				BS_CORE_WARN("Thumbnails: cannot remove '{}': {}", FileSystem::PathToUtf8(file), removeError.message());
+		};
+		for (const std::filesystem::path& file : files)
 		{
-			const auto key = FileSystem::ReadTextFile(keyPath);
-			const std::string source = key ? key->substr(0, key->find('\n')) : std::string();
-			if (!everything && !source.empty() && FileSystem::Exists(projectDirectory / source))
-				continue;
-			std::filesystem::remove(keyPath, error);
-			std::filesystem::remove(std::filesystem::path(keyPath).replace_extension(".png"), error);
-			removed++;
+			if (file.extension() == ".key")
+			{
+				const auto stored = FileSystem::ReadTextFile(file);
+				const auto keyFile = stored ? ParseKeyFile(*stored) : std::nullopt;
+				const std::string source = keyFile ? keyFile->Key.substr(0, keyFile->Key.find('\n')) : std::string();
+				if (!everything && !source.empty() && FileSystem::Exists(m_ProjectDirectory / FileSystem::PathFromUtf8(source)))
+					continue;
+				remove(file);
+				remove(std::filesystem::path(file).replace_extension(".png"));
+			}
+			else if (file.extension() == ".png" && (everything || !FileSystem::Exists(KeyPathOf(file))))
+				remove(file);
 		}
 		return removed;
 	}

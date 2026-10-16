@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Basalt/Project/Project.h"
+
 #include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
 
@@ -7,8 +9,6 @@
 #include <string>
 
 namespace Basalt {
-
-	struct ProjectConfig;
 
 	// Where the Game view shows its image inside the panel.
 	struct GameViewRect
@@ -29,8 +29,9 @@ namespace Basalt {
 	class GameViewSettings
 	{
 	public:
-		static constexpr uint32_t MinResolution = 64;
-		static constexpr uint32_t MaxResolution = 16384;
+		// The window sizes the runtime accepts.
+		static constexpr uint32_t MinResolution = ProjectConfig::MinWindowSize;
+		static constexpr uint32_t MaxResolution = ProjectConfig::MaxWindowSize;
 		// Used without a project.
 		static constexpr glm::uvec2 FallbackResolution{ 1600, 900 };
 

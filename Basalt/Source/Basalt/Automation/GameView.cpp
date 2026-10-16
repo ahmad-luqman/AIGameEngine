@@ -37,12 +37,8 @@ namespace Basalt {
 			m_Override.reset();
 			return true;
 		}
-		std::string error;
-		if (!CommandSchema::Validate(Schema()["properties"]["resolution"], *it, error, "resolution"))
-		{
-			outError = error;
+		if (!CommandSchema::Validate(Schema()["properties"]["resolution"], *it, outError, "resolution"))
 			return false;
-		}
 		m_Override = glm::uvec2((*it)[0].get<uint32_t>(), (*it)[1].get<uint32_t>());
 		return true;
 	}

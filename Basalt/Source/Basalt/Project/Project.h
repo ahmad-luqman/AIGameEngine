@@ -14,6 +14,10 @@ namespace Basalt {
 	// Saved project defaults shared by the editor, runtime and authoring tools.
 	struct ProjectConfig
 	{
+		// Window sizes the runtime accepts (also the bounds of project.set windowWidth/windowHeight).
+		static constexpr uint32_t MinWindowSize = 64;
+		static constexpr uint32_t MaxWindowSize = 16384;
+
 		std::string Name = "Untitled";
 		// Scene opened by the editor and played first by the runtime (project-relative path).
 		std::string StartScene;
@@ -26,7 +30,7 @@ namespace Basalt {
 		// Collision layers and matrix used by every scene of the project.
 		PhysicsLayers Physics;
 		// Physics step (seconds) of every scene that does not override it (PhysicsSettings::FixedTimestep).
-		// Applies from the next play.
+		// Applies from the next Play or Simulate.
 		float FixedTimestep = DefaultFixedTimestep;
 		// Seeds the gameplay random streams of play sessions (Lua's Math.Random/math.random, particle emitters,
 		// and runtime entity UUIDs), so a session replays identically. Applies from the next play; changing
@@ -52,6 +56,8 @@ namespace Basalt {
 		static const Ref<Project>& GetActive() { return s_ActiveProject; }
 		// Graphics defaults for Edit mode and new Play sessions, including when no project is active.
 		static GraphicsSettings GetActiveGraphicsSettings();
+		// The active project's settings, or nullptr without an active project.
+		static const ProjectConfig* GetActiveConfig() { return s_ActiveProject ? &s_ActiveProject->m_Config : nullptr; }
 		// The active project's RandomSeed, or Random::DefaultSeed without an active project (tests, tools).
 		static uint32_t GetActiveRandomSeed() { return s_ActiveProject ? s_ActiveProject->m_Config.RandomSeed : Random::DefaultSeed; }
 		// The active project's FixedTimestep, or DefaultFixedTimestep without an active project.

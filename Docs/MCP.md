@@ -164,19 +164,21 @@ share the same switches; Debug Lines controls scripted debug lines independently
 
 The **Game** tab sits next to the scene view. It renders the primary camera at the game resolution (the
 project's `windowWidth`/`windowHeight`, the size the exported game opens with), letterboxed into the panel
-with the correct aspect ratio, with the game UI on top. Play brings it to the front and runs the game there:
-it owns the game UI's pointer (while hovered) and keyboard/gamepad navigation (while focused); Stop returns
-to the scene view if that was in front. Outside Play it previews the primary camera, labelled **Edit mode**
-or **Simulating**. The scene view always shows the editor camera with its helpers, and is no longer
-switched to the game camera in Play. Only the tab in front renders.
+with the correct aspect ratio, with the game UI on top (also in a scene without a camera, as in the runtime).
+Play brings it to the front and runs the game there: the game UI takes the pointer while the image is hovered
+and keyboard/gamepad navigation while the tab has focus; Stop returns to the scene view if that was in front.
+Outside Play it previews the primary camera, labelled **Edit mode** or **Simulating**. The scene view always
+shows the editor camera with its helpers. Each view renders only while visible, so the default tabbed pair
+costs one view.
 
 - `editor.game_view {}` returns `visible`, `mode` (`Edit`, `Play`, `Simulate`), the render `width` and
   `height`, the session `override`, `hasCamera`, `imageRect`/`panelRect` (logical units relative to the
   editor window, as last drawn), `windowSize`, and `renderWidth`/`renderHeight` (render scale and dynamic
   resolution apply as in the game). `resolution: [w, h]` (64–16384) overrides the resolution for this
   editor session without changing the project; `null` returns to the project's. `focus: true` brings the tab
-  forward. `path` saves the Game view's image (primary camera, game UI, never a debug view) to a PNG; it
-  fails without a primary camera. Captures reset exposure and skip dynamic resolution, like `render.screenshot`.
+  forward. `path` saves what the Game view shows (primary camera at its resolution, game UI, never a debug
+  view, without script debug lines) to a PNG; it fails without a primary camera. It renders through the capture
+  renderer, so the live view keeps its exposure and dynamic resolution, and resets exposure like `render.screenshot`.
 - `editor.panel {"name":"Project Settings","open":true,"focus":true}` opens, closes or focuses an editor
   window (`Viewport`, `Game`, `Hierarchy`, `Inspector`, `Scene`, `Content Browser`, `Console`,
   `Project Settings`; only Project Settings can be closed) and returns `{name, open}`.
@@ -189,12 +191,13 @@ switched to the game camera in Play. Only the tab in front renders.
   as the inspector shows it (128x128).
 
 The content browser shows these previews in each row (icon size slider in its header), a larger one with
-details on hover (a model's materials as spheres), and its context menu clears the cache.
+details on hover (a loaded model's materials as spheres), and its context menu clears the cache.
 
 **Edit > Project Settings** edits the project file through `project.set` (name, start scene, game
 resolution, fullscreen, random seed, physics step, graphics defaults, physics layers and the collision
-matrix) and lists `project.validate` issues; a scene's own physics step is shown and can be removed
-(`scene.settings` with `FixedTimestep: null`). Project settings are saved at once and are not undoable.
+matrix) and lists `project.validate` issues; a scene's own physics step is shown and can be added or removed
+(`scene.settings`, `FixedTimestep: null` removes it; an undoable scene edit). Project settings are saved at
+once and are not undoable.
 
 ## Selection and undo transactions
 

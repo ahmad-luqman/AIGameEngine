@@ -2,6 +2,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <string>
+
 namespace Basalt::EditorCommandSchemas {
 
 	// Editor tool contracts live in the headless core so discovery and validation are testable without a GPU.
@@ -21,9 +23,17 @@ namespace Basalt::EditorCommandSchemas {
 	nlohmann::json Thumbnail();
 	nlohmann::json MaterialPreview();
 
-	// Editor windows editor.panel can show and focus (their ImGui window titles).
-	inline constexpr const char* PanelNames[] = { "Viewport", "Game", "Hierarchy", "Inspector", "Scene", "Content Browser", "Console", "Project Settings" };
-	// Of those, the windows that can be closed (the others are always open).
-	inline constexpr const char* ClosablePanelNames[] = { "Project Settings" };
+	inline constexpr const char* ProjectSettingsTitle = "Project Settings";
+
+	// An editor window editor.panel can show and focus, by its ImGui window title.
+	struct PanelInfo
+	{
+		const char* Title;
+		// Only these can be closed; the others are always open.
+		bool Closable;
+	};
+	inline constexpr PanelInfo Panels[] = { { "Viewport", false }, { "Game", false }, { "Hierarchy", false }, { "Inspector", false }, { "Scene", false }, { "Content Browser", false }, { "Console", false }, { ProjectSettingsTitle, true } };
+
+	bool IsClosablePanel(const std::string& title);
 
 }

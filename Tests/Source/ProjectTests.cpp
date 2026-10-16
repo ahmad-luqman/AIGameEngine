@@ -449,12 +449,15 @@ TEST_SUITE("Project")
 		// A module loaded with require may return anything; only Script components need a class table.
 		temp.WriteFile("Assets/Scripts/Helpers.lua", "return function() return 1 end\n");
 		temp.WriteFile("Assets/Textures/Wall.png", "not decoded by validation");
-		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities": [{"ID": 1, "Name": "Wall", "Components": {
-			"Mesh": {"Mesh": "builtin://Cube"}, "Material": {"AlbedoMap": "Assets/Textures/Wall.png"},
-			"Script": {"Script": "Assets/Scripts/Mover.lua"}, "RigidBody": {"Layer": "Default"}}}]})");
+		temp.WriteFile("Assets/Models/Ship.glb", "not decoded by validation");
+		// Non-ASCII names must match on every platform (UTF-8 in the scene, the file system's encoding on disk).
+		REQUIRE(FileSystem::WriteTextFile(temp.GetDirectory() / std::filesystem::path(u8"Assets/Textures/\u00c4rger.png"), "x"));
+		temp.WriteFile("Assets/Scenes/Main.bscene", "{\"Entities\": [{\"ID\": 1, \"Name\": \"Wall\", \"Components\": {"
+													"\"Mesh\": {\"Mesh\": \"builtin://Cube\"}, \"Material\": {\"AlbedoMap\": \"Assets/Textures/Wall.png\", \"NormalMap\": \"Assets/Models/Ship.glb#image/0\", "
+													"\"EmissiveMap\": \"Assets/Textures/\xc3\x84rger.png\"}, \"Script\": {\"Script\": \"./Assets/Scripts/Mover.lua\"}, \"RigidBody\": {\"Layer\": \"Default\"}}}]}");
 		Project::GetActive()->GetConfig().StartScene = "Assets/Scenes/Main.bscene";
 		const ValidationReport report = ValidateProject(*Project::GetActive());
-		INFO(Messages(report, ValidationSeverity::Error).size());
+		INFO(nlohmann::json(Messages(report, ValidationSeverity::Error)).dump(1));
 		CHECK(report.IsValid());
 		CHECK(report.GetWarningCount() == 0);
 		CHECK(report.GetIssues().empty());
@@ -476,7 +479,11 @@ TEST_SUITE("Project")
 			{"ID": 3, "Name": "C", "Components": {"Mesh": {"Mesh": "builtin://Teapot"}}},
 			{"ID": 4, "Name": "D", "Components": {"Material": {"NormalMap": "../Outside.png"}}},
 			{"ID": 5, "Name": "E", "Components": {"Script": {"Script": "Assets/Scripts/NoClass.lua"}}},
-			{"ID": 6, "Name": "F", "Components": {"RigidBody": {"Layer": "Ghost"}}}]})");
+			{"ID": 6, "Name": "F", "Components": {"RigidBody": {"Layer": "Ghost"}}},
+			{"ID": 7, "Name": "G", "Components": {"UIText": {"Text": "see help.png"}}},
+			{"ID": 8, "Name": "H", "Components": {"Material": {"AlbedoMap": "/Absolute/Wall.png"}}}]})");
+		temp.WriteFile("Assets/Prefabs/Hollow.bprefab", R"({"Format": "BasaltPrefab", "Version": 1, "Entities": [
+			{"ID": 1, "Name": "Root", "Parent": 0, "Components": {"Mesh": {"Mesh": "Assets/Models/Gone.glb"}}}]})");
 		temp.WriteFile("Assets/Scenes/Corrupt.bscene", R"({"Entities": [{"ID": 1, "Components": {"Bogus": {}}}]})");
 		temp.WriteFile("Assets/Prefabs/Bad.bprefab", "{not json");
 		project->GetConfig().StartScene = "Assets/Scenes/Missing.bscene";
@@ -487,7 +494,7 @@ TEST_SUITE("Project")
 		const auto errors = Messages(report, ValidationSeverity::Error);
 		INFO(nlohmann::json(errors).dump(1));
 		CHECK(Contains(errors, "Project.bproject: the window size 10x900"));
-		CHECK(Contains(errors, "Project.bproject: StartScene the missing file 'Assets/Scenes/Missing.bscene'"));
+		CHECK(Contains(errors, "Project.bproject: the StartScene names the missing file 'Assets/Scenes/Missing.bscene'"));
 		CHECK(Contains(errors, "Assets/Scenes/Main.bscene: references the missing file 'Assets/Models/Missing.glb'"));
 		CHECK(Contains(errors, "'Assets/textures/wall.png', but the file on disk is 'Assets/Textures/Wall.png'"));
 		CHECK(Contains(errors, "unknown built-in mesh 'builtin://Teapot'"));
@@ -496,10 +503,14 @@ TEST_SUITE("Project")
 		CHECK(Contains(errors, "Assets/Scripts/NoClass.lua: fails to load as a script class"));
 		CHECK(Contains(errors, "Assets/Scenes/Corrupt.bscene: does not load"));
 		CHECK(Contains(errors, "Assets/Prefabs/Bad.bprefab: does not load"));
+		CHECK(Contains(errors, "Assets/Prefabs/Hollow.bprefab: references the missing file 'Assets/Models/Gone.glb'"));
+		CHECK(Contains(errors, "'/Absolute/Wall.png', which is outside Assets/"));
 		CHECK(report.GetErrorCount() == errors.size());
 		const auto warnings = Messages(report, ValidationSeverity::Warning);
 		CHECK(Contains(warnings, "'F' uses the undefined physics layer 'Ghost'"));
-		CHECK(report.GetWarningCount() == 1);
+		// Text that merely ends like a file name warns instead of blocking the export.
+		CHECK(Contains(warnings, "'see help.png' looks like a file but has no folder"));
+		CHECK(report.GetWarningCount() == 2);
 		CHECK(report.GetOmittedCount() == 0);
 	}
 
@@ -516,6 +527,36 @@ TEST_SUITE("Project")
 		CHECK(report.GetIssues().size() == ValidationReport::MaxIssues);
 		CHECK(report.GetErrorCount() == ValidationReport::MaxIssues + 25);
 		CHECK(report.GetOmittedCount() == 25);
+
+		// Errors that arrive after the list filled with warnings still show.
+		ValidationReport mixed;
+		for (size_t i = 0; i < ValidationReport::MaxIssues + 10; i++)
+			mixed.Add(ValidationSeverity::Warning, "w", "warning");
+		mixed.Add(ValidationSeverity::Error, "e", "error 1");
+		mixed.Add(ValidationSeverity::Error, "e", "error 2");
+		CHECK(mixed.GetIssues().size() == ValidationReport::MaxIssues);
+		CHECK(mixed.GetErrorCount() == 2);
+		CHECK(Messages(mixed, ValidationSeverity::Error) == std::vector<std::string>{ "e: error 1", "e: error 2" });
+		CHECK(mixed.GetOmittedCount() == 12);
+	}
+
+	TEST_CASE("Project validation reports project file problems")
+	{
+		BasaltTest::TempProject temp("ValidateProjectFile");
+		REQUIRE(temp.IsValid());
+		const Ref<Project>& project = Project::GetActive();
+		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities": []})");
+		project->GetConfig().StartScene = "Assets/Scenes/Main.bscene";
+		temp.WriteFile(Project::FileName, R"({"Name": "No format"})");
+		auto report = ValidateProject(*project);
+		CHECK(report.IsValid());
+		CHECK(Contains(Messages(report, ValidationSeverity::Warning), "does not declare \"Format\""));
+		temp.WriteFile(Project::FileName, "[1, 2]");
+		CHECK(Contains(Messages(ValidateProject(*project), ValidationSeverity::Error), "the project file is not a JSON object"));
+		project->GetConfig().StartScene = "Assets/Scenes/Main.lua";
+		CHECK(Contains(Messages(ValidateProject(*project), ValidationSeverity::Error), "is not a .bscene file"));
+		std::filesystem::remove_all(temp.GetDirectory() / "Assets");
+		CHECK(Contains(Messages(ValidateProject(*project), ValidationSeverity::Error), "the Assets directory is missing"));
 	}
 
 	TEST_CASE("project.validate and project.export refuse a broken project; project.smoke_test needs an executable")
@@ -535,7 +576,8 @@ TEST_SUITE("Project")
 		CHECK(report["issues"][0]["file"] == "Assets/Scenes/Main.bscene");
 		CHECK(RunCommandError(registry, session, "project.validate", { { "assertValid", true } }).find("Assets/Missing.glb") != std::string::npos);
 
-		const auto output = temp.GetDirectory().parent_path() / "ValidateCommandsExport";
+		BasaltTest::TempDirectory exportDirectory("ValidateCommandsExport");
+		const auto output = exportDirectory.GetPath() / "Build";
 		const std::string error = RunCommandError(registry, session, "project.export", { { "output", output.string() } });
 		CHECK(error.find("not exported: project validation found 1 error") != std::string::npos);
 		CHECK_FALSE(std::filesystem::exists(output));
@@ -554,7 +596,16 @@ TEST_SUITE("Project")
 
 		CHECK(RunCommandError(registry, session, "project.smoke_test", { { "executable", (temp.GetDirectory() / "NoGame").string() } }).find("no executable") != std::string::npos);
 		CHECK(RunCommandError(registry, session, "project.smoke_test", { { "executable", "x" }, { "frames", 0 } }).find("frames") != std::string::npos);
-		std::filesystem::remove_all(output);
+		CHECK(RunCommandError(registry, session, "project.export", { { "output", output.string() }, { "smokeTestTimeout", 5 } }).find("smokeTestTimeout needs smokeTestFrames") != std::string::npos);
+
+		// A file that is not a program cannot run: a failed smoke test, not an exit code.
+		temp.WriteFile("NotAProgram.txt", "text");
+		const nlohmann::json notRun = RunCommand(registry, session, "project.smoke_test", { { "executable", (temp.GetDirectory() / "NotAProgram.txt").string() }, { "frames", 1 } });
+		CHECK(notRun["passed"] == false);
+		CHECK(notRun["outcome"] == "failed");
+		CHECK(notRun["exitCode"].is_null());
+		CHECK(notRun["summary"].get<std::string>().find("could not be run") != std::string::npos);
+		CHECK(RunCommandError(registry, session, "project.smoke_test", { { "executable", (temp.GetDirectory() / "NotAProgram.txt").string() }, { "frames", 1 }, { "assertPassed", true } }).find("smoke test failed") != std::string::npos);
 	}
 
 	TEST_CASE("LastLines keeps the end of a log")
@@ -565,5 +616,7 @@ TEST_SUITE("Project")
 		CHECK(LastLines("single", 1) == "single");
 		CHECK(LastLines("", 3).empty());
 		CHECK(LastLines("a\n\n\n", 2) == "\n\n");
+		CHECK(LastLines("\nabc", 5) == "\nabc");
+		CHECK(LastLines("abc\n", 0).empty());
 	}
 }

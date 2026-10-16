@@ -3031,6 +3031,35 @@ TEST_SUITE("PhysicsLayers")
 		CHECK_FALSE(PhysicsLayers::FromJson(tooMany, error).has_value());
 	}
 
+	TEST_CASE("The simulation steps at the project's fixed timestep unless the scene sets its own")
+	{
+		BasaltTest::TempProject temp("PhysicsProjectStep");
+		REQUIRE(temp.IsValid());
+		const auto heightAfterFiveFrames = [](float projectStep, float sceneStep) {
+			Project::GetActive()->GetConfig().FixedTimestep = projectStep;
+			Scene scene;
+			scene.GetPhysicsSettings().FixedTimestep = sceneStep;
+			Entity box = CreateBox(scene, { 0.0f, 10.0f, 0.0f });
+			scene.OnSimulationStart();
+			// The session keeps the step it started with.
+			Project::GetActive()->GetConfig().FixedTimestep = 0.1f;
+			for (int frame = 0; frame < 5; frame++)
+				scene.OnUpdate(Step);
+			const float height = box.GetTransform().Translation.y;
+			scene.OnSimulationStop();
+			return height;
+		};
+		// Five 1/60 s frames are five 1/60 s steps but only two 1/30 s steps (the rest waits in the accumulator).
+		const float sixty = heightAfterFiveFrames(1.0f / 60.0f, 0.0f);
+		const float thirty = heightAfterFiveFrames(1.0f / 30.0f, 0.0f);
+		CHECK(sixty < 10.0f);
+		CHECK(thirty != sixty);
+		CHECK(heightAfterFiveFrames(1.0f / 60.0f, 0.0f) == sixty);
+		// The scene's own step wins over the project's.
+		CHECK(heightAfterFiveFrames(1.0f / 30.0f, 1.0f / 60.0f) == sixty);
+		CHECK(heightAfterFiveFrames(1.0f / 60.0f, 1.0f / 30.0f) == thirty);
+	}
+
 	TEST_CASE("Physics layers can be renamed and removed, keeping the other layers' collisions")
 	{
 		PhysicsLayers layers;

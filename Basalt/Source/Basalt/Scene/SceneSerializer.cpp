@@ -1,6 +1,7 @@
 #include "Basalt/Scene/SceneSerializer.h"
 
 #include "Basalt/Core/FileSystem.h"
+#include "Basalt/Core/Hash.h"
 #include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/EnumNames.h"
 #include "Basalt/Core/Log.h"
@@ -650,17 +651,7 @@ namespace Basalt {
 
 		// FNV-1a over the compact dump: object keys are sorted and floats print with round-trip precision,
 		// so equal states give equal text.
-		uint64_t hash = 14695981039346656037ull;
-		for (const char c : data.dump())
-		{
-			hash ^= static_cast<unsigned char>(c);
-			hash *= 1099511628211ull;
-		}
-		static constexpr char Digits[] = "0123456789abcdef";
-		std::string text(16, '0');
-		for (int i = 15; i >= 0; i--, hash >>= 4)
-			text[static_cast<size_t>(i)] = Digits[hash & 0xF];
-		return text;
+		return ToHex64(HashFnv1a64(data.dump()));
 	}
 
 }

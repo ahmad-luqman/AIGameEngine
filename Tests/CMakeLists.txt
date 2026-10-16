@@ -172,7 +172,8 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 			add_test(NAME EditorViewport
 				COMMAND ${basaltEditorDisplay} "${Python3_EXECUTABLE}" -B -O "${CMAKE_CURRENT_SOURCE_DIR}/Automation/EditorViewport.py"
 					$<TARGET_FILE:BasaltEditor> $<TARGET_FILE:BasaltCLI> "${CMAKE_CURRENT_BINARY_DIR}/Viewport")
-			set_tests_properties(EditorViewport PROPERTIES TIMEOUT 120)
+			# Includes the Game view, thumbnail (software-rendered on lavapipe) and project settings checks.
+			set_tests_properties(EditorViewport PROPERTIES TIMEOUT 300)
 			list(APPEND basaltGpuTests EditorViewport)
 		elseif(TARGET BasaltEditor)
 			message(WARNING "EditorViewport is not registered: install xvfb-run or provide DISPLAY for the editor integration test")
@@ -245,9 +246,8 @@ if(TARGET BasaltRuntime)
 		COMMAND "${CMAKE_COMMAND}" "-DCOMMAND=$<TARGET_FILE:BasaltRuntime>;--project;${CMAKE_CURRENT_SOURCE_DIR}/Data/ScriptError;--headless;--frames;5"
 			-DEXPECTED=0 "-DMATCH=deliberate script error" -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectExitCode.cmake")
 	add_test(NAME RuntimeOption_fail-on-script-errors-needs-frames
-		COMMAND BasaltRuntime --project "${CMAKE_CURRENT_SOURCE_DIR}/Data/ScriptError" --headless --fail-on-script-errors)
-	set_tests_properties(RuntimeOption_fail-on-script-errors-needs-frames PROPERTIES PASS_REGULAR_EXPRESSION "--fail-on-script-errors needs --frames"
-		FAIL_REGULAR_EXPRESSION "Runtime: playing")
+		COMMAND "${CMAKE_COMMAND}" "-DCOMMAND=$<TARGET_FILE:BasaltRuntime>;--project;${CMAKE_CURRENT_SOURCE_DIR}/Data/ScriptError;--headless;--fail-on-script-errors"
+			-DEXPECTED=1 "-DMATCH=--fail-on-script-errors needs --frames" -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectExitCode.cmake")
 	list(APPEND basaltRuntimeOptionTests RuntimeOption_fail-on-script-errors RuntimeOption_script-errors-ignored RuntimeOption_fail-on-script-errors-needs-frames)
 	set_tests_properties(${basaltRuntimeOptionTests} PROPERTIES LABELS integration TIMEOUT 60)
 endif()

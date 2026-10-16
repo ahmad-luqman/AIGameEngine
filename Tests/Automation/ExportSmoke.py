@@ -22,6 +22,7 @@ SCENE = {
 }
 # Saves on start, so the test can check where the smoke run's save data went.
 GOOD_SCRIPT = "local Spin = {}\nfunction Spin:OnCreate()\n\tStorage.Set('Launched', true)\n\tassert(Storage.Save())\nend\nfunction Spin:OnUpdate(dt)\n\tself.Entity.Rotation = Quat.AngleAxis(dt, Vec3(0, 1, 0)) * self.Entity.Rotation\nend\nreturn Spin\n"
+HANGING_SCRIPT = "local Spin = {}\nfunction Spin:OnUpdate(dt)\n\twhile true do end\nend\nreturn Spin\n"
 BROKEN_SCRIPT = "local Spin = {}\nfunction Spin:OnUpdate(dt)\n\terror('spin failed')\nend\nreturn Spin\n"
 
 
@@ -80,7 +81,7 @@ def main():
         require(smoke["passed"] and smoke["outcome"] == "exited" and smoke["exitCode"] == 0, f"smoke test: {smoke}")
         require("Runtime: playing 'Assets/Scenes/Main.bscene'" in smoke["log"], f"smoke log: {smoke['log']}")
         require(exported["validation"]["valid"], "export did not report its validation")
-        # The game's save data went to a temporary directory, not the user's.
+        # The game saved on start, and not into the user's data directory.
         require(not Path(temp, "User Data", "Smoke Game").exists(), "the smoke test wrote save data to the user directory")
 
         rerun = ok("project.smoke_test", {"executable": str(executable), "frames": 5, "assertPassed": True})
@@ -94,6 +95,12 @@ def main():
         failed = ok("project.smoke_test", {"executable": str(executable), "frames": 10})
         require(not failed["passed"] and failed["exitCode"] == 7 and "spin failed" in failed["log"], f"smoke test of a broken build: {failed}")
         fails("project.smoke_test", {"executable": str(executable), "frames": 10, "assertPassed": True}, "smoke test failed")
+
+        # A game that hangs is stopped at the timeout and reported as such.
+        (project / "Assets" / "Scripts" / "Spin.lua").write_text(HANGING_SCRIPT)
+        ok("project.export", {"output": str(output)})
+        hung = ok("project.smoke_test", {"executable": str(executable), "frames": 10, "timeout": 1})
+        require(not hung["passed"] and hung["outcome"] == "timedOut" and hung["exitCode"] is None and "was stopped" in hung["summary"], f"a hanging game: {hung}")
 
         # A missing asset is caught before anything is exported.
         (project / "Assets" / "Scripts" / "Spin.lua").write_text(GOOD_SCRIPT)

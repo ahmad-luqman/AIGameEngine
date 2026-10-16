@@ -28,6 +28,11 @@ namespace Basalt {
 		static std::filesystem::path GetExecutableDirectory();
 		// The path as UTF-8 text, for messages (path::string() throws on Windows for names outside the ANSI code page).
 		static std::string PathToUtf8(const std::filesystem::path& path);
+		// A path from UTF-8 text (asset references, JSON); std::filesystem::path(std::string) would read the ANSI
+		// code page on Windows.
+		static std::filesystem::path PathFromUtf8(const std::string& text);
+		// The extension in lower case (".png" for "Wall.PNG"), for matching file types.
+		static std::string GetLowercaseExtension(const std::filesystem::path& path);
 
 	private:
 		static bool WriteAtomically(const std::filesystem::path& path, const void* data, size_t size, std::string& outError);
