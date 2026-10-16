@@ -642,6 +642,16 @@ TEST_SUITE("Core")
 		CHECK(success.Succeeded());
 	}
 
+#if defined(_WIN32)
+	TEST_CASE("RunProcess refuses arguments that are not UTF-8 on Windows")
+	{
+		// Windows command lines are UTF-16: invalid bytes cannot be passed on unchanged, so nothing starts.
+		const ProcessResult result = RunProcess(ChildProcess({ "print", "\xFF\xFE" }));
+		CHECK(result.Outcome == ProcessOutcome::Failed);
+		CHECK(result.Error.find("is not valid UTF-8 text") != std::string::npos);
+	}
+#endif
+
 	TEST_CASE("RunProcess passes arguments with spaces, quotes and backslashes unchanged")
 	{
 		const std::vector<std::string> arguments = { "two words", "quote\"inside", "trailing\\", "back\\\"slash", "", "plain" };
