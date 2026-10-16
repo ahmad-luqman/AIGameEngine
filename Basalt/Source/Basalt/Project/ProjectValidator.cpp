@@ -13,7 +13,6 @@
 #include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
-#include <cctype>
 #include <iterator>
 #include <map>
 #include <set>
@@ -26,13 +25,7 @@ namespace Basalt {
 		// File types components reference by path. A string ending in one of these is treated as an asset path.
 		const std::set<std::string> s_AssetExtensions = { ".gltf", ".glb", ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr", ".wav", ".mp3", ".ogg", ".flac", ".ttf", ".otf", ".lua", ".bscene", ".bprefab" };
 
-		std::string Lowercase(std::string text)
-		{
-			std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-			return text;
-		}
-
-		// "Models/Ship.glb#image/0" names an image inside Ship.glb: the file is the part before '#'.
+		// "Assets/Models/Ship.glb#image/0" names an image inside Ship.glb: the file is the part before '#'.
 		std::string StripSubAsset(const std::string& reference)
 		{
 			return reference.substr(0, reference.find('#'));
@@ -43,25 +36,27 @@ namespace Basalt {
 			return s_AssetExtensions.contains(FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(StripSubAsset(value))));
 		}
 
-		// A value that is meant as a path: a built-in mesh, or a file with a known extension in a folder. A bare
-		// name with an asset extension ("help.png" in a label) may just be text, so it is only a warning.
-		bool IsPathReference(const std::string& value)
+		// Component fields that hold an asset path the game loads: a broken one is an error. A MeshCollider's empty
+		// Mesh means the entity's own mesh; an Animator's Clip names an animation, an AudioSource's is a file.
+		bool IsPathField(const std::string& component, const std::string& field)
 		{
-			return Primitives::IsBuiltinKey(value) || (HasAssetExtension(value) && StripSubAsset(value).find_first_of("/\\") != std::string::npos);
+			static const std::set<std::string> s_Fields = { "Mesh", "Script", "AlbedoMap", "NormalMap", "MetallicRoughnessMap", "OcclusionMap", "EmissiveMap", "EnvironmentMap", "Texture", "Font" };
+			return s_Fields.contains(field) || (component == "AudioSource" && field == "Clip");
 		}
 
-		// Collects every string of a component's JSON that ends in an asset extension (or is a built-in mesh).
-		void CollectAssetStrings(const nlohmann::json& value, std::set<std::string>& outStrings)
+		// Other strings (script properties, text) that name a file under Assets/: likely a path the game uses, but
+		// possibly just text, so a broken one only warns.
+		void CollectAssetLikeStrings(const nlohmann::json& value, std::set<std::string>& outStrings)
 		{
 			if (value.is_string())
 			{
-				if (const std::string& text = value.get_ref<const std::string&>(); Primitives::IsBuiltinKey(text) || HasAssetExtension(text))
+				if (const std::string& text = value.get_ref<const std::string&>(); text.rfind("Assets/", 0) == 0 && HasAssetExtension(text))
 					outStrings.insert(text);
 			}
 			else if (value.is_structured())
 			{
 				for (const auto& element : value)
-					CollectAssetStrings(element, outStrings);
+					CollectAssetLikeStrings(element, outStrings);
 			}
 		}
 
@@ -180,7 +175,7 @@ namespace Basalt {
 						scripts.push_back(it->path());
 				}
 				if (error)
-					m_Report.Add(ValidationSeverity::Error, Project::AssetDirectoryName, "cannot list the assets: " + error.message());
+					m_Report.Add(ValidationSeverity::Error, Project::AssetDirectoryName, "cannot list all the assets (the walk stopped with: " + error.message() + "); the remaining files were not checked");
 				// Directory order differs between platforms; reports should not.
 				for (auto* list : { &scenes, &prefabs, &scripts })
 					std::sort(list->begin(), list->end());
@@ -213,18 +208,34 @@ namespace Basalt {
 			void CheckEntities(Scene& scene, const std::string& file)
 			{
 				const nlohmann::json data = SceneSerializer::SerializeScene(scene);
-				std::set<std::string> strings;
+				std::set<std::string> paths, assetLike;
 				if (const auto entities = data.find("Entities"); entities != data.end())
 					for (const auto& entity : *entities)
-						if (const auto components = entity.find("Components"); components != entity.end())
-							CollectAssetStrings(*components, strings);
-				for (const std::string& value : strings)
-				{
-					if (IsPathReference(value))
-						CheckReference(value, file, "references");
-					else
-						m_Report.Add(ValidationSeverity::Warning, file, fmt::format("'{}' looks like a file but has no folder; asset paths start with Assets/ (ignore this for plain text)", value));
-				}
+					{
+						const auto components = entity.find("Components");
+						if (components == entity.end() || !components->is_object())
+							continue;
+						for (const auto& [component, fields] : components->items())
+						{
+							if (!fields.is_object())
+								continue;
+							for (const auto& [field, value] : fields.items())
+							{
+								if (value.is_string() && IsPathField(component, field))
+								{
+									if (!value.get_ref<const std::string&>().empty())
+										paths.insert(value.get<std::string>());
+								}
+								else
+									CollectAssetLikeStrings(value, assetLike);
+							}
+						}
+					}
+				for (const std::string& path : paths)
+					CheckReference(path, file, "references", ValidationSeverity::Error);
+				for (const std::string& path : assetLike)
+					if (!paths.contains(path))
+						CheckReference(path, file, "has a value naming", ValidationSeverity::Warning);
 				for (auto handle : scene.GetAllEntitiesWith<ScriptComponent>())
 				{
 					const std::string& script = scene.GetRegistry().get<ScriptComponent>(handle).Script;
@@ -237,20 +248,26 @@ namespace Basalt {
 
 			// A path a scene, prefab or the project refers to: it must name an existing file inside Assets/, spelled
 			// with the file's exact letter case (the game may run on a case-sensitive file system).
-			void CheckReference(const std::string& reference, const std::string& file, const char* role)
+			void CheckReference(const std::string& reference, const std::string& file, const char* role, ValidationSeverity severity = ValidationSeverity::Error)
 			{
 				if (Primitives::IsBuiltinKey(reference))
 				{
 					// Created, not looked up: AssetManager would log the failure and cache it, and validation changes nothing.
 					if (!Primitives::CreateFromKey(reference))
-						m_Report.Add(ValidationSeverity::Error, file, fmt::format("{} the unknown built-in mesh '{}'", role, reference));
+						m_Report.Add(severity, file, fmt::format("{} the unknown built-in mesh '{}'", role, reference));
+					return;
+				}
+				// A backslash separates folders on Windows only: the same game would not find the file on Linux or macOS.
+				if (reference.find('\\') != std::string::npos)
+				{
+					m_Report.Add(severity, file, fmt::format("{} '{}', which uses backslashes; separate folders with / so it loads on every platform", role, reference));
 					return;
 				}
 				const std::filesystem::path path = FileSystem::PathFromUtf8(StripSubAsset(reference)).lexically_normal();
 				const auto first = path.begin();
 				if (path.is_absolute() || path.has_root_name() || first == path.end() || *first != Project::AssetDirectoryName)
 				{
-					m_Report.Add(ValidationSeverity::Error, file, fmt::format("{} '{}', which is outside Assets/ and will not be exported", role, reference));
+					m_Report.Add(severity, file, fmt::format("{} '{}', which is outside Assets/ and will not be exported", role, reference));
 					return;
 				}
 				std::string actual, problem;
@@ -259,13 +276,13 @@ namespace Basalt {
 					case Match::Exact:
 						break;
 					case Match::DifferentCase:
-						m_Report.Add(ValidationSeverity::Error, file, fmt::format("{} '{}', but the file on disk is '{}' (letter case matters on Linux)", role, reference, actual));
+						m_Report.Add(severity, file, fmt::format("{} '{}', but the file on disk is '{}' (letter case matters on Linux)", role, reference, actual));
 						break;
 					case Match::Missing:
-						m_Report.Add(ValidationSeverity::Error, file, fmt::format("{} the missing file '{}'", role, reference));
+						m_Report.Add(severity, file, fmt::format("{} the missing file '{}'", role, reference));
 						break;
 					case Match::Unreadable:
-						m_Report.Add(ValidationSeverity::Error, file, fmt::format("{} '{}', which cannot be checked: {}", role, reference, problem));
+						m_Report.Add(severity, file, fmt::format("{} '{}', which cannot be checked: {}", role, reference, problem));
 						break;
 				}
 			}
@@ -289,7 +306,8 @@ namespace Basalt {
 					auto found = std::find(listing.Names.begin(), listing.Names.end(), name);
 					if (found == listing.Names.end())
 					{
-						found = std::find_if(listing.Names.begin(), listing.Names.end(), [&](const std::string& entry) { return Lowercase(entry) == Lowercase(name); });
+						const std::string folded = FileSystem::ToLowerAscii(name);
+						found = std::find_if(listing.Names.begin(), listing.Names.end(), [&](const std::string& entry) { return FileSystem::ToLowerAscii(entry) == folded; });
 						if (found == listing.Names.end())
 							return Match::Missing;
 						caseDiffers = true;
@@ -298,8 +316,12 @@ namespace Basalt {
 					current /= FileSystem::PathFromUtf8(*found);
 				}
 				std::error_code error;
-				if (!std::filesystem::is_regular_file(current, error))
-					return Match::Missing;
+				const bool regular = std::filesystem::is_regular_file(current, error);
+				if (error || !regular)
+				{
+					outProblem = error ? error.message() : "it is not a file";
+					return Match::Unreadable;
+				}
 				outActual = FileSystem::PathToUtf8(actual.generic_u8string());
 				return caseDiffers ? Match::DifferentCase : Match::Exact;
 			}
@@ -353,20 +375,17 @@ namespace Basalt {
 	{
 		const bool error = severity == ValidationSeverity::Error;
 		(error ? m_ErrorCount : m_WarningCount)++;
-		if (m_Issues.size() < MaxIssues)
+		if (m_Issues.size() >= MaxIssues)
 		{
-			m_Issues.push_back({ severity, std::move(file), std::move(message) });
-			return;
-		}
-		// Full: an error displaces the last listed warning, so warnings can never hide every error.
-		if (!error)
-			return;
-		const auto warning = std::find_if(m_Issues.rbegin(), m_Issues.rend(), [](const ValidationIssue& issue) { return issue.Severity == ValidationSeverity::Warning; });
-		if (warning != m_Issues.rend())
-		{
+			// Full: an error displaces the last listed warning, so warnings can never hide every error.
+			if (!error)
+				return;
+			const auto warning = std::find_if(m_Issues.rbegin(), m_Issues.rend(), [](const ValidationIssue& issue) { return issue.Severity == ValidationSeverity::Warning; });
+			if (warning == m_Issues.rend())
+				return;
 			m_Issues.erase(std::next(warning).base());
-			m_Issues.push_back({ severity, std::move(file), std::move(message) });
 		}
+		m_Issues.push_back({ severity, std::move(file), std::move(message) });
 	}
 
 	ValidationReport ValidateProject(const Project& project)

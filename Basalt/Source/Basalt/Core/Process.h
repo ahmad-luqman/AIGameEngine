@@ -31,8 +31,10 @@ namespace Basalt {
 	{
 		// The child exited by itself; ExitCode is its status.
 		Exited,
-		// The child was killed by a signal (POSIX; ExitCode is 128 + the signal, as a shell reports it) or ended
-		// with an unhandled exception (Windows; ExitCode is the exception code). Error names it.
+		// The child was killed by a signal (POSIX; ExitCode is 128 + the signal, as a shell reports it) or ended with
+		// an exception code (Windows: an NTSTATUS error or breakpoint code, which is what an unhandled exception or
+		// __debugbreak leaves; ExitCode is that code as a negative int). Error names it. A Windows program exiting
+		// with such a value itself looks the same; ordinary negative exit codes (-1) do not.
 		Crashed,
 		// The child never started (missing or non-executable file, bad working directory, no resources), or its
 		// status could not be read. Error says which; ExitCode is meaningless.
@@ -46,7 +48,8 @@ namespace Basalt {
 	{
 		ProcessOutcome Outcome = ProcessOutcome::Failed;
 		int ExitCode = -1;
-		// Combined stdout and stderr (truncated to MaxOutputBytes, keeping the end).
+		// Combined stdout and stderr (truncated to MaxOutputBytes, keeping the end), as valid UTF-8: a character cut
+		// at the start is dropped and invalid bytes become U+FFFD, so it can go into JSON.
 		std::string Output;
 		// Why the child crashed, failed or timed out; empty after a normal exit.
 		std::string Error;
@@ -56,9 +59,9 @@ namespace Basalt {
 
 	// Runs a program to completion with a timeout, capturing its output, and blocks the calling thread until it
 	// ends. Used by tools that check a build (the export smoke test). The child inherits the environment (plus
-	// spec.Environment) but no other open files: its stdin is the null device and stdout/stderr go to a
-	// temporary file rather than a pipe, so a chatty child can never block on a full pipe while the caller
-	// waits for it to exit. Never throws.
+	// spec.Environment) but no other open files or handles (POSIX closes descriptors up to 65536): its stdin is
+	// the null device and stdout/stderr go to a temporary file rather than a pipe, so a chatty child can never
+	// block on a full pipe while the caller waits for it to exit. Never throws.
 	ProcessResult RunProcess(const ProcessSpec& spec);
 
 }

@@ -46,10 +46,16 @@ namespace Basalt {
 	bool PhysicsLayers::CheckEditable(uint32_t index, const char* action, std::string& outError) const
 	{
 		if (index == 0)
+		{
 			outError = std::string("the Default physics layer cannot be ") + action;
-		else if (index >= GetCount())
+			return false;
+		}
+		if (index >= GetCount())
+		{
 			outError = "no physics layer " + std::to_string(index);
-		return index != 0 && index < GetCount();
+			return false;
+		}
+		return true;
 	}
 
 	bool PhysicsLayers::Rename(uint32_t index, const std::string& name, std::string& outError)

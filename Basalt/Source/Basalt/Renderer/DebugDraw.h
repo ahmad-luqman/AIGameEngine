@@ -32,7 +32,8 @@ namespace Basalt {
 		// Appends line vertices (pairs) taken with TakeLines, e.g. to draw the same lines in a second view. Keeps
 		// whole lines only and stops at MaxLines.
 		static void AddLines(const std::vector<DebugLineVertex>& vertices);
-		// Replaces the pending lines in one step (another thread's lines cannot slip in between).
+		// Replaces the pending lines in one step (another thread's lines cannot slip in between), keeping whole lines
+		// up to MaxLines.
 		static void RestoreLines(std::vector<DebugLineVertex>&& vertices);
 		static size_t GetLineCount();
 		static void Clear();

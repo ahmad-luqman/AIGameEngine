@@ -100,6 +100,7 @@ namespace Basalt {
 	{
 		std::scoped_lock lock(s_Mutex);
 		s_Vertices = std::move(vertices);
+		s_Vertices.resize(std::min(s_Vertices.size() - s_Vertices.size() % 2, MaxLines * 2));
 	}
 
 	size_t DebugDraw::GetLineCount()

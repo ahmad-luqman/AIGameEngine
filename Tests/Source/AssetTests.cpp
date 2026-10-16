@@ -945,6 +945,53 @@ TEST_SUITE("Assets")
 		CHECK(cache.Clear() == 0);
 	}
 
+	TEST_CASE("Thumbnail keys cover the files a preview also reads")
+	{
+		BasaltTest::TempDirectory project("ThumbnailDependencies");
+		ThumbnailCache cache(project.GetPath());
+		const std::filesystem::path& root = project.GetPath();
+		REQUIRE(FileSystem::WriteTextFile(root / "Assets/Models/Ship.gltf", R"({"asset": {"version": "2.0"},
+			"buffers": [{"uri": "Ship%20Data.bin", "byteLength": 4}],
+			"images": [{"uri": "../Textures/Hull.png"}, {"uri": "data:image/png;base64,AAAA"}]})"));
+		REQUIRE(FileSystem::WriteTextFile(root / "Assets/Models/Ship Data.bin", "abcd"));
+		REQUIRE(FileSystem::WriteTextFile(root / "Assets/Textures/Hull.png", "v1"));
+		REQUIRE(FileSystem::WriteTextFile(root / "Assets/Prefabs/Fleet.bprefab", R"({"Entities": [{"ID": 1, "Components": {
+			"Mesh": {"Mesh": "Assets/Models/Ship.gltf"}, "Material": {"AlbedoMap": "Assets/Textures/Paint.png"}, "Tag": {"Tag": "not a path"}}}]})"));
+		REQUIRE(FileSystem::WriteTextFile(root / "Assets/Textures/Paint.png", "v1"));
+
+		CHECK(cache.GetDependencies("Assets/Models/Ship.gltf") == std::vector<std::string>{ "Assets/Models/Ship Data.bin", "Assets/Textures/Hull.png" });
+		CHECK(cache.GetDependencies("Assets/Prefabs/Fleet.bprefab") == std::vector<std::string>{ "Assets/Models/Ship Data.bin", "Assets/Models/Ship.gltf", "Assets/Textures/Hull.png", "Assets/Textures/Paint.png" });
+		CHECK(cache.GetDependencies("Assets/Textures/Paint.png").empty());
+
+		std::string error;
+		const std::string model = cache.MakeKey("Assets/Models/Ship.gltf", error).value_or("");
+		const std::string prefab = cache.MakeKey("Assets/Prefabs/Fleet.bprefab", error).value_or("");
+		REQUIRE_FALSE(model.empty());
+		// A texture the model uses changes: both previews are stale, though their own files did not change.
+		REQUIRE(FileSystem::WriteTextFile(root / "Assets/Textures/Hull.png", "version 2"));
+		CHECK(cache.MakeKey("Assets/Models/Ship.gltf", error).value_or("") != model);
+		CHECK(cache.MakeKey("Assets/Prefabs/Fleet.bprefab", error).value_or("") != prefab);
+		// A dependency that goes missing changes the key too, and the key still exists.
+		std::filesystem::remove(root / "Assets/Textures/Paint.png");
+		const auto missing = cache.MakeKey("Assets/Prefabs/Fleet.bprefab", error);
+		REQUIRE(missing);
+		CHECK(missing->find("Assets/Textures/Paint.png missing") != std::string::npos);
+	}
+
+	TEST_CASE("Thumbnail cache entries of non-ASCII files survive pruning")
+	{
+		BasaltTest::TempDirectory project("ThumbnailUnicode");
+		ThumbnailCache cache(project.GetPath());
+		const std::string name = "Assets/\xC3\x84rger.png";
+		REQUIRE(FileSystem::WriteTextFile(project.GetPath() / FileSystem::PathFromUtf8(name), "x"));
+		std::string error;
+		const auto key = cache.MakeKey(name, error);
+		REQUIRE_MESSAGE(key, error);
+		REQUIRE(cache.Store(name, *key, { ThumbnailImage{ 1, 1, { 1, 2, 3, 4 } }, {} }, error));
+		CHECK(cache.PruneMissing() == 0);
+		CHECK(cache.Load(name, *key));
+	}
+
 	TEST_CASE("New projects keep editor caches out of version control")
 	{
 		BasaltTest::TempProject temp("ProjectGitignore");

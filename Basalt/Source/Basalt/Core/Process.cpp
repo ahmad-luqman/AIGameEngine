@@ -13,6 +13,8 @@
 extern char** environ;
 #endif
 
+#include <spdlog/fmt/fmt.h>
+
 #include <algorithm>
 #include <string_view>
 #if defined(BS_PLATFORM_WINDOWS)
@@ -28,14 +30,87 @@ extern char** environ;
 
 namespace Basalt {
 
+	namespace {
+
+		// Checks the parts of a spec that do not depend on the platform; outExecutable is the absolute program path.
+		bool CheckSpec(const ProcessSpec& spec, std::filesystem::path& outExecutable, std::string& outError)
+		{
+			std::error_code error;
+			outExecutable = std::filesystem::absolute(spec.Executable, error);
+			if (error || spec.Executable.empty())
+			{
+				outError = "invalid executable path '" + FileSystem::PathToUtf8(spec.Executable) + "'";
+				return false;
+			}
+			for (const auto& [name, value] : spec.Environment)
+			{
+				if (name.empty() || name.find('=') != std::string::npos)
+				{
+					outError = "invalid environment variable name '" + name + "'";
+					return false;
+				}
+			}
+			return true;
+		}
+
+		// The output tail as valid UTF-8 (it goes into JSON): a cut through a character at the start is dropped,
+		// other invalid bytes become U+FFFD.
+		std::string ToValidUtf8(const std::string& text)
+		{
+			std::string result;
+			result.reserve(text.size());
+			size_t i = 0;
+			// The tail may start inside a multi-byte character.
+			while (i < text.size() && (static_cast<unsigned char>(text[i]) & 0xC0) == 0x80)
+				i++;
+			while (i < text.size())
+			{
+				const auto lead = static_cast<unsigned char>(text[i]);
+				size_t length = 0;
+				if (lead < 0x80)
+					length = 1;
+				else if (lead >= 0xC2 && lead <= 0xDF)
+					length = 2;
+				else if (lead >= 0xE0 && lead <= 0xEF)
+					length = 3;
+				else if (lead >= 0xF0 && lead <= 0xF4)
+					length = 4;
+				bool valid = length > 0 && i + length <= text.size();
+				for (size_t k = 1; valid && k < length; k++)
+					valid = (static_cast<unsigned char>(text[i + k]) & 0xC0) == 0x80;
+				// Overlong forms, surrogates and code points above U+10FFFF.
+				if (valid && length == 3)
+				{
+					const auto second = static_cast<unsigned char>(text[i + 1]);
+					valid = !(lead == 0xE0 && second < 0xA0) && !(lead == 0xED && second >= 0xA0);
+				}
+				if (valid && length == 4)
+				{
+					const auto second = static_cast<unsigned char>(text[i + 1]);
+					valid = !(lead == 0xF0 && second < 0x90) && !(lead == 0xF4 && second >= 0x90);
+				}
+				if (valid)
+				{
+					result.append(text, i, length);
+					i += length;
+				}
+				else
+				{
+					result += "\xEF\xBF\xBD";
+					i++;
+				}
+			}
+			return result;
+		}
+
+	}
+
 #if defined(BS_PLATFORM_WINDOWS)
 
 	namespace {
 
 		// How long a terminated child may take to go away before the runner gives up on it.
 		constexpr DWORD TerminateWaitMilliseconds = 10000;
-		// NTSTATUS codes with both severity bits set are errors: an unhandled exception ended the process.
-		constexpr DWORD ExceptionCodeMask = 0xC0000000u;
 
 		std::string LastErrorMessage(DWORD code)
 		{
@@ -47,6 +122,16 @@ namespace Basalt {
 			while (!message.empty() && (message.back() == '\n' || message.back() == '\r' || message.back() == ' '))
 				message.pop_back();
 			return message;
+		}
+
+		// An unhandled exception ends a process with its NTSTATUS code: error severity (0xC...) for access
+		// violations, stack overruns and failed asserts' __fastfail, warning severity (0x8...) for a breakpoint
+		// (__debugbreak, which BS_DEBUGBREAK uses). A program can also exit with such a value itself, but ordinary
+		// negative exit codes (-1 is 0xFFFFFFFF) are not in these ranges.
+		bool IsExceptionCode(DWORD code)
+		{
+			const DWORD severity = code & 0xF0000000u;
+			return severity == 0xC0000000u || severity == 0x80000000u;
 		}
 
 		// Quotes one argument so CommandLineToArgvW / the MSVC runtime reads it back unchanged: backslashes are
@@ -121,24 +206,29 @@ namespace Basalt {
 			for (const auto& [name, value] : overrides)
 			{
 				std::wstring wideName, wideValue;
-				if (name.empty() || name.find('=') != std::string::npos || !Widen(name, wideName) || !Widen(value, wideValue))
+				if (!Widen(name, wideName) || !Widen(value, wideValue))
 				{
-					outError = "invalid environment variable '" + name + "'";
+					outError = "the environment variable '" + name + "' (name or value) is not valid UTF-8 text";
 					return false;
 				}
 				entries.push_back(wideName + L"=" + wideValue);
 			}
-			if (wchar_t* current = GetEnvironmentStringsW())
+			wchar_t* current = GetEnvironmentStringsW();
+			if (!current)
 			{
-				for (const wchar_t* entry = current; *entry; entry += std::wcslen(entry) + 1)
-				{
-					const std::wstring_view text(entry);
-					const bool replaced = std::any_of(entries.begin(), entries.begin() + static_cast<std::ptrdiff_t>(overrides.size()), [&](const std::wstring& added) { return CompareNames(VariableName(text), VariableName(added)) == CSTR_EQUAL; });
-					if (!replaced)
-						entries.emplace_back(text);
-				}
-				FreeEnvironmentStringsW(current);
+				// Never start the child with only the overrides: without PATH, SystemRoot or TEMP it would fail in ways
+				// that look like bugs of its own.
+				outError = "cannot read this process's environment: " + LastErrorMessage(GetLastError());
+				return false;
 			}
+			for (const wchar_t* entry = current; *entry; entry += std::wcslen(entry) + 1)
+			{
+				const std::wstring_view text(entry);
+				const bool replaced = std::any_of(entries.begin(), entries.begin() + static_cast<std::ptrdiff_t>(overrides.size()), [&](const std::wstring& added) { return CompareNames(VariableName(text), VariableName(added)) == CSTR_EQUAL; });
+				if (!replaced)
+					entries.emplace_back(text);
+			}
+			FreeEnvironmentStringsW(current);
 			std::sort(entries.begin(), entries.end(), [](const std::wstring& a, const std::wstring& b) { return CompareNames(VariableName(a), VariableName(b)) == CSTR_LESS_THAN; });
 			for (const std::wstring& entry : entries)
 				outBlock.append(entry).push_back(L'\0');
@@ -174,16 +264,7 @@ namespace Basalt {
 			if (!SetFilePointerEx(file, offset, nullptr, FILE_BEGIN) || !ReadFile(file, text.data(), static_cast<DWORD>(text.size()), &read, nullptr))
 				return "[output unavailable: " + LastErrorMessage(GetLastError()) + "]";
 			text.resize(read);
-			return text;
-		}
-
-		std::string Hex(DWORD value)
-		{
-			static constexpr char Digits[] = "0123456789ABCDEF";
-			std::string text = "0x00000000";
-			for (size_t i = 9; i >= 2; i--, value >>= 4)
-				text[i] = Digits[value & 0xF];
-			return text;
+			return ToValidUtf8(text);
 		}
 
 	}
@@ -191,13 +272,9 @@ namespace Basalt {
 	ProcessResult RunProcess(const ProcessSpec& spec)
 	{
 		ProcessResult result;
-		std::error_code error;
-		const std::filesystem::path executable = std::filesystem::absolute(spec.Executable, error);
-		if (error || spec.Executable.empty())
-		{
-			result.Error = "invalid executable path '" + FileSystem::PathToUtf8(spec.Executable) + "'";
+		std::filesystem::path executable;
+		if (!CheckSpec(spec, executable, result.Error))
 			return result;
-		}
 		static std::atomic<uint32_t> s_Counter{ 0 };
 		wchar_t tempDirectory[MAX_PATH + 1] = {};
 		const DWORD tempLength = GetTempPathW(MAX_PATH + 1, tempDirectory);
@@ -222,12 +299,12 @@ namespace Basalt {
 		}
 
 		std::wstring commandLine = QuoteArgument(executable.wstring());
-		for (const std::string& argument : spec.Arguments)
+		for (size_t i = 0; i < spec.Arguments.size(); i++)
 		{
 			std::wstring wide;
-			if (!Widen(argument, wide))
+			if (!Widen(spec.Arguments[i], wide))
 			{
-				result.Error = "an argument is not valid UTF-8 text";
+				result.Error = "argument " + std::to_string(i + 1) + " is not valid UTF-8 text";
 				return result;
 			}
 			commandLine += L" " + QuoteArgument(wide);
@@ -248,8 +325,7 @@ namespace Basalt {
 			result.Error = "cannot prepare the child's handles: " + LastErrorMessage(GetLastError());
 			return result;
 		}
-		const bool listed = UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited, sizeof(inherited), nullptr, nullptr);
-		if (!listed)
+		if (!UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited, sizeof(inherited), nullptr, nullptr))
 		{
 			result.Error = "cannot prepare the child's handles: " + LastErrorMessage(GetLastError());
 			DeleteProcThreadAttributeList(attributes);
@@ -285,11 +361,13 @@ namespace Basalt {
 		if (wait != WAIT_OBJECT_0)
 		{
 			const DWORD waitError = GetLastError();
-			const bool terminated = TerminateProcess(process.hProcess, 1) && WaitForSingleObject(process.hProcess, TerminateWaitMilliseconds) == WAIT_OBJECT_0;
 			result.Outcome = wait == WAIT_TIMEOUT ? ProcessOutcome::TimedOut : ProcessOutcome::Failed;
 			result.Error = wait == WAIT_TIMEOUT ? "killed after " + std::to_string(spec.Timeout.count()) + " ms" : "cannot wait for the process: " + LastErrorMessage(waitError);
-			if (!terminated)
+			// A child that exits on its own between the wait and the kill makes TerminateProcess fail harmlessly.
+			if (!TerminateProcess(process.hProcess, 1) && WaitForSingleObject(process.hProcess, 0) != WAIT_OBJECT_0)
 				result.Error += " (and it could not be terminated: " + LastErrorMessage(GetLastError()) + ")";
+			else if (WaitForSingleObject(process.hProcess, TerminateWaitMilliseconds) != WAIT_OBJECT_0)
+				result.Error += " (and it was still running " + std::to_string(TerminateWaitMilliseconds / 1000) + " s after being terminated)";
 		}
 		else if (DWORD exitCode = 0; !GetExitCodeProcess(process.hProcess, &exitCode))
 		{
@@ -299,9 +377,9 @@ namespace Basalt {
 		else
 		{
 			result.ExitCode = static_cast<int>(exitCode);
-			result.Outcome = (exitCode & ExceptionCodeMask) == ExceptionCodeMask ? ProcessOutcome::Crashed : ProcessOutcome::Exited;
+			result.Outcome = IsExceptionCode(exitCode) ? ProcessOutcome::Crashed : ProcessOutcome::Exited;
 			if (result.Outcome == ProcessOutcome::Crashed)
-				result.Error = "ended by an unhandled exception " + Hex(exitCode);
+				result.Error = fmt::format("ended by an unhandled exception 0x{:08X}", exitCode);
 		}
 		result.Output = ReadTail(output.Handle, spec.MaxOutputBytes);
 		return result;
@@ -313,6 +391,17 @@ namespace Basalt {
 
 		// How often the parent checks whether the child has exited.
 		constexpr std::chrono::milliseconds PollInterval{ 5 };
+		// Descriptors the child closes before exec are bounded: a huge open-file limit (some containers set 1M)
+		// would otherwise make every start slow. Descriptors above this are left alone.
+		constexpr long MaxDescriptorsToClose = 65536;
+
+		// What failed in the child before it became the program (reported through the status pipe with errno).
+		enum class StartStage : int
+		{
+			WorkingDirectory = 1,
+			Redirect,
+			Execute
+		};
 
 		// Closes a descriptor when the scope ends.
 		struct FileDescriptor
@@ -347,7 +436,7 @@ namespace Basalt {
 				done += static_cast<size_t>(count);
 			}
 			text.resize(done);
-			return text;
+			return ToValidUtf8(text);
 		}
 
 		bool SetCloseOnExec(int descriptor)
@@ -369,13 +458,10 @@ namespace Basalt {
 	ProcessResult RunProcess(const ProcessSpec& spec)
 	{
 		ProcessResult result;
-		std::error_code error;
-		const std::filesystem::path program = std::filesystem::absolute(spec.Executable, error);
-		if (error || spec.Executable.empty())
-		{
-			result.Error = "invalid executable path '" + spec.Executable.string() + "'";
+		std::filesystem::path program;
+		if (!CheckSpec(spec, program, result.Error))
 			return result;
-		}
+		std::error_code error;
 		const std::filesystem::path temporary = std::filesystem::temp_directory_path(error);
 		if (error)
 		{
@@ -414,12 +500,6 @@ namespace Basalt {
 		argv.push_back(nullptr);
 		// The caller's environment with spec.Environment replacing (or adding) its variables.
 		std::vector<std::string> variables;
-		for (const auto& [name, value] : spec.Environment)
-			if (name.empty() || name.find('=') != std::string::npos)
-			{
-				result.Error = "invalid environment variable '" + name + "'";
-				return result;
-			}
 		for (char** entry = environ; entry && *entry; entry++)
 		{
 			const std::string_view text(*entry);
@@ -436,10 +516,13 @@ namespace Basalt {
 		for (std::string& variable : variables)
 			envp.push_back(variable.data());
 		envp.push_back(nullptr);
+		const long openFileLimit = sysconf(_SC_OPEN_MAX);
+		const int closeLimit = static_cast<int>(std::clamp(openFileLimit < 0 ? 1024L : openFileLimit, 3L, MaxDescriptorsToClose));
 
 		// The child reports a failed chdir/dup2/exec through this pipe; a successful exec closes it (FD_CLOEXEC),
 		// so "could not start" never looks like "started and exited non-zero". (pipe2 is not portable to macOS; a
-		// fork elsewhere between pipe and fcntl could inherit the write end, which this process never does.)
+		// fork elsewhere between pipe and fcntl could inherit the write end, which is safe while nothing else in
+		// the process forks concurrently: RunProcess runs on the main thread.)
 		int pipeEnds[2] = { -1, -1 };
 		if (pipe(pipeEnds) != 0)
 		{
@@ -462,21 +545,34 @@ namespace Basalt {
 		}
 		if (pid == 0)
 		{
-			// Each step only runs when the previous one worked; execve returns only on failure.
-			const bool prepared = (directory.empty() || chdir(directory.c_str()) == 0) && dup2(input.Value, STDIN_FILENO) >= 0 && dup2(output.Value, STDOUT_FILENO) >= 0 && dup2(output.Value, STDERR_FILENO) >= 0;
+			StartStage stage = StartStage::WorkingDirectory;
+			bool prepared = directory.empty() || chdir(directory.c_str()) == 0;
 			if (prepared)
+			{
+				stage = StartStage::Redirect;
+				prepared = dup2(input.Value, STDIN_FILENO) >= 0 && dup2(output.Value, STDOUT_FILENO) >= 0 && dup2(output.Value, STDERR_FILENO) >= 0;
+			}
+			if (prepared)
+			{
+				// Nothing else of this process reaches the program (an editor's server socket, its log file), whether
+				// or not it was opened close-on-exec.
+				for (int descriptor = 3; descriptor < closeLimit; descriptor++)
+					if (descriptor != statusWrite.Value)
+						close(descriptor);
+				stage = StartStage::Execute;
 				execve(executable.c_str(), argv.data(), envp.data());
-			const int failure = errno;
-			[[maybe_unused]] const ssize_t written = write(statusWrite.Value, &failure, sizeof(failure));
+			}
+			const int report[2] = { static_cast<int>(stage), errno };
+			[[maybe_unused]] const ssize_t written = write(statusWrite.Value, report, sizeof(report));
 			_exit(127);
 		}
 
 		close(statusWrite.Value);
 		statusWrite.Value = -1;
-		int childError = 0;
+		int report[2] = {};
 		ssize_t count = 0;
 		do
-			count = read(statusRead.Value, &childError, sizeof(childError));
+			count = read(statusRead.Value, report, sizeof(report));
 		while (count < 0 && errno == EINTR);
 
 		int status = 0;
@@ -487,10 +583,14 @@ namespace Basalt {
 			if (count < 0)
 				kill(pid, SIGKILL);
 			WaitForChild(pid, status);
-			if (count == static_cast<ssize_t>(sizeof(childError)))
-				result.Error = std::string("cannot start '") + executable + "': " + std::strerror(childError);
-			else
+			if (count != static_cast<ssize_t>(sizeof(report)))
 				result.Error = std::string("cannot tell whether '") + executable + "' started: " + (count < 0 ? std::strerror(readError) : "a short status report");
+			else if (report[0] == static_cast<int>(StartStage::WorkingDirectory))
+				result.Error = "cannot enter the working directory '" + directory + "': " + std::strerror(report[1]);
+			else if (report[0] == static_cast<int>(StartStage::Redirect))
+				result.Error = std::string("cannot redirect the output of '") + executable + "': " + std::strerror(report[1]);
+			else
+				result.Error = std::string("cannot start '") + executable + "': " + std::strerror(report[1]);
 			return result;
 		}
 
@@ -533,11 +633,13 @@ namespace Basalt {
 			const char* name = strsignal(WTERMSIG(status));
 			result.Error = "terminated by signal " + std::to_string(WTERMSIG(status)) + (name ? std::string(" (") + name + ")" : std::string());
 		}
-		else
+		else if (WIFEXITED(status))
 		{
 			result.Outcome = ProcessOutcome::Exited;
-			result.ExitCode = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+			result.ExitCode = WEXITSTATUS(status);
 		}
+		else
+			result.Error = "the process ended in an unknown way (wait status " + std::to_string(status) + ")";
 		result.Output = ReadTail(output.Value, spec.MaxOutputBytes);
 		return result;
 	}

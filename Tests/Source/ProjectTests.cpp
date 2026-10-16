@@ -19,6 +19,10 @@
 #include <filesystem>
 #include <limits>
 
+#if !defined(_WIN32)
+	#include <unistd.h>
+#endif
+
 using namespace Basalt;
 
 namespace {
@@ -355,6 +359,13 @@ TEST_SUITE("Project")
 			CHECK_FALSE(Project::Load(temp.GetDirectory(), error));
 			CHECK(error.find("FixedTimestep") != std::string::npos);
 		}
+		// Window sizes the runtime cannot open are rejected too (a negative one would wrap around).
+		for (const char* bad : { R"("WindowWidth": -1)", R"("WindowWidth": 20)", R"("WindowHeight": 20000)", R"("WindowHeight": "tall")" })
+		{
+			temp.WriteFile(Project::FileName, std::string(R"({"Format": "BasaltProject", )") + bad + "}");
+			CHECK_FALSE(Project::Load(temp.GetDirectory(), error));
+			CHECK(error.find("must be an integer in [64, 16384]") != std::string::npos);
+		}
 	}
 
 	TEST_CASE("Scenes store the fixed timestep only as an override, and null removes it")
@@ -401,11 +412,20 @@ TEST_SUITE("Project")
 			return scene.GetPhysicsSettings().FixedTimestep;
 		};
 		CHECK(load(1, 0.01666666753590107) == 0.0f);
+		// What the committed scenes store, and a hand-written approximation, mean the default too.
+		CHECK(load(1, 0.016666668) == 0.0f);
+		CHECK(load(1, 0.0166667) == 0.0f);
 		// A version 1 scene that changed the step meant it; so does any version 2 value.
 		CHECK(load(1, 0.01) == 0.01f);
 		CHECK(load(2, 0.01666666753590107) == DefaultFixedTimestep);
 		Scene scene;
 		CHECK(SceneSerializer::SerializeScene(scene)["Version"] == SceneSerializer::FormatVersion);
+		// A migrated scene saves without a step; a scene.settings patch (no Version) keeps an exact 1/60 s override.
+		std::string error;
+		REQUIRE(SceneSerializer::DeserializeScene(scene, { { "Format", "BasaltScene" }, { "Version", 1 }, { "Physics", { { "FixedTimestep", 0.016666668 } } } }, error));
+		CHECK_FALSE(SceneSerializer::SerializeScene(scene)["Physics"].contains("FixedTimestep"));
+		REQUIRE(SceneSerializer::DeserializeScene(scene, { { "Physics", { { "FixedTimestep", 1.0 / 60.0 } } } }, error));
+		CHECK(scene.GetPhysicsSettings().FixedTimestep == DefaultFixedTimestep);
 		CHECK(SceneSerializer::FormatVersion == 2);
 	}
 
@@ -478,10 +498,11 @@ TEST_SUITE("Project")
 			{"ID": 2, "Name": "B", "Components": {"Material": {"AlbedoMap": "Assets/textures/wall.png"}}},
 			{"ID": 3, "Name": "C", "Components": {"Mesh": {"Mesh": "builtin://Teapot"}}},
 			{"ID": 4, "Name": "D", "Components": {"Material": {"NormalMap": "../Outside.png"}}},
-			{"ID": 5, "Name": "E", "Components": {"Script": {"Script": "Assets/Scripts/NoClass.lua"}}},
+			{"ID": 5, "Name": "E", "Components": {"Script": {"Script": "./Assets/Scripts/NoClass.lua", "Properties": {"Shot": "Assets/Prefabs/Gone.bprefab"}}}},
 			{"ID": 6, "Name": "F", "Components": {"RigidBody": {"Layer": "Ghost"}}},
-			{"ID": 7, "Name": "G", "Components": {"UIText": {"Text": "see help.png"}}},
-			{"ID": 8, "Name": "H", "Components": {"Material": {"AlbedoMap": "/Absolute/Wall.png"}}}]})");
+			{"ID": 7, "Name": "G", "Components": {"UIText": {"Text": "See docs/help.png or https://example.com/help.png"}}},
+			{"ID": 8, "Name": "H", "Components": {"Material": {"AlbedoMap": "/Absolute/Wall.png"}}},
+			{"ID": 9, "Name": "I", "Components": {"Mesh": {"Mesh": "Ship.glb"}, "AudioSource": {"Clip": "Assets\\Audio\\Beep.wav"}}}]})");
 		temp.WriteFile("Assets/Prefabs/Hollow.bprefab", R"({"Format": "BasaltPrefab", "Version": 1, "Entities": [
 			{"ID": 1, "Name": "Root", "Parent": 0, "Components": {"Mesh": {"Mesh": "Assets/Models/Gone.glb"}}}]})");
 		temp.WriteFile("Assets/Scenes/Corrupt.bscene", R"({"Entities": [{"ID": 1, "Components": {"Bogus": {}}}]})");
@@ -500,7 +521,11 @@ TEST_SUITE("Project")
 		CHECK(Contains(errors, "unknown built-in mesh 'builtin://Teapot'"));
 		CHECK(Contains(errors, "'../Outside.png', which is outside Assets/"));
 		CHECK(Contains(errors, "Assets/Scripts/Broken.lua: does not compile"));
+		// Spelled with ./ the script is still found, and class-checked.
 		CHECK(Contains(errors, "Assets/Scripts/NoClass.lua: fails to load as a script class"));
+		// A path field with a bare name is not inside Assets/ (the game resolves it against the project).
+		CHECK(Contains(errors, "references 'Ship.glb', which is outside Assets/"));
+		CHECK(Contains(errors, "which uses backslashes"));
 		CHECK(Contains(errors, "Assets/Scenes/Corrupt.bscene: does not load"));
 		CHECK(Contains(errors, "Assets/Prefabs/Bad.bprefab: does not load"));
 		CHECK(Contains(errors, "Assets/Prefabs/Hollow.bprefab: references the missing file 'Assets/Models/Gone.glb'"));
@@ -508,8 +533,10 @@ TEST_SUITE("Project")
 		CHECK(report.GetErrorCount() == errors.size());
 		const auto warnings = Messages(report, ValidationSeverity::Warning);
 		CHECK(Contains(warnings, "'F' uses the undefined physics layer 'Ghost'"));
-		// Text that merely ends like a file name warns instead of blocking the export.
-		CHECK(Contains(warnings, "'see help.png' looks like a file but has no folder"));
+		// A script property naming a missing asset warns (it may be text); plain text is not checked at all.
+		CHECK(Contains(warnings, "has a value naming the missing file 'Assets/Prefabs/Gone.bprefab'"));
+		CHECK_FALSE(Contains(errors, "help.png"));
+		CHECK_FALSE(Contains(warnings, "help.png"));
 		CHECK(report.GetWarningCount() == 2);
 		CHECK(report.GetOmittedCount() == 0);
 	}
@@ -559,22 +586,49 @@ TEST_SUITE("Project")
 		CHECK(Contains(Messages(ValidateProject(*project), ValidationSeverity::Error), "the Assets directory is missing"));
 	}
 
+#if !defined(_WIN32)
+	TEST_CASE("Project validation reports a folder it cannot read instead of skipping it")
+	{
+		// Permissions do not stop root, which then reads the folder.
+		if (geteuid() == 0)
+			return;
+		BasaltTest::TempProject temp("ValidateUnreadable");
+		REQUIRE(temp.IsValid());
+		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities": []})");
+		temp.WriteFile("Assets/Locked/Broken.lua", "local x = = 1\n");
+		Project::GetActive()->GetConfig().StartScene = "Assets/Scenes/Main.bscene";
+		const std::filesystem::path locked = temp.GetDirectory() / "Assets" / "Locked";
+		std::filesystem::permissions(locked, std::filesystem::perms::none);
+		const ValidationReport report = ValidateProject(*Project::GetActive());
+		std::filesystem::permissions(locked, std::filesystem::perms::owner_all);
+		CHECK_FALSE(report.IsValid());
+		const auto errors = Messages(report, ValidationSeverity::Error);
+		INFO(nlohmann::json(errors).dump(1));
+		CHECK(Contains(errors, "cannot list all the assets"));
+	}
+#endif
+
 	TEST_CASE("project.validate and project.export refuse a broken project; project.smoke_test needs an executable")
 	{
 		BasaltTest::TempProject temp("ValidateCommands");
 		REQUIRE(temp.IsValid());
 		CommandRegistry registry;
 		AutomationSession session;
-		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities": [{"ID": 1, "Name": "A", "Components": {"Mesh": {"Mesh": "Assets/Missing.glb"}}}]})");
+		// One error, and a warning that error messages leave out.
+		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities": [{"ID": 1, "Name": "A", "Components": {"Mesh": {"Mesh": "Assets/Missing.glb"}, "RigidBody": {"Layer": "Ghost"}}}]})");
 		RunCommand(registry, session, "project.set", { { "startScene", "Assets/Scenes/Main.bscene" } });
 
 		const nlohmann::json report = RunCommand(registry, session, "project.validate");
 		CHECK(report["valid"] == false);
 		CHECK(report["errors"] == 1);
-		REQUIRE(report["issues"].size() == 1);
-		CHECK(report["issues"][0]["severity"] == "error");
-		CHECK(report["issues"][0]["file"] == "Assets/Scenes/Main.bscene");
-		CHECK(RunCommandError(registry, session, "project.validate", { { "assertValid", true } }).find("Assets/Missing.glb") != std::string::npos);
+		CHECK(report["warnings"] == 1);
+		REQUIRE(report["issues"].size() == 2);
+		const auto listedError = std::find_if(report["issues"].begin(), report["issues"].end(), [](const nlohmann::json& issue) { return issue["severity"] == "error"; });
+		REQUIRE(listedError != report["issues"].end());
+		CHECK((*listedError)["file"] == "Assets/Scenes/Main.bscene");
+		const std::string assertError = RunCommandError(registry, session, "project.validate", { { "assertValid", true } });
+		CHECK(assertError.find("found 1 error(s)\nAssets/Scenes/Main.bscene: references the missing file 'Assets/Missing.glb'") != std::string::npos);
+		CHECK(assertError.find("Ghost") == std::string::npos);
 
 		BasaltTest::TempDirectory exportDirectory("ValidateCommandsExport");
 		const auto output = exportDirectory.GetPath() / "Build";
@@ -600,12 +654,38 @@ TEST_SUITE("Project")
 
 		// A file that is not a program cannot run: a failed smoke test, not an exit code.
 		temp.WriteFile("NotAProgram.txt", "text");
-		const nlohmann::json notRun = RunCommand(registry, session, "project.smoke_test", { { "executable", (temp.GetDirectory() / "NotAProgram.txt").string() }, { "frames", 1 } });
+		const std::string notAProgram = (temp.GetDirectory() / "NotAProgram.txt").string();
+		const nlohmann::json notRun = RunCommand(registry, session, "project.smoke_test", { { "executable", notAProgram }, { "frames", 1 } });
 		CHECK(notRun["passed"] == false);
 		CHECK(notRun["outcome"] == "failed");
 		CHECK(notRun["exitCode"].is_null());
 		CHECK(notRun["summary"].get<std::string>().find("could not be run") != std::string::npos);
-		CHECK(RunCommandError(registry, session, "project.smoke_test", { { "executable", (temp.GetDirectory() / "NotAProgram.txt").string() }, { "frames", 1 }, { "assertPassed", true } }).find("smoke test failed") != std::string::npos);
+		CHECK(RunCommandError(registry, session, "project.smoke_test", { { "executable", notAProgram }, { "frames", 1 }, { "assertPassed", true } }).find("smoke test failed") != std::string::npos);
+	}
+
+	TEST_CASE("A smoke test reports a game that crashes")
+	{
+		// The test binary stands in for an exported game: BASALT_TEST_CHILD_ACTIONS makes it act whatever its
+		// arguments (TestMain.cpp).
+		const BasaltTest::ScopedEnvVar actions("BASALT_TEST_CHILD_ACTIONS", "print playing crash");
+#if defined(_WIN32)
+		const std::filesystem::path game = FileSystem::GetExecutableDirectory() / "BasaltTests.exe";
+#else
+		const std::filesystem::path game = FileSystem::GetExecutableDirectory() / "BasaltTests";
+#endif
+		const SmokeTestResult result = RunSmokeTest(game, 10, std::chrono::seconds(30));
+		CHECK_FALSE(result.Passed);
+		CHECK(result.Process.Outcome == ProcessOutcome::Crashed);
+		CHECK(result.Summary.rfind("the game crashed: ", 0) == 0);
+		CHECK(result.Process.Output.find("playing") != std::string::npos);
+
+		CommandRegistry registry;
+		AutomationSession session;
+		const nlohmann::json report = RunCommand(registry, session, "project.smoke_test", { { "executable", FileSystem::PathToUtf8(game) }, { "frames", 10 } });
+		CHECK(report["outcome"] == "crashed");
+		CHECK_FALSE(report["exitCode"].is_null());
+		CHECK(report["passed"] == false);
+		CHECK_FALSE(RunSmokeTest(game, 0, std::chrono::seconds(30)).Passed);
 	}
 
 	TEST_CASE("LastLines keeps the end of a log")

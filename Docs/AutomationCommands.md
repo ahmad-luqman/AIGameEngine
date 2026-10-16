@@ -1860,7 +1860,7 @@ Checks that the project would export and start: settings, start scene, every sce
 
 ### `render.screenshot`
 
-Renders the current scene from its primary camera, with its game UI, to a PNG (editor / GPU hosts only).
+Renders the current scene from its primary camera (the editor camera when the scene has none), with its game UI, to a PNG (editor / GPU hosts only). The editor's debug view applies; editor.game_view's path never uses one and fails without a primary camera.
 
 | Parameter | Type / description |
 |-----------|--------------------|

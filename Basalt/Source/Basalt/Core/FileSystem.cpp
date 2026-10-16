@@ -3,8 +3,6 @@
 #include "Basalt/Core/Base.h"
 #include "Basalt/Core/Log.h"
 
-#include <algorithm>
-#include <cctype>
 #include <cerrno>
 #include <fstream>
 #include <system_error>
@@ -128,9 +126,15 @@ namespace Basalt {
 
 	std::string FileSystem::GetLowercaseExtension(const std::filesystem::path& path)
 	{
-		std::string extension = PathToUtf8(path.extension());
-		std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-		return extension;
+		return ToLowerAscii(PathToUtf8(path.extension()));
+	}
+
+	std::string FileSystem::ToLowerAscii(std::string text)
+	{
+		for (char& c : text)
+			if (c >= 'A' && c <= 'Z')
+				c = static_cast<char>(c - 'A' + 'a');
+		return text;
 	}
 
 	bool FileSystem::Exists(const std::filesystem::path& path)

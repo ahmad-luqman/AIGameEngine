@@ -6,7 +6,9 @@
 
 #include <spdlog/fmt/fmt.h>
 
-#include <random>
+#include <atomic>
+#include <string>
+#include <string_view>
 #include <system_error>
 
 namespace Basalt {
@@ -21,7 +23,8 @@ namespace Basalt {
 				case 1:
 					return "the game failed to start or render (bad option or project, missing or broken start scene, renderer failure)";
 				case 3:
-					return "GPU validation errors";
+					// Smoke tests run headless, so this is not GPU validation: on Windows abort() exits with 3.
+					return "the game aborted (or, with a GPU, reported validation errors)";
 				case 4:
 					return "a screenshot could not be written";
 				case 5:
@@ -35,11 +38,13 @@ namespace Basalt {
 			}
 		}
 
+		constexpr std::string_view NotRunPrefix = "the game could not be run: ";
+
 		SmokeTestResult Fail(std::string summary)
 		{
 			SmokeTestResult result;
 			result.Process.Error = summary;
-			result.Summary = "the game could not be run: " + std::move(summary);
+			result.Summary = std::string(NotRunPrefix) + std::move(summary);
 			return result;
 		}
 
@@ -75,7 +80,9 @@ namespace Basalt {
 		const std::filesystem::path temporary = std::filesystem::temp_directory_path(error);
 		if (error || !temporary.is_absolute())
 			return Fail("cannot find the temporary directory for the game's save data" + (error ? ": " + error.message() : std::string()));
-		const std::filesystem::path userData = temporary / fmt::format("BasaltSmokeTest-{:016x}", std::random_device{}() * 0x100000000ull + std::random_device{}());
+		// Unique without std::random_device (which may throw): the clock, plus a counter for runs in the same tick.
+		static std::atomic<uint32_t> s_Run{ 0 };
+		const std::filesystem::path userData = temporary / fmt::format("BasaltSmokeTest-{:x}-{}", std::chrono::steady_clock::now().time_since_epoch().count(), s_Run++);
 
 		ProcessSpec spec;
 		spec.Executable = program;
@@ -94,7 +101,7 @@ namespace Basalt {
 		switch (result.Process.Outcome)
 		{
 			case ProcessOutcome::Failed:
-				result.Summary = "the game could not be run: " + result.Process.Error;
+				result.Summary = std::string(NotRunPrefix) + result.Process.Error;
 				break;
 			case ProcessOutcome::TimedOut:
 				result.Summary = fmt::format("the game did not finish {} frames within {} s and was stopped", frames, static_cast<double>(timeout.count()) / 1000.0);

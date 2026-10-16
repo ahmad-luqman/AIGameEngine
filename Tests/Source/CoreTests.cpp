@@ -17,11 +17,16 @@
 #include "TestUtils.h"
 
 #include <csignal>
+#include <nlohmann/json.hpp>
 #include <cstdint>
 #include <filesystem>
 #include <limits>
 #include <unordered_set>
 #include <vector>
+
+#if !defined(_WIN32)
+	#include <unistd.h>
+#endif
 
 using namespace Basalt;
 
@@ -670,14 +675,16 @@ TEST_SUITE("Core")
 	TEST_CASE("RunProcess passes the environment with overrides")
 	{
 		const BasaltTest::ScopedEnvVar kept("BASALT_PROCESS_TEST_KEPT", "kept");
+		const BasaltTest::ScopedEnvVar unicode("BASALT_PROCESS_TEST_UNICODE", "J\xC3\xBCrgen");
 		const BasaltTest::ScopedEnvVar replaced("BASALT_PROCESS_TEST_REPLACED", "old");
-		ProcessSpec spec = ChildProcess({ "env", "BASALT_PROCESS_TEST_KEPT", "env", "BASALT_PROCESS_TEST_REPLACED", "env", "BASALT_PROCESS_TEST_ADDED" });
-		spec.Environment = { { "BASALT_PROCESS_TEST_REPLACED", "new value" }, { "BASALT_PROCESS_TEST_ADDED", "added" } };
+		ProcessSpec spec = ChildProcess({ "env", "BASALT_PROCESS_TEST_KEPT", "env", "BASALT_PROCESS_TEST_REPLACED", "env", "BASALT_PROCESS_TEST_ADDED", "env", "BASALT_PROCESS_TEST_UNICODE" });
+		spec.Environment = { { "BASALT_PROCESS_TEST_REPLACED", "new value" }, { "BASALT_PROCESS_TEST_ADDED", "added \xC3\xA9" } };
 		const ProcessResult result = RunProcess(spec);
 		REQUIRE(result.Succeeded());
 		CHECK(result.Output.find("BASALT_PROCESS_TEST_KEPT=kept") != std::string::npos);
 		CHECK(result.Output.find("BASALT_PROCESS_TEST_REPLACED=new value") != std::string::npos);
-		CHECK(result.Output.find("BASALT_PROCESS_TEST_ADDED=added") != std::string::npos);
+		CHECK(result.Output.find("BASALT_PROCESS_TEST_ADDED=added \xC3\xA9") != std::string::npos);
+		CHECK(result.Output.find("BASALT_PROCESS_TEST_UNICODE=J\xC3\xBCrgen") != std::string::npos);
 		CHECK(result.Output.find("=old") == std::string::npos);
 	}
 
@@ -695,30 +702,68 @@ TEST_SUITE("Core")
 	{
 		ProcessSpec spec = ChildProcess({ "print", "started", "sleep", "20000", "exit", "0" });
 		// Long enough for a Debug or sanitizer build of the child to start and print on a busy CI machine.
-		spec.Timeout = std::chrono::milliseconds(2000);
+		spec.Timeout = std::chrono::milliseconds(5000);
 		const auto start = std::chrono::steady_clock::now();
 		const ProcessResult result = RunProcess(spec);
 		CHECK(result.Outcome == ProcessOutcome::TimedOut);
 		CHECK_FALSE(result.Succeeded());
 		CHECK(result.Output.find("started") != std::string::npos);
-		CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(10));
+		CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(20));
 	}
 
 	TEST_CASE("RunProcess reports a crash as a crash, never as an exit")
 	{
-		const ProcessResult result = RunProcess(ChildProcess({ "print", "before the crash", "crash" }));
-		CHECK(result.Outcome == ProcessOutcome::Crashed);
-		CHECK_FALSE(result.Succeeded());
-		CHECK_FALSE(result.Error.empty());
-		CHECK(result.Output.find("before the crash") != std::string::npos);
-#if defined(_WIN32)
-		CHECK(static_cast<uint32_t>(result.ExitCode) == 0xC0000005u);
-		CHECK(result.Error.find("0xC0000005") != std::string::npos);
-#else
-		CHECK(result.ExitCode == 128 + SIGABRT);
-		CHECK(result.Error.find("signal") != std::string::npos);
+		for (const char* action : { "crash", "trap" })
+		{
+			INFO(action);
+			const ProcessResult result = RunProcess(ChildProcess({ "print", "before the crash", action }));
+			CHECK(result.Outcome == ProcessOutcome::Crashed);
+			CHECK_FALSE(result.Succeeded());
+			CHECK_FALSE(result.Error.empty());
+			CHECK(result.Output.find("before the crash") != std::string::npos);
+#if !defined(_WIN32)
+			CHECK(result.ExitCode > 128);
+			CHECK(result.Error.find("signal") != std::string::npos);
 #endif
+		}
+#if defined(_WIN32)
+		const ProcessResult violation = RunProcess(ChildProcess({ "crash" }));
+		CHECK(static_cast<uint32_t>(violation.ExitCode) == 0xC0000005u);
+		CHECK(violation.Error.find("0xC0000005") != std::string::npos);
+#else
+		CHECK(RunProcess(ChildProcess({ "crash" })).ExitCode == 128 + SIGABRT);
+#endif
+		// A negative exit code is an exit, not a crash, on every platform.
+		const ProcessResult negative = RunProcess(ChildProcess({ "exit", "-1" }));
+		CHECK(negative.Outcome == ProcessOutcome::Exited);
+		CHECK_FALSE(negative.Succeeded());
 	}
+
+	TEST_CASE("RunProcess output is valid UTF-8 even when the tail starts inside a character")
+	{
+		// 1001 two-byte characters, cut to 1001 bytes: the first byte kept is the second half of a character.
+		ProcessSpec spec = ChildProcess({ "utf8", "1001", "invalid" });
+		spec.MaxOutputBytes = 1001 + 4;
+		const ProcessResult result = RunProcess(spec);
+		REQUIRE(result.Succeeded());
+		CHECK(result.Output.rfind("\xC3\xA9", 0) == 0);
+		CHECK(result.Output.find("[\xEF\xBF\xBD\xEF\xBF\xBD]") != std::string::npos);
+		CHECK(nlohmann::json(result.Output).dump().size() > 0);
+	}
+
+#if !defined(_WIN32)
+	TEST_CASE("RunProcess does not pass the caller's other open files to the child")
+	{
+		// A descriptor without close-on-exec, as a library or a socket might leave it.
+		int ends[2] = { -1, -1 };
+		REQUIRE(pipe(ends) == 0);
+		const ProcessResult result = RunProcess(ChildProcess({ "fd", std::to_string(ends[1]).c_str(), "fd", "1" }));
+		close(ends[0]);
+		close(ends[1]);
+		REQUIRE(result.Succeeded());
+		CHECK(result.Output.find("fd closed\nfd open") != std::string::npos);
+	}
+#endif
 
 	TEST_CASE("RunProcess rejects environment names it cannot pass on")
 	{
@@ -728,7 +773,7 @@ TEST_SUITE("Core")
 			spec.Environment = { { name, "value" } };
 			const ProcessResult result = RunProcess(spec);
 			CHECK(result.Outcome == ProcessOutcome::Failed);
-			CHECK(result.Error.find("invalid environment variable") != std::string::npos);
+			CHECK(result.Error.find("invalid environment variable name") != std::string::npos);
 		}
 	}
 
@@ -739,6 +784,7 @@ TEST_SUITE("Core")
 		std::error_code error;
 		spec.Executable = std::filesystem::relative(spec.Executable, std::filesystem::current_path(), error);
 		REQUIRE_FALSE(error);
+		REQUIRE_FALSE(spec.Executable.empty());
 		spec.WorkingDirectory = directory.GetPath();
 		CHECK(RunProcess(spec).Succeeded());
 	}

@@ -607,8 +607,8 @@ namespace Basalt {
 				if (dynamicState == DynamicResolutionState::EmptyRange)
 					warnings.push_back("dynamic resolution " + DescribeDynamicResolutionState(dynamicState, saved.Graphics.DynamicResolution, saved.Graphics.RenderScale));
 				// The project step does not reach a scene with its own; say so rather than appear to do nothing.
-				if (params.contains("fixedTimestep") && session.GetScene() && session.GetScene()->GetPhysicsSettings().FixedTimestep > 0.0f)
-					warnings.push_back(fmt::format("the open scene keeps its own physics step ({} s); remove it with scene.settings {{\"Physics\": {{\"FixedTimestep\": null}}}}", session.GetScene()->GetPhysicsSettings().FixedTimestep));
+				if (const Scene* scene = session.GetScene().get(); params.contains("fixedTimestep") && scene && scene->GetPhysicsSettings().HasFixedTimestepOverride())
+					warnings.push_back(fmt::format("the open scene keeps its own physics step ({} s); remove it with scene.settings {{\"Physics\": {{\"FixedTimestep\": null}}}}", scene->GetPhysicsSettings().FixedTimestep));
 				if (!warnings.empty())
 					result["warnings"] = warnings;
 				// Renaming or removing a layer strands bodies on it; report them now rather than at play time.
@@ -766,6 +766,7 @@ namespace Basalt {
 					for (const auto& warning : GetAnimationWarnings(entity))
 						animationWarnings.push_back({ { "entity", static_cast<uint64_t>(entity.GetUUID()) }, { "name", entity.GetName() }, { "message", warning } });
 				}
+				const PhysicsSettings& physics = scene.GetPhysicsSettings();
 				return json{
 					{ "name", scene.GetName() },
 					{ "path", session.GetScenePath() },
@@ -776,7 +777,7 @@ namespace Basalt {
 					{ "unknownPhysicsLayers", UnknownPhysicsLayersJson(scene, ActivePhysicsLayers()) },
 					{ "fixedTimestep", scene.GetFixedTimestep() },
 					// Null when the scene follows the project's FixedTimestep.
-					{ "fixedTimestepOverride", scene.GetPhysicsSettings().FixedTimestep > 0.0f ? json(scene.GetPhysicsSettings().FixedTimestep) : json() },
+					{ "fixedTimestepOverride", physics.HasFixedTimestepOverride() ? json(physics.FixedTimestep) : json() },
 				};
 			});
 
@@ -1259,7 +1260,7 @@ namespace Basalt {
 				return json{ { "result", result } };
 			});
 
-			Add(registry, "render.screenshot", "Renders the current scene from its primary camera, with its game UI, to a PNG (editor / GPU hosts only).", Schema::Object({ { "path", Schema::String("string, output .png", true) }, { "width", Schema::Nullable(Schema::Integer("integer", 16, 8192)) }, { "height", Schema::Nullable(Schema::Integer("integer", 16, 8192)) } }, { "path" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "render.screenshot", "Renders the current scene from its primary camera (the editor camera when the scene has none), with its game UI, to a PNG (editor / GPU hosts only). The editor's debug view applies; editor.game_view's path never uses one and fails without a primary camera.", Schema::Object({ { "path", Schema::String("string, output .png", true) }, { "width", Schema::Nullable(Schema::Integer("integer", 16, 8192)) }, { "height", Schema::Nullable(Schema::Integer("integer", 16, 8192)) } }, { "path" }), [](AutomationSession& session, const json& params) {
 				if (!session.Screenshot)
 					throw CommandError("screenshots need a GPU host (the editor, or 'BasaltRuntime --frames N --screenshot out.png'); this host is '" + session.HostName + "'");
 				const std::string path = RequireString(params, "path");

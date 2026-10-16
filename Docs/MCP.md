@@ -171,14 +171,17 @@ Outside Play it previews the primary camera, labelled **Edit mode** or **Simulat
 shows the editor camera with its helpers. Each view renders only while visible, so the default tabbed pair
 costs one view.
 
-- `editor.game_view {}` returns `visible`, `mode` (`Edit`, `Play`, `Simulate`), the render `width` and
+- `editor.game_view {}` returns `visible`, `mode` (`Edit`, `Play`, `Simulate`), `status` (how the last frame
+  went: `rendered`, `notRendered` while the tab is hidden, `noCamera`, `rendererUnavailable`, `renderFailed`), the render `width` and
   `height`, the session `override`, `hasCamera`, `imageRect`/`panelRect` (logical units relative to the
   editor window, as last drawn), `windowSize`, and `renderWidth`/`renderHeight` (render scale and dynamic
   resolution apply as in the game). `resolution: [w, h]` (64–16384) overrides the resolution for this
   editor session without changing the project; `null` returns to the project's. `focus: true` brings the tab
   forward. `path` saves what the Game view shows (primary camera at its resolution, game UI, never a debug
   view, without script debug lines) to a PNG; it fails without a primary camera. It renders through the capture
-  renderer, so the live view keeps its exposure and dynamic resolution, and resets exposure like `render.screenshot`.
+  renderer at the session's render scale (no dynamic resolution) with exposure reset like `render.screenshot`,
+  so the live view's exposure and resolution are untouched. A `resolution` in the same call applies first,
+  even if the capture then fails.
 - `editor.panel {"name":"Project Settings","open":true,"focus":true}` opens, closes or focuses an editor
   window (`Viewport`, `Game`, `Hierarchy`, `Inspector`, `Scene`, `Content Browser`, `Console`,
   `Project Settings`; only Project Settings can be closed) and returns `{name, open}`.
@@ -186,7 +189,9 @@ costs one view.
 - `editor.thumbnail {"path":"Assets/Models/Ship.glb","output":"ship.png","refresh":false}` makes (or reads from
   the cache) the content-browser preview of an image, `.hdr` environment, `.gltf`/`.glb` model or `.bprefab`
   and returns `kind` (`Image`, `Environment`, `Model`, `Prefab`), `width`/`height` (at most 128), `cached`,
-  `cachePath` and `details` (the tooltip's lines). Other files report that they have no preview.
+  `cachePath` and `details` (the tooltip's lines), plus `warnings` when the preview was made but could not be
+  stored in the cache. `refresh: true` makes it again, first re-reading the model and the files it uses. Other
+  files report that they have no preview.
 - `editor.material_preview {"entity":"Ball","output":"ball.png"}` renders an entity's Material on a sphere,
   as the inspector shows it (128x128).
 

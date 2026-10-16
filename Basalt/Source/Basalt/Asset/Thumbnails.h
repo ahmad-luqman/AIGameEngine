@@ -56,8 +56,8 @@ namespace Basalt {
 
 	// A project's previews on disk, under <project>/Cache/Thumbnails: outside Assets/, so never exported. Each
 	// entry is <hash of the project-relative path>.png plus a .key file holding the version key (path, size,
-	// modification time, kind and Version; not a content hash) and the tooltip details. A changed source no
-	// longer matches its key and is made again. Headless.
+	// modification time, kind and Version, and the same for each dependency; not a content hash) and the tooltip
+	// details. A changed source or dependency no longer matches its key and is made again. Headless.
 	class ThumbnailCache
 	{
 	public:
@@ -74,8 +74,12 @@ namespace Basalt {
 		explicit ThumbnailCache(std::filesystem::path projectDirectory);
 
 		static std::filesystem::path DirectoryFor(const std::filesystem::path& projectDirectory);
-		// The version key of a project-relative source file, or nullopt (with the reason) when it cannot be read.
+		// The version key of a project-relative source file, or nullopt (with the reason) when it cannot be read. It
+		// covers the files the preview also reads (GetDependencies), so changing one of those makes it again.
 		std::optional<std::string> MakeKey(const std::string& relativePath, std::string& outError) const;
+		// The other files a preview reads: a glTF's external buffers and images; a prefab's models (and theirs),
+		// textures and fonts. Project-relative, sorted.
+		std::vector<std::string> GetDependencies(const std::string& relativePath) const;
 
 		// The cached preview when it was made from the same version of the source (key).
 		std::optional<Entry> Load(const std::string& relativePath, const std::string& key) const;

@@ -36,4 +36,18 @@ namespace Basalt::EditorCommandSchemas {
 
 	bool IsClosablePanel(const std::string& title);
 
+	// The editor keeps one open flag for closable windows: Project Settings must be the only one.
+	constexpr bool ProjectSettingsIsTheOnlyClosablePanel()
+	{
+		size_t closable = 0;
+		for (const PanelInfo& panel : Panels)
+			if (panel.Closable)
+			{
+				if (panel.Title != ProjectSettingsTitle)
+					return false;
+				closable++;
+			}
+		return closable == 1;
+	}
+
 }
