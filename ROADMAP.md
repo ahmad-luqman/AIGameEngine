@@ -9,7 +9,8 @@ automation API, docs, and a code review before committing.
 Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or more.
 
 **Execution.** Work in milestones rather than one item at a time: P0 → particles and UI components →
-P2 editor feel → the Marble Run sample. Run each milestone as one long autonomous session at high effort
+P2 editor feel → agent-tested samples (part 1, Marble Run and Tetris polish, has shipped; the remaining samples
+are next). Run each milestone as one long autonomous session at high effort
 (or with multi-agent workflows), and check quality and token cost before starting the next.
 
 ## Current state (baseline)
@@ -19,8 +20,8 @@ P2 editor feel → the Marble Run sample. Run each milestone as one long autonom
   creation/destruction/prefabs, an editor, export, and a full automation API (CLI + TCP).
 - CI builds and tests on Windows, Ubuntu and macOS (Debug + Release) — but without a GPU. Rendering has
   only been verified on macOS (Apple M4 Max via MoltenVK) with zero validation errors.
-- 105 unit test cases, a feature test with 320 Lua checks, and a Tetris sample with a scripted gameplay
-  test.
+- 105 unit test cases, a feature test with 320 Lua checks, and Tetris, Joints and Marble Run samples with
+  scripted gameplay tests.
 
 ---
 
@@ -219,10 +220,6 @@ with a smoke test have shipped. Follow-ups:
 The specification asks for an editor that an AI agent can fully control. These items make that faster and
 more reliable.
 
-- **Marble Run sample — M.** A physics showcase (joints, trigger zones, particles, spatial audio,
-  UI components) built through the automation API, with a ctest gameplay test written as `assert.*`,
-  `events.poll` and `scene.diff` checks. Exercises most of P1.
-- **Tetris polish — S.** Line-clear particles and screen shake once particles exist.
 - **More samples — M each.** Breakout (physics + UI), a 3D platformer (character controller + camera +
   an animated character whose walk/run/jump go through the animation state machine, foot IK and root motion),
   and a small first-person scene (mouse look + raycasts + audio). Each one is built through the

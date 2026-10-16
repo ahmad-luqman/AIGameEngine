@@ -30,7 +30,8 @@ Write scripts with `asset.write` (or directly as files under `<project>/Assets/S
   frame (an upward part jumps when `IsGrounded()`). Put bodies on named
   layers (`RigidBody.Layer`) and set which layers collide with `project.set` `physicsLayers`
   (`{"Names": ["Default", "Player", "Pickup"], "IgnoredPairs": [["Player", "Pickup"]]}`). Set
-  `RigidBody.Continuous` on fast projectiles. Probe the world with `Physics.Raycast/SphereCast/BoxCast/OverlapSphere/OverlapBox`
+  `RigidBody.Continuous` on fast projectiles and `RigidBody.AllowSleeping = false` on balls that roll slowly
+  (a sleeping ball freezes where it stopped, even on a slope). Probe the world with `Physics.Raycast/SphereCast/BoxCast/OverlapSphere/OverlapBox`
   (options: `Ignore`, `Layers`, `IncludeTriggers`, `All`; see Docs/ScriptingAPI.md).
 - Imported levels and props: add `RigidBody {}` (Static by default) and `MeshCollider {}` to each entity with
   a `Mesh` component (an empty `Mesh` field uses the entity's mesh) so static geometry collides by its real
@@ -99,12 +100,15 @@ Write gameplay checks as assertions, so a batch reads as the game's specificatio
   {"command": "play.step", "params": {"frames": 120, "assertNoErrors": true}},
   {"command": "assert.entity_exists", "params": {"entity": "Enemy", "count": 3}},
   {"command": "assert.component", "params": {"entity": "Ball", "component": "Transform", "fields": {"Translation": [0, 0.5, 0]}, "tolerance": 0.01}},
-  {"command": "events.poll", "params": {"subscription": 1, "assertTypes": ["collision"]}},
+  {"command": "events.poll", "params": {"subscription": 1, "expect": [{"event": "collision", "type": "triggerEnter", "a": {"name": "Goal"}, "b": {"name": "Ball"}}]}},
   {"command": "scene.diff", "params": {"from": "start", "tolerance": 0.001}}
 ]
 ```
-`scene.diff` lists exactly what playing changed (entities added/removed, fields with before and after); add
-`"expectError": "assertion failed"` to a request that must fail. Subscription IDs start at 1 in each CLI run.
+`events.poll`'s `expect` patterns name the fields an event must have (bodies in either order); `assertTypes`
+only checks the kinds. `scene.diff` lists exactly what playing changed (entities added/removed, fields with
+before and after); add `"expectError": "assertion failed"` to a request that must fail. Subscription IDs start at
+1 in each CLI run. `Samples/MarbleRun/test_game.json` is a complete example (it also clicks HUD widgets with
+`input.mouse` at canvas positions).
 Game scripts get completion and type checks in code editors from `Docs/basalt.d.lua` (lua-language-server): add it
 to `workspace.library` in the project's `.luarc.json`.
 

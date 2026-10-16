@@ -1234,6 +1234,7 @@ function BasaltScript:StopAllCoroutines() end
 ---@field FixedRotation boolean
 ---@field Layer string
 ---@field Continuous boolean
+---@field AllowSleeping boolean
 
 ---BoxCollider data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
 ---@class BoxColliderComponent

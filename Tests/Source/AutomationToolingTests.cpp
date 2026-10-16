@@ -277,6 +277,65 @@ TEST_SUITE("Automation")
 		CHECK(RunError(registry, session, "events.poll", { { "subscription", id }, { "max", 1 }, { "assertTypes", { "collision" } } }) == "assertion failed: no collision event among the first 1 queued (1 playState; 0 dropped); they stay queued");
 	}
 
+	TEST_CASE("events.poll with expect matches event patterns, naming a contact's bodies in either order")
+	{
+		CommandRegistry registry;
+		AutomationSession session;
+		Run(registry, session, "scene.new", { { "empty", true } });
+		AddFallingBall(*session.GetEditScene());
+		const json types = { "collision", "playState" };
+		const uint64_t raw = Subscribe(registry, session, types);
+		const uint64_t listed = Subscribe(registry, session, types);
+		const uint64_t swapped = Subscribe(registry, session, types);
+		const uint64_t unswappedNormal = Subscribe(registry, session, types);
+		const uint64_t missing = Subscribe(registry, session, types);
+		Run(registry, session, "play.start");
+		Run(registry, session, "play.step", { { "frames", 150 } });
+		Run(registry, session, "play.stop");
+
+		json landing;
+		const json rawEvents = Poll(registry, session, raw)["events"];
+		for (const json& event : rawEvents)
+		{
+			if (event["event"] == "collision" && event["type"] == "collisionBegin")
+				landing = event;
+		}
+		REQUIRE(landing.is_object());
+		const json& normal = landing["normal"];
+		REQUIRE(std::abs(normal[1].get<double>()) > 0.5);
+
+		// Patterns name a subset of the fields; floats match within a tolerance.
+		const json asListed = { { "event", "collision" }, { "type", "collisionBegin" }, { "a", { { "name", landing["a"]["name"] } } }, { "b", { { "name", landing["b"]["name"] } } }, { "normal", normal } };
+		const json stopped = { { "event", "playState" }, { "state", "stop" } };
+		const json polled = Run(registry, session, "events.poll", { { "subscription", listed }, { "expect", { asListed, stopped } } });
+		CHECK(polled["events"].size() > 2);
+
+		// The bodies swapped: the normal (from a to b) must be reversed too.
+		json reversedNormal = json::array();
+		for (const json& component : normal)
+			reversedNormal.push_back(-component.get<double>());
+		json bodiesSwapped = { { "event", "collision" }, { "type", "collisionBegin" }, { "a", { { "name", landing["b"]["name"] } } }, { "b", { { "name", landing["a"]["name"] } } }, { "normal", reversedNormal } };
+		Run(registry, session, "events.poll", { { "subscription", swapped }, { "expect", { bodiesSwapped } } });
+		bodiesSwapped["normal"] = normal;
+		CHECK(Contains(RunError(registry, session, "events.poll", { { "subscription", unswappedNormal }, { "expect", { bodiesSwapped } } }), "assertion failed: no event matches"));
+
+		// A pattern nothing matches fails, names the pattern and keeps the events.
+		const json goal = { { "event", "collision" }, { "type", "triggerEnter" }, { "a", { { "name", "Goal" } } } };
+		const std::string error = RunError(registry, session, "events.poll", { { "subscription", missing }, { "expect", { stopped, goal } } });
+		CHECK(Contains(error, "assertion failed: no event matches " + goal.dump() + " among the "));
+		CHECK(Contains(error, "they stay queued"));
+		// Only the first 'max' events count: the stop event comes last.
+		CHECK(Contains(RunError(registry, session, "events.poll", { { "subscription", missing }, { "max", 1 }, { "expect", { stopped } } }), "no event matches " + stopped.dump() + " among the first 1 queued (1 playState; 0 dropped)"));
+		// A missing type is reported before a pattern.
+		CHECK(Contains(RunError(registry, session, "events.poll", { { "subscription", missing }, { "assertTypes", { "log" } }, { "expect", { goal } } }), "assertion failed: no log event among the "));
+		// Patterns are objects, at least one.
+		CHECK(Contains(RunError(registry, session, "events.poll", { { "subscription", missing }, { "expect", { "triggerEnter" } } }), "expect[0]"));
+		CHECK(Contains(RunError(registry, session, "events.poll", { { "subscription", missing }, { "expect", json::array() } }), "expect"));
+		const json all = Poll(registry, session, missing);
+		CHECK(all["events"].size() == polled["events"].size());
+		CHECK(all["events"].back()["state"] == "stop");
+	}
+
 	TEST_CASE("Simulate reports collisions to event subscriptions although no scripts run")
 	{
 		CommandRegistry registry;
@@ -838,15 +897,26 @@ TEST_SUITE("Automation")
 			hub.Publish(AutomationEventType::PlayState, { { "state", "play" } });
 		std::vector<json> events;
 		uint64_t dropped = 0;
-		const uint32_t collision = AutomationEventHub::TypeBit(AutomationEventType::Collision);
-		CHECK(hub.Poll(id, 10, events, dropped, collision) == AutomationEventHub::PollStatus::Rejected);
+		size_t checked = 0;
+		const AutomationEventHub::PollCheck refuse = [&checked](std::span<const json> queued) {
+			checked = queued.size();
+			return false;
+		};
+		CHECK(hub.Poll(id, 10, events, dropped, refuse) == AutomationEventHub::PollStatus::Rejected);
+		// The check sees exactly the events the poll would return.
+		CHECK(checked == 10);
 		CHECK(events.size() == 10);
 		CHECK(dropped == extra);
-		CHECK(hub.Poll(id, AutomationEventHub::MaxQueuedEvents, events, dropped, collision) == AutomationEventHub::PollStatus::Rejected);
+		CHECK(hub.Poll(id, AutomationEventHub::MaxQueuedEvents, events, dropped, refuse) == AutomationEventHub::PollStatus::Rejected);
+		CHECK(checked == AutomationEventHub::MaxQueuedEvents);
+		CHECK(dropped == extra);
+		// An accepting check takes the events (and resets the drop count) like a poll without one.
+		REQUIRE(hub.Poll(id, 2, events, dropped, [](std::span<const json> queued) { return queued.size() == 2; }) == AutomationEventHub::PollStatus::Ok);
+		CHECK(events.size() == 2);
 		CHECK(dropped == extra);
 		REQUIRE(hub.Poll(id, AutomationEventHub::MaxQueuedEvents, events, dropped) == AutomationEventHub::PollStatus::Ok);
-		CHECK(events.size() == AutomationEventHub::MaxQueuedEvents);
-		CHECK(dropped == extra);
+		CHECK(events.size() == AutomationEventHub::MaxQueuedEvents - 2);
+		CHECK(dropped == 0);
 		REQUIRE(hub.Poll(id, 1, events, dropped) == AutomationEventHub::PollStatus::Ok);
 		CHECK(events.empty());
 		CHECK(dropped == 0);

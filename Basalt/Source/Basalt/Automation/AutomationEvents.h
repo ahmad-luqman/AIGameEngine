@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -88,7 +89,7 @@ namespace Basalt {
 			UnknownSubscription,
 			// The subscription streams to its connection.
 			Streamed,
-			// The events lack a required type; they stay queued.
+			// The poll's check refused the events; they stay queued.
 			Rejected
 		};
 
@@ -107,11 +108,15 @@ namespace Basalt {
 		void RemoveOwner(uint64_t owner);
 		size_t GetSubscriptionCount() const;
 
+		// Decides whether a poll may take the events it would return (events.poll's assertions). It runs with the hub's
+		// lock held, so it must not log or call back into the hub.
+		using PollCheck = std::function<bool(std::span<const nlohmann::json> events)>;
+
 		// Replaces outEvents with up to `max` queued events of a polled subscription, oldest first, and removes them;
-		// outDropped is the number lost to the queue limit since the previous successful poll. With requiredTypes
-		// (TypeBits), the events stay queued unless they include every required type: Rejected, with outEvents and
-		// outDropped filled so the caller can say what was there.
-		PollStatus Poll(uint64_t id, size_t max, std::vector<nlohmann::json>& outEvents, uint64_t& outDropped, uint32_t requiredTypes = 0);
+		// outDropped is the number lost to the queue limit since the previous successful poll. With a check, the events
+		// stay queued unless it accepts them: Rejected, with outEvents and outDropped filled so the caller can say what
+		// was there.
+		PollStatus Poll(uint64_t id, size_t max, std::vector<nlohmann::json>& outEvents, uint64_t& outDropped, const PollCheck& check = {});
 		// Every event queued for the owner's streamed subscriptions as newline-terminated JSON frames, each with its
 		// "subscription": grouped by subscription in ID order, each oldest first (clients order across subscriptions by
 		// "seq"); a dropped count becomes a {"event":"dropped"} frame before them. Empty when nothing is pending.

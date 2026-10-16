@@ -3,7 +3,7 @@
 -- Controls: Left/Right move, Up rotate, Down soft drop, Space hard drop, R restart.
 -- The board is a 10x20 grid of cube entities created at start; cells are shown or hidden and recolored
 -- as the game state changes. Game state is exposed as fields (Score, Lines, Level, GameOver) so it can be
--- inspected and tested through the automation API.
+-- inspected and tested through the automation API. Cleared lines burst into particles and shake the camera.
 
 local Tetris = {}
 
@@ -14,6 +14,9 @@ Tetris.Properties = {
 	StartInterval = 0.8,  -- seconds per row at level 1
 	RepeatDelay = 0.17,   -- held-key auto-repeat delay
 	RepeatRate = 0.05,
+	ShakeStrength = 0.4,  -- camera offset (world units) at full trauma
+	ShakeDecay = 1.0,     -- trauma lost per second
+	BurstParticles = 60,  -- particles per cleared line
 }
 
 -- Pieces as lists of rotations; each rotation is four {x, y} cells (y up).
@@ -32,6 +35,8 @@ local Colors = {
 	Z = { 0.9, 0.15, 0.15, 1 }, J = { 0.15, 0.3, 0.95, 1 }, L = { 0.95, 0.5, 0.1, 1 },
 }
 local LineScores = { 100, 300, 500, 800 }
+-- Screen-shake trauma a clear adds, by lines cleared at once (a Tetris shakes hardest).
+local LineTrauma = { 0.4, 0.55, 0.7, 1.0 }
 
 function Tetris:Cell(x, y)
 	return self.Board[y * self.Width + x + 1]
@@ -78,6 +83,7 @@ function Tetris:Reset()
 	self.Score, self.Lines, self.Level = 0, 0, 1
 	self.GameOver = false
 	self.DropTimer = 0
+	self:StopShake()
 	-- Force every cell to redraw (cells may still show the game-over color).
 	for i = 1, #self.Board do self.Shown[i] = nil end
 	self:Spawn()
@@ -101,7 +107,7 @@ function Tetris:Lock()
 		return
 	end
 
-	-- Clear full rows, top to bottom so indices stay valid.
+	-- Clear full rows, top to bottom so indices stay valid (and each y is where the row was on screen).
 	local cleared = 0
 	for y = self.Height - 1, 0, -1 do
 		local full = true
@@ -110,6 +116,7 @@ function Tetris:Lock()
 		end
 		if full then
 			cleared = cleared + 1
+			self:BurstRow(y)
 			for row = y, self.Height - 2 do
 				for x = 0, self.Width - 1 do
 					self.Board[row * self.Width + x + 1] = self.Board[(row + 1) * self.Width + x + 1]
@@ -122,8 +129,38 @@ function Tetris:Lock()
 		self.Lines = self.Lines + cleared
 		self.Score = self.Score + LineScores[cleared] * self.Level
 		self.Level = 1 + math.floor(self.Lines / 10)
+		self.Trauma = math.min(1, self.Trauma + LineTrauma[cleared])
 	end
 	self:Spawn()
+end
+
+-- Sparks along a cleared row. The emitter simulates in world space, so moving it between bursts leaves the
+-- earlier rows' particles where they were.
+function Tetris:BurstRow(y)
+	self.LineBurst.Translation = Vec3((self.Width - 1) / 2, y, 0.6)
+	self.LineBurst:EmitParticles(self.BurstParticles)
+end
+
+-- Offsets the camera from its rest position by the current trauma (squared, so small shakes stay subtle) and
+-- lets the trauma decay. Driven by sines of the shake's own clock, never by Math.Random: the piece bag draws
+-- from that generator, and a shake must not change which pieces come next (replays depend on it).
+function Tetris:OnLateUpdate(dt)
+	if self.Trauma <= 0 then return end
+	self.Trauma = math.max(0, self.Trauma - self.ShakeDecay * dt)
+	if self.Trauma == 0 then
+		self:StopShake()
+		return
+	end
+	self.ShakeTime = self.ShakeTime + dt
+	local amount = self.ShakeStrength * self.Trauma * self.Trauma
+	local offset = Vec3(math.sin(self.ShakeTime * 47) * amount, math.sin(self.ShakeTime * 61 + 1.3) * amount * 0.8, 0)
+	self.Camera.Translation = self.CameraRest + offset
+end
+
+function Tetris:StopShake()
+	self.Trauma = 0
+	self.ShakeTime = 0
+	self.Camera.Translation = self.CameraRest
 end
 
 function Tetris:Move(dx, dy)
@@ -196,6 +233,22 @@ function Tetris:OnCreate()
 	Wall("WallRight", Vec3(self.Width, self.Height / 2 - 0.5, 0), Vec3(1, self.Height + 1, 1))
 	Wall("Floor", Vec3(self.Width / 2 - 0.5, -1, 0), Vec3(self.Width + 2, 1, 1))
 	Wall("Back", Vec3(self.Width / 2 - 0.5, self.Height / 2 - 0.5, -0.75), Vec3(self.Width, self.Height, 0.5))
+
+	-- Line-clear sparks: a flat box the width of the well that only emits on demand (BurstRow).
+	self.LineBurst = Scene.CreateEntity("LineBurst")
+	self.LineBurst:AddComponent("ParticleEmitter", {
+		PlayOnStart = false, Looping = false, Rate = 0, MaxParticles = 800,
+		Shape = "Box", BoxExtents = { self.Width / 2, 0.4, 0.4 },
+		LifetimeMin = 0.5, LifetimeMax = 1.0, SpeedMin = 2, SpeedMax = 6, GravityScale = 1.5, Drag = 0.5,
+		StartColor = { 3, 1.9, 0.6, 1 }, EndColor = { 1.6, 0.45, 0.1, 0 }, StartSize = 0.25, EndSize = 0.05,
+		Blend = "Additive", SimulationSpace = "World" })
+	self.LineBurst:SetParent(self.Entity)
+
+	-- The camera shakes around where the scene placed it.
+	self.Camera = Scene.FindEntityByName("Camera")
+	self.CameraRest = self.Camera.Translation
+	self.Trauma = 0
+	self.ShakeTime = 0
 
 	self:Reset()
 	self:Render()

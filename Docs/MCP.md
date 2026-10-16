@@ -98,7 +98,10 @@ Agents can follow a running game and check it without polling or screenshots:
   (see `Tests/Automation/EditorViewport.py`). The server serves one connection at a time, so subscribe on the
   connection that sends the commands. MCP clients and the CLI get polled subscriptions instead (on the editor's TCP
   server an MCP client's still end with its connection; `basalt mcp`'s end with the process): `events.poll {subscription}` returns the queued events (at most 1024 wait;
-  `dropped` counts the rest; with `assertTypes` it fails, leaving them queued, unless every listed type is there).
+  `dropped` counts the rest; with `assertTypes` it fails, leaving them queued, unless every listed type is there,
+  and with `expect` unless each listed pattern matches an event: every field the pattern names must be equal, so
+  `{"event": "collision", "type": "triggerEnter", "a": {"name": "Goal"}}` asks for an entity named Goal to have
+  been entered; a collision pattern also matches with `a` and `b` swapped, since contacts list their bodies by ID).
   `pause` and `resume` come from the editor's Pause button; no command pauses.
 - `scene.snapshot {name}` keeps the current state in memory; `scene.diff {from, to?}` compares two snapshots or
   `.bscene` files (omit `to` to compare with the current scene) by entity ID and lists every changed field, and

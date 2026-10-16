@@ -509,6 +509,7 @@ namespace Basalt {
 			if (!legacyLayer)
 				r.Field("Layer", c.Layer);
 			r.Field("Continuous", c.Continuous);
+			r.Field("AllowSleeping", c.AllowSleeping);
 			if (legacyMask || legacyLayer)
 			{
 				static bool s_Warned = false;
@@ -842,6 +843,7 @@ namespace Basalt {
 				{ "FixedRotation", c.FixedRotation },
 				{ "Layer", c.Layer },
 				{ "Continuous", c.Continuous },
+				{ "AllowSleeping", c.AllowSleeping },
 			};
 		}
 

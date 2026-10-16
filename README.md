@@ -39,6 +39,9 @@ build/bin/basalt --project Samples/Tetris project.export '{"output": "Dist/Tetri
 - [Docs/TestedHardware.md](Docs/TestedHardware.md) — real-GPU smoke test procedure and results
 - [.claude/skills/basalt-make-game](.claude/skills/basalt-make-game/SKILL.md) — building a game as an AI agent
 - [Samples/Tetris](Samples/Tetris) — a game built entirely through the automation API
+- [Samples/MarbleRun](Samples/MarbleRun) — a physics showcase (joints, triggers, particles, spatial audio, UI) whose
+  test is written as `assert.*`, `events.poll` and `scene.diff` checks
+- [Samples/Joints](Samples/Joints) — every joint type
 
 ## License
 
