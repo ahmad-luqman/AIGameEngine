@@ -64,7 +64,7 @@ namespace Basalt {
 		if (protocol == Protocol::Mcp)
 		{
 			// MCP has no frames for unsolicited events: its subscriptions are polled, but still end with the connection.
-			AutomationSession::EventClientScope client(session, { m_ClientId, false });
+			AutomationSession::EventClientScope client(session, { m_ClientId, AutomationEventDelivery::Polled });
 			const auto response = m_Mcp.HandleRequest(registry, session, parsed);
 			return response ? response->dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) : "";
 		}
@@ -72,7 +72,7 @@ namespace Basalt {
 			return "";
 		if (parsed.is_discarded())
 			return R"({"ok":false,"error":"invalid JSON"})";
-		AutomationSession::EventClientScope client(session, { m_ClientId, true });
+		AutomationSession::EventClientScope client(session, { m_ClientId, AutomationEventDelivery::Streamed });
 		return registry.HandleRequest(session, parsed).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 	}
 

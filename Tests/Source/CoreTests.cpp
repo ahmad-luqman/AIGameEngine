@@ -18,7 +18,9 @@
 
 #include <csignal>
 #include <nlohmann/json.hpp>
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <limits>
@@ -880,8 +882,59 @@ TEST_SUITE("Core")
 		history.AddListener([&](const LogMessage&) { after++; });
 		history.Push({ LogLevel::Error, "BASALT", "kept" });
 		CHECK(after == 1);
-		CHECK(history.GetErrorCount() == 1);
-		CHECK(history.GetAll().back().Text == "kept");
+		// The message, then the failure as an error of its own.
+		CHECK(history.GetErrorCount() == 2);
+		const std::vector<LogMessage> all = history.GetAll();
+		REQUIRE(all.size() >= 2);
+		CHECK(all[all.size() - 2].Text == "kept");
+		CHECK(all.back().Text == "LogHistory: a log listener failed: listener failure");
+	}
+
+	TEST_CASE("A history listener may log through the engine's loggers")
+	{
+		LogHistory& history = Log::GetHistory();
+		std::atomic<int> calls = 0;
+		const uint64_t id = history.AddListener([&](const LogMessage& message) {
+			if (message.Text != "listener test: outer")
+				return;
+			calls++;
+			BS_CORE_INFO("listener test: inner");
+		});
+		BS_CORE_INFO("listener test: outer");
+		history.RemoveListener(id);
+		CHECK(calls == 1);
+		const std::vector<LogMessage> all = history.GetAll();
+		const auto outer = std::ranges::find_if(all, [](const LogMessage& m) { return m.Text == "listener test: outer"; });
+		const auto inner = std::ranges::find_if(all, [](const LogMessage& m) { return m.Text == "listener test: inner"; });
+		CHECK(outer != all.end());
+		CHECK(inner != all.end());
+	}
+
+	TEST_CASE("Concurrent atomic writes of one file all succeed and leave no temporary files")
+	{
+		BasaltTest::TempDirectory directory("ConcurrentWrites");
+		const std::filesystem::path path = directory.GetPath() / "shared.txt";
+		std::atomic<int> failures = 0;
+		std::vector<std::thread> writers;
+		writers.reserve(4);
+		for (int t = 0; t < 4; t++)
+		{
+			writers.emplace_back([&, t]() {
+				for (int i = 0; i < 100; i++)
+				{
+					std::string error;
+					if (!FileSystem::WriteTextFile(path, "writer " + std::to_string(t), error))
+						failures++;
+				}
+			});
+		}
+		for (std::thread& writer : writers)
+			writer.join();
+		CHECK(failures == 0);
+		const std::string text = FileSystem::ReadTextFile(path).value_or("");
+		CHECK(text.starts_with("writer "));
+		CHECK(text.size() == 8);
+		CHECK_FALSE(BasaltTest::HasTempFiles(directory.GetPath()));
 	}
 
 	TEST_CASE("Log history listeners can be removed while other threads log")
@@ -892,18 +945,22 @@ TEST_SUITE("Core")
 			while (running)
 				history.Push({ LogLevel::Trace, "BASALT", "background" });
 		});
+		int total = 0;
 		for (int i = 0; i < 200; i++)
 		{
 			auto counter = std::make_shared<std::atomic<int>>(0);
 			const uint64_t id = history.AddListener([counter](const LogMessage&) { counter->fetch_add(1); });
-			std::this_thread::yield();
+			std::this_thread::sleep_for(std::chrono::microseconds(200));
 			history.RemoveListener(id);
 			// Removed means no call is running or will start.
 			const int seen = counter->load();
-			std::this_thread::yield();
+			std::this_thread::sleep_for(std::chrono::microseconds(200));
 			CHECK(counter->load() == seen);
+			total += seen;
 		}
 		running = false;
 		logger.join();
+		// The listeners did run while the other thread logged.
+		CHECK(total > 0);
 	}
 }

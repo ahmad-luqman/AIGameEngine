@@ -19,7 +19,8 @@ committing; do not commit "fix later" TODOs for correctness problems.
 - [ ] Ownership is clear (`Scope`/`Ref`/nvrhi handles); no leaks on early-return paths.
 - [ ] GPU resources referenced by in-flight frames are not destroyed early (nvrhi handles defer release; raw Vulkan does not).
 - [ ] Thread safety: anything called from the automation server thread goes through `Application::SubmitToMainThread`
-      (the exception: draining the thread-safe `AutomationEventHub` in `ClientHandler::TakePending`).
+      (the exceptions: `AutomationConnection::ShutdownResponse`, and `TakePendingEvents`, which drains the thread-safe
+      `AutomationEventHub`).
 - [ ] Shader bindings follow the zero-offset convention; no duplicate slot numbers in one layout.
 
 **Tests**

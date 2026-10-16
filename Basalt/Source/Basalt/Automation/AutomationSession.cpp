@@ -96,7 +96,7 @@ namespace Basalt {
 		m_Session.m_EventClient = m_Previous;
 	}
 
-	bool AutomationSession::SetSnapshot(const std::string& name, nlohmann::json state, std::string& outError)
+	bool AutomationSession::CanSetSnapshot(const std::string& name, std::string& outError) const
 	{
 		if (name.ends_with(".bscene"))
 		{
@@ -108,6 +108,13 @@ namespace Basalt {
 			outError = fmt::format("too many snapshots (at most {}); reuse a name", MaxSnapshots);
 			return false;
 		}
+		return true;
+	}
+
+	bool AutomationSession::SetSnapshot(const std::string& name, nlohmann::json state, std::string& outError)
+	{
+		if (!CanSetSnapshot(name, outError))
+			return false;
 		m_Snapshots[name] = std::move(state);
 		return true;
 	}

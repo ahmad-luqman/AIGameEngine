@@ -57,8 +57,6 @@ namespace Basalt {
 			// copies can remap the reference.
 			void Field(const char* name, UUID& value)
 			{
-				if (IsCollecting())
-					m_EntityFields.emplace_back(name);
 				Describe(name, { ComponentFieldKind::Entity });
 				const json* element = Find(name);
 				if (element)
@@ -103,6 +101,7 @@ namespace Basalt {
 			template<typename E, size_t Count, size_t N>
 			void EnumArrayField(const char* name, std::array<E, Count>& value, const char* const (&names)[N])
 			{
+				static_assert(Count <= UINT8_MAX, "ComponentFieldType::Count is 8-bit");
 				DescribeEnum(name, { ComponentFieldKind::Enum, static_cast<uint8_t>(Count) }, names);
 				const json* element = Find(name);
 				if (!element)
@@ -150,19 +149,23 @@ namespace Basalt {
 			// Collect mode (no data) records what tools need about each field; reads skip that bookkeeping.
 			bool IsCollecting() const { return m_Data == nullptr; }
 
+			// Records a field in collect mode: its name (in declaration order), type, and whether it names an entity.
 			void Describe(const char* name, ComponentFieldType type)
 			{
-				if (IsCollecting())
-					m_FieldTypes[name] = type;
+				if (!IsCollecting())
+					return;
+				m_FieldNames.emplace_back(name);
+				m_FieldTypes[name] = type;
+				if (type.Kind == ComponentFieldKind::Entity)
+					m_EntityFields.emplace_back(name);
 			}
 
 			template<size_t N>
 			void DescribeEnum(const char* name, ComponentFieldType type, const char* const (&names)[N])
 			{
-				if (!IsCollecting())
-					return;
-				m_FieldTypes[name] = type;
-				m_EnumOptions[name] = std::vector<std::string>(std::begin(names), std::end(names));
+				Describe(name, type);
+				if (IsCollecting())
+					m_EnumOptions[name] = std::vector<std::string>(std::begin(names), std::end(names));
 			}
 
 			// The JSON type a Read overload accepts (see ComponentInfo::FieldTypes).
@@ -200,8 +203,6 @@ namespace Basalt {
 
 			const json* Find(const char* name)
 			{
-				if (IsCollecting())
-					m_FieldNames.emplace_back(name);
 				if (!m_Data)
 					return nullptr;
 				auto it = m_Data->find(name);
@@ -1339,6 +1340,7 @@ namespace Basalt {
 	std::string ComponentFieldType::ToString() const
 	{
 		static constexpr const char* const Names[] = { "number", "integer", "boolean", "string", "object", "entity", "enum" };
+		static_assert(std::size(Names) == static_cast<size_t>(ComponentFieldKind::Enum) + 1, "one name per field kind");
 		const char* name = EnumNameOrNull(Names, Kind);
 		std::string text = name ? name : "unknown";
 		if (Count > 0)

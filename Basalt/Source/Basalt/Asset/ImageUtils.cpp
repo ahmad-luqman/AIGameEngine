@@ -20,9 +20,15 @@ namespace Basalt {
 		std::string png;
 		const int ok = stbi_write_png_to_func([](void* context, void* data, int size) { static_cast<std::string*>(context)->append(static_cast<const char*>(data), static_cast<size_t>(size)); },
 											  &png, static_cast<int>(width), static_cast<int>(height), 4, rgba.data(), static_cast<int>(width * 4));
-		if (!ok || !FileSystem::WriteBinaryFile(path, png.data(), png.size()))
+		if (!ok)
 		{
-			outError = "could not write '" + path.string() + "'";
+			outError = "could not encode '" + FileSystem::PathToUtf8(path) + "'";
+			return false;
+		}
+		std::string error;
+		if (!FileSystem::WriteTextFile(path, png, error))
+		{
+			outError = "could not write '" + FileSystem::PathToUtf8(path) + "': " + error;
 			return false;
 		}
 		return true;

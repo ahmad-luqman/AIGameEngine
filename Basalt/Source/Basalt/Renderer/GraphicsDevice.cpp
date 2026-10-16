@@ -28,8 +28,8 @@ namespace Basalt {
 	namespace {
 
 		// Makes Homebrew's validation layer loadable without DYLD_FALLBACK_LIBRARY_PATH (see ValidationLayerManifest).
-		// Development builds on macOS only (Dist never enables validation). Runs before the loader reads the variable
-		// and before other threads exist, so setting it is safe.
+		// Development builds on macOS only (Dist never enables validation). Called while the device is created, before
+		// the hosts start worker threads: setenv is not safe while other threads read the environment.
 		void AddHomebrewValidationLayer()
 		{
 #if defined(BS_PLATFORM_MACOS) && !defined(BS_DIST)
@@ -42,32 +42,22 @@ namespace Basalt {
 				BS_CORE_WARN("GraphicsDevice: no temporary folder for the validation layer manifest copy: {}", ec.message());
 				return;
 			}
-			for (const std::filesystem::path& prefix : ValidationLayerManifest::HomebrewPrefixes(Platform::GetEnvVar("HOMEBREW_PREFIX")))
+			std::vector<std::string> messages;
+			const std::optional<std::filesystem::path> directory = ValidationLayerManifest::FirstAbsoluteCopy(ValidationLayerManifest::HomebrewPrefixes(Platform::GetEnvVar("HOMEBREW_PREFIX")), temp / "basalt-vulkan-layers", messages);
+			for (const std::string& message : messages)
+				BS_CORE_WARN("GraphicsDevice: Homebrew validation layer: {}", message);
+			if (!directory)
+				return;
+			const std::string existing = Platform::GetEnvVar(Variable).value_or("");
+			const std::string updated = ValidationLayerManifest::AppendSearchPath(existing, FileSystem::PathToUtf8(*directory), ':');
+			if (updated == existing)
+				return;
+			if (!Platform::SetEnvVar(Variable, updated))
 			{
-				const ValidationLayerManifest::CopyResult copy = ValidationLayerManifest::WriteAbsoluteCopy(prefix, temp / "basalt-vulkan-layers");
-				if (copy.Outcome == ValidationLayerManifest::CopyOutcome::NotNeeded)
-				{
-					if (!copy.Message.empty())
-						BS_CORE_INFO("GraphicsDevice: {}", copy.Message);
-					continue;
-				}
-				if (copy.Outcome == ValidationLayerManifest::CopyOutcome::Failed)
-				{
-					BS_CORE_WARN("GraphicsDevice: cannot prepare Homebrew's validation layer: {}", copy.Message);
-					continue;
-				}
-				const std::string existing = Platform::GetEnvVar(Variable).value_or("");
-				const std::string updated = ValidationLayerManifest::AppendSearchPath(existing, FileSystem::PathToUtf8(copy.Directory), ':');
-				if (updated == existing)
-					return;
-				if (!Platform::SetEnvVar(Variable, updated))
-				{
-					BS_CORE_WARN("GraphicsDevice: cannot set {}: {}", Variable, std::generic_category().message(errno));
-					return;
-				}
-				BS_CORE_TRACE("GraphicsDevice: {} = {} (Homebrew validation layer under {})", Variable, updated, FileSystem::PathToUtf8(prefix));
+				BS_CORE_WARN("GraphicsDevice: cannot set {}: {}", Variable, std::generic_category().message(errno));
 				return;
 			}
+			BS_CORE_INFO("GraphicsDevice: {}={} (Homebrew validation layer manifest with an absolute library path)", Variable, updated);
 #endif
 		}
 

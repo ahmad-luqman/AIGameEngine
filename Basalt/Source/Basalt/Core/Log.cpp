@@ -2,6 +2,7 @@
 
 #include "Basalt/Core/EnumNames.h"
 
+#include <spdlog/details/null_mutex.h>
 #include <spdlog/sinks/base_sink.h>
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
@@ -17,8 +18,18 @@ namespace Basalt {
 		constexpr const char* const LevelNames[] = { "trace", "info", "warn", "error", "critical" };
 		static_assert(std::size(LevelNames) == static_cast<size_t>(LogLevel::Critical) + 1, "one name per LogLevel");
 
-		// Set while this thread runs listeners: a listener that logs must not re-enter them (or their lock).
+		// Set while this thread runs listeners (of any history): what a listener logs is stored but not passed to
+		// listeners again, which would re-enter them and their lock.
 		thread_local bool s_InListener = false;
+
+		class ListenerScope
+		{
+		public:
+			ListenerScope() { s_InListener = true; }
+			~ListenerScope() { s_InListener = false; }
+			ListenerScope(const ListenerScope&) = delete;
+			ListenerScope& operator=(const ListenerScope&) = delete;
+		};
 
 		LogLevel ToLogLevel(spdlog::level::level_enum level)
 		{
@@ -40,8 +51,9 @@ namespace Basalt {
 			}
 		}
 
-		// Forwards formatted messages into the LogHistory ring buffer.
-		class HistorySink final : public spdlog::sinks::base_sink<std::mutex>
+		// Forwards formatted messages into the LogHistory ring buffer. LogHistory locks for itself, so the sink takes no
+		// lock of its own: a history listener may then log (re-entering this sink) without deadlocking.
+		class HistorySink final : public spdlog::sinks::base_sink<spdlog::details::null_mutex>
 		{
 		public:
 			explicit HistorySink(LogHistory& history)
@@ -111,27 +123,29 @@ namespace Basalt {
 		// After storing, so a failing listener cannot lose the message for log.get and error counts.
 		if (s_InListener)
 			return;
-		s_InListener = true;
+		const ListenerScope scope;
+		std::scoped_lock listenerLock(m_ListenerMutex);
+		for (const auto& [id, listener] : m_Listeners)
 		{
-			std::scoped_lock listenerLock(m_ListenerMutex);
-			for (const auto& [id, listener] : m_Listeners)
+			std::string failure;
+			try
 			{
-				try
-				{
-					listener(message);
-				}
-				catch (const std::exception& e)
-				{
-					// Logging the failure would re-enter the listeners.
-					std::fprintf(stderr, "LogHistory: a listener failed: %s\n", e.what());
-				}
-				catch (...)
-				{
-					std::fprintf(stderr, "LogHistory: a listener failed\n");
-				}
+				listener(message);
 			}
+			catch (const std::exception& e)
+			{
+				failure = e.what();
+			}
+			catch (...)
+			{
+				failure = "unknown exception";
+			}
+			if (failure.empty())
+				continue;
+			// Stored like any message (the scope keeps it from the listeners); stderr too, for hosts without a console.
+			std::fprintf(stderr, "LogHistory: a log listener failed: %s\n", failure.c_str());
+			Push({ LogLevel::Error, "BASALT", "LogHistory: a log listener failed: " + failure });
 		}
-		s_InListener = false;
 	}
 
 	void LogHistory::Clear()

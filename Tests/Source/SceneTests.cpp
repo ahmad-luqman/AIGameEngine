@@ -23,6 +23,33 @@ using namespace Basalt;
 
 namespace {
 
+	// Whether a serialized value has a field kind's JSON type (enum values: one of the options).
+	bool MatchesFieldKind(const nlohmann::json& value, ComponentFieldKind kind, const std::vector<std::string>* enumOptions)
+	{
+		switch (kind)
+		{
+			case ComponentFieldKind::Number:
+				return value.is_number();
+			case ComponentFieldKind::Integer:
+				return value.is_number_integer();
+			case ComponentFieldKind::Boolean:
+				return value.is_boolean();
+			case ComponentFieldKind::String:
+				return value.is_string();
+			case ComponentFieldKind::Object:
+				return value.is_object();
+			case ComponentFieldKind::Entity:
+				return value.is_number_unsigned();
+			case ComponentFieldKind::Enum:
+				return value.is_string() && enumOptions && std::ranges::find(*enumOptions, value.get<std::string>()) != enumOptions->end();
+		}
+		return false;
+	}
+
+}
+
+namespace {
+
 	bool Near(const glm::vec3& a, const glm::vec3& b, float epsilon = 1e-4f)
 	{
 		return glm::all(glm::epsilonEqual(a, b, epsilon));
@@ -1646,5 +1673,42 @@ TEST_SUITE("Scene diff")
 		CHECK(mismatches.empty());
 		MatchJsonSubset(actual, { { "Color", { 1.0, 0.6, 0.25 } }, { "Intensity", 2.0 }, { "Missing", 1 }, { "Nested", { { "Inner", "b" } } }, { "Extra", { true } } }, 0.0, "Light", mismatches);
 		CHECK(mismatches == std::vector<std::string>{ "Light.Color is [1.0,0.5,0.25], expected [1.0,0.6,0.25]", "Light.Extra is true, expected [true]", "Light.Missing is missing", "Light.Nested.Inner is \"a\", expected \"b\"" });
+	}
+}
+
+TEST_SUITE("Serialization")
+{
+	TEST_CASE("Every component field serializes as the type the registry declares")
+	{
+		using json = nlohmann::json;
+		Scene scene;
+		Entity entity = scene.CreateEntity("Everything");
+		size_t fields = 0;
+		for (const ComponentInfo& info : ComponentRegistry::GetAll())
+		{
+			INFO("component ", info.Name);
+			info.Add(entity);
+			const json data = info.Serialize(entity);
+			fields += info.Fields.size();
+			for (const std::string& field : info.Fields)
+			{
+				INFO("field ", field);
+				REQUIRE(data.contains(field));
+				const ComponentFieldType& type = info.FieldTypes.at(field);
+				const auto options = info.EnumOptions.find(field);
+				const std::vector<std::string>* enumOptions = options == info.EnumOptions.end() ? nullptr : &options->second;
+				if (type.Count == 0)
+				{
+					CHECK(MatchesFieldKind(data[field], type.Kind, enumOptions));
+					continue;
+				}
+				REQUIRE(data[field].is_array());
+				CHECK(data[field].size() == type.Count);
+				for (const json& element : data[field])
+					CHECK(MatchesFieldKind(element, type.Kind, enumOptions));
+			}
+		}
+		// Collecting the field lists works (an empty list would make every check above pass).
+		CHECK(fields > 150);
 	}
 }

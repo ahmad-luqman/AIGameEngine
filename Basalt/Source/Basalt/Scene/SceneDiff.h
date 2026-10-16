@@ -10,7 +10,8 @@ namespace Basalt {
 
 	struct SceneDiffOptions
 	{
-		// Numbers closer than this count as equal (physics rarely lands on the same float twice).
+		// Floats at most this far apart count as equal (physics rarely lands on the same float twice); integers compare
+		// exactly.
 		double Tolerance = 0.0;
 	};
 

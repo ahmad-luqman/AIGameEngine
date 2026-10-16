@@ -20,8 +20,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <atomic>
 #include <map>
-#include <ranges>
 #include <set>
 #include <sstream>
 #include <thread>
@@ -72,6 +72,13 @@ namespace {
 	size_t IndexOf(const std::vector<std::string>& kinds, const std::string& kind)
 	{
 		return static_cast<size_t>(std::ranges::find(kinds, kind) - kinds.begin());
+	}
+
+	// Index of the last event of a kind, or the count when there is none.
+	size_t LastIndexOf(const std::vector<std::string>& kinds, const std::string& kind)
+	{
+		const auto last = std::ranges::find(kinds.rbegin(), kinds.rend(), kind);
+		return last == kinds.rend() ? kinds.size() : static_cast<size_t>(kinds.rend() - last - 1);
 	}
 
 	bool HasKind(const std::vector<std::string>& kinds, const std::string& kind)
@@ -205,7 +212,7 @@ TEST_SUITE("Automation")
 		// The ball enters and leaves the zone before it lands.
 		CHECK(IndexOf(kinds, "triggerEnter") < IndexOf(kinds, "triggerExit"));
 		CHECK(IndexOf(kinds, "triggerExit") < IndexOf(kinds, "collisionBegin"));
-		CHECK(IndexOf(kinds, "collisionBegin") < kinds.size());
+		CHECK(HasKind(kinds, "collisionBegin"));
 		for (size_t i = 1; i < events.size(); i++)
 			CHECK(events[i]["seq"].get<uint64_t>() > events[i - 1]["seq"].get<uint64_t>());
 
@@ -238,10 +245,10 @@ TEST_SUITE("Automation")
 		}
 		// OnCreate's error comes after the play event, OnDestroy's (raised while stopping) before the stop event.
 		CHECK(errors == std::vector<std::string>{ "create", "update", "destroy" });
-		CHECK(events[1]["event"] == "scriptError");
 		CHECK(IndexOf(kinds, "scriptError") == 1);
-		const auto lastError = std::ranges::find(std::ranges::reverse_view(kinds), "scriptError");
-		CHECK(std::distance(kinds.rbegin(), lastError) < 3);
+		// Between the OnDestroy error and the stop event only the contacts the removed bodies end are reported.
+		for (size_t i = LastIndexOf(kinds, "scriptError") + 1; i + 1 < kinds.size(); i++)
+			CHECK_MESSAGE((kinds[i] == "collisionEnd" || kinds[i] == "triggerExit"), kinds[i]);
 
 		// Polling drained the subscription; the other one kept its own copy of the play-state events only.
 		CHECK(Poll(registry, session, all)["events"].empty());
@@ -264,6 +271,10 @@ TEST_SUITE("Automation")
 		// A later poll still gets them.
 		CHECK(EventKinds(Poll(registry, session, id)["events"]) == std::vector<std::string>{ "playState:play", "playState:stop" });
 		CHECK(RunError(registry, session, "events.poll", { { "subscription", id }, { "assertTypes", { "playState" } } }) == "assertion failed: no playState event among the 0 queued (none; 0 dropped); they stay queued");
+		Run(registry, session, "play.start");
+		Run(registry, session, "play.stop");
+		// Only the first 'max' events count.
+		CHECK(RunError(registry, session, "events.poll", { { "subscription", id }, { "max", 1 }, { "assertTypes", { "collision" } } }) == "assertion failed: no collision event among the first 1 queued (1 playState; 0 dropped); they stay queued");
 	}
 
 	TEST_CASE("Simulate reports collisions to event subscriptions although no scripts run")
@@ -357,9 +368,11 @@ TEST_SUITE("Automation")
 		const json errorEvents = Poll(registry, session, errors)["events"];
 		CHECK(TestLogTexts(errorEvents) == std::vector<std::string>{ "events test: an error" });
 		for (const json& event : errorEvents)
+		{
 			CHECK((event["level"] == "error" || event["level"] == "critical"));
-		REQUIRE_FALSE(errorEvents.empty());
-		CHECK(errorEvents[0]["logger"] == "BASALT");
+			if (event["text"] == "events test: an error")
+				CHECK(event["logger"] == "BASALT");
+		}
 		CHECK(TestLogTexts(Poll(registry, session, everything)["events"]) == std::vector<std::string>{ "events test: a warning", "events test: an error" });
 
 		const size_t extra = 5;
@@ -368,7 +381,9 @@ TEST_SUITE("Automation")
 		const json polled = Poll(registry, session, everything);
 		CHECK(polled["events"].size() == AutomationEventHub::MaxQueuedEvents);
 		CHECK(polled["dropped"].get<uint64_t>() >= extra);
-		CHECK(polled["events"].back()["text"] == "events test: line " + std::to_string(AutomationEventHub::MaxQueuedEvents + extra - 1));
+		const std::vector<std::string> lines = TestLogTexts(polled["events"]);
+		REQUIRE_FALSE(lines.empty());
+		CHECK(lines.back() == "events test: line " + std::to_string(AutomationEventHub::MaxQueuedEvents + extra - 1));
 		CHECK(Poll(registry, session, everything)["dropped"] == 0);
 	}
 
@@ -523,9 +538,10 @@ TEST_SUITE("Automation")
 			const json subscribed = McpCall(connection, registry, session, 2, "events.subscribe", { { "types", { "playState" } } });
 			CHECK(subscribed["streamed"] == false);
 			McpCall(connection, registry, session, 3, "play.start", json::object());
+			// Nothing streams to an MCP connection; the event waits for events.poll.
+			CHECK(connection.TakePendingEvents().empty());
 			const json polled = McpCall(connection, registry, session, 4, "events.poll", { { "subscription", subscribed["subscription"] } });
 			CHECK(EventKinds(polled["events"]) == std::vector<std::string>{ "playState:play" });
-			CHECK(connection.TakePendingEvents().empty());
 			CHECK(session.GetEventClient().Owner == 0);
 			CHECK(session.GetEvents()->GetSubscriptionCount() == 1);
 		}
@@ -713,7 +729,7 @@ TEST_SUITE("Automation")
 		CHECK(RunError(registry, session, "assert.component", { { "entity", "Twin" }, { "component", "Transform" } }) == "assertion failed: several entities are named 'Twin'; use the numeric ID");
 		CHECK(RunError(registry, session, "assert.component", { { "entity", "Door" }, { "component", "Joint" }, { "fields", { { "ConnectedEntity", "Wall" } } } }) == "assertion failed: no entity named 'Wall'");
 		CHECK(RunError(registry, session, "assert.component", { { "entity", "Door" }, { "component", "Transform" }, { "fields", { { "Position", { 0, 0, 0 } } } } }) == "unknown field 'Position' for Transform (valid: Translation, Rotation, Scale)");
-		CHECK(Contains(RunError(registry, session, "assert.component", { { "entity", "Door" }, { "component", "Nope" } }), "unknown component 'Nope' (valid: "));
+		CHECK(RunError(registry, session, "assert.component", { { "entity", "Door" }, { "component", "Nope" } }).starts_with("unknown component 'Nope' (valid: "));
 		CHECK(RunError(registry, session, "assert.component", { { "entity", "Door" }, { "component", "Joint" }, { "exists", false }, { "fields", json::object() } }) == "'fields' cannot be checked with exists=false");
 	}
 
@@ -739,7 +755,7 @@ TEST_SUITE("Automation")
 		CHECK(renders == 1);
 		CHECK(same["matches"] == true);
 		CHECK(same["similarity"] == 1.0);
-		CHECK(same["actual"] == FileSystem::PathToUtf8(project.GetDirectory() / "Cache" / "RenderCompare.png"));
+		CHECK(FileSystem::PathFromUtf8(same["actual"].get<std::string>()) == project.GetDirectory() / "Cache" / "RenderCompare.png");
 		CHECK(same["diff"].is_null());
 		CHECK(FileSystem::Exists(project.GetDirectory() / "Cache" / "RenderCompare.png"));
 
@@ -748,7 +764,7 @@ TEST_SUITE("Automation")
 		CHECK(different["matches"] == false);
 		CHECK(different["maxDelta"] == 51);
 		CHECK(different["similarity"].get<double>() == doctest::Approx(1.0 - 51.0 / 255.0));
-		CHECK(different["diff"] == FileSystem::PathToUtf8(project.GetDirectory() / "Diffs" / "Diff.png"));
+		CHECK(FileSystem::PathFromUtf8(different["diff"].get<std::string>()) == project.GetDirectory() / "Diffs" / "Diff.png");
 		CHECK(FileSystem::Exists(project.GetDirectory() / "Out" / "Render.png"));
 		CHECK(FileSystem::Exists(project.GetDirectory() / "Diffs" / "Diff.png"));
 		const std::string differ = RunError(registry, session, "render.compare", { { "reference", "Reference.png" }, { "width", 64 }, { "height", 32 }, { "assertMatch", true } });
@@ -803,50 +819,161 @@ TEST_SUITE("Automation")
 		CHECK(byName["Tag"]["types"]["Tag"] == "string");
 	}
 
-	TEST_CASE("Every component field serializes as the type the registry declares")
+	TEST_CASE("A rejected poll keeps the drop count and every queued event")
 	{
-		Scene scene;
-		Entity entity = scene.CreateEntity("Everything");
-		for (const ComponentInfo& info : ComponentRegistry::GetAll())
+		AutomationEventHub hub;
+		const uint64_t id = *hub.Subscribe({}, 0, AutomationEventHub::Delivery::Polled);
+		const size_t extra = 3;
+		for (size_t i = 0; i < AutomationEventHub::MaxQueuedEvents + extra; i++)
+			hub.Publish(AutomationEventType::PlayState, { { "state", "play" } });
+		std::vector<json> events;
+		uint64_t dropped = 0;
+		const uint32_t collision = AutomationEventHub::TypeBit(AutomationEventType::Collision);
+		CHECK(hub.Poll(id, 10, events, dropped, collision) == AutomationEventHub::PollStatus::Rejected);
+		CHECK(events.size() == 10);
+		CHECK(dropped == extra);
+		CHECK(hub.Poll(id, AutomationEventHub::MaxQueuedEvents, events, dropped, collision) == AutomationEventHub::PollStatus::Rejected);
+		CHECK(dropped == extra);
+		REQUIRE(hub.Poll(id, AutomationEventHub::MaxQueuedEvents, events, dropped) == AutomationEventHub::PollStatus::Ok);
+		CHECK(events.size() == AutomationEventHub::MaxQueuedEvents);
+		CHECK(dropped == extra);
+		REQUIRE(hub.Poll(id, 1, events, dropped) == AutomationEventHub::PollStatus::Ok);
+		CHECK(events.empty());
+		CHECK(dropped == 0);
+	}
+
+	TEST_CASE("The event hub stays consistent while other threads log")
+	{
+		CommandRegistry registry;
+		AutomationSession session;
+		const uint64_t whole = Subscribe(registry, session, { "log" }, "trace");
+		std::atomic<bool> running = true;
+		std::atomic<uint64_t> published = 0;
+		std::vector<std::thread> loggers;
+		loggers.reserve(2);
+		for (int t = 0; t < 2; t++)
 		{
-			INFO("component ", info.Name);
-			info.Add(entity);
-			const json data = info.Serialize(entity);
-			for (const std::string& field : info.Fields)
-			{
-				INFO("field ", field);
-				REQUIRE(data.contains(field));
-				const ComponentFieldType& type = info.FieldTypes.at(field);
-				const auto matches = [&](const json& value) {
-					switch (type.Kind)
-					{
-						case ComponentFieldKind::Number:
-							return value.is_number();
-						case ComponentFieldKind::Integer:
-							return value.is_number_integer();
-						case ComponentFieldKind::Boolean:
-							return value.is_boolean();
-						case ComponentFieldKind::String:
-							return value.is_string();
-						case ComponentFieldKind::Object:
-							return value.is_object();
-						case ComponentFieldKind::Entity:
-							return value.is_number_unsigned();
-						case ComponentFieldKind::Enum:
-							return value.is_string() && std::ranges::find(info.EnumOptions.at(field), value.get<std::string>()) != info.EnumOptions.at(field).end();
-					}
-					return false;
-				};
-				if (type.Count == 0)
+			loggers.emplace_back([&]() {
+				while (running)
 				{
-					CHECK(matches(data[field]));
-					continue;
+					BS_CORE_TRACE("events test: stress");
+					published++;
 				}
-				REQUIRE(data[field].is_array());
-				CHECK(data[field].size() == type.Count);
-				for (const json& element : data[field])
-					CHECK(matches(element));
+			});
+		}
+		uint64_t received = 0;
+		uint64_t dropped = 0;
+		uint64_t lastSeq = 0;
+		for (int i = 0; i < 300; i++)
+		{
+			const std::optional<uint64_t> extra = session.GetEvents()->Subscribe({}, 9, AutomationEventHub::Delivery::Streamed);
+			REQUIRE(extra);
+			// Draining a stream while others publish yields whole, valid frames.
+			for (const json& frame : Lines(session.GetEvents()->TakeStreamed(9)))
+				CHECK_FALSE(frame.is_discarded());
+			session.GetEvents()->Unsubscribe(*extra);
+			std::vector<json> events;
+			uint64_t lost = 0;
+			REQUIRE(session.GetEvents()->Poll(whole, AutomationEventHub::MaxQueuedEvents, events, lost) == AutomationEventHub::PollStatus::Ok);
+			dropped += lost;
+			for (const json& event : events)
+			{
+				CHECK(event["seq"].get<uint64_t>() > lastSeq);
+				lastSeq = event["seq"].get<uint64_t>();
+				if (event["text"] == "events test: stress")
+					received++;
 			}
 		}
+		running = false;
+		for (std::thread& logger : loggers)
+			logger.join();
+		std::vector<json> rest;
+		uint64_t lost = 0;
+		REQUIRE(session.GetEvents()->Poll(whole, AutomationEventHub::MaxQueuedEvents, rest, lost) == AutomationEventHub::PollStatus::Ok);
+		dropped += lost;
+		for (const json& event : rest)
+		{
+			if (event["text"] == "events test: stress")
+				received++;
+		}
+		CHECK(published.load() > 0);
+		// Every line the subscription saw was either delivered or counted as dropped (other code may log too).
+		CHECK(received + dropped >= published.load());
+	}
+
+	TEST_CASE("A client that stops reading its event stream is disconnected")
+	{
+		CommandRegistry registry;
+		AutomationSession session;
+		AutomationServer server;
+		server.SetSendTimeout(200);
+		std::string error;
+		REQUIRE(server.StartWithFactory(0, [&]() {
+			auto connection = std::make_shared<AutomationConnection>();
+			return AutomationServer::ClientHandler{ [&, connection](const std::string& request) { return connection->HandleRequest(registry, session, request); }, [connection]() { return connection->TakePendingEvents(); } }; }, error));
+		const uint64_t logCursor = Log::GetHistory().GetTotalCount();
+		{
+			BasaltTest::LineClient client(server.GetPort(), 1024);
+			REQUIRE(client.Send(R"({"id":1,"command":"events.subscribe","params":{"types":["log"],"minLevel":"trace"}})"));
+			REQUIRE(ParseJson(client.ReadLine())["ok"] == true);
+			// Never read again: the server's sends back up until the timeout disconnects the client.
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+			const std::string padding(200, 'x');
+			while (session.GetEvents()->GetSubscriptionCount() != 0 && std::chrono::steady_clock::now() < deadline)
+			{
+				for (int i = 0; i < 200; i++)
+					BS_CORE_TRACE("events test: flood {}", padding);
+				std::this_thread::sleep_for(std::chrono::milliseconds(5));
+			}
+			CHECK(session.GetEvents()->GetSubscriptionCount() == 0);
+		}
+		bool warned = false;
+		uint64_t next = 0;
+		for (const LogMessage& message : Log::GetHistory().GetMessagesSince(logCursor, next))
+			warned = warned || Contains(message.Text, "Automation: closing connection; cannot send");
+		CHECK(warned);
+		const auto stopStart = std::chrono::steady_clock::now();
+		server.Stop();
+		CHECK(std::chrono::steady_clock::now() - stopStart < std::chrono::seconds(2));
+	}
+
+	TEST_CASE("A session that goes while a host still holds its play copy detaches its listener")
+	{
+		Ref<Scene> copy;
+		{
+			CommandRegistry registry;
+			AutomationSession session;
+			Run(registry, session, "scene.new", { { "empty", true } });
+			AddFallingBall(*session.GetEditScene());
+			Subscribe(registry, session, { "collision" });
+			Run(registry, session, "play.start");
+			copy = session.GetScene();
+			REQUIRE(copy->GetEventListener() != nullptr);
+		}
+		CHECK(copy->GetEventListener() == nullptr);
+		// Contacts after the session is gone reach no listener (ASan would catch a dangling one).
+		for (int i = 0; i < 150; i++)
+			copy->OnUpdate(BasaltTest::Step);
+		copy->OnRuntimeStop();
+	}
+
+	TEST_CASE("Event client scopes nest and restore the previous client, even when a command fails")
+	{
+		CommandRegistry registry;
+		AutomationSession session;
+		{
+			const AutomationSession::EventClientScope outer(session, { 2, AutomationEventDelivery::Polled });
+			{
+				const AutomationSession::EventClientScope inner(session, { 1, AutomationEventDelivery::Streamed });
+				CHECK(session.GetEventClient().Owner == 1);
+			}
+			CHECK(session.GetEventClient().Owner == 2);
+			CHECK(session.GetEventClient().Delivery == AutomationEventDelivery::Polled);
+		}
+		CHECK(session.GetEventClient().Owner == 0);
+		AutomationConnection connection;
+		const json failed = ParseJson(connection.HandleRequest(registry, session, R"({"command":"entity.get","params":{"entity":"Nobody"}})"));
+		CHECK(failed["ok"] == false);
+		CHECK(session.GetEventClient().Owner == 0);
 	}
 }

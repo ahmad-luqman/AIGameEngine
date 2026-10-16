@@ -20,7 +20,7 @@ namespace Basalt {
 		Info,
 		Warn,
 		Error,
-		Critical
+		Critical // keep last: LevelNames (Log.cpp) has one name per level
 	};
 
 	// Lowercase level names ("trace" ... "critical"), as log.get and automation events report them.
@@ -47,9 +47,10 @@ namespace Basalt {
 		void Clear();
 
 		// Calls the listener with every message pushed from now on, after the history stores it, on the pushing
-		// thread (any thread; one call at a time, under the listener lock). A listener must be quick and must not
-		// add or remove listeners (that deadlocks); messages it logs itself reach the history but no listener.
-		// Exceptions it throws are reported on stderr and dropped. Returns the ID for RemoveListener.
+		// thread (any thread; one call at a time, under the listener lock; with several threads logging, the order
+		// listeners see may differ from the history's). A listener must be quick and must not add or remove listeners
+		// (that deadlocks). What it logs (BS_CORE_* or Push) is stored but reaches no listener; an exception it throws
+		// is recorded as an error message (and printed on stderr). Returns the ID for RemoveListener.
 		uint64_t AddListener(Listener listener);
 		// When this returns, no call of the listener is running or will start.
 		void RemoveListener(uint64_t id);

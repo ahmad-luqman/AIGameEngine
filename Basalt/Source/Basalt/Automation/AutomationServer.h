@@ -21,9 +21,9 @@ namespace Basalt {
 
 		// How long the server waits for a client between checks for stop and for unsolicited frames.
 		static constexpr int IdlePollMilliseconds = 100;
-		// A client that accepts no data for this long (it stopped reading its event stream) is disconnected, so it
-		// cannot block the server thread or Stop().
-		static constexpr int SendTimeoutMilliseconds = 5000;
+		// A client that accepts no data (responses or event frames) for this long, e.g. one that stopped reading its
+		// event stream, is disconnected, so it cannot block the server thread or Stop().
+		static constexpr int DefaultSendTimeoutMilliseconds = 5000;
 
 		// One client's callbacks, both run on the server thread.
 		struct ClientHandler
@@ -51,6 +51,9 @@ namespace Basalt {
 		bool StartWithFactory(uint16_t port, HandlerFactory factory, std::string& outError);
 		void Stop();
 
+		// For clients accepted from now on (tests shorten it).
+		void SetSendTimeout(int milliseconds) { m_SendTimeoutMilliseconds = milliseconds; }
+
 		bool IsRunning() const { return m_Running; }
 		uint16_t GetPort() const { return m_Port; }
 		// True while Stop() is in progress; long-running handlers should give up when this is set.
@@ -67,6 +70,7 @@ namespace Basalt {
 		std::atomic<bool> m_Stopping = false;
 		intptr_t m_ListenSocket = -1;
 		uint16_t m_Port = 0;
+		std::atomic<int> m_SendTimeoutMilliseconds = DefaultSendTimeoutMilliseconds;
 	};
 
 }

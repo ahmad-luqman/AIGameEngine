@@ -54,7 +54,7 @@ def check_game_view(call, require, output):
     call("image.compare", {"actual": str(game), "reference": str(reference), "assertMatch": True})
     # render.compare renders and compares in one step.
     compared = call("render.compare", {"reference": str(game), "output": str(Path(output, "game-compare.png")), "width": 640, "height": 360, "assertMatch": True})
-    require(compared["similarity"] > .99 and compared["actual"] == str(Path(output, "game-compare.png")), f"render.compare: {compared}")
+    require(compared["similarity"] > .99 and Path(compared["actual"]) == Path(output, "game-compare.png"), f"render.compare: {compared}")
     compared = call("render.compare", {"reference": str(game), "output": str(Path(output, "game-compare-small.png")), "width": 320, "height": 180})
     require(not compared["sizeMatches"] and compared["similarity"] == 0, f"render.compare at another size: {compared}")
     side = Path(output, "game-editor-camera.png")

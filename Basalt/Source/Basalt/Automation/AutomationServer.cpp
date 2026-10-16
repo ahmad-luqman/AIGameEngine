@@ -20,7 +20,9 @@ using SocketHandle = int;
 static const SocketHandle s_InvalidSocket = -1;
 #endif
 
+#include <cerrno>
 #include <cstring>
+#include <system_error>
 
 namespace Basalt {
 
@@ -52,7 +54,24 @@ namespace Basalt {
 			return select(static_cast<int>(socket) + 1, &set, nullptr, nullptr, &timeout);
 		}
 
-		bool SendAll(SocketHandle socket, const std::string& data)
+		// The reason the last socket call failed.
+		std::string LastSocketError()
+		{
+#if defined(BS_PLATFORM_WINDOWS)
+			const int code = WSAGetLastError();
+			if (code == WSAETIMEDOUT || code == WSAEWOULDBLOCK)
+				return "timed out (the client stopped reading)";
+			return std::system_category().message(code);
+#else
+			const int code = errno;
+			if (code == EAGAIN || code == EWOULDBLOCK)
+				return "timed out (the client stopped reading)";
+			return std::generic_category().message(code);
+#endif
+		}
+
+		// False with outError when the client did not take all of the data.
+		bool SendAll(SocketHandle socket, const std::string& data, std::string& outError)
 		{
 			size_t sent = 0;
 			while (sent < data.size())
@@ -65,7 +84,10 @@ namespace Basalt {
 				const ssize_t result = send(socket, data.data() + sent, data.size() - sent, 0);
 #endif
 				if (result <= 0)
+				{
+					outError = result == 0 ? std::string("connection closed") : LastSocketError();
 					return false;
+				}
 				sent += static_cast<size_t>(result);
 			}
 			return true;
@@ -174,13 +196,18 @@ namespace Basalt {
 			setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, sizeof(noSigPipe));
 #endif
 			// Event streams send data the client did not ask for; one that stops reading must not block us forever.
+			const int timeoutMilliseconds = m_SendTimeoutMilliseconds;
 #if defined(BS_PLATFORM_WINDOWS)
-			const DWORD sendTimeout = SendTimeoutMilliseconds;
-			setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&sendTimeout), sizeof(sendTimeout));
+			const DWORD sendTimeout = static_cast<DWORD>(timeoutMilliseconds);
+			const int timeoutSet = setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&sendTimeout), sizeof(sendTimeout));
 #else
-			const timeval sendTimeout{ SendTimeoutMilliseconds / 1000, (SendTimeoutMilliseconds % 1000) * 1000 };
-			setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &sendTimeout, sizeof(sendTimeout));
+			timeval sendTimeout;
+			sendTimeout.tv_sec = timeoutMilliseconds / 1000;
+			sendTimeout.tv_usec = static_cast<decltype(sendTimeout.tv_usec)>(timeoutMilliseconds % 1000) * 1000;
+			const int timeoutSet = setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &sendTimeout, sizeof(sendTimeout));
 #endif
+			if (timeoutSet != 0)
+				BS_CORE_WARN("Automation: cannot set a send timeout ({}); a client that stops reading can stall the server", LastSocketError());
 			ServeClient(static_cast<intptr_t>(client), m_Factory());
 			CloseSocket(client);
 		}
@@ -192,14 +219,18 @@ namespace Basalt {
 		std::string buffer;
 		char chunk[4096];
 		BS_CORE_ASSERT(handler.OnRequest, "a client handler needs OnRequest");
+		const auto send = [&](const std::string& data, const char* what) {
+			std::string error;
+			if (SendAll(client, data, error))
+				return true;
+			BS_CORE_WARN("Automation: closing connection; cannot send {} bytes of {}: {}", data.size(), what, error);
+			return false;
+		};
 		const auto sendPending = [&]() {
 			if (!handler.TakePending)
 				return true;
 			const std::string frames = handler.TakePending();
-			if (frames.empty() || SendAll(client, frames))
-				return true;
-			BS_CORE_WARN("Automation: closing connection; the client did not accept {} bytes of event frames within {} ms", frames.size(), SendTimeoutMilliseconds);
-			return false;
+			return frames.empty() || send(frames, "event frames");
 		};
 
 		while (!m_Stopping)
@@ -232,7 +263,7 @@ namespace Basalt {
 				if (!line.empty() && line.back() == '\r')
 					line.pop_back();
 				const std::string response = handler.OnRequest(line);
-				if (!response.empty() && !SendAll(client, response + "\n"))
+				if (!response.empty() && !send(response + "\n", "a response"))
 					return;
 				if (!sendPending())
 					return;

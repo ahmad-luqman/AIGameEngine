@@ -34,6 +34,7 @@ namespace BasaltTest {
 	// Whether a directory holds a leftover temporary file of FileSystem's atomic writes (*.tmp).
 	inline bool HasTempFiles(const std::filesystem::path& directory)
 	{
+		REQUIRE_MESSAGE(std::filesystem::is_directory(directory), "not a directory: ", directory.string());
 		std::error_code error;
 		for (const auto& entry : std::filesystem::directory_iterator(directory, error))
 		{

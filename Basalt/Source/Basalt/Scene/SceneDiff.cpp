@@ -133,24 +133,35 @@ namespace Basalt {
 			return fmt::format("{} is {}, expected {}", path, Brief(actual), Brief(expected));
 		}
 
-		// Whether the IDs both sides have appear in the same order on both.
-		bool SameOrder(const std::vector<IndexedEntity>& from, const std::vector<IndexedEntity>& to, const std::unordered_map<uint64_t, const json*>& fromById, const std::unordered_map<uint64_t, const json*>& toById)
+		// The IDs of `order` the other side has too, in order.
+		std::vector<uint64_t> SharedIds(const std::vector<IndexedEntity>& order, const std::unordered_map<uint64_t, const json*>& other)
 		{
-			auto a = from.begin();
-			auto b = to.begin();
-			while (true)
+			std::vector<uint64_t> ids;
+			for (const IndexedEntity& entity : order)
 			{
-				while (a != from.end() && !toById.contains(a->ID))
-					++a;
-				while (b != to.end() && !fromById.contains(b->ID))
-					++b;
-				if (a == from.end() || b == to.end())
-					return a == from.end() && b == to.end();
-				if (a->ID != b->ID)
-					return false;
-				++a;
-				++b;
+				if (other.contains(entity.ID))
+					ids.push_back(entity.ID);
 			}
+			return ids;
+		}
+
+		// Accessors that accept any JSON: DescribeSceneDiff's input need not be a DiffScenes result.
+		const json& ArrayAt(const json& object, const char* key)
+		{
+			static const json s_Empty = json::array();
+			const auto it = object.is_object() ? object.find(key) : object.end();
+			return it != object.end() && it->is_array() ? *it : s_Empty;
+		}
+
+		json ValueAt(const json& object, const char* key)
+		{
+			return object.is_object() ? object.value(key, json()) : json();
+		}
+
+		std::string StringAt(const json& object, const char* key)
+		{
+			const json value = ValueAt(object, key);
+			return value.is_string() ? value.get<std::string>() : std::string();
 		}
 
 	}
@@ -257,40 +268,32 @@ namespace Basalt {
 			json changes = json::array();
 			DiffValues(Flatten(*before->second), Flatten(*entity.Data), "", options.Tolerance, changes);
 			if (!changes.empty())
-				changed.push_back({ { "id", entity.ID }, { "name", EntityName(*entity.Data) }, { "changes", std::move(changes) } });
+			{
+				json entry = EntityRef(entity);
+				entry["changes"] = std::move(changes);
+				changed.push_back(std::move(entry));
+			}
 		}
-		const bool reordered = !SameOrder(fromOrder, toOrder, fromById, toById);
+		const bool reordered = SharedIds(fromOrder, toById) != SharedIds(toOrder, fromById);
 		const bool equal = settings.empty() && added.empty() && removed.empty() && changed.empty() && !reordered;
 		return json{ { "equal", equal }, { "settings", std::move(settings) }, { "added", std::move(added) }, { "removed", std::move(removed) }, { "changed", std::move(changed) }, { "reordered", reordered } };
 	}
 
 	std::string DescribeSceneDiff(const json& diff, size_t maxLines)
 	{
-		static const json s_Empty = json::array();
-		const auto list = [](const json& object, const char* key) -> const json& {
-			const auto it = object.is_object() ? object.find(key) : object.end();
-			return it != object.end() && it->is_array() ? *it : s_Empty;
-		};
-		// Values from any JSON: the input need not be a DiffScenes result.
-		const auto field = [](const json& object, const char* key) { return object.is_object() ? object.value(key, json()) : json(); };
-		const auto text = [&field](const json& object, const char* key) {
-			const json value = field(object, key);
-			return value.is_string() ? value.get<std::string>() : std::string();
-		};
-
 		std::vector<std::string> lines;
-		for (const json& change : list(diff, "settings"))
-			lines.push_back(fmt::format("scene {}: {} -> {}", text(change, "path"), Brief(field(change, "from")), Brief(field(change, "to"))));
-		for (const json& entity : list(diff, "removed"))
-			lines.push_back(fmt::format("removed '{}' ({})", text(entity, "name"), Brief(field(entity, "id"))));
-		for (const json& entity : list(diff, "added"))
-			lines.push_back(fmt::format("added '{}' ({})", text(entity, "name"), Brief(field(entity, "id"))));
-		for (const json& entity : list(diff, "changed"))
+		for (const json& change : ArrayAt(diff, "settings"))
+			lines.push_back(fmt::format("scene {}: {} -> {}", StringAt(change, "path"), Brief(ValueAt(change, "from")), Brief(ValueAt(change, "to"))));
+		for (const json& entity : ArrayAt(diff, "removed"))
+			lines.push_back(fmt::format("removed '{}' ({})", StringAt(entity, "name"), Brief(ValueAt(entity, "id"))));
+		for (const json& entity : ArrayAt(diff, "added"))
+			lines.push_back(fmt::format("added '{}' ({})", StringAt(entity, "name"), Brief(ValueAt(entity, "id"))));
+		for (const json& entity : ArrayAt(diff, "changed"))
 		{
-			for (const json& change : list(entity, "changes"))
-				lines.push_back(fmt::format("'{}' {}: {} -> {}", text(entity, "name"), text(change, "path"), Brief(field(change, "from")), Brief(field(change, "to"))));
+			for (const json& change : ArrayAt(entity, "changes"))
+				lines.push_back(fmt::format("'{}' {}: {} -> {}", StringAt(entity, "name"), StringAt(change, "path"), Brief(ValueAt(change, "from")), Brief(ValueAt(change, "to"))));
 		}
-		if (diff.is_object() && diff.value("reordered", false))
+		if (ValueAt(diff, "reordered") == true)
 			lines.emplace_back("the entities are in a different order");
 		std::string result;
 		for (size_t i = 0; i < lines.size() && i < maxLines; i++)

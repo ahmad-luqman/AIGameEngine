@@ -14,7 +14,7 @@ namespace Basalt {
 		constexpr const char* const EventTypeNames[] = { "log", "scriptError", "playState", "collision" };
 		static_assert(std::size(EventTypeNames) == static_cast<size_t>(AutomationEventType::Count), "one name per event type");
 		constexpr const char* const PlayStateNames[] = { "play", "simulate", "pause", "resume", "stop" };
-		static_assert(std::size(PlayStateNames) == static_cast<size_t>(PlayStateChange::Stop) + 1, "one name per play-state change");
+		static_assert(std::size(PlayStateNames) == static_cast<size_t>(PlayStateChange::Count), "one name per play-state change");
 
 	}
 
@@ -38,6 +38,7 @@ namespace Basalt {
 	const char* PlayStateChangeName(PlayStateChange change)
 	{
 		const char* name = EnumNameOrNull(PlayStateNames, change);
+		BS_CORE_ASSERT(name, "not a play-state change");
 		return name ? name : "unknown";
 	}
 
@@ -61,6 +62,8 @@ namespace Basalt {
 	{
 		BS_CORE_ASSERT((filter.Types & AllTypes) != 0, "a subscription must want some event type");
 		BS_CORE_ASSERT(delivery == Delivery::Polled || owner != 0, "a streamed subscription needs an owner that drains it");
+		if (delivery == Delivery::Streamed && owner == 0)
+			return std::nullopt;
 		std::scoped_lock lock(m_Mutex);
 		if (m_Subscriptions.size() >= MaxSubscriptions)
 			return std::nullopt;
@@ -98,7 +101,7 @@ namespace Basalt {
 		return m_Subscriptions.size();
 	}
 
-	AutomationEventHub::PollStatus AutomationEventHub::Poll(uint64_t id, size_t max, std::vector<nlohmann::json>& outEvents, uint64_t& outDropped, const std::function<bool(const std::vector<nlohmann::json>&)>& accept)
+	AutomationEventHub::PollStatus AutomationEventHub::Poll(uint64_t id, size_t max, std::vector<nlohmann::json>& outEvents, uint64_t& outDropped, uint32_t requiredTypes)
 	{
 		std::scoped_lock lock(m_Mutex);
 		auto it = m_Subscriptions.find(id);
@@ -108,11 +111,21 @@ namespace Basalt {
 		if (subscription.Mode == Delivery::Streamed)
 			return PollStatus::Streamed;
 		const auto count = static_cast<std::ptrdiff_t>(std::min(max, subscription.Queue.size()));
-		outEvents.assign(subscription.Queue.begin(), subscription.Queue.begin() + count);
+		const auto end = subscription.Queue.begin() + count;
 		outDropped = subscription.Dropped;
-		if (accept && !accept(outEvents))
+		uint32_t present = 0;
+		for (auto event = subscription.Queue.begin(); event != end; ++event)
+		{
+			if (const std::optional<AutomationEventType> type = AutomationEventTypeFromName(event->value("event", "")))
+				present |= TypeBit(*type);
+		}
+		if ((present & requiredTypes) != requiredTypes)
+		{
+			outEvents.assign(subscription.Queue.begin(), end);
 			return PollStatus::Rejected;
-		subscription.Queue.erase(subscription.Queue.begin(), subscription.Queue.begin() + count);
+		}
+		outEvents.assign(std::make_move_iterator(subscription.Queue.begin()), std::make_move_iterator(end));
+		subscription.Queue.erase(subscription.Queue.begin(), end);
 		subscription.Dropped = 0;
 		return PollStatus::Ok;
 	}
@@ -123,7 +136,7 @@ namespace Basalt {
 			return {};
 		struct Pending
 		{
-			uint64_t Subscription;
+			uint64_t Id;
 			uint64_t Dropped;
 			std::deque<nlohmann::json> Events;
 		};
@@ -141,13 +154,13 @@ namespace Basalt {
 			}
 		}
 		std::string frames;
-		for (Pending& subscription : pending)
+		for (Pending& batch : pending)
 		{
-			if (subscription.Dropped > 0)
-				frames += nlohmann::json({ { "event", "dropped" }, { "subscription", subscription.Subscription }, { "count", subscription.Dropped } }).dump() + "\n";
-			for (nlohmann::json& event : subscription.Events)
+			if (batch.Dropped > 0)
+				frames += nlohmann::json({ { "event", "dropped" }, { "subscription", batch.Id }, { "count", batch.Dropped } }).dump() + "\n";
+			for (nlohmann::json& event : batch.Events)
 			{
-				event["subscription"] = subscription.Subscription;
+				event["subscription"] = batch.Id;
 				// Text from scripts or files may not be valid UTF-8; the frame must still be valid JSON.
 				frames += event.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
 			}
