@@ -3031,6 +3031,45 @@ TEST_SUITE("PhysicsLayers")
 		CHECK_FALSE(PhysicsLayers::FromJson(tooMany, error).has_value());
 	}
 
+	TEST_CASE("Physics layers can be renamed and removed, keeping the other layers' collisions")
+	{
+		PhysicsLayers layers;
+		std::string error;
+		for (const char* name : { "Player", "Enemy", "Debris" })
+			REQUIRE(layers.Add(name, error));
+		layers.SetCollides(1, 2, false); // Player x Enemy
+		layers.SetCollides(3, 3, false); // Debris x Debris
+		layers.SetCollides(0, 3, false); // Default x Debris
+
+		CHECK(layers.Rename(1, "Hero", error));
+		CHECK(layers.GetNames() == std::vector<std::string>{ "Default", "Hero", "Enemy", "Debris" });
+		CHECK_FALSE(layers.ShouldCollide(1, 2));
+		CHECK_FALSE(layers.Rename(1, "Enemy", error));
+		CHECK(error == "duplicate physics layer 'Enemy'");
+		CHECK(layers.Rename(1, "Hero", error)); // its own name again
+		CHECK_FALSE(layers.Rename(1, "", error));
+		CHECK_FALSE(layers.Rename(0, "Base", error));
+		CHECK(error == "the Default physics layer cannot be renamed");
+		CHECK_FALSE(layers.Rename(9, "Nine", error));
+
+		// Removing Enemy moves Debris down to index 2 with its own collisions.
+		CHECK(layers.Remove(2, error));
+		CHECK(layers.GetNames() == std::vector<std::string>{ "Default", "Hero", "Debris" });
+		CHECK(layers.ShouldCollide(1, 2));
+		CHECK_FALSE(layers.ShouldCollide(2, 2));
+		CHECK_FALSE(layers.ShouldCollide(0, 2));
+		CHECK(layers.ShouldCollide(0, 1));
+		CHECK(layers.ShouldCollide(1, 1));
+		CHECK(layers.GetCollisionMask(2) == 0b010u);
+		CHECK_FALSE(layers.Remove(0, error));
+		CHECK(error == "the Default physics layer cannot be removed");
+		CHECK_FALSE(layers.Remove(3, error));
+		// The result is what the same layers would load from JSON.
+		const auto reloaded = PhysicsLayers::FromJson(layers.ToJson(), error);
+		REQUIRE(reloaded);
+		CHECK(*reloaded == layers);
+	}
+
 	TEST_CASE("Projects save and load their physics layers")
 	{
 		BasaltTest::TempProject temp("PhysicsLayersProject");

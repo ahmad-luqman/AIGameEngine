@@ -43,6 +43,51 @@ namespace Basalt {
 		return true;
 	}
 
+	bool PhysicsLayers::Rename(uint32_t index, const std::string& name, std::string& outError)
+	{
+		if (index == 0 || index >= GetCount())
+		{
+			outError = index == 0 ? "the Default physics layer cannot be renamed" : "no physics layer " + std::to_string(index);
+			return false;
+		}
+		if (name.empty())
+		{
+			outError = "physics layer names must not be empty";
+			return false;
+		}
+		if (const auto existing = Find(name); existing && *existing != index)
+		{
+			outError = "duplicate physics layer '" + name + "'";
+			return false;
+		}
+		m_Names[index] = name;
+		return true;
+	}
+
+	bool PhysicsLayers::Remove(uint32_t index, std::string& outError)
+	{
+		if (index == 0 || index >= GetCount())
+		{
+			outError = index == 0 ? "the Default physics layer cannot be removed" : "no physics layer " + std::to_string(index);
+			return false;
+		}
+		PhysicsLayers result;
+		std::vector<uint32_t> kept;
+		for (uint32_t i = 0; i < GetCount(); i++)
+		{
+			if (i == index)
+				continue;
+			if (i > 0)
+				result.m_Names.push_back(m_Names[i]);
+			kept.push_back(i);
+		}
+		for (uint32_t a = 0; a < kept.size(); a++)
+			for (uint32_t b = a; b < kept.size(); b++)
+				result.SetCollides(a, b, ShouldCollide(kept[a], kept[b]));
+		*this = std::move(result);
+		return true;
+	}
+
 	bool PhysicsLayers::ShouldCollide(uint32_t a, uint32_t b) const
 	{
 		BS_CORE_ASSERT(a < GetCount() && b < GetCount(), "physics layer index out of range");
