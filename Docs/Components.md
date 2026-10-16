@@ -54,7 +54,7 @@ Fields: `Enabled` (boolean), `Priority` (integer), `Tonemapper` (enum: None, Rei
 
 ## RigidBody
 
-Fields: `Type` (enum: Static, Dynamic, Kinematic), `Mass` (number), `LinearDamping` (number), `AngularDamping` (number), `GravityFactor` (number), `Friction` (number), `Restitution` (number), `FrictionCombine` (enum: Default, GeometricMean, Average, Min, Multiply, Max), `RestitutionCombine` (enum: Default, GeometricMean, Average, Min, Multiply, Max), `IsTrigger` (boolean), `FixedRotation` (boolean), `Layer` (string), `Continuous` (boolean)
+Fields: `Type` (enum: Static, Dynamic, Kinematic), `Mass` (number), `LinearDamping` (number), `AngularDamping` (number), `GravityFactor` (number), `Friction` (number), `Restitution` (number), `FrictionCombine` (enum: Default, GeometricMean, Average, Min, Multiply, Max), `RestitutionCombine` (enum: Default, GeometricMean, Average, Min, Multiply, Max), `IsTrigger` (boolean), `FixedRotation` (boolean), `Layer` (string), `Continuous` (boolean), `AllowSleeping` (boolean)
 
 ## BoxCollider
 

@@ -1559,7 +1559,7 @@ namespace Basalt {
 		// --- Events --------------------------------------------------------------------------------
 
 		// The required types (TypeBits) none of the events has, by name.
-		std::vector<std::string> MissingEventTypes(const std::vector<json>& events, uint32_t requiredTypes)
+		std::vector<std::string> MissingEventTypes(std::span<const json> events, uint32_t requiredTypes)
 		{
 			std::vector<std::string> missing;
 			for (uint32_t index = 0; index < static_cast<uint32_t>(AutomationEventType::Count); index++)
@@ -1585,6 +1585,48 @@ namespace Basalt {
 			for (const auto& [kind, count] : counts)
 				kinds.push_back(fmt::format("{} {}", count, kind));
 			return fmt::format("{}", fmt::join(kinds, ", "));
+		}
+
+		// Floats in an events.poll 'expect' pattern match within this (as assert.component's default).
+		constexpr double EventPatternTolerance = 1.0e-4;
+		// Patterns one events.poll may list: each is matched against up to MaxQueuedEvents events under the hub's lock.
+		constexpr size_t MaxEventPatterns = 64;
+
+		// Whether an event has every field of an events.poll 'expect' pattern (MatchJsonSubset). Contacts name their
+		// bodies in UUID order, which a test cannot know, so a collision pattern also matches with a and b swapped (and
+		// the normal, which points from a to b, reversed).
+		bool EventMatches(const json& event, const json& pattern)
+		{
+			std::vector<std::string> mismatches;
+			MatchJsonSubset(event, pattern, EventPatternTolerance, "", mismatches);
+			if (mismatches.empty())
+				return true;
+			if (event.value("event", "") != AutomationEventTypeName(AutomationEventType::Collision) || !event.contains("a") || !event.contains("b"))
+				return false;
+			json swapped = event;
+			std::swap(swapped["a"], swapped["b"]);
+			if (auto normal = swapped.find("normal"); normal != swapped.end() && normal->is_array())
+			{
+				for (json& component : *normal)
+				{
+					if (component.is_number())
+						component = -component.get<double>();
+				}
+			}
+			mismatches.clear();
+			MatchJsonSubset(swapped, pattern, EventPatternTolerance, "", mismatches);
+			return mismatches.empty();
+		}
+
+		// The first pattern no event matches, or null when each matches one.
+		const json* FirstUnmatchedPattern(std::span<const json> events, const json& patterns)
+		{
+			for (const json& pattern : patterns)
+			{
+				if (std::ranges::none_of(events, [&pattern](const json& event) { return EventMatches(event, pattern); }))
+					return &pattern;
+			}
+			return nullptr;
 		}
 
 		void RegisterEvents(CommandRegistry& registry)
@@ -1635,7 +1677,8 @@ namespace Basalt {
 
 			json assertTypes = typesSchema;
 			assertTypes["description"] = "array of event types: fail unless the first 'max' queued events include each; on failure they stay queued";
-			Add(registry, "events.poll", fmt::format("Returns (and removes) up to 'max' events a polled subscription collected, oldest first, with 'dropped': how many were lost because more than {} were waiting.", AutomationEventHub::MaxQueuedEvents), Schema::Object({ { "subscription", Schema::Integer("integer, from events.subscribe", 1, UINT64_MAX) }, { "max", Schema::Nullable(Schema::Integer(fmt::format("integer (default {})", AutomationEventHub::MaxQueuedEvents), 1, AutomationEventHub::MaxQueuedEvents)) }, { "assertTypes", assertTypes } }, { "subscription" }), [](AutomationSession& session, const json& params) {
+			const json expect = { { "type", "array" }, { "description", fmt::format("array of event patterns, e.g. {{\"event\": \"collision\", \"type\": \"triggerEnter\", \"a\": {{\"name\": \"Goal\"}}}}: fail unless each matches one of the first 'max' queued events (every field it lists, as assert.component compares them; floats within {}); a collision pattern also matches with a and b swapped. On failure the events stay queued", EventPatternTolerance) }, { "items", { { "type", "object" } } }, { "minItems", 1 }, { "maxItems", MaxEventPatterns } };
+			Add(registry, "events.poll", fmt::format("Returns (and removes) up to 'max' events a polled subscription collected, oldest first, with 'dropped': how many were lost because more than {} were waiting.", AutomationEventHub::MaxQueuedEvents), Schema::Object({ { "subscription", Schema::Integer("integer, from events.subscribe", 1, UINT64_MAX) }, { "max", Schema::Nullable(Schema::Integer(fmt::format("integer (default {})", AutomationEventHub::MaxQueuedEvents), 1, AutomationEventHub::MaxQueuedEvents)) }, { "assertTypes", assertTypes }, { "expect", expect } }, { "subscription" }), [](AutomationSession& session, const json& params) {
 				const uint64_t id = Require(params, "subscription").get<uint64_t>();
 				const auto max = static_cast<size_t>(OptionalInteger(params, "max", AutomationEventHub::MaxQueuedEvents, 1, AutomationEventHub::MaxQueuedEvents));
 				uint32_t requiredTypes = 0;
@@ -1649,17 +1692,31 @@ namespace Basalt {
 						requiredTypes |= AutomationEventHub::TypeBit(*type);
 					}
 				}
+				const json patterns = params.value("expect", json::array());
+				AutomationEventHub::PollCheck check;
+				if (requiredTypes != 0 || !patterns.empty())
+				{
+					check = [requiredTypes, &patterns](std::span<const json> queued) {
+						return MissingEventTypes(queued, requiredTypes).empty() && FirstUnmatchedPattern(queued, patterns) == nullptr;
+					};
+				}
 				std::vector<json> events;
 				uint64_t dropped = 0;
-				switch (session.GetEvents()->Poll(id, max, events, dropped, requiredTypes))
+				switch (session.GetEvents()->Poll(id, max, events, dropped, check))
 				{
 					case AutomationEventHub::PollStatus::UnknownSubscription:
 						throw CommandError("no event subscription " + std::to_string(id));
 					case AutomationEventHub::PollStatus::Streamed:
 						throw CommandError("event subscription " + std::to_string(id) + " streams to its connection; it cannot be polled");
 					case AutomationEventHub::PollStatus::Rejected:
+					{
 						// Only the first 'max' are examined; say so when there may be more.
-						throw CommandError(fmt::format("assertion failed: no {} event among the {}{} queued ({}; {} dropped); they stay queued", fmt::join(MissingEventTypes(events, requiredTypes), ", "), events.size() == max ? "first " : "", events.size(), DescribeEventCounts(events), dropped));
+						const std::string queued = fmt::format("among the {}{} queued ({}; {} dropped); they stay queued", events.size() == max ? "first " : "", events.size(), DescribeEventCounts(events), dropped);
+						if (const std::vector<std::string> missing = MissingEventTypes(events, requiredTypes); !missing.empty())
+							throw CommandError(fmt::format("assertion failed: no {} event {}", fmt::join(missing, ", "), queued));
+						const json* unmatched = FirstUnmatchedPattern(events, patterns);
+						throw CommandError(fmt::format("assertion failed: no event matches {} {}", unmatched ? unmatched->dump() : "the patterns", queued));
+					}
 					case AutomationEventHub::PollStatus::Ok:
 						break;
 				}

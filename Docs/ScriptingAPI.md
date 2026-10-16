@@ -368,6 +368,12 @@ scale was zero gets its body once the scale is valid again.
 Set `RigidBody.Continuous = true` on fast dynamic bodies (projectiles) so they cannot pass through thin
 geometry between steps. It costs more per step and has no effect on static, kinematic or trigger bodies.
 
+A body that has barely moved for about half a second falls asleep: it stops being simulated until something
+touches or pushes it (a force, an impulse, a non-zero velocity or a changed joint target wakes it). That saves work in piles of
+resting objects, but it can also freeze a ball that slowly turns around on a slope. Set
+`RigidBody.AllowSleeping = false` on bodies that must never stall (marbles, rolling balls). It has no effect on
+static bodies.
+
 ### Queries
 
 Casts sweep a ray, sphere or box from `origin` along `direction` (any length) for up to `maxDistance`:

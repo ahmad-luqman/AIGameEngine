@@ -275,6 +275,7 @@ namespace Basalt {
 		settings.mAngularDamping = rigidBody.AngularDamping;
 		settings.mGravityFactor = rigidBody.GravityFactor;
 		settings.mIsSensor = rigidBody.IsTrigger;
+		settings.mAllowSleeping = rigidBody.AllowSleeping;
 		// Kinematic triggers must also see static bodies; kinematic bodies are otherwise skipped vs static.
 		settings.mCollideKinematicVsNonDynamic = rigidBody.IsTrigger;
 		if (rigidBody.FixedRotation && motionType == JPH::EMotionType::Dynamic)
@@ -626,6 +627,12 @@ namespace Basalt {
 		if (body == nullptr)
 			return glm::vec3(0.0f);
 		return FromJolt(m_Impl->System->GetBodyInterface().GetAngularVelocity(body->ID));
+	}
+
+	bool PhysicsWorld::IsBodySleeping(Entity entity) const
+	{
+		auto* body = m_Impl->FindBody(entity);
+		return body != nullptr && body->Type != RigidBodyType::Static && !m_Impl->System->GetBodyInterface().IsActive(body->ID);
 	}
 
 	const PhysicsLayers& PhysicsWorld::GetLayers() const

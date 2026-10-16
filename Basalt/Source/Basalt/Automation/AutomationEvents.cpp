@@ -101,7 +101,7 @@ namespace Basalt {
 		return m_Subscriptions.size();
 	}
 
-	AutomationEventHub::PollStatus AutomationEventHub::Poll(uint64_t id, size_t max, std::vector<nlohmann::json>& outEvents, uint64_t& outDropped, uint32_t requiredTypes)
+	AutomationEventHub::PollStatus AutomationEventHub::Poll(uint64_t id, size_t max, std::vector<nlohmann::json>& outEvents, uint64_t& outDropped, const PollCheck& check)
 	{
 		std::scoped_lock lock(m_Mutex);
 		auto it = m_Subscriptions.find(id);
@@ -113,18 +113,17 @@ namespace Basalt {
 		const auto count = static_cast<std::ptrdiff_t>(std::min(max, subscription.Queue.size()));
 		const auto end = subscription.Queue.begin() + count;
 		outDropped = subscription.Dropped;
-		uint32_t present = 0;
-		for (auto event = subscription.Queue.begin(); event != end; ++event)
+		if (check)
 		{
-			if (const std::optional<AutomationEventType> type = AutomationEventTypeFromName(event->value("event", "")))
-				present |= TypeBit(*type);
-		}
-		if ((present & requiredTypes) != requiredTypes)
-		{
+			// The check takes contiguous events and the queue is a deque, so it sees the copy the caller gets.
 			outEvents.assign(subscription.Queue.begin(), end);
-			return PollStatus::Rejected;
+			if (!check(outEvents))
+				return PollStatus::Rejected;
 		}
-		outEvents.assign(std::make_move_iterator(subscription.Queue.begin()), std::make_move_iterator(end));
+		else
+		{
+			outEvents.assign(std::make_move_iterator(subscription.Queue.begin()), std::make_move_iterator(end));
+		}
 		subscription.Queue.erase(subscription.Queue.begin(), end);
 		subscription.Dropped = 0;
 		return PollStatus::Ok;

@@ -895,6 +895,7 @@ Returns (and removes) up to 'max' events a polled subscription collected, oldest
 | Parameter | Type / description |
 |-----------|--------------------|
 | `assertTypes` | array of event types: fail unless the first 'max' queued events include each; on failure they stay queued |
+| `expect` | array of event patterns, e.g. {"event": "collision", "type": "triggerEnter", "a": {"name": "Goal"}}: fail unless each matches one of the first 'max' queued events (every field it lists, as assert.component compares them; floats within 0.0001); a collision pattern also matches with a and b swapped. On failure the events stay queued |
 | `max` | integer (default 1024) |
 | `subscription` | integer, from events.subscribe |
 
@@ -916,6 +917,15 @@ Returns (and removes) up to 'max' events a polled subscription collected, oldest
         ],
         "type": "string"
       },
+      "minItems": 1,
+      "type": "array"
+    },
+    "expect": {
+      "description": "array of event patterns, e.g. {\"event\": \"collision\", \"type\": \"triggerEnter\", \"a\": {\"name\": \"Goal\"}}: fail unless each matches one of the first 'max' queued events (every field it lists, as assert.component compares them; floats within 0.0001); a collision pattern also matches with a and b swapped. On failure the events stay queued",
+      "items": {
+        "type": "object"
+      },
+      "maxItems": 64,
       "minItems": 1,
       "type": "array"
     },

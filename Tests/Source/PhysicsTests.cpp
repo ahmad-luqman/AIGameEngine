@@ -524,6 +524,32 @@ TEST_SUITE("Physics")
 		CHECK(shoot(true) < 5.0f);
 	}
 
+	TEST_CASE("A body without AllowSleeping stays awake at rest")
+	{
+		Scene scene;
+		Entity ground = CreateGround(scene);
+		Entity sleeper = CreateBox(scene, { -2.0f, 0.5f, 0.0f });
+		Entity awake = CreateBox(scene, { 2.0f, 0.5f, 0.0f });
+		awake.GetComponent<RigidBodyComponent>().AllowSleeping = false;
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		CHECK_FALSE(physics.IsBodySleeping(sleeper));
+		// Jolt puts a body to sleep after half a second of (almost) no motion.
+		Simulate(scene, 3.0f);
+		CHECK(physics.IsBodySleeping(sleeper));
+		CHECK_FALSE(physics.IsBodySleeping(awake));
+		// Static bodies and entities without a body never count as sleeping.
+		CHECK_FALSE(physics.IsBodySleeping(ground));
+		CHECK_FALSE(physics.IsBodySleeping(scene.CreateEntity("NoBody")));
+
+		// The setting applies when the body is rebuilt from its component.
+		awake.GetComponent<RigidBodyComponent>().AllowSleeping = true;
+		physics.RecreateBody(awake);
+		Simulate(scene, 3.0f);
+		CHECK(physics.IsBodySleeping(awake));
+		scene.OnSimulationStop();
+	}
+
 	TEST_CASE("Continuous on a non-dynamic body or a trigger is ignored with one warning")
 	{
 		Scene scene;

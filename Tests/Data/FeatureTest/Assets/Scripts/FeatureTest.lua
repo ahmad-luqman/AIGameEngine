@@ -716,6 +716,7 @@ function Driver:OnUpdate(dt)
 		Check("Six-DOF motor drives a free axis", Near(Scene.FindEntityByName("PoweredSled").Translation.x, -36.52, 0.05))
 		Check("Continuous body stops at a thin wall", Scene.FindEntityByName("Bullet").Translation.x < 15)
 		Check("RigidBody Layer and Continuous fields", Scene.FindEntityByName("GhostBox"):GetComponent("RigidBody").Layer == "Ghost" and Scene.FindEntityByName("Bullet"):GetComponent("RigidBody").Continuous)
+		Check("RigidBody AllowSleeping field", Scene.FindEntityByName("Bullet"):GetComponent("RigidBody").AllowSleeping == false and Scene.FindEntityByName("GhostBox"):GetComponent("RigidBody").AllowSleeping == true)
 		Check("Physics.GetLayers", table.concat(Physics.GetLayers(), ",") == "Default,Ghost,Debris")
 
 		-- 29 particle updates (scripts run before particles each frame): the 20-particle burst and 40/s for

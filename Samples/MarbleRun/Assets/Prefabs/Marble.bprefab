@@ -1,0 +1,99 @@
+{
+	"Entities": [
+		{
+			"Components": {
+				"AudioSource": {
+					"Bus": "SFX",
+					"Clip": "Assets/Audio/Clack.wav",
+					"Loop": false,
+					"MaxDistance": 30.0,
+					"MinDistance": 2.0,
+					"Pitch": 1.0,
+					"PlayOnStart": false,
+					"Spatial": true,
+					"Stream": false,
+					"Volume": 0.6000000238418579
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.8500000238418579,
+						0.11999999731779099,
+						0.10000000149011612,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.20000000298023224,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.15000000596046448
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Sphere",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": false,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": true,
+					"FixedRotation": false,
+					"Friction": 0.4000000059604645,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.25,
+					"RestitutionCombine": "Default",
+					"Type": "Dynamic"
+				},
+				"Script": {
+					"Properties": {},
+					"Script": "Assets/Scripts/Marble.lua"
+				},
+				"SphereCollider": {
+					"Friction": 0.5,
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Radius": 0.5,
+					"Restitution": 0.0
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Translation": [
+						0.0,
+						20.0,
+						0.0
+					]
+				}
+			},
+			"ID": 9021877092381176355,
+			"Name": "Marble",
+			"Parent": 0
+		}
+	],
+	"Format": "BasaltPrefab",
+	"Version": 2
+}
