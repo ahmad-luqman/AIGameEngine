@@ -1,6 +1,9 @@
 #include "Panels/ProjectSettingsPanel.h"
 
+#include "EditorColors.h"
+
 #include "Basalt/Asset/AssetManager.h"
+#include "Basalt/Automation/EditorCommandSchemas.h"
 #include "Basalt/Physics/FixedTimestep.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/RenderMath.h"
@@ -46,7 +49,7 @@ namespace Basalt {
 	{
 		if (!open)
 			return;
-		if (!ImGui::Begin("Project Settings", &open))
+		if (!ImGui::Begin(EditorCommandSchemas::ProjectSettingsTitle, &open))
 		{
 			ImGui::End();
 			return;
@@ -58,11 +61,21 @@ namespace Basalt {
 			ImGui::End();
 			return;
 		}
-		// Saved immediately (they are the shipped game's settings), so they stay out of scene undo history.
+		// Another project: nothing shown so far applies to it.
+		if (project.get() != m_Project)
+		{
+			m_Project = project.get();
+			m_Validation.reset();
+			m_Warnings.clear();
+			m_Rename.reset();
+		}
+		// Project settings are not scene state, so they are saved at once and stay out of scene undo history.
 		ImGui::TextDisabled("Saved to %s as you edit (not undoable).", Project::FileName);
 		const bool playing = m_Context.Session.IsPlaying();
 		if (playing)
-			ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "Stop playing to edit: a session keeps the settings it started with.");
+			ImGui::TextColored(EditorColors::Warning, "Stop playing to edit: a session keeps the settings it started with.");
+		for (const std::string& warning : m_Warnings)
+			ImGui::TextColored(EditorColors::Warning, "%s", warning.c_str());
 		// A copy: Set saves through project.set, which replaces the config being drawn.
 		const ProjectConfig config = project->GetConfig();
 		ImGui::BeginDisabled(playing);
@@ -78,10 +91,12 @@ namespace Basalt {
 
 	void ProjectSettingsPanel::Set(const nlohmann::json& params)
 	{
+		m_Warnings.clear();
+		// The settings change (or the attempt shows them stale): validate again to see the effect.
+		m_Validation.reset();
 		const auto result = m_Context.Execute("project.set", params);
 		if (!result)
 			return;
-		m_Warnings.clear();
 		if (const auto warnings = result->find("warnings"); warnings != result->end())
 			for (const auto& warning : *warnings)
 				m_Warnings.push_back(warning.get<std::string>());
@@ -127,10 +142,14 @@ namespace Basalt {
 			ImGui::EndCombo();
 		}
 		HelpMarker("The exported game's window size, and the size the editor's Game view renders at.");
-		int size[2] = { static_cast<int>(config.WindowWidth), static_cast<int>(config.WindowHeight) };
-		ImGui::InputInt2("Custom", size);
-		if (ImGui::IsItemDeactivatedAfterEdit())
-			Set({ { "windowWidth", std::clamp(size[0], 64, 16384) }, { "windowHeight", std::clamp(size[1], 64, 16384) } });
+		std::array<int, 2> size = { static_cast<int>(config.WindowWidth), static_cast<int>(config.WindowHeight) };
+		if (EditCommitted("Custom", size, [](const char* id, int* values) { ImGui::InputInt2(id, values); }))
+		{
+			const auto clamp = [](int value) { return std::clamp(value, static_cast<int>(ProjectConfig::MinWindowSize), static_cast<int>(ProjectConfig::MaxWindowSize)); };
+			if (clamp(size[0]) != size[0] || clamp(size[1]) != size[1])
+				m_Context.SetStatus(fmt::format("Window sizes are {} to {} pixels; using {} x {}", ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize, clamp(size[0]), clamp(size[1])), true);
+			Set({ { "windowWidth", clamp(size[0]) }, { "windowHeight", clamp(size[1]) } });
+		}
 		bool fullscreen = config.Fullscreen;
 		if (ImGui::Checkbox("Fullscreen", &fullscreen))
 			Set({ { "fullscreen", fullscreen } });
@@ -140,10 +159,9 @@ namespace Basalt {
 	{
 		if (!ImGui::CollapsingHeader("Simulation", ImGuiTreeNodeFlags_DefaultOpen))
 			return;
-		uint32_t seed = config.RandomSeed;
-		ImGui::InputScalar("Random Seed", ImGuiDataType_U32, &seed);
-		if (ImGui::IsItemDeactivatedAfterEdit() && seed != config.RandomSeed)
-			Set({ { "randomSeed", seed } });
+		std::array<uint32_t, 1> seed = { config.RandomSeed };
+		if (EditCommitted("Random Seed", seed, [](const char* id, uint32_t* value) { ImGui::InputScalar(id, ImGuiDataType_U32, value); }) && seed[0] != config.RandomSeed)
+			Set({ { "randomSeed", seed[0] } });
 		ImGui::SameLine();
 		if (ImGui::Button("Randomize"))
 			Set({ { "randomSeed", std::random_device{}() } });
@@ -157,19 +175,18 @@ namespace Basalt {
 			for (const int rate : s_StepRates)
 			{
 				const float seconds = 1.0f / static_cast<float>(rate);
-				const std::string name = std::to_string(rate) + " Hz";
+				const std::string name = fmt::format("{} Hz", rate);
 				const bool selected = std::abs(seconds - step) < 1e-6f;
 				if (ImGui::Selectable(name.c_str(), selected) && !selected)
 					Set({ { "fixedTimestep", seconds } });
 			}
 			ImGui::EndCombo();
 		}
-		float custom = step;
-		ImGui::InputFloat("Step Seconds", &custom, 0.0f, 0.0f, "%.5f");
-		if (ImGui::IsItemDeactivatedAfterEdit() && custom != step)
+		std::array<float, 1> custom = { step };
+		if (EditCommitted("Step Seconds", custom, [](const char* id, float* value) { ImGui::InputFloat(id, value, 0.0f, 0.0f, "%.5f"); }) && custom[0] != step)
 		{
-			if (IsValidFixedTimestep(custom))
-				Set({ { "fixedTimestep", custom } });
+			if (IsValidFixedTimestep(custom[0]))
+				Set({ { "fixedTimestep", custom[0] } });
 			else
 				m_Context.SetStatus(fmt::format("The physics step must be in (0, {}] seconds", MaxFixedTimestep), true);
 		}
@@ -200,10 +217,9 @@ namespace Basalt {
 		bool vsync = graphics.VSync;
 		if (ImGui::Checkbox("VSync", &vsync))
 			Set({ { "graphics", { { "VSync", vsync } } } });
-		float scale = graphics.RenderScale;
-		ImGui::SliderFloat("Render Scale", &scale, MinRenderScale, MaxRenderScale, "%.2f");
-		if (ImGui::IsItemDeactivatedAfterEdit())
-			Set({ { "graphics", { { "RenderScale", scale } } } });
+		std::array<float, 1> scale = { graphics.RenderScale };
+		if (EditCommitted("Render Scale", scale, [](const char* id, float* value) { ImGui::SliderFloat(id, value, MinRenderScale, MaxRenderScale, "%.2f"); }))
+			Set({ { "graphics", { { "RenderScale", scale[0] } } } });
 		for (const auto& [key, quality] : { std::pair{ "ShadowQuality", graphics.ShadowQuality }, std::pair{ "SSAOQuality", graphics.SSAOQuality } })
 		{
 			int index = static_cast<int>(quality);
@@ -214,14 +230,12 @@ namespace Basalt {
 		if (ImGui::Checkbox("Dynamic Resolution", &dynamic))
 			Set({ { "graphics", { { "DynamicResolution", dynamic } } } });
 		ImGui::BeginDisabled(!dynamic);
-		float target = graphics.DynamicResolution.TargetFrameRate;
-		ImGui::SliderFloat("Target Frame Rate", &target, MinTargetFrameRate, MaxTargetFrameRate, "%.0f FPS");
-		if (ImGui::IsItemDeactivatedAfterEdit())
-			Set({ { "graphics", { { "TargetFrameRate", target } } } });
-		float minimum = graphics.DynamicResolution.MinScale;
-		ImGui::SliderFloat("Lowest Render Scale", &minimum, MinRenderScale, MaxRenderScale, "%.2f");
-		if (ImGui::IsItemDeactivatedAfterEdit())
-			Set({ { "graphics", { { "MinRenderScale", minimum } } } });
+		std::array<float, 1> target = { graphics.DynamicResolution.TargetFrameRate };
+		if (EditCommitted("Target Frame Rate", target, [](const char* id, float* value) { ImGui::SliderFloat(id, value, MinTargetFrameRate, MaxTargetFrameRate, "%.0f FPS"); }))
+			Set({ { "graphics", { { "TargetFrameRate", target[0] } } } });
+		std::array<float, 1> minimum = { graphics.DynamicResolution.MinScale };
+		if (EditCommitted("Lowest Render Scale", minimum, [](const char* id, float* value) { ImGui::SliderFloat(id, value, MinRenderScale, MaxRenderScale, "%.2f"); }))
+			Set({ { "graphics", { { "MinRenderScale", minimum[0] } } } });
 		ImGui::EndDisabled();
 	}
 
@@ -243,21 +257,25 @@ namespace Basalt {
 				ImGui::TextUnformatted(names[i].c_str());
 			else
 			{
-				std::string buffer = m_RenamingLayer == i ? m_RenameBuffer : names[i];
+				const bool renaming = m_Rename && m_Rename->Index == i;
+				std::string buffer = renaming ? m_Rename->Buffer : names[i];
 				ImGui::SetNextItemWidth(180.0f);
 				if (ImGui::InputText("##Name", &buffer))
+					m_Rename = LayerRename{ i, renaming ? m_Rename->Original : names[i], buffer };
+				if (ImGui::IsItemDeactivatedAfterEdit() && m_Rename && m_Rename->Index == i)
 				{
-					m_RenamingLayer = i;
-					m_RenameBuffer = buffer;
-				}
-				if (ImGui::IsItemDeactivatedAfterEdit() && m_RenamingLayer == i)
-				{
+					// Only the layer the edit began on (the list may have changed through automation meanwhile).
 					PhysicsLayers changed = layers;
-					if (m_RenameBuffer != names[i] && changed.Rename(i, m_RenameBuffer, error))
-						apply(changed);
-					else if (m_RenameBuffer != names[i])
-						m_Context.SetStatus(error, true);
-					m_RenamingLayer.reset();
+					if (names[i] != m_Rename->Original)
+						m_Context.SetStatus("The layers changed while renaming; the rename was dropped", true);
+					else if (m_Rename->Buffer != names[i])
+					{
+						if (changed.Rename(i, m_Rename->Buffer, error))
+							apply(changed);
+						else
+							m_Context.SetStatus(error, true);
+					}
+					m_Rename.reset();
 				}
 				ImGui::SameLine();
 				if (ImGui::SmallButton("Remove"))
@@ -265,6 +283,8 @@ namespace Basalt {
 					PhysicsLayers changed = layers;
 					if (changed.Remove(i, error))
 						apply(changed);
+					else
+						m_Context.SetStatus(error, true);
 				}
 			}
 			ImGui::PopID();
@@ -323,8 +343,6 @@ namespace Basalt {
 			}
 			ImGui::EndTable();
 		}
-		for (const std::string& warning : m_Warnings)
-			ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "%s", warning.c_str());
 	}
 
 	void ProjectSettingsPanel::DrawValidation()
@@ -333,19 +351,19 @@ namespace Basalt {
 			return;
 		if (ImGui::Button("Validate Project"))
 			m_Validation = m_Context.Execute("project.validate");
-		HelpMarker("Checks what would break the exported game: missing or wrongly cased asset paths, scenes and prefabs that do not load, scripts that do not compile. Export runs the same check.");
+		HelpMarker("Checks what would break the exported game: missing or wrongly cased asset paths, scenes and prefabs that do not load, scripts that do not compile (or, used by a Script component, do not return a class). Export runs the same check.");
 		if (!m_Validation)
 			return;
 		const nlohmann::json& report = *m_Validation;
 		if (report["valid"].get<bool>() && report["warnings"].get<size_t>() == 0)
-			ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), "No problems found.");
+			ImGui::TextColored(EditorColors::Success, "No problems found.");
 		else
 			ImGui::Text("%zu error(s), %zu warning(s)", report["errors"].get<size_t>(), report["warnings"].get<size_t>());
 		for (const auto& issue : report["issues"])
 		{
 			const bool isError = issue["severity"] == "error";
 			ImGui::PushTextWrapPos(0.0f);
-			ImGui::TextColored(isError ? ImVec4(1.0f, 0.45f, 0.45f, 1.0f) : ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "%s: %s", issue["file"].get<std::string>().c_str(), issue["message"].get<std::string>().c_str());
+			ImGui::TextColored(isError ? EditorColors::Error : EditorColors::Warning, "%s: %s", issue["file"].get<std::string>().c_str(), issue["message"].get<std::string>().c_str());
 			ImGui::PopTextWrapPos();
 		}
 		if (report["omitted"].get<size_t>() > 0)

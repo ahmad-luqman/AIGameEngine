@@ -275,8 +275,9 @@ GPU copies of the assets it draws.
 - **Game view** (GPU timers, created when the Game tab is first shown): the primary camera at the project's
   window size (or a session override), letterboxed in the panel. Render scale, dynamic resolution and FSR
   follow the Play preferences as in the runtime; the debug view never applies. The scene's cameras take the
-  game's aspect ratio every frame. Only the tab in front renders, so the Scene/Game pair costs one view.
-  Script debug lines are drawn in both views; editor helpers only in the scene view.
+  game's aspect ratio every frame. Each view renders only while visible, so the default tabbed Scene/Game pair
+  costs one view. Script debug lines are drawn in the Game view and, with Debug Lines on, the scene view; editor
+  helpers only in the scene view. `editor.game_view` captures go through the capture renderer.
 - **Capture renderer** (picking, created on first use): screenshots and picking.
 - **Preview renderer** (`PreviewRenderer`, no timers or picking, created on first preview): content-browser
   thumbnails of models and prefabs and material spheres. It renders a fresh studio scene (procedural sky,
@@ -284,9 +285,11 @@ GPU copies of the assets it draws.
   At most one preview is rendered per frame; each waits for the GPU (readback). Images and `.hdr`
   environments are previewed on the CPU (an HDR is tonemapped with the ACES fit). Previews are cached in
   `<project>/Cache/Thumbnails` (outside `Assets/`, so never exported; new projects ignore `Cache/` in git) and
-  remade when the source file's size or modification time changes. Model and prefab previews load the
-  model into `AssetManager`, which keeps it; textures referenced by a material are not tracked, so editing one
-  does not refresh previews that use it (Clear Thumbnail Cache does).
+  remade when the source file's size or modification time changes (a changed model is read again). Only rows on
+  screen ask for previews, and at most 512 textures are kept. Material spheres update once a material stops
+  changing for a frame. Model and prefab previews load the model into `AssetManager`, which keeps it; textures
+  referenced by a material, and models inside a prefab, are not tracked, so editing one does not refresh the
+  previews that use it (Clear Thumbnail Cache does).
 
 `PreviewRendererGPU` checks framing, determinism, material colour and emission, failures and that pending
 debug lines survive a preview, with Vulkan validation required.

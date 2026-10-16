@@ -356,12 +356,19 @@ TEST_CASE("All editor tool schemas reject invalid values before the host handler
 		CHECK(registry.HandleRequest(session, { { "command", "editor.camera" }, { "params", bad } })["ok"] == false);
 		CHECK_FALSE(called);
 	}
-	for (const json& bad : { json::object(), json{ { "name", "Timeline" } }, json{ { "name", "Game" }, { "focus", "yes" } } })
+	for (const auto& [command, bad] : std::initializer_list<std::pair<const char*, json>>{
+			 { "editor.panel", json::object() }, { "editor.panel", { { "name", "Timeline" } } }, { "editor.panel", { { "name", "Game" }, { "focus", "yes" } } }, { "editor.thumbnail", json::object() }, { "editor.thumbnail", { { "path", "" } } }, { "editor.thumbnail", { { "path", "a.png" }, { "refresh", 1 } } }, { "editor.material_preview", { { "entity", "Ball" } } }, { "editor.material_preview", { { "output", "a.png" } } }, { "editor.material_preview", { { "entity", true }, { "output", "a.png" } } }, { "editor.game_view", { { "resolution", { 63, 100 } } } }, { "editor.game_view", { { "path", "" } } } })
 	{
+		INFO(command << " " << bad.dump());
 		called = false;
-		CHECK(registry.HandleRequest(session, { { "command", "editor.panel" }, { "params", bad } })["ok"] == false);
+		CHECK(registry.HandleRequest(session, { { "command", command }, { "params", bad } })["ok"] == false);
 		CHECK_FALSE(called);
 	}
+	// The closable windows are editor.panel windows, and only Project Settings is one.
+	CHECK(EditorCommandSchemas::IsClosablePanel(EditorCommandSchemas::ProjectSettingsTitle));
+	CHECK_FALSE(EditorCommandSchemas::IsClosablePanel("Game"));
+	CHECK_FALSE(EditorCommandSchemas::IsClosablePanel("Timeline"));
+	CHECK(EditorCommandSchemas::Panel()["properties"]["name"]["enum"].size() == std::size(EditorCommandSchemas::Panels));
 	for (const json& bad : { json::object(), json{ { "path", "" } }, json{ { "path", "capture.png" }, { "width", 15 } }, json{ { "path", "capture.png" }, { "height", 8193 } } })
 	{
 		called = false;

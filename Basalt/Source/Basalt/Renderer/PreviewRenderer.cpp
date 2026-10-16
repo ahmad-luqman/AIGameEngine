@@ -23,7 +23,7 @@ namespace Basalt {
 		// The camera looks from the front-right, slightly above, as asset browsers usually do.
 		const glm::vec3 s_ViewDirection = glm::normalize(glm::vec3(0.8f, 0.55f, 1.0f));
 
-		// A scene with the studio lighting: the procedural sky (and its IBL) and one key light.
+		// The key light; the procedural sky (and its IBL) is what a scene without a SkyLight gets.
 		void AddStudio(Scene& scene)
 		{
 			Entity sun = scene.CreateEntity("PreviewSun");
@@ -31,22 +31,29 @@ namespace Basalt {
 			sun.GetTransform().SetRotationEuler(glm::radians(glm::vec3(-40.0f, 35.0f, 0.0f)));
 		}
 
-		// World bounds of every mesh and animated model in the scene (Edit mode: rest poses).
-		AABB SceneBounds(Scene& scene)
+		// World bounds of every mesh and animated model in the scene (Edit mode: rest poses). The first mesh that does
+		// not load is named in outProblem (a prefab whose model is missing then says why it shows nothing).
+		AABB SceneBounds(Scene& scene, std::string& outProblem)
 		{
 			AABB bounds;
+			const auto load = [&](const std::string& key) {
+				Ref<MeshSource> mesh = AssetManager::GetMesh(key);
+				if (!mesh && outProblem.empty())
+					outProblem = AssetManager::GetError(key);
+				return mesh;
+			};
 			for (auto handle : scene.GetAllEntitiesWith<MeshComponent>())
 			{
 				Entity entity(handle, &scene);
 				const auto& component = entity.GetComponent<MeshComponent>();
-				const Ref<MeshSource> mesh = AssetManager::GetMesh(component.Mesh);
+				const Ref<MeshSource> mesh = load(component.Mesh);
 				if (mesh && component.MeshIndex < mesh->Meshes.size())
 					bounds.Expand(mesh->Meshes[component.MeshIndex].Bounds.Transformed(scene.GetWorldTransform(entity)));
 			}
 			for (auto handle : scene.GetAllEntitiesWith<AnimatorComponent>())
 			{
 				Entity entity(handle, &scene);
-				if (const Ref<MeshSource> mesh = AssetManager::GetMesh(entity.GetComponent<AnimatorComponent>().Mesh))
+				if (const Ref<MeshSource> mesh = load(entity.GetComponent<AnimatorComponent>().Mesh))
 					bounds.Expand(mesh->Bounds.Transformed(scene.GetWorldTransform(entity)));
 			}
 			return bounds;
@@ -92,6 +99,8 @@ namespace Basalt {
 
 	std::optional<ThumbnailImage> PreviewRenderer::RenderModel(const std::string& meshKey, std::string& outError)
 	{
+		if (!IsReady(outError))
+			return std::nullopt;
 		Scene scene("ModelPreview");
 		AddStudio(scene);
 		if (!AssetManager::ImportModel(scene, meshKey, {}, outError))
@@ -101,6 +110,8 @@ namespace Basalt {
 
 	std::optional<ThumbnailImage> PreviewRenderer::RenderPrefab(const std::string& prefabPath, std::string& outError)
 	{
+		if (!IsReady(outError))
+			return std::nullopt;
 		Scene scene("PrefabPreview");
 		AddStudio(scene);
 		if (!SceneSerializer::InstantiatePrefab(scene, Project::ResolvePath(prefabPath), prefabPath, {}, outError))
@@ -110,6 +121,8 @@ namespace Basalt {
 
 	std::optional<ThumbnailImage> PreviewRenderer::RenderMaterial(const MaterialComponent& material, std::string& outError)
 	{
+		if (!IsReady(outError))
+			return std::nullopt;
 		Scene scene("MaterialPreview");
 		AddStudio(scene);
 		Entity sphere = scene.CreateEntity("Sphere");
@@ -121,24 +134,28 @@ namespace Basalt {
 
 	std::optional<ThumbnailImage> PreviewRenderer::RenderFramed(Scene& scene, std::string& outError)
 	{
-		const AABB bounds = SceneBounds(scene);
+		std::string problem;
+		const AABB bounds = SceneBounds(scene, problem);
 		if (!bounds.IsValid())
 		{
-			outError = "nothing to show (no meshes)";
+			outError = problem.empty() ? "nothing to show (no meshes)" : "nothing to show: " + problem;
 			return std::nullopt;
 		}
-		// The bounding sphere fills the view; a flat model (radius from one axis only) still gets a sensible size.
+		// The bounding sphere (half the box diagonal) fills the view; the floor keeps a point-sized model from giving
+		// a zero distance.
 		const float radius = std::max(glm::length(bounds.GetExtents()), 1e-3f);
 		return Capture(scene, bounds.GetCenter(), radius, outError);
 	}
 
-	std::optional<ThumbnailImage> PreviewRenderer::Capture(Scene& scene, const glm::vec3& target, float radius, std::string& outError)
+	bool PreviewRenderer::IsReady(std::string& outError) const
 	{
 		if (!m_Renderer)
-		{
 			outError = "the preview renderer is not initialized";
-			return std::nullopt;
-		}
+		return m_Renderer != nullptr;
+	}
+
+	std::optional<ThumbnailImage> PreviewRenderer::Capture(Scene& scene, const glm::vec3& target, float radius, std::string& outError)
+	{
 		const float distance = radius / std::sin(FieldOfView * 0.5f);
 		RenderCamera camera;
 		camera.Position = target + s_ViewDirection * distance;
@@ -150,7 +167,7 @@ namespace Basalt {
 		// Previews are rendered between frames: keep the viewport's pending debug lines out of the image.
 		{
 			const DebugLineStash stash;
-			// A fresh scene each time, so every preview starts from the same exposure.
+			// The renderer is reused across previews: reset its exposure history so each preview stands alone.
 			m_Renderer->ResetExposure();
 			m_Renderer->Render(scene, camera, 0.0f);
 		}

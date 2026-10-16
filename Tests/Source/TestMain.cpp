@@ -17,14 +17,15 @@
 
 namespace {
 
-	// `BasaltTests --basalt-child <actions...>` acts as a child process for the RunProcess tests, so they need no
-	// shell or other platform tool. Actions run in order: print <text> (stdout), error <text> (stderr), env <name>, cwd, sleep
-	// <ms>, spam <bytes>, args (prints every remaining argument on its own line), exit <code>.
 	int Number(const char* text)
 	{
 		return static_cast<int>(std::strtol(text, nullptr, 10));
 	}
 
+	// `BasaltTests --basalt-child <actions...>` acts as a child process for the RunProcess tests, so they need no
+	// shell or other platform tool. Actions run in order: print <text> (stdout), error <text> (stderr), env <name>,
+	// cwd, crash (an access violation exit code on Windows, SIGABRT elsewhere), sleep <ms>, spam <bytes>, args
+	// (prints every remaining argument on its own line), exit <code>.
 	int RunChild(int argc, char** argv)
 	{
 		for (int i = 2; i < argc; i++)
@@ -64,6 +65,16 @@ namespace {
 			{
 				while (++i < argc)
 					std::printf("[%s]\n", argv[i]);
+			}
+			else if (action == "crash")
+			{
+				std::fflush(stdout);
+#if defined(_WIN32)
+				// What an access violation ends a process with (no debugger or error dialog involved).
+				std::_Exit(static_cast<int>(0xC0000005u));
+#else
+				std::abort();
+#endif
 			}
 			else if (action == "exit")
 			{

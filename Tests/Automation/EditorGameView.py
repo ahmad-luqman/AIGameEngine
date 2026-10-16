@@ -92,8 +92,18 @@ def check_game_view(call, require, output):
     played = Path(output, "game-play.png")
     call("editor.game_view", {"path": str(played)})
     call("image.compare", {"actual": str(played), "reference": str(game), "assertMatch": True})
+    # The game UI maps the mouse onto the letterboxed image, not the whole panel (the main window starts at 0,0).
+    state = call("editor.game_view")
+    host = call("ui.layout")["view"]
+    rect = state["imageRect"]
+    require(abs(host["origin"][0] - rect["x"]) < 1 and abs(host["origin"][1] - rect["y"]) < 1, f"UI origin {host} vs image {rect}")
+    require(abs(host["size"][0] - rect["width"]) < 1 and abs(host["size"][1] - rect["height"]) < 1, f"UI size {host} vs image {rect}")
+    # The scene view keeps the editor camera in Play: with the game camera turned away from the cube, the scene
+    # view's centre still shows (and picks) it.
+    call("component.set", {"entity": camera, "component": "Transform", "data": {"Rotation": [0, 180, 0]}})
     view = call("editor.viewport")
-    call("editor.pick", {"x": view["width"] // 2, "y": view["height"] // 2, "select": False})
+    picked = call("editor.pick", {"x": view["width"] // 2, "y": view["height"] // 2, "select": False})
+    require(picked["entity"] == cube, f"the scene view did not keep the editor camera in Play: {picked}")
     call("play.stop")
     wait_for(call, require, lambda s: s["mode"] == "Edit" and not s["visible"], "Stop did not return to the scene view")
     call("entity.destroy", {"entity": camera})

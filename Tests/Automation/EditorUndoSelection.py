@@ -92,8 +92,11 @@ def check_undo_selection(call, require, output, project):
     call("editor.transaction", {"action": "begin", "name": "Invalid"}, error="edit mode")
     call("editor.transform", {"delta": delta}, error="edit mode")
     call("editor.component_set", {"component": "Transform", "data": {}}, error="edit mode")
-    # Selecting is not editing: the scene view selects in Play as in Simulate.
-    call("editor.box_select", {"start": [0, 0], "end": [width, height]})
+    # Selecting is not editing: the scene view selects in Play as in Simulate, without touching history.
+    history = call("editor.history")
+    selected = call("editor.box_select", {"start": [0, 0], "end": [width, height]})
+    require(b in selected["entities"], f"box selection in Play missed the surviving entity: {selected}")
+    require(call("editor.history") == history, "box selection in Play changed undo history")
     # Delete/duplicate continue to edit only the running copy.
     call("editor.select", {"entity": b})
     require(len(call("editor.duplicate")["entities"]) == 1, "Play duplicate failed")

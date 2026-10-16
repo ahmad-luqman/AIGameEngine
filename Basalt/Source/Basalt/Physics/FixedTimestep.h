@@ -2,7 +2,8 @@
 
 namespace Basalt {
 
-	// Physics simulation step: the project's FixedTimestep, unless a scene overrides it (PhysicsSettings).
+	// Default of ProjectConfig::FixedTimestep (60 Hz). Scene::GetFixedTimestep picks a scene's own step
+	// (PhysicsSettings::FixedTimestep) or else the project's.
 	inline constexpr float DefaultFixedTimestep = 1.0f / 60.0f;
 	// Longer steps make contacts and joints unstable.
 	inline constexpr float MaxFixedTimestep = 0.25f;

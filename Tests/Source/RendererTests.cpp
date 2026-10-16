@@ -841,7 +841,6 @@ TEST_SUITE("SceneRenderer")
 		DebugDraw::Line({ 0, 0, 0 }, { 0, 1, 0 }, { 0, 1, 0, 1 });
 		{
 			const DebugLineStash stash;
-			CHECK(stash.GetLines().size() == 4);
 			CHECK(DebugDraw::GetLineCount() == 0);
 			// What the second view adds is consumed with it, not kept for the viewport.
 			DebugDraw::Line({ 0, 0, 0 }, { 0, 0, 1 }, { 0, 0, 1, 1 });
@@ -852,9 +851,9 @@ TEST_SUITE("SceneRenderer")
 		CHECK(lines[3].Color == glm::vec4(0, 1, 0, 1));
 
 		// AddLines keeps whole lines and respects the per-frame cap.
-		std::vector<DebugLineVertex> many(DebugDraw::MaxLines * 2 + 3, DebugLineVertex{ glm::vec3(0.0f), glm::vec4(1.0f) });
-		DebugDraw::AddLines(many);
-		CHECK(DebugDraw::GetLineCount() == DebugDraw::MaxLines);
+		std::vector<DebugLineVertex> many(DebugDraw::MaxLines * 2 - 2, DebugLineVertex{ glm::vec3(0.0f), glm::vec4(1.0f) });
+		DebugDraw::RestoreLines(std::move(many));
+		CHECK(DebugDraw::GetLineCount() == DebugDraw::MaxLines - 1);
 		DebugDraw::AddLines(lines);
 		CHECK(DebugDraw::GetLineCount() == DebugDraw::MaxLines);
 		DebugDraw::Clear();

@@ -10,6 +10,7 @@
 
 #include <spdlog/fmt/fmt.h>
 
+#include <algorithm>
 #include <chrono>
 
 namespace Basalt {
@@ -20,6 +21,8 @@ namespace Basalt {
 		constexpr double RecheckSeconds = 2.0;
 		// CPU work per frame (image decoding, cached previews); a GPU render always ends the frame's work.
 		constexpr std::chrono::milliseconds FrameBudget{ 8 };
+		// File slots are keyed by their project-relative path, which always starts with "Assets/", so material slots
+		// cannot collide with them.
 		const std::string s_MaterialPrefix = "material:";
 
 		double Now()
@@ -27,7 +30,8 @@ namespace Basalt {
 			return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 		}
 
-		// Every value a material preview shows, exactly (fmt prints floats so they read back the same).
+		// Every value a material preview shows, exactly (fmt prints floats so they read back the same). A string
+		// rather than operator==: NaN never compares equal, which would re-render it every frame.
 		std::string MaterialKey(const MaterialComponent& m)
 		{
 			return fmt::format("{} {} {} {} {} {} {} {} {} {}|{}|{}|{}|{}|{}", m.AlbedoColor.r, m.AlbedoColor.g, m.AlbedoColor.b, m.AlbedoColor.a, m.Metallic, m.Roughness, m.EmissiveColor.r, m.EmissiveColor.g, m.EmissiveColor.b, m.EmissiveIntensity, m.AlbedoMap, m.NormalMap, m.MetallicRoughnessMap, m.OcclusionMap, m.EmissiveMap);
@@ -56,44 +60,50 @@ namespace Basalt {
 		const Ref<Project>& project = Project::GetActive();
 		if (!project)
 			return std::nullopt;
-		return ThumbnailCache(ThumbnailCache::DirectoryFor(project->GetDirectory()));
+		return ThumbnailCache(project->GetDirectory());
 	}
 
-	ThumbnailManager::Slot* ThumbnailManager::Touch(const std::string& id)
+	ThumbnailManager::Slot& ThumbnailManager::Touch(const std::string& id)
 	{
 		Slot& slot = m_Slots[id];
 		slot.LastUsed = m_Frame;
-		return &slot;
+		return slot;
+	}
+
+	void ThumbnailManager::Enqueue(const std::string& id, Slot& slot)
+	{
+		if (slot.Queued)
+			return;
+		slot.Queued = true;
+		m_Queue.push_back(id);
+	}
+
+	void ThumbnailManager::Fail(Slot& slot, std::string error)
+	{
+		slot.Data.Status = State::Failed;
+		slot.Data.Error = std::move(error);
 	}
 
 	const ThumbnailManager::Preview* ThumbnailManager::Get(const std::string& relativePath)
 	{
 		const ThumbnailKind kind = ClassifyThumbnail(relativePath);
-		const Ref<Project>& project = Project::GetActive();
-		if (kind == ThumbnailKind::None || !project)
+		const auto cache = GetCache();
+		if (kind == ThumbnailKind::None || !cache)
 			return nullptr;
-		Slot& slot = *Touch(relativePath);
+		Slot& slot = Touch(relativePath);
 		slot.Data.Kind = kind;
-		if (const double now = Now(); now - slot.LastChecked >= RecheckSeconds || slot.LastChecked < 0.0)
+		if (const double now = Now(); slot.LastChecked < 0.0 || now - slot.LastChecked >= RecheckSeconds)
 		{
 			slot.LastChecked = now;
-			const std::string key = ThumbnailCache::MakeKey(project->GetDirectory(), relativePath);
-			if (key.empty())
-			{
-				slot.Data.Status = State::Failed;
-				slot.Data.Error = "the file is missing";
-			}
-			else if (key != slot.Key)
+			std::string error;
+			const auto key = cache->MakeKey(relativePath, error);
+			if (!key)
+				Fail(slot, error);
+			else if (*key != slot.Key)
 			{
 				// The old image stays on screen until the new one is ready.
-				slot.Key = key;
-				if (slot.Data.Status == State::Failed)
-					slot.Data.Status = State::Pending;
-				if (!slot.Queued)
-				{
-					slot.Queued = true;
-					m_Queue.push_back(relativePath);
-				}
+				slot.Data.Status = State::Pending;
+				Enqueue(relativePath, slot);
 			}
 		}
 		return &slot.Data;
@@ -102,25 +112,43 @@ namespace Basalt {
 	const ThumbnailManager::Preview* ThumbnailManager::GetMaterial(const std::string& id, const MaterialComponent& material)
 	{
 		const std::string slotId = s_MaterialPrefix + id;
-		Slot& slot = *Touch(slotId);
+		Slot& slot = Touch(slotId);
 		slot.IsMaterial = true;
-		if (const std::string key = MaterialKey(material); key != slot.Key)
+		if (std::string key = MaterialKey(material); key != slot.Key)
 		{
-			slot.Key = key;
+			slot.Key = std::move(key);
 			slot.Material = material;
-			if (!slot.Queued)
-			{
-				slot.Queued = true;
-				m_Queue.push_back(slotId);
-			}
+			slot.ChangedFrame = m_Frame;
+			slot.Data.Status = State::Pending;
+			Enqueue(slotId, slot);
 		}
 		return &slot.Data;
 	}
 
+	void ThumbnailManager::RequestClear(bool deleteCache)
+	{
+		m_ClearRequest = m_ClearRequest.value_or(false) || deleteCache;
+	}
+
 	void ThumbnailManager::Update()
 	{
-		m_Frame++;
+		// Here, outside the ImGui pass: a texture a panel already drew this frame stays alive until it is rendered.
+		if (Project::GetActive().get() != m_Project)
+		{
+			Clear();
+			m_Project = Project::GetActive().get();
+		}
+		if (m_ClearRequest)
+		{
+			const bool deleteCache = *m_ClearRequest;
+			m_ClearRequest.reset();
+			Clear();
+			if (const auto cache = GetCache(); deleteCache && cache)
+				BS_CORE_INFO("Thumbnails: removed {} cached file(s); previews are made again", cache->Clear());
+		}
+
 		const auto start = std::chrono::steady_clock::now();
+		std::vector<std::string> waiting;
 		while (!m_Queue.empty() && std::chrono::steady_clock::now() - start < FrameBudget)
 		{
 			const std::string id = m_Queue.front();
@@ -129,11 +157,19 @@ namespace Basalt {
 			// Evicted or cleared while waiting.
 			if (it == m_Slots.end() || !it->second.Queued)
 				continue;
+			// A material still being edited (it changed during the last ImGui pass) waits for its values to settle.
+			if (it->second.IsMaterial && it->second.ChangedFrame >= m_Frame)
+			{
+				waiting.push_back(id);
+				continue;
+			}
 			it->second.Queued = false;
 			if (Process(id, it->second))
 				break;
 		}
+		m_Queue.insert(m_Queue.end(), waiting.begin(), waiting.end());
 		EvictLeastRecentlyUsed();
+		m_Frame++;
 	}
 
 	bool ThumbnailManager::Process(const std::string& id, Slot& slot)
@@ -144,10 +180,7 @@ namespace Basalt {
 			if (const auto image = RenderMaterial(slot.Material, error))
 				Upload(slot, *image);
 			else
-			{
-				slot.Data.Status = State::Failed;
-				slot.Data.Error = error;
-			}
+				Fail(slot, error);
 			return true;
 		}
 		const auto cache = GetCache();
@@ -155,24 +188,28 @@ namespace Basalt {
 			return false;
 		// The file may have changed since it was queued (even while it was being written): store under the version
 		// actually previewed, never an older key.
-		slot.Key = ThumbnailCache::MakeKey(Project::GetActive()->GetDirectory(), id);
-		if (slot.Key.empty())
+		const auto key = cache->MakeKey(id, error);
+		if (!key)
 		{
-			slot.Data.Status = State::Failed;
-			slot.Data.Error = "the file is missing";
+			Fail(slot, error);
 			return false;
 		}
+		const bool sourceChanged = !slot.Key.empty() && slot.Key != *key;
+		slot.Key = *key;
 		if (const auto entry = cache->Load(id, slot.Key))
 		{
 			slot.Data.Details = entry->Details;
 			Upload(slot, entry->Image);
 			return false;
 		}
+		// AssetManager keeps the model it loaded for an earlier preview (or the open scene): read the new file.
+		if (sourceChanged && slot.Data.Kind == ThumbnailKind::Model)
+			AssetManager::Reload(id);
 		const auto entry = Make(id, slot.Data.Kind, error);
 		if (!entry)
 		{
-			slot.Data.Status = State::Failed;
-			slot.Data.Error = error;
+			BS_CORE_WARN("Thumbnails: no preview of '{}': {}", id, error);
+			Fail(slot, error);
 			return IsRenderedThumbnail(slot.Data.Kind);
 		}
 		// The disk cache only saves time later; a preview that cannot be stored is still shown.
@@ -196,7 +233,7 @@ namespace Basalt {
 		if (!renderer->Initialize())
 		{
 			// Logged once: every later preview reports the same error instead of retrying.
-			BS_CORE_ERROR("Thumbnails: the preview renderer failed to initialize");
+			BS_CORE_ERROR("Thumbnails: the preview renderer failed to initialize (see the renderer error above)");
 			m_RendererFailed = true;
 			outError = "the preview renderer failed to initialize";
 			return false;
@@ -213,10 +250,15 @@ namespace Basalt {
 			case ThumbnailKind::Environment:
 			{
 				// Loaded directly, not through AssetManager: browsing must not keep every image (or a 100 MB HDRI) in memory.
-				const Ref<TextureSource> source = TextureSource::LoadFromFile(Project::ResolvePath(relativePath), outError);
+				const Ref<TextureSource> source = TextureSource::LoadFromFile(Project::ResolvePath(FileSystem::PathFromUtf8(relativePath)), outError);
 				if (!source)
 					return std::nullopt;
 				ThumbnailImage image = MakeImageThumbnail(*source, PreviewRenderer::OutputSize);
+				if (!image.IsValid())
+				{
+					outError = "the image data is incomplete";
+					return std::nullopt;
+				}
 				return ThumbnailCache::Entry{ std::move(image), { fmt::format("{} x {}{}", source->Width, source->Height, source->Format == TextureFormat::RGBA32F ? " HDR" : "") } };
 			}
 			case ThumbnailKind::Model:
@@ -226,7 +268,7 @@ namespace Basalt {
 				auto image = m_Renderer->RenderModel(relativePath, outError);
 				if (!image)
 					return std::nullopt;
-				const Ref<MeshSource> mesh = AssetManager::GetMesh(relativePath);
+				const Ref<MeshSource> mesh = AssetManager::FindLoadedMesh(relativePath);
 				return ThumbnailCache::Entry{ std::move(*image), mesh ? ModelDetails(*mesh) : std::vector<std::string>{} };
 			}
 			case ThumbnailKind::Prefab:
@@ -236,7 +278,7 @@ namespace Basalt {
 				auto image = m_Renderer->RenderPrefab(relativePath, outError);
 				if (!image)
 					return std::nullopt;
-				const auto text = FileSystem::ReadTextFile(Project::ResolvePath(relativePath));
+				const auto text = FileSystem::ReadTextFile(Project::ResolvePath(FileSystem::PathFromUtf8(relativePath)));
 				const nlohmann::json data = text ? ParseJson(*text) : nlohmann::json();
 				const auto entities = data.is_object() ? data.find("Entities") : data.end();
 				std::vector<std::string> details;
@@ -272,28 +314,34 @@ namespace Basalt {
 			outError = "'" + relativePath + "' has no preview (images, .hdr environments, models and prefabs do)";
 			return std::nullopt;
 		}
-		const std::string key = ThumbnailCache::MakeKey(Project::GetActive()->GetDirectory(), relativePath);
-		if (key.empty())
+		std::string keyError;
+		const auto key = cache->MakeKey(relativePath, keyError);
+		if (!key)
 		{
-			outError = "no file at '" + relativePath + "'";
+			outError = "no preview of '" + relativePath + "': " + keyError;
 			return std::nullopt;
 		}
 		Generated result;
 		result.Kind = kind;
 		result.CachePath = cache->GetImagePath(relativePath);
 		if (!refresh)
-			if (auto entry = cache->Load(relativePath, key))
+		{
+			if (auto entry = cache->Load(relativePath, *key))
 			{
 				result.Image = std::move(entry->Image);
 				result.Details = std::move(entry->Details);
 				result.Cached = true;
 				return result;
 			}
+		}
+		// A refresh reads the model file again, whatever AssetManager holds.
+		if (refresh && kind == ThumbnailKind::Model)
+			AssetManager::Reload(relativePath);
 		auto entry = Make(relativePath, kind, outError);
 		if (!entry)
 			return std::nullopt;
-		if (!cache->Store(relativePath, key, *entry, outError))
-			return std::nullopt;
+		if (!cache->Store(relativePath, *key, *entry, result.CacheWarning))
+			BS_CORE_WARN("Thumbnails: cannot cache the preview of '{}': {}", relativePath, result.CacheWarning);
 		// The browser picks up the new image from the cache.
 		if (const auto it = m_Slots.find(relativePath); it != m_Slots.end())
 		{
@@ -307,10 +355,9 @@ namespace Basalt {
 
 	void ThumbnailManager::Upload(Slot& slot, const ThumbnailImage& image)
 	{
-		if (image.Width == 0 || image.Height == 0 || image.Pixels.size() < static_cast<size_t>(image.Width) * image.Height * 4)
+		if (!image.IsValid())
 		{
-			slot.Data.Status = State::Failed;
-			slot.Data.Error = "the preview is empty";
+			Fail(slot, "the preview is empty");
 			return;
 		}
 		nvrhi::TextureDesc desc;
@@ -321,19 +368,19 @@ namespace Basalt {
 		desc.keepInitialState = true;
 		desc.debugName = "Thumbnail";
 		nvrhi::TextureHandle texture = m_Device->createTexture(desc);
-		if (!texture)
-		{
-			slot.Data.Status = State::Failed;
-			slot.Data.Error = "cannot create the preview texture";
-			return;
-		}
 		if (!m_UploadList)
 			m_UploadList = m_Device->createCommandList();
+		if (!texture || !m_UploadList)
+		{
+			Fail(slot, "cannot create the preview texture");
+			return;
+		}
 		m_UploadList->open();
 		m_UploadList->writeTexture(texture, 0, 0, image.Pixels.data(), static_cast<size_t>(image.Width) * 4);
 		m_UploadList->close();
 		m_Device->executeCommandList(m_UploadList);
-		// ImGui keeps a reference to a texture drawn this frame, so replacing it here is safe.
+		// Update runs before this frame's ImGui pass, so no draw list holds the old texture's raw pointer yet; nvrhi
+		// keeps it alive for last frame's draws still in flight.
 		slot.Data.Texture = texture;
 		slot.Data.Width = image.Width;
 		slot.Data.Height = image.Height;
@@ -346,26 +393,26 @@ namespace Basalt {
 		size_t textures = 0;
 		for (const auto& [id, slot] : m_Slots)
 			textures += slot.Data.Texture ? 1 : 0;
-		while (textures > MaxTextures)
+		while (textures > MaxTextures || m_Slots.size() > MaxSlots)
 		{
+			// Over the texture budget only slots with textures count; over the slot budget any slot does.
+			const bool texturesOnly = textures > MaxTextures;
 			auto oldest = m_Slots.end();
 			for (auto it = m_Slots.begin(); it != m_Slots.end(); ++it)
-				if (it->second.Data.Texture && (oldest == m_Slots.end() || it->second.LastUsed < oldest->second.LastUsed))
+				if ((!texturesOnly || it->second.Data.Texture) && (oldest == m_Slots.end() || it->second.LastUsed < oldest->second.LastUsed))
 					oldest = it;
-			// Never drop a preview shown this frame.
+			// Never drop a preview requested during the last ImGui pass (it is still on screen).
 			if (oldest == m_Slots.end() || oldest->second.LastUsed >= m_Frame)
 				break;
+			textures -= oldest->second.Data.Texture ? 1 : 0;
 			m_Slots.erase(oldest);
-			textures--;
 		}
 	}
 
-	size_t ThumbnailManager::Clear(bool deleteCache)
+	void ThumbnailManager::Clear()
 	{
 		m_Slots.clear();
 		m_Queue.clear();
-		const auto cache = GetCache();
-		return deleteCache && cache ? cache->Prune(Project::GetActive()->GetDirectory(), true) : 0;
 	}
 
 }

@@ -43,9 +43,17 @@ namespace Basalt {
 			}
 		}
 
-		// Editor caches (thumbnails) are rebuilt from the assets and never belong in version control.
-		if (!FileSystem::Exists(absolute / ".gitignore") && !FileSystem::WriteTextFile(absolute / ".gitignore", "Cache/\n", outError))
-			return nullptr;
+		// Editor caches (thumbnails) are rebuilt from the assets and never belong in version control; keep an existing
+		// ignore file (a fresh repository's, say) and add the rule.
+		const std::filesystem::path ignorePath = absolute / ".gitignore";
+		std::string ignore = FileSystem::ReadTextFile(ignorePath).value_or("");
+		if (("\n" + ignore).find("\nCache/") == std::string::npos)
+		{
+			if (!ignore.empty() && ignore.back() != '\n')
+				ignore += '\n';
+			if (!FileSystem::WriteTextFile(ignorePath, ignore + "Cache/\n", outError))
+				return nullptr;
+		}
 
 		Ref<Project> project = CreateRef<Project>();
 		project->m_Directory = absolute;

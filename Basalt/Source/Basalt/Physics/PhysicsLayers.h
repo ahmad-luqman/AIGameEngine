@@ -33,7 +33,8 @@ namespace Basalt {
 		// Renames a layer, keeping its collisions. Default (index 0) keeps its name. Components that name the old
 		// layer are not changed: they play on Default until renamed too.
 		bool Rename(uint32_t index, const std::string& name, std::string& outError);
-		// Removes a layer (not Default); later layers move down one index and keep their collisions.
+		// Removes a layer (not Default); later layers move down one index and keep their collisions. Components that
+		// name the removed layer play on Default (project.set reports them as unknownPhysicsLayers).
 		bool Remove(uint32_t index, std::string& outError);
 
 		// Indices come from Find, so an index past GetCount() is a programmer error (asserted).
@@ -58,6 +59,9 @@ namespace Basalt {
 		bool operator==(const PhysicsLayers& other) const;
 
 	private:
+		// Rename and Remove apply to existing layers other than Default.
+		bool CheckEditable(uint32_t index, const char* action, std::string& outError) const;
+
 		std::vector<std::string> m_Names;
 		std::array<uint32_t, MaxLayers> m_Masks;
 	};

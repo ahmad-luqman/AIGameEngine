@@ -16,6 +16,8 @@
 
 #include "TestUtils.h"
 
+#include <csignal>
+#include <cstdint>
 #include <filesystem>
 #include <limits>
 #include <unordered_set>
@@ -692,13 +694,53 @@ TEST_SUITE("Core")
 	TEST_CASE("RunProcess kills a child that outlives its timeout")
 	{
 		ProcessSpec spec = ChildProcess({ "print", "started", "sleep", "20000", "exit", "0" });
-		spec.Timeout = std::chrono::milliseconds(300);
+		// Long enough for a Debug or sanitizer build of the child to start and print on a busy CI machine.
+		spec.Timeout = std::chrono::milliseconds(2000);
 		const auto start = std::chrono::steady_clock::now();
 		const ProcessResult result = RunProcess(spec);
 		CHECK(result.Outcome == ProcessOutcome::TimedOut);
 		CHECK_FALSE(result.Succeeded());
 		CHECK(result.Output.find("started") != std::string::npos);
 		CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(10));
+	}
+
+	TEST_CASE("RunProcess reports a crash as a crash, never as an exit")
+	{
+		const ProcessResult result = RunProcess(ChildProcess({ "print", "before the crash", "crash" }));
+		CHECK(result.Outcome == ProcessOutcome::Crashed);
+		CHECK_FALSE(result.Succeeded());
+		CHECK_FALSE(result.Error.empty());
+		CHECK(result.Output.find("before the crash") != std::string::npos);
+#if defined(_WIN32)
+		CHECK(static_cast<uint32_t>(result.ExitCode) == 0xC0000005u);
+		CHECK(result.Error.find("0xC0000005") != std::string::npos);
+#else
+		CHECK(result.ExitCode == 128 + SIGABRT);
+		CHECK(result.Error.find("signal") != std::string::npos);
+#endif
+	}
+
+	TEST_CASE("RunProcess rejects environment names it cannot pass on")
+	{
+		ProcessSpec spec = ChildProcess({ "exit", "0" });
+		for (const char* name : { "", "A=B" })
+		{
+			spec.Environment = { { name, "value" } };
+			const ProcessResult result = RunProcess(spec);
+			CHECK(result.Outcome == ProcessOutcome::Failed);
+			CHECK(result.Error.find("invalid environment variable") != std::string::npos);
+		}
+	}
+
+	TEST_CASE("RunProcess resolves a relative executable against the caller's directory, not the child's")
+	{
+		BasaltTest::TempDirectory directory("ProcessRelativeExecutable");
+		ProcessSpec spec = ChildProcess({ "exit", "0" });
+		std::error_code error;
+		spec.Executable = std::filesystem::relative(spec.Executable, std::filesystem::current_path(), error);
+		REQUIRE_FALSE(error);
+		spec.WorkingDirectory = directory.GetPath();
+		CHECK(RunProcess(spec).Succeeded());
 	}
 
 	TEST_CASE("RunProcess distinguishes a program that cannot start from one that fails")

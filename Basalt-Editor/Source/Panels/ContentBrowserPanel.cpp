@@ -1,5 +1,7 @@
 #include "Panels/ContentBrowserPanel.h"
 
+#include "EditorColors.h"
+#include "Panels/PreviewImage.h"
 #include "ThumbnailManager.h"
 
 #include "Basalt/Asset/AssetManager.h"
@@ -42,22 +44,6 @@ return %s
 			while ((position = text.find("%s")) != std::string::npos)
 				text.replace(position, 2, name);
 			return text;
-		}
-
-		// The largest rectangle with the image's aspect ratio inside a size x size square at `origin`, centred.
-		void FitImage(uint32_t width, uint32_t height, const ImVec2& origin, float size, ImVec2& outMin, ImVec2& outMax)
-		{
-			const float scale = size / static_cast<float>(std::max(width, height));
-			const ImVec2 extent(static_cast<float>(width) * scale, static_cast<float>(height) * scale);
-			outMin = ImVec2(origin.x + (size - extent.x) * 0.5f, origin.y + (size - extent.y) * 0.5f);
-			outMax = ImVec2(outMin.x + extent.x, outMin.y + extent.y);
-		}
-
-		void DrawPreviewImage(ImDrawList* drawList, const ThumbnailManager::Preview& preview, const ImVec2& origin, float size)
-		{
-			ImVec2 min, max;
-			FitImage(preview.Width, preview.Height, origin, size, min, max);
-			drawList->AddImage(ImTextureRef(reinterpret_cast<ImTextureID>(preview.Texture.Get())), min, max);
 		}
 
 		const char* KindName(ThumbnailKind kind)
@@ -134,54 +120,13 @@ return %s
 		});
 
 		const float rowHeight = std::max(m_IconSize, ImGui::GetTextLineHeight());
-		for (const auto& entry : entries)
-		{
-			const bool directory = entry.is_directory(error);
-			const std::string fileName = entry.path().filename().string();
-			const std::string relative = Project::MakeRelative(entry.path());
-			ImGui::PushID(relative.c_str());
-
-			// One row per file: the preview (or a type tag) in an icon-sized square, then the name.
-			const ThumbnailManager::Preview* preview = !directory && m_Thumbnails ? m_Thumbnails->Get(relative) : nullptr;
-			const ImVec2 rowMin = ImGui::GetCursorScreenPos();
-			ImGui::Selectable("##Item", false, ImGuiSelectableFlags_AllowDoubleClick, ImVec2(0.0f, rowHeight));
-			const bool hovered = ImGui::IsItemHovered();
-			ImDrawList* drawList = ImGui::GetWindowDrawList();
-			if (preview && preview->Texture)
-				DrawPreviewImage(drawList, *preview, rowMin, m_IconSize);
-			else
-			{
-				const char* icon = IconFor(entry.path(), directory);
-				drawList->AddText(ImVec2(rowMin.x, rowMin.y + (rowHeight - ImGui::GetTextLineHeight()) * 0.5f), ImGui::GetColorU32(ImGuiCol_TextDisabled), icon);
-			}
-			const float iconWidth = std::max(m_IconSize, ImGui::CalcTextSize("[FILE]").x);
-			drawList->AddText(ImVec2(rowMin.x + iconWidth + 6.0f, rowMin.y + (rowHeight - ImGui::GetTextLineHeight()) * 0.5f), ImGui::GetColorU32(ImGuiCol_Text), fileName.c_str());
-
-			if (!directory && ImGui::BeginDragDropSource())
-			{
-				ImGui::SetDragDropPayload(AssetPayloadType, relative.c_str(), relative.size() + 1);
-				ImGui::TextUnformatted(relative.c_str());
-				ImGui::EndDragDropSource();
-			}
-			if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-			{
-				if (directory)
-					m_CurrentDirectory = entry.path();
-				else if (OnOpenAsset)
-					OnOpenAsset(relative);
-			}
-			if (preview && hovered && !ImGui::IsMouseDragging(ImGuiMouseButton_Left))
-				DrawPreviewTooltip(relative, fileName);
-			if (ImGui::BeginPopupContextItem())
-			{
-				if (ImGui::MenuItem("Copy path"))
-					ImGui::SetClipboardText(relative.c_str());
-				if (ImGui::MenuItem("Delete"))
-					m_PendingDelete = entry.path();
-				ImGui::EndPopup();
-			}
-			ImGui::PopID();
-		}
+		// Only rows on screen ask for previews: a folder with more files than the preview cache holds must not
+		// cycle the cache every frame.
+		ImGuiListClipper clipper;
+		clipper.Begin(static_cast<int>(entries.size()), rowHeight + ImGui::GetStyle().ItemSpacing.y);
+		while (clipper.Step())
+			for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; row++)
+				DrawEntry(entries[static_cast<size_t>(row)], rowHeight);
 
 		if (ImGui::BeginPopupContextWindow("ContentContext", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
 		{
@@ -197,7 +142,11 @@ return %s
 			}
 			ImGui::Separator();
 			if (ImGui::MenuItem("Clear Thumbnail Cache", nullptr, false, m_Thumbnails != nullptr))
-				m_Context.SetStatus("Removed " + std::to_string(m_Thumbnails->Clear(true)) + " cached thumbnail(s); previews are made again", false);
+			{
+				// Done before the next frame's ImGui pass: this frame may already draw the textures it frees.
+				m_Thumbnails->RequestClear(true);
+				m_Context.SetStatus("Clearing the thumbnail cache; previews are made again", false);
+			}
 			ImGui::EndPopup();
 		}
 
@@ -258,29 +207,72 @@ return %s
 		ImGui::End();
 	}
 
-	void ContentBrowserPanel::DrawPreviewTooltip(const std::string& relative, const std::string& fileName)
+	void ContentBrowserPanel::DrawEntry(const std::filesystem::directory_entry& entry, float rowHeight)
 	{
-		const ThumbnailManager::Preview* preview = m_Thumbnails->Get(relative);
-		if (!preview || !ImGui::BeginTooltip())
+		std::error_code error;
+		const bool directory = entry.is_directory(error);
+		const std::string fileName = FileSystem::PathToUtf8(entry.path().filename());
+		const std::string relative = Project::MakeRelative(entry.path());
+		ImGui::PushID(relative.c_str());
+
+		// One row per file: the preview (or a type tag) in an icon-sized square, then the name.
+		const ThumbnailManager::Preview* preview = !directory && m_Thumbnails ? m_Thumbnails->Get(relative) : nullptr;
+		const ImVec2 rowMin = ImGui::GetCursorScreenPos();
+		ImGui::Selectable("##Item", false, ImGuiSelectableFlags_AllowDoubleClick, ImVec2(0.0f, rowHeight));
+		const bool hovered = ImGui::IsItemHovered();
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+		const float textY = rowMin.y + (rowHeight - ImGui::GetTextLineHeight()) * 0.5f;
+		if (preview && preview->Texture)
+			DrawPreviewImage(drawList, *preview, rowMin, m_IconSize);
+		else
+			drawList->AddText(ImVec2(rowMin.x, textY), ImGui::GetColorU32(ImGuiCol_TextDisabled), IconFor(entry.path(), directory));
+		const float iconWidth = std::max(m_IconSize, ImGui::CalcTextSize("[FILE]").x);
+		drawList->AddText(ImVec2(rowMin.x + iconWidth + 6.0f, textY), ImGui::GetColorU32(ImGuiCol_Text), fileName.c_str());
+
+		if (!directory && ImGui::BeginDragDropSource())
+		{
+			ImGui::SetDragDropPayload(AssetPayloadType, relative.c_str(), relative.size() + 1);
+			ImGui::TextUnformatted(relative.c_str());
+			ImGui::EndDragDropSource();
+		}
+		if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+		{
+			if (directory)
+				m_CurrentDirectory = entry.path();
+			else if (OnOpenAsset)
+				OnOpenAsset(relative);
+		}
+		if (preview && hovered && !ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+			DrawPreviewTooltip(*preview, relative, fileName);
+		if (ImGui::BeginPopupContextItem())
+		{
+			if (ImGui::MenuItem("Copy path"))
+				ImGui::SetClipboardText(relative.c_str());
+			if (ImGui::MenuItem("Delete"))
+				m_PendingDelete = entry.path();
+			ImGui::EndPopup();
+		}
+		ImGui::PopID();
+	}
+
+	void ContentBrowserPanel::DrawPreviewTooltip(const ThumbnailManager::Preview& preview, const std::string& relative, const std::string& fileName)
+	{
+		if (!ImGui::BeginTooltip())
 			return;
 		ImGui::TextUnformatted(fileName.c_str());
-		ImGui::TextDisabled("%s", KindName(preview->Kind));
-		const float size = static_cast<float>(PreviewRenderer::OutputSize);
-		if (preview->Texture)
-		{
-			const ImVec2 origin = ImGui::GetCursorScreenPos();
-			ImGui::Dummy(ImVec2(size, size));
-			DrawPreviewImage(ImGui::GetWindowDrawList(), *preview, origin, size);
-		}
-		if (preview->Status == ThumbnailManager::State::Pending)
+		ImGui::TextDisabled("%s", KindName(preview.Kind));
+		if (preview.Texture)
+			DrawPreviewSquare(preview, static_cast<float>(PreviewRenderer::OutputSize));
+		if (preview.Status == ThumbnailManager::State::Pending)
 			ImGui::TextDisabled("Making a preview...");
-		else if (preview->Status == ThumbnailManager::State::Failed)
-			ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "No preview: %s", preview->Error.c_str());
-		for (const std::string& line : preview->Details)
+		else if (preview.Status == ThumbnailManager::State::Failed)
+			ImGui::TextColored(EditorColors::Error, "No preview: %s", preview.Error.c_str());
+		for (const std::string& line : preview.Details)
 			ImGui::TextUnformatted(line.c_str());
-		// A model's materials, each on a sphere (loaded once the model has been previewed).
-		if (preview->Kind == ThumbnailKind::Model && preview->Status == ThumbnailManager::State::Ready)
-			if (const Ref<MeshSource> mesh = AssetManager::GetMesh(relative); mesh && !mesh->Materials.empty())
+		// A model's materials, each on a sphere. Only when the model is already loaded (by its preview or the scene):
+		// loading a whole glTF from a tooltip would stall the frame.
+		if (preview.Kind == ThumbnailKind::Model)
+			if (const Ref<MeshSource> mesh = AssetManager::FindLoadedMesh(relative); mesh && !mesh->Materials.empty())
 			{
 				static constexpr size_t ShownMaterials = 8;
 				static constexpr float Sphere = 48.0f;
@@ -288,11 +280,7 @@ return %s
 				for (size_t i = 0; i < std::min(mesh->Materials.size(), ShownMaterials); i++)
 				{
 					const MaterialData& material = mesh->Materials[i];
-					const ThumbnailManager::Preview* sphere = m_Thumbnails->GetMaterial(relative + "#material/" + std::to_string(i), ToMaterialComponent(material));
-					const ImVec2 origin = ImGui::GetCursorScreenPos();
-					ImGui::Dummy(ImVec2(Sphere, Sphere));
-					if (sphere->Texture)
-						DrawPreviewImage(ImGui::GetWindowDrawList(), *sphere, origin, Sphere);
+					DrawPreviewSquare(*m_Thumbnails->GetMaterial(relative + "#material/" + std::to_string(i), ToMaterialComponent(material)), Sphere);
 					ImGui::SameLine();
 					ImGui::AlignTextToFramePadding();
 					ImGui::TextUnformatted(material.Name.empty() ? ("Material " + std::to_string(i)).c_str() : material.Name.c_str());

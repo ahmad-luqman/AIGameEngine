@@ -39,6 +39,7 @@ namespace Basalt {
 		std::optional<ThumbnailImage> RenderMaterial(const MaterialComponent& material, std::string& outError);
 
 	private:
+		bool IsReady(std::string& outError) const;
 		std::optional<ThumbnailImage> RenderFramed(Scene& scene, std::string& outError);
 		std::optional<ThumbnailImage> Capture(Scene& scene, const glm::vec3& target, float radius, std::string& outError);
 

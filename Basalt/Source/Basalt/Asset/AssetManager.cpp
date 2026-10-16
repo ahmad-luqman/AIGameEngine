@@ -1,6 +1,7 @@
 #include "Basalt/Asset/AssetManager.h"
 
 #include "Basalt/Asset/MeshImporter.h"
+#include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Project/Project.h"
 
@@ -25,9 +26,7 @@ namespace Basalt {
 
 		std::string Extension(const std::string& path)
 		{
-			std::string extension = std::filesystem::path(path).extension().string();
-			std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-			return extension;
+			return FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(path));
 		}
 
 		Ref<MeshSource> LoadMesh(const std::string& key, std::string& outError)
@@ -97,6 +96,12 @@ namespace Basalt {
 		else
 			BS_CORE_ERROR("AssetManager: {}", entry.Error);
 		return s_Meshes.emplace(key, std::move(entry)).first->second.Asset;
+	}
+
+	Ref<MeshSource> AssetManager::FindLoadedMesh(const std::string& key)
+	{
+		const auto it = s_Meshes.find(key);
+		return it != s_Meshes.end() ? it->second.Asset : nullptr;
 	}
 
 	Ref<TextureSource> AssetManager::GetTexture(const std::string& key)

@@ -1,14 +1,13 @@
 #pragma once
 
 #include "EditorContext.h"
+#include "ThumbnailManager.h"
 
 #include <filesystem>
 #include <functional>
 #include <string>
 
 namespace Basalt {
-
-	class ThumbnailManager;
 
 	// Browses the project's Assets directory. Files are drag sources (project-relative paths) for the
 	// viewport, hierarchy and inspector; double-clicking a scene opens it. Images, environments, models and
@@ -29,7 +28,8 @@ namespace Basalt {
 		std::function<void(const std::string& path)> OnOpenAsset;
 
 	private:
-		void DrawPreviewTooltip(const std::string& relative, const std::string& fileName);
+		void DrawEntry(const std::filesystem::directory_entry& entry, float rowHeight);
+		void DrawPreviewTooltip(const ThumbnailManager::Preview& preview, const std::string& relative, const std::string& fileName);
 
 		EditorContext& m_Context;
 		ThumbnailManager* m_Thumbnails = nullptr;

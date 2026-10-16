@@ -182,11 +182,14 @@ namespace Basalt {
 		};
 		if (m_Options.MaxFrames == 0)
 			return;
-		if (const ScriptEngine* scripts = m_Scene ? m_Scene->GetScriptEngine() : nullptr; m_Options.FailOnScriptErrors && scripts && !scripts->GetErrors().empty())
+		// Errors an OnDestroy raises while the scene stops (after this) are not counted.
+		if (m_Options.FailOnScriptErrors && m_Scene)
 		{
-			const auto& errors = scripts->GetErrors();
-			BS_CORE_ERROR("Runtime: {} script error(s) occurred; the first: {}", errors.size(), errors.front());
-			fail(7);
+			if (const ScriptEngine* scripts = m_Scene->GetScriptEngine(); scripts && !scripts->GetErrors().empty())
+			{
+				BS_CORE_ERROR("Runtime: {} script error(s) occurred; the first: {}", scripts->GetErrors().size(), scripts->GetErrors().front());
+				fail(7);
+			}
 		}
 		const GraphicsDevice* device = application.GetGraphicsDevice();
 		if (!device)

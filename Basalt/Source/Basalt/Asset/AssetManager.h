@@ -21,6 +21,8 @@ namespace Basalt {
 	{
 	public:
 		static Ref<MeshSource> GetMesh(const std::string& key);
+		// The mesh if it is already loaded, without loading it (tooltips that must not stall a frame).
+		static Ref<MeshSource> FindLoadedMesh(const std::string& key);
 		static Ref<TextureSource> GetTexture(const std::string& key);
 		// Error message from the last failed load of key (empty if it loaded or was never requested).
 		static std::string GetError(const std::string& key);

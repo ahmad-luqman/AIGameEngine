@@ -132,9 +132,9 @@ namespace Basalt {
 			if (!commandLine.GetValue(name))
 				return fallback;
 			const auto value = commandLine.GetInteger(name);
-			if (!value || *value < 64 || *value > 16384)
+			if (!value || *value < ProjectConfig::MinWindowSize || *value > ProjectConfig::MaxWindowSize)
 			{
-				BS_CORE_WARN("--{} must be an integer in [64, 16384]; using {}", name, fallback);
+				BS_CORE_WARN("--{} must be an integer in [{}, {}]; using {}", name, ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize, fallback);
 				return fallback;
 			}
 			return static_cast<uint32_t>(*value);

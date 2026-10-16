@@ -96,6 +96,12 @@ namespace Basalt {
 		s_Vertices.insert(s_Vertices.end(), vertices.begin(), vertices.begin() + static_cast<std::ptrdiff_t>(count));
 	}
 
+	void DebugDraw::RestoreLines(std::vector<DebugLineVertex>&& vertices)
+	{
+		std::scoped_lock lock(s_Mutex);
+		s_Vertices = std::move(vertices);
+	}
+
 	size_t DebugDraw::GetLineCount()
 	{
 		std::scoped_lock lock(s_Mutex);

@@ -15,12 +15,13 @@ namespace Basalt {
 
 	enum class ValidationSeverity : uint8_t
 	{
-		// The exported game would fail or misbehave: export refuses to run.
+		// The exported game would fail or misbehave: project.export refuses unless validate is false.
 		Error,
 		// Worth fixing, but the game runs (e.g. a body on an undefined layer plays on Default).
 		Warning
 	};
 
+	// One problem: where it is and what is wrong.
 	struct ValidationIssue
 	{
 		ValidationSeverity Severity = ValidationSeverity::Error;
@@ -29,7 +30,8 @@ namespace Basalt {
 		std::string Message;
 	};
 
-	// What ValidateProject found. Issues are capped at MaxIssues; the counts include every problem.
+	// What ValidateProject found. Issues are capped at MaxIssues (errors displace warnings, so the list always
+	// shows errors when there are any); the counts include every problem.
 	class ValidationReport
 	{
 	public:
@@ -52,9 +54,11 @@ namespace Basalt {
 
 	// Checks that a project would export and start: project settings, the start scene, every scene and prefab
 	// (they load, and every asset path they reference exists inside Assets/ with the exact letter case, which
-	// case-sensitive file systems need), and every Lua script under Assets/ (it compiles and runs its top
-	// level). Headless; reads files but changes nothing. Asset files are checked for existence only, not
-	// decoded.
+	// case-sensitive file systems need), and every Lua script under Assets/ (it compiles; a script a Script
+	// component uses must also run its top level and return a class table). Asset references are recognised by
+	// file extension: a component string such as "Assets/Textures/Wall.png" or "builtin://Cube" is checked (an
+	// error when broken), a bare "Wall.png" without a folder only warns, since it may be plain text. Files are
+	// checked for existence, not decoded. Headless; reads files but changes nothing.
 	ValidationReport ValidateProject(const Project& project);
 
 	// A RigidBody or CharacterController that names a layer the project does not define (it plays on Default).

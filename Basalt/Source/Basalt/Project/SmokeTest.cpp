@@ -1,22 +1,25 @@
 #include "Basalt/Project/SmokeTest.h"
 
+#include "Basalt/Core/FileSystem.h"
+#include "Basalt/Core/Log.h"
 #include "Basalt/Core/Platform.h"
 
 #include <spdlog/fmt/fmt.h>
 
+#include <random>
 #include <system_error>
 
 namespace Basalt {
 
 	namespace {
 
-		// Runtime exit codes (Basalt-Runtime/Source/RuntimeLayer.cpp; AGENTS.md lists them).
+		// Exit codes of a --frames runtime run (RuntimeApp.cpp and RuntimeLayer.cpp; AGENTS.md lists them).
 		const char* DescribeRuntimeExitCode(int code)
 		{
 			switch (code)
 			{
 				case 1:
-					return "the game failed to start (bad project, missing start scene, or a scene that does not load)";
+					return "the game failed to start or render (bad option or project, missing or broken start scene, renderer failure)";
 				case 3:
 					return "GPU validation errors";
 				case 4:
@@ -28,38 +31,51 @@ namespace Basalt {
 				case 7:
 					return "scripts reported errors";
 				default:
-					return code >= 128 ? "the game crashed" : "an unexpected exit code";
+					return "an unexpected exit code";
 			}
+		}
+
+		SmokeTestResult Fail(std::string summary)
+		{
+			SmokeTestResult result;
+			result.Process.Error = summary;
+			result.Summary = "the game could not be run: " + std::move(summary);
+			return result;
 		}
 
 	}
 
 	std::string LastLines(const std::string& text, size_t lines)
 	{
-		size_t start = text.size();
-		// Skip a trailing newline so it does not count as an empty last line.
+		if (lines == 0)
+			return {};
+		// A trailing newline ends the last line rather than starting an empty one.
 		size_t end = !text.empty() && text.back() == '\n' ? text.size() - 1 : text.size();
-		for (size_t found = 0; found < lines && start > 0;)
+		size_t start = 0;
+		for (size_t found = 0; found < lines; found++)
 		{
-			const size_t newline = text.rfind('\n', end == 0 ? 0 : end - 1);
+			const size_t newline = end == 0 ? std::string::npos : text.rfind('\n', end - 1);
 			if (newline == std::string::npos)
-			{
-				start = 0;
-				break;
-			}
+				return text;
 			start = newline + 1;
 			end = newline;
-			found++;
 		}
 		return text.substr(start);
 	}
 
 	SmokeTestResult RunSmokeTest(const std::filesystem::path& executable, uint32_t frames, std::chrono::milliseconds timeout)
 	{
-		SmokeTestResult result;
+		if (frames == 0)
+			return Fail("a smoke test needs at least one frame");
 		std::error_code error;
 		const std::filesystem::path program = std::filesystem::absolute(executable, error);
-		const std::filesystem::path userData = std::filesystem::temp_directory_path(error) / fmt::format("BasaltSmokeTest-{}", std::chrono::steady_clock::now().time_since_epoch().count());
+		if (error)
+			return Fail("invalid executable path '" + FileSystem::PathToUtf8(executable) + "': " + error.message());
+		// The game's save data goes to a fresh directory, never the player's (and never next to the game).
+		const std::filesystem::path temporary = std::filesystem::temp_directory_path(error);
+		if (error || !temporary.is_absolute())
+			return Fail("cannot find the temporary directory for the game's save data" + (error ? ": " + error.message() : std::string()));
+		const std::filesystem::path userData = temporary / fmt::format("BasaltSmokeTest-{:016x}", std::random_device{}() * 0x100000000ull + std::random_device{}());
 
 		ProcessSpec spec;
 		spec.Executable = program;
@@ -67,21 +83,28 @@ namespace Basalt {
 		// An exported game finds its project next to the executable; run it from there as a player would.
 		spec.WorkingDirectory = program.parent_path();
 		spec.Timeout = timeout;
-		spec.Environment = { { Platform::UserDataDirectoryVariable, userData.string() } };
+		spec.Environment = { { Platform::UserDataDirectoryVariable, FileSystem::PathToUtf8(userData) } };
+		SmokeTestResult result;
 		result.Process = RunProcess(spec);
 		std::filesystem::remove_all(userData, error);
+		if (error)
+			BS_CORE_WARN("Smoke test: cannot remove its save data directory '{}': {}", FileSystem::PathToUtf8(userData), error.message());
 
+		result.Passed = result.Process.Succeeded();
 		switch (result.Process.Outcome)
 		{
 			case ProcessOutcome::Failed:
 				result.Summary = "the game could not be run: " + result.Process.Error;
 				break;
 			case ProcessOutcome::TimedOut:
-				result.Summary = fmt::format("the game did not finish {} frames within {} s and was stopped", frames, timeout.count() / 1000.0);
+				result.Summary = fmt::format("the game did not finish {} frames within {} s and was stopped", frames, static_cast<double>(timeout.count()) / 1000.0);
+				break;
+			case ProcessOutcome::Crashed:
+				result.Summary = "the game crashed: " + result.Process.Error;
 				break;
 			case ProcessOutcome::Exited:
-				result.Passed = result.Process.ExitCode == 0;
-				result.Summary = result.Passed ? fmt::format("the game ran {} frames and exited cleanly", frames) : fmt::format("the game exited with code {}: {}", result.Process.ExitCode, DescribeRuntimeExitCode(result.Process.ExitCode));
+				// --frames is a limit: a game may also quit earlier (Application.Quit), which is still a clean exit.
+				result.Summary = result.Passed ? fmt::format("the game ran (up to {} frames) and exited cleanly", frames) : fmt::format("the game exited with code {}: {}", result.Process.ExitCode, DescribeRuntimeExitCode(result.Process.ExitCode));
 				break;
 		}
 		return result;

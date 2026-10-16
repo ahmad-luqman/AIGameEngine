@@ -1,6 +1,8 @@
 #include "EditorLayer.h"
 
+#include "EditorColors.h"
 #include "Panels/JsonWidgets.h"
+#include "Panels/PreviewImage.h"
 
 #include "Basalt/Animation/AnimatedModel.h"
 #include "Basalt/Animation/AnimationPose.h"
@@ -8,6 +10,7 @@
 #include "Basalt/Automation/EditorCommandSchemas.h"
 #include "Basalt/Automation/EditorSelection.h"
 #include "Basalt/Core/Application.h"
+#include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Input.h"
 #include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
@@ -286,7 +289,7 @@ namespace Basalt {
 		m_Session.HostName = "editor";
 		m_Session.OnSceneChanged = [this]() { OnSceneChanged(); };
 		m_Session.Screenshot = [this](const std::filesystem::path& path, uint32_t width, uint32_t height, std::string& outError) {
-			return RenderToFile(path, width, height, false, outError);
+			return RenderToFile(path, width, height, CaptureView::GameCamera, outError);
 		};
 		m_Session.RenderStats = [this](nlohmann::json& outStats, std::string& outError) {
 			if (!m_Renderer)
@@ -509,7 +512,7 @@ namespace Basalt {
 								 return nlohmann::json{ { "path", path.string() }, { "note", "written at the end of the current frame" } };
 							 } });
 
-		m_Commands.Register({ "editor.game_view", "Gets or changes the Game view: the resolution it renders at (the project's window size unless overridden for this session), focus, and with path saves its image (primary camera, game UI, no debug view) to a PNG. Returns {visible, mode, width, height, override, hasCamera, imageRect and panelRect (logical units, relative to the editor window, as last drawn), windowSize, renderWidth, renderHeight}.", GameViewSettings::Schema(), [this](AutomationSession& session, const nlohmann::json& params) {
+		m_Commands.Register({ "editor.game_view", "Gets or changes the Game view: the resolution it renders at (the project's window size unless overridden for this session), focus, and with path saves what it shows (primary camera at that resolution, game UI, never a debug view; exposure reset as for screenshots) to a PNG. Returns {visible, mode, width, height, override, hasCamera, imageRect and panelRect (logical units, relative to the editor window, as last drawn), windowSize, renderWidth, renderHeight}.", GameViewSettings::Schema(), [this](AutomationSession& session, const nlohmann::json& params) {
 								 std::string error;
 								 if (!m_GameView.Apply(params, error))
 									 throw CommandError(error);
@@ -518,27 +521,24 @@ namespace Basalt {
 								 nlohmann::json result = GetGameViewState();
 								 if (const auto path = params.find("path"); path != params.end())
 								 {
-									 Scene& scene = *session.GetScene();
-									 // A capture of its own; the frame's pending lines stay for the views.
-									 const DebugLineStash stash;
-									 if (!RenderGameView(scene, {}, 0.0f, true))
-										 throw CommandError(m_GameHasCamera ? "the Game view render failed; see Console" : "the scene has no primary camera");
-									 const glm::uvec2 size = m_GameView.Resolve(Project::GetActive() ? &Project::GetActive()->GetConfig() : nullptr);
-									 DrawGameUIOverCapture(scene, *m_GameRenderer, size.x, size.y);
-									 if (!SaveScreenshot(*m_GameRenderer, path->get<std::string>(), error))
+									 // Through the capture renderer, so the live view keeps its exposure and dynamic resolution.
+									 const glm::uvec2 size = GetGameResolution();
+									 if (!RenderToFile(path->get<std::string>(), size.x, size.y, CaptureView::GameView, error))
 										 throw CommandError(error);
 									 result["path"] = *path;
 								 }
 								 return result;
 							 } });
 
-		m_Commands.Register({ "editor.thumbnail", "Makes (or reads from the cache) the content-browser preview of an image, .hdr environment, model or prefab and returns {kind, width, height, cached, cachePath, details}; output also writes it to a PNG, refresh ignores the cache.", EditorCommandSchemas::Thumbnail(), [this](AutomationSession&, const nlohmann::json& params) {
+		m_Commands.Register({ "editor.thumbnail", "Makes (or reads from the cache) the content-browser preview of an image, .hdr environment, model or prefab and returns {kind, width, height, cached, cachePath, details, warnings when it could not be cached}; output also writes it to a PNG, refresh makes it again (reading a model file anew).", EditorCommandSchemas::Thumbnail(), [this](AutomationSession&, const nlohmann::json& params) {
 								 const std::string path = params["path"].get<std::string>();
 								 std::string error;
 								 const auto generated = m_Thumbnails->Generate(path, params.value("refresh", false), error);
 								 if (!generated)
 									 throw CommandError(error);
-								 nlohmann::json result{ { "kind", ThumbnailKindName(generated->Kind) }, { "width", generated->Image.Width }, { "height", generated->Image.Height }, { "cached", generated->Cached }, { "cachePath", generated->CachePath.string() }, { "details", generated->Details } };
+								 nlohmann::json result{ { "kind", ThumbnailKindName(generated->Kind) }, { "width", generated->Image.Width }, { "height", generated->Image.Height }, { "cached", generated->Cached }, { "cachePath", FileSystem::PathToUtf8(generated->CachePath) }, { "details", generated->Details } };
+								 if (!generated->CacheWarning.empty())
+									 result["warnings"] = nlohmann::json::array({ "not cached: " + generated->CacheWarning });
 								 if (const auto output = params.find("output"); output != params.end())
 								 {
 									 if (!WritePng(output->get<std::string>(), generated->Image.Pixels, generated->Image.Width, generated->Image.Height, error))
@@ -564,15 +564,17 @@ namespace Basalt {
 
 		m_Commands.Register({ "editor.panel", "Opens, closes or focuses an editor window (e.g. focus the Game view, open Project Settings) and returns {name, open}.", EditorCommandSchemas::Panel(), [this](AutomationSession&, const nlohmann::json& params) {
 								 const std::string name = params["name"].get<std::string>();
-								 const bool closable = name == EditorCommandSchemas::ClosablePanelNames[0];
+								 // Project Settings is the one window that can be closed.
+								 const bool closable = EditorCommandSchemas::IsClosablePanel(name);
+								 BS_CORE_ASSERT(!closable || name == EditorCommandSchemas::ProjectSettingsTitle, "a new closable panel needs its own open flag here");
 								 if (const auto open = params.find("open"); open != params.end())
 								 {
-									 if (!closable && !open->get<bool>())
-										 throw CommandError("the " + name + " window cannot be closed");
 									 if (closable)
 										 m_ProjectSettingsOpen = open->get<bool>();
+									 else if (!open->get<bool>())
+										 throw CommandError("the " + name + " window cannot be closed");
 								 }
-								 const bool isOpen = closable ? m_ProjectSettingsOpen : true;
+								 const bool isOpen = !closable || m_ProjectSettingsOpen;
 								 if (params.value("focus", false))
 								 {
 									 if (!isOpen)
@@ -582,11 +584,11 @@ namespace Basalt {
 								 return nlohmann::json{ { "name", name }, { "open", isOpen } };
 							 } });
 
-		m_Commands.Register({ "editor.screenshot", "Renders the scene from the editor camera (with editor overlays and the game UI) to a PNG.", EditorCommandSchemas::Screenshot(), [this](AutomationSession&, const nlohmann::json& params) {
+		m_Commands.Register({ "editor.screenshot", "Renders what the scene view shows (editor camera, editor overlays, selection outline, and the UI components outside Play) to a PNG.", EditorCommandSchemas::Screenshot(), [this](AutomationSession&, const nlohmann::json& params) {
 								 const uint32_t width = params.value("width", 1280u);
 								 const uint32_t height = params.value("height", 720u);
 								 std::string error;
-								 if (!RenderToFile(params["path"].get<std::string>(), width, height, true, error))
+								 if (!RenderToFile(params["path"].get<std::string>(), width, height, CaptureView::SceneView, error))
 									 throw CommandError(error);
 								 return nlohmann::json{ { "path", params["path"] } };
 							 } });
@@ -621,12 +623,17 @@ namespace Basalt {
 		return true;
 	}
 
-	bool EditorLayer::RenderToFile(const std::filesystem::path& path, uint32_t width, uint32_t height, bool useEditorCamera, std::string& outError)
+	bool EditorLayer::RenderToFile(const std::filesystem::path& path, uint32_t width, uint32_t height, CaptureView view, std::string& outError)
 	{
 		Scene& scene = *m_Session.GetScene();
 		std::optional<RenderCamera> camera;
-		if (!useEditorCamera)
+		if (view != CaptureView::SceneView)
 			camera = GetPrimaryRenderCamera(scene, width, height);
+		if (!camera && view == CaptureView::GameView)
+		{
+			outError = "the scene has no primary camera";
+			return false;
+		}
 		if (!camera)
 		{
 			EditorCamera editorCamera = m_Camera;
@@ -634,24 +641,30 @@ namespace Basalt {
 			camera = editorCamera.GetRenderCamera();
 		}
 
-		if (!PrepareCaptureRenderer(width, height, ActiveRenderScale(m_Session.GetScene().get()), outError))
+		if (!PrepareCaptureRenderer(width, height, ActiveRenderScale(&scene), outError))
 			return false;
 
+		// The Game view never shows the editor's debug view; the other captures show what their view shows.
+		const RendererDebugView debugView = view == CaptureView::GameView ? RendererDebugView::None : m_DebugView;
+		const RendererDebugView sceneDebugView = scene.GetRendererSettings().DebugView;
+		scene.GetRendererSettings().DebugView = debugView;
 		{
-			// Debug lines belong to the viewport frame; draw editor overlays only for editor-camera shots.
+			// Debug lines belong to the viewport frame; the scene view's capture adds its editor helpers.
 			const DebugLineStash stash;
-			if (useEditorCamera && !m_Session.IsPlaying())
+			if (view == CaptureView::SceneView)
 				DrawEditorOverlays();
-			m_CaptureRenderer->SetSelections(useEditorCamera && !IsGameRunning() && m_ViewportSettings.Options().SelectionOutline ? m_Session.GetSelections() : std::vector<UUID>{});
+			m_CaptureRenderer->SetSelections(view == CaptureView::SceneView && m_ViewportSettings.Options().SelectionOutline ? m_Session.GetSelections() : std::vector<UUID>{});
 			m_CaptureRenderer->ResetExposure();
 			m_CaptureRenderer->Render(scene, *camera, 0.0f);
 		}
+		scene.GetRendererSettings().DebugView = sceneDebugView;
 		if (m_CaptureRenderer->GetStatistics().Failed)
 		{
 			outError = "capture render failed; see the renderer error in the log";
 			return false;
 		}
-		if (m_DebugView == RendererDebugView::None)
+		// Game UI as the view shows it: the scene view lays out UI components outside Play only.
+		if (debugView == RendererDebugView::None && (view != CaptureView::SceneView || !IsGameRunning()))
 			DrawGameUIOverCapture(scene, *m_CaptureRenderer, width, height);
 		return SaveScreenshot(*m_CaptureRenderer, path, outError);
 	}
@@ -958,7 +971,7 @@ namespace Basalt {
 		}
 		// Cameras follow the game's aspect ratio whichever views are shown: scripts read it, and the camera
 		// gizmo shows the frustum the game will see.
-		const glm::uvec2 gameSize = m_GameView.Resolve(Project::GetActive() ? &Project::GetActive()->GetConfig() : nullptr);
+		const glm::uvec2 gameSize = GetGameResolution();
 		scene.OnViewportResize(gameSize.x, gameSize.y);
 
 		// Lines from scripts go to both views; editor helpers only to the scene view. A hidden tab renders nothing.
@@ -966,21 +979,17 @@ namespace Basalt {
 		if (m_ViewportVisible)
 			RenderSceneView(scene, scriptLines);
 		if (m_GameViewVisible)
-			RenderGameView(scene, scriptLines, m_RenderDeltaTime, false);
+			RenderGameView(scene, scriptLines);
 		DebugDraw::Clear();
 
 		// UI components show in the scene view outside Play, so layouts can be authored without playing (built
 		// empty in debug views, so the UI bounds overlay still gets this frame's canvas). In Play the game UI,
 		// including the scripts' immediate-mode UI, belongs to the Game view.
 		m_UIFrame.Build(m_DebugView == RendererDebugView::None && !playing ? &scene : nullptr, m_ViewportSize, false);
-		m_GameUIFrame.Build(m_GameHasCamera ? &scene : nullptr, glm::max(m_GameImageSize, glm::vec2(1.0f)), playing);
+		// As in the runtime, the game UI shows with or without a camera (a menu scene may have none).
+		m_GameUIFrame.Build(&scene, glm::max(m_GameImageSize, glm::vec2(1.0f)), playing);
 
 		// Previews render on their own command lists, before this frame's list opens.
-		if (m_ThumbnailProject != Project::GetActive().get())
-		{
-			m_Thumbnails->Clear(false);
-			m_ThumbnailProject = Project::GetActive().get();
-		}
 		m_Thumbnails->Update();
 
 		// The dockspace covers the window, but clear the back buffer so no stale content shows through.
@@ -1010,43 +1019,41 @@ namespace Basalt {
 		m_Renderer->Render(scene, m_Camera.GetRenderCamera(), m_RenderDeltaTime);
 	}
 
-	bool EditorLayer::RenderGameView(Scene& scene, const std::vector<DebugLineVertex>& scriptLines, float deltaTime, bool capture)
+	void EditorLayer::RenderGameView(Scene& scene, const std::vector<DebugLineVertex>& scriptLines)
 	{
 		GraphicsDevice* device = Application::Get().GetGraphicsDevice();
 		if (!m_GameRenderer)
 		{
 			// Reported once; the Game view then shows the failure instead of retrying every frame.
-			if (m_GameRendererFailed)
-				return false;
+			if (m_GameViewStatus == GameViewStatus::RendererUnavailable)
+				return;
 			// Timers drive dynamic resolution, which the Game view runs as the game would.
 			auto renderer = CreateScope<SceneRenderer>(device->GetDevice(), SceneRendererSpecification{ .GpuTimers = device->SupportsTimerQueries() });
 			if (!renderer->Initialize())
 			{
-				BS_CORE_ERROR("Editor: the Game view renderer failed to initialize");
-				m_GameRendererFailed = true;
-				return false;
+				BS_CORE_ERROR("Editor: the Game view renderer failed to initialize (see the renderer error above)");
+				m_GameViewStatus = GameViewStatus::RendererUnavailable;
+				return;
 			}
 			m_GameRenderer = std::move(renderer);
 		}
-		const glm::uvec2 size = m_GameView.Resolve(Project::GetActive() ? &Project::GetActive()->GetConfig() : nullptr);
-		DynamicResolutionSettings dynamic = ActiveDynamicResolution(&scene);
-		dynamic.Enabled = dynamic.Enabled && !capture;
+		const glm::uvec2 size = GetGameResolution();
 		m_GameRenderer->SetRenderScale(ActiveRenderScale(&scene));
-		m_GameRenderer->SetDynamicResolution(dynamic);
+		m_GameRenderer->SetDynamicResolution(ActiveDynamicResolution(&scene));
 		m_GameRenderer->SetViewportSize(size.x, size.y);
 		const std::optional<RenderCamera> camera = GetPrimaryRenderCamera(scene, size.x, size.y);
-		m_GameHasCamera = camera.has_value();
 		if (!camera)
-			return false;
+		{
+			m_GameViewStatus = GameViewStatus::NoCamera;
+			return;
+		}
 		DebugDraw::AddLines(scriptLines);
 		// What the game shows: the editor's debug view is a scene-view aid.
 		const RendererDebugView debugView = scene.GetRendererSettings().DebugView;
 		scene.GetRendererSettings().DebugView = RendererDebugView::None;
-		if (capture)
-			m_GameRenderer->ResetExposure();
-		m_GameRenderer->Render(scene, *camera, deltaTime);
+		m_GameRenderer->Render(scene, *camera, m_RenderDeltaTime);
 		scene.GetRendererSettings().DebugView = debugView;
-		return !m_GameRenderer->GetStatistics().Failed;
+		m_GameViewStatus = m_GameRenderer->GetStatistics().Failed ? GameViewStatus::RenderFailed : GameViewStatus::Rendered;
 	}
 
 	void EditorLayer::HandleShortcuts()
@@ -1186,7 +1193,7 @@ namespace Basalt {
 		m_ContentBrowserPanel.OnImGuiRender();
 		m_ConsolePanel.OnImGuiRender();
 		DrawSceneSettingsPanel();
-		DockNextToOnFirstUse("Project Settings", "Inspector");
+		DockNextToOnFirstUse(EditorCommandSchemas::ProjectSettingsTitle, "Inspector");
 		m_ProjectSettingsPanel.OnImGuiRender(m_ProjectSettingsOpen);
 		DrawStatusBar();
 		DrawModals();
@@ -1232,7 +1239,7 @@ namespace Basalt {
 		ImGui::DockBuilderDockWindow("Content Browser", bottom);
 		ImGui::DockBuilderDockWindow("Console", bottom);
 		ImGui::DockBuilderDockWindow("Game", center);
-		// Docked last, so the scene view is the tab in front.
+		// Docked last and focused, so the scene view starts in front.
 		ImGui::DockBuilderDockWindow("Viewport", center);
 		ImGui::DockBuilderFinish(dockspaceId);
 		m_PendingFocus.emplace_back("Viewport");
@@ -1678,7 +1685,7 @@ namespace Basalt {
 		GraphicsDevice* device = Application::Get().GetGraphicsDevice();
 		if (!imgui || !imgui->IsInitialized() || !device)
 			return;
-		// The same UI the viewport shows: UI components always, the scripts' UI.* output while playing.
+		// UI components always; the scripts' UI.* output while playing (what the Game view shows).
 		const glm::vec2 size(static_cast<float>(width), static_cast<float>(height));
 		UIFrame frame;
 		frame.Build(&scene, size, IsGameRunning());
@@ -1715,8 +1722,7 @@ namespace Basalt {
 			DrawGameViewOptions();
 			const ImVec2 available = ImGui::GetContentRegionAvail();
 			const ImVec2 cursor = ImGui::GetCursorScreenPos();
-			const glm::uvec2 resolution = m_GameView.Resolve(Project::GetActive() ? &Project::GetActive()->GetConfig() : nullptr);
-			const GameViewRect rect = FitLetterbox({ available.x, available.y }, resolution);
+			const GameViewRect rect = FitLetterbox({ available.x, available.y }, GetGameResolution());
 			m_GamePanelMin = { cursor.x, cursor.y };
 			m_GamePanelSize = { available.x, available.y };
 			m_GameImageMin = glm::vec2(cursor.x, cursor.y) + rect.Origin;
@@ -1725,30 +1731,43 @@ namespace Basalt {
 			// Letterbox bars: what the panel shows outside the game's aspect ratio.
 			drawList->AddRectFilled(cursor, ImVec2(cursor.x + available.x, cursor.y + available.y), IM_COL32(0, 0, 0, 255));
 			const ImVec2 imageMin(m_GameImageMin.x, m_GameImageMin.y);
-			const ImVec2 imageMax(imageMin.x + m_GameImageSize.x, imageMin.y + m_GameImageSize.y);
-			const char* message = nullptr;
-			if (m_GameRendererFailed)
-				message = "The Game view renderer failed to initialize. See Console.";
-			else if (!m_GameHasCamera && m_GameRenderer)
-				message = "No primary camera: add a Camera component with Primary ticked.";
-			if (!message && m_GameRenderer && m_GameRenderer->GetOutputTexture() && rect.Size.x >= 1.0f && rect.Size.y >= 1.0f)
-			{
-				ImGui::SetCursorScreenPos(imageMin);
-				ImGui::Image(ImTextureRef(reinterpret_cast<ImTextureID>(m_GameRenderer->GetOutputTexture())), ImVec2(rect.Size.x, rect.Size.y));
-				m_GameViewHovered = ImGui::IsItemHovered();
-				m_GameUIFrame.Draw(drawList, m_GameImageMin, m_GameImageSize);
-				if (m_GameRenderer->GetStatistics().Failed)
-					message = "Rendering failed. See Console.";
-			}
+			const ImVec2 imageSize(std::max(rect.Size.x, 1.0f), std::max(rect.Size.y, 1.0f));
+			ImGui::SetCursorScreenPos(imageMin);
+			if (m_GameViewStatus == GameViewStatus::Rendered && m_GameRenderer->GetOutputTexture())
+				ImGui::Image(ImTextureRef(reinterpret_cast<ImTextureID>(m_GameRenderer->GetOutputTexture())), imageSize);
 			else
-				ImGui::Dummy(available);
+				ImGui::Dummy(imageSize);
+			m_GameViewHovered = ImGui::IsItemHovered();
+			// The game UI shows over the image, or over black when nothing rendered (a scene without a camera).
+			m_GameUIFrame.Draw(drawList, m_GameImageMin, m_GameImageSize);
+
+			const char* message = nullptr;
+			switch (m_GameViewStatus)
+			{
+				case GameViewStatus::NoCamera:
+					message = "No primary camera: add a Camera component with Primary ticked.";
+					break;
+				case GameViewStatus::RendererUnavailable:
+					message = "The Game view renderer failed to initialize. See Console.";
+					break;
+				case GameViewStatus::RenderFailed:
+					message = "Rendering failed. See Console.";
+					break;
+				case GameViewStatus::NotRendered:
+				case GameViewStatus::Rendered:
+					break;
+			}
 			if (message)
 			{
 				const ImVec2 textSize = ImGui::CalcTextSize(message);
 				drawList->AddText(ImVec2(cursor.x + (available.x - textSize.x) * 0.5f, cursor.y + (available.y - textSize.y) * 0.5f), IM_COL32(230, 120, 120, 255), message);
 			}
 			// Outside Play the image is a preview of the primary camera; say so, as the game is not running.
-			const char* badge = IsGameRunning() ? (m_Paused ? "Paused" : nullptr) : (m_Session.IsSimulating() ? "Simulating (scripts off)" : "Edit mode");
+			const char* badge = nullptr;
+			if (!IsGameRunning())
+				badge = m_Session.IsSimulating() ? "Simulating (scripts off)" : "Edit mode";
+			else if (m_Paused)
+				badge = "Paused";
 			if (badge)
 			{
 				const ImVec2 textSize = ImGui::CalcTextSize(badge);
@@ -1757,29 +1776,34 @@ namespace Basalt {
 				drawList->AddText(ImVec2(badgeMin.x + 6.0f, badgeMin.y + 4.0f), IM_COL32(255, 200, 80, 255), badge);
 			}
 		}
-		// In Play the game UI is laid out over this image and takes the pointer and keyboard here, even while the tab
-		// is hidden (then without input).
-		if (IsGameRunning() && m_GameImageSize.x >= 1.0f && m_GameImageSize.y >= 1.0f)
+		// In Play the game UI is laid out over this image and takes the pointer (while hovered) and the keyboard
+		// and gamepads (while focused) here; a hidden tab keeps the layout and takes neither.
+		if (IsGameRunning())
 		{
-			GameUI::SetViewportSize(m_GameImageSize);
-			GameUI::SetViewportOrigin(m_GameImageMin);
-			GameUI::SetPointerEnabled(m_GameViewHovered);
-			GameUI::SetNavigationEnabled(m_GameViewFocused);
-		}
-		else if (IsGameRunning())
-		{
-			GameUI::SetPointerEnabled(false);
-			GameUI::SetNavigationEnabled(false);
+			const bool hasImage = m_GameImageSize.x >= 1.0f && m_GameImageSize.y >= 1.0f;
+			if (hasImage)
+			{
+				GameUI::SetViewportSize(m_GameImageSize);
+				GameUI::SetViewportOrigin(m_GameImageMin);
+			}
+			GameUI::SetPointerEnabled(hasImage && m_GameViewHovered);
+			GameUI::SetNavigationEnabled(hasImage && m_GameViewFocused);
 		}
 		ImGui::End();
 		ImGui::PopStyleVar();
 	}
 
+	const char* EditorLayer::GetSessionModeName() const
+	{
+		if (IsGameRunning())
+			return "Play";
+		return m_Session.IsSimulating() ? "Simulate" : "Edit";
+	}
+
 	void EditorLayer::DrawGameViewOptions()
 	{
-		const ProjectConfig* config = Project::GetActive() ? &Project::GetActive()->GetConfig() : nullptr;
-		const glm::uvec2 resolution = m_GameView.Resolve(config);
-		const std::string label = std::to_string(resolution.x) + "x" + std::to_string(resolution.y) + (m_GameView.GetOverride() ? "" : " (Project)");
+		const glm::uvec2 resolution = GetGameResolution();
+		const std::string label = fmt::format("{}x{}{}", resolution.x, resolution.y, m_GameView.GetOverride() ? "" : " (Project)");
 		ImGui::SetNextItemWidth(170.0f);
 		if (ImGui::BeginCombo("##GameResolution", label.c_str()))
 		{
@@ -1787,7 +1811,7 @@ namespace Basalt {
 				m_Context.Execute("editor.game_view", { { "resolution", nullptr } });
 			for (const glm::uvec2 preset : { glm::uvec2(1280, 720), glm::uvec2(1920, 1080), glm::uvec2(2560, 1440), glm::uvec2(1024, 768), glm::uvec2(1080, 1920), glm::uvec2(720, 1280) })
 			{
-				const std::string name = std::to_string(preset.x) + "x" + std::to_string(preset.y);
+				const std::string name = fmt::format("{}x{}", preset.x, preset.y);
 				if (ImGui::Selectable(name.c_str(), m_GameView.GetOverride() == preset))
 					m_Context.Execute("editor.game_view", { { "resolution", { preset.x, preset.y } } });
 			}
@@ -1798,7 +1822,7 @@ namespace Basalt {
 			ImGui::TextUnformatted("The resolution the game renders at. Presets apply to this editor session; the project's\nwindow size (Project Settings) is what the exported game uses.");
 			ImGui::EndTooltip();
 		}
-		if (m_GameRenderer && m_GameHasCamera)
+		if (m_GameViewStatus == GameViewStatus::Rendered)
 		{
 			ImGui::SameLine();
 			ImGui::TextDisabled("render %ux%u", m_GameRenderer->GetRenderWidth(), m_GameRenderer->GetRenderHeight());
@@ -1808,35 +1832,27 @@ namespace Basalt {
 	void EditorLayer::DrawMaterialPreview(Entity entity)
 	{
 		static constexpr float Size = 96.0f;
-		const ThumbnailManager::Preview* preview = m_Thumbnails->GetMaterial(std::to_string(static_cast<uint64_t>(entity.GetUUID())), entity.GetComponent<MaterialComponent>());
-		const ImVec2 origin = ImGui::GetCursorScreenPos();
-		ImGui::Dummy(ImVec2(Size, Size));
-		if (preview->Texture)
-			ImGui::GetWindowDrawList()->AddImage(ImTextureRef(reinterpret_cast<ImTextureID>(preview->Texture.Get())), origin, ImVec2(origin.x + Size, origin.y + Size));
-		if (preview->Status == ThumbnailManager::State::Failed && ImGui::BeginItemTooltip())
-		{
-			ImGui::Text("No preview: %s", preview->Error.c_str());
-			ImGui::EndTooltip();
-		}
+		DrawPreviewSquare(*m_Thumbnails->GetMaterial(std::to_string(static_cast<uint64_t>(entity.GetUUID())), entity.GetComponent<MaterialComponent>()), Size);
 	}
 
 	nlohmann::json EditorLayer::GetGameViewState()
 	{
-		const glm::uvec2 resolution = m_GameView.Resolve(Project::GetActive() ? &Project::GetActive()->GetConfig() : nullptr);
+		const glm::uvec2 resolution = GetGameResolution();
 		const auto& override = m_GameView.GetOverride();
 		const ImGuiViewport* window = ImGui::GetMainViewport();
 		const glm::vec2 windowOrigin(window->Pos.x, window->Pos.y);
-		const glm::vec2 image = m_GameImageMin - windowOrigin;
-		const glm::vec2 panel = m_GamePanelMin - windowOrigin;
+		const auto rectJson = [&](const glm::vec2& min, const glm::vec2& size) {
+			return nlohmann::json{ { "x", min.x - windowOrigin.x }, { "y", min.y - windowOrigin.y }, { "width", size.x }, { "height", size.y } };
+		};
 		return {
 			{ "visible", m_GameViewVisible },
-			{ "mode", IsGameRunning() ? "Play" : (m_Session.IsSimulating() ? "Simulate" : "Edit") },
+			{ "mode", GetSessionModeName() },
 			{ "width", resolution.x },
 			{ "height", resolution.y },
 			{ "override", override ? nlohmann::json{ override->x, override->y } : nlohmann::json() },
 			{ "hasCamera", static_cast<bool>(m_Session.GetScene()->GetPrimaryCameraEntity()) },
-			{ "imageRect", { { "x", image.x }, { "y", image.y }, { "width", m_GameImageSize.x }, { "height", m_GameImageSize.y } } },
-			{ "panelRect", { { "x", panel.x }, { "y", panel.y }, { "width", m_GamePanelSize.x }, { "height", m_GamePanelSize.y } } },
+			{ "imageRect", rectJson(m_GameImageMin, m_GameImageSize) },
+			{ "panelRect", rectJson(m_GamePanelMin, m_GamePanelSize) },
 			{ "windowSize", { window->Size.x, window->Size.y } },
 			{ "renderWidth", m_GameRenderer ? m_GameRenderer->GetRenderWidth() : 0 },
 			{ "renderHeight", m_GameRenderer ? m_GameRenderer->GetRenderHeight() : 0 },
@@ -2040,7 +2056,7 @@ namespace Basalt {
 			}
 			if (m_Prompt == PromptKind::Export)
 			{
-				ImGui::TextDisabled("The project is validated first; errors stop the export (Project Settings > Validate).");
+				ImGui::TextDisabled("The project is validated first; errors stop the export (Project Settings > Validate Project).");
 				ImGui::Checkbox("Smoke test: run the exported game headless for", &m_ExportSmokeTest);
 				ImGui::SameLine();
 				ImGui::SetNextItemWidth(90.0f);
@@ -2103,7 +2119,7 @@ namespace Basalt {
 			{
 				// Validation and smoke test failures span several lines (the problems, the game's log).
 				ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 640.0f);
-				ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s", m_Context.StatusMessage.c_str());
+				ImGui::TextColored(EditorColors::Error, "%s", m_Context.StatusMessage.c_str());
 				ImGui::PopTextWrapPos();
 			}
 			if (close)

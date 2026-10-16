@@ -892,45 +892,57 @@ TEST_SUITE("Assets")
 	TEST_CASE("The thumbnail cache stores previews per source version and prunes removed sources")
 	{
 		BasaltTest::TempDirectory project("ThumbnailCache");
-		const std::filesystem::path directory = ThumbnailCache::DirectoryFor(project.GetPath());
-		CHECK(directory == project.GetPath() / "Cache" / "Thumbnails");
-		ThumbnailCache cache(directory);
-		CHECK(ThumbnailCache::MakeKey(project.GetPath(), "Assets/Missing.png").empty());
+		ThumbnailCache cache(project.GetPath());
+		CHECK(cache.GetDirectory() == project.GetPath() / "Cache" / "Thumbnails");
+		std::string error;
+		CHECK_FALSE(cache.MakeKey("Assets/Missing.png", error));
+		CHECK(error == "the file is missing");
 
 		REQUIRE(FileSystem::WriteTextFile(project.GetPath() / "Assets/Wall.png", "v1"));
 		REQUIRE(FileSystem::WriteTextFile(project.GetPath() / "Assets/Other.png", "v1"));
-		const std::string key = ThumbnailCache::MakeKey(project.GetPath(), "Assets/Wall.png");
+		const std::string key = cache.MakeKey("Assets/Wall.png", error).value_or("");
 		REQUIRE_FALSE(key.empty());
 		CHECK_FALSE(cache.Load("Assets/Wall.png", key));
 		const ThumbnailImage image{ 2, 1, { 10, 20, 30, 255, 40, 50, 60, 128 } };
-		std::string error;
-		REQUIRE_MESSAGE(cache.Store("Assets/Wall.png", key, { image, { "2 x 1", "RGBA" } }, error), error);
-		REQUIRE(cache.Store("Assets/Other.png", ThumbnailCache::MakeKey(project.GetPath(), "Assets/Other.png"), { image, {} }, error));
+		REQUIRE_MESSAGE(cache.Store("Assets/Wall.png", key, { image, { "2 x 1", "multi\nline" } }, error), error);
+		const std::string otherKey = cache.MakeKey("Assets/Other.png", error).value_or("");
+		REQUIRE(cache.Store("Assets/Other.png", otherKey, { image, {} }, error));
 		const auto loaded = cache.Load("Assets/Wall.png", key);
 		REQUIRE(loaded);
 		CHECK(loaded->Image.Width == 2);
 		CHECK(loaded->Image.Pixels == image.Pixels);
-		CHECK(loaded->Details == std::vector<std::string>{ "2 x 1", "RGBA" });
-		CHECK(cache.Load("Assets/Other.png", ThumbnailCache::MakeKey(project.GetPath(), "Assets/Other.png"))->Details.empty());
-		// A key that only starts like the stored one does not match.
+		// Details keep one line each.
+		CHECK(loaded->Details == std::vector<std::string>{ "2 x 1", "multi line" });
+		const auto other = cache.Load("Assets/Other.png", otherKey);
+		REQUIRE(other);
+		CHECK(other->Details.empty());
+		// Only the exact key matches.
 		CHECK_FALSE(cache.Load("Assets/Wall.png", key.substr(0, key.size() - 1)));
-		CHECK(cache.GetImagePath("Assets/Wall.png").parent_path() == directory);
+		CHECK_FALSE(cache.Load("Assets/Wall.png", key + "0"));
+		CHECK(cache.GetImagePath("Assets/Wall.png").parent_path() == cache.GetDirectory());
 		CHECK(cache.GetImagePath("Assets/Wall.png") != cache.GetImagePath("Assets/Other.png"));
+		// An empty image is never stored.
+		CHECK_FALSE(cache.Store("Assets/Wall.png", key, { ThumbnailImage{}, {} }, error));
+		CHECK(cache.Load("Assets/Wall.png", key));
 
 		// Rewriting the source (new size or modification time) makes the entry stale.
 		std::this_thread::sleep_for(std::chrono::milliseconds(20));
 		REQUIRE(FileSystem::WriteTextFile(project.GetPath() / "Assets/Wall.png", "version 2"));
-		const std::string changed = ThumbnailCache::MakeKey(project.GetPath(), "Assets/Wall.png");
+		const std::string changed = cache.MakeKey("Assets/Wall.png", error).value_or("");
 		CHECK(changed != key);
 		CHECK_FALSE(cache.Load("Assets/Wall.png", changed));
 		CHECK_FALSE(cache.Load("Assets/Wall.png", ""));
 
+		// Pruning removes entries of deleted sources, and images an interrupted store left without a key.
 		std::filesystem::remove(project.GetPath() / "Assets/Other.png");
-		CHECK(cache.Prune(project.GetPath(), false) == 1);
+		REQUIRE(FileSystem::WriteTextFile(cache.GetDirectory() / "0123456789abcdef.png", "orphan"));
+		CHECK(cache.PruneMissing() == 3);
 		CHECK_FALSE(std::filesystem::exists(cache.GetImagePath("Assets/Other.png")));
+		CHECK_FALSE(std::filesystem::exists(cache.GetDirectory() / "0123456789abcdef.png"));
 		CHECK(std::filesystem::exists(cache.GetImagePath("Assets/Wall.png")));
-		CHECK(cache.Prune(project.GetPath(), true) == 1);
+		CHECK(cache.Clear() == 2);
 		CHECK_FALSE(std::filesystem::exists(cache.GetImagePath("Assets/Wall.png")));
+		CHECK(cache.Clear() == 0);
 	}
 
 	TEST_CASE("New projects keep editor caches out of version control")
@@ -938,5 +950,18 @@ TEST_SUITE("Assets")
 		BasaltTest::TempProject temp("ProjectGitignore");
 		REQUIRE(temp.IsValid());
 		CHECK(FileSystem::ReadTextFile(temp.GetDirectory() / ".gitignore").value_or("") == "Cache/\n");
+
+		// An existing ignore file (a fresh repository's) keeps its rules and gains the cache.
+		BasaltTest::TempDirectory directory("ProjectGitignoreExisting");
+		REQUIRE(FileSystem::WriteTextFile(directory.GetPath() / ".gitignore", "*.tmp"));
+		std::string error;
+		REQUIRE_MESSAGE(Project::Create(directory.GetPath(), "Existing", error), error);
+		CHECK(FileSystem::ReadTextFile(directory.GetPath() / ".gitignore").value_or("") == "*.tmp\nCache/\n");
+		// Already ignored: nothing is added.
+		BasaltTest::TempDirectory ignored("ProjectGitignoreIgnored");
+		REQUIRE(FileSystem::WriteTextFile(ignored.GetPath() / ".gitignore", "Cache/\nSaved/\n"));
+		REQUIRE(Project::Create(ignored.GetPath(), "Ignored", error));
+		CHECK(FileSystem::ReadTextFile(ignored.GetPath() / ".gitignore").value_or("") == "Cache/\nSaved/\n");
+		Project::SetActive(nullptr);
 	}
 }

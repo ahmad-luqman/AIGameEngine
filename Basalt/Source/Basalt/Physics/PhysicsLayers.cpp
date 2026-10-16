@@ -43,13 +43,19 @@ namespace Basalt {
 		return true;
 	}
 
+	bool PhysicsLayers::CheckEditable(uint32_t index, const char* action, std::string& outError) const
+	{
+		if (index == 0)
+			outError = std::string("the Default physics layer cannot be ") + action;
+		else if (index >= GetCount())
+			outError = "no physics layer " + std::to_string(index);
+		return index != 0 && index < GetCount();
+	}
+
 	bool PhysicsLayers::Rename(uint32_t index, const std::string& name, std::string& outError)
 	{
-		if (index == 0 || index >= GetCount())
-		{
-			outError = index == 0 ? "the Default physics layer cannot be renamed" : "no physics layer " + std::to_string(index);
+		if (!CheckEditable(index, "renamed", outError))
 			return false;
-		}
 		if (name.empty())
 		{
 			outError = "physics layer names must not be empty";
@@ -66,24 +72,17 @@ namespace Basalt {
 
 	bool PhysicsLayers::Remove(uint32_t index, std::string& outError)
 	{
-		if (index == 0 || index >= GetCount())
-		{
-			outError = index == 0 ? "the Default physics layer cannot be removed" : "no physics layer " + std::to_string(index);
+		if (!CheckEditable(index, "removed", outError))
 			return false;
-		}
 		PhysicsLayers result;
-		std::vector<uint32_t> kept;
-		for (uint32_t i = 0; i < GetCount(); i++)
-		{
-			if (i == index)
-				continue;
-			if (i > 0)
+		for (uint32_t i = 1; i < GetCount(); i++)
+			if (i != index)
 				result.m_Names.push_back(m_Names[i]);
-			kept.push_back(i);
-		}
-		for (uint32_t a = 0; a < kept.size(); a++)
-			for (uint32_t b = a; b < kept.size(); b++)
-				result.SetCollides(a, b, ShouldCollide(kept[a], kept[b]));
+		// New index -> old index: the layers after the removed one move down by one.
+		const auto old = [index](uint32_t i) { return i < index ? i : i + 1; };
+		for (uint32_t a = 0; a < result.GetCount(); a++)
+			for (uint32_t b = a; b < result.GetCount(); b++)
+				result.SetCollides(a, b, ShouldCollide(old(a), old(b)));
 		*this = std::move(result);
 		return true;
 	}

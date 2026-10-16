@@ -43,8 +43,10 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
 - **Post-processing.** The highest-priority enabled `PostProcessComponent` (lowest UUID on ties) overrides legacy scene exposure/tonemapper/SSAO settings. Bloom and histogram exposure precede tonemapping; FXAA precedes FSR and overlays. Exposure history belongs to each renderer; captures reset it. `Graphics` Lua preferences are a session copy of project defaults and survive `Scene.Load` without saving the project.
 - **Play mode runs a copy.** `Scene::Copy` duplicates the edit scene (same UUIDs) for play/simulate;
   stopping discards it. In the editor the game runs in the Game tab (primary camera at the project's window
-  size, letterboxed, owning the game UI's input); the scene view keeps the editor camera in every mode.
-  Content-browser previews are cached in `<project>/Cache/Thumbnails`, outside `Assets/` (never exported).
+  size, letterboxed; the game UI takes the pointer while it is hovered and navigation while it has focus); the
+  scene view keeps the editor camera in every mode.
+- **Editor caches.** Content-browser previews are cached in `<project>/Cache/Thumbnails`, outside `Assets/`
+  (never exported, ignored by git).
 - **Gameplay services live in the ScriptEngine.** Timers and coroutines (`ScriptTasks`) and events
   (`ScriptEvents`) belong to the script instance that created them and end with it; `Storage` save data
   (`Project/SaveData`) goes to the per-user data directory (`Platform::GetUserDataDirectory`, overridden by
