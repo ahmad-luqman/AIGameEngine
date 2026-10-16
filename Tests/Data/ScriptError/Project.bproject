@@ -1,0 +1,5 @@
+{
+	"Format": "BasaltProject",
+	"Name": "ScriptError",
+	"StartScene": "Assets/Scenes/Main.bscene"
+}

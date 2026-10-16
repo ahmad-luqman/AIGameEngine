@@ -70,6 +70,12 @@ namespace Basalt {
 		options.MaxFrames = static_cast<uint64_t>(std::max<int64_t>(commandLine.GetInteger("frames").value_or(0), 0));
 		options.ScreenshotPath = commandLine.GetValue("screenshot").value_or("");
 		options.RequireValidation = commandLine.HasFlag("require-validation");
+		options.FailOnScriptErrors = commandLine.HasFlag("fail-on-script-errors");
+		if (options.FailOnScriptErrors && options.MaxFrames == 0)
+		{
+			BS_CORE_CRITICAL("--fail-on-script-errors needs --frames (an interactive run has no end to report at)");
+			return nullptr;
+		}
 		const std::string debugView = commandLine.GetValue("debug-view").value_or("None");
 		if (debugView == "SSAO")
 			options.DebugView = RendererDebugView::SSAO;

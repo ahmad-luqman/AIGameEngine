@@ -66,7 +66,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
 | Binary | Purpose |
 |--------|---------|
 | `BasaltEditor [--project P] [--port N\|--no-server] [--gpu G]` | Editor GUI + automation server |
-| `BasaltRuntime [--project P] [--scene S] [--width W --height H] [--frames N [--screenshot out.png] [--require-validation]] [--offscreen] [--debug-view V] [--render-scale S] [--dynamic-resolution FPS] [--min-render-scale S] [--gpu G] [--no-vsync]` | Plays the project's start scene; exported games are this binary renamed |
+| `BasaltRuntime [--project P] [--scene S] [--width W --height H] [--frames N [--screenshot out.png] [--require-validation] [--fail-on-script-errors]] [--headless \| --offscreen] [--debug-view V] [--render-scale S] [--dynamic-resolution FPS] [--min-render-scale S] [--gpu G] [--no-vsync]` | Plays the project's start scene; exported games are this binary renamed. `--headless` runs without a GPU or window. `--frames` runs exit 1 (start/render failure), 3 (validation errors), 4 (screenshot), 5 (validation layer missing), 6 (dynamic resolution did not run) or 7 (script errors, with `--fail-on-script-errors`) |
 | `basalt [--project P] [--scene S] [--no-save] [--verbose] <command> [json] \| batch <file> \| serve \| mcp` | Headless automation CLI |
 | `BasaltTests` | Unit tests |
 
