@@ -2,6 +2,7 @@
 
 #include <Basalt/Core/FileSystem.h>
 #include <Basalt/Core/Log.h>
+#include <Basalt/Renderer/DebugDraw.h>
 #include <Basalt/Renderer/DeviceSelection.h>
 #include <Basalt/Renderer/DynamicResolution.h>
 #include <Basalt/Renderer/GpuProfiler.h>
@@ -831,5 +832,34 @@ TEST_SUITE("SceneRenderer")
 		// Valid settings pass through silently.
 		renderer.SetDynamicResolution({ true, 30.0f, 0.5f });
 		CHECK(BasaltTest::CountLogMessages(since, "dynamic resolution settings out of range") == 1);
+	}
+
+	TEST_CASE("A debug line stash lets a second view render without taking the frame's lines")
+	{
+		DebugDraw::Clear();
+		DebugDraw::Line({ 0, 0, 0 }, { 1, 0, 0 }, { 1, 0, 0, 1 });
+		DebugDraw::Line({ 0, 0, 0 }, { 0, 1, 0 }, { 0, 1, 0, 1 });
+		{
+			const DebugLineStash stash;
+			CHECK(stash.GetLines().size() == 4);
+			CHECK(DebugDraw::GetLineCount() == 0);
+			// What the second view adds is consumed with it, not kept for the viewport.
+			DebugDraw::Line({ 0, 0, 0 }, { 0, 0, 1 }, { 0, 0, 1, 1 });
+		}
+		const auto lines = DebugDraw::TakeLines();
+		REQUIRE(lines.size() == 4);
+		CHECK(lines[1].Position == glm::vec3(1, 0, 0));
+		CHECK(lines[3].Color == glm::vec4(0, 1, 0, 1));
+
+		// AddLines keeps whole lines and respects the per-frame cap.
+		std::vector<DebugLineVertex> many(DebugDraw::MaxLines * 2 + 3, DebugLineVertex{ glm::vec3(0.0f), glm::vec4(1.0f) });
+		DebugDraw::AddLines(many);
+		CHECK(DebugDraw::GetLineCount() == DebugDraw::MaxLines);
+		DebugDraw::AddLines(lines);
+		CHECK(DebugDraw::GetLineCount() == DebugDraw::MaxLines);
+		DebugDraw::Clear();
+		DebugDraw::AddLines({ lines[0] });
+		CHECK(DebugDraw::GetLineCount() == 0);
+		DebugDraw::Clear();
 	}
 }

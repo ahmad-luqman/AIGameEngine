@@ -4,7 +4,9 @@
 #include <Basalt/Asset/AssetManager.h>
 #include <Basalt/Automation/CommandSchema.h>
 #include <Basalt/Automation/EditorCommandSchemas.h>
+#include <Basalt/Automation/GameView.h>
 #include <Basalt/Automation/ViewportSettings.h>
+#include <Basalt/Project/Project.h>
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
 #include <Basalt/Scene/VertexSnap.h>
@@ -12,6 +14,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <limits>
+#include <utility>
 
 using namespace Basalt;
 
@@ -200,4 +203,64 @@ TEST_CASE("Vertex snapping ignores unused accessor vertices and follows indexed 
 	mesh->Vertices = savedVertices;
 	mesh->Indices = savedIndices;
 	submesh = savedSubmesh;
+}
+
+TEST_CASE("The Game view letterboxes the game resolution into the panel")
+{
+	// Wider panel: bars left and right.
+	GameViewRect rect = FitLetterbox({ 1000.0f, 300.0f }, { 1600, 900 });
+	CHECK(rect.Size.y == doctest::Approx(300.0f));
+	CHECK(rect.Size.x == doctest::Approx(300.0f * 16.0f / 9.0f));
+	CHECK(rect.Origin.x == doctest::Approx((1000.0f - rect.Size.x) * 0.5f));
+	CHECK(rect.Origin.y == doctest::Approx(0.0f));
+	CHECK(rect.Scale == doctest::Approx(300.0f / 900.0f));
+	// Taller panel: bars above and below.
+	rect = FitLetterbox({ 400.0f, 1000.0f }, { 1600, 900 });
+	CHECK(rect.Size.x == doctest::Approx(400.0f));
+	CHECK(rect.Size.y == doctest::Approx(225.0f));
+	CHECK(rect.Origin.y == doctest::Approx(387.5f));
+	// Same aspect: no bars; a larger panel scales up.
+	rect = FitLetterbox({ 3200.0f, 1800.0f }, { 1600, 900 });
+	CHECK(rect.Origin == glm::vec2(0.0f));
+	CHECK(rect.Scale == doctest::Approx(2.0f));
+	// Portrait games keep their aspect too.
+	rect = FitLetterbox({ 800.0f, 800.0f }, { 1080, 1920 });
+	CHECK(rect.Size.x / rect.Size.y == doctest::Approx(1080.0f / 1920.0f));
+	CHECK(rect.Size.y == doctest::Approx(800.0f));
+	// Degenerate input never divides by zero.
+	for (const auto& [panel, game] : { std::pair{ glm::vec2(0.0f, 100.0f), glm::uvec2(16, 9) }, std::pair{ glm::vec2(100.0f, -1.0f), glm::uvec2(16, 9) }, std::pair{ glm::vec2(100.0f), glm::uvec2(0, 9) } })
+	{
+		rect = FitLetterbox(panel, game);
+		CHECK(rect.Size == glm::vec2(0.0f));
+		CHECK(rect.Scale == 0.0f);
+	}
+}
+
+TEST_CASE("The Game view renders at the project's window size unless a session override is set")
+{
+	GameViewSettings settings;
+	CHECK(settings.Resolve(nullptr) == GameViewSettings::FallbackResolution);
+	ProjectConfig config;
+	config.WindowWidth = 1280;
+	config.WindowHeight = 720;
+	CHECK(settings.Resolve(&config) == glm::uvec2(1280, 720));
+	// Hand-edited project files are clamped to what the runtime accepts.
+	config.WindowWidth = 10;
+	config.WindowHeight = 100000;
+	CHECK(settings.Resolve(&config) == glm::uvec2(GameViewSettings::MinResolution, GameViewSettings::MaxResolution));
+
+	std::string error;
+	CHECK(settings.Apply({ { "resolution", { 640, 360 } } }, error));
+	CHECK(settings.Resolve(&config) == glm::uvec2(640, 360));
+	CHECK(settings.Apply({ { "focus", true } }, error));
+	CHECK(settings.GetOverride() == glm::uvec2(640, 360));
+	for (const nlohmann::json& bad : { nlohmann::json{ 63, 100 }, nlohmann::json{ 100, 16385 }, nlohmann::json{ 100 }, nlohmann::json{ 100, 100, 100 }, nlohmann::json("640x360"), nlohmann::json{ 1.5, 100 } })
+	{
+		CHECK_FALSE(settings.Apply({ { "resolution", bad } }, error));
+		CHECK(error.find("resolution") != std::string::npos);
+		CHECK(settings.GetOverride() == glm::uvec2(640, 360));
+	}
+	CHECK(settings.Apply({ { "resolution", nullptr } }, error));
+	CHECK_FALSE(settings.GetOverride());
+	CHECK(CommandSchema::CheckDefinition(GameViewSettings::Schema(), error));
 }

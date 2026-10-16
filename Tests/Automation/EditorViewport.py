@@ -15,6 +15,7 @@ from LocalShadows import read_png
 from EditorUndoSelection import check_undo_selection
 from EditorPostProcess import check_post_process
 from EditorProjectSettings import check_project_settings
+from EditorGameView import check_game_view
 
 
 def require(value, message):
@@ -227,13 +228,15 @@ def main():
                     call("entity.destroy", {"entity": thin})
                     call("play.start")
                     call("editor.vertex_snap", {"source": [0, 0], "target": [0, 0]}, error="only available in edit mode")
-                    call("editor.pick", {"x": 0, "y": 0}, error="requires a scene viewport")
+                    # The scene view keeps the editor camera in Play, so picking still works there.
+                    require("entity" in call("editor.pick", {"x": 0, "y": 0, "select": False}), "Picking failed in Play")
                     call("play.stop")
                     call("editor.viewport", {"operation": "Translate"})
                     call("editor.window_screenshot", {"path": str(Path(output, "window.png"))})
                     call("editor.viewport")
                     check_undo_selection(call, require, output, temp)
                     check_post_process(call, require, output)
+                    check_game_view(call, require, output)
                     check_project_settings(call, require, output)
                     errors = call("log.get", {"errorsOnly": True})
                     require(not errors["messages"], f"Editor logged errors: {errors}")

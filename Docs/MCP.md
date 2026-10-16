@@ -138,8 +138,8 @@ are available through `help` / `tools/list`; they are editor-only and are not pa
 - `editor.pick {"x":200,"y":150,"select":true}` renders the current scene and picks at an integer output pixel.
   It returns `{"entity":<UUID>}` (0 for background), and selects by default. `select:false` only queries.
   Enabled light, camera and audio helpers use bounds tested against the mesh surface depth.
-  Out-of-bounds coordinates, render/readback failures and game Play mode report errors without changing
-  selection. On-demand rendering also handles queued edits and camera changes before the next frame,
+  Out-of-bounds coordinates and render/readback failures report errors without changing selection. The
+  scene view keeps the editor camera in Play (the game runs in the Game view), so picking works there too. On-demand rendering also handles queued edits and camera changes before the next frame,
   including when the window is minimized. It copies one ID/depth texel and waits for the whole GPU.
 - `editor.vertex_snap {"source":[x,y],"target":[x,y]}` translates the selected mesh entity to align
   the nearest source and target vertices within 16 viewport pixels. Coordinates use the displayed
@@ -160,6 +160,32 @@ changing selection, camera commands, viewport resize, or leaving the viewport ca
 Releasing V cancels only when sticky Vertex snapping is off. The camera stays fixed during this gesture. The Overlays popup and View menu
 share the same switches; Debug Lines controls scripted debug lines independently of grid/helpers.
 
+## Game view and editor windows
+
+The **Game** tab sits next to the scene view. It renders the primary camera at the game resolution (the
+project's `windowWidth`/`windowHeight`, the size the exported game opens with), letterboxed into the panel
+with the correct aspect ratio, with the game UI on top. Play brings it to the front and runs the game there:
+it owns the game UI's pointer (while hovered) and keyboard/gamepad navigation (while focused); Stop returns
+to the scene view if that was in front. Outside Play it previews the primary camera, labelled **Edit mode**
+or **Simulating**. The scene view always shows the editor camera with its helpers, and is no longer
+switched to the game camera in Play. Only the tab in front renders.
+
+- `editor.game_view {}` returns `visible`, `mode` (`Edit`, `Play`, `Simulate`), the render `width` and
+  `height`, the session `override`, `hasCamera`, `imageRect`/`panelRect` (logical units relative to the
+  editor window, as last drawn), `windowSize`, and `renderWidth`/`renderHeight` (render scale and dynamic
+  resolution apply as in the game). `resolution: [w, h]` (64–16384) overrides the resolution for this
+  editor session without changing the project; `null` returns to the project's. `focus: true` brings the tab
+  forward. `path` saves the Game view's image (primary camera, game UI, never a debug view) to a PNG; it
+  fails without a primary camera. Captures reset exposure and skip dynamic resolution, like `render.screenshot`.
+- `editor.panel {"name":"Project Settings","open":true,"focus":true}` opens, closes or focuses an editor
+  window (`Viewport`, `Game`, `Hierarchy`, `Inspector`, `Scene`, `Content Browser`, `Console`,
+  `Project Settings`; only Project Settings can be closed) and returns `{name, open}`.
+
+**Edit > Project Settings** edits the project file through `project.set` (name, start scene, game
+resolution, fullscreen, random seed, physics step, graphics defaults, physics layers and the collision
+matrix) and lists `project.validate` issues; a scene's own physics step is shown and can be removed
+(`scene.settings` with `FixedTimestep: null`). Project settings are saved at once and are not undoable.
+
 ## Selection and undo transactions
 
 `editor.select` accepts either `entity` (ID/name/null) or `entities` (an array of IDs/names), plus
@@ -176,7 +202,7 @@ includes occluded entities. Meshes use their bounds, animated models use current
 other entities use a 0.5-unit helper box. UI rects are selected through the hierarchy. Escape cancels a
 rectangle. `editor.box_select {"start":[x,y],"end":[x,y],"mode":"replace"}` exposes the same operation in
 logical viewport pixels, top-left origin; either drag direction works. Click/box selection also works
-in Simulate, where it operates on the simulation copy.
+in Simulate and Play, where it operates on the running copy.
 
 The group gizmo uses the mean selected world position as its pivot, with world axes or the active
 entity's local orientation. Translate, rotate and scale affect selected root trees; a selected child

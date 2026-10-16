@@ -28,11 +28,36 @@ namespace Basalt {
 
 		// Moves the accumulated lines out (renderer), leaving the list empty.
 		static std::vector<DebugLineVertex> TakeLines();
+		// Appends line vertices (pairs) taken with TakeLines, e.g. to draw the same lines in a second view.
+		static void AddLines(const std::vector<DebugLineVertex>& vertices);
 		static size_t GetLineCount();
 		static void Clear();
 
 		// Lines are dropped beyond this many per frame (protects against runaway scripts).
 		static constexpr size_t MaxLines = 1 << 20;
+	};
+
+	// Takes the pending lines for its scope and puts them back when it ends, so a capture or a second view can
+	// render (consuming whatever it adds) without taking the lines the viewport draws this frame.
+	class DebugLineStash
+	{
+	public:
+		DebugLineStash()
+			: m_Lines(DebugDraw::TakeLines())
+		{
+		}
+		~DebugLineStash()
+		{
+			DebugDraw::Clear();
+			DebugDraw::AddLines(m_Lines);
+		}
+		DebugLineStash(const DebugLineStash&) = delete;
+		DebugLineStash& operator=(const DebugLineStash&) = delete;
+
+		const std::vector<DebugLineVertex>& GetLines() const { return m_Lines; }
+
+	private:
+		std::vector<DebugLineVertex> m_Lines;
 	};
 
 }
