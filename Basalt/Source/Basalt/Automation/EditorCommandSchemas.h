@@ -17,5 +17,11 @@ namespace Basalt::EditorCommandSchemas {
 	nlohmann::json Redo();
 	nlohmann::json WindowScreenshot();
 	nlohmann::json Screenshot();
+	nlohmann::json Panel();
+
+	// Editor windows editor.panel can show and focus (their ImGui window titles).
+	inline constexpr const char* PanelNames[] = { "Viewport", "Game", "Hierarchy", "Inspector", "Scene", "Content Browser", "Console", "Project Settings" };
+	// Of those, the windows that can be closed (the others are always open).
+	inline constexpr const char* ClosablePanelNames[] = { "Project Settings" };
 
 }

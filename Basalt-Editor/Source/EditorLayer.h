@@ -6,6 +6,7 @@
 #include "Panels/ConsolePanel.h"
 #include "Panels/ContentBrowserPanel.h"
 #include "Panels/InspectorPanel.h"
+#include "Panels/ProjectSettingsPanel.h"
 #include "Panels/SceneHierarchyPanel.h"
 
 #include "Basalt/Automation/AutomationServer.h"
@@ -63,6 +64,8 @@ namespace Basalt {
 		void DrawSceneSettingsPanel();
 		void DrawStatusBar();
 		void DrawModals();
+		// Docks a window that has no saved layout yet next to an existing one (new windows in old imgui.ini files).
+		static void DockNextToOnFirstUse(const char* window, const char* neighbour);
 		void HandleShortcuts();
 
 		void DrawEditorOverlays();
@@ -106,6 +109,11 @@ namespace Basalt {
 		InspectorPanel m_InspectorPanel;
 		ContentBrowserPanel m_ContentBrowserPanel;
 		ConsolePanel m_ConsolePanel;
+		ProjectSettingsPanel m_ProjectSettingsPanel;
+		bool m_ProjectSettingsOpen = false;
+		// Windows editor.panel asked to bring to the front; applied at the end of the next ImGui frame, once the
+		// window exists.
+		std::vector<std::string> m_PendingFocus;
 
 		EditorCamera m_Camera;
 		Scope<SceneRenderer> m_Renderer;

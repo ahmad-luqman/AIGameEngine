@@ -264,6 +264,7 @@ namespace Basalt {
 		, m_InspectorPanel(m_Context)
 		, m_ContentBrowserPanel(m_Context)
 		, m_ConsolePanel(m_Context)
+		, m_ProjectSettingsPanel(m_Context)
 	{
 	}
 
@@ -497,6 +498,26 @@ namespace Basalt {
 										 BS_CORE_ERROR("Window screenshot: {}", error);
 								 });
 								 return nlohmann::json{ { "path", path.string() }, { "note", "written at the end of the current frame" } };
+							 } });
+
+		m_Commands.Register({ "editor.panel", "Opens, closes or focuses an editor window (e.g. focus the Game view, open Project Settings) and returns {name, open}.", EditorCommandSchemas::Panel(), [this](AutomationSession&, const nlohmann::json& params) {
+								 const std::string name = params["name"].get<std::string>();
+								 const bool closable = name == EditorCommandSchemas::ClosablePanelNames[0];
+								 if (const auto open = params.find("open"); open != params.end())
+								 {
+									 if (!closable && !open->get<bool>())
+										 throw CommandError("the " + name + " window cannot be closed");
+									 if (closable)
+										 m_ProjectSettingsOpen = open->get<bool>();
+								 }
+								 const bool isOpen = closable ? m_ProjectSettingsOpen : true;
+								 if (params.value("focus", false))
+								 {
+									 if (!isOpen)
+										 throw CommandError("open the " + name + " window before focusing it");
+									 m_PendingFocus.push_back(name);
+								 }
+								 return nlohmann::json{ { "name", name }, { "open", isOpen } };
 							 } });
 
 		m_Commands.Register({ "editor.screenshot", "Renders the scene from the editor camera (with editor overlays and the game UI) to a PNG.", EditorCommandSchemas::Screenshot(), [this](AutomationSession&, const nlohmann::json& params) {
@@ -1025,10 +1046,23 @@ namespace Basalt {
 		m_ContentBrowserPanel.OnImGuiRender();
 		m_ConsolePanel.OnImGuiRender();
 		DrawSceneSettingsPanel();
+		DockNextToOnFirstUse("Project Settings", "Inspector");
+		m_ProjectSettingsPanel.OnImGuiRender(m_ProjectSettingsOpen);
 		DrawStatusBar();
 		DrawModals();
+		for (const std::string& name : m_PendingFocus)
+			ImGui::SetWindowFocus(name.c_str());
+		m_PendingFocus.clear();
 		if (!ImGui::IsAnyItemActive())
 			m_Context.FinishFieldEdit();
+	}
+
+	void EditorLayer::DockNextToOnFirstUse(const char* window, const char* neighbour)
+	{
+		if (ImGui::FindWindowByName(window) || ImGui::FindWindowSettingsByID(ImHashStr(window)))
+			return;
+		if (const ImGuiWindow* other = ImGui::FindWindowByName(neighbour); other && other->DockId != 0)
+			ImGui::SetNextWindowDockID(other->DockId, ImGuiCond_FirstUseEver);
 	}
 
 	void EditorLayer::BuildDefaultLayout(unsigned int dockspaceId)
@@ -1112,6 +1146,8 @@ namespace Basalt {
 				Undo();
 			if (ImGui::MenuItem(("Redo " + m_History.RedoName()).c_str(), "Ctrl+Y", false, m_History.CanRedo() && !m_Session.IsPlaying()))
 				Redo();
+			ImGui::Separator();
+			ImGui::MenuItem("Project Settings...", nullptr, &m_ProjectSettingsOpen, static_cast<bool>(Project::GetActive()));
 			ImGui::EndMenu();
 		}
 

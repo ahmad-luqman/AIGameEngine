@@ -2,6 +2,10 @@
 
 #include "Basalt/Automation/CommandSchema.h"
 
+#include <iterator>
+#include <string>
+#include <vector>
+
 namespace Basalt::EditorCommandSchemas {
 
 	namespace Schema = CommandSchema;
@@ -75,6 +79,13 @@ namespace Basalt::EditorCommandSchemas {
 	nlohmann::json Screenshot()
 	{
 		return Schema::Object({ { "path", Schema::String("string, .png", true) }, { "width", Schema::Integer("integer", 16, 8192) }, { "height", Schema::Integer("integer", 16, 8192) } }, { "path" });
+	}
+
+	nlohmann::json Panel()
+	{
+		auto name = Schema::String("Editor window title");
+		name["enum"] = std::vector<std::string>(std::begin(PanelNames), std::end(PanelNames));
+		return Schema::Object({ { "name", name }, { "open", Schema::Boolean("Open or close the window (only Project Settings can be closed)") }, { "focus", Schema::Boolean("Bring the window (or its tab) to the front") } }, { "name" });
 	}
 
 }
