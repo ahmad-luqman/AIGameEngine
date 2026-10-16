@@ -71,8 +71,9 @@ namespace Basalt {
 	struct PhysicsSettings
 	{
 		glm::vec3 Gravity = { 0.0f, -9.81f, 0.0f };
-		// Fixed simulation step in seconds; variable frame times are accumulated into fixed steps.
-		float FixedTimestep = 1.0f / 60.0f;
+		// Fixed simulation step in seconds overriding the project's FixedTimestep; 0 uses the project's.
+		// Variable frame times are accumulated into fixed steps (see Scene::GetFixedTimestep).
+		float FixedTimestep = 0.0f;
 		uint32_t MaxStepsPerFrame = 8;
 	};
 
@@ -168,6 +169,10 @@ namespace Basalt {
 		// project setting mid-session (it applies from the next play) cannot split one session over two
 		// seeds. Meaningful while running; outside play it is the last session's.
 		uint32_t GetRandomSeed() const { return m_RandomSeed; }
+		// The physics step this scene simulates with: its own override (PhysicsSettings::FixedTimestep), else
+		// the project's. Like the seed, a session keeps the project value it started with; outside play this
+		// is the project's current value.
+		float GetFixedTimestep() const;
 
 		// --- Scene switching (play mode, Lua Scene.Load) ---------------------------------------
 		// Replaces the playing scene's contents with the scene file at `path` (project-relative, a .bscene
@@ -259,7 +264,9 @@ namespace Basalt {
 			std::unordered_set<UUID> Reserved;
 		};
 
-		void StartRandomSession();
+		// Captures the project values a play/simulate session keeps (seed, fixed timestep) and starts its
+		// random streams.
+		void StartSession();
 		Entity CreateEntityInternal(UUID uuid, const std::string& name);
 		UUID GenerateEntityUUID();
 		void RemoveFromParent(Entity entity);
@@ -281,6 +288,8 @@ namespace Basalt {
 		float m_Time = 0.0f;
 		uint64_t m_FrameCount = 0;
 		uint32_t m_RandomSeed = Random::DefaultSeed;
+		// The project's FixedTimestep when the session started (0 outside play).
+		float m_SessionFixedTimestep = 0.0f;
 		// Independent of gameplay draws; continues across Scene.Load and is released on stop.
 		std::optional<SessionIdentity> m_SessionIdentity;
 		bool m_QuitRequested = false;

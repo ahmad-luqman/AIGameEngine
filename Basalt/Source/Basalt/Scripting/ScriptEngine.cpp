@@ -742,6 +742,25 @@ namespace Basalt {
 		return true;
 	}
 
+	bool ScriptEngine::CheckSyntax(const std::string& scriptPath, std::string& outError)
+	{
+		const auto source = FileSystem::ReadTextFile(Project::ResolvePath(scriptPath));
+		if (!source)
+		{
+			outError = "cannot read script '" + scriptPath + "'";
+			return false;
+		}
+		sol::state lua;
+		const sol::load_result chunk = lua.load(*source, "@" + scriptPath);
+		if (!chunk.valid())
+		{
+			const sol::error error = chunk;
+			outError = error.what();
+			return false;
+		}
+		return true;
+	}
+
 	std::optional<nlohmann::json> ScriptEngine::LoadScriptProperties(const std::string& scriptPath, std::string& outError)
 	{
 		ScriptContext context;

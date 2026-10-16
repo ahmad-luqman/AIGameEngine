@@ -37,6 +37,13 @@ if(Python3_Interpreter_FOUND)
 	add_test(NAME McpIntegration
 		COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/Automation/McpIntegration.py" $<TARGET_FILE:BasaltCLI>)
 	set_tests_properties(McpIntegration PROPERTIES LABELS integration TIMEOUT 90 ENVIRONMENT "BASALT_USER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/McpUserData")
+	# Validate, export and smoke-test a project the way a release pipeline would; needs no GPU.
+	if(TARGET BasaltRuntime)
+		add_test(NAME ExportSmoke
+			COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/Automation/ExportSmoke.py" $<TARGET_FILE:BasaltCLI>
+				"${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest/Assets/Models/TexturedCube.glb")
+		set_tests_properties(ExportSmoke PROPERTIES LABELS integration TIMEOUT 300)
+	endif()
 	add_test(NAME LocalShadowHarness
 		COMMAND "${Python3_EXECUTABLE}" -O "${CMAKE_CURRENT_SOURCE_DIR}/Rendering/LocalShadowsTests.py")
 	set_tests_properties(LocalShadowHarness PROPERTIES LABELS unit TIMEOUT 30)

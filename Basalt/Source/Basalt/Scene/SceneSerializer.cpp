@@ -212,7 +212,11 @@ namespace Basalt {
 
 		json SerializePhysicsSettings(const PhysicsSettings& s)
 		{
-			return { { "Gravity", Vec3ToJson(s.Gravity) }, { "FixedTimestep", s.FixedTimestep }, { "MaxStepsPerFrame", s.MaxStepsPerFrame } };
+			json data = { { "Gravity", Vec3ToJson(s.Gravity) }, { "MaxStepsPerFrame", s.MaxStepsPerFrame } };
+			// Written only as an override: a scene without one follows the project's step.
+			if (s.FixedTimestep > 0.0f)
+				data["FixedTimestep"] = s.FixedTimestep;
+			return data;
 		}
 
 		bool DeserializePhysicsSettings(const json& data, PhysicsSettings& s, std::string& outError)
@@ -221,14 +225,19 @@ namespace Basalt {
 			if (!reader.IsObject(outError))
 				return false;
 			int64_t maxSteps = s.MaxStepsPerFrame;
-			if (!reader.Vec3("Gravity", s.Gravity, outError) || !reader.Float("FixedTimestep", s.FixedTimestep, outError) || !reader.Integer("MaxStepsPerFrame", maxSteps, 1, 64, outError) || !reader.Finish(outError))
-				return false;
-			s.MaxStepsPerFrame = static_cast<uint32_t>(maxSteps);
-			if (s.FixedTimestep <= 0.0f || s.FixedTimestep > 0.25f)
+			// null removes the override (scene.settings patches), so the scene follows the project again.
+			float fixedTimestep = s.FixedTimestep;
+			if (const json* step = reader.Take("FixedTimestep"); step && step->is_null())
+				fixedTimestep = 0.0f;
+			else if (step && (!JsonToFloat(*step, fixedTimestep) || !IsValidFixedTimestep(fixedTimestep)))
 			{
-				outError = "Physics: FixedTimestep must be in (0, 0.25] seconds";
+				outError = fmt::format("Physics: FixedTimestep must be a number of seconds in (0, {}], or null to use the project's", MaxFixedTimestep);
 				return false;
 			}
+			if (!reader.Vec3("Gravity", s.Gravity, outError) || !reader.Integer("MaxStepsPerFrame", maxSteps, 1, 64, outError) || !reader.Finish(outError))
+				return false;
+			s.MaxStepsPerFrame = static_cast<uint32_t>(maxSteps);
+			s.FixedTimestep = fixedTimestep;
 			return true;
 		}
 
@@ -623,6 +632,8 @@ namespace Basalt {
 	std::string SceneSerializer::ComputeStateHash(Scene& scene)
 	{
 		nlohmann::json data = SerializeScene(scene);
+		// The step the simulation actually uses, whether the scene or the project chose it.
+		data["Physics"]["FixedTimestep"] = scene.GetFixedTimestep();
 		ReplaceEulerRotations(data, scene);
 		std::unordered_map<uint64_t, uint64_t> indices;
 		for (const nlohmann::json& entity : data["Entities"])

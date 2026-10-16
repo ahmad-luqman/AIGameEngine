@@ -1,11 +1,20 @@
 #include <doctest/doctest.h>
 
+#include <Basalt/Automation/AutomationSession.h>
+#include <Basalt/Automation/CommandRegistry.h>
 #include <Basalt/Core/FileSystem.h>
 #include <Basalt/Core/Platform.h>
+#include <Basalt/Project/Project.h>
+#include <Basalt/Project/ProjectValidator.h>
 #include <Basalt/Project/SaveData.h>
+#include <Basalt/Project/SmokeTest.h>
+#include <Basalt/Scene/Components.h>
+#include <Basalt/Scene/Entity.h>
+#include <Basalt/Scene/SceneSerializer.h>
 
 #include "TestUtils.h"
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <limits>
@@ -13,6 +22,36 @@
 using namespace Basalt;
 
 namespace {
+
+	nlohmann::json RunCommand(const CommandRegistry& registry, AutomationSession& session, const std::string& command, const nlohmann::json& params = nlohmann::json::object())
+	{
+		const nlohmann::json response = registry.HandleRequest(session, { { "command", command }, { "params", params } });
+		INFO(command << ": " << response.dump());
+		REQUIRE(response["ok"] == true);
+		return response["result"];
+	}
+
+	std::string RunCommandError(const CommandRegistry& registry, AutomationSession& session, const std::string& command, const nlohmann::json& params = nlohmann::json::object())
+	{
+		const nlohmann::json response = registry.HandleRequest(session, { { "command", command }, { "params", params } });
+		REQUIRE(response["ok"] == false);
+		return response["error"].get<std::string>();
+	}
+
+	// The validation messages (file: message) of one severity.
+	std::vector<std::string> Messages(const ValidationReport& report, ValidationSeverity severity)
+	{
+		std::vector<std::string> messages;
+		for (const ValidationIssue& issue : report.GetIssues())
+			if (issue.Severity == severity)
+				messages.push_back(issue.File + ": " + issue.Message);
+		return messages;
+	}
+
+	bool Contains(const std::vector<std::string>& messages, const std::string& text)
+	{
+		return std::any_of(messages.begin(), messages.end(), [&](const std::string& message) { return message.find(text) != std::string::npos; });
+	}
 
 	std::string SaveFile(const nlohmann::json& values, int version = SaveData::FormatVersion)
 	{
@@ -281,5 +320,222 @@ TEST_SUITE("Project")
 			CHECK(error.find("HOME is set to 'relative/home', which is not an absolute path") != std::string::npos);
 		}
 #endif
+	}
+
+	TEST_CASE("The project's fixed timestep is the default physics step, which scenes may override")
+	{
+		BasaltTest::TempProject temp("FixedTimestep");
+		REQUIRE(temp.IsValid());
+		Ref<Project> project = Project::GetActive();
+		CHECK(project->GetConfig().FixedTimestep == DefaultFixedTimestep);
+
+		Scene scene;
+		CHECK(scene.GetFixedTimestep() == DefaultFixedTimestep);
+		project->GetConfig().FixedTimestep = 0.01f;
+		CHECK(scene.GetFixedTimestep() == 0.01f);
+		// A session keeps the step it started with, as it keeps the seed.
+		scene.OnSimulationStart();
+		project->GetConfig().FixedTimestep = 0.02f;
+		CHECK(scene.GetFixedTimestep() == 0.01f);
+		scene.OnSimulationStop();
+		CHECK(scene.GetFixedTimestep() == 0.02f);
+		// The scene's own value wins.
+		scene.GetPhysicsSettings().FixedTimestep = 0.005f;
+		CHECK(scene.GetFixedTimestep() == 0.005f);
+
+		// The project file keeps it; bad values are rejected on load.
+		std::string error;
+		REQUIRE(project->Save(error));
+		Ref<Project> reloaded = Project::Load(temp.GetDirectory(), error);
+		REQUIRE_MESSAGE(reloaded, error);
+		CHECK(reloaded->GetConfig().FixedTimestep == 0.02f);
+		for (const char* bad : { "0", "-0.01", "0.3", "\"fast\"" })
+		{
+			temp.WriteFile(Project::FileName, std::string(R"({"Format": "BasaltProject", "FixedTimestep": )") + bad + "}");
+			CHECK_FALSE(Project::Load(temp.GetDirectory(), error));
+			CHECK(error.find("FixedTimestep") != std::string::npos);
+		}
+	}
+
+	TEST_CASE("Scenes store the fixed timestep only as an override, and null removes it")
+	{
+		BasaltTest::TempProject temp("FixedTimestepOverride");
+		REQUIRE(temp.IsValid());
+		Scene scene;
+		CHECK_FALSE(SceneSerializer::SerializeScene(scene)["Physics"].contains("FixedTimestep"));
+		scene.GetPhysicsSettings().FixedTimestep = 0.01f;
+		CHECK(SceneSerializer::SerializeScene(scene)["Physics"]["FixedTimestep"] == 0.01f);
+
+		std::string error;
+		CHECK(SceneSerializer::DeserializeScene(scene, { { "Physics", { { "FixedTimestep", nullptr } } } }, error));
+		CHECK(scene.GetPhysicsSettings().FixedTimestep == 0.0f);
+		CHECK(SceneSerializer::DeserializeScene(scene, { { "Physics", { { "FixedTimestep", 0.02 } } } }, error));
+		CHECK(scene.GetPhysicsSettings().FixedTimestep == 0.02f);
+		for (const nlohmann::json& bad : { nlohmann::json(0), nlohmann::json(0.5), nlohmann::json("x") })
+		{
+			CHECK_FALSE(SceneSerializer::DeserializeScene(scene, { { "Physics", { { "FixedTimestep", bad } } } }, error));
+			CHECK(error.find("FixedTimestep") != std::string::npos);
+			CHECK(scene.GetPhysicsSettings().FixedTimestep == 0.02f);
+		}
+
+		// The state hash covers the step the simulation uses, whoever chose it.
+		scene.GetPhysicsSettings().FixedTimestep = 0.0f;
+		const std::string projectStep = SceneSerializer::ComputeStateHash(scene);
+		Project::GetActive()->GetConfig().FixedTimestep = 0.01f;
+		const std::string changedProject = SceneSerializer::ComputeStateHash(scene);
+		CHECK(changedProject != projectStep);
+		scene.GetPhysicsSettings().FixedTimestep = 0.01f;
+		CHECK(SceneSerializer::ComputeStateHash(scene) == changedProject);
+	}
+
+	TEST_CASE("Fixed timestep commands: project.set and project.info, scene.settings and scene.info")
+	{
+		BasaltTest::TempProject temp("FixedTimestepCommands");
+		REQUIRE(temp.IsValid());
+		CommandRegistry registry;
+		AutomationSession session;
+		RunCommand(registry, session, "scene.new", { { "name", "Main" }, { "empty", true } });
+		CHECK(RunCommand(registry, session, "project.info")["fixedTimestep"] == DefaultFixedTimestep);
+		RunCommand(registry, session, "project.set", { { "fixedTimestep", 0.02 } });
+		CHECK(RunCommand(registry, session, "project.info")["fixedTimestep"] == 0.02f);
+		for (const nlohmann::json& bad : { nlohmann::json(0), nlohmann::json(-1), nlohmann::json(0.26), nlohmann::json("x") })
+			CHECK(RunCommandError(registry, session, "project.set", { { "fixedTimestep", bad } }).find("fixedTimestep") != std::string::npos);
+		CHECK(Project::GetActive()->GetConfig().FixedTimestep == 0.02f);
+
+		nlohmann::json info = RunCommand(registry, session, "scene.info");
+		CHECK(info["fixedTimestep"] == 0.02f);
+		CHECK(info["fixedTimestepOverride"].is_null());
+		RunCommand(registry, session, "scene.settings", { { "Physics", { { "FixedTimestep", 0.005 } } } });
+		info = RunCommand(registry, session, "scene.info");
+		CHECK(info["fixedTimestep"] == 0.005f);
+		CHECK(info["fixedTimestepOverride"] == 0.005f);
+		RunCommand(registry, session, "scene.settings", { { "Physics", { { "FixedTimestep", nullptr } } } });
+		CHECK(RunCommand(registry, session, "scene.info")["fixedTimestepOverride"].is_null());
+	}
+
+	TEST_CASE("Project validation accepts a complete project")
+	{
+		BasaltTest::TempProject temp("ValidateClean");
+		REQUIRE(temp.IsValid());
+		temp.WriteFile("Assets/Scripts/Mover.lua", "local Mover = {}\nfunction Mover:OnUpdate(dt) end\nreturn Mover\n");
+		// A module loaded with require may return anything; only Script components need a class table.
+		temp.WriteFile("Assets/Scripts/Helpers.lua", "return function() return 1 end\n");
+		temp.WriteFile("Assets/Textures/Wall.png", "not decoded by validation");
+		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities": [{"ID": 1, "Name": "Wall", "Components": {
+			"Mesh": {"Mesh": "builtin://Cube"}, "Material": {"AlbedoMap": "Assets/Textures/Wall.png"},
+			"Script": {"Script": "Assets/Scripts/Mover.lua"}, "RigidBody": {"Layer": "Default"}}}]})");
+		Project::GetActive()->GetConfig().StartScene = "Assets/Scenes/Main.bscene";
+		const ValidationReport report = ValidateProject(*Project::GetActive());
+		INFO(Messages(report, ValidationSeverity::Error).size());
+		CHECK(report.IsValid());
+		CHECK(report.GetWarningCount() == 0);
+		CHECK(report.GetIssues().empty());
+	}
+
+	TEST_CASE("Project validation reports what would break the exported game")
+	{
+		BasaltTest::TempProject temp("ValidateProblems");
+		REQUIRE(temp.IsValid());
+		Ref<Project> project = Project::GetActive();
+		CHECK(Contains(Messages(ValidateProject(*project), ValidationSeverity::Error), "no StartScene"));
+
+		temp.WriteFile("Assets/Textures/Wall.png", "x");
+		temp.WriteFile("Assets/Scripts/Broken.lua", "local x = = 1\n");
+		temp.WriteFile("Assets/Scripts/NoClass.lua", "return 42\n");
+		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities": [
+			{"ID": 1, "Name": "A", "Components": {"Mesh": {"Mesh": "Assets/Models/Missing.glb"}}},
+			{"ID": 2, "Name": "B", "Components": {"Material": {"AlbedoMap": "Assets/textures/wall.png"}}},
+			{"ID": 3, "Name": "C", "Components": {"Mesh": {"Mesh": "builtin://Teapot"}}},
+			{"ID": 4, "Name": "D", "Components": {"Material": {"NormalMap": "../Outside.png"}}},
+			{"ID": 5, "Name": "E", "Components": {"Script": {"Script": "Assets/Scripts/NoClass.lua"}}},
+			{"ID": 6, "Name": "F", "Components": {"RigidBody": {"Layer": "Ghost"}}}]})");
+		temp.WriteFile("Assets/Scenes/Corrupt.bscene", R"({"Entities": [{"ID": 1, "Components": {"Bogus": {}}}]})");
+		temp.WriteFile("Assets/Prefabs/Bad.bprefab", "{not json");
+		project->GetConfig().StartScene = "Assets/Scenes/Missing.bscene";
+		project->GetConfig().WindowWidth = 10;
+
+		const ValidationReport report = ValidateProject(*project);
+		CHECK_FALSE(report.IsValid());
+		const auto errors = Messages(report, ValidationSeverity::Error);
+		INFO(nlohmann::json(errors).dump(1));
+		CHECK(Contains(errors, "Project.bproject: the window size 10x900"));
+		CHECK(Contains(errors, "Project.bproject: StartScene the missing file 'Assets/Scenes/Missing.bscene'"));
+		CHECK(Contains(errors, "Assets/Scenes/Main.bscene: references the missing file 'Assets/Models/Missing.glb'"));
+		CHECK(Contains(errors, "'Assets/textures/wall.png', but the file on disk is 'Assets/Textures/Wall.png'"));
+		CHECK(Contains(errors, "unknown built-in mesh 'builtin://Teapot'"));
+		CHECK(Contains(errors, "'../Outside.png', which is outside Assets/"));
+		CHECK(Contains(errors, "Assets/Scripts/Broken.lua: does not compile"));
+		CHECK(Contains(errors, "Assets/Scripts/NoClass.lua: fails to load as a script class"));
+		CHECK(Contains(errors, "Assets/Scenes/Corrupt.bscene: does not load"));
+		CHECK(Contains(errors, "Assets/Prefabs/Bad.bprefab: does not load"));
+		CHECK(report.GetErrorCount() == errors.size());
+		const auto warnings = Messages(report, ValidationSeverity::Warning);
+		CHECK(Contains(warnings, "'F' uses the undefined physics layer 'Ghost'"));
+		CHECK(report.GetWarningCount() == 1);
+		CHECK(report.GetOmittedCount() == 0);
+	}
+
+	TEST_CASE("Project validation caps the listed issues but counts them all")
+	{
+		BasaltTest::TempProject temp("ValidateCap");
+		REQUIRE(temp.IsValid());
+		std::string entities;
+		for (size_t i = 0; i < ValidationReport::MaxIssues + 25; i++)
+			entities += (i ? "," : "") + nlohmann::json{ { "ID", i + 1 }, { "Name", "E" }, { "Components", { { "Mesh", { { "Mesh", "Assets/M" + std::to_string(i) + ".glb" } } } } } }.dump();
+		temp.WriteFile("Assets/Scenes/Main.bscene", "{\"Entities\": [" + entities + "]}");
+		Project::GetActive()->GetConfig().StartScene = "Assets/Scenes/Main.bscene";
+		const ValidationReport report = ValidateProject(*Project::GetActive());
+		CHECK(report.GetIssues().size() == ValidationReport::MaxIssues);
+		CHECK(report.GetErrorCount() == ValidationReport::MaxIssues + 25);
+		CHECK(report.GetOmittedCount() == 25);
+	}
+
+	TEST_CASE("project.validate and project.export refuse a broken project; project.smoke_test needs an executable")
+	{
+		BasaltTest::TempProject temp("ValidateCommands");
+		REQUIRE(temp.IsValid());
+		CommandRegistry registry;
+		AutomationSession session;
+		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities": [{"ID": 1, "Name": "A", "Components": {"Mesh": {"Mesh": "Assets/Missing.glb"}}}]})");
+		RunCommand(registry, session, "project.set", { { "startScene", "Assets/Scenes/Main.bscene" } });
+
+		const nlohmann::json report = RunCommand(registry, session, "project.validate");
+		CHECK(report["valid"] == false);
+		CHECK(report["errors"] == 1);
+		REQUIRE(report["issues"].size() == 1);
+		CHECK(report["issues"][0]["severity"] == "error");
+		CHECK(report["issues"][0]["file"] == "Assets/Scenes/Main.bscene");
+		CHECK(RunCommandError(registry, session, "project.validate", { { "assertValid", true } }).find("Assets/Missing.glb") != std::string::npos);
+
+		const auto output = temp.GetDirectory().parent_path() / "ValidateCommandsExport";
+		const std::string error = RunCommandError(registry, session, "project.export", { { "output", output.string() } });
+		CHECK(error.find("not exported: project validation found 1 error") != std::string::npos);
+		CHECK_FALSE(std::filesystem::exists(output));
+		CHECK(RunCommandError(registry, session, "project.export", { { "output", output.string() }, { "smokeTestFrames", -1 } }).find("smokeTestFrames") != std::string::npos);
+		CHECK(RunCommandError(registry, session, "project.export", { { "output", output.string() }, { "smokeTestTimeout", 0 } }).find("smokeTestTimeout") != std::string::npos);
+		// validate: false exports anyway (BasaltRuntime is built next to the tests). On macOS the exporter bundles
+		// the Vulkan loader and MoltenVK: point it at stand-ins so the test does not need the Vulkan SDK.
+#if defined(__APPLE__)
+		temp.WriteFile("FakeVulkanSDK/lib/libvulkan.1.dylib", "stand-in");
+		temp.WriteFile("FakeVulkanSDK/lib/libMoltenVK.dylib", "stand-in");
+		const BasaltTest::ScopedEnvVar sdk("VULKAN_SDK", (temp.GetDirectory() / "FakeVulkanSDK").string());
+#endif
+		const nlohmann::json exported = RunCommand(registry, session, "project.export", { { "output", output.string() }, { "validate", false } });
+		CHECK(exported["validation"].is_null());
+		CHECK(std::filesystem::exists(exported["executable"].get<std::string>()));
+
+		CHECK(RunCommandError(registry, session, "project.smoke_test", { { "executable", (temp.GetDirectory() / "NoGame").string() } }).find("no executable") != std::string::npos);
+		CHECK(RunCommandError(registry, session, "project.smoke_test", { { "executable", "x" }, { "frames", 0 } }).find("frames") != std::string::npos);
+		std::filesystem::remove_all(output);
+	}
+
+	TEST_CASE("LastLines keeps the end of a log")
+	{
+		CHECK(LastLines("a\nb\nc\n", 2) == "b\nc\n");
+		CHECK(LastLines("a\nb\nc", 2) == "b\nc");
+		CHECK(LastLines("a\nb\nc\n", 5) == "a\nb\nc\n");
+		CHECK(LastLines("single", 1) == "single");
+		CHECK(LastLines("", 3).empty());
+		CHECK(LastLines("a\n\n\n", 2) == "\n\n");
 	}
 }

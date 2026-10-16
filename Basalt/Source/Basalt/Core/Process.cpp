@@ -9,13 +9,20 @@
 
 	#include <algorithm>
 	#include <atomic>
+	#include <cwchar>
+	#include <string_view>
 #else
+	#include <algorithm>
 	#include <cerrno>
 	#include <csignal>
 	#include <cstring>
+	#include <string_view>
+
 	#include <fcntl.h>
 	#include <sys/wait.h>
 	#include <unistd.h>
+
+extern char** environ;
 #endif
 
 namespace Basalt {
@@ -82,6 +89,38 @@ namespace Basalt {
 			return std::filesystem::path(std::u8string(text.begin(), text.end())).wstring();
 		}
 
+		bool SameVariable(std::wstring_view entry, const std::wstring& name)
+		{
+			// Variable names are case-insensitive on Windows.
+			return entry.size() > name.size() && entry[name.size()] == L'=' && CompareStringOrdinal(entry.data(), static_cast<int>(name.size()), name.data(), static_cast<int>(name.size()), TRUE) == CSTR_EQUAL;
+		}
+
+		// The caller's environment block with the overrides applied (empty when there are none, which makes the
+		// child inherit the block unchanged).
+		std::wstring BuildEnvironment(const std::vector<std::pair<std::string, std::string>>& overrides)
+		{
+			std::wstring block;
+			if (overrides.empty())
+				return block;
+			std::vector<std::wstring> names;
+			for (const auto& [name, value] : overrides)
+				names.push_back(Widen(name));
+			if (wchar_t* current = GetEnvironmentStringsW())
+			{
+				for (const wchar_t* entry = current; *entry; entry += std::wcslen(entry) + 1)
+				{
+					const std::wstring_view text(entry);
+					if (std::none_of(names.begin(), names.end(), [&](const std::wstring& name) { return SameVariable(text, name); }))
+						block.append(text).push_back(L'\0');
+				}
+				FreeEnvironmentStringsW(current);
+			}
+			for (const auto& [name, value] : overrides)
+				block.append(Widen(name) + L"=" + Widen(value)).push_back(L'\0');
+			block.push_back(L'\0');
+			return block;
+		}
+
 		// Closes a handle when the scope ends.
 		struct HandleGuard
 		{
@@ -146,7 +185,8 @@ namespace Basalt {
 		startup.hStdError = output.Handle;
 		PROCESS_INFORMATION process{};
 		const std::wstring directory = spec.WorkingDirectory.wstring();
-		if (!CreateProcessW(spec.Executable.wstring().c_str(), commandLine.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, directory.empty() ? nullptr : directory.c_str(), &startup, &process))
+		std::wstring environment = BuildEnvironment(spec.Environment);
+		if (!CreateProcessW(spec.Executable.wstring().c_str(), commandLine.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT, environment.empty() ? nullptr : environment.data(), directory.empty() ? nullptr : directory.c_str(), &startup, &process))
 		{
 			result.Error = "cannot start '" + spec.Executable.string() + "': " + LastErrorMessage(GetLastError());
 			return result;
@@ -265,6 +305,24 @@ namespace Basalt {
 		for (std::string& argument : arguments)
 			argv.push_back(argument.data());
 		argv.push_back(nullptr);
+		// The caller's environment with spec.Environment replacing (or adding) its variables.
+		std::vector<std::string> variables;
+		for (char** entry = environ; entry && *entry; entry++)
+		{
+			const std::string_view text(*entry);
+			const bool replaced = std::any_of(spec.Environment.begin(), spec.Environment.end(), [&](const auto& variable) {
+				return text.size() > variable.first.size() && text[variable.first.size()] == '=' && text.starts_with(variable.first);
+			});
+			if (!replaced)
+				variables.emplace_back(text);
+		}
+		for (const auto& [name, value] : spec.Environment)
+			variables.push_back(name + "=" + value);
+		std::vector<char*> envp;
+		envp.reserve(variables.size() + 1);
+		for (std::string& variable : variables)
+			envp.push_back(variable.data());
+		envp.push_back(nullptr);
 
 		// The child reports a failed chdir/exec through this pipe; a successful exec closes it (FD_CLOEXEC), so
 		// "could not start" never looks like "started and exited non-zero".
@@ -300,7 +358,7 @@ namespace Basalt {
 					dup2(input, STDIN_FILENO);
 				dup2(output.Value, STDOUT_FILENO);
 				dup2(output.Value, STDERR_FILENO);
-				execv(executable.c_str(), argv.data());
+				execve(executable.c_str(), argv.data(), envp.data());
 				failure = errno;
 			}
 			[[maybe_unused]] const ssize_t written = write(statusWrite.Value, &failure, sizeof(failure));

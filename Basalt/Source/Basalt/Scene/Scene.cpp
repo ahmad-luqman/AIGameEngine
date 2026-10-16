@@ -107,9 +107,17 @@ namespace Basalt {
 		return scene;
 	}
 
-	void Scene::StartRandomSession()
+	float Scene::GetFixedTimestep() const
+	{
+		if (m_PhysicsSettings.FixedTimestep > 0.0f)
+			return m_PhysicsSettings.FixedTimestep;
+		return m_SessionFixedTimestep > 0.0f ? m_SessionFixedTimestep : Project::GetActiveFixedTimestep();
+	}
+
+	void Scene::StartSession()
 	{
 		m_RandomSeed = Project::GetActiveRandomSeed();
+		m_SessionFixedTimestep = Project::GetActiveFixedTimestep();
 		m_SessionIdentity.emplace(m_RandomSeed);
 		// Authored entities never pass through the stream; reserve their IDs so a destroyed one is
 		// never reissued to a later spawn by this generator.
@@ -560,7 +568,7 @@ namespace Basalt {
 		m_FrameCount = 0;
 		// A play session never shows the previous session's immediate-mode UI (e.g. when it starts paused).
 		GameUI::BeginFrame();
-		StartRandomSession();
+		StartSession();
 		m_QuitRequested = false;
 		m_Paused = false;
 		m_StepFrames = 0;
@@ -608,6 +616,7 @@ namespace Basalt {
 		m_PhysicsWorld.reset();
 		m_State = SceneState::Edit;
 		m_SessionIdentity.reset();
+		m_SessionFixedTimestep = 0.0f;
 		m_PendingLoad.reset();
 		m_PersistentEntities.clear();
 		FlushPendingDestruction();
@@ -621,7 +630,7 @@ namespace Basalt {
 		m_State = SceneState::Simulate;
 		m_Time = 0.0f;
 		m_FrameCount = 0;
-		StartRandomSession();
+		StartSession();
 		m_Paused = false;
 		m_StepFrames = 0;
 		m_PhysicsWorld = CreateScope<PhysicsWorld>(this);
@@ -643,6 +652,7 @@ namespace Basalt {
 		m_PendingDestruction.clear();
 		m_State = SceneState::Edit;
 		m_SessionIdentity.reset();
+		m_SessionFixedTimestep = 0.0f;
 	}
 
 	void Scene::OnUpdate(Timestep ts)

@@ -1704,6 +1704,18 @@ namespace Basalt {
 				ImGui::SetNextItemWidth(520.0f);
 				ImGui::InputTextWithHint("##Name", "Project name", &m_PromptName);
 			}
+			if (m_Prompt == PromptKind::Export)
+			{
+				ImGui::TextDisabled("The project is validated first; errors stop the export (Project Settings > Validate).");
+				ImGui::Checkbox("Smoke test: run the exported game headless for", &m_ExportSmokeTest);
+				ImGui::SameLine();
+				ImGui::SetNextItemWidth(90.0f);
+				ImGui::BeginDisabled(!m_ExportSmokeTest);
+				ImGui::InputInt("frames", &m_ExportSmokeFrames, 0);
+				m_ExportSmokeFrames = std::clamp(m_ExportSmokeFrames, 1, 100000);
+				ImGui::EndDisabled();
+				ImGui::TextDisabled("The editor waits for the smoke test (at most 60 s).");
+			}
 
 			if (ImGui::Button("OK", ImVec2(120.0f, 0.0f)) || ImGui::IsKeyPressed(ImGuiKey_Enter))
 			{
@@ -1728,9 +1740,10 @@ namespace Basalt {
 							m_Context.Execute("scene.new", { { "name", "Main" } });
 						break;
 					case PromptKind::Export:
-						if (auto result = m_Context.Execute("project.export", { { "output", m_PromptPath } }))
+						if (auto result = m_Context.Execute("project.export", { { "output", m_PromptPath }, { "smokeTestFrames", m_ExportSmokeTest ? m_ExportSmokeFrames : 0 } }))
 						{
-							m_Context.SetStatus("Exported to " + (*result)["executable"].get<std::string>(), false);
+							const std::string executable = (*result)["executable"].get<std::string>();
+							m_Context.SetStatus(m_ExportSmokeTest ? "Exported to " + executable + "; the smoke test passed" : "Exported to " + executable, false);
 							ok = true;
 						}
 						break;
@@ -1753,7 +1766,12 @@ namespace Basalt {
 				return;
 			}
 			if (!m_Context.StatusMessage.empty() && m_Context.StatusIsError && ImGui::GetTime() - m_Context.StatusTime < 8.0)
+			{
+				// Validation and smoke test failures span several lines (the problems, the game's log).
+				ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 640.0f);
 				ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s", m_Context.StatusMessage.c_str());
+				ImGui::PopTextWrapPos();
+			}
 			if (close)
 				ImGui::CloseCurrentPopup();
 			ImGui::EndPopup();

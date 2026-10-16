@@ -146,6 +146,9 @@ namespace Basalt {
 		bool m_PromptOpened = false;
 		std::string m_PromptPath;
 		std::string m_PromptName;
+		// Export prompt: smoke-test the exported game (project.export smokeTestFrames).
+		bool m_ExportSmokeTest = true;
+		int m_ExportSmokeFrames = 120;
 		std::string m_WindowTitle;
 	};
 

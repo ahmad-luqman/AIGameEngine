@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace Basalt {
@@ -15,6 +16,8 @@ namespace Basalt {
 		std::vector<std::string> Arguments;
 		// Empty: the caller's working directory.
 		std::filesystem::path WorkingDirectory;
+		// Variables set (or replaced) in the child's copy of the caller's environment.
+		std::vector<std::pair<std::string, std::string>> Environment;
 		// The child is killed when it runs longer.
 		std::chrono::milliseconds Timeout{ 60000 };
 		// Combined stdout/stderr beyond this keeps only its last bytes (the end of a log explains a failure).
@@ -45,7 +48,8 @@ namespace Basalt {
 	};
 
 	// Runs a program to completion with a timeout, capturing its output. Used by tools that check a build
-	// (the export smoke test). Blocks the calling thread. The child inherits the environment. Output goes
+	// (the export smoke test). Blocks the calling thread. The child inherits the environment (plus
+	// spec.Environment). Output goes
 	// through a temporary file rather than a pipe, so a chatty child can never block on a full pipe while
 	// the caller waits for it to exit.
 	ProcessResult RunProcess(const ProcessSpec& spec);

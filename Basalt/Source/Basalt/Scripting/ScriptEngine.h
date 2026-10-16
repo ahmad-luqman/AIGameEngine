@@ -93,6 +93,9 @@ namespace Basalt {
 
 		// Loads a script in an isolated Lua state and returns its Properties defaults (editor inspector).
 		static std::optional<nlohmann::json> LoadScriptProperties(const std::string& scriptPath, std::string& outError);
+		// Compiles a script without running it (syntax errors only). Modules loaded through require may return
+		// anything, so this is the check that applies to every script file.
+		static bool CheckSyntax(const std::string& scriptPath, std::string& outError);
 
 	private:
 		// Creates the instance (properties applied) without calling OnCreate. False if none was created.
