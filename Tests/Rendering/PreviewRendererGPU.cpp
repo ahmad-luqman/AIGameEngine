@@ -3,6 +3,7 @@
 
 #include <Basalt/Asset/AssetManager.h>
 #include <Basalt/Asset/ImageUtils.h>
+#include <Basalt/Core/FileSystem.h>
 #include <Basalt/Project/Project.h>
 #include <Basalt/Renderer/DebugDraw.h>
 #include <Basalt/Renderer/PreviewRenderer.h>
@@ -125,6 +126,11 @@ TEST_CASE("Previews frame models, prefabs and materials under the studio lightin
 	CHECK_FALSE(previews.RenderModel("Assets/Models/Missing.glb", error));
 	CHECK_FALSE(error.empty());
 	CHECK_FALSE(previews.RenderPrefab("Assets/Prefabs/Missing.bprefab", error));
+	// A prefab with nothing to draw says so (an absolute path: the test data stays untouched).
+	const std::filesystem::path empty = std::filesystem::path(BASALT_PREVIEW_OUTPUT_DIR) / "Empty.bprefab";
+	REQUIRE(FileSystem::WriteTextFile(empty, R"({"Format": "BasaltPrefab", "Version": 1, "Entities": [{"ID": 1, "Name": "Root", "Parent": 0, "Components": {}}]})", error));
+	CHECK_FALSE(previews.RenderPrefab(FileSystem::PathToUtf8(empty), error));
+	CHECK(error == "nothing to show (no meshes)");
 
 	DebugDraw::Clear();
 	AssetManager::Clear();
