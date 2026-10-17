@@ -702,6 +702,37 @@ TEST_SUITE("UIWidgets")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("A mouse button held when the game gets the pointer back neither presses nor clicks a widget")
+	{
+		WidgetInputScope input;
+		TempProject project("UIHeldPointer");
+		Scene scene;
+		Entity menu = AddRecorder(scene, project, "Menu");
+		Entity button = AddWidget<UIButtonComponent>(scene, "Button", { 100.0f, 100.0f }, { 200.0f, 80.0f }, { .Target = menu.GetUUID() });
+		scene.OnRuntimeStart();
+		Input::SetMousePosition({ 200.0f, 140.0f });
+		// Pressed while the pointer was the host's (a replay's view without it, then the press, then a view with it, all
+		// on one frame) ...
+		Input::SetGamePointer(false);
+		Input::SetMouseButtonState(MouseCode::Left, true);
+		Input::SetGamePointer(true);
+		Frame(scene);
+		// ... and let go over the button.
+		CHECK(StateOf(scene, button) != UIWidgetState::Pressed);
+		Frame(scene);
+		CHECK(StateOf(scene, button) != UIWidgetState::Pressed);
+		Input::SetMouseButtonState(MouseCode::Left, false);
+		Frame(scene);
+		CHECK(LogOf(scene, menu).empty());
+		// A new click is the game's.
+		Input::SetMouseButtonState(MouseCode::Left, true);
+		Frame(scene);
+		Input::SetMouseButtonState(MouseCode::Left, false);
+		Frame(scene);
+		CHECK(LogOf(scene, menu) == std::vector<std::string>{ "Button:OnClick" });
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Enter, Space and gamepad A activate the focused widget")
 	{
 		WidgetInputScope input;

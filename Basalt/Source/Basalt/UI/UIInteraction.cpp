@@ -291,17 +291,19 @@ namespace Basalt {
 				m_Pressed->DragX = pointer->x;
 				DragSlider(scene, *pressed, pointer->x);
 			}
-			if (Input::IsMouseButtonDown(MouseCode::Left))
+			// The game's view of the button (GameInput), like the scripts': a button held when the game got the pointer
+			// back is not the game's.
+			if (GameInput::IsMouseButtonDown(MouseCode::Left))
 				return;
 			// Only a real release over the widget clicks it; a reset (the window lost focus) just lets go.
-			const bool clicked = Input::IsMouseButtonReleased(MouseCode::Left) && pressed->Kind != UIWidgetKind::Slider && m_Hovered == pressed->ID;
+			const bool clicked = GameInput::IsMouseButtonReleased(MouseCode::Left) && pressed->Kind != UIWidgetKind::Slider && m_Hovered == pressed->ID;
 			m_Pressed.reset();
 			if (clicked)
 				Activate(scene, *pressed);
 			return;
 		}
 
-		if (!pointer || !Input::IsMouseButtonPressed(MouseCode::Left))
+		if (!pointer || !GameInput::IsMouseButtonPressed(MouseCode::Left))
 			return;
 		// The mouse takes over from keyboard/gamepad navigation: Space and Enter go back to the game until the
 		// focus is set again.
