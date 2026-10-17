@@ -337,6 +337,30 @@ local function TestSystems(self)
 	ExpectError("Unknown key name", function() Input.IsKeyDown("Hyperspace") end, "unknown key")
 	ExpectError("Unknown mouse button", function() Input.IsMouseButtonDown("Thumb") end, "unknown mouse button")
 
+	-- Input actions come from the project's Input.binput; rebinding lasts for the session.
+	local actions = Input.GetActions()
+	Check("Input.GetActions", #actions == 3 and actions[1].Name == "Jump" and actions[3].Type == "Axis" and actions[3].Bindings[2].Scale == -1)
+	Check("Input.GetBindings", Input.GetBindings("Fire")[1].MouseButton == "Left" and Input.GetBindings("MoveX")[3].DeadZone == 0.25)
+	-- The batch holds Space and the left mouse button before play starts.
+	Check("Input.GetAction", Input.GetAction("MoveX") == 0 and Input.GetAction("Jump") == 1)
+	Check("Input.IsActionDown", Input.IsActionDown("Jump") and Input.IsActionDown("Fire") and not Input.IsActionDown("MoveX") and not Input.IsActionReleased("Fire"))
+	Input.SetBindings("Jump", { { Key = "J" } })
+	Check("Input.SetBindings", #Input.GetBindings("Jump") == 1 and Input.GetBindings("Jump")[1].Key == "J")
+	Input.ResetBindings("Jump")
+	Check("Input.ResetBindings", Input.GetBindings("Jump")[1].Key == "Space" and Input.GetBindings("Jump")[2].GamepadButton == "A")
+	Input.SetBindings("MoveX", {})
+	Input.ResetBindings()
+	Check("Input.ResetBindings all", #Input.GetBindings("MoveX") == 3)
+	ExpectError("Unknown input action", function() Input.GetAction("Dash") end, "unknown input action 'Dash' (defined: Jump, Fire, MoveX)")
+	ExpectError("Invalid input binding", function() Input.SetBindings("Jump", { { Key = "Space", Gamepad = 0 } }) end, "Gamepad applies to GamepadButton and GamepadAxis bindings only")
+	Check("Input.GetViewSize", Input.GetViewSize() == Vec2(1920, 1080))
+	-- The cursor mode is only stored headless; put it back so a windowed GPU run never keeps the cursor.
+	Input.SetCursorMode("Locked")
+	Check("Input.SetCursorMode", Input.GetCursorMode() == "Locked")
+	Input.SetCursorMode("Normal")
+	Check("Input.GetCursorMode", Input.GetCursorMode() == "Normal")
+	ExpectError("Unknown cursor mode", function() Input.SetCursorMode("Grabbed") end, "unknown cursor mode")
+
 	-- Sandbox: no file access from scripts.
 	Check("Sandbox: dofile removed", dofile == nil and loadfile == nil and io == nil and os == nil)
 	local util = require("Assets.Scripts.Lib.FeatureUtil")
@@ -523,6 +547,7 @@ function Driver:OnUpdate(dt)
 		Check("Input.GetMousePosition", Input.GetMousePosition() == Vec2(320, 240))
 		Check("Input.GetMouseScroll", Input.GetMouseScroll() == Vec2(0, 0))
 		Check("No release on the press frame", not Input.IsKeyReleased("Space") and not Input.IsMouseButtonReleased("Left"))
+		Check("Input.IsActionPressed", Input.IsActionPressed("Jump") and Input.GetAction("Jump") == 1 and Input.IsActionDown("Fire"))
 
 		-- Character controller: the hero walks towards a step, jumps on frame 25 and walks again from frame 100.
 		local hero = Scene.FindEntityByName("Hero")
@@ -663,6 +688,7 @@ function Driver:OnUpdate(dt)
 		Check("Input.IsKeyReleased", Input.IsKeyReleased("Space") and not Input.IsKeyDown("Space"))
 		Check("Input.IsMouseButtonReleased", Input.IsMouseButtonReleased("Left") and not Input.IsMouseButtonDown("Left"))
 		Check("Input.GetMouseDelta", Input.GetMouseDelta() == Vec2(10, 10) and Input.GetMousePosition() == Vec2(330, 250))
+		Check("Input.IsActionReleased", Input.IsActionReleased("Jump") and Input.IsActionReleased("Fire") and not Input.IsActionDown("Jump"))
 
 		-- One physics step applied the force (60 N * 1/60 s / 2 kg = +0.5 m/s) and torque.
 		local crate = Scene.FindEntityByName("Crate")

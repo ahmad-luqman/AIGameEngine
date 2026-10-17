@@ -68,6 +68,10 @@ namespace Basalt {
 		// primary camera, labelled with the mode.
 		void DrawGameView();
 		void DrawGameViewOptions();
+		// Gives the window the cursor the game asks for (Input::GetCursorMode) while the game runs with the Game view
+		// focused: Locked captures the mouse (ImGui ignores it meanwhile, as GLFW reports a virtual cursor), Hidden
+		// hides it over the Game image. Escape hands the cursor back to the editor until the Game image is clicked.
+		void UpdateGameCursor();
 		// The selected entity's material on a sphere, at the top of the inspector's Material section.
 		void DrawMaterialPreview(Entity entity);
 		void DrawToolbar();
@@ -183,6 +187,9 @@ namespace Basalt {
 		// Play brings the Game tab to the front; Stop returns to the scene view if it was in front before.
 		bool m_GameWasRunning = false;
 		bool m_ReturnToViewport = false;
+		// What UpdateGameCursor gave the window (Normal or Locked), and whether Escape took the cursor back.
+		CursorMode m_AppliedCursorMode = CursorMode::Normal;
+		bool m_GameCursorReleased = false;
 		bool m_ViewportVisible = true;
 
 		glm::vec2 m_ViewportSize = { 1280.0f, 720.0f };

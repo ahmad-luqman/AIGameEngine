@@ -41,6 +41,7 @@ build/bin/basalt --project Samples/Tetris project.export '{"output": "Dist/Tetri
 - [Samples/Tetris](Samples/Tetris) — a game built entirely through the automation API
 - [Samples/MarbleRun](Samples/MarbleRun) — a physics showcase (joints, triggers, particles, spatial audio, UI) whose
   test is written as `assert.*`, `events.poll` and `scene.diff` checks
+- [Samples/Breakout](Samples/Breakout) — physics, game UI and input actions (keys, gamepad, mouse, rebinding from Lua)
 - [Samples/Joints](Samples/Joints) — every joint type
 
 ## License

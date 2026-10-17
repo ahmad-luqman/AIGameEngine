@@ -12,6 +12,7 @@
 #include <Basalt/Scene/SceneSerializer.h>
 #include <Basalt/Scripting/LuaJson.h>
 #include <Basalt/Scripting/ScriptEngine.h>
+#include <Basalt/UI/GameUI.h>
 
 #include "TestUtils.h"
 
@@ -2341,6 +2342,147 @@ TEST_SUITE("Scripting")
 {
 	// Docs/basalt.d.lua is written by hand (signatures live only in the C++ bindings) except its component section;
 	// this keeps both in sync with what the engine binds.
+	TEST_CASE("Lua input actions read the project's actions; scripts rebind them for the session, through Scene.Load")
+	{
+		using BasaltTest::Eval;
+		BasaltTest::ScopedGameInput restore;
+		BasaltTest::TempProject project("ScriptInputActions");
+		std::string error;
+		const auto actions = InputActionMap::FromJson(
+			{ { "Actions",
+				{
+					{ { "Name", "Jump" }, { "Bindings", { { { "Key", "Space" } } } } },
+					{ { "Name", "MoveX" }, { "Type", "Axis" }, { "Bindings", { { { "Key", "D" } }, { { "Key", "A" }, { "Scale", -1 } } } } },
+				} } },
+			error);
+		REQUIRE_MESSAGE(actions, error);
+		Project::GetActive()->GetConfig().InputActions = *actions;
+		Scene next("Next");
+		REQUIRE(SceneSerializer::SaveScene(next, Project::ResolvePath("Assets/Scenes/Next.bscene"), error));
+
+		Scene scene;
+		CHECK_FALSE(scene.SetInputBindings("Jump", {}, error));
+		CHECK(error.find("require Play mode") != std::string::npos);
+		scene.OnRuntimeStart();
+		CHECK(Eval(scene, "return Input.GetAction('Jump') == 0 and not Input.IsActionDown('Jump')") == "true");
+		Input::SetKeyState(KeyCode::Space, true);
+		Input::SetKeyState(KeyCode::A, true);
+		CHECK(Eval(scene, "return Input.GetAction('Jump') == 1 and Input.IsActionDown('Jump') and Input.IsActionPressed('Jump')") == "true");
+		CHECK(Eval(scene, "return Input.GetAction('MoveX') == -1 and Input.IsActionDown('MoveX')") == "true");
+		Input::EndFrame();
+		CHECK(Eval(scene, "return Input.IsActionPressed('Jump')") == "false");
+		Input::SetKeyState(KeyCode::Space, false);
+		CHECK(Eval(scene, "return Input.IsActionReleased('Jump')") == "true");
+		CHECK(Eval(scene, "local a = Input.GetActions(); return #a == 2 and a[1].Name == 'Jump' and a[1].Type == 'Button' and a[2].Type == 'Axis' and a[2].Bindings[2].Scale == -1") == "true");
+		CHECK(Eval(scene, "local b = Input.GetBindings('MoveX'); return #b == 2 and b[1].Key == 'D' and b[2].Key == 'A'") == "true");
+
+		// Rebinding changes the session only: W jumps now, Space does not, and the project keeps its bindings.
+		CHECK(Eval(scene, "Input.SetBindings('Jump', { { Key = 'w' }, { GamepadButton = 'A', Gamepad = 1 } }) return Input.GetBindings('Jump')[1].Key") == "W");
+		Input::SetKeyState(KeyCode::Space, true);
+		CHECK(Eval(scene, "return Input.IsActionDown('Jump')") == "false");
+		Input::SetKeyState(KeyCode::W, true);
+		CHECK(Eval(scene, "return Input.IsActionDown('Jump')") == "true");
+		CHECK(Project::GetActive()->GetConfig().InputActions == *actions);
+		BasaltTest::CheckLuaErrors(*scene.GetScriptEngine(),
+								   std::array<std::pair<const char*, const char*>, 6>{ {
+									   { "Input.GetAction('Dash')", "unknown input action 'Dash' (defined: Jump, MoveX)" },
+									   { "Input.IsActionPressed('jump')", "unknown input action 'jump'" },
+									   { "Input.SetBindings('Jump', { { Key = 'Nope' } })", "Input.SetBindings('Jump'): binding: unknown Key 'Nope'" },
+									   { "Input.SetBindings('Jump', { { Key = 'A', Scale = 3 } })", "Scale must be a number in [-1, 1]" },
+									   { "Input.SetBindings('Dash', {})", "unknown input action 'Dash'" },
+									   { "Input.ResetBindings('Dash')", "unknown input action 'Dash'" },
+								   } });
+		// An empty table removes every binding; Scene.Load keeps the session's bindings.
+		CHECK(Eval(scene, "Input.SetBindings('MoveX', {}) return #Input.GetBindings('MoveX')") == "0");
+		CHECK(Eval(scene, "Scene.Load('Assets/Scenes/Next.bscene') return true") == "true");
+		scene.OnUpdate(Step);
+		REQUIRE(scene.GetName() == "Next");
+		CHECK(scene.GetInputActions().Find("MoveX")->Bindings.empty());
+		CHECK(Eval(scene, "return Input.IsActionDown('Jump')") == "true");
+		// Reset puts back what play started with: one action, or all.
+		CHECK(Eval(scene, "Input.ResetBindings('Jump') return Input.GetBindings('Jump')[1].Key") == "Space");
+		CHECK(scene.GetInputActions().Find("MoveX")->Bindings.empty());
+		CHECK(Eval(scene, "Input.ResetBindings() return #Input.GetBindings('MoveX')") == "2");
+		CHECK(scene.GetInputActions() == *actions);
+
+		CHECK(Eval(scene, "Input.SetBindings('Jump', {}) return true") == "true");
+		scene.OnRuntimeStop();
+		CHECK(scene.GetInputActions().IsEmpty());
+		CHECK_FALSE(scene.ResetInputBindings(std::nullopt, error));
+		scene.OnRuntimeStart();
+		CHECK(scene.GetInputActions() == *actions);
+		scene.OnRuntimeStop();
+
+		Project::GetActive()->GetConfig().InputActions = {};
+		scene.OnRuntimeStart();
+		CHECK(Eval(scene, "return Input.GetAction('Jump')").find("the project defines none") != std::string::npos);
+		CHECK(Eval(scene, "return #Input.GetActions()") == "0");
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Lua reads the mouse in the host's game coordinates and only the input routed to the game")
+	{
+		using BasaltTest::Eval;
+		BasaltTest::ScopedGameInput restore;
+		struct RestoreHost
+		{
+			~RestoreHost() { GameUI::SetHostState({}); }
+		} restoreHost;
+		Scene scene;
+		scene.OnRuntimeStart();
+		// The headless view: script coordinates are Input's.
+		Input::SetMousePosition({ 320.0f, 240.0f });
+		CHECK(Eval(scene, "return Input.GetMousePosition() == Vec2(320, 240) and Input.GetViewSize() == Vec2(1920, 1080)") == "true");
+
+		// The editor's Game view: a 960x540 image at (100, 50) showing a 1920x1080 game.
+		GameUI::SetHostState({ { 100.0f, 50.0f }, { 960.0f, 540.0f }, true, true, glm::vec2(1920.0f, 1080.0f) });
+		Input::SetMousePosition({ 580.0f, 320.0f });
+		Input::EndFrame();
+		Input::SetMousePosition({ 581.0f, 322.0f });
+		CHECK(Eval(scene, "return Input.GetMousePosition() == Vec2(962, 544)") == "true");
+		CHECK(Eval(scene, "return Input.GetMouseDelta() == Vec2(2, 4)") == "true");
+		CHECK(Eval(scene, "return Input.GetViewSize() == Vec2(1920, 1080)") == "true");
+
+		// The keyboard and gamepads reach scripts only while the game has focus, the mouse only with the pointer.
+		Input::SetKeyState(KeyCode::Space, true);
+		Input::SetMouseButtonState(MouseCode::Left, true);
+		Input::SetGamepadConnected(0, true);
+		REQUIRE(Input::SetGamepadButtonState(0, GamepadButton::A, true));
+		REQUIRE(Input::SetGamepadAxis(0, GamepadAxis::LeftX, 1.0f));
+		CHECK(Eval(scene, "return Input.IsKeyDown('Space') and Input.IsMouseButtonDown('Left') and Input.IsGamepadButtonDown(0, 'A')") == "true");
+		Input::EndFrame();
+		GameUI::SetNavigationEnabled(false);
+		CHECK(Eval(scene, "return Input.IsKeyDown('Space') or Input.IsGamepadButtonDown(0, 'A') or Input.GetGamepadAxis(0, 'LeftX') ~= 0") == "false");
+		CHECK(Eval(scene, "return Input.IsKeyReleased('Space') and Input.IsGamepadButtonReleased(0, 'A') and Input.IsMouseButtonDown('Left')") == "true");
+		CHECK(Eval(scene, "return Input.IsGamepadConnected(0)") == "true");
+		GameUI::SetPointerEnabled(false);
+		Input::SetMousePosition({ 600.0f, 322.0f });
+		CHECK(Eval(scene, "return not Input.IsMouseButtonDown('Left') and Input.IsMouseButtonReleased('Left') and Input.GetMouseDelta() == Vec2(0, 0)") == "true");
+		// The position is never withheld.
+		CHECK(Eval(scene, "return Input.GetMousePosition() == Vec2(1000, 544)") == "true");
+		CHECK(Eval(scene, "return Input.IsKeyPressed('Space') or Input.IsMouseButtonPressed('Left') or Input.IsGamepadButtonPressed(0, 'A')") == "false");
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Input.SetCursorMode stores the game's cursor; play starts and stops with Normal")
+	{
+		using BasaltTest::Eval;
+		BasaltTest::ScopedGameInput restore;
+		Input::SetCursorMode(CursorMode::Hidden);
+		Scene scene;
+		scene.OnRuntimeStart();
+		CHECK(Input::GetCursorMode() == CursorMode::Normal);
+		CHECK(Eval(scene, "return Input.GetCursorMode()") == "Normal");
+		CHECK(Eval(scene, "Input.SetCursorMode('locked') return Input.GetCursorMode()") == "Locked");
+		CHECK(Input::GetCursorMode() == CursorMode::Locked);
+		std::string result;
+		CHECK_FALSE(scene.GetScriptEngine()->ExecuteString("Input.SetCursorMode('Grabbed')", result));
+		CHECK(result.find("unknown cursor mode 'Grabbed' (valid: Normal, Hidden, Locked)") != std::string::npos);
+		CHECK(Input::GetCursorMode() == CursorMode::Locked);
+		scene.OnRuntimeStop();
+		CHECK(Input::GetCursorMode() == CursorMode::Normal);
+	}
+
 	TEST_CASE("LuaTypeDefinitions: Docs/basalt.d.lua declares exactly the bound Lua API and every component")
 	{
 		const std::optional<std::string> text = FileSystem::ReadTextFile(std::filesystem::path(BASALT_SOURCE_DIR) / "Docs" / "basalt.d.lua");

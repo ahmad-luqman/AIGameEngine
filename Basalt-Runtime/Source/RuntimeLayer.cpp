@@ -1,6 +1,7 @@
 #include "RuntimeLayer.h"
 
 #include "Basalt/Core/Application.h"
+#include "Basalt/Core/Input.h"
 #include "Basalt/Core/Window.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/GraphicsDevice.h"
@@ -81,14 +82,28 @@ namespace Basalt {
 			return;
 
 		m_Scene->OnUpdate(ts);
+		ApplyCursorMode();
 		m_RenderDeltaTime = ts;
 		m_Frame++;
 		if (m_Scene->IsQuitRequested())
 			Application::Get().Close();
 	}
 
+	void RuntimeLayer::ApplyCursorMode()
+	{
+		Window* window = Application::Get().GetWindow();
+		const CursorMode mode = Input::GetCursorMode();
+		if (!window || mode == m_AppliedCursorMode)
+			return;
+		window->SetCursorMode(mode);
+		m_AppliedCursorMode = mode;
+	}
+
 	void RuntimeLayer::OnImGuiRender()
 	{
+		// ImGui's platform backend shows the OS cursor again every frame unless ImGui asks for none.
+		if (Input::GetCursorMode() == CursorMode::Hidden)
+			ImGui::SetMouseCursor(ImGuiMouseCursor_None);
 		const ImGuiIO& io = ImGui::GetIO();
 		m_UIFrame.Draw(ImGui::GetForegroundDrawList(), { 0.0f, 0.0f }, { io.DisplaySize.x, io.DisplaySize.y });
 	}

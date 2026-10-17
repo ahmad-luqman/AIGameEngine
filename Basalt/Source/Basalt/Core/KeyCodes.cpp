@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cctype>
+#include <iterator>
 #include <utility>
 
 namespace Basalt {
@@ -138,6 +139,17 @@ namespace Basalt {
 				return name;
 		}
 		return "Unknown";
+	}
+
+	std::span<const std::string_view> GetKeyNames()
+	{
+		static const auto names = [] {
+			std::array<std::string_view, std::size(s_KeyNames)> result{};
+			for (size_t i = 0; i < result.size(); i++)
+				result[i] = s_KeyNames[i].second;
+			return result;
+		}();
+		return names;
 	}
 
 	std::optional<KeyCode> KeyCodeFromString(std::string_view name)

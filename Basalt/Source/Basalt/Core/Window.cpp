@@ -281,9 +281,18 @@ namespace Basalt {
 		glfwSetWindowTitle(m_Window, title.c_str());
 	}
 
-	void Window::SetCursorLocked(bool locked)
+	void Window::SetCursorMode(CursorMode mode)
 	{
-		glfwSetInputMode(m_Window, GLFW_CURSOR, locked ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+		if (!m_Window)
+			return;
+		int glfwMode = GLFW_CURSOR_NORMAL;
+		if (mode == CursorMode::Hidden)
+			glfwMode = GLFW_CURSOR_HIDDEN;
+		else if (mode == CursorMode::Locked)
+			glfwMode = GLFW_CURSOR_DISABLED;
+		glfwSetInputMode(m_Window, GLFW_CURSOR, glfwMode);
+		if (glfwRawMouseMotionSupported())
+			glfwSetInputMode(m_Window, GLFW_RAW_MOUSE_MOTION, mode == CursorMode::Locked ? GLFW_TRUE : GLFW_FALSE);
 	}
 
 }

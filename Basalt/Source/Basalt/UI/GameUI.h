@@ -55,9 +55,21 @@ namespace Basalt {
 		static void SetViewportOrigin(const glm::vec2& origin);
 		static glm::vec2 GetViewportOrigin();
 
-		// Whether the widgets take pointer input (the mouse is over the game view) and navigation input (keyboard
-		// and gamepads: the game view has focus). Both true until a host says otherwise; the editor follows its
-		// viewport panel's hover and focus.
+		// The game's size in the units its scripts see the mouse in (Lua Input.GetMousePosition: 0,0 top-left,
+		// this size bottom-right): the editor's Game view sets the game's resolution, so scripts read game pixels
+		// rather than editor window units. nullopt (the default, and what standalone hosts use) means the viewport
+		// size, so script coordinates are Input's. Sizes that are not positive and finite are ignored.
+		static void SetResolution(const std::optional<glm::vec2>& resolution);
+		static glm::vec2 GetResolution();
+		// Input's mouse coordinates (window units) in the game's: relative to the viewport origin, scaled from the
+		// viewport size to the resolution. A delta is only scaled.
+		static glm::vec2 ToGamePosition(const glm::vec2& mouse);
+		static glm::vec2 ToGameDelta(const glm::vec2& delta);
+
+		// Whether the widgets, and the game's scripts, take pointer input (the mouse is over the game view) and
+		// navigation input (keyboard and gamepads: the game view has focus). The flags are Input's game routing
+		// (Input::SetGamePointer, Input::SetGameFocus), so the widgets and GameInput always agree. Both true until a
+		// host says otherwise; the editor follows its view panels' hover and focus.
 		static void SetPointerEnabled(bool enabled);
 		static bool IsPointerEnabled();
 		static void SetNavigationEnabled(bool enabled);
@@ -75,6 +87,7 @@ namespace Basalt {
 			glm::vec2 ViewportSize = { 1920.0f, 1080.0f };
 			bool PointerEnabled = true;
 			bool NavigationEnabled = true;
+			std::optional<glm::vec2> Resolution;
 
 			bool operator==(const HostState&) const = default;
 		};

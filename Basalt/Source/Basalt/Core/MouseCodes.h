@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string_view>
 
 namespace Basalt {
@@ -23,5 +24,7 @@ namespace Basalt {
 
 	std::string_view MouseCodeToString(MouseCode button);
 	std::optional<MouseCode> MouseCodeFromString(std::string_view name);
+	// Every name, in button order.
+	std::span<const std::string_view> GetMouseButtonNames();
 
 }

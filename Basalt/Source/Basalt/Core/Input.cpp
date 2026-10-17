@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <mutex>
 
@@ -28,10 +29,17 @@ namespace Basalt {
 			std::array<bool, GamepadButtonCount> Buttons = {};
 			std::array<bool, GamepadButtonCount> ButtonsLastFrame = {};
 			std::array<float, GamepadAxisCount> Axes = {};
+			std::array<float, GamepadAxisCount> AxesLastFrame = {};
 			// A physical button or axis held through a reset or while the window was unfocused: it reads as released
 			// until the device lets it go, so it does not press again by itself.
 			std::array<bool, GamepadButtonCount> ButtonBlocked = {};
 			std::array<bool, GamepadAxisCount> AxisBlocked = {};
+			// The game's view (GameInput): what was held when the game got focus back reads as released for the game
+			// until it is let go, and what the game saw at the last EndFrame.
+			std::array<bool, GamepadButtonCount> GameButtonBlocked = {};
+			std::array<bool, GamepadAxisCount> GameAxisBlocked = {};
+			std::array<bool, GamepadButtonCount> GameButtonsLastFrame = {};
+			std::array<float, GamepadAxisCount> GameAxesLastFrame = {};
 
 			bool IsConnected() const { return Source != GamepadSource::None; }
 
@@ -41,6 +49,8 @@ namespace Basalt {
 				Axes = {};
 				ButtonBlocked = {};
 				AxisBlocked = {};
+				GameButtonBlocked = {};
+				GameAxisBlocked = {};
 			}
 
 			// Blocks what is held now (see ButtonBlocked).
@@ -52,7 +62,7 @@ namespace Basalt {
 					AxisBlocked[a] = AxisBlocked[a] || std::abs(Axes[a]) >= AxisRestThreshold;
 			}
 
-			// Keeps ButtonsLastFrame, so the buttons held reports their release on this frame.
+			// Keeps the last-frame state, so the buttons held report their release on this frame.
 			void Disconnect()
 			{
 				ClearInput();
@@ -73,13 +83,24 @@ namespace Basalt {
 			glm::vec2 Scroll = { 0.0f, 0.0f };
 			bool HasMousePosition = false;
 			std::array<GamepadSlot, Input::MaxGamepads> Gamepads = {};
+			// The game's view of the keys and mouse buttons (see GamepadSlot::GameButtonBlocked).
+			std::array<bool, MaxKeys> GameKeysBlocked = {};
+			std::array<bool, MaxKeys> GameKeysLastFrame = {};
+			std::array<bool, MouseButtonCount> GameButtonsBlocked = {};
+			std::array<bool, MouseButtonCount> GameButtonsLastFrame = {};
 		};
 
-		// All guarded by s_Mutex. The settings outlive Reset, which only clears what is held.
+		// All guarded by s_Mutex. The settings (gamepad devices, routing, the cursor mode) outlive Reset, which only
+		// clears what is held.
 		std::mutex s_Mutex;
 		InputState s_State;
 		bool s_DeviceGamepadsEnabled = true;
 		uint32_t s_NextGamepadConnection = 1;
+		bool s_GameFocus = true;
+		bool s_GamePointer = true;
+		CursorMode s_CursorMode = CursorMode::Normal;
+
+		constexpr std::string_view s_CursorModeNames[CursorModeCount] = { "Normal", "Hidden", "Locked" };
 
 		size_t KeyIndex(KeyCode key)
 		{
@@ -124,13 +145,51 @@ namespace Basalt {
 			return std::clamp(value, IsGamepadTrigger(axis) ? 0.0f : -1.0f, 1.0f);
 		}
 
+		// The game's current view (GameInput). Callers hold s_Mutex and check the index.
+		bool GameKeyDown(size_t index)
+		{
+			return s_GameFocus && s_State.KeysDown[index] && !s_State.GameKeysBlocked[index];
+		}
+		bool GameButtonDown(size_t index)
+		{
+			return s_GamePointer && s_State.ButtonsDown[index] && !s_State.GameButtonsBlocked[index];
+		}
+		bool GameGamepadButtonDown(const GamepadSlot& gamepad, size_t button)
+		{
+			return s_GameFocus && gamepad.Buttons[button] && !gamepad.GameButtonBlocked[button];
+		}
+		float GameGamepadAxis(const GamepadSlot& gamepad, size_t axis)
+		{
+			return s_GameFocus && !gamepad.GameAxisBlocked[axis] ? gamepad.Axes[axis] : 0.0f;
+		}
+
 	}
 
-	bool Input::IsKeyDown(KeyCode key)
+	std::string_view CursorModeToString(CursorMode mode)
+	{
+		const auto index = static_cast<uint32_t>(mode);
+		return index < CursorModeCount ? s_CursorModeNames[index] : std::string_view("Unknown");
+	}
+
+	std::optional<CursorMode> CursorModeFromString(std::string_view name)
+	{
+		for (uint32_t i = 0; i < CursorModeCount; i++)
+		{
+			const std::string_view candidate = s_CursorModeNames[i];
+			const bool equal = candidate.size() == name.size() && std::equal(candidate.begin(), candidate.end(), name.begin(), [](char a, char b) {
+								   return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
+							   });
+			if (equal)
+				return static_cast<CursorMode>(i);
+		}
+		return std::nullopt;
+	}
+
+	bool Input::IsKeyDown(KeyCode key, InputFrame frame)
 	{
 		std::scoped_lock lock(s_Mutex);
 		const size_t index = KeyIndex(key);
-		return index < MaxKeys && s_State.KeysDown[index];
+		return index < MaxKeys && (frame == InputFrame::Current ? s_State.KeysDown : s_State.KeysDownLastFrame)[index];
 	}
 
 	bool Input::IsKeyPressed(KeyCode key)
@@ -147,11 +206,11 @@ namespace Basalt {
 		return index < MaxKeys && !s_State.KeysDown[index] && s_State.KeysDownLastFrame[index];
 	}
 
-	bool Input::IsMouseButtonDown(MouseCode button)
+	bool Input::IsMouseButtonDown(MouseCode button, InputFrame frame)
 	{
 		std::scoped_lock lock(s_Mutex);
 		const size_t index = ButtonIndex(button);
-		return index < MouseButtonCount && s_State.ButtonsDown[index];
+		return index < MouseButtonCount && (frame == InputFrame::Current ? s_State.ButtonsDown : s_State.ButtonsDownLastFrame)[index];
 	}
 
 	bool Input::IsMouseButtonPressed(MouseCode button)
@@ -225,12 +284,16 @@ namespace Basalt {
 		return gamepad ? gamepad->Name : std::string();
 	}
 
-	bool Input::IsGamepadButtonDown(uint32_t index, GamepadButton button)
+	bool Input::IsGamepadButtonDown(uint32_t index, GamepadButton button, InputFrame frame)
 	{
 		std::scoped_lock lock(s_Mutex);
-		const GamepadSlot* gamepad = ConnectedGamepad(index);
 		const auto b = static_cast<size_t>(button);
-		return gamepad && b < GamepadButtonCount && gamepad->Buttons[b];
+		if (b >= GamepadButtonCount)
+			return false;
+		if (frame == InputFrame::Previous)
+			return index < MaxGamepads && s_State.Gamepads[index].ButtonsLastFrame[b];
+		const GamepadSlot* gamepad = ConnectedGamepad(index);
+		return gamepad && gamepad->Buttons[b];
 	}
 
 	bool Input::IsGamepadButtonPressed(uint32_t index, GamepadButton button)
@@ -252,12 +315,71 @@ namespace Basalt {
 		return b < GamepadButtonCount && !gamepad.Buttons[b] && gamepad.ButtonsLastFrame[b];
 	}
 
-	float Input::GetGamepadAxis(uint32_t index, GamepadAxis axis)
+	float Input::GetGamepadAxis(uint32_t index, GamepadAxis axis, InputFrame frame)
 	{
 		std::scoped_lock lock(s_Mutex);
-		const GamepadSlot* gamepad = ConnectedGamepad(index);
 		const auto a = static_cast<size_t>(axis);
-		return gamepad && a < GamepadAxisCount ? gamepad->Axes[a] : 0.0f;
+		if (a >= GamepadAxisCount)
+			return 0.0f;
+		if (frame == InputFrame::Previous)
+			return index < MaxGamepads ? s_State.Gamepads[index].AxesLastFrame[a] : 0.0f;
+		const GamepadSlot* gamepad = ConnectedGamepad(index);
+		return gamepad ? gamepad->Axes[a] : 0.0f;
+	}
+
+	void Input::SetGameFocus(bool focused)
+	{
+		std::scoped_lock lock(s_Mutex);
+		// What is held as the game gets focus back is not the game's: it stays released for the game until let go.
+		if (focused && !s_GameFocus)
+		{
+			for (size_t k = 0; k < MaxKeys; k++)
+				s_State.GameKeysBlocked[k] = s_State.GameKeysBlocked[k] || s_State.KeysDown[k];
+			for (GamepadSlot& gamepad : s_State.Gamepads)
+			{
+				for (size_t b = 0; b < GamepadButtonCount; b++)
+					gamepad.GameButtonBlocked[b] = gamepad.GameButtonBlocked[b] || gamepad.Buttons[b];
+				for (size_t a = 0; a < GamepadAxisCount; a++)
+					gamepad.GameAxisBlocked[a] = gamepad.GameAxisBlocked[a] || std::abs(gamepad.Axes[a]) >= AxisRestThreshold;
+			}
+		}
+		s_GameFocus = focused;
+	}
+
+	bool Input::HasGameFocus()
+	{
+		std::scoped_lock lock(s_Mutex);
+		return s_GameFocus;
+	}
+
+	void Input::SetGamePointer(bool enabled)
+	{
+		std::scoped_lock lock(s_Mutex);
+		if (enabled && !s_GamePointer)
+		{
+			for (size_t b = 0; b < MouseButtonCount; b++)
+				s_State.GameButtonsBlocked[b] = s_State.GameButtonsBlocked[b] || s_State.ButtonsDown[b];
+		}
+		s_GamePointer = enabled;
+	}
+
+	bool Input::HasGamePointer()
+	{
+		std::scoped_lock lock(s_Mutex);
+		return s_GamePointer;
+	}
+
+	void Input::SetCursorMode(CursorMode mode)
+	{
+		BS_CORE_ASSERT(static_cast<uint32_t>(mode) < CursorModeCount, "invalid cursor mode {}", static_cast<uint32_t>(mode));
+		std::scoped_lock lock(s_Mutex);
+		s_CursorMode = mode;
+	}
+
+	CursorMode Input::GetCursorMode()
+	{
+		std::scoped_lock lock(s_Mutex);
+		return s_CursorMode;
 	}
 
 	void Input::OnEvent(Event& event)
@@ -275,12 +397,36 @@ namespace Basalt {
 	void Input::EndFrame()
 	{
 		std::scoped_lock lock(s_Mutex);
+		// The game's view first: it reads the state this frame ends with. A block ends once its control is let go.
+		for (size_t k = 0; k < MaxKeys; k++)
+		{
+			s_State.GameKeysBlocked[k] = s_State.GameKeysBlocked[k] && s_State.KeysDown[k];
+			s_State.GameKeysLastFrame[k] = GameKeyDown(k);
+		}
+		for (size_t b = 0; b < MouseButtonCount; b++)
+		{
+			s_State.GameButtonsBlocked[b] = s_State.GameButtonsBlocked[b] && s_State.ButtonsDown[b];
+			s_State.GameButtonsLastFrame[b] = GameButtonDown(b);
+		}
+		for (GamepadSlot& gamepad : s_State.Gamepads)
+		{
+			for (size_t b = 0; b < GamepadButtonCount; b++)
+			{
+				gamepad.GameButtonBlocked[b] = gamepad.GameButtonBlocked[b] && gamepad.Buttons[b];
+				gamepad.GameButtonsLastFrame[b] = GameGamepadButtonDown(gamepad, b);
+			}
+			for (size_t a = 0; a < GamepadAxisCount; a++)
+			{
+				gamepad.GameAxisBlocked[a] = gamepad.GameAxisBlocked[a] && std::abs(gamepad.Axes[a]) >= AxisRestThreshold;
+				gamepad.GameAxesLastFrame[a] = GameGamepadAxis(gamepad, a);
+			}
+			gamepad.ButtonsLastFrame = gamepad.Buttons;
+			gamepad.AxesLastFrame = gamepad.Axes;
+		}
 		s_State.KeysDownLastFrame = s_State.KeysDown;
 		s_State.ButtonsDownLastFrame = s_State.ButtonsDown;
 		s_State.MousePositionLastFrame = s_State.MousePosition;
 		s_State.Scroll = { 0.0f, 0.0f };
-		for (GamepadSlot& gamepad : s_State.Gamepads)
-			gamepad.ButtonsLastFrame = gamepad.Buttons;
 	}
 
 	void Input::Reset()
@@ -292,6 +438,10 @@ namespace Basalt {
 		s_State.ButtonsDownLastFrame = {};
 		s_State.MousePositionLastFrame = s_State.MousePosition;
 		s_State.Scroll = { 0.0f, 0.0f };
+		s_State.GameKeysBlocked = {};
+		s_State.GameKeysLastFrame = {};
+		s_State.GameButtonsBlocked = {};
+		s_State.GameButtonsLastFrame = {};
 		// Gamepads stay connected (a reset is not a disconnect: scripts would see a disconnect and a reconnect),
 		// but release their buttons and center their sticks without reporting releases. A physical gamepad keeps
 		// what was held released until it is let go: the next poll would otherwise press it again at once.
@@ -302,6 +452,11 @@ namespace Basalt {
 			gamepad.Buttons = {};
 			gamepad.Axes = {};
 			gamepad.ButtonsLastFrame = {};
+			gamepad.AxesLastFrame = {};
+			gamepad.GameButtonBlocked = {};
+			gamepad.GameAxisBlocked = {};
+			gamepad.GameButtonsLastFrame = {};
+			gamepad.GameAxesLastFrame = {};
 		}
 	}
 
@@ -309,16 +464,22 @@ namespace Basalt {
 	{
 		std::scoped_lock lock(s_Mutex);
 		const size_t index = KeyIndex(key);
-		if (index < MaxKeys)
-			s_State.KeysDown[index] = down;
+		if (index >= MaxKeys)
+			return;
+		s_State.KeysDown[index] = down;
+		if (!down)
+			s_State.GameKeysBlocked[index] = false;
 	}
 
 	void Input::SetMouseButtonState(MouseCode button, bool down)
 	{
 		std::scoped_lock lock(s_Mutex);
 		const size_t index = ButtonIndex(button);
-		if (index < MouseButtonCount)
-			s_State.ButtonsDown[index] = down;
+		if (index >= MouseButtonCount)
+			return;
+		s_State.ButtonsDown[index] = down;
+		if (!down)
+			s_State.GameButtonsBlocked[index] = false;
 	}
 
 	void Input::SetMousePosition(const glm::vec2& position)
@@ -434,6 +595,107 @@ namespace Basalt {
 			gamepad.AxisBlocked[a] = pushed && (gamepad.AxisBlocked[a] || !focused);
 			gamepad.Axes[a] = focused && !gamepad.AxisBlocked[a] ? value : 0.0f;
 		}
+	}
+
+	bool GameInput::IsKeyDown(KeyCode key, InputFrame frame)
+	{
+		std::scoped_lock lock(s_Mutex);
+		const size_t index = KeyIndex(key);
+		if (index >= MaxKeys)
+			return false;
+		return frame == InputFrame::Current ? GameKeyDown(index) : s_State.GameKeysLastFrame[index];
+	}
+
+	bool GameInput::IsKeyPressed(KeyCode key)
+	{
+		std::scoped_lock lock(s_Mutex);
+		const size_t index = KeyIndex(key);
+		return index < MaxKeys && GameKeyDown(index) && !s_State.GameKeysLastFrame[index];
+	}
+
+	bool GameInput::IsKeyReleased(KeyCode key)
+	{
+		std::scoped_lock lock(s_Mutex);
+		const size_t index = KeyIndex(key);
+		return index < MaxKeys && !GameKeyDown(index) && s_State.GameKeysLastFrame[index];
+	}
+
+	bool GameInput::IsMouseButtonDown(MouseCode button, InputFrame frame)
+	{
+		std::scoped_lock lock(s_Mutex);
+		const size_t index = ButtonIndex(button);
+		if (index >= MouseButtonCount)
+			return false;
+		return frame == InputFrame::Current ? GameButtonDown(index) : s_State.GameButtonsLastFrame[index];
+	}
+
+	bool GameInput::IsMouseButtonPressed(MouseCode button)
+	{
+		std::scoped_lock lock(s_Mutex);
+		const size_t index = ButtonIndex(button);
+		return index < MouseButtonCount && GameButtonDown(index) && !s_State.GameButtonsLastFrame[index];
+	}
+
+	bool GameInput::IsMouseButtonReleased(MouseCode button)
+	{
+		std::scoped_lock lock(s_Mutex);
+		const size_t index = ButtonIndex(button);
+		return index < MouseButtonCount && !GameButtonDown(index) && s_State.GameButtonsLastFrame[index];
+	}
+
+	glm::vec2 GameInput::GetMouseDelta()
+	{
+		std::scoped_lock lock(s_Mutex);
+		return s_GamePointer ? s_State.MousePosition - s_State.MousePositionLastFrame : glm::vec2(0.0f);
+	}
+
+	glm::vec2 GameInput::GetMouseScroll()
+	{
+		std::scoped_lock lock(s_Mutex);
+		return s_GamePointer ? s_State.Scroll : glm::vec2(0.0f);
+	}
+
+	bool GameInput::IsGamepadButtonDown(uint32_t index, GamepadButton button, InputFrame frame)
+	{
+		std::scoped_lock lock(s_Mutex);
+		const auto b = static_cast<size_t>(button);
+		if (b >= GamepadButtonCount)
+			return false;
+		if (frame == InputFrame::Previous)
+			return index < Input::MaxGamepads && s_State.Gamepads[index].GameButtonsLastFrame[b];
+		const GamepadSlot* gamepad = ConnectedGamepad(index);
+		return gamepad && GameGamepadButtonDown(*gamepad, b);
+	}
+
+	bool GameInput::IsGamepadButtonPressed(uint32_t index, GamepadButton button)
+	{
+		std::scoped_lock lock(s_Mutex);
+		const GamepadSlot* gamepad = ConnectedGamepad(index);
+		const auto b = static_cast<size_t>(button);
+		return gamepad && b < GamepadButtonCount && GameGamepadButtonDown(*gamepad, b) && !gamepad->GameButtonsLastFrame[b];
+	}
+
+	bool GameInput::IsGamepadButtonReleased(uint32_t index, GamepadButton button)
+	{
+		std::scoped_lock lock(s_Mutex);
+		// Like Input's: a gamepad disconnected while a button was held reports the release on that frame.
+		const auto b = static_cast<size_t>(button);
+		if (index >= Input::MaxGamepads || b >= GamepadButtonCount)
+			return false;
+		const GamepadSlot& gamepad = s_State.Gamepads[index];
+		return !(gamepad.IsConnected() && GameGamepadButtonDown(gamepad, b)) && gamepad.GameButtonsLastFrame[b];
+	}
+
+	float GameInput::GetGamepadAxis(uint32_t index, GamepadAxis axis, InputFrame frame)
+	{
+		std::scoped_lock lock(s_Mutex);
+		const auto a = static_cast<size_t>(axis);
+		if (a >= GamepadAxisCount)
+			return 0.0f;
+		if (frame == InputFrame::Previous)
+			return index < Input::MaxGamepads ? s_State.Gamepads[index].GameAxesLastFrame[a] : 0.0f;
+		const GamepadSlot* gamepad = ConnectedGamepad(index);
+		return gamepad ? GameGamepadAxis(*gamepad, a) : 0.0f;
 	}
 
 }

@@ -1,12 +1,14 @@
 #pragma once
 
 #include "Basalt/Core/Base.h"
+#include "Basalt/Core/InputActions.h"
 #include "Basalt/Math/Random.h"
 #include "Basalt/Physics/FixedTimestep.h"
 #include "Basalt/Physics/PhysicsLayers.h"
 #include "Basalt/Renderer/GraphicsSettings.h"
 
 #include <filesystem>
+#include <optional>
 #include <string>
 
 namespace Basalt {
@@ -29,6 +31,9 @@ namespace Basalt {
 		GraphicsSettings Graphics;
 		// Collision layers and matrix used by every scene of the project.
 		PhysicsLayers Physics;
+		// Named input actions (Project::InputFileName, next to the project file). Play sessions read a copy, which
+		// scripts may rebind (Scene::GetInputActions).
+		InputActionMap InputActions;
 		// Physics step (seconds) of every scene that does not override it (PhysicsSettings::FixedTimestep).
 		// Applies from the next Play or Simulate.
 		float FixedTimestep = DefaultFixedTimestep;
@@ -45,11 +50,18 @@ namespace Basalt {
 	public:
 		static constexpr const char* FileName = "Project.bproject";
 		static constexpr const char* AssetDirectoryName = "Assets";
+		// The input actions file. Optional: a project without one has no actions.
+		static constexpr const char* InputFileName = "Input.binput";
 
 		// Creates the directory layout and project file. Fails if a project already exists there.
 		static Ref<Project> Create(const std::filesystem::path& directory, const std::string& name, std::string& outError);
 		// Accepts the project directory or the .bproject file itself.
 		static Ref<Project> Load(const std::filesystem::path& path, std::string& outError);
+		// Reads an input actions file: an empty map when it does not exist, nullopt (with the reason) when it cannot be
+		// read or is invalid.
+		static std::optional<InputActionMap> ReadInputActions(const std::filesystem::path& path, std::string& outError);
+		// Writes the project file, and the input actions file when there are actions or the file exists already (so
+		// removing the last action is saved too).
 		bool Save(std::string& outError) const;
 
 		static void SetActive(const Ref<Project>& project) { s_ActiveProject = project; }
@@ -61,6 +73,8 @@ namespace Basalt {
 		static const ProjectConfig* GetActiveConfig() { return s_ActiveProject ? &s_ActiveProject->m_Config : nullptr; }
 		// The active project's RandomSeed, or Random::DefaultSeed without an active project (tests, tools).
 		static uint32_t GetActiveRandomSeed() { return s_ActiveProject ? s_ActiveProject->m_Config.RandomSeed : Random::DefaultSeed; }
+		// The active project's input actions, or an empty map without an active project.
+		static InputActionMap GetActiveInputActions() { return s_ActiveProject ? s_ActiveProject->m_Config.InputActions : InputActionMap{}; }
 		// The active project's FixedTimestep, or DefaultFixedTimestep without an active project.
 		static float GetActiveFixedTimestep() { return s_ActiveProject ? s_ActiveProject->m_Config.FixedTimestep : DefaultFixedTimestep; }
 
@@ -75,6 +89,7 @@ namespace Basalt {
 		const std::filesystem::path& GetDirectory() const { return m_Directory; }
 		std::filesystem::path GetAssetDirectory() const { return m_Directory / AssetDirectoryName; }
 		std::filesystem::path GetProjectFilePath() const { return m_Directory / FileName; }
+		std::filesystem::path GetInputFilePath() const { return m_Directory / InputFileName; }
 
 	private:
 		ProjectConfig m_Config;

@@ -48,6 +48,14 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   scene view keeps the editor camera in every mode.
 - **Editor caches.** Content-browser previews are cached in `<project>/Cache/Thumbnails`, outside `Assets/`
   (never exported; new projects ignore `Cache/` in git).
+- **Input: host reads vs game reads.** `Input` holds every event (editor shortcuts and camera read it); the game
+  (Lua's `Input`, input actions) reads `GameInput`, which sees only what the host routes to it: `Input::SetGameFocus`
+  (keyboard, gamepads) and `SetGamePointer` (mouse), the same flags as `GameUI`'s navigation and pointer (the editor
+  follows its Game view; runtime and headless route everything). Lua mouse coordinates are game-view units
+  (`GameUI::ToGamePosition`: the editor maps to the game resolution). Input actions are the project's
+  `Input.binput` (`InputActionMap`, `ProjectConfig::InputActions`, `project.set inputActions`); a play session reads
+  a copy in `Scene` that Lua may rebind until play stops. `Input::SetCursorMode` only stores the game's request;
+  the runtime and the editor's Game view apply it.
 - **Gameplay services live in the ScriptEngine.** Timers and coroutines (`ScriptTasks`) and events
   (`ScriptEvents`) belong to the script instance that created them and end with it; `Storage` save data
   (`Project/SaveData`) goes to the per-user data directory (`Platform::GetUserDataDirectory`, overridden by

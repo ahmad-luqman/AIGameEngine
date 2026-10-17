@@ -1186,6 +1186,23 @@ Compares a PNG with a reference image within a tolerance; optionally writes a di
 
 ## input
 
+### `input.actions`
+
+Returns the input actions with their bindings and, while playing, the session's bindings (as scripts rebound them) with each action's value (a button's strength 0..1, an axis -1..1), down, pressed and released state as the game sees them this frame. Outside play, the project's actions.
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "required": [],
+  "type": "object"
+}
+```
+
+</details>
+
 ### `input.gamepad`
 
 Connects, disconnects or drives an injected gamepad for play mode (e.g. {index: 0, connected: true}, {button: 'A', down: true}, {axis: 'LeftX', value: -1}). A device poll never overrides an injected gamepad. Recorded while replay recording is on.
@@ -1841,6 +1858,7 @@ Changes project settings and saves the project file.
 | `fixedTimestep` | number of seconds in (0, 0.25], the physics step of every scene that does not override it (scene.settings Physics.FixedTimestep); applies from the next play |
 | `fullscreen` | bool |
 | `graphics` | Project graphics defaults; applies to the next Play session. Do not repeat a setting through its top-level alias. |
+| `inputActions` | object {Actions: [{Name, Type: "Button" | "Axis", Bindings: [{Key | MouseButton | GamepadButton | GamepadAxis: name, Scale?, DeadZone?, Gamepad?}]}]}, replaces every input action and saves Input.binput; applies from the next play |
 | `minRenderScale` | number in [0.25, 2], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning) |
 | `name` | string |
 | `physicsLayers` | object {Names: ["Default", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play |
@@ -1954,6 +1972,10 @@ Changes project settings and saves the project file.
         }
       ],
       "description": "Project graphics defaults; applies to the next Play session. Do not repeat a setting through its top-level alias."
+    },
+    "inputActions": {
+      "description": "object {Actions: [{Name, Type: \"Button\" | \"Axis\", Bindings: [{Key | MouseButton | GamepadButton | GamepadAxis: name, Scale?, DeadZone?, Gamepad?}]}]}, replaces every input action and saves Input.binput; applies from the next play",
+      "type": "object"
     },
     "minRenderScale": {
       "anyOf": [

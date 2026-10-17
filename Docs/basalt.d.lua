@@ -21,6 +21,9 @@
 ---Gamepad axes: sticks -1..1 (+Y is down), triggers 0..1 (case-insensitive).
 ---@alias GamepadAxis "LeftX"|"LeftY"|"RightX"|"RightY"|"LeftTrigger"|"RightTrigger"
 
+---What the game asks the mouse cursor to do (case-insensitive): Locked hides it and holds it in the window.
+---@alias CursorMode "Normal"|"Hidden"|"Locked"
+
 ---Mixer buses; Music, SFX and UI feed Master.
 ---@alias AudioBus "Master"|"Music"|"SFX"|"UI"
 
@@ -529,7 +532,23 @@ function Graphics.SetSettings(settings) end
 
 -- Input ------------------------------------------------------------------------------------------------------------
 
----Keyboard, mouse and gamepad state.
+---One control an input action reads: exactly one of Key, MouseButton, GamepadButton or GamepadAxis.
+---@class InputBinding
+---@field Key? KeyName
+---@field MouseButton? MouseButton
+---@field GamepadButton? GamepadButton
+---@field GamepadAxis? GamepadAxis
+---@field Scale? number Multiplies the value, -1..1 (default 1; -1 makes a key the negative half of an axis)
+---@field DeadZone? number Gamepad axes: 0..0.95 (default 0.2)
+---@field Gamepad? integer Gamepad controls: the gamepad to read, 0..15 (default: every gamepad)
+
+---An input action of the project (Input.binput) and its bindings in this session.
+---@class InputAction
+---@field Name string
+---@field Type "Button"|"Axis"
+---@field Bindings InputBinding[]
+
+---Keyboard, mouse and gamepad state as the game sees it, and the project's input actions.
 ---@class Input
 Input = {}
 
@@ -563,17 +582,67 @@ function Input.IsMouseButtonPressed(button) end
 ---@return boolean
 function Input.IsMouseButtonReleased(button) end
 
----Mouse position.
+---Mouse position in the game view: 0,0 top-left, Input.GetViewSize() bottom-right.
 ---@return Vec2
 function Input.GetMousePosition() end
 
----Mouse movement this frame.
+---Mouse movement this frame, in game view units (zero while the game does not have the pointer).
 ---@return Vec2
 function Input.GetMouseDelta() end
 
----Mouse wheel scroll this frame.
+---Mouse wheel scroll this frame (zero while the game does not have the pointer).
 ---@return Vec2
 function Input.GetMouseScroll() end
+
+---The size of the game view in the units of the mouse position (the window, or the editor's game resolution).
+---@return Vec2
+function Input.GetViewSize() end
+
+---Asks for a mouse cursor; play starts and stops with "Normal".
+---@param mode CursorMode
+function Input.SetCursorMode(mode) end
+
+---The cursor mode the game asked for.
+---@return CursorMode
+function Input.GetCursorMode() end
+
+---An action's value: a button's strength 0..1, an axis -1..1.
+---@param action string
+---@return number
+function Input.GetAction(action) end
+
+---Whether the action is held (a button's strength, or an axis' magnitude, of at least 0.5).
+---@param action string
+---@return boolean
+function Input.IsActionDown(action) end
+
+---Whether the action went down this frame.
+---@param action string
+---@return boolean
+function Input.IsActionPressed(action) end
+
+---Whether the action went up this frame.
+---@param action string
+---@return boolean
+function Input.IsActionReleased(action) end
+
+---Every input action of the session, with its bindings.
+---@return InputAction[]
+function Input.GetActions() end
+
+---The action's bindings in this session.
+---@param action string
+---@return InputBinding[]
+function Input.GetBindings(action) end
+
+---Rebinds an action for this session (the project's file is not changed); {} removes every binding.
+---@param action string
+---@param bindings InputBinding[]
+function Input.SetBindings(action, bindings) end
+
+---Puts back the bindings play started with: one action's, or every action's.
+---@param action? string
+function Input.ResetBindings(action) end
 
 ---Whether a gamepad is connected at index (0..15).
 ---@param index integer

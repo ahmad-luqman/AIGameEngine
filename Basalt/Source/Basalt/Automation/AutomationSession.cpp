@@ -288,12 +288,14 @@ namespace Basalt {
 		if (const GameUI::HostState view = GameUI::GetHostState(); m_RecordedView != view)
 		{
 			m_RecordedView = view;
-			const nlohmann::json viewParams = {
+			nlohmann::json viewParams = {
 				{ "origin", { view.ViewportOrigin.x, view.ViewportOrigin.y } },
 				{ "size", { view.ViewportSize.x, view.ViewportSize.y } },
 				{ "pointerEnabled", view.PointerEnabled },
 				{ "navigationEnabled", view.NavigationEnabled },
 			};
+			if (view.Resolution)
+				viewParams["resolution"] = { view.Resolution->x, view.Resolution->y };
 			m_Recording.push_back({ { "frame", frame }, { "command", "view" }, { "params", viewParams } });
 		}
 		m_Recording.push_back({ { "frame", frame }, { "command", command }, { "params", params } });

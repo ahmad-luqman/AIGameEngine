@@ -1,0 +1,9 @@
+{
+	"Format": "BasaltInput",
+	"Version": 1,
+	"Actions": [
+		{ "Name": "Jump", "Type": "Button", "Bindings": [{ "Key": "Space" }, { "GamepadButton": "A" }] },
+		{ "Name": "Fire", "Type": "Button", "Bindings": [{ "MouseButton": "Left" }, { "GamepadAxis": "RightTrigger" }] },
+		{ "Name": "MoveX", "Type": "Axis", "Bindings": [{ "Key": "D" }, { "Key": "A", "Scale": -1 }, { "GamepadAxis": "LeftX", "DeadZone": 0.25 }] }
+	]
+}

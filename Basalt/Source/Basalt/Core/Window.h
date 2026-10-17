@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Basalt/Core/Base.h"
+#include "Basalt/Core/Input.h"
 #include "Basalt/Events/Event.h"
 
 #include <functional>
@@ -46,7 +47,8 @@ namespace Basalt {
 		void SetTitle(const std::string& title);
 		const std::string& GetTitle() const { return m_Data.Title; }
 		void SetEventCallback(const EventCallbackFn& callback) { m_Data.EventCallback = callback; }
-		void SetCursorLocked(bool locked);
+		// Locked uses raw (unaccelerated) mouse motion where the platform has it, as first-person cameras want.
+		void SetCursorMode(CursorMode mode);
 
 		GLFWwindow* GetNativeWindow() const { return m_Window; }
 

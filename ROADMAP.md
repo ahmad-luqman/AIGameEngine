@@ -19,8 +19,8 @@ P2 editor feel → the remaining agent-tested samples. Run each milestone as one
   creation/destruction/prefabs, an editor, export, and a full automation API (CLI + TCP).
 - CI builds and tests on Windows, Ubuntu and macOS (Debug + Release) — but without a GPU. Rendering has
   only been verified on macOS (Apple M4 Max via MoltenVK) with zero validation errors.
-- Over 600 unit test cases, a feature test with over 500 Lua checks, and Tetris, Joints and Marble Run samples
-  with scripted gameplay tests.
+- Over 600 unit test cases, a feature test with over 500 Lua checks, and Tetris, Joints, Marble Run and Breakout
+  samples with scripted gameplay tests.
 
 ---
 
@@ -133,14 +133,6 @@ order of impact.
   inspector's cached script properties when the file is saved (today they stay cached until restart).
   Saves a lot of iteration time, including for AI agents.
 
-### Input
-
-- **Action mapping — M.** Named actions and axes (`"Jump"`, `"MoveX"`) bound to keys, mouse and gamepad
-  in a project-level `Input.binput` file, read with `Input.GetAction("Jump")`. Lets players rebind
-  controls without script changes.
-- **Cursor control — S.** `Window::SetCursorLocked` exists but is not reachable from scripts; expose
-  `Input.SetCursorMode("Locked" | "Hidden" | "Normal")` for first-person cameras.
-
 ### Audio
 
 - **Effects — M.** Low-pass, reverb and doppler via miniaudio nodes; `AudioSource.Doppler`.
@@ -163,9 +155,6 @@ order of impact.
 The Game view, asset thumbnails and material previews, the project settings panel and export validation
 with a smoke test have shipped. Follow-ups:
 
-- **Game view input — S.** Lua `Input.GetMousePosition` still reports window coordinates in the editor;
-  map it to the Game view's image (game pixels) while it hosts the game, and route keyboard input to the
-  game only while the Game view has focus (today scripts see every key, as in the runtime window).
 - **Material assets — L.** A `.bmaterial` file type that MaterialComponent can reference, with
   content-browser thumbnails (previews cover MaterialComponent and glTF materials today).
 - **Preview invalidation — S.** Refresh model and material previews when a texture they use changes, and
@@ -219,7 +208,7 @@ with a smoke test have shipped. Follow-ups:
 The specification asks for an editor that an AI agent can fully control. These items make that faster and
 more reliable.
 
-- **More samples — M each.** Breakout (physics + UI), a 3D platformer (character controller + camera +
+- **More samples — M each.** A 3D platformer (character controller + camera +
   an animated character whose walk/run/jump go through the animation state machine, foot IK and root motion),
   and a small first-person scene (mouse look + raycasts + audio). Each one is built through the
   automation API and adds a ctest gameplay test, which also checks the API is sufficient.

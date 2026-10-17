@@ -43,6 +43,57 @@ namespace {
 
 TEST_SUITE("UI")
 {
+	TEST_CASE("GameUI maps the mouse into the game's coordinates and shares its routing with Input")
+	{
+		BasaltTest::ScopedGameInput restore;
+		struct RestoreHost
+		{
+			~RestoreHost() { GameUI::SetHostState({}); }
+		} restoreHost;
+		GameUI::SetHostState({});
+		// Without a resolution, game coordinates are the viewport's.
+		CHECK(GameUI::GetResolution() == glm::vec2(1920.0f, 1080.0f));
+		CHECK(GameUI::ToGamePosition({ 12.0f, 34.0f }) == glm::vec2(12.0f, 34.0f));
+		GameUI::SetViewportOrigin({ 10.0f, 20.0f });
+		GameUI::SetViewportSize({ 400.0f, 300.0f });
+		CHECK(GameUI::GetResolution() == glm::vec2(400.0f, 300.0f));
+		CHECK(GameUI::ToGamePosition({ 210.0f, 170.0f }) == glm::vec2(200.0f, 150.0f));
+
+		GameUI::SetResolution(glm::vec2(1600.0f, 900.0f));
+		CHECK(GameUI::GetResolution() == glm::vec2(1600.0f, 900.0f));
+		CHECK(GameUI::ToGamePosition({ 210.0f, 170.0f }) == glm::vec2(800.0f, 450.0f));
+		CHECK(GameUI::ToGamePosition({ 10.0f, 20.0f }) == glm::vec2(0.0f, 0.0f));
+		CHECK(GameUI::ToGameDelta({ 1.0f, 2.0f }) == glm::vec2(4.0f, 6.0f));
+		// Unusable resolutions are ignored; nullopt goes back to the viewport size.
+		GameUI::SetResolution(glm::vec2(0.0f, 900.0f));
+		GameUI::SetResolution(glm::vec2(std::numeric_limits<float>::infinity(), 900.0f));
+		CHECK(GameUI::GetResolution() == glm::vec2(1600.0f, 900.0f));
+		CHECK(GameUI::GetHostState().Resolution == glm::vec2(1600.0f, 900.0f));
+		GameUI::SetResolution(std::nullopt);
+		CHECK(GameUI::GetResolution() == glm::vec2(400.0f, 300.0f));
+
+		// The widgets' pointer and navigation flags are Input's game routing.
+		GameUI::SetPointerEnabled(false);
+		CHECK_FALSE(Input::HasGamePointer());
+		Input::SetGameFocus(false);
+		CHECK_FALSE(GameUI::IsNavigationEnabled());
+		GameUI::HostState state = GameUI::GetHostState();
+		CHECK_FALSE(state.PointerEnabled);
+		CHECK_FALSE(state.NavigationEnabled);
+		state.PointerEnabled = true;
+		state.NavigationEnabled = true;
+		state.Resolution = glm::vec2(800.0f, 600.0f);
+		GameUI::SetHostState(state);
+		CHECK(Input::HasGamePointer());
+		CHECK(Input::HasGameFocus());
+		CHECK(GameUI::GetHostState() == state);
+		// Without the pointer the widgets have no pointer position either.
+		Input::SetMousePosition({ 100.0f, 100.0f });
+		CHECK(GameUI::GetPointerPosition().has_value());
+		Input::SetGamePointer(false);
+		CHECK_FALSE(GameUI::GetPointerPosition().has_value());
+	}
+
 	TEST_CASE("GameUI collects immediate-mode commands per scene update and maps the 1080-unit canvas")
 	{
 		GameUI::BeginFrame();

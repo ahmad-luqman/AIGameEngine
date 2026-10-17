@@ -19,7 +19,8 @@ namespace Basalt {
 	struct ProjectConfig;
 
 	// Edits the active project's settings: name and start scene, game resolution, random seed, physics step,
-	// graphics defaults, physics layers and their collision matrix, and runs project.validate. Every change goes
+	// graphics defaults, physics layers and their collision matrix, input actions (Input.binput), and runs
+	// project.validate. Every change goes
 	// through project.set, so the window can do nothing the automation API cannot. Project settings are not scene
 	// state: they are saved at once and are not part of undo history. The one scene edit here, a scene's own
 	// physics step, goes through scene.settings and is undoable.
@@ -40,6 +41,10 @@ namespace Basalt {
 		void DrawSimulation(const ProjectConfig& config);
 		void DrawGraphics(const ProjectConfig& config);
 		void DrawPhysicsLayers(const ProjectConfig& config);
+		void DrawInputActions(const ProjectConfig& config);
+		// One binding's controls (source, control, scale, dead zone, gamepad), editing `binding` in place (the JSON
+		// form project.set takes). True when it changed.
+		bool DrawInputBinding(nlohmann::json& binding);
 		void DrawValidation();
 		// Runs project.set, keeping the warnings it returns (undefined layers, an empty dynamic range, a scene that
 		// keeps its own step).
@@ -103,6 +108,7 @@ namespace Basalt {
 		bool m_EditingName = false;
 		FieldEdit m_Edit;
 		std::string m_NewLayerName;
+		std::string m_NewActionName;
 		std::optional<LayerRename> m_Rename;
 		std::vector<std::string> m_Warnings;
 		// The last project.validate report, until this panel changes a setting or another project opens.

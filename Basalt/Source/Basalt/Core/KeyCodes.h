@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string_view>
 
 namespace Basalt {
@@ -120,5 +121,7 @@ namespace Basalt {
 	std::string_view KeyCodeToString(KeyCode key);
 	// Case-insensitive inverse of KeyCodeToString.
 	std::optional<KeyCode> KeyCodeFromString(std::string_view name);
+	// Every canonical key name, in key code order (for pickers and documentation).
+	std::span<const std::string_view> GetKeyNames();
 
 }

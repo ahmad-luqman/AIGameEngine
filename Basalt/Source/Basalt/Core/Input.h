@@ -8,7 +8,9 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <string_view>
 
 namespace Basalt {
 
@@ -33,6 +35,31 @@ namespace Basalt {
 		Injected
 	};
 
+	// Which frame a state read describes: the current one, or the previous one (as EndFrame last rolled it over).
+	enum class InputFrame : uint8_t
+	{
+		Current = 0,
+		Previous
+	};
+
+	// The mouse cursor a game asks for (Input::SetCursorMode). Hosts apply it to their window.
+	enum class CursorMode : uint8_t
+	{
+		// Visible and free.
+		Normal = 0,
+		// Hidden over the window but free to leave it (a game that draws its own cursor).
+		Hidden,
+		// Hidden and held in the window: only the mouse delta means anything (first-person cameras).
+		Locked
+	};
+
+	inline constexpr uint32_t CursorModeCount = 3;
+
+	// "Normal", "Hidden", "Locked"; "Unknown" for values outside the enum.
+	std::string_view CursorModeToString(CursorMode mode);
+	// Case-insensitive inverse of CursorModeToString.
+	std::optional<CursorMode> CursorModeFromString(std::string_view name);
+
 	// Polled input state. Fed by window events (or injected by tests / the automation API), so it works
 	// identically with and without a window.
 	//
@@ -43,17 +70,20 @@ namespace Basalt {
 	// injected gamepad alone until it is disconnected again. A reset (focus loss) releases every button and
 	// centers every stick. Physical gamepads read as released while the window is unfocused, and a button or stick
 	// held through a reset or an unfocused stretch stays released until it is let go, so it does not press again.
+	//
+	// These reads are the host's: they see every event (the editor's shortcuts and camera use them). The game reads
+	// through GameInput, which sees only what the host routes to it (SetGameFocus, SetGamePointer).
 	class Input
 	{
 	public:
 		static constexpr uint32_t MaxGamepads = 16;
 		static constexpr const char* DefaultInjectedGamepadName = "Injected Gamepad";
 
-		static bool IsKeyDown(KeyCode key);
+		static bool IsKeyDown(KeyCode key, InputFrame frame = InputFrame::Current);
 		static bool IsKeyPressed(KeyCode key);
 		static bool IsKeyReleased(KeyCode key);
 
-		static bool IsMouseButtonDown(MouseCode button);
+		static bool IsMouseButtonDown(MouseCode button, InputFrame frame = InputFrame::Current);
 		static bool IsMouseButtonPressed(MouseCode button);
 		static bool IsMouseButtonReleased(MouseCode button);
 
@@ -76,19 +106,36 @@ namespace Basalt {
 		static GamepadSource GetGamepadSource(uint32_t index);
 		// The device's name ("Xbox Controller", ...); empty when not connected.
 		static std::string GetGamepadName(uint32_t index);
-		static bool IsGamepadButtonDown(uint32_t index, GamepadButton button);
+		// The previous frame's state of a gamepad disconnected since is what it held then.
+		static bool IsGamepadButtonDown(uint32_t index, GamepadButton button, InputFrame frame = InputFrame::Current);
 		static bool IsGamepadButtonPressed(uint32_t index, GamepadButton button);
 		static bool IsGamepadButtonReleased(uint32_t index, GamepadButton button);
 		// Sticks -1..1 (+Y down), triggers 0..1.
-		static float GetGamepadAxis(uint32_t index, GamepadAxis axis);
+		static float GetGamepadAxis(uint32_t index, GamepadAxis axis, InputFrame frame = InputFrame::Current);
+
+		// --- Game routing (see GameInput) ------------------------------------------------------
+		// Whether the game has the keyboard and gamepads (focus) and the mouse (pointer). Both true until a host says
+		// otherwise: the runtime window and headless runs are the game; the editor follows its Game view (focus while
+		// the view has keyboard focus, the pointer while the mouse is over it or the game holds the cursor locked).
+		static void SetGameFocus(bool focused);
+		static bool HasGameFocus();
+		static void SetGamePointer(bool enabled);
+		static bool HasGamePointer();
+
+		// The cursor the game asks for (Lua Input.SetCursorMode). Only stored here: the runtime applies it to its
+		// window, the editor while its Game view hosts the game with focus, headless runs never. Play sessions start
+		// and end with Normal; Reset keeps it.
+		static void SetCursorMode(CursorMode mode);
+		static CursorMode GetCursorMode();
 
 		// --- State feeding ---------------------------------------------------------------------
 		// Updates state from a platform event. Does not mark the event handled.
 		static void OnEvent(Event& event);
 		// Rolls "pressed/released this frame" into history. Call once at the end of each frame.
 		static void EndFrame();
-		// Clears every key and button and releases gamepads (e.g. on focus loss or when leaving play mode). Keeps the
-		// mouse position, gamepad connections and settings.
+		// Clears every key and button and releases gamepads (e.g. on focus loss or when leaving play mode), for the game
+		// too, without reporting releases. Keeps the mouse position, gamepad connections, routing, the cursor mode and
+		// settings.
 		static void Reset();
 
 		static void SetKeyState(KeyCode key, bool down);
@@ -114,6 +161,33 @@ namespace Basalt {
 		// whether the window has focus (unfocused, the gamepad reads as released and what it holds is blocked until
 		// let go). Ignored for injected gamepads and while device gamepads are disabled.
 		static void UpdateGamepadFromDevice(uint32_t index, const GamepadDeviceState* state, bool focused = true);
+	};
+
+	// Input as the game sees it (Lua's Input, input actions): only what the host routes to it. The keyboard and
+	// gamepads reach the game while it has focus (Input::SetGameFocus), the mouse buttons, movement and scroll while
+	// it has the pointer (Input::SetGamePointer); the mouse position is never withheld. Losing the routing reads like
+	// letting go of everything held (released on that frame); a key or button held when the routing comes back stays
+	// released for the game until it is let go (a stick until it returns to rest), so the click or key press that
+	// gives the game focus never reaches it as a press. With full routing (the runtime, headless runs) every read
+	// equals Input's.
+	class GameInput
+	{
+	public:
+		static bool IsKeyDown(KeyCode key, InputFrame frame = InputFrame::Current);
+		static bool IsKeyPressed(KeyCode key);
+		static bool IsKeyReleased(KeyCode key);
+
+		static bool IsMouseButtonDown(MouseCode button, InputFrame frame = InputFrame::Current);
+		static bool IsMouseButtonPressed(MouseCode button);
+		static bool IsMouseButtonReleased(MouseCode button);
+		// Zero while the game does not have the pointer.
+		static glm::vec2 GetMouseDelta();
+		static glm::vec2 GetMouseScroll();
+
+		static bool IsGamepadButtonDown(uint32_t index, GamepadButton button, InputFrame frame = InputFrame::Current);
+		static bool IsGamepadButtonPressed(uint32_t index, GamepadButton button);
+		static bool IsGamepadButtonReleased(uint32_t index, GamepadButton button);
+		static float GetGamepadAxis(uint32_t index, GamepadAxis axis, InputFrame frame = InputFrame::Current);
 	};
 
 }

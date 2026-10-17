@@ -14,6 +14,7 @@
 #include "Basalt/Core/Input.h"
 #include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
+#include "Basalt/Core/Window.h"
 #include "Basalt/ImGui/ImGuiLayer.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/DebugDraw.h"
@@ -538,7 +539,7 @@ namespace Basalt {
 								 return nlohmann::json{ { "path", path.string() }, { "note", "written at the end of the current frame" } };
 							 } });
 
-		m_Commands.Register({ "editor.game_view", "Gets or changes the Game view: the resolution it renders at (the project's window size unless overridden for this session), focus, and with path saves what it shows (primary camera at that resolution, game UI, never a debug view; exposure reset as for screenshots) to a PNG. Returns {visible, mode, status (rendered, notRendered, noCamera, rendererUnavailable, renderFailed: the last frame's), width, height, override, hasCamera, imageRect and panelRect (logical units, relative to the editor window, as last drawn), windowSize, renderWidth, renderHeight}.", GameViewSettings::Schema(), [this](AutomationSession& session, const nlohmann::json& params) {
+		m_Commands.Register({ "editor.game_view", "Gets or changes the Game view: the resolution it renders at (the project's window size unless overridden for this session), focus, and with path saves what it shows (primary camera at that resolution, game UI, never a debug view; exposure reset as for screenshots) to a PNG. Returns {visible, mode, status (rendered, notRendered, noCamera, rendererUnavailable, renderFailed: the last frame's), width, height, override, hasCamera, imageRect and panelRect (logical units, relative to the editor window, as last drawn), windowSize, renderWidth, renderHeight, cursorMode (what the game asks for: Normal, Hidden or Locked), cursorLocked (whether the window holds the cursor for the game now)}.", GameViewSettings::Schema(), [this](AutomationSession& session, const nlohmann::json& params) {
 								 std::string error;
 								 if (!m_GameView.Apply(params, error))
 									 throw CommandError(error);
@@ -1552,6 +1553,7 @@ namespace Basalt {
 		{
 			GameUI::SetViewportSize({ available.x, available.y });
 			GameUI::SetViewportOrigin({ cursor.x, cursor.y });
+			GameUI::SetResolution(std::nullopt);
 			GameUI::SetPointerEnabled(m_ViewportHovered);
 			GameUI::SetNavigationEnabled(m_ViewportFocused);
 		}
@@ -1809,8 +1811,10 @@ namespace Basalt {
 				drawList->AddText(ImVec2(badgeMin.x + 6.0f, badgeMin.y + 4.0f), IM_COL32(255, 200, 80, 255), badge);
 			}
 		}
-		// In Play the game UI is laid out over this image and takes the pointer (while hovered) and the keyboard
-		// and gamepads (while focused) here; a hidden tab keeps the layout and takes neither.
+		UpdateGameCursor();
+		// In Play the game (its UI and its scripts) is laid out over this image, sees the mouse in game pixels, and
+		// takes the pointer (while hovered, or while it holds the cursor locked) and the keyboard and gamepads (while
+		// focused) here; a hidden tab keeps the layout and takes neither.
 		if (IsGameRunning())
 		{
 			const bool hasImage = m_GameImageSize.x >= 1.0f && m_GameImageSize.y >= 1.0f;
@@ -1818,12 +1822,39 @@ namespace Basalt {
 			{
 				GameUI::SetViewportSize(m_GameImageSize);
 				GameUI::SetViewportOrigin(m_GameImageMin);
+				GameUI::SetResolution(glm::vec2(GetGameResolution()));
 			}
-			GameUI::SetPointerEnabled(hasImage && m_GameViewHovered);
+			GameUI::SetPointerEnabled(hasImage && (m_GameViewHovered || m_AppliedCursorMode == CursorMode::Locked));
 			GameUI::SetNavigationEnabled(hasImage && m_GameViewFocused);
 		}
 		ImGui::End();
 		ImGui::PopStyleVar();
+	}
+
+	void EditorLayer::UpdateGameCursor()
+	{
+		const CursorMode requested = IsGameRunning() ? Input::GetCursorMode() : CursorMode::Normal;
+		if (requested == CursorMode::Normal)
+			m_GameCursorReleased = false;
+		else if (m_GameViewFocused && Input::IsKeyPressed(KeyCode::Escape))
+			m_GameCursorReleased = true;
+		else if (m_GameCursorReleased && m_GameViewHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+			m_GameCursorReleased = false;
+		const bool active = requested != CursorMode::Normal && m_GameViewFocused && !m_GameCursorReleased;
+		const CursorMode window = active && requested == CursorMode::Locked ? CursorMode::Locked : CursorMode::Normal;
+		if (window != m_AppliedCursorMode)
+		{
+			Application::Get().GetWindow()->SetCursorMode(window);
+			m_AppliedCursorMode = window;
+		}
+		ImGuiIO& io = ImGui::GetIO();
+		if (window == CursorMode::Locked)
+			io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
+		else
+			io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+		// The OS cursor is the whole editor's: hide it only over the game.
+		if (active && requested == CursorMode::Hidden && m_GameViewHovered)
+			ImGui::SetMouseCursor(ImGuiMouseCursor_None);
 	}
 
 	const char* EditorLayer::GetSessionModeName() const
@@ -1908,6 +1939,8 @@ namespace Basalt {
 			{ "windowSize", { window->Size.x, window->Size.y } },
 			{ "renderWidth", m_GameRenderer ? m_GameRenderer->GetRenderWidth() : 0 },
 			{ "renderHeight", m_GameRenderer ? m_GameRenderer->GetRenderHeight() : 0 },
+			{ "cursorMode", std::string(CursorModeToString(IsGameRunning() ? Input::GetCursorMode() : CursorMode::Normal)) },
+			{ "cursorLocked", m_AppliedCursorMode == CursorMode::Locked },
 		};
 	}
 

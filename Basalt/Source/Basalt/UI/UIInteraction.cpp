@@ -379,7 +379,7 @@ namespace Basalt {
 		const Candidate* focus = current < navigable.size() ? navigable[current] : nullptr;
 		if (focus && focus->Kind != UIWidgetKind::Slider && IsAccept(&Input::IsKeyPressed, &Input::IsGamepadButtonPressed))
 			Activate(scene, *focus);
-		m_AcceptHeld = focus && focus->Kind != UIWidgetKind::Slider && IsAccept(&Input::IsKeyDown, &Input::IsGamepadButtonDown);
+		m_AcceptHeld = focus && focus->Kind != UIWidgetKind::Slider && IsAccept([](KeyCode key) { return Input::IsKeyDown(key); }, [](uint32_t index, GamepadButton button) { return Input::IsGamepadButtonDown(index, button); });
 	}
 
 	bool UIInteraction::Repeat(Direction direction, bool held, float deltaTime)

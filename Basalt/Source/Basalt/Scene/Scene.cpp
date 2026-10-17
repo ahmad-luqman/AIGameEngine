@@ -3,6 +3,7 @@
 #include "Basalt/Animation/AnimationSystem.h"
 #include "Basalt/Audio/AudioSystem.h"
 #include "Basalt/Core/Assert.h"
+#include "Basalt/Core/Input.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Particles/ParticleSystem.h"
 #include "Basalt/Physics/PhysicsWorld.h"
@@ -556,12 +557,47 @@ namespace Basalt {
 		return true;
 	}
 
+	bool Scene::SetInputBindings(std::string_view action, std::vector<InputBinding> bindings, std::string& outError)
+	{
+		if (m_State != SceneState::Play)
+		{
+			outError = "input bindings require Play mode";
+			return false;
+		}
+		return m_InputActions.SetBindings(action, std::move(bindings), outError);
+	}
+
+	bool Scene::ResetInputBindings(std::optional<std::string_view> action, std::string& outError)
+	{
+		if (m_State != SceneState::Play)
+		{
+			outError = "input bindings require Play mode";
+			return false;
+		}
+		if (!action)
+		{
+			m_InputActions = m_StartInputActions;
+			return true;
+		}
+		const InputAction* start = m_StartInputActions.Find(*action);
+		if (!start)
+		{
+			outError = fmt::format("unknown input action '{}'", *action);
+			return false;
+		}
+		return m_InputActions.SetBindings(*action, start->Bindings, outError);
+	}
+
 	void Scene::OnRuntimeStart(std::optional<GraphicsSettings> graphics)
 	{
 		if (IsRunning())
 			return;
 
 		m_GraphicsSettings = graphics.value_or(Project::GetActiveGraphicsSettings());
+		m_StartInputActions = Project::GetActiveInputActions();
+		m_InputActions = m_StartInputActions;
+		// The cursor belongs to the session: a game that locked it and stopped must not keep it locked.
+		Input::SetCursorMode(CursorMode::Normal);
 		m_StoppedSessionScriptErrors.clear();
 		m_State = SceneState::Play;
 		BumpRenderRevision();
@@ -616,6 +652,9 @@ namespace Basalt {
 		m_AnimationSystem.reset();
 		m_AudioSystem.reset();
 		m_PhysicsWorld.reset();
+		m_InputActions = {};
+		m_StartInputActions = {};
+		Input::SetCursorMode(CursorMode::Normal);
 		m_State = SceneState::Edit;
 		m_SessionIdentity.reset();
 		m_SessionFixedTimestep = 0.0f;

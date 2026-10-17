@@ -4,6 +4,10 @@
 
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Automation/EditorCommandSchemas.h"
+#include "Basalt/Core/GamepadCodes.h"
+#include "Basalt/Core/InputActions.h"
+#include "Basalt/Core/KeyCodes.h"
+#include "Basalt/Core/MouseCodes.h"
 #include "Basalt/Physics/FixedTimestep.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/RenderMath.h"
@@ -13,8 +17,11 @@
 #include <imgui_stdlib.h>
 #include <spdlog/fmt/fmt.h>
 
+#include <array>
 #include <cmath>
 #include <random>
+#include <span>
+#include <string_view>
 
 namespace Basalt {
 
@@ -29,6 +36,21 @@ namespace Basalt {
 
 		constexpr Resolution s_Resolutions[] = { { "1280 x 720 (16:9)", 1280, 720 }, { "1600 x 900 (16:9)", 1600, 900 }, { "1920 x 1080 (16:9)", 1920, 1080 }, { "2560 x 1440 (16:9)", 2560, 1440 }, { "1024 x 768 (4:3)", 1024, 768 }, { "1080 x 1920 (portrait)", 1080, 1920 } };
 		constexpr int s_StepRates[] = { 30, 50, 60, 120 };
+
+		// A binding's control keys (InputActionMap::BindingFromJson) with their pickers' labels and name lists.
+		struct BindingSource
+		{
+			const char* Key;
+			const char* Label;
+			std::span<const std::string_view> (*Names)();
+		};
+
+		constexpr std::array<BindingSource, 4> s_BindingSources = { {
+			{ "Key", "Key", &GetKeyNames },
+			{ "MouseButton", "Mouse", &GetMouseButtonNames },
+			{ "GamepadButton", "Gamepad Button", &GetGamepadButtonNames },
+			{ "GamepadAxis", "Gamepad Axis", &GetGamepadAxisNames },
+		} };
 
 		void HelpMarker(const char* text)
 		{
@@ -72,6 +94,7 @@ namespace Basalt {
 			m_EditingName = false;
 			m_NameBuffer.clear();
 			m_NewLayerName.clear();
+			m_NewActionName.clear();
 		}
 		// Project settings are not scene state, so they are saved at once and stay out of scene undo history.
 		ImGui::TextDisabled("Saved to %s as you edit (not undoable).", Project::FileName);
@@ -88,6 +111,7 @@ namespace Basalt {
 		DrawSimulation(config);
 		DrawGraphics(config);
 		DrawPhysicsLayers(config);
+		DrawInputActions(config);
 		ImGui::EndDisabled();
 		DrawValidation();
 		ImGui::End();
@@ -243,6 +267,172 @@ namespace Basalt {
 		if (EditCommitted("Lowest Render Scale", minimum, [](const char* id, float* value) { ImGui::SliderFloat(id, value, MinRenderScale, MaxRenderScale, "%.2f"); }) && minimum != graphics.DynamicResolution.MinScale)
 			Set({ { "graphics", { { "MinRenderScale", minimum } } } });
 		ImGui::EndDisabled();
+	}
+
+	void ProjectSettingsPanel::DrawInputActions(const ProjectConfig& config)
+	{
+		if (!ImGui::CollapsingHeader("Input Actions", ImGuiTreeNodeFlags_DefaultOpen))
+			return;
+		ImGui::TextDisabled("Saved to %s. Scripts read them with Input.GetAction.", Project::InputFileName);
+		HelpMarker("A Button action is as strong as its strongest binding; an Axis adds its bindings (a key with Scale -1 is the negative half). Scale multiplies a binding's value; a gamepad axis reads 0 inside its dead zone. Changes apply from the next play.");
+		// Edited as the JSON project.set takes, so this panel can do nothing the automation API cannot.
+		nlohmann::json map = config.InputActions.ToJson();
+		nlohmann::json& actions = map["Actions"];
+		bool changed = false;
+		std::optional<size_t> removedAction;
+		for (size_t i = 0; i < actions.size(); i++)
+		{
+			nlohmann::json& action = actions[i];
+			ImGui::PushID(static_cast<int>(i));
+			const std::string name = action["Name"].get<std::string>();
+			const bool open = ImGui::TreeNodeEx("##Action", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap, "%s", name.c_str());
+			ImGui::SameLine();
+			if (ImGui::SmallButton("Remove"))
+				removedAction = i;
+			if (open)
+			{
+				int type = action["Type"] == "Axis" ? 1 : 0;
+				const char* const types[] = { "Button", "Axis" };
+				ImGui::SetNextItemWidth(120.0f);
+				if (ImGui::Combo("Type", &type, types, 2))
+				{
+					action["Type"] = types[type];
+					changed = true;
+				}
+				nlohmann::json& bindings = action["Bindings"];
+				std::optional<size_t> removedBinding;
+				for (size_t b = 0; b < bindings.size(); b++)
+				{
+					ImGui::PushID(static_cast<int>(b));
+					changed |= DrawInputBinding(bindings[b]);
+					ImGui::SameLine();
+					if (ImGui::SmallButton("X"))
+						removedBinding = b;
+					ImGui::PopID();
+				}
+				if (removedBinding)
+				{
+					bindings.erase(*removedBinding);
+					changed = true;
+				}
+				ImGui::BeginDisabled(bindings.size() >= InputActionMap::MaxBindings);
+				if (ImGui::SmallButton("Add Binding"))
+				{
+					bindings.push_back({ { "Key", "Space" } });
+					changed = true;
+				}
+				ImGui::EndDisabled();
+				ImGui::TreePop();
+			}
+			ImGui::PopID();
+		}
+		if (removedAction)
+		{
+			actions.erase(*removedAction);
+			changed = true;
+		}
+		ImGui::SetNextItemWidth(180.0f);
+		ImGui::InputTextWithHint("##NewAction", "New action name", &m_NewActionName);
+		ImGui::SameLine();
+		ImGui::BeginDisabled(m_NewActionName.empty() || config.InputActions.Find(m_NewActionName) || actions.size() >= InputActionMap::MaxActions);
+		if (ImGui::Button("Add Action"))
+		{
+			actions.push_back({ { "Name", m_NewActionName }, { "Type", "Button" }, { "Bindings", nlohmann::json::array() } });
+			m_NewActionName.clear();
+			changed = true;
+		}
+		ImGui::EndDisabled();
+		if (changed)
+			Set({ { "inputActions", map } });
+	}
+
+	bool ProjectSettingsPanel::DrawInputBinding(nlohmann::json& binding)
+	{
+		bool changed = false;
+		size_t source = 0;
+		while (source + 1 < s_BindingSources.size() && !binding.contains(s_BindingSources[source].Key))
+			source++;
+		const BindingSource& current = s_BindingSources[source];
+		ImGui::SetNextItemWidth(130.0f);
+		if (ImGui::BeginCombo("##Source", current.Label))
+		{
+			for (size_t i = 0; i < s_BindingSources.size(); i++)
+			{
+				if (ImGui::Selectable(s_BindingSources[i].Label, i == source) && i != source)
+				{
+					// A new source starts at its first control; only Scale means the same for every source.
+					nlohmann::json replaced = { { s_BindingSources[i].Key, std::string(s_BindingSources[i].Names().front()) } };
+					if (binding.contains("Scale"))
+						replaced["Scale"] = binding["Scale"];
+					binding = std::move(replaced);
+					changed = true;
+				}
+			}
+			ImGui::EndCombo();
+		}
+		if (changed)
+			return true;
+		ImGui::SameLine();
+		const std::string control = binding[current.Key].get<std::string>();
+		ImGui::SetNextItemWidth(130.0f);
+		if (ImGui::BeginCombo("##Control", control.c_str(), ImGuiComboFlags_HeightLarge))
+		{
+			for (const std::string_view name : current.Names())
+			{
+				const std::string label(name);
+				if (ImGui::Selectable(label.c_str(), label == control) && label != control)
+				{
+					binding[current.Key] = label;
+					changed = true;
+				}
+			}
+			ImGui::EndCombo();
+		}
+		ImGui::SameLine();
+		float scale = binding.value("Scale", 1.0f);
+		ImGui::SetNextItemWidth(70.0f);
+		if (EditCommitted("Scale", scale, [](const char* label, float* value) { ImGui::DragFloat(label, value, 0.01f, -1.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp); }))
+		{
+			binding["Scale"] = scale;
+			changed = true;
+		}
+		const std::string_view key = current.Key;
+		if (key == "GamepadAxis")
+		{
+			ImGui::SameLine();
+			float deadZone = binding.value("DeadZone", InputBinding::DefaultDeadZone);
+			ImGui::SetNextItemWidth(70.0f);
+			if (EditCommitted("Dead Zone", deadZone, [](const char* label, float* value) { ImGui::DragFloat(label, value, 0.01f, 0.0f, InputBinding::MaxDeadZone, "%.2f", ImGuiSliderFlags_AlwaysClamp); }))
+			{
+				binding["DeadZone"] = deadZone;
+				changed = true;
+			}
+		}
+		if (key == "GamepadButton" || key == "GamepadAxis")
+		{
+			ImGui::SameLine();
+			const std::string gamepad = binding.contains("Gamepad") ? fmt::format("Gamepad {}", binding["Gamepad"].get<uint32_t>()) : std::string("Any gamepad");
+			ImGui::SetNextItemWidth(120.0f);
+			if (ImGui::BeginCombo("##Gamepad", gamepad.c_str()))
+			{
+				if (ImGui::Selectable("Any gamepad", !binding.contains("Gamepad")) && binding.contains("Gamepad"))
+				{
+					binding.erase("Gamepad");
+					changed = true;
+				}
+				for (uint32_t index = 0; index < Input::MaxGamepads; index++)
+				{
+					const bool selected = binding.contains("Gamepad") && binding["Gamepad"].get<uint32_t>() == index;
+					if (ImGui::Selectable(fmt::format("Gamepad {}", index).c_str(), selected) && !selected)
+					{
+						binding["Gamepad"] = index;
+						changed = true;
+					}
+				}
+				ImGui::EndCombo();
+			}
+		}
+		return changed;
 	}
 
 	void ProjectSettingsPanel::DrawPhysicsLayers(const ProjectConfig& config)

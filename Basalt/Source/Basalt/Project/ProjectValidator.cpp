@@ -73,6 +73,7 @@ namespace Basalt {
 			ValidationReport Run()
 			{
 				CheckProjectFile();
+				CheckInputFile();
 				CheckStartScene();
 				std::vector<std::filesystem::path> scenes, prefabs, scripts;
 				ListAssets(scenes, prefabs, scripts);
@@ -132,6 +133,24 @@ namespace Basalt {
 				const auto format = data.find("Format");
 				if (format == data.end() || *format != "BasaltProject")
 					m_Report.Add(ValidationSeverity::Warning, Project::FileName, "the file does not declare \"Format\": \"BasaltProject\"");
+			}
+
+			// The runtime refuses a project whose input actions file is broken. An action without bindings is legal (a
+			// game may bind it at run time) but usually an oversight.
+			void CheckInputFile()
+			{
+				std::string error;
+				const auto actions = Project::ReadInputActions(m_Project.GetInputFilePath(), error);
+				if (!actions)
+				{
+					m_Report.Add(ValidationSeverity::Error, Project::InputFileName, error);
+					return;
+				}
+				for (const InputAction& action : actions->GetActions())
+				{
+					if (action.Bindings.empty())
+						m_Report.Add(ValidationSeverity::Warning, Project::InputFileName, "input action '" + action.Name + "' has no bindings");
+				}
 			}
 
 			void CheckStartScene()

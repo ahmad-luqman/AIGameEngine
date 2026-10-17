@@ -1,0 +1,1189 @@
+{
+	"Entities": [
+		{
+			"Components": {
+				"AudioListener": {
+					"Active": true
+				},
+				"Camera": {
+					"FOV": 45.0,
+					"Far": 200.0,
+					"FixedAspectRatio": false,
+					"Near": 0.10000000149011612,
+					"OrthoFar": 100.0,
+					"OrthoNear": -100.0,
+					"OrthoSize": 10.0,
+					"Primary": true,
+					"Projection": "Perspective"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						7.0,
+						21.0
+					]
+				}
+			},
+			"ID": 9330582790247060040,
+			"Name": "Camera",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"DirectionalLight": {
+					"CastShadows": true,
+					"Color": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Intensity": 2.0,
+					"ShadowSoftness": 1.5
+				},
+				"Transform": {
+					"Rotation": [
+						-35.0,
+						20.000003814697266,
+						4.5428342332343163e-07
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						0.0,
+						0.0
+					]
+				}
+			},
+			"ID": 475097155381726687,
+			"Name": "Sun",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"SkyLight": {
+					"EnvironmentMap": "",
+					"Intensity": 0.30000001192092896,
+					"Rotation": 0.0,
+					"ShowBackground": false
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						0.0,
+						0.0
+					]
+				}
+			},
+			"ID": 1899343577636145180,
+			"Name": "Sky",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"PostProcess": {
+					"AdaptationSpeed": 3.0,
+					"AutoExposure": false,
+					"BloomEnabled": true,
+					"BloomIntensity": 0.6000000238418579,
+					"BloomScatter": 0.699999988079071,
+					"BloomThreshold": 1.0,
+					"Enabled": true,
+					"Exposure": 1.0,
+					"ExposureCompensation": 0.0,
+					"FXAAEnabled": false,
+					"MaxExposure": 16.0,
+					"MinExposure": 0.0625,
+					"Priority": 0,
+					"SSAOBias": 0.02500000037252903,
+					"SSAOEnabled": true,
+					"SSAOIntensity": 1.0,
+					"SSAORadius": 0.5,
+					"Tonemapper": "ACES"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						0.0,
+						0.0
+					]
+				}
+			},
+			"ID": 10104964627041895071,
+			"Name": "PostProcess",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"Script": {
+					"Properties": {},
+					"Script": "Assets/Scripts/Breakout.lua"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						0.0,
+						0.0
+					]
+				}
+			},
+			"ID": 16442158538971103205,
+			"Name": "Game",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"Material": {
+					"AlbedoColor": [
+						0.029999999329447746,
+						0.03500000014901161,
+						0.05999999865889549,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.8999999761581421
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						17.0,
+						15.0,
+						0.20000000298023224
+					],
+					"Translation": [
+						0.0,
+						7.0,
+						-1.2000000476837158
+					]
+				}
+			},
+			"ID": 6666670604463414563,
+			"Name": "Backboard",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.07999999821186066,
+						0.10000000149011612,
+						0.1599999964237213,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.019999999552965164,
+						0.11999999731779099,
+						0.30000001192092896
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.5,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.3499999940395355
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.0,
+					"FrictionCombine": "Min",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 1.0,
+					"RestitutionCombine": "Max",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.5,
+						15.0,
+						1.600000023841858
+					],
+					"Translation": [
+						-8.25,
+						7.0,
+						0.0
+					]
+				}
+			},
+			"ID": 11724974419924568035,
+			"Name": "WallLeft",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.07999999821186066,
+						0.10000000149011612,
+						0.1599999964237213,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.019999999552965164,
+						0.11999999731779099,
+						0.30000001192092896
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.5,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.3499999940395355
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.0,
+					"FrictionCombine": "Min",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 1.0,
+					"RestitutionCombine": "Max",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.5,
+						15.0,
+						1.600000023841858
+					],
+					"Translation": [
+						8.25,
+						7.0,
+						0.0
+					]
+				}
+			},
+			"ID": 12472195722445517079,
+			"Name": "WallRight",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.07999999821186066,
+						0.10000000149011612,
+						0.1599999964237213,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.019999999552965164,
+						0.11999999731779099,
+						0.30000001192092896
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.5,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.3499999940395355
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.0,
+					"FrictionCombine": "Min",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 1.0,
+					"RestitutionCombine": "Max",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						17.0,
+						0.5,
+						1.600000023841858
+					],
+					"Translation": [
+						0.0,
+						14.25,
+						0.0
+					]
+				}
+			},
+			"ID": 10381223310229550309,
+			"Name": "Ceiling",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						10.0,
+						0.5,
+						2.0
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.5,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": true,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						-1.0,
+						0.0
+					]
+				}
+			},
+			"ID": 750856693903829456,
+			"Name": "KillZone",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.800000011920929,
+						0.8999999761581421,
+						1.0,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.20000000298023224,
+						0.800000011920929,
+						1.600000023841858
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.5,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.25
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.0,
+					"FrictionCombine": "Min",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 1.0,
+					"RestitutionCombine": "Max",
+					"Type": "Kinematic"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						2.4000000953674316,
+						0.4000000059604645,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						1.0,
+						0.0
+					]
+				}
+			},
+			"ID": 5656335425057499089,
+			"Name": "Paddle",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"Material": {
+					"AlbedoColor": [
+						1.0,
+						1.0,
+						1.0,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						3.0,
+						3.0,
+						3.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.30000001192092896
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Sphere",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": false,
+					"AngularDamping": 0.0,
+					"Continuous": true,
+					"FixedRotation": true,
+					"Friction": 0.0,
+					"FrictionCombine": "Min",
+					"GravityFactor": 0.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.0,
+					"Mass": 1.0,
+					"Restitution": 1.0,
+					"RestitutionCombine": "Max",
+					"Type": "Dynamic"
+				},
+				"Script": {
+					"Properties": {},
+					"Script": "Assets/Scripts/Ball.lua"
+				},
+				"SphereCollider": {
+					"Friction": 0.5,
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Radius": 0.5,
+					"Restitution": 0.0
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Translation": [
+						0.0,
+						1.5,
+						0.0
+					]
+				}
+			},
+			"ID": 13140980244635662479,
+			"Name": "Ball",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"ParticleEmitter": {
+					"Blend": "Additive",
+					"BoxExtents": [
+						0.8999999761581421,
+						0.30000001192092896,
+						0.4000000059604645
+					],
+					"BurstCount": 0,
+					"ConeAngle": 25.0,
+					"Drag": 0.5,
+					"Duration": 5.0,
+					"EndColor": [
+						1.0,
+						1.0,
+						1.0,
+						0.0
+					],
+					"EndSize": 0.029999999329447746,
+					"GravityScale": 1.0,
+					"LifetimeMax": 0.699999988079071,
+					"LifetimeMin": 0.30000001192092896,
+					"Looping": false,
+					"MaxParticles": 512,
+					"PlayOnStart": false,
+					"Rate": 0.0,
+					"Shape": "Box",
+					"ShapeRadius": 0.5,
+					"SimulationSpace": "World",
+					"SpeedMax": 5.0,
+					"SpeedMin": 2.0,
+					"StartColor": [
+						1.0,
+						1.0,
+						1.0,
+						1.0
+					],
+					"StartSize": 0.18000000715255737,
+					"Texture": "",
+					"Velocity": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						20.0,
+						0.0
+					]
+				}
+			},
+			"ID": 17809482291024521162,
+			"Name": "BrickBurst",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"UIRect": {
+					"AnchorMax": [
+						1.0,
+						1.0
+					],
+					"AnchorMin": [
+						0.0,
+						0.0
+					],
+					"Pivot": [
+						0.5,
+						0.5
+					],
+					"Position": [
+						0.0,
+						0.0
+					],
+					"Size": [
+						-64.0,
+						-48.0
+					],
+					"Visible": true
+				}
+			},
+			"ID": 11224955567977599728,
+			"Name": "Hud",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"UIRect": {
+					"AnchorMax": [
+						0.0,
+						0.0
+					],
+					"AnchorMin": [
+						0.0,
+						0.0
+					],
+					"Pivot": [
+						0.0,
+						0.0
+					],
+					"Position": [
+						0.0,
+						0.0
+					],
+					"Size": [
+						480.0,
+						64.0
+					],
+					"Visible": true
+				},
+				"UIText": {
+					"Color": [
+						1.0,
+						1.0,
+						1.0,
+						1.0
+					],
+					"Font": "Assets/Fonts/Karla-Regular.ttf",
+					"FontSize": 48.0,
+					"HorizontalAlign": "Left",
+					"Shadow": true,
+					"Text": "SCORE 0",
+					"VerticalAlign": "Middle",
+					"Wrap": true
+				}
+			},
+			"ID": 3417902932881346383,
+			"Name": "ScoreText",
+			"Parent": 11224955567977599728
+		},
+		{
+			"Components": {
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"UIRect": {
+					"AnchorMax": [
+						0.5,
+						0.0
+					],
+					"AnchorMin": [
+						0.5,
+						0.0
+					],
+					"Pivot": [
+						0.5,
+						0.0
+					],
+					"Position": [
+						0.0,
+						0.0
+					],
+					"Size": [
+						480.0,
+						64.0
+					],
+					"Visible": true
+				},
+				"UIText": {
+					"Color": [
+						1.0,
+						0.8500000238418579,
+						0.3499999940395355,
+						1.0
+					],
+					"Font": "Assets/Fonts/Karla-Regular.ttf",
+					"FontSize": 48.0,
+					"HorizontalAlign": "Center",
+					"Shadow": true,
+					"Text": "BREAKOUT",
+					"VerticalAlign": "Middle",
+					"Wrap": true
+				}
+			},
+			"ID": 8701582852793269671,
+			"Name": "Title",
+			"Parent": 11224955567977599728
+		},
+		{
+			"Components": {
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"UIRect": {
+					"AnchorMax": [
+						1.0,
+						0.0
+					],
+					"AnchorMin": [
+						1.0,
+						0.0
+					],
+					"Pivot": [
+						1.0,
+						0.0
+					],
+					"Position": [
+						0.0,
+						0.0
+					],
+					"Size": [
+						480.0,
+						64.0
+					],
+					"Visible": true
+				},
+				"UIText": {
+					"Color": [
+						1.0,
+						1.0,
+						1.0,
+						1.0
+					],
+					"Font": "Assets/Fonts/Karla-Regular.ttf",
+					"FontSize": 48.0,
+					"HorizontalAlign": "Right",
+					"Shadow": true,
+					"Text": "LIVES 3",
+					"VerticalAlign": "Middle",
+					"Wrap": true
+				}
+			},
+			"ID": 8185943671186898563,
+			"Name": "LivesText",
+			"Parent": 11224955567977599728
+		},
+		{
+			"Components": {
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"UIRect": {
+					"AnchorMax": [
+						0.5,
+						0.5
+					],
+					"AnchorMin": [
+						0.5,
+						0.5
+					],
+					"Pivot": [
+						0.5,
+						0.5
+					],
+					"Position": [
+						0.0,
+						40.0
+					],
+					"Size": [
+						1200.0,
+						80.0
+					],
+					"Visible": true
+				},
+				"UIText": {
+					"Color": [
+						1.0,
+						1.0,
+						1.0,
+						1.0
+					],
+					"Font": "Assets/Fonts/Karla-Regular.ttf",
+					"FontSize": 56.0,
+					"HorizontalAlign": "Center",
+					"Shadow": true,
+					"Text": "",
+					"VerticalAlign": "Middle",
+					"Wrap": true
+				}
+			},
+			"ID": 9442581843307239570,
+			"Name": "Message",
+			"Parent": 11224955567977599728
+		},
+		{
+			"Components": {
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"UIButton": {
+					"DisabledTint": [
+						0.5,
+						0.5,
+						0.5,
+						0.5
+					],
+					"HighlightTint": [
+						1.0,
+						1.0,
+						1.0,
+						1.0
+					],
+					"Interactable": true,
+					"NormalTint": [
+						0.8500000238418579,
+						0.8500000238418579,
+						0.8500000238418579,
+						1.0
+					],
+					"OnClick": "OnRestart",
+					"PressedTint": [
+						0.6499999761581421,
+						0.6499999761581421,
+						0.6499999761581421,
+						1.0
+					],
+					"Target": 16442158538971103205
+				},
+				"UIImage": {
+					"Color": [
+						0.8500000238418579,
+						0.25,
+						0.18000000715255737,
+						1.0
+					],
+					"Slice": [
+						0.0,
+						0.0,
+						0.0,
+						0.0
+					],
+					"SliceScale": 1.0,
+					"Texture": ""
+				},
+				"UIRect": {
+					"AnchorMax": [
+						0.5,
+						0.5
+					],
+					"AnchorMin": [
+						0.5,
+						0.5
+					],
+					"Pivot": [
+						0.5,
+						0.5
+					],
+					"Position": [
+						0.0,
+						160.0
+					],
+					"Size": [
+						360.0,
+						90.0
+					],
+					"Visible": false
+				},
+				"UIText": {
+					"Color": [
+						1.0,
+						1.0,
+						1.0,
+						1.0
+					],
+					"Font": "Assets/Fonts/Karla-Regular.ttf",
+					"FontSize": 40.0,
+					"HorizontalAlign": "Center",
+					"Shadow": true,
+					"Text": "RESTART",
+					"VerticalAlign": "Middle",
+					"Wrap": true
+				}
+			},
+			"ID": 1231406519875818608,
+			"Name": "RestartButton",
+			"Parent": 11224955567977599728
+		}
+	],
+	"Format": "BasaltScene",
+	"Name": "Breakout",
+	"Physics": {
+		"Gravity": [
+			0.0,
+			-9.8100004196167,
+			0.0
+		],
+		"MaxStepsPerFrame": 8
+	},
+	"Renderer": {
+		"AmbientColor": [
+			0.029999999329447746,
+			0.029999999329447746,
+			0.03500000014901161
+		],
+		"CascadeSplitLambda": 0.8500000238418579,
+		"Exposure": 1.0,
+		"FSR1Enabled": false,
+		"FSR1Sharpness": 0.20000000298023224,
+		"SSAOBias": 0.02500000037252903,
+		"SSAOEnabled": true,
+		"SSAOIntensity": 1.0,
+		"SSAORadius": 0.5,
+		"ShadowBias": 0.001500000013038516,
+		"ShadowDistance": 40.0,
+		"ShadowNormalBias": 0.019999999552965164,
+		"ShadowsEnabled": true,
+		"Tonemapper": "ACES"
+	},
+	"Version": 2
+}

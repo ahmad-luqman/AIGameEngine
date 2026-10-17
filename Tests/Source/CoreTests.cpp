@@ -3,6 +3,7 @@
 #include <Basalt/Core/FileSystem.h>
 #include <Basalt/Core/GamepadCodes.h>
 #include <Basalt/Core/Input.h>
+#include <Basalt/Core/InputActions.h>
 #include <Basalt/Core/JsonUtils.h>
 #include <Basalt/Core/KeyCodes.h>
 #include <Basalt/Core/LayerStack.h>
@@ -453,6 +454,408 @@ TEST_SUITE("Core")
 		Input::SetMousePosition({ 300.0f, 200.0f });
 		CHECK(Input::GetMouseDelta() == glm::vec2(0.0f));
 		Input::EndFrame();
+	}
+
+	TEST_CASE("Input reads the previous frame's keys, buttons and gamepads")
+	{
+		BasaltTest::ScopedGameInput restore;
+		Input::SetKeyState(KeyCode::Q, true);
+		Input::SetMouseButtonState(MouseCode::Right, true);
+		Input::SetGamepadConnected(2, true);
+		REQUIRE(Input::SetGamepadButtonState(2, GamepadButton::Y, true));
+		REQUIRE(Input::SetGamepadAxis(2, GamepadAxis::RightX, 0.75f));
+		CHECK_FALSE(Input::IsKeyDown(KeyCode::Q, InputFrame::Previous));
+		CHECK_FALSE(Input::IsMouseButtonDown(MouseCode::Right, InputFrame::Previous));
+		CHECK_FALSE(Input::IsGamepadButtonDown(2, GamepadButton::Y, InputFrame::Previous));
+		CHECK(Input::GetGamepadAxis(2, GamepadAxis::RightX, InputFrame::Previous) == 0.0f);
+		Input::EndFrame();
+		Input::SetKeyState(KeyCode::Q, false);
+		CHECK(Input::IsKeyDown(KeyCode::Q, InputFrame::Previous));
+		CHECK(Input::IsMouseButtonDown(MouseCode::Right, InputFrame::Previous));
+		CHECK(Input::IsGamepadButtonDown(2, GamepadButton::Y, InputFrame::Previous));
+		CHECK(Input::GetGamepadAxis(2, GamepadAxis::RightX, InputFrame::Previous) == 0.75f);
+		// A gamepad disconnected since still reads what it held then.
+		Input::SetGamepadConnected(2, false);
+		CHECK(Input::IsGamepadButtonDown(2, GamepadButton::Y, InputFrame::Previous));
+		CHECK(Input::GetGamepadAxis(2, GamepadAxis::RightX, InputFrame::Previous) == 0.75f);
+		CHECK_FALSE(Input::IsGamepadButtonDown(2, GamepadButton::Y));
+		// A reset forgets the previous frame too (no release is reported).
+		Input::Reset();
+		CHECK_FALSE(Input::IsMouseButtonDown(MouseCode::Right, InputFrame::Previous));
+		CHECK_FALSE(Input::IsKeyDown(KeyCode::Q, InputFrame::Previous));
+		CHECK_FALSE(Input::IsKeyDown(static_cast<KeyCode>(9999), InputFrame::Previous));
+		CHECK(Input::GetGamepadAxis(Input::MaxGamepads, GamepadAxis::LeftX, InputFrame::Previous) == 0.0f);
+	}
+
+	TEST_CASE("GameInput equals Input with full routing")
+	{
+		BasaltTest::ScopedGameInput restore;
+		Input::SetKeyState(KeyCode::W, true);
+		Input::SetMouseButtonState(MouseCode::Left, true);
+		Input::SetMousePosition({ 10.0f, 20.0f });
+		Input::EndFrame();
+		Input::SetMousePosition({ 13.0f, 24.0f });
+		Input::AddMouseScroll({ 0.0f, 1.0f });
+		Input::SetKeyState(KeyCode::E, true);
+		CHECK(GameInput::IsKeyDown(KeyCode::W));
+		CHECK(GameInput::IsKeyPressed(KeyCode::E));
+		CHECK_FALSE(GameInput::IsKeyPressed(KeyCode::W));
+		CHECK(GameInput::IsKeyDown(KeyCode::W, InputFrame::Previous));
+		CHECK_FALSE(GameInput::IsKeyDown(KeyCode::E, InputFrame::Previous));
+		CHECK(GameInput::IsMouseButtonDown(MouseCode::Left));
+		CHECK(GameInput::GetMouseDelta() == glm::vec2(3.0f, 4.0f));
+		CHECK(GameInput::GetMouseScroll() == glm::vec2(0.0f, 1.0f));
+		Input::SetKeyState(KeyCode::W, false);
+		CHECK(GameInput::IsKeyReleased(KeyCode::W));
+		Input::SetMouseButtonState(MouseCode::Left, false);
+		CHECK(GameInput::IsMouseButtonReleased(MouseCode::Left));
+		CHECK_FALSE(GameInput::IsKeyDown(static_cast<KeyCode>(9999)));
+		CHECK_FALSE(GameInput::IsMouseButtonPressed(static_cast<MouseCode>(200)));
+	}
+
+	TEST_CASE("Losing game focus releases the keyboard for the game; what is held when it comes back stays released")
+	{
+		BasaltTest::ScopedGameInput restore;
+		Input::SetKeyState(KeyCode::W, true);
+		CHECK(GameInput::IsKeyPressed(KeyCode::W));
+		Input::EndFrame();
+
+		// Focus moves to another panel: the host still sees W, the game sees it let go once.
+		Input::SetGameFocus(false);
+		CHECK_FALSE(Input::HasGameFocus());
+		CHECK(Input::IsKeyDown(KeyCode::W));
+		CHECK_FALSE(GameInput::IsKeyDown(KeyCode::W));
+		CHECK(GameInput::IsKeyReleased(KeyCode::W));
+		Input::EndFrame();
+		CHECK_FALSE(GameInput::IsKeyReleased(KeyCode::W));
+		// Keys pressed elsewhere never reach the game.
+		Input::SetKeyState(KeyCode::S, true);
+		CHECK_FALSE(GameInput::IsKeyPressed(KeyCode::S));
+		Input::EndFrame();
+
+		// Focus comes back while both are held (the click that focuses the game): neither presses by itself.
+		Input::SetGameFocus(true);
+		CHECK_FALSE(GameInput::IsKeyDown(KeyCode::W));
+		CHECK_FALSE(GameInput::IsKeyPressed(KeyCode::S));
+		Input::EndFrame();
+		CHECK_FALSE(GameInput::IsKeyDown(KeyCode::W));
+		// Let go: no release either (the game never saw it held); a new press is the game's.
+		Input::SetKeyState(KeyCode::W, false);
+		CHECK_FALSE(GameInput::IsKeyReleased(KeyCode::W));
+		Input::EndFrame();
+		Input::SetKeyState(KeyCode::W, true);
+		CHECK(GameInput::IsKeyPressed(KeyCode::W));
+		// S was let go between two frames (the block ends at EndFrame) and is pressed again.
+		Input::SetKeyState(KeyCode::S, false);
+		Input::EndFrame();
+		Input::SetKeyState(KeyCode::S, true);
+		CHECK(GameInput::IsKeyPressed(KeyCode::S));
+	}
+
+	TEST_CASE("The game's pointer gates mouse buttons, movement and scroll but not the position")
+	{
+		BasaltTest::ScopedGameInput restore;
+		Input::SetMousePosition({ 0.0f, 0.0f });
+		Input::SetMouseButtonState(MouseCode::Left, true);
+		Input::EndFrame();
+		Input::SetGamePointer(false);
+		CHECK_FALSE(Input::HasGamePointer());
+		Input::SetMousePosition({ 5.0f, 5.0f });
+		Input::AddMouseScroll({ 1.0f, 0.0f });
+		CHECK(GameInput::GetMouseDelta() == glm::vec2(0.0f));
+		CHECK(GameInput::GetMouseScroll() == glm::vec2(0.0f));
+		CHECK(Input::GetMouseDelta() == glm::vec2(5.0f));
+		CHECK(Input::GetMousePosition() == glm::vec2(5.0f));
+		CHECK(GameInput::IsMouseButtonReleased(MouseCode::Left));
+		Input::EndFrame();
+		// The pointer comes back with the button held: it is not the game's until let go.
+		Input::SetGamePointer(true);
+		CHECK_FALSE(GameInput::IsMouseButtonDown(MouseCode::Left));
+		CHECK_FALSE(GameInput::IsMouseButtonPressed(MouseCode::Left));
+		Input::SetMouseButtonState(MouseCode::Left, false);
+		Input::EndFrame();
+		Input::SetMouseButtonState(MouseCode::Left, true);
+		CHECK(GameInput::IsMouseButtonPressed(MouseCode::Left));
+		// Keyboard focus does not gate the mouse.
+		Input::SetGameFocus(false);
+		CHECK(GameInput::IsMouseButtonDown(MouseCode::Left));
+	}
+
+	TEST_CASE("Game focus gates gamepads like the keyboard, sticks until they return to rest")
+	{
+		BasaltTest::ScopedGameInput restore;
+		Input::SetGamepadConnected(0, true);
+		REQUIRE(Input::SetGamepadButtonState(0, GamepadButton::A, true));
+		REQUIRE(Input::SetGamepadAxis(0, GamepadAxis::LeftX, 1.0f));
+		CHECK(GameInput::IsGamepadButtonPressed(0, GamepadButton::A));
+		CHECK(GameInput::GetGamepadAxis(0, GamepadAxis::LeftX) == 1.0f);
+		Input::EndFrame();
+		CHECK(GameInput::GetGamepadAxis(0, GamepadAxis::LeftX, InputFrame::Previous) == 1.0f);
+
+		Input::SetGameFocus(false);
+		CHECK_FALSE(GameInput::IsGamepadButtonDown(0, GamepadButton::A));
+		CHECK(GameInput::IsGamepadButtonReleased(0, GamepadButton::A));
+		CHECK(GameInput::GetGamepadAxis(0, GamepadAxis::LeftX) == 0.0f);
+		CHECK(Input::IsGamepadButtonDown(0, GamepadButton::A));
+		Input::EndFrame();
+		CHECK(GameInput::GetGamepadAxis(0, GamepadAxis::LeftX, InputFrame::Previous) == 0.0f);
+
+		Input::SetGameFocus(true);
+		CHECK_FALSE(GameInput::IsGamepadButtonPressed(0, GamepadButton::A));
+		CHECK(GameInput::GetGamepadAxis(0, GamepadAxis::LeftX) == 0.0f);
+		// A stick still pushed past rest stays blocked; back near the center it is the game's again.
+		REQUIRE(Input::SetGamepadAxis(0, GamepadAxis::LeftX, 0.5f));
+		Input::EndFrame();
+		CHECK(GameInput::GetGamepadAxis(0, GamepadAxis::LeftX) == 0.0f);
+		REQUIRE(Input::SetGamepadAxis(0, GamepadAxis::LeftX, 0.1f));
+		REQUIRE(Input::SetGamepadButtonState(0, GamepadButton::A, false));
+		Input::EndFrame();
+		CHECK(GameInput::GetGamepadAxis(0, GamepadAxis::LeftX) == doctest::Approx(0.1f));
+		REQUIRE(Input::SetGamepadButtonState(0, GamepadButton::A, true));
+		CHECK(GameInput::IsGamepadButtonPressed(0, GamepadButton::A));
+		Input::EndFrame();
+
+		// A disconnect reports the release to the game too.
+		Input::SetGamepadConnected(0, false);
+		CHECK(GameInput::IsGamepadButtonReleased(0, GamepadButton::A));
+		CHECK_FALSE(GameInput::IsGamepadButtonDown(0, GamepadButton::A));
+		CHECK(GameInput::IsGamepadButtonDown(0, GamepadButton::A, InputFrame::Previous));
+		CHECK_FALSE(GameInput::IsGamepadButtonReleased(Input::MaxGamepads, GamepadButton::A));
+	}
+
+	TEST_CASE("A reset clears what the game saw without reporting releases")
+	{
+		BasaltTest::ScopedGameInput restore;
+		Input::SetKeyState(KeyCode::D, true);
+		Input::EndFrame();
+		Input::SetGameFocus(false);
+		Input::SetGameFocus(true);
+		Input::Reset();
+		CHECK_FALSE(GameInput::IsKeyReleased(KeyCode::D));
+		CHECK_FALSE(GameInput::IsKeyDown(KeyCode::D, InputFrame::Previous));
+		// The block went with the reset: pressing D again is the game's at once.
+		Input::SetKeyState(KeyCode::D, true);
+		CHECK(GameInput::IsKeyPressed(KeyCode::D));
+		// Routing is a setting, kept by a reset.
+		Input::SetGameFocus(false);
+		Input::Reset();
+		CHECK_FALSE(Input::HasGameFocus());
+	}
+
+	TEST_CASE("Cursor modes have names and are stored, not applied, by Input")
+	{
+		BasaltTest::ScopedGameInput restore;
+		CHECK(CursorModeToString(CursorMode::Locked) == "Locked");
+		CHECK(CursorModeToString(static_cast<CursorMode>(7)) == "Unknown");
+		CHECK(CursorModeFromString("hidden") == CursorMode::Hidden);
+		CHECK(CursorModeFromString("NORMAL") == CursorMode::Normal);
+		CHECK_FALSE(CursorModeFromString("Captured").has_value());
+		CHECK_FALSE(CursorModeFromString("").has_value());
+		CHECK(Input::GetCursorMode() == CursorMode::Normal);
+		Input::SetCursorMode(CursorMode::Locked);
+		Input::Reset();
+		CHECK(Input::GetCursorMode() == CursorMode::Locked);
+	}
+
+	TEST_CASE("Input action maps round-trip through JSON with canonical names and only non-default fields")
+	{
+		const nlohmann::json data = {
+			{ "Actions",
+			  {
+				  { { "Name", "Jump" }, { "Bindings", { { { "Key", "space" } }, { { "GamepadButton", "a" } }, { { "MouseButton", "LEFT" } } } } },
+				  { { "Name", "MoveX" }, { "Type", "Axis" }, { "Bindings", { { { "Key", "D" } }, { { "Key", "A" }, { "Scale", -1 } }, { { "GamepadAxis", "LeftX" }, { "DeadZone", 0.1 }, { "Gamepad", 1 } } } } },
+				  { { "Name", "Idle" } },
+			  } },
+		};
+		std::string error;
+		const auto map = InputActionMap::FromJson(data, error);
+		REQUIRE_MESSAGE(map, error);
+		REQUIRE(map->GetActions().size() == 3);
+		const InputAction* jump = map->Find("Jump");
+		REQUIRE(jump);
+		CHECK(jump->Type == InputActionType::Button);
+		REQUIRE(jump->Bindings.size() == 3);
+		CHECK(std::get<KeyCode>(jump->Bindings[0].Control) == KeyCode::Space);
+		CHECK(std::get<GamepadButton>(jump->Bindings[1].Control) == GamepadButton::A);
+		CHECK(std::get<MouseCode>(jump->Bindings[2].Control) == MouseCode::Left);
+		const InputAction* move = map->Find("MoveX");
+		REQUIRE(move);
+		CHECK(move->Type == InputActionType::Axis);
+		CHECK(move->Bindings[1].Scale == -1.0f);
+		CHECK(move->Bindings[2].DeadZone == 0.1f);
+		CHECK(move->Bindings[2].Gamepad == 1u);
+		CHECK(map->Find("Idle")->Bindings.empty());
+		CHECK_FALSE(map->Find("jump"));
+
+		const nlohmann::json saved = map->ToJson();
+		CHECK(saved["Format"] == "BasaltInput");
+		CHECK(saved["Version"] == 1);
+		CHECK(saved["Actions"][0]["Type"] == "Button");
+		CHECK(saved["Actions"][0]["Bindings"][0] == nlohmann::json{ { "Key", "Space" } });
+		CHECK(saved["Actions"][0]["Bindings"][2] == nlohmann::json{ { "MouseButton", "Left" } });
+		CHECK(saved["Actions"][1]["Bindings"][2] == nlohmann::json{ { "GamepadAxis", "LeftX" }, { "DeadZone", 0.1f }, { "Gamepad", 1 } });
+		const auto reloaded = InputActionMap::FromJson(saved, error);
+		REQUIRE(reloaded);
+		CHECK(*reloaded == *map);
+		CHECK(InputActionMap::FromJson(nlohmann::json::object(), error)->IsEmpty());
+		CHECK(InputActionTypeToString(static_cast<InputActionType>(9)) == "Unknown");
+		CHECK_FALSE(InputActionTypeFromString("axis").has_value());
+	}
+
+	TEST_CASE("Input action maps reject malformed data with a reason")
+	{
+		const auto action = [](nlohmann::json fields) {
+			if (!fields.contains("Name"))
+				fields["Name"] = "A";
+			return nlohmann::json{ { "Actions", nlohmann::json::array({ fields }) } };
+		};
+		const auto binding = [&action](nlohmann::json fields) { return action({ { "Bindings", nlohmann::json::array({ fields }) } }); };
+		nlohmann::json tooManyActions = { { "Actions", nlohmann::json::array() } };
+		for (uint32_t i = 0; i <= InputActionMap::MaxActions; i++)
+			tooManyActions["Actions"].push_back({ { "Name", "A" + std::to_string(i) } });
+		nlohmann::json tooManyBindings = nlohmann::json::array();
+		for (uint32_t i = 0; i <= InputActionMap::MaxBindings; i++)
+			tooManyBindings.push_back({ { "Key", "A" } });
+		const std::vector<std::pair<nlohmann::json, const char*>> cases = {
+			{ nlohmann::json::array(), "must be an object" },
+			{ { { "Actions", {} }, { "Extra", 1 } }, "unknown key 'Extra'" },
+			{ { { "Format", "BasaltScene" } }, "Format must be \"BasaltInput\"" },
+			{ { { "Version", 2 } }, "unsupported Version" },
+			{ { { "Actions", nlohmann::json::array({ "Jump" }) } }, "every action must be an object" },
+			{ { { "Actions", "Jump" } }, "Actions must be an array" },
+			{ tooManyActions, "at most 256 actions" },
+			{ action({ { "Name", "" } }), "1 to 64 characters" },
+			{ action({ { "Name", std::string(65, 'x') } }), "1 to 64 characters" },
+			{ action({ { "Name", "Tab\there" } }), "control characters" },
+			{ action({ { "Name", 5 } }), "Name must be a string" },
+			{ { { "Actions", { { { "Name", "A" } }, { { "Name", "A" } } } } }, "duplicate action 'A'" },
+			{ action({ { "Type", "Trigger" } }), "Type must be \"Button\" or \"Axis\"" },
+			{ action({ { "Speed", 2 } }), "unknown key 'Speed'" },
+			{ action({ { "Bindings", nlohmann::json::array({ "Space" }) } }), "a binding must be an object" },
+			{ action({ { "Bindings", tooManyBindings } }), "at most 16 bindings" },
+			{ action({ { "Bindings", "Space" } }), "Bindings must be an array" },
+			{ binding(nlohmann::json::object()), "needs one of Key" },
+			{ binding({ { "Key", "A" }, { "GamepadButton", "A" } }), "one control, not both" },
+			{ binding({ { "Key", "Hyperspace" } }), "unknown Key 'Hyperspace'" },
+			{ binding({ { "GamepadAxis", 3 } }), "GamepadAxis must be a control name" },
+			{ binding({ { "Key", "A" }, { "Scale", 2 } }), "Scale must be a number in [-1, 1]" },
+			{ binding({ { "Key", "A" }, { "Scale", "big" } }), "Scale must be a number" },
+			{ binding({ { "Key", "A" }, { "DeadZone", 0.1 } }), "GamepadAxis bindings only" },
+			{ binding({ { "GamepadAxis", "LeftX" }, { "DeadZone", 1 } }), "DeadZone must be a number in [0, 0.95]" },
+			{ binding({ { "MouseButton", "Left" }, { "Gamepad", 0 } }), "GamepadButton and GamepadAxis bindings only" },
+			{ binding({ { "GamepadButton", "A" }, { "Gamepad", 16 } }), "integer from 0 to 15" },
+			{ binding({ { "GamepadButton", "A" }, { "Gamepad", -1 } }), "integer from 0 to 15" },
+			{ binding({ { "Key", "A" }, { "Repeat", true } }), "unknown key 'Repeat'" },
+		};
+		for (const auto& [data, expected] : cases)
+		{
+			std::string error;
+			CHECK_FALSE_MESSAGE(InputActionMap::FromJson(data, error).has_value(), data.dump());
+			CHECK_MESSAGE(error.find(expected) != std::string::npos, data.dump(), " -> ", error);
+		}
+	}
+
+	TEST_CASE("Input actions read buttons, axes, dead zones and gamepad indices through GameInput")
+	{
+		BasaltTest::ScopedGameInput restore;
+		std::string error;
+		const auto map = InputActionMap::FromJson(
+			{ { "Actions",
+				{
+					{ { "Name", "Jump" }, { "Bindings", { { { "Key", "Space" } }, { { "GamepadButton", "A" } } } } },
+					{ { "Name", "Fire" }, { "Bindings", { { { "GamepadAxis", "RightTrigger" }, { "DeadZone", 0 } }, { { "MouseButton", "Left" }, { "Scale", 0.25 } } } } },
+					{ { "Name", "Up" }, { "Bindings", { { { "GamepadAxis", "LeftY" }, { "Scale", -1 } } } } },
+					{ { "Name", "MoveX" }, { "Type", "Axis" }, { "Bindings", { { { "Key", "D" } }, { { "Key", "A" }, { "Scale", -1 } }, { { "Key", "Right" } }, { { "GamepadAxis", "LeftX" }, { "DeadZone", 0.5 } } } } },
+					{ { "Name", "P2Jump" }, { "Bindings", { { { "GamepadButton", "A" }, { "Gamepad", 1 } } } } },
+				} } },
+			error);
+		REQUIRE_MESSAGE(map, error);
+		const InputAction& jump = *map->Find("Jump");
+		const InputAction& fire = *map->Find("Fire");
+		const InputAction& up = *map->Find("Up");
+		const InputAction& move = *map->Find("MoveX");
+		const InputAction& p2Jump = *map->Find("P2Jump");
+
+		CHECK(InputActionMap::GetValue(jump) == 0.0f);
+		Input::SetKeyState(KeyCode::Space, true);
+		CHECK(InputActionMap::GetValue(jump) == 1.0f);
+		CHECK(InputActionMap::IsPressed(jump));
+		CHECK_FALSE(InputActionMap::IsDown(jump, InputFrame::Previous));
+		Input::EndFrame();
+		CHECK(InputActionMap::IsDown(jump));
+		CHECK_FALSE(InputActionMap::IsPressed(jump));
+		Input::SetKeyState(KeyCode::Space, false);
+		CHECK(InputActionMap::IsReleased(jump));
+
+		// Any gamepad presses an unindexed binding; an indexed one reads its gamepad only.
+		Input::SetGamepadConnected(0, true);
+		Input::SetGamepadConnected(1, true);
+		REQUIRE(Input::SetGamepadButtonState(0, GamepadButton::A, true));
+		CHECK(InputActionMap::IsDown(jump));
+		CHECK_FALSE(InputActionMap::IsDown(p2Jump));
+		REQUIRE(Input::SetGamepadButtonState(1, GamepadButton::A, true));
+		CHECK(InputActionMap::IsDown(p2Jump));
+
+		// A trigger gives a strength; a button's strength is its strongest binding, clamped (Scale 0.25 never presses).
+		REQUIRE(Input::SetGamepadAxis(0, GamepadAxis::RightTrigger, 0.4f));
+		CHECK(InputActionMap::GetValue(fire) == doctest::Approx(0.4f));
+		CHECK_FALSE(InputActionMap::IsDown(fire));
+		Input::SetMouseButtonState(MouseCode::Left, true);
+		CHECK(InputActionMap::GetValue(fire) == doctest::Approx(0.4f));
+		REQUIRE(Input::SetGamepadAxis(0, GamepadAxis::RightTrigger, 0.0f));
+		CHECK(InputActionMap::GetValue(fire) == doctest::Approx(0.25f));
+		// A negative scale turns a stick pushed up (-Y) into a button; pushed down it reads 0, not negative.
+		REQUIRE(Input::SetGamepadAxis(0, GamepadAxis::LeftY, -0.9f));
+		CHECK(InputActionMap::GetValue(up) > 0.85f);
+		REQUIRE(Input::SetGamepadAxis(0, GamepadAxis::LeftY, 0.9f));
+		CHECK(InputActionMap::GetValue(up) == 0.0f);
+
+		// Axes sum their bindings and clamp: opposite keys cancel, two keys one way do not add past full.
+		Input::SetKeyState(KeyCode::D, true);
+		CHECK(InputActionMap::GetValue(move) == 1.0f);
+		Input::SetKeyState(KeyCode::A, true);
+		CHECK(InputActionMap::GetValue(move) == 0.0f);
+		CHECK_FALSE(InputActionMap::IsDown(move));
+		Input::SetKeyState(KeyCode::A, false);
+		Input::SetKeyState(KeyCode::Right, true);
+		CHECK(InputActionMap::GetValue(move) == 1.0f);
+		Input::SetKeyState(KeyCode::D, false);
+		Input::SetKeyState(KeyCode::Right, false);
+		// The dead zone reads 0 inside it and rescales the rest to reach 1; the stick pushed furthest wins.
+		REQUIRE(Input::SetGamepadAxis(0, GamepadAxis::LeftX, -0.4f));
+		CHECK(InputActionMap::GetValue(move) == 0.0f);
+		REQUIRE(Input::SetGamepadAxis(0, GamepadAxis::LeftX, -0.75f));
+		CHECK(InputActionMap::GetValue(move) == doctest::Approx(-0.5f));
+		REQUIRE(Input::SetGamepadAxis(1, GamepadAxis::LeftX, 1.0f));
+		CHECK(InputActionMap::GetValue(move) == 1.0f);
+		CHECK(InputActionMap::IsDown(move));
+
+		// Actions see only what the host routes to the game.
+		Input::EndFrame();
+		Input::SetGameFocus(false);
+		CHECK(InputActionMap::GetValue(move) == 0.0f);
+		CHECK(InputActionMap::IsReleased(move));
+		CHECK(InputActionMap::GetValue(fire) == doctest::Approx(0.25f));
+		Input::SetGamePointer(false);
+		CHECK(InputActionMap::GetValue(fire) == 0.0f);
+	}
+
+	TEST_CASE("Input actions can be rebound, but not created or overfilled")
+	{
+		std::string error;
+		auto map = InputActionMap::FromJson({ { "Actions", { { { "Name", "Jump" }, { "Bindings", { { { "Key", "Space" } } } } } } } }, error);
+		REQUIRE(map);
+		const auto bindings = InputActionMap::BindingsFromJson({ { { "Key", "W" } }, { { "GamepadButton", "B" } } }, error);
+		REQUIRE(bindings);
+		CHECK(map->SetBindings("Jump", *bindings, error));
+		CHECK(map->Find("Jump")->Bindings == *bindings);
+		CHECK_FALSE(map->SetBindings("Dash", *bindings, error));
+		CHECK(error.find("unknown input action 'Dash'") != std::string::npos);
+		CHECK_FALSE(map->SetBindings("Jump", std::vector<InputBinding>(InputActionMap::MaxBindings + 1), error));
+		CHECK(error.find("at most 16 bindings") != std::string::npos);
+		CHECK(map->Find("Jump")->Bindings == *bindings);
+		CHECK_FALSE(InputActionMap::BindingsFromJson(nlohmann::json::object(), error));
+		CHECK(error.find("must be an array") != std::string::npos);
 	}
 
 	TEST_CASE("Gamepad name lists match the enums")
