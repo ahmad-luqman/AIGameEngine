@@ -1407,6 +1407,11 @@ TEST_SUITE("Automation")
 
 		CHECK(RunError(registry, session, "asset.refresh", { { "paths", "Assets/Scripts/Mover.lua" } }).find("array") != std::string::npos);
 		CHECK(RunError(registry, session, "asset.refresh", { { "paths", json::array({ "../x.lua" }) } }).find("..") != std::string::npos);
+		// A rejected request acknowledges nothing: an edit it named is still found by the next refresh.
+		temp.WriteFile(script, mover(50));
+		CHECK(RunError(registry, session, "asset.refresh", { { "paths", json::array({ script, "Assets/Scripts/Mvoer.lua" }) } }).find("does not exist") != std::string::npos);
+		CHECK(RunError(registry, session, "asset.refresh", { { "paths", json::array({ script, "Assets/Scripts" }) } }).find("folder") != std::string::npos);
+		CHECK(Run(registry, session, "asset.refresh")["changed"] == json::array({ { { "path", script }, { "type", "Modified" } } }));
 		// A typo is not a removal, and a folder names no file.
 		CHECK(RunError(registry, session, "asset.refresh", { { "paths", json::array({ "Assets/Scripts/Mvoer.lua" }) } }).find("does not exist") != std::string::npos);
 		CHECK(RunError(registry, session, "asset.refresh", { { "paths", json::array({ "Assets/Scripts" }) } }).find("folder") != std::string::npos);
@@ -1519,17 +1524,29 @@ TEST_SUITE("Automation")
 		CHECK(EditorPreferences::ClampCameraSpeed(std::numeric_limits<float>::infinity(), 2.0f) == 2.0f);
 		CHECK(preferences.Apply({ { "recentProjects", json::array({ (root / "B").string(), (root / "A").string(), (root / "B").string() }) }, { "cameraSpeed", 2.5 } }, error));
 
+		REQUIRE(preferences.GetRecentProjects().size() == 2);
+		CHECK(std::filesystem::path(preferences.GetRecentProjects()[0]) == root / "B");
+		CHECK(std::filesystem::path(preferences.GetRecentProjects()[1]) == root / "A");
+
 		const std::filesystem::path file = root / "Editor" / EditorPreferences::FileName;
-		CHECK(EditorPreferences::Load(file, error) == EditorPreferences());
+		EditorPreferences::LoadStatus status = EditorPreferences::LoadStatus::Loaded;
+		CHECK(EditorPreferences::Load(file, status, error) == EditorPreferences());
+		CHECK(status == EditorPreferences::LoadStatus::Missing);
 		CHECK(error.empty());
 		REQUIRE(preferences.Save(file, error));
-		CHECK(EditorPreferences::Load(file, error) == preferences);
+		CHECK(EditorPreferences::Load(file, status, error) == preferences);
+		CHECK(status == EditorPreferences::LoadStatus::Loaded);
 		CHECK(error.empty());
+		// A path that exists but cannot be read as a file (here a folder) is not invalid: it is left alone.
+		CHECK(EditorPreferences::Load(root, status, error) == EditorPreferences());
+		CHECK(status == EditorPreferences::LoadStatus::Unreadable);
+		CHECK_FALSE(error.empty());
 		for (const char* text : { "{ not json", R"({"theme":"Neon"})", R"({"cameraSpeed":1,"extra":true})", "[1,2]" })
 		{
 			CAPTURE(text);
 			REQUIRE(FileSystem::WriteTextFile(file, text));
-			CHECK(EditorPreferences::Load(file, error) == EditorPreferences());
+			CHECK(EditorPreferences::Load(file, status, error) == EditorPreferences());
+			CHECK(status == EditorPreferences::LoadStatus::Invalid);
 			CHECK(error.find(EditorPreferences::FileName) != std::string::npos);
 		}
 		// A rejected file is set aside, not lost.
@@ -1539,6 +1556,10 @@ TEST_SUITE("Automation")
 		CHECK(FileSystem::ReadTextFile(*aside) == std::optional<std::string>("[1,2]"));
 		CHECK_FALSE(EditorPreferences::SetAside(file, error));
 		CHECK_FALSE(error.empty());
+		// A later bad file replaces the older backup.
+		REQUIRE(FileSystem::WriteTextFile(file, "{ second"));
+		CHECK(EditorPreferences::SetAside(file, error) == aside);
+		CHECK(FileSystem::ReadTextFile(*aside) == std::optional<std::string>("{ second"));
 
 		BasaltTest::ScopedEnvVar userData(Platform::UserDataDirectoryVariable, (root / "UserData").string());
 		const auto preferencesDirectory = EditorPreferences::GetDirectory(error);
@@ -1548,3 +1569,29 @@ TEST_SUITE("Automation")
 		CHECK_FALSE(EditorPreferences::ThemeFromName("light"));
 	}
 }
+
+#if !defined(_WIN32)
+TEST_SUITE("Automation")
+{
+	TEST_CASE("asset.refresh fails while Assets/ cannot be read, and reports nothing as removed")
+	{
+		BasaltTest::TempProject temp("AutomationUnreadable");
+		temp.WriteFile("Assets/Textures/T.png", "x");
+		CommandRegistry registry;
+		AutomationSession session;
+		Run(registry, session, "asset.refresh");
+		const std::filesystem::path locked = temp.GetDirectory() / "Assets/Textures";
+		std::filesystem::permissions(locked, std::filesystem::perms::none);
+		std::error_code probe;
+		std::filesystem::directory_iterator unreadable(locked, probe);
+		// Running as root reads it anyway: nothing to test then.
+		if (probe)
+		{
+			CHECK(RunError(registry, session, "asset.refresh").find("cannot read") != std::string::npos);
+			std::filesystem::permissions(locked, std::filesystem::perms::owner_all);
+			CHECK(Run(registry, session, "asset.refresh")["changed"].empty());
+		}
+		std::filesystem::permissions(locked, std::filesystem::perms::owner_all);
+	}
+}
+#endif

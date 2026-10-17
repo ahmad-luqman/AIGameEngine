@@ -268,6 +268,18 @@ TEST_SUITE("Assets")
 		CHECK(AssetManager::ReloadChanged({ "Assets/Models/Quad.bin" }) == std::vector<std::string>{ "Assets/Models/Quad.gltf" });
 		CHECK(AssetManager::GetMesh("Assets/Models/Quad.gltf"));
 		CHECK(AssetManager::GetSourceFile("Assets/Models/Quad.gltf#image/0") == "Assets/Models/Quad.gltf");
+		// A model whose image lives in another folder is dropped when that image changes (keys like the watcher's).
+		const nlohmann::json shared = MakeGltfJson({ { "byteLength", buffer.size() }, { "uri", "Quad.bin" } }, { { { "uri", "../Textures/Wall.png" } }, { { "uri", "normal.png" } } });
+		project.WriteFile("Assets/Models/Shared.gltf", shared.dump());
+		REQUIRE(AssetManager::GetMesh("Assets/Models/Shared.gltf"));
+		CHECK(AssetManager::FindLoadedMesh("Assets/Models/Shared.gltf")->ExternalFiles == std::vector<std::string>{ "Assets/Models/Quad.bin", "Assets/Models/normal.png", "Assets/Textures/Wall.png" });
+		const std::vector<std::string> dropped = AssetManager::ReloadChanged({ "Assets/Textures/Wall.png" });
+		CHECK(std::find(dropped.begin(), dropped.end(), "Assets/Models/Shared.gltf") != dropped.end());
+		CHECK(MeshImporter::GetExternalFileKey("Assets/Models/Ship.gltf", "../Textures/Hull.png") == "Assets/Textures/Hull.png");
+		CHECK(MeshImporter::GetExternalFileKey("Assets/Models/Ship.gltf", "Ship%20Data.bin") == "Assets/Models/Ship Data.bin");
+		CHECK(MeshImporter::GetExternalFileKey("Assets/Models/Ship.gltf", "./sub/../Ship.bin") == "Assets/Models/Ship.bin");
+		CHECK_FALSE(MeshImporter::GetExternalFileKey("Assets/Models/Ship.gltf", "data:application/octet-stream;base64,AAAA"));
+		CHECK_FALSE(MeshImporter::GetExternalFileKey("Assets/Models/Ship.gltf", nullptr));
 		CHECK(AssetManager::GetSourceFile("Assets/Textures/Wall.png") == "Assets/Textures/Wall.png");
 		AssetManager::Clear();
 	}

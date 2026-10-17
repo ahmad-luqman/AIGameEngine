@@ -30,14 +30,18 @@ namespace Basalt {
 	{
 		// No added or modified script among the changes.
 		None,
+		// The play session processed the changed scripts: Scripts says what was reloaded (possibly nothing, when no
+		// running script uses them) and what failed.
 		Applied,
 		// Scripts reload only while the game runs.
 		NotPlaying,
 		// Simulate runs physics without scripts.
-		Simulating
+		Simulating,
+		// A Lua error stopped the reload part way (Scripts.Error): some classes may be replaced, others not.
+		Failed
 	};
 
-	// "none", "applied", "notPlaying" or "simulating".
+	// "none", "applied", "notPlaying", "simulating" or "failed".
 	const char* ScriptHotReloadName(ScriptHotReload state);
 
 	// What AutomationSession::ReloadAssets did with a set of changed files.
@@ -114,10 +118,9 @@ namespace Basalt {
 		void SetPaused(bool paused);
 
 		// --- Asset changes (hot reload) ---------------------------------------------------------------
-		// The watcher of the active project's Assets/ folder (once SyncFileWatcher has run). Hosts poll it through the
-		// functions below (the editor in the background; agents through asset.refresh), which keep it on the active
-		// project.
-		const FileWatcher& GetFileWatcher() const { return m_FileWatcher; }
+		// The session watches the active project's Assets/ folder with a FileWatcher. Hosts poll it through the
+		// functions below (the editor in the background; agents through asset.refresh); those that scan or record a file
+		// first follow the active project (SyncFileWatcher).
 		// Follows the active project: watches the Assets/ folder of a project that became active since the last call
 		// (what is there now is the baseline), or nothing without one.
 		void SyncFileWatcher();
@@ -128,10 +131,13 @@ namespace Basalt {
 		// The settled changes the background scans found since the last call.
 		std::vector<FileChange> PollFileChanges();
 		// Scans now: every change since changes were last reported (by a refresh, by polling, or since the project was
-		// opened). outError is set (and nothing reported) when the folder cannot be read.
-		std::vector<FileChange> RefreshFileChanges(std::string& outError);
+		// opened, or since the folder could first be read). outError is set (and nothing reported) when the folder cannot
+		// be read; outWarning when the baseline was only taken now (earlier changes were not seen).
+		std::vector<FileChange> RefreshFileChanges(std::string& outError, std::string& outWarning);
 		// A file the host wrote or removed itself: not reported as a change later.
 		std::optional<FileChangeType> AcknowledgeFile(const std::string& relativePath);
+		// The file is one the watcher knows (it existed at the last report).
+		bool IsKnownFile(const std::string& relativePath);
 		// Applies changed files: AssetManager drops what they affect (models, textures and what reads them), and while
 		// the game runs (Play, not Simulate) added or modified scripts are hot reloaded. Logs what it did and calls
 		// OnAssetsReloaded.
@@ -139,8 +145,8 @@ namespace Basalt {
 		// A file the session wrote itself (asset.write, scene.save, ...): the watcher records it, so it is not reported
 		// as a change later, and it is reloaded now.
 		AssetReloadReport OnFileWritten(const std::string& relativePath);
-		// Scripts were hot reloaded while recording: a replay runs the final code from the start, so it may not
-		// reproduce the run (replay.record_stop warns).
+		// Scripts were hot reloaded during the current recording: a replay runs the final code from the start, so it may
+		// not reproduce the run (replay.record_stop warns). False when not recording.
 		bool HasReloadedScriptsWhileRecording() const { return m_ReloadedWhileRecording; }
 
 		// --- Events and snapshots --------------------------------------------------------------------

@@ -30,9 +30,9 @@ namespace Basalt {
 		// Drops a cached asset so the next Get reloads it from disk.
 		static void Reload(const std::string& key);
 		// Drops what a change to these project-relative files affects: the files' own cache entries (with a model's
-		// embedded images) and models that read one of them (external buffers and images). Models that failed to load are
-		// dropped on any change: what they lacked may be what just appeared. Returns the keys dropped, sorted; files
-		// that were never requested drop nothing.
+		// embedded images) and models that read one of them (external buffers and images; also for a model that failed
+		// to load once its glTF parsed, so a buffer that appears retries it). Failed loads count, so a fixed file is tried
+		// again. Returns the keys dropped, sorted; files nothing requested drop nothing.
 		static std::vector<std::string> ReloadChanged(const std::vector<std::string>& paths);
 		// The file an asset key loads from: the model of an embedded image ("Ship.glb#image/0" -> "Ship.glb"), the
 		// key itself otherwise.

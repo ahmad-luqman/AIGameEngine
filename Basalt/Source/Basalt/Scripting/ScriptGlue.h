@@ -38,12 +38,15 @@ namespace Basalt {
 		// Creates and starts the script instances of new entities now (see ScriptEngine::EnsureInstances).
 		virtual void EnsureInstances(const std::vector<Entity>& entities) = 0;
 
-		// Whether an owner can still run code: always for 0, otherwise its instance exists, has started
-		// (OnCreate), has not failed, and its entity is not about to be destroyed.
+		// Whether an owner can still run code: always for 0 and the top level of loaded scripts and modules, otherwise
+		// its instance exists, has started (OnCreate), has not failed, and its entity is not about to be destroyed.
 		virtual bool IsOwnerActive(UUID owner) const = 0;
+		// The owner is not an instance: the play session (0) or the top level of a script or module. A failing timer or
+		// handler of such an owner ends alone; nothing else is disabled.
+		virtual bool IsSharedOwner(UUID owner) const = 0;
 		// Reports an error raised in an owner's timer, coroutine or event handler (`where`, e.g. "a timer") and
-		// disables the owning instance, cancelling everything it owns, like an error in any other callback. For
-		// owner 0 the error is only reported (the caller ends the failing timer or handler itself).
+		// disables the owning instance, cancelling everything it owns, like an error in any other callback. For a
+		// shared owner the error is only reported (the caller ends the failing timer or handler itself).
 		virtual void FailOwner(UUID owner, const std::string& message, const std::string& where) = 0;
 
 		virtual ScriptTasks& GetTasks() = 0;

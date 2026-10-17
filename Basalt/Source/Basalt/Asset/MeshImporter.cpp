@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <set>
 
 namespace Basalt {
@@ -105,7 +106,8 @@ namespace Basalt {
 			return true;
 		}
 
-		GltfData LoadGltfData(const std::filesystem::path& path, std::string& outError)
+		// The external files are listed as soon as the file parses, even when loading fails later (a missing buffer).
+		GltfData LoadGltfData(const std::filesystem::path& path, const std::string& key, std::vector<std::string>& outExternalFiles, std::string& outError)
 		{
 			const std::string pathString = path.string();
 			cgltf_options options = {};
@@ -117,6 +119,16 @@ namespace Basalt {
 				outError = path.filename().string() + ": " + ResultToString(result);
 				return nullptr;
 			}
+			std::set<std::string> externalFiles;
+			const auto addExternal = [&](const char* uri) {
+				if (auto file = MeshImporter::GetExternalFileKey(key, uri))
+					externalFiles.insert(std::move(*file));
+			};
+			for (cgltf_size i = 0; i < data->buffers_count; i++)
+				addExternal(data->buffers[i].uri);
+			for (cgltf_size i = 0; i < data->images_count; i++)
+				addExternal(data->images[i].uri);
+			outExternalFiles.assign(externalFiles.begin(), externalFiles.end());
 			for (cgltf_size i = 0; i < data->buffers_count; i++)
 			{
 				if (!CheckExternalUri(data->buffers[i].uri, path, outError))
@@ -154,8 +166,8 @@ namespace Basalt {
 			if (!view.texture || !view.texture->image)
 				return {};
 			const cgltf_image* image = view.texture->image;
-			if (image->uri && !IsDataUri(image->uri))
-				return MeshImporter::GetExternalFileKey(meshKey, image->uri);
+			if (auto external = MeshImporter::GetExternalFileKey(meshKey, image->uri))
+				return *external;
 			return meshKey + "#image/" + std::to_string(image - data->images);
 		}
 
@@ -231,8 +243,10 @@ namespace Basalt {
 
 	}
 
-	std::string MeshImporter::GetExternalFileKey(const std::string& modelKey, const char* uri)
+	std::optional<std::string> MeshImporter::GetExternalFileKey(const std::string& modelKey, const char* uri)
 	{
+		if (!uri || IsDataUri(uri))
+			return std::nullopt;
 		std::string decoded = uri;
 		cgltf_decode_uri(decoded.data());
 		decoded.resize(std::strlen(decoded.c_str()));
@@ -241,7 +255,14 @@ namespace Basalt {
 
 	Ref<MeshSource> MeshImporter::LoadGltf(const std::filesystem::path& path, const std::string& key, std::string& outError)
 	{
-		GltfData data = LoadGltfData(path, outError);
+		std::vector<std::string> externalFiles;
+		return LoadGltf(path, key, externalFiles, outError);
+	}
+
+	Ref<MeshSource> MeshImporter::LoadGltf(const std::filesystem::path& path, const std::string& key, std::vector<std::string>& outExternalFiles, std::string& outError)
+	{
+		outExternalFiles.clear();
+		GltfData data = LoadGltfData(path, key, outExternalFiles, outError);
 		if (!data)
 			return nullptr;
 
@@ -252,16 +273,7 @@ namespace Basalt {
 		}
 		Ref<MeshSource> source = CreateRef<MeshSource>();
 		source->Key = key;
-		std::set<std::string> externalFiles;
-		const auto addExternal = [&](const char* uri) {
-			if (uri && !IsDataUri(uri))
-				externalFiles.insert(GetExternalFileKey(key, uri));
-		};
-		for (cgltf_size i = 0; i < data->buffers_count; i++)
-			addExternal(data->buffers[i].uri);
-		for (cgltf_size i = 0; i < data->images_count; i++)
-			addExternal(data->images[i].uri);
-		source->ExternalFiles.assign(externalFiles.begin(), externalFiles.end());
+		source->ExternalFiles = outExternalFiles;
 
 		// Materials (plus a default one at the end for primitives without a material).
 		for (cgltf_size i = 0; i < data->materials_count; i++)

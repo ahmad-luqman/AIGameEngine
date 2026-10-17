@@ -32,7 +32,7 @@ namespace Basalt {
 		uint64_t next = 0;
 		for (const LogMessage& message : Log::GetHistory().GetMessagesSince(m_ClearedAt, next))
 		{
-			ImVec4 color(0.85f, 0.85f, 0.85f, 1.0f);
+			ImVec4 color = EditorColors::Info();
 			switch (message.Level)
 			{
 				case LogLevel::Trace:

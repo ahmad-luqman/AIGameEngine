@@ -2885,25 +2885,30 @@ TEST_SUITE("Scripting")
 		const std::string script = project.WriteFile("Assets/Scripts/Top.lua", source);
 		Scene scene;
 		Entity plain = AddScripted(scene, "Plain", script);
-		Entity custom = AddScripted(scene, "Custom", script, { { "Extra", "not a number" } });
+		Entity other = AddScripted(scene, "Other", script, { { "Extra", "not a number" } });
+		Entity custom = AddScripted(scene, "Custom", script);
 		scene.OnRuntimeStart();
 		ScriptEngine& engine = *scene.GetScriptEngine();
 		CHECK(BasaltTest::Eval(scene, "Events.Emit('Ping')") == "1");
 		for (int i = 0; i < 3; i++)
 		{
 			project.WriteFile(script, std::string(source).replace(source.find("Count = 1"), 9, "Count = 1, Extra = 5, Spin = Vec3(0, 1, 0)"));
-			REQUIRE(engine.ReloadScripts({ script }).Reloaded.size() == 1);
+			const ScriptReloadResult result = engine.ReloadScripts({ script });
+			REQUIRE(result.Reloaded.size() == 1);
+			// The instance with a metatable of its own is left as it is, so it is not counted.
+			CHECK(result.Instances == 2);
 		}
 		// One handler, not one per load.
 		BasaltTest::Eval(scene, "Pings = 0; Events.Emit('Ping')");
 		CHECK(BasaltTest::Eval(scene, "Pings") == "1");
-		// A metatable the script set itself stays; the class's is replaced.
+		// A metatable the script set itself stays (and that instance gets no new fields); the class's is replaced.
 		CHECK(BasaltTest::Eval(scene, "Scene.FindEntityByName('Custom'):GetScript():Kind()") == "state");
+		CHECK(Field(scene, custom, "Spin").is_null());
 		// Added properties: a vector of its own per instance, and the entity's override (applied as given, as at creation).
 		BasaltTest::Eval(scene, "Scene.FindEntityByName('Plain'):GetScript().Spin.x = 9");
-		CHECK(Field(scene, custom, "Spin") == nlohmann::json({ 0.0, 1.0, 0.0 }));
+		CHECK(Field(scene, other, "Spin") == nlohmann::json({ 0.0, 1.0, 0.0 }));
 		CHECK(Field(scene, plain, "Extra") == 5);
-		CHECK(Field(scene, custom, "Extra") == "not a number");
+		CHECK(Field(scene, other, "Extra") == "not a number");
 		scene.OnRuntimeStop();
 	}
 
@@ -2917,6 +2922,136 @@ TEST_SUITE("Scripting")
 		project.WriteFile(script, "local O = {} function O:OnReload() Reloaded = true end return O");
 		CHECK(scene.GetScriptEngine()->ReloadScripts({ script, "Assets/Scripts/Other.lua" }).Reloaded.size() == 1);
 		CHECK(BasaltTest::Eval(scene, "Reloaded") == "true");
+		scene.OnRuntimeStop();
+	}
+}
+
+TEST_SUITE("Scripting")
+{
+	TEST_CASE("Hot reload adds properties to an instance whose own metatable rejects writes")
+	{
+		BasaltTest::TempProject project("ScriptHotReloadStrict");
+		// Its metatable chains to the class's, so the instance keeps working with the reloaded methods.
+		const std::string strict = "local function Strict(self) local class = getmetatable(self) setmetatable(self, { __index = class.__index, __newindex = function(_, k) error('strict: ' .. k) end }) end ";
+		const std::string script = project.WriteFile("Assets/Scripts/Strict.lua", strict + "local S = {} function S:OnCreate() Strict(self) end return S");
+		Scene scene;
+		Entity entity = AddScripted(scene, "Strict", script);
+		scene.OnRuntimeStart();
+		scene.OnUpdate(Step);
+		project.WriteFile(script, strict + "local S = { Properties = { Added = 1 } } function S:OnCreate() Strict(self) end return S");
+		// Not a crash: the property write is raw, and the instance (its own metatable) is left as it is.
+		const ScriptReloadResult result = scene.GetScriptEngine()->ReloadScripts({ script });
+		CHECK(result.Reloaded == std::vector<std::string>{ script });
+		CHECK(result.Error.empty());
+		CHECK(Field(scene, entity, "Added").is_null());
+		scene.OnUpdate(Step);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("What a script's top level started fails alone, and a reload starts it afresh")
+	{
+		BasaltTest::TempProject project("ScriptTopLevelFailure");
+		const std::string ticking = project.WriteFile("Assets/Scripts/Ticking.lua", "Fails = 0 Timer.Every(0.01, function() Fails = Fails + 1; error('tick fails') end) Timer.Every(0.01, function() Ticks = (Ticks or 0) + 1 end) local T = {} return T");
+		const std::string handler = project.WriteFile("Assets/Scripts/Handler.lua", "Events.On('Boom', function() error('handler fails') end) Events.On('Calm', function() end) local H = {} return H");
+		const std::string broken = project.WriteFile("Assets/Scripts/Broken.lua", "Events.On('Leak', function() end) error('load fails')");
+		Scene scene;
+		AddScripted(scene, "Ticking", ticking);
+		AddScripted(scene, "Handler", handler);
+		AddScripted(scene, "Broken", broken);
+		scene.OnRuntimeStart();
+		ScriptEngine& engine = *scene.GetScriptEngine();
+		// What a script that failed to load started is gone.
+		CHECK(BasaltTest::Eval(scene, "Events.Emit('Leak')") == "0");
+		for (int i = 0; i < 3; i++)
+			scene.OnUpdate(Step);
+		// The failing timer ended alone; the other timer of the same top level runs on.
+		CHECK(BasaltTest::Eval(scene, "Fails") == "1");
+		CHECK(BasaltTest::Eval(scene, "Ticks") == "3");
+		CHECK(BasaltTest::Eval(scene, "Events.Emit('Boom')") == "1");
+		CHECK(BasaltTest::Eval(scene, "Events.Emit('Boom')") == "0");
+		CHECK(BasaltTest::Eval(scene, "Events.Emit('Calm')") == "1");
+		const auto mentions = [&](const std::string& text) { return std::count_if(engine.GetErrors().begin(), engine.GetErrors().end(), [&](const std::string& error) { return error.find(text) != std::string::npos; }); };
+		CHECK(mentions("timer started by the top level of '" + ticking + "'") == 1);
+		CHECK(mentions("event 'Boom' started by the top level of '" + handler + "'") == 1);
+		// Reloaded three times: one timer runs, not one per load.
+		project.WriteFile(ticking, "Fails = 0 Timer.Every(0.01, function() Fails = Fails + 1 end) local T = {} return T");
+		for (int i = 0; i < 3; i++)
+			REQUIRE(engine.ReloadScripts({ ticking }).Reloaded.size() == 1);
+		for (int i = 0; i < 3; i++)
+			scene.OnUpdate(Step);
+		CHECK(BasaltTest::Eval(scene, "Fails") == "3");
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("A module keeps what its top level started across reloads of the scripts that require it")
+	{
+		BasaltTest::TempProject project("ScriptHotReloadModuleOwner");
+		project.WriteFile("Assets/Scripts/Bus.lua", "Loads = (Loads or 0) + 1 Events.On('Ping', function() Pings = (Pings or 0) + 1 end) return { State = {} }");
+		const std::string helper = project.WriteFile("Assets/Scripts/Helper.lua", "return { Value = 1 }");
+		const std::string user = project.WriteFile("Assets/Scripts/User.lua", "local Bus = require('Assets.Scripts.Bus') local Helper = require('Assets.Scripts.Helper') local U = {} function U:OnCreate() Bus.State.Seen = true end return U");
+		Scene scene;
+		AddScripted(scene, "User", user);
+		scene.OnRuntimeStart();
+		ScriptEngine& engine = *scene.GetScriptEngine();
+		CHECK(BasaltTest::Eval(scene, "Events.Emit('Ping')") == "1");
+		// The class that first required the module reloads: the module's handler stays (it runs once, cached).
+		REQUIRE(engine.ReloadScripts({ user }).Reloaded.size() == 1);
+		CHECK(BasaltTest::Eval(scene, "Events.Emit('Ping')") == "1");
+		// An unrelated module changes: Bus is not loaded again, so its state and handler are kept.
+		project.WriteFile(helper, "return { Value = 2 }");
+		REQUIRE(engine.ReloadScripts({ helper }).Reloaded.size() == 1);
+		CHECK(BasaltTest::Eval(scene, "Loads") == "1");
+		CHECK(BasaltTest::Eval(scene, "tostring(require('Assets.Scripts.Bus').State.Seen)") == "true");
+		CHECK(BasaltTest::Eval(scene, "Events.Emit('Ping')") == "1");
+		// Bus itself changes: loaded again, its old handler ends and the new one takes over.
+		project.WriteFile("Assets/Scripts/Bus.lua", "Loads = (Loads or 0) + 1 Events.On('Ping', function() Pings = (Pings or 0) + 1 end) return { State = {}, V = 2 }");
+		REQUIRE(engine.ReloadScripts({ "Assets/Scripts/Bus.lua" }).Reloaded.size() == 1);
+		CHECK(BasaltTest::Eval(scene, "Loads") == "2");
+		CHECK(BasaltTest::Eval(scene, "Events.Emit('Ping')") == "1");
+		CHECK(engine.GetErrors().empty());
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("A running script whose reload a broken module failed is retried when the module is fixed")
+	{
+		BasaltTest::TempProject project("ScriptHotReloadStale");
+		const std::string module = project.WriteFile("Assets/Scripts/Util.lua", "return { Value = 1 }");
+		const std::string script = project.WriteFile("Assets/Scripts/Player.lua", "local Util = require('Assets.Scripts.Util') local P = {} function P:OnUpdate(dt) self.Value = Util.Value end return P");
+		Scene scene;
+		Entity entity = AddScripted(scene, "Player", script);
+		scene.OnRuntimeStart();
+		scene.OnUpdate(Step);
+		REQUIRE(Field(scene, entity, "Value") == 1);
+		ScriptEngine& engine = *scene.GetScriptEngine();
+		project.WriteFile(module, "return = broken");
+		ScriptReloadResult result = engine.ReloadScripts({ module });
+		CHECK(result.Reloaded.empty());
+		REQUIRE(result.Failed.size() == 1);
+		scene.OnUpdate(Step);
+		CHECK(Field(scene, entity, "Value") == 1);
+		project.WriteFile(module, "return { Value = 2 }");
+		result = engine.ReloadScripts({ module });
+		CHECK(result.Reloaded == std::vector<std::string>{ script });
+		scene.OnUpdate(Step);
+		CHECK(Field(scene, entity, "Value") == 2);
+		// An unrelated new file retries nothing.
+		CHECK(engine.ReloadScripts({ "Assets/Scripts/Unused.lua" }).Reloaded.empty());
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("A class that loads on retry but whose OnCreate fails is not counted")
+	{
+		BasaltTest::TempProject project("ScriptHotReloadRetryCreate");
+		const std::string script = project.WriteFile("Assets/Scripts/Retry.lua", "local = broken");
+		Scene scene;
+		AddScripted(scene, "Retry", script);
+		scene.OnRuntimeStart();
+		project.WriteFile(script, "local R = {} function R:OnCreate() error('create fails') end return R");
+		const ScriptReloadResult result = scene.GetScriptEngine()->ReloadScripts({ script });
+		CHECK(result.Reloaded == std::vector<std::string>{ script });
+		CHECK(result.Instances == 0);
+		REQUIRE(result.InstanceErrors.size() == 1);
+		CHECK(result.InstanceErrors[0].find("(in OnCreate)") != std::string::npos);
 		scene.OnRuntimeStop();
 	}
 }

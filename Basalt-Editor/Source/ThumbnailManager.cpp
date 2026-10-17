@@ -78,8 +78,19 @@ namespace Basalt {
 		m_Queue.push_back(id);
 	}
 
+	std::vector<ThumbnailManager::Preview::Material> ThumbnailManager::ListMaterials(const MeshSource& mesh)
+	{
+		std::vector<Preview::Material> materials;
+		materials.reserve(mesh.Materials.size());
+		for (size_t i = 0; i < mesh.Materials.size(); i++)
+			materials.push_back({ mesh.Materials[i].Name.empty() ? "Material " + std::to_string(i) : mesh.Materials[i].Name, ToMaterialComponent(mesh.Materials[i]) });
+		return materials;
+	}
+
 	void ThumbnailManager::Fail(Slot& slot, std::string error)
 	{
+		// What the old version's model held no longer describes the file.
+		slot.Data.Materials.clear();
 		slot.Data.Status = State::Failed;
 		slot.Data.Error = std::move(error);
 	}
@@ -228,12 +239,15 @@ namespace Basalt {
 		slot.Key = *key;
 		if (const auto entry = cache->Load(id, slot.Key))
 		{
+			// Cached on disk without its materials: those of the version shown before may no longer apply.
+			if (sourceChanged)
+				slot.Data.Materials.clear();
 			slot.Data.Details = entry->Details;
 			Upload(slot, entry->Image);
 			return false;
 		}
 		std::vector<Preview::Material> materials;
-		const auto entry = Make(id, slot.Data.Kind, sourceChanged, materials, error);
+		const auto entry = Make(*cache, id, slot.Data.Kind, sourceChanged, &materials, error);
 		if (!entry)
 		{
 			BS_CORE_WARN("Thumbnails: no preview of '{}': {}", id, error);
@@ -271,7 +285,7 @@ namespace Basalt {
 		return true;
 	}
 
-	std::optional<ThumbnailCache::Entry> ThumbnailManager::Make(const std::string& relativePath, ThumbnailKind kind, bool reread, std::vector<Preview::Material>& outMaterials, std::string& outError)
+	std::optional<ThumbnailCache::Entry> ThumbnailManager::Make(const ThumbnailCache& cache, const std::string& relativePath, ThumbnailKind kind, bool reread, std::vector<Preview::Material>* outMaterials, std::string& outError)
 	{
 		// What only this preview loads is released once it is made; what was loaded before (the open scene's) stays,
 		// including when it is read again below.
@@ -280,12 +294,9 @@ namespace Basalt {
 		// version too, which is what a changed file means there.)
 		if (reread && IsRenderedThumbnail(kind))
 		{
-			if (const auto cache = GetCache())
-			{
-				AssetManager::Reload(relativePath);
-				for (const std::string& dependency : cache->GetDependencies(relativePath))
-					AssetManager::Reload(dependency);
-			}
+			AssetManager::Reload(relativePath);
+			for (const std::string& dependency : cache.GetDependencies(relativePath))
+				AssetManager::Reload(dependency);
 		}
 		switch (kind)
 		{
@@ -316,8 +327,8 @@ namespace Basalt {
 				if (!mesh)
 					BS_CORE_WARN("Thumbnails: '{}' rendered but is no longer loaded; its preview has no details", relativePath);
 				// Kept with the preview: the model itself is released when the preview is made.
-				for (size_t i = 0; mesh && i < mesh->Materials.size(); i++)
-					outMaterials.push_back({ mesh->Materials[i].Name.empty() ? "Material " + std::to_string(i) : mesh->Materials[i].Name, ToMaterialComponent(mesh->Materials[i]) });
+				if (mesh && outMaterials)
+					*outMaterials = ListMaterials(*mesh);
 				return ThumbnailCache::Entry{ std::move(*image), mesh ? ModelDetails(*mesh) : std::vector<std::string>{} };
 			}
 			case ThumbnailKind::Prefab:
@@ -391,8 +402,7 @@ namespace Basalt {
 			result.Cached = true;
 			return result;
 		}
-		std::vector<Preview::Material> materials;
-		auto entry = Make(relativePath, kind, refresh, materials, outError);
+		auto entry = Make(*cache, relativePath, kind, refresh, nullptr, outError);
 		if (!entry)
 			return std::nullopt;
 		if (!cache->Store(relativePath, *key, *entry, result.CacheWarning))

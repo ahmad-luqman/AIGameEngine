@@ -331,7 +331,7 @@ namespace Basalt {
 			json failed = json::array();
 			for (const ScriptReloadFailure& failure : report.Scripts.Failed)
 				failed.push_back({ { "path", failure.Path }, { "error", failure.Error } });
-			return { { "hotReload", ScriptHotReloadName(report.HotReload) }, { "reloaded", report.Scripts.Reloaded }, { "failed", failed }, { "instances", report.Scripts.Instances }, { "instanceErrors", report.Scripts.InstanceErrors } };
+			return { { "hotReload", ScriptHotReloadName(report.HotReload) }, { "reloaded", report.Scripts.Reloaded }, { "failed", failed }, { "instances", report.Scripts.Instances }, { "instanceErrors", report.Scripts.InstanceErrors }, { "error", report.Scripts.Error } };
 		}
 
 		void Add(CommandRegistry& registry, std::string name, std::string description, json inputSchema, std::function<json(AutomationSession&, const json&)> handler, CommandPolicy policy = CommandPolicy::Normal)
@@ -1115,38 +1115,50 @@ namespace Basalt {
 				return json{ { "path", path }, { "bytes", content.get<std::string>().size() }, { "scripts", ScriptReloadJson(report) } };
 			});
 
-			Add(registry, "asset.refresh", "Reloads the asset files changed on disk since changes were last reported (by an earlier refresh, by the editor's automatic reload, or since the project was opened in this process): models and textures load again on their next use, and while the game runs (Play, not Simulate) changed scripts are hot reloaded (instances keep their fields; OnReload is called). With 'paths', reloads those files instead, changed or not. Files the session wrote itself (asset.write, scene.save, ...) are not reported again. Fails when Assets/ cannot be read.", Schema::Object({ { "paths", Schema::Array("array of project-relative file paths, optional", Schema::String("string", true)) } }), [](AutomationSession& session, const json& params) {
+			Add(registry, "asset.refresh", "Reloads the asset files changed on disk since changes were last reported (by an earlier refresh, by the editor's automatic reload, or since the project was opened in this process): models and textures load again on their next use, and while the game runs (Play, not Simulate) changed scripts are hot reloaded (instances keep their fields; OnReload is called). With 'paths', reloads those files instead, changed or not (a path that does not exist and was not known is an error, and nothing is reloaded then). Files the session wrote itself (asset.write, scene.save, ...) are not reported again. Without 'paths', fails when Assets/ cannot be read.", Schema::Object({ { "paths", Schema::Array("array of project-relative file paths, optional", Schema::String("string", true)) } }), [](AutomationSession& session, const json& params) {
 				RequireProject();
 				std::vector<FileChange> changes;
+				json warnings = json::array();
 				if (const auto it = params.find("paths"); it != params.end())
 				{
+					// Every path is checked before any is recorded: a rejected request changes nothing, so a later refresh
+					// still finds the edits it named.
 					for (const json& entry : *it)
 					{
 						const std::string path = ProjectRelative(entry.get<std::string>());
 						std::error_code error;
 						const std::filesystem::file_status status = std::filesystem::status(Project::ResolvePath(path), error);
+						if (error && error != std::errc::no_such_file_or_directory && error != std::errc::not_a_directory)
+							throw CommandError("cannot read '" + path + "': " + error.message());
 						if (std::filesystem::is_directory(status))
 							throw CommandError("'" + path + "' is a folder; name the files to reload");
 						const bool exists = std::filesystem::is_regular_file(status);
-						const std::optional<FileChangeType> change = session.AcknowledgeFile(path);
 						// A path that neither exists nor was known is a typo, not a removal.
-						if (!exists && change != FileChangeType::Removed)
-							throw CommandError("'" + path + "' does not exist" + (error && error != std::errc::no_such_file_or_directory ? " (" + error.message() + ")" : std::string()));
-						changes.push_back({ path, exists ? FileChangeType::Modified : FileChangeType::Removed });
+						if (!exists && !session.IsKnownFile(path))
+							throw CommandError("'" + path + "' does not exist");
+						changes.emplace_back(path, exists ? FileChangeType::Modified : FileChangeType::Removed);
 					}
+					for (const FileChange& change : changes)
+						session.AcknowledgeFile(change.Path);
 				}
 				else
 				{
 					std::string error;
-					changes = session.RefreshFileChanges(error);
+					std::string warning;
+					changes = session.RefreshFileChanges(error, warning);
 					if (!error.empty())
 						throw CommandError(error);
+					if (!warning.empty())
+						warnings.push_back(warning);
 				}
 				const AssetReloadReport report = session.ReloadAssets(changes);
 				json changed = json::array();
 				for (const FileChange& change : report.Changed)
 					changed.push_back({ { "path", change.Path }, { "type", FileChangeTypeName(change.Type) } });
-				return json{ { "changed", changed }, { "reloaded", report.Assets }, { "scripts", ScriptReloadJson(report) } };
+				json result = { { "changed", changed }, { "reloaded", report.Assets }, { "scripts", ScriptReloadJson(report) } };
+				if (!warnings.empty())
+					result["warnings"] = std::move(warnings);
+				return result;
 			});
 
 			Add(registry, "asset.read", "Reads a text asset.", Schema::Object({ { "path", Schema::String("string", true) } }, { "path" }), [](AutomationSession&, const json& params) {

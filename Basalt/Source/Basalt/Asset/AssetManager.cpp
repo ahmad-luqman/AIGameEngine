@@ -21,6 +21,8 @@ namespace Basalt {
 		{
 			Ref<T> Asset;
 			std::string Error;
+			// The other files a model reads (MeshSource::ExternalFiles), kept for a failed load too.
+			std::vector<std::string> Dependencies;
 		};
 
 		std::unordered_map<std::string, CacheEntry<MeshSource>> s_Meshes;
@@ -31,7 +33,7 @@ namespace Basalt {
 			return FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(path));
 		}
 
-		Ref<MeshSource> LoadMesh(const std::string& key, std::string& outError)
+		Ref<MeshSource> LoadMesh(const std::string& key, std::vector<std::string>& outDependencies, std::string& outError)
 		{
 			if (Primitives::IsBuiltinKey(key))
 			{
@@ -45,7 +47,7 @@ namespace Basalt {
 				outError = "'" + key + "' is not a supported mesh file (.gltf, .glb)";
 				return nullptr;
 			}
-			return MeshImporter::LoadGltf(Project::ResolvePath(key), key, outError);
+			return MeshImporter::LoadGltf(Project::ResolvePath(key), key, outDependencies, outError);
 		}
 
 		Ref<TextureSource> LoadTexture(const std::string& key, std::string& outError)
@@ -92,7 +94,7 @@ namespace Basalt {
 			return it->second.Asset;
 
 		CacheEntry<MeshSource> entry;
-		entry.Asset = LoadMesh(key, entry.Error);
+		entry.Asset = LoadMesh(key, entry.Dependencies, entry.Error);
 		if (entry.Asset)
 			entry.Asset->Key = key;
 		else
@@ -155,8 +157,8 @@ namespace Basalt {
 		std::set<std::string> keys;
 		for (const auto& [key, entry] : s_Meshes)
 		{
-			const bool readsChangedFile = entry.Asset && std::any_of(entry.Asset->ExternalFiles.begin(), entry.Asset->ExternalFiles.end(), [&](const std::string& file) { return changed.contains(file); });
-			if (!entry.Asset || changed.contains(key) || readsChangedFile)
+			const bool readsChangedFile = std::any_of(entry.Dependencies.begin(), entry.Dependencies.end(), [&](const std::string& file) { return changed.contains(file); });
+			if (changed.contains(key) || readsChangedFile)
 				keys.insert(key);
 		}
 		for (const auto& [key, entry] : s_Textures)

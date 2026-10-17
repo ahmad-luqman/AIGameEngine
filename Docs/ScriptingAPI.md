@@ -81,14 +81,17 @@ with `asset.write` or `asset.refresh` (which also reloads models and textures ch
   references to other entities). `Properties` the new version adds are set from the defaults or the component's
   overrides; a default that changed does not reach instances that already have the field. Then each started instance
   gets `OnReload()` (not `OnCreate`); one that had not started, or whose `OnCreate` raised an error, gets `OnCreate`.
-- A changed module (`require`d directly or through another module) reloads every module and every script, so they
-  pick up the new version. Saving a module whose `require` failed retries the scripts that failed to load.
+  An instance whose metatable the script replaced itself (`setmetatable(self, ...)`) is left as it is.
+- A changed module (`require`) is loaded again together with the modules that required it, and every script loads
+  again so they pick up the new version; other modules keep their state. Saving a module whose `require` failed
+  retries the scripts that failed because of it.
 - A version that does not load (a syntax error, an error in its top-level code, no class table) is reported and a
-  script that was running **keeps its previous version**; fix it and save again. An instance that a runtime error
-  disabled runs again after a successful reload, and entities whose script failed to load get their instances (with
-  `OnCreate`) then.
+  script that was running **keeps its previous version**; fix it (or the module that broke it) and save again. An
+  instance that a runtime error disabled runs again after a successful reload of its script, and entities whose
+  script failed to load get their instances (with `OnCreate`) then.
 - The script's top-level code runs again. Timers and event handlers it started (`Events.On` at the top level) end
-  with the old version, so they never pile up.
+  with the old version, so they never pile up; those a module's top level started belong to the module and end only
+  when the module itself is loaded again. A failing top-level timer or handler ends alone.
 - Not carried over: module-level `local` variables start afresh, and functions instances already handed to timers,
   coroutines or event handlers keep running the old code until they are created again (`OnReload` can restart them).
   A disabled instance's timers and handlers were cancelled when it failed.

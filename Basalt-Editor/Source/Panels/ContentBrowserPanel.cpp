@@ -273,10 +273,13 @@ return %s
 			ImGui::TextUnformatted(line.c_str());
 		// A model's materials, each on a sphere: those its preview read when it was made, or the model's when the open
 		// scene has it loaded. Never loaded here: a whole glTF would stall the frame.
-		std::vector<ThumbnailManager::Preview::Material> materials = preview.Materials;
-		if (const Ref<MeshSource> mesh = preview.Kind == ThumbnailKind::Model && materials.empty() ? AssetManager::FindLoadedMesh(relative) : nullptr)
-			for (size_t i = 0; i < mesh->Materials.size(); i++)
-				materials.push_back({ mesh->Materials[i].Name.empty() ? "Material " + std::to_string(i) : mesh->Materials[i].Name, ToMaterialComponent(mesh->Materials[i]) });
+		std::vector<ThumbnailManager::Preview::Material> loaded;
+		if (preview.Materials.empty() && preview.Kind == ThumbnailKind::Model)
+		{
+			if (const Ref<MeshSource> mesh = AssetManager::FindLoadedMesh(relative))
+				loaded = ThumbnailManager::ListMaterials(*mesh);
+		}
+		const std::vector<ThumbnailManager::Preview::Material>& materials = preview.Materials.empty() ? loaded : preview.Materials;
 		if (!materials.empty())
 		{
 			static constexpr size_t ShownMaterials = 8;
