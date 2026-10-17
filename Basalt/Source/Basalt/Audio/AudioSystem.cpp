@@ -3,6 +3,7 @@
 #include "Basalt/Audio/AudioEngine.h"
 #include "Basalt/Audio/AudioRules.h"
 #include "Basalt/Audio/LowPassNode.h"
+#include "Basalt/Audio/ReverbNode.h"
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Physics/PhysicsWorld.h"
@@ -11,8 +12,6 @@
 #include "Basalt/Scene/Scene.h"
 
 #include <miniaudio.h>
-
-#include <extras/nodes/ma_reverb_node/ma_reverb_node.h>
 
 #include <algorithm>
 #include <cmath>
@@ -53,7 +52,7 @@ namespace Basalt {
 
 		using LowPassHandle = std::unique_ptr<LowPassNode, NodeDeleter<LowPassNode, LowPassNodeUninit>>;
 		using SplitterHandle = std::unique_ptr<ma_splitter_node, NodeDeleter<ma_splitter_node, ma_splitter_node_uninit>>;
-		using ReverbHandle = std::unique_ptr<ma_reverb_node, NodeDeleter<ma_reverb_node, ma_reverb_node_uninit>>;
+		using ReverbHandle = std::unique_ptr<ReverbNode, NodeDeleter<ReverbNode, ReverbNodeUninit>>;
 
 		// Creates a node through init(node); null, logging what failed and what plays instead, when init fails. A
 		// plain unique_ptr until init succeeds: a handle's deleter must only see initialized nodes.
@@ -69,8 +68,10 @@ namespace Basalt {
 			return Handle(node.release());
 		}
 
-		// With the largest factor and speed, the Doppler pitch stays positive (miniaudio drops it to 0, silence, as
-		// a closing speed nears the speed of sound): the 0.26..3.8 range MaxAudioDoppler documents.
+		// With the largest factor and speed, both terms of miniaudio's pitch ratio stay positive, so the pitch stays
+		// finite and above 0: the 0.26..3.8 range MaxAudioDoppler documents. At the speed of sound it would fall to 0
+		// (silence) for a listener moving away and grow without bound for an approaching source. (miniaudio's
+		// MA_DEFAULT_SPEED_OF_SOUND is only visible to its implementation, so AudioSpeedOfSound restates it.)
 		static_assert(MaxAudioDoppler * AudioSystem::MaxDopplerSpeed < AudioSpeedOfSound);
 
 		// The live effect values of a source, each one turned off when it is outside its AudioRules range (only C++
@@ -89,20 +90,11 @@ namespace Basalt {
 				values.Doppler = source.Doppler;
 			// The filter is only defined below the Nyquist frequency; keep a margin under it (a 15 kHz cutoff becomes
 			// 9.9 kHz on a 22.05 kHz output).
-			if (source.LowPass != 0.0f && IsValidAudioLowPass(source.LowPass))
-				values.LowPass = std::min(source.LowPass, 0.45f * sampleRate);
+			if (IsValidAudioLowPass(source.LowPass))
+				values.LowPass = std::min(source.LowPass, MaxAudioLowPassRateFraction * sampleRate);
 			if (IsValidAudioReverbSend(source.ReverbSend))
 				values.ReverbSend = source.ReverbSend;
 			return values;
-		}
-
-		// With an output device the audio thread may be mid-block: it then runs that block with some settings old and
-		// some new, which is inaudible (verblib's setters only store a few floats).
-		void ApplyReverbSettings(ma_reverb_node& node, const AudioReverbSettings& settings)
-		{
-			verblib_set_room_size(&node.reverb, settings.RoomSize);
-			verblib_set_damping(&node.reverb, settings.Damping);
-			verblib_set_width(&node.reverb, settings.Width);
 		}
 
 		bool IsFinite(const glm::vec3& v)
@@ -132,12 +124,35 @@ namespace Basalt {
 			return std::nullopt;
 		}
 
+		// The pitch factor miniaudio's spatializer gives a sound (ma_doppler_pitch): toListener is the listener's
+		// position minus the sound's. Computed here from what the system hands miniaudio, so the main thread never
+		// reads the value the audio thread writes.
+		float DopplerPitch(const glm::vec3& toListener, const glm::vec3& soundVelocity, const glm::vec3& listenerVelocity, float factor)
+		{
+			const float distance = glm::length(toListener);
+			if (factor <= 0.0f || distance == 0.0f)
+				return 1.0f;
+			const float limit = AudioSpeedOfSound / factor;
+			const float listenerSpeed = std::min(glm::dot(toListener, listenerVelocity) / distance, limit);
+			const float soundSpeed = std::min(glm::dot(toListener, soundVelocity) / distance, limit);
+			return (AudioSpeedOfSound - factor * listenerSpeed) / (AudioSpeedOfSound - factor * soundSpeed);
+		}
+
+		// True when a problem seen every frame should be logged: when it appears, and again after it has cleared.
+		bool ShouldReport(bool& reported, bool hasProblem)
+		{
+			const bool report = hasProblem && !reported;
+			reported = hasProblem;
+			return report;
+		}
+
 		// The entity's velocity for the Doppler shift, clamped to MaxDopplerSpeed, and records position in
 		// lastPosition. A body knows its velocity exactly; a position delta would jitter whenever frames and fixed
 		// physics steps do not line up (some frames see no step, others two), which a Doppler shift turns into a
 		// warble, so the delta is only the fallback. nullopt when seconds is 0 (the immediate updates of Start and
-		// PlayOnStart), which have no movement to measure and only seed lastPosition.
-		std::optional<glm::vec3> TrackVelocity(const PhysicsWorld* physics, Entity entity, const glm::vec3& position, std::optional<glm::vec3>& lastPosition, float seconds)
+		// PlayOnStart), which have no movement to measure and only seed lastPosition. Positions are finite (the caller
+		// checks); a body's velocity can still blow up with its simulation, which gives no shift (reported once).
+		std::optional<glm::vec3> TrackVelocity(const PhysicsWorld* physics, Entity entity, const glm::vec3& position, std::optional<glm::vec3>& lastPosition, float seconds, bool& reportedInvalidVelocity)
 		{
 			if (!(seconds > 0.0f))
 			{
@@ -152,49 +167,93 @@ namespace Basalt {
 				velocity = (position - *lastPosition) / seconds;
 			lastPosition = position;
 
-			// Positions are checked finite by the caller; a body's velocity can still blow up with its simulation.
-			const float speed = glm::length(velocity);
-			if (!std::isfinite(speed))
+			if (ShouldReport(reportedInvalidVelocity, !IsFinite(velocity)))
+				BS_CORE_ERROR("Audio: the physics velocity of '{}' is not finite; its sound gets no Doppler shift", entity.GetName());
+			if (!IsFinite(velocity))
 				return glm::vec3(0.0f);
+			// Bounded first so the length cannot overflow.
+			velocity = glm::clamp(velocity, glm::vec3(-1e6f), glm::vec3(1e6f));
+			const float speed = glm::length(velocity);
 			return speed > AudioSystem::MaxDopplerSpeed ? velocity * (AudioSystem::MaxDopplerSpeed / speed) : velocity;
 		}
 
-	}
+		// One effect stage of a voice: its node (created on first use), whether the chain runs through it, and whether
+		// creating or routing it failed (not retried, which would log every frame; the sound plays without it).
+		template<typename Handle>
+		struct EffectStage
+		{
+			Handle Node;
+			bool Routed = false;
+			bool Failed = false;
 
-	// One effect stage of a voice: its node (created on first use), whether the chain runs through it, and whether
-	// creating or routing it failed (not retried, which would log every frame; the sound plays without it).
-	template<typename Handle>
-	struct EffectStage
-	{
-		Handle Node;
-		bool Routed = false;
-		bool Failed = false;
-	};
+			// Drops the node (its uninit detaches it from the graph) and gives up on the stage.
+			void Disable()
+			{
+				Node.reset();
+				Routed = false;
+				Failed = true;
+			}
+		};
+
+	}
 
 	struct AudioSystem::Voice
 	{
+		Voice(SoundHandle sound, const Output& out)
+			: Sound(std::move(sound))
+			, Out(out)
+		{
+			BS_CORE_ASSERT(Sound && Out.Node, "a voice has a sound and somewhere to send it");
+		}
+
 		// Declared before the sound so the sound (upstream) is destroyed first (do not reorder).
 		EffectStage<SplitterHandle> Send;
 		EffectStage<LowPassHandle> LowPass;
 		SoundHandle Sound;
-		Output Out;
-		// Problems reported once, until they clear, rather than every frame.
-		bool ReportedInvalidEffects = false;
+		// Fixed for the voice's life, which Route's early return relies on.
+		const Output Out;
+		// Problems reported once, until they clear, rather than every frame (the effects: the problem last reported).
+		std::string ReportedEffectsProblem;
 		bool ReportedInvalidPosition = false;
+		bool ReportedInvalidVelocity = false;
 		// The entity's previous world position, for its velocity.
 		std::optional<glm::vec3> LastPosition;
+		// What the sound was last given, for GetDopplerPitch.
+		glm::vec3 Position = glm::vec3(0.0f);
+		glm::vec3 Velocity = glm::vec3(0.0f);
+		float DopplerFactor = 0.0f;
+
+		void SetPosition(const glm::vec3& position)
+		{
+			ma_sound_set_position(Sound.get(), position.x, position.y, position.z);
+			Position = position;
+		}
+
+		void SetVelocity(const glm::vec3& velocity)
+		{
+			ma_sound_set_velocity(Sound.get(), velocity.x, velocity.y, velocity.z);
+			Velocity = velocity;
+		}
+
+		void SetDopplerFactor(float factor)
+		{
+			ma_sound_set_doppler_factor(Sound.get(), factor);
+			DopplerFactor = factor;
+		}
 
 		// Creates the low-pass on first use (at cutoff) and otherwise moves it to cutoff: it glides there while in the
 		// chain, and restarts there, with its memory cleared, when it goes back in after a bypass. False when it does
-		// not exist (creation failed).
-		bool UpdateLowPass(ma_engine* engine, float cutoff)
+		// not exist (creation failed, logged naming the source).
+		bool UpdateLowPass(ma_engine* engine, float cutoff, std::string_view name)
 		{
 			if (LowPass.Failed)
 				return false;
 			if (!LowPass.Node)
 			{
+				ma_node_graph* graph = ma_engine_get_node_graph(engine);
 				const ma_uint32 channels = ma_node_get_output_channels(Sound.get(), 0);
-				LowPass.Node = CreateNode<LowPassHandle>([&](LowPassNode* node) { return LowPassNodeInit(ma_engine_get_node_graph(engine), channels, ma_engine_get_sample_rate(engine), cutoff, node); }, "a low-pass filter", "the sound plays unfiltered");
+				const ma_uint32 sampleRate = ma_engine_get_sample_rate(engine);
+				LowPass.Node = CreateNode<LowPassHandle>([&](LowPassNode* node) { return LowPassNodeInit(graph, channels, sampleRate, cutoff, node); }, fmt::format("a low-pass filter for '{}'", name), "the sound plays unfiltered");
 				LowPass.Failed = !LowPass.Node;
 				return !LowPass.Failed;
 			}
@@ -206,14 +265,15 @@ namespace Basalt {
 		}
 
 		// Creates the reverb send on first use and sets how much it sends; false when it does not exist.
-		bool UpdateSend(ma_engine* engine, float send)
+		bool UpdateSend(ma_engine* engine, float send, std::string_view name)
 		{
 			if (Send.Failed)
 				return false;
 			if (!Send.Node)
 			{
+				ma_node_graph* graph = ma_engine_get_node_graph(engine);
 				const ma_splitter_node_config config = ma_splitter_node_config_init(ma_node_get_output_channels(Sound.get(), 0));
-				Send.Node = CreateNode<SplitterHandle>([&](ma_splitter_node* node) { return ma_splitter_node_init(ma_engine_get_node_graph(engine), &config, nullptr, node); }, "a reverb send", "the sound plays dry");
+				Send.Node = CreateNode<SplitterHandle>([&](ma_splitter_node* node) { return ma_splitter_node_init(graph, &config, nullptr, node); }, fmt::format("a reverb send for '{}'", name), "the sound plays dry");
 				Send.Failed = !Send.Node;
 				if (Send.Failed)
 					return false;
@@ -224,32 +284,52 @@ namespace Basalt {
 		}
 
 		// Routes the sound through the low-pass and, with a reverb, the send to it. The chain is built from the bus
-		// backwards; attaching an output replaces its previous connection, and stages that drop out are detached so
-		// the graph stops pulling them (a dropped send lets the reverb's tail ring out). When miniaudio refuses a
-		// connection the sound is wired straight to its output (logged) and plays without effects from then on.
-		void Route(bool lowPass, ma_node* reverb)
+		// backwards, and only connections that change are made: re-attaching an output briefly unlinks it in
+		// miniaudio, which could cost the voice a block. Attaching replaces an output's previous connection, so the
+		// old path plays until the new one exists; stages that drop out are detached afterwards so the graph stops
+		// pulling them (a dropped send lets the reverb's tail ring out). When miniaudio refuses a connection the
+		// sound is wired straight to its output (logged) and plays without effects from then on.
+		void Route(bool lowPass, ma_node* reverb, std::string_view name)
 		{
 			const bool send = reverb != nullptr;
+			BS_CORE_ASSERT(!lowPass || LowPass.Node, "a routed low-pass exists");
+			BS_CORE_ASSERT(!send || Send.Node, "a routed send exists");
 			if (lowPass == LowPass.Routed && send == Send.Routed)
 				return;
+			// Where each output goes now, from the stages routed so far (the send's two outputs never move: its bus and
+			// that bus's reverb are fixed for the voice).
+			ma_node* const sendNode = Send.Node.get();
+			ma_node* const lowPassNode = LowPass.Node.get();
+			ma_node* const lowPassWas = LowPass.Routed ? (Send.Routed ? sendNode : Out.Node) : nullptr;
+			ma_node* const soundWas = LowPass.Routed ? lowPassNode : (Send.Routed ? sendNode : Out.Node);
+
 			ma_result result = MA_SUCCESS;
-			auto attach = [&result](ma_node* from, ma_uint32 output, ma_node* to) {
-				if (result == MA_SUCCESS)
+			auto attach = [&result](ma_node* from, ma_uint32 output, ma_node* to, ma_node* was) {
+				if (result == MA_SUCCESS && to != was)
 					result = ma_node_attach_output_bus(from, output, to, 0);
 			};
 			ma_node* next = Out.Node;
 			if (send)
 			{
-				attach(Send.Node.get(), 0, next);
-				attach(Send.Node.get(), 1, reverb);
-				next = Send.Node.get();
+				attach(sendNode, 0, next, Send.Routed ? Out.Node : nullptr);
+				attach(sendNode, 1, reverb, Send.Routed ? reverb : nullptr);
+				next = sendNode;
 			}
 			if (lowPass)
 			{
-				attach(LowPass.Node.get(), 0, next);
-				next = LowPass.Node.get();
+				attach(lowPassNode, 0, next, lowPassWas);
+				next = lowPassNode;
 			}
-			attach(Sound.get(), 0, next);
+			attach(Sound.get(), 0, next, soundWas);
+			if (result != MA_SUCCESS)
+			{
+				BS_CORE_ERROR("Audio: cannot route '{}' through its effects ({}); it plays without them", name, ma_result_description(result));
+				LowPass.Disable();
+				Send.Disable();
+				if (const ma_result direct = ma_node_attach_output_bus(Sound.get(), 0, Out.Node, 0); direct != MA_SUCCESS)
+					BS_CORE_ERROR("Audio: cannot reconnect '{}' to its bus ({}); it is silent", name, ma_result_description(direct));
+				return;
+			}
 			// Only now drop the stages left out: the sound already bypasses them, so the bus never misses a block.
 			if (!send && Send.Node)
 				ma_node_detach_all_output_buses(Send.Node.get());
@@ -257,21 +337,6 @@ namespace Basalt {
 				ma_node_detach_all_output_buses(LowPass.Node.get());
 			LowPass.Routed = lowPass;
 			Send.Routed = send;
-			if (result == MA_SUCCESS)
-				return;
-
-			BS_CORE_ERROR("Audio: cannot route a sound through its effects ({}); it plays without them", ma_result_description(result));
-			for (ma_node* node : { static_cast<ma_node*>(Send.Node.get()), static_cast<ma_node*>(LowPass.Node.get()) })
-			{
-				if (node)
-					ma_node_detach_all_output_buses(node);
-			}
-			LowPass = {};
-			Send = {};
-			LowPass.Failed = true;
-			Send.Failed = true;
-			// The sound's own bus accepted it when it was created.
-			ma_node_attach_output_bus(Sound.get(), 0, Out.Node, 0);
 		}
 	};
 
@@ -428,6 +493,13 @@ namespace Basalt {
 			BS_CORE_ERROR("Audio: cannot play the AudioSource of '{}': {}", entity.GetName(), problem);
 			return false;
 		}
+		// A NaN position would reach the bus and its reverb (whose feedback keeps it until play stops).
+		const glm::vec3 position = glm::vec3(m_Scene->GetWorldTransform(entity)[3]);
+		if (source->Spatial && !IsFinite(position))
+		{
+			BS_CORE_ERROR("Audio: cannot play the AudioSource of '{}': its world position is not finite", entity.GetName());
+			return false;
+		}
 		const Output output = GetOutput(source->Bus);
 		SoundHandle sound = CreateSound(source->Clip, source->Spatial, output, source->Stream);
 		if (!sound)
@@ -440,12 +512,10 @@ namespace Basalt {
 		{
 			ma_sound_set_min_distance(sound.get(), source->MinDistance);
 			ma_sound_set_max_distance(sound.get(), source->MaxDistance);
-			const glm::vec3 position = glm::vec3(m_Scene->GetWorldTransform(entity)[3]);
-			ma_sound_set_position(sound.get(), position.x, position.y, position.z);
 		}
-		auto voice = std::make_unique<Voice>();
-		voice->Sound = std::move(sound);
-		voice->Out = output;
+		auto voice = std::make_unique<Voice>(std::move(sound), output);
+		if (source->Spatial)
+			voice->SetPosition(position);
 		ApplyEffects(*voice, entity, *source);
 		const UUID uuid = entity.GetUUID();
 		if (mode == StartMode::Now)
@@ -486,12 +556,12 @@ namespace Basalt {
 		auto it = m_Sources.find(entity.GetUUID());
 		if (it == m_Sources.end())
 			return 1.0f;
-		ma_sound* sound = it->second->Sound.get();
-		// A clip that played to its end keeps its last shift in miniaudio; nothing is shifted while nothing plays.
+		const Voice& voice = *it->second;
+		ma_sound* sound = voice.Sound.get();
+		// Nothing is shifted while nothing plays (a clip that played to its end included).
 		if (ma_sound_is_spatialization_enabled(sound) == MA_FALSE || ma_sound_is_playing(sound) == MA_FALSE)
 			return 1.0f;
-		// Written by the audio thread with a device: a diagnostic read, possibly a block old.
-		return sound->engineNode.spatializer.dopplerPitch;
+		return DopplerPitch(m_ListenerPosition - voice.Position, voice.Velocity, m_ListenerVelocity, voice.DopplerFactor);
 	}
 
 	bool AudioSystem::PlayOneShot(const std::string& clip, const glm::vec3* position, float volume, AudioBus bus)
@@ -499,6 +569,12 @@ namespace Basalt {
 		if (!IsValidAudioVolume(volume))
 		{
 			BS_CORE_ERROR("Audio: cannot play '{}' at volume {}: it must be a finite number >= 0", clip, volume);
+			return false;
+		}
+		// Never updated after this, so a NaN would sound for the one-shot's whole life.
+		if (position && !IsFinite(*position))
+		{
+			BS_CORE_ERROR("Audio: cannot play '{}' at a position that is not finite", clip);
 			return false;
 		}
 		SoundHandle sound = CreateSound(clip, position != nullptr, GetOutput(bus), false);
@@ -519,27 +595,26 @@ namespace Basalt {
 
 	void AudioSystem::ApplyEffects(Voice& voice, Entity entity, const AudioSourceComponent& source)
 	{
-		// Out-of-range values turn their effect off; say so once, until they are valid again.
-		if (const std::string problem = ValidateAudioEffects(source); problem.empty())
+		// Out-of-range values turn their effect off; say so once per problem (a different one is reported too), until
+		// they are valid again.
+		if (std::string problem = ValidateAudioEffects(source); problem != voice.ReportedEffectsProblem)
 		{
-			voice.ReportedInvalidEffects = false;
+			if (!problem.empty())
+				BS_CORE_ERROR("Audio: an effect of the AudioSource of '{}' is off: {}", entity.GetName(), problem);
+			voice.ReportedEffectsProblem = std::move(problem);
 		}
-		else if (!voice.ReportedInvalidEffects)
-		{
-			BS_CORE_ERROR("Audio: an effect of the AudioSource of '{}' is off: {}", entity.GetName(), problem);
-			voice.ReportedInvalidEffects = true;
-		}
+		const std::string& name = entity.GetName();
 
 		ma_engine* engine = AudioEngine::GetEngine();
 		const EffectValues effects = SanitizeEffects(source, static_cast<float>(ma_engine_get_sample_rate(engine)));
-		ma_sound_set_doppler_factor(voice.Sound.get(), effects.Doppler);
+		voice.SetDopplerFactor(effects.Doppler);
 
-		const bool lowPass = effects.LowPass > 0.0f && voice.UpdateLowPass(engine, effects.LowPass);
+		const bool lowPass = effects.LowPass > 0.0f && voice.UpdateLowPass(engine, effects.LowPass, name);
 		// A failed send never creates its bus's reverb.
 		Reverb* reverb = effects.ReverbSend > 0.0f && !voice.Send.Failed && voice.Out.Bus ? GetReverbNode(*voice.Out.Bus) : nullptr;
-		if (reverb && !voice.UpdateSend(engine, effects.ReverbSend))
+		if (reverb && !voice.UpdateSend(engine, effects.ReverbSend, name))
 			reverb = nullptr;
-		voice.Route(lowPass, reverb ? reverb->Node.get() : nullptr);
+		voice.Route(lowPass, reverb ? reverb->Node.get() : nullptr, name);
 	}
 
 	AudioSystem::Reverb* AudioSystem::GetReverbNode(size_t bus)
@@ -554,16 +629,14 @@ namespace Basalt {
 		// at 22.05 to 176.4 kHz only: elsewhere the sends are dropped and the sounds still play dry.
 		const ma_uint32 channels = ma_engine_get_channels(engine);
 		const ma_uint32 sampleRate = ma_engine_get_sample_rate(engine);
-		const ma_reverb_node_config config = ma_reverb_node_config_init(channels, sampleRate);
+		ma_node_graph* graph = ma_engine_get_node_graph(engine);
 		const std::string what = fmt::format("the {} bus reverb for {} channels at {} Hz", AudioBusNames[bus], channels, sampleRate);
-		ReverbHandle node = CreateNode<ReverbHandle>([&](ma_reverb_node* reverb) { return ma_reverb_node_init(ma_engine_get_node_graph(engine), &config, nullptr, reverb); }, what, "its sounds play without reverb");
+		ReverbHandle node = CreateNode<ReverbHandle>([&](ReverbNode* reverb) { return ReverbNodeInit(graph, channels, sampleRate, m_Reverb, reverb); }, what, "its sounds play without reverb");
 		if (!node)
 		{
 			m_ReverbFailed[bus] = true;
 			return nullptr;
 		}
-		// The node starts with verblib's defaults: wet only (the dry sound reaches the bus directly) at unity gain.
-		ApplyReverbSettings(*node, m_Reverb);
 		if (const ma_result result = ma_node_attach_output_bus(node.get(), 0, m_Buses[bus].get(), 0); result != MA_SUCCESS)
 		{
 			m_ReverbFailed[bus] = true;
@@ -602,19 +675,28 @@ namespace Basalt {
 			const glm::vec3 forward = -glm::normalize(glm::vec3(transform[2]));
 			const glm::vec3 up = glm::normalize(glm::vec3(transform[1]));
 			// A NaN would reach every spatial sound, and through them the reverbs, whose feedback would keep it
-			// until play stops. Such a listener (a broken transform, a zero scale) keeps its last placement.
-			if (IsFinite(position) && IsFinite(forward) && IsFinite(up))
+			// until play stops. Such a listener (a broken transform, a zero scale) keeps its last placement, and its
+			// movement is measured afresh once it is finite again.
+			const bool finite = IsFinite(position) && IsFinite(forward) && IsFinite(up);
+			if (ShouldReport(m_Listener.ReportedInvalidTransform, !finite))
+				BS_CORE_ERROR("Audio: the listener '{}' has a transform that is not finite; it keeps its last placement", listener.GetName());
+			if (finite)
 			{
-				m_Listener.ReportedInvalidTransform = false;
-				if (const std::optional<glm::vec3> velocity = TrackVelocity(physics, listener, position, m_Listener.LastPosition, seconds))
+				if (const std::optional<glm::vec3> velocity = TrackVelocity(physics, listener, position, m_Listener.LastPosition, seconds, m_Listener.ReportedInvalidVelocity))
 					m_Listener.Velocity = *velocity;
 				AudioEngine::SetListener(position, forward, up, m_Listener.Velocity);
+				m_ListenerPosition = position;
+				m_ListenerVelocity = m_Listener.Velocity;
 			}
-			else if (!m_Listener.ReportedInvalidTransform)
+			else
 			{
-				BS_CORE_ERROR("Audio: the listener '{}' has a transform that is not finite; it keeps its last placement", listener.GetName());
-				m_Listener.ReportedInvalidTransform = true;
+				m_Listener.LastPosition.reset();
 			}
+		}
+		else
+		{
+			// Whichever listener comes next (also this one again) starts without movement history.
+			m_Listener = {};
 		}
 
 		for (auto& [uuid, voice] : m_Sources)
@@ -628,17 +710,19 @@ namespace Basalt {
 			if (ma_sound_is_spatialization_enabled(sound) == MA_FALSE)
 				continue;
 			const glm::vec3 position = glm::vec3(m_Scene->GetWorldTransform(entity)[3]);
-			if (!IsFinite(position))
+			const bool finite = IsFinite(position);
+			if (ShouldReport(voice->ReportedInvalidPosition, !finite))
+				BS_CORE_ERROR("Audio: '{}' has a world position that is not finite; its sound keeps its last position, unmoving", entity.GetName());
+			if (!finite)
 			{
-				if (!voice->ReportedInvalidPosition)
-					BS_CORE_ERROR("Audio: '{}' has a world position that is not finite; its sound keeps its last position", entity.GetName());
-				voice->ReportedInvalidPosition = true;
+				// Standing still, and measured afresh once it is finite again (no teleport across the gap).
+				voice->SetVelocity(glm::vec3(0.0f));
+				voice->LastPosition.reset();
 				continue;
 			}
-			voice->ReportedInvalidPosition = false;
-			ma_sound_set_position(sound, position.x, position.y, position.z);
-			if (const std::optional<glm::vec3> velocity = TrackVelocity(physics, entity, position, voice->LastPosition, seconds))
-				ma_sound_set_velocity(sound, velocity->x, velocity->y, velocity->z);
+			voice->SetPosition(position);
+			if (const std::optional<glm::vec3> velocity = TrackVelocity(physics, entity, position, voice->LastPosition, seconds, voice->ReportedInvalidVelocity))
+				voice->SetVelocity(*velocity);
 		}
 
 		AudioEngine::AdvanceDeviceless(seconds);
@@ -681,7 +765,7 @@ namespace Basalt {
 		for (const std::unique_ptr<Reverb>& node : m_Reverbs)
 		{
 			if (node)
-				ApplyReverbSettings(*node->Node, m_Reverb);
+				ReverbNodeSetSettings(node->Node.get(), m_Reverb);
 		}
 		return true;
 	}

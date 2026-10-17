@@ -17,6 +17,10 @@ namespace Basalt {
 		uint32_t Channels = 2;
 		uint32_t SampleRate = 48000;
 	};
+	constexpr uint32_t MinDevicelessChannels = 1;
+	constexpr uint32_t MaxDevicelessChannels = 8;
+	constexpr uint32_t MinDevicelessSampleRate = 8000;
+	constexpr uint32_t MaxDevicelessSampleRate = 192000;
 
 	// Process-wide miniaudio engine. Falls back to a silent device-less engine when no audio device is
 	// available (headless runs, CI), so audio code paths behave the same everywhere.
@@ -28,8 +32,9 @@ namespace Basalt {
 	class AudioEngine
 	{
 	public:
-		// headless: never open an output device. format applies when there is no device; false (logged) when it is
-		// outside 1..8 channels or 8 to 192 kHz.
+		// headless: never open an output device. format applies when there is no device; false (logged), even when a
+		// device would open, when it is outside the Min/MaxDeviceless limits, and when a device-less engine already runs
+		// in another format.
 		static bool Init(bool headless, const AudioDevicelessFormat& format = {});
 		static void Shutdown();
 		static bool IsInitialized();

@@ -31,10 +31,9 @@ namespace Basalt {
 	//
 	// Each source's sound runs through a chain built from its live effect fields:
 	//   sound -> [low-pass] -> [splitter: dry -> bus, ReverbSend -> the bus's reverb] -> bus
-	// A stage is in the chain only while its effect is on (built on first use, bypassed after), so a source without
-	// effects sounds exactly as before. Each bus
-	// gets its own reverb the first time one of its sources sends to it; the reverb returns into that bus, so the
-	// bus volume scales the reverb too. The Doppler shift comes from velocities: an entity's own dynamic or kinematic
+	// A stage is in the chain only while its effect is on (built on first use, bypassed when it turns off), so a
+	// source without effects plays straight into its bus. Each bus gets its own reverb the first time one of its
+	// sources sends to it; the reverb returns into that bus, so the bus volume scales the reverb too. The Doppler shift comes from velocities: an entity's own dynamic or kinematic
 	// body (or character), else its closest ancestor's (a camera on a character; only the linear velocity), else its
 	// change in world position (also for static bodies, which report none).
 	class AudioSystem
@@ -88,9 +87,9 @@ namespace Basalt {
 		bool SetReverb(const AudioReverbSettings& reverb);
 		const AudioReverbSettings& GetReverb() const { return m_Reverb; }
 
-		// The Doppler pitch factor miniaudio applied to the entity's sound in the last mix: 1 = unshifted, also while it
-		// is not playing (never played, stopped, or played to its end) or when its sound is not spatial. For tests and
-		// diagnostics, like IsStreaming.
+		// The Doppler pitch factor of the entity's sound, from the positions, velocities and factor the last update gave
+		// miniaudio (the shift its next mix applies): 1 = unshifted, also while it is not playing (never played,
+		// stopped, or played to its end) or when its sound is not spatial. For tests and diagnostics.
 		float GetDopplerPitch(Entity entity) const;
 		// Whether the reverb of the bus exists (created when one of its sources first sends to it).
 		bool HasReverb(AudioBus bus) const;
@@ -139,8 +138,9 @@ namespace Basalt {
 			UUID ID = 0;
 			std::optional<glm::vec3> LastPosition;
 			glm::vec3 Velocity = glm::vec3(0.0f);
-			// A transform that is not finite is reported once, until it is finite again.
+			// A transform or velocity that is not finite is reported once, until it is finite again.
 			bool ReportedInvalidTransform = false;
+			bool ReportedInvalidVelocity = false;
 		};
 
 		// A source's sound (until it is stopped, also after a clip ends) and the effect nodes downstream of it
@@ -177,6 +177,9 @@ namespace Basalt {
 		std::unordered_set<UUID> m_PendingStarts;
 		std::vector<SoundHandle> m_OneShots;
 		ListenerState m_Listener;
+		// What miniaudio's listener was last given (it keeps it while there is no listener), for GetDopplerPitch.
+		glm::vec3 m_ListenerPosition = glm::vec3(0.0f);
+		glm::vec3 m_ListenerVelocity = glm::vec3(0.0f);
 	};
 
 }

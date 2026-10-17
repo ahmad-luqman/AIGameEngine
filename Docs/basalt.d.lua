@@ -369,8 +369,8 @@ function Entity:StopAudio() end
 ---@return boolean
 function Entity:IsAudioPlaying() end
 
----The Doppler pitch factor applied to the AudioSource in the last mix: 1 = unshifted, also while it is not playing or
----for a non-spatial source.
+---The Doppler pitch factor of the AudioSource from the last update (the shift its next mix applies): 1 = unshifted,
+---also while it is not playing or for a non-spatial source.
 ---@return number
 function Entity:GetAudioDopplerPitch() end
 
@@ -793,7 +793,8 @@ function Audio.GetBusVolume(bus) end
 ---@field Damping number How quickly high frequencies die away (default 0.25)
 ---@field Width number Stereo spread of the tail (default 1)
 
----Patches the reverb settings with the given fields; unknown fields or values outside 0..1 raise an error.
+---Patches the reverb settings with the given fields; unknown or non-string keys, non-numbers and values outside 0..1
+---raise an error, and nothing changes.
 ---@param settings {RoomSize?: number, Damping?: number, Width?: number}
 function Audio.SetReverb(settings) end
 
