@@ -246,7 +246,7 @@ namespace Basalt {
 		bool SetInputBindings(std::string_view action, std::vector<InputBinding> bindings, std::string& outError);
 		// Puts back the bindings play started with: one action's, or every action's (Play only).
 		bool ResetInputBindings(std::string_view action, std::string& outError);
-		bool ResetInputBindings(std::string& outError);
+		bool ResetAllInputBindings(std::string& outError);
 		// Unique across scene instances and increments on Play/reload; resets renderer history even after address reuse.
 		uint64_t GetRenderRevision() const { return m_RenderRevision; }
 		RendererSettings& GetRendererSettings() { return m_RendererSettings; }
@@ -336,6 +336,7 @@ namespace Basalt {
 		void BumpRenderRevision();
 		uint64_t m_RenderRevision = 0;
 		GraphicsSettings m_GraphicsSettings;
+		bool RequirePlayForBindings(std::string& outError) const;
 		// The session's input actions, and the project's as play started (ResetInputBindings).
 		InputActionMap m_InputActions;
 		InputActionMap m_StartInputActions;

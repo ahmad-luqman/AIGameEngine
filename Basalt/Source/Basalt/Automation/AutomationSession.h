@@ -146,7 +146,8 @@ namespace Basalt {
 		// Called after the edit scene is replaced (editor resets panels, camera...).
 		std::function<void()> OnSceneChanged;
 		// Called when Play starts, before the scripts' OnCreate, so the host can give the game its view first (the
-		// editor's Game view geometry, resolution and routing). replay.run clears it while it runs the headless view.
+		// editor's Game view geometry, resolution and routing). It must not start or stop play. replay.run clears it
+		// while it runs the recorded view.
 		std::function<void()> BeforeRuntimeStart;
 		// Name of the host for diagnostics ("cli", "editor").
 		std::string HostName = "cli";

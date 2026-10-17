@@ -33,6 +33,12 @@ namespace Basalt {
 			outError = "a project already exists in '" + absolute.string() + "'";
 			return nullptr;
 		}
+		// A new project has no actions, so Save writes no input file: one left there would be loaded as its own.
+		if (FileSystem::Exists(absolute / InputFileName))
+		{
+			outError = "'" + (absolute / InputFileName).string() + "' already exists (move it away to create a project here)";
+			return nullptr;
+		}
 
 		for (const char* sub : { "Assets", "Assets/Scenes", "Assets/Scripts", "Assets/Prefabs", "Assets/Models", "Assets/Textures", "Assets/Audio", "Assets/Environments" })
 		{
@@ -184,12 +190,7 @@ namespace Basalt {
 		}
 		std::string error;
 		const nlohmann::json data = ParseJson(*text, error);
-		if (data.is_discarded())
-		{
-			outError = "invalid input actions file '" + path.string() + "': " + error;
-			return std::nullopt;
-		}
-		auto actions = InputActionMap::FromJson(data, error);
+		auto actions = data.is_discarded() ? std::nullopt : InputActionMap::FromJson(data, error);
 		if (!actions)
 		{
 			outError = "invalid input actions file '" + path.string() + "': " + error;
@@ -200,15 +201,10 @@ namespace Basalt {
 
 	bool Project::Save(std::string& outError)
 	{
-		if (m_Config.InputActions != m_SavedInputActions)
-		{
-			if (!FileSystem::WriteTextFile(GetInputFilePath(), m_Config.InputActions.ToJson().dump(1, '\t')))
-			{
-				outError = "cannot write '" + GetInputFilePath().string() + "'";
-				return false;
-			}
-			m_SavedInputActions = m_Config.InputActions;
-		}
+		const bool writeInput = m_Config.InputActions != m_SavedInputActions;
+		const bool inputExisted = FileSystem::Exists(GetInputFilePath());
+		if (writeInput && !FileSystem::WriteTextFile(GetInputFilePath(), m_Config.InputActions.ToJson().dump(1, '\t'), outError))
+			return false;
 		const nlohmann::json data = {
 			{ "Format", "BasaltProject" },
 			{ "Name", m_Config.Name },
@@ -227,11 +223,23 @@ namespace Basalt {
 			{ "FixedTimestep", m_Config.FixedTimestep },
 			{ "RandomSeed", m_Config.RandomSeed },
 		};
-		if (!FileSystem::WriteTextFile(GetProjectFilePath(), data.dump(1, '\t')))
+		if (!FileSystem::WriteTextFile(GetProjectFilePath(), data.dump(1, '\t'), outError))
 		{
-			outError = "cannot write '" + GetProjectFilePath().string() + "'";
+			// Neither file changes then: put back the input actions written above (or remove the file they created).
+			if (!writeInput)
+				return false;
+			std::string restoreError;
+			std::error_code removeError;
+			if (inputExisted)
+				FileSystem::WriteTextFile(GetInputFilePath(), m_SavedInputActions.ToJson().dump(1, '\t'), restoreError);
+			else if (!std::filesystem::remove(GetInputFilePath(), removeError) && removeError)
+				restoreError = removeError.message();
+			if (!restoreError.empty())
+				outError += "; " + GetInputFilePath().string() + " was already updated and could not be put back: " + restoreError;
 			return false;
 		}
+		if (writeInput)
+			m_SavedInputActions = m_Config.InputActions;
 		return true;
 	}
 

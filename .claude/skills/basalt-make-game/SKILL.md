@@ -26,8 +26,9 @@ Write scripts with `asset.write` (or directly as files under `<project>/Assets/S
   "MoveX", "Type": "Axis", "Bindings": [{"Key": "D"}, {"Key": "A", "Scale": -1}, {"GamepadAxis": "LeftX"}]}]}}`
   and read `Input.GetAction("MoveX")` / `Input.IsActionPressed("Jump")`, so keys, gamepads and the mouse work
   alike and players can rebind (`Input.SetBindings`). `input.key`/`input.gamepad` still drive them in tests;
-  `input.actions` shows their values. In the editor, scripts get the keyboard only while the Game view has focus
-  (`editor.game_view {"focus": true}` first), as with a real keyboard. First-person cameras: `Input.SetCursorMode("Locked")` and
+  `input.actions` shows their values. In the editor, injected input reaches scripts only while the Game view has
+  focus (`editor.game_view {"focus": true}` first), and injected mouse buttons also need the real cursor over the
+  Game view, as with a real keyboard and mouse: test mouse-driven games headless. First-person cameras: `Input.SetCursorMode("Locked")` and
   `Input.GetMouseDelta()` (Samples/Breakout shows actions, the mouse and the cursor).
 - Grid games (Tetris, Snake, Minesweeper): keep the logical state in Lua tables and mirror it with
   entities (cubes with `Mesh builtin://Cube` + `Material AlbedoColor`). Do not use physics for them.

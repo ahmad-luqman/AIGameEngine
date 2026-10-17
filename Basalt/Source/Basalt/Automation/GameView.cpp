@@ -23,16 +23,32 @@ namespace Basalt {
 	{
 		GameCursorDecision decision;
 		decision.Released = input.Released;
-		if (input.Requested == CursorMode::Normal)
+		if (input.Requested != CursorMode::Locked)
 			decision.Released = false;
 		else if (!input.Released && input.ViewFocused && input.EscapePressed)
 			decision.Released = decision.ConsumeEscape = true;
 		else if (input.Released && input.ViewHovered && input.Clicked)
+		{
 			decision.Released = false;
-		const bool active = input.Requested != CursorMode::Normal && input.ViewFocused && !decision.Released;
-		decision.Window = active && input.Requested == CursorMode::Locked ? CursorMode::Locked : CursorMode::Normal;
+			decision.ConsumeClick = true;
+		}
+		const bool active = input.ViewFocused && !decision.Released;
+		decision.LockWindow = active && input.Requested == CursorMode::Locked;
 		decision.HideOverView = active && input.Requested == CursorMode::Hidden;
 		return decision;
+	}
+
+	GameViewRouting RouteGameView(const GameViewRoutingInput& input)
+	{
+		GameViewRouting routing;
+		routing.Focus = input.HasImage && input.ViewFocused;
+		routing.Pointer = routing.Focus && ((input.ViewHovered && input.MouseOverImage) || input.CursorLocked);
+		return routing;
+	}
+
+	bool IsInsideRect(const glm::vec2& point, const glm::vec2& min, const glm::vec2& size)
+	{
+		return glm::all(glm::greaterThanEqual(point, min)) && glm::all(glm::lessThan(point, min + size));
 	}
 
 	nlohmann::json GameViewSettings::Schema()

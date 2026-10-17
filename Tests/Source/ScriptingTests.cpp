@@ -2387,7 +2387,7 @@ TEST_SUITE("Scripting")
 								   std::array<std::pair<const char*, const char*>, 9>{ {
 									   { "Input.SetBindings('Jump', { Key = 'Space' })", "Input.SetBindings('Jump'): expected a list of bindings, such as { { Key = 'Space' } }" },
 									   { "Input.SetBindings('Jump', { { Key = 'Space', Scale = 0/0 } })", "Input.SetBindings('Jump'): binding Scale must be a number" },
-									   { "Input.SetBindings('Jump', { function() end })", "Input.SetBindings('Jump'): " },
+									   { "Input.SetBindings('Jump', { function() end })", "Input.SetBindings('Jump'): cannot convert a Lua function to data" },
 									   { "Input.GetAction('Dash')", "unknown input action 'Dash' (defined: Jump, MoveX)" },
 									   { "Input.IsActionPressed('jump')", "unknown input action 'jump'" },
 									   { "Input.SetBindings('Jump', { { Key = 'Nope' } })", "Input.SetBindings('Jump'): binding: unknown Key 'Nope'" },
@@ -2411,7 +2411,7 @@ TEST_SUITE("Scripting")
 		CHECK(Eval(scene, "Input.SetBindings('Jump', {}) return true") == "true");
 		scene.OnRuntimeStop();
 		CHECK(scene.GetInputActions().IsEmpty());
-		CHECK_FALSE(scene.ResetInputBindings(error));
+		CHECK_FALSE(scene.ResetAllInputBindings(error));
 		scene.OnRuntimeStart();
 		CHECK(scene.GetInputActions() == *actions);
 		scene.OnRuntimeStop();

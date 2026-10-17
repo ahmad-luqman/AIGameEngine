@@ -696,11 +696,13 @@ namespace Basalt {
 				{
 					throw std::runtime_error(where + e.what());
 				}
-				// An empty Lua table converts to an empty object: no bindings.
-				if (data.is_object() && data.empty())
+				if (data.is_object())
+				{
+					if (!data.empty())
+						throw std::runtime_error(where + "expected a list of bindings, such as { { Key = 'Space' } }");
+					// An empty Lua table converts to an empty object: no bindings.
 					data = nlohmann::json::array();
-				else if (data.is_object())
-					throw std::runtime_error(where + "expected a list of bindings, such as { { Key = 'Space' } }");
+				}
 				std::string error;
 				auto parsed = InputActionMap::BindingsFromJson(data, error);
 				if (!parsed || !RequireScene(context).SetInputBindings(name, std::move(*parsed), error))
@@ -715,7 +717,7 @@ namespace Basalt {
 					reset = RequireScene(context).ResetInputBindings(*name, error);
 				}
 				else
-					reset = RequireScene(context).ResetInputBindings(error);
+					reset = RequireScene(context).ResetAllInputBindings(error);
 				if (!reset)
 					throw std::runtime_error("Input.ResetBindings: " + error);
 			};

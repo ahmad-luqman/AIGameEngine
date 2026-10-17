@@ -329,16 +329,18 @@ over its image (or the game has locked the cursor). The mouse position, gamepad 
 `OnGamepadConnected`/`OnGamepadDisconnected`) are always reported. Losing that input reads like letting go of
 everything held (`IsKeyReleased` is true on that frame); a key or button held when it comes back stays up for the
 game until it is let go, and the click that focuses the Game view is not the game's. This applies to automation
-too: in the editor, `input.key` reaches scripts only while the Game view has focus (`editor.game_view {"focus":
-true}`), as a real key would.
+too: in the editor, injected keys and gamepads reach scripts only while the Game view has focus
+(`editor.game_view {"focus": true}`), and injected mouse buttons, movement and scroll also need the real mouse
+cursor over the Game view's image, as a real keyboard and mouse would.
 
 **Cursor.** `Input.SetCursorMode(mode)` asks for `"Normal"` (visible), `"Hidden"` (hidden over the game, free to
 leave) or `"Locked"` (hidden and held in the window: only the delta means anything, as first-person cameras want;
 the platform's raw mouse motion is used where available). `Input.GetCursorMode()` returns the mode asked for. Play
 starts and stops with `"Normal"` (`Scene.Load` keeps it). In the editor the mode applies while the game runs and the
 Game view has focus (`"Hidden"` hides the cursor only over the Game view's image); Escape gives the cursor back to
-the editor until the Game view is clicked again, and that Escape does not reach the game. While the cursor is locked
-the mouse position is meaningless (and UI widgets get no pointer). Headless runs only store the mode.
+the editor until the Game view is clicked again, and neither that Escape nor that click reaches the game (a hidden
+cursor keeps Escape for the game). While the game asks for a locked cursor, the mouse position is meaningless and UI
+widgets get no pointer, in every host. Headless runs change no cursor.
 
 ### Input actions
 
@@ -363,7 +365,8 @@ in Project Settings > Input Actions, or with `project.set inputActions`; it is e
   while held. A gamepad axis reads its value past its `DeadZone` (0 to 0.95, default 0.2), rescaled so a stick
   pushed all the way still reads 1. `Scale` (-1 to 1, default 1) multiplies the value: `-1` makes a key the negative
   half of an axis, or a stick pushed up (-Y) press a button. `Gamepad` (0-15) reads one gamepad (local
-  multiplayer); without it, every gamepad counts (the one pushed furthest the binding's way). Control names are
+  multiplayer); without it, every gamepad counts: for a `Button`, the one pushing it hardest; for an `Axis`, the
+  stick pushed furthest either way. Control names are
   case-insensitive, like key names in scripts; `Type` is exactly `"Button"` or `"Axis"`, like component enums.
 - A `Button` action (the default type) is as strong as its strongest binding, from 0 to 1 (a trigger gives
   values in between). An `Axis` action adds its bindings and clamps the sum to -1..1, so A and D held together

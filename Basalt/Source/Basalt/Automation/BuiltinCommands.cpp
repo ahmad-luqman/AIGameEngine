@@ -1291,7 +1291,7 @@ namespace Basalt {
 				return result;
 			});
 
-			Add(registry, "replay.record_start", "Starts recording input.key/input.mouse/input.gamepad commands with the play frame they arrive on. The mouse position and the injected gamepads (with what they hold) are recorded as they are on that frame, and the host's view whenever it changes, checked before every frame and every recorded command: where mouse positions land on the UI canvas, the game resolution scripts read the mouse in, and whether the game has the pointer and the keyboard (routing gates every game input), so replays run the same way in any host. Physical gamepads are not recorded (replays run without them): they are listed in physicalGamepads.", Schema::Object(), [](AutomationSession& session, const json&) {
+			Add(registry, "replay.record_start", "Starts recording input.key/input.mouse/input.gamepad commands with the play frame they arrive on. The mouse position and the injected gamepads (with what they hold) are recorded as they are on that frame, and the host's view whenever it changes, checked before every frame and every recorded command: where mouse positions land on the UI canvas, the game resolution scripts read the mouse in, and whether the game has the pointer and the keyboard (routing gates every game input), so replays run the same way in any host. A recording begun before play marks where play started (a playStart event): what came before it applies before the replay starts play, so OnCreate sees the same view and input. Physical gamepads are not recorded (replays run without them): they are listed in physicalGamepads.", Schema::Object(), [](AutomationSession& session, const json&) {
 				session.StartRecording();
 				json physical = json::array();
 				for (uint32_t index = 0; index < Input::MaxGamepads; index++)
@@ -1356,65 +1356,85 @@ namespace Basalt {
 				Input::Reset();
 				Input::ResetMousePosition();
 				Input::ForgetInjectedGamepads();
+				// Constructed explicitly: MSVC cannot aggregate-initialize a local class inside a lambda (C2326).
 				struct RestoreHost
 				{
+					explicit RestoreHost(AutomationSession& session)
+						: Session(session)
+						, Host(GameUI::GetHostState())
+						, DeviceGamepads(Input::IsDeviceGamepadsEnabled())
+						// The host would give the game its own view as play starts.
+						, BeforeRuntimeStart(std::exchange(session.BeforeRuntimeStart, nullptr))
+					{
+					}
+					RestoreHost(const RestoreHost&) = delete;
+					RestoreHost& operator=(const RestoreHost&) = delete;
 					AutomationSession& Session;
-					GameUI::HostState Host = GameUI::GetHostState();
-					bool DeviceGamepads = Input::IsDeviceGamepadsEnabled();
-					// The host would give the game its own view as play starts.
-					std::function<void()> BeforeRuntimeStart = std::exchange(Session.BeforeRuntimeStart, nullptr);
+					GameUI::HostState Host;
+					bool DeviceGamepads;
+					std::function<void()> BeforeRuntimeStart;
 					~RestoreHost()
 					{
 						GameUI::SetHostState(Host);
 						Input::SetDeviceGamepadsEnabled(DeviceGamepads);
 						Session.BeforeRuntimeStart = std::move(BeforeRuntimeStart);
 					}
-				} restore{ session };
+				} restore(session);
 				GameUI::SetHostState({});
 				Input::SetDeviceGamepadsEnabled(false);
 				const json& events = replay["Events"];
-				size_t next = 0;
-				// The view a recording starts with applies before play starts, so the scripts' OnCreate reads it too.
-				for (; next < events.size() && events[next].value("frame", uint64_t{ 0 }) == 0 && events[next].value("command", "") == "view"; next++)
+				// Events recorded at frame N were applied before the update that produced frame N + 1. A recording that
+				// began before play has a "playStart" marker: what came before it (the view play started with, keys
+				// already held) applies before the replay starts play, so the scripts' OnCreate sees it too. Recordings
+				// without one apply their leading frame-0 views then.
+				std::optional<size_t> playStart;
+				for (size_t i = 0; i < events.size(); i++)
 				{
+					const json& event = events[i];
+					const auto frame = event.is_object() ? event.find("frame") : event.end();
+					uint32_t frameNumber = 0;
+					if (!event.is_object() || (frame != event.end() && !JsonToUInt32(*frame, frameNumber)) || !event.value("command", json()).is_string() || (event.contains("params") && !event["params"].is_object()))
+						throw CommandError(fmt::format("'{}' event {} is not {{frame: integer, command: string, params: object}}", path, i));
+					if (!playStart && event["command"] == "playStart")
+						playStart = i;
+				}
+				const auto applyEvent = [&](size_t index) {
+					const json& event = events[index];
+					const std::string command = event["command"].get<std::string>();
+					const json eventParams = event.value("params", json::object());
 					try
 					{
-						ApplyViewEvent(events[next].value("params", json::object()));
+						if (command == "input.key")
+							ApplyKeyInput(eventParams);
+						else if (command == "input.mouse")
+							ApplyMouseInput(eventParams);
+						else if (command == "input.gamepad")
+							ApplyGamepadInput(eventParams);
+						else if (command == "view")
+							ApplyViewEvent(eventParams);
+						else if (command != "playStart")
+							throw CommandError("unknown command '" + command + "'");
 					}
 					catch (const CommandError& e)
 					{
-						throw CommandError(fmt::format("'{}' event {} (frame 0, view): {}", path, next, e.what()));
+						throw CommandError(fmt::format("'{}' event {} (frame {}, {}): {}", path, index, event.value("frame", uint64_t{ 0 }), command, e.what()));
 					}
-				}
+				};
+				const auto beforePlay = [&](size_t index) {
+					if (playStart)
+						return index <= *playStart;
+					return events[index].value("frame", uint64_t{ 0 }) == 0 && events[index]["command"] == "view";
+				};
+				size_t next = 0;
+				for (; next < events.size() && beforePlay(next); next++)
+					applyEvent(next);
 				std::string error;
 				if (!session.StartPlay(error))
 					throw CommandError(error);
 				for (uint32_t frame = 0; frame <= frames; frame++)
 				{
-					// Events recorded at frame N were applied before the update that produced frame N + 1.
 					for (; next < events.size() && events[next].value("frame", uint64_t{ 0 }) <= frame; next++)
-					{
-						const json& event = events[next];
-						const std::string command = event.value("command", "");
-						const json eventParams = event.value("params", json::object());
-						try
-						{
-							if (command == "input.key")
-								ApplyKeyInput(eventParams);
-							else if (command == "input.mouse")
-								ApplyMouseInput(eventParams);
-							else if (command == "input.gamepad")
-								ApplyGamepadInput(eventParams);
-							else if (command == "view")
-								ApplyViewEvent(eventParams);
-							else
-								throw CommandError("unknown command '" + command + "'");
-						}
-						catch (const CommandError& e)
-						{
-							throw CommandError(fmt::format("'{}' event {} (frame {}, {}): {}", path, next, frame, command, e.what()));
-						}
-					}
+						applyEvent(next);
 					if (frame < frames)
 						session.Step(1, 1.0f / 60.0f);
 				}

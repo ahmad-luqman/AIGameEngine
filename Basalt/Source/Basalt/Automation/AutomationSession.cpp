@@ -211,6 +211,13 @@ namespace Basalt {
 		{
 			if (BeforeRuntimeStart)
 				BeforeRuntimeStart();
+			// A recording that began before play marks where play started, with the view the scripts start with, so
+			// a replay applies what came before before it starts play (replay.run).
+			if (IsRecording() && !m_RecordingSeed)
+			{
+				RecordViewChange();
+				m_Recording.push_back({ { "frame", 0 }, { "command", "playStart" }, { "params", nlohmann::json::object() } });
+			}
 			m_Scene->OnRuntimeStart();
 		}
 		if (IsRecording() && !m_RecordingSeed)
@@ -259,7 +266,7 @@ namespace Basalt {
 		m_Recording = nlohmann::json::array();
 		m_RecordingSeed = IsPlaying() ? std::optional<uint32_t>(m_Scene->GetRandomSeed()) : std::nullopt;
 		m_RecordedView.reset();
-		// The view first: a replay applies a frame-0 view before it starts play, so OnCreate reads the same one.
+		// The view first, so the mouse positions after it map the same way in the replay.
 		RecordViewChange();
 		// A replay starts from no input: record the mouse position and the injected gamepads already connected, with
 		// what they hold.

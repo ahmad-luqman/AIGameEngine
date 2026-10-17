@@ -241,33 +241,76 @@ TEST_CASE("The Game view gives the game the cursor it asks for while focused, an
 	};
 	// Normal never captures anything and forgets an earlier release.
 	GameCursorDecision d = decide(CursorMode::Normal, true, true, true, false, true);
-	CHECK(d.Window == CursorMode::Normal);
+	CHECK_FALSE(d.LockWindow);
+	CHECK_FALSE(d.HideOverView);
 	CHECK_FALSE(d.Released);
 	CHECK_FALSE(d.ConsumeEscape);
 	// Locked captures the window cursor only while the Game view has focus.
-	CHECK(decide(CursorMode::Locked, true, false, false, false, false).Window == CursorMode::Locked);
-	CHECK(decide(CursorMode::Locked, false, true, false, false, false).Window == CursorMode::Normal);
+	CHECK(decide(CursorMode::Locked, true, false, false, false, false).LockWindow);
+	CHECK_FALSE(decide(CursorMode::Locked, false, true, false, false, false).LockWindow);
 	// Escape releases it (and is the editor's, not the game's) ...
 	d = decide(CursorMode::Locked, true, true, true, false, false);
-	CHECK(d.Window == CursorMode::Normal);
+	CHECK_FALSE(d.LockWindow);
 	CHECK(d.Released);
 	CHECK(d.ConsumeEscape);
-	// ... until the Game view is clicked: a click elsewhere, or Escape again, does not take it back.
-	CHECK(decide(CursorMode::Locked, true, false, false, true, true).Released);
+	// ... until the Game view is clicked (that click is the editor's too): a click elsewhere, or Escape again, does not
+	// take it back, and the game gets the second Escape.
+	d = decide(CursorMode::Locked, true, false, false, true, true);
+	CHECK(d.Released);
+	CHECK_FALSE(d.ConsumeClick);
 	d = decide(CursorMode::Locked, true, true, true, false, true);
 	CHECK(d.Released);
 	CHECK_FALSE(d.ConsumeEscape);
 	d = decide(CursorMode::Locked, true, true, false, true, true);
 	CHECK_FALSE(d.Released);
-	CHECK(d.Window == CursorMode::Locked);
+	CHECK(d.ConsumeClick);
+	CHECK(d.LockWindow);
 	// Escape without focus is not the editor's to take.
 	CHECK_FALSE(decide(CursorMode::Locked, false, false, true, false, false).ConsumeEscape);
-	// Hidden never captures the window; it only hides the cursor over the view, while active.
+	// Hidden never captures the window; it hides the cursor over the view while focused, and Escape stays the game's.
 	d = decide(CursorMode::Hidden, true, true, false, false, false);
-	CHECK(d.Window == CursorMode::Normal);
+	CHECK_FALSE(d.LockWindow);
 	CHECK(d.HideOverView);
 	CHECK_FALSE(decide(CursorMode::Hidden, false, true, false, false, false).HideOverView);
-	CHECK_FALSE(decide(CursorMode::Hidden, true, true, false, false, true).HideOverView);
+	d = decide(CursorMode::Hidden, true, true, true, false, false);
+	CHECK_FALSE(d.ConsumeEscape);
+	CHECK_FALSE(d.Released);
+	CHECK(d.HideOverView);
+	// Never both.
+	for (CursorMode mode : { CursorMode::Normal, CursorMode::Hidden, CursorMode::Locked })
+		for (int bits = 0; bits < 32; bits++)
+		{
+			d = decide(mode, bits & 1, bits & 2, bits & 4, bits & 8, bits & 16);
+			CHECK_FALSE((d.LockWindow && d.HideOverView));
+		}
+}
+
+TEST_CASE("The Game view gives the game the keyboard while focused and the mouse while it is also over the image")
+{
+	const auto route = [](bool image, bool focused, bool hovered, bool over, bool locked) {
+		return RouteGameView({ image, focused, hovered, over, locked });
+	};
+	GameViewRouting r = route(true, true, true, true, false);
+	CHECK(r.Focus);
+	CHECK(r.Pointer);
+	// Hovered on the last frame but the mouse has left the image (a click on another panel): not the game's.
+	CHECK_FALSE(route(true, true, true, false, false).Pointer);
+	// Over the image but the view is not focused (the click that focuses it): neither.
+	r = route(true, false, true, true, false);
+	CHECK_FALSE(r.Focus);
+	CHECK_FALSE(r.Pointer);
+	// A locked cursor stays the game's wherever the virtual cursor wanders.
+	CHECK(route(true, true, false, false, true).Pointer);
+	// No image: nothing.
+	r = route(false, true, true, true, true);
+	CHECK_FALSE(r.Focus);
+	CHECK_FALSE(r.Pointer);
+	// The rectangle includes its minimum edge and excludes its maximum.
+	CHECK(IsInsideRect({ 10.0f, 20.0f }, { 10.0f, 20.0f }, { 100.0f, 50.0f }));
+	CHECK(IsInsideRect({ 109.9f, 69.9f }, { 10.0f, 20.0f }, { 100.0f, 50.0f }));
+	CHECK_FALSE(IsInsideRect({ 110.0f, 30.0f }, { 10.0f, 20.0f }, { 100.0f, 50.0f }));
+	CHECK_FALSE(IsInsideRect({ 50.0f, 70.0f }, { 10.0f, 20.0f }, { 100.0f, 50.0f }));
+	CHECK_FALSE(IsInsideRect({ 0.0f, 0.0f }, { 0.0f, 0.0f }, { 0.0f, 0.0f }));
 }
 
 TEST_CASE("The Game view renders at the project's window size unless a session override is set")

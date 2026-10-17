@@ -385,8 +385,16 @@ namespace Basalt {
 	{
 		std::scoped_lock lock(s_Mutex);
 		const size_t index = KeyIndex(key);
-		if (index < MaxKeys)
-			s_State.GameKeysBlocked[index] = s_State.KeysDown[index];
+		if (index < MaxKeys && s_State.KeysDown[index])
+			s_State.GameKeysBlocked[index] = true;
+	}
+
+	void Input::WithholdFromGame(MouseCode button)
+	{
+		std::scoped_lock lock(s_Mutex);
+		const size_t index = ButtonIndex(button);
+		if (index < MouseButtonCount && s_State.ButtonsDown[index])
+			s_State.GameButtonsBlocked[index] = true;
 	}
 
 	bool Input::HasGamePointer()

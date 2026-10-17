@@ -123,6 +123,14 @@ namespace Basalt {
 			return result;
 		}
 
+		// The runtime refuses a broken input actions file: say so now (the file may have been edited since the project
+		// loaded) rather than ship a game that does not start.
+		if (std::string inputError; !Project::ReadInputActions(project.GetInputFilePath(), inputError))
+		{
+			result.Error = inputError;
+			return result;
+		}
+
 		const std::filesystem::path runtime = runtimeExecutable.empty() ? GetDefaultRuntimePath() : runtimeExecutable;
 		if (!FileSystem::Exists(runtime))
 		{
@@ -159,22 +167,24 @@ namespace Basalt {
 		std::filesystem::copy(project.GetDirectory() / Project::AssetDirectoryName, output / Project::AssetDirectoryName, std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, error);
 		if (!error)
 			std::filesystem::copy_file(project.GetProjectFilePath(), output / Project::FileName, std::filesystem::copy_options::overwrite_existing, error);
-		// The input actions are optional; a previous export's copy must not outlive the project's file. A file that
-		// cannot even be checked fails the export rather than shipping the game without its controls.
-		if (!error)
-		{
-			const std::filesystem::file_status input = std::filesystem::status(project.GetInputFilePath(), error);
-			if (input.type() == std::filesystem::file_type::not_found)
-			{
-				error.clear();
-				std::filesystem::remove(output / Project::InputFileName, error);
-			}
-			else if (!error)
-				std::filesystem::copy_file(project.GetInputFilePath(), output / Project::InputFileName, std::filesystem::copy_options::overwrite_existing, error);
-		}
 		if (error)
 		{
 			result.Error = "cannot copy project files: " + error.message();
+			return result;
+		}
+		// The input actions are optional; a previous export's copy must not outlive the project's file. A file that
+		// cannot even be checked fails the export rather than shipping the game without its controls.
+		const std::filesystem::file_status input = std::filesystem::status(project.GetInputFilePath(), error);
+		if (input.type() == std::filesystem::file_type::not_found)
+		{
+			error.clear();
+			std::filesystem::remove(output / Project::InputFileName, error);
+		}
+		else if (!error)
+			std::filesystem::copy_file(project.GetInputFilePath(), output / Project::InputFileName, std::filesystem::copy_options::overwrite_existing, error);
+		if (error)
+		{
+			result.Error = "cannot copy '" + project.GetInputFilePath().string() + "': " + error.message();
 			return result;
 		}
 

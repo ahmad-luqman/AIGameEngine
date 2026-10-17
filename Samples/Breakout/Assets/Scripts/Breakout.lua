@@ -232,7 +232,9 @@ end
 function Breakout:UpdateHud()
 	self.ScoreText:SetComponent("UIText", { Text = string.format("SCORE %d", self.Score) })
 	self.LivesText:SetComponent("UIText", { Text = string.format("LIVES %d", self.LivesLeft) })
-	self.Message:SetComponent("UIText", { Text = Messages[self.State] })
+	local message = Messages[self.State]
+	if message == nil then error("Breakout: no message for state '" .. tostring(self.State) .. "'") end
+	self.Message:SetComponent("UIText", { Text = message })
 	local menu = self.State == "GameOver" or self.State == "Won"
 	self.RestartButton:SetComponent("UIRect", { Visible = menu })
 	-- Focused, the button also restarts from the keyboard and gamepads (Space, Enter, A).

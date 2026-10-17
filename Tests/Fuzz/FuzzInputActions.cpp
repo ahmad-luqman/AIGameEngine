@@ -11,10 +11,15 @@
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 {
 	BasaltFuzz::Init();
-	const nlohmann::json parsed = Basalt::ParseJson(BasaltFuzz::AsText(data, size));
-	if (parsed.is_discarded())
-		return 0;
+	// The reporting overload, as Project::ReadInputActions reads the file: it must never throw.
 	std::string error;
+	const nlohmann::json parsed = Basalt::ParseJson(BasaltFuzz::AsText(data, size), error);
+	if (parsed.is_discarded())
+	{
+		if (error.empty())
+			__builtin_trap();
+		return 0;
+	}
 	if (const auto map = Basalt::InputActionMap::FromJson(parsed, error))
 	{
 		// Whatever loads must save and load again unchanged, and evaluate without input.
