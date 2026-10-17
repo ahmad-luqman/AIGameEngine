@@ -149,6 +149,9 @@ namespace Basalt {
 		AABB Bounds;
 		// Encoded bytes of images embedded in the file (glTF "#image/<n>" keys); empty for external images.
 		std::vector<std::vector<uint8_t>> EmbeddedImages;
+		// The other files a glTF read (external buffers and images; project-relative, sorted): a change to one of them
+		// is a change to this asset.
+		std::vector<std::string> ExternalFiles;
 		// Asset key this source was loaded from ("Assets/Models/Ship.gltf", "builtin://Cube").
 		std::string Key;
 

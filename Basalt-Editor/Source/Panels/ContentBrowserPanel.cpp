@@ -268,7 +268,7 @@ return %s
 		if (preview.Status == ThumbnailManager::State::Pending)
 			ImGui::TextDisabled("Making a preview...");
 		else if (preview.Status == ThumbnailManager::State::Failed)
-			ImGui::TextColored(EditorColors::Error, "No preview: %s", preview.Error.c_str());
+			ImGui::TextColored(EditorColors::Error(), "No preview: %s", preview.Error.c_str());
 		for (const std::string& line : preview.Details)
 			ImGui::TextUnformatted(line.c_str());
 		// A model's materials, each on a sphere. Only when the model is already loaded (by its preview or the scene):

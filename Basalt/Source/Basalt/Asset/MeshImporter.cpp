@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <set>
 
 namespace Basalt {
 
@@ -148,18 +149,22 @@ namespace Basalt {
 			return uri && std::string_view(uri).rfind("data:", 0) == 0;
 		}
 
+		// The asset key of an external (not data:) URI of the glTF.
+		std::string ExternalFileKey(const char* uri, const std::filesystem::path& gltfPath)
+		{
+			std::string decoded = uri;
+			cgltf_decode_uri(decoded.data());
+			decoded.resize(std::strlen(decoded.c_str()));
+			return Project::MakeRelative(gltfPath.parent_path() / decoded);
+		}
+
 		std::string TextureKey(const cgltf_data* data, const cgltf_texture_view& view, const std::filesystem::path& gltfPath, const std::string& meshKey)
 		{
 			if (!view.texture || !view.texture->image)
 				return {};
 			const cgltf_image* image = view.texture->image;
 			if (image->uri && !IsDataUri(image->uri))
-			{
-				std::string uri = image->uri;
-				cgltf_decode_uri(uri.data());
-				uri.resize(std::strlen(uri.c_str()));
-				return Project::MakeRelative(gltfPath.parent_path() / uri);
-			}
+				return ExternalFileKey(image->uri, gltfPath);
 			return meshKey + "#image/" + std::to_string(image - data->images);
 		}
 
@@ -248,6 +253,14 @@ namespace Basalt {
 		}
 		Ref<MeshSource> source = CreateRef<MeshSource>();
 		source->Key = key;
+		std::set<std::string> externalFiles;
+		for (cgltf_size i = 0; i < data->buffers_count; i++)
+			if (data->buffers[i].uri && !IsDataUri(data->buffers[i].uri))
+				externalFiles.insert(ExternalFileKey(data->buffers[i].uri, path));
+		for (cgltf_size i = 0; i < data->images_count; i++)
+			if (data->images[i].uri && !IsDataUri(data->images[i].uri))
+				externalFiles.insert(ExternalFileKey(data->images[i].uri, path));
+		source->ExternalFiles.assign(externalFiles.begin(), externalFiles.end());
 
 		// Materials (plus a default one at the end for primitives without a material).
 		for (cgltf_size i = 0; i < data->materials_count; i++)

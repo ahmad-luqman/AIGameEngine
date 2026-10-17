@@ -1,5 +1,7 @@
 #include "Panels/ConsolePanel.h"
 
+#include "EditorColors.h"
+
 #include "Basalt/Automation/EditorCommandSchemas.h"
 #include "Basalt/Core/Log.h"
 
@@ -36,7 +38,7 @@ namespace Basalt {
 				case LogLevel::Trace:
 					if (!m_ShowTrace)
 						continue;
-					color = ImVec4(0.55f, 0.55f, 0.55f, 1.0f);
+					color = EditorColors::Muted();
 					break;
 				case LogLevel::Info:
 					if (!m_ShowInfo)
@@ -45,13 +47,13 @@ namespace Basalt {
 				case LogLevel::Warn:
 					if (!m_ShowWarnings)
 						continue;
-					color = ImVec4(1.0f, 0.8f, 0.3f, 1.0f);
+					color = EditorColors::Warning();
 					break;
 				case LogLevel::Error:
 				case LogLevel::Critical:
 					if (!m_ShowErrors)
 						continue;
-					color = ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
+					color = EditorColors::Error();
 					break;
 			}
 			ImGui::PushStyleColor(ImGuiCol_Text, color);

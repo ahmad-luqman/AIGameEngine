@@ -22,7 +22,8 @@ namespace Basalt {
 	// outdated ones are queued and made by Update (the editor calls it once per frame, before the ImGui pass)
 	// within a frame budget: at most one GPU render, and new CPU work only until about 8 ms have passed (one large
 	// image can take longer). File previews are cached on disk (ThumbnailCache); material previews only in GPU
-	// textures. Previews not shown recently are dropped beyond MaxTextures / MaxSlots.
+	// textures. Previews not shown recently are dropped beyond MaxTextures / MaxSlots. Assets a preview loads only for
+	// itself are released from AssetManager when it is made (AssetManager::TemporaryLoads).
 	class ThumbnailManager
 	{
 	public:
@@ -81,6 +82,11 @@ namespace Basalt {
 
 		std::optional<Generated> Generate(const std::string& relativePath, bool refresh, std::string& outError);
 		std::optional<ThumbnailImage> RenderMaterial(const MaterialComponent& material, std::string& outError);
+
+		// Files changed on disk (project-relative, after AssetManager dropped them): file previews check their version
+		// on their next request instead of up to two seconds later, and material previews that use one of them as a
+		// map are made again.
+		void OnFilesChanged(const std::vector<std::string>& paths);
 
 		// Forgets every preview at the next Update (textures drawn this frame stay alive until then); with
 		// `deleteCache`, the disk cache too (the count it removed is logged).

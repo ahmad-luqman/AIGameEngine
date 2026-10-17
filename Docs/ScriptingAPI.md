@@ -33,6 +33,7 @@ function Player:OnTriggerEnter(other, contact) end  -- either body is a trigger 
 function Player:OnTriggerExit(other, contact) end
 function Player:OnJointBreak(other) end        -- joint exceeded BreakForce/BreakTorque; other is the far body, nil for the world
 function Player:OnGamepadConnected(index) end  -- a gamepad is connected (see "Input"); likewise OnGamepadDisconnected
+function Player:OnReload() end                 -- the script was hot reloaded (see "Hot reload")
 
 return Player
 ```
@@ -69,6 +70,24 @@ return Player
 - Destroying entities from any callback is safe: destruction is deferred until the current update ends.
 - `require("Assets.Scripts.Lib.Util")` loads project modules. `io`, `os`, `dofile` and `loadfile` are not
   available (scripts cannot touch the file system).
+
+### Hot reload
+
+A script saved while the game runs is loaded again without stopping play: in the editor as soon as the file
+settles on disk (View > Reload Changed Files Automatically, on by default), through automation with `asset.write`
+or `asset.refresh` (which also reloads models and textures changed on disk).
+
+- Every instance of the script moves onto the new class and **keeps its fields** (`self.Health`, counters,
+  references to other entities); `Properties` the new version adds are set from the defaults or the component's
+  overrides. Then `OnReload()` is called on each instance (not `OnCreate`).
+- A changed module (`require`) reloads every script, so they pick up the new module.
+- A version that does not load (a syntax error, an error in its top-level code, no class table) is reported and the
+  **previous version keeps running**; fix it and save again. An instance that a runtime error disabled runs again
+  after a successful reload, and entities whose script failed to load when play started get their instances
+  (with `OnCreate`) then.
+- Not carried over: module-level `local` variables start afresh, and functions already handed to timers, coroutines
+  or event handlers keep running the old code until they are created again (`OnReload` can restart them). A
+  disabled instance's timers and handlers were cancelled when it failed.
 
 ## Math types
 

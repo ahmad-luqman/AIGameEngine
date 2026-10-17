@@ -83,6 +83,20 @@ Protocol references: [lifecycle](https://modelcontextprotocol.io/specification/2
 [tools](https://modelcontextprotocol.io/specification/2025-11-25/server/tools), and
 [transports](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports).
 
+## Iterating on a running game
+
+Play does not have to stop for an edit. `asset.write` reloads what it wrote, and a script written while the game
+runs is **hot reloaded**: its instances keep their fields, take the new methods and get `OnReload()` (see
+Docs/ScriptingAPI.md, "Hot reload"); the result's `scripts` reports `reloaded`, `failed` (`{path, error}`: the
+previous version keeps running, and the next `play.step` lists the error in `scriptErrors`) and `instances`.
+Files changed with other tools (an agent's own file editing, a text editor, an exporter) are picked up by
+`asset.refresh`: it compares `Assets/` with the last refresh (or the opening of the project), reloads changed models
+and textures (they load again on their next use, so the scene shows them) and hot reloads changed scripts, and
+returns `{changed: [{path, type: Added|Modified|Removed}], reloaded, scripts}`. `asset.refresh {"paths": [...]}`
+reloads the files named, changed or not. Files the session writes itself (`asset.write`, `scene.save`,
+`prefab.create`, `replay.record_stop`) are never reported as changes. The editor also watches `Assets/` on its own
+(View > Reload Changed Files Automatically), so with it a plain file write is enough.
+
 ## Events, snapshots and assertions
 
 Agents can follow a running game and check it without polling or screenshots:
@@ -229,6 +243,13 @@ costs one view.
   files report that they have no preview.
 - `editor.material_preview {"entity":"Ball","output":"ball.png"}` renders an entity's Material on a sphere,
   as the inspector shows it (128x128).
+- `editor.preferences {"cameraSpeed":2,"theme":"Light","autoReload":true,"recentProjects":[]}` reads or patches the
+  user's editor preferences, which outlive the session (every key optional; an invalid one changes nothing):
+  `cameraSpeed` (fly speed multiplier, 0.1–10; also the viewport's Speed slider and RMB + wheel), `theme` (`Dark` or
+  `Light`), `recentProjects` (most recent first, at most 10; `[]` clears; opened projects are added) and `autoReload`
+  (watch `Assets/` and reload changed files, hot reloading scripts in Play). It returns them with `file` and
+  `layoutFile`: both live in `<user data>/BasaltEditor/` (`BASALT_USER_DATA_DIR` moves it), the window layout
+  included (an `imgui.ini` in the working directory is copied there once).
 
 The content browser shows these previews in each row (icon size slider in its header), a larger one with
 details on hover (a loaded model's materials as spheres), and its context menu clears the cache.

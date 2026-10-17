@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <array>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
@@ -96,6 +97,58 @@ namespace Basalt {
 			if (numeric && value.size() == 4 && defaultValue.is<glm::vec4>())
 				return sol::make_object(lua, glm::vec4(components[0], components[1], components[2], components[3]));
 			return JsonToLua(lua, value);
+		}
+
+		// An instance's value of a property: the component's override, converted like the default, or the default (a
+		// copied vector, so instances never share and mutate the class default). An override that does not convert sets
+		// outError and gives the default.
+		sol::object PropertyValue(const sol::state_view& lua, const std::string& name, const sol::object& defaultValue, const ScriptComponent& component, std::string& outError)
+		{
+			if (const auto overrideIt = component.Properties.find(name); overrideIt != component.Properties.end())
+			{
+				try
+				{
+					return ConvertProperty(lua, defaultValue, *overrideIt);
+				}
+				catch (const std::exception& e)
+				{
+					outError = component.Script + ": invalid value for property '" + name + "': " + e.what();
+					return defaultValue;
+				}
+			}
+			if (const sol::optional<glm::vec3> vector = defaultValue.as<sol::optional<glm::vec3>>())
+				return sol::make_object(lua, *vector);
+			return defaultValue;
+		}
+
+		// Clears require's cache (package.loaded) of the modules whose file is one of `files` (absolute), so the next
+		// require loads them again. True if it cleared any.
+		bool ForgetModules(sol::state& lua, const std::vector<std::filesystem::path>& files)
+		{
+			sol::table loaded = lua["package"]["loaded"];
+			const sol::protected_function searchPath = lua["package"]["searchpath"];
+			const std::string packagePath = lua["package"]["path"];
+			std::vector<std::string> names;
+			for (const auto& [key, value] : loaded)
+			{
+				if (key.is<std::string>())
+					names.push_back(key.as<std::string>());
+			}
+			bool forgot = false;
+			for (const std::string& name : names)
+			{
+				// The file require would load for the name now (nil for the standard libraries).
+				const sol::protected_function_result found = searchPath(name, packagePath);
+				if (!found.valid() || found.get_type() != sol::type::string)
+					continue;
+				const std::filesystem::path file = FileSystem::PathFromUtf8(found.get<std::string>()).lexically_normal();
+				if (std::find(files.begin(), files.end(), file) != files.end())
+				{
+					loaded[name] = sol::lua_nil;
+					forgot = true;
+				}
+			}
+			return forgot;
 		}
 
 	}
@@ -475,28 +528,10 @@ namespace Basalt {
 				if (!key.is<std::string>())
 					continue;
 				const std::string name = key.as<std::string>();
-				auto overrideIt = component->Properties.find(name);
-				if (overrideIt != component->Properties.end())
-				{
-					try
-					{
-						self[name] = ConvertProperty(impl.Lua, defaultValue, *overrideIt);
-					}
-					catch (const std::exception& e)
-					{
-						ReportError(component->Script + ": invalid value for property '" + name + "': " + e.what());
-						self[name] = defaultValue;
-					}
-				}
-				else if (defaultValue.is<glm::vec3>())
-				{
-					// Copy vectors so instances never share (and mutate) the class default.
-					self[name] = glm::vec3(defaultValue.as<glm::vec3>());
-				}
-				else
-				{
-					self[name] = defaultValue;
-				}
+				std::string error;
+				self[name] = PropertyValue(impl.Lua, name, defaultValue, *component, error);
+				if (!error.empty())
+					ReportError(error);
 			}
 		}
 
@@ -710,6 +745,124 @@ namespace Basalt {
 		// one of the two bodies and was notified above.
 		if (holderID != bodyID && holderID != connectedID)
 			notify(holderID, connectedID);
+	}
+
+	ScriptReloadResult ScriptEngine::ReloadScripts(const std::vector<std::string>& changedFiles)
+	{
+		Impl& impl = *m_Impl;
+		ScriptReloadResult result;
+		const std::set<std::string> changed(changedFiles.begin(), changedFiles.end());
+		std::vector<std::filesystem::path> files;
+		for (const std::string& path : changed)
+			files.push_back(Project::ResolvePath(path).lexically_normal());
+		// Any class may require a changed module (directly or through another module): all of them load again.
+		const bool moduleChanged = ForgetModules(impl.Lua, files);
+
+		std::set<std::string> candidates;
+		for (const auto& [path, scriptClass] : impl.Classes)
+		{
+			if (moduleChanged || changed.contains(path))
+				candidates.insert(path);
+		}
+		for (const std::string& path : impl.FailedClasses)
+		{
+			if (moduleChanged || changed.contains(path))
+				candidates.insert(path);
+		}
+
+		std::unordered_set<std::string> reloaded;
+		std::unordered_set<std::string> recovered;
+		for (const std::string& path : candidates)
+		{
+			std::string error;
+			std::optional<sol::table> scriptClass;
+			{
+				ScriptOwnerScope scope(impl.Context, 0);
+				scriptClass = LoadScriptClass(impl.Lua, path, error);
+			}
+			const auto existing = impl.Classes.find(path);
+			if (!scriptClass)
+			{
+				ReportError(existing != impl.Classes.end() ? "hot reload of '" + path + "' failed, the previous version keeps running: " + error : "hot reload of '" + path + "' failed: " + error);
+				result.Failed.emplace_back(path, error);
+				continue;
+			}
+			Impl::ScriptClass loaded{ *scriptClass, MakeInstanceMetatable(impl.Lua, *scriptClass) };
+			if (existing != impl.Classes.end())
+				existing->second = std::move(loaded);
+			else
+			{
+				impl.Classes.emplace(path, std::move(loaded));
+				impl.FailedClasses.erase(path);
+				recovered.insert(path);
+			}
+			reloaded.insert(path);
+			result.Reloaded.push_back(path);
+		}
+		if (reloaded.empty())
+			return result;
+
+		// Existing instances: the new class's methods, and the properties it added.
+		std::vector<UUID> moved;
+		for (UUID uuid : impl.Order)
+		{
+			auto it = impl.Instances.find(uuid);
+			if (it == impl.Instances.end() || !reloaded.contains(it->second.ScriptPath))
+				continue;
+			const Impl::ScriptClass& scriptClass = impl.Classes.at(it->second.ScriptPath);
+			sol::table self = it->second.Self;
+			self[sol::metatable_key] = scriptClass.InstanceMetatable;
+			Entity entity = m_Scene->GetEntityByUUID(uuid);
+			const auto* component = entity ? entity.TryGetComponent<ScriptComponent>() : nullptr;
+			const sol::object properties = scriptClass.Table["Properties"];
+			if (component && properties.get_type() == sol::type::table)
+			{
+				for (const auto& [key, defaultValue] : properties.as<sol::table>())
+				{
+					if (!key.is<std::string>())
+						continue;
+					const std::string name = key.as<std::string>();
+					if (self.raw_get<sol::object>(name).get_type() != sol::type::lua_nil)
+						continue;
+					std::string error;
+					self[name] = PropertyValue(impl.Lua, name, defaultValue, *component, error);
+					if (!error.empty())
+						ReportError(error);
+				}
+			}
+			moved.push_back(uuid);
+		}
+		result.Instances = moved.size();
+
+		// Then the callbacks, once every instance runs the new code (OnReload may call other reloaded instances).
+		for (UUID uuid : moved)
+		{
+			auto it = impl.Instances.find(uuid);
+			Entity entity = m_Scene->GetEntityByUUID(uuid);
+			if (it == impl.Instances.end() || !entity || m_Scene->IsEntityPendingDestruction(entity))
+				continue;
+			// Fixing the error that disabled an instance and saving the script is what brings it back.
+			it->second.Failed = false;
+			if (!it->second.Created)
+				ScriptEngineAccess::StartInstance(*this, uuid);
+			else
+				ScriptEngineAccess::Call(*this, uuid, "OnReload");
+		}
+
+		// Entities whose script failed to load before get their instances now, as if they had just been spawned.
+		if (!recovered.empty() && impl.Started)
+		{
+			std::vector<Entity> waiting;
+			for (Entity entity : m_Scene->GetAllEntitiesOrdered())
+			{
+				const auto* component = entity.TryGetComponent<ScriptComponent>();
+				if (component && recovered.contains(component->Script) && !HasInstance(entity) && !m_Scene->IsEntityPendingDestruction(entity))
+					waiting.push_back(entity);
+			}
+			EnsureInstances(waiting);
+			result.Instances += static_cast<size_t>(std::count_if(waiting.begin(), waiting.end(), [this](Entity entity) { return HasInstance(entity); }));
+		}
+		return result;
 	}
 
 	bool ScriptEngine::ExecuteString(const std::string& code, std::string& outResult)

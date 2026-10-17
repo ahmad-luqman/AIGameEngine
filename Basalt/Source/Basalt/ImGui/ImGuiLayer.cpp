@@ -26,9 +26,8 @@ namespace Basalt {
 		ImGuiIO& io = ImGui::GetIO();
 		io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 		io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-		io.IniFilename = "imgui.ini";
+		io.IniFilename = m_IniFilename.empty() ? nullptr : m_IniFilename.c_str();
 
-		ImGui::StyleColorsDark();
 		SetDarkThemeColors();
 		ImGuiStyle& style = ImGui::GetStyle();
 		style.WindowRounding = 2.0f;
@@ -130,8 +129,27 @@ namespace Basalt {
 		m_Renderer.Render(&drawData, target);
 	}
 
+	void ImGuiLayer::SetIniFilename(std::string path)
+	{
+		m_IniFilename = std::move(path);
+		if (ImGui::GetCurrentContext())
+			ImGui::GetIO().IniFilename = m_IniFilename.empty() ? nullptr : m_IniFilename.c_str();
+	}
+
+	void ImGuiLayer::SetLightThemeColors()
+	{
+		ImGui::StyleColorsLight();
+		auto& colors = ImGui::GetStyle().Colors;
+		colors[ImGuiCol_WindowBg] = ImVec4(0.94f, 0.94f, 0.94f, 1.0f);
+		colors[ImGuiCol_Tab] = ImVec4(0.82f, 0.82f, 0.84f, 1.0f);
+		colors[ImGuiCol_TabSelected] = ImVec4(0.94f, 0.94f, 0.94f, 1.0f);
+		colors[ImGuiCol_TabDimmed] = ImVec4(0.82f, 0.82f, 0.84f, 1.0f);
+		colors[ImGuiCol_TabDimmedSelected] = ImVec4(0.90f, 0.90f, 0.91f, 1.0f);
+	}
+
 	void ImGuiLayer::SetDarkThemeColors()
 	{
+		ImGui::StyleColorsDark();
 		auto& colors = ImGui::GetStyle().Colors;
 		colors[ImGuiCol_WindowBg] = ImVec4(0.10f, 0.105f, 0.11f, 1.0f);
 

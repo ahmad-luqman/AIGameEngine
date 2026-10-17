@@ -2,7 +2,9 @@
 
 #include "Basalt/Automation/AutomationEvents.h"
 #include "Basalt/Core/Base.h"
+#include "Basalt/Core/FileWatcher.h"
 #include "Basalt/Core/UUID.h"
+#include "Basalt/Scripting/ScriptReload.h"
 #include "Basalt/UI/GameUI.h"
 
 #include <nlohmann/json.hpp>
@@ -10,6 +12,7 @@
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -17,8 +20,19 @@
 
 namespace Basalt {
 
+	class Project;
 	class Scene;
 	struct CommandInfo;
+
+	// What AutomationSession::ReloadAssets did with a set of changed files.
+	struct AssetReloadReport
+	{
+		std::vector<FileChange> Changed;
+		// AssetManager keys dropped; they load again from disk on their next use.
+		std::vector<std::string> Assets;
+		// The hot reload of changed scripts (empty unless the game was running).
+		ScriptReloadResult Scripts;
+	};
 
 	// One host owns command observation. Rejected BeforeCommand calls never reach the handler;
 	// AfterCommand runs after successful or throwing handlers, with nesting depth already restored.
@@ -80,6 +94,21 @@ namespace Basalt {
 		void Step(uint32_t frames, float frameTime);
 		// Pauses or resumes the play scene (the editor's Pause button); no-op when not playing or unchanged.
 		void SetPaused(bool paused);
+
+		// --- Asset changes (hot reload) ---------------------------------------------------------------
+		// Watches the active project's Assets/ folder. The host polls it (the editor in the background; agents through
+		// asset.refresh).
+		FileWatcher& GetFileWatcher() { return m_FileWatcher; }
+		// Follows the active project: watches the Assets/ folder of a project that became active since the last call
+		// (what is there now is the baseline), or nothing without one.
+		void SyncFileWatcher();
+		// Applies changed files: AssetManager drops what they affect (models, textures and what reads them), and while
+		// the game runs (Play, not Simulate) added or modified scripts are hot reloaded. Logs what it did and calls
+		// OnAssetsReloaded.
+		AssetReloadReport ReloadAssets(const std::vector<FileChange>& changes);
+		// A file the session wrote itself (asset.write, scene.save, ...): the watcher records it, so it is not reported
+		// as a change later, and it is reloaded now.
+		AssetReloadReport OnFileWritten(const std::string& relativePath);
 
 		// --- Events and snapshots --------------------------------------------------------------------
 		// Log lines, script errors, play-state changes and collisions of this session (events.subscribe). Created by
@@ -149,6 +178,8 @@ namespace Basalt {
 		// editor's Game view geometry, resolution and routing). It must not start or stop play. replay.run clears it
 		// while it runs the recorded view.
 		std::function<void()> BeforeRuntimeStart;
+		// Called after ReloadAssets applied changes (the editor refreshes previews).
+		std::function<void(const AssetReloadReport&)> OnAssetsReloaded;
 		// Name of the host for diagnostics ("cli", "editor").
 		std::string HostName = "cli";
 		// Only the attached owner may detach itself; attaching a second observer is rejected.
@@ -182,6 +213,9 @@ namespace Basalt {
 		std::optional<uint32_t> m_RecordingSeed;
 		// The host view the recording last recorded.
 		std::optional<GameUI::HostState> m_RecordedView;
+		FileWatcher m_FileWatcher;
+		// The project m_FileWatcher watches (weak: another project at the same address is still another project).
+		std::weak_ptr<Project> m_WatchedProject;
 	};
 
 }

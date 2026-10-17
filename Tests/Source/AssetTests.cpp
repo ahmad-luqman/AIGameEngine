@@ -221,6 +221,62 @@ TEST_SUITE("Assets")
 		AssetManager::Clear();
 	}
 
+	TEST_CASE("Changed files drop the loaded assets they affect")
+	{
+		BasaltTest::TempProject project("AssetReloadChanged");
+		const std::string buffer = MakeQuadBuffer();
+		project.WriteFile("Assets/Models/Quad.bin", buffer);
+		project.WriteFile("Assets/Models/normal.png", MakePng(0x0000FFFF));
+		const std::string redPng = MakePng(0xFF0000FF);
+		const nlohmann::json gltf = MakeGltfJson({ { "byteLength", buffer.size() }, { "uri", "Quad.bin" } }, { { { "uri", "data:image/png;base64," + BasaltTest::Base64(redPng.data(), redPng.size()) } }, { { "uri", "normal.png" } } });
+		project.WriteFile("Assets/Models/Quad.gltf", gltf.dump());
+		project.WriteFile("Assets/Textures/Wall.png", MakePng(0xFFFFFFFF));
+
+		AssetManager::Clear();
+		const Ref<MeshSource> mesh = AssetManager::GetMesh("Assets/Models/Quad.gltf");
+		REQUIRE_MESSAGE(mesh, AssetManager::GetError("Assets/Models/Quad.gltf"));
+		CHECK(mesh->ExternalFiles == std::vector<std::string>{ "Assets/Models/Quad.bin", "Assets/Models/normal.png" });
+		REQUIRE(AssetManager::GetTexture("Assets/Models/Quad.gltf#image/0"));
+		REQUIRE(AssetManager::GetTexture("Assets/Models/normal.png"));
+		REQUIRE(AssetManager::GetTexture("Assets/Textures/Wall.png"));
+		REQUIRE(AssetManager::GetMesh("builtin://Cube"));
+		CHECK_FALSE(AssetManager::GetTexture("Assets/Textures/Missing.png"));
+
+		// A file nothing loaded drops nothing.
+		CHECK(AssetManager::ReloadChanged({ "Assets/Textures/Other.png" }).empty());
+		// A buffer only the model reads: the model goes, with its embedded images.
+		CHECK(AssetManager::ReloadChanged({ "Assets/Models/Quad.bin" }) == std::vector<std::string>{ "Assets/Models/Quad.gltf", "Assets/Models/Quad.gltf#image/0" });
+		CHECK_FALSE(AssetManager::FindLoadedMesh("Assets/Models/Quad.gltf"));
+		const Ref<MeshSource> reloaded = AssetManager::GetMesh("Assets/Models/Quad.gltf");
+		REQUIRE(reloaded);
+		CHECK(reloaded != mesh);
+		// An external image is its own texture and is read by the model.
+		CHECK(AssetManager::ReloadChanged({ "Assets/Models/normal.png" }) == std::vector<std::string>{ "Assets/Models/Quad.gltf", "Assets/Models/normal.png" });
+		// A failed load is dropped too, so the file is tried again; others stay.
+		project.WriteFile("Assets/Textures/Missing.png", MakePng(0xFFFFFFFF));
+		CHECK(AssetManager::ReloadChanged({ "Assets/Textures/Missing.png" }) == std::vector<std::string>{ "Assets/Textures/Missing.png" });
+		CHECK(AssetManager::GetTexture("Assets/Textures/Missing.png"));
+		CHECK(AssetManager::GetLoadedKeys() == std::vector<std::string>{ "Assets/Textures/Missing.png", "Assets/Textures/Wall.png", "builtin://Cube" });
+		AssetManager::Clear();
+	}
+
+	TEST_CASE("TemporaryLoads releases only the assets first loaded during its lifetime")
+	{
+		AssetManager::Clear();
+		const Ref<MeshSource> cube = AssetManager::GetMesh("builtin://Cube");
+		REQUIRE(cube);
+		{
+			AssetManager::TemporaryLoads temporary;
+			CHECK(AssetManager::GetMesh("builtin://Cube") == cube);
+			CHECK(AssetManager::GetMesh("builtin://Sphere"));
+			CHECK_FALSE(AssetManager::GetMesh("builtin://Teapot"));
+			CHECK(AssetManager::GetLoadedKeys().size() == 3);
+		}
+		CHECK(AssetManager::GetLoadedKeys() == std::vector<std::string>{ "builtin://Cube" });
+		CHECK(AssetManager::FindLoadedMesh("builtin://Cube") == cube);
+		AssetManager::Clear();
+	}
+
 	TEST_CASE("Asset failures are reported and cached until reloaded")
 	{
 		BasaltTest::TempProject project("AssetFailures");

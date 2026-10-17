@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include <Basalt/Core/FileSystem.h>
+#include <Basalt/Core/FileWatcher.h>
 #include <Basalt/Core/GamepadCodes.h>
 #include <Basalt/Core/Input.h>
 #include <Basalt/Core/InputActions.h>
@@ -1513,5 +1514,143 @@ TEST_SUITE("Core")
 		logger.join();
 		// The listeners did run while the other thread logged.
 		CHECK(total > 0);
+	}
+}
+
+TEST_SUITE("Core")
+{
+	namespace {
+
+		void WriteFile(const std::filesystem::path& path, const std::string& text)
+		{
+			REQUIRE(FileSystem::WriteTextFile(path, text));
+		}
+
+	}
+
+	TEST_CASE("FileWatcher reports added, modified and removed files under its folder")
+	{
+		BasaltTest::TempDirectory root("FileWatcherRefresh");
+		WriteFile(root.GetPath() / "Assets/Scripts/Player.lua", "return {}");
+		WriteFile(root.GetPath() / "Assets/Textures/Wall.png", "png");
+		WriteFile(root.GetPath() / "Project.bproject", "{}");
+
+		FileWatcher watcher;
+		CHECK(watcher.Refresh().empty());
+		watcher.Watch(root.GetPath());
+		REQUIRE(watcher.IsWatching());
+		// What existed when watching started is the baseline.
+		CHECK(watcher.Refresh().empty());
+
+		WriteFile(root.GetPath() / "Assets/Scripts/Player.lua", "return { Speed = 1 }");
+		WriteFile(root.GetPath() / "Assets/Models/Ship.gltf", "{}");
+		std::filesystem::remove(root.GetPath() / "Assets/Textures/Wall.png");
+		// Outside the watched folder.
+		WriteFile(root.GetPath() / "Project.bproject", "{ }");
+		const std::vector<FileChange> expected = { { "Assets/Models/Ship.gltf", FileChangeType::Added }, { "Assets/Scripts/Player.lua", FileChangeType::Modified }, { "Assets/Textures/Wall.png", FileChangeType::Removed } };
+		CHECK(watcher.Refresh() == expected);
+		CHECK(watcher.Refresh().empty());
+
+		// The same size, only a newer modification time.
+		const std::filesystem::path script = root.GetPath() / "Assets/Scripts/Player.lua";
+		std::filesystem::last_write_time(script, std::filesystem::last_write_time(script) + std::chrono::seconds(5));
+		CHECK(watcher.Refresh() == std::vector<FileChange>{ { "Assets/Scripts/Player.lua", FileChangeType::Modified } });
+
+		// Another root starts afresh.
+		BasaltTest::TempDirectory other("FileWatcherOther");
+		WriteFile(other.GetPath() / "Assets/a.txt", "a");
+		watcher.Watch(other.GetPath());
+		CHECK(watcher.Refresh().empty());
+		watcher.Watch({});
+		CHECK_FALSE(watcher.IsWatching());
+		CHECK(watcher.Refresh().empty());
+		CHECK(std::string(FileChangeTypeName(FileChangeType::Removed)) == "Removed");
+	}
+
+	TEST_CASE("FileWatcher holds back a change until a scan finds the file unchanged")
+	{
+		BasaltTest::TempDirectory root("FileWatcherSettle");
+		FileWatcher watcher;
+		watcher.Watch(root.GetPath());
+		const auto scanWith = [](uintmax_t size, int64_t time) {
+			FileWatcher::Scan scan;
+			scan.Files["Assets/Level.json"] = { size, time };
+			return scan;
+		};
+		// Still being written: nothing yet, then reported once two scans agree.
+		CHECK(watcher.Apply(scanWith(10, 1), watcher.BeginScan(), true).empty());
+		CHECK(watcher.Apply(scanWith(20, 2), watcher.BeginScan(), true).empty());
+		CHECK(watcher.Apply(scanWith(20, 2), watcher.BeginScan(), true) == std::vector<FileChange>{ { "Assets/Level.json", FileChangeType::Added } });
+		CHECK(watcher.Apply(scanWith(20, 2), watcher.BeginScan(), true).empty());
+		CHECK(watcher.Apply(scanWith(30, 3), watcher.BeginScan(), true).empty());
+		CHECK(watcher.Apply(scanWith(30, 3), watcher.BeginScan(), true) == std::vector<FileChange>{ { "Assets/Level.json", FileChangeType::Modified } });
+		// Changed back to what was reported before it settled: nothing to report.
+		CHECK(watcher.Apply(scanWith(31, 4), watcher.BeginScan(), true).empty());
+		CHECK(watcher.Apply(scanWith(30, 3), watcher.BeginScan(), true).empty());
+		CHECK(watcher.Apply(scanWith(30, 3), watcher.BeginScan(), true).empty());
+		// Removal settles too.
+		CHECK(watcher.Apply({}, watcher.BeginScan(), true).empty());
+		CHECK(watcher.Apply({}, watcher.BeginScan(), true) == std::vector<FileChange>{ { "Assets/Level.json", FileChangeType::Removed } });
+
+		// A scan that could not read the folder reports nothing, and a scan older than the last one is ignored.
+		FileWatcher::Scan failed = scanWith(1, 1);
+		failed.Error = "cannot read";
+		CHECK(watcher.Apply(failed, watcher.BeginScan(), false).empty());
+		const uint64_t old = watcher.BeginScan();
+		CHECK(watcher.Apply(scanWith(5, 5), watcher.BeginScan(), false).size() == 1);
+		CHECK(watcher.Apply({}, old, false).empty());
+	}
+
+	TEST_CASE("FileWatcher does not report the host's own writes")
+	{
+		BasaltTest::TempDirectory root("FileWatcherAcknowledge");
+		const std::filesystem::path file = root.GetPath() / "Assets/Scripts/Enemy.lua";
+		WriteFile(file, "return {}");
+		FileWatcher watcher;
+		watcher.Watch(root.GetPath());
+
+		WriteFile(file, "return { Health = 3 }");
+		watcher.Acknowledge("Assets/Scripts/Enemy.lua");
+		WriteFile(root.GetPath() / "Assets/Scripts/New.lua", "return {}");
+		watcher.Acknowledge("Assets/Scripts/./New.lua");
+		CHECK(watcher.Refresh().empty());
+
+		// A scan that began before the write shows the old file; it must not undo the acknowledgement.
+		const uint64_t sequence = watcher.BeginScan();
+		const FileWatcher::Scan before = FileWatcher::ScanDirectory(root.GetPath(), "Assets");
+		WriteFile(file, "return { Health = 30 }");
+		watcher.Acknowledge("Assets/Scripts/Enemy.lua");
+		std::filesystem::remove(root.GetPath() / "Assets/Scripts/New.lua");
+		watcher.Acknowledge("Assets/Scripts/New.lua");
+		// Without settling, so only the sequence check can hold the stale file back.
+		CHECK(watcher.Apply(before, sequence, false).empty());
+		CHECK(watcher.Refresh().empty());
+
+		// Files outside the folder are not recorded (they would be reported as removed).
+		WriteFile(root.GetPath() / "Notes.txt", "x");
+		watcher.Acknowledge("Notes.txt");
+		CHECK(watcher.Refresh().empty());
+	}
+
+	TEST_CASE("FileWatcher polling starts and stops cleanly")
+	{
+		BasaltTest::TempDirectory root("FileWatcherPolling");
+		WriteFile(root.GetPath() / "Assets/a.txt", "a");
+		{
+			FileWatcher watcher;
+			// Asked for before a folder is watched: starts with the folder.
+			watcher.StartPolling(std::chrono::milliseconds(1));
+			CHECK(watcher.IsPolling());
+			watcher.Watch(root.GetPath());
+			CHECK(watcher.IsPolling());
+			// Whatever the worker scanned meanwhile (if anything), nothing changed.
+			CHECK(watcher.Update().empty());
+			watcher.StopPolling();
+			CHECK_FALSE(watcher.IsPolling());
+			CHECK(watcher.Update().empty());
+			watcher.StartPolling(std::chrono::milliseconds(1));
+			// Destroyed while polling: the destructor stops the worker.
+		}
+		CHECK(true);
 	}
 }

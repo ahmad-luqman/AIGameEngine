@@ -4,6 +4,7 @@
 #include "Basalt/Core/Timestep.h"
 #include "Basalt/Core/UUID.h"
 #include "Basalt/Physics/PhysicsWorld.h"
+#include "Basalt/Scripting/ScriptReload.h"
 #include "Basalt/UI/UIWidgetEvent.h"
 
 #include <nlohmann/json.hpp>
@@ -33,6 +34,7 @@ namespace Basalt {
 	//   function Player:OnJointBreak(other) end    -- other is the far body; nil for a joint to the world
 	//   function Player:OnGamepadConnected(index) end  -- also for gamepads connected before the instance started;
 	//                                                  -- likewise OnGamepadDisconnected
+	//   function Player:OnReload() end             -- after a hot reload replaced the class (ReloadScripts)
 	//   return Player
 	//
 	// Each entity gets an instance table (self) whose fields start as the property values, with
@@ -82,6 +84,16 @@ namespace Basalt {
 		bool HasInstance(Entity entity) const;
 		// A field of the entity's script instance (self.<name>) converted to JSON.
 		std::optional<nlohmann::json> GetInstanceField(Entity entity, const std::string& name) const;
+
+		// Hot reload: loads the classes of the changed script files again, in this Lua state (every class when a
+		// changed file is a module loaded through require, which is loaded again too), and moves their instances
+		// onto the new class. Instances keep their fields; Properties they lack get their values (defaults or the
+		// component's overrides); an instance an error disabled runs again; then OnReload is called on each. A class
+		// that does not load keeps its previous version running, and one that failed to load before gets its
+		// instances now. Not undone: module-level locals start afresh, and functions already handed to timers,
+		// coroutines or events (and the timers of a disabled instance, cancelled when it failed) keep the old code.
+		// Project-relative paths ("Assets/Scripts/Player.lua"); files no script uses are ignored.
+		ScriptReloadResult ReloadScripts(const std::vector<std::string>& changedFiles);
 
 		// Runs a chunk of Lua in the scene's script state (editor console / automation). The result of the
 		// last expression (if any) is returned as a string.

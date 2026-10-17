@@ -1,10 +1,15 @@
 #include "Basalt/Automation/AutomationSession.h"
 
 #include "Basalt/Automation/AutomationEvents.h"
+#include "Basalt/Asset/AssetManager.h"
+#include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Input.h"
+#include "Basalt/Core/Log.h"
+#include "Basalt/Project/Project.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
 #include "Basalt/Scene/SceneEventListener.h"
+#include "Basalt/Scripting/ScriptEngine.h"
 
 #include <spdlog/fmt/fmt.h>
 
@@ -190,6 +195,53 @@ namespace Basalt {
 	{
 		if (m_CommandObserver == &observer)
 			m_CommandObserver = nullptr;
+	}
+
+	void AutomationSession::SyncFileWatcher()
+	{
+		const Ref<Project>& project = Project::GetActive();
+		if (project == m_WatchedProject.lock() && (project != nullptr) == m_FileWatcher.IsWatching())
+			return;
+		m_WatchedProject = project;
+		m_FileWatcher.Watch(project ? project->GetDirectory() : std::filesystem::path(), Project::AssetDirectoryName);
+	}
+
+	AssetReloadReport AutomationSession::ReloadAssets(const std::vector<FileChange>& changes)
+	{
+		AssetReloadReport report;
+		report.Changed = changes;
+		if (changes.empty())
+			return report;
+		std::vector<std::string> paths;
+		std::vector<std::string> scripts;
+		for (const FileChange& change : changes)
+		{
+			// AssetManager keys and script paths are normalized project-relative paths.
+			const std::u8string normal = FileSystem::PathFromUtf8(change.Path).lexically_normal().generic_u8string();
+			const std::string path(normal.begin(), normal.end());
+			paths.push_back(path);
+			// A removed script has nothing to load: the running version stays until play stops.
+			if (change.Type != FileChangeType::Removed && FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(path)) == ".lua")
+				scripts.push_back(path);
+		}
+		report.Assets = AssetManager::ReloadChanged(paths);
+		if (!scripts.empty() && IsPlaying() && !IsSimulating())
+		{
+			if (ScriptEngine* engine = m_Scene->GetScriptEngine())
+				report.Scripts = engine->ReloadScripts(scripts);
+		}
+		if (!report.Assets.empty() || !report.Scripts.Reloaded.empty() || !report.Scripts.Failed.empty())
+			BS_CORE_INFO("Hot reload: {} changed file(s); reloaded {} asset(s) and {} script(s) ({} instance(s)){}", changes.size(), report.Assets.size(), report.Scripts.Reloaded.size(), report.Scripts.Instances, report.Scripts.Failed.empty() ? "" : fmt::format("; {} script(s) failed", report.Scripts.Failed.size()));
+		if (OnAssetsReloaded)
+			OnAssetsReloaded(report);
+		return report;
+	}
+
+	AssetReloadReport AutomationSession::OnFileWritten(const std::string& relativePath)
+	{
+		SyncFileWatcher();
+		m_FileWatcher.Acknowledge(relativePath);
+		return ReloadAssets({ { relativePath, FileChangeType::Modified } });
 	}
 
 	bool AutomationSession::StartPlay(std::string& outError, bool simulate)
