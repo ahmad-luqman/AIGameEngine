@@ -1162,6 +1162,7 @@ function Storage.Load() end
 ---@field OnJointBreak? fun(self: BasaltScript, other: Entity?)
 ---@field OnGamepadConnected? fun(self: BasaltScript, index: integer)
 ---@field OnGamepadDisconnected? fun(self: BasaltScript, index: integer)
+---@field OnReload? fun(self: BasaltScript) After a hot reload moved the instance onto the new class
 
 ---Runs fn(...) as a coroutine right away, up to its first wait.
 ---@param fn fun(...: any)

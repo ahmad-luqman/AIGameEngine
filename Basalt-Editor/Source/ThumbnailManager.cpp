@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <unordered_set>
 
 namespace Basalt {
 
@@ -129,6 +130,25 @@ namespace Basalt {
 		return &slot.Data;
 	}
 
+	void ThumbnailManager::OnFilesChanged(const std::vector<std::string>& paths)
+	{
+		const std::unordered_set<std::string> changed(paths.begin(), paths.end());
+		// An embedded image key ("Model.glb#image/0") changes with its model file.
+		const auto uses = [&](const std::string& map) { return !map.empty() && changed.contains(map.substr(0, map.find('#'))); };
+		for (auto& [id, slot] : m_Slots)
+		{
+			if (!slot.IsMaterial)
+			{
+				slot.LastChecked = -1.0;
+				continue;
+			}
+			const MaterialComponent& material = slot.Material;
+			// A cleared key no longer matches the material's, so its next GetMaterial queues it.
+			if (uses(material.AlbedoMap) || uses(material.NormalMap) || uses(material.MetallicRoughnessMap) || uses(material.OcclusionMap) || uses(material.EmissiveMap))
+				slot.Key.clear();
+		}
+	}
+
 	void ThumbnailManager::RequestClear(bool deleteCache)
 	{
 		if (deleteCache || m_ClearRequest == ClearRequest::None)
@@ -218,7 +238,11 @@ namespace Basalt {
 			for (const std::string& dependency : cache->GetDependencies(id))
 				AssetManager::Reload(dependency);
 		}
-		const auto entry = Make(id, slot.Data.Kind, error);
+		std::optional<ThumbnailCache::Entry> entry;
+		{
+			AssetManager::TemporaryLoads previewOnly;
+			entry = Make(id, slot.Data.Kind, error);
+		}
 		if (!entry)
 		{
 			BS_CORE_WARN("Thumbnails: no preview of '{}': {}", id, error);
@@ -315,6 +339,7 @@ namespace Basalt {
 	{
 		if (!EnsureRenderer(outError))
 			return std::nullopt;
+		AssetManager::TemporaryLoads previewOnly;
 		return m_Renderer->RenderMaterial(material, outError);
 	}
 
@@ -366,7 +391,11 @@ namespace Basalt {
 			result.Cached = true;
 			return result;
 		}
-		auto entry = Make(relativePath, kind, outError);
+		std::optional<ThumbnailCache::Entry> entry;
+		{
+			AssetManager::TemporaryLoads previewOnly;
+			entry = Make(relativePath, kind, outError);
+		}
 		if (!entry)
 			return std::nullopt;
 		if (!cache->Store(relativePath, *key, *entry, result.CacheWarning))

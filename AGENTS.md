@@ -47,7 +47,13 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   tab has focus); the
   scene view keeps the editor camera in every mode.
 - **Editor caches.** Content-browser previews are cached in `<project>/Cache/Thumbnails`, outside `Assets/`
-  (never exported; new projects ignore `Cache/` in git).
+  (never exported; new projects ignore `Cache/` in git). Editor preferences (camera speed, theme, recent projects,
+  auto reload) and the window layout are per user (`Automation/EditorPreferences`, `<user data>/BasaltEditor/`).
+- **One file watcher.** `AutomationSession` owns a polling `FileWatcher` (Core) on the active project's `Assets/`;
+  `ReloadAssets` drops what changed files affect from `AssetManager` (models through `MeshSource::ExternalFiles`) and,
+  while the game runs, hot reloads scripts (`ScriptEngine::ReloadScripts`: instances keep their fields, then
+  `OnReload`). The editor polls it on a worker thread; agents call `asset.refresh`; files the session writes itself
+  (`OnFileWritten`) are acknowledged and never reported.
 - **Input: host reads vs game reads.** `Input` holds every event (editor shortcuts and camera read it); the game
   (Lua's `Input`, input actions) reads `GameInput`, which sees only what the host routes to it: `Input::SetGameFocus`
   (keyboard, gamepads) and `SetGamePointer` (mouse), the same flags as `GameUI`'s navigation and pointer (the editor

@@ -1,5 +1,6 @@
 #include "Panels/InspectorPanel.h"
 
+#include "EditorColors.h"
 #include "Panels/JsonWidgets.h"
 
 #include "Basalt/Automation/EditorCommandSchemas.h"
@@ -41,7 +42,7 @@ namespace Basalt {
 		}
 		if (!it->second.Error.empty())
 		{
-			ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", it->second.Error.c_str());
+			ImGui::TextColored(EditorColors::Error(), "%s", it->second.Error.c_str());
 			return nullptr;
 		}
 		return &it->second.Properties;
@@ -93,7 +94,7 @@ namespace Basalt {
 			const bool overridden = overrides.contains(it.key());
 			nlohmann::json value = overridden ? overrides[it.key()] : it.value();
 			if (overridden)
-				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.85f, 1.0f, 1.0f));
+				ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::Highlight());
 			const JsonFieldResult result = DrawJsonField(it.key(), value);
 			if (overridden)
 				ImGui::PopStyleColor();
@@ -317,10 +318,10 @@ namespace Basalt {
 					}
 					const JsonFieldResult result = DrawJsonField(field, data[field], enumOptions);
 					if (unknownLayer)
-						ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Unknown layer (plays as Default)");
+						ImGui::TextColored(EditorColors::Warning(), "Unknown layer (plays as Default)");
 					if (ignored)
 					{
-						ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.7f, 0.2f, 1.0f));
+						ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::Warning());
 						ImGui::TextWrapped("%s is ignored by this joint", field.c_str());
 						ImGui::PopStyleColor();
 					}
@@ -332,38 +333,38 @@ namespace Basalt {
 				if ((info.Name == "UIImage" || info.Name == "UIText" || isWidget) && !entity.HasComponent<UIRectComponent>())
 					ImGui::TextDisabled("No UIRect: fills the parent's UI rect (or the screen).");
 				if (isWidget && UILayout::CountWidgetComponents(entity) > 1)
-					ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "Several widget components: the entity acts as its %s only.", UIWidgetComponentName(*UILayout::GetWidgetKind(entity)));
+					ImGui::TextColored(EditorColors::Warning(), "Several widget components: the entity acts as its %s only.", UIWidgetComponentName(*UILayout::GetWidgetKind(entity)));
 				if (info.Name == "UIImage")
 				{
 					const std::string& texture = entity.GetComponent<UIImageComponent>().Texture;
 					if (const std::string error = AssetManager::GetError(texture); !error.empty())
-						ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Image not loaded (%s); drawing the Color instead.", error.c_str());
+						ImGui::TextColored(EditorColors::Warning(), "Image not loaded (%s); drawing the Color instead.", error.c_str());
 				}
 				if (info.Name == "UIText")
 				{
 					const std::string& font = entity.GetComponent<UITextComponent>().Font;
 					if (const std::string error = UIFonts::GetError(font); !error.empty())
-						ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Font not loaded (%s); using the built-in font.", error.c_str());
+						ImGui::TextColored(EditorColors::Warning(), "Font not loaded (%s); using the built-in font.", error.c_str());
 					else if (const std::string warning = UIFonts::GetWarning(font); !warning.empty())
-						ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Font: %s.", warning.c_str());
+						ImGui::TextColored(EditorColors::Warning(), "Font: %s.", warning.c_str());
 				}
 				if (info.Name == "CharacterController")
 				{
 					// Physics shapes the character from these and skips it without one.
 					if (!entity.HasComponent<BoxColliderComponent>() && !entity.HasComponent<SphereColliderComponent>() && !entity.HasComponent<CapsuleColliderComponent>() &&
 						!entity.HasComponent<MeshColliderComponent>())
-						ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Add a collider (a CapsuleCollider fits most characters).");
+						ImGui::TextColored(EditorColors::Warning(), "Add a collider (a CapsuleCollider fits most characters).");
 					if (entity.HasComponent<RigidBodyComponent>())
-						ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "The RigidBody is ignored while the character controller is present.");
+						ImGui::TextColored(EditorColors::Warning(), "The RigidBody is ignored while the character controller is present.");
 				}
 				if (info.Name == "Joint")
 				{
 					// The joint moves BodyEntity's body, or this entity's when BodyEntity is Self.
 					const Entity body = joint.BodyEntity != 0 ? scene->GetEntityByUUID(joint.BodyEntity) : entity;
 					if (!body)
-						ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "BodyEntity is missing; the joint is not built.");
+						ImGui::TextColored(EditorColors::Warning(), "BodyEntity is missing; the joint is not built.");
 					else if (!HasPhysicsBody(body))
-						ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), joint.BodyEntity != 0 ? "BodyEntity needs a RigidBody and a collider for the joint to work." : "This entity needs a RigidBody and a collider for the joint to work.");
+						ImGui::TextColored(EditorColors::Warning(), joint.BodyEntity != 0 ? "BodyEntity needs a RigidBody and a collider for the joint to work." : "This entity needs a RigidBody and a collider for the joint to work.");
 					else
 					{
 						// Physics builds the joint frame from the body's transform and skips one it cannot decompose.
@@ -371,7 +372,7 @@ namespace Basalt {
 						glm::quat rotation;
 						glm::vec3 scale;
 						if (!Math::DecomposeTransform(scene->GetWorldTransform(body), translation, rotation, scale))
-							ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "The body's transform is degenerate (e.g. a zero scale); the joint is not built.");
+							ImGui::TextColored(EditorColors::Warning(), "The body's transform is degenerate (e.g. a zero scale); the joint is not built.");
 					}
 				}
 			}

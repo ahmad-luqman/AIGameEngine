@@ -1,16 +1,24 @@
 #include "EditorCamera.h"
 
+#include "Basalt/Automation/EditorPreferences.h"
 #include "Basalt/Core/Input.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <cmath>
 
 namespace Basalt {
 
 	EditorCamera::EditorCamera()
 	{
 		LookAt({ 6.0f, 5.0f, 10.0f }, { 0.0f, 0.5f, 0.0f });
+	}
+
+	void EditorCamera::SetSpeedMultiplier(float multiplier)
+	{
+		if (std::isfinite(multiplier))
+			m_SpeedMultiplier = std::clamp(multiplier, EditorPreferences::MinCameraSpeed, EditorPreferences::MaxCameraSpeed);
 	}
 
 	void EditorCamera::SetViewportSize(uint32_t width, uint32_t height)
@@ -111,7 +119,7 @@ namespace Basalt {
 				move += glm::vec3(0.0f, 1.0f, 0.0f);
 			if (Input::IsKeyDown(KeyCode::Q))
 				move -= glm::vec3(0.0f, 1.0f, 0.0f);
-			const float speed = (Input::IsKeyDown(KeyCode::LeftShift) ? 20.0f : 5.0f) * std::max(1.0f, m_Distance * 0.2f);
+			const float speed = (Input::IsKeyDown(KeyCode::LeftShift) ? 20.0f : 5.0f) * std::max(1.0f, m_Distance * 0.2f) * m_SpeedMultiplier;
 			const glm::vec3 newPosition = position + move * speed * ts.GetSeconds();
 			m_FocalPoint = newPosition + GetForward() * m_Distance;
 		}
@@ -129,7 +137,12 @@ namespace Basalt {
 		}
 
 		const float scroll = Input::GetMouseScroll().y;
-		if (hovered && scroll != 0.0f)
+		if (right && scroll != 0.0f)
+		{
+			// While flying the wheel sets the speed (each notch about 20%), as in other editors; it does not dolly.
+			SetSpeedMultiplier(m_SpeedMultiplier * std::pow(1.2f, scroll));
+		}
+		else if (hovered && scroll != 0.0f)
 		{
 			const float zoom = std::max(m_Distance * 0.15f, 0.05f) * scroll;
 			m_Distance -= zoom;

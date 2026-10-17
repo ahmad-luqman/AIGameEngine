@@ -107,9 +107,9 @@ namespace Basalt {
 		ImGui::TextDisabled("Saved to %s as you edit (not undoable).", Project::FileName);
 		const bool playing = m_Context.Session.IsPlaying();
 		if (playing)
-			ImGui::TextColored(EditorColors::Warning, "Stop playing to edit: a session keeps the settings it started with.");
+			ImGui::TextColored(EditorColors::Warning(), "Stop playing to edit: a session keeps the settings it started with.");
 		for (const std::string& warning : m_Warnings)
-			ImGui::TextColored(EditorColors::Warning, "%s", warning.c_str());
+			ImGui::TextColored(EditorColors::Warning(), "%s", warning.c_str());
 		// A copy: Set saves through project.set, which replaces the config being drawn.
 		const ProjectConfig config = project->GetConfig();
 		ImGui::BeginDisabled(playing);
@@ -568,14 +568,14 @@ namespace Basalt {
 			return;
 		const nlohmann::json& report = *m_Validation;
 		if (report["valid"].get<bool>() && report["warnings"].get<size_t>() == 0)
-			ImGui::TextColored(EditorColors::Success, "No problems found.");
+			ImGui::TextColored(EditorColors::Success(), "No problems found.");
 		else
 			ImGui::Text("%zu error(s), %zu warning(s)", report["errors"].get<size_t>(), report["warnings"].get<size_t>());
 		for (const auto& issue : report["issues"])
 		{
 			const bool isError = issue["severity"] == "error";
 			ImGui::PushTextWrapPos(0.0f);
-			ImGui::TextColored(isError ? EditorColors::Error : EditorColors::Warning, "%s: %s", issue["file"].get<std::string>().c_str(), issue["message"].get<std::string>().c_str());
+			ImGui::TextColored(isError ? EditorColors::Error() : EditorColors::Warning(), "%s: %s", issue["file"].get<std::string>().c_str(), issue["message"].get<std::string>().c_str());
 			ImGui::PopTextWrapPos();
 		}
 		if (report["omitted"].get<size_t>() > 0)

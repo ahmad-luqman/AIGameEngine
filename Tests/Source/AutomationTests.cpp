@@ -4,10 +4,12 @@
 #include <Basalt/Automation/CommandRegistry.h>
 #include <Basalt/Automation/McpServer.h>
 #include <Basalt/Automation/AutomationConnection.h>
+#include <Basalt/Automation/EditorPreferences.h>
 #include <Basalt/Core/JsonUtils.h>
 #include <Basalt/Core/FileSystem.h>
 #include <Basalt/Core/Input.h>
 #include <Basalt/Core/Log.h>
+#include <Basalt/Core/Platform.h>
 #include <Basalt/Project/Project.h>
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
@@ -15,6 +17,10 @@
 
 #include "AutomationTestUtils.h"
 #include "TestUtils.h"
+
+#include <spdlog/fmt/fmt.h>
+
+#include <limits>
 
 using namespace Basalt;
 using json = nlohmann::json;
@@ -1282,4 +1288,170 @@ TEST_CASE("Log cursors and error filters retain their schema-to-handler contract
 	REQUIRE(result["messages"].size() == 1);
 	CHECK(result["messages"][0]["text"] == "Schema log error");
 	CHECK(result["next"] > cursor);
+}
+
+TEST_SUITE("Automation")
+{
+	TEST_CASE("asset.refresh and asset.write hot reload scripts while the game runs")
+	{
+		BasaltTest::TempProject temp("AutomationHotReload");
+		CommandRegistry registry;
+		AutomationSession session;
+		CHECK(Run(registry, session, "asset.refresh")["changed"].empty());
+		const std::string script = "Assets/Scripts/Mover.lua";
+		const auto mover = [](int scale, const char* extra = "") {
+			return fmt::format(R"(
+				local Mover = {{}}
+				function Mover:OnCreate() self.Steps = 0 end
+				function Mover:OnUpdate(dt) self.Steps = self.Steps + 1; self.Entity.Translation = Vec3(self.Steps * {}, 0, 0) end
+				{}
+				return Mover
+			)",
+							   scale, extra);
+		};
+		const auto x = [&]() { return Run(registry, session, "entity.transform", { { "entity", "Mover" } })["local"]["Translation"][0].get<double>(); };
+		Run(registry, session, "asset.write", { { "path", script }, { "content", mover(1) } });
+		Run(registry, session, "entity.create", { { "name", "Mover" }, { "components", { { "Script", { { "Script", script } } } } } });
+		Run(registry, session, "play.start");
+		Run(registry, session, "play.step", { { "frames", 2 } });
+		CHECK(x() == 2.0);
+
+		// An edit made outside the session (an agent's own file tools, a text editor).
+		temp.WriteFile(script, mover(10, "function Mover:OnReload() self.Reloaded = true end"));
+		json refresh = Run(registry, session, "asset.refresh");
+		CHECK(refresh["changed"] == json::array({ { { "path", script }, { "type", "Modified" } } }));
+		CHECK(refresh["scripts"]["reloaded"] == json::array({ script }));
+		CHECK(refresh["scripts"]["instances"] == 1);
+		CHECK(refresh["scripts"]["failed"].empty());
+		CHECK(Run(registry, session, "lua.exec", { { "code", "Scene.FindEntityByName('Mover'):GetScript().Reloaded" } })["result"] == "true");
+		Run(registry, session, "play.step");
+		// The instance kept its count.
+		CHECK(x() == 30.0);
+		CHECK(Run(registry, session, "asset.refresh")["changed"].empty());
+
+		// asset.write reloads at once, and its own write is not reported later.
+		const json written = Run(registry, session, "asset.write", { { "path", script }, { "content", mover(100) } });
+		CHECK(written["scripts"]["reloaded"] == json::array({ script }));
+		Run(registry, session, "play.step");
+		CHECK(x() == 400.0);
+		CHECK(Run(registry, session, "asset.refresh")["changed"].empty());
+
+		// A script that does not load: the running version stays.
+		const json broken = Run(registry, session, "asset.write", { { "path", script }, { "content", "local = = 1" } });
+		REQUIRE(broken["scripts"]["failed"].size() == 1);
+		CHECK(broken["scripts"]["failed"][0]["path"] == script);
+		// The next step reports the failed reload with the frame's script errors.
+		const json step = Run(registry, session, "play.step");
+		REQUIRE(step["scriptErrors"].size() == 1);
+		CHECK(step["scriptErrors"][0].get<std::string>().find("previous version keeps running") != std::string::npos);
+		CHECK(x() == 500.0);
+		// 'paths' reloads a file whether or not it changed.
+		temp.WriteFile(script, mover(1000));
+		const json forced = Run(registry, session, "asset.refresh", { { "paths", json::array({ script }) } });
+		CHECK(forced["changed"] == json::array({ { { "path", script }, { "type", "Modified" } } }));
+		CHECK(forced["scripts"]["reloaded"] == json::array({ script }));
+		CHECK(Run(registry, session, "asset.refresh")["changed"].empty());
+		Run(registry, session, "play.step");
+		CHECK(x() == 6000.0);
+		Run(registry, session, "play.stop");
+
+		// Outside Play scripts are only reported; files the session writes are never reported.
+		temp.WriteFile(script, mover(2));
+		refresh = Run(registry, session, "asset.refresh");
+		CHECK(refresh["changed"].size() == 1);
+		CHECK(refresh["scripts"]["reloaded"].empty());
+		Run(registry, session, "scene.save", { { "path", "Assets/Scenes/Hot.bscene" } });
+		Run(registry, session, "prefab.create", { { "entity", "Mover" }, { "path", "Assets/Prefabs/Mover.bprefab" } });
+		CHECK(Run(registry, session, "asset.refresh")["changed"].empty());
+		std::filesystem::remove(temp.GetDirectory() / "Assets/Prefabs/Mover.bprefab");
+		CHECK(Run(registry, session, "asset.refresh")["changed"] == json::array({ { { "path", "Assets/Prefabs/Mover.bprefab" }, { "type", "Removed" } } }));
+
+		CHECK(RunError(registry, session, "asset.refresh", { { "paths", "Assets/Scripts/Mover.lua" } }).find("array") != std::string::npos);
+		CHECK(RunError(registry, session, "asset.refresh", { { "paths", json::array({ "../x.lua" }) } }).find("..") != std::string::npos);
+	}
+
+	TEST_CASE("asset.refresh needs a project and follows the active one")
+	{
+		CommandRegistry registry;
+		AutomationSession session;
+		{
+			BasaltTest::TempProject first("AutomationRefreshFirst");
+			Run(registry, session, "project.open", { { "path", first.GetDirectory().string() } });
+			first.WriteFile("Assets/a.txt", "a");
+			CHECK(Run(registry, session, "asset.refresh")["changed"].size() == 1);
+		}
+		CHECK(RunError(registry, session, "asset.refresh").find("no project is open") != std::string::npos);
+		BasaltTest::TempProject second("AutomationRefreshSecond");
+		second.WriteFile("Assets/b.txt", "b");
+		Run(registry, session, "project.open", { { "path", second.GetDirectory().string() } });
+		// What the newly opened project held is the baseline.
+		CHECK(Run(registry, session, "asset.refresh")["changed"].empty());
+	}
+
+	TEST_CASE("EditorPreferences keep valid values and round-trip through their file")
+	{
+		EditorPreferences preferences;
+		CHECK(preferences.GetCameraSpeed() == 1.0f);
+		CHECK(preferences.GetTheme() == EditorTheme::Dark);
+		CHECK(preferences.GetAutoReload());
+		CHECK(preferences.GetRecentProjects().empty());
+		preferences.SetCameraSpeed(100.0f);
+		CHECK(preferences.GetCameraSpeed() == EditorPreferences::MaxCameraSpeed);
+		preferences.SetCameraSpeed(std::numeric_limits<float>::quiet_NaN());
+		CHECK(preferences.GetCameraSpeed() == EditorPreferences::MaxCameraSpeed);
+		preferences.SetCameraSpeed(0.0f);
+		CHECK(preferences.GetCameraSpeed() == EditorPreferences::MinCameraSpeed);
+
+		BasaltTest::TempDirectory directory("EditorPreferences");
+		const std::filesystem::path root = directory.GetPath();
+		for (int i = 0; i < 12; i++)
+			preferences.AddRecentProject(root / ("Project" + std::to_string(i)));
+		REQUIRE(preferences.GetRecentProjects().size() == EditorPreferences::MaxRecentProjects);
+		CHECK(std::filesystem::path(preferences.GetRecentProjects()[0]) == root / "Project11");
+		// The same directory spelled differently moves to the front instead of adding an entry.
+		preferences.AddRecentProject(root / "Project5" / "");
+		preferences.AddRecentProject(root / "x" / ".." / "Project5");
+		CHECK(preferences.GetRecentProjects().size() == EditorPreferences::MaxRecentProjects);
+		CHECK(std::filesystem::path(preferences.GetRecentProjects()[0]) == root / "Project5");
+		CHECK(std::filesystem::path(preferences.GetRecentProjects()[1]) == root / "Project11");
+
+		std::string error;
+		CHECK(preferences.Apply({ { "theme", "Light" }, { "cameraSpeed", 2.5 }, { "autoReload", false } }, error));
+		CHECK(preferences.GetTheme() == EditorTheme::Light);
+		CHECK(preferences.GetCameraSpeed() == 2.5f);
+		CHECK_FALSE(preferences.GetAutoReload());
+		// Nothing applies when one key is invalid.
+		for (const json& patch : { json{ { "theme", "Neon" }, { "cameraSpeed", 3 } }, json{ { "cameraSpeed", 50 } }, json{ { "colour", "red" } }, json{ { "recentProjects", json::array({ 5 }) } }, json(5) })
+		{
+			CAPTURE(patch.dump());
+			const EditorPreferences before = preferences;
+			CHECK_FALSE(preferences.Apply(patch, error));
+			CHECK_FALSE(error.empty());
+			CHECK(preferences == before);
+		}
+		CHECK(preferences.Apply({ { "recentProjects", json::array({ (root / "B").string(), (root / "A").string(), (root / "B").string() }) } }, error));
+		REQUIRE(preferences.GetRecentProjects().size() == 2);
+		CHECK(std::filesystem::path(preferences.GetRecentProjects()[0]) == root / "B");
+
+		const std::filesystem::path file = root / "Editor" / EditorPreferences::FileName;
+		CHECK(EditorPreferences::Load(file, error) == EditorPreferences());
+		CHECK(error.empty());
+		REQUIRE(preferences.Save(file, error));
+		CHECK(EditorPreferences::Load(file, error) == preferences);
+		CHECK(error.empty());
+		for (const char* text : { "{ not json", R"({"theme":"Neon"})", R"({"cameraSpeed":1,"extra":true})", "[1,2]" })
+		{
+			CAPTURE(text);
+			REQUIRE(FileSystem::WriteTextFile(file, text));
+			CHECK(EditorPreferences::Load(file, error) == EditorPreferences());
+			CHECK(error.find(EditorPreferences::FileName) != std::string::npos);
+		}
+
+		BasaltTest::ScopedEnvVar userData(Platform::UserDataDirectoryVariable, (root / "UserData").string());
+		const auto preferencesDirectory = EditorPreferences::GetDirectory(error);
+		REQUIRE(preferencesDirectory);
+		CHECK(*preferencesDirectory == root / "UserData" / "BasaltEditor");
+		CHECK(EditorPreferences::ThemeFromName("Light") == EditorTheme::Light);
+		CHECK_FALSE(EditorPreferences::ThemeFromName("light"));
+	}
 }

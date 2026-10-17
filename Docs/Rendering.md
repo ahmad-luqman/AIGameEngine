@@ -289,7 +289,10 @@ GPU copies of the assets it draws.
   glTF's external buffers and images, a prefab's models (and theirs). Only then are the model and those files
   read into `AssetManager` again (which also updates the open scene), as with `editor.thumbnail` `refresh`; a
   preview the cache still matches reuses what `AssetManager` holds. A file that disappears and comes back is
-  previewed again. Only rows on screen ask for previews, and at most 512 textures are kept. Material spheres
+  previewed again. Shown previews check their files every 2 seconds, and at once when the editor's file watcher
+  reports a change; a material sphere is made again when a texture it uses changes. Models and textures a preview
+  loads only for itself are released from `AssetManager` afterwards (what the open scene uses stays). Only rows on
+  screen ask for previews, and at most 512 textures are kept. Material spheres
   update once a material stops changing for a frame. Clear Thumbnail Cache forgets every preview and deletes the
   cached files but does not reload models already in `AssetManager`.
 

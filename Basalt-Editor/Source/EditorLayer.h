@@ -11,6 +11,7 @@
 #include "Panels/SceneHierarchyPanel.h"
 
 #include "Basalt/Automation/AutomationServer.h"
+#include "Basalt/Automation/EditorPreferences.h"
 #include "Basalt/Automation/GameView.h"
 #include "Basalt/Automation/ViewportSettings.h"
 #include "Basalt/Automation/AutomationSession.h"
@@ -25,6 +26,8 @@
 #include <glm/glm.hpp>
 #include <nvrhi/nvrhi.h>
 
+#include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -59,6 +62,16 @@ namespace Basalt {
 		std::optional<bool> m_PrePlayVSync;
 		void RegisterEditorCommands();
 		void OnSceneChanged();
+
+		// Reads the user's preferences and points ImGui's layout file next to them (first run: a copy of ./imgui.ini).
+		void LoadPreferences();
+		// Gives the camera, theme and file watching their preferred values.
+		void ApplyPreferences();
+		// Writes the preferences when they changed: at once with `now`, otherwise at most once a second.
+		void SavePreferences(bool now);
+		// Polls the file watcher (while AutoReload is on) and applies what changed; records the active project as recent.
+		void UpdateFileWatching();
+		void DrawRecentProjects(bool prompt);
 
 		void BuildDefaultLayout(unsigned int dockspaceId);
 		void DrawMenuBar();
@@ -234,6 +247,14 @@ namespace Basalt {
 		bool m_ExportSmokeTest = true;
 		int m_ExportSmokeFrames = 120;
 		std::string m_WindowTitle;
+
+		EditorPreferences m_Preferences;
+		// Empty when the user data directory is unavailable: preferences then last for this session only.
+		std::filesystem::path m_PreferencesFile;
+		bool m_PreferencesDirty = false;
+		double m_PreferencesChangedTime = 0.0;
+		// The project last added to the recent list.
+		std::weak_ptr<Project> m_RecentProject;
 	};
 
 }

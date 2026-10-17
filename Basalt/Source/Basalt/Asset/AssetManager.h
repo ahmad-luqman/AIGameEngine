@@ -29,7 +29,28 @@ namespace Basalt {
 
 		// Drops a cached asset so the next Get reloads it from disk.
 		static void Reload(const std::string& key);
+		// Drops what a change to these project-relative files affects: the files' own cache entries (with a model's
+		// embedded images) and models that read one of them (external buffers and images). Failed loads count, so a
+		// fixed file is tried again. Returns the keys dropped, sorted; files that were never requested drop nothing.
+		static std::vector<std::string> ReloadChanged(const std::vector<std::string>& paths);
 		static void Clear();
+		// Keys of every cache entry, failed loads included, sorted.
+		static std::vector<std::string> GetLoadedKeys();
+
+		// Drops, when it ends, every cache entry first made during its lifetime: an editor preview loads a model to
+		// render it once, and must not keep it (or its textures) in memory. Entries that existed before it began stay,
+		// so what the open scene uses is never unloaded.
+		class TemporaryLoads
+		{
+		public:
+			TemporaryLoads();
+			~TemporaryLoads();
+			TemporaryLoads(const TemporaryLoads&) = delete;
+			TemporaryLoads& operator=(const TemporaryLoads&) = delete;
+
+		private:
+			std::vector<std::string> m_Before;
+		};
 
 		// Imports a static entity hierarchy or a single Animator root for a skinned/animated model.
 		static Entity ImportModel(Scene& scene, const std::string& key, Entity parent, std::string& outError);

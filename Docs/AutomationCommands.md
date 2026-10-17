@@ -273,9 +273,40 @@ Reads a text asset.
 
 </details>
 
+### `asset.refresh`
+
+Reloads the asset files changed on disk since the last refresh (or since the project was opened): models and textures load again on their next use, and while the game runs changed scripts are hot reloaded (instances keep their fields; OnReload is called). With 'paths', reloads those files instead, changed or not. Files the session wrote itself (asset.write, scene.save, ...) are not reported again.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `paths` | array of project-relative paths, optional |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "paths": {
+      "description": "array of project-relative paths, optional",
+      "items": {
+        "description": "string",
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+</details>
+
 ### `asset.write`
 
-Writes a text asset (script, prefab, scene...) to a project-relative path.
+Writes a text asset (script, prefab, scene...) to a project-relative path and reloads it: a script written while the game runs is hot reloaded (see 'scripts').
 
 | Parameter | Type / description |
 |-----------|--------------------|

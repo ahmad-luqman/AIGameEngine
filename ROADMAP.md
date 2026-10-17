@@ -126,13 +126,6 @@ order of impact.
   every few frames for the pose and future trajectory that best match the desired movement) once the state
   machine and root motion exist; procedural leg stepping for multi-legged creatures built on IK.
 
-### Scripting
-
-- **Script hot reload — M.** Watch `.lua` files during play; on change, reload the class table and rebind
-  existing instances (keeping their fields), then call an optional `OnReload`. Also refresh the
-  inspector's cached script properties when the file is saved (today they stay cached until restart).
-  Saves a lot of iteration time, including for AI agents.
-
 ### Audio
 
 - **Effect follow-ups — S.** Effects on one-shots (`Audio.PlayOneShot` options for `LowPass`/`ReverbSend`), reverb
@@ -159,8 +152,6 @@ with a smoke test have shipped. Follow-ups:
 
 - **Material assets — L.** A `.bmaterial` file type that MaterialComponent can reference, with
   content-browser thumbnails (previews cover MaterialComponent and glTF materials today).
-- **Preview invalidation — S.** Refresh model and material previews when a texture they use changes, and
-  release preview-only models from `AssetManager`.
 
 ### Editor workflow
 
@@ -168,7 +159,6 @@ with a smoke test have shipped. Follow-ups:
   text-box fallback for headless and Linux systems without a portal.
 - **Prefab editing and overrides — L.** Open a prefab in an isolated scene, save, and propagate changes
   to instances while keeping per-instance overrides (track overridden fields in `PrefabComponent`).
-- **Editor preferences — S.** Persist camera speed, layout, recent projects and theme per user.
 - **Play-mode stats overlay — S.** Frame time, draw calls, triangle count, physics bodies and Lua
   memory.
 
@@ -184,8 +174,6 @@ with a smoke test have shipped. Follow-ups:
   use and load time roughly 4x. Use `basisu` or `bc7enc` at import time, and cache the results.
 - **Mesh optimization — S.** Run meshoptimizer (vertex cache, overdraw, vertex fetch) at import time and
   generate LODs with its simplifier.
-- **File watching — S.** Detect changed assets on disk and call `AssetManager::Reload` automatically in
-  the editor.
 
 ---
 

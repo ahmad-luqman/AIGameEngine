@@ -316,6 +316,14 @@ namespace Basalt {
 			return path;
 		}
 
+		json ScriptReloadJson(const ScriptReloadResult& result)
+		{
+			json failed = json::array();
+			for (const auto& [path, error] : result.Failed)
+				failed.push_back({ { "path", path }, { "error", error } });
+			return { { "reloaded", result.Reloaded }, { "failed", failed }, { "instances", result.Instances } };
+		}
+
 		void Add(CommandRegistry& registry, std::string name, std::string description, json inputSchema, std::function<json(AutomationSession&, const json&)> handler, CommandPolicy policy = CommandPolicy::Normal)
 		{
 			registry.Register({ std::move(name), std::move(description), std::move(inputSchema), std::move(handler), policy });
@@ -546,6 +554,7 @@ namespace Basalt {
 				if (!project)
 					throw CommandError(error);
 				Project::SetActive(project);
+				session.SyncFileWatcher();
 				AssetManager::Clear();
 				PhysicsWorld::ClearMeshShapeCache();
 				session.SetEditScene(CreateRef<Scene>("Untitled"), "");
@@ -557,6 +566,7 @@ namespace Basalt {
 				if (!project)
 					throw CommandError(error);
 				Project::SetActive(project);
+				session.SyncFileWatcher();
 				AssetManager::Clear();
 				PhysicsWorld::ClearMeshShapeCache();
 				const std::string startScene = project->GetConfig().StartScene;
@@ -789,6 +799,7 @@ namespace Basalt {
 				std::string error;
 				if (!SceneSerializer::SaveScene(*session.GetEditScene(), Project::ResolvePath(path), error))
 					throw CommandError(error);
+				session.OnFileWritten(path);
 				session.SetScenePath(path);
 				session.ClearDirty();
 				return json{ { "path", path } }; }, CommandPolicy::EditBoundary);
@@ -1096,7 +1107,7 @@ namespace Basalt {
 				return json{ { "assets", AssetManager::ListAssets(extensions) } };
 			});
 
-			Add(registry, "asset.write", "Writes a text asset (script, prefab, scene...) to a project-relative path.", Schema::Object({ { "path", Schema::String("string", true) }, { "content", Schema::String("string") } }, { "path", "content" }), [](AutomationSession&, const json& params) {
+			Add(registry, "asset.write", "Writes a text asset (script, prefab, scene...) to a project-relative path and reloads it: a script written while the game runs is hot reloaded (see 'scripts').", Schema::Object({ { "path", Schema::String("string", true) }, { "content", Schema::String("string") } }, { "path", "content" }), [](AutomationSession& session, const json& params) {
 				RequireProject();
 				const std::string path = ProjectRelative(RequireString(params, "path"));
 				const json& content = Require(params, "content");
@@ -1104,8 +1115,36 @@ namespace Basalt {
 					throw CommandError("'content' must be a string");
 				if (!FileSystem::WriteTextFile(Project::ResolvePath(path), content.get<std::string>()))
 					throw CommandError("cannot write '" + path + "'");
-				AssetManager::Reload(path);
-				return json{ { "path", path }, { "bytes", content.get<std::string>().size() } };
+				const AssetReloadReport report = session.OnFileWritten(path);
+				return json{ { "path", path }, { "bytes", content.get<std::string>().size() }, { "scripts", ScriptReloadJson(report.Scripts) } };
+			});
+
+			Add(registry, "asset.refresh", "Reloads the asset files changed on disk since the last refresh (or since the project was opened): models and textures load again on their next use, and while the game runs changed scripts are hot reloaded (instances keep their fields; OnReload is called). With 'paths', reloads those files instead, changed or not. Files the session wrote itself (asset.write, scene.save, ...) are not reported again.", Schema::Object({ { "paths", json{ { "type", "array" }, { "description", "array of project-relative paths, optional" }, { "items", Schema::String("string", true) } } } }), [](AutomationSession& session, const json& params) {
+				RequireProject();
+				session.SyncFileWatcher();
+				std::vector<FileChange> changes;
+				if (const auto it = params.find("paths"); it != params.end())
+				{
+					if (!it->is_array())
+						throw CommandError("'paths' must be an array of strings");
+					for (const json& entry : *it)
+					{
+						if (!entry.is_string())
+							throw CommandError("'paths' must be an array of strings");
+						const std::string path = ProjectRelative(entry.get<std::string>());
+						session.GetFileWatcher().Acknowledge(path);
+						changes.push_back({ path, FileSystem::Exists(Project::ResolvePath(path)) ? FileChangeType::Modified : FileChangeType::Removed });
+					}
+				}
+				else
+				{
+					changes = session.GetFileWatcher().Refresh();
+				}
+				const AssetReloadReport report = session.ReloadAssets(changes);
+				json changed = json::array();
+				for (const FileChange& change : report.Changed)
+					changed.push_back({ { "path", change.Path }, { "type", FileChangeTypeName(change.Type) } });
+				return json{ { "changed", changed }, { "reloaded", report.Assets }, { "scripts", ScriptReloadJson(report.Scripts) } };
 			});
 
 			Add(registry, "asset.read", "Reads a text asset.", Schema::Object({ { "path", Schema::String("string", true) } }, { "path" }), [](AutomationSession&, const json& params) {
@@ -1133,6 +1172,7 @@ namespace Basalt {
 				std::string error;
 				if (!SceneSerializer::SavePrefab(entity, Project::ResolvePath(path), error))
 					throw CommandError(error);
+				session.OnFileWritten(path);
 				return json{ { "path", path } };
 			});
 
@@ -1331,6 +1371,7 @@ namespace Basalt {
 					replay["StateHash"] = SceneSerializer::ComputeStateHash(*playing);
 				if (!FileSystem::WriteTextFile(Project::ResolvePath(path), replay.dump(1, '\t')))
 					throw CommandError("cannot write '" + path + "'");
+				session.OnFileWritten(path);
 				return json{ { "path", path }, { "events", events.size() }, { "frames", frames } };
 			});
 

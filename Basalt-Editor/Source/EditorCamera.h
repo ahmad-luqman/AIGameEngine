@@ -9,7 +9,7 @@
 namespace Basalt {
 
 	// Orbit/fly camera for the editor viewport.
-	//   Right mouse drag: look around; with WASD/QE: fly (Shift = fast)
+	//   Right mouse drag: look around; with WASD/QE: fly (Shift = fast), mouse wheel: fly speed
 	//   Alt + left drag: orbit around the focal point
 	//   Middle drag: pan; mouse wheel: dolly towards the focal point
 	class EditorCamera
@@ -25,6 +25,10 @@ namespace Basalt {
 		void LookAt(const glm::vec3& position, const glm::vec3& target);
 		// Frames a sphere around center.
 		void Focus(const glm::vec3& center, float radius);
+
+		// Multiplies the fly speed (EditorPreferences' range); the mouse wheel changes it while flying.
+		float GetSpeedMultiplier() const { return m_SpeedMultiplier; }
+		void SetSpeedMultiplier(float multiplier);
 
 		RenderCamera GetRenderCamera() const;
 		glm::mat4 GetView() const;
@@ -46,6 +50,7 @@ namespace Basalt {
 		float m_Near = 0.05f;
 		float m_Far = 2000.0f;
 		float m_AspectRatio = 16.0f / 9.0f;
+		float m_SpeedMultiplier = 1.0f;
 		bool m_Dragging = false;
 	};
 

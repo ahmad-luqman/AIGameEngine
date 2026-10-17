@@ -8,7 +8,9 @@
 #include <algorithm>
 #include <cctype>
 #include <charconv>
+#include <iterator>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace Basalt {
 
@@ -145,10 +147,68 @@ namespace Basalt {
 		}
 	}
 
+	std::vector<std::string> AssetManager::ReloadChanged(const std::vector<std::string>& paths)
+	{
+		const std::unordered_set<std::string> changed(paths.begin(), paths.end());
+		std::unordered_set<std::string> meshes;
+		for (const auto& [key, entry] : s_Meshes)
+		{
+			const bool readsChangedFile = entry.Asset && std::any_of(entry.Asset->ExternalFiles.begin(), entry.Asset->ExternalFiles.end(), [&](const std::string& file) { return changed.contains(file); });
+			if (changed.contains(key) || readsChangedFile)
+				meshes.insert(key);
+		}
+		std::vector<std::string> keys(meshes.begin(), meshes.end());
+		for (const auto& [key, entry] : s_Textures)
+		{
+			// An embedded image goes with its model file (Reload drops those).
+			const size_t marker = key.find("#image/");
+			const std::string model = marker != std::string::npos ? key.substr(0, marker) : std::string();
+			if (changed.contains(key) || (!model.empty() && (changed.contains(model) || meshes.contains(model))))
+				keys.push_back(key);
+		}
+		for (const std::string& key : keys)
+			Reload(key);
+		std::sort(keys.begin(), keys.end());
+		keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+		return keys;
+	}
+
 	void AssetManager::Clear()
 	{
 		s_Meshes.clear();
 		s_Textures.clear();
+	}
+
+	std::vector<std::string> AssetManager::GetLoadedKeys()
+	{
+		std::vector<std::string> keys;
+		keys.reserve(s_Meshes.size() + s_Textures.size());
+		for (const auto& [key, entry] : s_Meshes)
+			keys.push_back(key);
+		for (const auto& [key, entry] : s_Textures)
+			keys.push_back(key);
+		std::sort(keys.begin(), keys.end());
+		keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+		return keys;
+	}
+
+	AssetManager::TemporaryLoads::TemporaryLoads()
+		: m_Before(GetLoadedKeys())
+	{
+	}
+
+	AssetManager::TemporaryLoads::~TemporaryLoads()
+	{
+		const std::vector<std::string> after = GetLoadedKeys();
+		std::vector<std::string> added;
+		std::set_difference(after.begin(), after.end(), m_Before.begin(), m_Before.end(), std::back_inserter(added));
+		// Erased directly rather than through Reload, which would also drop the embedded images of a model that was
+		// already loaded.
+		for (const std::string& key : added)
+		{
+			s_Meshes.erase(key);
+			s_Textures.erase(key);
+		}
 	}
 
 	Entity AssetManager::ImportModel(Scene& scene, const std::string& key, Entity parent, std::string& outError)
