@@ -208,7 +208,11 @@ namespace Basalt {
 		if (simulate)
 			m_Scene->OnSimulationStart();
 		else
+		{
+			if (BeforeRuntimeStart)
+				BeforeRuntimeStart();
 			m_Scene->OnRuntimeStart();
+		}
 		if (IsRecording() && !m_RecordingSeed)
 			m_RecordingSeed = m_Scene->GetRandomSeed();
 		return true;
@@ -255,6 +259,8 @@ namespace Basalt {
 		m_Recording = nlohmann::json::array();
 		m_RecordingSeed = IsPlaying() ? std::optional<uint32_t>(m_Scene->GetRandomSeed()) : std::nullopt;
 		m_RecordedView.reset();
+		// The view first: a replay applies a frame-0 view before it starts play, so OnCreate reads the same one.
+		RecordViewChange();
 		// A replay starts from no input: record the mouse position and the injected gamepads already connected, with
 		// what they hold.
 		if (Input::HasMousePosition())
@@ -284,6 +290,15 @@ namespace Basalt {
 	{
 		if (!IsRecording())
 			return;
+		RecordViewChange();
+		const uint64_t frame = IsPlaying() ? m_Scene->GetFrameCount() : 0;
+		m_Recording.push_back({ { "frame", frame }, { "command", command }, { "params", params } });
+	}
+
+	void AutomationSession::RecordViewChange()
+	{
+		if (!IsRecording())
+			return;
 		const uint64_t frame = IsPlaying() ? m_Scene->GetFrameCount() : 0;
 		if (const GameUI::HostState view = GameUI::GetHostState(); m_RecordedView != view)
 		{
@@ -298,7 +313,6 @@ namespace Basalt {
 				viewParams["resolution"] = { view.Resolution->x, view.Resolution->y };
 			m_Recording.push_back({ { "frame", frame }, { "command", "view" }, { "params", viewParams } });
 		}
-		m_Recording.push_back({ { "frame", frame }, { "command", command }, { "params", params } });
 	}
 
 	nlohmann::json AutomationSession::StopRecording()
@@ -316,6 +330,7 @@ namespace Basalt {
 			return;
 		for (uint32_t i = 0; i < frames; i++)
 		{
+			RecordViewChange();
 			m_Scene->OnUpdate(frameTime);
 			Input::EndFrame();
 		}

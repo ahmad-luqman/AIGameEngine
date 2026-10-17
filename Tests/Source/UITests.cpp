@@ -46,11 +46,6 @@ TEST_SUITE("UI")
 	TEST_CASE("GameUI maps the mouse into the game's coordinates and shares its routing with Input")
 	{
 		BasaltTest::ScopedGameInput restore;
-		struct RestoreHost
-		{
-			~RestoreHost() { GameUI::SetHostState({}); }
-		} restoreHost;
-		GameUI::SetHostState({});
 		// Without a resolution, game coordinates are the viewport's.
 		CHECK(GameUI::GetResolution() == glm::vec2(1920.0f, 1080.0f));
 		CHECK(GameUI::ToGamePosition({ 12.0f, 34.0f }) == glm::vec2(12.0f, 34.0f));
@@ -64,9 +59,13 @@ TEST_SUITE("UI")
 		CHECK(GameUI::ToGamePosition({ 210.0f, 170.0f }) == glm::vec2(800.0f, 450.0f));
 		CHECK(GameUI::ToGamePosition({ 10.0f, 20.0f }) == glm::vec2(0.0f, 0.0f));
 		CHECK(GameUI::ToGameDelta({ 1.0f, 2.0f }) == glm::vec2(4.0f, 6.0f));
-		// Unusable resolutions are ignored; nullopt goes back to the viewport size.
-		GameUI::SetResolution(glm::vec2(0.0f, 900.0f));
-		GameUI::SetResolution(glm::vec2(std::numeric_limits<float>::infinity(), 900.0f));
+		// A host state with an unusable resolution keeps the current one (SetResolution asserts on it); nullopt goes
+		// back to the viewport size.
+		GameUI::HostState unusable = GameUI::GetHostState();
+		unusable.Resolution = glm::vec2(0.0f, 900.0f);
+		GameUI::SetHostState(unusable);
+		unusable.Resolution = glm::vec2(std::numeric_limits<float>::infinity(), 900.0f);
+		GameUI::SetHostState(unusable);
 		CHECK(GameUI::GetResolution() == glm::vec2(1600.0f, 900.0f));
 		CHECK(GameUI::GetHostState().Resolution == glm::vec2(1600.0f, 900.0f));
 		GameUI::SetResolution(std::nullopt);
@@ -92,6 +91,12 @@ TEST_SUITE("UI")
 		CHECK(GameUI::GetPointerPosition().has_value());
 		Input::SetGamePointer(false);
 		CHECK_FALSE(GameUI::GetPointerPosition().has_value());
+		// A locked cursor's position is a virtual one that wanders off the view: the widgets get no pointer.
+		Input::SetGamePointer(true);
+		Input::SetCursorMode(CursorMode::Locked);
+		CHECK_FALSE(GameUI::GetPointerPosition().has_value());
+		Input::SetCursorMode(CursorMode::Hidden);
+		CHECK(GameUI::GetPointerPosition().has_value());
 	}
 
 	TEST_CASE("GameUI collects immediate-mode commands per scene update and maps the 1080-unit canvas")

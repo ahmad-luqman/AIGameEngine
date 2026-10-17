@@ -68,10 +68,15 @@ namespace Basalt {
 		// primary camera, labelled with the mode.
 		void DrawGameView();
 		void DrawGameViewOptions();
-		// Gives the window the cursor the game asks for (Input::GetCursorMode) while the game runs with the Game view
-		// focused: Locked captures the mouse (ImGui ignores it meanwhile, as GLFW reports a virtual cursor), Hidden
-		// hides it over the Game image. Escape hands the cursor back to the editor until the Game image is clicked.
+		// Gives the window the cursor the game asks for (DecideGameCursor), before the scene updates: Locked captures the
+		// mouse while the game runs with the Game view focused (ImGui ignores it meanwhile, as GLFW reports a virtual
+		// cursor), Hidden hides it over the Game image. Escape hands the cursor back to the editor (the game does not
+		// see that Escape) until the Game view is clicked.
 		void UpdateGameCursor();
+		// Gives the game its view before the scene updates and as Play starts: the Game image's geometry, the game
+		// resolution, and the routing (the keyboard and gamepads while the Game view has focus, the pointer while it
+		// also has the mouse over its image or the cursor locked).
+		void ApplyGameView();
 		// The selected entity's material on a sphere, at the top of the inspector's Material section.
 		void DrawMaterialPreview(Entity entity);
 		void DrawToolbar();
@@ -100,6 +105,8 @@ namespace Basalt {
 		nlohmann::json GetGameViewState();
 		// Play mode proper: scripts run and the Game view hosts the game (not edit mode, not simulate).
 		bool IsGameRunning() const { return m_Session.IsPlaying() && !m_Session.IsSimulating(); }
+		// The cursor the game asks for, Normal while it does not run.
+		CursorMode GetRequestedGameCursor() const { return IsGameRunning() ? Input::GetCursorMode() : CursorMode::Normal; }
 		// Outlines every UI rect over the viewport (the selected entity's with its pivot and anchors).
 		void DrawUIBounds(const glm::vec2& origin, const glm::vec2& size);
 		UUID PickViewport(uint32_t x, uint32_t y);
@@ -187,9 +194,9 @@ namespace Basalt {
 		// Play brings the Game tab to the front; Stop returns to the scene view if it was in front before.
 		bool m_GameWasRunning = false;
 		bool m_ReturnToViewport = false;
-		// What UpdateGameCursor gave the window (Normal or Locked), and whether Escape took the cursor back.
+		// What UpdateGameCursor last decided, and what it gave the window (Normal or Locked).
+		GameCursorDecision m_GameCursor;
 		CursorMode m_AppliedCursorMode = CursorMode::Normal;
-		bool m_GameCursorReleased = false;
 		bool m_ViewportVisible = true;
 
 		glm::vec2 m_ViewportSize = { 1280.0f, 720.0f };

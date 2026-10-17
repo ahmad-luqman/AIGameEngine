@@ -715,6 +715,7 @@ TEST_SUITE("Automation")
 	TEST_CASE("input.gamepad drives an injected gamepad, is recorded and replays")
 	{
 		BasaltTest::TempProject temp("AutomationGamepad");
+		BasaltTest::ScopedGameInput restore;
 		CommandRegistry registry;
 		AutomationSession session;
 		Input::ForgetInjectedGamepads();
@@ -899,6 +900,129 @@ TEST_SUITE("Automation")
 		Run(registry, session, "play.stop");
 	}
 
+	TEST_CASE("A replay records routing changes between recorded commands, so it gates input the same way")
+	{
+		BasaltTest::TempProject temp("AutomationReplayRouting");
+		BasaltTest::ScopedGameInput restore;
+		CommandRegistry registry;
+		AutomationSession session;
+		// Releases and holds of Space move the probe, so the state hash shows what the game saw.
+		Run(registry, session, "asset.write", { { "path", "Assets/Scripts/Keys.lua" }, { "content", R"(
+			local K = {}
+			function K:OnUpdate()
+				local t = self.Entity.Translation
+				if Input.IsKeyReleased('Space') then t = t + Vec3(1, 0, 0) end
+				if Input.IsKeyDown('Space') then t = t + Vec3(0, 1, 0) end
+				self.Entity.Translation = t
+			end
+			return K
+		)" } });
+		Run(registry, session, "entity.create", { { "name", "Probe" }, { "components", { { "Script", { { "Script", "Assets/Scripts/Keys.lua" } } } } } });
+		Run(registry, session, "play.start");
+		Run(registry, session, "replay.record_start");
+		Run(registry, session, "input.key", { { "key", "Space" } });
+		Run(registry, session, "play.step", { { "frames", 1 } });
+		// The host takes the keyboard away and gives it back with no input command in between.
+		GameUI::SetNavigationEnabled(false);
+		Run(registry, session, "play.step", { { "frames", 1 } });
+		GameUI::SetNavigationEnabled(true);
+		const json live = Run(registry, session, "play.step", { { "frames", 2 }, { "hash", true } });
+		CHECK(Run(registry, session, "lua.exec", { { "code", "local t = Scene.FindEntityByName('Probe').Translation; return t.x .. ',' .. t.y" } })["result"] == "1.0,1.0");
+		const json events = Run(registry, session, "replay.record_stop", { { "path", "Replays/Routing.breplay" } });
+		CHECK(events["events"] == 4);
+		const json replayed = Run(registry, session, "replay.run", { { "path", "Replays/Routing.breplay" }, { "assertHash", true }, { "assertNoErrors", true } });
+		CHECK(replayed["stateHash"] == live["stateHash"]);
+		Run(registry, session, "play.stop");
+	}
+
+	TEST_CASE("Injected input reaches the game only through the host's routing, like a real keyboard")
+	{
+		BasaltTest::TempProject temp("AutomationInjectedRouting");
+		BasaltTest::ScopedGameInput restore;
+		CommandRegistry registry;
+		AutomationSession session;
+		Run(registry, session, "project.set", { { "inputActions", { { "Actions", { { { "Name", "Jump" }, { "Bindings", { { { "Key", "Space" } } } } } } } } } });
+		// An editor-like host whose Game view does not have focus: input.key holds Space, the game does not see it.
+		GameUI::SetHostState({ { 0.0f, 0.0f }, { 640.0f, 360.0f }, false, false });
+		Run(registry, session, "play.start");
+		Run(registry, session, "input.key", { { "key", "Space" } });
+		CHECK(Run(registry, session, "input.actions")["actions"][0]["Down"] == false);
+		// Focus comes back while Space is held: still not the game's until it is pressed again.
+		GameUI::SetNavigationEnabled(true);
+		CHECK(Run(registry, session, "input.actions")["actions"][0]["Down"] == false);
+		Run(registry, session, "input.key", { { "key", "Space" }, { "down", false } });
+		Run(registry, session, "input.key", { { "key", "Space" } });
+		CHECK(Run(registry, session, "input.actions")["actions"][0]["Pressed"] == true);
+		Run(registry, session, "play.stop");
+	}
+
+	TEST_CASE("Hosts give the game its view before OnCreate, except for replays")
+	{
+		BasaltTest::TempProject temp("AutomationBeforeRuntimeStart");
+		BasaltTest::ScopedGameInput restore;
+		CommandRegistry registry;
+		AutomationSession session;
+		Run(registry, session, "asset.write", { { "path", "Assets/Scripts/View.lua" }, { "content", R"(
+			local V = {}
+			function V:OnCreate() self.Entity.Translation = Vec3(Input.GetViewSize().x, Input.GetViewSize().y, 0) end
+			return V
+		)" } });
+		Run(registry, session, "entity.create", { { "name", "Probe" }, { "components", { { "Script", { { "Script", "Assets/Scripts/View.lua" } } } } } });
+		int calls = 0;
+		session.BeforeRuntimeStart = [&calls]() {
+			calls++;
+			GameUI::SetResolution(glm::vec2(1280.0f, 720.0f));
+		};
+		const auto probe = [&]() { return Run(registry, session, "lua.exec", { { "code", "local t = Scene.FindEntityByName('Probe').Translation; return t.x .. ',' .. t.y" } })["result"]; };
+		Run(registry, session, "play.start");
+		CHECK(calls == 1);
+		CHECK(probe() == "1280.0,720.0");
+		Run(registry, session, "replay.record_start");
+		Run(registry, session, "play.step", { { "frames", 1 } });
+		Run(registry, session, "replay.record_stop", { { "path", "Replays/View.breplay" } });
+		Run(registry, session, "play.stop");
+		// Simulate does not run scripts: no hook. A replay runs the view it recorded, without the host's hook.
+		std::string error;
+		REQUIRE(session.StartPlay(error, true));
+		session.StopPlay();
+		Run(registry, session, "replay.run", { { "path", "Replays/View.breplay" } });
+		CHECK(calls == 1);
+		CHECK(probe() == "1280.0,720.0");
+		CHECK(session.BeforeRuntimeStart);
+		Run(registry, session, "play.stop");
+	}
+
+	TEST_CASE("project.set keeps the settings when saving them fails, and input.actions needs a project or Play")
+	{
+		BasaltTest::ScopedGameInput restore;
+		{
+			CommandRegistry registry;
+			AutomationSession session;
+			Project::SetActive(nullptr);
+			CHECK(RunError(registry, session, "input.actions").find("no project") != std::string::npos);
+		}
+		BasaltTest::TempProject temp("AutomationProjectSetRollback");
+		CommandRegistry registry;
+		AutomationSession session;
+		CHECK(RunError(registry, session, "project.set", { { "inputActions", nullptr } }).find("inputActions") != std::string::npos);
+		// A directory where Input.binput should go: the file cannot be written, and nothing changes.
+		std::filesystem::create_directories(temp.GetDirectory() / Project::InputFileName);
+		CHECK(RunError(registry, session, "project.set", { { "name", "Renamed" }, { "inputActions", { { "Actions", { { { "Name", "Jump" } } } } } } }).find("cannot write") != std::string::npos);
+		CHECK(Project::GetActive()->GetConfig().Name == "AutomationProjectSetRollback");
+		CHECK(Project::GetActive()->GetConfig().InputActions.IsEmpty());
+		CHECK(Run(registry, session, "project.info")["name"] == "AutomationProjectSetRollback");
+		std::filesystem::remove_all(temp.GetDirectory() / Project::InputFileName);
+		Run(registry, session, "project.set", { { "inputActions", { { "Actions", { { { "Name", "Jump" } } } } } } });
+		// Simulate runs no scripts: input.actions reports the project's actions, not a session's.
+		std::string error;
+		REQUIRE(session.StartPlay(error, true));
+		const json result = Run(registry, session, "input.actions");
+		CHECK(result["playing"] == false);
+		CHECK(result["actions"][0]["Name"] == "Jump");
+		CHECK_FALSE(result["actions"][0].contains("Value"));
+		session.StopPlay();
+	}
+
 	TEST_CASE("A replay records and restores the game resolution scripts see the mouse in")
 	{
 		BasaltTest::TempProject temp("AutomationReplayResolution");
@@ -930,9 +1054,14 @@ TEST_SUITE("Automation")
 
 		GameUI::SetHostState({});
 		CHECK(Run(registry, session, "ui.layout")["view"]["resolution"] == json({ 1920.0, 1080.0 }));
+		// Replayed in another host (no pointer, another view): the recorded view applies, then the host's comes back.
+		const GameUI::HostState other{ { 7.0f, 9.0f }, { 320.0f, 200.0f }, false, true, glm::vec2(640.0f, 400.0f) };
+		GameUI::SetHostState(other);
 		const json replayed = Run(registry, session, "replay.run", { { "path", "Replays/Resolution.breplay" }, { "assertHash", true }, { "assertNoErrors", true } });
 		CHECK(replayed["stateHash"] == live["stateHash"]);
-		CHECK(GameUI::GetHostState() == GameUI::HostState{});
+		CHECK(GameUI::GetHostState() == other);
+		CHECK_FALSE(Input::HasGamePointer());
+		GameUI::SetHostState({});
 
 		// A bad resolution is an error naming the event; a null one means the viewport size, like older replays.
 		const auto viewReplay = [](const json& params) {
@@ -948,6 +1077,7 @@ TEST_SUITE("Automation")
 	TEST_CASE("A replay maps mouse positions through the view it was recorded in")
 	{
 		BasaltTest::TempProject temp("AutomationReplayView");
+		BasaltTest::ScopedGameInput restore;
 		CommandRegistry registry;
 		AutomationSession session;
 		Input::ForgetInjectedGamepads();

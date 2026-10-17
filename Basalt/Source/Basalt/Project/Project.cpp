@@ -160,22 +160,36 @@ namespace Basalt {
 		if (!actions)
 			return nullptr;
 		config.InputActions = std::move(*actions);
+		project->m_SavedInputActions = config.InputActions;
 		return project;
 	}
 
 	std::optional<InputActionMap> Project::ReadInputActions(const std::filesystem::path& path, std::string& outError)
 	{
-		if (!FileSystem::Exists(path))
+		// Only a file that is not there means "no actions"; one that cannot be checked is an error, not an empty map.
+		std::error_code statusError;
+		const std::filesystem::file_status status = std::filesystem::status(path, statusError);
+		if (status.type() == std::filesystem::file_type::not_found)
 			return InputActionMap{};
-		const auto text = FileSystem::ReadTextFile(path);
+		std::string reason;
+		if (statusError)
+			reason = ": " + statusError.message();
+		else if (status.type() != std::filesystem::file_type::regular)
+			reason = ": it is not a file";
+		const auto text = reason.empty() ? FileSystem::ReadTextFile(path) : std::nullopt;
 		if (!text)
 		{
-			outError = "cannot read input actions file '" + path.string() + "'";
+			outError = "cannot read input actions file '" + path.string() + "'" + reason;
 			return std::nullopt;
 		}
-		const nlohmann::json data = ParseJson(*text);
-		std::string error = "not valid JSON";
-		auto actions = data.is_discarded() ? std::nullopt : InputActionMap::FromJson(data, error);
+		std::string error;
+		const nlohmann::json data = ParseJson(*text, error);
+		if (data.is_discarded())
+		{
+			outError = "invalid input actions file '" + path.string() + "': " + error;
+			return std::nullopt;
+		}
+		auto actions = InputActionMap::FromJson(data, error);
 		if (!actions)
 		{
 			outError = "invalid input actions file '" + path.string() + "': " + error;
@@ -184,8 +198,17 @@ namespace Basalt {
 		return actions;
 	}
 
-	bool Project::Save(std::string& outError) const
+	bool Project::Save(std::string& outError)
 	{
+		if (m_Config.InputActions != m_SavedInputActions)
+		{
+			if (!FileSystem::WriteTextFile(GetInputFilePath(), m_Config.InputActions.ToJson().dump(1, '\t')))
+			{
+				outError = "cannot write '" + GetInputFilePath().string() + "'";
+				return false;
+			}
+			m_SavedInputActions = m_Config.InputActions;
+		}
 		const nlohmann::json data = {
 			{ "Format", "BasaltProject" },
 			{ "Name", m_Config.Name },
@@ -207,11 +230,6 @@ namespace Basalt {
 		if (!FileSystem::WriteTextFile(GetProjectFilePath(), data.dump(1, '\t')))
 		{
 			outError = "cannot write '" + GetProjectFilePath().string() + "'";
-			return false;
-		}
-		if ((!m_Config.InputActions.IsEmpty() || FileSystem::Exists(GetInputFilePath())) && !FileSystem::WriteTextFile(GetInputFilePath(), m_Config.InputActions.ToJson().dump(1, '\t')))
-		{
-			outError = "cannot write '" + GetInputFilePath().string() + "'";
 			return false;
 		}
 		return true;

@@ -19,6 +19,22 @@ namespace Basalt {
 		return rect;
 	}
 
+	GameCursorDecision DecideGameCursor(const GameCursorInput& input)
+	{
+		GameCursorDecision decision;
+		decision.Released = input.Released;
+		if (input.Requested == CursorMode::Normal)
+			decision.Released = false;
+		else if (!input.Released && input.ViewFocused && input.EscapePressed)
+			decision.Released = decision.ConsumeEscape = true;
+		else if (input.Released && input.ViewHovered && input.Clicked)
+			decision.Released = false;
+		const bool active = input.Requested != CursorMode::Normal && input.ViewFocused && !decision.Released;
+		decision.Window = active && input.Requested == CursorMode::Locked ? CursorMode::Locked : CursorMode::Normal;
+		decision.HideOverView = active && input.Requested == CursorMode::Hidden;
+		return decision;
+	}
+
 	nlohmann::json GameViewSettings::Schema()
 	{
 		namespace S = CommandSchema;

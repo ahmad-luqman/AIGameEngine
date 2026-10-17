@@ -2384,7 +2384,10 @@ TEST_SUITE("Scripting")
 		CHECK(Eval(scene, "return Input.IsActionDown('Jump')") == "true");
 		CHECK(Project::GetActive()->GetConfig().InputActions == *actions);
 		BasaltTest::CheckLuaErrors(*scene.GetScriptEngine(),
-								   std::array<std::pair<const char*, const char*>, 6>{ {
+								   std::array<std::pair<const char*, const char*>, 9>{ {
+									   { "Input.SetBindings('Jump', { Key = 'Space' })", "Input.SetBindings('Jump'): expected a list of bindings, such as { { Key = 'Space' } }" },
+									   { "Input.SetBindings('Jump', { { Key = 'Space', Scale = 0/0 } })", "Input.SetBindings('Jump'): binding Scale must be a number" },
+									   { "Input.SetBindings('Jump', { function() end })", "Input.SetBindings('Jump'): " },
 									   { "Input.GetAction('Dash')", "unknown input action 'Dash' (defined: Jump, MoveX)" },
 									   { "Input.IsActionPressed('jump')", "unknown input action 'jump'" },
 									   { "Input.SetBindings('Jump', { { Key = 'Nope' } })", "Input.SetBindings('Jump'): binding: unknown Key 'Nope'" },
@@ -2408,7 +2411,7 @@ TEST_SUITE("Scripting")
 		CHECK(Eval(scene, "Input.SetBindings('Jump', {}) return true") == "true");
 		scene.OnRuntimeStop();
 		CHECK(scene.GetInputActions().IsEmpty());
-		CHECK_FALSE(scene.ResetInputBindings(std::nullopt, error));
+		CHECK_FALSE(scene.ResetInputBindings(error));
 		scene.OnRuntimeStart();
 		CHECK(scene.GetInputActions() == *actions);
 		scene.OnRuntimeStop();
@@ -2424,10 +2427,6 @@ TEST_SUITE("Scripting")
 	{
 		using BasaltTest::Eval;
 		BasaltTest::ScopedGameInput restore;
-		struct RestoreHost
-		{
-			~RestoreHost() { GameUI::SetHostState({}); }
-		} restoreHost;
 		Scene scene;
 		scene.OnRuntimeStart();
 		// The headless view: script coordinates are Input's.
@@ -2468,12 +2467,21 @@ TEST_SUITE("Scripting")
 	{
 		using BasaltTest::Eval;
 		BasaltTest::ScopedGameInput restore;
+		BasaltTest::TempProject project("ScriptCursorMode");
+		Scene next("Next");
+		std::string error;
+		REQUIRE(SceneSerializer::SaveScene(next, Project::ResolvePath("Assets/Scenes/Next.bscene"), error));
 		Input::SetCursorMode(CursorMode::Hidden);
 		Scene scene;
 		scene.OnRuntimeStart();
 		CHECK(Input::GetCursorMode() == CursorMode::Normal);
 		CHECK(Eval(scene, "return Input.GetCursorMode()") == "Normal");
 		CHECK(Eval(scene, "Input.SetCursorMode('locked') return Input.GetCursorMode()") == "Locked");
+		CHECK(Input::GetCursorMode() == CursorMode::Locked);
+		// The cursor belongs to the play session, not to a scene: Scene.Load keeps it.
+		CHECK(Eval(scene, "Scene.Load('Assets/Scenes/Next.bscene') return true") == "true");
+		scene.OnUpdate(Step);
+		REQUIRE(scene.GetName() == "Next");
 		CHECK(Input::GetCursorMode() == CursorMode::Locked);
 		std::string result;
 		CHECK_FALSE(scene.GetScriptEngine()->ExecuteString("Input.SetCursorMode('Grabbed')", result));

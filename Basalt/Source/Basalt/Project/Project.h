@@ -60,9 +60,10 @@ namespace Basalt {
 		// Reads an input actions file: an empty map when it does not exist, nullopt (with the reason) when it cannot be
 		// read or is invalid.
 		static std::optional<InputActionMap> ReadInputActions(const std::filesystem::path& path, std::string& outError);
-		// Writes the project file, and the input actions file when there are actions or the file exists already (so
-		// removing the last action is saved too).
-		bool Save(std::string& outError) const;
+		// Writes the input actions file when the actions changed since they were loaded or last saved (so a hand edit
+		// of the file is never overwritten by an unrelated change), then the project file. A failure is reported and
+		// leaves the project file as it was when the actions could not be written.
+		bool Save(std::string& outError);
 
 		static void SetActive(const Ref<Project>& project) { s_ActiveProject = project; }
 		static const Ref<Project>& GetActive() { return s_ActiveProject; }
@@ -93,6 +94,8 @@ namespace Basalt {
 
 	private:
 		ProjectConfig m_Config;
+		// The actions as Input.binput holds them (Load, Save): Save writes the file only when they differ.
+		InputActionMap m_SavedInputActions;
 		std::filesystem::path m_Directory;
 
 		static Ref<Project> s_ActiveProject;

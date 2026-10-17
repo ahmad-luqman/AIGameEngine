@@ -16,9 +16,7 @@ namespace Basalt {
 
 		const char* const s_TypeNames[] = { "Button", "Axis" };
 		static_assert(std::size(s_TypeNames) == InputActionTypeCount);
-
-		// The binding keys that name a control, in the order of InputBinding::Control's alternatives.
-		constexpr const char* ControlKeys[] = { "Key", "MouseButton", "GamepadButton", "GamepadAxis" };
+		static_assert(InputControlKeys.size() == std::variant_size_v<decltype(InputBinding::Control)>);
 
 		template<class... Ts>
 		struct Overloaded : Ts...
@@ -34,34 +32,34 @@ namespace Basalt {
 			return std::copysign((magnitude - deadZone) / (1.0f - deadZone), value);
 		}
 
-		// The binding's value before Scale: 1 or 0 for keys and buttons, a gamepad axis past its dead zone.
-		float ReadControl(const InputBinding& binding, InputFrame frame)
+		// A binding's contribution: its control's value (1 or 0 for keys and buttons, a gamepad axis past its dead
+		// zone) times Scale, clamped to 0..1 for a button. Across gamepads the strongest contribution wins, so a
+		// scaled stick pushed the right way on one gamepad is not outweighed by another pushed the other way.
+		float ReadBinding(const InputBinding& binding, InputFrame frame, InputActionType type)
 		{
+			const auto contribution = [&binding, type](float control) {
+				const float value = control * binding.Scale;
+				return type == InputActionType::Button ? std::clamp(value, 0.0f, 1.0f) : value;
+			};
 			// Every gamepad, or the one the binding names. Slots that are not connected read as released.
 			const uint32_t first = binding.Gamepad.value_or(0);
 			const uint32_t last = binding.Gamepad ? *binding.Gamepad + 1 : Input::MaxGamepads;
+			const auto strongest = [&](auto&& read) {
+				float best = 0.0f;
+				for (uint32_t index = first; index < last; index++)
+				{
+					const float value = contribution(read(index));
+					if (std::abs(value) > std::abs(best))
+						best = value;
+				}
+				return best;
+			};
 			return std::visit(
 				Overloaded{
-					[frame](KeyCode key) { return GameInput::IsKeyDown(key, frame) ? 1.0f : 0.0f; },
-					[frame](MouseCode button) { return GameInput::IsMouseButtonDown(button, frame) ? 1.0f : 0.0f; },
-					[frame, first, last](GamepadButton button) {
-						for (uint32_t index = first; index < last; index++)
-						{
-							if (GameInput::IsGamepadButtonDown(index, button, frame))
-								return 1.0f;
-						}
-						return 0.0f;
-					},
-					[frame, first, last, &binding](GamepadAxis axis) {
-						float strongest = 0.0f;
-						for (uint32_t index = first; index < last; index++)
-						{
-							const float value = ApplyDeadZone(GameInput::GetGamepadAxis(index, axis, frame), binding.DeadZone);
-							if (std::abs(value) > std::abs(strongest))
-								strongest = value;
-						}
-						return strongest;
-					},
+					[&](KeyCode key) { return contribution(GameInput::IsKeyDown(key, frame) ? 1.0f : 0.0f); },
+					[&](MouseCode button) { return contribution(GameInput::IsMouseButtonDown(button, frame) ? 1.0f : 0.0f); },
+					[&](GamepadButton button) { return strongest([&](uint32_t index) { return GameInput::IsGamepadButtonDown(index, button, frame) ? 1.0f : 0.0f; }); },
+					[&](GamepadAxis axis) { return strongest([&](uint32_t index) { return ApplyDeadZone(GameInput::GetGamepadAxis(index, axis, frame), binding.DeadZone); }); },
 				},
 				binding.Control);
 		}
@@ -81,17 +79,35 @@ namespace Basalt {
 			return true;
 		}
 
-		bool ReadScaleOrDeadZone(const nlohmann::json& data, const char* key, float min, float max, float& out, std::string& outError)
+		// An optional number field; ValidateBinding checks its range.
+		bool ReadOptionalFloat(const nlohmann::json& data, const char* key, float& out, std::string& outError)
 		{
 			const auto it = data.find(key);
-			if (it == data.end())
+			if (it == data.end() || JsonToFloat(*it, out))
 				return true;
-			if (!JsonToFloat(*it, out) || out < min || out > max)
+			outError = fmt::format("binding {} must be a number", key);
+			return false;
+		}
+
+		// The control a binding's control key (an index into InputControlKeys) names, or nullopt for an unknown name.
+		std::optional<decltype(InputBinding::Control)> ParseControl(size_t keyIndex, std::string_view name)
+		{
+			const auto wrap = [](const auto& parsed) -> std::optional<decltype(InputBinding::Control)> {
+				if (parsed)
+					return *parsed;
+				return std::nullopt;
+			};
+			switch (keyIndex)
 			{
-				outError = fmt::format("binding {} must be a number in [{}, {}]", key, min, max);
-				return false;
+				case 0:
+					return wrap(KeyCodeFromString(name));
+				case 1:
+					return wrap(MouseCodeFromString(name));
+				case 2:
+					return wrap(GamepadButtonFromString(name));
+				default:
+					return wrap(GamepadAxisFromString(name));
 			}
-			return true;
 		}
 
 	}
@@ -126,6 +142,11 @@ namespace Basalt {
 			outError = fmt::format("an action has at most {} bindings", MaxBindings);
 			return false;
 		}
+		for (const InputBinding& binding : bindings)
+		{
+			if (!ValidateBinding(binding, outError))
+				return false;
+		}
 		it->Bindings = std::move(bindings);
 		return true;
 	}
@@ -136,12 +157,12 @@ namespace Basalt {
 		{
 			float sum = 0.0f;
 			for (const InputBinding& binding : action.Bindings)
-				sum += ReadControl(binding, frame) * binding.Scale;
+				sum += ReadBinding(binding, frame, action.Type);
 			return std::clamp(sum, -1.0f, 1.0f);
 		}
 		float strongest = 0.0f;
 		for (const InputBinding& binding : action.Bindings)
-			strongest = std::max(strongest, std::clamp(ReadControl(binding, frame) * binding.Scale, 0.0f, 1.0f));
+			strongest = std::max(strongest, ReadBinding(binding, frame, action.Type));
 		return strongest;
 	}
 
@@ -160,15 +181,49 @@ namespace Basalt {
 		return !IsDown(action, InputFrame::Current) && IsDown(action, InputFrame::Previous);
 	}
 
+	bool InputActionMap::ValidateBinding(const InputBinding& binding, std::string& outError)
+	{
+		if (!std::isfinite(binding.Scale) || binding.Scale < -1.0f || binding.Scale > 1.0f)
+		{
+			outError = "binding Scale must be a number in [-1, 1]";
+			return false;
+		}
+		if (!std::holds_alternative<GamepadAxis>(binding.Control))
+		{
+			if (binding.DeadZone != InputBinding::DefaultDeadZone)
+			{
+				outError = "binding DeadZone applies to GamepadAxis bindings only";
+				return false;
+			}
+		}
+		else if (!std::isfinite(binding.DeadZone) || binding.DeadZone < 0.0f || binding.DeadZone > InputBinding::MaxDeadZone)
+		{
+			outError = fmt::format("binding DeadZone must be a number in [0, {}]", InputBinding::MaxDeadZone);
+			return false;
+		}
+		if (binding.Gamepad && !binding.IsGamepadControl())
+		{
+			outError = "binding Gamepad applies to GamepadButton and GamepadAxis bindings only";
+			return false;
+		}
+		if (binding.Gamepad && *binding.Gamepad >= Input::MaxGamepads)
+		{
+			outError = fmt::format("binding Gamepad must be an integer from 0 to {}", Input::MaxGamepads - 1);
+			return false;
+		}
+		return true;
+	}
+
 	nlohmann::json InputActionMap::BindingToJson(const InputBinding& binding)
 	{
 		nlohmann::json data = nlohmann::json::object();
+		const std::string key(InputControlKeys[binding.Control.index()]);
 		std::visit(
 			Overloaded{
-				[&data](KeyCode key) { data["Key"] = std::string(KeyCodeToString(key)); },
-				[&data](MouseCode button) { data["MouseButton"] = std::string(MouseCodeToString(button)); },
-				[&data](GamepadButton button) { data["GamepadButton"] = std::string(GamepadButtonToString(button)); },
-				[&data](GamepadAxis axis) { data["GamepadAxis"] = std::string(GamepadAxisToString(axis)); },
+				[&](KeyCode control) { data[key] = std::string(KeyCodeToString(control)); },
+				[&](MouseCode control) { data[key] = std::string(MouseCodeToString(control)); },
+				[&](GamepadButton control) { data[key] = std::string(GamepadButtonToString(control)); },
+				[&](GamepadAxis control) { data[key] = std::string(GamepadAxisToString(control)); },
 			},
 			binding.Control);
 		if (binding.Scale != 1.0f)
@@ -180,6 +235,14 @@ namespace Basalt {
 		return data;
 	}
 
+	nlohmann::json InputActionMap::BindingsToJson(const std::vector<InputBinding>& bindings)
+	{
+		nlohmann::json data = nlohmann::json::array();
+		for (const InputBinding& binding : bindings)
+			data.push_back(BindingToJson(binding));
+		return data;
+	}
+
 	std::optional<InputBinding> InputActionMap::BindingFromJson(const nlohmann::json& data, std::string& outError)
 	{
 		if (!data.is_object())
@@ -187,17 +250,18 @@ namespace Basalt {
 			outError = "a binding must be an object such as {\"Key\": \"Space\"}";
 			return std::nullopt;
 		}
-		const char* controlKey = nullptr;
+		std::optional<size_t> controlIndex;
 		for (const auto& [key, value] : data.items())
 		{
-			if (std::ranges::find(ControlKeys, key) != std::end(ControlKeys))
+			const auto control = std::ranges::find(InputControlKeys, key);
+			if (control != InputControlKeys.end())
 			{
-				if (controlKey)
+				if (controlIndex)
 				{
-					outError = fmt::format("a binding names one control, not both {} and {}", controlKey, key);
+					outError = fmt::format("a binding names one control, not both {} and {}", InputControlKeys[*controlIndex], key);
 					return std::nullopt;
 				}
-				controlKey = *std::ranges::find(ControlKeys, key);
+				controlIndex = static_cast<size_t>(control - InputControlKeys.begin());
 			}
 			else if (key != "Scale" && key != "DeadZone" && key != "Gamepad")
 			{
@@ -205,75 +269,45 @@ namespace Basalt {
 				return std::nullopt;
 			}
 		}
-		if (!controlKey)
+		if (!controlIndex)
 		{
 			outError = "a binding needs one of Key, MouseButton, GamepadButton or GamepadAxis";
 			return std::nullopt;
 		}
-		const nlohmann::json& control = data[controlKey];
-		const std::string name = control.is_string() ? control.get<std::string>() : std::string();
+		const std::string_view controlKey = InputControlKeys[*controlIndex];
+		const nlohmann::json& control = data[std::string(controlKey)];
+		if (!control.is_string())
+		{
+			outError = fmt::format("binding {} must be a control name", controlKey);
+			return std::nullopt;
+		}
+		const auto parsed = ParseControl(*controlIndex, control.get<std::string>());
+		if (!parsed)
+		{
+			outError = fmt::format("binding: unknown {} '{}'", controlKey, control.get<std::string>());
+			return std::nullopt;
+		}
 		InputBinding binding;
-		bool known = false;
-		if (std::string_view(controlKey) == "Key")
-		{
-			if (const auto key = KeyCodeFromString(name))
-			{
-				binding.Control = *key;
-				known = true;
-			}
-		}
-		else if (std::string_view(controlKey) == "MouseButton")
-		{
-			if (const auto button = MouseCodeFromString(name))
-			{
-				binding.Control = *button;
-				known = true;
-			}
-		}
-		else if (std::string_view(controlKey) == "GamepadButton")
-		{
-			if (const auto button = GamepadButtonFromString(name))
-			{
-				binding.Control = *button;
-				known = true;
-			}
-		}
-		else if (const auto axis = GamepadAxisFromString(name))
-		{
-			binding.Control = *axis;
-			known = true;
-		}
-		if (!known)
-		{
-			outError = control.is_string() ? fmt::format("binding: unknown {} '{}'", controlKey, name) : fmt::format("binding {} must be a control name", controlKey);
+		binding.Control = *parsed;
+		if (!ReadOptionalFloat(data, "Scale", binding.Scale, outError) || !ReadOptionalFloat(data, "DeadZone", binding.DeadZone, outError))
 			return std::nullopt;
-		}
-
-		if (!ReadScaleOrDeadZone(data, "Scale", -1.0f, 1.0f, binding.Scale, outError))
-			return std::nullopt;
-		const bool axis = std::holds_alternative<GamepadAxis>(binding.Control);
-		if (data.contains("DeadZone") && !axis)
+		if (data.contains("DeadZone") && !std::holds_alternative<GamepadAxis>(binding.Control))
 		{
 			outError = "binding DeadZone applies to GamepadAxis bindings only";
 			return std::nullopt;
 		}
-		if (!ReadScaleOrDeadZone(data, "DeadZone", 0.0f, InputBinding::MaxDeadZone, binding.DeadZone, outError))
-			return std::nullopt;
 		if (const auto gamepad = data.find("Gamepad"); gamepad != data.end())
 		{
-			if (!binding.IsGamepadControl())
-			{
-				outError = "binding Gamepad applies to GamepadButton and GamepadAxis bindings only";
-				return std::nullopt;
-			}
 			uint32_t index = 0;
-			if (!JsonToUInt32(*gamepad, index) || index >= Input::MaxGamepads)
+			if (!JsonToUInt32(*gamepad, index))
 			{
 				outError = fmt::format("binding Gamepad must be an integer from 0 to {}", Input::MaxGamepads - 1);
 				return std::nullopt;
 			}
 			binding.Gamepad = index;
 		}
+		if (!ValidateBinding(binding, outError))
+			return std::nullopt;
 		return binding;
 	}
 
@@ -301,17 +335,17 @@ namespace Basalt {
 		return bindings;
 	}
 
-	nlohmann::json InputActionMap::ToJson() const
+	nlohmann::json InputActionMap::ActionsToJson() const
 	{
 		nlohmann::json actions = nlohmann::json::array();
 		for (const InputAction& action : m_Actions)
-		{
-			nlohmann::json bindings = nlohmann::json::array();
-			for (const InputBinding& binding : action.Bindings)
-				bindings.push_back(BindingToJson(binding));
-			actions.push_back({ { "Name", action.Name }, { "Type", std::string(InputActionTypeToString(action.Type)) }, { "Bindings", std::move(bindings) } });
-		}
-		return { { "Format", FormatName }, { "Version", FormatVersion }, { "Actions", std::move(actions) } };
+			actions.push_back({ { "Name", action.Name }, { "Type", std::string(InputActionTypeToString(action.Type)) }, { "Bindings", BindingsToJson(action.Bindings) } });
+		return actions;
+	}
+
+	nlohmann::json InputActionMap::ToJson() const
+	{
+		return { { "Format", FormatName }, { "Version", FormatVersion }, { "Actions", ActionsToJson() } };
 	}
 
 	std::optional<InputActionMap> InputActionMap::FromJson(const nlohmann::json& data, std::string& outError)
@@ -321,14 +355,8 @@ namespace Basalt {
 			outError = "input actions must be an object {\"Actions\": [...]}";
 			return std::nullopt;
 		}
-		for (const auto& [key, value] : data.items())
-		{
-			if (key != "Format" && key != "Version" && key != "Actions")
-			{
-				outError = "input actions: unknown key '" + key + "'";
-				return std::nullopt;
-			}
-		}
+		if (!RejectUnknownKeys(data, { "Format", "Version", "Actions" }, "input actions", outError))
+			return std::nullopt;
 		if (const auto format = data.find("Format"); format != data.end() && *format != FormatName)
 		{
 			outError = fmt::format("input actions: Format must be \"{}\"", FormatName);
@@ -354,31 +382,30 @@ namespace Basalt {
 			outError = fmt::format("input actions: at most {} actions are supported", MaxActions);
 			return std::nullopt;
 		}
-		for (const nlohmann::json& entry : *actions)
+		for (size_t i = 0; i < actions->size(); i++)
 		{
+			const nlohmann::json& entry = (*actions)[i];
+			const std::string position = fmt::format("input action #{}", i + 1);
 			if (!entry.is_object())
 			{
-				outError = "input actions: every action must be an object {\"Name\", \"Type\", \"Bindings\"}";
+				outError = position + " must be an object {\"Name\", \"Type\", \"Bindings\"}";
 				return std::nullopt;
 			}
-			for (const auto& [key, value] : entry.items())
-			{
-				if (key != "Name" && key != "Type" && key != "Bindings")
-				{
-					outError = "input action: unknown key '" + key + "'";
-					return std::nullopt;
-				}
-			}
+			if (!RejectUnknownKeys(entry, { "Name", "Type", "Bindings" }, position, outError))
+				return std::nullopt;
 			InputAction action;
 			const auto name = entry.find("Name");
 			if (name == entry.end() || !name->is_string())
 			{
-				outError = "input action: Name must be a string";
+				outError = position + ": Name must be a string";
 				return std::nullopt;
 			}
 			action.Name = name->get<std::string>();
 			if (!IsValidName(action.Name, outError))
+			{
+				outError = position + ": " + outError;
 				return std::nullopt;
+			}
 			if (map.Find(action.Name))
 			{
 				outError = "input actions: duplicate action '" + action.Name + "'";
@@ -389,7 +416,7 @@ namespace Basalt {
 				const auto parsed = type->is_string() ? InputActionTypeFromString(type->get<std::string>()) : std::nullopt;
 				if (!parsed)
 				{
-					outError = "input action '" + action.Name + "': Type must be \"Button\" or \"Axis\"";
+					outError = "input action '" + action.Name + "': Type must be \"Button\" or \"Axis\" (case-sensitive)";
 					return std::nullopt;
 				}
 				action.Type = *parsed;

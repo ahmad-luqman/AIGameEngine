@@ -648,6 +648,17 @@ TEST_SUITE("Project")
 		CHECK(Project::GetActive()->GetConfig().Name == "Renamed");
 		CHECK(ParseJson(*FileSystem::ReadTextFile(file)) == saved);
 
+		// Bindings that can never press a button or move an axis are warnings; a stick read backwards still can.
+		RunCommand(registry, session, "project.set", { { "inputActions", { { "Actions", { { { "Name", "Up" }, { "Bindings", { { { "Key", "W" }, { "Scale", -1 } }, { { "GamepadAxis", "LeftY" }, { "Scale", -1 } } } } }, { { "Name", "MoveX" }, { "Type", "Axis" }, { "Bindings", { { { "Key", "A" }, { "Scale", -1 } }, { { "Key", "D" }, { "Scale", 0 } } } } } } } } } });
+		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities": []})");
+		RunCommand(registry, session, "project.set", { { "startScene", "Assets/Scenes/Main.bscene" } });
+		const auto silent = Messages(ValidateProject(*Project::GetActive()), ValidationSeverity::Warning);
+		CHECK(Contains(silent, "input action 'Up': binding 1 can never press it (Scale -1)"));
+		CHECK_FALSE(Contains(silent, "input action 'Up': binding 2"));
+		CHECK(Contains(silent, "input action 'MoveX': binding 2 can never move it (Scale 0)"));
+		CHECK_FALSE(Contains(silent, "input action 'MoveX': binding 1"));
+		RunCommand(registry, session, "project.set", { { "inputActions", actions } });
+
 		// An action without bindings is a warning; a broken file an error, and the project no longer loads.
 		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities": []})");
 		RunCommand(registry, session, "project.set", { { "startScene", "Assets/Scenes/Main.bscene" } });
@@ -659,12 +670,23 @@ TEST_SUITE("Project")
 		CHECK(Contains(Messages(report, ValidationSeverity::Error), "binding: unknown Key 'Nope'"));
 		CHECK_FALSE(Project::Load(temp.GetDirectory(), error));
 		CHECK(error.find("invalid input actions file") != std::string::npos);
+		// A file that cannot be read is an error, never "no actions".
+		std::filesystem::remove(file);
+		std::filesystem::create_directories(file);
+		CHECK_FALSE(Project::Load(temp.GetDirectory(), error));
+		CHECK(error.find("cannot read input actions file") != std::string::npos);
+		std::filesystem::remove_all(file);
 		temp.WriteFile(Project::InputFileName, "{ not json");
 		CHECK_FALSE(Project::Load(temp.GetDirectory(), error));
-		CHECK(error.find("not valid JSON") != std::string::npos);
+		INFO(error);
+		CHECK(error.find("parse error at line 1") != std::string::npos);
+
+		// Saving unchanged actions leaves the (hand-edited) file alone, so put it back by hand.
+		RunCommand(registry, session, "project.set", { { "inputActions", actions } });
+		CHECK(*FileSystem::ReadTextFile(file) == "{ not json");
+		temp.WriteFile(Project::InputFileName, saved.dump());
 
 		// The export carries the file, and a later export without one drops the earlier copy.
-		RunCommand(registry, session, "project.set", { { "inputActions", actions } });
 #if defined(__APPLE__)
 		temp.WriteFile("FakeVulkanSDK/lib/libvulkan.1.dylib", "stand-in");
 		temp.WriteFile("FakeVulkanSDK/lib/libMoltenVK.dylib", "stand-in");

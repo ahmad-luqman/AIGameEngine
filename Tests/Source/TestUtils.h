@@ -7,6 +7,7 @@
 #include <Basalt/Project/Project.h>
 #include <Basalt/Scene/Scene.h>
 #include <Basalt/Scripting/ScriptEngine.h>
+#include <Basalt/UI/GameUI.h>
 
 #include <doctest/doctest.h>
 
@@ -98,8 +99,9 @@ namespace BasaltTest {
 		std::optional<std::string> m_Previous;
 	};
 
-	// Starts and ends a test with nothing held, no injected gamepads, full game routing and the Normal cursor, so a
-	// test that changes the routing or the cursor cannot leak it into the next one.
+	// Starts and ends a test with nothing held, no injected gamepads, the headless host view (with full game routing)
+	// and the Normal cursor, so a test that changes the view, the routing or the cursor cannot leak it into the next one,
+	// even when it fails half way.
 	class ScopedGameInput
 	{
 	public:
@@ -112,8 +114,7 @@ namespace BasaltTest {
 	private:
 		static void Restore()
 		{
-			Basalt::Input::SetGameFocus(true);
-			Basalt::Input::SetGamePointer(true);
+			Basalt::GameUI::SetHostState({});
 			Basalt::Input::SetCursorMode(Basalt::CursorMode::Normal);
 			Basalt::Input::Reset();
 			Basalt::Input::ForgetInjectedGamepads();

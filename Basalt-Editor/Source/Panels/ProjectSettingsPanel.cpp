@@ -37,20 +37,26 @@ namespace Basalt {
 		constexpr Resolution s_Resolutions[] = { { "1280 x 720 (16:9)", 1280, 720 }, { "1600 x 900 (16:9)", 1600, 900 }, { "1920 x 1080 (16:9)", 1920, 1080 }, { "2560 x 1440 (16:9)", 2560, 1440 }, { "1024 x 768 (4:3)", 1024, 768 }, { "1080 x 1920 (portrait)", 1080, 1920 } };
 		constexpr int s_StepRates[] = { 30, 50, 60, 120 };
 
-		// A binding's control keys (InputActionMap::BindingFromJson) with their pickers' labels and name lists.
+		// Pickers for the controls a binding can name, in the order of InputControlKeys.
 		struct BindingSource
 		{
-			const char* Key;
 			const char* Label;
 			std::span<const std::string_view> (*Names)();
+			bool IsGamepad;
+			bool HasDeadZone;
 		};
 
-		constexpr std::array<BindingSource, 4> s_BindingSources = { {
-			{ "Key", "Key", &GetKeyNames },
-			{ "MouseButton", "Mouse", &GetMouseButtonNames },
-			{ "GamepadButton", "Gamepad Button", &GetGamepadButtonNames },
-			{ "GamepadAxis", "Gamepad Axis", &GetGamepadAxisNames },
+		constexpr std::array<BindingSource, InputControlKeys.size()> s_BindingSources = { {
+			{ "Key", &GetKeyNames, false, false },
+			{ "Mouse", &GetMouseButtonNames, false, false },
+			{ "Gamepad Button", &GetGamepadButtonNames, true, false },
+			{ "Gamepad Axis", &GetGamepadAxisNames, true, true },
 		} };
+
+		std::string GamepadLabel(const std::optional<uint32_t>& gamepad)
+		{
+			return gamepad ? fmt::format("Gamepad {}", *gamepad) : std::string("Any gamepad");
+		}
 
 		void HelpMarker(const char* text)
 		{
@@ -117,20 +123,21 @@ namespace Basalt {
 		ImGui::End();
 	}
 
-	void ProjectSettingsPanel::Set(const nlohmann::json& params)
+	bool ProjectSettingsPanel::Set(const nlohmann::json& params)
 	{
 		m_Warnings.clear();
 		// The settings change (or the attempt shows them stale): validate again to see the effect.
 		m_Validation.reset();
 		const auto result = m_Context.Execute("project.set", params);
 		if (!result)
-			return;
+			return false;
 		if (const auto warnings = result->find("warnings"); warnings != result->end())
 			for (const auto& warning : *warnings)
 				m_Warnings.push_back(warning.get<std::string>());
 		if (const auto layers = result->find("unknownPhysicsLayers"); layers != result->end())
 			for (const auto& use : *layers)
 				m_Warnings.push_back("'" + use["name"].get<std::string>() + "' uses the undefined layer '" + use["layer"].get<std::string>() + "' and plays on Default");
+		return true;
 	}
 
 	void ProjectSettingsPanel::DrawGeneral(const ProjectConfig& config)
@@ -276,8 +283,7 @@ namespace Basalt {
 		ImGui::TextDisabled("Saved to %s. Scripts read them with Input.GetAction.", Project::InputFileName);
 		HelpMarker("A Button action is as strong as its strongest binding; an Axis adds its bindings (a key with Scale -1 is the negative half). Scale multiplies a binding's value; a gamepad axis reads 0 inside its dead zone. Changes apply from the next play.");
 		// Edited as the JSON project.set takes, so this panel can do nothing the automation API cannot.
-		nlohmann::json map = config.InputActions.ToJson();
-		nlohmann::json& actions = map["Actions"];
+		nlohmann::json actions = config.InputActions.ActionsToJson();
 		bool changed = false;
 		std::optional<size_t> removedAction;
 		for (size_t i = 0; i < actions.size(); i++)
@@ -291,13 +297,21 @@ namespace Basalt {
 				removedAction = i;
 			if (open)
 			{
-				int type = action["Type"] == "Axis" ? 1 : 0;
-				const char* const types[] = { "Button", "Axis" };
+				const InputActionType type = InputActionTypeFromString(action["Type"].get<std::string>()).value_or(InputActionType::Button);
 				ImGui::SetNextItemWidth(120.0f);
-				if (ImGui::Combo("Type", &type, types, 2))
+				if (ImGui::BeginCombo("Type", std::string(InputActionTypeToString(type)).c_str()))
 				{
-					action["Type"] = types[type];
-					changed = true;
+					for (uint32_t t = 0; t < InputActionTypeCount; t++)
+					{
+						const auto option = static_cast<InputActionType>(t);
+						const std::string label(InputActionTypeToString(option));
+						if (ImGui::Selectable(label.c_str(), option == type) && option != type)
+						{
+							action["Type"] = label;
+							changed = true;
+						}
+					}
+					ImGui::EndCombo();
 				}
 				nlohmann::json& bindings = action["Bindings"];
 				std::optional<size_t> removedBinding;
@@ -318,7 +332,7 @@ namespace Basalt {
 				ImGui::BeginDisabled(bindings.size() >= InputActionMap::MaxBindings);
 				if (ImGui::SmallButton("Add Binding"))
 				{
-					bindings.push_back({ { "Key", "Space" } });
+					bindings.push_back({ { std::string(InputControlKeys[0]), "Space" } });
 					changed = true;
 				}
 				ImGui::EndDisabled();
@@ -335,33 +349,31 @@ namespace Basalt {
 		ImGui::InputTextWithHint("##NewAction", "New action name", &m_NewActionName);
 		ImGui::SameLine();
 		ImGui::BeginDisabled(m_NewActionName.empty() || config.InputActions.Find(m_NewActionName) || actions.size() >= InputActionMap::MaxActions);
-		if (ImGui::Button("Add Action"))
-		{
-			actions.push_back({ { "Name", m_NewActionName }, { "Type", "Button" }, { "Bindings", nlohmann::json::array() } });
-			m_NewActionName.clear();
-			changed = true;
-		}
+		const bool add = ImGui::Button("Add Action");
 		ImGui::EndDisabled();
-		if (changed)
-			Set({ { "inputActions", map } });
+		if (add)
+			actions.push_back({ { "Name", m_NewActionName }, { "Type", "Button" }, { "Bindings", nlohmann::json::array() } });
+		// The typed name stays when project.set rejects it (too long, control characters), so it can be fixed.
+		if ((changed || add) && Set({ { "inputActions", { { "Actions", actions } } } }) && add)
+			m_NewActionName.clear();
 	}
 
 	bool ProjectSettingsPanel::DrawInputBinding(nlohmann::json& binding)
 	{
-		bool changed = false;
-		size_t source = 0;
-		while (source + 1 < s_BindingSources.size() && !binding.contains(s_BindingSources[source].Key))
-			source++;
+		const auto named = std::ranges::find_if(InputControlKeys, [&binding](std::string_view key) { return binding.contains(std::string(key)); });
+		const size_t source = named != InputControlKeys.end() ? static_cast<size_t>(named - InputControlKeys.begin()) : 0;
 		const BindingSource& current = s_BindingSources[source];
+		const std::string key(InputControlKeys[source]);
 		ImGui::SetNextItemWidth(130.0f);
 		if (ImGui::BeginCombo("##Source", current.Label))
 		{
+			bool changed = false;
 			for (size_t i = 0; i < s_BindingSources.size(); i++)
 			{
 				if (ImGui::Selectable(s_BindingSources[i].Label, i == source) && i != source)
 				{
 					// A new source starts at its first control; only Scale means the same for every source.
-					nlohmann::json replaced = { { s_BindingSources[i].Key, std::string(s_BindingSources[i].Names().front()) } };
+					nlohmann::json replaced = { { std::string(InputControlKeys[i]), std::string(s_BindingSources[i].Names().front()) } };
 					if (binding.contains("Scale"))
 						replaced["Scale"] = binding["Scale"];
 					binding = std::move(replaced);
@@ -369,11 +381,12 @@ namespace Basalt {
 				}
 			}
 			ImGui::EndCombo();
+			if (changed)
+				return true;
 		}
-		if (changed)
-			return true;
+		bool changed = false;
 		ImGui::SameLine();
-		const std::string control = binding[current.Key].get<std::string>();
+		const std::string control = binding[key].get<std::string>();
 		ImGui::SetNextItemWidth(130.0f);
 		if (ImGui::BeginCombo("##Control", control.c_str(), ImGuiComboFlags_HeightLarge))
 		{
@@ -382,7 +395,7 @@ namespace Basalt {
 				const std::string label(name);
 				if (ImGui::Selectable(label.c_str(), label == control) && label != control)
 				{
-					binding[current.Key] = label;
+					binding[key] = label;
 					changed = true;
 				}
 			}
@@ -396,8 +409,7 @@ namespace Basalt {
 			binding["Scale"] = scale;
 			changed = true;
 		}
-		const std::string_view key = current.Key;
-		if (key == "GamepadAxis")
+		if (current.HasDeadZone)
 		{
 			ImGui::SameLine();
 			float deadZone = binding.value("DeadZone", InputBinding::DefaultDeadZone);
@@ -408,24 +420,22 @@ namespace Basalt {
 				changed = true;
 			}
 		}
-		if (key == "GamepadButton" || key == "GamepadAxis")
+		if (current.IsGamepad)
 		{
 			ImGui::SameLine();
-			const std::string gamepad = binding.contains("Gamepad") ? fmt::format("Gamepad {}", binding["Gamepad"].get<uint32_t>()) : std::string("Any gamepad");
+			const std::optional<uint32_t> selected = binding.contains("Gamepad") ? std::optional<uint32_t>(binding["Gamepad"].get<uint32_t>()) : std::nullopt;
 			ImGui::SetNextItemWidth(120.0f);
-			if (ImGui::BeginCombo("##Gamepad", gamepad.c_str()))
+			if (ImGui::BeginCombo("##Gamepad", GamepadLabel(selected).c_str()))
 			{
-				if (ImGui::Selectable("Any gamepad", !binding.contains("Gamepad")) && binding.contains("Gamepad"))
+				for (int option = -1; option < static_cast<int>(Input::MaxGamepads); option++)
 				{
-					binding.erase("Gamepad");
-					changed = true;
-				}
-				for (uint32_t index = 0; index < Input::MaxGamepads; index++)
-				{
-					const bool selected = binding.contains("Gamepad") && binding["Gamepad"].get<uint32_t>() == index;
-					if (ImGui::Selectable(fmt::format("Gamepad {}", index).c_str(), selected) && !selected)
+					const std::optional<uint32_t> gamepad = option < 0 ? std::nullopt : std::optional<uint32_t>(static_cast<uint32_t>(option));
+					if (ImGui::Selectable(GamepadLabel(gamepad).c_str(), gamepad == selected) && gamepad != selected)
 					{
-						binding["Gamepad"] = index;
+						if (gamepad)
+							binding["Gamepad"] = *gamepad;
+						else
+							binding.erase("Gamepad");
 						changed = true;
 					}
 				}

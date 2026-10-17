@@ -1,7 +1,8 @@
 #include "Basalt/Core/KeyCodes.h"
 
+#include "Basalt/Core/EnumNames.h"
+
 #include <array>
-#include <cctype>
 #include <iterator>
 #include <utility>
 
@@ -116,18 +117,6 @@ namespace Basalt {
 			{ KeyCode::RightSuper, "RightSuper" },
 			{ KeyCode::Menu, "Menu" },
 		};
-
-		bool EqualsIgnoreCase(std::string_view a, std::string_view b)
-		{
-			if (a.size() != b.size())
-				return false;
-			for (size_t i = 0; i < a.size(); i++)
-			{
-				if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i])))
-					return false;
-			}
-			return true;
-		}
 
 	}
 

@@ -1,5 +1,6 @@
 #include "Basalt/UI/GameUI.h"
 
+#include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Input.h"
 #include "Basalt/UI/UIGeometry.h"
 
@@ -30,6 +31,17 @@ namespace Basalt {
 		bool IsUsableOrigin(const glm::vec2& origin)
 		{
 			return std::isfinite(origin.x) && std::isfinite(origin.y);
+		}
+
+		bool IsUsableResolution(const std::optional<glm::vec2>& resolution)
+		{
+			return !resolution || IsUsableSize(*resolution);
+		}
+
+		// Game units per viewport unit. Callers hold s_Mutex; the viewport size is always usable, so never zero.
+		glm::vec2 GameScale()
+		{
+			return s_Host.Resolution.value_or(s_Host.ViewportSize) / s_Host.ViewportSize;
 		}
 
 	}
@@ -97,8 +109,9 @@ namespace Basalt {
 
 	void GameUI::SetResolution(const std::optional<glm::vec2>& resolution)
 	{
+		BS_CORE_ASSERT(IsUsableResolution(resolution), "unusable game resolution");
 		std::scoped_lock lock(s_Mutex);
-		if (!resolution || IsUsableSize(*resolution))
+		if (IsUsableResolution(resolution))
 			s_Host.Resolution = resolution;
 	}
 
@@ -111,13 +124,13 @@ namespace Basalt {
 	glm::vec2 GameUI::ToGamePosition(const glm::vec2& mouse)
 	{
 		std::scoped_lock lock(s_Mutex);
-		return (mouse - s_Host.ViewportOrigin) * (s_Host.Resolution.value_or(s_Host.ViewportSize) / s_Host.ViewportSize);
+		return (mouse - s_Host.ViewportOrigin) * GameScale();
 	}
 
 	glm::vec2 GameUI::ToGameDelta(const glm::vec2& delta)
 	{
 		std::scoped_lock lock(s_Mutex);
-		return delta * (s_Host.Resolution.value_or(s_Host.ViewportSize) / s_Host.ViewportSize);
+		return delta * GameScale();
 	}
 
 	void GameUI::SetPointerEnabled(bool enabled)
@@ -142,7 +155,7 @@ namespace Basalt {
 
 	std::optional<glm::vec2> GameUI::GetPointerPosition()
 	{
-		if (!Input::HasMousePosition() || !Input::HasGamePointer())
+		if (!Input::HasMousePosition() || !Input::HasGamePointer() || Input::GetCursorMode() == CursorMode::Locked)
 			return std::nullopt;
 		const glm::vec2 mouse = Input::GetMousePosition();
 		std::scoped_lock lock(s_Mutex);
@@ -167,7 +180,7 @@ namespace Basalt {
 			s_Host.ViewportOrigin = state.ViewportOrigin;
 		if (IsUsableSize(state.ViewportSize))
 			s_Host.ViewportSize = state.ViewportSize;
-		if (!state.Resolution || IsUsableSize(*state.Resolution))
+		if (IsUsableResolution(state.Resolution))
 			s_Host.Resolution = state.Resolution;
 	}
 

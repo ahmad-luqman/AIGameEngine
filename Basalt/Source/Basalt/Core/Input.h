@@ -98,7 +98,8 @@ namespace Basalt {
 		static glm::vec2 GetMouseScroll();
 
 		// Out-of-range indices and disconnected gamepads read as buttons up and centered axes;
-		// IsGamepadButtonReleased still reports the buttons held at a disconnect, on that frame.
+		// IsGamepadButtonReleased still reports the buttons held at a disconnect, on that frame, and the Previous frame
+		// of a gamepad disconnected since reads what it held then (here and in GameInput).
 		static bool IsGamepadConnected(uint32_t index);
 		// An id of the gamepad's current connection, new for every connect (0 while disconnected): when it changes,
 		// the gamepad at `index` was disconnected or replaced, even between two looks at it.
@@ -106,7 +107,6 @@ namespace Basalt {
 		static GamepadSource GetGamepadSource(uint32_t index);
 		// The device's name ("Xbox Controller", ...); empty when not connected.
 		static std::string GetGamepadName(uint32_t index);
-		// The previous frame's state of a gamepad disconnected since is what it held then.
 		static bool IsGamepadButtonDown(uint32_t index, GamepadButton button, InputFrame frame = InputFrame::Current);
 		static bool IsGamepadButtonPressed(uint32_t index, GamepadButton button);
 		static bool IsGamepadButtonReleased(uint32_t index, GamepadButton button);
@@ -121,6 +121,10 @@ namespace Basalt {
 		static bool HasGameFocus();
 		static void SetGamePointer(bool enabled);
 		static bool HasGamePointer();
+		// Withholds a held key from the game until it is let go, as if it had been held when focus came back: the host
+		// used it (the editor's Escape that releases the cursor). Called before the scene update, the game never sees
+		// it pressed.
+		static void WithholdFromGame(KeyCode key);
 
 		// The cursor the game asks for (Lua Input.SetCursorMode). Only stored here: the runtime applies it to its
 		// window, the editor while its Game view hosts the game with focus, headless runs never. Play sessions start
@@ -165,11 +169,11 @@ namespace Basalt {
 
 	// Input as the game sees it (Lua's Input, input actions): only what the host routes to it. The keyboard and
 	// gamepads reach the game while it has focus (Input::SetGameFocus), the mouse buttons, movement and scroll while
-	// it has the pointer (Input::SetGamePointer); the mouse position is never withheld. Losing the routing reads like
-	// letting go of everything held (released on that frame); a key or button held when the routing comes back stays
-	// released for the game until it is let go (a stick until it returns to rest), so the click or key press that
-	// gives the game focus never reaches it as a press. With full routing (the runtime, headless runs) every read
-	// equals Input's.
+	// it has the pointer (Input::SetGamePointer); the mouse position, gamepad connections and names are never
+	// withheld. Losing the routing reads like letting go of everything held (released on that frame); a key or button
+	// held when the routing comes back stays released for the game until it is let go (a stick until it returns to
+	// rest). The editor gives the game the pointer only while its Game view also has focus, so the click that focuses
+	// the view is not the game's. With full routing (the runtime, headless runs) every read equals Input's.
 	class GameInput
 	{
 	public:

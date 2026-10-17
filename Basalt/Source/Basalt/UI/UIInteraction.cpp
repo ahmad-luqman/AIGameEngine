@@ -32,7 +32,8 @@ namespace Basalt {
 		}
 
 		// Enter, keypad Enter, Space or any gamepad's A, by `key` and `button` (Down or Pressed).
-		bool IsAccept(bool (*key)(KeyCode), bool (*button)(uint32_t, GamepadButton))
+		template<typename KeyRead, typename ButtonRead>
+		bool IsAccept(KeyRead&& key, ButtonRead&& button)
 		{
 			return key(KeyCode::Enter) || key(KeyCode::KPEnter) || key(KeyCode::Space) || AnyGamepad([button](uint32_t index) { return button(index, GamepadButton::A); });
 		}
@@ -64,15 +65,15 @@ namespace Basalt {
 		// push moves one way, not two.
 		bool IsStickPushed(uint32_t index, const DirectionBinding& binding)
 		{
-			const float along = Input::GetGamepadAxis(index, binding.Axis) * binding.Sign;
-			const float across = std::abs(Input::GetGamepadAxis(index, binding.CrossAxis));
+			const float along = GameInput::GetGamepadAxis(index, binding.Axis) * binding.Sign;
+			const float across = std::abs(GameInput::GetGamepadAxis(index, binding.CrossAxis));
 			return along >= UIInteraction::StickThreshold && (along > across || (binding.WinsTies && along == across));
 		}
 
 		// The direction is held on the keyboard, a D-pad or a left stick.
 		bool IsDirectionHeld(const DirectionBinding& binding)
 		{
-			return Input::IsKeyDown(binding.Key) || AnyGamepad([&binding](uint32_t index) { return Input::IsGamepadButtonDown(index, binding.DPad) || IsStickPushed(index, binding); });
+			return GameInput::IsKeyDown(binding.Key) || AnyGamepad([&binding](uint32_t index) { return GameInput::IsGamepadButtonDown(index, binding.DPad) || IsStickPushed(index, binding); });
 		}
 
 		// The widget nearest `from` in `direction` (a unit axis): by center distance along it plus twice the sideways
@@ -336,9 +337,9 @@ namespace Basalt {
 		// The focused widget's place in `navigable`; its size when nothing navigable is focused.
 		const auto focusIndex = [&]() { return static_cast<size_t>(std::ranges::find_if(navigable, [this](const Candidate* widget) { return widget->ID == m_Focus.ID; }) - navigable.begin()); };
 
-		if (Input::IsKeyPressed(KeyCode::Tab) && !navigable.empty())
+		if (GameInput::IsKeyPressed(KeyCode::Tab) && !navigable.empty())
 		{
-			const bool backwards = Input::IsKeyDown(KeyCode::LeftShift) || Input::IsKeyDown(KeyCode::RightShift);
+			const bool backwards = GameInput::IsKeyDown(KeyCode::LeftShift) || GameInput::IsKeyDown(KeyCode::RightShift);
 			const size_t count = navigable.size();
 			const size_t current = focusIndex();
 			size_t next = 0;
@@ -377,9 +378,9 @@ namespace Basalt {
 
 		const size_t current = focusIndex();
 		const Candidate* focus = current < navigable.size() ? navigable[current] : nullptr;
-		if (focus && focus->Kind != UIWidgetKind::Slider && IsAccept(&Input::IsKeyPressed, &Input::IsGamepadButtonPressed))
+		if (focus && focus->Kind != UIWidgetKind::Slider && IsAccept(&GameInput::IsKeyPressed, &GameInput::IsGamepadButtonPressed))
 			Activate(scene, *focus);
-		m_AcceptHeld = focus && focus->Kind != UIWidgetKind::Slider && IsAccept([](KeyCode key) { return Input::IsKeyDown(key); }, [](uint32_t index, GamepadButton button) { return Input::IsGamepadButtonDown(index, button); });
+		m_AcceptHeld = focus && focus->Kind != UIWidgetKind::Slider && IsAccept([](KeyCode key) { return GameInput::IsKeyDown(key); }, [](uint32_t index, GamepadButton button) { return GameInput::IsGamepadButtonDown(index, button); });
 	}
 
 	bool UIInteraction::Repeat(Direction direction, bool held, float deltaTime)

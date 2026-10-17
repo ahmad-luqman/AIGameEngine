@@ -1,8 +1,9 @@
 #include "Basalt/Core/GamepadCodes.h"
 
+#include "Basalt/Core/EnumNames.h"
+
 #include <algorithm>
 #include <array>
-#include <cctype>
 
 namespace Basalt {
 
@@ -24,29 +25,6 @@ namespace Basalt {
 		static_assert(std::ranges::none_of(s_ButtonNames, IsEmpty));
 		static_assert(std::ranges::none_of(s_AxisNames, IsEmpty));
 
-		bool EqualsIgnoreCase(std::string_view a, std::string_view b)
-		{
-			if (a.size() != b.size())
-				return false;
-			for (size_t i = 0; i < a.size(); i++)
-			{
-				if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i])))
-					return false;
-			}
-			return true;
-		}
-
-		template<typename T, size_t N>
-		std::optional<T> FindName(const std::array<std::string_view, N>& names, std::string_view name)
-		{
-			for (size_t i = 0; i < N; i++)
-			{
-				if (EqualsIgnoreCase(names[i], name))
-					return static_cast<T>(i);
-			}
-			return std::nullopt;
-		}
-
 	}
 
 	std::string_view GamepadButtonToString(GamepadButton button)
@@ -63,12 +41,12 @@ namespace Basalt {
 
 	std::optional<GamepadButton> GamepadButtonFromString(std::string_view name)
 	{
-		return FindName<GamepadButton>(s_ButtonNames, name);
+		return EnumFromNameIgnoreCase<GamepadButton>(s_ButtonNames, name);
 	}
 
 	std::optional<GamepadAxis> GamepadAxisFromString(std::string_view name)
 	{
-		return FindName<GamepadAxis>(s_AxisNames, name);
+		return EnumFromNameIgnoreCase<GamepadAxis>(s_AxisNames, name);
 	}
 
 	std::span<const std::string_view> GetGamepadButtonNames()

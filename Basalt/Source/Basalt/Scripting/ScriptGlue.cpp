@@ -32,6 +32,7 @@
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <ranges>
 #include <sstream>
 #include <stdexcept>
 #include <tuple>
@@ -670,12 +671,9 @@ namespace Basalt {
 			const InputActionMap& actions = RequireScene(context).GetInputActions();
 			if (const InputAction* action = actions.Find(name))
 				return *action;
-			std::vector<std::string> names;
-			for (const InputAction& action : actions.GetActions())
-				names.push_back(action.Name);
-			if (names.empty())
+			if (actions.IsEmpty())
 				throw std::runtime_error(fmt::format("unknown input action '{}' (the project defines none: add them to {} or with project.set inputActions)", name, Project::InputFileName));
-			throw std::runtime_error(fmt::format("unknown input action '{}' (defined: {})", name, fmt::join(names, ", ")));
+			throw std::runtime_error(fmt::format("unknown input action '{}' (defined: {})", name, fmt::join(actions.GetActions() | std::views::transform(&InputAction::Name), ", ")));
 		}
 
 		void RegisterInputActions(sol::table& input, ScriptContext& context)
@@ -684,29 +682,41 @@ namespace Basalt {
 			input["IsActionDown"] = [&context](const std::string& name) { return InputActionMap::IsDown(RequireAction(context, name)); };
 			input["IsActionPressed"] = [&context](const std::string& name) { return InputActionMap::IsPressed(RequireAction(context, name)); };
 			input["IsActionReleased"] = [&context](const std::string& name) { return InputActionMap::IsReleased(RequireAction(context, name)); };
-			input["GetActions"] = [&context](sol::this_state state) { return JsonToLua(state, RequireScene(context).GetInputActions().ToJson()["Actions"]); };
-			input["GetBindings"] = [&context](sol::this_state state, const std::string& name) {
-				nlohmann::json bindings = nlohmann::json::array();
-				for (const InputBinding& binding : RequireAction(context, name).Bindings)
-					bindings.push_back(InputActionMap::BindingToJson(binding));
-				return JsonToLua(state, bindings);
-			};
+			input["GetActions"] = [&context](sol::this_state state) { return JsonToLua(state, RequireScene(context).GetInputActions().ActionsToJson()); };
+			input["GetBindings"] = [&context](sol::this_state state, const std::string& name) { return JsonToLua(state, InputActionMap::BindingsToJson(RequireAction(context, name).Bindings)); };
 			input["SetBindings"] = [&context](const std::string& name, const sol::table& bindings) {
 				RequireAction(context, name);
-				nlohmann::json data = LuaToJson(bindings);
+				const std::string where = "Input.SetBindings('" + name + "'): ";
+				nlohmann::json data;
+				try
+				{
+					data = LuaToJson(bindings);
+				}
+				catch (const std::exception& e)
+				{
+					throw std::runtime_error(where + e.what());
+				}
 				// An empty Lua table converts to an empty object: no bindings.
 				if (data.is_object() && data.empty())
 					data = nlohmann::json::array();
+				else if (data.is_object())
+					throw std::runtime_error(where + "expected a list of bindings, such as { { Key = 'Space' } }");
 				std::string error;
 				auto parsed = InputActionMap::BindingsFromJson(data, error);
 				if (!parsed || !RequireScene(context).SetInputBindings(name, std::move(*parsed), error))
-					throw std::runtime_error("Input.SetBindings('" + name + "'): " + error);
+					throw std::runtime_error(where + error);
 			};
 			input["ResetBindings"] = [&context](const sol::optional<std::string>& name) {
-				if (name)
-					RequireAction(context, *name);
 				std::string error;
-				if (!RequireScene(context).ResetInputBindings(name ? std::optional<std::string_view>(*name) : std::nullopt, error))
+				bool reset = false;
+				if (name)
+				{
+					RequireAction(context, *name);
+					reset = RequireScene(context).ResetInputBindings(*name, error);
+				}
+				else
+					reset = RequireScene(context).ResetInputBindings(error);
+				if (!reset)
 					throw std::runtime_error("Input.ResetBindings: " + error);
 			};
 		}

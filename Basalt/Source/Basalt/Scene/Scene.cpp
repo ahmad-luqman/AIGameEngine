@@ -567,25 +567,31 @@ namespace Basalt {
 		return m_InputActions.SetBindings(action, std::move(bindings), outError);
 	}
 
-	bool Scene::ResetInputBindings(std::optional<std::string_view> action, std::string& outError)
+	bool Scene::ResetInputBindings(std::string_view action, std::string& outError)
 	{
 		if (m_State != SceneState::Play)
 		{
 			outError = "input bindings require Play mode";
 			return false;
 		}
-		if (!action)
-		{
-			m_InputActions = m_StartInputActions;
-			return true;
-		}
-		const InputAction* start = m_StartInputActions.Find(*action);
+		const InputAction* start = m_StartInputActions.Find(action);
 		if (!start)
 		{
-			outError = fmt::format("unknown input action '{}'", *action);
+			outError = fmt::format("unknown input action '{}'", action);
 			return false;
 		}
-		return m_InputActions.SetBindings(*action, start->Bindings, outError);
+		return m_InputActions.SetBindings(action, start->Bindings, outError);
+	}
+
+	bool Scene::ResetInputBindings(std::string& outError)
+	{
+		if (m_State != SceneState::Play)
+		{
+			outError = "input bindings require Play mode";
+			return false;
+		}
+		m_InputActions = m_StartInputActions;
+		return true;
 	}
 
 	void Scene::OnRuntimeStart(std::optional<GraphicsSettings> graphics)

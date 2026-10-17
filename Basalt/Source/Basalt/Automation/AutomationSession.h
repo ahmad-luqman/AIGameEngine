@@ -124,10 +124,13 @@ namespace Basalt {
 		// them on the same frames of a fresh play session reproduces the run.
 		void StartRecording();
 		bool IsRecording() const { return m_Recording.is_array(); }
-		// Records an input command on the current play frame. Before it, when the host's view (GameUI::HostState: where
-		// the mouse maps onto the canvas, and whether widgets take input) differs from the last one recorded, a "view"
-		// event records it, so a replay maps the recorded mouse positions the same way in any host.
+		// Records an input command on the current play frame, after RecordViewChange.
 		void RecordInput(const std::string& command, const nlohmann::json& params);
+		// While recording, records the host's view (GameUI::HostState: where the mouse maps onto the canvas and the game
+		// resolution, and whether the game has the pointer and the keyboard) as a "view" event when it differs from the
+		// last one recorded, so a replay maps mouse positions and routes input the same way in any host. Hosts call it
+		// before every scene update (Step does), as the routing can change between recorded commands.
+		void RecordViewChange();
 		// Seed of the first play session the recording saw (Scene::GetRandomSeed), if any: replays must run
 		// with it, whatever the project's seed was changed to since.
 		std::optional<uint32_t> GetRecordingSeed() const { return m_RecordingSeed; }
@@ -142,6 +145,9 @@ namespace Basalt {
 		std::function<bool(nlohmann::json& outStats, std::string& outError)> RenderStats;
 		// Called after the edit scene is replaced (editor resets panels, camera...).
 		std::function<void()> OnSceneChanged;
+		// Called when Play starts, before the scripts' OnCreate, so the host can give the game its view first (the
+		// editor's Game view geometry, resolution and routing). replay.run clears it while it runs the headless view.
+		std::function<void()> BeforeRuntimeStart;
 		// Name of the host for diagnostics ("cli", "editor").
 		std::string HostName = "cli";
 		// Only the attached owner may detach itself; attaching a second observer is rejected.

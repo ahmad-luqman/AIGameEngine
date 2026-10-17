@@ -322,18 +322,23 @@ Mouse buttons: `Left`, `Right`, `Middle`, `Button3`-`Button7`.
 displays); in the editor's Game view it is the game resolution, whatever size the view is drawn at, so a script
 reads the same coordinates in both. The delta is in the same units. Headless runs use a 1920x1080 view.
 
-**What the game receives.** Scripts see only the input the host gives the game. The runtime and headless runs give
-it everything. The editor gives it the keyboard and gamepads while the Game view has focus, and the mouse buttons,
-movement and scroll while the pointer is over the Game view (or the game has locked the cursor); the position is
-always reported. Losing that input reads like letting go of everything held (`IsKeyReleased` is true on that
-frame); a key or button held when it comes back stays up for the game until it is let go, so the click that
-focuses the Game view is not a press.
+**What the game receives.** Scripts (and the game UI's keyboard and gamepad navigation) see only the input the host
+gives the game. The runtime and headless runs give it everything. The editor gives it the keyboard and gamepads while
+the Game view has focus, and the mouse buttons, movement and scroll while the Game view has focus and the mouse is
+over its image (or the game has locked the cursor). The mouse position, gamepad connections and names (and
+`OnGamepadConnected`/`OnGamepadDisconnected`) are always reported. Losing that input reads like letting go of
+everything held (`IsKeyReleased` is true on that frame); a key or button held when it comes back stays up for the
+game until it is let go, and the click that focuses the Game view is not the game's. This applies to automation
+too: in the editor, `input.key` reaches scripts only while the Game view has focus (`editor.game_view {"focus":
+true}`), as a real key would.
 
 **Cursor.** `Input.SetCursorMode(mode)` asks for `"Normal"` (visible), `"Hidden"` (hidden over the game, free to
 leave) or `"Locked"` (hidden and held in the window: only the delta means anything, as first-person cameras want;
 the platform's raw mouse motion is used where available). `Input.GetCursorMode()` returns the mode asked for. Play
-starts and stops with `"Normal"`. In the editor the mode applies while the game runs and the Game view has focus;
-Escape gives the cursor back to the editor until the Game view is clicked again. Headless runs only store it.
+starts and stops with `"Normal"` (`Scene.Load` keeps it). In the editor the mode applies while the game runs and the
+Game view has focus (`"Hidden"` hides the cursor only over the Game view's image); Escape gives the cursor back to
+the editor until the Game view is clicked again, and that Escape does not reach the game. While the cursor is locked
+the mouse position is meaningless (and UI widgets get no pointer). Headless runs only store the mode.
 
 ### Input actions
 
@@ -349,7 +354,7 @@ in Project Settings > Input Actions, or with `project.set inputActions`; it is e
 		{ "Name": "Jump", "Type": "Button", "Bindings": [{ "Key": "Space" }, { "GamepadButton": "A" }] },
 		{ "Name": "Fire", "Bindings": [{ "MouseButton": "Left" }, { "GamepadAxis": "RightTrigger" }] },
 		{ "Name": "MoveX", "Type": "Axis", "Bindings": [{ "Key": "D" }, { "Key": "A", "Scale": -1 },
-			{ "GamepadAxis": "LeftX", "DeadZone": 0.25 }, { "GamepadButton": "A", "Gamepad": 1 }] }
+			{ "GamepadAxis": "LeftX", "DeadZone": 0.25 }, { "GamepadButton": "DPadRight", "Gamepad": 1 }] }
 	]
 }
 ```
@@ -358,13 +363,16 @@ in Project Settings > Input Actions, or with `project.set inputActions`; it is e
   while held. A gamepad axis reads its value past its `DeadZone` (0 to 0.95, default 0.2), rescaled so a stick
   pushed all the way still reads 1. `Scale` (-1 to 1, default 1) multiplies the value: `-1` makes a key the negative
   half of an axis, or a stick pushed up (-Y) press a button. `Gamepad` (0-15) reads one gamepad (local
-  multiplayer); without it, every gamepad counts (the one pushed furthest).
+  multiplayer); without it, every gamepad counts (the one pushed furthest the binding's way). Control names are
+  case-insensitive, like key names in scripts; `Type` is exactly `"Button"` or `"Axis"`, like component enums.
 - A `Button` action (the default type) is as strong as its strongest binding, from 0 to 1 (a trigger gives
   values in between). An `Axis` action adds its bindings and clamps the sum to -1..1, so A and D held together
   cancel and a key plus the stick never pass full.
 - An action is down from a strength (an axis from a magnitude) of 0.5. Pressed and released compare this frame
   with the previous one, both read through the current bindings (rebinding is not a press or a release).
 - Actions read only what the game receives (see above).
+- `project.validate` warns about actions without bindings and bindings that can never act (`Scale` 0, or a key or
+  button with a negative `Scale` on a `Button` action).
 
 `Input.GetAction(name)` — the value (a number); `Input.IsActionDown/Pressed/Released(name)` — booleans. An unknown
 name is an error that lists the defined actions (names are case-sensitive).
