@@ -26,7 +26,7 @@ namespace Basalt {
 		ImGuiIO& io = ImGui::GetIO();
 		io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 		io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-		io.IniFilename = m_IniFilename.empty() ? nullptr : m_IniFilename.c_str();
+		io.IniFilename = GetIniFilenamePointer();
 
 		SetDarkThemeColors();
 		ImGuiStyle& style = ImGui::GetStyle();
@@ -132,8 +132,12 @@ namespace Basalt {
 	void ImGuiLayer::SetIniFilename(std::string path)
 	{
 		m_IniFilename = std::move(path);
-		if (ImGui::GetCurrentContext())
-			ImGui::GetIO().IniFilename = m_IniFilename.empty() ? nullptr : m_IniFilename.c_str();
+		if (!ImGui::GetCurrentContext())
+			return;
+		ImGui::GetIO().IniFilename = GetIniFilenamePointer();
+		// ImGui reads the file on its first frame; after that, read it now.
+		if (ImGui::GetFrameCount() > 0 && !m_IniFilename.empty())
+			ImGui::LoadIniSettingsFromDisk(m_IniFilename.c_str());
 	}
 
 	void ImGuiLayer::SetLightThemeColors()

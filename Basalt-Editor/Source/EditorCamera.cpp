@@ -17,8 +17,7 @@ namespace Basalt {
 
 	void EditorCamera::SetSpeedMultiplier(float multiplier)
 	{
-		if (std::isfinite(multiplier))
-			m_SpeedMultiplier = std::clamp(multiplier, EditorPreferences::MinCameraSpeed, EditorPreferences::MaxCameraSpeed);
+		m_SpeedMultiplier = EditorPreferences::ClampCameraSpeed(multiplier, m_SpeedMultiplier);
 	}
 
 	void EditorCamera::SetViewportSize(uint32_t width, uint32_t height)

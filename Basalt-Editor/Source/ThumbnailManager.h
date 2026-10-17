@@ -2,6 +2,7 @@
 
 #include "Basalt/Asset/Thumbnails.h"
 #include "Basalt/Core/Base.h"
+#include "Basalt/Core/FileWatcher.h"
 #include "Basalt/Renderer/PreviewRenderer.h"
 
 #include <nvrhi/nvrhi.h>
@@ -49,6 +50,13 @@ namespace Basalt {
 			uint32_t Height = 0;
 			std::string Error;
 			std::vector<std::string> Details;
+			struct Material
+			{
+				std::string Name;
+				MaterialComponent Values;
+			};
+			// A model's materials, read when its preview was made this session (the model is not kept loaded for it).
+			std::vector<Material> Materials;
 		};
 
 		// The result of a synchronous request (editor.thumbnail).
@@ -83,10 +91,10 @@ namespace Basalt {
 		std::optional<Generated> Generate(const std::string& relativePath, bool refresh, std::string& outError);
 		std::optional<ThumbnailImage> RenderMaterial(const MaterialComponent& material, std::string& outError);
 
-		// Files changed on disk (project-relative, after AssetManager dropped them): file previews check their version
-		// on their next request instead of up to two seconds later, and material previews that use one of them as a
-		// map are made again.
-		void OnFilesChanged(const std::vector<std::string>& paths);
+		// Files changed on disk (after AssetManager dropped them): every file preview checks its version on its next
+		// request instead of up to RecheckSeconds (2 s) later, and material previews that use one of them as a map are
+		// made again.
+		void OnFilesChanged(const std::vector<FileChange>& changes);
 
 		// Forgets every preview at the next Update (textures drawn this frame stay alive until then); with
 		// `deleteCache`, the disk cache too (the count it removed is logged).
@@ -124,7 +132,8 @@ namespace Basalt {
 		// Makes one queued preview; true for a GPU-rendered kind, which ends the frame's budget even when the render
 		// failed.
 		bool Process(const std::string& id, Slot& slot);
-		std::optional<ThumbnailCache::Entry> Make(const std::string& relativePath, ThumbnailKind kind, std::string& outError);
+		// With `reread`, the model or prefab and the files it uses are read again first (their file changed).
+		std::optional<ThumbnailCache::Entry> Make(const std::string& relativePath, ThumbnailKind kind, bool reread, std::vector<Preview::Material>& outMaterials, std::string& outError);
 		void Upload(Slot& slot, const ThumbnailImage& image);
 		void Clear();
 		void EvictLeastRecentlyUsed();

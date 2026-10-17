@@ -121,35 +121,57 @@ namespace Basalt {
 			return defaultValue;
 		}
 
-		// Clears require's cache (package.loaded) of the modules whose file is one of `files` (absolute), so the next
-		// require loads them again. True if it cleared any.
+		// Clears require's cache (package.loaded) when it holds a module whose file is one of `files` (absolute, lexically
+		// normal). Every module loaded from a file is forgotten then, not only the changed one: a module that required it
+		// holds on to its old table. True if a changed module was loaded. `package` is read defensively, as scripts can
+		// replace its fields.
 		bool ForgetModules(sol::state& lua, const std::vector<std::filesystem::path>& files)
 		{
-			sol::table loaded = lua["package"]["loaded"];
-			const sol::protected_function searchPath = lua["package"]["searchpath"];
-			const std::string packagePath = lua["package"]["path"];
+			const auto package = lua["package"].get<sol::optional<sol::table>>();
+			if (!package)
+				return false;
+			auto loaded = package->get<sol::optional<sol::table>>("loaded");
+			const auto searchPath = package->get<sol::optional<sol::protected_function>>("searchpath");
+			const auto packagePath = package->get<sol::optional<std::string>>("path");
+			if (!loaded || !searchPath || !packagePath)
+				return false;
 			std::vector<std::string> names;
-			for (const auto& [key, value] : loaded)
+			for (const auto& [key, value] : *loaded)
 			{
 				if (key.is<std::string>())
 					names.push_back(key.as<std::string>());
 			}
-			bool forgot = false;
+			std::vector<std::string> modules;
+			modules.reserve(names.size());
+			bool changed = false;
 			for (const std::string& name : names)
 			{
 				// The file require would load for the name now (nil for the standard libraries).
-				const sol::protected_function_result found = searchPath(name, packagePath);
+				const sol::protected_function_result found = (*searchPath)(name, *packagePath);
 				if (!found.valid() || found.get_type() != sol::type::string)
 					continue;
-				const std::filesystem::path file = FileSystem::PathFromUtf8(found.get<std::string>()).lexically_normal();
-				if (std::find(files.begin(), files.end(), file) != files.end())
+				modules.push_back(name);
+				// package.path holds native narrow text (OpenSafeLibraries), so the result decodes the same way. Equivalent,
+				// not only equal: "require 'util'" finds Util.lua on case-insensitive file systems.
+				const std::filesystem::path file = std::filesystem::path(found.get<std::string>()).lexically_normal();
+				for (const std::filesystem::path& changedFile : files)
 				{
-					loaded[name] = sol::lua_nil;
-					forgot = true;
+					std::error_code error;
+					if (file == changedFile || std::filesystem::equivalent(file, changedFile, error))
+						changed = true;
 				}
 			}
-			return forgot;
+			if (changed)
+			{
+				for (const std::string& name : modules)
+					(*loaded)[name] = sol::lua_nil;
+			}
+			return changed;
 		}
+
+		// Owners of the code classes run at their top level (ScriptEngine::Impl::ScriptClass::Owner). Entity UUIDs are
+		// random 64-bit numbers, so this range only collides with one by a 1 in 2^48 chance per class load.
+		constexpr uint64_t ClassOwnerBase = 0xC1A5500000000000ull;
 
 	}
 
@@ -177,6 +199,9 @@ namespace Basalt {
 			bool Failed = false;
 			// OnCreate has been called. OnDestroy is only called on created instances.
 			bool Created = false;
+			// OnCreate returned without an error: a hot reload re-enables an instance whose OnCreate failed with OnCreate,
+			// one that failed later with OnReload.
+			bool Initialized = false;
 		};
 
 		struct ScriptClass
@@ -184,6 +209,9 @@ namespace Basalt {
 			sol::table Table;
 			// Shared by the class's instances: methods come from the class, then the engine's instance methods.
 			sol::table InstanceMetatable;
+			// Owns what the class's top-level code started (timers, event handlers), which ends when a hot reload replaces
+			// the class: otherwise every reload would add another copy.
+			UUID Owner = 0;
 		};
 
 		ScriptEngine& Engine;
@@ -197,6 +225,9 @@ namespace Basalt {
 		std::optional<SaveData> Storage;
 		std::unordered_map<std::string, ScriptClass> Classes;
 		std::unordered_set<std::string> FailedClasses;
+		// Class owner -> script path.
+		std::unordered_map<UUID, std::string> ClassOwners;
+		uint64_t ClassLoads = 0;
 		std::unordered_map<UUID, Instance> Instances;
 		// Creation order, for deterministic callback order.
 		std::vector<UUID> Order;
@@ -318,6 +349,13 @@ namespace Basalt {
 		// Reports an error of an owner's timer, coroutine or event handler, naming the owner, and disables it.
 		static void FailOwner(ScriptEngine& engine, UUID owner, const std::string& message, const std::string& where)
 		{
+			// What a class's top level started: it all ends, as an instance's does when it fails.
+			if (const auto it = engine.m_Impl->ClassOwners.find(owner); it != engine.m_Impl->ClassOwners.end())
+			{
+				engine.ReportError(message + " (in " + where + " started by the top level of '" + it->second + "')");
+				ReleaseOwned(engine, owner);
+				return;
+			}
 			std::string ownerName = "the play session";
 			if (owner != 0)
 			{
@@ -359,11 +397,66 @@ namespace Basalt {
 				return;
 			it->second.Created = true;
 			Call(engine, id, "OnCreate");
+			// Looked up again: OnCreate may have destroyed the entity.
+			if (const auto started = impl.Instances.find(id); started != impl.Instances.end() && !started->second.Failed)
+				started->second.Initialized = true;
 			// Gamepads announced before this instance existed (OnGamepadConnected is for every instance).
 			for (uint32_t index = 0; index < Input::MaxGamepads; index++)
 			{
 				if (impl.AnnouncedGamepads[index] != 0)
 					Call(engine, id, "OnGamepadConnected", static_cast<int>(index));
+			}
+		}
+	};
+
+	// Class loading and properties, shared by instance creation and hot reload.
+	struct ScriptClassLoader
+	{
+		// Loads a script's class, its top-level code running under a new class owner. On failure what that code started
+		// is cancelled.
+		static std::optional<ScriptEngine::Impl::ScriptClass> Load(ScriptEngine& engine, const std::string& path, std::string& outError)
+		{
+			ScriptEngine::Impl& impl = *engine.m_Impl;
+			const UUID owner(ClassOwnerBase | ++impl.ClassLoads);
+			impl.ClassOwners.emplace(owner, path);
+			std::optional<sol::table> table;
+			{
+				ScriptOwnerScope scope(impl.Context, owner);
+				table = LoadScriptClass(impl.Lua, path, outError);
+			}
+			if (!table)
+			{
+				Release(engine, owner);
+				return std::nullopt;
+			}
+			return ScriptEngine::Impl::ScriptClass{ *table, MakeInstanceMetatable(impl.Lua, *table), owner };
+		}
+
+		// Ends what a class's top-level code started.
+		static void Release(ScriptEngine& engine, UUID owner)
+		{
+			ScriptEngineAccess::ReleaseOwned(engine, owner);
+			engine.m_Impl->ClassOwners.erase(owner);
+		}
+
+		// Sets the instance's fields from the class's Properties (with the component's overrides); with onlyMissing,
+		// only those it does not have yet.
+		static void AssignProperties(ScriptEngine& engine, sol::table& self, const sol::table& scriptClass, const ScriptComponent& component, bool onlyMissing)
+		{
+			const sol::object properties = scriptClass["Properties"];
+			if (properties.get_type() != sol::type::table)
+				return;
+			for (const auto& [key, defaultValue] : properties.as<sol::table>())
+			{
+				if (!key.is<std::string>())
+					continue;
+				const std::string name = key.as<std::string>();
+				if (onlyMissing && self.raw_get<sol::object>(name).get_type() != sol::type::lua_nil)
+					continue;
+				std::string error;
+				self[name] = PropertyValue(engine.m_Impl->Lua, name, defaultValue, component, error);
+				if (!error.empty())
+					engine.ReportError(error);
 			}
 		}
 	};
@@ -380,7 +473,7 @@ namespace Basalt {
 
 	bool ScriptEngine::Impl::IsOwnerActive(UUID owner) const
 	{
-		return owner == 0 || ScriptEngineAccess::IsActive(Engine, owner);
+		return owner == 0 || ClassOwners.contains(owner) || ScriptEngineAccess::IsActive(Engine, owner);
 	}
 
 	void ScriptEngine::Impl::FailOwner(UUID owner, const std::string& message, const std::string& where)
@@ -498,42 +591,23 @@ namespace Basalt {
 		{
 			if (impl.FailedClasses.contains(component->Script))
 				return false;
+			// Top-level script code belongs to the class, whichever instance happened to load it first.
 			std::string error;
-			std::optional<sol::table> scriptClass;
-			{
-				// Top-level script code belongs to the session, whichever instance happened to load the class first.
-				ScriptOwnerScope scope(impl.Context, 0);
-				scriptClass = LoadScriptClass(impl.Lua, component->Script, error);
-			}
+			std::optional<Impl::ScriptClass> scriptClass = ScriptClassLoader::Load(*this, component->Script, error);
 			if (!scriptClass)
 			{
 				impl.FailedClasses.insert(component->Script);
 				ReportError(error);
 				return false;
 			}
-			classIt = impl.Classes.emplace(component->Script, Impl::ScriptClass{ *scriptClass, MakeInstanceMetatable(impl.Lua, *scriptClass) }).first;
+			classIt = impl.Classes.emplace(component->Script, std::move(*scriptClass)).first;
 		}
-		const sol::table& scriptClass = classIt->second.Table;
 
 		// Instance: fields from Properties (with per-entity overrides), methods via the class metatable.
 		sol::table self = impl.Lua.create_table();
 		self[sol::metatable_key] = classIt->second.InstanceMetatable;
 		self["Entity"] = ScriptEntity{ uuid, m_Scene };
-
-		const sol::object properties = scriptClass["Properties"];
-		if (properties.get_type() == sol::type::table)
-		{
-			for (const auto& [key, defaultValue] : properties.as<sol::table>())
-			{
-				if (!key.is<std::string>())
-					continue;
-				const std::string name = key.as<std::string>();
-				std::string error;
-				self[name] = PropertyValue(impl.Lua, name, defaultValue, *component, error);
-				if (!error.empty())
-					ReportError(error);
-			}
-		}
+		ScriptClassLoader::AssignProperties(*this, self, classIt->second.Table, *component, false);
 
 		Impl::Instance instance;
 		instance.ScriptPath = component->Script;
@@ -749,14 +823,34 @@ namespace Basalt {
 
 	ScriptReloadResult ScriptEngine::ReloadScripts(const std::vector<std::string>& changedFiles)
 	{
-		Impl& impl = *m_Impl;
 		ScriptReloadResult result;
+		// Lua runs here outside any callback: a sol2 error a script provokes (a replaced package table, an erroring
+		// metamethod) must not escape to the host.
+		try
+		{
+			ReloadClasses(changedFiles, result);
+		}
+		catch (const std::exception& e)
+		{
+			ReportError(std::string("hot reload stopped: ") + e.what());
+			result.InstanceErrors.emplace_back(e.what());
+		}
+		return result;
+	}
+
+	void ScriptEngine::ReloadClasses(const std::vector<std::string>& changedFiles, ScriptReloadResult& result)
+	{
+		Impl& impl = *m_Impl;
 		const std::set<std::string> changed(changedFiles.begin(), changedFiles.end());
 		std::vector<std::filesystem::path> files;
+		files.reserve(changed.size());
 		for (const std::string& path : changed)
 			files.push_back(Project::ResolvePath(path).lexically_normal());
-		// Any class may require a changed module (directly or through another module): all of them load again.
+		// Any class may require a changed module, directly or not: all of them load again.
 		const bool moduleChanged = ForgetModules(impl.Lua, files);
+		// A changed file no class runs may be a module whose require failed (Lua does not cache those): classes that
+		// failed to load are tried again.
+		const bool unknownFileChanged = std::any_of(changed.begin(), changed.end(), [&](const std::string& path) { return !impl.Classes.contains(path) && !impl.FailedClasses.contains(path); });
 
 		std::set<std::string> candidates;
 		for (const auto& [path, scriptClass] : impl.Classes)
@@ -766,87 +860,95 @@ namespace Basalt {
 		}
 		for (const std::string& path : impl.FailedClasses)
 		{
-			if (moduleChanged || changed.contains(path))
+			if (moduleChanged || unknownFileChanged || changed.contains(path))
 				candidates.insert(path);
 		}
 
-		std::unordered_set<std::string> reloaded;
+		// The metatable each reloaded class's instances had, so a metatable a script set itself is left alone.
+		std::unordered_map<std::string, sol::table> previousMetatables;
 		std::unordered_set<std::string> recovered;
 		for (const std::string& path : candidates)
 		{
 			std::string error;
-			std::optional<sol::table> scriptClass;
-			{
-				ScriptOwnerScope scope(impl.Context, 0);
-				scriptClass = LoadScriptClass(impl.Lua, path, error);
-			}
+			std::optional<Impl::ScriptClass> loaded = ScriptClassLoader::Load(*this, path, error);
 			const auto existing = impl.Classes.find(path);
-			if (!scriptClass)
+			if (!loaded)
 			{
-				ReportError(existing != impl.Classes.end() ? "hot reload of '" + path + "' failed, the previous version keeps running: " + error : "hot reload of '" + path + "' failed: " + error);
-				result.Failed.emplace_back(path, error);
+				std::string message = "hot reload of '" + path + "' failed";
+				if (existing != impl.Classes.end())
+					message += ", the previous version keeps running";
+				message += ": ";
+				message += error;
+				ReportError(message);
+				result.Failed.push_back({ path, error });
 				continue;
 			}
-			Impl::ScriptClass loaded{ *scriptClass, MakeInstanceMetatable(impl.Lua, *scriptClass) };
 			if (existing != impl.Classes.end())
-				existing->second = std::move(loaded);
+			{
+				previousMetatables.emplace(path, existing->second.InstanceMetatable);
+				ScriptClassLoader::Release(*this, existing->second.Owner);
+				existing->second = std::move(*loaded);
+			}
 			else
 			{
-				impl.Classes.emplace(path, std::move(loaded));
+				impl.Classes.emplace(path, std::move(*loaded));
 				impl.FailedClasses.erase(path);
 				recovered.insert(path);
 			}
-			reloaded.insert(path);
 			result.Reloaded.push_back(path);
 		}
-		if (reloaded.empty())
-			return result;
+		if (result.Reloaded.empty())
+			return;
 
-		// Existing instances: the new class's methods, and the properties it added.
+		// Existing instances: the new class's methods, and the properties it added. A copy of the order: assigning
+		// properties can run Lua (metamethods), which may create instances.
+		const std::vector<UUID> order = impl.Order;
 		std::vector<UUID> moved;
-		for (UUID uuid : impl.Order)
+		for (UUID uuid : order)
 		{
 			auto it = impl.Instances.find(uuid);
-			if (it == impl.Instances.end() || !reloaded.contains(it->second.ScriptPath))
+			if (it == impl.Instances.end())
+				continue;
+			const auto previous = previousMetatables.find(it->second.ScriptPath);
+			if (previous == previousMetatables.end())
 				continue;
 			const Impl::ScriptClass& scriptClass = impl.Classes.at(it->second.ScriptPath);
 			sol::table self = it->second.Self;
-			self[sol::metatable_key] = scriptClass.InstanceMetatable;
+			const sol::object current = self[sol::metatable_key];
+			if (current.get_type() == sol::type::table && current.as<sol::table>() == previous->second)
+				self[sol::metatable_key] = scriptClass.InstanceMetatable;
 			Entity entity = m_Scene->GetEntityByUUID(uuid);
-			const auto* component = entity ? entity.TryGetComponent<ScriptComponent>() : nullptr;
-			const sol::object properties = scriptClass.Table["Properties"];
-			if (component && properties.get_type() == sol::type::table)
+			if (const auto* component = entity ? entity.TryGetComponent<ScriptComponent>() : nullptr)
 			{
-				for (const auto& [key, defaultValue] : properties.as<sol::table>())
-				{
-					if (!key.is<std::string>())
-						continue;
-					const std::string name = key.as<std::string>();
-					if (self.raw_get<sol::object>(name).get_type() != sol::type::lua_nil)
-						continue;
-					std::string error;
-					self[name] = PropertyValue(impl.Lua, name, defaultValue, *component, error);
-					if (!error.empty())
-						ReportError(error);
-				}
+				// Copied: the property values below may run Lua that changes the component.
+				const ScriptComponent componentCopy = *component;
+				ScriptClassLoader::AssignProperties(*this, self, scriptClass.Table, componentCopy, true);
 			}
 			moved.push_back(uuid);
 		}
-		result.Instances = moved.size();
 
 		// Then the callbacks, once every instance runs the new code (OnReload may call other reloaded instances).
+		const size_t errorsBefore = m_Errors.size();
+		std::vector<UUID> notified;
 		for (UUID uuid : moved)
 		{
 			auto it = impl.Instances.find(uuid);
 			Entity entity = m_Scene->GetEntityByUUID(uuid);
 			if (it == impl.Instances.end() || !entity || m_Scene->IsEntityPendingDestruction(entity))
 				continue;
-			// Fixing the error that disabled an instance and saving the script is what brings it back.
+			// Fixing the error that disabled an instance and saving the script is what brings it back. One whose OnCreate
+			// failed (or that had not started) starts afresh.
 			it->second.Failed = false;
-			if (!it->second.Created)
+			if (!it->second.Initialized)
+			{
+				it->second.Created = false;
 				ScriptEngineAccess::StartInstance(*this, uuid);
+			}
 			else
+			{
 				ScriptEngineAccess::Call(*this, uuid, "OnReload");
+			}
+			notified.push_back(uuid);
 		}
 
 		// Entities whose script failed to load before get their instances now, as if they had just been spawned.
@@ -860,9 +962,14 @@ namespace Basalt {
 					waiting.push_back(entity);
 			}
 			EnsureInstances(waiting);
-			result.Instances += static_cast<size_t>(std::count_if(waiting.begin(), waiting.end(), [this](Entity entity) { return HasInstance(entity); }));
+			for (Entity entity : waiting)
+				notified.push_back(entity.GetUUID());
 		}
-		return result;
+		result.Instances = static_cast<size_t>(std::count_if(notified.begin(), notified.end(), [&](UUID uuid) {
+			const auto it = impl.Instances.find(uuid);
+			return it != impl.Instances.end() && !it->second.Failed;
+		}));
+		result.InstanceErrors.assign(m_Errors.begin() + static_cast<std::ptrdiff_t>(std::min(errorsBefore, m_Errors.size())), m_Errors.end());
 	}
 
 	bool ScriptEngine::ExecuteString(const std::string& code, std::string& outResult)

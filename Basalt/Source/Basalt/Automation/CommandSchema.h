@@ -16,6 +16,8 @@ namespace Basalt::CommandSchema {
 	nlohmann::json Integer(const std::string& description, int64_t minimum, uint64_t maximum);
 	nlohmann::json Number(const std::string& description, double minimum, double maximum);
 	nlohmann::json Vector(const std::string& description, size_t size);
+	// An array whose every element matches `items`.
+	nlohmann::json Array(const std::string& description, nlohmann::json items);
 	nlohmann::json Entity(const std::string& description);
 	nlohmann::json Nullable(nlohmann::json schema);
 	nlohmann::json Object(nlohmann::json properties = nlohmann::json::object(), std::initializer_list<const char*> required = {});

@@ -2652,7 +2652,7 @@ TEST_SUITE("Scripting")
 			const ScriptReloadResult result = scene.GetScriptEngine()->ReloadScripts({ script });
 			CHECK(result.Reloaded.empty());
 			REQUIRE(result.Failed.size() == 1);
-			CHECK(result.Failed[0].first == script);
+			CHECK(result.Failed[0].Path == script);
 			REQUIRE(scene.GetScriptEngine()->GetErrors().size() == 1);
 			CHECK(scene.GetScriptEngine()->GetErrors()[0].find("previous version keeps running") != std::string::npos);
 		}
@@ -2728,6 +2728,195 @@ TEST_SUITE("Scripting")
 		scene.OnUpdate(Step);
 		CHECK(Field(scene, entity, "Total") == 101);
 		CHECK(scene.GetScriptEngine()->GetErrors().empty());
+		scene.OnRuntimeStop();
+	}
+}
+
+TEST_SUITE("Scripting")
+{
+	TEST_CASE("Hot reload of a module required through another module reaches its users")
+	{
+		BasaltTest::TempProject project("ScriptHotReloadModuleChain");
+		const std::string tuning = project.WriteFile("Assets/Scripts/Tuning.lua", "return { Step = 1 }");
+		project.WriteFile("Assets/Scripts/Helpers.lua", R"(
+			local Tuning = require("Assets.Scripts.Tuning")
+			return { Step = function() return Tuning.Step end }
+		)");
+		const std::string script = project.WriteFile("Assets/Scripts/User.lua", R"(
+			local Helpers = require("Assets.Scripts.Helpers")
+			local User = {}
+			function User:OnCreate() self.Total = 0 end
+			function User:OnUpdate(dt) self.Total = self.Total + Helpers.Step() end
+			return User
+		)");
+		Scene scene;
+		Entity entity = AddScripted(scene, "User", script);
+		scene.OnRuntimeStart();
+		scene.OnUpdate(Step);
+		REQUIRE(Field(scene, entity, "Total") == 1);
+		project.WriteFile(tuning, "return { Step = 100 }");
+		CHECK(scene.GetScriptEngine()->ReloadScripts({ tuning }).Reloaded == std::vector<std::string>{ script });
+		scene.OnUpdate(Step);
+		CHECK(Field(scene, entity, "Total") == 101);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Hot reload retries scripts whose required module failed, once the module is fixed")
+	{
+		BasaltTest::TempProject project("ScriptHotReloadBrokenModule");
+		const std::string module = project.WriteFile("Assets/Scripts/Util.lua", "return = broken");
+		const std::string script = project.WriteFile("Assets/Scripts/User.lua", R"(
+			local Util = require("Assets.Scripts.Util")
+			local User = {}
+			function User:OnCreate() self.Value = Util.Value end
+			return User
+		)");
+		Scene scene;
+		Entity entity = AddScripted(scene, "User", script);
+		scene.OnRuntimeStart();
+		REQUIRE_FALSE(scene.GetScriptEngine()->HasInstance(entity));
+		project.WriteFile(module, "return { Value = 7 }");
+		// The module is not cached (its require failed) and no class runs it: the failed classes are tried again.
+		const ScriptReloadResult result = scene.GetScriptEngine()->ReloadScripts({ module });
+		CHECK(result.Reloaded == std::vector<std::string>{ script });
+		CHECK(result.Instances == 1);
+		CHECK(Field(scene, entity, "Value") == 7);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Hot reload of a script whose OnCreate failed runs OnCreate, not OnReload")
+	{
+		BasaltTest::TempProject project("ScriptHotReloadOnCreate");
+		const std::string script = project.WriteFile("Assets/Scripts/Init.lua", "local I = {} function I:OnCreate() error('boom') end return I");
+		Scene scene;
+		Entity entity = AddScripted(scene, "Init", script);
+		scene.OnRuntimeStart();
+		scene.OnUpdate(Step);
+		REQUIRE(scene.GetScriptEngine()->GetErrors().size() == 1);
+		project.WriteFile(script, R"(
+			local I = {}
+			function I:OnCreate() self.Count = 0; self.Creates = (self.Creates or 0) + 1 end
+			function I:OnUpdate(dt) self.Count = self.Count + 1 end
+			function I:OnReload() self.Reloads = (self.Reloads or 0) + 1 end
+			return I
+		)");
+		const ScriptReloadResult result = scene.GetScriptEngine()->ReloadScripts({ script });
+		CHECK(result.Instances == 1);
+		CHECK(result.InstanceErrors.empty());
+		CHECK(Field(scene, entity, "Creates") == 1);
+		CHECK(Field(scene, entity, "Reloads").is_null());
+		scene.OnUpdate(Step);
+		CHECK(Field(scene, entity, "Count") == 1);
+		// A later reload of the now started instance is an OnReload.
+		CHECK(scene.GetScriptEngine()->ReloadScripts({ script }).Instances == 1);
+		CHECK(Field(scene, entity, "Reloads") == 1);
+		CHECK(Field(scene, entity, "Creates") == 1);
+		CHECK(scene.GetScriptEngine()->GetErrors().size() == 1);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Errors in OnReload disable the instance and are reported with the reload")
+	{
+		BasaltTest::TempProject project("ScriptHotReloadOnReloadError");
+		const std::string script = project.WriteFile("Assets/Scripts/Bad.lua", "local B = {} function B:OnUpdate(dt) Updates = (Updates or 0) + 1 end return B");
+		Scene scene;
+		AddScripted(scene, "Bad", script);
+		scene.OnRuntimeStart();
+		scene.OnUpdate(Step);
+		ScriptEngine& engine = *scene.GetScriptEngine();
+		project.WriteFile(script, "local B = {} function B:OnUpdate(dt) Updates = (Updates or 0) + 1 end function B:OnReload() error('bad reload') end return B");
+		ScriptReloadResult result = engine.ReloadScripts({ script });
+		CHECK(result.Reloaded == std::vector<std::string>{ script });
+		CHECK(result.Instances == 0);
+		REQUIRE(result.InstanceErrors.size() == 1);
+		CHECK(result.InstanceErrors[0].find("(in OnReload)") != std::string::npos);
+		scene.OnUpdate(Step);
+		CHECK(BasaltTest::Eval(scene, "Updates") == "1");
+		// Fixed: it runs again.
+		project.WriteFile(script, "local B = {} function B:OnUpdate(dt) Updates = (Updates or 0) + 1 end return B");
+		result = engine.ReloadScripts({ script });
+		CHECK(result.Instances == 1);
+		scene.OnUpdate(Step);
+		CHECK(BasaltTest::Eval(scene, "Updates") == "2");
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Hot reload skips instances an earlier OnReload destroyed")
+	{
+		BasaltTest::TempProject project("ScriptHotReloadDestroy");
+		const std::string script = project.WriteFile("Assets/Scripts/Both.lua", "local B = {} return B");
+		Scene scene;
+		AddScripted(scene, "First", script);
+		AddScripted(scene, "Second", script);
+		scene.OnRuntimeStart();
+		scene.OnUpdate(Step);
+		project.WriteFile(script, R"(
+			local B = {}
+			Trail = Trail or ""
+			function B:OnReload()
+				Trail = Trail .. self.Entity.Name .. ";"
+				if self.Entity.Name == "First" then Scene.FindEntityByName("Second"):Destroy() end
+			end
+			function B:OnDestroy() Trail = Trail .. "destroy:" .. self.Entity.Name .. ";" end
+			return B
+		)");
+		const ScriptReloadResult result = scene.GetScriptEngine()->ReloadScripts({ script });
+		CHECK(result.Instances == 1);
+		CHECK(BasaltTest::Eval(scene, "Trail") == "First;destroy:Second;");
+		CHECK(scene.GetScriptEngine()->GetErrors().empty());
+		scene.OnUpdate(Step);
+		CHECK_FALSE(scene.FindEntityByName("Second"));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Hot reload ends what the old top-level code started and keeps script metatables")
+	{
+		BasaltTest::TempProject project("ScriptHotReloadTopLevel");
+		const std::string source = R"(
+			Events.On("Ping", function() Pings = (Pings or 0) + 1 end)
+			local State = {}
+			State.__index = State
+			function State:Kind() return "state" end
+			local C = {}
+			C.Properties = { Offset = Vec3(1, 2, 3), Count = 1 }
+			function C:OnCreate() if self.Entity.Name == "Custom" then setmetatable(self, State) end end
+			return C
+		)";
+		const std::string script = project.WriteFile("Assets/Scripts/Top.lua", source);
+		Scene scene;
+		Entity plain = AddScripted(scene, "Plain", script);
+		Entity custom = AddScripted(scene, "Custom", script, { { "Extra", "not a number" } });
+		scene.OnRuntimeStart();
+		ScriptEngine& engine = *scene.GetScriptEngine();
+		CHECK(BasaltTest::Eval(scene, "Events.Emit('Ping')") == "1");
+		for (int i = 0; i < 3; i++)
+		{
+			project.WriteFile(script, std::string(source).replace(source.find("Count = 1"), 9, "Count = 1, Extra = 5, Spin = Vec3(0, 1, 0)"));
+			REQUIRE(engine.ReloadScripts({ script }).Reloaded.size() == 1);
+		}
+		// One handler, not one per load.
+		BasaltTest::Eval(scene, "Pings = 0; Events.Emit('Ping')");
+		CHECK(BasaltTest::Eval(scene, "Pings") == "1");
+		// A metatable the script set itself stays; the class's is replaced.
+		CHECK(BasaltTest::Eval(scene, "Scene.FindEntityByName('Custom'):GetScript():Kind()") == "state");
+		// Added properties: a vector of its own per instance, and the entity's override (applied as given, as at creation).
+		BasaltTest::Eval(scene, "Scene.FindEntityByName('Plain'):GetScript().Spin.x = 9");
+		CHECK(Field(scene, custom, "Spin") == nlohmann::json({ 0.0, 1.0, 0.0 }));
+		CHECK(Field(scene, plain, "Extra") == 5);
+		CHECK(Field(scene, custom, "Extra") == "not a number");
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Hot reload survives a script that replaced the package table")
+	{
+		BasaltTest::TempProject project("ScriptHotReloadPackage");
+		const std::string script = project.WriteFile("Assets/Scripts/Odd.lua", "package = 5; local O = {} return O");
+		Scene scene;
+		AddScripted(scene, "Odd", script);
+		scene.OnRuntimeStart();
+		project.WriteFile(script, "local O = {} function O:OnReload() Reloaded = true end return O");
+		CHECK(scene.GetScriptEngine()->ReloadScripts({ script, "Assets/Scripts/Other.lua" }).Reloaded.size() == 1);
+		CHECK(BasaltTest::Eval(scene, "Reloaded") == "true");
 		scene.OnRuntimeStop();
 	}
 }

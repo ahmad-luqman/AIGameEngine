@@ -17,6 +17,22 @@
 
 namespace Basalt {
 
+	const char* ScriptHotReloadName(ScriptHotReload state)
+	{
+		switch (state)
+		{
+			case ScriptHotReload::None:
+				return "none";
+			case ScriptHotReload::Applied:
+				return "applied";
+			case ScriptHotReload::NotPlaying:
+				return "notPlaying";
+			case ScriptHotReload::Simulating:
+				return "simulating";
+		}
+		return "none";
+	}
+
 	namespace {
 
 		nlohmann::json EntityRef(Entity entity)
@@ -206,10 +222,29 @@ namespace Basalt {
 		m_FileWatcher.Watch(project ? project->GetDirectory() : std::filesystem::path(), Project::AssetDirectoryName);
 	}
 
+	std::vector<FileChange> AutomationSession::PollFileChanges()
+	{
+		SyncFileWatcher();
+		return m_FileWatcher.Update();
+	}
+
+	std::vector<FileChange> AutomationSession::RefreshFileChanges(std::string& outError)
+	{
+		SyncFileWatcher();
+		std::vector<FileChange> changes = m_FileWatcher.Refresh();
+		outError = m_FileWatcher.GetLastError();
+		return changes;
+	}
+
+	std::optional<FileChangeType> AutomationSession::AcknowledgeFile(const std::string& relativePath)
+	{
+		SyncFileWatcher();
+		return m_FileWatcher.Acknowledge(relativePath);
+	}
+
 	AssetReloadReport AutomationSession::ReloadAssets(const std::vector<FileChange>& changes)
 	{
 		AssetReloadReport report;
-		report.Changed = changes;
 		if (changes.empty())
 			return report;
 		std::vector<std::string> paths;
@@ -217,21 +252,32 @@ namespace Basalt {
 		for (const FileChange& change : changes)
 		{
 			// AssetManager keys and script paths are normalized project-relative paths.
-			const std::u8string normal = FileSystem::PathFromUtf8(change.Path).lexically_normal().generic_u8string();
-			const std::string path(normal.begin(), normal.end());
+			const std::filesystem::path normal = FileSystem::PathFromUtf8(change.Path).lexically_normal();
+			const std::string path = FileSystem::PathToGenericUtf8(normal);
+			report.Changed.push_back({ path, change.Type });
 			paths.push_back(path);
 			// A removed script has nothing to load: the running version stays until play stops.
-			if (change.Type != FileChangeType::Removed && FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(path)) == ".lua")
+			if (change.Type != FileChangeType::Removed && FileSystem::GetLowercaseExtension(normal) == ".lua")
 				scripts.push_back(path);
 		}
 		report.Assets = AssetManager::ReloadChanged(paths);
-		if (!scripts.empty() && IsPlaying() && !IsSimulating())
+		if (!scripts.empty())
 		{
-			if (ScriptEngine* engine = m_Scene->GetScriptEngine())
+			ScriptEngine* engine = IsPlaying() && !IsSimulating() ? m_Scene->GetScriptEngine() : nullptr;
+			report.HotReload = engine ? ScriptHotReload::Applied : IsSimulating() ? ScriptHotReload::Simulating
+																				  : ScriptHotReload::NotPlaying;
+			if (engine)
+			{
 				report.Scripts = engine->ReloadScripts(scripts);
+				if (IsRecording() && !report.Scripts.Reloaded.empty())
+					m_ReloadedWhileRecording = true;
+			}
 		}
-		if (!report.Assets.empty() || !report.Scripts.Reloaded.empty() || !report.Scripts.Failed.empty())
-			BS_CORE_INFO("Hot reload: {} changed file(s); reloaded {} asset(s) and {} script(s) ({} instance(s)){}", changes.size(), report.Assets.size(), report.Scripts.Reloaded.size(), report.Scripts.Instances, report.Scripts.Failed.empty() ? "" : fmt::format("; {} script(s) failed", report.Scripts.Failed.size()));
+		if (!report.Assets.empty() || report.HotReload == ScriptHotReload::Applied)
+		{
+			const std::string failures = report.Scripts.Failed.empty() ? std::string() : fmt::format("; {} script(s) did not load", report.Scripts.Failed.size());
+			BS_CORE_INFO("Hot reload: {} changed file(s); reloaded {} asset(s) and {} script(s) ({} instance(s)){}", changes.size(), report.Assets.size(), report.Scripts.Reloaded.size(), report.Scripts.Instances, failures);
+		}
 		if (OnAssetsReloaded)
 			OnAssetsReloaded(report);
 		return report;
@@ -239,9 +285,8 @@ namespace Basalt {
 
 	AssetReloadReport AutomationSession::OnFileWritten(const std::string& relativePath)
 	{
-		SyncFileWatcher();
-		m_FileWatcher.Acknowledge(relativePath);
-		return ReloadAssets({ { relativePath, FileChangeType::Modified } });
+		const std::optional<FileChangeType> change = AcknowledgeFile(relativePath);
+		return ReloadAssets({ { relativePath, change.value_or(FileChangeType::Modified) } });
 	}
 
 	bool AutomationSession::StartPlay(std::string& outError, bool simulate)
@@ -315,6 +360,7 @@ namespace Basalt {
 
 	void AutomationSession::StartRecording()
 	{
+		m_ReloadedWhileRecording = false;
 		m_Recording = nlohmann::json::array();
 		m_RecordingSeed = IsPlaying() ? std::optional<uint32_t>(m_Scene->GetRandomSeed()) : std::nullopt;
 		m_RecordedView.reset();

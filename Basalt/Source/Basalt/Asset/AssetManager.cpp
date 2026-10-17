@@ -8,7 +8,7 @@
 #include <algorithm>
 #include <cctype>
 #include <charconv>
-#include <iterator>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -149,28 +149,32 @@ namespace Basalt {
 
 	std::vector<std::string> AssetManager::ReloadChanged(const std::vector<std::string>& paths)
 	{
+		if (paths.empty())
+			return {};
 		const std::unordered_set<std::string> changed(paths.begin(), paths.end());
-		std::unordered_set<std::string> meshes;
+		std::set<std::string> keys;
 		for (const auto& [key, entry] : s_Meshes)
 		{
 			const bool readsChangedFile = entry.Asset && std::any_of(entry.Asset->ExternalFiles.begin(), entry.Asset->ExternalFiles.end(), [&](const std::string& file) { return changed.contains(file); });
-			if (changed.contains(key) || readsChangedFile)
-				meshes.insert(key);
+			if (!entry.Asset || changed.contains(key) || readsChangedFile)
+				keys.insert(key);
 		}
-		std::vector<std::string> keys(meshes.begin(), meshes.end());
 		for (const auto& [key, entry] : s_Textures)
 		{
 			// An embedded image goes with its model file (Reload drops those).
-			const size_t marker = key.find("#image/");
-			const std::string model = marker != std::string::npos ? key.substr(0, marker) : std::string();
-			if (changed.contains(key) || (!model.empty() && (changed.contains(model) || meshes.contains(model))))
-				keys.push_back(key);
+			const std::string source = GetSourceFile(key);
+			if (changed.contains(source) || keys.contains(source))
+				keys.insert(key);
 		}
 		for (const std::string& key : keys)
 			Reload(key);
-		std::sort(keys.begin(), keys.end());
-		keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
-		return keys;
+		return { keys.begin(), keys.end() };
+	}
+
+	std::string AssetManager::GetSourceFile(const std::string& key)
+	{
+		const size_t marker = key.find("#image/");
+		return marker != std::string::npos ? key.substr(0, marker) : key;
 	}
 
 	void AssetManager::Clear()
@@ -192,23 +196,39 @@ namespace Basalt {
 		return keys;
 	}
 
+	namespace {
+
+		template<typename T>
+		std::vector<std::string> SortedKeys(const std::unordered_map<std::string, CacheEntry<T>>& cache)
+		{
+			std::vector<std::string> keys;
+			keys.reserve(cache.size());
+			for (const auto& [key, entry] : cache)
+				keys.push_back(key);
+			std::sort(keys.begin(), keys.end());
+			return keys;
+		}
+
+		// Erases the entries whose key is not in `before` (sorted). Directly rather than through Reload, which would also
+		// drop the embedded images of a model that was already loaded.
+		template<typename T>
+		void EraseAddedSince(std::unordered_map<std::string, CacheEntry<T>>& cache, const std::vector<std::string>& before)
+		{
+			std::erase_if(cache, [&](const auto& entry) { return !std::binary_search(before.begin(), before.end(), entry.first); });
+		}
+
+	}
+
 	AssetManager::TemporaryLoads::TemporaryLoads()
-		: m_Before(GetLoadedKeys())
+		: m_Meshes(SortedKeys(s_Meshes))
+		, m_Textures(SortedKeys(s_Textures))
 	{
 	}
 
 	AssetManager::TemporaryLoads::~TemporaryLoads()
 	{
-		const std::vector<std::string> after = GetLoadedKeys();
-		std::vector<std::string> added;
-		std::set_difference(after.begin(), after.end(), m_Before.begin(), m_Before.end(), std::back_inserter(added));
-		// Erased directly rather than through Reload, which would also drop the embedded images of a model that was
-		// already loaded.
-		for (const std::string& key : added)
-		{
-			s_Meshes.erase(key);
-			s_Textures.erase(key);
-		}
+		EraseAddedSince(s_Meshes, m_Meshes);
+		EraseAddedSince(s_Textures, m_Textures);
 	}
 
 	Entity AssetManager::ImportModel(Scene& scene, const std::string& key, Entity parent, std::string& outError)

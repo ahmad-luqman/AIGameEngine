@@ -34,7 +34,9 @@ namespace Basalt {
 		// The camera's fly speed multiplier, in [MinCameraSpeed, MaxCameraSpeed].
 		float GetCameraSpeed() const { return m_CameraSpeed; }
 		// Clamped into range; a non-finite value is ignored.
-		void SetCameraSpeed(float speed);
+		void SetCameraSpeed(float speed) { m_CameraSpeed = ClampCameraSpeed(speed, m_CameraSpeed); }
+		// `speed` clamped into range, or `fallback` when it is not finite (the editor camera keeps the same range).
+		static float ClampCameraSpeed(float speed, float fallback);
 		EditorTheme GetTheme() const { return m_Theme; }
 		void SetTheme(EditorTheme theme) { m_Theme = theme; }
 		// Project directories, most recently opened first, without duplicates, at most MaxRecentProjects.
@@ -50,7 +52,8 @@ namespace Basalt {
 		nlohmann::json ToJson() const;
 		// What a file or a patch may contain (every key optional, no others).
 		static nlohmann::json Schema();
-		// Applies the keys of `patch` (recentProjects replaces the list). Nothing changes when any key is invalid.
+		// Applies the keys of `patch`: recentProjects replaces the list (its entries made absolute, de-duplicated and
+		// capped at MaxRecentProjects). Nothing changes when any key is invalid.
 		bool Apply(const nlohmann::json& patch, std::string& outError);
 
 		// "Dark" or "Light".
@@ -60,8 +63,11 @@ namespace Basalt {
 		// <user data directory>/BasaltEditor (Platform::GetUserDataDirectory, so BASALT_USER_DATA_DIR moves it).
 		static std::optional<std::filesystem::path> GetDirectory(std::string& outError);
 		// The preferences in `file`. A missing file gives the defaults without an error; a file that cannot be read
-		// or holds invalid preferences gives the defaults and sets outError.
+		// or holds invalid preferences (including keys this version does not know) gives the defaults and sets outError.
 		static EditorPreferences Load(const std::filesystem::path& file, std::string& outError);
+		// Moves a file Load rejected to "<file>.invalid" (replacing an older one), so saving the defaults does not
+		// destroy what the user had. Returns the new path, or nullopt with the reason.
+		static std::optional<std::filesystem::path> SetAside(const std::filesystem::path& file, std::string& outError);
 		// Writes atomically (FileSystem::WriteTextFile), creating the directory.
 		bool Save(const std::filesystem::path& file, std::string& outError) const;
 

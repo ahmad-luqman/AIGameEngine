@@ -271,25 +271,27 @@ return %s
 			ImGui::TextColored(EditorColors::Error(), "No preview: %s", preview.Error.c_str());
 		for (const std::string& line : preview.Details)
 			ImGui::TextUnformatted(line.c_str());
-		// A model's materials, each on a sphere. Only when the model is already loaded (by its preview or the scene):
-		// loading a whole glTF from a tooltip would stall the frame.
-		if (preview.Kind == ThumbnailKind::Model)
-			if (const Ref<MeshSource> mesh = AssetManager::FindLoadedMesh(relative); mesh && !mesh->Materials.empty())
+		// A model's materials, each on a sphere: those its preview read when it was made, or the model's when the open
+		// scene has it loaded. Never loaded here: a whole glTF would stall the frame.
+		std::vector<ThumbnailManager::Preview::Material> materials = preview.Materials;
+		if (const Ref<MeshSource> mesh = preview.Kind == ThumbnailKind::Model && materials.empty() ? AssetManager::FindLoadedMesh(relative) : nullptr)
+			for (size_t i = 0; i < mesh->Materials.size(); i++)
+				materials.push_back({ mesh->Materials[i].Name.empty() ? "Material " + std::to_string(i) : mesh->Materials[i].Name, ToMaterialComponent(mesh->Materials[i]) });
+		if (!materials.empty())
+		{
+			static constexpr size_t ShownMaterials = 8;
+			static constexpr float Sphere = 48.0f;
+			ImGui::Separator();
+			for (size_t i = 0; i < std::min(materials.size(), ShownMaterials); i++)
 			{
-				static constexpr size_t ShownMaterials = 8;
-				static constexpr float Sphere = 48.0f;
-				ImGui::Separator();
-				for (size_t i = 0; i < std::min(mesh->Materials.size(), ShownMaterials); i++)
-				{
-					const MaterialData& material = mesh->Materials[i];
-					DrawPreviewSquare(*m_Thumbnails->GetMaterial(relative + "#material/" + std::to_string(i), ToMaterialComponent(material)), Sphere);
-					ImGui::SameLine();
-					ImGui::AlignTextToFramePadding();
-					ImGui::TextUnformatted(material.Name.empty() ? ("Material " + std::to_string(i)).c_str() : material.Name.c_str());
-				}
-				if (mesh->Materials.size() > ShownMaterials)
-					ImGui::TextDisabled("and %zu more", mesh->Materials.size() - ShownMaterials);
+				DrawPreviewSquare(*m_Thumbnails->GetMaterial(relative + "#material/" + std::to_string(i), materials[i].Values), Sphere);
+				ImGui::SameLine();
+				ImGui::AlignTextToFramePadding();
+				ImGui::TextUnformatted(materials[i].Name.c_str());
 			}
+			if (materials.size() > ShownMaterials)
+				ImGui::TextDisabled("and %zu more", materials.size() - ShownMaterials);
+		}
 		ImGui::EndTooltip();
 	}
 

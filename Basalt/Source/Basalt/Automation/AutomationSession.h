@@ -9,6 +9,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <chrono>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -24,13 +25,30 @@ namespace Basalt {
 	class Scene;
 	struct CommandInfo;
 
+	// Whether changed scripts were hot reloaded.
+	enum class ScriptHotReload : uint8_t
+	{
+		// No added or modified script among the changes.
+		None,
+		Applied,
+		// Scripts reload only while the game runs.
+		NotPlaying,
+		// Simulate runs physics without scripts.
+		Simulating
+	};
+
+	// "none", "applied", "notPlaying" or "simulating".
+	const char* ScriptHotReloadName(ScriptHotReload state);
+
 	// What AutomationSession::ReloadAssets did with a set of changed files.
 	struct AssetReloadReport
 	{
+		// The changes, with normalized paths (AssetManager keys).
 		std::vector<FileChange> Changed;
 		// AssetManager keys dropped; they load again from disk on their next use.
 		std::vector<std::string> Assets;
-		// The hot reload of changed scripts (empty unless the game was running).
+		ScriptHotReload HotReload = ScriptHotReload::None;
+		// The hot reload of changed scripts (empty unless HotReload is Applied).
 		ScriptReloadResult Scripts;
 	};
 
@@ -96,12 +114,24 @@ namespace Basalt {
 		void SetPaused(bool paused);
 
 		// --- Asset changes (hot reload) ---------------------------------------------------------------
-		// Watches the active project's Assets/ folder. The host polls it (the editor in the background; agents through
-		// asset.refresh).
-		FileWatcher& GetFileWatcher() { return m_FileWatcher; }
+		// The watcher of the active project's Assets/ folder (once SyncFileWatcher has run). Hosts poll it through the
+		// functions below (the editor in the background; agents through asset.refresh), which keep it on the active
+		// project.
+		const FileWatcher& GetFileWatcher() const { return m_FileWatcher; }
 		// Follows the active project: watches the Assets/ folder of a project that became active since the last call
 		// (what is there now is the baseline), or nothing without one.
 		void SyncFileWatcher();
+		// Background scanning (FileWatcher::StartPolling): false (logged) when it cannot start.
+		bool StartFileWatchPolling(std::chrono::milliseconds interval) { return m_FileWatcher.StartPolling(interval); }
+		void StopFileWatchPolling() { m_FileWatcher.StopPolling(); }
+		bool IsFileWatchPolling() const { return m_FileWatcher.IsPolling(); }
+		// The settled changes the background scans found since the last call.
+		std::vector<FileChange> PollFileChanges();
+		// Scans now: every change since changes were last reported (by a refresh, by polling, or since the project was
+		// opened). outError is set (and nothing reported) when the folder cannot be read.
+		std::vector<FileChange> RefreshFileChanges(std::string& outError);
+		// A file the host wrote or removed itself: not reported as a change later.
+		std::optional<FileChangeType> AcknowledgeFile(const std::string& relativePath);
 		// Applies changed files: AssetManager drops what they affect (models, textures and what reads them), and while
 		// the game runs (Play, not Simulate) added or modified scripts are hot reloaded. Logs what it did and calls
 		// OnAssetsReloaded.
@@ -109,6 +139,9 @@ namespace Basalt {
 		// A file the session wrote itself (asset.write, scene.save, ...): the watcher records it, so it is not reported
 		// as a change later, and it is reloaded now.
 		AssetReloadReport OnFileWritten(const std::string& relativePath);
+		// Scripts were hot reloaded while recording: a replay runs the final code from the start, so it may not
+		// reproduce the run (replay.record_stop warns).
+		bool HasReloadedScriptsWhileRecording() const { return m_ReloadedWhileRecording; }
 
 		// --- Events and snapshots --------------------------------------------------------------------
 		// Log lines, script errors, play-state changes and collisions of this session (events.subscribe). Created by
@@ -213,8 +246,10 @@ namespace Basalt {
 		std::optional<uint32_t> m_RecordingSeed;
 		// The host view the recording last recorded.
 		std::optional<GameUI::HostState> m_RecordedView;
+		bool m_ReloadedWhileRecording = false;
 		FileWatcher m_FileWatcher;
-		// The project m_FileWatcher watches (weak: another project at the same address is still another project).
+		// The project m_FileWatcher watches. weak_ptr, not a raw pointer: a new project allocated where a freed one was
+		// must not look like the watched one (an expired pointer locks to null).
 		std::weak_ptr<Project> m_WatchedProject;
 	};
 

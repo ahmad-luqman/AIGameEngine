@@ -9,9 +9,10 @@
 namespace Basalt {
 
 	// Orbit/fly camera for the editor viewport.
-	//   Right mouse drag: look around; with WASD/QE: fly (Shift = fast), mouse wheel: fly speed
+	//   Right mouse drag: look around; with WASD/QE: fly (Shift = fast); mouse wheel while the right button is held:
+	//   fly speed
 	//   Alt + left drag: orbit around the focal point
-	//   Middle drag: pan; mouse wheel: dolly towards the focal point
+	//   Middle drag: pan; mouse wheel (without the right button): dolly towards the focal point
 	class EditorCamera
 	{
 	public:

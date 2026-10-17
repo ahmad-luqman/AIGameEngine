@@ -19,10 +19,10 @@ $B project.create '{"path": "Games/Tetris", "name": "Tetris"}'
 ## 2. Write gameplay as Lua scripts
 
 Write scripts with `asset.write` (or directly as files under `<project>/Assets/Scripts/`). Iterate without
-restarting play: in a long-lived session (`basalt serve`/`mcp`, the editor) a script written with `asset.write`
-during play is hot reloaded (instances keep their fields; define `OnReload` to redo setup), and files written with
-other tools are picked up by `asset.refresh` (check its `scripts.failed`; a broken version leaves the old one
-running). Typical patterns:
+restarting play: a script written with `asset.write` during Play (not Simulate) is hot reloaded (instances keep
+their fields; define `OnReload` to redo setup), and in a long-lived session (`basalt serve`/`mcp`, the editor) files
+written with other tools are picked up by `asset.refresh` (check `scripts.failed` and `scripts.instanceErrors`; a
+broken version leaves the old one running). Typical patterns:
 - One "Game" controller script on an empty entity owns the rules and state (grid arrays, score, timers),
   reads input, and spawns/moves/destroys entities (`Scene.CreateEntity` + `AddComponent`,
   or `Scene.Instantiate("Assets/Prefabs/Block.bprefab", pos)`).

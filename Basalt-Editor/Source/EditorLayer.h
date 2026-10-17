@@ -18,6 +18,7 @@
 #include "Basalt/Automation/CommandRegistry.h"
 #include "Basalt/Automation/AutomationConnection.h"
 #include "Basalt/Core/Layer.h"
+#include "Basalt/Core/Timer.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/DebugDraw.h"
 #include "Basalt/Renderer/SceneRenderer.h"
@@ -63,15 +64,24 @@ namespace Basalt {
 		void RegisterEditorCommands();
 		void OnSceneChanged();
 
-		// Reads the user's preferences and points ImGui's layout file next to them (first run: a copy of ./imgui.ini).
+		// Reads the user's preferences (a rejected file is set aside) and points ImGui's layout file next to them (first
+		// run: a copy of ./imgui.ini).
 		void LoadPreferences();
 		// Gives the camera, theme and file watching their preferred values.
 		void ApplyPreferences();
-		// Writes the preferences when they changed: at once with `now`, otherwise at most once a second.
+		void MarkPreferencesDirty();
+		// Writes changed preferences: at once with `now`, otherwise once PreferencesSaveDelay has passed since the last
+		// change.
 		void SavePreferences(bool now);
-		// Polls the file watcher (while AutoReload is on) and applies what changed; records the active project as recent.
+		// Applies the changed files the background scans found (they run while autoReload is on), on the main thread.
 		void UpdateFileWatching();
-		void DrawRecentProjects(bool prompt);
+		// Records the active project as recent and the wheel's camera speed, and saves the preferences when due.
+		void UpdatePreferences();
+		void OpenRecentProject(const std::string& directory);
+		// File > Open Recent Project: a menu item per project (greyed out when its folder is gone) and Clear.
+		void DrawRecentProjectsMenu();
+		// The Open Project prompt's list: a click fills in the path, a double click opens the project.
+		void DrawRecentProjectsList();
 
 		void BuildDefaultLayout(unsigned int dockspaceId);
 		void DrawMenuBar();
@@ -251,8 +261,13 @@ namespace Basalt {
 		EditorPreferences m_Preferences;
 		// Empty when the user data directory is unavailable: preferences then last for this session only.
 		std::filesystem::path m_PreferencesFile;
+		// Where ImGui keeps the window layout (./imgui.ini until LoadPreferences moves it next to the preferences).
+		std::filesystem::path m_LayoutFile = EditorPreferences::LayoutFileName;
 		bool m_PreferencesDirty = false;
-		double m_PreferencesChangedTime = 0.0;
+		// A save failed: warned once, tried again with the next change.
+		bool m_PreferencesSaveFailed = false;
+		// Since the last change.
+		Timer m_PreferencesChanged;
 		// The project last added to the recent list.
 		std::weak_ptr<Project> m_RecentProject;
 	};

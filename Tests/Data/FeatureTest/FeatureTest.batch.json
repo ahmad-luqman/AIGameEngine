@@ -21,6 +21,7 @@
 	{ "id": "run", "command": "play.step", "params": { "frames": 169, "assertNoErrors": true } },
 	{ "id": "asset-refresh", "command": "asset.refresh" },
 	{ "id": "hot-reload", "command": "asset.refresh", "params": { "paths": ["Assets/Scripts/Spinner.lua", "Assets/Textures/Checker.png"] } },
+	{ "id": "hot-reload-check", "command": "lua.exec", "params": { "code": "local s = Scene.FindEntityByName('Turntable'):GetScript(); assert(s.Reloads == 1 and s.Turns > 0, 'Spinner was not hot reloaded with its fields kept')" } },
 	{ "id": "hot-reload-bad", "command": "asset.refresh", "params": { "paths": "Assets/Scripts/Spinner.lua" }, "expectError": "must be an array" },
 	{ "id": "events-expect-missing", "command": "events.poll", "params": { "subscription": 1, "expect": [{ "event": "collision", "type": "collisionBegin", "a": { "name": "Ball" }, "b": { "name": "NoSuchEntity" } }] }, "expectError": "assertion failed: no event matches" },
 	{ "id": "events-poll", "command": "events.poll", "params": { "subscription": 1, "assertTypes": ["playState", "collision"], "expect": [{ "event": "playState", "state": "play" }, { "event": "collision", "type": "collisionBegin", "a": { "name": "Ground" }, "b": { "name": "Ball" } }] } },

@@ -30,26 +30,32 @@ namespace Basalt {
 		// Drops a cached asset so the next Get reloads it from disk.
 		static void Reload(const std::string& key);
 		// Drops what a change to these project-relative files affects: the files' own cache entries (with a model's
-		// embedded images) and models that read one of them (external buffers and images). Failed loads count, so a
-		// fixed file is tried again. Returns the keys dropped, sorted; files that were never requested drop nothing.
+		// embedded images) and models that read one of them (external buffers and images). Models that failed to load are
+		// dropped on any change: what they lacked may be what just appeared. Returns the keys dropped, sorted; files
+		// that were never requested drop nothing.
 		static std::vector<std::string> ReloadChanged(const std::vector<std::string>& paths);
+		// The file an asset key loads from: the model of an embedded image ("Ship.glb#image/0" -> "Ship.glb"), the
+		// key itself otherwise.
+		static std::string GetSourceFile(const std::string& key);
 		static void Clear();
 		// Keys of every cache entry, failed loads included, sorted.
 		static std::vector<std::string> GetLoadedKeys();
 
-		// Drops, when it ends, every cache entry first made during its lifetime: an editor preview loads a model to
-		// render it once, and must not keep it (or its textures) in memory. Entries that existed before it began stay,
-		// so what the open scene uses is never unloaded.
+		// Drops, when it ends, every cache entry that did not exist when it began: an editor preview loads a model to
+		// render it once, and must not keep it (or its textures) in memory. Entries present at the start stay; one that
+		// was dropped and made again meanwhile counts as present. An entry the open scene first requests during the scope
+		// is dropped too and simply loads again on its next use.
 		class TemporaryLoads
 		{
 		public:
-			TemporaryLoads();
+			[[nodiscard]] TemporaryLoads();
 			~TemporaryLoads();
 			TemporaryLoads(const TemporaryLoads&) = delete;
 			TemporaryLoads& operator=(const TemporaryLoads&) = delete;
 
 		private:
-			std::vector<std::string> m_Before;
+			std::vector<std::string> m_Meshes;
+			std::vector<std::string> m_Textures;
 		};
 
 		// Imports a static entity hierarchy or a single Animator root for a skinned/animated model.
