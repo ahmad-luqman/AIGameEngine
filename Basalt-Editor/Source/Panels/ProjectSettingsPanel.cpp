@@ -286,7 +286,8 @@ namespace Basalt {
 		// Edited as the JSON project.set takes, so this panel can do nothing the automation API cannot.
 		nlohmann::json actions = config.InputActions.ActionsToJson();
 		bool changed = false;
-		std::optional<size_t> removedAction;
+		// The action to remove, or none (the size).
+		size_t removedAction = actions.size();
 		for (size_t i = 0; i < actions.size(); i++)
 		{
 			nlohmann::json& action = actions[i];
@@ -315,7 +316,8 @@ namespace Basalt {
 					ImGui::EndCombo();
 				}
 				nlohmann::json& bindings = action["Bindings"];
-				std::optional<size_t> removedBinding;
+				// The binding to remove, or none (the size).
+				size_t removedBinding = bindings.size();
 				for (size_t b = 0; b < bindings.size(); b++)
 				{
 					ImGui::PushID(static_cast<int>(b));
@@ -325,9 +327,9 @@ namespace Basalt {
 						removedBinding = b;
 					ImGui::PopID();
 				}
-				if (removedBinding)
+				if (removedBinding < bindings.size())
 				{
-					bindings.erase(*removedBinding);
+					bindings.erase(removedBinding);
 					changed = true;
 				}
 				ImGui::BeginDisabled(bindings.size() >= InputActionMap::MaxBindings);
@@ -341,9 +343,9 @@ namespace Basalt {
 			}
 			ImGui::PopID();
 		}
-		if (removedAction)
+		if (removedAction < actions.size())
 		{
-			actions.erase(*removedAction);
+			actions.erase(removedAction);
 			changed = true;
 		}
 		ImGui::SetNextItemWidth(180.0f);
