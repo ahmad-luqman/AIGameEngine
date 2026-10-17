@@ -30,7 +30,7 @@ namespace Basalt {
 
 	float EditorPreferences::ClampCameraSpeed(float speed, float fallback)
 	{
-		return std::isfinite(speed) ? std::clamp(speed, MinCameraSpeed, MaxCameraSpeed) : fallback;
+		return std::clamp(std::isfinite(speed) ? speed : fallback, MinCameraSpeed, MaxCameraSpeed);
 	}
 
 	void EditorPreferences::AddRecentProject(const std::filesystem::path& directory)
@@ -55,8 +55,7 @@ namespace Basalt {
 		nlohmann::json theme = S::String("Dark or Light");
 		theme["enum"] = { ThemeName(EditorTheme::Dark), ThemeName(EditorTheme::Light) };
 		const nlohmann::json recent = S::Array("project directories, most recent first", S::String("", true));
-		// The limits as written (0.1, not the float 0.1 widened to 0.10000000149...), so the documented minimum passes.
-		return S::Object({ { "cameraSpeed", S::Number("fly speed multiplier", 0.1, 10.0) }, { "theme", theme }, { "recentProjects", recent }, { "autoReload", S::Boolean("reload files changed on disk (and hot reload scripts in Play)") } });
+		return S::Object({ { "cameraSpeed", S::Number("fly speed multiplier", CameraSpeedLimits[0], CameraSpeedLimits[1]) }, { "theme", theme }, { "recentProjects", recent }, { "autoReload", S::Boolean("reload files changed on disk (and hot reload scripts in Play)") } });
 	}
 
 	bool EditorPreferences::Apply(const nlohmann::json& patch, std::string& outError)
@@ -117,31 +116,39 @@ namespace Basalt {
 		return *base / "BasaltEditor";
 	}
 
-	EditorPreferences EditorPreferences::Load(const std::filesystem::path& file, std::string& outError)
+	EditorPreferences EditorPreferences::Load(const std::filesystem::path& file, LoadStatus& outStatus, std::string& outError)
 	{
 		outError.clear();
 		EditorPreferences preferences;
 		std::error_code error;
-		if (!std::filesystem::exists(file, error) && !error)
+		const bool exists = std::filesystem::exists(file, error);
+		if (!exists && !error)
+		{
+			outStatus = LoadStatus::Missing;
 			return preferences;
-		const auto text = error ? std::nullopt : FileSystem::ReadTextFile(file);
+		}
+		if (error)
+		{
+			outStatus = LoadStatus::Unreadable;
+			outError = "cannot read '" + FileSystem::PathToUtf8(file) + "': " + error.message();
+			return preferences;
+		}
+		const auto text = FileSystem::ReadTextFile(file);
 		if (!text)
 		{
-			outError = "cannot read '" + FileSystem::PathToUtf8(file) + "'" + (error ? ": " + error.message() : std::string());
+			outStatus = LoadStatus::Unreadable;
+			outError = "cannot read '" + FileSystem::PathToUtf8(file) + "'";
 			return preferences;
 		}
 		std::string parseError;
 		const nlohmann::json data = ParseJson(*text, parseError);
-		if (data.is_discarded())
+		if (data.is_discarded() || !preferences.Apply(data, parseError))
 		{
-			outError = FileSystem::PathToUtf8(file) + ": " + parseError;
-			return preferences;
-		}
-		if (!preferences.Apply(data, parseError))
-		{
+			outStatus = LoadStatus::Invalid;
 			outError = FileSystem::PathToUtf8(file) + ": " + parseError;
 			return EditorPreferences();
 		}
+		outStatus = LoadStatus::Loaded;
 		return preferences;
 	}
 
@@ -150,6 +157,9 @@ namespace Basalt {
 		std::filesystem::path backup = file;
 		backup += ".invalid";
 		std::error_code error;
+		// Removed first: renaming onto an existing file is not allowed everywhere.
+		std::filesystem::remove(backup, error);
+		error.clear();
 		std::filesystem::rename(file, backup, error);
 		if (error)
 		{

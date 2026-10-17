@@ -25,8 +25,10 @@ namespace Basalt {
 	class EditorPreferences
 	{
 	public:
-		static constexpr float MinCameraSpeed = 0.1f;
-		static constexpr float MaxCameraSpeed = 10.0f;
+		// As written in the schema (doubles: the float 0.1 widened is 0.10000000149..., above a JSON 0.1).
+		static constexpr double CameraSpeedLimits[2] = { 0.1, 10.0 };
+		static constexpr float MinCameraSpeed = static_cast<float>(CameraSpeedLimits[0]);
+		static constexpr float MaxCameraSpeed = static_cast<float>(CameraSpeedLimits[1]);
 		static constexpr size_t MaxRecentProjects = 10;
 		static constexpr const char* FileName = "Preferences.json";
 		static constexpr const char* LayoutFileName = "imgui.ini";
@@ -35,7 +37,8 @@ namespace Basalt {
 		float GetCameraSpeed() const { return m_CameraSpeed; }
 		// Clamped into range; a non-finite value is ignored.
 		void SetCameraSpeed(float speed) { m_CameraSpeed = ClampCameraSpeed(speed, m_CameraSpeed); }
-		// `speed` clamped into range, or `fallback` when it is not finite (the editor camera keeps the same range).
+		// `speed` clamped into range, or `fallback` (clamped too) when it is not finite. The editor camera keeps the same
+		// range.
 		static float ClampCameraSpeed(float speed, float fallback);
 		EditorTheme GetTheme() const { return m_Theme; }
 		void SetTheme(EditorTheme theme) { m_Theme = theme; }
@@ -62,10 +65,20 @@ namespace Basalt {
 
 		// <user data directory>/BasaltEditor (Platform::GetUserDataDirectory, so BASALT_USER_DATA_DIR moves it).
 		static std::optional<std::filesystem::path> GetDirectory(std::string& outError);
-		// The preferences in `file`. A missing file gives the defaults without an error; a file that cannot be read
-		// or holds invalid preferences (including keys this version does not know) gives the defaults and sets outError.
-		static EditorPreferences Load(const std::filesystem::path& file, std::string& outError);
-		// Moves a file Load rejected to "<file>.invalid" (replacing an older one), so saving the defaults does not
+		enum class LoadStatus : uint8_t
+		{
+			Loaded,
+			// No file yet: the defaults.
+			Missing,
+			// The file could not be read (it may be fine): the defaults, and outError.
+			Unreadable,
+			// The file holds no valid preferences (including keys this version does not know): the defaults, and
+			// outError.
+			Invalid
+		};
+		// The preferences in `file`, or the defaults when it is missing, unreadable or invalid (outStatus says which).
+		static EditorPreferences Load(const std::filesystem::path& file, LoadStatus& outStatus, std::string& outError);
+		// Moves a file Load found Invalid to "<file>.invalid" (replacing an older one), so saving the defaults does not
 		// destroy what the user had. Returns the new path, or nullopt with the reason.
 		static std::optional<std::filesystem::path> SetAside(const std::filesystem::path& file, std::string& outError);
 		// Writes atomically (FileSystem::WriteTextFile), creating the directory.

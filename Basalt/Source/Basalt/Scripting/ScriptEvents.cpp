@@ -106,8 +106,9 @@ namespace Basalt {
 			if (!result.valid())
 			{
 				const sol::error error = result;
-				// The session's handler would fail again on every emit; an instance's ends with its instance.
-				if (owner == 0)
+				// A shared owner's handler (the session's, a script's or module's top level) would fail again on every
+				// emit; an instance's ends with its instance.
+				if (m_Host.IsSharedOwner(owner))
 					Cancel(id);
 				else if (owner == emitter)
 					emitterFailed = true;

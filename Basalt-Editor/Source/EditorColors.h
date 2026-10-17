@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Basalt/Automation/EditorPreferences.h"
+
 #include <imgui.h>
 
 namespace Basalt::EditorColors {
@@ -8,6 +10,8 @@ namespace Basalt::EditorColors {
 	// dark theme's light tints would wash out on the light theme).
 	struct Palette
 	{
+		// Ordinary log lines (slightly softer than the theme's text).
+		ImVec4 Info;
 		ImVec4 Error;
 		ImVec4 Warning;
 		ImVec4 Success;
@@ -17,20 +21,43 @@ namespace Basalt::EditorColors {
 		ImVec4 Highlight;
 	};
 
-	inline constexpr Palette DarkPalette{ { 1.0f, 0.45f, 0.45f, 1.0f }, { 1.0f, 0.75f, 0.3f, 1.0f }, { 0.4f, 0.9f, 0.4f, 1.0f }, { 0.55f, 0.55f, 0.55f, 1.0f }, { 0.55f, 0.85f, 1.0f, 1.0f } };
-	inline constexpr Palette LightPalette{ { 0.75f, 0.1f, 0.1f, 1.0f }, { 0.65f, 0.4f, 0.0f, 1.0f }, { 0.1f, 0.5f, 0.1f, 1.0f }, { 0.45f, 0.45f, 0.45f, 1.0f }, { 0.1f, 0.35f, 0.7f, 1.0f } };
+	inline constexpr Palette DarkPalette{
+		.Info = { 0.85f, 0.85f, 0.85f, 1.0f },
+		.Error = { 1.0f, 0.45f, 0.45f, 1.0f },
+		.Warning = { 1.0f, 0.75f, 0.3f, 1.0f },
+		.Success = { 0.4f, 0.9f, 0.4f, 1.0f },
+		.Muted = { 0.55f, 0.55f, 0.55f, 1.0f },
+		.Highlight = { 0.55f, 0.85f, 1.0f, 1.0f },
+	};
+	inline constexpr Palette LightPalette{
+		.Info = { 0.12f, 0.12f, 0.12f, 1.0f },
+		.Error = { 0.75f, 0.1f, 0.1f, 1.0f },
+		.Warning = { 0.65f, 0.4f, 0.0f, 1.0f },
+		.Success = { 0.1f, 0.5f, 0.1f, 1.0f },
+		.Muted = { 0.45f, 0.45f, 0.45f, 1.0f },
+		.Highlight = { 0.1f, 0.35f, 0.7f, 1.0f },
+	};
 
-	// Set by EditorLayer::ApplyPreferences through SetLightTheme.
-	inline bool s_LightTheme = false;
+	namespace Detail {
 
-	inline void SetLightTheme(bool light)
+		// The palette in use; EditorLayer::ApplyPreferences sets it with the ImGui theme (SetTheme).
+		inline const Palette* s_Current = &DarkPalette;
+
+	}
+
+	inline void SetTheme(EditorTheme theme)
 	{
-		s_LightTheme = light;
+		Detail::s_Current = theme == EditorTheme::Light ? &LightPalette : &DarkPalette;
 	}
 
 	inline const Palette& Current()
 	{
-		return s_LightTheme ? LightPalette : DarkPalette;
+		return *Detail::s_Current;
+	}
+
+	inline ImVec4 Info()
+	{
+		return Current().Info;
 	}
 
 	inline ImVec4 Error()

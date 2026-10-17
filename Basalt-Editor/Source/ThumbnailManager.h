@@ -17,6 +17,7 @@
 
 namespace Basalt {
 
+	class MeshSource;
 	class Project;
 
 	// Content-browser and inspector previews. Panels ask for a preview every frame they show it; missing or
@@ -55,7 +56,8 @@ namespace Basalt {
 				std::string Name;
 				MaterialComponent Values;
 			};
-			// A model's materials, read when its preview was made this session (the model is not kept loaded for it).
+			// A model's materials, read when its preview was made this session (the model is not kept loaded for it);
+			// cleared when the file changes and the new version's are not known.
 			std::vector<Material> Materials;
 		};
 
@@ -96,6 +98,9 @@ namespace Basalt {
 		// made again.
 		void OnFilesChanged(const std::vector<FileChange>& changes);
 
+		// A model's materials as previews list them ("Material N" for unnamed ones).
+		static std::vector<Preview::Material> ListMaterials(const MeshSource& mesh);
+
 		// Forgets every preview at the next Update (textures drawn this frame stay alive until then); with
 		// `deleteCache`, the disk cache too (the count it removed is logged).
 		void RequestClear(bool deleteCache);
@@ -133,7 +138,8 @@ namespace Basalt {
 		// failed.
 		bool Process(const std::string& id, Slot& slot);
 		// With `reread`, the model or prefab and the files it uses are read again first (their file changed).
-		std::optional<ThumbnailCache::Entry> Make(const std::string& relativePath, ThumbnailKind kind, bool reread, std::vector<Preview::Material>& outMaterials, std::string& outError);
+		// outMaterials (optional) receives a model's materials.
+		std::optional<ThumbnailCache::Entry> Make(const ThumbnailCache& cache, const std::string& relativePath, ThumbnailKind kind, bool reread, std::vector<Preview::Material>* outMaterials, std::string& outError);
 		void Upload(Slot& slot, const ThumbnailImage& image);
 		void Clear();
 		void EvictLeastRecentlyUsed();

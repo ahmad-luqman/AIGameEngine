@@ -50,9 +50,10 @@ namespace Basalt {
 		void SetIniFilename(std::string path);
 
 	private:
+		const char* GetIniFilenamePointer() const { return m_IniFilename.empty() ? nullptr : m_IniFilename.c_str(); }
+
 		ImGuiRenderer m_Renderer;
 		std::string m_IniFilename = "imgui.ini";
-		const char* GetIniFilenamePointer() const { return m_IniFilename.empty() ? nullptr : m_IniFilename.c_str(); }
 		bool m_BlockEvents = true;
 		bool m_Initialized = false;
 		bool m_HasPlatformBackend = false;

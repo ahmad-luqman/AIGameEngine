@@ -64,8 +64,8 @@ namespace Basalt {
 		void RegisterEditorCommands();
 		void OnSceneChanged();
 
-		// Reads the user's preferences (a rejected file is set aside) and points ImGui's layout file next to them (first
-		// run: a copy of ./imgui.ini).
+		// Reads the user's preferences (an invalid file is set aside, an unreadable one left alone for this session) and
+		// points ImGui's layout file next to them (first run: a copy of ./imgui.ini).
 		void LoadPreferences();
 		// Gives the camera, theme and file watching their preferred values.
 		void ApplyPreferences();
@@ -77,7 +77,8 @@ namespace Basalt {
 		void UpdateFileWatching();
 		// Records the active project as recent and the wheel's camera speed, and saves the preferences when due.
 		void UpdatePreferences();
-		void OpenRecentProject(const std::string& directory);
+		// Stops play and opens the project; false (the error on the status bar) when it did not open.
+		bool OpenRecentProject(const std::string& directory);
 		// File > Open Recent Project: a menu item per project (greyed out when its folder is gone) and Clear.
 		void DrawRecentProjectsMenu();
 		// The Open Project prompt's list: a click fills in the path, a double click opens the project.
@@ -261,11 +262,11 @@ namespace Basalt {
 		EditorPreferences m_Preferences;
 		// Empty when the user data directory is unavailable: preferences then last for this session only.
 		std::filesystem::path m_PreferencesFile;
-		// Where ImGui keeps the window layout (./imgui.ini until LoadPreferences moves it next to the preferences).
+		// Where ImGui keeps the window layout (./imgui.ini until LoadPreferences points it next to the preferences).
 		std::filesystem::path m_LayoutFile = EditorPreferences::LayoutFileName;
 		bool m_PreferencesDirty = false;
-		// A save failed: warned once, tried again with the next change.
-		bool m_PreferencesSaveFailed = false;
+		// Why the last save failed (empty after a success): retried PreferencesSaveDelay later and on exit.
+		std::string m_PreferencesSaveError;
 		// Since the last change.
 		Timer m_PreferencesChanged;
 		// The project last added to the recent list.

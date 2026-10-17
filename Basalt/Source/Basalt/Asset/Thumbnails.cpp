@@ -1,8 +1,7 @@
 #include "Basalt/Asset/Thumbnails.h"
 
-#include "Basalt/Asset/MeshImporter.h"
-
 #include "Basalt/Asset/ImageUtils.h"
+#include "Basalt/Asset/MeshImporter.h"
 #include "Basalt/Asset/TextureSource.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Hash.h"
@@ -124,8 +123,8 @@ namespace Basalt {
 			if (cgltf_parse_file(&options, path.c_str(), &data) != cgltf_result_success)
 				return;
 			const auto add = [&](const char* uri) {
-				if (uri && std::string_view(uri).rfind("data:", 0) != 0)
-					outDependencies.insert(MeshImporter::GetExternalFileKey(model, uri));
+				if (auto file = MeshImporter::GetExternalFileKey(model, uri))
+					outDependencies.insert(std::move(*file));
 			};
 			for (cgltf_size i = 0; i < data->buffers_count; i++)
 				add(data->buffers[i].uri);

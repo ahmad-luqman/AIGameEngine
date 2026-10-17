@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <system_error>
+#include <utility>
 
 namespace Basalt {
 
@@ -73,53 +74,64 @@ namespace Basalt {
 		Scan result;
 		const std::filesystem::path base = FileSystem::PathFromUtf8(subdirectory);
 		const std::filesystem::path folder = root / base;
-		const auto fail = [&](const std::filesystem::path& path, const std::error_code& error) {
-			result.Error = "cannot read '" + FileSystem::PathToUtf8(path) + "': " + error.message();
-			return result;
-		};
+		const auto describe = [](const std::filesystem::path& path, const std::error_code& error) { return "cannot read '" + FileSystem::PathToUtf8(path) + "': " + error.message(); };
 		std::error_code error;
 		const std::filesystem::file_status status = std::filesystem::status(folder, error);
 		if (error && !IsMissing(error))
-			return fail(folder, error);
+		{
+			result.Error = describe(folder, error);
+			return result;
+		}
+		// A missing folder, or a file where it should be: nothing is watched.
 		if (!std::filesystem::is_directory(status))
 			return result;
-		// Unreadable folders are errors, not skipped: their files would look removed.
-		for (auto it = std::filesystem::recursive_directory_iterator(folder, error); it != std::filesystem::recursive_directory_iterator(); it.increment(error))
+		// Unreadable folders are errors, not skipped: their files would look removed. An increment that fails was
+		// entering the last entry listed (a folder).
+		std::filesystem::path last = folder;
+		for (auto it = std::filesystem::recursive_directory_iterator(folder, error); !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error))
 		{
-			if (error)
-				break;
+			last = it->path();
 			std::error_code entryError;
 			const bool regular = it->is_regular_file(entryError);
-			uintmax_t size = 0;
-			std::filesystem::file_time_type time;
+			Stamp stamp;
 			if (!entryError && regular)
-				size = it->file_size(entryError);
-			if (!entryError && regular)
-				time = it->last_write_time(entryError);
-			// A file removed between listing and reading is simply absent from this scan.
-			if (entryError && IsMissing(entryError))
-				continue;
+			{
+				stamp.Size = it->file_size(entryError);
+				if (!entryError)
+					stamp.WriteTime = it->last_write_time(entryError);
+			}
 			if (entryError)
-				return fail(it->path(), entryError);
+			{
+				// A file removed between listing and reading is simply absent from this scan.
+				if (IsMissing(entryError))
+					continue;
+				result.Error = describe(it->path(), entryError);
+				return result;
+			}
 			if (regular)
-				result.Files.emplace(FileSystem::PathToGenericUtf8(base / it->path().lexically_relative(folder)), Stamp{ size, time });
+				result.Files.emplace(FileSystem::PathToGenericUtf8(base / it->path().lexically_relative(folder)), stamp);
 		}
 		if (error)
-			return fail(folder, error);
+			result.Error = describe(last, error);
 		return result;
 	}
 
 	void FileWatcher::Watch(const std::filesystem::path& root, const std::string& subdirectory)
 	{
-		BS_CORE_ASSERT(IsOwnerThread(), "FileWatcher is used from the thread that created it");
+		AssertOwnerThread();
 		StopWorker();
 		m_Root = root;
-		m_Subdirectory = subdirectory;
+		// "Assets/" and "./Assets" are "Assets": watched paths and acknowledgements are compared as text.
+		std::string normal = FileSystem::PathToGenericUtf8(FileSystem::PathFromUtf8(subdirectory).lexically_normal());
+		while (normal.ends_with('/') || normal == ".")
+			normal.pop_back();
+		m_Subdirectory = std::move(normal);
 		m_Reported.clear();
 		m_LastScan.clear();
 		m_Acknowledged.clear();
 		m_LastError.clear();
 		m_BaselinePending = false;
+		m_LateBaseline = false;
 		if (!IsWatching())
 			return;
 		const uint64_t sequence = BeginScan();
@@ -127,7 +139,7 @@ namespace Basalt {
 		m_AppliedSequence = sequence;
 		if (!baseline.Error.empty())
 		{
-			BS_CORE_WARN("FileWatcher: {}; changes are reported once the folder can be read", baseline.Error);
+			BS_CORE_WARN("FileWatcher: {}; the first complete scan becomes the baseline (changes made before it are not reported)", baseline.Error);
 			m_LastError = baseline.Error;
 			m_BaselinePending = true;
 		}
@@ -142,6 +154,7 @@ namespace Basalt {
 
 	std::vector<FileChange> FileWatcher::Refresh()
 	{
+		AssertOwnerThread();
 		if (!IsWatching())
 			return {};
 		const uint64_t sequence = BeginScan();
@@ -150,24 +163,46 @@ namespace Basalt {
 
 	bool FileWatcher::IsWatchedPath(const std::string& path) const
 	{
+		// Normalized: a path still starting with ".." (or rooted) is outside the root whatever the subdirectory.
+		const std::filesystem::path relative = FileSystem::PathFromUtf8(path);
+		if (relative.empty() || relative.is_absolute() || relative.has_root_path() || *relative.begin() == "..")
+			return false;
 		return m_Subdirectory.empty() || path.starts_with(m_Subdirectory + "/");
+	}
+
+	bool FileWatcher::IsKnown(const std::string& relativePath) const
+	{
+		return m_Reported.contains(FileSystem::PathToGenericUtf8(FileSystem::PathFromUtf8(relativePath).lexically_normal()));
+	}
+
+	void FileWatcher::AssertOwnerThread() const
+	{
+		BS_CORE_ASSERT(std::this_thread::get_id() == m_Owner, "FileWatcher is used from the thread that created it");
+	}
+
+	bool FileWatcher::TakeLateBaselineNotice()
+	{
+		return std::exchange(m_LateBaseline, false);
 	}
 
 	std::optional<FileChangeType> FileWatcher::Acknowledge(const std::string& relativePath)
 	{
-		BS_CORE_ASSERT(IsOwnerThread(), "FileWatcher is used from the thread that created it");
+		AssertOwnerThread();
 		const std::string path = FileSystem::PathToGenericUtf8(FileSystem::PathFromUtf8(relativePath).lexically_normal());
 		// Files outside the watched folder are never scanned: recording them would report them as removed.
 		if (!IsWatching() || !IsWatchedPath(path))
 			return std::nullopt;
 		const auto stamp = ReadStamp(m_Root / FileSystem::PathFromUtf8(path));
 		const auto previous = m_Reported.find(path);
+		// Without a baseline yet there is nothing to compare with.
 		std::optional<FileChangeType> change;
-		if (stamp && previous == m_Reported.end())
+		if (m_BaselinePending)
+			change = std::nullopt;
+		else if (stamp && previous == m_Reported.end())
 			change = FileChangeType::Added;
 		else if (!stamp && previous != m_Reported.end())
 			change = FileChangeType::Removed;
-		else if (stamp && !(previous->second == *stamp))
+		else if (stamp && previous->second != *stamp)
 			change = FileChangeType::Modified;
 		if (stamp)
 		{
@@ -192,14 +227,19 @@ namespace Basalt {
 
 	std::vector<FileChange> FileWatcher::Apply(const Scan& scan, uint64_t sequence, bool settle)
 	{
-		BS_CORE_ASSERT(IsOwnerThread(), "FileWatcher is used from the thread that created it");
+		AssertOwnerThread();
 		if (!IsWatching())
 			return {};
+		// A background scan that started before the last Refresh knows less than what was already reported, whether it
+		// succeeded or not.
+		if (sequence <= m_AppliedSequence)
+			return {};
+		m_AppliedSequence = sequence;
 		if (!scan.Error.empty())
 		{
 			// Logged once per problem, not on every scan while it lasts.
 			if (scan.Error != m_LastError)
-				BS_CORE_WARN("FileWatcher: {}; changes are reported once the folder can be read again", scan.Error);
+				BS_CORE_WARN("FileWatcher: {}; nothing is reported until it can be read", scan.Error);
 			m_LastError = scan.Error;
 			return {};
 		}
@@ -208,16 +248,23 @@ namespace Basalt {
 			BS_CORE_INFO("FileWatcher: '{}' can be read again", FileSystem::PathToUtf8(m_Root / FileSystem::PathFromUtf8(m_Subdirectory)));
 			m_LastError.clear();
 		}
-		// A background scan that started before the last Refresh knows less than what was already reported.
-		if (sequence <= m_AppliedSequence)
-			return {};
-		m_AppliedSequence = sequence;
 		std::erase_if(m_Acknowledged, [sequence](const auto& entry) { return entry.second <= sequence; });
 		if (m_BaselinePending)
 		{
-			m_Reported = scan.Files;
-			m_LastScan = scan.Files;
+			// The first complete scan is the baseline, except for files the host acknowledged after it began.
+			Snapshot baseline = scan.Files;
+			for (const auto& [path, acknowledged] : m_Acknowledged)
+			{
+				if (const Stamp* stamp = Find(m_Reported, path))
+					baseline[path] = *stamp;
+				else
+					baseline.erase(path);
+			}
+			m_Reported = baseline;
+			m_LastScan = std::move(baseline);
 			m_BaselinePending = false;
+			m_LateBaseline = true;
+			BS_CORE_WARN("FileWatcher: '{}' can be read; changes made before now were not seen", FileSystem::PathToUtf8(m_Root / FileSystem::PathFromUtf8(m_Subdirectory)));
 			return {};
 		}
 
@@ -242,11 +289,11 @@ namespace Basalt {
 				return;
 			if (!current)
 			{
-				changes.push_back({ path, FileChangeType::Removed });
+				changes.emplace_back(path, FileChangeType::Removed);
 				m_Reported.erase(path);
 				return;
 			}
-			changes.push_back({ path, reported ? FileChangeType::Modified : FileChangeType::Added });
+			changes.emplace_back(path, reported ? FileChangeType::Modified : FileChangeType::Added);
 			m_Reported[path] = *current;
 		};
 		for (const auto& [path, stamp] : scan.Files)
@@ -266,7 +313,7 @@ namespace Basalt {
 
 	bool FileWatcher::StartPolling(std::chrono::milliseconds interval)
 	{
-		BS_CORE_ASSERT(IsOwnerThread(), "FileWatcher is used from the thread that created it");
+		AssertOwnerThread();
 		StopWorker();
 		m_RequestedInterval = std::max(interval, std::chrono::milliseconds(1));
 		if (!IsWatching())
@@ -276,6 +323,7 @@ namespace Basalt {
 
 	void FileWatcher::StopPolling()
 	{
+		AssertOwnerThread();
 		m_RequestedInterval = std::chrono::milliseconds(0);
 		StopWorker();
 	}
@@ -316,6 +364,7 @@ namespace Basalt {
 
 	std::vector<FileChange> FileWatcher::Update()
 	{
+		AssertOwnerThread();
 		std::optional<std::pair<Scan, uint64_t>> pending;
 		{
 			std::lock_guard lock(m_Mutex);
@@ -341,10 +390,11 @@ namespace Basalt {
 			}
 			catch (const std::exception& e)
 			{
-				scan = Scan{ {}, std::string("scan failed: ") + e.what() };
+				scan = Scan{ {}, "cannot scan '" + FileSystem::PathToUtf8(root / FileSystem::PathFromUtf8(subdirectory)) + "': " + e.what() };
 			}
 			lock.lock();
-			// An unread older scan is replaced: the newest one knows everything it did.
+			// An unread older scan is replaced: the newest one knows every file it did (a change it settled on may then be
+			// reported one interval later).
 			m_Pending.emplace(std::move(scan), sequence);
 		}
 	}

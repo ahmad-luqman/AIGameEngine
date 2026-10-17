@@ -121,57 +121,51 @@ namespace Basalt {
 			return defaultValue;
 		}
 
-		// Clears require's cache (package.loaded) when it holds a module whose file is one of `files` (absolute, lexically
-		// normal). Every module loaded from a file is forgotten then, not only the changed one: a module that required it
-		// holds on to its old table. True if a changed module was loaded. `package` is read defensively, as scripts can
-		// replace its fields.
-		bool ForgetModules(sol::state& lua, const std::vector<std::filesystem::path>& files)
+		// The parts of `package` require uses, unless a script replaced them.
+		struct PackageView
+		{
+			sol::table Loaded;
+			sol::protected_function SearchPath;
+			std::string Path;
+		};
+
+		std::optional<PackageView> GetPackage(sol::state& lua)
 		{
 			const auto package = lua["package"].get<sol::optional<sol::table>>();
-			if (!package)
-				return false;
-			auto loaded = package->get<sol::optional<sol::table>>("loaded");
-			const auto searchPath = package->get<sol::optional<sol::protected_function>>("searchpath");
-			const auto packagePath = package->get<sol::optional<std::string>>("path");
-			if (!loaded || !searchPath || !packagePath)
-				return false;
-			std::vector<std::string> names;
-			for (const auto& [key, value] : *loaded)
-			{
-				if (key.is<std::string>())
-					names.push_back(key.as<std::string>());
-			}
-			std::vector<std::string> modules;
-			modules.reserve(names.size());
-			bool changed = false;
-			for (const std::string& name : names)
-			{
-				// The file require would load for the name now (nil for the standard libraries).
-				const sol::protected_function_result found = (*searchPath)(name, *packagePath);
-				if (!found.valid() || found.get_type() != sol::type::string)
-					continue;
-				modules.push_back(name);
-				// package.path holds native narrow text (OpenSafeLibraries), so the result decodes the same way. Equivalent,
-				// not only equal: "require 'util'" finds Util.lua on case-insensitive file systems.
-				const std::filesystem::path file = std::filesystem::path(found.get<std::string>()).lexically_normal();
-				for (const std::filesystem::path& changedFile : files)
-				{
-					std::error_code error;
-					if (file == changedFile || std::filesystem::equivalent(file, changedFile, error))
-						changed = true;
-				}
-			}
-			if (changed)
-			{
-				for (const std::string& name : modules)
-					(*loaded)[name] = sol::lua_nil;
-			}
-			return changed;
+			auto loaded = package ? package->get<sol::optional<sol::table>>("loaded") : sol::nullopt;
+			auto searchPath = package ? package->get<sol::optional<sol::protected_function>>("searchpath") : sol::nullopt;
+			auto path = package ? package->get<sol::optional<std::string>>("path") : sol::nullopt;
+			if (!loaded || !searchPath || !path)
+				return std::nullopt;
+			return PackageView{ *loaded, *searchPath, *path };
 		}
 
-		// Owners of the code classes run at their top level (ScriptEngine::Impl::ScriptClass::Owner). Entity UUIDs are
-		// random 64-bit numbers, so this range only collides with one by a 1 in 2^48 chance per class load.
+		// The file require would load for a module name now (nullopt for the standard libraries and missing modules).
+		// package.path holds native narrow text (OpenSafeLibraries), so the result decodes the same way.
+		std::optional<std::filesystem::path> FindModuleFile(const PackageView& package, const std::string& name)
+		{
+			const sol::protected_function_result found = package.SearchPath(name, package.Path);
+			if (!found.valid() || found.get_type() != sol::type::string)
+				return std::nullopt;
+			return std::filesystem::path(found.get<std::string>()).lexically_normal();
+		}
+
+		// Equivalent, not only equal: "require 'util'" finds Util.lua on case-insensitive file systems.
+		bool IsAnyOf(const std::filesystem::path& file, const std::vector<std::filesystem::path>& files)
+		{
+			return std::any_of(files.begin(), files.end(), [&](const std::filesystem::path& other) {
+				std::error_code error;
+				return file == other || std::filesystem::equivalent(file, other, error);
+			});
+		}
+
+		// Owners of the code that runs at the top level of scripts (ScriptEngine::Impl::ScriptClass::Owner) and of
+		// required modules (ScriptEngine::Impl::ModuleOwners). One equals a given random entity UUID with probability
+		// 2^-64, and new ones skip UUIDs the scene uses (scene files are untrusted).
 		constexpr uint64_t ClassOwnerBase = 0xC1A5500000000000ull;
+		// Raw key that marks the metatables MakeInstanceMetatable made for a class: a hot reload swaps only those, never
+		// a metatable a script set on its instance itself.
+		constexpr const char* InstanceMetatableMarker = "__basaltInstance";
 
 	}
 
@@ -186,6 +180,7 @@ namespace Basalt {
 		sol::object GetInstance(UUID id) override;
 		void EnsureInstances(const std::vector<Entity>& entities) override;
 		bool IsOwnerActive(UUID owner) const override;
+		bool IsSharedOwner(UUID owner) const override { return owner == 0 || ClassOwners.contains(owner); }
 		void FailOwner(UUID owner, const std::string& message, const std::string& where) override;
 		ScriptTasks& GetTasks() override { return Tasks; }
 		ScriptEvents& GetEvents() override { return Events; }
@@ -225,9 +220,24 @@ namespace Basalt {
 		std::optional<SaveData> Storage;
 		std::unordered_map<std::string, ScriptClass> Classes;
 		std::unordered_set<std::string> FailedClasses;
-		// Class owner -> script path.
+		// Owner of a script's or module's top level -> what it is, for messages ("'Assets/Scripts/Player.lua'",
+		// "module 'Assets.Scripts.Util'").
 		std::unordered_map<UUID, std::string> ClassOwners;
 		uint64_t ClassLoads = 0;
+		// Module name -> the owner of what its top level started (it runs once, for whichever script requires it first,
+		// so it belongs to the module, not to that script's class).
+		std::unordered_map<std::string, UUID> ModuleOwners;
+		// Module name -> the modules whose top level required it: forgotten with it, as they hold its old table.
+		std::unordered_map<std::string, std::set<std::string>> ModuleDependents;
+		// The modules being loaded right now, innermost last.
+		std::vector<std::string> ModuleStack;
+		// Modules whose require failed (Lua does not cache those): when one of their files changes, the classes that
+		// failed to load and those whose last reload failed are tried again.
+		std::set<std::string> FailedRequires;
+		// Classes still running their previous version because their last hot reload failed.
+		std::unordered_set<std::string> StaleClasses;
+		// A replaced package table was reported (once per session).
+		bool ReportedPackageProblem = false;
 		std::unordered_map<UUID, Instance> Instances;
 		// Creation order, for deterministic callback order.
 		std::vector<UUID> Order;
@@ -349,11 +359,11 @@ namespace Basalt {
 		// Reports an error of an owner's timer, coroutine or event handler, naming the owner, and disables it.
 		static void FailOwner(ScriptEngine& engine, UUID owner, const std::string& message, const std::string& where)
 		{
-			// What a class's top level started: it all ends, as an instance's does when it fails.
+			// What a script's or module's top level started is shared, as the session's is: only the failing timer or
+			// handler ends (its caller ends it).
 			if (const auto it = engine.m_Impl->ClassOwners.find(owner); it != engine.m_Impl->ClassOwners.end())
 			{
-				engine.ReportError(message + " (in " + where + " started by the top level of '" + it->second + "')");
-				ReleaseOwned(engine, owner);
+				engine.ReportError(message + " (in " + where + " started by the top level of " + it->second + ")");
 				return;
 			}
 			std::string ownerName = "the play session";
@@ -412,35 +422,154 @@ namespace Basalt {
 	// Class loading and properties, shared by instance creation and hot reload.
 	struct ScriptClassLoader
 	{
-		// Loads a script's class, its top-level code running under a new class owner. On failure what that code started
-		// is cancelled.
+		// Loads a script's class, its top-level code running under a new class owner. On failure (or an exception) what
+		// that code started is cancelled.
 		static std::optional<ScriptEngine::Impl::ScriptClass> Load(ScriptEngine& engine, const std::string& path, std::string& outError)
 		{
 			ScriptEngine::Impl& impl = *engine.m_Impl;
-			const UUID owner(ClassOwnerBase | ++impl.ClassLoads);
-			impl.ClassOwners.emplace(owner, path);
+			const UUID owner = NewOwner(engine, "'" + path + "'");
+			// Released unless the load succeeds, whatever leaves this function.
+			struct ReleaseUnlessKept
+			{
+				ScriptEngine& Engine;
+				UUID Owner;
+				bool Kept = false;
+				~ReleaseUnlessKept()
+				{
+					if (!Kept)
+						Release(Engine, Owner);
+				}
+			} guard{ engine, owner };
 			std::optional<sol::table> table;
 			{
 				ScriptOwnerScope scope(impl.Context, owner);
 				table = LoadScriptClass(impl.Lua, path, outError);
 			}
 			if (!table)
-			{
-				Release(engine, owner);
 				return std::nullopt;
-			}
-			return ScriptEngine::Impl::ScriptClass{ *table, MakeInstanceMetatable(impl.Lua, *table), owner };
+			sol::table metatable = MakeInstanceMetatable(impl.Lua, *table);
+			metatable.raw_set(InstanceMetatableMarker, true);
+			guard.Kept = true;
+			return ScriptEngine::Impl::ScriptClass{ *table, metatable, owner };
 		}
 
-		// Ends what a class's top-level code started.
+		// A new owner for top-level code, described as `name` in messages.
+		static UUID NewOwner(ScriptEngine& engine, std::string name)
+		{
+			ScriptEngine::Impl& impl = *engine.m_Impl;
+			UUID owner(ClassOwnerBase | ++impl.ClassLoads);
+			while (engine.m_Scene->GetEntityByUUID(owner) || impl.ClassOwners.contains(owner))
+				owner = UUID(ClassOwnerBase | ++impl.ClassLoads);
+			impl.ClassOwners.emplace(owner, std::move(name));
+			return owner;
+		}
+
+		// Ends what a class's (or module's) top-level code started.
 		static void Release(ScriptEngine& engine, UUID owner)
 		{
 			ScriptEngineAccess::ReleaseOwned(engine, owner);
 			engine.m_Impl->ClassOwners.erase(owner);
 		}
 
+		// The owner of a module's top level, made on its first load.
+		static UUID ModuleOwner(ScriptEngine& engine, const std::string& name)
+		{
+			ScriptEngine::Impl& impl = *engine.m_Impl;
+			if (const auto it = impl.ModuleOwners.find(name); it != impl.ModuleOwners.end())
+				return it->second;
+			const UUID owner = NewOwner(engine, "module '" + name + "'");
+			impl.ModuleOwners.emplace(name, owner);
+			return owner;
+		}
+
+		// require, with what a module's top level starts owned by the module, and the modules that require it recorded.
+		static sol::object Require(ScriptEngine& engine, sol::this_state state, const sol::object& name)
+		{
+			ScriptEngine::Impl& impl = *engine.m_Impl;
+			const sol::protected_function require = sol::state_view(state).registry()["Basalt.Require"];
+			const std::string module = name.is<std::string>() ? name.as<std::string>() : std::string();
+			if (!module.empty() && !impl.ModuleStack.empty() && impl.ModuleStack.back() != module)
+				impl.ModuleDependents[module].insert(impl.ModuleStack.back());
+			impl.ModuleStack.push_back(module);
+			struct PopModule
+			{
+				std::vector<std::string>& Stack;
+				~PopModule() { Stack.pop_back(); }
+			} pop{ impl.ModuleStack };
+			sol::protected_function_result result = [&]() {
+				ScriptOwnerScope scope(impl.Context, module.empty() ? impl.Context.GetCurrentOwner() : ModuleOwner(engine, module));
+				return require(name);
+			}();
+			if (!result.valid())
+			{
+				impl.FailedRequires.insert(module);
+				const sol::error error = result;
+				throw std::runtime_error(error.what());
+			}
+			impl.FailedRequires.erase(module);
+			return result.get<sol::object>();
+		}
+
+		// Forgets the modules whose file is one of `files` (absolute, lexically normal) and those that required them,
+		// directly or not, so the next require loads them again, and ends what their top level started. True if a
+		// changed module was loaded, or if that cannot be told because a script replaced part of `package` (outError
+		// then says so, and the caller reloads every class). A changed file of a module whose require failed sets
+		// outFailedRequireChanged.
+		static bool ForgetModules(ScriptEngine& engine, const std::vector<std::filesystem::path>& files, bool& outFailedRequireChanged, std::string& outError)
+		{
+			ScriptEngine::Impl& impl = *engine.m_Impl;
+			std::optional<PackageView> package = GetPackage(impl.Lua);
+			if (!package)
+			{
+				outError = "a script replaced the package table (package.loaded, package.searchpath or package.path), so changed modules cannot be told apart: every script loads again";
+				return true;
+			}
+			outFailedRequireChanged = std::any_of(impl.FailedRequires.begin(), impl.FailedRequires.end(), [&](const std::string& name) {
+				const auto file = FindModuleFile(*package, name);
+				return file && IsAnyOf(*file, files);
+			});
+			// A snapshot of the names first: the searchpath calls below run Lua, which must not change the table being
+			// traversed.
+			std::vector<std::string> names;
+			for (const auto& [key, value] : package->Loaded)
+			{
+				if (key.is<std::string>())
+					names.push_back(key.as<std::string>());
+			}
+			std::vector<std::string> forget;
+			for (const std::string& name : names)
+			{
+				if (const auto file = FindModuleFile(*package, name); file && IsAnyOf(*file, files))
+					forget.push_back(name);
+			}
+			if (forget.empty())
+				return false;
+			std::set<std::string> forgotten;
+			while (!forget.empty())
+			{
+				const std::string name = std::move(forget.back());
+				forget.pop_back();
+				if (!forgotten.insert(name).second)
+					continue;
+				if (const auto it = impl.ModuleDependents.find(name); it != impl.ModuleDependents.end())
+					forget.insert(forget.end(), it->second.begin(), it->second.end());
+			}
+			for (const std::string& name : forgotten)
+			{
+				package->Loaded[name] = sol::lua_nil;
+				impl.ModuleDependents.erase(name);
+				if (const auto it = impl.ModuleOwners.find(name); it != impl.ModuleOwners.end())
+				{
+					Release(engine, it->second);
+					impl.ModuleOwners.erase(it);
+				}
+			}
+			return true;
+		}
+
 		// Sets the instance's fields from the class's Properties (with the component's overrides); with onlyMissing,
-		// only those it does not have yet.
+		// only those it does not have yet. Raw writes: after creation an instance may carry a metatable of its own
+		// whose __newindex would run (and could raise outside any protected call).
 		static void AssignProperties(ScriptEngine& engine, sol::table& self, const sol::table& scriptClass, const ScriptComponent& component, bool onlyMissing)
 		{
 			const sol::object properties = scriptClass["Properties"];
@@ -454,10 +583,16 @@ namespace Basalt {
 				if (onlyMissing && self.raw_get<sol::object>(name).get_type() != sol::type::lua_nil)
 					continue;
 				std::string error;
-				self[name] = PropertyValue(engine.m_Impl->Lua, name, defaultValue, component, error);
+				self.raw_set(name, PropertyValue(engine.m_Impl->Lua, name, defaultValue, component, error));
 				if (!error.empty())
 					engine.ReportError(error);
 			}
+		}
+
+		// The metatable is one MakeInstanceMetatable made (not one a script set itself).
+		static bool IsInstanceMetatable(const sol::object& metatable)
+		{
+			return metatable.get_type() == sol::type::table && metatable.as<sol::table>().raw_get<sol::optional<bool>>(InstanceMetatableMarker).value_or(false);
 		}
 	};
 
@@ -506,6 +641,13 @@ namespace Basalt {
 		m_Impl->Context.ResetRandom(scene->GetRandomSeed());
 		m_Impl->Context.Host = m_Impl.get();
 		RegisterScriptBindings(m_Impl->Lua, m_Impl->Context);
+
+		// A module runs its top level once, for whichever script requires it first: what that code starts belongs to the
+		// module (ScriptClassLoader::Require), not to that script's class, so reloading the class does not end it. The
+		// original require stays in the registry (a captured Lua reference would outlive lua_close).
+		sol::state& lua = m_Impl->Lua;
+		lua.registry()["Basalt.Require"] = lua["require"];
+		lua.set_function("require", [this](sol::this_state state, const sol::object& name) { return ScriptClassLoader::Require(*this, state, name); });
 
 		entt::registry& registry = scene->GetRegistry();
 		registry.on_construct<ScriptComponent>().connect<&Impl::OnScriptComponentChanged>(*m_Impl);
@@ -832,8 +974,8 @@ namespace Basalt {
 		}
 		catch (const std::exception& e)
 		{
-			ReportError(std::string("hot reload stopped: ") + e.what());
-			result.InstanceErrors.emplace_back(e.what());
+			ReportError(std::string("hot reload stopped part way: ") + e.what());
+			result.Error = e.what();
 		}
 		return result;
 	}
@@ -847,25 +989,25 @@ namespace Basalt {
 		for (const std::string& path : changed)
 			files.push_back(Project::ResolvePath(path).lexically_normal());
 		// Any class may require a changed module, directly or not: all of them load again.
-		const bool moduleChanged = ForgetModules(impl.Lua, files);
-		// A changed file no class runs may be a module whose require failed (Lua does not cache those): classes that
-		// failed to load are tried again.
-		const bool unknownFileChanged = std::any_of(changed.begin(), changed.end(), [&](const std::string& path) { return !impl.Classes.contains(path) && !impl.FailedClasses.contains(path); });
+		std::string packageProblem;
+		bool failedRequireChanged = false;
+		const bool moduleChanged = ScriptClassLoader::ForgetModules(*this, files, failedRequireChanged, packageProblem);
+		if (!packageProblem.empty() && !std::exchange(impl.ReportedPackageProblem, true))
+			ReportError("hot reload: " + packageProblem);
 
 		std::set<std::string> candidates;
 		for (const auto& [path, scriptClass] : impl.Classes)
 		{
-			if (moduleChanged || changed.contains(path))
+			if (moduleChanged || changed.contains(path) || (failedRequireChanged && impl.StaleClasses.contains(path)))
 				candidates.insert(path);
 		}
 		for (const std::string& path : impl.FailedClasses)
 		{
-			if (moduleChanged || unknownFileChanged || changed.contains(path))
+			if (moduleChanged || failedRequireChanged || changed.contains(path))
 				candidates.insert(path);
 		}
 
-		// The metatable each reloaded class's instances had, so a metatable a script set itself is left alone.
-		std::unordered_map<std::string, sol::table> previousMetatables;
+		std::unordered_set<std::string> replaced;
 		std::unordered_set<std::string> recovered;
 		for (const std::string& path : candidates)
 		{
@@ -874,20 +1016,22 @@ namespace Basalt {
 			const auto existing = impl.Classes.find(path);
 			if (!loaded)
 			{
+				const bool running = existing != impl.Classes.end();
 				std::string message = "hot reload of '" + path + "' failed";
-				if (existing != impl.Classes.end())
-					message += ", the previous version keeps running";
-				message += ": ";
+				message += running ? ", the previous version keeps running: " : ": ";
 				message += error;
 				ReportError(message);
+				if (running)
+					impl.StaleClasses.insert(path);
 				result.Failed.push_back({ path, error });
 				continue;
 			}
+			impl.StaleClasses.erase(path);
 			if (existing != impl.Classes.end())
 			{
-				previousMetatables.emplace(path, existing->second.InstanceMetatable);
 				ScriptClassLoader::Release(*this, existing->second.Owner);
 				existing->second = std::move(*loaded);
+				replaced.insert(path);
 			}
 			else
 			{
@@ -900,24 +1044,27 @@ namespace Basalt {
 		if (result.Reloaded.empty())
 			return;
 
-		// Existing instances: the new class's methods, and the properties it added. A copy of the order: assigning
-		// properties can run Lua (metamethods), which may create instances.
+		// Existing instances: the new class's methods, and the properties it added. A copy of the order: the property
+		// values can run Lua (metamethods), which may create instances.
+		const size_t errorsBefore = m_Errors.size();
 		const std::vector<UUID> order = impl.Order;
 		std::vector<UUID> moved;
 		for (UUID uuid : order)
 		{
 			auto it = impl.Instances.find(uuid);
-			if (it == impl.Instances.end())
-				continue;
-			const auto previous = previousMetatables.find(it->second.ScriptPath);
-			if (previous == previousMetatables.end())
+			if (it == impl.Instances.end() || !replaced.contains(it->second.ScriptPath))
 				continue;
 			const Impl::ScriptClass& scriptClass = impl.Classes.at(it->second.ScriptPath);
 			sol::table self = it->second.Self;
-			const sol::object current = self[sol::metatable_key];
-			if (current.get_type() == sol::type::table && current.as<sol::table>() == previous->second)
-				self[sol::metatable_key] = scriptClass.InstanceMetatable;
 			Entity entity = m_Scene->GetEntityByUUID(uuid);
+			// A metatable the script set on the instance itself stays: the new methods reach the instance only if that
+			// metatable leads to them, so it is not counted as running the new code.
+			if (!ScriptClassLoader::IsInstanceMetatable(self[sol::metatable_key]))
+			{
+				BS_CORE_WARN("Hot reload: the script of '{}' set its own metatable, which is kept; the new version's methods reach it only through that metatable", entity ? entity.GetName() : std::string("?"));
+				continue;
+			}
+			self[sol::metatable_key] = scriptClass.InstanceMetatable;
 			if (const auto* component = entity ? entity.TryGetComponent<ScriptComponent>() : nullptr)
 			{
 				// Copied: the property values below may run Lua that changes the component.
@@ -928,7 +1075,6 @@ namespace Basalt {
 		}
 
 		// Then the callbacks, once every instance runs the new code (OnReload may call other reloaded instances).
-		const size_t errorsBefore = m_Errors.size();
 		std::vector<UUID> notified;
 		for (UUID uuid : moved)
 		{

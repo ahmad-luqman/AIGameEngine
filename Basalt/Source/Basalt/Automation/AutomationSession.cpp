@@ -29,6 +29,8 @@ namespace Basalt {
 				return "notPlaying";
 			case ScriptHotReload::Simulating:
 				return "simulating";
+			case ScriptHotReload::Failed:
+				return "failed";
 		}
 		return "none";
 	}
@@ -228,12 +230,19 @@ namespace Basalt {
 		return m_FileWatcher.Update();
 	}
 
-	std::vector<FileChange> AutomationSession::RefreshFileChanges(std::string& outError)
+	std::vector<FileChange> AutomationSession::RefreshFileChanges(std::string& outError, std::string& outWarning)
 	{
 		SyncFileWatcher();
 		std::vector<FileChange> changes = m_FileWatcher.Refresh();
 		outError = m_FileWatcher.GetLastError();
+		outWarning = m_FileWatcher.TakeLateBaselineNotice() ? "Assets/ could not be read until now: changes made before were not seen (pass 'paths' to reload them)" : "";
 		return changes;
+	}
+
+	bool AutomationSession::IsKnownFile(const std::string& relativePath)
+	{
+		SyncFileWatcher();
+		return m_FileWatcher.IsKnown(relativePath);
 	}
 
 	std::optional<FileChangeType> AutomationSession::AcknowledgeFile(const std::string& relativePath)
@@ -254,7 +263,7 @@ namespace Basalt {
 			// AssetManager keys and script paths are normalized project-relative paths.
 			const std::filesystem::path normal = FileSystem::PathFromUtf8(change.Path).lexically_normal();
 			const std::string path = FileSystem::PathToGenericUtf8(normal);
-			report.Changed.push_back({ path, change.Type });
+			report.Changed.emplace_back(path, change.Type);
 			paths.push_back(path);
 			// A removed script has nothing to load: the running version stays until play stops.
 			if (change.Type != FileChangeType::Removed && FileSystem::GetLowercaseExtension(normal) == ".lua")
@@ -264,16 +273,19 @@ namespace Basalt {
 		if (!scripts.empty())
 		{
 			ScriptEngine* engine = IsPlaying() && !IsSimulating() ? m_Scene->GetScriptEngine() : nullptr;
-			report.HotReload = engine ? ScriptHotReload::Applied : IsSimulating() ? ScriptHotReload::Simulating
-																				  : ScriptHotReload::NotPlaying;
 			if (engine)
 			{
 				report.Scripts = engine->ReloadScripts(scripts);
+				report.HotReload = report.Scripts.Error.empty() ? ScriptHotReload::Applied : ScriptHotReload::Failed;
 				if (IsRecording() && !report.Scripts.Reloaded.empty())
 					m_ReloadedWhileRecording = true;
 			}
+			else if (IsSimulating())
+				report.HotReload = ScriptHotReload::Simulating;
+			else
+				report.HotReload = ScriptHotReload::NotPlaying;
 		}
-		if (!report.Assets.empty() || report.HotReload == ScriptHotReload::Applied)
+		if (!report.Assets.empty() || report.HotReload == ScriptHotReload::Applied || report.HotReload == ScriptHotReload::Failed)
 		{
 			const std::string failures = report.Scripts.Failed.empty() ? std::string() : fmt::format("; {} script(s) did not load", report.Scripts.Failed.size());
 			BS_CORE_INFO("Hot reload: {} changed file(s); reloaded {} asset(s) and {} script(s) ({} instance(s)){}", changes.size(), report.Assets.size(), report.Scripts.Reloaded.size(), report.Scripts.Instances, failures);
@@ -426,6 +438,7 @@ namespace Basalt {
 		m_Recording = nullptr;
 		m_RecordingSeed.reset();
 		m_RecordedView.reset();
+		m_ReloadedWhileRecording = false;
 		return events;
 	}
 

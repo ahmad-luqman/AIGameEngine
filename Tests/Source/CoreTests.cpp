@@ -1524,6 +1524,7 @@ namespace Basalt {
 	{
 		static uint64_t BeginScan(FileWatcher& watcher) { return watcher.BeginScan(); }
 		static std::vector<FileChange> Apply(FileWatcher& watcher, const FileWatcher::Scan& scan, uint64_t sequence, bool settle) { return watcher.Apply(scan, sequence, settle); }
+		static bool HasWorker(const FileWatcher& watcher) { return watcher.m_Worker.joinable(); }
 	};
 
 }
@@ -1661,7 +1662,19 @@ TEST_SUITE("Core")
 		CHECK_FALSE(watcher.Acknowledge("Notes.txt"));
 		WriteFile(root.GetPath() / "AssetsBackup/Old.lua", "x");
 		CHECK_FALSE(watcher.Acknowledge("AssetsBackup/Old.lua"));
+		CHECK_FALSE(watcher.Acknowledge("Assets/../Notes.txt"));
 		CHECK(watcher.Refresh().empty());
+
+		// The folder may be named with a trailing separator; acknowledgements still match it.
+		watcher.Watch(root.GetPath(), "./Assets/");
+		WriteFile(file, "return { Health = 300 }");
+		CHECK(watcher.Acknowledge("Assets/Scripts/Enemy.lua") == FileChangeType::Modified);
+		CHECK(watcher.IsKnown("Assets/Scripts/Enemy.lua"));
+		CHECK_FALSE(watcher.IsKnown("Assets/Scripts/Nope.lua"));
+		CHECK(watcher.Refresh().empty());
+		// Watching the whole root, paths outside it are still never recorded.
+		watcher.Watch(root.GetPath(), "");
+		CHECK_FALSE(watcher.Acknowledge("../Outside.txt"));
 	}
 
 #if !defined(_WIN32)
@@ -1689,6 +1702,19 @@ TEST_SUITE("Core")
 			CHECK(watcher.GetLastError().empty());
 			WriteFile(root.GetPath() / "Assets/Textures/Wall.png", "png2");
 			CHECK(watcher.Refresh() == std::vector<FileChange>{ { "Assets/Textures/Wall.png", FileChangeType::Modified } });
+
+			// A host write acknowledged while the baseline is pending survives a baseline scan that began before it.
+			std::filesystem::permissions(locked, std::filesystem::perms::none);
+			watcher.Watch(root.GetPath());
+			std::filesystem::permissions(locked, std::filesystem::perms::owner_all);
+			const uint64_t sequence = FileWatcherTestAccess::BeginScan(watcher);
+			const FileWatcher::Scan before = FileWatcher::ScanDirectory(root.GetPath(), "Assets");
+			WriteFile(root.GetPath() / "Assets/Scripts/Player.lua", "return { Changed = true }");
+			CHECK_FALSE(watcher.Acknowledge("Assets/Scripts/Player.lua"));
+			CHECK(FileWatcherTestAccess::Apply(watcher, before, sequence, false).empty());
+			CHECK(watcher.TakeLateBaselineNotice());
+			CHECK_FALSE(watcher.TakeLateBaselineNotice());
+			CHECK(watcher.Refresh().empty());
 		}
 		std::filesystem::permissions(locked, std::filesystem::perms::owner_all);
 	}
@@ -1703,16 +1729,21 @@ TEST_SUITE("Core")
 			// Asked for before a folder is watched: starts with the folder, and survives watching nothing for a while.
 			CHECK(watcher.StartPolling(std::chrono::milliseconds(1)));
 			CHECK(watcher.IsPolling());
+			CHECK_FALSE(FileWatcherTestAccess::HasWorker(watcher));
 			watcher.Watch(root.GetPath());
+			CHECK(FileWatcherTestAccess::HasWorker(watcher));
 			watcher.Watch({});
 			CHECK(watcher.IsPolling());
+			CHECK_FALSE(FileWatcherTestAccess::HasWorker(watcher));
 			watcher.Watch(root.GetPath());
 			CHECK(watcher.IsPolling());
+			CHECK(FileWatcherTestAccess::HasWorker(watcher));
 			// Whatever the worker scanned meanwhile (if anything), nothing changed. Only the outcome is checked: these
 			// tests do not wait on the clock.
 			CHECK(watcher.Update().empty());
 			watcher.StopPolling();
 			CHECK_FALSE(watcher.IsPolling());
+			CHECK_FALSE(FileWatcherTestAccess::HasWorker(watcher));
 			CHECK(watcher.Update().empty());
 			watcher.StartPolling(std::chrono::milliseconds(1));
 			// Destroyed while polling: the destructor stops the worker.

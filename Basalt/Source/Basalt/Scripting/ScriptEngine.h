@@ -87,15 +87,18 @@ namespace Basalt {
 
 		// Hot reload: loads the classes of the changed script files again in this Lua state, and moves their instances
 		// onto the new class. When a changed file is a module loaded through require, every module loaded from a file is
-		// forgotten and every class loads again; a changed file no class runs also retries the classes that failed to
-		// load (it may be the module whose require failed). Instances keep their fields, and Properties they lack get
-		// their values (defaults or the component's overrides; defaults that changed do not reach existing fields).
-		// Then each started instance gets OnReload; one that had not started, or whose OnCreate failed, gets OnCreate.
-		// An instance an error disabled runs again. A class that does not load keeps its previous version running, and
-		// one that failed to load before gets its instances now. What the old class's top-level code started (timers,
-		// event handlers) ends; the new top level starts its own. Not carried over: module-level locals start afresh,
-		// and functions already handed to timers, coroutines or events by instances keep the old code (as do the
-		// timers of a disabled instance, cancelled when it failed). Project-relative paths ("Assets/Scripts/Player.lua").
+		// forgotten (what modules' top level started ends) and every class loads again. A changed file no class runs
+		// also retries the classes that failed to load and those whose last reload failed (it may be the module whose
+		// require failed). Instances keep their fields, and Properties they lack get their values (defaults or the
+		// component's overrides; defaults that changed do not reach existing fields). Then each started instance gets
+		// OnReload; one that had not started, or whose OnCreate failed, gets OnCreate. An instance an error disabled
+		// runs again after a successful reload of its script; one whose script set its own metatable keeps it. A class
+		// that does not load keeps its previous version running, and one that failed to load before gets its instances
+		// now. What the old class's top-level code started (timers, event handlers) ends; the new top level starts its
+		// own. Not carried over: module-level locals start afresh, and functions instances already handed to timers,
+		// coroutines or events keep the old code; a disabled instance's timers and handlers were cancelled when it
+		// failed and are not restarted (OnReload can start them again). Project-relative paths
+		// ("Assets/Scripts/Player.lua").
 		ScriptReloadResult ReloadScripts(const std::vector<std::string>& changedFiles);
 
 		// Runs a chunk of Lua in the scene's script state (editor console / automation). The result of the

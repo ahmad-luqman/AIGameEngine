@@ -87,22 +87,25 @@ Protocol references: [lifecycle](https://modelcontextprotocol.io/specification/2
 
 Play does not have to stop for an edit. `asset.write` reloads what it wrote, and a script written while the game
 runs (Play, not Simulate) is **hot reloaded**: its instances keep their fields, take the new methods and get
-`OnReload()` (see Docs/ScriptingAPI.md, "Hot reload"). The result's `scripts` reports `hotReload` (`applied`,
-`notPlaying`, `simulating`, or `none` when no script changed), `reloaded`, `failed` (`{path, error}`: a script that
-ran before keeps its previous version, and the next `play.step` lists the error in `scriptErrors`), `instances`
-(those now running the new code) and `instanceErrors` (errors their `OnReload`/`OnCreate` raised).
+`OnReload()` (see Docs/ScriptingAPI.md, "Hot reload"). The result's `scripts` reports `hotReload` (`applied`: the
+play session processed the changed scripts, see `reloaded`; `notPlaying`; `simulating`; `failed`: a Lua error, in
+`error`, stopped the reload part way; or `none` when no script changed), `reloaded`, `failed` (`{path, error}`: a
+script that ran before keeps its previous version, and the next `play.step` lists the error in `scriptErrors`),
+`instances` (those now running the new code) and `instanceErrors` (errors raised while updating them: property values,
+`OnReload`, `OnCreate`).
 Files changed with other tools (an agent's own file editing, a text editor, an exporter) are picked up by
 `asset.refresh`: it compares `Assets/` with the state changes were last reported for (an earlier refresh, the editor's
 automatic reload, or the opening of the project in this process), reloads changed models and textures (they load
 again on their next use, so the scene shows them) and hot reloads changed scripts, and returns `{changed: [{path,
-type: Added|Modified|Removed}], reloaded, scripts}`. It fails when `Assets/` cannot be read (nothing is reported as
-removed then). `asset.refresh {"paths": [...]}` reloads the files named, changed or not (a path that does not exist
-and was not known is an error). Files the session writes itself (`asset.write`, `scene.save`, `prefab.create`,
-`replay.record_stop`) are never reported as changes. In the editor, View > Reload Changed Files Automatically
-(`autoReload`) reloads files once two scans 500 ms apart see them unchanged, so a plain file write is enough; such a
-file is then usually reloaded before your next command and not reported by `asset.refresh` (pass `paths` to force
-it). A replay recorded across a hot reload gets a warning from `replay.record_stop`: replaying runs the final code
-from the start.
+type: Added|Modified|Removed}], reloaded, scripts}`. Without `paths` it fails when `Assets/` cannot be read (nothing is
+reported as removed then), and when `Assets/` could not be read until now its `warnings` say that earlier changes were
+not seen. `asset.refresh {"paths": [...]}` reloads the files named, changed or not; a path that does not exist and was
+not known, or a folder, rejects the whole request (nothing is reloaded or recorded). Files the session writes itself
+(`asset.write`, `scene.save`, `prefab.create`, `replay.record_stop`) are never reported as changes. In the editor,
+View > Reload Changed Files Automatically (`autoReload`) reloads files once two scans 500 ms apart see them unchanged,
+so a plain file write is enough; such a file is then usually reloaded before your next command and not reported by
+`asset.refresh` (pass `paths` to force it). A replay recorded across a hot reload gets a warning from
+`replay.record_stop`: replaying runs the final code from the start.
 
 ## Events, snapshots and assertions
 
@@ -256,9 +259,11 @@ costs one view.
   `Light`), `recentProjects` (most recent first, at most 10; `[]` clears; opened projects are added) and `autoReload`
   (watch `Assets/` and reload changed files, hot reloading scripts in Play). It returns them with `file` and
   `layoutFile`: both live in `<user data>/BasaltEditor/` (`BASALT_USER_DATA_DIR` moves it), the window layout
-  included (an `imgui.ini` in the working directory is copied there once). Without a user data directory `file` is
-  empty, `persistent` is false and the layout stays in `./imgui.ini`. A file that does not hold valid preferences is
-  moved to `Preferences.json.invalid` and the defaults are used.
+  included (an `imgui.ini` in the working directory is copied there once). Without a user data directory, or when the
+  preferences file cannot be read (it is left alone then), `file` is empty, `persistent` is false and the layout stays
+  in `./imgui.ini`. A file that does not hold valid preferences is moved to `Preferences.json.invalid` and the defaults
+  are used. `autoReloadActive` says whether the file watcher really runs, and `saveError` why the last save failed
+  (it is retried).
 
 The content browser shows these previews in each row (icon size slider in its header), a larger one with
 details on hover (a loaded model's materials as spheres), and its context menu clears the cache.
