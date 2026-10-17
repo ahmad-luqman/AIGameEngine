@@ -4,6 +4,7 @@
 #include <Basalt/Audio/AudioRules.h>
 #include <Basalt/Audio/AudioSystem.h>
 #include <Basalt/Core/Log.h>
+#include <Basalt/Physics/PhysicsWorld.h>
 #include <Basalt/Scene/ComponentRegistry.h>
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
@@ -25,12 +26,12 @@ using namespace Basalt;
 namespace {
 
 	// 16-bit mono PCM WAV containing a sine tone.
-	std::string MakeWav(float seconds, uint32_t sampleRate = 22050)
+	std::string MakeWav(float seconds, uint32_t sampleRate = 22050, double frequency = 440.0)
 	{
 		const uint32_t samples = static_cast<uint32_t>(seconds * static_cast<float>(sampleRate));
 		std::vector<int16_t> pcm(samples);
 		for (uint32_t i = 0; i < samples; i++)
-			pcm[i] = static_cast<int16_t>(8000.0 * std::sin(2.0 * 3.14159265 * 440.0 * i / sampleRate));
+			pcm[i] = static_cast<int16_t>(8000.0 * std::sin(2.0 * 3.14159265 * frequency * i / sampleRate));
 
 		auto put32 = [](std::string& out, uint32_t value) { out.append(reinterpret_cast<const char*>(&value), 4); };
 		auto put16 = [](std::string& out, uint16_t value) { out.append(reinterpret_cast<const char*>(&value), 2); };
@@ -100,6 +101,32 @@ namespace {
 			count++;
 		}
 		return count ? static_cast<float>(std::sqrt(sum / static_cast<double>(count))) : 0.0f;
+	}
+
+	// The frequency of a tone in the left channel of a stereo mix, from the time between its first and last upward
+	// zero crossings (interpolated within a sample, so a fraction of a hertz is measurable in a tenth of a second).
+	double Frequency(std::span<const float> mix)
+	{
+		constexpr double FrameRate = 48000.0;
+		double first = -1.0;
+		double last = -1.0;
+		int crossings = 0;
+		for (size_t i = 2; i < mix.size(); i += 2)
+		{
+			const float before = mix[i - 2];
+			const float after = mix[i];
+			if (before < 0.0f && after >= 0.0f)
+			{
+				const size_t frame = i / 2 - 1;
+				const double time = (static_cast<double>(frame) + before / (before - after)) / FrameRate;
+				if (crossings == 0)
+					first = time;
+				last = time;
+				crossings++;
+			}
+		}
+		REQUIRE(crossings > 2);
+		return (crossings - 1) / (last - first);
 	}
 
 	// The number of samples in which two mixes differ by more than rounding.
@@ -305,6 +332,33 @@ TEST_SUITE("Audio")
 		CHECK(entity.GetComponent<AudioSourceComponent>().Bus == AudioBus::Music);
 	}
 
+	TEST_CASE("AudioSource effect fields round-trip through the component registry")
+	{
+		Scene scene;
+		Entity entity = scene.CreateEntity("Speaker");
+		std::string error;
+		REQUIRE_MESSAGE(ComponentRegistry::AddOrPatch(entity, "AudioSource", { { "Clip", "Hum.wav" } }, error), error);
+		const ComponentInfo* info = ComponentRegistry::Find("AudioSource");
+		REQUIRE(info);
+		nlohmann::json json = info->Serialize(entity);
+		CHECK(json["Doppler"] == 0.0);
+		CHECK(json["LowPass"] == 0.0);
+		CHECK(json["ReverbSend"] == 0.0);
+
+		REQUIRE_MESSAGE(ComponentRegistry::AddOrPatch(entity, "AudioSource", { { "Doppler", 1.5 }, { "LowPass", 800 }, { "ReverbSend", 0.25 } }, error), error);
+		const auto& source = entity.GetComponent<AudioSourceComponent>();
+		CHECK(source.Doppler == 1.5f);
+		CHECK(source.LowPass == 800.0f);
+		CHECK(source.ReverbSend == 0.25f);
+		json = info->Serialize(entity);
+		CHECK(json["Doppler"] == 1.5);
+		CHECK(json["LowPass"] == 800.0);
+		CHECK(json["ReverbSend"] == 0.25);
+		// 0 turns the low-pass off again.
+		REQUIRE_MESSAGE(ComponentRegistry::AddOrPatch(entity, "AudioSource", { { "LowPass", 0 } }, error), error);
+		CHECK(source.LowPass == 0.0f);
+	}
+
 	TEST_CASE("AudioSource values are validated: by the registry, and again before a C++-written source plays")
 	{
 		CHECK(ValidateAudioSource(AudioSourceComponent{}).empty());
@@ -319,6 +373,13 @@ TEST_SUITE("Audio")
 			{ { { "Pitch", 0 } }, "Pitch must be a finite number > 0 (got 0)" },
 			{ { { "MinDistance", 0 } }, "MinDistance must be a finite number > 0 (got 0)" },
 			{ { { "MinDistance", 10 }, { "MaxDistance", 5 } }, "MaxDistance must be a finite number >= MinDistance (got MaxDistance 5 and MinDistance 10)" },
+			{ { { "Doppler", -0.5 } }, "Doppler must be a number from 0 to 2 (got -0.5)" },
+			{ { { "Doppler", 2.5 } }, "Doppler must be a number from 0 to 2 (got 2.5)" },
+			{ { { "LowPass", 5 } }, "LowPass must be 0 (off) or a cutoff from 10 to 20000 Hz (got 5)" },
+			{ { { "LowPass", 25000 } }, "LowPass must be 0 (off) or a cutoff from 10 to 20000 Hz (got 25000)" },
+			{ { { "LowPass", -100 } }, "LowPass must be 0 (off) or a cutoff from 10 to 20000 Hz (got -100)" },
+			{ { { "ReverbSend", 1.5 } }, "ReverbSend must be a number from 0 to 1 (got 1.5)" },
+			{ { { "ReverbSend", -0.1 } }, "ReverbSend must be a number from 0 to 1 (got -0.1)" },
 		};
 		Scene scene;
 		Entity entity = scene.CreateEntity("Speaker");
@@ -351,6 +412,24 @@ TEST_SUITE("Audio")
 				CHECK(problem.find("must be a finite number") != std::string::npos);
 			}
 		}
+		// The effect ranges are closed and also reject non-finite values.
+		for (const float bad : { nan, std::numeric_limits<float>::infinity() })
+		{
+			for (float AudioSourceComponent::* field : { &AudioSourceComponent::Doppler, &AudioSourceComponent::LowPass, &AudioSourceComponent::ReverbSend })
+			{
+				AudioSourceComponent invalid;
+				invalid.*field = bad;
+				CHECK(ValidateAudioSource(invalid).find("must be") != std::string::npos);
+			}
+		}
+		AudioSourceComponent limits;
+		limits.Doppler = MaxAudioDoppler;
+		limits.LowPass = MaxAudioLowPass;
+		limits.ReverbSend = 1.0f;
+		CHECK(ValidateAudioSource(limits).empty());
+		limits.LowPass = MinAudioLowPass;
+		CHECK(ValidateAudioSource(limits).empty());
+
 		AudioSourceComponent invalid;
 		invalid.Bus = static_cast<AudioBus>(9);
 		CHECK(ValidateAudioSource(invalid) == "Bus must be one of its 4 values (got 9)");
@@ -879,5 +958,291 @@ TEST_SUITE("Audio")
 		// 1/64 s is exact in binary: 750 frames.
 		CHECK(AudioEngine::ReadDeviceless(0.015625f, frames));
 		CHECK(frames.size() == SamplesPerSecond / 64);
+	}
+
+	TEST_CASE("Doppler: approaching sources sound higher, receding ones lower, by the physical ratio")
+	{
+		BasaltTest::TempProject project("AudioDoppler");
+		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
+		HeadlessAudio engine;
+		constexpr double SpeedOfSound = 343.3;
+		constexpr float Speed = 30.0f;
+		// The pitch while the source (or, with movingListener, the listener) moves at velocity for a few frames: the
+		// Doppler shift needs no actual distance covered, only the velocities the last update saw.
+		auto measure = [](float doppler, const glm::vec3& velocity, bool movingListener, float* reportedPitch = nullptr) {
+			AudioScene scene;
+			AudioSourceComponent source = Source("Assets/Audio/Tone.wav");
+			source.Spatial = true;
+			source.Doppler = doppler;
+			Entity speaker = scene.Add("Speaker", source, glm::vec3(0.0f, 0.0f, -40.0f));
+			AudioSystem& audio = scene.Start();
+			Entity moving = movingListener ? scene.GetListener() : speaker;
+			for (int i = 0; i < 6; i++)
+			{
+				moving.GetComponent<TransformComponent>().Translation += velocity * StepSeconds;
+				scene.Run(StepSeconds);
+			}
+			const std::vector<float> mix = Mix(0.2f);
+			if (reportedPitch)
+				*reportedPitch = audio.GetDopplerPitch(speaker);
+			// miniaudio applies a new pitch from its next block on: skip the first 20 ms.
+			return Frequency(std::span(mix).subspan(SamplesPerSecond / 50)) / 440.0;
+		};
+		const glm::vec3 towardListener(0.0f, 0.0f, Speed);
+		float reported = 0.0f;
+		CHECK(measure(1.0f, towardListener, false, &reported) == doctest::Approx(SpeedOfSound / (SpeedOfSound - Speed)).epsilon(0.002));
+		CHECK(reported == doctest::Approx(SpeedOfSound / (SpeedOfSound - Speed)).epsilon(0.001));
+		CHECK(measure(1.0f, -towardListener, false) == doctest::Approx(SpeedOfSound / (SpeedOfSound + Speed)).epsilon(0.002));
+		// The listener's own movement counts too: walking toward the source raises its pitch.
+		CHECK(measure(1.0f, -towardListener, true) == doctest::Approx((SpeedOfSound + Speed) / SpeedOfSound).epsilon(0.002));
+		// The factor scales the effect; 0 (the default) turns it off.
+		CHECK(measure(0.5f, towardListener, false) == doctest::Approx(SpeedOfSound / (SpeedOfSound - 0.5 * Speed)).epsilon(0.002));
+		CHECK(measure(0.0f, towardListener, false, &reported) == doctest::Approx(1.0).epsilon(0.002));
+		CHECK(reported == 1.0f);
+		// Only the speed along the line to the listener counts: moving sideways, 3 m off the line 40 m away, the source
+		// recedes at a fraction of its speed.
+		const double receding = Speed * 3.0 / std::sqrt(3.0 * 3.0 + 40.0 * 40.0);
+		CHECK(measure(1.0f, glm::vec3(Speed, 0.0f, 0.0f), false) == doctest::Approx(SpeedOfSound / (SpeedOfSound + receding)).epsilon(0.001));
+	}
+
+	TEST_CASE("Doppler: velocities come from physics bodies, a teleport is capped and one-shots never shift")
+	{
+		BasaltTest::TempProject project("AudioDopplerBodies");
+		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
+		HeadlessAudio engine;
+		constexpr float SpeedOfSound = 343.3f;
+
+		SUBCASE("A child of a body uses the body's velocity, steady while frames and physics steps do not line up")
+		{
+			AudioScene scene;
+			Entity body = scene.GetScene().CreateEntity("Body");
+			body.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.0f, -60.0f);
+			auto& rigidBody = body.AddComponent<RigidBodyComponent>();
+			rigidBody.Type = RigidBodyType::Dynamic;
+			rigidBody.GravityFactor = 0.0f;
+			rigidBody.LinearDamping = 0.0f;
+			body.AddComponent<BoxColliderComponent>();
+			AudioSourceComponent source = Source("Assets/Audio/Tone.wav");
+			source.Spatial = true;
+			source.Doppler = 1.0f;
+			Entity speaker = scene.Add("Speaker", source, glm::vec3(0.0f, 0.0f, -60.0f));
+			REQUIRE(scene.GetScene().SetParent(speaker, body));
+			AudioSystem& audio = scene.Start();
+			scene.GetScene().GetPhysicsWorld()->SetLinearVelocity(body, glm::vec3(0.0f, 0.0f, 20.0f));
+			// 144 Hz frames over 60 Hz physics: most frames see no step, so the speaker's world position moves in
+			// jumps. Each update mixes its frame, so the pitch is measured after every one.
+			const float expected = SpeedOfSound / (SpeedOfSound - 20.0f);
+			for (int i = 0; i < 30; i++)
+			{
+				scene.GetScene().OnUpdate(1.0f / 144.0f);
+				if (i > 0)
+				{
+					CAPTURE(i);
+					CHECK(audio.GetDopplerPitch(speaker) == doctest::Approx(expected).epsilon(0.001));
+				}
+			}
+		}
+
+		SUBCASE("A teleport is capped at MaxDopplerSpeed")
+		{
+			AudioScene scene;
+			AudioSourceComponent source = Source("Assets/Audio/Tone.wav");
+			source.Spatial = true;
+			source.Doppler = 1.0f;
+			Entity speaker = scene.Add("Speaker", source, glm::vec3(0.0f, 0.0f, -2000.0f));
+			AudioSystem& audio = scene.Start();
+			scene.Run(StepSeconds);
+			speaker.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.0f, -5.0f);
+			scene.Run(StepSeconds);
+			const std::vector<float> mix = Mix(0.1f);
+			CHECK(audio.GetDopplerPitch(speaker) == doctest::Approx(SpeedOfSound / (SpeedOfSound - AudioSystem::MaxDopplerSpeed)).epsilon(0.001));
+			CHECK(Rms(mix) > 0.01f);
+			// Standing still again, the next update ends the shift.
+			scene.Run(StepSeconds);
+			Mix(0.05f);
+			CHECK(audio.GetDopplerPitch(speaker) == 1.0f);
+		}
+
+		SUBCASE("One-shots and non-spatial sources are never shifted, however fast the listener moves")
+		{
+			AudioScene scene;
+			AudioSourceComponent flatSource = Source("Assets/Audio/Tone.wav");
+			flatSource.Doppler = 2.0f;
+			Entity flat = scene.Add("Flat", flatSource);
+			AudioSystem& audio = scene.Start();
+			const glm::vec3 position(0.0f, 0.0f, -10.0f);
+			for (int i = 0; i < 6; i++)
+			{
+				scene.GetListener().GetComponent<TransformComponent>().Translation.z -= 50.0f * StepSeconds;
+				scene.Run(StepSeconds);
+			}
+			audio.Stop(flat);
+			REQUIRE(audio.PlayOneShot("Assets/Audio/Tone.wav", &position));
+			const std::vector<float> mix = Mix(0.2f);
+			CHECK(Frequency(std::span(mix).subspan(SamplesPerSecond / 50)) == doctest::Approx(440.0).epsilon(0.002));
+			REQUIRE(audio.Play(flat));
+			scene.Run(StepSeconds);
+			CHECK(audio.GetDopplerPitch(flat) == 1.0f);
+		}
+	}
+
+	TEST_CASE("LowPass muffles a source while it plays, and turning it off restores the exact sound")
+	{
+		BasaltTest::TempProject project("AudioLowPass");
+		project.WriteFile("Assets/Audio/High.wav", MakeWav(2.0f, 44100, 4000.0));
+		project.WriteFile("Assets/Audio/Low.wav", MakeWav(2.0f, 22050, 220.0));
+		HeadlessAudio engine;
+
+		// The reference: the same clip, never filtered, mixed at the same time as the comparison below (8 updates
+		// and 0.2 s of measuring mixes in).
+		auto plainMix = []() {
+			AudioScene scene;
+			scene.Add("High", Source("Assets/Audio/High.wav"));
+			scene.Start();
+			scene.Run(8 * StepSeconds);
+			Mix(0.2f);
+			return Mix(0.1f);
+		};
+		const std::vector<float> plain = plainMix();
+		const float plainRms = Rms(plain);
+		REQUIRE(plainRms > 0.05f);
+
+		AudioScene scene;
+		Entity high = scene.Add("High", Source("Assets/Audio/High.wav"));
+		AudioSourceComponent lowSource = Source("Assets/Audio/Low.wav");
+		lowSource.Volume = 0.0f;
+		Entity low = scene.Add("Low", lowSource);
+		scene.Start();
+		auto& effects = high.GetComponent<AudioSourceComponent>();
+		// Set while playing: the next update applies it. A 500 Hz cutoff takes a 4 kHz tone down by ~36 dB.
+		effects.LowPass = 500.0f;
+		scene.Run(0.1f);
+		CHECK(Rms(Mix(0.1f)) < 0.05f * plainRms);
+		// A higher cutoff lets more through.
+		effects.LowPass = 3000.0f;
+		scene.Run(StepSeconds);
+		const float brighter = Rms(Mix(0.1f));
+		CHECK(brighter > 0.3f * plainRms);
+		CHECK(brighter < 0.9f * plainRms);
+		// Off again: the filter leaves the chain, so the output is sample for sample the unfiltered clip.
+		effects.LowPass = 0.0f;
+		scene.Run(StepSeconds);
+		CHECK(CountMismatches(Mix(0.1f), plain) == 0);
+
+		// Low frequencies pass a cutoff well above them.
+		high.GetComponent<AudioSourceComponent>().Volume = 0.0f;
+		REQUIRE(scene.GetScene().GetAudioSystem()->Play(high));
+		low.GetComponent<AudioSourceComponent>().Volume = 1.0f;
+		REQUIRE(scene.GetScene().GetAudioSystem()->Play(low));
+		scene.Run(StepSeconds);
+		const float lowRms = Rms(Mix(0.1f));
+		low.GetComponent<AudioSourceComponent>().LowPass = 4000.0f;
+		scene.Run(StepSeconds);
+		CHECK(Rms(Mix(0.1f)) == doctest::Approx(lowRms).epsilon(0.02));
+	}
+
+	TEST_CASE("Live effect values that C++ code made invalid turn the effect off without logging")
+	{
+		BasaltTest::TempProject project("AudioInvalidEffects");
+		project.WriteFile("Assets/Audio/High.wav", MakeWav(2.0f, 44100, 4000.0));
+		HeadlessAudio engine;
+		AudioScene scene;
+		Entity high = scene.Add("High", Source("Assets/Audio/High.wav"));
+		AudioSystem& audio = scene.Start();
+		scene.Run(StepSeconds);
+		const float plainRms = Rms(Mix(0.1f));
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		auto& effects = high.GetComponent<AudioSourceComponent>();
+		// Below the 10 Hz minimum: applied, this cutoff would silence the 4 kHz tone.
+		effects.LowPass = 5.0f;
+		effects.ReverbSend = 7.0f;
+		effects.Doppler = -1.0f;
+		scene.Run(0.1f);
+		CHECK(Rms(Mix(0.1f)) == doctest::Approx(plainRms).epsilon(0.01));
+		CHECK_FALSE(audio.HasReverb(AudioBus::SFX));
+		CHECK(Log::GetHistory().GetTotalCount() == since);
+	}
+
+	TEST_CASE("ReverbSend feeds the bus's reverb, whose tail outlasts the sound and follows the bus volume")
+	{
+		BasaltTest::TempProject project("AudioReverb");
+		project.WriteFile("Assets/Audio/Beep.wav", MakeWav(0.1f));
+		HeadlessAudio engine;
+		// The tail's loudness from 0.15 s after a 0.1 s beep, with the send and room given.
+		auto tail = [](float send, const AudioReverbSettings& room, float sfxVolume = 1.0f, AudioBus bus = AudioBus::SFX) {
+			AudioScene scene;
+			AudioSourceComponent source = Source("Assets/Audio/Beep.wav", bus);
+			source.Loop = false;
+			source.ReverbSend = send;
+			Entity beep = scene.Add("Beep", source);
+			AudioSystem& audio = scene.Start();
+			CHECK(audio.SetReverb(room));
+			CHECK(audio.HasReverb(bus) == (send > 0.0f));
+			audio.SetBusVolume(AudioBus::SFX, sfxVolume);
+			scene.Run(0.25f);
+			CHECK_FALSE(audio.IsPlaying(beep));
+			return Rms(Mix(0.2f));
+		};
+		const AudioReverbSettings defaults;
+		CHECK(tail(0.0f, defaults) == 0.0f);
+		const float wet = tail(1.0f, defaults);
+		CHECK(wet > 0.002f);
+		// Half the send, half the tail.
+		CHECK(tail(0.5f, defaults) == doctest::Approx(wet * 0.5f).epsilon(0.01));
+		// The reverb returns into its bus: silencing SFX silences the tail of an SFX source.
+		CHECK(tail(1.0f, defaults, 0.0f) == 0.0f);
+		// A Music source gets the Music bus's own reverb, which an SFX volume does not touch.
+		CHECK(tail(1.0f, defaults, 0.0f, AudioBus::Music) > 0.002f);
+		// A larger room rings longer.
+		AudioReverbSettings small;
+		small.RoomSize = 0.1f;
+		AudioReverbSettings large;
+		large.RoomSize = 0.95f;
+		CHECK(tail(1.0f, large) > 2.0f * tail(1.0f, small));
+	}
+
+	TEST_CASE("Reverb settings are validated, apply to existing reverbs and start over each session")
+	{
+		BasaltTest::TempProject project("AudioReverbSettings");
+		project.WriteFile("Assets/Audio/Beep.wav", MakeWav(2.0f));
+		HeadlessAudio engine;
+		{
+			AudioScene scene;
+			AudioSourceComponent source = Source("Assets/Audio/Beep.wav");
+			source.ReverbSend = 1.0f;
+			Entity beep = scene.Add("Beep", source);
+			AudioSystem& audio = scene.Start();
+			CHECK(audio.HasReverb(AudioBus::SFX));
+			CHECK_FALSE(audio.HasReverb(AudioBus::Music));
+
+			const uint64_t since = Log::GetHistory().GetTotalCount();
+			AudioReverbSettings invalid;
+			invalid.Damping = 1.5f;
+			CHECK_FALSE(audio.SetReverb(invalid));
+			invalid = {};
+			invalid.Width = std::numeric_limits<float>::quiet_NaN();
+			CHECK_FALSE(audio.SetReverb(invalid));
+			CHECK(BasaltTest::CountLogMessages(since, "cannot set the reverb: Damping must be a number from 0 to 1 (got 1.5)") == 1);
+			CHECK(BasaltTest::CountLogMessages(since, "cannot set the reverb: Width must be a number from 0 to 1") == 1);
+			CHECK(audio.GetReverb().Damping == 0.25f);
+
+			AudioReverbSettings dry;
+			dry.RoomSize = 0.0f;
+			dry.Damping = 1.0f;
+			REQUIRE(audio.SetReverb(dry));
+			CHECK(audio.GetReverb().RoomSize == 0.0f);
+
+			// Stopping the source lets the reverb's tail ring out rather than cutting it.
+			REQUIRE(audio.SetReverb(AudioReverbSettings{ 0.95f, 0.0f, 1.0f }));
+			scene.Run(0.5f);
+			audio.Stop(beep);
+			scene.Run(StepSeconds);
+			CHECK(Rms(Mix(0.05f)) > 0.001f);
+		}
+		AudioScene next;
+		AudioSystem& audio = next.Start();
+		CHECK(audio.GetReverb().RoomSize == AudioReverbSettings{}.RoomSize);
+		CHECK(audio.GetReverb().Damping == AudioReverbSettings{}.Damping);
+		CHECK_FALSE(audio.HasReverb(AudioBus::SFX));
 	}
 }

@@ -113,7 +113,7 @@
 			"Prefab": { "Prefab": "Assets/Prefabs/Projectile.bprefab" } } },
 		{ "ID": 20, "Name": "Speaker", "Components": {
 			"Transform": { "Translation": [0, 1, 0] },
-			"AudioSource": { "Clip": "Assets/Audio/Beep.wav", "Volume": 0.5, "Pitch": 1.0, "Loop": false, "PlayOnStart": true, "Spatial": true, "MinDistance": 1, "MaxDistance": 30, "Bus": "SFX" } } },
+			"AudioSource": { "Clip": "Assets/Audio/Beep.wav", "Volume": 0.5, "Pitch": 1.0, "Loop": false, "PlayOnStart": true, "Spatial": true, "MinDistance": 1, "MaxDistance": 30, "Bus": "SFX", "Doppler": 1, "LowPass": 2000, "ReverbSend": 0.3 } } },
 		{ "ID": 211, "Name": "Music", "Components": {
 			"AudioSource": { "Clip": "Assets/Audio/Beep.wav", "Volume": 0.2, "Loop": true, "PlayOnStart": true, "Spatial": false, "Bus": "Music", "Stream": true } } },
 		{ "ID": 22, "Name": "Sparks", "Components": {

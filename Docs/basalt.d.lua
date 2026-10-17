@@ -369,6 +369,10 @@ function Entity:StopAudio() end
 ---@return boolean
 function Entity:IsAudioPlaying() end
 
+---The Doppler pitch factor applied to the AudioSource in the last mix (1 = unshifted, also when not playing).
+---@return number
+function Entity:GetAudioDopplerPitch() end
+
 ---Restarts a clip (nil or empty: the first) at 0; returns success.
 ---@param clip? string
 ---@return boolean
@@ -759,7 +763,7 @@ function Physics.SetGravity(gravity) end
 
 -- Audio ------------------------------------------------------------------------------------------------------------
 
----Fire-and-forget sounds and mixer buses (while the scene plays).
+---Fire-and-forget sounds, mixer buses and the reverb (while the scene plays).
 ---@class Audio
 Audio = {}
 
@@ -781,6 +785,20 @@ function Audio.SetBusVolume(bus, volume) end
 ---@param bus AudioBus
 ---@return number
 function Audio.GetBusVolume(bus) end
+
+---The room every bus's reverb simulates (each setting 0..1).
+---@class AudioReverbSettings
+---@field RoomSize number Larger rooms ring longer (default 0.5)
+---@field Damping number How quickly high frequencies die away (default 0.25)
+---@field Width number Stereo spread of the tail (default 1)
+
+---Patches the reverb settings with the given fields; unknown fields or values outside 0..1 raise an error.
+---@param settings {RoomSize?: number, Damping?: number, Width?: number}
+function Audio.SetReverb(settings) end
+
+---The current reverb settings.
+---@return AudioReverbSettings
+function Audio.GetReverb() end
 
 -- Logging, time, debug drawing, game -------------------------------------------------------------------------------
 
@@ -1403,6 +1421,9 @@ function BasaltScript:StopAllCoroutines() end
 ---@field MaxDistance number
 ---@field Bus "Master"|"Music"|"SFX"|"UI"
 ---@field Stream boolean
+---@field Doppler number
+---@field LowPass number
+---@field ReverbSend number
 
 ---AudioListener data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
 ---@class AudioListenerComponent

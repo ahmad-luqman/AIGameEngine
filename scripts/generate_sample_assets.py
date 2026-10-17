@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generates the sound effects of the Marble Run and Breakout samples (deterministic, no dependencies).
+"""Generates the sound effects of the Marble Run, Breakout and First Person samples (deterministic, no dependencies).
 
 Run:  python3 scripts/generate_sample_assets.py  (from any directory; paths are relative to this script)
 """
@@ -72,6 +72,55 @@ def lose(seconds=0.6):
         out.append(min(1.0, t / 0.01) * (1.0 - t / seconds) * 0.4 * math.sin(phase))
     return out
 
+def generator(seconds=1.0):
+    # First Person's generator: a 60 Hz buzz with strong odd harmonics up to 2.1 kHz (whole cycles in one second, so it
+    # loops seamlessly). The bright harmonics are what its low-pass occlusion takes away.
+    out = []
+    for i in range(int(seconds * RATE)):
+        t = i / RATE
+        value = sum(math.sin(2 * math.pi * 60 * k * t) / k for k in range(1, 36, 2))
+        out.append(0.3 * value)
+    return out
+
+def drone(seconds=1.0):
+    # First Person's drone: a 150 Hz rotor buzz (a band-limited sawtooth) beating at 10 Hz; whole cycles, so it loops.
+    out = []
+    for i in range(int(seconds * RATE)):
+        t = i / RATE
+        saw = sum(math.sin(2 * math.pi * 150 * k * t) / k for k in range(1, 13))
+        out.append(0.22 * (0.75 + 0.25 * math.sin(2 * math.pi * 10 * t)) * saw)
+    return out
+
+def shot(seconds=0.35):
+    # A shot: a noise crack over a falling low thump (fixed LCG noise).
+    out, state, phase = [], 24680, 0.0
+    for i in range(int(seconds * RATE)):
+        t = i / RATE
+        state = (1103515245 * state + 12345) & 0x7FFFFFFF
+        noise = state / 0x3FFFFFFF - 1.0
+        phase += 2 * math.pi * (160.0 - 220.0 * t) / RATE
+        out.append(0.55 * noise * math.exp(-28.0 * t) + 0.45 * math.sin(phase) * math.exp(-9.0 * t))
+    return out
+
+def step(seconds=0.12):
+    # A footstep: a dull knock with a little grit.
+    out, state = [], 13579
+    for i in range(int(seconds * RATE)):
+        t = i / RATE
+        state = (1103515245 * state + 12345) & 0x7FFFFFFF
+        noise = state / 0x3FFFFFFF - 1.0
+        out.append(math.exp(-40.0 * t) * (0.5 * math.sin(2 * math.pi * 95.0 * t) + 0.12 * noise))
+    return out
+
+def ding(seconds=0.5):
+    # A target going down: a bright two-note ping.
+    out = []
+    for i in range(int(seconds * RATE)):
+        t = i / RATE
+        frequency = 1318.5 if t < 0.08 else 1760.0
+        out.append(min(1.0, t / 0.003) * math.exp(-7.0 * t) * 0.35 * math.sin(2 * math.pi * frequency * t))
+    return out
+
 def write(sample, name, samples):
     directory = os.path.join(SAMPLES, sample, "Assets", "Audio")
     os.makedirs(directory, exist_ok=True)
@@ -85,3 +134,8 @@ if __name__ == "__main__":
     write("Breakout", "Bounce.wav", bounce())
     write("Breakout", "Break.wav", brick())
     write("Breakout", "Lose.wav", lose())
+    write("FirstPerson", "Generator.wav", generator())
+    write("FirstPerson", "Drone.wav", drone())
+    write("FirstPerson", "Shot.wav", shot())
+    write("FirstPerson", "Step.wav", step())
+    write("FirstPerson", "Ding.wav", ding())

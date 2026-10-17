@@ -253,7 +253,7 @@ namespace Basalt {
 		return s_Engine.get();
 	}
 
-	void AudioEngine::SetListener(const glm::vec3& position, const glm::vec3& forward, const glm::vec3& up)
+	void AudioEngine::SetListener(const glm::vec3& position, const glm::vec3& forward, const glm::vec3& up, const glm::vec3& velocity)
 	{
 		ma_engine* engine = GetEngine();
 		if (!engine)
@@ -261,6 +261,7 @@ namespace Basalt {
 		ma_engine_listener_set_position(engine, 0, position.x, position.y, position.z);
 		ma_engine_listener_set_direction(engine, 0, forward.x, forward.y, forward.z);
 		ma_engine_listener_set_world_up(engine, 0, up.x, up.y, up.z);
+		ma_engine_listener_set_velocity(engine, 0, velocity.x, velocity.y, velocity.z);
 	}
 
 	void AudioEngine::AdvanceDeviceless(float seconds)

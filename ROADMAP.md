@@ -135,7 +135,9 @@ order of impact.
 
 ### Audio
 
-- **Effects — M.** Low-pass, reverb and doppler via miniaudio nodes; `AudioSource.Doppler`.
+- **Effect follow-ups — S.** Effects on one-shots (`Audio.PlayOneShot` options for `LowPass`/`ReverbSend`), reverb
+  zones as a component (blend the room settings by the listener's position instead of scripting it), and more
+  effect types (high-pass, echo, distortion) on the same per-source chain.
 
 ### Game UI
 
@@ -208,10 +210,9 @@ with a smoke test have shipped. Follow-ups:
 The specification asks for an editor that an AI agent can fully control. These items make that faster and
 more reliable.
 
-- **More samples — M each.** A 3D platformer (character controller + camera +
+- **More samples — M.** A 3D platformer (character controller + camera +
   an animated character whose walk/run/jump go through the animation state machine, foot IK and root motion),
-  and a small first-person scene (mouse look + raycasts + audio). Each one is built through the
-  automation API and adds a ctest gameplay test, which also checks the API is sufficient.
+  built through the automation API with a ctest gameplay test, which also checks the API is sufficient.
 
 ---
 
