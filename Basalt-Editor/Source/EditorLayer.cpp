@@ -1838,7 +1838,9 @@ namespace Basalt {
 		GameCursorInput input;
 		input.Requested = GetRequestedGameCursor();
 		input.ViewFocused = m_GameViewFocused;
-		input.ViewHovered = m_GameViewHovered;
+		// Hovered on the last drawn frame and under the mouse now, so a click that has already left the image does not
+		// take the cursor back.
+		input.ViewHovered = m_GameViewHovered && IsInsideRect(Input::GetMousePosition(), m_GameImageMin, m_GameImageSize);
 		input.EscapePressed = Input::IsKeyPressed(KeyCode::Escape);
 		input.Clicked = Input::IsMouseButtonPressed(MouseCode::Left);
 		input.Released = m_GameCursor.Released;
