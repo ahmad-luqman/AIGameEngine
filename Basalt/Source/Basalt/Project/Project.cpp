@@ -203,6 +203,18 @@ namespace Basalt {
 	{
 		const bool writeInput = m_Config.InputActions != m_SavedInputActions;
 		const bool inputExisted = FileSystem::Exists(GetInputFilePath());
+		// The file as it is now (it may have been edited by hand since it was loaded), to put back exactly. Plain values
+		// rather than an optional: GCC's -Wmaybe-uninitialized misfires on optional conditionals in Release.
+		std::string previousInput;
+		bool previousInputRead = false;
+		if (writeInput && inputExisted)
+		{
+			if (auto text = FileSystem::ReadTextFile(GetInputFilePath()))
+			{
+				previousInput = std::move(*text);
+				previousInputRead = true;
+			}
+		}
 		if (writeInput && !FileSystem::WriteTextFile(GetInputFilePath(), m_Config.InputActions.ToJson().dump(1, '\t'), outError))
 			return false;
 		const nlohmann::json data = {
@@ -231,7 +243,7 @@ namespace Basalt {
 			std::string restoreError;
 			std::error_code removeError;
 			if (inputExisted)
-				FileSystem::WriteTextFile(GetInputFilePath(), m_SavedInputActions.ToJson().dump(1, '\t'), restoreError);
+				FileSystem::WriteTextFile(GetInputFilePath(), previousInputRead ? previousInput : m_SavedInputActions.ToJson().dump(1, '\t'), restoreError);
 			else if (!std::filesystem::remove(GetInputFilePath(), removeError) && removeError)
 				restoreError = removeError.message();
 			if (!restoreError.empty())
