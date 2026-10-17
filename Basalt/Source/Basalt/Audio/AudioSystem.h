@@ -31,10 +31,12 @@ namespace Basalt {
 	//
 	// Each source's sound runs through a chain built from its live effect fields:
 	//   sound -> [low-pass] -> [splitter: dry -> bus, ReverbSend -> the bus's reverb] -> bus
-	// A stage exists only while its effect is on, so a source without effects sounds exactly as before. Each bus
+	// A stage is in the chain only while its effect is on (built on first use, bypassed after), so a source without
+	// effects sounds exactly as before. Each bus
 	// gets its own reverb the first time one of its sources sends to it; the reverb returns into that bus, so the
-	// bus volume scales the reverb too. The Doppler shift comes from velocities: an entity's own physics body (or
-	// character), else its closest ancestor's (a camera on a character), else its change in world position.
+	// bus volume scales the reverb too. The Doppler shift comes from velocities: an entity's own dynamic or kinematic
+	// body (or character), else its closest ancestor's (a camera on a character; only the linear velocity), else its
+	// change in world position (also for static bodies, which report none).
 	class AudioSystem
 	{
 	public:
@@ -50,6 +52,7 @@ namespace Basalt {
 		// Starts the sources Start or PlayOnStart loaded. The scene calls it after the scripts' OnCreate: with an
 		// output device the mix runs all the time, and music must not sound before a script applies the player's
 		// saved bus volumes or stops it.
+		// Their movement history and the listener's start over here, so an OnCreate that places them is no teleport.
 		void BeginPlayback();
 		// Loads the PlayOnStart sources among entities added by a scene load, as Start does for the first scene;
 		// the scene calls BeginPlayback after their OnCreate.
@@ -57,8 +60,9 @@ namespace Basalt {
 		void Update(Timestep ts);
 		void OnEntityDestroyed(Entity entity);
 
-		// (Re)starts the entity's AudioSourceComponent clip from the beginning, reading every field once (later
-		// changes apply on the next Play). Stops the current sound first, also when the new one cannot play.
+		// (Re)starts the entity's AudioSourceComponent clip from the beginning, reading every field except the live
+		// effects (Doppler, LowPass, ReverbSend, which Update re-applies every frame) once: changes to the others
+		// apply on the next Play. Stops the current sound first, also when the new one cannot play.
 		// Returns false when the entity has no AudioSourceComponent or there is no audio engine, and false,
 		// logging why, when the source cannot play (no clip, invalid values, a clip that does not load).
 		bool Play(Entity entity);
@@ -84,8 +88,9 @@ namespace Basalt {
 		bool SetReverb(const AudioReverbSettings& reverb);
 		const AudioReverbSettings& GetReverb() const { return m_Reverb; }
 
-		// The Doppler pitch factor miniaudio applied to the entity's sound in the last mix (1 = unshifted; also 1
-		// without a sound or a spatial one). For tests and diagnostics, like IsStreaming.
+		// The Doppler pitch factor miniaudio applied to the entity's sound in the last mix: 1 = unshifted, also while it
+		// is not playing (never played, stopped, or played to its end) or when its sound is not spatial. For tests and
+		// diagnostics, like IsStreaming.
 		float GetDopplerPitch(Entity entity) const;
 		// Whether the reverb of the bus exists (created when one of its sources first sends to it).
 		bool HasReverb(AudioBus bus) const;
@@ -127,30 +132,31 @@ namespace Basalt {
 			std::optional<size_t> Bus;
 		};
 
-		// The previous world position of a sound's entity or the listener, for velocities from movement.
-		struct Motion
+		// The listener's entity, its previous world position (for its velocity) and its last velocity. A new
+		// listener starts over.
+		struct ListenerState
 		{
-			glm::vec3 LastPosition = glm::vec3(0.0f);
-			bool HasLastPosition = false;
+			UUID ID = 0;
+			std::optional<glm::vec3> LastPosition;
+			glm::vec3 Velocity = glm::vec3(0.0f);
+			// A transform that is not finite is reported once, until it is finite again.
+			bool ReportedInvalidTransform = false;
 		};
 
-		// A playing source: its sound and the effect nodes behind it (defined in the .cpp; miniaudio's node types
-		// are anonymous structs that cannot be forward declared).
+		// A source's sound (until it is stopped, also after a clip ends) and the effect nodes downstream of it
+		// (defined in the .cpp; miniaudio's node types are anonymous structs that cannot be forward declared).
 		struct Voice;
 		struct Reverb;
 
 		bool PlaySource(Entity entity, StartMode mode);
 		SoundHandle CreateSound(const std::string& clip, bool spatial, const Output& output, bool stream);
 		Output GetOutput(AudioBus bus) const;
-		// Applies the live effect fields of source to voice, building or bypassing chain stages as they turn on or off.
-		void ApplyEffects(Voice& voice, const AudioSourceComponent& source);
-		// Routes the chain through the low-pass and, with a reverb, through the send to it.
-		void RouteVoice(Voice& voice, bool lowPass, Reverb* reverb);
-		// The reverb of a bus, created on first use; null (logged once per bus) when it cannot be created.
+		// Applies the live effect fields of the entity's source to its voice, building or bypassing chain stages as
+		// they turn on or off.
+		void ApplyEffects(Voice& voice, Entity entity, const AudioSourceComponent& source);
+		// The reverb of a bus, created on first use; null when it cannot be created (logged once per bus), and
+		// without a log when the bus itself failed or there is no engine.
 		Reverb* GetReverbNode(size_t bus);
-		// The entity's velocity for the Doppler shift (see the class comment), clamped to MaxDopplerSpeed. Records
-		// position in motion; with ts == 0 (the immediate updates of Start and PlayOnStart) it only seeds motion.
-		glm::vec3 TrackVelocity(Entity entity, const glm::vec3& position, Motion& motion, float seconds) const;
 
 	private:
 		Scene* m_Scene = nullptr;
@@ -170,10 +176,7 @@ namespace Basalt {
 		// Sources loaded by Start that BeginPlayback has not started yet (see BeginPlayback).
 		std::unordered_set<UUID> m_PendingStarts;
 		std::vector<SoundHandle> m_OneShots;
-		// The listener's entity and its movement, for its velocity; a new listener starts with no history.
-		UUID m_ListenerID = 0;
-		Motion m_ListenerMotion;
-		glm::vec3 m_ListenerVelocity = glm::vec3(0.0f);
+		ListenerState m_Listener;
 	};
 
 }

@@ -19,15 +19,40 @@ namespace Basalt {
 	// A linear gain: finite and not negative (above 1 amplifies).
 	bool IsValidAudioVolume(float volume);
 
+	// The first effect field (Doppler, LowPass, ReverbSend) out of its range, naming it and its value; empty when
+	// all are valid. Part of ValidateAudioSource; the AudioSystem also checks the effects alone, as they apply live.
+	std::string ValidateAudioEffects(const AudioSourceComponent& source);
+
 	// The first setting out of its 0..1 range, naming it and its value; empty when every one is valid.
 	std::string ValidateAudioReverb(const AudioReverbSettings& reverb);
 
+	// Finite and within [min, max].
+	bool IsFiniteInRange(float value, float min, float max);
+
+	// The speed of sound miniaudio's Doppler shift uses (MA_DEFAULT_SPEED_OF_SOUND, in world units per second).
+	constexpr float AudioSpeedOfSound = 343.3f;
 	// Range of AudioSourceComponent::Doppler. With the AudioSystem's speed limit (MaxDopplerSpeed) the pitch
-	// stays between about 0.26 and 3.8: miniaudio would drop it to 0 (silence) for sources near the speed of sound.
+	// stays between about 0.26 and 3.8: near the speed of sound miniaudio's pitch goes to 0 (silence) for a receding
+	// listener and to infinity for an approaching source.
 	constexpr float MaxAudioDoppler = 2.0f;
-	// Range of a non-zero AudioSourceComponent::LowPass in Hz (the top of human hearing; the AudioSystem also keeps
-	// the cutoff below the output's Nyquist frequency).
+	// Range of a non-zero AudioSourceComponent::LowPass in Hz. The AudioSystem also keeps the cutoff below 0.45 times
+	// the output's sample rate (under its Nyquist frequency).
 	constexpr float MinAudioLowPass = 10.0f;
+	// The top of human hearing.
 	constexpr float MaxAudioLowPass = 20000.0f;
+
+	inline bool IsValidAudioDoppler(float doppler)
+	{
+		return IsFiniteInRange(doppler, 0.0f, MaxAudioDoppler);
+	}
+	// 0 (off) or a cutoff in range.
+	inline bool IsValidAudioLowPass(float cutoff)
+	{
+		return cutoff == 0.0f || IsFiniteInRange(cutoff, MinAudioLowPass, MaxAudioLowPass);
+	}
+	inline bool IsValidAudioReverbSend(float send)
+	{
+		return IsFiniteInRange(send, 0.0f, 1.0f);
+	}
 
 }

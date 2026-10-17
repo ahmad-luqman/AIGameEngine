@@ -11,7 +11,8 @@ Game.Properties = {
 }
 
 -- The acoustics of each area: the room every bus's reverb simulates and how much the player's own sounds (shots
--- and footsteps) feed it. The generator and the drone are outside the hall and keep a little courtyard reverb.
+-- and footsteps) feed it. The generator keeps a small fixed send (0.08) into whichever room is active; the drone
+-- sends none.
 local Areas = {
 	Courtyard = { Reverb = { RoomSize = 0.3, Damping = 0.6, Width = 1.0 }, Send = 0.08 },
 	Hall = { Reverb = { RoomSize = 0.92, Damping = 0.15, Width = 1.0 }, Send = 0.55 }
@@ -29,6 +30,8 @@ function Game:OnCreate()
 	self.Camera = RequireEntity("Camera", "AudioListener")
 	self.Gun = RequireEntity("Gun", "AudioSource")
 	self.Generator = RequireEntity("Generator", "AudioSource")
+	-- Player.lua reports entering and leaving this trigger as area changes.
+	RequireEntity("HallZone", "RigidBody")
 	self.ScoreText = RequireEntity("ScoreText", "UIText")
 	self.AreaText = RequireEntity("AreaText", "UIText")
 	self.HintText = RequireEntity("HintText", "UIText")
@@ -59,7 +62,8 @@ function Game:OnShot(entity, point)
 	local target = entity and self.Targets[entity.ID]
 	if not target or target.Down then return end
 	target.Down = true
-	-- Tipped over backwards about its base: it still blocks shots and sight, but scores no more until it stands.
+	-- Tipped over backwards about its base, below the line of fire; a shot aimed down at it scores nothing until it
+	-- stands again.
 	target.Entity.Rotation = Quat.AngleAxis(Math.Radians(-80), Vec3(1, 0, 0)) * target.Standing
 	self.Score = self.Score + 1
 	self.ScoreText:SetComponent("UIText", { Text = "TARGETS " .. self.Score })
@@ -75,7 +79,8 @@ end
 
 function Game:SetArea(area)
 	local settings = Areas[area]
-	if not settings or area == self.Area then return end
+	if not settings then error("Game: unknown area '" .. tostring(area) .. "'") end
+	if area == self.Area then return end
 	self.Area = area
 	Audio.SetReverb(settings.Reverb)
 	self.Gun:SetComponent("AudioSource", { ReverbSend = settings.Send })

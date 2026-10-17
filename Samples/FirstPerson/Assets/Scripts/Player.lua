@@ -37,8 +37,9 @@ function Player:OnCreate()
 	self:SetLocked(true)
 end
 
--- Locked: the mouse turns the view and the cursor is hidden and held in place. Escape releases it (for the
--- editor, or a pause menu); the next click takes it back without firing.
+-- Locked: the mouse turns the view and the cursor is hidden and held in place. Escape (or Start) releases it in the
+-- runtime, as a pause menu would; the editor keeps Escape for itself and releases the cursor on its own. The next
+-- click takes it back without firing.
 function Player:SetLocked(locked)
 	self.Locked = locked
 	Input.SetCursorMode(locked and "Locked" or "Normal")
@@ -70,8 +71,8 @@ function Player:Look(dt)
 	self.Yaw = self.Yaw - Input.GetAction("LookX") * self.StickLookSpeed * dt
 	self.Pitch = self.Pitch + Input.GetAction("LookY") * self.StickLookSpeed * dt
 	self.Pitch = Math.Clamp(self.Pitch, -self.MaxPitch, self.MaxPitch)
-	-- Keep the yaw in -180..180 so it never grows without bound.
-	if self.Yaw > 180 then self.Yaw = self.Yaw - 360 elseif self.Yaw < -180 then self.Yaw = self.Yaw + 360 end
+	-- Keep the yaw in [-180, 180) so it never grows without bound (Lua's % rounds down, so this wraps both ways).
+	self.Yaw = (self.Yaw + 180) % 360 - 180
 	self.Entity.EulerAngles = Vec3(0, Math.Radians(self.Yaw), 0)
 	self.Camera.EulerAngles = Vec3(Math.Radians(self.Pitch), 0, 0)
 end
@@ -108,7 +109,7 @@ function Player:Fire()
 	self.Gun:PlayAudio()
 	local origin = self.Camera.WorldPosition
 	local hit = Physics.Raycast(origin, self.Camera:GetForward(), self.Range, self.Entity)
-	Events.Emit("Shot", hit and hit.Entity or nil, hit and hit.Point or nil)
+	Events.Emit("Shot", hit and hit.Entity, hit and hit.Point)
 end
 
 function Player:OnTriggerEnter(other)

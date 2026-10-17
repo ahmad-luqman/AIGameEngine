@@ -19,7 +19,6 @@ namespace Basalt {
 	namespace {
 
 		// The device-less engine mixes at this rate; tests read its output at it (see ReadDeviceless).
-		constexpr ma_uint32 DevicelessSampleRate = 48000;
 		// Frames mixed per step without a device. Stream page refills run between steps.
 		constexpr ma_uint64 MixChunkFrames = 1024;
 		// Bounds the job loop of one step: miniaudio re-posts a job that ran out of order and reports success, so
@@ -157,11 +156,16 @@ namespace Basalt {
 
 	}
 
-	bool AudioEngine::Init(bool headless)
+	bool AudioEngine::Init(bool headless, const AudioDevicelessFormat& format)
 	{
 		std::scoped_lock lock(s_Mutex);
 		if (s_Engine)
 			return true;
+		if (format.Channels < 1 || format.Channels > 8 || format.SampleRate < 8000 || format.SampleRate > 192000)
+		{
+			BS_CORE_ERROR("AudioEngine: unsupported device-less format ({} channels at {} Hz)", format.Channels, format.SampleRate);
+			return false;
+		}
 
 		LogHandle log = CreateForwardingLog();
 		auto engine = std::make_unique<ma_engine>();
@@ -189,7 +193,7 @@ namespace Basalt {
 		resourceConfig.pLog = log.get();
 		resourceConfig.decodedFormat = ma_format_f32;
 		resourceConfig.decodedChannels = 0;
-		resourceConfig.decodedSampleRate = DevicelessSampleRate;
+		resourceConfig.decodedSampleRate = format.SampleRate;
 		resourceConfig.jobThreadCount = 0;
 		resourceConfig.flags |= MA_RESOURCE_MANAGER_FLAG_NO_THREADING;
 		if (const ma_result result = ma_resource_manager_init(&resourceConfig, resourceManager.get()); result != MA_SUCCESS)
@@ -201,8 +205,8 @@ namespace Basalt {
 		ma_engine_config config = ma_engine_config_init();
 		config.pLog = log.get();
 		config.noDevice = MA_TRUE;
-		config.channels = 2;
-		config.sampleRate = DevicelessSampleRate;
+		config.channels = format.Channels;
+		config.sampleRate = format.SampleRate;
 		config.pResourceManager = resourceManager.get();
 		if (const ma_result result = ma_engine_init(&config, engine.get()); result != MA_SUCCESS)
 		{

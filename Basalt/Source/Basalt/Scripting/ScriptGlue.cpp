@@ -29,12 +29,14 @@
 #include <glm/gtx/quaternion.hpp>
 #include <spdlog/fmt/ranges.h>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <optional>
 #include <ranges>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 #include <tuple>
 #include <utility>
 
@@ -351,15 +353,16 @@ namespace Basalt {
 		{
 			for (const auto& [key, value] : table)
 			{
-				const std::string name = key.get_type() == sol::type::string ? key.as<std::string>() : std::string();
-				float* field = name == "RoomSize" ? &settings.RoomSize : name == "Damping" ? &settings.Damping
-																	 : name == "Width"     ? &settings.Width
-																						   : nullptr;
-				if (!field)
-					throw std::runtime_error(fmt::format("Audio.SetReverb: unknown setting '{}' (valid: RoomSize, Damping, Width)", name));
+				const auto names = AudioReverbFields | std::views::transform(&AudioReverbField::Name);
+				if (key.get_type() != sol::type::string)
+					throw std::runtime_error(fmt::format("Audio.SetReverb: settings must use named keys ({}), not a {} key", fmt::join(names, ", "), sol::type_name(key.lua_state(), key.get_type())));
+				const std::string name = key.as<std::string>();
+				const auto field = std::ranges::find(AudioReverbFields, std::string_view(name), [](const AudioReverbField& f) { return std::string_view(f.Name); });
+				if (field == AudioReverbFields.end())
+					throw std::runtime_error(fmt::format("Audio.SetReverb: unknown setting '{}' (valid: {})", name, fmt::join(names, ", ")));
 				if (value.get_type() != sol::type::number)
 					throw std::runtime_error(fmt::format("Audio.SetReverb: {} must be a number", name));
-				*field = value.as<float>();
+				settings.*field->Member = value.as<float>();
 			}
 			if (const std::string problem = ValidateAudioReverb(settings); !problem.empty())
 				throw std::runtime_error("Audio.SetReverb: " + problem);
@@ -846,12 +849,16 @@ namespace Basalt {
 			audio["GetBusVolume"] = [&context](const std::string& bus) { return RequireAudio(context).GetBusVolume(ParseAudioBus("Audio.GetBusVolume", bus)); };
 			audio["SetReverb"] = [&context](const sol::table& settings) {
 				AudioSystem& system = RequireAudio(context);
-				// Checked above, so this cannot fail.
-				system.SetReverb(ReadReverbSettings(settings, system.GetReverb()));
+				// ReadReverbSettings raises an error for anything SetReverb would refuse.
+				if (!system.SetReverb(ReadReverbSettings(settings, system.GetReverb())))
+					throw std::runtime_error("Audio.SetReverb: the reverb was not changed (see the log)");
 			};
 			audio["GetReverb"] = [&context](sol::this_state state) {
 				const AudioReverbSettings& reverb = RequireAudio(context).GetReverb();
-				return sol::state_view(state).create_table_with("RoomSize", reverb.RoomSize, "Damping", reverb.Damping, "Width", reverb.Width);
+				sol::table result = sol::state_view(state).create_table();
+				for (const AudioReverbField& field : AudioReverbFields)
+					result[field.Name] = reverb.*field.Member;
+				return result;
 			};
 
 			sol::table log = lua.create_named_table("Log");

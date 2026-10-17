@@ -21,7 +21,7 @@ changing code. Task-specific procedures live in `.claude/skills/*/SKILL.md`.
 Engine modules (`Basalt/Source/Basalt/<Module>/`): `Core` (application, window, input incl. gamepads, log, file
 system, command line), `Events`, `Math`, `Renderer` (device, scene renderer, IBL, debug lines), `ImGui`, `Scene`
 (EnTT scene, components, component registry, serialization), `Asset` (glTF, images, primitives, asset
-cache), `Physics` (Jolt), `Audio` (miniaudio: buses and per-source low-pass, reverb and Doppler), `Particles` (CPU particle simulation), `Animation` (glTF TRS sampling, blends, crossfades and per-entity playback), `UI` (game UI: UI
+cache), `Physics` (Jolt), `Audio` (miniaudio: buses, per-source low-pass and Doppler, reverb sends into per-bus reverbs), `Particles` (CPU particle simulation), `Animation` (glTF TRS sampling, blends, crossfades and per-entity playback), `UI` (game UI: UI
 component layout, widgets and their mouse/keyboard/gamepad interaction, immediate-mode `UI.*`, TrueType fonts;
 drawn through ImGui after the scene), `Scripting` (Lua 5.4 + sol2; timers, coroutines, events), `Project`
 (project files, exporter, save data), `Automation` (command API, session, TCP server, editor history and selection).
