@@ -503,6 +503,12 @@ namespace Basalt {
 			if (!result.valid())
 			{
 				impl.FailedRequires.insert(module);
+				// Not cached by require: what its top level started before the error ends, and a later attempt starts afresh.
+				if (const auto owner = impl.ModuleOwners.find(module); owner != impl.ModuleOwners.end())
+				{
+					Release(engine, owner->second);
+					impl.ModuleOwners.erase(owner);
+				}
 				const sol::error error = result;
 				throw std::runtime_error(error.what());
 			}
