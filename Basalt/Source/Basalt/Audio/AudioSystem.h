@@ -151,6 +151,8 @@ namespace Basalt {
 		bool PlaySource(Entity entity, StartMode mode);
 		SoundHandle CreateSound(const std::string& clip, bool spatial, const Output& output, bool stream);
 		Output GetOutput(AudioBus bus) const;
+		// Gives miniaudio's listener a placement and remembers it.
+		void PlaceListener(const glm::vec3& position, const glm::vec3& forward, const glm::vec3& up, const glm::vec3& velocity);
 		// Applies the live effect fields of the entity's source to its voice, building or bypassing chain stages as
 		// they turn on or off.
 		void ApplyEffects(Voice& voice, Entity entity, const AudioSourceComponent& source);
@@ -177,8 +179,11 @@ namespace Basalt {
 		std::unordered_set<UUID> m_PendingStarts;
 		std::vector<SoundHandle> m_OneShots;
 		ListenerState m_Listener;
-		// What miniaudio's listener was last given (it keeps it while there is no listener), for GetDopplerPitch.
+		// What miniaudio's listener was last given (its defaults until then), for GetDopplerPitch and to hold it in
+		// place while there is no valid listener.
 		glm::vec3 m_ListenerPosition = glm::vec3(0.0f);
+		glm::vec3 m_ListenerForward = glm::vec3(0.0f, 0.0f, -1.0f);
+		glm::vec3 m_ListenerUp = glm::vec3(0.0f, 1.0f, 0.0f);
 		glm::vec3 m_ListenerVelocity = glm::vec3(0.0f);
 	};
 
