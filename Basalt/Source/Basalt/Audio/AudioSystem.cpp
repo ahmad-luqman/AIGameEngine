@@ -647,6 +647,15 @@ namespace Basalt {
 		return m_Reverbs[bus].get();
 	}
 
+	void AudioSystem::PlaceListener(const glm::vec3& position, const glm::vec3& forward, const glm::vec3& up, const glm::vec3& velocity)
+	{
+		AudioEngine::SetListener(position, forward, up, velocity);
+		m_ListenerPosition = position;
+		m_ListenerForward = forward;
+		m_ListenerUp = up;
+		m_ListenerVelocity = velocity;
+	}
+
 	void AudioSystem::Update(Timestep ts)
 	{
 		const float seconds = ts.GetSeconds();
@@ -684,9 +693,7 @@ namespace Basalt {
 			{
 				if (const std::optional<glm::vec3> velocity = TrackVelocity(physics, listener, position, m_Listener.LastPosition, seconds, m_Listener.ReportedInvalidVelocity))
 					m_Listener.Velocity = *velocity;
-				AudioEngine::SetListener(position, forward, up, m_Listener.Velocity);
-				m_ListenerPosition = position;
-				m_ListenerVelocity = m_Listener.Velocity;
+				PlaceListener(position, forward, up, m_Listener.Velocity);
 			}
 			else
 			{
@@ -698,6 +705,10 @@ namespace Basalt {
 			// Whichever listener comes next (also this one again) starts without movement history.
 			m_Listener = {};
 		}
+		// Without a valid listener this frame, the last placement stands still: a velocity left behind would keep
+		// shifting every Doppler source.
+		if (!listener || m_Listener.ReportedInvalidTransform)
+			PlaceListener(m_ListenerPosition, m_ListenerForward, m_ListenerUp, glm::vec3(0.0f));
 
 		for (auto& [uuid, voice] : m_Sources)
 		{

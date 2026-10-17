@@ -1865,4 +1865,34 @@ TEST_SUITE("Audio")
 		ma_audio_buffer_uninit(&buffer);
 		ma_node_graph_uninit(&graph, nullptr);
 	}
+
+	TEST_CASE("Doppler: a listener that stops being valid stops moving, so sources are no longer shifted")
+	{
+		BasaltTest::TempProject project("AudioListenerFreeze");
+		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
+		HeadlessAudio engine;
+		// The listener walks toward the source at 30 m/s, then its transform breaks (or it goes away).
+		auto measure = [](bool breakTransform) {
+			AudioScene scene;
+			Entity speaker = scene.Add("Speaker", DopplerSource("Assets/Audio/Tone.wav"), glm::vec3(0.0f, 0.0f, -60.0f));
+			AudioSystem& audio = scene.Start();
+			auto& transform = scene.GetListener().GetComponent<TransformComponent>();
+			for (int i = 0; i < 6; i++)
+			{
+				transform.Translation.z -= 30.0f * StepSeconds;
+				scene.Run(StepSeconds);
+			}
+			CHECK(audio.GetDopplerPitch(speaker) > 1.05f);
+			if (breakTransform)
+				transform.Scale = glm::vec3(0.0f);
+			else
+				scene.GetListener().GetComponent<AudioListenerComponent>().Active = false;
+			scene.Run(StepSeconds);
+			CHECK(audio.GetDopplerPitch(speaker) == 1.0f);
+			// The mix agrees: miniaudio's listener stands still too.
+			CHECK(MixedFrequency(0.2f) == doctest::Approx(440.0).epsilon(0.002));
+		};
+		measure(true);
+		measure(false);
+	}
 }
