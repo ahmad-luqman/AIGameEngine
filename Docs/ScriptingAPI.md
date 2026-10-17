@@ -143,6 +143,7 @@ Entity handles store an ID and stay safe to hold: using a destroyed entity raise
 | `e:GetJointRotation()` | Rotation (Euler degrees, like `Rotation`) of a cone or six-DOF Joint this entity holds, in the joint frame from its rest pose; nil otherwise |
 | `e:HasJoint()` | Whether the Joint this entity holds is a live constraint (false before both bodies exist, when it is invalid, and after it broke) |
 | `e:PlayAudio()`, `e:StopAudio()`, `e:IsAudioPlaying()` | The entity's AudioSource |
+| `e:GetAudioDopplerPitch()` | The Doppler pitch factor applied to the AudioSource in the last mix (1 = unshifted; also 1 when it is not playing or not spatial) |
 | `e:PlayParticles()`, `e:StopParticles([clear])`, `e:EmitParticles(count)` | The entity's ParticleEmitter (see Particles; `clear` is a boolean). Errors without a ParticleEmitter |
 | `e:IsEmittingParticles()`, `e:GetParticleCount()` | Whether the ParticleEmitter is playing, and its live particles (false/0 without one) |
 | `e:PlayAnimation([clip])`, `e:CrossFadeAnimation(clip, seconds)`, `e:BlendAnimations(first, second, weight)` | Animator playback and transitions; see Skeletal animation |
@@ -931,8 +932,9 @@ whose data could crash the font rasterizer draw blank, with a warning (also show
 
 An `AudioSource` component plays a project-relative clip (WAV, FLAC or MP3) while the scene plays: from
 the start with `PlayOnStart`, or when a script calls `e:PlayAudio()` (which restarts it from the beginning).
-Every field is read when the clip is loaded; changes apply on the next `e:PlayAudio()`, which stops the
-current sound first even when the new one cannot play. `PlayOnStart` sources (on play start, and those a
+Every field except the effects (`Doppler`, `LowPass`, `ReverbSend`) is read when the clip is loaded; changes
+apply on the next `e:PlayAudio()`, which stops the current sound first even when the new one cannot play. The
+effects apply while the sound plays: set them with `SetComponent` at any time. `PlayOnStart` sources (on play start, and those a
 `Scene.Load` adds) are loaded before the scripts' `OnCreate`, where they already report
 `e:IsAudioPlaying()`, and start sounding right after it: bus volumes set there apply from the first sample,
 and `e:StopAudio()` there keeps a source silent. `e:PlayAudio()` and `e:StopAudio()` raise an error on an
@@ -947,6 +949,9 @@ cannot play.
 | `MinDistance`, `MaxDistance` | Full volume up to `MinDistance` (> 0), then `MinDistance / distance`, no quieter beyond `MaxDistance` (>= `MinDistance`; equal distances turn fading off) |
 | `Bus` | `"Master"`, `"Music"`, `"SFX"` (default) or `"UI"` (see Mixer buses) |
 | `Stream` | Decode the clip a second at a time while it plays instead of loading it whole: for music and long ambience |
+| `Doppler` | Strength of the Doppler shift, 0 to 2: 0 (default) = off, 1 = physical. Spatial sources only (see Effects) |
+| `LowPass` | Low-pass cutoff in Hz, 10 to 20000, muffling the sound (behind a wall, under water); 0 (default) = off |
+| `ReverbSend` | Share of the sound fed to its bus's reverb, 0 (default) to 1; the dry sound is unchanged |
 
 Clips that are not streamed are decoded when they load and shared while any sound uses them. Invalid values
 are rejected with an error by `SetComponent`, scene files and the automation API.
@@ -975,6 +980,37 @@ end
   could not be created.
 - An unknown bus name or a volume that is negative or not finite raises an error, as does any `Audio.*`
   call outside play ("audio is not running").
+
+**Effects.** A source's effects follow its component while it plays, so scripts can drive them every frame:
+
+- *Low-pass* (`LowPass`): a 12 dB-per-octave filter. Raycasting from the listener to a source and muffling
+  it when something is in the way gives cheap occlusion (see `Samples/FirstPerson`).
+- *Reverb* (`ReverbSend`): each bus gets one reverb the first time one of its sources sends to it. Its
+  output returns into that bus, so the bus volume scales the reverb too; turning a send down lets the tail
+  ring out. One room setting applies to every bus's reverb; it belongs to the play session like the bus
+  volumes (defaults when play starts, kept through `Scene.Load`):
+  - `Audio.SetReverb({ RoomSize = 0.85, Damping = 0.1, Width = 1 })` patches the given settings (each 0
+    to 1: larger rooms ring longer, damping dulls the tail, width spreads it in stereo). Unknown fields or
+    values outside 0..1 raise an error.
+  - `Audio.GetReverb()` returns the current settings as a table.
+  The reverb is stereo: on an output device with more than two channels the sends are dropped (logged
+  once) and the sounds play dry.
+- *Doppler* (`Doppler`): pitch rises while a source and the listener approach each other and falls as
+  they part. Velocities come from physics where possible: the entity's own body or character, else its
+  closest ancestor's (a camera on a character moves with it), else its change in world position over the
+  frame. Speeds are capped at 100 units per second so a teleport does not read as a sonic boom.
+  `e:GetAudioDopplerPitch()` reports the shift miniaudio applied. One-shots are never shifted.
+
+```lua
+-- Occlusion: muffle the generator when a wall is between it and the player's camera.
+function Game:OnUpdate(dt)
+	local from = self.Camera.WorldPosition
+	local to = self.Generator.WorldPosition
+	local hit = Physics.Raycast(from, to - from, from:Distance(to), self.Player)
+	local blocked = hit ~= nil and hit.Entity ~= self.Generator
+	self.Generator:SetComponent("AudioSource", { LowPass = blocked and 600 or 0 })
+end
+```
 
 ## Debug drawing, time, logging, game
 

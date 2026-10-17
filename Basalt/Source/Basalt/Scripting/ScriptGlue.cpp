@@ -345,6 +345,27 @@ namespace Basalt {
 			return volume;
 		}
 
+		// Audio.SetReverb's table patched onto the current settings: only RoomSize, Damping and Width, each a number
+		// from 0 to 1 (checked here so a script gets an error at the call).
+		AudioReverbSettings ReadReverbSettings(const sol::table& table, AudioReverbSettings settings)
+		{
+			for (const auto& [key, value] : table)
+			{
+				const std::string name = key.get_type() == sol::type::string ? key.as<std::string>() : std::string();
+				float* field = name == "RoomSize" ? &settings.RoomSize : name == "Damping" ? &settings.Damping
+																	 : name == "Width"     ? &settings.Width
+																						   : nullptr;
+				if (!field)
+					throw std::runtime_error(fmt::format("Audio.SetReverb: unknown setting '{}' (valid: RoomSize, Damping, Width)", name));
+				if (value.get_type() != sol::type::number)
+					throw std::runtime_error(fmt::format("Audio.SetReverb: {} must be a number", name));
+				*field = value.as<float>();
+			}
+			if (const std::string problem = ValidateAudioReverb(settings); !problem.empty())
+				throw std::runtime_error("Audio.SetReverb: " + problem);
+			return settings;
+		}
+
 		ParticleSystem& RequireParticles(ScriptContext& context)
 		{
 			ParticleSystem* particles = RequireScene(context).GetParticleSystem();
@@ -543,7 +564,7 @@ namespace Basalt {
 					const std::optional<glm::vec3> normal = RequirePhysics(context).GetCharacterGroundNormal(self.ResolveOrThrow());
 					return normal ? sol::optional<glm::vec3>(*normal) : sol::optional<glm::vec3>(); },
 
-										   "PlayAudio", [&context](const ScriptEntity& self) { return RequireAudio(context).Play(RequireEntityWith<AudioSourceComponent>(self, "PlayAudio", "AudioSource")); }, "StopAudio", [&context](const ScriptEntity& self) { RequireAudio(context).Stop(RequireEntityWith<AudioSourceComponent>(self, "StopAudio", "AudioSource")); }, "IsAudioPlaying", [&context](const ScriptEntity& self) { return RequireAudio(context).IsPlaying(self.ResolveOrThrow()); },
+										   "PlayAudio", [&context](const ScriptEntity& self) { return RequireAudio(context).Play(RequireEntityWith<AudioSourceComponent>(self, "PlayAudio", "AudioSource")); }, "StopAudio", [&context](const ScriptEntity& self) { RequireAudio(context).Stop(RequireEntityWith<AudioSourceComponent>(self, "StopAudio", "AudioSource")); }, "IsAudioPlaying", [&context](const ScriptEntity& self) { return RequireAudio(context).IsPlaying(self.ResolveOrThrow()); }, "GetAudioDopplerPitch", [&context](const ScriptEntity& self) { return RequireAudio(context).GetDopplerPitch(self.ResolveOrThrow()); },
 
 										   "PlayAnimation", [&context](const ScriptEntity& self, const sol::object& clip) {
 					if (clip.valid() && clip.get_type() != sol::type::string)
@@ -823,6 +844,15 @@ namespace Basalt {
 				return RequireAudio(context).SetBusVolume(target, RequireAudioVolume("Audio.SetBusVolume", volume));
 			};
 			audio["GetBusVolume"] = [&context](const std::string& bus) { return RequireAudio(context).GetBusVolume(ParseAudioBus("Audio.GetBusVolume", bus)); };
+			audio["SetReverb"] = [&context](const sol::table& settings) {
+				AudioSystem& system = RequireAudio(context);
+				// Checked above, so this cannot fail.
+				system.SetReverb(ReadReverbSettings(settings, system.GetReverb()));
+			};
+			audio["GetReverb"] = [&context](sol::this_state state) {
+				const AudioReverbSettings& reverb = RequireAudio(context).GetReverb();
+				return sol::state_view(state).create_table_with("RoomSize", reverb.RoomSize, "Damping", reverb.Damping, "Width", reverb.Width);
+			};
 
 			sol::table log = lua.create_named_table("Log");
 			log["Trace"] = [](sol::variadic_args args) { BS_TRACE("{}", JoinArguments(args)); };

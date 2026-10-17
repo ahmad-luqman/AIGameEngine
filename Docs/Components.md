@@ -86,7 +86,7 @@ Fields: `Script` (string), `Properties` (object)
 
 ## AudioSource
 
-Fields: `Clip` (string), `Volume` (number), `Pitch` (number), `Loop` (boolean), `PlayOnStart` (boolean), `Spatial` (boolean), `MinDistance` (number), `MaxDistance` (number), `Bus` (enum: Master, Music, SFX, UI), `Stream` (boolean)
+Fields: `Clip` (string), `Volume` (number), `Pitch` (number), `Loop` (boolean), `PlayOnStart` (boolean), `Spatial` (boolean), `MinDistance` (number), `MaxDistance` (number), `Bus` (enum: Master, Music, SFX, UI), `Stream` (boolean), `Doppler` (number), `LowPass` (number), `ReverbSend` (number)
 
 ## AudioListener
 

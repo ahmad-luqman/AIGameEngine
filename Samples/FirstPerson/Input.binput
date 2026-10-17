@@ -1,0 +1,110 @@
+{
+	"Actions": [
+		{
+			"Bindings": [
+				{
+					"Key": "D"
+				},
+				{
+					"Key": "A",
+					"Scale": -1.0
+				},
+				{
+					"Key": "Right"
+				},
+				{
+					"Key": "Left",
+					"Scale": -1.0
+				},
+				{
+					"GamepadAxis": "LeftX"
+				}
+			],
+			"Name": "MoveX",
+			"Type": "Axis"
+		},
+		{
+			"Bindings": [
+				{
+					"Key": "W"
+				},
+				{
+					"Key": "S",
+					"Scale": -1.0
+				},
+				{
+					"Key": "Up"
+				},
+				{
+					"Key": "Down",
+					"Scale": -1.0
+				},
+				{
+					"GamepadAxis": "LeftY",
+					"Scale": -1.0
+				}
+			],
+			"Name": "MoveY",
+			"Type": "Axis"
+		},
+		{
+			"Bindings": [
+				{
+					"DeadZone": 0.15000000596046448,
+					"GamepadAxis": "RightX"
+				}
+			],
+			"Name": "LookX",
+			"Type": "Axis"
+		},
+		{
+			"Bindings": [
+				{
+					"DeadZone": 0.15000000596046448,
+					"GamepadAxis": "RightY",
+					"Scale": -1.0
+				}
+			],
+			"Name": "LookY",
+			"Type": "Axis"
+		},
+		{
+			"Bindings": [
+				{
+					"Key": "Space"
+				},
+				{
+					"GamepadButton": "A"
+				}
+			],
+			"Name": "Jump",
+			"Type": "Button"
+		},
+		{
+			"Bindings": [
+				{
+					"MouseButton": "Left"
+				},
+				{
+					"GamepadButton": "RightBumper"
+				}
+			],
+			"Name": "Fire",
+			"Type": "Button"
+		},
+		{
+			"Bindings": [
+				{
+					"Key": "Escape"
+				},
+				{
+					"GamepadButton": "Start"
+				}
+			],
+			"Name": "Unlock",
+			"Type": "Button"
+		}
+	],
+	"Format": "BasaltInput",
+	"Version": 1
+}

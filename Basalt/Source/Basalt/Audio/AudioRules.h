@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Basalt/Audio/AudioReverbSettings.h"
 #include "Basalt/Scene/Components.h"
 
 #include <string>
@@ -17,5 +18,16 @@ namespace Basalt {
 
 	// A linear gain: finite and not negative (above 1 amplifies).
 	bool IsValidAudioVolume(float volume);
+
+	// The first setting out of its 0..1 range, naming it and its value; empty when every one is valid.
+	std::string ValidateAudioReverb(const AudioReverbSettings& reverb);
+
+	// Range of AudioSourceComponent::Doppler. With the AudioSystem's speed limit (MaxDopplerSpeed) the pitch
+	// stays between about 0.26 and 3.8: miniaudio would drop it to 0 (silence) for sources near the speed of sound.
+	constexpr float MaxAudioDoppler = 2.0f;
+	// Range of a non-zero AudioSourceComponent::LowPass in Hz (the top of human hearing; the AudioSystem also keeps
+	// the cutoff below the output's Nyquist frequency).
+	constexpr float MinAudioLowPass = 10.0f;
+	constexpr float MaxAudioLowPass = 20000.0f;
 
 }

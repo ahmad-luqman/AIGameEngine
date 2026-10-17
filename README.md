@@ -42,6 +42,8 @@ build/bin/basalt --project Samples/Tetris project.export '{"output": "Dist/Tetri
 - [Samples/MarbleRun](Samples/MarbleRun) — a physics showcase (joints, triggers, particles, spatial audio, UI) whose
   test is written as `assert.*`, `events.poll` and `scene.diff` checks
 - [Samples/Breakout](Samples/Breakout) — physics, game UI and input actions (keys, gamepad, mouse, rebinding from Lua)
+- [Samples/FirstPerson](Samples/FirstPerson) — mouse look with a locked cursor, a character controller, raycast
+  shooting and audio effects (low-pass occlusion, reverb zones, Doppler)
 - [Samples/Joints](Samples/Joints) — every joint type
 
 ## License

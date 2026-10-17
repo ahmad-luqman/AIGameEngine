@@ -29,7 +29,11 @@ Write scripts with `asset.write` (or directly as files under `<project>/Assets/S
   `input.actions` shows their values. In the editor, injected input reaches scripts only while the Game view has
   focus (`editor.game_view {"focus": true}` first), and injected mouse buttons also need the real cursor over the
   Game view, as with a real keyboard and mouse: test mouse-driven games headless. First-person cameras: `Input.SetCursorMode("Locked")` and
-  `Input.GetMouseDelta()` (Samples/Breakout shows actions, the mouse and the cursor).
+  `Input.GetMouseDelta()`, yaw on the character's body and pitch on a child camera (Samples/Breakout shows actions,
+  the mouse and the cursor; Samples/FirstPerson a full first-person setup).
+- Sound design: put the `AudioListener` on the camera. `AudioSource.LowPass` (Hz, 0 = off), `ReverbSend` and
+  `Doppler` apply live, so scripts drive them: raycast from the listener to a source to muffle it behind walls,
+  switch `Audio.SetReverb` and sends in trigger zones, set `Doppler = 1` on fast movers (Samples/FirstPerson).
 - Grid games (Tetris, Snake, Minesweeper): keep the logical state in Lua tables and mirror it with
   entities (cubes with `Mesh builtin://Cube` + `Material AlbedoColor`). Do not use physics for them.
 - Physics games: `RigidBody` (`Dynamic`/`Static`/`Kinematic`, `IsTrigger`) + a collider; react in

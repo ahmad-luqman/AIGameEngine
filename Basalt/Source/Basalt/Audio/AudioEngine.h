@@ -29,7 +29,8 @@ namespace Basalt {
 		// engine's lifetime; standalone users (tests, tools) call Init/Shutdown themselves.
 		static ma_engine* GetEngine();
 
-		static void SetListener(const glm::vec3& position, const glm::vec3& forward, const glm::vec3& up);
+		// velocity (world units per second) only drives the Doppler shift of sources with a Doppler factor.
+		static void SetListener(const glm::vec3& position, const glm::vec3& forward, const glm::vec3& up, const glm::vec3& velocity = glm::vec3(0.0f));
 		// Without an output device nothing pulls audio; this mixes (and discards) the given duration so
 		// playback state advances exactly as it would with a device, and runs the resource manager's pending jobs
 		// (stream page refills) as it goes. No-op when a device is present.

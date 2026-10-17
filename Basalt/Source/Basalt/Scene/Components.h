@@ -433,6 +433,15 @@ namespace Basalt {
 		AudioBus Bus = AudioBus::SFX;
 		// Decodes the clip while it plays instead of loading it whole: for long music and ambience.
 		bool Stream = false;
+		// The effects below apply while the sound plays (the AudioSystem re-reads them every frame), so scripts can
+		// drive them: occlusion, entering a hall. The fields above apply on the next Play.
+		// Strength of the Doppler pitch shift from the source's and the listener's velocities: 0 = off, 1 =
+		// physical. Spatial sources only.
+		float Doppler = 0.0f;
+		// Low-pass cutoff in Hz (muffles the sound, e.g. behind a wall); 0 = off.
+		float LowPass = 0.0f;
+		// Share of the sound fed to its bus's reverb, 0..1; the dry sound is unchanged.
+		float ReverbSend = 0.0f;
 	};
 
 	struct AudioListenerComponent
