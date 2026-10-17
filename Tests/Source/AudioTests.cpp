@@ -1895,4 +1895,34 @@ TEST_SUITE("Audio")
 		measure(true);
 		measure(false);
 	}
+
+	TEST_CASE("Finite positions too far out for miniaudio are refused like non-finite ones")
+	{
+		BasaltTest::TempProject project("AudioExtremePositions");
+		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
+		HeadlessAudio engine;
+		AudioScene scene(glm::vec3(-3.0e38f, 0.0f, 0.0f));
+		AudioSourceComponent source = DopplerSource("Assets/Audio/Tone.wav");
+		source.ReverbSend = 1.0f;
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		Entity far = scene.Add("Far", source, glm::vec3(3.0e38f, 0.0f, 0.0f));
+		Entity near = scene.Add("Near", source, glm::vec3(0.0f, 0.0f, -2.0f));
+		AudioSystem& audio = scene.Start();
+		CHECK_FALSE(audio.IsPlaying(far));
+		CHECK(BasaltTest::CountLogMessages(since, "cannot play the AudioSource of 'Far': its world position is not finite or is beyond") == 1);
+		const glm::vec3 beyond(0.0f, 2.0f * AudioSystem::MaxAudioCoordinate, 0.0f);
+		CHECK_FALSE(audio.PlayOneShot("Assets/Audio/Tone.wav", &beyond));
+		// The listener out there keeps miniaudio's last placement; the near source plays, and nothing turns to NaN.
+		scene.Run(0.1f);
+		CHECK(BasaltTest::CountLogMessages(since, "the listener 'Listener' has a transform that is not finite (or is beyond") == 1);
+		const std::vector<float> mix = Mix(0.2f);
+		CHECK(AllFinite(mix));
+		CHECK(Rms(mix) > 0.01f);
+		const float pitch = audio.GetDopplerPitch(near);
+		CHECK(std::isfinite(pitch));
+		// Exactly at the limit is fine.
+		near.GetComponent<TransformComponent>().Translation = glm::vec3(AudioSystem::MaxAudioCoordinate, 0.0f, 0.0f);
+		scene.Run(StepSeconds);
+		CHECK(AllFinite(Mix(0.1f)));
+	}
 }
