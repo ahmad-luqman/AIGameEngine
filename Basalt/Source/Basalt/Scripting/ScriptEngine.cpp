@@ -129,11 +129,16 @@ namespace Basalt {
 			std::string Path;
 		};
 
+		// What require itself uses, kept in the registry when the engine was made (ScriptEngine's constructor), so a script
+		// replacing the global `package` (or its loaded and searchpath fields) hides no module from hot reload: Lua's own
+		// loaded-module table, the original searchpath, and the path of the original package table, which require reads.
+		// nullopt only when a script set that path to something other than text (require then fails too).
 		std::optional<PackageView> GetPackage(sol::state& lua)
 		{
-			const auto package = lua["package"].get<sol::optional<sol::table>>();
-			auto loaded = package ? package->get<sol::optional<sol::table>>("loaded") : sol::nullopt;
-			auto searchPath = package ? package->get<sol::optional<sol::protected_function>>("searchpath") : sol::nullopt;
+			const sol::table registry = lua.registry();
+			auto loaded = registry.get<sol::optional<sol::table>>(LUA_LOADED_TABLE);
+			auto searchPath = registry.get<sol::optional<sol::protected_function>>("Basalt.SearchPath");
+			const auto package = registry.get<sol::optional<sol::table>>("Basalt.Package");
 			auto path = package ? package->get<sol::optional<std::string>>("path") : sol::nullopt;
 			if (!loaded || !searchPath || !path)
 				return std::nullopt;
@@ -227,6 +232,16 @@ namespace Basalt {
 		// Module name -> the owner of what its top level started (it runs once, for whichever script requires it first,
 		// so it belongs to the module, not to that script's class).
 		std::unordered_map<std::string, UUID> ModuleOwners;
+		// A module ForgetModules dropped from require's cache, until SettleForgottenModules decides its fate.
+		struct ForgottenModule
+		{
+			std::string Name;
+			// What require had cached.
+			sol::object Value;
+			// What its top level started (0: nothing recorded).
+			UUID Owner;
+		};
+		std::vector<ForgottenModule> ForgottenModules;
 		// Module name -> the modules whose top level required it: forgotten with it, as they hold its old table.
 		std::unordered_map<std::string, std::set<std::string>> ModuleDependents;
 		// The modules being loaded right now, innermost last.
@@ -483,7 +498,8 @@ namespace Basalt {
 		}
 
 		// require, with what a module's top level starts owned by the module, and the modules that require it recorded.
-		static sol::object Require(ScriptEngine& engine, sol::this_state state, const sol::object& name)
+		// Every value require returns is passed on (Lua 5.4 adds the loader data, such as the file name).
+		static sol::variadic_results Require(ScriptEngine& engine, sol::this_state state, const sol::object& name)
 		{
 			ScriptEngine::Impl& impl = *engine.m_Impl;
 			const sol::protected_function require = sol::state_view(state).registry()["Basalt.Require"];
@@ -513,21 +529,24 @@ namespace Basalt {
 				throw std::runtime_error(error.what());
 			}
 			impl.FailedRequires.erase(module);
-			return result.get<sol::object>();
+			sol::variadic_results values;
+			for (int i = 0; i < result.return_count(); i++)
+				values.push_back(result.get<sol::object>(i));
+			return values;
 		}
 
 		// Forgets the modules whose file is one of `files` (absolute, lexically normal) and those that required them,
-		// directly or not, so the next require loads them again, and ends what their top level started. True if a
-		// changed module was loaded, or if that cannot be told because a script replaced part of `package` (outError
-		// then says so, and the caller reloads every class). A changed file of a module whose require failed sets
-		// outFailedRequireChanged.
+		// directly or not, so the next require loads them again. What their old top level started stays alive until
+		// SettleForgottenModules knows whether the new versions load (Impl::ForgottenModules). True if a changed module
+		// was loaded, or if that cannot be told (outError then says why, and the caller reloads every class). A changed
+		// file of a module whose require failed sets outFailedRequireChanged.
 		static bool ForgetModules(ScriptEngine& engine, const std::vector<std::filesystem::path>& files, bool& outFailedRequireChanged, std::string& outError)
 		{
 			ScriptEngine::Impl& impl = *engine.m_Impl;
 			std::optional<PackageView> package = GetPackage(impl.Lua);
 			if (!package)
 			{
-				outError = "a script replaced the package table (package.loaded, package.searchpath or package.path), so changed modules cannot be told apart: every script loads again";
+				outError = "a script set package.path to something other than text, so changed modules cannot be found: every script loads again";
 				return true;
 			}
 			outFailedRequireChanged = std::any_of(impl.FailedRequires.begin(), impl.FailedRequires.end(), [&](const std::string& name) {
@@ -562,15 +581,40 @@ namespace Basalt {
 			}
 			for (const std::string& name : forgotten)
 			{
+				ScriptEngine::Impl::ForgottenModule module{ name, package->Loaded[name], 0 };
 				package->Loaded[name] = sol::lua_nil;
-				impl.ModuleDependents.erase(name);
+				// Detached, not released: a new load gets an owner of its own, while the old one's work keeps running.
 				if (const auto it = impl.ModuleOwners.find(name); it != impl.ModuleOwners.end())
 				{
-					Release(engine, it->second);
+					module.Owner = it->second;
 					impl.ModuleOwners.erase(it);
 				}
+				impl.ForgottenModules.push_back(std::move(module));
 			}
 			return true;
+		}
+
+		// After the classes loaded again: a forgotten module whose new version does not load keeps its previous one (back in
+		// require's cache, its top level's work still running, as a class that does not load keeps running its previous
+		// version); otherwise what the old version's top level started ends. A module nothing required again also ends.
+		static void SettleForgottenModules(ScriptEngine& engine)
+		{
+			ScriptEngine::Impl& impl = *engine.m_Impl;
+			std::vector<ScriptEngine::Impl::ForgottenModule> forgotten = std::exchange(impl.ForgottenModules, {});
+			std::optional<PackageView> package = GetPackage(impl.Lua);
+			for (ScriptEngine::Impl::ForgottenModule& module : forgotten)
+			{
+				if (package && impl.FailedRequires.contains(module.Name) && !impl.ModuleOwners.contains(module.Name))
+				{
+					package->Loaded[module.Name] = module.Value;
+					if (module.Owner != 0)
+						impl.ModuleOwners.emplace(module.Name, module.Owner);
+				}
+				else if (module.Owner != 0)
+				{
+					Release(engine, module.Owner);
+				}
+			}
 		}
 
 		// Sets the instance's fields from the class's Properties (with the component's overrides); with onlyMissing,
@@ -653,6 +697,9 @@ namespace Basalt {
 		// original require stays in the registry (a captured Lua reference would outlive lua_close).
 		sol::state& lua = m_Impl->Lua;
 		lua.registry()["Basalt.Require"] = lua["require"];
+		// Kept for hot reload (GetPackage), whatever scripts later do to the global package table.
+		lua.registry()["Basalt.Package"] = lua["package"];
+		lua.registry()["Basalt.SearchPath"] = lua["package"]["searchpath"];
 		lua.set_function("require", [this](sol::this_state state, const sol::object& name) { return ScriptClassLoader::Require(*this, state, name); });
 
 		entt::registry& registry = scene->GetRegistry();
@@ -675,6 +722,7 @@ namespace Basalt {
 		m_Impl->Events.Clear();
 		m_Impl->Instances.clear();
 		m_Impl->Classes.clear();
+		m_Impl->ForgottenModules.clear();
 	}
 
 	void ScriptEngine::ReportError(const std::string& message)
@@ -982,6 +1030,17 @@ namespace Basalt {
 		{
 			ReportError(std::string("hot reload stopped part way: ") + e.what());
 			result.Error = e.what();
+		}
+		// Also after an error: the modules ForgetModules dropped must not stay in limbo.
+		try
+		{
+			ScriptClassLoader::SettleForgottenModules(*this);
+		}
+		catch (const std::exception& e)
+		{
+			ReportError(std::string("hot reload could not settle the changed modules: ") + e.what());
+			if (result.Error.empty())
+				result.Error = e.what();
 		}
 		return result;
 	}

@@ -83,8 +83,10 @@ with `asset.write` or `asset.refresh` (which also reloads models and textures ch
   gets `OnReload()` (not `OnCreate`); one that had not started, or whose `OnCreate` raised an error, gets `OnCreate`.
   An instance whose metatable the script replaced itself (`setmetatable(self, ...)`) is left as it is.
 - A changed module (`require`) is loaded again together with the modules that required it, and every script loads
-  again so they pick up the new version; other modules keep their state. Saving a module whose `require` failed
-  retries the scripts that failed because of it.
+  again so they pick up the new version; other modules keep their state. A module whose new version does not load
+  keeps its previous one (cached, and what its top level started keeps running). Saving a module whose `require`
+  failed retries the scripts that failed because of it. Replacing the global `package` table does not hide modules
+  from hot reload.
 - A version that does not load (a syntax error, an error in its top-level code, no class table) is reported and a
   script that was running **keeps its previous version**; fix it (or the module that broke it) and save again. An
   instance that a runtime error disabled runs again after a successful reload of its script, and entities whose

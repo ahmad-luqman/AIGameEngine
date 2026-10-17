@@ -3057,3 +3057,67 @@ TEST_SUITE("Scripting")
 		scene.OnRuntimeStop();
 	}
 }
+
+TEST_SUITE("Scripting")
+{
+	TEST_CASE("A module whose new version does not load keeps its previous version running")
+	{
+		BasaltTest::TempProject project("ScriptHotReloadModuleKept");
+		const std::string bus = project.WriteFile("Assets/Scripts/Bus.lua", "Events.On('Ping', function() Pings = (Pings or 0) + 1 end) return { State = { Count = 1 } }");
+		const std::string user = project.WriteFile("Assets/Scripts/User.lua", "local Bus = require('Assets.Scripts.Bus') local U = {} function U:OnUpdate(dt) self.Count = Bus.State.Count end return U");
+		Scene scene;
+		Entity entity = AddScripted(scene, "User", user);
+		scene.OnRuntimeStart();
+		ScriptEngine& engine = *scene.GetScriptEngine();
+		scene.OnUpdate(Step);
+		REQUIRE(Field(scene, entity, "Count") == 1);
+		// Broken: the script keeps running with the old module, whose handler and cached table stay.
+		project.WriteFile(bus, "Events.On('Ping', function() end) error('bus breaks')");
+		const ScriptReloadResult broken = engine.ReloadScripts({ bus });
+		CHECK(broken.Reloaded.empty());
+		CHECK(broken.Failed.size() == 1);
+		CHECK(BasaltTest::Eval(scene, "Events.Emit('Ping')") == "1");
+		CHECK(BasaltTest::Eval(scene, "Pings") == "1");
+		CHECK(BasaltTest::Eval(scene, "require('Assets.Scripts.Bus').State.Count") == "1");
+		scene.OnUpdate(Step);
+		CHECK(Field(scene, entity, "Count") == 1);
+		// Fixed: the new version replaces it, and only its handler remains.
+		project.WriteFile(bus, "Events.On('Ping', function() Pings = (Pings or 0) + 10 end) return { State = { Count = 2 } }");
+		const ScriptReloadResult fixed = engine.ReloadScripts({ bus });
+		CHECK(fixed.Reloaded == std::vector<std::string>{ user });
+		BasaltTest::Eval(scene, "Pings = 0");
+		CHECK(BasaltTest::Eval(scene, "Events.Emit('Ping')") == "1");
+		CHECK(BasaltTest::Eval(scene, "Pings") == "10");
+		scene.OnUpdate(Step);
+		CHECK(Field(scene, entity, "Count") == 2);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Hot reload finds changed modules after a script replaced the package table, and require returns every value")
+	{
+		BasaltTest::TempProject project("ScriptHotReloadPackageModules");
+		const std::string tuning = project.WriteFile("Assets/Scripts/Tuning.lua", "return { Step = 1 }");
+		const std::string script = project.WriteFile("Assets/Scripts/User.lua", R"(
+			local Tuning, file = require("Assets.Scripts.Tuning")
+			LoadedFrom = file
+			package = nil
+			local User = {}
+			function User:OnCreate() self.Total = 0 end
+			function User:OnUpdate(dt) self.Total = self.Total + Tuning.Step end
+			return User
+		)");
+		Scene scene;
+		Entity entity = AddScripted(scene, "User", script);
+		scene.OnRuntimeStart();
+		scene.OnUpdate(Step);
+		REQUIRE(Field(scene, entity, "Total") == 1);
+		// Lua 5.4's loader data (the file name) is passed through.
+		CHECK(BasaltTest::Eval(scene, "type(LoadedFrom)") == "string");
+		project.WriteFile(tuning, "return { Step = 100 }");
+		CHECK(scene.GetScriptEngine()->ReloadScripts({ tuning }).Reloaded == std::vector<std::string>{ script });
+		scene.OnUpdate(Step);
+		CHECK(Field(scene, entity, "Total") == 101);
+		CHECK(scene.GetScriptEngine()->GetErrors().empty());
+		scene.OnRuntimeStop();
+	}
+}

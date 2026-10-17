@@ -86,8 +86,9 @@ namespace Basalt {
 		std::optional<nlohmann::json> GetInstanceField(Entity entity, const std::string& name) const;
 
 		// Hot reload: loads the classes of the changed script files again in this Lua state, and moves their instances
-		// onto the new class. When a changed file is a module loaded through require, every module loaded from a file is
-		// forgotten (what modules' top level started ends) and every class loads again. A changed file no class runs
+		// onto the new class. When a changed file is a module loaded through require, it and the modules that required it
+		// are forgotten and every class loads again; a forgotten module that does not load again keeps its previous
+		// version (and its top level's timers and handlers), otherwise those end. A changed file no class runs
 		// also retries the classes that failed to load and those whose last reload failed (it may be the module whose
 		// require failed). Instances keep their fields, and Properties they lack get their values (defaults or the
 		// component's overrides; defaults that changed do not reach existing fields). Then each started instance gets
