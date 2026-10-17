@@ -30,6 +30,10 @@ namespace Basalt {
 
 	std::optional<std::string> FileSystem::ReadTextFile(const std::filesystem::path& path)
 	{
+		// A directory opens as a stream on Linux, with a meaningless size (reading it would allocate that much).
+		std::error_code error;
+		if (!std::filesystem::is_regular_file(path, error))
+			return std::nullopt;
 		std::ifstream stream(path, std::ios::in | std::ios::binary);
 		if (!stream)
 			return std::nullopt;
@@ -49,6 +53,9 @@ namespace Basalt {
 
 	std::optional<std::vector<uint8_t>> FileSystem::ReadBinaryFile(const std::filesystem::path& path)
 	{
+		std::error_code error;
+		if (!std::filesystem::is_regular_file(path, error))
+			return std::nullopt;
 		std::ifstream stream(path, std::ios::in | std::ios::binary);
 		if (!stream)
 			return std::nullopt;

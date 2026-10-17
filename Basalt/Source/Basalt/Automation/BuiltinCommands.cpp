@@ -651,7 +651,16 @@ namespace Basalt {
 				// A save that fails leaves the settings as they were, so what is shown is what is saved.
 				ProjectConfig previous = std::exchange(project->GetConfig(), std::move(config));
 				std::string error;
-				if (!project->Save(error))
+				bool saved = false;
+				try
+				{
+					saved = project->Save(error);
+				}
+				catch (const std::exception& e)
+				{
+					error = e.what();
+				}
+				if (!saved)
 				{
 					project->GetConfig() = std::move(previous);
 					throw CommandError(error);
