@@ -322,8 +322,7 @@ Mouse buttons: `Left`, `Right`, `Middle`, `Button3`-`Button7`.
 displays); in the editor's Game view it is the game resolution, whatever size the view is drawn at, so a script
 reads the same coordinates in both. The delta is in the same units. Headless runs use a 1920x1080 view.
 
-**What the game receives.** Scripts (and the game UI's keyboard and gamepad navigation) see only the input the host
-gives the game. The runtime and headless runs give it everything. The editor gives it the keyboard and gamepads while
+**What the game receives.** Scripts (and the game UI's widgets) see only the input the host gives the game. The runtime and headless runs give it everything. The editor gives it the keyboard and gamepads while
 the Game view has focus, and the mouse buttons, movement and scroll while the Game view has focus and the mouse is
 over its image (or the game has locked the cursor). The mouse position, gamepad connections and names (and
 `OnGamepadConnected`/`OnGamepadDisconnected`) are always reported. Losing that input reads like letting go of
