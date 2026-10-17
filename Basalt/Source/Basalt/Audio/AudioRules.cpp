@@ -3,7 +3,6 @@
 #include "Basalt/Core/Log.h"
 
 #include <cmath>
-#include <utility>
 
 namespace Basalt {
 
@@ -14,11 +13,11 @@ namespace Basalt {
 			return std::isfinite(value) && value > 0.0f;
 		}
 
-		bool IsInRange(float value, float min, float max)
-		{
-			return std::isfinite(value) && value >= min && value <= max;
-		}
+	}
 
+	bool IsFiniteInRange(float value, float min, float max)
+	{
+		return std::isfinite(value) && value >= min && value <= max;
 	}
 
 	bool IsValidAudioVolume(float volume)
@@ -41,22 +40,26 @@ namespace Basalt {
 			return fmt::format("MaxDistance must be a finite number >= MinDistance (got MaxDistance {} and MinDistance {})", source.MaxDistance, source.MinDistance);
 		if (static_cast<size_t>(source.Bus) >= AudioBusCount)
 			return fmt::format("Bus must be one of its {} values (got {})", AudioBusCount, static_cast<size_t>(source.Bus));
-		if (!IsInRange(source.Doppler, 0.0f, MaxAudioDoppler))
+		return ValidateAudioEffects(source);
+	}
+
+	std::string ValidateAudioEffects(const AudioSourceComponent& source)
+	{
+		if (!IsValidAudioDoppler(source.Doppler))
 			return fmt::format("Doppler must be a number from 0 to {} (got {})", MaxAudioDoppler, source.Doppler);
-		if (source.LowPass != 0.0f && !IsInRange(source.LowPass, MinAudioLowPass, MaxAudioLowPass))
+		if (!IsValidAudioLowPass(source.LowPass))
 			return fmt::format("LowPass must be 0 (off) or a cutoff from {} to {} Hz (got {})", MinAudioLowPass, MaxAudioLowPass, source.LowPass);
-		if (!IsInRange(source.ReverbSend, 0.0f, 1.0f))
+		if (!IsValidAudioReverbSend(source.ReverbSend))
 			return fmt::format("ReverbSend must be a number from 0 to 1 (got {})", source.ReverbSend);
 		return {};
 	}
 
 	std::string ValidateAudioReverb(const AudioReverbSettings& reverb)
 	{
-		const std::pair<const char*, float> settings[] = { { "RoomSize", reverb.RoomSize }, { "Damping", reverb.Damping }, { "Width", reverb.Width } };
-		for (const auto& [name, value] : settings)
+		for (const AudioReverbField& field : AudioReverbFields)
 		{
-			if (!IsInRange(value, 0.0f, 1.0f))
-				return fmt::format("{} must be a number from 0 to 1 (got {})", name, value);
+			if (const float value = reverb.*field.Member; !IsFiniteInRange(value, 0.0f, 1.0f))
+				return fmt::format("{} must be a number from 0 to 1 (got {})", field.Name, value);
 		}
 		return {};
 	}

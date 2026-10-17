@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+
 namespace Basalt {
 
 	// The room the reverb simulates (Freeverb's parameters, each 0..1). One setting for the whole play session:
@@ -12,6 +14,20 @@ namespace Basalt {
 		float Damping = 0.25f;
 		// Stereo spread of the reverb tail (0 = mono).
 		float Width = 1.0f;
+
+		bool operator==(const AudioReverbSettings&) const = default;
 	};
+
+	// Each setting by name, for the code that handles them by name (validation, Lua), in declaration order.
+	struct AudioReverbField
+	{
+		const char* Name;
+		float AudioReverbSettings::* Member;
+	};
+	inline constexpr std::array<AudioReverbField, 3> AudioReverbFields = { {
+		{ "RoomSize", &AudioReverbSettings::RoomSize },
+		{ "Damping", &AudioReverbSettings::Damping },
+		{ "Width", &AudioReverbSettings::Width },
+	} };
 
 }

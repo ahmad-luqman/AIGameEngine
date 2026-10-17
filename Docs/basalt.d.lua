@@ -369,7 +369,8 @@ function Entity:StopAudio() end
 ---@return boolean
 function Entity:IsAudioPlaying() end
 
----The Doppler pitch factor applied to the AudioSource in the last mix (1 = unshifted, also when not playing).
+---The Doppler pitch factor applied to the AudioSource in the last mix: 1 = unshifted, also while it is not playing or
+---for a non-spatial source.
 ---@return number
 function Entity:GetAudioDopplerPitch() end
 

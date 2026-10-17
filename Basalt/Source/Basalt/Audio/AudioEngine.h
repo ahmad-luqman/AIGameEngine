@@ -2,12 +2,21 @@
 
 #include <glm/glm.hpp>
 
+#include <cstdint>
 #include <filesystem>
 #include <vector>
 
 struct ma_engine;
 
 namespace Basalt {
+
+	// The output format of the device-less engine. Stereo at 48 kHz unless a test needs what some devices have
+	// (surround, a low rate).
+	struct AudioDevicelessFormat
+	{
+		uint32_t Channels = 2;
+		uint32_t SampleRate = 48000;
+	};
 
 	// Process-wide miniaudio engine. Falls back to a silent device-less engine when no audio device is
 	// available (headless runs, CI), so audio code paths behave the same everywhere.
@@ -19,8 +28,9 @@ namespace Basalt {
 	class AudioEngine
 	{
 	public:
-		// headless: never open an output device.
-		static bool Init(bool headless);
+		// headless: never open an output device. format applies when there is no device; false (logged) when it is
+		// outside 1..8 channels or 8 to 192 kHz.
+		static bool Init(bool headless, const AudioDevicelessFormat& format = {});
 		static void Shutdown();
 		static bool IsInitialized();
 		static bool HasDevice();

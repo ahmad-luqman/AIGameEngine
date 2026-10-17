@@ -15,7 +15,8 @@ effects (low-pass occlusion, reverb, Doppler), built only through the automation
   line is clear: step out from behind the wall and its buzz brightens.
 - **Reverb** — the stone hall has a trigger (`HallZone`). Entering it switches the reverb to a large, bright room
   (`Audio.SetReverb`) and raises the `ReverbSend` of the shots and footsteps, so they ring; leaving returns to the
-  courtyard's small, dull room. The generator keeps a little courtyard reverb throughout.
+  courtyard's small, dull room. The generator's small send stays fixed, so it rings with whichever room the player
+  is in.
 - **Doppler** — the `Drone` flies back and forth behind the targets with a rotor sound whose `AudioSource.Doppler`
   is 1: it sounds higher while it comes toward you and lower as it leaves. It is moved by script, so the audio system
   measures its velocity from its movement each frame (a physics body's velocity is used directly).
@@ -44,15 +45,16 @@ Rebuild the scene: `build/bin/basalt --project Samples/FirstPerson batch Samples
 ## The gameplay test
 
 `test_game.json` (run by ctest as `SampleFirstPerson`) runs headless. Look results are checked through the camera's
-forward vector with tolerances, never exact angles, since trigonometry differs slightly between platforms.
+forward vector and with tolerances, since trigonometry differs slightly between platforms; only the pitch clamp,
+which is exact, is compared exactly.
 
 - checks the scene before play (the saved scene matches, the listener is on the camera, the drone's Doppler is on,
   the hall's zone is a trigger) and the state after the first frames: the cursor is locked, the seven actions
   exist, the player stands, the wall hides the generator (`LowPass` 500) and the courtyard reverb is set;
 - turns the view with the mouse (the first `input.mouse` position only seeds the previous one): right, down, past
   the pitch limit (it stops at 85 degrees), up, and level again;
-- shoots the middle target (score 1, the HUD and the log agree), shoots it again while it lies down (no score), aims
-  16 degrees left with the mouse and shoots the left target;
+- shoots the middle target (score 1, the HUD and the log agree), aims down at it while it lies on the ground and
+  shoots it again (no score), aims 16 degrees left with the mouse and shoots the left target;
 - turns with a gamepad's right stick (nothing inside the dead zone, 140 degrees per second at full tilt);
 - jumps and lands;
 - strafes out from behind the wall (footsteps play; the generator's low-pass turns off) and back (it turns on again),
