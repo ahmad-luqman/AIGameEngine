@@ -1093,11 +1093,13 @@ TEST_SUITE("Automation")
 		std::filesystem::remove_all(projectFile);
 		temp.WriteFile(Project::FileName, projectText);
 		Run(registry, session, "project.set", { { "inputActions", { { "Actions", { { { "Name", "Jump" } } } } } } });
-		// Once saved, a failed project file write puts the previous actions file back.
+		// Once saved, a failed project file write puts the previous actions file back exactly, hand edits included.
+		const std::string handEdited = R"({"Actions": [{"Name": "Jump", "Bindings": [{"Key": "J"}]}]})";
+		temp.WriteFile(Project::InputFileName, handEdited);
 		std::filesystem::remove(projectFile);
 		std::filesystem::create_directories(projectFile);
 		CHECK(RunError(registry, session, "project.set", { { "inputActions", { { "Actions", { { { "Name", "Dash" } } } } } } }).find("cannot replace") != std::string::npos);
-		CHECK(ParseJson(*FileSystem::ReadTextFile(temp.GetDirectory() / Project::InputFileName))["Actions"][0]["Name"] == "Jump");
+		CHECK(*FileSystem::ReadTextFile(temp.GetDirectory() / Project::InputFileName) == handEdited);
 		CHECK(Project::GetActive()->GetConfig().InputActions.Find("Jump"));
 		std::filesystem::remove_all(projectFile);
 		temp.WriteFile(Project::FileName, projectText);
