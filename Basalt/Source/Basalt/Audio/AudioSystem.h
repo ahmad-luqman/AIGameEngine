@@ -99,6 +99,9 @@ namespace Basalt {
 		// Speeds above this (world units per second) are clamped before they reach the Doppler shift: a teleport
 		// would otherwise read as a speed past the speed of sound, which silences or shrieks for a moment.
 		static constexpr float MaxDopplerSpeed = 100.0f;
+		// Positions farther out on any axis (a million kilometers) are treated like non-finite ones: refused by Play and
+		// PlayOneShot, skipped (logged once) by the updates. Beyond it miniaudio's distance math overflows into NaN.
+		static constexpr float MaxAudioCoordinate = 1.0e9f;
 
 	private:
 		// Uninitializes and frees a sound or a bus (an ma_sound_group is an ma_sound).

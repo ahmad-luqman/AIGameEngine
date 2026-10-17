@@ -953,7 +953,9 @@ cannot play.
 | `LowPass` | Low-pass cutoff in Hz, 10 to 20000, muffling the sound (behind a wall, under water); 0 (default) = off. The cutoff used is at most 0.45 times the output's sample rate |
 | `ReverbSend` | Share of the sound fed to its bus's reverb, 0 (default) to 1; the dry sound is unchanged |
 
-Clips that are not streamed are decoded when they load and shared while any sound uses them. Invalid values
+Clips that are not streamed are decoded when they load and shared while any sound uses them. Positions
+that are not finite, or beyond a billion units on an axis, never reach a sound: `e:PlayAudio()` and
+`Audio.PlayOneShot` refuse them (logged), and a playing source or the listener keeps its last position. Invalid values
 are rejected with an error by `SetComponent`, scene files and the automation API.
 
 **Mixer buses.** Every sound plays through a bus: `Music`, `SFX` or `UI`, which all feed `Master` (a source

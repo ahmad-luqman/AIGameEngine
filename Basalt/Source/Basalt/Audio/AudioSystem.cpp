@@ -102,6 +102,13 @@ namespace Basalt {
 			return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
 		}
 
+		// A position miniaudio can work with: finite, and within MaxAudioCoordinate of the origin on every axis, so the
+		// spatializer's distances and their squares stay far from float's range (beyond it they overflow into NaN).
+		bool IsUsablePosition(const glm::vec3& v)
+		{
+			return IsFinite(v) && glm::all(glm::lessThanEqual(glm::abs(v), glm::vec3(AudioSystem::MaxAudioCoordinate)));
+		}
+
 		// The linear velocity of the entity's own dynamic or kinematic body or character, else of its closest
 		// ancestor's (a camera on a character); nullopt when none has one, or when a static body comes first: a script
 		// can move a static body, which then reports no velocity, so its movement is measured instead.
@@ -124,18 +131,20 @@ namespace Basalt {
 			return std::nullopt;
 		}
 
-		// The pitch factor miniaudio's spatializer gives a sound (ma_doppler_pitch): toListener is the listener's
-		// position minus the sound's. Computed here from what the system hands miniaudio, so the main thread never
-		// reads the value the audio thread writes.
-		float DopplerPitch(const glm::vec3& toListener, const glm::vec3& soundVelocity, const glm::vec3& listenerVelocity, float factor)
+		// The pitch factor miniaudio's spatializer gives a sound at soundPosition (ma_doppler_pitch). Computed here from
+		// what the system hands miniaudio, so the main thread never reads the value the audio thread writes. In double:
+		// finite but extreme positions (near FLT_MAX, from bad scene data) would overflow the difference in float.
+		float DopplerPitch(const glm::vec3& listenerPosition, const glm::vec3& soundPosition, const glm::vec3& soundVelocity, const glm::vec3& listenerVelocity, float factor)
 		{
-			const float distance = glm::length(toListener);
-			if (factor <= 0.0f || distance == 0.0f)
+			const glm::dvec3 toListener = glm::dvec3(listenerPosition) - glm::dvec3(soundPosition);
+			const double distance = glm::length(toListener);
+			if (factor <= 0.0f || distance == 0.0)
 				return 1.0f;
-			const float limit = AudioSpeedOfSound / factor;
-			const float listenerSpeed = std::min(glm::dot(toListener, listenerVelocity) / distance, limit);
-			const float soundSpeed = std::min(glm::dot(toListener, soundVelocity) / distance, limit);
-			return (AudioSpeedOfSound - factor * listenerSpeed) / (AudioSpeedOfSound - factor * soundSpeed);
+			const double speedOfSound = AudioSpeedOfSound;
+			const double limit = speedOfSound / factor;
+			const double listenerSpeed = std::min(glm::dot(toListener, glm::dvec3(listenerVelocity)) / distance, limit);
+			const double soundSpeed = std::min(glm::dot(toListener, glm::dvec3(soundVelocity)) / distance, limit);
+			return static_cast<float>((speedOfSound - factor * listenerSpeed) / (speedOfSound - factor * soundSpeed));
 		}
 
 		// True when a problem seen every frame should be logged: when it appears, and again after it has cleared.
@@ -495,9 +504,9 @@ namespace Basalt {
 		}
 		// A NaN position would reach the bus and its reverb (whose feedback keeps it until play stops).
 		const glm::vec3 position = glm::vec3(m_Scene->GetWorldTransform(entity)[3]);
-		if (source->Spatial && !IsFinite(position))
+		if (source->Spatial && !IsUsablePosition(position))
 		{
-			BS_CORE_ERROR("Audio: cannot play the AudioSource of '{}': its world position is not finite", entity.GetName());
+			BS_CORE_ERROR("Audio: cannot play the AudioSource of '{}': its world position is not finite or is beyond {} units", entity.GetName(), MaxAudioCoordinate);
 			return false;
 		}
 		const Output output = GetOutput(source->Bus);
@@ -561,7 +570,7 @@ namespace Basalt {
 		// Nothing is shifted while nothing plays (a clip that played to its end included).
 		if (ma_sound_is_spatialization_enabled(sound) == MA_FALSE || ma_sound_is_playing(sound) == MA_FALSE)
 			return 1.0f;
-		return DopplerPitch(m_ListenerPosition - voice.Position, voice.Velocity, m_ListenerVelocity, voice.DopplerFactor);
+		return DopplerPitch(m_ListenerPosition, voice.Position, voice.Velocity, m_ListenerVelocity, voice.DopplerFactor);
 	}
 
 	bool AudioSystem::PlayOneShot(const std::string& clip, const glm::vec3* position, float volume, AudioBus bus)
@@ -572,9 +581,9 @@ namespace Basalt {
 			return false;
 		}
 		// Never updated after this, so a NaN would sound for the one-shot's whole life.
-		if (position && !IsFinite(*position))
+		if (position && !IsUsablePosition(*position))
 		{
-			BS_CORE_ERROR("Audio: cannot play '{}' at a position that is not finite", clip);
+			BS_CORE_ERROR("Audio: cannot play '{}' at a position that is not finite or is beyond {} units", clip, MaxAudioCoordinate);
 			return false;
 		}
 		SoundHandle sound = CreateSound(clip, position != nullptr, GetOutput(bus), false);
@@ -686,9 +695,9 @@ namespace Basalt {
 			// A NaN would reach every spatial sound, and through them the reverbs, whose feedback would keep it
 			// until play stops. Such a listener (a broken transform, a zero scale) keeps its last placement, and its
 			// movement is measured afresh once it is finite again.
-			const bool finite = IsFinite(position) && IsFinite(forward) && IsFinite(up);
+			const bool finite = IsUsablePosition(position) && IsFinite(forward) && IsFinite(up);
 			if (ShouldReport(m_Listener.ReportedInvalidTransform, !finite))
-				BS_CORE_ERROR("Audio: the listener '{}' has a transform that is not finite; it keeps its last placement", listener.GetName());
+				BS_CORE_ERROR("Audio: the listener '{}' has a transform that is not finite (or is beyond {} units); it keeps its last placement", listener.GetName(), MaxAudioCoordinate);
 			if (finite)
 			{
 				if (const std::optional<glm::vec3> velocity = TrackVelocity(physics, listener, position, m_Listener.LastPosition, seconds, m_Listener.ReportedInvalidVelocity))
@@ -721,9 +730,9 @@ namespace Basalt {
 			if (ma_sound_is_spatialization_enabled(sound) == MA_FALSE)
 				continue;
 			const glm::vec3 position = glm::vec3(m_Scene->GetWorldTransform(entity)[3]);
-			const bool finite = IsFinite(position);
+			const bool finite = IsUsablePosition(position);
 			if (ShouldReport(voice->ReportedInvalidPosition, !finite))
-				BS_CORE_ERROR("Audio: '{}' has a world position that is not finite; its sound keeps its last position, unmoving", entity.GetName());
+				BS_CORE_ERROR("Audio: '{}' has a world position that is not finite (or is beyond {} units); its sound keeps its last position, unmoving", entity.GetName(), MaxAudioCoordinate);
 			if (!finite)
 			{
 				// Standing still, and measured afresh once it is finite again (no teleport across the gap).
