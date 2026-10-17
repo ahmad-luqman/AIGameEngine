@@ -58,7 +58,9 @@ namespace Basalt {
 		// The game's size in the units its scripts see the mouse in (Lua Input.GetMousePosition: 0,0 top-left,
 		// this size bottom-right): the editor's Game view sets the game's resolution, so scripts read game pixels
 		// rather than editor window units. nullopt (the default, and what standalone hosts use) means the viewport
-		// size, so script coordinates are Input's. Sizes that are not positive and finite are ignored.
+		// size: script coordinates are Input's relative to the viewport origin (Input's own in the runtime and
+		// headless, where the origin is 0,0). A size that is not positive and finite is a programmer error (asserted)
+		// and ignored.
 		static void SetResolution(const std::optional<glm::vec2>& resolution);
 		static glm::vec2 GetResolution();
 		// Input's mouse coordinates (window units) in the game's: relative to the viewport origin, scaled from the
@@ -75,12 +77,13 @@ namespace Basalt {
 		static void SetNavigationEnabled(bool enabled);
 		static bool IsNavigationEnabled();
 
-		// The mouse position on the canvas of the current viewport; nullopt while pointer input is disabled or
-		// before the first mouse position arrives.
+		// The mouse position on the canvas of the current viewport; nullopt while pointer input is disabled, while the
+		// game asks for a locked cursor (the position is then a virtual one that wanders off the view) or before the
+		// first mouse position arrives.
 		static std::optional<glm::vec2> GetPointerPosition();
 
 		// Everything a host sets about its view, to save and restore around a run that needs the headless view (the
-		// defaults).
+		// defaults). PointerEnabled and NavigationEnabled are Input's game routing, read and written through.
 		struct HostState
 		{
 			glm::vec2 ViewportOrigin = { 0.0f, 0.0f };
@@ -92,7 +95,7 @@ namespace Basalt {
 			bool operator==(const HostState&) const = default;
 		};
 		static HostState GetHostState();
-		// Sets every field at once (an origin or size that is not usable is ignored, like its setter).
+		// Sets every field at once (an origin, size or resolution that is not usable is ignored, like its setter).
 		static void SetHostState(const HostState& state);
 	};
 

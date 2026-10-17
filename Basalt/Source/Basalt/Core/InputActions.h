@@ -7,6 +7,7 @@
 
 #include <nlohmann/json_fwd.hpp>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -28,8 +29,12 @@ namespace Basalt {
 
 	// "Button", "Axis"; "Unknown" for values outside the enum.
 	std::string_view InputActionTypeToString(InputActionType type);
-	// Exact (case-sensitive) inverse of InputActionTypeToString, like the other enum names in data files.
+	// Exact (case-sensitive) inverse of InputActionTypeToString, like the component enums in data files. Control names
+	// in bindings are case-insensitive instead, like the key names Lua scripts use.
 	std::optional<InputActionType> InputActionTypeFromString(std::string_view name);
+
+	// The JSON keys that name a binding's control, in the order of InputBinding::Control's alternatives.
+	inline constexpr std::array<std::string_view, 4> InputControlKeys = { "Key", "MouseButton", "GamepadButton", "GamepadAxis" };
 
 	// One control an action reads, and how its value is shaped.
 	struct InputBinding
@@ -54,7 +59,8 @@ namespace Basalt {
 		bool operator==(const InputBinding&) const = default;
 	};
 
-	// A named action and the controls bound to it.
+	// A named action and the controls bound to it. Inside an InputActionMap the name is 1 to MaxNameLength bytes
+	// without control characters and unique, and there are at most MaxBindings bindings.
 	struct InputAction
 	{
 		std::string Name;
@@ -88,7 +94,8 @@ namespace Basalt {
 		const InputAction* Find(std::string_view name) const;
 
 		// Replaces the bindings of an existing action (Lua Input.SetBindings: actions are declared by the project,
-		// scripts rebind them). Fails for an unknown action or more than MaxBindings bindings; nothing changes then.
+		// scripts rebind them). Fails for an unknown action, more than MaxBindings bindings or an invalid one
+		// (ValidateBinding); nothing changes then.
 		bool SetBindings(std::string_view name, std::vector<InputBinding> bindings, std::string& outError);
 
 		// The action's value on the current or the previous frame: a button's strength (0..1) or an axis' value
@@ -98,22 +105,29 @@ namespace Basalt {
 		static bool IsPressed(const InputAction& action);
 		static bool IsReleased(const InputAction& action);
 
-		// {"Format": "BasaltInput", "Version": 1, "Actions": [{"Name", "Type", "Bindings": [...]}, ...]}, with
-		// canonical control names and only the binding fields that differ from their defaults.
+		// {"Format": "BasaltInput", "Version": 1, "Actions": [...]}, with canonical control names and only the binding
+		// fields that differ from their defaults.
 		nlohmann::json ToJson() const;
+		// The "Actions" array of ToJson: [{"Name", "Type", "Bindings": [...]}, ...].
+		nlohmann::json ActionsToJson() const;
 		// Strict: rejects unknown keys, another Format or Version (both optional), empty, overlong, duplicate or
 		// control-character names, more than MaxActions actions or MaxBindings bindings, and invalid bindings
-		// (BindingFromJson). Every key is optional: {} is an empty map.
+		// (BindingFromJson). {} is an empty map; an action needs a Name, its Type defaults to Button and its Bindings
+		// to none. Errors name the action (by index when its name is the problem).
 		static std::optional<InputActionMap> FromJson(const nlohmann::json& data, std::string& outError);
 
 		// {"Key": "Space"} | {"MouseButton": "Left"} | {"GamepadButton": "A"} | {"GamepadAxis": "LeftX"}, plus
 		// "Scale", "DeadZone" (gamepad axes) and "Gamepad" (gamepad controls) when they differ from the defaults.
 		static nlohmann::json BindingToJson(const InputBinding& binding);
-		// Strict: exactly one control key with a known control name (case-insensitive), Scale in [-1, 1], DeadZone
-		// in [0, MaxDeadZone] and Gamepad an index below Input::MaxGamepads, each only where it applies.
+		static nlohmann::json BindingsToJson(const std::vector<InputBinding>& bindings);
+		// Strict: exactly one control key with a known control name (case-insensitive), then ValidateBinding.
 		static std::optional<InputBinding> BindingFromJson(const nlohmann::json& data, std::string& outError);
 		// An array of at most MaxBindings bindings.
 		static std::optional<std::vector<InputBinding>> BindingsFromJson(const nlohmann::json& data, std::string& outError);
+		// What every binding in a map satisfies: Scale in [-1, 1], DeadZone in [0, MaxDeadZone] and Gamepad an index
+		// below Input::MaxGamepads, each finite and only where it applies (a DeadZone other than the default, or a
+		// Gamepad, on a key or mouse binding is an error). So ToJson's output always loads again.
+		static bool ValidateBinding(const InputBinding& binding, std::string& outError);
 
 		bool operator==(const InputActionMap&) const = default;
 

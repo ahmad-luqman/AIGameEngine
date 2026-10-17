@@ -62,6 +62,8 @@ namespace Basalt {
 		graphics.RenderScale = m_Options.RenderScale;
 		graphics.VSync = m_Options.VSync;
 		graphics.DynamicResolution = m_Options.DynamicResolution;
+		// Before the scripts' OnCreate, which may read the view (Input.GetViewSize).
+		UpdateGameView();
 		m_Scene->OnRuntimeStart(m_Options.Overrides.Apply(graphics));
 		BS_CORE_INFO("Runtime: playing '{}'", m_Options.ScenePath);
 	}
@@ -81,12 +83,32 @@ namespace Basalt {
 		if (!m_Scene)
 			return;
 
+		UpdateGameView();
 		m_Scene->OnUpdate(ts);
 		ApplyCursorMode();
 		m_RenderDeltaTime = ts;
 		m_Frame++;
 		if (m_Scene->IsQuitRequested())
 			Application::Get().Close();
+	}
+
+	void RuntimeLayer::UpdateGameView()
+	{
+		// The widgets and scripts map the mouse (window units) onto the view, so the view is in window units, which
+		// differ from back-buffer pixels on high-DPI displays. Drawing and hit testing then lay out the same canvas even
+		// when fractional scaling rounds the two sizes to slightly different aspects. Headless, the default view stays.
+		const Application& application = Application::Get();
+		const Window* window = application.GetWindow();
+		const GraphicsDevice* device = application.GetGraphicsDevice();
+		glm::vec2 size(0.0f);
+		if (window && window->GetWidth() > 0 && window->GetHeight() > 0)
+			size = { static_cast<float>(window->GetWidth()), static_cast<float>(window->GetHeight()) };
+		else if (device && device->GetBackBufferWidth() > 0 && device->GetBackBufferHeight() > 0)
+			size = { static_cast<float>(device->GetBackBufferWidth()), static_cast<float>(device->GetBackBufferHeight()) };
+		else
+			return;
+		GameUI::SetViewportSize(size);
+		GameUI::SetViewportOrigin({ 0.0f, 0.0f });
 	}
 
 	void RuntimeLayer::ApplyCursorMode()
@@ -117,14 +139,8 @@ namespace Basalt {
 
 		const uint32_t width = device->GetBackBufferWidth();
 		const uint32_t height = device->GetBackBufferHeight();
-		// The widgets map the mouse (window units) onto the canvas, so the UI uses the view in window units, which
-		// differ from back-buffer pixels on high-DPI displays. Drawing and hit testing then lay out the same canvas
-		// even when fractional scaling rounds the two sizes to slightly different aspects.
-		const Window* window = application.GetWindow();
-		const bool hasWindowSize = window && window->GetWidth() > 0 && window->GetHeight() > 0;
-		const glm::vec2 viewportSize = hasWindowSize ? glm::vec2(static_cast<float>(window->GetWidth()), static_cast<float>(window->GetHeight())) : glm::vec2(static_cast<float>(width), static_cast<float>(height));
-		GameUI::SetViewportSize(viewportSize);
-		GameUI::SetViewportOrigin({ 0.0f, 0.0f });
+		UpdateGameView();
+		const glm::vec2 viewportSize = GameUI::GetViewportSize();
 		m_Scene->OnViewportResize(width, height);
 		const auto graphics = m_Options.Overrides.Apply(m_Scene->GetEffectiveGraphicsSettings());
 		m_Renderer->SetRenderScale(graphics.RenderScale);

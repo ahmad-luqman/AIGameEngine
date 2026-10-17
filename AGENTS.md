@@ -55,7 +55,9 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   (`GameUI::ToGamePosition`: the editor maps to the game resolution). Input actions are the project's
   `Input.binput` (`InputActionMap`, `ProjectConfig::InputActions`, `project.set inputActions`); a play session reads
   a copy in `Scene` that Lua may rebind until play stops. `Input::SetCursorMode` only stores the game's request;
-  the runtime and the editor's Game view apply it.
+  the runtime and the editor's Game view apply it. Hosts set the game's view (geometry, resolution, routing) before
+  every scene update and as Play starts (`AutomationSession::BeforeRuntimeStart`), and call
+  `AutomationSession::RecordViewChange` so replays see routing changes.
 - **Gameplay services live in the ScriptEngine.** Timers and coroutines (`ScriptTasks`) and events
   (`ScriptEvents`) belong to the script instance that created them and end with it; `Storage` save data
   (`Project/SaveData`) goes to the per-user data directory (`Platform::GetUserDataDirectory`, overridden by

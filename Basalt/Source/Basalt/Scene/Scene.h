@@ -2,13 +2,13 @@
 
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Base.h"
+#include "Basalt/Core/InputActions.h"
 #include "Basalt/Core/Timestep.h"
 #include "Basalt/Core/UUID.h"
 #include "Basalt/Math/Random.h"
 #include "Basalt/Physics/FixedTimestep.h"
 #include "Basalt/Physics/PhysicsLayers.h"
 #include "Basalt/Renderer/Fsr1Settings.h"
-#include "Basalt/Core/InputActions.h"
 #include "Basalt/Renderer/GraphicsSettings.h"
 #include "Basalt/Renderer/PostProcessSettings.h"
 
@@ -239,12 +239,14 @@ namespace Basalt {
 		// Play preferences while playing, otherwise active project defaults.
 		GraphicsSettings GetEffectiveGraphicsSettings() const;
 		// The play session's input actions: a copy of the project's taken when play starts, which scripts may rebind
-		// (Lua Input.SetBindings) until play stops; Scene.Load keeps it. Empty outside Play.
+		// (Lua Input.SetBindings) until play stops; Scene.Load keeps it. Empty outside Play (Simulate too: scripts
+		// do not run there).
 		const InputActionMap& GetInputActions() const { return m_InputActions; }
 		// Rebinds an action of the session (Play only); nothing changes on failure.
 		bool SetInputBindings(std::string_view action, std::vector<InputBinding> bindings, std::string& outError);
-		// Puts back the bindings play started with: one action's, or every action's for nullopt (Play only).
-		bool ResetInputBindings(std::optional<std::string_view> action, std::string& outError);
+		// Puts back the bindings play started with: one action's, or every action's (Play only).
+		bool ResetInputBindings(std::string_view action, std::string& outError);
+		bool ResetInputBindings(std::string& outError);
 		// Unique across scene instances and increments on Play/reload; resets renderer history even after address reuse.
 		uint64_t GetRenderRevision() const { return m_RenderRevision; }
 		RendererSettings& GetRendererSettings() { return m_RendererSettings; }

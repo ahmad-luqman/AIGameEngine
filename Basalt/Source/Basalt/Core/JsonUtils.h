@@ -2,10 +2,13 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <exception>
+#include <initializer_list>
 #include <limits>
+#include <string>
 #include <string_view>
 
 namespace Basalt {
@@ -38,6 +41,45 @@ namespace Basalt {
 		{
 			return nlohmann::json(nlohmann::json::value_t::discarded);
 		}
+	}
+
+	// Like ParseJson, and says why it failed: the parser's message with the byte position of the error, or the depth.
+	inline nlohmann::json ParseJson(std::string_view text, std::string& outError)
+	{
+		struct TooDeep : std::exception
+		{
+		};
+		try
+		{
+			return nlohmann::json::parse(text, [](int depth, nlohmann::json::parse_event_t, nlohmann::json&) {
+				if (depth >= MaxJsonDepth)
+					throw TooDeep{};
+				return true;
+			});
+		}
+		catch (const TooDeep&)
+		{
+			outError = "the JSON nests deeper than " + std::to_string(MaxJsonDepth) + " levels";
+		}
+		catch (const nlohmann::json::parse_error& e)
+		{
+			outError = e.what();
+		}
+		return nlohmann::json(nlohmann::json::value_t::discarded);
+	}
+
+	// Strict readers: fails, naming the first key of `object` that is not in `allowed`, prefixed by `context`.
+	inline bool RejectUnknownKeys(const nlohmann::json& object, std::initializer_list<std::string_view> allowed, std::string_view context, std::string& outError)
+	{
+		for (const auto& [key, value] : object.items())
+		{
+			if (std::find(allowed.begin(), allowed.end(), key) == allowed.end())
+			{
+				outError = std::string(context) + ": unknown key '" + key + "'";
+				return false;
+			}
+		}
+		return true;
 	}
 
 	// Reads a JSON number into a float. JSON numbers are doubles, and converting one outside float range

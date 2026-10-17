@@ -1188,7 +1188,7 @@ Compares a PNG with a reference image within a tolerance; optionally writes a di
 
 ### `input.actions`
 
-Returns the input actions with their bindings and, while playing, the session's bindings (as scripts rebound them) with each action's value (a button's strength 0..1, an axis -1..1), down, pressed and released state as the game sees them this frame. Outside play, the project's actions.
+Returns {playing, actions}. While playing: the session's actions (with the bindings scripts gave them) and each one's Value (a button's strength 0..1, an axis -1..1), Down, Pressed and Released as the game sees them this frame. Otherwise (needs a project): the project's actions.
 
 <details><summary>Parameter JSON Schema</summary>
 
@@ -1858,7 +1858,7 @@ Changes project settings and saves the project file.
 | `fixedTimestep` | number of seconds in (0, 0.25], the physics step of every scene that does not override it (scene.settings Physics.FixedTimestep); applies from the next play |
 | `fullscreen` | bool |
 | `graphics` | Project graphics defaults; applies to the next Play session. Do not repeat a setting through its top-level alias. |
-| `inputActions` | object {Actions: [{Name, Type: "Button" | "Axis", Bindings: [{Key | MouseButton | GamepadButton | GamepadAxis: name, Scale?, DeadZone?, Gamepad?}]}]}, replaces every input action and saves Input.binput; applies from the next play |
+| `inputActions` | object {Actions: [{Name, Type: "Button" | "Axis", Bindings: [{Key | MouseButton | GamepadButton | GamepadAxis: name, Scale?, DeadZone?, Gamepad?}]}]}, replaces every input action and saves Input.binput (written only when the actions change); applies from the next play |
 | `minRenderScale` | number in [0.25, 2], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning) |
 | `name` | string |
 | `physicsLayers` | object {Names: ["Default", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play |
@@ -1974,7 +1974,7 @@ Changes project settings and saves the project file.
       "description": "Project graphics defaults; applies to the next Play session. Do not repeat a setting through its top-level alias."
     },
     "inputActions": {
-      "description": "object {Actions: [{Name, Type: \"Button\" | \"Axis\", Bindings: [{Key | MouseButton | GamepadButton | GamepadAxis: name, Scale?, DeadZone?, Gamepad?}]}]}, replaces every input action and saves Input.binput; applies from the next play",
+      "description": "object {Actions: [{Name, Type: \"Button\" | \"Axis\", Bindings: [{Key | MouseButton | GamepadButton | GamepadAxis: name, Scale?, DeadZone?, Gamepad?}]}]}, replaces every input action and saves Input.binput (written only when the actions change); applies from the next play",
       "type": "object"
     },
     "minRenderScale": {
@@ -2414,7 +2414,7 @@ Returns the scene renderer's statistics: viewport and render size, render scale 
 
 ### `replay.record_start`
 
-Starts recording input.key/input.mouse/input.gamepad commands with the play frame they arrive on. The mouse position and the injected gamepads (with what they hold) are recorded as they are on that frame, and the host's view (where mouse positions land on the UI canvas) whenever it changes, so replays map them the same way in any host. Physical gamepads are not recorded (replays run without them): they are listed in physicalGamepads.
+Starts recording input.key/input.mouse/input.gamepad commands with the play frame they arrive on. The mouse position and the injected gamepads (with what they hold) are recorded as they are on that frame, and the host's view whenever it changes, checked before every frame and every recorded command: where mouse positions land on the UI canvas, the game resolution scripts read the mouse in, and whether the game has the pointer and the keyboard (routing gates every game input), so replays run the same way in any host. Physical gamepads are not recorded (replays run without them): they are listed in physicalGamepads.
 
 <details><summary>Parameter JSON Schema</summary>
 

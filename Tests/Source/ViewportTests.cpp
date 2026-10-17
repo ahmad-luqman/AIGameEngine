@@ -234,6 +234,42 @@ TEST_CASE("The Game view letterboxes the game resolution into the panel")
 	}
 }
 
+TEST_CASE("The Game view gives the game the cursor it asks for while focused, and Escape hands it back")
+{
+	const auto decide = [](CursorMode requested, bool focused, bool hovered, bool escape, bool clicked, bool released) {
+		return DecideGameCursor({ requested, focused, hovered, escape, clicked, released });
+	};
+	// Normal never captures anything and forgets an earlier release.
+	GameCursorDecision d = decide(CursorMode::Normal, true, true, true, false, true);
+	CHECK(d.Window == CursorMode::Normal);
+	CHECK_FALSE(d.Released);
+	CHECK_FALSE(d.ConsumeEscape);
+	// Locked captures the window cursor only while the Game view has focus.
+	CHECK(decide(CursorMode::Locked, true, false, false, false, false).Window == CursorMode::Locked);
+	CHECK(decide(CursorMode::Locked, false, true, false, false, false).Window == CursorMode::Normal);
+	// Escape releases it (and is the editor's, not the game's) ...
+	d = decide(CursorMode::Locked, true, true, true, false, false);
+	CHECK(d.Window == CursorMode::Normal);
+	CHECK(d.Released);
+	CHECK(d.ConsumeEscape);
+	// ... until the Game view is clicked: a click elsewhere, or Escape again, does not take it back.
+	CHECK(decide(CursorMode::Locked, true, false, false, true, true).Released);
+	d = decide(CursorMode::Locked, true, true, true, false, true);
+	CHECK(d.Released);
+	CHECK_FALSE(d.ConsumeEscape);
+	d = decide(CursorMode::Locked, true, true, false, true, true);
+	CHECK_FALSE(d.Released);
+	CHECK(d.Window == CursorMode::Locked);
+	// Escape without focus is not the editor's to take.
+	CHECK_FALSE(decide(CursorMode::Locked, false, false, true, false, false).ConsumeEscape);
+	// Hidden never captures the window; it only hides the cursor over the view, while active.
+	d = decide(CursorMode::Hidden, true, true, false, false, false);
+	CHECK(d.Window == CursorMode::Normal);
+	CHECK(d.HideOverView);
+	CHECK_FALSE(decide(CursorMode::Hidden, false, true, false, false, false).HideOverView);
+	CHECK_FALSE(decide(CursorMode::Hidden, true, true, false, false, true).HideOverView);
+}
+
 TEST_CASE("The Game view renders at the project's window size unless a session override is set")
 {
 	GameViewSettings settings;

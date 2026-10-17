@@ -25,8 +25,8 @@ Breakout.Properties = {
 	MouseTravel = 24.0,
 	-- The sideways part of a bounce off the paddle's edge, for an upward part of 1 (about 56 degrees off vertical).
 	MaxBounce = 1.5,
-	-- The upward or downward part of the ball's direction never drops below this, so it cannot bounce sideways
-	-- between the walls forever.
+	-- When the upward or downward part of the ball's direction drops below this, it is pushed back up to about this,
+	-- so the ball cannot bounce sideways between the walls forever.
 	MinVertical = 0.35,
 	-- Demo mode: the paddle follows the ball and serves by itself (an attract screen; the gameplay test uses it).
 	Autopilot = false
@@ -45,6 +45,12 @@ local RowColors = {
 -- Where on the paddle the autopilot aims, in turn (fractions of its half width), so its bounces vary.
 local AimOffsets = { 0.55, -0.35, 0.8, -0.7, 0.2 }
 local Sounds = { Bounce = "Assets/Audio/Bounce.wav", Break = "Assets/Audio/Break.wav", Lose = "Assets/Audio/Lose.wav" }
+local Messages = {
+	Serve = "Press Space, A or click to launch",
+	Play = "",
+	GameOver = "GAME OVER",
+	Won = "YOU WIN!"
+}
 
 -- A missing piece of the scene (or one without the component it is driven through) is reported by name.
 local function RequireEntity(name, component)
@@ -78,6 +84,7 @@ function Breakout:Restart()
 	self.LivesLeft = self.Lives
 	self.BricksLeft = 0
 	self.PaddleX = 0
+	self.PaddleVelocity = 0
 	local step = self.BrickWidth + self.BrickGap
 	local left = -(self.Columns - 1) * step / 2
 	for row = 1, self.Rows do
@@ -86,11 +93,14 @@ function Breakout:Restart()
 			local position = Vec3(left + (column - 1) * step, self.TopRow - (row - 1) * (self.BrickHeight + self.BrickGap), 0)
 			local brick = Scene.Instantiate(BrickPrefab, position)
 			brick:SetComponent("Material", { AlbedoColor = color, EmissiveColor = { color[1] * 0.35, color[2] * 0.35, color[3] * 0.35 } })
-			brick:GetScript().Points = (self.Rows - row + 1) * 10
+			local script = brick:GetScript()
+			if not script then error("Breakout: " .. BrickPrefab .. " has no running Brick script") end
+			script.Points = (self.Rows - row + 1) * 10
 			self.BricksLeft = self.BricksLeft + 1
 		end
 	end
-	-- The click or key press that restarted the game must not also serve the ball.
+	-- The key or button press that restarted the game (Space, Enter or A on the focused button) must not also serve
+	-- the ball. A click restarts on release, when nothing is held any more.
 	self.WaitForRelease = Input.IsActionDown("Launch")
 	self:Serve()
 end
@@ -98,7 +108,7 @@ end
 -- The ball waits on the paddle until the player launches it.
 function Breakout:Serve()
 	self.State = "Serve"
-	self.Ball:SetLinearVelocity(Vec3(0, 0, 0))
+	self:StopBall()
 	self:FollowPaddle()
 	self:UpdateHud()
 end
@@ -110,8 +120,7 @@ end
 function Breakout:Launch()
 	self.State = "Play"
 	-- Up and a little to the side of the paddle's last movement, so a straight serve does not repeat forever.
-	local side = self.PaddleVelocity and Math.Sign(self.PaddleVelocity) or 0
-	if side == 0 then side = 1 end
+	local side = self.PaddleVelocity < 0 and -1 or 1
 	self:SetBallDirection(Vec2(0.35 * side, 1))
 	self:UpdateHud()
 end
@@ -119,6 +128,10 @@ end
 function Breakout:SetBallDirection(direction)
 	local d = direction:Normalized()
 	self.Ball:SetLinearVelocity(Vec3(d.x, d.y, 0) * self.BallSpeed)
+end
+
+function Breakout:StopBall()
+	self.Ball:SetLinearVelocity(Vec3(0, 0, 0))
 end
 
 function Breakout:OnUpdate(dt)
@@ -159,12 +172,11 @@ function Breakout:KeepBallMoving()
 	local velocity = self.Ball:GetLinearVelocity()
 	local direction = Vec2(velocity.x, velocity.y)
 	if direction:Length() < 1e-3 then direction = Vec2(0, 1) end
-	direction = direction:Normalized()
-	if math.abs(direction.y) < self.MinVertical then
-		local sign = direction.y < 0 and -1 or 1
-		direction = Vec2(direction.x, sign * self.MinVertical):Normalized()
+	local normalized = direction:Normalized()
+	if math.abs(normalized.y) < self.MinVertical then
+		direction = Vec2(normalized.x, (normalized.y < 0 and -1 or 1) * self.MinVertical)
 	end
-	self.Ball:SetLinearVelocity(Vec3(direction.x, direction.y, 0) * self.BallSpeed)
+	self:SetBallDirection(direction)
 	local position = self.Ball.Translation
 	if position.z ~= 0 then self.Ball.Translation = Vec3(position.x, position.y, 0) end
 end
@@ -190,7 +202,7 @@ function Breakout:OnBrickBroken(brick, points)
 	self:Play("Break", 0.7)
 	if self.BricksLeft <= 0 then
 		self.State = "Won"
-		self.Ball:SetLinearVelocity(Vec3(0, 0, 0))
+		self:StopBall()
 		Log.Info("Breakout: cleared every brick")
 	end
 	self:UpdateHud()
@@ -202,7 +214,7 @@ function Breakout:OnBallLost()
 	self:Play("Lose", 0.8)
 	if self.LivesLeft <= 0 then
 		self.State = "GameOver"
-		self.Ball:SetLinearVelocity(Vec3(0, 0, 0))
+		self:StopBall()
 		self:FollowPaddle()
 		Log.Info("Breakout: game over")
 		self:UpdateHud()
@@ -212,19 +224,15 @@ function Breakout:OnBallLost()
 end
 
 function Breakout:Play(sound, volume)
-	Audio.PlayOneShot(Sounds[sound], self.Ball.WorldPosition, volume)
+	local clip = Sounds[sound]
+	if not clip then error("Breakout: unknown sound '" .. tostring(sound) .. "'", 2) end
+	Audio.PlayOneShot(clip, self.Ball.WorldPosition, volume)
 end
 
 function Breakout:UpdateHud()
 	self.ScoreText:SetComponent("UIText", { Text = string.format("SCORE %d", self.Score) })
 	self.LivesText:SetComponent("UIText", { Text = string.format("LIVES %d", self.LivesLeft) })
-	local messages = {
-		Serve = "Press Space, A or click to launch",
-		Play = "",
-		GameOver = "GAME OVER",
-		Won = "YOU WIN!"
-	}
-	self.Message:SetComponent("UIText", { Text = messages[self.State] })
+	self.Message:SetComponent("UIText", { Text = Messages[self.State] })
 	local menu = self.State == "GameOver" or self.State == "Won"
 	self.RestartButton:SetComponent("UIRect", { Visible = menu })
 	-- Focused, the button also restarts from the keyboard and gamepads (Space, Enter, A).

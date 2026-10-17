@@ -37,6 +37,7 @@
 #include <optional>
 #include <system_error>
 #include <unordered_map>
+#include <utility>
 
 namespace Basalt {
 
@@ -390,19 +391,21 @@ namespace Basalt {
 				const auto it = params.find(name);
 				return it != params.end() && it->is_array() && it->size() == 2 && JsonToFloat((*it)[0], out.x) && JsonToFloat((*it)[1], out.y);
 			};
+			const auto readSize = [&readVec2](const char* name, glm::vec2& out) {
+				if (!readVec2(name, out) || !(out.x > 0.0f && out.y > 0.0f))
+					throw CommandError(fmt::format("'{}' must be [width, height] with positive values", name));
+			};
 			GameUI::HostState view;
 			if (!readVec2("origin", view.ViewportOrigin))
 				throw CommandError("'origin' must be [x, y]");
-			if (!readVec2("size", view.ViewportSize) || !(view.ViewportSize.x > 0.0f && view.ViewportSize.y > 0.0f))
-				throw CommandError("'size' must be [width, height] with positive values");
+			readSize("size", view.ViewportSize);
 			view.PointerEnabled = OptionalBool(params, "pointerEnabled", true);
 			view.NavigationEnabled = OptionalBool(params, "navigationEnabled", true);
 			// Recordings made before the Game view mapped the mouse have none: the viewport size, as they ran.
 			if (params.contains("resolution") && !params["resolution"].is_null())
 			{
 				glm::vec2 resolution;
-				if (!readVec2("resolution", resolution) || !(resolution.x > 0.0f && resolution.y > 0.0f))
-					throw CommandError("'resolution' must be [width, height] with positive values");
+				readSize("resolution", resolution);
 				view.Resolution = resolution;
 			}
 			GameUI::SetHostState(view);
@@ -600,7 +603,7 @@ namespace Basalt {
 												   { "TargetFrameRate", Schema::Number("target FPS", MinTargetFrameRate, MaxTargetFrameRate) },
 												   { "MinRenderScale", Schema::Number("minimum scale", MinRenderScale, MaxRenderScale) } });
 			graphicsSchema["description"] = "Project graphics defaults; applies to the next Play session. Do not repeat a setting through its top-level alias.";
-			Add(registry, "project.set", "Changes project settings and saves the project file.", Schema::Object({ { "graphics", Schema::Nullable(graphicsSchema) }, { "name", Schema::Nullable(Schema::String("string")) }, { "startScene", Schema::Nullable(Schema::String("string, project-relative scene")) }, { "windowWidth", Schema::Nullable(Schema::Integer("integer", ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize)) }, { "windowHeight", Schema::Nullable(Schema::Integer("integer", ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize)) }, { "fullscreen", Schema::Nullable(Schema::Boolean("bool")) }, { "renderScale", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution)", MinRenderScale, MaxRenderScale), MinRenderScale, MaxRenderScale)) }, { "dynamicResolution", Schema::Nullable(Schema::Boolean("bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries)")) }, { "targetFrameRate", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}]; dynamic resolution keeps the scene's GPU time within this frame rate's frame time", MinTargetFrameRate, MaxTargetFrameRate), MinTargetFrameRate, MaxTargetFrameRate)) }, { "minRenderScale", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning)", MinRenderScale, MaxRenderScale), MinRenderScale, MaxRenderScale)) }, { "physicsLayers", json{ { "type", "object" }, { "description", "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play" } } }, { "randomSeed", Schema::Nullable(Schema::Integer("integer in [0, 4294967295], seeds Lua's random numbers, particle emitters and runtime entity UUIDs; applies from the next play", 0, UINT32_MAX)) }, { "fixedTimestep", Schema::Nullable(json{ { "type", "number" }, { "description", fmt::format("number of seconds in (0, {}], the physics step of every scene that does not override it (scene.settings Physics.FixedTimestep); applies from the next play", MaxFixedTimestep) }, { "exclusiveMinimum", 0.0 }, { "maximum", MaxFixedTimestep } }) }, { "inputActions", json{ { "type", "object" }, { "description", "object {Actions: [{Name, Type: \"Button\" | \"Axis\", Bindings: [{Key | MouseButton | GamepadButton | GamepadAxis: name, Scale?, DeadZone?, Gamepad?}]}]}, replaces every input action and saves Input.binput; applies from the next play" } } } }), [](AutomationSession& session, const json& params) {
+			Add(registry, "project.set", "Changes project settings and saves the project file.", Schema::Object({ { "graphics", Schema::Nullable(graphicsSchema) }, { "name", Schema::Nullable(Schema::String("string")) }, { "startScene", Schema::Nullable(Schema::String("string, project-relative scene")) }, { "windowWidth", Schema::Nullable(Schema::Integer("integer", ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize)) }, { "windowHeight", Schema::Nullable(Schema::Integer("integer", ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize)) }, { "fullscreen", Schema::Nullable(Schema::Boolean("bool")) }, { "renderScale", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution)", MinRenderScale, MaxRenderScale), MinRenderScale, MaxRenderScale)) }, { "dynamicResolution", Schema::Nullable(Schema::Boolean("bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries)")) }, { "targetFrameRate", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}]; dynamic resolution keeps the scene's GPU time within this frame rate's frame time", MinTargetFrameRate, MaxTargetFrameRate), MinTargetFrameRate, MaxTargetFrameRate)) }, { "minRenderScale", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning)", MinRenderScale, MaxRenderScale), MinRenderScale, MaxRenderScale)) }, { "physicsLayers", json{ { "type", "object" }, { "description", "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play" } } }, { "randomSeed", Schema::Nullable(Schema::Integer("integer in [0, 4294967295], seeds Lua's random numbers, particle emitters and runtime entity UUIDs; applies from the next play", 0, UINT32_MAX)) }, { "fixedTimestep", Schema::Nullable(json{ { "type", "number" }, { "description", fmt::format("number of seconds in (0, {}], the physics step of every scene that does not override it (scene.settings Physics.FixedTimestep); applies from the next play", MaxFixedTimestep) }, { "exclusiveMinimum", 0.0 }, { "maximum", MaxFixedTimestep } }) }, { "inputActions", json{ { "type", "object" }, { "description", "object {Actions: [{Name, Type: \"Button\" | \"Axis\", Bindings: [{Key | MouseButton | GamepadButton | GamepadAxis: name, Scale?, DeadZone?, Gamepad?}]}]}, replaces every input action and saves Input.binput (written only when the actions change); applies from the next play" } } } }), [](AutomationSession& session, const json& params) {
 				Ref<Project> project = RequireProject();
 				// Every value is read and validated before any is assigned, so a bad parameter leaves the
 				// project untouched.
@@ -645,10 +648,14 @@ namespace Basalt {
 						throw CommandError("graphics: " + error);
 				}
 
-				project->GetConfig() = std::move(config);
+				// A save that fails leaves the settings as they were, so what is shown is what is saved.
+				ProjectConfig previous = std::exchange(project->GetConfig(), std::move(config));
 				std::string error;
 				if (!project->Save(error))
+				{
+					project->GetConfig() = std::move(previous);
 					throw CommandError(error);
+				}
 				json result = json::object();
 				// Valid but useless, and a headless host has no renderer to warn about it later.
 				const ProjectConfig& saved = project->GetConfig();
@@ -1284,7 +1291,7 @@ namespace Basalt {
 				return result;
 			});
 
-			Add(registry, "replay.record_start", "Starts recording input.key/input.mouse/input.gamepad commands with the play frame they arrive on. The mouse position and the injected gamepads (with what they hold) are recorded as they are on that frame, and the host's view (where mouse positions land on the UI canvas) whenever it changes, so replays map them the same way in any host. Physical gamepads are not recorded (replays run without them): they are listed in physicalGamepads.", Schema::Object(), [](AutomationSession& session, const json&) {
+			Add(registry, "replay.record_start", "Starts recording input.key/input.mouse/input.gamepad commands with the play frame they arrive on. The mouse position and the injected gamepads (with what they hold) are recorded as they are on that frame, and the host's view whenever it changes, checked before every frame and every recorded command: where mouse positions land on the UI canvas, the game resolution scripts read the mouse in, and whether the game has the pointer and the keyboard (routing gates every game input), so replays run the same way in any host. Physical gamepads are not recorded (replays run without them): they are listed in physicalGamepads.", Schema::Object(), [](AutomationSession& session, const json&) {
 				session.StartRecording();
 				json physical = json::array();
 				for (uint32_t index = 0; index < Input::MaxGamepads; index++)
@@ -1351,21 +1358,37 @@ namespace Basalt {
 				Input::ForgetInjectedGamepads();
 				struct RestoreHost
 				{
+					AutomationSession& Session;
 					GameUI::HostState Host = GameUI::GetHostState();
 					bool DeviceGamepads = Input::IsDeviceGamepadsEnabled();
+					// The host would give the game its own view as play starts.
+					std::function<void()> BeforeRuntimeStart = std::exchange(Session.BeforeRuntimeStart, nullptr);
 					~RestoreHost()
 					{
 						GameUI::SetHostState(Host);
 						Input::SetDeviceGamepadsEnabled(DeviceGamepads);
+						Session.BeforeRuntimeStart = std::move(BeforeRuntimeStart);
 					}
-				} restore;
+				} restore{ session };
 				GameUI::SetHostState({});
 				Input::SetDeviceGamepadsEnabled(false);
+				const json& events = replay["Events"];
+				size_t next = 0;
+				// The view a recording starts with applies before play starts, so the scripts' OnCreate reads it too.
+				for (; next < events.size() && events[next].value("frame", uint64_t{ 0 }) == 0 && events[next].value("command", "") == "view"; next++)
+				{
+					try
+					{
+						ApplyViewEvent(events[next].value("params", json::object()));
+					}
+					catch (const CommandError& e)
+					{
+						throw CommandError(fmt::format("'{}' event {} (frame 0, view): {}", path, next, e.what()));
+					}
+				}
 				std::string error;
 				if (!session.StartPlay(error))
 					throw CommandError(error);
-				const json& events = replay["Events"];
-				size_t next = 0;
 				for (uint32_t frame = 0; frame <= frames; frame++)
 				{
 					// Events recorded at frame N were applied before the update that produced frame N + 1.
@@ -1431,13 +1454,13 @@ namespace Basalt {
 					return json::object();
 				});
 
-			Add(registry, "input.actions", "Returns the input actions with their bindings and, while playing, the session's bindings (as scripts rebound them) with each action's value (a button's strength 0..1, an axis -1..1), down, pressed and released state as the game sees them this frame. Outside play, the project's actions.", Schema::Object(), [](AutomationSession& session, const json&) {
+			Add(registry, "input.actions", "Returns {playing, actions}. While playing: the session's actions (with the bindings scripts gave them) and each one's Value (a button's strength 0..1, an axis -1..1), Down, Pressed and Released as the game sees them this frame. Otherwise (needs a project): the project's actions.", Schema::Object(), [](AutomationSession& session, const json&) {
 				const Scene* scene = session.GetScene().get();
 				const bool playing = session.IsPlaying() && scene && scene->GetState() == SceneState::Play;
 				if (!playing)
 					RequireProject();
-				const InputActionMap actions = playing ? scene->GetInputActions() : Project::GetActiveInputActions();
-				json result = actions.ToJson()["Actions"];
+				const InputActionMap& actions = playing ? scene->GetInputActions() : Project::GetActiveConfig()->InputActions;
+				json result = actions.ActionsToJson();
 				if (playing)
 				{
 					for (size_t i = 0; i < actions.GetActions().size(); i++)

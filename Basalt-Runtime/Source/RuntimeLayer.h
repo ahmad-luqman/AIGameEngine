@@ -56,6 +56,8 @@ namespace Basalt {
 		void CheckRendererResults(const std::function<void(int)>& fail);
 		// Gives the window the cursor the game asks for (Input::GetCursorMode) when it changed.
 		void ApplyCursorMode();
+		// Sets the game view (GameUI viewport) to the window, before scripts run and every frame.
+		void UpdateGameView();
 
 		RuntimeOptions m_Options;
 		Ref<Scene> m_Scene;

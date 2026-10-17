@@ -594,7 +594,8 @@ function Input.GetMouseDelta() end
 ---@return Vec2
 function Input.GetMouseScroll() end
 
----The size of the game view in the units of the mouse position (the window, or the editor's game resolution).
+---The size of the game view in the units of the mouse position: the window, the editor's game resolution, or
+---1920x1080 headless.
 ---@return Vec2
 function Input.GetViewSize() end
 

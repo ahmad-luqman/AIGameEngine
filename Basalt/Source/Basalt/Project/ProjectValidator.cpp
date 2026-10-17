@@ -135,8 +135,10 @@ namespace Basalt {
 					m_Report.Add(ValidationSeverity::Warning, Project::FileName, "the file does not declare \"Format\": \"BasaltProject\"");
 			}
 
-			// The runtime refuses a project whose input actions file is broken. An action without bindings is legal (a
-			// game may bind it at run time) but usually an oversight.
+			// A broken input actions file stops the project from loading anywhere (Project::Load), so this reports one
+			// broken since the project was opened. Actions without bindings, and bindings that can never press a
+			// Button action (Scale 0 or below) or move an Axis (Scale 0), are legal (a game may rebind them at run time)
+			// but usually oversights.
 			void CheckInputFile()
 			{
 				std::string error;
@@ -150,6 +152,15 @@ namespace Basalt {
 				{
 					if (action.Bindings.empty())
 						m_Report.Add(ValidationSeverity::Warning, Project::InputFileName, "input action '" + action.Name + "' has no bindings");
+					for (size_t i = 0; i < action.Bindings.size(); i++)
+					{
+						const InputBinding& binding = action.Bindings[i];
+						const bool isButton = action.Type == InputActionType::Button;
+						// A stick read with a negative Scale still presses a button when pushed the other way.
+						const bool silent = binding.Scale == 0.0f || (isButton && binding.Scale < 0.0f && !std::holds_alternative<GamepadAxis>(binding.Control));
+						if (silent)
+							m_Report.Add(ValidationSeverity::Warning, Project::InputFileName, fmt::format("input action '{}': binding {} can never {} (Scale {})", action.Name, i + 1, isButton ? "press it" : "move it", binding.Scale));
+					}
 				}
 			}
 

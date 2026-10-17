@@ -20,10 +20,9 @@ namespace Basalt {
 
 	// Edits the active project's settings: name and start scene, game resolution, random seed, physics step,
 	// graphics defaults, physics layers and their collision matrix, input actions (Input.binput), and runs
-	// project.validate. Every change goes
-	// through project.set, so the window can do nothing the automation API cannot. Project settings are not scene
-	// state: they are saved at once and are not part of undo history. The one scene edit here, a scene's own
-	// physics step, goes through scene.settings and is undoable.
+	// project.validate. Every change goes through project.set, so the window can do nothing the automation API
+	// cannot. Project settings are not scene state: they are saved at once and are not part of undo history. The one
+	// scene edit here, a scene's own physics step, goes through scene.settings and is undoable.
 	class ProjectSettingsPanel
 	{
 	public:
@@ -47,8 +46,8 @@ namespace Basalt {
 		bool DrawInputBinding(nlohmann::json& binding);
 		void DrawValidation();
 		// Runs project.set, keeping the warnings it returns (undefined layers, an empty dynamic range, a scene that
-		// keeps its own step).
-		void Set(const nlohmann::json& params);
+		// keeps its own step). False when it failed (the error is in the status bar).
+		bool Set(const nlohmann::json& params);
 
 		// Draws a numeric field and reports its value once, when an edit of it ends. The field is drawn from the
 		// saved project every frame, which would overwrite what is being typed or dragged, so the value being edited
