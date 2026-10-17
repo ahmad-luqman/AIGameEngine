@@ -660,6 +660,48 @@ TEST_SUITE("UIWidgets")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("Keys and gamepads held when the game gets focus back neither navigate nor activate")
+	{
+		WidgetInputScope input;
+		TempProject project("UIHeldIntoFocus");
+		Scene scene;
+		Entity menu = AddRecorder(scene, project, "Menu");
+		Entity top = AddWidget<UIButtonComponent>(scene, "Top", { 100.0f, 100.0f }, { 200.0f, 80.0f }, { .Target = menu.GetUUID() });
+		AddWidget<UIButtonComponent>(scene, "Bottom", { 100.0f, 300.0f }, { 200.0f, 80.0f }, { .Target = menu.GetUUID() });
+		scene.OnRuntimeStart();
+		scene.GetUIInteraction()->SetFocus(IDOf(top));
+		// Held in another editor panel, then the Game view gets focus with them still down.
+		Input::SetGameFocus(false);
+		Input::SetKeyState(KeyCode::Down, true);
+		Input::SetKeyState(KeyCode::Enter, true);
+		Input::SetGamepadConnected(0, true);
+		REQUIRE(Input::SetGamepadButtonState(0, GamepadButton::DPadDown, true));
+		REQUIRE(Input::SetGamepadButtonState(0, GamepadButton::A, true));
+		Frame(scene);
+		Input::SetGameFocus(true);
+		// Past the repeat delay: nothing moves and nothing is clicked.
+		Frame(scene, 40, 1.0f / 64.0f);
+		CHECK(FocusOf(scene) == IDOf(top));
+		CHECK(LogOf(scene, menu).empty());
+		// Let go and pressed again: the game's.
+		Input::SetKeyState(KeyCode::Down, false);
+		Frame(scene);
+		Input::SetKeyState(KeyCode::Down, true);
+		Frame(scene);
+		CHECK(FocusOf(scene) != IDOf(top));
+		Input::SetKeyState(KeyCode::Down, false);
+		Input::SetKeyState(KeyCode::Enter, false);
+		Frame(scene);
+		// Enter pressed elsewhere on the very frame the game gets focus (the press still reads as new to the host):
+		// not the game's.
+		Input::SetGameFocus(false);
+		Input::SetKeyState(KeyCode::Enter, true);
+		Input::SetGameFocus(true);
+		Frame(scene);
+		CHECK(LogOf(scene, menu).empty());
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Enter, Space and gamepad A activate the focused widget")
 	{
 		WidgetInputScope input;

@@ -557,23 +557,25 @@ namespace Basalt {
 		return true;
 	}
 
+	bool Scene::RequirePlayForBindings(std::string& outError) const
+	{
+		if (m_State == SceneState::Play)
+			return true;
+		outError = "input bindings require Play mode";
+		return false;
+	}
+
 	bool Scene::SetInputBindings(std::string_view action, std::vector<InputBinding> bindings, std::string& outError)
 	{
-		if (m_State != SceneState::Play)
-		{
-			outError = "input bindings require Play mode";
+		if (!RequirePlayForBindings(outError))
 			return false;
-		}
 		return m_InputActions.SetBindings(action, std::move(bindings), outError);
 	}
 
 	bool Scene::ResetInputBindings(std::string_view action, std::string& outError)
 	{
-		if (m_State != SceneState::Play)
-		{
-			outError = "input bindings require Play mode";
+		if (!RequirePlayForBindings(outError))
 			return false;
-		}
 		const InputAction* start = m_StartInputActions.Find(action);
 		if (!start)
 		{
@@ -583,13 +585,10 @@ namespace Basalt {
 		return m_InputActions.SetBindings(action, start->Bindings, outError);
 	}
 
-	bool Scene::ResetInputBindings(std::string& outError)
+	bool Scene::ResetAllInputBindings(std::string& outError)
 	{
-		if (m_State != SceneState::Play)
-		{
-			outError = "input bindings require Play mode";
+		if (!RequirePlayForBindings(outError))
 			return false;
-		}
 		m_InputActions = m_StartInputActions;
 		return true;
 	}

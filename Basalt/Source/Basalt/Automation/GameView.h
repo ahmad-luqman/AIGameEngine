@@ -37,19 +37,49 @@ namespace Basalt {
 		bool Released = false;
 	};
 
+	// At most one of LockWindow and HideOverView is set.
 	struct GameCursorDecision
 	{
-		// What the window does: Locked captures the mouse, Normal leaves it to the editor (Hidden only hides it over
-		// the game image, through ImGui, so the rest of the editor keeps its cursor).
-		CursorMode Window = CursorMode::Normal;
+		// The window captures the mouse for the game (Locked); otherwise the editor keeps it.
+		bool LockWindow = false;
+		// The cursor is hidden over the game image only (Hidden, through ImGui), so the rest of the editor keeps it.
 		bool HideOverView = false;
-		// Escape released the cursor (until the Game view is clicked again, or the game stops asking).
+		// Escape released a locked cursor (until the Game view is clicked again, or the game stops asking).
 		bool Released = false;
-		// This Escape released the cursor: it is the editor's, not the game's (Input::WithholdFromGame).
+		// This Escape released the cursor, or this click took it back: the editor's, not the game's
+		// (Input::WithholdFromGame).
 		bool ConsumeEscape = false;
+		bool ConsumeClick = false;
 	};
 
+	// Escape releases only a locked cursor: a hidden one comes back by moving off the view, so a game's Escape (a
+	// pause menu, say) stays the game's.
 	GameCursorDecision DecideGameCursor(const GameCursorInput& input);
+
+	// What the editor's Game view gives the game (EditorLayer::ApplyGameView), decided before the scene updates.
+	struct GameViewRoutingInput
+	{
+		// The Game image has a size (a tab that has been drawn).
+		bool HasImage = false;
+		bool ViewFocused = false;
+		// On the last drawn frame (ImGui), and now (the mouse position against the image's rectangle).
+		bool ViewHovered = false;
+		bool MouseOverImage = false;
+		bool CursorLocked = false;
+	};
+
+	struct GameViewRouting
+	{
+		// The keyboard and gamepads (Input::SetGameFocus), and the mouse (Input::SetGamePointer).
+		bool Focus = false;
+		bool Pointer = false;
+	};
+
+	// The keyboard and gamepads while the view has focus; the mouse while it also has the mouse over its image (on the
+	// last drawn frame and now, so a click that leaves the image is the editor's), or holds the cursor locked.
+	GameViewRouting RouteGameView(const GameViewRoutingInput& input);
+	// Whether `point` is inside the rectangle from `min` (included) to `min + size` (excluded).
+	bool IsInsideRect(const glm::vec2& point, const glm::vec2& min, const glm::vec2& size);
 
 	// Game view options for the editor and editor.game_view: the resolution the game renders at is the
 	// project's window size (what the exported game opens with) unless a session-only override is set.

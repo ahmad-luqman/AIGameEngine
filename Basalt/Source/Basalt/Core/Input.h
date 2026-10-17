@@ -121,10 +121,11 @@ namespace Basalt {
 		static bool HasGameFocus();
 		static void SetGamePointer(bool enabled);
 		static bool HasGamePointer();
-		// Withholds a held key from the game until it is let go, as if it had been held when focus came back: the host
-		// used it (the editor's Escape that releases the cursor). Called before the scene update, the game never sees
-		// it pressed.
+		// Withholds a held key or mouse button from the game until it is let go, as if it had been held when the
+		// routing came back: the host used it (the editor's Escape that releases the cursor, the click that takes it
+		// back). Called before the scene update, the game never sees it pressed. Nothing happens for one not held.
 		static void WithholdFromGame(KeyCode key);
+		static void WithholdFromGame(MouseCode button);
 
 		// The cursor the game asks for (Lua Input.SetCursorMode). Only stored here: the runtime applies it to its
 		// window, the editor while its Game view hosts the game with focus, headless runs never. Play sessions start

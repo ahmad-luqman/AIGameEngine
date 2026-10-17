@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iterator>
+#include <type_traits>
 
 namespace Basalt {
 
@@ -16,7 +17,13 @@ namespace Basalt {
 
 		const char* const s_TypeNames[] = { "Button", "Axis" };
 		static_assert(std::size(s_TypeNames) == InputActionTypeCount);
-		static_assert(InputControlKeys.size() == std::variant_size_v<decltype(InputBinding::Control)>);
+		// InputControlKeys names InputBinding::Control's alternatives by index.
+		using Control = decltype(InputBinding::Control);
+		static_assert(InputControlKeys.size() == std::variant_size_v<Control>);
+		static_assert(std::is_same_v<std::variant_alternative_t<0, Control>, KeyCode> && InputControlKeys[0] == "Key");
+		static_assert(std::is_same_v<std::variant_alternative_t<1, Control>, MouseCode> && InputControlKeys[1] == "MouseButton");
+		static_assert(std::is_same_v<std::variant_alternative_t<2, Control>, GamepadButton> && InputControlKeys[2] == "GamepadButton");
+		static_assert(std::is_same_v<std::variant_alternative_t<3, Control>, GamepadAxis> && InputControlKeys[3] == "GamepadAxis");
 
 		template<class... Ts>
 		struct Overloaded : Ts...
@@ -33,8 +40,9 @@ namespace Basalt {
 		}
 
 		// A binding's contribution: its control's value (1 or 0 for keys and buttons, a gamepad axis past its dead
-		// zone) times Scale, clamped to 0..1 for a button. Across gamepads the strongest contribution wins, so a
-		// scaled stick pushed the right way on one gamepad is not outweighed by another pushed the other way.
+		// zone) times Scale, clamped to 0..1 for a button. Across gamepads the strongest contribution wins: for a button,
+		// a stick pushed its way on one gamepad is not outweighed by another pushed the other way; for an axis, the stick
+		// pushed furthest either way.
 		float ReadBinding(const InputBinding& binding, InputFrame frame, InputActionType type)
 		{
 			const auto contribution = [&binding, type](float control) {
@@ -90,9 +98,9 @@ namespace Basalt {
 		}
 
 		// The control a binding's control key (an index into InputControlKeys) names, or nullopt for an unknown name.
-		std::optional<decltype(InputBinding::Control)> ParseControl(size_t keyIndex, std::string_view name)
+		std::optional<Control> ParseControl(size_t keyIndex, std::string_view name)
 		{
-			const auto wrap = [](const auto& parsed) -> std::optional<decltype(InputBinding::Control)> {
+			const auto wrap = [](const auto& parsed) -> std::optional<Control> {
 				if (parsed)
 					return *parsed;
 				return std::nullopt;
@@ -183,6 +191,20 @@ namespace Basalt {
 
 	bool InputActionMap::ValidateBinding(const InputBinding& binding, std::string& outError)
 	{
+		// Only named controls: an unnamed value (C++ can make one) would save as "Unknown", which does not load.
+		const bool named = std::visit(
+			Overloaded{
+				[](KeyCode key) { return KeyCodeToString(key) != "Unknown"; },
+				[](MouseCode button) { return static_cast<uint32_t>(button) < MouseButtonCount; },
+				[](GamepadButton button) { return static_cast<uint32_t>(button) < GamepadButtonCount; },
+				[](GamepadAxis axis) { return static_cast<uint32_t>(axis) < GamepadAxisCount; },
+			},
+			binding.Control);
+		if (!named)
+		{
+			outError = fmt::format("binding {} has no name", InputControlKeys[binding.Control.index()]);
+			return false;
+		}
 		if (!std::isfinite(binding.Scale) || binding.Scale < -1.0f || binding.Scale > 1.0f)
 		{
 			outError = "binding Scale must be a number in [-1, 1]";
@@ -281,10 +303,11 @@ namespace Basalt {
 			outError = fmt::format("binding {} must be a control name", controlKey);
 			return std::nullopt;
 		}
-		const auto parsed = ParseControl(*controlIndex, control.get<std::string>());
+		const std::string name = control.get<std::string>();
+		const auto parsed = ParseControl(*controlIndex, name);
 		if (!parsed)
 		{
-			outError = fmt::format("binding: unknown {} '{}'", controlKey, control.get<std::string>());
+			outError = fmt::format("binding: unknown {} '{}'", controlKey, name);
 			return std::nullopt;
 		}
 		InputBinding binding;
@@ -403,7 +426,7 @@ namespace Basalt {
 			action.Name = name->get<std::string>();
 			if (!IsValidName(action.Name, outError))
 			{
-				outError = position + ": " + outError;
+				outError = fmt::format("{}: {}", position, outError);
 				return std::nullopt;
 			}
 			if (map.Find(action.Name))
@@ -426,7 +449,7 @@ namespace Basalt {
 				auto parsed = BindingsFromJson(*bindings, outError);
 				if (!parsed)
 				{
-					outError = "input action '" + action.Name + "': " + outError;
+					outError = fmt::format("input action '{}': {}", action.Name, outError);
 					return std::nullopt;
 				}
 				action.Bindings = std::move(*parsed);

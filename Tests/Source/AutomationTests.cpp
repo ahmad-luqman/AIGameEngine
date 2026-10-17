@@ -528,8 +528,8 @@ TEST_SUITE("Automation")
 		Run(registry, session, "input.key", { { "key", "Right" }, { "down", false } });
 		const json live = Run(registry, session, "play.step", { { "frames", 5 }, { "hash", true } });
 		const json saved = Run(registry, session, "replay.record_stop", { { "path", "Replays/Test.breplay" } });
-		// The four keys and the view they were made in.
-		CHECK(saved["events"] == 5);
+		// The four keys, the view they were made in and where play started (the recording began before it).
+		CHECK(saved["events"] == 6);
 		CHECK(saved["frames"] == 16);
 
 		const json first = Run(registry, session, "replay.run", { { "path", "Replays/Test.breplay" }, { "assertHash", true } });
@@ -782,8 +782,8 @@ TEST_SUITE("Automation")
 		CHECK(item["widget"]["target"] == 0);
 
 		const json saved = Run(registry, session, "replay.record_stop", { { "path", "Replays/Pad.breplay" } });
-		// Six gamepad events and the view.
-		CHECK(saved["events"] == 7);
+		// Six gamepad events, the view and where play started.
+		CHECK(saved["events"] == 8);
 		// The replay starts without the injected gamepad (still connected here) and connects it on its frame.
 		CHECK(Input::IsGamepadConnected(1));
 		const json replayed = Run(registry, session, "replay.run", { { "path", "Replays/Pad.breplay" }, { "assertHash", true }, { "assertNoErrors", true } });
@@ -992,6 +992,75 @@ TEST_SUITE("Automation")
 		Run(registry, session, "play.stop");
 	}
 
+	TEST_CASE("A recording begun before play replays what came before play start before OnCreate")
+	{
+		BasaltTest::TempProject temp("AutomationReplayPlayStart");
+		BasaltTest::ScopedGameInput restore;
+		CommandRegistry registry;
+		AutomationSession session;
+		Run(registry, session, "asset.write", { { "path", "Assets/Scripts/Start.lua" }, { "content", R"(
+			local S = {}
+			function S:OnCreate() self.Entity.Translation = Vec3(Input.GetViewSize().x, Input.IsKeyDown('Space') and 1 or 0, 0) end
+			function S:OnUpdate() if Input.IsKeyReleased('Space') then self.Entity.Translation = self.Entity.Translation + Vec3(0, 0, 1) end end
+			return S
+		)" } });
+		Run(registry, session, "entity.create", { { "name", "Probe" }, { "components", { { "Script", { { "Script", "Assets/Scripts/Start.lua" } } } } } });
+		// The editor shape: recording starts in Edit mode with the scene view's layout; play gives the game its own view.
+		GameUI::SetHostState({ { 5.0f, 5.0f }, { 800.0f, 450.0f }, true, true });
+		session.BeforeRuntimeStart = []() { GameUI::SetHostState({ { 300.0f, 100.0f }, { 640.0f, 360.0f }, true, true, glm::vec2(1280.0f, 720.0f) }); };
+		Run(registry, session, "replay.record_start");
+		Run(registry, session, "input.key", { { "key", "Space" } });
+		Run(registry, session, "play.start");
+		const auto probe = [&]() { return Run(registry, session, "lua.exec", { { "code", "local t = Scene.FindEntityByName('Probe').Translation; return t.x .. ',' .. t.y .. ',' .. t.z" } })["result"]; };
+		CHECK(probe() == "1280.0,1.0,0.0");
+		Run(registry, session, "play.step", { { "frames", 1 } });
+		Run(registry, session, "input.key", { { "key", "Space" }, { "down", false } });
+		const json live = Run(registry, session, "play.step", { { "frames", 1 }, { "hash", true } });
+		CHECK(probe() == "1280.0,1.0,1.0");
+		const json stopped = Run(registry, session, "replay.record_stop", { { "path", "Replays/Start.breplay" } });
+		const json recording = ParseJson(*FileSystem::ReadTextFile(temp.GetDirectory() / "Replays/Start.breplay"));
+		const auto marker = std::ranges::find_if(recording["Events"], [](const json& event) { return event["command"] == "playStart"; });
+		REQUIRE(marker != recording["Events"].end());
+		CHECK((*(marker - 1))["command"] == "view");
+		CHECK((*(marker - 1))["params"]["resolution"] == json({ 1280.0, 720.0 }));
+		Run(registry, session, "play.stop");
+
+		GameUI::SetHostState({});
+		const json replayed = Run(registry, session, "replay.run", { { "path", "Replays/Start.breplay" }, { "assertHash", true }, { "assertNoErrors", true } });
+		CHECK(replayed["stateHash"] == live["stateHash"]);
+		CHECK(probe() == "1280.0,1.0,1.0");
+		Run(registry, session, "play.stop");
+	}
+
+	TEST_CASE("A replay with a malformed event is refused before it changes anything")
+	{
+		BasaltTest::TempProject temp("AutomationReplayMalformed");
+		BasaltTest::ScopedGameInput restore;
+		CommandRegistry registry;
+		AutomationSession session;
+		bool hookCalled = false;
+		session.BeforeRuntimeStart = [&hookCalled]() { hookCalled = true; };
+		const GameUI::HostState host{ { 3.0f, 4.0f }, { 500.0f, 300.0f }, false, true, glm::vec2(1000.0f, 600.0f) };
+		GameUI::SetHostState(host);
+		const auto replayWith = [&](const json& events) {
+			const json replay = { { "Format", "BasaltReplay" }, { "Version", 1 }, { "Frames", 1 }, { "RandomSeed", Project::GetActiveRandomSeed() }, { "Events", events } };
+			Run(registry, session, "asset.write", { { "path", "Replays/Bad.breplay" }, { "content", replay.dump() } });
+			return RunError(registry, session, "replay.run", { { "path", "Replays/Bad.breplay" } });
+		};
+		CHECK(replayWith(json::array({ "input.key" })).find("event 0 is not {frame: integer, command: string, params: object}") != std::string::npos);
+		CHECK(replayWith(json::array({ { { "frame", "one" }, { "command", "view" } } })).find("event 0 is not") != std::string::npos);
+		CHECK(replayWith(json::array({ { { "frame", 0 }, { "command", 7 } } })).find("event 0 is not") != std::string::npos);
+		CHECK(replayWith(json::array({ { { "frame", 0 }, { "command", "view" }, { "params", json::array() } } })).find("event 0 is not") != std::string::npos);
+		// A bad view applied before play starts: refused, and the host keeps its view and hook.
+		CHECK(replayWith(json::array({ { { "frame", 0 }, { "command", "view" }, { "params", { { "origin", { 0, 0 } }, { "size", { -1, 1 } } } } } })).find("event 0 (frame 0, view): 'size' must be") != std::string::npos);
+		CHECK(GameUI::GetHostState() == host);
+		CHECK(Input::IsDeviceGamepadsEnabled());
+		REQUIRE(session.BeforeRuntimeStart);
+		session.BeforeRuntimeStart();
+		CHECK(hookCalled);
+		CHECK_FALSE(session.IsPlaying());
+	}
+
 	TEST_CASE("project.set keeps the settings when saving them fails, and input.actions needs a project or Play")
 	{
 		BasaltTest::ScopedGameInput restore;
@@ -1007,12 +1076,31 @@ TEST_SUITE("Automation")
 		CHECK(RunError(registry, session, "project.set", { { "inputActions", nullptr } }).find("inputActions") != std::string::npos);
 		// A directory where Input.binput should go: the file cannot be written, and nothing changes.
 		std::filesystem::create_directories(temp.GetDirectory() / Project::InputFileName);
-		CHECK(RunError(registry, session, "project.set", { { "name", "Renamed" }, { "inputActions", { { "Actions", { { { "Name", "Jump" } } } } } } }).find("cannot write") != std::string::npos);
+		CHECK(RunError(registry, session, "project.set", { { "name", "Renamed" }, { "inputActions", { { "Actions", { { { "Name", "Jump" } } } } } } }).find("cannot replace") != std::string::npos);
 		CHECK(Project::GetActive()->GetConfig().Name == "AutomationProjectSetRollback");
 		CHECK(Project::GetActive()->GetConfig().InputActions.IsEmpty());
 		CHECK(Run(registry, session, "project.info")["name"] == "AutomationProjectSetRollback");
 		std::filesystem::remove_all(temp.GetDirectory() / Project::InputFileName);
+		// The project file cannot be written after Input.binput was: the actions file is put back too (here: removed,
+		// as there was none), so the files match the settings shown.
+		const std::filesystem::path projectFile = temp.GetDirectory() / Project::FileName;
+		const std::string projectText = *FileSystem::ReadTextFile(projectFile);
+		std::filesystem::remove(projectFile);
+		std::filesystem::create_directories(projectFile);
+		CHECK(RunError(registry, session, "project.set", { { "inputActions", { { "Actions", { { { "Name", "Jump" } } } } } } }).find("cannot replace") != std::string::npos);
+		CHECK_FALSE(std::filesystem::exists(temp.GetDirectory() / Project::InputFileName));
+		CHECK(Project::GetActive()->GetConfig().InputActions.IsEmpty());
+		std::filesystem::remove_all(projectFile);
+		temp.WriteFile(Project::FileName, projectText);
 		Run(registry, session, "project.set", { { "inputActions", { { "Actions", { { { "Name", "Jump" } } } } } } });
+		// Once saved, a failed project file write puts the previous actions file back.
+		std::filesystem::remove(projectFile);
+		std::filesystem::create_directories(projectFile);
+		CHECK(RunError(registry, session, "project.set", { { "inputActions", { { "Actions", { { { "Name", "Dash" } } } } } } }).find("cannot replace") != std::string::npos);
+		CHECK(ParseJson(*FileSystem::ReadTextFile(temp.GetDirectory() / Project::InputFileName))["Actions"][0]["Name"] == "Jump");
+		CHECK(Project::GetActive()->GetConfig().InputActions.Find("Jump"));
+		std::filesystem::remove_all(projectFile);
+		temp.WriteFile(Project::FileName, projectText);
 		// Simulate runs no scripts: input.actions reports the project's actions, not a session's.
 		std::string error;
 		REQUIRE(session.StartPlay(error, true));

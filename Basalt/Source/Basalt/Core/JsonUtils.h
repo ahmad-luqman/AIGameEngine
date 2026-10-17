@@ -43,12 +43,14 @@ namespace Basalt {
 		}
 	}
 
-	// Like ParseJson, and says why it failed: the parser's message with the byte position of the error, or the depth.
+	// Like ParseJson, and says why it failed (outError is cleared otherwise): the parser's message with the position of
+	// the error (a syntax error, or a number out of range), or the depth.
 	inline nlohmann::json ParseJson(std::string_view text, std::string& outError)
 	{
 		struct TooDeep : std::exception
 		{
 		};
+		outError.clear();
 		try
 		{
 			return nlohmann::json::parse(text, [](int depth, nlohmann::json::parse_event_t, nlohmann::json&) {
@@ -61,7 +63,7 @@ namespace Basalt {
 		{
 			outError = "the JSON nests deeper than " + std::to_string(MaxJsonDepth) + " levels";
 		}
-		catch (const nlohmann::json::parse_error& e)
+		catch (const nlohmann::json::exception& e)
 		{
 			outError = e.what();
 		}

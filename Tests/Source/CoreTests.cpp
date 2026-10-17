@@ -709,7 +709,7 @@ TEST_SUITE("Core")
 				fields["Name"] = "A";
 			return nlohmann::json{ { "Actions", nlohmann::json::array({ fields }) } };
 		};
-		const auto binding = [&action](nlohmann::json fields) { return action({ { "Bindings", nlohmann::json::array({ fields }) } }); };
+		const auto binding = [&action](const nlohmann::json& fields) { return action({ { "Bindings", nlohmann::json::array({ fields }) } }); };
 		nlohmann::json tooManyActions = { { "Actions", nlohmann::json::array() } };
 		for (uint32_t i = 0; i <= InputActionMap::MaxActions; i++)
 			tooManyActions["Actions"].push_back({ { "Name", "A" + std::to_string(i) } });
@@ -875,6 +875,8 @@ TEST_SUITE("Core")
 		rejects({ .Control = GamepadAxis::LeftX, .DeadZone = std::numeric_limits<float>::infinity() }, "DeadZone must be a number");
 		rejects({ .Gamepad = 0u }, "Gamepad applies to GamepadButton and GamepadAxis bindings only");
 		rejects({ .Control = GamepadButton::A, .Gamepad = Input::MaxGamepads }, "integer from 0 to 15");
+		rejects({ .Control = static_cast<KeyCode>(9999) }, "binding Key has no name");
+		rejects({ .Control = static_cast<GamepadAxis>(40) }, "binding GamepadAxis has no name");
 		// Whatever SetBindings accepts saves and loads again unchanged.
 		const InputBinding stick{ .Control = GamepadAxis::RightY, .Scale = -0.5f, .DeadZone = 0.3f, .Gamepad = 3u };
 		REQUIRE(map->SetBindings("Jump", { stick }, error));
@@ -985,6 +987,12 @@ TEST_SUITE("Core")
 		CHECK_MESSAGE(error.find("parse error at line 2") != std::string::npos, error);
 		CHECK(ParseJson(std::string(MaxJsonDepth + 1, '['), error).is_discarded());
 		CHECK_MESSAGE(error.find("nests deeper than") != std::string::npos, error);
+		// A number out of range is reported, never thrown.
+		CHECK(ParseJson("[1e999]", error).is_discarded());
+		CHECK_MESSAGE(error.find("number overflow") != std::string::npos, error);
+		// A success clears an earlier message.
+		CHECK_FALSE(ParseJson("[]", error).is_discarded());
+		CHECK(error.empty());
 	}
 
 	TEST_CASE("Gamepad name lists match the enums")

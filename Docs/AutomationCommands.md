@@ -2414,7 +2414,7 @@ Returns the scene renderer's statistics: viewport and render size, render scale 
 
 ### `replay.record_start`
 
-Starts recording input.key/input.mouse/input.gamepad commands with the play frame they arrive on. The mouse position and the injected gamepads (with what they hold) are recorded as they are on that frame, and the host's view whenever it changes, checked before every frame and every recorded command: where mouse positions land on the UI canvas, the game resolution scripts read the mouse in, and whether the game has the pointer and the keyboard (routing gates every game input), so replays run the same way in any host. Physical gamepads are not recorded (replays run without them): they are listed in physicalGamepads.
+Starts recording input.key/input.mouse/input.gamepad commands with the play frame they arrive on. The mouse position and the injected gamepads (with what they hold) are recorded as they are on that frame, and the host's view whenever it changes, checked before every frame and every recorded command: where mouse positions land on the UI canvas, the game resolution scripts read the mouse in, and whether the game has the pointer and the keyboard (routing gates every game input), so replays run the same way in any host. A recording begun before play marks where play started (a playStart event): what came before it applies before the replay starts play, so OnCreate sees the same view and input. Physical gamepads are not recorded (replays run without them): they are listed in physicalGamepads.
 
 <details><summary>Parameter JSON Schema</summary>
 

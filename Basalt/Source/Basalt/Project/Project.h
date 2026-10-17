@@ -61,8 +61,9 @@ namespace Basalt {
 		// read or is invalid.
 		static std::optional<InputActionMap> ReadInputActions(const std::filesystem::path& path, std::string& outError);
 		// Writes the input actions file when the actions changed since they were loaded or last saved (so a hand edit
-		// of the file is never overwritten by an unrelated change), then the project file. A failure is reported and
-		// leaves the project file as it was when the actions could not be written.
+		// of the file is never overwritten by an unrelated change), then the project file. A failure is reported (with
+		// the system's reason) and leaves both files as they were: the actions are put back when only the project file
+		// could not be written.
 		bool Save(std::string& outError);
 
 		static void SetActive(const Ref<Project>& project) { s_ActiveProject = project; }

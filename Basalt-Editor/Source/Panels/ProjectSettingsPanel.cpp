@@ -53,9 +53,10 @@ namespace Basalt {
 			{ "Gamepad Axis", &GetGamepadAxisNames, true, true },
 		} };
 
-		std::string GamepadLabel(const std::optional<uint32_t>& gamepad)
+		// A binding's gamepad index, or -1 for every gamepad.
+		std::string GamepadLabel(int gamepad)
 		{
-			return gamepad ? fmt::format("Gamepad {}", *gamepad) : std::string("Any gamepad");
+			return gamepad >= 0 ? fmt::format("Gamepad {}", gamepad) : std::string("Any gamepad");
 		}
 
 		void HelpMarker(const char* text)
@@ -332,7 +333,7 @@ namespace Basalt {
 				ImGui::BeginDisabled(bindings.size() >= InputActionMap::MaxBindings);
 				if (ImGui::SmallButton("Add Binding"))
 				{
-					bindings.push_back({ { std::string(InputControlKeys[0]), "Space" } });
+					bindings.push_back({ { "Key", "Space" } });
 					changed = true;
 				}
 				ImGui::EndDisabled();
@@ -423,17 +424,17 @@ namespace Basalt {
 		if (current.IsGamepad)
 		{
 			ImGui::SameLine();
-			const std::optional<uint32_t> selected = binding.contains("Gamepad") ? std::optional<uint32_t>(binding["Gamepad"].get<uint32_t>()) : std::nullopt;
+			// -1 for every gamepad: plain ints, as GCC's -Wmaybe-uninitialized misfires on optional comparisons.
+			const int selected = binding.contains("Gamepad") ? binding["Gamepad"].get<int>() : -1;
 			ImGui::SetNextItemWidth(120.0f);
 			if (ImGui::BeginCombo("##Gamepad", GamepadLabel(selected).c_str()))
 			{
-				for (int option = -1; option < static_cast<int>(Input::MaxGamepads); option++)
+				for (int gamepad = -1; gamepad < static_cast<int>(Input::MaxGamepads); gamepad++)
 				{
-					const std::optional<uint32_t> gamepad = option < 0 ? std::nullopt : std::optional<uint32_t>(static_cast<uint32_t>(option));
 					if (ImGui::Selectable(GamepadLabel(gamepad).c_str(), gamepad == selected) && gamepad != selected)
 					{
-						if (gamepad)
-							binding["Gamepad"] = *gamepad;
+						if (gamepad >= 0)
+							binding["Gamepad"] = gamepad;
 						else
 							binding.erase("Gamepad");
 						changed = true;

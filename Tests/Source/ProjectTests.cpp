@@ -649,12 +649,13 @@ TEST_SUITE("Project")
 		CHECK(ParseJson(*FileSystem::ReadTextFile(file)) == saved);
 
 		// Bindings that can never press a button or move an axis are warnings; a stick read backwards still can.
-		RunCommand(registry, session, "project.set", { { "inputActions", { { "Actions", { { { "Name", "Up" }, { "Bindings", { { { "Key", "W" }, { "Scale", -1 } }, { { "GamepadAxis", "LeftY" }, { "Scale", -1 } } } } }, { { "Name", "MoveX" }, { "Type", "Axis" }, { "Bindings", { { { "Key", "A" }, { "Scale", -1 } }, { { "Key", "D" }, { "Scale", 0 } } } } } } } } } });
+		RunCommand(registry, session, "project.set", { { "inputActions", { { "Actions", { { { "Name", "Up" }, { "Bindings", { { { "Key", "W" }, { "Scale", -1 } }, { { "GamepadAxis", "LeftY" }, { "Scale", -1 } }, { { "GamepadAxis", "RightTrigger" }, { "Scale", -0.5 } } } } }, { { "Name", "MoveX" }, { "Type", "Axis" }, { "Bindings", { { { "Key", "A" }, { "Scale", -1 } }, { { "Key", "D" }, { "Scale", 0 } } } } } } } } } });
 		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities": []})");
 		RunCommand(registry, session, "project.set", { { "startScene", "Assets/Scenes/Main.bscene" } });
 		const auto silent = Messages(ValidateProject(*Project::GetActive()), ValidationSeverity::Warning);
 		CHECK(Contains(silent, "input action 'Up': binding 1 can never press it (Scale -1)"));
 		CHECK_FALSE(Contains(silent, "input action 'Up': binding 2"));
+		CHECK(Contains(silent, "input action 'Up': binding 3 can never press it (Scale -0.5)"));
 		CHECK(Contains(silent, "input action 'MoveX': binding 2 can never move it (Scale 0)"));
 		CHECK_FALSE(Contains(silent, "input action 'MoveX': binding 1"));
 		RunCommand(registry, session, "project.set", { { "inputActions", actions } });
@@ -675,18 +676,18 @@ TEST_SUITE("Project")
 		std::filesystem::create_directories(file);
 		CHECK_FALSE(Project::Load(temp.GetDirectory(), error));
 		CHECK(error.find("cannot read input actions file") != std::string::npos);
+		CHECK(Contains(Messages(ValidateProject(*Project::GetActive()), ValidationSeverity::Error), "cannot read input actions file"));
 		std::filesystem::remove_all(file);
+		// A number out of range is reported, not thrown.
+		temp.WriteFile(Project::InputFileName, R"({"Actions": [{"Name": "A", "Bindings": [{"Key": "A", "Scale": 1e999}]}]})");
+		CHECK_FALSE(Project::Load(temp.GetDirectory(), error));
+		CHECK_MESSAGE(error.find("number overflow") != std::string::npos, error);
 		temp.WriteFile(Project::InputFileName, "{ not json");
 		CHECK_FALSE(Project::Load(temp.GetDirectory(), error));
 		INFO(error);
 		CHECK(error.find("parse error at line 1") != std::string::npos);
 
-		// Saving unchanged actions leaves the (hand-edited) file alone, so put it back by hand.
-		RunCommand(registry, session, "project.set", { { "inputActions", actions } });
-		CHECK(*FileSystem::ReadTextFile(file) == "{ not json");
-		temp.WriteFile(Project::InputFileName, saved.dump());
-
-		// The export carries the file, and a later export without one drops the earlier copy.
+		// A broken file is not exported (the game would not start).
 #if defined(__APPLE__)
 		temp.WriteFile("FakeVulkanSDK/lib/libvulkan.1.dylib", "stand-in");
 		temp.WriteFile("FakeVulkanSDK/lib/libMoltenVK.dylib", "stand-in");
@@ -694,6 +695,14 @@ TEST_SUITE("Project")
 #endif
 		BasaltTest::TempDirectory exportDirectory("ProjectInputActionsExport");
 		const auto output = exportDirectory.GetPath() / "Build";
+		CHECK(RunCommandError(registry, session, "project.export", { { "output", output.string() }, { "validate", false } }).find("invalid input actions file") != std::string::npos);
+		CHECK_FALSE(std::filesystem::exists(output / Project::InputFileName));
+		// Saving unchanged actions leaves the (hand-edited) file alone, so put it back by hand.
+		RunCommand(registry, session, "project.set", { { "inputActions", actions } });
+		CHECK(*FileSystem::ReadTextFile(file) == "{ not json");
+		temp.WriteFile(Project::InputFileName, saved.dump());
+
+		// The export carries the file, and a later export without one drops the earlier copy.
 		RunCommand(registry, session, "project.export", { { "output", output.string() }, { "validate", false } });
 		CHECK(ParseJson(*FileSystem::ReadTextFile(output / Project::InputFileName)) == saved);
 		// Removing every action keeps the (now empty) file, so the removal is saved.

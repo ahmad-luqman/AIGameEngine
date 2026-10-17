@@ -124,9 +124,11 @@ namespace Basalt {
 		static std::optional<InputBinding> BindingFromJson(const nlohmann::json& data, std::string& outError);
 		// An array of at most MaxBindings bindings.
 		static std::optional<std::vector<InputBinding>> BindingsFromJson(const nlohmann::json& data, std::string& outError);
-		// What every binding in a map satisfies: Scale in [-1, 1], DeadZone in [0, MaxDeadZone] and Gamepad an index
-		// below Input::MaxGamepads, each finite and only where it applies (a DeadZone other than the default, or a
-		// Gamepad, on a key or mouse binding is an error). So ToJson's output always loads again.
+		// What every binding in a map satisfies: a named control, Scale in [-1, 1], DeadZone in [0, MaxDeadZone] and
+		// Gamepad an index below Input::MaxGamepads, each finite and only where it applies (a DeadZone other than the
+		// default on anything but a GamepadAxis, or a Gamepad on a key or mouse binding, is an error). So ToJson's output
+		// always loads again. BindingFromJson is stricter: it rejects any DeadZone key on a binding that is not a
+		// GamepadAxis.
 		static bool ValidateBinding(const InputBinding& binding, std::string& outError);
 
 		bool operator==(const InputActionMap&) const = default;
