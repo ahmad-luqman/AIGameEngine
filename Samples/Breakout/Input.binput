@@ -1,0 +1,54 @@
+{
+	"Actions": [
+		{
+			"Bindings": [
+				{
+					"Key": "Right"
+				},
+				{
+					"Key": "Left",
+					"Scale": -1.0
+				},
+				{
+					"Key": "D"
+				},
+				{
+					"Key": "A",
+					"Scale": -1.0
+				},
+				{
+					"GamepadAxis": "LeftX"
+				},
+				{
+					"GamepadButton": "DPadRight"
+				},
+				{
+					"GamepadButton": "DPadLeft",
+					"Scale": -1.0
+				}
+			],
+			"Name": "MoveX",
+			"Type": "Axis"
+		},
+		{
+			"Bindings": [
+				{
+					"Key": "Space"
+				},
+				{
+					"Key": "Enter"
+				},
+				{
+					"GamepadButton": "A"
+				},
+				{
+					"MouseButton": "Left"
+				}
+			],
+			"Name": "Launch",
+			"Type": "Button"
+		}
+	],
+	"Format": "BasaltInput",
+	"Version": 1
+}

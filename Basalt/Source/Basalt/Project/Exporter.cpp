@@ -159,6 +159,11 @@ namespace Basalt {
 		std::filesystem::copy(project.GetDirectory() / Project::AssetDirectoryName, output / Project::AssetDirectoryName, std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, error);
 		if (!error)
 			std::filesystem::copy_file(project.GetProjectFilePath(), output / Project::FileName, std::filesystem::copy_options::overwrite_existing, error);
+		// The input actions are optional; a previous export's copy must not outlive the project's file.
+		if (!error && FileSystem::Exists(project.GetInputFilePath()))
+			std::filesystem::copy_file(project.GetInputFilePath(), output / Project::InputFileName, std::filesystem::copy_options::overwrite_existing, error);
+		else if (!error)
+			std::filesystem::remove(output / Project::InputFileName, error);
 		if (error)
 		{
 			result.Error = "cannot copy project files: " + error.message();

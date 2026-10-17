@@ -397,6 +397,14 @@ namespace Basalt {
 				throw CommandError("'size' must be [width, height] with positive values");
 			view.PointerEnabled = OptionalBool(params, "pointerEnabled", true);
 			view.NavigationEnabled = OptionalBool(params, "navigationEnabled", true);
+			// Recordings made before the Game view mapped the mouse have none: the viewport size, as they ran.
+			if (params.contains("resolution") && !params["resolution"].is_null())
+			{
+				glm::vec2 resolution;
+				if (!readVec2("resolution", resolution) || !(resolution.x > 0.0f && resolution.y > 0.0f))
+					throw CommandError("'resolution' must be [width, height] with positive values");
+				view.Resolution = resolution;
+			}
 			GameUI::SetHostState(view);
 		}
 
@@ -580,6 +588,7 @@ namespace Basalt {
 					{ "physicsLayers", config.Physics.ToJson() },
 					{ "randomSeed", config.RandomSeed },
 					{ "fixedTimestep", config.FixedTimestep },
+					{ "inputActions", config.InputActions.ToJson() },
 				};
 			});
 
@@ -591,7 +600,7 @@ namespace Basalt {
 												   { "TargetFrameRate", Schema::Number("target FPS", MinTargetFrameRate, MaxTargetFrameRate) },
 												   { "MinRenderScale", Schema::Number("minimum scale", MinRenderScale, MaxRenderScale) } });
 			graphicsSchema["description"] = "Project graphics defaults; applies to the next Play session. Do not repeat a setting through its top-level alias.";
-			Add(registry, "project.set", "Changes project settings and saves the project file.", Schema::Object({ { "graphics", Schema::Nullable(graphicsSchema) }, { "name", Schema::Nullable(Schema::String("string")) }, { "startScene", Schema::Nullable(Schema::String("string, project-relative scene")) }, { "windowWidth", Schema::Nullable(Schema::Integer("integer", ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize)) }, { "windowHeight", Schema::Nullable(Schema::Integer("integer", ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize)) }, { "fullscreen", Schema::Nullable(Schema::Boolean("bool")) }, { "renderScale", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution)", MinRenderScale, MaxRenderScale), MinRenderScale, MaxRenderScale)) }, { "dynamicResolution", Schema::Nullable(Schema::Boolean("bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries)")) }, { "targetFrameRate", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}]; dynamic resolution keeps the scene's GPU time within this frame rate's frame time", MinTargetFrameRate, MaxTargetFrameRate), MinTargetFrameRate, MaxTargetFrameRate)) }, { "minRenderScale", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning)", MinRenderScale, MaxRenderScale), MinRenderScale, MaxRenderScale)) }, { "physicsLayers", json{ { "type", "object" }, { "description", "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play" } } }, { "randomSeed", Schema::Nullable(Schema::Integer("integer in [0, 4294967295], seeds Lua's random numbers, particle emitters and runtime entity UUIDs; applies from the next play", 0, UINT32_MAX)) }, { "fixedTimestep", Schema::Nullable(json{ { "type", "number" }, { "description", fmt::format("number of seconds in (0, {}], the physics step of every scene that does not override it (scene.settings Physics.FixedTimestep); applies from the next play", MaxFixedTimestep) }, { "exclusiveMinimum", 0.0 }, { "maximum", MaxFixedTimestep } }) } }), [](AutomationSession& session, const json& params) {
+			Add(registry, "project.set", "Changes project settings and saves the project file.", Schema::Object({ { "graphics", Schema::Nullable(graphicsSchema) }, { "name", Schema::Nullable(Schema::String("string")) }, { "startScene", Schema::Nullable(Schema::String("string, project-relative scene")) }, { "windowWidth", Schema::Nullable(Schema::Integer("integer", ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize)) }, { "windowHeight", Schema::Nullable(Schema::Integer("integer", ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize)) }, { "fullscreen", Schema::Nullable(Schema::Boolean("bool")) }, { "renderScale", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution)", MinRenderScale, MaxRenderScale), MinRenderScale, MaxRenderScale)) }, { "dynamicResolution", Schema::Nullable(Schema::Boolean("bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries)")) }, { "targetFrameRate", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}]; dynamic resolution keeps the scene's GPU time within this frame rate's frame time", MinTargetFrameRate, MaxTargetFrameRate), MinTargetFrameRate, MaxTargetFrameRate)) }, { "minRenderScale", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning)", MinRenderScale, MaxRenderScale), MinRenderScale, MaxRenderScale)) }, { "physicsLayers", json{ { "type", "object" }, { "description", "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play" } } }, { "randomSeed", Schema::Nullable(Schema::Integer("integer in [0, 4294967295], seeds Lua's random numbers, particle emitters and runtime entity UUIDs; applies from the next play", 0, UINT32_MAX)) }, { "fixedTimestep", Schema::Nullable(json{ { "type", "number" }, { "description", fmt::format("number of seconds in (0, {}], the physics step of every scene that does not override it (scene.settings Physics.FixedTimestep); applies from the next play", MaxFixedTimestep) }, { "exclusiveMinimum", 0.0 }, { "maximum", MaxFixedTimestep } }) }, { "inputActions", json{ { "type", "object" }, { "description", "object {Actions: [{Name, Type: \"Button\" | \"Axis\", Bindings: [{Key | MouseButton | GamepadButton | GamepadAxis: name, Scale?, DeadZone?, Gamepad?}]}]}, replaces every input action and saves Input.binput; applies from the next play" } } } }), [](AutomationSession& session, const json& params) {
 				Ref<Project> project = RequireProject();
 				// Every value is read and validated before any is assigned, so a bad parameter leaves the
 				// project untouched.
@@ -616,6 +625,14 @@ namespace Basalt {
 					if (!layers)
 						throw CommandError("physicsLayers: " + error);
 					config.Physics = std::move(*layers);
+				}
+				if (const auto it = params.find("inputActions"); it != params.end())
+				{
+					std::string error;
+					auto actions = InputActionMap::FromJson(*it, error);
+					if (!actions)
+						throw CommandError("inputActions: " + error);
+					config.InputActions = std::move(*actions);
 				}
 				if (const auto it = params.find("graphics"); it != params.end() && !it->is_null())
 				{
@@ -829,7 +846,8 @@ namespace Basalt {
 						}
 					}
 					const GameUI::HostState host = GameUI::GetHostState();
-					const json view = { { "origin", { host.ViewportOrigin.x, host.ViewportOrigin.y } }, { "size", { host.ViewportSize.x, host.ViewportSize.y } }, { "pointerEnabled", host.PointerEnabled }, { "navigationEnabled", host.NavigationEnabled } };
+					const glm::vec2 resolution = GameUI::GetResolution();
+					const json view = { { "origin", { host.ViewportOrigin.x, host.ViewportOrigin.y } }, { "size", { host.ViewportSize.x, host.ViewportSize.y } }, { "pointerEnabled", host.PointerEnabled }, { "navigationEnabled", host.NavigationEnabled }, { "resolution", { resolution.x, resolution.y } } };
 					return json{ { "canvas", { canvas.x, canvas.y } }, { "items", items }, { "view", view }, { "problems", problems } };
 				});
 
@@ -1412,6 +1430,27 @@ namespace Basalt {
 					session.RecordInput("input.gamepad", params);
 					return json::object();
 				});
+
+			Add(registry, "input.actions", "Returns the input actions with their bindings and, while playing, the session's bindings (as scripts rebound them) with each action's value (a button's strength 0..1, an axis -1..1), down, pressed and released state as the game sees them this frame. Outside play, the project's actions.", Schema::Object(), [](AutomationSession& session, const json&) {
+				const Scene* scene = session.GetScene().get();
+				const bool playing = session.IsPlaying() && scene && scene->GetState() == SceneState::Play;
+				if (!playing)
+					RequireProject();
+				const InputActionMap actions = playing ? scene->GetInputActions() : Project::GetActiveInputActions();
+				json result = actions.ToJson()["Actions"];
+				if (playing)
+				{
+					for (size_t i = 0; i < actions.GetActions().size(); i++)
+					{
+						const InputAction& action = actions.GetActions()[i];
+						result[i]["Value"] = InputActionMap::GetValue(action);
+						result[i]["Down"] = InputActionMap::IsDown(action);
+						result[i]["Pressed"] = InputActionMap::IsPressed(action);
+						result[i]["Released"] = InputActionMap::IsReleased(action);
+					}
+				}
+				return json{ { "playing", playing }, { "actions", result } };
+			});
 
 			Add(registry, "lua.exec", "Runs Lua in the playing scene's script state; returns the value of the expression.", Schema::Object({ { "code", Schema::String("string", true) } }, { "code" }), [](AutomationSession& session, const json& params) {
 				Scene& scene = RequireScene(session);

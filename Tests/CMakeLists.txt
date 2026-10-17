@@ -265,6 +265,10 @@ add_test(NAME SampleJoints
 # Samples/MarbleRun/README.md.
 add_test(NAME SampleMarbleRun
 	COMMAND BasaltCLI --project "${PROJECT_SOURCE_DIR}/Samples/MarbleRun" batch "${PROJECT_SOURCE_DIR}/Samples/MarbleRun/test_game.json")
+# Breakout drives its paddle through input actions (keys, a gamepad, the mouse, a Lua rebinding); see
+# Samples/Breakout/README.md.
+add_test(NAME SampleBreakout
+	COMMAND BasaltCLI --project "${PROJECT_SOURCE_DIR}/Samples/Breakout" batch "${PROJECT_SOURCE_DIR}/Samples/Breakout/test_game.json")
 # Determinism: a recorded session must replay to the identical state (same machine), and the committed
 # replay must end on the same board on every platform (Samples/Tetris/test_replay.json).
 add_test(NAME SampleTetrisReplay
@@ -277,7 +281,7 @@ add_test(NAME PhysicsDeterminism
 
 # Labels let CI jobs pick test groups (ctest -L gpu, ctest -LE "gpu|format").
 set_tests_properties(BasaltTests PROPERTIES LABELS unit)
-set(basaltIntegrationTests FeatureTest SampleTetris SampleTetrisReplay SampleJoints SampleMarbleRun PhysicsDeterminism)
+set(basaltIntegrationTests FeatureTest SampleTetris SampleTetrisReplay SampleJoints SampleMarbleRun SampleBreakout PhysicsDeterminism)
 set_tests_properties(${basaltIntegrationTests} PROPERTIES LABELS integration)
 if(TEST CodeFormat)
 	set_tests_properties(CodeFormat PROPERTIES LABELS format)

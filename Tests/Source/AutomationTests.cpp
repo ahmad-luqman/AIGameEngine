@@ -859,6 +859,92 @@ TEST_SUITE("Automation")
 		CHECK_FALSE(Input::IsGamepadConnected(2));
 	}
 
+	TEST_CASE("input.actions reports the project's actions, and the session's with their state while playing")
+	{
+		BasaltTest::TempProject temp("AutomationInputActions");
+		BasaltTest::ScopedGameInput restore;
+		CommandRegistry registry;
+		AutomationSession session;
+		Run(registry, session, "project.set", { { "inputActions", { { "Actions", { { { "Name", "Jump" }, { "Bindings", { { { "Key", "Space" } } } } }, { { "Name", "MoveX" }, { "Type", "Axis" }, { "Bindings", { { { "Key", "D" } }, { { "Key", "A" }, { "Scale", -1 } } } } } } } } } });
+		json result = Run(registry, session, "input.actions");
+		CHECK(result["playing"] == false);
+		REQUIRE(result["actions"].size() == 2);
+		CHECK(result["actions"][0]["Name"] == "Jump");
+		CHECK_FALSE(result["actions"][0].contains("Value"));
+
+		Run(registry, session, "play.start");
+		Run(registry, session, "input.key", { { "key", "Space" } });
+		Run(registry, session, "input.key", { { "key", "A" } });
+		result = Run(registry, session, "input.actions");
+		CHECK(result["playing"] == true);
+		CHECK(result["actions"][0]["Value"] == 1.0);
+		CHECK(result["actions"][0]["Down"] == true);
+		CHECK(result["actions"][0]["Pressed"] == true);
+		CHECK(result["actions"][1]["Value"] == -1.0);
+		Run(registry, session, "play.step", { { "frames", 1 } });
+		CHECK(Run(registry, session, "input.actions")["actions"][0]["Pressed"] == false);
+		// The session's bindings, as a script rebound them; the project keeps its own.
+		Run(registry, session, "lua.exec", { { "code", "Input.SetBindings('Jump', { { Key = 'W' } })" } });
+		result = Run(registry, session, "input.actions");
+		CHECK(result["actions"][0]["Bindings"][0]["Key"] == "W");
+		// Both frames are read through the current bindings, so a rebinding is not a release.
+		CHECK(result["actions"][0]["Down"] == false);
+		CHECK(result["actions"][0]["Released"] == false);
+		Run(registry, session, "play.stop");
+		CHECK(Run(registry, session, "input.actions")["actions"][0]["Bindings"][0]["Key"] == "Space");
+		// A project rebinding through project.set applies from the next play.
+		Run(registry, session, "project.set", { { "inputActions", { { "Actions", { { { "Name", "Fire" } } } } } } });
+		Run(registry, session, "play.start");
+		CHECK(Run(registry, session, "input.actions")["actions"][0]["Name"] == "Fire");
+		Run(registry, session, "play.stop");
+	}
+
+	TEST_CASE("A replay records and restores the game resolution scripts see the mouse in")
+	{
+		BasaltTest::TempProject temp("AutomationReplayResolution");
+		BasaltTest::ScopedGameInput restore;
+		CommandRegistry registry;
+		AutomationSession session;
+		Run(registry, session, "asset.write", { { "path", "Assets/Scripts/Mouse.lua" }, { "content", R"(
+			local M = {}
+			function M:OnUpdate() if Input.IsMouseButtonPressed('Left') then self.Entity.Translation = Vec3(Input.GetMousePosition().x, Input.GetMousePosition().y, 0) end end
+			return M
+		)" } });
+		Run(registry, session, "entity.create", { { "name", "Probe" }, { "components", { { "Script", { { "Script", "Assets/Scripts/Mouse.lua" } } } } } });
+		// The editor's Game view: a 960 x 540 image at (100, 50) of a 1280 x 720 game. Window (580, 320) is game
+		// (640, 360).
+		GameUI::SetHostState({ { 100.0f, 50.0f }, { 960.0f, 540.0f }, true, true, glm::vec2(1280.0f, 720.0f) });
+		Run(registry, session, "play.start");
+		Run(registry, session, "replay.record_start");
+		Run(registry, session, "input.mouse", { { "position", { 580, 320 } }, { "button", "Left" }, { "down", true } });
+		Run(registry, session, "play.step", { { "frames", 1 } });
+		Run(registry, session, "input.mouse", { { "button", "Left" }, { "down", false } });
+		const json live = Run(registry, session, "play.step", { { "frames", 1 }, { "hash", true } });
+		CHECK(Run(registry, session, "lua.exec", { { "code", "local t = Scene.FindEntityByName('Probe').Translation; return t.x .. ',' .. t.y" } })["result"] == "640.0,360.0");
+		Run(registry, session, "replay.record_stop", { { "path", "Replays/Resolution.breplay" } });
+		const json replay = ParseJson(*FileSystem::ReadTextFile(temp.GetDirectory() / "Replays/Resolution.breplay"));
+		CHECK(replay["Events"][0]["command"] == "view");
+		CHECK(replay["Events"][0]["params"]["resolution"] == json({ 1280.0, 720.0 }));
+		// ui.layout reports what scripts see.
+		CHECK(Run(registry, session, "ui.layout")["view"]["resolution"] == json({ 1280.0, 720.0 }));
+
+		GameUI::SetHostState({});
+		CHECK(Run(registry, session, "ui.layout")["view"]["resolution"] == json({ 1920.0, 1080.0 }));
+		const json replayed = Run(registry, session, "replay.run", { { "path", "Replays/Resolution.breplay" }, { "assertHash", true }, { "assertNoErrors", true } });
+		CHECK(replayed["stateHash"] == live["stateHash"]);
+		CHECK(GameUI::GetHostState() == GameUI::HostState{});
+
+		// A bad resolution is an error naming the event; a null one means the viewport size, like older replays.
+		const auto viewReplay = [](const json& params) {
+			return json{ { "Format", "BasaltReplay" }, { "Version", 1 }, { "Frames", 1 }, { "RandomSeed", Project::GetActiveRandomSeed() }, { "Events", json::array({ { { "frame", 0 }, { "command", "view" }, { "params", params } } }) } };
+		};
+		Run(registry, session, "asset.write", { { "path", "Replays/BadResolution.breplay" }, { "content", viewReplay({ { "origin", { 0, 0 } }, { "size", { 100, 100 } }, { "resolution", { 100, -1 } } }).dump() } });
+		CHECK(RunError(registry, session, "replay.run", { { "path", "Replays/BadResolution.breplay" } }).find("'resolution' must be [width, height] with positive values") != std::string::npos);
+		Run(registry, session, "asset.write", { { "path", "Replays/NullResolution.breplay" }, { "content", viewReplay({ { "origin", { 0, 0 } }, { "size", { 100, 100 } }, { "resolution", nullptr } }).dump() } });
+		CHECK(Run(registry, session, "replay.run", { { "path", "Replays/NullResolution.breplay" } })["scriptErrors"].empty());
+		Run(registry, session, "play.stop");
+	}
+
 	TEST_CASE("A replay maps mouse positions through the view it was recorded in")
 	{
 		BasaltTest::TempProject temp("AutomationReplayView");

@@ -19,6 +19,11 @@ namespace Basalt {
 		return index < MouseButtonCount ? s_ButtonNames[index] : std::string_view("Unknown");
 	}
 
+	std::span<const std::string_view> GetMouseButtonNames()
+	{
+		return s_ButtonNames;
+	}
+
 	std::optional<MouseCode> MouseCodeFromString(std::string_view name)
 	{
 		for (uint32_t i = 0; i < MouseButtonCount; i++)

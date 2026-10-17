@@ -20,8 +20,14 @@ $B project.create '{"path": "Games/Tetris", "name": "Tetris"}'
 
 Write scripts with `asset.write` (or directly as files under `<project>/Assets/Scripts/`). Typical patterns:
 - One "Game" controller script on an empty entity owns the rules and state (grid arrays, score, timers),
-  reads `Input.IsKeyPressed`, and spawns/moves/destroys entities (`Scene.CreateEntity` + `AddComponent`,
+  reads input, and spawns/moves/destroys entities (`Scene.CreateEntity` + `AddComponent`,
   or `Scene.Instantiate("Assets/Prefabs/Block.bprefab", pos)`).
+- Prefer input actions over raw keys: declare them with `project.set {"inputActions": {"Actions": [{"Name":
+  "MoveX", "Type": "Axis", "Bindings": [{"Key": "D"}, {"Key": "A", "Scale": -1}, {"GamepadAxis": "LeftX"}]}]}}`
+  and read `Input.GetAction("MoveX")` / `Input.IsActionPressed("Jump")`, so keys, gamepads and the mouse work
+  alike and players can rebind (`Input.SetBindings`). `input.key`/`input.gamepad` still drive them in tests;
+  `input.actions` shows their values. First-person cameras: `Input.SetCursorMode("Locked")` and
+  `Input.GetMouseDelta()` (Samples/Breakout shows actions, the mouse and the cursor).
 - Grid games (Tetris, Snake, Minesweeper): keep the logical state in Lua tables and mirror it with
   entities (cubes with `Mesh builtin://Cube` + `Material AlbedoColor`). Do not use physics for them.
 - Physics games: `RigidBody` (`Dynamic`/`Static`/`Kinematic`, `IsTrigger`) + a collider; react in

@@ -54,6 +54,8 @@ namespace Basalt {
 	private:
 		// Logs the GPU timings and fails (through `fail`) a run whose --dynamic-resolution did not run.
 		void CheckRendererResults(const std::function<void(int)>& fail);
+		// Gives the window the cursor the game asks for (Input::GetCursorMode) when it changed.
+		void ApplyCursorMode();
 
 		RuntimeOptions m_Options;
 		Ref<Scene> m_Scene;
@@ -64,6 +66,7 @@ namespace Basalt {
 		uint64_t m_Frame = 0;
 		float m_RenderDeltaTime = 0.0f;
 		bool m_WarnedNoCamera = false;
+		CursorMode m_AppliedCursorMode = CursorMode::Normal;
 	};
 
 }

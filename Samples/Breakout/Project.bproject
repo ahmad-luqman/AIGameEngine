@@ -1,0 +1,23 @@
+{
+	"DynamicResolution": false,
+	"FixedTimestep": 0.01666666753590107,
+	"Format": "BasaltProject",
+	"Fullscreen": false,
+	"MinRenderScale": 0.5,
+	"Name": "Breakout",
+	"PhysicsLayers": {
+		"IgnoredPairs": [],
+		"Names": [
+			"Default"
+		]
+	},
+	"RandomSeed": 9067031,
+	"RenderScale": 1.0,
+	"SSAOQuality": "High",
+	"ShadowQuality": "High",
+	"StartScene": "Assets/Scenes/Breakout.bscene",
+	"TargetFrameRate": 60.0,
+	"VSync": true,
+	"WindowHeight": 900,
+	"WindowWidth": 1600
+}

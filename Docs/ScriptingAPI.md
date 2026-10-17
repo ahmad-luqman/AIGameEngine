@@ -317,6 +317,75 @@ Mouse buttons: `Left`, `Right`, `Middle`, `Button3`-`Button7`.
 `Input.IsMouseButtonDown/Pressed/Released(button)`, `Input.GetMousePosition()`, `Input.GetMouseDelta()`,
 `Input.GetMouseScroll()` (all Vec2).
 
+**Coordinates.** The mouse position is in the game view: 0,0 is its top-left corner and `Input.GetViewSize()`
+(Vec2) its bottom-right. In the runtime that is the window (window units, which differ from pixels on high-DPI
+displays); in the editor's Game view it is the game resolution, whatever size the view is drawn at, so a script
+reads the same coordinates in both. The delta is in the same units. Headless runs use a 1920x1080 view.
+
+**What the game receives.** Scripts see only the input the host gives the game. The runtime and headless runs give
+it everything. The editor gives it the keyboard and gamepads while the Game view has focus, and the mouse buttons,
+movement and scroll while the pointer is over the Game view (or the game has locked the cursor); the position is
+always reported. Losing that input reads like letting go of everything held (`IsKeyReleased` is true on that
+frame); a key or button held when it comes back stays up for the game until it is let go, so the click that
+focuses the Game view is not a press.
+
+**Cursor.** `Input.SetCursorMode(mode)` asks for `"Normal"` (visible), `"Hidden"` (hidden over the game, free to
+leave) or `"Locked"` (hidden and held in the window: only the delta means anything, as first-person cameras want;
+the platform's raw mouse motion is used where available). `Input.GetCursorMode()` returns the mode asked for. Play
+starts and stops with `"Normal"`. In the editor the mode applies while the game runs and the Game view has focus;
+Escape gives the cursor back to the editor until the Game view is clicked again. Headless runs only store it.
+
+### Input actions
+
+Actions name what the player does (`"Jump"`, `"MoveX"`) rather than which control does it, so controls can be
+rebound without changing scripts. The project declares them in `Input.binput`, next to `Project.bproject` (edit it
+in Project Settings > Input Actions, or with `project.set inputActions`; it is exported with the game):
+
+```json
+{
+	"Format": "BasaltInput",
+	"Version": 1,
+	"Actions": [
+		{ "Name": "Jump", "Type": "Button", "Bindings": [{ "Key": "Space" }, { "GamepadButton": "A" }] },
+		{ "Name": "Fire", "Bindings": [{ "MouseButton": "Left" }, { "GamepadAxis": "RightTrigger" }] },
+		{ "Name": "MoveX", "Type": "Axis", "Bindings": [{ "Key": "D" }, { "Key": "A", "Scale": -1 },
+			{ "GamepadAxis": "LeftX", "DeadZone": 0.25 }, { "GamepadButton": "A", "Gamepad": 1 }] }
+	]
+}
+```
+
+- A binding names one control: `Key`, `MouseButton`, `GamepadButton` or `GamepadAxis`. Keys and buttons read 1
+  while held. A gamepad axis reads its value past its `DeadZone` (0 to 0.95, default 0.2), rescaled so a stick
+  pushed all the way still reads 1. `Scale` (-1 to 1, default 1) multiplies the value: `-1` makes a key the negative
+  half of an axis, or a stick pushed up (-Y) press a button. `Gamepad` (0-15) reads one gamepad (local
+  multiplayer); without it, every gamepad counts (the one pushed furthest).
+- A `Button` action (the default type) is as strong as its strongest binding, from 0 to 1 (a trigger gives
+  values in between). An `Axis` action adds its bindings and clamps the sum to -1..1, so A and D held together
+  cancel and a key plus the stick never pass full.
+- An action is down from a strength (an axis from a magnitude) of 0.5. Pressed and released compare this frame
+  with the previous one, both read through the current bindings (rebinding is not a press or a release).
+- Actions read only what the game receives (see above).
+
+`Input.GetAction(name)` — the value (a number); `Input.IsActionDown/Pressed/Released(name)` — booleans. An unknown
+name is an error that lists the defined actions (names are case-sensitive).
+
+Rebinding lasts for the play session (it survives `Scene.Load`) and never changes the project's file; save the
+player's choices with `Storage` and apply them in `OnCreate`:
+
+- `Input.GetActions()` — every action: `{ Name, Type, Bindings }` tables
+- `Input.GetBindings(name)` — the action's bindings, as tables like the file's (`{ Key = "Space" }`)
+- `Input.SetBindings(name, bindings)` — replaces them (at most 16; `{}` removes every binding); a bad binding is an
+  error and changes nothing
+- `Input.ResetBindings([name])` — puts back the bindings play started with, for one action or all
+
+```lua
+function Player:OnUpdate(dt)
+    local move = Input.GetAction("MoveX")
+    self.Entity.Translation = self.Entity.Translation + Vec3(move * self.Speed * dt, 0, 0)
+    if Input.IsActionPressed("Jump") then self:Jump() end
+end
+```
+
 ### Gamepads
 
 Gamepads use the standard (Xbox-style) layout; GLFW's mapping database maps PlayStation, Switch and most other
@@ -324,7 +393,8 @@ controllers onto it. Up to 16 are tracked, by index 0..15 (an integer; anything 
 Buttons: `A` (bottom face button), `B`, `X`, `Y`, `LeftBumper`, `RightBumper`, `Back`, `Start`, `Guide`,
 `LeftThumb`, `RightThumb`, `DPadUp`, `DPadRight`, `DPadDown`, `DPadLeft`. Axes: `LeftX`, `LeftY`, `RightX`,
 `RightY` (-1..1, +Y is down, like the canvas), `LeftTrigger`, `RightTrigger` (0..1). Names are
-case-insensitive; an unknown one is an error. Sticks are reported raw: apply your own dead zone. While the window
+case-insensitive; an unknown one is an error. Sticks are reported raw: apply your own dead zone (input actions apply
+one). Like the keyboard, gamepads reach the game only while it has focus (see above). While the window
 does not have focus, gamepads read as released; a button or stick held through a focus loss (or pressed while
 unfocused) stays released until it is let go. Controllers missing from GLFW's built-in mapping database are
 ignored, with a warning naming them; mappings in SDL's format in the `SDL_GAMECONTROLLERCONFIG` environment

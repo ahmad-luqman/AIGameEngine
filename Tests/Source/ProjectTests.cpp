@@ -3,6 +3,7 @@
 #include <Basalt/Automation/AutomationSession.h>
 #include <Basalt/Automation/CommandRegistry.h>
 #include <Basalt/Core/FileSystem.h>
+#include <Basalt/Core/JsonUtils.h>
 #include <Basalt/Core/Platform.h>
 #include <Basalt/Project/Project.h>
 #include <Basalt/Project/ProjectValidator.h>
@@ -615,6 +616,72 @@ TEST_SUITE("Project")
 		CHECK(Contains(errors, "cannot list all the assets"));
 	}
 #endif
+
+	TEST_CASE("Input actions live in Input.binput: set, saved, loaded, validated and exported")
+	{
+		BasaltTest::TempProject temp("ProjectInputActions");
+		REQUIRE(temp.IsValid());
+		CommandRegistry registry;
+		AutomationSession session;
+		const std::filesystem::path file = temp.GetDirectory() / Project::InputFileName;
+		// A project without actions has no file, and saving it does not create one.
+		CHECK_FALSE(std::filesystem::exists(file));
+		RunCommand(registry, session, "project.set", { { "name", "Renamed" } });
+		CHECK_FALSE(std::filesystem::exists(file));
+		CHECK(RunCommand(registry, session, "project.info")["inputActions"]["Actions"].empty());
+
+		const nlohmann::json actions = { { "Actions", { { { "Name", "Jump" }, { "Bindings", { { { "Key", "space" } }, { { "GamepadButton", "A" } } } } }, { { "Name", "Wave" } } } } };
+		RunCommand(registry, session, "project.set", { { "inputActions", actions } });
+		REQUIRE(std::filesystem::exists(file));
+		const nlohmann::json info = RunCommand(registry, session, "project.info")["inputActions"];
+		CHECK(info["Format"] == "BasaltInput");
+		CHECK(info["Actions"][0]["Bindings"][0]["Key"] == "Space");
+		const nlohmann::json saved = ParseJson(*FileSystem::ReadTextFile(file));
+		CHECK(saved == info);
+		std::string error;
+		const Ref<Project> loaded = Project::Load(temp.GetDirectory(), error);
+		REQUIRE_MESSAGE(loaded, error);
+		CHECK(loaded->GetConfig().InputActions == Project::GetActive()->GetConfig().InputActions);
+
+		// A bad map changes nothing.
+		CHECK(RunCommandError(registry, session, "project.set", { { "inputActions", { { "Actions", { { { "Name", "Jump" }, { "Type", "Stick" } } } } } }, { "name", "Other" } }).find("inputActions: input action 'Jump': Type must be") != std::string::npos);
+		CHECK(Project::GetActive()->GetConfig().Name == "Renamed");
+		CHECK(ParseJson(*FileSystem::ReadTextFile(file)) == saved);
+
+		// An action without bindings is a warning; a broken file an error, and the project no longer loads.
+		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities": []})");
+		RunCommand(registry, session, "project.set", { { "startScene", "Assets/Scenes/Main.bscene" } });
+		ValidationReport report = ValidateProject(*Project::GetActive());
+		CHECK(report.IsValid());
+		CHECK(Contains(Messages(report, ValidationSeverity::Warning), "input action 'Wave' has no bindings"));
+		temp.WriteFile(Project::InputFileName, R"({"Actions": [{"Name": "Jump", "Bindings": [{"Key": "Nope"}]}]})");
+		report = ValidateProject(*Project::GetActive());
+		CHECK(Contains(Messages(report, ValidationSeverity::Error), "binding: unknown Key 'Nope'"));
+		CHECK_FALSE(Project::Load(temp.GetDirectory(), error));
+		CHECK(error.find("invalid input actions file") != std::string::npos);
+		temp.WriteFile(Project::InputFileName, "{ not json");
+		CHECK_FALSE(Project::Load(temp.GetDirectory(), error));
+		CHECK(error.find("not valid JSON") != std::string::npos);
+
+		// The export carries the file, and a later export without one drops the earlier copy.
+		RunCommand(registry, session, "project.set", { { "inputActions", actions } });
+#if defined(__APPLE__)
+		temp.WriteFile("FakeVulkanSDK/lib/libvulkan.1.dylib", "stand-in");
+		temp.WriteFile("FakeVulkanSDK/lib/libMoltenVK.dylib", "stand-in");
+		const BasaltTest::ScopedEnvVar sdk("VULKAN_SDK", (temp.GetDirectory() / "FakeVulkanSDK").string());
+#endif
+		BasaltTest::TempDirectory exportDirectory("ProjectInputActionsExport");
+		const auto output = exportDirectory.GetPath() / "Build";
+		RunCommand(registry, session, "project.export", { { "output", output.string() }, { "validate", false } });
+		CHECK(ParseJson(*FileSystem::ReadTextFile(output / Project::InputFileName)) == saved);
+		// Removing every action keeps the (now empty) file, so the removal is saved.
+		RunCommand(registry, session, "project.set", { { "inputActions", nlohmann::json::object() } });
+		CHECK(ParseJson(*FileSystem::ReadTextFile(file))["Actions"].empty());
+		std::filesystem::remove(file);
+		RunCommand(registry, session, "project.export", { { "output", output.string() }, { "validate", false } });
+		CHECK_FALSE(std::filesystem::exists(output / Project::InputFileName));
+		CHECK(std::filesystem::exists(output / Project::FileName));
+	}
 
 	TEST_CASE("project.validate and project.export refuse a broken project; project.smoke_test needs an executable")
 	{

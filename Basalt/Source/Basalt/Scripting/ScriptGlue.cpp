@@ -6,6 +6,7 @@
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/EnumNames.h"
 #include "Basalt/Core/Input.h"
+#include "Basalt/Core/InputActions.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Particles/ParticleSystem.h"
 #include "Basalt/Physics/PhysicsWorld.h"
@@ -21,6 +22,7 @@
 #include "Basalt/Scripting/ScriptEvents.h"
 #include "Basalt/Scripting/ScriptTasks.h"
 #include "Basalt/Scripting/ScriptUI.h"
+#include "Basalt/UI/GameUI.h"
 
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -662,18 +664,76 @@ namespace Basalt {
 			};
 		}
 
+		// The session's action called `name`; unknown names are errors that list the defined ones.
+		const InputAction& RequireAction(ScriptContext& context, const std::string& name)
+		{
+			const InputActionMap& actions = RequireScene(context).GetInputActions();
+			if (const InputAction* action = actions.Find(name))
+				return *action;
+			std::vector<std::string> names;
+			for (const InputAction& action : actions.GetActions())
+				names.push_back(action.Name);
+			if (names.empty())
+				throw std::runtime_error(fmt::format("unknown input action '{}' (the project defines none: add them to {} or with project.set inputActions)", name, Project::InputFileName));
+			throw std::runtime_error(fmt::format("unknown input action '{}' (defined: {})", name, fmt::join(names, ", ")));
+		}
+
+		void RegisterInputActions(sol::table& input, ScriptContext& context)
+		{
+			input["GetAction"] = [&context](const std::string& name) { return InputActionMap::GetValue(RequireAction(context, name)); };
+			input["IsActionDown"] = [&context](const std::string& name) { return InputActionMap::IsDown(RequireAction(context, name)); };
+			input["IsActionPressed"] = [&context](const std::string& name) { return InputActionMap::IsPressed(RequireAction(context, name)); };
+			input["IsActionReleased"] = [&context](const std::string& name) { return InputActionMap::IsReleased(RequireAction(context, name)); };
+			input["GetActions"] = [&context](sol::this_state state) { return JsonToLua(state, RequireScene(context).GetInputActions().ToJson()["Actions"]); };
+			input["GetBindings"] = [&context](sol::this_state state, const std::string& name) {
+				nlohmann::json bindings = nlohmann::json::array();
+				for (const InputBinding& binding : RequireAction(context, name).Bindings)
+					bindings.push_back(InputActionMap::BindingToJson(binding));
+				return JsonToLua(state, bindings);
+			};
+			input["SetBindings"] = [&context](const std::string& name, const sol::table& bindings) {
+				RequireAction(context, name);
+				nlohmann::json data = LuaToJson(bindings);
+				// An empty Lua table converts to an empty object: no bindings.
+				if (data.is_object() && data.empty())
+					data = nlohmann::json::array();
+				std::string error;
+				auto parsed = InputActionMap::BindingsFromJson(data, error);
+				if (!parsed || !RequireScene(context).SetInputBindings(name, std::move(*parsed), error))
+					throw std::runtime_error("Input.SetBindings('" + name + "'): " + error);
+			};
+			input["ResetBindings"] = [&context](const sol::optional<std::string>& name) {
+				if (name)
+					RequireAction(context, *name);
+				std::string error;
+				if (!RequireScene(context).ResetInputBindings(name ? std::optional<std::string_view>(*name) : std::nullopt, error))
+					throw std::runtime_error("Input.ResetBindings: " + error);
+			};
+		}
+
 		void RegisterSystems(sol::state& lua, ScriptContext& context)
 		{
+			// The game's view of the input: only what the host routes to the game (GameInput), with the mouse in game
+			// coordinates (GameUI::ToGamePosition).
 			sol::table input = lua.create_named_table("Input");
-			input["IsKeyDown"] = [](const std::string& key) { return Input::IsKeyDown(ParseKey(key)); };
-			input["IsKeyPressed"] = [](const std::string& key) { return Input::IsKeyPressed(ParseKey(key)); };
-			input["IsKeyReleased"] = [](const std::string& key) { return Input::IsKeyReleased(ParseKey(key)); };
-			input["IsMouseButtonDown"] = [](const std::string& button) { return Input::IsMouseButtonDown(ParseMouseButton(button)); };
-			input["IsMouseButtonPressed"] = [](const std::string& button) { return Input::IsMouseButtonPressed(ParseMouseButton(button)); };
-			input["IsMouseButtonReleased"] = [](const std::string& button) { return Input::IsMouseButtonReleased(ParseMouseButton(button)); };
-			input["GetMousePosition"] = []() { return Input::GetMousePosition(); };
-			input["GetMouseDelta"] = []() { return Input::GetMouseDelta(); };
-			input["GetMouseScroll"] = []() { return Input::GetMouseScroll(); };
+			input["IsKeyDown"] = [](const std::string& key) { return GameInput::IsKeyDown(ParseKey(key)); };
+			input["IsKeyPressed"] = [](const std::string& key) { return GameInput::IsKeyPressed(ParseKey(key)); };
+			input["IsKeyReleased"] = [](const std::string& key) { return GameInput::IsKeyReleased(ParseKey(key)); };
+			input["IsMouseButtonDown"] = [](const std::string& button) { return GameInput::IsMouseButtonDown(ParseMouseButton(button)); };
+			input["IsMouseButtonPressed"] = [](const std::string& button) { return GameInput::IsMouseButtonPressed(ParseMouseButton(button)); };
+			input["IsMouseButtonReleased"] = [](const std::string& button) { return GameInput::IsMouseButtonReleased(ParseMouseButton(button)); };
+			input["GetMousePosition"] = []() { return GameUI::ToGamePosition(Input::GetMousePosition()); };
+			input["GetMouseDelta"] = []() { return GameUI::ToGameDelta(GameInput::GetMouseDelta()); };
+			input["GetMouseScroll"] = []() { return GameInput::GetMouseScroll(); };
+			input["GetViewSize"] = []() { return GameUI::GetResolution(); };
+			input["SetCursorMode"] = [](const std::string& mode) {
+				const auto parsed = CursorModeFromString(mode);
+				if (!parsed)
+					throw std::runtime_error("unknown cursor mode '" + mode + "' (valid: Normal, Hidden, Locked)");
+				Input::SetCursorMode(*parsed);
+			};
+			input["GetCursorMode"] = []() { return std::string(CursorModeToString(Input::GetCursorMode())); };
+			RegisterInputActions(input, context);
 			input["IsGamepadConnected"] = [](const sol::object& index) { return Input::IsGamepadConnected(ParseGamepadIndex(index)); };
 			input["GetGamepadName"] = [](const sol::object& index) -> sol::optional<std::string> {
 				const uint32_t gamepad = ParseGamepadIndex(index);
@@ -690,10 +750,10 @@ namespace Basalt {
 				}
 				return gamepads;
 			};
-			input["IsGamepadButtonDown"] = [](const sol::object& index, const std::string& button) { return Input::IsGamepadButtonDown(ParseGamepadIndex(index), ParseGamepadButton(button)); };
-			input["IsGamepadButtonPressed"] = [](const sol::object& index, const std::string& button) { return Input::IsGamepadButtonPressed(ParseGamepadIndex(index), ParseGamepadButton(button)); };
-			input["IsGamepadButtonReleased"] = [](const sol::object& index, const std::string& button) { return Input::IsGamepadButtonReleased(ParseGamepadIndex(index), ParseGamepadButton(button)); };
-			input["GetGamepadAxis"] = [](const sol::object& index, const std::string& axis) { return Input::GetGamepadAxis(ParseGamepadIndex(index), ParseGamepadAxis(axis)); };
+			input["IsGamepadButtonDown"] = [](const sol::object& index, const std::string& button) { return GameInput::IsGamepadButtonDown(ParseGamepadIndex(index), ParseGamepadButton(button)); };
+			input["IsGamepadButtonPressed"] = [](const sol::object& index, const std::string& button) { return GameInput::IsGamepadButtonPressed(ParseGamepadIndex(index), ParseGamepadButton(button)); };
+			input["IsGamepadButtonReleased"] = [](const sol::object& index, const std::string& button) { return GameInput::IsGamepadButtonReleased(ParseGamepadIndex(index), ParseGamepadButton(button)); };
+			input["GetGamepadAxis"] = [](const sol::object& index, const std::string& axis) { return GameInput::GetGamepadAxis(ParseGamepadIndex(index), ParseGamepadAxis(axis)); };
 
 			sol::table physics = lua.create_named_table("Physics");
 			physics["Raycast"] = [&context](sol::this_state state, const glm::vec3& origin, const glm::vec3& direction, float maxDistance, const sol::object& options) -> sol::object {

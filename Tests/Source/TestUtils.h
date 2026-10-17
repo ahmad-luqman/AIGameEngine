@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Basalt/Core/FileSystem.h>
+#include <Basalt/Core/Input.h>
 #include <Basalt/Core/Log.h>
 #include <Basalt/Core/Platform.h>
 #include <Basalt/Project/Project.h>
@@ -95,6 +96,29 @@ namespace BasaltTest {
 	private:
 		std::string m_Name;
 		std::optional<std::string> m_Previous;
+	};
+
+	// Starts and ends a test with nothing held, no injected gamepads, full game routing and the Normal cursor, so a
+	// test that changes the routing or the cursor cannot leak it into the next one.
+	class ScopedGameInput
+	{
+	public:
+		ScopedGameInput() { Restore(); }
+		~ScopedGameInput() { Restore(); }
+
+		ScopedGameInput(const ScopedGameInput&) = delete;
+		ScopedGameInput& operator=(const ScopedGameInput&) = delete;
+
+	private:
+		static void Restore()
+		{
+			Basalt::Input::SetGameFocus(true);
+			Basalt::Input::SetGamePointer(true);
+			Basalt::Input::SetCursorMode(Basalt::CursorMode::Normal);
+			Basalt::Input::Reset();
+			Basalt::Input::ForgetInjectedGamepads();
+			Basalt::Input::EndFrame();
+		}
 	};
 
 	// The result of a Lua chunk in the engine (see ScriptEngine::ExecuteString), or "error: <message>".

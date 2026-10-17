@@ -8,6 +8,7 @@
 #include "Basalt/Physics/FixedTimestep.h"
 #include "Basalt/Physics/PhysicsLayers.h"
 #include "Basalt/Renderer/Fsr1Settings.h"
+#include "Basalt/Core/InputActions.h"
 #include "Basalt/Renderer/GraphicsSettings.h"
 #include "Basalt/Renderer/PostProcessSettings.h"
 
@@ -237,6 +238,13 @@ namespace Basalt {
 		bool SetGraphicsSettings(const nlohmann::json& patch, std::string& error);
 		// Play preferences while playing, otherwise active project defaults.
 		GraphicsSettings GetEffectiveGraphicsSettings() const;
+		// The play session's input actions: a copy of the project's taken when play starts, which scripts may rebind
+		// (Lua Input.SetBindings) until play stops; Scene.Load keeps it. Empty outside Play.
+		const InputActionMap& GetInputActions() const { return m_InputActions; }
+		// Rebinds an action of the session (Play only); nothing changes on failure.
+		bool SetInputBindings(std::string_view action, std::vector<InputBinding> bindings, std::string& outError);
+		// Puts back the bindings play started with: one action's, or every action's for nullopt (Play only).
+		bool ResetInputBindings(std::optional<std::string_view> action, std::string& outError);
 		// Unique across scene instances and increments on Play/reload; resets renderer history even after address reuse.
 		uint64_t GetRenderRevision() const { return m_RenderRevision; }
 		RendererSettings& GetRendererSettings() { return m_RendererSettings; }
@@ -326,6 +334,9 @@ namespace Basalt {
 		void BumpRenderRevision();
 		uint64_t m_RenderRevision = 0;
 		GraphicsSettings m_GraphicsSettings;
+		// The session's input actions, and the project's as play started (ResetInputBindings).
+		InputActionMap m_InputActions;
+		InputActionMap m_StartInputActions;
 		PhysicsSettings m_PhysicsSettings;
 		std::optional<PhysicsLayers> m_PhysicsLayers;
 
