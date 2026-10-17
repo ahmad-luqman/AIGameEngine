@@ -3023,8 +3023,10 @@ TEST_SUITE("Scripting")
 		scene.OnUpdate(Step);
 		REQUIRE(Field(scene, entity, "Value") == 1);
 		ScriptEngine& engine = *scene.GetScriptEngine();
-		project.WriteFile(module, "return = broken");
+		// Broken after registering a handler: what its top level started before the error ends with the failed load.
+		project.WriteFile(module, "Events.On('Leak', function() end) error('module fails')");
 		ScriptReloadResult result = engine.ReloadScripts({ module });
+		CHECK(BasaltTest::Eval(scene, "Events.Emit('Leak')") == "0");
 		CHECK(result.Reloaded.empty());
 		REQUIRE(result.Failed.size() == 1);
 		scene.OnUpdate(Step);
