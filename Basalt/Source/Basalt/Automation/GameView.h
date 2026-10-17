@@ -30,6 +30,7 @@ namespace Basalt {
 		// What the game asks for (Normal outside Play).
 		CursorMode Requested = CursorMode::Normal;
 		bool ViewFocused = false;
+		// The mouse is over the Game image (on the last drawn frame and now).
 		bool ViewHovered = false;
 		bool EscapePressed = false;
 		bool Clicked = false;
