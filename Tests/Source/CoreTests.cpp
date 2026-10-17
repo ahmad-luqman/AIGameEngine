@@ -1089,6 +1089,17 @@ TEST_SUITE("Core")
 		std::filesystem::remove_all(directory);
 	}
 
+	TEST_CASE("FileSystem reads only regular files")
+	{
+		// A directory opens as a stream on Linux with a meaningless size; reading one must fail, not allocate it.
+		BasaltTest::TempDirectory directory("FileSystemReadDirectory");
+		CHECK_FALSE(FileSystem::ReadTextFile(directory.GetPath()).has_value());
+		CHECK_FALSE(FileSystem::ReadBinaryFile(directory.GetPath()).has_value());
+		CHECK_FALSE(FileSystem::ReadTextFile(directory.GetPath() / "missing.txt").has_value());
+		REQUIRE(FileSystem::WriteTextFile(directory.GetPath() / "file.txt", "text"));
+		CHECK(FileSystem::ReadTextFile(directory.GetPath() / "file.txt") == "text");
+	}
+
 	TEST_CASE("FileSystem write failure leaves the target untouched and no temp file")
 	{
 		const auto directory = std::filesystem::temp_directory_path() / "BasaltTests" / "FileSystemFailure";
