@@ -3,6 +3,7 @@
 #include <Basalt/Audio/AudioEngine.h>
 #include <Basalt/Audio/AudioRules.h>
 #include <Basalt/Audio/AudioSystem.h>
+#include <Basalt/Audio/LowPassNode.h>
 #include <Basalt/Core/Log.h>
 #include <Basalt/Physics/PhysicsWorld.h>
 #include <Basalt/Scene/ComponentRegistry.h>
@@ -11,11 +12,14 @@
 
 #include "TestUtils.h"
 
+#include <miniaudio.h>
+
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <ranges>
 #include <span>
 #include <vector>
 
@@ -64,7 +68,7 @@ namespace {
 		HeadlessAudio& operator=(const HeadlessAudio&) = delete;
 	};
 
-	// The device-less engine's rate, and its interleaved stereo: two samples per frame.
+	// The device-less engine's default format: 48 kHz, interleaved stereo (two samples per frame).
 	constexpr size_t FramesPerSecond = 48000;
 	constexpr size_t SamplesPerSecond = size_t{ 2 } * FramesPerSecond;
 	constexpr double SpeedOfSound = AudioSpeedOfSound;
@@ -76,7 +80,7 @@ namespace {
 		return static_cast<int>(std::lround(seconds / StepSeconds));
 	}
 
-	// Mixes the given duration and returns the interleaved stereo output.
+	// Mixes the given duration and returns the interleaved output (the engine's channel count per frame).
 	std::vector<float> Mix(float seconds)
 	{
 		std::vector<float> frames;
@@ -140,6 +144,12 @@ namespace {
 		return Frequency(std::span(mix).subspan(SamplesPerSecond / 50));
 	}
 
+	// Whether every sample is a finite number (a NaN anywhere in the graph spreads through the mix).
+	bool AllFinite(std::span<const float> samples)
+	{
+		return std::ranges::all_of(samples, [](float sample) { return std::isfinite(sample); });
+	}
+
 	// The number of samples in which two mixes differ by more than rounding.
 	size_t CountMismatches(const std::vector<float>& a, const std::vector<float>& b)
 	{
@@ -166,7 +176,7 @@ namespace {
 	}
 
 	// A looping spatial source with the given Doppler factor that starts with play mode.
-	AudioSourceComponent DopplerSource(const std::string& clip, float doppler)
+	AudioSourceComponent DopplerSource(const std::string& clip, float doppler = 1.0f)
 	{
 		AudioSourceComponent source = Source(clip);
 		source.Spatial = true;
@@ -1036,7 +1046,7 @@ TEST_SUITE("Audio")
 			rigidBody.GravityFactor = 0.0f;
 			rigidBody.LinearDamping = 0.0f;
 			body.AddComponent<BoxColliderComponent>();
-			Entity speaker = scene.Add("Speaker", DopplerSource("Assets/Audio/Tone.wav", 1.0f), glm::vec3(0.0f, 0.0f, -60.0f));
+			Entity speaker = scene.Add("Speaker", DopplerSource("Assets/Audio/Tone.wav"), glm::vec3(0.0f, 0.0f, -60.0f));
 			REQUIRE(scene.GetScene().SetParent(speaker, body));
 			AudioSystem& audio = scene.Start();
 			scene.GetScene().GetPhysicsWorld()->SetLinearVelocity(body, glm::vec3(0.0f, 0.0f, 20.0f));
@@ -1057,7 +1067,7 @@ TEST_SUITE("Audio")
 		SUBCASE("A teleport is capped at MaxDopplerSpeed")
 		{
 			AudioScene scene;
-			Entity speaker = scene.Add("Speaker", DopplerSource("Assets/Audio/Tone.wav", 1.0f), glm::vec3(0.0f, 0.0f, -2000.0f));
+			Entity speaker = scene.Add("Speaker", DopplerSource("Assets/Audio/Tone.wav"), glm::vec3(0.0f, 0.0f, -2000.0f));
 			AudioSystem& audio = scene.Start();
 			scene.Run(StepSeconds);
 			speaker.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.0f, -5.0f);
@@ -1282,7 +1292,7 @@ TEST_SUITE("Audio")
 			character.GravityFactor = 0.0f;
 			player.AddComponent<CapsuleColliderComponent>();
 			REQUIRE(scene.GetScene().SetParent(scene.GetListener(), player));
-			Entity speaker = scene.Add("Speaker", DopplerSource("Assets/Audio/Tone.wav", 1.0f), glm::vec3(0.0f, 0.0f, -80.0f));
+			Entity speaker = scene.Add("Speaker", DopplerSource("Assets/Audio/Tone.wav"), glm::vec3(0.0f, 0.0f, -80.0f));
 			AudioSystem& audio = scene.Start();
 			PhysicsWorld* physics = scene.GetScene().GetPhysicsWorld();
 			REQUIRE(physics);
@@ -1307,7 +1317,7 @@ TEST_SUITE("Audio")
 			Entity far = scene.GetScene().CreateEntity("Far");
 			far.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.0f, 50.0f);
 			far.AddComponent<AudioListenerComponent>().Active = false;
-			Entity speaker = scene.Add("Speaker", DopplerSource("Assets/Audio/Tone.wav", 1.0f), glm::vec3(0.0f, 0.0f, -10.0f));
+			Entity speaker = scene.Add("Speaker", DopplerSource("Assets/Audio/Tone.wav"), glm::vec3(0.0f, 0.0f, -10.0f));
 			AudioSystem& audio = scene.Start();
 			scene.Run(0.1f);
 			scene.GetListener().GetComponent<AudioListenerComponent>().Active = false;
@@ -1330,7 +1340,7 @@ TEST_SUITE("Audio")
 			listener.AddComponent<AudioListenerComponent>();
 			Entity speaker = scene.CreateEntity("Speaker");
 			speaker.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.0f, -10.0f);
-			speaker.AddComponent<AudioSourceComponent>(DopplerSource("Assets/Audio/Tone.wav", 1.0f));
+			speaker.AddComponent<AudioSourceComponent>(DopplerSource("Assets/Audio/Tone.wav"));
 			AudioSystem audio(&scene);
 			audio.Start();
 			// What a spawn script does in OnCreate: move both far from where Start found them.
@@ -1359,7 +1369,7 @@ TEST_SUITE("Audio")
 		SUBCASE("A static body moved by script")
 		{
 			AudioScene scene;
-			Entity speaker = scene.Add("Speaker", DopplerSource("Assets/Audio/Tone.wav", 1.0f), glm::vec3(0.0f, 0.0f, -60.0f));
+			Entity speaker = scene.Add("Speaker", DopplerSource("Assets/Audio/Tone.wav"), glm::vec3(0.0f, 0.0f, -60.0f));
 			speaker.AddComponent<RigidBodyComponent>();
 			speaker.AddComponent<BoxColliderComponent>();
 			AudioSystem& audio = scene.Start();
@@ -1375,7 +1385,7 @@ TEST_SUITE("Audio")
 		{
 			project.WriteFile("Assets/Audio/Short.wav", MakeWav(0.1f));
 			AudioScene scene;
-			AudioSourceComponent source = DopplerSource("Assets/Audio/Short.wav", 1.0f);
+			AudioSourceComponent source = DopplerSource("Assets/Audio/Short.wav");
 			source.Loop = false;
 			Entity speaker = scene.Add("Speaker", source, glm::vec3(0.0f, 0.0f, -60.0f));
 			AudioSystem& audio = scene.Start();
@@ -1418,7 +1428,7 @@ TEST_SUITE("Audio")
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
 		HeadlessAudio engine;
 		AudioScene scene;
-		AudioSourceComponent source = DopplerSource("Assets/Audio/Tone.wav", 1.0f);
+		AudioSourceComponent source = DopplerSource("Assets/Audio/Tone.wav");
 		source.ReverbSend = 1.0f;
 		Entity speaker = scene.Add("Speaker", source, glm::vec3(0.0f, 0.0f, -2.0f));
 		scene.Start();
@@ -1431,7 +1441,7 @@ TEST_SUITE("Audio")
 		speaker.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.0f, -2.0f);
 		scene.Run(StepSeconds);
 		const std::vector<float> mix = Mix(0.2f);
-		CHECK(std::ranges::all_of(mix, [](float sample) { return std::isfinite(sample); }));
+		CHECK(AllFinite(mix));
 		CHECK(Rms(mix) > 0.01f);
 		CHECK(Log::GetHistory().GetTotalCount() == since + 1);
 	}
@@ -1479,22 +1489,27 @@ TEST_SUITE("Audio")
 		CHECK(Rms(Mix(0.001f)) < 0.3f * plain);
 		const std::vector<float> after = Mix(0.1f);
 		CHECK(Rms(std::span(after).last(SamplesPerSecond / 50)) > 0.95f * plain);
-		// Back in after a bypass, the filter starts at its new cutoff rather than gliding from its old one.
+		// Back in after a bypass, the filter starts at its new cutoff rather than gliding up from the 100 Hz it had
+		// (which, as above, would keep the tone muffled for the first milliseconds).
+		effects.LowPass = 100.0f;
+		settle();
 		effects.LowPass = 0.0f;
 		settle();
 		effects.LowPass = 15000.0f;
 		scene.GetScene().OnUpdate(0.001f);
 		CHECK(Rms(Mix(0.001f)) > 0.8f * plain);
 
-		// Swept every frame between extremes, the filter never overshoots the input or produces anything not finite.
+		// Swept every frame between 50 Hz and 15 kHz, the filter stays near the input's level and never produces
+		// anything not finite.
 		for (int i = 0; i < 60; i++)
 		{
 			effects.LowPass = i % 2 == 0 ? 50.0f : 15000.0f;
 			scene.Run(StepSeconds);
 			const std::vector<float> mix = Mix(StepSeconds);
-			CHECK(std::ranges::all_of(mix, [](float sample) { return std::isfinite(sample); }));
-			const float peak = std::ranges::max(mix, {}, [](float sample) { return std::abs(sample); });
-			CHECK(std::abs(peak) < 0.3f);
+			CHECK(AllFinite(mix));
+			// The input peaks at 8000 / 32768 (0.244); a Butterworth step overshoots about 4%.
+			const float peak = std::ranges::max(mix | std::views::transform([](float sample) { return std::abs(sample); }));
+			CHECK(peak < 0.26f);
 		}
 	}
 
@@ -1504,7 +1519,7 @@ TEST_SUITE("Audio")
 		project.WriteFile("Assets/Audio/Beep.wav", MakeWav(0.1f));
 		project.WriteFile("Assets/Scenes/Next.bscene", R"({ "Format": "BasaltScene", "Version": 1, "Entities": [ { "ID": 20, "Name": "Nobody", "Parent": 0, "Components": {} } ] })");
 		HeadlessAudio engine;
-		// The tail of a beep whose source starts sending while it already plays, into a reverb set up beforehand.
+		// The tail of a beep whose source starts sending while it already plays, into a reverb created only now, after the settings were set.
 		auto tail = [](const AudioReverbSettings& room) {
 			AudioScene scene;
 			AudioSourceComponent source = Source("Assets/Audio/Beep.wav");
@@ -1534,13 +1549,13 @@ TEST_SUITE("Audio")
 		scene.OnRuntimeStop();
 	}
 
-	TEST_CASE("A source whose AudioSource is removed while it plays keeps its last effects until it is stopped")
+	TEST_CASE("A source whose AudioSource is removed while it plays keeps playing until it is stopped")
 	{
 		BasaltTest::TempProject project("AudioRemovedSource");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
 		HeadlessAudio engine;
 		AudioScene scene;
-		AudioSourceComponent source = DopplerSource("Assets/Audio/Tone.wav", 1.0f);
+		AudioSourceComponent source = DopplerSource("Assets/Audio/Tone.wav");
 		source.LowPass = 2000.0f;
 		source.ReverbSend = 0.5f;
 		Entity speaker = scene.Add("Speaker", source, glm::vec3(0.0f, 0.0f, -5.0f));
@@ -1567,7 +1582,8 @@ TEST_SUITE("Audio")
 			AudioScene scene;
 			AudioSourceComponent sfx = Source("Assets/Audio/Tone.wav");
 			sfx.ReverbSend = 1.0f;
-			// Above the 8 kHz output's Nyquist frequency: kept just under it, so the filter stays defined.
+			// Above the 8 kHz output's Nyquist frequency (in the 8 kHz run): kept just under it, so the filter stays
+			// defined.
 			sfx.LowPass = 20000.0f;
 			AudioSourceComponent music = Source("Assets/Audio/Tone.wav", AudioBus::Music);
 			music.ReverbSend = 1.0f;
@@ -1582,9 +1598,8 @@ TEST_SUITE("Audio")
 			CHECK_FALSE(audio.HasReverb(AudioBus::Music));
 			CHECK(BasaltTest::CountLogMessages(since, expectedLog) == 1);
 			CHECK(BasaltTest::CountLogMessages(since, "reverb for") == 2);
-			std::vector<float> mix;
-			REQUIRE(AudioEngine::ReadDeviceless(0.1f, mix));
-			CHECK(std::ranges::all_of(mix, [](float sample) { return std::isfinite(sample); }));
+			const std::vector<float> mix = Mix(0.1f);
+			CHECK(AllFinite(mix));
 			CHECK(Rms(mix) > 0.01f);
 		};
 		run({ 6, 48000 }, "cannot create the SFX bus reverb for 6 channels at 48000 Hz");
@@ -1614,11 +1629,240 @@ TEST_SUITE("Audio")
 			scene.Add("Tone", source);
 			scene.Start();
 			scene.Run(0.1f);
-			std::vector<float> mix;
-			REQUIRE(AudioEngine::ReadDeviceless(0.2f, mix));
-			REQUIRE(std::ranges::all_of(mix, [](float sample) { return std::isfinite(sample); }));
+			const std::vector<float> mix = Mix(0.2f);
+			REQUIRE(AllFinite(mix));
 			return Rms(mix);
 		};
 		CHECK(level(15000.0f) == doctest::Approx(level(0.0f)).epsilon(0.02));
+	}
+
+	TEST_CASE("A listener whose transform is not finite keeps its last placement, reported once until it is finite")
+	{
+		BasaltTest::TempProject project("AudioListenerNonFinite");
+		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
+		HeadlessAudio engine;
+		AudioScene scene;
+		AudioSourceComponent source = DopplerSource("Assets/Audio/Tone.wav");
+		source.ReverbSend = 1.0f;
+		Entity speaker = scene.Add("Speaker", source, glm::vec3(0.0f, 0.0f, -2.0f));
+		AudioSystem& audio = scene.Start();
+		scene.Run(StepSeconds);
+		auto& transform = scene.GetListener().GetComponent<TransformComponent>();
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		// A zero scale: the position is finite, its directions are not.
+		transform.Scale = glm::vec3(0.0f);
+		scene.Run(0.1f);
+		CHECK(BasaltTest::CountLogMessages(since, "the listener 'Listener' has a transform that is not finite") == 1);
+		// Back, somewhere else: no teleport reads as movement, and nothing poisoned the mix or the reverb.
+		transform.Scale = glm::vec3(1.0f);
+		transform.Translation = glm::vec3(0.0f, 0.0f, 30.0f);
+		scene.Run(StepSeconds);
+		CHECK(audio.GetDopplerPitch(speaker) == 1.0f);
+		const std::vector<float> mix = Mix(0.2f);
+		CHECK(AllFinite(mix));
+		CHECK(Rms(mix) > 0.001f);
+		// Broken again: reported again.
+		transform.Translation.y = std::numeric_limits<float>::infinity();
+		scene.Run(StepSeconds);
+		CHECK(BasaltTest::CountLogMessages(since, "the listener 'Listener' has a transform that is not finite") == 2);
+	}
+
+	TEST_CASE("Positions that are not finite never reach a sound: Play and PlayOneShot refuse them, and a recovery is no teleport")
+	{
+		BasaltTest::TempProject project("AudioNonFinitePlay");
+		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
+		HeadlessAudio engine;
+		AudioScene scene;
+		AudioSourceComponent source = DopplerSource("Assets/Audio/Tone.wav");
+		source.PlayOnStart = false;
+		source.ReverbSend = 1.0f;
+		Entity speaker = scene.Add("Speaker", source, glm::vec3(0.0f, 0.0f, -2.0f));
+		AudioSystem& audio = scene.Start();
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		speaker.GetComponent<TransformComponent>().Translation.x = std::numeric_limits<float>::quiet_NaN();
+		CHECK_FALSE(audio.Play(speaker));
+		CHECK(BasaltTest::CountLogMessages(since, "cannot play the AudioSource of 'Speaker': its world position is not finite") == 1);
+		const glm::vec3 nowhere(std::numeric_limits<float>::infinity(), 0.0f, 0.0f);
+		CHECK_FALSE(audio.PlayOneShot("Assets/Audio/Tone.wav", &nowhere));
+		CHECK(BasaltTest::CountLogMessages(since, "cannot play 'Assets/Audio/Tone.wav' at a position that is not finite") == 1);
+		CHECK(audio.GetActiveSoundCount() == 0);
+
+		// A playing source that goes non-finite and comes back 40 m away does not read as moving 40 m in a frame.
+		speaker.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.0f, -2.0f);
+		REQUIRE(audio.Play(speaker));
+		scene.Run(StepSeconds);
+		speaker.GetComponent<TransformComponent>().Translation.x = std::numeric_limits<float>::quiet_NaN();
+		scene.Run(StepSeconds);
+		speaker.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.0f, -42.0f);
+		scene.Run(StepSeconds);
+		CHECK(audio.GetDopplerPitch(speaker) == 1.0f);
+		CHECK(AllFinite(Mix(0.2f)));
+	}
+
+	TEST_CASE("Each new invalid effect value is reported, and a NaN send never reaches the reverb")
+	{
+		BasaltTest::TempProject project("AudioInvalidEffectsEach");
+		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
+		HeadlessAudio engine;
+		AudioScene scene;
+		Entity tone = scene.Add("Tone", Source("Assets/Audio/Tone.wav"));
+		AudioSystem& audio = scene.Start();
+		auto& effects = tone.GetComponent<AudioSourceComponent>();
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		effects.Doppler = -1.0f;
+		effects.LowPass = 5.0f;
+		scene.Run(0.1f);
+		CHECK(BasaltTest::CountLogMessages(since, "is off: Doppler must be") == 1);
+		// Doppler fixed, LowPass still out of range: that one is reported now.
+		effects.Doppler = 0.0f;
+		scene.Run(0.1f);
+		CHECK(BasaltTest::CountLogMessages(since, "is off: LowPass must be") == 1);
+		effects.LowPass = 0.0f;
+		effects.ReverbSend = std::numeric_limits<float>::quiet_NaN();
+		scene.Run(0.1f);
+		CHECK(BasaltTest::CountLogMessages(since, "is off: ReverbSend must be") == 1);
+		CHECK_FALSE(audio.HasReverb(AudioBus::SFX));
+		CHECK(AllFinite(Mix(0.2f)));
+		CHECK(Log::GetHistory().GetTotalCount() == since + 3);
+	}
+
+	TEST_CASE("Doppler: a static body stops the search for a moving ancestor; no listener resets the listener's history")
+	{
+		BasaltTest::TempProject project("AudioDopplerAncestors");
+		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
+		HeadlessAudio engine;
+
+		SUBCASE("A speaker on a script-moved static platform, riding a dynamic body that does not move")
+		{
+			AudioScene scene;
+			Entity carrier = scene.GetScene().CreateEntity("Carrier");
+			auto& carrierBody = carrier.AddComponent<RigidBodyComponent>();
+			carrierBody.Type = RigidBodyType::Dynamic;
+			carrierBody.GravityFactor = 0.0f;
+			carrier.AddComponent<BoxColliderComponent>();
+			// Below the listener's line, apart from the platform so their colliders do not overlap; the speaker ends up
+			// straight ahead of the listener.
+			carrier.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, -10.0f, 0.0f);
+			Entity platform = scene.GetScene().CreateEntity("Platform");
+			platform.AddComponent<RigidBodyComponent>();
+			platform.AddComponent<BoxColliderComponent>();
+			platform.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 5.0f, 0.0f);
+			REQUIRE(scene.GetScene().SetParent(platform, carrier, false));
+			Entity speaker = scene.Add("Speaker", DopplerSource("Assets/Audio/Tone.wav"));
+			speaker.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 5.0f, -60.0f);
+			REQUIRE(scene.GetScene().SetParent(speaker, platform, false));
+			AudioSystem& audio = scene.Start();
+			for (int i = 0; i < 6; i++)
+			{
+				speaker.GetComponent<TransformComponent>().Translation.z += 30.0f * StepSeconds;
+				scene.Run(StepSeconds);
+			}
+			// The carrier's velocity (0) would give no shift; the speaker's own movement does.
+			CHECK(audio.GetDopplerPitch(speaker) == doctest::Approx(SpeedOfSound / (SpeedOfSound - 30.0)).epsilon(0.001));
+		}
+
+		SUBCASE("A listener that goes away and comes back elsewhere")
+		{
+			AudioScene scene;
+			Entity speaker = scene.Add("Speaker", DopplerSource("Assets/Audio/Tone.wav"), glm::vec3(0.0f, 0.0f, -10.0f));
+			AudioSystem& audio = scene.Start();
+			scene.Run(0.1f);
+			auto& listener = scene.GetListener().GetComponent<AudioListenerComponent>();
+			listener.Active = false;
+			scene.Run(StepSeconds);
+			scene.GetListener().GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.0f, 40.0f);
+			listener.Active = true;
+			scene.Run(StepSeconds);
+			CHECK(audio.GetDopplerPitch(speaker) == 1.0f);
+		}
+	}
+
+	TEST_CASE("The device-less engine takes formats within its limits, mono included, and refuses a second format")
+	{
+		CHECK_FALSE(AudioEngine::Init(true, { MaxDevicelessChannels + 1, 48000 }));
+		CHECK_FALSE(AudioEngine::Init(true, { 2, MaxDevicelessSampleRate + 1 }));
+		CHECK_FALSE(AudioEngine::IsInitialized());
+
+		BasaltTest::TempProject project("AudioMono");
+		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
+		HeadlessAudio engine({ MinDevicelessChannels, MinDevicelessSampleRate });
+		REQUIRE(AudioEngine::GetEngine());
+		CHECK(ma_engine_get_channels(AudioEngine::GetEngine()) == 1);
+		CHECK(ma_engine_get_sample_rate(AudioEngine::GetEngine()) == MinDevicelessSampleRate);
+		// The same engine again is fine; another format while it runs is refused.
+		CHECK(AudioEngine::Init(true, { MinDevicelessChannels, MinDevicelessSampleRate }));
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		CHECK_FALSE(AudioEngine::Init(true));
+		CHECK(BasaltTest::CountLogMessages(since, "already running without a device at 1 channels and 8000 Hz") == 1);
+
+		// Every effect stage runs in mono (the reverb is refused below 22.05 kHz, logged; the rest plays).
+		AudioScene scene;
+		AudioSourceComponent source = DopplerSource("Assets/Audio/Tone.wav");
+		source.LowPass = 2000.0f;
+		source.ReverbSend = 0.5f;
+		scene.Add("Speaker", source, glm::vec3(0.0f, 0.0f, -2.0f));
+		scene.Start();
+		scene.Run(0.1f);
+		const std::vector<float> mix = Mix(0.1f);
+		CHECK(mix.size() == MinDevicelessSampleRate / 10);
+		CHECK(AllFinite(mix));
+		CHECK(Rms(mix) > 0.01f);
+	}
+
+	TEST_CASE("LowPassNode on its own: it glides in log frequency, a restart clears its memory, bad arguments are refused")
+	{
+		constexpr ma_uint32 Rate = 48000;
+		ma_node_graph_config graphConfig = ma_node_graph_config_init(1);
+		ma_node_graph graph;
+		REQUIRE(ma_node_graph_init(&graphConfig, nullptr, &graph) == MA_SUCCESS);
+		// 0.2 s of DC 1.0, then 0.2 s of silence.
+		std::vector<float> input(Rate * 2 / 5, 0.0f);
+		std::fill(input.begin(), input.begin() + Rate / 5, 1.0f);
+		const ma_audio_buffer_config bufferConfig = ma_audio_buffer_config_init(ma_format_f32, 1, input.size(), input.data(), nullptr);
+		ma_audio_buffer buffer;
+		REQUIRE(ma_audio_buffer_init(&bufferConfig, &buffer) == MA_SUCCESS);
+		const ma_data_source_node_config sourceConfig = ma_data_source_node_config_init(&buffer);
+		ma_data_source_node source;
+		REQUIRE(ma_data_source_node_init(&graph, &sourceConfig, nullptr, &source) == MA_SUCCESS);
+
+		LowPassNode node;
+		CHECK(LowPassNodeInit(&graph, 1, Rate, 0.0f, &node) == MA_INVALID_ARGS);
+		CHECK(LowPassNodeInit(&graph, 1, Rate, std::numeric_limits<float>::quiet_NaN(), &node) == MA_INVALID_ARGS);
+		CHECK(LowPassNodeInit(&graph, 1, Rate, std::numeric_limits<float>::infinity(), &node) == MA_INVALID_ARGS);
+		CHECK(LowPassNodeInit(&graph, 1, Rate, 24000.0f, &node) == MA_INVALID_ARGS);
+		CHECK(LowPassNodeInit(&graph, 0, Rate, 100.0f, &node) == MA_INVALID_ARGS);
+		REQUIRE(LowPassNodeInit(&graph, 1, Rate, 100.0f, &node) == MA_SUCCESS);
+		REQUIRE(ma_node_attach_output_bus(&source, 0, &node, 0) == MA_SUCCESS);
+		REQUIRE(ma_node_attach_output_bus(&node, 0, ma_node_graph_get_endpoint(&graph), 0) == MA_SUCCESS);
+		auto read = [&graph](ma_uint64 frames) {
+			std::vector<float> out(frames);
+			ma_uint64 framesRead = 0;
+			REQUIRE(ma_node_graph_read_pcm_frames(&graph, out.data(), frames, &framesRead) == MA_SUCCESS);
+			return out;
+		};
+
+		// The glide: 10 ms after a jump from 100 Hz to 10 kHz the cutoff has covered 1 - 1/e of the way in log
+		// frequency, and it settles exactly on the target.
+		LowPassNodeSetCutoff(&node, 10000.0f);
+		read(Rate / 100);
+		CHECK(LowPassNodeGetCurrentCutoff(&node) == doctest::Approx(100.0 * std::pow(100.0, 1.0 - std::exp(-1.0))).epsilon(0.01));
+		read(Rate / 10);
+		CHECK(LowPassNodeGetCurrentCutoff(&node) == 10000.0f);
+
+		// Settled on DC, the output is 1; at the switch to silence a restart at 100 Hz starts from an empty filter
+		// (without it, the output would decay from 1 over a few milliseconds).
+		const std::vector<float> settled = read(Rate / 20);
+		CHECK(settled.back() == doctest::Approx(1.0f).epsilon(0.001));
+		LowPassNodeSetCutoff(&node, 100.0f);
+		read(Rate / 20);
+		LowPassNodeRestart(&node, 100.0f);
+		const std::vector<float> after = read(Rate / 100);
+		CHECK(std::abs(after.front()) < 1e-6f);
+		CHECK(LowPassNodeGetCurrentCutoff(&node) == 100.0f);
+
+		LowPassNodeUninit(&node, nullptr);
+		ma_data_source_node_uninit(&source, nullptr);
+		ma_audio_buffer_uninit(&buffer);
+		ma_node_graph_uninit(&graph, nullptr);
 	}
 }

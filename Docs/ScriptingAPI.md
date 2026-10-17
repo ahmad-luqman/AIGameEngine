@@ -143,7 +143,7 @@ Entity handles store an ID and stay safe to hold: using a destroyed entity raise
 | `e:GetJointRotation()` | Rotation (Euler degrees, like `Rotation`) of a cone or six-DOF Joint this entity holds, in the joint frame from its rest pose; nil otherwise |
 | `e:HasJoint()` | Whether the Joint this entity holds is a live constraint (false before both bodies exist, when it is invalid, and after it broke) |
 | `e:PlayAudio()`, `e:StopAudio()`, `e:IsAudioPlaying()` | The entity's AudioSource |
-| `e:GetAudioDopplerPitch()` | The Doppler pitch factor applied to the AudioSource in the last mix: 1 = unshifted, also while it is not playing or for a non-spatial source |
+| `e:GetAudioDopplerPitch()` | The Doppler pitch factor of the AudioSource from the last update (the shift its next mix applies): 1 = unshifted, also while it is not playing or for a non-spatial source |
 | `e:PlayParticles()`, `e:StopParticles([clear])`, `e:EmitParticles(count)` | The entity's ParticleEmitter (see Particles; `clear` is a boolean). Errors without a ParticleEmitter |
 | `e:IsEmittingParticles()`, `e:GetParticleCount()` | Whether the ParticleEmitter is playing, and its live particles (false/0 without one) |
 | `e:PlayAnimation([clip])`, `e:CrossFadeAnimation(clip, seconds)`, `e:BlendAnimations(first, second, weight)` | Animator playback and transitions; see Skeletal animation |
@@ -983,16 +983,17 @@ end
 
 **Effects.** A source's effects follow its component while it plays, so scripts can drive them every frame:
 
-- *Low-pass* (`LowPass`): a 12 dB-per-octave filter that glides to a new cutoff over about 10 ms, so it can
-  follow a value that changes every frame without clicks. Raycasting from the listener to a source and muffling
-  it when something is in the way gives cheap occlusion (see `Samples/FirstPerson`).
+- *Low-pass* (`LowPass`): a 12 dB-per-octave filter that glides to a new cutoff (most of the way within about
+  10 ms, settled within about 100 ms), so it can follow a value that changes every frame without clicks.
+  Raycasting from the listener to a source and muffling it when something is in the way gives cheap
+  occlusion (see `Samples/FirstPerson`).
 - *Reverb* (`ReverbSend`): each bus gets one reverb the first time one of its sources sends to it. Its
   output returns into that bus, so the bus volume scales the reverb too; turning a send down lets the tail
   ring out. One room setting applies to every bus's reverb; it belongs to the play session like the bus
   volumes (defaults when play starts, kept through `Scene.Load`):
   - `Audio.SetReverb({ RoomSize = 0.85, Damping = 0.1, Width = 1 })` patches the given settings (each 0
-    to 1: larger rooms ring longer, damping dulls the tail, width spreads it in stereo). Unknown fields or
-    values outside 0..1 raise an error.
+    to 1: larger rooms ring longer, damping dulls the tail, width spreads it in stereo). Unknown or
+    non-string keys, non-numbers and values outside 0..1 raise an error, and nothing changes.
   - `Audio.GetReverb()` returns the current settings as a table.
   The reverb handles mono and stereo output at 22.05 to 176.4 kHz: on other devices (surround) the sends
   are dropped (logged once per bus) and the sounds play dry.
@@ -1002,7 +1003,7 @@ end
   counts), else its change in world position over the frame (also for a static body a script moves).
   Speeds are capped at 100 units per second so a teleport does not read as a sonic boom, and placing an
   entity in `OnCreate` is not a movement.
-  `e:GetAudioDopplerPitch()` reports the shift miniaudio applied. One-shots are never shifted.
+  `e:GetAudioDopplerPitch()` reports the shift the last update set up. One-shots are never shifted.
 
 ```lua
 -- Occlusion: muffle the generator when a wall is between it and the player's camera. OnLateUpdate runs after

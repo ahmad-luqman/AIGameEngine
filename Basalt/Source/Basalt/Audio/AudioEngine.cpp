@@ -18,7 +18,6 @@ namespace Basalt {
 
 	namespace {
 
-		// The device-less engine mixes at this rate; tests read its output at it (see ReadDeviceless).
 		// Frames mixed per step without a device. Stream page refills run between steps.
 		constexpr ma_uint64 MixChunkFrames = 1024;
 		// Bounds the job loop of one step: miniaudio re-posts a job that ran out of order and reports success, so
@@ -159,12 +158,21 @@ namespace Basalt {
 	bool AudioEngine::Init(bool headless, const AudioDevicelessFormat& format)
 	{
 		std::scoped_lock lock(s_Mutex);
-		if (s_Engine)
-			return true;
-		if (format.Channels < 1 || format.Channels > 8 || format.SampleRate < 8000 || format.SampleRate > 192000)
+		const bool supported = format.Channels >= MinDevicelessChannels && format.Channels <= MaxDevicelessChannels && format.SampleRate >= MinDevicelessSampleRate && format.SampleRate <= MaxDevicelessSampleRate;
+		if (!supported)
 		{
 			BS_CORE_ERROR("AudioEngine: unsupported device-less format ({} channels at {} Hz)", format.Channels, format.SampleRate);
 			return false;
+		}
+		if (s_Engine)
+		{
+			// Already running: a device-less engine in another format would hand the caller output it does not expect.
+			if (!s_HasDevice && (ma_engine_get_channels(s_Engine.get()) != format.Channels || ma_engine_get_sample_rate(s_Engine.get()) != format.SampleRate))
+			{
+				BS_CORE_ERROR("AudioEngine: already running without a device at {} channels and {} Hz, not {} and {}", ma_engine_get_channels(s_Engine.get()), ma_engine_get_sample_rate(s_Engine.get()), format.Channels, format.SampleRate);
+				return false;
+			}
+			return true;
 		}
 
 		LogHandle log = CreateForwardingLog();

@@ -93,8 +93,8 @@ function Game:OnCursorLockChanged(locked)
 	self.HintText:SetComponent("UIText", { Text = locked and "WASD move   Space jump   Click shoot   Esc release the mouse" or "Click to look around" })
 end
 
--- Muffles the generator while anything solid is between it and the listener. Runs after physics, so it sees where
--- the player ended up this frame.
+-- Muffles the generator while anything solid is between it and the listener. Called every frame from OnLateUpdate
+-- (after physics, so it sees where the player ended up) and once from OnCreate.
 function Game:UpdateOcclusion()
 	local from = self.Camera.WorldPosition
 	local to = self.Generator.WorldPosition

@@ -5,7 +5,7 @@ file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/So
 add_executable(BasaltTests ${TEST_SOURCES} "${PROJECT_SOURCE_DIR}/Basalt-Editor/Source/EditorContext.cpp")
 target_include_directories(BasaltTests PRIVATE "${PROJECT_SOURCE_DIR}/Basalt-Editor/Source")
 basalt_set_warnings(BasaltTests)
-target_link_libraries(BasaltTests PRIVATE Basalt doctest::doctest BasaltStb)
+target_link_libraries(BasaltTests PRIVATE Basalt doctest::doctest BasaltStb BasaltMiniaudio)
 if(WIN32)
 	target_link_libraries(BasaltTests PRIVATE ws2_32)
 endif()

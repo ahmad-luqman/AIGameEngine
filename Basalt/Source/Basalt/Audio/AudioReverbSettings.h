@@ -24,10 +24,11 @@ namespace Basalt {
 		const char* Name;
 		float AudioReverbSettings::* Member;
 	};
-	inline constexpr std::array<AudioReverbField, 3> AudioReverbFields = { {
+	inline constexpr auto AudioReverbFields = std::to_array<AudioReverbField>({
 		{ "RoomSize", &AudioReverbSettings::RoomSize },
 		{ "Damping", &AudioReverbSettings::Damping },
 		{ "Width", &AudioReverbSettings::Width },
-	} };
+	});
+	static_assert(sizeof(AudioReverbSettings) == AudioReverbFields.size() * sizeof(float), "every reverb setting needs an AudioReverbFields entry");
 
 }

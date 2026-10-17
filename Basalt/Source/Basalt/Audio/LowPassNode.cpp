@@ -1,14 +1,31 @@
 #include "Basalt/Audio/LowPassNode.h"
 
+#include "Basalt/Core/Assert.h"
+
 #include <glm/glm.hpp>
 
 #include <atomic>
 #include <cmath>
 #include <memory>
+#include <numbers>
 #include <type_traits>
 #include <vector>
 
 namespace Basalt {
+
+	struct LowPassState
+	{
+		std::atomic<float> TargetCutoff = 0.0f;
+		std::atomic<bool> RestartPending = false;
+		// The cutoff the filter has reached, published at the end of each block for diagnostics.
+		std::atomic<float> CurrentCutoff = 0.0f;
+		// Fixed at init.
+		float SampleRate = 48000.0f;
+		// Audio thread only (and the main thread before the node is in a graph).
+		float Cutoff = 0.0f;
+		// The two integrators of each channel (one entry per channel).
+		std::vector<glm::vec2> Integrators;
+	};
 
 	namespace {
 
@@ -19,24 +36,14 @@ namespace Basalt {
 		// 100 Hz as at 10 kHz): fast enough to follow occlusion, slow enough to never click.
 		constexpr float GlideSeconds = 0.01f;
 		// A Butterworth response (Q = 1/sqrt(2)): flat up to the cutoff, no resonant peak. The filter's damping is 1/Q.
-		constexpr float Damping = 1.41421356f;
-		constexpr float Pi = 3.14159265f;
+		constexpr float Damping = std::numbers::sqrt2_v<float>;
+		constexpr float Pi = std::numbers::pi_v<float>;
 
-	}
-
-	struct LowPassState
-	{
-		std::atomic<float> TargetCutoff = 0.0f;
-		std::atomic<bool> RestartPending = false;
-		// Audio thread only (and the main thread before the node is in a graph).
-		float Cutoff = 0.0f;
-		float SampleRate = 48000.0f;
-		uint32_t Channels = 0;
-		// The two integrators of each channel.
-		std::vector<glm::vec2> Integrators;
-	};
-
-	namespace {
+		// Positive, finite and below the Nyquist frequency, where the filter is defined.
+		bool IsValidCutoff(float cutoff, float sampleRate)
+		{
+			return std::isfinite(cutoff) && cutoff > 0.0f && cutoff < 0.5f * sampleRate;
+		}
 
 		// The filter's frequency warp for a cutoff: tan(pi * cutoff / sampleRate).
 		float Warp(float cutoff, float sampleRate)
@@ -44,16 +51,17 @@ namespace Basalt {
 			return std::tan(Pi * cutoff / sampleRate);
 		}
 
-		void Process(ma_node* node, const float** framesIn, ma_uint32* frameCountIn, float** framesOut, ma_uint32* frameCountOut)
+		void Process(ma_node* node, const float** framesIn, ma_uint32* /*frameCountIn*/, float** framesOut, ma_uint32* frameCountOut)
 		{
-			(void)frameCountIn;
 			LowPassState& state = *static_cast<LowPassNode*>(node)->State;
 			const ma_uint32 frames = *frameCountOut;
 			const float* in = framesIn[0];
 			float* out = framesOut[0];
 
+			// The flag first: its acquire makes the target LowPassNodeRestart stored before it visible.
+			const bool restart = state.RestartPending.exchange(false, std::memory_order_acquire);
 			const float target = state.TargetCutoff.load(std::memory_order_relaxed);
-			if (state.RestartPending.exchange(false, std::memory_order_acquire))
+			if (restart)
 			{
 				for (glm::vec2& integrators : state.Integrators)
 					integrators = glm::vec2(0.0f);
@@ -71,10 +79,11 @@ namespace Basalt {
 					end = target;
 			}
 			state.Cutoff = end;
+			state.CurrentCutoff.store(end, std::memory_order_relaxed);
 			const float startWarp = Warp(start, state.SampleRate);
 			const float endWarp = Warp(end, state.SampleRate);
 
-			const uint32_t channels = state.Channels;
+			const auto channels = static_cast<uint32_t>(state.Integrators.size());
 			for (ma_uint32 frame = 0; frame < frames; frame++)
 			{
 				const float t = frames > 1 ? static_cast<float>(frame) / static_cast<float>(frames - 1) : 1.0f;
@@ -95,25 +104,25 @@ namespace Basalt {
 			}
 		}
 
-		ma_node_vtable s_VTable = {
+		const ma_node_vtable s_VTable = {
 			Process,
 			nullptr,
 			1, // input buses
 			1, // output buses
-			0  // flags: no input, no output (no tail worth keeping)
+			0  // no flags: not continuous, so the filter's short tail ends when its input stops (as with ma_lpf_node)
 		};
 
 	}
 
 	ma_result LowPassNodeInit(ma_node_graph* graph, uint32_t channels, uint32_t sampleRate, float cutoff, LowPassNode* node)
 	{
-		if (!graph || !node || channels == 0 || sampleRate == 0 || !(cutoff > 0.0f))
+		if (!graph || !node || channels == 0 || sampleRate == 0 || !IsValidCutoff(cutoff, static_cast<float>(sampleRate)))
 			return MA_INVALID_ARGS;
 		auto state = std::make_unique<LowPassState>();
 		state->TargetCutoff.store(cutoff);
+		state->CurrentCutoff.store(cutoff);
 		state->Cutoff = cutoff;
 		state->SampleRate = static_cast<float>(sampleRate);
-		state->Channels = channels;
 		state->Integrators.assign(channels, glm::vec2(0.0f));
 
 		ma_node_config config = ma_node_config_init();
@@ -121,7 +130,8 @@ namespace Basalt {
 		const ma_uint32 channelCount = channels;
 		config.pInputChannels = &channelCount;
 		config.pOutputChannels = &channelCount;
-		// State is set before the node joins the graph: the audio thread may process it as soon as it is attached.
+		// State is set before init so a failed init can clear it; the audio thread reaches the node only once it is
+		// attached.
 		node->State = state.get();
 		if (const ma_result result = ma_node_init(graph, &config, nullptr, &node->Base); result != MA_SUCCESS)
 		{
@@ -143,18 +153,21 @@ namespace Basalt {
 
 	void LowPassNodeSetCutoff(LowPassNode* node, float cutoff)
 	{
+		// A NaN or a cutoff past Nyquist would stay in the filter for good (it glides from where it is).
+		BS_CORE_ASSERT(IsValidCutoff(cutoff, node->State->SampleRate), "the caller keeps the cutoff in (0, Nyquist)");
 		node->State->TargetCutoff.store(cutoff, std::memory_order_relaxed);
 	}
 
 	void LowPassNodeRestart(LowPassNode* node, float cutoff)
 	{
+		BS_CORE_ASSERT(IsValidCutoff(cutoff, node->State->SampleRate), "the caller keeps the cutoff in (0, Nyquist)");
 		node->State->TargetCutoff.store(cutoff, std::memory_order_relaxed);
 		node->State->RestartPending.store(true, std::memory_order_release);
 	}
 
 	float LowPassNodeGetCurrentCutoff(const LowPassNode* node)
 	{
-		return node->State->Cutoff;
+		return node->State->CurrentCutoff.load(std::memory_order_relaxed);
 	}
 
 }

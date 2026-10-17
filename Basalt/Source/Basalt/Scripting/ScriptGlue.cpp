@@ -246,7 +246,7 @@ namespace Basalt {
 		}
 
 		// Lua queries reject arguments the C++ API would quietly treat as "nothing hit", since a script
-		// with a bad vector would otherwise just see empty results.
+		// with a bad vector would otherwise just see empty results; audio positions too, for a clearer error.
 		void RequireFiniteVector(const char* query, const char* argument, const glm::vec3& v)
 		{
 			if (!std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.z))
@@ -351,9 +351,9 @@ namespace Basalt {
 		// from 0 to 1 (checked here so a script gets an error at the call).
 		AudioReverbSettings ReadReverbSettings(const sol::table& table, AudioReverbSettings settings)
 		{
+			const auto names = AudioReverbFields | std::views::transform(&AudioReverbField::Name);
 			for (const auto& [key, value] : table)
 			{
-				const auto names = AudioReverbFields | std::views::transform(&AudioReverbField::Name);
 				if (key.get_type() != sol::type::string)
 					throw std::runtime_error(fmt::format("Audio.SetReverb: settings must use named keys ({}), not a {} key", fmt::join(names, ", "), sol::type_name(key.lua_state(), key.get_type())));
 				const std::string name = key.as<std::string>();
@@ -362,7 +362,11 @@ namespace Basalt {
 					throw std::runtime_error(fmt::format("Audio.SetReverb: unknown setting '{}' (valid: {})", name, fmt::join(names, ", ")));
 				if (value.get_type() != sol::type::number)
 					throw std::runtime_error(fmt::format("Audio.SetReverb: {} must be a number", name));
-				settings.*field->Member = value.as<float>();
+				// Checked as a double: converting one outside float's range (1e300) would be undefined.
+				const auto number = value.as<double>();
+				if (!(number >= 0.0 && number <= 1.0))
+					throw std::runtime_error(fmt::format("Audio.SetReverb: {} must be a number from 0 to 1 (got {})", name, number));
+				settings.*field->Member = static_cast<float>(number);
 			}
 			if (const std::string problem = ValidateAudioReverb(settings); !problem.empty())
 				throw std::runtime_error("Audio.SetReverb: " + problem);
@@ -837,6 +841,8 @@ namespace Basalt {
 			sol::table audio = lua.create_named_table("Audio");
 			audio["PlayOneShot"] = [&context](const std::string& clip, sol::optional<glm::vec3> position, sol::optional<float> volume, sol::optional<std::string> bus) {
 				const glm::vec3* positionPointer = position ? &*position : nullptr;
+				if (position)
+					RequireFiniteVector("Audio.PlayOneShot", "position", *position);
 				const float gain = RequireAudioVolume("Audio.PlayOneShot", volume.value_or(1.0f));
 				const AudioBus target = bus ? ParseAudioBus("Audio.PlayOneShot", *bus) : AudioBus::SFX;
 				return RequireAudio(context).PlayOneShot(clip, positionPointer, gain, target);
@@ -849,7 +855,7 @@ namespace Basalt {
 			audio["GetBusVolume"] = [&context](const std::string& bus) { return RequireAudio(context).GetBusVolume(ParseAudioBus("Audio.GetBusVolume", bus)); };
 			audio["SetReverb"] = [&context](const sol::table& settings) {
 				AudioSystem& system = RequireAudio(context);
-				// ReadReverbSettings raises an error for anything SetReverb would refuse.
+				// ReadReverbSettings raises an error for anything SetReverb refuses today; this catches a rule it adds later.
 				if (!system.SetReverb(ReadReverbSettings(settings, system.GetReverb())))
 					throw std::runtime_error("Audio.SetReverb: the reverb was not changed (see the log)");
 			};

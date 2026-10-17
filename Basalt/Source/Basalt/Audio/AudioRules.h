@@ -7,10 +7,10 @@
 
 namespace Basalt {
 
-	// The value rules of AudioSourceComponent and of bus volumes, in one place for everything that applies
-	// them: the component registry rejects sources outside them (files, Lua, automation, inspector), the
-	// AudioSystem refuses to play a source that C++ code made invalid, and the Lua Audio functions check
-	// volumes with them. A NaN gain would poison the whole output (its bus, Master and every other sound); a
+	// The value rules of AudioSourceComponent, bus volumes and reverb settings, in one place for everything that
+	// applies them: the component registry rejects sources outside them (files, Lua, automation, inspector), the
+	// AudioSystem refuses to play a source that C++ code made invalid (and turns off live effects made invalid
+	// while it plays), and the Lua Audio functions check volumes and reverb settings with them. A NaN gain would poison the whole output (its bus, Master and every other sound); a
 	// negative one would silently invert the sound's phase.
 
 	// The first rule `source` breaks, naming the field and its value; empty when it is valid.
@@ -35,11 +35,12 @@ namespace Basalt {
 	// stays between about 0.26 and 3.8: near the speed of sound miniaudio's pitch goes to 0 (silence) for a receding
 	// listener and to infinity for an approaching source.
 	constexpr float MaxAudioDoppler = 2.0f;
-	// Range of a non-zero AudioSourceComponent::LowPass in Hz. The AudioSystem also keeps the cutoff below 0.45 times
-	// the output's sample rate (under its Nyquist frequency).
+	// Range of a non-zero AudioSourceComponent::LowPass in Hz. The AudioSystem also keeps the cutoff at most
+	// MaxAudioLowPassRateFraction times the output's sample rate (under its Nyquist frequency, half the rate).
 	constexpr float MinAudioLowPass = 10.0f;
 	// The top of human hearing.
 	constexpr float MaxAudioLowPass = 20000.0f;
+	constexpr float MaxAudioLowPassRateFraction = 0.45f;
 
 	inline bool IsValidAudioDoppler(float doppler)
 	{
