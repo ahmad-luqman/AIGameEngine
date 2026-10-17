@@ -257,6 +257,18 @@ TEST_SUITE("Assets")
 		CHECK(AssetManager::ReloadChanged({ "Assets/Textures/Missing.png" }) == std::vector<std::string>{ "Assets/Textures/Missing.png" });
 		CHECK(AssetManager::GetTexture("Assets/Textures/Missing.png"));
 		CHECK(AssetManager::GetLoadedKeys() == std::vector<std::string>{ "Assets/Textures/Missing.png", "Assets/Textures/Wall.png", "builtin://Cube" });
+
+		// A model that failed for want of its buffer is retried when the buffer appears (any change retries failed models).
+		REQUIRE(AssetManager::GetMesh("Assets/Models/Quad.gltf"));
+		REQUIRE(AssetManager::GetTexture("Assets/Models/Quad.gltf#image/0"));
+		std::filesystem::remove(project.GetDirectory() / "Assets/Models/Quad.bin");
+		CHECK(AssetManager::ReloadChanged({ "Assets/Models/Quad.bin" }) == std::vector<std::string>{ "Assets/Models/Quad.gltf", "Assets/Models/Quad.gltf#image/0" });
+		CHECK_FALSE(AssetManager::GetMesh("Assets/Models/Quad.gltf"));
+		project.WriteFile("Assets/Models/Quad.bin", buffer);
+		CHECK(AssetManager::ReloadChanged({ "Assets/Models/Quad.bin" }) == std::vector<std::string>{ "Assets/Models/Quad.gltf" });
+		CHECK(AssetManager::GetMesh("Assets/Models/Quad.gltf"));
+		CHECK(AssetManager::GetSourceFile("Assets/Models/Quad.gltf#image/0") == "Assets/Models/Quad.gltf");
+		CHECK(AssetManager::GetSourceFile("Assets/Textures/Wall.png") == "Assets/Textures/Wall.png");
 		AssetManager::Clear();
 	}
 
@@ -274,6 +286,20 @@ TEST_SUITE("Assets")
 		}
 		CHECK(AssetManager::GetLoadedKeys() == std::vector<std::string>{ "builtin://Cube" });
 		CHECK(AssetManager::FindLoadedMesh("builtin://Cube") == cube);
+
+		// A model loaded only inside the scope goes with its embedded images; a texture loaded before stays.
+		BasaltTest::TempProject project("TemporaryLoadsModel");
+		const std::string buffer = MakeQuadBuffer();
+		const std::string redPng = MakePng(0xFF0000FF);
+		project.WriteFile("Assets/Models/normal.png", MakePng(0x0000FFFF));
+		project.WriteFile("Assets/Models/Quad.gltf", MakeGltfJson({ { "byteLength", buffer.size() }, { "uri", "data:application/octet-stream;base64," + BasaltTest::Base64(buffer.data(), buffer.size()) } }, { { { "uri", "data:image/png;base64," + BasaltTest::Base64(redPng.data(), redPng.size()) } }, { { "uri", "normal.png" } } }).dump());
+		REQUIRE(AssetManager::GetTexture("Assets/Models/normal.png"));
+		{
+			AssetManager::TemporaryLoads temporary;
+			REQUIRE(AssetManager::GetMesh("Assets/Models/Quad.gltf"));
+			REQUIRE(AssetManager::GetTexture("Assets/Models/Quad.gltf#image/0"));
+		}
+		CHECK(AssetManager::GetLoadedKeys() == std::vector<std::string>{ "Assets/Models/normal.png", "builtin://Cube" });
 		AssetManager::Clear();
 	}
 

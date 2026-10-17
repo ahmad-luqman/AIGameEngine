@@ -1,6 +1,7 @@
 #include "Basalt/Automation/EditorPreferences.h"
 
 #include "Basalt/Automation/CommandSchema.h"
+#include "Basalt/Core/Assert.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Platform.h"
@@ -27,10 +28,9 @@ namespace Basalt {
 
 	}
 
-	void EditorPreferences::SetCameraSpeed(float speed)
+	float EditorPreferences::ClampCameraSpeed(float speed, float fallback)
 	{
-		if (std::isfinite(speed))
-			m_CameraSpeed = std::clamp(speed, MinCameraSpeed, MaxCameraSpeed);
+		return std::isfinite(speed) ? std::clamp(speed, MinCameraSpeed, MaxCameraSpeed) : fallback;
 	}
 
 	void EditorPreferences::AddRecentProject(const std::filesystem::path& directory)
@@ -54,15 +54,17 @@ namespace Basalt {
 		namespace S = CommandSchema;
 		nlohmann::json theme = S::String("Dark or Light");
 		theme["enum"] = { ThemeName(EditorTheme::Dark), ThemeName(EditorTheme::Light) };
-		const nlohmann::json recent = { { "type", "array" }, { "description", "project directories, most recent first" }, { "items", S::String("", true) } };
-		return S::Object({ { "cameraSpeed", S::Number("fly speed multiplier", MinCameraSpeed, MaxCameraSpeed) }, { "theme", theme }, { "recentProjects", recent }, { "autoReload", S::Boolean("reload files changed on disk (and hot reload scripts in Play)") } });
+		const nlohmann::json recent = S::Array("project directories, most recent first", S::String("", true));
+		// The limits as written (0.1, not the float 0.1 widened to 0.10000000149...), so the documented minimum passes.
+		return S::Object({ { "cameraSpeed", S::Number("fly speed multiplier", 0.1, 10.0) }, { "theme", theme }, { "recentProjects", recent }, { "autoReload", S::Boolean("reload files changed on disk (and hot reload scripts in Play)") } });
 	}
 
 	bool EditorPreferences::Apply(const nlohmann::json& patch, std::string& outError)
 	{
 		if (!CommandSchema::Validate(Schema(), patch, outError))
 			return false;
-		// Validated as a whole first, so a rejected key cannot leave the others applied.
+		// Validated against the schema above; changes go to a copy, so a later rejection (cameraSpeed) leaves nothing
+		// applied.
 		EditorPreferences next = *this;
 		if (const auto it = patch.find("cameraSpeed"); it != patch.end())
 		{
@@ -75,7 +77,11 @@ namespace Basalt {
 			next.SetCameraSpeed(speed);
 		}
 		if (const auto it = patch.find("theme"); it != patch.end())
-			next.m_Theme = ThemeFromName(it->get<std::string>()).value_or(EditorTheme::Dark);
+		{
+			const std::optional<EditorTheme> theme = ThemeFromName(it->get<std::string>());
+			BS_CORE_ASSERT(theme, "the schema only lets theme names through");
+			next.SetTheme(theme.value_or(EditorTheme::Dark));
+		}
 		if (const auto it = patch.find("recentProjects"); it != patch.end())
 		{
 			next.m_RecentProjects.clear();
@@ -84,7 +90,7 @@ namespace Basalt {
 				next.AddRecentProject(FileSystem::PathFromUtf8(entry->get<std::string>()));
 		}
 		if (const auto it = patch.find("autoReload"); it != patch.end())
-			next.m_AutoReload = it->get<bool>();
+			next.SetAutoReload(it->get<bool>());
 		*this = std::move(next);
 		return true;
 	}
@@ -118,10 +124,10 @@ namespace Basalt {
 		std::error_code error;
 		if (!std::filesystem::exists(file, error) && !error)
 			return preferences;
-		const auto text = FileSystem::ReadTextFile(file);
+		const auto text = error ? std::nullopt : FileSystem::ReadTextFile(file);
 		if (!text)
 		{
-			outError = "cannot read '" + FileSystem::PathToUtf8(file) + "'";
+			outError = "cannot read '" + FileSystem::PathToUtf8(file) + "'" + (error ? ": " + error.message() : std::string());
 			return preferences;
 		}
 		std::string parseError;
@@ -137,6 +143,20 @@ namespace Basalt {
 			return EditorPreferences();
 		}
 		return preferences;
+	}
+
+	std::optional<std::filesystem::path> EditorPreferences::SetAside(const std::filesystem::path& file, std::string& outError)
+	{
+		std::filesystem::path backup = file;
+		backup += ".invalid";
+		std::error_code error;
+		std::filesystem::rename(file, backup, error);
+		if (error)
+		{
+			outError = "cannot rename '" + FileSystem::PathToUtf8(file) + "': " + error.message();
+			return std::nullopt;
+		}
+		return backup;
 	}
 
 	bool EditorPreferences::Save(const std::filesystem::path& file, std::string& outError) const

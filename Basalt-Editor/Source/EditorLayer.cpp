@@ -40,7 +40,6 @@
 // ImGuizmo.h relies on imgui.h being included first.
 #include <ImGuizmo.h>
 
-#include <chrono>
 #include <future>
 #include <limits>
 
@@ -78,13 +77,9 @@ namespace Basalt {
 
 		// How often the editor scans the project's Assets/ folder for changed files.
 		constexpr std::chrono::milliseconds FileWatchInterval{ 500 };
-		// Preference changes are written at most this often (the camera speed changes on every wheel notch).
-		constexpr double PreferencesSaveDelay = 1.0;
-
-		double SecondsNow()
-		{
-			return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-		}
+		// Preferences are written this long after their last change, so a slider drag or wheel scroll writes once it
+		// settles.
+		constexpr float PreferencesSaveDelay = 1.0f;
 
 		const glm::vec4 s_SelectionColor(1.0f, 0.75f, 0.1f, 1.0f);
 		const glm::vec4 s_ColliderColor(0.2f, 1.0f, 0.4f, 0.8f);
@@ -325,17 +320,16 @@ namespace Basalt {
 
 		m_Session.HostName = "editor";
 		m_Session.OnAssetsReloaded = [this](const AssetReloadReport& report) {
-			std::vector<std::string> paths;
-			for (const FileChange& change : report.Changed)
-				paths.push_back(change.Path);
 			if (m_Thumbnails)
-				m_Thumbnails->OnFilesChanged(paths);
+				m_Thumbnails->OnFilesChanged(report.Changed);
 			if (!report.Scripts.Failed.empty())
-				m_Context.SetStatus("Hot reload of " + report.Scripts.Failed.front().first + " failed (the previous version keeps running): see Console", true);
+				m_Context.SetStatus("Hot reload of " + report.Scripts.Failed.front().Path + " failed: see Console", true);
+			else if (!report.Scripts.InstanceErrors.empty())
+				m_Context.SetStatus("Hot reloaded, but a script raised an error: see Console", true);
 			else if (!report.Scripts.Reloaded.empty())
 				m_Context.SetStatus(fmt::format("Hot reloaded {} script(s) ({} instance(s))", report.Scripts.Reloaded.size(), report.Scripts.Instances), false);
 			else if (!report.Assets.empty())
-				m_Context.SetStatus(fmt::format("Reloaded {} changed asset(s)", report.Assets.size()), false);
+				m_Context.SetStatus(fmt::format("Reloading {} changed asset(s)", report.Assets.size()), false);
 		};
 		m_Session.OnSceneChanged = [this]() { OnSceneChanged(); };
 		// Scripts' OnCreate reads the Game view (its resolution even before the tab is first drawn), not the scene
@@ -388,7 +382,7 @@ namespace Basalt {
 	{
 		m_Server.Stop();
 		m_Session.StopPlay();
-		m_Session.GetFileWatcher().StopPolling();
+		m_Session.StopFileWatchPolling();
 		m_Session.OnAssetsReloaded = nullptr;
 		SavePreferences(true);
 		if (Application::Get().GetGraphicsDevice())
@@ -649,13 +643,14 @@ namespace Basalt {
 								 if (!params.empty())
 								 {
 									 ApplyPreferences();
-									 // Written within PreferencesSaveDelay (a slider drag patches every frame) and on exit.
-									 m_PreferencesDirty = true;
-									 m_PreferencesChangedTime = SecondsNow();
+									 // Written PreferencesSaveDelay after the last patch (a slider drag patches every frame) and on exit.
+									 MarkPreferencesDirty();
 								 }
 								 nlohmann::json result = m_Preferences.ToJson();
 								 result["file"] = FileSystem::PathToUtf8(m_PreferencesFile);
-								 result["layoutFile"] = m_PreferencesFile.empty() ? std::string("imgui.ini") : FileSystem::PathToUtf8(m_PreferencesFile.parent_path() / EditorPreferences::LayoutFileName);
+								 result["layoutFile"] = FileSystem::PathToUtf8(m_LayoutFile);
+								 // Without a user data directory they last for this session only.
+								 result["persistent"] = !m_PreferencesFile.empty();
 								 return result;
 							 } });
 
@@ -678,27 +673,44 @@ namespace Basalt {
 			BS_CORE_WARN("Editor: preferences are kept for this session only ({}); the window layout stays in ./imgui.ini", error);
 			return;
 		}
-		m_PreferencesFile = *directory / EditorPreferences::FileName;
-		m_Preferences = EditorPreferences::Load(m_PreferencesFile, error);
+		const std::filesystem::path file = *directory / EditorPreferences::FileName;
+		m_Preferences = EditorPreferences::Load(file, error);
 		if (!error.empty())
-			BS_CORE_WARN("Editor: {}; using the default preferences (the file is replaced when one changes)", error);
+		{
+			// Set aside rather than overwritten by the defaults at the next save.
+			std::string moveError;
+			if (const auto backup = EditorPreferences::SetAside(file, moveError))
+				BS_CORE_WARN("Editor: {}; using the default preferences (the file was moved to '{}')", error, FileSystem::PathToUtf8(*backup));
+			else
+			{
+				BS_CORE_WARN("Editor: {}; using the default preferences for this session only ({})", error, moveError);
+				return;
+			}
+		}
+		m_PreferencesFile = file;
 
-		// ImGui writes the layout file but does not create its folder.
+		// ImGui writes the layout file but does not create its folder: without the folder the layout stays in ./imgui.ini.
 		std::error_code fsError;
 		std::filesystem::create_directories(*directory, fsError);
-		if (fsError)
-			BS_CORE_WARN("Editor: cannot create '{}': {}", FileSystem::PathToUtf8(*directory), fsError.message());
+		if (!std::filesystem::is_directory(*directory, fsError))
+		{
+			BS_CORE_WARN("Editor: cannot create '{}' ({}); the window layout stays in ./imgui.ini", FileSystem::PathToUtf8(*directory), fsError.message());
+			return;
+		}
 		const std::filesystem::path layout = *directory / EditorPreferences::LayoutFileName;
 		// Earlier versions kept the layout in the working directory: carry it over once.
-		const std::filesystem::path legacyLayout = "imgui.ini";
-		if (!std::filesystem::exists(layout, fsError) && std::filesystem::is_regular_file(legacyLayout, fsError))
+		const std::filesystem::path legacyLayout = m_LayoutFile;
+		if (!std::filesystem::exists(layout, fsError) && !fsError && std::filesystem::is_regular_file(legacyLayout, fsError))
 		{
 			std::filesystem::copy_file(legacyLayout, layout, fsError);
 			if (fsError)
 				BS_CORE_WARN("Editor: cannot copy the window layout from ./imgui.ini: {}", fsError.message());
 		}
 		if (ImGuiLayer* imgui = Application::Get().GetImGuiLayer())
+		{
 			imgui->SetIniFilename(FileSystem::PathToUtf8(layout));
+			m_LayoutFile = layout;
+		}
 	}
 
 	void EditorLayer::ApplyPreferences()
@@ -713,92 +725,113 @@ namespace Basalt {
 				ImGuiLayer::SetDarkThemeColors();
 		}
 		EditorColors::SetLightTheme(light);
-		FileWatcher& watcher = m_Session.GetFileWatcher();
-		if (m_Preferences.GetAutoReload() && !watcher.IsPolling())
-			watcher.StartPolling(FileWatchInterval);
-		else if (!m_Preferences.GetAutoReload() && watcher.IsPolling())
-			watcher.StopPolling();
+		const bool autoReload = m_Preferences.GetAutoReload();
+		if (autoReload != m_Session.IsFileWatchPolling())
+		{
+			if (autoReload)
+				m_Session.StartFileWatchPolling(FileWatchInterval);
+			else
+				m_Session.StopFileWatchPolling();
+		}
+	}
+
+	void EditorLayer::MarkPreferencesDirty()
+	{
+		m_PreferencesDirty = true;
+		m_PreferencesChanged.Reset();
 	}
 
 	void EditorLayer::SavePreferences(bool now)
 	{
 		if (!m_PreferencesDirty || m_PreferencesFile.empty())
 			return;
-		if (!now && SecondsNow() - m_PreferencesChangedTime < PreferencesSaveDelay)
+		if (!now && m_PreferencesChanged.Elapsed() < PreferencesSaveDelay)
 			return;
 		m_PreferencesDirty = false;
 		std::string error;
-		if (!m_Preferences.Save(m_PreferencesFile, error))
+		if (m_Preferences.Save(m_PreferencesFile, error))
+			m_PreferencesSaveFailed = false;
+		else if (!m_PreferencesSaveFailed)
+		{
+			// Tried again with the next change, warned about once.
+			m_PreferencesSaveFailed = true;
 			BS_CORE_WARN("Editor: cannot save the preferences: {}", error);
+		}
 	}
 
 	void EditorLayer::UpdateFileWatching()
 	{
-		// Follows project.open/create from any source (menu, prompt, automation).
-		m_Session.SyncFileWatcher();
-		FileWatcher& watcher = m_Session.GetFileWatcher();
-		if (watcher.IsPolling())
-		{
-			if (const std::vector<FileChange> changes = watcher.Update(); !changes.empty())
-				m_Session.ReloadAssets(changes);
-		}
+		// Polling follows project.open/create from any source (menu, prompt, automation).
+		if (const std::vector<FileChange> changes = m_Session.PollFileChanges(); !changes.empty())
+			m_Session.ReloadAssets(changes);
+	}
 
+	void EditorLayer::UpdatePreferences()
+	{
 		const Ref<Project>& project = Project::GetActive();
 		if (project && project != m_RecentProject.lock())
 		{
 			m_RecentProject = project;
 			m_Preferences.AddRecentProject(project->GetDirectory());
-			m_PreferencesDirty = true;
-			m_PreferencesChangedTime = SecondsNow();
+			MarkPreferencesDirty();
 		}
 		// The wheel changes the camera's speed while flying.
 		if (m_Camera.GetSpeedMultiplier() != m_Preferences.GetCameraSpeed())
 		{
 			m_Preferences.SetCameraSpeed(m_Camera.GetSpeedMultiplier());
-			m_PreferencesDirty = true;
-			m_PreferencesChangedTime = SecondsNow();
+			MarkPreferencesDirty();
 		}
 		SavePreferences(false);
 	}
 
-	void EditorLayer::DrawRecentProjects(bool prompt)
+	void EditorLayer::OpenRecentProject(const std::string& directory)
 	{
-		const std::vector<std::string> recent = m_Preferences.GetRecentProjects();
+		Stop();
+		m_Context.Execute("project.open", { { "path", directory } });
+	}
+
+	void EditorLayer::DrawRecentProjectsMenu()
+	{
+		const std::vector<std::string>& recent = m_Preferences.GetRecentProjects();
 		if (recent.empty())
-		{
 			ImGui::TextDisabled("No recent projects");
-			return;
-		}
+		std::string chosen;
 		for (const std::string& directory : recent)
 		{
 			std::error_code error;
-			const bool exists = std::filesystem::is_directory(FileSystem::PathFromUtf8(directory), error);
-			if (prompt)
-			{
-				// In the prompt a click fills in the path and a double click opens the project.
-				ImGui::BeginDisabled(!exists);
-				if (ImGui::Selectable(directory.c_str(), m_PromptPath == directory, ImGuiSelectableFlags_AllowDoubleClick))
-				{
-					m_PromptPath = directory;
-					if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && m_Context.Execute("project.open", { { "path", directory } }))
-					{
-						m_Prompt = PromptKind::None;
-						ImGui::CloseCurrentPopup();
-					}
-				}
-				ImGui::EndDisabled();
-			}
-			else if (ImGui::MenuItem(directory.c_str(), nullptr, false, exists))
-			{
-				Stop();
-				m_Context.Execute("project.open", { { "path", directory } });
-			}
+			if (ImGui::MenuItem(directory.c_str(), nullptr, false, std::filesystem::is_directory(FileSystem::PathFromUtf8(directory), error)))
+				chosen = directory;
 		}
-		if (!prompt)
+		ImGui::Separator();
+		if (ImGui::MenuItem("Clear Recent Projects", nullptr, false, !recent.empty()))
+			m_Context.Execute("editor.preferences", { { "recentProjects", nlohmann::json::array() } });
+		// After the loop: opening a project adds it to the list being drawn.
+		if (!chosen.empty())
+			OpenRecentProject(chosen);
+	}
+
+	void EditorLayer::DrawRecentProjectsList()
+	{
+		std::string opened;
+		for (const std::string& directory : m_Preferences.GetRecentProjects())
 		{
-			ImGui::Separator();
-			if (ImGui::MenuItem("Clear Recent Projects"))
-				m_Context.Execute("editor.preferences", { { "recentProjects", nlohmann::json::array() } });
+			std::error_code error;
+			ImGui::BeginDisabled(!std::filesystem::is_directory(FileSystem::PathFromUtf8(directory), error));
+			if (ImGui::Selectable(directory.c_str(), m_PromptPath == directory, ImGuiSelectableFlags_AllowDoubleClick))
+			{
+				m_PromptPath = directory;
+				if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+					opened = directory;
+			}
+			ImGui::EndDisabled();
+		}
+		if (opened.empty())
+			return;
+		OpenRecentProject(opened);
+		if (Project::GetActive())
+		{
+			m_Prompt = PromptKind::None;
+			ImGui::CloseCurrentPopup();
 		}
 	}
 
@@ -1028,6 +1061,7 @@ namespace Basalt {
 		m_RenderDeltaTime = ts;
 		// Changed files are reloaded before anything uses them this frame (scripts before the scene updates).
 		UpdateFileWatching();
+		UpdatePreferences();
 		HandleShortcuts();
 		m_Camera.SetViewportSize(static_cast<uint32_t>(m_ViewportSize.x), static_cast<uint32_t>(m_ViewportSize.y));
 		if (!m_VertexSnapDrag && !m_GizmoWasUsing && !m_BoxStart)
@@ -1497,7 +1531,7 @@ namespace Basalt {
 				m_Prompt = PromptKind::OpenProject;
 			if (ImGui::BeginMenu("Open Recent Project"))
 			{
-				DrawRecentProjects(false);
+				DrawRecentProjectsMenu();
 				ImGui::EndMenu();
 			}
 			if (ImGui::MenuItem("Set Current Scene as Start Scene", nullptr, false, !m_Session.GetScenePath().empty()))
@@ -2361,7 +2395,7 @@ namespace Basalt {
 			if (m_Prompt == PromptKind::OpenProject && !m_Preferences.GetRecentProjects().empty())
 			{
 				ImGui::TextDisabled("Recent projects (double-click to open):");
-				DrawRecentProjects(true);
+				DrawRecentProjectsList();
 				ImGui::Separator();
 			}
 			ImGui::SetNextItemWidth(520.0f);

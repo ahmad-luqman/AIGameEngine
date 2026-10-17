@@ -56,6 +56,11 @@ namespace Basalt::CommandSchema {
 		return { { "type", "array" }, { "description", description }, { "items", Number("", -std::numeric_limits<float>::max(), std::numeric_limits<float>::max()) }, { "minItems", size }, { "maxItems", size } };
 	}
 
+	json Array(const std::string& description, json items)
+	{
+		return { { "type", "array" }, { "description", description }, { "items", std::move(items) } };
+	}
+
 	json Entity(const std::string& description)
 	{
 		return { { "description", description }, { "anyOf", json::array({ String("", true), Integer("", 0, UINT64_MAX) }) } };

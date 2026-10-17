@@ -1,5 +1,7 @@
 #include "Basalt/Asset/Thumbnails.h"
 
+#include "Basalt/Asset/MeshImporter.h"
+
 #include "Basalt/Asset/ImageUtils.h"
 #include "Basalt/Asset/TextureSource.h"
 #include "Basalt/Core/FileSystem.h"
@@ -121,14 +123,9 @@ namespace Basalt {
 			const std::string path = FileSystem::PathToUtf8(projectDirectory / FileSystem::PathFromUtf8(model));
 			if (cgltf_parse_file(&options, path.c_str(), &data) != cgltf_result_success)
 				return;
-			const std::filesystem::path folder = FileSystem::PathFromUtf8(model).parent_path();
 			const auto add = [&](const char* uri) {
-				if (!uri || std::string_view(uri).rfind("data:", 0) == 0)
-					return;
-				std::string decoded = uri;
-				cgltf_decode_uri(decoded.data());
-				decoded.resize(std::strlen(decoded.c_str()));
-				outDependencies.insert(FileSystem::PathToUtf8((folder / FileSystem::PathFromUtf8(decoded)).lexically_normal().generic_u8string()));
+				if (uri && std::string_view(uri).rfind("data:", 0) != 0)
+					outDependencies.insert(MeshImporter::GetExternalFileKey(model, uri));
 			};
 			for (cgltf_size i = 0; i < data->buffers_count; i++)
 				add(data->buffers[i].uri);

@@ -18,6 +18,11 @@ function Spinner:OnUpdate(dt)
 	self.Turns = self.Turns + self.Speed * dt / (2 * Math.Pi)
 end
 
+-- After a hot reload (the feature test's batch reloads this script mid-run): the instance kept its fields.
+function Spinner:OnReload()
+	self.Reloads = (self.Reloads or 0) + 1
+end
+
 function Spinner:OnLateUpdate(dt)
 	self.LateUpdates = (self.LateUpdates or 0) + 1
 end

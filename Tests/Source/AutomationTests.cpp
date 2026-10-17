@@ -1353,6 +1353,31 @@ TEST_SUITE("Automation")
 		CHECK(Run(registry, session, "asset.refresh")["changed"].empty());
 		Run(registry, session, "play.step");
 		CHECK(x() == 6000.0);
+		// A path spelled differently is the same file, reported and acknowledged under its normal key.
+		temp.WriteFile(script, mover(1));
+		const json dotted = Run(registry, session, "asset.refresh", { { "paths", json::array({ "Assets/Scripts/./Mover.lua" }) } });
+		CHECK(dotted["changed"] == json::array({ { { "path", script }, { "type", "Modified" } } }));
+		CHECK(dotted["scripts"]["reloaded"] == json::array({ script }));
+		CHECK(Run(registry, session, "asset.refresh")["changed"].empty());
+		Run(registry, session, "play.step");
+		// A removed script keeps running until play stops; written again, it is hot reloaded.
+		std::filesystem::remove(temp.GetDirectory() / script);
+		const json removed = Run(registry, session, "asset.refresh");
+		CHECK(removed["changed"] == json::array({ { { "path", script }, { "type", "Removed" } } }));
+		CHECK(removed["scripts"]["hotReload"] == "none");
+		const double before = x();
+		Run(registry, session, "play.step");
+		CHECK(x() == before + 1.0);
+		temp.WriteFile(script, mover(3));
+		const json added = Run(registry, session, "asset.refresh");
+		CHECK(added["changed"][0]["type"] == "Added");
+		CHECK(added["scripts"]["hotReload"] == "applied");
+		CHECK(added["scripts"]["reloaded"] == json::array({ script }));
+		// An OnReload error is reported with the reload (and disables the instance, as any callback error does).
+		const json failing = Run(registry, session, "asset.write", { { "path", script }, { "content", mover(3, "function Mover:OnReload() error('no') end") } });
+		CHECK(failing["scripts"]["instances"] == 0);
+		REQUIRE(failing["scripts"]["instanceErrors"].size() == 1);
+		CHECK(failing["scripts"]["instanceErrors"][0].get<std::string>().find("(in OnReload)") != std::string::npos);
 		Run(registry, session, "play.stop");
 
 		// Outside Play scripts are only reported; files the session writes are never reported.
@@ -1360,14 +1385,62 @@ TEST_SUITE("Automation")
 		refresh = Run(registry, session, "asset.refresh");
 		CHECK(refresh["changed"].size() == 1);
 		CHECK(refresh["scripts"]["reloaded"].empty());
+		CHECK(refresh["scripts"]["hotReload"] == "notPlaying");
 		Run(registry, session, "scene.save", { { "path", "Assets/Scenes/Hot.bscene" } });
 		Run(registry, session, "prefab.create", { { "entity", "Mover" }, { "path", "Assets/Prefabs/Mover.bprefab" } });
 		CHECK(Run(registry, session, "asset.refresh")["changed"].empty());
 		std::filesystem::remove(temp.GetDirectory() / "Assets/Prefabs/Mover.bprefab");
 		CHECK(Run(registry, session, "asset.refresh")["changed"] == json::array({ { { "path", "Assets/Prefabs/Mover.bprefab" }, { "type", "Removed" } } }));
 
+		// A replay recorded across a hot reload says it may not reproduce the run.
+		Run(registry, session, "replay.record_start");
+		Run(registry, session, "play.start");
+		Run(registry, session, "asset.write", { { "path", script }, { "content", mover(4) } });
+		const json replay = Run(registry, session, "replay.record_stop", { { "path", "Assets/Replays/Hot.breplay" } });
+		REQUIRE(replay["warnings"].size() == 1);
+		CHECK(replay["warnings"][0].get<std::string>().find("hot reloaded") != std::string::npos);
+		Run(registry, session, "play.stop");
+		// Its own file is acknowledged like the others.
+		CHECK(Run(registry, session, "asset.refresh")["changed"].empty());
+		Run(registry, session, "replay.record_start");
+		CHECK_FALSE(Run(registry, session, "replay.record_stop", { { "path", "Assets/Replays/Plain.breplay" } }).contains("warnings"));
+
 		CHECK(RunError(registry, session, "asset.refresh", { { "paths", "Assets/Scripts/Mover.lua" } }).find("array") != std::string::npos);
 		CHECK(RunError(registry, session, "asset.refresh", { { "paths", json::array({ "../x.lua" }) } }).find("..") != std::string::npos);
+		// A typo is not a removal, and a folder names no file.
+		CHECK(RunError(registry, session, "asset.refresh", { { "paths", json::array({ "Assets/Scripts/Mvoer.lua" }) } }).find("does not exist") != std::string::npos);
+		CHECK(RunError(registry, session, "asset.refresh", { { "paths", json::array({ "Assets/Scripts" }) } }).find("folder") != std::string::npos);
+	}
+
+	TEST_CASE("Asset reloads reach the host, and Simulate does not hot reload scripts")
+	{
+		BasaltTest::TempProject temp("AutomationReloadHook");
+		CommandRegistry registry;
+		AutomationSession session;
+		std::vector<AssetReloadReport> reports;
+		session.OnAssetsReloaded = [&](const AssetReloadReport& report) { reports.push_back(report); };
+		// The first refresh takes the baseline; nothing changed, so the host hears nothing.
+		Run(registry, session, "asset.refresh");
+		CHECK(reports.empty());
+		Run(registry, session, "asset.write", { { "path", "Assets/Scripts/Sim.lua" }, { "content", "local S = {} return S" } });
+		REQUIRE(reports.size() == 1);
+		CHECK(reports[0].Changed == std::vector<FileChange>{ { "Assets/Scripts/Sim.lua", FileChangeType::Added } });
+		// Nothing changed: no call.
+		Run(registry, session, "asset.refresh");
+		CHECK(reports.size() == 1);
+		temp.WriteFile("Assets/Textures/T.png", "x");
+		Run(registry, session, "asset.refresh");
+		REQUIRE(reports.size() == 2);
+		CHECK(reports[1].Changed == std::vector<FileChange>{ { "Assets/Textures/T.png", FileChangeType::Added } });
+		CHECK(reports[1].HotReload == ScriptHotReload::None);
+
+		Run(registry, session, "entity.create", { { "name", "Sim" }, { "components", { { "Script", { { "Script", "Assets/Scripts/Sim.lua" } } } } } });
+		std::string error;
+		REQUIRE(session.StartPlay(error, true));
+		const json simulated = Run(registry, session, "asset.write", { { "path", "Assets/Scripts/Sim.lua" }, { "content", "local S = {} return S -- v2" } });
+		CHECK(simulated["scripts"]["hotReload"] == "simulating");
+		CHECK(simulated["scripts"]["reloaded"].empty());
+		session.StopPlay();
 	}
 
 	TEST_CASE("asset.refresh needs a project and follows the active one")
@@ -1403,7 +1476,7 @@ TEST_SUITE("Automation")
 		CHECK(preferences.GetCameraSpeed() == EditorPreferences::MinCameraSpeed);
 
 		BasaltTest::TempDirectory directory("EditorPreferences");
-		const std::filesystem::path root = directory.GetPath();
+		const std::filesystem::path& root = directory.GetPath();
 		for (int i = 0; i < 12; i++)
 			preferences.AddRecentProject(root / ("Project" + std::to_string(i)));
 		REQUIRE(preferences.GetRecentProjects().size() == EditorPreferences::MaxRecentProjects);
@@ -1433,6 +1506,19 @@ TEST_SUITE("Automation")
 		REQUIRE(preferences.GetRecentProjects().size() == 2);
 		CHECK(std::filesystem::path(preferences.GetRecentProjects()[0]) == root / "B");
 
+		// Bounds as documented, and the list capped when patched too.
+		CHECK(preferences.Apply({ { "cameraSpeed", 0.1 } }, error));
+		CHECK(preferences.GetCameraSpeed() == EditorPreferences::MinCameraSpeed);
+		CHECK(preferences.Apply({ { "cameraSpeed", 10 } }, error));
+		json many = json::array();
+		for (int i = 0; i < 12; i++)
+			many.push_back((root / ("P" + std::to_string(i))).string());
+		CHECK(preferences.Apply({ { "recentProjects", many } }, error));
+		REQUIRE(preferences.GetRecentProjects().size() == EditorPreferences::MaxRecentProjects);
+		CHECK(std::filesystem::path(preferences.GetRecentProjects()[0]) == root / "P0");
+		CHECK(EditorPreferences::ClampCameraSpeed(std::numeric_limits<float>::infinity(), 2.0f) == 2.0f);
+		CHECK(preferences.Apply({ { "recentProjects", json::array({ (root / "B").string(), (root / "A").string(), (root / "B").string() }) }, { "cameraSpeed", 2.5 } }, error));
+
 		const std::filesystem::path file = root / "Editor" / EditorPreferences::FileName;
 		CHECK(EditorPreferences::Load(file, error) == EditorPreferences());
 		CHECK(error.empty());
@@ -1446,6 +1532,13 @@ TEST_SUITE("Automation")
 			CHECK(EditorPreferences::Load(file, error) == EditorPreferences());
 			CHECK(error.find(EditorPreferences::FileName) != std::string::npos);
 		}
+		// A rejected file is set aside, not lost.
+		const auto aside = EditorPreferences::SetAside(file, error);
+		REQUIRE(aside);
+		CHECK_FALSE(std::filesystem::exists(file));
+		CHECK(FileSystem::ReadTextFile(*aside) == std::optional<std::string>("[1,2]"));
+		CHECK_FALSE(EditorPreferences::SetAside(file, error));
+		CHECK_FALSE(error.empty());
 
 		BasaltTest::ScopedEnvVar userData(Platform::UserDataDirectoryVariable, (root / "UserData").string());
 		const auto preferencesDirectory = EditorPreferences::GetDirectory(error);

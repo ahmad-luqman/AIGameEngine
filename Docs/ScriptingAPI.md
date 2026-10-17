@@ -73,21 +73,26 @@ return Player
 
 ### Hot reload
 
-A script saved while the game runs is loaded again without stopping play: in the editor as soon as the file
-settles on disk (View > Reload Changed Files Automatically, on by default), through automation with `asset.write`
-or `asset.refresh` (which also reloads models and textures changed on disk).
+A script saved while the game runs (Play; not while simulating) is loaded again without stopping play: in the editor
+as soon as the file settles on disk (View > Reload Changed Files Automatically, on by default), through automation
+with `asset.write` or `asset.refresh` (which also reloads models and textures changed on disk).
 
 - Every instance of the script moves onto the new class and **keeps its fields** (`self.Health`, counters,
-  references to other entities); `Properties` the new version adds are set from the defaults or the component's
-  overrides. Then `OnReload()` is called on each instance (not `OnCreate`).
-- A changed module (`require`) reloads every script, so they pick up the new module.
-- A version that does not load (a syntax error, an error in its top-level code, no class table) is reported and the
-  **previous version keeps running**; fix it and save again. An instance that a runtime error disabled runs again
-  after a successful reload, and entities whose script failed to load when play started get their instances
-  (with `OnCreate`) then.
-- Not carried over: module-level `local` variables start afresh, and functions already handed to timers, coroutines
-  or event handlers keep running the old code until they are created again (`OnReload` can restart them). A
-  disabled instance's timers and handlers were cancelled when it failed.
+  references to other entities). `Properties` the new version adds are set from the defaults or the component's
+  overrides; a default that changed does not reach instances that already have the field. Then each started instance
+  gets `OnReload()` (not `OnCreate`); one that had not started, or whose `OnCreate` raised an error, gets `OnCreate`.
+- A changed module (`require`d directly or through another module) reloads every module and every script, so they
+  pick up the new version. Saving a module whose `require` failed retries the scripts that failed to load.
+- A version that does not load (a syntax error, an error in its top-level code, no class table) is reported and a
+  script that was running **keeps its previous version**; fix it and save again. An instance that a runtime error
+  disabled runs again after a successful reload, and entities whose script failed to load get their instances (with
+  `OnCreate`) then.
+- The script's top-level code runs again. Timers and event handlers it started (`Events.On` at the top level) end
+  with the old version, so they never pile up.
+- Not carried over: module-level `local` variables start afresh, and functions instances already handed to timers,
+  coroutines or event handlers keep running the old code until they are created again (`OnReload` can restart them).
+  A disabled instance's timers and handlers were cancelled when it failed.
+- Deleting a script leaves its running version in place until play stops.
 
 ## Math types
 

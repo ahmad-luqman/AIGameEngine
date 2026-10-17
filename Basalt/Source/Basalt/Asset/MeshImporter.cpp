@@ -149,22 +149,13 @@ namespace Basalt {
 			return uri && std::string_view(uri).rfind("data:", 0) == 0;
 		}
 
-		// The asset key of an external (not data:) URI of the glTF.
-		std::string ExternalFileKey(const char* uri, const std::filesystem::path& gltfPath)
-		{
-			std::string decoded = uri;
-			cgltf_decode_uri(decoded.data());
-			decoded.resize(std::strlen(decoded.c_str()));
-			return Project::MakeRelative(gltfPath.parent_path() / decoded);
-		}
-
-		std::string TextureKey(const cgltf_data* data, const cgltf_texture_view& view, const std::filesystem::path& gltfPath, const std::string& meshKey)
+		std::string TextureKey(const cgltf_data* data, const cgltf_texture_view& view, const std::string& meshKey)
 		{
 			if (!view.texture || !view.texture->image)
 				return {};
 			const cgltf_image* image = view.texture->image;
 			if (image->uri && !IsDataUri(image->uri))
-				return ExternalFileKey(image->uri, gltfPath);
+				return MeshImporter::GetExternalFileKey(meshKey, image->uri);
 			return meshKey + "#image/" + std::to_string(image - data->images);
 		}
 
@@ -240,6 +231,14 @@ namespace Basalt {
 
 	}
 
+	std::string MeshImporter::GetExternalFileKey(const std::string& modelKey, const char* uri)
+	{
+		std::string decoded = uri;
+		cgltf_decode_uri(decoded.data());
+		decoded.resize(std::strlen(decoded.c_str()));
+		return FileSystem::PathToGenericUtf8((FileSystem::PathFromUtf8(modelKey).parent_path() / FileSystem::PathFromUtf8(decoded)).lexically_normal());
+	}
+
 	Ref<MeshSource> MeshImporter::LoadGltf(const std::filesystem::path& path, const std::string& key, std::string& outError)
 	{
 		GltfData data = LoadGltfData(path, outError);
@@ -254,12 +253,14 @@ namespace Basalt {
 		Ref<MeshSource> source = CreateRef<MeshSource>();
 		source->Key = key;
 		std::set<std::string> externalFiles;
+		const auto addExternal = [&](const char* uri) {
+			if (uri && !IsDataUri(uri))
+				externalFiles.insert(GetExternalFileKey(key, uri));
+		};
 		for (cgltf_size i = 0; i < data->buffers_count; i++)
-			if (data->buffers[i].uri && !IsDataUri(data->buffers[i].uri))
-				externalFiles.insert(ExternalFileKey(data->buffers[i].uri, path));
+			addExternal(data->buffers[i].uri);
 		for (cgltf_size i = 0; i < data->images_count; i++)
-			if (data->images[i].uri && !IsDataUri(data->images[i].uri))
-				externalFiles.insert(ExternalFileKey(data->images[i].uri, path));
+			addExternal(data->images[i].uri);
 		source->ExternalFiles.assign(externalFiles.begin(), externalFiles.end());
 
 		// Materials (plus a default one at the end for primitives without a material).
@@ -274,12 +275,12 @@ namespace Basalt {
 				result.AlbedoColor = { pbr.base_color_factor[0], pbr.base_color_factor[1], pbr.base_color_factor[2], pbr.base_color_factor[3] };
 				result.Metallic = pbr.metallic_factor;
 				result.Roughness = pbr.roughness_factor;
-				result.AlbedoMap = TextureKey(data.get(), pbr.base_color_texture, path, key);
-				result.MetallicRoughnessMap = TextureKey(data.get(), pbr.metallic_roughness_texture, path, key);
+				result.AlbedoMap = TextureKey(data.get(), pbr.base_color_texture, key);
+				result.MetallicRoughnessMap = TextureKey(data.get(), pbr.metallic_roughness_texture, key);
 			}
-			result.NormalMap = TextureKey(data.get(), material.normal_texture, path, key);
-			result.OcclusionMap = TextureKey(data.get(), material.occlusion_texture, path, key);
-			result.EmissiveMap = TextureKey(data.get(), material.emissive_texture, path, key);
+			result.NormalMap = TextureKey(data.get(), material.normal_texture, key);
+			result.OcclusionMap = TextureKey(data.get(), material.occlusion_texture, key);
+			result.EmissiveMap = TextureKey(data.get(), material.emissive_texture, key);
 			result.EmissiveColor = { material.emissive_factor[0], material.emissive_factor[1], material.emissive_factor[2] };
 			if (material.has_emissive_strength)
 				result.EmissiveIntensity = material.emissive_strength.emissive_strength;

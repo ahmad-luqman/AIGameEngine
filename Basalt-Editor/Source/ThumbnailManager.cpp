@@ -130,11 +130,13 @@ namespace Basalt {
 		return &slot.Data;
 	}
 
-	void ThumbnailManager::OnFilesChanged(const std::vector<std::string>& paths)
+	void ThumbnailManager::OnFilesChanged(const std::vector<FileChange>& changes)
 	{
-		const std::unordered_set<std::string> changed(paths.begin(), paths.end());
+		std::unordered_set<std::string> changed;
+		for (const FileChange& change : changes)
+			changed.insert(change.Path);
 		// An embedded image key ("Model.glb#image/0") changes with its model file.
-		const auto uses = [&](const std::string& map) { return !map.empty() && changed.contains(map.substr(0, map.find('#'))); };
+		const auto uses = [&](const std::string& map) { return !map.empty() && changed.contains(AssetManager::GetSourceFile(map)); };
 		for (auto& [id, slot] : m_Slots)
 		{
 			if (!slot.IsMaterial)
@@ -230,19 +232,8 @@ namespace Basalt {
 			Upload(slot, entry->Image);
 			return false;
 		}
-		// AssetManager keeps what it loaded for an earlier preview (or the open scene): read the changed files again.
-		// (This also reloads them for the open scene, which is what a changed file means there too.)
-		if (sourceChanged && IsRenderedThumbnail(slot.Data.Kind))
-		{
-			AssetManager::Reload(id);
-			for (const std::string& dependency : cache->GetDependencies(id))
-				AssetManager::Reload(dependency);
-		}
-		std::optional<ThumbnailCache::Entry> entry;
-		{
-			AssetManager::TemporaryLoads previewOnly;
-			entry = Make(id, slot.Data.Kind, error);
-		}
+		std::vector<Preview::Material> materials;
+		const auto entry = Make(id, slot.Data.Kind, sourceChanged, materials, error);
 		if (!entry)
 		{
 			BS_CORE_WARN("Thumbnails: no preview of '{}': {}", id, error);
@@ -253,6 +244,7 @@ namespace Basalt {
 		if (!cache->Store(id, slot.Key, *entry, error))
 			BS_CORE_WARN("Thumbnails: cannot cache the preview of '{}': {}", id, error);
 		slot.Data.Details = entry->Details;
+		slot.Data.Materials = std::move(materials);
 		Upload(slot, entry->Image);
 		return IsRenderedThumbnail(slot.Data.Kind);
 	}
@@ -279,8 +271,22 @@ namespace Basalt {
 		return true;
 	}
 
-	std::optional<ThumbnailCache::Entry> ThumbnailManager::Make(const std::string& relativePath, ThumbnailKind kind, std::string& outError)
+	std::optional<ThumbnailCache::Entry> ThumbnailManager::Make(const std::string& relativePath, ThumbnailKind kind, bool reread, std::vector<Preview::Material>& outMaterials, std::string& outError)
 	{
+		// What only this preview loads is released once it is made; what was loaded before (the open scene's) stays,
+		// including when it is read again below.
+		AssetManager::TemporaryLoads previewOnly;
+		// AssetManager keeps what it loaded earlier: read the changed files again. (The open scene then shows the new
+		// version too, which is what a changed file means there.)
+		if (reread && IsRenderedThumbnail(kind))
+		{
+			if (const auto cache = GetCache())
+			{
+				AssetManager::Reload(relativePath);
+				for (const std::string& dependency : cache->GetDependencies(relativePath))
+					AssetManager::Reload(dependency);
+			}
+		}
 		switch (kind)
 		{
 			case ThumbnailKind::Image:
@@ -309,6 +315,9 @@ namespace Basalt {
 				const Ref<MeshSource> mesh = AssetManager::FindLoadedMesh(relativePath);
 				if (!mesh)
 					BS_CORE_WARN("Thumbnails: '{}' rendered but is no longer loaded; its preview has no details", relativePath);
+				// Kept with the preview: the model itself is released when the preview is made.
+				for (size_t i = 0; mesh && i < mesh->Materials.size(); i++)
+					outMaterials.push_back({ mesh->Materials[i].Name.empty() ? "Material " + std::to_string(i) : mesh->Materials[i].Name, ToMaterialComponent(mesh->Materials[i]) });
 				return ThumbnailCache::Entry{ std::move(*image), mesh ? ModelDetails(*mesh) : std::vector<std::string>{} };
 			}
 			case ThumbnailKind::Prefab:
@@ -374,28 +383,16 @@ namespace Basalt {
 		Generated result;
 		result.Kind = kind;
 		result.CachePath = cache->GetImagePath(relativePath);
-		if (refresh)
-		{
-			// A refresh reads the model (and what it uses) again, whatever AssetManager holds.
-			if (IsRenderedThumbnail(kind))
-			{
-				AssetManager::Reload(relativePath);
-				for (const std::string& dependency : cache->GetDependencies(relativePath))
-					AssetManager::Reload(dependency);
-			}
-		}
-		else if (auto entry = cache->Load(relativePath, *key))
+		// A refresh makes it again, reading the model (and what it uses) anew, whatever AssetManager holds.
+		if (auto entry = refresh ? std::nullopt : cache->Load(relativePath, *key))
 		{
 			result.Image = std::move(entry->Image);
 			result.Details = std::move(entry->Details);
 			result.Cached = true;
 			return result;
 		}
-		std::optional<ThumbnailCache::Entry> entry;
-		{
-			AssetManager::TemporaryLoads previewOnly;
-			entry = Make(relativePath, kind, outError);
-		}
+		std::vector<Preview::Material> materials;
+		auto entry = Make(relativePath, kind, refresh, materials, outError);
 		if (!entry)
 			return std::nullopt;
 		if (!cache->Store(relativePath, *key, *entry, result.CacheWarning))

@@ -316,12 +316,22 @@ namespace Basalt {
 			return path;
 		}
 
-		json ScriptReloadJson(const ScriptReloadResult& result)
+		// Makes a just loaded or created project the active one, starting its assets and file watching afresh.
+		void ActivateProject(AutomationSession& session, const Ref<Project>& project)
+		{
+			Project::SetActive(project);
+			session.SyncFileWatcher();
+			AssetManager::Clear();
+			PhysicsWorld::ClearMeshShapeCache();
+		}
+
+		// The script part of an asset reload, as asset.write and asset.refresh return it.
+		json ScriptReloadJson(const AssetReloadReport& report)
 		{
 			json failed = json::array();
-			for (const auto& [path, error] : result.Failed)
-				failed.push_back({ { "path", path }, { "error", error } });
-			return { { "reloaded", result.Reloaded }, { "failed", failed }, { "instances", result.Instances } };
+			for (const ScriptReloadFailure& failure : report.Scripts.Failed)
+				failed.push_back({ { "path", failure.Path }, { "error", failure.Error } });
+			return { { "hotReload", ScriptHotReloadName(report.HotReload) }, { "reloaded", report.Scripts.Reloaded }, { "failed", failed }, { "instances", report.Scripts.Instances }, { "instanceErrors", report.Scripts.InstanceErrors } };
 		}
 
 		void Add(CommandRegistry& registry, std::string name, std::string description, json inputSchema, std::function<json(AutomationSession&, const json&)> handler, CommandPolicy policy = CommandPolicy::Normal)
@@ -553,10 +563,7 @@ namespace Basalt {
 				Ref<Project> project = Project::Create(RequireString(params, "path"), OptionalString(params, "name", "Game"), error);
 				if (!project)
 					throw CommandError(error);
-				Project::SetActive(project);
-				session.SyncFileWatcher();
-				AssetManager::Clear();
-				PhysicsWorld::ClearMeshShapeCache();
+				ActivateProject(session, project);
 				session.SetEditScene(CreateRef<Scene>("Untitled"), "");
 				return json{ { "directory", project->GetDirectory().string() } }; }, CommandPolicy::EditBoundary);
 
@@ -565,10 +572,7 @@ namespace Basalt {
 				Ref<Project> project = Project::Load(RequireString(params, "path"), error);
 				if (!project)
 					throw CommandError(error);
-				Project::SetActive(project);
-				session.SyncFileWatcher();
-				AssetManager::Clear();
-				PhysicsWorld::ClearMeshShapeCache();
+				ActivateProject(session, project);
 				const std::string startScene = project->GetConfig().StartScene;
 				if (!startScene.empty())
 				{
@@ -1090,24 +1094,16 @@ namespace Basalt {
 
 		void RegisterAssets(CommandRegistry& registry)
 		{
-			Add(registry, "asset.list", "Lists project asset files, optionally filtered by extensions (e.g. ['.lua']).", Schema::Object({ { "extensions", json{ { "type", "array" }, { "description", "array of strings" }, { "items", Schema::String() } } } }), [](AutomationSession&, const json& params) {
+			Add(registry, "asset.list", "Lists project asset files, optionally filtered by extensions (e.g. ['.lua']).", Schema::Object({ { "extensions", Schema::Array("array of strings", Schema::String()) } }), [](AutomationSession&, const json& params) {
 				RequireProject();
+				// The schema has checked the types.
 				std::vector<std::string> extensions;
 				if (auto it = params.find("extensions"); it != params.end())
-				{
-					if (!it->is_array())
-						throw CommandError("'extensions' must be an array of strings");
-					for (const json& extension : *it)
-					{
-						if (!extension.is_string())
-							throw CommandError("'extensions' must be an array of strings");
-						extensions.push_back(extension.get<std::string>());
-					}
-				}
+					extensions = it->get<std::vector<std::string>>();
 				return json{ { "assets", AssetManager::ListAssets(extensions) } };
 			});
 
-			Add(registry, "asset.write", "Writes a text asset (script, prefab, scene...) to a project-relative path and reloads it: a script written while the game runs is hot reloaded (see 'scripts').", Schema::Object({ { "path", Schema::String("string", true) }, { "content", Schema::String("string") } }, { "path", "content" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "asset.write", "Writes a text asset (script, prefab, scene...) to a project-relative path and reloads it: a script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts').", Schema::Object({ { "path", Schema::String("string", true) }, { "content", Schema::String("string") } }, { "path", "content" }), [](AutomationSession& session, const json& params) {
 				RequireProject();
 				const std::string path = ProjectRelative(RequireString(params, "path"));
 				const json& content = Require(params, "content");
@@ -1116,35 +1112,41 @@ namespace Basalt {
 				if (!FileSystem::WriteTextFile(Project::ResolvePath(path), content.get<std::string>()))
 					throw CommandError("cannot write '" + path + "'");
 				const AssetReloadReport report = session.OnFileWritten(path);
-				return json{ { "path", path }, { "bytes", content.get<std::string>().size() }, { "scripts", ScriptReloadJson(report.Scripts) } };
+				return json{ { "path", path }, { "bytes", content.get<std::string>().size() }, { "scripts", ScriptReloadJson(report) } };
 			});
 
-			Add(registry, "asset.refresh", "Reloads the asset files changed on disk since the last refresh (or since the project was opened): models and textures load again on their next use, and while the game runs changed scripts are hot reloaded (instances keep their fields; OnReload is called). With 'paths', reloads those files instead, changed or not. Files the session wrote itself (asset.write, scene.save, ...) are not reported again.", Schema::Object({ { "paths", json{ { "type", "array" }, { "description", "array of project-relative paths, optional" }, { "items", Schema::String("string", true) } } } }), [](AutomationSession& session, const json& params) {
+			Add(registry, "asset.refresh", "Reloads the asset files changed on disk since changes were last reported (by an earlier refresh, by the editor's automatic reload, or since the project was opened in this process): models and textures load again on their next use, and while the game runs (Play, not Simulate) changed scripts are hot reloaded (instances keep their fields; OnReload is called). With 'paths', reloads those files instead, changed or not. Files the session wrote itself (asset.write, scene.save, ...) are not reported again. Fails when Assets/ cannot be read.", Schema::Object({ { "paths", Schema::Array("array of project-relative file paths, optional", Schema::String("string", true)) } }), [](AutomationSession& session, const json& params) {
 				RequireProject();
-				session.SyncFileWatcher();
 				std::vector<FileChange> changes;
 				if (const auto it = params.find("paths"); it != params.end())
 				{
-					if (!it->is_array())
-						throw CommandError("'paths' must be an array of strings");
 					for (const json& entry : *it)
 					{
-						if (!entry.is_string())
-							throw CommandError("'paths' must be an array of strings");
 						const std::string path = ProjectRelative(entry.get<std::string>());
-						session.GetFileWatcher().Acknowledge(path);
-						changes.push_back({ path, FileSystem::Exists(Project::ResolvePath(path)) ? FileChangeType::Modified : FileChangeType::Removed });
+						std::error_code error;
+						const std::filesystem::file_status status = std::filesystem::status(Project::ResolvePath(path), error);
+						if (std::filesystem::is_directory(status))
+							throw CommandError("'" + path + "' is a folder; name the files to reload");
+						const bool exists = std::filesystem::is_regular_file(status);
+						const std::optional<FileChangeType> change = session.AcknowledgeFile(path);
+						// A path that neither exists nor was known is a typo, not a removal.
+						if (!exists && change != FileChangeType::Removed)
+							throw CommandError("'" + path + "' does not exist" + (error && error != std::errc::no_such_file_or_directory ? " (" + error.message() + ")" : std::string()));
+						changes.push_back({ path, exists ? FileChangeType::Modified : FileChangeType::Removed });
 					}
 				}
 				else
 				{
-					changes = session.GetFileWatcher().Refresh();
+					std::string error;
+					changes = session.RefreshFileChanges(error);
+					if (!error.empty())
+						throw CommandError(error);
 				}
 				const AssetReloadReport report = session.ReloadAssets(changes);
 				json changed = json::array();
 				for (const FileChange& change : report.Changed)
 					changed.push_back({ { "path", change.Path }, { "type", FileChangeTypeName(change.Type) } });
-				return json{ { "changed", changed }, { "reloaded", report.Assets }, { "scripts", ScriptReloadJson(report.Scripts) } };
+				return json{ { "changed", changed }, { "reloaded", report.Assets }, { "scripts", ScriptReloadJson(report) } };
 			});
 
 			Add(registry, "asset.read", "Reads a text asset.", Schema::Object({ { "path", Schema::String("string", true) } }, { "path" }), [](AutomationSession&, const json& params) {
@@ -1364,6 +1366,7 @@ namespace Basalt {
 				// recorded, which project.set randomSeed during or after the recording does not change. A recording
 				// that saw no play session replays with the project's seed.
 				const uint32_t seed = session.GetRecordingSeed().value_or(Project::GetActiveRandomSeed());
+				const bool reloaded = session.HasReloadedScriptsWhileRecording();
 				const json events = session.StopRecording();
 				json replay = { { "Format", "BasaltReplay" }, { "Version", 1 }, { "Frames", frames }, { "RandomSeed", seed }, { "Events", events } };
 				// The recorded run's final state: replay.run with assertHash checks a replay reproduces it.
@@ -1372,7 +1375,10 @@ namespace Basalt {
 				if (!FileSystem::WriteTextFile(Project::ResolvePath(path), replay.dump(1, '\t')))
 					throw CommandError("cannot write '" + path + "'");
 				session.OnFileWritten(path);
-				return json{ { "path", path }, { "events", events.size() }, { "frames", frames } };
+				json result = { { "path", path }, { "events", events.size() }, { "frames", frames } };
+				if (reloaded)
+					result["warnings"] = json::array({ "scripts were hot reloaded during the recording: replaying runs the final code from the start, so it may not reproduce the run" });
+				return result;
 			});
 
 			Add(registry, "replay.run", "Restarts play from the edit scene with no input held, re-applies a replay's inputs (and recorded host views) on their frames without physical gamepads, and returns the state hash. Play keeps running afterwards for inspection; the host view and gamepads are restored.", Schema::Object({ { "path", Schema::String("string, replay file", true) }, { "frames", Schema::Nullable(Schema::Integer("integer, default: the recorded length", 0, 10000000)) }, { "assertNoErrors", Schema::Nullable(Schema::Boolean("bool")) }, { "assertHash", Schema::Nullable(Schema::Boolean("bool: fail unless the final state hash equals the recorded one")) } }, { "path" }), [](AutomationSession& session, const json& params) {

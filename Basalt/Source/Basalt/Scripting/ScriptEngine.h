@@ -85,14 +85,17 @@ namespace Basalt {
 		// A field of the entity's script instance (self.<name>) converted to JSON.
 		std::optional<nlohmann::json> GetInstanceField(Entity entity, const std::string& name) const;
 
-		// Hot reload: loads the classes of the changed script files again, in this Lua state (every class when a
-		// changed file is a module loaded through require, which is loaded again too), and moves their instances
-		// onto the new class. Instances keep their fields; Properties they lack get their values (defaults or the
-		// component's overrides); an instance an error disabled runs again; then OnReload is called on each. A class
-		// that does not load keeps its previous version running, and one that failed to load before gets its
-		// instances now. Not undone: module-level locals start afresh, and functions already handed to timers,
-		// coroutines or events (and the timers of a disabled instance, cancelled when it failed) keep the old code.
-		// Project-relative paths ("Assets/Scripts/Player.lua"); files no script uses are ignored.
+		// Hot reload: loads the classes of the changed script files again in this Lua state, and moves their instances
+		// onto the new class. When a changed file is a module loaded through require, every module loaded from a file is
+		// forgotten and every class loads again; a changed file no class runs also retries the classes that failed to
+		// load (it may be the module whose require failed). Instances keep their fields, and Properties they lack get
+		// their values (defaults or the component's overrides; defaults that changed do not reach existing fields).
+		// Then each started instance gets OnReload; one that had not started, or whose OnCreate failed, gets OnCreate.
+		// An instance an error disabled runs again. A class that does not load keeps its previous version running, and
+		// one that failed to load before gets its instances now. What the old class's top-level code started (timers,
+		// event handlers) ends; the new top level starts its own. Not carried over: module-level locals start afresh,
+		// and functions already handed to timers, coroutines or events by instances keep the old code (as do the
+		// timers of a disabled instance, cancelled when it failed). Project-relative paths ("Assets/Scripts/Player.lua").
 		ScriptReloadResult ReloadScripts(const std::vector<std::string>& changedFiles);
 
 		// Runs a chunk of Lua in the scene's script state (editor console / automation). The result of the
@@ -113,6 +116,8 @@ namespace Basalt {
 	private:
 		// Creates the instance (properties applied) without calling OnCreate. False if none was created.
 		bool CreateInstance(Entity entity);
+		// ReloadScripts' work, which may throw sol2 errors (ReloadScripts catches them).
+		void ReloadClasses(const std::vector<std::string>& changedFiles, ScriptReloadResult& result);
 		void DispatchGamepadConnections();
 		// Calls a widget's callback on its target. A callback that cannot be called (no target entity, no script,
 		// no such method) is a script error, reported once per widget, method and problem; a widget or target that an
@@ -127,6 +132,7 @@ namespace Basalt {
 		std::unordered_set<std::string> m_ReportedUICallbacks;
 
 		friend struct ScriptEngineAccess;
+		friend struct ScriptClassLoader;
 	};
 
 }

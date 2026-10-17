@@ -19,7 +19,7 @@ changing code. Task-specific procedures live in `.claude/skills/*/SKILL.md`.
 | `scripts/` | `build.sh`, `test.sh`, `format.sh`. |
 
 Engine modules (`Basalt/Source/Basalt/<Module>/`): `Core` (application, window, input incl. gamepads, log, file
-system, command line), `Events`, `Math`, `Renderer` (device, scene renderer, IBL, debug lines), `ImGui`, `Scene`
+system and file watching, command line), `Events`, `Math`, `Renderer` (device, scene renderer, IBL, debug lines), `ImGui`, `Scene`
 (EnTT scene, components, component registry, serialization), `Asset` (glTF, images, primitives, asset
 cache), `Physics` (Jolt), `Audio` (miniaudio: buses, per-source low-pass and Doppler, reverb sends into per-bus reverbs), `Particles` (CPU particle simulation), `Animation` (glTF TRS sampling, blends, crossfades and per-entity playback), `UI` (game UI: UI
 component layout, widgets and their mouse/keyboard/gamepad interaction, immediate-mode `UI.*`, TrueType fonts;
@@ -52,8 +52,9 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
 - **One file watcher.** `AutomationSession` owns a polling `FileWatcher` (Core) on the active project's `Assets/`;
   `ReloadAssets` drops what changed files affect from `AssetManager` (models through `MeshSource::ExternalFiles`) and,
   while the game runs, hot reloads scripts (`ScriptEngine::ReloadScripts`: instances keep their fields, then
-  `OnReload`). The editor polls it on a worker thread; agents call `asset.refresh`; files the session writes itself
-  (`OnFileWritten`) are acknowledged and never reported.
+  `OnReload`; Play only). The editor scans on a worker thread and applies the results each frame on the main thread
+  (while autoReload is on); agents call `asset.refresh`; files the session writes itself (`OnFileWritten`) are
+  acknowledged and never reported.
 - **Input: host reads vs game reads.** `Input` holds every event (editor shortcuts and camera read it); the game
   (Lua's `Input`, input actions) reads `GameInput`, which sees only what the host routes to it: `Input::SetGameFocus`
   (keyboard, gamepads) and `SetGamePointer` (mouse), the same flags as `GameUI`'s navigation and pointer (the editor

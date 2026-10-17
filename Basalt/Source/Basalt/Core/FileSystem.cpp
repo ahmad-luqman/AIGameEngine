@@ -163,6 +163,12 @@ namespace Basalt {
 		return std::string(text.begin(), text.end());
 	}
 
+	std::string FileSystem::PathToGenericUtf8(const std::filesystem::path& path)
+	{
+		const std::u8string text = path.generic_u8string();
+		return std::string(text.begin(), text.end());
+	}
+
 	std::filesystem::path FileSystem::PathFromUtf8(const std::string& text)
 	{
 		return std::filesystem::path(std::u8string(text.begin(), text.end()));
