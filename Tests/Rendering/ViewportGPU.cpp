@@ -278,6 +278,7 @@ TEST_CASE("Async viewport draws a placeholder with every worker occupied then up
 	auto graphics = CreateTestGraphics();
 	AssetManager::Clear();
 	JobSystem& pool = JobSystem::Get();
+	pool.WaitIdle();
 	const auto workers = pool.GetWorkerCount();
 	std::latch started(workers);
 	std::latch release(1);
@@ -311,6 +312,7 @@ TEST_CASE("Async viewport draws a placeholder with every worker occupied then up
 		Capture(renderer, scene, camera);
 		CHECK(renderer.GetStatistics().DrawCalls > 0);
 		ExpectPick(renderer, 32, 32, entity.GetUUID());
+		ExpectPick(renderer, 39, 24, entity.GetUUID());
 		CHECK_FALSE(AssetManager::FindLoadedMesh("builtin://Sphere"));
 		CHECK(AssetManager::IsLoading("builtin://Sphere"));
 		CHECK(AssetManager::GetLoadedKeys() == std::vector<std::string>{ "builtin://Sphere" });
@@ -321,6 +323,7 @@ TEST_CASE("Async viewport draws a placeholder with every worker occupied then up
 		Capture(renderer, scene, camera);
 		CHECK(renderer.GetStatistics().DrawCalls > 0);
 		ExpectPick(renderer, 32, 32, entity.GetUUID());
+		CHECK(renderer.Pick(39, 24).value_or(UUID(0)) == UUID(0));
 	}
 	CHECK(MemoryTracker::Get(MemoryCategory::GpuBuffers).Bytes == memoryBefore);
 	graphics->WaitIdle();

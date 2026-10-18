@@ -19,7 +19,9 @@ namespace Basalt {
 	struct MemoryStatistics
 	{
 		uint64_t Bytes = 0;
+		// Process-lifetime peak; never reset.
 		uint64_t PeakBytes = 0;
+		// Live allocation charges, not a cumulative allocation count.
 		uint64_t Allocations = 0;
 	};
 
@@ -30,10 +32,12 @@ namespace Basalt {
 		static MemoryStatistics Get(MemoryCategory category);
 		static nlohmann::json ToJson();
 		static const char* GetName(MemoryCategory category);
-		static void Allocate(MemoryCategory category, size_t bytes);
-		static void Free(MemoryCategory category, size_t bytes);
 		// Lua allocator: failed reallocations preserve both the original memory and its accounting.
-		static void* LuaAllocator(void* user, void* pointer, size_t oldSize, size_t newSize);
+		static void* LuaAllocator(void* user, void* pointer, size_t oldSize, size_t newSize) noexcept;
+
+	private:
+		friend class MemoryAllocation;
+		static void Adjust(MemoryCategory category, size_t oldSize, size_t newSize) noexcept;
 	};
 
 	// Lifetime accounting for an owned resource; moving transfers the charge and copying duplicates it.

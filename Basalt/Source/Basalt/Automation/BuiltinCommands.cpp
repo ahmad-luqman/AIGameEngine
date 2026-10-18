@@ -1194,7 +1194,7 @@ namespace Basalt {
 				return result;
 			});
 
-			Add(registry, "asset.preload", "Requests mesh/texture CPU loads on the shared worker pool. Returns a status (pending, ready or failed) and error for each path. Poll by repeating; wait=true joins these requests, including embedded image dependencies. Reload/refresh retries failed loads. GPU upload happens in the renderer.", Schema::Object({ { "paths", Schema::Array("array of mesh/texture paths or built-in mesh keys", Schema::String("string", true)) }, { "wait", Schema::Boolean("wait for these loads, default false") } }, { "paths" }), [](AutomationSession&, const json& params) {
+			Add(registry, "asset.preload", "Requests mesh/texture CPU loads on the shared worker pool. Returns a status (pending, ready or failed) and error for each path. Poll by repeating; wait=true joins these requests, including embedded image dependencies. Reload/refresh retries failed loads. GPU upload happens in the renderer.", Schema::Object({ { "paths", Schema::Array("array of mesh/texture paths, Model.glb#image/N keys or built-in mesh keys", Schema::String("string", true)) }, { "wait", Schema::Boolean("wait for these loads, default false") } }, { "paths" }), [](AutomationSession&, const json& params) {
 				const auto& paths = params.at("paths");
 				if (paths.size() > 4096)
 					throw CommandError("at most 4096 preload paths are allowed");
@@ -1215,11 +1215,17 @@ namespace Basalt {
 				json result = json::array();
 				for (const auto& [key, mesh] : requests)
 				{
-					const bool ready = mesh ? static_cast<bool>(wait ? AssetManager::GetMesh(key) : AssetManager::RequestMesh(key))
-											: static_cast<bool>(wait ? AssetManager::GetTexture(key) : AssetManager::RequestTexture(key));
-					result.push_back({ { "path", key }, { "status", ready ? "ready" : AssetManager::IsLoading(key) ? "pending"
-																												   : "failed" },
-									   { "error", AssetManager::GetError(key) } });
+					bool ready = false;
+					if (mesh)
+						ready = static_cast<bool>(wait ? AssetManager::GetMesh(key) : AssetManager::RequestMesh(key));
+					else
+						ready = static_cast<bool>(wait ? AssetManager::GetTexture(key) : AssetManager::RequestTexture(key));
+					const char* status = "failed";
+					if (ready)
+						status = "ready";
+					else if (AssetManager::IsLoading(key))
+						status = "pending";
+					result.push_back({ { "path", key }, { "status", status }, { "error", AssetManager::GetError(key) } });
 				}
 				return result;
 			});
@@ -1648,7 +1654,7 @@ namespace Basalt {
 				return json{ { "path", path } };
 			});
 
-			Add(registry, "memory.stats", "Returns logical retained CPU asset payload bytes, requested GPU buffer bytes, and live Lua heap bytes, with peaks and allocation counts. Not RSS or driver residency; excludes allocator overhead, GPU textures and render targets. Available headlessly.", Schema::Object(), [](AutomationSession&, const json&) {
+			Add(registry, "memory.stats", "Returns logical retained CPU asset payload bytes, requested GPU buffer bytes, and live Lua heap bytes, with process-lifetime peaks and live allocation counts. Not RSS or driver residency; excludes allocator overhead, GPU textures and render targets. Available headlessly.", Schema::Object(), [](AutomationSession&, const json&) {
 				return MemoryTracker::ToJson();
 			});
 

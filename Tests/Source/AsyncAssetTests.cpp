@@ -2,6 +2,9 @@
 
 #include <Basalt/Asset/AssetManager.h>
 #include <Basalt/Core/JobSystem.h>
+#include <Basalt/Core/MemoryTracker.h>
+
+#include <latch>
 #include <Basalt/Project/Project.h>
 
 #include "TestUtils.h"
@@ -77,12 +80,15 @@ TEST_SUITE("AsyncAssets")
 	{
 		BasaltTest::TempProject project("AsyncInvalidImage");
 		project.WriteFile("Assets/bad.png", "this is not an image");
+		JobSystem::Get().WaitIdle();
+		const auto before = MemoryTracker::Get(MemoryCategory::Assets).Bytes;
 		AssetManager::Clear();
 		CHECK_FALSE(AssetManager::RequestTexture("Assets/bad.png"));
 		AssetManager::WaitForLoads();
 		CHECK_FALSE(AssetManager::GetTexture("Assets/bad.png"));
 		CHECK_FALSE(AssetManager::GetError("Assets/bad.png").empty());
 		CHECK_FALSE(AssetManager::IsLoading("Assets/bad.png"));
+		CHECK(MemoryTracker::Get(MemoryCategory::Assets).Bytes == before);
 		AssetManager::Clear();
 	}
 
@@ -97,13 +103,14 @@ TEST_SUITE("AsyncAssets")
 		AssetManager::PublishCompleted();
 		CHECK(AssetManager::GetLoadedKeys().empty());
 		AssetManager::RequestMesh("builtin://Cube");
-		CHECK(AssetManager::ReloadChanged({ "Assets/unknown.bin" }) == std::vector<std::string>{ "builtin://Cube" });
+		CHECK(AssetManager::ReloadChanged({ "Assets/unknown.bin" }).empty());
 		JobSystem::Get().WaitIdle();
 		AssetManager::PublishCompleted();
-		CHECK(AssetManager::GetLoadedKeys().empty());
+		CHECK(AssetManager::FindLoadedMesh("builtin://Cube"));
+		AssetManager::Clear();
 	}
 
-	TEST_CASE("Project switching discards requests without worker reads of the active project")
+	TEST_CASE("Project switching discards pending entries")
 	{
 		AssetManager::Clear();
 		// Own the old project: SetActive replaces the reference returned by GetActive.
@@ -129,6 +136,63 @@ TEST_SUITE("AsyncAssets")
 		AssetManager::WaitForLoads();
 		CHECK(AssetManager::GetLoadedKeys() == std::vector<std::string>{ "builtin://Sphere" });
 		CHECK(AssetManager::FindLoadedMesh("builtin://Sphere") == retained);
+		AssetManager::Clear();
+	}
+	TEST_CASE("Publishing a parent leaves its completed result intact for queued image jobs")
+	{
+		AssetManager::Clear();
+		const std::string mesh = std::string(BASALT_TEST_DATA_DIR) + "/FeatureTest/Assets/Models/TexturedCube.glb";
+		AssetManager::RequestMesh(mesh);
+		auto& pool = JobSystem::Get();
+		pool.WaitIdle();
+		std::latch started(pool.GetWorkerCount());
+		std::latch release(1);
+		auto unblock = std::shared_ptr<std::latch>(&release, [](std::latch* latch) {
+			latch->count_down();
+			JobSystem::Get().WaitIdle();
+		});
+		for (uint32_t i = 0; i < pool.GetWorkerCount(); ++i)
+			(void)pool.Submit([&] { started.count_down(); release.wait(); });
+		started.wait();
+		AssetManager::RequestTexture(mesh + "#image/0");
+		AssetManager::PublishCompleted();
+		REQUIRE(AssetManager::FindLoadedMesh(mesh));
+		unblock.reset();
+		AssetManager::WaitForLoads();
+		CHECK(AssetManager::GetTexture(mesh + "#image/0"));
+		CHECK(AssetManager::GetError(mesh + "#image/0").empty());
+		AssetManager::Clear();
+	}
+
+	TEST_CASE("Unrelated saves preserve a pending file mesh and its memory charge")
+	{
+		AssetManager::Clear();
+		const std::string mesh = std::string(BASALT_TEST_DATA_DIR) + "/FeatureTest/Assets/Models/TexturedCube.glb";
+		AssetManager::RequestMesh(mesh);
+		JobSystem::Get().WaitIdle();
+		const auto bytes = MemoryTracker::Get(MemoryCategory::Assets).Bytes;
+		CHECK(AssetManager::ReloadChanged({ "Assets/Scripts/unrelated.lua" }).empty());
+		AssetManager::PublishCompleted();
+		CHECK(AssetManager::FindLoadedMesh(mesh));
+		CHECK_FALSE(AssetManager::IsLoading(mesh));
+		CHECK(MemoryTracker::Get(MemoryCategory::Assets).Bytes == bytes);
+		AssetManager::Clear();
+	}
+
+	TEST_CASE("Completed project assets are replaced on project switch while builtins survive")
+	{
+		AssetManager::Clear();
+		BasaltTest::TempProject first("AsyncProjectA");
+		std::filesystem::copy_file(std::filesystem::path(BASALT_TEST_DATA_DIR) / "FeatureTest/Assets/Models/TexturedCube.glb", first.GetDirectory() / "Assets/model.glb");
+		auto builtin = AssetManager::GetMesh("builtin://Cube");
+		REQUIRE(AssetManager::GetMesh("Assets/model.glb"));
+		REQUIRE(AssetManager::GetTexture("Assets/model.glb#image/0"));
+		BasaltTest::TempProject second("AsyncProjectB");
+		second.WriteFile("Assets/model.glb", "invalid glb");
+		CHECK(AssetManager::GetMesh("builtin://Cube") == builtin);
+		CHECK_FALSE(AssetManager::GetMesh("Assets/model.glb"));
+		CHECK_FALSE(AssetManager::GetTexture("Assets/model.glb#image/0"));
+		CHECK_FALSE(AssetManager::GetError("Assets/model.glb#image/0").empty());
 		AssetManager::Clear();
 	}
 }

@@ -1,7 +1,6 @@
 #include "Basalt/Animation/AnimationSystem.h"
 
 #include "Basalt/Core/Profiler.h"
-
 #include "Basalt/Animation/AnimatedModel.h"
 #include "Basalt/Animation/AnimationPose.h"
 #include "Basalt/Animation/BlendSpace.h"

@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include <Basalt/Asset/AssetManager.h>
+#include <Basalt/Core/JobSystem.h>
 
 #include <Basalt/Automation/AutomationSession.h>
 #include <Basalt/Automation/CommandRegistry.h>
@@ -241,6 +242,15 @@ TEST_SUITE("Automation")
 		AssetManager::Clear();
 		const auto pending = Run(registry, session, "asset.preload", { { "paths", { "builtin://Cube" } } });
 		CHECK(pending[0]["status"] == "pending");
+		JobSystem::Get().WaitIdle();
+		CHECK(Run(registry, session, "asset.preload", { { "paths", { "builtin://Cube" } } })[0]["status"] == "ready");
+		std::filesystem::copy_file(std::filesystem::path(BASALT_TEST_DATA_DIR) / "FeatureTest/Assets/Models/TexturedCube.glb", project.GetDirectory() / "Assets/model.glb");
+		const auto embedded = Run(registry, session, "asset.preload", { { "paths", { "Assets/model.glb", "Assets/model.glb#image/0" } }, { "wait", true } });
+		CHECK(embedded[0]["status"] == "ready");
+		CHECK(embedded[1]["status"] == "ready");
+		Run(registry, session, "asset.preload", { { "paths", { "Assets/poll-missing.png" } } });
+		JobSystem::Get().WaitIdle();
+		CHECK(Run(registry, session, "asset.preload", { { "paths", { "Assets/poll-missing.png" } } })[0]["status"] == "failed");
 		const auto ready = Run(registry, session, "asset.preload", { { "paths", { "builtin://Cube", "Assets/missing.png" } }, { "wait", true } });
 		CHECK(ready[0]["status"] == "ready");
 		CHECK(ready[1]["status"] == "failed");

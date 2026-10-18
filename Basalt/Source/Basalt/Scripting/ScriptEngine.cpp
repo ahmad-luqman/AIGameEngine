@@ -1,7 +1,6 @@
 #include "Basalt/Scripting/ScriptEngine.h"
 
 #include "Basalt/Core/Profiler.h"
-
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Input.h"
 #include "Basalt/Core/JsonUtils.h"
@@ -38,8 +37,46 @@ namespace Basalt {
 			return sol::stack::push(state, description);
 		}
 
-		void OpenSafeLibraries(sol::state& lua)
+		// Outlives its Lua state, including warning callbacks from finalizers during lua_close.
+		struct LuaWarnings
 		{
+			bool Enabled = false;
+			bool Continuing = false;
+			std::string Message;
+			static void Receive(void* user, const char* message, int continued) noexcept
+			{
+				auto& warnings = *static_cast<LuaWarnings*>(user);
+				try
+				{
+					if (!warnings.Continuing && !continued && message[0] == '@')
+					{
+						if (std::string_view(message) == "@on")
+							warnings.Enabled = true;
+						else if (std::string_view(message) == "@off")
+							warnings.Enabled = false;
+						return;
+					}
+					if (!warnings.Enabled)
+						return;
+					warnings.Message += message;
+					warnings.Continuing = continued != 0;
+					if (!continued)
+					{
+						BS_WARN("Lua warning: {}", warnings.Message);
+						warnings.Message.clear();
+					}
+				}
+				catch (...)
+				{
+					warnings.Continuing = false;
+					warnings.Message.clear();
+				}
+			}
+		};
+
+		void OpenSafeLibraries(sol::state& lua, LuaWarnings& warnings)
+		{
+			lua_setwarnf(lua.lua_state(), &LuaWarnings::Receive, &warnings);
 			lua.set_exception_handler(&QuietExceptionHandler);
 			lua.open_libraries(sol::lib::base, sol::lib::package, sol::lib::string, sol::lib::math, sol::lib::table, sol::lib::utf8, sol::lib::coroutine);
 			// Scripts load code only through require (resolved inside the project).
@@ -220,6 +257,7 @@ namespace Basalt {
 		ScriptEngine& Engine;
 		// Declared before Lua so it outlives lua_close(): __gc metamethods may still call bindings.
 		ScriptContext Context;
+		LuaWarnings Warnings;
 		sol::state Lua{ sol::default_at_panic, &MemoryTracker::LuaAllocator };
 		// Declared after Lua: they hold Lua references, which must be released before the state closes.
 		ScriptTasks Tasks{ Lua, Context, *this };
@@ -688,7 +726,7 @@ namespace Basalt {
 		: m_Impl(CreateScope<Impl>(*this))
 		, m_Scene(scene)
 	{
-		OpenSafeLibraries(m_Impl->Lua);
+		OpenSafeLibraries(m_Impl->Lua, m_Impl->Warnings);
 		m_Impl->Context.SceneContext = scene;
 		// Every play session starts from its seed (the project's), so its random numbers repeat run after run.
 		m_Impl->Context.ResetRandom(scene->GetRandomSeed());
@@ -1247,8 +1285,9 @@ namespace Basalt {
 	std::optional<nlohmann::json> ScriptEngine::LoadScriptProperties(const std::string& scriptPath, std::string& outError)
 	{
 		ScriptContext context;
+		LuaWarnings warnings;
 		sol::state lua{ sol::default_at_panic, &MemoryTracker::LuaAllocator };
-		OpenSafeLibraries(lua);
+		OpenSafeLibraries(lua, warnings);
 		RegisterScriptBindings(lua, context);
 
 		auto scriptClass = LoadScriptClass(lua, scriptPath, outError);

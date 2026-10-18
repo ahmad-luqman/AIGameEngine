@@ -1,7 +1,6 @@
 #include "Basalt/Renderer/SceneRenderer.h"
 
 #include "Basalt/Core/Profiler.h"
-
 #include "Basalt/Animation/AnimatedModel.h"
 #include "Basalt/Animation/AnimationPose.h"
 #include "Basalt/Animation/AnimationSystem.h"
@@ -1204,6 +1203,7 @@ namespace Basalt {
 	void SceneRenderer::Render(Scene& scene, const RenderCamera& camera, float deltaTime)
 	{
 		BS_PROFILE_SCOPE("Scene render");
+		// Per-frame fence publishes worker results before any scene resource lookup.
 		AssetManager::PublishCompleted();
 		InvalidatePicking();
 		Impl& impl = *m_Impl;

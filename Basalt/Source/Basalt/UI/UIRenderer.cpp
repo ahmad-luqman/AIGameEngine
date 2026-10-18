@@ -1,5 +1,6 @@
 #include "Basalt/UI/UIRenderer.h"
 
+#include "Basalt/Asset/AssetManager.h"
 #include "Basalt/UI/GameUI.h"
 #include "Basalt/UI/UIFonts.h"
 #include "Basalt/UI/UILayout.h"
@@ -171,6 +172,8 @@ namespace Basalt {
 
 	void UIFrame::Build(Scene* scene, const glm::vec2& viewportSize, bool includeImmediate)
 	{
+		// Camera-less menu scenes still need a publication fence before resolving UI textures.
+		AssetManager::PublishCompleted();
 		m_Commands.clear();
 		m_Resources = {};
 		m_CanvasSize = GameUI::GetCanvasSize(viewportSize);

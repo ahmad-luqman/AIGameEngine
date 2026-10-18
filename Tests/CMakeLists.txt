@@ -13,6 +13,8 @@ target_compile_definitions(BasaltTests PRIVATE BASALT_TEST_DATA_DIR="${CMAKE_CUR
 
 add_test(NAME BasaltTests COMMAND BasaltTests --reporters=console --no-intro=true WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 
+set_tests_properties(BasaltTests PROPERTIES TIMEOUT 600)
+
 # Formatting check. clang-format output differs between major versions, so CI enables this on one job only.
 find_program(BASALT_CLANG_FORMAT clang-format)
 option(BASALT_CHECK_FORMAT "Register the clang-format check as a test" ON)
@@ -34,6 +36,9 @@ option(BASALT_GPU_TESTS "Register tests that need a GPU" OFF)
 # Python is optional; headless checks also guard the GPU harness against false passes.
 find_package(Python3 QUIET COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
+	add_test(NAME PhysicsJobFailure
+		COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/Automation/PhysicsJobFailure.py" $<TARGET_FILE:BasaltTests>)
+	set_tests_properties(PhysicsJobFailure PROPERTIES LABELS unit TIMEOUT 90)
 	add_test(NAME McpIntegration
 		COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/Automation/McpIntegration.py" $<TARGET_FILE:BasaltCLI>)
 	set_tests_properties(McpIntegration PROPERTIES LABELS integration TIMEOUT 90 ENVIRONMENT "BASALT_USER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/McpUserData")
