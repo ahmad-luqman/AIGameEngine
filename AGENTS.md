@@ -82,7 +82,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   `editor.*` commands and screenshots). Docs: Docs/AutomationCommands.md (generated), Docs/MCP.md (agent setup/protocol). CommandInfo declares
   InputSchema: validation, help and MCP tool definitions share it; editor TCP clients can use MCP too.
   `AutomationEventHub` (created by the session, shared with TCP connections, thread-safe) feeds `events.*`: the session's `SceneEventListener` on the
-  play copy reports contacts and script errors, a `LogHistory` listener log lines; legacy TCP connections stream
+  play copy reports contacts, animation events and script errors, a `LogHistory` listener log lines; legacy TCP connections stream
   their subscriptions (`AutomationServer::ClientHandler::TakePending`). Agent checks: `scene.snapshot`/`scene.diff`
   (`Scene/SceneDiff`), `assert.*`, `render.compare`.
 - **Headless core.** Everything except Renderer/ImGui/Window runs without a GPU; unit tests, the CLI and

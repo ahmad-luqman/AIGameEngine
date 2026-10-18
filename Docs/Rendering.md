@@ -217,7 +217,8 @@ identity. Duplicate clip names get deterministic suffixes. There is no morph-tar
 retargeting, animation state machine or root-motion extraction. Bone attachments, animation events and
 blend spaces are described in Docs/ScriptingAPI.md ("Skeletal animation").
 
-`AnimationTests` covers import, interpolation, space conventions, playback, blending, component/Lua
+`AnimationTests` covers import, interpolation, space conventions, playback, blending, blend spaces, animation
+events, bone attachments, component/Lua
 validation and lifecycle; the Khronos Fox fixture verifies Survey/Walk/Run from a real exported rig.
 The feature-test driver exercises every Lua operation on an off-camera rig. `AnimationGPU` compares
 GPU skinning with independently deformed CPU geometry for opaque/masked/blended materials, lit/

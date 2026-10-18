@@ -1063,7 +1063,7 @@ end
 ## Skeletal animation
 
 An `Animator` component draws a whole glTF model under one entity. `Mesh` is the asset path;
-`Clip` selects the initial clip (empty selects the first); `PlayOnStart` and `Looping` default to true;
+`Clip` selects the initial clip (empty selects the first; it may also name a blend space, see Blend spaces); `PlayOnStart` and `Looping` default to true;
 `Speed` defaults to 1 and accepts 0..100; `CastShadows` defaults to true. Importing a model with skins
 or animation creates this component on the imported root. Static imports retain their entity hierarchy.
 The inspector, component commands and generic Lua component access share these fields.
@@ -1098,7 +1098,7 @@ All functions require a running scene and an Animator on the entity. A missing a
 clips, zero times, false queries/operations. Unknown clips or invalid numeric parameters return false
 without changing existing playback. Failures are logged with the operation and clip name or invalid value. Non-looping clips hold their final pose; looping clocks wrap by
 clip duration, including large timesteps. Enabling Looping after a clip finishes does not restart it;
-call PlayAnimation. Play, CrossFade and Blend unpause playback. Empty clip names select the first
+call PlayAnimation. Play, CrossFade, Blend and PlayBlendSpace unpause playback. Empty clip names select the first
 clip in all three operations. Crossfade duration is scene time, independent of Speed.
 `Speed` and `Looping` updates apply immediately; changing `Mesh` or the configured `Clip`, asset reload,
 or removing/re-adding Animator resets playback according to `PlayOnStart`. With PlayOnStart false,
@@ -1118,17 +1118,22 @@ playback crosses a marker the entity's scripts receive `OnAnimationEvent(name, c
 clients subscribed to `animation` events get `{name, clip, entity, frame}`.
 
 - A marker fires when the clock moves over it: each update covers `[previous time, new time)`, so a marker at
-  0 fires on the first update after `PlayAnimation`, and one at the seek target fires after
-  `SetAnimationTime`. Seeks, stops and pauses skip what lies between; speed 0 fires nothing.
+  0 fires on the first update after `PlayAnimation`, and one at the seek target fires after `SetAnimationTime`
+  (except at the end of a non-looping clip, which has nothing left to play). Seeks, stops and pauses skip what
+  lies between; speed 0 fires nothing.
 - A looping clip fires its tail (its end included) and then restarts at 0 on every wrap, so one long update
   fires every marker of every loop it covers, in order. A non-looping clip fires its end once.
-- During a crossfade or `BlendAnimations` both clips fire (the `clip` argument tells them apart); in a blend
-  space only the heaviest sample's clip fires, because its clips run in step and would repeat each marker.
-- At most 64 events per Animator and frame are delivered (a warning reports the rest dropped). Markers past
-  a clip's end never fire (the inspector and `scene.info` warn about them and about unknown clips).
+- During a crossfade both clips fire until the fade ends (the `clip` argument tells them apart); with
+  `BlendAnimations` each clip fires while its weight is above 0. In a blend space only the heaviest sample's clip
+  fires, because its clips run in step and would repeat each marker; when the parameter makes another sample the
+  heaviest, a marker near that moment can be skipped or repeated once.
+- At most 64 events per Animator and frame are delivered; the rest are dropped with a warning (once per
+  animation started). Markers that name a clip and lie past its end, or name a missing or zero-length clip, never
+  fire; the inspector and `scene.info` warn about them.
 - Events are delivered after `OnLateUpdate` and after this frame's pose and attachments are computed, before
-  particles; a callback may change animation or remove the Animator safely. Simulate reports them to
-  automation only (no scripts run there).
+  particles; a callback may change animation or remove the Animator safely. Within one update an Animator's
+  events come clip by clip in timeline order (the current clip's before the outgoing clip's). Simulate reports
+  them to automation only (no scripts run there).
 
 ### Blend spaces
 
@@ -1137,7 +1142,7 @@ clients subscribed to `animation` events get `{name, clip, entity, frame}`.
 ```lua
 actor:SetComponent("Animator", { MatchVelocity = true, BlendSpaces = { {
 	Name = "Locomotion", Type = "1D", Samples = {
-		{ Clip = "Survey", X = 0 },             -- Speed 0: unknown (idle)
+		{ Clip = "Survey", X = 0 },             -- Speed 0: stands still
 		{ Clip = "Walk", X = 1.5, Speed = 1.5 }, -- m/s the clip moves at playback speed 1
 		{ Clip = "Run", X = 5, Speed = 5 } } } } })
 actor:PlayBlendSpace("Locomotion", 0, nil, 0.2)
@@ -1146,36 +1151,45 @@ function Player:OnUpdate(dt) self.Entity:SetBlendSpaceParameter(self.Speed) end
 
 - 1D spaces interpolate between the two samples around `X` and clamp outside them; 2D spaces (`Type = "2D"`,
   e.g. strafing over X/Y velocity) use gradient band interpolation: a sample's weight is 1 at its position and
-  falls to 0 at every other sample. Weights always sum to 1. Samples must be at distinct positions; an empty
-  sample `Clip` selects the first clip, and samples whose clip is missing get no weight.
+  falls to 0 at every other sample. Weights always sum to 1; samples at the same position share its weight. An
+  empty sample `Clip` selects the first clip, and samples whose clip is missing get no weight. Blend space names
+  must be unique (the inspector's Add and Duplicate pick a fresh one).
 - All clips run in step: one cycle lasts the weighted sum of their durations and each clip is sampled at the
   same fraction of its own length, so feet stay in phase. `SetBlendSpaceParameter` keeps that phase.
-- `PlayBlendSpace` fades from the visible pose over `fadeSeconds` (default 0); playing the running space again
-  only moves its parameter. `PlayAnimation`, `CrossFadeAnimation`, `BlendAnimations` and `StopAnimation`
-  leave the space. `GetAnimationTime`/`GetAnimationDuration`/`SetAnimationTime` use the blended cycle.
+- `PlayBlendSpace` fades from the visible pose over `fadeSeconds` (default 0). While the same space is playing it
+  only moves the parameter (the fade is ignored); a paused or finished one restarts. `PlayAnimation`,
+  `CrossFadeAnimation`, `BlendAnimations` and `StopAnimation` leave the space; `PauseAnimation`,
+  `GetAnimationTime`, `GetAnimationDuration` and `SetAnimationTime` act on its blended cycle.
   `GetBlendSpaceWeights()` returns `{ [clip] = weight }` (empty when no space plays).
+- When the running space or all its clips go missing (e.g. edited during play), playback holds its pose,
+  `IsAnimationPlaying()` and `SetBlendSpaceParameter` return false and the problem is logged once; it resumes
+  when the space can play again.
 - `Animator.Clip` may name a blend space: `PlayOnStart` then starts it at parameter (0, 0). A clip of the same
-  name wins.
-- **MatchVelocity:** with it on, a blend space plays at `Speed` x (the entity's measured horizontal speed / the
-  samples' weighted `Speed`), so a character moving faster than its run clip strides faster instead of
-  sliding. The speed is measured from the entity's world position (any mover: physics, characters, Lua),
-  ignoring vertical motion, and smoothed over about 0.1 s. While a sample with `Speed` 0 (unknown) has weight,
-  plain `Speed` applies.
+  name wins (the inspector warns).
+- **MatchVelocity:** with it on, the moving samples (`Speed` above 0) play at `Speed` x (the entity's measured
+  horizontal speed / their weighted `Speed`), so a character moving faster than its run clip strides faster
+  instead of sliding; samples with `Speed` 0 (standing, or unknown) keep the plain `Speed`, so the rate eases in
+  from idle. The speed is measured from the entity's world position (any mover: physics, characters, Lua),
+  ignoring vertical motion and jumps faster than 100 units/s (teleports), and smoothed over about 0.1 s. A space
+  of moving samples only freezes while the entity stands still.
 
 ### Bones
 
 `e:GetBoneTransform(joint)` returns the world position, rotation and scale of the first node named `joint` in
-the Animator's current pose (any glTF node, not only skin joints), or nil with a logged error when there is
-none.
+the Animator's current pose (any glTF node, not only skin joints), or nil when there is none (logged once per
+joint and reason). Animation advances after `OnLateUpdate`, so `OnUpdate` and `OnLateUpdate` see the previous
+frame's pose and `OnAnimationEvent` this frame's. Like the other Animator functions it raises an error on an
+entity without an Animator.
 
 A `BoneAttachment` component keeps an entity on a joint of another entity's Animator while the scene plays or
 simulates (weapon in hand, hat on head): `{ Target = <entity ID, 0 = the parent>, Joint = "b_Head_05",
-Translation, Rotation, Scale }` (the offset in the joint's space). Its world transform is set right after the
-pose is sampled, also for children of other entities, and attachments to attached entities update in
-dependency order within the frame. Edit mode keeps the authored transform. Physics reads transforms before
-animation, so a Kinematic body on an attachment follows one physics step later; a Dynamic body is also moved by
-physics (the inspector warns). Missing targets, joints or Animators and attachment cycles are logged once and
-leave the entity where it is.
+Translation, Rotation, Scale }` (the offset in the joint's space; `Rotation` in Euler degrees, as in component
+data). Its world transform is set right after the pose is sampled, also for children of other entities, and
+attachments to attached entities update in dependency order within the frame. Edit mode keeps the authored
+transform. Physics reads transforms before animation, so a Kinematic body on an attachment follows one physics
+step later (its body is moved with a velocity, so it pushes what it hits); a Dynamic body is also moved by
+physics (the inspector warns). Missing targets, joints or Animators, a Target inside the entity's own hierarchy
+below it, and attachment cycles are logged once and leave the entity where it is.
 
 ## Graphics settings
 

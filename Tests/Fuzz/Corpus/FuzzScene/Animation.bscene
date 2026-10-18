@@ -1,0 +1,17 @@
+{
+	"Format": "BasaltScene",
+	"Version": 1,
+	"Name": "Animation",
+	"Entities": [
+		{ "ID": 1, "Name": "Rig", "Components": {
+			"Animator": { "Mesh": "Assets/Models/TwoJoint.gltf", "Clip": "Locomotion", "MatchVelocity": true,
+				"Events": [ { "Clip": "Bend", "Time": 0.25, "Name": "Footstep" }, { "Time": 1, "Name": "Any" } ],
+				"BlendSpaces": [
+					{ "Name": "Locomotion", "Type": "1D", "Samples": [ { "Clip": "Step", "X": 0 }, { "Clip": "Cubic", "X": 1, "Speed": 2 } ] },
+					{ "Name": "Strafe", "Type": "2D", "Samples": [ { "X": 0, "Y": 0 }, { "Clip": "Step", "X": 1, "Y": 0 }, { "Clip": "Cubic", "X": 0, "Y": 1 } ] } ] } } },
+		{ "ID": 2, "Name": "Hat", "Parent": 1, "Components": {
+			"BoneAttachment": { "Joint": "Tip", "Translation": [0, 0.2, 0], "Rotation": [0, 90, 0], "Scale": [1, 1, 1] } } },
+		{ "ID": 3, "Name": "Sword", "Components": {
+			"BoneAttachment": { "Target": 1, "Joint": "RootJoint" } } }
+	]
+}

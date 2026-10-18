@@ -61,6 +61,12 @@ namespace Basalt {
 		return bounds;
 	}
 
+	Entity GetBoneAttachmentTarget(Entity entity)
+	{
+		const UUID target = entity.GetComponent<BoneAttachmentComponent>().Target;
+		return target != 0 ? entity.GetScene()->GetEntityByUUID(target) : entity.GetParent();
+	}
+
 	std::vector<std::string> GetAnimationWarnings(Entity entity)
 	{
 		std::vector<std::string> warnings;
@@ -92,33 +98,49 @@ namespace Basalt {
 						continue;
 					if (const AnimationClip* clip = findClip(event.Clip); !clip)
 						warnings.push_back(fmt::format("Animator event '{}': clip '{}' not found", event.Name, event.Clip));
+					else if (clip->Duration <= 0)
+						warnings.push_back(fmt::format("Animator event '{}': clip '{}' lasts 0 s, so its events never fire", event.Name, event.Clip));
 					else if (event.Time > clip->Duration)
 						warnings.push_back(fmt::format("Animator event '{}' at {}s is past the end of clip '{}' ({}s) and never fires", event.Name, event.Time, event.Clip, clip->Duration));
 				}
+				bool knownSpeed = false;
 				for (const AnimationBlendSpace& space : animator->BlendSpaces)
 				{
+					if (findClip(space.Name))
+						warnings.push_back("Animator blend space '" + space.Name + "' has the name of a clip; Clip selects the clip");
 					if (space.Samples.empty())
 						warnings.push_back("Animator blend space '" + space.Name + "' has no samples");
 					for (const AnimationBlendSample& sample : space.Samples)
+					{
+						knownSpeed = knownSpeed || sample.Speed > 0;
 						if (!sample.Clip.empty() && !findClip(sample.Clip))
 							warnings.push_back("Animator blend space '" + space.Name + "': clip '" + sample.Clip + "' not found");
+					}
 				}
+				if (animator->MatchVelocity && !knownSpeed)
+					warnings.emplace_back("Animator MatchVelocity has no effect: no blend space sample has a Speed");
 			}
 			else
 				warnings.push_back("Animator asset could not be loaded: " + AssetManager::GetError(animator->Mesh));
 		}
 		if (const auto* attachment = entity.TryGetComponent<BoneAttachmentComponent>())
 		{
-			Scene& scene = *entity.GetScene();
-			const Entity target = attachment->Target != 0 ? scene.GetEntityByUUID(attachment->Target) : entity.GetParent();
+			const Entity target = GetBoneAttachmentTarget(entity);
 			const auto* targetAnimator = target ? target.TryGetComponent<AnimatorComponent>() : nullptr;
+			const auto source = targetAnimator ? AssetManager::GetMesh(targetAnimator->Mesh) : nullptr;
 			if (!target)
 				warnings.emplace_back(attachment->Target != 0 ? "BoneAttachment Target entity not found" : "BoneAttachment has no Target and no parent");
 			else if (target == entity)
 				warnings.emplace_back("BoneAttachment cannot attach an entity to itself");
+			else if (entity.GetScene()->IsDescendantOf(target, entity))
+				warnings.push_back("BoneAttachment Target '" + target.GetName() + "' is a descendant of this entity");
 			else if (!targetAnimator)
 				warnings.push_back("BoneAttachment Target '" + target.GetName() + "' has no Animator");
-			else if (const auto source = AssetManager::GetMesh(targetAnimator->Mesh); source && std::ranges::find(source->Nodes, attachment->Joint, &MeshNode::Name) == source->Nodes.end())
+			else if (!source || source->AnimationUnsupported)
+				warnings.push_back("BoneAttachment Target '" + target.GetName() + "' has no playable Animator model");
+			else if (attachment->Joint.empty())
+				warnings.emplace_back("BoneAttachment Joint is empty");
+			else if (std::ranges::find(source->Nodes, attachment->Joint, &MeshNode::Name) == source->Nodes.end())
 				warnings.push_back("BoneAttachment joint '" + attachment->Joint + "' not found in '" + targetAnimator->Mesh + "'");
 			if (const auto* body = entity.TryGetComponent<RigidBodyComponent>(); body && body->Type == RigidBodyType::Dynamic)
 				warnings.emplace_back("BoneAttachment on a Dynamic RigidBody: physics moves it too; make it Kinematic");

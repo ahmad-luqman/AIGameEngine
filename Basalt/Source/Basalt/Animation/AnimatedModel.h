@@ -11,6 +11,8 @@ namespace Basalt {
 	void ForEachAnimatedMesh(Entity entity, const std::function<void(const Ref<MeshSource>&, const MeshNode&, const glm::mat4&, const std::vector<glm::mat4>&)>& visit);
 	// World bounds used by editor picking, focus and selection.
 	AABB AnimatedModelBounds(Entity entity);
+	// The entity a BoneAttachment follows: its Target, or its parent when Target is 0; null when that is missing.
+	Entity GetBoneAttachmentTarget(Entity entity);
 	// Non-fatal authoring diagnostics, shared by the inspector and scene.info automation.
 	std::vector<std::string> GetAnimationWarnings(Entity entity);
 }
