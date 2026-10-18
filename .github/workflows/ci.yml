@@ -62,8 +62,10 @@ jobs:
         shell: bash
         run: |
           formatCheck=OFF
+          profile=OFF
+          if [[ "${{ runner.os }}" == "Linux" && "${{ matrix.config }}" == "Debug" ]]; then profile=ON; fi
           if [[ "${{ runner.os }}" == "macOS" && "${{ matrix.config }}" == "Debug" ]]; then formatCheck=ON; fi
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DBASALT_CHECK_FORMAT=$formatCheck
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DBASALT_CHECK_FORMAT=$formatCheck -DBASALT_PROFILE=$profile
 
       - name: Build
         run: cmake --build build -- -k 0

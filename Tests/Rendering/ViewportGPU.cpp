@@ -5,6 +5,8 @@
 
 #include <Basalt/Animation/AnimationSystem.h>
 #include <Basalt/Asset/AssetManager.h>
+#include <Basalt/Core/JobSystem.h>
+#include <Basalt/Core/MemoryTracker.h>
 #include <Basalt/Renderer/SceneRenderer.h>
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
@@ -12,6 +14,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <latch>
 
 using namespace Basalt;
 
@@ -268,4 +271,59 @@ TEST_CASE("Viewport multi-selection outlines both surfaces and retains full UUID
 		CHECK(Capture(renderer, scene, camera) == plain);
 	}
 	CHECK(graphics->GetValidationErrorCount() == 0);
+}
+
+TEST_CASE("Async viewport draws a placeholder with every worker occupied then uploads published assets")
+{
+	auto graphics = CreateTestGraphics();
+	AssetManager::Clear();
+	JobSystem& pool = JobSystem::Get();
+	const auto workers = pool.GetWorkerCount();
+	std::latch started(workers);
+	std::latch release(1);
+	// Release even when a REQUIRE aborts the test, so the pool can always drain at process exit.
+	auto unblock = std::shared_ptr<std::latch>(&release, [](std::latch* latch) {
+		latch->count_down();
+		JobSystem::Get().WaitIdle();
+	});
+	for (uint32_t i = 0; i < workers; ++i)
+		(void)pool.Submit([&] {
+			started.count_down();
+			release.wait();
+		});
+	started.wait();
+
+	Scene scene;
+	scene.GetRendererSettings().SSAOEnabled = false;
+	scene.GetRendererSettings().ShadowsEnabled = false;
+	auto entity = scene.CreateEntity("Streaming sphere");
+	entity.AddComponent<MeshComponent>().Mesh = "builtin://Sphere";
+	RenderCamera camera;
+	camera.Position = { 0, 0, 5 };
+	camera.View = glm::lookAtRH(camera.Position, glm::vec3(0), glm::vec3(0, 1, 0));
+	camera.Projection = glm::orthoRH_ZO(-2.0f, 2.0f, -2.0f, 2.0f, .1f, 20.0f);
+	camera.Far = 20;
+	const auto memoryBefore = MemoryTracker::Get(MemoryCategory::GpuBuffers).Bytes;
+	{
+		SceneRenderer renderer(graphics->GetDevice(), { .Picking = true, .AsyncLoading = true });
+		REQUIRE(renderer.Initialize());
+		renderer.SetViewportSize(64, 64);
+		Capture(renderer, scene, camera);
+		CHECK(renderer.GetStatistics().DrawCalls > 0);
+		ExpectPick(renderer, 32, 32, entity.GetUUID());
+		CHECK_FALSE(AssetManager::FindLoadedMesh("builtin://Sphere"));
+		CHECK(AssetManager::IsLoading("builtin://Sphere"));
+		CHECK(AssetManager::GetLoadedKeys() == std::vector<std::string>{ "builtin://Sphere" });
+		CHECK(MemoryTracker::Get(MemoryCategory::GpuBuffers).Bytes > memoryBefore);
+		unblock.reset();
+		AssetManager::WaitForLoads();
+		CHECK(AssetManager::FindLoadedMesh("builtin://Sphere"));
+		Capture(renderer, scene, camera);
+		CHECK(renderer.GetStatistics().DrawCalls > 0);
+		ExpectPick(renderer, 32, 32, entity.GetUUID());
+	}
+	CHECK(MemoryTracker::Get(MemoryCategory::GpuBuffers).Bytes == memoryBefore);
+	graphics->WaitIdle();
+	CHECK(graphics->GetValidationErrorCount() == 0);
+	AssetManager::Clear();
 }

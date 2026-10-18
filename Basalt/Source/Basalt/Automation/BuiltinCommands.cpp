@@ -12,6 +12,7 @@
 #include "Basalt/Core/Input.h"
 #include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
+#include "Basalt/Core/MemoryTracker.h"
 #include "Basalt/Physics/PhysicsWorld.h"
 #include "Basalt/Project/Exporter.h"
 #include "Basalt/Project/Project.h"
@@ -1193,6 +1194,36 @@ namespace Basalt {
 				return result;
 			});
 
+			Add(registry, "asset.preload", "Requests mesh/texture CPU loads on the shared worker pool. Returns a status (pending, ready or failed) and error for each path. Poll by repeating; wait=true joins these requests, including embedded image dependencies. Reload/refresh retries failed loads. GPU upload happens in the renderer.", Schema::Object({ { "paths", Schema::Array("array of mesh/texture paths or built-in mesh keys", Schema::String("string", true)) }, { "wait", Schema::Boolean("wait for these loads, default false") } }, { "paths" }), [](AutomationSession&, const json& params) {
+				const auto& paths = params.at("paths");
+				if (paths.size() > 4096)
+					throw CommandError("at most 4096 preload paths are allowed");
+				std::vector<std::pair<std::string, bool>> requests;
+				// Validate the entire batch before creating work.
+				for (const auto& value : paths)
+				{
+					const std::string raw = value.get<std::string>();
+					const std::string key = Primitives::IsBuiltinKey(raw) ? raw : ProjectRelative(raw);
+					const bool mesh = Primitives::IsBuiltinKey(key) || AssetManager::IsMeshFile(key);
+					const auto marker = key.find("#image/");
+					if (!mesh && !AssetManager::IsTextureFile(key) && !(marker != std::string::npos && AssetManager::IsMeshFile(key.substr(0, marker))))
+						throw CommandError("unsupported preload asset '" + key + "'");
+					requests.emplace_back(key, mesh);
+				}
+				AssetManager::PublishCompleted();
+				const bool wait = OptionalBool(params, "wait", false);
+				json result = json::array();
+				for (const auto& [key, mesh] : requests)
+				{
+					const bool ready = mesh ? static_cast<bool>(wait ? AssetManager::GetMesh(key) : AssetManager::RequestMesh(key))
+											: static_cast<bool>(wait ? AssetManager::GetTexture(key) : AssetManager::RequestTexture(key));
+					result.push_back({ { "path", key }, { "status", ready ? "ready" : AssetManager::IsLoading(key) ? "pending"
+																												   : "failed" },
+									   { "error", AssetManager::GetError(key) } });
+				}
+				return result;
+			});
+
 			Add(registry, "asset.read", "Reads a text asset.", Schema::Object({ { "path", Schema::String("string", true) } }, { "path" }), [](AutomationSession&, const json& params) {
 				const std::string path = ProjectRelative(RequireString(params, "path"));
 				const auto text = FileSystem::ReadTextFile(Project::ResolvePath(path));
@@ -1617,6 +1648,10 @@ namespace Basalt {
 				return json{ { "path", path } };
 			});
 
+			Add(registry, "memory.stats", "Returns logical retained CPU asset payload bytes, requested GPU buffer bytes, and live Lua heap bytes, with peaks and allocation counts. Not RSS or driver residency; excludes allocator overhead, GPU textures and render targets. Available headlessly.", Schema::Object(), [](AutomationSession&, const json&) {
+				return MemoryTracker::ToJson();
+			});
+
 			Add(registry, "render.stats", "Returns the scene renderer's statistics: viewport and render size, render scale and dynamic resolution state, draw and culling counts, and the GPU time of each pass averaged over recent frames (editor / GPU hosts only).", Schema::Object(), [](AutomationSession& session, const json&) {
 				if (!session.RenderStats)
 					throw CommandError("render statistics need a GPU host (the editor); this host is '" + session.HostName + "'");
@@ -1624,6 +1659,7 @@ namespace Basalt {
 				std::string error;
 				if (!session.RenderStats(stats, error))
 					throw CommandError(error);
+				stats["memory"] = MemoryTracker::ToJson();
 				return stats;
 			});
 

@@ -1,9 +1,12 @@
 #include "Basalt/Scripting/ScriptEngine.h"
 
+#include "Basalt/Core/Profiler.h"
+
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Input.h"
 #include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
+#include "Basalt/Core/MemoryTracker.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Project/SaveData.h"
 #include "Basalt/Scene/Entity.h"
@@ -217,7 +220,7 @@ namespace Basalt {
 		ScriptEngine& Engine;
 		// Declared before Lua so it outlives lua_close(): __gc metamethods may still call bindings.
 		ScriptContext Context;
-		sol::state Lua;
+		sol::state Lua{ sol::default_at_panic, &MemoryTracker::LuaAllocator };
 		// Declared after Lua: they hold Lua references, which must be released before the state closes.
 		ScriptTasks Tasks{ Lua, Context, *this };
 		ScriptEvents Events{ Lua, Context, *this };
@@ -847,6 +850,7 @@ namespace Basalt {
 
 	void ScriptEngine::Update(Timestep ts, std::span<const UIWidgetEvent> uiEvents)
 	{
+		BS_PROFILE_SCOPE("Scripts");
 		Impl& impl = *m_Impl;
 		impl.Context.DeltaTime = ts.GetSeconds();
 		impl.Tasks.BeginFrame(ts.GetSeconds());
@@ -1229,7 +1233,7 @@ namespace Basalt {
 			outError = "cannot read script '" + scriptPath + "'";
 			return false;
 		}
-		sol::state lua;
+		sol::state lua{ sol::default_at_panic, &MemoryTracker::LuaAllocator };
 		const sol::load_result chunk = lua.load(*source, "@" + scriptPath);
 		if (!chunk.valid())
 		{
@@ -1243,7 +1247,7 @@ namespace Basalt {
 	std::optional<nlohmann::json> ScriptEngine::LoadScriptProperties(const std::string& scriptPath, std::string& outError)
 	{
 		ScriptContext context;
-		sol::state lua;
+		sol::state lua{ sol::default_at_panic, &MemoryTracker::LuaAllocator };
 		OpenSafeLibraries(lua);
 		RegisterScriptBindings(lua, context);
 

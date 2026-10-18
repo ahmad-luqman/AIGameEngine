@@ -9,13 +9,13 @@
 #include "Basalt/Physics/ContactListener.h"
 #include "Basalt/Physics/DirtySet.h"
 #include "Basalt/Physics/JoltUtils.h"
+#include "Basalt/Physics/PhysicsJobs.h"
 #include "Basalt/Physics/PhysicsLayers.h"
 #include "Basalt/Physics/WarningLog.h"
 #include "Basalt/Scene/Components.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
 
-#include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
@@ -112,7 +112,7 @@ namespace Basalt {
 		};
 
 		Scope<JPH::TempAllocatorImpl> TempAllocator;
-		Scope<JPH::JobSystemThreadPool> JobSystem;
+		Scope<PhysicsJobs> JobSystem;
 		PhysicsInternal::BroadPhaseLayerInterfaceImpl BroadPhaseLayerInterface;
 		PhysicsInternal::ObjectVsBroadPhaseLayerFilterImpl ObjectVsBroadPhaseLayerFilter;
 		PhysicsInternal::ObjectLayerPairFilterImpl ObjectLayerPairFilter;

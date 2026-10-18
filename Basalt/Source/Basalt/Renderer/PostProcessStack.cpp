@@ -124,6 +124,7 @@ namespace Basalt {
 		buffer.keepInitialState = true;
 		buffer.debugName = "ExposureHistogram";
 		m_Histogram = device->createBuffer(buffer);
+		m_HistogramMemory.Resize(m_Histogram ? static_cast<size_t>(buffer.byteSize) : 0);
 		if (!m_Histogram)
 			return Fail("histogram buffer");
 		m_ExposureSet = device->createBindingSet(nvrhi::BindingSetDesc().addItem(nvrhi::BindingSetItem::Texture_SRV(0, hdr)).addItem(nvrhi::BindingSetItem::Sampler(1, sampler)).addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(2, m_Histogram)).addItem(nvrhi::BindingSetItem::Texture_UAV(3, m_Exposure)).addItem(nvrhi::BindingSetItem::PushConstants(PushConstantSlot, sizeof(ExposurePush))), m_ExposureLayout);

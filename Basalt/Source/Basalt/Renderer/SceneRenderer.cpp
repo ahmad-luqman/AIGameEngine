@@ -1,5 +1,7 @@
 #include "Basalt/Renderer/SceneRenderer.h"
 
+#include "Basalt/Core/Profiler.h"
+
 #include "Basalt/Animation/AnimatedModel.h"
 #include "Basalt/Animation/AnimationPose.h"
 #include "Basalt/Animation/AnimationSystem.h"
@@ -397,6 +399,12 @@ namespace Basalt {
 
 		// Constant GPU resources
 		nvrhi::BufferHandle ViewConstantsBuffer;
+		MemoryAllocation ViewMemory{ MemoryCategory::GpuBuffers };
+		MemoryAllocation SsaoMemory{ MemoryCategory::GpuBuffers };
+		MemoryAllocation DrawMemory{ MemoryCategory::GpuBuffers };
+		MemoryAllocation MaterialMemory{ MemoryCategory::GpuBuffers };
+		MemoryAllocation LocalShadowMemory{ MemoryCategory::GpuBuffers };
+		MemoryAllocation ParticleMemory{ MemoryCategory::GpuBuffers };
 		nvrhi::BufferHandle SsaoConstantsBuffer;
 		nvrhi::BufferHandle DrawBuffer, MaterialBuffer, LightBuffer;
 		LightClusters Clusters;
@@ -515,7 +523,14 @@ namespace Basalt {
 		, m_Resources(CreateScope<RenderResources>(device))
 		, m_Profiler(device, std::vector<std::string>(std::begin(ScenePassNames), std::end(ScenePassNames)), specification.GpuTimers)
 		, m_Picking(specification.Picking)
+		, m_AsyncLoading(specification.AsyncLoading)
 	{
+		if (m_AsyncLoading)
+		{
+			// A placeholder must never wait on the pool: a cooperative wait could run an import here.
+			m_PlaceholderMesh = Primitives::CreateCube();
+			m_PlaceholderMesh->UpdateMemoryUsage();
+		}
 	}
 
 	SceneRenderer::~SceneRenderer()
@@ -717,12 +732,16 @@ namespace Basalt {
 		constantDesc.initialState = nvrhi::ResourceStates::ConstantBuffer;
 		constantDesc.keepInitialState = true;
 		impl.ViewConstantsBuffer = device->createBuffer(constantDesc);
+		impl.ViewMemory.Resize(impl.ViewConstantsBuffer ? static_cast<size_t>(constantDesc.byteSize) : 0);
 		constantDesc.byteSize = sizeof(GpuSSAOConstants);
 		constantDesc.debugName = "SSAOConstants";
 		impl.SsaoConstantsBuffer = device->createBuffer(constantDesc);
+		impl.SsaoMemory.Resize(impl.SsaoConstantsBuffer ? static_cast<size_t>(constantDesc.byteSize) : 0);
 
 		impl.DrawBuffer = EnsureStructuredBuffer(device, nullptr, sizeof(GpuDrawData) * 256, sizeof(GpuDrawData), "DrawBuffer");
+		impl.DrawMemory.Resize(impl.DrawBuffer ? static_cast<size_t>(impl.DrawBuffer->getDesc().byteSize) : 0);
 		impl.MaterialBuffer = EnsureStructuredBuffer(device, nullptr, sizeof(GpuMaterialData) * 256, sizeof(GpuMaterialData), "MaterialBuffer");
+		impl.MaterialMemory.Resize(impl.MaterialBuffer ? static_cast<size_t>(impl.MaterialBuffer->getDesc().byteSize) : 0);
 		if (!impl.Clusters.Initialize(device))
 			return false;
 		impl.LightBuffer = impl.Clusters.GetBuffer();
@@ -746,6 +765,7 @@ namespace Basalt {
 		if (!CreateLocalShadowTarget(device, 1, impl.LocalShadowAtlas, impl.LocalShadowFramebuffer, true))
 			return false;
 		impl.LocalShadowBuffer = EnsureStructuredBuffer(device, nullptr, sizeof(LocalShadowMap) * MaxLocalShadowMaps, sizeof(LocalShadowMap), "LocalShadowBuffer");
+		impl.LocalShadowMemory.Resize(impl.LocalShadowBuffer ? static_cast<size_t>(impl.LocalShadowBuffer->getDesc().byteSize) : 0);
 		if (!impl.LocalShadowBuffer)
 		{
 			BS_CORE_ERROR("SceneRenderer: failed to create local shadow map buffer");
@@ -1183,6 +1203,8 @@ namespace Basalt {
 
 	void SceneRenderer::Render(Scene& scene, const RenderCamera& camera, float deltaTime)
 	{
+		BS_PROFILE_SCOPE("Scene render");
+		AssetManager::PublishCompleted();
 		InvalidatePicking();
 		Impl& impl = *m_Impl;
 		ResizeTargets(m_Width, m_Height);
@@ -1342,7 +1364,7 @@ namespace Basalt {
 				skyLight = &view.get<SkyLightComponent>(*it);
 		}
 		const std::string environmentKey = skyLight ? skyLight->EnvironmentMap : std::string();
-		Ref<TextureSource> environmentSource = environmentKey.empty() ? nullptr : AssetManager::GetTexture(environmentKey);
+		Ref<TextureSource> environmentSource = environmentKey.empty() ? nullptr : (m_AsyncLoading ? AssetManager::RequestTexture(environmentKey) : AssetManager::GetTexture(environmentKey));
 		std::string bakeKey = environmentKey;
 		if (environmentSource)
 		{
@@ -1615,7 +1637,7 @@ namespace Basalt {
 		auto resolveTexture = [&](const std::string& key, bool srgb, nvrhi::ITexture* fallback) -> nvrhi::ITexture* {
 			if (key.empty())
 				return fallback;
-			Ref<TextureSource> source = AssetManager::GetTexture(key);
+			Ref<TextureSource> source = m_AsyncLoading ? AssetManager::RequestTexture(key) : AssetManager::GetTexture(key);
 			nvrhi::ITexture* gpu = source ? m_Resources->GetTexture(source, srgb, commandList) : nullptr;
 			return gpu ? gpu : fallback;
 		};
@@ -1742,7 +1764,11 @@ namespace Basalt {
 		{
 			Entity entity(handle, &scene);
 			const auto& component = entity.GetComponent<MeshComponent>();
-			addMesh(entity, AssetManager::GetMesh(component.Mesh), component.MeshIndex, scene.GetWorldTransform(entity), component.CastShadows, {}, unusedPaletteOffset);
+			auto source = m_AsyncLoading ? AssetManager::RequestMesh(component.Mesh) : AssetManager::GetMesh(component.Mesh);
+			const bool placeholder = !source && m_AsyncLoading && AssetManager::IsLoading(component.Mesh);
+			if (placeholder)
+				source = m_PlaceholderMesh;
+			addMesh(entity, source, placeholder ? 0 : component.MeshIndex, scene.GetWorldTransform(entity), component.CastShadows, {}, unusedPaletteOffset);
 		}
 		for (auto handle : scene.GetAllEntitiesWith<AnimatorComponent>())
 		{
@@ -1779,6 +1805,7 @@ namespace Basalt {
 			if (grown && grown != impl.ParticleBuffer)
 			{
 				impl.ParticleBuffer = grown;
+				impl.ParticleMemory.Resize(static_cast<size_t>(grown->getDesc().byteSize));
 				impl.ParticleSets.clear();
 			}
 			if (!grown)
@@ -1832,7 +1859,9 @@ namespace Basalt {
 		const nvrhi::BufferHandle previousDraws = impl.DrawBuffer;
 		const nvrhi::BufferHandle previousMaterials = impl.MaterialBuffer;
 		impl.DrawBuffer = EnsureStructuredBuffer(m_Device, impl.DrawBuffer, draws.size() * sizeof(GpuDrawData), sizeof(GpuDrawData), "DrawBuffer");
+		impl.DrawMemory.Resize(impl.DrawBuffer ? static_cast<size_t>(impl.DrawBuffer->getDesc().byteSize) : 0);
 		impl.MaterialBuffer = EnsureStructuredBuffer(m_Device, impl.MaterialBuffer, materials.size() * sizeof(GpuMaterialData), sizeof(GpuMaterialData), "MaterialBuffer");
+		impl.MaterialMemory.Resize(impl.MaterialBuffer ? static_cast<size_t>(impl.MaterialBuffer->getDesc().byteSize) : 0);
 		if (!impl.DrawBuffer || !impl.MaterialBuffer)
 		{
 			if (!impl.ReportedDrawBufferFailure)
@@ -2222,7 +2251,7 @@ namespace Basalt {
 
 	std::optional<UITexture> SceneRenderer::GetUITexture(const std::string& path, nvrhi::ICommandList* commandList)
 	{
-		Ref<TextureSource> source = AssetManager::GetTexture(path);
+		Ref<TextureSource> source = m_AsyncLoading ? AssetManager::RequestTexture(path) : AssetManager::GetTexture(path);
 		if (!source)
 			return std::nullopt;
 		nvrhi::ITexture* texture = m_Resources->GetTexture(source, false, commandList);

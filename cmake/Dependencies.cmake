@@ -246,3 +246,16 @@ target_link_libraries(nvrhi_vk PUBLIC nvrhi)
 # Basalt only needs the Vulkan::Headers target.
 
 unset(CMAKE_POLICY_VERSION_MINIMUM)
+
+# Tracy is fetched only for explicitly profiled builds. Keep shipping builds independent of its client.
+if(BASALT_PROFILE AND NOT CMAKE_BUILD_TYPE STREQUAL "Dist")
+	set(TRACY_ENABLE ON CACHE BOOL "" FORCE)
+	set(TRACY_ON_DEMAND ON CACHE BOOL "" FORCE)
+	set(TRACY_ONLY_LOCALHOST ON CACHE BOOL "" FORCE)
+	set(TRACY_NO_BROADCAST ON CACHE BOOL "" FORCE)
+	FetchContent_Declare(tracy SYSTEM
+		GIT_REPOSITORY https://github.com/wolfpld/tracy.git
+		GIT_TAG v0.12.2
+		GIT_SHALLOW TRUE)
+	FetchContent_MakeAvailable(tracy)
+endif()

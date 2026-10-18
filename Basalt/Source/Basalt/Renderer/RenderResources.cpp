@@ -205,6 +205,7 @@ namespace Basalt {
 		MeshEntry& entry = m_Meshes[source.get()];
 		entry.Source = source;
 		entry.Mesh = std::move(mesh);
+		entry.Memory.Resize(static_cast<size_t>(vertexDesc.byteSize + indexDesc.byteSize));
 		return &entry.Mesh;
 	}
 

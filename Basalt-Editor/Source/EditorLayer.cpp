@@ -12,6 +12,7 @@
 #include "Basalt/Core/Application.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Input.h"
+#include "Basalt/Core/MemoryTracker.h"
 #include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Core/Window.h"
@@ -307,7 +308,7 @@ namespace Basalt {
 	{
 		Application& application = Application::Get();
 		GraphicsDevice* device = application.GetGraphicsDevice();
-		m_Renderer = CreateScope<SceneRenderer>(device->GetDevice(), SceneRendererSpecification{ .GpuTimers = device->SupportsTimerQueries(), .Picking = true });
+		m_Renderer = CreateScope<SceneRenderer>(device->GetDevice(), SceneRendererSpecification{ .GpuTimers = device->SupportsTimerQueries(), .Picking = true, .AsyncLoading = true });
 		if (!m_Renderer->Initialize())
 		{
 			BS_CORE_CRITICAL("Editor: renderer initialization failed");
@@ -1312,7 +1313,7 @@ namespace Basalt {
 				return;
 			}
 			// Timers drive dynamic resolution, which the Game view runs as the game would.
-			auto renderer = CreateScope<SceneRenderer>(device->GetDevice(), SceneRendererSpecification{ .GpuTimers = device->SupportsTimerQueries() });
+			auto renderer = CreateScope<SceneRenderer>(device->GetDevice(), SceneRendererSpecification{ .GpuTimers = device->SupportsTimerQueries(), .AsyncLoading = true });
 			if (!renderer->Initialize())
 			{
 				BS_CORE_ERROR("Editor: the Game view renderer failed to initialize (see the renderer error above)");
@@ -2315,6 +2316,12 @@ namespace Basalt {
 				ImGui::TextColored(EditorColors::Error(), "Frame failed — see Console. Toggle FSR off/on to retry FSR allocation.");
 			ImGui::Text("FSR 1: %s", stats.FSR1Active ? "active" : "inactive");
 			ImGui::Text("Entities: %zu", scene.GetEntityCount());
+			for (uint8_t i = 0; i < static_cast<uint8_t>(MemoryCategory::Count); ++i)
+			{
+				const auto category = static_cast<MemoryCategory>(i);
+				const auto memory = MemoryTracker::Get(category);
+				ImGui::Text("%s: %.2f MiB (peak %.2f)", MemoryTracker::GetName(category), static_cast<double>(memory.Bytes) / 1048576.0, static_cast<double>(memory.PeakBytes) / 1048576.0);
+			}
 			ImGui::Text("Draw calls: %u (shadow %u)", stats.DrawCalls, stats.ShadowDrawCalls);
 			ImGui::Text("Culled submeshes: %u", stats.CulledSubmeshes);
 			ImGui::Text("Local shadow maps: %u (skipped lights %u)", stats.LocalShadowMaps, stats.LocalShadowsSkipped);

@@ -8,6 +8,11 @@
 
 namespace Basalt {
 
+	void TextureSource::UpdateMemoryUsage()
+	{
+		m_Memory.Resize(sizeof(TextureSource) + Pixels.capacity());
+	}
+
 	namespace {
 
 		// stb_image computes abs() of a BMP's signed 32-bit height, which overflows (undefined behaviour) for
@@ -86,6 +91,7 @@ namespace Basalt {
 
 		texture->Width = static_cast<uint32_t>(width);
 		texture->Height = static_cast<uint32_t>(height);
+		texture->UpdateMemoryUsage();
 		return texture;
 	}
 
@@ -111,6 +117,7 @@ namespace Basalt {
 		texture->Format = TextureFormat::RGBA8;
 		texture->Pixels = { static_cast<uint8_t>(rgba >> 24), static_cast<uint8_t>(rgba >> 16), static_cast<uint8_t>(rgba >> 8), static_cast<uint8_t>(rgba) };
 		texture->Key = key;
+		texture->UpdateMemoryUsage();
 		return texture;
 	}
 

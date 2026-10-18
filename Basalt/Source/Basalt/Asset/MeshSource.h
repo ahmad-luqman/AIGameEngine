@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Basalt/Core/Base.h"
+#include "Basalt/Core/MemoryTracker.h"
 #include "Basalt/Math/AABB.h"
 
 #include <glm/glm.hpp>
@@ -155,6 +156,13 @@ namespace Basalt {
 		// Asset key this source was loaded from ("Assets/Models/Ship.gltf", "builtin://Cube").
 		std::string Key;
 
+		// Refresh after mutating payload vectors; asset loads do this before publishing.
+		void UpdateMemoryUsage();
+
+	private:
+		MemoryAllocation m_Memory;
+
+	public:
 		// Rebuilds NodeOrder; returns false for an invalid parent or cycle.
 		bool FinalizeHierarchy();
 

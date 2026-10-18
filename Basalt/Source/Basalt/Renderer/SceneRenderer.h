@@ -17,6 +17,7 @@
 namespace Basalt {
 
 	class Scene;
+	class MeshSource;
 
 	struct RenderCamera
 	{
@@ -72,6 +73,8 @@ namespace Basalt {
 		bool GpuTimers = false;
 		// Editor-only entity IDs; runtime renderers allocate no picking resources.
 		bool Picking = false;
+		// Interactive views stream CPU assets; captures leave this off for deterministic output.
+		bool AsyncLoading = false;
 	};
 
 	// Renders a Scene from a camera into an internal LDR image:
@@ -191,6 +194,8 @@ namespace Basalt {
 		uint32_t m_Height = 0;
 		float m_RenderScale = 1.0f;
 		bool m_Picking = false;
+		bool m_AsyncLoading = false;
+		Ref<MeshSource> m_PlaceholderMesh;
 		std::vector<UUID> m_Selection;
 		bool m_ClusteredLighting = true;
 		bool m_VisualizeLightCount = false;

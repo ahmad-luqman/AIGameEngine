@@ -19,6 +19,8 @@ set(CMAKE_CXX_FLAGS_DIST "${CMAKE_CXX_FLAGS_RELEASE}" CACHE STRING "" FORCE)
 set(CMAKE_C_FLAGS_DIST "${CMAKE_C_FLAGS_RELEASE}" CACHE STRING "" FORCE)
 set(CMAKE_EXE_LINKER_FLAGS_DIST "${CMAKE_EXE_LINKER_FLAGS_RELEASE}" CACHE STRING "" FORCE)
 
+option(BASALT_PROFILE "Enable Tracy CPU profiling (compiled out in Dist)" OFF)
+
 option(BASALT_BUILD_EDITOR "Build the Basalt editor" ON)
 option(BASALT_BUILD_RUNTIME "Build the Basalt runtime (exported game player)" ON)
 option(BASALT_BUILD_TESTS "Build Basalt unit tests" ON)

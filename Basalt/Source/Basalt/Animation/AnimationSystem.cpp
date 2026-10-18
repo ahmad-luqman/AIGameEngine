@@ -1,5 +1,7 @@
 #include "Basalt/Animation/AnimationSystem.h"
 
+#include "Basalt/Core/Profiler.h"
+
 #include "Basalt/Animation/AnimatedModel.h"
 #include "Basalt/Animation/AnimationPose.h"
 #include "Basalt/Animation/BlendSpace.h"
@@ -428,6 +430,7 @@ namespace Basalt {
 
 	void AnimationSystem::Update(Timestep timestep, bool updateAttachments)
 	{
+		BS_PROFILE_SCOPE("Animation");
 		const float seconds = timestep.GetSeconds();
 		if (!std::isfinite(seconds) || seconds < 0)
 		{

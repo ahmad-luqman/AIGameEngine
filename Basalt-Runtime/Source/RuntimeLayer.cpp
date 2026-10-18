@@ -45,7 +45,7 @@ namespace Basalt {
 
 		if (GraphicsDevice* device = application.GetGraphicsDevice())
 		{
-			m_Renderer = CreateScope<SceneRenderer>(device->GetDevice(), SceneRendererSpecification{ .GpuTimers = device->SupportsTimerQueries() });
+			m_Renderer = CreateScope<SceneRenderer>(device->GetDevice(), SceneRendererSpecification{ .GpuTimers = device->SupportsTimerQueries(), .AsyncLoading = m_Options.MaxFrames == 0 });
 			if (!m_Renderer->Initialize())
 			{
 				m_Renderer.reset();

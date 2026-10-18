@@ -5,6 +5,7 @@
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Project/Project.h"
+#include "Basalt/Core/Profiler.h"
 #include "Basalt/Scene/Scene.h"
 
 #include <cgltf.h>
@@ -58,7 +59,7 @@ namespace Basalt {
 		// glTF files are untrusted: an external buffer or image URI may only name a file inside the active
 		// project (or, without one, inside the glTF's own folder). Absolute paths, URI schemes and '..'
 		// escapes are rejected, so a model cannot make the engine read arbitrary files.
-		bool CheckExternalUri(const char* uri, const std::filesystem::path& gltfPath, std::string& outError)
+		bool CheckExternalUri(const char* uri, const std::filesystem::path& gltfPath, const std::filesystem::path& root, std::string& outError)
 		{
 			if (!uri || IsDataUri(uri))
 				return true;
@@ -69,7 +70,6 @@ namespace Basalt {
 			const std::filesystem::path relative(decoded);
 			const bool hasScheme = decoded.find(':') != std::string::npos;
 			const bool rooted = relative.has_root_path() || decoded.starts_with('/') || decoded.starts_with('\\');
-			const std::filesystem::path root = Project::GetActive() ? Project::GetActive()->GetDirectory() : gltfPath.parent_path();
 			const std::filesystem::path resolved = (gltfPath.parent_path() / relative).lexically_normal();
 			const std::filesystem::path inside = resolved.lexically_relative(root.lexically_normal());
 			if (hasScheme || rooted || decoded.empty() || inside.empty() || *inside.begin() == "..")
@@ -107,7 +107,7 @@ namespace Basalt {
 		}
 
 		// The external files are listed as soon as the file parses, even when loading fails later (a missing buffer).
-		GltfData LoadGltfData(const std::filesystem::path& path, const std::string& key, std::vector<std::string>& outExternalFiles, std::string& outError)
+		GltfData LoadGltfData(const std::filesystem::path& path, const std::string& key, const std::filesystem::path& projectRoot, std::vector<std::string>& outExternalFiles, std::string& outError)
 		{
 			const std::string pathString = path.string();
 			cgltf_options options = {};
@@ -131,12 +131,12 @@ namespace Basalt {
 			outExternalFiles.assign(externalFiles.begin(), externalFiles.end());
 			for (cgltf_size i = 0; i < data->buffers_count; i++)
 			{
-				if (!CheckExternalUri(data->buffers[i].uri, path, outError))
+				if (!CheckExternalUri(data->buffers[i].uri, path, projectRoot, outError))
 					return nullptr;
 			}
 			for (cgltf_size i = 0; i < data->images_count; i++)
 			{
-				if (!CheckExternalUri(data->images[i].uri, path, outError))
+				if (!CheckExternalUri(data->images[i].uri, path, projectRoot, outError))
 					return nullptr;
 			}
 			result = cgltf_load_buffers(&options, data.get(), pathString.c_str());
@@ -261,8 +261,15 @@ namespace Basalt {
 
 	Ref<MeshSource> MeshImporter::LoadGltf(const std::filesystem::path& path, const std::string& key, std::vector<std::string>& outExternalFiles, std::string& outError)
 	{
+		const auto root = Project::GetActive() ? Project::GetActive()->GetDirectory() : path.parent_path();
+		return LoadGltf(path, key, root, outExternalFiles, outError);
+	}
+
+	Ref<MeshSource> MeshImporter::LoadGltf(const std::filesystem::path& path, const std::string& key, const std::filesystem::path& projectRoot, std::vector<std::string>& outExternalFiles, std::string& outError)
+	{
+		BS_PROFILE_SCOPE("Import glTF");
 		outExternalFiles.clear();
-		GltfData data = LoadGltfData(path, key, outExternalFiles, outError);
+		GltfData data = LoadGltfData(path, key, projectRoot, outExternalFiles, outError);
 		if (!data)
 			return nullptr;
 
