@@ -2330,7 +2330,7 @@ TEST_SUITE("Animation")
 		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(0.5f));
 		REQUIRE(animation.SetParameter(rig, "Speed", 1.0f));
 		animation.Update(0);
-		CHECK(animation.GetBlendSpaceWeights(rig) == std::vector<std::pair<std::string, float>>{ { "Step", 0 }, { "Cubic", 1 } });
+		CHECK(animation.GetBlendSpaceWeights(rig) == std::vector<std::pair<std::string, float>>{ { "Step", 0.0f }, { "Cubic", 1.0f } });
 	}
 
 	TEST_CASE("Character root motion collides preserves vertical input restores gameplay and accumulates substeps")
@@ -2578,7 +2578,7 @@ TEST_SUITE("Animation")
 		CHECK(animation.GetState(rig) == "Air");
 		CHECK(animation.IsPlaying(rig));
 		CHECK(CountLogMessages(since, "sample clips not found") == 1);
-		CHECK(animation.GetBlendSpaceWeights(rig) == std::vector<std::pair<std::string, float>>{ { "Step", 1 } });
+		CHECK(animation.GetBlendSpaceWeights(rig) == std::vector<std::pair<std::string, float>>{ { "Step", 1.0f } });
 		animation.Update(2);
 		animation.Update(0);
 		animation.Update(0);
