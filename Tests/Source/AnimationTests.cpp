@@ -172,12 +172,13 @@ namespace {
 	{
 		return rig.GetComponent<TransformComponent>().Translation.x;
 	}
-	void AddWall(Scene& scene)
+	Entity AddWall(Scene& scene)
 	{
 		auto wall = scene.CreateEntity("Wall");
 		wall.GetTransform().Translation = { 1.5f, 0, 0 };
 		wall.AddComponent<RigidBodyComponent>();
 		wall.AddComponent<BoxColliderComponent>().HalfExtents = { 0.1f, 5, 5 };
+		return wall;
 	}
 	void UseBlendSpace(json& graph, size_t state, const std::string& name)
 	{
@@ -2084,7 +2085,7 @@ TEST_SUITE("Animation")
 			{ "two sources", "/States/0/BlendSpace", "Space", "exactly one" },
 			{ "clip axis", "/States/0/ParameterX", "Speed", "clip states cannot have blend axes" },
 			{ "unknown field", "/States/0/Typo", 1, "unknown key" },
-			{ "unknown target", "/Transitions/0/To", "Missing", "unknown state" },
+			{ "unknown target", "/Transitions/0/To", "Missing", "unknown state 'Missing'" },
 			{ "negative duration", "/Transitions/0/Duration", -1, "Duration must" },
 			{ "long duration", "/Transitions/0/Duration", 61, "Duration must" },
 			{ "exit range", "/Transitions/0/ExitTime", 1.1, "ExitTime must" },
@@ -2093,11 +2094,12 @@ TEST_SUITE("Animation")
 			{ "trigger default", "/Parameters/2/Default", true, "triggers must default" },
 			{ "bad float", "/Transitions/1/Conditions/0/Value", "fast", "finite float" },
 			{ "no states", "/States", json::array(), "InitialState" },
-			{ "unknown source", "/Transitions/0/From", "Missing", "unknown state" },
+			{ "unknown source", "/Transitions/0/From", "Missing", "unknown state 'Missing'" },
 			{ "unknown comparison", "/Transitions/0/Conditions/0/Operator", "Equals", "unknown condition operator" },
 			{ "bool greater", "/Transitions/1/Conditions/1/Operator", "Greater", "Bool/Trigger" },
 			{ "trigger not equal", "/Transitions/0/Conditions/0/Operator", "NotEqual", "Trigger conditions" },
 			{ "empty name", "/Parameters/0/Name", "", "name must not be empty" },
+			{ "empty initial", "/InitialState", "", "InitialState: name must not be empty" },
 			{ "explicit self edge", "/Transitions/0/From", "Air", "self-transition" },
 			{ "too many edges", "/Transitions", json(std::vector<json>(513, json{ { "To", "Idle" } })), "at most 512" },
 		};
@@ -2111,11 +2113,13 @@ TEST_SUITE("Animation")
 			CHECK(error.find(test.Error) != std::string::npos);
 		}
 		auto axes = StateGraph();
-		axes["States"][0].erase("Clip");
-		axes["States"][0]["BlendSpace"] = "Move";
+		UseBlendSpace(axes, 0, "Move");
 		axes["States"][0]["ParameterX"] = "Missing";
 		CHECK_FALSE(AnimationGraph::FromJson(axes, error));
 		CHECK(error.find("unknown parameter") != std::string::npos);
+		axes["States"][0]["ParameterX"] = "Grounded";
+		CHECK_FALSE(AnimationGraph::FromJson(axes, error));
+		CHECK(error.find("blend axes require Float parameters") != std::string::npos);
 		auto indexed = StateGraph();
 		indexed["Transitions"][1]["Duration"] = -1;
 		CHECK_FALSE(AnimationGraph::FromJson(indexed, error));
@@ -2164,34 +2168,32 @@ TEST_SUITE("Animation")
 		ClearAssetCache clear;
 		TempProject project("RootMotion");
 		Scene scene;
-		auto rig = GraphAnimator(scene, project, StateGraph());
+		auto rig = ClipAnimator(scene, project);
 		auto& component = rig.GetComponent<AnimatorComponent>();
-		component.StateMachine.clear();
-		component.Clip = "Step";
 		AnimationSystem animation(scene);
 		animation.Update(0.5f);
-		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(0.5f));
+		CHECK(RootX(rig) == doctest::Approx(0.5f));
 		REQUIRE(animation.GetPose(rig));
 		CHECK((*animation.GetPose(rig))[2][3].x == doctest::Approx(0));
 		CHECK((*animation.GetPose(rig))[2][3].y == doctest::Approx(0.25f));
 		animation.Update(4.0f);
-		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(4.5f));
+		CHECK(RootX(rig) == doctest::Approx(4.5f));
 		REQUIRE(animation.Seek(rig, 1.75f));
-		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(4.5f));
+		CHECK(RootX(rig) == doctest::Approx(4.5f));
 		animation.Update(0.5f);
-		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(5.0f));
+		CHECK(RootX(rig) == doctest::Approx(5.0f));
 		animation.Pause(rig, true);
 		animation.Update(1);
-		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(5.0f));
+		CHECK(RootX(rig) == doctest::Approx(5.0f));
 		animation.Stop(rig);
 		animation.Update(1);
-		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(5.0f));
+		CHECK(RootX(rig) == doctest::Approx(5.0f));
 		component.Looping = false;
 		REQUIRE(animation.Play(rig, "Step"));
 		animation.Update(4);
-		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(7.0f));
+		CHECK(RootX(rig) == doctest::Approx(7.0f));
 		animation.Update(4);
-		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(7.0f));
+		CHECK(RootX(rig) == doctest::Approx(7.0f));
 	}
 
 	TEST_CASE("Root motion is per state and fades motion from the outgoing state")
@@ -2206,17 +2208,17 @@ TEST_SUITE("Animation")
 		auto rig = GraphAnimator(scene, project, graph);
 		AnimationSystem animation(scene);
 		animation.Update(0.5f);
-		CHECK(rig.GetComponent<TransformComponent>().Translation.x == 0);
+		CHECK(RootX(rig) == 0);
 		CHECK((*animation.GetPose(rig))[2][3].x == doctest::Approx(0.5f));
 		REQUIRE(animation.SetParameter(rig, "Speed", 1.0f));
 		animation.Update(1);
-		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(0.5f));
+		CHECK(RootX(rig) == doctest::Approx(0.5f));
 		CHECK((*animation.GetPose(rig))[2][3].x == doctest::Approx(0));
 		REQUIRE(animation.SetParameter(rig, "Speed", 0.0f));
 		animation.Update(1);
-		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(1.0f));
+		CHECK(RootX(rig) == doctest::Approx(1.0f));
 		animation.Update(1);
-		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(1.0f));
+		CHECK(RootX(rig) == doctest::Approx(1.0f));
 	}
 
 	TEST_CASE("Graph reload resets the session and broken assets fail closed then recover")
@@ -2298,11 +2300,9 @@ TEST_SUITE("Animation")
 		auto parent = scene.CreateEntity("Parent");
 		parent.GetComponent<TransformComponent>().Rotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(0, 1, 0));
 		parent.GetComponent<TransformComponent>().Scale = glm::vec3(2);
-		auto rig = GraphAnimator(scene, project, StateGraph());
+		auto rig = ClipAnimator(scene, project);
 		scene.SetParent(rig, parent, false);
 		auto& component = rig.GetComponent<AnimatorComponent>();
-		component.StateMachine.clear();
-		component.Clip = "Step";
 		AnimationSystem animation(scene);
 		animation.Update(0.5f);
 		const glm::vec3 position = scene.GetWorldTransform(rig)[3];
@@ -2323,8 +2323,7 @@ TEST_SUITE("Animation")
 		Scene scene;
 		auto graph = StateGraph();
 		graph["InitialState"] = "Walk";
-		graph["States"][1].erase("Clip");
-		graph["States"][1]["BlendSpace"] = "Move";
+		UseBlendSpace(graph, 1, "Move");
 		graph["States"][1]["ParameterX"] = "Speed";
 		auto rig = GraphAnimator(scene, project, graph);
 		auto& component = rig.GetComponent<AnimatorComponent>();
@@ -2332,7 +2331,7 @@ TEST_SUITE("Animation")
 		component.BlendSpaces = { { .Name = "Move", .Samples = { { .Clip = "Step", .Speed = 1 }, { .Clip = "Cubic", .X = 1, .Speed = 1 } } } };
 		AnimationSystem animation(scene);
 		animation.Update(0.5f);
-		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(0.5f));
+		CHECK(RootX(rig) == doctest::Approx(0.5f));
 		REQUIRE(animation.SetParameter(rig, "Speed", 1.0f));
 		animation.Update(0);
 		CHECK(animation.GetBlendSpaceWeights(rig) == std::vector<std::pair<std::string, float>>{ { "Step", 0.0f }, { "Cubic", 1.0f } });
@@ -2346,10 +2345,7 @@ TEST_SUITE("Animation")
 		{
 			CAPTURE(wall);
 			Scene scene;
-			auto rig = GraphAnimator(scene, project, StateGraph());
-			auto& component = rig.GetComponent<AnimatorComponent>();
-			component.StateMachine.clear();
-			component.Clip = "Step";
+			auto rig = ClipAnimator(scene, project);
 			rig.AddComponent<CharacterControllerComponent>().GravityFactor = 0;
 			rig.AddComponent<CapsuleColliderComponent>();
 			if (wall)
@@ -2395,8 +2391,7 @@ TEST_SUITE("Animation")
 		TempProject project("GraphRetry");
 		Scene scene;
 		auto graph = StateGraph();
-		graph["States"][2].erase("Clip");
-		graph["States"][2]["BlendSpace"] = "JumpSpace";
+		UseBlendSpace(graph, 2, "JumpSpace");
 		auto rig = GraphAnimator(scene, project, graph);
 		auto& component = rig.GetComponent<AnimatorComponent>();
 		AnimationSystem animation(scene);
@@ -2414,11 +2409,11 @@ TEST_SUITE("Animation")
 		component.RootMotion = false;
 		animation.Update(0.5f);
 		CHECK(animation.GetState(rig) == "Air");
-		CHECK(rig.GetComponent<TransformComponent>().Translation.x == 0);
+		CHECK(RootX(rig) == 0);
 		CHECK((*animation.GetPose(rig))[2][3].x == doctest::Approx(0.5f));
 		component.RootMotion = true;
 		animation.Update(0.5f);
-		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(0.5f));
+		CHECK(RootX(rig) == doctest::Approx(0.5f));
 		REQUIRE(animation.PlayBlendSpace(rig, "JumpSpace", { 0, 0 }));
 		CHECK(animation.GetState(rig).empty());
 	}
@@ -2432,7 +2427,7 @@ TEST_SUITE("Animation")
 		AnimationSystem animation(scene);
 		REQUIRE(animation.Blend(rig, "Step", "Bend", 0.0f));
 		animation.Update(0.5f);
-		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(0.5f));
+		CHECK(RootX(rig) == doctest::Approx(0.5f));
 		CHECK((*animation.GetPose(rig))[2][3].x == doctest::Approx(0));
 	}
 
@@ -2462,7 +2457,7 @@ TEST_SUITE("Animation")
 		AnimationSystem animation(scene);
 		REQUIRE(animation.SetParameter(rig, "Speed", 1.0f));
 		animation.Update(1.5f);
-		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(expected));
+		CHECK(RootX(rig) == doctest::Approx(expected));
 	}
 
 	TEST_CASE("Runtime character creation and collider rebuilding preserve queued root motion")
@@ -2470,29 +2465,23 @@ TEST_SUITE("Animation")
 		ClearAssetCache clear;
 		TempProject project("RootCharacterRebuild");
 		Scene scene;
-		auto rig = GraphAnimator(scene, project, StateGraph());
-		auto& component = rig.GetComponent<AnimatorComponent>();
-		component.StateMachine.clear();
-		component.Clip = "Step";
-		auto wall = scene.CreateEntity("Wall");
-		wall.GetComponent<TransformComponent>().Translation = { 1.5f, 0, 0 };
-		wall.AddComponent<RigidBodyComponent>();
-		wall.AddComponent<BoxColliderComponent>().HalfExtents = { 0.1f, 5, 5 };
+		auto rig = ClipAnimator(scene, project);
+		auto wall = AddWall(scene);
 		scene.OnSimulationStart();
 		rig.AddComponent<CharacterControllerComponent>().GravityFactor = 0;
 		rig.AddComponent<CapsuleColliderComponent>();
 		scene.OnUpdate(2);
-		CHECK(rig.GetComponent<TransformComponent>().Translation.x < 1.1f);
-		CHECK(rig.GetComponent<TransformComponent>().Translation.x > 0.8f);
+		CHECK(RootX(rig) < 1.1f);
+		CHECK(RootX(rig) > 0.8f);
 		// Remove the obstacle, then rebuild between extracting the next delta and stepping physics.
 		scene.DestroyEntity(wall);
 		auto* animation = scene.GetAnimationSystem();
 		animation->Update(0.5f, false);
-		const float before = rig.GetComponent<TransformComponent>().Translation.x;
+		const float before = RootX(rig);
 		rig.GetComponent<CapsuleColliderComponent>().Radius = 0.4f;
 		scene.GetRegistry().patch<CapsuleColliderComponent>(rig);
 		scene.GetPhysicsWorld()->Step(0.5f);
-		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(before + 0.5f).epsilon(0.02));
+		CHECK(RootX(rig) == doctest::Approx(before + 0.5f).epsilon(0.02));
 		scene.OnSimulationStop();
 	}
 
@@ -2502,8 +2491,7 @@ TEST_SUITE("Animation")
 		TempProject project("GraphExitPhase");
 		Scene scene;
 		auto graph = StateGraph();
-		graph["States"][0].erase("Clip");
-		graph["States"][0]["BlendSpace"] = "Move";
+		UseBlendSpace(graph, 0, "Move");
 		graph["States"][0]["ParameterX"] = "Speed";
 		graph["Transitions"][1]["ExitTime"] = 0.75;
 		auto rig = GraphAnimator(scene, project, graph);
@@ -2534,9 +2522,9 @@ TEST_SUITE("Animation")
 		scene.OnSimulationStart();
 		auto* physics = scene.GetPhysicsWorld();
 		physics->MoveCharacter(character, { 2, 7, 0 });
-		physics->SetRootMotionDelta(character, glm::vec3(99, 3, 0) * Step);
+		physics->QueueRootMotion(character, glm::vec3(99, 3, 0) * Step);
 		physics->Step(Step);
-		CHECK(character.GetComponent<TransformComponent>().Translation.x == doctest::Approx(2 * Step));
+		CHECK(RootX(character) == doctest::Approx(2 * Step));
 		CHECK(character.GetComponent<TransformComponent>().Translation.y == doctest::Approx(3 * Step));
 		scene.OnSimulationStop();
 	}
@@ -2547,8 +2535,7 @@ TEST_SUITE("Animation")
 		TempProject project("GraphPartialSpace");
 		Scene scene;
 		auto graph = StateGraph();
-		graph["States"][2].erase("Clip");
-		graph["States"][2]["BlendSpace"] = "JumpSpace";
+		UseBlendSpace(graph, 2, "JumpSpace");
 		graph["States"][2]["ParameterX"] = "Speed";
 		auto rig = GraphAnimator(scene, project, graph);
 		rig.GetComponent<AnimatorComponent>().BlendSpaces = { { .Name = "JumpSpace", .Samples = { { .Clip = "Step" }, { .Clip = "Missing", .X = 1 } } } };
@@ -2622,8 +2609,7 @@ TEST_SUITE("Animation")
 		Scene scene;
 		auto graph = StateGraph();
 		graph["InitialState"] = "Walk";
-		graph["States"][1].erase("Clip");
-		graph["States"][1]["BlendSpace"] = "Move";
+		UseBlendSpace(graph, 1, "Move");
 		graph["Transitions"].push_back({ { "From", "Walk" }, { "To", "Idle" }, { "Duration", 1 }, { "Conditions", json::array({ { { "Parameter", "Grounded" }, { "Value", false } } }) } });
 		auto rig = GraphAnimator(scene, project, graph);
 		rig.GetComponent<AnimatorComponent>().BlendSpaces = { { .Name = "Move", .Samples = { { .Clip = "Step" } } } };
@@ -2632,17 +2618,17 @@ TEST_SUITE("Animation")
 		REQUIRE(animation.SetParameter(rig, "Grounded", false));
 		animation.Update(0.5f); // The outgoing space crosses its loop boundary during the fade.
 		CHECK(animation.GetState(rig) == "Idle");
-		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(2.125f));
+		CHECK(RootX(rig) == doctest::Approx(2.125f));
 		animation.Update(0.5f);
-		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(2.25f));
+		CHECK(RootX(rig) == doctest::Approx(2.25f));
 		animation.Update(0.5f);
-		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(2.25f));
+		CHECK(RootX(rig) == doctest::Approx(2.25f));
 
 		REQUIRE(animation.PlayBlendSpace(rig, "Move", { 0, 0 }));
 		animation.Update(0.5f);
 		REQUIRE(animation.CrossFade(rig, "Bend", 1));
 		animation.Update(1.5f); // Only the first second of outgoing movement is visible.
-		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(3.25f));
+		CHECK(RootX(rig) == doctest::Approx(3.25f));
 	}
 	TEST_CASE("Non-looping exit one transitions for fractional clip durations")
 	{
@@ -2704,12 +2690,18 @@ TEST_SUITE("Animation")
 		animation.Update(0);
 		CHECK(animation.GetState(rig) == "Air");
 		animation.Stop(rig);
+		const auto since = Log::GetHistory().GetTotalCount();
 		CHECK(animation.GetState(rig).empty());
 		CHECK_FALSE(animation.SetTrigger(rig, "Jump"));
 		CHECK_FALSE(animation.SetParameter(rig, "Speed", 1.0f));
 		animation.Pause(rig, false);
 		animation.Update(1);
 		CHECK_FALSE(animation.IsPlaying(rig));
+		REQUIRE(animation.Seek(rig, 0.5f));
+		CHECK(animation.GetState(rig).empty());
+		CHECK_FALSE(animation.SetParameter(rig, "Speed", 1.0f));
+		CHECK(CountLogMessages(since, "parameter 'Speed': state machine was stopped") == 1);
+		CHECK(CountLogMessages(since, "direct playback took control") == 0);
 	}
 	TEST_CASE("Parameter failures name their reason once and cached graph failures report each session")
 	{
@@ -2729,8 +2721,14 @@ TEST_SUITE("Animation")
 			CHECK_FALSE(animation.SetParameter(rig, "Speed", std::numeric_limits<float>::infinity()));
 		CHECK(CountLogMessages(since, "value must be finite") == 1);
 		REQUIRE(animation.SetParameter(rig, "Speed", 0.0f));
-		CHECK_FALSE(animation.SetParameter(rig, "Speed", true));
-		CHECK(CountLogMessages(since, "type mismatch: expected Float") == 2);
+		CHECK_FALSE(animation.SetParameter(rig, "Speed", std::numeric_limits<float>::infinity()));
+		CHECK(CountLogMessages(since, "value must be finite") == 2);
+		for (int i = 0; i < 3; i++)
+		{
+			REQUIRE(animation.SetParameter(rig, "Speed", 0.0f));
+			CHECK_FALSE(animation.SetParameter(rig, "Speed", true));
+		}
+		CHECK(CountLogMessages(since, "type mismatch: expected Float") == 1);
 		REQUIRE(animation.Play(rig, "Bend"));
 		CHECK_FALSE(animation.SetTrigger(rig, "Jump"));
 		CHECK(CountLogMessages(since, "direct playback took control") == 1);
@@ -2751,7 +2749,7 @@ TEST_SUITE("Animation")
 	}
 	TEST_CASE("Vertical facing root keeps its animated pose and undefined twist skips extraction")
 	{
-		for (float pitch : { 90.0f, 180.0f })
+		for (float pitch : { -90.0f, 90.0f, 180.0f })
 		{
 			CAPTURE(pitch);
 			ClearAssetCache clear;
@@ -2771,10 +2769,12 @@ TEST_SUITE("Animation")
 			const auto* pose = animation.GetPose(rig);
 			REQUIRE(pose);
 			CHECK((*pose)[2][3].y == doctest::Approx(0.25f));
-			CHECK(RootX(rig) == doctest::Approx(pitch == 90 ? 0.5f : 0.0f));
+			CHECK(RootX(rig) == doctest::Approx(pitch == 180 ? 0.0f : 0.5f));
 			if (pitch == 180)
 				CHECK((*pose)[2][3].x == doctest::Approx(0.5f));
 			CHECK(CountLogMessages(since, "non-finite evaluated pose") == 0);
+			CHECK(CountLogMessages(since, "preserving the authored pose") == (pitch == 180 ? 1 : 0));
+			CHECK(CountLogMessages(since, "world transform") == 0);
 		}
 	}
 	TEST_CASE("Invalid animation timestep cannot retain a character root override")
@@ -2810,8 +2810,8 @@ TEST_SUITE("Animation")
 		for (int i = 0; i < 3; i++)
 			scene.OnUpdate(Step);
 		CHECK(CountLogMessages(since, "discarding queued root motion translation") == 1);
-		physics->SetRootMotionDelta(rig, glm::vec3(std::numeric_limits<float>::quiet_NaN()));
-		physics->SetRootMotionDelta(rig, glm::vec3(std::numeric_limits<float>::quiet_NaN()));
+		physics->QueueRootMotion(rig, glm::vec3(std::numeric_limits<float>::quiet_NaN()));
+		physics->QueueRootMotion(rig, glm::vec3(std::numeric_limits<float>::quiet_NaN()));
 		CHECK(CountLogMessages(since, "root motion displacement must be finite") == 1);
 		scene.OnSimulationStop();
 		rig.RemoveComponent<CharacterControllerComponent>();
@@ -2903,5 +2903,254 @@ TEST_SUITE("Animation")
 		CHECK(position.x == doctest::Approx(Step).epsilon(0.02));
 		CHECK(position.z == doctest::Approx(5));
 		scene.OnRuntimeStop();
+	}
+	TEST_CASE("Interrupted graph fades release gameplay movement when no root source remains")
+	{
+		ClearAssetCache clear;
+		TempProject project("InterruptedCharacter");
+		Scene scene;
+		auto graph = StateGraph();
+		graph["InitialState"] = "Walk";
+		graph["States"][2]["Clip"] = "Step";
+		graph["Transitions"] = json::array({ { { "From", "Walk" }, { "To", "Air" }, { "Duration", 1 }, { "Conditions", json::array({ { { "Parameter", "Jump" } } }) } },
+											 { { "From", "Air" }, { "To", "Idle" }, { "Duration", 1 }, { "Conditions", json::array({ { { "Parameter", "Grounded" }, { "Value", false } } }) } } });
+		auto rig = GraphAnimator(scene, project, graph);
+		rig.AddComponent<CharacterControllerComponent>().GravityFactor = 0;
+		rig.AddComponent<CapsuleColliderComponent>();
+		scene.OnSimulationStart();
+		auto* animation = scene.GetAnimationSystem();
+		auto* physics = scene.GetPhysicsWorld();
+		physics->MoveCharacter(rig, { 3, 0, 0 });
+		REQUIRE(animation->SetTrigger(rig, "Jump"));
+		scene.OnUpdate(Step);
+		REQUIRE(animation->SetParameter(rig, "Grounded", false));
+		const float before = RootX(rig);
+		for (int i = 0; i < 6; i++)
+			scene.OnUpdate(Step);
+		CHECK(animation->GetState(rig) == "Idle");
+		CHECK(RootX(rig) - before == doctest::Approx(3 * 6 * Step).epsilon(0.02));
+		scene.OnSimulationStop();
+	}
+	TEST_CASE("Undefined clip endpoints preserve authored motion and identify the clip and joint once")
+	{
+		for (bool space : { false, true })
+		{
+			CAPTURE(space);
+			ClearAssetCache clear;
+			TempProject project("EndpointTwist");
+			Scene scene;
+			auto rig = ClipAnimator(scene, project);
+			auto model = FixtureJson();
+			const float translations[] = { 0, 0, 0, 1, 0.5f, 0, 2, 0, 0 };
+			ReplaceAccessorBytes(model, 9, translations, sizeof(translations));
+			model["animations"][1]["samplers"][0]["interpolation"] = "LINEAR";
+			const float rotations[] = { 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1 };
+			ReplaceAccessorBytes(model, 8, rotations, sizeof(rotations));
+			model["animations"][1]["samplers"].push_back({ { "input", 7 }, { "output", 8 }, { "interpolation", "LINEAR" } });
+			model["animations"][1]["channels"].push_back({ { "sampler", 1 }, { "target", { { "node", 2 }, { "path", "rotation" } } } });
+			auto& component = rig.GetComponent<AnimatorComponent>();
+			component.Mesh = project.WriteFile("Assets/Models/Endpoint.gltf", model.dump());
+			if (space)
+			{
+				component.Clip = "Move";
+				component.BlendSpaces = { Space1D("Move", { { "Step", 0, 0, 0 } }) };
+			}
+			const auto since = Log::GetHistory().GetTotalCount();
+			AnimationSystem animation(scene);
+			animation.Update(1);
+			animation.Update(0.25f);
+			CHECK(RootX(rig) == doctest::Approx(0));
+			const auto* pose = animation.GetPose(rig);
+			REQUIRE(pose);
+			CHECK((*pose)[2][3].x == doctest::Approx(1.25f));
+			CHECK(CountLogMessages(since, "root motion undefined for clip 'Step' at node 'RootJoint': clip endpoint") == 1);
+			CHECK(CountLogMessages(since, "preserving the authored pose") == 1);
+			CHECK(CountLogMessages(since, "world transform") == 0);
+		}
+	}
+	TEST_CASE("Unplayable transition diagnostics are independent per target and recover per state")
+	{
+		ClearAssetCache clear;
+		TempProject project("StateProblems");
+		Scene scene;
+		auto graph = StateGraph();
+		UseBlendSpace(graph, 1, "MissingSpace");
+		graph["States"][2]["Clip"] = "GoneAir";
+		graph["Transitions"] = json::array({ { { "To", "Idle" }, { "Conditions", json::array({ { { "Parameter", "Grounded" }, { "Value", false } } }) } },
+											 { { "To", "Walk" } },
+											 { { "To", "Air" } } });
+		auto rig = GraphAnimator(scene, project, graph);
+		const auto since = Log::GetHistory().GetTotalCount();
+		AnimationSystem animation(scene);
+		for (int i = 0; i < 5; i++)
+			animation.Update(Step);
+		CHECK(CountLogMessages(since, "state 'Walk' cannot play") == 1);
+		CHECK(CountLogMessages(since, "state 'Air' cannot play") == 1);
+		CHECK(animation.GetState(rig) == "Idle");
+		auto& component = rig.GetComponent<AnimatorComponent>();
+		component.BlendSpaces = { Space1D("MissingSpace", { { "Step", 0, 0, 0 } }) };
+		animation.Update(0);
+		CHECK(animation.GetState(rig) == "Walk");
+		component.BlendSpaces.clear();
+		REQUIRE(animation.SetParameter(rig, "Grounded", false));
+		animation.Update(0);
+		animation.Update(0);
+		CHECK(animation.GetState(rig) == "Idle");
+		CHECK(CountLogMessages(since, "state 'Walk' cannot play") == 2);
+		CHECK(CountLogMessages(since, "state 'Air' cannot play") == 1);
+	}
+	TEST_CASE("Missing StateMachine and invalid root joint diagnostics follow configuration not state policy")
+	{
+		ClearAssetCache clear;
+		TempProject project("RootConfigProblems");
+		Scene scene;
+		auto rig = ClipAnimator(scene, project);
+		AnimationSystem animation(scene);
+		auto since = Log::GetHistory().GetTotalCount();
+		for (int i = 0; i < 3; i++)
+			CHECK_FALSE(animation.SetParameter(rig, "Speed", 1.0f));
+		CHECK(CountLogMessages(since, "Animator has no StateMachine") == 1);
+		auto graph = StateGraph();
+		graph["Transitions"] = json::array({ { { "From", "Idle" }, { "To", "Walk" }, { "Duration", 0 } },
+											 { { "From", "Walk" }, { "To", "Idle" }, { "Duration", 0 } } });
+		auto& component = rig.GetComponent<AnimatorComponent>();
+		component.StateMachine = project.WriteFile("Assets/Animations/Toggle.banimgraph", graph.dump());
+		component.RootJoint = "Typo";
+		since = Log::GetHistory().GetTotalCount();
+		for (int i = 0; i < 6; i++)
+			animation.Update(Step);
+		CHECK(CountLogMessages(since, "RootJoint must name") == 1);
+	}
+	TEST_CASE("Model reload resets cached root cycles and samples replacement motion")
+	{
+		ClearAssetCache clear;
+		TempProject project("RootModelReload");
+		Scene scene;
+		auto rig = ClipAnimator(scene, project);
+		AnimationSystem animation(scene);
+		animation.Update(2.5f);
+		CHECK(RootX(rig) == doctest::Approx(2.5f));
+		auto model = FixtureJson();
+		const float translations[] = { 0, 0, 0, 2, 1, 0, 4, 0, 0 };
+		ReplaceAccessorBytes(model, 9, translations, sizeof(translations));
+		model["animations"][1]["samplers"][0]["interpolation"] = "LINEAR";
+		const auto path = rig.GetComponent<AnimatorComponent>().Mesh;
+		project.WriteFile(path, model.dump());
+		CHECK(AssetManager::ReloadChanged({ path }) == std::vector<std::string>{ path });
+		animation.Update(2.5f);
+		CHECK(animation.GetTime(rig) == doctest::Approx(0.5f));
+		CHECK(RootX(rig) == doctest::Approx(7.5f));
+	}
+	TEST_CASE("Tilted Z-up roots extract animated Y twist and root joint changes invalidate clip cycles")
+	{
+		ClearAssetCache clear;
+		TempProject project("TiltedYawCache");
+		Scene scene;
+		auto rig = ClipAnimator(scene, project);
+		auto model = FixtureJson();
+		const auto tilt = glm::angleAxis(glm::radians(-90.0f), glm::vec3(1, 0, 0));
+		model["nodes"][2]["rotation"] = { tilt.x, tilt.y, tilt.z, tilt.w };
+		float rotations[12] = {};
+		for (size_t i = 0; i < 3; i++)
+		{
+			const auto q = glm::angleAxis(glm::radians(45.0f * static_cast<float>(i)), glm::vec3(0, 1, 0)) * tilt;
+			rotations[4 * i] = q.x;
+			rotations[4 * i + 1] = q.y;
+			rotations[4 * i + 2] = q.z;
+			rotations[4 * i + 3] = q.w;
+		}
+		ReplaceAccessorBytes(model, 8, rotations, sizeof(rotations));
+		model["animations"][0]["channels"][0]["target"]["node"] = 2;
+		auto& component = rig.GetComponent<AnimatorComponent>();
+		component.Clip = "Bend";
+		component.Mesh = project.WriteFile("Assets/Models/TiltYaw.gltf", model.dump());
+		AnimationSystem animation(scene);
+		animation.Update(1);
+		CHECK(scene.GetWorldTransform(rig)[2].x == doctest::Approx(std::sqrt(0.5f)).epsilon(0.001));
+		const auto* pose = animation.GetPose(rig);
+		REQUIRE(pose);
+		CHECK((*pose)[2][2].y == doctest::Approx(1));
+		// RootJoint rotates; Mesh remains stationary. Reusing the old cycle would rotate the entity across a wrap.
+		component.RootJoint = "Mesh";
+		const glm::mat4 before = scene.GetWorldTransform(rig);
+		animation.Update(2.5f);
+		CHECK(NearMatrix(before, scene.GetWorldTransform(rig)));
+	}
+	TEST_CASE("Zero-duration non-looping clips and spaces release root overrides in direct and graph playback")
+	{
+		for (bool graph : { false, true })
+			for (bool space : { false, true })
+			{
+				CAPTURE(graph);
+				CAPTURE(space);
+				ClearAssetCache clear;
+				TempProject project("ZeroCycle");
+				Scene scene;
+				auto rig = ClipAnimator(scene, project);
+				auto model = FixtureJson();
+				for (size_t accessor : { 7u, 8u, 9u, 10u })
+					model["accessors"][accessor]["count"] = accessor == 10 ? 3 : 1;
+				model["accessors"][7]["max"] = { 0 };
+				auto& component = rig.GetComponent<AnimatorComponent>();
+				component.Mesh = project.WriteFile("Assets/Models/Zero.gltf", model.dump());
+				component.Looping = false;
+				if (space)
+				{
+					component.Clip = "Move";
+					component.BlendSpaces = { Space1D("Move", { { "Step", 0, 0, 0 } }) };
+				}
+				if (graph)
+				{
+					auto data = StateGraph();
+					data["InitialState"] = "Walk";
+					data["States"][1]["Looping"] = false;
+					data["Transitions"] = json::array();
+					if (space)
+						UseBlendSpace(data, 1, "Move");
+					component.StateMachine = project.WriteFile("Assets/Animations/Zero.banimgraph", data.dump());
+				}
+				rig.AddComponent<CharacterControllerComponent>().GravityFactor = 0;
+				rig.AddComponent<CapsuleColliderComponent>();
+				scene.OnSimulationStart();
+				scene.GetPhysicsWorld()->MoveCharacter(rig, { 3, 0, 0 });
+				scene.OnUpdate(Step);
+				CHECK_FALSE(scene.GetAnimationSystem()->IsPlaying(rig));
+				const float before = RootX(rig);
+				scene.OnUpdate(Step);
+				CHECK(RootX(rig) - before == doctest::Approx(3 * Step).epsilon(0.02));
+				scene.OnSimulationStop();
+			}
+	}
+	TEST_CASE("Undefined sampled twists preserve motion for the interval and recover without log flooding")
+	{
+		ClearAssetCache clear;
+		TempProject project("SampledTwist");
+		Scene scene;
+		auto rig = ClipAnimator(scene, project);
+		auto model = FixtureJson();
+		const float translations[] = { 0, 0, 0, 1, 0.5f, 0, 2, 0, 0 };
+		ReplaceAccessorBytes(model, 9, translations, sizeof(translations));
+		model["animations"][1]["samplers"][0]["interpolation"] = "LINEAR";
+		const float rotations[] = { 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1 };
+		ReplaceAccessorBytes(model, 8, rotations, sizeof(rotations));
+		model["animations"][1]["samplers"].push_back({ { "input", 7 }, { "output", 8 }, { "interpolation", "LINEAR" } });
+		model["animations"][1]["channels"].push_back({ { "sampler", 1 }, { "target", { { "node", 2 }, { "path", "rotation" } } } });
+		rig.GetComponent<AnimatorComponent>().Mesh = project.WriteFile("Assets/Models/Sampled.gltf", model.dump());
+		const auto since = Log::GetHistory().GetTotalCount();
+		AnimationSystem animation(scene);
+		animation.Update(1);
+		CHECK(RootX(rig) == doctest::Approx(0));
+		animation.Update(0.25f);
+		CHECK(RootX(rig) == doctest::Approx(0));
+		const auto* pose = animation.GetPose(rig);
+		REQUIRE(pose);
+		CHECK((*pose)[2][3].x == doctest::Approx(1.25f));
+		CHECK(CountLogMessages(since, "preserving the authored pose") == 1);
+		CHECK(CountLogMessages(since, "world transform") == 0);
+		animation.Update(0.25f);
+		CHECK(RootX(rig) == doctest::Approx(0.25f));
+		pose = animation.GetPose(rig);
+		REQUIRE(pose);
+		CHECK((*pose)[2][3].x == doctest::Approx(0));
 	}
 }

@@ -374,6 +374,11 @@ function Entity:IsAudioPlaying() end
 ---@return number
 function Entity:GetAudioDopplerPitch() end
 
+-- Animator graph playback uses each state's Looping flag instead of Animator.Looping.
+-- PlayOnStart=false holds the initial state paused until PauseAnimation(false); zero-length states ignore ExitTime.
+-- Root motion writes yaw to the entity transform and sends character translation through physics.
+-- An unbuilt character drops queued translation with an error; yaw still applies.
+
 ---Restarts a clip (nil or empty: the first) at 0; returns success.
 ---@param clip? string
 ---@return boolean
@@ -396,10 +401,11 @@ function Entity:BlendAnimations(first, second, weight) end
 ---@param paused? boolean
 function Entity:PauseAnimation(paused) end
 
----Stops the Animator and shows the rest pose.
+---Stops the Animator, disables an active state machine, and shows the rest pose.
 function Entity:StopAnimation() end
 
----Seeks the Animator to seconds and resets graph exit phase to seconds/cycle duration; returns success.
+---Seeks the Animator, leaving the rest pose, and resets graph exit phase to min(seconds, duration)/duration.
+---A zero-duration cycle has phase 0. Returns success.
 ---@param seconds number
 ---@return boolean
 function Entity:SetAnimationTime(seconds) end
@@ -433,8 +439,6 @@ function Entity:SetAnimationParameter(name, value) end
 function Entity:SetAnimationTrigger(name) end
 
 ---Current state name, or an empty string after Stop, direct playback or a failed graph load.
----Graph playback uses each state's Looping flag. PlayOnStart=false pauses until PauseAnimation(false).
----Root motion yaw writes the entity transform; character translation uses physics. Zero-length states ignore exit time.
 ---@return string
 function Entity:GetAnimationState() end
 

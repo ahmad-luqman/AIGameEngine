@@ -16,6 +16,7 @@ namespace Basalt {
 			AnimationGraph Parse(const json& data)
 			{
 				Object(data, { "InitialState", "Parameters", "States", "Transitions" });
+				m_Location = "InitialState";
 				m_Graph.InitialState = Name(data.at("InitialState"));
 				m_Location = "Parameters";
 				const json parameters = data.value("Parameters", json::array());
@@ -34,9 +35,7 @@ namespace Basalt {
 					m_Graph.States.push_back(ParseState(data.at("States")[i]));
 				}
 				m_Location = "InitialState";
-				if (!m_Graph.FindState(m_Graph.InitialState))
-					throw std::runtime_error("InitialState does not name a state");
-				m_Graph.InitialStateIndex = static_cast<size_t>(m_Graph.FindState(m_Graph.InitialState) - m_Graph.States.data());
+				m_Graph.InitialStateIndex = StateIndex(m_Graph.InitialState);
 				m_Location = "Transitions";
 				const json transitions = data.value("Transitions", json::array());
 				List(transitions, 512);
@@ -109,6 +108,22 @@ namespace Basalt {
 				return static_cast<size_t>(it - m_Graph.Parameters.begin());
 			}
 
+			size_t StateIndex(const std::string& name) const
+			{
+				const auto it = std::ranges::find(m_Graph.States, name, &AnimationState::Name);
+				if (it == m_Graph.States.end())
+					throw std::runtime_error("unknown state '" + name + "'");
+				return static_cast<size_t>(it - m_Graph.States.begin());
+			}
+			std::optional<size_t> AxisIndex(const std::string& name) const
+			{
+				if (name.empty())
+					return std::nullopt;
+				const size_t index = ParameterIndex(name);
+				if (m_Graph.Parameters[index].Type != AnimationParameterType::Float)
+					throw std::runtime_error("blend axes require Float parameters");
+				return index;
+			}
 			AnimationState ParseState(const json& s)
 			{
 				Object(s, { "Name", "Clip", "BlendSpace", "ParameterX", "ParameterY", "Looping", "RootMotion" });
@@ -122,17 +137,12 @@ namespace Basalt {
 					throw std::runtime_error("state must select exactly one Clip or BlendSpace");
 				state.ParameterX = s.value("ParameterX", std::string());
 				state.ParameterY = s.value("ParameterY", std::string());
-				for (const std::string* axis : { &state.ParameterX, &state.ParameterY })
-					if (!axis->empty() && m_Graph.Parameters[ParameterIndex(*axis)].Type != AnimationParameterType::Float)
-						throw std::runtime_error("blend axes require Float parameters");
+				state.ParameterXIndex = AxisIndex(state.ParameterX);
+				state.ParameterYIndex = AxisIndex(state.ParameterY);
 				if (state.BlendSpace.empty() && (!state.ParameterX.empty() || !state.ParameterY.empty()))
 					throw std::runtime_error("clip states cannot have blend axes");
 				state.Looping = s.value("Looping", true);
 				state.RootMotion = s.value("RootMotion", false);
-				if (!state.ParameterX.empty())
-					state.ParameterXIndex = ParameterIndex(state.ParameterX);
-				if (!state.ParameterY.empty())
-					state.ParameterYIndex = ParameterIndex(state.ParameterY);
 				return state;
 			}
 
@@ -149,17 +159,36 @@ namespace Basalt {
 				throw std::runtime_error("unknown condition operator '" + op + "'");
 			}
 
+			AnimationCondition ParseCondition(const json& c)
+			{
+				Object(c, { "Parameter", "Operator", "Value" });
+				AnimationCondition condition;
+				condition.Parameter = ParameterIndex(Name(c.at("Parameter")));
+				const auto type = m_Graph.Parameters[condition.Parameter].Type;
+				const std::string op = c.value("Operator", std::string("Equal"));
+				condition.Comparison = ParseComparison(op);
+				if (type == AnimationParameterType::Float)
+					condition.Value = Number(c.at("Value"));
+				else
+				{
+					condition.Value = c.value("Value", true) ? 1.0f : 0.0f;
+					if (condition.Comparison != AnimationComparison::Equal && condition.Comparison != AnimationComparison::NotEqual)
+						throw std::runtime_error("Bool/Trigger conditions require Equal or NotEqual");
+					if (type == AnimationParameterType::Trigger && (condition.Comparison != AnimationComparison::Equal || condition.Value != 1))
+						throw std::runtime_error("Trigger conditions must test Equal true");
+				}
+				return condition;
+			}
+
 			AnimationTransition ParseTransition(const json& t)
 			{
 				Object(t, { "From", "To", "Duration", "ExitTime", "Conditions" });
 				AnimationTransition transition;
 				transition.From = t.value("From", std::string());
 				transition.To = Name(t.at("To"));
-				if ((!transition.From.empty() && !m_Graph.FindState(transition.From)) || !m_Graph.FindState(transition.To))
-					throw std::runtime_error("transition names an unknown state");
-				transition.ToIndex = static_cast<size_t>(m_Graph.FindState(transition.To) - m_Graph.States.data());
+				transition.ToIndex = StateIndex(transition.To);
 				if (!transition.From.empty())
-					transition.FromIndex = static_cast<size_t>(m_Graph.FindState(transition.From) - m_Graph.States.data());
+					transition.FromIndex = StateIndex(transition.From);
 				if (!transition.From.empty() && transition.From == transition.To)
 					throw std::runtime_error("explicit self-transition is not allowed");
 				m_Location += " (" + (transition.From.empty() ? "Any" : transition.From) + "->" + transition.To + ")";
@@ -182,24 +211,7 @@ namespace Basalt {
 				for (size_t i = 0; i < conditions.size(); i++)
 				{
 					m_Location = edgeLocation + ".Conditions[" + std::to_string(i) + "]";
-					const auto& c = conditions[i];
-					Object(c, { "Parameter", "Operator", "Value" });
-					AnimationCondition condition;
-					condition.Parameter = ParameterIndex(Name(c.at("Parameter")));
-					const auto type = m_Graph.Parameters[condition.Parameter].Type;
-					const std::string op = c.value("Operator", std::string("Equal"));
-					condition.Comparison = ParseComparison(op);
-					if (type == AnimationParameterType::Float)
-						condition.Value = Number(c.at("Value"));
-					else
-					{
-						condition.Value = c.value("Value", true) ? 1.0f : 0.0f;
-						if (op != "Equal" && op != "NotEqual")
-							throw std::runtime_error("Bool/Trigger conditions require Equal or NotEqual");
-						if (type == AnimationParameterType::Trigger && (op != "Equal" || condition.Value != 1))
-							throw std::runtime_error("Trigger conditions must test Equal true");
-					}
-					transition.Conditions.push_back(condition);
+					transition.Conditions.push_back(ParseCondition(conditions[i]));
 				}
 				return transition;
 			}
@@ -208,11 +220,6 @@ namespace Basalt {
 			std::unordered_set<std::string> m_Names;
 			std::string m_Location = "graph";
 		};
-	}
-	const AnimationState* AnimationGraph::FindState(const std::string& name) const
-	{
-		const auto it = std::ranges::find(States, name, &AnimationState::Name);
-		return it == States.end() ? nullptr : &*it;
 	}
 	std::optional<AnimationGraph> AnimationGraph::FromJson(const nlohmann::json& data, std::string& outError)
 	{

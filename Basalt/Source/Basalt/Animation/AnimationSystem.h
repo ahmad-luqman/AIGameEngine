@@ -8,6 +8,7 @@
 
 #include <entt/entt.hpp>
 
+#include <array>
 #include <map>
 #include <optional>
 #include <unordered_map>
@@ -87,6 +88,13 @@ namespace Basalt {
 		std::vector<AnimationEventRecord> TakeEvents();
 
 	private:
+		// Why graph evaluation/parameter writes are enabled or disabled, independent of pose and pause state.
+		enum class GraphControl
+		{
+			Active,
+			Direct,
+			Stopped
+		};
 		// One sample of the running blend space, resolved against the model.
 		struct SpaceSample
 		{
@@ -111,19 +119,26 @@ namespace Basalt {
 			// The problem last logged, so a problem is logged when it appears or changes, not every update.
 			std::string Problem;
 		};
-		// One outgoing contribution. Interrupted fades retain only the visible pose snapshot.
+		// Outgoing fade or first two-clip Blend contribution; Clip and Space are mutually exclusive.
+		// RootMotion implies a source. Interrupted fades retain only the frozen visible pose snapshot.
 		struct OutgoingState
 		{
 			int32_t Clip = -1;
 			double Time = 0;
 			bool Looping = true;
 			bool RootMotion = false;
+			// Only populated for a fade out of a root-motion blend space; its pose remains a snapshot.
 			std::optional<SpaceState> Space;
 		};
 		struct RootFrames
 		{
-			glm::mat4 Zero{ 1 }, End{ 1 };
+			// End * inverse(start), cached per source clip and extraction node.
+			glm::mat4 Cycle{ 1 };
 			bool Valid = false;
+			// A failed interval disables stripping for this clip until the next frame, restart or seek.
+			bool IntervalValid = true;
+			// Retained across good frames: each clip/node failure is reported once per playback/cache bind.
+			std::string Problem;
 		};
 		struct Playback
 		{
@@ -136,20 +151,25 @@ namespace Basalt {
 			std::vector<float> Parameters;
 			// Unwrapped cycle phase: blend-space duration changes must not move an exit threshold.
 			double StatePhase = 0;
-			// GraphActive permits parameter writes and transitions. Stop/direct playback disable it.
-			bool GraphActive = false;
+			// Active permits parameter writes/transitions. Seek preserves Stopped control while leaving rest.
+			GraphControl Control = GraphControl::Direct;
 			// Paused freezes the graph; Playing advances clocks and may be false at a non-looping end.
 			bool Paused = false;
 			bool Looping = true;
 			bool RootMotion = false;
 			int32_t RootNode = -1;
 			OutgoingState Outgoing;
+			// Rest horizontal frame and clip cycles depend only on Source and RootNode, not state policy.
 			std::optional<glm::mat4> RootReference;
 			std::unordered_map<int32_t, RootFrames> RootClips;
-			std::map<std::string, std::string> ParameterProblems;
+			// One diagnostic per declared parameter and supplied type; caller names cannot grow this storage.
+			std::vector<std::array<std::string, 3>> ParameterProblems;
+			// Undeclared names retain only the most recent diagnostic per supplied type.
+			std::array<std::string, 3> UnknownParameterProblems;
+			// Last failure per graph state, so competing unplayable targets cannot alternate logs.
+			std::vector<std::string> StateProblems;
 			std::string RootProblem;
 			std::string RootApplyProblem;
-			bool InvalidRootPose = false;
 			// In a blend space: the heaviest sample's clip.
 			int32_t Clip = -1;
 			// In a blend space: Phase * Duration.
@@ -198,18 +218,20 @@ namespace Basalt {
 		void AdvanceSpace(Playback& playback, SpaceState& state, const AnimatorComponent& component, double advance, UUID id, size_t& budget);
 		// Queues the markers of `clip` that a clock moving from `from` by `advance` crosses, within `budget`.
 		void CollectEvents(Playback& playback, const AnimatorComponent& component, int32_t clip, double from, double advance, UUID id, size_t& budget, bool looping);
-		bool EnterState(Playback& playback, const AnimationState& state, const AnimatorComponent& component, float fade);
+		bool EnterState(Playback& playback, size_t stateIndex, const AnimatorComponent& component, float fade);
 		void UpdateGraph(Playback& playback, const AnimatorComponent& component);
 		bool SetParameterValue(Entity entity, const std::string& name, float value, AnimationParameterType type);
 		static double CycleDuration(const Playback& playback);
-		static bool DrivesRootMotion(const Playback& playback);
-		static void ResolveRootNode(Playback& playback, const AnimatorComponent& component);
-		static glm::mat4 OutgoingRootDelta(Playback& playback, double advance);
-		static glm::mat4 FrameRootMotion(Playback& playback, double advance, double shown, double seconds, double plainSpeed);
-		static bool StripRoot(Playback& playback, AnimationLocalPose& pose, bool enabled);
-		static glm::mat4 SpaceRootDelta(Playback& playback, const SpaceState& space, double advance, bool looping);
-		static glm::mat4 CurrentRootDelta(Playback& playback, double advance);
-		static glm::mat4 RootDelta(Playback& playback, int32_t clip, double from, double advance, bool looping);
+		static bool ResolveRootNode(Playback& playback, const AnimatorComponent& component);
+		static void ApplyStateAxes(const Playback& playback, const AnimationState& state, SpaceState& space);
+		static bool CanExtractRoot(Playback& playback, int32_t clip);
+		static void ReportRootClipProblem(Playback& playback, int32_t clip, const std::string& problem);
+		static void ResetRootIntervals(Playback& playback);
+		static std::optional<glm::mat4> SourceRootDelta(Playback& playback, int32_t clip, double time, const std::optional<SpaceState>& space, double advance, bool looping, bool enabled);
+		static std::optional<glm::mat4> FrameRootMotion(Playback& playback, double advance, double shown, double seconds, double plainSpeed);
+		static void StripRoot(Playback& playback, AnimationLocalPose& pose, int32_t clip);
+		static std::optional<glm::mat4> SpaceRootDelta(Playback& playback, const SpaceState& space, double advance, bool looping);
+		static std::optional<glm::mat4> RootDelta(Playback& playback, int32_t clip, double from, double advance, bool looping);
 		void ApplyRootMotion(Entity entity, Playback& playback, const glm::mat4& delta, float seconds);
 		void OnDestroy(entt::registry& registry, entt::entity handle);
 		Scene& m_Scene;

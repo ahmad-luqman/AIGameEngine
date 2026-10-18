@@ -1088,7 +1088,7 @@ actor:BlendAnimations("Walk", "Run", 0.7)
 | `e:CrossFadeAnimation(clip, seconds)` | Starts the target at 0 and fades from the current pose. When leaving a single clip, outgoing and target clocks advance. Interrupted fades, blends, and stopped poses fade from a fixed snapshot of the visible pose. Zero duration acts as Play. Returns success. |
 | `e:BlendAnimations(first, second, weight)` | Persistent local-TRS blend, weight 0..1 toward the second clip. New pairs start at 0; changing only weight preserves both clocks. Returns success. |
 | `e:PauseAnimation([paused])` | Freezes/resumes active clocks and transitions. False does not restart a stopped animator; use PlayAnimation. Defaults to true; only boolean or nil accepted. |
-| `e:StopAnimation()` | Stops, clears blending, resets time, and displays the authored rest pose. |
+| `e:StopAnimation()` | Stops, disables an active state machine, clears blending, resets time, and displays the authored rest pose. |
 | `e:SetAnimationTime(seconds)` | Seeks to nonnegative finite seconds, clamped to each active clip's duration, without changing pause state or fade progress. Returns success. |
 | `e:GetAnimationTime()` | Target/current clip time in seconds (the second clip for a persistent blend). |
 | `e:GetAnimationDuration()` | Target/current clip duration, or 0 if none. |
@@ -1243,7 +1243,8 @@ changes with `asset.refresh`. Reloading resets each Animator to the initial stat
 An invalid graph stops playback and reports the load error; it never falls back to direct playback. With
 `PlayOnStart = false`, the initial state is paused at time zero until `PauseAnimation(false)` or a direct
 playback call. States use their own `Looping` flag; `Animator.Looping` is ignored by graph playback.
-`SetAnimationTime` resets the elapsed state phase to the seek time divided by the current cycle duration.
+`SetAnimationTime` resets the elapsed state phase to `min(seconds, duration) / duration` after clamping
+the seek time (phase 0 for a zero-duration cycle).
 Clear `StateMachine` to use direct playback. Direct `PlayAnimation`, `CrossFadeAnimation`,
 `BlendAnimations` and `PlayBlendSpace` calls take control from the graph until its configuration or asset
 reloads.
@@ -1253,8 +1254,9 @@ reloads.
   numbers or booleans raise an argument error.
 - `e:SetAnimationTrigger(name)` latches a `Trigger` until a successful transition using it consumes it; returns
   true on success, false for an unknown/wrong-type parameter or inactive machine.
-  Pausing preserves parameters and triggers; stopping disables the graph (setters return false and GetAnimationState returns empty) and holds the rest
-  pose until direct playback or a graph reload.
+  Pausing preserves parameters and triggers; stopping disables the graph (setters return false and
+  GetAnimationState returns empty) and holds the rest pose until direct playback, `SetAnimationTime`,
+  or a graph reload. Seeking leaves the stopped graph inactive.
 - `e:GetAnimationState()` returns the current state name, or `""` with no active graph.
 
 A graph has `InitialState`, `Parameters`, `States` and `Transitions`. Parameters have `Name`, `Type`
@@ -1295,8 +1297,12 @@ Enable `Animator.RootMotion` and name the extraction node in `Animator.RootJoint
 states with `RootMotion: true` drive movement; direct playback uses the Animator flag alone. Horizontal
 translation and yaw are extracted across loop boundaries, including multiple wraps, and removed from the
 displayed pose relative to the model's rest pose. Vertical motion, pitch and roll stay in the animation.
-Yaw uses the rotation's twist around model Y, including roots whose +Z points vertically; undefined
-twists skip extraction and retain the authored pose with a diagnostic. Crossfades blend motion from
+Yaw uses the rotation's twist around model Y, including roots whose +Z points vertically. A 180° swing,
+or one very close to it, has an undefined or imprecise twist. An undefined rest reference disables
+extraction for that root; an undefined first/last clip frame disables extraction for that clip.
+An undefined sampled frame skips extraction over that interval. In each case the authored motion stays
+in the pose and the diagnostic identifies the root/clip; unsupported sources do not override character
+movement. Crossfades blend motion from
 opted-in sources (interrupted blends freeze their outgoing pose). A fade out of a root-motion blend space
 retains its extraction clock and sample weights so movement decays throughout the fade, while the
 outgoing visible pose uses a frozen snapshot. Seeking never moves the entity. `MatchVelocity` is bypassed
@@ -1305,7 +1311,9 @@ while the current state drives root motion.
 Animation runs after script updates and before physics. Root motion overrides a character's requested
 velocity tangent to its up axis for that update, retaining `Move`'s request along that axis and normal
 gravity/collision handling. Character yaw writes the entity transform directly; translation goes through
-collision resolution. Pausing, stopping, finishing or leaving root-motion states restores gameplay input.
+collision resolution. If the character collider could not be built, queued translation is dropped with
+an error while yaw still applies. Pausing, stopping, finishing or leaving root-motion states restores
+gameplay input.
 Physics still uses fixed steps; displacement on frames below one step is queued until the next step.
 Without a character, root motion updates the world transform, respecting its rotation, scale and parent.
 Bone attachments update after physics and `OnLateUpdate`. Playback and parameters changed in
