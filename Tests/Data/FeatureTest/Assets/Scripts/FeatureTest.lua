@@ -191,6 +191,13 @@ local function TestEntities(self)
 	Check("GetBoneTransform", tip ~= nil and Near(tip.x, 1000, 3) and tipRotation ~= nil and tipScale ~= nil)
 	Check("GetBoneTransform missing joint", rig:GetBoneTransform("Missing") == nil)
 
+	local stateRig = Scene.FindEntityByName("StateMachineRig")
+	Check("GetAnimationState", stateRig:GetAnimationState() == "Idle")
+	Check("SetAnimationParameter float", stateRig:SetAnimationParameter("Speed", 1))
+	Check("SetAnimationParameter bool", stateRig:SetAnimationParameter("Grounded", true))
+	Check("SetAnimationTrigger", stateRig:SetAnimationTrigger("Move"))
+	Check("Animation parameter type mismatch", not stateRig:SetAnimationParameter("Speed", true))
+
 	-- Other scripts.
 	local spinner = Scene.FindEntityByName("Turntable"):GetScript()
 	Check("GetScript", spinner ~= nil and spinner.Label == "turntable" and spinner.Speed == 2.0)
@@ -755,6 +762,10 @@ function Driver:OnUpdate(dt)
 
 	if frame == 30 then
 		local tip, tipRotation = Scene.FindEntityByName("AnimationRig"):GetBoneTransform("Tip")
+		local stateRig = Scene.FindEntityByName("StateMachineRig")
+		Check("State machine transition", stateRig:GetAnimationState() == "Walk")
+		local rootPosition = stateRig:GetBoneTransform("RootJoint")
+		Check("Root motion moves entity and strips pose", stateRig.WorldPosition.x > 1000 and Near(rootPosition.x, stateRig.WorldPosition.x, 1e-3))
 		Check("BoneAttachment follows its joint", NearVec(Scene.FindEntityByName("RigHat").WorldPosition, tip + tipRotation * Vec3(0, 0.2, 0), 1e-3))
 		Check("OnAnimationEvent", (FeatureTestEvents["AnimationEvent:Footstep"] or 0) >= 1)
 		local hit = Physics.Raycast(Vec3(0, 10, 8), Vec3(0, -1, 0), 50)

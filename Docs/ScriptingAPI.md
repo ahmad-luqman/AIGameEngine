@@ -1184,16 +1184,16 @@ function Player:OnUpdate(dt) self.Entity:SetBlendSpaceParameter(self.Speed) end
 
 `e:GetBoneTransform(joint)` returns the world position, rotation and scale of the first node named `joint` in
 the Animator's current pose (any glTF node, not only skin joints), or nil when there is none or the Animator's model
-cannot animate (logged when the problem appears or changes, per joint). Animation advances after `OnLateUpdate`, so `OnUpdate` and `OnLateUpdate` see the previous
-frame's pose and `OnAnimationEvent` this frame's. Like the other Animator functions it raises an error on an
+cannot animate (logged when the problem appears or changes, per joint). Animation advances between `OnUpdate` and physics, so `OnUpdate` sees the previous
+frame's pose; `OnLateUpdate` and `OnAnimationEvent` see this frame's. Like the other Animator functions it raises an error on an
 entity without an Animator.
 
 A `BoneAttachment` component keeps an entity on a joint of another entity's Animator while the scene plays or
 simulates (weapon in hand, hat on head): `{ Target = <entity ID, 0 = the parent>, Joint = "b_Head_05",
 Translation, Rotation, Scale }` (the offset in the joint's space; `Rotation` in Euler degrees, as in component
-data). Its world transform is set right after the pose is sampled, also for children of other entities, and
+data). Its world transform is set after physics and `OnLateUpdate`, also for children of other entities, and
 attachments to attached entities update in dependency order within the frame. Edit mode keeps the authored
-transform. Physics reads transforms before animation, so a Kinematic body on an attachment follows one physics
+transform. Physics reads transforms before attachments update, so a Kinematic body on an attachment follows one physics
 step later (its body is moved with a velocity, so it pushes what it hits); a Dynamic body is also moved by
 physics (the inspector warns). Missing targets, joints or Animators, a Target inside the entity's own hierarchy
 below it, attachment cycles and a zero scale or non-finite value above the entity (or in its resulting transform) are
@@ -1233,3 +1233,65 @@ for ordering, quality levels, legacy fallback and exposure lifecycle.
 
 Explicit runtime CLI graphics flags remain host overrides above Lua preferences; `Graphics.GetSettings()`
 reports the stored session preferences. Unspecified settings remain script-controlled.
+
+### Animation state machines and root motion
+
+`Animator.StateMachine` references a project-relative `.banimgraph` JSON asset. Author it with
+`asset.write` (validates graphs before replacing the file), inspect it with `asset.read`, and apply disk
+changes with `asset.refresh`. Reloading resets each Animator to the initial state and parameter defaults.
+An invalid graph stops playback and reports the load error; it never falls back to direct playback.
+Clear `StateMachine` to use direct playback. Direct `PlayAnimation`, `CrossFadeAnimation`,
+`BlendAnimations` and `PlayBlendSpace` calls take control from the graph until its configuration or asset reloads.
+
+- `e:SetAnimationParameter(name, value)` sets a declared `Float` (number) or `Bool` (boolean); returns false
+  for a wrong type, unknown parameter, non-finite value, or inactive machine.
+- `e:SetAnimationTrigger(name)` latches a `Trigger` until a successful transition using it consumes it.
+  Pausing preserves parameters and triggers; stopping holds the rest pose until direct playback or a graph reload.
+- `e:GetAnimationState()` returns the current state name, or `""` with no active graph.
+
+A graph has `InitialState`, `Parameters`, `States` and `Transitions`. Parameters have `Name`, `Type`
+(`Float`, `Bool`, `Trigger`) and an optional `Default` (0 / false; triggers must default false). States
+have a unique `Name`, exactly one of `Clip` (empty selects the first clip) or `BlendSpace` (an Animator
+blend-space name), optional Float parameter names `ParameterX`/`ParameterY`, `Looping` (true), and
+`RootMotion` (false). Graphs are limited to 64 parameters, 128 states, 512 transitions and 64 conditions
+per transition. Unknown fields, duplicate names and broken references are rejected.
+
+Transitions have `From` (empty/omitted = any state), `To`, `Duration` (crossfade seconds, default 0.15,
+0..60), optional `ExitTime` (normalized elapsed state time, 0..1), and `Conditions` (all must match).
+Conditions have `Parameter`, `Operator` (`Greater`, `Less`, `Equal`, `NotEqual`; default `Equal`) and
+`Value`. Float conditions require a numeric value. Bool conditions default to `Equal true`; trigger
+conditions must test `Equal true`. Array order sets priority. At most one transition starts per update;
+self-transitions are ignored. Exit times are checked at update boundaries against time already played,
+including completed loops, so a large timestep cannot skip the exit. Finished non-looping states still
+check transitions; paused states do not. A missing clip or blend space is reported and retried without
+consuming triggers. A visual graph editor is a future feature.
+
+```json
+{
+  "InitialState": "Idle",
+  "Parameters": [{ "Name": "Attack", "Type": "Trigger" }],
+  "States": [
+    { "Name": "Idle", "Clip": "Idle" },
+    { "Name": "Attack", "Clip": "Attack", "Looping": false, "RootMotion": true }
+  ],
+  "Transitions": [
+    { "From": "Idle", "To": "Attack", "Conditions": [{ "Parameter": "Attack" }] },
+    { "From": "Attack", "To": "Idle", "ExitTime": 1 }
+  ]
+}
+```
+
+Enable `Animator.RootMotion` and name the extraction node in `Animator.RootJoint`. With a graph,
+only states with `RootMotion: true` drive movement; direct playback uses the Animator flag alone.
+Horizontal translation and yaw are extracted across loop boundaries, including multiple wraps, and
+removed from the displayed pose relative to the model's rest pose. Vertical motion, pitch and roll stay
+in the animation. Crossfades blend motion from opted-in sources (interrupted blends freeze their outgoing
+pose). Seeking never moves the entity. `MatchVelocity` is bypassed while the current state drives root motion.
+
+Animation runs after script updates and before physics. Root motion overrides a character's requested
+horizontal velocity for that update, retaining `Move`'s vertical request and normal gravity/collision
+handling; pausing, stopping, finishing or leaving root-motion states restores gameplay input. Physics still
+uses fixed steps; displacement on frames below one step is queued until the next step. Without a character,
+root motion updates the world transform, respecting its rotation, scale and parent. Bone attachments
+update after physics. Playback and parameters changed in `OnLateUpdate` advance on the following update;
+direct play, blend and seek calls resample the visible pose immediately.

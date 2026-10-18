@@ -331,7 +331,13 @@ namespace Basalt {
 			Impl::UpdateSupportingVolume(record);
 			const JPH::Vec3 up = character.GetUp();
 			const JPH::Vec3 gravity = sceneGravity * record.GravityFactor;
-			const JPH::Vec3 move = ToJolt(record.MoveVelocity);
+			glm::vec3 requested = record.MoveVelocity;
+			if (record.RootMotionVelocity)
+			{
+				requested.x = record.RootMotionVelocity->x;
+				requested.z = record.RootMotionVelocity->z;
+			}
+			const JPH::Vec3 move = ToJolt(requested);
 			const JPH::Vec3 moveVertical = up * move.Dot(up);
 			const JPH::Vec3 current = character.GetLinearVelocity();
 			const JPH::Vec3 groundVelocity = character.GetGroundVelocity();
@@ -389,6 +395,23 @@ namespace Basalt {
 		auto it = m_Impl->Characters.find(entity.GetUUID());
 		if (it != m_Impl->Characters.end() && IsFiniteVec(velocity))
 			it->second.MoveVelocity = velocity;
+	}
+
+	void PhysicsWorld::SetRootMotionDelta(Entity entity, std::optional<glm::vec3> displacement)
+	{
+		if (!m_Impl->Owns(entity) || !entity.HasComponent<CharacterControllerComponent>())
+			return;
+		if (!displacement)
+		{
+			if (auto it = m_Impl->RootMotion.find(entity.GetUUID()); it != m_Impl->RootMotion.end())
+				it->second.Active = false;
+			return;
+		}
+		if (!IsFiniteVec(*displacement))
+			return;
+		auto& request = m_Impl->RootMotion[entity.GetUUID()];
+		request.Active = true;
+		request.Pending += glm::vec3(displacement->x, 0, displacement->z);
 	}
 
 	bool PhysicsWorld::IsCharacterGrounded(Entity entity) const

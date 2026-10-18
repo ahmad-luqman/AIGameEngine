@@ -1,5 +1,6 @@
 #include "Basalt/Project/ProjectValidator.h"
 
+#include "Basalt/Animation/AnimationGraph.h"
 #include "Basalt/Asset/MeshSource.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/JsonUtils.h"
@@ -23,7 +24,7 @@ namespace Basalt {
 	namespace {
 
 		// File types components reference by path. A string ending in one of these is treated as an asset path.
-		const std::set<std::string> s_AssetExtensions = { ".gltf", ".glb", ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr", ".wav", ".mp3", ".ogg", ".flac", ".ttf", ".otf", ".lua", ".bscene", ".bprefab" };
+		const std::set<std::string> s_AssetExtensions = { ".gltf", ".glb", ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr", ".wav", ".mp3", ".ogg", ".flac", ".ttf", ".otf", ".lua", ".bscene", ".bprefab", ".banimgraph" };
 
 		// "Assets/Models/Ship.glb#image/0" names an image inside Ship.glb: the file is the part before '#'.
 		std::string StripSubAsset(const std::string& reference)
@@ -40,7 +41,7 @@ namespace Basalt {
 		// Mesh means the entity's own mesh; an Animator's Clip names an animation, an AudioSource's is a file.
 		bool IsPathField(const std::string& component, const std::string& field)
 		{
-			static const std::set<std::string> s_Fields = { "Mesh", "Script", "AlbedoMap", "NormalMap", "MetallicRoughnessMap", "OcclusionMap", "EmissiveMap", "EnvironmentMap", "Texture", "Font" };
+			static const std::set<std::string> s_Fields = { "Mesh", "Script", "AlbedoMap", "NormalMap", "MetallicRoughnessMap", "OcclusionMap", "EmissiveMap", "EnvironmentMap", "Texture", "Font", "StateMachine" };
 			return s_Fields.contains(field) || (component == "AudioSource" && field == "Clip");
 		}
 
@@ -75,14 +76,16 @@ namespace Basalt {
 				CheckProjectFile();
 				CheckInputFile();
 				CheckStartScene();
-				std::vector<std::filesystem::path> scenes, prefabs, scripts;
-				ListAssets(scenes, prefabs, scripts);
+				std::vector<std::filesystem::path> scenes, prefabs, scripts, graphs;
+				ListAssets(scenes, prefabs, scripts, graphs);
 				for (const auto& path : scenes)
 					CheckScene(path);
 				for (const auto& path : prefabs)
 					CheckPrefab(path);
 				for (const auto& path : scripts)
 					CheckScriptSyntax(path);
+				for (const auto& path : graphs)
+					CheckAnimationGraph(path);
 				for (const auto& [script, file] : m_ReferencedScripts)
 					CheckScriptClass(script, file);
 				return std::move(m_Report);
@@ -177,7 +180,7 @@ namespace Basalt {
 					CheckReference(start, Project::FileName, "the StartScene names");
 			}
 
-			void ListAssets(std::vector<std::filesystem::path>& scenes, std::vector<std::filesystem::path>& prefabs, std::vector<std::filesystem::path>& scripts)
+			void ListAssets(std::vector<std::filesystem::path>& scenes, std::vector<std::filesystem::path>& prefabs, std::vector<std::filesystem::path>& scripts, std::vector<std::filesystem::path>& graphs)
 			{
 				std::error_code error;
 				const std::filesystem::path assets = m_Project.GetAssetDirectory();
@@ -203,13 +206,15 @@ namespace Basalt {
 						scenes.push_back(it->path());
 					else if (extension == ".bprefab")
 						prefabs.push_back(it->path());
+					else if (extension == ".banimgraph")
+						graphs.push_back(it->path());
 					else if (extension == ".lua")
 						scripts.push_back(it->path());
 				}
 				if (error)
 					m_Report.Add(ValidationSeverity::Error, Project::AssetDirectoryName, "cannot list all the assets (the walk stopped with: " + error.message() + "); the remaining files were not checked");
 				// Directory order differs between platforms; reports should not.
-				for (auto* list : { &scenes, &prefabs, &scripts })
+				for (auto* list : { &scenes, &prefabs, &scripts, &graphs })
 					std::sort(list->begin(), list->end());
 			}
 
@@ -371,6 +376,15 @@ namespace Basalt {
 						it->second.Error = error.message();
 				}
 				return it->second;
+			}
+
+			void CheckAnimationGraph(const std::filesystem::path& path)
+			{
+				std::string error;
+				const auto text = FileSystem::ReadTextFile(path);
+				const auto graph = text ? ParseJson(*text, error) : nlohmann::json();
+				if (!text || graph.is_discarded() || !AnimationGraph::FromJson(graph, error))
+					m_Report.Add(ValidationSeverity::Error, Relative(path), "invalid animation graph: " + (text ? error : "cannot read file"));
 			}
 
 			void CheckScriptSyntax(const std::filesystem::path& path)

@@ -420,6 +420,22 @@ function Entity:IsAnimationPlaying() end
 ---@return string[]
 function Entity:GetAnimationClips() end
 
+---Sets a declared Float or Bool parameter. False on a missing parameter, wrong type, non-finite value or inactive machine.
+---@param name string
+---@param value number|boolean
+---@return boolean
+function Entity:SetAnimationParameter(name, value) end
+
+---Latches a declared trigger until a successful transition consumes it.
+---@param name string
+---@return boolean
+function Entity:SetAnimationTrigger(name) end
+
+---Current state name, or an empty string when no state machine is active.
+---@return string
+function Entity:GetAnimationState() end
+
+
 ---Plays one of the Animator's BlendSpaces at parameter (x, y), fading from the current pose over fadeSeconds
 ---(default 0). While that space plays it only moves the parameter (the fade is ignored); a paused or finished one
 ---restarts. Returns success.
@@ -1281,6 +1297,9 @@ function BasaltScript:StopAllCoroutines() end
 ---@field PlayOnStart boolean
 ---@field CastShadows boolean
 ---@field MatchVelocity boolean
+---@field StateMachine string
+---@field RootMotion boolean
+---@field RootJoint string
 ---@field Events AnimationEvent[]
 ---@field BlendSpaces AnimationBlendSpace[]
 

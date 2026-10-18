@@ -1,6 +1,8 @@
 #include "Basalt/Asset/AssetManager.h"
 
+#include "Basalt/Animation/AnimationGraph.h"
 #include "Basalt/Asset/MeshImporter.h"
+#include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Project/Project.h"
@@ -27,6 +29,7 @@ namespace Basalt {
 
 		std::unordered_map<std::string, CacheEntry<MeshSource>> s_Meshes;
 		std::unordered_map<std::string, CacheEntry<TextureSource>> s_Textures;
+		std::unordered_map<std::string, CacheEntry<AnimationGraph>> s_Graphs;
 
 		std::string Extension(const std::string& path)
 		{
@@ -85,6 +88,28 @@ namespace Basalt {
 
 	}
 
+	Ref<AnimationGraph> AssetManager::GetAnimationGraph(const std::string& key)
+	{
+		if (key.empty())
+			return nullptr;
+		if (auto it = s_Graphs.find(key); it != s_Graphs.end())
+			return it->second.Asset;
+		CacheEntry<AnimationGraph> entry;
+		const auto text = FileSystem::ReadTextFile(Project::ResolvePath(key));
+		if (!text)
+			entry.Error = "cannot read animation graph '" + key + "'";
+		else
+		{
+			const auto data = ParseJson(*text, entry.Error);
+			if (!data.is_discarded())
+				if (auto graph = AnimationGraph::FromJson(data, entry.Error))
+					entry.Asset = CreateRef<AnimationGraph>(std::move(*graph));
+		}
+		if (!entry.Asset)
+			BS_CORE_ERROR("Animation graph '{}': {}", key, entry.Error);
+		return s_Graphs.emplace(key, std::move(entry)).first->second.Asset;
+	}
+
 	Ref<MeshSource> AssetManager::GetMesh(const std::string& key)
 	{
 		if (key.empty())
@@ -131,11 +156,14 @@ namespace Basalt {
 			return it->second.Error;
 		if (auto it = s_Textures.find(key); it != s_Textures.end())
 			return it->second.Error;
+		if (auto it = s_Graphs.find(key); it != s_Graphs.end())
+			return it->second.Error;
 		return {};
 	}
 
 	void AssetManager::Reload(const std::string& key)
 	{
+		s_Graphs.erase(key);
 		s_Meshes.erase(key);
 		s_Textures.erase(key);
 		// Embedded images belong to their mesh file.
@@ -168,6 +196,9 @@ namespace Basalt {
 			if (changed.contains(source) || keys.contains(source))
 				keys.insert(key);
 		}
+		for (const auto& [key, entry] : s_Graphs)
+			if (changed.contains(key))
+				keys.insert(key);
 		for (const std::string& key : keys)
 			Reload(key);
 		return { keys.begin(), keys.end() };
@@ -181,6 +212,7 @@ namespace Basalt {
 
 	void AssetManager::Clear()
 	{
+		s_Graphs.clear();
 		s_Meshes.clear();
 		s_Textures.clear();
 	}
@@ -188,10 +220,12 @@ namespace Basalt {
 	std::vector<std::string> AssetManager::GetLoadedKeys()
 	{
 		std::vector<std::string> keys;
-		keys.reserve(s_Meshes.size() + s_Textures.size());
+		keys.reserve(s_Meshes.size() + s_Textures.size() + s_Graphs.size());
 		for (const auto& [key, entry] : s_Meshes)
 			keys.push_back(key);
 		for (const auto& [key, entry] : s_Textures)
+			keys.push_back(key);
+		for (const auto& [key, entry] : s_Graphs)
 			keys.push_back(key);
 		std::sort(keys.begin(), keys.end());
 		keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
@@ -224,6 +258,7 @@ namespace Basalt {
 	AssetManager::TemporaryLoads::TemporaryLoads()
 		: m_Meshes(SortedKeys(s_Meshes))
 		, m_Textures(SortedKeys(s_Textures))
+		, m_Graphs(SortedKeys(s_Graphs))
 	{
 	}
 
@@ -231,6 +266,7 @@ namespace Basalt {
 	{
 		EraseAddedSince(s_Meshes, m_Meshes);
 		EraseAddedSince(s_Textures, m_Textures);
+		EraseAddedSince(s_Graphs, m_Graphs);
 	}
 
 	Entity AssetManager::ImportModel(Scene& scene, const std::string& key, Entity parent, std::string& outError)

@@ -629,6 +629,21 @@ namespace Basalt {
 				const sol::state_view view(state);
 				return { sol::make_object(view, position), sol::make_object(view, rotation), sol::make_object(view, scale) };
 			};
+			entityType["SetAnimationParameter"] = [&context](const ScriptEntity& self, const std::string& name, const sol::object& value) {
+				Entity entity = RequireAnimator(self, "SetAnimationParameter");
+				auto& animations = RequireAnimations(context);
+				if (IsNil(value))
+					throw std::runtime_error("SetAnimationParameter: value must be a number or boolean");
+				if (value.is<bool>())
+					return animations.SetParameter(entity, name, value.as<bool>());
+				return animations.SetParameter(entity, name, OptionalNumber(value, "SetAnimationParameter: value", 0.0f));
+			};
+			entityType["SetAnimationTrigger"] = [&context](const ScriptEntity& self, const std::string& name) {
+				return RequireAnimations(context).SetTrigger(RequireAnimator(self, "SetAnimationTrigger"), name);
+			};
+			entityType["GetAnimationState"] = [&context](const ScriptEntity& self) {
+				return RequireAnimations(context).GetState(RequireAnimator(self, "GetAnimationState"));
+			};
 			entityType["PlayBlendSpace"] = [&context](const ScriptEntity& self, const std::string& space, float x, const sol::object& y, const sol::object& fadeSeconds) {
 				Entity entity = RequireAnimator(self, "PlayBlendSpace");
 				return RequireAnimations(context).PlayBlendSpace(entity, space, { x, OptionalNumber(y, "PlayBlendSpace: y", 0.0f) }, OptionalNumber(fadeSeconds, "PlayBlendSpace: fadeSeconds", 0.0f));

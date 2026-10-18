@@ -11,6 +11,7 @@
 namespace Basalt {
 
 	class Scene;
+	struct AnimationGraph;
 
 	// Loads and caches CPU-side assets by key. Keys are project-relative paths ("Assets/Models/Ship.glb"),
 	// built-in meshes ("builtin://Cube"), or embedded glTF images ("Assets/Models/Ship.glb#image/0").
@@ -20,6 +21,7 @@ namespace Basalt {
 	class AssetManager
 	{
 	public:
+		static Ref<AnimationGraph> GetAnimationGraph(const std::string& key);
 		static Ref<MeshSource> GetMesh(const std::string& key);
 		// The mesh if it is already loaded, without loading it (tooltips that must not stall a frame).
 		static Ref<MeshSource> FindLoadedMesh(const std::string& key);
@@ -29,7 +31,7 @@ namespace Basalt {
 
 		// Drops a cached asset so the next Get reloads it from disk.
 		static void Reload(const std::string& key);
-		// Drops what a change to these project-relative files affects: the files' own cache entries (with a model's
+		// Drops what a change to these project-relative files affects (including animation graphs): the files' own cache entries (with a model's
 		// embedded images) and models that read one of them (external buffers and images; also for a model that failed
 		// to load once its glTF parsed, so a buffer that appears retries it). Failed loads count, so a fixed file is tried
 		// again. Returns the keys dropped, sorted; files nothing requested drop nothing.
@@ -56,6 +58,7 @@ namespace Basalt {
 		private:
 			std::vector<std::string> m_Meshes;
 			std::vector<std::string> m_Textures;
+			std::vector<std::string> m_Graphs;
 		};
 
 		// Imports a static entity hierarchy or a single Animator root for a skinned/animated model.

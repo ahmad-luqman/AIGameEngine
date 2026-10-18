@@ -72,20 +72,10 @@ The features most games need, roughly in order of impact.
 ### Animation
 
 Skeletal playback, crossfades, two-clip blends, 1D/2D blend spaces with phase sync and velocity matching,
-animation events and bone attachments (`AnimationSystem`) are implemented; physics already provides
+animation events, bone attachments, data-driven state machines and per-state root motion (`AnimationSystem`) are implemented; physics already provides
 character controllers (`MoveCharacter`, `IsCharacterGrounded`, ground normal) and raycasts. The items
 below turn that into natural character movement (walk, run, jump, uneven ground), in order of impact.
 
-- **Animation state machine — L.** A data-driven graph (project asset, edited through automation commands
-  so agents can author it) of states (a clip or blend space) and transitions with conditions on named
-  parameters (`Speed`, `Grounded`) and triggers (`Jump`), crossfade durations and exit times. Lua:
-  `e:SetAnimationParameter(name, value)`, `e:SetAnimationTrigger(name)`, `e:GetAnimationState()`. Jumps
-  split into takeoff, an in-air loop and landing because airtime comes from physics. A visual graph editor
-  is a P2 follow-up.
-- **Root motion — M.** Extract the root joint's horizontal translation and yaw delta per frame, remove
-  them from the displayed pose, and apply them through `MoveCharacter` (or the transform when the entity
-  has no character) when the Animator enables `RootMotion`. Per-state opt-in once the state machine exists
-  (attacks, vaults, climbing), so locomotion can stay physics-driven.
 - **Inverse kinematics — M.** Analytic two-bone IK (legs, arms), look-at/aim chains (head and spine) and
   foot placement: raycast under each foot, solve leg IK so the foot lands on the surface, lower the
   pelvis by the largest offset and align feet to the ground normal, with smoothed weights so feet don't
@@ -143,6 +133,8 @@ with a smoke test have shipped. Follow-ups:
   content-browser thumbnails (previews cover MaterialComponent and glTF materials today).
 
 ### Editor workflow
+
+- **Animation graph editor — M.** A visual editor for existing `.banimgraph` states, parameters and transitions, using the automation asset commands.
 
 - **Native file dialogs — S.** Add nativefiledialog-extended (pinned) for Open/Save/Import, keeping the
   text-box fallback for headless and Linux systems without a portal.

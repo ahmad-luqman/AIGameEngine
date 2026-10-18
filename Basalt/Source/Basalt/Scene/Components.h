@@ -170,6 +170,11 @@ namespace Basalt {
 		bool MatchVelocity = false;
 		std::vector<AnimationEvent> Events;
 		std::vector<AnimationBlendSpace> BlendSpaces;
+		// Reusable project-relative .banimgraph. Empty keeps direct playback.
+		std::string StateMachine;
+		// Master gate; graph states must also opt in. RootJoint explicitly names the extraction node.
+		bool RootMotion = false;
+		std::string RootJoint;
 	};
 
 	// Keeps the entity at a joint (any node) of an Animator's model while the scene plays or simulates: its

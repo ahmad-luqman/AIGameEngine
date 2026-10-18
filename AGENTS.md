@@ -21,7 +21,7 @@ changing code. Task-specific procedures live in `.claude/skills/*/SKILL.md`.
 Engine modules (`Basalt/Source/Basalt/<Module>/`): `Core` (application, window, input incl. gamepads, log, file
 system and file watching, command line), `Events`, `Math`, `Renderer` (device, scene renderer, IBL, debug lines), `ImGui`, `Scene`
 (EnTT scene, components, component registry, serialization), `Asset` (glTF, images, primitives, asset
-cache), `Physics` (Jolt), `Audio` (miniaudio: buses, per-source low-pass and Doppler, reverb sends into per-bus reverbs), `Particles` (CPU particle simulation), `Animation` (glTF TRS sampling, blends, crossfades, 1D/2D blend spaces with phase sync and velocity matching, animation events, bone transforms and attachments, per-entity playback), `UI` (game UI: UI
+cache), `Physics` (Jolt), `Audio` (miniaudio: buses, per-source low-pass and Doppler, reverb sends into per-bus reverbs), `Particles` (CPU particle simulation), `Animation` (glTF TRS sampling, blends, crossfades, 1D/2D blend spaces with phase sync and velocity matching, animation events, bone transforms and attachments, data-driven state machines and per-state root motion, per-entity playback), `UI` (game UI: UI
 component layout, widgets and their mouse/keyboard/gamepad interaction, immediate-mode `UI.*`, TrueType fonts;
 drawn through ImGui after the scene), `Scripting` (Lua 5.4 + sol2; timers, coroutines, events), `Project`
 (project files, exporter, save data), `Automation` (command API, session, TCP server, editor history and selection).
@@ -41,6 +41,14 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   and re-reads the widgets every frame. Gameplay random streams (Lua's random numbers, particle
   emitters and runtime entity UUIDs) are seeded from the session's seed, `Scene::GetRandomSeed` (the project's `RandomSeed`).
 - **Post-processing.** The highest-priority enabled `PostProcessComponent` (lowest UUID on ties) overrides legacy scene exposure/tonemapper/SSAO settings. Bloom and histogram exposure precede tonemapping; FXAA precedes FSR and overlays. Exposure history belongs to each renderer; captures reset it. `Graphics` Lua preferences are a session copy of project defaults and survive `Scene.Load` without saving the project.
+- **Animation graphs and root motion.** `Animator.StateMachine` names a shared `.banimgraph` asset
+  (`AnimationGraph`, cached/reloaded by `AssetManager`, authored through `asset.write/read`). Runtime
+  parameters and triggers belong to each playback. Transitions use array priority, at most one per update;
+  successful transitions consume their trigger conditions. `Animator.RootMotion` is the master gate and
+  graph states also opt in; `RootJoint` explicitly names the extraction node. Animation advances after
+  scripts and before physics; horizontal root displacement queues for character fixed steps, retaining
+  gameplay vertical input, or updates the world transform. Attachments and events run after physics and
+  LateUpdate, before particles.
 - **Play mode runs a copy.** `Scene::Copy` duplicates the edit scene (same UUIDs) for play/simulate;
   stopping discards it. In the editor the game runs in the Game tab (primary camera at the project's window
   size, letterboxed; the game UI takes the pointer while the Game image is hovered and navigation while the Game

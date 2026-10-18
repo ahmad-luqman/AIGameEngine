@@ -523,6 +523,9 @@ namespace Basalt {
 			r.Field("PlayOnStart", c.PlayOnStart);
 			r.Field("CastShadows", c.CastShadows);
 			r.Field("MatchVelocity", c.MatchVelocity);
+			r.Field("StateMachine", c.StateMachine);
+			r.Field("RootMotion", c.RootMotion);
+			r.Field("RootJoint", c.RootJoint);
 			r.ListField("Events", c.Events, AnimatorComponent::MaxEvents);
 			r.ListField("BlendSpaces", c.BlendSpaces, AnimatorComponent::MaxBlendSpaces);
 		}
@@ -917,6 +920,9 @@ namespace Basalt {
 				{ "PlayOnStart", c.PlayOnStart },
 				{ "CastShadows", c.CastShadows },
 				{ "MatchVelocity", c.MatchVelocity },
+				{ "StateMachine", c.StateMachine },
+				{ "RootMotion", c.RootMotion },
+				{ "RootJoint", c.RootJoint },
 				{ "Events", ListToJson(c.Events) },
 				{ "BlendSpaces", ListToJson(c.BlendSpaces) },
 			};

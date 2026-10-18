@@ -1,0 +1,15 @@
+{
+	"InitialState": "Idle",
+	"Parameters": [
+		{ "Name": "Speed", "Type": "Float" },
+		{ "Name": "Grounded", "Type": "Bool", "Default": true },
+		{ "Name": "Move", "Type": "Trigger" }
+	],
+	"States": [
+		{ "Name": "Idle", "Clip": "Bend" },
+		{ "Name": "Walk", "BlendSpace": "Locomotion", "ParameterX": "Speed", "RootMotion": true }
+	],
+	"Transitions": [
+		{ "From": "Idle", "To": "Walk", "Duration": 0.15, "Conditions": [ { "Parameter": "Move" }, { "Parameter": "Grounded", "Value": true } ] }
+	]
+}
