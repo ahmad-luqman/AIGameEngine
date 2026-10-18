@@ -1175,4 +1175,44 @@ TEST_SUITE("Animation")
 		CHECK(NearRotation(BoneWorldRotation(scene, biped, "LeftFoot"), glm::quat(1, 0, 0, 0), 1e-3f));
 		scene.OnSimulationStop();
 	}
+
+	TEST_CASE("Feet ease back to the animation when a grounded character takes off")
+	{
+		ClearAssetCache clear;
+		auto foot = Chain("LeftFoot", IKChainType::TwoBone, "LeftFoot");
+		foot.Ground = true;
+		Scene scene;
+		auto biped = AddBiped(scene, { foot });
+		auto& ik = biped.GetComponent<InverseKinematicsComponent>();
+		ik.Pelvis = "Hips";
+		ik.Smoothing = 0.1f;
+		// Standing on a pillar between its feet, which reach a floor 0.1 m lower.
+		biped.GetTransform().Translation = { 0, 0.05f, 0 };
+		biped.AddComponent<CharacterControllerComponent>();
+		auto& capsule = biped.AddComponent<CapsuleColliderComponent>();
+		capsule.Radius = 0.06f;
+		capsule.Offset = { 0, 0.57f, 0 };
+		AddBox(scene, "Pillar", { 0, -0.5f, 0 }, { 0.07f, 0.5f, 0.07f });
+		AddBox(scene, "Floor", { 0, -0.6f, 0 }, { 5, 0.5f, 5 });
+		scene.OnSimulationStart();
+		for (int i = 0; i < 60; i++)
+			scene.OnUpdate(Step);
+		const auto lift = [&] { return BoneWorld(scene, biped, "LeftFoot").y - scene.GetWorldTransform(biped)[3].y; };
+		REQUIRE(lift() == doctest::Approx(-0.05f).epsilon(1e-2));
+
+		// Jump: the foot does not pop back at takeoff but eases (Smoothing) to its animated height.
+		scene.GetPhysicsWorld()->MoveCharacter(biped, { 0, 4, 0 });
+		for (int i = 0; i < 60 && scene.GetPhysicsWorld()->IsCharacterGrounded(biped); i++)
+			scene.OnUpdate(Step);
+		scene.GetPhysicsWorld()->MoveCharacter(biped, glm::vec3(0));
+		scene.OnUpdate(Step);
+		REQUIRE_FALSE(scene.GetPhysicsWorld()->IsCharacterGrounded(biped));
+		const float takeoff = lift();
+		CHECK(takeoff < 0.04f);
+		CHECK(takeoff > -0.05f);
+		for (int i = 0; i < 30 && !scene.GetPhysicsWorld()->IsCharacterGrounded(biped); i++)
+			scene.OnUpdate(Step);
+		CHECK(lift() == doctest::Approx(0.05f).epsilon(2e-2));
+		scene.OnSimulationStop();
+	}
 }
