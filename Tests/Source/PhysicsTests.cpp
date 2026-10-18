@@ -221,7 +221,10 @@ TEST_SUITE("Physics")
 			blocked.wait();
 		}
 		auto& jobs = PhysicsJobs::Get();
-		auto job = jobs.CreateJob("Regression throw", JPH::Color::sRed, [] { throw std::runtime_error("physics regression exception"); }, 1);
+		auto job = jobs.CreateJob("Regression throw", JPH::Color::sRed, [] {
+			// MSVC terminate handlers are per-thread: install on whichever thread Jolt executes here.
+			std::set_terminate([] { std::_Exit(86); });
+			throw std::runtime_error("physics regression exception"); }, 1);
 		auto* barrier = jobs.CreateBarrier();
 		barrier->AddJob(job);
 		job.RemoveDependency();
