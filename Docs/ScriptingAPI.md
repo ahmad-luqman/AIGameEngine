@@ -1301,8 +1301,8 @@ about 63% of a change after `Smoothing` seconds; 0 snaps), and the pelvis follow
 bodies (its colliders and its descendants', and a CharacterController on an ancestor with that controller's
 descendants) are not ground; other ancestors, such as a platform the character is parented to, are. A character at a
 scale of exactly zero (e.g. growing in when spawned) is left as animated. Surfaces facing away from the up axis and triggers
-are not ground either. While that CharacterController is not grounded, feet ease back to the animation, so jumps keep
-their pose. Without physics hits the feet keep the animation.
+are not ground either. While that CharacterController is not grounded, feet ease back to the animation over `Smoothing`
+(so legs do not pop at takeoff), and jumps keep their pose. Without physics hits the feet keep the animation.
 
 | Function | Behavior |
 |---|---|
