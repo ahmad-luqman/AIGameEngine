@@ -1156,4 +1156,23 @@ TEST_SUITE("Animation")
 		REQUIRE(LookAt(rig, { head, Node(*source, "Chest") }, { 0, 0, 1 }, target, glm::pi<float>()));
 		CHECK(Degrees(glm::vec3(rig.Globals[head] * glm::vec4(0, 0, 1, 0)), target - Position(rig.Globals, head)) < 0.05f);
 	}
+
+	TEST_CASE("A settled ground foot is solved again when an earlier chain turned it")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		// An earlier look-at turns the foot itself; the later ground chain on flat ground then puts it back.
+		auto look = Chain("FootLook", IKChainType::LookAt, "LeftFoot");
+		look.MaxAngle = 90;
+		auto ground = Chain("LeftFoot", IKChainType::TwoBone, "LeftFoot");
+		ground.Ground = true;
+		auto biped = AddBiped(scene, { look, ground });
+		AddBox(scene, "Floor", { 0, -0.5f, 0 }, { 5, 0.5f, 5 });
+		scene.OnSimulationStart();
+		REQUIRE(scene.GetAnimationSystem()->SetIKTarget(biped, "FootLook", glm::vec3(5, 0.05f, 0), std::nullopt));
+		scene.OnUpdate(Step);
+		// The animated foot is level (identity rest rotations, Lean only turns the spine).
+		CHECK(NearRotation(BoneWorldRotation(scene, biped, "LeftFoot"), glm::quat(1, 0, 0, 0), 1e-3f));
+		scene.OnSimulationStop();
+	}
 }
