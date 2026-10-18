@@ -153,6 +153,8 @@ namespace Basalt {
 		{
 			glm::vec3 Pending = glm::vec3(0);
 			bool Active = false;
+			// Unbuilt entries and InvalidReported retain idle requests until construction/recovery,
+			// keeping these diagnostic flags alive to prevent repeated logs.
 			bool UnbuiltReported = false;
 			bool InvalidReported = false;
 		};

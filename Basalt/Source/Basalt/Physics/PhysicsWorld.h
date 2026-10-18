@@ -147,9 +147,9 @@ namespace Basalt {
 		// entities without a character do nothing; non-finite velocities are ignored.
 		bool HasCharacter(Entity entity) const;
 		void MoveCharacter(Entity entity, const glm::vec3& velocity);
-		// Queues displacement until a fixed step; nullopt releases this frame's override without cancelling
-		// already queued displacement. Step consumes the override each frame; later frames use gameplay movement.
-		void SetRootMotionDelta(Entity entity, std::optional<glm::vec3> displacement);
+		// Queues animation displacement until a fixed step. Step consumes the one-frame override;
+		// pending displacement survives frames without fixed steps. Non-finite requests are logged/ignored.
+		void QueueRootMotion(Entity entity, const glm::vec3& displacement);
 		// Standing on ground no steeper than SlopeLimit.
 		bool IsCharacterGrounded(Entity entity) const;
 		// Normal of the ground the character touches (walkable or too steep), nullopt in the air or without a

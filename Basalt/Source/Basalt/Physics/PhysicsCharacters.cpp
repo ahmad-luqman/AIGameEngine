@@ -399,18 +399,13 @@ namespace Basalt {
 			it->second.MoveVelocity = velocity;
 	}
 
-	void PhysicsWorld::SetRootMotionDelta(Entity entity, std::optional<glm::vec3> displacement)
+	void PhysicsWorld::QueueRootMotion(Entity entity, const glm::vec3& displacement)
 	{
 		if (!m_Impl->Owns(entity) || !entity.HasComponent<CharacterControllerComponent>())
 			return;
-		if (!displacement)
-		{
-			if (auto it = m_Impl->RootMotion.find(entity.GetUUID()); it != m_Impl->RootMotion.end())
-				it->second.Active = false;
-			return;
-		}
+
 		auto& request = m_Impl->RootMotion[entity.GetUUID()];
-		if (!IsFiniteVec(*displacement))
+		if (!IsFiniteVec(displacement))
 		{
 			if (!request.InvalidReported)
 				BS_CORE_ERROR("Physics: character '{}': root motion displacement must be finite", entity.GetName());
@@ -419,7 +414,7 @@ namespace Basalt {
 		}
 		request.InvalidReported = false;
 		request.Active = true;
-		request.Pending += *displacement;
+		request.Pending += displacement;
 	}
 
 	bool PhysicsWorld::IsCharacterGrounded(Entity entity) const

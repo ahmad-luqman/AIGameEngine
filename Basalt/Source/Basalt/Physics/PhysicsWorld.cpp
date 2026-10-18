@@ -518,13 +518,16 @@ namespace Basalt {
 		}
 		// Active is a one-frame override, including zero-motion frames. Pending displacement survives
 		// frames without a fixed step, but an invalid/skipped animation update cannot leave Active latched.
-		for (auto& entry : impl.RootMotion)
+		for (auto it = impl.RootMotion.begin(); it != impl.RootMotion.end();)
 		{
-			auto& request = entry.second;
-			const bool built = impl.Characters.contains(entry.first);
-			Entity entity = impl.ScenePtr->GetEntityByUUID(entry.first);
+			auto& request = it->second;
+			Entity entity = impl.ScenePtr->GetEntityByUUID(it->first);
+			const bool built = impl.Characters.contains(it->first);
 			if (!entity || !entity.HasComponent<CharacterControllerComponent>())
+			{
+				it = impl.RootMotion.erase(it);
 				continue;
+			}
 			if (!built && (request.Active || request.Pending != glm::vec3(0)))
 			{
 				if (!request.UnbuiltReported)
@@ -535,11 +538,11 @@ namespace Basalt {
 			else if (built)
 				request.UnbuiltReported = false;
 			request.Active = false;
+			if (built && request.Pending == glm::vec3(0) && !request.InvalidReported)
+				it = impl.RootMotion.erase(it);
+			else
+				++it;
 		}
-		std::erase_if(impl.RootMotion, [&](const auto& entry) {
-			Entity entity = impl.ScenePtr->GetEntityByUUID(entry.first);
-			return !entity || !entity.HasComponent<CharacterControllerComponent>() || (impl.Characters.contains(entry.first) && entry.second.Pending == glm::vec3(0) && !entry.second.InvalidReported);
-		});
 		uint32_t steps = 0;
 		while (m_Accumulator >= fixedStep && steps < settings.MaxStepsPerFrame)
 		{

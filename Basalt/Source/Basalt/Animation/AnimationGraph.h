@@ -27,7 +27,9 @@ namespace Basalt {
 		std::string Name;
 		std::string Clip;
 		std::string BlendSpace;
+		// Names retain authored/diagnostic context; resolved indices are authoritative at runtime.
 		std::string ParameterX, ParameterY;
+		// Missing axis indices start that coordinate at zero.
 		std::optional<size_t> ParameterXIndex, ParameterYIndex;
 		bool Looping = true;
 		bool RootMotion = false;
@@ -51,8 +53,11 @@ namespace Basalt {
 	struct AnimationTransition
 	{
 		// Empty From matches any state except To. Explicit self-edges are rejected; states never restart implicitly.
+		// Authored names are diagnostic; runtime uses the indices below.
 		std::string From, To;
+		// nullopt matches any state except ToIndex.
 		std::optional<size_t> FromIndex;
+		// Index of the validated target state.
 		size_t ToIndex = 0;
 		float Duration = 0.15f;
 		std::optional<float> ExitTime;
@@ -61,13 +66,14 @@ namespace Basalt {
 	// Immutable declarations shared by Animators using a .banimgraph asset. Transitions use array order as priority.
 	struct AnimationGraph
 	{
+		// Authored name is diagnostic; InitialStateIndex selects the initial state at runtime.
 		std::string InitialState;
+		// Index of the validated initial state.
 		size_t InitialStateIndex = 0;
 		std::vector<AnimationParameter> Parameters;
 		std::vector<AnimationState> States;
 		std::vector<AnimationTransition> Transitions;
-		// Strict, bounded parser that resolves parameter indices and validates all references.
+		// Strict, bounded parser that resolves parameter and state indices and validates all references.
 		static std::optional<AnimationGraph> FromJson(const nlohmann::json& data, std::string& outError);
-		const AnimationState* FindState(const std::string& name) const;
 	};
 }
