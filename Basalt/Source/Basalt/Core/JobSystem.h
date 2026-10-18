@@ -58,6 +58,7 @@ namespace Basalt {
 		bool ParallelFor(uint32_t count, uint32_t grain, const std::function<void(uint32_t, uint32_t)>& function);
 		// Caller must be outside this pool's jobs; waits for every accepted task and capture release.
 		void WaitIdle();
+		// True on workers and on callers currently executing a job through cooperative Wait.
 		bool IsInJob() const;
 
 	private:

@@ -1,12 +1,12 @@
 #include "Basalt/Renderer/SceneRenderer.h"
 
-#include "Basalt/Core/Profiler.h"
 #include "Basalt/Animation/AnimatedModel.h"
 #include "Basalt/Animation/AnimationPose.h"
 #include "Basalt/Animation/AnimationSystem.h"
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Log.h"
+#include "Basalt/Core/Profiler.h"
 #include "Basalt/Math/Random.h"
 #include "Basalt/Particles/ParticleSystem.h"
 #include "Basalt/Project/Project.h"

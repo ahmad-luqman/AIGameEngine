@@ -1,11 +1,11 @@
 #include "Basalt/Scripting/ScriptEngine.h"
 
-#include "Basalt/Core/Profiler.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Input.h"
 #include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Core/MemoryTracker.h"
+#include "Basalt/Core/Profiler.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Project/SaveData.h"
 #include "Basalt/Scene/Entity.h"
@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -37,7 +38,7 @@ namespace Basalt {
 			return sol::stack::push(state, description);
 		}
 
-		// Outlives its Lua state, including warning callbacks from finalizers during lua_close.
+		// Routes enabled Lua warnings to the host log; outlives callbacks from lua_close finalizers.
 		struct LuaWarnings
 		{
 			bool Enabled = false;
@@ -70,6 +71,7 @@ namespace Basalt {
 				{
 					warnings.Continuing = false;
 					warnings.Message.clear();
+					std::fputs("Lua warning logging failed\n", stderr);
 				}
 			}
 		};

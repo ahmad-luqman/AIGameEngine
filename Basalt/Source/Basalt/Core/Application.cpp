@@ -1,10 +1,9 @@
 #include "Basalt/Core/Application.h"
 
-#include "Basalt/Core/Profiler.h"
-
 #include "Basalt/Audio/AudioEngine.h"
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Input.h"
+#include "Basalt/Core/Profiler.h"
 #include "Basalt/Core/Timer.h"
 #include "Basalt/ImGui/ImGuiLayer.h"
 #include "Basalt/Renderer/GraphicsDevice.h"
