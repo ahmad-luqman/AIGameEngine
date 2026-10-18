@@ -1,0 +1,88 @@
+[
+ {
+  "id": "open",
+  "command": "scene.open",
+  "params": {
+   "path": "Assets/Scenes/MovementDemo.bscene"
+  }
+ },
+ {
+  "id": "authoring",
+  "command": "assert.component",
+  "params": {
+   "entity": "Walker",
+   "component": "InverseKinematics",
+   "fields": {
+    "Pelvis": "Hips"
+   }
+  }
+ },
+ {
+  "id": "play",
+  "command": "play.start"
+ },
+ {
+  "id": "walk-to-stairs",
+  "command": "play.step",
+  "params": {
+   "frames": 180,
+   "assertNoErrors": true
+  }
+ },
+ {
+  "id": "walking-and-reaching",
+  "command": "lua.exec",
+  "params": {
+   "code": "local w = Scene.FindEntityByName('Walker'); local function clearance(bone) local p = w:GetBoneTransform(bone); local hit = Physics.Raycast(p + Vec3(0, 0.6, 0), Vec3(0, -1, 0), 2, w); assert(hit, bone .. ' has no ground under it'); return p.y - hit.Point.y, hit.Entity.Name end; local function stance() local l, lg = clearance('LeftFoot'); local r, rg = clearance('RightFoot'); assert(l > -0.02 and r > -0.02, string.format('a foot sank into the ground: %.3f %.3f', l, r)); if l < r then return l, lg end return r, rg end; local function angle(a, b) return math.deg(math.acos(math.max(-1, math.min(1, a:Normalized():Dot(b:Normalized()))))) end; local function look() local head, rotation = w:GetBoneTransform('Head'); local toOrb = Scene.FindEntityByName('Orb').WorldPosition - head; return angle(rotation * Vec3(0, 0, 1), toOrb), angle(w.Rotation * Vec3(0, 0, 1), toOrb) end; local p = w.WorldPosition; assert(p.x > -3.5 and p.x < -2, 'walker at x ' .. p.x); assert(w:IsGrounded(), 'walker is not grounded'); local h = stance(); assert(h > 0.03 and h < 0.15, 'the stance foot is not on the ground: ' .. h); assert(w:GetAnimationLayerWeight('Breathe') == 1, 'breathing layer off'); assert(w:GetIKWeight('Reach') > 0.5, 'the hand did not reach for the orb that came close'); local shoulder = w:GetBoneTransform('LeftUpperArm'); local hand = w:GetBoneTransform('LeftHand'); local d = angle(hand - shoulder, Scene.FindEntityByName('Orb').WorldPosition - shoulder); assert(d < 15, 'the reaching arm points ' .. d .. ' degrees away from the orb'); local head, body = look(); if body < 60 then assert(head < 1, string.format('head misses the orb by %.1f degrees (body %.1f)', head, body)) else assert(head < body - 60, string.format('head did not turn toward the orb: head %.1f body %.1f', head, body)) end; return string.format('x %.2f stance %.3f arm-orb %.1f deg', p.x, h, d)"
+  }
+ },
+ {
+  "id": "climb",
+  "command": "play.step",
+  "params": {
+   "frames": 90,
+   "assertNoErrors": true
+  }
+ },
+ {
+  "id": "on-the-platform-waving",
+  "command": "lua.exec",
+  "params": {
+   "code": "local w = Scene.FindEntityByName('Walker'); local function clearance(bone) local p = w:GetBoneTransform(bone); local hit = Physics.Raycast(p + Vec3(0, 0.6, 0), Vec3(0, -1, 0), 2, w); assert(hit, bone .. ' has no ground under it'); return p.y - hit.Point.y, hit.Entity.Name end; local function stance() local l, lg = clearance('LeftFoot'); local r, rg = clearance('RightFoot'); assert(l > -0.02 and r > -0.02, string.format('a foot sank into the ground: %.3f %.3f', l, r)); if l < r then return l, lg end return r, rg end; local function angle(a, b) return math.deg(math.acos(math.max(-1, math.min(1, a:Normalized():Dot(b:Normalized()))))) end; local function look() local head, rotation = w:GetBoneTransform('Head'); local toOrb = Scene.FindEntityByName('Orb').WorldPosition - head; return angle(rotation * Vec3(0, 0, 1), toOrb), angle(w.Rotation * Vec3(0, 0, 1), toOrb) end; local p = w.WorldPosition; assert(p.y > 0.3, 'walker did not climb the stairs: y ' .. p.y); local h, ground = stance(); assert(ground == 'Platform' and h > 0.03 and h < 0.15, string.format('stance foot %.3f above %s', h, ground)); assert(w:GetAnimationLayerWeight('Wave') == 1, 'not waving'); local hand = w:GetBoneTransform('RightHand'); local head = w:GetBoneTransform('Head'); assert(hand.y > head.y + 0.2, 'the wave did not raise the hand'); local legs = w:GetBoneTransform('LeftUpperLeg'); assert(legs.y > 0.8, 'the masked wave moved the legs'); local head, body = look(); if body < 60 then assert(head < 1, string.format('head misses the orb by %.1f degrees (body %.1f)', head, body)) else assert(head < body - 60, string.format('head did not turn toward the orb: head %.1f body %.1f', head, body)) end; return string.format('y %.2f stance %.3f', p.y, h)"
+  }
+ },
+ {
+  "id": "down-the-ramp",
+  "command": "play.step",
+  "params": {
+   "frames": 180,
+   "assertNoErrors": true
+  }
+ },
+ {
+  "id": "ramp-and-stones",
+  "command": "lua.exec",
+  "params": {
+   "code": "local w = Scene.FindEntityByName('Walker'); local function clearance(bone) local p = w:GetBoneTransform(bone); local hit = Physics.Raycast(p + Vec3(0, 0.6, 0), Vec3(0, -1, 0), 2, w); assert(hit, bone .. ' has no ground under it'); return p.y - hit.Point.y, hit.Entity.Name end; local function stance() local l, lg = clearance('LeftFoot'); local r, rg = clearance('RightFoot'); assert(l > -0.02 and r > -0.02, string.format('a foot sank into the ground: %.3f %.3f', l, r)); if l < r then return l, lg end return r, rg end; local function angle(a, b) return math.deg(math.acos(math.max(-1, math.min(1, a:Normalized():Dot(b:Normalized()))))) end; local function look() local head, rotation = w:GetBoneTransform('Head'); local toOrb = Scene.FindEntityByName('Orb').WorldPosition - head; return angle(rotation * Vec3(0, 0, 1), toOrb), angle(w.Rotation * Vec3(0, 0, 1), toOrb) end; local p = w.WorldPosition; assert(p.x > 2.5, 'walker at x ' .. p.x); assert(w:GetAnimationLayerWeight('Wave') == 0, 'still waving'); local h = stance(); assert(h > 0.03 and h < 0.15, 'the stance foot is not on the ground: ' .. h); local head, body = look(); if body < 60 then assert(head < 1, string.format('head misses the orb by %.1f degrees (body %.1f)', head, body)) else assert(head < body - 60, string.format('head did not turn toward the orb: head %.1f body %.1f', head, body)) end; return p.x"
+  }
+ },
+ {
+  "id": "to-the-end",
+  "command": "play.step",
+  "params": {
+   "frames": 270,
+   "assertNoErrors": true
+  }
+ },
+ {
+  "id": "turned-around",
+  "command": "lua.exec",
+  "params": {
+   "code": "local w = Scene.FindEntityByName('Walker'); local function clearance(bone) local p = w:GetBoneTransform(bone); local hit = Physics.Raycast(p + Vec3(0, 0.6, 0), Vec3(0, -1, 0), 2, w); assert(hit, bone .. ' has no ground under it'); return p.y - hit.Point.y, hit.Entity.Name end; local function stance() local l, lg = clearance('LeftFoot'); local r, rg = clearance('RightFoot'); assert(l > -0.02 and r > -0.02, string.format('a foot sank into the ground: %.3f %.3f', l, r)); if l < r then return l, lg end return r, rg end; local function angle(a, b) return math.deg(math.acos(math.max(-1, math.min(1, a:Normalized():Dot(b:Normalized()))))) end; local function look() local head, rotation = w:GetBoneTransform('Head'); local toOrb = Scene.FindEntityByName('Orb').WorldPosition - head; return angle(rotation * Vec3(0, 0, 1), toOrb), angle(w.Rotation * Vec3(0, 0, 1), toOrb) end; local p = w.WorldPosition; assert(w:GetScript().Direction == -1 and p.x < 7.6, 'walker did not turn back at the end: x ' .. p.x); local forward = w.Rotation * Vec3(0, 0, 1); assert(forward.x < 0, 'walker did not turn around'); local h = stance(); assert(h > 0.03 and h < 0.15, 'the stance foot is not on the ground: ' .. h); return forward.x"
+  }
+ },
+ {
+  "id": "stop",
+  "command": "play.stop"
+ }
+]
