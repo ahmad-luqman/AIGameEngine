@@ -2534,3 +2534,97 @@ TEST_SUITE("Animation")
 		CHECK(animation.GetState(rig) == "Walk");
 	}
 }
+
+TEST_SUITE("Animation")
+{
+	TEST_CASE("Character root motion preserves gameplay vertical input relative to non-Y gravity")
+	{
+		Scene scene;
+		scene.GetPhysicsSettings().Gravity = { -9.81f, 0, 0 };
+		auto character = scene.CreateEntity("SidewaysCharacter");
+		character.AddComponent<CharacterControllerComponent>().GravityFactor = 0;
+		character.AddComponent<CapsuleColliderComponent>();
+		scene.OnSimulationStart();
+		auto* physics = scene.GetPhysicsWorld();
+		physics->MoveCharacter(character, { 2, 7, 0 });
+		physics->SetRootMotionDelta(character, glm::vec3(99, 3, 0) * Step);
+		physics->Step(Step);
+		CHECK(character.GetComponent<TransformComponent>().Translation.x == doctest::Approx(2 * Step));
+		CHECK(character.GetComponent<TransformComponent>().Translation.y == doctest::Approx(3 * Step));
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Graph transitions accept partially resolved blend spaces and consume triggers only when playable")
+	{
+		ClearAssetCache clear;
+		TempProject project("GraphPartialSpace");
+		Scene scene;
+		auto graph = StateGraph();
+		graph["States"][2].erase("Clip");
+		graph["States"][2]["BlendSpace"] = "JumpSpace";
+		graph["States"][2]["ParameterX"] = "Speed";
+		auto rig = GraphAnimator(scene, project, graph);
+		rig.GetComponent<AnimatorComponent>().BlendSpaces = { { .Name = "JumpSpace", .Samples = { { .Clip = "Step" }, { .Clip = "Missing", .X = 1 } } } };
+		AnimationSystem animation(scene);
+		REQUIRE(animation.SetParameter(rig, "Speed", 1.0f));
+		REQUIRE(animation.SetParameter(rig, "Grounded", false)); // Only the Jump edge can match.
+		REQUIRE(animation.SetTrigger(rig, "Jump"));
+		animation.Update(0);
+		CHECK(animation.GetState(rig) == "Idle"); // No valid sample has weight yet.
+		REQUIRE(animation.SetParameter(rig, "Speed", 0.0f));
+		const auto since = Log::GetHistory().GetTotalCount();
+		animation.Update(0);
+		animation.Update(0.1f);
+		CHECK(animation.GetState(rig) == "Air");
+		CHECK(animation.IsPlaying(rig));
+		CHECK(CountLogMessages(since, "sample clips not found") == 1);
+		CHECK(animation.GetBlendSpaceWeights(rig) == std::vector<std::pair<std::string, float>>{ { "Step", 1 } });
+		animation.Update(2);
+		animation.Update(0);
+		animation.Update(0);
+		CHECK(animation.GetState(rig) == "Idle"); // The successful transition consumed Jump.
+	}
+
+	TEST_CASE("Root yaw blends take the short arc across pi in blend spaces and crossfades")
+	{
+		ClearAssetCache clear;
+		TempProject project("RootYawWrap");
+		auto model = FixtureJson();
+		float positive[12] = {}, negative[12] = {};
+		for (int i = 0; i < 3; i++)
+		{
+			const float halfAngle = glm::radians(179.0f) * static_cast<float>(i) / 4;
+			positive[i * 4 + 1] = std::sin(halfAngle);
+			negative[i * 4 + 1] = -std::sin(halfAngle);
+			positive[i * 4 + 3] = negative[i * 4 + 3] = std::cos(halfAngle);
+		}
+		ReplaceAccessorBytes(model, 8, positive, sizeof(positive));
+		model["accessors"].push_back({ { "componentType", 5126 }, { "count", 3 }, { "type", "VEC4" } });
+		ReplaceAccessorBytes(model, 11, negative, sizeof(negative));
+		model["animations"][0]["name"] = "Positive";
+		model["animations"][0]["channels"][0]["target"]["node"] = 2;
+		auto reverse = model["animations"][0];
+		reverse["name"] = "Negative";
+		reverse["samplers"][0]["output"] = 11;
+		model["animations"].push_back(reverse);
+		const auto mesh = project.WriteFile("Assets/Models/Turns.gltf", model.dump());
+		Scene scene;
+		auto space = AddAnimator(scene, "Space"), fade = AddAnimator(scene, "Fade");
+		for (Entity entity : { space, fade })
+		{
+			auto& animator = entity.GetComponent<AnimatorComponent>();
+			animator.Mesh = mesh;
+			animator.Clip = "Positive";
+			animator.Looping = false;
+			animator.RootMotion = true;
+			animator.RootJoint = "RootJoint";
+			animator.BlendSpaces = { { .Name = "Turn", .Samples = { { .Clip = "Positive" }, { .Clip = "Negative", .X = 1 } } } };
+		}
+		AnimationSystem animation(scene);
+		REQUIRE(animation.PlayBlendSpace(space, "Turn", { 0.5f, 0 }));
+		REQUIRE(animation.CrossFade(fade, "Negative", 2));
+		animation.Update(2);
+		for (Entity entity : { space, fade })
+			CHECK(scene.GetWorldTransform(entity)[2].z == doctest::Approx(-1).epsilon(1e-4));
+	}
+}

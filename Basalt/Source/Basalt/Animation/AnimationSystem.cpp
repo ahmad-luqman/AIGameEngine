@@ -11,6 +11,7 @@
 #include "Basalt/Scene/Scene.h"
 
 #include <spdlog/fmt/ranges.h>
+#include <glm/gtc/constants.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -21,6 +22,11 @@
 namespace Basalt {
 
 	namespace {
+		float BlendRootYaw(float from, float to, float weight)
+		{
+			return from + std::remainder(to - from, glm::two_pi<float>()) * weight;
+		}
+
 		int32_t FindClip(const MeshSource& source, const std::string& name)
 		{
 			if (source.Animations.empty())
@@ -468,7 +474,7 @@ namespace Basalt {
 					outgoing = RootDelta(*playback, playback->Outgoing, playback->OutgoingTime, shown * plainSpeed, playback->OutgoingLooping);
 				const double weight = playback->FadeDuration > 0 ? playback->BlendWeight + shown / (2.0 * playback->FadeDuration) : playback->BlendWeight;
 				const glm::vec3 translation = glm::mix(glm::vec3(outgoing[3]), glm::vec3(motion[3]), static_cast<float>(weight));
-				const float yaw = std::lerp(std::atan2(outgoing[2].x, outgoing[2].z), std::atan2(motion[2].x, motion[2].z), static_cast<float>(weight));
+				const float yaw = BlendRootYaw(std::atan2(outgoing[2].x, outgoing[2].z), std::atan2(motion[2].x, motion[2].z), static_cast<float>(weight));
 				motion = Math::ComposeTransform(translation, glm::vec3(0, yaw, 0), glm::vec3(1)) * tail;
 			}
 			const UUID id = entity.GetUUID();
@@ -742,6 +748,7 @@ namespace Basalt {
 			{
 				glm::vec3 translation(0);
 				float yaw = 0;
+				float total = 0;
 				const auto& space = *playback.Space;
 				if (space.Duration > 0)
 					for (const auto& sample : space.Samples)
@@ -750,7 +757,9 @@ namespace Basalt {
 							const double duration = playback.Source->Animations[sample.Clip].Duration;
 							const auto delta = RootDelta(playback, sample.Clip, space.Phase * duration, advance / space.Duration * duration, playback.Looping);
 							translation += glm::vec3(delta[3]) * sample.Weight;
-							yaw += std::atan2(delta[2].x, delta[2].z) * sample.Weight;
+							const float sampleYaw = std::atan2(delta[2].x, delta[2].z);
+							total += sample.Weight;
+							yaw = total > sample.Weight ? BlendRootYaw(yaw, sampleYaw, sample.Weight / total) : sampleYaw;
 						}
 				motion = Math::ComposeTransform(translation, glm::vec3(0, yaw, 0), glm::vec3(1));
 			}
@@ -847,7 +856,7 @@ namespace Basalt {
 		}
 		std::string problem;
 		const int32_t clip = state.BlendSpace.empty() ? FindClip(*playback.Source, state.Clip) : ResolveSpaceState(*playback.Source, component, space, problem);
-		if (clip < 0 || !problem.empty())
+		if (clip < 0)
 		{
 			const std::string message = "state '" + state.Name + "' cannot play: " + (problem.empty() ? "clip '" + state.Clip + "' not found" : problem);
 			if (message != playback.PlayProblem)
@@ -855,7 +864,10 @@ namespace Basalt {
 			playback.PlayProblem = message;
 			return false;
 		}
-		playback.PlayProblem.clear();
+		if (problem != playback.PlayProblem && !problem.empty())
+			BS_CORE_ERROR("Animator '{}': state '{}': {}", playback.EntityName, state.Name, problem);
+		playback.PlayProblem = problem;
+		space.Problem = problem;
 		if (fade > 0)
 			BeginTransition(playback, fade);
 		else

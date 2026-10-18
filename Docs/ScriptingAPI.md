@@ -1263,8 +1263,8 @@ Conditions have `Parameter`, `Operator` (`Greater`, `Less`, `Equal`, `NotEqual`;
 conditions must test `Equal true`. Array order sets priority. At most one transition starts per update;
 self-transitions are ignored. Exit times are checked at update boundaries against time already played,
 including completed loops, so a large timestep cannot skip the exit. Finished non-looping states still
-check transitions; paused states do not. A missing clip or blend space is reported and retried without
-consuming triggers. A visual graph editor is a future feature.
+check transitions; paused states do not. A missing clip or unplayable blend space is reported and retried without
+consuming triggers. A partially resolved space can play its valid weighted samples, reporting the missing ones. A visual graph editor is a future feature.
 
 ```json
 {
@@ -1289,7 +1289,7 @@ in the animation. Crossfades blend motion from opted-in sources (interrupted ble
 pose). Seeking never moves the entity. `MatchVelocity` is bypassed while the current state drives root motion.
 
 Animation runs after script updates and before physics. Root motion overrides a character's requested
-horizontal velocity for that update, retaining `Move`'s vertical request and normal gravity/collision
+velocity tangent to its up axis for that update, retaining `Move`'s request along that axis and normal gravity/collision
 handling; pausing, stopping, finishing or leaving root-motion states restores gameplay input. Physics still
 uses fixed steps; displacement on frames below one step is queued until the next step. Without a character,
 root motion updates the world transform, respecting its rotation, scale and parent. Bone attachments
