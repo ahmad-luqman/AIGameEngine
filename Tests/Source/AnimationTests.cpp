@@ -1917,10 +1917,25 @@ TEST_SUITE("Animation")
 		auto tiny = scene.CreateEntity("Tiny");
 		tiny.AddComponent<BoneAttachmentComponent>() = { a.GetUUID(), "Tip", { 0, 0, 0 }, glm::quat(1, 0, 0, 0), { 1e-4f, 1e-4f, 1e-4f } };
 		system.Update(.1f);
-		CHECK(CountLogMessages(since, "BoneAttachment 'Squashed': its parent 'Flat' has a zero (or non-finite) world scale") == 1);
-		CHECK(CountLogMessages(since, "BoneAttachment 'ZeroOffset': its world transform would have a zero (or non-finite) scale") == 1);
+		CHECK(CountLogMessages(since, "BoneAttachment 'Squashed': its parent 'Flat' has a zero scale or a non-finite world transform") == 1);
+		CHECK(CountLogMessages(since, "BoneAttachment 'ZeroOffset': its world transform would have a zero scale or non-finite values") == 1);
 		CHECK(squashed.GetTransform().Translation == glm::vec3(0));
 		CHECK(zeroOffset.GetTransform().Scale == glm::vec3(1));
+		// A non-finite translation (a script can write one) above the attachment or on its target does not spread
+		// into it.
+		auto far = scene.CreateEntity("Far");
+		auto follower = scene.CreateChildEntity(far, "Follower");
+		follower.AddComponent<BoneAttachmentComponent>() = { a.GetUUID(), "Tip" };
+		far.GetTransform().Translation.x = INFINITY;
+		auto farTarget = AddAnimator(scene, "FarTarget");
+		farTarget.GetTransform().Translation.y = NAN;
+		auto targetFollower = scene.CreateEntity("TargetFollower");
+		targetFollower.AddComponent<BoneAttachmentComponent>() = { farTarget.GetUUID(), "Tip" };
+		system.Update(.1f);
+		CHECK(CountLogMessages(since, "BoneAttachment 'Follower': its parent 'Far' has a zero scale or a non-finite world transform") == 1);
+		CHECK(CountLogMessages(since, "BoneAttachment 'TargetFollower': its world transform would have a zero scale or non-finite values") == 1);
+		CHECK(follower.GetTransform().Translation == glm::vec3(0));
+		CHECK(targetFollower.GetTransform().Translation == glm::vec3(0));
 		// A small but valid scale still attaches.
 		CHECK(NearMatrix(scene.GetWorldTransform(tiny), scene.GetWorldTransform(a) * (*system.GetPose(a))[0] * glm::scale(glm::mat4(1.0f), glm::vec3(1e-4f)), 1e-6f));
 		// Fixing a problem lets the attachment move; breaking it again reports again.

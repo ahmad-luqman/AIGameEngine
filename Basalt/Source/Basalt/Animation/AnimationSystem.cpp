@@ -563,9 +563,13 @@ namespace Basalt {
 			else if (!GetBoneTransform(target, attachment.Joint, bone, problem))
 				problem = fmt::format("Target '{}': {}", target.GetName(), problem);
 			// SetWorldTransform inverts the parent's world transform and decomposes the result: a zero scale above the
-			// entity, or in the target, joint or offset, has no Transform.
+			// entity, or in the target, joint or offset, has no Transform, and a non-finite value anywhere (a script can
+			// write one into a Translation) would spread into the entity's.
 			glm::mat4 world(1.0f);
 			const auto singular = [](const glm::mat4& matrix) {
+				for (int column = 0; column < 4; column++)
+					if (glm::any(glm::isnan(matrix[column])) || glm::any(glm::isinf(matrix[column])))
+						return true;
 				const glm::mat3 basis(matrix);
 				const float determinant = glm::determinant(basis);
 				return !std::isfinite(determinant) || !(glm::length(basis[0]) > 1e-6f && glm::length(basis[1]) > 1e-6f && glm::length(basis[2]) > 1e-6f) || determinant == 0.0f;
@@ -574,9 +578,9 @@ namespace Basalt {
 			{
 				world = m_Scene.GetWorldTransform(target) * bone * Math::ComposeTransform(attachment.Translation, attachment.Rotation, attachment.Scale);
 				if (const Entity parent = entity.GetParent(); parent && singular(m_Scene.GetWorldTransform(parent)))
-					problem = fmt::format("its parent '{}' has a zero (or non-finite) world scale", parent.GetName());
+					problem = fmt::format("its parent '{}' has a zero scale or a non-finite world transform", parent.GetName());
 				else if (singular(world))
-					problem = "its world transform would have a zero (or non-finite) scale";
+					problem = "its world transform would have a zero scale or non-finite values";
 			}
 			if (!problem.empty())
 			{

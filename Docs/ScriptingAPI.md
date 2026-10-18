@@ -1196,8 +1196,8 @@ attachments to attached entities update in dependency order within the frame. Ed
 transform. Physics reads transforms before animation, so a Kinematic body on an attachment follows one physics
 step later (its body is moved with a velocity, so it pushes what it hits); a Dynamic body is also moved by
 physics (the inspector warns). Missing targets, joints or Animators, a Target inside the entity's own hierarchy
-below it, attachment cycles and a zero scale above the entity (or in its resulting transform) are logged once and
-leave the entity where it is.
+below it, attachment cycles and a zero scale or non-finite value above the entity (or in its resulting transform) are
+logged once and leave the entity where it is.
 
 ## Graphics settings
 
