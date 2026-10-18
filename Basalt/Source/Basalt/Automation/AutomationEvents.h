@@ -24,10 +24,11 @@ namespace Basalt {
 		ScriptError,
 		PlayState,
 		Collision,
+		Animation,
 		Count
 	};
 
-	// Wire names ("log", "scriptError", "playState", "collision"), used in filters and in each event's "event" key.
+	// Wire names ("log", "scriptError", "playState", "collision", "animation"), used in filters and in each event's "event" key.
 	const char* AutomationEventTypeName(AutomationEventType type);
 	std::optional<AutomationEventType> AutomationEventTypeFromName(std::string_view name);
 	// Every type's wire name in enum order (command schemas list them).
@@ -54,7 +55,7 @@ namespace Basalt {
 		Streamed
 	};
 
-	// Fans engine events (log lines, script errors, play-state changes, collisions) out to automation
+	// Fans engine events (log lines, script errors, play-state changes, collisions, animation events) out to automation
 	// subscriptions, so tools follow a running game without polling log.get. Thread-safe: log lines arrive on any
 	// thread, the other events on the thread that updates the scene, and the TCP server thread drains streamed
 	// subscriptions. Events are finished JSON when published, so draining never touches the scene. Nothing is

@@ -278,6 +278,8 @@ namespace Basalt {
 		void ReportLoadProblem(const std::string& message);
 		void DestroyEntityImmediate(Entity entity);
 		void FlushPendingDestruction();
+		// Delivers the animation events of this frame to the event listener and the scripts.
+		void DispatchAnimationEvents();
 		// Session-owned identity stream. Only non-generated IDs need a permanent reservation; live
 		// generated IDs are protected by the entity map without retaining every retired spawn forever.
 		struct SessionIdentity

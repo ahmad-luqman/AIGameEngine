@@ -19,6 +19,8 @@ namespace Basalt {
 		virtual ~SceneEventListener() = default;
 		// The transitions scripts receive as OnCollisionBegin/End and OnTriggerEnter/Exit, before the scripts do.
 		virtual void OnContact(Scene& scene, ContactEventType type, Entity first, Entity second, const std::optional<ContactInfo>& contact) = 0;
+		// An Animator event marker playback crossed, before scripts receive it as OnAnimationEvent.
+		virtual void OnAnimationEvent(Scene& scene, Entity entity, const std::string& name, const std::string& clip) = 0;
 		// Every error ScriptEngine::ReportError records.
 		virtual void OnScriptError(Scene& scene, const std::string& message) = 0;
 	};

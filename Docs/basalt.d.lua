@@ -420,6 +420,33 @@ function Entity:IsAnimationPlaying() end
 ---@return string[]
 function Entity:GetAnimationClips() end
 
+---Plays one of the Animator's BlendSpaces at parameter (x, y), fading from the current pose over fadeSeconds
+---(default 0); playing the running space again only moves its parameter. Returns success.
+---@param space string
+---@param x number
+---@param y? number
+---@param fadeSeconds? number
+---@return boolean
+function Entity:PlayBlendSpace(space, x, y, fadeSeconds) end
+
+---Moves the running blend space's parameter (y defaults to 0); false when no blend space is playing.
+---@param x number
+---@param y? number
+---@return boolean
+function Entity:SetBlendSpaceParameter(x, y) end
+
+---The running blend space's weight per clip name (empty when none is playing).
+---@return table<string, number>
+function Entity:GetBlendSpaceWeights() end
+
+---World position, rotation and scale of the first node named joint in the Animator's current pose; nil (and a
+---logged error) when there is no such node.
+---@param joint string
+---@return Vec3? position
+---@return Quat? rotation
+---@return Vec3? scale
+function Entity:GetBoneTransform(joint) end
+
 ---Starts a new ParticleEmitter cycle unless it is playing.
 function Entity:PlayParticles() end
 
@@ -1160,6 +1187,7 @@ function Storage.Load() end
 ---@field OnTriggerEnter? fun(self: BasaltScript, other: Entity, contact: ContactInfo?)
 ---@field OnTriggerExit? fun(self: BasaltScript, other: Entity, contact: ContactInfo?)
 ---@field OnJointBreak? fun(self: BasaltScript, other: Entity?)
+---@field OnAnimationEvent? fun(self: BasaltScript, name: string, clip: string)
 ---@field OnGamepadConnected? fun(self: BasaltScript, index: integer)
 ---@field OnGamepadDisconnected? fun(self: BasaltScript, index: integer)
 ---@field OnReload? fun(self: BasaltScript) After a hot reload moved the instance onto the new class
@@ -1186,6 +1214,7 @@ function BasaltScript:StopAllCoroutines() end
 ---| "Camera"
 ---| "Mesh"
 ---| "Animator"
+---| "BoneAttachment"
 ---| "Material"
 ---| "DirectionalLight"
 ---| "PointLight"
@@ -1247,6 +1276,17 @@ function BasaltScript:StopAllCoroutines() end
 ---@field Looping boolean
 ---@field PlayOnStart boolean
 ---@field CastShadows boolean
+---@field MatchVelocity boolean
+---@field Events AnimationEvent[]
+---@field BlendSpaces AnimationBlendSpace[]
+
+---BoneAttachment data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
+---@class BoneAttachmentComponent
+---@field Target integer
+---@field Joint string
+---@field Translation number[]
+---@field Rotation number[]
+---@field Scale number[]
 
 ---Material data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
 ---@class MaterialComponent
@@ -1531,6 +1571,25 @@ function BasaltScript:StopAllCoroutines() end
 ---@class PrefabComponent
 ---@field Prefab string
 
+---An element of a component list field.
+---@class AnimationEvent
+---@field Clip string
+---@field Time number
+---@field Name string
+
+---An element of a component list field.
+---@class AnimationBlendSpace
+---@field Name string
+---@field Type "1D"|"2D"
+---@field Samples AnimationBlendSample[]
+
+---An element of a component list field.
+---@class AnimationBlendSample
+---@field Clip string
+---@field X number
+---@field Y number
+---@field Speed number
+
 ---Returns a copy of the component's fields (vectors as arrays, rotations in Euler degrees, entity references
 ---as IDs), or nil when the entity does not have the component.
 ---@param name ComponentName
@@ -1540,6 +1599,7 @@ function BasaltScript:StopAllCoroutines() end
 ---@overload fun(self: Entity, name: "Camera"): CameraComponent?
 ---@overload fun(self: Entity, name: "Mesh"): MeshComponent?
 ---@overload fun(self: Entity, name: "Animator"): AnimatorComponent?
+---@overload fun(self: Entity, name: "BoneAttachment"): BoneAttachmentComponent?
 ---@overload fun(self: Entity, name: "Material"): MaterialComponent?
 ---@overload fun(self: Entity, name: "DirectionalLight"): DirectionalLightComponent?
 ---@overload fun(self: Entity, name: "PointLight"): PointLightComponent?

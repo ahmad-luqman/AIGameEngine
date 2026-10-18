@@ -1,5 +1,7 @@
 #pragma once
 
+#include <Basalt/Scene/ComponentRegistry.h>
+
 #include <nlohmann/json.hpp>
 
 #include <string>
@@ -21,5 +23,24 @@ namespace Basalt {
 	// picker when the name contains "Color"; three booleans -> per-axis checkboxes, three strings with
 	// enumOptions -> per-axis combos.
 	JsonFieldResult DrawJsonField(const std::string& name, nlohmann::json& value, const std::vector<std::string>* enumOptions = nullptr);
+
+	// Structural edits of a List field (ComponentFieldKind::List) value.
+	enum class JsonListEdit : uint8_t
+	{
+		Add,       // appends the element schema's default (index unused)
+		Duplicate, // inserts a copy after the element
+		Remove,
+		MoveUp,
+		MoveDown
+	};
+
+	// Applies one edit to a JSON array of `type`'s elements; false (array unchanged) when it does not apply: an
+	// index out of range, a move past either end, or growing past type.MaxCount.
+	bool EditJsonList(nlohmann::json& array, JsonListEdit edit, size_t index, const ComponentFieldType& type);
+
+	// Draws a List field as a tree: one node per element (labelled by its Name or Clip) holding the element's fields,
+	// with move, duplicate and remove controls per element and an Add button. Structural edits change and commit at
+	// once; field edits report like DrawJsonField.
+	JsonFieldResult DrawJsonList(const std::string& name, nlohmann::json& array, const ComponentFieldType& type);
 
 }

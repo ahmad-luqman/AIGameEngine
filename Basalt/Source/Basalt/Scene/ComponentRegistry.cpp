@@ -34,8 +34,10 @@ namespace Basalt {
 		class FieldReader
 		{
 		public:
-			explicit FieldReader(const json* data)
+			// `prefix` qualifies field names in error messages for list elements, e.g. "Events[2].".
+			explicit FieldReader(const json* data, std::string prefix = {})
 				: m_Data(data)
+				, m_Prefix(std::move(prefix))
 			{
 			}
 
@@ -50,7 +52,7 @@ namespace Basalt {
 				Describe(name, TypeOf<T>());
 				const json* element = Find(name);
 				if (element)
-					Read(name, *element, value);
+					Read(Qualify(name).c_str(), *element, value);
 			}
 
 			// A field holding another entity's UUID (0 = none). Recorded so tools can resolve names and
@@ -60,8 +62,14 @@ namespace Basalt {
 				Describe(name, { ComponentFieldKind::Entity });
 				const json* element = Find(name);
 				if (element)
-					Read(name, *element, value);
+					Read(Qualify(name).c_str(), *element, value);
 			}
+
+			// A variable-length array of objects, each read with Fields(FieldReader&, E&) from a default E (so
+			// missing keys keep their defaults). The whole list is replaced; an empty object counts as an empty
+			// list (Lua cannot tell the two apart). Defined below, after the element overloads it calls.
+			template<typename E>
+			void ListField(const char* name, std::vector<E>& value, uint32_t maxCount, const char* elementName);
 
 			// Rotation stored as Euler angles in degrees.
 			void RotationField(const char* name, glm::quat& value)
@@ -71,7 +79,7 @@ namespace Basalt {
 				if (!element)
 					return;
 				glm::vec3 degrees;
-				Read(name, *element, degrees);
+				Read(Qualify(name).c_str(), *element, degrees);
 				value = Math::QuatFromEuler(glm::radians(degrees));
 			}
 
@@ -83,7 +91,7 @@ namespace Basalt {
 				if (!element)
 					return;
 				float degrees = 0.0f;
-				Read(name, *element, degrees);
+				Read(Qualify(name).c_str(), *element, degrees);
 				radiansValue = glm::radians(degrees);
 			}
 
@@ -93,7 +101,7 @@ namespace Basalt {
 				DescribeEnum(name, { ComponentFieldKind::Enum }, names);
 				const json* element = Find(name);
 				if (element)
-					value = ReadEnum<E>(name, *element, names);
+					value = ReadEnum<E>(Qualify(name).c_str(), *element, names);
 			}
 
 			// One enum value per axis, written as an array of names (e.g. ["Off", "Position", "Off"]). The
@@ -106,11 +114,12 @@ namespace Basalt {
 				const json* element = Find(name);
 				if (!element)
 					return;
+				const std::string qualified = Qualify(name);
 				if (!element->is_array() || element->size() != Count)
-					throw std::runtime_error(std::string("field '") + name + "' must be an array of " + std::to_string(Count) + " strings");
+					throw std::runtime_error("field '" + qualified + "' must be an array of " + std::to_string(Count) + " strings");
 				std::array<E, Count> result;
 				for (size_t i = 0; i < Count; i++)
-					result[i] = ReadEnum<E>(name, (*element)[i], names);
+					result[i] = ReadEnum<E>(qualified.c_str(), (*element)[i], names);
 				value = result;
 			}
 
@@ -141,7 +150,7 @@ namespace Basalt {
 					std::string valid;
 					for (size_t i = 0; i < validFields.size(); i++)
 						valid += (i ? ", " : "") + validFields[i];
-					throw std::runtime_error("unknown field '" + it.key() + "' (valid: " + valid + ")");
+					throw std::runtime_error("unknown field '" + Qualify(it.key().c_str()) + "' (valid: " + valid + ")");
 				}
 			}
 
@@ -149,8 +158,10 @@ namespace Basalt {
 			// Collect mode (no data) records what tools need about each field; reads skip that bookkeeping.
 			bool IsCollecting() const { return m_Data == nullptr; }
 
+			std::string Qualify(const char* name) const { return m_Prefix + name; }
+
 			// Records a field in collect mode: its name (in declaration order), type, and whether it names an entity.
-			void Describe(const char* name, ComponentFieldType type)
+			void Describe(const char* name, const ComponentFieldType& type)
 			{
 				if (!IsCollecting())
 					return;
@@ -161,7 +172,7 @@ namespace Basalt {
 			}
 
 			template<size_t N>
-			void DescribeEnum(const char* name, ComponentFieldType type, const char* const (&names)[N])
+			void DescribeEnum(const char* name, const ComponentFieldType& type, const char* const (&names)[N])
 			{
 				Describe(name, type);
 				if (IsCollecting())
@@ -170,7 +181,7 @@ namespace Basalt {
 
 			// The JSON type a Read overload accepts (see ComponentInfo::FieldTypes).
 			template<typename T>
-			static constexpr ComponentFieldType TypeOf()
+			static ComponentFieldType TypeOf()
 			{
 				if constexpr (std::is_same_v<T, float>)
 					return { ComponentFieldKind::Number };
@@ -285,12 +296,82 @@ namespace Basalt {
 
 		private:
 			const json* m_Data = nullptr;
+			std::string m_Prefix;
 			std::unordered_set<std::string> m_Consumed;
 			std::vector<std::string> m_FieldNames;
 			std::map<std::string, std::vector<std::string>> m_EnumOptions;
 			std::vector<std::string> m_EntityFields;
 			std::map<std::string, ComponentFieldType> m_FieldTypes;
 		};
+
+		// List element types. Their Fields and Write overloads are defined with the components' below; these
+		// declarations let the list templates find them.
+		void Fields(FieldReader& r, AnimationEvent& c);
+		void Fields(FieldReader& r, AnimationBlendSample& c);
+		void Fields(FieldReader& r, AnimationBlendSpace& c);
+		json Write(const AnimationEvent& c);
+		json Write(const AnimationBlendSample& c);
+		json Write(const AnimationBlendSpace& c);
+
+		// The shape of a list element, built once per element type from its field list.
+		template<typename E>
+		std::shared_ptr<const ComponentObjectSchema> SchemaOf(const char* elementName)
+		{
+			static const std::shared_ptr<const ComponentObjectSchema> s_Schema = [elementName] {
+				FieldReader collector(nullptr);
+				E element{};
+				Fields(collector, element);
+				// Entity references are remapped and resolved by name only at the top level of a component.
+				BS_CORE_ASSERT(collector.GetEntityFields().empty(), "list elements cannot hold entity fields");
+				auto schema = std::make_shared<ComponentObjectSchema>();
+				schema->Name = elementName;
+				schema->Fields = collector.GetFieldNames();
+				schema->FieldTypes = collector.GetFieldTypes();
+				schema->EnumOptions = collector.GetEnumOptions();
+				schema->Default = Write(element);
+				return schema;
+			}();
+			return s_Schema;
+		}
+
+		template<typename E>
+		void FieldReader::ListField(const char* name, std::vector<E>& value, uint32_t maxCount, const char* elementName)
+		{
+			const std::shared_ptr<const ComponentObjectSchema> schema = SchemaOf<E>(elementName);
+			Describe(name, { ComponentFieldKind::List, 0, maxCount, schema });
+			const json* element = Find(name);
+			if (!element)
+				return;
+			const std::string qualified = Qualify(name);
+			const bool emptyObject = element->is_object() && element->empty();
+			if (!element->is_array() && !emptyObject)
+				throw std::runtime_error("field '" + qualified + "' must be an array of objects");
+			if (element->size() > maxCount)
+				throw std::runtime_error(fmt::format("field '{}' has {} elements (at most {})", qualified, element->size(), maxCount));
+			std::vector<E> result;
+			result.reserve(emptyObject ? 0 : element->size());
+			for (size_t i = 0; !emptyObject && i < element->size(); i++)
+			{
+				const json& item = (*element)[i];
+				const std::string itemName = fmt::format("{}[{}]", qualified, i);
+				if (!item.is_object())
+					throw std::runtime_error("field '" + itemName + "' must be an object");
+				FieldReader reader(&item, itemName + ".");
+				E& entry = result.emplace_back();
+				Fields(reader, entry);
+				reader.CheckUnknownKeys(schema->Fields);
+			}
+			value = std::move(result);
+		}
+
+		template<typename E>
+		json ListToJson(const std::vector<E>& list)
+		{
+			json array = json::array();
+			for (const E& element : list)
+				array.push_back(Write(element));
+			return array;
+		}
 
 		template<glm::length_t L>
 		json ToJson(const glm::vec<L, float, glm::defaultp>& value)
@@ -334,6 +415,7 @@ namespace Basalt {
 		constexpr const char* s_ParticleBlendNames[] = { "Alpha", "Additive" };
 		constexpr const char* s_UIHorizontalAlignNames[] = { "Left", "Center", "Right" };
 		constexpr const char* s_UIVerticalAlignNames[] = { "Top", "Middle", "Bottom" };
+		constexpr const char* s_BlendSpaceTypeNames[] = { "1D", "2D" };
 		// Names are indexed by enum value; a new enum value needs a name here.
 		static_assert(std::size(s_RigidBodyTypeNames) == static_cast<size_t>(RigidBodyType::Kinematic) + 1);
 		static_assert(std::size(s_ProjectionTypeNames) == static_cast<size_t>(SceneCamera::ProjectionType::Orthographic) + 1);
@@ -345,6 +427,7 @@ namespace Basalt {
 		static_assert(std::size(s_ParticleBlendNames) == ParticleBlendModeCount);
 		static_assert(std::size(s_UIHorizontalAlignNames) == UIHorizontalAlignCount);
 		static_assert(std::size(s_UIVerticalAlignNames) == UIVerticalAlignCount);
+		static_assert(std::size(s_BlendSpaceTypeNames) == AnimationBlendSpaceTypeCount);
 
 		// The name of an enum value. C++ code can store a value outside the enum (the registry never does);
 		// writing it as the first name keeps saving from reading past the table.
@@ -399,6 +482,28 @@ namespace Basalt {
 			r.Field("CastShadows", c.CastShadows);
 		}
 
+		void Fields(FieldReader& r, AnimationEvent& c)
+		{
+			r.Field("Clip", c.Clip);
+			r.Field("Time", c.Time);
+			r.Field("Name", c.Name);
+		}
+
+		void Fields(FieldReader& r, AnimationBlendSample& c)
+		{
+			r.Field("Clip", c.Clip);
+			r.Field("X", c.X);
+			r.Field("Y", c.Y);
+			r.Field("Speed", c.Speed);
+		}
+
+		void Fields(FieldReader& r, AnimationBlendSpace& c)
+		{
+			r.Field("Name", c.Name);
+			r.EnumField("Type", c.Type, s_BlendSpaceTypeNames);
+			r.ListField("Samples", c.Samples, AnimatorComponent::MaxBlendSamples, "AnimationBlendSample");
+		}
+
 		void Fields(FieldReader& r, AnimatorComponent& c)
 		{
 			r.Field("Mesh", c.Mesh);
@@ -407,6 +512,18 @@ namespace Basalt {
 			r.Field("Looping", c.Looping);
 			r.Field("PlayOnStart", c.PlayOnStart);
 			r.Field("CastShadows", c.CastShadows);
+			r.Field("MatchVelocity", c.MatchVelocity);
+			r.ListField("Events", c.Events, AnimatorComponent::MaxEvents, "AnimationEvent");
+			r.ListField("BlendSpaces", c.BlendSpaces, AnimatorComponent::MaxBlendSpaces, "AnimationBlendSpace");
+		}
+
+		void Fields(FieldReader& r, BoneAttachmentComponent& c)
+		{
+			r.Field("Target", c.Target);
+			r.Field("Joint", c.Joint);
+			r.Field("Translation", c.Translation);
+			r.RotationField("Rotation", c.Rotation);
+			r.Field("Scale", c.Scale);
 		}
 
 		void Fields(FieldReader& r, MaterialComponent& c)
@@ -765,9 +882,39 @@ namespace Basalt {
 			return { { "Mesh", c.Mesh }, { "MeshIndex", c.MeshIndex }, { "CastShadows", c.CastShadows } };
 		}
 
+		json Write(const AnimationEvent& c)
+		{
+			return { { "Clip", c.Clip }, { "Time", c.Time }, { "Name", c.Name } };
+		}
+
+		json Write(const AnimationBlendSample& c)
+		{
+			return { { "Clip", c.Clip }, { "X", c.X }, { "Y", c.Y }, { "Speed", c.Speed } };
+		}
+
+		json Write(const AnimationBlendSpace& c)
+		{
+			return { { "Name", c.Name }, { "Type", EnumName(s_BlendSpaceTypeNames, c.Type) }, { "Samples", ListToJson(c.Samples) } };
+		}
+
 		json Write(const AnimatorComponent& c)
 		{
-			return { { "Mesh", c.Mesh }, { "Clip", c.Clip }, { "Speed", c.Speed }, { "Looping", c.Looping }, { "PlayOnStart", c.PlayOnStart }, { "CastShadows", c.CastShadows } };
+			return {
+				{ "Mesh", c.Mesh },
+				{ "Clip", c.Clip },
+				{ "Speed", c.Speed },
+				{ "Looping", c.Looping },
+				{ "PlayOnStart", c.PlayOnStart },
+				{ "CastShadows", c.CastShadows },
+				{ "MatchVelocity", c.MatchVelocity },
+				{ "Events", ListToJson(c.Events) },
+				{ "BlendSpaces", ListToJson(c.BlendSpaces) },
+			};
+		}
+
+		json Write(const BoneAttachmentComponent& c)
+		{
+			return { { "Target", static_cast<uint64_t>(c.Target) }, { "Joint", c.Joint }, { "Translation", ToJson(c.Translation) }, { "Rotation", RotationToJson(c.Rotation) }, { "Scale", ToJson(c.Scale) } };
 		}
 
 		json Write(const MaterialComponent& c)
@@ -1162,6 +1309,54 @@ namespace Basalt {
 		{
 			if (!std::isfinite(c.Speed) || c.Speed < 0.0f || c.Speed > MaxAnimatorSpeed)
 				return "Speed must be finite and between 0 and 100";
+			// C++ code can grow the lists past what the reader accepts.
+			if (c.Events.size() > AnimatorComponent::MaxEvents || c.BlendSpaces.size() > AnimatorComponent::MaxBlendSpaces)
+				return fmt::format("Animator holds at most {} events and {} blend spaces", AnimatorComponent::MaxEvents, AnimatorComponent::MaxBlendSpaces);
+			for (size_t i = 0; i < c.Events.size(); i++)
+			{
+				const AnimationEvent& event = c.Events[i];
+				if (event.Name.empty())
+					return fmt::format("Events[{}].Name must not be empty", i);
+				if (!std::isfinite(event.Time) || event.Time < 0.0f)
+					return fmt::format("Events[{}].Time {} must be finite and nonnegative", i, event.Time);
+			}
+			for (size_t i = 0; i < c.BlendSpaces.size(); i++)
+			{
+				const AnimationBlendSpace& space = c.BlendSpaces[i];
+				if (space.Name.empty())
+					return fmt::format("BlendSpaces[{}].Name must not be empty", i);
+				for (size_t j = 0; j < i; j++)
+				{
+					if (c.BlendSpaces[j].Name == space.Name)
+						return fmt::format("BlendSpaces[{}].Name '{}' is already used by BlendSpaces[{}]", i, space.Name, j);
+				}
+				if (space.Samples.size() > AnimatorComponent::MaxBlendSamples)
+					return fmt::format("BlendSpaces[{}] holds at most {} samples", i, AnimatorComponent::MaxBlendSamples);
+				const bool twoD = space.Type == AnimationBlendSpaceType::TwoD;
+				for (size_t j = 0; j < space.Samples.size(); j++)
+				{
+					const AnimationBlendSample& sample = space.Samples[j];
+					if (!std::isfinite(sample.X) || !std::isfinite(sample.Y))
+						return fmt::format("BlendSpaces[{}].Samples[{}] position ({}, {}) must be finite", i, j, sample.X, sample.Y);
+					if (!std::isfinite(sample.Speed) || sample.Speed < 0.0f)
+						return fmt::format("BlendSpaces[{}].Samples[{}].Speed {} must be finite and nonnegative", i, j, sample.Speed);
+					// Two samples at one position would have no defined weights.
+					for (size_t k = 0; k < j; k++)
+					{
+						const AnimationBlendSample& other = space.Samples[k];
+						if (other.X == sample.X && (!twoD || other.Y == sample.Y))
+							return fmt::format("BlendSpaces[{}].Samples[{}] is at the same position as Samples[{}]", i, j, k);
+					}
+				}
+			}
+			return {};
+		}
+
+		std::string Validate(const BoneAttachmentComponent& c)
+		{
+			const auto finite = [](const glm::vec3& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); };
+			if (!finite(c.Translation) || !finite(c.Scale))
+				return "Translation and Scale must be finite";
 			return {};
 		}
 
@@ -1316,6 +1511,7 @@ namespace Basalt {
 			infos.push_back(MakeCameraInfo());
 			infos.push_back(MakeInfo<MeshComponent>("Mesh"));
 			infos.push_back(MakeInfo<AnimatorComponent>("Animator"));
+			infos.push_back(MakeInfo<BoneAttachmentComponent>("BoneAttachment"));
 			infos.push_back(MakeInfo<MaterialComponent>("Material"));
 			infos.push_back(MakeInfo<DirectionalLightComponent>("DirectionalLight"));
 			infos.push_back(MakeInfo<PointLightComponent>("PointLight"));
@@ -1347,7 +1543,9 @@ namespace Basalt {
 
 	std::string ComponentFieldType::ToString() const
 	{
-		static constexpr const char* const Names[] = { "number", "integer", "boolean", "string", "object", "entity", "enum" };
+		if (Kind == ComponentFieldKind::List)
+			return "object[]";
+		static constexpr const char* const Names[] = { "number", "integer", "boolean", "string", "object", "entity", "list", "enum" };
 		static_assert(std::size(Names) == static_cast<size_t>(ComponentFieldKind::Enum) + 1, "one name per field kind");
 		const char* name = EnumNameOrNull(Names, Kind);
 		std::string text = name ? name : "unknown";

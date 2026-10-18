@@ -11,6 +11,7 @@
 #include "Basalt/Renderer/DebugDraw.h"
 #include "Basalt/Scene/ComponentRegistry.h"
 #include "Basalt/Scene/Entity.h"
+#include "Basalt/Scene/SceneEventListener.h"
 #include "Basalt/Scene/SceneSerializer.h"
 #include "Basalt/Scripting/ScriptEngine.h"
 #include "Basalt/UI/GameUI.h"
@@ -728,9 +729,11 @@ namespace Basalt {
 		m_PhysicsWorld->Step(ts);
 		if (m_State == SceneState::Play)
 			m_ScriptEngine->LateUpdate(ts);
+		// Animation moves BoneAttachment entities, so it runs before particles.
+		m_AnimationSystem->Update(ts);
+		DispatchAnimationEvents();
 		// After every system that moves entities, so particles leave from where the emitter is this frame.
 		m_ParticleSystem->Update(ts);
-		m_AnimationSystem->Update(ts);
 		if (m_State == SceneState::Play)
 			m_AudioSystem->Update(ts);
 		m_DeferDestruction--;
@@ -741,6 +744,21 @@ namespace Basalt {
 
 		if (m_State == SceneState::Play && m_PendingLoad)
 			ApplyPendingLoad();
+	}
+
+	void Scene::DispatchAnimationEvents()
+	{
+		for (const AnimationEventRecord& record : m_AnimationSystem->TakeEvents())
+		{
+			// An earlier callback may have destroyed the entity.
+			Entity entity = GetEntityByUUID(record.Entity);
+			if (!entity || IsEntityPendingDestruction(entity))
+				continue;
+			if (m_EventListener)
+				m_EventListener->OnAnimationEvent(*this, entity, record.Name, record.Clip);
+			if (m_ScriptEngine)
+				m_ScriptEngine->OnAnimationEvent(entity, record.Name, record.Clip);
+		}
 	}
 
 	bool Scene::RequestLoad(const std::string& path, std::string& outError)

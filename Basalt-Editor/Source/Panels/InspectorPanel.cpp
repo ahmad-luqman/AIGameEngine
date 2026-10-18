@@ -206,7 +206,8 @@ namespace Basalt {
 					if (mixed)
 						ImGui::TextDisabled("%s (mixed)", field.c_str());
 					const auto options = info.EnumOptions.find(field);
-					const auto result = DrawJsonField(field, data[field], options == info.EnumOptions.end() ? nullptr : &options->second);
+					const ComponentFieldType& type = info.FieldTypes.at(field);
+					const auto result = type.Kind == ComponentFieldKind::List ? DrawJsonList(field, data[field], type) : DrawJsonField(field, data[field], options == info.EnumOptions.end() ? nullptr : &options->second);
 					m_Context.EditField("editor.component_set", { { "component", info.Name }, { "data", { { field, data[field] } } } }, result.Changed, result.Committed);
 				}
 			}
@@ -296,6 +297,12 @@ namespace Basalt {
 							filter = JointReferenceFilter(entity, joint, field);
 						}
 						DrawEntityReference(entity, info.Name, field, data[field].get<uint64_t>(), filter, noneLabel);
+						continue;
+					}
+					if (const ComponentFieldType& type = info.FieldTypes.at(field); type.Kind == ComponentFieldKind::List)
+					{
+						const JsonFieldResult result = DrawJsonList(field, data[field], type);
+						m_Context.EditField("component.set", { { "entity", id }, { "component", info.Name }, { "data", { { field, data[field] } } } }, result.Changed, result.Committed);
 						continue;
 					}
 					auto options = info.EnumOptions.find(field);

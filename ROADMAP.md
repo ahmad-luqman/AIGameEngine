@@ -51,8 +51,8 @@ The features most games need, roughly in order of impact.
 - **Particle follow-ups — M.** `ParticleEmitterComponent` (Particles/ParticleSystem) covers CPU simulation,
   bursts, shapes, start-to-end color and size, alpha/additive billboards and Lua control. Missing: soft
   particles (fade against scene depth; needs a depth copy, since the transparent pass has depth attached),
-  per-particle rotation and random start size/color, color/size curves with several keys (needs an
-  inspector widget for arrays of objects), lit particles, an edit-mode preview, and simulation in a compute
+  per-particle rotation and random start size/color, color/size curves with several keys (a list
+  field of key objects: `FieldReader::ListField` and the inspector's list widget already exist), lit particles, an edit-mode preview, and simulation in a compute
   pass if particle counts demand it.
 - **Temporal anti-aliasing — M.** TAA (jittered projection, motion
   vectors from the depth prepass, history reprojection with neighbourhood clamping), which also
@@ -71,22 +71,11 @@ The features most games need, roughly in order of impact.
 
 ### Animation
 
-Skeletal playback, crossfades and a two-clip weighted blend (`AnimationSystem`) are implemented; physics
-already provides character controllers (`MoveCharacter`, `IsCharacterGrounded`, ground normal) and
-raycasts. The items below turn that into natural character movement (walk, run, jump, uneven ground), in
-order of impact.
+Skeletal playback, crossfades, two-clip blends, 1D/2D blend spaces with phase sync and velocity matching,
+animation events and bone attachments (`AnimationSystem`) are implemented; physics already provides
+character controllers (`MoveCharacter`, `IsCharacterGrounded`, ground normal) and raycasts. The items
+below turn that into natural character movement (walk, run, jump, uneven ground), in order of impact.
 
-- **Animation events — S.** Named markers on a clip's timeline (footsteps, attack hit frames, VFX cues),
-  declared per clip on the `Animator` (needs the array-of-objects inspector widget, see Particles) and
-  delivered to scripts as `OnAnimationEvent(name, clip)`. Fire every marker crossed in a frame, including
-  across a loop wrap, a seek and during crossfades (outgoing clip events optional).
-- **Bone attachments — S.** `e:GetBoneTransform(joint)` (world space) and a component that keeps an
-  entity attached to a joint of another entity's `Animator` (weapon in hand, hat on head), updated after
-  the pose is sampled and before transforms are consumed by physics and rendering.
-- **Blend spaces and speed sync — M.** Generalize `Blend` to 1D and 2D blend spaces: N clips placed on
-  parameter axes (speed for idle/walk/jog/run, speed × direction for strafing), weighted by the parameter
-  value. Synchronize the clips by normalized time (phase) so feet stay in step, and add an Animator
-  playback-speed mode that matches the clip to the character's actual velocity to prevent foot sliding.
 - **Animation state machine — L.** A data-driven graph (project asset, edited through automation commands
   so agents can author it) of states (a clip or blend space) and transitions with conditions on named
   parameters (`Speed`, `Grounded`) and triggers (`Jump`), crossfade durations and exit times. Lua:

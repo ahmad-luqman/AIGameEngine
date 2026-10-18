@@ -2279,6 +2279,8 @@ namespace {
 			case ComponentFieldKind::Object:
 				scalar = "table";
 				break;
+			case ComponentFieldKind::List:
+				return type.Element->Name + "[]";
 			case ComponentFieldKind::Enum:
 			{
 				std::string options;

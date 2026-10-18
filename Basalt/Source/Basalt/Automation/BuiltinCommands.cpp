@@ -100,6 +100,27 @@ namespace Basalt {
 			return value;
 		}
 
+		// component.types' description of a field list: names, types and enum options, plus each list field's
+		// element type described the same way (recursively).
+		json DescribeFields(const std::vector<std::string>& fields, const std::map<std::string, ComponentFieldType>& fieldTypes, const std::map<std::string, std::vector<std::string>>& enumOptions)
+		{
+			json types = json::object();
+			json lists = json::object();
+			for (const auto& [field, type] : fieldTypes)
+			{
+				types[field] = type.ToString();
+				if (type.Kind != ComponentFieldKind::List)
+					continue;
+				const ComponentObjectSchema& element = *type.Element;
+				json list = DescribeFields(element.Fields, element.FieldTypes, element.EnumOptions);
+				list["name"] = element.Name;
+				list["maxCount"] = type.MaxCount;
+				list["default"] = element.Default;
+				lists[field] = std::move(list);
+			}
+			return { { "fields", fields }, { "types", types }, { "enums", enumOptions }, { "lists", lists } };
+		}
+
 		bool OptionalBool(const json& params, const char* name, bool fallback)
 		{
 			auto it = params.find(name);
@@ -517,14 +538,15 @@ namespace Basalt {
 				return json{ { "commands", commands } };
 			});
 
-			Add(registry, "component.types", "Lists every component type with its fields (for component.set): their names in order, each field's JSON type ('number', 'integer', 'boolean', 'string', 'object', 'entity', 'enum', or an array such as 'number[3]'), the values of enum fields, and the fields that reference entities.", Schema::Object(), [](AutomationSession&, const json&) {
+			Add(registry, "component.types", "Lists every component type with its fields (for component.set): their names in order, each field's JSON type ('number', 'integer', 'boolean', 'string', 'object', 'entity', 'enum', an array such as 'number[3]', or 'object[]' for a list of objects), the values of enum fields, the fields that reference entities, and for each list field its element type under 'lists' ({name, fields, types, enums, maxCount, default, lists}; a set replaces the whole list).", Schema::Object(), [](AutomationSession&, const json&) {
 				json types = json::array();
 				for (const ComponentInfo& info : ComponentRegistry::GetAll())
 				{
-					json fieldTypes = json::object();
-					for (const auto& [field, type] : info.FieldTypes)
-						fieldTypes[field] = type.ToString();
-					types.push_back({ { "name", info.Name }, { "fields", info.Fields }, { "types", fieldTypes }, { "enums", info.EnumOptions }, { "entityFields", info.EntityFields }, { "core", info.IsCore } });
+					json description = DescribeFields(info.Fields, info.FieldTypes, info.EnumOptions);
+					description["name"] = info.Name;
+					description["entityFields"] = info.EntityFields;
+					description["core"] = info.IsCore;
+					types.push_back(std::move(description));
 				}
 				return json{ { "components", types } };
 			});
@@ -1916,7 +1938,7 @@ namespace Basalt {
 				levels.emplace_back(LogLevelName(static_cast<LogLevel>(level)));
 			json minLevel = Schema::String(fmt::format("string, lowest log level delivered: {} (default info)", fmt::join(levels, ", ")));
 			minLevel["enum"] = levels;
-			Add(registry, "events.subscribe", "Starts collecting events: log lines, script errors, play-state changes (play, simulate, stop; pause and resume from the editor's Pause button) and collisions (collisionBegin/End and triggerEnter/Exit, in Play and Simulate). On the editor's TCP server a line-protocol connection receives them as {\"event\": ...} lines without 'ok' (and {\"event\": \"dropped\"} when it falls behind); MCP and CLI clients read them with events.poll. A TCP connection's subscriptions end with it. Returns {subscription, types, minLevel, streamed}.", Schema::Object({ { "types", typesSchema }, { "minLevel", Schema::Nullable(minLevel) } }), [](AutomationSession& session, const json& params) {
+			Add(registry, "events.subscribe", "Starts collecting events: log lines, script errors, play-state changes (play, simulate, stop; pause and resume from the editor's Pause button) collisions (collisionBegin/End and triggerEnter/Exit, in Play and Simulate) and animation events (Animator Events markers playback crossed: name, clip, entity; in Play and Simulate). On the editor's TCP server a line-protocol connection receives them as {\"event\": ...} lines without 'ok' (and {\"event\": \"dropped\"} when it falls behind); MCP and CLI clients read them with events.poll. A TCP connection's subscriptions end with it. Returns {subscription, types, minLevel, streamed}.", Schema::Object({ { "types", typesSchema }, { "minLevel", Schema::Nullable(minLevel) } }), [](AutomationSession& session, const json& params) {
 				AutomationEventHub::Filter filter;
 				if (auto it = params.find("types"); it != params.end())
 					filter.Types = ParseEventTypes(*it);

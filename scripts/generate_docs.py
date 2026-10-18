@@ -69,7 +69,20 @@ def field_description(component, field):
     kind = component["types"][field]
     if field in component["enums"]:
         return f"`{field}` ({kind}: {', '.join(component['enums'][field])})"
+    if field in component["lists"]:
+        element = component["lists"][field]
+        return f"`{field}` (list of [{element['name']}](#{element['name'].lower()}), at most {element['maxCount']})"
     return f"`{field}` ({kind})"
+
+def list_elements(description, found=None):
+    """Every list element type reachable from a component or element description, in first-use order."""
+    found = {} if found is None else found
+    for field in description["fields"]:
+        element = description["lists"].get(field)
+        if element and element["name"] not in found:
+            found[element["name"]] = element
+            list_elements(element, found)
+    return found
 
 def components_markdown(components):
     lines = ["# Components", "",
@@ -78,18 +91,28 @@ def components_markdown(components):
              "Vectors are arrays (`[x, y, z]`), colors are RGB(A) arrays in linear space, rotations are Euler degrees,",
              "asset references are project-relative paths (`Assets/...`) or built-in meshes (`builtin://Cube`).",
              "Field types: `number`, `integer`, `boolean`, `string`, `object`, `entity` (an entity ID, 0 = none),",
-             "`enum` (one of the listed names) and arrays of them with their length (`number[3]`).", ""]
+             "`enum` (one of the listed names) and arrays of them with their length (`number[3]`).",
+             "List fields hold an array of objects (`object[]`) of the element type linked from the field; elements",
+             "may omit fields (they keep the defaults) and setting the field replaces the whole list.", ""]
+    elements = {}
     for component in components:
         core = " (always present)" if component["core"] else ""
         lines.append(f"## {component['name']}{core}")
         lines.append("")
         lines.append("Fields: " + ", ".join(field_description(component, field) for field in component["fields"]))
         lines.append("")
+        list_elements(component, elements)
+    if elements:
+        lines += ["## List element types", ""]
+    for name, element in elements.items():
+        lines += [f"### {name}", "", "Fields: " + ", ".join(field_description(element, field) for field in element["fields"]), ""]
     return "\n".join(lines) + "\n"
 
 def lua_type(component, field):
     """The LuaLS type of a field; the LuaTypeDefinitions unit test applies the same mapping."""
     kind = component["types"][field]
+    if field in component["lists"]:
+        return f"{component['lists'][field]['name']}[]"
     base, _, count = kind.partition("[")
     if base == "enum":
         union = "|".join(f'"{option}"' for option in component["enums"][field])
@@ -105,6 +128,12 @@ def lua_components(components):
         lines += ["", f"---{component['name']} data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.",
                   f"---@class {component['name']}Component"]
         lines += [f"---@field {field} {lua_type(component, field)}" for field in component["fields"]]
+    elements = {}
+    for component in components:
+        list_elements(component, elements)
+    for name, element in elements.items():
+        lines += ["", "---An element of a component list field.", f"---@class {name}"]
+        lines += [f"---@field {field} {lua_type(element, field)}" for field in element["fields"]]
     lines += ["", "---Returns a copy of the component's fields (vectors as arrays, rotations in Euler degrees, entity references",
               "---as IDs), or nil when the entity does not have the component.",
               "---@param name ComponentName", "---@return table?"]

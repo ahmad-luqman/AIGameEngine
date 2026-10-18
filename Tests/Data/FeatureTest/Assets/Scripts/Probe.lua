@@ -21,6 +21,7 @@ end
 function Probe:OnCollisionEnd(other, contact) Remember("CollisionEnd", contact) end
 function Probe:OnTriggerEnter(other, contact) Remember("TriggerEnter", contact) end
 function Probe:OnTriggerExit(other, contact) Remember("TriggerExit", contact) end
+function Probe:OnAnimationEvent(name, clip) Count("AnimationEvent:" .. name) end
 -- Per entity, since several probes hold joints that break.
 function Probe:OnJointBreak(other)
 	Count("JointBreak:" .. self.Entity.Name)

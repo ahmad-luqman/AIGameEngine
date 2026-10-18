@@ -6,6 +6,7 @@
 
 #include <functional>
 #include <map>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -24,19 +25,41 @@ namespace Basalt {
 		Object,
 		// An entity UUID (0 = none).
 		Entity,
+		// A variable-length array of objects described by ComponentFieldType::Element.
+		List,
 		// A string of ComponentInfo::EnumOptions.
 		Enum // keep last: ComponentFieldType::ToString has one name per kind
 	};
 
-	// The JSON type of a component field: one value of a kind (Count 0), or an array of Count values of that kind
-	// (vectors, colors, Euler degrees, boolean vectors, per-axis enums).
+	struct ComponentObjectSchema;
+
+	// The JSON type of a component field: one value of a kind (Count 0), an array of Count values of that kind
+	// (vectors, colors, Euler degrees, boolean vectors, per-axis enums), or a List of up to MaxCount objects
+	// whose fields Element describes.
 	struct ComponentFieldType
 	{
 		ComponentFieldKind Kind = ComponentFieldKind::Number;
 		uint8_t Count = 0;
+		// List only: the largest accepted length and the shape of every element.
+		uint32_t MaxCount = 0;
+		std::shared_ptr<const ComponentObjectSchema> Element;
 
-		// "number", "integer", "boolean", "string", "object", "entity" or "enum", with "[Count]" for an array.
+		// "number", "integer", "boolean", "string", "object", "entity" or "enum", with "[Count]" for an array;
+		// "object[]" for a List.
 		std::string ToString() const;
+	};
+
+	// The fields of one element of a List field (e.g. one Animator event). Elements may hold List fields of
+	// their own; they never hold entity references (only top-level fields are remapped and resolved by name).
+	struct ComponentObjectSchema
+	{
+		// Type name for tooling (the Lua class in Docs/basalt.d.lua), e.g. "AnimationEvent".
+		std::string Name;
+		std::vector<std::string> Fields;
+		std::map<std::string, ComponentFieldType> FieldTypes;
+		std::map<std::string, std::vector<std::string>> EnumOptions;
+		// A default-constructed element as JSON: what an inspector's Add button appends. It passes validation.
+		nlohmann::json Default;
 	};
 
 	// Uniform, name-based access to every serializable component. Scene files, prefabs, editor undo

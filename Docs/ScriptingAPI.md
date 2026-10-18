@@ -32,6 +32,7 @@ function Player:OnCollisionEnd(other, contact) end
 function Player:OnTriggerEnter(other, contact) end  -- either body is a trigger (RigidBody.IsTrigger)
 function Player:OnTriggerExit(other, contact) end
 function Player:OnJointBreak(other) end        -- joint exceeded BreakForce/BreakTorque; other is the far body, nil for the world
+function Player:OnAnimationEvent(name, clip) end  -- the entity's Animator crossed an Events marker (see Skeletal animation)
 function Player:OnGamepadConnected(index) end  -- a gamepad is connected (see "Input"); likewise OnGamepadDisconnected
 function Player:OnReload() end                 -- the script was hot reloaded (see "Hot reload")
 
@@ -178,6 +179,8 @@ Entity handles store an ID and stay safe to hold: using a destroyed entity raise
 | `e:PlayAnimation([clip])`, `e:CrossFadeAnimation(clip, seconds)`, `e:BlendAnimations(first, second, weight)` | Animator playback and transitions; see Skeletal animation |
 | `e:PauseAnimation([paused])`, `e:StopAnimation()`, `e:SetAnimationTime(seconds)` | Animator pause, stop and seek |
 | `e:GetAnimationClips()`, `e:GetAnimationTime()`, `e:GetAnimationDuration()`, `e:IsAnimationPlaying()` | Animator queries |
+| `e:PlayBlendSpace(space, x, [y], [fadeSeconds])`, `e:SetBlendSpaceParameter(x, [y])`, `e:GetBlendSpaceWeights()` | Animator blend spaces; see Blend spaces |
+| `e:GetBoneTransform(joint)` | World position (Vec3), rotation (Quat) and scale (Vec3) of a joint of the Animator's current pose, or nil; see Bones |
 | `e:GetScript()` | The entity's script instance (call its functions, read its fields) |
 | `e:Destroy()` | Destroy at the end of the frame (with children) |
 
@@ -1103,9 +1106,76 @@ the selected clip is held at time 0 until played. Edit mode shows the authored r
 
 Playback also runs in Simulate, respects scene pause/step, and advances after scripts and physics.
 State belongs to the play scene and is not serialized or included in `scene.hash`; copies start fresh.
-Persistent entities retain playback across `Scene.Load`. Bone nodes remain internal to the model:
-there are no bone attachments, animation events, retargeting or root-motion extraction. Animated
-node motion is relative to the entity; physics uses the entity's colliders, not deformed triangles.
+Persistent entities retain playback across `Scene.Load`. There is no retargeting or root-motion
+extraction. Animated node motion is relative to the entity; physics uses the entity's colliders, not
+deformed triangles.
+
+### Animation events
+
+`Animator.Events` lists named markers on clip timelines: `{ Clip = "Walk", Time = 0.4, Name = "Footstep" }`
+(`Clip` empty marks every clip; `Name` must not be empty; `Time` is seconds, finite and nonnegative). When
+playback crosses a marker the entity's scripts receive `OnAnimationEvent(name, clip)`, and automation
+clients subscribed to `animation` events get `{name, clip, entity, frame}`.
+
+- A marker fires when the clock moves over it: each update covers `[previous time, new time)`, so a marker at
+  0 fires on the first update after `PlayAnimation`, and one at the seek target fires after
+  `SetAnimationTime`. Seeks, stops and pauses skip what lies between; speed 0 fires nothing.
+- A looping clip fires its tail (its end included) and then restarts at 0 on every wrap, so one long update
+  fires every marker of every loop it covers, in order. A non-looping clip fires its end once.
+- During a crossfade or `BlendAnimations` both clips fire (the `clip` argument tells them apart); in a blend
+  space only the heaviest sample's clip fires, because its clips run in step and would repeat each marker.
+- At most 64 events per Animator and frame are delivered (a warning reports the rest dropped). Markers past
+  a clip's end never fire (the inspector and `scene.info` warn about them and about unknown clips).
+- Events are delivered after `OnLateUpdate` and after this frame's pose and attachments are computed, before
+  particles; a callback may change animation or remove the Animator safely. Simulate reports them to
+  automation only (no scripts run there).
+
+### Blend spaces
+
+`Animator.BlendSpaces` places clips on parameter axes, e.g. a 1D locomotion space over speed:
+
+```lua
+actor:SetComponent("Animator", { MatchVelocity = true, BlendSpaces = { {
+	Name = "Locomotion", Type = "1D", Samples = {
+		{ Clip = "Survey", X = 0 },             -- Speed 0: unknown (idle)
+		{ Clip = "Walk", X = 1.5, Speed = 1.5 }, -- m/s the clip moves at playback speed 1
+		{ Clip = "Run", X = 5, Speed = 5 } } } } })
+actor:PlayBlendSpace("Locomotion", 0, nil, 0.2)
+function Player:OnUpdate(dt) self.Entity:SetBlendSpaceParameter(self.Speed) end
+```
+
+- 1D spaces interpolate between the two samples around `X` and clamp outside them; 2D spaces (`Type = "2D"`,
+  e.g. strafing over X/Y velocity) use gradient band interpolation: a sample's weight is 1 at its position and
+  falls to 0 at every other sample. Weights always sum to 1. Samples must be at distinct positions; an empty
+  sample `Clip` selects the first clip, and samples whose clip is missing get no weight.
+- All clips run in step: one cycle lasts the weighted sum of their durations and each clip is sampled at the
+  same fraction of its own length, so feet stay in phase. `SetBlendSpaceParameter` keeps that phase.
+- `PlayBlendSpace` fades from the visible pose over `fadeSeconds` (default 0); playing the running space again
+  only moves its parameter. `PlayAnimation`, `CrossFadeAnimation`, `BlendAnimations` and `StopAnimation`
+  leave the space. `GetAnimationTime`/`GetAnimationDuration`/`SetAnimationTime` use the blended cycle.
+  `GetBlendSpaceWeights()` returns `{ [clip] = weight }` (empty when no space plays).
+- `Animator.Clip` may name a blend space: `PlayOnStart` then starts it at parameter (0, 0). A clip of the same
+  name wins.
+- **MatchVelocity:** with it on, a blend space plays at `Speed` x (the entity's measured horizontal speed / the
+  samples' weighted `Speed`), so a character moving faster than its run clip strides faster instead of
+  sliding. The speed is measured from the entity's world position (any mover: physics, characters, Lua),
+  ignoring vertical motion, and smoothed over about 0.1 s. While a sample with `Speed` 0 (unknown) has weight,
+  plain `Speed` applies.
+
+### Bones
+
+`e:GetBoneTransform(joint)` returns the world position, rotation and scale of the first node named `joint` in
+the Animator's current pose (any glTF node, not only skin joints), or nil with a logged error when there is
+none.
+
+A `BoneAttachment` component keeps an entity on a joint of another entity's Animator while the scene plays or
+simulates (weapon in hand, hat on head): `{ Target = <entity ID, 0 = the parent>, Joint = "b_Head_05",
+Translation, Rotation, Scale }` (the offset in the joint's space). Its world transform is set right after the
+pose is sampled, also for children of other entities, and attachments to attached entities update in
+dependency order within the frame. Edit mode keeps the authored transform. Physics reads transforms before
+animation, so a Kinematic body on an attachment follows one physics step later; a Dynamic body is also moved by
+physics (the inspector warns). Missing targets, joints or Animators and attachment cycles are logged once and
+leave the entity where it is.
 
 ## Graphics settings
 

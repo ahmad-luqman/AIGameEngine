@@ -11,7 +11,7 @@ namespace Basalt {
 
 	namespace {
 
-		constexpr const char* const EventTypeNames[] = { "log", "scriptError", "playState", "collision" };
+		constexpr const char* const EventTypeNames[] = { "log", "scriptError", "playState", "collision", "animation" };
 		static_assert(std::size(EventTypeNames) == static_cast<size_t>(AutomationEventType::Count), "one name per event type");
 		constexpr const char* const PlayStateNames[] = { "play", "simulate", "pause", "resume", "stop" };
 		static_assert(std::size(PlayStateNames) == static_cast<size_t>(PlayStateChange::Count), "one name per play-state change");

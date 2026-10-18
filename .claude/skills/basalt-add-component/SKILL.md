@@ -17,6 +17,10 @@ description: Add a new component type to the Basalt engine end to end (data, ser
    ParticleEmitter one, whose rules live in `Particles/ParticleEmitterRules.h` so the system can also
    repair values C++ code wrote directly). Every load, Lua `SetComponent`, `component.set` and inspector
    edit runs it. Adding a missing component constructs it once with its final values.
+   A `std::vector` of plain structs (Animator `Events`) is a `ListField`: give the element type its own `Fields`
+   and `Write` overloads, declared next to the existing element declarations after `FieldReader` (the list
+   templates call them), with defaults that pass `Validate` (the inspector's Add appends them). Elements cannot
+   hold entity references. The inspector, `component.types` and the generated docs pick the list up.
 3. **Runtime behaviour** — if a system consumes it (physics, audio, renderer, scripting), react to
    `on_construct/on_update/on_destroy` signals or read it each frame. Never store runtime handles in the
    component. Physics components get one `Wire<...>` line in `PhysicsWorld::Impl::WireSignals`
