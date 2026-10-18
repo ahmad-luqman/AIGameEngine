@@ -278,6 +278,10 @@ add_test(NAME SampleBreakout
 # effects (occlusion low-pass, the hall's reverb, the drone's Doppler); see Samples/FirstPerson/README.md.
 add_test(NAME SampleFirstPerson
 	COMMAND BasaltCLI --project "${PROJECT_SOURCE_DIR}/Samples/FirstPerson" batch "${PROJECT_SOURCE_DIR}/Samples/FirstPerson/test_game.json")
+# Layers and inverse kinematics on a walking mannequin: foot placement, look-at, a masked wave and a reach; see
+# Samples/MovementDemo/README.md.
+add_test(NAME SampleMovementDemo
+	COMMAND BasaltCLI --project "${PROJECT_SOURCE_DIR}/Samples/MovementDemo" batch "${PROJECT_SOURCE_DIR}/Samples/MovementDemo/test_game.json")
 # Determinism: a recorded session must replay to the identical state (same machine), and the committed
 # replay must end on the same board on every platform (Samples/Tetris/test_replay.json).
 add_test(NAME SampleTetrisReplay
@@ -290,7 +294,7 @@ add_test(NAME PhysicsDeterminism
 
 # Labels let CI jobs pick test groups (ctest -L gpu, ctest -LE "gpu|format").
 set_tests_properties(BasaltTests PROPERTIES LABELS unit)
-set(basaltIntegrationTests FeatureTest SampleTetris SampleTetrisReplay SampleJoints SampleMarbleRun SampleBreakout SampleFirstPerson PhysicsDeterminism)
+set(basaltIntegrationTests FeatureTest SampleTetris SampleTetrisReplay SampleJoints SampleMarbleRun SampleBreakout SampleFirstPerson SampleMovementDemo PhysicsDeterminism)
 set_tests_properties(${basaltIntegrationTests} PROPERTIES LABELS integration)
 if(TEST CodeFormat)
 	set_tests_properties(CodeFormat PROPERTIES LABELS format)

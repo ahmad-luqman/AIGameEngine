@@ -1,0 +1,2690 @@
+{
+	"Entities": [
+		{
+			"Components": {
+				"Camera": {
+					"FOV": 50.0,
+					"Far": 200.0,
+					"FixedAspectRatio": false,
+					"Near": 0.05000000074505806,
+					"OrthoFar": 100.0,
+					"OrthoNear": -100.0,
+					"OrthoSize": 10.0,
+					"Primary": true,
+					"Projection": "Perspective"
+				},
+				"Script": {
+					"Properties": {},
+					"Script": "Assets/Scripts/FollowCamera.lua"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						-4.0,
+						1.7999999523162842,
+						5.0
+					]
+				}
+			},
+			"ID": 6820206147622149906,
+			"Name": "Camera",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"DirectionalLight": {
+					"CastShadows": true,
+					"Color": [
+						1.0,
+						0.9399999976158142,
+						0.8500000238418579
+					],
+					"Intensity": 3.200000047683716,
+					"ShadowSoftness": 1.2000000476837158
+				},
+				"Transform": {
+					"Rotation": [
+						-42.0,
+						40.000003814697266,
+						2.229044184787199e-06
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						0.0,
+						0.0
+					]
+				}
+			},
+			"ID": 17849418633261400923,
+			"Name": "Sun",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"SkyLight": {
+					"EnvironmentMap": "",
+					"Intensity": 0.5,
+					"Rotation": 0.0,
+					"ShowBackground": true
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						0.0,
+						0.0
+					]
+				}
+			},
+			"ID": 12263706010793727601,
+			"Name": "Sky",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"PostProcess": {
+					"AdaptationSpeed": 3.0,
+					"AutoExposure": false,
+					"BloomEnabled": true,
+					"BloomIntensity": 0.6000000238418579,
+					"BloomScatter": 0.699999988079071,
+					"BloomThreshold": 1.0,
+					"Enabled": true,
+					"Exposure": 0.75,
+					"ExposureCompensation": 0.0,
+					"FXAAEnabled": false,
+					"MaxExposure": 16.0,
+					"MinExposure": 0.0625,
+					"Priority": 0,
+					"SSAOBias": 0.02500000037252903,
+					"SSAOEnabled": true,
+					"SSAOIntensity": 1.0,
+					"SSAORadius": 0.5,
+					"Tonemapper": "ACES"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						0.0,
+						0.0
+					]
+				}
+			},
+			"ID": 18069889360998702313,
+			"Name": "PostProcess",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.33000001311302185,
+						0.36000001430511475,
+						0.41999998688697815,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.800000011920929
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						40.0,
+						1.0,
+						40.0
+					],
+					"Translation": [
+						0.0,
+						-0.5,
+						0.0
+					]
+				}
+			},
+			"ID": 5833355483989147331,
+			"Name": "Ground",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.41999998688697815,
+						0.44999998807907104,
+						0.5199999809265137,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.699999988079071
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.9599999785423279,
+						1.0,
+						2.5999999046325684
+					],
+					"Translation": [
+						-9.0,
+						-0.49000000953674316,
+						0.0
+					]
+				}
+			},
+			"ID": 10428629840403452118,
+			"Name": "Tile0",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.3799999952316284,
+						0.4099999964237213,
+						0.47999998927116394,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.699999988079071
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.9599999785423279,
+						1.0,
+						2.5999999046325684
+					],
+					"Translation": [
+						-8.0,
+						-0.49000000953674316,
+						0.0
+					]
+				}
+			},
+			"ID": 4802562871749822847,
+			"Name": "Tile1",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.41999998688697815,
+						0.44999998807907104,
+						0.5199999809265137,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.699999988079071
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.9599999785423279,
+						1.0,
+						2.5999999046325684
+					],
+					"Translation": [
+						-7.0,
+						-0.49000000953674316,
+						0.0
+					]
+				}
+			},
+			"ID": 15713512767978724144,
+			"Name": "Tile2",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.3799999952316284,
+						0.4099999964237213,
+						0.47999998927116394,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.699999988079071
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.9599999785423279,
+						1.0,
+						2.5999999046325684
+					],
+					"Translation": [
+						-6.0,
+						-0.49000000953674316,
+						0.0
+					]
+				}
+			},
+			"ID": 5203370288841961834,
+			"Name": "Tile3",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.41999998688697815,
+						0.44999998807907104,
+						0.5199999809265137,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.699999988079071
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.9599999785423279,
+						1.0,
+						2.5999999046325684
+					],
+					"Translation": [
+						-5.0,
+						-0.49000000953674316,
+						0.0
+					]
+				}
+			},
+			"ID": 1835403569316186957,
+			"Name": "Tile4",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.3799999952316284,
+						0.4099999964237213,
+						0.47999998927116394,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.699999988079071
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.9599999785423279,
+						1.0,
+						2.5999999046325684
+					],
+					"Translation": [
+						-4.0,
+						-0.49000000953674316,
+						0.0
+					]
+				}
+			},
+			"ID": 11695574020203738670,
+			"Name": "Tile5",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.41999998688697815,
+						0.44999998807907104,
+						0.5199999809265137,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.699999988079071
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.9599999785423279,
+						1.0,
+						2.5999999046325684
+					],
+					"Translation": [
+						-3.0,
+						-0.49000000953674316,
+						0.0
+					]
+				}
+			},
+			"ID": 16100142334279542811,
+			"Name": "Tile6",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.3799999952316284,
+						0.4099999964237213,
+						0.47999998927116394,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.699999988079071
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.9599999785423279,
+						1.0,
+						2.5999999046325684
+					],
+					"Translation": [
+						-2.0,
+						-0.49000000953674316,
+						0.0
+					]
+				}
+			},
+			"ID": 9920388751339113859,
+			"Name": "Tile7",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.41999998688697815,
+						0.44999998807907104,
+						0.5199999809265137,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.699999988079071
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.9599999785423279,
+						1.0,
+						2.5999999046325684
+					],
+					"Translation": [
+						-1.0,
+						-0.49000000953674316,
+						0.0
+					]
+				}
+			},
+			"ID": 6264302783520056598,
+			"Name": "Tile8",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.3799999952316284,
+						0.4099999964237213,
+						0.47999998927116394,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.699999988079071
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.9599999785423279,
+						1.0,
+						2.5999999046325684
+					],
+					"Translation": [
+						0.0,
+						-0.49000000953674316,
+						0.0
+					]
+				}
+			},
+			"ID": 13422026730210994502,
+			"Name": "Tile9",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.41999998688697815,
+						0.44999998807907104,
+						0.5199999809265137,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.699999988079071
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.9599999785423279,
+						1.0,
+						2.5999999046325684
+					],
+					"Translation": [
+						1.0,
+						-0.49000000953674316,
+						0.0
+					]
+				}
+			},
+			"ID": 2148120325870175615,
+			"Name": "Tile10",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.3799999952316284,
+						0.4099999964237213,
+						0.47999998927116394,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.699999988079071
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.9599999785423279,
+						1.0,
+						2.5999999046325684
+					],
+					"Translation": [
+						2.0,
+						-0.49000000953674316,
+						0.0
+					]
+				}
+			},
+			"ID": 4246477484021806118,
+			"Name": "Tile11",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.41999998688697815,
+						0.44999998807907104,
+						0.5199999809265137,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.699999988079071
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.9599999785423279,
+						1.0,
+						2.5999999046325684
+					],
+					"Translation": [
+						3.0,
+						-0.49000000953674316,
+						0.0
+					]
+				}
+			},
+			"ID": 10213638796006259991,
+			"Name": "Tile12",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.3799999952316284,
+						0.4099999964237213,
+						0.47999998927116394,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.699999988079071
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.9599999785423279,
+						1.0,
+						2.5999999046325684
+					],
+					"Translation": [
+						4.0,
+						-0.49000000953674316,
+						0.0
+					]
+				}
+			},
+			"ID": 8887132535371101848,
+			"Name": "Tile13",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.41999998688697815,
+						0.44999998807907104,
+						0.5199999809265137,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.699999988079071
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.9599999785423279,
+						1.0,
+						2.5999999046325684
+					],
+					"Translation": [
+						5.0,
+						-0.49000000953674316,
+						0.0
+					]
+				}
+			},
+			"ID": 12535145505124109270,
+			"Name": "Tile14",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.3799999952316284,
+						0.4099999964237213,
+						0.47999998927116394,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.699999988079071
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.9599999785423279,
+						1.0,
+						2.5999999046325684
+					],
+					"Translation": [
+						6.0,
+						-0.49000000953674316,
+						0.0
+					]
+				}
+			},
+			"ID": 15128569714449534797,
+			"Name": "Tile15",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.41999998688697815,
+						0.44999998807907104,
+						0.5199999809265137,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.699999988079071
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.9599999785423279,
+						1.0,
+						2.5999999046325684
+					],
+					"Translation": [
+						7.0,
+						-0.49000000953674316,
+						0.0
+					]
+				}
+			},
+			"ID": 11422247314520241020,
+			"Name": "Tile16",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.3799999952316284,
+						0.4099999964237213,
+						0.47999998927116394,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.699999988079071
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.9599999785423279,
+						1.0,
+						2.5999999046325684
+					],
+					"Translation": [
+						8.0,
+						-0.49000000953674316,
+						0.0
+					]
+				}
+			},
+			"ID": 6983486665381305887,
+			"Name": "Tile17",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.41999998688697815,
+						0.44999998807907104,
+						0.5199999809265137,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.699999988079071
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.9599999785423279,
+						1.0,
+						2.5999999046325684
+					],
+					"Translation": [
+						9.0,
+						-0.49000000953674316,
+						0.0
+					]
+				}
+			},
+			"ID": 5656109527977901247,
+			"Name": "Tile18",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.75,
+						0.7300000190734863,
+						0.6800000071525574,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.800000011920929
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.5,
+						0.11999999731779099,
+						2.5999999046325684
+					],
+					"Translation": [
+						-2.75,
+						0.05999999865889549,
+						0.0
+					]
+				}
+			},
+			"ID": 9598457880765820073,
+			"Name": "Step1",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.7200000286102295,
+						0.699999988079071,
+						0.6499999761581421,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.800000011920929
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.5,
+						0.23999999463558197,
+						2.5999999046325684
+					],
+					"Translation": [
+						-2.25,
+						0.11999999731779099,
+						0.0
+					]
+				}
+			},
+			"ID": 18410220269745040350,
+			"Name": "Step2",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.6899999976158142,
+						0.6700000166893005,
+						0.6200000047683716,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.800000011920929
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						2.5,
+						0.36000001430511475,
+						2.5999999046325684
+					],
+					"Translation": [
+						-0.75,
+						0.18000000715255737,
+						0.0
+					]
+				}
+			},
+			"ID": 9721176317320147657,
+			"Name": "Platform",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.6600000262260437,
+						0.6399999856948853,
+						0.6000000238418579,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.800000011920929
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						0.0,
+						-6.842800617218018
+					],
+					"Scale": [
+						3.0215001106262207,
+						0.20000000298023224,
+						2.5999999046325684
+					],
+					"Translation": [
+						1.9881000518798828,
+						0.08070000261068344,
+						0.0
+					]
+				}
+			},
+			"ID": 319256271028074006,
+			"Name": "Ramp",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.550000011920929,
+						0.5,
+						0.44999998807907104,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.800000011920929
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.3499999940395355,
+						0.07999999821186066,
+						0.5
+					],
+					"Translation": [
+						4.300000190734863,
+						0.03999999910593033,
+						0.15000000596046448
+					]
+				}
+			},
+			"ID": 11610552528081848080,
+			"Name": "Stone0",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.550000011920929,
+						0.5,
+						0.44999998807907104,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.800000011920929
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						20.0000057220459,
+						0.0
+					],
+					"Scale": [
+						0.30000001192092896,
+						0.11999999731779099,
+						0.5
+					],
+					"Translation": [
+						4.900000095367432,
+						0.05999999865889549,
+						-0.11999999731779099
+					]
+				}
+			},
+			"ID": 552298940029178516,
+			"Name": "Stone1",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.550000011920929,
+						0.5,
+						0.44999998807907104,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.800000011920929
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						40.00000762939453,
+						0.0
+					],
+					"Scale": [
+						0.4000000059604645,
+						0.05999999865889549,
+						0.5
+					],
+					"Translation": [
+						5.599999904632568,
+						0.029999999329447746,
+						0.10000000149011612
+					]
+				}
+			},
+			"ID": 1260169898413850212,
+			"Name": "Stone2",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"BoxCollider": {
+					"Friction": 0.5,
+					"HalfExtents": [
+						0.5,
+						0.5,
+						0.5
+					],
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Restitution": 0.0
+				},
+				"Material": {
+					"AlbedoColor": [
+						0.550000011920929,
+						0.5,
+						0.44999998807907104,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"EmissiveIntensity": 1.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.800000011920929
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"Mesh": "builtin://Cube",
+					"MeshIndex": 0
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.800000011920929,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 1.0,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Static"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						60.000003814697266,
+						0.0
+					],
+					"Scale": [
+						0.30000001192092896,
+						0.14000000059604645,
+						0.5
+					],
+					"Translation": [
+						6.199999809265137,
+						0.07000000029802322,
+						-0.05000000074505806
+					]
+				}
+			},
+			"ID": 11751925691322902061,
+			"Name": "Stone3",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"Animator": {
+					"BlendSpaces": [],
+					"CastShadows": true,
+					"Clip": "Walk",
+					"Events": [],
+					"Layers": [
+						{
+							"Blend": "Override",
+							"Clip": "Wave",
+							"Looping": true,
+							"Mask": [
+								{
+									"Joint": "RightUpperArm",
+									"Weight": 1.0
+								}
+							],
+							"Name": "Wave",
+							"ReferenceClip": "",
+							"ReferenceTime": 0.0,
+							"Speed": 1.0,
+							"Weight": 0.0
+						},
+						{
+							"Blend": "Additive",
+							"Clip": "Breathe",
+							"Looping": true,
+							"Mask": [],
+							"Name": "Breathe",
+							"ReferenceClip": "",
+							"ReferenceTime": 0.0,
+							"Speed": 1.0,
+							"Weight": 1.0
+						}
+					],
+					"Looping": true,
+					"MatchVelocity": false,
+					"Mesh": "Assets/Models/Mannequin.gltf",
+					"PlayOnStart": true,
+					"RootJoint": "",
+					"RootMotion": false,
+					"Speed": 1.0,
+					"StateMachine": ""
+				},
+				"CapsuleCollider": {
+					"Friction": 0.5,
+					"HalfHeight": 0.6000000238418579,
+					"Offset": [
+						0.0,
+						0.8500000238418579,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Radius": 0.25,
+					"Restitution": 0.0
+				},
+				"CharacterController": {
+					"GravityFactor": 1.0,
+					"Layer": "Default",
+					"Mass": 70.0,
+					"MaxStrength": 100.0,
+					"SlopeLimit": 50.0,
+					"StepHeight": 0.30000001192092896
+				},
+				"InverseKinematics": {
+					"Chains": [
+						{
+							"Axis": [
+								0.0,
+								0.0,
+								1.0
+							],
+							"ChainLength": 1,
+							"Ground": true,
+							"Joint": "LeftFoot",
+							"MaxAngle": 60.0,
+							"Name": "LeftFoot",
+							"Pole": [
+								0.0,
+								0.0,
+								0.0
+							],
+							"Type": "TwoBone",
+							"Weight": 1.0
+						},
+						{
+							"Axis": [
+								0.0,
+								0.0,
+								1.0
+							],
+							"ChainLength": 1,
+							"Ground": true,
+							"Joint": "RightFoot",
+							"MaxAngle": 60.0,
+							"Name": "RightFoot",
+							"Pole": [
+								0.0,
+								0.0,
+								0.0
+							],
+							"Type": "TwoBone",
+							"Weight": 1.0
+						},
+						{
+							"Axis": [
+								0.0,
+								0.0,
+								1.0
+							],
+							"ChainLength": 3,
+							"Ground": false,
+							"Joint": "Head",
+							"MaxAngle": 80.0,
+							"Name": "Head",
+							"Pole": [
+								0.0,
+								0.0,
+								0.0
+							],
+							"Type": "LookAt",
+							"Weight": 1.0
+						},
+						{
+							"Axis": [
+								0.0,
+								0.0,
+								1.0
+							],
+							"ChainLength": 1,
+							"Ground": false,
+							"Joint": "LeftHand",
+							"MaxAngle": 60.0,
+							"Name": "Reach",
+							"Pole": [
+								0.0,
+								-1.0,
+								-1.0
+							],
+							"Type": "TwoBone",
+							"Weight": 0.0
+						}
+					],
+					"Pelvis": "Hips",
+					"RayDepth": 0.5,
+					"RayHeight": 0.5,
+					"Smoothing": 0.05999999865889549
+				},
+				"Script": {
+					"Properties": {},
+					"Script": "Assets/Scripts/Walker.lua"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						90.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						-7.0,
+						0.019999999552965164,
+						0.0
+					]
+				}
+			},
+			"ID": 12581051678772734288,
+			"Name": "Walker",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"Material": {
+					"AlbedoColor": [
+						0.30000001192092896,
+						0.800000011920929,
+						1.0,
+						1.0
+					],
+					"AlbedoMap": "",
+					"EmissiveColor": [
+						0.30000001192092896,
+						0.8500000238418579,
+						1.0
+					],
+					"EmissiveIntensity": 6.0,
+					"EmissiveMap": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.5
+				},
+				"Mesh": {
+					"CastShadows": false,
+					"Mesh": "builtin://Sphere",
+					"MeshIndex": 0
+				},
+				"PointLight": {
+					"CastShadows": false,
+					"Color": [
+						0.3499999940395355,
+						0.800000011920929,
+						1.0
+					],
+					"Intensity": 6.0,
+					"Radius": 4.0,
+					"ShadowSoftness": 1.0
+				},
+				"Script": {
+					"Properties": {},
+					"Script": "Assets/Scripts/Orb.lua"
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						0.18000000715255737,
+						0.18000000715255737,
+						0.18000000715255737
+					],
+					"Translation": [
+						-6.0,
+						1.7999999523162842,
+						1.5
+					]
+				}
+			},
+			"ID": 12169353981791324871,
+			"Name": "Orb",
+			"Parent": 0
+		}
+	],
+	"Format": "BasaltScene",
+	"Name": "MovementDemo",
+	"Physics": {
+		"Gravity": [
+			0.0,
+			-9.8100004196167,
+			0.0
+		],
+		"MaxStepsPerFrame": 8
+	},
+	"Renderer": {
+		"AmbientColor": [
+			0.029999999329447746,
+			0.029999999329447746,
+			0.03500000014901161
+		],
+		"CascadeSplitLambda": 0.8500000238418579,
+		"Exposure": 1.0,
+		"FSR1Enabled": false,
+		"FSR1Sharpness": 0.20000000298023224,
+		"SSAOBias": 0.02500000037252903,
+		"SSAOEnabled": true,
+		"SSAOIntensity": 1.0,
+		"SSAORadius": 0.5,
+		"ShadowBias": 0.001500000013038516,
+		"ShadowDistance": 60.0,
+		"ShadowNormalBias": 0.019999999552965164,
+		"ShadowsEnabled": true,
+		"Tonemapper": "ACES"
+	},
+	"Version": 2
+}

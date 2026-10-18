@@ -45,6 +45,8 @@ build/bin/basalt --project Samples/Tetris project.export '{"output": "Dist/Tetri
 - [Samples/FirstPerson](Samples/FirstPerson) — mouse look with a locked cursor, a character controller, raycast
   shooting and audio effects (low-pass occlusion, reverb zones, Doppler)
 - [Samples/Joints](Samples/Joints) — every joint type
+- [Samples/MovementDemo](Samples/MovementDemo) — a walking mannequin with foot placement, look-at and reach IK, a
+  masked wave layer and additive breathing
 
 ## License
 
