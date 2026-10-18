@@ -331,9 +331,11 @@ namespace Basalt {
 		{
 			const IKChain& config = *chain.Config;
 			const auto report = [&] { Report(*chain.Problem, fmt::format("{}", fmt::join(chain.Problems, "; ")), entity, &config); };
-			// A settled foot stays as animated unless something above its leg moved (the pelvis, or an earlier chain).
+			// A settled foot stays as animated unless an earlier chain or the pelvis moved one of its leg's joints or a node
+			// above them.
 			const uint32_t upper = chain.Joints.front();
-			if (chain.Settled && std::ranges::none_of(touched, [&](uint32_t node) { return node == upper || IsAncestor(source, node, upper); }))
+			const auto movesLeg = [&](uint32_t node) { return std::ranges::find(chain.Joints, node) != chain.Joints.end() || IsAncestor(source, node, upper); };
+			if (chain.Settled && std::ranges::none_of(touched, movesLeg))
 			{
 				report();
 				continue;
