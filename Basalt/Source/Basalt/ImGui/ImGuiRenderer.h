@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Basalt/Core/MemoryTracker.h"
+
 #include <nvrhi/nvrhi.h>
 
 #include <unordered_map>
@@ -50,6 +52,8 @@ namespace Basalt {
 		};
 		std::unordered_map<nvrhi::ITexture*, CachedBindingSet> m_BindingSets;
 		uint64_t m_FrameIndex = 0;
+		MemoryAllocation m_VertexMemory{ MemoryCategory::GpuBuffers };
+		MemoryAllocation m_IndexMemory{ MemoryCategory::GpuBuffers };
 	};
 
 }

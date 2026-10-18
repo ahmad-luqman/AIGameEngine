@@ -301,3 +301,51 @@ GPU copies of the assets it draws.
 
 `PreviewRendererGPU` checks framing, determinism, material colour and emission, failures and that pending
 debug lines survive a preview, with Vulkan validation required.
+
+## CPU jobs, streaming and memory
+
+`Core/JobSystem` supplies one shared work-stealing CPU pool. Each worker takes its own queued work
+last-in-first-out and steals other queues first-in-first-out. `Submit` returns a completion fence;
+`Wait` helps execute work so nested jobs also complete with one worker. Exceptions fail the fence
+and log a diagnostic. `ParallelFor` divides disjoint output ranges and joins every range before
+returning, including after a task fails. Callers retain ownership of captured data until completion,
+avoid cyclic waits, and call `WaitIdle` or destroy pools only from their owner thread after producers
+stop. Shutdown drains jobs and their children. Physics uses Jolt barriers/dependencies on this pool,
+without its previous private worker threads. Animation and culling can use the same range API for
+future crowd work; their evaluation is currently serial.
+
+`AssetManager::RequestMesh/RequestTexture` deduplicate CPU loads and decode on this pool. Requests
+return the published source or null; `IsLoading` distinguishes a pending request from a cached
+failure. `PublishCompleted` publishes results on the main thread; `WaitForLoads` joins and publishes
+current requests. Blocking `GetMesh/GetTexture` join a pending request. Embedded textures chain to
+their mesh without blocking a worker on main-thread publication. Workers capture paths and project
+root, never the active project or scene. Reload, clear, preview-scope eviction and project changes
+discard pending entries; late completions cannot recreate them. Because an unfinished glTF's external
+dependencies are unknown, any file refresh conservatively drops all pending mesh requests.
+Cache methods are main-thread-only; consumers must treat published source data as read-only during
+loads of its embedded textures.
+
+Interactive editor and runtime views request static meshes, material textures and environments
+asynchronously and upload on the rendering thread after publication. Pending meshes display a unit
+cube at their entity transform; textures use the existing fallback colors. Failed meshes disappear
+and report a cached diagnostic. Animation and physics retain blocking loads for simulation correctness;
+`asset.preload` can warm their assets before Play. Captures, previews and finite-frame runtime runs
+retain blocking loads for deterministic output. `asset.preload {"paths":["Assets/Models/Ship.glb"],"wait":true}`
+also works headlessly; without `wait`, repeat the command to poll per-path pending/ready/failed status.
+
+Configure with `-DBASALT_PROFILE=ON` to enable pinned Tracy 0.12.2 CPU zones for frames, jobs, scene,
+scripts, animation, physics, glTF import, texture decode and rendering. Run a matching Tracy profiler
+and connect locally; the client records on demand. Default builds do not fetch or link Tracy, and
+Dist builds compile instrumentation out. The Linux Debug CI job covers the profiled configuration.
+See the [Tracy integration manual](https://github.com/wolfpld/tracy/blob/v0.12.2/manual/tracy.tex).
+
+`memory.stats` works headlessly, and `render.stats.memory` and the editor Statistics panel show the
+same subsystem current bytes, lifetime peak bytes and live charge counts. These are logical owned
+bytes, **not RSS or driver heap residency**: assets track retained mesh geometry, metadata arrays,
+animation buffers, embedded images and decoded texture capacities (excluding string backing stores,
+allocator overhead and graphs); GPU buffers track requested sizes of mesh, scene, cluster, histogram, debug-line and ImGui buffers
+(excluding textures and render targets); Lua tracks every live allocation in
+script and authoring states through its allocator, including collection and close. Asset charges survive
+cache eviction while another consumer retains the source. GPU charges end with cache ownership,
+while nvrhi may defer actual destruction for in-flight frames. Mutating CPU source vectors outside the
+loader requires `UpdateMemoryUsage()` to refresh their payload charge.

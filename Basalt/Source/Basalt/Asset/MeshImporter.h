@@ -23,6 +23,8 @@ namespace Basalt {
 		// Also lists the files the glTF names (MeshSource::ExternalFiles), even when loading fails once it has parsed
 		// (a missing buffer), so a fix to one of them can retry the load.
 		static Ref<MeshSource> LoadGltf(const std::filesystem::path& path, const std::string& key, std::vector<std::string>& outExternalFiles, std::string& outError);
+		// Worker-safe overload: projectRoot is captured by the requesting thread.
+		static Ref<MeshSource> LoadGltf(const std::filesystem::path& path, const std::string& key, const std::filesystem::path& projectRoot, std::vector<std::string>& outExternalFiles, std::string& outError);
 		// The asset key of a file a glTF names by URI (an external buffer or image): the decoded URI resolved against
 		// the folder of the model's key, '/'-separated UTF-8 ("Assets/Models/Ship.bin"), as FileWatcher reports it.
 		// nullopt for no URI or a data: URI (embedded).

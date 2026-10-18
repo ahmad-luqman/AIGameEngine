@@ -100,6 +100,7 @@ namespace Basalt {
 		desc.keepInitialState = true;
 		desc.debugName = "ClusterConstants";
 		m_Constants = device->createBuffer(desc);
+		m_ConstantsMemory.Resize(m_Constants ? static_cast<size_t>(desc.byteSize) : 0);
 		if (!m_Constants)
 			return fail("constants");
 		desc = {};
@@ -110,6 +111,7 @@ namespace Basalt {
 		desc.byteSize = sizeof(uint32_t) * (LightClusterWordOffset + LightClusterCount * LightClusterStride);
 		desc.debugName = "ClusteredLightBuffer";
 		m_Buffer = device->createBuffer(desc);
+		m_BufferMemory.Resize(m_Buffer ? static_cast<size_t>(desc.byteSize) : 0);
 		if (!m_Buffer)
 			return fail("light records/lists");
 		auto layout = MakeLayout(0, nvrhi::ShaderType::Compute);

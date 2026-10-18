@@ -4,6 +4,25 @@
 
 namespace Basalt {
 
+	void MeshSource::UpdateMemoryUsage()
+	{
+		// Track retained CPU payload capacity, including animation and embedded image storage.
+		size_t bytes = sizeof(MeshSource) + Vertices.capacity() * sizeof(Vertex) + Indices.capacity() * sizeof(uint32_t) + Submeshes.capacity() * sizeof(Submesh) + Meshes.capacity() * sizeof(MeshData) + Materials.capacity() * sizeof(MaterialData) + Nodes.capacity() * sizeof(MeshNode) + Skins.capacity() * sizeof(MeshSkin) + Animations.capacity() * sizeof(AnimationClip) + NodeOrder.capacity() * sizeof(uint32_t) + EmbeddedImages.capacity() * sizeof(std::vector<uint8_t>);
+		for (const auto& mesh : Meshes)
+			bytes += mesh.Submeshes.capacity() * sizeof(uint32_t);
+		for (const auto& skin : Skins)
+			bytes += skin.Joints.capacity() * sizeof(SkinJoint);
+		for (const auto& clip : Animations)
+		{
+			bytes += clip.Tracks.capacity() * sizeof(AnimationTrack);
+			for (const auto& track : clip.Tracks)
+				bytes += track.Times.capacity() * sizeof(float) + track.Values.capacity() * sizeof(glm::vec4);
+		}
+		for (const auto& image : EmbeddedImages)
+			bytes += image.capacity();
+		m_Memory.Resize(bytes);
+	}
+
 	bool MeshSource::FinalizeHierarchy()
 	{
 		NodeOrder.clear();

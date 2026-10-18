@@ -5,6 +5,9 @@
 #include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Log.h"
+#include "Basalt/Core/JobSystem.h"
+#include "Basalt/Core/MemoryTracker.h"
+#include "Basalt/Core/Profiler.h"
 #include "Basalt/Project/Project.h"
 
 #include <algorithm>
@@ -18,6 +21,8 @@ namespace Basalt {
 
 	namespace {
 
+		void CheckProject();
+
 		template<typename T>
 		struct CacheEntry
 		{
@@ -25,6 +30,8 @@ namespace Basalt {
 			std::string Error;
 			// The other files a model reads (MeshSource::ExternalFiles), kept for a failed load too.
 			std::vector<std::string> Dependencies;
+			JobHandle Job;
+			Ref<CacheEntry<T>> Pending;
 		};
 
 		std::unordered_map<std::string, CacheEntry<MeshSource>> s_Meshes;
@@ -36,7 +43,7 @@ namespace Basalt {
 			return FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(path));
 		}
 
-		Ref<MeshSource> LoadMesh(const std::string& key, std::vector<std::string>& outDependencies, std::string& outError)
+		Ref<MeshSource> LoadMesh(const std::string& key, const std::filesystem::path& path, const std::filesystem::path& root, std::vector<std::string>& outDependencies, std::string& outError)
 		{
 			if (Primitives::IsBuiltinKey(key))
 			{
@@ -50,10 +57,10 @@ namespace Basalt {
 				outError = "'" + key + "' is not a supported mesh file (.gltf, .glb)";
 				return nullptr;
 			}
-			return MeshImporter::LoadGltf(Project::ResolvePath(key), key, outDependencies, outError);
+			return MeshImporter::LoadGltf(path, key, root, outDependencies, outError);
 		}
 
-		Ref<TextureSource> LoadTexture(const std::string& key, std::string& outError)
+		Ref<TextureSource> LoadTexture(const std::string& key, const std::filesystem::path& path, const Ref<MeshSource>& mesh, const std::string& meshError, std::string& outError)
 		{
 			const size_t marker = key.find("#image/");
 			if (marker != std::string::npos)
@@ -67,10 +74,9 @@ namespace Basalt {
 					outError = "invalid embedded image key '" + key + "'";
 					return nullptr;
 				}
-				Ref<MeshSource> mesh = AssetManager::GetMesh(meshKey);
 				if (!mesh)
 				{
-					outError = "cannot load '" + meshKey + "' for embedded image: " + AssetManager::GetError(meshKey);
+					outError = "cannot load '" + meshKey + "' for embedded image: " + (meshError.empty() ? "mesh unavailable" : meshError);
 					return nullptr;
 				}
 				if (index >= mesh->EmbeddedImages.size() || mesh->EmbeddedImages[index].empty())
@@ -83,7 +89,7 @@ namespace Basalt {
 					outError = key + ": " + outError;
 				return texture;
 			}
-			return TextureSource::LoadFromFile(Project::ResolvePath(key), outError);
+			return TextureSource::LoadFromFile(path, outError);
 		}
 
 		Ref<const AnimationGraph> LoadAnimationGraph(const std::string& key, std::string& outError)
@@ -105,6 +111,7 @@ namespace Basalt {
 
 	Ref<const AnimationGraph> AssetManager::GetAnimationGraph(const std::string& key)
 	{
+		CheckProject();
 		if (key.empty())
 			return nullptr;
 		if (auto it = s_Graphs.find(key); it != s_Graphs.end())
@@ -116,48 +123,195 @@ namespace Basalt {
 		return s_Graphs.emplace(key, std::move(entry)).first->second.Asset;
 	}
 
-	Ref<MeshSource> AssetManager::GetMesh(const std::string& key)
+	namespace {
+		template<typename T>
+		void Publish(const std::string& key, CacheEntry<T>& entry)
+		{
+			if (!entry.Pending || !entry.Job.IsComplete())
+				return;
+			const bool succeeded = entry.Job.Succeeded();
+			auto result = std::move(entry.Pending);
+			// Dependency jobs may still read the completed result; publication must not move from it.
+			entry = *result;
+			if (!succeeded)
+			{
+				entry.Asset.reset();
+				entry.Error = "asset worker failed (see job diagnostic)";
+			}
+			if (!entry.Asset)
+				BS_CORE_ERROR("AssetManager '{}': {}", key, entry.Error);
+		}
+
+		// Project changes discard pending entries without waiting: workers own their paths and results.
+		void CheckProject()
+		{
+			static std::weak_ptr<Project> s_Project;
+			static std::filesystem::path s_Root;
+			const auto& project = Project::GetActive();
+			const auto root = Project::ResolvePath("");
+			if (s_Project.lock() != project || s_Root != root)
+			{
+				// Completed built-ins have no project dependency and stay useful across project switches.
+				std::erase_if(s_Meshes, [](const auto& entry) { return entry.second.Pending || !Primitives::IsBuiltinKey(entry.first); });
+				s_Textures.clear();
+				s_Graphs.clear();
+				s_Project = project;
+				s_Root = root;
+			}
+		}
+	}
+
+	Ref<MeshSource> AssetManager::RequestMesh(const std::string& key)
 	{
+		CheckProject();
 		if (key.empty())
 			return nullptr;
-		auto it = s_Meshes.find(key);
-		if (it != s_Meshes.end())
-			return it->second.Asset;
+		auto [it, inserted] = s_Meshes.try_emplace(key);
+		auto& entry = it->second;
+		if (inserted)
+		{
+			const auto path = Project::ResolvePath(key);
+			const auto root = Project::GetActive() ? Project::GetActive()->GetDirectory() : path.parent_path();
+			auto result = CreateRef<CacheEntry<MeshSource>>();
+			entry.Pending = result;
+			entry.Job = JobSystem::Get().Submit([key, path, root, result] {
+				result->Asset = LoadMesh(key, path, root, result->Dependencies, result->Error);
+				if (result->Asset)
+				{
+					result->Asset->Key = key;
+					result->Asset->UpdateMemoryUsage();
+				}
+			});
+		}
+		// Publication happens only at an explicit fence; a fast worker must not change this frame's view.
+		return entry.Asset;
+	}
 
-		CacheEntry<MeshSource> entry;
-		entry.Asset = LoadMesh(key, entry.Dependencies, entry.Error);
-		if (entry.Asset)
-			entry.Asset->Key = key;
-		else
-			BS_CORE_ERROR("AssetManager: {}", entry.Error);
-		return s_Meshes.emplace(key, std::move(entry)).first->second.Asset;
+	Ref<MeshSource> AssetManager::GetMesh(const std::string& key)
+	{
+		RequestMesh(key);
+		auto it = s_Meshes.find(key);
+		if (it == s_Meshes.end())
+			return nullptr;
+		if (it->second.Pending)
+		{
+			JobSystem::Get().Wait(it->second.Job);
+			Publish(key, it->second);
+		}
+		return it->second.Asset;
 	}
 
 	Ref<MeshSource> AssetManager::FindLoadedMesh(const std::string& key)
 	{
+		CheckProject();
 		const auto it = s_Meshes.find(key);
 		return it != s_Meshes.end() ? it->second.Asset : nullptr;
 	}
 
-	Ref<TextureSource> AssetManager::GetTexture(const std::string& key)
+	Ref<TextureSource> AssetManager::RequestTexture(const std::string& key)
 	{
+		CheckProject();
 		if (key.empty())
 			return nullptr;
-		auto it = s_Textures.find(key);
-		if (it != s_Textures.end())
-			return it->second.Asset;
+		if (auto existing = s_Textures.find(key); existing != s_Textures.end())
+			return existing->second.Asset;
+		Ref<MeshSource> mesh;
+		Ref<CacheEntry<MeshSource>> parentResult;
+		JobHandle parentJob;
+		std::string parentError;
+		const size_t marker = key.find("#image/");
+		if (marker != std::string::npos)
+		{
+			const auto meshKey = key.substr(0, marker);
+			mesh = RequestMesh(meshKey);
+			if (auto parent = s_Meshes.find(meshKey); parent != s_Meshes.end())
+			{
+				parentResult = parent->second.Pending;
+				parentJob = parent->second.Job;
+				parentError = parent->second.Error;
+			}
+		}
+		auto [it, inserted] = s_Textures.try_emplace(key);
+		auto& entry = it->second;
+		if (inserted)
+		{
+			const auto path = Project::ResolvePath(key);
+			auto result = CreateRef<CacheEntry<TextureSource>>();
+			entry.Pending = result;
+			entry.Job = JobSystem::Get().Submit([key, path, mesh, parentResult, parentJob, parentError, result] {
+				BS_PROFILE_SCOPE("Decode texture");
+				Ref<MeshSource> parent = mesh;
+				std::string error = parentError;
+				if (parentResult)
+				{
+					if (JobSystem::Get().Wait(parentJob))
+					{
+						parent = parentResult->Asset;
+						error = parentResult->Error;
+					}
+					else
+						error = "mesh worker failed (see job diagnostic)";
+				}
+				result->Asset = LoadTexture(key, path, parent, error, result->Error);
+				if (result->Asset)
+				{
+					result->Asset->Key = key;
+					result->Asset->UpdateMemoryUsage();
+				}
+			});
+		}
+		return entry.Asset;
+	}
 
-		CacheEntry<TextureSource> entry;
-		entry.Asset = LoadTexture(key, entry.Error);
-		if (entry.Asset)
-			entry.Asset->Key = key;
-		else
-			BS_CORE_ERROR("AssetManager: {}", entry.Error);
-		return s_Textures.emplace(key, std::move(entry)).first->second.Asset;
+	Ref<TextureSource> AssetManager::GetTexture(const std::string& key)
+	{
+		RequestTexture(key);
+		auto it = s_Textures.find(key);
+		if (it == s_Textures.end())
+			return nullptr;
+		if (it->second.Pending)
+		{
+			JobSystem::Get().Wait(it->second.Job);
+			Publish(key, it->second);
+		}
+		return it->second.Asset;
+	}
+
+	bool AssetManager::IsLoading(const std::string& key)
+	{
+		CheckProject();
+		if (auto it = s_Meshes.find(key); it != s_Meshes.end() && it->second.Pending)
+			return true;
+		if (auto it = s_Textures.find(key); it != s_Textures.end() && it->second.Pending)
+			return true;
+		return false;
+	}
+
+	void AssetManager::PublishCompleted()
+	{
+		BS_PROFILE_SCOPE("Publish assets");
+		CheckProject();
+		for (auto& [key, entry] : s_Meshes)
+			Publish(key, entry);
+		for (auto& [key, entry] : s_Textures)
+			Publish(key, entry);
+	}
+
+	void AssetManager::WaitForLoads()
+	{
+		CheckProject();
+		for (auto& [key, entry] : s_Meshes)
+			if (entry.Pending)
+				JobSystem::Get().Wait(entry.Job);
+		for (auto& [key, entry] : s_Textures)
+			if (entry.Pending)
+				JobSystem::Get().Wait(entry.Job);
+		PublishCompleted();
 	}
 
 	std::string AssetManager::GetError(const std::string& key)
 	{
+		CheckProject();
 		if (auto it = s_Meshes.find(key); it != s_Meshes.end())
 			return it->second.Error;
 		if (auto it = s_Textures.find(key); it != s_Textures.end())
@@ -169,6 +323,7 @@ namespace Basalt {
 
 	void AssetManager::Reload(const std::string& key)
 	{
+		CheckProject();
 		s_Graphs.erase(key);
 		s_Meshes.erase(key);
 		s_Textures.erase(key);
@@ -185,6 +340,7 @@ namespace Basalt {
 
 	std::vector<std::string> AssetManager::ReloadChanged(const std::vector<std::string>& paths)
 	{
+		CheckProject();
 		if (paths.empty())
 			return {};
 		const std::unordered_set<std::string> changed(paths.begin(), paths.end());
@@ -192,7 +348,7 @@ namespace Basalt {
 		for (const auto& [key, entry] : s_Meshes)
 		{
 			const bool readsChangedFile = std::any_of(entry.Dependencies.begin(), entry.Dependencies.end(), [&](const std::string& file) { return changed.contains(file); });
-			if (changed.contains(key) || readsChangedFile)
+			if (entry.Pending || changed.contains(key) || readsChangedFile)
 				keys.insert(key);
 		}
 		for (const auto& [key, entry] : s_Textures)
@@ -225,6 +381,7 @@ namespace Basalt {
 
 	std::vector<std::string> AssetManager::GetLoadedKeys()
 	{
+		CheckProject();
 		std::vector<std::string> keys;
 		keys.reserve(s_Meshes.size() + s_Textures.size() + s_Graphs.size());
 		for (const auto& [key, entry] : s_Meshes)
@@ -262,10 +419,11 @@ namespace Basalt {
 	}
 
 	AssetManager::TemporaryLoads::TemporaryLoads()
-		: m_Meshes(SortedKeys(s_Meshes))
-		, m_Textures(SortedKeys(s_Textures))
-		, m_Graphs(SortedKeys(s_Graphs))
 	{
+		CheckProject();
+		m_Meshes = SortedKeys(s_Meshes);
+		m_Textures = SortedKeys(s_Textures);
+		m_Graphs = SortedKeys(s_Graphs);
 	}
 
 	AssetManager::TemporaryLoads::~TemporaryLoads()

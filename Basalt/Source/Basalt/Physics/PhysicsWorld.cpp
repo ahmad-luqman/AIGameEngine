@@ -1,5 +1,7 @@
 #include "Basalt/Physics/PhysicsWorld.h"
 
+#include "Basalt/Core/Profiler.h"
+
 #include "Basalt/Physics/ColliderShapes.h"
 #include "Basalt/Physics/MeshShapeCache.h"
 #include "Basalt/Physics/PhysicsWorldImpl.h"
@@ -12,7 +14,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -119,8 +120,7 @@ namespace Basalt {
 		constexpr uint32_t MaxContactConstraints = 16384;
 
 		m_Impl->TempAllocator = CreateScope<JPH::TempAllocatorImpl>(16 * 1024 * 1024);
-		const int threadCount = std::max(1, static_cast<int>(std::thread::hardware_concurrency()) - 1);
-		m_Impl->JobSystem = CreateScope<JPH::JobSystemThreadPool>(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, threadCount);
+		m_Impl->JobSystem = CreateScope<PhysicsJobs>();
 
 		if (const auto& layers = scene->GetPhysicsLayers())
 			m_Impl->Layers = *layers;
@@ -488,6 +488,7 @@ namespace Basalt {
 
 	void PhysicsWorld::Step(Timestep ts)
 	{
+		BS_PROFILE_SCOPE("Physics");
 		Impl& impl = *m_Impl;
 		JPH::BodyInterface& bodies = impl.System->GetBodyInterface();
 		const PhysicsSettings& settings = impl.ScenePtr->GetPhysicsSettings();

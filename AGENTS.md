@@ -93,6 +93,11 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   play copy reports contacts, animation events and script errors, a `LogHistory` listener log lines; legacy TCP connections stream
   their subscriptions (`AutomationServer::ClientHandler::TakePending`). Agent checks: `scene.snapshot`/`scene.diff`
   (`Scene/SceneDiff`), `assert.*`, `render.compare`.
+- **CPU jobs and streaming.** `Core/JobSystem` is the shared work-stealing pool, including Jolt physics.
+  Cache APIs stay on the main thread; asset workers capture project context and publish isolated results
+  through `AssetManager::PublishCompleted`. Blocking getters join requests. Interactive renderers opt into
+  streaming; captures keep blocking loads. `BASALT_PROFILE` enables Tracy outside Dist. `memory.stats`
+  reports logical asset payload, GPU mesh-buffer and Lua heap charges (see Docs/Rendering.md).
 - **Headless core.** Everything except Renderer/ImGui/Window runs without a GPU; unit tests, the CLI and
   the feature test rely on that.
 

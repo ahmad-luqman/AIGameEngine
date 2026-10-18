@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Basalt/Core/Base.h"
+#include "Basalt/Core/MemoryTracker.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -26,6 +27,13 @@ namespace Basalt {
 		std::vector<uint8_t> Pixels;
 		std::string Key;
 
+		// Refresh after mutating payload vectors; asset loads do this before publishing.
+		void UpdateMemoryUsage();
+
+	private:
+		MemoryAllocation m_Memory;
+
+	public:
 		size_t GetBytesPerPixel() const { return Format == TextureFormat::RGBA8 ? 4 : 16; }
 
 		// PNG, JPEG, TGA, BMP (RGBA8) and Radiance .hdr (RGBA32F). Returns nullptr and sets outError on failure.

@@ -1,5 +1,7 @@
 #include "Basalt/Scene/Scene.h"
 
+#include "Basalt/Core/Profiler.h"
+
 #include "Basalt/Animation/AnimationSystem.h"
 #include "Basalt/Audio/AudioSystem.h"
 #include "Basalt/Core/Assert.h"
@@ -704,6 +706,7 @@ namespace Basalt {
 
 	void Scene::OnUpdate(Timestep ts)
 	{
+		BS_PROFILE_SCOPE("Scene update");
 		if (!IsRunning())
 			return;
 

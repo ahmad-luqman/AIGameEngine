@@ -147,9 +147,6 @@ with a smoke test have shipped. Follow-ups:
 - **Stable asset IDs — M.** Assets are referenced by path, so renaming or moving a file breaks scenes.
   Add `.meta` sidecar files with a UUID, resolve references by UUID with the path as a hint, and make
   `asset.move`/`asset.rename` update both.
-- **Asynchronous loading — M.** Meshes and textures load synchronously on the main thread, so large
-  glTFs stall the frame. Load and decode on a worker thread pool, upload on the main thread, and show a
-  placeholder meanwhile. Requires a small job system.
 - **Texture compression — M.** Import textures to KTX2 with BC7 (desktop) and keep the source; cuts VRAM
   use and load time roughly 4x. Use `basisu` or `bc7enc` at import time, and cache the results.
 - **Mesh optimization — S.** Run meshoptimizer (vertex cache, overdraw, vertex fetch) at import time and
@@ -186,16 +183,9 @@ more reliable.
 
 ## Engine internals
 
-- **Job system — M.** A small engine-wide thread pool with work stealing, used by asset loading,
-  animation and culling. Physics currently owns a private `JPH::JobSystemThreadPool`; route it through
-  the shared pool (Jolt's `JobSystemWithBarrier`) so the two do not oversubscribe the CPU.
 - **GPU profiler follow-ups — S.** Scene passes are timed (`GpuProfiler`, editor statistics, `render.stats`);
   the editor's own ImGui pass and the runtime blit are not. Time them too, and show the totals in the
   play-mode stats overlay (see Editor) once it exists.
-- **CPU profiler integration — S.** Optional Tracy instrumentation behind `BASALT_PROFILE`, compiled out
-  by default.
-- **Memory tracking — S.** Track allocations per subsystem (assets, GPU buffers, Lua heap) and report them
-  in the stats overlay and `render.stats`.
 - **Performance benchmarks — M.** A benchmark scene with thousands of entities, many lights and physics
   bodies, run in Release on CI with frame-time thresholds to catch regressions.
 

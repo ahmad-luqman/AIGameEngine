@@ -1,5 +1,7 @@
 #include <doctest/doctest.h>
 
+#include <Basalt/Asset/AssetManager.h>
+
 #include <Basalt/Automation/AutomationSession.h>
 #include <Basalt/Automation/CommandRegistry.h>
 #include <Basalt/Automation/McpServer.h>
@@ -231,6 +233,31 @@ TEST_SUITE("Automation")
 		}
 	}
 
+	TEST_CASE("asset.preload reports async progress and joins mesh and texture dependencies")
+	{
+		BasaltTest::TempProject project("PreloadCommands");
+		CommandRegistry registry;
+		AutomationSession session;
+		AssetManager::Clear();
+		const auto pending = Run(registry, session, "asset.preload", { { "paths", { "builtin://Cube" } } });
+		CHECK(pending[0]["status"] == "pending");
+		const auto ready = Run(registry, session, "asset.preload", { { "paths", { "builtin://Cube", "Assets/missing.png" } }, { "wait", true } });
+		CHECK(ready[0]["status"] == "ready");
+		CHECK(ready[1]["status"] == "failed");
+		CHECK_FALSE(ready[1]["error"].get<std::string>().empty());
+		const auto memory = Run(registry, session, "memory.stats");
+		CHECK(memory["assets"]["bytes"].get<uint64_t>() > 0);
+		CHECK(memory["assets"]["peakBytes"] >= memory["assets"]["bytes"]);
+		CHECK(memory.contains("lua"));
+		CHECK(memory.contains("gpuBuffers"));
+		AssetManager::Clear();
+		CHECK(RunError(registry, session, "asset.preload", { { "paths", { "builtin://Cube", "Assets/unsupported.lua" } } }).find("unsupported") != std::string::npos);
+		CHECK(AssetManager::GetLoadedKeys().empty());
+		CHECK(RunError(registry, session, "asset.preload", { { "paths", { "../outside.png" } } }).find("project") != std::string::npos);
+		CHECK(RunError(registry, session, "asset.preload", { { "paths", "bad" } }).find("array") != std::string::npos);
+		CHECK(Run(registry, session, "asset.preload", { { "paths", json::array() } }).empty());
+	}
+
 	TEST_CASE("render.stats reports the host's renderer statistics and needs a GPU host")
 	{
 		CommandRegistry registry;
@@ -243,6 +270,7 @@ TEST_SUITE("Automation")
 			return true;
 		};
 		CHECK(Run(registry, session, "render.stats")["drawCalls"] == 3);
+		CHECK(Run(registry, session, "render.stats")["memory"].contains("assets"));
 		CHECK(RunError(registry, session, "render.stats", { { "frames", 1 } }).find("frames") != std::string::npos);
 		session.RenderStats = [](json&, std::string& error) {
 			error = "renderer gone";

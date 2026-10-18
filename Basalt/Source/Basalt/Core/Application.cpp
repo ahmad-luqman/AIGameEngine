@@ -1,5 +1,7 @@
 #include "Basalt/Core/Application.h"
 
+#include "Basalt/Core/Profiler.h"
+
 #include "Basalt/Audio/AudioEngine.h"
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Input.h"
@@ -155,6 +157,8 @@ namespace Basalt {
 		Timer frameTimer;
 		while (m_Running)
 		{
+			BS_PROFILE_FRAME();
+			BS_PROFILE_SCOPE("Frame");
 			float deltaTime = frameTimer.Elapsed();
 			frameTimer.Reset();
 			if (m_Specification.FixedTimestep > 0.0f)

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Basalt/Core/MemoryTracker.h"
+
 #include <glm/glm.hpp>
 #include <nvrhi/nvrhi.h>
 
@@ -52,5 +54,6 @@ namespace Basalt {
 		std::vector<BloomLevel> m_Bloom;
 		bool m_AutoLastFrame = false;
 		bool m_Failed = false;
+		MemoryAllocation m_HistogramMemory{ MemoryCategory::GpuBuffers };
 	};
 }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Basalt/Core/MemoryTracker.h"
+
 #include <glm/glm.hpp>
 #include <nvrhi/nvrhi.h>
 
@@ -69,6 +71,8 @@ namespace Basalt {
 		nvrhi::BindingLayoutHandle m_Layout;
 		nvrhi::BindingSetHandle m_Set;
 		nvrhi::ComputePipelineHandle m_Pipeline;
+		MemoryAllocation m_ConstantsMemory{ MemoryCategory::GpuBuffers };
+		MemoryAllocation m_BufferMemory{ MemoryCategory::GpuBuffers };
 	};
 
 }

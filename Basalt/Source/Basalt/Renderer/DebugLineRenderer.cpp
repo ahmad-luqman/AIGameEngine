@@ -63,6 +63,7 @@ namespace Basalt {
 			desc.initialState = nvrhi::ResourceStates::VertexBuffer;
 			desc.keepInitialState = true;
 			m_VertexBuffer = m_Device->createBuffer(desc);
+			m_VertexMemory.Resize(m_VertexBuffer ? static_cast<size_t>(desc.byteSize) : 0);
 		}
 		commandList->writeBuffer(m_VertexBuffer, vertices.data(), bytes);
 

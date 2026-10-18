@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Basalt/Core/MemoryTracker.h"
+
 #include "Basalt/Renderer/DebugDraw.h"
 
 #include <glm/glm.hpp>
@@ -31,6 +33,7 @@ namespace Basalt {
 		nvrhi::BufferHandle m_VertexBuffer;
 		nvrhi::GraphicsPipelineHandle m_Pipelines[2];
 		nvrhi::FramebufferInfo m_PipelineInfo[2];
+		MemoryAllocation m_VertexMemory{ MemoryCategory::GpuBuffers };
 	};
 
 }

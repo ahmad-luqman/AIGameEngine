@@ -94,7 +94,9 @@ namespace Basalt {
 		m_BindingSets.clear();
 		m_Pipeline = nullptr;
 		m_VertexBuffer = nullptr;
+		m_VertexMemory.Resize(0);
 		m_IndexBuffer = nullptr;
+		m_IndexMemory.Resize(0);
 		m_Sampler = nullptr;
 		m_BindingLayout = nullptr;
 		m_InputLayout = nullptr;
@@ -186,6 +188,7 @@ namespace Basalt {
 			desc.initialState = nvrhi::ResourceStates::VertexBuffer;
 			desc.keepInitialState = true;
 			m_VertexBuffer = m_Device->createBuffer(desc);
+			m_VertexMemory.Resize(m_VertexBuffer ? static_cast<size_t>(desc.byteSize) : 0);
 		}
 
 		if (!m_IndexBuffer || m_IndexBuffer->getDesc().byteSize < indexBytes)
@@ -197,6 +200,7 @@ namespace Basalt {
 			desc.initialState = nvrhi::ResourceStates::IndexBuffer;
 			desc.keepInitialState = true;
 			m_IndexBuffer = m_Device->createBuffer(desc);
+			m_IndexMemory.Resize(m_IndexBuffer ? static_cast<size_t>(desc.byteSize) : 0);
 		}
 
 		return m_VertexBuffer && m_IndexBuffer;

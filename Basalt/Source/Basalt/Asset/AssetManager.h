@@ -17,11 +17,18 @@ namespace Basalt {
 	// built-in meshes ("builtin://Cube"), or embedded glTF images ("Assets/Models/Ship.glb#image/0").
 	//
 	// Failed loads are cached too, so a missing file is reported once rather than every frame; call
-	// Reload() (or Clear()) after fixing the file. Main thread only.
+	// Reload() (or Clear()) after fixing the file. Cache APIs are main thread only; workers own isolated results.
 	class AssetManager
 	{
 	public:
 		static Ref<const AnimationGraph> GetAnimationGraph(const std::string& key);
+		// Starts a deduplicated worker load and returns only already-published assets. Poll each frame.
+		// GetMesh/GetTexture remain blocking and join an existing request instead of loading twice.
+		static Ref<MeshSource> RequestMesh(const std::string& key);
+		static Ref<TextureSource> RequestTexture(const std::string& key);
+		static bool IsLoading(const std::string& key);
+		static void PublishCompleted();
+		static void WaitForLoads();
 		static Ref<MeshSource> GetMesh(const std::string& key);
 		// The mesh if it is already loaded, without loading it (tooltips that must not stall a frame).
 		static Ref<MeshSource> FindLoadedMesh(const std::string& key);

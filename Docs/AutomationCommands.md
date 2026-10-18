@@ -244,6 +244,44 @@ Lists project asset files, optionally filtered by extensions (e.g. ['.lua']).
 
 </details>
 
+### `asset.preload`
+
+Requests mesh/texture CPU loads on the shared worker pool. Returns a status (pending, ready or failed) and error for each path. Poll by repeating; wait=true joins these requests, including embedded image dependencies. Reload/refresh retries failed loads. GPU upload happens in the renderer.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `paths` | array of mesh/texture paths or built-in mesh keys |
+| `wait` | wait for these loads, default false |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "paths": {
+      "description": "array of mesh/texture paths or built-in mesh keys",
+      "items": {
+        "description": "string",
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "wait": {
+      "description": "wait for these loads, default false",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "paths"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
 ### `asset.read`
 
 Reads a text asset.
@@ -1486,6 +1524,25 @@ Runs Lua in the playing scene's script state; returns the value of the expressio
   "required": [
     "code"
   ],
+  "type": "object"
+}
+```
+
+</details>
+
+## memory
+
+### `memory.stats`
+
+Returns logical retained CPU asset payload bytes, requested GPU buffer bytes, and live Lua heap bytes, with peaks and allocation counts. Not RSS or driver residency; excludes allocator overhead, GPU textures and render targets. Available headlessly.
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "required": [],
   "type": "object"
 }
 ```

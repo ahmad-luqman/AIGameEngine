@@ -3,6 +3,7 @@
 #include "Basalt/Asset/MeshSource.h"
 #include "Basalt/Asset/TextureSource.h"
 #include "Basalt/Core/Base.h"
+#include "Basalt/Core/MemoryTracker.h"
 
 #include <nvrhi/nvrhi.h>
 
@@ -54,6 +55,7 @@ namespace Basalt {
 		{
 			std::weak_ptr<MeshSource> Source;
 			GpuMesh Mesh;
+			MemoryAllocation Memory{ MemoryCategory::GpuBuffers };
 		};
 		struct TextureEntry
 		{
