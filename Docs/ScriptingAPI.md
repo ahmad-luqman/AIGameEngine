@@ -1170,7 +1170,8 @@ function Player:OnUpdate(dt) self.Entity:SetBlendSpaceParameter(self.Speed) end
   its pose, `IsAnimationPlaying()`, `SetBlendSpaceParameter` and `SetAnimationTime` return false and the problem is
   logged when it appears or changes; it resumes as soon as the space can play.
 - `Animator.Clip` may name a blend space: `PlayOnStart` then starts it at parameter (0, 0). A clip of the same
-  name wins (the inspector warns).
+  name wins (the inspector warns). A blend space of that name added during play still starts, unless the Animator
+  played something else first.
 - **MatchVelocity:** with it on, the whole space plays at one rate that blends the plain `Speed` (for the weight
   of samples with `Speed` 0: standing, or unknown) with `Speed` x the entity's measured horizontal speed / the
   moving samples' weighted `Speed` (for the moving samples' weight), clamped to 0..100. A character moving faster
@@ -1195,7 +1196,8 @@ attachments to attached entities update in dependency order within the frame. Ed
 transform. Physics reads transforms before animation, so a Kinematic body on an attachment follows one physics
 step later (its body is moved with a velocity, so it pushes what it hits); a Dynamic body is also moved by
 physics (the inspector warns). Missing targets, joints or Animators, a Target inside the entity's own hierarchy
-below it, and attachment cycles are logged once and leave the entity where it is.
+below it, attachment cycles and a zero scale above the entity (or in its resulting transform) are logged once and
+leave the entity where it is.
 
 ## Graphics settings
 

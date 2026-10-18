@@ -126,6 +126,9 @@ namespace Basalt {
 			bool InvalidPose = false;
 			bool InvalidSpeed = false;
 			bool EventLimitLogged = false;
+			// Animator.Clip when it named neither a clip nor a blend space: a blend space of that name added later
+			// still starts (until something else plays).
+			std::string PendingStart;
 			// The last failed PlayBlendSpace's problem, so a script retrying every frame logs it once.
 			std::string PlayProblem;
 			std::string EntityName;

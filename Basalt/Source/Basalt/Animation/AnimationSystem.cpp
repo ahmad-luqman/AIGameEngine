@@ -137,7 +137,10 @@ namespace Basalt {
 				if (FindSpace(*component, component->Clip))
 					ResolveSpace(playback, playback.Space.emplace(SpaceState{ .Name = component->Clip }), *component);
 				else
+				{
 					BS_CORE_ERROR("Animator '{}': clip '{}' not found in '{}'", entity.GetName(), component->Clip, component->Mesh);
+					playback.PendingStart = component->Clip;
+				}
 			}
 			playback.Playing = component->PlayOnStart && (playback.Clip >= 0 || playback.Space);
 			Evaluate(playback);
@@ -328,6 +331,17 @@ namespace Basalt {
 						playback->MeasuredSpeed += (distance / seconds - playback->MeasuredSpeed) * blend;
 				}
 				playback->LastPosition = position;
+			}
+			// Editing BlendSpaces does not reset playback, so a start space added after the Clip was set is looked
+			// for until the Animator plays something else.
+			if (!playback->PendingStart.empty() && playback->Clip < 0 && !playback->Space && !playback->Rest)
+			{
+				if (FindSpace(component, playback->PendingStart))
+				{
+					ResolveSpace(*playback, playback->Space.emplace(SpaceState{ .Name = playback->PendingStart }), component);
+					playback->Playing = component.PlayOnStart;
+					playback->PendingStart.clear();
+				}
 			}
 			if (!playback->Playing)
 				continue;
@@ -542,6 +556,22 @@ namespace Basalt {
 				problem = fmt::format("its Target '{}' is one of its descendants", target.GetName());
 			else if (!GetBoneTransform(target, attachment.Joint, bone, problem))
 				problem = fmt::format("Target '{}': {}", target.GetName(), problem);
+			// SetWorldTransform inverts the parent's world transform and decomposes the result: a zero scale above the
+			// entity, or in the target, joint or offset, has no Transform.
+			glm::mat4 world(1.0f);
+			const auto singular = [](const glm::mat4& matrix) {
+				const glm::mat3 basis(matrix);
+				const float determinant = glm::determinant(basis);
+				return !std::isfinite(determinant) || !(glm::length(basis[0]) > 1e-6f && glm::length(basis[1]) > 1e-6f && glm::length(basis[2]) > 1e-6f) || determinant == 0.0f;
+			};
+			if (problem.empty())
+			{
+				world = m_Scene.GetWorldTransform(target) * bone * Math::ComposeTransform(attachment.Translation, attachment.Rotation, attachment.Scale);
+				if (const Entity parent = entity.GetParent(); parent && singular(m_Scene.GetWorldTransform(parent)))
+					problem = fmt::format("its parent '{}' has a zero (or non-finite) world scale", parent.GetName());
+				else if (singular(world))
+					problem = "its world transform would have a zero (or non-finite) scale";
+			}
 			if (!problem.empty())
 			{
 				auto previous = m_AttachmentProblems.find(entity.GetUUID());
@@ -550,7 +580,7 @@ namespace Basalt {
 				problems[entity.GetUUID()] = std::move(problem);
 				continue;
 			}
-			m_Scene.SetWorldTransform(entity, m_Scene.GetWorldTransform(target) * bone * Math::ComposeTransform(attachment.Translation, attachment.Rotation, attachment.Scale));
+			m_Scene.SetWorldTransform(entity, world);
 		}
 		m_AttachmentProblems = std::move(problems);
 	}
