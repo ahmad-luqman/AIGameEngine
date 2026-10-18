@@ -662,6 +662,49 @@ namespace Basalt {
 					weights[clip] = weight;
 				return weights;
 			};
+
+			// Layers and inverse kinematics.
+			entityType["PlayAnimationLayer"] = [&context](const ScriptEntity& self, const std::string& layer, const sol::object& clip) {
+				Entity entity = RequireAnimator(self, "PlayAnimationLayer");
+				if (!IsNil(clip) && clip.get_type() != sol::type::string)
+					throw std::runtime_error("PlayAnimationLayer: clip must be a string or nil");
+				return RequireAnimations(context).PlayLayer(entity, layer, IsNil(clip) ? std::nullopt : std::optional<std::string>(clip.as<std::string>()));
+			};
+			entityType["SetAnimationLayerWeight"] = [&context](const ScriptEntity& self, const std::string& layer, float weight, const sol::object& seconds) {
+				Entity entity = RequireAnimator(self, "SetAnimationLayerWeight");
+				return RequireAnimations(context).SetLayerWeight(entity, layer, weight, OptionalNumber(seconds, "SetAnimationLayerWeight: seconds", 0.0f));
+			};
+			entityType["GetAnimationLayerWeight"] = [&context](const ScriptEntity& self, const std::string& layer) {
+				const std::optional<float> weight = RequireAnimations(context).GetLayerWeight(RequireAnimator(self, "GetAnimationLayerWeight"), layer);
+				return weight ? sol::optional<float>(*weight) : sol::optional<float>();
+			};
+			entityType["SetIKTarget"] = [&context](const ScriptEntity& self, const std::string& chain, const sol::object& target, const sol::object& extra) {
+				Entity entity = RequireEntityWith<InverseKinematicsComponent>(self, "SetIKTarget", "InverseKinematics");
+				AnimationSystem& animations = RequireAnimations(context);
+				if (target.is<ScriptEntity>())
+				{
+					if (!IsNil(extra) && extra.get_type() != sol::type::boolean)
+						throw std::runtime_error("SetIKTarget: matchRotation must be true, false or nil");
+					const Entity followed = target.as<ScriptEntity>().ResolveOrThrow();
+					return animations.SetIKTarget(entity, chain, followed, !IsNil(extra) && extra.as<bool>());
+				}
+				if (!target.is<glm::vec3>())
+					throw std::runtime_error("SetIKTarget: target must be a Vec3 or an Entity");
+				if (!IsNil(extra) && !extra.is<glm::quat>())
+					throw std::runtime_error("SetIKTarget: rotation must be a Quat or nil");
+				return animations.SetIKTarget(entity, chain, target.as<glm::vec3>(), IsNil(extra) ? std::nullopt : std::optional<glm::quat>(extra.as<glm::quat>()));
+			};
+			entityType["ClearIKTarget"] = [&context](const ScriptEntity& self, const std::string& chain) {
+				return RequireAnimations(context).ClearIKTarget(RequireEntityWith<InverseKinematicsComponent>(self, "ClearIKTarget", "InverseKinematics"), chain);
+			};
+			entityType["SetIKWeight"] = [&context](const ScriptEntity& self, const std::string& chain, float weight, const sol::object& seconds) {
+				Entity entity = RequireEntityWith<InverseKinematicsComponent>(self, "SetIKWeight", "InverseKinematics");
+				return RequireAnimations(context).SetIKWeight(entity, chain, weight, OptionalNumber(seconds, "SetIKWeight: seconds", 0.0f));
+			};
+			entityType["GetIKWeight"] = [&context](const ScriptEntity& self, const std::string& chain) {
+				const std::optional<float> weight = RequireAnimations(context).GetIKWeight(RequireEntityWith<InverseKinematicsComponent>(self, "GetIKWeight", "InverseKinematics"), chain);
+				return weight ? sol::optional<float>(*weight) : sol::optional<float>();
+			};
 		}
 
 		void RegisterGraphics(sol::state& lua, ScriptContext& context)

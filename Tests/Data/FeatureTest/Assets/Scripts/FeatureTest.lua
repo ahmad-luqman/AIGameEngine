@@ -152,7 +152,7 @@ local function TestEntities(self)
 
 	-- Every component type round-trips through Lua.
 	for _, name in ipairs({ "Camera", "Mesh", "Animator", "Material", "DirectionalLight", "PointLight", "SpotLight", "SkyLight", "PostProcess", "RigidBody",
-		"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "AudioSource", "AudioListener", "ParticleEmitter", "UIRect", "UIImage", "UIText", "UIButton", "UISlider", "UICheckbox", "Prefab", "BoneAttachment" }) do
+		"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "AudioSource", "AudioListener", "ParticleEmitter", "UIRect", "UIImage", "UIText", "UIButton", "UISlider", "UICheckbox", "Prefab", "BoneAttachment", "InverseKinematics" }) do
 		local holder = Scene.CreateEntity("Holder" .. name)
 		Expect("AddComponent " .. name, function() holder:AddComponent(name) end)
 		local data = holder:GetComponent(name)
@@ -200,6 +200,28 @@ local function TestEntities(self)
 	ExpectError("Animation parameter nil", function() stateRig:SetAnimationParameter("Speed", nil) end, "must be a number or boolean")
 	ExpectError("Animation parameter string", function() stateRig:SetAnimationParameter("Speed", "fast") end, "must be a number or boolean")
 	ExpectError("Animation parameter table", function() stateRig:SetAnimationParameter("Speed", {}) end, "must be a number or boolean")
+
+	-- Layers and inverse kinematics.
+	local ikRig = Scene.FindEntityByName("IKRig")
+	Check("GetAnimationLayerWeight", ikRig:GetAnimationLayerWeight("Wave") == 1 and ikRig:GetAnimationLayerWeight("Missing") == nil)
+	Check("SetAnimationLayerWeight", ikRig:SetAnimationLayerWeight("Breathe", 0.5) and ikRig:GetAnimationLayerWeight("Breathe") == 0.5)
+	Check("SetAnimationLayerWeight fade", ikRig:SetAnimationLayerWeight("Breathe", 1, 0.25) and ikRig:GetAnimationLayerWeight("Breathe") == 0.5)
+	Check("PlayAnimationLayer", ikRig:PlayAnimationLayer("Wave") and ikRig:PlayAnimationLayer("Wave", "Wave"))
+	Check("PlayAnimationLayer missing", not ikRig:PlayAnimationLayer("Missing") and not ikRig:PlayAnimationLayer("Wave", "Missing"))
+	ExpectError("PlayAnimationLayer clip type", function() ikRig:PlayAnimationLayer("Wave", 1) end, "clip must be a string or nil")
+	ExpectError("Animation layer validation", function() ikRig:SetComponent("Animator", { Layers = { { Name = "A" }, { Name = "A" } } }) end, "is already used by Layers[0]")
+	Check("Animator layer lists", ikRig:GetComponent("Animator").Layers[1].Mask[1].Joint == "RightUpperArm" and ikRig:GetComponent("Animator").Layers[2].Blend == "Additive")
+	Check("SetIKTarget", ikRig:SetIKTarget("Head", Vec3(1003, 1.7, 23)))
+	Check("SetIKTarget entity", ikRig:SetIKTarget("LeftArm", Scene.FindEntityByName("IKHandle")))
+	Check("SetIKTarget rotation", ikRig:SetIKTarget("RightFoot", Vec3(1000, 0, 20), Quat.Identity()) and ikRig:ClearIKTarget("RightFoot"))
+	Check("ClearIKTarget", ikRig:ClearIKTarget("LeftFoot"))
+	Check("SetIKWeight", ikRig:SetIKWeight("Head", 0.5) and ikRig:GetIKWeight("Head") == 0.5 and ikRig:SetIKWeight("Head", 1))
+	Check("GetIKWeight", ikRig:GetIKWeight("LeftArm") == 1 and ikRig:GetIKWeight("Missing") == nil)
+	Check("SetIKTarget missing", not ikRig:SetIKTarget("Missing", Vec3(0, 0, 0)))
+	ExpectError("SetIKTarget type", function() ikRig:SetIKTarget("Head", "up") end, "must be a Vec3 or an Entity")
+	ExpectError("SetIKTarget without component", function() rig:SetIKTarget("Head", Vec3(0, 0, 0)) end, "needs the InverseKinematics component")
+	ExpectError("IK chain validation", function() ikRig:SetComponent("InverseKinematics", { Chains = { { ChainLength = 0 } } }) end, "ChainLength 0 must be between 1 and 8")
+	Check("InverseKinematics lists", ikRig:GetComponent("InverseKinematics").Chains[3].Type == "LookAt")
 
 	-- Other scripts.
 	local spinner = Scene.FindEntityByName("Turntable"):GetScript()
@@ -771,6 +793,14 @@ function Driver:OnUpdate(dt)
 		Check("Root motion moves entity and strips pose", stateRig.WorldPosition.x > 1000 and Near(rootPosition.x, stateRig.WorldPosition.x, 1e-3))
 		Check("BoneAttachment follows its joint", NearVec(Scene.FindEntityByName("RigHat").WorldPosition, tip + tipRotation * Vec3(0, 0.2, 0), 1e-3))
 		Check("OnAnimationEvent", (FeatureTestEvents["AnimationEvent:Footstep"] or 0) >= 1)
+		local ikRig = Scene.FindEntityByName("IKRig")
+		-- The right foot stands on the 0.2 m step, its ankle 0.05 m above it; the left one stays on the floor.
+		Check("Foot placement", Near(ikRig:GetBoneTransform("RightFoot").y, 0.25, 0.01) and Near(ikRig:GetBoneTransform("LeftFoot").y, 0.05, 0.01))
+		Check("Two-bone IK follows an entity", NearVec(ikRig:GetBoneTransform("LeftHand"), Scene.FindEntityByName("IKHandle").WorldPosition, 1e-3))
+		local head, headRotation = ikRig:GetBoneTransform("Head")
+		Check("Look-at IK", NearVec(headRotation * Vec3(0, 0, 1), (Vec3(1003, 1.7, 23) - head):Normalized(), 1e-3))
+		-- The masked Wave layer raises the right arm (its rest pose points it sideways).
+		Check("Override layer", ikRig:GetBoneTransform("RightHand").y > ikRig:GetBoneTransform("RightUpperArm").y + 0.15)
 		local hit = Physics.Raycast(Vec3(0, 10, 8), Vec3(0, -1, 0), 50)
 		Check("Physics.Raycast hit", hit ~= nil and hit.Entity.Name == "Ground" and Near(hit.Point.y, 0, 0.05) and NearVec(hit.Normal, Vec3(0, 1, 0), 1e-3) and Near(hit.Distance, 10, 0.05))
 		Check("Physics.Raycast miss", Physics.Raycast(Vec3(0, 10, 8), Vec3(0, 1, 0), 50) == nil)

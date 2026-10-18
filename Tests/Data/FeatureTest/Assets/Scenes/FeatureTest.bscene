@@ -18,6 +18,20 @@
 			"Transform": { "Translation": [1000, 0, 10] },
 			"Animator": { "Mesh": "Assets/Models/TwoJoint.gltf", "StateMachine": "Assets/Animations/Character.banimgraph", "RootMotion": true, "RootJoint": "RootJoint",
 				"BlendSpaces": [ { "Name": "Locomotion", "Samples": [ { "Clip": "Step", "X": 0 }, { "Clip": "Cubic", "X": 1 } ] } ] } } },
+		{ "ID": 914, "Name": "IKRig", "Components": {
+			"Transform": { "Translation": [1000, 0, 20] },
+			"Animator": { "Mesh": "Assets/Models/Biped.gltf", "Clip": "Lean",
+				"Layers": [ { "Name": "Wave", "Clip": "Wave", "Mask": [ { "Joint": "RightUpperArm" } ] }, { "Name": "Breathe", "Clip": "Breathe", "Blend": "Additive" } ] },
+			"InverseKinematics": { "Pelvis": "Hips", "Smoothing": 0.05,
+				"Chains": [ { "Name": "LeftFoot", "Joint": "LeftFoot", "Ground": true }, { "Name": "RightFoot", "Joint": "RightFoot", "Ground": true },
+					{ "Name": "Head", "Type": "LookAt", "Joint": "Head" }, { "Name": "LeftArm", "Joint": "LeftHand" } ] } } },
+		{ "ID": 915, "Name": "IKFloor", "Components": {
+			"Transform": { "Translation": [1000, -0.5, 20] },
+			"RigidBody": {}, "BoxCollider": { "HalfExtents": [1, 0.5, 1] } } },
+		{ "ID": 916, "Name": "IKStep", "Components": {
+			"Transform": { "Translation": [999.9, 0.1, 20] },
+			"RigidBody": {}, "BoxCollider": { "HalfExtents": [0.05, 0.1, 0.2] } } },
+		{ "ID": 917, "Name": "IKHandle", "Components": { "Transform": { "Translation": [1000.4, 1.3, 20.3] } } },
 		{ "ID": 100, "Name": "FeatureTestDriver", "Components": {
 			"Script": { "Script": "Assets/Scripts/FeatureTest.lua", "Properties": { "Duration": 4.5, "Note": "from scene", "Offset": [1, 2, 3] } } } },
 

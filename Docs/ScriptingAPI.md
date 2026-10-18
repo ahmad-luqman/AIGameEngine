@@ -181,6 +181,8 @@ Entity handles store an ID and stay safe to hold: using a destroyed entity raise
 | `e:GetAnimationClips()`, `e:GetAnimationTime()`, `e:GetAnimationDuration()`, `e:IsAnimationPlaying()` | Animator queries |
 | `e:PlayBlendSpace(space, x, [y], [fadeSeconds])`, `e:SetBlendSpaceParameter(x, [y])`, `e:GetBlendSpaceWeights()` | Animator blend spaces; see Blend spaces |
 | `e:GetBoneTransform(joint)` | World position (Vec3), rotation (Quat) and scale (Vec3) of a joint of the Animator's current pose, or nil; see Bones |
+| `e:PlayAnimationLayer(layer, [clip])`, `e:SetAnimationLayerWeight(layer, weight, [seconds])`, `e:GetAnimationLayerWeight(layer)` | Animator layers; see Animation layers |
+| `e:SetIKTarget(chain, position, [rotation])`, `e:SetIKTarget(chain, entity, [matchRotation])`, `e:ClearIKTarget(chain)`, `e:SetIKWeight(chain, weight, [seconds])`, `e:GetIKWeight(chain)` | InverseKinematics chains; see Inverse kinematics |
 | `e:GetScript()` | The entity's script instance (call its functions, read its fields) |
 | `e:Destroy()` | Destroy at the end of the frame (with children) |
 
@@ -1188,7 +1190,8 @@ function Player:OnUpdate(dt) self.Entity:SetBlendSpaceParameter(self.Speed) end
 `e:GetBoneTransform(joint)` returns the world position, rotation and scale of the first node named `joint` in
 the Animator's current pose (any glTF node, not only skin joints), or nil when there is none or the Animator's model
 cannot animate (logged when the problem appears or changes, per joint). Animation advances between `OnUpdate` and physics, so `OnUpdate` sees the previous
-frame's pose; `OnLateUpdate` and `OnAnimationEvent` see this frame's. Like the other Animator functions it raises an error on an
+frame's pose; `OnLateUpdate` and `OnAnimationEvent` see this frame's (inverse kinematics runs after `OnLateUpdate`, so
+`OnLateUpdate` sees it with the previous frame's IK solution). Like the other Animator functions it raises an error on an
 entity without an Animator.
 
 A `BoneAttachment` component keeps an entity on a joint of another entity's Animator while the scene plays or
@@ -1201,6 +1204,106 @@ step later (its body is moved with a velocity, so it pushes what it hits); a Dyn
 physics (the inspector warns). Missing targets, joints or Animators, a Target inside the entity's own hierarchy
 below it, attachment cycles and a zero scale or non-finite value above the entity (or in its resulting transform) are
 logged once and leave the entity where it is.
+
+### Animation layers
+
+`Animator.Layers` plays clips on top of the base playback (a clip, blend, blend space or state machine), in list order:
+
+```lua
+actor:SetComponent("Animator", { Layers = {
+    { Name = "Wave", Clip = "Wave", Mask = { { Joint = "RightUpperArm" } } },
+    { Name = "Breathe", Clip = "Breathe", Blend = "Additive", Weight = 0.5 },
+} })
+actor:SetAnimationLayerWeight("Wave", 0, 0.3) -- fade the wave out over 0.3 s
+```
+
+| Field | Meaning |
+|---|---|
+| `Name` | Unique; scripts address the layer by it |
+| `Clip` | The clip the layer plays; empty plays nothing until `PlayAnimationLayer` names one |
+| `Blend` | `"Override"` moves the pose below toward the clip by the weight; `"Additive"` adds the clip's difference from its reference pose |
+| `Weight` | 0..1, the starting weight; a changed value applies at once (and ends a fade) |
+| `Speed`, `Looping` | The layer's own clock: `Speed` 0..100 (not scaled by `Animator.Speed`); a non-looping layer holds its last frame |
+| `ReferenceClip`, `ReferenceTime` | Additive only: the pose the clip is a difference from, `ReferenceClip` (empty: the layer's own clip) at `ReferenceTime` seconds (clamped to the clip) |
+| `Mask` | `{ Joint, Weight }` entries: each joint and its subtree take `Weight` (0..1) unless a deeper entry names one of its descendants; joints under no entry take 0. Empty: the whole model at 1 |
+
+A layer changes only the channels (translation, rotation, scale) its clip animates, on joints its mask weights.
+Additive deltas are taken in each joint's parent space: translation offsets, rotations applied before the pose's
+rotation, scale ratios. While root motion is on, the root-motion joint (`RootJoint`) is left out of every layer.
+Layers advance unless the Animator is paused (`PauseAnimation`): also while the base is stopped, finished, or a blend
+space cannot play. `StopAnimation` and base clip changes do not affect them. Layer state belongs to the playback and
+resets with it (`Mesh` or `Clip` changes, asset reload).
+
+| Function | Behavior |
+|---|---|
+| `e:PlayAnimationLayer(layer, [clip])` | Restarts the layer at 0, on `clip` when given (until the configured `Clip` changes), otherwise on its configured `Clip`. False for an unknown layer, an unknown or empty clip name |
+| `e:SetAnimationLayerWeight(layer, weight, [seconds])` | Fades the weight (0..1) linearly over `seconds` (default 0: at once). False for an unknown layer or an invalid weight or time |
+| `e:GetAnimationLayerWeight(layer)` | The current weight, or nil for an unknown layer |
+
+Unknown layers and clips are logged once per problem; a non-string clip or non-number seconds raise errors. The
+inspector and `scene.info` warn about layer clips, reference clips and mask joints the model does not have.
+
+### Inverse kinematics
+
+An `InverseKinematics` component on an Animator's entity bends the animated pose toward targets every frame the scene
+plays or simulates, after physics and `OnLateUpdate` and before attachments and drawing (so attachments follow solved
+hands):
+
+```lua
+actor:AddComponent("InverseKinematics", {
+    Pelvis = "Hips",
+    Chains = {
+        { Name = "LeftFoot", Joint = "LeftFoot", Ground = true },
+        { Name = "RightFoot", Joint = "RightFoot", Ground = true },
+        { Name = "Head", Type = "LookAt", Joint = "Head", ChainLength = 3, MaxAngle = 70 },
+        { Name = "RightHand", Joint = "RightHand", Weight = 0 },
+    },
+})
+actor:SetIKTarget("Head", Scene.FindEntityByName("Camera")) -- follow an entity
+actor:SetIKTarget("RightHand", lever.WorldPosition, lever.Rotation) -- lever has no parent here
+actor:SetIKWeight("RightHand", 1, 0.25)
+```
+
+| Chain field | Meaning |
+|---|---|
+| `Name` | Unique; scripts address the chain by it |
+| `Type` | `"TwoBone"`: `Joint` is the end of a three-joint chain (foot, hand): its parent bends and its grandparent turns so it reaches the target. `"LookAt"`: `Joint` and `ChainLength - 1` ancestors turn so `Joint`'s `Axis` points at the target |
+| `Joint` | The end joint (TwoBone) or the aiming joint (LookAt) |
+| `ChainLength` | LookAt: 1..8 joints share the turn, the outermost first, each an equal part of what remains |
+| `Axis` | LookAt: the aiming direction in `Joint`'s local space (default +Z) |
+| `MaxAngle` | LookAt: the largest turn (degrees, 0..180) away from the animated aim; targets beyond it are followed up to it |
+| `Pole` | TwoBone: the direction (in the entity's space) the middle joint bends toward; zero keeps the animated bend (a straight chain then bends toward +Z) |
+| `Ground` | TwoBone: foot placement while no script target is set |
+| `Weight` | 0..1, the starting weight; a changed value applies at once |
+
+A TwoBone chain reaches any target within its length and stretches toward farther ones; the end joint keeps its
+animated rotation unless the target has one. Rotations blend from the animated pose by the chain's weight, and chains
+solve in list order (a hand after a spine look-at reaches from the turned spine). Every frame solves from the animated
+pose (layers included), never from the last solution.
+
+**Foot placement.** For each `Ground` chain a ray is cast down the entity's up axis under the animated joint, from
+`RayHeight` above the plane through the entity's origin to `RayDepth` below it (meters, defaults 0.5). The animation is
+taken as authored on that plane, so a foot keeps its animated height above the ground it lands on: steps lift it,
+holes lower it. `Pelvis` (when set) is lowered by the largest downward offset so the lower foot can reach, and each
+foot turns from the entity's up axis to the ground normal. Offsets, the pelvis and normals ease over `Smoothing`
+seconds (exponential; 0 snaps). The entity's own bodies (its collider, a parent's character controller, children's
+colliders) and triggers are not ground. While the entity's (or an ancestor's) CharacterController is not grounded,
+feet ease back to the animation, so jumps keep their pose. Without physics hits the feet keep the animation.
+
+| Function | Behavior |
+|---|---|
+| `e:SetIKTarget(chain, position, [rotation])` | A world position target, with an optional world `Quat` for a TwoBone chain's end joint. Replaces ground placement until cleared |
+| `e:SetIKTarget(chain, entity, [matchRotation])` | Follows the entity's world position every frame (and its rotation with `matchRotation`). A destroyed entity idles the chain (logged once) |
+| `e:ClearIKTarget(chain)` | Removes the target: the chain idles, or a Ground chain places its foot again |
+| `e:SetIKWeight(chain, weight, [seconds])` | Fades the weight (0..1) linearly over `seconds` (default 0) |
+| `e:GetIKWeight(chain)` | The current weight, or nil for an unknown chain |
+
+The functions raise errors on an entity without an InverseKinematics component and for wrongly typed arguments; an
+unknown chain or a non-finite target returns false (logged once per problem). Chains whose joints are missing, lack
+enough ancestors or have fixed glTF matrices are logged once and skipped; the inspector and `scene.info` show the same
+problems, and warn about an InverseKinematics without an Animator. Targets and weights are gameplay state: they
+survive playback resets (`Mesh` or `Clip` changes) and end with the component. Edit mode shows the animation without
+IK.
 
 ## Graphics settings
 

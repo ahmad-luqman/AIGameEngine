@@ -150,12 +150,57 @@ namespace Basalt {
 		std::vector<AnimationBlendSample> Samples;
 	};
 
+	enum class AnimationLayerBlend : uint8_t
+	{
+		// Replaces the pose below it by the layer's weight.
+		Override = 0,
+		// Adds the clip's difference from its reference pose on top.
+		Additive
+	};
+	inline constexpr size_t AnimationLayerBlendCount = 2;
+
+	// One entry of a layer's joint mask: the joint and its subtree take Weight, unless a deeper entry names one of
+	// its descendants.
+	struct AnimationMaskJoint
+	{
+		static constexpr const char* TypeName = "AnimationMaskJoint";
+
+		std::string Joint;
+		float Weight = 1.0f;
+	};
+
+	// A clip played on top of the Animator's base playback (clip, blend, blend space or state machine), in list
+	// order: e.g. an upper-body wave masked to the arms, or additive breathing.
+	struct AnimationLayer
+	{
+		static constexpr const char* TypeName = "AnimationLayer";
+		// Layers are found by name.
+		static constexpr const char* UniqueField = "Name";
+
+		std::string Name = "Layer";
+		// Empty: the layer shows nothing until a script plays a clip on it.
+		std::string Clip;
+		AnimationLayerBlend Blend = AnimationLayerBlend::Override;
+		// 0..1. The starting weight of the layer; a changed value applies at once.
+		float Weight = 1.0f;
+		float Speed = 1.0f;
+		bool Looping = true;
+		// Additive only: the pose the clip is a difference from, ReferenceClip (empty: the layer's own clip) sampled at
+		// ReferenceTime seconds.
+		std::string ReferenceClip;
+		float ReferenceTime = 0.0f;
+		// Empty: every joint at weight 1. Otherwise joints under no entry take weight 0.
+		std::vector<AnimationMaskJoint> Mask;
+	};
+
 	// Draws an entire glTF model with independent skeletal/TRS animation playback.
 	struct AnimatorComponent
 	{
 		static constexpr uint32_t MaxEvents = 256;
 		static constexpr uint32_t MaxBlendSpaces = 32;
 		static constexpr uint32_t MaxBlendSamples = 64;
+		static constexpr uint32_t MaxLayers = 16;
+		static constexpr uint32_t MaxMaskJoints = 64;
 
 		std::string Mesh;
 		// Empty selects the first clip. May name a blend space (a clip of the same name wins).
@@ -175,6 +220,7 @@ namespace Basalt {
 		// Master gate; graph states must also opt in. RootJoint explicitly names the extraction node.
 		bool RootMotion = false;
 		std::string RootJoint;
+		std::vector<AnimationLayer> Layers;
 	};
 
 	// Keeps the entity at a joint (any node) of an Animator's model while the scene plays or simulates: its
@@ -190,6 +236,59 @@ namespace Basalt {
 		glm::vec3 Translation = { 0.0f, 0.0f, 0.0f };
 		glm::quat Rotation = { 1.0f, 0.0f, 0.0f, 0.0f };
 		glm::vec3 Scale = { 1.0f, 1.0f, 1.0f };
+	};
+
+	enum class IKChainType : uint8_t
+	{
+		// Bends Joint's parent and turns its grandparent so Joint reaches the target (legs, arms).
+		TwoBone = 0,
+		// Turns Joint and ChainLength - 1 of its ancestors so Joint's Axis points at the target (head, spine, aim).
+		LookAt
+	};
+	inline constexpr size_t IKChainTypeCount = 2;
+
+	// One inverse kinematics chain of an InverseKinematics component. Targets come from scripts (SetIKTarget) or,
+	// for Ground chains, from the surface under the joint.
+	struct IKChain
+	{
+		static constexpr const char* TypeName = "IKChain";
+		// Chains are found by name.
+		static constexpr const char* UniqueField = "Name";
+		static constexpr uint32_t MaxChainLength = 8;
+
+		std::string Name = "Chain";
+		IKChainType Type = IKChainType::TwoBone;
+		// TwoBone: the end of the chain (a foot or hand). LookAt: the joint that aims (a head, or a hand holding a gun).
+		std::string Joint;
+		// LookAt: how many joints share the turn, Joint first, then its ancestors (1..MaxChainLength).
+		uint32_t ChainLength = 1;
+		// LookAt: the aiming direction in Joint's local space.
+		glm::vec3 Axis = { 0.0f, 0.0f, 1.0f };
+		// LookAt: the largest turn, in degrees (0..180), away from the animated aim.
+		float MaxAngle = 60.0f;
+		// TwoBone: the direction the middle joint bends toward, in the entity's space; zero keeps the animated bend.
+		glm::vec3 Pole = { 0.0f, 0.0f, 0.0f };
+		// TwoBone: place Joint on the ground below it (foot placement) while no script target is set.
+		bool Ground = false;
+		// 0..1. The starting weight of the chain; a changed value applies at once.
+		float Weight = 1.0f;
+	};
+
+	// Inverse kinematics applied to the Animator on the same entity after physics and OnLateUpdate, before
+	// attachments and drawing. Foot placement casts a ray under each Ground chain's joint, lowers Pelvis by the
+	// largest downward offset, and aligns the feet to the surface.
+	struct InverseKinematicsComponent
+	{
+		static constexpr uint32_t MaxChains = 16;
+
+		std::vector<IKChain> Chains;
+		// Lowered so the lower foot can reach the ground; empty: no pelvis adjustment.
+		std::string Pelvis;
+		// Ground rays start RayHeight above the entity's origin and reach RayDepth below it (meters).
+		float RayHeight = 0.5f;
+		float RayDepth = 0.5f;
+		// Seconds over which foot offsets, the pelvis and ground contact ease in and out.
+		float Smoothing = 0.1f;
 	};
 
 	// PBR metallic-roughness material. When present it overrides the material imported with the mesh.
@@ -800,6 +899,7 @@ namespace Basalt {
 		MeshComponent,
 		AnimatorComponent,
 		BoneAttachmentComponent,
+		InverseKinematicsComponent,
 		MaterialComponent,
 		DirectionalLightComponent,
 		PointLightComponent,

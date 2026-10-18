@@ -841,7 +841,18 @@ TEST_SUITE("Serialization")
 				CHECK(type.Element->Default.contains(field));
 				const ComponentFieldType& fieldType = type.Element->FieldTypes.at(field);
 				const auto options = type.Element->EnumOptions.find(field);
-				CHECK(MatchesFieldKind(type.Element->Default[field], fieldType.Kind, options == type.Element->EnumOptions.end() ? nullptr : &options->second));
+				const std::vector<std::string>* enumOptions = options == type.Element->EnumOptions.end() ? nullptr : &options->second;
+				const nlohmann::json& value = type.Element->Default[field];
+				if (fieldType.Count == 0)
+					CHECK(MatchesFieldKind(value, fieldType.Kind, enumOptions));
+				else
+				{
+					// Vectors (IKChain Axis and Pole).
+					REQUIRE(value.is_array());
+					CHECK(value.size() == fieldType.Count);
+					for (const nlohmann::json& component : value)
+						CHECK(MatchesFieldKind(component, fieldType.Kind, enumOptions));
+				}
 				CHECK(fieldType.Kind != ComponentFieldKind::Entity);
 				if (fieldType.Kind == ComponentFieldKind::List)
 					checkList(fmt::format("{}.{}", path, field), fieldType);
@@ -865,7 +876,8 @@ TEST_SUITE("Serialization")
 					CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, info.Name, { { field, nlohmann::json::array({ type.Element->Default, type.Element->Default }) } }, error));
 			}
 		}
-		CHECK(lists == 3);
+		// Animator Events, BlendSpaces (Samples), Layers (Mask); InverseKinematics Chains.
+		CHECK(lists == 6);
 	}
 
 	TEST_CASE("Entity reference fields are collected from the component definitions")
