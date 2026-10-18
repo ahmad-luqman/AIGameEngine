@@ -458,8 +458,8 @@ function Entity:SetBlendSpaceParameter(x, y) end
 ---@return table<string, number>
 function Entity:GetBlendSpaceWeights() end
 
----World position, rotation and scale of the first node named joint in the Animator's current pose (the previous
----frame's during OnUpdate/OnLateUpdate); nil when the node is missing or the Animator's model cannot animate
+---World position, rotation and scale of the first node named joint in the Animator's current pose: the previous
+---frame's during OnUpdate, this frame's during OnLateUpdate/OnAnimationEvent. Nil when the node is missing or the model cannot animate
 ---(logged when the problem appears or changes). Errors without an Animator.
 ---@param joint string
 ---@return Vec3? position
