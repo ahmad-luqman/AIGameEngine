@@ -1605,6 +1605,30 @@ TEST_SUITE("Animation")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("A start blend space added after the Animator's Clip named it still starts")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		auto entity = AddAnimator(scene);
+		auto& animator = entity.GetComponent<AnimatorComponent>();
+		animator.Clip = "Later";
+		auto other = AddAnimator(scene, "Other");
+		other.GetComponent<AnimatorComponent>().Clip = "Later";
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		system.Update(.1f);
+		CHECK_FALSE(system.IsPlaying(entity));
+		// Something else played first: the late space does not take over.
+		REQUIRE(system.Play(other, "Bend"));
+		animator.BlendSpaces = { Space1D("Later", { { "Step", 0, 0, 0 } }) };
+		other.GetComponent<AnimatorComponent>().BlendSpaces = animator.BlendSpaces;
+		system.Update(.1f);
+		CHECK(system.IsPlaying(entity));
+		CHECK(system.GetBlendSpaceWeights(entity) == Weights{ { "Step", 1.0f } });
+		CHECK(system.GetBlendSpaceWeights(other).empty());
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Animation operations on a model that cannot animate say why, once")
 	{
 		ClearAssetCache clear;
@@ -1861,6 +1885,22 @@ TEST_SUITE("Animation")
 		// Attachments that only depend on a cycle still follow it.
 		const auto& poseA = *system.GetPose(a);
 		CHECK(NearMatrix(scene.GetWorldTransform(dynamic), scene.GetWorldTransform(a) * poseA[0]));
+		// A zero scale above the entity, or in its result, has no Transform: reported, and the entity stays finite.
+		auto flat = scene.CreateEntity("Flat");
+		flat.GetTransform().Scale = { 1, 0, 1 };
+		auto squashed = scene.CreateChildEntity(flat, "Squashed");
+		squashed.AddComponent<BoneAttachmentComponent>() = { a.GetUUID(), "Tip" };
+		auto zeroOffset = scene.CreateEntity("ZeroOffset");
+		zeroOffset.AddComponent<BoneAttachmentComponent>() = { a.GetUUID(), "Tip", { 0, 0, 0 }, glm::quat(1, 0, 0, 0), { 0, 0, 0 } };
+		auto tiny = scene.CreateEntity("Tiny");
+		tiny.AddComponent<BoneAttachmentComponent>() = { a.GetUUID(), "Tip", { 0, 0, 0 }, glm::quat(1, 0, 0, 0), { 1e-4f, 1e-4f, 1e-4f } };
+		system.Update(.1f);
+		CHECK(CountLogMessages(since, "BoneAttachment 'Squashed': its parent 'Flat' has a zero (or non-finite) world scale") == 1);
+		CHECK(CountLogMessages(since, "BoneAttachment 'ZeroOffset': its world transform would have a zero (or non-finite) scale") == 1);
+		CHECK(squashed.GetTransform().Translation == glm::vec3(0));
+		CHECK(zeroOffset.GetTransform().Scale == glm::vec3(1));
+		// A small but valid scale still attaches.
+		CHECK(NearMatrix(scene.GetWorldTransform(tiny), scene.GetWorldTransform(a) * (*system.GetPose(a))[0] * glm::scale(glm::mat4(1.0f), glm::vec3(1e-4f)), 1e-6f));
 		// Fixing a problem lets the attachment move; breaking it again reports again.
 		wrongJoint.GetComponent<BoneAttachmentComponent>().Joint = "Tip";
 		system.Update(.1f);
