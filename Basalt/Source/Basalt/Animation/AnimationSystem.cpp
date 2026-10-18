@@ -836,29 +836,36 @@ namespace Basalt {
 	}
 	std::optional<glm::mat4> AnimationSystem::FrameRootMotion(Playback& playback, double advance, double shown, double seconds, double plainSpeed)
 	{
-		auto incoming = [&](double amount) { return SourceRootDelta(playback, playback.Clip, playback.Time, playback.Space, amount, playback.Looping, playback.RootMotion); };
-		auto motion = incoming(advance);
-		if (playback.BlendWeight >= 1)
-			return motion;
-		glm::mat4 tail(1);
-		if (shown < seconds && seconds > 0)
-		{
-			const auto fading = incoming(advance * shown / seconds);
-			if (motion && fading)
+		auto sample = [&]() -> std::optional<glm::mat4> {
+			auto incoming = [&](double amount) { return SourceRootDelta(playback, playback.Clip, playback.Time, playback.Space, amount, playback.Looping, playback.RootMotion); };
+			auto motion = incoming(advance);
+			if (playback.BlendWeight >= 1)
+				return motion;
+			glm::mat4 tail(1);
+			if (shown < seconds && seconds > 0)
 			{
-				tail = glm::inverse(*fading) * *motion;
-				motion = fading;
+				const auto fading = incoming(advance * shown / seconds);
+				if (motion && fading)
+				{
+					tail = glm::inverse(*fading) * *motion;
+					motion = fading;
+				}
+				else
+					motion.reset();
 			}
-			else
-				motion.reset();
-		}
-		const auto& source = playback.Outgoing;
-		const auto outgoing = SourceRootDelta(playback, source.Clip, source.Time, source.Space, shown * plainSpeed, source.Looping, source.RootMotion);
-		if (!motion && !outgoing)
-			return std::nullopt;
-		const glm::mat4 from = outgoing.value_or(glm::mat4(1)), to = motion.value_or(glm::mat4(1));
-		const double weight = playback.FadeDuration > 0 ? playback.BlendWeight + shown / (2.0 * playback.FadeDuration) : playback.BlendWeight;
-		return YawTransform(glm::mix(glm::vec3(from[3]), glm::vec3(to[3]), static_cast<float>(weight)), BlendRootYaw(RootYaw(from), RootYaw(to), static_cast<float>(weight))) * tail;
+			const auto& source = playback.Outgoing;
+			const auto outgoing = SourceRootDelta(playback, source.Clip, source.Time, source.Space, shown * plainSpeed, source.Looping, source.RootMotion);
+			if (!motion && !outgoing)
+				return std::nullopt;
+			const glm::mat4 from = outgoing.value_or(glm::mat4(1)), to = motion.value_or(glm::mat4(1));
+			const double weight = playback.FadeDuration > 0 ? playback.BlendWeight + shown / (2.0 * playback.FadeDuration) : playback.BlendWeight;
+			return YawTransform(glm::mix(glm::vec3(from[3]), glm::vec3(to[3]), static_cast<float>(weight)), BlendRootYaw(RootYaw(from), RootYaw(to), static_cast<float>(weight))) * tail;
+		};
+		const auto motion = sample();
+		// A later source may invalidate a clip already used by an earlier source. Recompute with
+		// the settled per-clip validity so displacement and pose stripping exclude the same samples.
+		const bool failed = std::any_of(playback.RootClips.begin(), playback.RootClips.end(), [](const auto& entry) { return !entry.second.IntervalValid; });
+		return failed ? sample() : motion;
 	}
 	std::optional<glm::mat4> AnimationSystem::SpaceRootDelta(Playback& playback, const SpaceState& space, double advance, bool looping)
 	{
