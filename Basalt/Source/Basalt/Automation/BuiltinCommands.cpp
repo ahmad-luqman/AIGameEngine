@@ -39,6 +39,7 @@
 #include <optional>
 #include <system_error>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace Basalt {
@@ -1198,7 +1199,14 @@ namespace Basalt {
 				const auto& paths = params.at("paths");
 				if (paths.size() > 4096)
 					throw CommandError("at most 4096 preload paths are allowed");
-				std::vector<std::pair<std::string, bool>> requests;
+				// Validated requests retain their published status while the whole batch is scheduled.
+				struct PreloadRequest
+				{
+					std::string Key;
+					bool Mesh = false;
+					bool Ready = false;
+				};
+				std::vector<PreloadRequest> requests;
 				// Validate the entire batch before creating work.
 				for (const auto& value : paths)
 				{
@@ -1208,18 +1216,36 @@ namespace Basalt {
 					const auto marker = key.find("#image/");
 					if (!mesh && !AssetManager::IsTextureFile(key) && !(marker != std::string::npos && AssetManager::IsMeshFile(key.substr(0, marker))))
 						throw CommandError("unsupported preload asset '" + key + "'");
-					requests.emplace_back(key, mesh);
+					requests.push_back({ key, mesh });
 				}
 				AssetManager::PublishCompleted();
 				const bool wait = OptionalBool(params, "wait", false);
-				json result = json::array();
-				for (const auto& [key, mesh] : requests)
+				// Schedule every path before any blocking getter can join an import.
+				for (auto& request : requests)
+					request.Ready = request.Mesh ? static_cast<bool>(AssetManager::RequestMesh(request.Key)) : static_cast<bool>(AssetManager::RequestTexture(request.Key));
+				if (wait)
 				{
-					bool ready = false;
-					if (mesh)
-						ready = static_cast<bool>(wait ? AssetManager::GetMesh(key) : AssetManager::RequestMesh(key));
-					else
-						ready = static_cast<bool>(wait ? AssetManager::GetTexture(key) : AssetManager::RequestTexture(key));
+					// Activate deferred image batches as their parents finish, before joining textures.
+					std::unordered_set<std::string> joinedParents;
+					for (const auto& request : requests)
+					{
+						if (request.Mesh)
+							continue;
+						const auto source = AssetManager::GetSourceFile(request.Key);
+						if (source != request.Key && joinedParents.insert(source).second)
+						{
+							AssetManager::GetMesh(source);
+							AssetManager::PublishCompleted();
+						}
+					}
+				}
+				json result = json::array();
+				for (const auto& request : requests)
+				{
+					const auto& key = request.Key;
+					bool ready = request.Ready;
+					if (wait)
+						ready = request.Mesh ? static_cast<bool>(AssetManager::GetMesh(key)) : static_cast<bool>(AssetManager::GetTexture(key));
 					const char* status = "failed";
 					if (ready)
 						status = "ready";

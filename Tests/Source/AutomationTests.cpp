@@ -245,9 +245,10 @@ TEST_SUITE("Automation")
 		JobSystem::Get().WaitIdle();
 		CHECK(Run(registry, session, "asset.preload", { { "paths", { "builtin://Cube" } } })[0]["status"] == "ready");
 		std::filesystem::copy_file(std::filesystem::path(BASALT_TEST_DATA_DIR) / "FeatureTest/Assets/Models/TexturedCube.glb", project.GetDirectory() / "Assets/model.glb");
-		const auto embedded = Run(registry, session, "asset.preload", { { "paths", { "Assets/model.glb", "Assets/model.glb#image/0" } }, { "wait", true } });
-		CHECK(embedded[0]["status"] == "ready");
-		CHECK(embedded[1]["status"] == "ready");
+		const auto embedded = Run(registry, session, "asset.preload", { { "paths", { "Assets/model.glb", "Assets/model.glb#image/0", "builtin://Sphere", "builtin://Plane" } }, { "wait", true } });
+		REQUIRE(embedded.size() == 4);
+		for (const auto& item : embedded)
+			CHECK(item["status"] == "ready");
 		Run(registry, session, "asset.preload", { { "paths", { "Assets/poll-missing.png" } } });
 		JobSystem::Get().WaitIdle();
 		CHECK(Run(registry, session, "asset.preload", { { "paths", { "Assets/poll-missing.png" } } })[0]["status"] == "failed");

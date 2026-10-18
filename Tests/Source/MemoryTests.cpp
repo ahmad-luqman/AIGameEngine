@@ -10,6 +10,26 @@ using namespace Basalt;
 
 TEST_SUITE("Memory")
 {
+	TEST_CASE("Mesh metadata charges external file elements but excludes string backing storage")
+	{
+		AssetManager::Clear();
+		JobSystem::Get().WaitIdle();
+		const auto before = MemoryTracker::Get(MemoryCategory::Assets).Bytes;
+		{
+			MeshSource mesh;
+			mesh.UpdateMemoryUsage();
+			const auto empty = MemoryTracker::Get(MemoryCategory::Assets).Bytes;
+			mesh.ExternalFiles.reserve(32);
+			mesh.UpdateMemoryUsage();
+			const auto metadata = MemoryTracker::Get(MemoryCategory::Assets).Bytes;
+			CHECK(metadata == empty + mesh.ExternalFiles.capacity() * sizeof(std::string));
+			mesh.ExternalFiles.emplace_back(4096, 'x');
+			mesh.UpdateMemoryUsage();
+			CHECK(MemoryTracker::Get(MemoryCategory::Assets).Bytes == metadata);
+		}
+		CHECK(MemoryTracker::Get(MemoryCategory::Assets).Bytes == before);
+	}
+
 	TEST_CASE("Charges follow copy move resize and destruction")
 	{
 		const auto before = MemoryTracker::Get(MemoryCategory::GpuBuffers);
