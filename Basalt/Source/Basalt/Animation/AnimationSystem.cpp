@@ -69,12 +69,27 @@ namespace Basalt {
 			out = YawTransform({ position.x, 0, position.z }, 2 * std::atan2(rotation.y, rotation.w));
 			return Math::IsFinite(out);
 		}
-		bool HorizontalTransform(const MeshSource& source, const AnimationClip* clip, float time, int32_t node, glm::mat4& out)
+		// Correction is rigid, so authored TRS roots stay representable, including zero-scale helpers.
+		// Used both to preflight extraction and to commit the visible pose, keeping their validity in sync.
+		bool CorrectRootPose(const MeshSource& source, AnimationLocalPose& pose, const glm::mat4& correction)
 		{
+			for (size_t i = 0; i < pose.Nodes.size(); i++)
+				if (source.Nodes[i].Parent < 0)
+				{
+					auto& root = pose.Nodes[i];
+					const glm::mat4 corrected = correction * Math::ComposeTransform(root.Translation, root.Rotation, root.Scale);
+					if (!Math::IsFinite(corrected) || !Math::DecomposeAffineTransform(corrected, root.Translation, root.Rotation, root.Scale))
+						return false;
+				}
+			return true;
+		}
+		bool HorizontalTransform(const MeshSource& source, const AnimationClip* clip, float time, int32_t node, glm::mat4& out, const glm::mat4* reference = nullptr)
+		{
+			auto pose = SampleAnimation(source, clip, time);
 			std::vector<glm::mat4> globals;
-			if (node < 0 || !EvaluateAnimation(source, clip, time, globals) || static_cast<size_t>(node) >= globals.size())
+			if (node < 0 || !ComposeAnimationPose(source, pose, globals) || static_cast<size_t>(node) >= globals.size() || !HorizontalFrame(globals[node], out))
 				return false;
-			return HorizontalFrame(globals[node], out);
+			return !reference || CorrectRootPose(source, pose, *reference * glm::inverse(out));
 		}
 		float BlendRootYaw(float from, float to, float weight)
 		{
@@ -735,21 +750,22 @@ namespace Basalt {
 	{
 		if (clipIndex < 0 || playback.RootNode < 0 || !playback.RootReference)
 			return false;
+		const glm::mat4 reference = *playback.RootReference;
 		auto [it, inserted] = playback.RootClips.try_emplace(clipIndex);
 		auto& frames = it->second;
 		if (inserted)
 		{
 			const auto& clip = playback.Source->Animations[clipIndex];
 			glm::mat4 zero, end;
-			frames.Valid = HorizontalTransform(*playback.Source, &clip, 0, playback.RootNode, zero) &&
-						   HorizontalTransform(*playback.Source, &clip, clip.Duration, playback.RootNode, end);
+			frames.Valid = HorizontalTransform(*playback.Source, &clip, 0, playback.RootNode, zero, &reference) &&
+						   HorizontalTransform(*playback.Source, &clip, clip.Duration, playback.RootNode, end, &reference);
 			if (frames.Valid)
 			{
 				frames.Cycle = end * glm::inverse(zero);
 				frames.Valid = Math::IsFinite(frames.Cycle);
 			}
 			if (!frames.Valid)
-				ReportRootClipProblem(playback, clipIndex, "clip endpoint twist is undefined");
+				ReportRootClipProblem(playback, clipIndex, "clip endpoint twist or pose correction is undefined");
 		}
 		return frames.Valid;
 	}
@@ -772,17 +788,11 @@ namespace Basalt {
 		}
 		const glm::mat4 correction = *playback.RootReference * glm::inverse(horizontal);
 		auto stripped = pose;
-		// Commit only a completely representable correction; failed extraction keeps the authored pose.
-		for (size_t i = 0; i < pose.Nodes.size(); i++)
-			if (playback.Source->Nodes[i].Parent < 0)
-			{
-				auto& root = stripped.Nodes[i];
-				if (!Math::DecomposeTransform(correction * Math::ComposeTransform(root.Translation, root.Rotation, root.Scale), root.Translation, root.Rotation, root.Scale))
-				{
-					fail();
-					return;
-				}
-			}
+		if (!CorrectRootPose(*playback.Source, stripped, correction))
+		{
+			fail();
+			return;
+		}
 		pose = std::move(stripped);
 	}
 	double AnimationSystem::CycleDuration(const Playback& playback)
@@ -873,6 +883,7 @@ namespace Basalt {
 	{
 		if (!CanExtractRoot(playback, clipIndex) || !playback.RootReference)
 			return std::nullopt;
+		const glm::mat4 reference = *playback.RootReference;
 		const auto& clip = playback.Source->Animations[clipIndex];
 		auto& frames = playback.RootClips.at(clipIndex);
 		if (!frames.IntervalValid)
@@ -887,8 +898,8 @@ namespace Basalt {
 		};
 		glm::mat4 start, end;
 		const double to = from + advance;
-		if (!HorizontalTransform(*playback.Source, &clip, static_cast<float>(from), playback.RootNode, start) ||
-			!HorizontalTransform(*playback.Source, &clip, static_cast<float>(looping ? std::fmod(to, duration) : std::min(to, duration)), playback.RootNode, end))
+		if (!HorizontalTransform(*playback.Source, &clip, static_cast<float>(from), playback.RootNode, start, &reference) ||
+			!HorizontalTransform(*playback.Source, &clip, static_cast<float>(looping ? std::fmod(to, duration) : std::min(to, duration)), playback.RootNode, end, &reference))
 			return fail();
 		glm::mat4 cycles(1);
 		if (looping)
@@ -904,7 +915,7 @@ namespace Basalt {
 					cycle = cycle * cycle;
 			}
 		}
-		const glm::mat4 result = *playback.RootReference * glm::inverse(start) * cycles * end * glm::inverse(*playback.RootReference);
+		const glm::mat4 result = reference * glm::inverse(start) * cycles * end * glm::inverse(reference);
 		if (!Math::IsFinite(result))
 			return fail();
 		return result;

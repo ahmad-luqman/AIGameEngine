@@ -3153,4 +3153,74 @@ TEST_SUITE("Animation")
 		REQUIRE(pose);
 		CHECK((*pose)[2][3].x == doctest::Approx(0));
 	}
+	TEST_CASE("Root correction and extraction agree for unrelated zero-scale model roots")
+	{
+		for (const glm::vec3 scale : { glm::vec3(0, 1, 1), glm::vec3(0) })
+		{
+			ClearAssetCache clear;
+			TempProject project("ZeroScaleRoot");
+			Scene scene;
+			auto rig = ClipAnimator(scene, project);
+			auto model = FixtureJson();
+			model["nodes"].push_back({ { "name", "ZeroHelper" }, { "translation", { 5, 0, 0 } }, { "scale", { scale.x, scale.y, scale.z } } });
+			model["scenes"][0]["nodes"].push_back(3);
+			const float translations[] = { 0, 0, 0, 1, 0.5f, 0, 2, 0, 0 };
+			ReplaceAccessorBytes(model, 9, translations, sizeof(translations));
+			model["animations"][1]["samplers"][0]["interpolation"] = "LINEAR";
+			float rotations[12] = {};
+			for (size_t i = 0; i < 3; i++)
+			{
+				const auto rotation = glm::angleAxis(glm::radians(45.0f * static_cast<float>(i)), glm::vec3(0, 1, 0));
+				rotations[i * 4] = rotation.x;
+				rotations[i * 4 + 1] = rotation.y;
+				rotations[i * 4 + 2] = rotation.z;
+				rotations[i * 4 + 3] = rotation.w;
+			}
+			ReplaceAccessorBytes(model, 8, rotations, sizeof(rotations));
+			model["animations"][1]["samplers"].push_back({ { "input", 7 }, { "output", 8 }, { "interpolation", "LINEAR" } });
+			model["animations"][1]["channels"].push_back({ { "sampler", 1 }, { "target", { { "node", 2 }, { "path", "rotation" } } } });
+			rig.GetComponent<AnimatorComponent>().Mesh = project.WriteFile("Assets/Models/Helper.gltf", model.dump());
+			const auto since = Log::GetHistory().GetTotalCount();
+			AnimationSystem animation(scene);
+			animation.Update(1);
+			const auto* pose = animation.GetPose(rig);
+			REQUIRE(pose);
+			REQUIRE(pose->size() == 4);
+			const auto entityWorld = scene.GetWorldTransform(rig);
+			CHECK(entityWorld[3].x == doctest::Approx(1));
+			CHECK(entityWorld[2].x == doctest::Approx(std::sqrt(0.5f)).epsilon(0.001));
+			CHECK((*pose)[2][3].x == doctest::Approx(0));
+			CHECK((entityWorld * (*pose)[2])[3].x == doctest::Approx(1));
+			CHECK((entityWorld * (*pose)[3])[3].x == doctest::Approx(5));
+			CHECK((entityWorld * (*pose)[3])[3].z == doctest::Approx(0).epsilon(0.0001));
+			CHECK(CountLogMessages(since, "preserving the authored pose") == 0);
+		}
+	}
+	TEST_CASE("Unrepresentable hierarchy correction rejects root displacement before entity movement")
+	{
+		ClearAssetCache clear;
+		TempProject project("RootCorrectionOverflow");
+		Scene scene;
+		auto rig = ClipAnimator(scene, project);
+		auto model = FixtureJson();
+		constexpr float Distance = 2.5e38f;
+		model["nodes"].push_back({ { "name", "FarHelper" }, { "translation", { -Distance, 0.0f, 0.0f } } });
+		model["scenes"][0]["nodes"].push_back(3);
+		const float translations[] = { 0, 0, 0, Distance, 0.5f, 0, Distance, 0, 0 };
+		ReplaceAccessorBytes(model, 9, translations, sizeof(translations));
+		model["animations"][1]["samplers"][0]["interpolation"] = "LINEAR";
+		rig.GetComponent<AnimatorComponent>().Mesh = project.WriteFile("Assets/Models/Overflow.gltf", model.dump());
+		const auto since = Log::GetHistory().GetTotalCount();
+		AnimationSystem animation(scene);
+		animation.Update(1);
+		CHECK(RootX(rig) == doctest::Approx(0));
+		const auto* pose = animation.GetPose(rig);
+		REQUIRE(pose);
+		REQUIRE(pose->size() == 4);
+		CHECK((*pose)[2][3].x == doctest::Approx(Distance));
+		CHECK((*pose)[3][3].x == doctest::Approx(-Distance));
+		CHECK(CountLogMessages(since, "clip endpoint twist or pose correction is undefined") == 1);
+		CHECK(CountLogMessages(since, "world transform") == 0);
+		CHECK(CountLogMessages(since, "non-finite evaluated pose") == 0);
+	}
 }
