@@ -131,9 +131,14 @@ animations = [
                        ('LeftUpperArm', 'rotation', armL), ('RightUpperArm', 'rotation', armR),
                        ('LeftForeArm', 'rotation', elbow), ('RightForeArm', 'rotation', elbow),
                        ('Hips', 'translation', hips), ('Spine', 'rotation', twist)]),
-    # The right arm up beside the head, the forearm waving.
+    # A whole-body wave: the right arm up beside the head with the forearm waving, standing with the legs spread and
+    # leaning to the left. The sample masks it to the right arm, so the legs keep walking: unmasked, they would stop
+    # spread apart.
     clip('Wave', 1.0, [('RightUpperArm', 'rotation', [(Z, -160)] * 5),
-                       ('RightForeArm', 'rotation', [(Z, -25), (Z, 5), (Z, 30), (Z, 5), (Z, -25)])]),
+                       ('RightForeArm', 'rotation', [(Z, -25), (Z, 5), (Z, 30), (Z, 5), (Z, -25)]),
+                       ('LeftUpperLeg', 'rotation', [(Z, 22)] * 5), ('RightUpperLeg', 'rotation', [(Z, -22)] * 5),
+                       ('LeftLowerLeg', 'rotation', [(X, 0)] * 5), ('RightLowerLeg', 'rotation', [(X, 0)] * 5),
+                       ('Spine', 'rotation', [(Z, 10)] * 5)]),
     # Additive breathing: the chest rises and settles (frame 0 is the reference).
     clip('Breathe', 3.0, [('Chest', 'rotation', rx(0, -3, -5, -3, 0)), ('Neck', 'rotation', rx(0, 2, 3, 2, 0))]),
 ]
