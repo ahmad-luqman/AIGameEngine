@@ -126,7 +126,7 @@ namespace Basalt {
 		// 2D blend spaces only.
 		float Y = 0.0f;
 		// How fast the clip moves the character at playback speed 1 (units/s), for Animator MatchVelocity; 0 for
-		// clips that stand still or whose speed is unknown (they play at the Animator's Speed).
+		// clips that stand still or whose speed is unknown (their weight keeps the space at the Animator's Speed).
 		float Speed = 0.0f;
 	};
 
@@ -165,8 +165,8 @@ namespace Basalt {
 		bool PlayOnStart = true;
 		bool CastShadows = true;
 		// Scales a blend space's playback rate by the entity's measured horizontal speed over the moving samples'
-		// blended Speed, so feet do not slide; samples with Speed 0 keep the plain Speed. A walk-only space freezes
-		// while the entity stands still.
+		// weighted Speed (for their share of the weight; samples with Speed 0 keep the plain Speed), so feet do not
+		// slide. A space of only moving samples freezes while the entity stands still.
 		bool MatchVelocity = false;
 		std::vector<AnimationEvent> Events;
 		std::vector<AnimationBlendSpace> BlendSpaces;

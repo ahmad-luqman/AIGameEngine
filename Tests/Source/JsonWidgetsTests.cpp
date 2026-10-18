@@ -6,6 +6,7 @@
 
 #include <doctest/doctest.h>
 #include <imgui.h>
+#include <imgui_internal.h>
 
 using namespace Basalt;
 using json = nlohmann::json;
@@ -48,15 +49,18 @@ namespace {
 		return frame;
 	}
 
-	// The open state of the BlendSpaces list node (index -1) or of one of its element nodes.
+	// The open state of the BlendSpaces list node (index -1) or of one of its element nodes, which live under the
+	// open list node's ID.
 	int& NodeState(int index)
 	{
 		ImGui::PushID("BlendSpaces");
 		ImGuiID id = ImGui::GetID("###list");
 		if (index >= 0)
 		{
+			ImGui::PushOverrideID(id);
 			ImGui::PushID(index);
 			id = ImGui::GetID("##element");
+			ImGui::PopID();
 			ImGui::PopID();
 		}
 		ImGui::PopID();
@@ -126,19 +130,33 @@ TEST_SUITE("Editor")
 		REQUIRE(EditJsonList(list, JsonListEdit::Duplicate, 0, spaces));
 		REQUIRE(EditJsonList(list, JsonListEdit::Duplicate, 0, spaces));
 		CHECK(Names(list) == json({ "Walk", "Walk 3", "Walk 2", "BlendSpace 2" }));
+		// Duplicating a numbered name numbers from its base.
+		REQUIRE(EditJsonList(list, JsonListEdit::Duplicate, 2, spaces));
+		CHECK(list[3]["Name"] == "Walk 4");
 	}
 
-	TEST_CASE("The list widget draws nested lists without changing them, and its Add button appends")
+	TEST_CASE("The list widget draws nested lists without changing them, and its buttons edit the list")
 	{
 		BasaltTest::ImGuiTestContext context;
 		ImGuiIO& io = ImGui::GetIO();
 		const json spaces = { { { "Name", "Walk" }, { "Type", "1D" }, { "Samples", { { { "Clip", "Step" }, { "X", 0.0 }, { "Y", 0.0 }, { "Speed", 1.0 } } } } } };
 		json value = spaces;
-		// Open the list and its element, as a user would.
-		InWindow([] {
-			NodeState(-1) = 1;
-			NodeState(0) = 1;
-		});
+		// Presses and releases the left button at `position` over three frames.
+		auto click = [&](ImVec2 position) {
+			io.AddMousePosEvent(position.x, position.y);
+			DrawFrame(value);
+			io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+			DrawFrame(value);
+			io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+			return DrawFrame(value);
+		};
+		// The list's header row (the last item while the list is closed), then the Add button with the element closed.
+		const Frame closed = DrawFrame(value);
+		const float row = closed.LastItemMax.y - closed.LastItemMin.y;
+		InWindow([] { NodeState(-1) = 1; });
+		const Frame collapsed = DrawFrame(value);
+		// Opening the element draws its fields, nested Samples list included, pushing the Add button down.
+		InWindow([] { NodeState(0) = 1; });
 		Frame frame;
 		for (int i = 0; i < 3; i++)
 		{
@@ -147,22 +165,27 @@ TEST_SUITE("Editor")
 			CHECK_FALSE(frame.Result.Committed);
 		}
 		CHECK(value == spaces);
-		// The open list ends with its Add button: press and release over it.
-		REQUIRE(frame.LastItemMax.y > frame.LastItemMin.y);
-		io.AddMousePosEvent((frame.LastItemMin.x + frame.LastItemMax.x) / 2, (frame.LastItemMin.y + frame.LastItemMax.y) / 2);
-		DrawFrame(value);
-		io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
-		DrawFrame(value);
-		io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
-		frame = DrawFrame(value);
+		CHECK(frame.LastItemMin.y > collapsed.LastItemMin.y + 3 * row);
+		// Add appends a default element; its node starts closed.
+		frame = click({ (frame.LastItemMin.x + frame.LastItemMax.x) / 2, (frame.LastItemMin.y + frame.LastItemMax.y) / 2 });
 		CHECK(frame.Result.Changed);
 		CHECK(frame.Result.Committed);
 		REQUIRE(value.size() == 2);
 		CHECK(value[1]["Name"] == "BlendSpace");
-		// The new element's node starts closed; the first stays open.
 		InWindow([] {
 			CHECK(NodeState(0) == 1);
 			CHECK(NodeState(1) == 0);
+		});
+		// The first element's down arrow (second button from the right of its row, the row below the header) moves it
+		// down, and its open node moves with it.
+		const float spacing = ImGui::GetStyle().ItemSpacing.x;
+		const ImVec2 down = { 600.0f - ImGui::GetStyle().WindowPadding.x - row - spacing - row / 2, closed.LastItemMax.y + ImGui::GetStyle().ItemSpacing.y + row / 2 };
+		frame = click(down);
+		CHECK(frame.Result.Committed);
+		CHECK(Names(value) == json({ "BlendSpace", "Walk" }));
+		InWindow([] {
+			CHECK(NodeState(0) == 0);
+			CHECK(NodeState(1) == 1);
 		});
 	}
 }

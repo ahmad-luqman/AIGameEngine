@@ -1092,14 +1092,14 @@ actor:BlendAnimations("Walk", "Run", 0.7)
 | `e:SetAnimationTime(seconds)` | Seeks to nonnegative finite seconds, clamped to each active clip's duration, without changing pause state or fade progress. Returns success. |
 | `e:GetAnimationTime()` | Target/current clip time in seconds (the second clip for a persistent blend). |
 | `e:GetAnimationDuration()` | Target/current clip duration, or 0 if none. |
-| `e:IsAnimationPlaying()` | Whether playback is advancing; speed 0 still counts as playing. |
+| `e:IsAnimationPlaying()` | Whether playback is advancing; speed 0 still counts as playing; false while a blend space cannot play. |
 
 All functions require a running scene and an Animator on the entity. A missing asset yields empty
 clips, zero times, false queries/operations. Unknown clips or invalid numeric parameters return false
 without changing existing playback. Failures are logged with the operation and clip name or invalid value. Non-looping clips hold their final pose; looping clocks wrap by
 clip duration, including large timesteps. Enabling Looping after a clip finishes does not restart it;
 call PlayAnimation. Play, CrossFade, Blend and PlayBlendSpace unpause playback. Empty clip names select the first
-clip in all three operations. Crossfade duration is scene time, independent of Speed.
+clip in Play, CrossFade and Blend. Crossfade duration is scene time, independent of Speed.
 `Speed` and `Looping` updates apply immediately; changing `Mesh` or the configured `Clip`, asset reload,
 or removing/re-adding Animator resets playback according to `PlayOnStart`. With PlayOnStart false,
 the selected clip is held at time 0 until played. Edit mode shows the authored rest pose.
@@ -1123,16 +1123,19 @@ clients subscribed to `animation` events get `{name, clip, entity, frame}`.
   lies between; speed 0 fires nothing.
 - A looping clip fires its tail (its end included) and then restarts at 0 on every wrap, so one long update
   fires every marker of every loop it covers, in order. A non-looping clip fires its end once.
-- During a crossfade both clips fire until the fade ends (the `clip` argument tells them apart); with
-  `BlendAnimations` each clip fires while its weight is above 0. In a blend space only the heaviest sample's clip
+- During a crossfade from a single playing clip both clips fire until the fade ends (the `clip` argument tells
+  them apart); fades that start from a fixed pose (out of a blend, a blend space or an interrupted fade) fire only
+  the target. With `BlendAnimations` each clip fires while its weight is above 0. In a blend space only the heaviest sample's clip
   fires, because its clips run in step and would repeat each marker; when the parameter makes another sample the
   heaviest, a marker near that moment can be skipped or repeated once.
 - At most 64 events per Animator and frame are delivered; the rest are dropped with a warning (once per
-  animation started). Markers that name a clip and lie past its end, or name a missing or zero-length clip, never
-  fire; the inspector and `scene.info` warn about them.
+  animation started). A marker past the end of the playing clip does not fire for it (an empty-`Clip` marker still
+  fires for longer clips); markers naming a missing or zero-length clip never fire. The inspector and `scene.info`
+  warn about markers that can never fire.
 - Events are delivered after `OnLateUpdate` and after this frame's pose and attachments are computed, before
   particles; a callback may change animation or remove the Animator safely. Within one update an Animator's
-  events come clip by clip in timeline order (the current clip's before the outgoing clip's). Simulate reports
+  events come clip by clip in the order playback crossed them (the current clip's before the outgoing clip's; for
+  `BlendAnimations(first, second)`, `second`'s first). Simulate reports
   them to automation only (no scripts run there).
 
 ### Blend spaces
@@ -1152,32 +1155,35 @@ function Player:OnUpdate(dt) self.Entity:SetBlendSpaceParameter(self.Speed) end
 - 1D spaces interpolate between the two samples around `X` and clamp outside them; 2D spaces (`Type = "2D"`,
   e.g. strafing over X/Y velocity) use gradient band interpolation: a sample's weight is 1 at its position and
   falls to 0 at every other sample. Weights always sum to 1; samples at the same position share its weight. An
-  empty sample `Clip` selects the first clip, and samples whose clip is missing get no weight. Blend space names
-  must be unique (the inspector's Add and Duplicate pick a fresh one).
+  empty sample `Clip` selects the first clip, and samples whose clip is missing get no weight (their share goes to
+  the other weighted samples). Blend space names must be unique (the inspector's Add and Duplicate pick a fresh one).
 - All clips run in step: one cycle lasts the weighted sum of their durations and each clip is sampled at the
   same fraction of its own length, so feet stay in phase. `SetBlendSpaceParameter` keeps that phase.
 - `PlayBlendSpace` fades from the visible pose over `fadeSeconds` (default 0). While the same space is playing it
   only moves the parameter (the fade is ignored); a paused or finished one restarts. `PlayAnimation`,
   `CrossFadeAnimation`, `BlendAnimations` and `StopAnimation` leave the space; `PauseAnimation`,
   `GetAnimationTime`, `GetAnimationDuration` and `SetAnimationTime` act on its blended cycle.
-  `GetBlendSpaceWeights()` returns `{ [clip] = weight }` (empty when no space plays).
-- When the running space or all its clips go missing (e.g. edited during play), playback holds its pose,
-  `IsAnimationPlaying()` and `SetBlendSpaceParameter` return false and the problem is logged once; it resumes
-  when the space can play again.
+  `GetBlendSpaceWeights()` returns `{ [clip] = weight }` (clips without weight at the parameter listed with 0; empty
+  when no space runs or it cannot play). `SetBlendSpaceParameter(x)` without `y` keeps a 2D space's current Y.
+- A space cannot play when it is missing or has no samples, or when no sample weighted at the parameter has a clip
+  (e.g. after edits during play, or a parameter that sits on a sample whose clip is missing). Playback then holds
+  its pose, `IsAnimationPlaying()`, `SetBlendSpaceParameter` and `SetAnimationTime` return false and the problem is
+  logged when it appears or changes; it resumes as soon as the space can play.
 - `Animator.Clip` may name a blend space: `PlayOnStart` then starts it at parameter (0, 0). A clip of the same
   name wins (the inspector warns).
-- **MatchVelocity:** with it on, the moving samples (`Speed` above 0) play at `Speed` x (the entity's measured
-  horizontal speed / their weighted `Speed`), so a character moving faster than its run clip strides faster
-  instead of sliding; samples with `Speed` 0 (standing, or unknown) keep the plain `Speed`, so the rate eases in
-  from idle. The speed is measured from the entity's world position (any mover: physics, characters, Lua),
-  ignoring vertical motion and jumps faster than 100 units/s (teleports), and smoothed over about 0.1 s. A space
-  of moving samples only freezes while the entity stands still.
+- **MatchVelocity:** with it on, the whole space plays at one rate that blends the plain `Speed` (for the weight
+  of samples with `Speed` 0: standing, or unknown) with `Speed` x the entity's measured horizontal speed / the
+  moving samples' weighted `Speed` (for the moving samples' weight), clamped to 0..100. A character moving faster
+  than its run clip strides faster instead of sliding, and the rate eases in from idle. The speed is measured from
+  the entity's world position (any mover: physics, characters, Lua), ignoring vertical motion and any horizontal
+  move faster than 100 units/s between updates (teleports), and smoothed over about 0.1 s. A space of only moving
+  samples freezes while the entity stands still.
 
 ### Bones
 
 `e:GetBoneTransform(joint)` returns the world position, rotation and scale of the first node named `joint` in
-the Animator's current pose (any glTF node, not only skin joints), or nil when there is none (logged once per
-joint and reason). Animation advances after `OnLateUpdate`, so `OnUpdate` and `OnLateUpdate` see the previous
+the Animator's current pose (any glTF node, not only skin joints), or nil when there is none or the Animator's model
+cannot animate (logged when the problem appears or changes, per joint). Animation advances after `OnLateUpdate`, so `OnUpdate` and `OnLateUpdate` see the previous
 frame's pose and `OnAnimationEvent` this frame's. Like the other Animator functions it raises an error on an
 entity without an Animator.
 

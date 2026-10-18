@@ -617,12 +617,11 @@ namespace Basalt {
 				AnimationSystem& animations = RequireAnimations(context);
 				glm::mat4 bone(1.0f);
 				std::string error;
-				if (!animations.GetBoneTransform(entity, joint, bone, error))
-				{
-					// Logged once: scripts typically poll a joint every frame.
-					animations.ReportBoneProblem(entity, joint, error);
+				const bool found = animations.GetBoneTransform(entity, joint, bone, error);
+				// Logged when it appears or changes: scripts typically poll a joint every frame.
+				animations.ReportBoneProblem(entity, joint, error);
+				if (!found)
 					return { sol::lua_nil, sol::lua_nil, sol::lua_nil };
-				}
 				glm::vec3 position;
 				glm::quat rotation;
 				glm::vec3 scale;
@@ -636,7 +635,10 @@ namespace Basalt {
 			};
 			entityType["SetBlendSpaceParameter"] = [&context](const ScriptEntity& self, float x, const sol::object& y) {
 				Entity entity = RequireAnimator(self, "SetBlendSpaceParameter");
-				return RequireAnimations(context).SetBlendSpaceParameter(entity, { x, OptionalNumber(y, "SetBlendSpaceParameter: y", 0.0f) });
+				AnimationSystem& animations = RequireAnimations(context);
+				// An omitted y keeps a 2D space's current one.
+				const float currentY = animations.GetBlendSpaceParameter(entity).value_or(glm::vec2(0.0f)).y;
+				return animations.SetBlendSpaceParameter(entity, { x, OptionalNumber(y, "SetBlendSpaceParameter: y", currentY) });
 			};
 			entityType["GetBlendSpaceWeights"] = [&context](sol::this_state state, const ScriptEntity& self) {
 				Entity entity = RequireAnimator(self, "GetBlendSpaceWeights");

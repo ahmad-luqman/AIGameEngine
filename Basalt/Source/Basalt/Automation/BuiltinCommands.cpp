@@ -115,6 +115,8 @@ namespace Basalt {
 				json list = DescribeFields(element.Fields, element.FieldTypes, element.EnumOptions);
 				list["name"] = element.Name;
 				list["maxCount"] = type.MaxCount;
+				if (!element.UniqueField.empty())
+					list["uniqueField"] = element.UniqueField;
 				list["default"] = element.Default;
 				lists[field] = std::move(list);
 			}
@@ -538,7 +540,7 @@ namespace Basalt {
 				return json{ { "commands", commands } };
 			});
 
-			Add(registry, "component.types", "Lists every component type with its fields (for component.set): their names in order, each field's JSON type ('number', 'integer', 'boolean', 'string', 'object', 'entity', 'enum', an array such as 'number[3]', or 'object[]' for a list of objects), the values of enum fields, the fields that reference entities, and for each list field its element type under 'lists' ({name, fields, types, enums, maxCount, default, lists}; a set replaces the whole list).", Schema::Object(), [](AutomationSession&, const json&) {
+			Add(registry, "component.types", "Lists every component type with its fields (for component.set): their names in order, each field's JSON type ('number', 'integer', 'boolean', 'string', 'object', 'entity', 'enum', an array such as 'number[3]', or 'object[]' for a list of objects), the values of enum fields, the fields that reference entities, and for each list field its element type under 'lists' ({name, fields, types, enums, maxCount, default, lists, and uniqueField when one string field must differ between elements}; a set replaces the whole list).", Schema::Object(), [](AutomationSession&, const json&) {
 				json types = json::array();
 				for (const ComponentInfo& info : ComponentRegistry::GetAll())
 				{

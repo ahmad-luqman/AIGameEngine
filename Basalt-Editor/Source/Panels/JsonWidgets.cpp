@@ -2,6 +2,8 @@
 
 #include "EditorContext.h"
 
+#include "Basalt/Core/Assert.h"
+
 #include <imgui.h>
 #include <imgui_stdlib.h>
 
@@ -34,14 +36,19 @@ namespace Basalt {
 		// Gives the element at `index` a value of `field` no other element has: "Walk", then "Walk 2", "Walk 3"...
 		void MakeUnique(nlohmann::json& array, size_t index, const std::string& field)
 		{
+			if (!array[index].is_object())
+				return;
 			const auto taken = [&](const std::string& candidate) {
 				for (size_t i = 0; i < array.size(); i++)
-					if (i != index && array[i].value(field, "") == candidate)
+					if (i != index && array[i].is_object() && array[i].value(field, "") == candidate)
 						return true;
 				return false;
 			};
-			const std::string base = array[index].value(field, "");
+			std::string base = array[index].value(field, "");
 			std::string candidate = base;
+			// Numbering restarts from the name without its number, so "Walk 2" duplicates to "Walk 3".
+			if (const size_t space = base.find_last_of(' '); space != std::string::npos && space + 1 < base.size() && base.find_first_not_of("0123456789", space + 1) == std::string::npos)
+				base.resize(space);
 			for (int suffix = 2; taken(candidate); suffix++)
 				candidate = base + " " + std::to_string(suffix);
 			array[index][field] = candidate;
@@ -325,6 +332,7 @@ namespace Basalt {
 						if (value == array[i].end())
 							continue;
 						const auto fieldType = schema.FieldTypes.find(field);
+						BS_ASSERT(fieldType != schema.FieldTypes.end(), "every schema field has a type");
 						if (fieldType == schema.FieldTypes.end())
 							continue;
 						const JsonFieldResult fieldResult = DrawJsonValue(field, *value, fieldType->second, schema.EnumOptions);
@@ -344,22 +352,25 @@ namespace Basalt {
 				ImGui::SameLine();
 				ImGui::TextDisabled("(at most %u)", type.MaxCount);
 			}
-			ImGui::TreePop();
-		}
-		if (pending)
-		{
-			// Element nodes are keyed by position, so their open states move with the elements.
-			ImGuiStorage* storage = ImGui::GetStateStorage();
-			nlohmann::json open = nlohmann::json::array();
-			for (size_t i = 0; i < array.size(); i++)
-				open.push_back(storage->GetInt(ElementNodeID(i), 0));
-			if (EditJsonList(array, pending->first, pending->second, type))
+			if (pending)
 			{
-				ApplyListEdit(open, pending->first, pending->second, 0);
-				for (size_t i = 0; i < open.size(); i++)
-					storage->SetInt(ElementNodeID(i), open[i].get<int>());
-				result = { true, true };
+				// Element nodes are keyed by position (under the open list node, so this runs before TreePop): their
+				// open states move with the elements, and a slot a removal frees is closed.
+				ImGuiStorage* storage = ImGui::GetStateStorage();
+				const size_t before = array.size();
+				nlohmann::json open = nlohmann::json::array();
+				for (size_t i = 0; i < before; i++)
+					open.push_back(storage->GetInt(ElementNodeID(i), 0));
+				if (EditJsonList(array, pending->first, pending->second, type))
+				{
+					[[maybe_unused]] const bool moved = ApplyListEdit(open, pending->first, pending->second, 0);
+					BS_ASSERT(moved && open.size() == array.size(), "open states follow the edit the list accepted");
+					for (size_t i = 0; i < std::max(before, open.size()); i++)
+						storage->SetInt(ElementNodeID(i), i < open.size() ? open[i].get<int>() : 0);
+					result = { true, true };
+				}
 			}
+			ImGui::TreePop();
 		}
 		ImGui::PopID();
 		return result;

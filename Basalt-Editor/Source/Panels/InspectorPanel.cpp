@@ -204,16 +204,19 @@ namespace Basalt {
 						continue;
 					const bool mixed = std::any_of(values.begin(), values.end(), [&](const auto& value) { return value[field] != data[field]; });
 					const auto type = info.FieldTypes.find(field);
+					BS_ASSERT(type != info.FieldTypes.end(), "every component field has a type");
 					if (type == info.FieldTypes.end())
 						continue;
-					// Editing a list sends all of it, which would replace every other entity's different list.
-					if (mixed && type->second.Kind == ComponentFieldKind::List)
-					{
-						ImGui::TextDisabled("%s (mixed lists: edit one entity at a time)", field.c_str());
-						continue;
-					}
 					if (mixed)
+					{
+						// Editing a list sends all of it, which would replace every other entity's different list.
+						if (type->second.Kind == ComponentFieldKind::List)
+						{
+							ImGui::TextDisabled("%s (mixed lists: edit one entity at a time)", field.c_str());
+							continue;
+						}
 						ImGui::TextDisabled("%s (mixed)", field.c_str());
+					}
 					const auto result = DrawJsonValue(field, data[field], type->second, info.EnumOptions);
 					m_Context.EditField("editor.component_set", { { "component", info.Name }, { "data", { { field, data[field] } } } }, result.Changed, result.Committed);
 				}
