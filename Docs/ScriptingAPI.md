@@ -1300,8 +1300,9 @@ displayed pose relative to the model's rest pose. Vertical motion, pitch and rol
 Yaw uses the rotation's twist around model Y, including roots whose +Z points vertically. A 180° swing,
 or one very close to it, has an undefined or imprecise twist. An undefined rest reference disables
 extraction for that root; an undefined first/last clip frame disables extraction for that clip.
-An undefined sampled frame skips extraction over that interval. In each case the authored motion stays
-in the pose and the diagnostic identifies the root/clip; unsupported sources do not override character
+An undefined sampled frame skips extraction over that interval. Extraction also validates that the
+hierarchy correction is representable before moving the entity; zero-scale helper nodes are supported.
+In each case the authored motion stays in the pose and the diagnostic identifies the root/clip; unsupported sources do not override character
 movement. Crossfades blend motion from
 opted-in sources (interrupted blends freeze their outgoing pose). A fade out of a root-motion blend space
 retains its extraction clock and sample weights so movement decays throughout the fade, while the

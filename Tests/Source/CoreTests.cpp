@@ -1197,6 +1197,7 @@ TEST_SUITE("Core")
 		CHECK(result.Error.empty());
 
 		const ProcessResult success = RunProcess(ChildProcess({ "exit", "0" }));
+		INFO("outcome=", static_cast<int>(success.Outcome), ", exit=", success.ExitCode, ", error=", success.Error, ", output=", success.Output);
 		CHECK(success.Succeeded());
 	}
 
