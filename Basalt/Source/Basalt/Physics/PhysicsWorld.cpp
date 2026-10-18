@@ -511,13 +511,34 @@ namespace Basalt {
 			if (auto it = impl.RootMotion.find(id); plannedSteps > 0 && it != impl.RootMotion.end())
 			{
 				auto& request = it->second;
-				if (request.Active || glm::any(glm::notEqual(request.Pending, glm::vec3(0))))
+				if (request.Active || request.Pending != glm::vec3(0))
 					character.RootMotionVelocity = request.Pending / (fixedStep * static_cast<float>(plannedSteps));
 				request.Pending = glm::vec3(0);
 			}
 		}
+		// Active is a one-frame override, including zero-motion frames. Pending displacement survives
+		// frames without a fixed step, but an invalid/skipped animation update cannot leave Active latched.
+		for (auto& entry : impl.RootMotion)
+		{
+			auto& request = entry.second;
+			const bool built = impl.Characters.contains(entry.first);
+			Entity entity = impl.ScenePtr->GetEntityByUUID(entry.first);
+			if (!entity || !entity.HasComponent<CharacterControllerComponent>())
+				continue;
+			if (!built && (request.Active || request.Pending != glm::vec3(0)))
+			{
+				if (!request.UnbuiltReported)
+					BS_CORE_ERROR("Physics: character '{}' could not be built; discarding queued root motion translation", entity.GetName());
+				request.UnbuiltReported = true;
+				request.Pending = glm::vec3(0);
+			}
+			else if (built)
+				request.UnbuiltReported = false;
+			request.Active = false;
+		}
 		std::erase_if(impl.RootMotion, [&](const auto& entry) {
-			return !impl.Characters.contains(entry.first) || (!entry.second.Active && entry.second.Pending == glm::vec3(0));
+			Entity entity = impl.ScenePtr->GetEntityByUUID(entry.first);
+			return !entity || !entity.HasComponent<CharacterControllerComponent>() || (impl.Characters.contains(entry.first) && entry.second.Pending == glm::vec3(0) && !entry.second.InvalidReported);
 		});
 		uint32_t steps = 0;
 		while (m_Accumulator >= fixedStep && steps < settings.MaxStepsPerFrame)

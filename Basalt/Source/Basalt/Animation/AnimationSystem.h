@@ -40,10 +40,14 @@ namespace Basalt {
 		explicit AnimationSystem(Scene& scene);
 		~AnimationSystem();
 		void Update(Timestep timestep, bool updateAttachments = true);
+		// Refresh attachments after physics and LateUpdate have placed their rigs.
 		void UpdateAttachments();
+		// Set a declared Float/Bool parameter on an active graph; false with a deduplicated diagnostic on failure.
 		bool SetParameter(Entity entity, const std::string& name, float value);
 		bool SetParameter(Entity entity, const std::string& name, bool value);
+		// Latch a declared trigger until a successful transition consumes it. False for an inactive graph or wrong name/type.
 		bool SetTrigger(Entity entity, const std::string& name);
+		// Current graph state; empty after Stop, direct playback, or a graph load failure.
 		std::string GetState(Entity entity);
 		bool Play(Entity entity, const std::string& clip);
 		bool CrossFade(Entity entity, const std::string& clip, float seconds);
@@ -107,24 +111,42 @@ namespace Basalt {
 			// The problem last logged, so a problem is logged when it appears or changes, not every update.
 			std::string Problem;
 		};
+		// One outgoing contribution. Interrupted fades retain only the visible pose snapshot.
+		struct OutgoingState
+		{
+			int32_t Clip = -1;
+			double Time = 0;
+			bool Looping = true;
+			bool RootMotion = false;
+			std::optional<SpaceState> Space;
+		};
+		struct RootFrames
+		{
+			glm::mat4 Zero{ 1 }, End{ 1 };
+			bool Valid = false;
+		};
 		struct Playback
 		{
 			entt::entity Handle = entt::null;
 			Ref<MeshSource> Source;
 			std::string ConfiguredClip;
 			std::string ConfiguredGraph;
-			Ref<AnimationGraph> Graph;
-			std::string State;
+			Ref<const AnimationGraph> Graph;
+			std::optional<size_t> StateIndex;
 			std::vector<float> Parameters;
 			// Unwrapped cycle phase: blend-space duration changes must not move an exit threshold.
 			double StatePhase = 0;
+			// GraphActive permits parameter writes and transitions. Stop/direct playback disable it.
 			bool GraphActive = false;
+			// Paused freezes the graph; Playing advances clocks and may be false at a non-looping end.
 			bool Paused = false;
 			bool Looping = true;
-			bool OutgoingLooping = true;
 			bool RootMotion = false;
-			bool OutgoingRootMotion = false;
 			int32_t RootNode = -1;
+			OutgoingState Outgoing;
+			std::optional<glm::mat4> RootReference;
+			std::unordered_map<int32_t, RootFrames> RootClips;
+			std::map<std::string, std::string> ParameterProblems;
 			std::string RootProblem;
 			std::string RootApplyProblem;
 			bool InvalidRootPose = false;
@@ -132,14 +154,10 @@ namespace Basalt {
 			int32_t Clip = -1;
 			// In a blend space: Phase * Duration.
 			double Time = 0;
-			int32_t Outgoing = -1;
-			double OutgoingTime = 0;
 			float BlendWeight = 1;
 			double FadeTime = 0;
 			float FadeDuration = 0;
 			std::optional<SpaceState> Space;
-			// Pose fades still use Snapshot; an opted-in space keeps its extraction clock for smooth motion.
-			std::optional<SpaceState> OutgoingSpace;
 			// MatchVelocity: the entity's smoothed horizontal speed and where it was at the last update.
 			double MeasuredSpeed = 0;
 			std::optional<glm::vec3> LastPosition;
@@ -183,10 +201,15 @@ namespace Basalt {
 		bool EnterState(Playback& playback, const AnimationState& state, const AnimatorComponent& component, float fade);
 		void UpdateGraph(Playback& playback, const AnimatorComponent& component);
 		bool SetParameterValue(Entity entity, const std::string& name, float value, AnimationParameterType type);
+		static double CycleDuration(const Playback& playback);
+		static bool DrivesRootMotion(const Playback& playback);
+		static void ResolveRootNode(Playback& playback, const AnimatorComponent& component);
+		static glm::mat4 OutgoingRootDelta(Playback& playback, double advance);
+		static glm::mat4 FrameRootMotion(Playback& playback, double advance, double shown, double seconds, double plainSpeed);
 		static bool StripRoot(Playback& playback, AnimationLocalPose& pose, bool enabled);
-		static glm::mat4 SpaceRootDelta(const Playback& playback, const SpaceState& space, double advance, bool looping);
-		static glm::mat4 CurrentRootDelta(const Playback& playback, double advance);
-		static glm::mat4 RootDelta(const Playback& playback, int32_t clip, double from, double advance, bool looping);
+		static glm::mat4 SpaceRootDelta(Playback& playback, const SpaceState& space, double advance, bool looping);
+		static glm::mat4 CurrentRootDelta(Playback& playback, double advance);
+		static glm::mat4 RootDelta(Playback& playback, int32_t clip, double from, double advance, bool looping);
 		void ApplyRootMotion(Entity entity, Playback& playback, const glm::mat4& delta, float seconds);
 		void OnDestroy(entt::registry& registry, entt::entity handle);
 		Scene& m_Scene;

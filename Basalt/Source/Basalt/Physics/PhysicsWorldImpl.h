@@ -95,6 +95,7 @@ namespace Basalt {
 			std::vector<std::string> BuildWarnings;
 			// The last MoveCharacter velocity, used every step until the next call.
 			glm::vec3 MoveVelocity = { 0.0f, 0.0f, 0.0f };
+			// Per-Step animation velocity, shared by its substeps; absent restores gameplay movement.
 			std::optional<glm::vec3> RootMotionVelocity;
 			// Displacement over the last step divided by its duration.
 			glm::vec3 ActualVelocity = { 0.0f, 0.0f, 0.0f };
@@ -152,6 +153,8 @@ namespace Basalt {
 		{
 			glm::vec3 Pending = glm::vec3(0);
 			bool Active = false;
+			bool UnbuiltReported = false;
+			bool InvalidReported = false;
 		};
 		std::unordered_map<UUID, RootMotionRequest> RootMotion;
 

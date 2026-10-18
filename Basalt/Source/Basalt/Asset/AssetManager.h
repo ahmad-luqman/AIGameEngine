@@ -21,7 +21,7 @@ namespace Basalt {
 	class AssetManager
 	{
 	public:
-		static Ref<AnimationGraph> GetAnimationGraph(const std::string& key);
+		static Ref<const AnimationGraph> GetAnimationGraph(const std::string& key);
 		static Ref<MeshSource> GetMesh(const std::string& key);
 		// The mesh if it is already loaded, without loading it (tooltips that must not stall a frame).
 		static Ref<MeshSource> FindLoadedMesh(const std::string& key);

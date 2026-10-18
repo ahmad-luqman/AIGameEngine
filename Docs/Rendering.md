@@ -213,8 +213,8 @@ floats (repeated sampler references count separately). The combined joint-refere
 work for assets that reuse a large skin across many nodes.
 Non-finite evaluated hierarchies or palettes log once per failure episode and display the validated rest pose.
 A skin may use the first N matrices of a larger inverse-bind accessor; absent inverse binds are
-identity. Duplicate clip names get deterministic suffixes. There is no morph-target deformation,
-retargeting, animation state machine or root-motion extraction. Bone attachments, animation events and
+identity. Duplicate clip names get deterministic suffixes. There is no morph-target deformation
+or retargeting. State machines, per-state root motion, bone attachments, animation events and
 blend spaces are described in Docs/ScriptingAPI.md ("Skeletal animation").
 
 `AnimationTests` covers import, interpolation, space conventions, playback, blending, blend spaces, animation

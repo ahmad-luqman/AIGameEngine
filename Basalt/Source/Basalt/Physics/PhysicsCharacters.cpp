@@ -336,7 +336,8 @@ namespace Basalt {
 			{
 				const glm::vec3 worldUp = FromJolt(up);
 				const glm::vec3 rootVelocity = *record.RootMotionVelocity;
-				requested = worldUp * glm::dot(requested, worldUp) + rootVelocity - worldUp * glm::dot(rootVelocity, worldUp);
+				const glm::vec3 tangent = rootVelocity - worldUp * glm::dot(rootVelocity, worldUp);
+				requested = worldUp * glm::dot(requested, worldUp) + tangent;
 			}
 			const JPH::Vec3 move = ToJolt(requested);
 			const JPH::Vec3 moveVertical = up * move.Dot(up);
@@ -408,9 +409,15 @@ namespace Basalt {
 				it->second.Active = false;
 			return;
 		}
-		if (!IsFiniteVec(*displacement))
-			return;
 		auto& request = m_Impl->RootMotion[entity.GetUUID()];
+		if (!IsFiniteVec(*displacement))
+		{
+			if (!request.InvalidReported)
+				BS_CORE_ERROR("Physics: character '{}': root motion displacement must be finite", entity.GetName());
+			request.InvalidReported = true;
+			return;
+		}
+		request.InvalidReported = false;
 		request.Active = true;
 		request.Pending += *displacement;
 	}

@@ -197,6 +197,9 @@ local function TestEntities(self)
 	Check("SetAnimationParameter bool", stateRig:SetAnimationParameter("Grounded", true))
 	Check("SetAnimationTrigger", stateRig:SetAnimationTrigger("Move"))
 	Check("Animation parameter type mismatch", not stateRig:SetAnimationParameter("Speed", true))
+	ExpectError("Animation parameter nil", function() stateRig:SetAnimationParameter("Speed", nil) end, "must be a number or boolean")
+	ExpectError("Animation parameter string", function() stateRig:SetAnimationParameter("Speed", "fast") end, "must be a number or boolean")
+	ExpectError("Animation parameter table", function() stateRig:SetAnimationParameter("Speed", {}) end, "must be a number or boolean")
 
 	-- Other scripts.
 	local spinner = Scene.FindEntityByName("Turntable"):GetScript()

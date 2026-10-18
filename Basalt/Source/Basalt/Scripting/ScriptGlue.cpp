@@ -632,7 +632,7 @@ namespace Basalt {
 			entityType["SetAnimationParameter"] = [&context](const ScriptEntity& self, const std::string& name, const sol::object& value) {
 				Entity entity = RequireAnimator(self, "SetAnimationParameter");
 				auto& animations = RequireAnimations(context);
-				if (IsNil(value))
+				if (IsNil(value) || (!value.is<bool>() && value.get_type() != sol::type::number))
 					throw std::runtime_error("SetAnimationParameter: value must be a number or boolean");
 				if (value.is<bool>())
 					return animations.SetParameter(entity, name, value.as<bool>());

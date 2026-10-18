@@ -29,7 +29,7 @@ namespace Basalt {
 
 		std::unordered_map<std::string, CacheEntry<MeshSource>> s_Meshes;
 		std::unordered_map<std::string, CacheEntry<TextureSource>> s_Textures;
-		std::unordered_map<std::string, CacheEntry<AnimationGraph>> s_Graphs;
+		std::unordered_map<std::string, CacheEntry<const AnimationGraph>> s_Graphs;
 
 		std::string Extension(const std::string& path)
 		{
@@ -86,25 +86,31 @@ namespace Basalt {
 			return TextureSource::LoadFromFile(Project::ResolvePath(key), outError);
 		}
 
+		Ref<const AnimationGraph> LoadAnimationGraph(const std::string& key, std::string& outError)
+		{
+			const auto text = FileSystem::ReadTextFile(Project::ResolvePath(key));
+			if (!text)
+				outError = "cannot read animation graph '" + key + "'";
+			else
+			{
+				const auto data = ParseJson(*text, outError);
+				if (!data.is_discarded())
+					if (auto graph = AnimationGraph::FromJson(data, outError))
+						return CreateRef<const AnimationGraph>(std::move(*graph));
+			}
+			return nullptr;
+		}
+
 	}
 
-	Ref<AnimationGraph> AssetManager::GetAnimationGraph(const std::string& key)
+	Ref<const AnimationGraph> AssetManager::GetAnimationGraph(const std::string& key)
 	{
 		if (key.empty())
 			return nullptr;
 		if (auto it = s_Graphs.find(key); it != s_Graphs.end())
 			return it->second.Asset;
-		CacheEntry<AnimationGraph> entry;
-		const auto text = FileSystem::ReadTextFile(Project::ResolvePath(key));
-		if (!text)
-			entry.Error = "cannot read animation graph '" + key + "'";
-		else
-		{
-			const auto data = ParseJson(*text, entry.Error);
-			if (!data.is_discarded())
-				if (auto graph = AnimationGraph::FromJson(data, entry.Error))
-					entry.Asset = CreateRef<AnimationGraph>(std::move(*graph));
-		}
+		CacheEntry<const AnimationGraph> entry;
+		entry.Asset = LoadAnimationGraph(key, entry.Error);
 		if (!entry.Asset)
 			BS_CORE_ERROR("Animation graph '{}': {}", key, entry.Error);
 		return s_Graphs.emplace(key, std::move(entry)).first->second.Asset;
