@@ -137,3 +137,41 @@ text = json.dumps(model, indent=2) + '\n'
 feature = root.parent / 'FeatureTest/Assets/Models/Biped.gltf'
 feature.parent.mkdir(parents=True, exist_ok=True)
 feature.write_text(text)
+
+# BipedArmature.gltf: the same rig under an 'Armature' root turned 90 degrees about Y and scaled by 0.5, its joint
+# translations doubled (so the world sizes match), as exporters such as Mixamo nest skeletons. The pelvis then has a
+# rotated, scaled parent, which IK must account for.
+import copy
+armature = copy.deepcopy(model)
+turn = lambda v: (v[2], v[1], -v[0])  # 90 degrees about Y
+turned_positions = [c for i in range(0, len(positions), 3) for c in turn(positions[i:i + 3])]
+xs, ys, zs = turned_positions[0::3], turned_positions[1::3], turned_positions[2::3]
+primitive = armature['meshes'][0]['primitives'][0]
+primitive['attributes']['POSITION'] = accessor(turned_positions, 3, min=[min(xs), min(ys), min(zs)], max=[max(xs), max(ys), max(zs)])
+primitive['attributes']['NORMAL'] = accessor([1, 0, 0] * (len(normals) // 3), 3)
+# Inverse of Armature * translate(2c): translate(-2c) * 2 * (90 degrees about Y)^-1, column-major.
+turned_binds = []
+for x, y, z in world:
+    turned_binds += [0, 0, 2, 0, 0, 2, 0, 0, -2, 0, 0, 0, -2 * x, -2 * y, -2 * z, 1]
+armature['skins'][0]['inverseBindMatrices'] = accessor(turned_binds, 16)
+for node in armature['nodes'][1:]:
+    if 'translation' in node:
+        node['translation'] = [2 * v for v in node['translation']]
+    if 'matrix' in node:
+        node['matrix'][12:15] = [2 * v for v in node['matrix'][12:15]]
+    if 'children' in node:
+        node['children'] = [child + 1 for child in node['children']]
+armature['nodes'].insert(1, dict(name='Armature', rotation=axis_angle((0, 1, 0), 90), scale=[0.5, 0.5, 0.5], children=[2]))
+armature['skins'][0]['joints'] = [j + 1 for j in armature['skins'][0]['joints']]
+armature['skins'][0]['skeleton'] = 1
+for animation in armature['animations']:
+    for channel in animation['channels']:
+        channel['target']['node'] += 1
+        if channel['target']['path'] == 'translation':
+            sampler = animation['samplers'][channel['sampler']]
+            sampler['output'] = accessor([2 * v for v in [0, 1.0, 0, 0, 1.02, 0, 0, 1.0, 0]], 3)
+armature['scenes'] = [dict(nodes=[0, 1])]
+armature['bufferViews'] = views
+armature['accessors'] = accessors
+armature['buffers'] = [dict(byteLength=len(blob), uri='data:application/octet-stream;base64,' + base64.b64encode(blob).decode())]
+(root / 'BipedArmature.gltf').write_text(json.dumps(armature, indent=2) + '\n')

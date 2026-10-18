@@ -418,6 +418,11 @@ namespace Basalt {
 			return RequireEntityWith<AnimatorComponent>(self, operation, "Animator");
 		}
 
+		Entity RequireInverseKinematics(const ScriptEntity& self, const char* operation)
+		{
+			return RequireEntityWith<InverseKinematicsComponent>(self, operation, "InverseKinematics");
+		}
+
 		AnimationSystem& RequireAnimations(ScriptContext& context)
 		{
 			auto* system = RequireScene(context).GetAnimationSystem();
@@ -686,7 +691,7 @@ namespace Basalt {
 				return RequireAnimations(context).GetLayerWeight(RequireAnimator(self, "GetAnimationLayerWeight"), layer);
 			};
 			entityType["SetIKTarget"] = [&context](const ScriptEntity& self, const std::string& chain, const sol::object& target, const sol::object& extra) {
-				Entity entity = RequireEntityWith<InverseKinematicsComponent>(self, "SetIKTarget", "InverseKinematics");
+				Entity entity = RequireInverseKinematics(self, "SetIKTarget");
 				AnimationSystem& animations = RequireAnimations(context);
 				if (target.is<ScriptEntity>())
 				{
@@ -702,14 +707,14 @@ namespace Basalt {
 				return animations.SetIKTarget(entity, chain, target.as<glm::vec3>(), IsNil(extra) ? std::nullopt : std::optional<glm::quat>(extra.as<glm::quat>()));
 			};
 			entityType["ClearIKTarget"] = [&context](const ScriptEntity& self, const std::string& chain) {
-				return RequireAnimations(context).ClearIKTarget(RequireEntityWith<InverseKinematicsComponent>(self, "ClearIKTarget", "InverseKinematics"), chain);
+				return RequireAnimations(context).ClearIKTarget(RequireInverseKinematics(self, "ClearIKTarget"), chain);
 			};
 			entityType["SetIKWeight"] = [&context](const ScriptEntity& self, const std::string& chain, float weight, const sol::object& seconds) {
-				Entity entity = RequireEntityWith<InverseKinematicsComponent>(self, "SetIKWeight", "InverseKinematics");
+				Entity entity = RequireInverseKinematics(self, "SetIKWeight");
 				return RequireAnimations(context).SetIKWeight(entity, chain, weight, OptionalNumber(seconds, "SetIKWeight: seconds", 0.0f));
 			};
 			entityType["GetIKWeight"] = [&context](const ScriptEntity& self, const std::string& chain) {
-				return RequireAnimations(context).GetIKWeight(RequireEntityWith<InverseKinematicsComponent>(self, "GetIKWeight", "InverseKinematics"), chain);
+				return RequireAnimations(context).GetIKWeight(RequireInverseKinematics(self, "GetIKWeight"), chain);
 			};
 		}
 

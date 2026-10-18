@@ -119,13 +119,13 @@ namespace Basalt {
 			switch (track.Path)
 			{
 				case AnimationPath::Translation:
-					channels[track.Node] |= AnimatedTranslation;
+					channels[track.Node] |= AnimatedChannel::Translation;
 					break;
 				case AnimationPath::Rotation:
-					channels[track.Node] |= AnimatedRotation;
+					channels[track.Node] |= AnimatedChannel::Rotation;
 					break;
 				case AnimationPath::Scale:
-					channels[track.Node] |= AnimatedScale;
+					channels[track.Node] |= AnimatedChannel::Scale;
 					break;
 			}
 		}
@@ -134,16 +134,16 @@ namespace Basalt {
 
 	std::vector<float> AnimationMaskWeights(const MeshSource& source, const std::vector<AnimationMaskJoint>& mask, std::vector<std::string>& outMissing)
 	{
-		if (mask.empty())
+		// The inspector adds entries before they are named: until one is, the mask is still empty.
+		if (std::ranges::all_of(mask, [](const AnimationMaskJoint& entry) { return entry.Joint.empty(); }))
 			return std::vector<float>(source.Nodes.size(), 1.0f);
 		std::vector<std::optional<float>> named(source.Nodes.size());
 		for (const AnimationMaskJoint& entry : mask)
 		{
-			// The inspector adds entries before they are named.
 			if (entry.Joint.empty())
 				continue;
 			if (const int32_t node = FindNode(source, entry.Joint); node >= 0)
-				named[node] = entry.Weight;
+				named[node] = std::isfinite(entry.Weight) ? std::clamp(entry.Weight, 0.0f, 1.0f) : 0.0f;
 			else
 				outMissing.push_back(entry.Joint);
 		}
@@ -171,11 +171,11 @@ namespace Basalt {
 				continue;
 			AnimationNodePose& node = target.Nodes[i];
 			const AnimationNodePose& source = layer.Nodes[i];
-			if (channels & AnimatedTranslation)
+			if (channels & AnimatedChannel::Translation)
 				node.Translation = glm::mix(node.Translation, source.Translation, amount);
-			if (channels & AnimatedRotation)
+			if (channels & AnimatedChannel::Rotation)
 				node.Rotation = glm::normalize(glm::slerp(node.Rotation, source.Rotation, amount));
-			if (channels & AnimatedScale)
+			if (channels & AnimatedChannel::Scale)
 				node.Scale = glm::mix(node.Scale, source.Scale, amount);
 		}
 	}
@@ -192,14 +192,14 @@ namespace Basalt {
 			AnimationNodePose& node = target.Nodes[i];
 			const AnimationNodePose& source = layer.Nodes[i];
 			const AnimationNodePose& base = reference.Nodes[i];
-			if (channels & AnimatedTranslation)
+			if (channels & AnimatedChannel::Translation)
 				node.Translation += amount * (source.Translation - base.Translation);
-			if (channels & AnimatedRotation)
+			if (channels & AnimatedChannel::Rotation)
 			{
 				const glm::quat delta = glm::normalize(source.Rotation * glm::inverse(base.Rotation));
 				node.Rotation = glm::normalize(glm::slerp(glm::quat(1, 0, 0, 0), delta, amount) * node.Rotation);
 			}
-			if (channels & AnimatedScale)
+			if (channels & AnimatedChannel::Scale)
 			{
 				// A zero reference scale has no ratio; that axis keeps the target's scale.
 				glm::vec3 ratio(1.0f);
@@ -215,6 +215,14 @@ namespace Basalt {
 	{
 		const auto node = std::ranges::find(source.Nodes, name, &MeshNode::Name);
 		return node == source.Nodes.end() ? -1 : static_cast<int32_t>(node - source.Nodes.begin());
+	}
+
+	bool IsAncestor(const MeshSource& source, uint32_t ancestor, uint32_t node)
+	{
+		for (int32_t parent = source.Nodes[node].Parent; parent >= 0; parent = source.Nodes[parent].Parent)
+			if (static_cast<uint32_t>(parent) == ancestor)
+				return true;
+		return false;
 	}
 
 	bool SkinPalettesFinite(const MeshSource& source, const std::vector<glm::mat4>& globals)

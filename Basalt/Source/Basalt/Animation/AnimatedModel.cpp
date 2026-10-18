@@ -184,18 +184,29 @@ namespace Basalt {
 			const auto source = animator->Mesh.empty() ? nullptr : AssetManager::GetMesh(animator->Mesh);
 			std::vector<uint32_t> joints;
 			std::vector<uint32_t> groundUppers;
+			std::vector<std::pair<uint32_t, const IKChain*>> ends;
 			for (const IKChain& chain : ik.Chains)
 			{
-				if (chain.Joint.empty() || !source)
+				if (chain.Joint.empty())
 				{
-					if (chain.Joint.empty())
-						warnings.push_back(fmt::format("InverseKinematics chain '{}': Joint is empty", chain.Name));
+					warnings.push_back(fmt::format("InverseKinematics chain '{}': Joint is empty", chain.Name));
 					continue;
 				}
+				if (!source)
+					continue;
 				if (std::string problem = ResolveIKChain(*source, chain, joints); !problem.empty())
+				{
 					warnings.push_back(fmt::format("InverseKinematics chain '{}': {}", chain.Name, problem));
-				else if (chain.Ground && chain.Type == IKChainType::TwoBone)
+					continue;
+				}
+				if (chain.Ground && chain.Type == IKChainType::TwoBone)
 					groundUppers.push_back(joints.front());
+				// Chains solve in order, so a later one driving the same joint overrides the earlier one.
+				const uint32_t end = chain.Type == IKChainType::TwoBone ? joints.back() : joints.front();
+				if (const auto other = std::ranges::find(ends, end, &std::pair<uint32_t, const IKChain*>::first); other != ends.end())
+					warnings.push_back(fmt::format("InverseKinematics chains '{}' and '{}' both drive joint '{}'; the later one wins", other->second->Name, chain.Name, chain.Joint));
+				else
+					ends.emplace_back(end, &chain);
 			}
 			if (ik.Pelvis.empty())
 				return;
@@ -211,10 +222,7 @@ namespace Basalt {
 			else
 				for (uint32_t upper : groundUppers)
 				{
-					bool above = false;
-					for (int32_t node = static_cast<int32_t>(upper); node >= 0 && !above; node = source->Nodes[node].Parent)
-						above = node == pelvis;
-					if (!above)
+					if (upper != static_cast<uint32_t>(pelvis) && !IsAncestor(*source, static_cast<uint32_t>(pelvis), upper))
 						warnings.push_back(fmt::format("InverseKinematics Pelvis joint '{}' is not above the leg starting at '{}', so lowering it does not help that foot reach", ik.Pelvis, source->Nodes[upper].Name));
 				}
 		}

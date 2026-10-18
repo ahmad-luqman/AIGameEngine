@@ -2,6 +2,7 @@
 
 #include "Basalt/Animation/AnimationPose.h"
 #include "Basalt/Animation/AnimationGraph.h"
+#include "Basalt/Animation/FadingWeight.h"
 #include "Basalt/Core/UUID.h"
 #include "Basalt/Core/Timestep.h"
 #include "Basalt/Scene/Components.h"
@@ -44,7 +45,8 @@ namespace Basalt {
 		~AnimationSystem();
 		// runLateUpdate: also run LateUpdate at the end; the scene passes false and calls LateUpdate after physics.
 		void Update(Timestep timestep, bool runLateUpdate = true);
-		// Solves inverse kinematics and refreshes attachments once physics and OnLateUpdate have placed the rigs.
+		// Solves inverse kinematics and refreshes attachments once physics and OnLateUpdate have placed the rigs. An
+		// invalid (negative or non-finite) step, which Update reports, skips IK.
 		void LateUpdate(Timestep timestep);
 		// Set a declared Float/Bool parameter on an active graph; false with a deduplicated diagnostic on failure.
 		bool SetParameter(Entity entity, const std::string& name, float value);
@@ -88,15 +90,15 @@ namespace Basalt {
 		void ReportBoneProblem(Entity entity, const std::string& joint, const std::string& error);
 		// Layers (Animator.Layers, found by name). PlayLayer restarts the layer at 0, on `clip` when given (until the
 		// configured Clip changes), otherwise on its configured Clip (dropping an earlier script clip); false when the
-		// layer then shows nothing. SetLayerWeight fades linearly over `seconds` (0: at once). False, with a
-		// diagnostic logged once per entity, layer and problem, for an unknown layer or clip or an invalid value.
+		// layer would show nothing (the call then changes nothing). SetLayerWeight fades linearly over `seconds` (0: at
+		// once). False for an unknown layer or clip or an invalid value, logged as ReportCallProblem describes.
 		bool PlayLayer(Entity entity, const std::string& layer, const std::optional<std::string>& clip);
 		bool SetLayerWeight(Entity entity, const std::string& layer, float weight, float seconds);
 		std::optional<float> GetLayerWeight(Entity entity, const std::string& layer);
 		// Inverse kinematics chains (InverseKinematics.Chains, found by name). A target is a world position (with an
 		// optional world rotation for a TwoBone chain's end joint) or an entity followed every frame; it replaces
-		// ground placement until ClearIKTarget. False, with a diagnostic logged once per entity, chain and problem,
-		// for a missing component or chain, an invalid value, or a rotation for a LookAt chain.
+		// ground placement until ClearIKTarget. False for a missing component or chain, an invalid value, or a rotation
+		// for a LookAt chain, logged as ReportCallProblem describes.
 		bool SetIKTarget(Entity entity, const std::string& chain, const glm::vec3& position, const std::optional<glm::quat>& rotation);
 		bool SetIKTarget(Entity entity, const std::string& chain, Entity target, bool matchRotation);
 		bool ClearIKTarget(Entity entity, const std::string& chain);
@@ -159,24 +161,6 @@ namespace Basalt {
 			// Retained across good frames: each clip/node failure is reported once per playback/cache bind.
 			std::string Problem;
 		};
-		// A 0..1 weight that fades linearly toward a target. A changed configured value applies at once and ends a fade.
-		class FadingWeight
-		{
-		public:
-			explicit FadingWeight(float configured = 1.0f);
-			void Configure(float configured);
-			// Seconds 0 sets the weight at once.
-			void FadeTo(float target, float seconds);
-			void Advance(float seconds);
-			float Get() const { return m_Value; }
-
-		private:
-			float m_Configured;
-			float m_Value;
-			float m_Target;
-			// Weight per second while fading; 0 when not fading.
-			float m_Rate = 0;
-		};
 		// What a layer's resolution depends on: it is resolved again only when this changes.
 		struct LayerKey
 		{
@@ -185,9 +169,27 @@ namespace Basalt {
 			std::string ReferenceClip;
 			float ReferenceTime = 0;
 			std::vector<AnimationMaskJoint> Mask;
-			// The root-motion extraction node while root motion is on, else -1.
-			int32_t RootNode = -1;
-			bool operator==(const LayerKey&) const = default;
+			// Compares without copying the configuration; NaN values written by C++ compare equal to themselves, so they
+			// cannot force a resolution every update.
+			bool Matches(const AnimationLayer& config, const std::string& clip) const;
+		};
+		// A layer's clip, mask and reference pose, resolved against the model.
+		struct LayerResolution
+		{
+			LayerKey Key;
+			// -1 shows nothing: no clip, or a missing clip or reference clip.
+			int32_t Clip = -1;
+			AnimationLayerMask Mask;
+			// Additive layers only.
+			AnimationLocalPose Reference;
+			// Mask with the root-motion joint and the nodes above it left out, for RootMaskNode (-1: not built yet).
+			AnimationLayerMask RootMask;
+			int32_t RootMaskNode = -1;
+		};
+		struct IKOverlayEntry
+		{
+			uint32_t Node = 0;
+			AnimationNodePose Local;
 		};
 		// Runtime playback of one Animator layer, matched to its configuration by name every update. It belongs to
 		// the playback and resets with it.
@@ -200,15 +202,13 @@ namespace Basalt {
 			std::string ConfiguredClip;
 			FadingWeight Weight;
 			double Time = 0;
-			// The cached resolution (see ResolveLayer); nullopt until the first.
-			std::optional<LayerKey> Key;
-			// -1 shows nothing: no clip, or a missing clip or reference clip.
-			int32_t Clip = -1;
-			AnimationLayerMask Mask;
-			AnimationLocalPose Reference;
-			// The last resolution and configuration problems, each logged when it changes.
+			// Cached by ResolveLayer; nullopt until the first resolution.
+			std::optional<LayerResolution> Resolved;
+			// The last resolution, configuration and root-motion problems, each logged when it changes. The root-motion one
+			// is kept while root motion is off, so states switching it on and off do not repeat it.
 			std::string Problem;
 			std::string ConfigProblem;
+			std::string RootProblem;
 		};
 		struct Playback
 		{
@@ -261,8 +261,8 @@ namespace Basalt {
 			// The last IK solution's local transforms of the nodes it moved. Each evaluation composes Globals from a copy
 			// of Pose with these on top, so a pose evaluated again after the IK pass (e.g. Play in OnAnimationEvent)
 			// keeps the solution until the next solve.
-			std::vector<std::pair<uint32_t, AnimationNodePose>> IKOverlay;
-			// The overlay no longer composed on a changed pose and was dropped (warned once until IK solves again).
+			std::vector<IKOverlayEntry> IKOverlay;
+			// The overlay did not compose on a finite pose and was dropped; warned once until an overlay composes again.
 			bool OverlayDropped = false;
 			bool Playing = false;
 			bool Rest = false;
@@ -293,7 +293,8 @@ namespace Basalt {
 				bool MatchRotation = false;
 			};
 			// Foot placement's smoothed ground below the joint: the offset from the entity's origin height along its up
-			// axis, and the normal (world space). Placed snaps the first real frame.
+			// axis, and the normal (world space). Placed is false until the first solve with time (seconds > 0), which
+			// snaps instead of easing; ClearIKTarget resets it.
 			struct GroundContact
 			{
 				float Offset = 0;
@@ -314,8 +315,16 @@ namespace Basalt {
 		{
 			entt::entity Handle = entt::null;
 			std::vector<IKChainState> Chains;
-			// The last problem with the entity as a whole (its Animator, transform or pelvis), logged when it changes.
+			// The last problem with the entity as a whole (its Animator, pose or transform, and out-of-range settings,
+			// including chains' Weight and MaxAngle), and the last one lowering the pelvis, each logged when it changes.
 			std::string Problem;
+			std::string PelvisProblem;
+		};
+		// A chain's state and configuration, as FindChain returns them.
+		struct ChainLookup
+		{
+			IKChainState* State = nullptr;
+			const IKChain* Config = nullptr;
 		};
 		Playback* Ensure(Entity entity);
 		// Ensure for an operation: logs why the entity cannot animate (once per entity and reason).
@@ -329,24 +338,32 @@ namespace Basalt {
 		// Re-resolves the running space and logs a new problem; false when it cannot play.
 		bool ResolveSpace(Playback& playback, SpaceState& state, const AnimatorComponent& component);
 		static void Evaluate(Playback& playback);
-		// Builds Pose from Local and the layers, then composes Globals from Pose with the IK overlay on top.
+		// Builds Pose from Local and the layers, then composes Globals from Pose with the IK overlay on top. Layers
+		// leave out the root-motion joint and the nodes above it while root motion applies (also while it fades out).
 		static void Finish(Playback& playback);
 		// Matches layer states to the configuration (by name), resolves them and advances their clocks and fades.
 		static void AdvanceLayers(Playback& playback, const AnimatorComponent& component, double seconds);
-		// Re-resolves the layer's clip, mask and reference pose when what they depend on changed.
-		static void ResolveLayer(Playback& playback, const AnimationLayer& config, LayerState& state);
-		// The layer named `layer` after syncing, or null (reported).
-		LayerState* FindLayer(Entity entity, Playback& playback, const std::string& layer);
+		// Re-resolves the layer's clip, mask and reference pose when what they depend on changed; returns them.
+		static const LayerResolution& ResolveLayer(Playback& playback, const AnimationLayer& config, LayerState& state);
+		// The layer named `layer` after syncing, or null (reported for `operation`).
+		LayerState* FindLayer(Entity entity, Playback& playback, const std::string& layer, const char* operation);
 		// Moves BoneAttachment entities to their joints once the rigs are placed (part of LateUpdate).
 		void UpdateAttachments();
 		void SolveIK(float seconds);
 		void SolveEntityIK(Entity entity, Playback& playback, const InverseKinematicsComponent& component, IKState& state, float seconds);
 		IKState& SyncIK(Entity entity, const InverseKinematicsComponent& component);
-		// The chain named `chain` after syncing, or null (reported).
-		IKChainState* FindChain(Entity entity, const std::string& chain);
-		// Logs `problem` for (entity, name) when it differs from the last one reported there; an empty problem records
-		// success, so a script retrying a mistake every frame logs it once.
-		static void ReportCallProblem(std::map<std::pair<UUID, std::string>, std::string>& reported, Entity entity, const char* owner, const std::string& name, const std::string& problem);
+		// The chain named `chain` after syncing, or nulls (reported for `operation`).
+		ChainLookup FindChain(Entity entity, const std::string& chain, const char* operation);
+		// Logs `problem` (plus `detail`, e.g. the offending values) for one entity, operation and layer or chain name
+		// when the problem differs from the last one reported there; an empty problem records that operation's success.
+		// A script repeating a failing call every frame, between other calls, logs it once. Unknown names share one
+		// slot per operation, so scripts cannot grow the record without bound.
+		static void ReportCallProblem(std::map<std::pair<UUID, std::string>, std::string>& reported, Entity entity, const char* owner, const char* operation, const std::string& name, const std::string& problem, const std::string& detail = {});
+		void ReportLayerCall(Entity entity, const char* operation, const std::string& layer, const std::string& problem, const std::string& detail = {});
+		void ReportIKCall(Entity entity, const char* operation, const std::string& chain, const std::string& problem, const std::string& detail = {});
+		// A component value C++ code wrote outside [low, high] (Validate rejects it from data), clamped; the problem
+		// (value-free, so a changing value logs once) is appended to `problems`.
+		static float ClampSetting(float value, float low, float high, const std::string& name, std::vector<std::string>& problems);
 		void OnIKDestroy(entt::registry& registry, entt::entity handle);
 		static void ClearTransition(Playback& playback);
 		// Starts fading from the visible pose; the current clip keeps advancing as the outgoing one when playback is
@@ -384,7 +401,7 @@ namespace Basalt {
 		std::map<std::pair<UUID, std::string>, std::string> m_BoneProblems;
 		std::unordered_map<UUID, std::string> m_UnplayableReported;
 		std::unordered_map<UUID, IKState> m_IK;
-		// The last failed script call's problem per entity and layer or chain name (see ReportCallProblem).
+		// The last failed script call's problem per entity and operation and layer or chain name (see ReportCallProblem).
 		std::map<std::pair<UUID, std::string>, std::string> m_LayerProblems;
 		std::map<std::pair<UUID, std::string>, std::string> m_IKCallProblems;
 		// Scratch storage reused every update.
