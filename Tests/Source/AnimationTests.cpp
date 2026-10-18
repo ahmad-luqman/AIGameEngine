@@ -3153,6 +3153,80 @@ TEST_SUITE("Animation")
 		REQUIRE(pose);
 		CHECK((*pose)[2][3].x == doctest::Approx(0));
 	}
+	TEST_CASE("Shared clips discard retained fade motion when either source interval is undefined")
+	{
+		for (bool graph : { false, true })
+			for (bool space : { false, true })
+			{
+				CAPTURE(graph);
+				CAPTURE(space);
+				ClearAssetCache clear;
+				TempProject project("SharedRootIntervals");
+				Scene scene;
+				auto rig = ClipAnimator(scene, project);
+				auto& component = rig.GetComponent<AnimatorComponent>();
+				auto model = FixtureJson();
+				const float translations[] = { 0, 0, 0, 1, 0.5f, 0, 2, 0, 0 };
+				ReplaceAccessorBytes(model, 9, translations, sizeof(translations));
+				model["animations"][1]["samplers"][0]["interpolation"] = "LINEAR";
+				auto good = model["animations"][1];
+				good["name"] = "Good";
+				model["animations"].push_back(good);
+				const float rotations[] = { 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1 };
+				ReplaceAccessorBytes(model, 8, rotations, sizeof(rotations));
+				model["animations"][1]["samplers"].push_back({ { "input", 7 }, { "output", 8 }, { "interpolation", "LINEAR" } });
+				model["animations"][1]["channels"].push_back({ { "sampler", 1 }, { "target", { { "node", 2 }, { "path", "rotation" } } } });
+				component.Mesh = project.WriteFile("Assets/Models/Shared.gltf", model.dump());
+				if (space)
+				{
+					component.Clip = "First";
+					component.BlendSpaces = { Space1D("First", { { "Step", 0, 0, 0 }, { "Good", 1, 0, 0 } }), Space1D("Second", { { "Step", 0, 0, 0 }, { "Good", 1, 0, 0 } }) };
+				}
+				if (graph)
+				{
+					auto data = StateGraph();
+					data["States"][0]["Clip"] = "Step";
+					data["States"][0]["RootMotion"] = true;
+					data["Transitions"][1]["Duration"] = 1;
+					if (space)
+					{
+						UseBlendSpace(data, 0, "First");
+						UseBlendSpace(data, 1, "Second");
+						data["States"][0]["ParameterX"] = "Speed";
+						data["States"][1]["ParameterX"] = "Speed";
+						data["Parameters"][0]["Default"] = 0.5;
+						data["Transitions"][1]["Conditions"][0] = { { "Parameter", "Jump" } };
+						data["Transitions"].erase(data["Transitions"].begin());
+					}
+					component.StateMachine = project.WriteFile("Assets/Animations/Shared.banimgraph", data.dump());
+				}
+				AnimationSystem animation(scene);
+				if (space && !graph)
+					REQUIRE(animation.PlayBlendSpace(rig, "First", { 0.5f, 0 }));
+				animation.Update(0.5f);
+				const float before = RootX(rig);
+				CHECK(before == doctest::Approx(0.5f));
+				if (graph)
+				{
+					if (space)
+						REQUIRE(animation.SetTrigger(rig, "Jump"));
+					else
+						REQUIRE(animation.SetParameter(rig, "Speed", 1.0f));
+				}
+				else if (space)
+					REQUIRE(animation.PlayBlendSpace(rig, "Second", { 0.5f, 0 }, 1));
+				else
+					REQUIRE(animation.CrossFade(rig, "Step", 1));
+				const auto since = Log::GetHistory().GetTotalCount();
+				animation.Update(0.5f);
+				CHECK(RootX(rig) - before == doctest::Approx(space ? 0.25f : 0.0f));
+				const auto* pose = animation.GetPose(rig);
+				REQUIRE(pose);
+				// Blend-space fades retain the outgoing snapshot; clip fades sample both clocks.
+				CHECK((*pose)[2][3].x == doctest::Approx(space ? 0.125f : 0.75f));
+				CHECK(CountLogMessages(since, "sampled twist or hierarchy is undefined") == 1);
+			}
+	}
 	TEST_CASE("Root correction and extraction agree for unrelated zero-scale model roots")
 	{
 		for (const glm::vec3 scale : { glm::vec3(0, 1, 1), glm::vec3(0) })
