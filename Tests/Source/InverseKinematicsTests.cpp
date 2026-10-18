@@ -415,9 +415,14 @@ TEST_SUITE("Animation")
 		biped.GetTransform().Translation = { 0, 0.2f, 0 };
 		AddBox(scene, "Floor", { 0, -0.5f, 0 }, { 5, 0.5f, 5 });
 		auto step = AddBox(scene, "Step", { -0.1f, 0.1f, 0 }, { 0.05f, 0.1f, 0.2f });
-		// The biped's own collider is not ground.
+		// The biped's own collider and its children's (a hitbox around the shins) are not ground.
 		biped.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
 		biped.AddComponent<BoxColliderComponent>().HalfExtents = { 0.4f, 0.05f, 0.4f };
+		auto hitbox = scene.CreateEntity("Hitbox");
+		scene.SetParent(hitbox, biped, false);
+		hitbox.GetTransform().Translation = { 0, 0.3f, 0 };
+		hitbox.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
+		hitbox.AddComponent<BoxColliderComponent>().HalfExtents = { 0.4f, 0.05f, 0.4f };
 		scene.OnSimulationStart();
 		scene.OnUpdate(Step);
 
