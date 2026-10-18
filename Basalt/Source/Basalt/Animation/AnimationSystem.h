@@ -138,6 +138,8 @@ namespace Basalt {
 			double FadeTime = 0;
 			float FadeDuration = 0;
 			std::optional<SpaceState> Space;
+			// Pose fades still use Snapshot; an opted-in space keeps its extraction clock for smooth motion.
+			std::optional<SpaceState> OutgoingSpace;
 			// MatchVelocity: the entity's smoothed horizontal speed and where it was at the last update.
 			double MeasuredSpeed = 0;
 			std::optional<glm::vec3> LastPosition;
@@ -182,6 +184,7 @@ namespace Basalt {
 		void UpdateGraph(Playback& playback, const AnimatorComponent& component);
 		bool SetParameterValue(Entity entity, const std::string& name, float value, AnimationParameterType type);
 		static bool StripRoot(Playback& playback, AnimationLocalPose& pose, bool enabled);
+		static glm::mat4 SpaceRootDelta(const Playback& playback, const SpaceState& space, double advance, bool looping);
 		static glm::mat4 CurrentRootDelta(const Playback& playback, double advance);
 		static glm::mat4 RootDelta(const Playback& playback, int32_t clip, double from, double advance, bool looping);
 		void ApplyRootMotion(Entity entity, Playback& playback, const glm::mat4& delta, float seconds);

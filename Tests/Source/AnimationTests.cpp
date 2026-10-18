@@ -2628,3 +2628,36 @@ TEST_SUITE("Animation")
 			CHECK(scene.GetWorldTransform(entity)[2].z == doctest::Approx(-1).epsilon(1e-4));
 	}
 }
+
+TEST_SUITE("Animation")
+{
+	TEST_CASE("Fades out of root-motion blend spaces retain their weighted extraction clocks")
+	{
+		ClearAssetCache clear;
+		TempProject project("OutgoingSpaceRootMotion");
+		Scene scene;
+		auto graph = StateGraph();
+		graph["InitialState"] = "Walk";
+		graph["States"][1].erase("Clip");
+		graph["States"][1]["BlendSpace"] = "Move";
+		graph["Transitions"].push_back({ { "From", "Walk" }, { "To", "Idle" }, { "Duration", 1 }, { "Conditions", json::array({ { { "Parameter", "Grounded" }, { "Value", false } } }) } });
+		auto rig = GraphAnimator(scene, project, graph);
+		rig.GetComponent<AnimatorComponent>().BlendSpaces = { { .Name = "Move", .Samples = { { .Clip = "Step" } } } };
+		AnimationSystem animation(scene);
+		animation.Update(1.75f);
+		REQUIRE(animation.SetParameter(rig, "Grounded", false));
+		animation.Update(0.5f); // The outgoing space crosses its loop boundary during the fade.
+		CHECK(animation.GetState(rig) == "Idle");
+		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(2.125f));
+		animation.Update(0.5f);
+		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(2.25f));
+		animation.Update(0.5f);
+		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(2.25f));
+
+		REQUIRE(animation.PlayBlendSpace(rig, "Move", { 0, 0 }));
+		animation.Update(0.5f);
+		REQUIRE(animation.CrossFade(rig, "Bend", 1));
+		animation.Update(1.5f); // Only the first second of outgoing movement is visible.
+		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(3.25f));
+	}
+}
