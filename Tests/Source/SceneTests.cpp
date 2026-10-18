@@ -827,6 +827,11 @@ TEST_SUITE("Serialization")
 			CHECK(type.ToString() == "object[]");
 			CHECK(type.MaxCount > 0);
 			CHECK_FALSE(type.Element->Name.empty());
+			if (!type.Element->UniqueField.empty())
+			{
+				REQUIRE(type.Element->FieldTypes.contains(type.Element->UniqueField));
+				CHECK(type.Element->FieldTypes.at(type.Element->UniqueField).Kind == ComponentFieldKind::String);
+			}
 			CHECK(type.Element->FieldTypes.size() == type.Element->Fields.size());
 			for (const std::string& field : type.Element->Fields)
 			{
@@ -852,6 +857,9 @@ TEST_SUITE("Serialization")
 				std::string error;
 				REQUIRE_MESSAGE(ComponentRegistry::AddOrPatch(entity, info.Name, { { field, list } }, error), error);
 				CHECK(info.Serialize(entity)[field] == list);
+				// The component enforces what UniqueField promises: a repeated value is rejected.
+				if (!type.Element->UniqueField.empty())
+					CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, info.Name, { { field, nlohmann::json::array({ type.Element->Default, type.Element->Default }) } }, error));
 			}
 		}
 		CHECK(lists == 3);

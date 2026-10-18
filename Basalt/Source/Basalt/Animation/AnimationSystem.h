@@ -7,6 +7,7 @@
 
 #include <entt/entt.hpp>
 
+#include <map>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -47,16 +48,19 @@ namespace Basalt {
 		bool PlayBlendSpace(Entity entity, const std::string& space, glm::vec2 parameter, float fadeSeconds = 0.0f);
 		// Moves the running blend space's parameter; false when no blend space is running or it cannot play there.
 		bool SetBlendSpaceParameter(Entity entity, glm::vec2 parameter);
-		// The running blend space's weight per clip (summed over samples that share a clip); empty when no blend
-		// space is running or it cannot play.
+		// The running blend space's parameter, if one is running.
+		std::optional<glm::vec2> GetBlendSpaceParameter(Entity entity);
+		// The running blend space's weight per clip (summed over samples that share a clip, 0 for clips without
+		// weight at the parameter); empty when no blend space is running or it cannot play.
 		std::vector<std::pair<std::string, float>> GetBlendSpaceWeights(Entity entity);
 		void Pause(Entity entity, bool paused);
 		void Stop(Entity entity);
-		// In a blend space, seconds of its blended cycle.
+		// In a blend space, seconds of its blended cycle; false while the space cannot play.
 		bool Seek(Entity entity, float seconds);
+		// In a blend space that cannot play: its last playable cycle.
 		float GetTime(Entity entity);
 		float GetDuration(Entity entity);
-		// False while a blend space cannot play (missing space or clips); it resumes once they exist.
+		// False while a blend space cannot play (see SpaceState::Resolved); it resumes once it can.
 		bool IsPlaying(Entity entity);
 		std::vector<std::string> GetClips(Entity entity);
 		// Getters resolve assets/configuration lazily and may reset playback. The vector object survives
@@ -65,11 +69,11 @@ namespace Basalt {
 		// Model-space transform of the first node named `joint` in the current pose; false (with the reason in
 		// outError) when the entity has no playable Animator or its model no such node.
 		bool GetBoneTransform(Entity entity, const std::string& joint, glm::mat4& outTransform, std::string& outError);
-		// Logs a GetBoneTransform failure once per entity, joint and reason, so a script polling a misspelled joint
-		// every frame reports it once.
+		// Logs a GetBoneTransform failure for a script when it appears or changes (an empty `error` records success),
+		// so a script polling a misspelled joint every frame reports it once.
 		void ReportBoneProblem(Entity entity, const std::string& joint, const std::string& error);
-		// The events crossed since the last call, per Animator in update order: each clip's in timeline order, the
-		// current clip's before the outgoing clip's.
+		// The events crossed since the last call, per Animator in update order: each clip's in the order playback
+		// crossed them, the current clip's before the outgoing one's (for a two-clip blend, the second clip's first).
 		std::vector<AnimationEventRecord> TakeEvents();
 
 	private:
@@ -80,7 +84,8 @@ namespace Basalt {
 			float Weight = 0;
 			float Speed = 0;
 		};
-		// The running blend space. It is looked up by name every update, so edits during play apply at once.
+		// The running blend space. It is looked up by name every update while playing, so edits during play apply at
+		// once.
 		struct SpaceState
 		{
 			std::string Name;
@@ -90,10 +95,10 @@ namespace Basalt {
 			// Blended cycle length: the weighted sum of the sample clips' durations.
 			double Duration = 0;
 			std::vector<SpaceSample> Samples;
-			// False while the space or every sample clip is missing: playback holds its pose and resumes once they
-			// exist.
+			// False while the space is missing, has no samples, or no sample weighted at the parameter has a clip:
+			// playback holds its pose and resumes once it can play.
 			bool Resolved = false;
-			// The problem last logged, so each one is reported once.
+			// The problem last logged, so a problem is logged when it appears or changes, not every update.
 			std::string Problem;
 		};
 		struct Playback
@@ -121,15 +126,20 @@ namespace Basalt {
 			bool InvalidPose = false;
 			bool InvalidSpeed = false;
 			bool EventLimitLogged = false;
+			// The last failed PlayBlendSpace's problem, so a script retrying every frame logs it once.
+			std::string PlayProblem;
 			std::string EntityName;
 			std::vector<glm::mat4> Globals;
 		};
 		Playback* Ensure(Entity entity);
+		// Ensure for an operation: logs why the entity cannot animate (once per entity and reason).
+		Playback* EnsurePlayable(Entity entity);
 		// Why Ensure returns no playback for the entity.
 		static std::string DescribeUnplayable(Entity entity);
-		// Fills the state's samples, duration and dominant clip from the component; false when the space or every
-		// sample clip is missing. `outProblem` also names missing sample clips when the others can play.
-		bool ResolveSpaceState(const MeshSource& source, const AnimatorComponent& component, SpaceState& state, int32_t& outDominant, std::string& outProblem);
+		// Fills the state's samples, duration and Resolved from the component and returns the dominant clip; -1
+		// (Resolved false) when the space cannot play (see SpaceState::Resolved). `outProblem` also names missing
+		// sample clips when the others can play.
+		int32_t ResolveSpaceState(const MeshSource& source, const AnimatorComponent& component, SpaceState& state, std::string& outProblem);
 		// Re-resolves the running space and logs a new problem; false when it cannot play.
 		bool ResolveSpace(Playback& playback, SpaceState& state, const AnimatorComponent& component);
 		static void Evaluate(Playback& playback);
@@ -137,6 +147,8 @@ namespace Basalt {
 		// Starts fading from the visible pose; the current clip keeps advancing as the outgoing one when playback is
 		// a single clip.
 		static void BeginTransition(Playback& playback, float seconds);
+		// Starts `clip` (or a blend space whose dominant clip it is) from 0 after the caller set up the transition.
+		static void Start(Playback& playback, int32_t clip);
 		void AdvanceSpace(Playback& playback, SpaceState& state, const AnimatorComponent& component, double advance, UUID id, size_t& budget);
 		// Queues the markers of `clip` that a clock moving from `from` by `advance` crosses, within `budget`.
 		void CollectEvents(Playback& playback, const AnimatorComponent& component, int32_t clip, double from, double advance, UUID id, size_t& budget);
@@ -148,7 +160,9 @@ namespace Basalt {
 		std::vector<AnimationEventRecord> m_PendingEvents;
 		// The last problem reported per BoneAttachment entity, so each is logged once.
 		std::unordered_map<UUID, std::string> m_AttachmentProblems;
-		std::unordered_set<std::string> m_ReportedBoneProblems;
+		// The last GetBoneTransform problem reported per entity and joint, and the last unplayable reason per entity.
+		std::map<std::pair<UUID, std::string>, std::string> m_BoneProblems;
+		std::unordered_map<UUID, std::string> m_UnplayableReported;
 		// Scratch storage reused every update.
 		std::vector<const AnimationEvent*> m_Markers;
 		std::vector<float> m_Weights;

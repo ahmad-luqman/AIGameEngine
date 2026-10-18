@@ -1208,6 +1208,13 @@ TEST_SUITE("Animation")
 			// The fade finished: only the incoming clip remains (Bend's End is not one of Step's markers).
 			system.Update(1.2f);
 			CHECK(TakeEventNames(system) == Names{ "StepOnly@Step" });
+			// A fade that ends within an update: the outgoing clip fires only up to where it ends (Bend .4..1).
+			REQUIRE(system.Play(entity, "Bend"));
+			REQUIRE(system.CrossFade(entity, "Step", 1));
+			system.Update(.4f);
+			CHECK(TakeEventNames(system) == Names{ "StepOnly@Step", "Start@Bend" });
+			system.Update(1);
+			CHECK(TakeEventNames(system) == Names{ "Any@Step", "Mid@Bend" });
 			// A fade shorter than the update: the outgoing clip fires only for the faded part (Bend 0..0.1).
 			REQUIRE(system.Play(entity, "Bend"));
 			REQUIRE(system.CrossFade(entity, "Step", .1f));
@@ -1429,7 +1436,7 @@ TEST_SUITE("Animation")
 		CHECK(CountLogMessages(since, "fadeSeconds must be finite and nonnegative") == 1);
 		// A sample whose clip is missing gets no weight; the space fails only when nothing is left.
 		CHECK_FALSE(system.PlayBlendSpace(entity, "Broken", { 0, 0 }));
-		CHECK(CountLogMessages(since, "blend space 'Broken': sample clips not found: Nope") == 1);
+		CHECK(CountLogMessages(since, "blend space 'Broken': sample clips not found: 'Nope'") == 1);
 		REQUIRE(system.PlayBlendSpace(entity, "Broken", { .5f, 0 }));
 		CHECK(system.GetBlendSpaceWeights(entity) == Weights{ { "Step", 1.0f } });
 		// Moving onto the missing clip pauses the space (one log for the same problem); moving off resumes it.
@@ -1438,7 +1445,8 @@ TEST_SUITE("Animation")
 		CHECK(system.GetBlendSpaceWeights(entity).empty());
 		REQUIRE(system.SetBlendSpaceParameter(entity, { 1, 0 }));
 		CHECK(system.IsPlaying(entity));
-		CHECK(CountLogMessages(since, "sample clips not found: Nope") == 2);
+		// The same problem is logged once, whether the space failed to start or went silent later.
+		CHECK(CountLogMessages(since, "sample clips not found: 'Nope'") == 1);
 		// Samples sharing a clip add up; an empty sample clip is the first clip (Bend).
 		REQUIRE(system.PlayBlendSpace(entity, "Twins", { 1.5f, 0 }));
 		CHECK(system.GetBlendSpaceWeights(entity) == Weights{ { "Step", .5f }, { "Bend", .5f } });
@@ -1489,6 +1497,12 @@ TEST_SUITE("Animation")
 			REQUIRE(system.PlayBlendSpace(entity, "Walk", { .5f, 0 }));
 			CHECK(system.IsPlaying(entity));
 			CHECK(system.GetTime(entity) == 0);
+			// A paused space restarts too.
+			system.Update(.5f);
+			system.Pause(entity, true);
+			REQUIRE(system.PlayBlendSpace(entity, "Walk", { .5f, 0 }));
+			CHECK(system.IsPlaying(entity));
+			CHECK(system.GetTime(entity) == 0);
 		}
 		SUBCASE("Removing the running space holds the pose with one error and resumes when it is back")
 		{
@@ -1498,11 +1512,16 @@ TEST_SUITE("Animation")
 			entity.GetComponent<AnimatorComponent>().BlendSpaces.clear();
 			system.Update(.1f);
 			const float held = system.GetTime(entity);
+			const auto heldPose = *system.GetPose(entity);
 			system.Update(.1f);
 			CHECK_FALSE(system.IsPlaying(entity));
 			CHECK(system.GetTime(entity) == held);
 			CHECK_FALSE(system.SetBlendSpaceParameter(entity, { 0, 0 }));
-			CHECK(CountLogMessages(removed, "blend space 'Walk' not found") == 1);
+			// Seeking cannot play it either: the pose holds.
+			CHECK_FALSE(system.Seek(entity, .5f));
+			CHECK(NearPose(*system.GetPose(entity), heldPose));
+			CHECK(CountLogMessages(removed, "cannot seek: blend space 'Walk' not found") == 1);
+			CHECK(CountLogMessages(removed, "Animator 'Rig': blend space 'Walk' not found") == 1);
 			entity.GetComponent<AnimatorComponent>().BlendSpaces = spaces;
 			system.Update(.1f);
 			CHECK(system.IsPlaying(entity));
@@ -1523,8 +1542,10 @@ TEST_SUITE("Animation")
 		system.Update(.5f);
 		const auto weights = system.GetBlendSpaceWeights(entity);
 		REQUIRE(weights.size() == 3);
-		for (const auto& [clip, weight] : weights)
-			CHECK(weight > 0);
+		// Gradient bands at (.25, .25): .75 for Step and .25 for the others, normalized.
+		CHECK(weights[0].second == doctest::Approx(.6));
+		CHECK(weights[1].second == doctest::Approx(.2));
+		CHECK(weights[2].second == doctest::Approx(.2));
 		// Step and Cubic at their mutual ratio, then Bend at its share of the total.
 		const auto source = AssetManager::GetMesh(FixturePath().string());
 		auto pose = SampleAnimation(*source, &source->Animations[2], .5f);
@@ -1552,6 +1573,51 @@ TEST_SUITE("Animation")
 		CHECK(system.GetBlendSpaceWeights(entity) == Weights{ { "Step", 1.0f }, { "Cubic", 0.0f }, { "Bend", 0.0f } });
 		REQUIRE(system.SetBlendSpaceParameter(entity, { 0, 1 }));
 		CHECK(system.GetBlendSpaceWeights(entity)[2].second == doctest::Approx(1));
+		// Lua's SetBlendSpaceParameter(x) keeps a 2D space's Y.
+		CHECK(Eval(scene, "local e = Scene.FindEntityByName('Rig'); assert(e:SetBlendSpaceParameter(0)); return e:GetBlendSpaceWeights().Bend") == "1.0");
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("A start blend space that cannot play holds the rest pose until it can")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		auto entity = AddAnimator(scene);
+		auto& animator = entity.GetComponent<AnimatorComponent>();
+		animator.BlendSpaces = { Space1D("Run", { { "Gone", 0, 0, 0 }, { "Lost", 1, 0, 0 }, { "Gone", 2, 0, 0 } }) };
+		animator.Clip = "Run";
+		const auto since = Log::GetHistory().GetTotalCount();
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		system.Update(.5f);
+		CHECK(CountLogMessages(since, "blend space 'Run': sample clips not found: 'Gone', 'Lost'") == 1);
+		CHECK_FALSE(system.IsPlaying(entity));
+		CHECK_FALSE(system.Seek(entity, .5f));
+		CHECK(system.GetBlendSpaceWeights(entity).empty());
+		std::vector<glm::mat4> rest;
+		REQUIRE(EvaluateAnimation(*AssetManager::GetMesh(FixturePath().string()), nullptr, 0, rest));
+		CHECK(NearPose(*system.GetPose(entity), rest));
+		animator.BlendSpaces[0].Samples[0].Clip = "Step";
+		system.Update(.5f);
+		CHECK(system.IsPlaying(entity));
+		CHECK(system.GetBlendSpaceWeights(entity) == Weights{ { "Step", 1.0f } });
+		CHECK(CountLogMessages(since, "sample clips not found: 'Lost'") == 1);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Animation operations on a model that cannot animate say why, once")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		auto entity = scene.CreateEntity("Broken");
+		entity.AddComponent<AnimatorComponent>().Mesh = "Missing/Model.gltf";
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		const auto since = Log::GetHistory().GetTotalCount();
+		CHECK_FALSE(system.Play(entity, "Walk"));
+		CHECK_FALSE(system.CrossFade(entity, "Walk", 1));
+		CHECK_FALSE(system.PlayBlendSpace(entity, "Run", { 0, 0 }));
+		CHECK(CountLogMessages(since, "Animator 'Broken': cannot animate: model 'Missing/Model.gltf' could not be loaded") == 1);
 		scene.OnRuntimeStop();
 	}
 
@@ -1565,14 +1631,16 @@ TEST_SUITE("Animation")
 		animator.BlendSpaces = { Space1D("Empty", {}), Space1D("Bend", { { "Gone", 0, 0, 0 } }) };
 		animator.MatchVelocity = true;
 		animator.Clip = "Bend";
-		CHECK(GetAnimationWarnings(entity) == Names{
-												  "Animator event 'Lost': clip 'Nope' not found",
-												  "Animator event 'Late' at 3s is past the end of clip 'Bend' (2s) and never fires",
-												  "Animator blend space 'Empty' has no samples",
-												  "Animator blend space 'Bend' has the name of a clip; Clip selects the clip",
-												  "Animator blend space 'Bend': clip 'Gone' not found",
-												  "Animator MatchVelocity has no effect: no blend space sample has a Speed",
-											  });
+		const Names expected = {
+			"Animator event 'Lost': clip 'Nope' not found",
+			"Animator event 'Late' at 3s is past the end of clip 'Bend' (2s) and never fires",
+			"Animator event 'AnyLate' at 9s is past the end of every clip and never fires",
+			"Animator blend space 'Empty' has no samples",
+			"Animator blend space 'Bend' has the name of a clip; Clip selects the clip",
+			"Animator blend space 'Bend': clip 'Gone' not found",
+			"Animator MatchVelocity has no effect: no blend space sample has a Speed",
+		};
+		CHECK(GetAnimationWarnings(entity) == expected);
 	}
 
 	TEST_CASE("MatchVelocity plays a blend space as fast as the entity moves horizontally")
@@ -1607,7 +1675,10 @@ TEST_SUITE("Animation")
 		// A teleport does not count as movement.
 		entity.GetTransform().Translation.x += 500;
 		system.Update(.1f);
-		CHECK(advance({ 0, 0, .3f }) == doctest::Approx(.15).epsilon(1e-3));
+		const float beforeTeleport = system.GetTime(entity);
+		entity.GetTransform().Translation.z += .3f;
+		system.Update(.1f);
+		CHECK(std::fmod(system.GetTime(entity) - beforeTeleport + 2.0f, 2.0f) == doctest::Approx(.15).epsilon(1e-3));
 		// Moving while paused is measured too: resuming plays at the steady rate at once.
 		system.Pause(entity, true);
 		for (int i = 0; i < 30; i++)
@@ -1626,6 +1697,23 @@ TEST_SUITE("Animation")
 		CHECK(advance({ 0, 0, .2f }) == doctest::Approx(.15).epsilon(1e-3));
 		REQUIRE(system.SetBlendSpaceParameter(entity, { 0, 0 }));
 		CHECK(advance({ 0, 0, .2f }) == doctest::Approx(.1).epsilon(1e-3));
+		// At a high frame rate physics moves the entity only every fixed step; those moves are not teleports. 2000
+		// updates per second, moving .1 every fixed step: 6 m/s over Run's 1 m/s sample.
+		REQUIRE(system.PlayBlendSpace(entity, "Run", { 0, 0 }));
+		const float fixedStep = scene.GetFixedTimestep();
+		const int perStep = static_cast<int>(std::lround(fixedStep / .0005f));
+		auto highRate = [&](int steps) {
+			for (int i = 0; i < steps * perStep; i++)
+			{
+				if (i % perStep == 0)
+					entity.GetTransform().Translation.z += .1f;
+				system.Update(.0005f);
+			}
+		};
+		highRate(30);
+		const float beforeSteps = system.GetTime(entity);
+		highRate(6);
+		CHECK(std::fmod(system.GetTime(entity) - beforeSteps + 2.0f, 2.0f) == doctest::Approx(.6).epsilon(.05));
 		animator.MatchVelocity = false;
 		REQUIRE(system.PlayBlendSpace(entity, "Run", { 1, 0 }));
 		CHECK(advance({ 0, 0, .3f }) == doctest::Approx(.1).epsilon(1e-3));
@@ -1667,6 +1755,7 @@ TEST_SUITE("Animation")
 		ring.GetParent().AddComponent<BoneAttachmentComponent>() = { rig.GetUUID(), "RootJoint", { 1, 0, 0 }, glm::quat(1, 0, 0, 0), { 1, 1, 1 } };
 		rig3Parent.AddComponent<BoneAttachmentComponent>() = { rig.GetUUID(), "Tip", { 0, 1, 0 }, glm::quat(1, 0, 0, 0), { 1, 1, 1 } };
 
+		const auto since = Log::GetHistory().GetTotalCount();
 		scene.OnRuntimeStart();
 		auto& system = *scene.GetAnimationSystem();
 		system.Update(.5f);
@@ -1697,9 +1786,11 @@ TEST_SUITE("Animation")
 			assert((expected - world):Length() < 1e-4, tostring(expected) .. ' vs ' .. tostring(world))
 			assert((scale - Vec3(1, 1, 1)):Length() < 1e-4)
 			for _ = 1, 3 do assert(rig:GetBoneTransform('Nope') == nil) end
+			assert(rig:GetBoneTransform('Tip') ~= nil)
 			assert(not pcall(function() Scene.FindEntityByName('Holder'):GetBoneTransform('Tip') end))
 			return 'ok'
 		)") == "ok");
+		CHECK(CountLogMessages(since, "GetBoneTransform on 'Rig': joint 'Nope' not found") == 1);
 		scene.OnRuntimeStop();
 	}
 
@@ -1750,7 +1841,8 @@ TEST_SUITE("Animation")
 		auto broken = scene.CreateEntity("BrokenModel");
 		broken.AddComponent<AnimatorComponent>().Mesh = "Missing/Model.gltf";
 		noAnimator.GetComponent<BoneAttachmentComponent>().Target = broken.GetUUID();
-		CHECK(warning(noAnimator) == "BoneAttachment Target 'BrokenModel' has no playable Animator model");
+		CHECK(warning(noAnimator).find("BoneAttachment Target 'BrokenModel' model could not be loaded: ") == 0);
+		CHECK(warning(a) == "BoneAttachment Target 'B' is attached back to this entity (a cycle)");
 
 		const auto since = Log::GetHistory().GetTotalCount();
 		scene.OnRuntimeStart();

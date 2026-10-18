@@ -19,7 +19,7 @@ description: Add a new component type to the Basalt engine end to end (data, ser
    edit runs it. Adding a missing component constructs it once with its final values.
    A `std::vector` of plain structs (Animator `Events`) is a `ListField(name, list, MaxCount)`: the element struct
    names itself with `static constexpr const char* TypeName` (its Lua class) and may declare a `UniqueField` (a
-   string field the editor keeps unique on Add/Duplicate). Give it `Fields` and `Write` overloads, declared next to
+   string field the editor keeps unique on Add/Duplicate; reject duplicates in `Validate` too, the registry does not). Give it `Fields` and `Write` overloads, declared next to
    the existing element declarations after `FieldReader` (the list templates call them), with defaults that pass
    `Validate` (the inspector's Add appends them). Element rules go in the owning component's `Validate`, with indexed
    messages (`Events[2].Name ...`), which must also re-check the list sizes (C++ can grow a list past what the

@@ -52,7 +52,7 @@ namespace Basalt {
 				Describe(name, TypeOf<T>());
 				const json* element = Find(name);
 				if (element)
-					Read(Qualify(name).c_str(), *element, value);
+					ReadQualified(name, *element, value);
 			}
 
 			// A field holding another entity's UUID (0 = none). Recorded so tools can resolve names and
@@ -62,7 +62,7 @@ namespace Basalt {
 				Describe(name, { ComponentFieldKind::Entity });
 				const json* element = Find(name);
 				if (element)
-					Read(Qualify(name).c_str(), *element, value);
+					ReadQualified(name, *element, value);
 			}
 
 			// A variable-length array of objects, each read with Fields(FieldReader&, E&) from a default E (so
@@ -80,7 +80,7 @@ namespace Basalt {
 				if (!element)
 					return;
 				glm::vec3 degrees;
-				Read(Qualify(name).c_str(), *element, degrees);
+				ReadQualified(name, *element, degrees);
 				value = Math::QuatFromEuler(glm::radians(degrees));
 			}
 
@@ -92,7 +92,7 @@ namespace Basalt {
 				if (!element)
 					return;
 				float degrees = 0.0f;
-				Read(Qualify(name).c_str(), *element, degrees);
+				ReadQualified(name, *element, degrees);
 				radiansValue = glm::radians(degrees);
 			}
 
@@ -160,6 +160,12 @@ namespace Basalt {
 			bool IsCollecting() const { return m_Data == nullptr; }
 
 			std::string Qualify(const char* name) const { return m_Prefix + name; }
+
+			template<typename T>
+			void ReadQualified(const char* name, const json& element, T& value) const
+			{
+				Read(Qualify(name).c_str(), element, value);
+			}
 
 			// Records a field in collect mode: its name (in declaration order), type, and whether it names an entity.
 			void Describe(const char* name, const ComponentFieldType& type)
@@ -332,6 +338,7 @@ namespace Basalt {
 				schema->FieldTypes = collector.GetFieldTypes();
 				schema->EnumOptions = collector.GetEnumOptions();
 				schema->Default = Write(element);
+				BS_CORE_ASSERT(schema->UniqueField.empty() || (schema->FieldTypes.contains(schema->UniqueField) && schema->FieldTypes.at(schema->UniqueField).Kind == ComponentFieldKind::String), "UniqueField must name a string field");
 				return schema;
 			}();
 			return s_Schema;
@@ -1352,7 +1359,7 @@ namespace Basalt {
 		{
 			const auto finite = [](const auto& v) { return !glm::any(glm::isnan(v)) && !glm::any(glm::isinf(v)); };
 			// The registry only writes finite rotations; C++ code may not.
-			if (!finite(c.Translation) || !finite(c.Scale) || !finite(glm::vec4(c.Rotation.x, c.Rotation.y, c.Rotation.z, c.Rotation.w)))
+			if (!finite(c.Translation) || !finite(c.Scale) || !finite(c.Rotation))
 				return "Translation, Rotation and Scale must be finite";
 			return {};
 		}

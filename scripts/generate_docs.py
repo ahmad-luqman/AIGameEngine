@@ -71,7 +71,8 @@ def field_description(component, field):
         return f"`{field}` ({kind}: {', '.join(component['enums'][field])})"
     if field in component["lists"]:
         element = component["lists"][field]
-        return f"`{field}` (list of [{element['name']}](#{element['name'].lower()}), at most {element['maxCount']})"
+        unique = f", unique `{element['uniqueField']}`" if "uniqueField" in element else ""
+        return f"`{field}` (list of [{element['name']}](#{element['name'].lower()}), at most {element['maxCount']}{unique})"
     return f"`{field}` ({kind})"
 
 def list_elements(description, found=None):

@@ -430,19 +430,21 @@ function Entity:GetAnimationClips() end
 ---@return boolean
 function Entity:PlayBlendSpace(space, x, y, fadeSeconds) end
 
----Moves the running blend space's parameter (y defaults to 0); false when no blend space is playing or it cannot
----play (missing space or clips).
+---Moves the running blend space's parameter (an omitted y keeps the current one); false when no blend space is
+---running or it cannot play there (missing space, or no sample weighted at the parameter has a clip).
 ---@param x number
 ---@param y? number
 ---@return boolean
 function Entity:SetBlendSpaceParameter(x, y) end
 
----The running blend space's weight per clip name (empty when none is playing).
+---The running blend space's weight per clip name (0 for clips without weight at the parameter; empty when no
+---blend space is running or it cannot play).
 ---@return table<string, number>
 function Entity:GetBlendSpaceWeights() end
 
 ---World position, rotation and scale of the first node named joint in the Animator's current pose (the previous
----frame's during OnUpdate/OnLateUpdate); nil (logged once) when there is no such node. Errors without an Animator.
+---frame's during OnUpdate/OnLateUpdate); nil when the node is missing or the Animator's model cannot animate
+---(logged when the problem appears or changes). Errors without an Animator.
 ---@param joint string
 ---@return Vec3? position
 ---@return Quat? rotation

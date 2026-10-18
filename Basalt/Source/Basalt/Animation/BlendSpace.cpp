@@ -1,5 +1,7 @@
 #include "Basalt/Animation/BlendSpace.h"
 
+#include "Basalt/Core/Assert.h"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -52,17 +54,17 @@ namespace Basalt {
 				float weight = 1.0f;
 				for (size_t j = 0; j < samples.size() && weight > 0.0f; j++)
 				{
+					if (j == i)
+						continue;
 					const glm::vec2 edge = glm::vec2(samples[j].X, samples[j].Y) - origin;
 					const float lengthSquared = glm::dot(edge, edge);
-					if (j == i || lengthSquared <= 0.0f)
+					if (lengthSquared <= 0.0f)
 						continue;
 					weight = std::min(weight, std::clamp(1.0f - glm::dot(point - origin, edge) / lengthSquared, 0.0f, 1.0f));
 				}
 				// Coincident samples each reach full weight there; splitting it keeps them one position's worth.
-				size_t coincident = 0;
-				for (const AnimationBlendSample& other : samples)
-					coincident += other.X == samples[i].X && other.Y == samples[i].Y;
-				weights[i] = weight / static_cast<float>(coincident);
+				const auto coincident = std::ranges::count_if(samples, [&](const AnimationBlendSample& other) { return other.X == samples[i].X && other.Y == samples[i].Y; });
+				weights[i] = weight / static_cast<float>(std::max<std::ptrdiff_t>(coincident, 1));
 				total += weights[i];
 			}
 			if (total > 0.0f && std::isfinite(total))
@@ -71,8 +73,9 @@ namespace Basalt {
 					weight /= total;
 				return;
 			}
-			// The sample nearest the point always keeps a positive weight; this only guards non-finite input that
-			// skipped validation (C++ writes), by playing the nearest sample.
+			// The sample nearest the point always keeps a positive weight, so only non-finite input that skipped
+			// validation (C++ writes) gets here; it plays the nearest sample.
+			BS_CORE_ASSERT(false, "blend space weights need finite sample positions and parameter");
 			size_t nearest = 0;
 			float best = std::numeric_limits<float>::infinity();
 			for (size_t i = 0; i < samples.size(); i++)
