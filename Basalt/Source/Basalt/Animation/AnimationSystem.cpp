@@ -1575,8 +1575,9 @@ namespace Basalt {
 		if (state.Resolved && state.Resolved->Key.Matches(config, clip))
 			return *state.Resolved;
 		const MeshSource& source = *playback.Source;
-		LayerResolution& resolved = state.Resolved.emplace();
-		resolved.Key = { clip, config.Blend, config.ReferenceClip, config.ReferenceTime, config.Mask };
+		// Built as a value and moved in: Clang with libstdc++ rejects optional::emplace() for a nested struct with default
+		// member initializers.
+		LayerResolution resolved{ .Key = { clip, config.Blend, config.ReferenceClip, config.ReferenceTime, config.Mask } };
 		std::vector<std::string> problems;
 		if (static_cast<size_t>(config.Blend) >= AnimationLayerBlendCount)
 			problems.push_back(fmt::format("Blend {} is not a blend mode; using Override", static_cast<int>(config.Blend)));
@@ -1618,7 +1619,8 @@ namespace Basalt {
 		if (!problem.empty() && problem != state.Problem)
 			BS_CORE_WARN("Animator '{}': layer '{}': {}", playback.EntityName, config.Name, problem);
 		state.Problem = std::move(problem);
-		return resolved;
+		state.Resolved = std::move(resolved);
+		return *state.Resolved;
 	}
 
 	void AnimationSystem::AdvanceLayers(Playback& playback, const AnimatorComponent& component, double seconds)
