@@ -1286,7 +1286,8 @@ only states with `RootMotion: true` drive movement; direct playback uses the Ani
 Horizontal translation and yaw are extracted across loop boundaries, including multiple wraps, and
 removed from the displayed pose relative to the model's rest pose. Vertical motion, pitch and roll stay
 in the animation. Crossfades blend motion from opted-in sources (interrupted blends freeze their outgoing
-pose). Seeking never moves the entity. `MatchVelocity` is bypassed while the current state drives root motion.
+pose). A fade out of a root-motion blend space retains its extraction clock and sample weights so movement
+decays throughout the fade, while the outgoing visible pose keeps the existing snapshot behavior. Seeking never moves the entity. `MatchVelocity` is bypassed while the current state drives root motion.
 
 Animation runs after script updates and before physics. Root motion overrides a character's requested
 velocity tangent to its up axis for that update, retaining `Move`'s request along that axis and normal gravity/collision

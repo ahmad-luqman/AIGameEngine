@@ -470,8 +470,13 @@ namespace Basalt {
 					motion = fading;
 				}
 				glm::mat4 outgoing(1);
-				if (playback->Outgoing >= 0 && playback->OutgoingRootMotion && playback->RootNode >= 0)
-					outgoing = RootDelta(*playback, playback->Outgoing, playback->OutgoingTime, shown * plainSpeed, playback->OutgoingLooping);
+				if (playback->OutgoingRootMotion && playback->RootNode >= 0)
+				{
+					if (playback->OutgoingSpace)
+						outgoing = SpaceRootDelta(*playback, *playback->OutgoingSpace, shown * plainSpeed, playback->OutgoingLooping);
+					else if (playback->Outgoing >= 0)
+						outgoing = RootDelta(*playback, playback->Outgoing, playback->OutgoingTime, shown * plainSpeed, playback->OutgoingLooping);
+				}
 				const double weight = playback->FadeDuration > 0 ? playback->BlendWeight + shown / (2.0 * playback->FadeDuration) : playback->BlendWeight;
 				const glm::vec3 translation = glm::mix(glm::vec3(outgoing[3]), glm::vec3(motion[3]), static_cast<float>(weight));
 				const float yaw = BlendRootYaw(std::atan2(outgoing[2].x, outgoing[2].z), std::atan2(motion[2].x, motion[2].z), static_cast<float>(weight));
@@ -501,6 +506,12 @@ namespace Basalt {
 					CollectEvents(*playback, component, playback->Outgoing, playback->OutgoingTime, shown, id, budget, playback->OutgoingLooping);
 				}
 				playback->OutgoingTime = WrapClock(playback->OutgoingTime + outgoingAdvance, playback->Source->Animations[playback->Outgoing].Duration, playback->OutgoingLooping);
+			}
+			if (playback->OutgoingSpace)
+			{
+				auto& outgoing = *playback->OutgoingSpace;
+				if (outgoing.Duration > 0)
+					outgoing.Phase = WrapClock(outgoing.Phase + static_cast<double>(seconds) * plainSpeed / outgoing.Duration, 1.0, playback->OutgoingLooping);
 			}
 			const bool rootDriving = playback->RootMotion || playback->OutgoingRootMotion;
 			if (playback->FadeDuration > 0)
@@ -739,34 +750,29 @@ namespace Basalt {
 		return true;
 	}
 
+	glm::mat4 AnimationSystem::SpaceRootDelta(const Playback& playback, const SpaceState& space, double advance, bool looping)
+	{
+		glm::vec3 translation(0);
+		float yaw = 0, total = 0;
+		if (space.Duration > 0)
+			for (const auto& sample : space.Samples)
+				if (sample.Weight > 0 && sample.Clip >= 0)
+				{
+					const double duration = playback.Source->Animations[sample.Clip].Duration;
+					const auto delta = RootDelta(playback, sample.Clip, space.Phase * duration, advance / space.Duration * duration, looping);
+					translation += glm::vec3(delta[3]) * sample.Weight;
+					const float sampleYaw = std::atan2(delta[2].x, delta[2].z);
+					total += sample.Weight;
+					yaw = total > sample.Weight ? BlendRootYaw(yaw, sampleYaw, sample.Weight / total) : sampleYaw;
+				}
+		return Math::ComposeTransform(translation, glm::vec3(0, yaw, 0), glm::vec3(1));
+	}
+
 	glm::mat4 AnimationSystem::CurrentRootDelta(const Playback& playback, double advance)
 	{
-		glm::mat4 motion(1);
-		if (playback.RootMotion && playback.RootNode >= 0)
-		{
-			if (playback.Space)
-			{
-				glm::vec3 translation(0);
-				float yaw = 0;
-				float total = 0;
-				const auto& space = *playback.Space;
-				if (space.Duration > 0)
-					for (const auto& sample : space.Samples)
-						if (sample.Weight > 0 && sample.Clip >= 0)
-						{
-							const double duration = playback.Source->Animations[sample.Clip].Duration;
-							const auto delta = RootDelta(playback, sample.Clip, space.Phase * duration, advance / space.Duration * duration, playback.Looping);
-							translation += glm::vec3(delta[3]) * sample.Weight;
-							const float sampleYaw = std::atan2(delta[2].x, delta[2].z);
-							total += sample.Weight;
-							yaw = total > sample.Weight ? BlendRootYaw(yaw, sampleYaw, sample.Weight / total) : sampleYaw;
-						}
-				motion = Math::ComposeTransform(translation, glm::vec3(0, yaw, 0), glm::vec3(1));
-			}
-			else
-				motion = RootDelta(playback, playback.Clip, playback.Time, advance, playback.Looping);
-		}
-		return motion;
+		if (!playback.RootMotion || playback.RootNode < 0)
+			return glm::mat4(1);
+		return playback.Space ? SpaceRootDelta(playback, *playback.Space, advance, playback.Looping) : RootDelta(playback, playback.Clip, playback.Time, advance, playback.Looping);
 	}
 
 	glm::mat4 AnimationSystem::RootDelta(const Playback& playback, int32_t clipIndex, double from, double advance, bool looping)
@@ -986,6 +992,7 @@ namespace Basalt {
 	void AnimationSystem::ClearTransition(Playback& playback)
 	{
 		playback.Outgoing = -1;
+		playback.OutgoingSpace.reset();
 		playback.OutgoingRootMotion = false;
 		playback.OutgoingTime = 0;
 		playback.Snapshot = {};
@@ -997,6 +1004,7 @@ namespace Basalt {
 	void AnimationSystem::BeginTransition(Playback& playback, float seconds)
 	{
 		playback.Snapshot = playback.Local;
+		playback.OutgoingSpace = playback.RootMotion && playback.BlendWeight >= 1 && !playback.Rest ? playback.Space : std::nullopt;
 		playback.Outgoing = playback.BlendWeight >= 1 && !playback.Rest && !playback.Space ? playback.Clip : -1;
 		playback.OutgoingTime = playback.Time;
 		playback.OutgoingRootMotion = playback.RootMotion;
@@ -1093,6 +1101,7 @@ namespace Basalt {
 			playback->EventLimitLogged = false;
 		}
 		playback->Space.reset();
+		playback->OutgoingSpace.reset();
 		playback->Outgoing = a;
 		playback->OutgoingRootMotion = playback->RootMotion;
 		playback->OutgoingLooping = playback->Looping;
