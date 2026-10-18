@@ -152,10 +152,10 @@ namespace Basalt {
 
 	enum class AnimationLayerBlend : uint8_t
 	{
-		// Replaces the pose below it by the layer's weight.
+		// Moves the pose below toward the clip by the weight, on the channels the clip animates.
 		Override = 0,
 		// Adds the clip's difference from its reference pose on top.
-		Additive
+		Additive // keep last: AnimationLayerBlendCount
 	};
 	inline constexpr size_t AnimationLayerBlendCount = 2;
 
@@ -167,6 +167,8 @@ namespace Basalt {
 
 		std::string Joint;
 		float Weight = 1.0f;
+
+		bool operator==(const AnimationMaskJoint&) const = default;
 	};
 
 	// A clip played on top of the Animator's base playback (clip, blend, blend space or state machine), in list
@@ -176,6 +178,7 @@ namespace Basalt {
 		static constexpr const char* TypeName = "AnimationLayer";
 		// Layers are found by name.
 		static constexpr const char* UniqueField = "Name";
+		static constexpr uint32_t MaxMaskJoints = 64;
 
 		std::string Name = "Layer";
 		// Empty: the layer shows nothing until a script plays a clip on it.
@@ -183,6 +186,7 @@ namespace Basalt {
 		AnimationLayerBlend Blend = AnimationLayerBlend::Override;
 		// 0..1. The starting weight of the layer; a changed value applies at once.
 		float Weight = 1.0f;
+		// 0..100; the layer's own clock, not scaled by Animator.Speed.
 		float Speed = 1.0f;
 		bool Looping = true;
 		// Additive only: the pose the clip is a difference from, ReferenceClip (empty: the layer's own clip) sampled at
@@ -200,7 +204,6 @@ namespace Basalt {
 		static constexpr uint32_t MaxBlendSpaces = 32;
 		static constexpr uint32_t MaxBlendSamples = 64;
 		static constexpr uint32_t MaxLayers = 16;
-		static constexpr uint32_t MaxMaskJoints = 64;
 
 		std::string Mesh;
 		// Empty selects the first clip. May name a blend space (a clip of the same name wins).
@@ -243,7 +246,7 @@ namespace Basalt {
 		// Bends Joint's parent and turns its grandparent so Joint reaches the target (legs, arms).
 		TwoBone = 0,
 		// Turns Joint and ChainLength - 1 of its ancestors so Joint's Axis points at the target (head, spine, aim).
-		LookAt
+		LookAt // keep last: IKChainTypeCount
 	};
 	inline constexpr size_t IKChainTypeCount = 2;
 
@@ -266,7 +269,8 @@ namespace Basalt {
 		glm::vec3 Axis = { 0.0f, 0.0f, 1.0f };
 		// LookAt: the largest turn, in degrees (0..180), away from the animated aim.
 		float MaxAngle = 60.0f;
-		// TwoBone: the direction the middle joint bends toward, in the entity's space; zero keeps the animated bend.
+		// TwoBone: the direction (not a point) the middle joint bends toward, in the entity's space; zero keeps the
+		// animated bend.
 		glm::vec3 Pole = { 0.0f, 0.0f, 0.0f };
 		// TwoBone: place Joint on the ground below it (foot placement) while no script target is set.
 		bool Ground = false;
@@ -282,12 +286,15 @@ namespace Basalt {
 		static constexpr uint32_t MaxChains = 16;
 
 		std::vector<IKChain> Chains;
-		// Lowered so the lower foot can reach the ground; empty: no pelvis adjustment.
+		// Lowered (never raised) by the largest downward foot offset, each scaled by its chain's weight, so the lower
+		// foot can reach the ground; empty: no pelvis adjustment.
 		std::string Pelvis;
-		// Ground rays start RayHeight above the entity's origin and reach RayDepth below it (meters).
+		// Ground rays run under each foot from RayHeight above the plane through the entity's origin to RayDepth below
+		// it (meters, 0..100).
 		float RayHeight = 0.5f;
 		float RayDepth = 0.5f;
-		// Seconds over which foot offsets, the pelvis and ground contact ease in and out.
+		// Time constant (seconds, 0..100) of the exponential easing of foot offsets, the pelvis and ground normals; 0
+		// snaps.
 		float Smoothing = 0.1f;
 	};
 

@@ -475,7 +475,8 @@ function Entity:GetBlendSpaceWeights() end
 function Entity:GetBoneTransform(joint) end
 
 ---Restarts one of the Animator's Layers at time 0, on clip when given (until the layer's configured Clip changes),
----otherwise on its configured Clip. False (logged once per problem) for an unknown layer or clip.
+---otherwise on its configured Clip. False (logged once per problem) for an unknown layer, an unknown or empty clip
+---name, or when the layer then shows nothing.
 ---@param layer string
 ---@param clip? string
 ---@return boolean
@@ -496,8 +497,8 @@ function Entity:GetAnimationLayerWeight(layer) end
 
 ---Sets an InverseKinematics chain's target until ClearIKTarget: a world position (with an optional world rotation
 ---for a TwoBone chain's end joint), or an entity followed every frame (matchRotation also takes its rotation for a
----TwoBone chain). Replaces ground placement. False (logged once per problem) for an unknown chain or a non-finite
----value. Errors without an InverseKinematics component.
+---TwoBone chain). Replaces ground placement. False (logged once per problem) for an unknown chain, a non-finite value
+---or a rotation for a LookAt chain. Errors without an InverseKinematics component.
 ---@param chain string
 ---@param target Vec3|Entity
 ---@param rotationOrMatch? Quat|boolean

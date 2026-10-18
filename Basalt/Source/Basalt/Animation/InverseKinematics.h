@@ -2,32 +2,75 @@
 
 #include "Basalt/Animation/AnimationPose.h"
 
+#include <glm/gtc/constants.hpp>
+
 #include <optional>
+#include <span>
+#include <string>
 
 namespace Basalt {
 
-	// Analytic IK solvers on a local pose and its composed model-space globals. They rewrite local rotations of
-	// the chain's joints, blended from the incoming pose by `weight`, and leave `globals` composed from the result.
-	// Every position and direction is in model space. False (pose and globals unchanged) when the chain is
-	// degenerate (zero-length bones) or the result is not finite.
+	struct IKChain;
 
-	// Turns `upper` and bends `middle` so `end` reaches `target`; an unreachable target leaves the chain fully
-	// stretched toward it (just short of straight, so the bend direction survives). `pole` (nonzero) turns the
-	// chain about the upper-to-target line so the middle joint points toward it; zero keeps the animated bend.
-	// `endRotation` sets the end joint's model-space rotation.
-	bool SolveTwoBoneIK(const MeshSource& source, AnimationLocalPose& pose, std::vector<glm::mat4>& globals, uint32_t upper, uint32_t middle, uint32_t end, const glm::vec3& target, const glm::vec3& pole, const std::optional<glm::quat>& endRotation, float weight);
+	// Analytic IK solvers on a local pose and its model-space globals, which must be composed from that pose on
+	// entry. They rewrite local rotations of the chain's joints, blended from the incoming pose by the request's
+	// weight (clamped to 0..1), and leave `globals` composed from the result. Positions and directions are in model
+	// space. Parent rotations are treated as rigid: a non-uniformly scaled parent makes the result approximate.
 
-	// Turns joints[0] (the aiming joint) and its listed ancestors (joints[1..], nearest first) so joints[0]'s local
-	// `axis` points at `target`, the turn limited to `maxAngle` radians from the animated aim. Each joint takes an
-	// equal share of what remains, outermost first.
-	bool SolveLookAtIK(const MeshSource& source, AnimationLocalPose& pose, std::vector<glm::mat4>& globals, const std::vector<uint32_t>& joints, const glm::vec3& axis, const glm::vec3& target, float maxAngle, float weight);
+	enum class IKSolveResult : uint8_t
+	{
+		Solved,
+		// Nothing to do: zero weight, or a target on the aiming joint (no direction to aim in).
+		Unchanged,
+		// A chain joint uses a fixed glTF matrix, which the pose cannot turn.
+		FixedMatrix,
+		// Zero-length bones, a fully folded chain or a zero aiming axis.
+		Degenerate,
+		// A non-finite target or result; pose and globals are left as they were.
+		NonFinite
+	};
+	// Why a solve failed, for diagnostics; empty for Solved and Unchanged.
+	const char* DescribeIKResult(IKSolveResult result);
+
+	struct TwoBoneIKRequest
+	{
+		// Each a descendant of the previous one (usually its child).
+		uint32_t Upper = 0, Middle = 0, End = 0;
+		glm::vec3 Target = glm::vec3(0);
+		// The direction the middle joint bends toward; nullopt keeps the animated bend.
+		std::optional<glm::vec3> Pole;
+		// The end joint's model-space rotation; nullopt keeps its local rotation (it turns with the lower bone).
+		std::optional<glm::quat> EndRotation;
+		float Weight = 1.0f;
+	};
+	// Turns `Upper` and bends `Middle` so `End` reaches the target. Targets beyond the chain's reach (or closer than
+	// the difference of its bones) leave it stretched (or folded) toward them, just short of straight.
+	IKSolveResult SolveTwoBoneIK(const MeshSource& source, AnimationLocalPose& pose, std::vector<glm::mat4>& globals, const TwoBoneIKRequest& request);
+
+	struct LookAtIKRequest
+	{
+		// The aiming joint, then the ancestors that share the turn (nearest first).
+		std::span<const uint32_t> Joints;
+		// The aiming direction in the aiming joint's local space.
+		glm::vec3 Axis = glm::vec3(0, 0, 1);
+		glm::vec3 Target = glm::vec3(0);
+		// The largest turn (radians) away from the animated aim.
+		float MaxAngle = glm::pi<float>();
+		float Weight = 1.0f;
+	};
+	// Turns the joints so the aiming joint's axis points at the target. Each joint takes an equal share of the turn
+	// still left, outermost first, so the aim is exact within MaxAngle.
+	IKSolveResult SolveLookAtIK(const MeshSource& source, AnimationLocalPose& pose, std::vector<glm::mat4>& globals, const LookAtIKRequest& request);
+
+	// The joints `chain` drives on `source` (TwoBone: upper, middle, end; LookAt: the aiming joint, then its
+	// ancestors), or why it cannot: an empty or unknown joint, too few ancestors, a fixed-matrix joint.
+	std::string ResolveIKChain(const MeshSource& source, const IKChain& chain, std::vector<uint32_t>& outJoints);
+	bool HasFixedMatrix(const MeshSource& source, std::span<const uint32_t> nodes);
 
 	// The shortest rotation turning unit vector `from` onto unit vector `to`.
 	glm::quat RotationBetween(const glm::vec3& from, const glm::vec3& to);
-	// The rotation part of a model-space node transform (scale and mirroring removed).
+	// The rotation part of a model-space node transform: scale removed, and a mirroring moved into X (as
+	// Math::DecomposeTransform does), so a mirrored transform still yields a proper rotation.
 	glm::quat GlobalRotation(const glm::mat4& transform);
-	// Rotates `node` by the model-space rotation `delta` about its own origin (its descendants follow). Globals are
-	// left stale; compose the pose afterwards.
-	void RotateJointGlobal(const MeshSource& source, AnimationLocalPose& pose, const std::vector<glm::mat4>& globals, uint32_t node, const glm::quat& delta);
 
 }

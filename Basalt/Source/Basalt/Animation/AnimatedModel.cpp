@@ -1,6 +1,7 @@
 #include "Basalt/Animation/AnimatedModel.h"
 
 #include "Basalt/Animation/AnimationSystem.h"
+#include "Basalt/Animation/InverseKinematics.h"
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Scene/Entity.h"
@@ -87,7 +88,7 @@ namespace Basalt {
 				auto it = std::ranges::find(source->Animations, name, &AnimationClip::Name);
 				return it != source->Animations.end() ? &*it : nullptr;
 			};
-			if (animator.RootMotion && (animator.RootJoint.empty() || std::ranges::find(source->Nodes, animator.RootJoint, &MeshNode::Name) == source->Nodes.end()))
+			if (animator.RootMotion && (animator.RootJoint.empty() || FindNode(*source, animator.RootJoint) < 0))
 				warnings.emplace_back("Animator RootJoint must name a model node for root motion");
 			if (!animator.StateMachine.empty())
 			{
@@ -144,7 +145,6 @@ namespace Basalt {
 			}
 			if (animator.MatchVelocity && !knownSpeed)
 				warnings.emplace_back("Animator MatchVelocity has no effect: no blend space sample has a Speed");
-			const auto hasNode = [&](const std::string& name) { return std::ranges::find(source->Nodes, name, &MeshNode::Name) != source->Nodes.end(); };
 			for (const AnimationLayer& layer : animator.Layers)
 			{
 				if (!layer.Clip.empty() && !findClip(layer.Clip))
@@ -157,7 +157,7 @@ namespace Basalt {
 				{
 					if (joint.Joint.empty())
 						warnings.push_back(fmt::format("Animator layer '{}': a mask entry has no Joint and is ignored", layer.Name));
-					else if (!hasNode(joint.Joint))
+					else if (FindNode(*source, joint.Joint) < 0)
 						warnings.push_back(fmt::format("Animator layer '{}': mask joint '{}' not found", layer.Name, joint.Joint));
 				}
 			}
@@ -171,42 +171,52 @@ namespace Basalt {
 				warnings.emplace_back("InverseKinematics needs an Animator on the same entity");
 				return;
 			}
-			// AddAnimatorWarnings reports a model that cannot load.
-			const auto source = animator->Mesh.empty() ? nullptr : AssetManager::GetMesh(animator->Mesh);
-			bool ground = false;
 			for (const IKChain& chain : ik.Chains)
 			{
-				ground = ground || chain.Ground;
-				if (chain.Joint.empty())
-				{
-					warnings.push_back(fmt::format("InverseKinematics chain '{}': Joint is empty", chain.Name));
-					continue;
-				}
-				if (!source)
-					continue;
-				const auto node = std::ranges::find(source->Nodes, chain.Joint, &MeshNode::Name);
-				if (node == source->Nodes.end())
-				{
-					warnings.push_back(fmt::format("InverseKinematics chain '{}': joint '{}' not found", chain.Name, chain.Joint));
-					continue;
-				}
-				const size_t length = chain.Type == IKChainType::TwoBone ? 3 : chain.ChainLength;
-				size_t found = 0;
-				bool fixed = false;
-				for (int32_t index = static_cast<int32_t>(node - source->Nodes.begin()); index >= 0 && found < length; index = source->Nodes[index].Parent)
-				{
-					fixed = fixed || source->Nodes[index].HasMatrix;
-					found++;
-				}
-				if (found < length)
-					warnings.push_back(chain.Type == IKChainType::TwoBone ? fmt::format("InverseKinematics chain '{}': joint '{}' needs a parent and a grandparent", chain.Name, chain.Joint) : fmt::format("InverseKinematics chain '{}': joint '{}' has fewer than {} joints above it", chain.Name, chain.Joint, length - 1));
-				else if (fixed)
-					warnings.push_back(fmt::format("InverseKinematics chain '{}': a joint has a fixed matrix and cannot be turned", chain.Name));
+				if (chain.Type == IKChainType::LookAt && glm::length(chain.Pole) > 0)
+					warnings.push_back(fmt::format("InverseKinematics chain '{}': Pole only applies to TwoBone chains", chain.Name));
+				if (chain.Type == IKChainType::TwoBone && chain.ChainLength != 1)
+					warnings.push_back(fmt::format("InverseKinematics chain '{}': ChainLength only applies to LookAt chains", chain.Name));
+				if (chain.Type == IKChainType::LookAt && chain.MaxAngle == 0)
+					warnings.push_back(fmt::format("InverseKinematics chain '{}': MaxAngle 0 never turns the chain", chain.Name));
 			}
-			if (!ik.Pelvis.empty() && source && std::ranges::find(source->Nodes, ik.Pelvis, &MeshNode::Name) == source->Nodes.end())
-				warnings.push_back(fmt::format("InverseKinematics Pelvis joint '{}' not found", ik.Pelvis));
-			if (!ik.Pelvis.empty() && !ground)
+			// AddAnimatorWarnings reports a model that cannot load.
+			const auto source = animator->Mesh.empty() ? nullptr : AssetManager::GetMesh(animator->Mesh);
+			std::vector<uint32_t> joints;
+			std::vector<uint32_t> groundUppers;
+			for (const IKChain& chain : ik.Chains)
+			{
+				if (chain.Joint.empty() || !source)
+				{
+					if (chain.Joint.empty())
+						warnings.push_back(fmt::format("InverseKinematics chain '{}': Joint is empty", chain.Name));
+					continue;
+				}
+				if (std::string problem = ResolveIKChain(*source, chain, joints); !problem.empty())
+					warnings.push_back(fmt::format("InverseKinematics chain '{}': {}", chain.Name, problem));
+				else if (chain.Ground && chain.Type == IKChainType::TwoBone)
+					groundUppers.push_back(joints.front());
+			}
+			if (ik.Pelvis.empty())
+				return;
+			if (std::ranges::none_of(ik.Chains, &IKChain::Ground))
 				warnings.emplace_back("InverseKinematics Pelvis has no effect: no chain is a Ground chain");
+			if (!source)
+				return;
+			const int32_t pelvis = FindNode(*source, ik.Pelvis);
+			if (pelvis < 0)
+				warnings.push_back(fmt::format("InverseKinematics Pelvis joint '{}' not found", ik.Pelvis));
+			else if (source->Nodes[pelvis].HasMatrix)
+				warnings.push_back(fmt::format("InverseKinematics Pelvis joint '{}' has a fixed matrix and cannot move", ik.Pelvis));
+			else
+				for (uint32_t upper : groundUppers)
+				{
+					bool above = false;
+					for (int32_t node = static_cast<int32_t>(upper); node >= 0 && !above; node = source->Nodes[node].Parent)
+						above = node == pelvis;
+					if (!above)
+						warnings.push_back(fmt::format("InverseKinematics Pelvis joint '{}' is not above the leg starting at '{}', so lowering it does not help that foot reach", ik.Pelvis, source->Nodes[upper].Name));
+				}
 		}
 
 		void AddBoneAttachmentWarnings(Entity entity, const BoneAttachmentComponent& attachment, std::vector<std::string>& warnings)
@@ -260,7 +270,7 @@ namespace Basalt {
 				warnings.push_back(fmt::format("BoneAttachment Target '{}' model has extra influence sets the Animator cannot animate", target.GetName()));
 			else if (attachment.Joint.empty())
 				warnings.emplace_back("BoneAttachment Joint is empty");
-			else if (std::ranges::find(source->Nodes, attachment.Joint, &MeshNode::Name) == source->Nodes.end())
+			else if (FindNode(*source, attachment.Joint) < 0)
 				warnings.push_back(fmt::format("BoneAttachment joint '{}' not found in '{}'", attachment.Joint, animator->Mesh));
 			if (const auto* body = entity.TryGetComponent<RigidBodyComponent>(); body && body->Type == RigidBodyType::Dynamic)
 				warnings.emplace_back("BoneAttachment on a Dynamic RigidBody: physics moves it too; make it Kinematic");

@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "AnimationTestUtils.h"
 #include "TestUtils.h"
 
 #include <Basalt/Animation/AnimatedModel.h>
@@ -21,28 +22,9 @@ using namespace Basalt;
 using namespace BasaltTest;
 using json = nlohmann::json;
 
+using namespace AnimationTest;
+
 namespace {
-	std::filesystem::path BipedPath()
-	{
-		return std::filesystem::path(BASALT_TEST_DATA_DIR) / "Animation/Biped.gltf";
-	}
-	Ref<MeshSource> Load(const std::filesystem::path& path)
-	{
-		std::string error;
-		auto source = MeshImporter::LoadGltf(path, path.string(), error);
-		REQUIRE_MESSAGE(source, error);
-		return source;
-	}
-	struct ClearAssetCache
-	{
-		~ClearAssetCache() { AssetManager::Clear(); }
-	};
-	uint32_t Node(const MeshSource& source, const std::string& name)
-	{
-		const auto node = std::ranges::find(source.Nodes, name, &MeshNode::Name);
-		REQUIRE(node != source.Nodes.end());
-		return static_cast<uint32_t>(node - source.Nodes.begin());
-	}
 	glm::vec3 Position(const std::vector<glm::mat4>& globals, uint32_t node)
 	{
 		return glm::vec3(globals[node][3]);
@@ -51,23 +33,9 @@ namespace {
 	{
 		return glm::all(glm::epsilonEqual(a, b, epsilon));
 	}
-	bool NearRotation(const glm::quat& a, const glm::quat& b, float epsilon = 1e-4f)
-	{
-		return std::abs(std::abs(glm::dot(a, b)) - 1.0f) < epsilon;
-	}
 	float Degrees(const glm::vec3& a, const glm::vec3& b)
 	{
 		return glm::degrees(std::acos(std::clamp(glm::dot(glm::normalize(a), glm::normalize(b)), -1.0f, 1.0f)));
-	}
-	bool SamePose(const std::vector<glm::mat4>& a, const std::vector<glm::mat4>& b)
-	{
-		if (a.size() != b.size())
-			return false;
-		for (size_t i = 0; i < a.size(); i++)
-			for (int c = 0; c < 4; c++)
-				if (!glm::all(glm::epsilonEqual(a[i][c], b[i][c], 1e-5f)))
-					return false;
-		return true;
 	}
 
 	// The rest pose of `source` and its globals.
@@ -83,6 +51,16 @@ namespace {
 		AnimationLocalPose Pose;
 		std::vector<glm::mat4> Globals;
 	};
+
+	bool TwoBone(Rig& rig, uint32_t upper, uint32_t middle, uint32_t end, const glm::vec3& target, const glm::vec3& pole = glm::vec3(0), const std::optional<glm::quat>& rotation = std::nullopt, float weight = 1)
+	{
+		const TwoBoneIKRequest request{ .Upper = upper, .Middle = middle, .End = end, .Target = target, .Pole = glm::length(pole) > 0 ? std::optional<glm::vec3>(pole) : std::nullopt, .EndRotation = rotation, .Weight = weight };
+		return SolveTwoBoneIK(*rig.Source, rig.Pose, rig.Globals, request) == IKSolveResult::Solved;
+	}
+	bool LookAt(Rig& rig, const std::vector<uint32_t>& joints, const glm::vec3& axis, const glm::vec3& target, float maxAngle, float weight = 1)
+	{
+		return SolveLookAtIK(*rig.Source, rig.Pose, rig.Globals, { .Joints = joints, .Axis = axis, .Target = target, .MaxAngle = maxAngle, .Weight = weight }) == IKSolveResult::Solved;
+	}
 
 	struct Leg
 	{
@@ -141,13 +119,13 @@ TEST_SUITE("Animation")
 {
 	TEST_CASE("Two-bone IK reaches targets keeps bone lengths and bends in the animated plane")
 	{
-		Rig rig(Load(BipedPath()));
+		Rig rig(LoadModel(BipedPath()));
 		const auto [upper, middle, end] = LeftLeg(*rig.Source);
 		const glm::vec3 a = Position(rig.Globals, upper), b = Position(rig.Globals, middle), c = Position(rig.Globals, end);
 		const float thigh = glm::length(b - a), shin = glm::length(c - b);
 
 		const glm::vec3 target(0.1f, 0.3f, 0.25f);
-		REQUIRE(SolveTwoBoneIK(*rig.Source, rig.Pose, rig.Globals, upper, middle, end, target, glm::vec3(0), std::nullopt, 1));
+		REQUIRE(TwoBone(rig, upper, middle, end, target, glm::vec3(0), std::nullopt, 1));
 		CHECK(Near(Position(rig.Globals, end), target));
 		CHECK(glm::length(Position(rig.Globals, middle) - a) == doctest::Approx(thigh));
 		CHECK(glm::length(Position(rig.Globals, end) - Position(rig.Globals, middle)) == doctest::Approx(shin));
@@ -159,7 +137,7 @@ TEST_SUITE("Animation")
 		// Unreachable: stretched toward the target.
 		Rig far(rig.Source);
 		const glm::vec3 below(0.1f, -3.0f, 0.0f);
-		REQUIRE(SolveTwoBoneIK(*far.Source, far.Pose, far.Globals, upper, middle, end, below, glm::vec3(0), std::nullopt, 1));
+		REQUIRE(TwoBone(far, upper, middle, end, below, glm::vec3(0), std::nullopt, 1));
 		const glm::vec3 reached = Position(far.Globals, end);
 		CHECK(glm::length(reached - a) == doctest::Approx(thigh + shin).epsilon(1e-3));
 		CHECK(Degrees(reached - a, below - a) < 0.01f);
@@ -167,16 +145,16 @@ TEST_SUITE("Animation")
 
 	TEST_CASE("Two-bone IK weights poles and end rotations")
 	{
-		const auto source = Load(BipedPath());
+		const auto source = LoadModel(BipedPath());
 		const auto [upper, middle, end] = LeftLeg(*source);
 		const glm::vec3 target(0.1f, 0.3f, 0.25f);
 
 		Rig animated(source);
 		Rig none(source);
-		CHECK_FALSE(SolveTwoBoneIK(*source, none.Pose, none.Globals, upper, middle, end, target, glm::vec3(0), std::nullopt, 0));
-		CHECK(SamePose(none.Globals, animated.Globals));
+		CHECK_FALSE(TwoBone(none, upper, middle, end, target, glm::vec3(0), std::nullopt, 0));
+		CHECK(NearPose(none.Globals, animated.Globals));
 		Rig half(source);
-		REQUIRE(SolveTwoBoneIK(*source, half.Pose, half.Globals, upper, middle, end, target, glm::vec3(0), std::nullopt, 0.5f));
+		REQUIRE(TwoBone(half, upper, middle, end, target, glm::vec3(0), std::nullopt, 0.5f));
 		const float start = glm::length(Position(animated.Globals, end) - target);
 		const float between = glm::length(Position(half.Globals, end) - target);
 		CHECK(between > 0.05f);
@@ -184,7 +162,7 @@ TEST_SUITE("Animation")
 
 		// A pole behind the leg turns the knee backward.
 		Rig back(source);
-		REQUIRE(SolveTwoBoneIK(*source, back.Pose, back.Globals, upper, middle, end, target, glm::vec3(0, 0, -1), std::nullopt, 1));
+		REQUIRE(TwoBone(back, upper, middle, end, target, glm::vec3(0, 0, -1), std::nullopt, 1));
 		CHECK(Near(Position(back.Globals, end), target));
 		CHECK(Position(back.Globals, middle).z < 0.15f);
 		CHECK(Position(back.Globals, middle).z < Position(back.Globals, upper).z + glm::dot(target - Position(back.Globals, upper), glm::vec3(0, 0, 1)) * 0.5f);
@@ -193,39 +171,39 @@ TEST_SUITE("Animation")
 		const uint32_t shoulder = Node(*source, "LeftUpperArm"), elbow = Node(*source, "LeftForeArm"), hand = Node(*source, "LeftHand");
 		const glm::vec3 reach(0.55f, 1.55f, 0.0f);
 		Rig front(source);
-		REQUIRE(SolveTwoBoneIK(*source, front.Pose, front.Globals, shoulder, elbow, hand, reach, glm::vec3(0), std::nullopt, 1));
+		REQUIRE(TwoBone(front, shoulder, elbow, hand, reach, glm::vec3(0), std::nullopt, 1));
 		CHECK(Near(Position(front.Globals, hand), reach));
 		CHECK(Position(front.Globals, elbow).z > 0.1f);
 		Rig down(source);
-		REQUIRE(SolveTwoBoneIK(*source, down.Pose, down.Globals, shoulder, elbow, hand, reach, glm::vec3(0, -1, 0), std::nullopt, 1));
+		REQUIRE(TwoBone(down, shoulder, elbow, hand, reach, glm::vec3(0, -1, 0), std::nullopt, 1));
 		CHECK(Near(Position(down.Globals, hand), reach));
 		CHECK(Position(down.Globals, elbow).y < 1.45f);
 
 		// The end joint takes the given model-space rotation.
 		Rig turned(source);
 		const glm::quat rotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(0, 1, 0));
-		REQUIRE(SolveTwoBoneIK(*source, turned.Pose, turned.Globals, upper, middle, end, target, glm::vec3(0), rotation, 1));
+		REQUIRE(TwoBone(turned, upper, middle, end, target, glm::vec3(0), rotation, 1));
 		CHECK(NearRotation(GlobalRotation(turned.Globals[end]), rotation));
 	}
 
 	TEST_CASE("Look-at IK aims the axis shares the turn along the chain and limits the angle")
 	{
-		const auto source = Load(BipedPath());
+		const auto source = LoadModel(BipedPath());
 		const uint32_t head = Node(*source, "Head"), chest = Node(*source, "Chest"), spine = Node(*source, "Spine");
 		const glm::vec3 axis(0, 0, 1);
 		const glm::vec3 target(2.0f, 1.7f, 0.0f);
 
 		Rig single(source);
-		REQUIRE(SolveLookAtIK(*source, single.Pose, single.Globals, { head }, axis, target, glm::pi<float>(), 1));
+		REQUIRE(LookAt(single, { head }, axis, target, glm::pi<float>(), 1));
 		const auto aim = [&](const Rig& rig) { return glm::vec3(rig.Globals[head] * glm::vec4(axis, 0)); };
 		CHECK(Degrees(aim(single), target - Position(single.Globals, head)) < 0.01f);
 
 		Rig limited(source);
-		REQUIRE(SolveLookAtIK(*source, limited.Pose, limited.Globals, { head }, axis, target, glm::radians(30.0f), 1));
+		REQUIRE(LookAt(limited, { head }, axis, target, glm::radians(30.0f), 1));
 		CHECK(Degrees(aim(limited), axis) == doctest::Approx(30.0f).epsilon(1e-3));
 
 		Rig chain(source);
-		REQUIRE(SolveLookAtIK(*source, chain.Pose, chain.Globals, { head, chest, spine }, axis, target, glm::pi<float>(), 1));
+		REQUIRE(LookAt(chain, { head, chest, spine }, axis, target, glm::pi<float>(), 1));
 		CHECK(Degrees(aim(chain), target - Position(chain.Globals, head)) < 0.05f);
 		// Each joint turns about a third of the 90 degrees.
 		for (uint32_t joint : { spine, chest, head })
@@ -235,16 +213,16 @@ TEST_SUITE("Animation")
 		}
 
 		Rig half(source);
-		REQUIRE(SolveLookAtIK(*source, half.Pose, half.Globals, { head }, axis, target, glm::pi<float>(), 0.5f));
+		REQUIRE(LookAt(half, { head }, axis, target, glm::pi<float>(), 0.5f));
 		CHECK(Degrees(aim(half), axis) == doctest::Approx(45.0f).epsilon(1e-3));
 		// A target at the joint has no direction.
 		Rig at(source);
-		CHECK_FALSE(SolveLookAtIK(*source, at.Pose, at.Globals, { head }, axis, Position(at.Globals, head), glm::pi<float>(), 1));
+		CHECK_FALSE(LookAt(at, { head }, axis, Position(at.Globals, head), glm::pi<float>(), 1));
 	}
 
 	TEST_CASE("IK solves the Khronos Fox's rotated and scaled joints")
 	{
-		const auto source = Load(std::filesystem::path(BASALT_TEST_DATA_DIR) / "Animation/Fox/Fox.glb");
+		const auto source = LoadModel(std::filesystem::path(BASALT_TEST_DATA_DIR) / "Animation/Fox/Fox.glb");
 		Rig rig(source);
 		const uint32_t upper = Node(*source, "b_LeftLeg01_015"), middle = Node(*source, "b_LeftLeg02_016"), end = Node(*source, "b_LeftFoot01_017");
 		const glm::vec3 a = Position(rig.Globals, upper), b = Position(rig.Globals, middle), c = Position(rig.Globals, end);
@@ -252,7 +230,7 @@ TEST_SUITE("Animation")
 		// Lift the foot to 80% of the hip-to-foot distance, swung 20 degrees about the bend axis.
 		const glm::vec3 bend = glm::normalize(glm::cross(c - a, b - a));
 		const glm::vec3 target = a + glm::angleAxis(glm::radians(20.0f), bend) * ((c - a) * 0.8f);
-		REQUIRE(SolveTwoBoneIK(*source, rig.Pose, rig.Globals, upper, middle, end, target, glm::vec3(0), std::nullopt, 1));
+		REQUIRE(TwoBone(rig, upper, middle, end, target, glm::vec3(0), std::nullopt, 1));
 		const float scale = thigh + shin;
 		CHECK(glm::length(Position(rig.Globals, end) - target) < 1e-4f * scale);
 		CHECK(glm::length(Position(rig.Globals, middle) - a) == doctest::Approx(thigh).epsilon(1e-3));
@@ -262,7 +240,7 @@ TEST_SUITE("Animation")
 		const glm::vec3 axis(0, 1, 0);
 		const glm::vec3 headPosition = Position(rig.Globals, head);
 		const glm::vec3 look = headPosition + glm::vec3(50, 20, 40);
-		REQUIRE(SolveLookAtIK(*source, rig.Pose, rig.Globals, { head, neck }, axis, look, glm::pi<float>(), 1));
+		REQUIRE(LookAt(rig, { head, neck }, axis, look, glm::pi<float>(), 1));
 		const glm::vec3 aim = glm::vec3(rig.Globals[head] * glm::vec4(axis, 0));
 		CHECK(Degrees(aim, look - Position(rig.Globals, head)) < 0.05f);
 	}
@@ -338,7 +316,7 @@ TEST_SUITE("Animation")
 		const auto first = *system.GetPose(biped);
 		for (int i = 0; i < 10; i++)
 			system.Update(Step);
-		CHECK(SamePose(*system.GetPose(biped), first));
+		CHECK(NearPose(*system.GetPose(biped), first));
 
 		// Re-evaluating the base after the IK pass (Play from an event callback) keeps the solved arm.
 		REQUIRE(system.Play(biped, "Lean"));
@@ -361,12 +339,13 @@ TEST_SUITE("Animation")
 		CHECK_FALSE(system.SetIKWeight(biped, "LeftArm", 2, 0));
 		CHECK_FALSE(system.SetIKWeight(biped, "LeftArm", 1, -1));
 		CHECK_FALSE(system.SetIKTarget(biped, "LeftArm", glm::vec3(std::numeric_limits<float>::infinity()), std::nullopt));
+		CHECK_FALSE(system.SetIKTarget(biped, "LeftArm", glm::vec3(std::numeric_limits<float>::infinity()), std::nullopt));
 		CHECK_FALSE(system.SetIKTarget(biped, "Missing", target, std::nullopt));
 		CHECK_FALSE(system.SetIKTarget(biped, "Missing", target, std::nullopt));
 		CHECK_FALSE(system.GetIKWeight(biped, "Missing").has_value());
 		CHECK_FALSE(system.ClearIKTarget(biped, "Missing"));
 		CHECK(CountLogMessages(since, "no chain named 'Missing'") == 1);
-		CHECK(CountLogMessages(since, "target must be finite") == 1);
+		CHECK(CountLogMessages(since, "target must be a finite position") == 1);
 		CHECK(CountLogMessages(since, "weight must be between 0 and 1") == 2);
 		auto plain = scene.CreateEntity("Plain");
 		CHECK_FALSE(system.GetIKWeight(plain, "LeftArm").has_value());
@@ -394,6 +373,8 @@ TEST_SUITE("Animation")
 		CHECK(CountLogMessages(since, "chain 'Empty': Joint is empty") == 1);
 		CHECK(CountLogMessages(since, "chain 'Short': joint 'Spine' needs a parent and a grandparent") == 1);
 		CHECK(CountLogMessages(since, "chain 'Spine': joint 'Head' has fewer than 7 joints above it") == 1);
+		// The pelvis is checked whether or not a foot needs it.
+		CHECK(CountLogMessages(since, "Pelvis joint 'Nowhere' not found") == 1);
 		// The valid chain still solves.
 		CHECK(Near(BoneWorld(scene, biped, "LeftHand"), glm::vec3(0.4f, 1.3f, 0.3f), 1e-3f));
 		scene.OnRuntimeStop();
@@ -477,9 +458,9 @@ TEST_SUITE("Animation")
 			biped.GetTransform().Translation = { 0, airborne ? 0.3f : 0.05f, 0 };
 			biped.AddComponent<CharacterControllerComponent>().GravityFactor = airborne ? 0.0f : 1.0f;
 			auto& capsule = biped.AddComponent<CapsuleColliderComponent>();
-			capsule.Radius = 0.04f;
-			capsule.Offset = { 0, 0.55f, 0 };
-			AddBox(scene, "Pillar", { 0, -0.5f, 0 }, { 0.04f, 0.5f, 0.04f });
+			capsule.Radius = 0.06f;
+			capsule.Offset = { 0, 0.57f, 0 };
+			AddBox(scene, "Pillar", { 0, -0.5f, 0 }, { 0.07f, 0.5f, 0.07f });
 			AddBox(scene, "Floor", { 0, -0.6f, 0 }, { 5, 0.5f, 5 });
 			scene.OnSimulationStart();
 			for (int i = 0; i < 60; i++)
@@ -512,7 +493,7 @@ TEST_SUITE("Animation")
 		additive.ReferenceClip = "Gone";
 		biped.GetComponent<AnimatorComponent>().Layers = { layer, additive };
 		const auto warnings = GetAnimationWarnings(biped);
-		const auto has = [&](const std::string& text) { return std::ranges::find(warnings, text) != warnings.end(); };
+		const auto has = [&](const std::string& text) { return std::ranges::any_of(warnings, [&](const std::string& warning) { return warning.starts_with(text); }); };
 		CAPTURE(warnings);
 		CHECK(has("Animator layer 'Upper': clip 'Missing' not found"));
 		CHECK(has("Animator layer 'Upper': ReferenceClip only applies to Additive layers"));
@@ -550,6 +531,7 @@ TEST_SUITE("Animation")
 			{ { { "RayHeight", -1 } }, "RayHeight -1 must be between 0 and 100" },
 			{ { { "RayDepth", 101 } }, "RayDepth 101 must be between 0 and 100" },
 			{ { { "Smoothing", -0.1 } }, "Smoothing -0.1 must be between 0 and 100" },
+			{ { { "RayHeight", 0 }, { "RayDepth", 0 }, { "Chains", { { { "Joint", "Foot" }, { "Ground", true } } } } }, "RayHeight + RayDepth must be positive for Ground chains" },
 		};
 		for (const auto& [data, expected] : cases)
 		{
@@ -578,7 +560,7 @@ TEST_SUITE("Animation")
 		const char* prefix = "local e = Scene.FindEntityByName('Biped'); ";
 		const auto run = [&](const std::string& code) { return Eval(scene, prefix + code); };
 		CHECK(run("return tostring(e:SetIKTarget('LeftArm', Vec3(0.4, 1.3, 0.3)))") == "true");
-		CHECK(run("return tostring(e:SetIKTarget('LeftArm', Vec3(0.4, 1.3, 0.3), Quat.FromEuler(Vec3(0, 90, 0))))") == "true");
+		CHECK(run("return tostring(e:SetIKTarget('LeftArm', Vec3(0.4, 1.3, 0.3), Quat.AngleAxis(math.pi / 2, Vec3(0, 1, 0))))") == "true");
 		CHECK(run("return tostring(e:SetIKTarget('LeftArm', Scene.FindEntityByName('Handle'), true))") == "true");
 		CHECK(run("return tostring(e:SetIKTarget('LeftArm', Scene.FindEntityByName('Handle')))") == "true");
 		CHECK(run("return tostring(e:ClearIKTarget('LeftArm'))") == "true");
@@ -596,6 +578,369 @@ TEST_SUITE("Animation")
 			{ "Scene.FindEntityByName('Plain'):GetIKWeight('LeftArm')", "needs the InverseKinematics component" },
 		};
 		CheckLuaErrors(*scene.GetScriptEngine(), errors);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("IK reaches world targets on rotated scaled parented and mirrored entities")
+	{
+		ClearAssetCache clear;
+		for (const glm::vec3 scale : { glm::vec3(2.0f), glm::vec3(-1, 1, 1) })
+		{
+			CAPTURE(scale);
+			Scene scene;
+			auto carrier = scene.CreateEntity("Carrier");
+			carrier.GetTransform().Translation = { 3, 0, -2 };
+			carrier.GetTransform().Rotation = AxisAngle({ 0, 1, 0 }, 30);
+			auto biped = AddBiped(scene, { Chain("LeftArm", IKChainType::TwoBone, "LeftHand") });
+			scene.SetParent(biped, carrier, false);
+			biped.GetTransform().Translation = { 1, 0, 0 };
+			biped.GetTransform().Rotation = AxisAngle({ 0, 1, 0 }, 90);
+			biped.GetTransform().Scale = scale;
+			auto handle = scene.CreateEntity("Handle");
+			scene.OnRuntimeStart();
+			auto& system = *scene.GetAnimationSystem();
+
+			// Within reach of the shoulder in world units (the arm is 0.6 m long at scale 1).
+			const glm::vec3 shoulder = BoneWorld(scene, biped, "LeftUpperArm");
+			const float reach = 0.6f * std::abs(scale.y);
+			const glm::vec3 target = shoulder + glm::normalize(glm::vec3(0.3f, -0.6f, 0.5f)) * (0.7f * reach);
+			const glm::quat rotation = glm::normalize(glm::quat(0.8f, 0.2f, -0.4f, 0.3f));
+			REQUIRE(system.SetIKTarget(biped, "LeftArm", target, rotation));
+			system.Update(Step);
+			CHECK(Near(BoneWorld(scene, biped, "LeftHand"), target, 1e-3f * reach));
+			CHECK(NearRotation(BoneWorldRotation(scene, biped, "LeftHand"), rotation, 1e-3f));
+
+			// An entity target with its rotation.
+			handle.GetTransform().Translation = target;
+			handle.GetTransform().Rotation = AxisAngle(glm::normalize(glm::vec3(1, 2, 3)), 70);
+			REQUIRE(system.SetIKTarget(biped, "LeftArm", handle, true));
+			system.Update(Step);
+			CHECK(Near(BoneWorld(scene, biped, "LeftHand"), target, 1e-3f * reach));
+			CHECK(NearRotation(BoneWorldRotation(scene, biped, "LeftHand"), GlobalRotation(scene.GetWorldTransform(handle)), 1e-3f));
+			scene.OnRuntimeStop();
+		}
+	}
+
+	TEST_CASE("Two-bone IK solves under a mirrored parent joint")
+	{
+		const auto source = LoadBiped();
+		const auto [upper, middle, end] = LeftLeg(*source);
+		for (const glm::vec3 mirror : { glm::vec3(-1, 1, 1), glm::vec3(1, 1, -1) })
+		{
+			CAPTURE(mirror);
+			Rig rig(source);
+			rig.Pose.Nodes[Node(*source, "Hips")].Scale = mirror;
+			REQUIRE(ComposeAnimationPose(*source, rig.Pose, rig.Globals));
+			const glm::vec3 a = Position(rig.Globals, upper), c = Position(rig.Globals, end);
+			// Off the leg's plane, so the swing turns about more than the knee's axis.
+			const glm::vec3 target = a + AxisAngle({ 0, 0, 1 }, 25) * AxisAngle({ 1, 0, 0 }, 30) * ((c - a) * 0.8f);
+			const glm::quat rotation = AxisAngle({ 0, 1, 0 }, 45);
+			REQUIRE(TwoBone(rig, upper, middle, end, target, glm::vec3(0), rotation));
+			CHECK(Near(Position(rig.Globals, end), target, 1e-4f));
+			CHECK(NearRotation(GlobalRotation(rig.Globals[end]), rotation));
+		}
+	}
+
+	TEST_CASE("Two-bone IK handles targets at the root, poles along the chain and very unequal bones")
+	{
+		const auto source = LoadBiped();
+		const auto [upper, middle, end] = LeftLeg(*source);
+		// A target on the hip folds the leg as far as it goes.
+		Rig folded(source);
+		REQUIRE(TwoBone(folded, upper, middle, end, Position(folded.Globals, upper)));
+		CHECK(std::ranges::all_of(folded.Globals, [](const glm::mat4& global) { return Math::IsFinite(global); }));
+		CHECK(glm::length(Position(folded.Globals, end) - Position(folded.Globals, upper)) < 0.01f);
+		// A pole along the straight arm falls back to another bend direction.
+		const uint32_t shoulder = Node(*source, "LeftUpperArm"), elbow = Node(*source, "LeftForeArm"), hand = Node(*source, "LeftHand");
+		Rig arm(source);
+		REQUIRE(TwoBone(arm, shoulder, elbow, hand, glm::vec3(0.55f, 1.55f, 0), glm::vec3(1, 0, 0)));
+		CHECK(Near(Position(arm.Globals, hand), glm::vec3(0.55f, 1.55f, 0)));
+
+		// A 1e-5 lower bone against a 1 m upper one: the reach limits cross, and must not trip std::clamp.
+		MeshSource tiny;
+		tiny.Nodes.resize(3);
+		tiny.Nodes[1].Parent = 0;
+		tiny.Nodes[1].Translation = { 0, -1, 0 };
+		tiny.Nodes[2].Parent = 1;
+		tiny.Nodes[2].Translation = { 0, -1e-5f, 1e-6f };
+		REQUIRE(tiny.FinalizeHierarchy());
+		AnimationLocalPose pose = SampleAnimation(tiny, nullptr, 0);
+		std::vector<glm::mat4> globals;
+		REQUIRE(ComposeAnimationPose(tiny, pose, globals));
+		CHECK(SolveTwoBoneIK(tiny, pose, globals, { .Upper = 0, .Middle = 1, .End = 2, .Target = { 0, -0.5f, 0 } }) == IKSolveResult::Solved);
+		CHECK(std::ranges::all_of(globals, [](const glm::mat4& global) { return Math::IsFinite(global); }));
+		// Zero-length bones cannot be solved.
+		tiny.Nodes[2].Translation = glm::vec3(0);
+		pose = SampleAnimation(tiny, nullptr, 0);
+		REQUIRE(ComposeAnimationPose(tiny, pose, globals));
+		CHECK(SolveTwoBoneIK(tiny, pose, globals, { .Upper = 0, .Middle = 1, .End = 2, .Target = { 0, -0.5f, 0 } }) == IKSolveResult::Degenerate);
+		CHECK(SolveTwoBoneIK(tiny, pose, globals, { .Upper = 0, .Middle = 1, .End = 2, .Target = glm::vec3(NAN) }) == IKSolveResult::NonFinite);
+	}
+
+	TEST_CASE("Joints with fixed glTF matrices are refused and reported")
+	{
+		ClearAssetCache clear;
+		const auto source = LoadBiped();
+		Rig rig(source);
+		CHECK(SolveTwoBoneIK(*source, rig.Pose, rig.Globals, { .Upper = Node(*source, "LeftForeArm"), .Middle = Node(*source, "LeftHand"), .End = Node(*source, "Prop"), .Target = glm::vec3(1) }) == IKSolveResult::FixedMatrix);
+		const std::vector<uint32_t> prop{ Node(*source, "Prop") };
+		CHECK(SolveLookAtIK(*source, rig.Pose, rig.Globals, { .Joints = prop, .Target = glm::vec3(1) }) == IKSolveResult::FixedMatrix);
+
+		Scene scene;
+		auto biped = AddBiped(scene, { Chain("Prop", IKChainType::LookAt, "Prop"), Chain("Foot", IKChainType::TwoBone, "LeftFoot") });
+		auto& ik = biped.GetComponent<InverseKinematicsComponent>();
+		ik.Pelvis = "Prop";
+		ik.Chains[1].Ground = true;
+		const auto warnings = GetAnimationWarnings(biped);
+		CHECK(std::ranges::count(warnings, std::string("InverseKinematics chain 'Prop': joint 'Prop' has a fixed matrix and cannot be turned")) == 1);
+		CHECK(std::ranges::count(warnings, std::string("InverseKinematics Pelvis joint 'Prop' has a fixed matrix and cannot move")) == 1);
+		const auto since = Log::GetHistory().GetTotalCount();
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		REQUIRE(system.SetIKTarget(biped, "Prop", glm::vec3(1), std::nullopt));
+		for (int i = 0; i < 3; i++)
+			system.Update(Step);
+		CHECK(CountLogMessages(since, "chain 'Prop': joint 'Prop' has a fixed matrix") == 1);
+		CHECK(CountLogMessages(since, "Pelvis joint 'Prop' has a fixed matrix and cannot move") == 1);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Foot placement uses a parent's character controller and stands on a parent platform")
+	{
+		ClearAssetCache clear;
+		auto foot = Chain("LeftFoot", IKChainType::TwoBone, "LeftFoot");
+		foot.Ground = true;
+		for (bool airborne : { false, true })
+		{
+			CAPTURE(airborne);
+			Scene scene;
+			// The controller is on the parent; the model, with its IK, is a child at the parent's origin.
+			auto character = scene.CreateEntity("Character");
+			character.GetTransform().Translation = { 0, airborne ? 0.3f : 0.05f, 0 };
+			character.AddComponent<CharacterControllerComponent>().GravityFactor = airborne ? 0.0f : 1.0f;
+			// Wide enough to stand under the feet: the rays must skip it.
+			auto& capsule = character.AddComponent<CapsuleColliderComponent>();
+			capsule.Radius = 0.15f;
+			capsule.Offset = { 0, 0.66f, 0 };
+			auto biped = AddBiped(scene, { foot });
+			auto& ik = biped.GetComponent<InverseKinematicsComponent>();
+			ik.Pelvis = "Hips";
+			// Rays from above the capsule would land on its top without the hierarchy filter.
+			ik.RayHeight = 1.5f;
+			scene.SetParent(biped, character, false);
+			AddBox(scene, "Pillar", { 0, -0.5f, 0 }, { 0.07f, 0.5f, 0.07f });
+			AddBox(scene, "Floor", { 0, -0.6f, 0 }, { 5, 0.5f, 5 });
+			scene.OnSimulationStart();
+			for (int i = 0; i < 60; i++)
+				scene.OnUpdate(Step);
+			REQUIRE(scene.GetPhysicsWorld()->IsCharacterGrounded(character) == !airborne);
+			const glm::vec3 origin = scene.GetWorldTransform(biped)[3];
+			CHECK(BoneWorld(scene, biped, "LeftFoot").y - origin.y == doctest::Approx(airborne ? 0.05f : -0.05f).epsilon(1e-2));
+			scene.OnSimulationStop();
+		}
+		{
+			// A platform the character is parented to is ground.
+			Scene scene;
+			auto platform = AddBox(scene, "Platform", { 0, -0.5f, 0 }, { 2, 0.5f, 2 });
+			auto biped = AddBiped(scene, { foot });
+			biped.GetComponent<InverseKinematicsComponent>().Pelvis = "Hips";
+			scene.SetParent(biped, platform, false);
+			biped.GetTransform().Translation = { 0, 0.6f, 0 };
+			scene.OnSimulationStart();
+			scene.OnUpdate(Step);
+			CHECK(BoneWorld(scene, biped, "LeftFoot").y == doctest::Approx(0.05f).epsilon(1e-3));
+			scene.OnSimulationStop();
+		}
+	}
+
+	TEST_CASE("Attachments follow solved hands and OnLateUpdate targets apply the same frame")
+	{
+		ClearAssetCache clear;
+		TempProject project("IKLateUpdate");
+		const std::string script = project.WriteFile("Assets/Scripts/Mover.lua", R"(
+			local Mover = {}
+			function Mover:OnLateUpdate() self.Entity.Translation = Vec3(0.35, 1.2, 0.2) end
+			return Mover
+		)");
+		Scene scene;
+		auto biped = AddBiped(scene, { Chain("LeftArm", IKChainType::TwoBone, "LeftHand") });
+		auto handle = scene.CreateEntity("Handle");
+		handle.GetTransform().Translation = { 0.4f, 1.3f, 0.3f };
+		handle.AddComponent<ScriptComponent>().Script = script;
+		auto sword = scene.CreateEntity("Sword");
+		auto& attachment = sword.AddComponent<BoneAttachmentComponent>();
+		attachment.Target = biped.GetUUID();
+		attachment.Joint = "LeftHand";
+		scene.OnRuntimeStart();
+		REQUIRE(scene.GetAnimationSystem()->SetIKTarget(biped, "LeftArm", handle, false));
+		scene.OnUpdate(Step);
+		// The script moved the handle after physics; IK and then the attachment saw it in the same frame.
+		CHECK(Near(BoneWorld(scene, biped, "LeftHand"), glm::vec3(0.35f, 1.2f, 0.2f), 1e-3f));
+		CHECK(Near(glm::vec3(scene.GetWorldTransform(sword)[3]), glm::vec3(0.35f, 1.2f, 0.2f), 1e-3f));
+		CHECK(scene.GetScriptEngine()->GetErrors().empty());
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("IK solves from the layered pose")
+	{
+		ClearAssetCache clear;
+		const auto source = LoadBiped();
+		Scene scene;
+		auto biped = AddBiped(scene, { Chain("LeftArm", IKChainType::TwoBone, "LeftHand") });
+		auto& animator = biped.GetComponent<AnimatorComponent>();
+		AnimationLayer breathe;
+		breathe.Name = "Breathe";
+		breathe.Clip = "Breathe";
+		breathe.Blend = AnimationLayerBlend::Additive;
+		animator.Layers = { breathe };
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		const glm::vec3 target(0.4f, 1.3f, 0.3f);
+		REQUIRE(system.SetIKTarget(biped, "LeftArm", target, std::nullopt));
+		system.Update(0.5f);
+		CHECK(Near(BoneWorld(scene, biped, "LeftHand"), target, 1e-3f));
+		// The chest keeps the layer's 10 degree breath under the solved arm.
+		const auto& globals = *system.GetPose(biped);
+		const glm::quat chest = glm::inverse(GlobalRotation(globals[Node(*source, "Spine")])) * GlobalRotation(globals[Node(*source, "Chest")]);
+		CHECK(NearRotation(chest, AxisAngle({ 1, 0, 0 }, 10)));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Script targets replace ground placement and partly weighted feet lower the pelvis partly")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		auto left = Chain("LeftFoot", IKChainType::TwoBone, "LeftFoot");
+		left.Ground = true;
+		auto right = Chain("RightFoot", IKChainType::TwoBone, "RightFoot");
+		right.Ground = true;
+		auto biped = AddBiped(scene, { left, right });
+		auto& ik = biped.GetComponent<InverseKinematicsComponent>();
+		ik.Pelvis = "Hips";
+		ik.Smoothing = 0;
+		// Floor 0.2 m below the origin under both feet.
+		biped.GetTransform().Translation = { 0, 0.2f, 0 };
+		AddBox(scene, "Floor", { 0, -0.5f, 0 }, { 5, 0.5f, 5 });
+		scene.OnSimulationStart();
+		scene.OnUpdate(Step);
+		auto& system = *scene.GetAnimationSystem();
+		CHECK(BoneWorld(scene, biped, "Hips").y == doctest::Approx(1.0f).epsilon(1e-3));
+
+		// The right foot follows a script target; only the left one still lowers the pelvis.
+		const glm::vec3 lifted(-0.1f, 0.6f, 0.3f);
+		REQUIRE(system.SetIKTarget(biped, "RightFoot", lifted, std::nullopt));
+		REQUIRE(system.SetIKWeight(biped, "LeftFoot", 0.5f, 0));
+		scene.OnUpdate(Step);
+		CHECK(Near(BoneWorld(scene, biped, "RightFoot"), lifted, 1e-3f));
+		CHECK(BoneWorld(scene, biped, "Hips").y == doctest::Approx(1.1f).epsilon(1e-3));
+
+		// Cleared, the foot snaps back onto the ground.
+		REQUIRE(system.ClearIKTarget(biped, "RightFoot"));
+		REQUIRE(system.SetIKWeight(biped, "LeftFoot", 1, 0));
+		scene.OnUpdate(Step);
+		CHECK(BoneWorld(scene, biped, "RightFoot").y == doctest::Approx(0.05f).epsilon(1e-3));
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Foot placement ignores ground out of reach and Smoothing 0 snaps")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		auto left = Chain("LeftFoot", IKChainType::TwoBone, "LeftFoot");
+		left.Ground = true;
+		auto biped = AddBiped(scene, { left });
+		auto& ik = biped.GetComponent<InverseKinematicsComponent>();
+		ik.Pelvis = "Hips";
+		ik.Smoothing = 0;
+		// 0.6 m below the origin: beyond RayDepth.
+		auto floor = AddBox(scene, "Floor", { 0, -1.1f, 0 }, { 5, 0.5f, 5 });
+		scene.OnSimulationStart();
+		scene.OnUpdate(Step);
+		CHECK(BoneWorld(scene, biped, "LeftFoot").y == doctest::Approx(0.05f).epsilon(1e-3));
+		// Raised into reach, the foot follows at once.
+		floor.GetTransform().Translation = { 0, -0.8f, 0 };
+		scene.OnUpdate(Step);
+		scene.OnUpdate(Step);
+		CHECK(BoneWorld(scene, biped, "LeftFoot").y == doctest::Approx(-0.25f).epsilon(1e-3));
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("IK targets survive playback resets and end with the entity")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		auto biped = AddBiped(scene, { Chain("LeftArm", IKChainType::TwoBone, "LeftHand") });
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		const glm::vec3 target(0.4f, 1.3f, 0.3f);
+		REQUIRE(system.SetIKTarget(biped, "LeftArm", target, std::nullopt));
+		REQUIRE(system.SetIKWeight(biped, "LeftArm", 0.5f, 0));
+		// Changing the Clip resets the playback, not the IK state.
+		biped.GetComponent<AnimatorComponent>().Clip = "Wave";
+		system.Update(Step);
+		CHECK(system.GetIKWeight(biped, "LeftArm") == doctest::Approx(0.5f));
+		REQUIRE(system.SetIKWeight(biped, "LeftArm", 1, 0));
+		system.Update(Step);
+		CHECK(Near(BoneWorld(scene, biped, "LeftHand"), target, 1e-3f));
+		// Destroying the entity ends everything, and the next update is fine.
+		scene.DestroyEntity(biped);
+		system.Update(Step);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("IK reports unplayable Animators zero-scale entities and LookAt rotations")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		auto biped = AddBiped(scene, { Chain("Look", IKChainType::LookAt, "Head") });
+		auto broken = scene.CreateEntity("Broken");
+		broken.AddComponent<AnimatorComponent>().Mesh = "Missing.gltf";
+		broken.AddComponent<InverseKinematicsComponent>();
+		const auto since = Log::GetHistory().GetTotalCount();
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		system.Update(Step);
+		system.Update(Step);
+		CHECK(CountLogMessages(since, "InverseKinematics 'Broken': not solved: model 'Missing.gltf' could not be loaded") == 1);
+
+		CHECK_FALSE(system.SetIKTarget(biped, "Look", glm::vec3(1), glm::quat(1, 0, 0, 0)));
+		CHECK_FALSE(system.SetIKTarget(biped, "Look", broken, true));
+		CHECK(CountLogMessages(since, "chain 'Look' is a LookAt chain, which takes no rotation") == 1);
+
+		REQUIRE(system.SetIKTarget(biped, "Look", glm::vec3(1, 1.7f, 1), std::nullopt));
+		biped.GetTransform().Scale = glm::vec3(0);
+		system.Update(Step);
+		system.Update(Step);
+		CHECK(CountLogMessages(since, "the entity's transform has no inverse (zero scale)") == 1);
+		// A non-finite step skips the solve but still updates attachments.
+		system.LateUpdate(std::numeric_limits<float>::quiet_NaN());
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Lua IK rotations reach the solver and matchRotation false keeps the hand's local rotation")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		auto biped = AddBiped(scene, { Chain("LeftArm", IKChainType::TwoBone, "LeftHand") });
+		auto handle = scene.CreateEntity("Handle");
+		handle.GetTransform().Translation = { 0.4f, 1.3f, 0.3f };
+		handle.GetTransform().Rotation = AxisAngle({ 0, 0, 1 }, 50);
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		const glm::quat rotation = AxisAngle({ 0, 1, 0 }, 90);
+		REQUIRE(Eval(scene, "local e = Scene.FindEntityByName('Biped'); return tostring(e:SetIKTarget('LeftArm', Vec3(0.4, 1.3, 0.3), Quat.AngleAxis(math.pi / 2, Vec3(0, 1, 0))))") == "true");
+		system.Update(Step);
+		CHECK(NearRotation(BoneWorldRotation(scene, biped, "LeftHand"), rotation, 1e-3f));
+		REQUIRE(Eval(scene, "local e = Scene.FindEntityByName('Biped'); return tostring(e:SetIKTarget('LeftArm', Scene.FindEntityByName('Handle'), true))") == "true");
+		system.Update(Step);
+		CHECK(NearRotation(BoneWorldRotation(scene, biped, "LeftHand"), handle.GetTransform().Rotation, 1e-3f));
+		REQUIRE(Eval(scene, "local e = Scene.FindEntityByName('Biped'); return tostring(e:SetIKTarget('LeftArm', Scene.FindEntityByName('Handle'), false))") == "true");
+		system.Update(Step);
+		// Without a rotation the hand keeps its animated local rotation and turns with the forearm.
+		const auto source = AssetManager::GetMesh(BipedPath().string());
+		const auto& globals = *system.GetPose(biped);
+		const glm::quat local = glm::inverse(GlobalRotation(globals[Node(*source, "LeftForeArm")])) * GlobalRotation(globals[Node(*source, "LeftHand")]);
+		CHECK(NearRotation(local, glm::quat(1, 0, 0, 0)));
 		scene.OnRuntimeStop();
 	}
 }
