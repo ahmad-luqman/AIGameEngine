@@ -6,6 +6,8 @@
 #include <imgui_stdlib.h>
 
 #include <algorithm>
+#include <optional>
+#include <utility>
 
 namespace Basalt {
 
@@ -14,6 +16,18 @@ namespace Basalt {
 		JsonFieldResult Finish(bool changed)
 		{
 			return { changed, ImGui::IsItemDeactivatedAfterEdit() };
+		}
+
+		// "#2 Footstep": the element's position and its first non-empty Name or Clip.
+		std::string ElementLabel(const nlohmann::json& element, size_t index)
+		{
+			std::string label = "#" + std::to_string(index);
+			for (const char* key : { "Name", "Clip" })
+			{
+				if (auto it = element.find(key); it != element.end() && it->is_string() && !it->get_ref<const std::string&>().empty())
+					return label + " " + it->get<std::string>();
+			}
+			return label;
 		}
 
 		float DragSpeed(const std::string& name)
@@ -167,6 +181,130 @@ namespace Basalt {
 			ImGui::TextDisabled("%s: %s", name.c_str(), value.dump().c_str());
 		}
 
+		ImGui::PopID();
+		return result;
+	}
+
+	bool EditJsonList(nlohmann::json& array, JsonListEdit edit, size_t index, const ComponentFieldType& type)
+	{
+		if (!array.is_array() || !type.Element)
+			return false;
+		const bool grows = edit == JsonListEdit::Add || edit == JsonListEdit::Duplicate;
+		if (grows && array.size() >= type.MaxCount)
+			return false;
+		if (edit == JsonListEdit::Add)
+		{
+			array.push_back(type.Element->Default);
+			return true;
+		}
+		if (index >= array.size())
+			return false;
+		switch (edit)
+		{
+			case JsonListEdit::Duplicate:
+				array.insert(array.begin() + static_cast<std::ptrdiff_t>(index) + 1, array[index]);
+				return true;
+			case JsonListEdit::Remove:
+				array.erase(array.begin() + static_cast<std::ptrdiff_t>(index));
+				return true;
+			case JsonListEdit::MoveUp:
+				if (index == 0)
+					return false;
+				std::swap(array[index - 1], array[index]);
+				return true;
+			case JsonListEdit::MoveDown:
+				if (index + 1 >= array.size())
+					return false;
+				std::swap(array[index], array[index + 1]);
+				return true;
+			case JsonListEdit::Add:
+				break;
+		}
+		return false;
+	}
+
+	JsonFieldResult DrawJsonList(const std::string& name, nlohmann::json& array, const ComponentFieldType& type)
+	{
+		JsonFieldResult result;
+		if (!array.is_array() || !type.Element)
+		{
+			ImGui::TextDisabled("%s: %s", name.c_str(), array.dump().c_str());
+			return result;
+		}
+		const ComponentObjectSchema& schema = *type.Element;
+		ImGui::PushID(name.c_str());
+		// Structural edits wait until the loop is done so it never walks an array it changed.
+		std::optional<std::pair<JsonListEdit, size_t>> pending;
+		const std::string header = name + " (" + std::to_string(array.size()) + ")###list";
+		if (ImGui::TreeNodeEx(header.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth))
+		{
+			const bool full = array.size() >= type.MaxCount;
+			for (size_t i = 0; i < array.size(); i++)
+			{
+				ImGui::PushID(static_cast<int>(i));
+				const std::string label = ElementLabel(array[i], i);
+				const bool open = ImGui::TreeNodeEx("##element", ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_AllowOverlap, "%s", label.c_str());
+				if (ImGui::BeginPopupContextItem())
+				{
+					if (ImGui::MenuItem("Duplicate", nullptr, false, !full))
+						pending = { JsonListEdit::Duplicate, i };
+					if (ImGui::MenuItem("Move Up", nullptr, false, i > 0))
+						pending = { JsonListEdit::MoveUp, i };
+					if (ImGui::MenuItem("Move Down", nullptr, false, i + 1 < array.size()))
+						pending = { JsonListEdit::MoveDown, i };
+					if (ImGui::MenuItem("Remove"))
+						pending = { JsonListEdit::Remove, i };
+					ImGui::EndPopup();
+				}
+				const float button = ImGui::GetFrameHeight();
+				ImGui::SameLine(ImGui::GetContentRegionMax().x - 3.0f * button - 2.0f * ImGui::GetStyle().ItemSpacing.x);
+				ImGui::BeginDisabled(i == 0);
+				if (ImGui::ArrowButton("up", ImGuiDir_Up))
+					pending = { JsonListEdit::MoveUp, i };
+				ImGui::EndDisabled();
+				ImGui::SameLine();
+				ImGui::BeginDisabled(i + 1 >= array.size());
+				if (ImGui::ArrowButton("down", ImGuiDir_Down))
+					pending = { JsonListEdit::MoveDown, i };
+				ImGui::EndDisabled();
+				ImGui::SameLine();
+				if (ImGui::Button("x", ImVec2(button, button)))
+					pending = { JsonListEdit::Remove, i };
+				if (open)
+				{
+					for (const std::string& field : schema.Fields)
+					{
+						auto value = array[i].find(field);
+						if (value == array[i].end())
+							continue;
+						JsonFieldResult fieldResult;
+						if (const ComponentFieldType& fieldType = schema.FieldTypes.at(field); fieldType.Kind == ComponentFieldKind::List)
+							fieldResult = DrawJsonList(field, *value, fieldType);
+						else
+						{
+							const auto options = schema.EnumOptions.find(field);
+							fieldResult = DrawJsonField(field, *value, options == schema.EnumOptions.end() ? nullptr : &options->second);
+						}
+						result.Changed |= fieldResult.Changed;
+						result.Committed |= fieldResult.Committed;
+					}
+					ImGui::TreePop();
+				}
+				ImGui::PopID();
+			}
+			ImGui::BeginDisabled(full);
+			if (ImGui::Button(("Add " + schema.Name).c_str()))
+				pending = { JsonListEdit::Add, 0 };
+			ImGui::EndDisabled();
+			if (full)
+			{
+				ImGui::SameLine();
+				ImGui::TextDisabled("(at most %u)", type.MaxCount);
+			}
+			ImGui::TreePop();
+		}
+		if (pending && EditJsonList(array, pending->first, pending->second, type))
+			result = { true, true };
 		ImGui::PopID();
 		return result;
 	}

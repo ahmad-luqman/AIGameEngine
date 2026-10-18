@@ -5,19 +5,26 @@
 #include <Basalt/Animation/AnimatedModel.h>
 #include <Basalt/Animation/AnimationPose.h>
 #include <Basalt/Animation/AnimationSystem.h>
+#include <Basalt/Animation/BlendSpace.h>
 #include <Basalt/Asset/AssetManager.h>
 #include <Basalt/Asset/MeshImporter.h>
+#include <Basalt/Core/Log.h>
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/ComponentRegistry.h>
+#include <Basalt/Scene/SceneEventListener.h>
 #include <Basalt/Scene/SceneSerializer.h>
+#include <Basalt/Scripting/ScriptEngine.h>
 
 #include <glm/gtc/epsilon.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
+#include <cmath>
 #include <fstream>
 #include <limits>
 
 using namespace Basalt;
 using namespace BasaltTest;
+using json = nlohmann::json;
 
 namespace {
 	std::filesystem::path FixturePath()
@@ -1040,6 +1047,582 @@ TEST_SUITE("Animation")
 			assert(e:BlendAnimations('Step', 'Bend', .5))
 			local plain = Scene.CreateEntity('Plain')
 			assert(not pcall(function() plain:PlayAnimation() end))
+			return 'ok'
+		)") == "ok");
+		scene.OnRuntimeStop();
+	}
+}
+
+namespace {
+	// "Name@Clip" for each event the system collected since the last call.
+	std::vector<std::string> TakeEventNames(AnimationSystem& system)
+	{
+		std::vector<std::string> names;
+		for (const AnimationEventRecord& record : system.TakeEvents())
+			names.push_back(record.Name + "@" + record.Clip);
+		return names;
+	}
+	using Names = std::vector<std::string>;
+
+	// TwoJoint with Step lasting 4 s (keys at 0, 2 and 4) while Bend and Cubic last 2 s.
+	std::filesystem::path WriteSlowStepFixture(const TempDirectory& directory)
+	{
+		auto model = FixtureJson();
+		auto& sampler = model["animations"][1]["samplers"][0];
+		auto accessor = model["accessors"][sampler["input"].get<size_t>()];
+		accessor["max"] = { 4 };
+		model["accessors"].push_back(accessor);
+		const size_t index = model["accessors"].size() - 1;
+		const float times[] = { 0, 2, 4 };
+		ReplaceAccessorBytes(model, index, times, sizeof(times));
+		sampler["input"] = index;
+		const auto path = directory.GetPath() / "SlowStep.gltf";
+		std::ofstream(path) << model.dump();
+		return path;
+	}
+
+	bool NearMatrix(const glm::mat4& a, const glm::mat4& b, float epsilon = 1e-4f)
+	{
+		for (int c = 0; c < 4; c++)
+			if (!glm::all(glm::epsilonEqual(a[c], b[c], epsilon)))
+				return false;
+		return true;
+	}
+
+	glm::mat4 Translation(const glm::vec3& offset)
+	{
+		glm::mat4 matrix(1.0f);
+		matrix[3] = glm::vec4(offset, 1.0f);
+		return matrix;
+	}
+
+	AnimationBlendSpace Space1D(const std::string& name, std::vector<AnimationBlendSample> samples)
+	{
+		return { name, AnimationBlendSpaceType::OneD, std::move(samples) };
+	}
+
+	class RecordingListener final : public SceneEventListener
+	{
+	public:
+		void OnContact(Scene&, ContactEventType, Entity, Entity, const std::optional<ContactInfo>&) override {}
+		void OnScriptError(Scene&, const std::string&) override {}
+		void OnAnimationEvent(Scene&, Entity entity, const std::string& name, const std::string& clip) override { Events.push_back(entity.GetName() + ":" + name + "@" + clip); }
+		std::vector<std::string> Events;
+	};
+}
+
+TEST_SUITE("Animation")
+{
+	TEST_CASE("Animation events fire once per crossing across loop wraps, clip ends, seeks, pauses and crossfades")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		auto entity = AddAnimator(scene);
+		auto& events = entity.GetComponent<AnimatorComponent>().Events;
+		events = { { "Bend", 0.0f, "Start" }, { "Bend", 0.5f, "Mid" }, { "Bend", 2.0f, "End" }, { "", 1.0f, "Any" }, { "Step", 0.25f, "StepOnly" }, { "Bend", 3.0f, "Never" } };
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		CHECK(system.TakeEvents().empty());
+		// Windows are [from, to): an event at 0 fires on the first advancing update.
+		system.Update(.25f);
+		CHECK(TakeEventNames(system) == Names{ "Start@Bend" });
+		system.Update(.5f);
+		CHECK(TakeEventNames(system) == Names{ "Mid@Bend" });
+		system.Update(1);
+		CHECK(TakeEventNames(system) == Names{ "Any@Bend" });
+		// A wrap fires the tail including the clip's end, then the restart.
+		system.Update(.5f);
+		CHECK(TakeEventNames(system) == Names{ "End@Bend", "Start@Bend" });
+		// A step longer than the clip fires every marker of every loop it covers, in order.
+		system.Update(4);
+		CHECK(TakeEventNames(system) == Names{ "Mid@Bend", "Any@Bend", "End@Bend", "Start@Bend", "Mid@Bend", "Any@Bend", "End@Bend", "Start@Bend" });
+		CHECK(system.GetTime(entity) == .25f);
+		// A seek skips the markers in between; one at the seek target fires on the next update.
+		REQUIRE(system.Seek(entity, 1.5f));
+		system.Update(.25f);
+		CHECK(system.TakeEvents().empty());
+		REQUIRE(system.Seek(entity, .5f));
+		system.Update(.125f);
+		CHECK(TakeEventNames(system) == Names{ "Mid@Bend" });
+		system.Pause(entity, true);
+		system.Update(1);
+		CHECK(system.TakeEvents().empty());
+		system.Stop(entity);
+		system.Update(1);
+		CHECK(system.TakeEvents().empty());
+		// Speed 0 never advances, so nothing is crossed.
+		entity.GetComponent<AnimatorComponent>().Speed = 0;
+		REQUIRE(system.Play(entity, "Bend"));
+		system.Update(1);
+		CHECK(system.TakeEvents().empty());
+		entity.GetComponent<AnimatorComponent>().Speed = 1;
+
+		SUBCASE("A non-looping clip fires its end once, also after a seek past the end")
+		{
+			entity.GetComponent<AnimatorComponent>().Looping = false;
+			REQUIRE(system.Play(entity, "Bend"));
+			system.Update(1.9f);
+			CHECK(TakeEventNames(system) == Names{ "Start@Bend", "Mid@Bend", "Any@Bend" });
+			system.Update(1);
+			CHECK(TakeEventNames(system) == Names{ "End@Bend" });
+			CHECK_FALSE(system.IsPlaying(entity));
+			system.Update(1);
+			REQUIRE(system.Seek(entity, 5));
+			system.Pause(entity, false);
+			system.Update(1);
+			CHECK(system.TakeEvents().empty());
+		}
+		SUBCASE("Markers name their clip; empty marks every clip")
+		{
+			REQUIRE(system.Play(entity, "Step"));
+			system.Update(1.5f);
+			CHECK(TakeEventNames(system) == Names{ "StepOnly@Step", "Any@Step" });
+		}
+		SUBCASE("A crossfade fires the incoming and the outgoing clip")
+		{
+			REQUIRE(system.Play(entity, "Bend"));
+			REQUIRE(system.Seek(entity, .4f));
+			REQUIRE(system.CrossFade(entity, "Step", 1));
+			system.Update(.3f);
+			CHECK(TakeEventNames(system) == Names{ "StepOnly@Step", "Mid@Bend" });
+			system.Update(.8f);
+			CHECK(TakeEventNames(system) == Names{ "Any@Step", "Any@Bend" });
+			// The fade finished: only the incoming clip remains (Bend's End is not one of Step's markers).
+			system.Update(1.2f);
+			CHECK(TakeEventNames(system) == Names{ "StepOnly@Step" });
+		}
+		SUBCASE("A flood of events is capped per frame with one warning")
+		{
+			const auto since = Log::GetHistory().GetTotalCount();
+			REQUIRE(system.Play(entity, "Bend"));
+			system.Update(1000);
+			CHECK(system.TakeEvents().size() == AnimationSystem::MaxEventsPerFrame);
+			system.Update(1000);
+			CHECK(system.TakeEvents().size() == AnimationSystem::MaxEventsPerFrame);
+			CHECK(CountLogMessages(since, "animation events in one frame") == 1);
+		}
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Animation events reach scripts after OnLateUpdate and the event listener, also in simulation")
+	{
+		ClearAssetCache clear;
+		BasaltTest::TempProject project("AnimationEventScripts");
+		const std::string script = project.WriteFile("Assets/Scripts/Rig.lua", R"(
+			local Rig = {}
+			function Rig:OnCreate() self.Log = "" self.Late = 0 end
+			function Rig:OnLateUpdate() self.Late = self.Late + 1 end
+			function Rig:OnAnimationEvent(name, clip)
+				self.Log = self.Log .. name .. "@" .. clip .. ":" .. self.Late .. ";"
+				-- The system is not iterating its playback while callbacks run, so this is safe.
+				if name == "Mid" then self.Entity:RemoveComponent("Animator") end
+			end
+			return Rig
+		)");
+		Scene scene;
+		auto entity = AddAnimator(scene);
+		entity.GetComponent<AnimatorComponent>().Events = { { "", 0.0f, "Start" }, { "", 0.5f, "Mid" }, { "", 0.6f, "After" } };
+		entity.AddComponent<ScriptComponent>().Script = script;
+		RecordingListener listener;
+		scene.SetEventListener(&listener);
+
+		SUBCASE("Play")
+		{
+			scene.OnRuntimeStart();
+			scene.OnUpdate(.75f);
+			// All three were crossed in one frame; removing the Animator does not cancel delivered ones.
+			CHECK(scene.GetScriptEngine()->GetInstanceField(entity, "Log") == "Start@Bend:1;Mid@Bend:1;After@Bend:1;");
+			CHECK(listener.Events == Names{ "Rig:Start@Bend", "Rig:Mid@Bend", "Rig:After@Bend" });
+			CHECK_FALSE(entity.HasComponent<AnimatorComponent>());
+			scene.OnUpdate(.75f);
+			CHECK(listener.Events.size() == 3);
+			CHECK(scene.GetScriptEngine()->GetErrors().empty());
+			scene.OnRuntimeStop();
+		}
+		SUBCASE("Simulate has no scripts but still reports to the listener")
+		{
+			scene.OnSimulationStart();
+			scene.OnUpdate(.25f);
+			CHECK(listener.Events == Names{ "Rig:Start@Bend" });
+			scene.OnSimulationStop();
+		}
+		scene.SetEventListener(nullptr);
+	}
+
+	TEST_CASE("Blend space weights are exact at samples, sum to one and clamp outside the samples")
+	{
+		auto sample = [](float x, float y = 0) { return AnimationBlendSample{ "", x, y, 0 }; };
+		const auto space = Space1D("Line", { sample(3), sample(0), sample(1) });
+		auto weights = [&](const AnimationBlendSpace& blendSpace, glm::vec2 parameter) { return ComputeBlendSpaceWeights(blendSpace, parameter); };
+		CHECK(weights(space, { -1, 7 }) == std::vector<float>{ 0, 1, 0 });
+		CHECK(weights(space, { 0, 0 }) == std::vector<float>{ 0, 1, 0 });
+		CHECK(weights(space, { .25f, 0 }) == std::vector<float>{ 0, .75f, .25f });
+		CHECK(weights(space, { 2, 0 }) == std::vector<float>{ .5f, 0, .5f });
+		CHECK(weights(space, { 9, 0 }) == std::vector<float>{ 1, 0, 0 });
+		CHECK(ComputeBlendSpaceWeights(Space1D("Empty", {}), { 0, 0 }).empty());
+		CHECK(weights(Space1D("One", { sample(2) }), { -5, 0 }) == std::vector<float>{ 1 });
+
+		AnimationBlendSpace plane{ "Plane", AnimationBlendSpaceType::TwoD, { sample(0, 0), sample(1, 0), sample(0, 1), sample(-1, 0), sample(0, -1) } };
+		for (size_t i = 0; i < plane.Samples.size(); i++)
+		{
+			const auto atSample = weights(plane, { plane.Samples[i].X, plane.Samples[i].Y });
+			for (size_t j = 0; j < atSample.size(); j++)
+				CHECK(atSample[j] == doctest::Approx(i == j ? 1 : 0));
+		}
+		const auto between = weights(plane, { .5f, 0 });
+		CHECK(between[0] == doctest::Approx(.5));
+		CHECK(between[1] == doctest::Approx(.5));
+		for (const glm::vec2 point : { glm::vec2(.3f, .7f), glm::vec2(-2, 5), glm::vec2(.1f, -.4f), glm::vec2(40, -40) })
+		{
+			float total = 0;
+			for (const float weight : weights(plane, point))
+			{
+				CHECK(weight >= 0);
+				total += weight;
+			}
+			CHECK(total == doctest::Approx(1));
+		}
+		// Collinear samples in a 2D space still blend along the line.
+		AnimationBlendSpace line2D{ "Line2D", AnimationBlendSpaceType::TwoD, { sample(0, 0), sample(2, 0) } };
+		const auto onLine = weights(line2D, { .5f, 3 });
+		CHECK(onLine[0] == doctest::Approx(.75));
+		CHECK(onLine[1] == doctest::Approx(.25));
+	}
+
+	TEST_CASE("Blend spaces play their clips in step and keep the phase when the parameter moves")
+	{
+		ClearAssetCache clear;
+		TempDirectory directory("AnimationBlendSpaces");
+		const auto path = WriteSlowStepFixture(directory);
+		Scene scene;
+		auto entity = scene.CreateEntity("Rig");
+		auto& animator = entity.AddComponent<AnimatorComponent>();
+		animator.Mesh = path.string();
+		animator.Events = { { "Step", 1.0f, "StepMark" }, { "Cubic", 0.5f, "CubicMark" } };
+		animator.BlendSpaces = { Space1D("Walk", { { "Step", 0, 0, 1 }, { "Cubic", 1, 0, 2 } }), Space1D("Broken", { { "Nope", 0, 0, 0 }, { "Step", 1, 0, 0 } }) };
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		const auto source = AssetManager::GetMesh(path.string());
+		REQUIRE(source);
+		REQUIRE(source->Animations[1].Duration == 4);
+		REQUIRE(source->Animations[2].Duration == 2);
+
+		REQUIRE(system.PlayBlendSpace(entity, "Walk", { .5f, 0 }));
+		CHECK(system.GetBlendSpaceWeights(entity) == std::vector<std::pair<std::string, float>>{ { "Step", .5f }, { "Cubic", .5f } });
+		// One cycle lasts the weighted durations: .5 * 4 + .5 * 2.
+		CHECK(system.GetDuration(entity) == 3);
+		system.Update(1.5f);
+		CHECK(system.GetTime(entity) == doctest::Approx(1.5));
+		// Both clips sit at half their own length: Step at 2 s, Cubic at 1 s.
+		auto expected = SampleAnimation(*source, &source->Animations[2], 1);
+		BlendAnimationPose(expected, SampleAnimation(*source, &source->Animations[1], 2), .5f);
+		std::vector<glm::mat4> expectedGlobals;
+		REQUIRE(ComposeAnimationPose(*source, expected, expectedGlobals));
+		const auto& pose = *system.GetPose(entity);
+		for (size_t i = 0; i < pose.size(); i++)
+			CHECK(NearMatrix(pose[i], expectedGlobals[i]));
+		// The heaviest sample alone fires (a tie goes to the first): both marks sit at phase .25.
+		CHECK(TakeEventNames(system) == Names{ "StepMark@Step" });
+
+		// Moving the parameter keeps the phase: half of the new duration.
+		REQUIRE(system.SetBlendSpaceParameter(entity, { 1, 0 }));
+		CHECK(system.GetTime(entity) == doctest::Approx(1));
+		CHECK(system.GetBlendSpaceWeights(entity) == std::vector<std::pair<std::string, float>>{ { "Step", 0 }, { "Cubic", 1 } });
+		REQUIRE(system.PlayBlendSpace(entity, "Walk", { .25f, 0 }));
+		CHECK(system.GetTime(entity) == doctest::Approx(.5 * 3.5));
+		// Seeking a space moves its phase.
+		REQUIRE(system.Seek(entity, 3.5f));
+		CHECK(system.GetTime(entity) == doctest::Approx(3.5));
+		REQUIRE(system.SetBlendSpaceParameter(entity, { -3, 0 }));
+		CHECK(system.GetDuration(entity) == 4);
+		CHECK(system.GetTime(entity) == 4);
+
+		const auto since = Log::GetHistory().GetTotalCount();
+		CHECK_FALSE(system.PlayBlendSpace(entity, "Missing", { 0, 0 }));
+		CHECK_FALSE(system.PlayBlendSpace(entity, "Walk", { NAN, 0 }));
+		CHECK_FALSE(system.PlayBlendSpace(entity, "Walk", { 0, 0 }, -1));
+		CHECK_FALSE(system.SetBlendSpaceParameter(entity, { INFINITY, 0 }));
+		CHECK(CountLogMessages(since, "blend space 'Missing' not found") == 1);
+		// A sample whose clip is missing gets no weight; the space fails only when nothing is left.
+		CHECK_FALSE(system.PlayBlendSpace(entity, "Broken", { 0, 0 }));
+		CHECK(CountLogMessages(since, "sample clip 'Nope' not found") == 1);
+		REQUIRE(system.PlayBlendSpace(entity, "Broken", { .5f, 0 }));
+		CHECK(system.GetBlendSpaceWeights(entity) == std::vector<std::pair<std::string, float>>{ { "Step", 1 } });
+
+		// Other playback leaves the space.
+		REQUIRE(system.Play(entity, "Bend"));
+		CHECK(system.GetBlendSpaceWeights(entity).empty());
+		CHECK_FALSE(system.SetBlendSpaceParameter(entity, { 0, 0 }));
+		REQUIRE(system.PlayBlendSpace(entity, "Walk", { 0, 0 }));
+		system.Stop(entity);
+		CHECK(system.GetBlendSpaceWeights(entity).empty());
+
+		SUBCASE("A fade into a space starts from the visible pose")
+		{
+			REQUIRE(system.Play(entity, "Bend"));
+			system.Update(.5f);
+			const auto before = *system.GetPose(entity);
+			REQUIRE(system.PlayBlendSpace(entity, "Walk", { 1, 0 }, 1));
+			const auto& after = *system.GetPose(entity);
+			for (size_t i = 0; i < before.size(); i++)
+				CHECK(NearMatrix(before[i], after[i]));
+			system.Update(1);
+			std::vector<glm::mat4> cubic;
+			REQUIRE(EvaluateAnimation(*source, &source->Animations[2], 1, cubic));
+			for (size_t i = 0; i < cubic.size(); i++)
+				CHECK(NearMatrix((*system.GetPose(entity))[i], cubic[i]));
+		}
+		SUBCASE("A non-looping space stops at the end of its cycle")
+		{
+			entity.GetComponent<AnimatorComponent>().Looping = false;
+			REQUIRE(system.PlayBlendSpace(entity, "Walk", { .5f, 0 }));
+			system.Update(10);
+			CHECK_FALSE(system.IsPlaying(entity));
+			CHECK(system.GetTime(entity) == 3);
+		}
+		SUBCASE("Removing the running space holds the pose and stops with one error")
+		{
+			REQUIRE(system.PlayBlendSpace(entity, "Walk", { .5f, 0 }));
+			const auto removed = Log::GetHistory().GetTotalCount();
+			entity.GetComponent<AnimatorComponent>().BlendSpaces.clear();
+			system.Update(.1f);
+			system.Update(.1f);
+			CHECK_FALSE(system.IsPlaying(entity));
+			CHECK(CountLogMessages(removed, "blend space 'Walk' not found") == 1);
+		}
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("An Animator Clip may name a blend space to play on start")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		auto entity = AddAnimator(scene);
+		auto& animator = entity.GetComponent<AnimatorComponent>();
+		animator.BlendSpaces = { { "Strafe", AnimationBlendSpaceType::TwoD, { { "Step", 0, 0, 0 }, { "Cubic", 1, 0, 0 }, { "Bend", 0, 1, 0 } } } };
+		animator.Clip = "Strafe";
+		CHECK(GetAnimationWarnings(entity).empty());
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		CHECK(system.IsPlaying(entity));
+		CHECK(system.GetBlendSpaceWeights(entity) == std::vector<std::pair<std::string, float>>{ { "Step", 1 }, { "Cubic", 0 }, { "Bend", 0 } });
+		REQUIRE(system.SetBlendSpaceParameter(entity, { 0, 1 }));
+		CHECK(system.GetBlendSpaceWeights(entity)[2].second == doctest::Approx(1));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("MatchVelocity plays a blend space as fast as the entity moves horizontally")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		auto entity = AddAnimator(scene);
+		auto& animator = entity.GetComponent<AnimatorComponent>();
+		animator.BlendSpaces = { Space1D("Run", { { "Step", 0, 0, 1 }, { "Cubic", 1, 0, 2 } }) };
+		animator.MatchVelocity = true;
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		REQUIRE(system.PlayBlendSpace(entity, "Run", { 0, 0 }));
+		// The clip time one .1 s update advances while the entity moves by `delta` per update.
+		auto advance = [&](const glm::vec3& delta) {
+			for (int i = 0; i < 60; i++)
+			{
+				entity.GetTransform().Translation += delta;
+				system.Update(.1f);
+			}
+			const float before = system.GetTime(entity);
+			entity.GetTransform().Translation += delta;
+			system.Update(.1f);
+			return std::fmod(system.GetTime(entity) - before + 2.0f, 2.0f);
+		};
+		// 2.5 m/s over a sample that covers 1 m/s at speed 1: 2.5 times as fast.
+		CHECK(advance({ .25f, 0, 0 }) == doctest::Approx(.25).epsilon(1e-3));
+		// Falling is not walking.
+		CHECK(advance({ 0, -.25f, 0 }) == doctest::Approx(0).epsilon(1e-3));
+		REQUIRE(system.SetBlendSpaceParameter(entity, { 1, 0 }));
+		CHECK(advance({ 0, 0, .3f }) == doctest::Approx(.15).epsilon(1e-3));
+		// A contributing sample of unknown speed (0) turns matching off: Speed alone.
+		animator.BlendSpaces[0].Samples[1].Speed = 0;
+		CHECK(advance({ 0, 0, .3f }) == doctest::Approx(.1).epsilon(1e-3));
+		animator.BlendSpaces[0].Samples[1].Speed = 2;
+		animator.MatchVelocity = false;
+		CHECK(advance({ 0, 0, .3f }) == doctest::Approx(.1).epsilon(1e-3));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Bone transforms and attachments follow the posed joint in world space")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		auto rig = AddAnimator(scene);
+		rig.GetTransform().Translation = { 5, 0, 0 };
+		rig.GetComponent<AnimatorComponent>().Clip = "Bend";
+		// Created before the second rig it is attached to, so plain entity order would move it first.
+		auto hat = scene.CreateEntity("Hat");
+		auto rig2 = AddAnimator(scene, "Rig2");
+		rig2.AddComponent<BoneAttachmentComponent>() = { rig.GetUUID(), "Tip", { 0, .5f, 0 }, glm::quat(1, 0, 0, 0), { 1, 1, 1 } };
+		hat.AddComponent<BoneAttachmentComponent>() = { rig2.GetUUID(), "Tip", { 0, .25f, 0 }, glm::angleAxis(glm::radians(90.0f), glm::vec3(0, 1, 0)), { 2, 2, 2 } };
+		// Target 0 attaches to the parent.
+		auto child = scene.CreateChildEntity(rig, "Child");
+		child.AddComponent<BoneAttachmentComponent>().Joint = "RootJoint";
+		// A parent that is not the target: the joint's world transform is converted into the parent's space.
+		auto holder = scene.CreateEntity("Holder");
+		holder.GetTransform().Translation = { 0, 10, 0 };
+		holder.GetTransform().SetRotationEuler({ 0, glm::radians(90.0f), 0 });
+		auto held = scene.CreateChildEntity(holder, "Held");
+		held.AddComponent<BoneAttachmentComponent>() = { rig.GetUUID(), "Tip", { 1, 0, 0 }, glm::quat(1, 0, 0, 0), { 1, 1, 1 } };
+		CHECK(GetAnimationWarnings(held).empty());
+
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		system.Update(.5f);
+		const auto& pose = *system.GetPose(rig);
+		glm::mat4 tip;
+		std::string error;
+		REQUIRE(system.GetBoneTransform(rig, "Tip", tip, error));
+		CHECK(NearMatrix(tip, pose[0]));
+		CHECK_FALSE(system.GetBoneTransform(rig, "Nope", tip, error));
+		CHECK(error.find("joint 'Nope' not found in '") == 0);
+		CHECK_FALSE(system.GetBoneTransform(holder, "Tip", tip, error));
+
+		const glm::mat4 rigWorld = scene.GetWorldTransform(rig);
+		CHECK(NearMatrix(scene.GetWorldTransform(rig2), rigWorld * pose[0] * Translation({ 0, .5f, 0 })));
+		const glm::mat4 hatOffset = Translation({ 0, .25f, 0 }) * glm::mat4_cast(glm::angleAxis(glm::radians(90.0f), glm::vec3(0, 1, 0))) * glm::scale(glm::mat4(1.0f), glm::vec3(2));
+		CHECK(NearMatrix(scene.GetWorldTransform(hat), scene.GetWorldTransform(rig2) * (*system.GetPose(rig2))[0] * hatOffset));
+		CHECK(NearMatrix(child.GetTransform().GetTransform(), pose[2]));
+		CHECK(NearMatrix(scene.GetWorldTransform(held), rigWorld * pose[0] * Translation({ 1, 0, 0 })));
+
+		// Lua returns the joint's world position, rotation and scale.
+		CHECK(Eval(scene, R"(
+			local rig = Scene.FindEntityByName('Rig')
+			local position, rotation, scale = rig:GetBoneTransform('Tip')
+			local world = Scene.FindEntityByName('Rig2').WorldPosition
+			local expected = position + rotation * Vec3(0, 0.5, 0)
+			assert((expected - world):Length() < 1e-4, tostring(expected) .. ' vs ' .. tostring(world))
+			assert((scale - Vec3(1, 1, 1)):Length() < 1e-4)
+			assert(rig:GetBoneTransform('Nope') == nil)
+			assert(not pcall(function() Scene.FindEntityByName('Holder'):GetBoneTransform('Tip') end))
+			return 'ok'
+		)") == "ok");
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Bone attachment problems are reported once and leave the entity where it is")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		auto a = AddAnimator(scene, "A");
+		auto b = AddAnimator(scene, "B");
+		a.AddComponent<BoneAttachmentComponent>() = { b.GetUUID(), "Tip" };
+		b.AddComponent<BoneAttachmentComponent>() = { a.GetUUID(), "Tip" };
+		auto self = AddAnimator(scene, "Self");
+		self.AddComponent<BoneAttachmentComponent>() = { self.GetUUID(), "Tip" };
+		auto lost = scene.CreateEntity("Lost");
+		lost.AddComponent<BoneAttachmentComponent>().Joint = "Tip";
+		auto wrongJoint = scene.CreateEntity("WrongJoint");
+		wrongJoint.AddComponent<BoneAttachmentComponent>() = { a.GetUUID(), "Nope" };
+		auto plain = scene.CreateEntity("Plain");
+		auto noAnimator = scene.CreateEntity("NoAnimator");
+		noAnimator.AddComponent<BoneAttachmentComponent>() = { plain.GetUUID(), "Tip" };
+		auto dynamic = scene.CreateEntity("Dynamic");
+		dynamic.AddComponent<BoneAttachmentComponent>() = { a.GetUUID(), "Tip" };
+		dynamic.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+		for (auto entity : { a, b, self, lost, wrongJoint, noAnimator })
+			entity.GetTransform().Translation = { 3, 4, 5 };
+
+		auto warning = [](Entity entity) {
+			const auto warnings = GetAnimationWarnings(entity);
+			return warnings.empty() ? std::string() : warnings.back();
+		};
+		CHECK(warning(self) == "BoneAttachment cannot attach an entity to itself");
+		CHECK(warning(lost) == "BoneAttachment has no Target and no parent");
+		CHECK(warning(wrongJoint).find("BoneAttachment joint 'Nope' not found in '") == 0);
+		CHECK(warning(noAnimator) == "BoneAttachment Target 'Plain' has no Animator");
+		CHECK(warning(dynamic).find("Dynamic RigidBody") != std::string::npos);
+		b.GetComponent<BoneAttachmentComponent>().Target = 12345;
+		CHECK(warning(b) == "BoneAttachment Target entity not found");
+		b.GetComponent<BoneAttachmentComponent>().Target = a.GetUUID();
+
+		const auto since = Log::GetHistory().GetTotalCount();
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		system.Update(.1f);
+		system.Update(.1f);
+		CHECK(CountLogMessages(since, "BoneAttachment 'A': its attachments form a cycle") == 1);
+		CHECK(CountLogMessages(since, "BoneAttachment 'B': its attachments form a cycle") == 1);
+		CHECK(CountLogMessages(since, "BoneAttachment 'Self': it cannot attach to itself") == 1);
+		CHECK(CountLogMessages(since, "BoneAttachment 'Lost': no Target and no parent") == 1);
+		CHECK(CountLogMessages(since, "BoneAttachment 'WrongJoint': Target 'A': joint 'Nope' not found") == 1);
+		CHECK(CountLogMessages(since, "BoneAttachment 'NoAnimator': Target 'Plain': no playable Animator") == 1);
+		for (auto entity : { a, b, self, lost, wrongJoint, noAnimator })
+			CHECK(entity.GetTransform().Translation == glm::vec3(3, 4, 5));
+		// Attachments that only depend on a cycle still follow it.
+		CHECK(dynamic.GetTransform().Translation != glm::vec3(0));
+		// Fixing a problem lets the attachment move; breaking it again reports again.
+		wrongJoint.GetComponent<BoneAttachmentComponent>().Joint = "Tip";
+		system.Update(.1f);
+		CHECK(wrongJoint.GetTransform().Translation != glm::vec3(3, 4, 5));
+		wrongJoint.GetComponent<BoneAttachmentComponent>().Joint = "Nope";
+		system.Update(.1f);
+		CHECK(CountLogMessages(since, "BoneAttachment 'WrongJoint': Target 'A': joint 'Nope' not found") == 2);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Animator lists and BoneAttachment validate atomically and round-trip through Lua")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		auto entity = AddAnimator(scene);
+		std::string error;
+		auto rejects = [&](const nlohmann::json& data, const std::string& expected) {
+			CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, "Animator", data, error));
+			CHECK(error == "Animator: " + expected);
+		};
+		rejects({ { "Events", 3 } }, "field 'Events' must be an array of objects");
+		rejects({ { "Events", { 3 } } }, "field 'Events[0]' must be an object");
+		rejects({ { "Events", { { { "Time", "soon" } } } } }, "field 'Events[0].Time' must be a number");
+		rejects({ { "Events", { { { "Name", "" } } } } }, "Events[0].Name must not be empty");
+		rejects({ { "Events", { { { "Time", -1 } } } } }, "Events[0].Time -1 must be finite and nonnegative");
+		rejects({ { "BlendSpaces", { { { "Samples", { json::object(), { { "Bogus", 1 } } } } } } } }, "unknown field 'BlendSpaces[0].Samples[1].Bogus' (valid: Clip, X, Y, Speed)");
+		rejects({ { "BlendSpaces", { { { "Type", "3D" } } } } }, "field 'BlendSpaces[0].Type' has invalid value '3D' (valid: 1D, 2D)");
+		rejects({ { "BlendSpaces", { { { "Samples", { { { "X", 1 } }, { { "X", 1 }, { "Y", 2 } } } } } } } }, "BlendSpaces[0].Samples[1] is at the same position as Samples[0]");
+		rejects({ { "BlendSpaces", { json::object(), json::object() } } }, "BlendSpaces[1].Name 'BlendSpace' is already used by BlendSpaces[0]");
+		rejects({ { "BlendSpaces", { { { "Samples", { { { "Speed", -1 } } } } } } } }, "BlendSpaces[0].Samples[0].Speed -1 must be finite and nonnegative");
+		rejects({ { "Events", json::array_t(AnimatorComponent::MaxEvents + 1, json::object()) } }, "field 'Events' has 257 elements (at most 256)");
+		CHECK(entity.GetComponent<AnimatorComponent>().Events.empty());
+		CHECK(entity.GetComponent<AnimatorComponent>().BlendSpaces.empty());
+
+		// In 2D the same X is fine at another Y; missing keys keep the element defaults.
+		REQUIRE(ComponentRegistry::AddOrPatch(entity, "Animator", { { "BlendSpaces", { { { "Type", "2D" }, { "Samples", { { { "X", 1 } }, { { "X", 1 }, { "Y", 2 }, { "Clip", "Bend" } } } } } } }, { "Events", { { { "Time", 1.5 } } } } }, error));
+		const auto& animator = entity.GetComponent<AnimatorComponent>();
+		REQUIRE(animator.BlendSpaces.size() == 1);
+		CHECK(animator.BlendSpaces[0].Name == "BlendSpace");
+		CHECK(animator.BlendSpaces[0].Samples[1].Clip == "Bend");
+		CHECK(animator.Events[0].Name == "Event");
+		CHECK(animator.Events[0].Time == 1.5f);
+		// An empty object is an empty list (an empty Lua table cannot say which it is).
+		REQUIRE(ComponentRegistry::AddOrPatch(entity, "Animator", { { "Events", json::object() } }, error));
+		CHECK(animator.Events.empty());
+
+		CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, "BoneAttachment", { { "Translation", { 0, NAN, 0 } } }, error));
+		CHECK_FALSE(entity.HasComponent<BoneAttachmentComponent>());
+
+		scene.OnRuntimeStart();
+		CHECK(Eval(scene, R"(
+			local e = Scene.FindEntityByName('Rig')
+			local animator = e:GetComponent('Animator')
+			assert(#animator.BlendSpaces == 1 and #animator.BlendSpaces[1].Samples == 2)
+			animator.Events = { { Clip = 'Bend', Time = 0.5, Name = 'Hit' } }
+			animator.BlendSpaces = {}
+			e:SetComponent('Animator', animator)
+			animator = e:GetComponent('Animator')
+			assert(animator.Events[1].Name == 'Hit' and #animator.BlendSpaces == 0)
+			e:SetComponent('Animator', e:GetComponent('Animator'))
+			assert(not pcall(function() e:SetComponent('Animator', { Events = { { Time = 'x' } } }) end))
+			assert(not e:PlayBlendSpace('Missing', 0))
+			assert(not pcall(function() e:PlayBlendSpace('Missing', 0, 'up') end))
+			assert(not pcall(function() e:SetBlendSpaceParameter(0, {}) end))
+			local weights = e:GetBlendSpaceWeights()
+			assert(next(weights) == nil)
 			return 'ok'
 		)") == "ok");
 		scene.OnRuntimeStop();

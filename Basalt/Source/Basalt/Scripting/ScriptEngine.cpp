@@ -996,6 +996,11 @@ namespace Basalt {
 		}
 	}
 
+	void ScriptEngine::OnAnimationEvent(Entity entity, const std::string& name, const std::string& clip)
+	{
+		ScriptEngineAccess::Call(*this, entity.GetUUID(), "OnAnimationEvent", name, clip);
+	}
+
 	void ScriptEngine::OnJointBroken(Entity holder, Entity body, Entity connected)
 	{
 		// Captured up front: a callback may destroy any of these entities.

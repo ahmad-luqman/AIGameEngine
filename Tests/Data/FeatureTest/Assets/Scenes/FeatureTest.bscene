@@ -8,7 +8,12 @@
 		{ "ID": 911, "Name": "PostProcessing", "Components": { "PostProcess": { "Enabled": false } } },
 		{ "ID": 910, "Name": "AnimationRig", "Components": {
 			"Transform": { "Translation": [1000, 0, 0] },
-			"Animator": { "Mesh": "Assets/Models/TwoJoint.gltf", "Clip": "Bend" } } },
+			"Animator": { "Mesh": "Assets/Models/TwoJoint.gltf", "Clip": "Bend",
+				"Events": [ { "Time": 0.25, "Name": "Footstep" } ],
+				"BlendSpaces": [ { "Name": "Locomotion", "Type": "1D", "Samples": [ { "Clip": "Step", "X": 0, "Speed": 1 }, { "Clip": "Cubic", "X": 1, "Speed": 2 } ] } ] },
+			"Script": { "Script": "Assets/Scripts/Probe.lua" } } },
+		{ "ID": 912, "Name": "RigHat", "Components": {
+			"BoneAttachment": { "Target": 910, "Joint": "Tip", "Translation": [0, 0.2, 0] } } },
 		{ "ID": 100, "Name": "FeatureTestDriver", "Components": {
 			"Script": { "Script": "Assets/Scripts/FeatureTest.lua", "Properties": { "Duration": 4.5, "Note": "from scene", "Offset": [1, 2, 3] } } } },
 

@@ -214,7 +214,8 @@ work for assets that reuse a large skin across many nodes.
 Non-finite evaluated hierarchies or palettes log once per failure episode and display the validated rest pose.
 A skin may use the first N matrices of a larger inverse-bind accessor; absent inverse binds are
 identity. Duplicate clip names get deterministic suffixes. There is no morph-target deformation,
-retargeting, animation state machine, bone attachment API, or root-motion extraction.
+retargeting, animation state machine or root-motion extraction. Bone attachments, animation events and
+blend spaces are described in Docs/ScriptingAPI.md ("Skeletal animation").
 
 `AnimationTests` covers import, interpolation, space conventions, playback, blending, component/Lua
 validation and lifecycle; the Khronos Fox fixture verifies Survey/Walk/Run from a real exported rig.

@@ -4,6 +4,7 @@
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Scene/Entity.h"
+#include "Basalt/Scene/Scene.h"
 
 #include <algorithm>
 
@@ -78,11 +79,49 @@ namespace Basalt {
 			{
 				if (source->AnimationUnsupported)
 					warnings.emplace_back("Animator cannot animate this model's extra influence sets; static geometry is available through Mesh");
-				if (!animator->Clip.empty() && std::none_of(source->Animations.begin(), source->Animations.end(), [&](const AnimationClip& clip) { return clip.Name == animator->Clip; }))
+				const auto findClip = [&](const std::string& name) -> const AnimationClip* {
+					auto it = std::ranges::find(source->Animations, name, &AnimationClip::Name);
+					return it != source->Animations.end() ? &*it : nullptr;
+				};
+				const bool namesSpace = std::ranges::find(animator->BlendSpaces, animator->Clip, &AnimationBlendSpace::Name) != animator->BlendSpaces.end();
+				if (!animator->Clip.empty() && !findClip(animator->Clip) && !namesSpace)
 					warnings.push_back("Animator clip '" + animator->Clip + "' not found in '" + animator->Mesh + "'");
+				for (const AnimationEvent& event : animator->Events)
+				{
+					if (event.Clip.empty())
+						continue;
+					if (const AnimationClip* clip = findClip(event.Clip); !clip)
+						warnings.push_back(fmt::format("Animator event '{}': clip '{}' not found", event.Name, event.Clip));
+					else if (event.Time > clip->Duration)
+						warnings.push_back(fmt::format("Animator event '{}' at {}s is past the end of clip '{}' ({}s) and never fires", event.Name, event.Time, event.Clip, clip->Duration));
+				}
+				for (const AnimationBlendSpace& space : animator->BlendSpaces)
+				{
+					if (space.Samples.empty())
+						warnings.push_back("Animator blend space '" + space.Name + "' has no samples");
+					for (const AnimationBlendSample& sample : space.Samples)
+						if (!sample.Clip.empty() && !findClip(sample.Clip))
+							warnings.push_back("Animator blend space '" + space.Name + "': clip '" + sample.Clip + "' not found");
+				}
 			}
 			else
 				warnings.push_back("Animator asset could not be loaded: " + AssetManager::GetError(animator->Mesh));
+		}
+		if (const auto* attachment = entity.TryGetComponent<BoneAttachmentComponent>())
+		{
+			Scene& scene = *entity.GetScene();
+			const Entity target = attachment->Target != 0 ? scene.GetEntityByUUID(attachment->Target) : entity.GetParent();
+			const auto* targetAnimator = target ? target.TryGetComponent<AnimatorComponent>() : nullptr;
+			if (!target)
+				warnings.emplace_back(attachment->Target != 0 ? "BoneAttachment Target entity not found" : "BoneAttachment has no Target and no parent");
+			else if (target == entity)
+				warnings.emplace_back("BoneAttachment cannot attach an entity to itself");
+			else if (!targetAnimator)
+				warnings.push_back("BoneAttachment Target '" + target.GetName() + "' has no Animator");
+			else if (const auto source = AssetManager::GetMesh(targetAnimator->Mesh); source && std::ranges::find(source->Nodes, attachment->Joint, &MeshNode::Name) == source->Nodes.end())
+				warnings.push_back("BoneAttachment joint '" + attachment->Joint + "' not found in '" + targetAnimator->Mesh + "'");
+			if (const auto* body = entity.TryGetComponent<RigidBodyComponent>(); body && body->Type == RigidBodyType::Dynamic)
+				warnings.emplace_back("BoneAttachment on a Dynamic RigidBody: physics moves it too; make it Kinematic");
 		}
 		return warnings;
 	}

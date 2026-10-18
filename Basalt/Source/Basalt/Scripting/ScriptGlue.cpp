@@ -392,6 +392,17 @@ namespace Basalt {
 			return entity;
 		}
 
+		// An optional numeric argument: nil gives `fallback`; anything but a number is an error (a sol::optional would
+		// silently treat a mistyped argument as missing).
+		float OptionalNumber(const sol::object& value, const char* what, float fallback)
+		{
+			if (!value.valid())
+				return fallback;
+			if (value.get_type() != sol::type::number)
+				throw std::runtime_error(std::string(what) + " must be a number or nil");
+			return value.as<float>();
+		}
+
 		Entity RequireAnimator(const ScriptEntity& self, const char* operation)
 		{
 			return RequireEntityWith<AnimatorComponent>(self, operation, "Animator");
@@ -485,9 +496,9 @@ namespace Basalt {
 				return rotation;
 			};
 
-			lua.new_usertype<ScriptEntity>("Entity", sol::no_constructor, "ID", sol::readonly_property([](const ScriptEntity& self) { return static_cast<int64_t>(static_cast<uint64_t>(self.ID)); }), "Name", sol::property([](const ScriptEntity& self) { return self.ResolveOrThrow().GetName(); }, [](const ScriptEntity& self, const std::string& name) { self.ResolveOrThrow().GetComponent<TagComponent>().Tag = name; }), "IsValid", [](const ScriptEntity& self) { return static_cast<bool>(self.Resolve()); },
+			sol::usertype<ScriptEntity> entityType = lua.new_usertype<ScriptEntity>("Entity", sol::no_constructor, "ID", sol::readonly_property([](const ScriptEntity& self) { return static_cast<int64_t>(static_cast<uint64_t>(self.ID)); }), "Name", sol::property([](const ScriptEntity& self) { return self.ResolveOrThrow().GetName(); }, [](const ScriptEntity& self, const std::string& name) { self.ResolveOrThrow().GetComponent<TagComponent>().Tag = name; }), "IsValid", [](const ScriptEntity& self) { return static_cast<bool>(self.Resolve()); },
 
-										   "Translation", sol::property([](const ScriptEntity& self) { return self.ResolveOrThrow().GetTransform().Translation; }, [](const ScriptEntity& self, const glm::vec3& value) { self.ResolveOrThrow().GetTransform().Translation = value; }), "Rotation", sol::property([](const ScriptEntity& self) { return self.ResolveOrThrow().GetTransform().Rotation; }, [](const ScriptEntity& self, const glm::quat& value) { self.ResolveOrThrow().GetTransform().Rotation = glm::normalize(value); }), "EulerAngles", sol::property([](const ScriptEntity& self) { return self.ResolveOrThrow().GetTransform().GetRotationEuler(); }, [](const ScriptEntity& self, const glm::vec3& value) { self.ResolveOrThrow().GetTransform().SetRotationEuler(value); }), "Scale", sol::property([](const ScriptEntity& self) { return self.ResolveOrThrow().GetTransform().Scale; }, [](const ScriptEntity& self, const glm::vec3& value) { self.ResolveOrThrow().GetTransform().Scale = value; }), "WorldPosition", sol::property([&context](const ScriptEntity& self) { return glm::vec3(RequireScene(context).GetWorldTransform(self.ResolveOrThrow())[3]); }, [&context](const ScriptEntity& self, const glm::vec3& value) {
+																					"Translation", sol::property([](const ScriptEntity& self) { return self.ResolveOrThrow().GetTransform().Translation; }, [](const ScriptEntity& self, const glm::vec3& value) { self.ResolveOrThrow().GetTransform().Translation = value; }), "Rotation", sol::property([](const ScriptEntity& self) { return self.ResolveOrThrow().GetTransform().Rotation; }, [](const ScriptEntity& self, const glm::quat& value) { self.ResolveOrThrow().GetTransform().Rotation = glm::normalize(value); }), "EulerAngles", sol::property([](const ScriptEntity& self) { return self.ResolveOrThrow().GetTransform().GetRotationEuler(); }, [](const ScriptEntity& self, const glm::vec3& value) { self.ResolveOrThrow().GetTransform().SetRotationEuler(value); }), "Scale", sol::property([](const ScriptEntity& self) { return self.ResolveOrThrow().GetTransform().Scale; }, [](const ScriptEntity& self, const glm::vec3& value) { self.ResolveOrThrow().GetTransform().Scale = value; }), "WorldPosition", sol::property([&context](const ScriptEntity& self) { return glm::vec3(RequireScene(context).GetWorldTransform(self.ResolveOrThrow())[3]); }, [&context](const ScriptEntity& self, const glm::vec3& value) {
 					Entity entity = self.ResolveOrThrow();
 					Scene& scene = RequireScene(context);
 					glm::mat4 world = scene.GetWorldTransform(entity);
@@ -505,7 +516,7 @@ namespace Basalt {
 					rotation = glm::quatLookAt(glm::normalize(direction), up.value_or(glm::vec3(0.0f, 1.0f, 0.0f)));
 					scene.SetWorldTransform(entity, Math::ComposeTransform(position, rotation, scale)); },
 
-										   "HasComponent", [](const ScriptEntity& self, const std::string& name) { return RequireComponent(name).Has(self.ResolveOrThrow()); }, "AddComponent", [&context](const ScriptEntity& self, const std::string& name, sol::optional<sol::table> data) {
+																					"HasComponent", [](const ScriptEntity& self, const std::string& name) { return RequireComponent(name).Has(self.ResolveOrThrow()); }, "AddComponent", [&context](const ScriptEntity& self, const std::string& name, sol::optional<sol::table> data) {
 					Entity entity = self.ResolveOrThrow();
 					const ComponentInfo& info = RequireComponent(name);
 					if (info.IsCore)
@@ -533,7 +544,7 @@ namespace Basalt {
 					if (!info.Deserialize(entity, LuaToJson(data), error))
 						throw std::runtime_error(name + ": " + error); },
 
-										   "GetParent", [&context](sol::this_state state, const ScriptEntity& self) { return MakeEntity(state, context, self.ResolveOrThrow().GetParent()); }, "SetParent", [&context](const ScriptEntity& self, sol::optional<ScriptEntity> parent) {
+																					"GetParent", [&context](sol::this_state state, const ScriptEntity& self) { return MakeEntity(state, context, self.ResolveOrThrow().GetParent()); }, "SetParent", [&context](const ScriptEntity& self, sol::optional<ScriptEntity> parent) {
 					Entity entity = self.ResolveOrThrow();
 					Entity parentEntity = parent ? parent->ResolveOrThrow() : Entity {};
 					if (!RequireScene(context).SetParent(entity, parentEntity, true))
@@ -556,13 +567,13 @@ namespace Basalt {
 					};
 					return MakeEntity(state, context, find(self.ResolveOrThrow())); },
 
-										   "AddForce", [&context](const ScriptEntity& self, const glm::vec3& force) { RequirePhysics(context).AddForce(self.ResolveOrThrow(), force); }, "AddImpulse", [&context](const ScriptEntity& self, const glm::vec3& impulse) { RequirePhysics(context).AddImpulse(self.ResolveOrThrow(), impulse); }, "AddTorque", [&context](const ScriptEntity& self, const glm::vec3& torque) { RequirePhysics(context).AddTorque(self.ResolveOrThrow(), torque); }, "SetLinearVelocity", [&context](const ScriptEntity& self, const glm::vec3& velocity) { RequirePhysics(context).SetLinearVelocity(self.ResolveOrThrow(), velocity); }, "GetLinearVelocity", [&context](const ScriptEntity& self) { return RequirePhysics(context).GetLinearVelocity(self.ResolveOrThrow()); }, "SetAngularVelocity", [&context](const ScriptEntity& self, const glm::vec3& velocity) { RequirePhysics(context).SetAngularVelocity(self.ResolveOrThrow(), velocity); }, "GetAngularVelocity", [&context](const ScriptEntity& self) { return RequirePhysics(context).GetAngularVelocity(self.ResolveOrThrow()); }, "IsSleeping", [&context](const ScriptEntity& self) -> sol::optional<bool> { PhysicsWorld& physics = RequirePhysics(context); const Entity entity = self.ResolveOrThrow(); if (!physics.HasBody(entity)) return sol::nullopt; return physics.IsBodySleeping(entity); }, "GetJointPosition", [&context](const ScriptEntity& self) {
+																					"AddForce", [&context](const ScriptEntity& self, const glm::vec3& force) { RequirePhysics(context).AddForce(self.ResolveOrThrow(), force); }, "AddImpulse", [&context](const ScriptEntity& self, const glm::vec3& impulse) { RequirePhysics(context).AddImpulse(self.ResolveOrThrow(), impulse); }, "AddTorque", [&context](const ScriptEntity& self, const glm::vec3& torque) { RequirePhysics(context).AddTorque(self.ResolveOrThrow(), torque); }, "SetLinearVelocity", [&context](const ScriptEntity& self, const glm::vec3& velocity) { RequirePhysics(context).SetLinearVelocity(self.ResolveOrThrow(), velocity); }, "GetLinearVelocity", [&context](const ScriptEntity& self) { return RequirePhysics(context).GetLinearVelocity(self.ResolveOrThrow()); }, "SetAngularVelocity", [&context](const ScriptEntity& self, const glm::vec3& velocity) { RequirePhysics(context).SetAngularVelocity(self.ResolveOrThrow(), velocity); }, "GetAngularVelocity", [&context](const ScriptEntity& self) { return RequirePhysics(context).GetAngularVelocity(self.ResolveOrThrow()); }, "IsSleeping", [&context](const ScriptEntity& self) -> sol::optional<bool> { PhysicsWorld& physics = RequirePhysics(context); const Entity entity = self.ResolveOrThrow(); if (!physics.HasBody(entity)) return sol::nullopt; return physics.IsBodySleeping(entity); }, "GetJointPosition", [&context](const ScriptEntity& self) {
 				const std::optional<float> position = RequirePhysics(context).GetJointPosition(self.ResolveOrThrow());
 				return position ? sol::optional<float>(*position) : sol::optional<float>(); }, "GetJointRotation", [&context](const ScriptEntity& self) {
 				const std::optional<glm::vec3> rotation = RequirePhysics(context).GetJointRotation(self.ResolveOrThrow());
 				return rotation ? sol::optional<glm::vec3>(*rotation) : sol::optional<glm::vec3>(); }, "HasJoint", [&context](const ScriptEntity& self) { return RequirePhysics(context).HasJoint(self.ResolveOrThrow()); },
 
-										   "Move", [&context](const ScriptEntity& self, const glm::vec3& velocity) {
+																					"Move", [&context](const ScriptEntity& self, const glm::vec3& velocity) {
 					Entity entity = RequireEntityWith<CharacterControllerComponent>(self, "Move", "CharacterController");
 					// Ignoring it would keep the character walking at its last velocity (e.g. after normalizing a zero vector).
 					if (!std::isfinite(velocity.x) || !std::isfinite(velocity.y) || !std::isfinite(velocity.z))
@@ -571,9 +582,9 @@ namespace Basalt {
 					const std::optional<glm::vec3> normal = RequirePhysics(context).GetCharacterGroundNormal(self.ResolveOrThrow());
 					return normal ? sol::optional<glm::vec3>(*normal) : sol::optional<glm::vec3>(); },
 
-										   "PlayAudio", [&context](const ScriptEntity& self) { return RequireAudio(context).Play(RequireEntityWith<AudioSourceComponent>(self, "PlayAudio", "AudioSource")); }, "StopAudio", [&context](const ScriptEntity& self) { RequireAudio(context).Stop(RequireEntityWith<AudioSourceComponent>(self, "StopAudio", "AudioSource")); }, "IsAudioPlaying", [&context](const ScriptEntity& self) { return RequireAudio(context).IsPlaying(self.ResolveOrThrow()); }, "GetAudioDopplerPitch", [&context](const ScriptEntity& self) { return RequireAudio(context).GetDopplerPitch(self.ResolveOrThrow()); },
+																					"PlayAudio", [&context](const ScriptEntity& self) { return RequireAudio(context).Play(RequireEntityWith<AudioSourceComponent>(self, "PlayAudio", "AudioSource")); }, "StopAudio", [&context](const ScriptEntity& self) { RequireAudio(context).Stop(RequireEntityWith<AudioSourceComponent>(self, "StopAudio", "AudioSource")); }, "IsAudioPlaying", [&context](const ScriptEntity& self) { return RequireAudio(context).IsPlaying(self.ResolveOrThrow()); }, "GetAudioDopplerPitch", [&context](const ScriptEntity& self) { return RequireAudio(context).GetDopplerPitch(self.ResolveOrThrow()); },
 
-										   "PlayAnimation", [&context](const ScriptEntity& self, const sol::object& clip) {
+																					"PlayAnimation", [&context](const ScriptEntity& self, const sol::object& clip) {
 					if (clip.valid() && clip.get_type() != sol::type::string)
 						throw std::runtime_error("PlayAnimation: clip must be a string or nil");
 					return RequireAnimations(context).Play(RequireAnimator(self, "PlayAnimation"), clip.valid() ? clip.as<std::string>() : ""); }, "CrossFadeAnimation", [&context](const ScriptEntity& self, const std::string& clip, float seconds) { return RequireAnimations(context).CrossFade(RequireAnimator(self, "CrossFadeAnimation"), clip, seconds); }, "BlendAnimations", [&context](const ScriptEntity& self, const std::string& first, const std::string& second, float weight) { return RequireAnimations(context).Blend(RequireAnimator(self, "BlendAnimations"), first, second, weight); }, "PauseAnimation", [&context](const ScriptEntity& self, const sol::object& paused) {
@@ -590,15 +601,48 @@ namespace Basalt {
 						throw std::runtime_error("EmitParticles count must be between 0 and " + std::to_string(ParticleEmitterComponent::MaxParticlesLimit));
 					return RequireParticles(context).Emit(entity, static_cast<uint32_t>(count)); }, "IsEmittingParticles", [&context](const ScriptEntity& self) { return RequireParticles(context).IsPlaying(self.ResolveOrThrow()); }, "GetParticleCount", [&context](const ScriptEntity& self) { return RequireParticles(context).GetParticleCount(self.ResolveOrThrow()); },
 
-										   "GetScript", [&context](const ScriptEntity& self) -> sol::object {
+																					"GetScript", [&context](const ScriptEntity& self) -> sol::object {
 					self.ResolveOrThrow();
 					return context.Host ? context.Host->GetInstance(self.ID) : sol::object(sol::lua_nil); }, "Destroy", [&context](const ScriptEntity& self) {
 					if (Entity entity = self.Resolve())
 						RequireScene(context).DestroyEntity(entity); },
 
-										   sol::meta_function::equal_to, [](const ScriptEntity& a, const ScriptEntity& b) { return a == b; }, sol::meta_function::to_string, [](const ScriptEntity& self) {
+																					sol::meta_function::equal_to, [](const ScriptEntity& a, const ScriptEntity& b) { return a == b; }, sol::meta_function::to_string, [](const ScriptEntity& self) {
 					Entity entity = self.Resolve();
 					return "Entity(" + (entity ? entity.GetName() : std::string("<destroyed>")) + ", " + std::to_string(static_cast<uint64_t>(self.ID)) + ")"; });
+
+			// Bones and blend spaces.
+			entityType["GetBoneTransform"] = [&context](sol::this_state state, const ScriptEntity& self, const std::string& joint) -> std::tuple<sol::object, sol::object, sol::object> {
+				Entity entity = RequireAnimator(self, "GetBoneTransform");
+				glm::mat4 bone(1.0f);
+				std::string error;
+				if (!RequireAnimations(context).GetBoneTransform(entity, joint, bone, error))
+				{
+					BS_CORE_ERROR("GetBoneTransform on '{}': {}", entity.GetName(), error);
+					return { sol::lua_nil, sol::lua_nil, sol::lua_nil };
+				}
+				glm::vec3 position;
+				glm::quat rotation;
+				glm::vec3 scale;
+				Math::DecomposeTransform(RequireScene(context).GetWorldTransform(entity) * bone, position, rotation, scale);
+				const sol::state_view view(state);
+				return { sol::make_object(view, position), sol::make_object(view, rotation), sol::make_object(view, scale) };
+			};
+			entityType["PlayBlendSpace"] = [&context](const ScriptEntity& self, const std::string& space, float x, const sol::object& y, const sol::object& fadeSeconds) {
+				Entity entity = RequireAnimator(self, "PlayBlendSpace");
+				return RequireAnimations(context).PlayBlendSpace(entity, space, { x, OptionalNumber(y, "PlayBlendSpace: y", 0.0f) }, OptionalNumber(fadeSeconds, "PlayBlendSpace: fadeSeconds", 0.0f));
+			};
+			entityType["SetBlendSpaceParameter"] = [&context](const ScriptEntity& self, float x, const sol::object& y) {
+				Entity entity = RequireAnimator(self, "SetBlendSpaceParameter");
+				return RequireAnimations(context).SetBlendSpaceParameter(entity, { x, OptionalNumber(y, "SetBlendSpaceParameter: y", 0.0f) });
+			};
+			entityType["GetBlendSpaceWeights"] = [&context](sol::this_state state, const ScriptEntity& self) {
+				Entity entity = RequireAnimator(self, "GetBlendSpaceWeights");
+				sol::table weights = sol::state_view(state).create_table();
+				for (const auto& [clip, weight] : RequireAnimations(context).GetBlendSpaceWeights(entity))
+					weights[clip] = weight;
+				return weights;
+			};
 		}
 
 		void RegisterGraphics(sol::state& lua, ScriptContext& context)

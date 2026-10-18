@@ -101,15 +101,79 @@ namespace Basalt {
 
 	inline constexpr float MaxAnimatorSpeed = 100.0f;
 
+	// A named marker on a clip's timeline, delivered to scripts as OnAnimationEvent(name, clip) when playback
+	// crosses it.
+	struct AnimationEvent
+	{
+		// Empty marks every clip.
+		std::string Clip;
+		// Seconds from the clip's start.
+		float Time = 0.0f;
+		std::string Name = "Event";
+	};
+
+	// One clip placed on a blend space's parameter axes.
+	struct AnimationBlendSample
+	{
+		// Empty selects the model's first clip.
+		std::string Clip;
+		float X = 0.0f;
+		// 2D blend spaces only.
+		float Y = 0.0f;
+		// How fast the clip moves the character at playback speed 1 (units/s), for Animator MatchVelocity;
+		// 0 = unknown.
+		float Speed = 0.0f;
+	};
+
+	enum class AnimationBlendSpaceType : uint8_t
+	{
+		OneD = 0,
+		TwoD
+	};
+	inline constexpr size_t AnimationBlendSpaceTypeCount = 2;
+
+	// Clips weighted by their distance to a parameter (speed, or speed x direction) and played in step.
+	struct AnimationBlendSpace
+	{
+		std::string Name = "BlendSpace";
+		AnimationBlendSpaceType Type = AnimationBlendSpaceType::OneD;
+		std::vector<AnimationBlendSample> Samples;
+	};
+
 	// Draws an entire glTF model with independent skeletal/TRS animation playback.
 	struct AnimatorComponent
 	{
+		static constexpr uint32_t MaxEvents = 256;
+		static constexpr uint32_t MaxBlendSpaces = 32;
+		static constexpr uint32_t MaxBlendSamples = 64;
+
 		std::string Mesh;
-		std::string Clip; // Empty selects the first clip.
+		// Empty selects the first clip. May name a blend space (a clip of the same name wins).
+		std::string Clip;
 		float Speed = 1.0f;
 		bool Looping = true;
 		bool PlayOnStart = true;
 		bool CastShadows = true;
+		// Scales a blend space's playback rate by the entity's measured horizontal speed over the samples'
+		// blended Speed, so feet do not slide.
+		bool MatchVelocity = false;
+		std::vector<AnimationEvent> Events;
+		std::vector<AnimationBlendSpace> BlendSpaces;
+	};
+
+	// Keeps the entity at a joint (any node) of an Animator's model while the scene plays or simulates: its
+	// world transform becomes the target's bone transform times this offset. Edit mode keeps the authored
+	// transform.
+	struct BoneAttachmentComponent
+	{
+		// The entity with the Animator; 0 = this entity's parent.
+		UUID Target = 0;
+		// Node name in the target's model; the first node with this name is used.
+		std::string Joint;
+		// Offset in the joint's space.
+		glm::vec3 Translation = { 0.0f, 0.0f, 0.0f };
+		glm::quat Rotation = { 1.0f, 0.0f, 0.0f, 0.0f };
+		glm::vec3 Scale = { 1.0f, 1.0f, 1.0f };
 	};
 
 	// PBR metallic-roughness material. When present it overrides the material imported with the mesh.
@@ -719,6 +783,7 @@ namespace Basalt {
 		CameraComponent,
 		MeshComponent,
 		AnimatorComponent,
+		BoneAttachmentComponent,
 		MaterialComponent,
 		DirectionalLightComponent,
 		PointLightComponent,

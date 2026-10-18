@@ -40,6 +40,8 @@ namespace {
 				return value.is_object();
 			case ComponentFieldKind::Entity:
 				return value.is_number_unsigned();
+			case ComponentFieldKind::List:
+				return value.is_array() && std::ranges::all_of(value, [](const nlohmann::json& element) { return element.is_object(); });
 			case ComponentFieldKind::Enum:
 				return value.is_string() && enumOptions && std::ranges::find(*enumOptions, value.get<std::string>()) != enumOptions->end();
 		}
@@ -796,6 +798,54 @@ TEST_SUITE("Serialization")
 		CHECK(ComponentRegistry::Find("Joint")->EnumOptions.at("LinearMotorMode") == std::vector<std::string>{ "Off", "Velocity", "Position" });
 	}
 
+	TEST_CASE("List fields describe their elements, whose defaults are valid and round-trip")
+	{
+		Scene scene;
+		Entity entity = scene.CreateEntity("Lists");
+		size_t lists = 0;
+		// Checks one list type and the lists inside its elements.
+		std::function<void(const std::string&, const ComponentFieldType&)> checkList = [&](const std::string& path, const ComponentFieldType& type) {
+			INFO("list: " << path);
+			lists++;
+			REQUIRE(type.Element);
+			CHECK(type.ToString() == "object[]");
+			CHECK(type.MaxCount > 0);
+			CHECK_FALSE(type.Element->Name.empty());
+			CHECK(type.Element->FieldTypes.size() == type.Element->Fields.size());
+			for (const std::string& field : type.Element->Fields)
+			{
+				CHECK(type.Element->Default.contains(field));
+				const ComponentFieldType& fieldType = type.Element->FieldTypes.at(field);
+				const auto options = type.Element->EnumOptions.find(field);
+				CHECK(MatchesFieldKind(type.Element->Default[field], fieldType.Kind, options == type.Element->EnumOptions.end() ? nullptr : &options->second));
+				CHECK(fieldType.Kind != ComponentFieldKind::Entity);
+				if (fieldType.Kind == ComponentFieldKind::List)
+					checkList(fmt::format("{}.{}", path, field), fieldType);
+			}
+		};
+		for (const ComponentInfo& info : ComponentRegistry::GetAll())
+		{
+			for (const auto& [field, type] : info.FieldTypes)
+			{
+				if (type.Kind != ComponentFieldKind::List)
+					continue;
+				checkList(info.Name + "." + field, type);
+				// An inspector's Add appends the default: it must be accepted and read back unchanged.
+				const nlohmann::json list = nlohmann::json::array({ type.Element->Default, type.Element->Default });
+				std::string error;
+				const bool unique = info.Name != "Animator" || field != "BlendSpaces";
+				if (unique)
+				{
+					REQUIRE_MESSAGE(ComponentRegistry::AddOrPatch(entity, info.Name, { { field, list } }, error), error);
+					CHECK(info.Serialize(entity)[field] == list);
+				}
+				REQUIRE_MESSAGE(ComponentRegistry::AddOrPatch(entity, info.Name, { { field, nlohmann::json::array({ type.Element->Default }) } }, error), error);
+				CHECK(info.Serialize(entity)[field] == nlohmann::json::array({ type.Element->Default }));
+			}
+		}
+		CHECK(lists == 3);
+	}
+
 	TEST_CASE("Entity reference fields are collected from the component definitions")
 	{
 		for (const ComponentInfo& info : ComponentRegistry::GetAll())
@@ -806,7 +856,7 @@ TEST_SUITE("Serialization")
 				CHECK(info.EntityFields == std::vector<std::string>{ "BodyEntity", "ConnectedEntity" });
 				CHECK(info.RemapEntityReferences);
 			}
-			else if (info.Name == "UIButton" || info.Name == "UISlider" || info.Name == "UICheckbox")
+			else if (info.Name == "UIButton" || info.Name == "UISlider" || info.Name == "UICheckbox" || info.Name == "BoneAttachment")
 			{
 				CHECK(info.EntityFields == std::vector<std::string>{ "Target" });
 				CHECK(info.RemapEntityReferences);

@@ -7,6 +7,8 @@ Vectors are arrays (`[x, y, z]`), colors are RGB(A) arrays in linear space, rota
 asset references are project-relative paths (`Assets/...`) or built-in meshes (`builtin://Cube`).
 Field types: `number`, `integer`, `boolean`, `string`, `object`, `entity` (an entity ID, 0 = none),
 `enum` (one of the listed names) and arrays of them with their length (`number[3]`).
+List fields hold an array of objects (`object[]`) of the element type linked from the field; elements
+may omit fields (they keep the defaults) and setting the field replaces the whole list.
 
 ## Tag (always present)
 
@@ -26,7 +28,11 @@ Fields: `Mesh` (string), `MeshIndex` (integer), `CastShadows` (boolean)
 
 ## Animator
 
-Fields: `Mesh` (string), `Clip` (string), `Speed` (number), `Looping` (boolean), `PlayOnStart` (boolean), `CastShadows` (boolean)
+Fields: `Mesh` (string), `Clip` (string), `Speed` (number), `Looping` (boolean), `PlayOnStart` (boolean), `CastShadows` (boolean), `MatchVelocity` (boolean), `Events` (list of [AnimationEvent](#animationevent), at most 256), `BlendSpaces` (list of [AnimationBlendSpace](#animationblendspace), at most 32)
+
+## BoneAttachment
+
+Fields: `Target` (entity), `Joint` (string), `Translation` (number[3]), `Rotation` (number[3]), `Scale` (number[3])
 
 ## Material
 
@@ -123,4 +129,18 @@ Fields: `Interactable` (boolean), `Checked` (boolean), `BoxColor` (number[4]), `
 ## Prefab
 
 Fields: `Prefab` (string)
+
+## List element types
+
+### AnimationEvent
+
+Fields: `Clip` (string), `Time` (number), `Name` (string)
+
+### AnimationBlendSpace
+
+Fields: `Name` (string), `Type` (enum: 1D, 2D), `Samples` (list of [AnimationBlendSample](#animationblendsample), at most 64)
+
+### AnimationBlendSample
+
+Fields: `Clip` (string), `X` (number), `Y` (number), `Speed` (number)
 

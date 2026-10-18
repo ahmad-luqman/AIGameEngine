@@ -152,7 +152,7 @@ local function TestEntities(self)
 
 	-- Every component type round-trips through Lua.
 	for _, name in ipairs({ "Camera", "Mesh", "Animator", "Material", "DirectionalLight", "PointLight", "SpotLight", "SkyLight", "PostProcess", "RigidBody",
-		"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "AudioSource", "AudioListener", "ParticleEmitter", "UIRect", "UIImage", "UIText", "UIButton", "UISlider", "UICheckbox", "Prefab" }) do
+		"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "AudioSource", "AudioListener", "ParticleEmitter", "UIRect", "UIImage", "UIText", "UIButton", "UISlider", "UICheckbox", "Prefab", "BoneAttachment" }) do
 		local holder = Scene.CreateEntity("Holder" .. name)
 		Expect("AddComponent " .. name, function() holder:AddComponent(name) end)
 		local data = holder:GetComponent(name)
@@ -179,6 +179,17 @@ local function TestEntities(self)
 	Check("Animation bad time", not rig:SetAnimationTime(-1))
 	ExpectError("Animation pause type", function() rig:PauseAnimation(1) end, "paused must be")
 	ExpectError("Animation speed validation", function() rig:SetComponent("Animator", { Speed = -1 }) end, "Speed must be")
+	ExpectError("Animation event validation", function() rig:SetComponent("Animator", { Events = { { Name = "" } } }) end, "Events[0].Name must not be empty")
+	Check("Animator lists", #rig:GetComponent("Animator").Events == 1 and rig:GetComponent("Animator").BlendSpaces[1].Samples[2].Clip == "Cubic")
+	Check("PlayBlendSpace", rig:PlayBlendSpace("Locomotion", 0.25))
+	local weights = rig:GetBlendSpaceWeights()
+	Check("GetBlendSpaceWeights", Near(weights.Step, 0.75, 1e-5) and Near(weights.Cubic, 0.25, 1e-5))
+	Check("SetBlendSpaceParameter", rig:SetBlendSpaceParameter(1) and Near(rig:GetBlendSpaceWeights().Cubic, 1, 1e-5))
+	Check("PlayBlendSpace missing space", not rig:PlayBlendSpace("Missing", 0))
+	ExpectError("PlayBlendSpace parameter type", function() rig:PlayBlendSpace("Locomotion", 0, "up") end, "must be a number or nil")
+	local tip, tipRotation, tipScale = rig:GetBoneTransform("Tip")
+	Check("GetBoneTransform", tip ~= nil and Near(tip.x, 1000, 3) and tipRotation ~= nil and tipScale ~= nil)
+	Check("GetBoneTransform missing joint", rig:GetBoneTransform("Missing") == nil)
 
 	-- Other scripts.
 	local spinner = Scene.FindEntityByName("Turntable"):GetScript()
@@ -743,6 +754,9 @@ function Driver:OnUpdate(dt)
 	end
 
 	if frame == 30 then
+		local tip, tipRotation = Scene.FindEntityByName("AnimationRig"):GetBoneTransform("Tip")
+		Check("BoneAttachment follows its joint", NearVec(Scene.FindEntityByName("RigHat").WorldPosition, tip + tipRotation * Vec3(0, 0.2, 0), 1e-3))
+		Check("OnAnimationEvent", (FeatureTestEvents["AnimationEvent:Footstep"] or 0) >= 1)
 		local hit = Physics.Raycast(Vec3(0, 10, 8), Vec3(0, -1, 0), 50)
 		Check("Physics.Raycast hit", hit ~= nil and hit.Entity.Name == "Ground" and Near(hit.Point.y, 0, 0.05) and NearVec(hit.Normal, Vec3(0, 1, 0), 1e-3) and Near(hit.Distance, 10, 0.05))
 		Check("Physics.Raycast miss", Physics.Raycast(Vec3(0, 10, 8), Vec3(0, 1, 0), 50) == nil)

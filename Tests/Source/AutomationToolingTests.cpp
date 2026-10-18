@@ -392,8 +392,8 @@ TEST_SUITE("Automation")
 		// Patterns are objects that name a field (an event type, if 'event'), 1 to 64 of them; 'tolerance' needs them.
 		CHECK(fails({ { "expect", { "triggerEnter" } } }) == "parameter 'expect[0]' must be an object");
 		CHECK(fails({ { "expect", { stopped, json::object() } } }) == "parameter 'expect[1]' names no field");
-		CHECK(fails({ { "expect", { { { "event", "colision" } } } } }) == "parameter 'expect[0].event' must be one of: log, scriptError, playState, collision");
-		CHECK(fails({ { "expect", { { { "event", 3 } } } } }) == "parameter 'expect[0].event' must be one of: log, scriptError, playState, collision");
+		CHECK(fails({ { "expect", { { { "event", "colision" } } } } }) == "parameter 'expect[0].event' must be one of: log, scriptError, playState, collision, animation");
+		CHECK(fails({ { "expect", { { { "event", 3 } } } } }) == "parameter 'expect[0].event' must be one of: log, scriptError, playState, collision, animation");
 		CHECK(Contains(fails({ { "expect", json::array() } }), "parameter 'expect'"));
 		CHECK(Contains(fails({ { "expect", json(65, stopped) } }), "parameter 'expect'"));
 		CHECK(fails({ { "tolerance", 0.1 } }) == "parameter 'tolerance' needs 'expect'");
@@ -530,7 +530,7 @@ TEST_SUITE("Automation")
 		for (uint64_t id : ids)
 			Run(registry, session, "events.unsubscribe", { { "subscription", id } });
 		CHECK_FALSE(session.GetEvents()->Wants(AutomationEventType::PlayState));
-		CHECK(Run(registry, session, "events.subscribe")["types"] == json({ "log", "scriptError", "playState", "collision" }));
+		CHECK(Run(registry, session, "events.subscribe")["types"] == json({ "log", "scriptError", "playState", "collision", "animation" }));
 		CHECK(Contains(RunError(registry, session, "events.subscribe", { { "types", { "frames" } } }), "parameter 'types[0]' must be one of"));
 	}
 
@@ -942,6 +942,7 @@ TEST_SUITE("Automation")
 					CHECK(component["enums"].contains(field));
 				if (type == "entity")
 					CHECK(std::ranges::find(component["entityFields"], json(field)) != component["entityFields"].end());
+				CHECK(component["lists"].contains(field) == (type == "object[]"));
 			}
 			byName[component["name"].get<std::string>()] = component;
 		}
@@ -955,6 +956,19 @@ TEST_SUITE("Automation")
 		CHECK(byName["Joint"]["entityFields"].size() == 2);
 		CHECK(byName["Script"]["types"]["Properties"] == "object");
 		CHECK(byName["Tag"]["types"]["Tag"] == "string");
+		// List fields describe their element type, recursively, with the default an editor's Add appends.
+		const json& events = byName["Animator"]["lists"]["Events"];
+		CHECK(byName["Animator"]["types"]["Events"] == "object[]");
+		CHECK(events["name"] == "AnimationEvent");
+		CHECK(events["maxCount"] == AnimatorComponent::MaxEvents);
+		CHECK(events["fields"] == json({ "Clip", "Time", "Name" }));
+		CHECK(events["default"] == json({ { "Clip", "" }, { "Time", 0.0 }, { "Name", "Event" } }));
+		const json& spaces = byName["Animator"]["lists"]["BlendSpaces"];
+		CHECK(spaces["enums"]["Type"] == json({ "1D", "2D" }));
+		CHECK(spaces["lists"]["Samples"]["name"] == "AnimationBlendSample");
+		CHECK(spaces["lists"]["Samples"]["maxCount"] == AnimatorComponent::MaxBlendSamples);
+		CHECK(spaces["lists"]["Samples"]["lists"] == json::object());
+		CHECK(byName["Transform"]["lists"] == json::object());
 	}
 
 	TEST_CASE("A rejected poll keeps the drop count and every queued event")
