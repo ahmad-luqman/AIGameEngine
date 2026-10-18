@@ -203,11 +203,18 @@ namespace Basalt {
 					if (!data.contains(field))
 						continue;
 					const bool mixed = std::any_of(values.begin(), values.end(), [&](const auto& value) { return value[field] != data[field]; });
+					const auto type = info.FieldTypes.find(field);
+					if (type == info.FieldTypes.end())
+						continue;
+					// Editing a list sends all of it, which would replace every other entity's different list.
+					if (mixed && type->second.Kind == ComponentFieldKind::List)
+					{
+						ImGui::TextDisabled("%s (mixed lists: edit one entity at a time)", field.c_str());
+						continue;
+					}
 					if (mixed)
 						ImGui::TextDisabled("%s (mixed)", field.c_str());
-					const auto options = info.EnumOptions.find(field);
-					const ComponentFieldType& type = info.FieldTypes.at(field);
-					const auto result = type.Kind == ComponentFieldKind::List ? DrawJsonList(field, data[field], type) : DrawJsonField(field, data[field], options == info.EnumOptions.end() ? nullptr : &options->second);
+					const auto result = DrawJsonValue(field, data[field], type->second, info.EnumOptions);
 					m_Context.EditField("editor.component_set", { { "component", info.Name }, { "data", { { field, data[field] } } } }, result.Changed, result.Committed);
 				}
 			}
@@ -288,7 +295,8 @@ namespace Basalt {
 						continue;
 					if (std::find(info.EntityFields.begin(), info.EntityFields.end(), field) != info.EntityFields.end())
 					{
-						// 0 is the entity itself for a joint's BodyEntity and the world for its ConnectedEntity.
+						// 0 is the entity itself for a joint's BodyEntity, the world for its ConnectedEntity and the parent
+						// for a BoneAttachment's Target.
 						const char* noneLabel = "None";
 						std::function<bool(Entity)> filter = [entity](Entity candidate) { return candidate != entity; };
 						if (isJoint)
@@ -296,12 +304,18 @@ namespace Basalt {
 							noneLabel = field == "BodyEntity" ? "Self" : "World";
 							filter = JointReferenceFilter(entity, joint, field);
 						}
+						else if (info.Name == "BoneAttachment")
+						{
+							noneLabel = "Parent";
+							// A descendant would move with the entity it holds (UpdateAttachments rejects it).
+							filter = [entity](Entity candidate) { return candidate != entity && !entity.GetScene()->IsDescendantOf(candidate, entity); };
+						}
 						DrawEntityReference(entity, info.Name, field, data[field].get<uint64_t>(), filter, noneLabel);
 						continue;
 					}
-					if (const ComponentFieldType& type = info.FieldTypes.at(field); type.Kind == ComponentFieldKind::List)
+					if (const auto type = info.FieldTypes.find(field); type != info.FieldTypes.end() && type->second.Kind == ComponentFieldKind::List)
 					{
-						const JsonFieldResult result = DrawJsonList(field, data[field], type);
+						const JsonFieldResult result = DrawJsonList(field, data[field], type->second);
 						m_Context.EditField("component.set", { { "entity", id }, { "component", info.Name }, { "data", { { field, data[field] } } } }, result.Changed, result.Committed);
 						continue;
 					}

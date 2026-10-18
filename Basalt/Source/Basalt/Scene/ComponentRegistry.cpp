@@ -67,9 +67,10 @@ namespace Basalt {
 
 			// A variable-length array of objects, each read with Fields(FieldReader&, E&) from a default E (so
 			// missing keys keep their defaults). The whole list is replaced; an empty object counts as an empty
-			// list (Lua cannot tell the two apart). Defined below, after the element overloads it calls.
+			// list (Lua cannot tell the two apart). E names itself with a static TypeName (and may name a
+			// UniqueField). Defined below, after the element declarations it needs.
 			template<typename E>
-			void ListField(const char* name, std::vector<E>& value, uint32_t maxCount, const char* elementName);
+			void ListField(const char* name, std::vector<E>& value, uint32_t maxCount);
 
 			// Rotation stored as Euler angles in degrees.
 			void RotationField(const char* name, glm::quat& value)
@@ -315,16 +316,18 @@ namespace Basalt {
 
 		// The shape of a list element, built once per element type from its field list.
 		template<typename E>
-		std::shared_ptr<const ComponentObjectSchema> SchemaOf(const char* elementName)
+		std::shared_ptr<const ComponentObjectSchema> SchemaOf()
 		{
-			static const std::shared_ptr<const ComponentObjectSchema> s_Schema = [elementName] {
+			static const std::shared_ptr<const ComponentObjectSchema> s_Schema = [] {
 				FieldReader collector(nullptr);
 				E element{};
 				Fields(collector, element);
 				// Entity references are remapped and resolved by name only at the top level of a component.
 				BS_CORE_ASSERT(collector.GetEntityFields().empty(), "list elements cannot hold entity fields");
 				auto schema = std::make_shared<ComponentObjectSchema>();
-				schema->Name = elementName;
+				schema->Name = E::TypeName;
+				if constexpr (requires { E::UniqueField; })
+					schema->UniqueField = E::UniqueField;
 				schema->Fields = collector.GetFieldNames();
 				schema->FieldTypes = collector.GetFieldTypes();
 				schema->EnumOptions = collector.GetEnumOptions();
@@ -335,10 +338,10 @@ namespace Basalt {
 		}
 
 		template<typename E>
-		void FieldReader::ListField(const char* name, std::vector<E>& value, uint32_t maxCount, const char* elementName)
+		void FieldReader::ListField(const char* name, std::vector<E>& value, uint32_t maxCount)
 		{
-			const std::shared_ptr<const ComponentObjectSchema> schema = SchemaOf<E>(elementName);
-			Describe(name, { ComponentFieldKind::List, 0, maxCount, schema });
+			const std::shared_ptr<const ComponentObjectSchema> schema = SchemaOf<E>();
+			Describe(name, ComponentFieldType::List(maxCount, schema));
 			const json* element = Find(name);
 			if (!element)
 				return;
@@ -349,8 +352,8 @@ namespace Basalt {
 			if (element->size() > maxCount)
 				throw std::runtime_error(fmt::format("field '{}' has {} elements (at most {})", qualified, element->size(), maxCount));
 			std::vector<E> result;
-			result.reserve(emptyObject ? 0 : element->size());
-			for (size_t i = 0; !emptyObject && i < element->size(); i++)
+			result.reserve(element->size());
+			for (size_t i = 0; i < element->size(); i++)
 			{
 				const json& item = (*element)[i];
 				const std::string itemName = fmt::format("{}[{}]", qualified, i);
@@ -501,7 +504,7 @@ namespace Basalt {
 		{
 			r.Field("Name", c.Name);
 			r.EnumField("Type", c.Type, s_BlendSpaceTypeNames);
-			r.ListField("Samples", c.Samples, AnimatorComponent::MaxBlendSamples, "AnimationBlendSample");
+			r.ListField("Samples", c.Samples, AnimatorComponent::MaxBlendSamples);
 		}
 
 		void Fields(FieldReader& r, AnimatorComponent& c)
@@ -513,8 +516,8 @@ namespace Basalt {
 			r.Field("PlayOnStart", c.PlayOnStart);
 			r.Field("CastShadows", c.CastShadows);
 			r.Field("MatchVelocity", c.MatchVelocity);
-			r.ListField("Events", c.Events, AnimatorComponent::MaxEvents, "AnimationEvent");
-			r.ListField("BlendSpaces", c.BlendSpaces, AnimatorComponent::MaxBlendSpaces, "AnimationBlendSpace");
+			r.ListField("Events", c.Events, AnimatorComponent::MaxEvents);
+			r.ListField("BlendSpaces", c.BlendSpaces, AnimatorComponent::MaxBlendSpaces);
 		}
 
 		void Fields(FieldReader& r, BoneAttachmentComponent& c)
@@ -1332,7 +1335,7 @@ namespace Basalt {
 				}
 				if (space.Samples.size() > AnimatorComponent::MaxBlendSamples)
 					return fmt::format("BlendSpaces[{}] holds at most {} samples", i, AnimatorComponent::MaxBlendSamples);
-				const bool twoD = space.Type == AnimationBlendSpaceType::TwoD;
+				// Samples may share a position (they share its weight), so an editor can add one at the default.
 				for (size_t j = 0; j < space.Samples.size(); j++)
 				{
 					const AnimationBlendSample& sample = space.Samples[j];
@@ -1340,13 +1343,6 @@ namespace Basalt {
 						return fmt::format("BlendSpaces[{}].Samples[{}] position ({}, {}) must be finite", i, j, sample.X, sample.Y);
 					if (!std::isfinite(sample.Speed) || sample.Speed < 0.0f)
 						return fmt::format("BlendSpaces[{}].Samples[{}].Speed {} must be finite and nonnegative", i, j, sample.Speed);
-					// Two samples at one position would have no defined weights.
-					for (size_t k = 0; k < j; k++)
-					{
-						const AnimationBlendSample& other = space.Samples[k];
-						if (other.X == sample.X && (!twoD || other.Y == sample.Y))
-							return fmt::format("BlendSpaces[{}].Samples[{}] is at the same position as Samples[{}]", i, j, k);
-					}
 				}
 			}
 			return {};
@@ -1354,9 +1350,10 @@ namespace Basalt {
 
 		std::string Validate(const BoneAttachmentComponent& c)
 		{
-			const auto finite = [](const glm::vec3& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); };
-			if (!finite(c.Translation) || !finite(c.Scale))
-				return "Translation and Scale must be finite";
+			const auto finite = [](const auto& v) { return !glm::any(glm::isnan(v)) && !glm::any(glm::isinf(v)); };
+			// The registry only writes finite rotations; C++ code may not.
+			if (!finite(c.Translation) || !finite(c.Scale) || !finite(glm::vec4(c.Rotation.x, c.Rotation.y, c.Rotation.z, c.Rotation.w)))
+				return "Translation, Rotation and Scale must be finite";
 			return {};
 		}
 
@@ -1543,15 +1540,19 @@ namespace Basalt {
 
 	std::string ComponentFieldType::ToString() const
 	{
-		if (Kind == ComponentFieldKind::List)
-			return "object[]";
-		static constexpr const char* const Names[] = { "number", "integer", "boolean", "string", "object", "entity", "list", "enum" };
+		static constexpr const char* const Names[] = { "number", "integer", "boolean", "string", "object", "entity", "object[]", "enum" };
 		static_assert(std::size(Names) == static_cast<size_t>(ComponentFieldKind::Enum) + 1, "one name per field kind");
 		const char* name = EnumNameOrNull(Names, Kind);
 		std::string text = name ? name : "unknown";
 		if (Count > 0)
 			text += "[" + std::to_string(Count) + "]";
 		return text;
+	}
+
+	ComponentFieldType ComponentFieldType::List(uint32_t maxCount, std::shared_ptr<const ComponentObjectSchema> element)
+	{
+		BS_CORE_ASSERT(maxCount > 0 && element, "a list field needs a length limit and an element schema");
+		return { ComponentFieldKind::List, 0, maxCount, std::move(element) };
 	}
 
 	const std::vector<ComponentInfo>& ComponentRegistry::GetAll()

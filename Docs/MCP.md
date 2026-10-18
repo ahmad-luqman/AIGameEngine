@@ -113,7 +113,9 @@ Agents can follow a running game and check it without polling or screenshots:
 
 - `events.subscribe {types?, minLevel?}` collects log lines, script errors, play-state changes (`play`, `simulate`,
   `pause`, `resume`, `stop`) and collisions (`collisionBegin`/`collisionEnd`/`triggerEnter`/`triggerExit` with both
-  entities as `a` and `b`, the frame and the contact: `point`, `normal` pointing from `b` toward `a`, `impulse`). On the editor's legacy line protocol the subscription **streams**: event
+  entities as `a` and `b`, the frame and the contact: `point`, `normal` pointing from `b` toward `a`, `impulse`) and
+  animation events (`animation`: an Animator `Events` marker playback crossed, with `name`, `clip`, `entity` and the
+  frame). On the editor's legacy line protocol the subscription **streams**: event
   frames arrive on the same connection after a response or within about 100 ms when idle, as JSON lines with an
   `event` key and no `ok` key (`{"event":"collision","subscription":1,"seq":7,"type":"collisionBegin",...}`), and the
   subscription ends when the connection closes. A connection that falls behind gets

@@ -396,7 +396,7 @@ namespace Basalt {
 		// silently treat a mistyped argument as missing).
 		float OptionalNumber(const sol::object& value, const char* what, float fallback)
 		{
-			if (!value.valid())
+			if (IsNil(value))
 				return fallback;
 			if (value.get_type() != sol::type::number)
 				throw std::runtime_error(std::string(what) + " must be a number or nil");
@@ -614,11 +614,13 @@ namespace Basalt {
 			// Bones and blend spaces.
 			entityType["GetBoneTransform"] = [&context](sol::this_state state, const ScriptEntity& self, const std::string& joint) -> std::tuple<sol::object, sol::object, sol::object> {
 				Entity entity = RequireAnimator(self, "GetBoneTransform");
+				AnimationSystem& animations = RequireAnimations(context);
 				glm::mat4 bone(1.0f);
 				std::string error;
-				if (!RequireAnimations(context).GetBoneTransform(entity, joint, bone, error))
+				if (!animations.GetBoneTransform(entity, joint, bone, error))
 				{
-					BS_CORE_ERROR("GetBoneTransform on '{}': {}", entity.GetName(), error);
+					// Logged once: scripts typically poll a joint every frame.
+					animations.ReportBoneProblem(entity, joint, error);
 					return { sol::lua_nil, sol::lua_nil, sol::lua_nil };
 				}
 				glm::vec3 position;

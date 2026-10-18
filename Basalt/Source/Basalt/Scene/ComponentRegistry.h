@@ -44,6 +44,8 @@ namespace Basalt {
 		uint32_t MaxCount = 0;
 		std::shared_ptr<const ComponentObjectSchema> Element;
 
+		static ComponentFieldType List(uint32_t maxCount, std::shared_ptr<const ComponentObjectSchema> element);
+
 		// "number", "integer", "boolean", "string", "object", "entity" or "enum", with "[Count]" for an array;
 		// "object[]" for a List.
 		std::string ToString() const;
@@ -58,7 +60,11 @@ namespace Basalt {
 		std::vector<std::string> Fields;
 		std::map<std::string, ComponentFieldType> FieldTypes;
 		std::map<std::string, std::vector<std::string>> EnumOptions;
-		// A default-constructed element as JSON: what an inspector's Add button appends. It passes validation.
+		// A string field whose value must differ between the list's elements (empty: none). Editors give the
+		// elements they add or duplicate a fresh value.
+		std::string UniqueField;
+		// A default-constructed element as JSON: what an inspector's Add button appends. It passes the
+		// component's checks once UniqueField is made unique.
 		nlohmann::json Default;
 	};
 

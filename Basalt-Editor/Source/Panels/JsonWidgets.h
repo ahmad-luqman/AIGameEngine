@@ -1,9 +1,10 @@
 #pragma once
 
-#include <Basalt/Scene/ComponentRegistry.h>
+#include "Basalt/Scene/ComponentRegistry.h"
 
 #include <nlohmann/json.hpp>
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -35,12 +36,17 @@ namespace Basalt {
 	};
 
 	// Applies one edit to a JSON array of `type`'s elements; false (array unchanged) when it does not apply: an
-	// index out of range, a move past either end, or growing past type.MaxCount.
+	// index out of range, a move past either end, or growing past type.MaxCount. An added or duplicated element
+	// gets a fresh value of the schema's UniqueField ("Walk 2").
 	bool EditJsonList(nlohmann::json& array, JsonListEdit edit, size_t index, const ComponentFieldType& type);
 
 	// Draws a List field as a tree: one node per element (labelled by its Name or Clip) holding the element's fields,
-	// with move, duplicate and remove controls per element and an Add button. Structural edits change and commit at
-	// once; field edits report like DrawJsonField.
+	// with move and remove buttons per element (duplicate and the rest in its context menu) and an Add button.
+	// Structural edits change and commit at once; field edits report like DrawJsonField.
 	JsonFieldResult DrawJsonList(const std::string& name, nlohmann::json& array, const ComponentFieldType& type);
+
+	// One field of a component or list element: DrawJsonList for a List field, DrawJsonField (with the field's enum
+	// options) for anything else.
+	JsonFieldResult DrawJsonValue(const std::string& name, nlohmann::json& value, const ComponentFieldType& type, const std::map<std::string, std::vector<std::string>>& enumOptions);
 
 }

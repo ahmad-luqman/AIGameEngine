@@ -105,6 +105,9 @@ namespace Basalt {
 	// crosses it.
 	struct AnimationEvent
 	{
+		// Element type name in tooling (component.types, the Lua definitions).
+		static constexpr const char* TypeName = "AnimationEvent";
+
 		// Empty marks every clip.
 		std::string Clip;
 		// Seconds from the clip's start.
@@ -112,16 +115,18 @@ namespace Basalt {
 		std::string Name = "Event";
 	};
 
-	// One clip placed on a blend space's parameter axes.
+	// One clip placed on a blend space's parameter axes. Samples at the same position share its weight.
 	struct AnimationBlendSample
 	{
+		static constexpr const char* TypeName = "AnimationBlendSample";
+
 		// Empty selects the model's first clip.
 		std::string Clip;
 		float X = 0.0f;
 		// 2D blend spaces only.
 		float Y = 0.0f;
-		// How fast the clip moves the character at playback speed 1 (units/s), for Animator MatchVelocity;
-		// 0 = unknown.
+		// How fast the clip moves the character at playback speed 1 (units/s), for Animator MatchVelocity; 0 for
+		// clips that stand still or whose speed is unknown (they play at the Animator's Speed).
 		float Speed = 0.0f;
 	};
 
@@ -132,9 +137,14 @@ namespace Basalt {
 	};
 	inline constexpr size_t AnimationBlendSpaceTypeCount = 2;
 
-	// Clips weighted by their distance to a parameter (speed, or speed x direction) and played in step.
+	// Clips placed on one or two parameter axes (speed, or speed x direction), weighted by where the parameter lies
+	// among them and played in step.
 	struct AnimationBlendSpace
 	{
+		static constexpr const char* TypeName = "AnimationBlendSpace";
+		// Blend spaces are found by name, so an editor gives added and duplicated ones a fresh one.
+		static constexpr const char* UniqueField = "Name";
+
 		std::string Name = "BlendSpace";
 		AnimationBlendSpaceType Type = AnimationBlendSpaceType::OneD;
 		std::vector<AnimationBlendSample> Samples;
@@ -154,8 +164,9 @@ namespace Basalt {
 		bool Looping = true;
 		bool PlayOnStart = true;
 		bool CastShadows = true;
-		// Scales a blend space's playback rate by the entity's measured horizontal speed over the samples'
-		// blended Speed, so feet do not slide.
+		// Scales a blend space's playback rate by the entity's measured horizontal speed over the moving samples'
+		// blended Speed, so feet do not slide; samples with Speed 0 keep the plain Speed. A walk-only space freezes
+		// while the entity stands still.
 		bool MatchVelocity = false;
 		std::vector<AnimationEvent> Events;
 		std::vector<AnimationBlendSpace> BlendSpaces;

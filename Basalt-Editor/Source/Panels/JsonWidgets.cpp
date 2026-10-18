@@ -24,10 +24,73 @@ namespace Basalt {
 			std::string label = "#" + std::to_string(index);
 			for (const char* key : { "Name", "Clip" })
 			{
-				if (auto it = element.find(key); it != element.end() && it->is_string() && !it->get_ref<const std::string&>().empty())
-					return label + " " + it->get<std::string>();
+				if (auto it = element.find(key); it != element.end() && it->is_string())
+					if (const auto& text = it->get_ref<const std::string&>(); !text.empty())
+						return label.append(" ").append(text);
 			}
 			return label;
+		}
+
+		// Gives the element at `index` a value of `field` no other element has: "Walk", then "Walk 2", "Walk 3"...
+		void MakeUnique(nlohmann::json& array, size_t index, const std::string& field)
+		{
+			const auto taken = [&](const std::string& candidate) {
+				for (size_t i = 0; i < array.size(); i++)
+					if (i != index && array[i].value(field, "") == candidate)
+						return true;
+				return false;
+			};
+			const std::string base = array[index].value(field, "");
+			std::string candidate = base;
+			for (int suffix = 2; taken(candidate); suffix++)
+				candidate = base + " " + std::to_string(suffix);
+			array[index][field] = candidate;
+		}
+
+		// The structural part of a list edit, shared by element values and their tree-node open states.
+		bool ApplyListEdit(nlohmann::json& array, JsonListEdit edit, size_t index, const nlohmann::json& fresh)
+		{
+			switch (edit)
+			{
+				case JsonListEdit::Add:
+					array.push_back(fresh);
+					return true;
+				case JsonListEdit::Duplicate:
+					if (index >= array.size())
+						return false;
+					array.insert(array.begin() + static_cast<std::ptrdiff_t>(index) + 1, array[index]);
+					return true;
+				case JsonListEdit::Remove:
+					if (index >= array.size())
+						return false;
+					array.erase(array.begin() + static_cast<std::ptrdiff_t>(index));
+					return true;
+				case JsonListEdit::MoveUp:
+					if (index == 0 || index >= array.size())
+						return false;
+					std::swap(array[index - 1], array[index]);
+					return true;
+				case JsonListEdit::MoveDown:
+					if (index + 1 >= array.size())
+						return false;
+					std::swap(array[index], array[index + 1]);
+					return true;
+			}
+			return false;
+		}
+
+		// The new element's position after an edit that adds one.
+		size_t AddedIndex(const nlohmann::json& array, JsonListEdit edit, size_t index)
+		{
+			return edit == JsonListEdit::Add ? array.size() - 1 : index + 1;
+		}
+
+		ImGuiID ElementNodeID(size_t index)
+		{
+			ImGui::PushID(static_cast<int>(index));
+			const ImGuiID id = ImGui::GetID("##element");
+			ImGui::PopID();
+			return id;
 		}
 
 		float DragSpeed(const std::string& name)
@@ -192,35 +255,19 @@ namespace Basalt {
 		const bool grows = edit == JsonListEdit::Add || edit == JsonListEdit::Duplicate;
 		if (grows && array.size() >= type.MaxCount)
 			return false;
-		if (edit == JsonListEdit::Add)
-		{
-			array.push_back(type.Element->Default);
-			return true;
-		}
-		if (index >= array.size())
+		if (!ApplyListEdit(array, edit, index, type.Element->Default))
 			return false;
-		switch (edit)
-		{
-			case JsonListEdit::Duplicate:
-				array.insert(array.begin() + static_cast<std::ptrdiff_t>(index) + 1, array[index]);
-				return true;
-			case JsonListEdit::Remove:
-				array.erase(array.begin() + static_cast<std::ptrdiff_t>(index));
-				return true;
-			case JsonListEdit::MoveUp:
-				if (index == 0)
-					return false;
-				std::swap(array[index - 1], array[index]);
-				return true;
-			case JsonListEdit::MoveDown:
-				if (index + 1 >= array.size())
-					return false;
-				std::swap(array[index], array[index + 1]);
-				return true;
-			case JsonListEdit::Add:
-				break;
-		}
-		return false;
+		if (grows && !type.Element->UniqueField.empty())
+			MakeUnique(array, AddedIndex(array, edit, index), type.Element->UniqueField);
+		return true;
+	}
+
+	JsonFieldResult DrawJsonValue(const std::string& name, nlohmann::json& value, const ComponentFieldType& type, const std::map<std::string, std::vector<std::string>>& enumOptions)
+	{
+		if (type.Kind == ComponentFieldKind::List)
+			return DrawJsonList(name, value, type);
+		const auto options = enumOptions.find(name);
+		return DrawJsonField(name, value, options == enumOptions.end() ? nullptr : &options->second);
 	}
 
 	JsonFieldResult DrawJsonList(const std::string& name, nlohmann::json& array, const ComponentFieldType& type)
@@ -277,14 +324,10 @@ namespace Basalt {
 						auto value = array[i].find(field);
 						if (value == array[i].end())
 							continue;
-						JsonFieldResult fieldResult;
-						if (const ComponentFieldType& fieldType = schema.FieldTypes.at(field); fieldType.Kind == ComponentFieldKind::List)
-							fieldResult = DrawJsonList(field, *value, fieldType);
-						else
-						{
-							const auto options = schema.EnumOptions.find(field);
-							fieldResult = DrawJsonField(field, *value, options == schema.EnumOptions.end() ? nullptr : &options->second);
-						}
+						const auto fieldType = schema.FieldTypes.find(field);
+						if (fieldType == schema.FieldTypes.end())
+							continue;
+						const JsonFieldResult fieldResult = DrawJsonValue(field, *value, fieldType->second, schema.EnumOptions);
 						result.Changed |= fieldResult.Changed;
 						result.Committed |= fieldResult.Committed;
 					}
@@ -303,8 +346,21 @@ namespace Basalt {
 			}
 			ImGui::TreePop();
 		}
-		if (pending && EditJsonList(array, pending->first, pending->second, type))
-			result = { true, true };
+		if (pending)
+		{
+			// Element nodes are keyed by position, so their open states move with the elements.
+			ImGuiStorage* storage = ImGui::GetStateStorage();
+			nlohmann::json open = nlohmann::json::array();
+			for (size_t i = 0; i < array.size(); i++)
+				open.push_back(storage->GetInt(ElementNodeID(i), 0));
+			if (EditJsonList(array, pending->first, pending->second, type))
+			{
+				ApplyListEdit(open, pending->first, pending->second, 0);
+				for (size_t i = 0; i < open.size(); i++)
+					storage->SetInt(ElementNodeID(i), open[i].get<int>());
+				result = { true, true };
+			}
+		}
 		ImGui::PopID();
 		return result;
 	}

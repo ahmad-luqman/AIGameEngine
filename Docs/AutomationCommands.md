@@ -1008,7 +1008,7 @@ Returns (and removes) up to 'max' events a polled subscription collected, oldest
 
 ### `events.subscribe`
 
-Starts collecting events: log lines, script errors, play-state changes (play, simulate, stop; pause and resume from the editor's Pause button) collisions (collisionBegin/End and triggerEnter/Exit, in Play and Simulate) and animation events (Animator Events markers playback crossed: name, clip, entity; in Play and Simulate). On the editor's TCP server a line-protocol connection receives them as {"event": ...} lines without 'ok' (and {"event": "dropped"} when it falls behind); MCP and CLI clients read them with events.poll. A TCP connection's subscriptions end with it. Returns {subscription, types, minLevel, streamed}.
+Starts collecting events: log lines, script errors, play-state changes (play, simulate, stop; pause and resume from the editor's Pause button), collisions (collisionBegin/End and triggerEnter/Exit, in Play and Simulate) and animation events (Animator Events markers playback crossed: name, clip, entity, frame; in Play and Simulate). On the editor's TCP server a line-protocol connection receives them as {"event": ...} lines without 'ok' (and {"event": "dropped"} when it falls behind); MCP and CLI clients read them with events.poll. A TCP connection's subscriptions end with it. Returns {subscription, types, minLevel, streamed}.
 
 | Parameter | Type / description |
 |-----------|--------------------|

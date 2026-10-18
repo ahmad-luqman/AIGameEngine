@@ -1,3 +1,5 @@
+#include "Panels/JsonWidgets.h"
+
 #include <doctest/doctest.h>
 
 #include <Basalt/Core/Log.h>
@@ -22,6 +24,20 @@
 using namespace Basalt;
 
 namespace {
+
+	// A list as the inspector builds it: Add twice (and twice in every nested list), then Duplicate the first.
+	nlohmann::json AddedByEditor(const ComponentFieldType& type)
+	{
+		nlohmann::json list = nlohmann::json::array();
+		REQUIRE(EditJsonList(list, JsonListEdit::Add, 0, type));
+		REQUIRE(EditJsonList(list, JsonListEdit::Add, 0, type));
+		for (nlohmann::json& element : list)
+			for (const auto& [field, fieldType] : type.Element->FieldTypes)
+				if (fieldType.Kind == ComponentFieldKind::List)
+					element[field] = AddedByEditor(fieldType);
+		REQUIRE(EditJsonList(list, JsonListEdit::Duplicate, 0, type));
+		return list;
+	}
 
 	// Whether a serialized value has a field kind's JSON type (enum values: one of the options).
 	bool MatchesFieldKind(const nlohmann::json& value, ComponentFieldKind kind, const std::vector<std::string>* enumOptions)
@@ -798,7 +814,7 @@ TEST_SUITE("Serialization")
 		CHECK(ComponentRegistry::Find("Joint")->EnumOptions.at("LinearMotorMode") == std::vector<std::string>{ "Off", "Velocity", "Position" });
 	}
 
-	TEST_CASE("List fields describe their elements, whose defaults are valid and round-trip")
+	TEST_CASE("List fields describe their elements, whose editor-made values are valid and round-trip")
 	{
 		Scene scene;
 		Entity entity = scene.CreateEntity("Lists");
@@ -830,17 +846,12 @@ TEST_SUITE("Serialization")
 				if (type.Kind != ComponentFieldKind::List)
 					continue;
 				checkList(info.Name + "." + field, type);
-				// An inspector's Add appends the default: it must be accepted and read back unchanged.
-				const nlohmann::json list = nlohmann::json::array({ type.Element->Default, type.Element->Default });
+				// What the inspector builds with Add and Duplicate (also in nested lists) must be accepted and read back
+				// unchanged.
+				const nlohmann::json list = AddedByEditor(type);
 				std::string error;
-				const bool unique = info.Name != "Animator" || field != "BlendSpaces";
-				if (unique)
-				{
-					REQUIRE_MESSAGE(ComponentRegistry::AddOrPatch(entity, info.Name, { { field, list } }, error), error);
-					CHECK(info.Serialize(entity)[field] == list);
-				}
-				REQUIRE_MESSAGE(ComponentRegistry::AddOrPatch(entity, info.Name, { { field, nlohmann::json::array({ type.Element->Default }) } }, error), error);
-				CHECK(info.Serialize(entity)[field] == nlohmann::json::array({ type.Element->Default }));
+				REQUIRE_MESSAGE(ComponentRegistry::AddOrPatch(entity, info.Name, { { field, list } }, error), error);
+				CHECK(info.Serialize(entity)[field] == list);
 			}
 		}
 		CHECK(lists == 3);
