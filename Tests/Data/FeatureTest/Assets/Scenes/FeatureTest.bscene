@@ -14,6 +14,10 @@
 			"Script": { "Script": "Assets/Scripts/Probe.lua" } } },
 		{ "ID": 912, "Name": "RigHat", "Components": {
 			"BoneAttachment": { "Target": 910, "Joint": "Tip", "Translation": [0, 0.2, 0] } } },
+		{ "ID": 913, "Name": "StateMachineRig", "Components": {
+			"Transform": { "Translation": [1000, 0, 10] },
+			"Animator": { "Mesh": "Assets/Models/TwoJoint.gltf", "StateMachine": "Assets/Animations/Character.banimgraph", "RootMotion": true, "RootJoint": "RootJoint",
+				"BlendSpaces": [ { "Name": "Locomotion", "Samples": [ { "Clip": "Step", "X": 0 }, { "Clip": "Cubic", "X": 1 } ] } ] } } },
 		{ "ID": 100, "Name": "FeatureTestDriver", "Components": {
 			"Script": { "Script": "Assets/Scripts/FeatureTest.lua", "Properties": { "Duration": 4.5, "Note": "from scene", "Offset": [1, 2, 3] } } } },
 

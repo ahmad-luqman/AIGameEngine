@@ -95,6 +95,7 @@ namespace Basalt {
 			std::vector<std::string> BuildWarnings;
 			// The last MoveCharacter velocity, used every step until the next call.
 			glm::vec3 MoveVelocity = { 0.0f, 0.0f, 0.0f };
+			std::optional<glm::vec3> RootMotionVelocity;
 			// Displacement over the last step divided by its duration.
 			glm::vec3 ActualVelocity = { 0.0f, 0.0f, 0.0f };
 			// Pose last written to / read from the entity, used to detect transforms changed by scripts.
@@ -146,6 +147,14 @@ namespace Basalt {
 		};
 
 		std::unordered_map<UUID, CharacterRecord> Characters;
+		// Requests live outside character records so creating or rebuilding a collider cannot lose motion.
+		struct RootMotionRequest
+		{
+			glm::vec3 Pending = glm::vec3(0);
+			bool Active = false;
+		};
+		std::unordered_map<UUID, RootMotionRequest> RootMotion;
+
 		// Characters meet each other's full shapes through this list, and a moving one pushes the other with its
 		// velocity (in the pushed character's own update). They skip each other's inner bodies, which Jolt
 		// moves by teleporting, so those would only block. Holds raw pointers, one per Characters record:

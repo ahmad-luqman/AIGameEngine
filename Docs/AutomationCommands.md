@@ -275,7 +275,7 @@ Reads a text asset.
 
 ### `asset.refresh`
 
-Reloads the asset files changed on disk since changes were last reported (by an earlier refresh, by the editor's automatic reload, or since the project was opened in this process): models and textures load again on their next use, and while the game runs (Play, not Simulate) changed scripts are hot reloaded (instances keep their fields; OnReload is called). With 'paths', reloads those files instead, changed or not (a path that does not exist and was not known is an error, and nothing is reloaded then). Files the session wrote itself (asset.write, scene.save, ...) are not reported again. Without 'paths', fails when Assets/ cannot be read.
+Reloads the asset files changed on disk since changes were last reported (by an earlier refresh, by the editor's automatic reload, or since the project was opened in this process): models, textures and animation graphs load again on their next use (graphs restart from their initial state and parameter defaults), and while the game runs (Play, not Simulate) changed scripts are hot reloaded (instances keep their fields; OnReload is called). With 'paths', reloads those files instead, changed or not (a path that does not exist and was not known is an error, and nothing is reloaded then). Files the session wrote itself (asset.write, scene.save, ...) are not reported again. Without 'paths', fails when Assets/ cannot be read.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -306,7 +306,7 @@ Reloads the asset files changed on disk since changes were last reported (by an 
 
 ### `asset.write`
 
-Writes a text asset (script, prefab, scene...) to a project-relative path and reloads it: a script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts').
+Writes a text asset (script, prefab, scene, animation graph...) to a project-relative path and reloads it. A .banimgraph is validated before replacing the file: a script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts').
 
 | Parameter | Type / description |
 |-----------|--------------------|

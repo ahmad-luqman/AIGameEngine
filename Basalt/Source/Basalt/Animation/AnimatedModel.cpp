@@ -87,6 +87,25 @@ namespace Basalt {
 				auto it = std::ranges::find(source->Animations, name, &AnimationClip::Name);
 				return it != source->Animations.end() ? &*it : nullptr;
 			};
+			if (animator.RootMotion && (animator.RootJoint.empty() || std::ranges::find(source->Nodes, animator.RootJoint, &MeshNode::Name) == source->Nodes.end()))
+				warnings.emplace_back("Animator RootJoint must name a model node for root motion");
+			if (!animator.StateMachine.empty())
+			{
+				const auto graph = AssetManager::GetAnimationGraph(animator.StateMachine);
+				if (!graph)
+					warnings.push_back("Animator state machine could not be loaded: " + AssetManager::GetError(animator.StateMachine));
+				else
+					for (const auto& state : graph->States)
+					{
+						if (state.BlendSpace.empty())
+						{
+							if (state.Clip.empty() ? source->Animations.empty() : !findClip(state.Clip))
+								warnings.push_back(fmt::format("Animator state '{}': clip '{}' not found", state.Name, state.Clip));
+						}
+						else if (std::ranges::find(animator.BlendSpaces, state.BlendSpace, &AnimationBlendSpace::Name) == animator.BlendSpaces.end())
+							warnings.push_back(fmt::format("Animator state '{}': blend space '{}' not found", state.Name, state.BlendSpace));
+					}
+			}
 			const bool namesSpace = std::ranges::find(animator.BlendSpaces, animator.Clip, &AnimationBlendSpace::Name) != animator.BlendSpaces.end();
 			if (!animator.Clip.empty() && !findClip(animator.Clip) && !namesSpace)
 				warnings.push_back(fmt::format("Animator clip '{}' not found in '{}'", animator.Clip, animator.Mesh));

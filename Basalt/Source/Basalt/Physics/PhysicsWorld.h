@@ -147,6 +147,8 @@ namespace Basalt {
 		// entities without a character do nothing; non-finite velocities are ignored.
 		bool HasCharacter(Entity entity) const;
 		void MoveCharacter(Entity entity, const glm::vec3& velocity);
+		// Queues animation displacement until the next physics step; nullopt releases the horizontal override.
+		void SetRootMotionDelta(Entity entity, std::optional<glm::vec3> displacement);
 		// Standing on ground no steeper than SlopeLimit.
 		bool IsCharacterGrounded(Entity entity) const;
 		// Normal of the ground the character touches (walkable or too steep), nullopt in the air or without a

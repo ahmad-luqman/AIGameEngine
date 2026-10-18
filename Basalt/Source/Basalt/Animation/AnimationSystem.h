@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Basalt/Animation/AnimationPose.h"
+#include "Basalt/Animation/AnimationGraph.h"
 #include "Basalt/Core/UUID.h"
 #include "Basalt/Core/Timestep.h"
 #include "Basalt/Scene/Components.h"
@@ -28,8 +29,8 @@ namespace Basalt {
 	};
 
 	// Per-entity playback and poses for a playing/simulating scene. Asset data stays shared and immutable.
-	// Each Update advances every Animator, collects the events playback crossed (TakeEvents) and then moves
-	// BoneAttachment entities onto their joints.
+	// Each Update advances every Animator and collects the events playback crossed (TakeEvents). The scene
+	// updates attachments after physics; standalone callers get attachments at the end of Update by default.
 	class AnimationSystem
 	{
 	public:
@@ -38,7 +39,12 @@ namespace Basalt {
 
 		explicit AnimationSystem(Scene& scene);
 		~AnimationSystem();
-		void Update(Timestep timestep);
+		void Update(Timestep timestep, bool updateAttachments = true);
+		void UpdateAttachments();
+		bool SetParameter(Entity entity, const std::string& name, float value);
+		bool SetParameter(Entity entity, const std::string& name, bool value);
+		bool SetTrigger(Entity entity, const std::string& name);
+		std::string GetState(Entity entity);
 		bool Play(Entity entity, const std::string& clip);
 		bool CrossFade(Entity entity, const std::string& clip, float seconds);
 		bool Blend(Entity entity, const std::string& first, const std::string& second, float weight);
@@ -106,6 +112,22 @@ namespace Basalt {
 			entt::entity Handle = entt::null;
 			Ref<MeshSource> Source;
 			std::string ConfiguredClip;
+			std::string ConfiguredGraph;
+			Ref<AnimationGraph> Graph;
+			std::string State;
+			std::vector<float> Parameters;
+			// Unwrapped cycle phase: blend-space duration changes must not move an exit threshold.
+			double StatePhase = 0;
+			bool GraphActive = false;
+			bool Paused = false;
+			bool Looping = true;
+			bool OutgoingLooping = true;
+			bool RootMotion = false;
+			bool OutgoingRootMotion = false;
+			int32_t RootNode = -1;
+			std::string RootProblem;
+			std::string RootApplyProblem;
+			bool InvalidRootPose = false;
 			// In a blend space: the heaviest sample's clip.
 			int32_t Clip = -1;
 			// In a blend space: Phase * Duration.
@@ -152,10 +174,17 @@ namespace Basalt {
 		static void BeginTransition(Playback& playback, float seconds);
 		// Starts `clip` (or a blend space whose dominant clip it is) from 0 after the caller set up the transition.
 		static void Start(Playback& playback, int32_t clip);
+		static void TakeDirectControl(Playback& playback, const AnimatorComponent& component);
 		void AdvanceSpace(Playback& playback, SpaceState& state, const AnimatorComponent& component, double advance, UUID id, size_t& budget);
 		// Queues the markers of `clip` that a clock moving from `from` by `advance` crosses, within `budget`.
-		void CollectEvents(Playback& playback, const AnimatorComponent& component, int32_t clip, double from, double advance, UUID id, size_t& budget);
-		void UpdateAttachments();
+		void CollectEvents(Playback& playback, const AnimatorComponent& component, int32_t clip, double from, double advance, UUID id, size_t& budget, bool looping);
+		bool EnterState(Playback& playback, const AnimationState& state, const AnimatorComponent& component, float fade);
+		void UpdateGraph(Playback& playback, const AnimatorComponent& component);
+		bool SetParameterValue(Entity entity, const std::string& name, float value, AnimationParameterType type);
+		static bool StripRoot(Playback& playback, AnimationLocalPose& pose, bool enabled);
+		static glm::mat4 CurrentRootDelta(const Playback& playback, double advance);
+		static glm::mat4 RootDelta(const Playback& playback, int32_t clip, double from, double advance, bool looping);
+		void ApplyRootMotion(Entity entity, Playback& playback, const glm::mat4& delta, float seconds);
 		void OnDestroy(entt::registry& registry, entt::entity handle);
 		Scene& m_Scene;
 		std::unordered_map<UUID, Playback> m_Playback;

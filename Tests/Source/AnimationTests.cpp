@@ -8,6 +8,9 @@
 #include <Basalt/Animation/BlendSpace.h>
 #include <Basalt/Asset/AssetManager.h>
 #include <Basalt/Asset/MeshImporter.h>
+#include <Basalt/Physics/PhysicsWorld.h>
+#include <Basalt/Automation/AutomationSession.h>
+#include <Basalt/Automation/CommandRegistry.h>
 #include <Basalt/Core/Log.h>
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/ComponentRegistry.h>
@@ -2008,5 +2011,526 @@ TEST_SUITE("Animation")
 			return 'ok'
 		)") == "ok");
 		scene.OnRuntimeStop();
+	}
+}
+
+namespace {
+	json StateGraph()
+	{
+		return {
+			{ "InitialState", "Idle" },
+			{ "Parameters", json::array({ { { "Name", "Speed" }, { "Type", "Float" } }, { { "Name", "Grounded" }, { "Type", "Bool" }, { "Default", true } }, { { "Name", "Jump" }, { "Type", "Trigger" } } }) },
+			{ "States", json::array({ { { "Name", "Idle" }, { "Clip", "Bend" } }, { { "Name", "Walk" }, { "Clip", "Step" }, { "RootMotion", true } }, { { "Name", "Air" }, { "Clip", "Cubic" }, { "Looping", false }, { "RootMotion", true } } }) },
+			{ "Transitions", json::array({ { { "To", "Air" }, { "Duration", 0 }, { "Conditions", json::array({ { { "Parameter", "Jump" } } }) } },
+										   { { "From", "Idle" }, { "To", "Walk" }, { "Duration", 0 }, { "Conditions", json::array({ { { "Parameter", "Speed" }, { "Operator", "Greater" }, { "Value", 0.5 } }, { { "Parameter", "Grounded" }, { "Value", true } } }) } },
+										   { { "From", "Air" }, { "To", "Idle" }, { "Duration", 0 }, { "ExitTime", 1 } } }) }
+		};
+	}
+	std::string MotionFixture(TempProject& project)
+	{
+		auto model = FixtureJson();
+		const float translations[] = { 0, 0, 0, 1, 0.5f, 0, 2, 0, 0 };
+		ReplaceAccessorBytes(model, 9, translations, sizeof(translations));
+		model["animations"][1]["samplers"][0]["interpolation"] = "LINEAR";
+		return project.WriteFile("Assets/Models/Motion.gltf", model.dump());
+	}
+	Entity GraphAnimator(Scene& scene, TempProject& project, const json& graph)
+	{
+		auto entity = AddAnimator(scene);
+		auto& animator = entity.GetComponent<AnimatorComponent>();
+		animator.Mesh = MotionFixture(project);
+		animator.StateMachine = project.WriteFile("Assets/Animations/Character.banimgraph", graph.dump());
+		animator.RootMotion = true;
+		animator.RootJoint = "RootJoint";
+		return entity;
+	}
+}
+
+TEST_SUITE("Animation")
+{
+	TEST_CASE("Animation graphs reject malformed types references limits and unknown fields")
+	{
+		std::string error;
+		REQUIRE(AnimationGraph::FromJson(StateGraph(), error));
+		CHECK(error.empty());
+		for (int i = 0; i < 17; i++)
+		{
+			auto data = StateGraph();
+			switch (i)
+			{
+				case 0:
+					data["InitialState"] = "Missing";
+					break;
+				case 1:
+					data["States"][1]["Name"] = "Idle";
+					break;
+				case 2:
+					data["Parameters"][1]["Name"] = "Speed";
+					break;
+				case 3:
+					data["Parameters"][0]["Default"] = 1e300;
+					break;
+				case 4:
+					data["Parameters"][0]["Type"] = "Integer";
+					break;
+				case 5:
+					data["States"][0]["BlendSpace"] = "Space";
+					break;
+				case 6:
+					data["States"][0]["ParameterX"] = "Missing";
+					break;
+				case 7:
+					data["States"][0]["Typo"] = 1;
+					break;
+				case 8:
+					data["Transitions"][0]["To"] = "Missing";
+					break;
+				case 9:
+					data["Transitions"][0]["Duration"] = -1;
+					break;
+				case 10:
+					data["Transitions"][0]["ExitTime"] = 1.1;
+					break;
+				case 11:
+					data["Transitions"][0]["Conditions"][0]["Parameter"] = "Missing";
+					break;
+				case 12:
+					data["Transitions"][0]["Conditions"][0]["Value"] = false;
+					break;
+				case 13:
+					data["Parameters"][1]["Default"] = 1;
+					break;
+				case 14:
+					data["Transitions"][1]["Conditions"][0]["Value"] = "fast";
+					break;
+				case 15:
+					data["States"] = json::array();
+					break;
+				case 16:
+					data["Transitions"] = json::array();
+					for (int t = 0; t < 513; t++)
+						data["Transitions"].push_back({ { "To", "Idle" } });
+					break;
+				default:
+					FAIL("unhandled graph rejection case");
+					break;
+			}
+			CAPTURE(i);
+			CHECK_FALSE(AnimationGraph::FromJson(data, error));
+			CHECK_FALSE(error.empty());
+		}
+	}
+
+	TEST_CASE("State machines isolate parameters consume triggers and take ordered transitions after exit time")
+	{
+		ClearAssetCache clear;
+		TempProject project("StateMachine");
+		Scene scene;
+		auto rig = GraphAnimator(scene, project, StateGraph());
+		auto other = scene.DuplicateEntity(rig);
+		AnimationSystem animation(scene);
+		CHECK(animation.GetState(rig) == "Idle");
+		REQUIRE(animation.SetParameter(rig, "Speed", 1.0f));
+		REQUIRE(animation.SetParameter(rig, "Grounded", false));
+		animation.Update(0.1f);
+		CHECK(animation.GetState(rig) == "Idle");
+		REQUIRE(animation.SetParameter(rig, "Grounded", true));
+		animation.Update(0.1f);
+		CHECK(animation.GetState(rig) == "Walk");
+		CHECK(animation.GetState(other) == "Idle");
+		REQUIRE(animation.SetTrigger(rig, "Jump"));
+		animation.Update(0.1f);
+		CHECK(animation.GetState(rig) == "Air");
+		animation.Update(2.0f);
+		CHECK_FALSE(animation.IsPlaying(rig));
+		animation.Update(0);
+		CHECK(animation.GetState(rig) == "Idle");
+		animation.Update(0);
+		CHECK(animation.GetState(rig) == "Walk"); // Jump was consumed.
+		CHECK_FALSE(animation.SetParameter(rig, "Speed", true));
+		CHECK_FALSE(animation.SetParameter(rig, "Grounded", 1.0f));
+		CHECK_FALSE(animation.SetTrigger(rig, "Grounded"));
+		CHECK_FALSE(animation.SetParameter(rig, "Speed", std::numeric_limits<float>::infinity()));
+		CHECK_FALSE(animation.SetParameter(rig, "Missing", 0.0f));
+		REQUIRE(animation.Play(rig, "Bend"));
+		CHECK(animation.GetState(rig).empty());
+		animation.Update(0.1f);
+		CHECK(animation.GetState(rig).empty());
+	}
+
+	TEST_CASE("Root motion unwraps cycles preserves vertical pose and does not move on seek pause or stop")
+	{
+		ClearAssetCache clear;
+		TempProject project("RootMotion");
+		Scene scene;
+		auto rig = GraphAnimator(scene, project, StateGraph());
+		auto& component = rig.GetComponent<AnimatorComponent>();
+		component.StateMachine.clear();
+		component.Clip = "Step";
+		AnimationSystem animation(scene);
+		animation.Update(0.5f);
+		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(0.5f));
+		REQUIRE(animation.GetPose(rig));
+		CHECK((*animation.GetPose(rig))[2][3].x == doctest::Approx(0));
+		CHECK((*animation.GetPose(rig))[2][3].y == doctest::Approx(0.25f));
+		animation.Update(4.0f);
+		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(4.5f));
+		REQUIRE(animation.Seek(rig, 1.75f));
+		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(4.5f));
+		animation.Update(0.5f);
+		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(5.0f));
+		animation.Pause(rig, true);
+		animation.Update(1);
+		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(5.0f));
+		animation.Stop(rig);
+		animation.Update(1);
+		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(5.0f));
+		component.Looping = false;
+		REQUIRE(animation.Play(rig, "Step"));
+		animation.Update(4);
+		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(7.0f));
+		animation.Update(4);
+		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(7.0f));
+	}
+
+	TEST_CASE("Root motion is per state and fades motion from the outgoing state")
+	{
+		ClearAssetCache clear;
+		TempProject project("RootFade");
+		Scene scene;
+		auto graph = StateGraph();
+		graph["States"][0]["Clip"] = "Step"; // Same moving clip, no root motion in Idle.
+		graph["Transitions"][1]["Duration"] = 1.0;
+		graph["Transitions"].push_back({ { "From", "Walk" }, { "To", "Idle" }, { "Duration", 1 }, { "Conditions", json::array({ { { "Parameter", "Speed" }, { "Operator", "Less" }, { "Value", 0.5 } } }) } });
+		auto rig = GraphAnimator(scene, project, graph);
+		AnimationSystem animation(scene);
+		animation.Update(0.5f);
+		CHECK(rig.GetComponent<TransformComponent>().Translation.x == 0);
+		CHECK((*animation.GetPose(rig))[2][3].x == doctest::Approx(0.5f));
+		REQUIRE(animation.SetParameter(rig, "Speed", 1.0f));
+		animation.Update(1);
+		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(0.5f));
+		CHECK((*animation.GetPose(rig))[2][3].x == doctest::Approx(0));
+		REQUIRE(animation.SetParameter(rig, "Speed", 0.0f));
+		animation.Update(1);
+		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(1.0f));
+		animation.Update(1);
+		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(1.0f));
+	}
+
+	TEST_CASE("Graph reload resets the session and broken assets fail closed then recover")
+	{
+		ClearAssetCache clear;
+		TempProject project("GraphReload");
+		Scene scene;
+		auto rig = GraphAnimator(scene, project, StateGraph());
+		AnimationSystem animation(scene);
+		REQUIRE(animation.SetParameter(rig, "Speed", 1.0f));
+		animation.Update(0.1f);
+		CHECK(animation.GetState(rig) == "Walk");
+		const auto path = rig.GetComponent<AnimatorComponent>().StateMachine;
+		project.WriteFile(path, "{}");
+		CHECK(AssetManager::ReloadChanged({ path }) == std::vector<std::string>{ path });
+		animation.Update(1);
+		CHECK(animation.GetState(rig).empty());
+		CHECK_FALSE(animation.IsPlaying(rig));
+		project.WriteFile(path, StateGraph().dump());
+		AssetManager::Reload(path);
+		animation.Update(0);
+		CHECK(animation.GetState(rig) == "Idle");
+		CHECK_FALSE(animation.SetParameter(rig, "Jump", true));
+	}
+}
+
+TEST_SUITE("Animation")
+{
+	TEST_CASE("Root yaw and translation compose across cycles and agree across timestep sizes")
+	{
+		ClearAssetCache clear;
+		TempProject project("RootYaw");
+		auto model = FixtureJson();
+		const float half = std::sqrt(0.5f);
+		const float rotations[] = { 0, 0, 0, 1, 0, half, 0, half, 0, 1, 0, 0 };
+		ReplaceAccessorBytes(model, 8, rotations, sizeof(rotations));
+		model["animations"][0]["channels"][0]["target"]["node"] = 2;
+		const float translations[] = { 0, 0, 0, 1, 0.5f, 0, 2, 0, 0 };
+		ReplaceAccessorBytes(model, 9, translations, sizeof(translations));
+		model["animations"][0]["samplers"].push_back({ { "input", 7 }, { "output", 9 }, { "interpolation", "LINEAR" } });
+		model["animations"][0]["channels"].push_back({ { "sampler", 1 }, { "target", { { "node", 2 }, { "path", "translation" } } } });
+
+		const auto path = project.WriteFile("Assets/Models/Turn.gltf", model.dump());
+		Scene scene;
+		auto large = AddAnimator(scene, "Large");
+		auto small = AddAnimator(scene, "Small");
+		for (Entity rig : { large, small })
+		{
+			auto& component = rig.GetComponent<AnimatorComponent>();
+			component.Mesh = path;
+			component.RootMotion = true;
+			component.RootJoint = "RootJoint";
+		}
+		AnimationSystem animation(scene);
+		animation.Pause(small, true);
+		animation.Update(5);
+		animation.Pause(large, true);
+		animation.Pause(small, false);
+		for (int i = 0; i < 20; i++)
+			animation.Update(0.25f);
+		const auto largeWorld = scene.GetWorldTransform(large), smallWorld = scene.GetWorldTransform(small);
+		for (int column = 0; column < 4; column++)
+			CHECK(glm::all(glm::epsilonEqual(largeWorld[column], smallWorld[column], 1e-4f)));
+		CHECK(largeWorld[2].x == doctest::Approx(1));
+		CHECK(largeWorld[3].x == doctest::Approx(1));
+		CHECK(largeWorld[3].z == doctest::Approx(0).epsilon(1e-4));
+		CHECK((*animation.GetPose(large))[2][2].z == doctest::Approx(1));
+	}
+
+	TEST_CASE("Root motion respects rotated scaled parents and missing root nodes hold movement with a diagnostic")
+	{
+		ClearAssetCache clear;
+		TempProject project("RootParent");
+		Scene scene;
+		auto parent = scene.CreateEntity("Parent");
+		parent.GetComponent<TransformComponent>().Rotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(0, 1, 0));
+		parent.GetComponent<TransformComponent>().Scale = glm::vec3(2);
+		auto rig = GraphAnimator(scene, project, StateGraph());
+		scene.SetParent(rig, parent, false);
+		auto& component = rig.GetComponent<AnimatorComponent>();
+		component.StateMachine.clear();
+		component.Clip = "Step";
+		AnimationSystem animation(scene);
+		animation.Update(0.5f);
+		const glm::vec3 position = scene.GetWorldTransform(rig)[3];
+		CHECK(position.z == doctest::Approx(-1));
+		CHECK(position.x == doctest::Approx(0).epsilon(1e-5));
+		component.RootJoint = "Missing";
+		const auto since = Log::GetHistory().GetTotalCount();
+		animation.Update(0.5f);
+		animation.Update(0.5f);
+		CHECK(CountLogMessages(since, "RootJoint must name") == 1);
+		CHECK(glm::vec3(scene.GetWorldTransform(rig)[3]) == position);
+	}
+
+	TEST_CASE("Blend-space graph states follow named parameters and root motion bypasses velocity matching")
+	{
+		ClearAssetCache clear;
+		TempProject project("GraphBlend");
+		Scene scene;
+		auto graph = StateGraph();
+		graph["InitialState"] = "Walk";
+		graph["States"][1].erase("Clip");
+		graph["States"][1]["BlendSpace"] = "Move";
+		graph["States"][1]["ParameterX"] = "Speed";
+		auto rig = GraphAnimator(scene, project, graph);
+		auto& component = rig.GetComponent<AnimatorComponent>();
+		component.MatchVelocity = true;
+		component.BlendSpaces = { { .Name = "Move", .Samples = { { .Clip = "Step", .Speed = 1 }, { .Clip = "Cubic", .X = 1, .Speed = 1 } } } };
+		AnimationSystem animation(scene);
+		animation.Update(0.5f);
+		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(0.5f));
+		REQUIRE(animation.SetParameter(rig, "Speed", 1.0f));
+		animation.Update(0);
+		CHECK(animation.GetBlendSpaceWeights(rig) == std::vector<std::pair<std::string, float>>{ { "Step", 0 }, { "Cubic", 1 } });
+	}
+
+	TEST_CASE("Character root motion collides preserves vertical input restores gameplay and accumulates substeps")
+	{
+		ClearAssetCache clear;
+		TempProject project("RootCharacter");
+		for (bool wall : { false, true })
+		{
+			CAPTURE(wall);
+			Scene scene;
+			auto rig = GraphAnimator(scene, project, StateGraph());
+			auto& component = rig.GetComponent<AnimatorComponent>();
+			component.StateMachine.clear();
+			component.Clip = "Step";
+			rig.AddComponent<CharacterControllerComponent>().GravityFactor = 0;
+			rig.AddComponent<CapsuleColliderComponent>();
+			if (wall)
+			{
+				auto obstacle = scene.CreateEntity("Wall");
+				obstacle.GetComponent<TransformComponent>().Translation = { 1.5f, 0, 0 };
+				obstacle.AddComponent<RigidBodyComponent>();
+				obstacle.AddComponent<BoxColliderComponent>().HalfExtents = { 0.1f, 5, 5 };
+			}
+			scene.OnSimulationStart();
+			scene.GetPhysicsWorld()->MoveCharacter(rig, { 3, 0.5f, 0 });
+			for (int i = 0; i < 2000; i++)
+				scene.OnUpdate(0.0005f);
+			const glm::vec3 position = scene.GetWorldTransform(rig)[3];
+			CHECK(position.x > 0.8f);
+			CHECK(position.x < 1.05f);
+			CHECK(position.y == doctest::Approx(0.5f).epsilon(0.03));
+			if (!wall)
+			{
+				CHECK(position.x == doctest::Approx(1.0f).epsilon(0.03));
+				scene.GetAnimationSystem()->Pause(rig, true);
+				for (int i = 0; i < 60; i++)
+					scene.OnUpdate(Step);
+				CHECK(glm::vec3(scene.GetWorldTransform(rig)[3]).x == doctest::Approx(4.0f).epsilon(0.03));
+			}
+			scene.OnSimulationStop();
+		}
+	}
+
+	TEST_CASE("Graph authoring validates before replacing an asset")
+	{
+		ClearAssetCache clear;
+		TempProject project("GraphAuthoring");
+		AutomationSession session;
+		CommandRegistry commands;
+		const std::string path = "Assets/Animations/Test.banimgraph";
+		const auto valid = StateGraph().dump();
+		commands.Execute(session, "asset.write", { { "path", path }, { "content", valid } });
+		CHECK_THROWS_AS(commands.Execute(session, "asset.write", { { "path", path }, { "content", "{}" } }), CommandError);
+		CHECK(commands.Execute(session, "asset.read", { { "path", path } })["content"] == valid);
+	}
+}
+
+TEST_SUITE("Animation")
+{
+	TEST_CASE("A paused graph retains triggers and a missing target retries without consuming them")
+	{
+		ClearAssetCache clear;
+		TempProject project("GraphRetry");
+		Scene scene;
+		auto graph = StateGraph();
+		graph["States"][2].erase("Clip");
+		graph["States"][2]["BlendSpace"] = "JumpSpace";
+		auto rig = GraphAnimator(scene, project, graph);
+		auto& component = rig.GetComponent<AnimatorComponent>();
+		AnimationSystem animation(scene);
+		REQUIRE(animation.SetTrigger(rig, "Jump"));
+		animation.Pause(rig, true);
+		animation.Update(1);
+		CHECK(animation.GetState(rig) == "Idle");
+		animation.Pause(rig, false);
+		const auto since = Log::GetHistory().GetTotalCount();
+		animation.Update(0.1f);
+		animation.Update(0.1f);
+		CHECK(animation.GetState(rig) == "Idle");
+		CHECK(CountLogMessages(since, "state 'Air' cannot play") == 1);
+		component.BlendSpaces = { { .Name = "JumpSpace", .Samples = { { .Clip = "Step" } } } };
+		component.RootMotion = false;
+		animation.Update(0.5f);
+		CHECK(animation.GetState(rig) == "Air");
+		CHECK(rig.GetComponent<TransformComponent>().Translation.x == 0);
+		CHECK((*animation.GetPose(rig))[2][3].x == doctest::Approx(0.5f));
+		component.RootMotion = true;
+		animation.Update(0.5f);
+		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(0.5f));
+		REQUIRE(animation.PlayBlendSpace(rig, "JumpSpace", { 0, 0 }));
+		CHECK(animation.GetState(rig).empty());
+	}
+
+	TEST_CASE("Direct two-clip blends extract root motion from both visible clips")
+	{
+		ClearAssetCache clear;
+		TempProject project("RootBlend");
+		Scene scene;
+		auto rig = GraphAnimator(scene, project, StateGraph());
+		AnimationSystem animation(scene);
+		REQUIRE(animation.Blend(rig, "Step", "Bend", 0.0f));
+		animation.Update(0.5f);
+		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(0.5f));
+		CHECK((*animation.GetPose(rig))[2][3].x == doctest::Approx(0));
+	}
+}
+
+TEST_SUITE("Animation")
+{
+	TEST_CASE("A root-motion crossfade never applies an outgoing STEP key after the fade ends")
+	{
+		ClearAssetCache clear;
+		TempProject project("RootFadeWindow");
+		Scene scene;
+		auto graph = StateGraph();
+		graph["States"][0]["Clip"] = "Step";
+		graph["States"][0]["RootMotion"] = true;
+		graph["States"][1]["Clip"] = "Bend";
+		graph["States"][1]["RootMotion"] = false;
+		graph["Transitions"][1]["Duration"] = 0.5;
+		float expected = 0;
+		SUBCASE("Outgoing motion after the fade is invisible") {}
+		SUBCASE("Incoming motion after the fade has full weight")
+		{
+			graph["States"][0]["Clip"] = "Bend";
+			graph["States"][0]["RootMotion"] = false;
+			graph["States"][1]["Clip"] = "Step";
+			graph["States"][1]["RootMotion"] = true;
+			expected = 2;
+		}
+		auto rig = GraphAnimator(scene, project, graph);
+		rig.GetComponent<AnimatorComponent>().Mesh = FixturePath().string(); // STEP's first move is at 1 second.
+		AnimationSystem animation(scene);
+		REQUIRE(animation.SetParameter(rig, "Speed", 1.0f));
+		animation.Update(1.5f);
+		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(expected));
+	}
+}
+
+TEST_SUITE("Animation")
+{
+	TEST_CASE("Runtime character creation and collider rebuilding preserve queued root motion")
+	{
+		ClearAssetCache clear;
+		TempProject project("RootCharacterRebuild");
+		Scene scene;
+		auto rig = GraphAnimator(scene, project, StateGraph());
+		auto& component = rig.GetComponent<AnimatorComponent>();
+		component.StateMachine.clear();
+		component.Clip = "Step";
+		auto wall = scene.CreateEntity("Wall");
+		wall.GetComponent<TransformComponent>().Translation = { 1.5f, 0, 0 };
+		wall.AddComponent<RigidBodyComponent>();
+		wall.AddComponent<BoxColliderComponent>().HalfExtents = { 0.1f, 5, 5 };
+		scene.OnSimulationStart();
+		rig.AddComponent<CharacterControllerComponent>().GravityFactor = 0;
+		rig.AddComponent<CapsuleColliderComponent>();
+		scene.OnUpdate(2);
+		CHECK(rig.GetComponent<TransformComponent>().Translation.x < 1.1f);
+		CHECK(rig.GetComponent<TransformComponent>().Translation.x > 0.8f);
+		// Remove the obstacle, then rebuild between extracting the next delta and stepping physics.
+		scene.DestroyEntity(wall);
+		auto* animation = scene.GetAnimationSystem();
+		animation->Update(0.5f, false);
+		const float before = rig.GetComponent<TransformComponent>().Translation.x;
+		rig.GetComponent<CapsuleColliderComponent>().Radius = 0.4f;
+		scene.GetRegistry().patch<CapsuleColliderComponent>(rig);
+		scene.GetPhysicsWorld()->Step(0.5f);
+		CHECK(rig.GetComponent<TransformComponent>().Translation.x == doctest::Approx(before + 0.5f).epsilon(0.02));
+		scene.OnSimulationStop();
+	}
+}
+
+TEST_SUITE("Animation")
+{
+	TEST_CASE("Blend-space exit times follow synchronized phase when parameter changes shorten the cycle")
+	{
+		ClearAssetCache clear;
+		TempProject project("GraphExitPhase");
+		Scene scene;
+		auto graph = StateGraph();
+		graph["States"][0].erase("Clip");
+		graph["States"][0]["BlendSpace"] = "Move";
+		graph["States"][0]["ParameterX"] = "Speed";
+		graph["Transitions"][1]["ExitTime"] = 0.75;
+		auto rig = GraphAnimator(scene, project, graph);
+		auto model = FixtureJson();
+		const float times[] = { 0, 0.5f, 1 };
+		model["accessors"].push_back({ { "componentType", 5126 }, { "count", 3 }, { "type", "SCALAR" } });
+		ReplaceAccessorBytes(model, 11, times, sizeof(times));
+		model["animations"][0]["samplers"][0]["input"] = 11;
+		rig.GetComponent<AnimatorComponent>().Mesh = project.WriteFile("Assets/Models/Cycles.gltf", model.dump());
+		rig.GetComponent<AnimatorComponent>().BlendSpaces = { { .Name = "Move", .Samples = { { .Clip = "Step" }, { .Clip = "Bend", .X = 1 } } } };
+		AnimationSystem animation(scene);
+		animation.Update(1);                                 // Halfway through the two-second cycle.
+		REQUIRE(animation.SetParameter(rig, "Speed", 1.0f)); // One-second cycle, still halfway through it.
+		animation.Update(0);
+		CHECK(animation.GetState(rig) == "Idle");
+		animation.Update(0.3f);
+		animation.Update(0);
+		CHECK(animation.GetState(rig) == "Walk");
 	}
 }

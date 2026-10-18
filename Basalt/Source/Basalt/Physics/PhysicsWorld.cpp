@@ -496,6 +496,29 @@ namespace Basalt {
 		impl.ApplyPendingChanges();
 
 		m_Accumulator += ts.GetSeconds();
+		// Preserve animation displacement on frames below the fixed timestep, and distribute it over this
+		// frame's substeps. Finishing or removing an Animator must not drop its last queued displacement.
+		uint32_t plannedSteps = 0;
+		float remaining = m_Accumulator;
+		while (remaining >= fixedStep && plannedSteps < settings.MaxStepsPerFrame)
+		{
+			remaining -= fixedStep;
+			plannedSteps++;
+		}
+		for (auto& [id, character] : impl.Characters)
+		{
+			character.RootMotionVelocity.reset();
+			if (auto it = impl.RootMotion.find(id); plannedSteps > 0 && it != impl.RootMotion.end())
+			{
+				auto& request = it->second;
+				if (request.Active || glm::any(glm::notEqual(request.Pending, glm::vec3(0))))
+					character.RootMotionVelocity = request.Pending / (fixedStep * static_cast<float>(plannedSteps));
+				request.Pending = glm::vec3(0);
+			}
+		}
+		std::erase_if(impl.RootMotion, [&](const auto& entry) {
+			return !impl.Characters.contains(entry.first) || (!entry.second.Active && entry.second.Pending == glm::vec3(0));
+		});
 		uint32_t steps = 0;
 		while (m_Accumulator >= fixedStep && steps < settings.MaxStepsPerFrame)
 		{

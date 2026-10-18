@@ -6,6 +6,7 @@
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Math/Math.h"
+#include "Basalt/Physics/PhysicsWorld.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
 
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <utility>
 
 namespace Basalt {
@@ -122,13 +124,17 @@ namespace Basalt {
 		}
 		auto [it, inserted] = m_Playback.try_emplace(entity.GetUUID());
 		auto& playback = it->second;
-		if (inserted || playback.Handle != static_cast<entt::entity>(entity) || playback.Source != source || playback.ConfiguredClip != component->Clip)
+		const auto graph = AssetManager::GetAnimationGraph(component->StateMachine);
+		if (inserted || playback.Graph != graph || playback.ConfiguredGraph != component->StateMachine || playback.Handle != static_cast<entt::entity>(entity) || playback.Source != source || playback.ConfiguredClip != component->Clip)
 		{
 			playback = {};
 			playback.Handle = entity;
 			playback.EntityName = entity.GetName();
 			playback.Source = source;
 			playback.ConfiguredClip = component->Clip;
+			playback.ConfiguredGraph = component->StateMachine;
+			playback.Graph = graph;
+			playback.Looping = component->Looping;
 			playback.Clip = FindClip(*source, component->Clip);
 			if (playback.Clip < 0 && !component->Clip.empty())
 			{
@@ -143,7 +149,55 @@ namespace Basalt {
 				}
 			}
 			playback.Playing = component->PlayOnStart && (playback.Clip >= 0 || playback.Space);
+			if (!component->StateMachine.empty())
+			{
+				playback.Playing = false;
+				playback.Clip = -1;
+				playback.Space.reset();
+				playback.PendingStart.clear();
+				if (graph)
+				{
+					for (const auto& parameter : graph->Parameters)
+						playback.Parameters.push_back(parameter.Default);
+					playback.GraphActive = true;
+					if (const auto* initial = graph->FindState(graph->InitialState))
+						EnterState(playback, *initial, *component, 0);
+					playback.Paused = !component->PlayOnStart;
+					playback.Playing = playback.Playing && component->PlayOnStart;
+				}
+			}
 			Evaluate(playback);
+		}
+		const auto oldRoot = playback.RootNode;
+		const bool oldEnabled = playback.RootMotion;
+		playback.RootNode = -1;
+		std::string problem;
+		const auto* state = playback.GraphActive && graph ? graph->FindState(playback.State) : nullptr;
+		playback.RootMotion = component->RootMotion && (!playback.GraphActive || (state && state->RootMotion));
+		if (!component->RootMotion)
+			playback.OutgoingRootMotion = false;
+		if (playback.RootMotion || playback.OutgoingRootMotion)
+		{
+			playback.RootNode = component->RootJoint.empty() ? -1 : FindNode(*source, component->RootJoint);
+			if (playback.RootNode < 0)
+				problem = "RootJoint must name a model node for root motion";
+		}
+		if (problem != playback.RootProblem)
+		{
+			if (!problem.empty())
+				BS_CORE_ERROR("Animator '{}': {}", entity.GetName(), problem);
+			playback.RootProblem = problem;
+		}
+		if (oldRoot != playback.RootNode || oldEnabled != playback.RootMotion)
+			Evaluate(playback);
+		if (!playback.GraphActive)
+		{
+			playback.Looping = component->Looping;
+			if (playback.FadeDuration == 0)
+			{
+				playback.OutgoingLooping = component->Looping;
+				playback.OutgoingRootMotion = playback.Outgoing >= 0 && component->RootMotion;
+			}
 		}
 		return &playback;
 	}
@@ -283,12 +337,18 @@ namespace Basalt {
 		}
 		else
 			playback.Local = SampleAnimation(*playback.Source, playback.Rest || playback.Clip < 0 ? nullptr : &playback.Source->Animations[playback.Clip], static_cast<float>(playback.Time));
+		bool validRoot = StripRoot(playback, playback.Local, playback.RootMotion && !playback.Rest);
 		if (playback.BlendWeight < 1 && !playback.Rest)
 		{
-			const auto from = playback.Outgoing >= 0 ? SampleAnimation(*playback.Source, &playback.Source->Animations[playback.Outgoing], static_cast<float>(playback.OutgoingTime)) : playback.Snapshot;
+			auto from = playback.Outgoing >= 0 ? SampleAnimation(*playback.Source, &playback.Source->Animations[playback.Outgoing], static_cast<float>(playback.OutgoingTime)) : playback.Snapshot;
+			if (playback.Outgoing >= 0)
+				validRoot = StripRoot(playback, from, playback.OutgoingRootMotion) && validRoot;
 			BlendAnimationPose(playback.Local, from, playback.BlendWeight);
 		}
-		bool valid = ComposeAnimationPose(*playback.Source, playback.Local, playback.Globals);
+		if (!validRoot && !playback.InvalidRootPose)
+			BS_CORE_ERROR("Animator '{}': root motion cannot strip a degenerate pose", playback.EntityName);
+		playback.InvalidRootPose = !validRoot;
+		bool valid = validRoot && ComposeAnimationPose(*playback.Source, playback.Local, playback.Globals);
 		if (valid)
 			for (const auto& skin : playback.Source->Skins)
 				valid = valid && !BuildSkinPalette(skin, playback.Globals).empty();
@@ -302,7 +362,7 @@ namespace Basalt {
 		playback.InvalidPose = !valid;
 	}
 
-	void AnimationSystem::Update(Timestep timestep)
+	void AnimationSystem::Update(Timestep timestep, bool updateAttachments)
 	{
 		const float seconds = timestep.GetSeconds();
 		if (!std::isfinite(seconds) || seconds < 0)
@@ -310,6 +370,9 @@ namespace Basalt {
 			BS_CORE_ERROR("AnimationSystem: ignoring a time step of {} s (must be nonnegative and finite)", seconds);
 			return;
 		}
+		if (auto* physics = m_Scene.GetPhysicsWorld())
+			for (auto handle : m_Scene.GetAllEntitiesWith<CharacterControllerComponent>())
+				physics->SetRootMotionDelta(Entity(handle, &m_Scene), std::nullopt);
 		for (auto handle : m_Scene.GetAllEntitiesWith<AnimatorComponent>())
 		{
 			Entity entity(handle, &m_Scene);
@@ -349,6 +412,8 @@ namespace Basalt {
 					playback->PendingStart.clear();
 				}
 			}
+			if (playback->GraphActive && !playback->Paused && !playback->Rest)
+				UpdateGraph(*playback, component);
 			if (!playback->Playing)
 				continue;
 			if (playback->Space)
@@ -365,7 +430,7 @@ namespace Basalt {
 			playback->InvalidSpeed = invalidSpeed;
 			const double plainSpeed = std::isfinite(component.Speed) ? std::clamp(component.Speed, 0.0f, MaxAnimatorSpeed) : 0;
 			double speed = plainSpeed;
-			if (playback->Space && component.MatchVelocity)
+			if (playback->Space && component.MatchVelocity && !playback->RootMotion)
 			{
 				// One rate for the whole space: the moving samples' share (Speed > 0) plays as fast as the entity
 				// really moves relative to their weighted Speed, the rest (idle, unknown) at the plain Speed, so the
@@ -386,6 +451,26 @@ namespace Basalt {
 				}
 			}
 			const double advance = static_cast<double>(seconds) * speed;
+			glm::mat4 motion = CurrentRootDelta(*playback, advance);
+			if (playback->BlendWeight < 1)
+			{
+				// Sample only the visible interval of the outgoing clip; a large frame can extend past the fade.
+				const double shown = playback->FadeDuration > 0 ? std::min(static_cast<double>(seconds), playback->FadeDuration - playback->FadeTime) : seconds;
+				glm::mat4 tail(1);
+				if (shown < seconds && seconds > 0)
+				{
+					const glm::mat4 fading = CurrentRootDelta(*playback, advance * shown / seconds);
+					tail = glm::inverse(fading) * motion;
+					motion = fading;
+				}
+				glm::mat4 outgoing(1);
+				if (playback->Outgoing >= 0 && playback->OutgoingRootMotion && playback->RootNode >= 0)
+					outgoing = RootDelta(*playback, playback->Outgoing, playback->OutgoingTime, shown * plainSpeed, playback->OutgoingLooping);
+				const double weight = playback->FadeDuration > 0 ? playback->BlendWeight + shown / (2.0 * playback->FadeDuration) : playback->BlendWeight;
+				const glm::vec3 translation = glm::mix(glm::vec3(outgoing[3]), glm::vec3(motion[3]), static_cast<float>(weight));
+				const float yaw = std::lerp(std::atan2(outgoing[2].x, outgoing[2].z), std::atan2(motion[2].x, motion[2].z), static_cast<float>(weight));
+				motion = Math::ComposeTransform(translation, glm::vec3(0, yaw, 0), glm::vec3(1)) * tail;
+			}
 			const UUID id = entity.GetUUID();
 			size_t budget = MaxEventsPerFrame;
 			if (playback->Space)
@@ -395,8 +480,8 @@ namespace Basalt {
 				// A two-clip blend's second clip fires only while it shows; a crossfade's target always does, from its
 				// first frame.
 				if (playback->BlendWeight > 0 || playback->FadeDuration > 0)
-					CollectEvents(*playback, component, playback->Clip, playback->Time, advance, id, budget);
-				playback->Time = WrapClock(playback->Time + advance, playback->Source->Animations[playback->Clip].Duration, component.Looping);
+					CollectEvents(*playback, component, playback->Clip, playback->Time, advance, id, budget, playback->Looping);
+				playback->Time = WrapClock(playback->Time + advance, playback->Source->Animations[playback->Clip].Duration, playback->Looping);
 			}
 			if (playback->Outgoing >= 0)
 			{
@@ -406,9 +491,12 @@ namespace Basalt {
 				const double outgoingAdvance = static_cast<double>(seconds) * outgoingRate;
 				const double shown = playback->FadeDuration > 0 ? std::min(static_cast<double>(seconds), playback->FadeDuration - playback->FadeTime) * outgoingRate : outgoingAdvance;
 				if (playback->BlendWeight < 1)
-					CollectEvents(*playback, component, playback->Outgoing, playback->OutgoingTime, shown, id, budget);
-				playback->OutgoingTime = WrapClock(playback->OutgoingTime + outgoingAdvance, playback->Source->Animations[playback->Outgoing].Duration, component.Looping);
+				{
+					CollectEvents(*playback, component, playback->Outgoing, playback->OutgoingTime, shown, id, budget, playback->OutgoingLooping);
+				}
+				playback->OutgoingTime = WrapClock(playback->OutgoingTime + outgoingAdvance, playback->Source->Animations[playback->Outgoing].Duration, playback->OutgoingLooping);
 			}
+			const bool rootDriving = playback->RootMotion || playback->OutgoingRootMotion;
 			if (playback->FadeDuration > 0)
 			{
 				playback->FadeTime += seconds;
@@ -418,13 +506,19 @@ namespace Basalt {
 					ClearTransition(*playback);
 				}
 			}
+			const double cycleDuration = playback->Space ? playback->Space->Duration : playback->Source->Animations[playback->Clip].Duration;
+			if (cycleDuration > 0)
+				playback->StatePhase += advance / cycleDuration;
+			if (rootDriving)
+				ApplyRootMotion(entity, *playback, motion, seconds);
 			const bool finished = playback->Space ? playback->Space->Phase >= 1 : playback->Time >= playback->Source->Animations[playback->Clip].Duration;
-			if (!component.Looping && finished && playback->FadeDuration == 0 &&
+			if (!playback->Looping && finished && playback->FadeDuration == 0 &&
 				(playback->Outgoing < 0 || playback->OutgoingTime >= playback->Source->Animations[playback->Outgoing].Duration))
 				playback->Playing = false;
 			Evaluate(*playback);
 		}
-		UpdateAttachments();
+		if (updateAttachments)
+			UpdateAttachments();
 	}
 
 	void AnimationSystem::AdvanceSpace(Playback& playback, SpaceState& state, const AnimatorComponent& component, double advance, UUID id, size_t& budget)
@@ -432,19 +526,19 @@ namespace Basalt {
 		if (state.Duration <= 0)
 		{
 			// Static poses have no cycle: a non-looping space of them is done at once.
-			if (!component.Looping && advance > 0)
+			if (!playback.Looping && advance > 0)
 				state.Phase = 1;
 			return;
 		}
 		// The heaviest sample alone fires events: the clips are in step, so each would fire its own copy.
 		const double phaseAdvance = advance / state.Duration;
 		const double dominantDuration = playback.Source->Animations[playback.Clip].Duration;
-		CollectEvents(playback, component, playback.Clip, state.Phase * dominantDuration, phaseAdvance * dominantDuration, id, budget);
-		state.Phase = WrapClock(state.Phase + phaseAdvance, 1.0, component.Looping);
+		CollectEvents(playback, component, playback.Clip, state.Phase * dominantDuration, phaseAdvance * dominantDuration, id, budget, playback.Looping);
+		state.Phase = WrapClock(state.Phase + phaseAdvance, 1.0, playback.Looping);
 		playback.Time = state.Phase * state.Duration;
 	}
 
-	void AnimationSystem::CollectEvents(Playback& playback, const AnimatorComponent& component, int32_t clip, double from, double advance, UUID id, size_t& budget)
+	void AnimationSystem::CollectEvents(Playback& playback, const AnimatorComponent& component, int32_t clip, double from, double advance, UUID id, size_t& budget, bool looping)
 	{
 		if (advance <= 0 || component.Events.empty())
 			return;
@@ -476,7 +570,7 @@ namespace Basalt {
 			}
 			return true;
 		};
-		if (component.Looping && duration > 0)
+		if (looping && duration > 0)
 		{
 			// The same arithmetic as the clock (fmod of from + advance), so the windows meet where the clock lands
 			// (for a blend space, whose clock is its phase, up to rounding).
@@ -595,9 +689,292 @@ namespace Basalt {
 		m_AttachmentProblems = std::move(problems);
 	}
 
+	namespace {
+		bool HorizontalTransform(const MeshSource& source, const AnimationClip* clip, float time, int32_t node, glm::mat4& out)
+		{
+			std::vector<glm::mat4> globals;
+			if (node < 0 || !EvaluateAnimation(source, clip, time, globals) || static_cast<size_t>(node) >= globals.size())
+				return false;
+			glm::vec3 position, scale;
+			glm::quat rotation;
+			if (!Math::DecomposeTransform(globals[node], position, rotation, scale))
+				return false;
+			const glm::vec3 forward = rotation * glm::vec3(0, 0, 1);
+			if (glm::length(glm::vec2(forward.x, forward.z)) < 1e-6f)
+				return false;
+			out = Math::ComposeTransform({ position.x, 0, position.z }, glm::vec3(0, std::atan2(forward.x, forward.z), 0), glm::vec3(1));
+			return Math::IsFinite(out);
+		}
+	}
+
+	bool AnimationSystem::StripRoot(Playback& playback, AnimationLocalPose& pose, bool enabled)
+	{
+		if (!enabled || playback.RootNode < 0 || pose.Nodes.empty())
+			return true;
+		std::vector<glm::mat4> globals;
+		glm::mat4 reference(1);
+		if (!ComposeAnimationPose(*playback.Source, pose, globals) || !HorizontalTransform(*playback.Source, nullptr, 0, playback.RootNode, reference))
+			return false;
+		glm::vec3 position, scale;
+		glm::quat rotation;
+		if (!Math::DecomposeTransform(globals[playback.RootNode], position, rotation, scale))
+			return false;
+		const glm::vec3 forward = rotation * glm::vec3(0, 0, 1);
+		const glm::mat4 horizontal = Math::ComposeTransform({ position.x, 0, position.z }, glm::vec3(0, std::atan2(forward.x, forward.z), 0), glm::vec3(1));
+		const glm::mat4 correction = reference * glm::inverse(horizontal);
+		// Apply in model space to every hierarchy root, including mesh nodes. Vertical motion and tilt stay authored.
+		for (size_t i = 0; i < pose.Nodes.size(); i++)
+			if (playback.Source->Nodes[i].Parent < 0)
+			{
+				auto& root = pose.Nodes[i];
+				if (!Math::DecomposeTransform(correction * Math::ComposeTransform(root.Translation, root.Rotation, root.Scale), root.Translation, root.Rotation, root.Scale))
+					return false;
+			}
+		return true;
+	}
+
+	glm::mat4 AnimationSystem::CurrentRootDelta(const Playback& playback, double advance)
+	{
+		glm::mat4 motion(1);
+		if (playback.RootMotion && playback.RootNode >= 0)
+		{
+			if (playback.Space)
+			{
+				glm::vec3 translation(0);
+				float yaw = 0;
+				const auto& space = *playback.Space;
+				if (space.Duration > 0)
+					for (const auto& sample : space.Samples)
+						if (sample.Weight > 0 && sample.Clip >= 0)
+						{
+							const double duration = playback.Source->Animations[sample.Clip].Duration;
+							const auto delta = RootDelta(playback, sample.Clip, space.Phase * duration, advance / space.Duration * duration, playback.Looping);
+							translation += glm::vec3(delta[3]) * sample.Weight;
+							yaw += std::atan2(delta[2].x, delta[2].z) * sample.Weight;
+						}
+				motion = Math::ComposeTransform(translation, glm::vec3(0, yaw, 0), glm::vec3(1));
+			}
+			else
+				motion = RootDelta(playback, playback.Clip, playback.Time, advance, playback.Looping);
+		}
+		return motion;
+	}
+
+	glm::mat4 AnimationSystem::RootDelta(const Playback& playback, int32_t clipIndex, double from, double advance, bool looping)
+	{
+		if (clipIndex < 0 || advance <= 0)
+			return glm::mat4(1);
+		const auto& clip = playback.Source->Animations[clipIndex];
+		const double duration = clip.Duration;
+		if (duration <= 0)
+			return glm::mat4(1);
+		glm::mat4 start, end, zero, last;
+		if (!HorizontalTransform(*playback.Source, &clip, static_cast<float>(from), playback.RootNode, start) ||
+			!HorizontalTransform(*playback.Source, &clip, 0, playback.RootNode, zero) ||
+			!HorizontalTransform(*playback.Source, &clip, clip.Duration, playback.RootNode, last))
+			return glm::mat4(std::numeric_limits<float>::quiet_NaN());
+		const double to = from + advance;
+		if (!HorizontalTransform(*playback.Source, &clip, static_cast<float>(looping ? std::fmod(to, duration) : std::min(to, duration)), playback.RootNode, end))
+			return glm::mat4(std::numeric_limits<float>::quiet_NaN());
+		glm::mat4 cycles(1);
+		if (looping)
+		{
+			// Exponentiation also handles many wraps without a frame-time-dependent loop over cycles.
+			double count = std::floor(to / duration);
+			glm::mat4 cycle = last * glm::inverse(zero);
+			while (count >= 1)
+			{
+				if (std::fmod(count, 2.0) >= 1)
+					cycles = cycles * cycle;
+				count = std::floor(count / 2.0);
+				if (count >= 1)
+					cycle = cycle * cycle;
+			}
+		}
+		glm::mat4 reference(1);
+		if (!HorizontalTransform(*playback.Source, nullptr, 0, playback.RootNode, reference))
+			return glm::mat4(std::numeric_limits<float>::quiet_NaN());
+		return reference * glm::inverse(start) * cycles * end * glm::inverse(reference);
+	}
+
+	void AnimationSystem::ApplyRootMotion(Entity entity, Playback& playback, const glm::mat4& delta, float seconds)
+	{
+		if (seconds <= 0 || playback.RootNode < 0)
+			return;
+		auto report = [&](const std::string& problem) {
+			if (problem != playback.RootApplyProblem && !problem.empty())
+				BS_CORE_ERROR("Animator '{}': {}", entity.GetName(), problem);
+			playback.RootApplyProblem = problem;
+		};
+		const glm::mat4 old = m_Scene.GetWorldTransform(entity);
+		glm::vec3 position, scale;
+		glm::quat rotation;
+		if (!Math::IsFinite(delta) || !Math::DecomposeTransform(old, position, rotation, scale))
+		{
+			report("root motion needs a finite delta and nondegenerate world transform");
+			return;
+		}
+		const glm::vec3 displacement = rotation * (scale * glm::vec3(delta[3]));
+		const float yaw = std::atan2(delta[2].x, delta[2].z);
+		auto* physics = m_Scene.GetPhysicsWorld();
+		const bool character = physics && entity.HasComponent<CharacterControllerComponent>();
+		const glm::mat4 world = Math::ComposeTransform(character ? position : position + displacement, rotation * glm::angleAxis(yaw, glm::vec3(0, 1, 0)), scale);
+		glm::mat4 local = world;
+		if (const Entity parent = entity.GetParent())
+			local = glm::inverse(m_Scene.GetWorldTransform(parent)) * world;
+		glm::vec3 localPosition, localScale;
+		glm::quat localRotation;
+		if (!Math::IsFinite(world) || !Math::IsFinite(local) || !Math::DecomposeTransform(local, localPosition, localRotation, localScale))
+		{
+			report("root motion cannot represent the resulting local transform (check parent scale)");
+			return;
+		}
+		if (character)
+			physics->SetRootMotionDelta(entity, displacement);
+		m_Scene.SetWorldTransform(entity, world);
+		report("");
+	}
+
+	bool AnimationSystem::EnterState(Playback& playback, const AnimationState& state, const AnimatorComponent& component, float fade)
+	{
+		SpaceState space{ .Name = state.BlendSpace };
+		for (size_t i = 0; i < playback.Graph->Parameters.size(); i++)
+		{
+			if (playback.Graph->Parameters[i].Name == state.ParameterX)
+				space.Parameter.x = playback.Parameters[i];
+			if (playback.Graph->Parameters[i].Name == state.ParameterY)
+				space.Parameter.y = playback.Parameters[i];
+		}
+		std::string problem;
+		const int32_t clip = state.BlendSpace.empty() ? FindClip(*playback.Source, state.Clip) : ResolveSpaceState(*playback.Source, component, space, problem);
+		if (clip < 0 || !problem.empty())
+		{
+			const std::string message = "state '" + state.Name + "' cannot play: " + (problem.empty() ? "clip '" + state.Clip + "' not found" : problem);
+			if (message != playback.PlayProblem)
+				BS_CORE_ERROR("Animator '{}': {}", playback.EntityName, message);
+			playback.PlayProblem = message;
+			return false;
+		}
+		playback.PlayProblem.clear();
+		if (fade > 0)
+			BeginTransition(playback, fade);
+		else
+			ClearTransition(playback);
+		playback.Space.reset();
+		if (!state.BlendSpace.empty())
+			playback.Space = std::move(space);
+		playback.State = state.Name;
+		playback.StatePhase = 0;
+		playback.Looping = state.Looping;
+		playback.RootMotion = component.RootMotion && state.RootMotion;
+		playback.RootNode = component.RootJoint.empty() ? -1 : FindNode(*playback.Source, component.RootJoint);
+		Start(playback, clip);
+		return true;
+	}
+
+	void AnimationSystem::UpdateGraph(Playback& playback, const AnimatorComponent& component)
+	{
+		if (!playback.Graph)
+			return;
+		const AnimationGraph& graph = *playback.Graph;
+		if (playback.State.empty())
+		{
+			if (const auto* initial = graph.FindState(graph.InitialState))
+				EnterState(playback, *initial, component, 0);
+			return;
+		}
+		const auto* state = graph.FindState(playback.State);
+		if (!state)
+			return;
+		if (playback.Space)
+		{
+			for (size_t i = 0; i < graph.Parameters.size(); i++)
+			{
+				if (graph.Parameters[i].Name == state->ParameterX)
+					playback.Space->Parameter.x = playback.Parameters[i];
+				if (graph.Parameters[i].Name == state->ParameterY)
+					playback.Space->Parameter.y = playback.Parameters[i];
+			}
+			ResolveSpace(playback, *playback.Space, component);
+		}
+		const double duration = playback.Space ? playback.Space->Duration : (playback.Clip >= 0 ? playback.Source->Animations[playback.Clip].Duration : 0);
+		for (const auto& transition : graph.Transitions)
+		{
+			if ((!transition.From.empty() && transition.From != playback.State) || transition.To == playback.State)
+				continue;
+			if (transition.ExitTime && duration > 0 && playback.StatePhase < *transition.ExitTime)
+				continue;
+			bool matches = true;
+			for (const auto& condition : transition.Conditions)
+			{
+				const float value = playback.Parameters[condition.Parameter];
+				switch (condition.Comparison)
+				{
+					case AnimationComparison::Greater:
+						matches = matches && value > condition.Value;
+						break;
+					case AnimationComparison::Less:
+						matches = matches && value < condition.Value;
+						break;
+					case AnimationComparison::Equal:
+						matches = matches && value == condition.Value;
+						break;
+					case AnimationComparison::NotEqual:
+						matches = matches && value != condition.Value;
+						break;
+				}
+			}
+			if (!matches)
+				continue;
+			const auto* target = graph.FindState(transition.To);
+			if (target && EnterState(playback, *target, component, transition.Duration))
+			{
+				for (const auto& condition : transition.Conditions)
+					if (graph.Parameters[condition.Parameter].Type == AnimationParameterType::Trigger)
+						playback.Parameters[condition.Parameter] = 0;
+				return;
+			}
+		}
+	}
+
+	bool AnimationSystem::SetParameterValue(Entity entity, const std::string& name, float value, AnimationParameterType type)
+	{
+		auto* playback = EnsurePlayable(entity);
+		if (!playback)
+			return false;
+		if (playback->Graph && playback->GraphActive && std::isfinite(value))
+			for (size_t i = 0; i < playback->Graph->Parameters.size(); i++)
+				if (const auto& parameter = playback->Graph->Parameters[i]; parameter.Name == name && parameter.Type == type)
+				{
+					playback->Parameters[i] = value;
+					return true;
+				}
+		BS_CORE_ERROR("Animator '{}': parameter '{}' is missing, has a different type, has a non-finite value, or the state machine is inactive", entity.GetName(), name);
+		return false;
+	}
+
+	bool AnimationSystem::SetParameter(Entity entity, const std::string& name, float value)
+	{
+		return SetParameterValue(entity, name, value, AnimationParameterType::Float);
+	}
+	bool AnimationSystem::SetParameter(Entity entity, const std::string& name, bool value)
+	{
+		return SetParameterValue(entity, name, value ? 1.0f : 0.0f, AnimationParameterType::Bool);
+	}
+	bool AnimationSystem::SetTrigger(Entity entity, const std::string& name)
+	{
+		return SetParameterValue(entity, name, 1, AnimationParameterType::Trigger);
+	}
+	std::string AnimationSystem::GetState(Entity entity)
+	{
+		const auto* playback = Ensure(entity);
+		return playback && playback->GraphActive ? playback->State : std::string();
+	}
+
 	void AnimationSystem::ClearTransition(Playback& playback)
 	{
 		playback.Outgoing = -1;
+		playback.OutgoingRootMotion = false;
 		playback.OutgoingTime = 0;
 		playback.Snapshot = {};
 		playback.FadeTime = 0;
@@ -610,6 +987,8 @@ namespace Basalt {
 		playback.Snapshot = playback.Local;
 		playback.Outgoing = playback.BlendWeight >= 1 && !playback.Rest && !playback.Space ? playback.Clip : -1;
 		playback.OutgoingTime = playback.Time;
+		playback.OutgoingRootMotion = playback.RootMotion;
+		playback.OutgoingLooping = playback.Looping;
 		playback.FadeTime = 0;
 		playback.FadeDuration = seconds;
 		playback.BlendWeight = 0;
@@ -623,6 +1002,15 @@ namespace Basalt {
 		playback.Rest = false;
 		playback.EventLimitLogged = false;
 		Evaluate(playback);
+	}
+
+	void AnimationSystem::TakeDirectControl(Playback& playback, const AnimatorComponent& component)
+	{
+		playback.GraphActive = false;
+		playback.Paused = false;
+		playback.Looping = component.Looping;
+		playback.RootMotion = component.RootMotion;
+		playback.RootNode = component.RootJoint.empty() ? -1 : FindNode(*playback.Source, component.RootJoint);
 	}
 
 	bool AnimationSystem::Play(Entity entity, const std::string& clip)
@@ -639,6 +1027,7 @@ namespace Basalt {
 				BS_CORE_ERROR("Animator '{}': clip '{}' not found", entity.GetName(), clip);
 			return false;
 		}
+		TakeDirectControl(*playback, entity.GetComponent<AnimatorComponent>());
 		ClearTransition(*playback);
 		playback->Space.reset();
 		Start(*playback, selected);
@@ -661,6 +1050,7 @@ namespace Basalt {
 			return false;
 		}
 		BeginTransition(*playback, seconds);
+		TakeDirectControl(*playback, entity.GetComponent<AnimatorComponent>());
 		playback->Space.reset();
 		Start(*playback, selected);
 		return true;
@@ -683,6 +1073,7 @@ namespace Basalt {
 			BS_CORE_ERROR("Animator '{}': blend clip '{}' not found", entity.GetName(), a < 0 ? first : second);
 			return false;
 		}
+		TakeDirectControl(*playback, entity.GetComponent<AnimatorComponent>());
 		// Updating a locomotion blend's weight must not restart either clock.
 		if (playback->Outgoing != a || playback->Clip != b || playback->FadeDuration > 0 || playback->Space)
 		{
@@ -691,6 +1082,8 @@ namespace Basalt {
 		}
 		playback->Space.reset();
 		playback->Outgoing = a;
+		playback->OutgoingRootMotion = playback->RootMotion;
+		playback->OutgoingLooping = playback->Looping;
 		playback->Clip = b;
 		playback->BlendWeight = weight;
 		playback->FadeDuration = 0;
@@ -709,9 +1102,12 @@ namespace Basalt {
 		if (!playback)
 			return false;
 		const auto& component = entity.GetComponent<AnimatorComponent>();
-		const bool finished = playback->Space && playback->Space->Phase >= 1 && !component.Looping;
+		const bool finished = playback->Space && playback->Space->Phase >= 1 && !playback->Looping;
 		if (playback->Space && playback->Space->Name == space && playback->Playing && !finished)
+		{
+			TakeDirectControl(*playback, component);
 			return SetBlendSpaceParameter(entity, parameter);
+		}
 		SpaceState state{ .Name = space, .Parameter = parameter };
 		const int32_t dominant = ResolveSpaceState(*playback->Source, component, state, state.Problem);
 		// Scripts often call this every frame; a problem is logged when it appears or changes.
@@ -724,6 +1120,7 @@ namespace Basalt {
 			BeginTransition(*playback, fadeSeconds);
 		else
 			ClearTransition(*playback);
+		TakeDirectControl(*playback, component);
 		playback->Space = std::move(state);
 		Start(*playback, dominant);
 		return true;
@@ -779,7 +1176,10 @@ namespace Basalt {
 	void AnimationSystem::Pause(Entity entity, bool paused)
 	{
 		if (auto* playback = Ensure(entity))
+		{
+			playback->Paused = paused;
 			playback->Playing = !paused && (playback->Clip >= 0 || playback->Space) && !playback->Rest;
+		}
 	}
 
 	void AnimationSystem::Stop(Entity entity)
@@ -824,6 +1224,8 @@ namespace Basalt {
 		if (playback->Outgoing >= 0)
 			playback->OutgoingTime = std::min(seconds, playback->Source->Animations[playback->Outgoing].Duration);
 		playback->Rest = false;
+		const double duration = playback->Space ? playback->Space->Duration : playback->Source->Animations[playback->Clip].Duration;
+		playback->StatePhase = duration > 0 ? playback->Time / duration : 0;
 		Evaluate(*playback);
 		return true;
 	}

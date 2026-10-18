@@ -4,6 +4,7 @@
 #include "Basalt/Asset/TextureSource.h"
 #include "Basalt/Automation/AutomationEvents.h"
 #include "Basalt/Automation/AutomationSession.h"
+#include "Basalt/Animation/AnimationGraph.h"
 #include "Basalt/Automation/CommandRegistry.h"
 #include "Basalt/Automation/CommandSchema.h"
 #include "Basalt/Core/Assert.h"
@@ -1127,19 +1128,26 @@ namespace Basalt {
 				return json{ { "assets", AssetManager::ListAssets(extensions) } };
 			});
 
-			Add(registry, "asset.write", "Writes a text asset (script, prefab, scene...) to a project-relative path and reloads it: a script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts').", Schema::Object({ { "path", Schema::String("string", true) }, { "content", Schema::String("string") } }, { "path", "content" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "asset.write", "Writes a text asset (script, prefab, scene, animation graph...) to a project-relative path and reloads it. A .banimgraph is validated before replacing the file: a script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts').", Schema::Object({ { "path", Schema::String("string", true) }, { "content", Schema::String("string") } }, { "path", "content" }), [](AutomationSession& session, const json& params) {
 				RequireProject();
 				const std::string path = ProjectRelative(RequireString(params, "path"));
 				const json& content = Require(params, "content");
 				if (!content.is_string())
 					throw CommandError("'content' must be a string");
+				if (FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(path)) == ".banimgraph")
+				{
+					std::string error;
+					const auto graph = ParseJson(content.get_ref<const std::string&>(), error);
+					if (graph.is_discarded() || !AnimationGraph::FromJson(graph, error))
+						throw CommandError("invalid animation graph: " + error);
+				}
 				if (!FileSystem::WriteTextFile(Project::ResolvePath(path), content.get<std::string>()))
 					throw CommandError("cannot write '" + path + "'");
 				const AssetReloadReport report = session.OnFileWritten(path);
 				return json{ { "path", path }, { "bytes", content.get<std::string>().size() }, { "scripts", ScriptReloadJson(report) } };
 			});
 
-			Add(registry, "asset.refresh", "Reloads the asset files changed on disk since changes were last reported (by an earlier refresh, by the editor's automatic reload, or since the project was opened in this process): models and textures load again on their next use, and while the game runs (Play, not Simulate) changed scripts are hot reloaded (instances keep their fields; OnReload is called). With 'paths', reloads those files instead, changed or not (a path that does not exist and was not known is an error, and nothing is reloaded then). Files the session wrote itself (asset.write, scene.save, ...) are not reported again. Without 'paths', fails when Assets/ cannot be read.", Schema::Object({ { "paths", Schema::Array("array of project-relative file paths, optional", Schema::String("string", true)) } }), [](AutomationSession& session, const json& params) {
+			Add(registry, "asset.refresh", "Reloads the asset files changed on disk since changes were last reported (by an earlier refresh, by the editor's automatic reload, or since the project was opened in this process): models, textures and animation graphs load again on their next use (graphs restart from their initial state and parameter defaults), and while the game runs (Play, not Simulate) changed scripts are hot reloaded (instances keep their fields; OnReload is called). With 'paths', reloads those files instead, changed or not (a path that does not exist and was not known is an error, and nothing is reloaded then). Files the session wrote itself (asset.write, scene.save, ...) are not reported again. Without 'paths', fails when Assets/ cannot be read.", Schema::Object({ { "paths", Schema::Array("array of project-relative file paths, optional", Schema::String("string", true)) } }), [](AutomationSession& session, const json& params) {
 				RequireProject();
 				std::vector<FileChange> changes;
 				json warnings = json::array();
