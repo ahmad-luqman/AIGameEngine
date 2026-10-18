@@ -18,6 +18,7 @@ namespace Basalt {
 	class JobHandle
 	{
 	public:
+		explicit operator bool() const { return !!m_State; }
 		bool IsComplete() const { return !m_State || m_State->Complete.load(std::memory_order_acquire); }
 		bool Succeeded() const { return m_State && IsComplete() && m_State->Success; }
 
@@ -34,7 +35,8 @@ namespace Basalt {
 
 	// Shared CPU pool: workers take local work LIFO and steal FIFO. Waiting callers help execute
 	// queued work, so a worker may submit and wait for children even with only one worker.
-	// Callers must not create cyclic waits. Destroy on the owner thread after producers stop;
+	// Callers must not create cyclic waits; nested cooperative waits consume stack depth.
+	// Destroy on the constructing thread after producers stop;
 	// destruction drains accepted work, including children submitted by running jobs.
 	class JobSystem
 	{
@@ -47,12 +49,16 @@ namespace Basalt {
 		static JobSystem& Get();
 		static uint32_t DefaultWorkerCount();
 		uint32_t GetWorkerCount() const { return static_cast<uint32_t>(m_Workers.size()); }
+		// Rejects empty functions and external submissions during shutdown; running jobs may submit children.
 		[[nodiscard]] JobHandle Submit(std::function<void()> function);
-		// Returns false for an empty/rejected/failed job. Exceptions are logged at the worker boundary.
+		// Returns false for an empty/rejected/failed job. Exceptions are logged at the job boundary.
+		// The caller can execute unrelated queued work, so this may take longer than the target job.
 		bool Wait(const JobHandle& handle);
 		// Synchronous parallel ranges [begin, end), useful for animation/culling with disjoint outputs.
 		bool ParallelFor(uint32_t count, uint32_t grain, const std::function<void(uint32_t, uint32_t)>& function);
+		// Caller must be outside this pool's jobs; waits for every accepted task and capture release.
 		void WaitIdle();
+		bool IsInJob() const;
 
 	private:
 		struct Task

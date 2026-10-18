@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include <Basalt/Asset/AssetManager.h>
+#include <Basalt/Core/JobSystem.h>
 #include <Basalt/Asset/ImageUtils.h>
 #include <Basalt/Asset/TextureSource.h>
 #include <Basalt/Asset/MeshImporter.h>
@@ -68,6 +69,34 @@ namespace {
 
 TEST_SUITE("Assets")
 {
+	TEST_CASE("Pending imports retry only when their discovered dependencies changed")
+	{
+		BasaltTest::TempProject project("AsyncDependencyChange");
+		AssetManager::Clear();
+		const auto binary = MakeQuadBuffer();
+		project.WriteFile("Assets/quad.bin", binary);
+		project.WriteFile("Assets/normal.png", MakePng(0xFFFFFFFF));
+		const auto png = MakePng(0xFFFFFFFF);
+		project.WriteFile("Assets/quad.gltf", MakeGltfJson({ { "uri", "quad.bin" }, { "byteLength", binary.size() } }, { { { "uri", "data:image/png;base64," + BasaltTest::Base64(png.data(), png.size()) } }, { { "uri", "normal.png" } } }).dump());
+		AssetManager::RequestTexture("Assets/quad.gltf#image/0");
+		JobSystem::Get().WaitIdle();
+		// Dependency metadata is still private to the completed result at this point.
+		std::filesystem::remove(project.GetDirectory() / "Assets/quad.bin");
+		CHECK(AssetManager::ReloadChanged({ "Assets/quad.bin" }).empty());
+		AssetManager::PublishCompleted();
+		CHECK(AssetManager::IsLoading("Assets/quad.gltf"));
+		CHECK_FALSE(AssetManager::FindLoadedMesh("Assets/quad.gltf"));
+		AssetManager::WaitForLoads();
+		CHECK_FALSE(AssetManager::GetMesh("Assets/quad.gltf"));
+		CHECK_FALSE(AssetManager::GetError("Assets/quad.gltf").empty());
+		CHECK_FALSE(AssetManager::IsLoading("Assets/quad.gltf#image/0"));
+		CHECK_FALSE(AssetManager::GetError("Assets/quad.gltf#image/0").empty());
+		project.WriteFile("Assets/quad.bin", binary);
+		CHECK(AssetManager::ReloadChanged({ "Assets/quad.bin" }) == std::vector<std::string>{ "Assets/quad.gltf", "Assets/quad.gltf#image/0" });
+		CHECK(AssetManager::GetMesh("Assets/quad.gltf"));
+		AssetManager::Clear();
+	}
+
 	TEST_CASE("Built-in primitives have consistent geometry, normals and bounds")
 	{
 		for (const char* key : { "builtin://Cube", "builtin://Sphere", "builtin://Plane", "builtin://Cylinder", "builtin://Capsule" })

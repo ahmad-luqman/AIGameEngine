@@ -1,7 +1,6 @@
 #include "Basalt/Physics/PhysicsWorld.h"
 
 #include "Basalt/Core/Profiler.h"
-
 #include "Basalt/Physics/ColliderShapes.h"
 #include "Basalt/Physics/MeshShapeCache.h"
 #include "Basalt/Physics/PhysicsWorldImpl.h"

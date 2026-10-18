@@ -1,10 +1,14 @@
 #pragma once
 
 #include "Basalt/Core/JobSystem.h"
+#include "Basalt/Core/Log.h"
 #include "Basalt/Physics/JoltUtils.h"
 
 #include <Jolt/Core/JobSystemWithBarrier.h>
-#include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/Physics/PhysicsSettings.h>
+
+#include <exception>
+#include <string>
 
 namespace Basalt {
 
@@ -16,16 +20,35 @@ namespace Basalt {
 		static PhysicsJobs& Get()
 		{
 			// Construct the pool first: this adapter drains its queued references at process exit,
-			// before the pool is destroyed. A world's teardown never joins unrelated asset work.
+			// including imports, before the pool is destroyed. World teardown never joins unrelated work.
 			(void)Basalt::JobSystem::Get();
 			static PhysicsJobs jobs;
 			return jobs;
 		}
 		~PhysicsJobs() override { Basalt::JobSystem::Get().WaitIdle(); }
+		// Jolt barrier waits let the calling thread execute ready jobs too.
 		int GetMaxConcurrency() const override { return static_cast<int>(Basalt::JobSystem::Get().GetWorkerCount()) + 1; }
 		JobHandle CreateJob(const char* name, JPH::ColorArg color, const JobFunction& function, JPH::uint32 dependencies = 0) override
 		{
-			auto* job = new Job(name, color, this, function, dependencies);
+			// Guard the Jolt function itself: either a worker or a barrier-waiting thread can execute it.
+			// Jolt cannot unwind a running job: it would leave the barrier permanently unsignalled.
+			JobFunction guarded = [function, label = std::string(name)]() noexcept {
+				try
+				{
+					function();
+				}
+				catch (const std::exception& error)
+				{
+					BS_CORE_CRITICAL("Physics job '{}': {}", label, error.what());
+					std::terminate();
+				}
+				catch (...)
+				{
+					BS_CORE_CRITICAL("Physics job '{}': unknown exception", label);
+					std::terminate();
+				}
+			};
+			auto* job = new Job(name, color, this, guarded, dependencies);
 			JobHandle handle(job);
 			if (dependencies == 0)
 				QueueJob(job);
@@ -39,12 +62,23 @@ namespace Basalt {
 
 	protected:
 		void FreeJob(Job* job) override { delete job; }
-		void QueueJob(Job* job) override
+		void QueueJob(Job* job) noexcept override
 		{
-			job->AddRef();
-			// A shared capture releases the queue's reference even if submission throws.
-			auto reference = std::shared_ptr<Job>(job, [](Job* queued) { queued->Release(); });
-			(void)Basalt::JobSystem::Get().Submit([reference] { reference->Execute(); });
+			try
+			{
+				// Jolt's intrusive handle keeps the queued reference alive through completion.
+				JobHandle reference(job);
+				if (!Basalt::JobSystem::Get().Submit([reference] { reference.GetPtr()->Execute(); }))
+				{
+					BS_CORE_CRITICAL("Physics job submission rejected");
+					std::terminate();
+				}
+			}
+			catch (...)
+			{
+				BS_CORE_CRITICAL("Physics job submission failed");
+				std::terminate();
+			}
 		}
 		void QueueJobs(Job** jobs, JPH::uint count) override
 		{

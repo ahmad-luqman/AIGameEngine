@@ -22,26 +22,32 @@ namespace Basalt {
 	{
 	public:
 		static Ref<const AnimationGraph> GetAnimationGraph(const std::string& key);
-		// Starts a deduplicated worker load and returns only already-published assets. Poll each frame.
+		// Starts a deduplicated worker load and returns only already-published assets. Call PublishCompleted each frame before polling.
 		// GetMesh/GetTexture remain blocking and join an existing request instead of loading twice.
 		static Ref<MeshSource> RequestMesh(const std::string& key);
 		static Ref<TextureSource> RequestTexture(const std::string& key);
+		// True until publication, including when a worker has finished. Does not start a load.
 		static bool IsLoading(const std::string& key);
+		// Main-thread fence; scene rendering and UI frame building call this even without a camera.
+		// Headless callers must publish explicitly (asset.preload does so when polled).
 		static void PublishCompleted();
+		// Joins requested loads and dependencies, retries changed dependencies, then publishes.
 		static void WaitForLoads();
 		static Ref<MeshSource> GetMesh(const std::string& key);
 		// The mesh if it is already loaded, without loading it (tooltips that must not stall a frame).
 		static Ref<MeshSource> FindLoadedMesh(const std::string& key);
 		static Ref<TextureSource> GetTexture(const std::string& key);
-		// Error message from the last failed load of key (empty if it loaded or was never requested).
+		// Error message from the last failed load of key (empty while pending, if loaded, or if never requested).
 		static std::string GetError(const std::string& key);
 
-		// Drops a cached asset so the next Get reloads it from disk.
+		// Drops a cached asset so the next Get or Request reloads it from disk.
 		static void Reload(const std::string& key);
 		// Drops what a change to these project-relative files affects (including animation graphs): the files' own cache entries (with a model's
 		// embedded images) and models that read one of them (external buffers and images; also for a model that failed
 		// to load once its glTF parsed, so a buffer that appears retries it). Failed loads count, so a fixed file is tried
-		// again. Returns the keys dropped, sorted; files nothing requested drop nothing.
+		// again. Returns the keys dropped immediately, sorted; unrequested files drop nothing. Pending file meshes
+		// record changes until their dependencies are known, then retry at publication only if affected.
+		// Built-in meshes are independent of file changes.
 		static std::vector<std::string> ReloadChanged(const std::vector<std::string>& paths);
 		// The file an asset key loads from: the model of an embedded image ("Ship.glb#image/0" -> "Ship.glb"), the
 		// key itself otherwise.

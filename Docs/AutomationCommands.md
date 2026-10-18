@@ -250,7 +250,7 @@ Requests mesh/texture CPU loads on the shared worker pool. Returns a status (pen
 
 | Parameter | Type / description |
 |-----------|--------------------|
-| `paths` | array of mesh/texture paths or built-in mesh keys |
+| `paths` | array of mesh/texture paths, Model.glb#image/N keys or built-in mesh keys |
 | `wait` | wait for these loads, default false |
 
 <details><summary>Parameter JSON Schema</summary>
@@ -260,7 +260,7 @@ Requests mesh/texture CPU loads on the shared worker pool. Returns a status (pen
   "additionalProperties": false,
   "properties": {
     "paths": {
-      "description": "array of mesh/texture paths or built-in mesh keys",
+      "description": "array of mesh/texture paths, Model.glb#image/N keys or built-in mesh keys",
       "items": {
         "description": "string",
         "minLength": 1,
@@ -1534,7 +1534,7 @@ Runs Lua in the playing scene's script state; returns the value of the expressio
 
 ### `memory.stats`
 
-Returns logical retained CPU asset payload bytes, requested GPU buffer bytes, and live Lua heap bytes, with peaks and allocation counts. Not RSS or driver residency; excludes allocator overhead, GPU textures and render targets. Available headlessly.
+Returns logical retained CPU asset payload bytes, requested GPU buffer bytes, and live Lua heap bytes, with process-lifetime peaks and live allocation counts. Not RSS or driver residency; excludes allocator overhead, GPU textures and render targets. Available headlessly.
 
 <details><summary>Parameter JSON Schema</summary>
 

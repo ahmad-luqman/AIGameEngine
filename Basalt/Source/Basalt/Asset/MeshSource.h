@@ -156,7 +156,7 @@ namespace Basalt {
 		// Asset key this source was loaded from ("Assets/Models/Ship.gltf", "builtin://Cube").
 		std::string Key;
 
-		// Refresh after mutating payload vectors; asset loads do this before publishing.
+		// Refresh after mutating payload vectors; AssetManager loads do this before publishing.
 		void UpdateMemoryUsage();
 
 	private:

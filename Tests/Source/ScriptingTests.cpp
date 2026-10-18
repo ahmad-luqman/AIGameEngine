@@ -3,6 +3,7 @@
 #include <Basalt/Core/FileSystem.h>
 #include <Basalt/Core/Input.h>
 #include <Basalt/Core/Platform.h>
+#include <Basalt/Core/MemoryTracker.h>
 #include <Basalt/Physics/PhysicsWorld.h>
 #include <Basalt/Project/Project.h>
 #include <Basalt/Project/SaveData.h>
@@ -50,6 +51,36 @@ namespace {
 
 TEST_SUITE("Scripting")
 {
+	TEST_CASE("ScriptEngine tracks its Lua heap and preserves warning controls and continuations")
+	{
+		BasaltTest::TempProject project("LuaWarningsAndMemory");
+		const auto path = project.WriteFile("Assets/Warnings.lua", R"(
+			warn("hidden-warning")
+			warn("@on")
+			warn("visible-", "warning")
+			warn("", "@off")
+			warn("still-enabled-warning")
+			warn("@off")
+			warn("disabled-warning")
+			return {}
+		)");
+		const auto before = MemoryTracker::Get(MemoryCategory::Lua).Bytes;
+		const auto since = Log::GetHistory().GetTotalCount();
+		{
+			Scene scene;
+			AddScripted(scene, "Warnings", path);
+			scene.OnRuntimeStart();
+			CHECK(MemoryTracker::Get(MemoryCategory::Lua).Bytes > before);
+			CHECK(BasaltTest::CountLogMessages(since, "visible-warning") == 1);
+			CHECK(BasaltTest::CountLogMessages(since, "Lua warning: @off") == 1);
+			CHECK(BasaltTest::CountLogMessages(since, "still-enabled-warning") == 1);
+			CHECK(BasaltTest::CountLogMessages(since, "hidden-warning") == 0);
+			CHECK(BasaltTest::CountLogMessages(since, "disabled-warning") == 0);
+			scene.OnRuntimeStop();
+		}
+		CHECK(MemoryTracker::Get(MemoryCategory::Lua).Bytes == before);
+	}
+
 	TEST_CASE("Spawned script and compound contact callbacks repeat in the same order")
 	{
 		BasaltTest::TempProject project("RuntimeContactOrder");

@@ -97,7 +97,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   Cache APIs stay on the main thread; asset workers capture project context and publish isolated results
   through `AssetManager::PublishCompleted`. Blocking getters join requests. Interactive renderers opt into
   streaming; captures keep blocking loads. `BASALT_PROFILE` enables Tracy outside Dist. `memory.stats`
-  reports logical asset payload, GPU mesh-buffer and Lua heap charges (see Docs/Rendering.md).
+  reports logical asset payload, GPU buffer and Lua heap charges (see Docs/Rendering.md).
 - **Headless core.** Everything except Renderer/ImGui/Window runs without a GPU; unit tests, the CLI and
   the feature test rely on that.
 

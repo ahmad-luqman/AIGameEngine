@@ -2,8 +2,11 @@
 
 #include <Basalt/Asset/AssetManager.h>
 #include <Basalt/Core/JsonUtils.h>
+#include <Basalt/Core/JobSystem.h>
+#include <Basalt/Core/Platform.h>
 #include <Basalt/Core/Log.h>
 #include <Basalt/Physics/PhysicsLayers.h>
+#include <Basalt/Physics/PhysicsJobs.h>
 #include <Basalt/Physics/DirtySet.h>
 #include <Basalt/Physics/PhysicsWorld.h>
 #include <Basalt/Physics/WarningLog.h>
@@ -16,6 +19,10 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cstdlib>
+#include <exception>
+#include <latch>
+#include <stdexcept>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -161,6 +168,70 @@ namespace {
 
 TEST_SUITE("Physics")
 {
+	TEST_CASE("Stopping a physics world does not wait for unrelated pool jobs")
+	{
+		auto& pool = JobSystem::Get();
+		pool.WaitIdle();
+		std::latch started(pool.GetWorkerCount());
+		std::latch release(1);
+		auto unblock = std::shared_ptr<std::latch>(&release, [](std::latch* latch) {
+			latch->count_down();
+			JobSystem::Get().WaitIdle();
+		});
+		for (uint32_t i = 0; i < pool.GetWorkerCount(); ++i)
+			(void)pool.Submit([&] {
+				started.count_down();
+				release.wait();
+			});
+		started.wait();
+		// Jolt's barrier executes physics functions on this thread while queue references stay
+		// pending. ASan checks late reference releases after both worlds die. Destroy the old world and its factory, then start another before releasing them.
+		for (uint32_t i = 0; i < 2; ++i)
+		{
+			Scene scene;
+			auto body = scene.CreateEntity("Body");
+			body.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+			body.AddComponent<BoxColliderComponent>();
+			scene.OnSimulationStart();
+			scene.OnUpdate(Timestep(1.0f / 60.0f));
+			CHECK(scene.GetPhysicsWorld()->GetStepCount() == 1);
+			CHECK(body.GetTransform().Translation.y < 0.0f);
+			scene.OnSimulationStop();
+			CHECK_FALSE(scene.GetPhysicsWorld());
+		}
+	}
+
+	TEST_CASE("Throwing Jolt jobs fail fast on workers and barrier callers")
+	{
+		// PhysicsJobFailure ctest runs each mode in a subprocess; a regression must time out/fail,
+		// never kill the main unit-test process. No factory or world is needed for this adapter test.
+		const auto mode = Platform::GetEnvVar("BASALT_TEST_PHYSICS_FAILURE");
+		if (!mode)
+			return;
+		std::set_terminate([] { std::_Exit(86); });
+		PhysicsInternal::AcquireJolt();
+		auto& pool = JobSystem::Get();
+		pool.WaitIdle();
+		std::latch blocked(pool.GetWorkerCount());
+		std::latch release(1);
+		if (*mode == "barrier")
+		{
+			for (uint32_t i = 0; i < pool.GetWorkerCount(); ++i)
+				(void)pool.Submit([&] { blocked.count_down(); release.wait(); });
+			blocked.wait();
+		}
+		auto& jobs = PhysicsJobs::Get();
+		auto job = jobs.CreateJob("Regression throw", JPH::Color::sRed, [] { throw std::runtime_error("physics regression exception"); }, 1);
+		auto* barrier = jobs.CreateBarrier();
+		barrier->AddJob(job);
+		job.RemoveDependency();
+		if (*mode == "barrier")
+			jobs.WaitForJobs(barrier);
+		else
+			pool.WaitIdle();
+		std::_Exit(87); // Returning or completing a generic engine fence must not hide Jolt's broken barrier.
+	}
+
 	TEST_CASE("Physics warnings are logged once per distinct set and again after they clear")
 	{
 		Scene scene;

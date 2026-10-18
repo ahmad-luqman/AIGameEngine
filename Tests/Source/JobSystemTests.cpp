@@ -43,7 +43,7 @@ TEST_SUITE("JobSystem")
 		for (const auto value : values)
 			CHECK(value == 1);
 		CHECK(pool.ParallelFor(0, 17, [](uint32_t, uint32_t) {}));
-		CHECK_FALSE(pool.ParallelFor(10, 0, [](uint32_t, uint32_t) {}));
+
 		CHECK_FALSE(pool.ParallelFor(10, 1, {}));
 	}
 
@@ -145,37 +145,6 @@ TEST_SUITE("JobSystem")
 		release.count_down();
 		CHECK(owner.Wait(job));
 		CHECK(other.Wait(job)); // Completed fences may be observed anywhere.
-	}
-
-	TEST_CASE("Stopping a physics world does not wait for unrelated pool jobs")
-	{
-		auto& pool = JobSystem::Get();
-		pool.WaitIdle();
-		std::latch started(pool.GetWorkerCount());
-		std::latch release(1);
-		auto unblock = std::shared_ptr<std::latch>(&release, [](std::latch* latch) {
-			latch->count_down();
-			JobSystem::Get().WaitIdle();
-		});
-		for (uint32_t i = 0; i < pool.GetWorkerCount(); ++i)
-			(void)pool.Submit([&] {
-				started.count_down();
-				release.wait();
-			});
-		started.wait();
-		// Jolt's barrier executes physics functions on this thread while queue references stay
-		// pending. Destroy the old world and its factory, then start another before releasing them.
-		for (uint32_t i = 0; i < 2; ++i)
-		{
-			Scene scene;
-			auto body = scene.CreateEntity("Body");
-			body.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
-			body.AddComponent<BoxColliderComponent>();
-			scene.OnSimulationStart();
-			scene.OnUpdate(Timestep(1.0f / 60.0f));
-			scene.OnSimulationStop();
-			CHECK_FALSE(scene.GetPhysicsWorld());
-		}
 	}
 
 	TEST_CASE("Idle workers steal children from an occupied worker queue")

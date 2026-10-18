@@ -1,5 +1,7 @@
 #include "Basalt/Core/MemoryTracker.h"
 
+#include "Basalt/Core/Assert.h"
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -51,46 +53,46 @@ namespace Basalt {
 		return Names.at(static_cast<size_t>(category));
 	}
 
-	void MemoryTracker::Allocate(MemoryCategory category, size_t bytes)
-	{
-		if (bytes == 0)
-			return;
-		auto& state = GetState();
-		std::lock_guard lock(state.Mutex);
-		auto& stats = state.Statistics.at(static_cast<size_t>(category));
-		stats.Bytes += bytes;
-		stats.PeakBytes = std::max(stats.PeakBytes, stats.Bytes);
-		++stats.Allocations;
+	namespace {
+		void AdjustStatistics(MemoryStatistics& stats, size_t oldSize, size_t newSize) noexcept
+		{
+			BS_CORE_ASSERT(stats.Bytes >= oldSize && (oldSize == 0 || stats.Allocations > 0), "Unbalanced memory charge");
+			// Guard even in Dist: an accounting mistake must not wrap to enormous values.
+			stats.Bytes -= std::min(stats.Bytes, static_cast<uint64_t>(oldSize));
+			if (oldSize != 0 && stats.Allocations != 0)
+				--stats.Allocations;
+			stats.Bytes += newSize;
+			if (newSize != 0)
+				++stats.Allocations;
+			stats.PeakBytes = std::max(stats.PeakBytes, stats.Bytes);
+		}
 	}
 
-	void MemoryTracker::Free(MemoryCategory category, size_t bytes)
+	void MemoryTracker::Adjust(MemoryCategory category, size_t oldSize, size_t newSize) noexcept
 	{
-		if (bytes == 0)
-			return;
 		auto& state = GetState();
 		std::lock_guard lock(state.Mutex);
-		auto& stats = state.Statistics.at(static_cast<size_t>(category));
-		stats.Bytes -= bytes;
-		--stats.Allocations;
+		AdjustStatistics(state.Statistics.at(static_cast<size_t>(category)), oldSize, newSize);
 	}
 
-	void* MemoryTracker::LuaAllocator(void*, void* pointer, size_t oldSize, size_t newSize)
+	void* MemoryTracker::LuaAllocator(void*, void* pointer, size_t oldSize, size_t newSize) noexcept
 	{
-		// Lua passes a type tag as oldSize when pointer is null.
+		// Lock before realloc: once it succeeds, reporting failure would lose the moved allocation.
+		// A broken accounting mutex is fatal, never an exception unwinding through Lua's C frames.
+		auto& state = GetState();
+		std::lock_guard lock(state.Mutex);
 		if (!pointer)
-			oldSize = 0;
+			oldSize = 0; // Lua passes a type tag for a new allocation.
+		void* result = nullptr;
 		if (newSize == 0)
-		{
 			std::free(pointer);
-			Free(MemoryCategory::Lua, oldSize);
-			return nullptr;
-		}
-		void* result = std::realloc(pointer, newSize);
-		if (result)
+		else
 		{
-			Free(MemoryCategory::Lua, oldSize);
-			Allocate(MemoryCategory::Lua, newSize);
+			result = std::realloc(pointer, newSize);
+			if (!result)
+				return nullptr;
 		}
+		AdjustStatistics(state.Statistics[static_cast<size_t>(MemoryCategory::Lua)], oldSize, newSize);
 		return result;
 	}
 
@@ -135,9 +137,8 @@ namespace Basalt {
 	{
 		if (bytes == m_Bytes)
 			return;
-		MemoryTracker::Free(m_Category, m_Bytes);
+		MemoryTracker::Adjust(m_Category, m_Bytes, bytes);
 		m_Bytes = bytes;
-		MemoryTracker::Allocate(m_Category, m_Bytes);
 	}
 
 }

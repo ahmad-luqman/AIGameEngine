@@ -3,6 +3,7 @@
 // Internal to the physics module.
 
 #include "Basalt/Core/Base.h"
+#include "Basalt/Core/Log.h"
 #include "Basalt/Physics/ColliderShapes.h"
 #include "Basalt/Physics/JoltUtils.h"
 #include "Basalt/Physics/PhysicsMaterial.h"
@@ -14,6 +15,7 @@
 #include <Jolt/Physics/Collision/Shape/CompoundShape.h>
 
 #include <cstdint>
+#include <exception>
 #include <mutex>
 #include <tuple>
 #include <vector>
@@ -73,8 +75,7 @@ namespace Basalt::PhysicsInternal {
 				}
 			}
 
-			std::scoped_lock lock(Mutex);
-			Events.push_back(event);
+			RecordEvent(event);
 		}
 
 		void OnContactPersisted(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold, JPH::ContactSettings& settings) override
@@ -85,8 +86,7 @@ namespace Basalt::PhysicsInternal {
 
 		void OnContactRemoved(const JPH::SubShapeIDPair& pair) override
 		{
-			std::scoped_lock lock(Mutex);
-			Events.push_back({ false, pair.GetBody1ID().GetIndexAndSequenceNumber(), pair.GetSubShapeID1().GetValue(), pair.GetBody2ID().GetIndexAndSequenceNumber(), pair.GetSubShapeID2().GetValue(), {} });
+			RecordEvent({ false, pair.GetBody1ID().GetIndexAndSequenceNumber(), pair.GetSubShapeID1().GetValue(), pair.GetBody2ID().GetIndexAndSequenceNumber(), pair.GetSubShapeID2().GetValue(), {} });
 		}
 
 		std::mutex Mutex;
@@ -96,6 +96,20 @@ namespace Basalt::PhysicsInternal {
 		float MinVelocityForRestitution = 1.0f;
 
 	private:
+		void RecordEvent(const RawContactEvent& event) noexcept
+		{
+			try
+			{
+				std::scoped_lock lock(Mutex);
+				Events.push_back(event);
+			}
+			catch (...)
+			{
+				BS_CORE_CRITICAL("Physics contact event allocation failed");
+				std::terminate();
+			}
+		}
+
 		// The friction and restitution of the part of the body that touches: its collider's own, else the body's.
 		static ColliderMaterial SurfaceOf(const BodyMaterial& material, const JPH::Body& body, const JPH::SubShapeID& subShape)
 		{

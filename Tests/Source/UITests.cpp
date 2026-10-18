@@ -1,5 +1,7 @@
 #include <doctest/doctest.h>
 
+#include <Basalt/Asset/AssetManager.h>
+#include <Basalt/Core/JobSystem.h>
 #include <Basalt/Core/FileSystem.h>
 #include <Basalt/Core/Log.h>
 #include <Basalt/Project/Project.h>
@@ -575,6 +577,31 @@ TEST_SUITE("UI")
 		text.Shadow = true;
 		CHECK(draw(text).Vertices.size() == 2 * plain);
 		ImGui::EndFrame();
+	}
+
+	TEST_CASE("Camera-less UI frames publish completed streamed textures before resource lookup")
+	{
+		ImGuiTestContext imgui;
+		AssetManager::Clear();
+		const std::string texture = std::string(BASALT_TEST_DATA_DIR) + "/FeatureTest/Assets/Textures/UIPanel.png";
+		AssetManager::RequestTexture(texture);
+		// No scene renderer or preload command publishes this completed decode.
+		JobSystem::Get().WaitIdle();
+		CHECK_FALSE(AssetManager::RequestTexture(texture));
+		Scene scene;
+		auto image = scene.CreateEntity("Menu image");
+		image.AddComponent<UIRectComponent>();
+		image.AddComponent<UIImageComponent>().Texture = texture;
+		UIFrame frame;
+		frame.Build(&scene, { 640, 480 }, false);
+		bool resolved = false;
+		frame.Prepare([&](const std::string& path) -> std::optional<UITexture> {
+			resolved = !!AssetManager::RequestTexture(path);
+			return resolved ? std::optional<UITexture>({ 1, { 16, 16 } }) : std::nullopt;
+		});
+		CHECK(resolved);
+		CHECK(frame.GetResources().Textures.contains(texture));
+		AssetManager::Clear();
 	}
 
 	TEST_CASE("UIFrame puts UI components under this frame's immediate commands and resolves each resource once")

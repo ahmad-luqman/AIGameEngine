@@ -3,6 +3,7 @@
 #include "Basalt/Animation/AnimationGraph.h"
 #include "Basalt/Asset/MeshImporter.h"
 #include "Basalt/Core/JsonUtils.h"
+#include "Basalt/Core/Assert.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Core/JobSystem.h"
@@ -24,14 +25,22 @@ namespace Basalt {
 		void CheckProject();
 
 		template<typename T>
-		struct CacheEntry
+		struct LoadResult
 		{
 			Ref<T> Asset;
 			std::string Error;
 			// The other files a model reads (MeshSource::ExternalFiles), kept for a failed load too.
 			std::vector<std::string> Dependencies;
+		};
+
+		template<typename T>
+		struct CacheEntry : LoadResult<T>
+		{
 			JobHandle Job;
-			Ref<CacheEntry<T>> Pending;
+			JobHandle ParentJob;
+			Ref<LoadResult<T>> Pending;
+			std::function<void()> Work;
+			std::unordered_set<std::string> Changed;
 		};
 
 		std::unordered_map<std::string, CacheEntry<MeshSource>> s_Meshes;
@@ -125,26 +134,89 @@ namespace Basalt {
 
 	namespace {
 		template<typename T>
-		void Publish(const std::string& key, CacheEntry<T>& entry)
+		void Start(const std::string& key, CacheEntry<T>& entry, bool wait = false)
 		{
-			if (!entry.Pending || !entry.Job.IsComplete())
+			if (!entry.Work)
 				return;
-			const bool succeeded = entry.Job.Succeeded();
-			auto result = std::move(entry.Pending);
-			// Dependency jobs may still read the completed result; publication must not move from it.
-			entry = *result;
-			if (!succeeded)
+			// Dependencies are resolved on the cache's main thread, never by nesting worker waits.
+			if (wait)
+				JobSystem::Get().Wait(entry.ParentJob);
+			if (!entry.ParentJob.IsComplete())
+				return;
+			try
 			{
-				entry.Asset.reset();
-				entry.Error = "asset worker failed (see job diagnostic)";
+				entry.Job = JobSystem::Get().Submit(std::move(entry.Work));
+				if (!entry.Job)
+					entry.Pending->Error = "'" + key + "': asset load not scheduled";
 			}
-			if (!entry.Asset)
-				BS_CORE_ERROR("AssetManager '{}': {}", key, entry.Error);
+			catch (const std::exception& error)
+			{
+				entry.Pending->Error = "'" + key + "': scheduling exception: " + error.what();
+			}
+			catch (...)
+			{
+				entry.Pending->Error = "'" + key + "': unknown scheduling exception";
+			}
+			entry.Work = {};
+			if (!entry.Job)
+				BS_CORE_ERROR("AssetManager scheduling failed: {}", entry.Pending->Error);
 		}
 
-		// Project changes discard pending entries without waiting: workers own their paths and results.
+		template<typename T, typename F>
+		void Prepare(const std::string& key, CacheEntry<T>& entry, const F& load)
+		{
+			auto result = CreateRef<LoadResult<T>>();
+			entry.Pending = result;
+			entry.Work = [key, result, load] {
+				try
+				{
+					load(*result);
+					if (result->Asset)
+					{
+						result->Asset->Key = key;
+						result->Asset->UpdateMemoryUsage();
+					}
+				}
+				catch (const std::exception& error)
+				{
+					result->Asset.reset();
+					result->Error = "'" + key + "': worker exception: " + error.what();
+				}
+				catch (...)
+				{
+					result->Asset.reset();
+					result->Error = "'" + key + "': unknown worker exception";
+				}
+				// One-shot CLI requests may exit before a publication fence.
+				if (!result->Asset)
+					BS_CORE_ERROR("AssetManager '{}': {}", key, result->Error);
+			};
+			Start(key, entry);
+		}
+
+		template<typename T>
+		void Publish(const std::string& key, CacheEntry<T>& entry)
+		{
+			Start(key, entry);
+			if (!entry.Pending || entry.Work || !entry.Job.IsComplete())
+				return;
+			auto result = std::move(entry.Pending);
+			// Dependency jobs may still read the completed result; publication must not move or write it.
+			static_cast<LoadResult<T>&>(entry) = *result;
+			if (entry.Job && !entry.Job.Succeeded())
+			{
+				entry.Asset.reset();
+				if (entry.Error.empty())
+					entry.Error = "'" + key + "': asset job failed (see job diagnostic)";
+			}
+			entry.Job = {};
+			entry.ParentJob = {};
+		}
+
+		// Project changes discard all project-dependent entries: workers own their paths and results.
 		void CheckProject()
 		{
+			BS_CORE_ASSERT(!JobSystem::Get().IsInJob(), "Asset cache APIs belong to the main thread");
 			static std::weak_ptr<Project> s_Project;
 			static std::filesystem::path s_Root;
 			const auto& project = Project::GetActive();
@@ -172,15 +244,8 @@ namespace Basalt {
 		{
 			const auto path = Project::ResolvePath(key);
 			const auto root = Project::GetActive() ? Project::GetActive()->GetDirectory() : path.parent_path();
-			auto result = CreateRef<CacheEntry<MeshSource>>();
-			entry.Pending = result;
-			entry.Job = JobSystem::Get().Submit([key, path, root, result] {
-				result->Asset = LoadMesh(key, path, root, result->Dependencies, result->Error);
-				if (result->Asset)
-				{
-					result->Asset->Key = key;
-					result->Asset->UpdateMemoryUsage();
-				}
+			Prepare(key, entry, [key, path, root](LoadResult<MeshSource>& result) {
+				result.Asset = LoadMesh(key, path, root, result.Dependencies, result.Error);
 			});
 		}
 		// Publication happens only at an explicit fence; a fast worker must not change this frame's view.
@@ -193,10 +258,11 @@ namespace Basalt {
 		auto it = s_Meshes.find(key);
 		if (it == s_Meshes.end())
 			return nullptr;
-		if (it->second.Pending)
+		while (it->second.Pending)
 		{
 			JobSystem::Get().Wait(it->second.Job);
-			Publish(key, it->second);
+			PublishCompleted();
+			it = s_Meshes.find(key);
 		}
 		return it->second.Asset;
 	}
@@ -216,7 +282,7 @@ namespace Basalt {
 		if (auto existing = s_Textures.find(key); existing != s_Textures.end())
 			return existing->second.Asset;
 		Ref<MeshSource> mesh;
-		Ref<CacheEntry<MeshSource>> parentResult;
+		Ref<LoadResult<MeshSource>> parentResult;
 		JobHandle parentJob;
 		std::string parentError;
 		const size_t marker = key.find("#image/");
@@ -236,28 +302,12 @@ namespace Basalt {
 		if (inserted)
 		{
 			const auto path = Project::ResolvePath(key);
-			auto result = CreateRef<CacheEntry<TextureSource>>();
-			entry.Pending = result;
-			entry.Job = JobSystem::Get().Submit([key, path, mesh, parentResult, parentJob, parentError, result] {
+			entry.ParentJob = std::move(parentJob);
+			Prepare(key, entry, [key, path, mesh, parentResult, parentError](LoadResult<TextureSource>& result) {
 				BS_PROFILE_SCOPE("Decode texture");
-				Ref<MeshSource> parent = mesh;
-				std::string error = parentError;
-				if (parentResult)
-				{
-					if (JobSystem::Get().Wait(parentJob))
-					{
-						parent = parentResult->Asset;
-						error = parentResult->Error;
-					}
-					else
-						error = "mesh worker failed (see job diagnostic)";
-				}
-				result->Asset = LoadTexture(key, path, parent, error, result->Error);
-				if (result->Asset)
-				{
-					result->Asset->Key = key;
-					result->Asset->UpdateMemoryUsage();
-				}
+				const auto parent = parentResult ? parentResult->Asset : mesh;
+				const auto& error = parentResult ? parentResult->Error : parentError;
+				result.Asset = LoadTexture(key, path, parent, error, result.Error);
 			});
 		}
 		return entry.Asset;
@@ -265,13 +315,18 @@ namespace Basalt {
 
 	Ref<TextureSource> AssetManager::GetTexture(const std::string& key)
 	{
+		// A dependency may be retried after a changed external file is discovered at publication.
+		if (key.find("#image/") != std::string::npos)
+			GetMesh(GetSourceFile(key));
 		RequestTexture(key);
 		auto it = s_Textures.find(key);
 		if (it == s_Textures.end())
 			return nullptr;
 		if (it->second.Pending)
 		{
+			Start(key, it->second, true);
 			JobSystem::Get().Wait(it->second.Job);
+			it = s_Textures.find(key);
 			Publish(key, it->second);
 		}
 		return it->second.Asset;
@@ -291,21 +346,61 @@ namespace Basalt {
 	{
 		BS_PROFILE_SCOPE("Publish assets");
 		CheckProject();
+		std::vector<std::string> retry;
 		for (auto& [key, entry] : s_Meshes)
+		{
+			if (entry.Pending)
+			{
+				// A job completing between this check and Publish must not bypass change validation.
+				if (!entry.Job.IsComplete())
+					continue;
+				const auto& files = entry.Pending->Dependencies;
+				if (std::any_of(files.begin(), files.end(), [&](const auto& file) { return entry.Changed.contains(file); }))
+					retry.push_back(key);
+				else
+					entry.Changed.clear();
+			}
+			if (!retry.empty() && retry.back() == key)
+				continue;
 			Publish(key, entry);
+		}
+		for (const auto& key : retry)
+		{
+			// An automatic retry preserves requested children; explicit Reload still cancels them.
+			std::vector<std::string> images;
+			for (const auto& [imageKey, entry] : s_Textures)
+				if (GetSourceFile(imageKey) == key)
+					images.push_back(imageKey);
+			Reload(key);
+			RequestMesh(key);
+			for (const auto& image : images)
+				RequestTexture(image);
+		}
 		for (auto& [key, entry] : s_Textures)
+		{
+			// A parent completing after the mesh traversal is not validated until the next fence.
+			if (const auto parent = s_Meshes.find(GetSourceFile(key)); parent != s_Meshes.end() && parent->second.Pending)
+				continue;
 			Publish(key, entry);
+		}
 	}
 
 	void AssetManager::WaitForLoads()
 	{
 		CheckProject();
-		for (auto& [key, entry] : s_Meshes)
-			if (entry.Pending)
-				JobSystem::Get().Wait(entry.Job);
+		do
+		{
+			for (auto& [key, entry] : s_Meshes)
+				if (entry.Pending)
+					JobSystem::Get().Wait(entry.Job);
+			PublishCompleted();
+		} while (std::any_of(s_Meshes.begin(), s_Meshes.end(), [](const auto& pair) { return !!pair.second.Pending; }));
 		for (auto& [key, entry] : s_Textures)
 			if (entry.Pending)
+			{
+				Start(key, entry, true);
 				JobSystem::Get().Wait(entry.Job);
+			}
 		PublishCompleted();
 	}
 
@@ -345,10 +440,14 @@ namespace Basalt {
 			return {};
 		const std::unordered_set<std::string> changed(paths.begin(), paths.end());
 		std::set<std::string> keys;
-		for (const auto& [key, entry] : s_Meshes)
+		for (auto& [key, entry] : s_Meshes)
 		{
+			if (Primitives::IsBuiltinKey(key))
+				continue;
+			if (entry.Pending)
+				entry.Changed.insert(paths.begin(), paths.end());
 			const bool readsChangedFile = std::any_of(entry.Dependencies.begin(), entry.Dependencies.end(), [&](const std::string& file) { return changed.contains(file); });
-			if (entry.Pending || changed.contains(key) || readsChangedFile)
+			if (changed.contains(key) || readsChangedFile)
 				keys.insert(key);
 		}
 		for (const auto& [key, entry] : s_Textures)
