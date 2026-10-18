@@ -332,6 +332,12 @@ namespace Basalt {
 				}
 				playback->LastPosition = position;
 			}
+			else if (!component.MatchVelocity)
+			{
+				// Re-enabling starts a fresh measurement: the movement while it was off is not one frame's.
+				playback->LastPosition.reset();
+				playback->MeasuredSpeed = 0;
+			}
 			// Editing BlendSpaces does not reset playback, so a start space added after the Clip was set is looked
 			// for until the Animator plays something else.
 			if (!playback->PendingStart.empty() && playback->Clip < 0 && !playback->Space && !playback->Rest)

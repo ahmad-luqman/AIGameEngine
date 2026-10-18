@@ -1715,6 +1715,18 @@ TEST_SUITE("Animation")
 		entity.GetTransform().Translation.z += .3f;
 		system.Update(.1f);
 		CHECK(std::fmod(system.GetTime(entity) - paused + 2.0f, 2.0f) == doctest::Approx(.15).epsilon(1e-3));
+		// Turning matching off and on starts a fresh measurement: movement while it was off is not one frame's.
+		animator.MatchVelocity = false;
+		for (int i = 0; i < 10; i++)
+		{
+			entity.GetTransform().Translation.z += .3f;
+			system.Update(.1f);
+		}
+		animator.MatchVelocity = true;
+		system.Update(.1f);
+		const float reenabled = system.GetTime(entity);
+		system.Update(.1f);
+		CHECK(std::fmod(system.GetTime(entity) - reenabled + 2.0f, 2.0f) == doctest::Approx(0).epsilon(1e-3));
 		// Samples that stand still (Speed 0) keep the plain Speed for their share: half idle, half moving at 1 m/s
 		// while the entity moves at 2 m/s plays at .5 + .5 * 2.
 		REQUIRE(system.PlayBlendSpace(entity, "Start", { .5f, 0 }));
@@ -1866,7 +1878,17 @@ TEST_SUITE("Animation")
 		broken.AddComponent<AnimatorComponent>().Mesh = "Missing/Model.gltf";
 		noAnimator.GetComponent<BoneAttachmentComponent>().Target = broken.GetUUID();
 		CHECK(warning(noAnimator).find("BoneAttachment Target 'BrokenModel' model could not be loaded: ") == 0);
-		CHECK(warning(a) == "BoneAttachment Target 'B' is attached back to this entity (a cycle)");
+		CHECK(warning(a) == "BoneAttachment Target 'B' depends on this entity's attachment (a cycle)");
+		// A cycle through an attached ancestor of the target: C targets plain D, whose parent E targets C.
+		auto c = AddAnimator(scene, "C");
+		auto e = AddAnimator(scene, "E");
+		auto d = scene.CreateChildEntity(e, "D");
+		d.AddComponent<AnimatorComponent>().Mesh = FixturePath().string();
+		c.AddComponent<BoneAttachmentComponent>() = { d.GetUUID(), "Tip" };
+		e.AddComponent<BoneAttachmentComponent>() = { c.GetUUID(), "Tip" };
+		CHECK(warning(c) == "BoneAttachment Target 'D' depends on this entity's attachment (a cycle)");
+		CHECK(warning(e) == "BoneAttachment Target 'C' depends on this entity's attachment (a cycle)");
+		CHECK(warning(dynamic).find("Dynamic RigidBody") != std::string::npos);
 
 		const auto since = Log::GetHistory().GetTotalCount();
 		scene.OnRuntimeStart();

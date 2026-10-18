@@ -133,13 +133,32 @@ namespace Basalt {
 			const Entity target = GetBoneAttachmentTarget(entity);
 			const auto* animator = target ? target.TryGetComponent<AnimatorComponent>() : nullptr;
 			const auto source = animator ? AssetManager::GetMesh(animator->Mesh) : nullptr;
-			// Following targets that are attached themselves back to this entity is a cycle (the runtime skips it).
+			// The attachments this one waits for, as UpdateAttachments orders them: those on its target and the target's
+			// ancestors, and on its own ancestors. Reaching this entity again through them is a cycle (the runtime
+			// leaves such attachments in place).
+			const auto dependencies = [](Entity attached) {
+				std::vector<Entity> found;
+				for (Entity start : { GetBoneAttachmentTarget(attached), attached.GetParent() })
+					for (Entity next = start; next; next = next.GetParent())
+						if (next != attached && next.HasComponent<BoneAttachmentComponent>())
+							found.push_back(next);
+				return found;
+			};
 			bool cycle = false;
 			std::vector<Entity> visited;
-			for (Entity next = target; next && next.HasComponent<BoneAttachmentComponent>() && std::ranges::find(visited, next) == visited.end(); next = GetBoneAttachmentTarget(next))
+			std::vector<Entity> pending = dependencies(entity);
+			while (!pending.empty() && !cycle)
 			{
+				const Entity next = pending.back();
+				pending.pop_back();
+				if (std::ranges::find(visited, next) != visited.end())
+					continue;
 				visited.push_back(next);
-				cycle = cycle || GetBoneAttachmentTarget(next) == entity;
+				for (Entity dependency : dependencies(next))
+				{
+					cycle = cycle || dependency == entity;
+					pending.push_back(dependency);
+				}
 			}
 			if (!target)
 				warnings.emplace_back(attachment.Target != 0 ? "BoneAttachment Target entity not found" : "BoneAttachment has no Target and no parent");
@@ -148,7 +167,7 @@ namespace Basalt {
 			else if (scene.IsDescendantOf(target, entity))
 				warnings.push_back(fmt::format("BoneAttachment Target '{}' is a descendant of this entity", target.GetName()));
 			else if (cycle)
-				warnings.push_back(fmt::format("BoneAttachment Target '{}' is attached back to this entity (a cycle)", target.GetName()));
+				warnings.push_back(fmt::format("BoneAttachment Target '{}' depends on this entity's attachment (a cycle)", target.GetName()));
 			else if (!animator)
 				warnings.push_back(fmt::format("BoneAttachment Target '{}' has no Animator", target.GetName()));
 			else if (animator->Mesh.empty())
