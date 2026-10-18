@@ -3,16 +3,69 @@
 #include <Basalt/Asset/AssetManager.h>
 #include <Basalt/Core/JobSystem.h>
 #include <Basalt/Core/MemoryTracker.h>
-
-#include <latch>
 #include <Basalt/Project/Project.h>
 
 #include "TestUtils.h"
+
+#include <latch>
 
 using namespace Basalt;
 
 TEST_SUITE("AsyncAssets")
 {
+	TEST_CASE("Blocking getters publish only their own keys and mesh dependencies")
+	{
+		AssetManager::Clear();
+		const std::string texture = std::string(BASALT_TEST_DATA_DIR) + "/FeatureTest/Assets/Textures/Checker.png";
+		AssetManager::RequestMesh("builtin://Cube");
+		AssetManager::RequestMesh("builtin://Sphere");
+		AssetManager::RequestTexture(texture);
+		JobSystem::Get().WaitIdle();
+		REQUIRE(AssetManager::GetMesh("builtin://Cube"));
+		CHECK_FALSE(AssetManager::FindLoadedMesh("builtin://Sphere"));
+		CHECK_FALSE(AssetManager::RequestTexture(texture));
+		CHECK(AssetManager::IsLoading("builtin://Sphere"));
+		CHECK(AssetManager::IsLoading(texture));
+		REQUIRE(AssetManager::GetTexture(texture));
+		CHECK_FALSE(AssetManager::FindLoadedMesh("builtin://Sphere"));
+		AssetManager::PublishCompleted();
+		CHECK(AssetManager::FindLoadedMesh("builtin://Sphere"));
+		AssetManager::Clear();
+	}
+
+	TEST_CASE("Streamed image requests made before their mesh finishes progress through frame fences")
+	{
+		AssetManager::Clear();
+		auto& pool = JobSystem::Get();
+		pool.WaitIdle();
+		std::latch started(pool.GetWorkerCount());
+		std::latch release(1);
+		auto unblock = std::shared_ptr<std::latch>(&release, [](std::latch* latch) {
+			latch->count_down();
+			JobSystem::Get().WaitIdle();
+		});
+		for (uint32_t i = 0; i < pool.GetWorkerCount(); ++i)
+			(void)pool.Submit([&] { started.count_down(); release.wait(); });
+		started.wait();
+		const std::string mesh = std::string(BASALT_TEST_DATA_DIR) + "/FeatureTest/Assets/Models/TexturedCube.glb";
+		const auto image = mesh + "#image/0";
+		AssetManager::RequestMesh(mesh);
+		AssetManager::RequestTexture(image);
+		CHECK(AssetManager::IsLoading(mesh));
+		CHECK(AssetManager::IsLoading(image));
+		unblock.reset();
+		Ref<TextureSource> decoded;
+		for (uint32_t frame = 0; frame < 4 && !decoded; ++frame)
+		{
+			pool.WaitIdle();
+			AssetManager::PublishCompleted();
+			decoded = AssetManager::RequestTexture(image);
+		}
+		REQUIRE_MESSAGE(decoded, AssetManager::GetError(image));
+		CHECK_FALSE(AssetManager::IsLoading(image));
+		AssetManager::Clear();
+	}
+
 	TEST_CASE("Requests deduplicate and publish only at the main thread fence")
 	{
 		AssetManager::Clear();
@@ -80,9 +133,9 @@ TEST_SUITE("AsyncAssets")
 	{
 		BasaltTest::TempProject project("AsyncInvalidImage");
 		project.WriteFile("Assets/bad.png", "this is not an image");
+		AssetManager::Clear();
 		JobSystem::Get().WaitIdle();
 		const auto before = MemoryTracker::Get(MemoryCategory::Assets).Bytes;
-		AssetManager::Clear();
 		CHECK_FALSE(AssetManager::RequestTexture("Assets/bad.png"));
 		AssetManager::WaitForLoads();
 		CHECK_FALSE(AssetManager::GetTexture("Assets/bad.png"));

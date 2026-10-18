@@ -65,7 +65,8 @@ namespace Basalt {
 	public:
 		// Collects the scene's UI components (when `scene` is set) and then, with `includeImmediate`, this
 		// frame's UI.* commands, laid out for a viewport of `viewportSize` screen units. Forgets the last
-		// frame's resources: call Prepare before Draw.
+		// frame's resources: call Prepare before Draw. Publishes completed CPU assets first,
+		// independently of scene rendering, so camera-less UI can resolve streamed images.
 		void Build(Scene* scene, const glm::vec2& viewportSize, bool includeImmediate);
 		void Clear();
 

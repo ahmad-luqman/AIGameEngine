@@ -1,7 +1,7 @@
 #include "Basalt/Core/JobSystem.h"
 
-#include "Basalt/Core/Log.h"
 #include "Basalt/Core/Assert.h"
+#include "Basalt/Core/Log.h"
 #include "Basalt/Core/Profiler.h"
 
 #include <algorithm>
@@ -187,7 +187,6 @@ namespace Basalt {
 	void JobSystem::WaitIdle()
 	{
 		BS_CORE_ASSERT(!IsInJob(), "A job cannot wait for its own outstanding count");
-		// Owner-thread fence: a job cannot wait for its own outstanding count to become zero.
 		std::unique_lock lock(m_Mutex);
 		m_Wake.wait(lock, [this] { return m_Outstanding == 0; });
 	}
@@ -195,6 +194,7 @@ namespace Basalt {
 	bool JobSystem::ParallelFor(uint32_t count, uint32_t grain, const std::function<void(uint32_t, uint32_t)>& function)
 	{
 		BS_CORE_ASSERT(grain > 0, "ParallelFor grain must be positive");
+		// Keep the invalid-grain guard in Dist, where the programmer assertion is compiled out.
 		if (!function || grain == 0)
 		{
 			BS_CORE_ERROR("ParallelFor requires a function and positive grain");

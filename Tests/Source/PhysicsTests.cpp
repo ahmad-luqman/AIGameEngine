@@ -1,13 +1,13 @@
 #include <doctest/doctest.h>
 
 #include <Basalt/Asset/AssetManager.h>
-#include <Basalt/Core/JsonUtils.h>
 #include <Basalt/Core/JobSystem.h>
-#include <Basalt/Core/Platform.h>
+#include <Basalt/Core/JsonUtils.h>
 #include <Basalt/Core/Log.h>
-#include <Basalt/Physics/PhysicsLayers.h>
-#include <Basalt/Physics/PhysicsJobs.h>
+#include <Basalt/Core/Platform.h>
 #include <Basalt/Physics/DirtySet.h>
+#include <Basalt/Physics/PhysicsJobs.h>
+#include <Basalt/Physics/PhysicsLayers.h>
 #include <Basalt/Physics/PhysicsWorld.h>
 #include <Basalt/Physics/WarningLog.h>
 #include <Basalt/Scene/Entity.h>
@@ -204,10 +204,13 @@ TEST_SUITE("Physics")
 	TEST_CASE("Throwing Jolt jobs fail fast on workers and barrier callers")
 	{
 		// PhysicsJobFailure ctest runs each mode in a subprocess; a regression must time out/fail,
-		// never kill the main unit-test process. No factory or world is needed for this adapter test.
+		// never kill the main unit-test process. Initialize Jolt globals without creating a scene/world.
 		const auto mode = Platform::GetEnvVar("BASALT_TEST_PHYSICS_FAILURE");
 		if (!mode)
+		{
+			MESSAGE("Fatal physics paths require the PhysicsJobFailure subprocess ctest (Python3)");
 			return;
+		}
 		std::set_terminate([] { std::_Exit(86); });
 		PhysicsInternal::AcquireJolt();
 		auto& pool = JobSystem::Get();

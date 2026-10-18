@@ -307,40 +307,44 @@ debug lines survive a preview, with Vulkan validation required.
 `Core/JobSystem` supplies one shared work-stealing CPU pool. Each worker takes its own queued work
 last-in-first-out and steals other queues first-in-first-out. `Submit` returns a completion fence;
 `Wait` helps execute work so nested jobs also complete with one worker. Exceptions fail the fence
-and log a diagnostic. Jolt job exceptions are fatal, because Jolt cannot complete a barrier
-after a job unwinds. `ParallelFor` divides disjoint output ranges and joins every range before
-returning, including after a task fails. Callers retain ownership of captured data until completion,
-avoid cyclic waits, and call `WaitIdle` or destroy pools only from the constructing thread, outside any pool job after producers
-stop. Shutdown drains jobs and their children. Physics uses Jolt barriers/dependencies on this pool,
-without its previous private worker threads. The Jolt adapter lives until engine shutdown, so stopping
-a world does not join unrelated asset jobs; queued references to already-completed physics jobs remain
-valid until the pool releases them. Process exit drains all pool work, including imports. Animation and culling can use the same range API for
-future crowd work; their evaluation is currently serial.
+and log a diagnostic. Jolt job exceptions are fatal because Jolt cannot complete a barrier after a
+job unwinds. `ParallelFor` divides disjoint output ranges and joins every range before returning,
+including after a task fails. Callers retain captured data until completion and avoid cyclic waits.
+`WaitIdle` must run outside the pool's jobs; stop producers first for a stable idle fence. Destroy
+pools on the constructing thread after producers stop. Shutdown drains accepted jobs and their children.
+Physics uses Jolt barriers/dependencies on this pool. The Jolt adapter lives until engine shutdown,
+so stopping a world does not join unrelated asset jobs; queued references to completed physics jobs
+remain valid until the pool releases them. Process exit waits for all submitted pool work, including
+imports. Animation and culling can use the same range API for future crowd work; evaluation is serial.
 
 `AssetManager::RequestMesh/RequestTexture` deduplicate CPU loads and decode on this pool. Requests
-return the published source or null; `IsLoading` distinguishes a pending request from a cached
-failure. `PublishCompleted` publishes results on the main thread (scene rendering and UI frame building
-call it, including camera-less menus); `WaitForLoads` joins and publishes
-current requests. Blocking `GetMesh/GetTexture` join a pending request. Embedded textures chain to
-their mesh: the main thread schedules decoding only after the parent completes. Workers capture paths and project
-root, never the active project or scene. Reload, clear, preview-scope eviction and project changes
-discard pending entries; late completions cannot recreate them. Pending file meshes record file changes until their external dependencies are known, then retry at
-publication only if those dependencies changed. Unrelated writes preserve pending work; built-ins
-are unaffected by file refreshes.
-Cache methods are main-thread-only; consumers must treat published source data as read-only during
-loads of its embedded textures.
+return the published source or null; `IsLoading` distinguishes pending requests from cached failures.
+`PublishCompleted` publishes completed results on the main thread. Scene rendering and UI frame
+building call this fence, including camera-less menus; each fence may expose additional completions,
+so separate scene/UI views do not promise one shared snapshot for an entire host frame.
+`WaitForLoads` joins and publishes current requests. Blocking `GetMesh/GetTexture` join and publish
+only the requested key and its mesh dependency, including automatic retries; they leave unrelated
+entries unpublished. Embedded-image work is scheduled on the main thread after its parent completes.
+Workers capture paths and project root, never the active project or scene. Reload, clear, preview-scope
+eviction and project changes discard entries; late worker completions cannot recreate them.
+A change to a mesh's own file drops its entry immediately. Pending file meshes retain changes to
+other files until their dependencies are known, then retry only if affected, preserving requested
+images and logging the changed dependency. Unrelated writes preserve work; file refreshes do not
+affect built-ins. Cache methods are main-thread-only. Published payloads and completed worker results
+are read-only during dependent image loading; consumers must not mutate their vectors then.
 
 Interactive editor and runtime views request static meshes, material textures and environments
-asynchronously and upload on the rendering thread after publication. Pending meshes display a unit
-cube at their entity transform; textures use the existing fallback colors. Failed meshes disappear
-and report a cached diagnostic. Animator meshes retain blocking loads, including in Edit mode. Physics startup and
-editor operations such as selection bounds, collider overlays, focus and vertex snapping can also
-join a pending import; selecting a loading mesh can therefore stall a frame. `asset.preload` can
-warm these assets before use. Captures, previews and finite-frame runtime runs
-retain blocking loads for deterministic output. `asset.preload {"paths":["Assets/Models/Ship.glb"],"wait":true}`
-also works headlessly; without `wait`, repeat the command in a persistent
-CLI server or editor session to poll per-path pending/ready/failed status. A one-shot CLI request
-reports pending and drains its worker work at exit; cache state is not shared with a later process.
+asynchronously, then upload on the main thread after publication. Pending meshes display a unit
+cube at their entity transform; textures use fallback colors. Failed meshes disappear and report a
+cached diagnostic. Animator meshes retain blocking loads, including in Edit mode. Physics startup
+and editor bounds, collider overlays, focus and vertex snapping can also join an import; selecting
+a loading mesh can stall a frame. `asset.preload` can warm these assets before use. Captures,
+previews and finite-frame runtime runs retain blocking loads for deterministic output.
+`asset.preload {"paths":["Assets/Models/Ship.glb"],"wait":true}` also works headlessly. Without `wait`,
+repeat in a persistent `serve`/`mcp`/editor session to poll pending/ready/failed status. A one-shot CLI
+process does not retain cache state for later calls: it waits for submitted worker tasks at exit,
+but deferred embedded-image work is never submitted without another publication or blocking call.
+Use `wait=true` for one-shot warmup and diagnostics.
 
 Configure with `-DBASALT_PROFILE=ON` to enable pinned Tracy 0.12.2 CPU zones for frames, jobs, scene,
 scripts, animation, physics, glTF import, texture decode and rendering. Run a matching Tracy profiler

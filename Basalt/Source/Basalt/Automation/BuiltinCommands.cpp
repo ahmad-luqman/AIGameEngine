@@ -1194,7 +1194,7 @@ namespace Basalt {
 				return result;
 			});
 
-			Add(registry, "asset.preload", "Requests mesh/texture CPU loads on the shared worker pool. Returns a status (pending, ready or failed) and error for each path. Poll by repeating; wait=true joins these requests, including embedded image dependencies. Reload/refresh retries failed loads. GPU upload happens in the renderer.", Schema::Object({ { "paths", Schema::Array("array of mesh/texture paths, Model.glb#image/N keys or built-in mesh keys", Schema::String("string", true)) }, { "wait", Schema::Boolean("wait for these loads, default false") } }, { "paths" }), [](AutomationSession&, const json& params) {
+			Add(registry, "asset.preload", "Requests mesh/texture CPU loads on the shared worker pool. Returns a status (pending, ready or failed) and error for each path. Poll by repeating in a persistent serve/mcp/editor session; use wait=true for one-shot CLI calls. wait=true joins these requests, including embedded image dependencies. Reload/refresh retries failed loads. GPU upload happens in the renderer.", Schema::Object({ { "paths", Schema::Array("array of mesh/texture paths, Model.glb#image/N keys or built-in mesh keys", Schema::String("string", true)) }, { "wait", Schema::Boolean("wait for these loads, default false") } }, { "paths" }), [](AutomationSession&, const json& params) {
 				const auto& paths = params.at("paths");
 				if (paths.size() > 4096)
 					throw CommandError("at most 4096 preload paths are allowed");

@@ -19,8 +19,8 @@ namespace Basalt {
 	public:
 		static PhysicsJobs& Get()
 		{
-			// Construct the pool first: this adapter drains its queued references at process exit,
-			// including imports, before the pool is destroyed. World teardown never joins unrelated work.
+			// Construct the pool first: at exit this adapter waits for the whole pool to become idle
+			// (including imports) before releasing barriers. World teardown never waits for unrelated work.
 			(void)Basalt::JobSystem::Get();
 			static PhysicsJobs jobs;
 			return jobs;
@@ -66,7 +66,7 @@ namespace Basalt {
 		{
 			try
 			{
-				// Jolt's intrusive handle keeps the queued reference alive through completion.
+				// Jolt's intrusive handle keeps the queued reference alive through execution.
 				JobHandle reference(job);
 				if (!Basalt::JobSystem::Get().Submit([reference] { reference.GetPtr()->Execute(); }))
 				{

@@ -96,6 +96,7 @@ namespace Basalt::PhysicsInternal {
 		float MinVelocityForRestitution = 1.0f;
 
 	private:
+		// An allocation failure must not unwind through a Jolt callback and leave a barrier stuck.
 		void RecordEvent(const RawContactEvent& event) noexcept
 		{
 			try

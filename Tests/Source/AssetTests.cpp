@@ -69,6 +69,26 @@ namespace {
 
 TEST_SUITE("Assets")
 {
+	TEST_CASE("Blocking mesh getters join dependency retries without publishing unrelated requests")
+	{
+		BasaltTest::TempProject project("BlockingAsyncRetry");
+		AssetManager::Clear();
+		const auto binary = MakeQuadBuffer();
+		project.WriteFile("Assets/quad.bin", binary);
+		project.WriteFile("Assets/normal.png", MakePng(0xFFFFFFFF));
+		project.WriteFile("Assets/quad.gltf", MakeGltfJson({ { "uri", "quad.bin" }, { "byteLength", binary.size() } }, { { { "uri", "normal.png" } }, { { "uri", "normal.png" } } }).dump());
+		AssetManager::RequestMesh("Assets/quad.gltf");
+		AssetManager::RequestMesh("builtin://Sphere");
+		JobSystem::Get().WaitIdle();
+		const auto since = Log::GetHistory().GetTotalCount();
+		CHECK(AssetManager::ReloadChanged({ "Assets/quad.bin" }).empty());
+		REQUIRE(AssetManager::GetMesh("Assets/quad.gltf"));
+		CHECK_FALSE(AssetManager::IsLoading("Assets/quad.gltf"));
+		CHECK_FALSE(AssetManager::FindLoadedMesh("builtin://Sphere"));
+		CHECK(BasaltTest::CountLogMessages(since, "Assets/quad.gltf': 'Assets/quad.bin' changed while loading; retrying") == 1);
+		AssetManager::Clear();
+	}
+
 	TEST_CASE("Pending imports retry only when their discovered dependencies changed")
 	{
 		BasaltTest::TempProject project("AsyncDependencyChange");
@@ -86,6 +106,7 @@ TEST_SUITE("Assets")
 		AssetManager::PublishCompleted();
 		CHECK(AssetManager::IsLoading("Assets/quad.gltf"));
 		CHECK_FALSE(AssetManager::FindLoadedMesh("Assets/quad.gltf"));
+		CHECK_FALSE(AssetManager::RequestTexture("Assets/quad.gltf#image/0"));
 		AssetManager::WaitForLoads();
 		CHECK_FALSE(AssetManager::GetMesh("Assets/quad.gltf"));
 		CHECK_FALSE(AssetManager::GetError("Assets/quad.gltf").empty());

@@ -1058,6 +1058,8 @@ end
   this frame only
 - `Time.GetDelta()`, `Time.GetElapsed()`, `Time.GetFrame()`
 - `Log.Trace/Info/Warn/Error(...)`, `print(...)` (to the engine log / editor console)
+- Lua `warn(...)` sends enabled warnings to the same log. `warn("@on")` enables them and
+  `warn("@off")` disables them (the Lua default); fragments in a multi-argument warning are joined.
 - `Game.Quit()` — ends the game (the runtime exits, the editor leaves play mode)
 
 ## Skeletal animation

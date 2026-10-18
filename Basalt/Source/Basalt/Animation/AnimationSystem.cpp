@@ -1,11 +1,11 @@
 #include "Basalt/Animation/AnimationSystem.h"
 
-#include "Basalt/Core/Profiler.h"
 #include "Basalt/Animation/AnimatedModel.h"
 #include "Basalt/Animation/AnimationPose.h"
 #include "Basalt/Animation/BlendSpace.h"
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Core/Log.h"
+#include "Basalt/Core/Profiler.h"
 #include "Basalt/Math/Math.h"
 #include "Basalt/Physics/PhysicsWorld.h"
 #include "Basalt/Scene/Entity.h"

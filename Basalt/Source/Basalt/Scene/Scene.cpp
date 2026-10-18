@@ -1,11 +1,11 @@
 #include "Basalt/Scene/Scene.h"
 
-#include "Basalt/Core/Profiler.h"
 #include "Basalt/Animation/AnimationSystem.h"
 #include "Basalt/Audio/AudioSystem.h"
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Input.h"
 #include "Basalt/Core/Log.h"
+#include "Basalt/Core/Profiler.h"
 #include "Basalt/Particles/ParticleSystem.h"
 #include "Basalt/Physics/PhysicsWorld.h"
 #include "Basalt/Project/Project.h"

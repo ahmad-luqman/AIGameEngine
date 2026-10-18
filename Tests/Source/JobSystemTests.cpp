@@ -43,7 +43,9 @@ TEST_SUITE("JobSystem")
 		for (const auto value : values)
 			CHECK(value == 1);
 		CHECK(pool.ParallelFor(0, 17, [](uint32_t, uint32_t) {}));
-
+#if defined(BS_DIST)
+		CHECK_FALSE(pool.ParallelFor(10, 0, [](uint32_t, uint32_t) {}));
+#endif
 		CHECK_FALSE(pool.ParallelFor(10, 1, {}));
 	}
 
