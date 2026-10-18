@@ -334,8 +334,9 @@ namespace Basalt {
 			glm::vec3 requested = record.MoveVelocity;
 			if (record.RootMotionVelocity)
 			{
-				requested.x = record.RootMotionVelocity->x;
-				requested.z = record.RootMotionVelocity->z;
+				const glm::vec3 worldUp = FromJolt(up);
+				const glm::vec3 rootVelocity = *record.RootMotionVelocity;
+				requested = worldUp * glm::dot(requested, worldUp) + rootVelocity - worldUp * glm::dot(rootVelocity, worldUp);
 			}
 			const JPH::Vec3 move = ToJolt(requested);
 			const JPH::Vec3 moveVertical = up * move.Dot(up);
@@ -411,7 +412,7 @@ namespace Basalt {
 			return;
 		auto& request = m_Impl->RootMotion[entity.GetUUID()];
 		request.Active = true;
-		request.Pending += glm::vec3(displacement->x, 0, displacement->z);
+		request.Pending += *displacement;
 	}
 
 	bool PhysicsWorld::IsCharacterGrounded(Entity entity) const
