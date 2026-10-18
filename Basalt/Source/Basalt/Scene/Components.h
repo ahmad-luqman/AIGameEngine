@@ -193,7 +193,7 @@ namespace Basalt {
 		// ReferenceTime seconds.
 		std::string ReferenceClip;
 		float ReferenceTime = 0.0f;
-		// Empty: every joint at weight 1. Otherwise joints under no entry take weight 0.
+		// Empty (or only entries without a Joint): every joint at weight 1. Otherwise joints under no entry take 0.
 		std::vector<AnimationMaskJoint> Mask;
 	};
 
@@ -243,7 +243,8 @@ namespace Basalt {
 
 	enum class IKChainType : uint8_t
 	{
-		// Bends Joint's parent and turns its grandparent so Joint reaches the target (legs, arms).
+		// Bends Joint's parent and turns its grandparent so Joint reaches the target (legs, arms); Joint itself turns to a
+		// target rotation or the ground.
 		TwoBone = 0,
 		// Turns Joint and ChainLength - 1 of its ancestors so Joint's Axis points at the target (head, spine, aim).
 		LookAt // keep last: IKChainTypeCount
@@ -293,8 +294,8 @@ namespace Basalt {
 		// it (meters, 0..100).
 		float RayHeight = 0.5f;
 		float RayDepth = 0.5f;
-		// Time constant (seconds, 0..100) of the exponential easing of foot offsets, the pelvis and ground normals; 0
-		// snaps.
+		// Time constant (seconds, 0..100) of the exponential easing of foot offsets and ground normals (the pelvis
+		// follows the eased offsets); 0 snaps.
 		float Smoothing = 0.1f;
 	};
 

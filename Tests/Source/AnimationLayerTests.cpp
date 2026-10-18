@@ -4,6 +4,7 @@
 #include "TestUtils.h"
 
 #include <Basalt/Animation/AnimationPose.h>
+#include <Basalt/Animation/FadingWeight.h>
 #include <Basalt/Animation/AnimationSystem.h>
 #include <Basalt/Asset/AssetManager.h>
 #include <Basalt/Asset/MeshImporter.h>
@@ -192,15 +193,24 @@ TEST_SUITE("Animation")
 		CHECK(system.GetLayerWeight(biped, "Wave") == doctest::Approx(0.25f));
 
 		const auto since = Log::GetHistory().GetTotalCount();
-		// Each distinct problem logs once, however often a script repeats it, also between good calls on other layers.
+		// A failing call logs once however often a script repeats it, with whatever bad values, also between good calls
+		// on the same and other layers.
 		for (int i = 0; i < 3; i++)
 		{
-			CHECK_FALSE(system.SetLayerWeight(biped, "Wave", 1.5f, 0));
+			CHECK_FALSE(system.SetLayerWeight(biped, "Wave", 1.5f + static_cast<float>(i), 0));
+			CHECK(system.GetLayerWeight(biped, "Wave").has_value());
 			CHECK(system.GetLayerWeight(biped, "Lean").has_value());
+			// Another call on the same layer succeeding does not end this call's problem.
+			CHECK(system.PlayLayer(biped, "Wave", std::nullopt));
 		}
 		CHECK_FALSE(system.SetLayerWeight(biped, "Wave", 1, -1));
 		CHECK_FALSE(system.SetLayerWeight(biped, "Wave", std::numeric_limits<float>::quiet_NaN(), 0));
-		CHECK(CountLogMessages(since, "layer 'Wave': weight must be between 0 and 1") == 3);
+		CHECK(CountLogMessages(since, "layer 'Wave': the weight must be between 0 and 1") == 1);
+		CHECK(CountLogMessages(since, "(got 1.5 and 0)") == 1);
+		// A success of the same call ends the problem: it logs again when it comes back.
+		CHECK(system.SetLayerWeight(biped, "Wave", 0.25f, 0));
+		CHECK_FALSE(system.SetLayerWeight(biped, "Wave", 2, 0));
+		CHECK(CountLogMessages(since, "layer 'Wave': the weight must be between 0 and 1") == 2);
 		CHECK(system.GetLayerWeight(biped, "Wave") == doctest::Approx(0.25f));
 		scene.OnRuntimeStop();
 	}
@@ -265,7 +275,9 @@ TEST_SUITE("Animation")
 		CHECK_FALSE(system.PlayLayer(biped, "Lower", std::nullopt));
 		CHECK_FALSE(system.GetLayerWeight(biped, "Lower").has_value());
 		CHECK(CountLogMessages(since, "clip 'Missing' not found") == 1);
-		CHECK(CountLogMessages(since, "no layer named 'Lower'") == 1);
+		// Once per operation: PlayAnimationLayer and GetAnimationLayerWeight.
+		CHECK_FALSE(system.PlayLayer(biped, "Lower", std::nullopt));
+		CHECK(CountLogMessages(since, "no layer named 'Lower'") == 2);
 		// The failed calls kept the script clip.
 		CHECK(NearRotation(LocalRotation(system, biped, *source, "RightUpperArm"), AxisAngle(Z, -45)));
 
@@ -296,11 +308,12 @@ TEST_SUITE("Animation")
 			animator.Layers = { Layer("Walk", "Walk") };
 			scene.OnRuntimeStart();
 			auto& system = *scene.GetAnimationSystem();
-			system.Update(0.25f);
-			// Walk bobs the hips to 1.01 m at 0.25 s; root motion leaves the base's hips in place.
+			system.Update(0.125f);
+			// Walk bobs the hips to 1.005 m at 0.125 s; root motion leaves the base's hips in place, and the layer's legs
+			// (10 degrees, not the base's rest) either way.
 			const auto& globals = *system.GetPose(biped);
-			CHECK(globals[Node(*source, "Hips")][3].y == doctest::Approx(rootMotion ? 1.0f : 1.01f));
-			CHECK(NearRotation(LocalRotation(system, biped, *source, "LeftUpperLeg"), AxisAngle(X, 0)));
+			CHECK(globals[Node(*source, "Hips")][3].y == doctest::Approx(rootMotion ? 1.0f : 1.005f));
+			CHECK(NearRotation(LocalRotation(system, biped, *source, "LeftUpperLeg"), AxisAngle(X, 10)));
 			scene.OnRuntimeStop();
 		}
 	}
@@ -334,6 +347,11 @@ TEST_SUITE("Animation")
 		for (uint32_t i = 0; i <= AnimatorComponent::MaxLayers; i++)
 			many.push_back({ { "Name", "L" + std::to_string(i) } });
 		CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, "Animator", { { "Layers", many } }, error));
+
+		json mask = json::array();
+		for (uint32_t i = 0; i <= AnimationLayer::MaxMaskJoints; i++)
+			mask.push_back({ { "Joint", "J" + std::to_string(i) } });
+		CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, "Animator", { { "Layers", { { { "Mask", mask } } } } }, error));
 
 		REQUIRE(ComponentRegistry::AddOrPatch(entity, "Animator", { { "Layers", { { { "Name", "Breath" }, { "Clip", "Breathe" }, { "Blend", "Additive" }, { "Mask", { { { "Joint", "Chest" }, { "Weight", 0.5 } } } } } } } }, error));
 		const auto& layer = entity.GetComponent<AnimatorComponent>().Layers.at(0);
@@ -378,7 +396,7 @@ TEST_SUITE("Animation")
 		reference = target;
 		layer.Nodes[0] = { { 3, 0, 0 }, AxisAngle({ 1, 0, 0 }, 40) * AxisAngle({ 0, 1, 0 }, 30), { 3, 1, 0 } };
 		reference.Nodes[0] = { { 2, 0, 0 }, AxisAngle({ 0, 1, 0 }, 30), { 1, 1, 0 } };
-		const AnimationLayerMask mask{ .Weights = { 1, 1 }, .Channels = { AnimatedTranslation | AnimatedRotation | AnimatedScale, 0 } };
+		const AnimationLayerMask mask{ .Weights = { 1, 1 }, .Channels = { AnimatedChannel::Translation | AnimatedChannel::Rotation | AnimatedChannel::Scale, 0 } };
 
 		AnimationLocalPose added = target;
 		AddAnimationPose(added, layer, reference, mask, 0.5f);
@@ -391,7 +409,7 @@ TEST_SUITE("Animation")
 		CHECK(added.Nodes[1].Translation == target.Nodes[1].Translation);
 
 		AnimationLocalPose overridden = target;
-		OverrideAnimationPose(overridden, layer, { .Weights = { 0.5f, 1 }, .Channels = { AnimatedScale, AnimatedRotation } }, 1);
+		OverrideAnimationPose(overridden, layer, { .Weights = { 0.5f, 1 }, .Channels = { AnimatedChannel::Scale, AnimatedChannel::Rotation } }, 1);
 		CHECK(overridden.Nodes[0].Scale == glm::vec3(2.5f, 1.5f, 1));
 		CHECK(overridden.Nodes[0].Translation == target.Nodes[0].Translation);
 		CHECK(NearRotation(overridden.Nodes[0].Rotation, target.Nodes[0].Rotation));
@@ -470,7 +488,7 @@ TEST_SUITE("Animation")
 		CHECK(NearRotation(LocalRotation(system, biped, *source, "RightUpperArm"), glm::quat(1, 0, 0, 0)));
 		// No clip shows nothing, so PlayAnimationLayer says so.
 		CHECK_FALSE(system.PlayLayer(biped, "Wave", std::nullopt));
-		CHECK(CountLogMessages(since, "layer 'Wave' cannot play") == 1);
+		CHECK(CountLogMessages(since, "layer 'Wave' shows nothing with this clip") == 1);
 		layers[0].Clip = "Wave";
 		layers[0].Mask[0].Joint = "RightUpperArm";
 		system.Update(0);
@@ -486,7 +504,7 @@ TEST_SUITE("Animation")
 		system.Update(Step);
 		system.Update(Step);
 		CHECK(system.GetLayerWeight(biped, "Wave") == doctest::Approx(1.0f));
-		CHECK(CountLogMessages(since, "Weight 3 must be between 0 and 1") == 1);
+		CHECK(CountLogMessages(since, "layer 'Wave': Weight must be between 0 and 1; clamping") == 1);
 		scene.OnRuntimeStop();
 	}
 
@@ -503,8 +521,18 @@ TEST_SUITE("Animation")
 		const auto since = Log::GetHistory().GetTotalCount();
 		scene.OnRuntimeStart();
 		auto& system = *scene.GetAnimationSystem();
-		system.Update(0.25f);
-		// Walk bobs the hips, above the root joint Spine: the layer leaves them alone, and says why.
+		system.Update(0.125f);
+		// Walk bobs the hips, above the root joint Spine: the layer leaves them alone, and says why; the legs, beside
+		// Spine, still follow the layer.
+		CHECK((*system.GetPose(biped))[Node(*source, "Hips")][3].y == doctest::Approx(1.0f));
+		CHECK(NearRotation(LocalRotation(system, biped, *source, "LeftUpperLeg"), AxisAngle(X, 10)));
+		CHECK(CountLogMessages(since, "animates the root-motion joint 'Spine' or a node above it") == 1);
+		// Turning root motion off gives the hips back to the layer (it bobs them); back on, the warning is not repeated.
+		animator.RootMotion = false;
+		system.Update(0);
+		CHECK((*system.GetPose(biped))[Node(*source, "Hips")][3].y == doctest::Approx(1.005f));
+		animator.RootMotion = true;
+		system.Update(0);
 		CHECK((*system.GetPose(biped))[Node(*source, "Hips")][3].y == doctest::Approx(1.0f));
 		CHECK(CountLogMessages(since, "animates the root-motion joint 'Spine' or a node above it") == 1);
 		scene.OnRuntimeStop();
@@ -523,5 +551,120 @@ TEST_SUITE("Animation")
 		system.Update(0);
 		CHECK(system.GetLayerWeight(biped, "Wave") == doctest::Approx(1.0f));
 		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Fading weights clamp their inputs, fade from where they are and end at the target")
+	{
+		FadingWeight weight(2);
+		CHECK(weight.Get() == 1);
+		weight.FadeTo(0, 2);
+		weight.Advance(0.5f);
+		CHECK(weight.Get() == doctest::Approx(0.75f));
+		// A new fade starts from the current value.
+		weight.FadeTo(1, 1);
+		weight.Advance(0.5f);
+		CHECK(weight.Get() == doctest::Approx(0.875f));
+		weight.Advance(10);
+		CHECK(weight.Get() == 1);
+		CHECK_FALSE(weight.IsFading());
+		// No time, a denormal time or a non-finite target sets the value at once.
+		weight.FadeTo(0.25f, 0);
+		CHECK(weight.Get() == 0.25f);
+		weight.FadeTo(0.5f, std::numeric_limits<float>::denorm_min());
+		CHECK(weight.Get() == 0.5f);
+		weight.FadeTo(NAN, 1);
+		weight.Advance(1);
+		CHECK(weight.Get() == 0);
+		// A changed configuration applies at once and ends a fade; an unchanged one does nothing.
+		weight.FadeTo(1, 1);
+		weight.Configure(2);
+		CHECK(weight.Get() == 0);
+		weight.Configure(0.5f);
+		CHECK(weight.Get() == 0.5f);
+		CHECK_FALSE(weight.IsFading());
+		CHECK(IsValidFade(1, 0));
+		CHECK_FALSE(IsValidFade(1.5f, 0));
+		CHECK_FALSE(IsValidFade(0.5f, -1));
+		CHECK_FALSE(IsValidFade(NAN, 0));
+	}
+
+	TEST_CASE("Layers react to Blend changes and failed PlayAnimationLayer calls change nothing")
+	{
+		ClearAssetCache clear;
+		const auto source = LoadBiped();
+		Scene scene;
+		auto biped = AddBiped(scene, "Lean");
+		auto& layers = biped.GetComponent<AnimatorComponent>().Layers;
+		// Lean on Lean: an override shows Lean's 20 degrees, an additive one adds them again (its reference is Walk's
+		// rest spine).
+		layers = { Layer("Lean", "Lean") };
+		layers[0].ReferenceClip = "Walk";
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		CHECK(NearRotation(LocalRotation(system, biped, *source, "Spine"), AxisAngle(Z, 20)));
+		layers[0].Blend = AnimationLayerBlend::Additive;
+		system.Update(0);
+		CHECK(NearRotation(LocalRotation(system, biped, *source, "Spine"), AxisAngle(Z, 40)));
+
+		// A reference clip that is missing makes the layer show nothing; asking it to play another clip then fails and
+		// keeps the layer as it was.
+		layers[0].ReferenceClip = "Missing";
+		system.Update(0.25f);
+		CHECK_FALSE(system.PlayLayer(biped, "Lean", std::string("Wave")));
+		layers[0].ReferenceClip = "Walk";
+		system.Update(0);
+		CHECK(NearRotation(LocalRotation(system, biped, *source, "Spine"), AxisAngle(Z, 40)));
+		CHECK(NearRotation(LocalRotation(system, biped, *source, "RightUpperArm"), glm::quat(1, 0, 0, 0)));
+		// A mask of only unnamed entries (the inspector's fresh additions) is still the whole model.
+		layers[0].Mask = { { "", 1.0f } };
+		system.Update(0);
+		CHECK(NearRotation(LocalRotation(system, biped, *source, "Spine"), AxisAngle(Z, 40)));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Layers stay out of root motion while it fades out of a state")
+	{
+		ClearAssetCache clear;
+		TempProject project("LayerRootFade");
+		const json graph = {
+			{ "InitialState", "Walk" },
+			{ "Parameters", json::array({ { { "Name", "Stop" }, { "Type", "Trigger" } } }) },
+			{ "States", json::array({ { { "Name", "Walk" }, { "Clip", "Walk" }, { "RootMotion", true } }, { { "Name", "Idle" }, { "Clip", "Lean" } } }) },
+			{ "Transitions", json::array({ { { "From", "Walk" }, { "To", "Idle" }, { "Duration", 1 }, { "Conditions", json::array({ { { "Parameter", "Stop" } } }) } } }) },
+		};
+		const std::string path = project.WriteFile("Assets/Animations/Fade.banimgraph", graph.dump());
+		const auto source = LoadBiped();
+		// The same rig with and without a layer that bobs the hips at another speed: while the outgoing Walk still
+		// extracts root motion the hips must not differ.
+		std::array<float, 2> hips{};
+		std::array<float, 2> settled{};
+		for (int withLayer = 0; withLayer < 2; withLayer++)
+		{
+			Scene scene;
+			auto biped = AddBiped(scene);
+			auto& animator = biped.GetComponent<AnimatorComponent>();
+			animator.StateMachine = path;
+			animator.RootMotion = true;
+			animator.RootJoint = "Hips";
+			if (withLayer)
+			{
+				animator.Layers = { Layer("Bob", "Walk") };
+				animator.Layers[0].Speed = 3;
+			}
+			scene.OnRuntimeStart();
+			auto& system = *scene.GetAnimationSystem();
+			system.Update(0.1f);
+			REQUIRE(system.SetTrigger(biped, "Stop"));
+			system.Update(0.05f);
+			system.Update(0.1f);
+			hips[withLayer] = (*system.GetPose(biped))[Node(*source, "Hips")][3].y;
+			for (int i = 0; i < 20; i++)
+				system.Update(0.1f);
+			settled[withLayer] = (*system.GetPose(biped))[Node(*source, "Hips")][3].y;
+			scene.OnRuntimeStop();
+		}
+		CHECK(hips[1] == doctest::Approx(hips[0]));
+		// After the fade nothing extracts root motion and the layer moves the hips.
+		CHECK(settled[1] != doctest::Approx(settled[0]));
 	}
 }
