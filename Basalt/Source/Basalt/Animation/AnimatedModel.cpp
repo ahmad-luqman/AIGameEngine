@@ -144,6 +144,69 @@ namespace Basalt {
 			}
 			if (animator.MatchVelocity && !knownSpeed)
 				warnings.emplace_back("Animator MatchVelocity has no effect: no blend space sample has a Speed");
+			const auto hasNode = [&](const std::string& name) { return std::ranges::find(source->Nodes, name, &MeshNode::Name) != source->Nodes.end(); };
+			for (const AnimationLayer& layer : animator.Layers)
+			{
+				if (!layer.Clip.empty() && !findClip(layer.Clip))
+					warnings.push_back(fmt::format("Animator layer '{}': clip '{}' not found", layer.Name, layer.Clip));
+				if (layer.Blend == AnimationLayerBlend::Additive && !layer.ReferenceClip.empty() && !findClip(layer.ReferenceClip))
+					warnings.push_back(fmt::format("Animator layer '{}': reference clip '{}' not found", layer.Name, layer.ReferenceClip));
+				if (layer.Blend == AnimationLayerBlend::Override && !layer.ReferenceClip.empty())
+					warnings.push_back(fmt::format("Animator layer '{}': ReferenceClip only applies to Additive layers", layer.Name));
+				for (const AnimationMaskJoint& joint : layer.Mask)
+				{
+					if (joint.Joint.empty())
+						warnings.push_back(fmt::format("Animator layer '{}': a mask entry has no Joint and is ignored", layer.Name));
+					else if (!hasNode(joint.Joint))
+						warnings.push_back(fmt::format("Animator layer '{}': mask joint '{}' not found", layer.Name, joint.Joint));
+				}
+			}
+		}
+
+		void AddInverseKinematicsWarnings(Entity entity, const InverseKinematicsComponent& ik, std::vector<std::string>& warnings)
+		{
+			const auto* animator = entity.TryGetComponent<AnimatorComponent>();
+			if (!animator)
+			{
+				warnings.emplace_back("InverseKinematics needs an Animator on the same entity");
+				return;
+			}
+			// AddAnimatorWarnings reports a model that cannot load.
+			const auto source = animator->Mesh.empty() ? nullptr : AssetManager::GetMesh(animator->Mesh);
+			bool ground = false;
+			for (const IKChain& chain : ik.Chains)
+			{
+				ground = ground || chain.Ground;
+				if (chain.Joint.empty())
+				{
+					warnings.push_back(fmt::format("InverseKinematics chain '{}': Joint is empty", chain.Name));
+					continue;
+				}
+				if (!source)
+					continue;
+				const auto node = std::ranges::find(source->Nodes, chain.Joint, &MeshNode::Name);
+				if (node == source->Nodes.end())
+				{
+					warnings.push_back(fmt::format("InverseKinematics chain '{}': joint '{}' not found", chain.Name, chain.Joint));
+					continue;
+				}
+				const size_t length = chain.Type == IKChainType::TwoBone ? 3 : chain.ChainLength;
+				size_t found = 0;
+				bool fixed = false;
+				for (int32_t index = static_cast<int32_t>(node - source->Nodes.begin()); index >= 0 && found < length; index = source->Nodes[index].Parent)
+				{
+					fixed = fixed || source->Nodes[index].HasMatrix;
+					found++;
+				}
+				if (found < length)
+					warnings.push_back(chain.Type == IKChainType::TwoBone ? fmt::format("InverseKinematics chain '{}': joint '{}' needs a parent and a grandparent", chain.Name, chain.Joint) : fmt::format("InverseKinematics chain '{}': joint '{}' has fewer than {} joints above it", chain.Name, chain.Joint, length - 1));
+				else if (fixed)
+					warnings.push_back(fmt::format("InverseKinematics chain '{}': a joint has a fixed matrix and cannot be turned", chain.Name));
+			}
+			if (!ik.Pelvis.empty() && source && std::ranges::find(source->Nodes, ik.Pelvis, &MeshNode::Name) == source->Nodes.end())
+				warnings.push_back(fmt::format("InverseKinematics Pelvis joint '{}' not found", ik.Pelvis));
+			if (!ik.Pelvis.empty() && !ground)
+				warnings.emplace_back("InverseKinematics Pelvis has no effect: no chain is a Ground chain");
 		}
 
 		void AddBoneAttachmentWarnings(Entity entity, const BoneAttachmentComponent& attachment, std::vector<std::string>& warnings)
@@ -218,6 +281,8 @@ namespace Basalt {
 			AddAnimatorWarnings(*animator, warnings);
 		if (const auto* attachment = entity.TryGetComponent<BoneAttachmentComponent>())
 			AddBoneAttachmentWarnings(entity, *attachment, warnings);
+		if (const auto* ik = entity.TryGetComponent<InverseKinematicsComponent>())
+			AddInverseKinematicsWarnings(entity, *ik, warnings);
 		return warnings;
 	}
 }

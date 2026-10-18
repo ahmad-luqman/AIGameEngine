@@ -30,8 +30,9 @@ namespace Basalt {
 	};
 
 	// Per-entity playback and poses for a playing/simulating scene. Asset data stays shared and immutable.
-	// Each Update advances every Animator and collects the events playback crossed (TakeEvents). The scene
-	// updates attachments after physics; standalone callers get attachments at the end of Update by default.
+	// Each Update advances every Animator (base playback, then its layers) and collects the events playback crossed
+	// (TakeEvents). The scene runs LateUpdate (inverse kinematics, then attachments) after physics and OnLateUpdate;
+	// standalone callers get it at the end of Update by default.
 	class AnimationSystem
 	{
 	public:
@@ -40,7 +41,9 @@ namespace Basalt {
 
 		explicit AnimationSystem(Scene& scene);
 		~AnimationSystem();
-		void Update(Timestep timestep, bool updateAttachments = true);
+		void Update(Timestep timestep, bool late = true);
+		// Solves inverse kinematics and refreshes attachments once physics and OnLateUpdate have placed the rigs.
+		void LateUpdate(Timestep timestep);
 		// Refresh attachments after physics and LateUpdate have placed their rigs.
 		void UpdateAttachments();
 		// Set a declared Float/Bool parameter on an active graph; false with a deduplicated diagnostic on failure.
@@ -83,6 +86,21 @@ namespace Basalt {
 		// Logs a GetBoneTransform failure for a script when it appears or changes (an empty `error` records success),
 		// so a script polling a misspelled joint every frame reports it once.
 		void ReportBoneProblem(Entity entity, const std::string& joint, const std::string& error);
+		// Layers (Animator.Layers, found by name). PlayLayer restarts the layer at 0, on `clip` when given (until the
+		// configured Clip changes); SetLayerWeight fades linearly over `seconds` (0: at once). False, with a
+		// diagnostic, for an unknown layer or clip or an invalid value.
+		bool PlayLayer(Entity entity, const std::string& layer, const std::optional<std::string>& clip);
+		bool SetLayerWeight(Entity entity, const std::string& layer, float weight, float seconds);
+		std::optional<float> GetLayerWeight(Entity entity, const std::string& layer);
+		// Inverse kinematics chains (InverseKinematics.Chains, found by name). A target is a world position (with an
+		// optional world rotation for a TwoBone chain's end joint) or an entity followed every frame; it replaces
+		// ground placement until ClearIKTarget. False, with a diagnostic, for a missing component or chain or an
+		// invalid value.
+		bool SetIKTarget(Entity entity, const std::string& chain, const glm::vec3& position, const std::optional<glm::quat>& rotation);
+		bool SetIKTarget(Entity entity, const std::string& chain, Entity target, bool matchRotation);
+		bool ClearIKTarget(Entity entity, const std::string& chain);
+		bool SetIKWeight(Entity entity, const std::string& chain, float weight, float seconds);
+		std::optional<float> GetIKWeight(Entity entity, const std::string& chain);
 		// The events crossed since the last call, per Animator in update order: each clip's in the order playback
 		// crossed them, the current clip's before the outgoing one's (for a two-clip blend, the second clip's first).
 		std::vector<AnimationEventRecord> TakeEvents();
@@ -140,6 +158,28 @@ namespace Basalt {
 			// Retained across good frames: each clip/node failure is reported once per playback/cache bind.
 			std::string Problem;
 		};
+		// Runtime playback of one Animator layer, matched to its configuration by name every update.
+		struct LayerState
+		{
+			std::string Name;
+			// Set by PlayLayer; nullopt plays the configured Clip.
+			std::optional<std::string> ScriptClip;
+			// The configuration last seen: a changed Clip or Weight applies at once.
+			std::string ConfiguredClip;
+			float ConfiguredWeight = 1;
+			double Time = 0;
+			float Weight = 1;
+			float TargetWeight = 1;
+			// Weight per second while fading toward TargetWeight; 0 when not fading.
+			float FadeRate = 0;
+			// Resolved every update: -1 shows nothing (no clip, or a missing clip or reference clip).
+			int32_t Clip = -1;
+			AnimationLayerBlend Blend = AnimationLayerBlend::Override;
+			std::vector<float> Mask;
+			std::vector<uint8_t> Channels;
+			AnimationLocalPose Reference;
+			std::string Problem;
+		};
 		struct Playback
 		{
 			entt::entity Handle = entt::null;
@@ -181,8 +221,15 @@ namespace Basalt {
 			// MatchVelocity: the entity's smoothed horizontal speed and where it was at the last update.
 			double MeasuredSpeed = 0;
 			std::optional<glm::vec3> LastPosition;
+			// The base pose (clip, blend, fade or blend space); layers and IK never touch it.
 			AnimationLocalPose Local;
 			AnimationLocalPose Snapshot; // Interrupted transitions start from their visible blended pose.
+			std::vector<LayerState> Layers;
+			// Local with the layers applied: the pose IK solves from.
+			AnimationLocalPose Pose;
+			// The last IK solution's local transforms of the nodes it moved, written over Pose by every evaluation, so a
+			// pose evaluated again after the IK pass (e.g. Play in OnAnimationEvent) keeps it until the next solve.
+			std::vector<std::pair<uint32_t, AnimationNodePose>> IKOverlay;
 			bool Playing = false;
 			bool Rest = false;
 			bool InvalidPose = false;
@@ -196,6 +243,38 @@ namespace Basalt {
 			std::string EntityName;
 			std::vector<glm::mat4> Globals;
 		};
+		// Runtime state of one IK chain, matched to its configuration by name every update.
+		struct IKChainState
+		{
+			enum class TargetKind : uint8_t
+			{
+				None,
+				Position,
+				Entity
+			};
+			std::string Name;
+			float ConfiguredWeight = 1;
+			float Weight = 1;
+			float TargetWeight = 1;
+			float FadeRate = 0;
+			TargetKind Kind = TargetKind::None;
+			glm::vec3 Position = glm::vec3(0);
+			std::optional<glm::quat> Rotation;
+			UUID TargetEntity = 0;
+			bool MatchRotation = false;
+			// Foot placement: the smoothed offset of the ground below the joint from the entity's origin height along
+			// its up axis, and the smoothed ground normal (world space). Placed snaps the first real frame.
+			float GroundOffset = 0;
+			glm::vec3 GroundNormal = glm::vec3(0, 1, 0);
+			bool Placed = false;
+		};
+		struct IKState
+		{
+			entt::entity Handle = entt::null;
+			std::vector<IKChainState> Chains;
+			// The last solve problem, logged when it changes.
+			std::string Problem;
+		};
 		Playback* Ensure(Entity entity);
 		// Ensure for an operation: logs why the entity cannot animate (once per entity and reason).
 		Playback* EnsurePlayable(Entity entity);
@@ -208,6 +287,20 @@ namespace Basalt {
 		// Re-resolves the running space and logs a new problem; false when it cannot play.
 		bool ResolveSpace(Playback& playback, SpaceState& state, const AnimatorComponent& component);
 		static void Evaluate(Playback& playback);
+		// Applies the layers and the IK overlay to the base pose and composes Globals.
+		static void Finish(Playback& playback);
+		// Matches layer states to the configuration, resolves them and advances their clocks and fades.
+		static void AdvanceLayers(Playback& playback, const AnimatorComponent& component, double seconds);
+		static void ResolveLayer(Playback& playback, const AnimationLayer& config, LayerState& state);
+		// The layer named `layer` after syncing, or null (logged once per problem).
+		LayerState* FindLayer(Entity entity, Playback& playback, const std::string& layer);
+		void SolveIK(float seconds);
+		void SolveEntityIK(Entity entity, Playback& playback, const InverseKinematicsComponent& component, IKState& state, float seconds);
+		IKState& SyncIK(Entity entity, const InverseKinematicsComponent& component);
+		// The chain named `chain` after syncing, or null (logged once per problem).
+		IKChainState* FindChain(Entity entity, const std::string& chain);
+		void ReportIKCallProblem(Entity entity, const std::string& problem);
+		void OnIKDestroy(entt::registry& registry, entt::entity handle);
 		static void ClearTransition(Playback& playback);
 		// Starts fading from the visible pose; the current clip keeps advancing as the outgoing one when playback is
 		// a single clip.
@@ -243,6 +336,13 @@ namespace Basalt {
 		// The last GetBoneTransform problem reported per entity and joint, and the last unplayable reason per entity.
 		std::map<std::pair<UUID, std::string>, std::string> m_BoneProblems;
 		std::unordered_map<UUID, std::string> m_UnplayableReported;
+		// IK targets and weights are gameplay state: they survive playback resets (Mesh or Clip changes).
+		std::unordered_map<UUID, IKState> m_IK;
+		std::vector<glm::mat4> m_IKGlobals;
+		// The last failed layer call's problem per entity, so a script retrying every frame logs it once.
+		std::unordered_map<UUID, std::string> m_LayerProblems;
+		// The last failed IK call's problem per entity, likewise.
+		std::unordered_map<UUID, std::string> m_IKCallProblems;
 		// Scratch storage reused every update.
 		std::vector<const AnimationEvent*> m_Markers;
 		std::vector<float> m_Weights;

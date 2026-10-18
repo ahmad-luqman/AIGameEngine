@@ -319,6 +319,12 @@ namespace Basalt {
 		json Write(const AnimationEvent& c);
 		json Write(const AnimationBlendSample& c);
 		json Write(const AnimationBlendSpace& c);
+		void Fields(FieldReader& r, AnimationMaskJoint& c);
+		void Fields(FieldReader& r, AnimationLayer& c);
+		void Fields(FieldReader& r, IKChain& c);
+		json Write(const AnimationMaskJoint& c);
+		json Write(const AnimationLayer& c);
+		json Write(const IKChain& c);
 
 		// The shape of a list element, built once per element type from its field list.
 		template<typename E>
@@ -426,6 +432,8 @@ namespace Basalt {
 		constexpr const char* s_UIHorizontalAlignNames[] = { "Left", "Center", "Right" };
 		constexpr const char* s_UIVerticalAlignNames[] = { "Top", "Middle", "Bottom" };
 		constexpr const char* s_BlendSpaceTypeNames[] = { "1D", "2D" };
+		constexpr const char* s_LayerBlendNames[] = { "Override", "Additive" };
+		constexpr const char* s_IKChainTypeNames[] = { "TwoBone", "LookAt" };
 		// Names are indexed by enum value; a new enum value needs a name here.
 		static_assert(std::size(s_RigidBodyTypeNames) == static_cast<size_t>(RigidBodyType::Kinematic) + 1);
 		static_assert(std::size(s_ProjectionTypeNames) == static_cast<size_t>(SceneCamera::ProjectionType::Orthographic) + 1);
@@ -438,6 +446,8 @@ namespace Basalt {
 		static_assert(std::size(s_UIHorizontalAlignNames) == UIHorizontalAlignCount);
 		static_assert(std::size(s_UIVerticalAlignNames) == UIVerticalAlignCount);
 		static_assert(std::size(s_BlendSpaceTypeNames) == AnimationBlendSpaceTypeCount);
+		static_assert(std::size(s_LayerBlendNames) == AnimationLayerBlendCount);
+		static_assert(std::size(s_IKChainTypeNames) == IKChainTypeCount);
 
 		// The name of an enum value. C++ code can store a value outside the enum (the registry never does);
 		// writing it as the first name keeps saving from reading past the table.
@@ -514,6 +524,25 @@ namespace Basalt {
 			r.ListField("Samples", c.Samples, AnimatorComponent::MaxBlendSamples);
 		}
 
+		void Fields(FieldReader& r, AnimationMaskJoint& c)
+		{
+			r.Field("Joint", c.Joint);
+			r.Field("Weight", c.Weight);
+		}
+
+		void Fields(FieldReader& r, AnimationLayer& c)
+		{
+			r.Field("Name", c.Name);
+			r.Field("Clip", c.Clip);
+			r.EnumField("Blend", c.Blend, s_LayerBlendNames);
+			r.Field("Weight", c.Weight);
+			r.Field("Speed", c.Speed);
+			r.Field("Looping", c.Looping);
+			r.Field("ReferenceClip", c.ReferenceClip);
+			r.Field("ReferenceTime", c.ReferenceTime);
+			r.ListField("Mask", c.Mask, AnimatorComponent::MaxMaskJoints);
+		}
+
 		void Fields(FieldReader& r, AnimatorComponent& c)
 		{
 			r.Field("Mesh", c.Mesh);
@@ -528,6 +557,7 @@ namespace Basalt {
 			r.Field("RootJoint", c.RootJoint);
 			r.ListField("Events", c.Events, AnimatorComponent::MaxEvents);
 			r.ListField("BlendSpaces", c.BlendSpaces, AnimatorComponent::MaxBlendSpaces);
+			r.ListField("Layers", c.Layers, AnimatorComponent::MaxLayers);
 		}
 
 		void Fields(FieldReader& r, BoneAttachmentComponent& c)
@@ -537,6 +567,28 @@ namespace Basalt {
 			r.Field("Translation", c.Translation);
 			r.RotationField("Rotation", c.Rotation);
 			r.Field("Scale", c.Scale);
+		}
+
+		void Fields(FieldReader& r, IKChain& c)
+		{
+			r.Field("Name", c.Name);
+			r.EnumField("Type", c.Type, s_IKChainTypeNames);
+			r.Field("Joint", c.Joint);
+			r.Field("ChainLength", c.ChainLength);
+			r.Field("Axis", c.Axis);
+			r.Field("MaxAngle", c.MaxAngle);
+			r.Field("Pole", c.Pole);
+			r.Field("Ground", c.Ground);
+			r.Field("Weight", c.Weight);
+		}
+
+		void Fields(FieldReader& r, InverseKinematicsComponent& c)
+		{
+			r.ListField("Chains", c.Chains, InverseKinematicsComponent::MaxChains);
+			r.Field("Pelvis", c.Pelvis);
+			r.Field("RayHeight", c.RayHeight);
+			r.Field("RayDepth", c.RayDepth);
+			r.Field("Smoothing", c.Smoothing);
 		}
 
 		void Fields(FieldReader& r, MaterialComponent& c)
@@ -925,7 +977,48 @@ namespace Basalt {
 				{ "RootJoint", c.RootJoint },
 				{ "Events", ListToJson(c.Events) },
 				{ "BlendSpaces", ListToJson(c.BlendSpaces) },
+				{ "Layers", ListToJson(c.Layers) },
 			};
+		}
+
+		json Write(const AnimationMaskJoint& c)
+		{
+			return { { "Joint", c.Joint }, { "Weight", c.Weight } };
+		}
+
+		json Write(const AnimationLayer& c)
+		{
+			return {
+				{ "Name", c.Name },
+				{ "Clip", c.Clip },
+				{ "Blend", EnumName(s_LayerBlendNames, c.Blend) },
+				{ "Weight", c.Weight },
+				{ "Speed", c.Speed },
+				{ "Looping", c.Looping },
+				{ "ReferenceClip", c.ReferenceClip },
+				{ "ReferenceTime", c.ReferenceTime },
+				{ "Mask", ListToJson(c.Mask) },
+			};
+		}
+
+		json Write(const IKChain& c)
+		{
+			return {
+				{ "Name", c.Name },
+				{ "Type", EnumName(s_IKChainTypeNames, c.Type) },
+				{ "Joint", c.Joint },
+				{ "ChainLength", c.ChainLength },
+				{ "Axis", ToJson(c.Axis) },
+				{ "MaxAngle", c.MaxAngle },
+				{ "Pole", ToJson(c.Pole) },
+				{ "Ground", c.Ground },
+				{ "Weight", c.Weight },
+			};
+		}
+
+		json Write(const InverseKinematicsComponent& c)
+		{
+			return { { "Chains", ListToJson(c.Chains) }, { "Pelvis", c.Pelvis }, { "RayHeight", c.RayHeight }, { "RayDepth", c.RayDepth }, { "Smoothing", c.Smoothing } };
 		}
 
 		json Write(const BoneAttachmentComponent& c)
@@ -1326,8 +1419,8 @@ namespace Basalt {
 			if (!std::isfinite(c.Speed) || c.Speed < 0.0f || c.Speed > MaxAnimatorSpeed)
 				return "Speed must be finite and between 0 and 100";
 			// C++ code can grow the lists past what the reader accepts.
-			if (c.Events.size() > AnimatorComponent::MaxEvents || c.BlendSpaces.size() > AnimatorComponent::MaxBlendSpaces)
-				return fmt::format("Animator holds at most {} events and {} blend spaces", AnimatorComponent::MaxEvents, AnimatorComponent::MaxBlendSpaces);
+			if (c.Events.size() > AnimatorComponent::MaxEvents || c.BlendSpaces.size() > AnimatorComponent::MaxBlendSpaces || c.Layers.size() > AnimatorComponent::MaxLayers)
+				return fmt::format("Animator holds at most {} events, {} blend spaces and {} layers", AnimatorComponent::MaxEvents, AnimatorComponent::MaxBlendSpaces, AnimatorComponent::MaxLayers);
 			for (size_t i = 0; i < c.Events.size(); i++)
 			{
 				const AnimationEvent& event = c.Events[i];
@@ -1357,6 +1450,67 @@ namespace Basalt {
 					if (!std::isfinite(sample.Speed) || sample.Speed < 0.0f)
 						return fmt::format("BlendSpaces[{}].Samples[{}].Speed {} must be finite and nonnegative", i, j, sample.Speed);
 				}
+			}
+			for (size_t i = 0; i < c.Layers.size(); i++)
+			{
+				const AnimationLayer& layer = c.Layers[i];
+				if (layer.Name.empty())
+					return fmt::format("Layers[{}].Name must not be empty", i);
+				for (size_t j = 0; j < i; j++)
+				{
+					if (c.Layers[j].Name == layer.Name)
+						return fmt::format("Layers[{}].Name '{}' is already used by Layers[{}]", i, layer.Name, j);
+				}
+				if (!std::isfinite(layer.Weight) || layer.Weight < 0.0f || layer.Weight > 1.0f)
+					return fmt::format("Layers[{}].Weight {} must be between 0 and 1", i, layer.Weight);
+				if (!std::isfinite(layer.Speed) || layer.Speed < 0.0f || layer.Speed > MaxAnimatorSpeed)
+					return fmt::format("Layers[{}].Speed {} must be finite and between 0 and {}", i, layer.Speed, MaxAnimatorSpeed);
+				if (!std::isfinite(layer.ReferenceTime) || layer.ReferenceTime < 0.0f)
+					return fmt::format("Layers[{}].ReferenceTime {} must be finite and nonnegative", i, layer.ReferenceTime);
+				if (layer.Mask.size() > AnimatorComponent::MaxMaskJoints)
+					return fmt::format("Layers[{}] mask holds at most {} joints", i, AnimatorComponent::MaxMaskJoints);
+				for (size_t j = 0; j < layer.Mask.size(); j++)
+				{
+					const AnimationMaskJoint& joint = layer.Mask[j];
+					if (!std::isfinite(joint.Weight) || joint.Weight < 0.0f || joint.Weight > 1.0f)
+						return fmt::format("Layers[{}].Mask[{}].Weight {} must be between 0 and 1", i, j, joint.Weight);
+				}
+			}
+			return {};
+		}
+
+		std::string Validate(const InverseKinematicsComponent& c)
+		{
+			const auto finite = [](const glm::vec3& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); };
+			if (c.Chains.size() > InverseKinematicsComponent::MaxChains)
+				return fmt::format("InverseKinematics holds at most {} chains", InverseKinematicsComponent::MaxChains);
+			for (const auto& [name, value] : { std::pair<const char*, float>{ "RayHeight", c.RayHeight }, { "RayDepth", c.RayDepth }, { "Smoothing", c.Smoothing } })
+			{
+				if (!std::isfinite(value) || value < 0.0f || value > 100.0f)
+					return fmt::format("{} {} must be between 0 and 100", name, value);
+			}
+			for (size_t i = 0; i < c.Chains.size(); i++)
+			{
+				const IKChain& chain = c.Chains[i];
+				if (chain.Name.empty())
+					return fmt::format("Chains[{}].Name must not be empty", i);
+				for (size_t j = 0; j < i; j++)
+				{
+					if (c.Chains[j].Name == chain.Name)
+						return fmt::format("Chains[{}].Name '{}' is already used by Chains[{}]", i, chain.Name, j);
+				}
+				if (chain.ChainLength < 1 || chain.ChainLength > IKChain::MaxChainLength)
+					return fmt::format("Chains[{}].ChainLength {} must be between 1 and {}", i, chain.ChainLength, IKChain::MaxChainLength);
+				if (!finite(chain.Axis) || glm::length(chain.Axis) < 1e-4f)
+					return fmt::format("Chains[{}].Axis must be finite and nonzero", i);
+				if (!finite(chain.Pole))
+					return fmt::format("Chains[{}].Pole must be finite", i);
+				if (!std::isfinite(chain.MaxAngle) || chain.MaxAngle < 0.0f || chain.MaxAngle > 180.0f)
+					return fmt::format("Chains[{}].MaxAngle {} must be between 0 and 180 degrees", i, chain.MaxAngle);
+				if (!std::isfinite(chain.Weight) || chain.Weight < 0.0f || chain.Weight > 1.0f)
+					return fmt::format("Chains[{}].Weight {} must be between 0 and 1", i, chain.Weight);
+				if (chain.Ground && chain.Type != IKChainType::TwoBone)
+					return fmt::format("Chains[{}]: only TwoBone chains can be Ground chains", i);
 			}
 			return {};
 		}
@@ -1522,6 +1676,7 @@ namespace Basalt {
 			infos.push_back(MakeInfo<MeshComponent>("Mesh"));
 			infos.push_back(MakeInfo<AnimatorComponent>("Animator"));
 			infos.push_back(MakeInfo<BoneAttachmentComponent>("BoneAttachment"));
+			infos.push_back(MakeInfo<InverseKinematicsComponent>("InverseKinematics"));
 			infos.push_back(MakeInfo<MaterialComponent>("Material"));
 			infos.push_back(MakeInfo<DirectionalLightComponent>("DirectionalLight"));
 			infos.push_back(MakeInfo<PointLightComponent>("PointLight"));

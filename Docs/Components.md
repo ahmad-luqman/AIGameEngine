@@ -28,11 +28,15 @@ Fields: `Mesh` (string), `MeshIndex` (integer), `CastShadows` (boolean)
 
 ## Animator
 
-Fields: `Mesh` (string), `Clip` (string), `Speed` (number), `Looping` (boolean), `PlayOnStart` (boolean), `CastShadows` (boolean), `MatchVelocity` (boolean), `StateMachine` (string), `RootMotion` (boolean), `RootJoint` (string), `Events` (list of [AnimationEvent](#animationevent), at most 256), `BlendSpaces` (list of [AnimationBlendSpace](#animationblendspace), at most 32, unique `Name`)
+Fields: `Mesh` (string), `Clip` (string), `Speed` (number), `Looping` (boolean), `PlayOnStart` (boolean), `CastShadows` (boolean), `MatchVelocity` (boolean), `StateMachine` (string), `RootMotion` (boolean), `RootJoint` (string), `Events` (list of [AnimationEvent](#animationevent), at most 256), `BlendSpaces` (list of [AnimationBlendSpace](#animationblendspace), at most 32, unique `Name`), `Layers` (list of [AnimationLayer](#animationlayer), at most 16, unique `Name`)
 
 ## BoneAttachment
 
 Fields: `Target` (entity), `Joint` (string), `Translation` (number[3]), `Rotation` (number[3]), `Scale` (number[3])
+
+## InverseKinematics
+
+Fields: `Chains` (list of [IKChain](#ikchain), at most 16, unique `Name`), `Pelvis` (string), `RayHeight` (number), `RayDepth` (number), `Smoothing` (number)
 
 ## Material
 
@@ -143,4 +147,16 @@ Fields: `Name` (string), `Type` (enum: 1D, 2D), `Samples` (list of [AnimationBle
 ### AnimationBlendSample
 
 Fields: `Clip` (string), `X` (number), `Y` (number), `Speed` (number)
+
+### AnimationLayer
+
+Fields: `Name` (string), `Clip` (string), `Blend` (enum: Override, Additive), `Weight` (number), `Speed` (number), `Looping` (boolean), `ReferenceClip` (string), `ReferenceTime` (number), `Mask` (list of [AnimationMaskJoint](#animationmaskjoint), at most 64)
+
+### AnimationMaskJoint
+
+Fields: `Joint` (string), `Weight` (number)
+
+### IKChain
+
+Fields: `Name` (string), `Type` (enum: TwoBone, LookAt), `Joint` (string), `ChainLength` (integer), `Axis` (number[3]), `MaxAngle` (number), `Pole` (number[3]), `Ground` (boolean), `Weight` (number)
 

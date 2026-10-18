@@ -733,8 +733,8 @@ namespace Basalt {
 		m_PhysicsWorld->Step(ts);
 		if (m_State == SceneState::Play)
 			m_ScriptEngine->LateUpdate(ts);
-		// Attachments follow the final rig transform, including physics and script LateUpdate movement.
-		m_AnimationSystem->UpdateAttachments();
+		// IK and attachments follow the final rig transform, including physics and script LateUpdate movement.
+		m_AnimationSystem->LateUpdate(ts);
 		DispatchAnimationEvents();
 		// After every system that moves entities, so particles leave from where the emitter is this frame.
 		m_ParticleSystem->Update(ts);

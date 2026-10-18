@@ -465,13 +465,62 @@ function Entity:SetBlendSpaceParameter(x, y) end
 function Entity:GetBlendSpaceWeights() end
 
 ---World position, rotation and scale of the first node named joint in the Animator's current pose: the previous
----frame's during OnUpdate, this frame's during OnLateUpdate/OnAnimationEvent. Nil when the node is missing or the model cannot animate
+---frame's during OnUpdate, this frame's during OnLateUpdate (with the previous frame's IK solution) and
+---OnAnimationEvent (with this frame's). Nil when the node is missing or the model cannot animate
 ---(logged when the problem appears or changes). Errors without an Animator.
 ---@param joint string
 ---@return Vec3? position
 ---@return Quat? rotation
 ---@return Vec3? scale
 function Entity:GetBoneTransform(joint) end
+
+---Restarts one of the Animator's Layers at time 0, on clip when given (until the layer's configured Clip changes),
+---otherwise on its configured Clip. False (logged once per problem) for an unknown layer or clip.
+---@param layer string
+---@param clip? string
+---@return boolean
+function Entity:PlayAnimationLayer(layer, clip) end
+
+---Fades a layer's weight (0..1) linearly over seconds (default 0: at once). False for an unknown layer or an invalid
+---weight or time.
+---@param layer string
+---@param weight number
+---@param seconds? number
+---@return boolean
+function Entity:SetAnimationLayerWeight(layer, weight, seconds) end
+
+---A layer's current weight; nil for an unknown layer.
+---@param layer string
+---@return number?
+function Entity:GetAnimationLayerWeight(layer) end
+
+---Sets an InverseKinematics chain's target until ClearIKTarget: a world position (with an optional world rotation
+---for a TwoBone chain's end joint), or an entity followed every frame (matchRotation also takes its rotation for a
+---TwoBone chain). Replaces ground placement. False (logged once per problem) for an unknown chain or a non-finite
+---value. Errors without an InverseKinematics component.
+---@param chain string
+---@param target Vec3|Entity
+---@param rotationOrMatch? Quat|boolean
+---@return boolean
+function Entity:SetIKTarget(chain, target, rotationOrMatch) end
+
+---Removes a chain's target: the chain idles, or Ground chains place the foot on the ground again.
+---@param chain string
+---@return boolean
+function Entity:ClearIKTarget(chain) end
+
+---Fades a chain's weight (0..1) linearly over seconds (default 0: at once). False for an unknown chain or an
+---invalid weight or time.
+---@param chain string
+---@param weight number
+---@param seconds? number
+---@return boolean
+function Entity:SetIKWeight(chain, weight, seconds) end
+
+---A chain's current weight; nil for an unknown chain.
+---@param chain string
+---@return number?
+function Entity:GetIKWeight(chain) end
 
 ---Starts a new ParticleEmitter cycle unless it is playing.
 function Entity:PlayParticles() end
@@ -1241,6 +1290,7 @@ function BasaltScript:StopAllCoroutines() end
 ---| "Mesh"
 ---| "Animator"
 ---| "BoneAttachment"
+---| "InverseKinematics"
 ---| "Material"
 ---| "DirectionalLight"
 ---| "PointLight"
@@ -1308,6 +1358,7 @@ function BasaltScript:StopAllCoroutines() end
 ---@field RootJoint string
 ---@field Events AnimationEvent[]
 ---@field BlendSpaces AnimationBlendSpace[]
+---@field Layers AnimationLayer[]
 
 ---BoneAttachment data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
 ---@class BoneAttachmentComponent
@@ -1316,6 +1367,14 @@ function BasaltScript:StopAllCoroutines() end
 ---@field Translation number[]
 ---@field Rotation number[]
 ---@field Scale number[]
+
+---InverseKinematics data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
+---@class InverseKinematicsComponent
+---@field Chains IKChain[]
+---@field Pelvis string
+---@field RayHeight number
+---@field RayDepth number
+---@field Smoothing number
 
 ---Material data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
 ---@class MaterialComponent
@@ -1619,6 +1678,35 @@ function BasaltScript:StopAllCoroutines() end
 ---@field Y number
 ---@field Speed number
 
+---An element of a component list field.
+---@class AnimationLayer
+---@field Name string
+---@field Clip string
+---@field Blend "Override"|"Additive"
+---@field Weight number
+---@field Speed number
+---@field Looping boolean
+---@field ReferenceClip string
+---@field ReferenceTime number
+---@field Mask AnimationMaskJoint[]
+
+---An element of a component list field.
+---@class AnimationMaskJoint
+---@field Joint string
+---@field Weight number
+
+---An element of a component list field.
+---@class IKChain
+---@field Name string
+---@field Type "TwoBone"|"LookAt"
+---@field Joint string
+---@field ChainLength integer
+---@field Axis number[]
+---@field MaxAngle number
+---@field Pole number[]
+---@field Ground boolean
+---@field Weight number
+
 ---Returns a copy of the component's fields (vectors as arrays, rotations in Euler degrees, entity references
 ---as IDs), or nil when the entity does not have the component.
 ---@param name ComponentName
@@ -1629,6 +1717,7 @@ function BasaltScript:StopAllCoroutines() end
 ---@overload fun(self: Entity, name: "Mesh"): MeshComponent?
 ---@overload fun(self: Entity, name: "Animator"): AnimatorComponent?
 ---@overload fun(self: Entity, name: "BoneAttachment"): BoneAttachmentComponent?
+---@overload fun(self: Entity, name: "InverseKinematics"): InverseKinematicsComponent?
 ---@overload fun(self: Entity, name: "Material"): MaterialComponent?
 ---@overload fun(self: Entity, name: "DirectionalLight"): DirectionalLightComponent?
 ---@overload fun(self: Entity, name: "PointLight"): PointLightComponent?

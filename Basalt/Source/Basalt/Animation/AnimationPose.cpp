@@ -2,6 +2,7 @@
 
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Math/Math.h"
+#include "Basalt/Scene/Components.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -107,6 +108,104 @@ namespace Basalt {
 				return false;
 		}
 		return true;
+	}
+
+	std::vector<uint8_t> AnimatedChannels(const MeshSource& source, const AnimationClip& clip)
+	{
+		std::vector<uint8_t> channels(source.Nodes.size(), 0);
+		for (const auto& track : clip.Tracks)
+		{
+			switch (track.Path)
+			{
+				case AnimationPath::Translation:
+					channels[track.Node] |= AnimatedTranslation;
+					break;
+				case AnimationPath::Rotation:
+					channels[track.Node] |= AnimatedRotation;
+					break;
+				case AnimationPath::Scale:
+					channels[track.Node] |= AnimatedScale;
+					break;
+			}
+		}
+		return channels;
+	}
+
+	std::vector<float> AnimationMaskWeights(const MeshSource& source, const std::vector<AnimationMaskJoint>& mask, std::vector<std::string>& outMissing)
+	{
+		if (mask.empty())
+			return std::vector<float>(source.Nodes.size(), 1.0f);
+		// -1: no entry names the node itself.
+		std::vector<float> own(source.Nodes.size(), -1.0f);
+		for (const AnimationMaskJoint& entry : mask)
+		{
+			// The inspector adds entries before they are named.
+			if (entry.Joint.empty())
+				continue;
+			const auto node = std::ranges::find(source.Nodes, entry.Joint, &MeshNode::Name);
+			if (node == source.Nodes.end())
+				outMissing.push_back(entry.Joint);
+			else
+				own[static_cast<size_t>(node - source.Nodes.begin())] = entry.Weight;
+		}
+		std::vector<float> weights(source.Nodes.size(), 0.0f);
+		// Parents come before their children in NodeOrder.
+		for (uint32_t i : source.NodeOrder)
+		{
+			const int32_t parent = source.Nodes[i].Parent;
+			weights[i] = own[i] >= 0.0f ? own[i] : parent >= 0 ? weights[parent]
+															   : 0.0f;
+		}
+		return weights;
+	}
+
+	void OverrideAnimationPose(AnimationLocalPose& target, const AnimationLocalPose& layer, const std::vector<float>& weights, const std::vector<uint8_t>& channels)
+	{
+		BS_CORE_ASSERT(target.Nodes.size() == layer.Nodes.size() && weights.size() == target.Nodes.size() && channels.size() == target.Nodes.size());
+		for (size_t i = 0; i < target.Nodes.size(); i++)
+		{
+			const float weight = weights[i];
+			if (weight <= 0.0f || channels[i] == 0)
+				continue;
+			AnimationNodePose& node = target.Nodes[i];
+			const AnimationNodePose& source = layer.Nodes[i];
+			if (channels[i] & AnimatedTranslation)
+				node.Translation = glm::mix(node.Translation, source.Translation, weight);
+			if (channels[i] & AnimatedRotation)
+				node.Rotation = glm::normalize(glm::slerp(node.Rotation, source.Rotation, weight));
+			if (channels[i] & AnimatedScale)
+				node.Scale = glm::mix(node.Scale, source.Scale, weight);
+		}
+	}
+
+	void AddAnimationPose(AnimationLocalPose& target, const AnimationLocalPose& layer, const AnimationLocalPose& reference, const std::vector<float>& weights, const std::vector<uint8_t>& channels)
+	{
+		BS_CORE_ASSERT(target.Nodes.size() == layer.Nodes.size() && reference.Nodes.size() == target.Nodes.size() && weights.size() == target.Nodes.size() && channels.size() == target.Nodes.size());
+		for (size_t i = 0; i < target.Nodes.size(); i++)
+		{
+			const float weight = weights[i];
+			if (weight <= 0.0f || channels[i] == 0)
+				continue;
+			AnimationNodePose& node = target.Nodes[i];
+			const AnimationNodePose& source = layer.Nodes[i];
+			const AnimationNodePose& base = reference.Nodes[i];
+			if (channels[i] & AnimatedTranslation)
+				node.Translation += weight * (source.Translation - base.Translation);
+			if (channels[i] & AnimatedRotation)
+			{
+				const glm::quat delta = glm::normalize(source.Rotation * glm::inverse(base.Rotation));
+				node.Rotation = glm::normalize(glm::slerp(glm::quat(1, 0, 0, 0), delta, weight) * node.Rotation);
+			}
+			if (channels[i] & AnimatedScale)
+			{
+				// A zero reference scale has no ratio; that axis keeps the target's scale.
+				glm::vec3 ratio(1.0f);
+				for (int axis = 0; axis < 3; axis++)
+					if (std::abs(base.Scale[axis]) > 1e-6f)
+						ratio[axis] = source.Scale[axis] / base.Scale[axis];
+				node.Scale *= glm::mix(glm::vec3(1.0f), ratio, weight);
+			}
+		}
 	}
 
 	bool EvaluateAnimation(const MeshSource& source, const AnimationClip* clip, float time, std::vector<glm::mat4>& globals)

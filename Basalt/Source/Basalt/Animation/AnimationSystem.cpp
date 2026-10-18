@@ -3,6 +3,7 @@
 #include "Basalt/Animation/AnimatedModel.h"
 #include "Basalt/Animation/AnimationPose.h"
 #include "Basalt/Animation/BlendSpace.h"
+#include "Basalt/Animation/InverseKinematics.h"
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Core/Profiler.h"
@@ -160,12 +161,14 @@ namespace Basalt {
 		: m_Scene(scene)
 	{
 		m_Scene.GetRegistry().on_destroy<AnimatorComponent>().connect<&AnimationSystem::OnDestroy>(*this);
+		m_Scene.GetRegistry().on_destroy<InverseKinematicsComponent>().connect<&AnimationSystem::OnIKDestroy>(*this);
 		Update(0);
 	}
 
 	AnimationSystem::~AnimationSystem()
 	{
 		m_Scene.GetRegistry().on_destroy<AnimatorComponent>().disconnect<&AnimationSystem::OnDestroy>(*this);
+		m_Scene.GetRegistry().on_destroy<InverseKinematicsComponent>().disconnect<&AnimationSystem::OnIKDestroy>(*this);
 	}
 
 	void AnimationSystem::OnDestroy(entt::registry& registry, entt::entity handle)
@@ -175,7 +178,25 @@ namespace Basalt {
 		if (const auto* id = registry.try_get<IDComponent>(handle))
 		{
 			m_UnplayableReported.erase(id->ID);
+			m_LayerProblems.erase(id->ID);
+			m_IKCallProblems.erase(id->ID);
 			std::erase_if(m_BoneProblems, [id](const auto& entry) { return entry.first.first == id->ID; });
+		}
+	}
+
+	void AnimationSystem::OnIKDestroy(entt::registry& registry, entt::entity handle)
+	{
+		std::erase_if(m_IK, [handle](const auto& entry) { return entry.second.Handle == handle; });
+		if (const auto* id = registry.try_get<IDComponent>(handle))
+			m_IKCallProblems.erase(id->ID);
+		// The pose returns to the animation alone.
+		for (auto& [id, playback] : m_Playback)
+		{
+			if (playback.Handle == handle && !playback.IKOverlay.empty())
+			{
+				playback.IKOverlay.clear();
+				Finish(playback);
+			}
 		}
 	}
 
@@ -412,22 +433,57 @@ namespace Basalt {
 			}
 			BlendAnimationPose(playback.Local, from, playback.BlendWeight);
 		}
+		Finish(playback);
+	}
 
-		bool valid = ComposeAnimationPose(*playback.Source, playback.Local, playback.Globals);
-		if (valid)
-			for (const auto& skin : playback.Source->Skins)
-				valid = valid && !BuildSkinPalette(skin, playback.Globals).empty();
+	void AnimationSystem::Finish(Playback& playback)
+	{
+		const MeshSource& source = *playback.Source;
+		playback.Pose = playback.Local;
+		for (const LayerState& layer : playback.Layers)
+		{
+			if (layer.Clip < 0 || layer.Weight <= 0)
+				continue;
+			const AnimationClip& clip = source.Animations[layer.Clip];
+			const AnimationLocalPose sample = SampleAnimation(source, &clip, static_cast<float>(layer.Time));
+			std::vector<float> weights = layer.Mask;
+			for (float& weight : weights)
+				weight *= layer.Weight;
+			if (layer.Blend == AnimationLayerBlend::Additive)
+				AddAnimationPose(playback.Pose, sample, layer.Reference, weights, layer.Channels);
+			else
+				OverrideAnimationPose(playback.Pose, sample, weights, layer.Channels);
+		}
+		const auto compose = [&](bool overlay) {
+			AnimationLocalPose pose = playback.Pose;
+			if (overlay)
+				for (const auto& [node, transform] : playback.IKOverlay)
+					pose.Nodes[node] = transform;
+			bool valid = ComposeAnimationPose(source, pose, playback.Globals);
+			if (valid)
+				for (const auto& skin : source.Skins)
+					valid = valid && !BuildSkinPalette(skin, playback.Globals).empty();
+			return valid;
+		};
+		bool valid = compose(true);
+		// The IK pass validates its own results; the overlay only fails on a base pose that changed under it.
+		if (!valid && !playback.IKOverlay.empty())
+		{
+			playback.IKOverlay.clear();
+			valid = compose(false);
+		}
 		if (!valid)
 		{
 			if (!playback.InvalidPose)
 				BS_CORE_ERROR("Animator '{}': non-finite evaluated pose; displaying rest pose", playback.EntityName);
-			playback.Local = SampleAnimation(*playback.Source, nullptr, 0);
-			ComposeAnimationPose(*playback.Source, playback.Local, playback.Globals);
+			playback.Local = SampleAnimation(source, nullptr, 0);
+			playback.Pose = playback.Local;
+			ComposeAnimationPose(source, playback.Local, playback.Globals);
 		}
 		playback.InvalidPose = !valid;
 	}
 
-	void AnimationSystem::Update(Timestep timestep, bool updateAttachments)
+	void AnimationSystem::Update(Timestep timestep, bool late)
 	{
 		BS_PROFILE_SCOPE("Animation");
 		const float seconds = timestep.GetSeconds();
@@ -478,16 +534,33 @@ namespace Basalt {
 			}
 			if (playback->Control == GraphControl::Active && !playback->Paused)
 				UpdateGraph(*playback, component);
+			// Layers play on while the base holds its pose (stopped, finished, or a space that cannot play).
+			const bool layered = !component.Layers.empty() || !playback->Layers.empty();
+			if (layered)
+				AdvanceLayers(*playback, component, playback->Paused ? 0.0 : static_cast<double>(seconds));
+			const auto holdBase = [&] {
+				if (layered)
+					Finish(*playback);
+			};
 			if (!playback->Playing)
+			{
+				holdBase();
 				continue;
+			}
 			if (playback->Space)
 			{
 				// Holds the pose while the space cannot play, and resumes once it can.
 				if (!ResolveSpace(*playback, *playback->Space, component))
+				{
+					holdBase();
 					continue;
+				}
 			}
 			else if (playback->Clip < 0)
+			{
+				holdBase();
 				continue;
+			}
 			const bool invalidSpeed = !std::isfinite(component.Speed) || component.Speed < 0 || component.Speed > MaxAnimatorSpeed;
 			if (invalidSpeed && !playback->InvalidSpeed)
 				BS_CORE_WARN("Animator '{}': invalid Speed {}; clamping to [0, {}]", entity.GetName(), component.Speed, MaxAnimatorSpeed);
@@ -568,8 +641,20 @@ namespace Basalt {
 				playback->Playing = false;
 			Evaluate(*playback);
 		}
-		if (updateAttachments)
+		if (late)
+		{
+			SolveIK(seconds);
 			UpdateAttachments();
+		}
+	}
+
+	void AnimationSystem::LateUpdate(Timestep timestep)
+	{
+		const float seconds = timestep.GetSeconds();
+		// Update already reported an invalid step; attachments still follow the rigs.
+		if (std::isfinite(seconds) && seconds >= 0)
+			SolveIK(seconds);
+		UpdateAttachments();
 	}
 
 	void AnimationSystem::AdvanceSpace(Playback& playback, SpaceState& state, const AnimatorComponent& component, double advance, UUID id, size_t& budget)
@@ -1443,6 +1528,164 @@ namespace Basalt {
 		if (reported != error)
 			BS_CORE_ERROR("GetBoneTransform on '{}': {}", entity.GetName(), error);
 		reported = error;
+	}
+
+	void AnimationSystem::ResolveLayer(Playback& playback, const AnimationLayer& config, LayerState& state)
+	{
+		const MeshSource& source = *playback.Source;
+		const std::string& clip = state.ScriptClip ? *state.ScriptClip : config.Clip;
+		std::string problem;
+		state.Blend = config.Blend;
+		// Unlike the base Clip, an empty layer Clip plays nothing.
+		state.Clip = clip.empty() ? -1 : FindClip(source, clip);
+		if (!clip.empty() && state.Clip < 0)
+			problem = fmt::format("clip '{}' not found in '{}'", clip, source.Key);
+		if (state.Clip >= 0)
+		{
+			state.Channels = AnimatedChannels(source, source.Animations[state.Clip]);
+			std::vector<std::string> missing;
+			state.Mask = AnimationMaskWeights(source, config.Mask, missing);
+			if (!missing.empty())
+				problem = fmt::format("mask joint{} {} not found in '{}'", missing.size() > 1 ? "s" : "", fmt::join(missing, ", "), source.Key);
+			// Root motion owns the extraction node: a layer moving it would undo the stripping.
+			if (playback.RootMotion && playback.RootNode >= 0)
+				state.Mask[playback.RootNode] = 0;
+			if (config.Blend == AnimationLayerBlend::Additive)
+			{
+				const int32_t reference = config.ReferenceClip.empty() ? state.Clip : FindClip(source, config.ReferenceClip);
+				if (reference < 0)
+				{
+					problem = fmt::format("reference clip '{}' not found in '{}'", config.ReferenceClip, source.Key);
+					state.Clip = -1;
+				}
+				else
+				{
+					const AnimationClip& referenceClip = source.Animations[reference];
+					state.Reference = SampleAnimation(source, &referenceClip, std::min(config.ReferenceTime, referenceClip.Duration));
+				}
+			}
+		}
+		if (!problem.empty() && problem != state.Problem)
+			BS_CORE_WARN("Animator '{}': layer '{}': {}", playback.EntityName, config.Name, problem);
+		state.Problem = std::move(problem);
+	}
+
+	void AnimationSystem::AdvanceLayers(Playback& playback, const AnimatorComponent& component, double seconds)
+	{
+		std::vector<LayerState> layers;
+		layers.reserve(component.Layers.size());
+		for (const AnimationLayer& config : component.Layers)
+		{
+			LayerState state;
+			if (auto found = std::ranges::find(playback.Layers, config.Name, &LayerState::Name); found != playback.Layers.end())
+				state = std::move(*found);
+			else
+			{
+				state.Name = config.Name;
+				state.ConfiguredClip = config.Clip;
+				state.ConfiguredWeight = state.Weight = state.TargetWeight = config.Weight;
+			}
+			if (config.Weight != state.ConfiguredWeight)
+			{
+				state.ConfiguredWeight = state.Weight = state.TargetWeight = config.Weight;
+				state.FadeRate = 0;
+			}
+			if (config.Clip != state.ConfiguredClip)
+			{
+				state.ConfiguredClip = config.Clip;
+				state.ScriptClip.reset();
+				state.Time = 0;
+			}
+			ResolveLayer(playback, config, state);
+			if (state.Clip >= 0 && seconds > 0)
+			{
+				const double speed = std::isfinite(config.Speed) ? std::clamp(config.Speed, 0.0f, MaxAnimatorSpeed) : 0.0;
+				state.Time = WrapClock(state.Time + seconds * speed, playback.Source->Animations[state.Clip].Duration, config.Looping);
+			}
+			if (state.FadeRate > 0 && seconds > 0)
+			{
+				const float step = static_cast<float>(seconds) * state.FadeRate;
+				state.Weight = state.Weight < state.TargetWeight ? std::min(state.Weight + step, state.TargetWeight) : std::max(state.Weight - step, state.TargetWeight);
+				if (state.Weight == state.TargetWeight)
+					state.FadeRate = 0;
+			}
+			layers.push_back(std::move(state));
+		}
+		playback.Layers = std::move(layers);
+	}
+
+	AnimationSystem::LayerState* AnimationSystem::FindLayer(Entity entity, Playback& playback, const std::string& layer)
+	{
+		AdvanceLayers(playback, entity.GetComponent<AnimatorComponent>(), 0);
+		if (auto found = std::ranges::find(playback.Layers, layer, &LayerState::Name); found != playback.Layers.end())
+			return &*found;
+		std::string problem = fmt::format("no layer named '{}'", layer);
+		std::string& reported = m_LayerProblems[entity.GetUUID()];
+		if (reported != problem)
+			BS_CORE_ERROR("Animator '{}': {}", entity.GetName(), problem);
+		reported = std::move(problem);
+		return nullptr;
+	}
+
+	bool AnimationSystem::PlayLayer(Entity entity, const std::string& layer, const std::optional<std::string>& clip)
+	{
+		auto* playback = EnsurePlayable(entity);
+		LayerState* state = playback ? FindLayer(entity, *playback, layer) : nullptr;
+		if (!state)
+			return false;
+		// An empty name would select the first clip here but nothing in the layer's own Clip; neither is meant.
+		if (clip && (clip->empty() || FindClip(*playback->Source, *clip) < 0))
+		{
+			std::string problem = fmt::format("layer '{}': clip '{}' not found in '{}'", layer, *clip, playback->Source->Key);
+			std::string& reported = m_LayerProblems[entity.GetUUID()];
+			if (reported != problem)
+				BS_CORE_ERROR("Animator '{}': {}", entity.GetName(), problem);
+			reported = std::move(problem);
+			return false;
+		}
+		m_LayerProblems.erase(entity.GetUUID());
+		state->ScriptClip = clip;
+		state->Time = 0;
+		const auto& component = entity.GetComponent<AnimatorComponent>();
+		ResolveLayer(*playback, *std::ranges::find(component.Layers, layer, &AnimationLayer::Name), *state);
+		Finish(*playback);
+		return true;
+	}
+
+	bool AnimationSystem::SetLayerWeight(Entity entity, const std::string& layer, float weight, float seconds)
+	{
+		if (!std::isfinite(weight) || weight < 0 || weight > 1)
+		{
+			BS_CORE_ERROR("Animator '{}': layer weight must be between 0 and 1, got {}", entity.GetName(), weight);
+			return false;
+		}
+		if (!CheckSeconds(entity, seconds, "layer fade seconds"))
+			return false;
+		auto* playback = EnsurePlayable(entity);
+		LayerState* state = playback ? FindLayer(entity, *playback, layer) : nullptr;
+		if (!state)
+			return false;
+		m_LayerProblems.erase(entity.GetUUID());
+		state->TargetWeight = weight;
+		if (seconds > 0 && weight != state->Weight)
+			state->FadeRate = std::abs(weight - state->Weight) / seconds;
+		else
+		{
+			state->Weight = weight;
+			state->FadeRate = 0;
+		}
+		Finish(*playback);
+		return true;
+	}
+
+	std::optional<float> AnimationSystem::GetLayerWeight(Entity entity, const std::string& layer)
+	{
+		auto* playback = EnsurePlayable(entity);
+		LayerState* state = playback ? FindLayer(entity, *playback, layer) : nullptr;
+		if (!state)
+			return std::nullopt;
+		m_LayerProblems.erase(entity.GetUUID());
+		return state->Weight;
 	}
 
 	std::vector<AnimationEventRecord> AnimationSystem::TakeEvents()

@@ -72,17 +72,14 @@ The features most games need, roughly in order of impact.
 ### Animation
 
 Skeletal playback, crossfades, two-clip blends, 1D/2D blend spaces with phase sync and velocity matching,
-animation events, bone attachments, data-driven state machines and per-state root motion (`AnimationSystem`) are implemented; physics already provides
-character controllers (`MoveCharacter`, `IsCharacterGrounded`, ground normal) and raycasts. The items
-below turn that into natural character movement (walk, run, jump, uneven ground), in order of impact.
+animation events, bone attachments, data-driven state machines and per-state root motion, layers with joint masks and
+additive clips, and inverse kinematics (two-bone, look-at chains, foot placement) (`AnimationSystem`) are implemented;
+physics provides character controllers (`MoveCharacter`, `IsCharacterGrounded`, ground normal) and raycasts. The items
+below extend character movement, in order of impact.
 
-- **Inverse kinematics — M.** Analytic two-bone IK (legs, arms), look-at/aim chains (head and spine) and
-  foot placement: raycast under each foot, solve leg IK so the foot lands on the surface, lower the
-  pelvis by the largest offset and align feet to the ground normal, with smoothed weights so feet don't
-  pop. Runs after sampling and before skinning; targets and weights settable from Lua.
-- **Layers, masks and additive clips — M.** Ordered animation layers with per-joint masks (upper body
-  aims or waves while the legs run) and additive layers (breathing, recoil, lean) applied as deltas from a
-  reference pose on top of the base pose.
+- **IK and layer follow-ups — S each.** Multi-joint chains (FABRIK or CCD) for tails and tentacles; IK and layers in
+  the edit-mode preview; reusable mask assets shared between Animators; layers driven by state machine states (an
+  upper-body graph); foot locking during stance phases so planted feet do not slide.
 - **Ragdolls — M.** Build a Jolt `Ragdoll` from the skeleton (a capsule per bone with swing-twist limits,
   generated from the joint hierarchy with editable sizes and limits), switch an Animator to it on death or
   a big hit, and blend back to animation with a get-up clip. Follow-up: powered (active) ragdolls that
