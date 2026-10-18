@@ -403,6 +403,16 @@ namespace Basalt {
 			return value.as<float>();
 		}
 
+		// An optional string argument: nil gives nullopt; anything but a string is an error.
+		std::optional<std::string> OptionalString(const sol::object& value, const char* what)
+		{
+			if (IsNil(value))
+				return std::nullopt;
+			if (value.get_type() != sol::type::string)
+				throw std::runtime_error(std::string(what) + " must be a string or nil");
+			return value.as<std::string>();
+		}
+
 		Entity RequireAnimator(const ScriptEntity& self, const char* operation)
 		{
 			return RequireEntityWith<AnimatorComponent>(self, operation, "Animator");
@@ -666,17 +676,14 @@ namespace Basalt {
 			// Layers and inverse kinematics.
 			entityType["PlayAnimationLayer"] = [&context](const ScriptEntity& self, const std::string& layer, const sol::object& clip) {
 				Entity entity = RequireAnimator(self, "PlayAnimationLayer");
-				if (!IsNil(clip) && clip.get_type() != sol::type::string)
-					throw std::runtime_error("PlayAnimationLayer: clip must be a string or nil");
-				return RequireAnimations(context).PlayLayer(entity, layer, IsNil(clip) ? std::nullopt : std::optional<std::string>(clip.as<std::string>()));
+				return RequireAnimations(context).PlayLayer(entity, layer, OptionalString(clip, "PlayAnimationLayer: clip"));
 			};
 			entityType["SetAnimationLayerWeight"] = [&context](const ScriptEntity& self, const std::string& layer, float weight, const sol::object& seconds) {
 				Entity entity = RequireAnimator(self, "SetAnimationLayerWeight");
 				return RequireAnimations(context).SetLayerWeight(entity, layer, weight, OptionalNumber(seconds, "SetAnimationLayerWeight: seconds", 0.0f));
 			};
 			entityType["GetAnimationLayerWeight"] = [&context](const ScriptEntity& self, const std::string& layer) {
-				const std::optional<float> weight = RequireAnimations(context).GetLayerWeight(RequireAnimator(self, "GetAnimationLayerWeight"), layer);
-				return weight ? sol::optional<float>(*weight) : sol::optional<float>();
+				return RequireAnimations(context).GetLayerWeight(RequireAnimator(self, "GetAnimationLayerWeight"), layer);
 			};
 			entityType["SetIKTarget"] = [&context](const ScriptEntity& self, const std::string& chain, const sol::object& target, const sol::object& extra) {
 				Entity entity = RequireEntityWith<InverseKinematicsComponent>(self, "SetIKTarget", "InverseKinematics");
@@ -702,8 +709,7 @@ namespace Basalt {
 				return RequireAnimations(context).SetIKWeight(entity, chain, weight, OptionalNumber(seconds, "SetIKWeight: seconds", 0.0f));
 			};
 			entityType["GetIKWeight"] = [&context](const ScriptEntity& self, const std::string& chain) {
-				const std::optional<float> weight = RequireAnimations(context).GetIKWeight(RequireEntityWith<InverseKinematicsComponent>(self, "GetIKWeight", "InverseKinematics"), chain);
-				return weight ? sol::optional<float>(*weight) : sol::optional<float>();
+				return RequireAnimations(context).GetIKWeight(RequireEntityWith<InverseKinematicsComponent>(self, "GetIKWeight", "InverseKinematics"), chain);
 			};
 		}
 

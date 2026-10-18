@@ -12,52 +12,48 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <set>
 
-// The inverse kinematics pass of AnimationSystem: it runs in LateUpdate, after physics and OnLateUpdate.
+// The inverse kinematics pass of AnimationSystem. It runs in LateUpdate: after physics and OnLateUpdate in a scene, at
+// the end of Update for standalone callers.
 
 namespace Basalt {
 
 	namespace {
-		int32_t FindJoint(const MeshSource& source, const std::string& name)
-		{
-			const auto node = std::ranges::find(source.Nodes, name, &MeshNode::Name);
-			return node == source.Nodes.end() ? -1 : static_cast<int32_t>(node - source.Nodes.begin());
-		}
-
-		bool IsFiniteVector(const glm::vec3& v)
-		{
-			return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
-		}
-
-		bool IsFiniteRotation(const glm::quat& q)
-		{
-			return std::isfinite(q.x) && std::isfinite(q.y) && std::isfinite(q.z) && std::isfinite(q.w) && glm::length(q) > 1e-6f;
-		}
-
-		void FadeWeight(float& weight, float target, float& rate, float seconds)
-		{
-			if (rate <= 0 || seconds <= 0)
-				return;
-			const float step = seconds * rate;
-			weight = weight < target ? std::min(weight + step, target) : std::max(weight - step, target);
-			if (weight == target)
-				rate = 0;
-		}
-
 		// A chain resolved against the model for one solve.
 		struct ResolvedChain
 		{
 			const IKChain* Config = nullptr;
+			// Reports this chain's problem once the solve is done.
+			std::string* Problem = nullptr;
 			float Weight = 0;
 			// TwoBone: upper, middle, end. LookAt: the aiming joint, then its ancestors.
 			std::vector<uint32_t> Joints;
 			// Model space.
 			glm::vec3 Target = glm::vec3(0);
 			std::optional<glm::quat> Rotation;
-			// A ground chain whose foot already stands on flat ground at its animated height.
+			// A ground chain whose foot already stands on flat ground at its animated height. Solving it anyway would
+			// still bend a straight leg by the solver's reach margin.
 			bool Settled = false;
 		};
+
+		// A component value C++ code wrote outside its valid range (Validate rejects it from data), clamped.
+		float ClampSetting(float value, float low, float high, const std::string& name, std::vector<std::string>& problems)
+		{
+			if (std::isfinite(value) && value >= low && value <= high)
+				return value;
+			problems.push_back(fmt::format("{} {} must be between {} and {}; clamping", name, value, low, high));
+			return std::isfinite(value) ? std::clamp(value, low, high) : low;
+		}
+
+		// Logs `problem` with `prefix` when it changed since `reported`.
+		void Report(std::string& reported, std::string problem, Entity entity, const std::string& prefix)
+		{
+			if (!problem.empty() && problem != reported)
+				BS_CORE_WARN("InverseKinematics '{}': {}{}", entity.GetName(), prefix, problem);
+			reported = std::move(problem);
+		}
 	}
 
 	AnimationSystem::IKState& AnimationSystem::SyncIK(Entity entity, const InverseKinematicsComponent& component)
@@ -72,19 +68,16 @@ namespace Basalt {
 		chains.reserve(component.Chains.size());
 		for (const IKChain& config : component.Chains)
 		{
+			// Names are unique (Validate), so each state moves to at most one configuration.
 			IKChainState chain;
 			if (auto found = std::ranges::find(state.Chains, config.Name, &IKChainState::Name); found != state.Chains.end())
 				chain = std::move(*found);
 			else
 			{
 				chain.Name = config.Name;
-				chain.ConfiguredWeight = chain.Weight = chain.TargetWeight = config.Weight;
+				chain.Weight = FadingWeight(config.Weight);
 			}
-			if (config.Weight != chain.ConfiguredWeight)
-			{
-				chain.ConfiguredWeight = chain.Weight = chain.TargetWeight = config.Weight;
-				chain.FadeRate = 0;
-			}
+			chain.Weight.Configure(std::isfinite(config.Weight) ? std::clamp(config.Weight, 0.0f, 1.0f) : 0.0f);
 			chains.push_back(std::move(chain));
 		}
 		state.Chains = std::move(chains);
@@ -100,10 +93,11 @@ namespace Basalt {
 			const auto& component = entity.GetComponent<InverseKinematicsComponent>();
 			IKState& state = SyncIK(entity, component);
 			for (IKChainState& chain : state.Chains)
-				FadeWeight(chain.Weight, chain.TargetWeight, chain.FadeRate, seconds);
-			// Authoring warnings report an InverseKinematics without a playable Animator.
+				chain.Weight.Advance(seconds);
 			if (auto* playback = Ensure(entity))
 				SolveEntityIK(entity, *playback, component, state, seconds);
+			else
+				Report(state.Problem, "not solved: " + DescribeUnplayable(entity), entity, {});
 		}
 	}
 
@@ -118,172 +112,170 @@ namespace Basalt {
 				playback.IKOverlay.clear();
 				Finish(playback);
 			}
-			std::string problem = fmt::format("{}", fmt::join(problems, "; "));
-			if (!problem.empty() && problem != state.Problem)
-				BS_CORE_WARN("InverseKinematics '{}': {}", entity.GetName(), problem);
-			state.Problem = std::move(problem);
+			Report(state.Problem, fmt::format("{}", fmt::join(problems, "; ")), entity, {});
 		};
 
-		// Always from the animated pose without IK, so held poses never accumulate last frame's solution.
+		// Always from the layered pose without IK, so held poses never accumulate last frame's solution.
 		AnimationLocalPose pose = playback.Pose;
 		std::vector<glm::mat4>& globals = m_IKGlobals;
 		if (!ComposeAnimationPose(source, pose, globals))
+		{
+			problems.emplace_back("the animated pose is not finite");
 			return finish(false);
+		}
 		const glm::mat4 world = m_Scene.GetWorldTransform(entity);
 		const glm::mat4 model = glm::inverse(world);
-		if (!Math::IsFinite(model) || std::abs(glm::determinant(glm::mat3(world))) < 1e-12f)
+		if (!Math::IsFinite(model))
 		{
 			problems.emplace_back("the entity's transform has no inverse (zero scale)");
 			return finish(false);
 		}
-		const glm::quat modelRotation = GlobalRotation(model);
-		glm::vec3 up = glm::vec3(world[1]);
-		up = glm::length(up) > 0 ? glm::normalize(up) : glm::vec3(0, 1, 0);
+		// World vectors and rotations into the model's space; normals by the inverse transpose.
+		const auto toModelRotation = [&](const glm::quat& rotation) { return GlobalRotation(model * glm::mat4_cast(rotation)); };
+		const glm::vec3 up = glm::normalize(glm::vec3(world[1]));
 		const glm::vec3 origin = glm::vec3(world[3]);
+		const float rayHeight = ClampSetting(component.RayHeight, 0, 100, "RayHeight", problems);
+		const float rayDepth = ClampSetting(component.RayDepth, 0, 100, "RayDepth", problems);
+		const float smoothing = ClampSetting(component.Smoothing, 0, 100, "Smoothing", problems);
 
 		PhysicsWorld* physics = m_Scene.GetPhysicsWorld();
-		// Feet follow the ground only while the character stands on it, so a jump keeps its animated legs.
+		// Feet follow the ground only while the character stands on it, so a jump keeps its animated legs. The
+		// character's bodies (on the entity or the controller's entity above it, and below either) are not ground;
+		// other ancestors (a moving platform the character is parented to) are.
 		bool airborne = false;
+		Entity body = entity;
 		if (physics)
 			for (Entity holder = entity; holder; holder = holder.GetParent())
 				if (holder.HasComponent<CharacterControllerComponent>() && physics->HasCharacter(holder))
 				{
 					airborne = !physics->IsCharacterGrounded(holder);
+					body = holder;
 					break;
 				}
-		const float blend = component.Smoothing > 0 ? 1.0f - std::exp(-seconds / component.Smoothing) : 1.0f;
+		const float blend = smoothing > 0 ? 1.0f - std::exp(-seconds / smoothing) : 1.0f;
 
 		std::vector<ResolvedChain> chains;
 		float pelvisOffset = 0;
 		bool grounded = false;
-		for (const IKChain& config : component.Chains)
+		for (size_t index = 0; index < component.Chains.size(); index++)
 		{
-			auto found = std::ranges::find(state.Chains, config.Name, &IKChainState::Name);
-			IKChainState& chain = *found;
-			const auto fail = [&](const std::string& problem) { problems.push_back(fmt::format("chain '{}': {}", config.Name, problem)); };
-			if (config.Joint.empty())
+			const IKChain& config = component.Chains[index];
+			// SyncIK built one state per configuration, in order.
+			IKChainState& chain = state.Chains[index];
+			const std::string prefix = fmt::format("chain '{}': ", config.Name);
+			// SyncIK clamped the weight; report a value C++ code wrote out of range.
+			ClampSetting(config.Weight, 0, 1, fmt::format("chain '{}' Weight", config.Name), problems);
+			ResolvedChain resolved{ .Config = &config, .Problem = &chain.Problem, .Weight = chain.Weight.Get() };
+			if (std::string problem = ResolveIKChain(source, config, resolved.Joints); !problem.empty())
 			{
-				fail("Joint is empty");
+				Report(chain.Problem, std::move(problem), entity, prefix);
 				continue;
 			}
-			const int32_t end = FindJoint(source, config.Joint);
-			if (end < 0)
+			if (const auto* position = std::get_if<IKChainState::PositionTarget>(&chain.Target))
 			{
-				fail(fmt::format("joint '{}' not found in '{}'", config.Joint, source.Key));
-				continue;
+				resolved.Target = position->Position;
+				resolved.Rotation = position->Rotation;
 			}
-			ResolvedChain resolved{ .Config = &config, .Weight = chain.Weight };
-			const size_t length = config.Type == IKChainType::TwoBone ? 3 : std::clamp<uint32_t>(config.ChainLength, 1, IKChain::MaxChainLength);
-			for (int32_t node = end; node >= 0 && resolved.Joints.size() < length; node = source.Nodes[node].Parent)
-				resolved.Joints.push_back(static_cast<uint32_t>(node));
-			if (resolved.Joints.size() < length)
+			else if (const auto* followed = std::get_if<IKChainState::EntityTarget>(&chain.Target))
 			{
-				fail(config.Type == IKChainType::TwoBone ? fmt::format("joint '{}' needs a parent and a grandparent", config.Joint) : fmt::format("joint '{}' has fewer than {} joints above it", config.Joint, length - 1));
-				continue;
-			}
-			if (std::ranges::any_of(resolved.Joints, [&](uint32_t joint) { return source.Nodes[joint].HasMatrix; }))
-			{
-				fail("a joint has a fixed matrix and cannot be turned");
-				continue;
-			}
-			if (config.Type == IKChainType::TwoBone)
-				std::ranges::reverse(resolved.Joints);
-
-			switch (chain.Kind)
-			{
-				case IKChainState::TargetKind::Position:
-					resolved.Target = chain.Position;
-					resolved.Rotation = chain.Rotation;
-					break;
-				case IKChainState::TargetKind::Entity:
+				const Entity target = m_Scene.GetEntityByUUID(followed->Entity);
+				if (!target)
 				{
-					const Entity target = m_Scene.GetEntityByUUID(chain.TargetEntity);
-					if (!target)
-					{
-						fail("its target entity no longer exists");
-						continue;
-					}
-					const glm::mat4 transform = m_Scene.GetWorldTransform(target);
-					resolved.Target = glm::vec3(transform[3]);
-					if (chain.MatchRotation)
-						resolved.Rotation = GlobalRotation(transform);
-					break;
+					Report(chain.Problem, "its target entity no longer exists", entity, prefix);
+					continue;
 				}
-				case IKChainState::TargetKind::None:
+				const glm::mat4 transform = m_Scene.GetWorldTransform(target);
+				resolved.Target = glm::vec3(transform[3]);
+				if (followed->MatchRotation)
+					resolved.Rotation = GlobalRotation(transform);
+			}
+			else if (config.Ground && config.Type == IKChainType::TwoBone)
+			{
+				// The ground below the animated foot, relative to the plane through the entity's origin: the animation is
+				// authored on that plane, so lifts and steps keep their height above the ground.
+				const uint32_t end = resolved.Joints.back();
+				const glm::vec3 foot = glm::vec3(world * globals[end][3]);
+				const glm::vec3 base = foot - up * glm::dot(foot - origin, up);
+				float offset = 0;
+				glm::vec3 normal = up;
+				if (physics && !airborne && rayHeight + rayDepth > 0)
 				{
-					if (!config.Ground || config.Type != IKChainType::TwoBone)
-						continue;
-					// The ground below the animated foot, relative to the plane through the entity's origin: the
-					// animation is authored on that plane, so lifts and steps keep their height above the ground.
-					const glm::vec3 foot = glm::vec3(world * globals[end][3]);
-					const glm::vec3 base = foot - up * glm::dot(foot - origin, up);
-					float offset = 0;
-					glm::vec3 normal = up;
-					if (physics && !airborne)
+					const PhysicsQueryFilter filter{ .IgnoreEntity = body.GetUUID() };
+					float nearest = std::numeric_limits<float>::max();
+					for (const RaycastHit& hit : physics->RaycastAll(base + up * rayHeight, -up, rayHeight + rayDepth, filter))
 					{
-						const PhysicsQueryFilter filter{ .IgnoreEntity = entity.GetUUID() };
-						float nearest = std::numeric_limits<float>::max();
-						for (const RaycastHit& hit : physics->RaycastAll(base + up * component.RayHeight, -up, component.RayHeight + component.RayDepth, filter))
+						const Entity hitEntity = m_Scene.GetEntityByUUID(hit.EntityID);
+						if (hitEntity && (hitEntity == entity || m_Scene.IsDescendantOf(hitEntity, body) || m_Scene.IsDescendantOf(hitEntity, entity)))
+							continue;
+						// Surfaces facing away from up (undersides, back faces) are not ground.
+						if (hit.Distance < nearest && glm::dot(hit.Normal, up) > 0)
 						{
-							const Entity hitEntity = m_Scene.GetEntityByUUID(hit.EntityID);
-							// The character's own bodies (a parent's controller, a child's hitboxes) are not ground.
-							if (hitEntity && (m_Scene.IsDescendantOf(hitEntity, entity) || m_Scene.IsDescendantOf(entity, hitEntity)))
-								continue;
-							if (hit.Distance < nearest && glm::dot(hit.Normal, up) > 0)
-							{
-								nearest = hit.Distance;
-								offset = component.RayHeight - hit.Distance;
-								normal = glm::normalize(hit.Normal);
-							}
+							nearest = hit.Distance;
+							offset = rayHeight - hit.Distance;
+							normal = glm::normalize(hit.Normal);
 						}
 					}
-					if (!chain.Placed)
-					{
-						chain.GroundOffset = offset;
-						chain.GroundNormal = normal;
-						// Update(0) runs before physics bodies exist: the first real frame snaps instead of easing in.
-						chain.Placed = seconds > 0;
-					}
-					else
-					{
-						chain.GroundOffset += (offset - chain.GroundOffset) * blend;
-						const glm::vec3 eased = glm::mix(chain.GroundNormal, normal, blend);
-						chain.GroundNormal = glm::length(eased) > 1e-6f ? glm::normalize(eased) : normal;
-					}
-					grounded = true;
-					pelvisOffset = std::min(pelvisOffset, chain.GroundOffset * chain.Weight);
-					resolved.Settled = std::abs(chain.GroundOffset) < 1e-5f && glm::dot(chain.GroundNormal, up) > 0.99999f;
-					resolved.Target = foot + up * chain.GroundOffset;
-					resolved.Rotation = RotationBetween(up, chain.GroundNormal) * GlobalRotation(world * globals[end]);
-					break;
 				}
+				auto& ground = chain.Ground;
+				if (!ground.Placed)
+				{
+					ground.Offset = offset;
+					ground.Normal = normal;
+					// Update(0) runs before physics bodies exist: the first real frame snaps instead of easing in.
+					ground.Placed = seconds > 0;
+				}
+				else
+				{
+					ground.Offset += (offset - ground.Offset) * blend;
+					const glm::vec3 eased = glm::mix(ground.Normal, normal, blend);
+					ground.Normal = glm::length(eased) > 1e-6f ? glm::normalize(eased) : normal;
+				}
+				grounded = true;
+				pelvisOffset = std::min(pelvisOffset, ground.Offset * resolved.Weight);
+				resolved.Settled = std::abs(ground.Offset) < 1e-5f && glm::dot(ground.Normal, up) > 0.99999f;
+				resolved.Target = foot + up * ground.Offset;
+				// Turns the animated foot from the entity's up axis to the ground normal; converted to model space below.
+				resolved.Rotation = RotationBetween(up, ground.Normal) * GlobalRotation(world * globals[end]);
+			}
+			if (std::holds_alternative<std::monostate>(chain.Target) && !config.Ground)
+			{
+				// No target: the chain idles.
+				Report(chain.Problem, {}, entity, prefix);
+				continue;
 			}
 			if (resolved.Weight <= 0)
+			{
+				Report(chain.Problem, {}, entity, prefix);
 				continue;
+			}
 			resolved.Target = glm::vec3(model * glm::vec4(resolved.Target, 1.0f));
 			if (resolved.Rotation)
-				resolved.Rotation = glm::normalize(modelRotation * *resolved.Rotation);
+				resolved.Rotation = toModelRotation(*resolved.Rotation);
 			chains.push_back(std::move(resolved));
 		}
 
 		std::set<uint32_t> touched;
-		if (grounded && pelvisOffset < 0 && !component.Pelvis.empty())
+		if (!component.Pelvis.empty())
 		{
-			const int32_t pelvis = FindJoint(source, component.Pelvis);
+			const int32_t pelvis = FindNode(source, component.Pelvis);
 			if (pelvis < 0)
 				problems.push_back(fmt::format("Pelvis joint '{}' not found in '{}'", component.Pelvis, source.Key));
 			else if (source.Nodes[pelvis].HasMatrix)
 				problems.push_back(fmt::format("Pelvis joint '{}' has a fixed matrix and cannot move", component.Pelvis));
-			else
+			else if (grounded && pelvisOffset < 0)
 			{
 				// Down along the entity's up axis, expressed in the pelvis's parent space.
 				glm::vec3 offset = glm::mat3(model) * (up * pelvisOffset);
 				if (const int32_t parent = source.Nodes[pelvis].Parent; parent >= 0)
 					offset = glm::inverse(glm::mat3(globals[parent])) * offset;
-				if (IsFiniteVector(offset))
-				{
-					pose.Nodes[pelvis].Translation += offset;
+				const glm::vec3 animated = pose.Nodes[pelvis].Translation;
+				pose.Nodes[pelvis].Translation += offset;
+				if (Math::IsFinite(offset) && ComposeAnimationPose(source, pose, globals))
 					touched.insert(static_cast<uint32_t>(pelvis));
+				else
+				{
+					problems.push_back(fmt::format("Pelvis joint '{}' cannot be lowered: its parent has no finite inverse", component.Pelvis));
+					pose.Nodes[pelvis].Translation = animated;
 					ComposeAnimationPose(source, pose, globals);
 				}
 			}
@@ -291,27 +283,31 @@ namespace Basalt {
 		for (const ResolvedChain& chain : chains)
 		{
 			const IKChain& config = *chain.Config;
-			// A foot already on its animated spot needs no solve unless the pelvis moved.
+			const std::string prefix = fmt::format("chain '{}': ", config.Name);
+			// Unless the pelvis or an earlier chain moved something, a settled foot stays as animated.
 			if (chain.Settled && touched.empty())
-				continue;
-			bool solved = false;
-			if (config.Type == IKChainType::TwoBone)
-				solved = SolveTwoBoneIK(source, pose, globals, chain.Joints[0], chain.Joints[1], chain.Joints[2], chain.Target, config.Pole, chain.Rotation, chain.Weight);
-			else
-				solved = SolveLookAtIK(source, pose, globals, chain.Joints, config.Axis, chain.Target, glm::radians(config.MaxAngle), chain.Weight);
-			if (!solved)
 			{
-				problems.push_back(fmt::format("chain '{}' has zero-length bones or no finite solution", config.Name));
+				Report(*chain.Problem, {}, entity, prefix);
 				continue;
 			}
-			touched.insert(chain.Joints.begin(), chain.Joints.end());
+			IKSolveResult result;
+			if (config.Type == IKChainType::TwoBone)
+			{
+				const bool pole = glm::length(config.Pole) > 0;
+				result = SolveTwoBoneIK(source, pose, globals, { .Upper = chain.Joints[0], .Middle = chain.Joints[1], .End = chain.Joints[2], .Target = chain.Target, .Pole = pole ? std::optional<glm::vec3>(config.Pole) : std::nullopt, .EndRotation = chain.Rotation, .Weight = chain.Weight });
+			}
+			else
+			{
+				const float maxAngle = glm::radians(ClampSetting(config.MaxAngle, 0, 180, fmt::format("chain '{}' MaxAngle", config.Name), problems));
+				result = SolveLookAtIK(source, pose, globals, { .Joints = chain.Joints, .Axis = config.Axis, .Target = chain.Target, .MaxAngle = maxAngle, .Weight = chain.Weight });
+			}
+			if (result == IKSolveResult::Solved)
+				touched.insert(chain.Joints.begin(), chain.Joints.end());
+			Report(*chain.Problem, DescribeIKResult(result), entity, prefix);
 		}
 		if (touched.empty())
 			return finish(false);
-		bool valid = true;
-		for (const auto& skin : source.Skins)
-			valid = valid && !BuildSkinPalette(skin, globals).empty();
-		if (!valid)
+		if (!std::ranges::all_of(globals, [](const glm::mat4& global) { return Math::IsFinite(global); }) || !SkinPalettesFinite(source, globals))
 		{
 			problems.emplace_back("the solved pose is not finite");
 			return finish(false);
@@ -319,6 +315,7 @@ namespace Basalt {
 		playback.IKOverlay.clear();
 		for (uint32_t node : touched)
 			playback.IKOverlay.emplace_back(node, pose.Nodes[node]);
+		playback.OverlayDropped = false;
 		playback.Globals = globals;
 		finish(true);
 	}
@@ -328,60 +325,49 @@ namespace Basalt {
 		const auto* component = entity.TryGetComponent<InverseKinematicsComponent>();
 		if (!component)
 		{
-			ReportIKCallProblem(entity, "the entity has no InverseKinematics component");
+			ReportCallProblem(m_IKCallProblems, entity, "InverseKinematics", chain, "the entity has no InverseKinematics component");
 			return nullptr;
 		}
 		IKState& state = SyncIK(entity, *component);
 		if (auto found = std::ranges::find(state.Chains, chain, &IKChainState::Name); found != state.Chains.end())
 			return &*found;
-		ReportIKCallProblem(entity, fmt::format("no chain named '{}'", chain));
+		ReportCallProblem(m_IKCallProblems, entity, "InverseKinematics", chain, fmt::format("no chain named '{}'", chain));
 		return nullptr;
-	}
-
-	void AnimationSystem::ReportIKCallProblem(Entity entity, const std::string& problem)
-	{
-		if (problem.empty())
-		{
-			m_IKCallProblems.erase(entity.GetUUID());
-			return;
-		}
-		std::string& reported = m_IKCallProblems[entity.GetUUID()];
-		if (reported != problem)
-			BS_CORE_ERROR("InverseKinematics '{}': {}", entity.GetName(), problem);
-		reported = problem;
 	}
 
 	bool AnimationSystem::SetIKTarget(Entity entity, const std::string& chain, const glm::vec3& position, const std::optional<glm::quat>& rotation)
 	{
-		if (!IsFiniteVector(position) || (rotation && !IsFiniteRotation(*rotation)))
-		{
-			BS_CORE_ERROR("InverseKinematics '{}': chain '{}' target must be finite", entity.GetName(), chain);
-			return false;
-		}
 		IKChainState* state = FindChain(entity, chain);
 		if (!state)
 			return false;
-		ReportIKCallProblem(entity, {});
-		state->Kind = IKChainState::TargetKind::Position;
-		state->Position = position;
-		state->Rotation = rotation ? std::optional<glm::quat>(glm::normalize(*rotation)) : std::nullopt;
+		const auto& config = *std::ranges::find(entity.GetComponent<InverseKinematicsComponent>().Chains, chain, &IKChain::Name);
+		std::string problem;
+		if (!Math::IsFinite(position) || (rotation && (!Math::IsFinite(*rotation) || glm::length(*rotation) < 1e-6f)))
+			problem = fmt::format("chain '{}' target must be a finite position and a finite, nonzero rotation", chain);
+		else if (rotation && config.Type == IKChainType::LookAt)
+			problem = fmt::format("chain '{}' is a LookAt chain, which takes no rotation", chain);
+		ReportCallProblem(m_IKCallProblems, entity, "InverseKinematics", chain, problem);
+		if (!problem.empty())
+			return false;
+		state->Target = IKChainState::PositionTarget{ position, rotation ? std::optional<glm::quat>(glm::normalize(*rotation)) : std::nullopt };
 		return true;
 	}
 
 	bool AnimationSystem::SetIKTarget(Entity entity, const std::string& chain, Entity target, bool matchRotation)
 	{
-		if (!target)
-		{
-			BS_CORE_ERROR("InverseKinematics '{}': chain '{}' target entity does not exist", entity.GetName(), chain);
-			return false;
-		}
 		IKChainState* state = FindChain(entity, chain);
 		if (!state)
 			return false;
-		ReportIKCallProblem(entity, {});
-		state->Kind = IKChainState::TargetKind::Entity;
-		state->TargetEntity = target.GetUUID();
-		state->MatchRotation = matchRotation;
+		const auto& config = *std::ranges::find(entity.GetComponent<InverseKinematicsComponent>().Chains, chain, &IKChain::Name);
+		std::string problem;
+		if (!target)
+			problem = fmt::format("chain '{}' target entity does not exist", chain);
+		else if (matchRotation && config.Type == IKChainType::LookAt)
+			problem = fmt::format("chain '{}' is a LookAt chain, which takes no rotation", chain);
+		ReportCallProblem(m_IKCallProblems, entity, "InverseKinematics", chain, problem);
+		if (!problem.empty())
+			return false;
+		state->Target = IKChainState::EntityTarget{ target.GetUUID(), matchRotation };
 		return true;
 	}
 
@@ -390,34 +376,25 @@ namespace Basalt {
 		IKChainState* state = FindChain(entity, chain);
 		if (!state)
 			return false;
-		ReportIKCallProblem(entity, {});
-		state->Kind = IKChainState::TargetKind::None;
-		state->Rotation.reset();
-		state->TargetEntity = 0;
+		ReportCallProblem(m_IKCallProblems, entity, "InverseKinematics", chain, {});
+		state->Target = std::monostate{};
 		// Ground placement takes over again from where the ground is now.
-		state->Placed = false;
+		state->Ground.Placed = false;
 		return true;
 	}
 
 	bool AnimationSystem::SetIKWeight(Entity entity, const std::string& chain, float weight, float seconds)
 	{
-		if (!std::isfinite(weight) || weight < 0 || weight > 1 || !std::isfinite(seconds) || seconds < 0)
-		{
-			BS_CORE_ERROR("InverseKinematics '{}': chain '{}' weight must be between 0 and 1 and the fade time finite and nonnegative, got {} and {}", entity.GetName(), chain, weight, seconds);
-			return false;
-		}
 		IKChainState* state = FindChain(entity, chain);
 		if (!state)
 			return false;
-		ReportIKCallProblem(entity, {});
-		state->TargetWeight = weight;
-		if (seconds > 0 && weight != state->Weight)
-			state->FadeRate = std::abs(weight - state->Weight) / seconds;
-		else
-		{
-			state->Weight = weight;
-			state->FadeRate = 0;
-		}
+		std::string problem;
+		if (!std::isfinite(weight) || weight < 0 || weight > 1 || !std::isfinite(seconds) || seconds < 0)
+			problem = fmt::format("chain '{}' weight must be between 0 and 1 and the fade time finite and nonnegative, got {} and {}", chain, weight, seconds);
+		ReportCallProblem(m_IKCallProblems, entity, "InverseKinematics", chain, problem);
+		if (!problem.empty())
+			return false;
+		state->Weight.FadeTo(weight, seconds);
 		return true;
 	}
 
@@ -426,8 +403,8 @@ namespace Basalt {
 		IKChainState* state = FindChain(entity, chain);
 		if (!state)
 			return std::nullopt;
-		ReportIKCallProblem(entity, {});
-		return state->Weight;
+		ReportCallProblem(m_IKCallProblems, entity, "InverseKinematics", chain, {});
+		return state->Weight.Get();
 	}
 
 }

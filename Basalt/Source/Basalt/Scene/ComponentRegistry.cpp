@@ -4,6 +4,7 @@
 #include "Basalt/Core/EnumNames.h"
 #include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
+#include "Basalt/Math/Math.h"
 #include "Basalt/Particles/ParticleEmitterRules.h"
 #include "Basalt/Physics/PhysicsLayers.h"
 #include "Basalt/Renderer/LocalShadows.h"
@@ -540,7 +541,7 @@ namespace Basalt {
 			r.Field("Looping", c.Looping);
 			r.Field("ReferenceClip", c.ReferenceClip);
 			r.Field("ReferenceTime", c.ReferenceTime);
-			r.ListField("Mask", c.Mask, AnimatorComponent::MaxMaskJoints);
+			r.ListField("Mask", c.Mask, AnimationLayer::MaxMaskJoints);
 		}
 
 		void Fields(FieldReader& r, AnimatorComponent& c)
@@ -1467,13 +1468,19 @@ namespace Basalt {
 					return fmt::format("Layers[{}].Speed {} must be finite and between 0 and {}", i, layer.Speed, MaxAnimatorSpeed);
 				if (!std::isfinite(layer.ReferenceTime) || layer.ReferenceTime < 0.0f)
 					return fmt::format("Layers[{}].ReferenceTime {} must be finite and nonnegative", i, layer.ReferenceTime);
-				if (layer.Mask.size() > AnimatorComponent::MaxMaskJoints)
-					return fmt::format("Layers[{}] mask holds at most {} joints", i, AnimatorComponent::MaxMaskJoints);
+				if (layer.Mask.size() > AnimationLayer::MaxMaskJoints)
+					return fmt::format("Layers[{}] mask holds at most {} joints", i, AnimationLayer::MaxMaskJoints);
 				for (size_t j = 0; j < layer.Mask.size(); j++)
 				{
 					const AnimationMaskJoint& joint = layer.Mask[j];
 					if (!std::isfinite(joint.Weight) || joint.Weight < 0.0f || joint.Weight > 1.0f)
 						return fmt::format("Layers[{}].Mask[{}].Weight {} must be between 0 and 1", i, j, joint.Weight);
+					// Empty entries are the inspector's unnamed additions.
+					for (size_t k = 0; k < j && !joint.Joint.empty(); k++)
+					{
+						if (layer.Mask[k].Joint == joint.Joint)
+							return fmt::format("Layers[{}].Mask[{}].Joint '{}' is already used by Mask[{}]", i, j, joint.Joint, k);
+					}
 				}
 			}
 			return {};
@@ -1481,7 +1488,6 @@ namespace Basalt {
 
 		std::string Validate(const InverseKinematicsComponent& c)
 		{
-			const auto finite = [](const glm::vec3& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); };
 			if (c.Chains.size() > InverseKinematicsComponent::MaxChains)
 				return fmt::format("InverseKinematics holds at most {} chains", InverseKinematicsComponent::MaxChains);
 			for (const auto& [name, value] : { std::pair<const char*, float>{ "RayHeight", c.RayHeight }, { "RayDepth", c.RayDepth }, { "Smoothing", c.Smoothing } })
@@ -1501,9 +1507,9 @@ namespace Basalt {
 				}
 				if (chain.ChainLength < 1 || chain.ChainLength > IKChain::MaxChainLength)
 					return fmt::format("Chains[{}].ChainLength {} must be between 1 and {}", i, chain.ChainLength, IKChain::MaxChainLength);
-				if (!finite(chain.Axis) || glm::length(chain.Axis) < 1e-4f)
+				if (!Math::IsFinite(chain.Axis) || glm::length(chain.Axis) < 1e-4f)
 					return fmt::format("Chains[{}].Axis must be finite and nonzero", i);
-				if (!finite(chain.Pole))
+				if (!Math::IsFinite(chain.Pole))
 					return fmt::format("Chains[{}].Pole must be finite", i);
 				if (!std::isfinite(chain.MaxAngle) || chain.MaxAngle < 0.0f || chain.MaxAngle > 180.0f)
 					return fmt::format("Chains[{}].MaxAngle {} must be between 0 and 180 degrees", i, chain.MaxAngle);
@@ -1512,6 +1518,8 @@ namespace Basalt {
 				if (chain.Ground && chain.Type != IKChainType::TwoBone)
 					return fmt::format("Chains[{}]: only TwoBone chains can be Ground chains", i);
 			}
+			if (c.RayHeight + c.RayDepth <= 0.0f && std::ranges::any_of(c.Chains, &IKChain::Ground))
+				return "RayHeight + RayDepth must be positive for Ground chains";
 			return {};
 		}
 

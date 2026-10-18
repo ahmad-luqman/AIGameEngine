@@ -50,12 +50,14 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   gameplay vertical input, or updates the world transform. Attachments and events run after physics and
   LateUpdate, before particles.
 - **Layers and IK.** A pose is built in stages: the base playback (`Playback::Local`, which fades, snapshots and root
-  stripping use), then `Animator.Layers` in order (`Pose`), then the IK overlay, composed into `Globals`.
-  `InverseKinematicsComponent` chains solve in `AnimationSystem::LateUpdate` (after physics and OnLateUpdate, before
-  attachments) from `Pose`, never from the last solution; the solved joints' local transforms are kept as an overlay
-  so a pose evaluated again that frame (Play in a callback) keeps the IK. Foot rays use `PhysicsWorld::RaycastAll`
-  and skip the entity's own hierarchy. IK targets and weights live in the system keyed by entity (they survive
-  playback resets); layer state belongs to the playback. Solvers (`Animation/InverseKinematics.h`) are pure functions.
+  stripping use), then `Animator.Layers` in order (`Pose`, cached per layer until its clip, mask or root motion
+  changes), then the IK overlay, composed into `Globals`. `InverseKinematicsComponent` chains solve in
+  `AnimationSystem::LateUpdate` (after physics and OnLateUpdate, before attachments) from `Pose`, never from the last
+  solution; the solved joints' local transforms are kept as an overlay so a pose evaluated again that frame (Play in a
+  callback) keeps the IK. Foot rays use `PhysicsWorld::RaycastAll` and skip the entity, its descendants and its
+  character controller's entity and descendants. IK targets and weights live in the system keyed by entity (they
+  survive playback resets); layer state belongs to the playback. Solvers (`Animation/InverseKinematics.h`) are
+  stateless free functions that handle mirrored joints.
 - **Play mode runs a copy.** `Scene::Copy` duplicates the edit scene (same UUIDs) for play/simulate;
   stopping discards it. In the editor the game runs in the Game tab (primary camera at the project's window
   size, letterboxed; the game UI takes the pointer while the Game image is hovered and navigation while the Game

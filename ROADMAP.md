@@ -77,8 +77,8 @@ additive clips, and inverse kinematics (two-bone, look-at chains, foot placement
 physics provides character controllers (`MoveCharacter`, `IsCharacterGrounded`, ground normal) and raycasts. The items
 below extend character movement, in order of impact.
 
-- **IK and layer follow-ups — S each.** Multi-joint chains (FABRIK or CCD) for tails and tentacles; IK and layers in
-  the edit-mode preview; reusable mask assets shared between Animators; layers driven by state machine states (an
+- **IK and layer follow-ups — S each.** Multi-joint chains (FABRIK or CCD) for tails and tentacles; an edit-mode
+  animation preview (clips, layers and IK); reusable mask assets shared between Animators; layers driven by state machine states (an
   upper-body graph); foot locking during stance phases so planted feet do not slide.
 - **Ragdolls — M.** Build a Jolt `Ragdoll` from the skeleton (a capsule per bone with swing-twist limits,
   generated from the joint hierarchy with editable sizes and limits), switch an Animator to it on death or

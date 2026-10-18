@@ -107,12 +107,17 @@ animations = [
 ]
 
 nodes = [dict(name='Mesh', mesh=0, skin=0)]
+# A held prop with a fixed matrix: IK cannot turn such nodes, so the tests check that it says so.
+prop = len(joints) + 1
 for name, parent, offset in joints:
     node = dict(name=name, translation=list(offset))
     children = [index[child] + 1 for child, p, _ in joints if p == name]
+    if name == 'LeftHand':
+        children.append(prop)
     if children:
         node['children'] = children
     nodes.append(node)
+nodes.append(dict(name='Prop', matrix=[1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0.1, 0, 0, 1]))
 for animation in animations:
     for channel in animation['channels']:
         channel['target']['node'] += 1

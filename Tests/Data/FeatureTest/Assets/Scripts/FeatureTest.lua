@@ -799,8 +799,9 @@ function Driver:OnUpdate(dt)
 		Check("Two-bone IK follows an entity", NearVec(ikRig:GetBoneTransform("LeftHand"), Scene.FindEntityByName("IKHandle").WorldPosition, 1e-3))
 		local head, headRotation = ikRig:GetBoneTransform("Head")
 		Check("Look-at IK", NearVec(headRotation * Vec3(0, 0, 1), (Vec3(1003, 1.7, 23) - head):Normalized(), 1e-3))
-		-- The masked Wave layer raises the right arm (its rest pose points it sideways).
-		Check("Override layer", ikRig:GetBoneTransform("RightHand").y > ikRig:GetBoneTransform("RightUpperArm").y + 0.15)
+		-- The masked Wave layer raises the right arm (its rest pose points it sideways) and leaves the left one.
+		local rightRise = ikRig:GetBoneTransform("RightHand").y - ikRig:GetBoneTransform("RightUpperArm").y
+		Check("Override layer", rightRise > 0.15 and rightRise < 0.6 and Near(ikRig:GetBoneTransform("LeftUpperArm").y, ikRig:GetBoneTransform("RightUpperArm").y, 0.25))
 		local hit = Physics.Raycast(Vec3(0, 10, 8), Vec3(0, -1, 0), 50)
 		Check("Physics.Raycast hit", hit ~= nil and hit.Entity.Name == "Ground" and Near(hit.Point.y, 0, 0.05) and NearVec(hit.Normal, Vec3(0, 1, 0), 1e-3) and Near(hit.Distance, 10, 0.05))
 		Check("Physics.Raycast miss", Physics.Raycast(Vec3(0, 10, 8), Vec3(0, 1, 0), 50) == nil)
