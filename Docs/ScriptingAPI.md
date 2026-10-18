@@ -1104,10 +1104,11 @@ clip in Play, CrossFade and Blend. Crossfade duration is scene time, independent
 or removing/re-adding Animator resets playback according to `PlayOnStart`. With PlayOnStart false,
 the selected clip is held at time 0 until played. Edit mode shows the authored rest pose.
 
-Playback also runs in Simulate, respects scene pause/step, and advances after scripts and physics.
+Playback also runs in Simulate, respects scene pause/step, and advances after `OnUpdate` and before physics;
+attachments update after `OnLateUpdate`.
 State belongs to the play scene and is not serialized or included in `scene.hash`; copies start fresh.
-Persistent entities retain playback across `Scene.Load`. There is no retargeting or root-motion
-extraction. Animated node motion is relative to the entity; physics uses the entity's colliders, not
+Persistent entities retain playback across `Scene.Load`. Retargeting is not supported. Animated node motion
+is relative to the entity; physics uses the entity's colliders, not
 deformed triangles.
 
 ### Animation events
@@ -1239,14 +1240,21 @@ reports the stored session preferences. Unspecified settings remain script-contr
 `Animator.StateMachine` references a project-relative `.banimgraph` JSON asset. Author it with
 `asset.write` (validates graphs before replacing the file), inspect it with `asset.read`, and apply disk
 changes with `asset.refresh`. Reloading resets each Animator to the initial state and parameter defaults.
-An invalid graph stops playback and reports the load error; it never falls back to direct playback.
+An invalid graph stops playback and reports the load error; it never falls back to direct playback. With
+`PlayOnStart = false`, the initial state is paused at time zero until `PauseAnimation(false)` or a direct
+playback call. States use their own `Looping` flag; `Animator.Looping` is ignored by graph playback.
+`SetAnimationTime` resets the elapsed state phase to the seek time divided by the current cycle duration.
 Clear `StateMachine` to use direct playback. Direct `PlayAnimation`, `CrossFadeAnimation`,
-`BlendAnimations` and `PlayBlendSpace` calls take control from the graph until its configuration or asset reloads.
+`BlendAnimations` and `PlayBlendSpace` calls take control from the graph until its configuration or asset
+reloads.
 
 - `e:SetAnimationParameter(name, value)` sets a declared `Float` (number) or `Bool` (boolean); returns false
-  for a wrong type, unknown parameter, non-finite value, or inactive machine.
-- `e:SetAnimationTrigger(name)` latches a `Trigger` until a successful transition using it consumes it.
-  Pausing preserves parameters and triggers; stopping holds the rest pose until direct playback or a graph reload.
+  for a wrong declared type, unknown parameter, non-finite value, or inactive machine. Nil and values other than
+  numbers or booleans raise an argument error.
+- `e:SetAnimationTrigger(name)` latches a `Trigger` until a successful transition using it consumes it; returns
+  true on success, false for an unknown/wrong-type parameter or inactive machine.
+  Pausing preserves parameters and triggers; stopping disables the graph (setters return false and GetAnimationState returns empty) and holds the rest
+  pose until direct playback or a graph reload.
 - `e:GetAnimationState()` returns the current state name, or `""` with no active graph.
 
 A graph has `InitialState`, `Parameters`, `States` and `Transitions`. Parameters have `Name`, `Type`
@@ -1261,10 +1269,12 @@ Transitions have `From` (empty/omitted = any state), `To`, `Duration` (crossfade
 Conditions have `Parameter`, `Operator` (`Greater`, `Less`, `Equal`, `NotEqual`; default `Equal`) and
 `Value`. Float conditions require a numeric value. Bool conditions default to `Equal true`; trigger
 conditions must test `Equal true`. Array order sets priority. At most one transition starts per update;
-self-transitions are ignored. Exit times are checked at update boundaries against time already played,
-including completed loops, so a large timestep cannot skip the exit. Finished non-looping states still
-check transitions; paused states do not. A missing clip or unplayable blend space is reported and retried without
-consuming triggers. A partially resolved space can play its valid weighted samples, reporting the missing ones. A visual graph editor is a future feature.
+explicit self-transitions are rejected; any-state edges skip their own target. Exit times are checked at
+update boundaries against time already played, including completed loops, so a large timestep cannot skip
+the exit. Finished non-looping states still check transitions; paused states do not. Zero-length states
+ignore ExitTime. A missing clip or unplayable blend space is reported and retried without consuming
+triggers. A partially resolved space can play its valid weighted samples, reporting the missing ones. A
+visual graph editor is a future feature.
 
 ```json
 {
@@ -1281,18 +1291,23 @@ consuming triggers. A partially resolved space can play its valid weighted sampl
 }
 ```
 
-Enable `Animator.RootMotion` and name the extraction node in `Animator.RootJoint`. With a graph,
-only states with `RootMotion: true` drive movement; direct playback uses the Animator flag alone.
-Horizontal translation and yaw are extracted across loop boundaries, including multiple wraps, and
-removed from the displayed pose relative to the model's rest pose. Vertical motion, pitch and roll stay
-in the animation. Crossfades blend motion from opted-in sources (interrupted blends freeze their outgoing
-pose). A fade out of a root-motion blend space retains its extraction clock and sample weights so movement
-decays throughout the fade, while the outgoing visible pose keeps the existing snapshot behavior. Seeking never moves the entity. `MatchVelocity` is bypassed while the current state drives root motion.
+Enable `Animator.RootMotion` and name the extraction node in `Animator.RootJoint`. With a graph, only
+states with `RootMotion: true` drive movement; direct playback uses the Animator flag alone. Horizontal
+translation and yaw are extracted across loop boundaries, including multiple wraps, and removed from the
+displayed pose relative to the model's rest pose. Vertical motion, pitch and roll stay in the animation.
+Yaw uses the rotation's twist around model Y, including roots whose +Z points vertically; undefined
+twists skip extraction and retain the authored pose with a diagnostic. Crossfades blend motion from
+opted-in sources (interrupted blends freeze their outgoing pose). A fade out of a root-motion blend space
+retains its extraction clock and sample weights so movement decays throughout the fade, while the
+outgoing visible pose uses a frozen snapshot. Seeking never moves the entity. `MatchVelocity` is bypassed
+while the current state drives root motion.
 
 Animation runs after script updates and before physics. Root motion overrides a character's requested
-velocity tangent to its up axis for that update, retaining `Move`'s request along that axis and normal gravity/collision
-handling; pausing, stopping, finishing or leaving root-motion states restores gameplay input. Physics still
-uses fixed steps; displacement on frames below one step is queued until the next step. Without a character,
-root motion updates the world transform, respecting its rotation, scale and parent. Bone attachments
-update after physics. Playback and parameters changed in `OnLateUpdate` advance on the following update;
-direct play, blend and seek calls resample the visible pose immediately.
+velocity tangent to its up axis for that update, retaining `Move`'s request along that axis and normal
+gravity/collision handling. Character yaw writes the entity transform directly; translation goes through
+collision resolution. Pausing, stopping, finishing or leaving root-motion states restores gameplay input.
+Physics still uses fixed steps; displacement on frames below one step is queued until the next step.
+Without a character, root motion updates the world transform, respecting its rotation, scale and parent.
+Bone attachments update after physics and `OnLateUpdate`. Playback and parameters changed in
+`OnLateUpdate` advance on the following update; direct play, blend and seek calls resample the visible
+pose immediately.

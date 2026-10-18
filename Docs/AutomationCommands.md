@@ -306,7 +306,7 @@ Reloads the asset files changed on disk since changes were last reported (by an 
 
 ### `asset.write`
 
-Writes a text asset (script, prefab, scene, animation graph...) to a project-relative path and reloads it. A .banimgraph is validated before replacing the file: a script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts').
+Writes a text asset (script, prefab, scene, animation graph...) to a project-relative path and reloads it. A .banimgraph is validated before replacing the file. A script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts').
 
 | Parameter | Type / description |
 |-----------|--------------------|

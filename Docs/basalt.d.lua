@@ -399,7 +399,7 @@ function Entity:PauseAnimation(paused) end
 ---Stops the Animator and shows the rest pose.
 function Entity:StopAnimation() end
 
----Seeks the Animator to seconds; returns success.
+---Seeks the Animator to seconds and resets graph exit phase to seconds/cycle duration; returns success.
 ---@param seconds number
 ---@return boolean
 function Entity:SetAnimationTime(seconds) end
@@ -420,21 +420,23 @@ function Entity:IsAnimationPlaying() end
 ---@return string[]
 function Entity:GetAnimationClips() end
 
----Sets a declared Float or Bool parameter. False on a missing parameter, wrong type, non-finite value or inactive machine.
+---Sets a declared Float or Bool parameter. False on a missing parameter, wrong declared type, non-finite value or inactive machine.
+---Nil and values other than numbers/booleans raise an argument error.
 ---@param name string
 ---@param value number|boolean
 ---@return boolean
 function Entity:SetAnimationParameter(name, value) end
 
----Latches a declared trigger until a successful transition consumes it.
+---Latches a declared trigger until a successful transition consumes it; false for an unknown/wrong-type parameter or inactive graph.
 ---@param name string
 ---@return boolean
 function Entity:SetAnimationTrigger(name) end
 
----Current state name, or an empty string when no state machine is active.
+---Current state name, or an empty string after Stop, direct playback or a failed graph load.
+---Graph playback uses each state's Looping flag. PlayOnStart=false pauses until PauseAnimation(false).
+---Root motion yaw writes the entity transform; character translation uses physics. Zero-length states ignore exit time.
 ---@return string
 function Entity:GetAnimationState() end
-
 
 ---Plays one of the Animator's BlendSpaces at parameter (x, y), fading from the current pose over fadeSeconds
 ---(default 0). While that space plays it only moves the parameter (the fade is ignored); a paused or finished one

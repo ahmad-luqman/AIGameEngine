@@ -102,8 +102,8 @@ below turn that into natural character movement (walk, run, jump, uneven ground)
   culling, update distant animators at a reduced rate (animation LOD), and evaluate poses on the job
   system (see Engine internals).
 - **Later: motion matching and procedural creatures — L each.** Motion matching (search a mocap database
-  every few frames for the pose and future trajectory that best match the desired movement) once the state
-  machine and root motion exist; procedural leg stepping for multi-legged creatures built on IK.
+  every few frames for the pose and future trajectory that best match the desired movement); procedural
+  leg stepping for multi-legged creatures built on IK.
 
 ### Audio
 
@@ -135,7 +135,6 @@ with a smoke test have shipped. Follow-ups:
 ### Editor workflow
 
 - **Animation graph editor — M.** A visual editor for existing `.banimgraph` states, parameters and transitions, using the automation asset commands.
-
 - **Native file dialogs — S.** Add nativefiledialog-extended (pinned) for Open/Save/Import, keeping the
   text-box fallback for headless and Linux systems without a portal.
 - **Prefab editing and overrides — L.** Open a prefab in an isolated scene, save, and propagate changes

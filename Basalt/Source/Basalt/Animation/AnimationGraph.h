@@ -14,7 +14,7 @@ namespace Basalt {
 		Bool,
 		Trigger
 	};
-	// Immutable declarations shared by every Animator using a .banimgraph asset.
+	// One typed parameter declaration; each Animator owns its current value.
 	struct AnimationParameter
 	{
 		std::string Name;
@@ -28,6 +28,7 @@ namespace Basalt {
 		std::string Clip;
 		std::string BlendSpace;
 		std::string ParameterX, ParameterY;
+		std::optional<size_t> ParameterXIndex, ParameterYIndex;
 		bool Looping = true;
 		bool RootMotion = false;
 	};
@@ -43,24 +44,29 @@ namespace Basalt {
 	{
 		size_t Parameter = 0;
 		AnimationComparison Comparison = AnimationComparison::Equal;
+		// Omitted Bool/Trigger values test true. Float conditions require an explicit value.
 		float Value = 1;
 	};
 	// Ordered edge; exit time and conditions must all pass before the target starts.
 	struct AnimationTransition
 	{
-		// Empty From matches any state, except To (no implicit self-restarts).
+		// Empty From matches any state except To. Explicit self-edges are rejected; states never restart implicitly.
 		std::string From, To;
+		std::optional<size_t> FromIndex;
+		size_t ToIndex = 0;
 		float Duration = 0.15f;
 		std::optional<float> ExitTime;
 		std::vector<AnimationCondition> Conditions;
 	};
-	// Strict, bounded graph parser. Transitions use array order as priority and all their conditions must match.
+	// Immutable declarations shared by Animators using a .banimgraph asset. Transitions use array order as priority.
 	struct AnimationGraph
 	{
 		std::string InitialState;
+		size_t InitialStateIndex = 0;
 		std::vector<AnimationParameter> Parameters;
 		std::vector<AnimationState> States;
 		std::vector<AnimationTransition> Transitions;
+		// Strict, bounded parser that resolves parameter indices and validates all references.
 		static std::optional<AnimationGraph> FromJson(const nlohmann::json& data, std::string& outError);
 		const AnimationState* FindState(const std::string& name) const;
 	};

@@ -726,11 +726,12 @@ namespace Basalt {
 			m_UIInteraction->Update(*this, ts.GetSeconds());
 			m_ScriptEngine->Update(ts, m_UIInteraction->TakeEvents());
 		}
+		// Sample after gameplay chooses states and before physics consumes this frame's root displacement.
 		m_AnimationSystem->Update(ts, false);
 		m_PhysicsWorld->Step(ts);
 		if (m_State == SceneState::Play)
 			m_ScriptEngine->LateUpdate(ts);
-		// Animation moves BoneAttachment entities, so it runs before particles.
+		// Attachments follow the final rig transform, including physics and script LateUpdate movement.
 		m_AnimationSystem->UpdateAttachments();
 		DispatchAnimationEvents();
 		// After every system that moves entities, so particles leave from where the emitter is this frame.
