@@ -14,6 +14,7 @@ namespace Basalt::PhysicsInternal {
 	namespace {
 
 		std::mutex s_JoltMutex;
+		std::once_flag s_AllocatorInitialized;
 		uint32_t s_JoltUsers = 0;
 
 		void JoltTrace(const char* format, ...)
@@ -33,8 +34,12 @@ namespace Basalt::PhysicsInternal {
 		std::scoped_lock lock(s_JoltMutex);
 		if (s_JoltUsers++ > 0)
 			return;
-		JPH::RegisterDefaultAllocator();
-		JPH::Trace = JoltTrace;
+		// Completed jobs can be freed after a world stops. Never rewrite allocator callbacks
+		// while those worker deletions read them during a later world's initialization.
+		std::call_once(s_AllocatorInitialized, [] {
+			JPH::RegisterDefaultAllocator();
+			JPH::Trace = JoltTrace;
+		});
 		JPH::Factory::sInstance = new JPH::Factory();
 		JPH::RegisterTypes();
 	}

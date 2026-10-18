@@ -120,7 +120,7 @@ namespace Basalt {
 		constexpr uint32_t MaxContactConstraints = 16384;
 
 		m_Impl->TempAllocator = CreateScope<JPH::TempAllocatorImpl>(16 * 1024 * 1024);
-		m_Impl->JobSystem = CreateScope<PhysicsJobs>();
+		m_Impl->JobSystem = &PhysicsJobs::Get();
 
 		if (const auto& layers = scene->GetPhysicsLayers())
 			m_Impl->Layers = *layers;
@@ -171,7 +171,7 @@ namespace Basalt {
 		}
 		registry.clear<Impl::BodyRecord>();
 		m_Impl->System.reset();
-		m_Impl->JobSystem.reset();
+		m_Impl->JobSystem = nullptr;
 		m_Impl->TempAllocator.reset();
 		m_Impl.reset();
 
@@ -577,7 +577,7 @@ namespace Basalt {
 			// Characters move before the bodies step, as Jolt expects.
 			impl.UpdateCharacters(fixedStep);
 
-			impl.System->Update(fixedStep, 1, impl.TempAllocator.get(), impl.JobSystem.get());
+			impl.System->Update(fixedStep, 1, impl.TempAllocator.get(), impl.JobSystem);
 			m_Accumulator -= fixedStep;
 			m_StepCount++;
 			steps++;

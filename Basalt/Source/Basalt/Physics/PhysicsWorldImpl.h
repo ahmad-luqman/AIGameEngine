@@ -112,7 +112,7 @@ namespace Basalt {
 		};
 
 		Scope<JPH::TempAllocatorImpl> TempAllocator;
-		Scope<PhysicsJobs> JobSystem;
+		PhysicsJobs* JobSystem = nullptr; // Engine-owned; queued references may outlive this world.
 		PhysicsInternal::BroadPhaseLayerInterfaceImpl BroadPhaseLayerInterface;
 		PhysicsInternal::ObjectVsBroadPhaseLayerFilterImpl ObjectVsBroadPhaseLayerFilter;
 		PhysicsInternal::ObjectLayerPairFilterImpl ObjectLayerPairFilter;

@@ -311,7 +311,9 @@ and log a diagnostic. `ParallelFor` divides disjoint output ranges and joins eve
 returning, including after a task fails. Callers retain ownership of captured data until completion,
 avoid cyclic waits, and call `WaitIdle` or destroy pools only from their owner thread after producers
 stop. Shutdown drains jobs and their children. Physics uses Jolt barriers/dependencies on this pool,
-without its previous private worker threads. Animation and culling can use the same range API for
+without its previous private worker threads. The Jolt adapter lives until engine shutdown, so stopping
+a world does not join unrelated asset jobs; queued references to already-completed physics jobs remain
+valid until the pool releases them. Animation and culling can use the same range API for
 future crowd work; their evaluation is currently serial.
 
 `AssetManager::RequestMesh/RequestTexture` deduplicate CPU loads and decode on this pool. Requests
