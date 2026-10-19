@@ -47,7 +47,8 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   successful transitions consume their trigger conditions. `Animator.RootMotion` is the master gate and
   graph states also opt in; `RootJoint` explicitly names the extraction node. Animation advances after
   scripts and before physics; horizontal root displacement queues for character fixed steps, retaining
-  gameplay vertical input, or updates the world transform. Attachments and events run after physics and
+  gameplay vertical input (and, during fades to or from states without root motion, the faded share of gameplay
+  horizontal input), or updates the world transform. Attachments and events run after physics and
   LateUpdate, before particles.
 - **Layers and IK.** A pose is built in stages: the base playback (`Playback::Local`, which fades, snapshots and root
   stripping use), then `Animator.Layers` in order (`Pose`; each layer's clip, mask and reference pose are resolved again

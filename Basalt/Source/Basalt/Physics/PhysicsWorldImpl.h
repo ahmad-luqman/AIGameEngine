@@ -97,6 +97,8 @@ namespace Basalt {
 			glm::vec3 MoveVelocity = { 0.0f, 0.0f, 0.0f };
 			// Per-Step animation velocity, shared by its substeps; absent restores gameplay movement.
 			std::optional<glm::vec3> RootMotionVelocity;
+			// How much of the horizontal movement RootMotionVelocity owns (see QueueRootMotion).
+			float RootMotionShare = 1.0f;
 			// Displacement over the last step divided by its duration.
 			glm::vec3 ActualVelocity = { 0.0f, 0.0f, 0.0f };
 			// Pose last written to / read from the entity, used to detect transforms changed by scripts.
@@ -152,6 +154,9 @@ namespace Basalt {
 		struct RootMotionRequest
 		{
 			glm::vec3 Pending = glm::vec3(0);
+			// The queued frames' shares, summed, and how many frames queued since the last step.
+			float ShareSum = 0;
+			uint32_t Frames = 0;
 			bool Active = false;
 			// Unbuilt entries and InvalidReported retain idle requests until construction/recovery,
 			// keeping these diagnostic flags alive to prevent repeated logs.

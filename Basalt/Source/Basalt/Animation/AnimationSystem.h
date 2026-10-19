@@ -424,11 +424,13 @@ namespace Basalt {
 		static void ReportRootClipProblem(Playback& playback, int32_t clip, const std::string& problem);
 		static void ResetRootIntervals(Playback& playback);
 		static std::optional<glm::mat4> SourceRootDelta(Playback& playback, int32_t clip, double time, const std::optional<SpaceState>& space, double advance, bool looping, bool enabled);
-		static std::optional<glm::mat4> FrameRootMotion(Playback& playback, double advance, double shown, double seconds, double plainSpeed);
+		// The frame's root displacement; outShare is how much of the entity's horizontal movement it owns (0..1): the
+		// root-motion side of a fade by its weight, so a character's gameplay movement fills in the rest.
+		static std::optional<glm::mat4> FrameRootMotion(Playback& playback, double advance, double shown, double seconds, double plainSpeed, float& outShare);
 		static void StripRoot(Playback& playback, AnimationLocalPose& pose, int32_t clip);
 		static std::optional<glm::mat4> SpaceRootDelta(Playback& playback, const SpaceState& space, double advance, bool looping);
 		static std::optional<glm::mat4> RootDelta(Playback& playback, int32_t clip, double from, double advance, bool looping);
-		void ApplyRootMotion(Entity entity, Playback& playback, const glm::mat4& delta, float seconds);
+		void ApplyRootMotion(Entity entity, Playback& playback, const glm::mat4& delta, float seconds, float share);
 		void OnDestroy(entt::registry& registry, entt::entity handle);
 		Scene& m_Scene;
 		std::unordered_map<UUID, Playback> m_Playback;
