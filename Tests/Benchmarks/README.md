@@ -45,3 +45,16 @@ Other configurations reject this option; sanitizer/coverage runs exercise correc
 Compare a new run on the same machine/configuration before attributing gains to session 4. CI artifacts
 provide the corresponding runner baselines. Do not regenerate the committed baseline when optimizing:
 keep it as the before measurement. A moving or larger workload needs a new version and baseline.
+
+## Recorded baseline
+
+Recorded on Apple M4 Max (16 CPU cores, 128 GiB), macOS 26.6.2, AppleClang 21, Release,
+with no concurrent builds/tests, from implementation revision `36d7b3c`:
+
+| Mode | Mean frame (ms) | p95 frame (ms) | Raw report |
+|---|---:|---:|---|
+| CPU update | 2.347 | 2.649 | [macos-arm64-cpu.json](Baselines/macos-arm64-cpu.json) |
+| Complete GPU frame, validation on | 31.031 | 33.309 | [macos-arm64-gpu.json](Baselines/macos-arm64-gpu.json) |
+
+[Final benchmark image](Baselines/macos-arm64-gpu.json.png). CPU and GPU modes measure different work;
+their times are not additive. These local measurements are evidence, not the shared-runner CI budgets.
