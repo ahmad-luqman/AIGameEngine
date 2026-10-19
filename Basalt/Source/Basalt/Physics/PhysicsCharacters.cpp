@@ -457,16 +457,6 @@ namespace Basalt {
 		request.Time += weight;
 	}
 
-	void PhysicsWorld::QueueRootMotionGap(Entity entity, float seconds)
-	{
-		if (!m_Impl->Owns(entity))
-			return;
-		auto it = m_Impl->RootMotion.find(entity.GetUUID());
-		if (it == m_Impl->RootMotion.end() || !it->second.HasQueued())
-			return;
-		it->second.Time += std::isfinite(seconds) && seconds > 0.0f ? seconds : m_Impl->ScenePtr->GetFixedTimestep();
-	}
-
 	bool PhysicsWorld::IsCharacterGrounded(Entity entity) const
 	{
 		if (!m_Impl->Owns(entity))

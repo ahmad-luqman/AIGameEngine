@@ -496,6 +496,12 @@ namespace Basalt {
 		impl.ApplyPendingChanges();
 
 		m_Accumulator += ts.GetSeconds();
+		// A frame that queued no root motion while earlier displacement waits for a step owns its part of that step for
+		// gameplay movement (share 0), whatever kept the animation from queuing (a fade that ended, a stopped clip).
+		if (const float seconds = ts.GetSeconds(); std::isfinite(seconds) && seconds > 0)
+			for (auto& [id, request] : impl.RootMotion)
+				if (!request.Active && request.HasQueued())
+					request.Time += seconds;
 		// Preserve animation displacement on frames below the fixed timestep, and distribute it over this
 		// frame's substeps. Finishing or removing an Animator must not drop its last queued displacement.
 		uint32_t plannedSteps = 0;
