@@ -8,6 +8,48 @@
 
 namespace Basalt {
 
+	std::optional<GpuStatistics> CollectGpuStatistics(const GpuProfiler* profiler)
+	{
+		if (!profiler)
+			return std::nullopt;
+		return GpuStatistics{ .Timings = profiler->GetTimings(),
+							  .DisabledReason = profiler->IsEnabled() ? std::nullopt : std::optional<std::string>(profiler->GetDisabledReason()),
+							  .ConsecutiveDrops = profiler->GetConsecutiveDrops() };
+	}
+
+	nlohmann::json GpuStatisticsToJson(const std::optional<GpuStatistics>& statistics)
+	{
+		if (!statistics)
+			return nullptr;
+		auto result = GpuTimingsToJson(statistics->Timings);
+		result["timers"] = statistics->HasTimers();
+		result["consecutiveDrops"] = statistics->ConsecutiveDrops;
+		result["stalled"] = statistics->IsStalled();
+		result["disabledReason"] = statistics->DisabledReason ? nlohmann::json(*statistics->DisabledReason) : nlohmann::json();
+		if (!statistics->IsReady())
+		{
+			result["frameMs"] = nullptr;
+			for (auto& pass : result["passes"])
+				pass["ms"] = nullptr;
+		}
+		return result;
+	}
+
+	std::string FormatGpuStatistics(const std::optional<GpuStatistics>& statistics, bool includePasses)
+	{
+		if (!statistics)
+			return "unavailable";
+		if (statistics->DisabledReason)
+			return "unavailable (" + *statistics->DisabledReason + ")";
+		if (statistics->IsStalled())
+			return fmt::format("stalled ({} consecutive frames without results)", statistics->ConsecutiveDrops);
+		if (!statistics->Timings.SampleCount)
+			return "not available yet (waiting for GPU timings)";
+		if (includePasses)
+			return FormatGpuTimings(statistics->Timings, true);
+		return fmt::format("{:.2f} ms ({} samples, {} dropped in session)", statistics->Timings.FrameMilliseconds, statistics->Timings.SampleCount, statistics->Timings.DroppedFrames);
+	}
+
 	std::optional<RenderCamera> GetPrimaryRenderCamera(Scene& scene, uint32_t viewportWidth, uint32_t viewportHeight)
 	{
 		Entity cameraEntity = scene.GetPrimaryCameraEntity();
@@ -73,16 +115,20 @@ namespace Basalt {
 			text += fmt::format("{}{} {:.2f}", i == 0 ? "" : ", ", timings.Passes[i].Name, timings.Passes[i].Milliseconds);
 		text += ')';
 		if (timings.DroppedFrames > 0)
-			text += fmt::format("; {} frames dropped", timings.DroppedFrames);
+			text += fmt::format("; {} frames dropped in session", timings.DroppedFrames);
 		return text;
 	}
 
 	nlohmann::json GetRenderStats(const SceneRenderer& renderer)
 	{
+		return GetRenderStats(renderer, CollectGpuStatistics(&renderer.GetGpuProfiler()));
+	}
+
+	nlohmann::json GetRenderStats(const SceneRenderer& renderer, const std::optional<GpuStatistics>& gpuStatistics)
+	{
 		const SceneRendererStatistics& statistics = renderer.GetStatistics();
 		const DynamicResolutionSettings& dynamic = renderer.GetDynamicResolution();
-		nlohmann::json gpu = GpuTimingsToJson(renderer.GetGpuTimings());
-		gpu["timers"] = renderer.HasGpuTimers();
+		const auto gpu = GpuStatisticsToJson(gpuStatistics);
 		return {
 			{ "viewport", { renderer.GetViewportWidth(), renderer.GetViewportHeight() } },
 			{ "renderSize", { renderer.GetRenderWidth(), renderer.GetRenderHeight() } },
@@ -109,7 +155,7 @@ namespace Basalt {
 			{ "particlesSkipped", statistics.ParticlesSkipped },
 			{ "lights", statistics.Lights },
 			{ "materials", statistics.Materials },
-			{ "gpu", std::move(gpu) },
+			{ "gpu", gpu },
 		};
 	}
 

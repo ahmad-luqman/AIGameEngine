@@ -262,35 +262,26 @@ namespace Basalt {
 
 	void RuntimeLayer::CheckRendererResults(const std::function<void(int)>& fail)
 	{
-		auto logHostTiming = [&](const char* name, const GpuProfiler* profiler) {
+		// Results arrive Latency frames late, so a shorter run cannot have any.
+		const bool tooShort = m_Options.MaxFrames <= GpuProfiler::Latency;
+		auto logTiming = [&](const char* name, const GpuProfiler* profiler) {
 			if (!profiler)
 				return;
-			const auto& timings = profiler->GetTimings();
-			const auto text = profiler->IsStalled() || !profiler->IsEnabled()
-								  ? FormatGpuStatistics(CollectGpuStatistics(profiler))
-								  : FormatGpuTimings(timings, true);
-			if (profiler->IsStalled() || (profiler->IsEnabled() && !timings.SampleCount && m_Options.MaxFrames > GpuProfiler::Latency))
+			const auto statistics = CollectGpuStatistics(profiler);
+			const auto text = FormatGpuStatistics(statistics, true);
+			if (profiler->IsStalled() || (profiler->IsEnabled() && !statistics->Timings.SampleCount && !tooShort))
 				BS_CORE_WARN("Runtime: {} GPU time {}", name, text);
 			else
-				BS_CORE_INFO("Runtime: {} GPU time {}", name, text);
+				BS_CORE_INFO("Runtime: {} GPU time {}{}", name, text, tooShort ? " (run shorter than query latency)" : "");
 		};
-		logHostTiming("blit", m_BlitProfiler.get());
+		logTiming("scene", &m_Renderer->GetGpuProfiler());
+		logTiming("blit", m_BlitProfiler.get());
 		if (const auto* imgui = Application::Get().GetImGuiLayer())
-			logHostTiming("ImGui", imgui->GetProfiler());
+			logTiming("ImGui", imgui->GetProfiler());
 		const auto& stats = m_Renderer->GetStatistics();
 		BS_CORE_INFO("Runtime: render stats localShadowMaps={} localShadowsSkipped={} lightsSkipped={} localShadowAtlasSize={} fsr1={} vsync={}",
 					 stats.LocalShadowMaps, stats.LocalShadowsSkipped, stats.LightsSkipped, stats.LocalShadowAtlasSize, stats.FSR1Active ? 1 : 0, Application::Get().GetGraphicsDevice()->IsVSync() ? 1 : 0);
-		const bool timers = m_Renderer->HasGpuTimers();
 		const GpuTimings& timings = m_Renderer->GetGpuTimings();
-		const std::string text = FormatGpuTimings(timings, timers);
-		// Results arrive GpuProfiler::Latency frames late, so a shorter run cannot have any.
-		const bool tooShort = m_Options.MaxFrames <= GpuProfiler::Latency;
-		if (timers && timings.SampleCount == 0 && tooShort)
-			BS_CORE_INFO("Runtime: scene GPU time {} (the run is too short: results arrive {} frames late)", text, GpuProfiler::Latency);
-		else if (timers && timings.SampleCount == 0)
-			BS_CORE_WARN("Runtime: scene GPU time {}", text); // a whole run without results: a driver or profiler problem
-		else
-			BS_CORE_INFO("Runtime: scene GPU time {}", text);
 		BS_CORE_INFO("Runtime: last frame rendered at {}x{} ({:.0f}% render scale)", m_Renderer->GetRenderWidth(), m_Renderer->GetRenderHeight(), m_Renderer->GetCurrentRenderScale() * 100.0f);
 
 		const DynamicResolutionSampleCounts& samples = m_Renderer->GetDynamicResolutionSamples();
@@ -303,6 +294,8 @@ namespace Basalt {
 			reason = DescribeDynamicResolutionState(m_Renderer->GetDynamicResolutionState(), m_Renderer->GetDynamicResolution(), m_Renderer->GetRenderScale());
 		else if (tooShort)
 			reason = fmt::format("the run is too short: GPU timer results arrive {} frames late, use more --frames", GpuProfiler::Latency);
+		else if (m_Renderer->GetGpuProfiler().IsStalled())
+			reason = "GPU timer results stopped arriving";
 		else if (timings.SampleCount == 0)
 			reason = "no GPU timer results arrived";
 		else if (samples.Accepted == 0)

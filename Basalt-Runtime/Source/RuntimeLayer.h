@@ -71,6 +71,7 @@ namespace Basalt {
 		uint64_t m_Frame = 0;
 		float m_RenderDeltaTime = 0.0f;
 		bool m_WarnedNoCamera = false;
+		// This frame succeeded, rather than merely having a camera or stale renderer counters.
 		bool m_Rendered = false;
 		CursorMode m_AppliedCursorMode = CursorMode::Normal;
 	};

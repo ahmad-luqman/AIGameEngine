@@ -118,9 +118,9 @@ namespace Basalt {
 		// Consecutive dropped frames after which a stall is warned about.
 		static constexpr uint32_t DropWarningThreshold = 2 * Latency;
 
-		// Times with nvrhi timer queries on `device` (markers only when `enabled` is false or the device is null).
+		// Times with nvrhi timer queries on `device` (markers only when disabled; no markers without a device).
 		GpuProfiler(nvrhi::IDevice* device, std::vector<std::string> passNames, bool enabled);
-		// Times through `backend` (markers only when `enabled` is false or the backend is null).
+		// Times through `backend` (markers only when disabled; no markers without a backend).
 		GpuProfiler(Scope<GpuTimerBackend> backend, std::vector<std::string> passNames, bool enabled);
 		~GpuProfiler();
 
@@ -128,8 +128,11 @@ namespace Basalt {
 		GpuProfiler& operator=(const GpuProfiler&) = delete;
 
 		bool IsEnabled() const { return m_Enabled; }
+		// An old rolling average is no longer current after a sustained run of missing query results.
 		bool IsStalled() const { return m_ConsecutiveDrops >= DropWarningThreshold; }
+		// Unlike the session total in GetTimings, resets when a result arrives.
 		uint32_t GetConsecutiveDrops() const { return m_ConsecutiveDrops; }
+		// Empty when enabled; otherwise explains why no measurements can arrive.
 		const std::string& GetDisabledReason() const { return m_DisabledReason; }
 		// Queries every profiler alive holds (against DeviceTimerQueryCapacity).
 		static uint32_t GetQueriesInUse() { return s_QueriesInUse; }

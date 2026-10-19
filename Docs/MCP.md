@@ -245,12 +245,14 @@ costs one view.
   even if the capture then fails.
   `stats: true` enables the passive Game-view overlay during Play only; the choice lasts for the editor
   session and does not save or dirty the project. The result includes `stats` (the choice), `statsVisible`,
-  `frameMs` (mean wall latency of the last 60 completed host frames; null before any complete frame),
+  `frameMs` (mean wall-clock frame interval of the last 60 completed host frames; null before any complete frame),
   `physicsBodies` (live system count, null without a physics world), `luaBytes` (process Lua heap),
-  `renderStats` (live Game renderer snapshot, null when this frame did not render), and `imguiGpu`
+  `renderStats` (live Game renderer snapshot, null unless the last Game frame rendered successfully (`status` is `rendered`)), and `imguiGpu`
   (null without an initialized ImGui profiler). GPU timing objects include `timers`, `stalled`,
   `consecutiveDrops` and `disabledReason` in addition to `frames`, `frameMs`, `droppedFrames` and `passes`.
-  Disabled timers, pending samples and stalled results are distinct. Game-image captures exclude the
+  Disabled timers, pending samples and stalled results are distinct: their `frameMs` and pass `ms`
+  values are null. `droppedFrames` is a session total, while `frames` counts the rolling average.
+  The same GPU schema is used by `render.stats`. Game-image captures exclude the
   diagnostics; `editor.window_screenshot` includes them.
 - `editor.panel {"name":"Project Settings","open":true,"focus":true}` opens, closes or focuses an editor
   window (`Viewport`, `Game`, `Hierarchy`, `Inspector`, `Scene`, `Content Browser`, `Console`,

@@ -18,6 +18,7 @@ using namespace Basalt;
 
 namespace {
 	// Unwind runtime state and cached assets before releasing the device, including on a failed run.
+	// Members destroy in reverse declaration order, so Graphics must remain first.
 	struct BenchmarkSession
 	{
 		Scope<GraphicsDevice> Graphics;
@@ -110,9 +111,9 @@ namespace {
 			report["renderStats"] = GetRenderStats(*renderer);
 			if (const auto errors = graphics->GetValidationErrorCount())
 				return fail(fmt::format("{} GPU validation errors", errors));
-			const auto& timings = renderer->GetGpuTimings();
-			if (!timings.SampleCount || !std::isfinite(timings.FrameMilliseconds) || timings.FrameMilliseconds <= 0)
-				return fail(fmt::format("GPU timing unavailable or invalid: {} samples, {} ms", timings.SampleCount, timings.FrameMilliseconds));
+			const auto timing = CollectGpuStatistics(&renderer->GetGpuProfiler());
+			if (!timing || !HasValidGpuTiming(*timing))
+				return fail(fmt::format("GPU timing unavailable, stale or invalid: {}; disabled reason: {}", FormatGpuStatistics(timing), renderer->GetGpuProfiler().GetDisabledReason()));
 			if (const auto problem = ValidateRenderedWorkload(renderer->GetStatistics()); !problem.empty())
 				return fail(problem);
 			std::string screenshotError;
@@ -136,7 +137,16 @@ int main(int argc, char** argv)
 		{ "version", 1 }, { "buildType", BASALT_BENCHMARK_BUILD_TYPE }, { "compiler", BASALT_BENCHMARK_COMPILER }, { "mode", argv[1] }, { "warmupFrames", BasaltBenchmark::WarmupFrames }, { "fixedStep", BasaltBenchmark::FixedStep }
 	};
 	std::string error;
-	bool passed = RunBenchmark(std::string_view(argv[1]) == "gpu", argv[2], report, error);
+	bool passed = false;
+	try
+	{
+		passed = RunBenchmark(std::string_view(argv[1]) == "gpu", argv[2], report, error);
+	}
+	catch (const std::exception& exception)
+	{
+		error = std::string("unhandled exception: ") + exception.what();
+		BS_CORE_ERROR("Benchmark: {}", error);
+	}
 	if (const auto errors = Log::GetHistory().GetErrorCount(); passed && errors)
 	{
 		error = fmt::format("{} engine errors were logged; successful report refused", errors);
@@ -147,7 +157,18 @@ int main(int argc, char** argv)
 	if (!passed)
 		report["failure"] = error;
 	std::ofstream output(argv[2]);
-	output << report.dump(2) << '\n';
+	try
+	{
+		// Adapter names and platform error strings need not be valid UTF-8.
+		output << report.dump(2, ' ', false, nlohmann::json::error_handler_t::replace) << '\n';
+	}
+	catch (const std::exception& exception)
+	{
+		BS_CORE_ERROR("Benchmark: report serialization failed: {}", exception.what());
+		passed = false;
+		nlohmann::json failure = { { "passed", false }, { "failure", std::string("report serialization failed: ") + exception.what() } };
+		output << failure.dump(2, ' ', false, nlohmann::json::error_handler_t::replace) << '\n';
+	}
 	output.close();
 	if (!output)
 	{

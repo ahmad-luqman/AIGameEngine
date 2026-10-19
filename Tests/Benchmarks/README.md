@@ -25,8 +25,8 @@ last 30 resolved scene samples and are supplementary to wall-clock measurements.
 Reports preserve every measured frame, live workload counts, compiler/build type, worker count, platform, adapter, mean,
 nearest-rank p95, maximum, thresholds and pass/fail status. The runner refuses missing/invalid timings,
 changed workload counts or failed processes. The executable also checks for script/engine errors, incomplete component workloads,
-validation errors, missing GPU timings and exact rendered draw/triangle/skin/light counts. The native headless unit test
-checks that the workload survives warmup and measurement and that dropping a light component fails the guard. `RunTests.py` verifies failure paths and
+validation errors, missing GPU timings and exact rendered draw/triangle/skin/light counts. The native headless unit tests
+check that the workload survives warmup and measurement and that dropping a light component fails the guard. `RunTests.py` verifies failure paths and
 independent mean/tail gates, including under Python `-O`.
 
 `Thresholds.json` contains absolute CI budgets (milliseconds): CPU mean 20 / p95 40; GPU mean 250 /
@@ -46,8 +46,10 @@ To register gates locally, configure Release with `-DBASALT_BENCHMARK_TESTS=ON` 
 Other configurations reject this option; sanitizer/coverage runs exercise correctness, not performance.
 
 `Baselines/` stores measured session-3 reports. Their `sourceRevision`, `recordedAtUTC`, `hardware`
-and `conditions` fields were added by hand after recording; the runner writes compiler/build type,
-platform, adapter, worker count, samples and results automatically.
+and `conditions` fields were added by hand after recording; the executable writes compiler/build type,
+adapter, worker count and samples. The Python runner adds platform, summary, thresholds and pass/fail.
+A baseline preserves the budgets in force when recorded (1000/1500 ms for the original GPU report),
+even when current CI budgets are tightened.
 Compare a new run on the same machine/configuration before attributing gains to session 4. CI artifacts
 provide the corresponding runner baselines. Do not regenerate the committed baseline when optimizing:
 keep it as the before measurement. A moving or larger workload needs a new version and baseline. Session 4 must deliberately update

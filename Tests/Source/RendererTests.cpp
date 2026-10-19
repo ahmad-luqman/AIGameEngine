@@ -765,7 +765,7 @@ TEST_SUITE("GpuProfiler")
 		timings.SampleCount = 30;
 		timings.FrameMilliseconds = 2.5f;
 		timings.Passes = { { "Shadows", 1.0f }, { "Lighting", 0.75f } };
-		CHECK(FormatGpuTimings(timings, true) == "2.50 ms over 30 frames (Shadows 1.00, Lighting 0.75); 4 frames dropped");
+		CHECK(FormatGpuTimings(timings, true) == "2.50 ms over 30 frames (Shadows 1.00, Lighting 0.75); 4 frames dropped in session");
 		timings.DroppedFrames = 0;
 		CHECK(FormatGpuTimings(timings, true) == "2.50 ms over 30 frames (Shadows 1.00, Lighting 0.75)");
 		const nlohmann::json json = GpuTimingsToJson(timings);
@@ -808,6 +808,13 @@ TEST_SUITE("SceneRenderer")
 		CHECK(stats["gpu"]["timers"] == false);
 		CHECK(stats["gpu"]["frames"] == 0);
 		CHECK(stats["gpu"]["droppedFrames"] == 0);
+		CHECK(stats["gpu"]["consecutiveDrops"] == 0);
+		CHECK(stats["gpu"]["stalled"] == false);
+		CHECK(stats["gpu"]["disabledReason"] == "no GPU timer backend");
+		CHECK(stats["gpu"]["frameMs"].is_null());
+		CHECK(stats["gpu"]["passes"][0]["ms"].is_null());
+		Scene scene;
+		CHECK(PlayStatisticsToJson(CollectPlayStatistics(scene, { .Renderer = &renderer }))["renderStats"] == stats);
 		REQUIRE(stats["gpu"]["passes"].size() == 11);
 		CHECK(stats["gpu"]["passes"][0]["name"] == "Environment");
 		CHECK(stats["gpu"]["passes"][1]["name"] == "Uploads");

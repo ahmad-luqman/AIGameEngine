@@ -5,6 +5,8 @@
 
 #include <doctest/doctest.h>
 
+#include <limits>
+
 using namespace Basalt;
 
 TEST_CASE("The diagnostics benchmark keeps its fixed workload throughout warmup and measurement")
@@ -50,8 +52,38 @@ TEST_CASE("The benchmark rejects a reduced rendered workload even when mannequin
 		auto reduced = full;
 		--(reduced.*member);
 		CHECK_FALSE(ValidateRenderedWorkload(reduced).empty());
+		reduced = full;
+		++(reduced.*member);
+		CHECK_FALSE(ValidateRenderedWorkload(reduced).empty());
 	}
 	auto reduced = full;
 	--reduced.Triangles;
 	CHECK_FALSE(ValidateRenderedWorkload(reduced).empty());
+	reduced = full;
+	++reduced.Triangles;
+	CHECK_FALSE(ValidateRenderedWorkload(reduced).empty());
+}
+
+TEST_CASE("The benchmark rejects stale, pending, disabled and invalid GPU measurements")
+{
+	GpuStatistics statistics{ .DisabledReason = std::nullopt };
+	statistics.Timings.SampleCount = 30;
+	statistics.Timings.FrameMilliseconds = 2.0f;
+	CHECK(BasaltBenchmark::HasValidGpuTiming(statistics));
+	statistics.ConsecutiveDrops = 1;
+	CHECK_FALSE(BasaltBenchmark::HasValidGpuTiming(statistics));
+	statistics.ConsecutiveDrops = GpuProfiler::DropWarningThreshold;
+	CHECK_FALSE(BasaltBenchmark::HasValidGpuTiming(statistics));
+	statistics.ConsecutiveDrops = 0;
+	for (float invalid : { 0.0f, -1.0f, std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN() })
+	{
+		statistics.Timings.FrameMilliseconds = invalid;
+		CHECK_FALSE(BasaltBenchmark::HasValidGpuTiming(statistics));
+	}
+	statistics.Timings.FrameMilliseconds = 2.0f;
+	statistics.Timings.SampleCount = 0;
+	CHECK_FALSE(BasaltBenchmark::HasValidGpuTiming(statistics));
+	statistics.Timings.SampleCount = 30;
+	statistics.DisabledReason = "query creation failed";
+	CHECK_FALSE(BasaltBenchmark::HasValidGpuTiming(statistics));
 }

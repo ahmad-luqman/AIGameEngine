@@ -2,13 +2,16 @@
 
 #include "Basalt/Animation/AnimationSystem.h"
 #include "Basalt/Physics/PhysicsWorld.h"
-#include "Basalt/Renderer/SceneRenderer.h"
+#include "Basalt/Renderer/RenderUtils.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
 
+#include <cmath>
+
 namespace BasaltBenchmark {
 
+	// Run.py pins the same scene counts/timestep and adds report protocol/build requirements.
 	inline constexpr uint32_t Meshes = 2048;
 	inline constexpr uint32_t Bodies = 256;
 	inline constexpr uint32_t Lights = 64;
@@ -17,6 +20,7 @@ namespace BasaltBenchmark {
 	inline constexpr uint32_t Entities = Meshes + Lights + Animators + SunAndCamera;
 	inline constexpr uint32_t Width = 320, Height = 180;
 	inline constexpr uint32_t CubeTriangles = 12;
+	// Samples/MovementDemo/Assets/Models/Mannequin.gltf (GenerateMannequin.py): 216 triangles, 17 joints.
 	inline constexpr uint32_t MannequinTriangles = 216;
 	inline constexpr uint32_t MannequinJoints = 17;
 	inline constexpr uint64_t FirstLightId = Meshes + Animators + 1;
@@ -66,6 +70,12 @@ namespace BasaltBenchmark {
 		return playing;
 	}
 
+	// WaitIdle makes every result due by the final frame; even a short unresolved drop invalidates the gate.
+	inline bool HasValidGpuTiming(const Basalt::GpuStatistics& statistics)
+	{
+		return statistics.IsReady() && statistics.ConsecutiveDrops == 0 && std::isfinite(statistics.Timings.FrameMilliseconds) && statistics.Timings.FrameMilliseconds > 0;
+	}
+
 	// This pre-instancing workload fits entirely in the camera. Reduced rendering must fail, not look faster.
 	inline std::string ValidateRenderedWorkload(const Basalt::SceneRendererStatistics& stats)
 	{
@@ -76,6 +86,7 @@ namespace BasaltBenchmark {
 			return fmt::format("color triangles: expected {}, got {}", triangles, stats.Triangles);
 		if (stats.SkinMatrices != Animators * MannequinJoints)
 			return fmt::format("skin matrices: expected {}, got {}", Animators * MannequinJoints, stats.SkinMatrices);
+		// The directional sun joins the point lights in renderer statistics.
 		if (stats.Lights != Lights + 1)
 			return fmt::format("rendered lights: expected {}, got {}", Lights + 1, stats.Lights);
 		return {};

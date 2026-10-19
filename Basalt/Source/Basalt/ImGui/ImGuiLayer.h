@@ -33,6 +33,7 @@ namespace Basalt {
 		void SetBlockEvents(bool block) { m_BlockEvents = block; }
 		// False if the platform or renderer backend failed to initialize; ImGui frames are then skipped.
 		bool IsInitialized() const { return m_Initialized; }
+		// Null before successful initialization, so callers distinguish missing from pending timings.
 		const GpuProfiler* GetProfiler() const { return m_Initialized ? m_Renderer.GetProfiler() : nullptr; }
 
 		// Renders one draw list (built outside the ImGui frame, e.g. game UI for a screenshot) into `target`,

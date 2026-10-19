@@ -21,6 +21,8 @@ class TimingGateTests(unittest.TestCase):
         random.Random(42).shuffle(self.report["samplesMs"])
         self.assertNotEqual(self.report["samplesMs"][-1], 180)
         self.assertEqual(Run.summarize(self.report, "cpu"), {"meanMs": 90.5, "p95Ms": 171, "maxMs": 180})
+        skewed = dict(self.report, samplesMs=[1.0] * 179 + [1000.0])
+        self.assertEqual(Run.summarize(skewed, "cpu")["meanMs"], 1179.0 / 180)
         self.report["mode"] = "gpu"
         self.assertEqual(Run.summarize(self.report, "gpu")["p95Ms"], 171)
         with self.assertRaises(ValueError):
@@ -34,6 +36,8 @@ class TimingGateTests(unittest.TestCase):
         for bad in (0, -1, math.inf, math.nan, True, "20", None):
             with self.assertRaises(ValueError):
                 Run.check_thresholds(summary, {"meanMs": bad, "p95Ms": 180})
+            with self.assertRaises(ValueError):
+                Run.check_thresholds(summary, {"meanMs": 90, "p95Ms": bad})
         with self.assertRaises(ValueError):
             Run.check_thresholds(summary, {"meanMs": 200, "p95Ms": 180})
         for thresholds in json.loads(Path(Run.__file__).with_name("Thresholds.json").read_text()).values():
@@ -83,6 +87,7 @@ class TimingGateTests(unittest.TestCase):
                     self.assertFalse(output.exists())
                     self.assertFalse(image.exists())
                     self.assertTrue(kwargs["check"])
+                    self.assertEqual(kwargs["timeout"], 270)
                     self.assertEqual(command[1], mode)
                     output.write_text(json.dumps(dict(self.report, mode=mode)))
 
@@ -95,12 +100,14 @@ class TimingGateTests(unittest.TestCase):
                         Run.main(args)
                 report = json.loads(output.read_text())
                 self.assertEqual(report["passed"], mode == "cpu")
+                self.assertEqual(report["mode"], mode)
+                self.assertEqual(report["summary"], Run.summarize(dict(self.report, mode=mode), mode))
                 self.assertEqual(report["thresholds"], json.loads(thresholds.read_text())[mode])
                 if mode == "gpu":
                     self.assertIn("exceeds", report["failure"])
 
     def test_main_preserves_malformed_threshold_failures(self):
-        for limits in (None, [], {"cpu": None}, {"cpu": []}, {"cpu": "invalid"}):
+        for limits in (None, [], {}, {"cpu": None}, {"cpu": []}, {"cpu": "invalid"}):
             with self.subTest(limits=limits), tempfile.TemporaryDirectory() as temp:
                 output = Path(temp, "report.json")
                 thresholds = Path(temp, "thresholds.json")
@@ -113,10 +120,10 @@ class TimingGateTests(unittest.TestCase):
                     Run.main(["--binary", "native", "--mode", "cpu", "--output", str(output), "--thresholds", str(thresholds)])
                 report = json.loads(output.read_text())
                 self.assertFalse(report["passed"])
-                self.assertIn("object", report["failure"])
+                self.assertIn("no cpu mode" if limits == {} else "object", report["failure"])
 
     def test_main_preserves_native_failure_timeout_and_bad_json(self):
-        for kind in ("native", "timeout", "bad-json", "bad-workload"):
+        for kind in ("native", "native-zero-exit", "timeout", "bad-json", "array", "bad-workload", "missing-binary", "missing-thresholds", "mode-mismatch"):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temp:
                 output = Path(temp, "report.json")
 
@@ -124,15 +131,35 @@ class TimingGateTests(unittest.TestCase):
                     if kind == "native":
                         output.write_text('{"passed": false, "failure": "BeginFrame failed", "samplesMs": [1]}')
                         raise subprocess.CalledProcessError(1, command)
+                    if kind == "native-zero-exit":
+                        output.write_text(json.dumps(dict(self.report, passed=False, failure="native failure")))
+                        return
+                    if kind == "missing-binary":
+                        raise FileNotFoundError("native binary missing")
                     if kind == "timeout":
                         raise subprocess.TimeoutExpired(command, 270)
-                    output.write_text("bad json" if kind == "bad-json" else json.dumps(dict(self.report, version=2)))
+                    if kind == "array":
+                        output.write_text("[1, 2]")
+                    elif kind == "mode-mismatch":
+                        output.write_text(json.dumps(dict(self.report, mode="gpu")))
+                    elif kind == "missing-thresholds":
+                        output.write_text(json.dumps(self.report))
+                    else:
+                        output.write_text("bad json" if kind == "bad-json" else json.dumps(dict(self.report, version=2)))
 
                 with patch.object(Run.platform, "platform", return_value="test"), patch.object(Run.subprocess, "run", side_effect=native), self.assertRaises(SystemExit):
-                    Run.main(["--binary", "native", "--mode", "cpu", "--output", str(output)])
+                    args = ["--binary", "native", "--mode", "cpu", "--output", str(output)]
+                    if kind == "missing-thresholds":
+                        args += ["--thresholds", str(Path(temp, "missing.json"))]
+                    Run.main(args)
                 report = json.loads(output.read_text())
                 self.assertFalse(report["passed"])
                 self.assertTrue(report["failure"])
+                self.assertEqual(report["mode"], "cpu")
+                if kind == "mode-mismatch":
+                    self.assertEqual(report["reportedMode"], "gpu")
+                if kind == "native-zero-exit":
+                    self.assertEqual(report["failure"], "native failure")
                 if kind == "native":
                     self.assertEqual(report["failure"], "BeginFrame failed")
                     self.assertEqual(report["samplesMs"], [1])

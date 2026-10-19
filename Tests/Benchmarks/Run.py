@@ -7,7 +7,8 @@ import platform
 import statistics
 import subprocess
 
-# Keep these in sync with BenchmarkScene.h. Tests also reject changed values and incomplete renders.
+# Keep scene counts/timestep in sync with BenchmarkScene.h; version/build type describe this report protocol.
+# The native executable, rather than this gate, validates rendered geometry.
 EXPECTED_WORKLOAD = {"version": 1, "buildType": "Release", "warmupFrames": 60, "entities": 2242,
                      "meshes": 2048, "animators": 128, "lights": 64, "physicsBodies": 256}
 SAMPLE_FRAMES = 180
@@ -51,6 +52,7 @@ def main(argv=None):
     parser.add_argument("--thresholds", type=Path, default=Path(__file__).with_name("Thresholds.json"))
     args = parser.parse_args(argv)
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    # A failed process must never inherit a successful report or image from an earlier run.
     args.output.unlink(missing_ok=True)
     Path(str(args.output) + ".png").unlink(missing_ok=True)
     report = {}
@@ -65,12 +67,14 @@ def main(argv=None):
         limits = json.loads(args.thresholds.read_text())
         if not isinstance(limits, dict):
             raise ValueError("threshold configuration must be an object")
+        if args.mode not in limits:
+            raise ValueError(f"threshold configuration has no {args.mode} mode")
         thresholds = limits[args.mode]
         failures = check_thresholds(summary, thresholds)
         report.update(summary=summary, thresholds=thresholds)
         if failures:
             raise ValueError("; ".join(failures))
-    except (ValueError, KeyError, OSError, subprocess.SubprocessError) as error:
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
         # The native executable may have preserved stage diagnostics and partial samples before exiting.
         if not isinstance(report, dict) or not report:
             try:
@@ -78,6 +82,8 @@ def main(argv=None):
                 report = partial if isinstance(partial, dict) else {}
             except (ValueError, OSError):
                 report = {}
+        if "mode" in report and report["mode"] != args.mode:
+            report["reportedMode"] = report["mode"]
         report.update(passed=False, failure=report.get("failure") or str(error), mode=args.mode,
                       platform=platform.platform(), machine=platform.machine())
         args.output.write_text(json.dumps(report, indent=2) + "\n")

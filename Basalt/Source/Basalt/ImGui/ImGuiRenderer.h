@@ -23,6 +23,7 @@ namespace Basalt {
 		bool Init(nvrhi::IDevice* device, bool gpuTimers);
 		void Shutdown();
 
+		// Captures pass profile=false to preserve markers without changing the live timing average.
 		void Render(ImDrawData* drawData, nvrhi::IFramebuffer* framebuffer, bool profile);
 		const GpuProfiler* GetProfiler() const { return m_Profiler.get(); }
 
