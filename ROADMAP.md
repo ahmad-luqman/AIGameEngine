@@ -19,8 +19,8 @@ P2 editor feel → the remaining agent-tested samples. Run each milestone as one
   creation/destruction/prefabs, an editor, export, and a full automation API (CLI + TCP).
 - CI builds and tests on Windows, Ubuntu and macOS (Debug + Release) — but without a GPU. Rendering has
   only been verified on macOS (Apple M4 Max via MoltenVK) with zero validation errors.
-- Over 600 unit test cases, a feature test with over 500 Lua checks, and Tetris, Joints, Marble Run and Breakout
-  samples with scripted gameplay tests.
+- Over 800 unit test cases, a feature test with over 600 Lua checks, and Tetris, Joints, Marble Run, Breakout, First
+  Person, Movement Demo and Platformer samples with scripted gameplay tests.
 
 ---
 
@@ -73,13 +73,15 @@ The features most games need, roughly in order of impact.
 
 Skeletal playback, crossfades, two-clip blends, 1D/2D blend spaces with phase sync and velocity matching,
 animation events, bone attachments, data-driven state machines and per-state root motion, layers with joint masks and
-additive clips, and inverse kinematics (two-bone, look-at chains, foot placement) (`AnimationSystem`) are implemented;
+additive clips, inverse kinematics (two-bone, look-at chains, foot placement) and spring bones (`AnimationSystem`) are implemented;
 physics provides character controllers (`MoveCharacter`, `IsCharacterGrounded`, ground normal) and raycasts. The items
 below extend character movement, in order of impact.
 
 - **IK and layer follow-ups — S each.** Multi-joint chains (FABRIK or CCD) for tails and tentacles; an edit-mode
   animation preview (clips, layers and IK); reusable mask assets shared between Animators; layers driven by state machine states (an
   upper-body graph); foot locking during stance phases so planted feet do not slide.
+- **Spring bone follow-ups — S.** Collide chains with physics bodies (a cape against walls, hair on the ground),
+  colliders per chain instead of per component, angle limits for stiff appendages, and an edit-mode preview.
 - **Ragdolls — M.** Build a Jolt `Ragdoll` from the skeleton (a capsule per bone with swing-twist limits,
   generated from the joint hierarchy with editable sizes and limits), switch an Animator to it on death or
   a big hit, and blend back to animation with a get-up clip. Follow-up: powered (active) ragdolls that
@@ -90,8 +92,6 @@ below extend character movement, in order of impact.
 - **Retargeting — M.** Play clips authored for one skeleton on another with different proportions: a
   humanoid joint map (name mapping plus rest-pose rotation correction) and translation scaled by limb
   length, so a shared clip library (e.g. Mixamo) can drive any character.
-- **Spring bones — S.** Procedural secondary motion for hair, tails, ears and capes: damped springs on
-  selected joint chains, applied after the animated pose, with optional sphere/capsule colliders.
 - **Property animation — M.** Keyframe tracks for any component field through the `ComponentRegistry`
   JSON path (doors, platforms, light flicker, UI transitions, cutscene cameras) with the same playback
   controls as skeletal clips, so non-character motion does not need per-frame Lua.
@@ -164,17 +164,6 @@ with a smoke test have shipped. Follow-ups:
   message box in the runtime.
 - **Release pipeline — S.** A GitHub Actions workflow on tags that builds Dist on all three platforms,
   exports the samples, and attaches editor, runtime and CLI archives to a GitHub release.
-
----
-
-## AI-agent workflow
-
-The specification asks for an editor that an AI agent can fully control. These items make that faster and
-more reliable.
-
-- **More samples — M.** A 3D platformer (character controller + camera +
-  an animated character whose walk/run/jump go through the animation state machine, foot IK and root motion),
-  built through the automation API with a ctest gameplay test, which also checks the API is sufficient.
 
 ---
 

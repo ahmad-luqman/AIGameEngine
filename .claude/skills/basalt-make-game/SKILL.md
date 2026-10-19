@@ -49,6 +49,13 @@ broken version leaves the old one running). Typical patterns:
   `RigidBody.Continuous` on fast projectiles and `RigidBody.AllowSleeping = false` on balls that roll slowly
   (a sleeping ball freezes where it stopped, even on a slope). Probe the world with `Physics.Raycast/SphereCast/BoxCast/OverlapSphere/OverlapBox`
   (options: `Ignore`, `Layers`, `IncludeTriggers`, `All`; see Docs/ScriptingAPI.md).
+- Animated characters (Samples/Platformer): write the state machine with `asset.write` (`.banimgraph`), set its
+  parameters and triggers from the movement script every frame, and let a root-motion locomotion blend space move the
+  character (`Animator.RootMotion` + `RootJoint`; `Move` still supplies jumps and air movement). Set a trigger and the
+  jump's upward `Move` only on `Input.IsActionPressed`, keep pushing up until the controller leaves the ground, and
+  debounce `IsGrounded()` (coyote time) so stairs do not flicker into a fall state. Add `InverseKinematics` Ground
+  chains for the feet and `SpringBone` chains for hair and capes; Kinematic platforms moved through their transform
+  carry characters standing on them.
 - Imported levels and props: add `RigidBody {}` (Static by default) and `MeshCollider {}` to each entity with
   a `Mesh` component (an empty `Mesh` field uses the entity's mesh) so static geometry collides by its real
   triangles; without a RigidBody nothing collides. Dynamic bodies and triggers use the mesh's convex hull: set

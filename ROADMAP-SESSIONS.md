@@ -9,7 +9,7 @@ Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or mor
 | # | Session | Items (size) | Why here |
 |---|---------|--------------|----------|
 | 1 | **Character movement** ✅ | Inverse kinematics: two-bone legs and arms, look-at/aim chains, foot placement (M); animation layers, per-joint masks, additive clips (M) | Shipped. |
-| 2 | **3D platformer sample** | Platformer built through the automation API with a ctest gameplay test (M); spring bones on its hair or cape (S) | Uses session 1 together with the character controller, so it checks whether the API is enough for real character movement. |
+| 2 | **3D platformer sample** ✅ | Platformer built through the automation API with a ctest gameplay test (M); spring bones on its hair or cape (S) | Shipped. |
 | 3 | **Diagnostics** | Play-mode stats overlay (S); timing for the editor's ImGui pass and the runtime blit (S); benchmark scene with frame-time thresholds on CI (M) | The roadmap says the GPU timings belong in the overlay. The benchmarks record a baseline before session 4. |
 | 4 | **Throughput** | GPU instancing and draw batching (M); crowd performance: cached joint bounds, animation LOD, poses evaluated on the job system (M) | Session 3's benchmarks measure the gains. The crowd work finally uses the new job system. |
 | 5 | **Game UI** | UI follow-ups: `UI.MeasureText`, clipping, rect rotation/scale, sprite sheets, viewport handles (S); more widgets: text input, dropdown, scroll view, vertical slider, explicit navigation, input-blocking panels, focus ring (M) | Clipping has to land first because scroll views need it. |

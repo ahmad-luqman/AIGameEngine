@@ -1,0 +1,80 @@
+{
+	"Actions": [
+		{
+			"Bindings": [
+				{
+					"Key": "D"
+				},
+				{
+					"Key": "A",
+					"Scale": -1.0
+				},
+				{
+					"Key": "Right"
+				},
+				{
+					"Key": "Left",
+					"Scale": -1.0
+				},
+				{
+					"GamepadAxis": "LeftX"
+				}
+			],
+			"Name": "MoveX",
+			"Type": "Axis"
+		},
+		{
+			"Bindings": [
+				{
+					"Key": "W"
+				},
+				{
+					"Key": "S",
+					"Scale": -1.0
+				},
+				{
+					"Key": "Up"
+				},
+				{
+					"Key": "Down",
+					"Scale": -1.0
+				},
+				{
+					"GamepadAxis": "LeftY",
+					"Scale": -1.0
+				}
+			],
+			"Name": "MoveY",
+			"Type": "Axis"
+		},
+		{
+			"Bindings": [
+				{
+					"Key": "Space"
+				},
+				{
+					"GamepadButton": "A"
+				}
+			],
+			"Name": "Jump",
+			"Type": "Button"
+		},
+		{
+			"Bindings": [
+				{
+					"Key": "LeftShift"
+				},
+				{
+					"GamepadButton": "X"
+				},
+				{
+					"GamepadButton": "RightBumper"
+				}
+			],
+			"Name": "Run",
+			"Type": "Button"
+		}
+	],
+	"Format": "BasaltInput",
+	"Version": 1
+}
