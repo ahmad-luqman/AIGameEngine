@@ -266,13 +266,6 @@ namespace Basalt {
 					open = candidate;
 			}
 		}
-		for (const UIImmediateWidget& widget : m_LastImmediate)
-		{
-			Candidate candidate{ UIWidgetID::ForName(widget.ID), widget.Kind, { canvas * widget.Anchor + widget.Offset, widget.Size }, widget.Interactable, widget.HandleWidth, 0, {} };
-			candidate.Vertical = widget.Vertical;
-			candidate.Clip = widget.Clip;
-			widgets.push_back(candidate);
-		}
 		if (open)
 		{
 			const UIDropdownComponent dropdown = SanitizeUIDropdown(scene.GetEntityByUUID(m_OpenDropdown).GetComponent<UIDropdownComponent>());
@@ -284,6 +277,13 @@ namespace Basalt {
 				option.Option = i;
 				widgets.push_back(option);
 			}
+		}
+		for (const UIImmediateWidget& widget : m_LastImmediate)
+		{
+			Candidate candidate{ UIWidgetID::ForName(widget.ID), widget.Kind, { canvas * widget.Anchor + widget.Offset, widget.Size }, widget.Interactable, widget.HandleWidth, 0, {} };
+			candidate.Vertical = widget.Vertical;
+			candidate.Clip = widget.Clip;
+			widgets.push_back(candidate);
 		}
 		return widgets;
 	}
@@ -435,7 +435,8 @@ namespace Basalt {
 			}
 			else if (navigable[current]->Kind == UIWidgetKind::Dropdown && m_OpenDropdown != 0)
 			{
-				const auto& dropdown = WidgetEntity(scene, navigable[current]->ID).GetComponent<UIDropdownComponent>();
+				const Entity owner = WidgetEntity(scene, navigable[current]->ID);
+				const auto& dropdown = owner.GetComponent<UIDropdownComponent>();
 				const auto count = UIWidgets::DropdownOptions(dropdown.Options).size();
 				if (count != 0)
 				{

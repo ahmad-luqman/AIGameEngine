@@ -1745,6 +1745,12 @@ TEST_CASE("Typed events are Unicode-safe, frame bounded and routed when received
 	CHECK_FALSE(letter.Handled);
 	CHECK(Input::GetTextInput() == "\xf0\x9f\x98\x80");
 	CHECK(GameInput::GetTextInput() == Input::GetTextInput());
+	// Hosts reaffirm focus after polling platform events and before the scene updates.
+	Input::SetGameFocus(true);
+	CHECK(GameInput::GetTextInput() == Input::GetTextInput());
+	Input::SetGameFocus(false);
+	Input::SetGameFocus(true);
+	CHECK(GameInput::GetTextInput().empty());
 	Input::EndFrame();
 	CHECK(Input::GetTextInput().empty());
 	Input::SetGameFocus(false);
@@ -1761,4 +1767,33 @@ TEST_CASE("Typed events are Unicode-safe, frame bounded and routed when received
 	CHECK(Input::GetTextInput().size() == 16384);
 	Input::Reset();
 	CHECK(Input::GetTextInput().empty());
+}
+
+TEST_CASE("Immediate widgets receive clicks above an overlapping dropdown popup")
+{
+	WidgetInputScope input;
+	TempProject project("UIDropdownOverlap");
+	Scene scene;
+	const std::string script = project.WriteFile("Assets/Scripts/Menu.lua", R"(
+		local Menu = {}
+		function Menu:OnCreate() self.Clicks = 0 end
+		function Menu:OnUpdate()
+			if UI.Button("Overlay", 20, 100, 160, 40) then self.Clicks = self.Clicks + 1 end
+		end
+		return Menu
+	)");
+	Entity menu = scene.CreateEntity("Menu");
+	menu.AddComponent<ScriptComponent>().Script = script;
+	Entity dropdown = AddWidget<UIDropdownComponent>(scene, "Dropdown", { 20, 20 }, { 160, 40 });
+	dropdown.GetComponent<UIDropdownComponent>().Options = "First\nSecond";
+	dropdown.GetComponent<UIDropdownComponent>().OnValueChanged.clear();
+	scene.OnRuntimeStart();
+	Frame(scene);
+	Click(scene, { 40, 40 });
+	CHECK(scene.GetUIInteraction()->GetOpenDropdown() == dropdown.GetUUID());
+	Click(scene, { 40, 120 });
+	CHECK(Field(scene, menu, "Clicks") == 1);
+	CHECK(dropdown.GetComponent<UIDropdownComponent>().Selected == 0);
+	CHECK(scene.GetUIInteraction()->GetOpenDropdown() == 0);
+	scene.OnRuntimeStop();
 }

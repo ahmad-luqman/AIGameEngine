@@ -578,10 +578,21 @@ local function TestWidgets(self)
 end
 
 -- The batch enables these probes only after the original widget checks have finished.
+function Driver:OnUIFieldChanged(widget, value)
+	self.UIFieldEvent = widget.Name .. "=" .. value
+end
+
+function Driver:OnUIChoiceChanged(widget, value)
+	self.UIChoiceEvent = widget.Name .. "=" .. value
+end
+
 function FeatureTest.BeginUIFollowups()
+	local driver = Scene.FindEntityByName("FeatureTestDriver")
 	local field = Scene.FindEntityByName("TextInputProbe")
 	field:SetComponent("UIRect", { Visible = true, AnchorMin = Vec2(0), AnchorMax = Vec2(0), Pivot = Vec2(0), Position = Vec2(800, 300) })
+	field:SetComponent("UITextInput", { Target = driver.ID, OnValueChanged = "OnUIFieldChanged" })
 	local dropdown = Scene.FindEntityByName("DropdownProbe")
+	dropdown:SetComponent("UIDropdown", { Target = driver.ID, OnValueChanged = "OnUIChoiceChanged" })
 	dropdown:SetComponent("UIRect", { Visible = true, AnchorMin = Vec2(0), AnchorMax = Vec2(0), Pivot = Vec2(0), Position = Vec2(800, 400) })
 	field:AddComponent("UINavigation", { Down = dropdown.ID })
 	UI.SetFocus(field)
@@ -590,6 +601,9 @@ function FeatureTest.BeginUIFollowups()
 end
 
 function FeatureTest.CheckUIFollowups()
+	local driver = Scene.FindEntityByName("FeatureTestDriver"):GetScript()
+	Check("UITextInput string callback", driver.UIFieldEvent == "TextInputProbe=Helloé")
+	Check("UIDropdown numeric callback", driver.UIChoiceEvent == "DropdownProbe=0.0" or driver.UIChoiceEvent == "DropdownProbe=0")
 	Check("UITextInput Unicode editing", Scene.FindEntityByName("TextInputProbe"):GetComponent("UITextInput").Text == "Helloé")
 	Check("UIScrollView wheel input", Scene.FindEntityByName("UIFollowups"):GetComponent("UIScrollView").Offset[2] > 0)
 	Check("UINavigation explicit target", UI.GetFocus() == Scene.FindEntityByName("DropdownProbe"))

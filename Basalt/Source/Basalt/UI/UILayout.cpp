@@ -286,7 +286,8 @@ namespace Basalt {
 			for (size_t i = begin; i < out.size(); ++i)
 			{
 				out[i].Transform = item.Transform;
-				out[i].Clip = item.Clip;
+				if (item.Clip)
+					out[i].Clip = out[i].Clip ? IntersectUIBoxes(*out[i].Clip, *item.Clip) : item.Clip;
 			}
 		}
 		if (interaction && interaction->GetOpenDropdown() != 0)

@@ -356,6 +356,8 @@ namespace Basalt {
 	void Input::SetGameFocus(bool focused)
 	{
 		std::scoped_lock lock(s_Mutex);
+		if (focused == s_GameFocus)
+			return;
 		// What is held as the game gets focus back is not the game's: it stays released for the game until let go.
 		if (focused && !s_GameFocus)
 		{

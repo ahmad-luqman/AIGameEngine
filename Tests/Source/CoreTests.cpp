@@ -1342,6 +1342,7 @@ TEST_SUITE("Core")
 		const ProcessResult result = RunProcess(ChildProcess({ "fd", std::to_string(ends[1]).c_str(), "fd", "1" }));
 		close(ends[0]);
 		close(ends[1]);
+		INFO("outcome=" << static_cast<int>(result.Outcome) << " exit=" << result.ExitCode << " error=" << result.Error << " output=" << result.Output);
 		REQUIRE(result.Succeeded());
 		CHECK(result.Output.find("fd closed\nfd open") != std::string::npos);
 	}
@@ -1378,7 +1379,9 @@ TEST_SUITE("Core")
 		REQUIRE_FALSE(error);
 		REQUIRE_FALSE(spec.Executable.empty());
 		spec.WorkingDirectory = directory.GetPath();
-		CHECK(RunProcess(spec).Succeeded());
+		const ProcessResult result = RunProcess(spec);
+		INFO("outcome=" << static_cast<int>(result.Outcome) << " exit=" << result.ExitCode << " error=" << result.Error << " output=" << result.Output);
+		CHECK(result.Succeeded());
 	}
 
 	TEST_CASE("RunProcess distinguishes a program that cannot start from one that fails")

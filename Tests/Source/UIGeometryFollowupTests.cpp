@@ -14,6 +14,7 @@
 
 #include <glm/gtc/constants.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -263,4 +264,62 @@ TEST_CASE("UI renderer suppresses transformed glyphs outside its finite numeric 
 		if (draw.ElemCount)
 			CHECK(draw.ClipRect.x == draw.ClipRect.z);
 	ImGui::EndFrame();
+}
+
+TEST_CASE("text fields retain their own clip and intersect inherited clipping after transforms")
+{
+	for (int variant = 0; variant < 3; ++variant)
+	{
+		Scene scene;
+		Entity parent = scene.CreateEntity("Parent clip");
+		auto& parentRect = parent.AddComponent<UIRectComponent>();
+		parentRect.AnchorMin = parentRect.AnchorMax = parentRect.Pivot = { 0, 0 };
+		parentRect.Position = { 50, 50 };
+		parentRect.Size = { 120, 60 };
+		parentRect.ClipChildren = variant != 0;
+		Entity field = scene.CreateEntity("Long text field");
+		REQUIRE(scene.SetParent(field, parent));
+		auto& rect = field.AddComponent<UIRectComponent>();
+		rect.AnchorMin = rect.AnchorMax = rect.Pivot = { 0, 0 };
+		rect.Position = { 20, 20 };
+		rect.Size = { 200, 40 };
+		if (variant == 2)
+		{
+			rect.Rotation = glm::radians(30.0f);
+			rect.Scale = { 1.25f, 0.8f };
+		}
+		field.AddComponent<UITextInputComponent>().Text = "A very long text field value that extends well beyond its rectangle";
+		scene.OnRuntimeStart();
+		REQUIRE(BasaltTest::Eval(scene, "UI.SetFocus(Scene.FindEntityByName('Long text field'))") == "");
+		const auto items = UILayout::Layout(scene, { 1920, 1080 });
+		const auto item = std::find_if(items.begin(), items.end(), [&](const auto& value) { return value.Owner == field; });
+		REQUIRE(item != items.end());
+		const UIBox fieldClip = TransformUIBox(item->Rect, item->Transform);
+		const UIBox expected = item->Clip ? IntersectUIBoxes(fieldClip, *item->Clip) : fieldClip;
+		std::vector<UIDrawCommand> commands;
+		UILayout::BuildCommands(scene, { 1920, 1080 }, commands);
+		const auto text = std::find_if(commands.begin(), commands.end(), [](const auto& value) { return value.Kind == UIDrawKind::Text; });
+		REQUIRE(text != commands.end());
+		REQUIRE(text->Clip);
+		CHECK(*text->Clip == expected);
+		CHECK(text->Transform == item->Transform);
+		CHECK(text->Text.find('|') != std::string::npos);
+		BasaltTest::ImGuiTestContext context;
+		ImGui::NewFrame();
+		BasaltTest::ImGuiTestContext::MarkTexturesUploaded();
+		ImDrawList* list = ImGui::GetForegroundDrawList();
+		UIRenderer::Draw(list, { 0, 0 }, { 1920, 1080 }, { 1920, 1080 }, std::span(&*text, 1), {});
+		BasaltTest::ImGuiTestContext::MarkTexturesUploaded();
+		for (const auto& draw : list->CmdBuffer)
+		{
+			if (!draw.ElemCount)
+				continue;
+			CHECK(draw.ClipRect.x == doctest::Approx(expected.Min.x));
+			CHECK(draw.ClipRect.y == doctest::Approx(expected.Min.y));
+			CHECK(draw.ClipRect.z == doctest::Approx(expected.Max().x));
+			CHECK(draw.ClipRect.w == doctest::Approx(expected.Max().y));
+		}
+		ImGui::EndFrame();
+		scene.OnRuntimeStop();
+	}
 }
