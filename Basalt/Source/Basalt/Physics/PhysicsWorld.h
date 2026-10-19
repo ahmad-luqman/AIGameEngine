@@ -156,10 +156,9 @@ namespace Basalt {
 		// MoveCharacter's horizontal velocity is added scaled by 1 - share. Frames queued before one step average their
 		// shares weighted by `seconds`, the time each displacement took (0 or non-finite: one fixed step); a frame
 		// without displacement counts too.
+		// A frame that queues nothing while earlier displacement waits for a step (a fade that ended, a clip that
+		// stopped) counts with share 0: gameplay movement owns that part of the step.
 		void QueueRootMotion(Entity entity, const glm::vec3& displacement, float share = 1.0f, float seconds = 0.0f);
-		// A frame of `seconds` without root motion. While displacement from earlier frames waits for a step, it counts
-		// with share 0 (gameplay movement owns that part of the step); otherwise it does nothing.
-		void QueueRootMotionGap(Entity entity, float seconds);
 		// Standing on ground no steeper than SlopeLimit.
 		bool IsCharacterGrounded(Entity entity) const;
 		// Normal of the ground the character touches (walkable or too steep), nullopt in the air or without a

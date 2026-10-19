@@ -2628,20 +2628,16 @@ TEST_SUITE("Animation")
 				  physics->QueueRootMotion(character, glm::vec3(0.5f, 0, 0) * Step, 1.0f);
 				  physics->Step(Step / 2);
 			  }) == doctest::Approx((1 + 0.5f * 2) * Step));
-		// A frame without root motion after one with it (a fade that ended between steps) counts with share 0: a half
-		// frame owned by root motion (its 0.5 m/s * Step of displacement) and a half frame by gameplay movement make a share
-		// of 0.5, so half of the 2 m/s gameplay movement comes through. Without the gap the share would be 1 (0.5 * Step in
-		// all). Alone, a gap queues nothing.
+		// A frame that queues nothing after one that queued (a fade that ended or a clip that stopped between steps) counts
+		// with share 0: a half frame owned by root motion (its 0.5 m/s * Step of displacement) and a half frame by gameplay
+		// movement make a share of 0.5, so half of the 2 m/s gameplay movement comes through (without the gap the share
+		// would be 1: 0.5 * Step in all). Without anything queued, gameplay movement moves alone.
 		CHECK(moved([&] {
 				  physics->QueueRootMotion(character, glm::vec3(0.5f, 0, 0) * Step, 1.0f, Step / 2);
 				  physics->Step(Step / 2);
-				  physics->QueueRootMotionGap(character, Step / 2);
 				  physics->Step(Step / 2);
 			  }) == doctest::Approx((0.5f + 0.5f * 2) * Step));
-		CHECK(moved([&] {
-				  physics->QueueRootMotionGap(character, Step);
-				  physics->Step(Step);
-			  }) == doctest::Approx(2 * Step));
+		CHECK(moved([&] { physics->Step(Step); }) == doctest::Approx(2 * Step));
 		// A frame without displacement (an idle root-motion clip) still owns its share until the step.
 		CHECK(moved([&] {
 				  physics->QueueRootMotion(character, glm::vec3(0), 1.0f, Step / 2);
