@@ -94,6 +94,7 @@ namespace Basalt {
 		// primary camera, labelled with the mode.
 		void DrawGameView();
 		PlayStatistics GetPlayStatistics() const;
+		// The session preference draws only in a visible, playing Game view.
 		bool IsStatsOverlayActive() const { return m_GameView.ShowStats() && IsGameRunning() && m_GameViewVisible; }
 		void DrawGameViewOptions();
 		// Gives the window the cursor the game asks for (DecideGameCursor), before the scene updates: Locked captures the

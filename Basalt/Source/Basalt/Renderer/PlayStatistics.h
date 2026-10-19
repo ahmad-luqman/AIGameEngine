@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Basalt/Renderer/GpuProfiler.h"
+#include "Basalt/Renderer/RenderUtils.h"
 #include "Basalt/Renderer/SceneRenderer.h"
 
 #include <nlohmann/json.hpp>
@@ -11,18 +11,6 @@
 namespace Basalt {
 
 	class Scene;
-
-	// A copied GPU timing status; missing, disabled, pending and stalled are distinct from a measured zero.
-	struct GpuStatistics
-	{
-		GpuTimings Timings;
-		bool Timers = false;
-		uint32_t ConsecutiveDrops = 0;
-		std::string DisabledReason;
-
-		bool IsStalled() const { return ConsecutiveDrops >= GpuProfiler::DropWarningThreshold; }
-		bool IsReady() const { return Timers && Timings.SampleCount > 0 && !IsStalled(); }
-	};
 
 	// Named sources prevent mixing the ImGui and runtime blit profilers. Renderer is null for an unrendered frame.
 	struct PlayStatisticsSources
@@ -47,11 +35,11 @@ namespace Basalt {
 		std::optional<GpuStatistics> BlitGpu;
 	};
 
-	std::optional<GpuStatistics> CollectGpuStatistics(const GpuProfiler* profiler);
+	// Failed renders are excluded so old counters cannot masquerade as a successfully rendered frame.
 	PlayStatistics CollectPlayStatistics(const Scene& scene, const PlayStatisticsSources& sources);
-	nlohmann::json GpuStatisticsToJson(const std::optional<GpuStatistics>& statistics);
+	// Serialize the captured snapshot without re-reading live renderer/system state.
 	nlohmann::json PlayStatisticsToJson(const PlayStatistics& statistics);
-	std::string FormatGpuStatistics(const std::optional<GpuStatistics>& statistics);
+	// Pure text shared by the runtime and editor overlays, without ImGui dependencies.
 	std::string FormatStatisticsText(const PlayStatistics& statistics);
 
 }

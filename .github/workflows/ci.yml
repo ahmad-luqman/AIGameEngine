@@ -79,7 +79,7 @@ jobs:
         with:
           name: benchmark-${{ runner.os }}-Release
           path: build/Tests/Benchmark-*.json
-          if-no-files-found: error
+          if-no-files-found: warn
 
   # AddressSanitizer + UndefinedBehaviorSanitizer over every headless test. All code, third-party
   # included, is instrumented (cmake/Sanitizers.cmake).

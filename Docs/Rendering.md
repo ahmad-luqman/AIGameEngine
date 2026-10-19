@@ -371,7 +371,7 @@ the game image and takes no pointer or keyboard input. Game captures keep the ga
 `editor.window_screenshot` includes the diagnostics. `BasaltRuntime --stats` draws the same overlay,
 including its blit timing, and includes it in runtime screenshots. `--stats` requires a GPU.
 
-The overlay reports the last 60 host frames' mean wall latency and FPS, Game renderer draw calls,
+The overlay reports the last 60 host frames' mean wall-clock frame interval and FPS, Game renderer draw calls,
 color-pass triangles (meshes and particle billboards; no depth, shadow or fullscreen triangles), live
 physics bodies and the process's accounted Lua heap. Frame latency includes waits, presentation and
 editor overhead; it remains wall time during fixed-step runs. Before rendering or when rendering is
@@ -390,7 +390,9 @@ samples. Runtime `--frames` logs scene, blit and ImGui timing even when the over
 `statsVisible`, `frameMs` (null before any complete host frame), `physicsBodies` (null without a physics
 world), `luaBytes`, `renderStats` (the live Game renderer, or null), and `imguiGpu` (null without an
 initialized profiler). GPU diagnostics include `timers`, `consecutiveDrops`, `stalled` and
-`disabledReason`, alongside the timing samples. `PlayStatistics` collects one consistent snapshot for
+`disabledReason`, alongside the timing samples. `frameMs` and pass `ms` are null while timers are
+disabled, pending or stalled; `droppedFrames` is the session total. The same GPU schema is used by
+`render.stats` and the benchmark. `PlayStatistics` collects one consistent snapshot for
 formatting and JSON; its pure formatter and unavailable/zero distinctions have headless tests.
 
 The fixed Release workload and pre-throughput baseline are described in

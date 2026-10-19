@@ -7,7 +7,7 @@
 
 namespace Basalt {
 
-	// Rolling host-frame latency, independent of the simulation timestep and its stall clamp.
+	// Rolling host-frame interval, independent of the simulation timestep and its stall clamp.
 	class FrameTiming
 	{
 	public:
