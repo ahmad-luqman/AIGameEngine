@@ -513,6 +513,7 @@ TEST_SUITE("Serialization")
 		entity.GetComponent<AnimatorComponent>().RootMotion = true;
 		entity.GetComponent<AnimatorComponent>().RootJoint = "Hips";
 		entity.GetComponent<MaterialComponent>().AlbedoColor = { 0.1f, 0.2f, 0.3f, 0.4f };
+		entity.GetComponent<SpringBoneComponent>() = { .Chains = { { .Name = "Cape", .Joint = "CapeTop", .ChainLength = 3, .Stiffness = 12.5f, .Damping = 2.5f, .GravityFactor = 0.5f, .Radius = 0.05f, .Weight = 0.75f } }, .Colliders = { { .Joint = "Hips", .Offset = { 0.0f, 0.1f, -0.1f }, .Radius = 0.2f, .HalfHeight = 0.3f } }, .Wind = { 1.0f, 0.0f, -2.0f } };
 		entity.GetComponent<ParticleEmitterComponent>() = { .PlayOnStart = false,
 															.Looping = false,
 															.Duration = 2.5f,
@@ -876,8 +877,8 @@ TEST_SUITE("Serialization")
 					CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, info.Name, { { field, nlohmann::json::array({ type.Element->Default, type.Element->Default }) } }, error));
 			}
 		}
-		// Animator Events, BlendSpaces (Samples), Layers (Mask); InverseKinematics Chains.
-		CHECK(lists == 6);
+		// Animator Events, BlendSpaces (Samples), Layers (Mask); InverseKinematics Chains; SpringBone Chains, Colliders.
+		CHECK(lists == 8);
 	}
 
 	TEST_CASE("Entity reference fields are collected from the component definitions")

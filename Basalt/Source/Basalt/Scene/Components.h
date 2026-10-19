@@ -299,6 +299,64 @@ namespace Basalt {
 		float Smoothing = 0.1f;
 	};
 
+	// One chain of a SpringBone component: Joint and the joints below it swing behind the animated pose. Each rotated
+	// joint aims at its child, which is simulated as a point mass, so the last rotated joint needs a child (the tip).
+	struct SpringChain
+	{
+		static constexpr const char* TypeName = "SpringChain";
+		// Chains are found by name.
+		static constexpr const char* UniqueField = "Name";
+		static constexpr uint32_t MaxChainLength = 16;
+
+		std::string Name = "Chain";
+		// The first joint that swings (hair root, cape top, tail base); its parent follows the animation.
+		std::string Joint;
+		// How many joints swing, Joint first, each the first child of the one before (0..MaxChainLength); 0 follows the
+		// first children down to the last joint that still has a child.
+		uint32_t ChainLength = 0;
+		// Pull (1/s², 0..10000) of each point toward where the animated pose puts it; 0 hangs freely.
+		float Stiffness = 40.0f;
+		// Velocity decay (1/s, 0..1000); higher settles sooner.
+		float Damping = 4.0f;
+		// Scales the physics gravity (-100..100); 0 ignores gravity.
+		float GravityFactor = 1.0f;
+		// Radius (meters, 0..100) of each simulated point against the colliders.
+		float Radius = 0.02f;
+		// 0..1. Blend between the animated pose (0) and the simulation (1).
+		float Weight = 1.0f;
+	};
+
+	// A sphere or capsule attached to a joint that keeps every chain of its SpringBone component outside it (a head
+	// under hair, legs in front of a cape).
+	struct SpringCollider
+	{
+		static constexpr const char* TypeName = "SpringCollider";
+
+		// The joint the collider moves with; empty: the entity itself.
+		std::string Joint;
+		// Center in the joint's (or the entity's) space.
+		glm::vec3 Offset = { 0.0f, 0.0f, 0.0f };
+		// Meters (0..100).
+		float Radius = 0.1f;
+		// 0: a sphere; otherwise a capsule along the joint's local Y axis, HalfHeight (meters, 0..100) to each side of
+		// Offset.
+		float HalfHeight = 0.0f;
+	};
+
+	// Secondary motion for hair, capes, tails and ears, applied to the Animator on the same entity after inverse
+	// kinematics and before attachments: each chain's joints follow simulated points that lag behind the
+	// character's motion, sag under gravity and wind, and spring back to the animated pose.
+	struct SpringBoneComponent
+	{
+		static constexpr uint32_t MaxChains = 16;
+		static constexpr uint32_t MaxColliders = 32;
+
+		std::vector<SpringChain> Chains;
+		std::vector<SpringCollider> Colliders;
+		// World-space acceleration (m/s²) added to every point, for wind or gusts set from scripts.
+		glm::vec3 Wind = { 0.0f, 0.0f, 0.0f };
+	};
+
 	// PBR metallic-roughness material. When present it overrides the material imported with the mesh.
 	// Texture paths are project-relative; empty means "no texture".
 	struct MaterialComponent
@@ -908,6 +966,7 @@ namespace Basalt {
 		AnimatorComponent,
 		BoneAttachmentComponent,
 		InverseKinematicsComponent,
+		SpringBoneComponent,
 		MaterialComponent,
 		DirectionalLightComponent,
 		PointLightComponent,

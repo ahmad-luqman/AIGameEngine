@@ -77,5 +77,8 @@ namespace Basalt {
 	// The rotation part of a model-space node transform: scale removed, and a mirroring moved into X (as
 	// Math::DecomposeTransform does), so a mirrored transform still yields a proper rotation.
 	glm::quat GlobalRotation(const glm::mat4& transform);
+	// Rotates `node` by the model-space rotation `delta` about its own origin (its descendants follow), under mirrored
+	// parents too. Globals are left stale; compose the pose afterwards.
+	void RotateJoint(const MeshSource& source, AnimationLocalPose& pose, const std::vector<glm::mat4>& globals, uint32_t node, const glm::quat& delta);
 
 }

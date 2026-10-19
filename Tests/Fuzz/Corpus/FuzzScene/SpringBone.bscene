@@ -1,0 +1,13 @@
+{
+	"Format": "BasaltScene",
+	"Version": 1,
+	"Name": "SpringBone",
+	"Entities": [
+		{ "ID": 1, "Name": "Hero", "Components": {
+			"Animator": { "Mesh": "Assets/Models/Biped.gltf", "Clip": "Lean" },
+			"SpringBone": { "Wind": [ 1, 0, -0.5 ],
+				"Chains": [ { "Name": "Hair", "Joint": "Head", "ChainLength": 2, "Stiffness": 30, "Damping": 3, "GravityFactor": 0.5, "Radius": 0.03, "Weight": 0.8 },
+					{ "Name": "Cape", "Joint": "Spine" } ],
+				"Colliders": [ { "Joint": "Chest", "Offset": [ 0, 0.1, -0.1 ], "Radius": 0.15 }, { "Joint": "", "Radius": 0.2, "HalfHeight": 0.5 } ] } } }
+	]
+}

@@ -423,6 +423,11 @@ namespace Basalt {
 			return RequireEntityWith<InverseKinematicsComponent>(self, operation, "InverseKinematics");
 		}
 
+		Entity RequireSpringBone(const ScriptEntity& self, const char* operation)
+		{
+			return RequireEntityWith<SpringBoneComponent>(self, operation, "SpringBone");
+		}
+
 		AnimationSystem& RequireAnimations(ScriptContext& context)
 		{
 			auto* system = RequireScene(context).GetAnimationSystem();
@@ -715,6 +720,10 @@ namespace Basalt {
 			};
 			entityType["GetIKWeight"] = [&context](const ScriptEntity& self, const std::string& chain) {
 				return RequireAnimations(context).GetIKWeight(RequireInverseKinematics(self, "GetIKWeight"), chain);
+			};
+			entityType["ResetSpringBones"] = [&context](const ScriptEntity& self) {
+				// The component was just checked, so the system finds it.
+				RequireAnimations(context).ResetSpringBones(RequireSpringBone(self, "ResetSpringBones"));
 			};
 		}
 

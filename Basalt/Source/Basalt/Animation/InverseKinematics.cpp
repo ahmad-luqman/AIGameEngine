@@ -60,21 +60,6 @@ namespace Basalt {
 			return Unmirrored(globals[parent], glm::inverse(GlobalRotation(globals[parent])) * rotation);
 		}
 
-		// Rotates `node` by the model-space rotation `delta` about its own origin (its descendants follow). Globals are
-		// left stale; compose the pose afterwards.
-		void RotateJoint(const MeshSource& source, AnimationLocalPose& pose, const std::vector<glm::mat4>& globals, uint32_t node, const glm::quat& delta)
-		{
-			const int32_t parent = source.Nodes[node].Parent;
-			glm::quat local = delta;
-			if (parent >= 0)
-			{
-				const glm::quat parentRotation = GlobalRotation(globals[parent]);
-				local = Unmirrored(globals[parent], glm::inverse(parentRotation) * delta * parentRotation);
-			}
-			auto& rotation = pose.Nodes[node].Rotation;
-			rotation = glm::normalize(local * rotation);
-		}
-
 		// The chain joints' rotations before a solve, so a failed one restores just those.
 		class SavedRotations
 		{
@@ -123,6 +108,19 @@ namespace Basalt {
 				saved.Blend(pose, weight);
 			return ComposeOrRestore(source, pose, globals, saved) ? IKSolveResult::Solved : IKSolveResult::NonFinite;
 		}
+	}
+
+	void RotateJoint(const MeshSource& source, AnimationLocalPose& pose, const std::vector<glm::mat4>& globals, uint32_t node, const glm::quat& delta)
+	{
+		const int32_t parent = source.Nodes[node].Parent;
+		glm::quat local = delta;
+		if (parent >= 0)
+		{
+			const glm::quat parentRotation = GlobalRotation(globals[parent]);
+			local = Unmirrored(globals[parent], glm::inverse(parentRotation) * delta * parentRotation);
+		}
+		auto& rotation = pose.Nodes[node].Rotation;
+		rotation = glm::normalize(local * rotation);
 	}
 
 	const char* DescribeIKResult(IKSolveResult result)

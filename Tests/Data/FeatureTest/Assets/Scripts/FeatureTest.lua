@@ -152,7 +152,7 @@ local function TestEntities(self)
 
 	-- Every component type round-trips through Lua.
 	for _, name in ipairs({ "Camera", "Mesh", "Animator", "Material", "DirectionalLight", "PointLight", "SpotLight", "SkyLight", "PostProcess", "RigidBody",
-		"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "AudioSource", "AudioListener", "ParticleEmitter", "UIRect", "UIImage", "UIText", "UIButton", "UISlider", "UICheckbox", "Prefab", "BoneAttachment", "InverseKinematics" }) do
+		"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "AudioSource", "AudioListener", "ParticleEmitter", "UIRect", "UIImage", "UIText", "UIButton", "UISlider", "UICheckbox", "Prefab", "BoneAttachment", "InverseKinematics", "SpringBone" }) do
 		local holder = Scene.CreateEntity("Holder" .. name)
 		Expect("AddComponent " .. name, function() holder:AddComponent(name) end)
 		local data = holder:GetComponent(name)
@@ -222,6 +222,13 @@ local function TestEntities(self)
 	ExpectError("SetIKTarget without component", function() rig:SetIKTarget("Head", Vec3(0, 0, 0)) end, "needs the InverseKinematics component")
 	ExpectError("IK chain validation", function() ikRig:SetComponent("InverseKinematics", { Chains = { { ChainLength = 0 } } }) end, "ChainLength 0 must be between 1 and 8")
 	Check("InverseKinematics lists", ikRig:GetComponent("InverseKinematics").Chains[3].Type == "LookAt")
+
+	-- Spring bones.
+	local springRig = Scene.FindEntityByName("SpringRig")
+	Expect("ResetSpringBones", function() springRig:ResetSpringBones() end)
+	ExpectError("ResetSpringBones without component", function() rig:ResetSpringBones() end, "needs the SpringBone component")
+	ExpectError("Spring chain validation", function() springRig:SetComponent("SpringBone", { Chains = { { Name = "A", Stiffness = -1 } } }) end, "Stiffness -1 must be between 0 and 10000")
+	Check("SpringBone lists", springRig:GetComponent("SpringBone").Chains[1].Joint == "RightUpperArm" and springRig:GetComponent("SpringBone").Colliders[1].Joint == "Chest")
 
 	-- Other scripts.
 	local spinner = Scene.FindEntityByName("Turntable"):GetScript()
@@ -802,6 +809,15 @@ function Driver:OnUpdate(dt)
 		-- The masked Wave layer raises the right arm (its rest pose points it sideways) and leaves the left one.
 		local rightRise = ikRig:GetBoneTransform("RightHand").y - ikRig:GetBoneTransform("RightUpperArm").y
 		Check("Override layer", rightRise > 0.15 and rightRise < 0.6 and Near(ikRig:GetBoneTransform("LeftUpperArm").y, ikRig:GetBoneTransform("RightUpperArm").y, 0.25))
+		-- The loose right arm swung down from its sideways rest pose, keeping its bone lengths, and its elbow stays outside
+		-- the chest's collider, which sits where the elbow would hang.
+		local springRig = Scene.FindEntityByName("SpringRig")
+		local shoulder, hand = springRig:GetBoneTransform("RightUpperArm"), springRig:GetBoneTransform("RightHand")
+		local elbow = springRig:GetBoneTransform("RightForeArm")
+		local chest, chestRotation = springRig:GetBoneTransform("Chest")
+		local collider = chest + chestRotation * Vec3(-0.3026, -0.1319, 0)
+		Check("Spring bones swing", hand.y < shoulder.y - 0.3 and Near((elbow - shoulder):Length(), 0.3, 1e-3) and Near((hand - elbow):Length(), 0.3, 1e-3)
+			and NearVec(collider, shoulder + Vec3(0, -0.3, 0), 0.01) and (elbow - collider):Length() > 0.115)
 		local hit = Physics.Raycast(Vec3(0, 10, 8), Vec3(0, -1, 0), 50)
 		Check("Physics.Raycast hit", hit ~= nil and hit.Entity.Name == "Ground" and Near(hit.Point.y, 0, 0.05) and NearVec(hit.Normal, Vec3(0, 1, 0), 1e-3) and Near(hit.Distance, 10, 0.05))
 		Check("Physics.Raycast miss", Physics.Raycast(Vec3(0, 10, 8), Vec3(0, 1, 0), 50) == nil)

@@ -148,11 +148,6 @@ namespace Basalt {
 		{
 			std::erase_if(problems, [id](const auto& entry) { return entry.first.first == id; });
 		}
-
-		// A horizontal move faster than this (units/s) between two updates is a teleport (respawn, Scene.Load, a script
-		// placing the entity), not movement, so it does not spike MatchVelocity. Physics moves bodies once per fixed
-		// step, so a move is measured over at least one step: at high frame rates most frames see none.
-		constexpr double TeleportSpeed = 100.0;
 	}
 
 	AnimationSystem::AnimationSystem(Scene& scene)
@@ -160,6 +155,7 @@ namespace Basalt {
 	{
 		m_Scene.GetRegistry().on_destroy<AnimatorComponent>().connect<&AnimationSystem::OnDestroy>(*this);
 		m_Scene.GetRegistry().on_destroy<InverseKinematicsComponent>().connect<&AnimationSystem::OnIKDestroy>(*this);
+		m_Scene.GetRegistry().on_destroy<SpringBoneComponent>().connect<&AnimationSystem::OnSpringDestroy>(*this);
 		Update(0);
 	}
 
@@ -167,6 +163,7 @@ namespace Basalt {
 	{
 		m_Scene.GetRegistry().on_destroy<AnimatorComponent>().disconnect<&AnimationSystem::OnDestroy>(*this);
 		m_Scene.GetRegistry().on_destroy<InverseKinematicsComponent>().disconnect<&AnimationSystem::OnIKDestroy>(*this);
+		m_Scene.GetRegistry().on_destroy<SpringBoneComponent>().disconnect<&AnimationSystem::OnSpringDestroy>(*this);
 	}
 
 	void AnimationSystem::OnDestroy(entt::registry& registry, entt::entity handle)
@@ -472,28 +469,31 @@ namespace Basalt {
 		}
 		const auto composes = [&](const AnimationLocalPose& pose) { return ComposeAnimationPose(source, pose, playback.Globals) && SkinPalettesFinite(source, playback.Globals); };
 		bool valid;
-		if (playback.IKOverlay.empty())
+		if (playback.IKOverlay.empty() && playback.SpringOverlay.empty())
 			valid = composes(playback.Pose);
 		else
 		{
 			AnimationLocalPose pose = playback.Pose;
-			for (const auto& [node, transform] : playback.IKOverlay)
-			{
-				// The overlay is cleared with the playback whenever Source changes.
-				BS_CORE_ASSERT(node < pose.Nodes.size());
-				pose.Nodes[node] = transform;
-			}
+			// Spring bones solved on top of IK, so their entries (which include IK's changes to the same nodes) go last.
+			for (const auto* overlay : { &playback.IKOverlay, &playback.SpringOverlay })
+				for (const auto& [node, transform] : *overlay)
+				{
+					// The overlays are cleared with the playback whenever Source changes.
+					BS_CORE_ASSERT(node < pose.Nodes.size());
+					pose.Nodes[node] = transform;
+				}
 			valid = composes(pose);
 			if (valid)
 				playback.OverlayDropped = false;
-			// The IK pass checks its own results, so the overlay fails on a pose that changed under it. A pose that
-			// fails without it too is reported below, not as an IK problem.
+			// The IK and spring passes check their own results, so the overlays fail on a pose that changed under them. A
+			// pose that fails without them too is reported below, not as an IK problem.
 			else if (composes(playback.Pose))
 			{
 				if (!playback.OverlayDropped)
-					BS_CORE_WARN("Animator '{}': the IK solution does not fit the newly evaluated pose; showing the pose without IK until IK solves again", playback.EntityName);
+					BS_CORE_WARN("Animator '{}': the IK and spring bone solution does not fit the newly evaluated pose; showing the pose without them until they solve again", playback.EntityName);
 				playback.OverlayDropped = true;
 				playback.IKOverlay.clear();
+				playback.SpringOverlay.clear();
 				valid = true;
 			}
 		}
@@ -504,6 +504,7 @@ namespace Basalt {
 			playback.Local = SampleAnimation(source, nullptr, 0);
 			playback.Pose = playback.Local;
 			playback.IKOverlay.clear();
+			playback.SpringOverlay.clear();
 			ComposeAnimationPose(source, playback.Local, playback.Globals);
 		}
 		playback.InvalidPose = !valid;
@@ -662,7 +663,10 @@ namespace Basalt {
 		const float seconds = timestep.GetSeconds();
 		// Update already reported an invalid step; attachments still follow the rigs.
 		if (std::isfinite(seconds) && seconds >= 0)
+		{
 			SolveIK(seconds);
+			SolveSprings(seconds);
+		}
 		UpdateAttachments();
 	}
 

@@ -3,6 +3,7 @@
 #include "Basalt/Animation/AnimationPose.h"
 #include "Basalt/Animation/AnimationGraph.h"
 #include "Basalt/Animation/FadingWeight.h"
+#include "Basalt/Animation/SpringBones.h"
 #include "Basalt/Core/UUID.h"
 #include "Basalt/Core/Timestep.h"
 #include "Basalt/Scene/Components.h"
@@ -33,8 +34,8 @@ namespace Basalt {
 
 	// Per-entity playback and poses for a playing/simulating scene. Asset data stays shared and immutable.
 	// Each Update advances every Animator, composes its base playback and then its layers, and collects the events
-	// playback crossed (TakeEvents). The scene runs LateUpdate (inverse kinematics, then attachments) after physics and
-	// OnLateUpdate; standalone callers get it at the end of Update by default.
+	// playback crossed (TakeEvents). The scene runs LateUpdate (inverse kinematics, spring bones, then attachments) after
+	// physics and OnLateUpdate; standalone callers get it at the end of Update by default.
 	class AnimationSystem
 	{
 	public:
@@ -45,8 +46,8 @@ namespace Basalt {
 		~AnimationSystem();
 		// runLateUpdate: also run LateUpdate at the end; the scene passes false and calls LateUpdate after physics.
 		void Update(Timestep timestep, bool runLateUpdate = true);
-		// Solves inverse kinematics and refreshes attachments once physics and OnLateUpdate have placed the rigs. An
-		// invalid (negative or non-finite) step, which Update reports, skips IK.
+		// Solves inverse kinematics, then spring bones, and refreshes attachments once physics and OnLateUpdate have
+		// placed the rigs. An invalid (negative or non-finite) step, which Update reports, skips IK and spring bones.
 		void LateUpdate(Timestep timestep);
 		// Set a declared Float/Bool parameter on an active graph; false with a deduplicated diagnostic on failure.
 		bool SetParameter(Entity entity, const std::string& name, float value);
@@ -104,11 +105,18 @@ namespace Basalt {
 		bool ClearIKTarget(Entity entity, const std::string& chain);
 		bool SetIKWeight(Entity entity, const std::string& chain, float weight, float seconds);
 		std::optional<float> GetIKWeight(Entity entity, const std::string& chain);
+		// Puts every spring chain of the entity back on its animated pose with no motion (after a teleport the
+		// automatic detection misses, or a cutscene cut). False when the entity has no SpringBone component.
+		bool ResetSpringBones(Entity entity);
 		// The events crossed since the last call, per Animator in update order: each clip's in the order playback
 		// crossed them, the current clip's before the outgoing one's (for a two-clip blend, the second clip's first).
 		std::vector<AnimationEventRecord> TakeEvents();
 
 	private:
+		// A move faster than this (units/s) between two updates is a teleport (respawn, Scene.Load, a script placing the
+		// entity), not movement, so it does not spike MatchVelocity or swing spring bones. Physics moves bodies once per
+		// fixed step, so MatchVelocity measures a move over at least one step: at high frame rates most frames see none.
+		static constexpr double TeleportSpeed = 100.0;
 		// Why graph evaluation/parameter writes are enabled or disabled, independent of pose and pause state.
 		enum class GraphControl
 		{
@@ -262,7 +270,10 @@ namespace Basalt {
 			// of Pose with these on top, so a pose evaluated again after the IK pass (e.g. Play in OnAnimationEvent)
 			// keeps the solution until the next solve.
 			std::vector<IKOverlayEntry> IKOverlay;
-			// The overlay did not compose on a finite pose and was dropped; warned once until an overlay composes again.
+			// The last spring bone solution's local transforms of the nodes it turned, applied after IKOverlay the same
+			// way. Spring bones solve from Pose with IKOverlay, never from this.
+			std::vector<IKOverlayEntry> SpringOverlay;
+			// The overlays did not compose on a finite pose and were dropped; warned once until an overlay composes again.
 			bool OverlayDropped = false;
 			bool Playing = false;
 			bool Rest = false;
@@ -320,6 +331,30 @@ namespace Basalt {
 			std::string Problem;
 			std::string PelvisProblem;
 		};
+		// Runtime state of one spring chain, matched to its configuration by name every update.
+		struct SpringChainState
+		{
+			std::string Name;
+			// The joints and tip resolved last time; a different resolution (a changed Joint or model) restarts the chain.
+			std::vector<uint32_t> Joints;
+			// The simulated children of the joints, and the animated joints and tip at the last simulation (world space).
+			std::vector<SpringPoint> Points;
+			std::vector<glm::vec3> Animated;
+			// False until the points start on the animated pose (first solve, ResetSpringBones, a teleport).
+			bool Initialized = false;
+			// The last problem with this chain, logged when it changes.
+			std::string Problem;
+		};
+		// The spring bone runtime state of one entity. It survives playback resets (the points are where the chains hang
+		// in the world) and ends with the component.
+		struct SpringState
+		{
+			entt::entity Handle = entt::null;
+			std::vector<SpringChainState> Chains;
+			// The last problem with the entity as a whole (its Animator, pose, transform and colliders), logged when it
+			// changes.
+			std::string Problem;
+		};
 		// A chain's state and configuration, as FindChain returns them.
 		struct ChainLookup
 		{
@@ -338,7 +373,7 @@ namespace Basalt {
 		// Re-resolves the running space and logs a new problem; false when it cannot play.
 		bool ResolveSpace(Playback& playback, SpaceState& state, const AnimatorComponent& component);
 		static void Evaluate(Playback& playback);
-		// Builds Pose from Local and the layers, then composes Globals from Pose with the IK overlay on top. Layers
+		// Builds Pose from Local and the layers, then composes Globals from Pose with the IK and spring overlays on top. Layers
 		// leave out the root-motion joint and the nodes above it while root motion applies (also while it fades out).
 		static void Finish(Playback& playback);
 		// Matches layer states to the configuration (by name), resolves them and advances their clocks and fades.
@@ -352,6 +387,10 @@ namespace Basalt {
 		void SolveIK(float seconds);
 		void SolveEntityIK(Entity entity, Playback& playback, const InverseKinematicsComponent& component, IKState& state, float seconds);
 		IKState& SyncIK(Entity entity, const InverseKinematicsComponent& component);
+		void SolveSprings(float seconds);
+		void SolveEntitySprings(Entity entity, Playback& playback, const SpringBoneComponent& component, SpringState& state, float seconds);
+		SpringState& SyncSprings(Entity entity, const SpringBoneComponent& component);
+		void OnSpringDestroy(entt::registry& registry, entt::entity handle);
 		// The chain named `chain` after syncing, or nulls (reported for `operation`).
 		ChainLookup FindChain(Entity entity, const std::string& chain, const char* operation);
 		// Logs `problem` (plus `detail`, e.g. the offending values) for one entity, operation and layer or chain name
@@ -401,6 +440,7 @@ namespace Basalt {
 		std::map<std::pair<UUID, std::string>, std::string> m_BoneProblems;
 		std::unordered_map<UUID, std::string> m_UnplayableReported;
 		std::unordered_map<UUID, IKState> m_IK;
+		std::unordered_map<UUID, SpringState> m_Springs;
 		// The last failed script call's problem per entity and operation and layer or chain name (see ReportCallProblem).
 		std::map<std::pair<UUID, std::string>, std::string> m_LayerProblems;
 		std::map<std::pair<UUID, std::string>, std::string> m_IKCallProblems;

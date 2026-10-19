@@ -21,7 +21,7 @@ changing code. Task-specific procedures live in `.claude/skills/*/SKILL.md`.
 Engine modules (`Basalt/Source/Basalt/<Module>/`): `Core` (application, window, input incl. gamepads, log, file
 system and file watching, command line), `Events`, `Math`, `Renderer` (device, scene renderer, IBL, debug lines), `ImGui`, `Scene`
 (EnTT scene, components, component registry, serialization), `Asset` (glTF, images, primitives, asset
-cache), `Physics` (Jolt), `Audio` (miniaudio: buses, per-source low-pass and Doppler, reverb sends into per-bus reverbs), `Particles` (CPU particle simulation), `Animation` (glTF TRS sampling, blends, crossfades, 1D/2D blend spaces with phase sync and velocity matching, animation events, bone transforms and attachments, data-driven state machines and per-state root motion, layers with joint masks and additive clips, two-bone/look-at IK and foot placement, per-entity playback), `UI` (game UI: UI
+cache), `Physics` (Jolt), `Audio` (miniaudio: buses, per-source low-pass and Doppler, reverb sends into per-bus reverbs), `Particles` (CPU particle simulation), `Animation` (glTF TRS sampling, blends, crossfades, 1D/2D blend spaces with phase sync and velocity matching, animation events, bone transforms and attachments, data-driven state machines and per-state root motion, layers with joint masks and additive clips, two-bone/look-at IK and foot placement, spring bones, per-entity playback), `UI` (game UI: UI
 component layout, widgets and their mouse/keyboard/gamepad interaction, immediate-mode `UI.*`, TrueType fonts;
 drawn through ImGui after the scene), `Scripting` (Lua 5.4 + sol2; timers, coroutines, events), `Project`
 (project files, exporter, save data), `Automation` (command API, session, TCP server, editor history and selection).
@@ -58,7 +58,10 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   callback) keeps the IK. Foot rays use `PhysicsWorld::RaycastAll` and skip the entity, its descendants and its
   character controller's entity and descendants. IK targets and weights live in the system keyed by entity (they
   survive playback resets); layer state belongs to the playback. Solvers (`Animation/InverseKinematics.h`) are
-  stateless free functions that handle mirrored (negative-determinant) parents.
+  stateless free functions that handle mirrored (negative-determinant) parents. `SpringBoneComponent` chains swing right
+  after IK, from `Pose` plus the IK overlay (never their own last solution), as world-space Verlet points
+  (`Animation/SpringBones.h`, fixed 120 Hz substeps) kept in the system by entity; their joints go into a second overlay
+  that `Finish` applies after the IK one.
 - **Play mode runs a copy.** `Scene::Copy` duplicates the edit scene (same UUIDs) for play/simulate;
   stopping discards it. In the editor the game runs in the Game tab (primary camera at the project's window
   size, letterboxed; the game UI takes the pointer while the Game image is hovered and navigation while the Game

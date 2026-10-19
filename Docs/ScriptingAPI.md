@@ -183,6 +183,7 @@ Entity handles store an ID and stay safe to hold: using a destroyed entity raise
 | `e:GetBoneTransform(joint)` | World position (Vec3), rotation (Quat) and scale (Vec3) of a joint of the Animator's current pose, or nil; see Bones |
 | `e:PlayAnimationLayer(layer, [clip])`, `e:SetAnimationLayerWeight(layer, weight, [seconds])`, `e:GetAnimationLayerWeight(layer)` | Animator layers; see Animation layers |
 | `e:SetIKTarget(chain, position, [rotation])`, `e:SetIKTarget(chain, entity, [matchRotation])`, `e:ClearIKTarget(chain)`, `e:SetIKWeight(chain, weight, [seconds])`, `e:GetIKWeight(chain)` | InverseKinematics chains; see Inverse kinematics |
+| `e:ResetSpringBones()` | Puts the SpringBone chains back on the animated pose, at rest; see Spring bones |
 | `e:GetScript()` | The entity's script instance (call its functions, read its fields) |
 | `e:Destroy()` | Destroy at the end of the frame (with children) |
 
@@ -1320,6 +1321,55 @@ missing `Pelvis`, and an InverseKinematics whose Animator cannot animate are log
 Animator, `Pole` on a LookAt chain, `ChainLength` on a TwoBone chain, `MaxAngle` 0, a `Pelvis` without Ground chains or
 not above a ground leg, and two chains driving the same joint. Targets and weights are gameplay state: they survive
 playback resets (changes to `Mesh`, `Clip` or `StateMachine`, asset reload) and end with the component.
+
+### Spring bones
+
+A `SpringBone` component on an Animator's entity adds secondary motion to hair, capes, tails and ears every frame the
+scene plays or simulates, right after inverse kinematics (so chains hang from the solved pose) and before attachments.
+Each chain's joints follow simulated points that lag behind the character's motion, sag under gravity and wind, bounce
+off colliders and spring back toward the animated shape.
+
+```lua
+hero:AddComponent("SpringBone", {
+    Chains = {
+        { Name = "Hair", Joint = "Hair1", Stiffness = 30, Damping = 3 },
+        { Name = "Cape", Joint = "Cape1", ChainLength = 3, Stiffness = 15, Radius = 0.04 },
+    },
+    Colliders = {
+        { Joint = "Head", Offset = { 0, 0.1, 0 }, Radius = 0.12 },
+        { Joint = "LeftUpperLeg", Offset = { 0, -0.2, 0 }, Radius = 0.08, HalfHeight = 0.2 },
+    },
+})
+local springs = hero:GetComponent("SpringBone")
+springs.Wind = { 3, 0, 0 } -- a gust
+hero:SetComponent("SpringBone", springs)
+```
+
+| Chain field | Meaning |
+|---|---|
+| `Name` | Unique per component; the simulation state follows the name when chains are added, removed or reordered |
+| `Joint` | The first joint that swings; its parent follows the animation |
+| `ChainLength` | How many joints swing (0..16), `Joint` first, each the first child of the one before; 0 (default) follows first children down to the last joint that still has a child. Every swinging joint aims at its child, so the last one needs a child: the tip, often an end joint without geometry |
+| `Stiffness` | Pull (1/s², 0..10000, default 40) of each point back toward where the animated shape puts it, measured from the swung points before it; 0 hangs freely |
+| `Damping` | Velocity decay (1/s, 0..1000, default 4): higher settles sooner. It acts on world-space velocity, like air drag, so moving chains trail behind |
+| `GravityFactor` | Scales the physics gravity (-100..100, default 1) |
+| `Radius` | Radius (m, 0..100, default 0.02) of each point against the colliders |
+| `Weight` | 0..1 blend from the animated pose (0) to the simulation (1); the simulation keeps running at 0 |
+
+`Colliders` are spheres or capsules attached to joints (`Joint`; empty: the entity itself) at `Offset` in the joint's
+space, with `Radius` (default 0.1) and `HalfHeight` (0: a sphere; otherwise a capsule along the joint's local Y axis,
+`HalfHeight` to each side of `Offset`). They keep the points of every chain of the component outside them. `Wind` is a
+world-space acceleration (m/s²) added to every point.
+
+Points simulate in world space at 120 steps per second (a frame runs at least one; a frame longer than 1/15 s only
+simulates 1/15 s), so a moving or turning character swings its chains, and every bone keeps its animated length (scaled
+with the entity). A chain starts on the animated pose; it restarts there when its joints change and when the chain's
+first joint moves faster than 100 m/s (a teleport or respawn). `e:ResetSpringBones()` restarts every chain on the next
+update, for cuts the speed test misses; it raises an error without a SpringBone component. Chains whose joints are
+missing, have no child or have fixed glTF matrices, unknown collider joints and a SpringBone whose Animator cannot
+animate are logged once and skipped; the inspector and `scene.info` show the same problems and warn when two chains turn
+the same joint (the later one wins). The simulated points are gameplay state: they survive playback resets and end with
+the component.
 
 ## Graphics settings
 

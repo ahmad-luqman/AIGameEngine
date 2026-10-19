@@ -524,6 +524,10 @@ function Entity:SetIKWeight(chain, weight, seconds) end
 ---@return number?
 function Entity:GetIKWeight(chain) end
 
+---Restarts every SpringBone chain on the animated pose, at rest, on the next update (after a cut the automatic teleport
+---detection misses). Errors without a SpringBone component.
+function Entity:ResetSpringBones() end
+
 ---Starts a new ParticleEmitter cycle unless it is playing.
 function Entity:PlayParticles() end
 
@@ -1293,6 +1297,7 @@ function BasaltScript:StopAllCoroutines() end
 ---| "Animator"
 ---| "BoneAttachment"
 ---| "InverseKinematics"
+---| "SpringBone"
 ---| "Material"
 ---| "DirectionalLight"
 ---| "PointLight"
@@ -1377,6 +1382,12 @@ function BasaltScript:StopAllCoroutines() end
 ---@field RayHeight number
 ---@field RayDepth number
 ---@field Smoothing number
+
+---SpringBone data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
+---@class SpringBoneComponent
+---@field Chains SpringChain[]
+---@field Colliders SpringCollider[]
+---@field Wind number[]
 
 ---Material data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
 ---@class MaterialComponent
@@ -1709,6 +1720,24 @@ function BasaltScript:StopAllCoroutines() end
 ---@field Ground boolean
 ---@field Weight number
 
+---An element of a component list field.
+---@class SpringChain
+---@field Name string
+---@field Joint string
+---@field ChainLength integer
+---@field Stiffness number
+---@field Damping number
+---@field GravityFactor number
+---@field Radius number
+---@field Weight number
+
+---An element of a component list field.
+---@class SpringCollider
+---@field Joint string
+---@field Offset number[]
+---@field Radius number
+---@field HalfHeight number
+
 ---Returns a copy of the component's fields (vectors as arrays, rotations in Euler degrees, entity references
 ---as IDs), or nil when the entity does not have the component.
 ---@param name ComponentName
@@ -1720,6 +1749,7 @@ function BasaltScript:StopAllCoroutines() end
 ---@overload fun(self: Entity, name: "Animator"): AnimatorComponent?
 ---@overload fun(self: Entity, name: "BoneAttachment"): BoneAttachmentComponent?
 ---@overload fun(self: Entity, name: "InverseKinematics"): InverseKinematicsComponent?
+---@overload fun(self: Entity, name: "SpringBone"): SpringBoneComponent?
 ---@overload fun(self: Entity, name: "Material"): MaterialComponent?
 ---@overload fun(self: Entity, name: "DirectionalLight"): DirectionalLightComponent?
 ---@overload fun(self: Entity, name: "PointLight"): PointLightComponent?
