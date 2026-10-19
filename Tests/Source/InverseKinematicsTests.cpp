@@ -29,10 +29,6 @@ namespace {
 	{
 		return glm::vec3(globals[node][3]);
 	}
-	bool Near(const glm::vec3& a, const glm::vec3& b, float epsilon = 1e-4f)
-	{
-		return glm::all(glm::epsilonEqual(a, b, epsilon));
-	}
 	float Degrees(const glm::vec3& a, const glm::vec3& b)
 	{
 		return glm::degrees(std::acos(std::clamp(glm::dot(glm::normalize(a), glm::normalize(b)), -1.0f, 1.0f)));
@@ -89,17 +85,6 @@ namespace {
 		animator.PlayOnStart = false;
 		entity.AddComponent<InverseKinematicsComponent>().Chains = chains;
 		return entity;
-	}
-	glm::mat4 BoneWorldTransform(Scene& scene, Entity entity, const std::string& joint)
-	{
-		glm::mat4 bone(1.0f);
-		std::string error;
-		REQUIRE_MESSAGE(scene.GetAnimationSystem()->GetBoneTransform(entity, joint, bone, error), error);
-		return scene.GetWorldTransform(entity) * bone;
-	}
-	glm::vec3 BoneWorld(Scene& scene, Entity entity, const std::string& joint)
-	{
-		return glm::vec3(BoneWorldTransform(scene, entity, joint)[3]);
 	}
 	glm::quat BoneWorldRotation(Scene& scene, Entity entity, const std::string& joint)
 	{

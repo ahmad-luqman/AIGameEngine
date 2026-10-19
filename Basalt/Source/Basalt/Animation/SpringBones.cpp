@@ -1,16 +1,20 @@
 #include "Basalt/Animation/SpringBones.h"
 
+#include "Basalt/Animation/InverseKinematics.h"
 #include "Basalt/Core/Assert.h"
-#include "Basalt/Math/Math.h"
 #include "Basalt/Scene/Components.h"
 
 #include <spdlog/fmt/fmt.h>
-#include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <optional>
 
 namespace Basalt {
+
+	// Explicit integration of the pull is stable while stiffness * substep² stays below 4; keep a wide margin.
+	static_assert(SpringChain::MaxStiffness / (SpringStepRate * SpringStepRate) < 1.0f, "the stiffest spring must stay stable at the longest substep");
 
 	namespace {
 		constexpr float Epsilon = 1e-6f;
@@ -27,8 +31,9 @@ namespace Basalt {
 			return head + glm::normalize(offset) * length;
 		}
 
-		// `point` pushed out of the shape grown by `radius`; `away` breaks the tie when the point is on its axis.
-		glm::vec3 PushOut(const SpringCollisionShape& shape, const glm::vec3& point, float radius, const glm::vec3& away)
+		// `point` pushed out of the shape grown by `radius`, or nullopt when it is outside already. A point on the shape's
+		// axis leaves across `bone` (its bone's direction), which keeps it near its bone length.
+		std::optional<glm::vec3> PushOut(const SpringCollisionShape& shape, const glm::vec3& point, float radius, const glm::vec3& bone)
 		{
 			const glm::vec3 axis = shape.B - shape.A;
 			const float lengthSquared = glm::dot(axis, axis);
@@ -36,15 +41,19 @@ namespace Basalt {
 			const glm::vec3 closest = shape.A + axis * t;
 			const float reach = shape.Radius + radius;
 			glm::vec3 offset = point - closest;
-			const float distance = glm::length(offset);
-			if (distance >= reach)
-				return point;
-			if (distance < Epsilon)
+			if (glm::length(offset) >= reach)
+				return std::nullopt;
+			if (glm::length(offset) < Epsilon)
 			{
-				offset = away - glm::dot(away, axis) * axis / std::max(lengthSquared, Epsilon);
-				// Any direction across the axis.
+				// Across both the bone and a capsule's axis; failing that (parallel or vanishing), any direction across
+				// whichever of the two is there.
+				const glm::vec3 along = lengthSquared > 0 ? axis : bone;
+				offset = lengthSquared > 0 ? glm::cross(axis, bone) : glm::cross(bone, glm::vec3(0, 1, 0));
+				for (const glm::vec3 fallback : { glm::vec3(0, 1, 0), glm::vec3(1, 0, 0) })
+					if (glm::length(offset) < Epsilon)
+						offset = glm::cross(along, fallback);
 				if (glm::length(offset) < Epsilon)
-					offset = lengthSquared > 0 && std::abs(axis.y) > 0.9f * std::sqrt(lengthSquared) ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
+					offset = glm::vec3(0, 1, 0);
 			}
 			return closest + glm::normalize(offset) * reach;
 		}
@@ -54,20 +63,33 @@ namespace Basalt {
 	{
 		const size_t count = points.size();
 		BS_CORE_ASSERT(request.Animated.size() == count + 1 && request.PreviousAnimated.size() == count + 1, "one animated position per joint plus the tip");
-		const float seconds = std::min(request.Seconds, static_cast<float>(MaxSpringSteps) / SpringStepRate);
-		if (count == 0 || !(seconds > 0))
+		BS_CORE_ASSERT(count <= SpringChain::MaxChainLength, "chains have at most MaxChainLength joints");
+		BS_CORE_ASSERT(request.Stiffness >= 0 && request.Damping >= 0, "a negative stiffness or damping adds energy");
+		constexpr float longest = static_cast<float>(MaxSpringSteps) / SpringStepRate;
+		if (count == 0 || !(request.Seconds > 0))
 			return;
+		const float seconds = std::min(request.Seconds, longest);
+		// A hitch: the points move along with the first joint for the part of the frame that is not simulated, and the
+		// animated pose is interpolated over the simulated rest.
+		const float skipped = 1.0f - seconds / request.Seconds;
+		std::array<glm::vec3, SpringChain::MaxChainLength + 1> start{};
+		for (size_t i = 0; i <= count; i++)
+			start[i] = glm::mix(request.PreviousAnimated[i], request.Animated[i], skipped);
+		const glm::vec3 carried = start[0] - request.PreviousAnimated[0];
+		for (SpringPoint& point : points)
+			point.Position += carried;
+
 		const uint32_t steps = std::clamp(static_cast<uint32_t>(std::ceil(seconds * SpringStepRate)), 1u, MaxSpringSteps);
 		const float step = seconds / static_cast<float>(steps);
 		const float decay = std::exp(-request.Damping * step);
-		std::vector<glm::vec3> animated(count + 1);
+		std::array<glm::vec3, SpringChain::MaxChainLength + 1> animated{};
 		for (uint32_t substep = 1; substep <= steps; substep++)
 		{
 			// The animated pose moves evenly through the frame, so a fast-moving character does not jerk its points
 			// once per frame.
 			const float progress = static_cast<float>(substep) / static_cast<float>(steps);
 			for (size_t i = 0; i <= count; i++)
-				animated[i] = glm::mix(request.PreviousAnimated[i], request.Animated[i], progress);
+				animated[i] = glm::mix(start[i], request.Animated[i], progress);
 			glm::vec3 head = animated[0];
 			// How far the simulated chain so far turned away from the animated one: the animated shape below follows it.
 			glm::quat turn(1, 0, 0, 0);
@@ -77,16 +99,28 @@ namespace Basalt {
 				const glm::vec3 bone = animated[i + 1] - animated[i];
 				const float length = glm::length(bone);
 				const glm::vec3 target = head + turn * bone;
-				const glm::vec3 velocity = (point.Position - point.Previous) * decay;
-				const glm::vec3 acceleration = request.Stiffness * (target - point.Position) + request.Acceleration;
-				glm::vec3 next = KeepLength(head, point.Position + velocity + acceleration * step * step, length, target);
-				for (const SpringCollisionShape& shape : request.Colliders)
-					next = PushOut(shape, next, request.Radius, next - head);
-				next = KeepLength(head, next, length, target);
-				point.Previous = point.Position;
+				// Semi-implicit Euler: the velocity first, so the result does not depend on how long earlier substeps were.
+				point.Velocity = point.Velocity * decay + (request.Stiffness * (target - point.Position) + request.Acceleration) * step;
+				glm::vec3 next = KeepLength(head, point.Position + point.Velocity * step, length, target);
+				for (uint32_t iteration = 0; iteration < SpringConstraintIterations; iteration++)
+				{
+					bool pushed = false;
+					for (const SpringCollisionShape& shape : request.Colliders)
+						if (const auto out = PushOut(shape, next, request.Radius, next - head))
+						{
+							next = *out;
+							pushed = true;
+						}
+					if (!pushed)
+						break;
+					next = KeepLength(head, next, length, target);
+				}
+				// The constraints' corrections become velocity, as in position-based dynamics.
+				point.Velocity = (next - point.Position) / step;
 				point.Position = next;
-				if (length > Epsilon && glm::length(next - head) > Epsilon)
-					turn = RotationBetween(bone / length, glm::normalize(next - head));
+				const glm::vec3 swung = next - head;
+				if (length > Epsilon && glm::length(swung) > Epsilon)
+					turn = RotationBetween(bone / length, glm::normalize(swung));
 				head = next;
 			}
 		}
@@ -98,9 +132,18 @@ namespace Basalt {
 		return found == source.Nodes.end() ? -1 : static_cast<int32_t>(found - source.Nodes.begin());
 	}
 
+	size_t ChildCount(const MeshSource& source, uint32_t node)
+	{
+		return static_cast<size_t>(std::ranges::count(source.Nodes, static_cast<int32_t>(node), &MeshNode::Parent));
+	}
+
 	std::string ResolveSpringChain(const MeshSource& source, const SpringChain& chain, std::vector<uint32_t>& outJoints)
 	{
 		outJoints.clear();
+		const auto fail = [&](std::string problem) {
+			outJoints.clear();
+			return problem;
+		};
 		if (chain.Joint.empty())
 			return "Joint is empty";
 		const int32_t first = FindNode(source, chain.Joint);
@@ -116,72 +159,14 @@ namespace Basalt {
 				break;
 			outJoints.push_back(static_cast<uint32_t>(child));
 		}
-		std::string problem;
 		if (outJoints.size() < 2)
-			problem = fmt::format("joint '{}' has no child to swing toward", chain.Joint);
-		else if (chain.ChainLength != 0 && outJoints.size() <= length)
-			problem = fmt::format("joint '{}' has fewer than {} joints in a line below it", chain.Joint, length);
-		else if (const auto fixed = std::ranges::find_if(outJoints.begin(), outJoints.end() - 1, [&](uint32_t joint) { return source.Nodes[joint].HasMatrix; }); fixed != outJoints.end() - 1)
-			problem = fmt::format("joint '{}' has a fixed matrix and cannot be turned", source.Nodes[*fixed].Name);
-		if (!problem.empty())
-			outJoints.clear();
-		return problem;
-	}
-
-	IKSolveResult ApplySpringChain(const MeshSource& source, AnimationLocalPose& pose, std::vector<glm::mat4>& globals, std::span<const uint32_t> joints, std::span<const glm::vec3> targets, float weight)
-	{
-		BS_CORE_ASSERT(joints.size() == targets.size() + 1, "one target per turned joint");
-		weight = std::isfinite(weight) ? std::clamp(weight, 0.0f, 1.0f) : 0.0f;
-		if (weight <= 0 || targets.empty())
-			return IKSolveResult::Unchanged;
-		const std::span<const uint32_t> turned = joints.first(targets.size());
-		if (std::ranges::any_of(turned, [&](uint32_t joint) { return source.Nodes[joint].HasMatrix; }))
-			return IKSolveResult::FixedMatrix;
-		if (!std::ranges::all_of(targets, [](const glm::vec3& target) { return Math::IsFinite(target); }))
-			return IKSolveResult::NonFinite;
-		std::vector<glm::quat> saved;
-		saved.reserve(turned.size());
-		for (uint32_t joint : turned)
-			saved.push_back(pose.Nodes[joint].Rotation);
-		const auto restore = [&] {
-			for (size_t i = 0; i < turned.size(); i++)
-				pose.Nodes[turned[i]].Rotation = saved[i];
-			// The saved pose composed on entry, so this cannot fail.
-			ComposeAnimationPose(source, pose, globals);
-		};
-		bool changed = false;
-		for (size_t i = 0; i < turned.size(); i++)
-		{
-			const glm::vec3 origin = glm::vec3(globals[joints[i]][3]);
-			const glm::vec3 bone = glm::vec3(globals[joints[i + 1]][3]) - origin;
-			const glm::vec3 aim = targets[i] - origin;
-			if (glm::length(bone) < Epsilon || glm::length(aim) < Epsilon)
-				continue;
-			RotateJoint(source, pose, globals, joints[i], RotationBetween(glm::normalize(bone), glm::normalize(aim)));
-			// The joints below aim from where this turn puts them.
-			if (!ComposeAnimationPose(source, pose, globals))
-			{
-				restore();
-				return IKSolveResult::NonFinite;
-			}
-			changed = true;
-		}
-		if (!changed)
-			return IKSolveResult::Unchanged;
-		if (weight < 1.0f)
-		{
-			for (size_t i = 0; i < turned.size(); i++)
-			{
-				auto& rotation = pose.Nodes[turned[i]].Rotation;
-				rotation = glm::normalize(glm::slerp(saved[i], rotation, weight));
-			}
-			if (!ComposeAnimationPose(source, pose, globals))
-			{
-				restore();
-				return IKSolveResult::NonFinite;
-			}
-		}
-		return IKSolveResult::Solved;
+			return fail(fmt::format("joint '{}' has no child to swing toward", chain.Joint));
+		if (chain.ChainLength != 0 && outJoints.size() <= length)
+			return fail(fmt::format("joint '{}' needs {} joints and a tip in a line from it", chain.Joint, length));
+		for (uint32_t joint : std::span(outJoints).first(outJoints.size() - 1))
+			if (source.Nodes[joint].HasMatrix)
+				return fail(fmt::format("joint '{}' has a fixed matrix and cannot be turned", source.Nodes[joint].Name));
+		return {};
 	}
 
 }

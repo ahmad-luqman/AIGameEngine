@@ -1546,6 +1546,7 @@ function BasaltScript:StopAllCoroutines() end
 ---@field MaxStrength number
 ---@field Mass number
 ---@field GravityFactor number
+---@field JumpGrace number
 ---@field Layer string
 
 ---Script data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.

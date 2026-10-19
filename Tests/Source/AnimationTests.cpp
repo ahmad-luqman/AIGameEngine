@@ -2531,41 +2531,68 @@ TEST_SUITE("Animation")
 
 	TEST_CASE("Character gameplay movement fills in while root motion fades in and out")
 	{
-		ClearAssetCache clear;
 		TempProject project("RootShare");
-		Scene scene;
-		auto graph = StateGraph();
-		graph["States"][0]["Clip"] = "Step"; // The same 1 m/s clip, without root motion in Idle.
-		graph["Transitions"][1]["Duration"] = 1.0;
-		graph["Transitions"].push_back({ { "From", "Walk" }, { "To", "Idle" }, { "Duration", 1 }, { "Conditions", json::array({ { { "Parameter", "Speed" }, { "Operator", "Less" }, { "Value", 0.5 } } }) } });
-		auto rig = GraphAnimator(scene, project, graph);
-		rig.AddComponent<CharacterControllerComponent>().GravityFactor = 0;
-		rig.AddComponent<CapsuleColliderComponent>();
-		scene.OnSimulationStart();
-		auto& animation = *scene.GetAnimationSystem();
-		scene.GetPhysicsWorld()->MoveCharacter(rig, { 2, 0, 0 });
-		const auto run = [&](int frames) {
-			const float start = RootX(rig);
-			for (int i = 0; i < frames; i++)
-				scene.OnUpdate(Step);
-			return RootX(rig) - start;
+		const auto setup = [&](Scene& scene, float duration) {
+			auto graph = StateGraph();
+			graph["States"][0]["Clip"] = "Step"; // The same 1 m/s clip, without root motion in Idle.
+			graph["Transitions"][1]["Duration"] = duration;
+			graph["Transitions"].push_back({ { "From", "Walk" }, { "To", "Idle" }, { "Duration", duration }, { "Conditions", json::array({ { { "Parameter", "Speed" }, { "Operator", "Less" }, { "Value", 0.5 } } }) } });
+			auto rig = GraphAnimator(scene, project, graph);
+			rig.AddComponent<CharacterControllerComponent>().GravityFactor = 0;
+			rig.AddComponent<CapsuleColliderComponent>();
+			scene.OnSimulationStart();
+			scene.GetPhysicsWorld()->MoveCharacter(rig, { 2, 0, 0 });
+			return rig;
 		};
-		// Idle: gameplay movement alone (2 m/s).
-		CHECK(run(30) == doctest::Approx(1.0f).epsilon(0.01));
-		// Fading into Walk over a second, root motion's share grows from 0 to 1 and gameplay movement fills in the rest:
-		// on average half of each, 0.5 * 1 + 0.5 * 2 m.
-		REQUIRE(animation.SetParameter(rig, "Speed", 1.0f));
-		CHECK(run(60) == doctest::Approx(1.5f).epsilon(0.02));
-		// Walk alone: its 1 m/s replaces gameplay movement.
-		CHECK(run(60) == doctest::Approx(1.0f).epsilon(0.01));
-		// Fading back out.
-		REQUIRE(animation.SetParameter(rig, "Speed", 0.0f));
-		CHECK(run(60) == doctest::Approx(1.5f).epsilon(0.02));
-		CHECK(run(30) == doctest::Approx(1.0f).epsilon(0.01));
-		scene.OnSimulationStop();
+		{
+			// Each block writes its own graph to the same path.
+			ClearAssetCache clear;
+			Scene scene;
+			auto rig = setup(scene, 1.0f);
+			auto& animation = *scene.GetAnimationSystem();
+			const auto run = [&](int frames) {
+				const float start = RootX(rig);
+				for (int i = 0; i < frames; i++)
+					scene.OnUpdate(Step);
+				return RootX(rig) - start;
+			};
+			// Idle: gameplay movement alone (2 m/s).
+			CHECK(run(30) == doctest::Approx(1.0f).epsilon(0.01));
+			// Fading into Walk over a second, root motion owns its weight w of the movement and gameplay movement the rest:
+			// 2 - w m/s, so 0.875 m over the first half second and 0.625 m over the second (a share running the other way
+			// would give 0.375 then 1.125).
+			REQUIRE(animation.SetParameter(rig, "Speed", 1.0f));
+			CHECK(run(30) == doctest::Approx(0.875f).epsilon(0.03));
+			CHECK(run(30) == doctest::Approx(0.625f).epsilon(0.03));
+			// Walk alone: its 1 m/s replaces gameplay movement.
+			CHECK(run(60) == doctest::Approx(1.0f).epsilon(0.01));
+			// Fading back out mirrors it.
+			REQUIRE(animation.SetParameter(rig, "Speed", 0.0f));
+			CHECK(run(30) == doctest::Approx(0.625f).epsilon(0.03));
+			CHECK(run(30) == doctest::Approx(0.875f).epsilon(0.03));
+			CHECK(run(30) == doctest::Approx(1.0f).epsilon(0.01));
+			scene.OnSimulationStop();
+		}
+		{
+			// A 0.15 s fade into Walk in 0.1 s frames ends halfway through the second frame: that frame shares the fade's
+			// half (weight 0.83 on average) and the incoming state owns the rest, 0.05 * (2 - 0.833) + 0.05 * 1 = 0.108 m
+			// (without the tail's own share it would be 0.125 m, with gameplay movement filling the tail 0.158 m).
+			ClearAssetCache clear;
+			Scene scene;
+			auto rig = setup(scene, 0.15f);
+			auto& animation = *scene.GetAnimationSystem();
+			REQUIRE(animation.SetParameter(rig, "Speed", 1.0f));
+			float start = RootX(rig);
+			scene.OnUpdate(0.1f);
+			CHECK(RootX(rig) - start == doctest::Approx(0.1f * (2 - 1.0f / 3)).epsilon(0.03));
+			start = RootX(rig);
+			scene.OnUpdate(0.1f);
+			CHECK(RootX(rig) - start == doctest::Approx(0.05f * (2 - 5.0f / 6) + 0.05f).epsilon(0.03));
+			scene.OnSimulationStop();
+		}
 	}
 
-	TEST_CASE("Queued root motion shares horizontal movement with MoveCharacter and averages over frames without steps")
+	TEST_CASE("Queued root motion shares horizontal movement with MoveCharacter, weighted by time")
 	{
 		Scene scene;
 		auto character = scene.CreateEntity("Character");
@@ -2574,25 +2601,76 @@ TEST_SUITE("Animation")
 		scene.OnSimulationStart();
 		auto* physics = scene.GetPhysicsWorld();
 		physics->MoveCharacter(character, { 2, 1, 0 });
-		// A quarter of the horizontal movement is root motion (1 m/s), the rest gameplay movement; the vertical part
-		// is gameplay movement's in full.
-		physics->QueueRootMotion(character, glm::vec3(1, 5, 0) * Step, 0.25f);
+		const auto moved = [&](auto&& queue) {
+			const float before = RootX(character);
+			queue();
+			return RootX(character) - before;
+		};
+		// Root motion owns a quarter: its 1 m/s applies in full, plus three quarters of the 2 m/s gameplay request; the
+		// vertical part is gameplay movement's in full.
+		const float y = character.GetComponent<TransformComponent>().Translation.y;
+		CHECK(moved([&] {
+				  physics->QueueRootMotion(character, glm::vec3(1, 5, 0) * Step, 0.25f, Step);
+				  physics->Step(Step);
+			  }) == doctest::Approx((1 + 0.75f * 2) * Step));
+		CHECK(character.GetComponent<TransformComponent>().Translation.y - y == doctest::Approx(Step));
+		// Frames queued before one step weigh their shares by their durations: a quarter of the time at share 0 and three
+		// quarters at share 1 make 0.75. Without durations both frames weigh the same (0.5).
+		CHECK(moved([&] {
+				  physics->QueueRootMotion(character, glm::vec3(0.25f, 0, 0) * Step, 0.0f, Step / 4);
+				  physics->Step(Step / 4);
+				  physics->QueueRootMotion(character, glm::vec3(0.75f, 0, 0) * Step, 1.0f, Step * 3 / 4);
+				  physics->Step(Step * 3 / 4);
+			  }) == doctest::Approx((1 + 0.25f * 2) * Step));
+		CHECK(moved([&] {
+				  physics->QueueRootMotion(character, glm::vec3(0.5f, 0, 0) * Step, 0.0f);
+				  physics->Step(Step / 2);
+				  physics->QueueRootMotion(character, glm::vec3(0.5f, 0, 0) * Step, 1.0f);
+				  physics->Step(Step / 2);
+			  }) == doctest::Approx((1 + 0.5f * 2) * Step));
+		// A frame without displacement (an idle root-motion clip) still owns its share until the step.
+		CHECK(moved([&] {
+				  physics->QueueRootMotion(character, glm::vec3(0), 1.0f, Step / 2);
+				  physics->Step(Step / 2);
+				  physics->QueueRootMotion(character, glm::vec3(0), 1.0f, Step / 2);
+				  physics->Step(Step / 2);
+			  }) == doctest::Approx(0).scale(1));
+		// Out-of-range shares clamp; a non-finite one is logged once and counts as root motion owning everything.
+		CHECK(moved([&] {
+				  physics->QueueRootMotion(character, glm::vec3(1, 0, 0) * Step, 2.0f);
+				  physics->Step(Step);
+			  }) == doctest::Approx(Step));
+		CHECK(moved([&] {
+				  physics->QueueRootMotion(character, glm::vec3(1, 0, 0) * Step, -1.0f);
+				  physics->Step(Step);
+			  }) == doctest::Approx(3 * Step));
+		const auto since = Log::GetHistory().GetTotalCount();
+		for (int i = 0; i < 2; i++)
+			CHECK(moved([&] {
+					  physics->QueueRootMotion(character, glm::vec3(1, 0, 0) * Step, std::numeric_limits<float>::quiet_NaN());
+					  physics->Step(Step);
+				  }) == doctest::Approx(Step));
+		CHECK(CountLogMessages(since, "root motion share must be finite; using 1") == 1);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("A character that could not be built drops its queued share with its displacement")
+	{
+		Scene scene;
+		auto character = scene.CreateEntity("Character");
+		character.AddComponent<CharacterControllerComponent>().GravityFactor = 0;
+		scene.OnSimulationStart();
+		auto* physics = scene.GetPhysicsWorld();
+		// No collider: nothing is built, and the queued share 0 goes with the displacement.
+		physics->QueueRootMotion(character, glm::vec3(1, 0, 0) * Step, 0.0f, Step);
 		physics->Step(Step);
-		CHECK(RootX(character) == doctest::Approx((1 + 0.75f * 2) * Step));
-		CHECK(character.GetComponent<TransformComponent>().Translation.y == doctest::Approx(Step));
-		// Two half frames queue before one step: their shares (0 and 1) average to a half.
+		character.AddComponent<CapsuleColliderComponent>();
+		physics->Step(Step);
+		physics->MoveCharacter(character, { 2, 0, 0 });
 		const float before = RootX(character);
-		physics->QueueRootMotion(character, glm::vec3(0.5f, 0, 0) * Step, 0.0f);
-		physics->Step(Step / 2);
-		CHECK(RootX(character) == before);
-		physics->QueueRootMotion(character, glm::vec3(0.5f, 0, 0) * Step, 1.0f);
-		physics->Step(Step / 2);
-		CHECK(RootX(character) - before == doctest::Approx((1 + 0.5f * 2) * Step));
-		// Out-of-range shares clamp; a non-finite one counts as root motion owning everything.
-		const float clamped = RootX(character);
-		physics->QueueRootMotion(character, glm::vec3(1, 0, 0) * Step, std::numeric_limits<float>::quiet_NaN());
+		physics->QueueRootMotion(character, glm::vec3(1, 0, 0) * Step, 1.0f, Step);
 		physics->Step(Step);
-		CHECK(RootX(character) - clamped == doctest::Approx(Step));
+		CHECK(RootX(character) - before == doctest::Approx(Step));
 		scene.OnSimulationStop();
 	}
 

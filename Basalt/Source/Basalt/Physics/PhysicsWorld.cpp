@@ -507,18 +507,13 @@ namespace Basalt {
 		}
 		for (auto& [id, character] : impl.Characters)
 		{
-			character.RootMotionVelocity.reset();
+			character.RootMotion.reset();
 			if (auto it = impl.RootMotion.find(id); plannedSteps > 0 && it != impl.RootMotion.end())
 			{
 				auto& request = it->second;
-				if (request.Active || request.Pending != glm::vec3(0))
-				{
-					character.RootMotionVelocity = request.Pending / (fixedStep * static_cast<float>(plannedSteps));
-					character.RootMotionShare = request.Frames > 0 ? request.ShareSum / static_cast<float>(request.Frames) : 1.0f;
-				}
-				request.Pending = glm::vec3(0);
-				request.ShareSum = 0;
-				request.Frames = 0;
+				if (request.Active || request.HasQueued())
+					character.RootMotion = Impl::CharacterRecord::RootMotionDrive{ .Velocity = request.Pending / (fixedStep * static_cast<float>(plannedSteps)), .Share = request.Time > 0 ? request.ShareTime / request.Time : 1.0f };
+				request.ClearQueued();
 			}
 		}
 		// Active is a one-frame override, including zero-motion frames. Pending displacement survives
@@ -533,19 +528,18 @@ namespace Basalt {
 				it = impl.RootMotion.erase(it);
 				continue;
 			}
-			if (!built && (request.Active || request.Pending != glm::vec3(0)))
+			if (!built && (request.Active || request.HasQueued()))
 			{
 				if (!request.UnbuiltReported)
 					BS_CORE_ERROR("Physics: character '{}' could not be built; discarding queued root motion translation", entity.GetName());
 				request.UnbuiltReported = true;
-				request.Pending = glm::vec3(0);
-				request.ShareSum = 0;
-				request.Frames = 0;
+				request.ClearQueued();
 			}
 			else if (built)
 				request.UnbuiltReported = false;
 			request.Active = false;
-			if (built && request.Pending == glm::vec3(0) && !request.InvalidReported)
+			// Reported problems keep their requests, so a caller repeating them logs once.
+			if (built && !request.HasQueued() && !request.InvalidReported && !request.InvalidShareReported)
 				it = impl.RootMotion.erase(it);
 			else
 				++it;

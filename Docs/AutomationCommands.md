@@ -1452,10 +1452,11 @@ Sets mouse position and/or a button state for play mode. Recorded while replay r
 
 ### `log.get`
 
-Returns engine log messages logged after index 'since'.
+Returns engine log messages logged after index 'since'. With assertNoWarnings the command fails when one of them is a warning or worse, naming them.
 
 | Parameter | Type / description |
 |-----------|--------------------|
+| `assertNoWarnings` | bool: fail the command when a message since 'since' is a warning or worse |
 | `errorsOnly` | bool |
 | `since` | integer, cursor from a previous call (default 0) |
 
@@ -1465,6 +1466,18 @@ Returns engine log messages logged after index 'since'.
 {
   "additionalProperties": false,
   "properties": {
+    "assertNoWarnings": {
+      "anyOf": [
+        {
+          "description": "bool: fail the command when a message since 'since' is a warning or worse",
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "bool: fail the command when a message since 'since' is a warning or worse"
+    },
     "errorsOnly": {
       "anyOf": [
         {
@@ -2737,14 +2750,31 @@ Hash of the current scene state (the play copy while playing); equal states give
 
 ### `scene.info`
 
-Summary of the open scene: name, path, entity count, state, unsaved changes, undefined physics layers, animation authoring warnings and the physics step (fixedTimestep: the step in use; fixedTimestepOverride: the scene's own step, or null).
+Summary of the open scene: name, path, entity count, state, unsaved changes, undefined physics layers, animation authoring warnings and the physics step (fixedTimestep: the step in use; fixedTimestepOverride: the scene's own step, or null). With assertNoAnimationWarnings the command fails when there are animation authoring warnings, naming them.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `assertNoAnimationWarnings` | bool: fail the command when an entity has animation authoring warnings |
 
 <details><summary>Parameter JSON Schema</summary>
 
 ```json
 {
   "additionalProperties": false,
-  "properties": {},
+  "properties": {
+    "assertNoAnimationWarnings": {
+      "anyOf": [
+        {
+          "description": "bool: fail the command when an entity has animation authoring warnings",
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "bool: fail the command when an entity has animation authoring warnings"
+    }
+  },
   "required": [],
   "type": "object"
 }

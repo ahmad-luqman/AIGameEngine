@@ -812,6 +812,7 @@ namespace Basalt {
 			r.Field("MaxStrength", c.MaxStrength);
 			r.Field("Mass", c.Mass);
 			r.Field("GravityFactor", c.GravityFactor);
+			r.Field("JumpGrace", c.JumpGrace);
 			r.Field("Layer", c.Layer);
 		}
 
@@ -1231,6 +1232,7 @@ namespace Basalt {
 				{ "MaxStrength", c.MaxStrength },
 				{ "Mass", c.Mass },
 				{ "GravityFactor", c.GravityFactor },
+				{ "JumpGrace", c.JumpGrace },
 				{ "Layer", c.Layer },
 			};
 		}
@@ -1599,14 +1601,14 @@ namespace Basalt {
 				}
 				if (chain.ChainLength > SpringChain::MaxChainLength)
 					return fmt::format("Chains[{}].ChainLength {} must be between 0 and {}", i, chain.ChainLength, SpringChain::MaxChainLength);
-				if (!inRange(chain.Stiffness, 0.0f, 10000.0f))
-					return fmt::format("Chains[{}].Stiffness {} must be between 0 and 10000", i, chain.Stiffness);
-				if (!inRange(chain.Damping, 0.0f, 1000.0f))
-					return fmt::format("Chains[{}].Damping {} must be between 0 and 1000", i, chain.Damping);
-				if (!inRange(chain.GravityFactor, -100.0f, 100.0f))
-					return fmt::format("Chains[{}].GravityFactor {} must be between -100 and 100", i, chain.GravityFactor);
-				if (!inRange(chain.Radius, 0.0f, 100.0f))
-					return fmt::format("Chains[{}].Radius {} must be between 0 and 100", i, chain.Radius);
+				if (!inRange(chain.Stiffness, 0.0f, SpringChain::MaxStiffness))
+					return fmt::format("Chains[{}].Stiffness {} must be between 0 and {}", i, chain.Stiffness, SpringChain::MaxStiffness);
+				if (!inRange(chain.Damping, 0.0f, SpringChain::MaxDamping))
+					return fmt::format("Chains[{}].Damping {} must be between 0 and {}", i, chain.Damping, SpringChain::MaxDamping);
+				if (!inRange(chain.GravityFactor, -SpringChain::MaxGravityFactor, SpringChain::MaxGravityFactor))
+					return fmt::format("Chains[{}].GravityFactor {} must be between {} and {}", i, chain.GravityFactor, -SpringChain::MaxGravityFactor, SpringChain::MaxGravityFactor);
+				if (!inRange(chain.Radius, 0.0f, SpringChain::MaxRadius))
+					return fmt::format("Chains[{}].Radius {} must be between 0 and {}", i, chain.Radius, SpringChain::MaxRadius);
 				if (!inRange(chain.Weight, 0.0f, 1.0f))
 					return fmt::format("Chains[{}].Weight {} must be between 0 and 1", i, chain.Weight);
 			}
@@ -1615,10 +1617,10 @@ namespace Basalt {
 				const SpringCollider& collider = c.Colliders[i];
 				if (!Math::IsFinite(collider.Offset))
 					return fmt::format("Colliders[{}].Offset must be finite", i);
-				if (!inRange(collider.Radius, 0.0f, 100.0f))
-					return fmt::format("Colliders[{}].Radius {} must be between 0 and 100", i, collider.Radius);
-				if (!inRange(collider.HalfHeight, 0.0f, 100.0f))
-					return fmt::format("Colliders[{}].HalfHeight {} must be between 0 and 100", i, collider.HalfHeight);
+				if (!inRange(collider.Radius, 0.0f, SpringCollider::MaxSize))
+					return fmt::format("Colliders[{}].Radius {} must be between 0 and {}", i, collider.Radius, SpringCollider::MaxSize);
+				if (!inRange(collider.HalfHeight, 0.0f, SpringCollider::MaxSize))
+					return fmt::format("Colliders[{}].HalfHeight {} must be between 0 and {}", i, collider.HalfHeight, SpringCollider::MaxSize);
 			}
 			return {};
 		}

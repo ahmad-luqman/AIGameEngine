@@ -324,6 +324,50 @@ TEST_SUITE("Physics")
 		}
 	}
 
+	TEST_CASE("JumpGrace lets an upward Move jump once just after walking off a ledge")
+	{
+		for (const float grace : { 0.0f, 0.25f })
+		{
+			CAPTURE(grace);
+			Scene scene;
+			CreateGround(scene);
+			// A 2 m high ledge whose edge is at x = 2.
+			CreateStaticBox(scene, "Ledge", { 0.0f, 1.0f, 0.0f }, { 2.0f, 1.0f, 5.0f });
+			Entity character = CreateCharacter(scene, { 0.0f, 2.0f + StandingHeight, 0.0f });
+			character.GetComponent<CharacterControllerComponent>().JumpGrace = grace;
+			scene.OnSimulationStart();
+			PhysicsWorld& physics = *scene.GetPhysicsWorld();
+			Simulate(scene, 0.25f);
+			REQUIRE(physics.IsCharacterGrounded(character));
+			physics.MoveCharacter(character, { 4.0f, 0.0f, 0.0f });
+			for (int frame = 0; frame < 120 && physics.IsCharacterGrounded(character); frame++)
+				scene.OnUpdate(Step);
+			REQUIRE_FALSE(physics.IsCharacterGrounded(character));
+			// A tenth of a second after walking off, an upward request jumps only with a grace that long.
+			Simulate(scene, 0.1f);
+			const float before = Position(character).y;
+			physics.MoveCharacter(character, { 4.0f, 5.0f, 0.0f });
+			Simulate(scene, 2.0f * Step);
+			const float rising = physics.GetLinearVelocity(character).y;
+			// Still within the grace and still asking to go up: no second jump.
+			Simulate(scene, 4.0f * Step);
+			CHECK(physics.GetLinearVelocity(character).y < rising);
+			physics.MoveCharacter(character, { 4.0f, 0.0f, 0.0f });
+			Simulate(scene, 0.2f);
+			if (grace > 0)
+			{
+				CHECK(rising > 4.0f);
+				CHECK(Position(character).y > before + 0.4f);
+			}
+			else
+			{
+				CHECK(rising < 0.0f);
+				CHECK(Position(character).y < before);
+			}
+			scene.OnSimulationStop();
+		}
+	}
+
 	TEST_CASE("Without gravity the Move velocity applies on every axis")
 	{
 		Scene scene;
@@ -603,6 +647,7 @@ TEST_SUITE("Physics")
 		controller.StepHeight = -1.0f;
 		controller.MaxStrength = -5.0f;
 		controller.Mass = -1.0f;
+		controller.JumpGrace = -1.0f;
 		controller.Layer = "Nowhere";
 
 		const uint64_t since = Log::GetHistory().GetTotalCount();
@@ -616,6 +661,7 @@ TEST_SUITE("Physics")
 		CHECK(BasaltTest::CountLogMessages(since, "StepHeight -1") == 1);
 		CHECK(BasaltTest::CountLogMessages(since, "MaxStrength -5") == 1);
 		CHECK(BasaltTest::CountLogMessages(since, "Mass -1") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "JumpGrace -1 must be within [0, 10] seconds; using 0") == 1);
 		CHECK(BasaltTest::CountLogMessages(since, "unknown physics layer 'Nowhere'") == 1);
 
 		// Fixing a value logs the remaining problems once more.
