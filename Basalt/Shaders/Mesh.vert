@@ -13,6 +13,7 @@ layout(location = 0) out vec3 v_WorldPosition;
 layout(location = 1) out vec3 v_Normal;
 layout(location = 2) out vec4 v_Tangent;
 layout(location = 3) out vec2 v_TexCoord;
+// x: material index, y: pick token. Fragment shaders cannot use gl_InstanceIndex to fetch their record.
 layout(location = 4) flat out uvec2 v_InstanceIndices;
 
 // The depth prepass and the lighting pass must produce bit-identical depth.

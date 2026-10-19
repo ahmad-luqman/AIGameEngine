@@ -198,9 +198,9 @@ the frame at four storage-buffer bindings and supports independent instances wit
 asset data. Mesh nodes sharing a skin reuse one palette per instance, uploaded only if a camera or shadow
 pass needs it; `render.stats.skinMatrices` reports the uploaded matrix count. Vertex stride is 80 bytes for both rigid and skinned geometry. Palette upload storage grows
 with demand and uses nvrhi resource lifetime tracking; allocation failure fails the frame explicitly.
-Exact submesh bounds are computed on the CPU from the current palette for camera and shadow culling.
-This adds work proportional to animated vertex count, in addition to GPU skinning; large crowds would
-benefit from cached joint influence bounds or GPU culling.
+Camera and shadow culling transform cached joint influence bounds in O(influencing joints); see
+Draw throughput below. Exact per-vertex posed bounds remain for editor framing/selection and as
+the reference/fallback for geometry without cached influences.
 
 Import rejects malformed weights/joints, invalid track shapes/times/quaternions, cyclic hierarchies,
 animated matrix nodes and duplicate node/path targets. Unsupported morph-weight and pointer channels
@@ -315,7 +315,9 @@ pools on the constructing thread after producers stop. Shutdown drains accepted 
 Physics uses Jolt barriers/dependencies on this pool. The Jolt adapter lives until engine shutdown,
 so stopping a world does not join unrelated asset jobs; queued references to completed physics jobs
 remain valid until the pool releases them. Process exit waits for all submitted pool work, including
-imports. Animation and culling can use the same range API for future crowd work; evaluation is serial.
+imports. Animation samples due poses through `ParallelFor` for crowds (32 or more due playbacks,
+ranges of 16). Control, asset resolution, clocks, events and root motion run on the main thread;
+pose work joins before physics and late animation passes. Culling remains serial.
 
 `AssetManager::RequestMesh/RequestTexture` deduplicate CPU loads and decode on this pool. Requests
 return the published source or null; `IsLoading` distinguishes pending requests from cached failures.
@@ -403,16 +405,21 @@ are separate from deterministic unit tests.
 ## Draw throughput
 
 Compatible opaque mesh instances share indexed GPU draws in the depth/normal/ID, lighting,
-and directional/local shadow passes. A structured buffer holds each instance's model and normal
-matrices, material constants, pick token and independent skin palette offset. Texture bindings,
-geometry range, alpha-test state and sidedness split batches. Each pass filters camera/shadow
+and directional/local shadow passes. The draw buffer holds each instance's model and normal
+matrices, material-buffer index, pick token and independent skin palette offset/count. Material
+constants live in a separate buffer; palettes precede the contiguous instance records in the draw
+buffer. Vertex shaders use `DrawIndex + gl_InstanceIndex` with `startInstanceLocation` fixed at zero.
+Batch keys group in deterministic first-appearance order. Texture bindings, geometry range, alpha-test state and sidedness split batches. Each pass filters camera/shadow
 visibility before forming contiguous instance ranges. Blended meshes and particle emitters keep
-their existing stable back-to-front ordering and individual draws.
+their stable back-to-front ordering and individual draws.
 
 `render.stats.drawCalls` counts submitted color draws; `instances` counts color mesh instances
 (excludes particle billboards), and `triangles` counts all rendered color triangles. These counters
 allow benchmark workload guards to detect missing objects even as draw counts decrease.
 `SceneRenderer::SetInstancingEnabled(false)` provides a reference path for image equivalence and
-throughput checks. Skin culling uses immutable per-submesh joint influence bounds cached at import;
-posing bounds costs O(influencing joints), with conservative bounds covering weighted vertices,
-nonuniform scale and mirrored transforms. Exact CPU skin bounds remain available for verification.
+throughput checks. Shared asset keys resolve once per update/frame; edits and reloads are observed
+on the next update/render, while direct playback operations resolve fresh handles.
+Skin culling uses immutable per-submesh joint influence bounds built by `AddSubmesh` during import
+or procedural creation. Posing bounds costs O(influencing joints), with conservative bounds covering
+weighted vertices, nonuniform scale and mirrored transforms. Exact CPU skin bounds remain in use for
+editor focus/selection, uncached geometry and verification.

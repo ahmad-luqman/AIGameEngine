@@ -47,7 +47,10 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 			for (const auto& node : source->Nodes)
 				if (node.Active && node.MeshIndex >= 0 && node.SkinIndex >= 0 && !palettes[node.SkinIndex].empty())
 					for (uint32_t submesh : source->Meshes[node.MeshIndex].Submeshes)
+					{
 						Basalt::SkinBounds(*source, source->Submeshes[submesh], palettes[node.SkinIndex]);
+						Basalt::CachedSkinBounds(*source, source->Submeshes[submesh], palettes[node.SkinIndex]);
+					}
 		}
 	return 0;
 }

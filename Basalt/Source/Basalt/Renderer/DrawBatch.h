@@ -6,8 +6,9 @@
 
 namespace Basalt {
 
-	// State shared by instances of an indexed mesh draw. Per-instance transforms, palettes,
-	// material constants and pick IDs stay in the draw buffer and need not match.
+	// State shared by instances of an indexed mesh draw. Model/normal matrices, material index,
+	// pick token and palette offset/count vary per instance. Non-owning identity pointers keep
+	// this key independent of GPU headers; std::less gives them a total order for key lookup.
 	struct DrawBatchKey
 	{
 		const void* Mesh = nullptr;
@@ -30,7 +31,7 @@ namespace Basalt {
 		}
 	};
 
-	// Contiguous draw records are required because shaders address firstDraw + gl_InstanceIndex.
+	// Contiguous draw records and startInstanceLocation == 0 are required: shaders use firstDraw + gl_InstanceIndex.
 	inline bool CanInstanceDraw(const DrawBatchKey& first, uint32_t firstDraw, uint32_t count, const DrawBatchKey& next, uint32_t nextDraw)
 	{
 		return first == next && static_cast<uint64_t>(firstDraw) + count == nextDraw;

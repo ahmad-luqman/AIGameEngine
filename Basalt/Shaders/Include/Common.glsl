@@ -80,6 +80,8 @@ layout(std430, set = 0, binding = 14) readonly buffer LocalShadowBuffer
 
 layout(push_constant) uniform DrawPush
 {
+	// First mesh-instance record: DrawIndex + gl_InstanceIndex (firstInstance is zero).
+	// Particle draws reuse this as the first particle instead.
 	uint DrawIndex;
 	uint ShadowViewIndex; // [0, MAX_CASCADES) selects a cascade; later indices select atlas maps.
 } u_Push;

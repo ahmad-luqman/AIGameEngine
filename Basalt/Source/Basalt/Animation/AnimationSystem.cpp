@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
 #include <functional>
 #include <limits>
 #include <utility>
@@ -235,7 +236,7 @@ namespace Basalt {
 		return fmt::format("{}", fmt::join(problems, "; "));
 	}
 
-	AnimationSystem::Playback* AnimationSystem::Ensure(Entity entity)
+	AnimationSystem::Playback* AnimationSystem::Ensure(Entity entity, const ResolvedAssets* assets)
 	{
 		const auto* component = entity ? entity.TryGetComponent<AnimatorComponent>() : nullptr;
 		if (!component)
@@ -248,7 +249,7 @@ namespace Basalt {
 			return nullptr;
 		}
 		m_EmptyMeshes.erase(entity);
-		auto source = AssetManager::GetMesh(component->Mesh);
+		auto source = assets ? assets->Source : AssetManager::GetMesh(component->Mesh);
 		if (!source || source->AnimationUnsupported)
 		{
 			m_Playback.erase(entity.GetUUID());
@@ -256,7 +257,7 @@ namespace Basalt {
 		}
 		auto [it, inserted] = m_Playback.try_emplace(entity.GetUUID());
 		auto& playback = it->second;
-		const auto graph = AssetManager::GetAnimationGraph(component->StateMachine);
+		const auto graph = component->StateMachine.empty() ? nullptr : (assets ? assets->Graph : AssetManager::GetAnimationGraph(component->StateMachine));
 		if (inserted || playback.Graph != graph || playback.ConfiguredGraph != component->StateMachine || playback.Handle != static_cast<entt::entity>(entity) || playback.Source != source || playback.ConfiguredClip != component->Clip)
 		{
 			playback = {};
@@ -541,13 +542,24 @@ namespace Basalt {
 		{
 			if (!playback.InvalidPose)
 				BS_CORE_ERROR("Animator '{}': non-finite evaluated pose; displaying rest pose", playback.EntityName);
-			playback.Local = SampleAnimation(source, nullptr, 0);
-			playback.Pose = playback.Local;
-			playback.IKOverlay.clear();
-			playback.SpringOverlay.clear();
-			ComposeAnimationPose(source, playback.Local, playback.Globals);
+			RestoreRestPose(playback);
 		}
 		playback.InvalidPose = !valid;
+	}
+
+	void AnimationSystem::RestoreRestPose(Playback& playback)
+	{
+		const MeshSource& source = *playback.Source;
+		playback.Local.Nodes.resize(source.Nodes.size());
+		for (size_t i = 0; i < source.Nodes.size(); ++i)
+		{
+			const auto& node = source.Nodes[i];
+			playback.Local.Nodes[i] = { node.Translation, node.Rotation, node.Scale };
+		}
+		playback.Pose = playback.Local;
+		playback.IKOverlay.clear();
+		playback.SpringOverlay.clear();
+		ComposeAnimationPose(source, playback.Local, playback.Globals);
 	}
 
 	void AnimationSystem::Update(Timestep timestep, bool runLateUpdate)
@@ -564,16 +576,36 @@ namespace Basalt {
 		std::optional<glm::vec3> cameraPosition;
 		if (Entity camera = m_Scene.GetPrimaryCameraEntity())
 			cameraPosition = m_Scene.GetWorldTransform(camera)[3];
+		// Resolving a shared model or graph once avoids repeated project/path checks for crowds.
+		// These maps end with the update: edits and reloads are observed again next update.
+		std::unordered_map<std::string, Ref<MeshSource>> sources;
+		std::unordered_map<std::string, Ref<const AnimationGraph>> graphs;
 		for (auto handle : m_Scene.GetAllEntitiesWith<AnimatorComponent>())
 		{
 			Entity entity(handle, &m_Scene);
-			auto* playback = Ensure(entity);
+			const auto& component = entity.GetComponent<AnimatorComponent>();
+			auto [source, firstSource] = sources.try_emplace(component.Mesh);
+			if (firstSource && !component.Mesh.empty())
+				source->second = AssetManager::GetMesh(component.Mesh);
+			Ref<const AnimationGraph> graph;
+			if (source->second && !source->second->AnimationUnsupported && !component.StateMachine.empty())
+			{
+				auto [entry, firstGraph] = graphs.try_emplace(component.StateMachine);
+				if (firstGraph)
+					entry->second = AssetManager::GetAnimationGraph(component.StateMachine);
+				graph = entry->second;
+			}
+			const ResolvedAssets assets{ source->second, graph };
+			auto* playback = Ensure(entity, &assets);
 			if (!playback)
 				continue;
-			const auto& component = entity.GetComponent<AnimatorComponent>();
+			const bool invalidLOD = !std::isfinite(component.LODDistance) || component.LODDistance < 0 || component.LODInterval < 1 || component.LODInterval > AnimatorComponent::MaxLODInterval;
+			if (invalidLOD && !playback->InvalidLOD)
+				BS_CORE_WARN("Animator '{}': invalid LODDistance {} or LODInterval {}; disabling invalid distance and clamping interval to [1, {}]", playback->EntityName, component.LODDistance, component.LODInterval, AnimatorComponent::MaxLODInterval);
+			playback->InvalidLOD = invalidLOD;
 			const bool distant = cameraPosition && std::isfinite(component.LODDistance) && component.LODDistance > 0 &&
 								 glm::distance(*cameraPosition, glm::vec3(m_Scene.GetWorldTransform(entity)[3])) > component.LODDistance;
-			const uint32_t interval = distant ? std::clamp(component.LODInterval, 1u, 60u) : 1u;
+			const uint32_t interval = distant ? std::clamp(component.LODInterval, 1u, AnimatorComponent::MaxLODInterval) : 1u;
 			const bool evaluatePose = playback->LODFrame == 0 || playback->LODFrame >= interval || seconds == 0;
 			playback->LODFrame = seconds == 0 ? 0u : (evaluatePose ? 1u : playback->LODFrame + 1u);
 			if (component.MatchVelocity && seconds > 0)
@@ -620,7 +652,7 @@ namespace Basalt {
 			if (!baseAdvances)
 			{
 				if (layered && evaluatePose)
-					m_PoseJobs.emplace_back(playback, false);
+					m_PoseJobs.push_back({ playback, false });
 				continue;
 			}
 			const bool invalidSpeed = !std::isfinite(component.Speed) || component.Speed < 0 || component.Speed > MaxAnimatorSpeed;
@@ -702,25 +734,44 @@ namespace Basalt {
 				(playback->Outgoing.Clip < 0 || playback->Outgoing.Time >= playback->Source->Animations[playback->Outgoing.Clip].Duration))
 				playback->Playing = false;
 			if (evaluatePose || !playback->Playing)
-				m_PoseJobs.emplace_back(playback, true);
+				m_PoseJobs.push_back({ playback, true });
 		}
 		const auto evaluate = [&](uint32_t begin, uint32_t end) {
 			for (uint32_t i = begin; i < end; ++i)
 			{
-				auto [playback, sample] = m_PoseJobs[i];
-				if (sample)
-					Evaluate(*playback);
-				else
-					Finish(*playback);
+				const PoseJob& job = m_PoseJobs[i];
+				try
+				{
+					if (job.Sample)
+						Evaluate(*job.Target);
+					else
+						Finish(*job.Target);
+				}
+				catch (const std::exception& error)
+				{
+					if (!job.Target->InvalidPose)
+						BS_CORE_ERROR("Animator '{}': pose evaluation failed: {}; displaying rest pose", job.Target->EntityName, error.what());
+					RestoreRestPose(*job.Target);
+					job.Target->InvalidPose = true;
+				}
+				catch (...)
+				{
+					if (!job.Target->InvalidPose)
+						BS_CORE_ERROR("Animator '{}': pose evaluation failed: unknown exception; displaying rest pose", job.Target->EntityName);
+					RestoreRestPose(*job.Target);
+					job.Target->InvalidPose = true;
+				}
 			}
 		};
-		// Small scenes avoid queue overhead. Workers touch only their playback and immutable model data;
-		// no registry, asset cache, physics, callbacks or pending event storage is accessed here.
-		if (m_PoseJobs.size() < 32)
+		// Small scenes avoid queue overhead. Workers write only their playback against immutable models.
+		// Their shared side effect is logging: history is thread-safe, and listeners can run on workers.
+		constexpr uint32_t MinParallelPoseJobs = 32, PoseJobGrain = 16;
+		if (m_PoseJobs.size() < MinParallelPoseJobs)
 			evaluate(0, static_cast<uint32_t>(m_PoseJobs.size()));
-		else if (!JobSystem::Get().ParallelFor(static_cast<uint32_t>(m_PoseJobs.size()), 16, evaluate))
+		else if (!JobSystem::Get().ParallelFor(static_cast<uint32_t>(m_PoseJobs.size()), PoseJobGrain, evaluate))
 		{
-			BS_CORE_ERROR("AnimationSystem: pose jobs failed; rebuilding poses synchronously");
+			// Every accepted range has joined. Rebuilding from clocks is idempotent, so completed jobs can retry too.
+			BS_CORE_ERROR("AnimationSystem: pose job scheduling failed; retrying synchronously");
 			evaluate(0, static_cast<uint32_t>(m_PoseJobs.size()));
 		}
 		if (runLateUpdate)

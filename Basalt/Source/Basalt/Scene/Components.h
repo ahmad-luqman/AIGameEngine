@@ -204,6 +204,7 @@ namespace Basalt {
 		static constexpr uint32_t MaxBlendSpaces = 32;
 		static constexpr uint32_t MaxBlendSamples = 64;
 		static constexpr uint32_t MaxLayers = 16;
+		static constexpr uint32_t MaxLODInterval = 60;
 
 		std::string Mesh;
 		// Empty selects the first clip. May name a blend space (a clip of the same name wins).

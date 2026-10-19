@@ -32,7 +32,7 @@ namespace Basalt {
 	struct SceneRendererStatistics
 	{
 		uint32_t DrawCalls = 0;
-		uint32_t Instances = 0; // Color-pass mesh instances, independent of batching.
+		uint32_t Instances = 0; // Color-pass mesh instances, independent of batching; excludes particles.
 		uint32_t ShadowDrawCalls = 0;
 		// Triangles submitted in the color pass, excluding depth, shadows and fullscreen passes.
 		uint64_t Triangles = 0;
