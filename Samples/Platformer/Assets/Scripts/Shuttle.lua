@@ -14,8 +14,9 @@ Shuttle.Properties = {
 function Shuttle:OnCreate()
 	self.Hero = Scene.FindEntityByName("Hero")
 	if not self.Hero then error("Shuttle: the scene has no entity named 'Hero'") end
-	if not (self.Duration > 0) or not (self.Wait >= 0) then
-		error("Shuttle '" .. self.Entity.Name .. "': Duration must be positive and Wait nonnegative")
+	local function finite(value) return value == value and math.abs(value) < math.huge end
+	if not (finite(self.Duration) and self.Duration > 0 and finite(self.Wait) and self.Wait >= 0 and finite(self.TravelX) and finite(self.TravelZ)) then
+		error("Shuttle '" .. self.Entity.Name .. "': Duration must be positive, Wait nonnegative, and both they and TravelX/TravelZ finite")
 	end
 	self.Start = self.Entity.WorldPosition
 	self.Travel = Vec3(self.TravelX, 0, self.TravelZ)

@@ -7,7 +7,9 @@ state machine are built only through the automation API (`build_scene.json`):
 - **Character controller** — `Hero.lua` moves the hero relative to the camera (WASD, the arrow keys or the left
   stick; Shift, the pad's X or the right bumper to run; Space or A to jump) with `Move` and turns it toward the input.
   It jumps on the frame the button is pressed, so holding it never jumps again on landing, and still jumps just after
-  running off a ledge: the controller's `JumpGrace` (coyote time, 0.12 s) takes the upward request once.
+  running off a ledge: the controller's `JumpGrace` (coyote time, 0.12 s) takes the upward request once. The script
+  offers that jump a little less long (`CoyoteMargin`), since the controller counts from the physics step the hero
+  left the ground.
 - **Animation state machine** — `Assets/Animations/Hero.banimgraph` (written with `asset.write`) picks `Locomotion`,
   `Jump`, `Fall` and `Land` from the `Speed`, `Grounded`, `VerticalSpeed` parameters and the `Jump` trigger that the
   script sets every frame.
@@ -56,5 +58,8 @@ authoring warnings, then plays the course with injected keys and a gamepad and c
   hero at the speed those cycles cover, (0.8 · 1.5 m + 0.2 · 2.4 m) / (0.8 · 1 s + 0.2 · 0.6 s) = 1.826 m/s. Retuning
   a clip's stride or duration moves that number.
 
-Every step fails on script errors, the run must log no warnings or errors (engine ones included), and the edit scene
-must be unchanged after play stops.
+- A fall after the checkpoint brings the hero back on the landing.
+
+Every step fails on script errors, the session must log no warnings or errors (engine ones included; the log history
+keeps the last 2048 messages, and `log.get` fails if it already dropped some), and the edit scene must be unchanged
+after play stops.

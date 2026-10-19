@@ -14,7 +14,11 @@ Hero.Properties = {
 	TurnSpeed = 10.0,
 	AirControl = 3.0,
 	-- Take-off speed (m/s): about 1.3 m high under the default gravity.
-	JumpSpeed = 5.0
+	JumpSpeed = 5.0,
+	-- How much earlier (s) than the controller's JumpGrace this script stops offering the coyote jump: the controller
+	-- counts its grace in physics steps from the step the hero left the ground, a step or two before this script
+	-- notices, so without the margin a late press would play the jump while the controller refuses it.
+	CoyoteMargin = 0.035
 }
 
 local Up = Vec3(0, 1, 0)
@@ -32,9 +36,14 @@ end
 function Hero:OnCreate()
 	self.Camera = Scene.FindEntityByName("Camera")
 	if not self.Camera then error("Hero: the scene has no entity named 'Camera'") end
-	-- Coyote time: the controller still jumps this long after walking off a ledge, and the animation waits as long
-	-- before calling it a fall (so a step down a stair is not one).
-	self.CoyoteTime = self.Entity:GetComponent("CharacterController").JumpGrace
+	-- Coyote time: the controller still jumps this long after walking off a ledge (less the margin), and the animation
+	-- waits as long before calling it a fall (so a step down a stair is not one).
+	local controller = self.Entity:GetComponent("CharacterController")
+	if not controller then error("Hero: needs a CharacterController") end
+	if not (controller.JumpGrace >= 0 and controller.JumpGrace <= 10) then
+		error("Hero: CharacterController.JumpGrace must be within [0, 10] seconds, got " .. tostring(controller.JumpGrace))
+	end
+	self.CoyoteTime = math.max(0, controller.JumpGrace - self.CoyoteMargin)
 	self:Respawn(self.Entity.WorldPosition)
 	-- Read by the gameplay test.
 	self.Jumps = 0
@@ -97,7 +106,8 @@ function Hero:OnUpdate(dt)
 	if self.Airborne then
 		self.AirVelocity = self.AirVelocity + (wish * topSpeed - self.AirVelocity) * Ease(self.AirControl, dt)
 		if grounded and self.JumpHold <= 0 then
-			-- Landing keeps the air speed but runs along the facing, which turned toward the input in the air.
+			-- Landing keeps the air speed (up to RunSpeed) but runs along the facing, which turned toward the input in the
+			-- air.
 			self.Airborne = false
 			self.Speed = math.min(self.AirVelocity:Length(), self.RunSpeed)
 		end
@@ -110,7 +120,7 @@ function Hero:OnUpdate(dt)
 	end
 
 	-- Pressed, not held: holding the button never jumps again on landing. Within the coyote time after walking off a
-	-- ledge (not yet Airborne) it still jumps: the controller's JumpGrace takes the upward request once.
+	-- ledge (not yet Airborne) it asks to jump too, and the controller's JumpGrace takes the upward request once.
 	if Input.IsActionPressed("Jump") and not self.Airborne then
 		self:TakeOff(facing)
 		self.JumpHold = 0.1
@@ -120,8 +130,9 @@ function Hero:OnUpdate(dt)
 	local vertical = 0
 	if self.JumpHold > 0 then
 		vertical = self.JumpSpeed
-		-- Rising: the controller took the jump.
-		self.JumpHold = entity:GetLinearVelocity().y > 1 and 0 or self.JumpHold - dt
+		-- Off the ground and rising: the controller took the jump. (A step up a stair also moves the hero up fast, while
+		-- it stays grounded.)
+		self.JumpHold = (not grounded and entity:GetLinearVelocity().y > 1) and 0 or self.JumpHold - dt
 	end
 
 	-- On the ground the Locomotion state's root motion replaces the horizontal part (through a fade into or out of it,
