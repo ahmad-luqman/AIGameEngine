@@ -38,6 +38,10 @@ Fields: `Target` (entity), `Joint` (string), `Translation` (number[3]), `Rotatio
 
 Fields: `Chains` (list of [IKChain](#ikchain), at most 16, unique `Name`), `Pelvis` (string), `RayHeight` (number), `RayDepth` (number), `Smoothing` (number)
 
+## SpringBone
+
+Fields: `Chains` (list of [SpringChain](#springchain), at most 16, unique `Name`), `Colliders` (list of [SpringCollider](#springcollider), at most 32), `Wind` (number[3])
+
 ## Material
 
 Fields: `AlbedoColor` (number[4]), `Metallic` (number), `Roughness` (number), `EmissiveColor` (number[3]), `EmissiveIntensity` (number), `AlbedoMap` (string), `NormalMap` (string), `MetallicRoughnessMap` (string), `OcclusionMap` (string), `EmissiveMap` (string)
@@ -159,4 +163,12 @@ Fields: `Joint` (string), `Weight` (number)
 ### IKChain
 
 Fields: `Name` (string), `Type` (enum: TwoBone, LookAt), `Joint` (string), `ChainLength` (integer), `Axis` (number[3]), `MaxAngle` (number), `Pole` (number[3]), `Ground` (boolean), `Weight` (number)
+
+### SpringChain
+
+Fields: `Name` (string), `Joint` (string), `ChainLength` (integer), `Stiffness` (number), `Damping` (number), `GravityFactor` (number), `Radius` (number), `Weight` (number)
+
+### SpringCollider
+
+Fields: `Joint` (string), `Offset` (number[3]), `Radius` (number), `HalfHeight` (number)
 

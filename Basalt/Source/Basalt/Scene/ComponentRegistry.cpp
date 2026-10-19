@@ -326,6 +326,10 @@ namespace Basalt {
 		json Write(const AnimationMaskJoint& c);
 		json Write(const AnimationLayer& c);
 		json Write(const IKChain& c);
+		void Fields(FieldReader& r, SpringChain& c);
+		void Fields(FieldReader& r, SpringCollider& c);
+		json Write(const SpringChain& c);
+		json Write(const SpringCollider& c);
 
 		// The shape of a list element, built once per element type from its field list.
 		template<typename E>
@@ -590,6 +594,33 @@ namespace Basalt {
 			r.Field("RayHeight", c.RayHeight);
 			r.Field("RayDepth", c.RayDepth);
 			r.Field("Smoothing", c.Smoothing);
+		}
+
+		void Fields(FieldReader& r, SpringChain& c)
+		{
+			r.Field("Name", c.Name);
+			r.Field("Joint", c.Joint);
+			r.Field("ChainLength", c.ChainLength);
+			r.Field("Stiffness", c.Stiffness);
+			r.Field("Damping", c.Damping);
+			r.Field("GravityFactor", c.GravityFactor);
+			r.Field("Radius", c.Radius);
+			r.Field("Weight", c.Weight);
+		}
+
+		void Fields(FieldReader& r, SpringCollider& c)
+		{
+			r.Field("Joint", c.Joint);
+			r.Field("Offset", c.Offset);
+			r.Field("Radius", c.Radius);
+			r.Field("HalfHeight", c.HalfHeight);
+		}
+
+		void Fields(FieldReader& r, SpringBoneComponent& c)
+		{
+			r.ListField("Chains", c.Chains, SpringBoneComponent::MaxChains);
+			r.ListField("Colliders", c.Colliders, SpringBoneComponent::MaxColliders);
+			r.Field("Wind", c.Wind);
 		}
 
 		void Fields(FieldReader& r, MaterialComponent& c)
@@ -1020,6 +1051,30 @@ namespace Basalt {
 		json Write(const InverseKinematicsComponent& c)
 		{
 			return { { "Chains", ListToJson(c.Chains) }, { "Pelvis", c.Pelvis }, { "RayHeight", c.RayHeight }, { "RayDepth", c.RayDepth }, { "Smoothing", c.Smoothing } };
+		}
+
+		json Write(const SpringChain& c)
+		{
+			return {
+				{ "Name", c.Name },
+				{ "Joint", c.Joint },
+				{ "ChainLength", c.ChainLength },
+				{ "Stiffness", c.Stiffness },
+				{ "Damping", c.Damping },
+				{ "GravityFactor", c.GravityFactor },
+				{ "Radius", c.Radius },
+				{ "Weight", c.Weight },
+			};
+		}
+
+		json Write(const SpringCollider& c)
+		{
+			return { { "Joint", c.Joint }, { "Offset", ToJson(c.Offset) }, { "Radius", c.Radius }, { "HalfHeight", c.HalfHeight } };
+		}
+
+		json Write(const SpringBoneComponent& c)
+		{
+			return { { "Chains", ListToJson(c.Chains) }, { "Colliders", ListToJson(c.Colliders) }, { "Wind", ToJson(c.Wind) } };
 		}
 
 		json Write(const BoneAttachmentComponent& c)
@@ -1523,6 +1578,51 @@ namespace Basalt {
 			return {};
 		}
 
+		std::string Validate(const SpringBoneComponent& c)
+		{
+			if (c.Chains.size() > SpringBoneComponent::MaxChains)
+				return fmt::format("SpringBone holds at most {} chains", SpringBoneComponent::MaxChains);
+			if (c.Colliders.size() > SpringBoneComponent::MaxColliders)
+				return fmt::format("SpringBone holds at most {} colliders", SpringBoneComponent::MaxColliders);
+			if (!Math::IsFinite(c.Wind))
+				return "Wind must be finite";
+			const auto inRange = [](float value, float low, float high) { return std::isfinite(value) && value >= low && value <= high; };
+			for (size_t i = 0; i < c.Chains.size(); i++)
+			{
+				const SpringChain& chain = c.Chains[i];
+				if (chain.Name.empty())
+					return fmt::format("Chains[{}].Name must not be empty", i);
+				for (size_t j = 0; j < i; j++)
+				{
+					if (c.Chains[j].Name == chain.Name)
+						return fmt::format("Chains[{}].Name '{}' is already used by Chains[{}]", i, chain.Name, j);
+				}
+				if (chain.ChainLength > SpringChain::MaxChainLength)
+					return fmt::format("Chains[{}].ChainLength {} must be between 0 and {}", i, chain.ChainLength, SpringChain::MaxChainLength);
+				if (!inRange(chain.Stiffness, 0.0f, 10000.0f))
+					return fmt::format("Chains[{}].Stiffness {} must be between 0 and 10000", i, chain.Stiffness);
+				if (!inRange(chain.Damping, 0.0f, 1000.0f))
+					return fmt::format("Chains[{}].Damping {} must be between 0 and 1000", i, chain.Damping);
+				if (!inRange(chain.GravityFactor, -100.0f, 100.0f))
+					return fmt::format("Chains[{}].GravityFactor {} must be between -100 and 100", i, chain.GravityFactor);
+				if (!inRange(chain.Radius, 0.0f, 100.0f))
+					return fmt::format("Chains[{}].Radius {} must be between 0 and 100", i, chain.Radius);
+				if (!inRange(chain.Weight, 0.0f, 1.0f))
+					return fmt::format("Chains[{}].Weight {} must be between 0 and 1", i, chain.Weight);
+			}
+			for (size_t i = 0; i < c.Colliders.size(); i++)
+			{
+				const SpringCollider& collider = c.Colliders[i];
+				if (!Math::IsFinite(collider.Offset))
+					return fmt::format("Colliders[{}].Offset must be finite", i);
+				if (!inRange(collider.Radius, 0.0f, 100.0f))
+					return fmt::format("Colliders[{}].Radius {} must be between 0 and 100", i, collider.Radius);
+				if (!inRange(collider.HalfHeight, 0.0f, 100.0f))
+					return fmt::format("Colliders[{}].HalfHeight {} must be between 0 and 100", i, collider.HalfHeight);
+			}
+			return {};
+		}
+
 		std::string Validate(const BoneAttachmentComponent& c)
 		{
 			const auto finite = [](const auto& v) { return !glm::any(glm::isnan(v)) && !glm::any(glm::isinf(v)); };
@@ -1685,6 +1785,7 @@ namespace Basalt {
 			infos.push_back(MakeInfo<AnimatorComponent>("Animator"));
 			infos.push_back(MakeInfo<BoneAttachmentComponent>("BoneAttachment"));
 			infos.push_back(MakeInfo<InverseKinematicsComponent>("InverseKinematics"));
+			infos.push_back(MakeInfo<SpringBoneComponent>("SpringBone"));
 			infos.push_back(MakeInfo<MaterialComponent>("Material"));
 			infos.push_back(MakeInfo<DirectionalLightComponent>("DirectionalLight"));
 			infos.push_back(MakeInfo<PointLightComponent>("PointLight"));

@@ -2,6 +2,7 @@
 
 #include "Basalt/Animation/AnimationSystem.h"
 #include "Basalt/Animation/InverseKinematics.h"
+#include "Basalt/Animation/SpringBones.h"
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Scene/Entity.h"
@@ -227,6 +228,54 @@ namespace Basalt {
 				}
 		}
 
+		void AddSpringBoneWarnings(Entity entity, const SpringBoneComponent& springs, std::vector<std::string>& warnings)
+		{
+			const auto* animator = entity.TryGetComponent<AnimatorComponent>();
+			if (!animator)
+			{
+				warnings.emplace_back("SpringBone needs an Animator on the same entity");
+				return;
+			}
+			// AddAnimatorWarnings reports a model that cannot load.
+			const auto source = animator->Mesh.empty() ? nullptr : AssetManager::GetMesh(animator->Mesh);
+			std::vector<uint32_t> joints;
+			std::vector<std::pair<uint32_t, const SpringChain*>> turned;
+			for (const SpringChain& chain : springs.Chains)
+			{
+				if (chain.Joint.empty())
+				{
+					warnings.push_back(fmt::format("SpringBone chain '{}': Joint is empty", chain.Name));
+					continue;
+				}
+				if (!source)
+					continue;
+				if (std::string problem = ResolveSpringChain(*source, chain, joints); !problem.empty())
+				{
+					warnings.push_back(fmt::format("SpringBone chain '{}': {}", chain.Name, problem));
+					continue;
+				}
+				// Chains swing in order, so a later one turning the same joint overrides the earlier one.
+				for (auto joint = joints.begin(); joint + 1 != joints.end(); ++joint)
+				{
+					if (const auto other = std::ranges::find(turned, *joint, &std::pair<uint32_t, const SpringChain*>::first); other != turned.end())
+					{
+						warnings.push_back(fmt::format("SpringBone chains '{}' and '{}' both turn joint '{}'; the later one wins", other->second->Name, chain.Name, source->Nodes[*joint].Name));
+						break;
+					}
+				}
+				for (auto joint = joints.begin(); joint + 1 != joints.end(); ++joint)
+					turned.emplace_back(*joint, &chain);
+			}
+			if (!source)
+				return;
+			for (size_t i = 0; i < springs.Colliders.size(); i++)
+			{
+				const SpringCollider& collider = springs.Colliders[i];
+				if (!collider.Joint.empty() && FindNode(*source, collider.Joint) < 0)
+					warnings.push_back(fmt::format("SpringBone Colliders[{}]: joint '{}' not found", i, collider.Joint));
+			}
+		}
+
 		void AddBoneAttachmentWarnings(Entity entity, const BoneAttachmentComponent& attachment, std::vector<std::string>& warnings)
 		{
 			Scene& scene = *entity.GetScene();
@@ -301,6 +350,8 @@ namespace Basalt {
 			AddBoneAttachmentWarnings(entity, *attachment, warnings);
 		if (const auto* ik = entity.TryGetComponent<InverseKinematicsComponent>())
 			AddInverseKinematicsWarnings(entity, *ik, warnings);
+		if (const auto* springs = entity.TryGetComponent<SpringBoneComponent>())
+			AddSpringBoneWarnings(entity, *springs, warnings);
 		return warnings;
 	}
 }
