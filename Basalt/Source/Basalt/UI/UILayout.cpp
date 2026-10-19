@@ -16,7 +16,7 @@ namespace Basalt {
 
 		bool HasUIComponent(Entity entity)
 		{
-			return entity.HasComponent<UIRectComponent>() || entity.HasComponent<UIImageComponent>() || entity.HasComponent<UITextComponent>() || UILayout::GetWidgetKind(entity).has_value();
+			return entity.HasComponent<UIRectComponent>() || entity.HasComponent<UIImageComponent>() || entity.HasComponent<UITextComponent>() || entity.HasComponent<UIFocusRingComponent>() || entity.HasComponent<UINavigationComponent>() || UILayout::GetWidgetKind(entity).has_value();
 		}
 
 		// Reported problems, bounded so a long session with many broken entities cannot grow it without end.
@@ -80,19 +80,43 @@ namespace Basalt {
 			return IsHidden(entity) ? std::nullopt : std::optional(rect);
 		}
 
-		// Depth-first in hierarchy order. Scene bounds hierarchy depth (Scene::MaxHierarchyDepth), so the
-		// recursion is bounded too.
-		void Visit(Scene& scene, Entity entity, const UIBox& parent, std::vector<UILayoutItem>& out)
+		// Depth-first hierarchy traversal composes transforms, intersects canvas clips and lays scroll children
+		// out in their expanded, offset content box. Scene::MaxHierarchyDepth bounds the recursion.
+		void Visit(Scene& scene, Entity entity, const UIBox& parent, std::vector<UILayoutItem>& out, const glm::mat3& parentTransform = glm::mat3(1.0f), std::optional<UIBox> clip = std::nullopt, std::vector<UILayoutProblem>* problems = nullptr)
 		{
 			const std::optional<UIBox> rect = VisibleRectInParent(entity, parent);
 			if (!rect)
 				return;
+			glm::mat3 transform = parentTransform;
+			const auto* component = entity.TryGetComponent<UIRectComponent>();
+			if (component)
+				transform *= ComputeUITransform(*rect, SanitizeUIRect(*component));
+			if (!IsUsableUITransform(*rect, transform))
+			{
+				if (problems)
+					problems->push_back({ entity, "composed UI transform outside the supported numeric range; subtree skipped" });
+				if (ShouldReport(entity, "composed transform"))
+					BS_CORE_WARN("UILayout: '{}' has a composed UI transform outside the supported numeric range; skipping its subtree", entity.GetName());
+				return;
+			}
 			if (HasUIComponent(entity))
-				out.push_back({ entity, *rect });
+				out.push_back({ entity, *rect, transform, clip });
+			if ((component && component->ClipChildren) || entity.HasComponent<UIScrollViewComponent>())
+			{
+				const UIBox bounds = TransformUIBox(*rect, transform);
+				clip = clip ? IntersectUIBoxes(*clip, bounds) : bounds;
+			}
+			UIBox childRect = *rect;
+			if (const auto* scroll = entity.TryGetComponent<UIScrollViewComponent>())
+			{
+				const auto repaired = Repaired(entity, *scroll, &SanitizeUIScrollView, &ValidateUIScrollView, "UIScrollView");
+				childRect.Size = glm::max(rect->Size, repaired.ContentSize);
+				childRect.Min -= glm::clamp(repaired.Offset, glm::vec2(0), childRect.Size - rect->Size);
+			}
 			for (UUID child : entity.GetComponent<RelationshipComponent>().Children)
 			{
 				if (Entity childEntity = scene.GetEntityByUUID(child))
-					Visit(scene, childEntity, *rect, out);
+					Visit(scene, childEntity, childRect, out, transform, clip, problems);
 			}
 		}
 
@@ -104,8 +128,8 @@ namespace Basalt {
 			return interaction->GetState(UIWidgetID::ForEntity(entity.GetUUID()), interactable);
 		}
 
-		// The draw commands of one laid-out entity: its image (tinted by a button), its slider or checkbox, then its
-		// text (beside a checkbox's box).
+		// One entity's image, control geometry/text and focus ring. Text inputs supply their own text/caret,
+		// dropdowns their selected label, and checkboxes reserve space beside the box for a label.
 		void AppendCommands(const UILayoutItem& item, const UIInteraction* interaction, std::vector<UIDrawCommand>& out)
 		{
 			const Entity entity = item.Owner;
@@ -129,13 +153,18 @@ namespace Basalt {
 				command.Texture = image.Texture;
 				command.Slice = image.Slice;
 				command.SliceScale = image.SliceScale;
+				command.UVMin = image.UVMin;
+				command.UVMax = image.UVMax;
+				command.SpriteColumns = image.SpriteColumns;
+				command.SpriteRows = image.SpriteRows;
+				command.SpriteFrame = image.SpriteFrame;
 			}
 			UIBox textRect = item.Rect;
 			if (is(UIWidgetKind::Slider))
 			{
 				const UISliderComponent slider = Repaired(entity, entity.GetComponent<UISliderComponent>(), &SanitizeUISlider, &ValidateUISlider, "UISlider");
 				const glm::vec4 tint = UIWidgetTints::Of(slider).For(WidgetState(interaction, entity, interactable));
-				UIWidgets::AppendSlider(item.Rect, UIWidgets::SliderFraction(slider.Value, slider.Min, slider.Max), slider.HandleWidth, slider.TrackColor, slider.FillColor, slider.HandleColor * tint, out);
+				UIWidgets::AppendSlider(item.Rect, UIWidgets::SliderFraction(slider.Value, slider.Min, slider.Max), slider.HandleWidth, slider.TrackColor, slider.FillColor, slider.HandleColor * tint, out, slider.Vertical);
 			}
 			else if (is(UIWidgetKind::Checkbox))
 			{
@@ -144,7 +173,47 @@ namespace Basalt {
 				UIWidgets::AppendCheckbox(item.Rect, checkbox.Checked, checkbox.BoxColor * tint, checkbox.CheckColor, out);
 				textRect = UIWidgets::CheckboxLabelBox(item.Rect);
 			}
-			if (const auto* component = entity.TryGetComponent<UITextComponent>())
+			if (is(UIWidgetKind::TextInput) || is(UIWidgetKind::Dropdown))
+			{
+				UITextComponent text = entity.HasComponent<UITextComponent>() ? Repaired(entity, entity.GetComponent<UITextComponent>(), &SanitizeUIText, &ValidateUIText, "UIText") : UITextComponent{};
+				glm::vec4 tint(1.0f);
+				if (is(UIWidgetKind::TextInput))
+				{
+					const auto input = Repaired(entity, entity.GetComponent<UITextInputComponent>(), &SanitizeUITextInput, &ValidateUITextInput, "UITextInput");
+					tint = UIWidgetTints::Of(input).For(WidgetState(interaction, entity, input.Interactable));
+					text.Text = input.Text.empty() ? input.Placeholder : input.Text;
+					if (input.Text.empty())
+						text.Color.a *= 0.5f;
+					if (interaction && interaction->GetFocus() == UIWidgetID::ForEntity(entity.GetUUID()))
+					{
+						text.Text = input.Text;
+						size_t cursor = std::min(interaction->GetTextCursor(UIWidgetID::ForEntity(entity.GetUUID()), text.Text.size()), text.Text.size());
+						while (cursor > 0 && cursor < text.Text.size() && (static_cast<unsigned char>(text.Text[cursor]) & 0xc0U) == 0x80U)
+							cursor--;
+						text.Text.insert(cursor, "|");
+					}
+				}
+				else
+				{
+					const auto dropdown = Repaired(entity, entity.GetComponent<UIDropdownComponent>(), &SanitizeUIDropdown, &ValidateUIDropdown, "UIDropdown");
+					tint = UIWidgetTints::Of(dropdown).For(WidgetState(interaction, entity, dropdown.Interactable));
+					const auto options = UIWidgets::DropdownOptions(dropdown.Options);
+					text.Text = dropdown.Selected < options.size() ? std::string(options[dropdown.Selected]) : std::string();
+					text.Text += "  v";
+				}
+				UIWidgets::AppendRect(item.Rect, glm::vec4(0.12f, 0.12f, 0.15f, 0.95f) * tint, out);
+				UIDrawCommand& command = out.emplace_back();
+				command.Kind = UIDrawKind::Text;
+				command.Position = item.Rect.Min + glm::vec2(4.0f, 0.0f);
+				command.Size = glm::max(item.Rect.Size - glm::vec2(8.0f, 0.0f), glm::vec2(0));
+				command.Text = text.Text;
+				command.Font = text.Font;
+				command.FontSize = text.FontSize;
+				command.Color = text.Color;
+				command.Align = { 0.0f, 0.5f };
+				command.Clip = TransformUIBox(item.Rect, item.Transform);
+			}
+			if (const auto* component = entity.TryGetComponent<UITextComponent>(); component && !is(UIWidgetKind::TextInput) && !is(UIWidgetKind::Dropdown))
 			{
 				const UITextComponent text = Repaired(entity, *component, &SanitizeUIText, &ValidateUIText, "UIText");
 				UIDrawCommand& command = out.emplace_back();
@@ -158,6 +227,15 @@ namespace Basalt {
 				command.Align = { UIAlignFraction(text.HorizontalAlign), UIAlignFraction(text.VerticalAlign) };
 				command.Wrap = text.Wrap;
 				command.Shadow = text.Shadow;
+			}
+			if (const auto* component = entity.TryGetComponent<UIFocusRingComponent>(); component && interaction && interaction->IsFocusVisible() && interaction->GetFocus() == UIWidgetID::ForEntity(entity.GetUUID()))
+			{
+				const auto ring = Repaired(entity, *component, &SanitizeUIFocusRing, &ValidateUIFocusRing, "UIFocusRing");
+				const float thickness = std::min({ ring.Thickness, item.Rect.Size.x * 0.5f, item.Rect.Size.y * 0.5f });
+				UIWidgets::AppendRect({ item.Rect.Min, { item.Rect.Size.x, thickness } }, ring.Color, out);
+				UIWidgets::AppendRect({ item.Rect.Min + glm::vec2(0, item.Rect.Size.y - thickness), { item.Rect.Size.x, thickness } }, ring.Color, out);
+				UIWidgets::AppendRect({ item.Rect.Min, { thickness, item.Rect.Size.y } }, ring.Color, out);
+				UIWidgets::AppendRect({ item.Rect.Min + glm::vec2(item.Rect.Size.x - thickness, 0), { thickness, item.Rect.Size.y } }, ring.Color, out);
 			}
 		}
 
@@ -179,47 +257,156 @@ namespace Basalt {
 
 	}
 
+	// Scroll offsets can change a descendant's position inside a viewport. Other clipping ancestors move
+	// with their children, so a fully excluded subtree cannot become reachable by scrolling above it.
+	bool UILayout::CanReveal(const UILayoutItem& item, const std::unordered_map<uint64_t, const UILayoutItem*>& items)
+	{
+		UIBox potential = TransformUIBox(item.Rect, item.Transform);
+		bool scrollable = false;
+		for (Entity ancestor = item.Owner.GetParent(); ancestor; ancestor = ancestor.GetParent())
+		{
+			const auto found = items.find(static_cast<uint64_t>(ancestor.GetUUID()));
+			if (found == items.end())
+				continue;
+			const UILayoutItem& parent = *found->second;
+			const auto* scroll = ancestor.TryGetComponent<UIScrollViewComponent>();
+			if (scroll && scroll->Interactable)
+			{
+				const auto view = SanitizeUIScrollView(*scroll);
+				const glm::vec2 maximum = glm::max(view.ContentSize - parent.Rect.Size, glm::vec2(0));
+				const glm::vec2 offset = glm::clamp(view.Offset, glm::vec2(0), maximum);
+				UIBox local = TransformUIBox(potential, glm::inverse(parent.Transform));
+				local.Min += offset - maximum;
+				local.Size += maximum;
+				const UIBox reachable = IntersectUIBoxes(local, parent.Rect);
+				if (reachable.Size.x <= 0.0f || reachable.Size.y <= 0.0f)
+					return false;
+				potential = TransformUIBox(reachable, parent.Transform);
+				scrollable = true;
+			}
+			else if (const auto* rect = ancestor.TryGetComponent<UIRectComponent>(); scroll || (rect && rect->ClipChildren))
+				potential = IntersectUIBoxes(potential, TransformUIBox(parent.Rect, parent.Transform));
+			if (potential.Size.x <= 0.0f || potential.Size.y <= 0.0f)
+				return false;
+		}
+		return scrollable;
+	}
+
 	bool UILayout::HasUI(Scene& scene)
 	{
-		return AnyEntityWith<UIRectComponent, UIImageComponent, UITextComponent>(scene) || HasWidgets(scene);
+		return AnyEntityWith<UIRectComponent, UIImageComponent, UITextComponent, UIFocusRingComponent, UINavigationComponent>(scene) || HasWidgets(scene);
 	}
 
 	bool UILayout::HasWidgets(Scene& scene)
 	{
-		return AnyEntityWith<UIButtonComponent, UISliderComponent, UICheckboxComponent>(scene);
+		return AnyEntityWith<UIButtonComponent, UISliderComponent, UICheckboxComponent, UITextInputComponent, UIDropdownComponent, UIPanelComponent, UIScrollViewComponent>(scene);
 	}
 
-	std::vector<UILayoutItem> UILayout::Layout(Scene& scene, const glm::vec2& canvasSize)
+	std::vector<UILayoutItem> UILayout::Layout(Scene& scene, const glm::vec2& canvasSize, std::vector<UILayoutProblem>* problems)
 	{
 		std::vector<UILayoutItem> items;
 		if (!HasUI(scene))
 			return items;
 		const UIBox canvas{ { 0.0f, 0.0f }, canvasSize };
 		for (Entity root : scene.GetRootEntities())
-			Visit(scene, root, canvas, items);
+			Visit(scene, root, canvas, items, glm::mat3(1.0f), std::nullopt, problems);
 		return items;
 	}
 
 	void UILayout::BuildCommands(Scene& scene, const glm::vec2& canvasSize, std::vector<UIDrawCommand>& out)
 	{
 		const UIInteraction* interaction = scene.GetUIInteraction();
-		for (const UILayoutItem& item : Layout(scene, canvasSize))
+		const auto items = Layout(scene, canvasSize);
+		for (const UILayoutItem& item : items)
+		{
+			const size_t begin = out.size();
+			const std::optional<UIBox> inherited = item.Clip;
 			AppendCommands(item, interaction, out);
+			for (size_t i = begin; i < out.size(); ++i)
+			{
+				UIDrawCommand& command = out[i];
+				command.Transform = item.Transform;
+				if (inherited)
+				{
+					const UIBox inheritedClip = *inherited;
+					if (command.Clip)
+						command.Clip = IntersectUIBoxes(*command.Clip, inheritedClip);
+					else
+						command.Clip = inheritedClip;
+				}
+			}
+		}
+		if (interaction && interaction->GetOpenDropdown() != 0)
+		{
+			for (const UILayoutItem& item : items)
+			{
+				if (item.Owner.GetUUID() != interaction->GetOpenDropdown())
+					continue;
+				const auto* component = item.Owner.TryGetComponent<UIDropdownComponent>();
+				if (!component || !component->Interactable || GetWidgetKind(item.Owner) != UIWidgetKind::Dropdown)
+					break;
+				const auto dropdown = Repaired(item.Owner, *component, &SanitizeUIDropdown, &ValidateUIDropdown, "UIDropdown");
+				const auto options = UIWidgets::DropdownOptions(dropdown.Options);
+				const UITextComponent text = item.Owner.HasComponent<UITextComponent>() ? Repaired(item.Owner, item.Owner.GetComponent<UITextComponent>(), &SanitizeUIText, &ValidateUIText, "UIText") : UITextComponent{};
+				for (size_t index = 0; index < options.size(); index++)
+				{
+					UIBox row = item.Rect;
+					row.Min.y += row.Size.y * static_cast<float>(index + 1);
+					const size_t begin = out.size();
+					UIWidgets::AppendRect(row, index == interaction->GetDropdownHighlight() ? glm::vec4(0.2f, 0.4f, 0.7f, 1.0f) : glm::vec4(0.12f, 0.12f, 0.15f, 1.0f), out);
+					UIDrawCommand& command = out.emplace_back();
+					command.Kind = UIDrawKind::Text;
+					command.Position = row.Min + glm::vec2(4, 0);
+					command.Size = glm::max(row.Size - glm::vec2(8, 0), glm::vec2(0));
+					command.Text = options[index];
+					command.Font = text.Font;
+					command.FontSize = text.FontSize;
+					command.Color = text.Color;
+					command.Align = { 0.0f, 0.5f };
+					for (size_t i = begin; i < out.size(); i++)
+					{
+						out[i].Transform = item.Transform;
+						const UIBox clip = TransformUIBox(row, item.Transform);
+						out[i].Clip = item.Clip ? IntersectUIBoxes(clip, *item.Clip) : clip;
+					}
+				}
+				break;
+			}
+		}
 	}
 
 	std::optional<UIBox> UILayout::GetRect(Scene& scene, Entity entity, const glm::vec2& canvasSize)
 	{
 		if (!entity || entity.GetScene() != &scene || !HasUIComponent(entity))
 			return std::nullopt;
-		UIBox rect{ { 0.0f, 0.0f }, canvasSize };
-		for (Entity ancestor : GetAncestors(entity))
+		auto ancestors = GetAncestors(entity);
+		ancestors.push_back(entity);
+		UIBox parent{ { 0, 0 }, canvasSize };
+		glm::mat3 transform(1.0f);
+		for (Entity current : ancestors)
 		{
-			const std::optional<UIBox> next = VisibleRectInParent(ancestor, rect);
-			if (!next)
+			const auto rect = VisibleRectInParent(current, parent);
+			if (!rect)
 				return std::nullopt;
-			rect = *next;
+			if (const auto* component = current.TryGetComponent<UIRectComponent>())
+				transform *= ComputeUITransform(*rect, SanitizeUIRect(*component));
+			if (!IsUsableUITransform(*rect, transform))
+			{
+				if (ShouldReport(current, "composed transform"))
+					BS_CORE_WARN("UILayout: '{}' has a composed UI transform outside the supported numeric range; skipping its subtree", current.GetName());
+				return std::nullopt;
+			}
+			if (current == entity)
+				return rect;
+			parent = *rect;
+			if (const auto* scroll = current.TryGetComponent<UIScrollViewComponent>())
+			{
+				const auto repaired = Repaired(current, *scroll, &SanitizeUIScrollView, &ValidateUIScrollView, "UIScrollView");
+				parent.Size = glm::max(rect->Size, repaired.ContentSize);
+				parent.Min -= glm::clamp(repaired.Offset, glm::vec2(0), parent.Size - rect->Size);
+			}
 		}
-		return VisibleRectInParent(entity, rect);
+		return std::nullopt;
 	}
 
 	UIBox UILayout::GetParentRect(Scene& scene, Entity entity, const glm::vec2& canvasSize)
@@ -228,7 +415,16 @@ namespace Basalt {
 		if (!entity || entity.GetScene() != &scene)
 			return rect;
 		for (Entity ancestor : GetAncestors(entity))
+		{
 			rect = RectInParent(ancestor, rect);
+			if (const auto* scroll = ancestor.TryGetComponent<UIScrollViewComponent>())
+			{
+				const auto repaired = Repaired(ancestor, *scroll, &SanitizeUIScrollView, &ValidateUIScrollView, "UIScrollView");
+				const glm::vec2 content = glm::max(rect.Size, repaired.ContentSize);
+				rect.Min -= glm::clamp(repaired.Offset, glm::vec2(0), content - rect.Size);
+				rect.Size = content;
+			}
+		}
 		return rect;
 	}
 
@@ -261,6 +457,28 @@ namespace Basalt {
 				info = { UIWidgetKind::Checkbox, checkbox.Interactable, checkbox.Target, checkbox.OnValueChanged, component.OnValueChanged };
 				break;
 			}
+			case UIWidgetKind::TextInput:
+			{
+				const auto& component = entity.GetComponent<UITextInputComponent>();
+				const auto widget = Repaired(entity, component, &SanitizeUITextInput, &ValidateUITextInput, "UITextInput");
+				info = { UIWidgetKind::TextInput, widget.Interactable, widget.Target, widget.OnValueChanged, component.OnValueChanged };
+				break;
+			}
+			case UIWidgetKind::Dropdown:
+			{
+				const auto& component = entity.GetComponent<UIDropdownComponent>();
+				const auto widget = Repaired(entity, component, &SanitizeUIDropdown, &ValidateUIDropdown, "UIDropdown");
+				info = { UIWidgetKind::Dropdown, widget.Interactable, widget.Target, widget.OnValueChanged, component.OnValueChanged };
+				break;
+			}
+			case UIWidgetKind::Panel:
+				info.Kind = UIWidgetKind::Panel;
+				info.Interactable = false;
+				break;
+			case UIWidgetKind::ScrollView:
+				info.Kind = UIWidgetKind::ScrollView;
+				info.Interactable = Repaired(entity, entity.GetComponent<UIScrollViewComponent>(), &SanitizeUIScrollView, &ValidateUIScrollView, "UIScrollView").Interactable;
+				break;
 		}
 		info.SeveralComponents = CountWidgetComponents(entity) > 1;
 		if (info.SeveralComponents && ShouldReport(entity, "widgets"))
@@ -276,12 +494,20 @@ namespace Basalt {
 			return UIWidgetKind::Slider;
 		if (entity.HasComponent<UICheckboxComponent>())
 			return UIWidgetKind::Checkbox;
+		if (entity.HasComponent<UITextInputComponent>())
+			return UIWidgetKind::TextInput;
+		if (entity.HasComponent<UIDropdownComponent>())
+			return UIWidgetKind::Dropdown;
+		if (entity.HasComponent<UIScrollViewComponent>())
+			return UIWidgetKind::ScrollView;
+		if (entity.HasComponent<UIPanelComponent>() && entity.GetComponent<UIPanelComponent>().BlockInput)
+			return UIWidgetKind::Panel;
 		return std::nullopt;
 	}
 
 	int UILayout::CountWidgetComponents(Entity entity)
 	{
-		return (entity.HasComponent<UIButtonComponent>() ? 1 : 0) + (entity.HasComponent<UISliderComponent>() ? 1 : 0) + (entity.HasComponent<UICheckboxComponent>() ? 1 : 0);
+		return (entity.HasComponent<UIButtonComponent>() ? 1 : 0) + (entity.HasComponent<UISliderComponent>() ? 1 : 0) + (entity.HasComponent<UICheckboxComponent>() ? 1 : 0) + (entity.HasComponent<UITextInputComponent>() ? 1 : 0) + (entity.HasComponent<UIDropdownComponent>() ? 1 : 0);
 	}
 
 }

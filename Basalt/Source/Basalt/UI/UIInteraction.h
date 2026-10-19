@@ -59,6 +59,8 @@ namespace Basalt {
 		bool Interactable = true;
 		// Sliders only.
 		float HandleWidth = 0.0f;
+		bool Vertical = false;
+		std::optional<UIBox> Clip;
 	};
 
 	// What the user did to an immediate-mode widget this frame. A widget drawn disabled this frame gets no Activated,
@@ -78,15 +80,16 @@ namespace Basalt {
 	// focused, and what the user did to it. Created by Scene::OnRuntimeStart in Play mode (editing and simulating
 	// draw every widget normal, or disabled when not Interactable).
 	//
-	// Every frame Update hit-tests the visible widget components (UILayout) and the immediate-mode widgets drawn
-	// the frame before, topmost first: immediate widgets over components, later ones over earlier ones. Only
-	// widgets take pointer input; a plain UIImage does not block it. Any left press in the game view drops the
-	// keyboard/gamepad focus, and one on a widget holds it; a real release over the same widget clicks a button or
-	// toggles a checkbox, and a held slider follows the pointer as it moves. Arrows, the D-pad and the left stick (with
-	// repeat after RepeatDelay, every RepeatInterval) move the focus to the nearest widget in that direction,
-	// Tab/Shift+Tab through all of them in draw order; Enter, keypad Enter, Space or gamepad A activate the focused
-	// widget on the press, and Left/Right move a focused slider. Widget components change their own Value/Checked
-	// and queue a UIWidgetEvent; immediate widgets read their UIImmediateInput when the script draws them again.
+	// Each Update hit-tests transformed, clipped components and the preceding frame's immediate widgets,
+	// topmost first. Widgets and blocking panels consume the pointer; plain images do not. A left press
+	// clears focus, except text inputs and dropdowns take focus when pressed. Release over the same widget
+	// activates it, while held sliders follow the pointer outside their rect. The wheel goes to the nearest
+	// enabled scroll ancestor. Dropdowns support pointer selection and Up/Down, accept and Escape; text
+	// inputs support Unicode insertion, cursor movement and deletion while the host routes keyboard input.
+	// Arrows, D-pad and left stick navigate explicit targets or spatial neighbors (with repeat), and Tab
+	// traverses controls in draw order. Slider-axis keys step its value; accept activates the focused control.
+	// Components update their own value and queue UIWidgetEvent callbacks; immediate widgets read the next
+	// UIImmediateInput. Keyboard/gamepad actions show the focus ring; a pointer press hides it.
 	class UIInteraction
 	{
 	public:
@@ -123,18 +126,26 @@ namespace Basalt {
 		// How the widget looks this frame.
 		UIWidgetState GetState(const UIWidgetID& id, bool interactable) const;
 
-		// The focused widget (invalid when none). A focus that is not a visible, interactable widget is dropped in an
-		// Update, with a warning when it never was one; a newly set focus gets one Update to appear (an immediate-mode
-		// widget set from OnCreate, a widget shown as it is focused). A script may set it while navigation is off;
-		// the keyboard and gamepads then still do not act on it.
+		// The focused control (invalid when none). Hidden, disabled, missing or unreachable controls lose focus;
+		// scroll descendants that enabled ancestors can reveal remain eligible. A new scripted focus gets one
+		// Update to appear, then warns if still invalid (including non-focusable panels/scroll views). Offscreen
+		// focus can remain after wheel scrolling until navigation reveals it. Scripts may focus with navigation off;
+		// navigation and activation remain paused, while a focused text input can still accept editing keys.
 		const UIWidgetID& GetFocus() const { return m_Focus.ID; }
+		// The last input modality was keyboard/gamepad; pointer presses hide focus rings.
+		bool IsFocusVisible() const { return m_FocusVisible; }
 		void SetFocus(UIWidgetID id);
-		// Whether the pointer was over an interactable widget in the last Update (so a click there is the UI's,
-		// not the game's).
-		bool IsPointerOverWidget() const { return m_Hovered.IsValid(); }
+		// Whether the pointer was over an interactable control, scroll view or blocking panel in the last
+		// Update, so a click there belongs to the UI.
+		bool IsPointerOverWidget() const { return m_PointerBlocked; }
+		UUID GetOpenDropdown() const { return m_OpenDropdown; }
+		uint32_t GetDropdownHighlight() const { return m_DropdownHighlight; }
+		// UTF-8 byte offset, at a code-point boundary; fallback when this is not the current text input.
+		size_t GetTextCursor(const UIWidgetID& id, size_t fallback = 0) const { return m_TextFocus == id ? m_TextCursor : fallback; }
 
 		// The game's keyboard and gamepad navigation setting (UI.SetNavigationEnabled): a game that reads the arrows,
-		// Space or the D-pad itself while widgets are visible turns it off, so they never focus or activate a widget.
+		// Space or the D-pad itself while widgets are visible turns it off to pause navigation and activation.
+		// Pointer-focused text inputs still edit while the host routes keyboard input.
 		// Turning it off drops the focus. On by default. The host's switch (GameUI::SetNavigationEnabled, e.g. the
 		// editor view without focus) pauses navigation too but keeps the focus; this reports the game's setting.
 		void SetNavigationEnabled(bool enabled);
@@ -151,6 +162,21 @@ namespace Basalt {
 			// Widget components: the resolved callback target and method (from UILayout::GetWidget).
 			UUID Target = 0;
 			std::string Callback;
+			bool Vertical = false;
+			glm::mat3 Transform = glm::mat3(1.0f);
+			std::optional<UIBox> Clip;
+			std::optional<uint32_t> Option;
+			bool Revealable = false;
+			bool Contains(const glm::vec2& point) const { return (!Clip || Clip->Contains(point)) && ContainsUIBox(Rect, Transform, point); }
+			bool IsNavigable() const
+			{
+				if (!Interactable || Kind == UIWidgetKind::Panel || Kind == UIWidgetKind::ScrollView || Option || Rect.Size.x <= 0.0f || Rect.Size.y <= 0.0f)
+					return false;
+				if (Revealable || !Clip)
+					return true;
+				const UIBox visible = IntersectUIBoxes(TransformUIBox(Rect, Transform), *Clip);
+				return visible.Size.x > 0.0f && visible.Size.y > 0.0f;
+			}
 		};
 
 		// How sure the focus is that its widget exists.
@@ -185,8 +211,10 @@ namespace Basalt {
 			UIWidgetID ID;
 			// A slider: it stays pressed while the pointer drags it off its rect.
 			bool IsDrag = false;
-			// The pointer's x when the slider last followed it (it follows only when the pointer moves).
-			float DragX = 0.0f;
+			// The pointer position when the slider last followed it (only actual pointer movement drags).
+			glm::vec2 DragPosition = { 0.0f, 0.0f };
+			std::optional<uint32_t> Option;
+			bool DropdownWasOpen = false;
 		};
 
 		std::vector<Candidate> CollectWidgets(Scene& scene) const;
@@ -199,13 +227,23 @@ namespace Basalt {
 		void FocusLive(const UIWidgetID& id);
 
 		void Activate(Scene& scene, const Candidate& widget);
-		void DragSlider(Scene& scene, const Candidate& widget, float pointerX);
+		void DragSlider(Scene& scene, const Candidate& widget, const glm::vec2& pointer);
+		void UpdateText(Scene& scene, const std::vector<Candidate>& widgets);
+		void RevealFocus(Scene& scene);
+		void SelectDropdown(Scene& scene, const Candidate& widget, uint32_t index);
 		void StepSlider(Scene& scene, const Candidate& widget, int steps);
 		// Writes a slider component's new value and queues its callback, when the value changed.
 		void CommitSliderValue(const Candidate& widget, UISliderComponent& slider, float value);
 
 	private:
 		UIWidgetID m_Hovered;
+		bool m_PointerBlocked = false;
+		bool m_FocusVisible = false;
+		std::optional<glm::vec2> m_LastPointer;
+		UUID m_OpenDropdown = 0;
+		uint32_t m_DropdownHighlight = 0;
+		UIWidgetID m_TextFocus;
+		size_t m_TextCursor = 0;
 		std::optional<Press> m_Pressed;
 		Focus m_Focus;
 		// The accept button is held on the focused widget.

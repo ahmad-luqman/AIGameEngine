@@ -40,6 +40,11 @@ namespace Basalt {
 				{ "UI Text", "Text", { { "UIRect", nlohmann::json::object() }, { "UIText", nlohmann::json::object() } } },
 				{ "UI Button", "Button", { { "UIRect", { { "Size", { 240, 64 } } } }, { "UIImage", { { "Color", { 0.2, 0.24, 0.32, 0.95 } } } }, { "UIText", { { "Text", "Button" }, { "HorizontalAlign", "Center" }, { "VerticalAlign", "Middle" } } }, { "UIButton", nlohmann::json::object() } } },
 				{ "UI Slider", "Slider", { { "UIRect", { { "Size", { 320, 32 } } } }, { "UISlider", nlohmann::json::object() } } },
+				{ "UI Vertical Slider", "Vertical Slider", { { "UIRect", { { "Size", { 32, 320 } } } }, { "UISlider", { { "Vertical", true } } } } },
+				{ "UI Text Input", "Text Input", { { "UIRect", { { "Size", { 320, 48 } } } }, { "UITextInput", nlohmann::json::object() } } },
+				{ "UI Dropdown", "Dropdown", { { "UIRect", { { "Size", { 320, 48 } } } }, { "UIDropdown", { { "Options", "First\nSecond\nThird" } } } } },
+				{ "UI Scroll View", "Scroll View", { { "UIRect", { { "Size", { 400, 300 } } } }, { "UIScrollView", { { "ContentSize", { 400, 600 } } } }, { "UIImage", { { "Color", { 0.12, 0.12, 0.15, 0.95 } } } } } },
+				{ "UI Blocking Panel", "Blocking Panel", { { "UIRect", nlohmann::json::object() }, { "UIImage", { { "Color", { 0.0, 0.0, 0.0, 0.5 } } } }, { "UIPanel", nlohmann::json::object() } } },
 				{ "UI Checkbox", "Checkbox", { { "UIRect", { { "Size", { 320, 40 } } } }, { "UIText", { { "Text", "Checkbox" }, { "VerticalAlign", "Middle" }, { "Wrap", false } } }, { "UICheckbox", nlohmann::json::object() } } },
 			};
 			return s_Options;

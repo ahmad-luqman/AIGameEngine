@@ -17,6 +17,7 @@ from EditorPostProcess import check_post_process
 from EditorProjectSettings import check_project_settings
 from EditorGameView import check_game_view
 from EditorThumbnails import check_thumbnails
+from EditorUI import check_ui
 
 
 def require(value, message):
@@ -244,6 +245,7 @@ def main():
                     check_game_view(call, require, output)
                     check_thumbnails(call, require, output, temp)
                     check_project_settings(call, require, output)
+                    check_ui(call, require, output)
                     errors = call("log.get", {"errorsOnly": True})
                     require(not errors["messages"], f"Editor logged errors: {errors}")
             finally:

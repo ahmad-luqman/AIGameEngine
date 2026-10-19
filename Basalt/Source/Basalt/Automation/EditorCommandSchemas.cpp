@@ -13,7 +13,7 @@ namespace Basalt::EditorCommandSchemas {
 
 	nlohmann::json Pick()
 	{
-		return Schema::Object({ { "x", Schema::Integer("Integer viewport output pixel, left origin", 0, 16383) }, { "y", Schema::Integer("Integer viewport output pixel, top origin", 0, 16383) }, { "select", Schema::Boolean("Select the hit entity (default true)") } }, { "x", "y" });
+		return Schema::Object({ { "x", Schema::Integer("Integer viewport output pixel, left origin", 0, 16383) }, { "y", Schema::Integer("Integer viewport output pixel, top origin", 0, 16383) }, { "select", Schema::Boolean("Select the hit entity (default true); UI rects are picked outside Play only with editor.viewport uiBounds=true") } }, { "x", "y" });
 	}
 
 	nlohmann::json VertexSnap()

@@ -558,6 +558,22 @@ TEST_SUITE("Serialization")
 													 .Target = UUID(0xF000000000000004ull),
 													 .OnValueChanged = "SetVolume" };
 		entity.GetComponent<UICheckboxComponent>() = { .Interactable = false, .Checked = true, .BoxColor = { 0.3f, 0.3f, 0.3f, 1.0f }, .CheckColor = { 1.0f, 0.0f, 0.0f, 1.0f }, .NormalTint = { 0.8f, 0.8f, 0.8f, 1.0f }, .HighlightTint = { 0.9f, 1.0f, 0.9f, 1.0f }, .PressedTint = { 0.6f, 0.6f, 0.6f, 1.0f }, .DisabledTint = { 0.4f, 0.4f, 0.4f, 0.4f }, .Target = UUID(0xF000000000000005ull), .OnValueChanged = "" };
+		entity.GetComponent<UIRectComponent>().ClipChildren = true;
+		entity.GetComponent<UIRectComponent>().Rotation = glm::radians(25.0f);
+		entity.GetComponent<UIRectComponent>().Scale = { 1.5f, 0.75f };
+		auto& image = entity.GetComponent<UIImageComponent>();
+		image.UVMin = { 0.25f, 0.5f };
+		image.UVMax = { 0.75f, 1.0f };
+		image.SpriteColumns = 3;
+		image.SpriteRows = 2;
+		image.SpriteFrame = 5;
+		entity.GetComponent<UISliderComponent>().Vertical = true;
+		entity.GetComponent<UITextInputComponent>() = { .Interactable = false, .ReadOnly = true, .Text = "Player", .Placeholder = "Name", .MaxLength = 77, .Target = UUID(0xF000000000000006ull), .OnValueChanged = "NameChanged" };
+		entity.GetComponent<UIDropdownComponent>() = { .Interactable = false, .Options = "One\nTwo\nThree", .Selected = 2, .Target = UUID(0xF000000000000007ull), .OnValueChanged = "ChoiceChanged" };
+		entity.GetComponent<UIScrollViewComponent>() = { .Interactable = false, .ContentSize = { 300, 500 }, .Offset = { 20, 80 }, .ScrollSpeed = 17 };
+		entity.GetComponent<UIPanelComponent>().BlockInput = false;
+		entity.GetComponent<UINavigationComponent>() = { UUID(11), UUID(12), UUID(13), UUID(14) };
+		entity.GetComponent<UIFocusRingComponent>() = { .Color = { 0.2f, 0.4f, 0.6f, 0.8f }, .Thickness = 5 };
 		entity.GetComponent<ScriptComponent>().Script = "Assets/Scripts/Test.lua";
 		entity.GetComponent<ScriptComponent>().Properties = { { "Speed", 3.5 }, { "Target", { 1, 2, 3 } } };
 		JointComponent& joint = entity.GetComponent<JointComponent>();
@@ -891,9 +907,14 @@ TEST_SUITE("Serialization")
 				CHECK(info.EntityFields == std::vector<std::string>{ "BodyEntity", "ConnectedEntity" });
 				CHECK(info.RemapEntityReferences);
 			}
-			else if (info.Name == "UIButton" || info.Name == "UISlider" || info.Name == "UICheckbox" || info.Name == "BoneAttachment")
+			else if (info.Name == "UIButton" || info.Name == "UISlider" || info.Name == "UICheckbox" || info.Name == "UITextInput" || info.Name == "UIDropdown" || info.Name == "BoneAttachment")
 			{
 				CHECK(info.EntityFields == std::vector<std::string>{ "Target" });
+				CHECK(info.RemapEntityReferences);
+			}
+			else if (info.Name == "UINavigation")
+			{
+				CHECK(info.EntityFields == std::vector<std::string>{ "Up", "Down", "Left", "Right" });
 				CHECK(info.RemapEntityReferences);
 			}
 			else
@@ -1833,4 +1854,36 @@ TEST_SUITE("Serialization")
 		// Collecting the field lists works (an empty list would make every check above pass).
 		CHECK(fields > 150);
 	}
+}
+
+TEST_CASE("UI navigation and widget callback references remap in duplicated trees and prefabs")
+{
+	BasaltTest::TempProject project("UIReferencePrefab");
+	Scene scene;
+	Entity external = scene.CreateEntity("External");
+	Entity root = scene.CreateEntity("UI root");
+	Entity first = scene.CreateChildEntity(root, "First");
+	Entity second = scene.CreateChildEntity(root, "Second");
+	first.AddComponent<UITextInputComponent>().Target = second.GetUUID();
+	second.AddComponent<UIDropdownComponent>().Target = root.GetUUID();
+	first.AddComponent<UINavigationComponent>() = { second.GetUUID(), external.GetUUID(), root.GetUUID(), 0 };
+	const auto verify = [&](Entity copy) {
+		REQUIRE(copy.GetChildren().size() == 2);
+		Entity a = copy.GetChildren()[0], b = copy.GetChildren()[1];
+		CHECK(a.GetComponent<UITextInputComponent>().Target == b.GetUUID());
+		CHECK(b.GetComponent<UIDropdownComponent>().Target == copy.GetUUID());
+		const auto& navigation = a.GetComponent<UINavigationComponent>();
+		CHECK(navigation.Up == b.GetUUID());
+		CHECK(navigation.Down == external.GetUUID());
+		CHECK(navigation.Left == copy.GetUUID());
+		CHECK(navigation.Right == UUID(0));
+	};
+	verify(scene.DuplicateEntity(root));
+	std::string error;
+	const auto path = project.GetDirectory() / "Assets/Prefabs/UI.bprefab";
+	REQUIRE(SceneSerializer::SavePrefab(root, path, error));
+	Entity instance = SceneSerializer::InstantiatePrefab(scene, path, "Assets/Prefabs/UI.bprefab", {}, error);
+	REQUIRE_MESSAGE(instance, error);
+	verify(instance);
+	CHECK(first.GetComponent<UITextInputComponent>().Target == second.GetUUID());
 }

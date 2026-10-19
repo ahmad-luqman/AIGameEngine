@@ -35,6 +35,14 @@ namespace Basalt {
 		// Called at the start of every scene update that advances a frame (not while paused), and when play
 		// starts and stops.
 		static void BeginFrame();
+		// A bounded, intersecting canvas clip stack, cleared with the frame.
+		static bool PushClip(const UIBox& box);
+		static bool PopClip();
+		static std::optional<UIBox> GetClip();
+		// Protected script calls preserve their caller's stack, including when Lua reports an error.
+		static std::vector<UIBox> CaptureClipStack();
+		// Returns whether the callback left a different stack; restores the supplied snapshot.
+		static bool RestoreClipStack(std::vector<UIBox> clips);
 		// Appends this frame's commands to `out`, in submission order.
 		static void AppendCommands(std::vector<UIDrawCommand>& out);
 		static size_t GetCommandCount();

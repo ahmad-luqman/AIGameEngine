@@ -11,16 +11,20 @@
 
 namespace Basalt {
 
-	// The three widget components. An entity with several acts as the first in this order
-	// (UILayout::GetWidget).
+	// Widget and pointer-blocking kinds. UILayout::GetWidget chooses Button, Slider, Checkbox, TextInput,
+	// Dropdown, ScrollView, then a blocking Panel; enum declaration order does not set that priority.
 	enum class UIWidgetKind
 	{
 		Button = 0,
 		Slider,
-		Checkbox
+		Checkbox,
+		TextInput,
+		Dropdown,
+		Panel,
+		ScrollView
 	};
 
-	// The component name of a widget kind ("UIButton", "UISlider", "UICheckbox"), and the kind of such a name.
+	// The component name of a widget kind, and the kind of such a name.
 	const char* UIWidgetComponentName(UIWidgetKind kind);
 	std::optional<UIWidgetKind> UIWidgetKindFromComponentName(std::string_view name);
 
@@ -61,6 +65,14 @@ namespace Basalt {
 	// testing (UIInteraction), so what is drawn is what responds.
 	namespace UIWidgets {
 
+		// Newline-separated dropdown labels, bounded by the component rules.
+		std::vector<std::string_view> DropdownOptions(std::string_view options);
+		// UTF-8 boundaries used by the single-line editor (including validation of untrusted text).
+		bool IsSingleLineUTF8(std::string_view text);
+		size_t TextLength(std::string_view text);
+		size_t PreviousCharacter(std::string_view text, size_t cursor);
+		size_t NextCharacter(std::string_view text, size_t cursor);
+
 		// Where Value sits between Min and Max, 0..1 (0 when Max <= Min).
 		float SliderFraction(float value, float min, float max);
 		// Value clamped to [min, max] (min < max) and, with a positive step, moved to the nearest Min + k * step or
@@ -95,7 +107,7 @@ namespace Basalt {
 		void AppendRect(const UIBox& box, const glm::vec4& color, std::vector<UIDrawCommand>& out);
 		// Appends the slider's track, fill and handle as Rect commands (Anchor and Pivot zero; Position = box
 		// top-left). `handleColor` is already tinted.
-		void AppendSlider(const UIBox& rect, float fraction, float handleWidth, const glm::vec4& trackColor, const glm::vec4& fillColor, const glm::vec4& handleColor, std::vector<UIDrawCommand>& out);
+		void AppendSlider(const UIBox& rect, float fraction, float handleWidth, const glm::vec4& trackColor, const glm::vec4& fillColor, const glm::vec4& handleColor, std::vector<UIDrawCommand>& out, bool vertical = false);
 		// Appends the checkbox's box and, when checked, its mark as Rect commands. `boxColor` is already tinted.
 		void AppendCheckbox(const UIBox& rect, bool checked, const glm::vec4& boxColor, const glm::vec4& checkColor, std::vector<UIDrawCommand>& out);
 

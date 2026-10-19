@@ -9,10 +9,12 @@
 #include "Basalt/UI/UIInteraction.h"
 #include "Basalt/UI/UILayout.h"
 #include "Basalt/UI/UIWidgets.h"
+#include "Basalt/UI/UIRenderer.h"
 
 #include <spdlog/fmt/ranges.h>
 
 #include <algorithm>
+#include <cmath>
 #include <initializer_list>
 #include <optional>
 #include <span>
@@ -196,6 +198,8 @@ namespace Basalt {
 			if (std::optional<glm::vec2> anchor = options.Anchor("Anchor"))
 				command.Anchor = *anchor;
 			command.Pivot = options.Vector<glm::vec2>("Pivot", "Vec2", 0.0f, 1.0f).value_or(command.Anchor);
+			command.Rotation = glm::radians(options.Number("Rotation", -360000.0f, 360000.0f).value_or(0.0f));
+			command.Scale = options.Vector<glm::vec2>("Scale", "Vec2", 0.001f, 1000.0f).value_or(command.Scale);
 		}
 
 		std::string TooManyCommandsMessage()
@@ -297,7 +301,10 @@ namespace Basalt {
 				m_Widget.ID = std::move(id);
 				m_Widget.Offset = position - pivot * size;
 				if (kind == UIWidgetKind::Slider)
+				{
 					m_Widget.HandleWidth = OptionNumber("HandleWidth", 0.0f, UIRectComponent::MaxMagnitude, UISliderComponent{}.HandleWidth);
+					m_Widget.Vertical = m_Options ? m_Options->Bool("Vertical").value_or(false) : false;
+				}
 			}
 
 			glm::vec4 Color(const glm::vec4& fallback) const { return m_Color.value_or(fallback); }
@@ -314,6 +321,7 @@ namespace Basalt {
 				return m_Options ? m_Options->Number(key, min, max).value_or(fallback) : fallback;
 			}
 			float GetHandleWidth() const { return m_Widget.HandleWidth; }
+			bool IsVertical() const { return m_Widget.Vertical; }
 			UIBox Rect() const { return { m_Widget.Offset, m_Widget.Size }; }
 
 			// Registers the widget for input and returns what the user did to it this frame (nothing when it is drawn
@@ -323,6 +331,7 @@ namespace Basalt {
 			{
 				BS_CORE_ASSERT(!m_Registered, "an immediate-mode widget registers once");
 				m_Registered = true;
+				m_Widget.Clip = GameUI::GetClip();
 				UIInteraction& interaction = RequireInteraction(context, m_Checker);
 				if (GameUI::GetCommandCount() + MaxCommands > GameUI::MaxCommands)
 					m_Checker.Fail(TooManyCommandsMessage());
@@ -391,6 +400,32 @@ namespace Basalt {
 		sol::table ui = lua.create_named_table("UI");
 
 		ui["GetSize"] = []() { return GameUI::GetCanvasSize(); };
+		ui["PushClip"] = [](float x, float y, float width, float height) {
+			const Checker checker("UI.PushClip");
+			const glm::vec2 size = checker.Size(width, height);
+			if (size.x < 0 || size.y < 0)
+				checker.Fail("clip width and height must be non-negative");
+			if (!GameUI::PushClip({ checker.Position(x, y), size }))
+				checker.Fail("clip stack exceeds 256 levels");
+		};
+		ui["PopClip"] = []() { if (!GameUI::PopClip()) Checker("UI.PopClip").Fail("clip stack is empty"); };
+		ui["MeasureText"] = [](const std::string& text, const sol::object& sizeOrOptions) {
+			const Checker checker("UI.MeasureText");
+			float size = UITextComponent::DefaultFontSize, width = 0;
+			std::string font;
+			if (sizeOrOptions.get_type() == sol::type::table)
+			{
+				const Options options(checker, sizeOrOptions.as<sol::table>(), { "Size", "Font", "Width" });
+				size = options.Number("Size", UITextComponent::MinFontSize, UITextComponent::MaxFontSize).value_or(size);
+				width = options.Number("Width", 0.0f, UIRectComponent::MaxMagnitude).value_or(width);
+				font = options.String("Font").value_or(font);
+			}
+			else if (sizeOrOptions.get_type() == sol::type::number)
+				size = checker.Range("size", sizeOrOptions.as<float>(), UITextComponent::MinFontSize, UITextComponent::MaxFontSize);
+			else if (sizeOrOptions != sol::lua_nil)
+				checker.Fail("the second argument must be a size or options table");
+			return UIRenderer::MeasureText(text, size, font, width);
+		};
 
 		// UI.Text(text, x, y [, size [, color [, align]]]) or UI.Text(text, x, y, options).
 		ui["Text"] = [](const std::string& text, float x, float y, const sol::object& sizeOrOptions, sol::optional<glm::vec4> color, sol::optional<std::string> align) {
@@ -410,7 +445,7 @@ namespace Basalt {
 			{
 				if (color || align)
 					checker.Fail("pass either an options table or size, color and align, not both");
-				const Options options(checker, sizeOrOptions.as<sol::table>(), { "Size", "Color", "Align", "Anchor", "Pivot", "Font", "Shadow", "Width" });
+				const Options options(checker, sizeOrOptions.as<sol::table>(), { "Size", "Color", "Align", "Anchor", "Pivot", "Font", "Shadow", "Width", "Rotation", "Scale" });
 				command.FontSize = options.Number("Size", MinSize, MaxSize).value_or(command.FontSize);
 				command.Color = options.Color("Color").value_or(command.Color);
 				if (std::optional<std::string> name = options.String("Align"))
@@ -451,7 +486,7 @@ namespace Basalt {
 			command.Color = glm::vec4(0.0f, 0.0f, 0.0f, 0.5f);
 			if (std::optional<sol::table> table = OptionsOrColor(colorOrOptions, command.Color, checker, "color"))
 			{
-				const Options options(checker, *table, { "Color", "Anchor", "Pivot" });
+				const Options options(checker, *table, { "Color", "Anchor", "Pivot", "Rotation", "Scale" });
 				command.Color = options.Color("Color").value_or(command.Color);
 				ReadPlacement(options, command);
 			}
@@ -470,11 +505,22 @@ namespace Basalt {
 			command.Size = checker.Size(width, height);
 			if (std::optional<sol::table> table = OptionsOrColor(tintOrOptions, command.Color, checker, "tint"))
 			{
-				const Options options(checker, *table, { "Tint", "Anchor", "Pivot", "Slice", "SliceScale" });
+				const Options options(checker, *table, { "Tint", "Anchor", "Pivot", "Slice", "SliceScale", "UVMin", "UVMax", "SpriteColumns", "SpriteRows", "SpriteFrame", "Rotation", "Scale" });
 				command.Color = options.Color("Tint").value_or(command.Color);
 				ReadPlacement(options, command);
 				command.Slice = options.Vector<glm::vec4>("Slice", "Vec4 (left, top, right, bottom texels)", 0.0f, UIImageComponent::MaxSlice).value_or(command.Slice);
 				command.SliceScale = options.Number("SliceScale", UIImageComponent::MinSliceScale, UIImageComponent::MaxSliceScale).value_or(command.SliceScale);
+				command.UVMin = options.Vector<glm::vec2>("UVMin", "Vec2", 0, 1).value_or(command.UVMin);
+				command.UVMax = options.Vector<glm::vec2>("UVMax", "Vec2", 0, 1).value_or(command.UVMax);
+				const auto integer = [&](const char* name, uint32_t fallback, uint32_t max) {
+					const float value = options.Number(name, name == std::string_view("SpriteFrame") ? 0.0f : 1.0f, static_cast<float>(max)).value_or(static_cast<float>(fallback));
+					if (std::floor(value) != value)
+						checker.Fail(fmt::format("{} must be an integer", name));
+					return static_cast<uint32_t>(value);
+				};
+				command.SpriteColumns = integer("SpriteColumns", 1, 4096);
+				command.SpriteRows = integer("SpriteRows", 1, 4096);
+				command.SpriteFrame = integer("SpriteFrame", 0, command.SpriteColumns * command.SpriteRows - 1);
 			}
 			Submit(std::move(command), checker);
 		};
@@ -514,7 +560,7 @@ namespace Basalt {
 			if (!(max > min))
 				checker.Fail(fmt::format("max must be greater than min (got min {} and max {})", min, max));
 			checker.Range("value", value, min, max);
-			ImmediateWidget widget(checker, UIWidgetKind::Slider, label, x, y, width, height, options, { "Step", "FillColor", "HandleColor", "HandleWidth" });
+			ImmediateWidget widget(checker, UIWidgetKind::Slider, label, x, y, width, height, options, { "Step", "FillColor", "HandleColor", "HandleWidth", "Vertical" });
 			const UISliderComponent defaults;
 			const float step = widget.OptionNumber("Step", 0.0f, Limit, defaults.Step);
 			const glm::vec4 fillColor = widget.OptionColor("FillColor", defaults.FillColor);
@@ -525,7 +571,7 @@ namespace Basalt {
 			if (input.SliderSteps != 0)
 				value = UIWidgets::StepSliderValue(value, input.SliderSteps, min, max, step);
 			std::vector<UIDrawCommand> commands;
-			UIWidgets::AppendSlider(widget.Rect(), UIWidgets::SliderFraction(value, min, max), widget.GetHandleWidth(), widget.Color(defaults.TrackColor), fillColor, handleColor * DefaultTint<UISliderComponent>(input.State), commands);
+			UIWidgets::AppendSlider(widget.Rect(), UIWidgets::SliderFraction(value, min, max), widget.GetHandleWidth(), widget.Color(defaults.TrackColor), fillColor, handleColor * DefaultTint<UISliderComponent>(input.State), commands, widget.IsVertical());
 			widget.Draw(std::move(commands), widget.Rect(), { 0.5f, 0.5f });
 			return value;
 		};
@@ -564,12 +610,13 @@ namespace Basalt {
 			if (!target.is<ScriptEntity>())
 				checker.Fail("the argument must be a widget entity, a widget id or nil");
 			Entity entity = target.as<ScriptEntity>().ResolveOrThrow();
-			if (!UILayout::GetWidgetKind(entity))
-				checker.Fail(fmt::format("'{}' has no UIButton, UISlider or UICheckbox", entity.GetName()));
+			const auto kind = UILayout::GetWidgetKind(entity);
+			if (!kind || *kind == UIWidgetKind::Panel || *kind == UIWidgetKind::ScrollView)
+				checker.Fail(fmt::format("'{}' has no UIButton, UISlider, UICheckbox, UITextInput or UIDropdown", entity.GetName()));
 			interaction.SetFocus(UIWidgetID::ForEntity(entity.GetUUID()));
 		};
 
-		// UI.IsPointerOverWidget(): whether the pointer is over an interactable widget (a click there is the UI's).
+		// UI.IsPointerOverWidget(): whether the pointer is over an interactable control, scroll view or blocking panel.
 		ui["IsPointerOverWidget"] = [&context]() {
 			const UIInteraction* interaction = FindInteraction(context);
 			return interaction && interaction->IsPointerOverWidget();
@@ -584,7 +631,7 @@ namespace Basalt {
 		};
 
 		// UI.GetRect(entity): the laid-out rect of an entity with UI components as Vec4(x, y, width, height)
-		// in canvas units, or nil when it has none or it or an ancestor is hidden. Laid out for the last
+		// in canvas units, or nil when it has none, it or an ancestor is hidden, or its transform is unusable. Uses the last
 		// rendered viewport (1920x1080 headless).
 		ui["GetRect"] = [](const ScriptEntity& self) -> std::optional<glm::vec4> {
 			Entity entity = self.ResolveOrThrow();

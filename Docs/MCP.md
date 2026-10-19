@@ -196,7 +196,9 @@ are available through `help` / `tools/list`; they are editor-only and are not pa
   mesh AABB feedback alongside or instead of the visible-surface outline. Collider visibility applies
   to selected entities too; particle emitter shapes have their own switch. Invalid patches are
   atomic. These preferences last for the editor session and do not modify project/scene files.
-- `editor.pick {"x":200,"y":150,"select":true}` renders the current scene and picks at an integer output pixel.
+- `editor.pick {"x":200,"y":150,"select":true}` picks at an integer output pixel. Outside Play with
+  `editor.viewport` set to `uiBounds:true`, it first tests visible UI rects from topmost to bottommost using their transforms and effective clips. A UI hit
+  returns immediately; otherwise it renders the scene to pick world geometry.
   It returns `{"entity":<UUID>}` (0 for background), and selects by default. `select:false` only queries.
   Enabled light, camera and audio helpers use bounds tested against the mesh surface depth.
   Out-of-bounds coordinates and render/readback failures report errors without changing selection. The
@@ -357,3 +359,17 @@ links preserving hierarchy order. Retention is capped at 128 entries and 32 MiB 
 and label payloads; oldest entries are evicted. An individual edit exceeding the entire budget clears
 retained history and cannot be undone; a Console warning and status message report this. Scene
 serialization/diffing and restoration take time proportional to scene size.
+
+Game UI tools use the same component registry as Lua and the inspector. `ui.layout` reports each
+untransformed canvas rect, its column-major 3×3 affine `transform`, and the effective canvas `clip`
+(`[x,y,width,height]`, or null). Transform the rect's corners to locate rotated controls.
+`input.text {"codepoint":233}` queues one Unicode scalar value for the focused `UITextInput`;
+surrogates, C0 controls (U+0000–001F), DEL (U+007F), and a full text-input buffer are rejected.
+`input.mouse {"scroll":[0,-1]}` injects wheel input for scroll views.
+Both input kinds are recorded and replayed alongside keys, mouse buttons and gamepads.
+
+In Edit mode in the Scene viewport, enable **UI Bounds** and select an entity with `UIRect` to use its handles.
+With W (Translate), drag its body to move or one of eight handles to resize. E rotates around its
+pivot; R scales uniformly. The Snap toggle or Ctrl/Cmd enables the viewport's snap settings. Each gesture is one undo
+entry, and Escape cancels it. The handles follow ancestor rotation/scale and edit through
+`component.set`, using the same component validation and history as automation.

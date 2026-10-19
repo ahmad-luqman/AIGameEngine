@@ -19,6 +19,15 @@ namespace Basalt {
 	std::string ValidateUISlider(const UISliderComponent& slider);
 	std::string ValidateUICheckbox(const UICheckboxComponent& checkbox);
 
+	std::string ValidateUITextInput(const UITextInputComponent& c);
+	UITextInputComponent SanitizeUITextInput(UITextInputComponent c);
+	std::string ValidateUIDropdown(const UIDropdownComponent& c);
+	UIDropdownComponent SanitizeUIDropdown(UIDropdownComponent c);
+	std::string ValidateUIScrollView(const UIScrollViewComponent& c);
+	UIScrollViewComponent SanitizeUIScrollView(UIScrollViewComponent c);
+	std::string ValidateUIFocusRing(const UIFocusRingComponent& c);
+	UIFocusRingComponent SanitizeUIFocusRing(UIFocusRingComponent c);
+
 	// The component with every value moved into its range: non-finite values and out-of-range enums take the
 	// default component's value, everything else is clamped (AnchorMax is raised to AnchorMin; a slider with
 	// Max <= Min gets the unit range above Min, or the top unit of the allowed range, Value is clamped into it, and a

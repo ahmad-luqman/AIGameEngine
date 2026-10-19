@@ -102,15 +102,6 @@ below extend character movement, in order of impact.
   zones as a component (blend the room settings by the listener's position instead of scripting it), and more
   effect types (high-pass, echo, distortion) on the same per-source chain.
 
-### Game UI
-
-- **UI follow-ups — S.** Text measuring from Lua (`UI.MeasureText`), clipping a subtree to its rect (scroll
-  lists), rotation and scale of UI rects, sprite sheets (UV rects) for `UIImage`, editor handles to drag
-  and resize rects in the viewport.
-- **More widgets — M.** Text input fields, dropdowns and scroll views; vertical sliders; explicit navigation
-  neighbours (overriding the nearest-widget rule); panels that block pointer input to the widgets below them;
-  a focus ring that only shows after keyboard/gamepad use.
-
 ---
 
 ## P2 — Editor and asset pipeline

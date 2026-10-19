@@ -152,7 +152,7 @@ local function TestEntities(self)
 
 	-- Every component type round-trips through Lua.
 	for _, name in ipairs({ "Camera", "Mesh", "Animator", "Material", "DirectionalLight", "PointLight", "SpotLight", "SkyLight", "PostProcess", "RigidBody",
-		"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "AudioSource", "AudioListener", "ParticleEmitter", "UIRect", "UIImage", "UIText", "UIButton", "UISlider", "UICheckbox", "Prefab", "BoneAttachment", "InverseKinematics", "SpringBone" }) do
+		"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "AudioSource", "AudioListener", "ParticleEmitter", "UIRect", "UIImage", "UIText", "UIButton", "UISlider", "UICheckbox", "UITextInput", "UIDropdown", "UIScrollView", "UIPanel", "UINavigation", "UIFocusRing", "Prefab", "BoneAttachment", "InverseKinematics", "SpringBone" }) do
 		local holder = Scene.CreateEntity("Holder" .. name)
 		Expect("AddComponent " .. name, function() holder:AddComponent(name) end)
 		local data = holder:GetComponent(name)
@@ -281,6 +281,9 @@ local function TestSystems(self)
 		UI.Image("Assets/Textures/UIPanel.png", 20, 20, 64, 64)
 		UI.Image("Assets/Textures/UIPanel.png", 20, 20, 200, 80, { Slice = Vec4(10, 10, 10, 10), SliceScale = 2, Tint = Vec4(1, 1, 1, 0.8), Anchor = "TopLeft" })
 	end)
+	Check("UI.Image sprite and transform options", pcall(function()
+		UI.Image("Assets/Textures/UIPanel.png", 20, 20, 100, 100, { UVMin = Vec2(0), UVMax = Vec2(1), SpriteColumns = 2, SpriteRows = 2, SpriteFrame = 3, Rotation = 25, Scale = Vec2(1.1, 0.9) })
+	end))
 	ExpectError("UI unknown option", function() UI.Rect(0, 0, 1, 1, { Colour = Vec4(1) }) end, "unknown option 'Colour'")
 	ExpectError("UI unknown anchor", function() UI.Text("x", 0, 0, { Anchor = "Middle" }) end, "unknown Anchor 'Middle'")
 	ExpectError("UI.Image without a texture", function() UI.Image("", 0, 0, 1, 1) end, "texture path is empty")
@@ -320,6 +323,29 @@ local function TestSystems(self)
 	ExpectError("UIImage slice scale", function() panel:SetComponent("UIImage", { SliceScale = 0 }) end, "SliceScale must be between")
 	Check("Rejected UI patches change nothing", RectIs(UI.GetRect(panel), canvas.x - 24 - 360, 24, 360, 120)
 		and label:GetComponent("UIText").FontSize == 52 and label:GetComponent("UIText").HorizontalAlign == "Right" and panel:GetComponent("UIImage").SliceScale == 2)
+
+	local measured = UI.MeasureText("Measure", { Size = 24, Font = "Assets/Fonts/Karla-Regular.ttf" })
+	Check("UI.MeasureText", measured.x > 0 and measured.y > 0)
+	local wrapped = UI.MeasureText("Measure words", { Size = 24, Width = 30 })
+	Check("UI.MeasureText wrapping", wrapped.y > measured.y)
+	UI.PushClip(0, 0, 100, 100)
+	Check("UI.PushClip", pcall(function() UI.Rect(0, 0, 200, 200) end))
+	Check("UI.PopClip", pcall(function() UI.PopClip() end))
+	-- UI follow-ups are hidden probes so this headless check also runs against the GPU fixture.
+	local followups = Scene.FindEntityByName("UIFollowups")
+	local followRect = followups:GetComponent("UIRect")
+	Check("UIRect clipping and transforms", followRect.ClipChildren and Near(followRect.Rotation, 15) and Near(followRect.Scale[1], 1.2))
+	Check("UIScrollView fields", followups:GetComponent("UIScrollView").ContentSize[2] == 600)
+	Check("UIPanel blocks input", followups:GetComponent("UIPanel").BlockInput)
+	Check("UINavigation defaults", followups:GetComponent("UINavigation").Right == 0)
+	Check("UIFocusRing fields", followups:GetComponent("UIFocusRing").Thickness == 2)
+	Check("UITextInput fields", Scene.FindEntityByName("TextInputProbe"):GetComponent("UITextInput").Text == "Hello")
+	Check("UIDropdown fields", Scene.FindEntityByName("DropdownProbe"):GetComponent("UIDropdown").Selected == 1)
+	local sprite = Scene.FindEntityByName("SpriteProbe")
+	Check("UIImage sprite sheets", sprite:GetComponent("UIImage").SpriteFrame == 3 and sprite:GetComponent("UIImage").SpriteRows == 2)
+	Check("UISlider vertical", sprite:GetComponent("UISlider").Vertical)
+	ExpectError("UI sprite frame outside sheet", function() sprite:SetComponent("UIImage", { SpriteFrame = 4 }) end, "SpriteFrame")
+	ExpectError("UI scale must be invertible", function() followups:SetComponent("UIRect", { Scale = Vec2(0, 1) }) end, "Scale")
 
 	-- Time.
 	Check("Time at start", Time.GetFrame() == 0 and Near(Time.GetElapsed(), 0))
@@ -525,6 +551,7 @@ local function TestWidgets(self)
 	-- Immediate-mode widgets: nothing happened to them yet.
 	Check("UI.Button", UI.Button("Probe button", 20, 20, 100, 40) == false)
 	Check("UI.Checkbox", UI.Checkbox("Probe checkbox", true, 20, 80, 200, 40, { CheckColor = Vec4(1, 0, 0, 1) }) == true)
+	Check("UI.Slider vertical", UI.Slider("Vertical probe", 0.5, 0, 1, 300, 140, 30, 200, { Vertical = true }) == 0.5)
 	Check("UI.Slider", UI.Slider("", 0.25, 0, 1, 20, 140, 200, 30, { Id = "Probe slider", Step = 0.25, HandleWidth = 10 }) == 0.25)
 	ExpectError("UI.Button duplicate id", function() UI.Button("Probe button", 0, 0, 10, 10) end, "already uses the id 'Probe button'")
 	ExpectError("UI.Slider empty range", function() UI.Slider("x", 0, 1, 1, 0, 0, 10, 10) end, "max must be greater than min")
@@ -535,7 +562,7 @@ local function TestWidgets(self)
 	UI.SetFocus("Probe button")
 	Check("UI.SetFocus id", UI.GetFocus() == "Probe button")
 	UI.SetFocus(nil)
-	ExpectError("UI.SetFocus non-widget", function() UI.SetFocus(Scene.FindEntityByName("HUD")) end, "has no UIButton, UISlider or UICheckbox")
+	ExpectError("UI.SetFocus non-widget", function() UI.SetFocus(Scene.FindEntityByName("HUD")) end, "has no UIButton, UISlider, UICheckbox, UITextInput or UIDropdown")
 	Check("UI.IsPointerOverWidget", UI.IsPointerOverWidget() == false)
 	UI.SetNavigationEnabled(false)
 	Check("UI.SetNavigationEnabled", UI.IsNavigationEnabled() == false)
@@ -552,6 +579,51 @@ local function TestWidgets(self)
 	ExpectError("Gamepad index range", function() Input.IsGamepadConnected(16) end, "integer from 0 to 15")
 	ExpectError("Gamepad button name", function() Input.IsGamepadButtonDown(0, "Turbo") end, "unknown gamepad button")
 	ExpectError("Gamepad axis name", function() Input.GetGamepadAxis(0, "Wheel") end, "unknown gamepad axis")
+end
+
+-- The batch enables these probes only after the original widget checks have finished.
+function Driver:OnUIFieldChanged(widget, value)
+	self.UIFieldEvent = widget.Name .. "=" .. value
+end
+
+function Driver:OnUIChoiceChanged(widget, value)
+	self.UIChoiceEvent = widget.Name .. "=" .. value
+end
+
+function FeatureTest.BeginUIFollowups()
+	local driver = Scene.FindEntityByName("FeatureTestDriver")
+	local field = Scene.FindEntityByName("TextInputProbe")
+	field:SetComponent("UIRect", { Visible = true, AnchorMin = Vec2(0), AnchorMax = Vec2(0), Pivot = Vec2(0), Position = Vec2(800, 300) })
+	field:SetComponent("UITextInput", { Target = driver.ID, OnValueChanged = "OnUIFieldChanged" })
+	local dropdown = Scene.FindEntityByName("DropdownProbe")
+	dropdown:SetComponent("UIDropdown", { Target = driver.ID, OnValueChanged = "OnUIChoiceChanged" })
+	dropdown:SetComponent("UIRect", { Visible = true, AnchorMin = Vec2(0), AnchorMax = Vec2(0), Pivot = Vec2(0), Position = Vec2(800, 400) })
+	field:AddComponent("UINavigation", { Down = dropdown.ID })
+	UI.SetFocus(field)
+	local scroll = Scene.FindEntityByName("UIFollowups")
+	scroll:SetComponent("UIRect", { Visible = true, AnchorMin = Vec2(0), AnchorMax = Vec2(0), Pivot = Vec2(0), Position = Vec2(800, 500), Size = Vec2(200, 100), Rotation = 0, Scale = Vec2(1) })
+end
+
+function FeatureTest.CheckUIFollowups()
+	local driver = Scene.FindEntityByName("FeatureTestDriver"):GetScript()
+	Check("UITextInput string callback", driver.UIFieldEvent == "TextInputProbe=Helloé")
+	Check("UIDropdown numeric callback", driver.UIChoiceEvent == "DropdownProbe=0.0" or driver.UIChoiceEvent == "DropdownProbe=0")
+	Check("UITextInput Unicode editing", Scene.FindEntityByName("TextInputProbe"):GetComponent("UITextInput").Text == "Helloé")
+	Check("UIScrollView wheel input", Scene.FindEntityByName("UIFollowups"):GetComponent("UIScrollView").Offset[2] == 32)
+	Check("UINavigation explicit target", UI.GetFocus() == Scene.FindEntityByName("DropdownProbe"))
+	Check("UIDropdown navigation selection", Scene.FindEntityByName("DropdownProbe"):GetComponent("UIDropdown").Selected == 0)
+	Scene.FindEntityByName("DropdownProbe"):SetComponent("UIRect", { Visible = false })
+	Scene.FindEntityByName("TextInputProbe"):SetComponent("UIRect", { Visible = false })
+	UI.SetFocus(Scene.FindEntityByName("ScrolledButtonProbe"))
+end
+
+function FeatureTest.CheckUIScrollKeyboard()
+	local scroll = Scene.FindEntityByName("UIFollowups")
+	local button = Scene.FindEntityByName("ScrolledButtonProbe")
+	Check("UIScrollView keyboard reveal", UI.GetFocus() == button and Near(scroll:GetComponent("UIScrollView").Offset[2], 390))
+	Check("UIScrollView visible focused rect", Near(UI.GetRect(button).y, 560))
+	scroll:SetComponent("UIRect", { Visible = false })
+	UI.SetFocus(nil)
 end
 
 -- Called by the batch after it clicked PLAY (a click does not focus), pressed Down twice (the first shows the focus

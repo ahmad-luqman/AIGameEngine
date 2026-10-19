@@ -112,11 +112,11 @@ Fields: `PlayOnStart` (boolean), `Looping` (boolean), `Duration` (number), `MaxP
 
 ## UIRect
 
-Fields: `Visible` (boolean), `AnchorMin` (number[2]), `AnchorMax` (number[2]), `Pivot` (number[2]), `Position` (number[2]), `Size` (number[2])
+Fields: `Visible` (boolean), `ClipChildren` (boolean), `Rotation` (number), `Scale` (number[2]), `AnchorMin` (number[2]), `AnchorMax` (number[2]), `Pivot` (number[2]), `Position` (number[2]), `Size` (number[2])
 
 ## UIImage
 
-Fields: `Texture` (string), `Color` (number[4]), `Slice` (number[4]), `SliceScale` (number)
+Fields: `Texture` (string), `Color` (number[4]), `Slice` (number[4]), `SliceScale` (number), `UVMin` (number[2]), `UVMax` (number[2]), `SpriteColumns` (integer), `SpriteRows` (integer), `SpriteFrame` (integer)
 
 ## UIText
 
@@ -128,11 +128,35 @@ Fields: `Interactable` (boolean), `NormalTint` (number[4]), `HighlightTint` (num
 
 ## UISlider
 
-Fields: `Interactable` (boolean), `Value` (number), `Min` (number), `Max` (number), `Step` (number), `TrackColor` (number[4]), `FillColor` (number[4]), `HandleColor` (number[4]), `HandleWidth` (number), `NormalTint` (number[4]), `HighlightTint` (number[4]), `PressedTint` (number[4]), `DisabledTint` (number[4]), `Target` (entity), `OnValueChanged` (string)
+Fields: `Interactable` (boolean), `Value` (number), `Min` (number), `Max` (number), `Step` (number), `TrackColor` (number[4]), `FillColor` (number[4]), `HandleColor` (number[4]), `HandleWidth` (number), `Vertical` (boolean), `NormalTint` (number[4]), `HighlightTint` (number[4]), `PressedTint` (number[4]), `DisabledTint` (number[4]), `Target` (entity), `OnValueChanged` (string)
 
 ## UICheckbox
 
 Fields: `Interactable` (boolean), `Checked` (boolean), `BoxColor` (number[4]), `CheckColor` (number[4]), `NormalTint` (number[4]), `HighlightTint` (number[4]), `PressedTint` (number[4]), `DisabledTint` (number[4]), `Target` (entity), `OnValueChanged` (string)
+
+## UITextInput
+
+Fields: `Interactable` (boolean), `ReadOnly` (boolean), `Text` (string), `Placeholder` (string), `MaxLength` (integer), `NormalTint` (number[4]), `HighlightTint` (number[4]), `PressedTint` (number[4]), `DisabledTint` (number[4]), `Target` (entity), `OnValueChanged` (string)
+
+## UIDropdown
+
+Fields: `Interactable` (boolean), `Options` (string), `Selected` (integer), `NormalTint` (number[4]), `HighlightTint` (number[4]), `PressedTint` (number[4]), `DisabledTint` (number[4]), `Target` (entity), `OnValueChanged` (string)
+
+## UIScrollView
+
+Fields: `Interactable` (boolean), `ContentSize` (number[2]), `Offset` (number[2]), `ScrollSpeed` (number)
+
+## UIPanel
+
+Fields: `BlockInput` (boolean)
+
+## UINavigation
+
+Fields: `Up` (entity), `Down` (entity), `Left` (entity), `Right` (entity)
+
+## UIFocusRing
+
+Fields: `Color` (number[4]), `Thickness` (number)
 
 ## Prefab
 

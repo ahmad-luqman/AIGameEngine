@@ -42,6 +42,40 @@
 
 namespace Basalt {
 
+	ScriptOwnerScope::ScriptOwnerScope(ScriptContext& context, UUID owner, const char* callback)
+		: m_Context(context)
+		, m_Previous(context.m_CurrentOwner)
+		, m_Owner(owner)
+		, m_Callback(callback)
+		, m_Clips(GameUI::CaptureClipStack())
+	{
+		context.m_CurrentOwner = owner;
+	}
+
+	ScriptOwnerScope::~ScriptOwnerScope()
+	{
+		m_Context.m_CurrentOwner = m_Previous;
+		if (!GameUI::RestoreClipStack(std::move(m_Clips)))
+			return;
+		auto& reported = m_Context.m_ReportedClipLeaks;
+		const std::string key = fmt::format("{}/{}", static_cast<uint64_t>(m_Owner), m_Callback);
+		if (reported.contains(key))
+			return;
+		if (reported.size() >= ScriptContext::MaxClipLeakWarnings)
+		{
+			if (!m_Context.m_ReportedClipLeakLimit)
+			{
+				m_Context.m_ReportedClipLeakLimit = true;
+				BS_CORE_WARN("UI: clip leak diagnostic limit ({}) reached; further callback warnings suppressed until scripts reload", ScriptContext::MaxClipLeakWarnings);
+			}
+			return;
+		}
+		reported.insert(key);
+		const Entity entity = m_Context.SceneContext ? m_Context.SceneContext->GetEntityByUUID(m_Owner) : Entity();
+		const auto* script = entity ? entity.TryGetComponent<ScriptComponent>() : nullptr;
+		BS_CORE_WARN("UI: unbalanced UI.PushClip/PopClip in '{}' {} (entity {}); restored the caller's clip stack", script ? script->Script : "<script>", m_Callback, static_cast<uint64_t>(m_Owner));
+	}
+
 	Entity ScriptEntity::Resolve() const
 	{
 		return SceneContext ? SceneContext->GetEntityByUUID(ID) : Entity{};

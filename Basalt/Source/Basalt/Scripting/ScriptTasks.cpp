@@ -226,7 +226,7 @@ namespace Basalt {
 			}
 		}
 
-		ScriptOwnerScope scope(m_Context, owner);
+		ScriptOwnerScope scope(m_Context, owner, "timer");
 		const sol::protected_function_result result = callback(ScriptTaskHandle{ id });
 		if (result.valid())
 			return;
@@ -261,7 +261,7 @@ namespace Basalt {
 		int resultCount = 0;
 		int status = LUA_OK;
 		{
-			ScriptOwnerScope scope(m_Context, owner);
+			ScriptOwnerScope scope(m_Context, owner, "coroutine resume");
 			status = lua_resume(coroutine, from, nargs, &resultCount);
 		}
 		const WaitRequest wait = std::exchange(m_Active, previous).Wait;
@@ -288,7 +288,7 @@ namespace Basalt {
 		// The message and where it was raised, taken before lua_closethread resets the stack. As the owner: a
 		// __tostring may create timers or handlers, which must end with the failing instance.
 		{
-			ScriptOwnerScope scope(m_Context, owner);
+			ScriptOwnerScope scope(m_Context, owner, "coroutine error text");
 			outError = ErrorText(from, coroutine);
 		}
 		const std::string traceback = Traceback(from, coroutine);
@@ -299,7 +299,7 @@ namespace Basalt {
 		lua_xmove(coroutine, from, 1);
 		int closeStatus = LUA_OK;
 		{
-			ScriptOwnerScope scope(m_Context, owner);
+			ScriptOwnerScope scope(m_Context, owner, "coroutine close");
 			closeStatus = lua_closethread(coroutine, from);
 		}
 		// The thread's error is left on its stack: the original one, or the error a __close raised instead.
@@ -308,7 +308,7 @@ namespace Basalt {
 			lua_xmove(coroutine, from, 1);
 			if (!lua_rawequal(from, -1, -2))
 			{
-				ScriptOwnerScope scope(m_Context, owner);
+				ScriptOwnerScope scope(m_Context, owner, "coroutine close error text");
 				outError += "\n(closing its to-be-closed variables also failed: " + PopAsText(from) + ")";
 			}
 			else

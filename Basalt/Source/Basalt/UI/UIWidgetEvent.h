@@ -8,8 +8,8 @@
 namespace Basalt {
 
 	// What a widget callback receives besides the widget: nothing for a click, the new value of a slider (number)
-	// or of a checkbox (boolean).
-	using UIWidgetValue = std::variant<std::monostate, float, bool>;
+	// or of a checkbox (boolean), a text input (string), or a dropdown (zero-based numeric index).
+	using UIWidgetValue = std::variant<std::monostate, float, bool, std::string>;
 
 	// A user interaction with a widget component, for its target's script: Target:Method(widget[, value]). Produced
 	// by UIInteraction, dispatched by the ScriptEngine before OnUpdate.

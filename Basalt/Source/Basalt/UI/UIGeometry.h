@@ -45,6 +45,14 @@ namespace Basalt {
 	// resulting size (Size shrinking the anchors' span past zero) collapses to zero around the pivot.
 	UIBox ComputeUIRect(const UIBox& parent, const UIRectComponent& rect);
 
+	// Composed transforms must remain finite, with coordinates/linear terms within 1e9 and inverse linear terms within 1e12.
+	bool IsUsableUITransform(const UIBox& box, const glm::mat3& transform);
+	constexpr float MaxUICoordinate = 1e9f;
+	glm::mat3 ComputeUITransform(const UIBox& box, const UIRectComponent& rect);
+	UIBox TransformUIBox(const UIBox& box, const glm::mat3& transform);
+	UIBox IntersectUIBoxes(const UIBox& a, const UIBox& b);
+	bool ContainsUIBox(const UIBox& box, const glm::mat3& transform, const glm::vec2& point);
+
 	// The top-left corner that places something of size `extent` inside `box` at `align` (0 = left/top,
 	// 0.5 = centered, 1 = right/bottom). A zero-size box makes `align` the extent's pivot on box.Min.
 	glm::vec2 AlignInBox(const UIBox& box, const glm::vec2& extent, const glm::vec2& align);

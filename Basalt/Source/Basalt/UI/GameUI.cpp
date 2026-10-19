@@ -2,6 +2,7 @@
 
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Input.h"
+#include "Basalt/Core/Log.h"
 #include "Basalt/UI/UIGeometry.h"
 
 #include <cmath>
@@ -13,6 +14,8 @@ namespace Basalt {
 
 		std::mutex s_Mutex;
 		std::vector<UIDrawCommand> s_Commands;
+		std::vector<UIBox> s_Clips;
+		bool s_ReportedUnbalancedClips = false;
 		// The host's view without the pointer and navigation flags, which are Input's game routing. The defaults are
 		// the headless view.
 		struct HostView
@@ -53,14 +56,65 @@ namespace Basalt {
 		std::scoped_lock lock(s_Mutex);
 		if (s_Commands.size() >= MaxCommands)
 			return SubmitResult::QueueFull;
+		if (!s_Clips.empty())
+			command.Clip = command.Clip ? IntersectUIBoxes(*command.Clip, s_Clips.back()) : s_Clips.back();
 		s_Commands.push_back(std::move(command));
 		return SubmitResult::Queued;
 	}
 
 	void GameUI::BeginFrame()
 	{
+		bool warn = false;
+		{
+			std::scoped_lock lock(s_Mutex);
+			warn = !s_Clips.empty() && !s_ReportedUnbalancedClips;
+			s_ReportedUnbalancedClips |= warn;
+			s_Commands.clear();
+			s_Clips.clear();
+		}
+		if (warn)
+			BS_CORE_WARN("GameUI: unbalanced UI.PushClip/PopClip at frame boundary; resetting the clip stack (reported once per process)");
+	}
+
+	bool GameUI::PushClip(const UIBox& box)
+	{
+		if (!IsUsableOrigin(box.Min) || !std::isfinite(box.Size.x) || !std::isfinite(box.Size.y) || box.Size.x < 0 || box.Size.y < 0)
+			return false;
 		std::scoped_lock lock(s_Mutex);
-		s_Commands.clear();
+		if (s_Clips.size() >= 256)
+			return false;
+		s_Clips.push_back(s_Clips.empty() ? box : IntersectUIBoxes(s_Clips.back(), box));
+		return true;
+	}
+
+	bool GameUI::PopClip()
+	{
+		std::scoped_lock lock(s_Mutex);
+		if (s_Clips.empty())
+			return false;
+		s_Clips.pop_back();
+		return true;
+	}
+
+	std::optional<UIBox> GameUI::GetClip()
+	{
+		std::scoped_lock lock(s_Mutex);
+		return s_Clips.empty() ? std::nullopt : std::optional(s_Clips.back());
+	}
+
+	std::vector<UIBox> GameUI::CaptureClipStack()
+	{
+		std::scoped_lock lock(s_Mutex);
+		return s_Clips;
+	}
+
+	bool GameUI::RestoreClipStack(std::vector<UIBox> clips)
+	{
+		std::scoped_lock lock(s_Mutex);
+		const bool changed = s_Clips != clips;
+		if (changed)
+			s_Clips = std::move(clips);
+		return changed;
 	}
 
 	void GameUI::AppendCommands(std::vector<UIDrawCommand>& out)

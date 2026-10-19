@@ -147,6 +147,10 @@ namespace Basalt {
 		static void SetMouseButtonState(MouseCode button, bool down);
 		static void SetMousePosition(const glm::vec2& position);
 		static void AddMouseScroll(const glm::vec2& scroll);
+		// Unicode text typed this frame; bounded to 16384 UTF-8 bytes and cleared by EndFrame/Reset.
+		// Returns false for C0 (U+0000..001F), DEL (U+007F), invalid scalars or a full frame buffer.
+		static bool AddTextCodepoint(uint32_t codepoint);
+		static std::string GetTextInput();
 
 		// Injected gamepads (tests, automation). Connecting names the gamepad and makes it injected (taking over a
 		// physical gamepad at that index, released); disconnecting releases everything (a physical gamepad there
@@ -178,6 +182,8 @@ namespace Basalt {
 	class GameInput
 	{
 	public:
+		static std::string GetTextInput();
+
 		static bool IsKeyDown(KeyCode key, InputFrame frame = InputFrame::Current);
 		static bool IsKeyPressed(KeyCode key);
 		static bool IsKeyReleased(KeyCode key);
