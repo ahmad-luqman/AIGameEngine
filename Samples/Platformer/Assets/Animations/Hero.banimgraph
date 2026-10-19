@@ -1,0 +1,25 @@
+{
+	"InitialState": "Locomotion",
+	"Parameters": [
+		{ "Name": "Speed", "Type": "Float" },
+		{ "Name": "Grounded", "Type": "Bool", "Default": true },
+		{ "Name": "VerticalSpeed", "Type": "Float" },
+		{ "Name": "Jump", "Type": "Trigger" }
+	],
+	"States": [
+		{ "Name": "Locomotion", "BlendSpace": "Locomotion", "ParameterX": "Speed", "RootMotion": true },
+		{ "Name": "Jump", "Clip": "Jump", "Looping": false },
+		{ "Name": "Fall", "Clip": "Fall" },
+		{ "Name": "Land", "Clip": "Land", "Looping": false }
+	],
+	"Transitions": [
+		{ "From": "Locomotion", "To": "Jump", "Duration": 0.1, "Conditions": [ { "Parameter": "Jump" } ] },
+		{ "From": "Land", "To": "Jump", "Duration": 0.1, "Conditions": [ { "Parameter": "Jump" } ] },
+		{ "From": "Locomotion", "To": "Fall", "Duration": 0.2, "Conditions": [ { "Parameter": "Grounded", "Value": false } ] },
+		{ "From": "Land", "To": "Fall", "Duration": 0.2, "Conditions": [ { "Parameter": "Grounded", "Value": false } ] },
+		{ "From": "Jump", "To": "Land", "Duration": 0.08, "Conditions": [ { "Parameter": "Grounded", "Value": true } ] },
+		{ "From": "Jump", "To": "Fall", "Duration": 0.25, "Conditions": [ { "Parameter": "VerticalSpeed", "Operator": "Less", "Value": 0 } ] },
+		{ "From": "Fall", "To": "Land", "Duration": 0.08, "Conditions": [ { "Parameter": "Grounded", "Value": true } ] },
+		{ "From": "Land", "To": "Locomotion", "Duration": 0.15, "ExitTime": 0.7 }
+	]
+}

@@ -47,6 +47,8 @@ build/bin/basalt --project Samples/Tetris project.export '{"output": "Dist/Tetri
 - [Samples/Joints](Samples/Joints) — every joint type
 - [Samples/MovementDemo](Samples/MovementDemo) — a walking mannequin with foot placement, look-at and reach IK, a
   masked wave layer and additive breathing
+- [Samples/Platformer](Samples/Platformer) — a 3D platformer: a character controller driven through an animation state
+  machine with root motion, foot placement, spring-bone hair and cape, and a moving platform
 
 ## License
 
