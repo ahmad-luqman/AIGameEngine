@@ -29,9 +29,10 @@ namespace Basalt {
 
 	}
 
-	bool ImGuiRenderer::Init(nvrhi::IDevice* device)
+	bool ImGuiRenderer::Init(nvrhi::IDevice* device, bool gpuTimers)
 	{
 		m_Device = device;
+		m_Profiler = CreateScope<GpuProfiler>(device, std::vector<std::string>{ "ImGui" }, gpuTimers);
 		m_CommandList = m_Device->createCommandList();
 
 		m_VertexShader = CreateEmbeddedShader(m_Device, "ImGui.vert", nvrhi::ShaderType::Vertex);
@@ -77,6 +78,7 @@ namespace Basalt {
 			return;
 
 		m_Device->waitForIdle();
+		m_Profiler.reset();
 		for (ImTextureData* texture : ImGui::GetPlatformIO().Textures)
 		{
 			if (texture->RefCount != 1)
@@ -261,12 +263,16 @@ namespace Basalt {
 		return bindingSet;
 	}
 
-	void ImGuiRenderer::Render(ImDrawData* drawData, nvrhi::IFramebuffer* framebuffer)
+	void ImGuiRenderer::Render(ImDrawData* drawData, nvrhi::IFramebuffer* framebuffer, bool profile)
 	{
 		m_FrameIndex++;
 
 		m_CommandList->open();
-		m_CommandList->beginMarker("ImGui");
+		if (profile)
+		{
+			m_Profiler->BeginFrame(m_CommandList);
+			m_Profiler->BeginPass(m_CommandList, 0);
+		}
 
 		if (drawData->Textures)
 		{
@@ -362,7 +368,11 @@ namespace Basalt {
 			}
 		}
 
-		m_CommandList->endMarker();
+		if (profile)
+		{
+			m_Profiler->EndPass(m_CommandList, 0);
+			m_Profiler->EndFrame(m_CommandList, 0);
+		}
 		m_CommandList->close();
 		m_Device->executeCommandList(m_CommandList);
 

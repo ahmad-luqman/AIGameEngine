@@ -17,7 +17,9 @@
 #include "Basalt/Core/MemoryTracker.h"
 #include "Basalt/Core/Window.h"
 #include "Basalt/ImGui/ImGuiLayer.h"
+#include "Basalt/ImGui/StatisticsOverlay.h"
 #include "Basalt/Project/Project.h"
+#include "Basalt/Physics/PhysicsWorld.h"
 #include "Basalt/Renderer/DebugDraw.h"
 #include "Basalt/Renderer/GraphicsDevice.h"
 #include "Basalt/Renderer/RenderMath.h"
@@ -566,7 +568,7 @@ namespace Basalt {
 								 return nlohmann::json{ { "path", path.string() }, { "note", "written at the end of the current frame" } };
 							 } });
 
-		m_Commands.Register({ "editor.game_view", "Gets or changes the Game view: the resolution it renders at (the project's window size unless overridden for this session), focus, and with path saves what it shows (primary camera at that resolution, game UI, never a debug view; exposure reset as for screenshots) to a PNG. Returns {visible, mode, status (rendered, notRendered, noCamera, rendererUnavailable, renderFailed: the last frame's), width, height, override, hasCamera, imageRect and panelRect (logical units, relative to the editor window, as last drawn), windowSize, renderWidth, renderHeight, cursorMode (what the game asks for: Normal, Hidden or Locked), cursorLocked (whether the window holds the cursor for the game now), cursorReleased (Escape gave the cursor back to the editor until the Game view is clicked)}.", GameViewSettings::Schema(), [this](AutomationSession& session, const nlohmann::json& params) {
+		m_Commands.Register({ "editor.game_view", "Gets or changes the Game view: the resolution it renders at (the project's window size unless overridden for this session), focus, stats (session-only play overlay), and with path saves what it shows (primary camera at that resolution, game UI, never a debug view; exposure reset as for screenshots) to a PNG. Returns {stats, statsVisible, frameMs (host wall time), physicsBodies, luaBytes (process), renderStats (Game renderer or null), imguiGpu, visible, mode, status (rendered, notRendered, noCamera, rendererUnavailable, renderFailed: the last frame's), width, height, override, hasCamera, imageRect and panelRect (logical units, relative to the editor window, as last drawn), windowSize, renderWidth, renderHeight, cursorMode (what the game asks for: Normal, Hidden or Locked), cursorLocked (whether the window holds the cursor for the game now), cursorReleased (Escape gave the cursor back to the editor until the Game view is clicked)}.", GameViewSettings::Schema(), [this](AutomationSession& session, const nlohmann::json& params) {
 								 std::string error;
 								 if (!m_GameView.Apply(params, error))
 									 throw CommandError(error);
@@ -2052,6 +2054,9 @@ namespace Basalt {
 			m_GameViewHovered = ImGui::IsItemHovered();
 			// The game UI shows over the image, or over black when nothing rendered (a scene without a camera).
 			m_GameUIFrame.Draw(drawList, m_GameImageMin, m_GameImageSize);
+			if (IsGameRunning() && m_GameView.ShowStats())
+				DrawStatisticsOverlay(drawList, m_GameImageMin, m_GameImageSize, *m_Session.GetScene(),
+									  m_GameViewStatus == GameViewStatus::Rendered ? m_GameRenderer.get() : nullptr, Application::Get().GetImGuiLayer()->GetProfiler());
 
 			const char* message = nullptr;
 			switch (m_GameViewStatus)
@@ -2086,7 +2091,8 @@ namespace Basalt {
 			if (badge)
 			{
 				const ImVec2 textSize = ImGui::CalcTextSize(badge);
-				const ImVec2 badgeMin(imageMin.x + 8.0f, imageMin.y + 8.0f);
+				const float badgeY = IsGameRunning() && m_GameView.ShowStats() ? imageMin.y + imageSize.y - textSize.y - 16.0f : imageMin.y + 8.0f;
+				const ImVec2 badgeMin(imageMin.x + 8.0f, badgeY);
 				drawList->AddRectFilled(badgeMin, ImVec2(badgeMin.x + textSize.x + 12.0f, badgeMin.y + textSize.y + 8.0f), IM_COL32(20, 20, 24, 210), 4.0f);
 				drawList->AddText(ImVec2(badgeMin.x + 6.0f, badgeMin.y + 4.0f), IM_COL32(255, 200, 80, 255), badge);
 			}
@@ -2156,6 +2162,10 @@ namespace Basalt {
 
 	void EditorLayer::DrawGameViewOptions()
 	{
+		bool showStats = m_GameView.ShowStats();
+		if (ImGui::Checkbox("Stats", &showStats))
+			m_Context.Execute("editor.game_view", { { "stats", showStats } });
+		ImGui::SameLine();
 		const glm::uvec2 resolution = GetGameResolution();
 		const std::string label = fmt::format("{}x{}{}", resolution.x, resolution.y, m_GameView.GetOverride() ? "" : " (Project)");
 		ImGui::SetNextItemWidth(170.0f);
@@ -2218,6 +2228,13 @@ namespace Basalt {
 		};
 		return {
 			{ "visible", m_GameViewVisible },
+			{ "stats", m_GameView.ShowStats() },
+			{ "statsVisible", m_GameView.ShowStats() && IsGameRunning() && m_GameViewVisible },
+			{ "physicsBodies", m_Session.GetScene()->GetPhysicsWorld() ? m_Session.GetScene()->GetPhysicsWorld()->GetBodyCount() : 0 },
+			{ "luaBytes", MemoryTracker::Get(MemoryCategory::Lua).Bytes },
+			{ "frameMs", Application::Get().GetFrameMilliseconds() },
+			{ "renderStats", m_GameViewStatus == GameViewStatus::Rendered && m_GameRenderer ? GetRenderStats(*m_GameRenderer) : nlohmann::json() },
+			{ "imguiGpu", Application::Get().GetImGuiLayer()->GetProfiler() ? GpuTimingsToJson(Application::Get().GetImGuiLayer()->GetProfiler()->GetTimings()) : nlohmann::json() },
 			{ "mode", GetSessionModeName() },
 			{ "status", GameViewStatusName(m_GameViewStatus) },
 			{ "width", resolution.x },

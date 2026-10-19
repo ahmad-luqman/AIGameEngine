@@ -2052,6 +2052,7 @@ namespace Basalt {
 					continue;
 				drawItem(item, impl.OpaquePipeline[item.DoubleSided ? 1 : 0], impl.LightingFramebuffer, renderViewport, 0, true);
 				m_Statistics.DrawCalls++;
+				m_Statistics.Triangles += item.IndexCount / 3;
 			}
 
 			if (!skyLight || skyLight->ShowBackground)
@@ -2086,10 +2087,14 @@ namespace Basalt {
 				commandList->setPushConstants(&push, sizeof(push));
 				// Six vertices (two triangles) per billboard, pulled from the particle buffer.
 				commandList->draw(nvrhi::DrawArguments().setVertexCount(batch.Count * 6));
+				m_Statistics.Triangles += static_cast<uint64_t>(batch.Count) * 2;
 			};
 			// std::visit: a new kind of transparent draw must be handled here to compile.
 			const auto drawTransparent = Overloaded{
-				[&](const DrawItem* item) { drawItem(*item, impl.TransparentPipeline[item->DoubleSided ? 1 : 0], impl.LightingFramebuffer, renderViewport, 0, true); },
+				[&](const DrawItem* item) {
+					drawItem(*item, impl.TransparentPipeline[item->DoubleSided ? 1 : 0], impl.LightingFramebuffer, renderViewport, 0, true);
+					m_Statistics.Triangles += item->IndexCount / 3;
+				},
 				[&](const ParticleDraw* particleDraw) { drawParticles(*particleDraw); },
 			};
 			for (const TransparentDraw& draw : transparent)

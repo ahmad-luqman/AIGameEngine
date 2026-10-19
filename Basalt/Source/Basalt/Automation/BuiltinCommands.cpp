@@ -1712,7 +1712,7 @@ namespace Basalt {
 				return MemoryTracker::ToJson();
 			});
 
-			Add(registry, "render.stats", "Returns the scene renderer's statistics: viewport and render size, render scale and dynamic resolution state, draw and culling counts, and the GPU time of each pass averaged over recent frames (editor / GPU hosts only).", Schema::Object(), [](AutomationSession& session, const json&) {
+			Add(registry, "render.stats", "Returns the scene renderer's statistics: viewport and render size, render scale and dynamic resolution state, draw, color-pass triangle and culling counts, and the GPU time of each pass averaged over recent frames (editor / GPU hosts only).", Schema::Object(), [](AutomationSession& session, const json&) {
 				if (!session.RenderStats)
 					throw CommandError("render statistics need a GPU host (the editor); this host is '" + session.HostName + "'");
 				json stats;

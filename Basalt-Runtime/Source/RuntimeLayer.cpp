@@ -3,6 +3,8 @@
 #include "Basalt/Core/Application.h"
 #include "Basalt/Core/Input.h"
 #include "Basalt/Core/Window.h"
+#include "Basalt/ImGui/ImGuiLayer.h"
+#include "Basalt/ImGui/StatisticsOverlay.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/GraphicsDevice.h"
 #include "Basalt/Renderer/RenderUtils.h"
@@ -54,6 +56,7 @@ namespace Basalt {
 				return;
 			}
 			m_CommandList = device->GetDevice()->createCommandList();
+			m_BlitProfiler = CreateScope<GpuProfiler>(device->GetDevice(), std::vector<std::string>{ "Runtime blit" }, device->SupportsTimerQueries());
 			m_Scene->OnViewportResize(device->GetBackBufferWidth(), device->GetBackBufferHeight());
 		}
 
@@ -76,6 +79,7 @@ namespace Basalt {
 		m_UIFrame.Clear();
 		m_CommandList = nullptr;
 		m_Renderer.reset();
+		m_BlitProfiler.reset();
 	}
 
 	void RuntimeLayer::OnUpdate(Timestep ts)
@@ -128,6 +132,10 @@ namespace Basalt {
 			ImGui::SetMouseCursor(ImGuiMouseCursor_None);
 		const ImGuiIO& io = ImGui::GetIO();
 		m_UIFrame.Draw(ImGui::GetForegroundDrawList(), { 0.0f, 0.0f }, { io.DisplaySize.x, io.DisplaySize.y });
+		if (m_Options.ShowStats && m_Scene)
+			DrawStatisticsOverlay(ImGui::GetForegroundDrawList(), { 0, 0 }, { io.DisplaySize.x, io.DisplaySize.y }, *m_Scene,
+								  m_Scene->GetPrimaryCameraEntity() ? m_Renderer.get() : nullptr,
+								  Application::Get().GetImGuiLayer()->GetProfiler(), m_BlitProfiler.get());
 	}
 
 	void RuntimeLayer::OnRender()
@@ -171,10 +179,15 @@ namespace Basalt {
 
 		m_CommandList->open();
 		m_UIFrame.Prepare([&](const std::string& path) { return m_Renderer->GetUITexture(path, m_CommandList); });
+		m_BlitProfiler->BeginFrame(m_CommandList);
 		if (camera)
+		{
+			const GpuPassScope pass(*m_BlitProfiler, m_CommandList, 0);
 			m_Renderer->Blit(m_CommandList, device->GetCurrentFramebuffer());
+		}
 		else
 			nvrhi::utils::ClearColorAttachment(m_CommandList, device->GetCurrentFramebuffer(), 0, nvrhi::Color(0.0f, 0.0f, 0.0f, 1.0f));
+		m_BlitProfiler->EndFrame(m_CommandList, static_cast<uint64_t>(width) * height);
 		m_CommandList->close();
 		device->GetDevice()->executeCommandList(m_CommandList);
 
@@ -242,6 +255,9 @@ namespace Basalt {
 
 	void RuntimeLayer::CheckRendererResults(const std::function<void(int)>& fail)
 	{
+		BS_CORE_INFO("Runtime: blit GPU time {}", FormatGpuTimings(m_BlitProfiler->GetTimings(), m_BlitProfiler->IsEnabled()));
+		if (const auto* imgui = Application::Get().GetImGuiLayer(); imgui && imgui->GetProfiler())
+			BS_CORE_INFO("Runtime: ImGui GPU time {}", FormatGpuTimings(imgui->GetProfiler()->GetTimings(), imgui->GetProfiler()->IsEnabled()));
 		const auto& stats = m_Renderer->GetStatistics();
 		BS_CORE_INFO("Runtime: render stats localShadowMaps={} localShadowsSkipped={} lightsSkipped={} localShadowAtlasSize={} fsr1={} vsync={}",
 					 stats.LocalShadowMaps, stats.LocalShadowsSkipped, stats.LightsSkipped, stats.LocalShadowAtlasSize, stats.FSR1Active ? 1 : 0, Application::Get().GetGraphicsDevice()->IsVSync() ? 1 : 0);

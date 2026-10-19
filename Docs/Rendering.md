@@ -362,3 +362,34 @@ script and authoring states through its allocator, including collection and clos
 cache eviction while another consumer retains the source. GPU charges end with cache ownership,
 while nvrhi may defer actual destruction for in-flight frames. Mutating CPU source vectors outside the
 loader requires `UpdateMemoryUsage()` to refresh their payload charge.
+
+# Play diagnostics and frame-time benchmarks
+
+The Game tab's **Stats** checkbox enables a passive overlay during Play (also while paused). Set it
+through `editor.game_view {"stats": true}`; it lasts for the editor session. The overlay is clipped to
+the game image and takes no pointer or keyboard input. Game captures keep the game image and game UI;
+`editor.window_screenshot` includes the diagnostics. `BasaltRuntime --stats` draws the same overlay,
+including its blit timing, and includes it in runtime screenshots. `--stats` requires a GPU.
+
+The overlay reports the last 60 host frames' mean wall latency and FPS, Game renderer draw calls,
+color-pass triangles (meshes and particle billboards; no depth, shadow or fullscreen triangles), live
+physics bodies and the process's accounted Lua heap. Frame latency includes waits, presentation and
+editor overhead; it remains wall time during fixed-step runs. Before rendering or when rendering is
+unavailable, the overlay says so rather than showing old counters.
+
+Scene GPU passes and the ImGui and runtime blit passes use separate `GpuProfiler` instances: timer
+readback never waits, results arrive at least four frames late, and each profiler averages its last
+30 results. Missing timers and pending results are explicit. **Game + host GPU** adds those independently
+averaged times; in the editor it includes all editor ImGui, but excludes the separate Scene view and
+thumbnail/capture work. It is not a whole-editor GPU frame measurement. Dynamic resolution still uses
+only scene timing. ImGui timing includes its atlas/buffer uploads; separate capture draw lists are not
+samples. Runtime `--frames` logs scene, blit and ImGui timing even when the overlay is off.
+
+`render.stats.triangles` returns the color-pass count. `editor.game_view` also returns `stats`,
+`statsVisible`, `frameMs`, `physicsBodies`, `luaBytes`, `renderStats` (the live Game renderer, or null),
+and `imguiGpu` (same GPU timing JSON shape as `render.stats.gpu`, without its `timers` flag).
+
+The fixed Release workload and pre-throughput baseline are described in
+[Tests/Benchmarks/README.md](../Tests/Benchmarks/README.md). Release CI runs its mean and p95 frame-time
+thresholds and uploads raw samples; the lavapipe job also times complete rendered frames. Timing gates
+are separate from deterministic unit tests.

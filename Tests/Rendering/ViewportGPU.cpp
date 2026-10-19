@@ -66,6 +66,7 @@ TEST_CASE("Viewport ID prepass selects visible surfaces across scaling, transpar
 		CHECK_FALSE(renderer.Pick(0, 0));
 		renderer.SetSelections({});
 		const auto plain = Capture(renderer, scene, camera);
+		CHECK(renderer.GetStatistics().Triangles == 24);
 		ExpectPick(renderer, 50, 37, front.GetUUID());
 		const auto sample = renderer.PickSurface(50, 37);
 		REQUIRE(sample);

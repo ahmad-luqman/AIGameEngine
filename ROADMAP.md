@@ -136,8 +136,6 @@ with a smoke test have shipped. Follow-ups:
   text-box fallback for headless and Linux systems without a portal.
 - **Prefab editing and overrides — L.** Open a prefab in an isolated scene, save, and propagate changes
   to instances while keeping per-instance overrides (track overridden fields in `PrefabComponent`).
-- **Play-mode stats overlay — S.** Frame time, draw calls, triangle count, physics bodies and Lua
-  memory.
 
 ### Asset pipeline
 
@@ -166,14 +164,6 @@ with a smoke test have shipped. Follow-ups:
   exports the samples, and attaches editor, runtime and CLI archives to a GitHub release.
 
 ---
-
-## Engine internals
-
-- **GPU profiler follow-ups — S.** Scene passes are timed (`GpuProfiler`, editor statistics, `render.stats`);
-  the editor's own ImGui pass and the runtime blit are not. Time them too, and show the totals in the
-  play-mode stats overlay (see Editor) once it exists.
-- **Performance benchmarks — M.** A benchmark scene with thousands of entities, many lights and physics
-  bodies, run in Release on CI with frame-time thresholds to catch regressions.
 
 ---
 

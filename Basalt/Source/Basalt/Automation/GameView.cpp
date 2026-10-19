@@ -55,11 +55,15 @@ namespace Basalt {
 	{
 		namespace S = CommandSchema;
 		auto resolution = S::Nullable({ { "type", "array" }, { "items", S::Integer("pixels", MinResolution, MaxResolution) }, { "minItems", 2 }, { "maxItems", 2 }, { "description", "[width, height] the Game view renders at for this session; null uses the project's window size" } });
-		return S::Object({ { "resolution", resolution }, { "focus", S::Boolean("Bring the Game view tab to the front") }, { "path", S::String("Save the Game view's image (with game UI) to this .png", true) } });
+		return S::Object({ { "stats", S::Boolean("Show the play-mode statistics overlay") }, { "resolution", resolution }, { "focus", S::Boolean("Bring the Game view tab to the front") }, { "path", S::String("Save the Game view's image (with game UI) to this .png", true) } });
 	}
 
 	bool GameViewSettings::Apply(const nlohmann::json& patch, std::string& outError)
 	{
+		if (!CommandSchema::Validate(Schema(), patch, outError))
+			return false;
+		if (patch.contains("stats"))
+			m_ShowStats = patch["stats"].get<bool>();
 		const auto it = patch.find("resolution");
 		if (it == patch.end())
 			return true;
@@ -68,8 +72,6 @@ namespace Basalt {
 			m_Override.reset();
 			return true;
 		}
-		if (!CommandSchema::Validate(Schema()["properties"]["resolution"], *it, outError, "resolution"))
-			return false;
 		m_Override = glm::uvec2((*it)[0].get<uint32_t>(), (*it)[1].get<uint32_t>());
 		return true;
 	}

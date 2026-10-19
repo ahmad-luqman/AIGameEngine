@@ -44,7 +44,7 @@ namespace Basalt {
 			return;
 		}
 
-		if (!m_Renderer.Init(application.GetGraphicsDevice()->GetDevice()))
+		if (!m_Renderer.Init(application.GetGraphicsDevice()->GetDevice(), application.GetGraphicsDevice()->SupportsTimerQueries()))
 		{
 			BS_CORE_ERROR("ImGuiLayer: renderer backend initialization failed");
 			if (m_HasPlatformBackend)
@@ -126,7 +126,7 @@ namespace Basalt {
 		drawData.DisplaySize = ImVec2(displaySize.x, displaySize.y);
 		drawData.FramebufferScale = ImVec2(1.0f, 1.0f);
 		drawData.Textures = &textures;
-		m_Renderer.Render(&drawData, target);
+		m_Renderer.Render(&drawData, target, false);
 	}
 
 	void ImGuiLayer::SetIniFilename(std::string path)

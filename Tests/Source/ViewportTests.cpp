@@ -317,6 +317,16 @@ TEST_CASE("The Game view renders at the project's window size unless a session o
 {
 	GameViewSettings settings;
 	CHECK(settings.Resolve(nullptr) == GameViewSettings::FallbackResolution);
+	CHECK_FALSE(settings.ShowStats());
+	std::string statsError;
+	CHECK(settings.Apply({ { "stats", true } }, statsError));
+	CHECK(settings.ShowStats());
+	CHECK_FALSE(settings.Apply({ { "stats", false }, { "resolution", { 1, 2 } } }, statsError));
+	CHECK(settings.ShowStats());
+	CHECK_FALSE(settings.Apply({ { "stats", "yes" } }, statsError));
+	CHECK(settings.ShowStats());
+	CHECK(settings.Apply({ { "stats", false } }, statsError));
+	CHECK_FALSE(settings.ShowStats());
 	ProjectConfig config;
 	config.WindowWidth = 1280;
 	config.WindowHeight = 720;

@@ -29,6 +29,8 @@ def check_game_view(call, require, output):
     cube = call("entity.create", {"name": "GameCube"})["id"]
     call("component.set", {"entity": cube, "component": "Mesh", "data": {"Mesh": "builtin://Cube"}})
     call("component.set", {"entity": cube, "component": "Material", "data": {"AlbedoColor": [1, 0, 0, 1], "EmissiveColor": [1, 0, 0], "EmissiveIntensity": 2}})
+    call("component.set", {"entity": cube, "component": "RigidBody", "data": {"Type": "Static"}})
+    call("component.set", {"entity": cube, "component": "BoxCollider", "data": {}})
     # The editor camera looks at the cube from the side, so the two views differ.
     call("editor.camera", {"position": [7, 2, 0], "target": [0, 0, 0]})
 
@@ -96,9 +98,32 @@ def check_game_view(call, require, output):
     require(subscription["streamed"], f"the editor's TCP connection did not stream events: {subscription}")
     call("play.start")
     state = wait_for(call, require, lambda s: s["mode"] == "Play" and s["visible"], "Play did not bring the Game view forward")
+    # Diagnostics are session-only and draw over the game without changing its captures or taking focus.
+    require(not state["statsVisible"], f"stats unexpectedly enabled: {state}")
+    state = call("editor.game_view", {"stats": True})
+    state = wait_for(call, require, lambda s: s["statsVisible"] and s["imguiGpu"]["frames"] > 0
+                     and s["renderStats"] is not None and s["renderStats"]["gpu"]["frames"] > 0,
+                     "play diagnostics did not receive GPU timings")
+    require(state["renderStats"]["triangles"] == 12, f"one cube should submit 12 color triangles: {state}")
+    require(state["physicsBodies"] == 1 and state["luaBytes"] > 0 and state["frameMs"] > 0, f"play diagnostics counters: {state}")
+    overlay = Path(output, "game-stats-window.png")
+    call("editor.window_screenshot", {"path": str(overlay)})
+    state = call("editor.game_view")  # waits for the preceding frame's capture
+    width, _, pixels = read_png(overlay)
+    scale = width / state["windowSize"][0]
+    rect = state["imageRect"]
+    # Text in the overlay's first line, against its dark translucent background.
+    bright = 0
+    for y in range(int((rect["y"] + 14) * scale), int((rect["y"] + 30) * scale)):
+        for x in range(int((rect["x"] + 14) * scale), int((rect["x"] + 130) * scale)):
+            if min(pixels[y * width + x][:3]) > 160:
+                bright += 1
+    require(bright > 30, "the enabled play stats overlay did not draw its frame-time text")
     played = Path(output, "game-play.png")
     call("editor.game_view", {"path": str(played)})
     call("image.compare", {"actual": str(played), "reference": str(game), "assertMatch": True})
+    require(call("editor.game_view", {"stats": False})["stats"] is False, "stats did not turn off")
+    wait_for(call, require, lambda s: not s["statsVisible"], "stats did not disappear")
     # The game UI maps the mouse onto the letterboxed image, not the whole panel (the main window starts at 0,0).
     state = call("editor.game_view")
     host = call("ui.layout")["view"]
