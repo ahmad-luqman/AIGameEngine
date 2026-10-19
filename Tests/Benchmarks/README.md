@@ -69,3 +69,26 @@ with no concurrent builds/tests, from implementation revision `36d7b3c`:
 
 [Final benchmark image](Baselines/macos-arm64-gpu.json.png). CPU and GPU modes measure different work;
 their times are not additive. These local measurements are evidence, not the shared-runner CI budgets.
+
+## Recorded throughput result
+
+Recorded on the same M4 Max, OS, compiler and Release configuration as the session-3 baseline,
+from `7f46b6d`, without concurrent builds/tests. The scene, resolution, 60-frame warmup, 180 measured
+frames and timestep are unchanged. Animation LOD remains disabled, so all 128 rigs sample independent
+poses every update. Original `Baselines/` files are preserved.
+
+| Mode | Before mean / p95 (ms) | After mean / p95 (ms) | Mean reduction | Raw after report |
+|---|---:|---:|---:|---|
+| CPU update | 2.347 / 2.649 | 0.679 / 0.965 | 71.0% | [CPU](Throughput/macos-arm64-cpu.json) |
+| Complete GPU frame, validation on | 31.031 / 33.309 | 4.642 / 5.538 | 85.0% | [GPU](Throughput/macos-arm64-gpu.json) |
+
+The [after image](Throughput/macos-arm64-gpu.json.png) is pixel-identical to the baseline image.
+Color draws fall from 2,176 to 2, while retaining 2,176 instances, 52,224 triangles, 2,176 skin
+matrices and 65 lights. The runtime guard requires those counts.
+
+These are combined results for instancing, cached influence bounds, pose jobs and shared asset
+resolution within updates/frames. Profiling the first throughput patch found repeated project/path
+checks dominating the no-project benchmark's main-thread animation and mesh gathering. Resolving
+shared keys once removes that cost without changing refresh behaviour between calls. This is not
+an isolated measurement of GPU hardware instancing or of distance LOD. Mean and p95 gates retain
+their existing CI budgets; shared-runner results are uploaded with the PR's CI runs.
