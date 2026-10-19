@@ -13,6 +13,10 @@ Shuttle.Properties = {
 
 function Shuttle:OnCreate()
 	self.Hero = Scene.FindEntityByName("Hero")
+	if not self.Hero then error("Shuttle: the scene has no entity named 'Hero'") end
+	if not (self.Duration > 0) or not (self.Wait >= 0) then
+		error("Shuttle '" .. self.Entity.Name .. "': Duration must be positive and Wait nonnegative")
+	end
 	self.Start = self.Entity.WorldPosition
 	self.Travel = Vec3(self.TravelX, 0, self.TravelZ)
 	-- Read by the gameplay test: "Start", "Going", "End", "Returning"; and how many crossings it began.
@@ -24,7 +28,7 @@ end
 
 -- Whether the hero stands on this platform (the ground right under it is this entity).
 function Shuttle:Carrying()
-	if not self.Hero or not self.Hero:IsGrounded() then return false end
+	if not self.Hero:IsGrounded() then return false end
 	local hit = Physics.Raycast(self.Hero.WorldPosition + Vec3(0, 0.2, 0), Vec3(0, -1, 0), 0.5, self.Hero)
 	return hit ~= nil and hit.Entity == self.Entity
 end

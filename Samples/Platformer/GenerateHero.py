@@ -7,7 +7,7 @@ import math, sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
-from skinned_gltf import SkinnedModel, X, Y, Z, rx
+from skinned_gltf import SkinnedModel, cycle, pairs, rx, rz
 
 joints = [
     ('Root', None, (0, 0, 0)),
@@ -61,29 +61,13 @@ for side in ('Left', 'Right'):
     limb(side + 'UpperLeg', side + 'LowerLeg', 0.075)
     limb(side + 'LowerLeg', side + 'Foot', 0.06)
     at(side + 'Foot', (0, -0.015, 0.06), (0.055, 0.035, 0.13))
-for joint, child in (('Hair1', 'Hair2'), ('Hair2', 'Hair3'), ('Hair3', 'HairTip')):
+for joint, child in pairs('Hair1', 'Hair2', 'Hair3', 'HairTip'):
     limb(joint, child, 0.035, HAIR)
 for strand in ('CapeL', 'CapeR'):
-    for i in range(1, 4):
-        joint, child = strand + str(i), strand + (str(i + 1) if i < 3 else 'Tip')
-        a, b = model.world[model.index[joint]], model.world[model.index[child]]
+    for joint, child in pairs(strand + '1', strand + '2', strand + '3', strand + 'Tip'):
+        a, b = model.position(joint), model.position(child)
         # A thin panel per segment, a little longer than the bone so bent segments still overlap.
         box(joint, tuple((x + y) / 2 for x, y in zip(a, b)), (0.085, abs(a[1] - b[1]) / 2 + 0.015, 0.012), CAPE)
-
-
-def loop(keys):
-    """Closes a list of per-key values into a loop (first == last)."""
-    return keys + keys[:1]
-
-
-def shifted(keys):
-    """The same cycle half a period later (the other leg or arm); keys excludes the loop key."""
-    half = len(keys) // 2
-    return loop(keys[half:] + keys[:half])
-
-
-def cycle(degrees):
-    return rx(*loop(degrees)), rx(*shifted(degrees))
 
 
 def bob(base, depth, keys):
@@ -97,9 +81,9 @@ def stride(length):
 
 
 # Idle (2 s): breathing and a slight sway.
-model.clip('Idle', 2.0, [('Chest', 'rotation', rx(0, -3, 0, 2, 0)), ('Spine', 'rotation', [(Z, d) for d in (0, 1.5, 0, -1.5, 0)]),
-                         ('LeftUpperArm', 'rotation', [(Z, d) for d in (6, 9, 6, 4, 6)]),
-                         ('RightUpperArm', 'rotation', [(Z, -d) for d in (6, 9, 6, 4, 6)]),
+model.clip('Idle', 2.0, [('Chest', 'rotation', rx(0, -3, 0, 2, 0)), ('Spine', 'rotation', rz(0, 1.5, 0, -1.5, 0)),
+                         ('LeftUpperArm', 'rotation', rz(6, 9, 6, 4, 6)),
+                         ('RightUpperArm', 'rotation', rz(-6, -9, -6, -4, -6)),
                          ('Hips', 'translation', [(0, 0.95, 0), (0, 0.94, 0), (0, 0.95, 0)])])
 
 # Walk (1 s, 8 keys): the mannequin's walk. Negative X rotation swings a leg forward (the rig faces +Z).
@@ -126,15 +110,15 @@ model.clip('Run', 0.6, [('LeftUpperLeg', 'rotation', legL), ('LeftLowerLeg', 'ro
 # Jump (0.4 s, once): knees tuck up and the arms go up and out.
 model.clip('Jump', 0.4, [('LeftUpperLeg', 'rotation', rx(0, -35, -60, -65, -65)), ('LeftLowerLeg', 'rotation', rx(0, 50, 95, 100, 100)),
                          ('RightUpperLeg', 'rotation', rx(0, -20, -35, -40, -40)), ('RightLowerLeg', 'rotation', rx(0, 30, 60, 70, 70)),
-                         ('LeftUpperArm', 'rotation', [(Z, d) for d in (5, 60, 120, 140, 140)]),
-                         ('RightUpperArm', 'rotation', [(Z, -d) for d in (5, 60, 120, 140, 140)]),
+                         ('LeftUpperArm', 'rotation', rz(5, 60, 120, 140, 140)),
+                         ('RightUpperArm', 'rotation', rz(-5, -60, -120, -140, -140)),
                          ('Spine', 'rotation', rx(0, -5, -8, -8, -8))])
 
 # Fall (0.6 s, loops): legs reach for the ground, arms out and paddling.
 model.clip('Fall', 0.6, [('LeftUpperLeg', 'rotation', rx(-25, -15, -25)), ('LeftLowerLeg', 'rotation', rx(35, 20, 35)),
                          ('RightUpperLeg', 'rotation', rx(-5, -15, -5)), ('RightLowerLeg', 'rotation', rx(15, 30, 15)),
-                         ('LeftUpperArm', 'rotation', [(Z, d) for d in (95, 115, 95)]),
-                         ('RightUpperArm', 'rotation', [(Z, -d) for d in (115, 95, 115)]),
+                         ('LeftUpperArm', 'rotation', rz(95, 115, 95)),
+                         ('RightUpperArm', 'rotation', rz(-115, -95, -115)),
                          ('Spine', 'rotation', rx(5, 5, 5))])
 
 # Land (0.35 s, once): the hips drop into a crouch and rise again.
@@ -142,8 +126,8 @@ model.clip('Land', 0.35, [('Hips', 'translation', [(0, 0.95, 0), (0, 0.8, 0), (0
                           ('LeftUpperLeg', 'rotation', rx(-10, -45, -30, 0)), ('LeftLowerLeg', 'rotation', rx(10, 80, 55, 0)),
                           ('RightUpperLeg', 'rotation', rx(-10, -45, -30, 0)), ('RightLowerLeg', 'rotation', rx(10, 80, 55, 0)),
                           ('Spine', 'rotation', rx(0, 20, 12, 0)),
-                          ('LeftUpperArm', 'rotation', [(Z, d) for d in (40, 25, 15, 6)]),
-                          ('RightUpperArm', 'rotation', [(Z, -d) for d in (40, 25, 15, 6)])])
+                          ('LeftUpperArm', 'rotation', rz(40, 25, 15, 6)),
+                          ('RightUpperArm', 'rotation', rz(-40, -25, -15, -6))])
 
 model.write(Path(__file__).resolve().parent / 'Assets/Models/Hero.gltf', 'Basalt Platformer sample',
             [('Hero', [0.25, 0.55, 0.95, 1]), ('Hair', [0.35, 0.18, 0.08, 1]), ('Cape', [0.85, 0.12, 0.15, 1])])

@@ -4,9 +4,10 @@ A 3D platformer course: run, jump a gap, ride a shuttle across a windy chasm and
 on the way. It puts the character tools together on one hero, and the scene, the input actions and the animation
 state machine are built only through the automation API (`build_scene.json`):
 
-- **Character controller** — `Hero.lua` moves the hero relative to the camera (WASD or the left stick, Shift or the
-  pad's X to run, Space or A to jump) with `Move`, turns it toward the input, and jumps on the frame the button is
-  pressed (holding it never jumps again on landing). Walking off a ledge keeps a short coyote time.
+- **Character controller** — `Hero.lua` moves the hero relative to the camera (WASD, the arrow keys or the left
+  stick; Shift, the pad's X or the right bumper to run; Space or A to jump) with `Move` and turns it toward the input.
+  It jumps on the frame the button is pressed, so holding it never jumps again on landing, and still jumps just after
+  running off a ledge: the controller's `JumpGrace` (coyote time, 0.12 s) takes the upward request once.
 - **Animation state machine** — `Assets/Animations/Hero.banimgraph` (written with `asset.write`) picks `Locomotion`,
   `Jump`, `Fall` and `Land` from the `Speed`, `Grounded`, `VerticalSpeed` parameters and the `Jump` trigger that the
   script sets every frame.
@@ -34,21 +35,26 @@ Rebuild the scene: `build/bin/basalt --project Samples/Platformer batch Samples/
 
 ## The gameplay test
 
-`test_game.json` (run by ctest as `SamplePlatformer`) plays the course with injected keys and a gamepad and checks:
+`test_game.json` (run by ctest as `SamplePlatformer`) checks that the project validates and has no animation
+authoring warnings, then plays the course with injected keys and a gamepad and checks:
 
 - Standing at the start: the input actions, the HUD, both ankles at their animated height above the ground, and the
   cape and ponytail hanging at rest.
-- Walking and running: root motion moves the hero at exactly the Walk and Run clips' speeds, and, on average over the
-  run, the cape and ponytail stream out behind and lift.
-- Running off the deck without jumping: the hero falls (the `Fall` state), lands in the pit and comes back at the
-  start with the camera, the cape at rest and a death counted.
-- The second attempt: the stance foot on the stairs, then a running jump (`Jump` with the run's full speed through the
-  fade, then `Fall` past the apex, collecting the coin over the gap, then `Land` and `Locomotion`) onto the checkpoint.
-- The shuttle: it leaves once the hero stands on it, carries the standing hero (its offset on the platform stays put)
-  across the gust, which blows the cape sideways, and stops at the far end.
+- Walking and running: root motion moves the hero at the Walk and Run clips' speeds, and, on average over the run, the
+  cape and ponytail stream out behind and lift.
+- Running off the deck without jumping: the hero falls (the `Fall` state) into the pit's kill zone and comes back at
+  the start with the camera, the cape at rest and a death counted.
+- The second attempt: the stance foot on the stairs, then a coyote-time jump just after running off the deck (`Jump`
+  with the run's full speed through the fade, then `Fall` past the apex, collecting the coin over the gap, then `Land`
+  and `Locomotion`) onto the checkpoint.
+- The shuttle: it leaves once the hero stands on it, carries the standing hero (its offset on the platform stays within
+  a few centimeters) across the gust, which blows the cape sideways, and stops at the far end.
 - Standing on the ramp: both ankles at their height above the slope and the feet turned to its 11.3 degree tilt; the
   wind stopped.
-- The goal: all four coins, the win message, and a half-pushed stick moving the hero at the blended cycles' speed
-  (1.826 m/s for a requested 2 m/s).
+- The goal: all four coins and the win message. Then a gamepad stick pushed partway with Run held: it reads 0.5 past
+  the dead zone, so the hero asks for 2 m/s, the blend space weights Walk 0.8 and Run 0.2, and root motion moves the
+  hero at the speed those cycles cover, (0.8 · 1.5 m + 0.2 · 2.4 m) / (0.8 · 1 s + 0.2 · 0.6 s) = 1.826 m/s. Retuning
+  a clip's stride or duration moves that number.
 
-Each step also fails on script errors, and the edit scene must be unchanged after play stops.
+Every step fails on script errors, the run must log no warnings or errors (engine ones included), and the edit scene
+must be unchanged after play stops.

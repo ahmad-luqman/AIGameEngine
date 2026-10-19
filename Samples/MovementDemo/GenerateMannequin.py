@@ -6,7 +6,7 @@ import math, sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
-from skinned_gltf import SkinnedModel, X, Z, rx
+from skinned_gltf import SkinnedModel, X, Z, cycle, rx
 
 joints = [
     ('Hips', None, (0, 0.95, 0)),
@@ -44,12 +44,9 @@ for side in ('Left', 'Right'):
     at(side + 'Foot', (0, -0.015, 0.06), (0.055, 0.035, 0.13))
 
 # Walk: 8 keys over 1 s (+ the loop key). Negative X rotation swings a leg forward (the rig faces +Z).
-legL = rx(-25, -12, 2, 15, 25, 12, -5, -18, -25)
-kneeL = rx(5, 3, 8, 20, 55, 50, 20, 8, 5)
-legR = legL[4:] + legL[1:5]
-kneeR = kneeL[4:] + kneeL[1:5]
-armL = rx(18, 10, 0, -10, -18, -10, 0, 10, 18)
-armR = armL[4:] + armL[1:5]
+legL, legR = cycle([-25, -12, 2, 15, 25, 12, -5, -18])
+kneeL, kneeR = cycle([5, 3, 8, 20, 55, 50, 20, 8])
+armL, armR = cycle([18, 10, 0, -10, -18, -10, 0, 10])
 elbow = rx(-12, -10, -8, -10, -12, -10, -8, -10, -12)
 hips = [(0, 0.95 + 0.025 * math.cos(4 * math.pi * i / 8 + math.pi), 0) for i in range(9)]
 twist = [((0, 1, 0), 6 * math.cos(2 * math.pi * i / 8)) for i in range(9)]
