@@ -282,11 +282,13 @@ namespace Basalt {
 			std::vector<OverlayEntry> SpringOverlay;
 			// The overlays did not compose on a finite pose and were dropped; warned once until an overlay composes again.
 			bool OverlayDropped = false;
+			// 0 evaluates next update; otherwise the number of updates since the last evaluation.
 			uint32_t LODFrame = 0;
 			bool Playing = false;
 			bool Rest = false;
 			bool InvalidPose = false;
 			bool InvalidSpeed = false;
+			bool InvalidLOD = false;
 			bool EventLimitLogged = false;
 			// Animator.Clip when it named neither a clip nor a blend space: a blend space of that name added later
 			// still starts (until something else plays).
@@ -399,7 +401,13 @@ namespace Basalt {
 			IKChainState* State = nullptr;
 			const IKChain* Config = nullptr;
 		};
-		Playback* Ensure(Entity entity);
+		// Main-thread asset handles resolved once per key during an update. Direct operations resolve afresh.
+		struct ResolvedAssets
+		{
+			Ref<MeshSource> Source;
+			Ref<const AnimationGraph> Graph;
+		};
+		Playback* Ensure(Entity entity, const ResolvedAssets* assets = nullptr);
 		// Ensure for an operation: logs why the entity cannot animate (once per entity and reason).
 		Playback* EnsurePlayable(Entity entity);
 		// Why Ensure returns no playback for the entity.
@@ -414,6 +422,8 @@ namespace Basalt {
 		// Builds Pose from Local and the layers, then composes Globals from Pose with the IK and spring overlays on top. Layers
 		// leave out the root-motion joint and the nodes above it while root motion applies (also while it fades out).
 		static void Finish(Playback& playback);
+		// Reuses the already allocated pose buffers, including when a pose job failed allocation.
+		static void RestoreRestPose(Playback& playback);
 		// Matches layer states to the configuration (by name), resolves them and advances their clocks and fades.
 		static void AdvanceLayers(Playback& playback, const AnimatorComponent& component, double seconds);
 		// Re-resolves the layer's clip, mask and reference pose when what they depend on changed; returns them.
@@ -525,8 +535,15 @@ namespace Basalt {
 		// The last failed script call's problem per entity and operation and layer or chain name (see ReportCallProblem).
 		std::map<std::pair<UUID, std::string>, std::string> m_LayerProblems;
 		std::map<std::pair<UUID, std::string>, std::string> m_IKCallProblems;
-		// Disjoint playback outputs, collected after all scene/cache/control work and joined before LateUpdate.
-		std::vector<std::pair<Playback*, bool>> m_PoseJobs;
+		// Borrowed, disjoint playback outputs; sampling and composition touch only Target.
+		struct PoseJob
+		{
+			Playback* Target = nullptr;
+			bool Sample = true;
+		};
+		// Queued during entity updates, executed after that loop and joined before LateUpdate. Addresses survive
+		// unordered_map rehashes; no playback is erased or externally mutated while jobs run.
+		std::vector<PoseJob> m_PoseJobs;
 		// Scratch storage reused every update.
 		std::vector<const AnimationEvent*> m_Markers;
 		std::vector<float> m_Weights;

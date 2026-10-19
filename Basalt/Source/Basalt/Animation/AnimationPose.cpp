@@ -256,10 +256,17 @@ namespace Basalt {
 		AABB bounds;
 		if (submesh.HasUnweightedVertices)
 			bounds.Expand(glm::vec3(0));
+		// For sum s > 0, the skinned point is the convex combination
+		// sum_j (weight_j / s) * palette_j * (position * s, s).
+		// Union the joint boxes; adding them would incorrectly scale multi-joint vertices.
 		for (const auto& influence : submesh.JointBounds)
 		{
 			if (influence.Joint >= palette.size())
+			{
+				// The shader drops invalid influences, leaving the missing share at the origin.
+				bounds.Expand(glm::vec3(0));
 				continue;
+			}
 			const glm::vec4 low(influence.Positions.Min, influence.MinWeightSum);
 			const glm::vec4 high(influence.Positions.Max, influence.MaxWeightSum);
 			glm::vec3 minimum(0), maximum(0);

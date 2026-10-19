@@ -3456,3 +3456,355 @@ TEST_SUITE("Animation")
 		CHECK(CountLogMessages(since, "non-finite evaluated pose") == 0);
 	}
 }
+
+TEST_SUITE("AnimationThroughput")
+{
+	TEST_CASE("Cached joint influence bounds contain exact skinning under independent affine transforms")
+	{
+		MeshSource source;
+		std::vector<Vertex> vertices(96);
+		for (uint32_t i = 0; i < vertices.size(); ++i)
+		{
+			auto& vertex = vertices[i];
+			vertex.Position = { static_cast<float>(i % 7) - 3, static_cast<float>(i % 13), static_cast<float>(i % 5) - 2 };
+			vertex.Joints = { i % 4, (i + 1) % 4, (i + 2) % 4, (i + 3) % 4 };
+			// Include non-unit positive sums to exercise homogeneous weight bounds.
+			vertex.Weights = i == 0 ? glm::vec4(0) : glm::vec4(.1f, .2f, .3f, .4f) * (i % 2 ? 1.0f : .999f);
+		}
+		source.AddSubmesh(vertices, {}, 0);
+		const auto& submesh = source.Submeshes[0];
+		CHECK(submesh.JointBounds.size() == 4);
+		for (uint32_t frame = 0; frame < 30; ++frame)
+		{
+			std::vector<glm::mat4> palette;
+			for (uint32_t joint = 0; joint < 4; ++joint)
+			{
+				auto matrix = glm::translate(glm::mat4(1), glm::vec3(static_cast<float>(joint), -static_cast<float>(frame), 3));
+				matrix = glm::rotate(matrix, static_cast<float>(frame + joint) * .11f, glm::normalize(glm::vec3(1, 2, 3)));
+				matrix = glm::scale(matrix, glm::vec3(joint % 2 ? -2.0f : .001f, 3, .7f));
+				palette.push_back(matrix);
+			}
+			const auto exact = SkinBounds(source, submesh, palette);
+			const auto cached = CachedSkinBounds(source, submesh, palette);
+			CHECK(glm::all(glm::lessThanEqual(cached.Min, exact.Min)));
+			CHECK(glm::all(glm::greaterThanEqual(cached.Max, exact.Max)));
+		}
+	}
+
+	TEST_CASE("Distance animation LOD holds poses while clocks advance and catches up near the camera")
+	{
+		ClearAssetCache clearCache;
+		Scene scene;
+		auto camera = scene.CreateEntity("Camera");
+		camera.AddComponent<CameraComponent>();
+		auto rig = scene.CreateEntity("Rig");
+		auto& animator = rig.AddComponent<AnimatorComponent>();
+		animator.Mesh = FixturePath().string();
+		animator.LODDistance = 10;
+		animator.LODInterval = 3;
+		rig.GetTransform().Translation.x = 100;
+		scene.OnSimulationStart();
+		auto* system = scene.GetAnimationSystem();
+		REQUIRE(system);
+		scene.OnUpdate(.1f);
+		const auto first = *system->GetPose(rig);
+		scene.OnUpdate(.1f);
+		CHECK(*system->GetPose(rig) == first);
+		CHECK(system->GetTime(rig) == doctest::Approx(.2f));
+		scene.OnUpdate(.1f);
+		CHECK(*system->GetPose(rig) == first);
+		scene.OnUpdate(.1f);
+		CHECK(*system->GetPose(rig) != first);
+		const auto far = *system->GetPose(rig);
+		camera.GetTransform().Translation.x = 100;
+		scene.OnUpdate(.1f);
+		CHECK(*system->GetPose(rig) != far);
+		REQUIRE(system->Seek(rig, 1));
+		const auto sought = *system->GetPose(rig);
+		CHECK(sought != far);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Crowd pose jobs match varied serial twins through spaces, root motion, fades and held layers")
+	{
+		ClearAssetCache clearCache;
+		const auto errors = Log::GetHistory().GetErrorCount();
+		Scene crowd;
+		std::vector<Scope<Scene>> serialScenes;
+		std::vector<Scope<AnimationSystem>> serialSystems;
+		std::vector<Entity> rigs, references;
+		for (uint32_t i = 0; i < 80; ++i)
+		{
+			auto rig = crowd.CreateEntity("Crowd");
+			auto& config = rig.AddComponent<AnimatorComponent>();
+			config.Mesh = FixturePath().string();
+			config.Speed = .5f + static_cast<float>(i) * .03f;
+			AnimationLayer layer;
+			layer.Name = "Overlay";
+			layer.Clip = "Bend";
+			layer.Weight = .1f + static_cast<float>(i % 7) * .1f;
+			layer.Speed = .4f + static_cast<float>(i) * .02f;
+			layer.Mask = { { "Tip", 1 } };
+			config.Layers.push_back(layer);
+			if (i % 4 == 1)
+			{
+				config.Clip = "Space";
+				config.BlendSpaces = { { .Name = "Space", .Samples = { { .Clip = "Bend" }, { .Clip = "Cubic", .X = 1 } } } };
+			}
+			else if (i % 4 == 2)
+			{
+				config.Clip = "Cubic";
+				config.RootMotion = true;
+				config.RootJoint = "RootJoint";
+			}
+			else if (i % 4 == 3)
+				config.PlayOnStart = false;
+			auto serial = CreateScope<Scene>();
+			auto reference = serial->CreateEntity("Reference");
+			reference.AddComponent<AnimatorComponent>() = config;
+			rigs.push_back(rig);
+			references.push_back(reference);
+			serialScenes.push_back(std::move(serial));
+		}
+		AnimationSystem parallel(crowd);
+		for (uint32_t i = 0; i < rigs.size(); ++i)
+		{
+			serialSystems.push_back(CreateScope<AnimationSystem>(*serialScenes[i]));
+			const float time = static_cast<float>(i) * .013f;
+			REQUIRE(parallel.Seek(rigs[i], time));
+			REQUIRE(serialSystems[i]->Seek(references[i], time));
+			if (i % 4 == 1)
+			{
+				const glm::vec2 parameter(static_cast<float>((i * 7) % 19) / 18.0f, 0);
+				REQUIRE(parallel.SetBlendSpaceParameter(rigs[i], parameter));
+				REQUIRE(serialSystems[i]->SetBlendSpaceParameter(references[i], parameter));
+			}
+		}
+		for (uint32_t frame = 0; frame < 25; ++frame)
+		{
+			for (uint32_t i = 0; i < rigs.size(); ++i)
+			{
+				if (frame == 8 && i % 4 != 3)
+				{
+					REQUIRE(parallel.CrossFade(rigs[i], "Cubic", .3f));
+					REQUIRE(serialSystems[i]->CrossFade(references[i], "Cubic", .3f));
+				}
+				if ((frame == 15 || frame == 18) && i % 5 == 0 && i % 4 != 3)
+				{
+					parallel.Pause(rigs[i], frame == 15);
+					serialSystems[i]->Pause(references[i], frame == 15);
+				}
+			}
+			parallel.Update(.05f);
+			for (uint32_t i = 0; i < rigs.size(); ++i)
+			{
+				serialSystems[i]->Update(.05f);
+				CHECK(*parallel.GetPose(rigs[i]) == *serialSystems[i]->GetPose(references[i]));
+				CHECK(parallel.GetTime(rigs[i]) == serialSystems[i]->GetTime(references[i]));
+				CHECK(rigs[i].GetTransform().Translation == references[i].GetTransform().Translation);
+				CHECK(rigs[i].GetTransform().Rotation == references[i].GetTransform().Rotation);
+			}
+		}
+		CHECK(Log::GetHistory().GetErrorCount() == errors);
+	}
+
+	TEST_CASE("Animation LOD configuration validates and round trips through the component registry")
+	{
+		const auto* info = ComponentRegistry::Find("Animator");
+		REQUIRE(info);
+		Scene scene;
+		auto rig = scene.CreateEntity("Rig");
+		rig.AddComponent<AnimatorComponent>();
+		std::string error;
+		for (const auto& invalid : std::vector<nlohmann::json>{ { { "LODDistance", -1 } }, { { "LODInterval", 0 } }, { { "LODInterval", 61 } }, { { "LODDistance", "far" } } })
+		{
+			CHECK_FALSE(info->Deserialize(rig, invalid, error));
+			CHECK(error.find(invalid.begin().key()) != std::string::npos);
+		}
+		REQUIRE(info->Deserialize(rig, { { "LODDistance", 20 }, { "LODInterval", 4 } }, error));
+		CHECK(info->Serialize(rig)["LODDistance"] == 20);
+		CHECK(info->Serialize(rig)["LODInterval"] == 4);
+	}
+
+	TEST_CASE("Distant LOD preserves animation event crossings and has no effect without a camera")
+	{
+		ClearAssetCache clearCache;
+		Scene scene;
+		auto camera = scene.CreateEntity("Camera");
+		camera.AddComponent<CameraComponent>();
+		auto rig = scene.CreateEntity("Rig");
+		auto& animator = rig.AddComponent<AnimatorComponent>();
+		animator.Mesh = FixturePath().string();
+		animator.LODDistance = 1;
+		animator.LODInterval = 60;
+		animator.Events = { { "Bend", .15f, "Marker" } };
+		rig.GetTransform().Translation.x = 100;
+		AnimationSystem system(scene);
+		system.Update(.1f);
+		const auto first = *system.GetPose(rig);
+		system.Update(.1f);
+		CHECK(*system.GetPose(rig) == first);
+		const auto events = system.TakeEvents();
+		REQUIRE(events.size() == 1);
+		CHECK(events[0].Name == "Marker");
+		CHECK(system.GetTime(rig) == doctest::Approx(.2f));
+		system.Update(0);
+		CHECK(*system.GetPose(rig) != first);
+		camera.RemoveComponent<CameraComponent>();
+		system.Update(.1f);
+		CHECK(*system.GetPose(rig) != first);
+		const auto current = *system.GetPose(rig);
+		camera.AddComponent<CameraComponent>();
+		system.Update(0);
+		CHECK(*system.GetPose(rig) == current);
+		system.Pause(rig, true);
+		system.Update(.1f);
+		CHECK(system.GetTime(rig) == doctest::Approx(.3f));
+		CHECK(*system.GetPose(rig) == current);
+	}
+
+	TEST_CASE("Distance pose LOD keeps root displacement identical to full-rate animation")
+	{
+		ClearAssetCache clearCache;
+		Scene scene;
+		auto camera = scene.CreateEntity("Camera");
+		camera.AddComponent<CameraComponent>();
+		auto distant = scene.CreateEntity("Distant"), reference = scene.CreateEntity("Reference");
+		auto& config = distant.AddComponent<AnimatorComponent>();
+		config.Mesh = FixturePath().string();
+		config.Clip = "Cubic";
+		config.RootMotion = true;
+		config.RootJoint = "RootJoint";
+		config.LODDistance = 1;
+		config.LODInterval = 5;
+		reference.AddComponent<AnimatorComponent>() = config;
+		reference.GetComponent<AnimatorComponent>().LODInterval = 1;
+		distant.GetTransform().Translation.x = reference.GetTransform().Translation.x = 100;
+		AnimationSystem system(scene);
+		for (uint32_t frame = 0; frame < 30; ++frame)
+		{
+			system.Update(.1f);
+			CHECK(distant.GetTransform().Translation == reference.GetTransform().Translation);
+			CHECK(distant.GetTransform().Rotation == reference.GetTransform().Rotation);
+			CHECK(system.GetTime(distant) == system.GetTime(reference));
+		}
+		CHECK(distant.GetTransform().Translation.x != 100);
+	}
+
+	TEST_CASE("Joint bounds union keeps positive-coordinate vertices and duplicate joint slots")
+	{
+		MeshSource source;
+		Vertex vertex;
+		vertex.Position = { 10, 20, 30 };
+		vertex.Joints = { 0, 0, 1, 0 };
+		vertex.Weights = { .2f, .3f, .5f, 0 };
+		source.AddSubmesh({ vertex }, {}, 0);
+		const std::vector<glm::mat4> palette(2, glm::mat4(1));
+		const auto cached = CachedSkinBounds(source, source.Submeshes[0], palette);
+		const auto exact = SkinBounds(source, source.Submeshes[0], palette);
+		CHECK(glm::all(glm::lessThanEqual(cached.Min, exact.Min)));
+		CHECK(glm::all(glm::greaterThanEqual(cached.Max, exact.Max)));
+		CHECK(cached.Min.x > 9.9f);
+		CHECK(cached.Max.x < 10.1f);
+		// A truncated palette drops joint 1 in the shader: its share pulls the point toward zero.
+		const auto dropped = CachedSkinBounds(source, source.Submeshes[0], { glm::mat4(1) });
+		CHECK(glm::all(glm::lessThanEqual(dropped.Min, vertex.Position * .5f)));
+		CHECK(glm::all(glm::greaterThanEqual(dropped.Max, vertex.Position * .5f)));
+		const auto imported = LoadFixture();
+		REQUIRE_FALSE(imported->Submeshes[0].JointBounds.empty());
+	}
+
+	TEST_CASE("Distant LOD shows a non-looping final frame and immediate explicit controls")
+	{
+		ClearAssetCache clearCache;
+		Scene scene;
+		auto camera = scene.CreateEntity("Camera");
+		camera.AddComponent<CameraComponent>();
+		auto rig = AddAnimator(scene);
+		rig.GetTransform().Translation.x = 100;
+		auto& config = rig.GetComponent<AnimatorComponent>();
+		config.LODDistance = 1;
+		config.LODInterval = 60;
+		config.Looping = false;
+		AnimationSystem system(scene);
+		system.Update(.1f);
+		const auto first = *system.GetPose(rig);
+		system.Update(.3f);
+		CHECK(*system.GetPose(rig) == first);
+		REQUIRE(system.Seek(rig, .8f));
+		CHECK(*system.GetPose(rig) != first);
+		REQUIRE(system.Play(rig, "Cubic"));
+		const auto started = *system.GetPose(rig);
+		const auto cubicSource = AssetManager::GetMesh(config.Mesh);
+		std::vector<glm::mat4> cubicStart;
+		REQUIRE(EvaluateAnimation(*cubicSource, &cubicSource->Animations[2], 0, cubicStart));
+		CHECK(started == cubicStart);
+		REQUIRE(system.Blend(rig, "Bend", "Cubic", .4f));
+		REQUIRE(system.Seek(rig, .6f));
+		CHECK(*system.GetPose(rig) != started);
+		REQUIRE(system.CrossFade(rig, "Step", 0));
+		CHECK(system.GetTime(rig) == 0);
+		CHECK(*system.GetPose(rig) != first);
+		REQUIRE(system.Play(rig, "Bend"));
+		REQUIRE(system.Seek(rig, .5f));
+		const auto held = *system.GetPose(rig);
+		system.Update(.7f);
+		CHECK(*system.GetPose(rig) == held);
+		system.Update(.9f);
+		CHECK_FALSE(system.IsPlaying(rig));
+		CHECK(*system.GetPose(rig) != held);
+		std::vector<glm::mat4> expected;
+		const auto source = AssetManager::GetMesh(config.Mesh);
+		REQUIRE(EvaluateAnimation(*source, &source->Animations[0], source->Animations[0].Duration, expected));
+		CHECK(*system.GetPose(rig) == expected);
+	}
+
+	TEST_CASE("Crowd asset reuse observes a model reload on the next update")
+	{
+		ClearAssetCache clearCache;
+		const auto source = AssetManager::GetMesh(FixturePath().string());
+		REQUIRE(source);
+		source->Nodes[2].Translation.x = 25;
+		Scene scene;
+		std::vector<Entity> rigs;
+		rigs.reserve(40);
+		for (uint32_t i = 0; i < 40; ++i)
+			rigs.push_back(AddAnimator(scene));
+		AnimationSystem system(scene);
+		std::vector<const std::vector<glm::mat4>*> poses;
+		poses.reserve(rigs.size());
+		for (Entity rig : rigs)
+		{
+			poses.push_back(system.GetPose(rig));
+			REQUIRE(poses.back());
+			CHECK((*poses.back())[2][3].x == 25);
+		}
+		AssetManager::Reload(FixturePath().string());
+		system.Update(.1f);
+		// Inspect the stable vector objects directly: a getter would itself resolve the reload and hide a stale update.
+		for (const auto* pose : poses)
+			CHECK((*pose)[2][3].x == 0);
+	}
+
+	TEST_CASE("Invalid C++ animation LOD settings warn once per episode and recover")
+	{
+		ClearAssetCache clearCache;
+		Scene scene;
+		auto rig = AddAnimator(scene);
+		auto& config = rig.GetComponent<AnimatorComponent>();
+		config.LODDistance = -1;
+		config.LODInterval = 0;
+		const auto since = Log::GetHistory().GetTotalCount();
+		AnimationSystem system(scene);
+		system.Update(.1f);
+		system.Update(.1f);
+		CHECK(CountLogMessages(since, "invalid LODDistance") == 1);
+		config.LODDistance = 0;
+		config.LODInterval = 1;
+		system.Update(.1f);
+		config.LODInterval = 1000;
+		system.Update(.1f);
+		CHECK(CountLogMessages(since, "invalid LODDistance") == 2);
+		CHECK(system.GetTime(rig) == doctest::Approx(.4f));
+	}
+}

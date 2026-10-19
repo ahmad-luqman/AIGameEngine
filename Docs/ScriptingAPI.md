@@ -1115,7 +1115,7 @@ or removing/re-adding Animator resets playback according to `PlayOnStart`. With 
 the selected clip is held at time 0 until played. Edit mode shows the authored rest pose.
 
 `LODDistance` (default 0, disabled) and `LODInterval` (1–60 updates, default 1) opt into
-pose LOD beyond that world-space distance from the primary scene camera. Without a camera,
+pose LOD beyond that world-space distance from the primary scene camera. Without a primary camera,
 poses evaluate every update. Distant rigs retain their last sampled pose between evaluations;
 clocks, transitions, events, layer clocks and root motion still advance every update. IK and spring
 solvers continue at full rate on that pose; attachments follow the displayed joints. Returning near

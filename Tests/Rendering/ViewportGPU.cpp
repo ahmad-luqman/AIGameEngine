@@ -366,7 +366,7 @@ TEST_CASE("Particle billboards add exactly two color triangles per drawn particl
 	CHECK(graphics->GetValidationErrorCount() == 0);
 }
 
-TEST_CASE("Opaque instance batches retain material constants, IDs and camera filtering")
+TEST_CASE("Opaque instance batches retain material constants, IDs and filtering through buffer growth")
 {
 	auto graphics = CreateTestGraphics();
 	Scene scene;
@@ -375,13 +375,14 @@ TEST_CASE("Opaque instance batches retain material constants, IDs and camera fil
 	sun.AddComponent<DirectionalLightComponent>();
 	sun.GetTransform().SetRotationEuler(glm::radians(glm::vec3(-50, 20, 0)));
 	std::vector<Entity> cubes;
-	for (uint32_t i = 0; i < 6; ++i)
+	constexpr uint32_t Count = 320;
+	for (uint32_t i = 0; i < Count; ++i)
 	{
 		auto cube = scene.CreateEntity("Instance");
 		cube.AddComponent<MeshComponent>().Mesh = "builtin://Cube";
-		cube.GetTransform().Translation = { static_cast<float>(i) - 2.5f, 0, 0 };
-		cube.GetTransform().Scale = glm::vec3(.6f);
-		cube.AddComponent<MaterialComponent>().AlbedoColor = { .1f * static_cast<float>(i + 1), .2f, .8f, 1 };
+		cube.GetTransform().Translation = { static_cast<float>(i % 20) - 9.5f, static_cast<float>(i / 20) - 7.5f, 0 };
+		cube.GetTransform().Scale = { i % 7 == 0 ? -.6f : .6f, .6f, .6f };
+		cube.AddComponent<MaterialComponent>().AlbedoColor = { static_cast<float>(i % 6 + 1) / 8.0f, .2f, .8f, 1 };
 		cubes.push_back(cube);
 	}
 	auto hidden = scene.CreateEntity("Off-camera instance");
@@ -390,24 +391,105 @@ TEST_CASE("Opaque instance batches retain material constants, IDs and camera fil
 	RenderCamera camera;
 	camera.Position = { 0, 0, 5 };
 	camera.View = glm::lookAtRH(camera.Position, glm::vec3(0), glm::vec3(0, 1, 0));
+	camera.Projection = glm::orthoRH_ZO(-10.0f, 10.0f, -8.0f, 8.0f, .1f, 20.0f);
+	camera.Far = 20;
+	SceneRenderer renderer(graphics->GetDevice(), { .Picking = true });
+	REQUIRE(renderer.Initialize());
+	renderer.SetViewportSize(400, 320);
+	renderer.SetSelections({ cubes.back().GetUUID() });
+	const auto batched = Capture(renderer, scene, camera);
+	const auto stats = renderer.GetStatistics();
+	CHECK(stats.DrawCalls == 1);
+	CHECK(stats.Instances == Count);
+	CHECK(stats.Triangles == Count * 12);
+	CHECK(stats.ShadowDrawCalls > 0);
+	for (uint32_t i : { 0u, 1u, 63u, 127u, 255u, Count - 1 })
+		ExpectPick(renderer, 10 + i % 20 * 20, 310 - i / 20 * 20, cubes[i].GetUUID());
+	renderer.SetInstancingEnabled(false);
+	CHECK(Capture(renderer, scene, camera) == batched);
+	CHECK(renderer.GetStatistics().DrawCalls == Count);
+	CHECK(renderer.GetStatistics().Instances == stats.Instances);
+	CHECK(renderer.GetStatistics().Triangles == stats.Triangles);
+	CHECK(renderer.GetStatistics().ShadowDrawCalls > stats.ShadowDrawCalls);
+	CHECK(graphics->GetValidationErrorCount() == 0);
+}
+
+TEST_CASE("Batch key discovery keeps coplanar color and pick winners deterministic")
+{
+	auto graphics = CreateTestGraphics();
+	SceneRenderer renderer(graphics->GetDevice(), { .Picking = true });
+	REQUIRE(renderer.Initialize());
+	renderer.SetViewportSize(160, 160);
+	RenderCamera camera;
+	camera.Position = { 0, 0, 5 };
+	camera.View = glm::lookAtRH(camera.Position, glm::vec3(0), glm::vec3(0, 1, 0));
+	camera.Projection = glm::orthoRH_ZO(-1.5f, 1.5f, -1.5f, 1.5f, .1f, 20.0f);
+	camera.Far = 20;
+	// Reuse GPU resources but reverse discovery order: pointer order cannot satisfy both cases.
+	for (bool cubeFirst : { true, false })
+	{
+		Scene scene;
+		scene.GetRendererSettings().SSAOEnabled = false;
+		scene.GetRendererSettings().ShadowsEnabled = false;
+		for (uint32_t i = 0; i < 2; ++i)
+		{
+			const bool cube = (i == 0) == cubeFirst;
+			auto entity = scene.CreateEntity("Coplanar");
+			entity.AddComponent<MeshComponent>().Mesh = cube ? "builtin://Cube" : "builtin://Plane";
+			entity.AddComponent<MaterialComponent>().AlbedoColor = cube ? glm::vec4(1, 0, 0, 1) : glm::vec4(0, 0, 1, 1);
+			if (!cube)
+			{
+				entity.GetTransform().Translation.z = .5f;
+				entity.GetTransform().SetRotationEuler({ glm::radians(90.0f), 0, 0 });
+			}
+		}
+		renderer.SetInstancingEnabled(false);
+		const auto reference = Capture(renderer, scene, camera);
+		const auto picked = renderer.Pick(80, 80);
+		REQUIRE(picked);
+		renderer.SetInstancingEnabled(true);
+		CHECK(Capture(renderer, scene, camera) == reference);
+		CHECK(renderer.Pick(80, 80) == picked);
+		CHECK(renderer.GetStatistics().DrawCalls == 2);
+	}
+	CHECK(graphics->GetValidationErrorCount() == 0);
+}
+
+TEST_CASE("Shadow-only instances stay out of color and picking batches")
+{
+	auto graphics = CreateTestGraphics();
+	Scene scene;
+	scene.GetRendererSettings().SSAOEnabled = false;
+	auto wall = scene.CreateEntity("Receiver");
+	wall.AddComponent<MeshComponent>().Mesh = "builtin://Plane";
+	wall.GetTransform().SetRotationEuler({ glm::radians(90.0f), 0, 0 });
+	wall.GetTransform().Scale = { 6, 1, 3 };
+	auto visible = scene.CreateEntity("Visible cube");
+	visible.AddComponent<MeshComponent>().Mesh = "builtin://Cube";
+	visible.GetTransform().Translation = { -1, 0, 1 };
+	auto hidden = scene.CreateEntity("Off-camera caster");
+	hidden.AddComponent<MeshComponent>().Mesh = "builtin://Cube";
+	hidden.GetTransform().Translation = { 4, 0, 3 };
+	auto sun = scene.CreateEntity("Sun");
+	sun.AddComponent<DirectionalLightComponent>();
+	sun.GetTransform().SetRotationEuler({ 0, glm::radians(33.7f), 0 });
+	RenderCamera camera;
+	camera.Position = { 0, 0, 5 };
+	camera.View = glm::lookAtRH(camera.Position, glm::vec3(0), glm::vec3(0, 1, 0));
 	camera.Projection = glm::orthoRH_ZO(-3.0f, 3.0f, -1.5f, 1.5f, .1f, 20.0f);
 	camera.Far = 20;
 	SceneRenderer renderer(graphics->GetDevice(), { .Picking = true });
 	REQUIRE(renderer.Initialize());
 	renderer.SetViewportSize(300, 150);
-	renderer.SetSelections({ cubes[2].GetUUID() });
-	const auto batched = Capture(renderer, scene, camera);
-	const auto stats = renderer.GetStatistics();
-	CHECK(stats.DrawCalls == 1);
-	CHECK(stats.Instances == 6);
-	CHECK(stats.Triangles == 72);
-	for (uint32_t i = 0; i < cubes.size(); ++i)
-		ExpectPick(renderer, 25 + i * 50, 75, cubes[i].GetUUID());
+	const auto withCaster = Capture(renderer, scene, camera);
+	CHECK(renderer.GetStatistics().Instances == 2);
+	ExpectPick(renderer, 100, 75, visible.GetUUID());
 	renderer.SetInstancingEnabled(false);
-	CHECK(Capture(renderer, scene, camera) == batched);
-	CHECK(renderer.GetStatistics().DrawCalls == 6);
-	CHECK(renderer.GetStatistics().Instances == stats.Instances);
-	CHECK(renderer.GetStatistics().Triangles == stats.Triangles);
-	CHECK(renderer.GetStatistics().ShadowDrawCalls >= stats.ShadowDrawCalls);
+	CHECK(Capture(renderer, scene, camera) == withCaster);
+	CHECK(renderer.GetStatistics().Instances == 2);
+	renderer.SetInstancingEnabled(true);
+	hidden.GetComponent<MeshComponent>().CastShadows = false;
+	CHECK(Capture(renderer, scene, camera) != withCaster);
+	CHECK(renderer.GetStatistics().Instances == 2);
 	CHECK(graphics->GetValidationErrorCount() == 0);
 }

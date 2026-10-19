@@ -289,6 +289,7 @@ namespace Basalt {
 			uint32_t BaseIndex = 0;
 			uint32_t BaseVertex = 0;
 			uint32_t DrawIndex = 0;
+			uint32_t BatchOrder = 0;
 			nvrhi::IBindingSet* MaterialSet = nullptr;
 			bool Blend = false;
 			bool DoubleSided = false;
@@ -498,6 +499,7 @@ namespace Basalt {
 
 		// Per-frame scratch, kept to avoid reallocating every frame.
 		std::vector<GpuDrawData> Draws;
+		std::vector<GpuDrawData> InstanceRecords;
 		std::vector<GpuMaterialData> Materials;
 		std::vector<GpuLightData> Lights;
 		std::vector<DrawItem> Items;
@@ -512,6 +514,7 @@ namespace Basalt {
 		bool FrameSetDirty = true;
 		bool ReportedFrameSetFailure = false;
 		bool ReportedDrawBufferFailure = false;
+		bool ReportedMaterialSetFailure = false;
 		bool ReportedShadowAtlasFailure = false;
 		bool ReportedShadowOverflow = false;
 		bool ReportedLightOverflow = false;
@@ -1606,16 +1609,21 @@ namespace Basalt {
 				cascadeFrusta.emplace_back(cascadeViewProjection);
 		}
 		std::vector<GpuDrawData>& draws = impl.Draws;
+		std::vector<GpuDrawData>& instanceRecords = impl.InstanceRecords;
 		std::vector<GpuMaterialData>& materials = impl.Materials;
 		std::vector<DrawItem>& items = impl.Items;
 		impl.PickEntities = { UUID(0) };
 		std::unordered_map<UUID, uint32_t> pickIds;
 		const std::unordered_set<UUID> selectedIds(m_Selection.begin(), m_Selection.end());
 		draws.clear();
+		instanceRecords.clear();
 		materials.clear();
 		items.clear();
 
+		bool materialSetFailed = false;
 		auto materialSet = [&](nvrhi::ITexture* albedo, nvrhi::ITexture* normal, nvrhi::ITexture* metallicRoughness, nvrhi::ITexture* occlusion, nvrhi::ITexture* emissive) -> nvrhi::IBindingSet* {
+			if (materialSetFailed)
+				return nullptr;
 			const std::array<nvrhi::ITexture*, 5> key = { albedo, normal, metallicRoughness, occlusion, emissive };
 			auto it = impl.MaterialSets.find(key);
 			if (it != impl.MaterialSets.end())
@@ -1631,6 +1639,14 @@ namespace Basalt {
 																		 .addItem(nvrhi::BindingSetItem::Texture_SRV(4, emissive))
 																		 .addItem(nvrhi::BindingSetItem::Sampler(5, impl.LinearWrapAniso)),
 																	 impl.MaterialLayout);
+			if (!set)
+			{
+				if (!impl.ReportedMaterialSetFailure)
+					BS_CORE_ERROR("SceneRenderer: failed to create a material binding set; frame aborted");
+				impl.ReportedMaterialSetFailure = true;
+				materialSetFailed = true;
+				return nullptr;
+			}
 			impl.MaterialSets[key] = { set, impl.FrameCounter };
 			return set;
 		};
@@ -1724,6 +1740,9 @@ namespace Basalt {
 					set = materialSet(albedo, normal, mr, occlusion, emissive);
 				}
 
+				if (!set)
+					return;
+
 				// Transparent geometry cannot keep an off-camera draw alive through shadow visibility.
 				if (!visible && blend)
 				{
@@ -1741,8 +1760,8 @@ namespace Basalt {
 						draws.push_back({ joint, glm::mat4(1), glm::uvec4(0) });
 					m_Statistics.SkinMatrices += static_cast<uint32_t>(palette.size());
 				}
-				const uint32_t drawIndex = static_cast<uint32_t>(draws.size());
-				draws.push_back({ model, normalMatrix, glm::uvec4(materialIndex, pickId, paletteOffset, static_cast<uint32_t>(palette.size())) });
+				const uint32_t drawIndex = static_cast<uint32_t>(instanceRecords.size());
+				instanceRecords.push_back({ model, normalMatrix, glm::uvec4(materialIndex, pickId, paletteOffset, static_cast<uint32_t>(palette.size())) });
 
 				DrawItem item;
 				item.Mesh = gpuMesh;
@@ -1762,15 +1781,28 @@ namespace Basalt {
 			}
 		};
 		uint32_t unusedPaletteOffset = 0;
+		// Shared asset keys resolve once per frame, including the async placeholder decision.
+		// Keeping this local lets a reload or completed streaming request take effect next frame.
+		struct FrameMesh
+		{
+			Ref<MeshSource> Source;
+			bool Placeholder = false;
+		};
+		std::unordered_map<std::string, FrameMesh> frameMeshes;
 		for (auto handle : scene.GetAllEntitiesWith<MeshComponent>())
 		{
 			Entity entity(handle, &scene);
 			const auto& component = entity.GetComponent<MeshComponent>();
-			auto source = m_AsyncLoading ? AssetManager::RequestMesh(component.Mesh) : AssetManager::GetMesh(component.Mesh);
-			const bool placeholder = !source && m_AsyncLoading && AssetManager::IsLoading(component.Mesh);
-			if (placeholder)
-				source = m_PlaceholderMesh;
-			addMesh(entity, source, placeholder ? 0 : component.MeshIndex, scene.GetWorldTransform(entity), component.CastShadows, {}, unusedPaletteOffset);
+			auto [entry, first] = frameMeshes.try_emplace(component.Mesh);
+			if (first)
+			{
+				entry->second.Source = m_AsyncLoading ? AssetManager::RequestMesh(component.Mesh) : AssetManager::GetMesh(component.Mesh);
+				entry->second.Placeholder = !entry->second.Source && m_AsyncLoading && AssetManager::IsLoading(component.Mesh);
+				if (entry->second.Placeholder)
+					entry->second.Source = m_PlaceholderMesh;
+			}
+			const auto& resolved = entry->second;
+			addMesh(entity, resolved.Source, resolved.Placeholder ? 0 : component.MeshIndex, scene.GetWorldTransform(entity), component.CastShadows, {}, unusedPaletteOffset);
 		}
 		for (auto handle : scene.GetAllEntitiesWith<AnimatorComponent>())
 		{
@@ -1782,25 +1814,36 @@ namespace Basalt {
 				addMesh(entity, source, static_cast<uint32_t>(node.MeshIndex), model, component.CastShadows, palette, offset);
 			});
 		}
+		if (materialSetFailed)
+		{
+			uploadsPass.reset();
+			abortFrame();
+			return;
+		}
+		impl.ReportedMaterialSetFailure = false;
 		m_Statistics.Materials = static_cast<uint32_t>(materials.size());
 		if (m_InstancingEnabled)
 		{
-			// Preserve transparent submission order (including equal-depth ties), sorting only opaque draws.
+			// Group in first-appearance order: heap addresses identify keys, never draw order. This keeps
+			// coplanar winners deterministic. Transparent draws retain submission order, including ties.
+			std::map<DrawBatchKey, uint32_t> batchOrders;
+			for (DrawItem& item : items)
+				if (!item.Blend)
+					item.BatchOrder = batchOrders.try_emplace(item.Key(), static_cast<uint32_t>(batchOrders.size())).first->second;
 			std::stable_sort(items.begin(), items.end(), [](const DrawItem& a, const DrawItem& b) {
 				if (a.Blend != b.Blend)
 					return !a.Blend;
-				return !a.Blend && a.Key() < b.Key();
+				return !a.Blend && a.BatchOrder < b.BatchOrder;
 			});
-			// Palettes keep their original offsets. Append contiguous per-instance records after them;
-			// every pass, including picking and shadows, reads the same instance data.
-			std::vector<GpuDrawData> instances;
-			instances.reserve(items.size());
-			for (DrawItem& item : items)
-			{
-				instances.push_back(draws[item.DrawIndex]);
-				item.DrawIndex = static_cast<uint32_t>(draws.size() + instances.size() - 1);
-			}
-			draws.insert(draws.end(), instances.begin(), instances.end());
+		}
+		// Palettes precede contiguous instance records. Staging the models separately avoids dead
+		// copies in the uploaded buffer; picking, shadows and lighting all read the same records.
+		draws.reserve(draws.size() + items.size());
+		for (DrawItem& item : items)
+		{
+			const uint32_t stagedIndex = item.DrawIndex;
+			item.DrawIndex = static_cast<uint32_t>(draws.size());
+			draws.push_back(instanceRecords[stagedIndex]);
 		}
 
 		// --- Particles ----------------------------------------------------------------------------
@@ -1960,31 +2003,41 @@ namespace Basalt {
 			nvrhi::DrawArguments args;
 			args.vertexCount = item.IndexCount;
 			args.instanceCount = instanceCount;
+			args.startInstanceLocation = 0;
 			args.startIndexLocation = item.BaseIndex;
 			args.startVertexLocation = item.BaseVertex;
 			commandList->drawIndexed(args);
 		};
 
+		enum class BatchPass
+		{
+			Shadow,
+			Prepass,
+			Lighting
+		};
 		// Filtering is per pass/frustum. A skipped record ends a batch, so off-camera and shadow-only
 		// geometry cannot be pulled into another pass through an instance range.
-		auto drawBatches = [&](auto accepts, auto pipeline, nvrhi::IFramebuffer* framebuffer, const nvrhi::Viewport& viewport, uint32_t shadowIndex, bool shadow) {
+		auto drawBatches = [&](auto accepts, auto pipeline, nvrhi::IFramebuffer* framebuffer, const nvrhi::Viewport& viewport, uint32_t shadowIndex, BatchPass pass) {
+			const bool shadow = pass == BatchPass::Shadow;
 			for (size_t i = 0; i < items.size();)
 			{
 				const DrawItem& first = items[i++];
 				if (!accepts(first))
 					continue;
+				BS_CORE_ASSERT(!first.Blend, "Transparent draws retain their sorted individual submission");
+				const DrawBatchKey firstKey = first.Key();
 				uint32_t count = 1;
 				while (m_InstancingEnabled && i < items.size() && accepts(items[i]) &&
-					   CanInstanceDraw(first.Key(), first.DrawIndex, count, items[i].Key(), items[i].DrawIndex))
+					   CanInstanceDraw(firstKey, first.DrawIndex, count, items[i].Key(), items[i].DrawIndex))
 				{
 					++count;
 					++i;
 				}
-				drawItem(first, pipeline(first), framebuffer, viewport, shadowIndex, !shadow || first.AlphaTested,
+				drawItem(first, pipeline(firstKey), framebuffer, viewport, shadowIndex, !shadow || first.AlphaTested,
 						 shadow ? impl.ShadowFrameSet.Get() : nullptr, count);
 				if (shadow)
 					++m_Statistics.ShadowDrawCalls;
-				else if (framebuffer == impl.LightingFramebuffer.Get())
+				else if (pass == BatchPass::Lighting)
 				{
 					++m_Statistics.DrawCalls;
 					m_Statistics.Instances += count;
@@ -1997,6 +2050,7 @@ namespace Basalt {
 			DrawFullscreen(commandList, pipeline, framebuffer, set, viewport, push, pushSize);
 		};
 		const nvrhi::Viewport outputViewport(static_cast<float>(m_Width), static_cast<float>(m_Height));
+		const auto visibleOpaque = [](const DrawItem& item) { return !item.Blend && item.WorldBounds.IsValid(); };
 
 		// --- Shadow maps --------------------------------------------------------------------------
 		{
@@ -2004,7 +2058,7 @@ namespace Basalt {
 			auto drawShadowCasters = [&](const Frustum& shadowFrustum, nvrhi::IGraphicsPipeline* opaque,
 										 nvrhi::IGraphicsPipeline* masked, nvrhi::IFramebuffer* framebuffer, const nvrhi::Viewport& viewport, uint32_t index) {
 				drawBatches([&](const DrawItem& item) { return item.CastShadows && shadowFrustum.Intersects(item.ShadowBounds); },
-							[&](const DrawItem& item) { return item.AlphaTested ? masked : opaque; }, framebuffer, viewport, index, true);
+							[&](const DrawBatchKey& key) { return key.AlphaTested ? masked : opaque; }, framebuffer, viewport, index, BatchPass::Shadow);
 			};
 			commandList->clearDepthStencilTexture(impl.ShadowMap, nvrhi::AllSubresources, true, 1.0f, false, 0);
 			if (shadowsActive)
@@ -2030,8 +2084,7 @@ namespace Basalt {
 				commandList->clearTextureUInt(impl.EntityIds, nvrhi::AllSubresources, 0);
 			commandList->clearDepthStencilTexture(m_DepthTexture, nvrhi::AllSubresources, true, 1.0f, false, 0);
 			commandList->clearTextureFloat(impl.NormalTexture, nvrhi::AllSubresources, nvrhi::Color(0.0f, 0.0f, 1.0f, 0.0f));
-			drawBatches([](const DrawItem& item) { return !item.Blend && item.WorldBounds.IsValid(); },
-						[&](const DrawItem& item) { return impl.PrepassPipeline[item.DoubleSided ? 1 : 0].Get(); }, impl.PrepassFramebuffer, renderViewport, 0, false);
+			drawBatches(visibleOpaque, [&](const DrawBatchKey& key) { return impl.PrepassPipeline[key.DoubleSided ? 1 : 0].Get(); }, impl.PrepassFramebuffer, renderViewport, 0, BatchPass::Prepass);
 		}
 
 		// Transparent selection gets its own nearest-surface depth, leaving lighting/SSAO depth intact.
@@ -2087,8 +2140,7 @@ namespace Basalt {
 		{
 			const GpuPassScope pass(profiler, commandList, PassLighting);
 			commandList->clearTextureFloat(impl.HdrTexture, nvrhi::AllSubresources, nvrhi::Color(0.0f, 0.0f, 0.0f, 1.0f));
-			drawBatches([](const DrawItem& item) { return !item.Blend && item.WorldBounds.IsValid(); },
-						[&](const DrawItem& item) { return impl.OpaquePipeline[item.DoubleSided ? 1 : 0].Get(); }, impl.LightingFramebuffer, renderViewport, 0, false);
+			drawBatches(visibleOpaque, [&](const DrawBatchKey& key) { return impl.OpaquePipeline[key.DoubleSided ? 1 : 0].Get(); }, impl.LightingFramebuffer, renderViewport, 0, BatchPass::Lighting);
 
 			if (!skyLight || skyLight->ShowBackground)
 			{

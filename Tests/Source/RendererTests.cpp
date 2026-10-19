@@ -3,6 +3,7 @@
 #include <Basalt/Core/FileSystem.h>
 #include <Basalt/Core/Log.h>
 #include <Basalt/Renderer/DebugDraw.h>
+#include <Basalt/Renderer/DrawBatch.h>
 #include <Basalt/Renderer/DeviceSelection.h>
 #include <Basalt/Renderer/DynamicResolution.h>
 #include <Basalt/Renderer/GpuProfiler.h>
@@ -820,7 +821,7 @@ TEST_SUITE("SceneRenderer")
 		CHECK(stats["gpu"]["passes"][1]["name"] == "Uploads");
 		CHECK(stats["gpu"]["passes"][5]["name"] == "Clusters");
 		CHECK(stats["gpu"]["passes"][7]["name"] == "PostProcess");
-		for (const char* key : { "viewport", "renderSize", "renderScale", "currentRenderScale", "drawCalls", "shadowDrawCalls", "culledSubmeshes", "skinMatrices", "lights", "materials" })
+		for (const char* key : { "viewport", "renderSize", "renderScale", "currentRenderScale", "drawCalls", "instances", "shadowDrawCalls", "culledSubmeshes", "skinMatrices", "lights", "materials" })
 		{
 			INFO(key);
 			CHECK(stats.contains(key));
@@ -1025,5 +1026,50 @@ TEST_SUITE("ValidationLayerManifest")
 		CHECK(AppendSearchPath("/mine:", "/tmp/layers", ':') == "/mine:/tmp/layers");
 		CHECK(AppendSearchPath("::/mine", "/tmp/layers", ':') == "/mine:/tmp/layers");
 		CHECK(AppendSearchPath("C:\\a;D:\\b", "D:\\b", ';') == "C:\\a;D:\\b");
+	}
+}
+
+TEST_SUITE("DrawBatching")
+{
+	TEST_CASE("Draw batching requires identical state and contiguous instance records")
+	{
+		int mesh = 0, material = 0, other = 0;
+		DrawBatchKey key{ &mesh, &material, 3, 7, 12, false, false };
+		CHECK(CanInstanceDraw(key, 10, 4, key, 14));
+		CHECK_FALSE(CanInstanceDraw(key, 10, 4, key, 15));
+		CHECK_FALSE(CanInstanceDraw(key, UINT32_MAX, 1, key, 0));
+		for (int field = 0; field < 7; ++field)
+		{
+			auto changed = key;
+			switch (field)
+			{
+				case 0:
+					changed.Mesh = &other;
+					break;
+				case 1:
+					changed.MaterialSet = &other;
+					break;
+				case 2:
+					++changed.BaseIndex;
+					break;
+				case 3:
+					++changed.BaseVertex;
+					break;
+				case 4:
+					++changed.IndexCount;
+					break;
+				case 5:
+					changed.DoubleSided = true;
+					break;
+				case 6:
+					changed.AlphaTested = true;
+					break;
+				default:
+					FAIL("Unexpected batch key field");
+					break;
+			}
+			CHECK_FALSE(CanInstanceDraw(key, 10, 4, changed, 14));
+			CHECK((key < changed) != (changed < key));
+		}
 	}
 }
