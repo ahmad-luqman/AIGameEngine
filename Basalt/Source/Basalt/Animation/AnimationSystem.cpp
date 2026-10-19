@@ -684,6 +684,9 @@ namespace Basalt {
 				playback->StatePhase += advance / cycleDuration;
 			if (motion)
 				ApplyRootMotion(entity, *playback, *motion, seconds);
+			// A frame without root motion still owns its part of a step that earlier root-motion frames queued for.
+			else if (auto* physics = m_Scene.GetPhysicsWorld(); physics && seconds > 0 && entity.HasComponent<CharacterControllerComponent>())
+				physics->QueueRootMotionGap(entity, seconds);
 			const bool finished = playback->Space ? playback->Space->Phase >= 1 : playback->Time >= playback->Source->Animations[playback->Clip].Duration;
 			// Time clamps exactly to Duration; summed phase fractions can finish just below 1.
 			if (!playback->Looping && finished && cycleDuration > 0)
