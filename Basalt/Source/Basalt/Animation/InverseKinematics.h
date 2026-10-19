@@ -67,6 +67,19 @@ namespace Basalt {
 	// still left, outermost first, so the aim is exact within MaxAngleRadians.
 	[[nodiscard]] IKSolveResult SolveLookAtIK(const MeshSource& source, AnimationLocalPose& pose, std::vector<glm::mat4>& globals, const LookAtIKRequest& request);
 
+	// What SolveAimChainIK solves: a chain of joints, each turned so its child points at a target (spring bones).
+	struct AimChainIKRequest
+	{
+		// The joints, parent first, each followed by its child; the last entry is the tip, which does not turn.
+		std::span<const uint32_t> Joints;
+		// Where each joint's child should point toward (one per joint but the tip).
+		std::span<const glm::vec3> Targets;
+		float Weight = 1.0f;
+	};
+	// Turns the joints parent first so each one's child lies toward its target. Joints whose bone or target direction
+	// vanishes keep their rotation; Degenerate when none could turn.
+	[[nodiscard]] IKSolveResult SolveAimChainIK(const MeshSource& source, AnimationLocalPose& pose, std::vector<glm::mat4>& globals, const AimChainIKRequest& request);
+
 	// Fills outJoints with the joints `chain` drives on `source` (TwoBone: upper, middle, end; LookAt: the aiming joint,
 	// then its ancestors; ChainLength clamped to 1..MaxChainLength) and returns empty, or returns why it cannot (an empty
 	// or unknown joint, too few ancestors, a fixed-matrix joint) and leaves outJoints empty.
@@ -77,8 +90,5 @@ namespace Basalt {
 	// The rotation part of a model-space node transform: scale removed, and a mirroring moved into X (as
 	// Math::DecomposeTransform does), so a mirrored transform still yields a proper rotation.
 	glm::quat GlobalRotation(const glm::mat4& transform);
-	// Rotates `node` by the model-space rotation `delta` about its own origin (its descendants follow), under mirrored
-	// parents too. Globals are left stale; compose the pose afterwards.
-	void RotateJoint(const MeshSource& source, AnimationLocalPose& pose, const std::vector<glm::mat4>& globals, uint32_t node, const glm::quat& delta);
 
 }

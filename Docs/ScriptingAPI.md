@@ -462,8 +462,8 @@ injects).
 
 ## Physics
 
-`Physics.GetGravity()`, `Physics.SetGravity(v)`, and `Physics.GetLayers()` (the layer names the running
-world uses, in order: the project's, read when play started).
+`Physics.GetGravity()`, `Physics.SetGravity(v)` (a non-finite `v` is an error), and `Physics.GetLayers()` (the layer
+names the running world uses, in order: the project's, read when play started).
 
 ### Layers and continuous collision
 
@@ -668,7 +668,9 @@ end
 
 - `Move(velocity)` holds until the next call, so call it every frame. With gravity (scene gravity times
   `GravityFactor`), its upward part only counts on walkable ground, where it jumps, again on every landing
-  while it is held. In the air gravity drives the vertical speed and `Move` steers sideways. A ceiling
+  while it is held, and within `JumpGrace` seconds (default 0) after walking off it, where it jumps once (coyote
+  time: a jump pressed just after running off a ledge still works). Otherwise in the air gravity drives the vertical
+  speed and `Move` steers sideways. A ceiling
   stops a jump at once. With `GravityFactor = 0` the velocity applies in full (flying, ladders). A
   velocity that is not finite is a script error.
 - `AddForce`, `AddImpulse`, `AddTorque`, `SetLinearVelocity` and `SetAngularVelocity` do nothing on a
@@ -678,14 +680,15 @@ end
   standing (`IsGrounded()` is false), and the character slides down it. `StepHeight` also keeps the
   character on the ground when walking down stairs and slopes; 0 turns both off. A capsule's round bottom
   rolls over low edges even without `StepHeight`.
-- Moving the entity's transform teleports the character; its rotation follows the entity's rotation.
+- Moving the entity's transform teleports the character; its rotation follows the entity's rotation. Spring bones
+  restart by themselves only after a long teleport (see Spring bones), so call `ResetSpringBones()` after a short one.
 - Characters collide with each other's full shapes (on layers that collide) and a moving character pushes
   another with its velocity, whatever its `MaxStrength` (that only limits how hard it pushes dynamic
   bodies).
 - The character enters triggers like any body (`OnTriggerEnter`/`OnTriggerExit`). Dynamic bodies that run
   into it raise collision callbacks (kinematic ones, such as other characters, do not); the character walking into something does not (it stops just short of it),
   so use a trigger or a query to detect what it touches.
-- Changing `SlopeLimit`, `StepHeight`, `MaxStrength`, `Mass` or `GravityFactor` applies in place; a new
+- Changing `SlopeLimit`, `StepHeight`, `MaxStrength`, `Mass`, `GravityFactor` or `JumpGrace` applies in place; a new
   `Layer` or collider rebuilds the character, which keeps its velocity and ground. Out-of-range values are
   clamped with one warning; `SlopeLimit` is at least 1 degree.
 
@@ -1326,8 +1329,8 @@ playback resets (changes to `Mesh`, `Clip` or `StateMachine`, asset reload) and 
 
 A `SpringBone` component on an Animator's entity adds secondary motion to hair, capes, tails and ears every frame the
 scene plays or simulates, right after inverse kinematics (so chains hang from the solved pose) and before attachments.
-Each chain's joints follow simulated points that lag behind the character's motion, sag under gravity and wind, bounce
-off colliders and spring back toward the animated shape.
+Each chain's joints follow simulated points that lag behind the character's motion, sag under gravity and wind, stay
+outside colliders and spring back toward the animated shape.
 
 ```lua
 hero:AddComponent("SpringBone", {
@@ -1349,27 +1352,34 @@ hero:SetComponent("SpringBone", springs)
 |---|---|
 | `Name` | Unique per component; the simulation state follows the name when chains are added, removed or reordered |
 | `Joint` | The first joint that swings; its parent follows the animation |
-| `ChainLength` | How many joints swing (0..16), `Joint` first, each the first child of the one before; 0 (default) follows first children down to the last joint that still has a child. Every swinging joint aims at its child, so the last one needs a child: the tip, often an end joint without geometry |
+| `ChainLength` | How many joints swing (0..16), `Joint` first, each the first child of the one before; 0 (default) follows first children down to the last joint that still has a child, at most 16 joints. Every swinging joint aims at its child, so the last one needs a child: the tip, often an end joint without geometry |
 | `Stiffness` | Pull (1/s², 0..10000, default 40) of each point back toward where the animated shape puts it, measured from the swung points before it; 0 hangs freely |
 | `Damping` | Velocity decay (1/s, 0..1000, default 4): higher settles sooner. It acts on world-space velocity, like air drag, so moving chains trail behind |
 | `GravityFactor` | Scales the physics gravity (-100..100, default 1) |
-| `Radius` | Radius (m, 0..100, default 0.02) of each point against the colliders |
+| `Radius` | Radius (0..100, default 0.02) of each point against the colliders, in the entity's units: it scales with the entity |
 | `Weight` | 0..1 blend from the animated pose (0) to the simulation (1); the simulation keeps running at 0 |
 
 `Colliders` are spheres or capsules attached to joints (`Joint`; empty: the entity itself) at `Offset` in the joint's
 space, with `Radius` (default 0.1) and `HalfHeight` (0: a sphere; otherwise a capsule along the joint's local Y axis,
-`HalfHeight` to each side of `Offset`). They keep the points of every chain of the component outside them. `Wind` is a
-world-space acceleration (m/s²) added to every point.
+`HalfHeight` to each side of `Offset`), both in the joint's space (they scale with it). They keep the points of every
+chain of the component outside them wherever a point can stay outside at its bone length. They follow the pose before
+any chain swings, so a collider on a swinging joint stays where the animation puts it. `Wind` is a world-space
+acceleration (m/s²) added to every point.
 
-Points simulate in world space at 120 steps per second (a frame runs at least one; a frame longer than 1/15 s only
-simulates 1/15 s), so a moving or turning character swings its chains, and every bone keeps its animated length (scaled
-with the entity). A chain starts on the animated pose; it restarts there when its joints change and when the chain's
-first joint moves faster than 100 m/s (a teleport or respawn). `e:ResetSpringBones()` restarts every chain on the next
-update, for cuts the speed test misses; it raises an error without a SpringBone component. Chains whose joints are
-missing, have no child or have fixed glTF matrices, unknown collider joints and a SpringBone whose Animator cannot
-animate are logged once and skipped; the inspector and `scene.info` show the same problems and warn when two chains turn
-the same joint (the later one wins). The simulated points are gameplay state: they survive playback resets and end with
-the component.
+Points simulate in world space in equal substeps of at most 1/120 s, so a moving or turning character swings its
+chains, and every bone keeps its animated length (scaled with the entity). A frame longer than 1/15 s (a hitch)
+simulates only its last 1/15 s; the points move along with the chain for the rest, so a hitch does not whip them. A
+chain starts on the animated pose; it restarts there when its joints, its `ChainLength` or the model change, after a
+frame it could not be solved, and when its first joint moves faster than 100 m/s (a teleport or respawn: about 1.7 m in
+one 60 Hz frame). `e:ResetSpringBones()` restarts every chain on the next update, for shorter teleports and cuts; it
+raises an error without a SpringBone component.
+
+Problems are logged once and the chain (or the component) skipped: chains whose joints are missing, have no child,
+are fewer than `ChainLength` in a line or have fixed glTF matrices; chains whose bones all have zero length; unknown
+collider joints; a non-finite physics gravity or `Wind` (ignored); and a SpringBone whose Animator cannot animate. The
+inspector and `scene.info` show the authoring problems too and warn when two chains turn the same joint (the later one
+wins), when a chain joint has several children (the first is followed) and when a `ChainLength` 0 chain goes on past
+16 joints. The simulated points are gameplay state: they survive playback resets and end with the component.
 
 ## Graphics settings
 

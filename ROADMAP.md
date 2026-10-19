@@ -8,8 +8,8 @@ automation API, docs, and a code review before committing.
 
 Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or more.
 
-**Execution.** Work in milestones rather than one item at a time: P0 → particles and UI components →
-P2 editor feel → the remaining agent-tested samples. Run each milestone as one long autonomous session at high effort
+**Execution.** Work in milestones rather than one item at a time (`ROADMAP-SESSIONS.md` groups the open items into
+sessions). Run each milestone as one long autonomous session at high effort
 (or with multi-agent workflows), and check quality and token cost before starting the next.
 
 ## Current state (baseline)

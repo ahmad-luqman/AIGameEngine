@@ -9,6 +9,8 @@
 #include "Basalt/Scene/Scene.h"
 
 #include <algorithm>
+#include <map>
+#include <span>
 
 namespace Basalt {
 	void ForEachAnimatedMesh(Entity entity, const std::function<void(const Ref<MeshSource>&, const MeshNode&, const glm::mat4&, const std::vector<glm::mat4>&)>& visit)
@@ -239,7 +241,8 @@ namespace Basalt {
 			// AddAnimatorWarnings reports a model that cannot load.
 			const auto source = animator->Mesh.empty() ? nullptr : AssetManager::GetMesh(animator->Mesh);
 			std::vector<uint32_t> joints;
-			std::vector<std::pair<uint32_t, const SpringChain*>> turned;
+			// The first chain turning each joint.
+			std::map<uint32_t, const SpringChain*> turned;
 			for (const SpringChain& chain : springs.Chains)
 			{
 				if (chain.Joint.empty())
@@ -254,17 +257,18 @@ namespace Basalt {
 					warnings.push_back(fmt::format("SpringBone chain '{}': {}", chain.Name, problem));
 					continue;
 				}
+				const auto chainJoints = std::span(joints).first(joints.size() - 1);
 				// Chains swing in order, so a later one turning the same joint overrides the earlier one.
-				for (auto joint = joints.begin(); joint + 1 != joints.end(); ++joint)
+				if (const auto other = std::ranges::find_if(chainJoints, [&](uint32_t joint) { return turned.contains(joint); }); other != chainJoints.end())
+					warnings.push_back(fmt::format("SpringBone chains '{}' and '{}' both turn joint '{}'; the later one wins", turned.at(*other)->Name, chain.Name, source->Nodes[*other].Name));
+				for (uint32_t joint : chainJoints)
 				{
-					if (const auto other = std::ranges::find(turned, *joint, &std::pair<uint32_t, const SpringChain*>::first); other != turned.end())
-					{
-						warnings.push_back(fmt::format("SpringBone chains '{}' and '{}' both turn joint '{}'; the later one wins", other->second->Name, chain.Name, source->Nodes[*joint].Name));
-						break;
-					}
+					turned.emplace(joint, &chain);
+					if (const size_t children = ChildCount(*source, joint); children > 1)
+						warnings.push_back(fmt::format("SpringBone chain '{}': joint '{}' has {} children; the chain follows the first, '{}'", chain.Name, source->Nodes[joint].Name, children, source->Nodes[static_cast<size_t>(FirstChild(*source, joint))].Name));
 				}
-				for (auto joint = joints.begin(); joint + 1 != joints.end(); ++joint)
-					turned.emplace_back(*joint, &chain);
+				if (chain.ChainLength == 0 && FirstChild(*source, joints.back()) >= 0)
+					warnings.push_back(fmt::format("SpringBone chain '{}': the joints go on past the first {}; the rest follow the animation", chain.Name, SpringChain::MaxChainLength));
 			}
 			if (!source)
 				return;

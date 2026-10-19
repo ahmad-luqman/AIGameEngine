@@ -325,6 +325,7 @@ local function TestSystems(self)
 	Check("Physics.GetGravity (scene setting)", NearVec(gravity, Vec3(0, -9.81, 0), 1e-3))
 	Physics.SetGravity(Vec3(0, -20, 0))
 	Check("Physics.SetGravity", NearVec(Physics.GetGravity(), Vec3(0, -20, 0)))
+	ExpectError("Physics.SetGravity non-finite", function() Physics.SetGravity(Vec3(0, 0 / 0, 0)) end, "must be finite")
 	Physics.SetGravity(gravity)
 
 	-- Audio.
@@ -815,6 +816,7 @@ function Driver:OnUpdate(dt)
 		local shoulder, hand = springRig:GetBoneTransform("RightUpperArm"), springRig:GetBoneTransform("RightHand")
 		local elbow = springRig:GetBoneTransform("RightForeArm")
 		local chest, chestRotation = springRig:GetBoneTransform("Chest")
+		-- The collider's Offset on SpringRig (entity 918) in FeatureTest.bscene.
 		local collider = chest + chestRotation * Vec3(-0.3026, -0.1319, 0)
 		Check("Spring bones swing", hand.y < shoulder.y - 0.3 and Near((elbow - shoulder):Length(), 0.3, 1e-3) and Near((hand - elbow):Length(), 0.3, 1e-3)
 			and NearVec(collider, shoulder + Vec3(0, -0.3, 0), 0.01) and (elbow - collider):Length() > 0.115)

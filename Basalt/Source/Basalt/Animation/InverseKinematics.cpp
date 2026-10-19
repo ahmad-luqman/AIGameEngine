@@ -60,6 +60,21 @@ namespace Basalt {
 			return Unmirrored(globals[parent], glm::inverse(GlobalRotation(globals[parent])) * rotation);
 		}
 
+		// Rotates `node` by the model-space rotation `delta` about its own origin (its descendants follow). Globals are
+		// left stale; compose the pose afterwards.
+		void RotateJoint(const MeshSource& source, AnimationLocalPose& pose, const std::vector<glm::mat4>& globals, uint32_t node, const glm::quat& delta)
+		{
+			const int32_t parent = source.Nodes[node].Parent;
+			glm::quat local = delta;
+			if (parent >= 0)
+			{
+				const glm::quat parentRotation = GlobalRotation(globals[parent]);
+				local = Unmirrored(globals[parent], glm::inverse(parentRotation) * delta * parentRotation);
+			}
+			auto& rotation = pose.Nodes[node].Rotation;
+			rotation = glm::normalize(local * rotation);
+		}
+
 		// The chain joints' rotations before a solve, so a failed one restores just those.
 		class SavedRotations
 		{
@@ -110,19 +125,6 @@ namespace Basalt {
 		}
 	}
 
-	void RotateJoint(const MeshSource& source, AnimationLocalPose& pose, const std::vector<glm::mat4>& globals, uint32_t node, const glm::quat& delta)
-	{
-		const int32_t parent = source.Nodes[node].Parent;
-		glm::quat local = delta;
-		if (parent >= 0)
-		{
-			const glm::quat parentRotation = GlobalRotation(globals[parent]);
-			local = Unmirrored(globals[parent], glm::inverse(parentRotation) * delta * parentRotation);
-		}
-		auto& rotation = pose.Nodes[node].Rotation;
-		rotation = glm::normalize(local * rotation);
-	}
-
 	const char* DescribeIKResult(IKSolveResult result)
 	{
 		switch (result)
@@ -135,7 +137,7 @@ namespace Basalt {
 			case IKSolveResult::Degenerate:
 				return "the chain has zero-length bones, is fully folded, or its aiming axis vanishes (a zero-scaled joint)";
 			case IKSolveResult::NonFinite:
-				return "a target, pole, axis or the solved pose is not finite";
+				return "a request value (target, pole or axis) or the solved pose is not finite";
 		}
 		return "unknown result";
 	}
@@ -309,6 +311,40 @@ namespace Basalt {
 			if (!ComposeOrRestore(source, pose, globals, saved))
 				return IKSolveResult::NonFinite;
 		}
+		return Finalize(source, pose, globals, saved, weight);
+	}
+
+	IKSolveResult SolveAimChainIK(const MeshSource& source, AnimationLocalPose& pose, std::vector<glm::mat4>& globals, const AimChainIKRequest& request)
+	{
+		const std::span<const uint32_t> joints = request.Joints;
+		BS_CORE_ASSERT(joints.size() == request.Targets.size() + 1, "one target per turned joint");
+		const float weight = ClampWeight(request.Weight);
+		if (weight <= 0 || request.Targets.empty())
+			return IKSolveResult::Unchanged;
+		const std::span<const uint32_t> turned = joints.first(request.Targets.size());
+		if (HasFixedMatrix(source, turned))
+			return IKSolveResult::FixedMatrix;
+		if (!std::ranges::all_of(request.Targets, [](const glm::vec3& target) { return Math::IsFinite(target); }))
+			return IKSolveResult::NonFinite;
+		const SavedRotations saved(pose, turned);
+		bool turnedAny = false;
+		for (size_t i = 0; i < turned.size(); i++)
+		{
+			const glm::vec3 origin = Position(globals, joints[i]);
+			const glm::vec3 bone = Position(globals, joints[i + 1]) - origin;
+			const glm::vec3 aim = request.Targets[i] - origin;
+			if (glm::length(bone) < 1e-6f || glm::length(aim) < 1e-6f)
+				continue;
+			RotateJoint(source, pose, globals, joints[i], RotationBetween(glm::normalize(bone), glm::normalize(aim)));
+			// The joints below aim from where this turn puts them.
+			if (!ComposeOrRestore(source, pose, globals, saved))
+				return IKSolveResult::NonFinite;
+			turnedAny = true;
+		}
+		if (!turnedAny)
+			return IKSolveResult::Degenerate;
+		if (weight >= 1.0f)
+			return IKSolveResult::Solved;
 		return Finalize(source, pose, globals, saved, weight);
 	}
 

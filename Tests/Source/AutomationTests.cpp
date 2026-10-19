@@ -50,6 +50,25 @@ TEST_SUITE("Automation")
 		CHECK(warnings[0]["name"] == "EmptyRig");
 		CHECK(warnings[0]["message"] == "Animator Mesh is empty");
 	}
+	TEST_CASE("Scene info and the log can fail a batch on warnings")
+	{
+		CommandRegistry registry;
+		AutomationSession session;
+		Run(registry, session, "scene.new", { { "name", "Clean" }, { "empty", true } });
+		CHECK(Run(registry, session, "scene.info", { { "assertNoAnimationWarnings", true } })["animationWarnings"].empty());
+		Run(registry, session, "entity.create", { { "name", "EmptyRig" } });
+		Run(registry, session, "component.set", { { "entity", "EmptyRig" }, { "component", "Animator" }, { "data", json::object() } });
+		CHECK(RunError(registry, session, "scene.info", { { "assertNoAnimationWarnings", true } }) == "1 animation warning(s): EmptyRig: Animator Mesh is empty");
+		CHECK(Run(registry, session, "scene.info", { { "assertNoAnimationWarnings", false } })["animationWarnings"].size() == 1);
+
+		const auto cursor = Run(registry, session, "log.get")["next"];
+		BS_CORE_INFO("an info line");
+		CHECK(Run(registry, session, "log.get", { { "since", cursor }, { "assertNoWarnings", true } })["messages"].size() == 1);
+		BS_CORE_WARN("a warning line");
+		// errorsOnly filters what is returned, not what the assertion looks at.
+		const std::string error = RunError(registry, session, "log.get", { { "since", cursor }, { "errorsOnly", true }, { "assertNoWarnings", true } });
+		CHECK(error == "1 warning(s) or worse logged: [warn] a warning line");
+	}
 	TEST_CASE("Protocol: unknown commands, malformed requests, batches")
 	{
 		CommandRegistry registry;

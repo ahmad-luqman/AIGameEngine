@@ -722,8 +722,9 @@ namespace Basalt {
 				return RequireAnimations(context).GetIKWeight(RequireInverseKinematics(self, "GetIKWeight"), chain);
 			};
 			entityType["ResetSpringBones"] = [&context](const ScriptEntity& self) {
-				// The component was just checked, so the system finds it.
-				RequireAnimations(context).ResetSpringBones(RequireSpringBone(self, "ResetSpringBones"));
+				const Entity entity = RequireSpringBone(self, "ResetSpringBones");
+				if (!RequireAnimations(context).ResetSpringBones(entity))
+					throw std::runtime_error("ResetSpringBones: the animation system does not know the SpringBone on '" + entity.GetName() + "'");
 			};
 		}
 
@@ -962,7 +963,10 @@ namespace Basalt {
 				return names;
 			};
 			physics["GetGravity"] = [&context]() { return RequirePhysics(context).GetGravity(); };
-			physics["SetGravity"] = [&context](const glm::vec3& gravity) { RequirePhysics(context).SetGravity(gravity); };
+			physics["SetGravity"] = [&context](const glm::vec3& gravity) {
+				RequireFiniteVector("Physics.SetGravity", "gravity", gravity);
+				RequirePhysics(context).SetGravity(gravity);
+			};
 
 			sol::table audio = lua.create_named_table("Audio");
 			audio["PlayOneShot"] = [&context](const std::string& clip, sol::optional<glm::vec3> position, sol::optional<float> volume, sol::optional<std::string> bus) {

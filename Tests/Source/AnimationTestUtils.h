@@ -3,14 +3,17 @@
 #include <doctest/doctest.h>
 
 #include <Basalt/Animation/AnimationPose.h>
+#include <Basalt/Animation/AnimationSystem.h>
 #include <Basalt/Asset/AssetManager.h>
 #include <Basalt/Asset/MeshImporter.h>
+#include <Basalt/Scene/Entity.h>
+#include <Basalt/Scene/Scene.h>
 
 #include <glm/gtc/epsilon.hpp>
 
 #include <filesystem>
 
-// Helpers shared by the layer and IK tests, around the generated Biped fixture (Tests/Data/Animation).
+// Helpers shared by the layer, IK and spring bone tests, around the generated Biped fixture (Tests/Data/Animation).
 namespace AnimationTest {
 
 	inline std::filesystem::path BipedPath()
@@ -64,6 +67,32 @@ namespace AnimationTest {
 	inline glm::quat AxisAngle(const glm::vec3& axis, float degrees)
 	{
 		return glm::angleAxis(glm::radians(degrees), axis);
+	}
+
+	inline bool Near(const glm::vec3& a, const glm::vec3& b, float epsilon = 1e-4f)
+	{
+		return glm::all(glm::epsilonEqual(a, b, epsilon));
+	}
+
+	// A joint's world transform in the running scene's current pose.
+	inline glm::mat4 BoneWorldTransform(Basalt::Scene& scene, Basalt::Entity entity, const std::string& joint)
+	{
+		glm::mat4 bone(1.0f);
+		std::string error;
+		REQUIRE_MESSAGE(scene.GetAnimationSystem()->GetBoneTransform(entity, joint, bone, error), error);
+		return scene.GetWorldTransform(entity) * bone;
+	}
+
+	inline glm::vec3 BoneWorld(Basalt::Scene& scene, Basalt::Entity entity, const std::string& joint)
+	{
+		return glm::vec3(BoneWorldTransform(scene, entity, joint)[3]);
+	}
+
+	// Runs the scene's animation (Update with LateUpdate) for `frames` frames of `seconds`.
+	inline void RunAnimation(Basalt::Scene& scene, int frames, float seconds = 1.0f / 60.0f)
+	{
+		for (int i = 0; i < frames; i++)
+			scene.GetAnimationSystem()->Update(seconds);
 	}
 
 }

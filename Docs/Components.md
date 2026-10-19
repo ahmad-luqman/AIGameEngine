@@ -92,7 +92,7 @@ Fields: `Type` (enum: Fixed, Point, Hinge, Slider, Distance, Cone, SixDOF), `Bod
 
 ## CharacterController
 
-Fields: `SlopeLimit` (number), `StepHeight` (number), `MaxStrength` (number), `Mass` (number), `GravityFactor` (number), `Layer` (string)
+Fields: `SlopeLimit` (number), `StepHeight` (number), `MaxStrength` (number), `Mass` (number), `GravityFactor` (number), `JumpGrace` (number), `Layer` (string)
 
 ## Script
 

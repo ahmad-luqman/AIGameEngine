@@ -50,7 +50,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   gameplay vertical input (and, during fades to or from states without root motion, the faded share of gameplay
   horizontal input), or updates the world transform. Attachments and events run after physics and
   LateUpdate, before particles.
-- **Layers and IK.** A pose is built in stages: the base playback (`Playback::Local`, which fades, snapshots and root
+- **Layers, IK and spring bones.** A pose is built in stages: the base playback (`Playback::Local`, which fades, snapshots and root
   stripping use), then `Animator.Layers` in order (`Pose`; each layer's clip, mask and reference pose are resolved again
   only when its clip, blend, reference or mask changes, and the root-motion exclusion when the root-motion joint
   does), then the IK overlay, composed into `Globals`. `InverseKinematicsComponent` chains solve in
@@ -60,8 +60,8 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   character controller's entity and descendants. IK targets and weights live in the system keyed by entity (they
   survive playback resets); layer state belongs to the playback. Solvers (`Animation/InverseKinematics.h`) are
   stateless free functions that handle mirrored (negative-determinant) parents. `SpringBoneComponent` chains swing right
-  after IK, from `Pose` plus the IK overlay (never their own last solution), as world-space Verlet points
-  (`Animation/SpringBones.h`, fixed 120 Hz substeps) kept in the system by entity; their joints go into a second overlay
+  after IK, from `Pose` plus the IK overlay (never their own last solution), as world-space points
+  (`Animation/SpringBones.h`, substeps of at most 1/120 s) kept in the system by entity; their joints go into a second overlay
   that `Finish` applies after the IK one.
 - **Play mode runs a copy.** `Scene::Copy` duplicates the edit scene (same UUIDs) for play/simulate;
   stopping discards it. In the editor the game runs in the Game tab (primary camera at the project's window

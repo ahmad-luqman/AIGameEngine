@@ -91,14 +91,23 @@ namespace Basalt {
 			// Settings in Jolt's terms, checked by ConfigureCharacter.
 			float StepHeight = 0.0f;
 			float GravityFactor = 1.0f;
+			float JumpGrace = 0.0f;
+			// Seconds since the character last stood on walkable ground, and whether it already jumped since then (from
+			// the ground or within JumpGrace), so the grace gives one jump.
+			float SinceGrounded = 0.0f;
+			bool Jumped = false;
 			// Warnings found while building the character, repeated with the settings' own when they change.
 			std::vector<std::string> BuildWarnings;
 			// The last MoveCharacter velocity, used every step until the next call.
 			glm::vec3 MoveVelocity = { 0.0f, 0.0f, 0.0f };
-			// Per-Step animation velocity, shared by its substeps; absent restores gameplay movement.
-			std::optional<glm::vec3> RootMotionVelocity;
-			// How much of the horizontal movement RootMotionVelocity owns (see QueueRootMotion).
-			float RootMotionShare = 1.0f;
+			// Animation movement for one Step, shared by its substeps: the root motion velocity and how much of the
+			// horizontal movement it owns (see QueueRootMotion). Absent restores gameplay movement.
+			struct RootMotionDrive
+			{
+				glm::vec3 Velocity = glm::vec3(0);
+				float Share = 1.0f;
+			};
+			std::optional<RootMotionDrive> RootMotion;
 			// Displacement over the last step divided by its duration.
 			glm::vec3 ActualVelocity = { 0.0f, 0.0f, 0.0f };
 			// Pose last written to / read from the entity, used to detect transforms changed by scripts.
@@ -154,14 +163,24 @@ namespace Basalt {
 		struct RootMotionRequest
 		{
 			glm::vec3 Pending = glm::vec3(0);
-			// The queued frames' shares, summed, and how many frames queued since the last step.
-			float ShareSum = 0;
-			uint32_t Frames = 0;
+			// The shares queued since the last step, weighted by their frames' durations, and the summed durations: a
+			// frame without displacement still queues its share.
+			float ShareTime = 0;
+			float Time = 0;
 			bool Active = false;
 			// Unbuilt entries and InvalidReported retain idle requests until construction/recovery,
 			// keeping these diagnostic flags alive to prevent repeated logs.
 			bool UnbuiltReported = false;
 			bool InvalidReported = false;
+			bool InvalidShareReported = false;
+
+			bool HasQueued() const { return Pending != glm::vec3(0) || Time > 0; }
+			void ClearQueued()
+			{
+				Pending = glm::vec3(0);
+				ShareTime = 0;
+				Time = 0;
+			}
 		};
 		std::unordered_map<UUID, RootMotionRequest> RootMotion;
 

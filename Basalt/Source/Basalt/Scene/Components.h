@@ -299,46 +299,55 @@ namespace Basalt {
 		float Smoothing = 0.1f;
 	};
 
-	// One chain of a SpringBone component: Joint and the joints below it swing behind the animated pose. Each rotated
-	// joint aims at its child, which is simulated as a point mass, so the last rotated joint needs a child (the tip).
+	// One chain of a SpringBone component: Joint and the joints below it swing behind the animated pose. Each turned
+	// joint aims at its child, which is simulated as a point mass, so the last turned joint needs a child (the tip).
 	struct SpringChain
 	{
 		static constexpr const char* TypeName = "SpringChain";
 		// Chains are found by name.
 		static constexpr const char* UniqueField = "Name";
 		static constexpr uint32_t MaxChainLength = 16;
+		// Upper bounds of the settings below. MaxStiffness keeps the integration stable at the simulation's
+		// substep (see SpringStepRate in Animation/SpringBones.h).
+		static constexpr float MaxStiffness = 10000.0f;
+		static constexpr float MaxDamping = 1000.0f;
+		static constexpr float MaxGravityFactor = 100.0f;
+		static constexpr float MaxRadius = 100.0f;
 
 		std::string Name = "Chain";
 		// The first joint that swings (hair root, cape top, tail base); its parent follows the animation.
 		std::string Joint;
-		// How many joints swing, Joint first, each the first child of the one before (0..MaxChainLength); 0 follows the
-		// first children down to the last joint that still has a child.
+		// How many joints swing (0..MaxChainLength), Joint first, each the first child of the one before; 0 follows the
+		// first children down to the last joint that still has a child, at most MaxChainLength joints.
 		uint32_t ChainLength = 0;
-		// Pull (1/s², 0..10000) of each point toward where the animated pose puts it; 0 hangs freely.
+		// Pull (1/s², 0..MaxStiffness) of each point toward where the animated shape puts it; 0 hangs freely.
 		float Stiffness = 40.0f;
-		// Velocity decay (1/s, 0..1000); higher settles sooner.
+		// Velocity decay (1/s, 0..MaxDamping) of the world-space motion, like air drag; higher settles sooner.
 		float Damping = 4.0f;
-		// Scales the physics gravity (-100..100); 0 ignores gravity.
+		// Scales the physics gravity (-MaxGravityFactor..MaxGravityFactor); 0 ignores gravity.
 		float GravityFactor = 1.0f;
-		// Radius (meters, 0..100) of each simulated point against the colliders.
+		// Radius of each simulated point against the colliders (0..MaxRadius, in the entity's units: it scales with
+		// the entity).
 		float Radius = 0.02f;
-		// 0..1. Blend between the animated pose (0) and the simulation (1).
+		// 0..1. Blend between the animated pose (0) and the simulation (1); the simulation keeps running at 0.
 		float Weight = 1.0f;
 	};
 
 	// A sphere or capsule attached to a joint that keeps every chain of its SpringBone component outside it (a head
-	// under hair, legs in front of a cape).
+	// under hair, legs in front of a cape). It follows the pose before any chain swings, so a collider on a swinging
+	// joint does not move with the swing.
 	struct SpringCollider
 	{
 		static constexpr const char* TypeName = "SpringCollider";
+		static constexpr float MaxSize = 100.0f;
 
 		// The joint the collider moves with; empty: the entity itself.
 		std::string Joint;
 		// Center in the joint's (or the entity's) space.
 		glm::vec3 Offset = { 0.0f, 0.0f, 0.0f };
-		// Meters (0..100).
+		// 0..MaxSize, in the joint's space (it scales with the joint's world transform).
 		float Radius = 0.1f;
-		// 0: a sphere; otherwise a capsule along the joint's local Y axis, HalfHeight (meters, 0..100) to each side of
+		// 0: a sphere; otherwise a capsule along the joint's local Y axis, HalfHeight (0..MaxSize) to each side of
 		// Offset.
 		float HalfHeight = 0.0f;
 	};
@@ -637,6 +646,8 @@ namespace Basalt {
 	// velocity (when their layers collide); they raise no collision events with each other.
 	struct CharacterControllerComponent
 	{
+		static constexpr float MaxJumpGrace = 10.0f;
+
 		// Steepest ground (degrees from horizontal, 1..90) the character stands on and walks up; it slides
 		// down anything steeper.
 		float SlopeLimit = 45.0f;
@@ -649,6 +660,9 @@ namespace Basalt {
 		float Mass = 70.0f;
 		// Scales the scene gravity; 0 makes the Move velocity apply in full on every axis (flying, ladders).
 		float GravityFactor = 1.0f;
+		// Seconds (0..MaxJumpGrace) after walking off walkable ground during which an upward Move still jumps once
+		// (coyote time); 0 jumps only from the ground.
+		float JumpGrace = 0.0f;
 		// Name of a project physics layer, as on RigidBodyComponent.
 		std::string Layer = "Default";
 

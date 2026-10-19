@@ -556,17 +556,23 @@ namespace Basalt {
 				return json{ { "components", types } };
 			});
 
-			Add(registry, "log.get", "Returns engine log messages logged after index 'since'.", Schema::Object({ { "since", Schema::Nullable(Schema::Integer("integer, cursor from a previous call (default 0)", 0, INT64_MAX)) }, { "errorsOnly", Schema::Nullable(Schema::Boolean("bool")) } }), [](AutomationSession&, const json& params) {
+			Add(registry, "log.get", "Returns engine log messages logged after index 'since'. With assertNoWarnings the command fails when one of them is a warning or worse, naming them.", Schema::Object({ { "since", Schema::Nullable(Schema::Integer("integer, cursor from a previous call (default 0)", 0, INT64_MAX)) }, { "errorsOnly", Schema::Nullable(Schema::Boolean("bool")) }, { "assertNoWarnings", Schema::Nullable(Schema::Boolean("bool: fail the command when a message since 'since' is a warning or worse")) } }), [](AutomationSession&, const json& params) {
 				const uint64_t since = static_cast<uint64_t>(OptionalInteger(params, "since", 0, 0, INT64_MAX));
 				const bool errorsOnly = OptionalBool(params, "errorsOnly", false);
+				const bool assertNoWarnings = OptionalBool(params, "assertNoWarnings", false);
 				uint64_t next = 0;
 				json messages = json::array();
+				std::vector<std::string> warnings;
 				for (const LogMessage& message : Log::GetHistory().GetMessagesSince(since, next))
 				{
+					if (message.Level >= LogLevel::Warn)
+						warnings.push_back(fmt::format("[{}] {}", LogLevelName(message.Level), message.Text));
 					if (errorsOnly && message.Level < LogLevel::Error)
 						continue;
 					messages.push_back({ { "level", LogLevelName(message.Level) }, { "logger", message.LoggerName }, { "text", message.Text } });
 				}
+				if (assertNoWarnings && !warnings.empty())
+					throw CommandError(fmt::format("{} warning(s) or worse logged: {}", warnings.size(), fmt::join(warnings, "; ")));
 				return json{ { "messages", messages }, { "next", next } };
 			});
 		}
@@ -913,7 +919,7 @@ namespace Basalt {
 				return SceneSerializer::SerializeScene(RequireScene(session));
 			});
 
-			Add(registry, "scene.info", "Summary of the open scene: name, path, entity count, state, unsaved changes, undefined physics layers, animation authoring warnings and the physics step (fixedTimestep: the step in use; fixedTimestepOverride: the scene's own step, or null).", Schema::Object(), [](AutomationSession& session, const json&) {
+			Add(registry, "scene.info", "Summary of the open scene: name, path, entity count, state, unsaved changes, undefined physics layers, animation authoring warnings and the physics step (fixedTimestep: the step in use; fixedTimestepOverride: the scene's own step, or null). With assertNoAnimationWarnings the command fails when there are animation authoring warnings, naming them.", Schema::Object({ { "assertNoAnimationWarnings", Schema::Nullable(Schema::Boolean("bool: fail the command when an entity has animation authoring warnings")) } }), [](AutomationSession& session, const json& params) {
 				Scene& scene = RequireScene(session);
 				json animationWarnings = json::array();
 				for (auto handle : scene.GetRegistry().view<IDComponent>())
@@ -921,6 +927,13 @@ namespace Basalt {
 					Entity entity(handle, &scene);
 					for (const auto& warning : GetAnimationWarnings(entity))
 						animationWarnings.push_back({ { "entity", static_cast<uint64_t>(entity.GetUUID()) }, { "name", entity.GetName() }, { "message", warning } });
+				}
+				if (OptionalBool(params, "assertNoAnimationWarnings", false) && !animationWarnings.empty())
+				{
+					std::vector<std::string> named;
+					for (const json& warning : animationWarnings)
+						named.push_back(warning["name"].get<std::string>() + ": " + warning["message"].get<std::string>());
+					throw CommandError(fmt::format("{} animation warning(s): {}", named.size(), fmt::join(named, "; ")));
 				}
 				const PhysicsSettings& physics = scene.GetPhysicsSettings();
 				return json{

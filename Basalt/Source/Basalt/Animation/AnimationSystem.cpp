@@ -184,15 +184,52 @@ namespace Basalt {
 		std::erase_if(m_IK, [handle](const auto& entry) { return entry.second.Handle == handle; });
 		if (const auto* id = registry.try_get<IDComponent>(handle))
 			EraseProblemsOf(m_IKCallProblems, id->ID);
-		// The pose returns to the animation alone.
+		// The pose returns to the animation alone. Spring bones were solved on top of the IK solution, so they go too
+		// until they solve again from the animation.
 		for (auto& [id, playback] : m_Playback)
 		{
-			if (playback.Handle == handle && !playback.IKOverlay.empty())
+			if (playback.Handle == handle && !(playback.IKOverlay.empty() && playback.SpringOverlay.empty()))
 			{
 				playback.IKOverlay.clear();
+				playback.SpringOverlay.clear();
 				Finish(playback);
 			}
 		}
+	}
+
+	void AnimationSystem::DropOverlay(Playback& playback, std::vector<OverlayEntry>& overlay)
+	{
+		if (overlay.empty())
+			return;
+		overlay.clear();
+		Finish(playback);
+	}
+
+	void AnimationSystem::StoreOverlay(Playback& playback, std::vector<OverlayEntry>& overlay, std::span<const uint32_t> nodes, const AnimationLocalPose& pose, const std::vector<glm::mat4>& globals)
+	{
+		overlay.clear();
+		for (uint32_t node : nodes)
+			overlay.push_back({ node, pose.Nodes[node] });
+		// The same as Finish would compose (Pose with the overlays), without sampling the layers again.
+		playback.Globals = globals;
+		playback.OverlayDropped = false;
+	}
+
+	void AnimationSystem::ReportProblem(std::string& reported, std::string problem, Entity entity, const char* owner, const std::string* chain)
+	{
+		if (!problem.empty() && problem != reported)
+		{
+			if (chain)
+				BS_CORE_WARN("{} '{}': chain '{}': {}", owner, entity.GetName(), *chain, problem);
+			else
+				BS_CORE_WARN("{} '{}': {}", owner, entity.GetName(), problem);
+		}
+		reported = std::move(problem);
+	}
+
+	std::string AnimationSystem::JoinProblems(const std::vector<std::string>& problems)
+	{
+		return fmt::format("{}", fmt::join(problems, "; "));
 	}
 
 	AnimationSystem::Playback* AnimationSystem::Ensure(Entity entity)
@@ -603,8 +640,7 @@ namespace Basalt {
 			const double advance = static_cast<double>(seconds) * speed;
 			const double shown = playback->FadeDuration > 0 ? std::min(static_cast<double>(seconds), playback->FadeDuration - playback->FadeTime) : seconds;
 			ResetRootIntervals(*playback);
-			float rootShare = 1;
-			const auto motion = FrameRootMotion(*playback, advance, shown, seconds, plainSpeed, rootShare);
+			const auto motion = FrameRootMotion(*playback, advance, shown, seconds, plainSpeed);
 			const UUID id = entity.GetUUID();
 			size_t budget = MaxEventsPerFrame;
 			if (playback->Space)
@@ -645,7 +681,7 @@ namespace Basalt {
 			if (cycleDuration > 0)
 				playback->StatePhase += advance / cycleDuration;
 			if (motion)
-				ApplyRootMotion(entity, *playback, *motion, seconds, rootShare);
+				ApplyRootMotion(entity, *playback, *motion, seconds);
 			const bool finished = playback->Space ? playback->Space->Phase >= 1 : playback->Time >= playback->Source->Animations[playback->Clip].Duration;
 			// Time clamps exactly to Duration; summed phase fractions can finish just below 1.
 			if (!playback->Looping && finished && cycleDuration > 0)
@@ -935,16 +971,13 @@ namespace Basalt {
 			return std::nullopt;
 		return space ? SpaceRootDelta(playback, *space, advance, looping) : RootDelta(playback, clip, time, advance, looping);
 	}
-	std::optional<glm::mat4> AnimationSystem::FrameRootMotion(Playback& playback, double advance, double shown, double seconds, double plainSpeed, float& outShare)
+	std::optional<AnimationSystem::RootMotionFrame> AnimationSystem::FrameRootMotion(Playback& playback, double advance, double shown, double seconds, double plainSpeed)
 	{
-		auto sample = [&]() -> std::optional<glm::mat4> {
+		auto sample = [&]() -> std::optional<RootMotionFrame> {
 			auto incoming = [&](double amount) { return SourceRootDelta(playback, playback.Clip, playback.Time, playback.Space, amount, playback.Looping, playback.RootMotion); };
 			auto motion = incoming(advance);
 			if (playback.BlendWeight >= 1)
-			{
-				outShare = motion ? 1.0f : 0.0f;
-				return motion;
-			}
+				return motion ? std::optional<RootMotionFrame>(RootMotionFrame{ .Delta = *motion }) : std::nullopt;
 			glm::mat4 tail(1);
 			// The part of the frame the fade covers; the incoming source alone moves the rest (the tail).
 			double fading = 1;
@@ -966,9 +999,11 @@ namespace Basalt {
 				return std::nullopt;
 			const glm::mat4 from = outgoing.value_or(glm::mat4(1)), to = motion.value_or(glm::mat4(1));
 			const double weight = playback.FadeDuration > 0 ? playback.BlendWeight + shown / (2.0 * playback.FadeDuration) : playback.BlendWeight;
+			// Each source owns its side of the fade; after the fade ends within this frame (the tail), the incoming one
+			// owns all of it.
 			const double fadeShare = (motion ? weight : 0.0) + (outgoing ? 1.0 - weight : 0.0);
-			outShare = static_cast<float>(std::clamp(fading * fadeShare + (1.0 - fading) * (motion ? 1.0 : 0.0), 0.0, 1.0));
-			return YawTransform(glm::mix(glm::vec3(from[3]), glm::vec3(to[3]), static_cast<float>(weight)), BlendRootYaw(RootYaw(from), RootYaw(to), static_cast<float>(weight))) * tail;
+			const double share = fading * fadeShare + (1.0 - fading) * (motion ? 1.0 : 0.0);
+			return RootMotionFrame{ .Delta = YawTransform(glm::mix(glm::vec3(from[3]), glm::vec3(to[3]), static_cast<float>(weight)), BlendRootYaw(RootYaw(from), RootYaw(to), static_cast<float>(weight))) * tail, .Share = static_cast<float>(std::clamp(share, 0.0, 1.0)) };
 		};
 		const auto motion = sample();
 		// A later source may invalidate a clip already used by an earlier source. Recompute with
@@ -1037,7 +1072,7 @@ namespace Basalt {
 		return result;
 	}
 
-	void AnimationSystem::ApplyRootMotion(Entity entity, Playback& playback, const glm::mat4& delta, float seconds, float share)
+	void AnimationSystem::ApplyRootMotion(Entity entity, Playback& playback, const RootMotionFrame& motion, float seconds)
 	{
 		if (seconds <= 0 || playback.RootNode < 0)
 			return;
@@ -1049,6 +1084,7 @@ namespace Basalt {
 		const glm::mat4 old = m_Scene.GetWorldTransform(entity);
 		glm::vec3 position, scale;
 		glm::quat rotation;
+		const glm::mat4& delta = motion.Delta;
 		if (!Math::IsFinite(delta))
 		{
 			report("root motion produced a non-finite extracted delta");
@@ -1075,7 +1111,7 @@ namespace Basalt {
 			return;
 		}
 		if (character)
-			physics->QueueRootMotion(entity, displacement, share);
+			physics->QueueRootMotion(entity, displacement, motion.Share, seconds);
 		m_Scene.SetWorldTransform(entity, world);
 		report("");
 	}
@@ -1571,8 +1607,13 @@ namespace Basalt {
 	{
 		if (std::isfinite(value) && value >= low && value <= high)
 			return value;
+		if (!std::isfinite(value))
+		{
+			problems.push_back(fmt::format("{} is not finite; using {}", name, low));
+			return low;
+		}
 		problems.push_back(fmt::format("{} must be between {} and {}; clamping", name, low, high));
-		return std::isfinite(value) ? std::clamp(value, low, high) : low;
+		return std::clamp(value, low, high);
 	}
 
 	bool AnimationSystem::LayerKey::Matches(const AnimationLayer& config, const std::string& clip) const

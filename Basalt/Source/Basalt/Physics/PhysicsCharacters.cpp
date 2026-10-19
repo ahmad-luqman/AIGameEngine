@@ -64,6 +64,9 @@ namespace Basalt {
 		record.GravityFactor = std::isfinite(c.GravityFactor) ? c.GravityFactor : 1.0f;
 		if (record.GravityFactor != c.GravityFactor)
 			warnings.emplace_back(fmt::format("GravityFactor {} is not finite; using 1", c.GravityFactor));
+		record.JumpGrace = std::isfinite(c.JumpGrace) ? std::clamp(c.JumpGrace, 0.0f, CharacterControllerComponent::MaxJumpGrace) : 0.0f;
+		if (record.JumpGrace != c.JumpGrace)
+			warnings.emplace_back(fmt::format("JumpGrace {} must be within [0, {}] seconds; using {}", c.JumpGrace, CharacterControllerComponent::MaxJumpGrace, record.JumpGrace));
 	}
 
 	void PhysicsWorld::Impl::UpdateSupportingVolume(CharacterRecord& record)
@@ -333,14 +336,14 @@ namespace Basalt {
 			const JPH::Vec3 up = character.GetUp();
 			const JPH::Vec3 gravity = sceneGravity * record.GravityFactor;
 			glm::vec3 requested = record.MoveVelocity;
-			if (record.RootMotionVelocity)
+			if (record.RootMotion)
 			{
 				const glm::vec3 worldUp = FromJolt(up);
-				const glm::vec3 rootVelocity = *record.RootMotionVelocity;
+				const glm::vec3 rootVelocity = record.RootMotion->Velocity;
 				const glm::vec3 tangent = rootVelocity - worldUp * glm::dot(rootVelocity, worldUp);
 				const glm::vec3 vertical = worldUp * glm::dot(requested, worldUp);
 				// While root motion fades in or out, gameplay movement keeps the rest of the horizontal velocity.
-				requested = vertical + tangent + (1.0f - record.RootMotionShare) * (requested - vertical);
+				requested = vertical + tangent + (1.0f - record.RootMotion->Share) * (requested - vertical);
 			}
 			const JPH::Vec3 move = ToJolt(requested);
 			const JPH::Vec3 moveVertical = up * move.Dot(up);
@@ -355,8 +358,20 @@ namespace Basalt {
 			else
 			{
 				// Moving away from the ground (just jumped) counts as airborne, or the jump would be undone.
-				if (onGround && (current - groundVelocity).Dot(up) < 0.1f)
+				const bool standing = onGround && (current - groundVelocity).Dot(up) < 0.1f;
+				const bool jumping = moveVertical.Dot(up) > 0.0f;
+				record.SinceGrounded = standing ? 0.0f : record.SinceGrounded + fixedStep;
+				if (standing)
+				{
 					velocity = groundVelocity + moveVertical;
+					record.Jumped = jumping;
+				}
+				// Coyote time: shortly after walking off a ledge an upward request still jumps, once.
+				else if (jumping && !record.Jumped && record.SinceGrounded <= record.JumpGrace)
+				{
+					velocity = moveVertical;
+					record.Jumped = true;
+				}
 				else
 					velocity = up * current.Dot(up) + gravity * fixedStep;
 				velocity += move - moveVertical;
@@ -402,7 +417,7 @@ namespace Basalt {
 			it->second.MoveVelocity = velocity;
 	}
 
-	void PhysicsWorld::QueueRootMotion(Entity entity, const glm::vec3& displacement, float share)
+	void PhysicsWorld::QueueRootMotion(Entity entity, const glm::vec3& displacement, float share, float seconds)
 	{
 		if (!m_Impl->Owns(entity) || !entity.HasComponent<CharacterControllerComponent>())
 			return;
@@ -416,10 +431,21 @@ namespace Basalt {
 			return;
 		}
 		request.InvalidReported = false;
+		if (!std::isfinite(share))
+		{
+			if (!request.InvalidShareReported)
+				BS_CORE_ERROR("Physics: character '{}': root motion share must be finite; using 1", entity.GetName());
+			request.InvalidShareReported = true;
+			share = 1.0f;
+		}
+		else
+			request.InvalidShareReported = false;
+		// Without a duration every frame weighs the same.
+		const float weight = std::isfinite(seconds) && seconds > 0.0f ? seconds : 1.0f;
 		request.Active = true;
 		request.Pending += displacement;
-		request.ShareSum += std::isfinite(share) ? std::clamp(share, 0.0f, 1.0f) : 1.0f;
-		request.Frames++;
+		request.ShareTime += std::clamp(share, 0.0f, 1.0f) * weight;
+		request.Time += weight;
 	}
 
 	bool PhysicsWorld::IsCharacterGrounded(Entity entity) const
