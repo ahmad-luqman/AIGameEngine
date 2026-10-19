@@ -2379,3 +2379,40 @@ TEST_CASE("Immediate buttons ignore clicks in their clipped-off width")
 	CHECK(Field(scene, menu, "Clicks") == 1);
 	scene.OnRuntimeStop();
 }
+
+TEST_CASE("Disabled children do not bypass their panel's pointer blocking")
+{
+	WidgetInputScope input;
+	TempProject project("UIDisabledPanelChild");
+	Scene scene;
+	Entity panel = AddWidget<UIPanelComponent>(scene, "Panel", { 20, 20 }, { 160, 40 });
+	Entity child = AddWidget<UIButtonComponent>(scene, "Child", { 0, 0 }, { 160, 40 });
+	child.GetComponent<UIButtonComponent>().Interactable = false;
+	child.AddComponent<ScriptComponent>().Script = project.WriteFile("Assets/Scripts/Child.lua", RecorderScript);
+	scene.SetParent(child, panel);
+	scene.OnRuntimeStart();
+	Click(scene, { 40, 40 });
+	CHECK(scene.GetUIInteraction()->IsPointerOverWidget());
+	CHECK(LogOf(scene, child).empty());
+	panel.GetComponent<UIPanelComponent>().BlockInput = false;
+	Click(scene, { 40, 40 });
+	CHECK_FALSE(scene.GetUIInteraction()->IsPointerOverWidget());
+	CHECK(LogOf(scene, child).empty());
+	scene.OnRuntimeStop();
+}
+
+TEST_CASE("Disabled overlays suppress activation while covered interactive UI still blocks gameplay")
+{
+	WidgetInputScope input;
+	TempProject project("UIDisabledOverlayBlocking");
+	Scene scene;
+	Entity button = AddWidget<UIButtonComponent>(scene, "Button", { 20, 20 }, { 160, 40 });
+	button.AddComponent<ScriptComponent>().Script = project.WriteFile("Assets/Scripts/Button.lua", RecorderScript);
+	Entity overlay = AddWidget<UIButtonComponent>(scene, "Overlay", { 20, 20 }, { 160, 40 });
+	overlay.GetComponent<UIButtonComponent>().Interactable = false;
+	scene.OnRuntimeStart();
+	Click(scene, { 40, 40 });
+	CHECK(scene.GetUIInteraction()->IsPointerOverWidget());
+	CHECK(LogOf(scene, button).empty());
+	scene.OnRuntimeStop();
+}

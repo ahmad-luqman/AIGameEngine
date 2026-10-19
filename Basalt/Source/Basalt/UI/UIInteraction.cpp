@@ -308,6 +308,7 @@ namespace Basalt {
 	{
 		const std::optional<glm::vec2> pointer = GameUI::GetPointerPosition();
 		m_Hovered = {};
+		m_PointerBlocked = false;
 		const Candidate* top = nullptr;
 		if (pointer)
 		{
@@ -316,15 +317,15 @@ namespace Basalt {
 			{
 				if (widget.Contains(*pointer))
 				{
-					top = &widget;
-					break;
+					if (!top)
+						top = &widget;
+					m_PointerBlocked = m_PointerBlocked || widget.Interactable || widget.Kind == UIWidgetKind::Panel;
 				}
 			}
 		}
 		if (top && top->Option && pointer != m_LastPointer)
 			m_DropdownHighlight = *top->Option;
 		m_LastPointer = pointer;
-		m_PointerBlocked = top && (top->Interactable || top->Kind == UIWidgetKind::Panel);
 		if (top && top->Interactable)
 			m_Hovered = top->ID;
 
