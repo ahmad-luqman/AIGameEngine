@@ -115,6 +115,7 @@ namespace Basalt {
 	{
 		JPH::Vec3 previousVelocity = JPH::Vec3::sZero();
 		glm::vec3 moveVelocity(0.0f);
+		CharacterRecord::Airtime air;
 		if (entity)
 		{
 			auto existing = Characters.find(entity.GetUUID());
@@ -123,6 +124,8 @@ namespace Basalt {
 				// Rebuilding (e.g. after a collider change) keeps the character moving.
 				previousVelocity = existing->second.Character->GetLinearVelocity();
 				moveVelocity = existing->second.MoveVelocity;
+				// A rebuild in mid-air must not hand out the coyote jump again.
+				air = existing->second.Air;
 				RemoveCharacter(entity.GetUUID());
 			}
 		}
@@ -193,6 +196,7 @@ namespace Basalt {
 		// A copy: configuration and reporting keep using warnings below.
 		record.BuildWarnings = warnings; // NOLINT(performance-use-std-move)
 		record.MoveVelocity = moveVelocity;
+		record.Air = air;
 		record.LastPosition = position;
 		record.LastRotation = rotation;
 		record.BuiltScale = scale;
@@ -354,23 +358,28 @@ namespace Basalt {
 			if (gravity.IsNearZero())
 			{
 				velocity = move + (onGround ? groundVelocity : JPH::Vec3::sZero());
+				// Flying or on a ladder there is no ground to leave: gravity coming back does not bring a coyote jump.
+				record.Air = { .Jumped = true };
 			}
 			else
 			{
 				// Moving away from the ground (just jumped) counts as airborne, or the jump would be undone.
 				const bool standing = onGround && (current - groundVelocity).Dot(up) < 0.1f;
-				const bool jumping = moveVertical.Dot(up) > 0.0f;
-				record.SinceGrounded = standing ? 0.0f : record.SinceGrounded + fixedStep;
+				// A request too small to lift off is no jump, and does not spend the grace.
+				const bool jumping = moveVertical.Dot(up) > 1e-3f;
+				auto& air = record.Air;
+				air.SinceGrounded = standing ? 0.0f : air.SinceGrounded + fixedStep;
 				if (standing)
 				{
 					velocity = groundVelocity + moveVertical;
-					record.Jumped = jumping;
+					air.Jumped = jumping;
 				}
-				// Coyote time: shortly after walking off a ledge an upward request still jumps, once.
-				else if (jumping && !record.Jumped && record.SinceGrounded <= record.JumpGrace)
+				// Coyote time: shortly after leaving the ground without jumping, an upward request still jumps, once. It
+				// replaces the vertical speed (falling or a platform's it left) with the requested one.
+				else if (jumping && !air.Jumped && air.SinceGrounded <= record.JumpGrace)
 				{
 					velocity = moveVertical;
-					record.Jumped = true;
+					air.Jumped = true;
 				}
 				else
 					velocity = up * current.Dot(up) + gravity * fixedStep;
@@ -440,8 +449,8 @@ namespace Basalt {
 		}
 		else
 			request.InvalidShareReported = false;
-		// Without a duration every frame weighs the same.
-		const float weight = std::isfinite(seconds) && seconds > 0.0f ? seconds : 1.0f;
+		// Without a duration the frame weighs one fixed step.
+		const float weight = std::isfinite(seconds) && seconds > 0.0f ? seconds : m_Impl->ScenePtr->GetFixedTimestep();
 		request.Active = true;
 		request.Pending += displacement;
 		request.ShareTime += std::clamp(share, 0.0f, 1.0f) * weight;

@@ -33,7 +33,7 @@ namespace Basalt {
 		for (auto& [id, playback] : m_Playback)
 		{
 			if (playback.Handle == handle)
-				DropOverlay(playback, playback.SpringOverlay);
+				DropOverlay(playback, &Playback::SpringOverlay);
 		}
 	}
 
@@ -45,7 +45,7 @@ namespace Basalt {
 			state = {};
 			state.Handle = entity;
 		}
-		state.Chains = MatchByName(state.Chains, component.Chains, [](const SpringChain& config) { return SpringChainState{ .Name = config.Name }; });
+		state.Chains = MatchByName(std::move(state.Chains), component.Chains, [](const SpringChain& config) { return SpringChainState{ .Name = config.Name }; });
 		return state;
 	}
 
@@ -62,9 +62,14 @@ namespace Basalt {
 				SolveEntitySprings(entity, *playback, component, state, seconds);
 				continue;
 			}
-			// The points restart on the animated pose once the Animator can play again.
+			// The points restart on the animated pose once the Animator can play again, and the cached resolutions let go
+			// of the model.
 			for (SpringChainState& chain : state.Chains)
+			{
 				chain.Sim.reset();
+				chain.Resolved = {};
+			}
+			state.ColliderSource.reset();
 			// Ensure already warns about an empty Mesh.
 			if (const auto* animator = entity.TryGetComponent<AnimatorComponent>(); !animator || !animator->Mesh.empty())
 				ReportProblem(state.Problem, "not solved: " + DescribeUnplayable(entity), entity, Owner);
@@ -73,25 +78,22 @@ namespace Basalt {
 
 	void AnimationSystem::ResolveSpringColliders(const Ref<MeshSource>& source, const SpringBoneComponent& component, SpringState& state, const glm::mat4& world, const std::vector<glm::mat4>& globals, std::vector<SpringCollisionShape>& out, std::vector<std::string>& problems)
 	{
-		const bool resolved = state.ColliderSource == source && std::ranges::equal(state.ColliderJoints, component.Colliders, {}, {}, &SpringCollider::Joint);
-		if (!resolved)
+		if (state.ColliderSource != source || !std::ranges::equal(state.Colliders, component.Colliders, {}, &SpringState::ColliderBinding::Joint, &SpringCollider::Joint))
 		{
 			state.ColliderSource = source;
-			state.ColliderJoints.clear();
-			state.ColliderNodes.clear();
+			state.Colliders.clear();
 			for (const SpringCollider& collider : component.Colliders)
 			{
-				state.ColliderJoints.push_back(collider.Joint);
 				const int32_t node = collider.Joint.empty() ? -1 : FindNode(*source, collider.Joint);
-				state.ColliderNodes.push_back(collider.Joint.empty() || node >= 0 ? node : NoNode);
+				state.Colliders.push_back({ .Joint = collider.Joint, .Node = collider.Joint.empty() || node >= 0 ? node : SpringState::NoNode });
 			}
 		}
 		out.clear();
 		for (size_t index = 0; index < component.Colliders.size(); index++)
 		{
 			const SpringCollider& collider = component.Colliders[index];
-			const int32_t node = state.ColliderNodes[index];
-			if (node == NoNode)
+			const int32_t node = state.Colliders[index].Node;
+			if (node == SpringState::NoNode)
 			{
 				problems.push_back(fmt::format("Colliders[{}]: joint '{}' not found in '{}'", index, collider.Joint, source->Key));
 				continue;
@@ -112,11 +114,14 @@ namespace Basalt {
 		BS_CORE_ASSERT(state.Chains.size() == component.Chains.size(), "SyncSprings builds one state per chain");
 		const MeshSource& source = *playback.Source;
 		std::vector<std::string> problems;
-		const auto report = [&] { ReportProblem(state.Problem, JoinProblems(problems), entity, Owner); };
+		const auto report = [&] {
+			if (!(problems.empty() && state.HoldProblem))
+				ReportProblem(state.Problem, JoinProblems(problems), entity, Owner);
+		};
 		// Nothing could be simulated: the pose returns to the animation (and IK) alone, and the chains restart on it once
 		// they can solve again rather than from points the entity left behind meanwhile.
 		const auto skip = [&] {
-			DropOverlay(playback, playback.SpringOverlay);
+			DropOverlay(playback, &Playback::SpringOverlay);
 			for (SpringChainState& chain : state.Chains)
 				chain.Sim.reset();
 			report();
@@ -165,37 +170,48 @@ namespace Basalt {
 		// pose instead of swinging it across the jump; as in MatchVelocity, physics moves bodies at most once per fixed
 		// step.
 		const double window = std::max(static_cast<double>(seconds), static_cast<double>(m_Scene.GetFixedTimestep()));
-		std::vector<uint32_t>& touched = m_SpringTouched;
+		std::vector<uint32_t>& touched = m_TouchedNodes;
 		std::vector<glm::vec3>& animated = m_SpringAnimated;
 		std::vector<glm::vec3>& targets = m_SpringTargets;
 		touched.clear();
+		bool simulated = false;
+		const SpringChain defaults;
 		for (size_t index = 0; index < component.Chains.size(); index++)
 		{
 			const SpringChain& config = component.Chains[index];
 			// SyncSprings built one state per configuration, in order.
 			SpringChainState& chain = state.Chains[index];
 			std::vector<std::string> chainProblems;
-			const float stiffness = ClampSetting(config.Stiffness, 0, SpringChain::MaxStiffness, "Stiffness", chainProblems);
-			const float damping = ClampSetting(config.Damping, 0, SpringChain::MaxDamping, "Damping", chainProblems);
-			const float gravityFactor = ClampSetting(config.GravityFactor, -SpringChain::MaxGravityFactor, SpringChain::MaxGravityFactor, "GravityFactor", chainProblems);
-			const float radius = ClampSetting(config.Radius, 0, SpringChain::MaxRadius, "Radius", chainProblems);
-			const float weight = ClampSetting(config.Weight, 0, 1, "Weight", chainProblems);
-			const auto reportChain = [&] { ReportProblem(chain.Problem, JoinProblems(chainProblems), entity, Owner, &config.Name); };
-			if (chain.ResolvedSource != playback.Source || chain.ResolvedJoint != config.Joint || chain.ResolvedLength != config.ChainLength)
+			const float stiffness = ClampSetting(config.Stiffness, 0, SpringChain::MaxStiffness, defaults.Stiffness, "Stiffness", chainProblems);
+			const float damping = ClampSetting(config.Damping, 0, SpringChain::MaxDamping, defaults.Damping, "Damping", chainProblems);
+			const float gravityFactor = ClampSetting(config.GravityFactor, -SpringChain::MaxGravityFactor, SpringChain::MaxGravityFactor, defaults.GravityFactor, "GravityFactor", chainProblems);
+			const float radius = ClampSetting(config.Radius, 0, SpringChain::MaxRadius, defaults.Radius, "Radius", chainProblems);
+			const float weight = ClampSetting(config.Weight, 0, 1, defaults.Weight, "Weight", chainProblems);
+			const auto reportChain = [&] {
+				if (!(chainProblems.empty() && chain.HoldProblem))
+					ReportProblem(chain.Problem, JoinProblems(chainProblems), entity, Owner, &config.Name);
+			};
+			if (!chain.Resolved.Matches(playback.Source, config))
 			{
-				chain.ResolveProblem = ResolveSpringChain(source, config, chain.Joints);
-				chain.ResolvedSource = playback.Source;
-				chain.ResolvedJoint = config.Joint;
-				chain.ResolvedLength = config.ChainLength;
+				auto& resolved = chain.Resolved;
+				resolved = { .Source = playback.Source, .Joint = config.Joint, .Length = config.ChainLength };
+				resolved.Problem = ResolveSpringChain(source, config, resolved.Joints);
 				chain.Sim.reset();
 			}
-			if (!chain.ResolveProblem.empty())
+			if (!chain.Resolved.Problem.empty())
 			{
-				chainProblems.push_back(chain.ResolveProblem);
+				chainProblems.push_back(chain.Resolved.Problem);
 				reportChain();
 				continue;
 			}
-			const std::vector<uint32_t>& joints = chain.Joints;
+			// Each finite on its own, together they can still overflow.
+			glm::vec3 acceleration = gravity * gravityFactor + wind;
+			if (!Math::IsFinite(acceleration))
+			{
+				chainProblems.emplace_back("gravity times GravityFactor plus Wind is not finite; ignoring it");
+				acceleration = glm::vec3(0);
+			}
+			const std::vector<uint32_t>& joints = chain.Resolved.Joints;
 			animated.clear();
 			for (uint32_t joint : joints)
 				animated.emplace_back(world * globals[joint][3]);
@@ -203,13 +219,27 @@ namespace Basalt {
 				chain.Sim.reset();
 			if (!chain.Sim)
 			{
-				auto& sim = chain.Sim.emplace();
+				SpringChainState::Simulation sim{ .Animated = animated };
 				for (size_t i = 1; i < joints.size(); i++)
 					sim.Points.push_back({ .Position = animated[i] });
+				chain.Sim = std::move(sim);
 			}
 			else
-				SimulateSpringChain({ .Animated = animated, .PreviousAnimated = chain.Sim->Animated, .Colliders = colliders, .Stiffness = stiffness, .Damping = damping, .Radius = radius * entityScale, .Acceleration = gravity * gravityFactor + wind, .Seconds = seconds }, chain.Sim->Points);
-			chain.Sim->Animated = animated;
+			{
+				SimulateSpringChain({ .Animated = animated, .PreviousAnimated = chain.Sim->Animated, .Colliders = colliders, .Stiffness = stiffness, .Damping = damping, .Radius = radius * entityScale, .Acceleration = acceleration, .Seconds = seconds }, chain.Sim->Points);
+				chain.Sim->Animated = animated;
+				// Checked whatever the weight, so a hidden chain does not keep non-finite points until it shows again.
+				if (!std::ranges::all_of(chain.Sim->Points, [](const SpringPoint& point) { return Math::IsFinite(point.Position) && Math::IsFinite(point.Velocity); }))
+				{
+					chainProblems.emplace_back("the simulated points are not finite; restarting the chain");
+					chain.Sim.reset();
+					chain.HoldProblem = true;
+					reportChain();
+					continue;
+				}
+				simulated = true;
+				chain.HoldProblem = false;
+			}
 			targets.clear();
 			for (const SpringPoint& point : chain.Sim->Points)
 				targets.emplace_back(model * glm::vec4(point.Position, 1.0f));
@@ -218,16 +248,17 @@ namespace Basalt {
 				case IKSolveResult::Solved:
 					touched.insert(touched.end(), joints.begin(), joints.end() - 1);
 					break;
-				// Weight 0: the points keep simulating, so a returning weight picks the swing up where it is.
+				// Unchanged at weight 0: the points keep simulating, so a returning weight picks the swing up where it is.
+				// Degenerate: the animation scaled the chain's bones to nothing (hiding it, as a zero entity scale does), so
+				// there is nothing to swing and no problem; bones of zero length in the model itself are an authoring warning.
 				case IKSolveResult::Unchanged:
-					break;
 				case IKSolveResult::Degenerate:
-					chainProblems.emplace_back("its bones have zero length (or every point sits on its joint), so nothing can swing");
 					break;
 				case IKSolveResult::NonFinite:
-					chainProblems.emplace_back("the simulated points or the swung pose are not finite; restarting the chain");
+					chainProblems.emplace_back("the swung pose is not finite; restarting the chain");
 					// Restart from the animated pose rather than from points that could not be shown.
 					chain.Sim.reset();
+					chain.HoldProblem = true;
 					break;
 				case IKSolveResult::FixedMatrix:
 					// ResolveSpringChain rejects fixed-matrix joints; kept for completeness.
@@ -236,21 +267,22 @@ namespace Basalt {
 			}
 			reportChain();
 		}
+		if (simulated)
+			state.HoldProblem = false;
 		if (touched.empty())
 		{
 			// No chain turned (weights 0, or problems reported per chain): the simulation carries on underneath.
-			DropOverlay(playback, playback.SpringOverlay);
+			DropOverlay(playback, &Playback::SpringOverlay);
 			return report();
 		}
 		// SolveAimChainIK leaves globals composed (finite); skins add their inverse binds.
 		if (!SkinPalettesFinite(source, globals))
 		{
 			problems.emplace_back("the swung pose is not finite");
+			state.HoldProblem = true;
 			return skip();
 		}
-		std::ranges::sort(touched);
-		touched.erase(std::ranges::unique(touched).begin(), touched.end());
-		StoreOverlay(playback, playback.SpringOverlay, touched, pose, globals);
+		StoreOverlay(playback, &Playback::SpringOverlay, touched, pose, globals);
 		report();
 	}
 

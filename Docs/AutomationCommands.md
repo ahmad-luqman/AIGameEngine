@@ -1452,7 +1452,7 @@ Sets mouse position and/or a button state for play mode. Recorded while replay r
 
 ### `log.get`
 
-Returns engine log messages logged after index 'since'. With assertNoWarnings the command fails when one of them is a warning or worse, naming them.
+Returns engine log messages logged after index 'since'. With assertNoWarnings the command fails when any message since 'since' (whatever errorsOnly says) is a warning or worse, naming them, or when some were already dropped from the history (it keeps the last 2048 messages).
 
 | Parameter | Type / description |
 |-----------|--------------------|

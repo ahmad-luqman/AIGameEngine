@@ -11,6 +11,8 @@
 
 #include <glm/gtc/epsilon.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 
 // Helpers shared by the layer, IK and spring bone tests, around the generated Biped fixture (Tests/Data/Animation).
@@ -67,6 +69,12 @@ namespace AnimationTest {
 	inline glm::quat AxisAngle(const glm::vec3& axis, float degrees)
 	{
 		return glm::angleAxis(glm::radians(degrees), axis);
+	}
+
+	// The angle between two directions, in degrees.
+	inline float Degrees(const glm::vec3& a, const glm::vec3& b)
+	{
+		return glm::degrees(std::acos(std::clamp(glm::dot(glm::normalize(a), glm::normalize(b)), -1.0f, 1.0f)));
 	}
 
 	inline bool Near(const glm::vec3& a, const glm::vec3& b, float epsilon = 1e-4f)

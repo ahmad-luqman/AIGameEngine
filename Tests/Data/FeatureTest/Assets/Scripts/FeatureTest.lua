@@ -627,7 +627,7 @@ function Driver:OnUpdate(dt)
 		-- Character controller: the hero walks towards a step, jumps on frame 25 and walks again from frame 100.
 		local hero = Scene.FindEntityByName("Hero")
 		local controller = hero:GetComponent("CharacterController")
-		Check("CharacterController fields", controller.SlopeLimit == 40 and Near(controller.StepHeight, 0.35, 1e-6) and controller.Layer == "Default")
+		Check("CharacterController fields", controller.SlopeLimit == 40 and Near(controller.StepHeight, 0.35, 1e-6) and Near(controller.JumpGrace, 0.1, 1e-6) and controller.Layer == "Default")
 		ExpectError("Move without a CharacterController", function() Scene.FindEntityByName("Crate"):Move(Vec3(1, 0, 0)) end, "needs the CharacterController component")
 		Check("IsGrounded without a character", not Scene.FindEntityByName("Crate"):IsGrounded() and Scene.FindEntityByName("Crate"):GetGroundNormal() == nil)
 		ExpectError("Move with a non-finite velocity", function() hero:Move(Vec3(0 / 0, 0, 0)) end, "must be finite")
@@ -816,7 +816,7 @@ function Driver:OnUpdate(dt)
 		local shoulder, hand = springRig:GetBoneTransform("RightUpperArm"), springRig:GetBoneTransform("RightHand")
 		local elbow = springRig:GetBoneTransform("RightForeArm")
 		local chest, chestRotation = springRig:GetBoneTransform("Chest")
-		-- The collider's Offset on SpringRig (entity 918) in FeatureTest.bscene.
+		-- The collider's Offset on SpringRig (ID 918) in FeatureTest.bscene.
 		local collider = chest + chestRotation * Vec3(-0.3026, -0.1319, 0)
 		Check("Spring bones swing", hand.y < shoulder.y - 0.3 and Near((elbow - shoulder):Length(), 0.3, 1e-3) and Near((hand - elbow):Length(), 0.3, 1e-3)
 			and NearVec(collider, shoulder + Vec3(0, -0.3, 0), 0.01) and (elbow - collider):Length() > 0.115)

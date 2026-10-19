@@ -722,9 +722,8 @@ namespace Basalt {
 				return RequireAnimations(context).GetIKWeight(RequireInverseKinematics(self, "GetIKWeight"), chain);
 			};
 			entityType["ResetSpringBones"] = [&context](const ScriptEntity& self) {
-				const Entity entity = RequireSpringBone(self, "ResetSpringBones");
-				if (!RequireAnimations(context).ResetSpringBones(entity))
-					throw std::runtime_error("ResetSpringBones: the animation system does not know the SpringBone on '" + entity.GetName() + "'");
+				[[maybe_unused]] const bool reset = RequireAnimations(context).ResetSpringBones(RequireSpringBone(self, "ResetSpringBones"));
+				BS_CORE_ASSERT(reset, "RequireSpringBone checked the component");
 			};
 		}
 

@@ -118,9 +118,10 @@ namespace Basalt {
 
 	private:
 		// A move faster than this (units/s) between two updates is a teleport (respawn, Scene.Load, a script placing the
-		// entity), not movement, so it does not spike MatchVelocity or swing spring bones. MatchVelocity measures the
-		// entity's horizontal move, spring bones each chain's first joint in 3D. Both measure over at least one fixed
-		// step, because physics moves bodies once per step: at high frame rates most frames see none.
+		// entity), not movement, so it does not spike MatchVelocity or swing spring bones. MatchVelocity checks the
+		// entity's horizontal move, spring bones each chain's first joint in 3D; both compare the move against
+		// TeleportSpeed times the longer of the frame and one fixed step, because physics moves bodies once per step: at
+		// high frame rates most frames see no move.
 		static constexpr double TeleportSpeed = 100.0;
 		// Why graph evaluation/parameter writes are enabled or disabled, independent of pose and pause state.
 		enum class GraphControl
@@ -341,41 +342,55 @@ namespace Basalt {
 		struct SpringChainState
 		{
 			std::string Name;
-			// The chain resolved against the model (its joints, then the tip, or why it cannot be), and what it was
-			// resolved from: it is resolved again (and restarts) when the Joint, the ChainLength or the model changes.
-			std::vector<uint32_t> Joints;
-			std::string ResolveProblem;
-			std::string ResolvedJoint;
-			uint32_t ResolvedLength = 0;
-			Ref<MeshSource> ResolvedSource;
+			// The chain resolved against the model: its joints, then the tip, or why it cannot be resolved. It is
+			// resolved again (and the chain restarts) when the Joint, the ChainLength or the model changes.
+			struct Resolution
+			{
+				Ref<MeshSource> Source;
+				std::string Joint;
+				uint32_t Length = 0;
+				std::vector<uint32_t> Joints;
+				std::string Problem;
+				bool Matches(const Ref<MeshSource>& source, const SpringChain& config) const { return Source == source && Joint == config.Joint && Length == config.ChainLength; }
+			};
+			Resolution Resolved;
 			// The simulated children of the joints and where the animation put the joints and the tip at the last solve
 			// (world space). Absent until the chain starts on the animated pose: before its first solve, after
-			// ResetSpringBones, a teleport, a changed resolution, or a solve that could not run.
+			// ResetSpringBones, a teleport, a changed resolution, a frame its entity could not be solved, or points that
+			// went non-finite.
 			struct Simulation
 			{
 				std::vector<SpringPoint> Points;
 				std::vector<glm::vec3> Animated;
 			};
 			std::optional<Simulation> Sim;
-			// The last problem with this chain, logged when it changes.
+			// The last problem with this chain, logged when it changes. HoldProblem keeps it through the frame the chain
+			// restarts on (when nothing is simulated, so nothing could go wrong yet), so a problem that comes back right
+			// after is not logged again.
 			std::string Problem;
+			bool HoldProblem = false;
 		};
-		// SpringState::ColliderNodes for a collider whose joint the model does not have.
-		static constexpr int32_t NoNode = -2;
 		// The spring bone runtime state of one entity. It survives playback resets (the points are where the chains hang
 		// in the world) and ends with the component.
 		struct SpringState
 		{
+			// ColliderBinding::Node for a collider whose joint the model does not have; -1 is the entity itself.
+			static constexpr int32_t NoNode = -2;
+			struct ColliderBinding
+			{
+				std::string Joint;
+				int32_t Node = -1;
+			};
 			entt::entity Handle = entt::null;
 			std::vector<SpringChainState> Chains;
-			// Each collider's node (-1: the entity itself; NoNode: not found), resolved again when the joint names or the
-			// model change.
-			std::vector<std::string> ColliderJoints;
-			std::vector<int32_t> ColliderNodes;
+			// Each collider's joint resolved against ColliderSource, resolved again when the joint names or the model
+			// change.
+			std::vector<ColliderBinding> Colliders;
 			Ref<MeshSource> ColliderSource;
 			// The last problem with the entity as a whole (its Animator, pose, transform, gravity, wind and colliders),
-			// logged when it changes.
+			// logged when it changes; HoldProblem as in SpringChainState.
 			std::string Problem;
+			bool HoldProblem = false;
 		};
 		// A chain's state and configuration, as FindChain returns them.
 		struct ChainLookup
@@ -413,12 +428,16 @@ namespace Basalt {
 		void SolveEntitySprings(Entity entity, Playback& playback, const SpringBoneComponent& component, SpringState& state, float seconds);
 		SpringState& SyncSprings(Entity entity, const SpringBoneComponent& component);
 		// Fills `out` with the colliders in world space from the pose's globals, resolving their joints when needed.
-		void ResolveSpringColliders(const Ref<MeshSource>& source, const SpringBoneComponent& component, SpringState& state, const glm::mat4& world, const std::vector<glm::mat4>& globals, std::vector<SpringCollisionShape>& out, std::vector<std::string>& problems);
+		static void ResolveSpringColliders(const Ref<MeshSource>& source, const SpringBoneComponent& component, SpringState& state, const glm::mat4& world, const std::vector<glm::mat4>& globals, std::vector<SpringCollisionShape>& out, std::vector<std::string>& problems);
 		void OnSpringDestroy(entt::registry& registry, entt::entity handle);
+		// A pass's overlay in a playback: &Playback::IKOverlay or &Playback::SpringOverlay.
+		using Overlay = std::vector<OverlayEntry> Playback::*;
 		// Drops a pass's overlay and composes the pose again from what the other passes left.
-		static void DropOverlay(Playback& playback, std::vector<OverlayEntry>& overlay);
-		// Keeps the local transforms of `nodes` (sorted, unique) as a pass's overlay and its composed globals as the pose.
-		static void StoreOverlay(Playback& playback, std::vector<OverlayEntry>& overlay, std::span<const uint32_t> nodes, const AnimationLocalPose& pose, const std::vector<glm::mat4>& globals);
+		static void DropOverlay(Playback& playback, Overlay overlay);
+		// Keeps the local transforms of `nodes` (sorted and deduplicated here) as a pass's overlay and its composed globals
+		// as the pose: Pose with the overlays of this pass and the passes before it. A later pass (springs after IK) then
+		// stores or drops its own.
+		static void StoreOverlay(Playback& playback, Overlay overlay, std::vector<uint32_t>& nodes, const AnimationLocalPose& pose, const std::vector<glm::mat4>& globals);
 		// Logs `problem` for `owner` (a component name) when it changed since `reported`, naming `chain` when given.
 		static void ReportProblem(std::string& reported, std::string problem, Entity entity, const char* owner, const std::string* chain = nullptr);
 		// The problems joined into one message ("; " between them).
@@ -426,7 +445,7 @@ namespace Basalt {
 		// The states matched to `configs` by Name, in configuration order. Each state moves to at most one configuration
 		// (even if C++ code wrote duplicate names past Validate); unmatched configurations get create(config).
 		template<typename State, typename Config, typename Create>
-		static std::vector<State> MatchByName(std::vector<State>& states, const std::vector<Config>& configs, Create create)
+		static std::vector<State> MatchByName(std::vector<State> states, const std::vector<Config>& configs, Create create)
 		{
 			std::vector<State> matched;
 			matched.reserve(configs.size());
@@ -453,9 +472,10 @@ namespace Basalt {
 		static void ReportCallProblem(std::map<std::pair<UUID, std::string>, std::string>& reported, Entity entity, const char* owner, const char* operation, const std::string& name, const std::string& problem, const std::string& detail = {});
 		void ReportLayerCall(Entity entity, const char* operation, const std::string& layer, const std::string& problem, const std::string& detail = {});
 		void ReportIKCall(Entity entity, const char* operation, const std::string& chain, const std::string& problem, const std::string& detail = {});
-		// A component value C++ code wrote outside [low, high] (Validate rejects it from data), clamped; the problem
-		// (value-free, so a changing value logs once) is appended to `problems`.
-		static float ClampSetting(float value, float low, float high, const std::string& name, std::vector<std::string>& problems);
+		// A component value C++ code wrote outside [low, high] (Validate rejects it from data): clamped (infinities to the
+		// bound on their side), or `fallback` (the component's default) for NaN; the problem (value-free, so a changing
+		// value logs once) is appended to `problems`.
+		static float ClampSetting(float value, float low, float high, float fallback, const std::string& name, std::vector<std::string>& problems);
 		void OnIKDestroy(entt::registry& registry, entt::entity handle);
 		static void ClearTransition(Playback& playback);
 		// Starts fading from the visible pose; the current clip keeps advancing as the outgoing one when playback is
@@ -511,6 +531,7 @@ namespace Basalt {
 		std::vector<SpringCollisionShape> m_SpringColliders;
 		std::vector<glm::vec3> m_SpringAnimated;
 		std::vector<glm::vec3> m_SpringTargets;
-		std::vector<uint32_t> m_SpringTouched;
+		// The nodes a pass moved (IK, then springs).
+		std::vector<uint32_t> m_TouchedNodes;
 	};
 }

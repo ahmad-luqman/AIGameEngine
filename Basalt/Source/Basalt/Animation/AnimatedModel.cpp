@@ -241,6 +241,8 @@ namespace Basalt {
 			// AddAnimatorWarnings reports a model that cannot load.
 			const auto source = animator->Mesh.empty() ? nullptr : AssetManager::GetMesh(animator->Mesh);
 			std::vector<uint32_t> joints;
+			std::vector<glm::mat4> restGlobals;
+			const bool restPose = source && EvaluateAnimation(*source, nullptr, 0, restGlobals);
 			// The first chain turning each joint.
 			std::map<uint32_t, const SpringChain*> turned;
 			for (const SpringChain& chain : springs.Chains)
@@ -261,12 +263,20 @@ namespace Basalt {
 				// Chains swing in order, so a later one turning the same joint overrides the earlier one.
 				if (const auto other = std::ranges::find_if(chainJoints, [&](uint32_t joint) { return turned.contains(joint); }); other != chainJoints.end())
 					warnings.push_back(fmt::format("SpringBone chains '{}' and '{}' both turn joint '{}'; the later one wins", turned.at(*other)->Name, chain.Name, source->Nodes[*other].Name));
-				for (uint32_t joint : chainJoints)
+				for (size_t i = 0; i < chainJoints.size(); i++)
 				{
-					turned.emplace(joint, &chain);
-					if (const size_t children = ChildCount(*source, joint); children > 1)
-						warnings.push_back(fmt::format("SpringBone chain '{}': joint '{}' has {} children; the chain follows the first, '{}'", chain.Name, source->Nodes[joint].Name, children, source->Nodes[static_cast<size_t>(FirstChild(*source, joint))].Name));
+					turned.emplace(joints[i], &chain);
+					// ResolveSpringChain follows first children: the next joint is the first child.
+					if (const size_t children = ChildCount(*source, joints[i]); children > 1)
+						warnings.push_back(fmt::format("SpringBone chain '{}': joint '{}' has {} children; the chain follows the first, '{}'", chain.Name, source->Nodes[joints[i]].Name, children, source->Nodes[joints[i + 1]].Name));
 				}
+				// Zero-length bones in the model's own pose have nothing to swing (the animation hiding a chain by scaling
+				// it to nothing is no problem).
+				bool flat = restPose;
+				for (size_t i = 0; flat && i < chainJoints.size(); i++)
+					flat = glm::length(glm::vec3(restGlobals[joints[i + 1]][3]) - glm::vec3(restGlobals[joints[i]][3])) < 1e-6f;
+				if (flat)
+					warnings.push_back(fmt::format("SpringBone chain '{}': its bones have zero length in the model's rest pose, so nothing can swing", chain.Name));
 				if (chain.ChainLength == 0 && FirstChild(*source, joints.back()) >= 0)
 					warnings.push_back(fmt::format("SpringBone chain '{}': the joints go on past the first {}; the rest follow the animation", chain.Name, SpringChain::MaxChainLength));
 			}

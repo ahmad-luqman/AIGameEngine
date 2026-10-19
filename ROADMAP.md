@@ -9,7 +9,7 @@ automation API, docs, and a code review before committing.
 Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or more.
 
 **Execution.** Work in milestones rather than one item at a time (`ROADMAP-SESSIONS.md` groups the open items into
-sessions). Run each milestone as one long autonomous session at high effort
+single-session milestones). Run each milestone as one long autonomous session at high effort
 (or with multi-agent workflows), and check quality and token cost before starting the next.
 
 ## Current state (baseline)

@@ -142,8 +142,9 @@ namespace Basalt {
 		// Character controllers. MoveCharacter sets the velocity the character walks with until the next call.
 		// With gravity (scene gravity times GravityFactor), the part of it along the up axis (against gravity)
 		// only counts while the character stands on walkable ground, where it jumps (again on every landing
-		// while it is held), and once within CharacterController.JumpGrace seconds of walking off it (coyote
-		// time); otherwise in the air gravity drives the vertical speed and the rest steers. The character
+		// while it is held), and once within CharacterController.JumpGrace seconds (counted in fixed steps) of
+		// leaving it without jumping (coyote time); otherwise in the air gravity drives the vertical speed and the
+		// rest steers. The character
 		// also moves with the ground it stands on. Without gravity the velocity applies in full. Calls on
 		// entities without a character do nothing; non-finite velocities are ignored.
 		bool HasCharacter(Entity entity) const;
@@ -151,9 +152,10 @@ namespace Basalt {
 		// Queues animation displacement until a fixed step. Step consumes the one-frame override;
 		// pending displacement survives frames without fixed steps. Non-finite requests are logged/ignored.
 		// `share` (0..1, clamped; a non-finite one is logged and counts as 1) is how much of the character's horizontal
-		// movement the displacement owns: below 1 (a fade between root-motion and gameplay-driven states) (1 - share)
-		// of MoveCharacter's horizontal velocity is added. Frames queued before one step average their shares weighted
-		// by `seconds`, the time each displacement took (0: equal weights); a frame without displacement counts too.
+		// movement the displacement owns: below 1, during a fade between root-motion and gameplay-driven states,
+		// MoveCharacter's horizontal velocity is added scaled by 1 - share. Frames queued before one step average their
+		// shares weighted by `seconds`, the time each displacement took (0 or non-finite: one fixed step); a frame
+		// without displacement counts too.
 		void QueueRootMotion(Entity entity, const glm::vec3& displacement, float share = 1.0f, float seconds = 0.0f);
 		// Standing on ground no steeper than SlopeLimit.
 		bool IsCharacterGrounded(Entity entity) const;

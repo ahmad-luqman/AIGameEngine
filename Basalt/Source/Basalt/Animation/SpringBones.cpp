@@ -13,7 +13,7 @@
 
 namespace Basalt {
 
-	// Explicit integration of the pull is stable while stiffness * substep² stays below 4; keep a wide margin.
+	// Semi-implicit Euler integration of the pull is stable while stiffness * substep² stays below 4; keep a wide margin.
 	static_assert(SpringChain::MaxStiffness / (SpringStepRate * SpringStepRate) < 1.0f, "the stiffest spring must stay stable at the longest substep");
 
 	namespace {
@@ -41,14 +41,15 @@ namespace Basalt {
 			const glm::vec3 closest = shape.A + axis * t;
 			const float reach = shape.Radius + radius;
 			glm::vec3 offset = point - closest;
-			if (glm::length(offset) >= reach)
+			const float distance = glm::length(offset);
+			if (distance >= reach)
 				return std::nullopt;
-			if (glm::length(offset) < Epsilon)
+			if (distance < Epsilon)
 			{
 				// Across both the bone and a capsule's axis; failing that (parallel or vanishing), any direction across
 				// whichever of the two is there.
 				const glm::vec3 along = lengthSquared > 0 ? axis : bone;
-				offset = lengthSquared > 0 ? glm::cross(axis, bone) : glm::cross(bone, glm::vec3(0, 1, 0));
+				offset = lengthSquared > 0 ? glm::cross(axis, bone) : glm::vec3(0);
 				for (const glm::vec3 fallback : { glm::vec3(0, 1, 0), glm::vec3(1, 0, 0) })
 					if (glm::length(offset) < Epsilon)
 						offset = glm::cross(along, fallback);
@@ -64,9 +65,11 @@ namespace Basalt {
 		const size_t count = points.size();
 		BS_CORE_ASSERT(request.Animated.size() == count + 1 && request.PreviousAnimated.size() == count + 1, "one animated position per joint plus the tip");
 		BS_CORE_ASSERT(count <= SpringChain::MaxChainLength, "chains have at most MaxChainLength joints");
-		BS_CORE_ASSERT(request.Stiffness >= 0 && request.Damping >= 0, "a negative stiffness or damping adds energy");
+		BS_CORE_ASSERT(request.Stiffness >= 0 && request.Stiffness <= SpringChain::MaxStiffness && request.Damping >= 0 && request.Radius >= 0, "settings outside their ranges add energy or overflow");
 		constexpr float longest = static_cast<float>(MaxSpringSteps) / SpringStepRate;
-		if (count == 0 || !(request.Seconds > 0))
+		// The buffers below hold MaxChainLength joints: a longer chain (only C++ callers past the assert) is not
+		// simulated.
+		if (count == 0 || count > SpringChain::MaxChainLength || request.Animated.size() != count + 1 || request.PreviousAnimated.size() != count + 1 || !(request.Seconds > 0))
 			return;
 		const float seconds = std::min(request.Seconds, longest);
 		// A hitch: the points move along with the first joint for the part of the frame that is not simulated, and the
@@ -99,7 +102,8 @@ namespace Basalt {
 				const glm::vec3 bone = animated[i + 1] - animated[i];
 				const float length = glm::length(bone);
 				const glm::vec3 target = head + turn * bone;
-				// Semi-implicit Euler: the velocity first, so the result does not depend on how long earlier substeps were.
+				// The velocity is stored (not the previous position, as in Verlet), so substeps of different lengths integrate
+				// correctly; updating it before the position (semi-implicit Euler) keeps the stiff pull stable.
 				point.Velocity = point.Velocity * decay + (request.Stiffness * (target - point.Position) + request.Acceleration) * step;
 				glm::vec3 next = KeepLength(head, point.Position + point.Velocity * step, length, target);
 				for (uint32_t iteration = 0; iteration < SpringConstraintIterations; iteration++)

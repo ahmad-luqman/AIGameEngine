@@ -26,6 +26,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include <limits>
 #include <optional>
 #include <set>
 #include <string>
@@ -92,10 +93,15 @@ namespace Basalt {
 			float StepHeight = 0.0f;
 			float GravityFactor = 1.0f;
 			float JumpGrace = 0.0f;
-			// Seconds since the character last stood on walkable ground, and whether it already jumped since then (from
-			// the ground or within JumpGrace), so the grace gives one jump.
-			float SinceGrounded = 0.0f;
-			bool Jumped = false;
+			// Seconds since the character last stood on walkable ground (counted in fixed steps), and whether it jumped
+			// since then (from the ground or within JumpGrace), so the grace gives one jump. A character that has not
+			// stood yet (built in the air) gets none; a rebuild keeps both.
+			struct Airtime
+			{
+				float SinceGrounded = std::numeric_limits<float>::infinity();
+				bool Jumped = false;
+			};
+			Airtime Air;
 			// Warnings found while building the character, repeated with the settings' own when they change.
 			std::vector<std::string> BuildWarnings;
 			// The last MoveCharacter velocity, used every step until the next call.
@@ -163,8 +169,8 @@ namespace Basalt {
 		struct RootMotionRequest
 		{
 			glm::vec3 Pending = glm::vec3(0);
-			// The shares queued since the last step, weighted by their frames' durations, and the summed durations: a
-			// frame without displacement still queues its share.
+			// The shares queued since the last step, weighted by their frames' durations (one fixed step for a frame
+			// queued without one), and the summed durations: a frame without displacement still queues its share.
 			float ShareTime = 0;
 			float Time = 0;
 			bool Active = false;
@@ -174,7 +180,8 @@ namespace Basalt {
 			bool InvalidReported = false;
 			bool InvalidShareReported = false;
 
-			bool HasQueued() const { return Pending != glm::vec3(0) || Time > 0; }
+			// Every queued frame adds to Time.
+			bool HasQueued() const { return Time > 0; }
 			void ClearQueued()
 			{
 				Pending = glm::vec3(0);

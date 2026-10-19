@@ -15,6 +15,8 @@
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scripting/ScriptEngine.h>
 
+#include <nlohmann/json.hpp>
+
 #include <glm/gtc/epsilon.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -79,11 +81,6 @@ namespace {
 		return glm::length(point - (shape.A + axis * t));
 	}
 
-	float Degrees(const glm::vec3& a, const glm::vec3& b)
-	{
-		return glm::degrees(std::acos(std::clamp(glm::dot(glm::normalize(a), glm::normalize(b)), -1.0f, 1.0f)));
-	}
-
 	SpringChain RightArm(float stiffness = 0, float gravityFactor = 1)
 	{
 		SpringChain chain;
@@ -116,6 +113,29 @@ namespace {
 		const glm::vec3 shoulder = BoneWorld(scene, biped, "RightUpperArm"), elbow = BoneWorld(scene, biped, "RightForeArm"), hand = BoneWorld(scene, biped, "RightHand");
 		CHECK(glm::length(elbow - shoulder) == doctest::Approx(0.3f * scale).epsilon(1e-4));
 		CHECK(glm::length(hand - elbow) == doctest::Approx(0.3f * scale).epsilon(1e-4));
+	}
+	// glTF text of a straight line of `count` joints named J0.. (J0 at the origin, each `spacing` above the one before),
+	// beside a one-triangle mesh (models need geometry to load).
+	std::string LineModel(size_t count, float spacing)
+	{
+		nlohmann::json nodes = nlohmann::json::array({ { { "name", "Mesh" }, { "mesh", 0 } } });
+		for (size_t i = 0; i < count; i++)
+		{
+			nlohmann::json node = { { "name", "J" + std::to_string(i) }, { "translation", { 0, i == 0 ? 0.0f : spacing, 0 } } };
+			if (i + 1 < count)
+				node["children"] = { i + 2 };
+			nodes.push_back(node);
+		}
+		// Three positions: (0, 0, 0), (0.1, 0, 0) and (0, 0.1, 0).
+		const nlohmann::json triangle = {
+			{ "buffers", { { { "byteLength", 36 }, { "uri", "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAzczMPQAAAAAAAAAAAAAAAM3MzD0AAAAA" } } } },
+			{ "bufferViews", { { { "buffer", 0 }, { "byteLength", 36 } } } },
+			{ "accessors", { { { "bufferView", 0 }, { "componentType", 5126 }, { "count", 3 }, { "type", "VEC3" }, { "min", { 0, 0, 0 } }, { "max", { 0.1, 0.1, 0 } } } } },
+			{ "meshes", { { { "primitives", { { { "attributes", { { "POSITION", 0 } } } } } } } } },
+		};
+		nlohmann::json model = { { "asset", { { "version", "2.0" } } }, { "nodes", nodes }, { "scenes", { { { "nodes", { 0, 1 } } } } }, { "scene", 0 } };
+		model.update(triangle);
+		return model.dump();
 	}
 	// A three-node line: Root, Middle (`middleHeight` above it, optionally a fixed matrix) and Tip 0.5 m above that.
 	MeshSource Line(bool fixedMiddle = false, float middleHeight = 0.5f)
@@ -244,20 +264,29 @@ TEST_SUITE("Animation")
 		CHECK(Distance(near, single.Points[0].Position) >= near.Radius - 1e-4f);
 		CHECK(single.Length(0) == doctest::Approx(0.3f).epsilon(1e-4));
 
-		// A point exactly on a sphere's center or a capsule's axis still leaves it, across its bone, at its length.
-		for (const SpringCollisionShape& shape : { SpringCollisionShape{ .A = { 0.3f, 2, 0 }, .B = { 0.3f, 2, 0 }, .Radius = 0.05f }, SpringCollisionShape{ .A = { 0.3f, 1.8f, 0 }, .B = { 0.3f, 2.2f, 0 }, .Radius = 0.05f },
-												   SpringCollisionShape{ .A = { 0, 2, 0 }, .B = { 1, 2, 0 }, .Radius = 0.05f } })
+		// A point exactly on a sphere's center or a capsule's axis still leaves it, across its bone, at its length. A capsule
+		// along the bone (the last) covers the whole bone, so nowhere at its length is outside it; the point stays finite.
+		const std::pair<SpringCollisionShape, bool> centers[] = { { { .A = { 0.3f, 2, 0 }, .B = { 0.3f, 2, 0 }, .Radius = 0.05f }, true },
+																  { { .A = { 0.3f, 1.8f, 0 }, .B = { 0.3f, 2.2f, 0 }, .Radius = 0.05f }, true },
+																  { { .A = { 0, 2, 0 }, .B = { 1, 2, 0 }, .Radius = 0.05f }, false } };
+		for (const auto& [shape, outside] : centers)
 		{
 			Strand centered({ 0, 2, 0 }, { 1, 0, 0 }, 1);
 			const std::array centerShapes{ shape };
 			centered.Run(1, Step, { .Colliders = centerShapes });
-			CHECK(Math::IsFinite(centered.Points[0].Position));
+			const glm::vec3 point = centered.Points[0].Position;
+			CAPTURE(point);
+			CHECK(Math::IsFinite(point));
 			CHECK(centered.Length(0) == doctest::Approx(0.3f).epsilon(1e-4));
+			if (outside)
+				CHECK(Distance(shape, point) >= shape.Radius - 2e-3f);
 		}
-		Strand centered({ 0, 2, 0 }, { 1, 0, 0 }, 1);
-		const std::array sphereShapes{ SpringCollisionShape{ .A = { 0.3f, 2, 0 }, .B = { 0.3f, 2, 0 }, .Radius = 0.05f } };
-		centered.Run(1, Step, { .Colliders = sphereShapes });
-		CHECK(Distance(sphereShapes[0], centered.Points[0].Position) >= 0.05f - 1e-3f);
+		// Across the bone: the vertical capsule pushes the point out sideways, not along its bone or the capsule.
+		Strand across({ 0, 2, 0 }, { 1, 0, 0 }, 1);
+		const std::array verticalShape{ SpringCollisionShape{ .A = { 0.3f, 1.8f, 0 }, .B = { 0.3f, 2.2f, 0 }, .Radius = 0.05f } };
+		across.Run(1, Step, { .Colliders = verticalShape });
+		CHECK(std::abs(across.Points[0].Position.z) > 0.04f);
+		CHECK(std::abs(across.Points[0].Position.y - 2) < 1e-3f);
 	}
 
 	TEST_CASE("Spring points lag behind a moving chain the same at any frame rate and through hitches")
@@ -396,6 +425,21 @@ TEST_SUITE("Animation")
 		component.Chains[0].Weight = 1;
 		RunAnimation(scene, 1);
 		CHECK(Near(BoneWorld(scene, biped, "RightHand"), hanging, 5e-3f));
+
+		// A different ChainLength restarts the chain on the animated pose; so does an Animator that could not play.
+		component.Chains[0].ChainLength = 1;
+		RunAnimation(scene, 1);
+		CHECK(Near(BoneWorld(scene, biped, "RightHand"), animated));
+		component.Chains[0].ChainLength = 0;
+		RunAnimation(scene, 60);
+		REQUIRE(BoneWorld(scene, biped, "RightHand").y < animated.y - 0.1f);
+		auto& animator = biped.GetComponent<AnimatorComponent>();
+		const std::string mesh = animator.Mesh;
+		animator.Mesh.clear();
+		RunAnimation(scene, 1);
+		animator.Mesh = mesh;
+		RunAnimation(scene, 1);
+		CHECK(Near(BoneWorld(scene, biped, "RightHand"), animated));
 
 		// A different Joint restarts the chain on the animated pose.
 		component.Chains[0].Joint = "RightForeArm";
@@ -622,7 +666,7 @@ TEST_SUITE("Animation")
 		CHECK(warnings.size() == 6);
 
 		// At runtime each problem is logged once, and the valid chain still swings (with its Damping, written as infinity
-		// from C++, replaced by 0).
+		// from C++, clamped to 1000).
 		scene.CreateEntity("Plain");
 		const auto since = Log::GetHistory().GetTotalCount();
 		scene.OnRuntimeStart();
@@ -632,9 +676,10 @@ TEST_SUITE("Animation")
 		CHECK(CountLogMessages(since, "chain 'Missing': joint 'Nope' not found") == 1);
 		CHECK(CountLogMessages(since, "chain 'Leaf': joint 'RightHand' has no child") == 1);
 		CHECK(CountLogMessages(since, "Colliders[0]: joint 'Nowhere' not found") == 1);
-		CHECK(CountLogMessages(since, "chain 'RightArm': Damping is not finite; using 0") == 1);
+		CHECK(CountLogMessages(since, "chain 'RightArm': Damping must be between 0 and 1000; clamping") == 1);
 		CHECK(CountLogMessages(since, "SpringBone 'Rig': not solved") == 1);
 		CHECK(glm::length(BoneWorld(scene, biped, "RightHand") - animated) > 0.05f);
+		CheckArmLengths(scene, biped);
 
 		const std::pair<const char*, const char*> errors[] = {
 			{ "Scene.FindEntityByName('Plain'):ResetSpringBones()", "ResetSpringBones needs the SpringBone component on 'Plain'" },
@@ -663,14 +708,138 @@ TEST_SUITE("Animation")
 		RunAnimation(scene, 60);
 		CHECK(ArmReach(scene, biped).y < animated.y - 0.1f);
 
-		// Non-finite wind (from C++) and gravity (from a script) are ignored, each logged once, and the bones stay
-		// finite.
+		// Non-finite wind and gravity, both written from C++ (Lua's Physics.SetGravity rejects them), are ignored, each
+		// logged once, and the bones stay finite.
 		const auto since = Log::GetHistory().GetTotalCount();
 		biped.GetComponent<SpringBoneComponent>().Wind = glm::vec3(std::numeric_limits<float>::quiet_NaN(), 0, 0);
 		scene.GetPhysicsWorld()->SetGravity(glm::vec3(0, std::numeric_limits<float>::infinity(), 0));
 		RunAnimation(scene, 10);
 		CHECK(CountLogMessages(since, "Wind is not finite; ignoring it") == 1);
 		CHECK(CountLogMessages(since, "the physics gravity is not finite; ignoring it") == 1);
+		CHECK(Math::IsFinite(BoneWorld(scene, biped, "RightHand")));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Spring colliders and chains resolve again when their joints or the model change")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		const std::string armature = (std::filesystem::path(BASALT_TEST_DATA_DIR) / "Animation/BipedArmature.gltf").string();
+		auto biped = AddBiped(scene, { RightArm() });
+		// The other model's animated pose, without springs.
+		auto reference = scene.CreateEntity("Reference");
+		auto& referenceAnimator = reference.AddComponent<AnimatorComponent>();
+		referenceAnimator.Mesh = armature;
+		referenceAnimator.Clip = "Lean";
+		referenceAnimator.PlayOnStart = false;
+		scene.OnRuntimeStart();
+		const glm::vec3 shoulder = BoneWorld(scene, biped, "RightUpperArm");
+		const glm::vec3 center = shoulder + glm::vec3(0, -0.3f, 0);
+		const glm::vec3 offset = glm::vec3(glm::inverse(BoneWorldTransform(scene, biped, "Chest")) * glm::vec4(center, 1));
+		auto& springs = biped.GetComponent<SpringBoneComponent>();
+		springs.Colliders = { { .Joint = "Chest", .Offset = offset, .Radius = 0.1f } };
+		RunAnimation(scene, 300);
+		REQUIRE(glm::length(BoneWorld(scene, biped, "RightForeArm") - center) >= 0.12f - 1e-3f);
+
+		// Renaming the collider's joint resolves it again: unknown, the arm hangs straight through where it was.
+		const auto since = Log::GetHistory().GetTotalCount();
+		springs.Colliders[0].Joint = "Nowhere";
+		RunAnimation(scene, 300);
+		CHECK(CountLogMessages(since, "Colliders[0]: joint 'Nowhere' not found") == 1);
+		CHECK(Near(BoneWorld(scene, biped, "RightForeArm"), center, 5e-3f));
+		springs.Colliders[0].Joint = "Chest";
+		RunAnimation(scene, 300);
+		CHECK(glm::length(BoneWorld(scene, biped, "RightForeArm") - center) >= 0.12f - 1e-3f);
+		// A collider added after the others resolved.
+		springs.Colliders.push_back({ .Joint = "Head", .Radius = 0.05f });
+		RunAnimation(scene, 1);
+		CHECK(Math::IsFinite(BoneWorld(scene, biped, "RightHand")));
+
+		// Another model with the same joints at other indices: the chain and the collider resolve on it, the chain
+		// restarts on its animated pose, and no other joint swings.
+		biped.GetComponent<AnimatorComponent>().Mesh = armature;
+		RunAnimation(scene, 1);
+		CHECK(Near(BoneWorld(scene, biped, "RightHand"), BoneWorld(scene, reference, "RightHand")));
+		CHECK(Near(BoneWorld(scene, biped, "LeftHand"), BoneWorld(scene, reference, "LeftHand")));
+		RunAnimation(scene, 300);
+		const glm::vec3 armatureShoulder = BoneWorld(scene, biped, "RightUpperArm");
+		const glm::vec3 armatureCenter = glm::vec3(BoneWorldTransform(scene, biped, "Chest") * glm::vec4(offset, 1));
+		const float scale = glm::length(BoneWorld(scene, reference, "RightForeArm") - BoneWorld(scene, reference, "RightUpperArm")) / 0.3f;
+		CHECK(glm::length(BoneWorld(scene, biped, "RightForeArm") - armatureCenter) >= (0.1f + 0.02f) * scale - 1e-3f);
+		CHECK(glm::length(BoneWorld(scene, biped, "RightForeArm") - armatureShoulder) == doctest::Approx(0.3f * scale).epsilon(1e-3));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Spring chains stop at MaxChainLength joints and warn about zero-length bones")
+	{
+		// A 20-joint line: a ChainLength 0 chain takes the first 16 joints and the 17th as its tip, and simulates them.
+		MeshSource line;
+		line.Nodes.resize(SpringChain::MaxChainLength + 4);
+		for (size_t i = 0; i < line.Nodes.size(); i++)
+		{
+			line.Nodes[i].Name = "J" + std::to_string(i);
+			line.Nodes[i].Parent = static_cast<int32_t>(i) - 1;
+			line.Nodes[i].Translation = i == 0 ? glm::vec3(0) : glm::vec3(0, 0.1f, 0);
+		}
+		REQUIRE(line.FinalizeHierarchy());
+		SpringChain chain;
+		chain.Joint = "J0";
+		std::vector<uint32_t> joints;
+		CHECK(ResolveSpringChain(line, chain, joints).empty());
+		CHECK(joints.size() == SpringChain::MaxChainLength + 1);
+		CHECK(FirstChild(line, joints.back()) >= 0);
+		Strand strand({ 0, 0, 0 }, { 1, 0, 0 }, SpringChain::MaxChainLength, 0.1f);
+		strand.Run(60, Step, { .Stiffness = 10, .Damping = 4, .Acceleration = Gravity });
+		for (const SpringPoint& point : strand.Points)
+			CHECK(Math::IsFinite(point.Position));
+
+		// The same lines as models: the inspector warns that the chain stops early, and about bones of zero length.
+		ClearAssetCache clear;
+		TempProject project("SpringLines");
+		Scene scene;
+		const auto add = [&](const char* name, size_t count, float spacing) {
+			auto entity = scene.CreateEntity(name);
+			auto& animator = entity.AddComponent<AnimatorComponent>();
+			animator.Mesh = project.WriteFile(fmt::format("Assets/Models/{}.gltf", name), LineModel(count, spacing));
+			SpringChain springChain;
+			springChain.Joint = "J0";
+			entity.AddComponent<SpringBoneComponent>().Chains = { springChain };
+			return GetAnimationWarnings(entity);
+		};
+		CHECK(add("Long", SpringChain::MaxChainLength + 4, 0.1f) == std::vector<std::string>{ "SpringBone chain 'Chain': the joints go on past the first 16; the rest follow the animation" });
+		CHECK(add("Flat", 3, 0) == std::vector<std::string>{ "SpringBone chain 'Chain': its bones have zero length in the model's rest pose, so nothing can swing" });
+		CHECK(add("Fine", 3, 0.1f).empty());
+	}
+
+	TEST_CASE("Spring settings written as NaN or infinity from C++ fall back to their defaults or bounds")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		SpringChain chain = RightArm();
+		auto biped = AddBiped(scene, { chain });
+		scene.OnRuntimeStart();
+		const glm::vec3 shoulder = BoneWorld(scene, biped, "RightUpperArm");
+		const auto since = Log::GetHistory().GetTotalCount();
+		// A NaN GravityFactor is the default 1: the arm hangs down (the lower bound, -100, would fling it up).
+		auto& config = biped.GetComponent<SpringBoneComponent>().Chains[0];
+		config.GravityFactor = std::numeric_limits<float>::quiet_NaN();
+		RunAnimation(scene, 300);
+		CHECK(CountLogMessages(since, "chain 'RightArm': GravityFactor is not a number; using 1") == 1);
+		CHECK(Near(BoneWorld(scene, biped, "RightHand"), shoulder + glm::vec3(0, -0.6f, 0), 1e-2f));
+		// An infinite Damping is its upper bound (an infinite one would read as 0 if it fell to the lower bound).
+		config.GravityFactor = 1;
+		config.Damping = std::numeric_limits<float>::infinity();
+		RunAnimation(scene, 2);
+		CHECK(CountLogMessages(since, "chain 'RightArm': Damping must be between 0 and 1000; clamping") == 1);
+
+		// Gravity and wind finite on their own but overflowing together are ignored, logged once.
+		config.GravityFactor = 1;
+		config.Damping = 4;
+		biped.GetComponent<SpringBoneComponent>().Wind = { 3e38f, 0, 0 };
+		scene.GetPhysicsWorld()->SetGravity({ 3e38f, 0, 0 });
+		const auto overflow = Log::GetHistory().GetTotalCount();
+		RunAnimation(scene, 30);
+		CHECK(CountLogMessages(overflow, "gravity times GravityFactor plus Wind is not finite; ignoring it") == 1);
 		CHECK(Math::IsFinite(BoneWorld(scene, biped, "RightHand")));
 		scene.OnRuntimeStop();
 	}

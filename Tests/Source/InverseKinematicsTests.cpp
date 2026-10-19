@@ -29,10 +29,6 @@ namespace {
 	{
 		return glm::vec3(globals[node][3]);
 	}
-	float Degrees(const glm::vec3& a, const glm::vec3& b)
-	{
-		return glm::degrees(std::acos(std::clamp(glm::dot(glm::normalize(a), glm::normalize(b)), -1.0f, 1.0f)));
-	}
 
 	// The rest pose of `source` and its globals.
 	struct Rig
