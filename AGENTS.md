@@ -117,7 +117,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   shaders address `DrawIndex + gl_InstanceIndex` with `startInstanceLocation = 0`. Batch discovery order is
   deterministic; grouping can change exact coplanar opaque depth-tie winners. Blended draws keep their
   stable back-to-front order. Camera and each shadow frustum filter batches independently. Skin culling
-  uses per-source joint influence caches built by `AddSubmesh`; assets/topology stay immutable after
+  uses per-submesh joint influence bounds built by `AddSubmesh`; assets/topology stay immutable after
   publication. Animation control, clocks, events, root motion and asset resolution stay on the main thread;
   large sets of due poses run as disjoint playback jobs joined before physics. `LODDistance`/`LODInterval`
   opt into pose throttling from the primary camera while gameplay clocks and late solvers run at full rate.

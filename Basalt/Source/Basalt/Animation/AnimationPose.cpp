@@ -256,9 +256,10 @@ namespace Basalt {
 		AABB bounds;
 		if (submesh.HasUnweightedVertices)
 			bounds.Expand(glm::vec3(0));
-		// For nonnegative weights with sum s > 0, the skinned point is the convex combination
-		// sum_j (weight_j / s) * palette_j * (position * s, s).
-		// Union the joint boxes; adding them would incorrectly scale multi-joint vertices.
+		// For nonnegative weights summing to s > 0, world.xyz is a convex combination of
+		// palette_j * (position * s, s), including the origin for dropped influences.
+		// The rasterized world.xyz / w is a convex combination of valid palette_j * (position, 1).
+		// Each joint box encloses both inputs. Union the boxes: summing them can exclude single-joint vertices.
 		for (const auto& influence : submesh.JointBounds)
 		{
 			if (influence.Joint >= palette.size())
@@ -302,6 +303,9 @@ namespace Basalt {
 				if (vertex.Joints[j] < palette.size())
 					position += vertex.Weights[j] * (palette[vertex.Joints[j]] * glm::vec4(vertex.Position, 1));
 			bounds.Expand(glm::vec3(position));
+			// Rasterization divides by the valid weight sum; bounds must contain that point as well as world.xyz.
+			if (position.w > 0)
+				bounds.Expand(glm::vec3(position) / position.w);
 		}
 		return bounds;
 	}

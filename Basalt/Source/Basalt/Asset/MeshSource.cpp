@@ -68,8 +68,11 @@ namespace Basalt {
 				auto& influence = it->second;
 				influence.Joint = vertex.Joints[i];
 				influence.Positions.Expand(vertex.Position * sum);
-				influence.MinWeightSum = inserted ? sum : std::min(influence.MinWeightSum, sum);
-				influence.MaxWeightSum = inserted ? sum : std::max(influence.MaxWeightSum, sum);
+				influence.Positions.Expand(vertex.Position);
+				// Cover both the unnormalized shader world position and the position after perspective divide.
+				const float minimum = std::min(sum, 1.0f), maximum = std::max(sum, 1.0f);
+				influence.MinWeightSum = inserted ? minimum : std::min(influence.MinWeightSum, minimum);
+				influence.MaxWeightSum = inserted ? maximum : std::max(influence.MaxWeightSum, maximum);
 			}
 		}
 		for (const auto& [joint, bounds] : influences)

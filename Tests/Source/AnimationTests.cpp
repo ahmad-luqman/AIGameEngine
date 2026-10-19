@@ -3691,6 +3691,31 @@ TEST_SUITE("AnimationThroughput")
 		CHECK(distant.GetTransform().Translation.x != 100);
 	}
 
+	TEST_CASE("Incomplete cached animation initialization is rebuilt before poses escape")
+	{
+		ClearAssetCache clearCache;
+		Scene scene;
+		const auto rig = AddAnimator(scene);
+		rig.GetComponent<AnimatorComponent>().Clip = "Step";
+		AnimationSystem system(scene);
+		const auto* pose = system.GetPose(rig);
+		REQUIRE(pose);
+		const auto expected = *pose;
+		REQUIRE_FALSE(expected.empty());
+		// Simulate initialization throwing after the cache keys were assigned but before Globals
+		// was populated. The storage belongs to this non-const system; no source data changes.
+		const_cast<std::vector<glm::mat4>&>(*pose).clear();
+		const auto* rebuilt = system.GetPose(rig);
+		REQUIRE(rebuilt);
+		CHECK(NearPose(*rebuilt, expected));
+		// The update path also passes through Ensure before dispatching a playing pose.
+		const_cast<std::vector<glm::mat4>&>(*rebuilt).clear();
+		system.Update(.1f);
+		REQUIRE(system.GetPose(rig));
+		CHECK(system.GetPose(rig)->size() == expected.size());
+		CHECK(system.GetTime(rig) == doctest::Approx(.1f));
+	}
+
 	TEST_CASE("Joint bounds union keeps positive-coordinate vertices and duplicate joint slots")
 	{
 		MeshSource source;
@@ -3706,13 +3731,27 @@ TEST_SUITE("AnimationThroughput")
 		CHECK(glm::all(glm::greaterThanEqual(cached.Max, exact.Max)));
 		CHECK(cached.Min.x > 9.9f);
 		CHECK(cached.Max.x < 10.1f);
-		// A truncated palette drops joint 1; the unnormalized model-space point carries half the weight.
+		// A truncated palette drops joint 1; contain both world.xyz and the rasterized world.xyz / w.
 		const auto dropped = CachedSkinBounds(source, source.Submeshes[0], { glm::mat4(1) });
 		const auto exactDropped = SkinBounds(source, source.Submeshes[0], { glm::mat4(1) });
-		CHECK(exactDropped.Min == vertex.Position * .5f);
-		CHECK(exactDropped.Max == exactDropped.Min);
-		CHECK(glm::all(glm::lessThanEqual(dropped.Min, vertex.Position * .5f)));
-		CHECK(glm::all(glm::greaterThanEqual(dropped.Max, vertex.Position * .5f)));
+		CHECK(glm::all(glm::epsilonEqual(exactDropped.Min, vertex.Position * .5f, 1e-5f)));
+		CHECK(glm::all(glm::epsilonEqual(exactDropped.Max, vertex.Position, 1e-5f)));
+		CHECK(glm::all(glm::lessThanEqual(dropped.Min, exactDropped.Min)));
+		CHECK(glm::all(glm::greaterThanEqual(dropped.Max, exactDropped.Max)));
+		const glm::vec3 translation(1, 2, 3);
+		const std::vector<glm::mat4> translatedPalette{ glm::translate(glm::mat4(1), translation) };
+		for (const float sum : { .25f, .75f, 2.0f })
+		{
+			MeshSource procedural;
+			vertex.Weights = { sum, 0, 0, 0 };
+			procedural.AddSubmesh({ vertex }, {}, 0);
+			const auto cachedProcedural = CachedSkinBounds(procedural, procedural.Submeshes[0], translatedPalette);
+			const auto exactProcedural = SkinBounds(procedural, procedural.Submeshes[0], translatedPalette);
+			CHECK(glm::all(glm::lessThanEqual(cachedProcedural.Min, exactProcedural.Min)));
+			CHECK(glm::all(glm::greaterThanEqual(cachedProcedural.Max, exactProcedural.Max)));
+			CHECK(glm::all(glm::lessThanEqual(exactProcedural.Min, vertex.Position + translation)));
+			CHECK(glm::all(glm::greaterThanEqual(exactProcedural.Max, vertex.Position + translation)));
+		}
 		const auto imported = LoadFixture();
 		REQUIRE_FALSE(imported->Submeshes[0].JointBounds.empty());
 	}

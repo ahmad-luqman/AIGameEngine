@@ -57,7 +57,8 @@ namespace Basalt {
 	struct JointInfluenceBounds
 	{
 		uint32_t Joint = 0; // Skin-palette index, not a node index.
-		AABB Positions;     // Positions multiplied by the vertex's total weight sum.
+		AABB Positions;     // Positions both unscaled and multiplied by the vertex's total weight sum.
+		// Homogeneous w range: vertex weight sums widened to include 1 for the divided point.
 		float MinWeightSum = 0;
 		float MaxWeightSum = 0;
 	};
@@ -71,7 +72,7 @@ namespace Basalt {
 		uint32_t VertexCount = 0;
 		uint32_t MaterialIndex = 0;
 		AABB Bounds;
-		// Derived by AddSubmesh; changing positions/weights requires re-adding geometry and its GPU buffers.
+		// Derived by AddSubmesh; changing positions/joints/weights requires re-adding geometry and its GPU buffers.
 		std::vector<JointInfluenceBounds> JointBounds;
 		// Defensive for procedural meshes: zero-weight vertices collapse (w = 0); include the model origin.
 		bool HasUnweightedVertices = false;

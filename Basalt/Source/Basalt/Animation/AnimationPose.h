@@ -60,7 +60,7 @@ namespace Basalt {
 	bool SkinPalettesFinite(const MeshSource& source, const std::vector<glm::mat4>& globals);
 	// Conservative posed bounds in O(influencing joints), using AddSubmesh caches; exact fallback without influences.
 	AABB CachedSkinBounds(const MeshSource& source, const Submesh& submesh, const std::vector<glm::mat4>& palette);
-	// Exact per-vertex posed bounds: editor framing/selection, uncached geometry and test reference.
+	// Per-vertex bounds of skinned xyz and xyz/w: editor framing/selection, uncached geometry and test reference.
 	AABB SkinBounds(const MeshSource& source, const Submesh& submesh, const std::vector<glm::mat4>& palette);
 
 }
