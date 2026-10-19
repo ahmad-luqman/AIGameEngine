@@ -33,7 +33,7 @@ TEST_CASE("Play statistics preserve absent data separately from measured zero va
 	CHECK(text.find("Game rendering: unavailable") != std::string::npos);
 	CHECK(text.find("Game + host GPU: n/a") != std::string::npos);
 	scene.OnRuntimeStart();
-	statistics = CollectPlayStatistics(scene, { .FrameMilliseconds = 20 });
+	statistics = CollectPlayStatistics(scene, { .FrameMilliseconds = 20.0f });
 	REQUIRE(statistics.PhysicsBodies);
 	CHECK(*statistics.PhysicsBodies == 0);
 	json = PlayStatisticsToJson(statistics);
