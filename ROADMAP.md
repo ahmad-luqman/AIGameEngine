@@ -62,9 +62,6 @@ The features most games need, roughly in order of impact.
   `KHR_materials_clearcoat`, `KHR_materials_transmission` (via the transparent pass),
   `KHR_mesh_quantization`, `KHR_texture_basisu`. Unknown required extensions should fail the import with
   a clear message.
-- **GPU instancing and draw batching — M.** Group draws by mesh and material into instanced draws with a
-  per-instance structured buffer. Needed for scenes with thousands of objects (voxel, puzzle and
-  strategy games).
 - **Reflection probes and SSR — L.** Local box-projected cubemap probes captured in the editor, then
   screen-space reflections for contact detail.
 - **Decals and text in 3D — L each.**
@@ -95,9 +92,6 @@ below extend character movement, in order of impact.
 - **Property animation — M.** Keyframe tracks for any component field through the `ComponentRegistry`
   JSON path (doors, platforms, light flicker, UI transitions, cutscene cameras) with the same playback
   controls as skeletal clips, so non-character motion does not need per-frame Lua.
-- **Crowd performance — M.** Replace per-vertex CPU bounds with cached joint influence bounds or GPU
-  culling, update distant animators at a reduced rate (animation LOD), and evaluate poses on the job
-  system (see Engine internals).
 - **Later: motion matching and procedural creatures — L each.** Motion matching (search a mocap database
   every few frames for the pose and future trajectory that best match the desired movement); procedural
   leg stepping for multi-legged creatures built on IK.

@@ -37,7 +37,7 @@ namespace Basalt {
 	};
 
 	// Per-entity playback and poses for a playing/simulating scene. Asset data stays shared and immutable.
-	// Each Update advances every Animator, composes its base playback and then its layers, and collects the events
+	// Each Update advances every Animator, samples due poses (optionally distance-throttled), and collects the events
 	// playback crossed (TakeEvents). The scene runs LateUpdate (inverse kinematics, spring bones, then attachments) after
 	// physics and OnLateUpdate; standalone callers get it at the end of Update by default.
 	class AnimationSystem
@@ -282,6 +282,7 @@ namespace Basalt {
 			std::vector<OverlayEntry> SpringOverlay;
 			// The overlays did not compose on a finite pose and were dropped; warned once until an overlay composes again.
 			bool OverlayDropped = false;
+			uint32_t LODFrame = 0;
 			bool Playing = false;
 			bool Rest = false;
 			bool InvalidPose = false;
@@ -524,6 +525,8 @@ namespace Basalt {
 		// The last failed script call's problem per entity and operation and layer or chain name (see ReportCallProblem).
 		std::map<std::pair<UUID, std::string>, std::string> m_LayerProblems;
 		std::map<std::pair<UUID, std::string>, std::string> m_IKCallProblems;
+		// Disjoint playback outputs, collected after all scene/cache/control work and joined before LateUpdate.
+		std::vector<std::pair<Playback*, bool>> m_PoseJobs;
 		// Scratch storage reused every update.
 		std::vector<const AnimationEvent*> m_Markers;
 		std::vector<float> m_Weights;

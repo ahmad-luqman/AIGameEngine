@@ -38,16 +38,17 @@ TEST_CASE("The benchmark rejects a reduced rendered workload even when mannequin
 {
 	using namespace BasaltBenchmark;
 	SceneRendererStatistics full;
-	full.DrawCalls = Meshes + Animators;
+	full.DrawCalls = 2;
+	full.Instances = Meshes + Animators;
 	full.Triangles = static_cast<uint64_t>(Meshes) * CubeTriangles + static_cast<uint64_t>(Animators) * MannequinTriangles;
 	full.SkinMatrices = Animators * MannequinJoints;
 	full.Lights = Lights + 1;
 	CHECK(ValidateRenderedWorkload(full).empty());
 	auto missingCubes = full;
-	missingCubes.DrawCalls = Animators;
+	missingCubes.Instances = Animators;
 	missingCubes.Triangles = static_cast<uint64_t>(Animators) * MannequinTriangles;
 	CHECK_FALSE(ValidateRenderedWorkload(missingCubes).empty());
-	for (auto member : { &SceneRendererStatistics::DrawCalls, &SceneRendererStatistics::SkinMatrices, &SceneRendererStatistics::Lights })
+	for (auto member : { &SceneRendererStatistics::Instances, &SceneRendererStatistics::DrawCalls, &SceneRendererStatistics::SkinMatrices, &SceneRendererStatistics::Lights })
 	{
 		auto reduced = full;
 		--(reduced.*member);

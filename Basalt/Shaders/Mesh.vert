@@ -13,14 +13,14 @@ layout(location = 0) out vec3 v_WorldPosition;
 layout(location = 1) out vec3 v_Normal;
 layout(location = 2) out vec4 v_Tangent;
 layout(location = 3) out vec2 v_TexCoord;
-layout(location = 4) flat out uint v_MaterialIndex;
+layout(location = 4) flat out uvec2 v_InstanceIndices;
 
 // The depth prepass and the lighting pass must produce bit-identical depth.
 invariant gl_Position;
 
 void main()
 {
-	DrawData draw = u_Draws.Draws[u_Push.DrawIndex];
+	DrawData draw = u_Draws.Draws[u_Push.DrawIndex + gl_InstanceIndex];
 	mat4 skin = SkinMatrix(draw, a_Joints, a_Weights);
 	vec4 world = draw.Model * skin * vec4(a_Position, 1.0);
 	v_WorldPosition = world.xyz;
@@ -38,6 +38,6 @@ void main()
 	tangent = StableNormalize(tangent, cross(v_Normal, abs(v_Normal.x) < 0.9 ? vec3(1,0,0) : vec3(0,1,0)));
 	v_Tangent = vec4(tangent, a_Tangent.w * (orientation < 0.0 ? -1.0 : 1.0));
 	v_TexCoord = a_TexCoord;
-	v_MaterialIndex = draw.Indices.x;
+	v_InstanceIndices = draw.Indices.xy;
 	gl_Position = u_View.ViewProjection * world;
 }

@@ -1114,6 +1114,15 @@ clip in Play, CrossFade and Blend. Crossfade duration is scene time, independent
 or removing/re-adding Animator resets playback according to `PlayOnStart`. With PlayOnStart false,
 the selected clip is held at time 0 until played. Edit mode shows the authored rest pose.
 
+`LODDistance` (default 0, disabled) and `LODInterval` (1–60 updates, default 1) opt into
+pose LOD beyond that world-space distance from the primary scene camera. Without a camera,
+poses evaluate every update. Distant rigs retain their last sampled pose between evaluations;
+clocks, transitions, events, layer clocks and root motion still advance every update. IK and spring
+solvers continue at full rate on that pose; attachments follow the displayed joints. Returning near
+the camera or a zero-time update evaluates immediately. Explicit Play, Seek and blend operations
+still update the pose immediately. Crowd pose jobs join before physics and late animation passes;
+asset resolution, graph control and event collection remain on the main thread.
+
 Playback also runs in Simulate, respects scene pause/step, and advances after `OnUpdate` and before physics;
 attachments update after `OnLateUpdate`.
 State belongs to the play scene and is not serialized or included in `scene.hash`; copies start fresh.

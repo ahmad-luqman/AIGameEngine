@@ -76,11 +76,13 @@ namespace BasaltBenchmark {
 		return statistics.IsReady() && statistics.ConsecutiveDrops == 0 && std::isfinite(statistics.Timings.FrameMilliseconds) && statistics.Timings.FrameMilliseconds > 0;
 	}
 
-	// This pre-instancing workload fits entirely in the camera. Reduced rendering must fail, not look faster.
+	// This fixed workload fits entirely in the camera. Reduced rendering must fail, not look faster.
 	inline std::string ValidateRenderedWorkload(const Basalt::SceneRendererStatistics& stats)
 	{
-		if (stats.DrawCalls != Meshes + Animators)
-			return fmt::format("draw calls: expected {}, got {}", Meshes + Animators, stats.DrawCalls);
+		if (stats.Instances != Meshes + Animators)
+			return fmt::format("mesh instances: expected {}, got {}", Meshes + Animators, stats.Instances);
+		if (stats.DrawCalls != 2)
+			return fmt::format("batched draw calls: expected 2, got {}", stats.DrawCalls);
 		constexpr uint64_t triangles = static_cast<uint64_t>(Meshes) * CubeTriangles + static_cast<uint64_t>(Animators) * MannequinTriangles;
 		if (stats.Triangles != triangles)
 			return fmt::format("color triangles: expected {}, got {}", triangles, stats.Triangles);
@@ -92,7 +94,7 @@ namespace BasaltBenchmark {
 		return {};
 	}
 
-	// Fixed workload for the pre-instancing baseline: individual cube draws, overlapping lights and awake bodies.
+	// The same workload as the pre-instancing baseline: cube instances, overlapping lights and awake bodies.
 	inline void BuildScene(Basalt::Scene& scene)
 	{
 		using namespace Basalt;

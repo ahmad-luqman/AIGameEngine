@@ -563,6 +563,8 @@ namespace Basalt {
 			r.ListField("Events", c.Events, AnimatorComponent::MaxEvents);
 			r.ListField("BlendSpaces", c.BlendSpaces, AnimatorComponent::MaxBlendSpaces);
 			r.ListField("Layers", c.Layers, AnimatorComponent::MaxLayers);
+			r.Field("LODDistance", c.LODDistance);
+			r.Field("LODInterval", c.LODInterval);
 		}
 
 		void Fields(FieldReader& r, BoneAttachmentComponent& c)
@@ -1011,6 +1013,8 @@ namespace Basalt {
 				{ "Events", ListToJson(c.Events) },
 				{ "BlendSpaces", ListToJson(c.BlendSpaces) },
 				{ "Layers", ListToJson(c.Layers) },
+				{ "LODDistance", c.LODDistance },
+				{ "LODInterval", c.LODInterval },
 			};
 		}
 
@@ -1474,6 +1478,8 @@ namespace Basalt {
 
 		std::string Validate(const AnimatorComponent& c)
 		{
+			if (!std::isfinite(c.LODDistance) || c.LODDistance < 0 || c.LODInterval < 1 || c.LODInterval > 60)
+				return "LODDistance must be finite and nonnegative; LODInterval must be between 1 and 60";
 			if (!std::isfinite(c.Speed) || c.Speed < 0.0f || c.Speed > MaxAnimatorSpeed)
 				return "Speed must be finite and between 0 and 100";
 			// C++ code can grow the lists past what the reader accepts.

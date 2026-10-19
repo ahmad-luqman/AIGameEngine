@@ -11,6 +11,7 @@
 #include "Basalt/Particles/ParticleSystem.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/DebugLineRenderer.h"
+#include "Basalt/Renderer/DrawBatch.h"
 #include "Basalt/Renderer/Fsr1Upscaler.h"
 #include "Basalt/Renderer/LightClusters.h"
 #include "Basalt/Renderer/LocalShadows.h"
@@ -298,6 +299,7 @@ namespace Basalt {
 			// Valid only when visible to the camera.
 			AABB WorldBounds;
 			AABB ShadowBounds;
+			DrawBatchKey Key() const { return { Mesh, MaterialSet, BaseIndex, BaseVertex, IndexCount, DoubleSided, AlphaTested }; }
 		};
 
 		// One emitter's batch with the binding set of its texture (a strong handle, so the draw never depends
@@ -1674,7 +1676,7 @@ namespace Basalt {
 			for (uint32_t submeshIndex : source->Meshes[meshIndex].Submeshes)
 			{
 				const Submesh& submesh = source->Submeshes[submeshIndex];
-				const AABB bounds = palette.empty() ? submesh.Bounds : SkinBounds(*source, submesh, palette);
+				const AABB bounds = palette.empty() ? submesh.Bounds : CachedSkinBounds(*source, submesh, palette);
 				const AABB worldBounds = bounds.Transformed(model);
 				const bool visible = frustum.Intersects(worldBounds);
 				auto intersectsAny = [&](const std::vector<Frustum>& frusta) {
@@ -1781,6 +1783,25 @@ namespace Basalt {
 			});
 		}
 		m_Statistics.Materials = static_cast<uint32_t>(materials.size());
+		if (m_InstancingEnabled)
+		{
+			// Preserve transparent submission order (including equal-depth ties), sorting only opaque draws.
+			std::stable_sort(items.begin(), items.end(), [](const DrawItem& a, const DrawItem& b) {
+				if (a.Blend != b.Blend)
+					return !a.Blend;
+				return !a.Blend && a.Key() < b.Key();
+			});
+			// Palettes keep their original offsets. Append contiguous per-instance records after them;
+			// every pass, including picking and shadows, reads the same instance data.
+			std::vector<GpuDrawData> instances;
+			instances.reserve(items.size());
+			for (DrawItem& item : items)
+			{
+				instances.push_back(draws[item.DrawIndex]);
+				item.DrawIndex = static_cast<uint32_t>(draws.size() + instances.size() - 1);
+			}
+			draws.insert(draws.end(), instances.begin(), instances.end());
+		}
 
 		// --- Particles ----------------------------------------------------------------------------
 		// Only a running scene has a particle system. Batches outside the view frustum are not drawn.
@@ -1923,7 +1944,7 @@ namespace Basalt {
 		// the render size; shadow maps use their own.
 		const nvrhi::Viewport renderViewport(static_cast<float>(m_RenderWidth), static_cast<float>(m_RenderHeight));
 		const nvrhi::Viewport shadowViewport(static_cast<float>(ShadowMapSize), static_cast<float>(ShadowMapSize));
-		auto drawItem = [&](const DrawItem& item, nvrhi::IGraphicsPipeline* pipeline, nvrhi::IFramebuffer* framebuffer, const nvrhi::Viewport& viewport, uint32_t shadowViewIndex, bool withMaterial, nvrhi::IBindingSet* frameSet = nullptr) {
+		auto drawItem = [&](const DrawItem& item, nvrhi::IGraphicsPipeline* pipeline, nvrhi::IFramebuffer* framebuffer, const nvrhi::Viewport& viewport, uint32_t shadowViewIndex, bool withMaterial, nvrhi::IBindingSet* frameSet = nullptr, uint32_t instanceCount = 1) {
 			nvrhi::GraphicsState state;
 			state.pipeline = pipeline;
 			state.framebuffer = framebuffer;
@@ -1938,9 +1959,38 @@ namespace Basalt {
 			commandList->setPushConstants(&push, sizeof(push));
 			nvrhi::DrawArguments args;
 			args.vertexCount = item.IndexCount;
+			args.instanceCount = instanceCount;
 			args.startIndexLocation = item.BaseIndex;
 			args.startVertexLocation = item.BaseVertex;
 			commandList->drawIndexed(args);
+		};
+
+		// Filtering is per pass/frustum. A skipped record ends a batch, so off-camera and shadow-only
+		// geometry cannot be pulled into another pass through an instance range.
+		auto drawBatches = [&](auto accepts, auto pipeline, nvrhi::IFramebuffer* framebuffer, const nvrhi::Viewport& viewport, uint32_t shadowIndex, bool shadow) {
+			for (size_t i = 0; i < items.size();)
+			{
+				const DrawItem& first = items[i++];
+				if (!accepts(first))
+					continue;
+				uint32_t count = 1;
+				while (m_InstancingEnabled && i < items.size() && accepts(items[i]) &&
+					   CanInstanceDraw(first.Key(), first.DrawIndex, count, items[i].Key(), items[i].DrawIndex))
+				{
+					++count;
+					++i;
+				}
+				drawItem(first, pipeline(first), framebuffer, viewport, shadowIndex, !shadow || first.AlphaTested,
+						 shadow ? impl.ShadowFrameSet.Get() : nullptr, count);
+				if (shadow)
+					++m_Statistics.ShadowDrawCalls;
+				else if (framebuffer == impl.LightingFramebuffer.Get())
+				{
+					++m_Statistics.DrawCalls;
+					m_Statistics.Instances += count;
+					m_Statistics.Triangles += static_cast<uint64_t>(first.IndexCount / 3) * count;
+				}
+			}
 		};
 
 		auto fullscreen = [&](nvrhi::IGraphicsPipeline* pipeline, nvrhi::IFramebuffer* framebuffer, nvrhi::IBindingSet* set, const nvrhi::Viewport& viewport, const void* push, size_t pushSize) {
@@ -1953,13 +2003,8 @@ namespace Basalt {
 			const GpuPassScope pass(profiler, commandList, PassShadows);
 			auto drawShadowCasters = [&](const Frustum& shadowFrustum, nvrhi::IGraphicsPipeline* opaque,
 										 nvrhi::IGraphicsPipeline* masked, nvrhi::IFramebuffer* framebuffer, const nvrhi::Viewport& viewport, uint32_t index) {
-				for (const DrawItem& item : items)
-				{
-					if (!item.CastShadows || !shadowFrustum.Intersects(item.ShadowBounds))
-						continue;
-					drawItem(item, item.AlphaTested ? masked : opaque, framebuffer, viewport, index, item.AlphaTested, impl.ShadowFrameSet);
-					m_Statistics.ShadowDrawCalls++;
-				}
+				drawBatches([&](const DrawItem& item) { return item.CastShadows && shadowFrustum.Intersects(item.ShadowBounds); },
+							[&](const DrawItem& item) { return item.AlphaTested ? masked : opaque; }, framebuffer, viewport, index, true);
 			};
 			commandList->clearDepthStencilTexture(impl.ShadowMap, nvrhi::AllSubresources, true, 1.0f, false, 0);
 			if (shadowsActive)
@@ -1985,12 +2030,8 @@ namespace Basalt {
 				commandList->clearTextureUInt(impl.EntityIds, nvrhi::AllSubresources, 0);
 			commandList->clearDepthStencilTexture(m_DepthTexture, nvrhi::AllSubresources, true, 1.0f, false, 0);
 			commandList->clearTextureFloat(impl.NormalTexture, nvrhi::AllSubresources, nvrhi::Color(0.0f, 0.0f, 1.0f, 0.0f));
-			for (const DrawItem& item : items)
-			{
-				if (item.Blend || !item.WorldBounds.IsValid())
-					continue;
-				drawItem(item, impl.PrepassPipeline[item.DoubleSided ? 1 : 0], impl.PrepassFramebuffer, renderViewport, 0, true);
-			}
+			drawBatches([](const DrawItem& item) { return !item.Blend && item.WorldBounds.IsValid(); },
+						[&](const DrawItem& item) { return impl.PrepassPipeline[item.DoubleSided ? 1 : 0].Get(); }, impl.PrepassFramebuffer, renderViewport, 0, false);
 		}
 
 		// Transparent selection gets its own nearest-surface depth, leaving lighting/SSAO depth intact.
@@ -2046,14 +2087,8 @@ namespace Basalt {
 		{
 			const GpuPassScope pass(profiler, commandList, PassLighting);
 			commandList->clearTextureFloat(impl.HdrTexture, nvrhi::AllSubresources, nvrhi::Color(0.0f, 0.0f, 0.0f, 1.0f));
-			for (const DrawItem& item : items)
-			{
-				if (item.Blend || !item.WorldBounds.IsValid())
-					continue;
-				drawItem(item, impl.OpaquePipeline[item.DoubleSided ? 1 : 0], impl.LightingFramebuffer, renderViewport, 0, true);
-				m_Statistics.DrawCalls++;
-				m_Statistics.Triangles += item.IndexCount / 3;
-			}
+			drawBatches([](const DrawItem& item) { return !item.Blend && item.WorldBounds.IsValid(); },
+						[&](const DrawItem& item) { return impl.OpaquePipeline[item.DoubleSided ? 1 : 0].Get(); }, impl.LightingFramebuffer, renderViewport, 0, false);
 
 			if (!skyLight || skyLight->ShowBackground)
 			{
@@ -2094,6 +2129,7 @@ namespace Basalt {
 				[&](const DrawItem* item) {
 					drawItem(*item, impl.TransparentPipeline[item->DoubleSided ? 1 : 0], impl.LightingFramebuffer, renderViewport, 0, true);
 					m_Statistics.Triangles += item->IndexCount / 3;
+					++m_Statistics.Instances;
 				},
 				[&](const ParticleDraw* particleDraw) { drawParticles(*particleDraw); },
 			};

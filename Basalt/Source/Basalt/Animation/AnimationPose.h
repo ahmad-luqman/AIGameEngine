@@ -58,7 +58,9 @@ namespace Basalt {
 	std::vector<glm::mat4> BuildSkinPalette(const MeshSkin& skin, const std::vector<glm::mat4>& globals);
 	// Whether every skin's palette is finite for these globals (the shader cannot draw anything else).
 	bool SkinPalettesFinite(const MeshSource& source, const std::vector<glm::mat4>& globals);
-	// Exact posed bounds used for camera and shadow culling; never uses stale bind-pose bounds.
+	// Conservative posed bounds in O(influencing joints), using immutable import-time caches.
+	AABB CachedSkinBounds(const MeshSource& source, const Submesh& submesh, const std::vector<glm::mat4>& palette);
+	// Exact posed bounds for reference geometry and verification.
 	AABB SkinBounds(const MeshSource& source, const Submesh& submesh, const std::vector<glm::mat4>& palette);
 
 }

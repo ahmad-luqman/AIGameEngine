@@ -32,6 +32,7 @@ namespace Basalt {
 	struct SceneRendererStatistics
 	{
 		uint32_t DrawCalls = 0;
+		uint32_t Instances = 0; // Color-pass mesh instances, independent of batching.
 		uint32_t ShadowDrawCalls = 0;
 		// Triangles submitted in the color pass, excluding depth, shadows and fullscreen passes.
 		uint64_t Triangles = 0;
@@ -147,6 +148,9 @@ namespace Basalt {
 		// Starts the next auto-exposure frame at its metered target (deterministic captures).
 		void ResetExposure();
 
+		// Reference path for validation and throughput comparisons. Transparent draws remain individual.
+		void SetInstancingEnabled(bool enabled) { m_InstancingEnabled = enabled; }
+
 		// Records and submits all passes for one frame.
 		void Render(Scene& scene, const RenderCamera& camera, float deltaTime);
 
@@ -197,6 +201,7 @@ namespace Basalt {
 		uint32_t m_Height = 0;
 		float m_RenderScale = 1.0f;
 		bool m_Picking = false;
+		bool m_InstancingEnabled = true;
 		bool m_AsyncLoading = false;
 		Ref<MeshSource> m_PlaceholderMesh;
 		std::vector<UUID> m_Selection;

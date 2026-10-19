@@ -224,6 +224,10 @@ namespace Basalt {
 		bool RootMotion = false;
 		std::string RootJoint;
 		std::vector<AnimationLayer> Layers;
+		// Opt-in pose LOD: beyond this distance from the primary camera evaluate every LODInterval
+		// updates. Zero distance disables LOD. Clocks, events and root motion still advance each update.
+		float LODDistance = 0.0f;
+		uint32_t LODInterval = 1;
 	};
 
 	// Keeps the entity at a joint (any node) of an Animator's model while the scene plays or simulates: its
