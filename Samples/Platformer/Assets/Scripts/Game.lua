@@ -14,12 +14,14 @@ local function RequireEntity(name, component)
 	return entity
 end
 
--- The entity's script, which must have the function `name` (all instances exist before any OnCreate runs).
+-- Checks that the entity's script has the function `name` (all instances exist before any OnCreate runs) and returns
+-- the script.
 local function RequireScriptFunction(entity, name)
 	local script = entity:GetScript()
 	if not script or type(script[name]) ~= "function" then
-		error("Game: '" .. entity.Name .. "' needs a script with " .. name, 2)
+		error("Game: '" .. entity.Name .. "' has no script with " .. name .. ", or its script failed to start (see the error above)", 2)
 	end
+	return script
 end
 
 function Game:OnCreate()
@@ -29,7 +31,7 @@ function Game:OnCreate()
 	RequireScriptFunction(self.Camera, "Snap")
 	self.CoinText = RequireEntity("CoinText", "UIText")
 	self.MessageText = RequireEntity("MessageText", "UIText")
-	-- Coin1, Coin2, ...
+	-- Coin1, Coin2, ... up to the first missing number.
 	self.CoinCount = 0
 	while Scene.FindEntityByName("Coin" .. (self.CoinCount + 1)) do self.CoinCount = self.CoinCount + 1 end
 	if self.CoinCount == 0 then Log.Warn("Platformer: the scene has no Coin1") end
@@ -47,8 +49,11 @@ end
 
 function Game:OnCoin(coin)
 	self.Coins = self.Coins + 1
-	-- Coins are counted by name (Coin1, Coin2, ...); one outside that sequence was missed.
-	if self.Coins > self.CoinCount then Log.Warn("Platformer: coin '" .. coin.Name .. "' is not one of Coin1..Coin" .. self.CoinCount) end
+	-- The HUD counts Coin1..CoinN; a coin named outside that sequence was left out of the total.
+	local number = tonumber(coin.Name:match("^Coin(%d+)$"))
+	if not number or number > self.CoinCount then
+		Log.Warn("Platformer: coin '" .. coin.Name .. "' is not one of Coin1..Coin" .. self.CoinCount .. ", so the total leaves it out")
+	end
 	self:UpdateHud()
 end
 
@@ -61,7 +66,7 @@ function Game:OnZone(kind, zone, entered)
 	end
 	if not entered then return end
 	if kind == "Checkpoint" then
-		-- The hero comes back standing on the bottom of the checkpoint's box.
+		-- The hero comes back standing on the bottom of the checkpoint's box (an unrotated box without Offset).
 		local box = zone:GetComponent("BoxCollider")
 		if not box then error("Game: checkpoint '" .. zone.Name .. "' needs a BoxCollider") end
 		local position = zone.WorldPosition
@@ -69,8 +74,8 @@ function Game:OnZone(kind, zone, entered)
 		self.Respawn = Vec3(position.x, position.y - box.HalfExtents[2] * zone.Scale.y, position.z)
 	elseif kind == "Kill" then
 		self.Deaths = self.Deaths + 1
-		self.Hero:GetScript():Respawn(self.Respawn)
-		self.Camera:GetScript():Snap()
+		RequireScriptFunction(self.Hero, "Respawn"):Respawn(self.Respawn)
+		RequireScriptFunction(self.Camera, "Snap"):Snap()
 	elseif kind == "Goal" and not self.Won then
 		self.Won = true
 		self.MessageText:SetComponent("UIText", { Text = string.format("COURSE CLEAR!  %d / %d COINS", self.Coins, self.CoinCount) })
