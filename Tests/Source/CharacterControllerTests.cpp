@@ -326,12 +326,16 @@ TEST_SUITE("Physics")
 
 	TEST_CASE("JumpGrace lets an upward Move jump once just after walking off a ledge")
 	{
-		for (const float grace : { 0.0f, 0.25f })
+		// Walks the character off a 2 m high ledge (edge at x = 2) and, `delay` seconds after it left the ground, asks
+		// to go up for a few steps; returns its vertical speed then and the height it gained or lost since asking.
+		struct Result
 		{
-			CAPTURE(grace);
+			float Rising;
+			float Climb;
+		};
+		const auto walkOff = [](float grace, float delay, const std::function<void(Scene&, Entity)>& inTheAir = {}) {
 			Scene scene;
 			CreateGround(scene);
-			// A 2 m high ledge whose edge is at x = 2.
 			CreateStaticBox(scene, "Ledge", { 0.0f, 1.0f, 0.0f }, { 2.0f, 1.0f, 5.0f });
 			Entity character = CreateCharacter(scene, { 0.0f, 2.0f + StandingHeight, 0.0f });
 			character.GetComponent<CharacterControllerComponent>().JumpGrace = grace;
@@ -343,8 +347,9 @@ TEST_SUITE("Physics")
 			for (int frame = 0; frame < 120 && physics.IsCharacterGrounded(character); frame++)
 				scene.OnUpdate(Step);
 			REQUIRE_FALSE(physics.IsCharacterGrounded(character));
-			// A tenth of a second after walking off, an upward request jumps only with a grace that long.
-			Simulate(scene, 0.1f);
+			Simulate(scene, delay);
+			if (inTheAir)
+				inTheAir(scene, character);
 			const float before = Position(character).y;
 			physics.MoveCharacter(character, { 4.0f, 5.0f, 0.0f });
 			Simulate(scene, 2.0f * Step);
@@ -354,18 +359,84 @@ TEST_SUITE("Physics")
 			CHECK(physics.GetLinearVelocity(character).y < rising);
 			physics.MoveCharacter(character, { 4.0f, 0.0f, 0.0f });
 			Simulate(scene, 0.2f);
-			if (grace > 0)
+			const Result result{ rising, Position(character).y - before };
+			scene.OnSimulationStop();
+			return result;
+		};
+		// A tenth of a second after walking off, an upward request jumps only with a grace that long.
+		for (const float grace : { 0.0f, 0.05f, 0.25f })
+		{
+			CAPTURE(grace);
+			const Result result = walkOff(grace, 0.1f);
+			if (grace > 0.1f)
 			{
-				CHECK(rising > 4.0f);
-				CHECK(Position(character).y > before + 0.4f);
+				CHECK(result.Rising > 4.0f);
+				CHECK(result.Climb > 0.4f);
 			}
 			else
 			{
-				CHECK(rising < 0.0f);
-				CHECK(Position(character).y < before);
+				CHECK(result.Rising < 0.0f);
+				CHECK(result.Climb < 0.0f);
 			}
-			scene.OnSimulationStop();
 		}
+		// Rebuilding the character in mid-air (a collider change) after its grace jump keeps the jump spent: asking to go
+		// up again (within a long grace) does not jump a second time.
+		const Result rebuilt = walkOff(1.0f, 0.1f, [](Scene& scene, Entity character) {
+			PhysicsWorld& physics = *scene.GetPhysicsWorld();
+			physics.MoveCharacter(character, { 4.0f, 5.0f, 0.0f });
+			Simulate(scene, 2.0f * Step);
+			REQUIRE(physics.GetLinearVelocity(character).y > 4.0f);
+			physics.MoveCharacter(character, { 4.0f, 0.0f, 0.0f });
+			Simulate(scene, 0.15f);
+			auto capsule = character.GetComponent<CapsuleColliderComponent>();
+			capsule.Radius *= 0.9f;
+			character.AddOrReplaceComponent<CapsuleColliderComponent>(capsule);
+		});
+		CHECK(rebuilt.Rising < 4.0f);
+	}
+
+	TEST_CASE("JumpGrace gives one jump per time off the ground and none to a character that never stood")
+	{
+		Scene scene;
+		CreateGround(scene);
+		CreateStaticBox(scene, "Ledge", { 0.0f, 1.0f, 0.0f }, { 2.0f, 1.0f, 5.0f });
+		// Starts in the air above the ground beside the ledge.
+		Entity character = CreateCharacter(scene, { 6.0f, 6.0f, 0.0f });
+		character.GetComponent<CharacterControllerComponent>().JumpGrace = 0.25f;
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		// It never stood, so asking to go up in the air does nothing.
+		physics.MoveCharacter(character, { 0.0f, 5.0f, 0.0f });
+		Simulate(scene, 3.0f * Step);
+		CHECK(physics.GetLinearVelocity(character).y < 0.0f);
+		physics.MoveCharacter(character, { 0.0f, 0.0f, 0.0f });
+		Simulate(scene, 2.0f);
+		REQUIRE(physics.IsCharacterGrounded(character));
+
+		// A jump held from the ground is not boosted again by the grace once airborne: it rises under gravity alone.
+		physics.MoveCharacter(character, { 0.0f, 5.0f, 0.0f });
+		Simulate(scene, 2.0f * Step);
+		const float takeOff = physics.GetLinearVelocity(character).y;
+		REQUIRE(takeOff > 4.0f);
+		Simulate(scene, 0.2f);
+		CHECK(physics.GetLinearVelocity(character).y == doctest::Approx(takeOff - 9.81f * 0.2f).epsilon(0.05));
+		physics.MoveCharacter(character, { 0.0f, 0.0f, 0.0f });
+		Simulate(scene, 1.5f);
+		REQUIRE(physics.IsCharacterGrounded(character));
+
+		// A request too small to lift off neither jumps nor spends the grace: walking off afterwards still allows one.
+		character.GetTransform().Translation = { 0.0f, 2.0f + StandingHeight, 0.0f };
+		physics.MoveCharacter(character, { 0.0f, 1e-4f, 0.0f });
+		Simulate(scene, 0.25f);
+		REQUIRE(physics.IsCharacterGrounded(character));
+		physics.MoveCharacter(character, { 4.0f, 1e-4f, 0.0f });
+		for (int frame = 0; frame < 120 && physics.IsCharacterGrounded(character); frame++)
+			scene.OnUpdate(Step);
+		Simulate(scene, 0.05f);
+		physics.MoveCharacter(character, { 4.0f, 5.0f, 0.0f });
+		Simulate(scene, 2.0f * Step);
+		CHECK(physics.GetLinearVelocity(character).y > 4.0f);
+		scene.OnSimulationStop();
 	}
 
 	TEST_CASE("Without gravity the Move velocity applies on every axis")

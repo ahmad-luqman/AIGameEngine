@@ -556,23 +556,37 @@ namespace Basalt {
 				return json{ { "components", types } };
 			});
 
-			Add(registry, "log.get", "Returns engine log messages logged after index 'since'. With assertNoWarnings the command fails when one of them is a warning or worse, naming them.", Schema::Object({ { "since", Schema::Nullable(Schema::Integer("integer, cursor from a previous call (default 0)", 0, INT64_MAX)) }, { "errorsOnly", Schema::Nullable(Schema::Boolean("bool")) }, { "assertNoWarnings", Schema::Nullable(Schema::Boolean("bool: fail the command when a message since 'since' is a warning or worse")) } }), [](AutomationSession&, const json& params) {
+			Add(registry, "log.get", "Returns engine log messages logged after index 'since'. With assertNoWarnings the command fails when any message since 'since' (whatever errorsOnly says) is a warning or worse, naming them, or when some were already dropped from the history (it keeps the last 2048 messages).", Schema::Object({ { "since", Schema::Nullable(Schema::Integer("integer, cursor from a previous call (default 0)", 0, INT64_MAX)) }, { "errorsOnly", Schema::Nullable(Schema::Boolean("bool")) }, { "assertNoWarnings", Schema::Nullable(Schema::Boolean("bool: fail the command when a message since 'since' is a warning or worse")) } }), [](AutomationSession&, const json& params) {
 				const uint64_t since = static_cast<uint64_t>(OptionalInteger(params, "since", 0, 0, INT64_MAX));
 				const bool errorsOnly = OptionalBool(params, "errorsOnly", false);
 				const bool assertNoWarnings = OptionalBool(params, "assertNoWarnings", false);
 				uint64_t next = 0;
+				const auto history = Log::GetHistory().GetMessagesSince(since, next);
 				json messages = json::array();
 				std::vector<std::string> warnings;
-				for (const LogMessage& message : Log::GetHistory().GetMessagesSince(since, next))
+				for (const LogMessage& message : history)
 				{
-					if (message.Level >= LogLevel::Warn)
+					if (assertNoWarnings && message.Level >= LogLevel::Warn)
 						warnings.push_back(fmt::format("[{}] {}", LogLevelName(message.Level), message.Text));
 					if (errorsOnly && message.Level < LogLevel::Error)
 						continue;
 					messages.push_back({ { "level", LogLevelName(message.Level) }, { "logger", message.LoggerName }, { "text", message.Text } });
 				}
-				if (assertNoWarnings && !warnings.empty())
-					throw CommandError(fmt::format("{} warning(s) or worse logged: {}", warnings.size(), fmt::join(warnings, "; ")));
+				if (assertNoWarnings)
+				{
+					// The cursor stays usable after a failed assertion.
+					const uint64_t wanted = next > since ? next - since : 0;
+					if (const uint64_t dropped = wanted - history.size(); dropped > 0)
+						throw CommandError(fmt::format("{} message(s) since {} were dropped from the log history, so they cannot be checked (next {})", dropped, since, next));
+					if (!warnings.empty())
+					{
+						constexpr size_t Shown = 20;
+						const size_t total = warnings.size();
+						if (total > Shown)
+							warnings.resize(Shown);
+						throw CommandError(fmt::format("{} warning(s) or worse logged: {}{} (next {})", total, fmt::join(warnings, "; "), total > Shown ? fmt::format("; and {} more", total - Shown) : std::string(), next));
+					}
+				}
 				return json{ { "messages", messages }, { "next", next } };
 			});
 		}
@@ -921,20 +935,21 @@ namespace Basalt {
 
 			Add(registry, "scene.info", "Summary of the open scene: name, path, entity count, state, unsaved changes, undefined physics layers, animation authoring warnings and the physics step (fixedTimestep: the step in use; fixedTimestepOverride: the scene's own step, or null). With assertNoAnimationWarnings the command fails when there are animation authoring warnings, naming them.", Schema::Object({ { "assertNoAnimationWarnings", Schema::Nullable(Schema::Boolean("bool: fail the command when an entity has animation authoring warnings")) } }), [](AutomationSession& session, const json& params) {
 				Scene& scene = RequireScene(session);
+				const bool assertClean = OptionalBool(params, "assertNoAnimationWarnings", false);
 				json animationWarnings = json::array();
+				std::vector<std::string> named;
 				for (auto handle : scene.GetRegistry().view<IDComponent>())
 				{
 					Entity entity(handle, &scene);
 					for (const auto& warning : GetAnimationWarnings(entity))
+					{
 						animationWarnings.push_back({ { "entity", static_cast<uint64_t>(entity.GetUUID()) }, { "name", entity.GetName() }, { "message", warning } });
+						if (assertClean)
+							named.push_back(entity.GetName() + ": " + warning);
+					}
 				}
-				if (OptionalBool(params, "assertNoAnimationWarnings", false) && !animationWarnings.empty())
-				{
-					std::vector<std::string> named;
-					for (const json& warning : animationWarnings)
-						named.push_back(warning["name"].get<std::string>() + ": " + warning["message"].get<std::string>());
+				if (!named.empty())
 					throw CommandError(fmt::format("{} animation warning(s): {}", named.size(), fmt::join(named, "; ")));
-				}
 				const PhysicsSettings& physics = scene.GetPhysicsSettings();
 				return json{
 					{ "name", scene.GetName() },

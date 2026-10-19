@@ -53,7 +53,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
 - **Layers, IK and spring bones.** A pose is built in stages: the base playback (`Playback::Local`, which fades, snapshots and root
   stripping use), then `Animator.Layers` in order (`Pose`; each layer's clip, mask and reference pose are resolved again
   only when its clip, blend, reference or mask changes, and the root-motion exclusion when the root-motion joint
-  does), then the IK overlay, composed into `Globals`. `InverseKinematicsComponent` chains solve in
+  does), then the IK and spring bone overlays, composed into `Globals`. `InverseKinematicsComponent` chains solve in
   `AnimationSystem::LateUpdate` (after physics and OnLateUpdate, before attachments) from `Pose`, never from the last
   solution; the solved joints' local transforms are kept as an overlay so a pose evaluated again that frame (Play in a
   callback) keeps the IK. Foot rays use `PhysicsWorld::RaycastAll` and skip the entity, its descendants and its

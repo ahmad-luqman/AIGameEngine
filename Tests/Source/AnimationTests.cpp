@@ -2661,11 +2661,14 @@ TEST_SUITE("Animation")
 		character.AddComponent<CharacterControllerComponent>().GravityFactor = 0;
 		scene.OnSimulationStart();
 		auto* physics = scene.GetPhysicsWorld();
-		// No collider: nothing is built, and the queued share 0 goes with the displacement.
+		// No collider: nothing is built, and the queued share 0 goes with the displacement (logged once).
+		const auto since = Log::GetHistory().GetTotalCount();
 		physics->QueueRootMotion(character, glm::vec3(1, 0, 0) * Step, 0.0f, Step);
 		physics->Step(Step);
+		CHECK(CountLogMessages(since, "could not be built; discarding queued root motion translation") == 1);
+		// Built with the next step: only the new full share counts, not a stale 0 mixing in (which would let half of the
+		// 2 m/s gameplay movement through).
 		character.AddComponent<CapsuleColliderComponent>();
-		physics->Step(Step);
 		physics->MoveCharacter(character, { 2, 0, 0 });
 		const float before = RootX(character);
 		physics->QueueRootMotion(character, glm::vec3(1, 0, 0) * Step, 1.0f, Step);

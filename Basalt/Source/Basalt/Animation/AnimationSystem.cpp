@@ -188,7 +188,7 @@ namespace Basalt {
 		// until they solve again from the animation.
 		for (auto& [id, playback] : m_Playback)
 		{
-			if (playback.Handle == handle && !(playback.IKOverlay.empty() && playback.SpringOverlay.empty()))
+			if (playback.Handle == handle && (!playback.IKOverlay.empty() || !playback.SpringOverlay.empty()))
 			{
 				playback.IKOverlay.clear();
 				playback.SpringOverlay.clear();
@@ -197,20 +197,22 @@ namespace Basalt {
 		}
 	}
 
-	void AnimationSystem::DropOverlay(Playback& playback, std::vector<OverlayEntry>& overlay)
+	void AnimationSystem::DropOverlay(Playback& playback, Overlay overlay)
 	{
-		if (overlay.empty())
+		if ((playback.*overlay).empty())
 			return;
-		overlay.clear();
+		(playback.*overlay).clear();
 		Finish(playback);
 	}
 
-	void AnimationSystem::StoreOverlay(Playback& playback, std::vector<OverlayEntry>& overlay, std::span<const uint32_t> nodes, const AnimationLocalPose& pose, const std::vector<glm::mat4>& globals)
+	void AnimationSystem::StoreOverlay(Playback& playback, Overlay overlay, std::vector<uint32_t>& nodes, const AnimationLocalPose& pose, const std::vector<glm::mat4>& globals)
 	{
-		overlay.clear();
+		std::ranges::sort(nodes);
+		nodes.erase(std::ranges::unique(nodes).begin(), nodes.end());
+		auto& entries = playback.*overlay;
+		entries.clear();
 		for (uint32_t node : nodes)
-			overlay.push_back({ node, pose.Nodes[node] });
-		// The same as Finish would compose (Pose with the overlays), without sampling the layers again.
+			entries.push_back({ node, pose.Nodes[node] });
 		playback.Globals = globals;
 		playback.OverlayDropped = false;
 	}
@@ -977,7 +979,11 @@ namespace Basalt {
 			auto incoming = [&](double amount) { return SourceRootDelta(playback, playback.Clip, playback.Time, playback.Space, amount, playback.Looping, playback.RootMotion); };
 			auto motion = incoming(advance);
 			if (playback.BlendWeight >= 1)
-				return motion ? std::optional<RootMotionFrame>(RootMotionFrame{ .Delta = *motion }) : std::nullopt;
+			{
+				if (!motion)
+					return std::nullopt;
+				return RootMotionFrame{ .Delta = *motion };
+			}
 			glm::mat4 tail(1);
 			// The part of the frame the fade covers; the incoming source alone moves the rest (the tail).
 			double fading = 1;
@@ -1603,15 +1609,15 @@ namespace Basalt {
 		ReportCallProblem(m_IKCallProblems, entity, "InverseKinematics", operation, chain, problem, detail);
 	}
 
-	float AnimationSystem::ClampSetting(float value, float low, float high, const std::string& name, std::vector<std::string>& problems)
+	float AnimationSystem::ClampSetting(float value, float low, float high, float fallback, const std::string& name, std::vector<std::string>& problems)
 	{
-		if (std::isfinite(value) && value >= low && value <= high)
-			return value;
-		if (!std::isfinite(value))
+		if (std::isnan(value))
 		{
-			problems.push_back(fmt::format("{} is not finite; using {}", name, low));
-			return low;
+			problems.push_back(fmt::format("{} is not a number; using {}", name, fallback));
+			return fallback;
 		}
+		if (value >= low && value <= high)
+			return value;
 		problems.push_back(fmt::format("{} must be between {} and {}; clamping", name, low, high));
 		return std::clamp(value, low, high);
 	}
@@ -1700,8 +1706,8 @@ namespace Basalt {
 			}
 			// C++ code can store values Validate rejects: they are clamped, and said so once.
 			std::vector<std::string> problems;
-			ClampSetting(config.Weight, 0, 1, "Weight", problems);
-			const float speed = ClampSetting(config.Speed, 0, MaxAnimatorSpeed, "Speed", problems);
+			ClampSetting(config.Weight, 0, 1, AnimationLayer{}.Weight, "Weight", problems);
+			const float speed = ClampSetting(config.Speed, 0, MaxAnimatorSpeed, AnimationLayer{}.Speed, "Speed", problems);
 			std::string problem = fmt::format("{}", fmt::join(problems, "; "));
 			if (!problem.empty() && problem != state.ConfigProblem)
 				BS_CORE_WARN("Animator '{}': layer '{}': {}", playback.EntityName, config.Name, problem);

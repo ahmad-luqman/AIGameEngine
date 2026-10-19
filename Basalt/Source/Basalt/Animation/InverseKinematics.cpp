@@ -318,6 +318,8 @@ namespace Basalt {
 	{
 		const std::span<const uint32_t> joints = request.Joints;
 		BS_CORE_ASSERT(joints.size() == request.Targets.size() + 1, "one target per turned joint");
+		if (joints.size() != request.Targets.size() + 1)
+			return IKSolveResult::Degenerate;
 		const float weight = ClampWeight(request.Weight);
 		if (weight <= 0 || request.Targets.empty())
 			return IKSolveResult::Unchanged;

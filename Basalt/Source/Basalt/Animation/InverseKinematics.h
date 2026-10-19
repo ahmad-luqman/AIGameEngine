@@ -20,11 +20,12 @@ namespace Basalt {
 	enum class IKSolveResult : uint8_t
 	{
 		Solved,
-		// Nothing to do: zero weight, or a target on the aiming joint (no direction to aim in).
+		// Nothing to do: zero weight, no targets, or a target on the aiming joint (no direction to aim in).
 		Unchanged,
 		// A chain joint uses a fixed glTF matrix, which the pose cannot turn.
 		FixedMatrix,
-		// Zero-length bones, a fully folded chain, or an aiming axis that vanishes (a zero-scaled aiming joint).
+		// Zero-length bones, a fully folded chain, or an aiming axis that vanishes (a zero-scaled aiming joint); for an aim
+		// chain, no joint with both a bone and a direction to its target (or targets that do not match the joints).
 		Degenerate,
 		// A non-finite request value or result; pose and globals are left as they were.
 		NonFinite
@@ -72,7 +73,7 @@ namespace Basalt {
 	{
 		// The joints, parent first, each followed by its child; the last entry is the tip, which does not turn.
 		std::span<const uint32_t> Joints;
-		// Where each joint's child should point toward (one per joint but the tip).
+		// The point each joint's child should lie toward (model space; one per joint but the tip).
 		std::span<const glm::vec3> Targets;
 		float Weight = 1.0f;
 	};

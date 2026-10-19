@@ -183,7 +183,7 @@ Entity handles store an ID and stay safe to hold: using a destroyed entity raise
 | `e:GetBoneTransform(joint)` | World position (Vec3), rotation (Quat) and scale (Vec3) of a joint of the Animator's current pose, or nil; see Bones |
 | `e:PlayAnimationLayer(layer, [clip])`, `e:SetAnimationLayerWeight(layer, weight, [seconds])`, `e:GetAnimationLayerWeight(layer)` | Animator layers; see Animation layers |
 | `e:SetIKTarget(chain, position, [rotation])`, `e:SetIKTarget(chain, entity, [matchRotation])`, `e:ClearIKTarget(chain)`, `e:SetIKWeight(chain, weight, [seconds])`, `e:GetIKWeight(chain)` | InverseKinematics chains; see Inverse kinematics |
-| `e:ResetSpringBones()` | Puts the SpringBone chains back on the animated pose, at rest; see Spring bones |
+| `e:ResetSpringBones()` | Puts the SpringBone chains back on the animated pose, at rest, on the next update; see Spring bones |
 | `e:GetScript()` | The entity's script instance (call its functions, read its fields) |
 | `e:Destroy()` | Destroy at the end of the frame (with children) |
 
@@ -668,9 +668,11 @@ end
 
 - `Move(velocity)` holds until the next call, so call it every frame. With gravity (scene gravity times
   `GravityFactor`), its upward part only counts on walkable ground, where it jumps, again on every landing
-  while it is held, and within `JumpGrace` seconds (default 0) after walking off it, where it jumps once (coyote
-  time: a jump pressed just after running off a ledge still works). Otherwise in the air gravity drives the vertical
-  speed and `Move` steers sideways. A ceiling
+  while it is held, and within `JumpGrace` seconds (default 0, at most 10, counted in physics steps) after leaving it
+  without jumping, where it jumps once (coyote time: a jump pressed just after running off a ledge still works; it
+  replaces the vertical speed, so it does not add a rising platform's). A character that has not stood yet gets no
+  grace, and a rebuilt one keeps its time off the ground. Otherwise in the air gravity drives the vertical speed and
+  `Move` steers sideways. A ceiling
   stops a jump at once. With `GravityFactor = 0` the velocity applies in full (flying, ladders). A
   velocity that is not finite is a script error.
 - `AddForce`, `AddImpulse`, `AddTorque`, `SetLinearVelocity` and `SetAngularVelocity` do nothing on a
@@ -1361,25 +1363,28 @@ hero:SetComponent("SpringBone", springs)
 
 `Colliders` are spheres or capsules attached to joints (`Joint`; empty: the entity itself) at `Offset` in the joint's
 space, with `Radius` (default 0.1) and `HalfHeight` (0: a sphere; otherwise a capsule along the joint's local Y axis,
-`HalfHeight` to each side of `Offset`), both in the joint's space (they scale with it). They keep the points of every
-chain of the component outside them wherever a point can stay outside at its bone length. They follow the pose before
+`HalfHeight` to each side of `Offset`), both in the joint's space (they scale with it, by its average axis scale) or
+the entity's. They keep the points of every chain of the component outside them as far as a point can stay outside at
+its bone length (overlapping colliders may leave it slightly inside). They follow the pose before
 any chain swings, so a collider on a swinging joint stays where the animation puts it. `Wind` is a world-space
 acceleration (m/s²) added to every point.
 
 Points simulate in world space in equal substeps of at most 1/120 s, so a moving or turning character swings its
 chains, and every bone keeps its animated length (scaled with the entity). A frame longer than 1/15 s (a hitch)
-simulates only its last 1/15 s; the points move along with the chain for the rest, so a hitch does not whip them. A
-chain starts on the animated pose; it restarts there when its joints, its `ChainLength` or the model change, after a
-frame it could not be solved, and when its first joint moves faster than 100 m/s (a teleport or respawn: about 1.7 m in
-one 60 Hz frame). `e:ResetSpringBones()` restarts every chain on the next update, for shorter teleports and cuts; it
+simulates only its last 1/15 s; the points move along with the chain's first joint (translated, not turned) for the
+rest, so a hitch does not whip them. A chain starts on the animated pose; it restarts there when its joints, its
+`ChainLength` or the model change, after a frame its entity could not be solved (an Animator that cannot play, a
+non-finite pose, a zero-scale or non-invertible transform), when its points go non-finite, and when its first joint
+moves faster than 100 m/s (a teleport or respawn: about 1.7 m in one 60 Hz frame). `e:ResetSpringBones()` restarts every chain on the next update, for shorter teleports and cuts; it
 raises an error without a SpringBone component.
 
 Problems are logged once and the chain (or the component) skipped: chains whose joints are missing, have no child,
-are fewer than `ChainLength` in a line or have fixed glTF matrices; chains whose bones all have zero length; unknown
-collider joints; a non-finite physics gravity or `Wind` (ignored); and a SpringBone whose Animator cannot animate. The
-inspector and `scene.info` show the authoring problems too and warn when two chains turn the same joint (the later one
-wins), when a chain joint has several children (the first is followed) and when a `ChainLength` 0 chain goes on past
-16 joints. The simulated points are gameplay state: they survive playback resets and end with the component.
+are fewer than `ChainLength` in a line or have fixed glTF matrices; unknown collider joints; a non-finite physics
+gravity or `Wind`, or the two overflowing together (ignored); points that go non-finite (the chain restarts); and a
+SpringBone whose Animator cannot animate. A chain the animation scales to nothing (hiding it) has nothing to swing,
+quietly. The inspector and `scene.info` show the authoring problems too and warn when two chains turn the same joint
+(the later one wins), when a chain joint has several children (the first is followed), when a `ChainLength` 0 chain
+goes on past 16 joints and when a chain's bones have zero length in the model's rest pose. The simulated points are gameplay state: they survive playback resets and end with the component.
 
 ## Graphics settings
 

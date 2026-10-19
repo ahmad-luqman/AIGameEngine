@@ -51,8 +51,9 @@ namespace Basalt {
 	// Substeps per frame at most. A longer frame (a hitch) simulates only its last MaxSpringSteps / SpringStepRate
 	// seconds; the points first move along with the chain's first joint for the rest, so the hitch does not whip them.
 	inline constexpr uint32_t MaxSpringSteps = 8;
-	// How often each substep alternates pushing points out of the colliders and back to their bone length, so a point
-	// that can stay outside every collider at its length ends up there.
+	// How many times each substep alternates pushing a point out of the colliders and back to its bone length. A point
+	// that can stay outside every collider at its length usually ends up there; overlapping colliders can leave it
+	// slightly inside.
 	inline constexpr uint32_t SpringConstraintIterations = 4;
 	// Advances `points` (one per joint) by request.Seconds. Each point keeps its animated distance from the point
 	// before it (from the first joint for the first point), is pulled toward where the animated chain shape puts it
@@ -64,8 +65,9 @@ namespace Basalt {
 	// or returns why it cannot (an empty or unknown joint, a joint without a child, fewer than ChainLength joints and a
 	// tip in a line, a fixed-matrix joint other than the tip) and leaves outJoints empty.
 	[[nodiscard]] std::string ResolveSpringChain(const MeshSource& source, const SpringChain& chain, std::vector<uint32_t>& outJoints);
-	// The first node whose parent is `node`, or -1; ChildCount counts them all.
+	// The first node whose parent is `node`, or -1.
 	int32_t FirstChild(const MeshSource& source, uint32_t node);
+	// How many nodes have `node` as their parent.
 	size_t ChildCount(const MeshSource& source, uint32_t node);
 
 }

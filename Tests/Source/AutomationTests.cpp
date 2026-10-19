@@ -67,7 +67,19 @@ TEST_SUITE("Automation")
 		BS_CORE_WARN("a warning line");
 		// errorsOnly filters what is returned, not what the assertion looks at.
 		const std::string error = RunError(registry, session, "log.get", { { "since", cursor }, { "errorsOnly", true }, { "assertNoWarnings", true } });
-		CHECK(error == "1 warning(s) or worse logged: [warn] a warning line");
+		CHECK(error.starts_with("1 warning(s) or worse logged: [warn] a warning line (next "));
+		// Many warnings: the first 20 are named.
+		const auto many = Run(registry, session, "log.get")["next"];
+		for (int i = 0; i < 25; i++)
+			BS_CORE_WARN("warning {}", i);
+		const std::string listed = RunError(registry, session, "log.get", { { "since", many }, { "assertNoWarnings", true } });
+		CHECK(listed.starts_with("25 warning(s) or worse logged: [warn] warning 0; "));
+		CHECK(listed.find("[warn] warning 19; and 5 more (next ") != std::string::npos);
+		// Messages the history no longer holds cannot be checked.
+		const auto old = Run(registry, session, "log.get")["next"];
+		for (int i = 0; i < 2100; i++)
+			BS_CORE_INFO("filler {}", i);
+		CHECK(RunError(registry, session, "log.get", { { "since", old }, { "assertNoWarnings", true } }).starts_with("52 message(s) since "));
 	}
 	TEST_CASE("Protocol: unknown commands, malformed requests, batches")
 	{

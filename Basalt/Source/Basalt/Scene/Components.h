@@ -345,7 +345,8 @@ namespace Basalt {
 		std::string Joint;
 		// Center in the joint's (or the entity's) space.
 		glm::vec3 Offset = { 0.0f, 0.0f, 0.0f };
-		// 0..MaxSize, in the joint's space (it scales with the joint's world transform).
+		// 0..MaxSize, in the joint's (or the entity's) space: it scales with that world transform, by its average axis
+		// scale.
 		float Radius = 0.1f;
 		// 0: a sphere; otherwise a capsule along the joint's local Y axis, HalfHeight (0..MaxSize) to each side of
 		// Offset.
@@ -660,8 +661,8 @@ namespace Basalt {
 		float Mass = 70.0f;
 		// Scales the scene gravity; 0 makes the Move velocity apply in full on every axis (flying, ladders).
 		float GravityFactor = 1.0f;
-		// Seconds (0..MaxJumpGrace) after walking off walkable ground during which an upward Move still jumps once
-		// (coyote time); 0 jumps only from the ground.
+		// Seconds (0..MaxJumpGrace, counted in physics steps) after leaving walkable ground without jumping during which
+		// an upward Move still jumps once (coyote time); 0 jumps only from the ground.
 		float JumpGrace = 0.0f;
 		// Name of a project physics layer, as on RigidBodyComponent.
 		std::string Layer = "Default";
