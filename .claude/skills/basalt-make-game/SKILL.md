@@ -51,9 +51,11 @@ broken version leaves the old one running). Typical patterns:
   (options: `Ignore`, `Layers`, `IncludeTriggers`, `All`; see Docs/ScriptingAPI.md).
 - Animated characters (Samples/Platformer): write the state machine with `asset.write` (`.banimgraph`), set its
   parameters and triggers from the movement script every frame, and let a root-motion locomotion blend space move the
-  character (`Animator.RootMotion` + `RootJoint`; `Move` still supplies jumps and air movement). Set a trigger and the
-  jump's upward `Move` only on `Input.IsActionPressed`, keep pushing up until the controller leaves the ground, and
-  debounce `IsGrounded()` (coyote time) so stairs do not flicker into a fall state. Add `InverseKinematics` Ground
+  character (`Animator.RootMotion` + `RootJoint`; `Move` still supplies jumps and air movement, and fills in through
+  fades into and out of root-motion states). Set a trigger and the jump's upward `Move` only on
+  `Input.IsActionPressed`, keep pushing up until the controller rises, and debounce `IsGrounded()` so stairs do not
+  flicker into a fall state; `CharacterController.JumpGrace` lets a jump pressed just after walking off a ledge work
+  (coyote time). Add `InverseKinematics` Ground
   chains for the feet and `SpringBone` chains for hair and capes; Kinematic platforms moved through their transform
   carry characters standing on them.
 - Imported levels and props: add `RigidBody {}` (Static by default) and `MeshCollider {}` to each entity with

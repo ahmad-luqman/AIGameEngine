@@ -2,7 +2,7 @@
 local FollowCamera = {}
 
 FollowCamera.Properties = {
-	-- Where the camera sits relative to the hero, and how quickly it catches up (1/s).
+	-- Where the camera sits relative to the hero, and how quickly it catches up (1/s, exponential).
 	Height = 3.2,
 	Distance = 6.5,
 	Follow = 4.0
@@ -11,6 +11,11 @@ FollowCamera.Properties = {
 function FollowCamera:OnCreate()
 	self.Hero = Scene.FindEntityByName("Hero")
 	if not self.Hero then error("FollowCamera: the scene has no entity named 'Hero'") end
+end
+
+-- Where the camera wants to be: behind and above the hero.
+function FollowCamera:Wanted()
+	return self.Hero.WorldPosition + Vec3(0, self.Height, -self.Distance)
 end
 
 function FollowCamera:Place(position)
@@ -22,13 +27,12 @@ end
 
 -- Jumps straight behind the hero (after a respawn): catching up from where the hero fell would look the wrong way.
 function FollowCamera:Snap()
-	self:Place(self.Hero.WorldPosition + Vec3(0, self.Height, -self.Distance))
+	self:Place(self:Wanted())
 end
 
 function FollowCamera:OnLateUpdate(dt)
-	local wanted = self.Hero.WorldPosition + Vec3(0, self.Height, -self.Distance)
 	local position = self.Entity.WorldPosition
-	self:Place(position + (wanted - position) * math.min(1, dt * self.Follow))
+	self:Place(position + (self:Wanted() - position) * (1 - math.exp(-self.Follow * dt)))
 end
 
 return FollowCamera

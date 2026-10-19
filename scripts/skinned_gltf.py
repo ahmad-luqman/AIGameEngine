@@ -19,6 +19,32 @@ def rx(*degrees):
     return [(X, d) for d in degrees]
 
 
+def rz(*degrees):
+    """Rotation keys about Z; positive Z rotation raises a left arm sideways."""
+    return [(Z, d) for d in degrees]
+
+
+def loop(keys):
+    """Closes a list of per-key values into a loop (first == last)."""
+    return keys + keys[:1]
+
+
+def shifted(keys):
+    """The same cycle half a period later (the other leg or arm), closed into a loop; `keys` has no loop key."""
+    half = len(keys) // 2
+    return loop(keys[half:] + keys[:half])
+
+
+def cycle(degrees):
+    """X rotation keys of a limb over a cycle and of its opposite half a period later, both closed into loops."""
+    return rx(*loop(degrees)), rx(*shifted(degrees))
+
+
+def pairs(*names):
+    """Consecutive pairs: each joint with its child along a chain."""
+    return list(zip(names, names[1:]))
+
+
 class SkinnedModel:
     def __init__(self, joints):
         """joints: (name, parent or None, offset from the parent) in parent-before-child order."""
@@ -62,16 +88,20 @@ class SkinnedModel:
             # Counter-clockwise seen from outside: u x v = n for every face above.
             self.indices.setdefault(material, []).extend([first, first + 1, first + 2, first, first + 2, first + 3])
 
+    def position(self, joint):
+        """Where `joint` is in the bind pose."""
+        return self.world[self.index[joint]]
+
     def limb(self, joint, child, thickness, material=0):
         """A box from `joint` to `child`, at least `thickness` thick on each side."""
-        a, b = self.world[self.index[joint]], self.world[self.index[child]]
+        a, b = self.position(joint), self.position(child)
         center = tuple((x + y) / 2 for x, y in zip(a, b))
         half = tuple(max(abs(x - y) / 2, thickness) for x, y in zip(a, b))
         self.box(joint, center, half, material)
 
     def at(self, joint, offset, half, material=0):
         """A box at `offset` from `joint`."""
-        self.box(joint, tuple(w + o for w, o in zip(self.world[self.index[joint]], offset)), half, material)
+        self.box(joint, tuple(w + o for w, o in zip(self.position(joint), offset)), half, material)
 
     def clip(self, name, duration, channels):
         """channels: (joint, 'rotation' with [(axis, degrees)] keys | 'translation' with [xyz] keys), keys evenly spread
