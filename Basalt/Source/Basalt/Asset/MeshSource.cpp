@@ -2,12 +2,17 @@
 
 #include <glm/gtc/constants.hpp>
 
+#include <algorithm>
+#include <map>
+
 namespace Basalt {
 
 	void MeshSource::UpdateMemoryUsage()
 	{
 		// Track retained CPU payload capacity, including animation and embedded image storage.
 		size_t bytes = sizeof(MeshSource) + Vertices.capacity() * sizeof(Vertex) + Indices.capacity() * sizeof(uint32_t) + Submeshes.capacity() * sizeof(Submesh) + Meshes.capacity() * sizeof(MeshData) + Materials.capacity() * sizeof(MaterialData) + Nodes.capacity() * sizeof(MeshNode) + Skins.capacity() * sizeof(MeshSkin) + Animations.capacity() * sizeof(AnimationClip) + NodeOrder.capacity() * sizeof(uint32_t) + EmbeddedImages.capacity() * sizeof(std::vector<uint8_t>) + ExternalFiles.capacity() * sizeof(std::string);
+		for (const auto& submesh : Submeshes)
+			bytes += submesh.JointBounds.capacity() * sizeof(JointInfluenceBounds);
 		for (const auto& mesh : Meshes)
 			bytes += mesh.Submeshes.capacity() * sizeof(uint32_t);
 		for (const auto& skin : Skins)
@@ -49,8 +54,26 @@ namespace Basalt {
 		submesh.IndexCount = static_cast<uint32_t>(indices.size());
 		submesh.VertexCount = static_cast<uint32_t>(vertices.size());
 		submesh.MaterialIndex = materialIndex;
+		std::map<uint32_t, JointInfluenceBounds> influences;
 		for (const Vertex& vertex : vertices)
+		{
 			submesh.Bounds.Expand(vertex.Position);
+			const float sum = vertex.Weights.x + vertex.Weights.y + vertex.Weights.z + vertex.Weights.w;
+			submesh.HasUnweightedVertices = submesh.HasUnweightedVertices || sum == 0;
+			for (int i = 0; i < 4; ++i)
+			{
+				if (vertex.Weights[i] <= 0)
+					continue;
+				auto [it, inserted] = influences.try_emplace(vertex.Joints[i]);
+				auto& influence = it->second;
+				influence.Joint = vertex.Joints[i];
+				influence.Positions.Expand(vertex.Position * sum);
+				influence.MinWeightSum = inserted ? sum : std::min(influence.MinWeightSum, sum);
+				influence.MaxWeightSum = inserted ? sum : std::max(influence.MaxWeightSum, sum);
+			}
+		}
+		for (const auto& [joint, bounds] : influences)
+			submesh.JointBounds.push_back(bounds);
 
 		Vertices.insert(Vertices.end(), vertices.begin(), vertices.end());
 		Indices.insert(Indices.end(), indices.begin(), indices.end());

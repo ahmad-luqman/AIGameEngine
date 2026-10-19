@@ -399,3 +399,20 @@ The fixed Release workload and pre-throughput baseline are described in
 [Tests/Benchmarks/README.md](../Tests/Benchmarks/README.md). Release CI runs its mean and p95 frame-time
 thresholds and uploads raw samples; the lavapipe job also times complete rendered frames. Timing gates
 are separate from deterministic unit tests.
+
+## Draw throughput
+
+Compatible opaque mesh instances share indexed GPU draws in the depth/normal/ID, lighting,
+and directional/local shadow passes. A structured buffer holds each instance's model and normal
+matrices, material constants, pick token and independent skin palette offset. Texture bindings,
+geometry range, alpha-test state and sidedness split batches. Each pass filters camera/shadow
+visibility before forming contiguous instance ranges. Blended meshes and particle emitters keep
+their existing stable back-to-front ordering and individual draws.
+
+`render.stats.drawCalls` counts submitted color draws; `instances` counts color mesh instances
+(excludes particle billboards), and `triangles` counts all rendered color triangles. These counters
+allow benchmark workload guards to detect missing objects even as draw counts decrease.
+`SceneRenderer::SetInstancingEnabled(false)` provides a reference path for image equivalence and
+throughput checks. Skin culling uses immutable per-submesh joint influence bounds cached at import;
+posing bounds costs O(influencing joints), with conservative bounds covering weighted vertices,
+nonuniform scale and mirrored transforms. Exact CPU skin bounds remain available for verification.

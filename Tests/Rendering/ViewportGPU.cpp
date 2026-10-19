@@ -365,3 +365,49 @@ TEST_CASE("Particle billboards add exactly two color triangles per drawn particl
 	graphics->WaitIdle();
 	CHECK(graphics->GetValidationErrorCount() == 0);
 }
+
+TEST_CASE("Opaque instance batches retain material constants, IDs and camera filtering")
+{
+	auto graphics = CreateTestGraphics();
+	Scene scene;
+	scene.GetRendererSettings().SSAOEnabled = false;
+	auto sun = scene.CreateEntity("Sun");
+	sun.AddComponent<DirectionalLightComponent>();
+	sun.GetTransform().SetRotationEuler(glm::radians(glm::vec3(-50, 20, 0)));
+	std::vector<Entity> cubes;
+	for (uint32_t i = 0; i < 6; ++i)
+	{
+		auto cube = scene.CreateEntity("Instance");
+		cube.AddComponent<MeshComponent>().Mesh = "builtin://Cube";
+		cube.GetTransform().Translation = { static_cast<float>(i) - 2.5f, 0, 0 };
+		cube.GetTransform().Scale = glm::vec3(.6f);
+		cube.AddComponent<MaterialComponent>().AlbedoColor = { .1f * static_cast<float>(i + 1), .2f, .8f, 1 };
+		cubes.push_back(cube);
+	}
+	auto hidden = scene.CreateEntity("Off-camera instance");
+	hidden.AddComponent<MeshComponent>().Mesh = "builtin://Cube";
+	hidden.GetTransform().Translation.x = 1000;
+	RenderCamera camera;
+	camera.Position = { 0, 0, 5 };
+	camera.View = glm::lookAtRH(camera.Position, glm::vec3(0), glm::vec3(0, 1, 0));
+	camera.Projection = glm::orthoRH_ZO(-3.0f, 3.0f, -1.5f, 1.5f, .1f, 20.0f);
+	camera.Far = 20;
+	SceneRenderer renderer(graphics->GetDevice(), { .Picking = true });
+	REQUIRE(renderer.Initialize());
+	renderer.SetViewportSize(300, 150);
+	renderer.SetSelections({ cubes[2].GetUUID() });
+	const auto batched = Capture(renderer, scene, camera);
+	const auto stats = renderer.GetStatistics();
+	CHECK(stats.DrawCalls == 1);
+	CHECK(stats.Instances == 6);
+	CHECK(stats.Triangles == 72);
+	for (uint32_t i = 0; i < cubes.size(); ++i)
+		ExpectPick(renderer, 25 + i * 50, 75, cubes[i].GetUUID());
+	renderer.SetInstancingEnabled(false);
+	CHECK(Capture(renderer, scene, camera) == batched);
+	CHECK(renderer.GetStatistics().DrawCalls == 6);
+	CHECK(renderer.GetStatistics().Instances == stats.Instances);
+	CHECK(renderer.GetStatistics().Triangles == stats.Triangles);
+	CHECK(renderer.GetStatistics().ShadowDrawCalls >= stats.ShadowDrawCalls);
+	CHECK(graphics->GetValidationErrorCount() == 0);
+}

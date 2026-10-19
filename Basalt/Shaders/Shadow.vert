@@ -8,6 +8,6 @@ layout(location = 2) in vec4 a_Weights;
 
 void main()
 {
-	DrawData draw = u_Draws.Draws[u_Push.DrawIndex];
+	DrawData draw = u_Draws.Draws[u_Push.DrawIndex + gl_InstanceIndex];
 	gl_Position = ShadowViewProjection(u_Push.ShadowViewIndex) * draw.Model * SkinMatrix(draw, a_Joints, a_Weights) * vec4(a_Position, 1.0);
 }

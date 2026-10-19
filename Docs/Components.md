@@ -28,7 +28,7 @@ Fields: `Mesh` (string), `MeshIndex` (integer), `CastShadows` (boolean)
 
 ## Animator
 
-Fields: `Mesh` (string), `Clip` (string), `Speed` (number), `Looping` (boolean), `PlayOnStart` (boolean), `CastShadows` (boolean), `MatchVelocity` (boolean), `StateMachine` (string), `RootMotion` (boolean), `RootJoint` (string), `Events` (list of [AnimationEvent](#animationevent), at most 256), `BlendSpaces` (list of [AnimationBlendSpace](#animationblendspace), at most 32, unique `Name`), `Layers` (list of [AnimationLayer](#animationlayer), at most 16, unique `Name`)
+Fields: `Mesh` (string), `Clip` (string), `Speed` (number), `Looping` (boolean), `PlayOnStart` (boolean), `CastShadows` (boolean), `MatchVelocity` (boolean), `StateMachine` (string), `RootMotion` (boolean), `RootJoint` (string), `Events` (list of [AnimationEvent](#animationevent), at most 256), `BlendSpaces` (list of [AnimationBlendSpace](#animationblendspace), at most 32, unique `Name`), `Layers` (list of [AnimationLayer](#animationlayer), at most 16, unique `Name`), `LODDistance` (number), `LODInterval` (integer)
 
 ## BoneAttachment
 

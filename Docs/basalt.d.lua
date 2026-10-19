@@ -1366,6 +1366,8 @@ function BasaltScript:StopAllCoroutines() end
 ---@field Events AnimationEvent[]
 ---@field BlendSpaces AnimationBlendSpace[]
 ---@field Layers AnimationLayer[]
+---@field LODDistance number
+---@field LODInterval integer
 
 ---BoneAttachment data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
 ---@class BoneAttachmentComponent

@@ -161,6 +161,14 @@ TEST_CASE("GPU skinning matches CPU posed geometry in lighting, normals, depth a
 				gpuScene.GetRendererSettings().DebugView = view;
 				cpuScene.GetRendererSettings().DebugView = view;
 				const auto gpu = Capture(gpuRenderer, gpuScene, camera);
+				const auto batched = gpuRenderer.GetStatistics();
+				gpuRenderer.SetInstancingEnabled(false);
+				Compare(Capture(gpuRenderer, gpuScene, camera), gpu);
+				CHECK(gpuRenderer.GetStatistics().Instances == batched.Instances);
+				CHECK(gpuRenderer.GetStatistics().Triangles == batched.Triangles);
+				if (alpha != AlphaMode::Blend)
+					CHECK(gpuRenderer.GetStatistics().DrawCalls > batched.DrawCalls);
+				gpuRenderer.SetInstancingEnabled(true);
 				const auto cpu = Capture(cpuRenderer, cpuScene, camera);
 				Compare(gpu, cpu);
 				if (alpha == AlphaMode::Opaque && view == RendererDebugView::None)

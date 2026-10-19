@@ -52,6 +52,16 @@ namespace Basalt {
 		std::string EmissiveMap;
 	};
 
+	// Bind-space influence bounds. Homogeneous weight sums retain conservative bounds even when
+	// normalized floating-point weights do not sum to exactly one.
+	struct JointInfluenceBounds
+	{
+		uint32_t Joint = 0;
+		AABB Positions;
+		float MinWeightSum = 0;
+		float MaxWeightSum = 0;
+	};
+
 	// A contiguous range of the index buffer drawn with one material.
 	struct Submesh
 	{
@@ -61,6 +71,8 @@ namespace Basalt {
 		uint32_t VertexCount = 0;
 		uint32_t MaterialIndex = 0;
 		AABB Bounds;
+		std::vector<JointInfluenceBounds> JointBounds;
+		bool HasUnweightedVertices = false;
 	};
 
 	// One drawable mesh (a glTF mesh): a set of submeshes. MeshComponent::MeshIndex selects one.

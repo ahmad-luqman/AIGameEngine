@@ -249,6 +249,40 @@ namespace Basalt {
 		return result;
 	}
 
+	AABB CachedSkinBounds(const MeshSource& source, const Submesh& submesh, const std::vector<glm::mat4>& palette)
+	{
+		if (submesh.JointBounds.empty())
+			return SkinBounds(source, submesh, palette);
+		AABB bounds;
+		if (submesh.HasUnweightedVertices)
+			bounds.Expand(glm::vec3(0));
+		for (const auto& influence : submesh.JointBounds)
+		{
+			if (influence.Joint >= palette.size())
+				continue;
+			const glm::vec4 low(influence.Positions.Min, influence.MinWeightSum);
+			const glm::vec4 high(influence.Positions.Max, influence.MaxWeightSum);
+			glm::vec3 minimum(0), maximum(0);
+			for (int column = 0; column < 4; ++column)
+			{
+				const glm::vec3 a = glm::vec3(palette[influence.Joint][column]) * low[column];
+				const glm::vec3 b = glm::vec3(palette[influence.Joint][column]) * high[column];
+				minimum += glm::min(a, b);
+				maximum += glm::max(a, b);
+			}
+			bounds.Expand(minimum);
+			bounds.Expand(maximum);
+		}
+		// Cover roundoff in the shader's weighted sums at the boundary of a culling plane.
+		if (bounds.IsValid())
+		{
+			const glm::vec3 padding = glm::max(glm::abs(bounds.Min), glm::abs(bounds.Max)) * 1e-5f + glm::vec3(1e-6f);
+			bounds.Min -= padding;
+			bounds.Max += padding;
+		}
+		return bounds;
+	}
+
 	AABB SkinBounds(const MeshSource& source, const Submesh& submesh, const std::vector<glm::mat4>& palette)
 	{
 		AABB bounds;

@@ -1,11 +1,12 @@
-# Diagnostics benchmark (session 3)
+# Diagnostics and throughput benchmark (sessions 3–4)
 
-`BenchmarkScene.h` builds a fixed scene: 2,048 separately drawn cubes, 128 animated mannequins sharing
+`BenchmarkScene.h` builds a fixed scene: 2,048 cube instances, 128 animated mannequins sharing
 one 17-joint model and looping Walk clip, 64 overlapping point lights, one shadowed sun and one camera.
 256 cubes have dynamic box bodies with sleeping and gravity disabled, zero velocity and no contacts.
 They measure integration, broadphase and transform synchronization, not contact/constraint solving. IDs, placements and the 1/60-second timestep are fixed. The camera sees the field
-at 320x180; default High SSAO and cascaded shadows stay enabled. This measures the code before session
-4's instancing and crowd improvements. No assets are streamed during measurement.
+at 320x180; default High SSAO and cascaded shadows stay enabled. The workload is unchanged from the pre-throughput baseline. Compatible cubes and mannequins now
+submit as two color draws; each mannequin still evaluates its independent pose every frame (LOD is
+disabled by default). No assets are streamed during measurement.
 
 Build and run (idle machine, plugged in, no concurrent builds):
 
@@ -25,7 +26,7 @@ last 30 resolved scene samples and are supplementary to wall-clock measurements.
 Reports preserve every measured frame, live workload counts, compiler/build type, worker count, platform, adapter, mean,
 nearest-rank p95, maximum, thresholds and pass/fail status. The runner refuses missing/invalid timings,
 changed workload counts or failed processes. The executable also checks for script/engine errors, incomplete component workloads,
-validation errors, missing GPU timings and exact rendered draw/triangle/skin/light counts. The native headless unit tests
+validation errors, missing GPU timings and exact rendered instance/draw/triangle/skin/light counts. The native headless unit tests
 check that the workload survives warmup and measurement and that dropping a light component fails the guard. `RunTests.py` verifies failure paths and
 independent mean/tail gates, including under Python `-O`.
 
@@ -52,8 +53,9 @@ A baseline preserves the budgets in force when recorded (1000/1500 ms for the or
 even when current CI budgets are tightened.
 Compare a new run on the same machine/configuration before attributing gains to session 4. CI artifacts
 provide the corresponding runner baselines. Do not regenerate the committed baseline when optimizing:
-keep it as the before measurement. A moving or larger workload needs a new version and baseline. Session 4 must deliberately update
-the pre-instancing exact draw/triangle/skin-count guard when batching or LOD changes those counts.
+keep it as the before measurement. A moving or larger workload needs a new version and baseline. Session 4 updates the guard to require 2,176 color mesh instances and two batched color draws,
+while preserving exact triangle, skin and light counts. Reducing instances or increasing draw calls
+fails even if the frame time improves. The source workload and baseline files remain unchanged.
 
 ## Recorded baseline
 

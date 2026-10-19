@@ -5,6 +5,7 @@
 #include "Basalt/Animation/BlendSpace.h"
 #include "Basalt/Animation/InverseKinematics.h"
 #include "Basalt/Asset/AssetManager.h"
+#include "Basalt/Core/JobSystem.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Core/Profiler.h"
 #include "Basalt/Math/Math.h"
@@ -559,6 +560,10 @@ namespace Basalt {
 			return;
 		}
 
+		m_PoseJobs.clear();
+		std::optional<glm::vec3> cameraPosition;
+		if (Entity camera = m_Scene.GetPrimaryCameraEntity())
+			cameraPosition = m_Scene.GetWorldTransform(camera)[3];
 		for (auto handle : m_Scene.GetAllEntitiesWith<AnimatorComponent>())
 		{
 			Entity entity(handle, &m_Scene);
@@ -566,6 +571,11 @@ namespace Basalt {
 			if (!playback)
 				continue;
 			const auto& component = entity.GetComponent<AnimatorComponent>();
+			const bool distant = cameraPosition && std::isfinite(component.LODDistance) && component.LODDistance > 0 &&
+								 glm::distance(*cameraPosition, glm::vec3(m_Scene.GetWorldTransform(entity)[3])) > component.LODDistance;
+			const uint32_t interval = distant ? std::clamp(component.LODInterval, 1u, 60u) : 1u;
+			const bool evaluatePose = playback->LODFrame == 0 || playback->LODFrame >= interval || seconds == 0;
+			playback->LODFrame = seconds == 0 ? 0u : (evaluatePose ? 1u : playback->LODFrame + 1u);
 			if (component.MatchVelocity && seconds > 0)
 			{
 				// Measured while paused too, so resuming does not see the whole pause's movement at once.
@@ -609,8 +619,8 @@ namespace Basalt {
 			const bool baseAdvances = playback->Playing && (playback->Space ? ResolveSpace(*playback, *playback->Space, component) : playback->Clip >= 0);
 			if (!baseAdvances)
 			{
-				if (layered)
-					Finish(*playback);
+				if (layered && evaluatePose)
+					m_PoseJobs.emplace_back(playback, false);
 				continue;
 			}
 			const bool invalidSpeed = !std::isfinite(component.Speed) || component.Speed < 0 || component.Speed > MaxAnimatorSpeed;
@@ -691,7 +701,27 @@ namespace Basalt {
 			if (!playback->Looping && finished && playback->FadeDuration == 0 &&
 				(playback->Outgoing.Clip < 0 || playback->Outgoing.Time >= playback->Source->Animations[playback->Outgoing.Clip].Duration))
 				playback->Playing = false;
-			Evaluate(*playback);
+			if (evaluatePose || !playback->Playing)
+				m_PoseJobs.emplace_back(playback, true);
+		}
+		const auto evaluate = [&](uint32_t begin, uint32_t end) {
+			for (uint32_t i = begin; i < end; ++i)
+			{
+				auto [playback, sample] = m_PoseJobs[i];
+				if (sample)
+					Evaluate(*playback);
+				else
+					Finish(*playback);
+			}
+		};
+		// Small scenes avoid queue overhead. Workers touch only their playback and immutable model data;
+		// no registry, asset cache, physics, callbacks or pending event storage is accessed here.
+		if (m_PoseJobs.size() < 32)
+			evaluate(0, static_cast<uint32_t>(m_PoseJobs.size()));
+		else if (!JobSystem::Get().ParallelFor(static_cast<uint32_t>(m_PoseJobs.size()), 16, evaluate))
+		{
+			BS_CORE_ERROR("AnimationSystem: pose jobs failed; rebuilding poses synchronously");
+			evaluate(0, static_cast<uint32_t>(m_PoseJobs.size()));
 		}
 		if (runLateUpdate)
 			LateUpdate(timestep);

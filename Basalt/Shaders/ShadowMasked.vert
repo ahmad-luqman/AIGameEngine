@@ -13,7 +13,7 @@ layout(location = 1) flat out uint v_MaterialIndex;
 
 void main()
 {
-	DrawData draw = u_Draws.Draws[u_Push.DrawIndex];
+	DrawData draw = u_Draws.Draws[u_Push.DrawIndex + gl_InstanceIndex];
 	v_TexCoord = a_TexCoord;
 	v_MaterialIndex = draw.Indices.x;
 	gl_Position = ShadowViewProjection(u_Push.ShadowViewIndex) * draw.Model * SkinMatrix(draw, a_Joints, a_Weights) * vec4(a_Position, 1.0);

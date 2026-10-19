@@ -141,6 +141,7 @@ namespace Basalt {
 			{ "targetFrameRate", dynamic.TargetFrameRate },
 			{ "minRenderScale", dynamic.MinScale },
 			{ "drawCalls", statistics.DrawCalls },
+			{ "instances", statistics.Instances },
 			{ "triangles", statistics.Triangles },
 			{ "shadowDrawCalls", statistics.ShadowDrawCalls },
 			{ "lightsSkipped", statistics.LightsSkipped },
