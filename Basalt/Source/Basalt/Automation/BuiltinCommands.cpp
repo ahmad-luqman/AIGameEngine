@@ -381,7 +381,10 @@ namespace Basalt {
 			const auto codepoint = static_cast<uint32_t>(OptionalInteger(params, "codepoint", -1, 0, 0x10ffff));
 			if (codepoint >= 0xd800 && codepoint <= 0xdfff)
 				throw CommandError("'codepoint' must be a Unicode scalar value (surrogates are invalid)");
-			Input::AddTextCodepoint(codepoint);
+			if (codepoint < 0x20 || codepoint == 0x7f)
+				throw CommandError("control characters are not text; use input.key");
+			if (!Input::AddTextCodepoint(codepoint))
+				throw CommandError("text input buffer is full this frame (16384 bytes)");
 		}
 
 		void ApplyMouseInput(const json& params)
@@ -910,7 +913,7 @@ namespace Basalt {
 			});
 
 			Add(registry, "ui.layout",
-				"Lays out the current scene's UI components (the play copy while playing) for a viewport of width x height pixels: the canvas size, every visible UI entity's untransformed rect [x, y, width, height] in canvas units in draw order, its column-major 3x3 transform and effective canvas clip (null when unrestricted) (widgets add their kind, values, target, callback and, while playing, state and focus), the host's view that maps the mouse onto the canvas for the widgets (`view`: origin and size in mouse coordinates and whether widgets take pointer and navigation input; headless, mouse positions are canvas units), and the problems that make UI draw or behave differently than authored (an image that does not load and draws its Color, a font that does not load and falls back to the built-in one or has glyphs that draw blank, an entity with several widget components, a widget callback whose target is missing or has no Script).", Schema::Object({ { "width", Schema::Nullable(Schema::Integer("integer, viewport pixels (default 1920)", 1, 65536)) }, { "height", Schema::Nullable(Schema::Integer("integer, viewport pixels (default 1080)", 1, 65536)) } }), [](AutomationSession& session, const json& params) {
+				"Lays out the current scene's UI components (the play copy while playing) for a viewport of width x height pixels: the canvas size, every visible UI entity's untransformed rect [x, y, width, height] in canvas units in draw order, its column-major 3x3 transform and effective canvas clip (null when unrestricted) (widgets add their kind, values, target, callback and, while playing, state and focus), the host's view that maps the mouse onto the canvas for the widgets (`view`: origin and size in mouse coordinates and whether widgets take pointer and navigation input; headless, mouse positions are canvas units), and the problems that make UI draw or behave differently than authored (an image that does not load and draws its Color, a font that does not load and falls back to the built-in one or has glyphs that draw blank, an entity with several widget components, a widget callback whose target is missing or has no Script, an unusable composed transform, or an explicit navigation target that cannot currently take focus).", Schema::Object({ { "width", Schema::Nullable(Schema::Integer("integer, viewport pixels (default 1920)", 1, 65536)) }, { "height", Schema::Nullable(Schema::Integer("integer, viewport pixels (default 1080)", 1, 65536)) } }), [](AutomationSession& session, const json& params) {
 					const auto width = static_cast<float>(OptionalInteger(params, "width", 1920, 1, 65536));
 					const auto height = static_cast<float>(OptionalInteger(params, "height", 1080, 1, 65536));
 					const glm::vec2 canvas = GameUI::GetCanvasSize({ width, height });
@@ -918,7 +921,14 @@ namespace Basalt {
 					json problems = json::array();
 					std::unordered_map<std::string, std::string> fontErrors;
 					Scene& scene = RequireScene(session);
-					for (const UILayoutItem& item : UILayout::Layout(scene, canvas))
+					std::vector<UILayoutProblem> layoutProblems;
+					const auto layout = UILayout::Layout(scene, canvas, &layoutProblems);
+					std::unordered_map<uint64_t, const UILayoutItem*> byEntity;
+					for (const auto& item : layout)
+						byEntity.emplace(static_cast<uint64_t>(item.Owner.GetUUID()), &item);
+					for (const auto& problem : layoutProblems)
+						problems.push_back({ { "id", static_cast<uint64_t>(problem.Owner.GetUUID()) }, { "name", problem.Owner.GetName() }, { "problem", problem.Message } });
+					for (const UILayoutItem& item : layout)
 					{
 						const UIBox& rect = item.Rect;
 						const uint64_t id = item.Owner.GetUUID();
@@ -935,6 +945,35 @@ namespace Basalt {
 								report(fmt::format("several widget components: it acts as its {} only", UIWidgetComponentName(widget->Kind)));
 							if (const std::string problem = WidgetCallbackProblem(scene, item.Owner, *widget); !problem.empty())
 								report(problem);
+						}
+						if (const auto* navigation = item.Owner.TryGetComponent<UINavigationComponent>())
+						{
+							const std::pair<const char*, UUID> directions[] = { { "Up", navigation->Up }, { "Down", navigation->Down }, { "Left", navigation->Left }, { "Right", navigation->Right } };
+							for (const auto& [direction, targetID] : directions)
+							{
+								if (targetID == 0)
+									continue;
+								const auto prefix = fmt::format("UINavigation {} {}", direction, static_cast<uint64_t>(targetID));
+								const Entity target = scene.GetEntityByUUID(targetID);
+								if (!target)
+								{
+									report(prefix + " does not exist");
+									continue;
+								}
+								const auto widget = UILayout::GetWidget(target);
+								if (!widget || widget->Kind == UIWidgetKind::Panel || widget->Kind == UIWidgetKind::ScrollView)
+									report(prefix + " is not a focusable widget");
+								else if (!widget->Interactable)
+									report(prefix + " is disabled");
+								else if (const auto found = byEntity.find(static_cast<uint64_t>(targetID)); found == byEntity.end())
+									report(prefix + " is hidden or has an unusable transform");
+								else if (const auto& targetItem = *found->second; targetItem.Clip)
+								{
+									const UIBox visible = IntersectUIBoxes(TransformUIBox(targetItem.Rect, targetItem.Transform), *targetItem.Clip);
+									if ((visible.Size.x <= 0 || visible.Size.y <= 0) && !UILayout::CanReveal(targetItem, byEntity))
+										report(prefix + " is fully clipped and cannot be scrolled into view");
+								}
+							}
 						}
 						items.push_back(std::move(entry));
 						if (const auto* image = item.Owner.TryGetComponent<UIImageComponent>(); image && !image->Texture.empty() && !AssetManager::GetTexture(image->Texture))
@@ -1678,7 +1717,7 @@ namespace Basalt {
 				return json::object();
 			});
 
-			Add(registry, "input.text", "Queues one Unicode scalar value for the focused text input this frame. Recorded during replay recording.", Schema::Object({ { "codepoint", Schema::Integer("Unicode scalar value (surrogates rejected)", 0, 0x10ffff) } }, { "codepoint" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "input.text", "Queues one Unicode scalar value for the focused text input this frame. Rejects C0/DEL control characters, surrogates and input beyond the 16384-byte frame buffer. Recorded during replay recording.", Schema::Object({ { "codepoint", Schema::Integer("Unicode scalar value (surrogates rejected)", 0, 0x10ffff) } }, { "codepoint" }), [](AutomationSession& session, const json& params) {
 				ApplyTextInput(params);
 				session.RecordInput("input.text", params);
 				return json{ { "ok", true } };

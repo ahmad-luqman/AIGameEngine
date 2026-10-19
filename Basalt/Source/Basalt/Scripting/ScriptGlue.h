@@ -2,6 +2,7 @@
 
 #include "Basalt/Core/UUID.h"
 #include "Basalt/Math/Random.h"
+#include "Basalt/UI/UIGeometry.h"
 
 #include <sol/sol.hpp>
 
@@ -94,6 +95,7 @@ namespace Basalt {
 	private:
 		// Changed only by ScriptOwnerScope.
 		UUID m_CurrentOwner = 0;
+		std::vector<UUID> m_ReportedClipLeaks;
 
 		friend class ScriptOwnerScope;
 	};
@@ -104,13 +106,8 @@ namespace Basalt {
 	class ScriptOwnerScope
 	{
 	public:
-		ScriptOwnerScope(ScriptContext& context, UUID owner)
-			: m_Context(context)
-			, m_Previous(context.m_CurrentOwner)
-		{
-			context.m_CurrentOwner = owner;
-		}
-		~ScriptOwnerScope() { m_Context.m_CurrentOwner = m_Previous; }
+		ScriptOwnerScope(ScriptContext& context, UUID owner, const char* callback = "callback");
+		~ScriptOwnerScope();
 
 		ScriptOwnerScope(const ScriptOwnerScope&) = delete;
 		ScriptOwnerScope& operator=(const ScriptOwnerScope&) = delete;
@@ -118,6 +115,9 @@ namespace Basalt {
 	private:
 		ScriptContext& m_Context;
 		UUID m_Previous;
+		UUID m_Owner;
+		const char* m_Callback;
+		std::vector<UIBox> m_Clips;
 	};
 
 	// Registers the complete Basalt Lua API (see Docs/ScriptingAPI.md) into the state.

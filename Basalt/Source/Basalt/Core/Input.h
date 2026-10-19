@@ -148,7 +148,8 @@ namespace Basalt {
 		static void SetMousePosition(const glm::vec2& position);
 		static void AddMouseScroll(const glm::vec2& scroll);
 		// Printable Unicode text typed this frame; bounded to 16384 bytes and cleared by EndFrame/Reset.
-		static void AddTextCodepoint(uint32_t codepoint);
+		// Returns false for controls, invalid scalars or a full frame buffer.
+		static bool AddTextCodepoint(uint32_t codepoint);
 		static std::string GetTextInput();
 
 		// Injected gamepads (tests, automation). Connecting names the gamepad and makes it injected (taking over a

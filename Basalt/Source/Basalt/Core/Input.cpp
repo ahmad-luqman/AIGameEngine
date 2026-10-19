@@ -422,10 +422,10 @@ namespace Basalt {
 		return s_CursorMode;
 	}
 
-	void Input::AddTextCodepoint(uint32_t codepoint)
+	bool Input::AddTextCodepoint(uint32_t codepoint)
 	{
 		if (codepoint < 0x20U || codepoint == 0x7fU || codepoint > 0x10ffffU || (codepoint >= 0xd800U && codepoint <= 0xdfffU))
-			return;
+			return false;
 		std::string encoded;
 		if (codepoint <= 0x7fU)
 			encoded += static_cast<char>(codepoint);
@@ -441,10 +441,11 @@ namespace Basalt {
 		}
 		std::scoped_lock lock(s_Mutex);
 		if (s_TextInput.size() + encoded.size() > 16384)
-			return;
+			return false;
 		s_TextInput += encoded;
 		if (s_GameFocus)
 			s_GameTextInput += encoded;
+		return true;
 	}
 
 	std::string Input::GetTextInput()

@@ -1,6 +1,9 @@
 #include <doctest/doctest.h>
 
 #include <Basalt/Scene/Entity.h>
+#include <Basalt/Core/Log.h>
+#include <Basalt/Core/FileSystem.h>
+#include <Basalt/UI/UIFonts.h>
 #include <Basalt/Scene/Scene.h>
 #include <Basalt/UI/GameUI.h>
 #include <Basalt/UI/UILayout.h>
@@ -166,7 +169,7 @@ TEST_CASE("sprite sheet rendering maps UV rectangles to the selected row-major c
 	ImGui::EndFrame();
 }
 
-TEST_CASE("MeasureText creates and releases a context in headless sessions")
+TEST_CASE("MeasureText restores the caller context in headless sessions")
 {
 	REQUIRE(ImGui::GetCurrentContext() == nullptr);
 	const auto extent = UIRenderer::MeasureText("Headless", 20);
@@ -207,7 +210,10 @@ TEST_CASE("composed UI scales stop unsafe subtrees and retain finite renderer ou
 			entity.AddComponent<UIImageComponent>();
 			parent = entity;
 		}
-		const auto items = UILayout::Layout(scene, { 1920, 1080 });
+		std::vector<UILayoutProblem> problems;
+		const auto items = UILayout::Layout(scene, { 1920, 1080 }, &problems);
+		REQUIRE(problems.size() == 1);
+		CHECK_FALSE(problems[0].Message.empty());
 		CHECK_FALSE(items.empty());
 		CHECK(items.size() < 24);
 		for (const auto& item : items)
@@ -322,4 +328,148 @@ TEST_CASE("text fields retain their own clip and intersect inherited clipping af
 		ImGui::EndFrame();
 		scene.OnRuntimeStop();
 	}
+}
+
+TEST_CASE("rotated nested ClipChildren intersect and disjoint clips reject hits")
+{
+	for (const float childX : { 20.0f, 300.0f })
+	{
+		Scene scene;
+		Entity outer = scene.CreateEntity("Rotated outer clip");
+		auto& rect = outer.AddComponent<UIRectComponent>();
+		rect.AnchorMin = rect.AnchorMax = rect.Pivot = { 0, 0 };
+		rect.Position = { 100, 100 };
+		rect.Size = { 100, 100 };
+		rect.Rotation = glm::radians(35.0f);
+		rect.ClipChildren = true;
+		Entity inner = scene.CreateChildEntity(outer, "Inner clip");
+		auto& innerRect = inner.AddComponent<UIRectComponent>();
+		innerRect.AnchorMin = innerRect.AnchorMax = innerRect.Pivot = { 0, 0 };
+		innerRect.Position = { childX, 0 };
+		innerRect.Size = { 80, 80 };
+		innerRect.Rotation = glm::radians(-15.0f);
+		innerRect.ClipChildren = true;
+		Entity content = scene.CreateChildEntity(inner, "Content");
+		content.AddComponent<UIImageComponent>();
+		const auto items = UILayout::Layout(scene, { 1920, 1080 });
+		REQUIRE(items.size() == 3);
+		const UIBox expected = IntersectUIBoxes(TransformUIBox(items[0].Rect, items[0].Transform), TransformUIBox(items[1].Rect, items[1].Transform));
+		REQUIRE(items[2].Clip);
+		CHECK(*items[2].Clip == expected);
+		if (childX > 100)
+		{
+			CHECK(expected.Size.x == 0);
+			CHECK_FALSE(items[2].Contains(expected.Center()));
+		}
+		else
+			CHECK(expected.Size.x > 0);
+	}
+}
+
+TEST_CASE("draw command clips reject negative extents and frame reset diagnoses an unbalanced stack once")
+{
+	UIDrawCommand command;
+	command.Clip = UIBox{ { 0, 0 }, { -1, 20 } };
+	CHECK_FALSE(SanitizeUIDrawCommand(command));
+	command.Clip->Size = { 20, -1 };
+	CHECK_FALSE(SanitizeUIDrawCommand(command));
+	command.Clip->Size = { 0, 20 };
+	CHECK(SanitizeUIDrawCommand(command));
+	GameUI::BeginFrame();
+	const uint64_t before = Log::GetHistory().GetTotalCount();
+	for (int i = 0; i < 3; ++i)
+	{
+		REQUIRE(GameUI::PushClip({ { 0, 0 }, { 10, 10 } }));
+		GameUI::BeginFrame();
+		CHECK_FALSE(GameUI::GetClip());
+	}
+	uint64_t next = 0;
+	const auto messages = Log::GetHistory().GetMessagesSince(before, next);
+	CHECK(std::count_if(messages.begin(), messages.end(), [](const auto& message) { return message.Text.find("unbalanced UI.PushClip/PopClip") != std::string::npos; }) <= 1);
+}
+
+TEST_CASE("new UI component repairs report one layout warning per component")
+{
+	BasaltTest::ScopedGameInput restore;
+	Input::Reset();
+	Scene scene;
+	Entity input = scene.CreateEntity("Invalid input");
+	input.AddComponent<UITextInputComponent>().MaxLength = 0;
+	input.AddComponent<UIFocusRingComponent>().Thickness = -1;
+	Entity dropdown = scene.CreateEntity("Invalid dropdown");
+	dropdown.AddComponent<UIDropdownComponent>().Selected = 999;
+	Entity scroll = scene.CreateEntity("Invalid scroll");
+	scroll.AddComponent<UIScrollViewComponent>().ScrollSpeed = -1;
+	const uint64_t before = Log::GetHistory().GetTotalCount();
+	scene.OnRuntimeStart();
+	REQUIRE(BasaltTest::Eval(scene, "UI.SetFocus(Scene.FindEntityByName('Invalid input'))") == "");
+	Input::SetKeyState(KeyCode::Home, true);
+	scene.OnUpdate(1.0f / 60.0f);
+	Input::SetKeyState(KeyCode::Home, false);
+	Input::EndFrame();
+	for (int i = 0; i < 2; ++i)
+	{
+		std::vector<UIDrawCommand> commands;
+		UILayout::BuildCommands(scene, { 1920, 1080 }, commands);
+		UILayout::GetWidget(input);
+		UILayout::GetWidget(dropdown);
+		UILayout::GetWidget(scroll);
+	}
+	uint64_t next = 0;
+	const auto messages = Log::GetHistory().GetMessagesSince(before, next);
+	for (const std::string component : { "UITextInput", "UIDropdown", "UIScrollView", "UIFocusRing" })
+		CHECK(std::count_if(messages.begin(), messages.end(), [&](const auto& message) { return message.Text.find("the " + component + " on") != std::string::npos; }) == 1);
+	scene.OnRuntimeStop();
+}
+
+TEST_CASE("headless text measurement retains loaded fonts and coexists with a host context")
+{
+	REQUIRE(ImGui::GetCurrentContext() == nullptr);
+	BasaltTest::TempProject project("HeadlessMeasureFont");
+	const auto data = BasaltTest::ReadKarla();
+	const auto fontPath = project.GetDirectory() / "Assets/Measure.ttf";
+	REQUIRE(FileSystem::WriteBinaryFile(fontPath, data.data(), data.size()));
+	const std::string path = FileSystem::PathToUtf8(fontPath);
+	const auto first = UIRenderer::MeasureText("Persistent TrueType metrics", 30, path);
+	REQUIRE(first.x > 0);
+	REQUIRE(std::filesystem::remove(fontPath));
+	for (int i = 0; i < 3; ++i)
+	{
+		CHECK(UIRenderer::MeasureText("Persistent TrueType metrics", 30, path) == first);
+		CHECK(ImGui::GetCurrentContext() == nullptr);
+	}
+	{
+		BasaltTest::ImGuiTestContext host;
+		ImGuiContext* context = ImGui::GetCurrentContext();
+		std::string error;
+		REQUIRE(UIFonts::LoadFromMemory(data, "Host Karla", error));
+		CHECK(UIRenderer::MeasureText("Host text", 24).x > 0);
+		CHECK(ImGui::GetCurrentContext() == context);
+		ImGui::NewFrame();
+		ImGui::EndFrame();
+	}
+	CHECK(ImGui::GetCurrentContext() == nullptr);
+	CHECK(UIRenderer::MeasureText("Headless after host shutdown", 20).x > 0);
+	CHECK(ImGui::GetCurrentContext() == nullptr);
+}
+
+TEST_CASE("GetRect visits only its ancestry and rejects hidden or unusable ancestors")
+{
+	Scene scene;
+	Entity good = scene.CreateEntity("Queried field");
+	good.AddComponent<UIRectComponent>();
+	Entity unrelated = scene.CreateEntity("Unqueried invalid transform");
+	unrelated.AddComponent<UIRectComponent>().Scale = { 1000, 1000 };
+	Entity child = scene.CreateChildEntity(unrelated, "Unqueried invalid child");
+	child.AddComponent<UIRectComponent>().Scale = { 1000, 1000 };
+	Entity invalid = scene.CreateChildEntity(child, "Unqueried overflowing descendant");
+	invalid.AddComponent<UIRectComponent>().Scale = { 1000, 1000 };
+	const uint64_t before = Log::GetHistory().GetTotalCount();
+	CHECK(UILayout::GetRect(scene, good, { 1920, 1080 }));
+	uint64_t next = 0;
+	const auto messages = Log::GetHistory().GetMessagesSince(before, next);
+	CHECK(std::none_of(messages.begin(), messages.end(), [](const auto& message) { return message.Text.find("Unqueried") != std::string::npos; }));
+	CHECK_FALSE(UILayout::GetRect(scene, invalid, { 1920, 1080 }));
+	unrelated.GetComponent<UIRectComponent>().Visible = false;
+	CHECK_FALSE(UILayout::GetRect(scene, child, { 1920, 1080 }));
 }

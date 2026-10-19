@@ -1463,7 +1463,7 @@ Sets mouse position, a button state and/or accumulated scroll [x,y] for play mod
 
 ### `input.text`
 
-Queues one Unicode scalar value for the focused text input this frame. Recorded during replay recording.
+Queues one Unicode scalar value for the focused text input this frame. Rejects C0/DEL control characters, surrogates and input beyond the 16384-byte frame buffer. Recorded during replay recording.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -3035,7 +3035,7 @@ Compiles a Lua script in isolation and returns its Properties, or the error.
 
 ### `ui.layout`
 
-Lays out the current scene's UI components (the play copy while playing) for a viewport of width x height pixels: the canvas size, every visible UI entity's untransformed rect [x, y, width, height] in canvas units in draw order, its column-major 3x3 transform and effective canvas clip (null when unrestricted) (widgets add their kind, values, target, callback and, while playing, state and focus), the host's view that maps the mouse onto the canvas for the widgets (`view`: origin and size in mouse coordinates and whether widgets take pointer and navigation input; headless, mouse positions are canvas units), and the problems that make UI draw or behave differently than authored (an image that does not load and draws its Color, a font that does not load and falls back to the built-in one or has glyphs that draw blank, an entity with several widget components, a widget callback whose target is missing or has no Script).
+Lays out the current scene's UI components (the play copy while playing) for a viewport of width x height pixels: the canvas size, every visible UI entity's untransformed rect [x, y, width, height] in canvas units in draw order, its column-major 3x3 transform and effective canvas clip (null when unrestricted) (widgets add their kind, values, target, callback and, while playing, state and focus), the host's view that maps the mouse onto the canvas for the widgets (`view`: origin and size in mouse coordinates and whether widgets take pointer and navigation input; headless, mouse positions are canvas units), and the problems that make UI draw or behave differently than authored (an image that does not load and draws its Color, a font that does not load and falls back to the built-in one or has glyphs that draw blank, an entity with several widget components, a widget callback whose target is missing or has no Script, an unusable composed transform, or an explicit navigation target that cannot currently take focus).
 
 | Parameter | Type / description |
 |-----------|--------------------|

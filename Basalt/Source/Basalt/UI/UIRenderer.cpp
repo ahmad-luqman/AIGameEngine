@@ -16,6 +16,53 @@ namespace Basalt {
 
 	namespace {
 
+		// Owned independently of hosts so headless measurements retain their atlas and font cache.
+		class HeadlessMeasureContext
+		{
+		public:
+			HeadlessMeasureContext()
+			{
+				ImGuiContext* previous = ImGui::GetCurrentContext();
+				m_Context = ImGui::CreateContext();
+				ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+				ImGui::GetIO().IniFilename = nullptr;
+				ImGui::SetCurrentContext(previous);
+			}
+			~HeadlessMeasureContext()
+			{
+				ImGuiContext* previous = ImGui::GetCurrentContext();
+				ImGui::DestroyContext(m_Context);
+				ImGui::SetCurrentContext(previous == m_Context ? nullptr : previous);
+			}
+			ImGuiContext* Get() const { return m_Context; }
+			HeadlessMeasureContext(const HeadlessMeasureContext&) = delete;
+			HeadlessMeasureContext& operator=(const HeadlessMeasureContext&) = delete;
+
+		private:
+			ImGuiContext* m_Context = nullptr;
+		};
+
+		// Restores the host's current context even if font loading or measurement throws.
+		class MeasureContextScope
+		{
+		public:
+			MeasureContextScope()
+				: m_Previous(ImGui::GetCurrentContext())
+			{
+				if (!m_Previous)
+				{
+					static HeadlessMeasureContext s_Headless;
+					ImGui::SetCurrentContext(s_Headless.Get());
+				}
+			}
+			~MeasureContextScope() { ImGui::SetCurrentContext(m_Previous); }
+			MeasureContextScope(const MeasureContextScope&) = delete;
+			MeasureContextScope& operator=(const MeasureContextScope&) = delete;
+
+		private:
+			ImGuiContext* m_Previous;
+		};
+
 		ImU32 ToColor(const glm::vec4& color)
 		{
 			const glm::vec4 clamped = glm::clamp(color, glm::vec4(0.0f), glm::vec4(1.0f));
@@ -107,21 +154,13 @@ namespace Basalt {
 	{
 		if (text.empty())
 			return glm::vec2(0);
-		ImGuiContext* temporary = nullptr;
-		if (!ImGui::GetCurrentContext())
-		{
-			temporary = ImGui::CreateContext();
-			ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
-			ImGui::GetIO().IniFilename = nullptr;
-		}
+		const MeasureContextScope context;
 		ImFont* font = UIFonts::Get(fontPath);
 		fontSize = std::clamp(std::isfinite(fontSize) ? fontSize : UITextComponent::DefaultFontSize, UITextComponent::MinFontSize, UITextComponent::MaxFontSize);
 		const auto lines = BreakLines(font, fontSize, text, std::isfinite(wrapWidth) ? std::max(wrapWidth, 0.0f) : 0.0f);
 		glm::vec2 size(0.0f, fontSize * static_cast<float>(lines.size()));
 		for (const auto& line : lines)
 			size.x = std::max(size.x, line.Width);
-		if (temporary)
-			ImGui::DestroyContext(temporary);
 		return size;
 	}
 

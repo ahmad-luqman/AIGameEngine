@@ -989,6 +989,12 @@ function Game.Quit() end
 
 -- Screen UI --------------------------------------------------------------------------------------------------------
 
+---Options of UI.MeasureText.
+---@class UIMeasureTextOptions
+---@field Size? number Font size, 4..512 (default 32)
+---@field Font? string .ttf path (empty uses built-in)
+---@field Width? number Wrap width, 0..1000000 (0 disables wrapping)
+
 ---Options of UI.Text.
 ---@class UITextOptions
 ---@field Size? number Font size, 4..512 (default 32)
@@ -1019,7 +1025,6 @@ function Game.Quit() end
 ---@field Scale? Vec2 Positive scale about the pivot
 ---@field Slice? Vec4 Nine-slice borders: left, top, right, bottom texels
 ---@field SliceScale? number
-
 ---@field UVMin? Vec2 Normalized texture rectangle minimum
 ---@field UVMax? Vec2 Normalized texture rectangle maximum
 ---@field SpriteColumns? integer Grid columns, 1..4096
@@ -1056,6 +1061,22 @@ UI = {}
 ---The canvas size.
 ---@return Vec2
 function UI.GetSize() end
+
+---Measures UI text in canvas units; Width enables word wrapping. Empty text measures zero.
+---@param text string
+---@param sizeOrOptions? number|UIMeasureTextOptions
+---@return Vec2
+function UI.MeasureText(text, sizeOrOptions) end
+
+---Intersect a canvas clip rectangle with the current clip until PopClip. Reset each frame.
+---@param x number
+---@param y number
+---@param width number
+---@param height number
+function UI.PushClip(x, y, width, height) end
+
+---Restore the previous clip. An empty stack is an error.
+function UI.PopClip() end
 
 ---Draws text this frame (size default 32, color default white, align default "Left").
 ---@param text string
@@ -1126,11 +1147,11 @@ function UI.GetFocus() end
 ---@param widget Entity|string|nil
 function UI.SetFocus(widget) end
 
----Whether the pointer is over an interactable widget.
+---Whether the pointer is over an interactable widget or blocking panel.
 ---@return boolean
 function UI.IsPointerOverWidget() end
 
----Whether the keyboard and gamepads move the focus and activate widgets.
+---Whether keyboard/gamepads navigate and activate; pointer-focused text inputs still accept typing.
 ---@param enabled boolean
 function UI.SetNavigationEnabled(enabled) end
 
@@ -1138,7 +1159,7 @@ function UI.SetNavigationEnabled(enabled) end
 ---@return boolean
 function UI.IsNavigationEnabled() end
 
----The entity's laid-out rect as Vec4(x, y, width, height), or nil when it has none or is hidden.
+---The untransformed layout rect as Vec4(x, y, width, height); nil without UI, when hidden or with an unusable transform.
 ---@param entity Entity
 ---@return Vec4?
 function UI.GetRect(entity) end
@@ -1862,19 +1883,3 @@ function BasaltScript:StopAllCoroutines() end
 ---@overload fun(self: Entity, name: "Prefab"): PrefabComponent?
 function Entity:GetComponent(name) end
 -- END GENERATED: components
-
----Measures UI text in canvas units; Width enables word wrapping. Empty text measures zero.
----@param text string
----@param sizeOrOptions? number|table Size, Font, Width
----@return Vec2
-function UI.MeasureText(text, sizeOrOptions) end
-
----Intersect a canvas clip rectangle with the current clip until PopClip. Reset each frame.
----@param x number
----@param y number
----@param width number
----@param height number
-function UI.PushClip(x, y, width, height) end
-
----Restore the previous clip. An empty stack is an error.
-function UI.PopClip() end

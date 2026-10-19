@@ -35,7 +35,7 @@ def main():
               ("nested content", (250, 450), (26, 77, 230)),
               ("outside right clip", (550, 450), (20, 26, 36)),
               ("outside bottom clip", (250, 560), (20, 26, 36)),
-              ("focus ring", (1101, 310), (255, 204, 26))]
+              ("programmatic focus has no keyboard ring", (1101, 310), (31, 31, 38))]
     for name, position, expected in checks:
         actual = pixel(*position)
         if not close(actual, expected):

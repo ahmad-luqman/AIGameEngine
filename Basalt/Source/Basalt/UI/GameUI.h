@@ -39,6 +39,10 @@ namespace Basalt {
 		static bool PushClip(const UIBox& box);
 		static bool PopClip();
 		static std::optional<UIBox> GetClip();
+		// Protected script calls preserve their caller's stack, including when Lua reports an error.
+		static std::vector<UIBox> CaptureClipStack();
+		// Returns whether the callback left a different stack; restores the supplied snapshot.
+		static bool RestoreClipStack(std::vector<UIBox> clips);
 		// Appends this frame's commands to `out`, in submission order.
 		static void AppendCommands(std::vector<UIDrawCommand>& out);
 		static size_t GetCommandCount();

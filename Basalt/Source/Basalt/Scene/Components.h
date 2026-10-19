@@ -828,7 +828,9 @@ namespace Basalt {
 		bool Visible = true;
 		// Clips descendants to this rect's transformed axis-aligned bounds.
 		bool ClipChildren = false;
+		// Clockwise about Pivot (+Y down): radians in C++, degrees in JSON/Lua, within +/-1000 turns.
 		float Rotation = 0.0f;
+		// Positive per-axis scale about Pivot, each axis 0.001..1000; inherited by descendants.
 		glm::vec2 Scale = { 1.0f, 1.0f };
 		glm::vec2 AnchorMin = { 0.5f, 0.5f };
 		glm::vec2 AnchorMax = { 0.5f, 0.5f };
@@ -931,9 +933,10 @@ namespace Basalt {
 		bool operator==(const UIButtonComponent&) const = default;
 	};
 
-	// A slider: a track filling the rect, a fill from its minimum edge to the value and a handle (tinted)
-	// at the value. Dragging, or Left/Right while focused, changes Value within [Min, Max] in steps of Step, Max
-	// always being a stop (0 = continuous; Left/Right then move a twentieth of the range).
+	// A slider: horizontal values increase rightwards; Vertical values increase upwards. The track fills the
+	// rect, with a fill and a tinted handle at Value. Dragging, or Left/Right (Up/Down when Vertical) while
+	// focused, changes Value within [Min, Max] in steps of Step, with Max always a stop (0 = continuous;
+	// navigation then moves a twentieth of the range).
 	struct UISliderComponent
 	{
 		bool Interactable = true;
@@ -944,7 +947,7 @@ namespace Basalt {
 		glm::vec4 TrackColor = { 0.12f, 0.12f, 0.15f, 0.9f };
 		glm::vec4 FillColor = { 0.3f, 0.6f, 1.0f, 1.0f };
 		glm::vec4 HandleColor = { 1.0f, 1.0f, 1.0f, 1.0f };
-		// Canvas units; a handle wider than the rect shrinks to its width.
+		// Canvas units along the slider axis: width horizontally, height when Vertical; at most that rect extent.
 		float HandleWidth = 24.0f;
 		bool Vertical = false;
 		glm::vec4 NormalTint = { 0.85f, 0.85f, 0.85f, 1.0f };

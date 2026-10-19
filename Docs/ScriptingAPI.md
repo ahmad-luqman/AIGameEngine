@@ -790,8 +790,8 @@ Colors are display colors with opacity, 0..1 (not HDR). Debug views (`--debug-vi
 
 | Component | Fields |
 |-----------|--------|
-| `UIRect` | `Visible`, `AnchorMin`, `AnchorMax`, `Pivot`, `Position`, `Size` (Vec2s) |
-| `UIImage` | `Texture`, `Color` (tint), `Slice` (Vec4 left, top, right, bottom, in texels), `SliceScale` |
+| `UIRect` | `Visible`, `ClipChildren`, `Rotation` (degrees, ±360000), `Scale` (Vec2, each axis 0.001..1000), `AnchorMin`, `AnchorMax`, `Pivot`, `Position`, `Size` (Vec2s) |
+| `UIImage` | `Texture`, `Color` (tint), `Slice` (Vec4 left, top, right, bottom, in texels), `SliceScale`, `UVMin`, `UVMax` (Vec2s, 0..1), `SpriteColumns`, `SpriteRows` (integers, 1..4096), `SpriteFrame` (zero-based, less than columns × rows) |
 | `UIText` | `Text`, `Font` (.ttf path, empty = built-in), `FontSize`, `Color`, `HorizontalAlign` (`Left`/`Center`/`Right`), `VerticalAlign` (`Top`/`Middle`/`Bottom`), `Wrap`, `Shadow` |
 | `UIButton` | `Interactable`, tints (below), `Target`, `OnClick` |
 | `UISlider` | `Interactable`, `Value`, `Min`, `Max`, `Step`, `TrackColor`, `FillColor`, `HandleColor`, `HandleWidth`, `Vertical`, tints, `Target`, `OnValueChanged` |
@@ -804,7 +804,8 @@ Colors are display colors with opacity, 0..1 (not HDR). Debug views (`--debug-vi
 | `UIFocusRing` | `Color`, `Thickness` |
 
 `UIRect` places a rectangle relative to its parent's rect: that of the nearest ancestor with UI components,
-or the whole canvas (nothing is clipped to it). Anchors are fractions of the parent rect (`0,0` top-left,
+or the whole canvas. Descendants are clipped when an ancestor enables `ClipChildren` or has a
+`UIScrollView`; otherwise they may extend outside the parent. Anchors are parent fractions (`0,0` top-left,
 `1,1` bottom-right).
 
 - **Equal anchors** pin the rect to that spot: `Size` is its size, and its `Pivot` (a fraction of the rect)
@@ -835,7 +836,8 @@ Scene.FindEntityByName("PauseMenu"):SetComponent("UIRect", { Visible = paused })
 ```
 
 - `UI.GetRect(entity)` — the entity's laid-out rect as `Vec4(x, y, width, height)` in canvas units, or nil
-  when it has no UI components or it or an ancestor is hidden. Laid out for the last rendered viewport
+  when it has no UI components, it or an ancestor is hidden, or its composed transform is unusable.
+  Clipping alone does not remove the rect. Laid out for the last rendered viewport
   (1920×1080 when headless), like `UI.GetSize()`.
 
 ### Widgets
@@ -862,22 +864,26 @@ input.
 - **`UIDropdown`** draws the selected label and opens a popup on click or accept. `Options` contains up
   to 128 labels separated by newlines (at most 16384 bytes). `Selected` is zero-based; an empty option
   string has no choices and keeps `Selected = 0`. Choose a row with the pointer, or use Up/Down and
-  accept; Escape or clicking outside dismisses the popup. A `UIText` supplies the font styling.
+  accept; Escape or clicking outside dismisses the popup. Highlighting a row leaves `Selected` unchanged
+  until the choice is accepted. A `UIText` supplies the font styling.
 - **`UIScrollView`** clips descendants to its viewport and places them in `ContentSize` (at least the
   viewport size). Children move opposite `Offset`, clamped to the content extent. Wheel input adjusts
   the offset by `ScrollSpeed` canvas units; Shift swaps the scroll axes. Nested views route the wheel
-  to the nearest enabled scroll ancestor under the pointer. `Interactable = false` pauses wheel input.
+  to the nearest enabled scroll ancestor under the pointer. `Interactable = false` disables user scrolling.
 - **`UIPanel`** with `BlockInput = true` consumes pointer input over its rect, including when it has no
   image. Children can still receive input. `UI.IsPointerOverWidget()` reports blocking panels too.
 - **`UINavigation`** sets explicit directional focus targets. A direction set to 0 uses the nearest
   widget in that direction. A hidden, clipped, missing or disabled explicit target leaves focus in place.
-- **`UIFocusRing`** draws an inset border of `Thickness` canvas units while the entity has focus.
+- **`UIFocusRing`** draws an inset border of `Thickness` canvas units around the focused control after
+  keyboard/gamepad input. A pointer press hides the ring; typing in a text input shows it again.
+  Script-set focus inherits the current input modality.
 
 Tints multiply one part of the widget by state (the button's `UIImage`, the slider's handle, the checkbox's
 box): `NormalTint`, `HighlightTint` (hovered by the mouse, or focused by keyboard/gamepad navigation),
 `PressedTint` (held with the mouse over it — a dragged slider stays pressed — or by the accept key) and
-`DisabledTint` (`Interactable = false`: no input, no focus). An entity with several widget components acts as the first of button, slider, checkbox, text input, dropdown
-(`ui.layout` reports it).
+`DisabledTint` (`Interactable = false`: no input, no focus). An entity with several interactive controls
+acts as the first of button, slider, checkbox, text input, dropdown (`ui.layout` reports it). Without a control it acts as a scroll view, then a blocking panel;
+scroll views and panels do not count as conflicting controls.
 
 **Callbacks.** A user interaction calls a method on the script of the `Target` entity (0, the default, means
 the widget's own entity), named by `OnClick` (buttons) or `OnValueChanged` (sliders: the new number;
@@ -893,28 +899,27 @@ end
 ```
 
 Callbacks run at the start of the frame, before `OnUpdate`, in the order the interactions happened; the
-widget's `Value`/`Checked` is already updated. Setting values with `SetComponent` (or in the scene file) calls
-nothing. A callback that cannot run — the target entity does not exist, has no running script, or its script
+widget's `Value`, `Checked`, `Text` or `Selected` is already updated. Setting values with `SetComponent`
+(or in the scene file) calls nothing. A callback that cannot run — the target entity does not exist, has no running script, or its script
 has no such method — is a script error, reported once per widget, method and kind of problem (`ui.layout` lists
 the targets that are missing or have no Script). A widget or target that an earlier callback destroyed this
 frame (a menu closing itself) is skipped. Names must be Lua identifiers (or
 empty); `Target` is remapped when the widget is duplicated or instantiated with its target, like joints.
 
-**Input.** Only widgets take pointer input (a plain `UIImage` over a button does not block it; hide or disable
-the widgets under a modal panel). The topmost widget under the mouse is hovered (immediate-mode widgets are
-over the components, later ones over earlier ones; a disabled widget still covers the ones below). Pressing
+**Input.** Widgets and blocking `UIPanel`s take pointer input. A plain `UIImage` over a button does not
+block it; add a blocking panel for a modal backdrop. The topmost widget under the mouse is hovered
+(immediate-mode widgets are over components, later ones over earlier ones; a disabled widget still covers the ones below). Pressing
 the left mouse button on a widget holds it; releasing over it clicks a button or toggles a checkbox (losing the
 window's focus while holding does not), and a held slider follows the mouse as it moves, even off its rect. Any
-left click in the game view drops the keyboard/gamepad focus, so after a click Space and Enter are the game's
-again. Keyboard and
-gamepads move the focus:
+left click in the game view drops keyboard/gamepad focus, except text inputs and dropdowns take focus
+when clicked. Keyboard and gamepads move the focus:
 
 | Input | Effect |
 |-------|--------|
 | Arrows, D-pad, left stick (pushed past half way, along its dominant axis) | Focus the nearest widget in that direction (from widget centers; sideways distance counts double). The first press with nothing focused focuses the first widget. Held, it repeats after 0.4 s, every 0.1 s. |
-| Left/Right on a focused slider | Move it to the next stop (`Min + k * Step`, and `Max`; a twentieth of the range when continuous); Up/Down still navigate |
+| Left/Right on a horizontal slider; Up/Down on a vertical slider | Move it to the next stop (`Min + k * Step`, and `Max`; a twentieth of the range when continuous); the other axis navigates |
 | Tab / Shift+Tab | Next / previous widget in draw order, wrapping |
-| Enter, keypad Enter, Space, gamepad `A` | Click the focused button / toggle the focused checkbox, on the press |
+| Enter, keypad Enter, Space, gamepad `A` | Activate the focused control on the press; dropdowns open or accept the highlighted choice |
 
 Hidden, disabled and destroyed widgets lose the focus, and so does everything when the scene changes
 (`Scene.Load`). The keys that act on a focused widget still reach `Input`: a game that reads the arrows, Space or
@@ -930,8 +935,10 @@ gamepads while it has focus.
 - `UI.SetNavigationEnabled(enabled)`, `UI.IsNavigationEnabled()` — whether the keyboard and gamepads move the
   focus and activate widgets (on by default; turning it off drops the focus, though `UI.SetFocus` can still set
   one). The game's setting: it survives `Scene.Load`, and the editor also pauses navigation while its game view
-  does not have focus. `UI.SetNavigationEnabled` is an error outside play; `UI.IsNavigationEnabled` is then false.
-- `UI.IsPointerOverWidget()` — whether the mouse is over an interactable widget (so a click there is the UI's,
+  does not have focus. Pointer-focused text inputs still accept typing and cursor keys while the host
+  routes keyboard input, even when the game disables navigation. `UI.SetNavigationEnabled` is an error
+  outside play; `UI.IsNavigationEnabled` is then false.
+- `UI.IsPointerOverWidget()` — whether the mouse is over an interactable widget or blocking panel (so a click is the UI's,
   not the game's)
 
 ### Immediate mode
@@ -983,6 +990,35 @@ function Menu:OnUpdate(dt)
     self.Volume = UI.Slider("Volume", self.Volume, 0, 1, 0, 80, 320, 32, { Anchor = "Center", Step = 0.1 })
 end
 ```
+
+### Clipping, transforms and sprite sheets
+
+`UI.MeasureText(text [, size | { Size=32, Font="", Width=0 }])` returns a Vec2 in canvas units, using
+UI.Text's newline and word wrapping rules. Width zero disables wrapping. Empty text measures zero.
+Measurement is available in headless sessions.
+
+`UI.PushClip(x, y, width, height)` intersects a canvas rectangle with the current clip;
+`UI.PopClip()` restores the previous clip. Drawing and immediate widget hit testing obey this stack.
+Clips reset each frame; popping an empty stack is an error. At most 256 clips may nest.
+Each protected script callback (including timers, events and coroutine resumes) restores its caller's
+clip stack on return, error or yield. Balance pushes and pops within that callback; an imbalance
+logs a warning naming the script, once per instance.
+
+A UIRect's `ClipChildren` clips descendants to its transformed axis-aligned bounds. Nested clips
+intersect. `Rotation` is clockwise about the pivot, in degrees in component JSON and Lua (radians in
+C++), within ±360000 degrees. Each `Scale` axis is 0.001..1000. Rotation and scale apply to descendants.
+`UI.GetRect` returns the untransformed layout box; rendering and pointer hit testing apply the hierarchy's
+transforms. Scroll views clip descendants automatically. UI.Rect, UI.Image and UI.Text options also accept
+`Rotation` (degrees) and `Scale`, applied about their `Pivot`.
+
+UIImage and UI.Image options support `UVMin` and `UVMax` (each coordinate 0..1; reversed axes flip the
+image), plus integer `SpriteColumns` and `SpriteRows` (1..4096), and zero-based `SpriteFrame` less than
+their product. Cells run left to right, then top to bottom within the UV rectangle. Nine-slice borders
+are measured within the selected cell.
+
+UI hierarchy transforms have a finite numeric envelope: canvas coordinates and matrix terms remain
+within ±1e9, and inverse linear terms within ±1e12. A transform beyond that envelope, or a singular
+transform, skips its subtree with a warning. Ordinary tiny transforms retain inverse hit testing.
 
 ### Fonts
 
@@ -1542,15 +1578,3 @@ Without a character, root motion updates the world transform, respecting its rot
 Bone attachments update after physics and `OnLateUpdate`. Playback and parameters changed in
 `OnLateUpdate` advance on the following update; direct play, blend and seek calls resample the visible
 pose immediately.
-
-### UI clipping, transforms and sprite sheets
-
-`UI.MeasureText(text [, size | { Size=32, Font="", Width=0 }])` returns a Vec2 in canvas units, using the same newline and word wrapping rules as UI.Text. Width zero disables wrapping. Empty text measures zero. Measurement is available in headless sessions.
-
-`UI.PushClip(x, y, width, height)` intersects a canvas rectangle with the current clip; `UI.PopClip()` restores the previous clip. Both drawing and immediate widget hit testing obey this stack. Clips reset each frame; popping an empty stack is an error. At most 256 clips may nest.
-
-A UIRect's `ClipChildren` clips its descendants to its transformed axis-aligned bounds. Nested clips intersect. `Rotation` is in degrees in component JSON; `Scale` is a positive Vec2. Rotation and scale act about the rect's pivot and apply to all descendants. Layout boxes from UI.GetRect remain in the layout coordinate system; rendering and pointer hit testing apply the hierarchy's transforms. Scroll views clip descendants automatically. A hierarchy whose composed transform is singular or exceeds the finite drawing range is skipped with a warning. UI.Rect, UI.Image and UI.Text options also accept Rotation (degrees) and Scale, applied about their Pivot.
-
-UIImage and UI.Image options support `UVMin` and `UVMax` (normalized texture coordinates; reversed axes flip the image), plus `SpriteColumns`, `SpriteRows`, and zero-based `SpriteFrame`. Cells run left to right, then top to bottom within the UV rectangle. Grid dimensions are integers from 1 to 4096 and the frame must exist. Nine-slice borders are measured within the selected cell.
-
-UI hierarchy transforms have a finite numeric envelope: canvas coordinates and matrix terms must remain within ±1e9, and inverse linear terms within ±1e12. An accumulated transform beyond that envelope skips its subtree with a warning, preventing overflow from deeply nested extreme scales. Ordinary tiny transforms retain inverse hit testing.

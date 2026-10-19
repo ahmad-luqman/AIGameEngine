@@ -42,6 +42,30 @@
 
 namespace Basalt {
 
+	ScriptOwnerScope::ScriptOwnerScope(ScriptContext& context, UUID owner, const char* callback)
+		: m_Context(context)
+		, m_Previous(context.m_CurrentOwner)
+		, m_Owner(owner)
+		, m_Callback(callback)
+		, m_Clips(GameUI::CaptureClipStack())
+	{
+		context.m_CurrentOwner = owner;
+	}
+
+	ScriptOwnerScope::~ScriptOwnerScope()
+	{
+		m_Context.m_CurrentOwner = m_Previous;
+		if (!GameUI::RestoreClipStack(std::move(m_Clips)))
+			return;
+		auto& reported = m_Context.m_ReportedClipLeaks;
+		if (reported.size() >= 1024 || std::ranges::find(reported, m_Owner) != reported.end())
+			return;
+		reported.push_back(m_Owner);
+		const Entity entity = m_Context.SceneContext ? m_Context.SceneContext->GetEntityByUUID(m_Owner) : Entity();
+		const auto* script = entity ? entity.TryGetComponent<ScriptComponent>() : nullptr;
+		BS_CORE_WARN("UI: unbalanced UI.PushClip/PopClip in '{}' {} (entity {}); restored the caller's clip stack", script ? script->Script : "<script>", m_Callback, static_cast<uint64_t>(m_Owner));
+	}
+
 	Entity ScriptEntity::Resolve() const
 	{
 		return SceneContext ? SceneContext->GetEntityByUUID(ID) : Entity{};

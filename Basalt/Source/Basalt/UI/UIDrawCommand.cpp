@@ -41,7 +41,7 @@ namespace Basalt {
 		for (glm::length_t col = 0; col < 3; ++col)
 			if (!IsFinite(command.Transform[col]))
 				return false;
-		if (command.Clip && (!IsFinite(command.Clip->Min) || !IsFinite(command.Clip->Size)))
+		if (command.Clip && (!IsFinite(command.Clip->Min) || !IsFinite(command.Clip->Size) || command.Clip->Size.x < 0 || command.Clip->Size.y < 0))
 			return false;
 		const UIDrawCommand defaults;
 		constexpr float Limit = UIRectComponent::MaxMagnitude;

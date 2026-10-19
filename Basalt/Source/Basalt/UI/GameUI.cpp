@@ -2,6 +2,7 @@
 
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Input.h"
+#include "Basalt/Core/Log.h"
 #include "Basalt/UI/UIGeometry.h"
 
 #include <cmath>
@@ -14,6 +15,7 @@ namespace Basalt {
 		std::mutex s_Mutex;
 		std::vector<UIDrawCommand> s_Commands;
 		std::vector<UIBox> s_Clips;
+		bool s_ReportedUnbalancedClips = false;
 		// The host's view without the pointer and navigation flags, which are Input's game routing. The defaults are
 		// the headless view.
 		struct HostView
@@ -62,9 +64,16 @@ namespace Basalt {
 
 	void GameUI::BeginFrame()
 	{
-		std::scoped_lock lock(s_Mutex);
-		s_Commands.clear();
-		s_Clips.clear();
+		bool warn = false;
+		{
+			std::scoped_lock lock(s_Mutex);
+			warn = !s_Clips.empty() && !s_ReportedUnbalancedClips;
+			s_ReportedUnbalancedClips |= warn;
+			s_Commands.clear();
+			s_Clips.clear();
+		}
+		if (warn)
+			BS_CORE_WARN("GameUI: unbalanced UI.PushClip/PopClip at frame boundary; resetting the clip stack (reported once per process)");
 	}
 
 	bool GameUI::PushClip(const UIBox& box)
@@ -91,6 +100,21 @@ namespace Basalt {
 	{
 		std::scoped_lock lock(s_Mutex);
 		return s_Clips.empty() ? std::nullopt : std::optional(s_Clips.back());
+	}
+
+	std::vector<UIBox> GameUI::CaptureClipStack()
+	{
+		std::scoped_lock lock(s_Mutex);
+		return s_Clips;
+	}
+
+	bool GameUI::RestoreClipStack(std::vector<UIBox> clips)
+	{
+		std::scoped_lock lock(s_Mutex);
+		const bool changed = s_Clips != clips;
+		if (changed)
+			s_Clips = std::move(clips);
+		return changed;
 	}
 
 	void GameUI::AppendCommands(std::vector<UIDrawCommand>& out)

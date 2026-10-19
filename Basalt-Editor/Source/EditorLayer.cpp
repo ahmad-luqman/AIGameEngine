@@ -438,7 +438,7 @@ namespace Basalt {
 								 result["renderHeight"] = m_Renderer ? m_Renderer->GetRenderHeight() : 0;
 								 return result;
 							 } });
-		m_Commands.Register({ "editor.pick", "Picks visible UI rects, current mesh surfaces and enabled light/camera/audio helpers; background is 0. Selects unless select=false.", EditorCommandSchemas::Pick(), [this](AutomationSession& session, const nlohmann::json& params) {
+		m_Commands.Register({ "editor.pick", "Picks UI rects outside Play when UI Bounds is enabled, then mesh surfaces and enabled light/camera/audio helpers; background is 0. Selects unless select=false.", EditorCommandSchemas::Pick(), [this](AutomationSession& session, const nlohmann::json& params) {
 								 if (!m_Renderer)
 									 throw CommandError("picking requires a scene viewport");
 								 const UUID id = PickViewport(params["x"].get<uint32_t>(), params["y"].get<uint32_t>());
@@ -1396,7 +1396,7 @@ namespace Basalt {
 			throw CommandError("picking unavailable: viewport has not been sized");
 		if (x >= width || y >= height)
 			throw CommandError("pick coordinates outside " + std::to_string(width) + "x" + std::to_string(height) + " output viewport");
-		if (!IsGameRunning())
+		if (!IsGameRunning() && m_ViewportSettings.Options().UIBounds)
 		{
 			const glm::vec2 canvas = GameUI::GetCanvasSize({ static_cast<float>(width), static_cast<float>(height) });
 			const glm::vec2 point = glm::vec2(x, y) * canvas / glm::vec2(width, height);
@@ -2332,47 +2332,8 @@ namespace Basalt {
 		if (m_UIRectDrag && ImGui::IsMouseDown(ImGuiMouseButton_Left))
 		{
 			const auto& drag = *m_UIRectDrag;
-			UIRectComponent edited = drag.Initial;
-			const glm::vec2 parentDelta = glm::vec2(glm::inverse(drag.ParentTransform) * glm::vec3(mouse - drag.Start, 0.0f));
-			if (drag.Resize)
-			{
-				const glm::vec2 localDelta = glm::vec2(glm::inverse(drag.Transform) * glm::vec3(mouse - drag.Start, 0.0f));
-				edited = ResizeUIRect(drag.Initial, drag.Box, drag.Handle, localDelta);
-			}
-			else if (drag.Operation == GizmoOperation::Translate)
-				edited.Position += parentDelta;
-			else
-			{
-				const glm::vec2 pivot = drag.Box.Min + drag.Box.Size * drag.Initial.Pivot;
-				const glm::mat3 inverse = glm::inverse(drag.ParentTransform);
-				const glm::vec2 start = glm::vec2(inverse * glm::vec3(drag.Start, 1.0f)) - pivot;
-				const glm::vec2 current = glm::vec2(inverse * glm::vec3(mouse, 1.0f)) - pivot;
-				if (drag.Operation == GizmoOperation::Rotate && glm::length(start) > 1e-3f && glm::length(current) > 1e-3f)
-					edited.Rotation += std::atan2(current.y, current.x) - std::atan2(start.y, start.x);
-				else if (drag.Operation == GizmoOperation::Scale && glm::length(start) > 1e-3f)
-					edited.Scale *= std::max(glm::length(current) / glm::length(start), 0.01f);
-			}
 			const bool snap = options.Snap || ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
-			if (snap)
-			{
-				const float step = options.StepFor(drag.Operation);
-				if (drag.Operation == GizmoOperation::Rotate)
-					edited.Rotation = glm::radians(std::round(glm::degrees(edited.Rotation) / step) * step);
-				else if (drag.Operation == GizmoOperation::Scale)
-				{
-					edited.Scale = glm::round(edited.Scale / step) * step;
-					for (int axis = 0; axis < 2; ++axis)
-						if (std::abs(edited.Scale[axis]) < 0.01f)
-							edited.Scale[axis] = drag.Initial.Scale[axis] < 0.0f ? -0.01f : 0.01f;
-				}
-				else
-				{
-					edited.Position = glm::round(edited.Position / step) * step;
-					if (drag.Resize)
-						edited.Size = glm::round(edited.Size / step) * step;
-				}
-			}
-			edited = SanitizeUIRect(edited);
+			const UIRectComponent edited = TransformUIRect(drag.Initial, drag.Box, drag.ParentTransform, drag.Start, mouse, drag.Operation, snap ? options.StepFor(drag.Operation) : 0.0f, drag.Resize ? std::optional(drag.Handle) : std::nullopt);
 			if (edited != selected.GetComponent<UIRectComponent>())
 				if (!m_Context.Execute("component.set", { { "entity", static_cast<uint64_t>(selected.GetUUID()) }, { "component", "UIRect" }, { "data", { { "Position", { edited.Position.x, edited.Position.y } }, { "Size", { edited.Size.x, edited.Size.y } }, { "Rotation", glm::degrees(edited.Rotation) }, { "Scale", { edited.Scale.x, edited.Scale.y } } } } }))
 					FinishGizmo(true);

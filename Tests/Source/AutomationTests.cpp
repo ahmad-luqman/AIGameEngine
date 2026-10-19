@@ -535,6 +535,57 @@ TEST_SUITE("Automation")
 		Run(registry, session, "play.stop");
 	}
 
+	TEST_CASE("Text injection rejects controls and a full frame buffer")
+	{
+		CommandRegistry registry;
+		AutomationSession session;
+		Input::Reset();
+		for (int codepoint : { 0, 9, 10, 31, 127 })
+			CHECK(RunError(registry, session, "input.text", { { "codepoint", codepoint } }).find("use input.key") != std::string::npos);
+		for (int i = 0; i < 16384; ++i)
+			REQUIRE(Input::AddTextCodepoint('x'));
+		CHECK(RunError(registry, session, "input.text", { { "codepoint", 'x' } }).find("buffer is full") != std::string::npos);
+		Input::EndFrame();
+		Run(registry, session, "input.text", { { "codepoint", 0x10ffff } });
+		CHECK(Input::GetTextInput().size() == 4);
+		CHECK_FALSE(RunError(registry, session, "input.mouse", { { "scroll", { 1 } } }).empty());
+		Input::Reset();
+	}
+
+	TEST_CASE("UI layout diagnoses navigation targets and omitted transform subtrees")
+	{
+		CommandRegistry registry;
+		AutomationSession session;
+		Run(registry, session, "scene.new", { { "empty", true } });
+		const auto create = [&](const char* name, const json& components = json::object(), const json& parent = nullptr) {
+			json params = { { "name", name }, { "components", components } };
+			if (!parent.is_null())
+				params["parent"] = parent;
+			return Run(registry, session, "entity.create", params)["id"];
+		};
+		const auto nonWidget = create("NonWidget");
+		const auto disabled = create("Disabled", { { "UIRect", json::object() }, { "UIButton", { { "Interactable", false } } } });
+		const auto hidden = create("Hidden", { { "UIRect", { { "Visible", false } } }, { "UIButton", json::object() } });
+		const auto source = create("Source", { { "UIRect", json::object() }, { "UIButton", json::object() }, { "UINavigation", { { "Down", nonWidget }, { "Left", disabled }, { "Right", hidden } } } });
+		session.GetScene()->GetEntityByUUID(UUID(source.get<uint64_t>())).GetComponent<UINavigationComponent>().Up = UUID(999999);
+		std::string problems = Run(registry, session, "ui.layout")["problems"].dump();
+		CHECK(problems.find("does not exist") != std::string::npos);
+		CHECK(problems.find("not a focusable widget") != std::string::npos);
+		CHECK(problems.find("is disabled") != std::string::npos);
+		CHECK(problems.find("is hidden") != std::string::npos);
+		const auto clip = create("Clip", { { "UIRect", { { "ClipChildren", true }, { "Size", { 0, 0 } } } } });
+		const auto clipped = create("Clipped", { { "UIRect", json::object() }, { "UIButton", json::object() } }, clip);
+		Run(registry, session, "component.set", { { "entity", source }, { "component", "UINavigation" }, { "data", { { "Right", clipped } } } });
+		CHECK(Run(registry, session, "ui.layout")["problems"].dump().find("fully clipped") != std::string::npos);
+		json parent = nullptr;
+		for (int i = 0; i < 5; ++i)
+			parent = create("Huge", { { "UIRect", { { "Scale", { 1000, 1000 } } } } }, parent);
+		const json layout = Run(registry, session, "ui.layout");
+		CHECK(layout["problems"].dump().find("composed UI transform") != std::string::npos);
+		CHECK(layout["items"][0].contains("transform"));
+		CHECK(layout["items"][0].contains("clip"));
+	}
+
 	TEST_CASE("State hash ignores entity UUIDs but tracks every state change")
 	{
 		CommandRegistry registry;

@@ -11,8 +11,8 @@
 
 namespace Basalt {
 
-	// Widget and pointer-blocking component kinds. An entity with several acts as the first in this order
-	// (UILayout::GetWidget).
+	// Widget and pointer-blocking kinds. UILayout::GetWidget chooses Button, Slider, Checkbox, TextInput,
+	// Dropdown, ScrollView, then a blocking Panel; enum declaration order does not set that priority.
 	enum class UIWidgetKind
 	{
 		Button = 0,

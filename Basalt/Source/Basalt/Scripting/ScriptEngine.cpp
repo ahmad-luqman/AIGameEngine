@@ -360,7 +360,7 @@ namespace Basalt {
 			if (callback.get_type() != sol::type::function)
 				return true;
 			sol::protected_function function = callback.as<sol::protected_function>();
-			ScriptOwnerScope scope(engine.m_Impl->Context, id);
+			ScriptOwnerScope scope(engine.m_Impl->Context, id, name);
 			const sol::protected_function_result result = function(self, std::forward<Args>(args)...);
 			if (result.valid())
 				return true;

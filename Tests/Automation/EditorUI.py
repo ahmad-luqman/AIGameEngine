@@ -13,6 +13,18 @@ def check_ui(call, require, output):
                                     "y": int(height / 2 + dy * height / 1080),
                                     "select": False})["entity"]
 
+    cube = call("entity.create", {"name": "PickThroughHUD"})["id"]
+    call("component.set", {"entity": cube, "component": "Mesh", "data": {"Mesh": "builtin://Cube"}})
+    call("editor.camera", {"position": [0, 0, 5], "target": [0, 0, 0]})
+    hud = call("entity.create", {"name": "HUDContainer"})["id"]
+    call("component.set", {"entity": hud, "component": "UIRect", "data": {"AnchorMin": [0, 0], "AnchorMax": [1, 1], "Size": [0, 0]}})
+    call("editor.viewport", {"uiBounds": False})
+    require(pick(0, 0) == cube, "HUD container stole world picking with UI Bounds off")
+    call("editor.viewport", {"uiBounds": True})
+    require(pick(0, 0) == hud, "UI Bounds did not enable HUD container picking")
+    call("entity.destroy", {"entity": hud})
+    call("entity.destroy", {"entity": cube})
+
     panel = call("entity.create", {"name": "RotatedPanel"})["id"]
     call("component.set", {"entity": panel, "component": "UIRect",
                            "data": {"Size": [200, 60], "Rotation": 90, "Scale": [1.5, 1]}})

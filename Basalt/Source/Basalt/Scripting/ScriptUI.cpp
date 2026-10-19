@@ -403,8 +403,10 @@ namespace Basalt {
 		ui["PushClip"] = [](float x, float y, float width, float height) {
 			const Checker checker("UI.PushClip");
 			const glm::vec2 size = checker.Size(width, height);
-			if (size.x < 0 || size.y < 0 || !GameUI::PushClip({ checker.Position(x, y), size }))
-				checker.Fail("invalid clip or clip stack exceeds 256 levels");
+			if (size.x < 0 || size.y < 0)
+				checker.Fail("clip width and height must be non-negative");
+			if (!GameUI::PushClip({ checker.Position(x, y), size }))
+				checker.Fail("clip stack exceeds 256 levels");
 		};
 		ui["PopClip"] = []() { if (!GameUI::PopClip()) Checker("UI.PopClip").Fail("clip stack is empty"); };
 		ui["MeasureText"] = [](const std::string& text, const sol::object& sizeOrOptions) {

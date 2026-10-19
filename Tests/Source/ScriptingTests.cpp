@@ -2,6 +2,7 @@
 
 #include <Basalt/Core/FileSystem.h>
 #include <Basalt/Core/Input.h>
+#include <Basalt/Core/Log.h>
 #include <Basalt/Core/Platform.h>
 #include <Basalt/Core/MemoryTracker.h>
 #include <Basalt/Physics/PhysicsWorld.h>
@@ -19,6 +20,7 @@
 
 #include <spdlog/fmt/fmt.h>
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <map>
@@ -26,6 +28,7 @@
 #include <set>
 #include <sstream>
 #include <tuple>
+#include <vector>
 
 using namespace Basalt;
 
@@ -3152,5 +3155,57 @@ TEST_SUITE("Scripting")
 		CHECK(Field(scene, entity, "Total") == 101);
 		CHECK(scene.GetScriptEngine()->GetErrors().empty());
 		scene.OnRuntimeStop();
+	}
+}
+
+TEST_SUITE("Scripting")
+{
+	TEST_CASE("Protected Lua callbacks restore clip stacks on return error timer and coroutine yield")
+	{
+		const std::vector<std::string> scripts = {
+			"local L={} function L:OnUpdate() UI.PushClip(0,0,10,10); UI.Rect(0,0,20,20) end return L",
+			"local L={} function L:OnUpdate() UI.PushClip(0,0,10,10); error('clip scope failure') end return L",
+			"local L={} function L:OnCreate() Timer.After(0,function() UI.PushClip(0,0,10,10); UI.Rect(0,0,20,20) end) end return L",
+			"local L={} function L:OnCreate() self:StartCoroutine(function() UI.PushClip(0,0,10,10); WaitFrames(1); UI.Rect(0,0,20,20) end) end return L",
+			"local L={} function L:OnCreate() Events.On('ClipEvent',function() UI.PopClip() end) end function L:OnUpdate() UI.PushClip(0,0,10,10); Events.Emit('ClipEvent'); UI.Rect(0,0,20,20); UI.PopClip() end return L"
+		};
+		for (size_t index = 0; index < scripts.size(); ++index)
+		{
+			CAPTURE(index);
+			BasaltTest::TempProject project("ScriptClipScope" + std::to_string(index));
+			const auto leaky = project.WriteFile("Assets/Scripts/Leaky.lua", scripts[index]);
+			const auto follower = project.WriteFile("Assets/Scripts/Follower.lua", "local F={} function F:OnUpdate() UI.Rect(200,200,20,20) end return F");
+			Scene scene;
+			AddScripted(scene, "Leaky", leaky);
+			AddScripted(scene, "Follower", follower);
+			const uint64_t cursor = Log::GetHistory().GetTotalCount();
+			scene.OnRuntimeStart();
+			for (int frame = 0; frame < 2; ++frame)
+			{
+				scene.OnUpdate(Step);
+				CHECK_FALSE(GameUI::GetClip());
+				std::vector<UIDrawCommand> commands;
+				GameUI::AppendCommands(commands);
+				bool found = false;
+				for (const auto& command : commands)
+				{
+					if (command.Position == glm::vec2(200, 200))
+					{
+						found = true;
+						CHECK_FALSE(command.Clip);
+					}
+					if (index == 4 && command.Position == glm::vec2(0))
+					{
+						REQUIRE(command.Clip);
+						CHECK(command.Clip->Size == glm::vec2(10));
+					}
+				}
+				CHECK(found);
+			}
+			uint64_t next = 0;
+			const auto messages = Log::GetHistory().GetMessagesSince(cursor, next);
+			CHECK(std::count_if(messages.begin(), messages.end(), [](const auto& entry) { return entry.Text.find("restored the caller's clip stack") != std::string::npos && entry.Text.find("Leaky.lua") != std::string::npos; }) == 1);
+			scene.OnRuntimeStop();
+		}
 	}
 }

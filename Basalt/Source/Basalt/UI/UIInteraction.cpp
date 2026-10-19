@@ -142,6 +142,15 @@ namespace Basalt {
 			Entity owner = scene.GetEntityByUUID(m_OpenDropdown);
 			if (!owner || !owner.HasComponent<UIDropdownComponent>() || !owner.GetComponent<UIDropdownComponent>().Interactable || !UILayout::GetRect(scene, owner, GameUI::GetCanvasSize()))
 				m_OpenDropdown = 0;
+			else
+			{
+				const auto dropdown = SanitizeUIDropdown(owner.GetComponent<UIDropdownComponent>());
+				const auto count = UIWidgets::DropdownOptions(dropdown.Options).size();
+				if (count == 0)
+					m_OpenDropdown = 0;
+				else
+					m_DropdownHighlight = std::min(m_DropdownHighlight, static_cast<uint32_t>(count - 1));
+			}
 		}
 		const std::vector<Candidate> widgets = CollectWidgets(scene);
 		// A held or focused widget that is gone, hidden or disabled lets go.
@@ -188,6 +197,7 @@ namespace Basalt {
 		m_OpenDropdown = 0;
 		m_TextFocus = {};
 		m_PointerBlocked = false;
+		m_FocusVisible = false;
 		m_LastPointer.reset();
 		m_Pressed.reset();
 		SetFocus({});
@@ -251,7 +261,11 @@ namespace Basalt {
 		std::vector<Candidate> widgets;
 		const glm::vec2 canvas = GameUI::GetCanvasSize();
 		std::optional<Candidate> open;
-		for (const UILayoutItem& item : UILayout::Layout(scene, canvas))
+		const auto layout = UILayout::Layout(scene, canvas);
+		std::unordered_map<uint64_t, const UILayoutItem*> items;
+		for (const UILayoutItem& item : layout)
+			items.emplace(static_cast<uint64_t>(item.Owner.GetUUID()), &item);
+		for (const UILayoutItem& item : layout)
 		{
 			if (const std::optional<UIWidgetInfo> info = UILayout::GetWidget(item.Owner))
 			{
@@ -259,6 +273,7 @@ namespace Basalt {
 				Candidate candidate{ UIWidgetID::ForEntity(entity), info->Kind, item.Rect, info->Interactable, info->HandleWidth, info->ResolveTarget(entity), info->Callback };
 				candidate.Transform = item.Transform;
 				candidate.Clip = item.Clip;
+				candidate.Revealable = UILayout::CanReveal(item, items);
 				if (const auto* slider = item.Owner.TryGetComponent<UISliderComponent>())
 					candidate.Vertical = slider->Vertical;
 				widgets.push_back(candidate);
@@ -327,7 +342,11 @@ namespace Basalt {
 						glm::vec2 scroll = GameInput::GetMouseScroll();
 						if (GameInput::IsKeyDown(KeyCode::LeftShift) || GameInput::IsKeyDown(KeyCode::RightShift))
 							std::swap(scroll.x, scroll.y);
-						component->Offset = glm::clamp(view.Offset - scroll * view.ScrollSpeed, glm::vec2(0), glm::max(view.ContentSize - rect->Size, glm::vec2(0)));
+						if (scroll != glm::vec2(0))
+						{
+							m_FocusVisible = false;
+							component->Offset = glm::clamp(view.Offset - scroll * view.ScrollSpeed, glm::vec2(0), glm::max(view.ContentSize - rect->Size, glm::vec2(0)));
+						}
 					}
 					break;
 				}
@@ -336,9 +355,14 @@ namespace Basalt {
 
 		if (m_Pressed)
 		{
+			const Press held = *m_Pressed;
 			// Without pointer input (it left the game view) the hold ends without a click.
-			const auto pressed = std::ranges::find_if(widgets, [this](const Candidate& widget) { return widget.ID == m_Pressed->ID; });
-			BS_CORE_ASSERT(pressed != widgets.end(), "Update keeps only holds on live widgets");
+			const auto pressed = std::ranges::find_if(widgets, [&held](const Candidate& widget) { return widget.ID == held.ID && widget.Option == held.Option; });
+			if (pressed == widgets.end())
+			{
+				m_Pressed.reset();
+				return;
+			}
 			if (!pointer)
 			{
 				m_Pressed.reset();
@@ -356,12 +380,15 @@ namespace Basalt {
 			if (GameInput::IsMouseButtonDown(MouseCode::Left))
 				return;
 			// Only a real release over the widget clicks it; a reset (the window lost focus) just lets go.
-			const bool clicked = GameInput::IsMouseButtonReleased(MouseCode::Left) && pressed->Kind != UIWidgetKind::Slider && m_Hovered == pressed->ID;
+			const bool clicked = GameInput::IsMouseButtonReleased(MouseCode::Left) && pressed->Kind != UIWidgetKind::Slider && m_Hovered == pressed->ID && top && top->Option == held.Option;
+			const bool closeDropdown = held.DropdownWasOpen && !held.Option;
 			m_Pressed.reset();
 			if (clicked)
 			{
 				if (top && top->Option)
 					SelectDropdown(scene, *top, *top->Option);
+				else if (closeDropdown)
+					m_OpenDropdown = 0;
 				else
 					Activate(scene, *pressed);
 			}
@@ -373,13 +400,14 @@ namespace Basalt {
 		// The mouse takes over from keyboard/gamepad navigation: Space and Enter go back to the game until the
 		// focus is set again.
 		SetFocus({});
+		m_FocusVisible = false;
 		if (m_OpenDropdown != 0 && (!top || top->ID != UIWidgetID::ForEntity(m_OpenDropdown)))
 			m_OpenDropdown = 0;
 		if (!top || !top->Interactable || top->Kind == UIWidgetKind::Panel || top->Kind == UIWidgetKind::ScrollView)
 			return;
 		if (top->Kind == UIWidgetKind::TextInput || top->Kind == UIWidgetKind::Dropdown)
 			FocusLive(top->ID);
-		m_Pressed = Press{ top->ID, top->Kind == UIWidgetKind::Slider, *pointer };
+		m_Pressed = Press{ top->ID, top->Kind == UIWidgetKind::Slider, *pointer, top->Option, top->Kind == UIWidgetKind::Dropdown && m_OpenDropdown == top->ID.GetEntity() };
 		if (top->Kind == UIWidgetKind::Slider)
 			DragSlider(scene, *top, *pointer);
 	}
@@ -398,6 +426,9 @@ namespace Basalt {
 			fired[direction] = Repeat(static_cast<Direction>(direction), IsDirectionHeld(DirectionBindings[direction]), deltaTime);
 		const bool left = fired[static_cast<size_t>(Direction::Left)];
 		const bool right = fired[static_cast<size_t>(Direction::Right)];
+		const bool navigationInput = std::ranges::any_of(fired, [](bool f) { return f; }) || GameInput::IsKeyPressed(KeyCode::Tab) || IsAccept(&GameInput::IsKeyPressed, &GameInput::IsGamepadButtonPressed);
+		if (navigationInput)
+			m_FocusVisible = true;
 
 		std::vector<const Candidate*> navigable;
 		for (const Candidate& widget : widgets)
@@ -436,7 +467,7 @@ namespace Basalt {
 			else if (navigable[current]->Kind == UIWidgetKind::Dropdown && m_OpenDropdown != 0)
 			{
 				const Entity owner = WidgetEntity(scene, navigable[current]->ID);
-				const auto& dropdown = owner.GetComponent<UIDropdownComponent>();
+				const auto dropdown = SanitizeUIDropdown(owner.GetComponent<UIDropdownComponent>());
 				const auto count = UIWidgets::DropdownOptions(dropdown.Options).size();
 				if (count != 0)
 				{
@@ -480,7 +511,7 @@ namespace Basalt {
 			}
 		}
 
-		if (GameInput::IsKeyPressed(KeyCode::Escape))
+		if (GameInput::IsKeyPressed(KeyCode::Escape) || AnyGamepad([](uint32_t index) { return GameInput::IsGamepadButtonPressed(index, GamepadButton::B); }))
 			m_OpenDropdown = 0;
 		if (m_OpenDropdown != 0 && m_Focus.ID != UIWidgetID::ForEntity(m_OpenDropdown))
 			m_OpenDropdown = 0;
@@ -489,6 +520,8 @@ namespace Basalt {
 		if (focus && focus->Kind != UIWidgetKind::Slider && IsAccept(&GameInput::IsKeyPressed, &GameInput::IsGamepadButtonPressed))
 			Activate(scene, *focus);
 		m_AcceptHeld = focus && focus->Kind != UIWidgetKind::Slider && IsAccept([](KeyCode key) { return GameInput::IsKeyDown(key); }, [](uint32_t index, GamepadButton button) { return GameInput::IsGamepadButtonDown(index, button); });
+		if (navigationInput)
+			RevealFocus(scene);
 	}
 
 	bool UIInteraction::Repeat(Direction direction, bool held, float deltaTime)
@@ -600,11 +633,51 @@ namespace Basalt {
 		m_OpenDropdown = 0;
 		FocusLive(widget.ID);
 		auto& dropdown = WidgetEntity(scene, widget.ID).GetComponent<UIDropdownComponent>();
-		if (index >= UIWidgets::DropdownOptions(dropdown.Options).size() || index == dropdown.Selected)
+		const auto repaired = SanitizeUIDropdown(dropdown);
+		if (index >= UIWidgets::DropdownOptions(repaired.Options).size() || index == repaired.Selected)
 			return;
 		dropdown.Selected = index;
 		if (!widget.Callback.empty())
 			m_Events.push_back({ widget.ID.GetEntity(), widget.Target, widget.Callback, static_cast<float>(index) });
+	}
+
+	void UIInteraction::RevealFocus(Scene& scene)
+	{
+		if (!m_Focus.ID.IsEntity())
+			return;
+		Entity focused = scene.GetEntityByUUID(m_Focus.ID.GetEntity());
+		if (!focused)
+			return;
+		for (Entity ancestor = focused.GetParent(); ancestor; ancestor = ancestor.GetParent())
+		{
+			auto* component = ancestor.TryGetComponent<UIScrollViewComponent>();
+			if (!component || !component->Interactable)
+				continue;
+			// An inner offset changes the next ancestor's target bounds, so each viewport reads a fresh layout.
+			const auto layout = UILayout::Layout(scene, GameUI::GetCanvasSize());
+			const auto target = std::ranges::find_if(layout, [focused](const UILayoutItem& item) { return item.Owner == focused; });
+			const auto viewport = std::ranges::find_if(layout, [ancestor](const UILayoutItem& item) { return item.Owner == ancestor; });
+			if (target == layout.end() || viewport == layout.end())
+				return;
+			const UIBox box = TransformUIBox(target->Rect, glm::inverse(viewport->Transform) * target->Transform);
+			glm::vec2 delta(0);
+			for (glm::length_t axis = 0; axis < 2; axis++)
+			{
+				// An oversized widget already covering the viewport cannot fit; preserve its visible portion.
+				if (box.Size[axis] > viewport->Rect.Size[axis] && box.Min[axis] <= viewport->Rect.Min[axis] && box.Max()[axis] >= viewport->Rect.Max()[axis])
+					continue;
+				if (box.Min[axis] < viewport->Rect.Min[axis])
+					delta[axis] = box.Min[axis] - viewport->Rect.Min[axis];
+				else if (box.Max()[axis] > viewport->Rect.Max()[axis])
+					delta[axis] = box.Max()[axis] - viewport->Rect.Max()[axis];
+			}
+			const auto view = SanitizeUIScrollView(*component);
+			const glm::vec2 maximum = glm::max(view.ContentSize - viewport->Rect.Size, glm::vec2(0));
+			const glm::vec2 offset = glm::clamp(view.Offset, glm::vec2(0), maximum);
+			const glm::vec2 next = glm::clamp(offset + delta, glm::vec2(0), maximum);
+			if (next != offset)
+				component->Offset = next;
+		}
 	}
 
 	void UIInteraction::UpdateText(Scene& scene, const std::vector<Candidate>& widgets)
@@ -626,9 +699,11 @@ namespace Basalt {
 		// External text changes may put the old byte offset inside a multibyte code point.
 		while (m_TextCursor > 0 && m_TextCursor < repaired.Text.size() && (static_cast<unsigned char>(repaired.Text[m_TextCursor]) & 0xc0U) == 0x80U)
 			m_TextCursor--;
-		if (!m_NavigationEnabled || !GameUI::IsNavigationEnabled() || !Input::HasGameFocus())
+		if (!GameUI::IsNavigationEnabled() || !Input::HasGameFocus())
 			return;
 		std::string text = repaired.Text;
+		if (!GameInput::GetTextInput().empty() || GameInput::IsKeyPressed(KeyCode::Left) || GameInput::IsKeyPressed(KeyCode::Right) || GameInput::IsKeyPressed(KeyCode::Home) || GameInput::IsKeyPressed(KeyCode::End) || GameInput::IsKeyPressed(KeyCode::Backspace) || GameInput::IsKeyPressed(KeyCode::Delete))
+			m_FocusVisible = true;
 		if (GameInput::IsKeyPressed(KeyCode::Left))
 			m_TextCursor = UIWidgets::PreviousCharacter(text, m_TextCursor);
 		if (GameInput::IsKeyPressed(KeyCode::Right))
@@ -659,7 +734,7 @@ namespace Basalt {
 				i = next;
 			}
 		}
-		if (text != component.Text)
+		if (text != repaired.Text)
 		{
 			component.Text = std::move(text);
 			if (!focus->Callback.empty())

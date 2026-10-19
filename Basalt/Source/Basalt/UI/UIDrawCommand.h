@@ -21,13 +21,16 @@ namespace Basalt {
 	// resolved when drawing (ResolveUIBox), so anchored commands follow the canvas as the window resizes.
 	// Commands built from components (UILayout) carry their laid-out box as Position/Size with Anchor and
 	// Pivot at zero; immediate-mode commands carry the caller's anchor, offset and pivot. Rect commands use
-	// only placement and Color.
+	// placement, transforms, clipping and Color.
 	struct UIDrawCommand
 	{
 		UIDrawKind Kind = UIDrawKind::Rect;
+		// Accumulated component hierarchy transform in canvas coordinates; applied after the local transform.
 		glm::mat3 Transform = glm::mat3(1.0f);
+		// Local clockwise rotation (radians) and positive scale about Pivot, used by immediate-mode draws.
 		float Rotation = 0.0f;
 		glm::vec2 Scale = { 1.0f, 1.0f };
+		// Effective axis-aligned canvas clip, after transforms; nullopt leaves only the viewport scissor.
 		std::optional<UIBox> Clip;
 
 		// The box's top-left is Anchor * canvas size + Position - Pivot * Size (canvas units).

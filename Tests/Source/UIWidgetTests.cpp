@@ -1757,14 +1757,15 @@ TEST_CASE("Typed events are Unicode-safe, frame bounded and routed when received
 	Input::AddTextCodepoint('x');
 	Input::SetGameFocus(true);
 	CHECK(GameInput::GetTextInput().empty());
-	Input::AddTextCodepoint(0xd800);
-	Input::AddTextCodepoint(0x110000);
-	Input::AddTextCodepoint('\n');
+	CHECK_FALSE(Input::AddTextCodepoint(0xd800));
+	CHECK_FALSE(Input::AddTextCodepoint(0x110000));
+	CHECK_FALSE(Input::AddTextCodepoint('\n'));
 	CHECK(Input::GetTextInput() == "x");
 	Input::Reset();
 	for (size_t n = 0; n < 5000; n++)
 		Input::AddTextCodepoint(0x1f600);
 	CHECK(Input::GetTextInput().size() == 16384);
+	CHECK_FALSE(Input::AddTextCodepoint(0x1f600));
 	Input::Reset();
 	CHECK(Input::GetTextInput().empty());
 }
@@ -1795,5 +1796,370 @@ TEST_CASE("Immediate widgets receive clicks above an overlapping dropdown popup"
 	CHECK(Field(scene, menu, "Clicks") == 1);
 	CHECK(dropdown.GetComponent<UIDropdownComponent>().Selected == 0);
 	CHECK(scene.GetUIInteraction()->GetOpenDropdown() == 0);
+	scene.OnRuntimeStop();
+}
+
+TEST_CASE("Focus rings follow keyboard and gamepad use and hide on pointer presses")
+{
+	WidgetInputScope input;
+	Scene scene;
+	Entity text = AddWidget<UITextInputComponent>(scene, "Text", { 20, 20 }, { 160, 40 });
+	Entity dropdown = AddWidget<UIDropdownComponent>(scene, "Dropdown", { 20, 100 }, { 160, 40 });
+	const glm::vec4 ringColor(0.91f, 0.07f, 0.03f, 1.0f);
+	text.AddComponent<UIFocusRingComponent>().Color = ringColor;
+	dropdown.AddComponent<UIFocusRingComponent>().Color = ringColor;
+	scene.OnRuntimeStart();
+	auto* interaction = scene.GetUIInteraction();
+	const auto ringRects = [&]() {
+		std::vector<UIDrawCommand> commands;
+		UILayout::BuildCommands(scene, GameUI::GetCanvasSize(), commands);
+		return std::ranges::count_if(commands, [&](const UIDrawCommand& c) { return c.Kind == UIDrawKind::Rect && c.Color == ringColor; });
+	};
+	interaction->SetFocus(IDOf(text));
+	Frame(scene);
+	CHECK(ringRects() == 0);
+	Click(scene, { 40, 40 });
+	CHECK(interaction->GetFocus() == IDOf(text));
+	CHECK(ringRects() == 0);
+	Tap(scene, KeyCode::Right);
+	CHECK(ringRects() == 4);
+	Click(scene, { 40, 120 });
+	CHECK(interaction->GetFocus() == IDOf(dropdown));
+	CHECK(ringRects() == 0);
+	Tap(scene, KeyCode::Escape);
+	Input::SetGamepadConnected(0, true);
+	Input::SetGamepadButtonState(0, GamepadButton::DPadUp, true);
+	Frame(scene);
+	CHECK(interaction->GetFocus() == IDOf(text));
+	CHECK(ringRects() == 4);
+	Input::SetGamepadButtonState(0, GamepadButton::DPadUp, false);
+	Click(scene, { 40, 40 });
+	CHECK(ringRects() == 0);
+	scene.OnRuntimeStop();
+}
+
+TEST_CASE("Dropdown presses identify individual rows and header clicks only dismiss")
+{
+	WidgetInputScope input;
+	Scene scene;
+	Entity dropdown = AddWidget<UIDropdownComponent>(scene, "Dropdown", { 20, 20 }, { 160, 40 });
+	auto& component = dropdown.GetComponent<UIDropdownComponent>();
+	component.Options = "One\nTwo\nThree";
+	component.OnValueChanged.clear();
+	scene.OnRuntimeStart();
+	auto* interaction = scene.GetUIInteraction();
+	Click(scene, { 40, 40 });
+	Press(scene, { 40, 80 });
+	Release(scene, { 40, 120 });
+	CHECK(component.Selected == 0);
+	CHECK(interaction->GetOpenDropdown() == dropdown.GetUUID());
+	Press(scene, { 40, 40 });
+	Release(scene, { 40, 80 });
+	CHECK(component.Selected == 0);
+	CHECK(interaction->GetOpenDropdown() == dropdown.GetUUID());
+	Input::SetMousePosition({ 40, 160 });
+	Frame(scene);
+	CHECK(interaction->GetDropdownHighlight() == 2);
+	Click(scene, { 40, 40 });
+	CHECK(component.Selected == 0);
+	CHECK(interaction->GetOpenDropdown() == 0);
+	Tap(scene, KeyCode::Enter);
+	Tap(scene, KeyCode::Down);
+	CHECK(interaction->GetDropdownHighlight() == 1);
+	component.Options = "Only";
+	Frame(scene);
+	CHECK(interaction->GetDropdownHighlight() == 0);
+	Tap(scene, KeyCode::Enter);
+	CHECK(interaction->GetOpenDropdown() == 0);
+	CHECK(component.Selected == 0);
+	component.Options = "One\nTwo\nThree";
+	Click(scene, { 40, 40 });
+	Press(scene, { 40, 160 });
+	component.Options = "Only";
+	Release(scene, { 40, 160 });
+	CHECK(component.Selected == 0);
+	CHECK(interaction->GetOpenDropdown() == dropdown.GetUUID());
+	Input::SetGamepadConnected(0, true);
+	Input::SetGamepadButtonState(0, GamepadButton::B, true);
+	Frame(scene);
+	CHECK(interaction->GetOpenDropdown() == 0);
+	Input::SetGamepadButtonState(0, GamepadButton::B, false);
+	Tap(scene, KeyCode::Enter);
+	component.Options.clear();
+	Frame(scene);
+	CHECK(interaction->GetOpenDropdown() == 0);
+	scene.OnRuntimeStop();
+}
+
+TEST_CASE("Text editing preserves authored invalid values until user changes the repaired text")
+{
+	WidgetInputScope input;
+	TempProject project("UITextRepair");
+	Scene scene;
+	const std::string script = project.WriteFile("Assets/Scripts/Text.lua", R"(
+		local Text = {}
+		function Text:OnCreate() self.Changes = 0 end
+		function Text:OnValueChanged(widget, value) self.Changes = self.Changes + 1 end
+		return Text
+	)");
+	Entity text = AddWidget<UITextInputComponent>(scene, "Text", { 20, 20 }, { 160, 40 });
+	text.AddComponent<ScriptComponent>().Script = script;
+	auto& component = text.GetComponent<UITextInputComponent>();
+	component.Text = "a";
+	scene.OnRuntimeStart();
+	auto* interaction = scene.GetUIInteraction();
+	interaction->SetFocus(IDOf(text));
+	Frame(scene);
+	component.Text = "\xc3\xa9";
+	std::vector<UIDrawCommand> commands;
+	UILayout::BuildCommands(scene, GameUI::GetCanvasSize(), commands);
+	const auto drawnText = std::ranges::find_if(commands, [](const UIDrawCommand& c) { return c.Kind == UIDrawKind::Text; });
+	REQUIRE(drawnText != commands.end());
+	CHECK(drawnText->Text == "|\xc3\xa9");
+	Frame(scene);
+	CHECK(interaction->GetTextCursor() == 0);
+	Input::AddTextCodepoint('x');
+	Frame(scene);
+	CHECK(component.Text == "x\xc3\xa9");
+	CHECK(Field(scene, text, "Changes") == 1);
+	component.Text = "bad\ntext";
+	Frame(scene);
+	CHECK(component.Text == "bad\ntext");
+	CHECK(Field(scene, text, "Changes") == 1);
+	Input::AddTextCodepoint('z');
+	Frame(scene);
+	CHECK(component.Text == "z");
+	CHECK(Field(scene, text, "Changes") == 2);
+	scene.OnRuntimeStop();
+}
+
+TEST_CASE("Pointer-focused text edits with navigation disabled but respects host focus")
+{
+	WidgetInputScope input;
+	Input::SetGameFocus(true);
+	Scene scene;
+	Entity text = AddWidget<UITextInputComponent>(scene, "Text", { 20, 20 }, { 160, 40 });
+	text.GetComponent<UITextInputComponent>().OnValueChanged.clear();
+	scene.OnRuntimeStart();
+	scene.GetUIInteraction()->SetNavigationEnabled(false);
+	Click(scene, { 40, 40 });
+	Input::AddTextCodepoint('x');
+	Frame(scene);
+	CHECK(text.GetComponent<UITextInputComponent>().Text == "x");
+	Input::SetGameFocus(false);
+	Input::AddTextCodepoint('y');
+	Frame(scene);
+	CHECK(text.GetComponent<UITextInputComponent>().Text == "x");
+	Input::SetGameFocus(true);
+	Frame(scene);
+	CHECK(text.GetComponent<UITextInputComponent>().Text == "x");
+	scene.OnRuntimeStop();
+}
+
+TEST_CASE("Scroll views preserve authored offsets without wheel input")
+{
+	WidgetInputScope input;
+	Scene scene;
+	Entity view = AddWidget<UIScrollViewComponent>(scene, "View", { 20, 20 }, { 200, 100 });
+	auto& component = view.GetComponent<UIScrollViewComponent>();
+	component.ContentSize = { 200, 400 };
+	component.Offset = { 0, 999 };
+	scene.OnRuntimeStart();
+	Input::SetMousePosition({ 40, 40 });
+	Frame(scene);
+	CHECK(component.Offset.y == 999);
+	Input::AddMouseScroll({ 0, -1 });
+	Frame(scene);
+	CHECK(component.Offset.y == 300);
+	scene.OnRuntimeStop();
+}
+
+TEST_CASE("Navigation skips collapsed widget rectangles")
+{
+	WidgetInputScope input;
+	Scene scene;
+	Entity collapsed = AddWidget<UIButtonComponent>(scene, "Collapsed", { 20, 20 }, { 0, 40 });
+	Entity visible = AddWidget<UIButtonComponent>(scene, "Visible", { 20, 100 }, { 160, 40 });
+	scene.OnRuntimeStart();
+	Tap(scene, KeyCode::Tab);
+	CHECK(scene.GetUIInteraction()->GetFocus() == IDOf(visible));
+	visible.AddComponent<UINavigationComponent>().Up = collapsed.GetUUID();
+	Tap(scene, KeyCode::Up);
+	CHECK(scene.GetUIInteraction()->GetFocus() == IDOf(visible));
+	scene.OnRuntimeStop();
+}
+
+TEST_CASE("Keyboard and gamepad navigation reveal scroll descendants without fighting the wheel")
+{
+	WidgetInputScope input;
+	Scene scene;
+	Entity view = AddWidget<UIScrollViewComponent>(scene, "View", { 20, 20 }, { 200, 100 });
+	view.GetComponent<UIScrollViewComponent>().ContentSize = { 200, 500 };
+	Entity first = AddWidget<UIButtonComponent>(scene, "First", { 0, 0 }, { 100, 40 });
+	Entity second = AddWidget<UIButtonComponent>(scene, "Second", { 0, 160 }, { 100, 40 });
+	Entity third = AddWidget<UIButtonComponent>(scene, "Third", { 0, 320 }, { 100, 40 });
+	scene.SetParent(first, view);
+	scene.SetParent(second, view);
+	scene.SetParent(third, view);
+	first.AddComponent<UINavigationComponent>().Down = third.GetUUID();
+	scene.OnRuntimeStart();
+	auto* interaction = scene.GetUIInteraction();
+	Tap(scene, KeyCode::Tab);
+	CHECK(interaction->GetFocus() == IDOf(first));
+	Tap(scene, KeyCode::Tab);
+	CHECK(interaction->GetFocus() == IDOf(second));
+	CHECK(view.GetComponent<UIScrollViewComponent>().Offset.y == doctest::Approx(100));
+	Tap(scene, KeyCode::Down);
+	CHECK(interaction->GetFocus() == IDOf(third));
+	CHECK(view.GetComponent<UIScrollViewComponent>().Offset.y == doctest::Approx(260));
+	Input::SetMousePosition({ 40, 40 });
+	Input::AddMouseScroll({ 0, 10 });
+	Frame(scene, 2);
+	CHECK(view.GetComponent<UIScrollViewComponent>().Offset.y == 0);
+	CHECK(interaction->GetFocus() == IDOf(third));
+	CHECK_FALSE(interaction->IsFocusVisible());
+	Tap(scene, KeyCode::Tab);
+	CHECK(interaction->GetFocus() == IDOf(first));
+	Tap(scene, KeyCode::Down);
+	CHECK(interaction->GetFocus() == IDOf(third));
+	CHECK(view.GetComponent<UIScrollViewComponent>().Offset.y == doctest::Approx(260));
+	Input::SetGamepadConnected(0, true);
+	Input::SetGamepadButtonState(0, GamepadButton::DPadUp, true);
+	Frame(scene);
+	CHECK(interaction->GetFocus() == IDOf(second));
+	CHECK(view.GetComponent<UIScrollViewComponent>().Offset.y == doctest::Approx(160));
+	scene.OnRuntimeStop();
+}
+
+TEST_CASE("Nested scroll views reveal focus from the inside out")
+{
+	WidgetInputScope input;
+	Scene scene;
+	Entity outer = AddWidget<UIScrollViewComponent>(scene, "Outer", { 20, 20 }, { 200, 100 });
+	outer.GetComponent<UIScrollViewComponent>().ContentSize = { 200, 600 };
+	Entity inner = AddWidget<UIScrollViewComponent>(scene, "Inner", { 0, 250 }, { 180, 80 });
+	inner.GetComponent<UIScrollViewComponent>().ContentSize = { 180, 400 };
+	Entity target = AddWidget<UIButtonComponent>(scene, "Target", { 0, 300 }, { 100, 30 });
+	scene.SetParent(inner, outer);
+	scene.SetParent(target, inner);
+	scene.OnRuntimeStart();
+	Tap(scene, KeyCode::Tab);
+	CHECK(scene.GetUIInteraction()->GetFocus() == IDOf(target));
+	CHECK(inner.GetComponent<UIScrollViewComponent>().Offset.y == doctest::Approx(250));
+	CHECK(outer.GetComponent<UIScrollViewComponent>().Offset.y == doctest::Approx(230));
+	const auto layout = UILayout::Layout(scene, GameUI::GetCanvasSize());
+	const auto item = std::ranges::find_if(layout, [target](const UILayoutItem& i) { return i.Owner == target; });
+	REQUIRE(item != layout.end());
+	CHECK(item->Contains(item->Rect.Center()));
+	outer.GetComponent<UIScrollViewComponent>().Offset = { 0, 0 };
+	outer.GetComponent<UIScrollViewComponent>().Interactable = false;
+	inner.GetComponent<UIScrollViewComponent>().Offset = { 0, 0 };
+	scene.GetUIInteraction()->SetFocus({});
+	Tap(scene, KeyCode::Tab);
+	CHECK_FALSE(scene.GetUIInteraction()->GetFocus().IsValid());
+	CHECK(outer.GetComponent<UIScrollViewComponent>().Offset.y == 0);
+	scene.OnRuntimeStop();
+}
+
+TEST_CASE("Focus reveal maps transformed widget corners into the scroll viewport")
+{
+	WidgetInputScope input;
+	Scene scene;
+	Entity view = AddWidget<UIScrollViewComponent>(scene, "View", { 300, 200 }, { 200, 100 });
+	view.GetComponent<UIScrollViewComponent>().ContentSize = { 200, 500 };
+	view.GetComponent<UIRectComponent>().Rotation = 0.6f;
+	view.GetComponent<UIRectComponent>().Scale = { 1.7f, 0.8f };
+	Entity target = AddWidget<UIButtonComponent>(scene, "Target", { 0, 250 }, { 100, 40 });
+	scene.SetParent(target, view);
+	scene.OnRuntimeStart();
+	Tap(scene, KeyCode::Tab);
+	CHECK(scene.GetUIInteraction()->GetFocus() == IDOf(target));
+	CHECK(view.GetComponent<UIScrollViewComponent>().Offset.y == doctest::Approx(190));
+	const auto layout = UILayout::Layout(scene, GameUI::GetCanvasSize());
+	const auto item = std::ranges::find_if(layout, [target](const UILayoutItem& i) { return i.Owner == target; });
+	const auto viewport = std::ranges::find_if(layout, [view](const UILayoutItem& i) { return i.Owner == view; });
+	REQUIRE(item != layout.end());
+	REQUIRE(viewport != layout.end());
+	const UIBox local = TransformUIBox(item->Rect, glm::inverse(viewport->Transform) * item->Transform);
+	CHECK(local.Min.y >= viewport->Rect.Min.y - 0.001f);
+	CHECK(local.Max().y <= viewport->Rect.Max().y + 0.001f);
+	scene.OnRuntimeStop();
+}
+
+TEST_CASE("Scrolling cannot reveal controls excluded by an ordinary clipping parent")
+{
+	WidgetInputScope input;
+	Scene scene;
+	Entity view = AddWidget<UIScrollViewComponent>(scene, "View", { 20, 20 }, { 200, 100 });
+	view.GetComponent<UIScrollViewComponent>().ContentSize = { 200, 500 };
+	Entity clip = scene.CreateEntity("Clip");
+	clip.AddComponent<UIRectComponent>(PlacedRect({ 0, 0 }, { 100, 40 })).ClipChildren = true;
+	Entity hidden = AddWidget<UIButtonComponent>(scene, "Hidden", { 0, 160 }, { 100, 40 });
+	Entity visible = AddWidget<UIButtonComponent>(scene, "Visible", { 0, 0 }, { 100, 40 });
+	scene.SetParent(clip, view);
+	scene.SetParent(hidden, clip);
+	scene.SetParent(visible, view);
+	visible.AddComponent<UINavigationComponent>().Down = hidden.GetUUID();
+	scene.OnRuntimeStart();
+	Tap(scene, KeyCode::Tab);
+	CHECK(scene.GetUIInteraction()->GetFocus() == IDOf(visible));
+	Tap(scene, KeyCode::Down);
+	CHECK(scene.GetUIInteraction()->GetFocus() == IDOf(visible));
+	CHECK(view.GetComponent<UIScrollViewComponent>().Offset.y == 0);
+	scene.OnRuntimeStop();
+}
+
+TEST_CASE("Text input rejects malformed Unicode encodings and preserves valid scalar boundaries")
+{
+	const std::vector<std::string> invalid = {
+		"\x80", "\xc0\xaf", "\xc1\xbf", "\xe0\x80\xaf", "\xed\xa0\x80", "\xf0\x80\x80\xaf",
+		"\xf4\x90\x80\x80", "\xf5\x80\x80\x80", "\xff", "\xe2\x82", "\xe2\x41\xac",
+		"a\nb", "a\rb", "\x01"
+	};
+	for (const std::string& value : invalid)
+	{
+		CAPTURE(value);
+		CHECK_FALSE(UIWidgets::IsSingleLineUTF8(value));
+		UITextInputComponent component;
+		component.Text = value;
+		CHECK_FALSE(ValidateUITextInput(component).empty());
+		CHECK(SanitizeUITextInput(component).Text.empty());
+	}
+	const std::string valid = "a\xc2\xa2\xe2\x82\xac\xf0\x90\x8d\x88";
+	CHECK(UIWidgets::IsSingleLineUTF8(valid));
+	CHECK(UIWidgets::TextLength(valid) == 4);
+	CHECK(UIWidgets::NextCharacter(valid, 3) == 6);
+	CHECK(UIWidgets::PreviousCharacter(valid, 10) == 6);
+}
+
+TEST_CASE("Wheel scrolling clamps both axes and routes to the nearest enabled ancestor")
+{
+	WidgetInputScope input;
+	Scene scene;
+	Entity outer = AddWidget<UIScrollViewComponent>(scene, "Outer", { 20, 20 }, { 300, 200 });
+	outer.GetComponent<UIScrollViewComponent>().ContentSize = { 600, 600 };
+	Entity inner = AddWidget<UIScrollViewComponent>(scene, "Inner", { 0, 0 }, { 100, 100 });
+	inner.GetComponent<UIScrollViewComponent>().ContentSize = { 300, 400 };
+	Entity child = AddWidget<UIButtonComponent>(scene, "Child", { 0, 0 }, { 100, 100 });
+	scene.SetParent(inner, outer);
+	scene.SetParent(child, inner);
+	scene.OnRuntimeStart();
+	Input::SetMousePosition({ 40, 40 });
+	Input::SetKeyState(KeyCode::LeftShift, true);
+	Input::AddMouseScroll({ 0, -20 });
+	Frame(scene);
+	CHECK(inner.GetComponent<UIScrollViewComponent>().Offset.x == 200);
+	CHECK(inner.GetComponent<UIScrollViewComponent>().Offset.y == 0);
+	CHECK(outer.GetComponent<UIScrollViewComponent>().Offset == glm::vec2(0));
+	Input::SetKeyState(KeyCode::LeftShift, false);
+	Input::AddMouseScroll({ 20, -20 });
+	Frame(scene);
+	CHECK(inner.GetComponent<UIScrollViewComponent>().Offset.x == 0);
+	CHECK(inner.GetComponent<UIScrollViewComponent>().Offset.y == 300);
+	inner.GetComponent<UIScrollViewComponent>().Interactable = false;
+	Input::AddMouseScroll({ 0, -2 });
+	Frame(scene);
+	CHECK(inner.GetComponent<UIScrollViewComponent>().Offset.y == 300);
+	CHECK(outer.GetComponent<UIScrollViewComponent>().Offset.y == 64);
 	scene.OnRuntimeStop();
 }
