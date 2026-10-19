@@ -2529,6 +2529,73 @@ TEST_SUITE("Animation")
 		scene.OnSimulationStop();
 	}
 
+	TEST_CASE("Character gameplay movement fills in while root motion fades in and out")
+	{
+		ClearAssetCache clear;
+		TempProject project("RootShare");
+		Scene scene;
+		auto graph = StateGraph();
+		graph["States"][0]["Clip"] = "Step"; // The same 1 m/s clip, without root motion in Idle.
+		graph["Transitions"][1]["Duration"] = 1.0;
+		graph["Transitions"].push_back({ { "From", "Walk" }, { "To", "Idle" }, { "Duration", 1 }, { "Conditions", json::array({ { { "Parameter", "Speed" }, { "Operator", "Less" }, { "Value", 0.5 } } }) } });
+		auto rig = GraphAnimator(scene, project, graph);
+		rig.AddComponent<CharacterControllerComponent>().GravityFactor = 0;
+		rig.AddComponent<CapsuleColliderComponent>();
+		scene.OnSimulationStart();
+		auto& animation = *scene.GetAnimationSystem();
+		scene.GetPhysicsWorld()->MoveCharacter(rig, { 2, 0, 0 });
+		const auto run = [&](int frames) {
+			const float start = RootX(rig);
+			for (int i = 0; i < frames; i++)
+				scene.OnUpdate(Step);
+			return RootX(rig) - start;
+		};
+		// Idle: gameplay movement alone (2 m/s).
+		CHECK(run(30) == doctest::Approx(1.0f).epsilon(0.01));
+		// Fading into Walk over a second, root motion's share grows from 0 to 1 and gameplay movement fills in the rest:
+		// on average half of each, 0.5 * 1 + 0.5 * 2 m.
+		REQUIRE(animation.SetParameter(rig, "Speed", 1.0f));
+		CHECK(run(60) == doctest::Approx(1.5f).epsilon(0.02));
+		// Walk alone: its 1 m/s replaces gameplay movement.
+		CHECK(run(60) == doctest::Approx(1.0f).epsilon(0.01));
+		// Fading back out.
+		REQUIRE(animation.SetParameter(rig, "Speed", 0.0f));
+		CHECK(run(60) == doctest::Approx(1.5f).epsilon(0.02));
+		CHECK(run(30) == doctest::Approx(1.0f).epsilon(0.01));
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Queued root motion shares horizontal movement with MoveCharacter and averages over frames without steps")
+	{
+		Scene scene;
+		auto character = scene.CreateEntity("Character");
+		character.AddComponent<CharacterControllerComponent>().GravityFactor = 0;
+		character.AddComponent<CapsuleColliderComponent>();
+		scene.OnSimulationStart();
+		auto* physics = scene.GetPhysicsWorld();
+		physics->MoveCharacter(character, { 2, 1, 0 });
+		// A quarter of the horizontal movement is root motion (1 m/s), the rest gameplay movement; the vertical part
+		// is gameplay movement's in full.
+		physics->QueueRootMotion(character, glm::vec3(1, 5, 0) * Step, 0.25f);
+		physics->Step(Step);
+		CHECK(RootX(character) == doctest::Approx((1 + 0.75f * 2) * Step));
+		CHECK(character.GetComponent<TransformComponent>().Translation.y == doctest::Approx(Step));
+		// Two half frames queue before one step: their shares (0 and 1) average to a half.
+		const float before = RootX(character);
+		physics->QueueRootMotion(character, glm::vec3(0.5f, 0, 0) * Step, 0.0f);
+		physics->Step(Step / 2);
+		CHECK(RootX(character) == before);
+		physics->QueueRootMotion(character, glm::vec3(0.5f, 0, 0) * Step, 1.0f);
+		physics->Step(Step / 2);
+		CHECK(RootX(character) - before == doctest::Approx((1 + 0.5f * 2) * Step));
+		// Out-of-range shares clamp; a non-finite one counts as root motion owning everything.
+		const float clamped = RootX(character);
+		physics->QueueRootMotion(character, glm::vec3(1, 0, 0) * Step, std::numeric_limits<float>::quiet_NaN());
+		physics->Step(Step);
+		CHECK(RootX(character) - clamped == doctest::Approx(Step));
+		scene.OnSimulationStop();
+	}
+
 	TEST_CASE("Graph transitions accept partially resolved blend spaces and consume triggers only when playable")
 	{
 		ClearAssetCache clear;

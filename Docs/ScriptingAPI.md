@@ -1482,7 +1482,9 @@ while the current state drives root motion.
 
 Animation runs after script updates and before physics. Root motion overrides a character's requested
 velocity tangent to its up axis for that update, retaining `Move`'s request along that axis and normal
-gravity/collision handling. Character yaw writes the entity transform directly; translation goes through
+gravity/collision handling. While a fade blends a root-motion state with one without root motion (either way), root
+motion owns only its side of the blend: `Move`'s horizontal request fills in the rest, so a jump from a root-motion run
+into an airborne state keeps its speed through the fade. Character yaw writes the entity transform directly; translation goes through
 collision resolution. If the character collider could not be built, queued translation is dropped with
 an error while yaw still applies. Pausing, stopping, finishing or leaving root-motion states restores
 gameplay input.

@@ -149,7 +149,10 @@ namespace Basalt {
 		void MoveCharacter(Entity entity, const glm::vec3& velocity);
 		// Queues animation displacement until a fixed step. Step consumes the one-frame override;
 		// pending displacement survives frames without fixed steps. Non-finite requests are logged/ignored.
-		void QueueRootMotion(Entity entity, const glm::vec3& displacement);
+		// `share` (0..1) is how much of the character's horizontal movement the displacement owns: below 1 (a fade
+		// between root-motion and gameplay-driven states) the rest of MoveCharacter's horizontal velocity still applies.
+		// Frames queued before one step average their shares.
+		void QueueRootMotion(Entity entity, const glm::vec3& displacement, float share = 1.0f);
 		// Standing on ground no steeper than SlopeLimit.
 		bool IsCharacterGrounded(Entity entity) const;
 		// Normal of the ground the character touches (walkable or too steep), nullopt in the air or without a

@@ -512,8 +512,13 @@ namespace Basalt {
 			{
 				auto& request = it->second;
 				if (request.Active || request.Pending != glm::vec3(0))
+				{
 					character.RootMotionVelocity = request.Pending / (fixedStep * static_cast<float>(plannedSteps));
+					character.RootMotionShare = request.Frames > 0 ? request.ShareSum / static_cast<float>(request.Frames) : 1.0f;
+				}
 				request.Pending = glm::vec3(0);
+				request.ShareSum = 0;
+				request.Frames = 0;
 			}
 		}
 		// Active is a one-frame override, including zero-motion frames. Pending displacement survives
@@ -534,6 +539,8 @@ namespace Basalt {
 					BS_CORE_ERROR("Physics: character '{}' could not be built; discarding queued root motion translation", entity.GetName());
 				request.UnbuiltReported = true;
 				request.Pending = glm::vec3(0);
+				request.ShareSum = 0;
+				request.Frames = 0;
 			}
 			else if (built)
 				request.UnbuiltReported = false;

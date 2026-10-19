@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cmath>
 #include <optional>
 
 namespace Basalt {
@@ -337,7 +338,9 @@ namespace Basalt {
 				const glm::vec3 worldUp = FromJolt(up);
 				const glm::vec3 rootVelocity = *record.RootMotionVelocity;
 				const glm::vec3 tangent = rootVelocity - worldUp * glm::dot(rootVelocity, worldUp);
-				requested = worldUp * glm::dot(requested, worldUp) + tangent;
+				const glm::vec3 vertical = worldUp * glm::dot(requested, worldUp);
+				// While root motion fades in or out, gameplay movement keeps the rest of the horizontal velocity.
+				requested = vertical + tangent + (1.0f - record.RootMotionShare) * (requested - vertical);
 			}
 			const JPH::Vec3 move = ToJolt(requested);
 			const JPH::Vec3 moveVertical = up * move.Dot(up);
@@ -399,7 +402,7 @@ namespace Basalt {
 			it->second.MoveVelocity = velocity;
 	}
 
-	void PhysicsWorld::QueueRootMotion(Entity entity, const glm::vec3& displacement)
+	void PhysicsWorld::QueueRootMotion(Entity entity, const glm::vec3& displacement, float share)
 	{
 		if (!m_Impl->Owns(entity) || !entity.HasComponent<CharacterControllerComponent>())
 			return;
@@ -415,6 +418,8 @@ namespace Basalt {
 		request.InvalidReported = false;
 		request.Active = true;
 		request.Pending += displacement;
+		request.ShareSum += std::isfinite(share) ? std::clamp(share, 0.0f, 1.0f) : 1.0f;
+		request.Frames++;
 	}
 
 	bool PhysicsWorld::IsCharacterGrounded(Entity entity) const
