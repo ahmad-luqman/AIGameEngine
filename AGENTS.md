@@ -63,6 +63,11 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   after IK, from `Pose` plus the IK overlay (never their own last solution), as world-space points
   (`Animation/SpringBones.h`, substeps of at most 1/120 s) kept in the system by entity; their joints go into a second overlay
   that `Finish` applies after the IK one.
+- **Game UI geometry.** `UILayout` is shared by drawing, hit testing, `ui.layout` and viewport handles.
+  Rects remain in untransformed canvas units; affine transforms compose through descendants. Clips intersect
+  as canvas-aligned scissors (rotated clipping parents use their transformed bounds). Scroll views clip
+  automatically and offset their content. Text cursors, dropdown popup/highlight and keyboard focus-ring
+  visibility belong to `UIInteraction`, while authored text, selections and scroll offsets stay in components.
 - **Play mode runs a copy.** `Scene::Copy` duplicates the edit scene (same UUIDs) for play/simulate;
   stopping discards it. In the editor the game runs in the Game tab (primary camera at the project's window
   size, letterboxed; the game UI takes the pointer while the Game image is hovered and navigation while the Game

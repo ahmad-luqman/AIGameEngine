@@ -54,6 +54,9 @@ namespace Basalt {
 		// Breaks `text` into lines at '\n' and, when wrapWidth > 0, where ImGui's word wrap does: between
 		// words, or inside a word wider than wrapWidth. Trailing blanks are left out of a line's text and
 		// width, and a line that starts after a wrap drops its leading blanks.
+		// Measures the same lines used for drawing, in canvas units. Also works headless.
+		static glm::vec2 MeasureText(const std::string& text, float fontSize, const std::string& font = {}, float wrapWidth = 0.0f);
+
 		static std::vector<UITextLine> BreakLines(ImFont* font, float pixelSize, std::string_view text, float wrapWidth);
 	};
 

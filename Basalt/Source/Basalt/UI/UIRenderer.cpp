@@ -46,18 +46,22 @@ namespace Basalt {
 			}
 
 			const ImTextureRef id(static_cast<ImTextureID>(texture->second.Handle));
+			const uint32_t columns = std::clamp(command.SpriteColumns, 1u, 4096u), rows = std::clamp(command.SpriteRows, 1u, 4096u);
+			const uint32_t frame = std::min(command.SpriteFrame, columns * rows - 1);
+			const glm::vec2 uvSize = (command.UVMax - command.UVMin) / glm::vec2(columns, rows);
+			const glm::vec2 uvMin = command.UVMin + glm::vec2(frame % columns, frame / columns) * uvSize;
 			if (command.Slice == glm::vec4(0.0f))
 			{
-				drawList->AddImage(id, ToImVec(screen.Min), ToImVec(screen.Max()), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), color);
+				drawList->AddImage(id, ToImVec(screen.Min), ToImVec(screen.Max()), ToImVec(uvMin), ToImVec(uvMin + uvSize), color);
 				return;
 			}
-			for (const UIQuad& quad : ComputeNineSlice(box, texture->second.Size, command.Slice, command.SliceScale))
+			for (const UIQuad& quad : ComputeNineSlice(box, texture->second.Size * glm::abs(uvSize), command.Slice, command.SliceScale))
 			{
 				// Written to skip NaN sizes too.
 				if (!(quad.Box.Size.x > 0.0f) || !(quad.Box.Size.y > 0.0f))
 					continue;
 				const UIBox patch = mapping.ToScreen(quad.Box);
-				drawList->AddImage(id, ToImVec(patch.Min), ToImVec(patch.Max()), ToImVec(quad.UVMin), ToImVec(quad.UVMax), color);
+				drawList->AddImage(id, ToImVec(patch.Min), ToImVec(patch.Max()), ToImVec(uvMin + quad.UVMin * uvSize), ToImVec(uvMin + quad.UVMax * uvSize), color);
 			}
 		}
 
@@ -97,6 +101,28 @@ namespace Basalt {
 			font->CurrentRasterizerDensity = previousDensity;
 		}
 
+	}
+
+	glm::vec2 UIRenderer::MeasureText(const std::string& text, float fontSize, const std::string& fontPath, float wrapWidth)
+	{
+		if (text.empty())
+			return glm::vec2(0);
+		ImGuiContext* temporary = nullptr;
+		if (!ImGui::GetCurrentContext())
+		{
+			temporary = ImGui::CreateContext();
+			ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+			ImGui::GetIO().IniFilename = nullptr;
+		}
+		ImFont* font = UIFonts::Get(fontPath);
+		fontSize = std::clamp(std::isfinite(fontSize) ? fontSize : UITextComponent::DefaultFontSize, UITextComponent::MinFontSize, UITextComponent::MaxFontSize);
+		const auto lines = BreakLines(font, fontSize, text, std::isfinite(wrapWidth) ? std::max(wrapWidth, 0.0f) : 0.0f);
+		glm::vec2 size(0.0f, fontSize * static_cast<float>(lines.size()));
+		for (const auto& line : lines)
+			size.x = std::max(size.x, line.Width);
+		if (temporary)
+			ImGui::DestroyContext(temporary);
+		return size;
 	}
 
 	std::vector<UITextLine> UIRenderer::BreakLines(ImFont* font, float pixelSize, std::string_view text, float wrapWidth)
@@ -150,7 +176,31 @@ namespace Basalt {
 		drawList->PushClipRect(ToImVec(origin), ToImVec(origin + size), true);
 		for (const UIDrawCommand& command : commands)
 		{
+			if (command.Clip)
+			{
+				const UIBox clip = mapping.ToScreen(*command.Clip);
+				if (!(clip.Size.x > 0) || !(clip.Size.y > 0))
+					continue;
+				drawList->PushClipRect(ToImVec(clip.Min), ToImVec(clip.Max()), true);
+			}
 			const UIBox box = ResolveUIBox(command, canvasSize);
+			UIRectComponent local;
+			local.Pivot = command.Pivot;
+			local.Rotation = command.Rotation;
+			local.Scale = command.Scale;
+			const glm::mat3 transform = command.Transform * ComputeUITransform(box, local);
+			if (!IsUsableUITransform(box, transform))
+			{
+				if (command.Clip)
+					drawList->PopClipRect();
+				continue;
+			}
+			const bool transformed = transform != glm::mat3(1.0f);
+			const ImVec4 actualClip = drawList->_CmdHeader.ClipRect;
+			if (transformed)
+				drawList->PushClipRect(ImVec2(-FLT_MAX, -FLT_MAX), ImVec2(FLT_MAX, FLT_MAX), false);
+			const int commandBegin = drawList->CmdBuffer.Size - 1;
+			const int vertexBegin = drawList->VtxBuffer.Size;
 			switch (command.Kind)
 			{
 				case UIDrawKind::Rect:
@@ -166,6 +216,31 @@ namespace Basalt {
 					DrawText(drawList, mapping, command, box, resources);
 					break;
 			}
+			bool validVertices = true;
+			if (transformed)
+			{
+				for (int i = vertexBegin; i < drawList->VtxBuffer.Size; ++i)
+				{
+					ImDrawVert& vertex = drawList->VtxBuffer[i];
+					const glm::vec2 canvas = mapping.ToCanvas({ vertex.pos.x, vertex.pos.y });
+					vertex.pos = ToImVec(mapping.ToScreen(glm::vec2(transform * glm::vec3(canvas, 1.0f))));
+					validVertices = validVertices && std::isfinite(vertex.pos.x) && std::isfinite(vertex.pos.y) && std::abs(vertex.pos.x) <= MaxUICoordinate && std::abs(vertex.pos.y) <= MaxUICoordinate;
+				}
+			}
+			if (!validVertices)
+			{
+				for (int i = vertexBegin; i < drawList->VtxBuffer.Size; ++i)
+					drawList->VtxBuffer[i].pos = ImVec2(0, 0);
+			}
+			if (transformed)
+			{
+				// Text's CPU glyph culling must see the untransformed positions; the GPU scissor uses the final clip.
+				for (int i = commandBegin; i < drawList->CmdBuffer.Size; ++i)
+					drawList->CmdBuffer[i].ClipRect = validVertices ? actualClip : ImVec4(0, 0, 0, 0);
+				drawList->PopClipRect();
+			}
+			if (command.Clip)
+				drawList->PopClipRect();
 		}
 		drawList->PopClipRect();
 	}

@@ -5,6 +5,10 @@
 	"Renderer": { "Exposure": 0.8, "Tonemapper": "ACES", "SSAOEnabled": true, "ShadowsEnabled": true, "ShadowDistance": 40 },
 	"Physics": { "Gravity": [0, -9.81, 0], "FixedTimestep": 0.016666668, "MaxStepsPerFrame": 8 },
 	"Entities": [
+		{ "ID": 920, "Name": "UIFollowups", "Components": { "UIRect": { "Visible": false, "ClipChildren": true, "Rotation": 15, "Scale": [1.2, 0.8] }, "UIScrollView": { "ContentSize": [400, 600] }, "UIPanel": {}, "UINavigation": {}, "UIFocusRing": {} } },
+		{ "ID": 921, "Name": "TextInputProbe", "Components": { "UIRect": { "Visible": false }, "UITextInput": { "Text": "Hello", "Placeholder": "Name", "OnValueChanged": "" } } },
+		{ "ID": 922, "Name": "DropdownProbe", "Components": { "UIRect": { "Visible": false }, "UIDropdown": { "Options": "Low\nHigh", "Selected": 1, "OnValueChanged": "" } } },
+		{ "ID": 923, "Name": "SpriteProbe", "Components": { "UIRect": { "Visible": false }, "UIImage": { "Texture": "Assets/Textures/UIPanel.png", "SpriteColumns": 2, "SpriteRows": 2, "SpriteFrame": 3 }, "UISlider": { "Vertical": true, "OnValueChanged": "" } } },
 		{ "ID": 911, "Name": "PostProcessing", "Components": { "PostProcess": { "Enabled": false } } },
 		{ "ID": 910, "Name": "AnimationRig", "Components": {
 			"Transform": { "Translation": [1000, 0, 0] },

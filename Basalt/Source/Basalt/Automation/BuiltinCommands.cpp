@@ -374,6 +374,16 @@ namespace Basalt {
 			Input::SetKeyState(*key, OptionalBool(params, "down", true));
 		}
 
+		void ApplyTextInput(const json& params)
+		{
+			if (!params.contains("codepoint") || params["codepoint"].is_null())
+				throw CommandError("missing parameter 'codepoint'");
+			const auto codepoint = static_cast<uint32_t>(OptionalInteger(params, "codepoint", -1, 0, 0x10ffff));
+			if (codepoint >= 0xd800 && codepoint <= 0xdfff)
+				throw CommandError("'codepoint' must be a Unicode scalar value (surrogates are invalid)");
+			Input::AddTextCodepoint(codepoint);
+		}
+
 		void ApplyMouseInput(const json& params)
 		{
 			if (auto position = params.find("position"); position != params.end())
@@ -382,6 +392,13 @@ namespace Basalt {
 				if (!position->is_array() || position->size() != 2 || !JsonToFloat((*position)[0], mouse.x) || !JsonToFloat((*position)[1], mouse.y))
 					throw CommandError("'position' must be [x, y]");
 				Input::SetMousePosition(mouse);
+			}
+			if (auto scroll = params.find("scroll"); scroll != params.end())
+			{
+				glm::vec2 delta;
+				if (!scroll->is_array() || scroll->size() != 2 || !JsonToFloat((*scroll)[0], delta.x) || !JsonToFloat((*scroll)[1], delta.y))
+					throw CommandError("'scroll' must be [x, y]");
+				Input::AddMouseScroll(delta);
 			}
 			if (params.contains("button"))
 			{
@@ -401,6 +418,10 @@ namespace Basalt {
 				summary["value"] = entity.GetComponent<UISliderComponent>().Value;
 			else if (info.Kind == UIWidgetKind::Checkbox)
 				summary["checked"] = entity.GetComponent<UICheckboxComponent>().Checked;
+			else if (info.Kind == UIWidgetKind::TextInput)
+				summary["text"] = entity.GetComponent<UITextInputComponent>().Text;
+			else if (info.Kind == UIWidgetKind::Dropdown)
+				summary["selected"] = entity.GetComponent<UIDropdownComponent>().Selected;
 			if (const UIInteraction* interaction = scene.GetUIInteraction())
 			{
 				const UIWidgetID id = UIWidgetID::ForEntity(entity.GetUUID());
@@ -889,7 +910,7 @@ namespace Basalt {
 			});
 
 			Add(registry, "ui.layout",
-				"Lays out the current scene's UI components (the play copy while playing) for a viewport of width x height pixels: the canvas size, every visible UI entity's rect [x, y, width, height] in canvas units in draw order (widgets add their kind, values, target, callback and, while playing, state and focus), the host's view that maps the mouse onto the canvas for the widgets (`view`: origin and size in mouse coordinates and whether widgets take pointer and navigation input; headless, mouse positions are canvas units), and the problems that make UI draw or behave differently than authored (an image that does not load and draws its Color, a font that does not load and falls back to the built-in one or has glyphs that draw blank, an entity with several widget components, a widget callback whose target is missing or has no Script).", Schema::Object({ { "width", Schema::Nullable(Schema::Integer("integer, viewport pixels (default 1920)", 1, 65536)) }, { "height", Schema::Nullable(Schema::Integer("integer, viewport pixels (default 1080)", 1, 65536)) } }), [](AutomationSession& session, const json& params) {
+				"Lays out the current scene's UI components (the play copy while playing) for a viewport of width x height pixels: the canvas size, every visible UI entity's untransformed rect [x, y, width, height] in canvas units in draw order, its column-major 3x3 transform and effective canvas clip (null when unrestricted) (widgets add their kind, values, target, callback and, while playing, state and focus), the host's view that maps the mouse onto the canvas for the widgets (`view`: origin and size in mouse coordinates and whether widgets take pointer and navigation input; headless, mouse positions are canvas units), and the problems that make UI draw or behave differently than authored (an image that does not load and draws its Color, a font that does not load and falls back to the built-in one or has glyphs that draw blank, an entity with several widget components, a widget callback whose target is missing or has no Script).", Schema::Object({ { "width", Schema::Nullable(Schema::Integer("integer, viewport pixels (default 1920)", 1, 65536)) }, { "height", Schema::Nullable(Schema::Integer("integer, viewport pixels (default 1080)", 1, 65536)) } }), [](AutomationSession& session, const json& params) {
 					const auto width = static_cast<float>(OptionalInteger(params, "width", 1920, 1, 65536));
 					const auto height = static_cast<float>(OptionalInteger(params, "height", 1080, 1, 65536));
 					const glm::vec2 canvas = GameUI::GetCanvasSize({ width, height });
@@ -902,6 +923,10 @@ namespace Basalt {
 						const UIBox& rect = item.Rect;
 						const uint64_t id = item.Owner.GetUUID();
 						json entry = { { "id", id }, { "name", item.Owner.GetName() }, { "rect", { rect.Min.x, rect.Min.y, rect.Size.x, rect.Size.y } } };
+						entry["clip"] = item.Clip ? json{ item.Clip->Min.x, item.Clip->Min.y, item.Clip->Size.x, item.Clip->Size.y } : json();
+						entry["transform"] = json::array();
+						for (int column = 0; column < 3; ++column)
+							entry["transform"].push_back({ item.Transform[column].x, item.Transform[column].y, item.Transform[column].z });
 						const auto report = [&](const std::string& problem) { problems.push_back({ { "id", id }, { "name", item.Owner.GetName() }, { "problem", problem } }); };
 						if (const std::optional<UIWidgetInfo> widget = UILayout::GetWidget(item.Owner))
 						{
@@ -1477,7 +1502,7 @@ namespace Basalt {
 				return result;
 			});
 
-			Add(registry, "replay.record_start", "Starts recording input.key/input.mouse/input.gamepad commands with the play frame they arrive on. The mouse position and the injected gamepads (with what they hold) are recorded as they are on that frame, and the host's view whenever it changes, checked before every frame and every recorded command: where mouse positions land on the UI canvas, the game resolution scripts read the mouse in, and whether the game has the pointer and the keyboard (routing gates every game input), so replays run the same way in any host. A recording begun before play marks where play started (a playStart event): what came before it applies before the replay starts play, so OnCreate sees the same view and input. Physical gamepads are not recorded (replays run without them): they are listed in physicalGamepads.", Schema::Object(), [](AutomationSession& session, const json&) {
+			Add(registry, "replay.record_start", "Starts recording input.key/input.text/input.mouse/input.gamepad commands with the play frame they arrive on. The mouse position and the injected gamepads (with what they hold) are recorded as they are on that frame, and the host's view whenever it changes, checked before every frame and every recorded command: where mouse positions land on the UI canvas, the game resolution scripts read the mouse in, and whether the game has the pointer and the keyboard (routing gates every game input), so replays run the same way in any host. A recording begun before play marks where play started (a playStart event): what came before it applies before the replay starts play, so OnCreate sees the same view and input. Physical gamepads are not recorded (replays run without them): they are listed in physicalGamepads.", Schema::Object(), [](AutomationSession& session, const json&) {
 				session.StartRecording();
 				json physical = json::array();
 				for (uint32_t index = 0; index < Input::MaxGamepads; index++)
@@ -1597,6 +1622,8 @@ namespace Basalt {
 					{
 						if (command == "input.key")
 							ApplyKeyInput(eventParams);
+						else if (command == "input.text")
+							ApplyTextInput(eventParams);
 						else if (command == "input.mouse")
 							ApplyMouseInput(eventParams);
 						else if (command == "input.gamepad")
@@ -1651,7 +1678,13 @@ namespace Basalt {
 				return json::object();
 			});
 
-			Add(registry, "input.mouse", "Sets mouse position and/or a button state for play mode. Recorded while replay recording is on.", Schema::Object({ { "position", Schema::Vector("[x, y]", 2) }, { "button", Schema::String("string (Left, Right, Middle)", true) }, { "down", Schema::Nullable(Schema::Boolean("bool")) } }), [](AutomationSession& session, const json& params) {
+			Add(registry, "input.text", "Queues one Unicode scalar value for the focused text input this frame. Recorded during replay recording.", Schema::Object({ { "codepoint", Schema::Integer("Unicode scalar value (surrogates rejected)", 0, 0x10ffff) } }, { "codepoint" }), [](AutomationSession& session, const json& params) {
+				ApplyTextInput(params);
+				session.RecordInput("input.text", params);
+				return json{ { "ok", true } };
+			});
+
+			Add(registry, "input.mouse", "Sets mouse position, a button state and/or accumulated scroll [x,y] for play mode. Recorded while replay recording is on.", Schema::Object({ { "position", Schema::Vector("[x, y]", 2) }, { "scroll", Schema::Vector("[x, y] wheel delta", 2) }, { "button", Schema::String("string (Left, Right, Middle)", true) }, { "down", Schema::Nullable(Schema::Boolean("bool")) } }), [](AutomationSession& session, const json& params) {
 				ApplyMouseInput(params);
 				session.RecordInput("input.mouse", params);
 				return json::object();

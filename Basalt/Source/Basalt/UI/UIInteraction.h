@@ -59,6 +59,8 @@ namespace Basalt {
 		bool Interactable = true;
 		// Sliders only.
 		float HandleWidth = 0.0f;
+		bool Vertical = false;
+		std::optional<UIBox> Clip;
 	};
 
 	// What the user did to an immediate-mode widget this frame. A widget drawn disabled this frame gets no Activated,
@@ -80,7 +82,7 @@ namespace Basalt {
 	//
 	// Every frame Update hit-tests the visible widget components (UILayout) and the immediate-mode widgets drawn
 	// the frame before, topmost first: immediate widgets over components, later ones over earlier ones. Only
-	// widgets take pointer input; a plain UIImage does not block it. Any left press in the game view drops the
+	// widgets and blocking panels take pointer input; a plain UIImage does not block it. Any left press in the game view drops the
 	// keyboard/gamepad focus, and one on a widget holds it; a real release over the same widget clicks a button or
 	// toggles a checkbox, and a held slider follows the pointer as it moves. Arrows, the D-pad and the left stick (with
 	// repeat after RepeatDelay, every RepeatInterval) move the focus to the nearest widget in that direction,
@@ -129,9 +131,12 @@ namespace Basalt {
 		// the keyboard and gamepads then still do not act on it.
 		const UIWidgetID& GetFocus() const { return m_Focus.ID; }
 		void SetFocus(UIWidgetID id);
-		// Whether the pointer was over an interactable widget in the last Update (so a click there is the UI's,
+		// Whether the pointer was over an interactable widget or blocking panel in the last Update (so a click there is the UI's,
 		// not the game's).
-		bool IsPointerOverWidget() const { return m_Hovered.IsValid(); }
+		bool IsPointerOverWidget() const { return m_PointerBlocked; }
+		UUID GetOpenDropdown() const { return m_OpenDropdown; }
+		uint32_t GetDropdownHighlight() const { return m_DropdownHighlight; }
+		size_t GetTextCursor() const { return m_TextCursor; }
 
 		// The game's keyboard and gamepad navigation setting (UI.SetNavigationEnabled): a game that reads the arrows,
 		// Space or the D-pad itself while widgets are visible turns it off, so they never focus or activate a widget.
@@ -151,6 +156,12 @@ namespace Basalt {
 			// Widget components: the resolved callback target and method (from UILayout::GetWidget).
 			UUID Target = 0;
 			std::string Callback;
+			bool Vertical = false;
+			glm::mat3 Transform = glm::mat3(1.0f);
+			std::optional<UIBox> Clip;
+			std::optional<uint32_t> Option;
+			bool Contains(const glm::vec2& point) const { return (!Clip || Clip->Contains(point)) && ContainsUIBox(Rect, Transform, point); }
+			bool IsNavigable() const { return Interactable && Kind != UIWidgetKind::Panel && Kind != UIWidgetKind::ScrollView && !Option && (!Clip || (IntersectUIBoxes(TransformUIBox(Rect, Transform), *Clip).Size.x > 0.0f && IntersectUIBoxes(TransformUIBox(Rect, Transform), *Clip).Size.y > 0.0f)); }
 		};
 
 		// How sure the focus is that its widget exists.
@@ -186,7 +197,7 @@ namespace Basalt {
 			// A slider: it stays pressed while the pointer drags it off its rect.
 			bool IsDrag = false;
 			// The pointer's x when the slider last followed it (it follows only when the pointer moves).
-			float DragX = 0.0f;
+			glm::vec2 DragPosition = { 0.0f, 0.0f };
 		};
 
 		std::vector<Candidate> CollectWidgets(Scene& scene) const;
@@ -199,13 +210,21 @@ namespace Basalt {
 		void FocusLive(const UIWidgetID& id);
 
 		void Activate(Scene& scene, const Candidate& widget);
-		void DragSlider(Scene& scene, const Candidate& widget, float pointerX);
+		void DragSlider(Scene& scene, const Candidate& widget, const glm::vec2& pointer);
+		void UpdateText(Scene& scene, const std::vector<Candidate>& widgets);
+		void SelectDropdown(Scene& scene, const Candidate& widget, uint32_t index);
 		void StepSlider(Scene& scene, const Candidate& widget, int steps);
 		// Writes a slider component's new value and queues its callback, when the value changed.
 		void CommitSliderValue(const Candidate& widget, UISliderComponent& slider, float value);
 
 	private:
 		UIWidgetID m_Hovered;
+		bool m_PointerBlocked = false;
+		std::optional<glm::vec2> m_LastPointer;
+		UUID m_OpenDropdown = 0;
+		uint32_t m_DropdownHighlight = 0;
+		UIWidgetID m_TextFocus;
+		size_t m_TextCursor = 0;
 		std::optional<Press> m_Pressed;
 		Focus m_Focus;
 		// The accept button is held on the focused widget.

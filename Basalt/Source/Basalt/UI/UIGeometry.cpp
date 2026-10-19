@@ -4,6 +4,8 @@
 #include "Basalt/UI/UIRules.h"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 namespace Basalt {
 
@@ -80,6 +82,71 @@ namespace Basalt {
 		const glm::vec2 pivot = anchorMin + span * rect.Pivot + rect.Position;
 		const glm::vec2 size = glm::max(span + rect.Size, glm::vec2(0.0f));
 		return { pivot - size * rect.Pivot, size };
+	}
+
+	glm::mat3 ComputeUITransform(const UIBox& box, const UIRectComponent& rect)
+	{
+		const glm::vec2 pivot = box.Min + box.Size * rect.Pivot;
+		const float c = std::cos(rect.Rotation), s = std::sin(rect.Rotation);
+		glm::mat3 result(1.0f);
+		result[0] = { c * rect.Scale.x, s * rect.Scale.x, 0.0f };
+		result[1] = { -s * rect.Scale.y, c * rect.Scale.y, 0.0f };
+		result[2] = glm::vec3(pivot - glm::vec2(result * glm::vec3(pivot, 0.0f)), 1.0f);
+		return result;
+	}
+
+	UIBox TransformUIBox(const UIBox& box, const glm::mat3& transform)
+	{
+		glm::vec2 low(std::numeric_limits<float>::max()), high(std::numeric_limits<float>::lowest());
+		for (glm::vec2 p : { box.Min, box.Max(), box.Min + glm::vec2(box.Size.x, 0), box.Min + glm::vec2(0, box.Size.y) })
+		{
+			p = glm::vec2(transform * glm::vec3(p, 1));
+			low = glm::min(low, p);
+			high = glm::max(high, p);
+		}
+		return { low, high - low };
+	}
+
+	UIBox IntersectUIBoxes(const UIBox& a, const UIBox& b)
+	{
+		const glm::vec2 low = glm::max(a.Min, b.Min);
+		return { low, glm::max(glm::min(a.Max(), b.Max()) - low, glm::vec2(0)) };
+	}
+
+	bool IsUsableUITransform(const UIBox& box, const glm::mat3& transform)
+	{
+		if (!std::isfinite(box.Min.x) || !std::isfinite(box.Min.y) || !std::isfinite(box.Size.x) || !std::isfinite(box.Size.y) || box.Size.x < 0 || box.Size.y < 0)
+			return false;
+		for (glm::length_t col = 0; col < 3; ++col)
+			for (glm::length_t row = 0; row < 3; ++row)
+				if (!std::isfinite(transform[col][row]) || std::abs(transform[col][row]) > MaxUICoordinate)
+					return false;
+		if (transform[0][2] != 0 || transform[1][2] != 0 || transform[2][2] != 1)
+			return false;
+		const double determinant = double(transform[0][0]) * transform[1][1] - double(transform[1][0]) * transform[0][1];
+		if (determinant == 0 || !std::isfinite(determinant))
+			return false;
+		for (glm::length_t col = 0; col < 2; ++col)
+			for (glm::length_t row = 0; row < 2; ++row)
+				if (std::abs(double(transform[col][row]) / determinant) > 1e12)
+					return false;
+		const UIBox bounds = TransformUIBox(box, transform);
+		for (glm::vec2 point : { bounds.Min, bounds.Max() })
+			if (!std::isfinite(point.x) || !std::isfinite(point.y) || std::abs(point.x) > MaxUICoordinate || std::abs(point.y) > MaxUICoordinate)
+				return false;
+		return true;
+	}
+
+	bool ContainsUIBox(const UIBox& box, const glm::mat3& transform, const glm::vec2& point)
+	{
+		if (!IsUsableUITransform(box, transform))
+			return false;
+		// Double intermediates preserve valid tiny scales whose float determinant would underflow.
+		const double determinant = double(transform[0][0]) * transform[1][1] - double(transform[1][0]) * transform[0][1];
+		const double x = double(point.x) - transform[2][0], y = double(point.y) - transform[2][1];
+		const glm::dvec2 local((x * transform[1][1] - y * transform[1][0]) / determinant,
+							   (y * transform[0][0] - x * transform[0][1]) / determinant);
+		return local.x >= box.Min.x && local.y >= box.Min.y && local.x < double(box.Min.x) + box.Size.x && local.y < double(box.Min.y) + box.Size.y;
 	}
 
 	glm::vec2 AlignInBox(const UIBox& box, const glm::vec2& extent, const glm::vec2& align)

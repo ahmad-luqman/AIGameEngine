@@ -1,6 +1,7 @@
 #include "EditorLayer.h"
 
 #include "EditorColors.h"
+#include "UIRectHandles.h"
 #include "Panels/JsonWidgets.h"
 #include "Panels/PreviewImage.h"
 
@@ -46,6 +47,7 @@
 
 #include <future>
 #include <limits>
+#include <ranges>
 
 namespace Basalt {
 
@@ -436,7 +438,7 @@ namespace Basalt {
 								 result["renderHeight"] = m_Renderer ? m_Renderer->GetRenderHeight() : 0;
 								 return result;
 							 } });
-		m_Commands.Register({ "editor.pick", "Picks current mesh surfaces and enabled light/camera/audio helpers; background is 0. Selects unless select=false.", EditorCommandSchemas::Pick(), [this](AutomationSession& session, const nlohmann::json& params) {
+		m_Commands.Register({ "editor.pick", "Picks visible UI rects, current mesh surfaces and enabled light/camera/audio helpers; background is 0. Selects unless select=false.", EditorCommandSchemas::Pick(), [this](AutomationSession& session, const nlohmann::json& params) {
 								 if (!m_Renderer)
 									 throw CommandError("picking requires a scene viewport");
 								 const UUID id = PickViewport(params["x"].get<uint32_t>(), params["y"].get<uint32_t>());
@@ -877,6 +879,7 @@ namespace Basalt {
 		CancelVertexSnap();
 		m_BoxStart.reset();
 		m_GizmoCancelled = m_GizmoWasUsing;
+		m_UIRectDrag.reset();
 		m_History.Reset(SceneSerializer::SerializeScene(*m_Session.GetEditScene()));
 		m_Paused = false;
 	}
@@ -1393,6 +1396,15 @@ namespace Basalt {
 			throw CommandError("picking unavailable: viewport has not been sized");
 		if (x >= width || y >= height)
 			throw CommandError("pick coordinates outside " + std::to_string(width) + "x" + std::to_string(height) + " output viewport");
+		if (!IsGameRunning())
+		{
+			const glm::vec2 canvas = GameUI::GetCanvasSize({ static_cast<float>(width), static_cast<float>(height) });
+			const glm::vec2 point = glm::vec2(x, y) * canvas / glm::vec2(width, height);
+			const auto items = UILayout::Layout(*m_Session.GetScene(), canvas);
+			for (const auto& item : std::views::reverse(items))
+				if (item.Contains(point))
+					return item.Owner.GetUUID();
+		}
 		std::string error;
 		if (!PrepareCaptureRenderer(width, height, m_Renderer->GetCurrentRenderScale(), error))
 			throw CommandError(error);
@@ -1678,6 +1690,7 @@ namespace Basalt {
 				ImGui::TextDisabled("Automation server: off");
 			ImGui::TextDisabled("Viewport: RMB+WASD fly (RMB+wheel: speed), Alt+LMB orbit, MMB pan, wheel zoom, F focus");
 			ImGui::TextDisabled("Gizmo: Q none, W move, E rotate, R scale, Ctrl snaps; V+drag vertex to vertex");
+			ImGui::TextDisabled("UI Bounds: W drag rect to move, edge/corner handles to resize; E rotate, R scale; Esc cancels");
 			ImGui::EndMenu();
 		}
 		ImGui::EndMainMenuBar();
@@ -1786,6 +1799,7 @@ namespace Basalt {
 		if (m_GizmoWasUsing && !m_GizmoCancelled)
 			m_Context.FinishGizmoTransaction(cancel, [this](auto& state, std::string& error) { return RestoreState(state, error); });
 		ResetGizmoInteraction();
+		m_UIRectDrag.reset();
 		m_GizmoWasUsing = false;
 		m_GizmoCancelled = ImGui::IsMouseDown(ImGuiMouseButton_Left);
 	}
@@ -1858,7 +1872,7 @@ namespace Basalt {
 			ImGui::EndDragDropTarget();
 		}
 
-		if (m_GizmoWasUsing && (m_Session.IsPlaying() || m_ViewportSettings.Options().Operation == GizmoOperation::None || m_GizmoSelection != m_Session.GetSelections() || Input::IsKeyPressed(KeyCode::Escape)))
+		if (m_GizmoWasUsing && (m_Session.IsPlaying() || m_ViewportSettings.Options().Operation == GizmoOperation::None || m_GizmoSelection != m_Session.GetSelections() || Input::IsKeyPressed(KeyCode::Escape) || (m_UIRectDrag && (!m_ViewportSettings.Options().UIBounds || m_UIRectDrag->Operation != m_ViewportSettings.Options().Operation))))
 			FinishGizmo(true);
 		if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
 			m_GizmoCancelled = false;
@@ -1881,7 +1895,9 @@ namespace Basalt {
 				break;
 		}
 		const bool vertexSnap = m_Session.GetSelections().size() == 1 && !ImGuizmo::IsUsing() && !m_Session.IsPlaying() && !io.WantTextInput && !ImGui::IsAnyItemActive() && (options.VertexSnap || Input::IsKeyDown(KeyCode::V));
-		bool gizmoActive = false;
+		bool gizmoActive = HandleUIRectHandles(selected, { cursor.x, cursor.y }, { available.x, available.y });
+		// Cancelling a gesture restores a new scene instance.
+		selected = m_Session.GetScene()->GetEntityByUUID(m_Session.GetSelection());
 		// UI rects are placed by their UIRect; selected world entities share one pivot.
 		if (!m_Context.HasAutomationTransaction() && !m_GizmoCancelled && !vertexSnap && selected && gizmoOperation != 0 && !m_Session.IsPlaying() && !selected.HasComponent<UIRectComponent>())
 		{
@@ -1921,7 +1937,7 @@ namespace Basalt {
 			}
 			gizmoActive = ImGuizmo::IsOver() || ImGuizmo::IsUsing();
 		}
-		const bool using_ = ImGuizmo::IsUsing();
+		const bool using_ = ImGuizmo::IsUsing() || m_UIRectDrag.has_value();
 		if (m_GizmoWasUsing && !using_)
 			FinishGizmo(false);
 		m_GizmoWasUsing = using_;
@@ -2259,6 +2275,114 @@ namespace Basalt {
 		return result;
 	}
 
+	bool EditorLayer::HandleUIRectHandles(Entity selected, const glm::vec2& origin, const glm::vec2& size)
+	{
+		const auto options = m_ViewportSettings.Options();
+		if (!selected || !selected.HasComponent<UIRectComponent>() || m_Session.IsPlaying() || !options.UIBounds || options.Operation == GizmoOperation::None || m_Context.HasAutomationTransaction() || m_GizmoCancelled)
+			return false;
+		const UICanvasMapping mapping = UICanvasMapping::ForViewport(origin, size);
+		const glm::vec2 mouse = mapping.ToCanvas({ ImGui::GetIO().MousePos.x, ImGui::GetIO().MousePos.y });
+		std::optional<UILayoutItem> selectedItem;
+		for (const auto& item : UILayout::Layout(*m_Session.GetScene(), m_UIFrame.GetCanvasSize()))
+			if (item.Owner == selected)
+				selectedItem = item;
+		if (!selectedItem)
+		{
+			if (m_UIRectDrag)
+				FinishGizmo(true);
+			return false;
+		}
+		const auto& item = *selectedItem;
+		const auto rect = SanitizeUIRect(selected.GetComponent<UIRectComponent>());
+		const auto point = [&](const glm::vec2& uv) { return glm::vec2(item.Transform * glm::vec3(item.Rect.Min + item.Rect.Size * uv, 1.0f)); };
+		const auto screen = [&](const glm::vec2& uv) {
+			const glm::vec2 p = mapping.ToScreen(point(uv));
+			return ImVec2(p.x, p.y);
+		};
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+		drawList->PushClipRect(ImVec2(origin.x, origin.y), ImVec2(origin.x + size.x, origin.y + size.y), true);
+		const ImU32 color = IM_COL32(255, 200, 80, 255);
+		const std::array<glm::vec2, 8> handles = { glm::vec2(0, 0), { 0.5f, 0 }, { 1, 0 }, { 1, 0.5f }, { 1, 1 }, { 0.5f, 1 }, { 0, 1 }, { 0, 0.5f } };
+		std::optional<glm::vec2> hovered;
+		for (const glm::vec2& handle : handles)
+		{
+			const ImVec2 p = screen(handle);
+			drawList->AddRectFilled(ImVec2(p.x - 4, p.y - 4), ImVec2(p.x + 4, p.y + 4), color);
+			if (glm::length(mapping.ToScreen(point(handle)) - glm::vec2(ImGui::GetIO().MousePos.x, ImGui::GetIO().MousePos.y)) <= 8.0f)
+				hovered = handle;
+		}
+		const bool inside = item.Contains(mouse);
+		const bool active = m_UIRectDrag.has_value() || (m_ViewportHovered && (hovered.has_value() || inside));
+		if (active)
+			ImGui::SetMouseCursor(options.Operation == GizmoOperation::Translate && hovered ? ImGuiMouseCursor_ResizeAll : ImGuiMouseCursor_Hand);
+		if (!m_UIRectDrag && active && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().KeyAlt && !ImGui::IsAnyItemActive())
+		{
+			const glm::mat3 local = ComputeUITransform(item.Rect, rect);
+			if (std::abs(glm::determinant(local)) > 1e-8f && std::abs(glm::determinant(item.Transform)) > 1e-8f)
+			{
+				m_Context.FinishFieldEdit();
+				if (m_Context.BeginTransaction("UI rect gesture", EditorContext::TransactionKind::Gizmo))
+				{
+					m_UIRectDrag = UIRectDrag{ rect, item.Rect, item.Transform, item.Transform * glm::inverse(local), mouse, hovered.value_or(glm::vec2(0.5f)), options.Operation, hovered.has_value() && options.Operation == GizmoOperation::Translate };
+					m_GizmoSelection = m_Session.GetSelections();
+					m_GizmoWasUsing = true;
+				}
+			}
+		}
+		if (m_UIRectDrag && ImGui::IsMouseDown(ImGuiMouseButton_Left))
+		{
+			const auto& drag = *m_UIRectDrag;
+			UIRectComponent edited = drag.Initial;
+			const glm::vec2 parentDelta = glm::vec2(glm::inverse(drag.ParentTransform) * glm::vec3(mouse - drag.Start, 0.0f));
+			if (drag.Resize)
+			{
+				const glm::vec2 localDelta = glm::vec2(glm::inverse(drag.Transform) * glm::vec3(mouse - drag.Start, 0.0f));
+				edited = ResizeUIRect(drag.Initial, drag.Box, drag.Handle, localDelta);
+			}
+			else if (drag.Operation == GizmoOperation::Translate)
+				edited.Position += parentDelta;
+			else
+			{
+				const glm::vec2 pivot = drag.Box.Min + drag.Box.Size * drag.Initial.Pivot;
+				const glm::mat3 inverse = glm::inverse(drag.ParentTransform);
+				const glm::vec2 start = glm::vec2(inverse * glm::vec3(drag.Start, 1.0f)) - pivot;
+				const glm::vec2 current = glm::vec2(inverse * glm::vec3(mouse, 1.0f)) - pivot;
+				if (drag.Operation == GizmoOperation::Rotate && glm::length(start) > 1e-3f && glm::length(current) > 1e-3f)
+					edited.Rotation += std::atan2(current.y, current.x) - std::atan2(start.y, start.x);
+				else if (drag.Operation == GizmoOperation::Scale && glm::length(start) > 1e-3f)
+					edited.Scale *= std::max(glm::length(current) / glm::length(start), 0.01f);
+			}
+			const bool snap = options.Snap || ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
+			if (snap)
+			{
+				const float step = options.StepFor(drag.Operation);
+				if (drag.Operation == GizmoOperation::Rotate)
+					edited.Rotation = glm::radians(std::round(glm::degrees(edited.Rotation) / step) * step);
+				else if (drag.Operation == GizmoOperation::Scale)
+				{
+					edited.Scale = glm::round(edited.Scale / step) * step;
+					for (int axis = 0; axis < 2; ++axis)
+						if (std::abs(edited.Scale[axis]) < 0.01f)
+							edited.Scale[axis] = drag.Initial.Scale[axis] < 0.0f ? -0.01f : 0.01f;
+				}
+				else
+				{
+					edited.Position = glm::round(edited.Position / step) * step;
+					if (drag.Resize)
+						edited.Size = glm::round(edited.Size / step) * step;
+				}
+			}
+			edited = SanitizeUIRect(edited);
+			if (edited != selected.GetComponent<UIRectComponent>())
+				if (!m_Context.Execute("component.set", { { "entity", static_cast<uint64_t>(selected.GetUUID()) }, { "component", "UIRect" }, { "data", { { "Position", { edited.Position.x, edited.Position.y } }, { "Size", { edited.Size.x, edited.Size.y } }, { "Rotation", glm::degrees(edited.Rotation) }, { "Scale", { edited.Scale.x, edited.Scale.y } } } } }))
+					FinishGizmo(true);
+		}
+		else if (m_UIRectDrag)
+			m_UIRectDrag.reset();
+		drawList->PopClipRect();
+		return active;
+	}
+
 	void EditorLayer::DrawUIBounds(const glm::vec2& origin, const glm::vec2& size)
 	{
 		Scene& scene = *m_Session.GetScene();
@@ -2274,29 +2398,36 @@ namespace Basalt {
 		const Entity selected = scene.GetEntityByUUID(m_Session.GetSelection());
 		const ImU32 boundsColor = IM_COL32(255, 255, 255, 90);
 		const ImU32 selectionColor = ImGui::ColorConvertFloat4ToU32(ImVec4(s_SelectionColor.r, s_SelectionColor.g, s_SelectionColor.b, s_SelectionColor.a));
-		std::optional<UIBox> selectedRect;
+		std::optional<UILayoutItem> selectedRect;
 		for (const UILayoutItem& item : UILayout::Layout(scene, canvas))
 		{
 			if (item.Owner == selected)
-				selectedRect = item.Rect;
+				selectedRect = item;
 			else
-				drawList->AddRect(toScreen(item.Rect.Min), toScreen(item.Rect.Max()), boundsColor);
+			{
+				const auto point = [&](const glm::vec2& uv) { return toScreen(glm::vec2(item.Transform * glm::vec3(item.Rect.Min + item.Rect.Size * uv, 1.0f))); };
+				drawList->AddQuad(point({ 0, 0 }), point({ 1, 0 }), point({ 1, 1 }), point({ 0, 1 }), boundsColor);
+			}
 		}
 		// The selection on top: its rect, its pivot as a dot and its anchors as diamonds on the parent rect.
 		const auto* rectComponent = selected ? selected.TryGetComponent<UIRectComponent>() : nullptr;
 		if (selectedRect)
-			drawList->AddRect(toScreen(selectedRect->Min), toScreen(selectedRect->Max()), selectionColor, 0.0f, 0, 2.0f);
+		{
+			const auto point = [&](const glm::vec2& uv) { return toScreen(glm::vec2(selectedRect->Transform * glm::vec3(selectedRect->Rect.Min + selectedRect->Rect.Size * uv, 1.0f))); };
+			drawList->AddQuad(point({ 0, 0 }), point({ 1, 0 }), point({ 1, 1 }), point({ 0, 1 }), selectionColor, 2.0f);
+		}
 		if (selectedRect && rectComponent)
 		{
 			const UIRectComponent rect = SanitizeUIRect(*rectComponent);
-			drawList->AddCircleFilled(toScreen(selectedRect->Min + selectedRect->Size * rect.Pivot), 4.0f, selectionColor);
+			drawList->AddCircleFilled(toScreen(glm::vec2(selectedRect->Transform * glm::vec3(selectedRect->Rect.Min + selectedRect->Rect.Size * rect.Pivot, 1.0f))), 4.0f, selectionColor);
 			const UIBox parent = UILayout::GetParentRect(scene, selected, canvas);
 			const glm::vec2 anchorMin = parent.Min + parent.Size * rect.AnchorMin;
 			const glm::vec2 anchorMax = parent.Min + parent.Size * rect.AnchorMax;
+			const glm::mat3 parentTransform = selectedRect->Transform * glm::inverse(ComputeUITransform(selectedRect->Rect, rect));
 			constexpr float AnchorMarkerRadius = 5.0f;
 			for (const glm::vec2& anchor : { anchorMin, glm::vec2(anchorMax.x, anchorMin.y), glm::vec2(anchorMin.x, anchorMax.y), anchorMax })
 			{
-				const ImVec2 point = toScreen(anchor);
+				const ImVec2 point = toScreen(glm::vec2(parentTransform * glm::vec3(anchor, 1.0f)));
 				drawList->AddQuad(ImVec2(point.x, point.y - AnchorMarkerRadius), ImVec2(point.x + AnchorMarkerRadius, point.y), ImVec2(point.x, point.y + AnchorMarkerRadius), ImVec2(point.x - AnchorMarkerRadius, point.y), selectionColor, 1.5f);
 			}
 		}

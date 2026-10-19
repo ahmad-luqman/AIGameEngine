@@ -794,8 +794,14 @@ Colors are display colors with opacity, 0..1 (not HDR). Debug views (`--debug-vi
 | `UIImage` | `Texture`, `Color` (tint), `Slice` (Vec4 left, top, right, bottom, in texels), `SliceScale` |
 | `UIText` | `Text`, `Font` (.ttf path, empty = built-in), `FontSize`, `Color`, `HorizontalAlign` (`Left`/`Center`/`Right`), `VerticalAlign` (`Top`/`Middle`/`Bottom`), `Wrap`, `Shadow` |
 | `UIButton` | `Interactable`, tints (below), `Target`, `OnClick` |
-| `UISlider` | `Interactable`, `Value`, `Min`, `Max`, `Step`, `TrackColor`, `FillColor`, `HandleColor`, `HandleWidth`, tints, `Target`, `OnValueChanged` |
+| `UISlider` | `Interactable`, `Value`, `Min`, `Max`, `Step`, `TrackColor`, `FillColor`, `HandleColor`, `HandleWidth`, `Vertical`, tints, `Target`, `OnValueChanged` |
 | `UICheckbox` | `Interactable`, `Checked`, `BoxColor`, `CheckColor`, tints, `Target`, `OnValueChanged` |
+| `UITextInput` | `Interactable`, `ReadOnly`, `Text`, `Placeholder`, `MaxLength`, tints, `Target`, `OnValueChanged` |
+| `UIDropdown` | `Interactable`, `Options` (newline-separated labels), `Selected` (zero-based), tints, `Target`, `OnValueChanged` |
+| `UIScrollView` | `Interactable`, `ContentSize`, `Offset` (Vec2s), `ScrollSpeed` |
+| `UIPanel` | `BlockInput` |
+| `UINavigation` | `Up`, `Down`, `Left`, `Right` (entity references; 0 uses spatial navigation) |
+| `UIFocusRing` | `Color`, `Thickness` |
 
 `UIRect` places a rectangle relative to its parent's rect: that of the nearest ancestor with UI components,
 or the whole canvas (nothing is clipped to it). Anchors are fractions of the parent rect (`0,0` top-left,
@@ -834,29 +840,48 @@ Scene.FindEntityByName("PauseMenu"):SetComponent("UIRect", { Visible = paused })
 
 ### Widgets
 
-`UIButton`, `UISlider` and `UICheckbox` make an entity's rect interactive while the scene plays (in the editor
+`UIButton`, `UISlider`, `UICheckbox`, `UITextInput` and `UIDropdown` make an entity's rect interactive while the scene plays (in the editor
 and while simulating they only draw). Give the entity a `UIRect` as usual; the rect is the area that takes
 input.
 
 - **`UIButton`** draws nothing itself: it tints the entity's `UIImage` (its background) by state, and the
   entity's `UIText` is its label. Without a `UIImage` it is an invisible click area.
-- **`UISlider`** (horizontal) draws its track (`TrackColor`, the whole rect), a fill from the left edge to the
+- **`UISlider`** (horizontal by default) draws its track (`TrackColor`, the whole rect), a fill from the left edge to the
   value (`FillColor`) and a handle (`HandleColor`, `HandleWidth` units wide, as tall as the rect, tinted by
   state) that stays inside the rect. `Value` lies in `Min..Max`; a positive `Step` snaps it to
-  `Min + k * Step` (and `Max`), 0 is continuous.
+  `Min + k * Step` (and `Max`), 0 is continuous. With `Vertical = true`, values increase upwards,
+  `HandleWidth` is the handle height, and Up/Down step the focused slider.
 - **`UICheckbox`** draws a box (`BoxColor`, tinted by state) as tall as the rect at its left edge and, when
   `Checked`, a mark inside it (`CheckColor`); the entity's `UIText` is laid out in the rest of the rect, as the
   label. Clicking anywhere in the rect toggles it.
+- **`UITextInput`** draws a single-line editor with a placeholder while empty. Clicking it focuses it;
+  typed Unicode inserts at the cursor, Left/Right, Home/End move it, and Backspace/Delete remove whole
+  Unicode code points. `MaxLength` counts code points (1–4096); text and placeholders must be valid
+  single-line UTF-8. `ReadOnly` permits focus and cursor movement while preserving the text. A `UIText`
+  on the entity supplies its font, size and text color; the editor supplies the text.
+- **`UIDropdown`** draws the selected label and opens a popup on click or accept. `Options` contains up
+  to 128 labels separated by newlines (at most 16384 bytes). `Selected` is zero-based; an empty option
+  string has no choices and keeps `Selected = 0`. Choose a row with the pointer, or use Up/Down and
+  accept; Escape or clicking outside dismisses the popup. A `UIText` supplies the font styling.
+- **`UIScrollView`** clips descendants to its viewport and places them in `ContentSize` (at least the
+  viewport size). Children move opposite `Offset`, clamped to the content extent. Wheel input adjusts
+  the offset by `ScrollSpeed` canvas units; Shift swaps the scroll axes. Nested views route the wheel
+  to the nearest enabled scroll ancestor under the pointer. `Interactable = false` pauses wheel input.
+- **`UIPanel`** with `BlockInput = true` consumes pointer input over its rect, including when it has no
+  image. Children can still receive input. `UI.IsPointerOverWidget()` reports blocking panels too.
+- **`UINavigation`** sets explicit directional focus targets. A direction set to 0 uses the nearest
+  widget in that direction. A hidden, clipped, missing or disabled explicit target leaves focus in place.
+- **`UIFocusRing`** draws an inset border of `Thickness` canvas units while the entity has focus.
 
 Tints multiply one part of the widget by state (the button's `UIImage`, the slider's handle, the checkbox's
 box): `NormalTint`, `HighlightTint` (hovered by the mouse, or focused by keyboard/gamepad navigation),
 `PressedTint` (held with the mouse over it — a dragged slider stays pressed — or by the accept key) and
-`DisabledTint` (`Interactable = false`: no input, no focus). An entity with several widget components acts as the first of button, slider, checkbox
+`DisabledTint` (`Interactable = false`: no input, no focus). An entity with several widget components acts as the first of button, slider, checkbox, text input, dropdown
 (`ui.layout` reports it).
 
 **Callbacks.** A user interaction calls a method on the script of the `Target` entity (0, the default, means
 the widget's own entity), named by `OnClick` (buttons) or `OnValueChanged` (sliders: the new number;
-checkboxes: the new boolean); an empty name calls nothing. The widget entity is the first argument, so one
+checkboxes: the new boolean; text inputs: the new UTF-8 string; dropdowns: the new zero-based index); an empty name calls nothing. The widget entity is the first argument, so one
 menu script can handle every button:
 
 ```lua
@@ -940,7 +965,7 @@ components' default tints; a slider's label is drawn centered on it), and return
 - `UI.Checkbox(label, checked, x, y, width, height [, options])` — the new checked state (options add
   `CheckColor`)
 - `UI.Slider(label, value, min, max, x, y, width, height [, options])` — the new value (options add `Step`,
-  `FillColor`, `HandleColor`, `HandleWidth`); `min < max`, and `value` must lie between them
+  `FillColor`, `HandleColor`, `HandleWidth`, `Vertical`); `min < max`, and `value` must lie between them
 
 Options for all three: `Id`, `Anchor`, `Pivot`, `Interactable` (default true), `Color` (background, box or
 track), `TextColor`, `Size` (label font size; default 60% of the height, at most 32), `Font`. A widget is
@@ -1517,3 +1542,15 @@ Without a character, root motion updates the world transform, respecting its rot
 Bone attachments update after physics and `OnLateUpdate`. Playback and parameters changed in
 `OnLateUpdate` advance on the following update; direct play, blend and seek calls resample the visible
 pose immediately.
+
+### UI clipping, transforms and sprite sheets
+
+`UI.MeasureText(text [, size | { Size=32, Font="", Width=0 }])` returns a Vec2 in canvas units, using the same newline and word wrapping rules as UI.Text. Width zero disables wrapping. Empty text measures zero. Measurement is available in headless sessions.
+
+`UI.PushClip(x, y, width, height)` intersects a canvas rectangle with the current clip; `UI.PopClip()` restores the previous clip. Both drawing and immediate widget hit testing obey this stack. Clips reset each frame; popping an empty stack is an error. At most 256 clips may nest.
+
+A UIRect's `ClipChildren` clips its descendants to its transformed axis-aligned bounds. Nested clips intersect. `Rotation` is in degrees in component JSON; `Scale` is a positive Vec2. Rotation and scale act about the rect's pivot and apply to all descendants. Layout boxes from UI.GetRect remain in the layout coordinate system; rendering and pointer hit testing apply the hierarchy's transforms. Scroll views clip descendants automatically. A hierarchy whose composed transform is singular or exceeds the finite drawing range is skipped with a warning. UI.Rect, UI.Image and UI.Text options also accept Rotation (degrees) and Scale, applied about their Pivot.
+
+UIImage and UI.Image options support `UVMin` and `UVMax` (normalized texture coordinates; reversed axes flip the image), plus `SpriteColumns`, `SpriteRows`, and zero-based `SpriteFrame`. Cells run left to right, then top to bottom within the UV rectangle. Grid dimensions are integers from 1 to 4096 and the frame must exist. Nine-slice borders are measured within the selected cell.
+
+UI hierarchy transforms have a finite numeric envelope: canvas coordinates and matrix terms must remain within ±1e9, and inverse linear terms within ±1e12. An accumulated transform beyond that envelope skips its subtree with a warning, preventing overflow from deeply nested extreme scales. Ordinary tiny transforms retain inverse hit testing.

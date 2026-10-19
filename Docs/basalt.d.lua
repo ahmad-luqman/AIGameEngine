@@ -996,6 +996,8 @@ function Game.Quit() end
 ---@field Align? UIAlign
 ---@field Anchor? UIAnchor
 ---@field Pivot? Vec2
+---@field Rotation? number Degrees about the pivot
+---@field Scale? Vec2 Positive scale about the pivot
 ---@field Font? string .ttf path
 ---@field Shadow? boolean Default true
 ---@field Width? number Wraps lines at this width
@@ -1005,14 +1007,24 @@ function Game.Quit() end
 ---@field Color? Vec4
 ---@field Anchor? UIAnchor
 ---@field Pivot? Vec2
+---@field Rotation? number Degrees about the pivot
+---@field Scale? Vec2 Positive scale about the pivot
 
 ---Options of UI.Image.
 ---@class UIImageOptions
 ---@field Tint? Vec4
 ---@field Anchor? UIAnchor
 ---@field Pivot? Vec2
+---@field Rotation? number Degrees about the pivot
+---@field Scale? Vec2 Positive scale about the pivot
 ---@field Slice? Vec4 Nine-slice borders: left, top, right, bottom texels
 ---@field SliceScale? number
+
+---@field UVMin? Vec2 Normalized texture rectangle minimum
+---@field UVMax? Vec2 Normalized texture rectangle maximum
+---@field SpriteColumns? integer Grid columns, 1..4096
+---@field SpriteRows? integer Grid rows, 1..4096
+---@field SpriteFrame? integer Zero-based row-major cell
 
 ---Options of every immediate-mode widget (UI.Button, UI.Checkbox, UI.Slider).
 ---@class UIWidgetOptions
@@ -1035,6 +1047,7 @@ function Game.Quit() end
 ---@field FillColor? Vec4
 ---@field HandleColor? Vec4
 ---@field HandleWidth? number
+---@field Vertical? boolean Increase upwards and use Up/Down navigation.
 
 ---Immediate-mode game UI on a canvas 1080 units tall (origin top-left, +Y down) and widget focus.
 ---@class UI
@@ -1321,6 +1334,12 @@ function BasaltScript:StopAllCoroutines() end
 ---| "UIButton"
 ---| "UISlider"
 ---| "UICheckbox"
+---| "UITextInput"
+---| "UIDropdown"
+---| "UIScrollView"
+---| "UIPanel"
+---| "UINavigation"
+---| "UIFocusRing"
 ---| "Prefab"
 
 ---Tag data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
@@ -1606,6 +1625,9 @@ function BasaltScript:StopAllCoroutines() end
 ---UIRect data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
 ---@class UIRectComponent
 ---@field Visible boolean
+---@field ClipChildren boolean
+---@field Rotation number
+---@field Scale number[]
 ---@field AnchorMin number[]
 ---@field AnchorMax number[]
 ---@field Pivot number[]
@@ -1618,6 +1640,11 @@ function BasaltScript:StopAllCoroutines() end
 ---@field Color number[]
 ---@field Slice number[]
 ---@field SliceScale number
+---@field UVMin number[]
+---@field UVMax number[]
+---@field SpriteColumns integer
+---@field SpriteRows integer
+---@field SpriteFrame integer
 
 ---UIText data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
 ---@class UITextComponent
@@ -1651,6 +1678,7 @@ function BasaltScript:StopAllCoroutines() end
 ---@field FillColor number[]
 ---@field HandleColor number[]
 ---@field HandleWidth number
+---@field Vertical boolean
 ---@field NormalTint number[]
 ---@field HighlightTint number[]
 ---@field PressedTint number[]
@@ -1670,6 +1698,55 @@ function BasaltScript:StopAllCoroutines() end
 ---@field DisabledTint number[]
 ---@field Target integer
 ---@field OnValueChanged string
+
+---UITextInput data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
+---@class UITextInputComponent
+---@field Interactable boolean
+---@field ReadOnly boolean
+---@field Text string
+---@field Placeholder string
+---@field MaxLength integer
+---@field NormalTint number[]
+---@field HighlightTint number[]
+---@field PressedTint number[]
+---@field DisabledTint number[]
+---@field Target integer
+---@field OnValueChanged string
+
+---UIDropdown data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
+---@class UIDropdownComponent
+---@field Interactable boolean
+---@field Options string
+---@field Selected integer
+---@field NormalTint number[]
+---@field HighlightTint number[]
+---@field PressedTint number[]
+---@field DisabledTint number[]
+---@field Target integer
+---@field OnValueChanged string
+
+---UIScrollView data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
+---@class UIScrollViewComponent
+---@field Interactable boolean
+---@field ContentSize number[]
+---@field Offset number[]
+---@field ScrollSpeed number
+
+---UIPanel data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
+---@class UIPanelComponent
+---@field BlockInput boolean
+
+---UINavigation data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
+---@class UINavigationComponent
+---@field Up integer
+---@field Down integer
+---@field Left integer
+---@field Right integer
+
+---UIFocusRing data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
+---@class UIFocusRingComponent
+---@field Color number[]
+---@field Thickness number
 
 ---Prefab data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
 ---@class PrefabComponent
@@ -1776,6 +1853,28 @@ function BasaltScript:StopAllCoroutines() end
 ---@overload fun(self: Entity, name: "UIButton"): UIButtonComponent?
 ---@overload fun(self: Entity, name: "UISlider"): UISliderComponent?
 ---@overload fun(self: Entity, name: "UICheckbox"): UICheckboxComponent?
+---@overload fun(self: Entity, name: "UITextInput"): UITextInputComponent?
+---@overload fun(self: Entity, name: "UIDropdown"): UIDropdownComponent?
+---@overload fun(self: Entity, name: "UIScrollView"): UIScrollViewComponent?
+---@overload fun(self: Entity, name: "UIPanel"): UIPanelComponent?
+---@overload fun(self: Entity, name: "UINavigation"): UINavigationComponent?
+---@overload fun(self: Entity, name: "UIFocusRing"): UIFocusRingComponent?
 ---@overload fun(self: Entity, name: "Prefab"): PrefabComponent?
 function Entity:GetComponent(name) end
 -- END GENERATED: components
+
+---Measures UI text in canvas units; Width enables word wrapping. Empty text measures zero.
+---@param text string
+---@param sizeOrOptions? number|table Size, Font, Width
+---@return Vec2
+function UI.MeasureText(text, sizeOrOptions) end
+
+---Intersect a canvas clip rectangle with the current clip until PopClip. Reset each frame.
+---@param x number
+---@param y number
+---@param width number
+---@param height number
+function UI.PushClip(x, y, width, height) end
+
+---Restore the previous clip. An empty stack is an error.
+function UI.PopClip() end

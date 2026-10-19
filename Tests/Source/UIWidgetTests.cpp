@@ -2,6 +2,7 @@
 
 #include <Basalt/Core/Input.h>
 #include <Basalt/Core/Log.h>
+#include <Basalt/Events/KeyEvent.h>
 #include <Basalt/Project/Project.h>
 #include <Basalt/Scene/ComponentRegistry.h>
 #include <Basalt/Scene/Entity.h>
@@ -1004,7 +1005,7 @@ TEST_SUITE("UIWidgets")
 			{ "UI.Slider('S', 0.5, 0, 1, 0, 0, 10, 10, { HandleWidth = 0/0 })", "HandleWidth must be between" },
 			{ "UI.SetFocus('')", "UI.SetFocus: the widget id must not be empty" },
 			{ "UI.SetFocus(42)", "UI.SetFocus: the argument must be a widget entity, a widget id or nil" },
-			{ "UI.SetFocus(Scene.FindEntityByName('Plain'))", "UI.SetFocus: 'Plain' has no UIButton, UISlider or UICheckbox" },
+			{ "UI.SetFocus(Scene.FindEntityByName('Plain'))", "UI.SetFocus: 'Plain' has no UIButton, UISlider, UICheckbox, UITextInput or UIDropdown" },
 		};
 		CheckLuaErrors(*scene.GetScriptEngine(), cases);
 		// A failed call registers nothing: a later call can use the id.
@@ -1561,4 +1562,203 @@ TEST_SUITE("UIWidgets")
 			CheckRulesAgree(UICheckboxComponent{ .BoxColor = color(), .CheckColor = color(), .DisabledTint = color(), .OnValueChanged = name() }, &SanitizeUICheckbox, &ValidateUICheckbox);
 		}
 	}
+}
+
+TEST_CASE("UI follow-up widgets validate text and choice data")
+{
+	UITextInputComponent text;
+	CHECK(ValidateUITextInput(text).empty());
+	text.Text = "a\xc3\xa9";
+	text.MaxLength = 2;
+	CHECK(ValidateUITextInput(text).empty());
+	text.MaxLength = 1;
+	CHECK_FALSE(ValidateUITextInput(text).empty());
+	CHECK(SanitizeUITextInput(text).Text == "a");
+	text.Text = "\xc0\x80";
+	CHECK_FALSE(ValidateUITextInput(text).empty());
+	CHECK(SanitizeUITextInput(text).Text.empty());
+	text.Text = "line\nbreak";
+	CHECK_FALSE(ValidateUITextInput(text).empty());
+	UIDropdownComponent dropdown;
+	dropdown.Options = "First\nSecond\nThird";
+	dropdown.Selected = 3;
+	CHECK_FALSE(ValidateUIDropdown(dropdown).empty());
+	CHECK(SanitizeUIDropdown(dropdown).Selected == 2);
+	dropdown.Options.clear();
+	CHECK(SanitizeUIDropdown(dropdown).Selected == 0);
+	UIScrollViewComponent scroll;
+	scroll.Offset.x = std::numeric_limits<float>::infinity();
+	CHECK_FALSE(ValidateUIScrollView(scroll).empty());
+	CHECK(SanitizeUIScrollView(scroll).Offset.x == 0.0f);
+}
+
+TEST_CASE("Text input edits Unicode at its cursor and respects routing and limits")
+{
+	WidgetInputScope input;
+	Input::SetGameFocus(true);
+	Scene scene;
+	Entity text = AddWidget<UITextInputComponent>(scene, "Text", { 20, 20 }, { 200, 40 });
+	text.GetComponent<UITextInputComponent>().MaxLength = 3;
+	scene.OnRuntimeStart();
+	auto* interaction = scene.GetUIInteraction();
+	interaction->SetFocus(UIWidgetID::ForEntity(text.GetUUID()));
+	Input::AddTextCodepoint('a');
+	Input::AddTextCodepoint(0xe9);
+	Frame(scene);
+	CHECK(text.GetComponent<UITextInputComponent>().Text == "a\xc3\xa9");
+	Input::SetKeyState(KeyCode::Left, true);
+	Frame(scene);
+	Input::SetKeyState(KeyCode::Left, false);
+	Input::AddTextCodepoint(0x1f600);
+	Input::AddTextCodepoint('x');
+	Frame(scene);
+	CHECK(text.GetComponent<UITextInputComponent>().Text == "a\xf0\x9f\x98\x80\xc3\xa9");
+	Input::SetKeyState(KeyCode::Backspace, true);
+	Frame(scene);
+	CHECK(text.GetComponent<UITextInputComponent>().Text == "a\xc3\xa9");
+	Input::SetKeyState(KeyCode::Backspace, false);
+	text.GetComponent<UITextInputComponent>().ReadOnly = true;
+	Input::AddTextCodepoint('q');
+	Frame(scene);
+	CHECK(text.GetComponent<UITextInputComponent>().Text == "a\xc3\xa9");
+	text.GetComponent<UITextInputComponent>().ReadOnly = false;
+	Input::SetGameFocus(false);
+	Input::AddTextCodepoint('q');
+	Input::SetGameFocus(true);
+	Frame(scene);
+	CHECK(text.GetComponent<UITextInputComponent>().Text == "a\xc3\xa9");
+	scene.OnRuntimeStop();
+}
+
+TEST_CASE("Dropdown popup accepts pointer and keyboard selection and dismisses on Escape")
+{
+	WidgetInputScope input;
+	Scene scene;
+	Entity dropdown = AddWidget<UIDropdownComponent>(scene, "Menu", { 20, 20 }, { 160, 40 });
+	dropdown.GetComponent<UIDropdownComponent>().Options = "One\nTwo\nThree";
+	scene.OnRuntimeStart();
+	auto* interaction = scene.GetUIInteraction();
+	Press(scene, { 40, 40 });
+	Release(scene, { 40, 40 });
+	CHECK(interaction->GetOpenDropdown() == dropdown.GetUUID());
+	Press(scene, { 40, 120 });
+	Release(scene, { 40, 120 });
+	CHECK(dropdown.GetComponent<UIDropdownComponent>().Selected == 1);
+	CHECK(interaction->GetOpenDropdown() == 0);
+	Input::SetKeyState(KeyCode::Enter, true);
+	Frame(scene);
+	Input::SetKeyState(KeyCode::Enter, false);
+	Frame(scene);
+	Input::SetKeyState(KeyCode::Down, true);
+	Frame(scene);
+	Input::SetKeyState(KeyCode::Down, false);
+	Input::SetKeyState(KeyCode::Enter, true);
+	Frame(scene);
+	CHECK(dropdown.GetComponent<UIDropdownComponent>().Selected == 2);
+	Input::SetKeyState(KeyCode::Enter, false);
+	Frame(scene);
+	Input::SetKeyState(KeyCode::Enter, true);
+	Frame(scene);
+	Input::SetKeyState(KeyCode::Enter, false);
+	Input::SetKeyState(KeyCode::Escape, true);
+	Frame(scene);
+	CHECK(interaction->GetOpenDropdown() == 0);
+	scene.OnRuntimeStop();
+}
+
+TEST_CASE("Scroll view clips children and panel overlays block input and wheel")
+{
+	WidgetInputScope input;
+	Scene scene;
+	Entity view = AddWidget<UIScrollViewComponent>(scene, "View", { 20, 20 }, { 200, 100 });
+	view.GetComponent<UIScrollViewComponent>().ContentSize = { 200, 400 };
+	Entity child = AddWidget<UIButtonComponent>(scene, "Child", { 0, 160 }, { 100, 40 });
+	scene.SetParent(child, view);
+	Entity panel = AddWidget<UIPanelComponent>(scene, "Overlay", { 20, 20 }, { 200, 100 });
+	panel.GetComponent<UIRectComponent>().Visible = false;
+	scene.OnRuntimeStart();
+	Input::SetMousePosition({ 40, 40 });
+	Input::AddMouseScroll({ 0, -2 });
+	Frame(scene);
+	CHECK(view.GetComponent<UIScrollViewComponent>().Offset.y == 64.0f);
+	const auto rect = UILayout::GetRect(scene, child, GameUI::GetCanvasSize());
+	REQUIRE(rect.has_value());
+	CHECK(rect->Min.y == doctest::Approx(116.0f));
+	panel.GetComponent<UIRectComponent>().Visible = true;
+	Input::AddMouseScroll({ 0, -2 });
+	Frame(scene);
+	CHECK(view.GetComponent<UIScrollViewComponent>().Offset.y == 64.0f);
+	CHECK(scene.GetUIInteraction()->IsPointerOverWidget());
+	Press(scene, { 40, 40 });
+	CHECK_FALSE(scene.GetUIInteraction()->GetFocus().IsValid());
+	scene.OnRuntimeStop();
+}
+
+TEST_CASE("Vertical sliders, explicit navigation and focus rings share widget geometry")
+{
+	WidgetInputScope input;
+	Scene scene;
+	UISliderComponent slider;
+	slider.Vertical = true;
+	slider.HandleWidth = 20.0f;
+	Entity vertical = AddWidget<UISliderComponent>(scene, "Vertical", { 20, 20 }, { 40, 200 }, slider);
+	Entity first = AddWidget<UIButtonComponent>(scene, "First", { 200, 20 }, { 100, 40 });
+	Entity second = AddWidget<UIButtonComponent>(scene, "Second", { 400, 20 }, { 100, 40 });
+	Entity third = AddWidget<UIButtonComponent>(scene, "Third", { 600, 20 }, { 100, 40 });
+	first.AddComponent<UINavigationComponent>().Right = third.GetUUID();
+	third.AddComponent<UIFocusRingComponent>();
+	scene.OnRuntimeStart();
+	Press(scene, { 40, 30 });
+	CHECK(vertical.GetComponent<UISliderComponent>().Value == 1.0f);
+	Release(scene, { 40, 30 });
+	auto* interaction = scene.GetUIInteraction();
+	interaction->SetFocus(UIWidgetID::ForEntity(vertical.GetUUID()));
+	Input::SetKeyState(KeyCode::Down, true);
+	Frame(scene);
+	CHECK(vertical.GetComponent<UISliderComponent>().Value == doctest::Approx(0.95f));
+	Input::SetKeyState(KeyCode::Down, false);
+	Frame(scene);
+	interaction->SetFocus(UIWidgetID::ForEntity(first.GetUUID()));
+	Input::SetKeyState(KeyCode::Right, true);
+	Frame(scene);
+	CHECK(interaction->GetFocus() == UIWidgetID::ForEntity(third.GetUUID()));
+	std::vector<UIDrawCommand> commands;
+	UILayout::BuildCommands(scene, GameUI::GetCanvasSize(), commands);
+	CHECK(commands.size() == 7);
+	Input::SetKeyState(KeyCode::Right, false);
+	Frame(scene);
+	first.GetComponent<UINavigationComponent>().Right = second.GetUUID();
+	second.GetComponent<UIButtonComponent>().Interactable = false;
+	interaction->SetFocus(UIWidgetID::ForEntity(first.GetUUID()));
+	Input::SetKeyState(KeyCode::Right, true);
+	Frame(scene);
+	CHECK(interaction->GetFocus() == UIWidgetID::ForEntity(first.GetUUID()));
+	scene.OnRuntimeStop();
+}
+
+TEST_CASE("Typed events are Unicode-safe, frame bounded and routed when received")
+{
+	WidgetInputScope input;
+	Input::SetGameFocus(true);
+	KeyTypedEvent letter(0x1f600);
+	Input::OnEvent(letter);
+	CHECK_FALSE(letter.Handled);
+	CHECK(Input::GetTextInput() == "\xf0\x9f\x98\x80");
+	CHECK(GameInput::GetTextInput() == Input::GetTextInput());
+	Input::EndFrame();
+	CHECK(Input::GetTextInput().empty());
+	Input::SetGameFocus(false);
+	Input::AddTextCodepoint('x');
+	Input::SetGameFocus(true);
+	CHECK(GameInput::GetTextInput().empty());
+	Input::AddTextCodepoint(0xd800);
+	Input::AddTextCodepoint(0x110000);
+	Input::AddTextCodepoint('\n');
+	CHECK(Input::GetTextInput() == "x");
+	Input::Reset();
+	for (size_t n = 0; n < 5000; n++)
+		Input::AddTextCodepoint(0x1f600);
+	CHECK(Input::GetTextInput().size() == 16384);
+	Input::Reset();
+	CHECK(Input::GetTextInput().empty());
 }

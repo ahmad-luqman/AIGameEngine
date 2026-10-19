@@ -15,6 +15,9 @@ namespace Basalt {
 
 	namespace {
 
+		std::string s_TextInput;
+		std::string s_GameTextInput;
+
 		constexpr size_t MaxKeys = 512;
 
 		// A stick or trigger counts as let go below this (see GamepadSlot::ButtonBlocked).
@@ -362,6 +365,7 @@ namespace Basalt {
 				gamepad.BlockHeldForGame();
 		}
 		s_GameFocus = focused;
+		s_GameTextInput.clear();
 	}
 
 	bool Input::HasGameFocus()
@@ -416,10 +420,48 @@ namespace Basalt {
 		return s_CursorMode;
 	}
 
+	void Input::AddTextCodepoint(uint32_t codepoint)
+	{
+		if (codepoint < 0x20U || codepoint == 0x7fU || codepoint > 0x10ffffU || (codepoint >= 0xd800U && codepoint <= 0xdfffU))
+			return;
+		std::string encoded;
+		if (codepoint <= 0x7fU)
+			encoded += static_cast<char>(codepoint);
+		else
+		{
+			const int extra = codepoint <= 0x7ffU ? 1 : codepoint <= 0xffffU ? 2
+																			 : 3;
+			encoded += static_cast<char>((extra == 1 ? 0xc0U : extra == 2 ? 0xe0U
+																		  : 0xf0U) |
+										 (codepoint >> (6 * extra)));
+			for (int shift = extra - 1; shift >= 0; shift--)
+				encoded += static_cast<char>(0x80U | ((codepoint >> (6 * shift)) & 0x3fU));
+		}
+		std::scoped_lock lock(s_Mutex);
+		if (s_TextInput.size() + encoded.size() > 16384)
+			return;
+		s_TextInput += encoded;
+		if (s_GameFocus)
+			s_GameTextInput += encoded;
+	}
+
+	std::string Input::GetTextInput()
+	{
+		std::scoped_lock lock(s_Mutex);
+		return s_TextInput;
+	}
+
+	std::string GameInput::GetTextInput()
+	{
+		std::scoped_lock lock(s_Mutex);
+		return s_GameFocus ? s_GameTextInput : std::string();
+	}
+
 	void Input::OnEvent(Event& event)
 	{
 		EventDispatcher dispatcher(event);
 		dispatcher.Dispatch<KeyPressedEvent>([](KeyPressedEvent& e) { SetKeyState(e.GetKeyCode(), true); return false; });
+		dispatcher.Dispatch<KeyTypedEvent>([](KeyTypedEvent& e) { AddTextCodepoint(e.GetCodepoint()); return false; });
 		dispatcher.Dispatch<KeyReleasedEvent>([](KeyReleasedEvent& e) { SetKeyState(e.GetKeyCode(), false); return false; });
 		dispatcher.Dispatch<MouseButtonPressedEvent>([](MouseButtonPressedEvent& e) { SetMouseButtonState(e.GetMouseButton(), true); return false; });
 		dispatcher.Dispatch<MouseButtonReleasedEvent>([](MouseButtonReleasedEvent& e) { SetMouseButtonState(e.GetMouseButton(), false); return false; });
@@ -450,6 +492,8 @@ namespace Basalt {
 		s_State.ButtonsDownLastFrame = s_State.ButtonsDown;
 		s_State.MousePositionLastFrame = s_State.MousePosition;
 		s_State.Scroll = { 0.0f, 0.0f };
+		s_TextInput.clear();
+		s_GameTextInput.clear();
 	}
 
 	void Input::Reset()
@@ -461,6 +505,8 @@ namespace Basalt {
 		s_State.ButtonsDownLastFrame = {};
 		s_State.MousePositionLastFrame = s_State.MousePosition;
 		s_State.Scroll = { 0.0f, 0.0f };
+		s_TextInput.clear();
+		s_GameTextInput.clear();
 		s_State.GameKeysBlocked = {};
 		s_State.GameKeysLastFrame = {};
 		s_State.GameButtonsBlocked = {};

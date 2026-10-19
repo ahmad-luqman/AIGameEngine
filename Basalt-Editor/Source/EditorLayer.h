@@ -137,6 +137,7 @@ namespace Basalt {
 		CursorMode GetRequestedGameCursor() const { return IsGameRunning() ? Input::GetCursorMode() : CursorMode::Normal; }
 		// Outlines every UI rect over the viewport (the selected entity's with its pivot and anchors).
 		void DrawUIBounds(const glm::vec2& origin, const glm::vec2& size);
+		bool HandleUIRectHandles(Entity selected, const glm::vec2& origin, const glm::vec2& size);
 		UUID PickViewport(uint32_t x, uint32_t y);
 		bool PrepareCaptureRenderer(uint32_t width, uint32_t height, float scale, std::string& error);
 		void HandleVertexSnapDrag(Entity selected, bool enabled, const glm::vec2& origin);
@@ -238,6 +239,18 @@ namespace Basalt {
 			glm::vec2 Source;
 		};
 		std::optional<VertexSnapDrag> m_VertexSnapDrag;
+		struct UIRectDrag
+		{
+			UIRectComponent Initial;
+			UIBox Box;
+			glm::mat3 Transform{ 1.0f };
+			glm::mat3 ParentTransform{ 1.0f };
+			glm::vec2 Start;
+			glm::vec2 Handle;
+			GizmoOperation Operation = GizmoOperation::Translate;
+			bool Resize = false;
+		};
+		std::optional<UIRectDrag> m_UIRectDrag;
 		bool m_GizmoWasUsing = false;
 		bool m_GizmoCancelled = false;
 		glm::mat4 m_GizmoPivot{ 1 };

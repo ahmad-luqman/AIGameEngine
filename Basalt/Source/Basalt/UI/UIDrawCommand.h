@@ -25,6 +25,10 @@ namespace Basalt {
 	struct UIDrawCommand
 	{
 		UIDrawKind Kind = UIDrawKind::Rect;
+		glm::mat3 Transform = glm::mat3(1.0f);
+		float Rotation = 0.0f;
+		glm::vec2 Scale = { 1.0f, 1.0f };
+		std::optional<UIBox> Clip;
 
 		// The box's top-left is Anchor * canvas size + Position - Pivot * Size (canvas units).
 		glm::vec2 Anchor = { 0.0f, 0.0f };
@@ -38,6 +42,11 @@ namespace Basalt {
 		std::string Texture;
 		glm::vec4 Slice = { 0.0f, 0.0f, 0.0f, 0.0f };
 		float SliceScale = 1.0f;
+		glm::vec2 UVMin = { 0.0f, 0.0f };
+		glm::vec2 UVMax = { 1.0f, 1.0f };
+		uint32_t SpriteColumns = 1;
+		uint32_t SpriteRows = 1;
+		uint32_t SpriteFrame = 0;
 
 		// Text: each line is placed in the box at Align (0 = left/top, 1 = right/bottom). With a zero-size box
 		// (immediate-mode text without Width) Align is the text's pivot on the box position. Wrap breaks lines

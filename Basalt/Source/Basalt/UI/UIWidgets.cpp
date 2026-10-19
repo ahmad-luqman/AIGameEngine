@@ -18,6 +18,14 @@ namespace Basalt {
 				return "UISlider";
 			case UIWidgetKind::Checkbox:
 				return "UICheckbox";
+			case UIWidgetKind::TextInput:
+				return "UITextInput";
+			case UIWidgetKind::Dropdown:
+				return "UIDropdown";
+			case UIWidgetKind::Panel:
+				return "UIPanel";
+			case UIWidgetKind::ScrollView:
+				return "UIScrollView";
 		}
 		BS_CORE_ASSERT(false, "unknown widget kind {}", static_cast<int>(kind));
 		return "UIButton";
@@ -25,7 +33,7 @@ namespace Basalt {
 
 	std::optional<UIWidgetKind> UIWidgetKindFromComponentName(std::string_view name)
 	{
-		for (UIWidgetKind kind : { UIWidgetKind::Button, UIWidgetKind::Slider, UIWidgetKind::Checkbox })
+		for (UIWidgetKind kind : { UIWidgetKind::Button, UIWidgetKind::Slider, UIWidgetKind::Checkbox, UIWidgetKind::TextInput, UIWidgetKind::Dropdown, UIWidgetKind::Panel, UIWidgetKind::ScrollView })
 		{
 			if (name == UIWidgetComponentName(kind))
 				return kind;
@@ -68,6 +76,81 @@ namespace Basalt {
 	}
 
 	namespace UIWidgets {
+
+		std::vector<std::string_view> DropdownOptions(std::string_view options)
+		{
+			std::vector<std::string_view> result;
+			if (options.empty())
+				return result;
+			while (result.size() < 128)
+			{
+				const size_t end = options.find('\n');
+				result.push_back(options.substr(0, end));
+				if (end == std::string_view::npos)
+					break;
+				options.remove_prefix(end + 1);
+			}
+			return result;
+		}
+
+		size_t NextCharacter(std::string_view text, size_t cursor)
+		{
+			if (cursor >= text.size())
+				return text.size();
+			cursor++;
+			while (cursor < text.size() && (static_cast<unsigned char>(text[cursor]) & 0xc0U) == 0x80U)
+				cursor++;
+			return cursor;
+		}
+
+		size_t PreviousCharacter(std::string_view text, size_t cursor)
+		{
+			cursor = std::min(cursor, text.size());
+			if (cursor == 0)
+				return 0;
+			cursor--;
+			while (cursor > 0 && (static_cast<unsigned char>(text[cursor]) & 0xc0U) == 0x80U)
+				cursor--;
+			return cursor;
+		}
+
+		size_t TextLength(std::string_view text)
+		{
+			size_t count = 0;
+			for (size_t cursor = 0; cursor < text.size(); cursor = NextCharacter(text, cursor))
+				count++;
+			return count;
+		}
+
+		bool IsSingleLineUTF8(std::string_view text)
+		{
+			for (size_t i = 0; i < text.size();)
+			{
+				const auto first = static_cast<unsigned char>(text[i++]);
+				if (first < 0x80U)
+				{
+					if (first < 0x20U || first == 0x7fU)
+						return false;
+					continue;
+				}
+				const size_t extra = first >= 0xc2U && first <= 0xdfU ? 1 : first >= 0xe0U && first <= 0xefU ? 2
+																		: first >= 0xf0U && first <= 0xf4U   ? 3
+																											 : 0;
+				if (extra == 0 || text.size() - i < extra)
+					return false;
+				uint32_t point = first & (0x7fU >> (extra + 1));
+				for (size_t j = 0; j < extra; j++)
+				{
+					const auto next = static_cast<unsigned char>(text[i++]);
+					if ((next & 0xc0U) != 0x80U)
+						return false;
+					point = (point << 6U) | (next & 0x3fU);
+				}
+				if ((extra == 1 && point < 0x80U) || (extra == 2 && point < 0x800U) || (extra == 3 && point < 0x10000U) || (point >= 0xd800U && point <= 0xdfffU) || point > 0x10ffffU)
+					return false;
+			}
+			return true;
+		}
 
 		float SliderFraction(float value, float min, float max)
 		{
@@ -172,8 +255,24 @@ namespace Basalt {
 			return { { rect.Min.x + offset, rect.Min.y }, { rect.Size.x - offset, rect.Size.y } };
 		}
 
-		void AppendSlider(const UIBox& rect, float fraction, float handleWidth, const glm::vec4& trackColor, const glm::vec4& fillColor, const glm::vec4& handleColor, std::vector<UIDrawCommand>& out)
+		void AppendSlider(const UIBox& rect, float fraction, float handleWidth, const glm::vec4& trackColor, const glm::vec4& fillColor, const glm::vec4& handleColor, std::vector<UIDrawCommand>& out, bool vertical)
 		{
+			if (vertical)
+			{
+				const UIBox swapped{ { rect.Min.y, rect.Min.x }, { rect.Size.y, rect.Size.x } };
+				const size_t start = out.size();
+				AppendSlider(swapped, 1.0f - fraction, handleWidth, trackColor, fillColor, handleColor, out);
+				// Vertical values grow upwards, including the fill from the bottom edge.
+				const UIBox handle = SliderHandleBox(swapped, 1.0f - fraction, handleWidth);
+				out[start + 1].Position.x = handle.Center().x;
+				out[start + 1].Size.x = swapped.Min.x + swapped.Size.x - handle.Center().x;
+				for (size_t i = start; i < out.size(); i++)
+				{
+					std::swap(out[i].Position.x, out[i].Position.y);
+					std::swap(out[i].Size.x, out[i].Size.y);
+				}
+				return;
+			}
 			const UIBox handle = SliderHandleBox(rect, fraction, handleWidth);
 			AppendRect(rect, trackColor, out);
 			// The fill reaches the handle's center.

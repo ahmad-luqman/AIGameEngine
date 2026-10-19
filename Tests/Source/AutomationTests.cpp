@@ -507,6 +507,34 @@ TEST_SUITE("Automation")
 		Input::Reset();
 	}
 
+	TEST_CASE("Unicode text and scroll automation validate input and replay into widgets")
+	{
+		BasaltTest::TempProject temp("AutomationUIText");
+		CommandRegistry registry;
+		AutomationSession session;
+		Run(registry, session, "asset.write", { { "path", "Assets/Scripts/Focus.lua" }, { "content", "local F = {}; function F:OnCreate() UI.SetFocus(self.Entity) end; return F" } });
+		Run(registry, session, "entity.create", { { "name", "Field" }, { "components", { { "Script", { { "Script", "Assets/Scripts/Focus.lua" } } }, { "UIRect", json::object() }, { "UITextInput", { { "OnValueChanged", "" } } } } } });
+		Run(registry, session, "replay.record_start");
+		Run(registry, session, "play.start");
+		Run(registry, session, "input.text", { { "codepoint", 0xe9 } });
+		CHECK(Input::GetTextInput() == "\xc3\xa9");
+		CHECK(RunError(registry, session, "input.text", { { "codepoint", 0xd800 } }).find("scalar") != std::string::npos);
+		CHECK_FALSE(RunError(registry, session, "input.text", { { "codepoint", 0x110000 } }).empty());
+		CHECK_FALSE(RunError(registry, session, "input.text").empty());
+		Run(registry, session, "input.mouse", { { "scroll", { 1, -2 } } });
+		CHECK(Input::GetMouseScroll() == glm::vec2(1, -2));
+		Run(registry, session, "play.step", { { "frames", 1 }, { "assertNoErrors", true } });
+		CHECK(Run(registry, session, "ui.layout")["items"][0]["widget"]["text"] == "\xc3\xa9");
+		CHECK(Input::GetTextInput().empty());
+		CHECK(Input::GetMouseScroll() == glm::vec2(0));
+		Run(registry, session, "replay.record_stop", { { "path", "Saved/Text.breplay" } });
+		Run(registry, session, "play.stop");
+		// The script restores focus at Play start, so replay must deliver the same Unicode input.
+		Run(registry, session, "replay.run", { { "path", "Saved/Text.breplay" }, { "assertNoErrors", true } });
+		CHECK(Run(registry, session, "ui.layout")["items"][0]["widget"]["text"] == "\xc3\xa9");
+		Run(registry, session, "play.stop");
+	}
+
 	TEST_CASE("State hash ignores entity UUIDs but tracks every state change")
 	{
 		CommandRegistry registry;

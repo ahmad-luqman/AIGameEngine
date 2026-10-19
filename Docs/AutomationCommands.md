@@ -1397,13 +1397,14 @@ Sets a key's state for play mode (e.g. {key: 'Space', down: true}). Recorded whi
 
 ### `input.mouse`
 
-Sets mouse position and/or a button state for play mode. Recorded while replay recording is on.
+Sets mouse position, a button state and/or accumulated scroll [x,y] for play mode. Recorded while replay recording is on.
 
 | Parameter | Type / description |
 |-----------|--------------------|
 | `button` | string (Left, Right, Middle) |
 | `down` | bool |
 | `position` | [x, y] |
+| `scroll` | [x, y] wheel delta |
 
 <details><summary>Parameter JSON Schema</summary>
 
@@ -1439,9 +1440,51 @@ Sets mouse position and/or a button state for play mode. Recorded while replay r
       "maxItems": 2,
       "minItems": 2,
       "type": "array"
+    },
+    "scroll": {
+      "description": "[x, y] wheel delta",
+      "items": {
+        "description": "",
+        "maximum": 3.4028234663852886e+38,
+        "minimum": -3.4028234663852886e+38,
+        "type": "number"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
     }
   },
   "required": [],
+  "type": "object"
+}
+```
+
+</details>
+
+### `input.text`
+
+Queues one Unicode scalar value for the focused text input this frame. Recorded during replay recording.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `codepoint` | Unicode scalar value (surrogates rejected) |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "codepoint": {
+      "description": "Unicode scalar value (surrogates rejected)",
+      "maximum": 1114111,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "codepoint"
+  ],
   "type": "object"
 }
 ```
@@ -2517,7 +2560,7 @@ Returns the scene renderer's statistics: viewport and render size, render scale 
 
 ### `replay.record_start`
 
-Starts recording input.key/input.mouse/input.gamepad commands with the play frame they arrive on. The mouse position and the injected gamepads (with what they hold) are recorded as they are on that frame, and the host's view whenever it changes, checked before every frame and every recorded command: where mouse positions land on the UI canvas, the game resolution scripts read the mouse in, and whether the game has the pointer and the keyboard (routing gates every game input), so replays run the same way in any host. A recording begun before play marks where play started (a playStart event): what came before it applies before the replay starts play, so OnCreate sees the same view and input. Physical gamepads are not recorded (replays run without them): they are listed in physicalGamepads.
+Starts recording input.key/input.text/input.mouse/input.gamepad commands with the play frame they arrive on. The mouse position and the injected gamepads (with what they hold) are recorded as they are on that frame, and the host's view whenever it changes, checked before every frame and every recorded command: where mouse positions land on the UI canvas, the game resolution scripts read the mouse in, and whether the game has the pointer and the keyboard (routing gates every game input), so replays run the same way in any host. A recording begun before play marks where play started (a playStart event): what came before it applies before the replay starts play, so OnCreate sees the same view and input. Physical gamepads are not recorded (replays run without them): they are listed in physicalGamepads.
 
 <details><summary>Parameter JSON Schema</summary>
 
@@ -2992,7 +3035,7 @@ Compiles a Lua script in isolation and returns its Properties, or the error.
 
 ### `ui.layout`
 
-Lays out the current scene's UI components (the play copy while playing) for a viewport of width x height pixels: the canvas size, every visible UI entity's rect [x, y, width, height] in canvas units in draw order (widgets add their kind, values, target, callback and, while playing, state and focus), the host's view that maps the mouse onto the canvas for the widgets (`view`: origin and size in mouse coordinates and whether widgets take pointer and navigation input; headless, mouse positions are canvas units), and the problems that make UI draw or behave differently than authored (an image that does not load and draws its Color, a font that does not load and falls back to the built-in one or has glyphs that draw blank, an entity with several widget components, a widget callback whose target is missing or has no Script).
+Lays out the current scene's UI components (the play copy while playing) for a viewport of width x height pixels: the canvas size, every visible UI entity's untransformed rect [x, y, width, height] in canvas units in draw order, its column-major 3x3 transform and effective canvas clip (null when unrestricted) (widgets add their kind, values, target, callback and, while playing, state and focus), the host's view that maps the mouse onto the canvas for the widgets (`view`: origin and size in mouse coordinates and whether widgets take pointer and navigation input; headless, mouse positions are canvas units), and the problems that make UI draw or behave differently than authored (an image that does not load and draws its Color, a font that does not load and falls back to the built-in one or has glyphs that draw blank, an entity with several widget components, a widget callback whose target is missing or has no Script).
 
 | Parameter | Type / description |
 |-----------|--------------------|

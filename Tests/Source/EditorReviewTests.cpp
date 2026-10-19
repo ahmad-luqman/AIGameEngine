@@ -360,3 +360,27 @@ TEST_CASE("Editor duplicate during a gizmo drag commits movement before changing
 	REQUIRE(test.History.Undo(test.Restore()));
 	CHECK(test.Session.GetScene()->GetEntityByUUID(original).GetTransform().Translation.x == doctest::Approx(0));
 }
+
+TEST_CASE("Editor UI rect gesture cancellation restores all fields and completed gestures undo together")
+{
+	EditorFixture test;
+	const auto id = test.Run("entity.create", { { "name", "Panel" } })["id"].get<uint64_t>();
+	test.Run("component.set", { { "entity", id }, { "component", "UIRect" }, { "data", json::object() } });
+	const auto initial = test.Session.GetScene()->GetEntityByUUID(id).GetComponent<UIRectComponent>();
+	const auto count = test.History.GetSize();
+	const auto gesture = [&]() {
+		REQUIRE(test.Context.BeginTransaction("UI rect gesture", EditorContext::TransactionKind::Gizmo));
+		REQUIRE(test.Context.Execute("component.set", { { "entity", id }, { "component", "UIRect" }, { "data", { { "Position", { 80, 90 } }, { "Size", { 250, 180 } } } } }));
+		REQUIRE(test.Context.Execute("component.set", { { "entity", id }, { "component", "UIRect" }, { "data", { { "Rotation", 30 }, { "Scale", { 2, 0.5 } } } } }));
+	};
+	gesture();
+	// Escape and a disappearing viewport use this same cancellation path.
+	test.Context.FinishGizmoTransaction(true, test.Restore());
+	CHECK(test.Session.GetScene()->GetEntityByUUID(id).GetComponent<UIRectComponent>() == initial);
+	CHECK(test.History.GetSize() == count);
+	gesture();
+	test.Context.FinishGizmoTransaction(false, test.Restore());
+	CHECK(test.History.GetSize() == count + 1);
+	REQUIRE(test.History.Undo(test.Restore()));
+	CHECK(test.Session.GetScene()->GetEntityByUUID(id).GetComponent<UIRectComponent>() == initial);
+}

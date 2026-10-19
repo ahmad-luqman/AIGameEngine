@@ -171,6 +171,11 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 		list(APPEND basaltGpuTests FeatureTestRenderWindowed)
 	endif()
 	if(Python3_Interpreter_FOUND)
+		add_test(NAME UIFollowupsRender
+			COMMAND "${Python3_EXECUTABLE}" -B -O "${CMAKE_CURRENT_SOURCE_DIR}/Rendering/UIFollowups.py"
+				$<TARGET_FILE:BasaltRuntime> "${CMAKE_CURRENT_BINARY_DIR}/UIFollowups")
+		set_tests_properties(UIFollowupsRender PROPERTIES TIMEOUT 120)
+		list(APPEND basaltGpuTests UIFollowupsRender)
 		# Exercise the actual editor host. Linux CI supplies a virtual display; macOS uses the desktop.
 		set(basaltEditorDisplay "")
 		if(UNIX AND NOT APPLE)

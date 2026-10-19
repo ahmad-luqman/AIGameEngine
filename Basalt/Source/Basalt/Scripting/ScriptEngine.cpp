@@ -972,6 +972,8 @@ namespace Basalt {
 			ScriptEngineAccess::Call(*this, event.Target, method, widgetEntity, *value);
 		else if (const bool* checked = std::get_if<bool>(&event.Value))
 			ScriptEngineAccess::Call(*this, event.Target, method, widgetEntity, *checked);
+		else if (const std::string* text = std::get_if<std::string>(&event.Value))
+			ScriptEngineAccess::Call(*this, event.Target, method, widgetEntity, *text);
 		else
 			ScriptEngineAccess::Call(*this, event.Target, method, widgetEntity);
 	}

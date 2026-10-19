@@ -1,0 +1,29 @@
+"""UI authoring selection uses the same transformed, clipped geometry as drawing."""
+from pathlib import Path
+
+
+def check_ui(call, require, output):
+    call("scene.new", {"empty": True})
+    call("editor.viewport", {"operation": "Translate", "uiBounds": True})
+    view = call("editor.viewport")
+    width, height = view["width"], view["height"]
+
+    def pick(dx, dy):
+        return call("editor.pick", {"x": int(width / 2 + dx * height / 1080),
+                                    "y": int(height / 2 + dy * height / 1080),
+                                    "select": False})["entity"]
+
+    panel = call("entity.create", {"name": "RotatedPanel"})["id"]
+    call("component.set", {"entity": panel, "component": "UIRect",
+                           "data": {"Size": [200, 60], "Rotation": 90, "Scale": [1.5, 1]}})
+    require(pick(0, 100) == panel, "UI picking missed rotated/scaled rect")
+    require(pick(80, 0) == 0, "UI picking used the untransformed rect")
+    call("component.set", {"entity": panel, "component": "UIRect",
+                           "data": {"Size": [200, 200], "Rotation": 0, "Scale": [1, 1], "ClipChildren": True}})
+    child = call("entity.create", {"name": "ClippedChild", "parent": panel})["id"]
+    call("component.set", {"entity": child, "component": "UIRect",
+                           "data": {"Position": [100, 0], "Size": [100, 100]}})
+    require(pick(80, 0) == child, "UI picking did not prefer the topmost child")
+    require(pick(120, 0) == 0, "UI picking selected clipped child content")
+    call("editor.select", {"entity": child})
+    call("editor.window_screenshot", {"path": str(Path(output, "ui-handles.png"))})

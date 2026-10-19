@@ -13,6 +13,7 @@ namespace Basalt {
 
 		std::mutex s_Mutex;
 		std::vector<UIDrawCommand> s_Commands;
+		std::vector<UIBox> s_Clips;
 		// The host's view without the pointer and navigation flags, which are Input's game routing. The defaults are
 		// the headless view.
 		struct HostView
@@ -53,6 +54,8 @@ namespace Basalt {
 		std::scoped_lock lock(s_Mutex);
 		if (s_Commands.size() >= MaxCommands)
 			return SubmitResult::QueueFull;
+		if (!s_Clips.empty())
+			command.Clip = command.Clip ? IntersectUIBoxes(*command.Clip, s_Clips.back()) : s_Clips.back();
 		s_Commands.push_back(std::move(command));
 		return SubmitResult::Queued;
 	}
@@ -61,6 +64,33 @@ namespace Basalt {
 	{
 		std::scoped_lock lock(s_Mutex);
 		s_Commands.clear();
+		s_Clips.clear();
+	}
+
+	bool GameUI::PushClip(const UIBox& box)
+	{
+		if (!IsUsableOrigin(box.Min) || !std::isfinite(box.Size.x) || !std::isfinite(box.Size.y) || box.Size.x < 0 || box.Size.y < 0)
+			return false;
+		std::scoped_lock lock(s_Mutex);
+		if (s_Clips.size() >= 256)
+			return false;
+		s_Clips.push_back(s_Clips.empty() ? box : IntersectUIBoxes(s_Clips.back(), box));
+		return true;
+	}
+
+	bool GameUI::PopClip()
+	{
+		std::scoped_lock lock(s_Mutex);
+		if (s_Clips.empty())
+			return false;
+		s_Clips.pop_back();
+		return true;
+	}
+
+	std::optional<UIBox> GameUI::GetClip()
+	{
+		std::scoped_lock lock(s_Mutex);
+		return s_Clips.empty() ? std::nullopt : std::optional(s_Clips.back());
 	}
 
 	void GameUI::AppendCommands(std::vector<UIDrawCommand>& out)

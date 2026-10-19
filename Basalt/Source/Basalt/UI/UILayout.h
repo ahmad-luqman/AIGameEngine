@@ -21,6 +21,9 @@ namespace Basalt {
 	{
 		Entity Owner;
 		UIBox Rect;
+		glm::mat3 Transform = glm::mat3(1.0f);
+		std::optional<UIBox> Clip;
+		bool Contains(const glm::vec2& point) const { return (!Clip || Clip->Contains(point)) && ContainsUIBox(Rect, Transform, point); }
 	};
 
 	// What the interaction and the tools need to know about an entity's widget, from its repaired component.
@@ -72,8 +75,8 @@ namespace Basalt {
 		// every ancestor were visible (the inspector's anchor presets work on hidden rects too).
 		static UIBox GetParentRect(Scene& scene, Entity entity, const glm::vec2& canvasSize);
 
-		// The entity's widget: the first of its UIButton, UISlider and UICheckbox (an entity with several acts as
-		// that one alone, and the layout warns once). nullopt when it has none. Values come repaired (UIRules).
+		// The entity's first interactive control, or its scroll viewport or blocking panel. Several controls
+		// on one entity use the documented priority and warn once. Values come repaired (UIRules).
 		static std::optional<UIWidgetInfo> GetWidget(Entity entity);
 		// The kind GetWidget reports, without repairing or warning.
 		static std::optional<UIWidgetKind> GetWidgetKind(Entity entity);

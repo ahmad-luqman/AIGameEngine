@@ -877,6 +877,9 @@ namespace Basalt {
 		void Fields(FieldReader& r, UIRectComponent& c)
 		{
 			r.Field("Visible", c.Visible);
+			r.Field("ClipChildren", c.ClipChildren);
+			r.AngleField("Rotation", c.Rotation);
+			r.Field("Scale", c.Scale);
 			r.Field("AnchorMin", c.AnchorMin);
 			r.Field("AnchorMax", c.AnchorMax);
 			r.Field("Pivot", c.Pivot);
@@ -890,6 +893,11 @@ namespace Basalt {
 			r.Field("Color", c.Color);
 			r.Field("Slice", c.Slice);
 			r.Field("SliceScale", c.SliceScale);
+			r.Field("UVMin", c.UVMin);
+			r.Field("UVMax", c.UVMax);
+			r.Field("SpriteColumns", c.SpriteColumns);
+			r.Field("SpriteRows", c.SpriteRows);
+			r.Field("SpriteFrame", c.SpriteFrame);
 		}
 
 		void Fields(FieldReader& r, UITextComponent& c)
@@ -933,6 +941,7 @@ namespace Basalt {
 			r.Field("FillColor", c.FillColor);
 			r.Field("HandleColor", c.HandleColor);
 			r.Field("HandleWidth", c.HandleWidth);
+			r.Field("Vertical", c.Vertical);
 			WidgetFields(r, c, "OnValueChanged", c.OnValueChanged);
 		}
 
@@ -943,6 +952,51 @@ namespace Basalt {
 			r.Field("BoxColor", c.BoxColor);
 			r.Field("CheckColor", c.CheckColor);
 			WidgetFields(r, c, "OnValueChanged", c.OnValueChanged);
+		}
+
+		void Fields(FieldReader& r, UITextInputComponent& c)
+		{
+			r.Field("Interactable", c.Interactable);
+			r.Field("ReadOnly", c.ReadOnly);
+			r.Field("Text", c.Text);
+			r.Field("Placeholder", c.Placeholder);
+			r.Field("MaxLength", c.MaxLength);
+			WidgetFields(r, c, "OnValueChanged", c.OnValueChanged);
+		}
+
+		void Fields(FieldReader& r, UIDropdownComponent& c)
+		{
+			r.Field("Interactable", c.Interactable);
+			r.Field("Options", c.Options);
+			r.Field("Selected", c.Selected);
+			WidgetFields(r, c, "OnValueChanged", c.OnValueChanged);
+		}
+
+		void Fields(FieldReader& r, UIScrollViewComponent& c)
+		{
+			r.Field("Interactable", c.Interactable);
+			r.Field("ContentSize", c.ContentSize);
+			r.Field("Offset", c.Offset);
+			r.Field("ScrollSpeed", c.ScrollSpeed);
+		}
+
+		void Fields(FieldReader& r, UIPanelComponent& c)
+		{
+			r.Field("BlockInput", c.BlockInput);
+		}
+
+		void Fields(FieldReader& r, UINavigationComponent& c)
+		{
+			r.Field("Up", c.Up);
+			r.Field("Down", c.Down);
+			r.Field("Left", c.Left);
+			r.Field("Right", c.Right);
+		}
+
+		void Fields(FieldReader& r, UIFocusRingComponent& c)
+		{
+			r.Field("Color", c.Color);
+			r.Field("Thickness", c.Thickness);
 		}
 
 		void Fields(FieldReader& r, PrefabComponent& c)
@@ -1303,6 +1357,9 @@ namespace Basalt {
 		{
 			return {
 				{ "Visible", c.Visible },
+				{ "ClipChildren", c.ClipChildren },
+				{ "Rotation", glm::degrees(c.Rotation) },
+				{ "Scale", ToJson(c.Scale) },
 				{ "AnchorMin", ToJson(c.AnchorMin) },
 				{ "AnchorMax", ToJson(c.AnchorMax) },
 				{ "Pivot", ToJson(c.Pivot) },
@@ -1318,6 +1375,11 @@ namespace Basalt {
 				{ "Color", ToJson(c.Color) },
 				{ "Slice", ToJson(c.Slice) },
 				{ "SliceScale", c.SliceScale },
+				{ "UVMin", ToJson(c.UVMin) },
+				{ "UVMax", ToJson(c.UVMax) },
+				{ "SpriteColumns", c.SpriteColumns },
+				{ "SpriteRows", c.SpriteRows },
+				{ "SpriteFrame", c.SpriteFrame },
 			};
 		}
 
@@ -1364,6 +1426,7 @@ namespace Basalt {
 										{ "FillColor", ToJson(c.FillColor) },
 										{ "HandleColor", ToJson(c.HandleColor) },
 										{ "HandleWidth", c.HandleWidth },
+										{ "Vertical", c.Vertical },
 									},
 									c, "OnValueChanged", c.OnValueChanged);
 		}
@@ -1377,6 +1440,36 @@ namespace Basalt {
 										{ "CheckColor", ToJson(c.CheckColor) },
 									},
 									c, "OnValueChanged", c.OnValueChanged);
+		}
+
+		json Write(const UITextInputComponent& c)
+		{
+			return WithWidgetFields({ { "Interactable", c.Interactable }, { "ReadOnly", c.ReadOnly }, { "Text", c.Text }, { "Placeholder", c.Placeholder }, { "MaxLength", c.MaxLength } }, c, "OnValueChanged", c.OnValueChanged);
+		}
+
+		json Write(const UIDropdownComponent& c)
+		{
+			return WithWidgetFields({ { "Interactable", c.Interactable }, { "Options", c.Options }, { "Selected", c.Selected } }, c, "OnValueChanged", c.OnValueChanged);
+		}
+
+		json Write(const UIScrollViewComponent& c)
+		{
+			return { { "Interactable", c.Interactable }, { "ContentSize", ToJson(c.ContentSize) }, { "Offset", ToJson(c.Offset) }, { "ScrollSpeed", c.ScrollSpeed } };
+		}
+
+		json Write(const UIPanelComponent& c)
+		{
+			return { { "BlockInput", c.BlockInput } };
+		}
+
+		json Write(const UINavigationComponent& c)
+		{
+			return { { "Up", static_cast<uint64_t>(c.Up) }, { "Down", static_cast<uint64_t>(c.Down) }, { "Left", static_cast<uint64_t>(c.Left) }, { "Right", static_cast<uint64_t>(c.Right) } };
+		}
+
+		json Write(const UIFocusRingComponent& c)
+		{
+			return { { "Color", ToJson(c.Color) }, { "Thickness", c.Thickness } };
 		}
 
 		json Write(const PrefabComponent& c)
@@ -1677,6 +1770,26 @@ namespace Basalt {
 			return ValidateUICheckbox(checkbox);
 		}
 
+		std::string Validate(const UITextInputComponent& c)
+		{
+			return ValidateUITextInput(c);
+		}
+
+		std::string Validate(const UIDropdownComponent& c)
+		{
+			return ValidateUIDropdown(c);
+		}
+
+		std::string Validate(const UIScrollViewComponent& c)
+		{
+			return ValidateUIScrollView(c);
+		}
+
+		std::string Validate(const UIFocusRingComponent& c)
+		{
+			return ValidateUIFocusRing(c);
+		}
+
 		template<typename T>
 		ComponentInfo MakeInfo(const char* name, bool isCore = false)
 		{
@@ -1819,6 +1932,12 @@ namespace Basalt {
 			infos.push_back(MakeInfo<UIButtonComponent>("UIButton"));
 			infos.push_back(MakeInfo<UISliderComponent>("UISlider"));
 			infos.push_back(MakeInfo<UICheckboxComponent>("UICheckbox"));
+			infos.push_back(MakeInfo<UITextInputComponent>("UITextInput"));
+			infos.push_back(MakeInfo<UIDropdownComponent>("UIDropdown"));
+			infos.push_back(MakeInfo<UIScrollViewComponent>("UIScrollView"));
+			infos.push_back(MakeInfo<UIPanelComponent>("UIPanel"));
+			infos.push_back(MakeInfo<UINavigationComponent>("UINavigation"));
+			infos.push_back(MakeInfo<UIFocusRingComponent>("UIFocusRing"));
 			infos.push_back(MakeInfo<PrefabComponent>("Prefab"));
 			return infos;
 		}

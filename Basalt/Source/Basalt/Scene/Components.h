@@ -826,6 +826,10 @@ namespace Basalt {
 
 		// false hides this entity and its whole subtree (layout, drawing and UI.GetRect).
 		bool Visible = true;
+		// Clips descendants to this rect's transformed axis-aligned bounds.
+		bool ClipChildren = false;
+		float Rotation = 0.0f;
+		glm::vec2 Scale = { 1.0f, 1.0f };
 		glm::vec2 AnchorMin = { 0.5f, 0.5f };
 		glm::vec2 AnchorMax = { 0.5f, 0.5f };
 		glm::vec2 Pivot = { 0.5f, 0.5f };
@@ -854,6 +858,12 @@ namespace Basalt {
 		// Canvas units per border texel; opposite borders shrink proportionally when they would overlap, in the
 		// rect or in the texture.
 		float SliceScale = 1.0f;
+		// Row-major sprite grid; frame zero is the top-left cell.
+		glm::vec2 UVMin = { 0.0f, 0.0f };
+		glm::vec2 UVMax = { 1.0f, 1.0f };
+		uint32_t SpriteColumns = 1;
+		uint32_t SpriteRows = 1;
+		uint32_t SpriteFrame = 0;
 
 		bool operator==(const UIImageComponent&) const = default;
 	};
@@ -921,7 +931,7 @@ namespace Basalt {
 		bool operator==(const UIButtonComponent&) const = default;
 	};
 
-	// A horizontal slider: a track filling the rect, a fill from the left edge to the value and a handle (tinted)
+	// A slider: a track filling the rect, a fill from its minimum edge to the value and a handle (tinted)
 	// at the value. Dragging, or Left/Right while focused, changes Value within [Min, Max] in steps of Step, Max
 	// always being a stop (0 = continuous; Left/Right then move a twentieth of the range).
 	struct UISliderComponent
@@ -936,6 +946,7 @@ namespace Basalt {
 		glm::vec4 HandleColor = { 1.0f, 1.0f, 1.0f, 1.0f };
 		// Canvas units; a handle wider than the rect shrinks to its width.
 		float HandleWidth = 24.0f;
+		bool Vertical = false;
 		glm::vec4 NormalTint = { 0.85f, 0.85f, 0.85f, 1.0f };
 		glm::vec4 HighlightTint = { 1.0f, 1.0f, 1.0f, 1.0f };
 		glm::vec4 PressedTint = { 0.65f, 0.65f, 0.65f, 1.0f };
@@ -963,6 +974,81 @@ namespace Basalt {
 		std::string OnValueChanged = "OnValueChanged";
 
 		bool operator==(const UICheckboxComponent&) const = default;
+	};
+
+	// A single-line UTF-8 editor. Keyboard editing acts on the focused widget; MaxLength counts code points.
+	struct UITextInputComponent
+	{
+		bool Interactable = true;
+		bool ReadOnly = false;
+		std::string Text;
+		std::string Placeholder;
+		uint32_t MaxLength = 256;
+
+		glm::vec4 NormalTint = { 0.85f, 0.85f, 0.85f, 1.0f };
+		glm::vec4 HighlightTint = { 1.0f, 1.0f, 1.0f, 1.0f };
+		glm::vec4 PressedTint = { 0.65f, 0.65f, 0.65f, 1.0f };
+		glm::vec4 DisabledTint = { 0.5f, 0.5f, 0.5f, 0.5f };
+		UUID Target = 0;
+		std::string OnValueChanged = "OnValueChanged";
+
+		bool operator==(const UITextInputComponent&) const = default;
+	};
+
+	// A choice menu. Options are newline-separated labels; Selected and its callback use zero-based indices.
+	struct UIDropdownComponent
+	{
+		bool Interactable = true;
+		std::string Options = "Option";
+		uint32_t Selected = 0;
+
+		glm::vec4 NormalTint = { 0.85f, 0.85f, 0.85f, 1.0f };
+		glm::vec4 HighlightTint = { 1.0f, 1.0f, 1.0f, 1.0f };
+		glm::vec4 PressedTint = { 0.65f, 0.65f, 0.65f, 1.0f };
+		glm::vec4 DisabledTint = { 0.5f, 0.5f, 0.5f, 0.5f };
+		UUID Target = 0;
+		std::string OnValueChanged = "OnValueChanged";
+
+		bool operator==(const UIDropdownComponent&) const = default;
+	};
+
+	// A clipped viewport whose children occupy ContentSize and move opposite Offset. Wheel units use ScrollSpeed.
+	struct UIScrollViewComponent
+	{
+		bool Interactable = true;
+		glm::vec2 ContentSize = { 0.0f, 0.0f };
+		glm::vec2 Offset = { 0.0f, 0.0f };
+		float ScrollSpeed = 32.0f;
+
+		bool operator==(const UIScrollViewComponent&) const = default;
+	};
+
+	// A panel can consume pointer input without acting as a focusable widget; its children remain interactive.
+	struct UIPanelComponent
+	{
+		bool BlockInput = true;
+
+		bool operator==(const UIPanelComponent&) const = default;
+	};
+
+	// Optional directional focus targets; a missing direction uses spatial navigation. Invalid targets do not move focus.
+	struct UINavigationComponent
+	{
+		UUID Up = 0;
+		UUID Down = 0;
+		UUID Left = 0;
+		UUID Right = 0;
+
+		bool operator==(const UINavigationComponent&) const = default;
+	};
+
+	// Draws an inset border while this entity's widget has keyboard/gamepad focus.
+	struct UIFocusRingComponent
+	{
+		glm::vec4 Color = { 0.3f, 0.6f, 1.0f, 1.0f };
+		float Thickness = 2.0f;
+
+		bool operator==(const UIFocusRingComponent&) const = default;
 	};
 
 	// Marks the root entity of a prefab instance and remembers the prefab it came from.
@@ -1010,6 +1096,12 @@ namespace Basalt {
 		UIButtonComponent,
 		UISliderComponent,
 		UICheckboxComponent,
+		UITextInputComponent,
+		UIDropdownComponent,
+		UIScrollViewComponent,
+		UIPanelComponent,
+		UINavigationComponent,
+		UIFocusRingComponent,
 		PrefabComponent>;
 
 }

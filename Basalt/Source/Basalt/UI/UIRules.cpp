@@ -1,6 +1,7 @@
 #include "Basalt/UI/UIRules.h"
 
 #include "Basalt/Core/Log.h"
+#include "Basalt/UI/UIWidgets.h"
 
 #include <algorithm>
 #include <cmath>
@@ -99,6 +100,8 @@ namespace Basalt {
 			rules.Vector(rect.Pivot, 0.0f, 1.0f, defaults.Pivot, "Pivot", AxisNames);
 			rules.Vector(rect.Position, -Limit, Limit, defaults.Position, "Position", AxisNames);
 			rules.Vector(rect.Size, -Limit, Limit, defaults.Size, "Size", AxisNames);
+			rules.Float(rect.Rotation, -glm::two_pi<float>() * 1000.0f, glm::two_pi<float>() * 1000.0f, 0.0f, "Rotation");
+			rules.Vector(rect.Scale, 0.001f, 1000.0f, defaults.Scale, "Scale", AxisNames);
 		}
 
 		void ApplyRules(UIImageComponent& image, RuleWalker& rules)
@@ -107,6 +110,24 @@ namespace Basalt {
 			rules.Color(image.Color, defaults.Color, "Color");
 			rules.Vector(image.Slice, 0.0f, UIImageComponent::MaxSlice, defaults.Slice, "Slice", AxisNames);
 			rules.Float(image.SliceScale, UIImageComponent::MinSliceScale, UIImageComponent::MaxSliceScale, defaults.SliceScale, "SliceScale");
+			rules.Vector(image.UVMin, 0.0f, 1.0f, defaults.UVMin, "UVMin", AxisNames);
+			rules.Vector(image.UVMax, 0.0f, 1.0f, defaults.UVMax, "UVMax", AxisNames);
+			if (image.SpriteColumns < 1 || image.SpriteColumns > 4096 || image.SpriteRows < 1 || image.SpriteRows > 4096)
+			{
+				rules.Report("SpriteColumns and SpriteRows must be between 1 and 4096");
+				if (rules.Repairing())
+				{
+					image.SpriteColumns = std::clamp(image.SpriteColumns, 1u, 4096u);
+					image.SpriteRows = std::clamp(image.SpriteRows, 1u, 4096u);
+				}
+			}
+			const uint64_t count = uint64_t(image.SpriteColumns) * image.SpriteRows;
+			if (image.SpriteFrame >= count)
+			{
+				rules.Report("SpriteFrame must be less than SpriteColumns * SpriteRows");
+				if (rules.Repairing())
+					image.SpriteFrame = 0;
+			}
 		}
 
 		void ApplyRules(UITextComponent& text, RuleWalker& rules)
@@ -170,6 +191,70 @@ namespace Basalt {
 			rules.Color(checkbox.BoxColor, defaults.BoxColor, "BoxColor");
 			rules.Color(checkbox.CheckColor, defaults.CheckColor, "CheckColor");
 			ApplyWidgetRules(checkbox, rules, checkbox.OnValueChanged, "OnValueChanged");
+		}
+
+		void ApplyRules(UITextInputComponent& c, RuleWalker& rules)
+		{
+			ApplyWidgetRules(c, rules, c.OnValueChanged, "OnValueChanged");
+			if (c.MaxLength == 0 || c.MaxLength > 4096)
+			{
+				rules.Report("MaxLength must be between 1 and 4096");
+				if (rules.Repairing())
+					c.MaxLength = std::clamp(c.MaxLength, 1U, 4096U);
+			}
+			if (!UIWidgets::IsSingleLineUTF8(c.Text) || UIWidgets::TextLength(c.Text) > c.MaxLength)
+			{
+				rules.Report("Text must be single-line UTF-8 within MaxLength");
+				if (rules.Repairing())
+				{
+					if (!UIWidgets::IsSingleLineUTF8(c.Text))
+						c.Text.clear();
+					size_t end = 0;
+					for (uint32_t n = 0; n < c.MaxLength && end < c.Text.size(); n++)
+						end = UIWidgets::NextCharacter(c.Text, end);
+					c.Text.resize(end);
+				}
+			}
+			if (!UIWidgets::IsSingleLineUTF8(c.Placeholder) || c.Placeholder.size() > 16384)
+			{
+				rules.Report("Placeholder must be single-line UTF-8 of at most 16384 bytes");
+				if (rules.Repairing())
+					c.Placeholder.clear();
+			}
+		}
+
+		void ApplyRules(UIDropdownComponent& c, RuleWalker& rules)
+		{
+			ApplyWidgetRules(c, rules, c.OnValueChanged, "OnValueChanged");
+			const auto options = UIWidgets::DropdownOptions(c.Options);
+			if (c.Options.size() > 16384 || std::ranges::count(c.Options, '\n') >= 128 || std::ranges::any_of(options, [](std::string_view label) { return !UIWidgets::IsSingleLineUTF8(label); }))
+			{
+				rules.Report("Options must contain at most 128 single-line UTF-8 labels and 16384 bytes");
+				if (rules.Repairing())
+					c.Options = "Option";
+			}
+			const auto count = UIWidgets::DropdownOptions(c.Options).size();
+			if ((count == 0 && c.Selected != 0) || (count != 0 && c.Selected >= count))
+			{
+				rules.Report("Selected must index Options (or be 0 for no options)");
+				if (rules.Repairing())
+					c.Selected = count == 0 ? 0U : static_cast<uint32_t>(count - 1);
+			}
+		}
+
+		void ApplyRules(UIScrollViewComponent& c, RuleWalker& rules)
+		{
+			const UIScrollViewComponent defaults;
+			rules.Vector(c.ContentSize, 0.0f, UIRectComponent::MaxMagnitude, defaults.ContentSize, "ContentSize", AxisNames);
+			rules.Vector(c.Offset, 0.0f, UIRectComponent::MaxMagnitude, defaults.Offset, "Offset", AxisNames);
+			rules.Float(c.ScrollSpeed, 0.0f, UIRectComponent::MaxMagnitude, defaults.ScrollSpeed, "ScrollSpeed");
+		}
+
+		void ApplyRules(UIFocusRingComponent& c, RuleWalker& rules)
+		{
+			const UIFocusRingComponent defaults;
+			rules.Color(c.Color, defaults.Color, "Color");
+			rules.Float(c.Thickness, 0.0f, 1024.0f, defaults.Thickness, "Thickness");
 		}
 
 		template<typename T>
@@ -248,6 +333,42 @@ namespace Basalt {
 	UICheckboxComponent SanitizeUICheckbox(UICheckboxComponent checkbox)
 	{
 		return Sanitize(std::move(checkbox));
+	}
+
+	std::string ValidateUITextInput(const UITextInputComponent& c)
+	{
+		return Validate(c);
+	}
+	UITextInputComponent SanitizeUITextInput(UITextInputComponent c)
+	{
+		return Sanitize(std::move(c));
+	}
+
+	std::string ValidateUIDropdown(const UIDropdownComponent& c)
+	{
+		return Validate(c);
+	}
+	UIDropdownComponent SanitizeUIDropdown(UIDropdownComponent c)
+	{
+		return Sanitize(std::move(c));
+	}
+
+	std::string ValidateUIScrollView(const UIScrollViewComponent& c)
+	{
+		return Validate(c);
+	}
+	UIScrollViewComponent SanitizeUIScrollView(UIScrollViewComponent c)
+	{
+		return Sanitize(c);
+	}
+
+	std::string ValidateUIFocusRing(const UIFocusRingComponent& c)
+	{
+		return Validate(c);
+	}
+	UIFocusRingComponent SanitizeUIFocusRing(UIFocusRingComponent c)
+	{
+		return Sanitize(c);
 	}
 
 	bool IsValidUICallbackName(std::string_view name)
