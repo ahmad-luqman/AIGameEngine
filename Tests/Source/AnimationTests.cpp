@@ -3706,8 +3706,11 @@ TEST_SUITE("AnimationThroughput")
 		CHECK(glm::all(glm::greaterThanEqual(cached.Max, exact.Max)));
 		CHECK(cached.Min.x > 9.9f);
 		CHECK(cached.Max.x < 10.1f);
-		// A truncated palette drops joint 1 in the shader: its share pulls the point toward zero.
+		// A truncated palette drops joint 1; the unnormalized model-space point carries half the weight.
 		const auto dropped = CachedSkinBounds(source, source.Submeshes[0], { glm::mat4(1) });
+		const auto exactDropped = SkinBounds(source, source.Submeshes[0], { glm::mat4(1) });
+		CHECK(exactDropped.Min == vertex.Position * .5f);
+		CHECK(exactDropped.Max == exactDropped.Min);
 		CHECK(glm::all(glm::lessThanEqual(dropped.Min, vertex.Position * .5f)));
 		CHECK(glm::all(glm::greaterThanEqual(dropped.Max, vertex.Position * .5f)));
 		const auto imported = LoadFixture();

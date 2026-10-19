@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <latch>
+#include <filesystem>
 
 using namespace Basalt;
 
@@ -491,5 +492,53 @@ TEST_CASE("Shadow-only instances stay out of color and picking batches")
 	hidden.GetComponent<MeshComponent>().CastShadows = false;
 	CHECK(Capture(renderer, scene, camera) != withCaster);
 	CHECK(renderer.GetStatistics().Instances == 2);
+	CHECK(graphics->GetValidationErrorCount() == 0);
+}
+
+TEST_CASE("Interleaved coplanar material keys use documented batch-group order")
+{
+	auto graphics = CreateTestGraphics();
+	Scene scene;
+	scene.GetRendererSettings().SSAOEnabled = false;
+	scene.GetRendererSettings().ShadowsEnabled = false;
+	const auto texturePath = std::filesystem::path(BASALT_ANIMATION_DATA_DIR).parent_path() / "FeatureTest/Assets/Textures/Checker.png";
+	REQUIRE(AssetManager::GetTexture(texturePath.string()));
+	Entity middle;
+	for (uint32_t i = 0; i < 3; ++i)
+	{
+		auto entity = scene.CreateEntity("Coplanar cube");
+		entity.AddComponent<MeshComponent>().Mesh = "builtin://Cube";
+		auto& material = entity.AddComponent<MaterialComponent>();
+		material.AlbedoColor = { 1, 0, 0, 1 };
+		if (i == 1)
+		{
+			middle = entity;
+			material.AlbedoColor = { 0, 0, 1, 1 };
+			material.AlbedoMap = texturePath.string();
+		}
+	}
+	RenderCamera camera;
+	camera.Position = { 0, 0, 5 };
+	camera.View = glm::lookAtRH(camera.Position, glm::vec3(0), glm::vec3(0, 1, 0));
+	camera.Projection = glm::orthoRH_ZO(-1.5f, 1.5f, -1.5f, 1.5f, .1f, 20.0f);
+	camera.Far = 20;
+	SceneRenderer renderer(graphics->GetDevice(), { .Picking = true });
+	REQUIRE(renderer.Initialize());
+	renderer.SetViewportSize(160, 160);
+	renderer.SetInstancingEnabled(false);
+	const auto reference = Capture(renderer, scene, camera);
+	const auto referenceDepth = renderer.PickSurface(80, 80);
+	REQUIRE(referenceDepth);
+	CHECK(renderer.Pick(80, 80) != middle.GetUUID());
+	CHECK(renderer.GetStatistics().DrawCalls == 3);
+	renderer.SetInstancingEnabled(true);
+	CHECK(Capture(renderer, scene, camera) != reference);
+	const auto groupedDepth = renderer.PickSurface(80, 80);
+	REQUIRE(groupedDepth);
+	// Identical geometry/transforms make this an actual depth tie, not a near-coplanar approximation.
+	CHECK(groupedDepth->Depth == referenceDepth->Depth);
+	ExpectPick(renderer, 80, 80, middle.GetUUID());
+	CHECK(renderer.GetStatistics().DrawCalls == 2);
+	CHECK(renderer.GetStatistics().Instances == 3);
 	CHECK(graphics->GetValidationErrorCount() == 0);
 }

@@ -417,8 +417,10 @@ their stable back-to-front ordering and individual draws.
 (excludes particle billboards), and `triangles` counts all rendered color triangles. These counters
 allow benchmark workload guards to detect missing objects even as draw counts decrease.
 `SceneRenderer::SetInstancingEnabled(false)` provides a reference path for image equivalence and
-throughput checks. Shared asset keys resolve once per update/frame; edits and reloads are observed
-on the next update/render, while direct playback operations resolve fresh handles.
+throughput checks. Opaque grouping can change the winner for exactly coplanar surfaces from different
+batch keys; use a geometric offset when a particular surface must win. Transparency keeps its order.
+Animation updates reuse model/graph handles per key, and static mesh gathering reuses model handles
+per key within each render. These caches end with the call; direct queries resolve fresh handles.
 Skin culling uses immutable per-submesh joint influence bounds built by `AddSubmesh` during import
 or procedural creation. Posing bounds costs O(influencing joints), with conservative bounds covering
 weighted vertices, nonuniform scale and mirrored transforms. Exact CPU skin bounds remain in use for

@@ -550,13 +550,13 @@ namespace Basalt {
 	void AnimationSystem::RestoreRestPose(Playback& playback)
 	{
 		const MeshSource& source = *playback.Source;
-		playback.Local.Nodes.resize(source.Nodes.size());
+		BS_CORE_ASSERT(playback.Local.Nodes.size() == source.Nodes.size() && playback.Pose.Nodes.size() == source.Nodes.size() && playback.Globals.size() == source.Nodes.size(), "Playback buffers must be initialized before rest-pose recovery");
 		for (size_t i = 0; i < source.Nodes.size(); ++i)
 		{
 			const auto& node = source.Nodes[i];
 			playback.Local.Nodes[i] = { node.Translation, node.Rotation, node.Scale };
+			playback.Pose.Nodes[i] = playback.Local.Nodes[i];
 		}
-		playback.Pose = playback.Local;
 		playback.IKOverlay.clear();
 		playback.SpringOverlay.clear();
 		ComposeAnimationPose(source, playback.Local, playback.Globals);
@@ -746,20 +746,21 @@ namespace Basalt {
 						Evaluate(*job.Target);
 					else
 						Finish(*job.Target);
+					job.Target->PoseJobFailed = false;
 				}
 				catch (const std::exception& error)
 				{
-					if (!job.Target->InvalidPose)
+					if (!job.Target->PoseJobFailed)
 						BS_CORE_ERROR("Animator '{}': pose evaluation failed: {}; displaying rest pose", job.Target->EntityName, error.what());
 					RestoreRestPose(*job.Target);
-					job.Target->InvalidPose = true;
+					job.Target->PoseJobFailed = true;
 				}
 				catch (...)
 				{
-					if (!job.Target->InvalidPose)
+					if (!job.Target->PoseJobFailed)
 						BS_CORE_ERROR("Animator '{}': pose evaluation failed: unknown exception; displaying rest pose", job.Target->EntityName);
 					RestoreRestPose(*job.Target);
-					job.Target->InvalidPose = true;
+					job.Target->PoseJobFailed = true;
 				}
 			}
 		};
@@ -770,8 +771,9 @@ namespace Basalt {
 			evaluate(0, static_cast<uint32_t>(m_PoseJobs.size()));
 		else if (!JobSystem::Get().ParallelFor(static_cast<uint32_t>(m_PoseJobs.size()), PoseJobGrain, evaluate))
 		{
-			// Every accepted range has joined. Rebuilding from clocks is idempotent, so completed jobs can retry too.
-			BS_CORE_ERROR("AnimationSystem: pose job scheduling failed; retrying synchronously");
+			// Every accepted range has joined. Evaluate/Finish recompute outputs without advancing clocks
+			// or emitting events, so already completed work can safely run again.
+			BS_CORE_ERROR("AnimationSystem: pose jobs failed; retrying synchronously");
 			evaluate(0, static_cast<uint32_t>(m_PoseJobs.size()));
 		}
 		if (runLateUpdate)

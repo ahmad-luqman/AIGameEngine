@@ -2498,7 +2498,7 @@ Renders the current scene from its primary camera (the editor camera when the sc
 
 ### `render.stats`
 
-Returns the scene renderer's statistics: viewport and render size, render scale and dynamic resolution state, draw, color-pass triangle and culling counts, and the GPU time of each pass averaged over recent frames (editor / GPU hosts only).
+Returns the scene renderer's statistics: viewport and render size, render scale and dynamic resolution state, draw, mesh-instance (including transparent meshes, excluding particles), color-pass triangle and culling counts, and the GPU time of each pass averaged over recent frames (editor / GPU hosts only).
 
 <details><summary>Parameter JSON Schema</summary>
 

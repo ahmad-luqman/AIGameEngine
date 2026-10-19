@@ -54,7 +54,7 @@ even when current CI budgets are tightened.
 Compare a new run on the same machine/configuration before attributing gains to session 4. CI artifacts
 provide the corresponding runner baselines. Do not regenerate the committed baseline when optimizing:
 keep it as the before measurement. A moving or larger workload needs a new version and baseline. Session 4 updates the guard to require 2,176 color mesh instances and two batched color draws,
-while preserving exact triangle, skin and light counts. Reducing instances or increasing draw calls
+while preserving exact triangle, skin and light counts. Any change to these instance/draw counts
 fails even if the frame time improves. The source workload and baseline files remain unchanged.
 
 ## Recorded baseline
