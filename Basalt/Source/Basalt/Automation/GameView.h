@@ -93,17 +93,19 @@ namespace Basalt {
 		// Used without a project.
 		static constexpr glm::uvec2 FallbackResolution{ 1600, 900 };
 
-		// {resolution: [w, h] | null (back to the project's), focus: bool, path: string}.
+		// {resolution: [w, h] | null (back to the project's), stats: bool, focus: bool, path: string}.
 		static nlohmann::json Schema();
-		// Applies the resolution part of a patch; nothing changes when it fails.
+		// Applies the resolution and overlay parts of a patch; nothing changes when validation fails.
 		bool Apply(const nlohmann::json& patch, std::string& outError);
 
 		glm::uvec2 Resolve(const ProjectConfig* project) const;
+		bool ShowStats() const { return m_ShowStats; }
 		const std::optional<glm::uvec2>& GetOverride() const { return m_Override; }
 
 	private:
 		// Only Apply sets it, so it is always within [MinResolution, MaxResolution].
 		std::optional<glm::uvec2> m_Override;
+		bool m_ShowStats = false;
 	};
 
 }

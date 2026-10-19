@@ -70,6 +70,7 @@ namespace Basalt {
 		options.MaxFrames = static_cast<uint64_t>(std::max<int64_t>(commandLine.GetInteger("frames").value_or(0), 0));
 		options.ScreenshotPath = commandLine.GetValue("screenshot").value_or("");
 		options.RequireValidation = commandLine.HasFlag("require-validation");
+		options.ShowStats = commandLine.HasFlag("stats");
 		options.FailOnScriptErrors = commandLine.HasFlag("fail-on-script-errors");
 		if (options.FailOnScriptErrors && options.MaxFrames == 0)
 		{
@@ -157,6 +158,11 @@ namespace Basalt {
 			specification.FixedTimestep = 1.0f / 60.0f;
 		if (specification.Headless)
 		{
+			if (options.ShowStats)
+			{
+				BS_CORE_ERROR("--stats needs a GPU and cannot be combined with --headless");
+				return nullptr;
+			}
 			// Without a GPU nothing renders: the application loop itself enforces the frame cap.
 			specification.MaxFrames = options.MaxFrames;
 			if (!options.ScreenshotPath.empty())

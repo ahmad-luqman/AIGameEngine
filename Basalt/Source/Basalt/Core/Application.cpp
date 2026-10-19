@@ -160,6 +160,8 @@ namespace Basalt {
 			BS_PROFILE_SCOPE("Frame");
 			float deltaTime = frameTimer.Elapsed();
 			frameTimer.Reset();
+			if (m_FrameCount > 0)
+				m_FrameTiming.Add(deltaTime * 1000.0f);
 			if (m_Specification.FixedTimestep > 0.0f)
 				deltaTime = m_Specification.FixedTimestep;
 			// Clamp long stalls (debugger breaks, window drags) so simulations stay stable.

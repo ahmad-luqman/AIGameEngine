@@ -33,6 +33,8 @@ namespace Basalt {
 	{
 		uint32_t DrawCalls = 0;
 		uint32_t ShadowDrawCalls = 0;
+		// Triangles submitted in the color pass, excluding depth, shadows and fullscreen passes.
+		uint64_t Triangles = 0;
 		uint32_t CulledSubmeshes = 0;
 		uint32_t Lights = 0;
 		uint32_t LightsSkipped = 0;

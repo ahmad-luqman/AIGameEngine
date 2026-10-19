@@ -65,13 +65,21 @@ jobs:
           profile=OFF
           if [[ "${{ runner.os }}" == "Linux" && "${{ matrix.config }}" == "Debug" ]]; then profile=ON; fi
           if [[ "${{ runner.os }}" == "macOS" && "${{ matrix.config }}" == "Debug" ]]; then formatCheck=ON; fi
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DBASALT_CHECK_FORMAT=$formatCheck -DBASALT_PROFILE=$profile
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DBASALT_CHECK_FORMAT=$formatCheck -DBASALT_PROFILE=$profile -DBASALT_BENCHMARK_TESTS=${{ matrix.config == 'Release' && 'ON' || 'OFF' }}
 
       - name: Build
         run: cmake --build build -- -k 0
 
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+      - name: Upload benchmark report
+        if: always() && matrix.config == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ runner.os }}-Release
+          path: build/Tests/Benchmark-*.json
+          if-no-files-found: error
 
   # AddressSanitizer + UndefinedBehaviorSanitizer over every headless test. All code, third-party
   # included, is instrumented (cmake/Sanitizers.cmake).
@@ -207,7 +215,7 @@ jobs:
           key: deps-plain-${{ runner.os }}-Release-${{ hashFiles('cmake/Dependencies.cmake') }}
 
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBASALT_GPU_TESTS=ON -DBASALT_GOLDEN_DRIVER=lavapipe -DBASALT_CHECK_FORMAT=OFF
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBASALT_GPU_TESTS=ON -DBASALT_GOLDEN_DRIVER=lavapipe -DBASALT_CHECK_FORMAT=OFF -DBASALT_BENCHMARK_TESTS=ON
 
       - name: Build
         run: cmake --build build -- -k 0
@@ -215,7 +223,7 @@ jobs:
       - name: Verify editor integration is registered
         run: |
           ctest --test-dir build -N --show-only=json-v1 > /tmp/basalt-tests.json
-          python3 -c 'import json; tests = json.load(open("/tmp/basalt-tests.json"))["tests"]; names = {t["name"] for t in tests}; missing = {"EditorViewport", "ViewportGPU", "PostProcessGPU", "PreviewRendererGPU"} - names; missing and exit(f"Missing GPU regressions: {missing}")'
+          python3 -c 'import json; tests = json.load(open("/tmp/basalt-tests.json"))["tests"]; names = {t["name"] for t in tests}; missing = {"EditorViewport", "ViewportGPU", "PostProcessGPU", "PreviewRendererGPU", "Benchmark_gpu"} - names; missing and exit(f"Missing GPU regressions: {missing}")'
 
       - name: GPU tests
         run: ctest --test-dir build --output-on-failure -L gpu
@@ -226,8 +234,10 @@ jobs:
         with:
           name: lavapipe-screenshots
           path: |
+            build/Tests/Benchmark-*
             build/Tests/Golden/**/*.png
             build/Tests/Viewport/*
+            build/Tests/StatisticsOverlay/*
             build/Tests/PostProcess/*.png
             build/Tests/Previews/*.png
           if-no-files-found: warn

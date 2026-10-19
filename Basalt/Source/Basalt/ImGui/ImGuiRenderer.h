@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Basalt/Core/MemoryTracker.h"
+#include "Basalt/Renderer/GpuProfiler.h"
 
 #include <nvrhi/nvrhi.h>
 
@@ -19,10 +20,11 @@ namespace Basalt {
 	class ImGuiRenderer
 	{
 	public:
-		bool Init(nvrhi::IDevice* device);
+		bool Init(nvrhi::IDevice* device, bool gpuTimers = false);
 		void Shutdown();
 
-		void Render(ImDrawData* drawData, nvrhi::IFramebuffer* framebuffer);
+		void Render(ImDrawData* drawData, nvrhi::IFramebuffer* framebuffer, bool profile = true);
+		const GpuProfiler* GetProfiler() const { return m_Profiler.get(); }
 
 	private:
 		void UpdateTexture(ImTextureData* texture, nvrhi::ICommandList* commandList);
@@ -31,6 +33,7 @@ namespace Basalt {
 		nvrhi::IBindingSet* GetBindingSet(nvrhi::ITexture* texture);
 
 	private:
+		Scope<GpuProfiler> m_Profiler;
 		nvrhi::IDevice* m_Device = nullptr;
 		nvrhi::CommandListHandle m_CommandList;
 

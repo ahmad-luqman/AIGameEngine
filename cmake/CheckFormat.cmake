@@ -8,6 +8,7 @@ file(GLOB_RECURSE files
 	"${SOURCE_DIR}/Basalt-CLI/Source/*.cpp" "${SOURCE_DIR}/Basalt-CLI/Source/*.h"
 	"${SOURCE_DIR}/Tests/Source/*.cpp" "${SOURCE_DIR}/Tests/Source/*.h"
 	"${SOURCE_DIR}/Tests/Rendering/*.cpp" "${SOURCE_DIR}/Tests/Rendering/*.h"
+	"${SOURCE_DIR}/Tests/Benchmarks/*.cpp" "${SOURCE_DIR}/Tests/Benchmarks/*.h"
 	"${SOURCE_DIR}/Tests/Fuzz/*.cpp" "${SOURCE_DIR}/Tests/Fuzz/*.h")
 
 execute_process(

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Basalt/Core/Base.h"
+#include "Basalt/Core/FrameTiming.h"
 #include "Basalt/Core/LayerStack.h"
 #include "Basalt/Core/Timestep.h"
 #include "Basalt/Core/Window.h"
@@ -92,6 +93,7 @@ namespace Basalt {
 		const ApplicationSpecification& GetSpecification() const { return m_Specification; }
 		uint64_t GetFrameCount() const { return m_FrameCount; }
 		float GetTime() const { return m_Time; }
+		float GetFrameMilliseconds() const { return m_FrameTiming.GetMilliseconds(); }
 
 		static Application& Get();
 		static bool HasInstance();
@@ -113,6 +115,7 @@ namespace Basalt {
 		int m_ExitCode = 0;
 		uint64_t m_FrameCount = 0;
 		float m_Time = 0.0f;
+		FrameTiming m_FrameTiming;
 
 		std::mutex m_MainThreadQueueMutex;
 		std::vector<std::function<void()>> m_MainThreadQueue;

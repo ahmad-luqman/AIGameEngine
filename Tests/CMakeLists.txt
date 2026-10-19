@@ -36,6 +36,8 @@ option(BASALT_GPU_TESTS "Register tests that need a GPU" OFF)
 # Python is optional; headless checks also guard the GPU harness against false passes.
 find_package(Python3 QUIET COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
+	add_test(NAME BenchmarkHarness COMMAND "${Python3_EXECUTABLE}" -B -O "${CMAKE_CURRENT_SOURCE_DIR}/Benchmarks/RunTests.py")
+	set_tests_properties(BenchmarkHarness PROPERTIES LABELS unit TIMEOUT 30)
 	add_test(NAME PhysicsJobFailure
 		COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/Automation/PhysicsJobFailure.py" $<TARGET_FILE:BasaltTests>)
 	set_tests_properties(PhysicsJobFailure PROPERTIES LABELS unit TIMEOUT 90)
@@ -103,7 +105,7 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	set(dynamicArgs --dynamic-resolution 1000000 --min-render-scale 0.5)
 	# Every driver these tests run on (lavapipe in CI, MoltenVK and desktop GPUs locally) has timer queries,
 	# so missing GPU timings are a profiler bug. The prefixes come from FormatGpuTimings (pinned by a unit test).
-	set(noGpuTimingsRegex "scene GPU time (unavailable|not available yet)")
+	set(noGpuTimingsRegex "(scene|blit|ImGui) GPU time (unavailable|not available yet)")
 	foreach(view Lit SSAO Normals Depth Scaled Dynamic ScaledSSAO DynamicSSAO)
 		set(debugView ${view})
 		set(renderTest FeatureTestRender_${view})
@@ -188,6 +190,11 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 			message(WARNING "EditorViewport is not registered: install xvfb-run or provide DISPLAY for the editor integration test")
 		endif()
 		# -B keeps helper bytecode out of the source tree; -O verifies checks survive Python optimization.
+		add_test(NAME StatisticsOverlay
+			COMMAND "${Python3_EXECUTABLE}" -B -O "${CMAKE_CURRENT_SOURCE_DIR}/Rendering/StatisticsOverlay.py"
+				$<TARGET_FILE:BasaltRuntime> "${CMAKE_CURRENT_BINARY_DIR}/StatisticsOverlay")
+		set_tests_properties(StatisticsOverlay PROPERTIES TIMEOUT 240)
+		list(APPEND basaltGpuTests StatisticsOverlay)
 		add_test(NAME FSR1Render
 			COMMAND "${Python3_EXECUTABLE}" -B -O "${CMAKE_CURRENT_SOURCE_DIR}/Rendering/FSR1.py"
 				--runtime $<TARGET_FILE:BasaltRuntime> --cli $<TARGET_FILE:BasaltCLI>
@@ -214,6 +221,7 @@ endif()
 if(TARGET BasaltRuntime)
 	set(basaltRuntimeOptionTests "")
 	foreach(case
+			"stats-headless;--stats;;--stats needs a GPU"
 			"dynamic-resolution-low;--dynamic-resolution;5;--dynamic-resolution must be 0"
 			"dynamic-resolution-high;--dynamic-resolution;2e6;--dynamic-resolution must be 0"
 			"dynamic-resolution-text;--dynamic-resolution;abc;--dynamic-resolution must be 0"
@@ -305,4 +313,33 @@ if(TEST CodeFormat)
 endif()
 if(BASALT_SANITIZE)
 	set_property(TEST BasaltTests ${basaltIntegrationTests} APPEND PROPERTY ENVIRONMENT ${BASALT_SANITIZER_ENVIRONMENT})
+endif()
+
+# Release benchmarks use the same fixed workload on every runner; timing gates are opt-in locally.
+add_executable(BasaltBenchmark Benchmarks/Benchmark.cpp)
+basalt_set_warnings(BasaltBenchmark)
+target_link_libraries(BasaltBenchmark PRIVATE Basalt)
+target_compile_definitions(BasaltBenchmark PRIVATE BASALT_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+	BASALT_BENCHMARK_BUILD_TYPE="${CMAKE_BUILD_TYPE}" BASALT_BENCHMARK_COMPILER="${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
+option(BASALT_BENCHMARK_TESTS "Run Release frame-time regression gates" OFF)
+if(BASALT_BENCHMARK_TESTS)
+	if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+		message(FATAL_ERROR "BASALT_BENCHMARK_TESTS requires a Release build")
+	endif()
+	if(NOT Python3_Interpreter_FOUND)
+		message(FATAL_ERROR "BASALT_BENCHMARK_TESTS requires Python 3")
+	endif()
+	foreach(mode cpu gpu)
+		if(mode STREQUAL "gpu" AND NOT BASALT_GPU_TESTS)
+			continue()
+		endif()
+		add_test(NAME Benchmark_${mode}
+			COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/Benchmarks/Run.py"
+				--binary $<TARGET_FILE:BasaltBenchmark> --mode ${mode}
+				--output "${CMAKE_CURRENT_BINARY_DIR}/Benchmark-${mode}.json")
+		set_tests_properties(Benchmark_${mode} PROPERTIES LABELS benchmark TIMEOUT 300)
+		if(mode STREQUAL "gpu")
+			set_property(TEST Benchmark_${mode} APPEND PROPERTY LABELS gpu)
+		endif()
+	endforeach()
 endif()
