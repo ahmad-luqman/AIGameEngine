@@ -423,7 +423,7 @@ namespace Basalt {
 		// Builds Pose from Local and the layers, then composes Globals from Pose with the IK and spring overlays on top. Layers
 		// leave out the root-motion joint and the nodes above it while root motion applies (also while it fades out).
 		static void Finish(Playback& playback);
-		// Requires Local/Pose/Globals sized by Ensure's first evaluation and immutable source topology.
+		// Requires Local/Pose/Globals sized by Ensure (which retries incomplete initialization) and immutable source topology.
 		// Rewrites those buffers in place, so queued-job recovery needs no pose allocation.
 		static void RestoreRestPose(Playback& playback);
 		// Matches layer states to the configuration (by name), resolves them and advances their clocks and fades.
@@ -541,7 +541,7 @@ namespace Basalt {
 		struct PoseJob
 		{
 			Playback* Target = nullptr;
-			bool Sample = true; // true: sample clips and compose; false: compose layers over the held base.
+			bool Sample = true; // true: sample clips and compose; false: sample layers and compose overlays over the held base.
 		};
 		// Queued during entity updates, executed after that loop and joined before LateUpdate. Addresses survive
 		// unordered_map rehashes; no queued playback is erased or externally mutated before the join.

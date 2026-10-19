@@ -258,7 +258,11 @@ namespace Basalt {
 		auto [it, inserted] = m_Playback.try_emplace(entity.GetUUID());
 		auto& playback = it->second;
 		const auto graph = component->StateMachine.empty() ? nullptr : (assets ? assets->Graph : AssetManager::GetAnimationGraph(component->StateMachine));
-		if (inserted || playback.Graph != graph || playback.ConfiguredGraph != component->StateMachine || playback.Handle != static_cast<entt::entity>(entity) || playback.Source != source || playback.ConfiguredClip != component->Clip)
+		// An initialization exception can leave matching asset keys with incomplete buffers.
+		// Retry initialization before publishing a pose or dispatching a job that recovers in place.
+		const size_t nodeCount = source->Nodes.size();
+		const bool incomplete = playback.Local.Nodes.size() != nodeCount || playback.Pose.Nodes.size() != nodeCount || playback.Globals.size() != nodeCount;
+		if (inserted || incomplete || playback.Graph != graph || playback.ConfiguredGraph != component->StateMachine || playback.Handle != static_cast<entt::entity>(entity) || playback.Source != source || playback.ConfiguredClip != component->Clip)
 		{
 			playback = {};
 			playback.Handle = entity;
