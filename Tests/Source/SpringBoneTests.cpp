@@ -212,9 +212,9 @@ TEST_SUITE("Animation")
 				for (glm::vec3& position : animated)
 					position.z += 2 * seconds;
 				SimulateSpringChain({ .Animated = animated, .PreviousAnimated = previous, .Stiffness = 60, .Damping = 4, .Seconds = seconds }, strand.Points);
-				previous = animated;
+				previous = std::move(animated);
 			}
-			strand.Animated = previous;
+			strand.Animated = std::move(previous);
 			return strand;
 		};
 		Strand at60 = move(1.0f / 60, 30);
