@@ -616,7 +616,7 @@ namespace Basalt {
 			interaction.SetFocus(UIWidgetID::ForEntity(entity.GetUUID()));
 		};
 
-		// UI.IsPointerOverWidget(): whether the pointer is over an interactable widget (a click there is the UI's).
+		// UI.IsPointerOverWidget(): whether the pointer is over an interactable control, scroll view or blocking panel.
 		ui["IsPointerOverWidget"] = [&context]() {
 			const UIInteraction* interaction = FindInteraction(context);
 			return interaction && interaction->IsPointerOverWidget();
@@ -631,7 +631,7 @@ namespace Basalt {
 		};
 
 		// UI.GetRect(entity): the laid-out rect of an entity with UI components as Vec4(x, y, width, height)
-		// in canvas units, or nil when it has none or it or an ancestor is hidden. Laid out for the last
+		// in canvas units, or nil when it has none, it or an ancestor is hidden, or its transform is unusable. Uses the last
 		// rendered viewport (1920x1080 headless).
 		ui["GetRect"] = [](const ScriptEntity& self) -> std::optional<glm::vec4> {
 			Entity entity = self.ResolveOrThrow();

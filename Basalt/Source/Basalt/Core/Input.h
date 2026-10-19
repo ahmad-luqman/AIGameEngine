@@ -147,8 +147,8 @@ namespace Basalt {
 		static void SetMouseButtonState(MouseCode button, bool down);
 		static void SetMousePosition(const glm::vec2& position);
 		static void AddMouseScroll(const glm::vec2& scroll);
-		// Printable Unicode text typed this frame; bounded to 16384 bytes and cleared by EndFrame/Reset.
-		// Returns false for controls, invalid scalars or a full frame buffer.
+		// Unicode text typed this frame; bounded to 16384 UTF-8 bytes and cleared by EndFrame/Reset.
+		// Returns false for C0 (U+0000..001F), DEL (U+007F), invalid scalars or a full frame buffer.
 		static bool AddTextCodepoint(uint32_t codepoint);
 		static std::string GetTextInput();
 

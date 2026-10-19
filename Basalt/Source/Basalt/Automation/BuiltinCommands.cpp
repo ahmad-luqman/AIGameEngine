@@ -967,6 +967,8 @@ namespace Basalt {
 									report(prefix + " is disabled");
 								else if (const auto found = byEntity.find(static_cast<uint64_t>(targetID)); found == byEntity.end())
 									report(prefix + " is hidden or has an unusable transform");
+								else if (found->second->Rect.Size.x <= 0 || found->second->Rect.Size.y <= 0)
+									report(prefix + " has a zero-area rect");
 								else if (const auto& targetItem = *found->second; targetItem.Clip)
 								{
 									const UIBox visible = IntersectUIBoxes(TransformUIBox(targetItem.Rect, targetItem.Transform), *targetItem.Clip);

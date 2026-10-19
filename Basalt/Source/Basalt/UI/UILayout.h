@@ -16,8 +16,9 @@ namespace Basalt {
 
 	class Scene;
 
-	// An entity with UI components and the rect it occupies on the canvas: a snapshot, valid until the scene
-	// changes.
+	// One laid-out UI entity: its untransformed canvas box, composed canvas transform and inherited
+	// canvas-aligned clip. A snapshot, valid until the scene changes. The entity's own child clip is inherited
+	// only by its descendants, while scroll offsets are already included in their layout boxes.
 	struct UILayoutItem
 	{
 		Entity Owner;
@@ -70,14 +71,15 @@ namespace Basalt {
 		// one Layout snapshot by entity UUID; fixed clipping ancestors still exclude unreachable controls.
 		static bool CanReveal(const UILayoutItem& item, const std::unordered_map<uint64_t, const UILayoutItem*>& items);
 
-		// Every visible entity with a UI component, in draw order (depth-first in hierarchy order: parents
-		// before children, later siblings after earlier ones). An entity without a UIRect occupies its parent's
-		// rect; entities without UI components pass their parent's rect on to their children.
+		// Every non-hidden UI entity in depth-first draw order (parents first, later siblings on top), including
+		// clipped entities. Rects inherit the nearest UI layout box; scroll views expand that box to ContentSize
+		// and offset descendants. Affine transforms compose; child clips intersect transformed parent bounds.
+		// Unusable composed transforms omit a subtree and optionally append a problem.
 		static std::vector<UILayoutItem> Layout(Scene& scene, const glm::vec2& canvasSize, std::vector<UILayoutProblem>* problems = nullptr);
 
-		// Appends the draw commands of the scene's UI components in draw order (each entity's image, then its
-		// widget, then its text). Widgets look the way the scene's UIInteraction says (when not playing: normal, or
-		// disabled when not Interactable).
+		// Appends images, widget geometry/text and focus rings in hierarchy order, then the open dropdown
+		// popup on top. Commands carry composed transforms and intersect inherited clips with local text/row
+		// clips. UIInteraction supplies runtime states; outside Play widgets are normal or disabled.
 		static void BuildCommands(Scene& scene, const glm::vec2& canvasSize, std::vector<UIDrawCommand>& out);
 
 		// The untransformed layout rect; nullopt without UI, when hidden by an ancestor, or when its

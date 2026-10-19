@@ -2323,7 +2323,7 @@ namespace Basalt {
 				m_Context.FinishFieldEdit();
 				if (m_Context.BeginTransaction("UI rect gesture", EditorContext::TransactionKind::Gizmo))
 				{
-					m_UIRectDrag = UIRectDrag{ rect, item.Rect, item.Transform, item.Transform * glm::inverse(local), mouse, hovered.value_or(glm::vec2(0.5f)), options.Operation, hovered.has_value() && options.Operation == GizmoOperation::Translate };
+					m_UIRectDrag = UIRectDrag{ rect, item.Rect, item.Transform * glm::inverse(local), mouse, hovered.value_or(glm::vec2(0.5f)), options.Operation, hovered.has_value() && options.Operation == GizmoOperation::Translate };
 					m_GizmoSelection = m_Session.GetSelections();
 					m_GizmoWasUsing = true;
 				}

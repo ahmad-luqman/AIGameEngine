@@ -140,7 +140,7 @@ namespace Basalt {
 		if (m_OpenDropdown != 0)
 		{
 			Entity owner = scene.GetEntityByUUID(m_OpenDropdown);
-			if (!owner || !owner.HasComponent<UIDropdownComponent>() || !owner.GetComponent<UIDropdownComponent>().Interactable || !UILayout::GetRect(scene, owner, GameUI::GetCanvasSize()))
+			if (!owner || !owner.HasComponent<UIDropdownComponent>() || UILayout::GetWidgetKind(owner) != UIWidgetKind::Dropdown || !owner.GetComponent<UIDropdownComponent>().Interactable || !UILayout::GetRect(scene, owner, GameUI::GetCanvasSize()))
 				m_OpenDropdown = 0;
 			else
 			{
@@ -204,6 +204,7 @@ namespace Basalt {
 		// The load comes at the end of a frame, after the old scene's scripts drew this frame's widgets.
 		m_Immediate.clear();
 		m_ImmediateIDs.clear();
+		m_ImmediateInputs.clear();
 		m_HeldTime.fill(-1.0f);
 	}
 
@@ -464,7 +465,7 @@ namespace Basalt {
 			{
 				// Cursor movement is handled by UpdateText, never spatial navigation.
 			}
-			else if (navigable[current]->Kind == UIWidgetKind::Dropdown && m_OpenDropdown != 0)
+			else if (navigable[current]->Kind == UIWidgetKind::Dropdown && navigable[current]->ID.IsEntity() && navigable[current]->ID.GetEntity() == m_OpenDropdown)
 			{
 				const Entity owner = WidgetEntity(scene, navigable[current]->ID);
 				const auto dropdown = SanitizeUIDropdown(owner.GetComponent<UIDropdownComponent>());

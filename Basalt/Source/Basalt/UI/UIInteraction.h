@@ -126,20 +126,22 @@ namespace Basalt {
 		// How the widget looks this frame.
 		UIWidgetState GetState(const UIWidgetID& id, bool interactable) const;
 
-		// The focused widget (invalid when none). A focus that is not a visible, interactable widget is dropped in an
-		// Update, with a warning when it never was one; a newly set focus gets one Update to appear (an immediate-mode
-		// widget set from OnCreate, a widget shown as it is focused). A script may set it while navigation is off;
+		// The focused control (invalid when none). Hidden, disabled, missing or unreachable controls lose focus;
+		// scroll descendants that enabled ancestors can reveal remain eligible. A new scripted focus gets one
+		// Update to appear, then warns if still invalid (including non-focusable panels/scroll views). Offscreen
+		// focus can remain after wheel scrolling until navigation reveals it. Scripts may focus with navigation off;
 		// navigation and activation remain paused, while a focused text input can still accept editing keys.
 		const UIWidgetID& GetFocus() const { return m_Focus.ID; }
 		// The last input modality was keyboard/gamepad; pointer presses hide focus rings.
 		bool IsFocusVisible() const { return m_FocusVisible; }
 		void SetFocus(UIWidgetID id);
-		// Whether the pointer was over an interactable widget or blocking panel in the last Update (so a click there is the UI's,
-		// not the game's).
+		// Whether the pointer was over an interactable control, scroll view or blocking panel in the last
+		// Update, so a click there belongs to the UI.
 		bool IsPointerOverWidget() const { return m_PointerBlocked; }
 		UUID GetOpenDropdown() const { return m_OpenDropdown; }
 		uint32_t GetDropdownHighlight() const { return m_DropdownHighlight; }
-		size_t GetTextCursor() const { return m_TextCursor; }
+		// UTF-8 byte offset, at a code-point boundary; fallback when this is not the current text input.
+		size_t GetTextCursor(const UIWidgetID& id, size_t fallback = 0) const { return m_TextFocus == id ? m_TextCursor : fallback; }
 
 		// The game's keyboard and gamepad navigation setting (UI.SetNavigationEnabled): a game that reads the arrows,
 		// Space or the D-pad itself while widgets are visible turns it off to pause navigation and activation.

@@ -8,6 +8,7 @@
 
 #include <string>
 #include <vector>
+#include <unordered_set>
 
 namespace Basalt {
 
@@ -91,22 +92,33 @@ namespace Basalt {
 		// another instance's method does not change it); coroutines belong to the instance they are started on.
 		// 0 outside instance code (console, lua.exec, top-level script code).
 		UUID GetCurrentOwner() const { return m_CurrentOwner; }
+		static constexpr size_t MaxClipLeakWarnings = 1024;
+		// A reload makes repaired callbacks eligible for a fresh diagnostic.
+		void ResetClipLeakWarnings()
+		{
+			m_ReportedClipLeaks.clear();
+			m_ReportedClipLeakLimit = false;
+		}
 
 	private:
 		// Changed only by ScriptOwnerScope.
 		UUID m_CurrentOwner = 0;
-		std::vector<UUID> m_ReportedClipLeaks;
+		std::unordered_set<std::string> m_ReportedClipLeaks;
+		bool m_ReportedClipLeakLimit = false;
 
 		friend class ScriptOwnerScope;
 	};
 
-	// Makes `owner` the context's current owner for the lifetime of the scope (see ScriptContext::GetCurrentOwner).
+	// Makes `owner` current and snapshots the caller's UI clip stack; destruction restores both, including
+	// after a protected call fails. Unbalanced clips warn once per owner/callback until scripts reload.
+	// After 1024 distinct pairs per ScriptContext, one limit warning suppresses further leak diagnostics
+	// (see ScriptContext::GetCurrentOwner).
 	// Rule: only wrap protected calls (pcall, lua_resume). Lua is compiled as C, so an error raised through an
 	// unprotected scope would longjmp past its destructor and leave the wrong owner current.
 	class ScriptOwnerScope
 	{
 	public:
-		ScriptOwnerScope(ScriptContext& context, UUID owner, const char* callback = "callback");
+		ScriptOwnerScope(ScriptContext& context, UUID owner, const char* callback);
 		~ScriptOwnerScope();
 
 		ScriptOwnerScope(const ScriptOwnerScope&) = delete;

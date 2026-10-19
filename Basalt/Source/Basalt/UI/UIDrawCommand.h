@@ -41,7 +41,8 @@ namespace Basalt {
 		// Fill or tint, and the text color (display color and opacity, 0..1).
 		glm::vec4 Color = { 1.0f, 1.0f, 1.0f, 1.0f };
 
-		// Image: project-relative path; empty fills with Color. Slice/SliceScale as in UIImageComponent.
+		// Image: project-relative path; empty fills with Color. Slice/SliceScale and UV/sprite selection
+		// follow UIImageComponent; nine-slice texel borders are relative to the selected sprite cell.
 		std::string Texture;
 		glm::vec4 Slice = { 0.0f, 0.0f, 0.0f, 0.0f };
 		float SliceScale = 1.0f;
@@ -74,10 +75,10 @@ namespace Basalt {
 	// The command's box on a canvas of the given size.
 	UIBox ResolveUIBox(const UIDrawCommand& command, const glm::vec2& canvasSize);
 
-	// Moves the command's values into the ranges the renderer handles, so its box stays finite: Position and
-	// Size within +-UIRectComponent::MaxMagnitude (Size >= 0), Anchor, Pivot, Align and Color within 0..1, and
-	// Slice, SliceScale and FontSize within their component limits. NaN or infinite placement makes the
-	// whole command unusable (returns false); other non-finite values take their defaults.
+	// Repairs Position/Size (Size >= 0), anchor/pivot/alignment, colors, local rotation/scale, UV/sprite
+	// selection, slices and font size to their supported ranges. Non-finite placement, hierarchy matrix terms
+	// or clip bounds reject the command; other non-finite values take defaults. This does not validate the
+	// composed transform's numeric envelope; drawing checks that after resolving the box.
 	bool SanitizeUIDrawCommand(UIDrawCommand& command);
 
 }

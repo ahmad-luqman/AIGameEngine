@@ -80,8 +80,8 @@ namespace Basalt {
 			return IsHidden(entity) ? std::nullopt : std::optional(rect);
 		}
 
-		// Depth-first in hierarchy order. Scene bounds hierarchy depth (Scene::MaxHierarchyDepth), so the
-		// recursion is bounded too.
+		// Depth-first hierarchy traversal composes transforms, intersects canvas clips and lays scroll children
+		// out in their expanded, offset content box. Scene::MaxHierarchyDepth bounds the recursion.
 		void Visit(Scene& scene, Entity entity, const UIBox& parent, std::vector<UILayoutItem>& out, const glm::mat3& parentTransform = glm::mat3(1.0f), std::optional<UIBox> clip = std::nullopt, std::vector<UILayoutProblem>* problems = nullptr)
 		{
 			const std::optional<UIBox> rect = VisibleRectInParent(entity, parent);
@@ -128,8 +128,8 @@ namespace Basalt {
 			return interaction->GetState(UIWidgetID::ForEntity(entity.GetUUID()), interactable);
 		}
 
-		// The draw commands of one laid-out entity: its image (tinted by a button), its slider or checkbox, then its
-		// text (beside a checkbox's box).
+		// One entity's image, control geometry/text and focus ring. Text inputs supply their own text/caret,
+		// dropdowns their selected label, and checkboxes reserve space beside the box for a label.
 		void AppendCommands(const UILayoutItem& item, const UIInteraction* interaction, std::vector<UIDrawCommand>& out)
 		{
 			const Entity entity = item.Owner;
@@ -187,7 +187,7 @@ namespace Basalt {
 					if (interaction && interaction->GetFocus() == UIWidgetID::ForEntity(entity.GetUUID()))
 					{
 						text.Text = input.Text;
-						size_t cursor = std::min(interaction->GetTextCursor(), text.Text.size());
+						size_t cursor = std::min(interaction->GetTextCursor(UIWidgetID::ForEntity(entity.GetUUID()), text.Text.size()), text.Text.size());
 						while (cursor > 0 && cursor < text.Text.size() && (static_cast<unsigned char>(text.Text[cursor]) & 0xc0U) == 0x80U)
 							cursor--;
 						text.Text.insert(cursor, "|");
@@ -342,7 +342,10 @@ namespace Basalt {
 			{
 				if (item.Owner.GetUUID() != interaction->GetOpenDropdown())
 					continue;
-				const auto dropdown = Repaired(item.Owner, item.Owner.GetComponent<UIDropdownComponent>(), &SanitizeUIDropdown, &ValidateUIDropdown, "UIDropdown");
+				const auto* component = item.Owner.TryGetComponent<UIDropdownComponent>();
+				if (!component || !component->Interactable || GetWidgetKind(item.Owner) != UIWidgetKind::Dropdown)
+					break;
+				const auto dropdown = Repaired(item.Owner, *component, &SanitizeUIDropdown, &ValidateUIDropdown, "UIDropdown");
 				const auto options = UIWidgets::DropdownOptions(dropdown.Options);
 				const UITextComponent text = item.Owner.HasComponent<UITextComponent>() ? Repaired(item.Owner, item.Owner.GetComponent<UITextComponent>(), &SanitizeUIText, &ValidateUIText, "UIText") : UITextComponent{};
 				for (size_t index = 0; index < options.size(); index++)

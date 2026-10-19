@@ -243,7 +243,6 @@ namespace Basalt {
 		{
 			UIRectComponent Initial;
 			UIBox Box;
-			glm::mat3 Transform{ 1.0f };
 			glm::mat3 ParentTransform{ 1.0f };
 			glm::vec2 Start;
 			glm::vec2 Handle;

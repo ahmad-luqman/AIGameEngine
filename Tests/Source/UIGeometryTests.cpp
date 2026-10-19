@@ -197,6 +197,7 @@ TEST_CASE("composed UI scales stop unsafe subtrees and retain finite renderer ou
 	{
 		Scene scene;
 		Entity parent;
+		std::vector<Entity> entities;
 		for (int i = 0; i < 24; ++i)
 		{
 			Entity entity = scene.CreateEntity("Scaled");
@@ -209,13 +210,18 @@ TEST_CASE("composed UI scales stop unsafe subtrees and retain finite renderer ou
 			rect.ClipChildren = true;
 			entity.AddComponent<UIImageComponent>();
 			parent = entity;
+			entities.push_back(entity);
 		}
 		std::vector<UILayoutProblem> problems;
 		const auto items = UILayout::Layout(scene, { 1920, 1080 }, &problems);
 		REQUIRE(problems.size() == 1);
 		CHECK_FALSE(problems[0].Message.empty());
-		CHECK_FALSE(items.empty());
-		CHECK(items.size() < 24);
+		const size_t expectedVisible = scale < 1.0f ? 4 : 2;
+		REQUIRE(items.size() == expectedVisible);
+		CHECK(problems[0].Owner == entities[expectedVisible]);
+		for (size_t i = 0; i < expectedVisible; ++i)
+			CHECK(items[i].Owner == entities[i]);
+		CHECK_FALSE(UILayout::GetRect(scene, entities.back(), { 1920, 1080 }));
 		for (const auto& item : items)
 			CHECK(IsUsableUITransform(item.Rect, item.Transform));
 		std::vector<UIDrawCommand> commands;
@@ -366,7 +372,7 @@ TEST_CASE("rotated nested ClipChildren intersect and disjoint clips reject hits"
 	}
 }
 
-TEST_CASE("draw command clips reject negative extents and frame reset diagnoses an unbalanced stack once")
+TEST_CASE("draw command clips reject negative extents and frame reset clears an unbalanced stack")
 {
 	UIDrawCommand command;
 	command.Clip = UIBox{ { 0, 0 }, { -1, 20 } };
@@ -376,16 +382,20 @@ TEST_CASE("draw command clips reject negative extents and frame reset diagnoses 
 	command.Clip->Size = { 0, 20 };
 	CHECK(SanitizeUIDrawCommand(command));
 	GameUI::BeginFrame();
-	const uint64_t before = Log::GetHistory().GetTotalCount();
 	for (int i = 0; i < 3; ++i)
 	{
 		REQUIRE(GameUI::PushClip({ { 0, 0 }, { 10, 10 } }));
 		GameUI::BeginFrame();
 		CHECK_FALSE(GameUI::GetClip());
 	}
-	uint64_t next = 0;
-	const auto messages = Log::GetHistory().GetMessagesSince(before, next);
-	CHECK(std::count_if(messages.begin(), messages.end(), [](const auto& message) { return message.Text.find("unbalanced UI.PushClip/PopClip") != std::string::npos; }) <= 1);
+	UIDrawCommand afterReset;
+	afterReset.Size = { 20, 20 };
+	REQUIRE(GameUI::Submit(afterReset) == GameUI::SubmitResult::Queued);
+	std::vector<UIDrawCommand> commands;
+	GameUI::AppendCommands(commands);
+	REQUIRE(commands.size() == 1);
+	CHECK_FALSE(commands[0].Clip);
+	GameUI::BeginFrame();
 }
 
 TEST_CASE("new UI component repairs report one layout warning per component")

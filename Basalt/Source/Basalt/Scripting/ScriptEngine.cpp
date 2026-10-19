@@ -500,7 +500,7 @@ namespace Basalt {
 			} guard{ engine, owner };
 			std::optional<sol::table> table;
 			{
-				ScriptOwnerScope scope(impl.Context, owner);
+				ScriptOwnerScope scope(impl.Context, owner, "class load");
 				table = LoadScriptClass(impl.Lua, path, outError);
 			}
 			if (!table)
@@ -556,7 +556,7 @@ namespace Basalt {
 				~PopModule() { Stack.pop_back(); }
 			} pop{ impl.ModuleStack };
 			sol::protected_function_result result = [&]() {
-				ScriptOwnerScope scope(impl.Context, module.empty() ? impl.Context.GetCurrentOwner() : ModuleOwner(engine, module));
+				ScriptOwnerScope scope(impl.Context, module.empty() ? impl.Context.GetCurrentOwner() : ModuleOwner(engine, module), "module load");
 				return require(name);
 			}();
 			if (!result.valid())
@@ -1070,6 +1070,7 @@ namespace Basalt {
 
 	ScriptReloadResult ScriptEngine::ReloadScripts(const std::vector<std::string>& changedFiles)
 	{
+		m_Impl->Context.ResetClipLeakWarnings();
 		ScriptReloadResult result;
 		// Lua runs here outside any callback: a sol2 error a script provokes (a replaced package table, an erroring
 		// metamethod) must not escape to the host.
@@ -1236,6 +1237,7 @@ namespace Basalt {
 
 	bool ScriptEngine::ExecuteString(const std::string& code, std::string& outResult)
 	{
+		ScriptOwnerScope scope(m_Impl->Context, UUID(0), "console");
 		sol::state& lua = m_Impl->Lua;
 		// Try as an expression first so "Scene.GetEntityCount()" returns its value.
 		sol::load_result chunk = lua.load("return " + code, "=console");

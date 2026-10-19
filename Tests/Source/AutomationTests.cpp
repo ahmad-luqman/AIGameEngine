@@ -573,6 +573,9 @@ TEST_SUITE("Automation")
 		CHECK(problems.find("not a focusable widget") != std::string::npos);
 		CHECK(problems.find("is disabled") != std::string::npos);
 		CHECK(problems.find("is hidden") != std::string::npos);
+		const auto collapsed = create("Collapsed", { { "UIRect", { { "Size", { 0, 40 } } } }, { "UIButton", json::object() } });
+		Run(registry, session, "component.set", { { "entity", source }, { "component", "UINavigation" }, { "data", { { "Right", collapsed } } } });
+		CHECK(Run(registry, session, "ui.layout")["problems"].dump().find("zero-area rect") != std::string::npos);
 		const auto clip = create("Clip", { { "UIRect", { { "ClipChildren", true }, { "Size", { 0, 0 } } } } });
 		const auto clipped = create("Clipped", { { "UIRect", json::object() }, { "UIButton", json::object() } }, clip);
 		Run(registry, session, "component.set", { { "entity", source }, { "component", "UINavigation" }, { "data", { { "Right", clipped } } } });
@@ -582,8 +585,29 @@ TEST_SUITE("Automation")
 			parent = create("Huge", { { "UIRect", { { "Scale", { 1000, 1000 } } } } }, parent);
 		const json layout = Run(registry, session, "ui.layout");
 		CHECK(layout["problems"].dump().find("composed UI transform") != std::string::npos);
-		CHECK(layout["items"][0].contains("transform"));
-		CHECK(layout["items"][0].contains("clip"));
+		CHECK(layout["items"][0]["transform"] == json({ { 1.0, 0.0, 0.0 }, { 0.0, 1.0, 0.0 }, { 0.0, 0.0, 1.0 } }));
+		CHECK(layout["items"][0]["clip"].is_null());
+	}
+
+	TEST_CASE("UI layout preserves transform and clip values and accepts revealable navigation targets")
+	{
+		CommandRegistry registry;
+		AutomationSession session;
+		Run(registry, session, "scene.new", { { "empty", true } });
+		const json viewport = Run(registry, session, "entity.create", { { "name", "Scroll viewport" }, { "components", { { "UIRect", { { "AnchorMin", { 0, 0 } }, { "AnchorMax", { 0, 0 } }, { "Pivot", { 0, 0 } }, { "Size", { 100, 100 } } } }, { "UIScrollView", { { "ContentSize", { 100, 500 } } } } } } })["id"];
+		const json target = Run(registry, session, "entity.create", { { "name", "Offscreen choice" }, { "parent", viewport }, { "components", { { "UIRect", { { "AnchorMin", { 0, 0 } }, { "AnchorMax", { 0, 0 } }, { "Pivot", { 0, 0 } }, { "Position", { 0, 300 } }, { "Size", { 80, 40 } } } }, { "UIButton", { { "OnClick", "" } } } } } })["id"];
+		const json source = Run(registry, session, "entity.create", { { "name", "Navigation source" }, { "components", { { "UIRect", { { "AnchorMin", { 0, 0 } }, { "AnchorMax", { 0, 0 } }, { "Pivot", { 0, 0 } }, { "Position", { 200, 100 } }, { "Size", { 100, 50 } }, { "Scale", { 2, 0.5 } } } }, { "UIButton", { { "OnClick", "" } } }, { "UINavigation", { { "Down", target } } } } } })["id"];
+		const json layout = Run(registry, session, "ui.layout");
+		CHECK(layout["problems"].empty());
+		const auto targetItem = std::find_if(layout["items"].begin(), layout["items"].end(), [&](const auto& item) { return item["id"] == target; });
+		REQUIRE(targetItem != layout["items"].end());
+		CHECK((*targetItem)["rect"] == json({ 0, 300, 80, 40 }));
+		CHECK((*targetItem)["clip"] == json({ 0, 0, 100, 100 }));
+		CHECK((*targetItem)["transform"] == json({ { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } }));
+		const auto sourceItem = std::find_if(layout["items"].begin(), layout["items"].end(), [&](const auto& item) { return item["id"] == source; });
+		REQUIRE(sourceItem != layout["items"].end());
+		CHECK((*sourceItem)["transform"] == json({ { 2, 0, 0 }, { 0, 0.5, 0 }, { -200, 50, 1 } }));
+		CHECK((*sourceItem)["clip"].is_null());
 	}
 
 	TEST_CASE("State hash ignores entity UUIDs but tracks every state change")

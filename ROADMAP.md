@@ -102,7 +102,6 @@ below extend character movement, in order of impact.
   zones as a component (blend the room settings by the listener's position instead of scripting it), and more
   effect types (high-pass, echo, distortion) on the same per-source chain.
 
-
 ---
 
 ## P2 — Editor and asset pipeline

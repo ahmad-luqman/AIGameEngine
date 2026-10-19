@@ -1147,7 +1147,7 @@ function UI.GetFocus() end
 ---@param widget Entity|string|nil
 function UI.SetFocus(widget) end
 
----Whether the pointer is over an interactable widget or blocking panel.
+---Whether the pointer is over an interactable control, scroll view or blocking panel.
 ---@return boolean
 function UI.IsPointerOverWidget() end
 

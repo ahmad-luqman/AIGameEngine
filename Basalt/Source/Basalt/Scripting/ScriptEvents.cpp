@@ -101,7 +101,7 @@ namespace Basalt {
 				Cancel(id);
 
 			called++;
-			ScriptOwnerScope scope(m_Context, owner);
+			ScriptOwnerScope scope(m_Context, owner, "event handler");
 			const sol::protected_function_result result = handler(args);
 			if (!result.valid())
 			{

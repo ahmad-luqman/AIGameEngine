@@ -865,18 +865,24 @@ input.
   to 128 labels separated by newlines (at most 16384 bytes). `Selected` is zero-based; an empty option
   string has no choices and keeps `Selected = 0`. Choose a row with the pointer, or use Up/Down and
   accept; Escape or clicking outside dismisses the popup. Highlighting a row leaves `Selected` unchanged
-  until the choice is accepted. A `UIText` supplies the font styling.
+  until the choice is accepted. Popup rows inherit ancestor clips, so allow enough viewport space
+  for pointer selection. A `UIText` supplies the font styling.
 - **`UIScrollView`** clips descendants to its viewport and places them in `ContentSize` (at least the
   viewport size). Children move opposite `Offset`, clamped to the content extent. Wheel input adjusts
   the offset by `ScrollSpeed` canvas units; Shift swaps the scroll axes. Nested views route the wheel
-  to the nearest enabled scroll ancestor under the pointer. `Interactable = false` disables user scrolling.
+  to the nearest enabled scroll ancestor under the pointer. Keyboard/gamepad navigation reveals offscreen
+  descendants through enabled scroll views. `Interactable = false` disables that view's user scrolling.
 - **`UIPanel`** with `BlockInput = true` consumes pointer input over its rect, including when it has no
   image. Children can still receive input. `UI.IsPointerOverWidget()` reports blocking panels too.
 - **`UINavigation`** sets explicit directional focus targets. A direction set to 0 uses the nearest
-  widget in that direction. A hidden, clipped, missing or disabled explicit target leaves focus in place.
+  widget in that direction. A missing, hidden, disabled, collapsed or non-control explicit target leaves focus in
+  place. Fully clipped targets are skipped unless enabled scroll ancestors can reveal them. Navigation
+  scrolls a focused descendant into view from the innermost viewport outward. The directions used to
+  edit a control take precedence: Left/Right for text carets and horizontal sliders, Up/Down for vertical
+  sliders.
 - **`UIFocusRing`** draws an inset border of `Thickness` canvas units around the focused control after
   keyboard/gamepad input. A pointer press hides the ring; typing in a text input shows it again.
-  Script-set focus inherits the current input modality.
+  Script-set focus inherits the current input modality; scrolling into view occurs on navigation input.
 
 Tints multiply one part of the widget by state (the button's `UIImage`, the slider's handle, the checkbox's
 box): `NormalTint`, `HighlightTint` (hovered by the mouse, or focused by keyboard/gamepad navigation),
@@ -921,25 +927,27 @@ when clicked. Keyboard and gamepads move the focus:
 | Tab / Shift+Tab | Next / previous widget in draw order, wrapping |
 | Enter, keypad Enter, Space, gamepad `A` | Activate the focused control on the press; dropdowns open or accept the highlighted choice |
 
-Hidden, disabled and destroyed widgets lose the focus, and so does everything when the scene changes
+Hidden, disabled, destroyed and clipped-out-of-reach controls lose focus; enabled scroll ancestors may
+retain an offscreen control that navigation can reveal. Everything loses focus when the scene changes
 (`Scene.Load`). The keys that act on a focused widget still reach `Input`: a game that reads the arrows, Space or
 the D-pad itself while widgets are visible turns navigation off (`UI.SetNavigationEnabled(false)`), or checks
 `UI.GetFocus() == nil`. In the editor, the game view takes the mouse while it is hovered and the keyboard and
 gamepads while it has focus.
 
 - `UI.GetFocus()` — the focused widget: its entity, an immediate-mode widget's id (string), or nil
-- `UI.SetFocus(widget)` — focus a widget entity (an error if it has no widget component) or an immediate-mode
-  widget id; nil clears the focus. An immediate-mode id may be set before its widget is first drawn (e.g. in
-  `OnCreate`, for a menu that opens with a button focused); a focus that is not a visible, interactable widget a
-  frame later is dropped with a warning. An error outside play.
+- `UI.SetFocus(widget)` — focus an entity with a button, slider, checkbox, text input or dropdown control
+  (an error for entities without one, including panels/scroll views alone), or an immediate-mode widget id;
+  nil clears the focus. An immediate-mode id may be set before its widget is first drawn (e.g. in
+  `OnCreate`, for a menu that opens with a button focused); a focus that is not an interactable, reachable
+  control a frame later is dropped with a warning. An error outside play.
 - `UI.SetNavigationEnabled(enabled)`, `UI.IsNavigationEnabled()` — whether the keyboard and gamepads move the
   focus and activate widgets (on by default; turning it off drops the focus, though `UI.SetFocus` can still set
   one). The game's setting: it survives `Scene.Load`, and the editor also pauses navigation while its game view
   does not have focus. Pointer-focused text inputs still accept typing and cursor keys while the host
   routes keyboard input, even when the game disables navigation. `UI.SetNavigationEnabled` is an error
   outside play; `UI.IsNavigationEnabled` is then false.
-- `UI.IsPointerOverWidget()` — whether the mouse is over an interactable widget or blocking panel (so a click is the UI's,
-  not the game's)
+- `UI.IsPointerOverWidget()` — whether the mouse is over an interactable control, scroll view or blocking
+  panel (so a click belongs to the UI)
 
 ### Immediate mode
 
@@ -1002,7 +1010,7 @@ Measurement is available in headless sessions.
 Clips reset each frame; popping an empty stack is an error. At most 256 clips may nest.
 Each protected script callback (including timers, events and coroutine resumes) restores its caller's
 clip stack on return, error or yield. Balance pushes and pops within that callback; an imbalance
-logs a warning naming the script, once per instance.
+logs a warning naming the script, once per instance and callback until hot reload.
 
 A UIRect's `ClipChildren` clips descendants to its transformed axis-aligned bounds. Nested clips
 intersect. `Rotation` is clockwise about the pivot, in degrees in component JSON and Lua (radians in

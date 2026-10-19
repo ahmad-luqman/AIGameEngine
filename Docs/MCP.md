@@ -368,8 +368,8 @@ surrogates, C0 controls (U+0000–001F), DEL (U+007F), and a full text-input buf
 `input.mouse {"scroll":[0,-1]}` injects wheel input for scroll views.
 Both input kinds are recorded and replayed alongside keys, mouse buttons and gamepads.
 
-In the Scene viewport, enable **UI Bounds** and select an entity with `UIRect` to use its handles.
+In Edit mode in the Scene viewport, enable **UI Bounds** and select an entity with `UIRect` to use its handles.
 With W (Translate), drag its body to move or one of eight handles to resize. E rotates around its
-pivot; R scales uniformly. Ctrl/Cmd uses the viewport's snap settings. Each gesture is one undo
+pivot; R scales uniformly. The Snap toggle or Ctrl/Cmd enables the viewport's snap settings. Each gesture is one undo
 entry, and Escape cancels it. The handles follow ancestor rotation/scale and edit through
 `component.set`, using the same component validation and history as automation.

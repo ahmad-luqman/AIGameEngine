@@ -1724,7 +1724,17 @@ TEST_CASE("Vertical sliders, explicit navigation and focus rings share widget ge
 	CHECK(interaction->GetFocus() == UIWidgetID::ForEntity(third.GetUUID()));
 	std::vector<UIDrawCommand> commands;
 	UILayout::BuildCommands(scene, GameUI::GetCanvasSize(), commands);
-	CHECK(commands.size() == 7);
+	REQUIRE(commands.size() == 7);
+	CHECK(commands[0].Position == glm::vec2(20, 20));
+	CHECK(commands[0].Size == glm::vec2(40, 200));
+	CHECK(commands[2].Size == glm::vec2(40, 20));
+	CHECK(commands[3].Position == glm::vec2(600, 20));
+	CHECK(commands[3].Size == glm::vec2(100, 2));
+	CHECK(commands[4].Position == glm::vec2(600, 58));
+	CHECK(commands[5].Size == glm::vec2(2, 40));
+	CHECK(commands[6].Position == glm::vec2(698, 20));
+	CHECK(commands[6].Size == glm::vec2(2, 40));
+	CHECK(commands[3].Color == third.GetComponent<UIFocusRingComponent>().Color);
 	Input::SetKeyState(KeyCode::Right, false);
 	Frame(scene);
 	first.GetComponent<UINavigationComponent>().Right = second.GetUUID();
@@ -1917,7 +1927,7 @@ TEST_CASE("Text editing preserves authored invalid values until user changes the
 	REQUIRE(drawnText != commands.end());
 	CHECK(drawnText->Text == "|\xc3\xa9");
 	Frame(scene);
-	CHECK(interaction->GetTextCursor() == 0);
+	CHECK(interaction->GetTextCursor(IDOf(text)) == 0);
 	Input::AddTextCodepoint('x');
 	Frame(scene);
 	CHECK(component.Text == "x\xc3\xa9");
@@ -2161,5 +2171,211 @@ TEST_CASE("Wheel scrolling clamps both axes and routes to the nearest enabled an
 	Frame(scene);
 	CHECK(inner.GetComponent<UIScrollViewComponent>().Offset.y == 300);
 	CHECK(outer.GetComponent<UIScrollViewComponent>().Offset.y == 64);
+	scene.OnRuntimeStop();
+}
+
+TEST_CASE("Dropdown popup drawing tolerates same-frame component removal and replacement")
+{
+	WidgetInputScope input;
+	Scene scene;
+	Entity dropdown = AddWidget<UIDropdownComponent>(scene, "Dropdown", { 20, 20 }, { 160, 40 });
+	dropdown.GetComponent<UIDropdownComponent>().Options = "One\nTwo";
+	dropdown.GetComponent<UIDropdownComponent>().OnValueChanged.clear();
+	scene.OnRuntimeStart();
+	Click(scene, { 40, 40 });
+	CHECK(scene.GetUIInteraction()->GetOpenDropdown() == dropdown.GetUUID());
+	size_t expectedCommands = 0;
+	SUBCASE("Removed component")
+	{
+		dropdown.RemoveComponent<UIDropdownComponent>();
+	}
+	SUBCASE("Disabled component")
+	{
+		dropdown.GetComponent<UIDropdownComponent>().Interactable = false;
+		expectedCommands = 2;
+	}
+	SUBCASE("Replaced widget priority")
+	{
+		dropdown.AddComponent<UIButtonComponent>();
+	}
+	std::vector<UIDrawCommand> commands;
+	UILayout::BuildCommands(scene, GameUI::GetCanvasSize(), commands);
+	CHECK(commands.size() == expectedCommands);
+	Frame(scene);
+	CHECK(scene.GetUIInteraction()->GetOpenDropdown() == 0);
+	scene.OnRuntimeStop();
+}
+
+TEST_CASE("Switching text focus after update uses the new field's end cursor for drawing")
+{
+	WidgetInputScope input;
+	Scene scene;
+	Entity first = AddWidget<UITextInputComponent>(scene, "First", { 20, 20 }, { 160, 40 });
+	Entity second = AddWidget<UITextInputComponent>(scene, "Second", { 20, 100 }, { 160, 40 });
+	first.GetComponent<UITextInputComponent>().Text = "a";
+	second.GetComponent<UITextInputComponent>().Text = "long";
+	scene.OnRuntimeStart();
+	auto* interaction = scene.GetUIInteraction();
+	interaction->SetFocus(IDOf(first));
+	Frame(scene);
+	interaction->SetFocus(IDOf(second));
+	std::vector<UIDrawCommand> commands;
+	UILayout::BuildCommands(scene, GameUI::GetCanvasSize(), commands);
+	CHECK(std::ranges::any_of(commands, [](const UIDrawCommand& c) { return c.Kind == UIDrawKind::Text && c.Text == "long|"; }));
+	CHECK_FALSE(std::ranges::any_of(commands, [](const UIDrawCommand& c) { return c.Kind == UIDrawKind::Text && c.Text == "l|ong"; }));
+	scene.OnRuntimeStop();
+}
+
+TEST_CASE("A stale open dropdown does not capture another dropdown's directional navigation")
+{
+	WidgetInputScope input;
+	Scene scene;
+	Entity first = AddWidget<UIDropdownComponent>(scene, "First", { 20, 20 }, { 160, 40 });
+	Entity second = AddWidget<UIDropdownComponent>(scene, "Second", { 20, 100 }, { 160, 40 });
+	Entity next = AddWidget<UIButtonComponent>(scene, "Next", { 20, 180 }, { 160, 40 });
+	scene.OnRuntimeStart();
+	Click(scene, { 40, 40 });
+	CHECK(scene.GetUIInteraction()->GetOpenDropdown() == first.GetUUID());
+	scene.GetUIInteraction()->SetFocus(IDOf(second));
+	Tap(scene, KeyCode::Down);
+	CHECK(scene.GetUIInteraction()->GetFocus() == IDOf(next));
+	CHECK(scene.GetUIInteraction()->GetOpenDropdown() == 0);
+	scene.OnRuntimeStop();
+}
+
+TEST_CASE("Scene loads discard pending immediate widget activations")
+{
+	WidgetInputScope input;
+	Scene scene;
+	UIInteraction interaction;
+	const UIImmediateWidget widget{ .ID = "Shared", .Offset = { 20, 20 }, .Size = { 160, 40 } };
+	const auto update = [&]() {
+		UIImmediateInput result;
+		REQUIRE(interaction.SubmitImmediate(widget, result) == UIInteraction::SubmitResult::Accepted);
+		interaction.Update(scene, Step);
+		Input::EndFrame();
+	};
+	update();
+	Input::SetMousePosition({ 40, 40 });
+	Input::SetMouseButtonState(MouseCode::Left, true);
+	update();
+	Input::SetMouseButtonState(MouseCode::Left, false);
+	update();
+	UIImmediateInput activated;
+	REQUIRE(interaction.SubmitImmediate(widget, activated) == UIInteraction::SubmitResult::Accepted);
+	CHECK(activated.Activated);
+	interaction.OnSceneLoaded();
+	UIImmediateInput afterLoad;
+	REQUIRE(interaction.SubmitImmediate(widget, afterLoad) == UIInteraction::SubmitResult::Accepted);
+	CHECK_FALSE(afterLoad.Activated);
+}
+
+TEST_CASE("Blocking panels prevent underlying component callbacks until input blocking is disabled")
+{
+	WidgetInputScope input;
+	TempProject project("UIPanelCallbacks");
+	Scene scene;
+	Entity button = AddWidget<UIButtonComponent>(scene, "Button", { 20, 20 }, { 160, 40 });
+	button.AddComponent<ScriptComponent>().Script = project.WriteFile("Assets/Scripts/Button.lua", RecorderScript);
+	Entity panel = AddWidget<UIPanelComponent>(scene, "Overlay", { 20, 20 }, { 160, 40 });
+	scene.OnRuntimeStart();
+	Click(scene, { 40, 40 });
+	CHECK(LogOf(scene, button).empty());
+	CHECK(scene.GetUIInteraction()->IsPointerOverWidget());
+	panel.GetComponent<UIPanelComponent>().BlockInput = false;
+	Click(scene, { 40, 40 });
+	CHECK(LogOf(scene, button) == std::vector<std::string>{ "Button:OnClick" });
+	scene.OnRuntimeStop();
+}
+
+TEST_CASE("Dropdown rows draw over component buttons and exclusively receive their clicks")
+{
+	WidgetInputScope input;
+	TempProject project("UIDropdownComponentOverlap");
+	Scene scene;
+	Entity recorder = scene.CreateEntity("Recorder");
+	recorder.AddComponent<ScriptComponent>().Script = project.WriteFile("Assets/Scripts/Recorder.lua", RecorderScript);
+	Entity dropdown = AddWidget<UIDropdownComponent>(scene, "Dropdown", { 20, 20 }, { 160, 40 });
+	dropdown.GetComponent<UIDropdownComponent>().Options = "First\nSecond";
+	dropdown.GetComponent<UIDropdownComponent>().Target = recorder.GetUUID();
+	Entity button = AddWidget<UIButtonComponent>(scene, "Button", { 20, 100 }, { 160, 40 });
+	button.GetComponent<UIButtonComponent>().Target = recorder.GetUUID();
+	button.AddComponent<UITextComponent>().Text = "UnderlyingButton";
+	scene.OnRuntimeStart();
+	Click(scene, { 40, 40 });
+	std::vector<UIDrawCommand> commands;
+	UILayout::BuildCommands(scene, GameUI::GetCanvasSize(), commands);
+	const auto buttonDraw = std::ranges::find_if(commands, [](const UIDrawCommand& c) { return c.Kind == UIDrawKind::Text && c.Text == "UnderlyingButton"; });
+	const auto popupDraw = std::ranges::find_if(commands, [](const UIDrawCommand& c) { return c.Kind == UIDrawKind::Text && c.Text == "Second"; });
+	REQUIRE(buttonDraw != commands.end());
+	REQUIRE(popupDraw != commands.end());
+	CHECK(buttonDraw < popupDraw);
+	Click(scene, { 40, 120 });
+	CHECK(dropdown.GetComponent<UIDropdownComponent>().Selected == 1);
+	CHECK(LogOf(scene, recorder) == std::vector<std::string>{ "Dropdown:OnValueChanged=1.0" });
+	scene.OnRuntimeStop();
+}
+
+TEST_CASE("Invalid dropdown option text uses only the repaired choice for drawing and input")
+{
+	WidgetInputScope input;
+	TempProject project("UIDropdownInvalidChoices");
+	Scene scene;
+	Entity dropdown = AddWidget<UIDropdownComponent>(scene, "Dropdown", { 20, 20 }, { 160, 40 });
+	dropdown.AddComponent<ScriptComponent>().Script = project.WriteFile("Assets/Scripts/Recorder.lua", RecorderScript);
+	auto& component = dropdown.GetComponent<UIDropdownComponent>();
+	component.Options = "\xc0\xaf\nGhost";
+	CHECK(SanitizeUIDropdown(component).Options == "Option");
+	scene.OnRuntimeStart();
+	Click(scene, { 40, 40 });
+	auto* interaction = scene.GetUIInteraction();
+	CHECK(interaction->GetOpenDropdown() == dropdown.GetUUID());
+	Tap(scene, KeyCode::Down);
+	CHECK(interaction->GetDropdownHighlight() == 0);
+	std::vector<UIDrawCommand> commands;
+	UILayout::BuildCommands(scene, GameUI::GetCanvasSize(), commands);
+	CHECK(std::ranges::count_if(commands, [](const UIDrawCommand& c) { return c.Kind == UIDrawKind::Text && c.Text == "Option"; }) == 1);
+	CHECK_FALSE(std::ranges::any_of(commands, [](const UIDrawCommand& c) { return c.Kind == UIDrawKind::Text && c.Text == "Ghost"; }));
+	Click(scene, { 40, 120 });
+	CHECK(interaction->GetOpenDropdown() == 0);
+	CHECK(component.Selected == 0);
+	CHECK(LogOf(scene, dropdown).empty());
+	Click(scene, { 40, 40 });
+	Click(scene, { 40, 80 });
+	CHECK(component.Selected == 0);
+	CHECK(LogOf(scene, dropdown).empty());
+	CHECK(component.Options == "\xc0\xaf\nGhost");
+	scene.OnRuntimeStop();
+}
+
+TEST_CASE("Immediate buttons ignore clicks in their clipped-off width")
+{
+	WidgetInputScope input;
+	TempProject project("UIImmediateClippedHit");
+	Scene scene;
+	const std::string script = project.WriteFile("Assets/Scripts/Menu.lua", R"(
+		local Menu = {}
+		function Menu:OnCreate() self.Clicks = 0 end
+		function Menu:OnUpdate()
+			UI.PushClip(0, 0, 100, 100)
+			if UI.Button("Clipped", 0, 0, 200, 100) then self.Clicks = self.Clicks + 1 end
+			UI.PopClip()
+		end
+		return Menu
+	)");
+	Entity menu = scene.CreateEntity("Menu");
+	menu.AddComponent<ScriptComponent>().Script = script;
+	scene.OnRuntimeStart();
+	Frame(scene);
+	std::vector<UIDrawCommand> commands;
+	GameUI::AppendCommands(commands);
+	REQUIRE_FALSE(commands.empty());
+	REQUIRE(commands.front().Clip.has_value());
+	CHECK(commands.front().Clip->Size == glm::vec2(100, 100));
+	Click(scene, { 150, 50 });
+	CHECK(Field(scene, menu, "Clicks") == 0);
+	CHECK_FALSE(scene.GetUIInteraction()->IsPointerOverWidget());
+	Click(scene, { 50, 50 });
+	CHECK(Field(scene, menu, "Clicks") == 1);
 	scene.OnRuntimeStop();
 }
