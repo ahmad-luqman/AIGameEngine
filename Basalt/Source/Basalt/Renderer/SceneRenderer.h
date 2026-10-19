@@ -175,6 +175,7 @@ namespace Basalt {
 		// pass listed at 0 ms) until results arrive, and always without GPU timers.
 		const GpuTimings& GetGpuTimings() const { return m_Profiler.GetTimings(); }
 		bool HasGpuTimers() const { return m_Profiler.IsEnabled(); }
+		const GpuProfiler& GetGpuProfiler() const { return m_Profiler; }
 		RenderResources& GetResources() { return *m_Resources; }
 
 	private:

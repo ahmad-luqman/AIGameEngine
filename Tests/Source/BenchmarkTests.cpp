@@ -21,16 +21,37 @@ TEST_CASE("The diagnostics benchmark keeps its fixed workload throughout warmup 
 	CHECK(scene.GetEntityCount() == BasaltBenchmark::Entities);
 	CHECK(scene.GetPhysicsWorld()->GetBodyCount() == BasaltBenchmark::Bodies);
 	CHECK(BasaltBenchmark::CountWorkload(scene).IsComplete());
-	uint32_t playing = 0;
-	for (auto entity : scene.GetAllEntitiesOrdered())
-		if (entity.HasComponent<AnimatorComponent>() && scene.GetAnimationSystem()->IsPlaying(entity))
-			++playing;
-	CHECK(playing == BasaltBenchmark::Animators);
+	CHECK(BasaltBenchmark::CountPlayingAnimators(scene) == BasaltBenchmark::Animators);
+
 	// Retaining entities while dropping a component must fail the same guard the timing executable uses.
-	auto light = scene.GetEntityByUUID(UUID(BasaltBenchmark::Meshes + BasaltBenchmark::Animators + 1));
+	auto light = scene.GetEntityByUUID(UUID(BasaltBenchmark::FirstLightId));
 	REQUIRE(light.HasComponent<PointLightComponent>());
 	light.RemoveComponent<PointLightComponent>();
 	CHECK_FALSE(BasaltBenchmark::CountWorkload(scene).IsComplete());
 	CHECK(BasaltBenchmark::CountWorkload(scene).Lights == BasaltBenchmark::Lights - 1);
 	scene.OnRuntimeStop();
+}
+
+TEST_CASE("The benchmark rejects a reduced rendered workload even when mannequins mask missing cubes")
+{
+	using namespace BasaltBenchmark;
+	SceneRendererStatistics full;
+	full.DrawCalls = Meshes + Animators;
+	full.Triangles = static_cast<uint64_t>(Meshes) * CubeTriangles + static_cast<uint64_t>(Animators) * MannequinTriangles;
+	full.SkinMatrices = Animators * MannequinJoints;
+	full.Lights = Lights + 1;
+	CHECK(ValidateRenderedWorkload(full).empty());
+	auto missingCubes = full;
+	missingCubes.DrawCalls = Animators;
+	missingCubes.Triangles = static_cast<uint64_t>(Animators) * MannequinTriangles;
+	CHECK_FALSE(ValidateRenderedWorkload(missingCubes).empty());
+	for (auto member : { &SceneRendererStatistics::DrawCalls, &SceneRendererStatistics::SkinMatrices, &SceneRendererStatistics::Lights })
+	{
+		auto reduced = full;
+		--(reduced.*member);
+		CHECK_FALSE(ValidateRenderedWorkload(reduced).empty());
+	}
+	auto reduced = full;
+	--reduced.Triangles;
+	CHECK_FALSE(ValidateRenderedWorkload(reduced).empty());
 }

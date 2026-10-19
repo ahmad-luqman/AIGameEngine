@@ -93,7 +93,8 @@ namespace Basalt {
 		const ApplicationSpecification& GetSpecification() const { return m_Specification; }
 		uint64_t GetFrameCount() const { return m_FrameCount; }
 		float GetTime() const { return m_Time; }
-		float GetFrameMilliseconds() const { return m_FrameTiming.GetMilliseconds(); }
+		// Mean wall latency of the last 60 completed frames; absent until the second loop iteration.
+		std::optional<float> GetFrameMilliseconds() const { return m_FrameTiming.GetMilliseconds(); }
 
 		static Application& Get();
 		static bool HasInstance();

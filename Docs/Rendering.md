@@ -379,15 +379,19 @@ unavailable, the overlay says so rather than showing old counters.
 
 Scene GPU passes and the ImGui and runtime blit passes use separate `GpuProfiler` instances: timer
 readback never waits, results arrive at least four frames late, and each profiler averages its last
-30 results. Missing timers and pending results are explicit. **Game + host GPU** adds those independently
+30 results. Missing timers, their disable reason, pending results and stalled averages are explicit. A stalled
+profiler shows its consecutive dropped-frame count instead of presenting its old average as current. **Game + host GPU** adds those independently
 averaged times; in the editor it includes all editor ImGui, but excludes the separate Scene view and
 thumbnail/capture work. It is not a whole-editor GPU frame measurement. Dynamic resolution still uses
 only scene timing. ImGui timing includes its atlas/buffer uploads; separate capture draw lists are not
 samples. Runtime `--frames` logs scene, blit and ImGui timing even when the overlay is off.
 
 `render.stats.triangles` returns the color-pass count. `editor.game_view` also returns `stats`,
-`statsVisible`, `frameMs`, `physicsBodies`, `luaBytes`, `renderStats` (the live Game renderer, or null),
-and `imguiGpu` (same GPU timing JSON shape as `render.stats.gpu`, without its `timers` flag).
+`statsVisible`, `frameMs` (null before any complete host frame), `physicsBodies` (null without a physics
+world), `luaBytes`, `renderStats` (the live Game renderer, or null), and `imguiGpu` (null without an
+initialized profiler). GPU diagnostics include `timers`, `consecutiveDrops`, `stalled` and
+`disabledReason`, alongside the timing samples. `PlayStatistics` collects one consistent snapshot for
+formatting and JSON; its pure formatter and unavailable/zero distinctions have headless tests.
 
 The fixed Release workload and pre-throughput baseline are described in
 [Tests/Benchmarks/README.md](../Tests/Benchmarks/README.md). Release CI runs its mean and p95 frame-time

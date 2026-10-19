@@ -3,6 +3,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <optional>
 
 namespace Basalt {
 
@@ -21,12 +22,14 @@ namespace Basalt {
 			if (m_Count < Window)
 				++m_Count;
 		}
-		float GetMilliseconds() const
+		std::optional<float> GetMilliseconds() const
 		{
 			double sum = 0;
 			for (size_t i = 0; i < m_Count; ++i)
 				sum += m_Samples[i];
-			return m_Count ? static_cast<float>(sum / static_cast<double>(m_Count)) : 0.0f;
+			if (!m_Count)
+				return std::nullopt;
+			return static_cast<float>(sum / static_cast<double>(m_Count));
 		}
 
 	private:

@@ -142,7 +142,7 @@ scripts/test.sh             # build + ctest (unit tests, format check, ...)
   checks in `.clang-tidy`), a coverage report (`scripts/coverage.sh`) and libFuzzer targets for every
   untrusted input (`scripts/fuzz.sh`, `Tests/Fuzz/`; nightly long runs). Parse untrusted JSON with
   `ParseJson` and read floats with `JsonToFloat` (`Basalt/Core/JsonUtils.h`). Tests carry ctest labels
-  (`unit`, `integration`, `gpu`, `format`) for `ctest -L/-LE`. Details: the basalt-build-test skill.
+  (`unit`, `integration`, `gpu`, `format`, `benchmark`) for `ctest -L/-LE`. Details: the basalt-build-test skill.
 - **macOS + Homebrew:** Homebrew's validation layer manifest names its library without a path, so non-Dist
   builds point `VK_ADD_LAYER_PATH` at a copy with the absolute path (`Renderer/ValidationLayerManifest`; prefixes
   `$HOMEBREW_PREFIX`, `/opt/homebrew`, `/usr/local`); no

@@ -13,15 +13,15 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     project = Path(__file__).resolve().parents[1] / "Data" / "FeatureTest"
     images = []
-    for stats in (False, True):
-        screenshot = output / ("stats.png" if stats else "plain.png")
+    for index, stats in enumerate((False, False, True)):
+        screenshot = output / ("stats.png" if stats else f"plain-{index}.png")
         command = [runtime, "--project", str(project), "--offscreen", "--frames", "60",
                    "--width", "640", "--height", "480", "--require-validation", "--fail-on-script-errors",
                    "--screenshot", str(screenshot)]
         if stats:
             command.append("--stats")
         result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=90)
-        (output / ("stats.log" if stats else "plain.log")).write_text(result.stdout)
+        (output / ("stats.log" if stats else f"plain-{index}.log")).write_text(result.stdout)
         if result.returncode:
             raise RuntimeError(result.stdout)
         for name in ("scene", "blit", "ImGui"):
@@ -31,11 +31,14 @@ def main():
         if (width, height) != (640, 480):
             raise RuntimeError(f"incorrect screenshot size {width}x{height}")
         images.append(pixels)
-    # The frame-time text is in the first line; this checks that --stats actually draws, beyond logging timers.
-    changed = sum(images[0][y * 640 + x] != images[1][y * 640 + x]
-                  for y in range(14, 32) for x in range(14, 180))
-    if changed < 100:
-        raise RuntimeError("--stats did not draw the statistics overlay")
+    region = [y * 640 + x for y in range(14, 32) for x in range(14, 180)]
+    if any(images[0][i] != images[1][i] for i in region):
+        raise RuntimeError("two plain fixed-step runs differ in the overlay test region")
+    changed = sum(images[1][i] != images[2][i] for i in region)
+    bright = sum(min(images[2][i][:3]) > 160 for i in region)
+    background = images[2][10 * 640 + 10]
+    if changed < 100 or bright < 30 or max(background[:3]) > 80:
+        raise RuntimeError("--stats did not draw dark background and bright frame-time text")
 
 
 if __name__ == "__main__":

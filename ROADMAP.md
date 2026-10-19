@@ -165,8 +165,6 @@ with a smoke test have shipped. Follow-ups:
 
 ---
 
----
-
 ## Platform notes
 
 - **Wayland.** GLFW 3.4 supports Wayland; test the editor under a Wayland session on Ubuntu 24.04 and

@@ -20,10 +20,10 @@ namespace Basalt {
 	class ImGuiRenderer
 	{
 	public:
-		bool Init(nvrhi::IDevice* device, bool gpuTimers = false);
+		bool Init(nvrhi::IDevice* device, bool gpuTimers);
 		void Shutdown();
 
-		void Render(ImDrawData* drawData, nvrhi::IFramebuffer* framebuffer, bool profile = true);
+		void Render(ImDrawData* drawData, nvrhi::IFramebuffer* framebuffer, bool profile);
 		const GpuProfiler* GetProfiler() const { return m_Profiler.get(); }
 
 	private:

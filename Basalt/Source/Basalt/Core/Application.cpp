@@ -160,6 +160,7 @@ namespace Basalt {
 			BS_PROFILE_SCOPE("Frame");
 			float deltaTime = frameTimer.Elapsed();
 			frameTimer.Reset();
+			// The initial timer interval precedes any work; it is not a completed host frame.
 			if (m_FrameCount > 0)
 				m_FrameTiming.Add(deltaTime * 1000.0f);
 			if (m_Specification.FixedTimestep > 0.0f)

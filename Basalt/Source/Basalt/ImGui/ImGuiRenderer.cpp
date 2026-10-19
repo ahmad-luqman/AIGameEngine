@@ -268,11 +268,8 @@ namespace Basalt {
 		m_FrameIndex++;
 
 		m_CommandList->open();
-		if (profile)
-		{
-			m_Profiler->BeginFrame(m_CommandList);
-			m_Profiler->BeginPass(m_CommandList, 0);
-		}
+		m_Profiler->BeginFrame(m_CommandList, profile);
+		m_Profiler->BeginPass(m_CommandList, 0);
 
 		if (drawData->Textures)
 		{
@@ -368,11 +365,8 @@ namespace Basalt {
 			}
 		}
 
-		if (profile)
-		{
-			m_Profiler->EndPass(m_CommandList, 0);
-			m_Profiler->EndFrame(m_CommandList, 0);
-		}
+		m_Profiler->EndPass(m_CommandList, 0);
+		m_Profiler->EndFrame(m_CommandList, 0);
 		m_CommandList->close();
 		m_Device->executeCommandList(m_CommandList);
 
