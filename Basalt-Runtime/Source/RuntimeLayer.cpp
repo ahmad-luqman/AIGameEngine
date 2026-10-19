@@ -7,6 +7,7 @@
 #include "Basalt/ImGui/StatisticsOverlay.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/GraphicsDevice.h"
+#include "Basalt/Renderer/PlayStatistics.h"
 #include "Basalt/Renderer/RenderUtils.h"
 #include "Basalt/Scene/SceneSerializer.h"
 #include "Basalt/Scripting/ScriptEngine.h"
@@ -133,13 +134,16 @@ namespace Basalt {
 		const ImGuiIO& io = ImGui::GetIO();
 		m_UIFrame.Draw(ImGui::GetForegroundDrawList(), { 0.0f, 0.0f }, { io.DisplaySize.x, io.DisplaySize.y });
 		if (m_Options.ShowStats && m_Scene)
-			DrawStatisticsOverlay(ImGui::GetForegroundDrawList(), { 0, 0 }, { io.DisplaySize.x, io.DisplaySize.y }, *m_Scene,
-								  m_Scene->GetPrimaryCameraEntity() ? m_Renderer.get() : nullptr,
-								  Application::Get().GetImGuiLayer()->GetProfiler(), m_BlitProfiler.get());
+			DrawStatisticsOverlay(ImGui::GetForegroundDrawList(), { 0, 0 }, { io.DisplaySize.x, io.DisplaySize.y },
+								  CollectPlayStatistics(*m_Scene, { .FrameMilliseconds = Application::Get().GetFrameMilliseconds(),
+																	.Renderer = m_Rendered ? m_Renderer.get() : nullptr,
+																	.ImGui = Application::Get().GetImGuiLayer()->GetProfiler(),
+																	.Blit = m_Rendered ? m_BlitProfiler.get() : nullptr }));
 	}
 
 	void RuntimeLayer::OnRender()
 	{
+		m_Rendered = false;
 		Application& application = Application::Get();
 		GraphicsDevice* device = application.GetGraphicsDevice();
 		if (!m_Scene || !m_Renderer || !device)
@@ -166,6 +170,7 @@ namespace Basalt {
 				application.Close();
 				return;
 			}
+			m_Rendered = true;
 		}
 		else if (!m_WarnedNoCamera)
 		{
@@ -179,15 +184,17 @@ namespace Basalt {
 
 		m_CommandList->open();
 		m_UIFrame.Prepare([&](const std::string& path) { return m_Renderer->GetUITexture(path, m_CommandList); });
-		m_BlitProfiler->BeginFrame(m_CommandList);
 		if (camera)
 		{
-			const GpuPassScope pass(*m_BlitProfiler, m_CommandList, 0);
-			m_Renderer->Blit(m_CommandList, device->GetCurrentFramebuffer());
+			m_BlitProfiler->BeginFrame(m_CommandList);
+			{
+				const GpuPassScope pass(*m_BlitProfiler, m_CommandList, 0);
+				m_Renderer->Blit(m_CommandList, device->GetCurrentFramebuffer());
+			}
+			m_BlitProfiler->EndFrame(m_CommandList, 0);
 		}
 		else
 			nvrhi::utils::ClearColorAttachment(m_CommandList, device->GetCurrentFramebuffer(), 0, nvrhi::Color(0.0f, 0.0f, 0.0f, 1.0f));
-		m_BlitProfiler->EndFrame(m_CommandList, static_cast<uint64_t>(width) * height);
 		m_CommandList->close();
 		device->GetDevice()->executeCommandList(m_CommandList);
 
@@ -255,9 +262,21 @@ namespace Basalt {
 
 	void RuntimeLayer::CheckRendererResults(const std::function<void(int)>& fail)
 	{
-		BS_CORE_INFO("Runtime: blit GPU time {}", FormatGpuTimings(m_BlitProfiler->GetTimings(), m_BlitProfiler->IsEnabled()));
-		if (const auto* imgui = Application::Get().GetImGuiLayer(); imgui && imgui->GetProfiler())
-			BS_CORE_INFO("Runtime: ImGui GPU time {}", FormatGpuTimings(imgui->GetProfiler()->GetTimings(), imgui->GetProfiler()->IsEnabled()));
+		auto logHostTiming = [&](const char* name, const GpuProfiler* profiler) {
+			if (!profiler)
+				return;
+			const auto& timings = profiler->GetTimings();
+			const auto text = profiler->IsStalled() || !profiler->IsEnabled()
+								  ? FormatGpuStatistics(CollectGpuStatistics(profiler))
+								  : FormatGpuTimings(timings, true);
+			if (profiler->IsStalled() || (profiler->IsEnabled() && !timings.SampleCount && m_Options.MaxFrames > GpuProfiler::Latency))
+				BS_CORE_WARN("Runtime: {} GPU time {}", name, text);
+			else
+				BS_CORE_INFO("Runtime: {} GPU time {}", name, text);
+		};
+		logHostTiming("blit", m_BlitProfiler.get());
+		if (const auto* imgui = Application::Get().GetImGuiLayer())
+			logHostTiming("ImGui", imgui->GetProfiler());
 		const auto& stats = m_Renderer->GetStatistics();
 		BS_CORE_INFO("Runtime: render stats localShadowMaps={} localShadowsSkipped={} lightsSkipped={} localShadowAtlasSize={} fsr1={} vsync={}",
 					 stats.LocalShadowMaps, stats.LocalShadowsSkipped, stats.LightsSkipped, stats.LocalShadowAtlasSize, stats.FSR1Active ? 1 : 0, Application::Get().GetGraphicsDevice()->IsVSync() ? 1 : 0);

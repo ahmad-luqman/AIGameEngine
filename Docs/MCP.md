@@ -243,6 +243,15 @@ costs one view.
   renderer at the session's render scale (no dynamic resolution) with exposure reset like `render.screenshot`,
   so the live view's exposure and resolution are untouched. A `resolution` in the same call applies first,
   even if the capture then fails.
+  `stats: true` enables the passive Game-view overlay during Play only; the choice lasts for the editor
+  session and does not save or dirty the project. The result includes `stats` (the choice), `statsVisible`,
+  `frameMs` (mean wall latency of the last 60 completed host frames; null before any complete frame),
+  `physicsBodies` (live system count, null without a physics world), `luaBytes` (process Lua heap),
+  `renderStats` (live Game renderer snapshot, null when this frame did not render), and `imguiGpu`
+  (null without an initialized ImGui profiler). GPU timing objects include `timers`, `stalled`,
+  `consecutiveDrops` and `disabledReason` in addition to `frames`, `frameMs`, `droppedFrames` and `passes`.
+  Disabled timers, pending samples and stalled results are distinct. Game-image captures exclude the
+  diagnostics; `editor.window_screenshot` includes them.
 - `editor.panel {"name":"Project Settings","open":true,"focus":true}` opens, closes or focuses an editor
   window (`Viewport`, `Game`, `Hierarchy`, `Inspector`, `Scene`, `Content Browser`, `Console`,
   `Project Settings`; only Project Settings can be closed) and returns `{name, open}`.

@@ -1,21 +1,127 @@
 #include "BenchmarkScene.h"
 
-#include "Basalt/Animation/AnimationSystem.h"
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Core/JobSystem.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Core/Timer.h"
-#include "Basalt/Physics/PhysicsWorld.h"
 #include "Basalt/Renderer/GraphicsDevice.h"
 #include "Basalt/Renderer/RenderUtils.h"
 #include "Basalt/Renderer/VulkanLoader.h"
 
 #include <nlohmann/json.hpp>
 
+#include <cmath>
 #include <fstream>
 #include <string_view>
 
 using namespace Basalt;
+
+namespace {
+	// Unwind runtime state and cached assets before releasing the device, including on a failed run.
+	struct BenchmarkSession
+	{
+		Scope<GraphicsDevice> Graphics;
+		Scope<SceneRenderer> Renderer;
+		nvrhi::CommandListHandle CommandList;
+		Scene World;
+
+		~BenchmarkSession()
+		{
+			World.OnRuntimeStop();
+			JobSystem::Get().WaitIdle();
+			if (Graphics)
+				Graphics->WaitIdle();
+			AssetManager::Clear();
+		}
+	};
+
+	bool RunBenchmark(bool gpu, const std::string& path, nlohmann::json& report, std::string& error)
+	{
+		using namespace BasaltBenchmark;
+		auto fail = [&](const std::string& reason) {
+			error = reason;
+			BS_CORE_ERROR("Benchmark: {}", reason);
+			return false;
+		};
+		BenchmarkSession session;
+		auto& graphics = session.Graphics;
+		auto& renderer = session.Renderer;
+		auto& commandList = session.CommandList;
+		auto& scene = session.World;
+		if (gpu)
+		{
+			if (!VulkanLoader::Load())
+				return fail("Vulkan loader initialization failed");
+			graphics = GraphicsDevice::CreateOffscreen(Width, Height, { .ApplicationName = "BasaltBenchmark", .EnableValidation = true, .VSync = false });
+			if (!graphics)
+				return fail("offscreen graphics device creation failed");
+			if (!graphics->IsValidationActive())
+				return fail("Vulkan validation is required but inactive");
+			if (!graphics->SupportsTimerQueries())
+				return fail("GPU timer queries are required but unavailable");
+			renderer = CreateScope<SceneRenderer>(graphics->GetDevice(), SceneRendererSpecification{ .GpuTimers = true });
+			if (!renderer->Initialize())
+				return fail("scene renderer initialization failed");
+			renderer->SetViewportSize(Width, Height);
+			commandList = graphics->GetDevice()->createCommandList();
+			if (!commandList)
+				return fail("blit command list creation failed");
+		}
+		BuildScene(scene);
+		scene.OnViewportResize(Width, Height);
+		scene.OnRuntimeStart();
+		const auto camera = GetPrimaryRenderCamera(scene, Width, Height);
+		if (!camera)
+			return fail("benchmark primary camera is unavailable");
+		if (!CountWorkload(scene).IsComplete())
+			return fail("benchmark component/body workload failed to initialize");
+		const auto playing = CountPlayingAnimators(scene);
+		if (playing != Animators)
+			return fail(fmt::format("playing animators: expected {}, got {}", Animators, playing));
+		report["samplesMs"] = nlohmann::json::array();
+		for (uint32_t frame = 0; frame < WarmupFrames + SampleFrames; ++frame)
+		{
+			Timer timer;
+			scene.OnUpdate(FixedStep);
+			if (gpu)
+			{
+				if (!graphics->BeginFrame())
+					return fail(fmt::format("offscreen BeginFrame failed at frame {}", frame));
+				renderer->Render(scene, *camera, FixedStep);
+				if (renderer->GetStatistics().Failed)
+					return fail(fmt::format("scene rendering failed at frame {}", frame));
+				commandList->open();
+				renderer->Blit(commandList, graphics->GetCurrentFramebuffer());
+				commandList->close();
+				graphics->GetDevice()->executeCommandList(commandList);
+				graphics->Present();
+				// Complete-frame latency, including the GPU, rather than how fast the CPU can queue work.
+				graphics->WaitIdle();
+			}
+			if (frame >= WarmupFrames)
+				report["samplesMs"].push_back(timer.ElapsedMillis());
+		}
+		const auto counts = CountWorkload(scene);
+		report.update({ { "entities", counts.Entities }, { "meshes", counts.Meshes }, { "animators", counts.Animators }, { "lights", counts.Lights }, { "physicsBodies", counts.Bodies }, { "workers", JobSystem::Get().GetWorkerCount() }, { "adapter", graphics ? graphics->GetAdapterName() : "headless" } });
+		if (!counts.IsComplete())
+			return fail("benchmark component/body workload changed during the run");
+		if (gpu)
+		{
+			report["renderStats"] = GetRenderStats(*renderer);
+			if (const auto errors = graphics->GetValidationErrorCount())
+				return fail(fmt::format("{} GPU validation errors", errors));
+			const auto& timings = renderer->GetGpuTimings();
+			if (!timings.SampleCount || !std::isfinite(timings.FrameMilliseconds) || timings.FrameMilliseconds <= 0)
+				return fail(fmt::format("GPU timing unavailable or invalid: {} samples, {} ms", timings.SampleCount, timings.FrameMilliseconds));
+			if (const auto problem = ValidateRenderedWorkload(renderer->GetStatistics()); !problem.empty())
+				return fail(problem);
+			std::string screenshotError;
+			if (!SaveScreenshot(*renderer, path + ".png", screenshotError))
+				return fail("screenshot failed: " + screenshotError);
+		}
+		return true;
+	}
+}
 
 int main(int argc, char** argv)
 {
@@ -26,119 +132,27 @@ int main(int argc, char** argv)
 		BS_CORE_ERROR("Usage: BasaltBenchmark cpu|gpu report.json");
 		return 1;
 	}
-	const bool gpu = std::string_view(argv[1]) == "gpu";
-	Scope<GraphicsDevice> graphics;
-	Scope<SceneRenderer> renderer;
-	nvrhi::CommandListHandle commandList;
-	if (gpu)
-	{
-		if (!VulkanLoader::Load())
-			return 1;
-		graphics = GraphicsDevice::CreateOffscreen(320, 180, { .ApplicationName = "BasaltBenchmark", .EnableValidation = true, .VSync = false });
-		if (!graphics || !graphics->IsValidationActive() || !graphics->SupportsTimerQueries())
-		{
-			BS_CORE_ERROR("Benchmark requires Vulkan validation and GPU timer queries");
-			return 1;
-		}
-		renderer = CreateScope<SceneRenderer>(graphics->GetDevice(), SceneRendererSpecification{ .GpuTimers = true });
-		if (!renderer->Initialize())
-			return 1;
-		renderer->SetViewportSize(320, 180);
-		commandList = graphics->GetDevice()->createCommandList();
-		if (!commandList)
-			return 1;
-	}
-	Scene scene;
-	BasaltBenchmark::BuildScene(scene);
-	scene.OnViewportResize(320, 180);
-	scene.OnRuntimeStart();
-	const auto camera = GetPrimaryRenderCamera(scene, 320, 180);
-	if (!camera || !BasaltBenchmark::CountWorkload(scene).IsComplete())
-	{
-		BS_CORE_ERROR("Benchmark workload failed to initialize");
-		return 1;
-	}
-	uint32_t playing = 0;
-	for (auto entity : scene.GetAllEntitiesOrdered())
-		if (entity.HasComponent<AnimatorComponent>() && scene.GetAnimationSystem()->IsPlaying(entity))
-			++playing;
-	if (playing != BasaltBenchmark::Animators)
-	{
-		BS_CORE_ERROR("Benchmark expected {} playing animators, got {}", BasaltBenchmark::Animators, playing);
-		return 1;
-	}
-	nlohmann::json samples = nlohmann::json::array();
-	for (uint32_t frame = 0; frame < BasaltBenchmark::WarmupFrames + BasaltBenchmark::SampleFrames; ++frame)
-	{
-		Timer timer;
-		scene.OnUpdate(BasaltBenchmark::FixedStep);
-		if (gpu)
-		{
-			if (!graphics->BeginFrame())
-				return 1;
-			renderer->Render(scene, *camera, BasaltBenchmark::FixedStep);
-			if (renderer->GetStatistics().Failed)
-				return 1;
-			commandList->open();
-			renderer->Blit(commandList, graphics->GetCurrentFramebuffer());
-			commandList->close();
-			graphics->GetDevice()->executeCommandList(commandList);
-			graphics->Present();
-			// Complete-frame latency, including the GPU, rather than how fast the CPU can queue work.
-			graphics->WaitIdle();
-		}
-		if (frame >= BasaltBenchmark::WarmupFrames)
-			samples.push_back(timer.ElapsedMillis());
-	}
-	const auto counts = BasaltBenchmark::CountWorkload(scene);
-	if (!counts.IsComplete())
-	{
-		BS_CORE_ERROR("Benchmark workload changed during the run");
-		return 1;
-	}
 	nlohmann::json report = {
-		{ "version", 1 },
-		{ "buildType", BASALT_BENCHMARK_BUILD_TYPE },
-		{ "compiler", BASALT_BENCHMARK_COMPILER },
-		{ "mode", argv[1] },
-		{ "warmupFrames", BasaltBenchmark::WarmupFrames },
-		{ "fixedStep", BasaltBenchmark::FixedStep },
-		{ "samplesMs", samples },
-		{ "entities", counts.Entities },
-		{ "meshes", counts.Meshes },
-		{ "animators", counts.Animators },
-		{ "lights", counts.Lights },
-		{ "physicsBodies", counts.Bodies },
-		{ "workers", JobSystem::Get().GetWorkerCount() },
-		{ "adapter", graphics ? graphics->GetAdapterName() : "headless" },
+		{ "version", 1 }, { "buildType", BASALT_BENCHMARK_BUILD_TYPE }, { "compiler", BASALT_BENCHMARK_COMPILER }, { "mode", argv[1] }, { "warmupFrames", BasaltBenchmark::WarmupFrames }, { "fixedStep", BasaltBenchmark::FixedStep }
 	};
-	if (gpu)
+	std::string error;
+	bool passed = RunBenchmark(std::string_view(argv[1]) == "gpu", argv[2], report, error);
+	if (const auto errors = Log::GetHistory().GetErrorCount(); passed && errors)
 	{
-		report["renderStats"] = GetRenderStats(*renderer);
-		std::string error;
-		if (!SaveScreenshot(*renderer, std::string(argv[2]) + ".png", error))
-		{
-			BS_CORE_ERROR("Benchmark screenshot: {}", error);
-			return 1;
-		}
-		if (graphics->GetValidationErrorCount() || !renderer->GetGpuTimings().SampleCount || renderer->GetStatistics().Triangles < static_cast<uint64_t>(BasaltBenchmark::Meshes) * 12 || renderer->GetStatistics().SkinMatrices == 0 || renderer->GetStatistics().Lights != BasaltBenchmark::Lights + 1)
-		{
-			BS_CORE_ERROR("Benchmark render failed validation, GPU timing or visible geometry checks");
-			return 1;
-		}
+		error = fmt::format("{} engine errors were logged; successful report refused", errors);
+		BS_CORE_ERROR("Benchmark: {}", error);
+		passed = false;
 	}
-	scene.OnRuntimeStop();
-	JobSystem::Get().WaitIdle();
-	AssetManager::Clear();
-	if (Log::GetHistory().GetErrorCount())
-		return 1;
+	report["passed"] = passed;
+	if (!passed)
+		report["failure"] = error;
 	std::ofstream output(argv[2]);
 	output << report.dump(2) << '\n';
 	output.close();
 	if (!output)
 	{
-		BS_CORE_ERROR("Cannot write benchmark report to '{}'", argv[2]);
+		BS_CORE_ERROR("Benchmark: cannot write report to '{}'", argv[2]);
 		return 1;
 	}
-	return 0;
+	return passed ? 0 : 1;
 }

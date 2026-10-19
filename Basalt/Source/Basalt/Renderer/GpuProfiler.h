@@ -128,12 +128,16 @@ namespace Basalt {
 		GpuProfiler& operator=(const GpuProfiler&) = delete;
 
 		bool IsEnabled() const { return m_Enabled; }
+		bool IsStalled() const { return m_ConsecutiveDrops >= DropWarningThreshold; }
+		uint32_t GetConsecutiveDrops() const { return m_ConsecutiveDrops; }
+		const std::string& GetDisabledReason() const { return m_DisabledReason; }
 		// Queries every profiler alive holds (against DeviceTimerQueryCapacity).
 		static uint32_t GetQueriesInUse() { return s_QueriesInUse; }
 
 		// Starts a frame on an open command list, before any pass. Returns the frame last recorded in this slot
 		// (Latency or more frames earlier) when its results are available; they are also added to the average.
-		std::optional<GpuFrameSample> BeginFrame(nvrhi::ICommandList* commandList);
+		// With timed=false, passes keep their debug markers without reading queries or advancing the ring.
+		std::optional<GpuFrameSample> BeginFrame(nvrhi::ICommandList* commandList, bool timed = true);
 		// A pass may run at most once per frame; passes do not nest. Prefer GpuPassScope.
 		void BeginPass(nvrhi::ICommandList* commandList, uint32_t pass);
 		void EndPass(nvrhi::ICommandList* commandList, uint32_t pass);
@@ -167,6 +171,7 @@ namespace Basalt {
 		uint32_t m_Current = 0;
 		uint32_t m_QueryCount = 0;
 		bool m_Enabled = false;
+		std::string m_DisabledReason;
 		bool m_FrameOpen = false;
 		uint32_t m_OpenPass = NoPass;
 		uint32_t m_ConsecutiveDrops = 0;

@@ -1,6 +1,9 @@
 #pragma once
 
+#include "Basalt/Animation/AnimationSystem.h"
 #include "Basalt/Physics/PhysicsWorld.h"
+#include "Basalt/Renderer/SceneRenderer.h"
+#include "Basalt/Core/Log.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
 
@@ -10,7 +13,13 @@ namespace BasaltBenchmark {
 	inline constexpr uint32_t Bodies = 256;
 	inline constexpr uint32_t Lights = 64;
 	inline constexpr uint32_t Animators = 128;
-	inline constexpr uint32_t Entities = Meshes + Lights + Animators + 2;
+	inline constexpr uint32_t SunAndCamera = 2;
+	inline constexpr uint32_t Entities = Meshes + Lights + Animators + SunAndCamera;
+	inline constexpr uint32_t Width = 320, Height = 180;
+	inline constexpr uint32_t CubeTriangles = 12;
+	inline constexpr uint32_t MannequinTriangles = 216;
+	inline constexpr uint32_t MannequinJoints = 17;
+	inline constexpr uint64_t FirstLightId = Meshes + Animators + 1;
 	inline constexpr uint32_t WarmupFrames = 60;
 	inline constexpr uint32_t SampleFrames = 180;
 	inline constexpr float FixedStep = 1.0f / 60.0f;
@@ -45,6 +54,31 @@ namespace BasaltBenchmark {
 				++counts.Lights;
 		}
 		return counts;
+	}
+
+	inline uint32_t CountPlayingAnimators(Basalt::Scene& scene)
+	{
+		uint32_t playing = 0;
+		if (auto* animation = scene.GetAnimationSystem())
+			for (auto entity : scene.GetAllEntitiesOrdered())
+				if (entity.HasComponent<Basalt::AnimatorComponent>() && animation->IsPlaying(entity))
+					++playing;
+		return playing;
+	}
+
+	// This pre-instancing workload fits entirely in the camera. Reduced rendering must fail, not look faster.
+	inline std::string ValidateRenderedWorkload(const Basalt::SceneRendererStatistics& stats)
+	{
+		if (stats.DrawCalls != Meshes + Animators)
+			return fmt::format("draw calls: expected {}, got {}", Meshes + Animators, stats.DrawCalls);
+		constexpr uint64_t triangles = static_cast<uint64_t>(Meshes) * CubeTriangles + static_cast<uint64_t>(Animators) * MannequinTriangles;
+		if (stats.Triangles != triangles)
+			return fmt::format("color triangles: expected {}, got {}", triangles, stats.Triangles);
+		if (stats.SkinMatrices != Animators * MannequinJoints)
+			return fmt::format("skin matrices: expected {}, got {}", Animators * MannequinJoints, stats.SkinMatrices);
+		if (stats.Lights != Lights + 1)
+			return fmt::format("rendered lights: expected {}, got {}", Lights + 1, stats.Lights);
+		return {};
 	}
 
 	// Fixed workload for the pre-instancing baseline: individual cube draws, overlapping lights and awake bodies.

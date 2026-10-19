@@ -39,6 +39,12 @@ def check_game_view(call, require, output):
     require(state["width"] == 640 and state["height"] == 360 and state["override"] is None, f"project resolution: {state}")
     state = wait_for(call, require, lambda s: s["visible"] and s["imageRect"]["width"] > 1 and s["renderWidth"] == 640 and s["status"] == "rendered", "the Game view did not come to the front")
     require(state["hasCamera"] and state["mode"] == "Edit", f"edit-mode preview: {state}")
+    project_before_stats = call("project.info")
+    state = call("editor.game_view", {"stats": True})
+    require(state["stats"] and not state["statsVisible"], f"the overlay must stay hidden in Edit: {state}")
+    require(state["physicsBodies"] is None, f"Edit must not claim a measured physics body count: {state}")
+    require(call("project.info") == project_before_stats, "stats changed the project")
+    call("editor.game_view", {"stats": False})
     rect = state["imageRect"]
     require(abs(rect["width"] / rect["height"] - 16 / 9) < .01, f"letterbox lost the aspect ratio: {state}")
     panel = state["panelRect"]
@@ -98,10 +104,10 @@ def check_game_view(call, require, output):
     require(subscription["streamed"], f"the editor's TCP connection did not stream events: {subscription}")
     call("play.start")
     state = wait_for(call, require, lambda s: s["mode"] == "Play" and s["visible"], "Play did not bring the Game view forward")
-    # Diagnostics are session-only and draw over the game without changing its captures or taking focus.
+    # Diagnostics draw over the game without changing its game-image captures.
     require(not state["statsVisible"], f"stats unexpectedly enabled: {state}")
     state = call("editor.game_view", {"stats": True})
-    state = wait_for(call, require, lambda s: s["statsVisible"] and s["imguiGpu"]["frames"] > 0
+    state = wait_for(call, require, lambda s: s["statsVisible"] and s["imguiGpu"]["timers"] and s["imguiGpu"]["frames"] > 0
                      and s["renderStats"] is not None and s["renderStats"]["gpu"]["frames"] > 0,
                      "play diagnostics did not receive GPU timings")
     require(state["renderStats"]["triangles"] == 12, f"one cube should submit 12 color triangles: {state}")
@@ -142,6 +148,7 @@ def check_game_view(call, require, output):
     states = [event["state"] for event in call.events if event.get("event") == "playState" and event.get("subscription") == subscription["subscription"]]
     require(states == ["play", "stop"], f"streamed play-state events: {call.events}")
     call("events.unsubscribe", {"subscription": subscription["subscription"]})
+    require(not call("editor.game_view")["statsVisible"], "the overlay survived Stop")
     call("entity.destroy", {"entity": camera})
     require(not call("editor.game_view")["hasCamera"], "a destroyed camera still counts as primary")
 

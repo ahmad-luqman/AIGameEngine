@@ -35,6 +35,8 @@
 
 namespace Basalt {
 
+	struct PlayStatistics;
+
 	struct EditorOptions
 	{
 		std::string ProjectPath;
@@ -91,6 +93,8 @@ namespace Basalt {
 		// game runs in Play (it owns the game UI's pointer and keyboard); in Edit and Simulate it previews the
 		// primary camera, labelled with the mode.
 		void DrawGameView();
+		PlayStatistics GetPlayStatistics() const;
+		bool IsStatsOverlayActive() const { return m_GameView.ShowStats() && IsGameRunning() && m_GameViewVisible; }
 		void DrawGameViewOptions();
 		// Gives the window the cursor the game asks for (DecideGameCursor), before the scene updates: Locked captures the
 		// mouse while the game runs with the Game view focused (ImGui ignores it meanwhile, as GLFW reports a virtual

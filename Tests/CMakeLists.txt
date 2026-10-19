@@ -104,8 +104,8 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	# tolerance; the SSAO pair has no golden.
 	set(dynamicArgs --dynamic-resolution 1000000 --min-render-scale 0.5)
 	# Every driver these tests run on (lavapipe in CI, MoltenVK and desktop GPUs locally) has timer queries,
-	# so missing GPU timings are a profiler bug. The prefixes come from FormatGpuTimings (pinned by a unit test).
-	set(noGpuTimingsRegex "(scene|blit|ImGui) GPU time (unavailable|not available yet)")
+	# so missing GPU timings are a profiler bug. The prefixes are logged by RuntimeLayer::CheckRendererResults.
+	set(noGpuTimingsRegex "(scene|blit|ImGui) GPU time (unavailable|not available yet|stalled)")
 	foreach(view Lit SSAO Normals Depth Scaled Dynamic ScaledSSAO DynamicSSAO)
 		set(debugView ${view})
 		set(renderTest FeatureTestRender_${view})
@@ -331,6 +331,7 @@ if(BASALT_BENCHMARK_TESTS)
 	endif()
 	foreach(mode cpu gpu)
 		if(mode STREQUAL "gpu" AND NOT BASALT_GPU_TESTS)
+			message(STATUS "Benchmark_gpu is not registered: enable BASALT_GPU_TESTS to run the GPU gate")
 			continue()
 		endif()
 		add_test(NAME Benchmark_${mode}

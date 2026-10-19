@@ -107,7 +107,7 @@ namespace Basalt {
 		ImGui::Render();
 
 		GraphicsDevice* device = Application::Get().GetGraphicsDevice();
-		m_Renderer.Render(ImGui::GetDrawData(), device->GetCurrentFramebuffer());
+		m_Renderer.Render(ImGui::GetDrawData(), device->GetCurrentFramebuffer(), true);
 	}
 
 	void ImGuiLayer::RenderDrawList(ImDrawList& drawList, const glm::vec2& displaySize, nvrhi::IFramebuffer* target)

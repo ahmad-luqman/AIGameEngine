@@ -7,6 +7,7 @@
 #include <Basalt/Asset/AssetManager.h>
 #include <Basalt/Core/JobSystem.h>
 #include <Basalt/Core/MemoryTracker.h>
+#include <Basalt/Particles/ParticleSystem.h>
 #include <Basalt/Renderer/SceneRenderer.h>
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
@@ -130,6 +131,7 @@ TEST_CASE("Viewport ID prepass selects visible surfaces across scaling, transpar
 	// Transparent nearest-surface picking must not replace the scene depth used by lighting.
 	front.AddComponent<MaterialComponent>().AlbedoColor.a = 0.5f;
 	renderer.Render(scene, camera, 0.0f);
+	CHECK(renderer.GetStatistics().Triangles == 24);
 	ExpectPick(renderer, 50, 37, front.GetUUID());
 	SceneRenderer reference(graphics->GetDevice());
 	REQUIRE(reference.Initialize());
@@ -330,4 +332,36 @@ TEST_CASE("Async viewport draws a placeholder with every worker occupied then up
 	graphics->WaitIdle();
 	CHECK(graphics->GetValidationErrorCount() == 0);
 	AssetManager::Clear();
+}
+
+TEST_CASE("Particle billboards add exactly two color triangles per drawn particle")
+{
+	auto graphics = CreateTestGraphics();
+	Scene scene;
+	scene.GetRendererSettings().SSAOEnabled = false;
+	scene.GetRendererSettings().ShadowsEnabled = false;
+	auto emitter = scene.CreateEntity("Particles");
+	auto& component = emitter.AddComponent<ParticleEmitterComponent>();
+	component.PlayOnStart = false;
+	component.Rate = 0;
+	component.SpeedMin = 0;
+	component.SpeedMax = 0;
+	scene.OnRuntimeStart();
+	REQUIRE(scene.GetParticleSystem());
+	REQUIRE(scene.GetParticleSystem()->Emit(emitter, 7) == 7);
+	RenderCamera camera;
+	camera.Position = { 0, 0, 5 };
+	camera.View = glm::lookAtRH(camera.Position, glm::vec3(0), glm::vec3(0, 1, 0));
+	camera.Projection = glm::orthoRH_ZO(-2.0f, 2.0f, -2.0f, 2.0f, .1f, 20.0f);
+	camera.Far = 20;
+	SceneRenderer renderer(graphics->GetDevice());
+	REQUIRE(renderer.Initialize());
+	renderer.SetViewportSize(64, 64);
+	renderer.Render(scene, camera, 0);
+	REQUIRE_FALSE(renderer.GetStatistics().Failed);
+	CHECK(renderer.GetStatistics().Particles == 7);
+	CHECK(renderer.GetStatistics().Triangles == 14);
+	scene.OnRuntimeStop();
+	graphics->WaitIdle();
+	CHECK(graphics->GetValidationErrorCount() == 0);
 }

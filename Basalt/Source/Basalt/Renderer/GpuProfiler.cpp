@@ -116,19 +116,24 @@ namespace Basalt {
 		, m_Average(std::move(passNames), AverageWindow)
 	{
 		if (!m_Enabled)
+		{
+			m_DisabledReason = enabled ? "no GPU timer backend" : "GPU timers disabled or unsupported";
 			return;
+		}
 
 		const uint32_t queries = Latency * (GetPassCount() + 1);
 		if (s_QueriesInUse + queries > DeviceTimerQueryCapacity)
 		{
 			BS_CORE_WARN("GpuProfiler: {} timer queries are in use and {} more would exceed the device's {}; GPU timings are disabled for this renderer", s_QueriesInUse, queries, DeviceTimerQueryCapacity);
 			m_Enabled = false;
+			m_DisabledReason = "GPU timer query budget exhausted";
 			return;
 		}
 		if (!m_Backend->CreateQueries(queries))
 		{
 			BS_CORE_WARN("GpuProfiler: timer query creation failed; GPU timings are disabled for this renderer");
 			m_Enabled = false;
+			m_DisabledReason = "GPU timer query creation failed";
 			return;
 		}
 		m_Slots.resize(Latency);
@@ -180,10 +185,10 @@ namespace Basalt {
 		return sample;
 	}
 
-	std::optional<GpuFrameSample> GpuProfiler::BeginFrame(nvrhi::ICommandList* commandList)
+	std::optional<GpuFrameSample> GpuProfiler::BeginFrame(nvrhi::ICommandList* commandList, bool timed)
 	{
 		BS_CORE_ASSERT(!m_FrameOpen, "GpuProfiler::BeginFrame called twice without EndFrame");
-		if (!m_Enabled)
+		if (!m_Enabled || !timed)
 			return std::nullopt;
 
 		m_Current = (m_Current + 1) % Latency;

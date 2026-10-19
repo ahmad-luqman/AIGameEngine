@@ -6,6 +6,7 @@
 #include <Basalt/Renderer/DeviceSelection.h>
 #include <Basalt/Renderer/DynamicResolution.h>
 #include <Basalt/Renderer/GpuProfiler.h>
+#include <Basalt/Renderer/PlayStatistics.h>
 #include <Basalt/Renderer/RenderMath.h>
 #include <Basalt/Renderer/RenderUtils.h>
 #include <Basalt/Renderer/SceneLights.h>
@@ -490,6 +491,7 @@ TEST_SUITE("GpuProfiler")
 		std::vector<uint32_t> Begun;
 		uint32_t Resets = 0;
 		int Markers = 0;
+		int EndedMarkers = 0;
 
 		// Every query recorded so far finishes: frame queries take 4 ms, pass queries 1 ms.
 		void FinishAll() { std::fill(Ready.begin(), Ready.end(), uint8_t{ 1 }); }
@@ -535,7 +537,7 @@ TEST_SUITE("GpuProfiler")
 			return query % (m_PassCount + 1) == m_PassCount ? 4.0f : 1.0f;
 		}
 		void BeginMarker(nvrhi::ICommandList*, const char*) override { m_Timers.Markers++; }
-		void EndMarker(nvrhi::ICommandList*) override {}
+		void EndMarker(nvrhi::ICommandList*) override { m_Timers.EndedMarkers++; }
 
 	private:
 		FakeTimers& m_Timers;
@@ -608,6 +610,29 @@ TEST_SUITE("GpuProfiler")
 		CHECK(profiler.GetTimings().DroppedFrames == 1);
 	}
 
+	TEST_CASE("Untimed ImGui capture frames retain markers without collecting queries or advancing the timing ring")
+	{
+		FakeTimers timers;
+		GpuProfiler profiler = MakeProfiler(timers);
+		for (uint32_t i = 0; i < GpuProfiler::Latency; ++i)
+			RecordFrame(profiler, 100 + i);
+		timers.FinishAll();
+		const auto begun = timers.TotalBegun();
+		const auto markers = timers.Markers;
+		CHECK_FALSE(profiler.BeginFrame(nullptr, false));
+		profiler.BeginPass(nullptr, 0);
+		profiler.EndPass(nullptr, 0);
+		profiler.EndFrame(nullptr, 0);
+		CHECK(timers.TotalBegun() == begun);
+		CHECK(timers.Resets == 0);
+		CHECK(profiler.GetTimings().SampleCount == 0);
+		CHECK(timers.Markers == markers + 1);
+		CHECK(timers.Markers == timers.EndedMarkers);
+		const auto sample = RecordFrame(profiler, 1);
+		REQUIRE(sample);
+		CHECK(sample->RenderedPixels == 100);
+	}
+
 	TEST_CASE("Stalled results are warned about once")
 	{
 		FakeTimers timers;
@@ -616,6 +641,13 @@ TEST_SUITE("GpuProfiler")
 		for (uint32_t frame = 0; frame < GpuProfiler::Latency + 3 * GpuProfiler::DropWarningThreshold; frame++)
 			RecordFrame(profiler, 1);
 		CHECK(profiler.GetTimings().DroppedFrames == 3 * GpuProfiler::DropWarningThreshold);
+		CHECK(profiler.IsStalled());
+		CHECK(CollectGpuStatistics(&profiler)->IsStalled());
+		CHECK(FormatGpuStatistics(CollectGpuStatistics(&profiler)).find("stalled") != std::string::npos);
+		timers.FinishAll();
+		RecordFrame(profiler, 1);
+		CHECK_FALSE(profiler.IsStalled());
+		CHECK(profiler.GetConsecutiveDrops() == 0);
 		CHECK(BasaltTest::CountLogMessages(since, "no GPU timer results for") == 1);
 	}
 
@@ -634,6 +666,7 @@ TEST_SUITE("GpuProfiler")
 				CHECK(profilers[i]->IsEnabled());
 			CHECK_FALSE(profilers.back()->IsEnabled());
 			CHECK(timers.back().Created == 0);
+			CHECK(profilers.back()->GetDisabledReason().find("budget") != std::string::npos);
 			CHECK(GpuProfiler::GetQueriesInUse() <= GpuProfiler::DeviceTimerQueryCapacity);
 		}
 		CHECK(GpuProfiler::GetQueriesInUse() == baseline);
@@ -643,6 +676,7 @@ TEST_SUITE("GpuProfiler")
 		failing.FailCreation = true;
 		GpuProfiler profiler = MakeProfiler(failing);
 		CHECK_FALSE(profiler.IsEnabled());
+		CHECK(profiler.GetDisabledReason().find("creation failed") != std::string::npos);
 		CHECK(GpuProfiler::GetQueriesInUse() == baseline);
 		// SceneRenderer's profiler must leave room for the editor's renderers.
 		CHECK(GpuProfiler::Latency * 10 <= GpuProfiler::DeviceTimerQueryCapacity / 4);

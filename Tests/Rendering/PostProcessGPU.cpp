@@ -5,6 +5,7 @@
 
 #include <Basalt/Project/Project.h>
 #include <Basalt/Renderer/PostProcessStack.h>
+#include <Basalt/Renderer/PlayStatistics.h>
 #include <Basalt/Renderer/RenderUtils.h>
 #include <Basalt/Renderer/ShaderUtils.h>
 #include <Basalt/Scene/Entity.h>
@@ -85,6 +86,9 @@ TEST_CASE("Post-process effects operate in order, reset exposure and bypass diag
 	post.Exposure = std::numeric_limits<float>::quiet_NaN();
 	renderer.Render(scene, camera, 0);
 	CHECK(renderer.GetStatistics().Failed);
+	const auto failedStatistics = CollectPlayStatistics(scene, { .Renderer = &renderer });
+	CHECK_FALSE(failedStatistics.Renderer);
+	CHECK(PlayStatisticsToJson(failedStatistics)["renderStats"].is_null());
 	post.Enabled = false;
 	Capture(renderer, scene, camera);
 	post = PostProcessComponent{};

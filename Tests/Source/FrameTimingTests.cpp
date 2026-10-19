@@ -9,7 +9,7 @@ using namespace Basalt;
 TEST_CASE("Host frame timing averages real latency, including stalls, and evicts old samples")
 {
 	FrameTiming timing;
-	CHECK(timing.GetMilliseconds() == 0);
+	CHECK_FALSE(timing.GetMilliseconds());
 	timing.Add(10);
 	timing.Add(30);
 	CHECK(timing.GetMilliseconds() == 20);
@@ -20,5 +20,6 @@ TEST_CASE("Host frame timing averages real latency, including stalls, and evicts
 		timing.Add(1000);
 	CHECK(timing.GetMilliseconds() == 1000);
 	timing.Add(10);
-	CHECK(timing.GetMilliseconds() == doctest::Approx((59 * 1000.0f + 10) / 60));
+	REQUIRE(timing.GetMilliseconds());
+	CHECK(*timing.GetMilliseconds() == doctest::Approx((59 * 1000.0f + 10) / 60));
 }

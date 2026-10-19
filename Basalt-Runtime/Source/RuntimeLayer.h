@@ -20,6 +20,7 @@ namespace Basalt {
 		std::string ScreenshotPath;
 		// Fail (exit code 5) when GPU validation is not active, so validation-based tests cannot pass vacuously.
 		bool RequireValidation = false;
+		// Passive runtime diagnostics over the game image (--stats).
 		bool ShowStats = false;
 		// Fail (exit code 7) when a script reported an error during the run (export smoke tests). Script errors
 		// never stop a game, so without this a broken script would still exit 0.
@@ -70,6 +71,7 @@ namespace Basalt {
 		uint64_t m_Frame = 0;
 		float m_RenderDeltaTime = 0.0f;
 		bool m_WarnedNoCamera = false;
+		bool m_Rendered = false;
 		CursorMode m_AppliedCursorMode = CursorMode::Normal;
 	};
 
