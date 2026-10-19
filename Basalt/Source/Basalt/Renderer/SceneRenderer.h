@@ -148,7 +148,8 @@ namespace Basalt {
 		// Starts the next auto-exposure frame at its metered target (deterministic captures).
 		void ResetExposure();
 
-		// Reference path for validation and throughput comparisons. Transparent draws remain individual.
+		// false submits individual draws in original order for validation and throughput comparisons.
+		// Grouping opaque keys can change exact coplanar depth-tie winners; transparent order is preserved.
 		void SetInstancingEnabled(bool enabled) { m_InstancingEnabled = enabled; }
 
 		// Records and submits all passes for one frame.

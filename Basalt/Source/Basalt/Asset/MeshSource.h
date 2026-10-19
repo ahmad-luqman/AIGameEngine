@@ -71,9 +71,9 @@ namespace Basalt {
 		uint32_t VertexCount = 0;
 		uint32_t MaterialIndex = 0;
 		AABB Bounds;
-		// Derived by AddSubmesh; rebuild when geometry changes, like Bounds and the GPU buffers.
+		// Derived by AddSubmesh; changing positions/weights requires re-adding geometry and its GPU buffers.
 		std::vector<JointInfluenceBounds> JointBounds;
-		// Defensive for procedural meshes: zero-weight vertices skin to the origin.
+		// Defensive for procedural meshes: zero-weight vertices collapse (w = 0); include the model origin.
 		bool HasUnweightedVertices = false;
 	};
 

@@ -287,6 +287,7 @@ namespace Basalt {
 			bool Playing = false;
 			bool Rest = false;
 			bool InvalidPose = false;
+			bool PoseJobFailed = false;
 			bool InvalidSpeed = false;
 			bool InvalidLOD = false;
 			bool EventLimitLogged = false;
@@ -422,7 +423,8 @@ namespace Basalt {
 		// Builds Pose from Local and the layers, then composes Globals from Pose with the IK and spring overlays on top. Layers
 		// leave out the root-motion joint and the nodes above it while root motion applies (also while it fades out).
 		static void Finish(Playback& playback);
-		// Reuses the already allocated pose buffers, including when a pose job failed allocation.
+		// Requires Local/Pose/Globals sized by Ensure's first evaluation and immutable source topology.
+		// Rewrites those buffers in place, so queued-job recovery needs no pose allocation.
 		static void RestoreRestPose(Playback& playback);
 		// Matches layer states to the configuration (by name), resolves them and advances their clocks and fades.
 		static void AdvanceLayers(Playback& playback, const AnimatorComponent& component, double seconds);
@@ -539,10 +541,10 @@ namespace Basalt {
 		struct PoseJob
 		{
 			Playback* Target = nullptr;
-			bool Sample = true;
+			bool Sample = true; // true: sample clips and compose; false: compose layers over the held base.
 		};
 		// Queued during entity updates, executed after that loop and joined before LateUpdate. Addresses survive
-		// unordered_map rehashes; no playback is erased or externally mutated while jobs run.
+		// unordered_map rehashes; no queued playback is erased or externally mutated before the join.
 		std::vector<PoseJob> m_PoseJobs;
 		// Scratch storage reused every update.
 		std::vector<const AnimationEvent*> m_Markers;

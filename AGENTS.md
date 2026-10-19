@@ -112,6 +112,16 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   through `AssetManager::PublishCompleted`. Blocking getters join requests. Interactive renderers opt into
   streaming; captures keep blocking loads. `BASALT_PROFILE` enables Tracy outside Dist. `memory.stats`
   reports logical asset payload, GPU buffer and Lua heap charges (see Docs/Rendering.md).
+- **Throughput.** Opaque/masked geometry batches by shared mesh/range, texture bindings and pipeline flags.
+  Draw records keep each instance's transforms, material index, pick token and skin offset/count; vertex
+  shaders address `DrawIndex + gl_InstanceIndex` with `startInstanceLocation = 0`. Batch discovery order is
+  deterministic; grouping can change exact coplanar opaque depth-tie winners. Blended draws keep their
+  stable back-to-front order. Camera and each shadow frustum filter batches independently. Skin culling
+  uses per-source joint influence caches built by `AddSubmesh`; assets/topology stay immutable after
+  publication. Animation control, clocks, events, root motion and asset resolution stay on the main thread;
+  large sets of due poses run as disjoint playback jobs joined before physics. `LODDistance`/`LODInterval`
+  opt into pose throttling from the primary camera while gameplay clocks and late solvers run at full rate.
+  Per-update model/graph resolution and per-render static-mesh resolution do not retain caches across calls.
 - **Headless core.** Everything except Renderer/ImGui/Window runs without a GPU; unit tests, the CLI and
   the feature test rely on that.
 
