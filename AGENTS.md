@@ -31,6 +31,9 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
 
 ## Architecture
 
+- **Asset identity.** Project-owned `AssetRegistry` reads `.meta` UUIDs. Scene/prefab disk saves encode declared
+  `ComponentInfo::AssetFields` as UUID/path objects; runtime snapshots keep paths. `asset.move`/`asset.rename`
+  migrate legacy references and carry sidecars; loading never writes metadata. See `Docs/AssetPipeline.md`.
 - **One data path.** Components are plain structs. `ComponentRegistry` gives each a strict JSON reader/
   writer that every consumer shares: scene and prefab files, Lua `GetComponent/SetComponent`, the
   automation commands and the editor inspector. Adding a component = one registry entry (see the

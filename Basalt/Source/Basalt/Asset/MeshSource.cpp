@@ -12,7 +12,7 @@ namespace Basalt {
 		// Track retained CPU payload capacity, including animation and embedded image storage.
 		size_t bytes = sizeof(MeshSource) + Vertices.capacity() * sizeof(Vertex) + Indices.capacity() * sizeof(uint32_t) + Submeshes.capacity() * sizeof(Submesh) + Meshes.capacity() * sizeof(MeshData) + Materials.capacity() * sizeof(MaterialData) + Nodes.capacity() * sizeof(MeshNode) + Skins.capacity() * sizeof(MeshSkin) + Animations.capacity() * sizeof(AnimationClip) + NodeOrder.capacity() * sizeof(uint32_t) + EmbeddedImages.capacity() * sizeof(std::vector<uint8_t>) + ExternalFiles.capacity() * sizeof(std::string);
 		for (const auto& submesh : Submeshes)
-			bytes += submesh.JointBounds.capacity() * sizeof(JointInfluenceBounds);
+			bytes += submesh.JointBounds.capacity() * sizeof(JointInfluenceBounds) + submesh.LODs.capacity() * sizeof(MeshLOD);
 		for (const auto& mesh : Meshes)
 			bytes += mesh.Submeshes.capacity() * sizeof(uint32_t);
 		for (const auto& skin : Skins)

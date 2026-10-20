@@ -7,6 +7,7 @@
 #include "Basalt/Math/Math.h"
 #include "Basalt/Particles/ParticleEmitterRules.h"
 #include "Basalt/Physics/PhysicsLayers.h"
+#include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/LocalShadows.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/UI/UIRules.h"
@@ -44,6 +45,7 @@ namespace Basalt {
 
 			std::vector<std::string>& GetFieldNames() { return m_FieldNames; }
 			std::map<std::string, std::vector<std::string>>& GetEnumOptions() { return m_EnumOptions; }
+			std::vector<std::string>& GetAssetFields() { return m_AssetFields; }
 			std::vector<std::string>& GetEntityFields() { return m_EntityFields; }
 			std::map<std::string, ComponentFieldType>& GetFieldTypes() { return m_FieldTypes; }
 
@@ -54,6 +56,30 @@ namespace Basalt {
 				const json* element = Find(name);
 				if (element)
 					ReadQualified(name, *element, value);
+			}
+
+			// Asset readers accept both legacy paths and persistent UUID/path references, on every data path.
+			void AssetField(const char* name, std::string& value)
+			{
+				Describe(name, { ComponentFieldKind::String });
+				if (IsCollecting())
+					m_AssetFields.emplace_back(name);
+				const json* element = Find(name);
+				if (!element)
+					return;
+				if (element->is_string())
+				{
+					ReadQualified(name, *element, value);
+					return;
+				}
+				std::string error;
+				const auto& project = Project::GetActive();
+				if (!project)
+					throw std::runtime_error(Qualify(name) + ": UUID asset references require an active project");
+				if (!project->GetAssets().Decode(*element, value, error, true))
+					throw std::runtime_error(Qualify(name) + ": " + error);
+				if (!error.empty())
+					BS_CORE_WARN("Asset field {}: {}", Qualify(name), error);
 			}
 
 			// A field holding another entity's UUID (0 = none). Recorded so tools can resolve names and
@@ -309,6 +335,7 @@ namespace Basalt {
 			std::vector<std::string> m_FieldNames;
 			std::map<std::string, std::vector<std::string>> m_EnumOptions;
 			std::vector<std::string> m_EntityFields;
+			std::vector<std::string> m_AssetFields;
 			std::map<std::string, ComponentFieldType> m_FieldTypes;
 		};
 
@@ -509,9 +536,10 @@ namespace Basalt {
 
 		void Fields(FieldReader& r, MeshComponent& c)
 		{
-			r.Field("Mesh", c.Mesh);
+			r.AssetField("Mesh", c.Mesh);
 			r.Field("MeshIndex", c.MeshIndex);
 			r.Field("CastShadows", c.CastShadows);
+			r.Field("LODDistance", c.LODDistance);
 		}
 
 		void Fields(FieldReader& r, AnimationEvent& c)
@@ -557,14 +585,14 @@ namespace Basalt {
 
 		void Fields(FieldReader& r, AnimatorComponent& c)
 		{
-			r.Field("Mesh", c.Mesh);
+			r.AssetField("Mesh", c.Mesh);
 			r.Field("Clip", c.Clip);
 			r.Field("Speed", c.Speed);
 			r.Field("Looping", c.Looping);
 			r.Field("PlayOnStart", c.PlayOnStart);
 			r.Field("CastShadows", c.CastShadows);
 			r.Field("MatchVelocity", c.MatchVelocity);
-			r.Field("StateMachine", c.StateMachine);
+			r.AssetField("StateMachine", c.StateMachine);
 			r.Field("RootMotion", c.RootMotion);
 			r.Field("RootJoint", c.RootJoint);
 			r.ListField("Events", c.Events, AnimatorComponent::MaxEvents);
@@ -639,11 +667,11 @@ namespace Basalt {
 			r.Field("Roughness", c.Roughness);
 			r.Field("EmissiveColor", c.EmissiveColor);
 			r.Field("EmissiveIntensity", c.EmissiveIntensity);
-			r.Field("AlbedoMap", c.AlbedoMap);
-			r.Field("NormalMap", c.NormalMap);
-			r.Field("MetallicRoughnessMap", c.MetallicRoughnessMap);
-			r.Field("OcclusionMap", c.OcclusionMap);
-			r.Field("EmissiveMap", c.EmissiveMap);
+			r.AssetField("AlbedoMap", c.AlbedoMap);
+			r.AssetField("NormalMap", c.NormalMap);
+			r.AssetField("MetallicRoughnessMap", c.MetallicRoughnessMap);
+			r.AssetField("OcclusionMap", c.OcclusionMap);
+			r.AssetField("EmissiveMap", c.EmissiveMap);
 		}
 
 		void Fields(FieldReader& r, DirectionalLightComponent& c)
@@ -698,7 +726,7 @@ namespace Basalt {
 
 		void Fields(FieldReader& r, SkyLightComponent& c)
 		{
-			r.Field("EnvironmentMap", c.EnvironmentMap);
+			r.AssetField("EnvironmentMap", c.EnvironmentMap);
 			r.Field("Intensity", c.Intensity);
 			r.Field("Rotation", c.Rotation);
 			r.Field("ShowBackground", c.ShowBackground);
@@ -774,7 +802,7 @@ namespace Basalt {
 
 		void Fields(FieldReader& r, MeshColliderComponent& c)
 		{
-			r.Field("Mesh", c.Mesh);
+			r.AssetField("Mesh", c.Mesh);
 			r.Field("MeshIndex", c.MeshIndex);
 			r.Field("Convex", c.Convex);
 			MaterialFields(r, c);
@@ -827,13 +855,13 @@ namespace Basalt {
 
 		void Fields(FieldReader& r, ScriptComponent& c)
 		{
-			r.Field("Script", c.Script);
+			r.AssetField("Script", c.Script);
 			r.Field("Properties", c.Properties);
 		}
 
 		void Fields(FieldReader& r, AudioSourceComponent& c)
 		{
-			r.Field("Clip", c.Clip);
+			r.AssetField("Clip", c.Clip);
 			r.Field("Volume", c.Volume);
 			r.Field("Pitch", c.Pitch);
 			r.Field("Loop", c.Loop);
@@ -924,7 +952,7 @@ namespace Basalt {
 			r.ListField("SizeCurve", c.SizeCurve, ParticleEmitterComponent::MaxCurveKeys);
 			r.ListField("ColorCurve", c.ColorCurve, ParticleEmitterComponent::MaxCurveKeys);
 			r.EnumField("Blend", c.Blend, s_ParticleBlendNames);
-			r.Field("Texture", c.Texture);
+			r.AssetField("Texture", c.Texture);
 		}
 
 		void Fields(FieldReader& r, UIRectComponent& c)
@@ -942,7 +970,7 @@ namespace Basalt {
 
 		void Fields(FieldReader& r, UIImageComponent& c)
 		{
-			r.Field("Texture", c.Texture);
+			r.AssetField("Texture", c.Texture);
 			r.Field("Color", c.Color);
 			r.Field("Slice", c.Slice);
 			r.Field("SliceScale", c.SliceScale);
@@ -956,7 +984,7 @@ namespace Basalt {
 		void Fields(FieldReader& r, UITextComponent& c)
 		{
 			r.Field("Text", c.Text);
-			r.Field("Font", c.Font);
+			r.AssetField("Font", c.Font);
 			r.Field("FontSize", c.FontSize);
 			r.Field("Color", c.Color);
 			r.EnumField("HorizontalAlign", c.HorizontalAlign, s_UIHorizontalAlignNames);
@@ -1054,7 +1082,7 @@ namespace Basalt {
 
 		void Fields(FieldReader& r, PrefabComponent& c)
 		{
-			r.Field("Prefab", c.Prefab);
+			r.AssetField("Prefab", c.Prefab);
 		}
 
 		// --- Writers -----------------------------------------------------------------------------
@@ -1086,7 +1114,7 @@ namespace Basalt {
 
 		json Write(const MeshComponent& c)
 		{
-			return { { "Mesh", c.Mesh }, { "MeshIndex", c.MeshIndex }, { "CastShadows", c.CastShadows } };
+			return { { "Mesh", c.Mesh }, { "MeshIndex", c.MeshIndex }, { "CastShadows", c.CastShadows }, { "LODDistance", c.LODDistance } };
 		}
 
 		json Write(const AnimationEvent& c)
@@ -1582,6 +1610,7 @@ namespace Basalt {
 			info.FieldTypes = collector.GetFieldTypes();
 			info.EnumOptions = collector.GetEnumOptions();
 			info.EntityFields = collector.GetEntityFields();
+			info.AssetFields = collector.GetAssetFields();
 		}
 
 		// Rewrites a component's entity references through its JSON form, so every component with UUID
@@ -1617,6 +1646,11 @@ namespace Basalt {
 		std::string Validate(const T&)
 		{
 			return {};
+		}
+
+		std::string Validate(const MeshComponent& c)
+		{
+			return !std::isfinite(c.LODDistance) || c.LODDistance < 0 || c.LODDistance > MeshComponent::MaxLODDistance ? "LODDistance must be in [0, 1000000]" : "";
 		}
 
 		std::string Validate(const PostProcessComponent& c)

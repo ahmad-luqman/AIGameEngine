@@ -99,6 +99,8 @@ namespace Basalt {
 		std::map<std::string, ComponentFieldType> FieldTypes;
 		// Valid values of string-enum fields (e.g. RigidBody "Type"), for inspectors and validation messages.
 		std::map<std::string, std::vector<std::string>> EnumOptions;
+		// Fields naming project assets; persistence and move commands share this declaration.
+		std::vector<std::string> AssetFields;
 		// Fields that hold an entity UUID (collected from the field list). Tools may let users name entities
 		// there (see component.set), and inspectors show an entity picker.
 		std::vector<std::string> EntityFields;

@@ -63,6 +63,14 @@ namespace Basalt {
 		float MaxWeightSum = 0;
 	};
 
+	// Reduced triangle range in the same index buffer, sharing the submesh's base vertex.
+	struct MeshLOD
+	{
+		uint32_t BaseIndex = 0;
+		uint32_t IndexCount = 0;
+		float Error = 0; // Simplifier error relative to the primitive's extent.
+	};
+
 	// A contiguous range of the index buffer drawn with one material.
 	struct Submesh
 	{
@@ -74,6 +82,8 @@ namespace Basalt {
 		AABB Bounds;
 		// Derived by AddSubmesh; changing positions/joints/weights requires re-adding geometry and its GPU buffers.
 		std::vector<JointInfluenceBounds> JointBounds;
+		// Reduced ranges, most detailed first, sharing BaseVertex. CPU queries and physics use the base range.
+		std::vector<MeshLOD> LODs;
 		// Defensive for procedural meshes: zero-weight vertices collapse (w = 0); include the model origin.
 		bool HasUnweightedVertices = false;
 	};

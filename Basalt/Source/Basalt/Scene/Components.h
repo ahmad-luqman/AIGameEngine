@@ -94,9 +94,13 @@ namespace Basalt {
 	// "builtin://Capsule").
 	struct MeshComponent
 	{
+		static constexpr float MaxLODDistance = 1000000;
 		std::string Mesh;
 		uint32_t MeshIndex = 0;
 		bool CastShadows = true;
+		// Imported static meshes: camera distance to each submesh's world bounds center for the first reduced level.
+		// 0 keeps full detail; subsequent stored levels double the distance.
+		float LODDistance = 0;
 	};
 
 	inline constexpr float MaxAnimatorSpeed = 100.0f;

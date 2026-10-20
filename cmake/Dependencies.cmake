@@ -116,6 +116,12 @@ FetchContent_Declare(miniaudio
 	GIT_TAG 78c8a43a5f99980fa4cbf34ac5720c3f77073c4d
 	SOURCE_SUBDIR _BasaltNoCMake)
 
+FetchContent_Declare(meshoptimizer
+	SYSTEM
+	GIT_REPOSITORY https://github.com/zeux/meshoptimizer.git
+	GIT_TAG v1.0.1
+	GIT_SHALLOW TRUE)
+
 FetchContent_Declare(cgltf
 	SYSTEM
 	GIT_REPOSITORY https://github.com/jkuhlmann/cgltf.git
@@ -188,7 +194,7 @@ set(OBJECT_LAYER_BITS 32 CACHE STRING "" FORCE)
 
 FetchContent_MakeAvailable(VulkanHeaders)
 FetchContent_MakeAvailable(glfw glm nvrhi spdlog entt json jolt sol2 doctest
-	lua imgui imguizmo miniaudio cgltf stb fsr1)
+	lua imgui imguizmo miniaudio cgltf stb fsr1 meshoptimizer)
 # Jolt's deterministic mode turns contraction off for GCC, clang and MSVC, but not for clang-cl.
 if(MSVC AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 	target_compile_options(Jolt PRIVATE /clang:-ffp-contract=off)

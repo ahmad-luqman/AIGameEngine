@@ -36,6 +36,9 @@ option(BASALT_GPU_TESTS "Register tests that need a GPU" OFF)
 # Python is optional; headless checks also guard the GPU harness against false passes.
 find_package(Python3 QUIET COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
+	add_test(NAME AssetPipelineFeature COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/Automation/AssetPipeline.py" $<TARGET_FILE:BasaltCLI> "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest")
+	set_tests_properties(AssetPipelineFeature PROPERTIES LABELS integration TIMEOUT 180 ENVIRONMENT "BASALT_USER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/AssetPipelineUserData")
+
 	add_test(NAME BenchmarkHarness COMMAND "${Python3_EXECUTABLE}" -B -O "${CMAKE_CURRENT_SOURCE_DIR}/Benchmarks/RunTests.py")
 	set_tests_properties(BenchmarkHarness PROPERTIES LABELS unit TIMEOUT 30)
 	add_test(NAME PhysicsJobFailure

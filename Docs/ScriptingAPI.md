@@ -759,6 +759,10 @@ Zero retains hardware comparison filtering. `ShadowsEnabled` in the scene's `Ren
 settings (scene files / `scene.settings`) disables all shadows. `Mesh.CastShadows` controls
 local and directional casters. Opaque and alpha-masked meshes cast; alpha-blended meshes do not.
 
+Mesh components accept `LODDistance` (0–1000000 world units, default 0): imported static meshes use reduced
+index ranges beyond that camera distance, doubling thresholds for subsequent levels. Physics retains
+full detail. See [AssetPipeline.md](AssetPipeline.md) for UUID persistence and import behavior.
+
 Local shadows use a 4096² depth atlas with 64 fixed 512² tiles, allocated on first use; until
 then a 1×1 fallback is bound. Each frame, point range spheres and spheres bounding spot cones
 are tested against the camera frustum. Visible influences are ranked by conservative projected

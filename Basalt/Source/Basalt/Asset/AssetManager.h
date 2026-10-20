@@ -79,8 +79,9 @@ namespace Basalt {
 		static Entity ImportModel(Scene& scene, const std::string& key, Entity parent, std::string& outError);
 
 		// Project-relative paths of every file under the asset directory with one of the extensions
-		// (lower-case, including the dot). Empty extension list returns every file.
-		static std::vector<std::string> ListAssets(const std::vector<std::string>& extensions = {});
+		// (lower-case, including the dot). Metadata is excluded. On an incomplete scan, returns the files found
+		// so far and sets *outError when provided; successful scans clear it.
+		static std::vector<std::string> ListAssets(const std::vector<std::string>& extensions = {}, std::string* outError = nullptr);
 		static bool IsMeshFile(const std::string& path);
 		static bool IsTextureFile(const std::string& path);
 	};

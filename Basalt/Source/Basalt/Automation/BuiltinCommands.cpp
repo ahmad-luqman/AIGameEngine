@@ -34,6 +34,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <limits>
 #include <map>
 #include <optional>
@@ -741,7 +742,7 @@ namespace Basalt {
 				bool saveSucceeded = false;
 				try
 				{
-					saveSucceeded = project->Save(error);
+					saveSucceeded = project->Save(error, params.contains("startScene") && !params["startScene"].is_null());
 				}
 				catch (const std::exception& e)
 				{
@@ -752,6 +753,7 @@ namespace Basalt {
 					project->GetConfig() = std::move(previous);
 					throw CommandError(error);
 				}
+				session.AcknowledgeAssetMetadata();
 				json result = json::object();
 				// Valid but useless, and a headless host has no renderer to warn about it later.
 				const ProjectConfig& saved = project->GetConfig();
@@ -997,7 +999,7 @@ namespace Basalt {
 					return json{ { "canvas", { canvas.x, canvas.y } }, { "items", items }, { "view", view }, { "problems", problems } };
 				});
 
-			Add(registry, "scene.get", "Returns the whole open scene as JSON (same format as .bscene files).", Schema::Object(), [](AutomationSession& session, const json&) {
+			Add(registry, "scene.get", "Returns the whole open scene as JSON with resolved asset paths (disk files persist UUID references).", Schema::Object(), [](AutomationSession& session, const json&) {
 				return SceneSerializer::SerializeScene(RequireScene(session));
 			});
 
@@ -1215,8 +1217,215 @@ namespace Basalt {
 			});
 		}
 
+		json MoveAsset(AutomationSession& session, const json& params)
+		{
+			auto project = RequireProject();
+			if (session.IsPlaying() || session.IsSimulating())
+				throw CommandError("stop Play or Simulate before moving assets");
+			const auto from = ProjectRelative(RequireString(params, "from"));
+			const auto to = ProjectRelative(RequireString(params, "to"));
+			std::string error;
+			const bool movesStartScene = project->GetAssets().ReferencesSource(project->GetConfig().StartScene, from);
+			const bool movesOpenScene = project->GetAssets().ReferencesSource(session.GetScenePath(), from);
+			if (!project->GetAssets().ValidateMove(from, to, error) || !project->GetAssets().Ensure(from, error))
+				throw CommandError(error);
+
+			struct Patch
+			{
+				UUID ID;
+				const ComponentInfo* Info;
+				json Data;
+			};
+			std::vector<Patch> patches;
+			Scene validation;
+			auto probe = validation.CreateEntity("AssetMoveValidation");
+			if (auto scene = session.GetEditScene())
+				for (auto entity : scene->GetAllEntitiesOrdered())
+					for (const auto& info : ComponentRegistry::GetAll())
+					{
+						if (info.AssetFields.empty() || !info.Has(entity))
+							continue;
+						auto data = info.Serialize(entity);
+						bool changed = false;
+						for (const auto& field : info.AssetFields)
+						{
+							auto value = data.find(field);
+							if (value == data.end() || !value->is_string())
+								throw CommandError("asset field did not serialize as a path: " + info.Name + "." + field);
+							const auto& key = value->get_ref<const std::string&>();
+							if (project->GetAssets().ReferencesSource(key, from))
+							{
+								const auto marker = key.find("#image/");
+								*value = to + (marker == std::string::npos ? "" : key.substr(marker));
+								changed = true;
+							}
+						}
+						if (changed)
+						{
+							if (!info.Deserialize(probe, data, error))
+								throw CommandError("cannot prepare open-scene asset references: " + error);
+							patches.push_back({ entity.GetUUID(), &info, std::move(data) });
+						}
+					}
+
+			// Prepare document replacements together. Newly created source metadata remains valid on failure.
+			struct Migration
+			{
+				std::string Path, Before, After;
+			};
+			std::vector<Migration> migrations;
+			const auto documents = AssetManager::ListAssets({ ".bscene", ".bprefab" }, &error);
+			if (!error.empty())
+				throw CommandError(error);
+			for (const auto& path : documents)
+			{
+				const auto text = FileSystem::ReadTextFile(Project::ResolvePath(path));
+				if (!text)
+					throw CommandError("cannot read asset references in '" + path + "'");
+				json data = ParseJson(*text);
+				if (!data.is_object())
+					throw CommandError("cannot migrate '" + path + "': expected a JSON object");
+				const auto original = data;
+				if (!SceneSerializer::EncodeAssetReferences(data, error, from))
+					throw CommandError(fmt::format("cannot migrate '{}': {}", path, error));
+				if (data != original)
+				{
+					const auto version = data.find("Version");
+					if (version != data.end() && (!version->is_number_integer() || *version < 1 || *version > SceneSerializer::FormatVersion))
+						throw CommandError("cannot migrate unsupported document version in '" + path + "'");
+					// V1 wrote the old default as data. Preserve its 'follow the project' meaning before upgrading.
+					if (version != data.end() && *version == 1 && data.contains("Physics") && data["Physics"].is_object())
+					{
+						auto& physics = data["Physics"];
+						float step = 0;
+						if (physics.contains("FixedTimestep") && JsonToFloat(physics["FixedTimestep"], step) && std::abs(step - DefaultFixedTimestep) < 1e-6f)
+							physics.erase("FixedTimestep");
+					}
+					data["Version"] = SceneSerializer::FormatVersion;
+					migrations.push_back({ path, *text, data.dump(1, '\t') });
+				}
+			}
+			if (movesStartScene)
+			{
+				const auto text = FileSystem::ReadTextFile(project->GetProjectFilePath());
+				if (!text)
+					throw CommandError("cannot migrate the project start scene: cannot read Project.bproject");
+				json data = ParseJson(*text);
+				if (!data.is_object())
+					throw CommandError("cannot migrate the project start scene: cannot read Project.bproject");
+				json reference;
+				if (!project->GetAssets().Encode(from, reference, error))
+					throw CommandError(error);
+				data["StartScene"] = std::move(reference);
+				migrations.push_back({ Project::FileName, *text, data.dump(1, '\t') });
+			}
+			size_t written = 0;
+			for (; written < migrations.size(); ++written)
+				if (!FileSystem::WriteTextFile(Project::ResolvePath(migrations[written].Path), migrations[written].After, error))
+					break;
+			if (written != migrations.size() || !project->GetAssets().Move(from, to, error))
+			{
+				for (size_t i = 0; i < written; ++i)
+				{
+					std::string restoreError;
+					if (!FileSystem::WriteTextFile(Project::ResolvePath(migrations[i].Path), migrations[i].Before, restoreError))
+						error += "; cannot restore " + migrations[i].Path + ": " + restoreError;
+				}
+				throw CommandError(error);
+			}
+
+			// Disk state is committed. Finish host bookkeeping even if a component observer rejects a patch.
+			if (movesStartScene)
+				project->SetStartScene(to);
+			if (movesOpenScene)
+			{
+				session.SetScenePath(to);
+				if (session.GetEditScene())
+					session.GetEditScene()->SetPath(to);
+			}
+			AssetManager::Clear();
+			for (const auto& migration : migrations)
+				// A scene/prefab can reference itself, so its migrated file may be the one just moved.
+				session.AcknowledgeFile(migration.Path == from ? to : migration.Path);
+			for (const auto& path : { from, to, from + ".meta", to + ".meta" })
+				session.AcknowledgeFile(path);
+			json warnings = json::array();
+			if (!patches.empty())
+				session.MarkDirty();
+			for (const auto& patch : patches)
+			{
+				const auto previousWarnings = warnings.size();
+				try
+				{
+					if (!patch.Info->Deserialize(session.GetEditScene()->GetEntityByUUID(patch.ID), patch.Data, error))
+						warnings.push_back(patch.Info->Name + ": " + error);
+				}
+				catch (const std::exception& exception)
+				{
+					warnings.push_back(patch.Info->Name + ": " + exception.what());
+				}
+				if (warnings.size() != previousWarnings)
+					BS_CORE_ERROR("Asset move '{}' -> '{}', entity {}: {}", from, to, static_cast<uint64_t>(patch.ID), warnings.back().get<std::string>());
+			}
+			json result = { { "from", from }, { "to", to } };
+			if (!warnings.empty())
+				result["warnings"] = std::move(warnings);
+			return result;
+		}
+
 		void RegisterAssets(CommandRegistry& registry)
 		{
+			Add(registry, "asset.id", "Creates or reads the stable UUID sidecar of an existing asset under Assets/.", Schema::Object({ { "path", Schema::String("asset path", true) } }, { "path" }), [](AutomationSession& session, const json& params) {
+				auto project = RequireProject();
+				const auto path = ProjectRelative(RequireString(params, "path"));
+				std::string error;
+				const auto id = project->GetAssets().Ensure(path, error);
+				if (!id)
+					throw CommandError(error);
+				session.AcknowledgeAssetMetadata();
+				return json{ { "uuid", std::to_string(*id) }, { "path", path } };
+			});
+
+			Add(registry, "asset.resolve", "Resolves an asset UUID (decimal string) to its current project-relative path. Reads metadata without creating files.", Schema::Object({ { "uuid", Schema::String("nonzero decimal UUID", true) } }, { "uuid" }), [](AutomationSession&, const json& params) {
+				auto project = RequireProject();
+				std::string error;
+				const auto id = AssetRegistry::ParseID(RequireString(params, "uuid"), error);
+				if (!id || !project->GetAssets().Refresh(error))
+					throw CommandError(error);
+				const auto path = project->GetAssets().Find(*id);
+				if (path.empty())
+					throw CommandError("unresolved asset UUID " + std::to_string(*id));
+				return json{ { "uuid", std::to_string(*id) }, { "path", path } };
+			});
+
+			auto move = [](AutomationSession& session, const json& params) {
+				try
+				{
+					auto result = MoveAsset(session, params);
+					session.AcknowledgeAssetMetadata();
+					return result;
+				}
+				catch (...)
+				{
+					session.AcknowledgeAssetMetadata();
+					throw;
+				}
+			};
+			for (const auto* command : { "asset.move", "asset.rename" })
+				Add(registry, command, "Moves one asset file and its .meta sidecar within Assets/. 'to' is the complete destination path. Creates metadata if needed, migrates scene/prefab references to this asset to UUIDs and updates the open edit scene and project start scene. Does not rewrite paths inside scripts or glTF files. Stop Play or Simulate first.", Schema::Object({ { "from", Schema::String("source path", true) }, { "to", Schema::String("destination path", true) } }, { "from", "to" }), move, CommandPolicy::EditBoundary);
+
+			Add(registry, "asset.delete", "Deletes one asset file and its .meta identity. Existing UUID references become unresolved. Stop Play or Simulate first.", Schema::Object({ { "path", Schema::String("asset path", true) } }, { "path" }), [](AutomationSession& session, const json& params) {
+				auto project = RequireProject();
+				if (session.IsPlaying() || session.IsSimulating())
+					throw CommandError("stop Play or Simulate before deleting assets");
+				const auto path = ProjectRelative(RequireString(params, "path"));
+				std::string error;
+				if (!project->GetAssets().Remove(path, error))
+					throw CommandError(error);
+				session.AcknowledgeFile(path + ".meta");
+				session.OnFileWritten(path);
+				return json{ { "path", path } }; }, CommandPolicy::EditBoundary);
+
 			Add(registry, "asset.list", "Lists project asset files, optionally filtered by extensions (e.g. ['.lua']).", Schema::Object({ { "extensions", Schema::Array("array of strings", Schema::String()) } }), [](AutomationSession&, const json& params) {
 				RequireProject();
 				// The schema has checked the types.
@@ -1239,10 +1448,18 @@ namespace Basalt {
 					if (graph.is_discarded() || !AnimationGraph::FromJson(graph, error))
 						throw CommandError("invalid animation graph: " + error);
 				}
+				const bool adoptsOrphan = !FileSystem::Exists(Project::ResolvePath(path)) && FileSystem::Exists(Project::ResolvePath(path + ".meta"));
 				if (!FileSystem::WriteTextFile(Project::ResolvePath(path), content.get<std::string>()))
 					throw CommandError("cannot write '" + path + "'");
 				const AssetReloadReport report = session.OnFileWritten(path);
-				return json{ { "path", path }, { "bytes", content.get<std::string>().size() }, { "scripts", ScriptReloadJson(report) } };
+				json result = { { "path", path }, { "bytes", content.get<std::string>().size() }, { "scripts", ScriptReloadJson(report) } };
+				if (adoptsOrphan)
+				{
+					const auto warning = "restored source next to existing metadata; its previous UUID is retained: " + path;
+					BS_CORE_WARN("{}", warning);
+					result["warnings"] = json::array({ warning });
+				}
+				return result;
 			});
 
 			Add(registry, "asset.refresh", "Reloads the asset files changed on disk since changes were last reported (by an earlier refresh, by the editor's automatic reload, or since the project was opened in this process): models, textures and animation graphs load again on their next use (graphs restart from their initial state and parameter defaults), and while the game runs (Play, not Simulate) changed scripts are hot reloaded (instances keep their fields; OnReload is called). With 'paths', reloads those files instead, changed or not (a path that does not exist and was not known is an error, and nothing is reloaded then). Files the session wrote itself (asset.write, scene.save, ...) are not reported again. Without 'paths', fails when Assets/ cannot be read.", Schema::Object({ { "paths", Schema::Array("array of project-relative file paths, optional", Schema::String("string", true)) } }), [](AutomationSession& session, const json& params) {

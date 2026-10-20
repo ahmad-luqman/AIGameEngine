@@ -5,6 +5,10 @@
 
 #include <Basalt/Animation/AnimationSystem.h>
 #include <Basalt/Asset/AssetManager.h>
+#include <Basalt/Asset/MeshOptimizer.h>
+
+#include "../Source/TestUtils.h"
+#include "../Source/MeshTestUtils.h"
 #include <Basalt/Core/JobSystem.h>
 #include <Basalt/Core/MemoryTracker.h>
 #include <Basalt/Particles/ParticleSystem.h>
@@ -646,5 +650,47 @@ TEST_CASE("Lit particle diffuse uses bounded light attenuation and receives skyl
 	CHECK(ambient[center] > dark[center] + 10);
 	scene.OnRuntimeStop();
 	graphics->WaitIdle();
+	CHECK(graphics->GetValidationErrorCount() == 0);
+}
+
+TEST_CASE("Static LOD selection draws reduced ranges while picking retains entity identity")
+{
+	auto graphics = CreateTestGraphics();
+	BasaltTest::TempDirectory directory("ImportedLODRender");
+	AssetManager::TemporaryLoads temporary;
+	const auto key = FileSystem::PathToGenericUtf8(BasaltTest::WriteSphereGltf(directory.GetPath()));
+	auto source = AssetManager::GetMesh(key);
+	REQUIRE_MESSAGE(source, AssetManager::GetError(key));
+	REQUIRE_FALSE(source->Submeshes[0].LODs.empty());
+	Scene scene;
+	scene.GetRendererSettings().SSAOEnabled = false;
+	scene.GetRendererSettings().ShadowsEnabled = false;
+	auto entity = scene.CreateEntity("LOD");
+	entity.AddComponent<MeshComponent>().Mesh = key;
+	RenderCamera camera;
+	camera.Position = { 0, 0, 5 };
+	camera.View = glm::lookAtRH(camera.Position, glm::vec3(0), glm::vec3(0, 1, 0));
+	camera.Projection = glm::orthoRH_ZO(-1.0f, 1.0f, -1.0f, 1.0f, .1f, 20.0f);
+	camera.Far = 20;
+	SceneRenderer renderer(graphics->GetDevice(), { .Picking = true });
+	REQUIRE(renderer.Initialize());
+	renderer.SetViewportSize(64, 64);
+	Capture(renderer, scene, camera);
+	const auto full = renderer.GetStatistics().Triangles;
+	CHECK(full == source->Submeshes[0].IndexCount / 3);
+	ExpectPick(renderer, 32, 32, entity.GetUUID());
+	entity.GetComponent<MeshComponent>().LODDistance = 4;
+	Capture(renderer, scene, camera);
+	CHECK(renderer.GetStatistics().Triangles == source->Submeshes[0].LODs[0].IndexCount / 3);
+	CHECK(renderer.GetStatistics().Triangles < full);
+	ExpectPick(renderer, 32, 32, entity.GetUUID());
+	auto near = scene.CreateEntity("NearLOD");
+	near.AddComponent<MeshComponent>() = { key, 0, true, 4 };
+	near.GetTransform().Translation = { .6f, 0, 2 };
+	Capture(renderer, scene, camera);
+	CHECK(renderer.GetStatistics().Triangles == full + source->Submeshes[0].LODs[0].IndexCount / 3);
+	entity.AddComponent<MaterialComponent>().AlbedoColor.a = .5f;
+	Capture(renderer, scene, camera);
+	CHECK(renderer.GetStatistics().Triangles == 2 * full);
 	CHECK(graphics->GetValidationErrorCount() == 0);
 }
