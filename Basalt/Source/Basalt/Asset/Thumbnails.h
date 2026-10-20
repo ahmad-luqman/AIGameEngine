@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -60,6 +61,8 @@ namespace Basalt {
 	// NaN (written as null) still compares equal and is not re-rendered every frame; JSON array boundaries keep
 	// paths containing separators from producing the same key.
 	std::string MaterialPreviewKey(const MaterialComponent& material);
+	// Every texture a material preview samples (empty entries included): a change to any of them stales it.
+	std::array<const std::string*, 9> MaterialPreviewMaps(const MaterialComponent& material);
 
 	// A project's previews on disk, under <project>/Cache/Thumbnails: outside Assets/, so never exported. Each
 	// entry is <hash of the project-relative path>.png plus a .key file holding the version key (path, size,
@@ -68,8 +71,8 @@ namespace Basalt {
 	class ThumbnailCache
 	{
 	public:
-		// Bumped when previews change their look, so old caches are rebuilt.
-		static constexpr uint32_t Version = 1;
+		// Bumped when previews change their look, so old caches are rebuilt (2: clearcoat, transmission, KTX2).
+		static constexpr uint32_t Version = 2;
 
 		struct Entry
 		{
