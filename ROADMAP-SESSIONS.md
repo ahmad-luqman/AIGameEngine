@@ -3,7 +3,7 @@
 The `ROADMAP.md` items grouped into single-session milestones, sorted in order of implementation, with completed
 sessions retained for reference. The order follows the roadmap's priorities (P1 → P2 → P3) and is adjusted so that
 work a later session depends on comes first.
-Updated in October 2026 through Asset pipeline I (session 7).
+Updated in October 2026 through Asset pipeline II (session 8).
 
 Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or more.
 
@@ -16,7 +16,7 @@ Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or mor
 | 5 | **Game UI** ✅ | UI follow-ups: `UI.MeasureText`, clipping, rect rotation/scale, sprite sheets, viewport handles (S); more widgets: text input, dropdown, scroll view, vertical slider, explicit navigation, input-blocking panels, focus ring (M) | Shipped in [PR #41](https://github.com/ahmad-luqman/AIGameEngine/pull/41): shared clipped/transformed layouts, menu widgets and viewport handles with snapping, undo and cancellation. |
 | 6 | **Effects polish** ✅ | Particle follow-ups: soft/lit particles, rotation, random birth size/color, multi-key curves and edit preview (M); one-shot audio effects, reverb zones, high-pass/echo/distortion (S) | Shipped in [PR #42](https://github.com/ahmad-luqman/AIGameEngine/pull/42). |
 | 7 | **Asset pipeline I** ✅ | Stable asset IDs with `.meta` UUIDs (M); mesh optimization and LODs with meshoptimizer (S) | Implemented: project-local `.meta` UUIDs, scene/prefab/start-scene identity references, move/rename commands, meshoptimizer import and opt-in static mesh LODs. |
-| 8 | **Asset pipeline II (complete)** | Texture compression to KTX2/BC7 (M); glTF extensions (M) | `KHR_texture_basisu` needs the KTX2 path. Clearcoat and transmission extend the material model before session 9. |
+| 8 | **Asset pipeline II** ✅ | Texture compression to KTX2/BC7 (M); glTF extensions (M) | Shipped in [PR #44](https://github.com/ahmad-luqman/AIGameEngine/pull/44): KTX2/BC7 imports and the six planned glTF extensions. |
 | 9 | **Material assets** | `.bmaterial` files with thumbnails (L) | Needs stable IDs and the extended material model from sessions 7 and 8. |
 | 10 | **Animation content** | Morph targets (M); retargeting, e.g. sharing a Mixamo library across characters (M) | Both change skinning and import. Doing them before TAA means motion vectors handle deformed meshes from the start. |
 | 11 | **TAA** | Temporal anti-aliasing (M) | Needs previous-frame data for instanced draws (session 4) and for skinned and morphed meshes (session 10). |

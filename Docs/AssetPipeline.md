@@ -70,16 +70,16 @@ an earlier location until the next save; UUID resolution remains authoritative.
 authors a separate KTX2 asset containing desktop BC7 blocks and a complete mip chain. The source stays
 unchanged; point material/image references at the output to use it. Use `srgb:false` for normal and data
 maps. HDR input is rejected. Cache entries in `Cache/Textures/` are keyed by source contents, encoder
-version and color-space setting; changed sources/settings recompress, and unreadable cache entries are
+cache version (bumped when the encoder pin, parameters or mip filter change) and color-space setting; changed sources/settings recompress, and unreadable cache entries are
 rebuilt. Outputs live under `Assets/` and export normally; caches are excluded. Re-run compression after
 editing a source. Imports reject symlink sources/output ancestors. Compression is explicit rather than
 an implicit mutation during loading.
 
 The headless loader accepts 2D KTX2 with native BC7, Basis ETC1S, or LDR UASTC (including Zstandard).
-Basis textures transcode to BC7 once on the asset worker; the renderer uploads supplied block mip levels
+Basis textures transcode to BC7 once in the texture load job; the renderer uploads supplied block mip levels
 without decoding to RGBA. GPUs without sampled BC7 support use an RGBA8 fallback. CPU thumbnails decode
 level zero. Arrays, cubemaps, 3D textures, HDR Basis, non-default orientation/swizzle and other native
-formats are rejected explicitly. Dimensions are limited to 16384 per side and compressed payloads to
+formats are rejected explicitly. Dimensions are limited to 16384 per side and KTX2 files and BC7 mip chains to
 256 MiB. KTX2 texture color/data interpretation follows its material slot, like other textures.
 
 The glTF importer supports `KHR_texture_basisu`, `KHR_mesh_quantization`, `KHR_texture_transform`,
@@ -100,3 +100,11 @@ retain their full-detail, unreordered topology.
 Authored `Material` overrides expose `Clearcoat`, `ClearcoatRoughness`, `Transmission` in [0,1], the four
 extension map paths, and shared `UVOffset`, `UVScale`, `UVRotation` (radians). Their maps use UV0. All
 fields use the component registry for Lua, automation, disk persistence, inspector editing and undo.
+
+The `KHR_texture_basisu` image source is authoritative when present. A malformed/unsupported KTX2
+reports an asset-load error; Basalt does not silently substitute the optional core PNG/JPEG source.
+Normal-map scale and occlusion strength are honored on imported materials. Any positive transmission
+factor selects the transparent pass, without prepass normals or SSAO and without shadow casting/LODs.
+The isolated `AssetPipelineFeature` ctest exercises compression and UUID saves on a temporary copy of
+the feature project, so `FeatureTest.batch.json` never writes generated textures into checked-in assets.
+Cache write failures warn and still produce the requested output; output write failures report the OS reason.

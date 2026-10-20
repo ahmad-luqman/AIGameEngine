@@ -3,12 +3,16 @@
 
 #include <Basalt/Asset/AssetManager.h>
 #include <Basalt/Asset/TextureCompression.h>
-#include "../Source/TestUtils.h"
 #include <Basalt/Asset/ImageUtils.h>
 #include <Basalt/Core/FileSystem.h>
 #include <Basalt/Project/Project.h>
 #include <Basalt/Renderer/DebugDraw.h>
 #include <Basalt/Renderer/PreviewRenderer.h>
+
+#include "../Source/TestUtils.h"
+#include "../Source/MeshTestUtils.h"
+
+#include <glm/gtc/constants.hpp>
 
 #include <filesystem>
 #include <optional>
@@ -213,6 +217,81 @@ TEST_CASE("BC7 mip upload and material extensions render with validation")
 	const auto right = Made(previews.RenderMaterial(material, error), error);
 	CHECK(At(left, 64, 64).R > At(left, 64, 64).G + 80);
 	CHECK(At(right, 64, 64).G > At(right, 64, 64).R + 80);
+	material.UVScale = { 0, 0.5f };
+	material.UVOffset = { 0.5f, 0.25f };
+	material.UVRotation = glm::half_pi<float>();
+	const auto rotated = Made(previews.RenderMaterial(material, error), error);
+	material.UVRotation = -glm::half_pi<float>();
+	const auto inverse = Made(previews.RenderMaterial(material, error), error);
+	CHECK(At(rotated, 64, 64).R > At(rotated, 64, 64).G + 80);
+	CHECK(At(inverse, 64, 64).G > At(inverse, 64, 64).R + 80);
+	AssetManager::Clear();
+	CHECK(graphics->GetValidationErrorCount() == 0);
+}
+
+TEST_CASE("Imported UV1 and texture rotation preserve normal orientation and alpha-mode coverage")
+{
+	auto graphics = CreateTestGraphics();
+	BasaltTest::TempDirectory temp("ImportedMaterialsGPU");
+	const auto& root = temp.GetPath();
+	std::string error;
+	auto plane = Primitives::CreatePlane();
+	for (auto& vertex : plane->Vertices)
+		vertex.TexCoord1 = { 0.75f, 0.5f };
+	const auto path = BasaltTest::WriteSphereGltf(root, false, plane);
+	const auto text = FileSystem::ReadTextFile(path);
+	REQUIRE(text);
+	auto model = nlohmann::json::parse(*text);
+	TextureSource normal;
+	normal.Width = 2;
+	normal.Height = 2;
+	normal.Pixels = { 128, 200, 230, 255, 128, 200, 230, 255, 128, 200, 230, 255, 128, 200, 230, 255 };
+	REQUIRE(WritePng(root / "normal.png", normal.Pixels, 2, 2, error));
+	model["images"] = { { { "uri", "normal.png" } } };
+	model["textures"] = { { { "source", 0 } } };
+	model["materials"][0]["pbrMetallicRoughness"] = { { "metallicFactor", 0 }, { "roughnessFactor", 0.65 } };
+	model["materials"][0]["normalTexture"] = { { "index", 0 } };
+	PreviewRenderer previews(graphics->GetDevice());
+	REQUIRE(previews.Initialize());
+	auto render = [&] { REQUIRE(FileSystem::WriteTextFile(path,model.dump()));AssetManager::Clear();return Made(previews.RenderModel(FileSystem::PathToUtf8(path),error),error); };
+	const auto base = render();
+	model["meshes"][0]["primitives"][0]["attributes"]["TEXCOORD_1"] = 3;
+	model["materials"][0]["normalTexture"]["texCoord"] = 1;
+	const auto uv1 = render();
+	CHECK(Difference(At(base, 64, 64), At(uv1, 64, 64)) < 5);
+	model["materials"][0].erase("normalTexture");
+	model["materials"][0]["extensions"]["KHR_materials_clearcoat"] = { { "clearcoatFactor", 1 }, { "clearcoatRoughnessFactor", 0.4 }, { "clearcoatNormalTexture", { { "index", 0 } } } };
+	const auto coat = render();
+	CHECK(Difference(At(base, 64, 64), At(coat, 64, 64)) > 2);
+	// OPAQUE and surviving MASK coverage ignore base-color alpha even in the transmission pass.
+	model["materials"][0].erase("extensions");
+	model["materials"][0]["extensions"]["KHR_materials_transmission"] = { { "transmissionFactor", 0.8 } };
+	model["materials"][0]["pbrMetallicRoughness"]["baseColorFactor"] = { 0.5, 0.6, 0.7, 1 };
+	const auto opaque = render();
+	model["materials"][0]["pbrMetallicRoughness"]["baseColorFactor"][3] = 0.5;
+	CHECK(bool(render().Pixels == opaque.Pixels));
+	model["materials"][0]["alphaMode"] = "MASK";
+	model["materials"][0]["alphaCutoff"] = 0.2;
+	CHECK(bool(render().Pixels == opaque.Pixels));
+	model["materials"][0]["alphaMode"] = "BLEND";
+	CHECK(bool(render().Pixels != opaque.Pixels));
+	// A distinct second UV set reaches the seventh vertex attribute and the fragment selector.
+	std::vector<uint8_t> split(16 * 16 * 4, 255);
+	for (size_t pixel = 0; pixel < 256; pixel++)
+	{
+		split[pixel * 4] = (pixel % 16 < 8) ? 255 : 0;
+		split[pixel * 4 + 1] = (pixel % 16 < 8) ? 0 : 255;
+		split[pixel * 4 + 2] = 0;
+	}
+	REQUIRE(WritePng(root / "split.png", split, 16, 16, error));
+	model["images"][0]["uri"] = "split.png";
+	model["accessors"].push_back({ { "bufferView", 0 }, { "byteOffset", offsetof(Vertex, TexCoord1) }, { "componentType", 5126 }, { "count", plane->Vertices.size() }, { "type", "VEC2" } });
+	model["meshes"][0]["primitives"][0]["attributes"]["TEXCOORD_1"] = 5;
+	model["materials"][0] = { { "pbrMetallicRoughness", { { "baseColorFactor", { 0, 0, 0, 1 } }, { "metallicFactor", 0 } } }, { "emissiveFactor", { 0.5, 0.5, 0.5 } }, { "emissiveTexture", { { "index", 0 }, { "texCoord", 1 } } } };
+	const auto secondUV = render();
+	CHECK(At(secondUV, 64, 64).G > At(secondUV, 64, 64).R + 60);
+	model["materials"][0]["emissiveTexture"]["texCoord"] = 0;
+	CHECK(bool(render().Pixels != secondUV.Pixels));
 	AssetManager::Clear();
 	CHECK(graphics->GetValidationErrorCount() == 0);
 }

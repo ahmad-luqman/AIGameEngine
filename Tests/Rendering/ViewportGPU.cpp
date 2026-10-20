@@ -694,3 +694,42 @@ TEST_CASE("Static LOD selection draws reduced ranges while picking retains entit
 	CHECK(renderer.GetStatistics().Triangles == 2 * full);
 	CHECK(graphics->GetValidationErrorCount() == 0);
 }
+
+TEST_CASE("Full thin transmission reveals an emissive destination instead of darkening the surface")
+{
+	auto graphics = CreateTestGraphics();
+	Scene scene;
+	scene.GetRendererSettings().SSAOEnabled = false;
+	scene.GetRendererSettings().ShadowsEnabled = false;
+	auto sky = scene.CreateEntity("DarkEnvironment");
+	sky.AddComponent<SkyLightComponent>().Intensity = 0;
+	auto back = scene.CreateEntity("EmissiveBackground");
+	back.AddComponent<MeshComponent>().Mesh = "builtin://Cube";
+	back.GetTransform().Scale = { 3, 3, 1 };
+	auto& background = back.AddComponent<MaterialComponent>();
+	background.AlbedoColor = { 0, 0, 0, 1 };
+	background.EmissiveColor = { 0.2f, 0.4f, 0.6f };
+	RenderCamera camera;
+	camera.Position = { 0, 0, 5 };
+	camera.View = glm::lookAtRH(camera.Position, glm::vec3(0), glm::vec3(0, 1, 0));
+	camera.Projection = glm::orthoRH_ZO(-2.0f, 2.0f, -2.0f, 2.0f, .1f, 20.0f);
+	camera.Far = 20;
+	SceneRenderer renderer(graphics->GetDevice());
+	REQUIRE(renderer.Initialize());
+	renderer.SetViewportSize(64, 64);
+	const auto unobstructed = Capture(renderer, scene, camera);
+	auto front = scene.CreateEntity("Glass");
+	front.AddComponent<MeshComponent>().Mesh = "builtin://Cube";
+	front.GetTransform().Translation = { 0, 0, 2 };
+	auto& glass = front.AddComponent<MaterialComponent>();
+	glass.Transmission = 1;
+	glass.Metallic = 0;
+	const auto through = Capture(renderer, scene, camera);
+	const size_t centre = (size_t(32) * 64 + 32) * 4;
+	for (size_t channel = 0; channel < 3; channel++)
+		CHECK(std::abs(int(through[centre + channel]) - int(unobstructed[centre + channel])) <= 2);
+	glass.Transmission = 0;
+	const auto blocked = Capture(renderer, scene, camera);
+	CHECK(std::abs(int(blocked[centre + 2]) - int(unobstructed[centre + 2])) > 40);
+	CHECK(graphics->GetValidationErrorCount() == 0);
+}

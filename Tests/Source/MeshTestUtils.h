@@ -12,9 +12,9 @@
 namespace BasaltTest {
 
 	// A dense static glTF with real interleaved attributes, exercising the import path before publication.
-	inline std::filesystem::path WriteSphereGltf(const std::filesystem::path& root, bool blend = false)
+	inline std::filesystem::path WriteSphereGltf(const std::filesystem::path& root, bool blend = false, const Basalt::Ref<Basalt::MeshSource>& provided = nullptr)
 	{
-		const auto mesh = Basalt::Primitives::CreateSphere(32, 16);
+		const auto mesh = provided ? provided : Basalt::Primitives::CreateSphere(32, 16);
 		const auto vertexBytes = mesh->Vertices.size() * sizeof(Basalt::Vertex);
 		std::string buffer(reinterpret_cast<const char*>(mesh->Vertices.data()), vertexBytes);
 		buffer.append(reinterpret_cast<const char*>(mesh->Indices.data()), mesh->Indices.size() * sizeof(uint32_t));

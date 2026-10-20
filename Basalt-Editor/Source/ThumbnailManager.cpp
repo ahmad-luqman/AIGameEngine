@@ -30,13 +30,6 @@ namespace Basalt {
 			return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 		}
 
-		// Every value a material preview shows, exactly (fmt prints floats so they read back the same). A string
-		// rather than operator==: NaN never compares equal, which would re-render it every frame.
-		std::string MaterialKey(const MaterialComponent& m)
-		{
-			return fmt::format("{} {} {} {} {} {} {} {} {} {}|{}|{}|{}|{}|{}", m.AlbedoColor.r, m.AlbedoColor.g, m.AlbedoColor.b, m.AlbedoColor.a, m.Metallic, m.Roughness, m.EmissiveColor.r, m.EmissiveColor.g, m.EmissiveColor.b, m.EmissiveIntensity, m.AlbedoMap, m.NormalMap, m.MetallicRoughnessMap, m.OcclusionMap, m.EmissiveMap);
-		}
-
 		std::vector<std::string> ModelDetails(const MeshSource& mesh)
 		{
 			const size_t triangles = mesh.Indices.size() / 3;
@@ -130,7 +123,7 @@ namespace Basalt {
 		const std::string slotId = s_MaterialPrefix + id;
 		Slot& slot = Touch(slotId);
 		slot.IsMaterial = true;
-		if (std::string key = MaterialKey(material); key != slot.Key)
+		if (std::string key = MaterialPreviewKey(material); key != slot.Key)
 		{
 			slot.Key = std::move(key);
 			slot.Material = material;
@@ -307,10 +300,11 @@ namespace Basalt {
 				const Ref<TextureSource> source = TextureSource::LoadFromFile(Project::ResolvePath(FileSystem::PathFromUtf8(relativePath)), outError);
 				if (!source)
 					return std::nullopt;
-				ThumbnailImage image = MakeImageThumbnail(*source, PreviewRenderer::OutputSize);
+				ThumbnailImage image = MakeImageThumbnail(*source, PreviewRenderer::OutputSize, &outError);
 				if (!image.IsValid())
 				{
-					outError = "the image data is incomplete";
+					if (outError.empty())
+						outError = "the image data is incomplete";
 					return std::nullopt;
 				}
 				return ThumbnailCache::Entry{ std::move(image), { fmt::format("{} x {}{}", source->Width, source->Height, source->Format == TextureFormat::RGBA32F ? " HDR" : "") } };

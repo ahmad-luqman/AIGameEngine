@@ -59,7 +59,7 @@ struct MaterialData
 	vec4 AlbedoColor;
 	vec4 Emissive;        // rgb * intensity
 	vec4 Params;          // x: metallic, y: roughness, z: alpha cutoff (0 = opaque), w: flags
-	vec4 Extensions;      // clearcoat, coat roughness, transmission, transparent pass
+	vec4 Extensions;      // clearcoat, coat roughness, transmission, use albedo alpha as coverage
 	vec4 NormalParams;    // normal scale, occlusion strength, coat normal scale
 	vec4 UVRows[18];      // two affine rows per map, first row.w selects UV0/UV1
 };
@@ -102,6 +102,10 @@ mat4 ShadowViewProjection(uint index)
 #define MATERIAL_HAS_MR_MAP 4u
 #define MATERIAL_HAS_OCCLUSION_MAP 8u
 #define MATERIAL_HAS_EMISSIVE_MAP 16u
+#define MATERIAL_HAS_CLEARCOAT_MAP 32u
+#define MATERIAL_HAS_CLEARCOAT_ROUGHNESS_MAP 64u
+#define MATERIAL_HAS_CLEARCOAT_NORMAL_MAP 128u
+#define MATERIAL_HAS_TRANSMISSION_MAP 256u
 
 vec3 RotateY(vec3 v, float angle)
 {

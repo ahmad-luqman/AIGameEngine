@@ -284,7 +284,11 @@ namespace Basalt {
 			MaterialHasNormalMap = 2,
 			MaterialHasMetallicRoughnessMap = 4,
 			MaterialHasOcclusionMap = 8,
-			MaterialHasEmissiveMap = 16
+			MaterialHasEmissiveMap = 16,
+			MaterialHasClearcoatMap = 32,
+			MaterialHasClearcoatRoughnessMap = 64,
+			MaterialHasClearcoatNormalMap = 128,
+			MaterialHasTransmissionMap = 256
 		};
 
 		struct DrawItem
@@ -1121,6 +1125,7 @@ namespace Basalt {
 			{
 				desc.renderState.blendState.targets[0]
 					.setBlendEnable(true)
+					// Premultiplied reflection stays visible when transmission lowers destination occlusion.
 					.setSrcBlend(nvrhi::BlendFactor::One)
 					.setDestBlend(nvrhi::BlendFactor::InvSrcAlpha)
 					.setSrcBlendAlpha(nvrhi::BlendFactor::One)
@@ -1753,10 +1758,10 @@ namespace Basalt {
 					blend = m.AlbedoColor.a < 0.999f || m.Transmission > 0;
 					material.Extensions = glm::vec4(m.Clearcoat, m.ClearcoatRoughness, m.Transmission, blend ? 1.0f : 0.0f);
 					material.NormalParams = glm::vec4(1);
-					nvrhi::ITexture* coat = texture(m.ClearcoatMap, false, m_Resources->GetWhiteTexture(), 32, flags);
-					nvrhi::ITexture* coatRoughness = texture(m.ClearcoatRoughnessMap, false, m_Resources->GetWhiteTexture(), 64, flags);
-					nvrhi::ITexture* coatNormal = texture(m.ClearcoatNormalMap, false, m_Resources->GetFlatNormalTexture(), 128, flags);
-					nvrhi::ITexture* transmission = texture(m.TransmissionMap, false, m_Resources->GetWhiteTexture(), 256, flags);
+					nvrhi::ITexture* coat = texture(m.ClearcoatMap, false, m_Resources->GetWhiteTexture(), MaterialHasClearcoatMap, flags);
+					nvrhi::ITexture* coatRoughness = texture(m.ClearcoatRoughnessMap, false, m_Resources->GetWhiteTexture(), MaterialHasClearcoatRoughnessMap, flags);
+					nvrhi::ITexture* coatNormal = texture(m.ClearcoatNormalMap, false, m_Resources->GetFlatNormalTexture(), MaterialHasClearcoatNormalMap, flags);
+					nvrhi::ITexture* transmission = texture(m.TransmissionMap, false, m_Resources->GetWhiteTexture(), MaterialHasTransmissionMap, flags);
 					material.Params.w = static_cast<float>(flags);
 					set = materialSet(albedo, normal, mr, occlusion, emissive, coat, coatRoughness, coatNormal, transmission);
 				}
@@ -1773,12 +1778,12 @@ namespace Basalt {
 					material.Params = glm::vec4(m.Metallic, m.Roughness, m.Alpha == AlphaMode::Mask ? m.AlphaCutoff : 0.0f, static_cast<float>(flags));
 					blend = m.Alpha == AlphaMode::Blend || m.Transmission > 0;
 					doubleSided = m.DoubleSided;
-					material.Extensions = glm::vec4(m.Clearcoat, m.ClearcoatRoughness, m.Transmission, blend ? 1.0f : 0.0f);
+					material.Extensions = glm::vec4(m.Clearcoat, m.ClearcoatRoughness, m.Transmission, m.Alpha == AlphaMode::Blend ? 1.0f : 0.0f);
 					material.NormalParams = glm::vec4(1);
-					nvrhi::ITexture* coat = texture(m.ClearcoatMap, false, m_Resources->GetWhiteTexture(), 32, flags);
-					nvrhi::ITexture* coatRoughness = texture(m.ClearcoatRoughnessMap, false, m_Resources->GetWhiteTexture(), 64, flags);
-					nvrhi::ITexture* coatNormal = texture(m.ClearcoatNormalMap, false, m_Resources->GetFlatNormalTexture(), 128, flags);
-					nvrhi::ITexture* transmission = texture(m.TransmissionMap, false, m_Resources->GetWhiteTexture(), 256, flags);
+					nvrhi::ITexture* coat = texture(m.ClearcoatMap, false, m_Resources->GetWhiteTexture(), MaterialHasClearcoatMap, flags);
+					nvrhi::ITexture* coatRoughness = texture(m.ClearcoatRoughnessMap, false, m_Resources->GetWhiteTexture(), MaterialHasClearcoatRoughnessMap, flags);
+					nvrhi::ITexture* coatNormal = texture(m.ClearcoatNormalMap, false, m_Resources->GetFlatNormalTexture(), MaterialHasClearcoatNormalMap, flags);
+					nvrhi::ITexture* transmission = texture(m.TransmissionMap, false, m_Resources->GetWhiteTexture(), MaterialHasTransmissionMap, flags);
 					material.Params.w = static_cast<float>(flags);
 					set = materialSet(albedo, normal, mr, occlusion, emissive, coat, coatRoughness, coatNormal, transmission);
 				}

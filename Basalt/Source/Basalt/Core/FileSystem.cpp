@@ -91,6 +91,11 @@ namespace Basalt {
 		return false;
 	}
 
+	bool FileSystem::WriteBinaryFile(const std::filesystem::path& path, const void* data, size_t size, std::string& outError)
+	{
+		return WriteAtomically(path, data, size, outError);
+	}
+
 	bool FileSystem::WriteAtomically(const std::filesystem::path& path, const void* data, size_t size, std::string& outError)
 	{
 		std::error_code error;

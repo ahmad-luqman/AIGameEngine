@@ -35,6 +35,25 @@ with tempfile.TemporaryDirectory(prefix="BasaltAssetPipeline-") as temp:
         result = subprocess.run([str(cli), "--project", str(project), "asset.compress_texture", json.dumps(dict(compression, path="Assets/Textures/Alias.png"))], capture_output=True, text=True, timeout=30)
         require(result.returncode != 0, "compression accepted a symlink source")
         alias.unlink()
+    if sys.platform != "win32":
+        def reject(params, reason):
+            result = subprocess.run([str(cli), "--project", str(project), "asset.compress_texture", json.dumps(params)], capture_output=True, text=True, timeout=30)
+            require(result.returncode != 0 and reason in result.stdout + result.stderr, "missing diagnostic: " + reason)
+        reject(dict(compression, output="Cache/out.ktx2"), "under Assets")
+        outside = pathlib.Path(temp) / "Outside"
+        outside.mkdir()
+        (project / "Assets/AliasDirectory").symlink_to(outside, target_is_directory=True)
+        reject(dict(compression, output="Assets/AliasDirectory/out.ktx2"), "symlinks")
+        (project / "Assets/AliasDirectory").unlink()
+        leaf = project / "Assets/Alias.ktx2"
+        leaf.symlink_to(outside / "untouched.ktx2")
+        reject(dict(compression, output="Assets/Alias.ktx2"), "symlinks")
+        leaf.unlink()
+        shutil.rmtree(project / "Cache/Textures")
+        (project / "Cache/Textures").symlink_to(outside, target_is_directory=True)
+        reject(compression, "Cache/Textures")
+        (project / "Cache/Textures").unlink()
+        require(not list(outside.iterdir()), "invalid path request wrote outside project")
     original = "Assets/Textures/Checker.png"
     target = "Assets/Textures/Renamed.png"
     commands = [
@@ -58,6 +77,9 @@ with tempfile.TemporaryDirectory(prefix="BasaltAssetPipeline-") as temp:
     saved = json.loads((project / "Assets/Scenes/FeatureTest.bscene").read_text())
     materials = [e["Components"]["Material"]["AlbedoMap"] for e in saved["Entities"] if "Material" in e.get("Components", {}) and "AlbedoMap" in e["Components"]["Material"]]
     require(any(isinstance(value, dict) and value.get("UUID") == meta["UUID"] for value in materials), "scene did not persist the moved texture UUID")
+    extended = next(e["Components"]["Material"] for e in saved["Entities"] if e["Name"] == "MaterialExtensionData")
+    for field in ("ClearcoatMap", "ClearcoatRoughnessMap", "ClearcoatNormalMap", "TransmissionMap"):
+        require(extended[field]["UUID"] == meta["UUID"], field + " did not encode moved texture identity")
     # Load while still renamed, then prove that moving back invalidates the path hint rather than the UUID.
     commands = [
         {"command": "scene.open", "params": {"path": "Assets/Scenes/FeatureTest.bscene"}},

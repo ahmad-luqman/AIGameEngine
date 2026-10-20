@@ -107,9 +107,6 @@ with a smoke test have shipped. Follow-ups:
 - **Prefab editing and overrides — L.** Open a prefab in an isolated scene, save, and propagate changes
   to instances while keeping per-instance overrides (track overridden fields in `PrefabComponent`).
 
-### Asset pipeline
-
-KTX2/BC7 texture compression and the session-8 glTF extensions have shipped; see `Docs/AssetPipeline.md`.
 
 ---
 

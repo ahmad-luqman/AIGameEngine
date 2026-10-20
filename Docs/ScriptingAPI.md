@@ -1,12 +1,5 @@
 # Basalt Lua Scripting API
 
-Material overrides support `Clearcoat`, `ClearcoatRoughness`, `Transmission` (all 0..1),
-`ClearcoatMap`, `ClearcoatRoughnessMap`, `ClearcoatNormalMap`, `TransmissionMap`, and shared UV0
-`UVOffset` / `UVScale` / `UVRotation` (radians). These are ordinary `GetComponent` / `SetComponent`
-fields. Transmission reveals the existing background through the transparent pass while retaining
-reflection; refraction and volume absorption are not modeled. See [AssetPipeline.md](AssetPipeline.md).
-
-
 Gameplay code is written in Lua 5.4. A script is attached to an entity with a `Script` component
 (`{"Script": "Assets/Scripts/Player.lua"}`). The feature test (`Tests/Data/FeatureTest/Assets/Scripts/FeatureTest.lua`)
 calls every function on this page (checking its effect wherever it can be observed headlessly) and is the
@@ -193,6 +186,12 @@ Entity handles store an ID and stay safe to hold: using a destroyed entity raise
 | `e:ResetSpringBones()` | Puts the SpringBone chains back on the animated pose, at rest, on the next update; see Spring bones |
 | `e:GetScript()` | The entity's script instance (call its functions, read its fields) |
 | `e:Destroy()` | Destroy at the end of the frame (with children) |
+
+Material overrides support `Clearcoat`, `ClearcoatRoughness`, `Transmission` (all 0..1),
+`ClearcoatMap`, `ClearcoatRoughnessMap`, `ClearcoatNormalMap`, `TransmissionMap`, and shared UV0
+`UVOffset` / `UVScale` / `UVRotation` (radians). These are ordinary `GetComponent` / `SetComponent`
+fields. Transmission reveals the existing background through the transparent pass while retaining
+reflection; refraction and volume absorption are not modeled. See [AssetPipeline.md](AssetPipeline.md).
 
 Component names and fields are listed by `basalt component.types` (and in Docs/Components.md).
 Vectors in component tables are arrays (`{1, 2, 3}`); rotations are Euler degrees.

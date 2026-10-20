@@ -162,13 +162,13 @@ Fails unless the current scene (the play copy while playing) has the entity: by 
 
 ### `asset.compress_texture`
 
-Compresses an RGBA8 source to a separate KTX2/BC7 asset with mipmaps. Keeps the source, caches by source contents and sRGB setting in Cache/Textures. Reference the output asset to use compression; HDR sources are rejected.
+Compresses an 8-bit PNG/JPEG/TGA/BMP source to a separate KTX2/BC7 asset with mipmaps. Keeps the source, caches by source contents and sRGB setting in Cache/Textures. Reference the output asset to use compression; HDR sources are rejected.
 
 | Parameter | Type / description |
 |-----------|--------------------|
 | `output` | separate output .ktx2 under Assets/ |
 | `path` | source image under Assets/ |
-| `srgb` | color texture (default true); false for normal/data maps |
+| `srgb` | sRGB mip filtering, encoder weights and format tag (default true); false for normal/data maps |
 
 <details><summary>Parameter JSON Schema</summary>
 
@@ -187,7 +187,7 @@ Compresses an RGBA8 source to a separate KTX2/BC7 asset with mipmaps. Keeps the 
       "type": "string"
     },
     "srgb": {
-      "description": "color texture (default true); false for normal/data maps",
+      "description": "sRGB mip filtering, encoder weights and format tag (default true); false for normal/data maps",
       "type": "boolean"
     }
   },

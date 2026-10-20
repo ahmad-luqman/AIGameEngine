@@ -129,6 +129,18 @@ FetchContent_Declare(cgltf
 	GIT_SHALLOW TRUE
 	SOURCE_SUBDIR _BasaltNoCMake)
 
+# Basis bundles Zstd 1.4.9; use a current pinned decoder rather than that copy.
+FetchContent_Declare(zstd SYSTEM
+ GIT_REPOSITORY https://github.com/facebook/zstd.git
+ GIT_TAG v1.5.7
+ GIT_SHALLOW TRUE
+ SOURCE_SUBDIR build/cmake)
+set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_STATIC ON CACHE BOOL "" FORCE)
+set(ZSTD_MULTITHREAD_SUPPORT OFF CACHE BOOL "" FORCE)
+
 # Portable BC7 encoder/decoder and Basis Universal KTX2 transcoder (ETC1S/UASTC + Zstd).
 FetchContent_Declare(bc7enc SYSTEM
 	GIT_REPOSITORY https://github.com/richgel999/bc7enc_rdo.git
@@ -205,7 +217,7 @@ set(OBJECT_LAYER_BITS 32 CACHE STRING "" FORCE)
 
 FetchContent_MakeAvailable(VulkanHeaders)
 FetchContent_MakeAvailable(glfw glm nvrhi spdlog entt json jolt sol2 doctest
-	lua imgui imguizmo miniaudio cgltf stb fsr1 meshoptimizer bc7enc basisu)
+	lua imgui imguizmo miniaudio cgltf stb fsr1 meshoptimizer bc7enc basisu zstd)
 # Jolt's deterministic mode turns contraction off for GCC, clang and MSVC, but not for clang-cl.
 if(MSVC AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 	target_compile_options(Jolt PRIVATE /clang:-ffp-contract=off)
@@ -279,7 +291,8 @@ endif()
 
 add_library(BasaltTextureCodecs STATIC
 	"${bc7enc_SOURCE_DIR}/bc7enc.cpp" "${bc7enc_SOURCE_DIR}/bc7decomp.cpp"
-	"${basisu_SOURCE_DIR}/transcoder/basisu_transcoder.cpp" "${basisu_SOURCE_DIR}/zstd/zstd.c")
+	"${basisu_SOURCE_DIR}/transcoder/basisu_transcoder.cpp")
+target_link_libraries(BasaltTextureCodecs PRIVATE libzstd_static)
 target_include_directories(BasaltTextureCodecs SYSTEM PUBLIC "${bc7enc_SOURCE_DIR}" "${basisu_SOURCE_DIR}/transcoder")
 target_compile_definitions(BasaltTextureCodecs PUBLIC BASISD_SUPPORT_KTX2_ZSTD=1)
 # v1_60 uses std::terminate without including <exception>; libc++ 21 stopped including it transitively.

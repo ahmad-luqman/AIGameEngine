@@ -10,6 +10,7 @@
 #include "Basalt/Core/Log.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Scene/ComponentRegistry.h"
+#include "Basalt/Scene/Components.h"
 
 #include <cgltf.h>
 
@@ -22,6 +23,12 @@
 #include <system_error>
 
 namespace Basalt {
+
+	std::string MaterialPreviewKey(const MaterialComponent& m)
+	{
+		// JSON array boundaries keep path strings with separators from producing ambiguous keys.
+		return nlohmann::json::array({ m.AlbedoColor.r, m.AlbedoColor.g, m.AlbedoColor.b, m.AlbedoColor.a, m.Metallic, m.Roughness, m.EmissiveColor.r, m.EmissiveColor.g, m.EmissiveColor.b, m.EmissiveIntensity, m.AlbedoMap, m.NormalMap, m.MetallicRoughnessMap, m.OcclusionMap, m.EmissiveMap, m.Clearcoat, m.ClearcoatRoughness, m.Transmission, m.ClearcoatMap, m.ClearcoatRoughnessMap, m.ClearcoatNormalMap, m.TransmissionMap, m.UVOffset.x, m.UVOffset.y, m.UVScale.x, m.UVScale.y, m.UVRotation }).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+	}
 
 	namespace {
 
@@ -141,7 +148,7 @@ namespace Basalt {
 	ThumbnailKind ClassifyThumbnail(const std::string& path)
 	{
 		const std::string extension = FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(path));
-		if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".tga" || extension == ".bmp")
+		if (extension == ".ktx2" || extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".tga" || extension == ".bmp")
 			return ThumbnailKind::Image;
 		if (extension == ".hdr")
 			return ThumbnailKind::Environment;
@@ -199,7 +206,7 @@ namespace Basalt {
 		return image;
 	}
 
-	ThumbnailImage MakeImageThumbnail(const TextureSource& source, uint32_t maxSize)
+	ThumbnailImage MakeImageThumbnail(const TextureSource& source, uint32_t maxSize, std::string* outError)
 	{
 		uint32_t width = 0, height = 0;
 		if (source.Width == 0 || source.Height == 0 || maxSize == 0)
@@ -210,10 +217,12 @@ namespace Basalt {
 			auto decoded = source.DecodeRGBA8(error);
 			if (!decoded)
 			{
-				BS_CORE_WARN("BC7 thumbnail: {}", error);
+				if (outError)
+					*outError = error;
+				BS_CORE_ERROR("BC7 thumbnail: {}", error);
 				return {};
 			}
-			return MakeImageThumbnail(*decoded, maxSize);
+			return MakeImageThumbnail(*decoded, maxSize, outError);
 		}
 		FitSize(source.Width, source.Height, maxSize, width, height);
 		if (source.Format == TextureFormat::RGBA8)
