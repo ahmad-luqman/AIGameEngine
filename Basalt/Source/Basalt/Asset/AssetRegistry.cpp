@@ -1,5 +1,6 @@
 #include "Basalt/Asset/AssetRegistry.h"
 
+#include "Basalt/Asset/AssetKey.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
@@ -301,7 +302,7 @@ namespace Basalt {
 	{
 		std::filesystem::path asset, target;
 		std::string ignored;
-		return CheckPath(key.substr(0, key.find("#image/")), asset, ignored) && CheckPath(source, target, ignored) && asset == target;
+		return CheckPath(std::string(GetAssetSource(key)), asset, ignored) && CheckPath(source, target, ignored) && asset == target;
 	}
 
 	bool AssetRegistry::Decode(const nlohmann::json& value, std::string& path, std::string& outError, bool preserveUnresolved) const
@@ -325,7 +326,7 @@ namespace Basalt {
 		{
 			const auto& hint = value["Path"].get_ref<const std::string&>();
 			outError = "unresolved asset UUID " + std::to_string(*id) + " (hint: " + hint + ")";
-			const auto source = hint.substr(0, hint.find("#image/"));
+			const std::string source(GetAssetSource(hint));
 			if (const auto problem = m_Problems.find(source); problem != m_Problems.end())
 				outError += ": " + problem->second;
 			if (!preserveUnresolved)
@@ -334,8 +335,7 @@ namespace Basalt {
 			return true;
 		}
 		const auto& hint = value["Path"].get_ref<const std::string&>();
-		if (const auto marker = hint.find("#image/"); marker != std::string::npos)
-			path += hint.substr(marker);
+		path += GetSubAssetFragment(hint);
 		return true;
 	}
 
@@ -358,8 +358,7 @@ namespace Basalt {
 		}
 		if (path.empty() || path.starts_with("builtin://"))
 			return true;
-		const auto marker = path.find("#image/");
-		const auto source = path.substr(0, marker);
+		const std::string source(GetAssetSource(path));
 		std::filesystem::path absolute;
 		std::string ignored;
 		// Legacy references outside the registry's domain remain editable strings, including literal '#' names.

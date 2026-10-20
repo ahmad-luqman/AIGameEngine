@@ -104,11 +104,13 @@
 		{ "ID": 15, "Name": "Pillar", "Components": {
 			"Transform": { "Translation": [-3, 1, -6] },
 			"Mesh": { "Mesh": "builtin://Capsule" },
+			"Material": { "Material": "Assets/Materials/Checker.bmaterial" },
 			"RigidBody": { "Type": "Static" },
 			"CapsuleCollider": {} } },
 		{ "ID": 16, "Name": "Pillar", "Components": {
 			"Transform": { "Translation": [3, 1, -6] },
 			"Mesh": { "Mesh": "builtin://Capsule" },
+			"Material": { "Material": "Assets/Models/TexturedCube.glb#material/0" },
 			"RigidBody": { "Type": "Static" },
 			"CapsuleCollider": {} } },
 		{ "ID": 17, "Name": "ImportedModel", "Components": {

@@ -389,7 +389,7 @@ TEST_CASE("Every material registry field participates in the editor preview key"
 		if (value.is_number())
 			value = 0.25f;
 		else if (value.is_string())
-			value = "Assets/changed.ktx2";
+			value = it.key() == "Material" ? "Assets/changed.bmaterial" : "Assets/changed.ktx2";
 		else if (value.is_array())
 			for (auto& element : value)
 				element = 0.25f;
@@ -398,14 +398,12 @@ TEST_CASE("Every material registry field participates in the editor preview key"
 	}
 }
 
-TEST_CASE("Material previews track every texture asset field")
+TEST_CASE("Material previews track every asset field")
 {
 	// The editor re-renders a material preview when one of these files changes, so none may be missing.
 	const auto* info = ComponentRegistry::Find("Material");
 	REQUIRE(info);
-	MaterialComponent material;
-	const auto maps = MaterialPreviewMaps(material);
-	CHECK(maps.size() == info->AssetFields.size());
+	CHECK(MaterialPreviewDependencies(MaterialComponent{}).empty());
 	Scene scene;
 	auto entity = scene.CreateEntity("Maps");
 	entity.AddComponent<MaterialComponent>();
@@ -413,10 +411,16 @@ TEST_CASE("Material previews track every texture asset field")
 	for (const auto& field : info->AssetFields)
 	{
 		INFO(field);
-		REQUIRE(info->Deserialize(entity, { { field, "Assets/" + field + ".png" } }, error));
-		const auto tracked = MaterialPreviewMaps(entity.GetComponent<MaterialComponent>());
-		CHECK(std::any_of(tracked.begin(), tracked.end(), [&](const std::string* map) { return *map == "Assets/" + field + ".png"; }));
+		const std::string path = "Assets/" + field + (field == "Material" ? ".bmaterial" : ".png");
+		REQUIRE(info->Deserialize(entity, { { field, path } }, error));
+		const auto tracked = MaterialPreviewDependencies(entity.GetComponent<MaterialComponent>());
+		CHECK(std::find(tracked.begin(), tracked.end(), path) != tracked.end());
 	}
+	// Sub-assets count as their model.
+	REQUIRE(info->Deserialize(entity, { { "Material", "Assets/Ship.glb#material/2" }, { "AlbedoMap", "Assets/Ship.glb#image/0" } }, error));
+	const auto tracked = MaterialPreviewDependencies(entity.GetComponent<MaterialComponent>());
+	CHECK(std::find(tracked.begin(), tracked.end(), "Assets/Ship.glb") != tracked.end());
+	CHECK(std::none_of(tracked.begin(), tracked.end(), [](const std::string& file) { return file.find('#') != std::string::npos; }));
 }
 
 TEST_CASE("Compression cache is optional while output errors retain their filesystem cause")

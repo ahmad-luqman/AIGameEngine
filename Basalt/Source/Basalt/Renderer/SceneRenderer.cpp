@@ -4,6 +4,7 @@
 #include "Basalt/Animation/AnimationPose.h"
 #include "Basalt/Animation/AnimationSystem.h"
 #include "Basalt/Asset/AssetManager.h"
+#include "Basalt/Asset/MaterialAsset.h"
 #include "Basalt/Asset/MeshOptimizer.h"
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Log.h"
@@ -1709,6 +1710,13 @@ namespace Basalt {
 			return resolved;
 		};
 
+		auto resolveMaterial = [&](const std::string& key) -> Ref<const MaterialData> {
+			if (m_MaterialResolver)
+				if (auto resolved = m_MaterialResolver(key))
+					return resolved;
+			return m_AsyncLoading ? AssetManager::RequestMaterial(key) : AssetManager::GetMaterial(key);
+		};
+
 		const glm::vec3 cameraForward = -glm::vec3(view.InverseView[2]);
 		auto addMesh = [&](Entity entity, const Ref<MeshSource>& source, uint32_t meshIndex, const glm::mat4& model, bool castShadows, float lodDistance, const std::vector<glm::mat4>& palette, uint32_t& paletteOffset) {
 			if (!source || meshIndex >= source->Meshes.size())
@@ -1730,12 +1738,19 @@ namespace Basalt {
 				pickId = it->second | (selectedIds.contains(entity.GetUUID()) ? SelectedTokenBit : 0u);
 			}
 			const glm::mat4 normalMatrix = glm::transpose(glm::inverse(model));
-			const auto* materialOverride = entity.TryGetComponent<MaterialComponent>();
-			// An override's single UV transform applies to every map on UV0.
-			std::array<glm::vec4, 2 * MaterialTextureSlotCount> overrideUVRows{};
-			if (materialOverride)
-				for (size_t slot = 0; slot < MaterialTextureSlotCount; slot++)
-					WriteUVRows(overrideUVRows, slot, { materialOverride->UVOffset, materialOverride->UVScale, materialOverride->UVRotation, 0 });
+			// A MaterialComponent replaces every submesh's material: its asset, or its inline values (also while the
+			// asset streams in or when it failed, which AssetManager logs once).
+			const MaterialData* materialOverride = nullptr;
+			Ref<const MaterialData> overrideAsset;
+			MaterialData inlineMaterial;
+			if (const auto* component = entity.TryGetComponent<MaterialComponent>())
+			{
+				if (!component->Material.empty())
+					overrideAsset = resolveMaterial(component->Material);
+				if (!overrideAsset)
+					inlineMaterial = MaterialAsset::FromComponent(*component);
+				materialOverride = overrideAsset ? overrideAsset.get() : &inlineMaterial;
+			}
 
 			for (uint32_t submeshIndex : source->Meshes[meshIndex].Submeshes)
 			{
@@ -1753,54 +1768,31 @@ namespace Basalt {
 					continue;
 				}
 
-				const MaterialData* imported = materialOverride ? nullptr : &source->Materials[std::min<size_t>(submesh.MaterialIndex, source->Materials.size() - 1)];
+				const MaterialData& m = materialOverride ? *materialOverride : source->Materials[std::min<size_t>(submesh.MaterialIndex, source->Materials.size() - 1)];
 				uint32_t flags = 0;
-				// Overrides and imported materials share field names, so one resolver binds either.
-				auto bindMaps = [&](const auto& m) {
-					nvrhi::ITexture* white = m_Resources->GetWhiteTexture();
-					nvrhi::ITexture* flatNormal = m_Resources->GetFlatNormalTexture();
-					return materialSet({ texture(m.AlbedoMap, true, white, MaterialHasAlbedoMap, flags),
-										 texture(m.NormalMap, false, flatNormal, MaterialHasNormalMap, flags),
-										 texture(m.MetallicRoughnessMap, false, white, MaterialHasMetallicRoughnessMap, flags),
-										 texture(m.OcclusionMap, false, white, MaterialHasOcclusionMap, flags),
-										 texture(m.EmissiveMap, true, white, MaterialHasEmissiveMap, flags),
-										 texture(m.ClearcoatMap, false, white, MaterialHasClearcoatMap, flags),
-										 texture(m.ClearcoatRoughnessMap, false, white, MaterialHasClearcoatRoughnessMap, flags),
-										 texture(m.ClearcoatNormalMap, false, flatNormal, MaterialHasClearcoatNormalMap, flags),
-										 texture(m.TransmissionMap, false, white, MaterialHasTransmissionMap, flags) });
-				};
-				nvrhi::IBindingSet* set = materialOverride ? bindMaps(*materialOverride) : bindMaps(*imported);
+				nvrhi::ITexture* white = m_Resources->GetWhiteTexture();
+				nvrhi::ITexture* flatNormal = m_Resources->GetFlatNormalTexture();
+				nvrhi::IBindingSet* set = materialSet({ texture(m.AlbedoMap, true, white, MaterialHasAlbedoMap, flags),
+														texture(m.NormalMap, false, flatNormal, MaterialHasNormalMap, flags),
+														texture(m.MetallicRoughnessMap, false, white, MaterialHasMetallicRoughnessMap, flags),
+														texture(m.OcclusionMap, false, white, MaterialHasOcclusionMap, flags),
+														texture(m.EmissiveMap, true, white, MaterialHasEmissiveMap, flags),
+														texture(m.ClearcoatMap, false, white, MaterialHasClearcoatMap, flags),
+														texture(m.ClearcoatRoughnessMap, false, white, MaterialHasClearcoatRoughnessMap, flags),
+														texture(m.ClearcoatNormalMap, false, flatNormal, MaterialHasClearcoatNormalMap, flags),
+														texture(m.TransmissionMap, false, white, MaterialHasTransmissionMap, flags) });
 
 				GpuMaterialData material{};
-				bool blend = false;
-				bool doubleSided = false;
-				if (materialOverride)
-				{
-					const MaterialComponent& m = *materialOverride;
-					material.AlbedoColor = m.AlbedoColor;
-					material.Emissive = glm::vec4(m.EmissiveColor * m.EmissiveIntensity, 0.0f);
-					material.Params = glm::vec4(m.Metallic, m.Roughness, 0.0f, static_cast<float>(flags));
-					// Overrides have no alpha mode: alpha below one blends and is coverage. Transmission alone also
-					// draws in the blended pass, but keeps full coverage like an imported opaque material.
-					const bool alphaBlend = m.AlbedoColor.a < 0.999f;
-					blend = alphaBlend || m.Transmission > 0;
-					material.Extensions = glm::vec4(m.Clearcoat, m.ClearcoatRoughness, m.Transmission, alphaBlend ? 1.0f : 0.0f);
-					material.NormalParams = glm::vec4(1.0f, 1.0f, 1.0f, 0.0f);
-					material.UVRows = overrideUVRows;
-				}
-				else
-				{
-					const MaterialData& m = *imported;
-					material.AlbedoColor = m.AlbedoColor;
-					material.Emissive = glm::vec4(m.EmissiveColor * m.EmissiveIntensity, 0.0f);
-					material.Params = glm::vec4(m.Metallic, m.Roughness, m.Alpha == AlphaMode::Mask ? m.AlphaCutoff : 0.0f, static_cast<float>(flags));
-					blend = m.IsBlended();
-					doubleSided = m.DoubleSided;
-					material.Extensions = glm::vec4(m.Clearcoat, m.ClearcoatRoughness, m.Transmission, m.Alpha == AlphaMode::Blend ? 1.0f : 0.0f);
-					material.NormalParams = glm::vec4(m.NormalScale, m.OcclusionStrength, m.ClearcoatNormalScale, 0.0f);
-					for (size_t slot = 0; slot < MaterialTextureSlotCount; slot++)
-						WriteUVRows(material.UVRows, slot, m.TextureTransforms[slot]);
-				}
+				material.AlbedoColor = m.AlbedoColor;
+				material.Emissive = glm::vec4(m.EmissiveColor * m.EmissiveIntensity, 0.0f);
+				material.Params = glm::vec4(m.Metallic, m.Roughness, m.Alpha == AlphaMode::Mask ? m.AlphaCutoff : 0.0f, static_cast<float>(flags));
+				// Albedo alpha is coverage only in Blend mode; transmission alone draws in the blended pass with full coverage.
+				const bool blend = m.IsBlended();
+				const bool doubleSided = m.DoubleSided;
+				material.Extensions = glm::vec4(m.Clearcoat, m.ClearcoatRoughness, m.Transmission, m.Alpha == AlphaMode::Blend ? 1.0f : 0.0f);
+				material.NormalParams = glm::vec4(m.NormalScale, m.OcclusionStrength, m.ClearcoatNormalScale, 0.0f);
+				for (size_t slot = 0; slot < MaterialTextureSlotCount; slot++)
+					WriteUVRows(material.UVRows, slot, m.TextureTransforms[slot]);
 
 				if (!set)
 					return;

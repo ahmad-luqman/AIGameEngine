@@ -22,6 +22,7 @@ namespace Basalt::EditorCommandSchemas {
 	nlohmann::json Panel();
 	nlohmann::json Thumbnail();
 	nlohmann::json MaterialPreview();
+	nlohmann::json MaterialEditor();
 
 	// Editor window titles (ImGui window names; editor.panel takes them).
 	inline constexpr const char* ViewportTitle = "Viewport";

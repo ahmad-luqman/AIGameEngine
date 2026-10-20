@@ -44,7 +44,7 @@ Fields: `Chains` (list of [SpringChain](#springchain), at most 16, unique `Name`
 
 ## Material
 
-Fields: `AlbedoColor` (number[4]), `Metallic` (number), `Roughness` (number), `EmissiveColor` (number[3]), `EmissiveIntensity` (number), `AlbedoMap` (string), `NormalMap` (string), `MetallicRoughnessMap` (string), `OcclusionMap` (string), `EmissiveMap` (string), `Clearcoat` (number), `ClearcoatRoughness` (number), `Transmission` (number), `ClearcoatMap` (string), `ClearcoatRoughnessMap` (string), `ClearcoatNormalMap` (string), `TransmissionMap` (string), `UVOffset` (number[2]), `UVScale` (number[2]), `UVRotation` (number)
+Fields: `Material` (string), `AlbedoColor` (number[4]), `Metallic` (number), `Roughness` (number), `EmissiveColor` (number[3]), `EmissiveIntensity` (number), `AlbedoMap` (string), `NormalMap` (string), `MetallicRoughnessMap` (string), `OcclusionMap` (string), `EmissiveMap` (string), `Clearcoat` (number), `ClearcoatRoughness` (number), `Transmission` (number), `ClearcoatMap` (string), `ClearcoatRoughnessMap` (string), `ClearcoatNormalMap` (string), `TransmissionMap` (string), `UVOffset` (number[2]), `UVScale` (number[2]), `UVRotation` (number)
 
 ## DirectionalLight
 

@@ -261,13 +261,17 @@ costs one view.
   `Project Settings`; only Project Settings can be closed) and returns `{name, open}`.
 
 - `editor.thumbnail {"path":"Assets/Models/Ship.glb","output":"ship.png","refresh":false}` makes (or reads from
-  the cache) the content-browser preview of an image, `.hdr` environment, `.gltf`/`.glb` model or `.bprefab`
-  and returns `kind` (`Image`, `Environment`, `Model`, `Prefab`), `width`/`height` (at most 128), `cached`,
+  the cache) the content-browser preview of an image, `.hdr` environment, `.gltf`/`.glb` model, `.bprefab` or
+  `.bmaterial` and returns `kind` (`Image`, `Environment`, `Model`, `Prefab`, `Material`), `width`/`height` (at most 128), `cached`,
   `cachePath` and `details` (the tooltip's lines), plus `warnings` when the preview was made but could not be
   stored in the cache. `refresh: true` makes it again, first re-reading the model and the files it uses. Other
   files report that they have no preview.
 - `editor.material_preview {"entity":"Ball","output":"ball.png"}` renders an entity's Material on a sphere,
-  as the inspector shows it (128x128).
+  as the inspector shows it (128x128). A `Material` asset that does not load is an error.
+- `editor.material_editor {"path":"Assets/Materials/Brick.bmaterial"}` opens a material file in the Material Editor
+  window (`{"close":true}` closes it, discarding unsaved edits) and returns `{open, path, dirty, valid, error}`. Opening
+  fails while another material has unsaved edits. Agents edit material files with `asset.write`; an open editor without
+  unsaved edits follows the file.
 - `editor.preferences {"cameraSpeed":2,"theme":"Light","autoReload":true,"recentProjects":[]}` reads or patches the
   user's editor preferences, which outlive the session (every key optional; one invalid key rejects the whole patch):
   `cameraSpeed` (fly speed multiplier, 0.1–10; also the viewport's Speed slider and RMB + wheel), `theme` (`Dark` or
@@ -281,7 +285,8 @@ costs one view.
   (it is retried).
 
 The content browser shows these previews in each row (icon size slider in its header), a larger one with
-details on hover (a loaded model's materials as spheres), and its context menu clears the cache.
+details on hover (a loaded model's materials as spheres), and its context menu creates scripts, materials and
+folders, extracts a model's materials and clears the cache. Double-clicking a material opens the Material Editor.
 
 **Edit > Project Settings** edits the project file through `project.set` (name, start scene, game
 resolution, fullscreen, random seed, physics step, graphics defaults, physics layers and the collision

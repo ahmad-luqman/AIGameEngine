@@ -1,6 +1,7 @@
 #include "Basalt/Renderer/PreviewRenderer.h"
 
 #include "Basalt/Asset/AssetManager.h"
+#include "Basalt/Asset/MaterialAsset.h"
 #include "Basalt/Asset/MeshSource.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Project/Project.h"
@@ -62,29 +63,6 @@ namespace Basalt {
 
 	}
 
-	MaterialComponent ToMaterialComponent(const MaterialData& material)
-	{
-		MaterialComponent component;
-		component.AlbedoColor = material.AlbedoColor;
-		component.Metallic = material.Metallic;
-		component.Roughness = material.Roughness;
-		component.EmissiveColor = material.EmissiveColor;
-		component.EmissiveIntensity = material.EmissiveIntensity;
-		component.AlbedoMap = material.AlbedoMap;
-		component.NormalMap = material.NormalMap;
-		component.MetallicRoughnessMap = material.MetallicRoughnessMap;
-		component.OcclusionMap = material.OcclusionMap;
-		component.EmissiveMap = material.EmissiveMap;
-		component.Clearcoat = material.Clearcoat;
-		component.ClearcoatRoughness = material.ClearcoatRoughness;
-		component.Transmission = material.Transmission;
-		component.ClearcoatMap = material.ClearcoatMap;
-		component.ClearcoatRoughnessMap = material.ClearcoatRoughnessMap;
-		component.ClearcoatNormalMap = material.ClearcoatNormalMap;
-		component.TransmissionMap = material.TransmissionMap;
-		return component;
-	}
-
 	PreviewRenderer::PreviewRenderer(nvrhi::IDevice* device)
 		: m_Device(device)
 	{
@@ -131,6 +109,36 @@ namespace Basalt {
 	{
 		if (!IsReady(outError))
 			return std::nullopt;
+		if (!material.Material.empty() && !AssetManager::GetMaterial(material.Material))
+		{
+			outError = "Material '" + material.Material + "': " + AssetManager::GetError(material.Material);
+			return std::nullopt;
+		}
+		return RenderSphere(material, outError);
+	}
+
+	std::optional<ThumbnailImage> PreviewRenderer::RenderMaterial(const MaterialData& material, std::string& outError)
+	{
+		if (!IsReady(outError))
+			return std::nullopt;
+		if (auto problem = MaterialAsset::Validate(material))
+		{
+			outError = *problem;
+			return std::nullopt;
+		}
+		// A key no file or model can have; only this renderer resolves it, and only during this render.
+		static const std::string DraftKey = "preview://material";
+		const auto draft = CreateRef<const MaterialData>(material);
+		m_Renderer->SetMaterialResolver([&](const std::string& key) { return key == DraftKey ? draft : nullptr; });
+		MaterialComponent component;
+		component.Material = DraftKey;
+		auto image = RenderSphere(component, outError);
+		m_Renderer->SetMaterialResolver({});
+		return image;
+	}
+
+	std::optional<ThumbnailImage> PreviewRenderer::RenderSphere(const MaterialComponent& material, std::string& outError)
+	{
 		Scene scene("MaterialPreview");
 		AddStudio(scene);
 		Entity sphere = scene.CreateEntity("Sphere");

@@ -381,11 +381,11 @@ Moves one asset file and its .meta sidecar within Assets/. 'to' is the complete 
 
 ### `asset.preload`
 
-Requests mesh/texture CPU loads on the shared worker pool. Returns a status (pending, ready or failed) and error for each path. Poll by repeating in a persistent serve/mcp/editor session; use wait=true for one-shot CLI calls. wait=true joins these requests, including embedded image dependencies. Reload/refresh retries failed loads. GPU upload happens in the renderer.
+Requests mesh/texture CPU loads on the shared worker pool. A .bmaterial is read at once and its textures are requested too (each reported as its own path after the requested ones). Returns a status (pending, ready or failed) and error for each path. Poll by repeating in a persistent serve/mcp/editor session; use wait=true for one-shot CLI calls. wait=true joins these requests, including embedded image dependencies. Reload/refresh retries failed loads. GPU upload happens in the renderer.
 
 | Parameter | Type / description |
 |-----------|--------------------|
-| `paths` | array of mesh/texture paths, Model.glb#image/N keys or built-in mesh keys |
+| `paths` | array of mesh/texture/.bmaterial paths, Model.glb#image/N keys or built-in mesh keys |
 | `wait` | wait for these loads, default false |
 
 <details><summary>Parameter JSON Schema</summary>
@@ -395,7 +395,7 @@ Requests mesh/texture CPU loads on the shared worker pool. Returns a status (pen
   "additionalProperties": false,
   "properties": {
     "paths": {
-      "description": "array of mesh/texture paths, Model.glb#image/N keys or built-in mesh keys",
+      "description": "array of mesh/texture/.bmaterial paths, Model.glb#image/N keys or built-in mesh keys",
       "items": {
         "description": "string",
         "minLength": 1,
@@ -544,7 +544,7 @@ Resolves an asset UUID (decimal string) to its current project-relative path. Re
 
 ### `asset.write`
 
-Writes a text asset (script, prefab, scene, animation graph...) to a project-relative path and reloads it. A .banimgraph is validated before replacing the file. A script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts').
+Writes a text asset (script, prefab, scene, animation graph, material...) to a project-relative path and reloads it. A .banimgraph or .bmaterial is validated before replacing the file; a material's unresolved or missing textures are reported in 'warnings'. A script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts').
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -1779,6 +1779,106 @@ Runs Lua in the playing scene's script state; returns the value of the expressio
   },
   "required": [
     "code"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
+## material
+
+### `material.create`
+
+Writes a material file (.bmaterial under Assets/) with UUID texture references: with 'entity', the material that entity's Material component draws (its Material asset, or else its inline values), otherwise the defaults. Refuses to replace an existing file unless overwrite=true. Reference the file from Material.Material.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `entity` | ID or name, optional |
+| `overwrite` | replace an existing file, default false |
+| `path` | Assets/...bmaterial |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "entity": {
+      "anyOf": [
+        {
+          "anyOf": [
+            {
+              "description": "",
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "description": "",
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": "integer"
+            }
+          ],
+          "description": "ID or name, optional"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "ID or name, optional"
+    },
+    "overwrite": {
+      "description": "replace an existing file, default false",
+      "type": "boolean"
+    },
+    "path": {
+      "description": "Assets/...bmaterial",
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
+### `material.extract`
+
+Writes one material file per material a glTF model imports, keeping every imported value (alpha mode, sidedness, strengths, per-map UV transforms and sets): <folder>/<material name>.bmaterial, folder defaulting to a Materials folder next to the model. Textures reference the model's image files and embedded images (Model.glb#image/N) by UUID. Checks every output before writing: an existing file fails unless overwrite=true. The model's own materials stay addressable as Model.glb#material/N.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `folder` | output folder under Assets/, optional |
+| `model` | Assets/....gltf or .glb |
+| `overwrite` | replace existing files, default false |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "folder": {
+      "description": "output folder under Assets/, optional",
+      "type": "string"
+    },
+    "model": {
+      "description": "Assets/....gltf or .glb",
+      "minLength": 1,
+      "type": "string"
+    },
+    "overwrite": {
+      "description": "replace existing files, default false",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "model"
   ],
   "type": "object"
 }

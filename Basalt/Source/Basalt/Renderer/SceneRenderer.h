@@ -10,6 +10,7 @@
 #include <glm/glm.hpp>
 #include <nvrhi/nvrhi.h>
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -152,6 +153,11 @@ namespace Basalt {
 		// Grouping opaque keys can change exact coplanar depth-tie winners; transparent order is preserved.
 		void SetInstancingEnabled(bool enabled) { m_InstancingEnabled = enabled; }
 
+		// Resolves MaterialComponent::Material keys before AssetManager; a null result falls through to it. The preview
+		// renderer draws unsaved material drafts this way; scene renderers leave it unset.
+		using MaterialResolver = std::function<Ref<const MaterialData>(const std::string& key)>;
+		void SetMaterialResolver(MaterialResolver resolver) { m_MaterialResolver = std::move(resolver); }
+
 		// Records and submits all passes for one frame.
 		void Render(Scene& scene, const RenderCamera& camera, float deltaTime);
 
@@ -204,6 +210,7 @@ namespace Basalt {
 		bool m_Picking = false;
 		bool m_InstancingEnabled = true;
 		bool m_AsyncLoading = false;
+		MaterialResolver m_MaterialResolver;
 		Ref<MeshSource> m_PlaceholderMesh;
 		std::vector<UUID> m_Selection;
 		bool m_ClusteredLighting = true;

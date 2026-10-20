@@ -10,8 +10,10 @@
 namespace Basalt {
 
 	// Browses the project's Assets directory. Files are drag sources (project-relative paths) for the
-	// viewport, hierarchy and inspector; double-clicking a scene opens it. Images, environments, models and
-	// prefabs show previews (ThumbnailManager), with a larger one and details on hover.
+	// viewport, hierarchy and inspector; double-clicking a scene opens it (a material opens in the Material Editor).
+	// Images, environments, models, prefabs and materials show previews (ThumbnailManager), with a larger one and
+	// details on hover. New scripts, materials and folders are made from the context menu; a model's materials can be
+	// extracted to material files.
 	class ContentBrowserPanel
 	{
 	public:
@@ -37,6 +39,7 @@ namespace Basalt {
 		std::filesystem::path m_CurrentDirectory;
 		std::string m_NewItemName;
 		bool m_CreatingScript = false;
+		bool m_CreatingMaterial = false;
 		bool m_CreatingFolder = false;
 		std::filesystem::path m_PendingDelete;
 	};

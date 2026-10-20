@@ -1,0 +1,14 @@
+{
+	"Version": 1,
+	"AlbedoColor": [1, 0.85, 0.7, 1],
+	"Roughness": 0.6,
+	"AlphaMode": "Mask",
+	"AlphaCutoff": 0.3,
+	"DoubleSided": true,
+	"NormalScale": 0.5,
+	"AlbedoMap": "Assets/Textures/Checker.png",
+	"NormalMap": "Assets/Textures/FlatNormal.png",
+	"TextureTransforms": {
+		"Albedo": { "Offset": [0.25, 0], "Scale": [3, 3], "Rotation": 0.5, "TexCoord": 1 }
+	}
+}

@@ -1,6 +1,7 @@
 #include "ThumbnailManager.h"
 
 #include "Basalt/Asset/AssetManager.h"
+#include "Basalt/Asset/MaterialAsset.h"
 #include "Basalt/Asset/MeshSource.h"
 #include "Basalt/Asset/TextureSource.h"
 #include "Basalt/Core/FileSystem.h"
@@ -28,6 +29,16 @@ namespace Basalt {
 		double Now()
 		{
 			return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+		}
+
+		// The material file's mode and maps, from the copy the preview just loaded.
+		std::vector<std::string> MaterialDetails(const std::string& path)
+		{
+			const auto material = AssetManager::GetMaterial(path);
+			if (!material)
+				return {};
+			const size_t maps = MaterialAsset::GetTextures(*material).size();
+			return { fmt::format("{}{}, {} map(s)", MaterialAsset::AlphaModeNames[static_cast<size_t>(material->Alpha)], material->DoubleSided ? ", double-sided" : "", maps) };
 		}
 
 		std::vector<std::string> ModelDetails(const MeshSource& mesh)
@@ -75,8 +86,9 @@ namespace Basalt {
 	{
 		std::vector<Preview::Material> materials;
 		materials.reserve(mesh.Materials.size());
-		for (size_t i = 0; i < mesh.Materials.size(); i++)
-			materials.push_back({ mesh.Materials[i].Name.empty() ? "Material " + std::to_string(i) : mesh.Materials[i].Name, ToMaterialComponent(mesh.Materials[i]) });
+		// The importer appends a default material for primitives without one; it is not the model's.
+		for (size_t i = 0; i + 1 < mesh.Materials.size(); i++)
+			materials.push_back({ mesh.Materials[i].Name.empty() ? "Material " + std::to_string(i) : mesh.Materials[i].Name, mesh.Materials[i] });
 		return materials;
 	}
 
@@ -118,15 +130,15 @@ namespace Basalt {
 		return &slot.Data;
 	}
 
-	const ThumbnailManager::Preview* ThumbnailManager::GetMaterial(const std::string& id, const MaterialComponent& material)
+	const ThumbnailManager::Preview* ThumbnailManager::UpdateMaterial(const std::string& id, std::string key, const std::function<void(Slot&)>& assign)
 	{
 		const std::string slotId = s_MaterialPrefix + id;
 		Slot& slot = Touch(slotId);
 		slot.IsMaterial = true;
-		if (std::string key = MaterialPreviewKey(material); key != slot.Key)
+		if (key != slot.Key)
 		{
 			slot.Key = std::move(key);
-			slot.Material = material;
+			assign(slot);
 			slot.ChangedFrame = m_Frame;
 			slot.Data.Status = State::Pending;
 			Enqueue(slotId, slot);
@@ -134,13 +146,28 @@ namespace Basalt {
 		return &slot.Data;
 	}
 
+	const ThumbnailManager::Preview* ThumbnailManager::GetMaterial(const std::string& id, const MaterialComponent& material)
+	{
+		return UpdateMaterial(id, MaterialPreviewKey(material), [&](Slot& slot) {
+			slot.Material = material;
+			slot.Draft.reset();
+		});
+	}
+
+	const ThumbnailManager::Preview* ThumbnailManager::GetMaterial(const std::string& id, const MaterialData& material)
+	{
+		// Every value the renderer reads, as a file would store it; an invalid material keys on its problem instead.
+		std::string error;
+		const auto data = MaterialAsset::ToJson(material, false, error);
+		std::string key = "data\n" + (data ? data->dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) : "invalid: " + error);
+		return UpdateMaterial(id, std::move(key), [&](Slot& slot) { slot.Draft = material; });
+	}
+
 	void ThumbnailManager::OnFilesChanged(const std::vector<FileChange>& changes)
 	{
 		std::unordered_set<std::string> changed;
 		for (const FileChange& change : changes)
 			changed.insert(change.Path);
-		// An embedded image key ("Model.glb#image/0") changes with its model file.
-		const auto uses = [&](const std::string& map) { return !map.empty() && changed.contains(AssetManager::GetSourceFile(map)); };
 		for (auto& [id, slot] : m_Slots)
 		{
 			if (!slot.IsMaterial)
@@ -148,10 +175,15 @@ namespace Basalt {
 				slot.LastChecked = -1.0;
 				continue;
 			}
-			const MaterialComponent& material = slot.Material;
+			// An embedded image or imported material key ("Model.glb#image/0") changes with its model file.
+			std::vector<std::string> files;
+			if (slot.Draft)
+				for (const std::string& texture : MaterialAsset::GetTextures(*slot.Draft))
+					files.push_back(AssetManager::GetSourceFile(texture));
+			else
+				files = MaterialPreviewDependencies(slot.Material);
 			// A cleared key no longer matches the material's, so its next GetMaterial queues it.
-			const auto maps = MaterialPreviewMaps(material);
-			if (std::any_of(maps.begin(), maps.end(), [&](const std::string* map) { return uses(*map); }))
+			if (std::any_of(files.begin(), files.end(), [&](const std::string& file) { return changed.contains(file); }))
 				slot.Key.clear();
 		}
 	}
@@ -212,7 +244,7 @@ namespace Basalt {
 		std::string error;
 		if (slot.IsMaterial)
 		{
-			if (const auto image = RenderMaterial(slot.Material, error))
+			if (const auto image = slot.Draft ? RenderMaterial(*slot.Draft, error) : RenderMaterial(slot.Material, error))
 				Upload(slot, *image);
 			else
 				Fail(slot, error);
@@ -343,6 +375,17 @@ namespace Basalt {
 					BS_CORE_WARN("Thumbnails: '{}' rendered but could not be read again for its details (changed meanwhile?)", relativePath);
 				return ThumbnailCache::Entry{ std::move(*image), std::move(details) };
 			}
+			case ThumbnailKind::Material:
+			{
+				if (!EnsureRenderer(outError))
+					return std::nullopt;
+				MaterialComponent component;
+				component.Material = relativePath;
+				auto image = m_Renderer->RenderMaterial(component, outError);
+				if (!image)
+					return std::nullopt;
+				return ThumbnailCache::Entry{ std::move(*image), MaterialDetails(relativePath) };
+			}
 			case ThumbnailKind::None:
 				break;
 		}
@@ -351,6 +394,14 @@ namespace Basalt {
 	}
 
 	std::optional<ThumbnailImage> ThumbnailManager::RenderMaterial(const MaterialComponent& material, std::string& outError)
+	{
+		if (!EnsureRenderer(outError))
+			return std::nullopt;
+		AssetManager::TemporaryLoads previewOnly;
+		return m_Renderer->RenderMaterial(material, outError);
+	}
+
+	std::optional<ThumbnailImage> ThumbnailManager::RenderMaterial(const MaterialData& material, std::string& outError)
 	{
 		if (!EnsureRenderer(outError))
 			return std::nullopt;
@@ -369,7 +420,7 @@ namespace Basalt {
 		}
 		if (kind == ThumbnailKind::None)
 		{
-			outError = "'" + relativePath + "' has no preview (images, .hdr environments, models and prefabs do)";
+			outError = "'" + relativePath + "' has no preview (images, .hdr environments, models, prefabs and materials do)";
 			return std::nullopt;
 		}
 		// Previews are of project assets: never read (or cache) a file elsewhere on disk.

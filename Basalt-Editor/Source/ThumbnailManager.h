@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Basalt/Asset/MeshSource.h"
 #include "Basalt/Asset/Thumbnails.h"
 #include "Basalt/Core/Base.h"
 #include "Basalt/Core/FileWatcher.h"
@@ -9,6 +10,7 @@
 
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -17,7 +19,6 @@
 
 namespace Basalt {
 
-	class MeshSource;
 	class Project;
 
 	// Content-browser and inspector previews. Panels ask for a preview every frame they show it; missing or
@@ -54,7 +55,8 @@ namespace Basalt {
 			struct Material
 			{
 				std::string Name;
-				MaterialComponent Values;
+				// The whole imported material, previewed losslessly (as GetMaterial's MaterialData overload draws it).
+				MaterialData Values;
 			};
 			// A model's materials, read when its preview was made this session (the model is not kept loaded for it);
 			// cleared when the file changes and the new version's are not known.
@@ -85,6 +87,9 @@ namespace Basalt {
 		// the material's values have stopped changing for a frame (not on every frame of a drag). The pointer is
 		// valid until the next Update().
 		const Preview* GetMaterial(const std::string& id, const MaterialComponent& material);
+		// A material by value: the material editor's unsaved draft, or a model's imported material. Made again like the
+		// overload above once its values settle.
+		const Preview* GetMaterial(const std::string& id, const MaterialData& material);
 		// Makes queued previews and applies a requested clear. Renders and uploads on its own command lists, so
 		// call it while no other immediate command list is open, and before the frame's ImGui pass (which then
 		// draws the textures it leaves).
@@ -92,13 +97,15 @@ namespace Basalt {
 
 		std::optional<Generated> Generate(const std::string& relativePath, bool refresh, std::string& outError);
 		std::optional<ThumbnailImage> RenderMaterial(const MaterialComponent& material, std::string& outError);
+		std::optional<ThumbnailImage> RenderMaterial(const MaterialData& material, std::string& outError);
 
 		// Files changed on disk (after AssetManager dropped them): every file preview checks its version on its next
-		// request instead of up to RecheckSeconds (2 s) later, and material previews that use one of them as a map are
-		// made again.
+		// request instead of up to RecheckSeconds (2 s) later, and material previews that read one of them (a map, a
+		// material file or its textures, a model) are made again.
 		void OnFilesChanged(const std::vector<FileChange>& changes);
 
-		// A model's materials as previews list them ("Material N" for unnamed ones).
+		// A model's imported materials as previews list them ("Material N" for unnamed ones), without the default
+		// material the importer adds for primitives that have none.
 		static std::vector<Preview::Material> ListMaterials(const MeshSource& mesh);
 
 		// Forgets every preview at the next Update (textures drawn this frame stay alive until then); with
@@ -112,6 +119,8 @@ namespace Basalt {
 			// The source version (ThumbnailCache key) or material values the preview shows or is queued for.
 			std::string Key;
 			MaterialComponent Material;
+			// Set for a by-value preview (a draft, an imported material), which renders this instead of Material.
+			std::optional<MaterialData> Draft;
 			bool IsMaterial = false;
 			bool Queued = false;
 			uint64_t LastUsed = 0;
@@ -130,6 +139,8 @@ namespace Basalt {
 		};
 
 		Slot& Touch(const std::string& id);
+		// Queues a material slot when its key (the values it shows) changed.
+		const Preview* UpdateMaterial(const std::string& id, std::string key, const std::function<void(Slot&)>& assign);
 		void Enqueue(const std::string& id, Slot& slot);
 		static void Fail(Slot& slot, std::string error);
 		bool EnsureRenderer(std::string& outError);

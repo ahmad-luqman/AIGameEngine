@@ -1,5 +1,7 @@
 #include "Basalt/Animation/AnimatedModel.h"
+#include "Basalt/Asset/AssetKey.h"
 #include "Basalt/Asset/AssetManager.h"
+#include "Basalt/Asset/MaterialAsset.h"
 #include "Basalt/Asset/ImageUtils.h"
 #include "Basalt/Asset/TextureSource.h"
 #include "Basalt/Asset/TextureCompression.h"
@@ -34,11 +36,13 @@
 #include <spdlog/fmt/ranges.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <limits>
 #include <map>
 #include <optional>
+#include <set>
 #include <system_error>
 #include <unordered_map>
 #include <unordered_set>
@@ -344,6 +348,66 @@ namespace Basalt {
 			if (std::filesystem::path(path).is_absolute())
 				throw CommandError("asset paths must be project-relative (e.g. 'Assets/Scripts/Player.lua')");
 			return path;
+		}
+
+		// A project-relative path a command imports from or writes to: under Assets/, without drive letters, backslashes or
+		// symlinked components (a link could redirect a write outside the project). `subject` names it in errors.
+		void RequireAssetsPath(const Project& project, const std::string& name, std::string_view subject)
+		{
+			const auto relative = FileSystem::PathFromUtf8(name).lexically_normal();
+			if (relative.empty() || relative.has_root_path() || name.find(':') != std::string::npos || name.find('\\') != std::string::npos)
+				throw CommandError("invalid project-relative path: " + name);
+			if (*relative.begin() != "Assets")
+				throw CommandError(fmt::format("{} must be under Assets/: {}", subject, name));
+			std::filesystem::path entry;
+			std::error_code error;
+			if (FileSystem::FindSymlink(project.GetDirectory(), relative, entry, error))
+			{
+				if (error)
+					throw CommandError("cannot inspect " + FileSystem::PathToUtf8(entry) + ": " + error.message());
+				throw CommandError(fmt::format("symlinks are not allowed in {} paths: {}", subject, FileSystem::PathToUtf8(entry)));
+			}
+		}
+
+		// Problems a material file's texture references will have when it renders: unresolved UUIDs (from parsing) and
+		// files that do not exist.
+		std::vector<std::string> MaterialTextureWarnings(const MaterialData& material, std::vector<std::string> warnings)
+		{
+			for (size_t slot = 0; slot < MaterialTextureSlotCount; slot++)
+			{
+				const std::string& key = MaterialAsset::GetMap(material, static_cast<MaterialTextureSlot>(slot));
+				if (key.empty() || AssetRegistry::IsUnresolvedKey(key))
+					continue;
+				if (const std::string source(GetAssetSource(key)); !FileSystem::Exists(Project::ResolvePath(source)))
+					warnings.push_back(fmt::format("{}: '{}' does not exist", MaterialAsset::MapFields[slot], source));
+			}
+			return warnings;
+		}
+
+		// A material file's text with UUID texture references (creating metadata for referenced files, as scene saves do).
+		std::string MaterialFileText(const std::string& path, const MaterialData& material)
+		{
+			std::string error;
+			const auto data = MaterialAsset::ToJson(material, true, error);
+			if (!data)
+				throw CommandError("cannot write material '" + path + "': " + error);
+			return data->dump(1, '\t');
+		}
+
+		// Writes a material file and reloads it. Refuses to replace a file unless overwrite.
+		json WriteMaterialFile(AutomationSession& session, const std::string& path, const MaterialData& material, bool overwrite)
+		{
+			if (!overwrite && FileSystem::Exists(Project::ResolvePath(path)))
+				throw CommandError("'" + path + "' already exists (pass overwrite=true to replace it)");
+			const std::string text = MaterialFileText(path, material);
+			std::string error;
+			if (!FileSystem::WriteTextFile(Project::ResolvePath(path), text, error))
+				throw CommandError("cannot write '" + path + "': " + error);
+			session.OnFileWritten(path);
+			json result = { { "path", path } };
+			if (const auto warnings = MaterialTextureWarnings(material, {}); !warnings.empty())
+				result["warnings"] = warnings;
+			return result;
 		}
 
 		// Makes a just loaded or created project the active one, starting its assets and file watching afresh.
@@ -1256,8 +1320,7 @@ namespace Basalt {
 							const auto& key = value->get_ref<const std::string&>();
 							if (project->GetAssets().ReferencesSource(key, from))
 							{
-								const auto marker = key.find("#image/");
-								*value = to + (marker == std::string::npos ? "" : key.substr(marker));
+								*value = to + std::string(GetSubAssetFragment(key));
 								changed = true;
 							}
 						}
@@ -1305,6 +1368,24 @@ namespace Basalt {
 					data["Version"] = SceneSerializer::FormatVersion;
 					migrations.push_back({ path, *text, data.dump(1, '\t') });
 				}
+			}
+			// Material files reference textures and models' embedded images.
+			const auto materialFiles = AssetManager::ListAssets({ std::string(MaterialAsset::Extension) }, &error);
+			if (!error.empty())
+				throw CommandError(error);
+			for (const auto& path : materialFiles)
+			{
+				const auto text = FileSystem::ReadTextFile(Project::ResolvePath(path));
+				if (!text)
+					throw CommandError("cannot read asset references in '" + path + "'");
+				json data = ParseJson(*text);
+				if (!data.is_object())
+					throw CommandError("cannot migrate '" + path + "': expected a JSON object");
+				const auto original = data;
+				if (!MaterialAsset::EncodeReferences(data, error, from))
+					throw CommandError(fmt::format("cannot migrate '{}': {}", path, error));
+				if (data != original)
+					migrations.push_back({ path, *text, data.dump(1, '\t') });
 			}
 			if (movesStartScene)
 			{
@@ -1440,26 +1521,8 @@ namespace Basalt {
 				auto project = RequireProject();
 				const auto path = ProjectRelative(RequireString(params, "path"));
 				const auto output = ProjectRelative(RequireString(params, "output"));
-				// The symlink that FileSystem::FindSymlink finds in a project-relative path, or an empty string.
-				auto findLink = [&](const std::filesystem::path& relative) -> std::string {
-					std::filesystem::path entry;
-					std::error_code error;
-					if (!FileSystem::FindSymlink(project->GetDirectory(), relative, entry, error))
-						return {};
-					if (error)
-						throw CommandError("cannot inspect " + FileSystem::PathToUtf8(entry) + ": " + error.message());
-					return FileSystem::PathToUtf8(entry);
-				};
 				for (const std::string& name : { path, output })
-				{
-					const auto relative = FileSystem::PathFromUtf8(name).lexically_normal();
-					if (relative.empty() || relative.has_root_path() || name.find(':') != std::string::npos || name.find('\\') != std::string::npos)
-						throw CommandError("invalid project-relative path: " + name);
-					if (*relative.begin() != "Assets")
-						throw CommandError("texture source and output must be under Assets/: " + name);
-					if (const auto link = findLink(relative); !link.empty())
-						throw CommandError("symlinks are not allowed in texture import paths: " + link);
-				}
+					RequireAssetsPath(*project, name, "texture import");
 				if (FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(output)) != ".ktx2")
 					throw CommandError("compressed output must have a .ktx2 extension: " + output);
 				const auto outputPath = Project::ResolvePath(output);
@@ -1499,7 +1562,7 @@ namespace Basalt {
 				return result;
 			});
 
-			Add(registry, "asset.write", "Writes a text asset (script, prefab, scene, animation graph...) to a project-relative path and reloads it. A .banimgraph is validated before replacing the file. A script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts').", Schema::Object({ { "path", Schema::String("string", true) }, { "content", Schema::String("string") } }, { "path", "content" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "asset.write", "Writes a text asset (script, prefab, scene, animation graph, material...) to a project-relative path and reloads it. A .banimgraph or .bmaterial is validated before replacing the file; a material's unresolved or missing textures are reported in 'warnings'. A script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts').", Schema::Object({ { "path", Schema::String("string", true) }, { "content", Schema::String("string") } }, { "path", "content" }), [](AutomationSession& session, const json& params) {
 				RequireProject();
 				const std::string path = ProjectRelative(RequireString(params, "path"));
 				const json& content = Require(params, "content");
@@ -1512,6 +1575,17 @@ namespace Basalt {
 					if (graph.is_discarded() || !AnimationGraph::FromJson(graph, error))
 						throw CommandError("invalid animation graph: " + error);
 				}
+				std::vector<std::string> warnings;
+				if (MaterialAsset::IsMaterialFile(path))
+				{
+					std::string error;
+					const auto data = ParseJson(content.get_ref<const std::string&>(), error);
+					std::vector<std::string> referenceWarnings;
+					const auto material = data.is_discarded() ? std::nullopt : MaterialAsset::FromJson(data, error, &referenceWarnings);
+					if (!material)
+						throw CommandError("invalid material: " + error);
+					warnings = MaterialTextureWarnings(*material, std::move(referenceWarnings));
+				}
 				const bool adoptsOrphan = !FileSystem::Exists(Project::ResolvePath(path)) && FileSystem::Exists(Project::ResolvePath(path + ".meta"));
 				if (!FileSystem::WriteTextFile(Project::ResolvePath(path), content.get<std::string>()))
 					throw CommandError("cannot write '" + path + "'");
@@ -1519,10 +1593,12 @@ namespace Basalt {
 				json result = { { "path", path }, { "bytes", content.get<std::string>().size() }, { "scripts", ScriptReloadJson(report) } };
 				if (adoptsOrphan)
 				{
-					const auto warning = "restored source next to existing metadata; its previous UUID is retained: " + path;
+					auto warning = "restored source next to existing metadata; its previous UUID is retained: " + path;
 					BS_CORE_WARN("{}", warning);
-					result["warnings"] = json::array({ warning });
+					warnings.push_back(std::move(warning));
 				}
+				if (!warnings.empty())
+					result["warnings"] = warnings;
 				return result;
 			});
 
@@ -1572,7 +1648,7 @@ namespace Basalt {
 				return result;
 			});
 
-			Add(registry, "asset.preload", "Requests mesh/texture CPU loads on the shared worker pool. Returns a status (pending, ready or failed) and error for each path. Poll by repeating in a persistent serve/mcp/editor session; use wait=true for one-shot CLI calls. wait=true joins these requests, including embedded image dependencies. Reload/refresh retries failed loads. GPU upload happens in the renderer.", Schema::Object({ { "paths", Schema::Array("array of mesh/texture paths, Model.glb#image/N keys or built-in mesh keys", Schema::String("string", true)) }, { "wait", Schema::Boolean("wait for these loads, default false") } }, { "paths" }), [](AutomationSession&, const json& params) {
+			Add(registry, "asset.preload", "Requests mesh/texture CPU loads on the shared worker pool. A .bmaterial is read at once and its textures are requested too (each reported as its own path after the requested ones). Returns a status (pending, ready or failed) and error for each path. Poll by repeating in a persistent serve/mcp/editor session; use wait=true for one-shot CLI calls. wait=true joins these requests, including embedded image dependencies. Reload/refresh retries failed loads. GPU upload happens in the renderer.", Schema::Object({ { "paths", Schema::Array("array of mesh/texture/.bmaterial paths, Model.glb#image/N keys or built-in mesh keys", Schema::String("string", true)) }, { "wait", Schema::Boolean("wait for these loads, default false") } }, { "paths" }), [](AutomationSession&, const json& params) {
 				const auto& paths = params.at("paths");
 				if (paths.size() > 4096)
 					throw CommandError("at most 4096 preload paths are allowed");
@@ -1582,6 +1658,8 @@ namespace Basalt {
 					std::string Key;
 					bool Mesh = false;
 					bool Ready = false;
+					// A material file, parsed during validation; its textures follow as requests of their own.
+					bool Material = false;
 				};
 				std::vector<PreloadRequest> requests;
 				// Validate the entire batch before creating work.
@@ -1590,23 +1668,41 @@ namespace Basalt {
 					const std::string raw = value.get<std::string>();
 					const std::string key = Primitives::IsBuiltinKey(raw) ? raw : ProjectRelative(raw);
 					const bool mesh = Primitives::IsBuiltinKey(key) || AssetManager::IsMeshFile(key);
-					const auto marker = key.find("#image/");
-					if (!mesh && !AssetManager::IsTextureFile(key) && !(marker != std::string::npos && AssetManager::IsMeshFile(key.substr(0, marker))))
+					const bool material = MaterialAsset::IsMaterialFile(key);
+					const auto marker = key.find(EmbeddedImageMarker);
+					if (!mesh && !material && !AssetManager::IsTextureFile(key) && !(marker != std::string::npos && AssetManager::IsMeshFile(key.substr(0, marker))))
 						throw CommandError("unsupported preload asset '" + key + "'");
-					requests.push_back({ key, mesh });
+					requests.push_back({ key, mesh, false, material });
+				}
+				// Material files are small and parsed here; what takes time is their textures.
+				std::unordered_set<std::string> requested;
+				for (const auto& request : requests)
+					requested.insert(request.Key);
+				const size_t requestedCount = requests.size();
+				for (size_t i = 0; i < requestedCount; i++)
+				{
+					if (!requests[i].Material)
+						continue;
+					const auto material = AssetManager::GetMaterial(requests[i].Key);
+					requests[i].Ready = material != nullptr;
+					if (material)
+						for (const std::string& texture : MaterialAsset::GetTextures(*material))
+							if (!AssetRegistry::IsUnresolvedKey(texture) && requested.insert(texture).second)
+								requests.push_back({ texture, false });
 				}
 				AssetManager::PublishCompleted();
 				const bool wait = OptionalBool(params, "wait", false);
 				// Schedule every path before any blocking getter can join an import.
 				for (auto& request : requests)
-					request.Ready = request.Mesh ? static_cast<bool>(AssetManager::RequestMesh(request.Key)) : static_cast<bool>(AssetManager::RequestTexture(request.Key));
+					if (!request.Material)
+						request.Ready = request.Mesh ? static_cast<bool>(AssetManager::RequestMesh(request.Key)) : static_cast<bool>(AssetManager::RequestTexture(request.Key));
 				if (wait)
 				{
 					// Activate deferred image batches as their parents finish, before joining textures.
 					std::unordered_set<std::string> joinedParents;
 					for (const auto& request : requests)
 					{
-						if (request.Mesh)
+						if (request.Mesh || request.Material)
 							continue;
 						const auto source = AssetManager::GetSourceFile(request.Key);
 						if (source != request.Key && joinedParents.insert(source).second)
@@ -1621,7 +1717,7 @@ namespace Basalt {
 				{
 					const auto& key = request.Key;
 					bool ready = request.Ready;
-					if (wait)
+					if (wait && !request.Material)
 						ready = request.Mesh ? static_cast<bool>(AssetManager::GetMesh(key)) : static_cast<bool>(AssetManager::GetTexture(key));
 					const char* status = "failed";
 					if (ready)
@@ -1785,6 +1881,106 @@ namespace Basalt {
 			if (OptionalBool(params, "assertMatch", false) && !result.Matches)
 				throw CommandError("images differ: " + response.dump(-1, ' ', false, json::error_handler_t::replace));
 			return response;
+		}
+
+		// A file name for an imported material: its name with characters outside [A-Za-z0-9 ._-] replaced, without leading
+		// or trailing dots and spaces (which Windows drops), at most 64 characters; empty when nothing remains.
+		std::string MaterialFileName(const std::string& name)
+		{
+			std::string result;
+			for (const char c : name.substr(0, 64))
+				result += std::isalnum(static_cast<unsigned char>(c)) || c == ' ' || c == '.' || c == '_' || c == '-' ? c : '_';
+			const size_t first = result.find_first_not_of(". ");
+			if (first == std::string::npos)
+				return {};
+			return result.substr(first, result.find_last_not_of(". ") - first + 1);
+		}
+
+		void RegisterMaterials(CommandRegistry& registry)
+		{
+			Add(registry, "material.create", "Writes a material file (.bmaterial under Assets/) with UUID texture references: with 'entity', the material that entity's Material component draws (its Material asset, or else its inline values), otherwise the defaults. Refuses to replace an existing file unless overwrite=true. Reference the file from Material.Material.", Schema::Object({ { "path", Schema::String("Assets/...bmaterial", true) }, { "entity", Schema::Nullable(Schema::Entity("ID or name, optional")) }, { "overwrite", Schema::Boolean("replace an existing file, default false") } }, { "path" }), [](AutomationSession& session, const json& params) {
+				auto project = RequireProject();
+				const std::string path = ProjectRelative(RequireString(params, "path"));
+				RequireAssetsPath(*project, path, "material");
+				if (!MaterialAsset::IsMaterialFile(path))
+					throw CommandError("material files must have a .bmaterial extension: " + path);
+				MaterialData material;
+				if (params.contains("entity") && !params["entity"].is_null())
+				{
+					Entity entity = RequireEntity(session, params);
+					const auto* component = entity.TryGetComponent<MaterialComponent>();
+					if (!component)
+						throw CommandError("entity '" + entity.GetName() + "' has no Material component");
+					if (component->Material.empty())
+						material = MaterialAsset::FromComponent(*component);
+					else if (const auto asset = AssetManager::GetMaterial(component->Material))
+						material = *asset;
+					else
+						throw CommandError("cannot read Material '" + component->Material + "': " + AssetManager::GetError(component->Material));
+				}
+				material.Name.clear();
+				return WriteMaterialFile(session, path, material, OptionalBool(params, "overwrite", false));
+			});
+
+			Add(registry, "material.extract", "Writes one material file per material a glTF model imports, keeping every imported value (alpha mode, sidedness, strengths, per-map UV transforms and sets): <folder>/<material name>.bmaterial, folder defaulting to a Materials folder next to the model. Textures reference the model's image files and embedded images (Model.glb#image/N) by UUID. Checks every output before writing: an existing file fails unless overwrite=true. The model's own materials stay addressable as Model.glb#material/N.", Schema::Object({ { "model", Schema::String("Assets/....gltf or .glb", true) }, { "folder", Schema::String("output folder under Assets/, optional") }, { "overwrite", Schema::Boolean("replace existing files, default false") } }, { "model" }), [](AutomationSession& session, const json& params) {
+				auto project = RequireProject();
+				const std::string model = ProjectRelative(RequireString(params, "model"));
+				if (!AssetManager::IsMeshFile(model))
+					throw CommandError("'" + model + "' is not a glTF model (.gltf, .glb)");
+				const std::string folder = ProjectRelative(OptionalString(params, "folder", FileSystem::PathToGenericUtf8(FileSystem::PathFromUtf8(model).parent_path() / "Materials")));
+				RequireAssetsPath(*project, folder, "material output");
+				const auto mesh = AssetManager::GetMesh(model);
+				if (!mesh)
+					throw CommandError("cannot load '" + model + "': " + AssetManager::GetError(model));
+				// The importer appends a default material for primitives without one; it is not the model's.
+				const size_t count = mesh->Materials.size() - 1;
+				if (count == 0)
+					throw CommandError("'" + model + "' has no materials");
+				const bool overwrite = OptionalBool(params, "overwrite", false);
+				std::vector<std::string> paths;
+				paths.reserve(count);
+				std::set<std::string> used;
+				// Names compare case-insensitively: two materials must not share one file on Windows or macOS.
+				auto lower = [](std::string text) {
+					std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+					return text;
+				};
+				for (size_t i = 0; i < count; i++)
+				{
+					std::string name = MaterialFileName(mesh->Materials[i].Name);
+					if (name.empty())
+						name = "Material_" + std::to_string(i);
+					std::string unique = name;
+					for (int suffix = 2; !used.insert(lower(unique)).second; suffix++)
+						unique = name + "_" + std::to_string(suffix);
+					std::string path = folder;
+					path.append("/").append(unique).append(MaterialAsset::Extension);
+					if (!overwrite && FileSystem::Exists(Project::ResolvePath(path)))
+						throw CommandError("'" + path + "' already exists (pass overwrite=true to replace it); nothing was written");
+					paths.push_back(path);
+				}
+				// Every file's text is made first: only a file system error can stop the writes part way.
+				std::vector<std::string> texts;
+				texts.reserve(count);
+				for (size_t i = 0; i < count; i++)
+					texts.push_back(MaterialFileText(paths[i], mesh->Materials[i]));
+				json materials = json::array();
+				json warnings = json::array();
+				for (size_t i = 0; i < count; i++)
+				{
+					std::string error;
+					if (!FileSystem::WriteTextFile(Project::ResolvePath(paths[i]), texts[i], error))
+						throw CommandError(fmt::format("cannot write '{}': {} ({} of {} files were written before it)", paths[i], error, i, count));
+					session.OnFileWritten(paths[i]);
+					for (const auto& warning : MaterialTextureWarnings(mesh->Materials[i], {}))
+						warnings.push_back(paths[i] + ": " + warning);
+					materials.push_back({ { "index", i }, { "name", mesh->Materials[i].Name }, { "path", paths[i] }, { "key", model + std::string(ImportedMaterialMarker) + std::to_string(i) } });
+				}
+				json result = { { "model", model }, { "materials", materials } };
+				if (!warnings.empty())
+					result["warnings"] = warnings;
+				return result;
+			});
 		}
 
 		void RegisterPlay(CommandRegistry& registry)
@@ -2506,6 +2702,7 @@ namespace Basalt {
 		RegisterEntity(registry);
 		RegisterComponents(registry);
 		RegisterAssets(registry);
+		RegisterMaterials(registry);
 		RegisterPlay(registry);
 		RegisterAssertions(registry);
 		RegisterEvents(registry);

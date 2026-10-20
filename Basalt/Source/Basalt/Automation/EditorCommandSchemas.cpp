@@ -98,12 +98,17 @@ namespace Basalt::EditorCommandSchemas {
 
 	nlohmann::json Thumbnail()
 	{
-		return Schema::Object({ { "path", Schema::String("Project-relative image, .hdr, .gltf/.glb or .bprefab", true) }, { "output", Schema::String("Also write the preview to this .png", true) }, { "refresh", Schema::Boolean("Make it again even when the cache is current") } }, { "path" });
+		return Schema::Object({ { "path", Schema::String("Project-relative image, .hdr, .gltf/.glb, .bprefab or .bmaterial", true) }, { "output", Schema::String("Also write the preview to this .png", true) }, { "refresh", Schema::Boolean("Make it again even when the cache is current") } }, { "path" });
 	}
 
 	nlohmann::json MaterialPreview()
 	{
 		return Schema::Object({ { "entity", Schema::Entity("ID or name of an entity with a Material component") }, { "output", Schema::String(".png to write", true) } }, { "entity", "output" });
+	}
+
+	nlohmann::json MaterialEditor()
+	{
+		return Schema::Object({ { "path", Schema::String("Project-relative .bmaterial to open, optional", true) }, { "close", Schema::Boolean("Close the window, discarding unsaved edits") } });
 	}
 
 }

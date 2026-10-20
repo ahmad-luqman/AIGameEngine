@@ -176,6 +176,17 @@ local function TestEntities(self)
 	local persisted = Scene.FindEntityByName("MaterialExtensionData"):GetComponent("Material")
 	Check("Persisted material extensions", Near(persisted.Clearcoat,0.8,1e-6) and persisted.UVRotation==0.5)
 
+	-- Material assets: a .bmaterial file or a model's imported material replaces the inline values.
+	coated:SetComponent("Material", { Material = "Assets/Materials/Checker.bmaterial" })
+	Check("Material asset reference", coated:GetComponent("Material").Material == "Assets/Materials/Checker.bmaterial")
+	coated:SetComponent("Material", { Material = "Assets/Models/TexturedCube.glb#material/0" })
+	Check("Imported material reference", coated:GetComponent("Material").Material == "Assets/Models/TexturedCube.glb#material/0")
+	ExpectError("Material asset type", function() coated:SetComponent("Material", { Material = "Assets/Textures/Checker.png" }) end, "must be a .bmaterial file or <model>#material/<n>")
+	local pillarMaterials = {}
+	for _, pillar in ipairs(Scene.FindEntitiesByName("Pillar")) do
+		pillarMaterials[pillar:GetComponent("Material").Material] = true
+	end
+	Check("Persisted material assets", pillarMaterials["Assets/Materials/Checker.bmaterial"] and pillarMaterials["Assets/Models/TexturedCube.glb#material/0"])
 	ExpectError("Material transmission range", function() coated:SetComponent("Material", { Transmission = 2 }) end, "Transmission 2 must be in [0, 1]")
 	ExpectError("Material emissive intensity range", function() coated:SetComponent("Material", { EmissiveIntensity = -1 }) end, "EmissiveIntensity -1 must be finite and nonnegative")
 	coated:Destroy()
