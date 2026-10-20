@@ -775,7 +775,7 @@ namespace Basalt {
 		bool operator==(const ParticleColorKey&) const = default;
 	};
 
-	// Emits camera-facing particles while the scene plays or simulates (ParticleSystem simulates them on the
+	// Emits camera-facing particles while the scene plays/simulates or edit Preview is on (ParticleSystem uses the
 	// CPU, the renderer draws them in the transparent pass). Shapes and Velocity are in the emitter's
 	// local space; Box and Cone emit along local +Y, Point and Sphere in every direction. Each emission cycle
 	// lasts Duration seconds and starts with BurstCount particles; Rate emits continuously in between.
@@ -839,7 +839,8 @@ namespace Basalt {
 		// Billboard width and height (m) at birth and at death.
 		float StartSize = 0.2f;
 		float EndSize = 0.2f;
-		// Multipliers sampled once at birth; 1 means no variation. Color channels 0..1 only darken or fade.
+		// Multipliers sampled once at birth; equal endpoints draw no random value and defaults (1) leave
+		// size/color unchanged. Color channels 0..1 only darken or fade.
 		float StartSizeMin = 1.0f;
 		float StartSizeMax = 1.0f;
 		glm::vec4 StartColorMin{ 1.0f };

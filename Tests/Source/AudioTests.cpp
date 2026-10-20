@@ -410,6 +410,13 @@ TEST_SUITE("Audio")
 			{ { { "LowPass", 5 } }, "LowPass must be 0 (off) or a cutoff from 10 to 20000 Hz (got 5)" },
 			{ { { "LowPass", 25000 } }, "LowPass must be 0 (off) or a cutoff from 10 to 20000 Hz (got 25000)" },
 			{ { { "LowPass", -100 } }, "LowPass must be 0 (off) or a cutoff from 10 to 20000 Hz (got -100)" },
+			{ { { "HighPass", 5 } }, "HighPass must be 0 (off) or a cutoff from 10 to 20000 Hz (got 5)" },
+			{ { { "HighPass", 25000 } }, "HighPass must be 0 (off) or a cutoff from 10 to 20000 Hz (got 25000)" },
+			{ { { "HighPass", -100 } }, "HighPass must be 0 (off) or a cutoff from 10 to 20000 Hz (got -100)" },
+			{ { { "Echo", 1.5 } }, "Echo must be a number from 0 to 1 (got 1.5)" },
+			{ { { "Echo", -0.1 } }, "Echo must be a number from 0 to 1 (got -0.1)" },
+			{ { { "Distortion", 1.5 } }, "Distortion must be a number from 0 to 1 (got 1.5)" },
+			{ { { "Distortion", -0.1 } }, "Distortion must be a number from 0 to 1 (got -0.1)" },
 			{ { { "ReverbSend", 1.5 } }, "ReverbSend must be a number from 0 to 1 (got 1.5)" },
 			{ { { "ReverbSend", -0.1 } }, "ReverbSend must be a number from 0 to 1 (got -0.1)" },
 		};
@@ -2092,18 +2099,25 @@ TEST_SUITE("Audio")
 		Mix(0.2f);
 		const float dry = Rms(Mix(0.1f));
 		REQUIRE(dry > 0.01f);
-		auto level = [&] { audio->Update(0.1f); Mix(0.3f); auto samples=Mix(0.1f); for(float v:samples) CHECK(std::isfinite(v)); return Rms(samples); };
+		auto level = [&](float settle = 0.3f) {
+			// Let parameter glides and any previous routing settle before measuring the complete chain.
+			audio->Update(0.1f);
+			Mix(settle);
+			const auto samples = Mix(0.1f);
+			CHECK(AllFinite(samples));
+			return Rms(samples);
+		};
 		c.HighPass = 2000;
 		CHECK(level() < dry * 0.1f);
 		c.LowPass = 4000;
-		CHECK(level() > 0.0001f);
+		CHECK(level() < dry * 0.1f);
 		c.ReverbSend = 0.2f;
 		c.Echo = 0.2f;
-		CHECK(level() > 0.0001f);
+		CHECK(level() < dry * 0.2f);
 		CHECK(audio->HasReverb(AudioBus::SFX));
 		c.LowPass = 0;
 		c.Distortion = 0.5f;
-		CHECK(level() > 0.0001f);
+		CHECK(level() < dry * 0.5f);
 		c.HighPass = 0;
 		c.Echo = 0;
 		c.Distortion = 0;
@@ -2111,6 +2125,14 @@ TEST_SUITE("Audio")
 		level();
 		Mix(3.0f);
 		CHECK(Rms(Mix(0.1f)) == doctest::Approx(dry).epsilon(0.02));
+		// Fresh voice: create the combined stage only after the low-pass and splitter already exist.
+		audio->Stop(e);
+		c.LowPass = 4000;
+		c.ReverbSend = 0.2f;
+		REQUIRE(audio->Play(e));
+		CHECK(level() > dry * 0.8f);
+		c.HighPass = 2000;
+		CHECK(level(3.0f) < dry * 0.1f);
 		scene.OnRuntimeStop();
 	}
 }
@@ -2150,5 +2172,44 @@ TEST_SUITE("Audio")
 		SourceEffectsNodeUninit(&node, nullptr);
 		ma_audio_buffer_uninit(&buffer);
 		ma_node_graph_uninit(&graph, nullptr);
+	}
+}
+
+TEST_SUITE("Audio")
+{
+	TEST_CASE("Finished source effects suspend after their tail and Play creates an active chain")
+	{
+		BasaltTest::TempProject project("FinishedEffects");
+		project.WriteFile("Assets/Audio/Short.wav", MakeWav(0.04f, 48000));
+		HeadlessAudio engine;
+		Scene scene;
+		auto e = scene.CreateEntity("Finished");
+		auto& c = e.AddComponent<AudioSourceComponent>();
+		c.Clip = "Assets/Audio/Short.wav";
+		c.Spatial = false;
+		c.HighPass = 1000;
+		c.Distortion = 0.2f;
+		scene.OnRuntimeStart();
+		auto* audio = scene.GetAudioSystem();
+		REQUIRE(audio->Play(e));
+		CHECK(audio->IsProcessingSourceEffects(e));
+		audio->Update(0.05f);
+		CHECK_FALSE(audio->IsPlaying(e));
+		CHECK(audio->IsProcessingSourceEffects(e));
+		audio->Update(0.1f);
+		CHECK_FALSE(audio->IsProcessingSourceEffects(e));
+		CHECK(audio->GetActiveSoundCount() == 1);
+		c.Echo = 1;
+		REQUIRE(audio->Play(e));
+		CHECK(audio->IsProcessingSourceEffects(e));
+		audio->Update(0.1f);
+		CHECK(audio->IsProcessingSourceEffects(e));
+		audio->Update(3.1f);
+		CHECK_FALSE(audio->IsProcessingSourceEffects(e));
+		REQUIRE(audio->Play(e));
+		CHECK(audio->IsProcessingSourceEffects(e));
+		audio->Stop(e);
+		CHECK_FALSE(audio->IsProcessingSourceEffects(e));
+		scene.OnRuntimeStop();
 	}
 }

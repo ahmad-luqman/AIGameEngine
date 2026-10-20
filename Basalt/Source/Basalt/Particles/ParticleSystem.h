@@ -146,6 +146,7 @@ namespace Basalt {
 			Random Rng;
 			std::vector<Particle> Particles;
 			EmitterState State = EmitterState::Stopped;
+			// Last observed Preview flag; re-enabling restarts the emission cycle.
 			bool PreviewEnabled = false;
 			// The space the particles are stored in. A SimulationSpace change converts them (at the next Update or
 			// Emit); until then they are drawn in this space, so they never jump.
@@ -181,6 +182,7 @@ namespace Basalt {
 
 	private:
 		Scene* m_Scene = nullptr;
+		// Edit preview simulates only emitters with Preview enabled.
 		bool m_Preview = false;
 		// Never reused, so removing an emitter does not change the seeds of emitters registered later.
 		uint32_t m_NextOrdinal = 0;

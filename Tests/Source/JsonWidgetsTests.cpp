@@ -8,6 +8,8 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 
+#include <cmath>
+
 using namespace Basalt;
 using json = nlohmann::json;
 
@@ -228,5 +230,39 @@ TEST_SUITE("Editor")
 		REQUIRE(EditJsonList(list, JsonListEdit::Add, 0, type, &inserted));
 		CHECK(inserted == 1);
 		CHECK(list[1]["Time"] == doctest::Approx(0.25));
+	}
+}
+
+TEST_SUITE("Editor")
+{
+	TEST_CASE("A curve duplicate with no following float midpoint searches later free intervals")
+	{
+		const auto& type = ComponentRegistry::Find("ParticleEmitter")->FieldTypes.at("SizeCurve");
+		const float narrow = std::nextafter(0.1f, 1.0f);
+		json list = { { { "Time", 0.0f }, { "Value", 1 } }, { { "Time", 0.1f }, { "Value", 2 } }, { { "Time", narrow }, { "Value", 3 } }, { { "Time", 1.0f }, { "Value", 4 } } };
+		size_t inserted = 0;
+		REQUIRE(EditJsonList(list, JsonListEdit::Duplicate, 1, type, &inserted));
+		CHECK(inserted == 3);
+		CHECK(list[3]["Value"] == 2);
+		CHECK(list[3]["Time"].get<float>() > 0.5f);
+	}
+}
+
+TEST_SUITE("Editor")
+{
+	TEST_CASE("Timed list edits reject malformed external JSON without mutation")
+	{
+		const auto& type = ComponentRegistry::Find("ParticleEmitter")->FieldTypes.at("SizeCurve");
+		for (const json& time : { json("oops"), json(1e300), json(-1) })
+		{
+			json list = { { { "Time", time }, { "Value", 1 } } };
+			const json before = list;
+			CHECK_FALSE(EditJsonList(list, JsonListEdit::Add, 0, type));
+			CHECK(list == before);
+		}
+		json missing = { { { "Value", 1 } } };
+		const json before = missing;
+		CHECK_FALSE(EditJsonList(missing, JsonListEdit::Duplicate, 0, type));
+		CHECK(missing == before);
 	}
 }

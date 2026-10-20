@@ -896,18 +896,18 @@ function Audio.SetBusVolume(bus, volume) end
 ---@return number
 function Audio.GetBusVolume(bus) end
 
----The room every bus's reverb simulates (each setting 0..1).
+---A room description used for the session baseline and the effective zone-blended reverb (each setting 0..1).
 ---@class AudioReverbSettings
 ---@field RoomSize number Larger rooms ring longer (default 0.5)
 ---@field Damping number How quickly high frequencies die away (default 0.25)
 ---@field Width number Stereo spread of the tail (default 1)
 
----Patches the reverb settings with the given fields; unknown or non-string keys, non-numbers and values outside 0..1
+---Patches the session baseline, over which listener-position zones blend; unknown or non-string keys, non-numbers and values outside 0..1
 ---raise an error, and nothing changes.
 ---@param settings {RoomSize?: number, Damping?: number, Width?: number}
 function Audio.SetReverb(settings) end
 
----The current reverb settings.
+---The effective reverb settings after listener-position zone blending.
 ---@return AudioReverbSettings
 function Audio.GetReverb() end
 

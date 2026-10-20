@@ -893,7 +893,7 @@ TEST_SUITE("Serialization")
 					CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, info.Name, { { field, nlohmann::json::array({ type.Element->Default, type.Element->Default }) } }, error));
 			}
 		}
-		// Animator Events, BlendSpaces (Samples), Layers (Mask); InverseKinematics Chains; SpringBone Chains, Colliders.
+		// Animator Events, BlendSpaces (Samples), Layers (Mask); InverseKinematics Chains; SpringBone Chains, Colliders; ParticleEmitter SizeCurve, ColorCurve.
 		CHECK(lists == 10);
 	}
 

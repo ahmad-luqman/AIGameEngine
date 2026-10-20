@@ -3,6 +3,7 @@
 #include "EditorContext.h"
 
 #include "Basalt/Core/Assert.h"
+#include "Basalt/Core/JsonUtils.h"
 
 #include <imgui.h>
 #include <imgui_stdlib.h>
@@ -263,6 +264,22 @@ namespace Basalt {
 		if (grows && array.size() >= type.MaxCount)
 			return false;
 		const std::string& timeField = type.Element->NormalizedTimeField;
+		// Public helper callers can supply hand-built JSON; reject malformed times before editing anything.
+		if (!timeField.empty())
+		{
+			float previous = -1.0f;
+			for (const auto& key : array)
+			{
+				if (!key.is_object())
+					return false;
+				const auto value = key.find(timeField);
+				float time = 0.0f;
+				if (value == key.end() || !JsonToFloat(*value, time) || time < 0.0f || time > 1.0f || time <= previous)
+					return false;
+				previous = time;
+			}
+		}
+
 		nlohmann::json original = array;
 		if (!ApplyListEdit(array, edit, index, type.Element->Default))
 			return false;
@@ -299,7 +316,7 @@ namespace Basalt {
 								insert = i;
 								time = middle;
 							}
-							if (edit == JsonListEdit::Duplicate && i == index + 1 && gap > 0.0f)
+							if (edit == JsonListEdit::Duplicate && i == index + 1 && insert == i && gap > 0.0f)
 								break;
 						}
 						if (gap == 0.0f)

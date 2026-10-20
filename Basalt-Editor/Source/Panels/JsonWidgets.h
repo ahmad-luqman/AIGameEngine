@@ -36,8 +36,10 @@ namespace Basalt {
 	};
 
 	// Applies one edit to a JSON array of `type`'s elements; false (array unchanged) when it does not apply: an
-	// index out of range, a move past either end, or growing past type.MaxCount. An added or duplicated element
+	// index out of range, a move past either end, growing past type.MaxCount, or no representable free time. An added or duplicated element
 	// gets a fresh value of the schema's UniqueField ("Walk 2"). Timed lists insert into a free interval;
+	// Add uses time 0 for the first key, appends time 1 when possible, otherwise splits the widest interval.
+	// Duplicate prefers the following interval, falling back to the widest representable gap.
 	// insertedIndex receives the actual new slot so tree state follows it. Moves retain the ordered times.
 	bool EditJsonList(nlohmann::json& array, JsonListEdit edit, size_t index, const ComponentFieldType& type, size_t* insertedIndex = nullptr);
 

@@ -78,6 +78,9 @@ namespace Basalt {
 		// True when the entity's current sound decodes its clip while it plays (AudioSource.Stream). Asks
 		// miniaudio what it did rather than echoing the field, for tests and diagnostics.
 		bool IsStreaming(Entity entity) const;
+		// Diagnostics: whether the entity's combined high-pass/distortion/echo node is processing. Ended
+		// sources suspend it after the short filter tail, or after three seconds for echo, until the next Play.
+		bool IsProcessingSourceEffects(Entity entity) const;
 		// Fire-and-forget sound at a world position (non-spatial when position is null). Always decoded whole.
 		// False without an audio engine, and false, logging why, when the clip cannot load, volume is not a
 		// finite number >= 0, bus is outside the enum, or an effect option is invalid.
@@ -197,6 +200,8 @@ namespace Basalt {
 		std::unordered_map<UUID, std::unique_ptr<Voice>> m_Sources;
 		// Sources loaded by Start that BeginPlayback has not started yet (see BeginPlayback).
 		std::unordered_set<UUID> m_PendingStarts;
+		// Fire-and-forget voices include their effect chains and echo tails. Declared after m_Reverbs so
+		// they are destroyed first (do not reorder).
 		std::vector<std::unique_ptr<Voice>> m_OneShots;
 		ListenerState m_Listener;
 		// What miniaudio's listener was last given (its defaults until then), for GetDopplerPitch and to hold it in

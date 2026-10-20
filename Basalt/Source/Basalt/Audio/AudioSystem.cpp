@@ -228,6 +228,7 @@ namespace Basalt {
 		EffectStage<SplitterHandle> Send;
 		EffectStage<LowPassHandle> LowPass;
 		EffectStage<SourceEffectsHandle> Effects;
+		// Elapsed time after the clip ends, for source-node suspension and one-shot release.
 		float TailTime = 0.0f;
 		bool EchoTail = false;
 		SoundHandle Sound;
@@ -341,7 +342,7 @@ namespace Basalt {
 			{
 				BS_CORE_ERROR("Audio: cannot route '{}' through effects ({}); playing dry", name, ma_result_description(result));
 				if (const ma_result direct = ma_node_attach_output_bus(Sound.get(), 0, Out.Node, 0); direct != MA_SUCCESS)
-					BS_CORE_ERROR("Audio: cannot reconnect '{}' to its bus ({})", name, ma_result_description(direct));
+					BS_CORE_ERROR("Audio: cannot reconnect '{}' to its bus ({}); it is silent", name, ma_result_description(direct));
 				Effects.Disable();
 				LowPass.Disable();
 				Send.Disable();
@@ -568,6 +569,12 @@ namespace Basalt {
 		return (it->second->Sound->pResourceManagerDataSource->flags & MA_RESOURCE_MANAGER_DATA_SOURCE_FLAG_STREAM) != 0;
 	}
 
+	bool AudioSystem::IsProcessingSourceEffects(Entity entity) const
+	{
+		const auto it = m_Sources.find(entity.GetUUID());
+		return it != m_Sources.end() && it->second->Effects.Node && ma_node_get_state(it->second->Effects.Node.get()) == ma_node_state_started;
+	}
+
 	float AudioSystem::GetDopplerPitch(Entity entity) const
 	{
 		auto it = m_Sources.find(entity.GetUUID());
@@ -656,13 +663,13 @@ namespace Basalt {
 		}
 		if (voice.Effects.Node)
 			SourceEffectsNodeSet(voice.Effects.Node.get(), highPass, echo, distortion);
-		voice.EchoTail = echo > 0.0f && voice.Effects.Node;
 		const bool lowPass = effects.LowPass > 0.0f && voice.UpdateLowPass(engine, effects.LowPass, name);
 		// A failed send never creates its bus's reverb.
 		Reverb* reverb = effects.ReverbSend > 0.0f && !voice.Send.Failed && voice.Out.Bus ? GetReverbNode(*voice.Out.Bus) : nullptr;
 		if (reverb && !voice.UpdateSend(engine, effects.ReverbSend, name))
 			reverb = nullptr;
 		voice.Route(lowPass, reverb ? reverb->Node.get() : nullptr, name);
+		voice.EchoTail = echo > 0.0f && voice.Effects.Routed;
 	}
 
 	AudioSystem::Reverb* AudioSystem::GetReverbNode(size_t bus)
@@ -837,6 +844,24 @@ namespace Basalt {
 		}
 
 		AudioEngine::AdvanceDeviceless(seconds);
+
+		// Finished sources remain registered for queries, but their continuous effects must stop consuming
+		// audio-thread work once the tail ends. Play replaces the voice and starts a fresh chain.
+		for (auto& [uuid, voice] : m_Sources)
+		{
+			if (!voice->Effects.Node || ma_node_get_state(voice->Effects.Node.get()) != ma_node_state_started)
+				continue;
+			if (!ma_sound_at_end(voice->Sound.get()))
+			{
+				voice->TailTime = 0.0f;
+				continue;
+			}
+			if (std::isfinite(seconds) && seconds > 0.0f)
+				voice->TailTime += seconds;
+			if (voice->TailTime >= (voice->EchoTail ? 3.0f : 0.1f))
+				if (const ma_result result = ma_node_set_state(voice->Effects.Node.get(), ma_node_state_stopped); result != MA_SUCCESS)
+					BS_CORE_ERROR("Audio: cannot suspend finished effects for entity {} ({})", static_cast<uint64_t>(uuid), ma_result_description(result));
+		}
 
 		// Echo one-shots retain a three-second tail: 12 repeats at 0.35 feedback fall below -100 dB.
 		// Sources stay registered (and report !IsPlaying) until stopped.
