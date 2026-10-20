@@ -15,11 +15,12 @@ namespace Basalt {
 
 	// The first rule `source` breaks, naming the field and its value; empty when it is valid.
 	std::string ValidateAudioSource(const AudioSourceComponent& source);
+	std::string ValidateAudioReverbZone(const AudioReverbZoneComponent& zone);
 
 	// A linear gain: finite and not negative (above 1 amplifies).
 	bool IsValidAudioVolume(float volume);
 
-	// The first effect field (Doppler, LowPass, ReverbSend) out of its range, naming it and its value; empty when
+	// The first effect field (Doppler, LowPass, ReverbSend, HighPass, Echo, Distortion) out of its range, naming it and its value; empty when
 	// all are valid. Part of ValidateAudioSource; the AudioSystem also checks the effects alone, as they apply live.
 	std::string ValidateAudioEffects(const AudioSourceComponent& source);
 
@@ -35,7 +36,7 @@ namespace Basalt {
 	// stays between about 0.26 and 3.8: near the speed of sound miniaudio's pitch goes to 0 (silence) for a receding
 	// listener and to infinity for an approaching source.
 	constexpr float MaxAudioDoppler = 2.0f;
-	// Range of a non-zero AudioSourceComponent::LowPass in Hz. The AudioSystem also keeps the cutoff at most
+	// Shared range of non-zero AudioSourceComponent LowPass and HighPass cutoffs in Hz. The AudioSystem also keeps the cutoff at most
 	// MaxAudioLowPassRateFraction times the output's sample rate (under its Nyquist frequency, half the rate).
 	constexpr float MinAudioLowPass = 10.0f;
 	// The top of human hearing.

@@ -1002,13 +1002,39 @@ namespace Basalt {
 			};
 
 			sol::table audio = lua.create_named_table("Audio");
-			audio["PlayOneShot"] = [&context](const std::string& clip, sol::optional<glm::vec3> position, sol::optional<float> volume, sol::optional<std::string> bus) {
+			audio["PlayOneShot"] = [&context](const std::string& clip, sol::optional<glm::vec3> position, sol::optional<float> volume, sol::optional<std::string> bus, sol::optional<sol::table> options) {
 				const glm::vec3* positionPointer = position ? &*position : nullptr;
 				if (position)
 					RequireFiniteVector("Audio.PlayOneShot", "position", *position);
 				const float gain = RequireAudioVolume("Audio.PlayOneShot", volume.value_or(1.0f));
 				const AudioBus target = bus ? ParseAudioBus("Audio.PlayOneShot", *bus) : AudioBus::SFX;
-				return RequireAudio(context).PlayOneShot(clip, positionPointer, gain, target);
+				AudioOneShotOptions effects;
+				if (options)
+				{
+					for (const auto& pair : *options)
+					{
+						if (!pair.first.is<std::string>() || pair.second.get_type() != sol::type::number)
+							throw std::runtime_error("Audio.PlayOneShot: options must contain named numeric effect values");
+						const std::string name = pair.first.as<std::string>();
+						const double number = pair.second.as<double>();
+						if (!std::isfinite(number) || std::abs(number) > static_cast<double>(std::numeric_limits<float>::max()))
+							throw std::runtime_error("Audio.PlayOneShot: effect options must be finite float values");
+						const float value = static_cast<float>(number);
+						if (name == "LowPass")
+							effects.LowPass = value;
+						else if (name == "ReverbSend")
+							effects.ReverbSend = value;
+						else if (name == "HighPass")
+							effects.HighPass = value;
+						else if (name == "Echo")
+							effects.Echo = value;
+						else if (name == "Distortion")
+							effects.Distortion = value;
+						else
+							throw std::runtime_error("Audio.PlayOneShot: unknown effect option '" + name + "'");
+					}
+				}
+				return RequireAudio(context).PlayOneShot(clip, positionPointer, gain, target, effects);
 			};
 			audio["SetBusVolume"] = [&context](const std::string& bus, float volume) {
 				const AudioBus target = ParseAudioBus("Audio.SetBusVolume", bus);
@@ -1019,7 +1045,7 @@ namespace Basalt {
 			audio["SetReverb"] = [&context](const sol::table& settings) {
 				AudioSystem& system = RequireAudio(context);
 				// ReadReverbSettings raises an error for anything SetReverb refuses today; this catches a rule it adds later.
-				if (!system.SetReverb(ReadReverbSettings(settings, system.GetReverb())))
+				if (!system.SetReverb(ReadReverbSettings(settings, system.GetBaseReverb())))
 					throw std::runtime_error("Audio.SetReverb: the reverb was not changed (see the log)");
 			};
 			audio["GetReverb"] = [&context](sol::this_state state) {

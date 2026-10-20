@@ -117,6 +117,22 @@ namespace Basalt {
 		return m_SessionFixedTimestep > 0.0f ? m_SessionFixedTimestep : Project::GetActiveFixedTimestep();
 	}
 
+	void Scene::UpdateParticlePreview(Timestep ts)
+	{
+		if (m_ParticleSystem)
+			return;
+		if (!m_ParticlePreview)
+		{
+			m_ParticlePreview = CreateScope<ParticleSystem>(this, true);
+			m_ParticlePreview->Start();
+		}
+		m_ParticlePreview->Update(ts);
+	}
+	void Scene::ResetParticlePreview()
+	{
+		m_ParticlePreview.reset();
+	}
+
 	void Scene::StartSession()
 	{
 		m_RandomSeed = Project::GetActiveRandomSeed();
@@ -621,6 +637,7 @@ namespace Basalt {
 
 		m_PhysicsWorld = CreateScope<PhysicsWorld>(this);
 		m_AudioSystem = CreateScope<AudioSystem>(this);
+		m_ParticlePreview.reset();
 		m_ParticleSystem = CreateScope<ParticleSystem>(this);
 		m_AnimationSystem = CreateScope<AnimationSystem>(*this);
 		m_ScriptEngine = CreateScope<ScriptEngine>(this);
@@ -683,7 +700,8 @@ namespace Basalt {
 		m_StepFrames = 0;
 		m_PhysicsWorld = CreateScope<PhysicsWorld>(this);
 		m_PhysicsWorld->Start();
-		// Particles preview in simulation too (PlayOnStart emitters); nothing else can play them there.
+		// Simulate plays PlayOnStart emitters and replaces the isolated edit preview.
+		m_ParticlePreview.reset();
 		m_ParticleSystem = CreateScope<ParticleSystem>(this);
 		m_AnimationSystem = CreateScope<AnimationSystem>(*this);
 		m_ParticleSystem->Start();

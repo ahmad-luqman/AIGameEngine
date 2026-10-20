@@ -64,6 +64,8 @@ namespace Basalt {
 		// elements they add or duplicate a fresh value; the owning component's Validate must reject duplicates (the
 		// registry does not).
 		std::string UniqueField;
+		// A strictly ordered normalized time field. List edits insert into a free interval; moves keep key times.
+		std::string NormalizedTimeField;
 		// A default-constructed element as JSON: what an inspector's Add button appends. It passes the
 		// component's checks once UniqueField is made unique.
 		nlohmann::json Default;

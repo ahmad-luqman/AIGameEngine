@@ -314,6 +314,10 @@ namespace Basalt {
 
 		// List element types. Their Fields and Write overloads are defined with the components' below; these
 		// declarations let the list templates find them.
+		void Fields(FieldReader& r, ParticleSizeKey& c);
+		void Fields(FieldReader& r, ParticleColorKey& c);
+		json Write(const ParticleSizeKey& c);
+		json Write(const ParticleColorKey& c);
 		void Fields(FieldReader& r, AnimationEvent& c);
 		void Fields(FieldReader& r, AnimationBlendSample& c);
 		void Fields(FieldReader& r, AnimationBlendSpace& c);
@@ -345,11 +349,14 @@ namespace Basalt {
 				schema->Name = E::TypeName;
 				if constexpr (requires { E::UniqueField; })
 					schema->UniqueField = E::UniqueField;
+				if constexpr (requires { E::NormalizedTimeField; })
+					schema->NormalizedTimeField = E::NormalizedTimeField;
 				schema->Fields = collector.GetFieldNames();
 				schema->FieldTypes = collector.GetFieldTypes();
 				schema->EnumOptions = collector.GetEnumOptions();
 				schema->Default = Write(element);
 				BS_CORE_ASSERT(schema->UniqueField.empty() || (schema->FieldTypes.contains(schema->UniqueField) && schema->FieldTypes.at(schema->UniqueField).Kind == ComponentFieldKind::String), "UniqueField must name a string field");
+				BS_CORE_ASSERT(schema->NormalizedTimeField.empty() || (schema->FieldTypes.contains(schema->NormalizedTimeField) && schema->FieldTypes.at(schema->NormalizedTimeField).Kind == ComponentFieldKind::Number && schema->FieldTypes.at(schema->NormalizedTimeField).Count == 0), "NormalizedTimeField must name a scalar number field");
 				return schema;
 			}();
 			return s_Schema;
@@ -839,11 +846,44 @@ namespace Basalt {
 			r.Field("Doppler", c.Doppler);
 			r.Field("LowPass", c.LowPass);
 			r.Field("ReverbSend", c.ReverbSend);
+			r.Field("HighPass", c.HighPass);
+			r.Field("Echo", c.Echo);
+			r.Field("Distortion", c.Distortion);
+		}
+
+		void Fields(FieldReader& r, AudioReverbZoneComponent& c)
+		{
+			r.Field("Enabled", c.Enabled);
+			r.Field("Priority", c.Priority);
+			r.Field("Radius", c.Radius);
+			r.Field("BlendDistance", c.BlendDistance);
+			r.Field("RoomSize", c.RoomSize);
+			r.Field("Damping", c.Damping);
+			r.Field("Width", c.Width);
 		}
 
 		void Fields(FieldReader& r, AudioListenerComponent& c)
 		{
 			r.Field("Active", c.Active);
+		}
+
+		void Fields(FieldReader& r, ParticleSizeKey& c)
+		{
+			r.Field("Time", c.Time);
+			r.Field("Value", c.Value);
+		}
+		void Fields(FieldReader& r, ParticleColorKey& c)
+		{
+			r.Field("Time", c.Time);
+			r.Field("Value", c.Value);
+		}
+		json Write(const ParticleSizeKey& c)
+		{
+			return { { "Time", c.Time }, { "Value", c.Value } };
+		}
+		json Write(const ParticleColorKey& c)
+		{
+			return { { "Time", c.Time }, { "Value", ToJson(c.Value) } };
 		}
 
 		void Fields(FieldReader& r, ParticleEmitterComponent& c)
@@ -870,6 +910,19 @@ namespace Basalt {
 			r.Field("EndColor", c.EndColor);
 			r.Field("StartSize", c.StartSize);
 			r.Field("EndSize", c.EndSize);
+			r.Field("StartSizeMin", c.StartSizeMin);
+			r.Field("StartSizeMax", c.StartSizeMax);
+			r.Field("StartColorMin", c.StartColorMin);
+			r.Field("StartColorMax", c.StartColorMax);
+			r.AngleField("RotationMin", c.RotationMin);
+			r.AngleField("RotationMax", c.RotationMax);
+			r.AngleField("AngularVelocityMin", c.AngularVelocityMin);
+			r.AngleField("AngularVelocityMax", c.AngularVelocityMax);
+			r.Field("SoftDistance", c.SoftDistance);
+			r.Field("Lit", c.Lit);
+			r.Field("Preview", c.Preview);
+			r.ListField("SizeCurve", c.SizeCurve, ParticleEmitterComponent::MaxCurveKeys);
+			r.ListField("ColorCurve", c.ColorCurve, ParticleEmitterComponent::MaxCurveKeys);
 			r.EnumField("Blend", c.Blend, s_ParticleBlendNames);
 			r.Field("Texture", c.Texture);
 		}
@@ -1316,7 +1369,15 @@ namespace Basalt {
 				{ "Doppler", c.Doppler },
 				{ "LowPass", c.LowPass },
 				{ "ReverbSend", c.ReverbSend },
+				{ "HighPass", c.HighPass },
+				{ "Echo", c.Echo },
+				{ "Distortion", c.Distortion },
 			};
+		}
+
+		json Write(const AudioReverbZoneComponent& c)
+		{
+			return { { "Enabled", c.Enabled }, { "Priority", c.Priority }, { "Radius", c.Radius }, { "BlendDistance", c.BlendDistance }, { "RoomSize", c.RoomSize }, { "Damping", c.Damping }, { "Width", c.Width } };
 		}
 
 		json Write(const AudioListenerComponent& c)
@@ -1348,6 +1409,19 @@ namespace Basalt {
 				{ "EndColor", ToJson(c.EndColor) },
 				{ "StartSize", c.StartSize },
 				{ "EndSize", c.EndSize },
+				{ "StartSizeMin", c.StartSizeMin },
+				{ "StartSizeMax", c.StartSizeMax },
+				{ "StartColorMin", ToJson(c.StartColorMin) },
+				{ "StartColorMax", ToJson(c.StartColorMax) },
+				{ "RotationMin", glm::degrees(c.RotationMin) },
+				{ "RotationMax", glm::degrees(c.RotationMax) },
+				{ "AngularVelocityMin", glm::degrees(c.AngularVelocityMin) },
+				{ "AngularVelocityMax", glm::degrees(c.AngularVelocityMax) },
+				{ "SoftDistance", c.SoftDistance },
+				{ "Lit", c.Lit },
+				{ "Preview", c.Preview },
+				{ "SizeCurve", ListToJson(c.SizeCurve) },
+				{ "ColorCurve", ListToJson(c.ColorCurve) },
 				{ "Blend", EnumName(s_ParticleBlendNames, c.Blend) },
 				{ "Texture", c.Texture },
 			};
@@ -1564,6 +1638,10 @@ namespace Basalt {
 			return ValidateLocalShadowSoftness(light.ShadowSoftness);
 		}
 
+		std::string Validate(const AudioReverbZoneComponent& c)
+		{
+			return ValidateAudioReverbZone(c);
+		}
 		std::string Validate(const AudioSourceComponent& source)
 		{
 			return ValidateAudioSource(source);
@@ -1925,6 +2003,7 @@ namespace Basalt {
 			infos.push_back(MakeInfo<ScriptComponent>("Script"));
 			infos.push_back(MakeInfo<AudioSourceComponent>("AudioSource"));
 			infos.push_back(MakeInfo<AudioListenerComponent>("AudioListener"));
+			infos.push_back(MakeInfo<AudioReverbZoneComponent>("AudioReverbZone"));
 			infos.push_back(MakeInfo<ParticleEmitterComponent>("ParticleEmitter"));
 			infos.push_back(MakeInfo<UIRectComponent>("UIRect"));
 			infos.push_back(MakeInfo<UIImageComponent>("UIImage"));

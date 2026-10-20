@@ -373,3 +373,7 @@ With W (Translate), drag its body to move or one of eight handles to resize. E r
 pivot; R scales uniformly. The Snap toggle or Ctrl/Cmd enables the viewport's snap settings. Each gesture is one undo
 entry, and Escape cancels it. The handles follow ancestor rotation/scale and edit through
 `component.set`, using the same component validation and history as automation.
+
+Edit-mode particle emitters with `Preview` enabled advance with editor frame time, including between
+automation captures. Disable Preview for reproducible static edit captures, or use fixed Play steps
+for deterministic particle captures.

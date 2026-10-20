@@ -115,8 +115,9 @@ namespace Basalt {
 
 	}
 
-	ParticleSystem::ParticleSystem(Scene* scene)
+	ParticleSystem::ParticleSystem(Scene* scene, bool preview)
 		: m_Scene(scene)
+		, m_Preview(preview)
 	{
 		entt::registry& registry = scene->GetRegistry();
 		registry.on_construct<ParticleEmitterComponent>().connect<&ParticleSystem::OnConstruct>(*this);
@@ -194,7 +195,8 @@ namespace Basalt {
 		m_Order.push_back(id);
 		const ParticleEmitterComponent component = ReadComponent(emitter);
 		emitter.Space = component.SimulationSpace;
-		if (component.PlayOnStart)
+		emitter.PreviewEnabled = component.Preview;
+		if (m_Preview ? component.Preview : component.PlayOnStart)
 			StartCycle(emitter);
 	}
 
@@ -361,6 +363,13 @@ namespace Basalt {
 			particle.Position = world ? glm::vec3(emitterTransform * glm::vec4(position, 1.0f)) : position;
 			particle.Velocity = velocityToStored * (direction * speed + component.Velocity);
 			particle.Lifetime = lifetime;
+			// Constant ranges draw no random numbers, so emitters without variation retain their sequence.
+			auto sample = [&](float a, float b) { return a == b ? a : emitter.Rng.Range(a, b); };
+			particle.SizeScale = sample(component.StartSizeMin, component.StartSizeMax);
+			for (int c = 0; c < 4; ++c)
+				particle.ColorScale[c] = sample(component.StartColorMin[c], component.StartColorMax[c]);
+			particle.Rotation = sample(component.RotationMin, component.RotationMax);
+			particle.AngularVelocity = sample(component.AngularVelocityMin, component.AngularVelocityMax);
 			emitter.Particles.push_back(particle);
 		}
 		return spawned;
@@ -411,6 +420,20 @@ namespace Basalt {
 				continue;
 			Emitter& emitter = it->second;
 			const ParticleEmitterComponent component = ReadComponent(emitter);
+			if (m_Preview)
+			{
+				if (!component.Preview)
+				{
+					emitter.Particles.clear();
+					emitter.FreshCount = 0;
+					emitter.State = EmitterState::Stopped;
+					emitter.PreviewEnabled = false;
+					continue;
+				}
+				if (!emitter.PreviewEnabled)
+					StartCycle(emitter);
+				emitter.PreviewEnabled = true;
+			}
 			const glm::mat4 transform = m_Scene->GetWorldTransform(Entity(emitter.Handle, m_Scene));
 
 			// A smaller MaxParticles (set during play) takes effect at once. The trim removes the newest
@@ -492,6 +515,8 @@ namespace Basalt {
 				continue;
 			// Read here too (not cached from Update): edits made while paused render, and are reported, at once.
 			const ParticleEmitterComponent component = ReadComponent(emitter);
+			if (m_Preview && !component.Preview)
+				continue;
 			// The space the particles are stored in (a SimulationSpace change converts them at the next update).
 			const bool local = emitter.Space == ParticleSimulationSpace::Local;
 			const glm::mat4 transform = local ? m_Scene->GetWorldTransform(Entity(emitter.Handle, m_Scene)) : glm::mat4(1.0f);
@@ -520,9 +545,19 @@ namespace Basalt {
 				const Particle& particle = emitter.Particles[index];
 				const float t = std::clamp(particle.Age / particle.Lifetime, 0.0f, 1.0f);
 				const glm::vec3& position = positions[index];
-				const float size = glm::mix(component.StartSize, component.EndSize, t);
+				auto evaluate = [t](const auto& keys, auto fallback) {
+					if (keys.empty())
+						return fallback;
+					if (t <= keys.front().Time)
+						return keys.front().Value;
+					for (size_t i = 1; i < keys.size(); ++i)
+						if (t <= keys[i].Time)
+							return glm::mix(keys[i - 1].Value, keys[i].Value, (t - keys[i - 1].Time) / (keys[i].Time - keys[i - 1].Time));
+					return keys.back().Value;
+				};
+				const float size = evaluate(component.SizeCurve, glm::mix(component.StartSize, component.EndSize, t)) * particle.SizeScale;
 				largestSize = std::max(largestSize, size);
-				out.Particles.push_back({ glm::vec4(position, size), glm::mix(component.StartColor, component.EndColor, t) });
+				out.Particles.push_back({ glm::vec4(position, size), evaluate(component.ColorCurve, glm::mix(component.StartColor, component.EndColor, t)) * particle.ColorScale, glm::vec4(static_cast<float>(std::remainder(static_cast<double>(particle.Rotation) + static_cast<double>(particle.AngularVelocity) * particle.Age, glm::two_pi<double>())), component.SoftDistance, component.Lit ? 1.0f : 0.0f, 0.0f) });
 				batch.Bounds.Expand(position);
 			}
 			batch.Bounds.Min -= glm::vec3(largestSize * HalfDiagonal);

@@ -124,6 +124,7 @@ namespace Basalt {
 		constexpr uint32_t ParticleBufferSlot = 0;
 		constexpr uint32_t ParticleTextureSlot = 1;
 		constexpr uint32_t ParticleSamplerSlot = 2;
+		constexpr uint32_t ParticleDepthSlot = 3;
 
 		// GPU profiler passes (debug markers too), in recording order. Unscoped so the values index the
 		// profiler's pass list directly; the names below must match the order.
@@ -420,6 +421,7 @@ namespace Basalt {
 		nvrhi::TextureHandle BrdfLut;
 		bool BrdfLutReady = false;
 		nvrhi::BufferHandle ParticleBuffer;
+		nvrhi::TextureHandle ParticleDepth;
 		nvrhi::TextureHandle ParticleTexture; // built-in soft disc
 		GpuSSAOConstants SsaoConstants{};
 
@@ -510,6 +512,7 @@ namespace Basalt {
 		bool ReportedParticleCap = false;
 		bool ReportedParticleBufferFailure = false;
 		bool ReportedParticleSetFailure = false;
+		bool ReportedParticleDepthFailure = false;
 		uint64_t FrameCounter = 0;
 		bool FrameSetDirty = true;
 		bool ReportedFrameSetFailure = false;
@@ -709,13 +712,14 @@ namespace Basalt {
 		};
 		impl.ComputeLayout = device->createBindingLayout(computeDesc);
 
-		// Set 1 of the particle pipelines (set 0 is FrameLayout): the vertex shader reads the particles, the
-		// pixel shader the texture.
+		// Set 1: the vertex shader reads particles; the pixel shader reads texture and opaque depth.
+		// Lit particles also use set 0's irradiance map and clustered lights.
 		nvrhi::BindingLayoutDesc particleDesc = MakeLayout(1, nvrhi::ShaderType::All);
 		particleDesc.bindings = {
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(ParticleBufferSlot),
 			nvrhi::BindingLayoutItem::Texture_SRV(ParticleTextureSlot),
 			nvrhi::BindingLayoutItem::Sampler(ParticleSamplerSlot),
+			nvrhi::BindingLayoutItem::Texture_SRV(ParticleDepthSlot),
 		};
 		impl.ParticleLayout = device->createBindingLayout(particleDesc);
 
@@ -1040,6 +1044,18 @@ namespace Basalt {
 		};
 
 		m_DepthTexture = makeTarget(nvrhi::Format::D32, "SceneDepth", true);
+		impl.ParticleDepth = makeTarget(nvrhi::Format::D32, "ParticleDepth", true);
+		if (!impl.ParticleDepth)
+		{
+			if (!impl.ReportedParticleDepthFailure)
+				BS_CORE_ERROR("SceneRenderer: cannot allocate the {}x{} particle depth copy; retrying next frame", m_TargetWidth, m_TargetHeight);
+			impl.ReportedParticleDepthFailure = true;
+			// The unchanged-size fast path requires an output target; clearing it permits a retry.
+			m_OutputTexture = nullptr;
+			return;
+		}
+		impl.ReportedParticleDepthFailure = false;
+		impl.ParticleSets.clear();
 		impl.NormalTexture = makeTarget(nvrhi::Format::RGBA16_FLOAT, "SceneNormals");
 		impl.HdrTexture = makeTarget(nvrhi::Format::RGBA16_FLOAT, "SceneHDR");
 		impl.SsaoTexture = makeTarget(nvrhi::Format::R8_UNORM, "SSAO");
@@ -1213,7 +1229,7 @@ namespace Basalt {
 		InvalidatePicking();
 		Impl& impl = *m_Impl;
 		ResizeTargets(m_Width, m_Height);
-		if (!m_OutputTexture)
+		if (!m_OutputTexture || !impl.ParticleDepth)
 		{
 			m_Statistics.Failed = true;
 			return;
@@ -1847,7 +1863,7 @@ namespace Basalt {
 		}
 
 		// --- Particles ----------------------------------------------------------------------------
-		// Only a running scene has a particle system. Batches outside the view frustum are not drawn.
+		// A running scene or the editor's isolated preview supplies particles. Batches outside the view frustum are not drawn.
 		std::vector<ParticleDraw>& particleDraws = impl.ParticleDraws;
 		particleDraws.clear();
 		impl.ParticleData.Clear();
@@ -1896,7 +1912,8 @@ namespace Basalt {
 				entry.Set = m_Device->createBindingSet(nvrhi::BindingSetDesc()
 														   .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(ParticleBufferSlot, impl.ParticleBuffer))
 														   .addItem(nvrhi::BindingSetItem::Texture_SRV(ParticleTextureSlot, particleTexture))
-														   .addItem(nvrhi::BindingSetItem::Sampler(ParticleSamplerSlot, impl.LinearClamp)),
+														   .addItem(nvrhi::BindingSetItem::Sampler(ParticleSamplerSlot, impl.LinearClamp))
+														   .addItem(nvrhi::BindingSetItem::Texture_SRV(ParticleDepthSlot, impl.ParticleDepth)),
 													   impl.ParticleLayout);
 				// Reported once per failure episode: a later failure (after a set was created) reports again.
 				if (!entry.Set && !impl.ReportedParticleSetFailure)
@@ -2135,6 +2152,10 @@ namespace Basalt {
 				return;
 			}
 		}
+
+		// Lighting keeps the scene depth attached, so soft particles sample a separate copy.
+		if (std::any_of(impl.ParticleData.Particles.begin(), impl.ParticleData.Particles.end(), [](const GpuParticle& p) { return p.Effects.y > 0.0f; }))
+			commandList->copyTexture(impl.ParticleDepth, nvrhi::TextureSlice(), m_DepthTexture, nvrhi::TextureSlice());
 
 		// --- Lighting (opaque), skybox, transparent -----------------------------------------------
 		{

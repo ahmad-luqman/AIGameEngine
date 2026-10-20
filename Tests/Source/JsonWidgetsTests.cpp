@@ -8,6 +8,8 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 
+#include <cmath>
+
 using namespace Basalt;
 using json = nlohmann::json;
 
@@ -187,5 +189,80 @@ TEST_SUITE("Editor")
 			CHECK(NodeState(0) == 0);
 			CHECK(NodeState(1) == 1);
 		});
+	}
+}
+
+TEST_SUITE("Editor")
+{
+	TEST_CASE("Curve list edits preserve existing times and keep inserted keys strictly ordered")
+	{
+		const auto& type = ComponentRegistry::Find("ParticleEmitter")->FieldTypes.at("SizeCurve");
+		json list = json::array();
+		REQUIRE(EditJsonList(list, JsonListEdit::Add, 0, type));
+		REQUIRE(EditJsonList(list, JsonListEdit::Add, 0, type));
+		CHECK(list[0]["Time"] == 0);
+		CHECK(list[1]["Time"] == 1);
+		list[0]["Value"] = 2;
+		list[1]["Value"] = 4;
+		REQUIRE(EditJsonList(list, JsonListEdit::Duplicate, 0, type));
+		CHECK(list[1]["Time"] == 0.5);
+		CHECK(list[1]["Value"] == 2);
+		REQUIRE(EditJsonList(list, JsonListEdit::MoveDown, 1, type));
+		CHECK(list[1]["Time"] == 0.5);
+		CHECK(list[1]["Value"] == 4);
+		CHECK(list[2]["Value"] == 2);
+		while (list.size() < type.MaxCount)
+			REQUIRE(EditJsonList(list, JsonListEdit::Add, 0, type));
+		CHECK_FALSE(EditJsonList(list, JsonListEdit::Add, 0, type));
+		for (size_t i = 1; i < list.size(); ++i)
+			CHECK(list[i]["Time"].get<float>() > list[i - 1]["Time"].get<float>());
+	}
+
+	TEST_CASE("Duplicating a middle curve key prefers its following interval and reports its actual slot")
+	{
+		const auto& type = ComponentRegistry::Find("ParticleEmitter")->FieldTypes.at("SizeCurve");
+		json list = { { { "Time", 0 }, { "Value", 1 } }, { { "Time", 0.5 }, { "Value", 2 } }, { { "Time", 0.6 }, { "Value", 3 } }, { { "Time", 1 }, { "Value", 4 } } };
+		size_t inserted = 99;
+		REQUIRE(EditJsonList(list, JsonListEdit::Duplicate, 2, type, &inserted));
+		CHECK(inserted == 3);
+		CHECK(list[3]["Time"] == doctest::Approx(0.8));
+		CHECK(list[3]["Value"] == 3);
+		REQUIRE(EditJsonList(list, JsonListEdit::Add, 0, type, &inserted));
+		CHECK(inserted == 1);
+		CHECK(list[1]["Time"] == doctest::Approx(0.25));
+	}
+}
+
+TEST_SUITE("Editor")
+{
+	TEST_CASE("A curve duplicate with no following float midpoint searches later free intervals")
+	{
+		const auto& type = ComponentRegistry::Find("ParticleEmitter")->FieldTypes.at("SizeCurve");
+		const float narrow = std::nextafter(0.1f, 1.0f);
+		json list = { { { "Time", 0.0f }, { "Value", 1 } }, { { "Time", 0.1f }, { "Value", 2 } }, { { "Time", narrow }, { "Value", 3 } }, { { "Time", 1.0f }, { "Value", 4 } } };
+		size_t inserted = 0;
+		REQUIRE(EditJsonList(list, JsonListEdit::Duplicate, 1, type, &inserted));
+		CHECK(inserted == 3);
+		CHECK(list[3]["Value"] == 2);
+		CHECK(list[3]["Time"].get<float>() > 0.5f);
+	}
+}
+
+TEST_SUITE("Editor")
+{
+	TEST_CASE("Timed list edits reject malformed external JSON without mutation")
+	{
+		const auto& type = ComponentRegistry::Find("ParticleEmitter")->FieldTypes.at("SizeCurve");
+		for (const json& time : { json("oops"), json(1e300), json(-1) })
+		{
+			json list = { { { "Time", time }, { "Value", 1 } } };
+			const json before = list;
+			CHECK_FALSE(EditJsonList(list, JsonListEdit::Add, 0, type));
+			CHECK(list == before);
+		}
+		json missing = { { { "Value", 1 } } };
+		const json before = missing;
+		CHECK_FALSE(EditJsonList(missing, JsonListEdit::Duplicate, 0, type));
+		CHECK(missing == before);
 	}
 }

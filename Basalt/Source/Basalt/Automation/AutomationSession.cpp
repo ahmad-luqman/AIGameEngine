@@ -316,6 +316,7 @@ namespace Basalt {
 			outError = "already playing";
 			return false;
 		}
+		m_EditScene->ResetParticlePreview();
 		m_Scene = Scene::Copy(m_EditScene);
 		// Before the systems start, so errors of the first OnCreate calls are reported too, after the play event.
 		m_Scene->SetEventListener(m_SceneEvents.get());

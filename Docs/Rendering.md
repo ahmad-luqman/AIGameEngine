@@ -425,3 +425,9 @@ Skin culling uses immutable per-submesh joint influence bounds built by `AddSubm
 or procedural creation. Posing bounds costs O(influencing joints), with conservative bounds covering
 weighted vertices, nonuniform scale and mirrored transforms. Exact CPU skin bounds remain in use for
 editor focus/selection, uncached geometry and verification.
+
+Particle emitters can fade against a copy of opaque depth (`SoftDistance`, world units) and receive
+unshadowed two-sided diffuse lighting (`Lit`). Lit billboards use the surface renderer's bounded
+range attenuation, Lambert normalization, clustered local-light lists and diffuse IBL; they have no
+specular response or shadow reception/casting. Rotation is a roll about the view axis. In Edit mode,
+`Preview` runs only particle simulation, independently of PlayOnStart and without scripts/audio/physics.

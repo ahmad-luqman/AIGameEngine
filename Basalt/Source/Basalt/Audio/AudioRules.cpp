@@ -49,9 +49,24 @@ namespace Basalt {
 			return fmt::format("Doppler must be a number from 0 to {} (got {})", MaxAudioDoppler, source.Doppler);
 		if (!IsValidAudioLowPass(source.LowPass))
 			return fmt::format("LowPass must be 0 (off) or a cutoff from {} to {} Hz (got {})", MinAudioLowPass, MaxAudioLowPass, source.LowPass);
+		if (!IsValidAudioLowPass(source.HighPass))
+			return fmt::format("HighPass must be 0 (off) or a cutoff from {} to {} Hz (got {})", MinAudioLowPass, MaxAudioLowPass, source.HighPass);
+		if (!IsFiniteInRange(source.Echo, 0.0f, 1.0f))
+			return fmt::format("Echo must be a number from 0 to 1 (got {})", source.Echo);
+		if (!IsFiniteInRange(source.Distortion, 0.0f, 1.0f))
+			return fmt::format("Distortion must be a number from 0 to 1 (got {})", source.Distortion);
 		if (!IsValidAudioReverbSend(source.ReverbSend))
 			return fmt::format("ReverbSend must be a number from 0 to 1 (got {})", source.ReverbSend);
 		return {};
+	}
+
+	std::string ValidateAudioReverbZone(const AudioReverbZoneComponent& zone)
+	{
+		if (!IsFiniteInRange(zone.Radius, 0.001f, 1e6f))
+			return fmt::format("Radius must be in [0.001,1000000] (got {})", zone.Radius);
+		if (!IsFiniteInRange(zone.BlendDistance, 0.0f, zone.Radius))
+			return fmt::format("BlendDistance must be in [0,Radius {}] (got {})", zone.Radius, zone.BlendDistance);
+		return ValidateAudioReverb({ zone.RoomSize, zone.Damping, zone.Width });
 	}
 
 	std::string ValidateAudioReverb(const AudioReverbSettings& reverb)

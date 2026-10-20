@@ -100,15 +100,19 @@ Fields: `Script` (string), `Properties` (object)
 
 ## AudioSource
 
-Fields: `Clip` (string), `Volume` (number), `Pitch` (number), `Loop` (boolean), `PlayOnStart` (boolean), `Spatial` (boolean), `MinDistance` (number), `MaxDistance` (number), `Bus` (enum: Master, Music, SFX, UI), `Stream` (boolean), `Doppler` (number), `LowPass` (number), `ReverbSend` (number)
+Fields: `Clip` (string), `Volume` (number), `Pitch` (number), `Loop` (boolean), `PlayOnStart` (boolean), `Spatial` (boolean), `MinDistance` (number), `MaxDistance` (number), `Bus` (enum: Master, Music, SFX, UI), `Stream` (boolean), `Doppler` (number), `LowPass` (number), `ReverbSend` (number), `HighPass` (number), `Echo` (number), `Distortion` (number)
 
 ## AudioListener
 
 Fields: `Active` (boolean)
 
+## AudioReverbZone
+
+Fields: `Enabled` (boolean), `Priority` (integer), `Radius` (number), `BlendDistance` (number), `RoomSize` (number), `Damping` (number), `Width` (number)
+
 ## ParticleEmitter
 
-Fields: `PlayOnStart` (boolean), `Looping` (boolean), `Duration` (number), `MaxParticles` (integer), `Rate` (number), `BurstCount` (integer), `Shape` (enum: Point, Sphere, Box, Cone), `ShapeRadius` (number), `BoxExtents` (number[3]), `ConeAngle` (number), `LifetimeMin` (number), `LifetimeMax` (number), `SpeedMin` (number), `SpeedMax` (number), `Velocity` (number[3]), `GravityScale` (number), `Drag` (number), `SimulationSpace` (enum: World, Local), `StartColor` (number[4]), `EndColor` (number[4]), `StartSize` (number), `EndSize` (number), `Blend` (enum: Alpha, Additive), `Texture` (string)
+Fields: `PlayOnStart` (boolean), `Looping` (boolean), `Duration` (number), `MaxParticles` (integer), `Rate` (number), `BurstCount` (integer), `Shape` (enum: Point, Sphere, Box, Cone), `ShapeRadius` (number), `BoxExtents` (number[3]), `ConeAngle` (number), `LifetimeMin` (number), `LifetimeMax` (number), `SpeedMin` (number), `SpeedMax` (number), `Velocity` (number[3]), `GravityScale` (number), `Drag` (number), `SimulationSpace` (enum: World, Local), `StartColor` (number[4]), `EndColor` (number[4]), `StartSize` (number), `EndSize` (number), `StartSizeMin` (number), `StartSizeMax` (number), `StartColorMin` (number[4]), `StartColorMax` (number[4]), `RotationMin` (number), `RotationMax` (number), `AngularVelocityMin` (number), `AngularVelocityMax` (number), `SoftDistance` (number), `Lit` (boolean), `Preview` (boolean), `SizeCurve` (list of [ParticleSizeKey](#particlesizekey), at most 16), `ColorCurve` (list of [ParticleColorKey](#particlecolorkey), at most 16), `Blend` (enum: Alpha, Additive), `Texture` (string)
 
 ## UIRect
 
@@ -195,4 +199,12 @@ Fields: `Name` (string), `Joint` (string), `ChainLength` (integer), `Stiffness` 
 ### SpringCollider
 
 Fields: `Joint` (string), `Offset` (number[3]), `Radius` (number), `HalfHeight` (number)
+
+### ParticleSizeKey
+
+Fields: `Time` (number), `Value` (number)
+
+### ParticleColorKey
+
+Fields: `Time` (number), `Value` (number[4])
 

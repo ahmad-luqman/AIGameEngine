@@ -881,8 +881,9 @@ Audio = {}
 ---@param position? Vec3
 ---@param volume? number
 ---@param bus? AudioBus
+---@param options? {LowPass?: number, ReverbSend?: number, HighPass?: number, Echo?: number, Distortion?: number}
 ---@return boolean
-function Audio.PlayOneShot(clip, position, volume, bus) end
+function Audio.PlayOneShot(clip, position, volume, bus, options) end
 
 ---Sets a bus's linear gain; false (logged) if the bus could not be created.
 ---@param bus AudioBus
@@ -895,18 +896,18 @@ function Audio.SetBusVolume(bus, volume) end
 ---@return number
 function Audio.GetBusVolume(bus) end
 
----The room every bus's reverb simulates (each setting 0..1).
+---A room description used for the session baseline and the effective zone-blended reverb (each setting 0..1).
 ---@class AudioReverbSettings
 ---@field RoomSize number Larger rooms ring longer (default 0.5)
 ---@field Damping number How quickly high frequencies die away (default 0.25)
 ---@field Width number Stereo spread of the tail (default 1)
 
----Patches the reverb settings with the given fields; unknown or non-string keys, non-numbers and values outside 0..1
+---Patches the session baseline, over which listener-position zones blend; unknown or non-string keys, non-numbers and values outside 0..1
 ---raise an error, and nothing changes.
 ---@param settings {RoomSize?: number, Damping?: number, Width?: number}
 function Audio.SetReverb(settings) end
 
----The current reverb settings.
+---The effective reverb settings after listener-position zone blending.
 ---@return AudioReverbSettings
 function Audio.GetReverb() end
 
@@ -1348,6 +1349,7 @@ function BasaltScript:StopAllCoroutines() end
 ---| "Script"
 ---| "AudioSource"
 ---| "AudioListener"
+---| "AudioReverbZone"
 ---| "ParticleEmitter"
 ---| "UIRect"
 ---| "UIImage"
@@ -1611,10 +1613,23 @@ function BasaltScript:StopAllCoroutines() end
 ---@field Doppler number
 ---@field LowPass number
 ---@field ReverbSend number
+---@field HighPass number
+---@field Echo number
+---@field Distortion number
 
 ---AudioListener data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
 ---@class AudioListenerComponent
 ---@field Active boolean
+
+---AudioReverbZone data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
+---@class AudioReverbZoneComponent
+---@field Enabled boolean
+---@field Priority integer
+---@field Radius number
+---@field BlendDistance number
+---@field RoomSize number
+---@field Damping number
+---@field Width number
 
 ---ParticleEmitter data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
 ---@class ParticleEmitterComponent
@@ -1640,6 +1655,19 @@ function BasaltScript:StopAllCoroutines() end
 ---@field EndColor number[]
 ---@field StartSize number
 ---@field EndSize number
+---@field StartSizeMin number
+---@field StartSizeMax number
+---@field StartColorMin number[]
+---@field StartColorMax number[]
+---@field RotationMin number
+---@field RotationMax number
+---@field AngularVelocityMin number
+---@field AngularVelocityMax number
+---@field SoftDistance number
+---@field Lit boolean
+---@field Preview boolean
+---@field SizeCurve ParticleSizeKey[]
+---@field ColorCurve ParticleColorKey[]
 ---@field Blend "Alpha"|"Additive"
 ---@field Texture string
 
@@ -1839,6 +1867,16 @@ function BasaltScript:StopAllCoroutines() end
 ---@field Radius number
 ---@field HalfHeight number
 
+---An element of a component list field.
+---@class ParticleSizeKey
+---@field Time number
+---@field Value number
+
+---An element of a component list field.
+---@class ParticleColorKey
+---@field Time number
+---@field Value number[]
+
 ---Returns a copy of the component's fields (vectors as arrays, rotations in Euler degrees, entity references
 ---as IDs), or nil when the entity does not have the component.
 ---@param name ComponentName
@@ -1867,6 +1905,7 @@ function BasaltScript:StopAllCoroutines() end
 ---@overload fun(self: Entity, name: "Script"): ScriptComponent?
 ---@overload fun(self: Entity, name: "AudioSource"): AudioSourceComponent?
 ---@overload fun(self: Entity, name: "AudioListener"): AudioListenerComponent?
+---@overload fun(self: Entity, name: "AudioReverbZone"): AudioReverbZoneComponent?
 ---@overload fun(self: Entity, name: "ParticleEmitter"): ParticleEmitterComponent?
 ---@overload fun(self: Entity, name: "UIRect"): UIRectComponent?
 ---@overload fun(self: Entity, name: "UIImage"): UIImageComponent?

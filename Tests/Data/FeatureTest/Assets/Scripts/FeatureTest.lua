@@ -152,7 +152,7 @@ local function TestEntities(self)
 
 	-- Every component type round-trips through Lua.
 	for _, name in ipairs({ "Camera", "Mesh", "Animator", "Material", "DirectionalLight", "PointLight", "SpotLight", "SkyLight", "PostProcess", "RigidBody",
-		"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "AudioSource", "AudioListener", "ParticleEmitter", "UIRect", "UIImage", "UIText", "UIButton", "UISlider", "UICheckbox", "UITextInput", "UIDropdown", "UIScrollView", "UIPanel", "UINavigation", "UIFocusRing", "Prefab", "BoneAttachment", "InverseKinematics", "SpringBone" }) do
+		"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "AudioSource", "AudioListener", "AudioReverbZone", "ParticleEmitter", "UIRect", "UIImage", "UIText", "UIButton", "UISlider", "UICheckbox", "UITextInput", "UIDropdown", "UIScrollView", "UIPanel", "UINavigation", "UIFocusRing", "Prefab", "BoneAttachment", "InverseKinematics", "SpringBone" }) do
 		local holder = Scene.CreateEntity("Holder" .. name)
 		Expect("AddComponent " .. name, function() holder:AddComponent(name) end)
 		local data = holder:GetComponent(name)
@@ -358,6 +358,22 @@ local function TestSystems(self)
 	ExpectError("Physics.SetGravity non-finite", function() Physics.SetGravity(Vec3(0, 0 / 0, 0)) end, "must be finite")
 	Physics.SetGravity(gravity)
 
+	local effectsProbe = Scene.FindEntityByName("EffectsProbe")
+	local effects = effectsProbe:GetComponent("ParticleEmitter")
+	Check("Particle polish fields", effects.Lit and effects.SoftDistance == 0.5 and #effects.SizeCurve == 3 and #effects.ColorCurve == 2 and Near(effects.RotationMin, 15) and effects.StartSizeMin == 0.5 and effects.Preview)
+	Check("Particle polish emit", effectsProbe:EmitParticles(4) == 4)
+	Check("Reverb zone component", effectsProbe:GetComponent("AudioReverbZone").Radius == 2)
+	Check("One-shot effect options", Audio.PlayOneShot("Assets/Audio/Beep.wav", nil, 0.2, "SFX", { LowPass = 1000, ReverbSend = 0.2, HighPass = 100, Echo = 0.25, Distortion = 0.1 }))
+	ExpectError("One-shot unknown option", function() Audio.PlayOneShot("Assets/Audio/Beep.wav", nil, 1, "SFX", {Bogus=1}) end, "unknown effect option")
+	ExpectError("One-shot nonnumeric option", function() Audio.PlayOneShot("Assets/Audio/Beep.wav", nil, 1, "SFX", {Echo="x"}) end, "named numeric effect values")
+	ExpectError("One-shot huge option", function() Audio.PlayOneShot("Assets/Audio/Beep.wav", nil, 1, "SFX", {Echo=1e300}) end, "finite float values")
+	ExpectError("One-shot infinite option", function() Audio.PlayOneShot("Assets/Audio/Beep.wav", nil, 1, "SFX", {Echo=math.huge}) end, "finite float values")
+	ExpectError("One-shot NaN option", function() Audio.PlayOneShot("Assets/Audio/Beep.wav", nil, 1, "SFX", {Echo=0/0}) end, "finite float values")
+	Check("One-shot range refused", not Audio.PlayOneShot("Assets/Audio/Beep.wav", nil, 1, "SFX", {Echo=2}))
+	local sourceEffects = Scene.FindEntityByName("Speaker"):GetComponent("AudioSource")
+	sourceEffects.HighPass = 100; sourceEffects.Echo = 0.2; sourceEffects.Distortion = 0.1
+	Scene.FindEntityByName("Speaker"):SetComponent("AudioSource", sourceEffects)
+	Check("Live audio effect fields", Near(Scene.FindEntityByName("Speaker"):GetComponent("AudioSource").Echo, 0.2))
 	-- Audio.
 	local speaker = Scene.FindEntityByName("Speaker")
 	Check("AudioSource PlayOnStart", speaker:IsAudioPlaying())

@@ -12,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -24,14 +25,21 @@ namespace Basalt {
 	class Scene;
 	struct AudioSourceComponent;
 
+	// Fixed effect settings for one fire-and-forget voice; ranges match AudioSourceComponent.
+	struct AudioOneShotOptions
+	{
+		float LowPass = 0.0f, ReverbSend = 0.0f, HighPass = 0.0f, Echo = 0.0f, Distortion = 0.0f;
+	};
+
 	// Plays AudioSourceComponents of a running scene, positions the listener and owns the mixer buses and their
 	// effects. The listener is the first active AudioListenerComponent, or the primary camera if there is none.
 	// Bus volumes and the reverb settings belong to the play session: they start at their defaults, survive
 	// Scene.Load (the system does) and end when play stops, so a game applies its saved settings when it starts.
 	//
 	// Each source's sound runs through a chain built from its live effect fields:
-	//   sound -> [low-pass] -> [splitter: dry -> bus, ReverbSend -> the bus's reverb] -> bus
-	// A stage is in the chain only while its effect is on (built on first use, bypassed when it turns off), so a
+	//   sound -> [high-pass/distortion/echo] -> [low-pass] -> [splitter: dry -> bus, ReverbSend -> the bus's reverb] -> bus
+	// Low-pass and sends are bypassed when off. The combined stage stays attached once created and glides
+	// to dry processing when disabled, clearing its echo memory. A
 	// source without effects plays straight into its bus. Each bus gets its own reverb the first time one of its
 	// sources sends to it; the reverb returns into that bus, so the bus volume scales the reverb too. The Doppler shift comes from velocities: an entity's own dynamic or kinematic
 	// body (or character), else its closest ancestor's (a camera on a character; only the linear velocity), else its
@@ -60,7 +68,7 @@ namespace Basalt {
 		void OnEntityDestroyed(Entity entity);
 
 		// (Re)starts the entity's AudioSourceComponent clip from the beginning, reading every field except the live
-		// effects (Doppler, LowPass, ReverbSend, which Update re-applies every frame) once: changes to the others
+		// effects (Doppler, filters, echo, distortion and reverb send, which Update re-applies every frame) once: changes to the others
 		// apply on the next Play. Stops the current sound first, also when the new one cannot play.
 		// Returns false when the entity has no AudioSourceComponent or there is no audio engine, and false,
 		// logging why, when the source cannot play (no clip, invalid values, a clip that does not load).
@@ -70,10 +78,13 @@ namespace Basalt {
 		// True when the entity's current sound decodes its clip while it plays (AudioSource.Stream). Asks
 		// miniaudio what it did rather than echoing the field, for tests and diagnostics.
 		bool IsStreaming(Entity entity) const;
+		// Diagnostics: whether the entity's combined high-pass/distortion/echo node is processing. Ended
+		// sources suspend it after the short filter tail, or after three seconds for echo, until the next Play.
+		bool IsProcessingSourceEffects(Entity entity) const;
 		// Fire-and-forget sound at a world position (non-spatial when position is null). Always decoded whole.
 		// False without an audio engine, and false, logging why, when the clip cannot load, volume is not a
-		// finite number >= 0 or bus is outside the enum.
-		bool PlayOneShot(const std::string& clip, const glm::vec3* position, float volume = 1.0f, AudioBus bus = AudioBus::SFX);
+		// finite number >= 0, bus is outside the enum, or an effect option is invalid.
+		bool PlayOneShot(const std::string& clip, const glm::vec3* position, float volume = 1.0f, AudioBus bus = AudioBus::SFX, const AudioOneShotOptions& options = {});
 
 		// Linear gain of a bus (0 = silent, 1 = unchanged, above 1 amplifies). A sound's level is its own volume
 		// times its bus's times Master's. Returns false, logging why and changing nothing, when volume is not a
@@ -82,10 +93,12 @@ namespace Basalt {
 		// 0 (logged) for a bus outside the enum.
 		float GetBusVolume(AudioBus bus) const;
 
-		// The room every bus's reverb simulates. Returns false, logging why and changing nothing, when a setting is
+		// Sets the session baseline over which listener-position zones blend. Returns false, logging why and changing nothing, when a setting is
 		// outside 0..1 or not finite.
 		bool SetReverb(const AudioReverbSettings& reverb);
+		// Effective room after zone blending; SetReverb patches use the separate session baseline.
 		const AudioReverbSettings& GetReverb() const { return m_Reverb; }
+		const AudioReverbSettings& GetBaseReverb() const { return m_BaseReverb; }
 
 		// The Doppler pitch factor of the entity's sound, from the positions, velocities and factor the last update gave
 		// miniaudio (the shift its next mix applies): 1 = unshifted, also while it is not playing (never played,
@@ -159,6 +172,11 @@ namespace Basalt {
 		// Applies the live effect fields of the entity's source to its voice, building or bypassing chain stages as
 		// they turn on or off.
 		void ApplyEffects(Voice& voice, Entity entity, const AudioSourceComponent& source);
+		void ConfigureEffects(Voice& voice, const AudioSourceComponent& source, std::string_view name);
+		// Fold containing zones over the session baseline in deterministic priority order.
+		void UpdateReverbZones();
+		// Publish the effective room to each bus, without changing the session baseline.
+		void ApplyReverb(const AudioReverbSettings& settings);
 		// The reverb of a bus, created on first use; null when it cannot be created (logged once per bus), and
 		// without a log when the bus itself failed or there is no engine.
 		Reverb* GetReverbNode(size_t bus);
@@ -177,10 +195,14 @@ namespace Basalt {
 		// Buses whose reverb failed to create, so the error is logged once.
 		std::array<bool, AudioBusCount> m_ReverbFailed = {};
 		AudioReverbSettings m_Reverb;
+		AudioReverbSettings m_BaseReverb;
+		std::unordered_map<UUID, std::string> m_ReportedZoneProblems;
 		std::unordered_map<UUID, std::unique_ptr<Voice>> m_Sources;
 		// Sources loaded by Start that BeginPlayback has not started yet (see BeginPlayback).
 		std::unordered_set<UUID> m_PendingStarts;
-		std::vector<SoundHandle> m_OneShots;
+		// Fire-and-forget voices include their effect chains and echo tails. Declared after m_Reverbs so
+		// they are destroyed first (do not reorder).
+		std::vector<std::unique_ptr<Voice>> m_OneShots;
 		ListenerState m_Listener;
 		// What miniaudio's listener was last given (its defaults until then), for GetDopplerPitch and to hold it in
 		// place while there is no valid listener.

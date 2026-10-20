@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <type_traits>
 
 namespace Basalt {
 
@@ -21,6 +22,13 @@ namespace Basalt {
 		};
 
 		constexpr FloatRule FloatRules[] = {
+			{ "StartSizeMin", &Emitter::StartSizeMin, 0.0f, Emitter::MaxMagnitude },
+			{ "StartSizeMax", &Emitter::StartSizeMax, 0.0f, Emitter::MaxMagnitude },
+			{ "RotationMin", &Emitter::RotationMin, -Emitter::MaxMagnitude, Emitter::MaxMagnitude },
+			{ "RotationMax", &Emitter::RotationMax, -Emitter::MaxMagnitude, Emitter::MaxMagnitude },
+			{ "AngularVelocityMin", &Emitter::AngularVelocityMin, -Emitter::MaxMagnitude, Emitter::MaxMagnitude },
+			{ "AngularVelocityMax", &Emitter::AngularVelocityMax, -Emitter::MaxMagnitude, Emitter::MaxMagnitude },
+			{ "SoftDistance", &Emitter::SoftDistance, 0.0f, Emitter::MaxMagnitude },
 			{ "Duration", &Emitter::Duration, Emitter::MinTime, Emitter::MaxTime },
 			{ "Rate", &Emitter::Rate, 0.0f, Emitter::MaxRate },
 			{ "ShapeRadius", &Emitter::ShapeRadius, 0.0f, Emitter::MaxMagnitude },
@@ -48,7 +56,7 @@ namespace Basalt {
 			{ "Velocity", &Emitter::Velocity, -Emitter::MaxMagnitude, Emitter::MaxMagnitude },
 		};
 
-		// HDR color channels, opacity 0..1.
+		// Channels up to RgbMax and opacity up to AlphaMax; birth tint multipliers only darken.
 		struct ColorRule
 		{
 			const char* Name;
@@ -58,6 +66,8 @@ namespace Basalt {
 		};
 
 		constexpr ColorRule ColorRules[] = {
+			{ "StartColorMin", &Emitter::StartColorMin, 1.0f, 1.0f },
+			{ "StartColorMax", &Emitter::StartColorMax, 1.0f, 1.0f },
 			{ "StartColor", &Emitter::StartColor, Emitter::MaxMagnitude, 1.0f },
 			{ "EndColor", &Emitter::EndColor, Emitter::MaxMagnitude, 1.0f },
 		};
@@ -110,6 +120,33 @@ namespace Basalt {
 				for (int channel = 0; channel < 4; channel++)
 					checkFloat((emitter.*rule.Field)[channel], 0.0f, channel == 3 ? rule.AlphaMax : rule.RgbMax, (defaults.*rule.Field)[channel], std::string(rule.Name) + ChannelNames[channel]);
 			}
+			auto curve = [&](auto& keys, const char* name) {
+				bool valid = true;
+				auto problem = [&](const std::string& text) { valid = false; onProblem(text); };
+				if (keys.size() > Emitter::MaxCurveKeys)
+					problem(fmt::format("{} has {} keys (at most {})", name, keys.size(), Emitter::MaxCurveKeys));
+				float previous = -1.0f;
+				for (size_t i = 0; i < std::min<size_t>(keys.size(), Emitter::MaxCurveKeys); ++i)
+				{
+					const auto& key = keys[i];
+					if (!std::isfinite(key.Time) || key.Time < 0.0f || key.Time > 1.0f || key.Time <= previous)
+						problem(fmt::format("{}[{}].Time must be finite in [0,1] and greater than previous {} (got {})", name, i, previous, key.Time));
+					previous = key.Time;
+					if constexpr (std::is_same_v<std::decay_t<decltype(key.Value)>, float>)
+					{
+						if (!std::isfinite(key.Value) || key.Value < 0.0f || key.Value > Emitter::MaxMagnitude)
+							problem(fmt::format("{}[{}].Value must be in [0,{}] (got {})", name, i, Emitter::MaxMagnitude, key.Value));
+					}
+					else
+						for (int c = 0; c < 4; ++c)
+							if (!std::isfinite(key.Value[c]) || key.Value[c] < 0.0f || key.Value[c] > (c == 3 ? 1.0f : Emitter::MaxMagnitude))
+								problem(fmt::format("{}[{}].Value{} must be in [0,{}] (got {})", name, i, ChannelNames[c], c == 3 ? 1.0f : Emitter::MaxMagnitude, key.Value[c]));
+				}
+				if (!valid && repair)
+					keys.clear();
+			};
+			curve(emitter.SizeCurve, "SizeCurve");
+			curve(emitter.ColorCurve, "ColorCurve");
 			// Only C++ code can write these out of range; files and Lua go through the enum names.
 			checkEnum(emitter.Shape, ParticleEmitterShapeCount, defaults.Shape, "Shape");
 			checkEnum(emitter.SimulationSpace, ParticleSimulationSpaceCount, defaults.SimulationSpace, "SimulationSpace");
