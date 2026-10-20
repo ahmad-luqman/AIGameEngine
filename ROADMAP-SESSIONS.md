@@ -1,8 +1,9 @@
 # Roadmap Sessions
 
-The open `ROADMAP.md` items grouped into single-session milestones, sorted in order of implementation. The order
-follows the roadmap's priorities (P1 → P2 → P3) and is adjusted so that work a later session depends on comes first.
-Based on `main` at `fdc70d7` (October 2026, after PR #35 shipped the engine-internals items).
+The `ROADMAP.md` items grouped into single-session milestones, sorted in order of implementation, with completed
+sessions retained for reference. The order follows the roadmap's priorities (P1 → P2 → P3) and is adjusted so that
+work a later session depends on comes first.
+Updated through `main` at `471c8e8` (October 2026, after PR #41 shipped the Game UI session).
 
 Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or more.
 
@@ -12,7 +13,7 @@ Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or mor
 | 2 | **3D platformer sample** ✅ | Platformer built through the automation API with a ctest gameplay test (M); spring bones on its hair or cape (S) | Shipped. |
 | 3 | **Diagnostics** ✅ | Play-mode stats overlay (S); timing for the editor's ImGui pass and the runtime blit (S); benchmark scene with frame-time thresholds on CI (M) | Shipped: overlay, host GPU timers, Release CI frame-time gates and the pre-throughput baseline (`Tests/Benchmarks`). |
 | 4 | **Throughput** ✅ | GPU instancing and draw batching (M); crowd performance: cached joint bounds, animation LOD, poses evaluated on the job system (M) | Shipped: opaque GPU instancing across depth/ID, lighting and shadow passes; cached joint bounds, opt-in distance animation LOD and pose jobs. Session 3's fixed benchmark measures the gains. |
-| 5 | **Game UI** | UI follow-ups: `UI.MeasureText`, clipping, rect rotation/scale, sprite sheets, viewport handles (S); more widgets: text input, dropdown, scroll view, vertical slider, explicit navigation, input-blocking panels, focus ring (M) | Clipping has to land first because scroll views need it. |
+| 5 | **Game UI** ✅ | UI follow-ups: `UI.MeasureText`, clipping, rect rotation/scale, sprite sheets, viewport handles (S); more widgets: text input, dropdown, scroll view, vertical slider, explicit navigation, input-blocking panels, focus ring (M) | Shipped in [PR #41](https://github.com/ahmad-luqman/AIGameEngine/pull/41): shared clipped/transformed layouts, menu widgets and viewport handles with snapping, undo and cancellation. |
 | 6 | **Effects polish** | Particle follow-ups: soft particles, rotation, random start values, multi-key curves, lit particles, edit-mode preview (M); audio effect follow-ups: one-shot options, reverb zone component, high-pass/echo/distortion (S) | Two independent polish items of similar size. |
 | 7 | **Asset pipeline I** | Stable asset IDs with `.meta` UUIDs (M); mesh optimization and LODs with meshoptimizer (S) | Material assets and the packed archive both reference assets by UUID, so IDs come first. |
 | 8 | **Asset pipeline II** | Texture compression to KTX2/BC7 (M); glTF extensions (M) | `KHR_texture_basisu` needs the KTX2 path. Clearcoat and transmission extend the material model before session 9. |
