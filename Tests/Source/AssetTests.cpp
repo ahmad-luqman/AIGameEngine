@@ -69,6 +69,124 @@ namespace {
 
 TEST_SUITE("Assets")
 {
+	TEST_CASE("glTF extension materials retain independent texture transforms and UV1")
+	{
+		BasaltTest::TempProject project("GltfExtensions");
+		const auto binary = MakeQuadBuffer();
+		project.WriteFile("Assets/quad.bin", binary);
+		auto gltf = MakeGltfJson({ { "uri", "quad.bin" }, { "byteLength", binary.size() } }, { { { "uri", "color.ktx2" } }, { { "uri", "normal.png" } } });
+		gltf["extensionsRequired"] = { "KHR_texture_transform", "KHR_materials_emissive_strength", "KHR_materials_clearcoat", "KHR_materials_transmission", "KHR_texture_basisu", "KHR_mesh_quantization" };
+		gltf["textures"][0] = { { "extensions", { { "KHR_texture_basisu", { { "source", 0 } } } } } };
+		auto& material = gltf["materials"][0];
+		material["extensions"] = {
+			{ "KHR_materials_emissive_strength", { { "emissiveStrength", 3 } } },
+			{ "KHR_materials_clearcoat", { { "clearcoatFactor", 0.8 }, { "clearcoatRoughnessFactor", 0.2 }, { "clearcoatTexture", { { "index", 0 } } }, { "clearcoatRoughnessTexture", { { "index", 1 } } }, { "clearcoatNormalTexture", { { "index", 1 }, { "scale", 0.5 } } } } },
+			{ "KHR_materials_transmission", { { "transmissionFactor", 0.6 }, { "transmissionTexture", { { "index", 1 } } } } }
+		};
+		material["pbrMetallicRoughness"]["baseColorTexture"]["extensions"]["KHR_texture_transform"] = { { "offset", { 0.2, 0.3 } }, { "scale", { 2, -3 } }, { "rotation", 0.5 }, { "texCoord", 1 } };
+		gltf["meshes"][0]["primitives"][0]["attributes"]["TEXCOORD_1"] = 1;
+		project.WriteFile("Assets/quad.gltf", gltf.dump());
+		std::string error;
+		auto mesh = MeshImporter::LoadGltf(project.GetDirectory() / "Assets/quad.gltf", "Assets/quad.gltf", error);
+		REQUIRE_MESSAGE(mesh, error);
+		const auto& m = mesh->Materials[0];
+		CHECK(m.Clearcoat == doctest::Approx(0.8));
+		CHECK(m.ClearcoatRoughness == doctest::Approx(0.2));
+		CHECK(m.Transmission == doctest::Approx(0.6));
+		CHECK(m.EmissiveIntensity == 3);
+		CHECK(m.AlbedoMap == "Assets/color.ktx2");
+		CHECK(m.ClearcoatMap == "Assets/color.ktx2");
+		CHECK(m.TransmissionMap == "Assets/normal.png");
+		CHECK(m.ClearcoatNormalScale == 0.5f);
+		CHECK(m.TextureTransforms[0].Offset == glm::vec2(0.2f, 0.3f));
+		CHECK(m.TextureTransforms[0].Scale == glm::vec2(2, -3));
+		CHECK(m.TextureTransforms[0].Rotation == 0.5f);
+		CHECK(m.TextureTransforms[0].TexCoord == 1);
+		CHECK(m.TextureTransforms[1].Scale == glm::vec2(1));
+		CHECK(m.TextureTransforms[1].TexCoord == 0);
+		for (const auto& vertex : mesh->Vertices)
+			CHECK(vertex.TexCoord1 == vertex.TexCoord);
+		gltf["meshes"][0]["primitives"][0]["attributes"].erase("TEXCOORD_1");
+		project.WriteFile("Assets/quad.gltf", gltf.dump());
+		CHECK_FALSE(MeshImporter::LoadGltf(project.GetDirectory() / "Assets/quad.gltf", "Assets/quad.gltf", error));
+		CHECK(error.find("TEXCOORD_1") != std::string::npos);
+		gltf["meshes"][0]["primitives"][0]["attributes"]["TEXCOORD_1"] = 1;
+		gltf["extensionsRequired"] = { "KHR_not_supported" };
+		project.WriteFile("Assets/quad.gltf", gltf.dump());
+		CHECK_FALSE(MeshImporter::LoadGltf(project.GetDirectory() / "Assets/quad.gltf", "Assets/quad.gltf", error));
+		CHECK(error.find("KHR_not_supported") != std::string::npos);
+		gltf.erase("extensionsRequired");
+		material["extensions"]["KHR_materials_transmission"]["transmissionFactor"] = 2;
+		project.WriteFile("Assets/quad.gltf", gltf.dump());
+		CHECK_FALSE(MeshImporter::LoadGltf(project.GetDirectory() / "Assets/quad.gltf", "Assets/quad.gltf", error));
+		CHECK(error.find("factor") != std::string::npos);
+	}
+
+	TEST_CASE("Quantized glTF positions and UVs decode without changing topology")
+	{
+		BasaltTest::TempProject project("GltfQuantized");
+		const uint16_t positions[] = { 0, 0, 0, 0, 65535, 0, 0, 0, 65535, 65535, 0, 0, 0, 65535, 0, 0 };
+		const uint16_t uv[] = { 0, 65535, 65535, 65535, 65535, 0, 0, 0 };
+		const uint16_t indices[] = { 0, 1, 2, 0, 2, 3 };
+		std::string binary(reinterpret_cast<const char*>(positions), sizeof(positions));
+		binary.append(reinterpret_cast<const char*>(uv), sizeof(uv));
+		binary.append(reinterpret_cast<const char*>(indices), sizeof(indices));
+		project.WriteFile("Assets/quant.bin", binary);
+		auto gltf = MakeGltfJson({ { "uri", "quant.bin" }, { "byteLength", binary.size() } }, { { { "uri", "color.png" } }, { { "uri", "normal.png" } } });
+		gltf["extensionsRequired"] = { "KHR_mesh_quantization" };
+		gltf["bufferViews"][0]["byteLength"] = 32;
+		gltf["bufferViews"][0]["byteStride"] = 8;
+		gltf["bufferViews"][1]["byteOffset"] = 32;
+		gltf["bufferViews"][1]["byteLength"] = 16;
+		gltf["bufferViews"][2]["byteOffset"] = 48;
+		gltf["accessors"][0]["componentType"] = 5123;
+		gltf["accessors"][0]["normalized"] = true;
+		gltf["accessors"][1]["componentType"] = 5123;
+		gltf["accessors"][1]["normalized"] = true;
+		project.WriteFile("Assets/quant.gltf", gltf.dump());
+		std::string error;
+		auto mesh = MeshImporter::LoadGltf(project.GetDirectory() / "Assets/quant.gltf", "Assets/quant.gltf", error);
+		REQUIRE_MESSAGE(mesh, error);
+		CHECK(mesh->Vertices.size() == 4);
+		CHECK(mesh->Submeshes[0].IndexCount == 6);
+		CHECK(mesh->Bounds.Min == glm::vec3(0));
+		CHECK(mesh->Bounds.Max == glm::vec3(1, 1, 0));
+		for (const auto& vertex : mesh->Vertices)
+		{
+			CHECK(vertex.TexCoord.x == vertex.Position.x);
+			CHECK(vertex.TexCoord.y == 1 - vertex.Position.y);
+		}
+	}
+
+	TEST_CASE("KHR_texture_basisu external and embedded images reach the texture cache")
+	{
+		BasaltTest::TempProject project("GltfBasisImages");
+		const auto bytes = FileSystem::ReadBinaryFile(std::filesystem::path(BASALT_TEST_DATA_DIR) / "Textures/UASTC.ktx2");
+		REQUIRE(bytes);
+		std::string binary = MakeQuadBuffer();
+		const auto imageOffset = binary.size();
+		binary.append(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+		project.WriteFile("Assets/quad.bin", binary);
+		project.WriteFile("Assets/color.ktx2", std::string(reinterpret_cast<const char*>(bytes->data()), bytes->size()));
+		auto gltf = MakeGltfJson({ { "uri", "quad.bin" }, { "byteLength", binary.size() } }, { { { "uri", "color.ktx2" } }, { { "bufferView", 3 }, { "mimeType", "image/ktx2" } } });
+		gltf["bufferViews"].push_back({ { "buffer", 0 }, { "byteOffset", imageOffset }, { "byteLength", bytes->size() } });
+		gltf["extensionsRequired"] = { "KHR_texture_basisu" };
+		gltf["textures"][0] = { { "extensions", { { "KHR_texture_basisu", { { "source", 0 } } } } } };
+		gltf["textures"][1] = { { "extensions", { { "KHR_texture_basisu", { { "source", 1 } } } } } };
+		project.WriteFile("Assets/quad.gltf", gltf.dump());
+		AssetManager::Clear();
+		auto mesh = AssetManager::GetMesh("Assets/quad.gltf");
+		REQUIRE(mesh);
+		for (const auto& key : { mesh->Materials[0].AlbedoMap, mesh->Materials[0].NormalMap })
+		{
+			auto texture = AssetManager::GetTexture(key);
+			REQUIRE_MESSAGE(texture, AssetManager::GetError(key));
+			CHECK(texture->Format == TextureFormat::BC7);
+			CHECK(texture->MipOffsets.size() == 4);
+		}
+		AssetManager::Clear();
+	}
+
 	TEST_CASE("Blocking mesh getters join dependency retries without publishing unrelated requests")
 	{
 		BasaltTest::TempProject project("BlockingAsyncRetry");

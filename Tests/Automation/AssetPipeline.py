@@ -16,6 +16,25 @@ source = pathlib.Path(sys.argv[2]).resolve()
 with tempfile.TemporaryDirectory(prefix="BasaltAssetPipeline-") as temp:
     project = pathlib.Path(temp) / "Project"
     shutil.copytree(source, project)
+    compression = {"path": "Assets/Textures/Checker.png", "output": "Assets/Textures/Checker.ktx2", "srgb": True}
+    def command(name, params):
+        result = subprocess.run([str(cli), "--project", str(project), name, json.dumps(params)], capture_output=True, text=True, timeout=60)
+        require(result.returncode == 0, result.stdout + result.stderr)
+        return json.loads(result.stdout)["result"]
+    source_bytes = (project / compression["path"]).read_bytes()
+    require(command("asset.compress_texture", compression)["cacheHit"] is False, "first compression unexpectedly cached")
+    require(command("asset.compress_texture", compression)["cacheHit"] is True, "repeat compression missed cache")
+    require((project / compression["path"]).read_bytes() == source_bytes, "compression changed source")
+    require(command("asset.preload", {"paths": [compression["output"]], "wait": True})[0]["status"] == "ready", "KTX2 did not load")
+    for invalid in [dict(compression, output="../escape.ktx2"), dict(compression, output="Assets/wrong.png"), dict(compression, srgb="true")]:
+        result = subprocess.run([str(cli), "--project", str(project), "asset.compress_texture", json.dumps(invalid)], capture_output=True, text=True, timeout=30)
+        require(result.returncode != 0, "invalid compression request succeeded")
+    if sys.platform != "win32":
+        alias = project / "Assets/Textures/Alias.png"
+        alias.symlink_to(project / compression["path"])
+        result = subprocess.run([str(cli), "--project", str(project), "asset.compress_texture", json.dumps(dict(compression, path="Assets/Textures/Alias.png"))], capture_output=True, text=True, timeout=30)
+        require(result.returncode != 0, "compression accepted a symlink source")
+        alias.unlink()
     original = "Assets/Textures/Checker.png"
     target = "Assets/Textures/Renamed.png"
     commands = [

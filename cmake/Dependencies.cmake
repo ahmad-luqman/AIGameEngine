@@ -129,6 +129,17 @@ FetchContent_Declare(cgltf
 	GIT_SHALLOW TRUE
 	SOURCE_SUBDIR _BasaltNoCMake)
 
+# Portable BC7 encoder/decoder and Basis Universal KTX2 transcoder (ETC1S/UASTC + Zstd).
+FetchContent_Declare(bc7enc SYSTEM
+	GIT_REPOSITORY https://github.com/richgel999/bc7enc_rdo.git
+	GIT_TAG b9438627eef73a1157e84201b6fa6eb2ffd6d9f0
+	SOURCE_SUBDIR _BasaltNoCMake)
+FetchContent_Declare(basisu SYSTEM
+	GIT_REPOSITORY https://github.com/BinomialLLC/basis_universal.git
+	GIT_TAG v1_60
+	GIT_SHALLOW TRUE
+	SOURCE_SUBDIR _BasaltNoCMake)
+
 FetchContent_Declare(stb
 	SYSTEM
 	GIT_REPOSITORY https://github.com/nothings/stb.git
@@ -194,7 +205,7 @@ set(OBJECT_LAYER_BITS 32 CACHE STRING "" FORCE)
 
 FetchContent_MakeAvailable(VulkanHeaders)
 FetchContent_MakeAvailable(glfw glm nvrhi spdlog entt json jolt sol2 doctest
-	lua imgui imguizmo miniaudio cgltf stb fsr1 meshoptimizer)
+	lua imgui imguizmo miniaudio cgltf stb fsr1 meshoptimizer bc7enc basisu)
 # Jolt's deterministic mode turns contraction off for GCC, clang and MSVC, but not for clang-cl.
 if(MSVC AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 	target_compile_options(Jolt PRIVATE /clang:-ffp-contract=off)
@@ -264,4 +275,17 @@ if(BASALT_PROFILE AND NOT CMAKE_BUILD_TYPE STREQUAL "Dist")
 		GIT_TAG v0.12.2
 		GIT_SHALLOW TRUE)
 	FetchContent_MakeAvailable(tracy)
+endif()
+
+add_library(BasaltTextureCodecs STATIC
+	"${bc7enc_SOURCE_DIR}/bc7enc.cpp" "${bc7enc_SOURCE_DIR}/bc7decomp.cpp"
+	"${basisu_SOURCE_DIR}/transcoder/basisu_transcoder.cpp" "${basisu_SOURCE_DIR}/zstd/zstd.c")
+target_include_directories(BasaltTextureCodecs SYSTEM PUBLIC "${bc7enc_SOURCE_DIR}" "${basisu_SOURCE_DIR}/transcoder")
+target_compile_definitions(BasaltTextureCodecs PUBLIC BASISD_SUPPORT_KTX2_ZSTD=1)
+# v1_60 uses std::terminate without including <exception>; libc++ 21 stopped including it transitively.
+# Supply the missing standard header without patching third-party sources.
+if(MSVC)
+	target_compile_options(BasaltTextureCodecs PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:/FIexception>")
+else()
+	target_compile_options(BasaltTextureCodecs PRIVATE -fno-strict-aliasing "$<$<COMPILE_LANGUAGE:CXX>:-include>" "$<$<COMPILE_LANGUAGE:CXX>:exception>")
 endif()

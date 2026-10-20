@@ -221,8 +221,11 @@ namespace Basalt {
 			glm::vec4 AlbedoColor;
 			glm::vec4 Emissive;
 			glm::vec4 Params;
+			glm::vec4 Extensions;
+			glm::vec4 NormalParams;
+			std::array<glm::vec4, 18> UVRows;
 		};
-		static_assert(sizeof(GpuMaterialData) == 48);
+		static_assert(sizeof(GpuMaterialData) == 368);
 
 		struct GpuSSAOConstants
 		{
@@ -495,8 +498,8 @@ namespace Basalt {
 			nvrhi::BindingSetHandle Set;
 			uint64_t LastUsed = 0;
 		};
-		// Keyed by the five material textures (albedo, normal, metallic-roughness, occlusion, emissive).
-		std::map<std::array<nvrhi::ITexture*, 5>, CachedBindingSet> MaterialSets;
+		// Keyed by base PBR and extension textures; factors and UV transforms stay in the material buffer.
+		std::map<std::array<nvrhi::ITexture*, 9>, CachedBindingSet> MaterialSets;
 		// Keyed by particle texture; they also reference the particle buffer, so they are rebuilt when it grows.
 		std::map<nvrhi::ITexture*, CachedBindingSet> ParticleSets;
 
@@ -606,12 +609,13 @@ namespace Basalt {
 			nvrhi::VertexAttributeDesc().setName("TEXCOORD").setFormat(nvrhi::Format::RG32_FLOAT).setOffset(offsetof(Vertex, TexCoord)).setElementStride(sizeof(Vertex)),
 			nvrhi::VertexAttributeDesc().setName("JOINTS").setFormat(nvrhi::Format::RGBA32_UINT).setOffset(offsetof(Vertex, Joints)).setElementStride(sizeof(Vertex)),
 			nvrhi::VertexAttributeDesc().setName("WEIGHTS").setFormat(nvrhi::Format::RGBA32_FLOAT).setOffset(offsetof(Vertex, Weights)).setElementStride(sizeof(Vertex)),
+			nvrhi::VertexAttributeDesc().setName("TEXCOORD1").setFormat(nvrhi::Format::RG32_FLOAT).setOffset(offsetof(Vertex, TexCoord1)).setElementStride(sizeof(Vertex)),
 		};
-		impl.MeshInputLayout = device->createInputLayout(meshAttributes, 6, impl.MeshVS);
+		impl.MeshInputLayout = device->createInputLayout(meshAttributes, 7, impl.MeshVS);
 		const nvrhi::VertexAttributeDesc shadowAttributes[] = { meshAttributes[0], meshAttributes[4], meshAttributes[5] };
 		impl.ShadowInputLayout = device->createInputLayout(shadowAttributes, 3, impl.ShadowVS);
-		const nvrhi::VertexAttributeDesc maskedShadowAttributes[] = { meshAttributes[0], meshAttributes[3], meshAttributes[4], meshAttributes[5] };
-		impl.ShadowMaskedInputLayout = device->createInputLayout(maskedShadowAttributes, 4, impl.ShadowMaskedVS);
+		const nvrhi::VertexAttributeDesc maskedShadowAttributes[] = { meshAttributes[0], meshAttributes[3], meshAttributes[4], meshAttributes[5], meshAttributes[6] };
+		impl.ShadowMaskedInputLayout = device->createInputLayout(maskedShadowAttributes, 5, impl.ShadowMaskedVS);
 
 		// --- Binding layouts ----------------------------------------------------------------------
 		// Light records and cluster lists share slot 3: keep this frame layout at four storage buffers,
@@ -661,6 +665,10 @@ namespace Basalt {
 			nvrhi::BindingLayoutItem::Texture_SRV(3),
 			nvrhi::BindingLayoutItem::Texture_SRV(4),
 			nvrhi::BindingLayoutItem::Sampler(5),
+			nvrhi::BindingLayoutItem::Texture_SRV(6),
+			nvrhi::BindingLayoutItem::Texture_SRV(7),
+			nvrhi::BindingLayoutItem::Texture_SRV(8),
+			nvrhi::BindingLayoutItem::Texture_SRV(9),
 		};
 		impl.MaterialLayout = device->createBindingLayout(materialDesc);
 
@@ -1113,7 +1121,7 @@ namespace Basalt {
 			{
 				desc.renderState.blendState.targets[0]
 					.setBlendEnable(true)
-					.setSrcBlend(nvrhi::BlendFactor::SrcAlpha)
+					.setSrcBlend(nvrhi::BlendFactor::One)
 					.setDestBlend(nvrhi::BlendFactor::InvSrcAlpha)
 					.setSrcBlendAlpha(nvrhi::BlendFactor::One)
 					.setDestBlendAlpha(nvrhi::BlendFactor::InvSrcAlpha);
@@ -1638,10 +1646,10 @@ namespace Basalt {
 		items.clear();
 
 		bool materialSetFailed = false;
-		auto materialSet = [&](nvrhi::ITexture* albedo, nvrhi::ITexture* normal, nvrhi::ITexture* metallicRoughness, nvrhi::ITexture* occlusion, nvrhi::ITexture* emissive) -> nvrhi::IBindingSet* {
+		auto materialSet = [&](nvrhi::ITexture* albedo, nvrhi::ITexture* normal, nvrhi::ITexture* metallicRoughness, nvrhi::ITexture* occlusion, nvrhi::ITexture* emissive, nvrhi::ITexture* coat, nvrhi::ITexture* coatRoughness, nvrhi::ITexture* coatNormal, nvrhi::ITexture* transmission) -> nvrhi::IBindingSet* {
 			if (materialSetFailed)
 				return nullptr;
-			const std::array<nvrhi::ITexture*, 5> key = { albedo, normal, metallicRoughness, occlusion, emissive };
+			const std::array<nvrhi::ITexture*, 9> key = { albedo, normal, metallicRoughness, occlusion, emissive, coat, coatRoughness, coatNormal, transmission };
 			auto it = impl.MaterialSets.find(key);
 			if (it != impl.MaterialSets.end())
 			{
@@ -1654,6 +1662,10 @@ namespace Basalt {
 																		 .addItem(nvrhi::BindingSetItem::Texture_SRV(2, metallicRoughness))
 																		 .addItem(nvrhi::BindingSetItem::Texture_SRV(3, occlusion))
 																		 .addItem(nvrhi::BindingSetItem::Texture_SRV(4, emissive))
+																		 .addItem(nvrhi::BindingSetItem::Texture_SRV(6, coat))
+																		 .addItem(nvrhi::BindingSetItem::Texture_SRV(7, coatRoughness))
+																		 .addItem(nvrhi::BindingSetItem::Texture_SRV(8, coatNormal))
+																		 .addItem(nvrhi::BindingSetItem::Texture_SRV(9, transmission))
 																		 .addItem(nvrhi::BindingSetItem::Sampler(5, impl.LinearWrapAniso)),
 																	 impl.MaterialLayout);
 			if (!set)
@@ -1738,8 +1750,15 @@ namespace Basalt {
 					nvrhi::ITexture* occlusion = texture(m.OcclusionMap, false, m_Resources->GetWhiteTexture(), MaterialHasOcclusionMap, flags);
 					nvrhi::ITexture* emissive = texture(m.EmissiveMap, true, m_Resources->GetWhiteTexture(), MaterialHasEmissiveMap, flags);
 					material.Params = glm::vec4(m.Metallic, m.Roughness, 0.0f, static_cast<float>(flags));
-					blend = m.AlbedoColor.a < 0.999f;
-					set = materialSet(albedo, normal, mr, occlusion, emissive);
+					blend = m.AlbedoColor.a < 0.999f || m.Transmission > 0;
+					material.Extensions = glm::vec4(m.Clearcoat, m.ClearcoatRoughness, m.Transmission, blend ? 1.0f : 0.0f);
+					material.NormalParams = glm::vec4(1);
+					nvrhi::ITexture* coat = texture(m.ClearcoatMap, false, m_Resources->GetWhiteTexture(), 32, flags);
+					nvrhi::ITexture* coatRoughness = texture(m.ClearcoatRoughnessMap, false, m_Resources->GetWhiteTexture(), 64, flags);
+					nvrhi::ITexture* coatNormal = texture(m.ClearcoatNormalMap, false, m_Resources->GetFlatNormalTexture(), 128, flags);
+					nvrhi::ITexture* transmission = texture(m.TransmissionMap, false, m_Resources->GetWhiteTexture(), 256, flags);
+					material.Params.w = static_cast<float>(flags);
+					set = materialSet(albedo, normal, mr, occlusion, emissive, coat, coatRoughness, coatNormal, transmission);
 				}
 				else
 				{
@@ -1752,9 +1771,37 @@ namespace Basalt {
 					nvrhi::ITexture* occlusion = texture(m.OcclusionMap, false, m_Resources->GetWhiteTexture(), MaterialHasOcclusionMap, flags);
 					nvrhi::ITexture* emissive = texture(m.EmissiveMap, true, m_Resources->GetWhiteTexture(), MaterialHasEmissiveMap, flags);
 					material.Params = glm::vec4(m.Metallic, m.Roughness, m.Alpha == AlphaMode::Mask ? m.AlphaCutoff : 0.0f, static_cast<float>(flags));
-					blend = m.Alpha == AlphaMode::Blend;
+					blend = m.Alpha == AlphaMode::Blend || m.Transmission > 0;
 					doubleSided = m.DoubleSided;
-					set = materialSet(albedo, normal, mr, occlusion, emissive);
+					material.Extensions = glm::vec4(m.Clearcoat, m.ClearcoatRoughness, m.Transmission, blend ? 1.0f : 0.0f);
+					material.NormalParams = glm::vec4(1);
+					nvrhi::ITexture* coat = texture(m.ClearcoatMap, false, m_Resources->GetWhiteTexture(), 32, flags);
+					nvrhi::ITexture* coatRoughness = texture(m.ClearcoatRoughnessMap, false, m_Resources->GetWhiteTexture(), 64, flags);
+					nvrhi::ITexture* coatNormal = texture(m.ClearcoatNormalMap, false, m_Resources->GetFlatNormalTexture(), 128, flags);
+					nvrhi::ITexture* transmission = texture(m.TransmissionMap, false, m_Resources->GetWhiteTexture(), 256, flags);
+					material.Params.w = static_cast<float>(flags);
+					set = materialSet(albedo, normal, mr, occlusion, emissive, coat, coatRoughness, coatNormal, transmission);
+				}
+
+				for (size_t slot = 0; slot < 9; slot++)
+				{
+					TextureTransform transform;
+					if (materialOverride)
+					{
+						transform.Offset = materialOverride->UVOffset;
+						transform.Scale = materialOverride->UVScale;
+						transform.Rotation = materialOverride->UVRotation;
+					}
+					else
+						transform = source->Materials[std::min<size_t>(submesh.MaterialIndex, source->Materials.size() - 1)].TextureTransforms[slot];
+					const float c = std::cos(transform.Rotation), sn = std::sin(transform.Rotation);
+					material.UVRows[slot * 2] = { c * transform.Scale.x, -sn * transform.Scale.y, transform.Offset.x, static_cast<float>(transform.TexCoord) };
+					material.UVRows[slot * 2 + 1] = { sn * transform.Scale.x, c * transform.Scale.y, transform.Offset.y, 0 };
+				}
+				if (!materialOverride)
+				{
+					const auto& m = source->Materials[std::min<size_t>(submesh.MaterialIndex, source->Materials.size() - 1)];
+					material.NormalParams = { m.NormalScale, m.OcclusionStrength, m.ClearcoatNormalScale, 0 };
 				}
 
 				if (!set)

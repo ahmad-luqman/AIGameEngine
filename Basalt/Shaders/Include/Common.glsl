@@ -5,7 +5,8 @@
 //                     12 environment cube, 13 local shadow atlas, 14 local shadow maps (SSBO),
 //                     push constants (DrawPush)
 // Shadow pipelines use a reduced set 0: push constants, 0, 1, 2 and 14 only.
-//   set 1 (material): 0 albedo, 1 normal, 2 metallic-roughness, 3 occlusion, 4 emissive, 5 material sampler
+//   set 1 (material): 0 albedo, 1 normal, 2 metallic-roughness, 3 occlusion, 4 emissive, 5 material sampler,
+//                     6 clearcoat, 7 coat roughness, 8 coat normal, 9 transmission
 //   (the particle pipelines bind their own set 1; see Particle.vert)
 
 #ifndef BASALT_COMMON_GLSL
@@ -58,6 +59,9 @@ struct MaterialData
 	vec4 AlbedoColor;
 	vec4 Emissive;        // rgb * intensity
 	vec4 Params;          // x: metallic, y: roughness, z: alpha cutoff (0 = opaque), w: flags
+	vec4 Extensions;      // clearcoat, coat roughness, transmission, transparent pass
+	vec4 NormalParams;    // normal scale, occlusion strength, coat normal scale
+	vec4 UVRows[18];      // two affine rows per map, first row.w selects UV0/UV1
 };
 
 layout(std430, set = 0, binding = 2) readonly buffer MaterialBuffer

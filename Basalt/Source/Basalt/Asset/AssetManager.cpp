@@ -628,7 +628,7 @@ namespace Basalt {
 	bool AssetManager::IsTextureFile(const std::string& path)
 	{
 		const std::string extension = Extension(path);
-		return extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".tga" || extension == ".bmp" || extension == ".hdr";
+		return extension == ".ktx2" || extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".tga" || extension == ".bmp" || extension == ".hdr";
 	}
 
 }

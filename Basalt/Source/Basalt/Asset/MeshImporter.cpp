@@ -120,6 +120,14 @@ namespace Basalt {
 				outError = path.filename().string() + ": " + ResultToString(result);
 				return nullptr;
 			}
+
+			const std::set<std::string_view> supported = { "KHR_texture_transform", "KHR_materials_emissive_strength", "KHR_materials_clearcoat", "KHR_materials_transmission", "KHR_mesh_quantization", "KHR_texture_basisu" };
+			for (cgltf_size i = 0; i < data->extensions_required_count; i++)
+				if (!supported.contains(data->extensions_required[i]))
+				{
+					outError = key + ": unsupported required extension '" + data->extensions_required[i] + "'";
+					return nullptr;
+				}
 			std::set<std::string> externalFiles;
 			const auto addExternal = [&](const char* uri) {
 				if (auto file = MeshImporter::GetExternalFileKey(key, uri))
@@ -164,9 +172,11 @@ namespace Basalt {
 
 		std::string TextureKey(const cgltf_data* data, const cgltf_texture_view& view, const std::string& meshKey)
 		{
-			if (!view.texture || !view.texture->image)
+			if (!view.texture)
 				return {};
-			const cgltf_image* image = view.texture->image;
+			const cgltf_image* image = view.texture->has_basisu ? view.texture->basisu_image : view.texture->image;
+			if (!image)
+				return {};
 			if (auto external = MeshImporter::GetExternalFileKey(meshKey, image->uri))
 				return *external;
 			return meshKey + "#image/" + std::to_string(image - data->images);
@@ -304,6 +314,54 @@ namespace Basalt {
 			result.EmissiveColor = { material.emissive_factor[0], material.emissive_factor[1], material.emissive_factor[2] };
 			if (material.has_emissive_strength)
 				result.EmissiveIntensity = material.emissive_strength.emissive_strength;
+
+			result.Clearcoat = material.has_clearcoat ? material.clearcoat.clearcoat_factor : 0.0f;
+			result.ClearcoatRoughness = material.has_clearcoat ? material.clearcoat.clearcoat_roughness_factor : 0.0f;
+			result.Transmission = material.has_transmission ? material.transmission.transmission_factor : 0.0f;
+			result.ClearcoatMap = TextureKey(data.get(), material.clearcoat.clearcoat_texture, key);
+			result.ClearcoatRoughnessMap = TextureKey(data.get(), material.clearcoat.clearcoat_roughness_texture, key);
+			result.ClearcoatNormalMap = TextureKey(data.get(), material.clearcoat.clearcoat_normal_texture, key);
+			result.TransmissionMap = TextureKey(data.get(), material.transmission.transmission_texture, key);
+			result.NormalScale = material.normal_texture.texture ? material.normal_texture.scale : 1.0f;
+			result.OcclusionStrength = material.occlusion_texture.texture ? material.occlusion_texture.scale : 1.0f;
+			result.ClearcoatNormalScale = material.clearcoat.clearcoat_normal_texture.texture ? material.clearcoat.clearcoat_normal_texture.scale : 1.0f;
+			const cgltf_texture_view* views[] = { &material.pbr_metallic_roughness.base_color_texture, &material.normal_texture, &material.pbr_metallic_roughness.metallic_roughness_texture, &material.occlusion_texture, &material.emissive_texture, &material.clearcoat.clearcoat_texture, &material.clearcoat.clearcoat_roughness_texture, &material.clearcoat.clearcoat_normal_texture, &material.transmission.transmission_texture };
+			for (size_t slot = 0; slot < result.TextureTransforms.size(); slot++)
+			{
+				const auto& v = *views[slot];
+				auto& transform = result.TextureTransforms[slot];
+				if (!v.texture)
+					continue;
+				const int coordinate = v.has_transform && v.transform.has_texcoord ? v.transform.texcoord : v.texcoord;
+				if (coordinate < 0 || coordinate > 1)
+				{
+					outError = key + ": only TEXCOORD_0 and TEXCOORD_1 are supported";
+					return nullptr;
+				}
+				transform.TexCoord = static_cast<uint32_t>(coordinate);
+				if (v.has_transform)
+				{
+					transform.Offset = { v.transform.offset[0], v.transform.offset[1] };
+					transform.Scale = { v.transform.scale[0], v.transform.scale[1] };
+					transform.Rotation = v.transform.rotation;
+				}
+				if (!std::isfinite(transform.Offset.x) || !std::isfinite(transform.Offset.y) || !std::isfinite(transform.Scale.x) || !std::isfinite(transform.Scale.y) || !std::isfinite(transform.Rotation))
+				{
+					outError = key + ": non-finite texture transform";
+					return nullptr;
+				}
+				if (v.texture->has_basisu && !v.texture->basisu_image)
+				{
+					outError = key + ": KHR_texture_basisu has no source image";
+					return nullptr;
+				}
+			}
+			const auto unit = [](float value) { return std::isfinite(value) && value >= 0 && value <= 1; };
+			if (!unit(result.Clearcoat) || !unit(result.ClearcoatRoughness) || !unit(result.Transmission) || !std::isfinite(result.EmissiveIntensity) || result.EmissiveIntensity < 0 || !std::isfinite(result.NormalScale) || !std::isfinite(result.ClearcoatNormalScale) || !unit(result.OcclusionStrength))
+			{
+				outError = key + ": invalid material extension factor";
+				return nullptr;
+			}
 			result.Alpha = material.alpha_mode == cgltf_alpha_mode_mask ? AlphaMode::Mask : (material.alpha_mode == cgltf_alpha_mode_blend ? AlphaMode::Blend : AlphaMode::Opaque);
 			result.AlphaCutoff = material.alpha_cutoff;
 			result.DoubleSided = material.double_sided;
@@ -332,6 +390,7 @@ namespace Basalt {
 				const cgltf_accessor* normals = nullptr;
 				const cgltf_accessor* tangents = nullptr;
 				const cgltf_accessor* texCoords = nullptr;
+				const cgltf_accessor* texCoords1 = nullptr;
 				const cgltf_accessor* joints = nullptr;
 				const cgltf_accessor* weights = nullptr;
 				for (cgltf_size a = 0; a < primitive.attributes_count; a++)
@@ -352,6 +411,8 @@ namespace Basalt {
 						normals = attribute.data;
 					else if (attribute.type == cgltf_attribute_type_tangent)
 						tangents = attribute.data;
+					else if (attribute.type == cgltf_attribute_type_texcoord && attribute.index == 1)
+						texCoords1 = attribute.data;
 					else if (attribute.type == cgltf_attribute_type_texcoord && attribute.index == 0)
 						texCoords = attribute.data;
 				}
@@ -418,6 +479,19 @@ namespace Basalt {
 						vertices[v].TexCoord = texCoordData[v];
 				}
 
+				const bool hasUV1 = texCoords1 && texCoords1->count == positions->count && ReadAccessor(texCoords1, texCoordData, 2);
+				if (hasUV1)
+					for (size_t v = 0; v < vertices.size(); v++)
+						vertices[v].TexCoord1 = texCoordData[v];
+
+				if (primitive.material && !hasUV1)
+					for (const auto& transform : source->Materials[static_cast<size_t>(primitive.material - data->materials)].TextureTransforms)
+						if (transform.TexCoord == 1)
+						{
+							outError = key + ": material references missing or unreadable TEXCOORD_1";
+							return nullptr;
+						}
+
 				std::vector<uint32_t> indices;
 				if (primitive.indices)
 				{
@@ -457,7 +531,7 @@ namespace Basalt {
 				}
 
 				const uint32_t materialIndex = primitive.material ? static_cast<uint32_t>(primitive.material - data->materials) : defaultMaterial;
-				const bool reorder = source->Materials[materialIndex].Alpha != AlphaMode::Blend;
+				const bool reorder = source->Materials[materialIndex].Alpha != AlphaMode::Blend && source->Materials[materialIndex].Transmission == 0;
 				const bool optimized = MeshOptimizer::Optimize(vertices, indices, reorder);
 				if (!optimized)
 				{

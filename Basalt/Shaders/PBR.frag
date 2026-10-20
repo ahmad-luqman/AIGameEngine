@@ -19,10 +19,23 @@ layout(location = 4) flat in uvec2 v_InstanceIndices;
 
 layout(location = 0) out vec4 o_Color;
 
+layout(location = 5) in vec2 v_TexCoord1;
+
+// The transparent pass approximates thin transmission by passing through the destination;
+// reflected specular stays visible even at full transmission. Refraction/volume are not modeled.
+vec3 EvaluateSurfaceLight(Surface surface, vec3 V, vec3 L, vec3 radiance, vec3 F0)
+{
+	vec3 base = EvaluateLight(surface.Normal, V, L, radiance, surface.Albedo * (1.0 - surface.Transmission), surface.Metallic, surface.Roughness, F0);
+	if (surface.Clearcoat <= 0.0) return base;
+	float coatF = FresnelSchlick(max(dot(surface.ClearcoatNormal, V), 0.0), vec3(0.04)).r;
+	vec3 coat = EvaluateLight(surface.ClearcoatNormal, V, L, radiance, vec3(0), 0.0, surface.ClearcoatRoughness, vec3(0.04));
+	return base * (1.0 - surface.Clearcoat * coatF) + surface.Clearcoat * coat;
+}
+
 void main()
 {
 	MaterialData material = u_Materials.Materials[v_InstanceIndices.x];
-	Surface surface = EvaluateSurface(material, v_Normal, v_Tangent, v_TexCoord, gl_FrontFacing);
+	Surface surface = EvaluateSurface(material, v_Normal, v_Tangent, v_TexCoord, v_TexCoord1, v_WorldPosition, gl_FrontFacing);
 	if (material.Params.z > 0.0 && surface.Alpha < material.Params.z)
 		discard;
 
@@ -39,7 +52,7 @@ void main()
 	{
 		float shadow = ComputeShadow(v_WorldPosition, geometricNormal, viewDepth, gl_FragCoord.xy);
 		vec3 L = -normalize(u_View.Sun.Direction.xyz);
-		color += EvaluateLight(N, V, L, u_View.Sun.Color.rgb * shadow, surface.Albedo, surface.Metallic, surface.Roughness, F0);
+		color += EvaluateSurfaceLight(surface, V, L, u_View.Sun.Color.rgb * shadow, F0);
 	}
 
 	// Additional directional lights (unshadowed), then point and spot lights.
@@ -61,7 +74,7 @@ void main()
 		LightData light = u_Lights.Lights[lightIndex];
 		if (light.Color.w == LIGHT_TYPE_DIRECTIONAL)
 		{
-			color += EvaluateLight(N, V, -normalize(light.Direction.xyz), light.Color.rgb, surface.Albedo, surface.Metallic, surface.Roughness, F0);
+			color += EvaluateSurfaceLight(surface, V, -normalize(light.Direction.xyz), light.Color.rgb, F0);
 			continue;
 		}
 		vec3 toLight = light.Position.xyz - v_WorldPosition;
@@ -77,7 +90,7 @@ void main()
 		}
 		if (attenuation > 0.0)
 			attenuation *= ComputeLocalShadow(light, v_WorldPosition, geometricNormal);
-		color += EvaluateLight(N, V, L, light.Color.rgb * attenuation, surface.Albedo, surface.Metallic, surface.Roughness, F0);
+		color += EvaluateSurfaceLight(surface, V, L, light.Color.rgb * attenuation, F0);
 	}
 
 	if (u_View.ClusterDepths.w > 0.5)
@@ -96,8 +109,17 @@ void main()
 	float maxMip = u_View.EnvironmentParams.y - 1.0;
 	vec3 prefiltered = textureLod(samplerCube(u_PrefilteredMap, u_LinearSampler), RotateY(R, -rotation), surface.Roughness * maxMip).rgb;
 	vec2 brdf = texture(sampler2D(u_BRDFLut, u_LinearSampler), vec2(NdotV, surface.Roughness)).rg;
-	vec3 ambient = (kD * irradiance * surface.Albedo + prefiltered * (F * brdf.x + brdf.y)) * u_View.AmbientColor.w;
-	ambient += u_View.AmbientColor.rgb * surface.Albedo;
+	vec3 ambient = (kD * irradiance * surface.Albedo * (1.0 - surface.Transmission) + prefiltered * (F * brdf.x + brdf.y)) * u_View.AmbientColor.w;
+	ambient += u_View.AmbientColor.rgb * surface.Albedo * (1.0 - surface.Transmission);
+	if (surface.Clearcoat > 0.0)
+	{
+		float coatNV = max(dot(surface.ClearcoatNormal, V), 1e-4);
+		float coatF = FresnelSchlick(coatNV, vec3(0.04)).r;
+		vec3 coatR = RotateY(reflect(-V, surface.ClearcoatNormal), -rotation);
+		vec3 coatEnv = textureLod(samplerCube(u_PrefilteredMap, u_LinearSampler), coatR, surface.ClearcoatRoughness * maxMip).rgb;
+		vec2 coatBRDF = texture(sampler2D(u_BRDFLut, u_LinearSampler), vec2(coatNV, surface.ClearcoatRoughness)).rg;
+		ambient = ambient * (1.0 - surface.Clearcoat * coatF) + surface.Clearcoat * coatEnv * (0.04 * coatBRDF.x + coatBRDF.y) * u_View.AmbientColor.w;
+	}
 
 	float occlusion = surface.Occlusion;
 	if (u_View.EnvironmentParams.z > 0.5)
@@ -105,5 +127,6 @@ void main()
 	color += ambient * occlusion;
 	color += surface.Emissive;
 
-	o_Color = vec4(color, surface.Alpha);
+	float coverage = material.Extensions.w > 0.5 ? surface.Alpha : 1.0;
+	o_Color = vec4(color * coverage, coverage * (1.0 - surface.Transmission));
 }

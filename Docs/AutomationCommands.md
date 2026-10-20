@@ -160,6 +160,47 @@ Fails unless the current scene (the play copy while playing) has the entity: by 
 
 ## asset
 
+### `asset.compress_texture`
+
+Compresses an RGBA8 source to a separate KTX2/BC7 asset with mipmaps. Keeps the source, caches by source contents and sRGB setting in Cache/Textures. Reference the output asset to use compression; HDR sources are rejected.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `output` | separate output .ktx2 under Assets/ |
+| `path` | source image under Assets/ |
+| `srgb` | color texture (default true); false for normal/data maps |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "output": {
+      "description": "separate output .ktx2 under Assets/",
+      "minLength": 1,
+      "type": "string"
+    },
+    "path": {
+      "description": "source image under Assets/",
+      "minLength": 1,
+      "type": "string"
+    },
+    "srgb": {
+      "description": "color texture (default true); false for normal/data maps",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "path",
+    "output"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
 ### `asset.delete`
 
 Deletes one asset file and its .meta identity. Existing UUID references become unresolved. Stop Play or Simulate first.
