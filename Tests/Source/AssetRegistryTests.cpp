@@ -92,6 +92,40 @@ TEST_SUITE("AssetPipeline")
 		CHECK(FileSystem::ReadTextFile(Project::ResolvePath("Assets/b.lua.meta")) == "invalid");
 	}
 
+	TEST_CASE("Symlink aliases cannot move or delete their target assets")
+	{
+		BasaltTest::TempProject project("AssetSymlinks");
+		auto& assets = Project::GetActive()->GetAssets();
+		std::string error;
+		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/real.lua"), "return {}"));
+		const auto id = assets.Ensure("Assets/real.lua", error);
+		REQUIRE(id);
+		const auto meta = FileSystem::ReadTextFile(Project::ResolvePath("Assets/real.lua.meta"));
+		REQUIRE(meta);
+		std::error_code linkError;
+		std::filesystem::create_symlink("real.lua", Project::ResolvePath("Assets/alias.lua"), linkError);
+		if (linkError)
+		{
+			WARN_MESSAGE(false, "Symlink creation unavailable: ", linkError.message());
+			return;
+		}
+		CHECK_FALSE(assets.Remove("Assets/alias.lua", error));
+		CHECK(error.find("symlink") != std::string::npos);
+		CHECK_FALSE(assets.Move("Assets/alias.lua", "Assets/moved.lua", error));
+		CHECK_FALSE(assets.Ensure("Assets/alias.lua", error));
+		CHECK(FileSystem::ReadTextFile(Project::ResolvePath("Assets/real.lua")) == "return {}");
+		CHECK(FileSystem::ReadTextFile(Project::ResolvePath("Assets/real.lua.meta")) == meta);
+		CHECK(std::filesystem::is_symlink(Project::ResolvePath("Assets/alias.lua")));
+		CHECK_FALSE(FileSystem::Exists(Project::ResolvePath("Assets/moved.lua")));
+		std::filesystem::create_directory_symlink(".", Project::ResolvePath("Assets/linked"), linkError);
+		REQUIRE_FALSE(linkError);
+		CHECK_FALSE(assets.Remove("Assets/linked/real.lua", error));
+		CHECK_FALSE(assets.Move("Assets/linked/real.lua", "Assets/moved.lua", error));
+		CHECK_FALSE(assets.Move("Assets/real.lua", "Assets/linked/moved.lua", error));
+		CHECK(FileSystem::ReadTextFile(Project::ResolvePath("Assets/real.lua.meta")) == meta);
+		CHECK(assets.Find(*id) == "Assets/real.lua");
+	}
+
 	TEST_CASE("Scene and prefab persistence use identity while snapshots stay path based")
 	{
 		BasaltTest::TempProject project("AssetPersistence");
@@ -247,7 +281,8 @@ TEST_SUITE("AssetPipeline")
 		REQUIRE_MESSAGE(SceneSerializer::SaveScene(scene, path, error), error);
 		const auto loaded = SceneSerializer::LoadScene(path, error);
 		REQUIRE_MESSAGE(loaded, error);
-		const auto& actual = loaded->GetAllEntitiesOrdered()[0].GetComponent<MaterialComponent>();
+		const auto entities = loaded->GetAllEntitiesOrdered();
+		const auto& actual = entities[0].GetComponent<MaterialComponent>();
 		CHECK(actual.AlbedoMap == material.AlbedoMap);
 		CHECK(actual.NormalMap == material.NormalMap);
 		CHECK(actual.EmissiveMap == material.EmissiveMap);
