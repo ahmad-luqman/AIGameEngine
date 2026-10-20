@@ -7,3 +7,6 @@ UASTC uses the default Zstandard supercompression. Both contain four mip levels.
 ZstdRegression.ktx2 is a minimized FuzzTexture input (also in Tests/Fuzz/Corpus/FuzzTexture) that the
 Zstandard 1.4.9 bundled with Basis mishandled. With the pinned libzstd it must fail cleanly with
 "Basis transcode failed".
+UncompressedLengthMismatch.ktx2 is a FuzzTexture crash input (also in the FuzzTexture corpus): a UASTC level without
+supercompression whose stored length differs from its declared uncompressed length, which reached an assert in
+the Basis transcoder. The loader must reject it before transcoding.

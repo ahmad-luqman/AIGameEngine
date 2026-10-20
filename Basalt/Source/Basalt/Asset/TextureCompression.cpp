@@ -87,6 +87,10 @@ namespace Basalt {
 			const uint64_t start = Read64(index), length = Read64(index + 8), expanded = Read64(index + 16);
 			if (start > size || length > size - start || expanded > MaxPayload)
 				return fail(fmt::format("mip {} has an invalid range or expansion size", mip));
+			// Basis takes an unsupercompressed level's stored length as its uncompressed size and only asserts the
+			// two agree (FuzzTexture found the abort); the KTX2 spec requires them equal.
+			if (Read32(data + 44) == 0 && length != expanded)
+				return fail(fmt::format("mip {} stores {} bytes but declares {} uncompressed", mip, length, expanded));
 			totalBytes += TextureSource::BC7LevelSize(width, height, mip);
 			if (totalBytes > MaxPayload)
 				return fail("BC7 mip chain exceeds 256 MiB");

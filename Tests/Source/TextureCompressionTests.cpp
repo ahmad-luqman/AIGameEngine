@@ -438,6 +438,15 @@ TEST_CASE("Compression cache is optional while output errors retain their filesy
 	CHECK(error.find("BlockedOutput") != std::string::npos);
 }
 
+TEST_CASE("Uncompressed Basis levels must store their declared size")
+{
+	// A FuzzTexture crash: UASTC without supercompression whose level length differs from its uncompressed length
+	// reached an assert inside the Basis transcoder.
+	std::string error;
+	CHECK_FALSE(TextureSource::LoadFromFile(std::filesystem::path(BASALT_TEST_DATA_DIR) / "Textures/UncompressedLengthMismatch.ktx2", error));
+	CHECK(error.find("mip 0 stores 26 bytes but declares 64 uncompressed") != std::string::npos);
+}
+
 TEST_CASE("Malformed Zstandard texture fixture reports a decode error")
 {
 	std::string error;
