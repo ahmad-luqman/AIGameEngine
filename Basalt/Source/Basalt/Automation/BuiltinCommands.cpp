@@ -2,6 +2,7 @@
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Asset/ImageUtils.h"
 #include "Basalt/Asset/TextureSource.h"
+#include "Basalt/Asset/TextureCompression.h"
 #include "Basalt/Automation/AutomationEvents.h"
 #include "Basalt/Automation/AutomationSession.h"
 #include "Basalt/Animation/AnimationGraph.h"
@@ -1433,6 +1434,37 @@ namespace Basalt {
 				if (auto it = params.find("extensions"); it != params.end())
 					extensions = it->get<std::vector<std::string>>();
 				return json{ { "assets", AssetManager::ListAssets(extensions) } };
+			});
+
+			Add(registry, "asset.compress_texture", "Compresses an RGBA8 source to a separate KTX2/BC7 asset with mipmaps. Keeps the source, caches by source contents and sRGB setting in Cache/Textures. Reference the output asset to use compression; HDR sources are rejected.", Schema::Object({ { "path", Schema::String("source image under Assets/", true) }, { "output", Schema::String("separate output .ktx2 under Assets/", true) }, { "srgb", Schema::Boolean("color texture (default true); false for normal/data maps") } }, { "path", "output" }), [](AutomationSession& session, const json& params) {
+				auto project = RequireProject();
+				const auto path = ProjectRelative(RequireString(params, "path"));
+				const auto output = ProjectRelative(RequireString(params, "output"));
+				auto safe = [&](const std::string& name, bool asset = true) {
+					const auto relative = FileSystem::PathFromUtf8(name).lexically_normal();
+					if (relative.empty() || (asset && *relative.begin() != "Assets") || relative.has_root_path() || name.find(':') != std::string::npos || name.find('\\') != std::string::npos)
+						return false;
+					auto absolute = project->GetDirectory();
+					for (const auto& part : relative)
+					{
+						absolute /= part;
+						std::error_code ec;
+						const auto status = std::filesystem::symlink_status(absolute, ec);
+						if (ec && ec != std::errc::no_such_file_or_directory)
+							return false;
+						if (std::filesystem::is_symlink(status))
+							return false;
+					}
+					return true;
+				};
+				if (!safe(path) || !safe(output) || !safe("Cache/Textures", false) || FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(output)) != ".ktx2" || FileSystem::PathFromUtf8(path).lexically_normal() == FileSystem::PathFromUtf8(output).lexically_normal())
+					throw CommandError("use distinct source/output files under Assets/ without symlinks, with a .ktx2 output");
+				std::string error;
+				bool cacheHit = false;
+				if (!TextureCompression::Import(Project::ResolvePath(path), Project::ResolvePath(output), project->GetDirectory() / "Cache/Textures", OptionalBool(params, "srgb", true), cacheHit, error))
+					throw CommandError(error);
+				session.OnFileWritten(output);
+				return json{ { "path", output }, { "source", path }, { "cacheHit", cacheHit } };
 			});
 
 			Add(registry, "asset.write", "Writes a text asset (script, prefab, scene, animation graph...) to a project-relative path and reloads it. A .banimgraph is validated before replacing the file. A script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts').", Schema::Object({ { "path", Schema::String("string", true) }, { "content", Schema::String("string") } }, { "path", "content" }), [](AutomationSession& session, const json& params) {

@@ -58,7 +58,8 @@ target_link_libraries(Basalt
 		BasaltMiniaudio
 		BasaltCgltf
 		BasaltStb
-		meshoptimizer)
+		meshoptimizer
+		BasaltTextureCodecs)
 
 if(WIN32)
 	target_link_libraries(Basalt PRIVATE ws2_32)

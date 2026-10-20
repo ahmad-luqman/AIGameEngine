@@ -62,3 +62,41 @@ Legacy version-1 scene migrations retain the original fixed-timestep default sem
 the document to version 3. Move preparation may create a source sidecar; failed moves preserve that ID
 while restoring any scene, prefab and project documents they changed. Diagnostic path hints may name
 an earlier location until the next save; UUID resolution remains authoritative.
+
+
+## Compressed textures and extended glTF materials
+
+`asset.compress_texture {"path":"Assets/Textures/Wall.png","output":"Assets/Textures/Wall.ktx2","srgb":true}`
+authors a separate KTX2 asset containing desktop BC7 blocks and a complete mip chain. The source stays
+unchanged; point material/image references at the output to use it. Use `srgb:false` for normal and data
+maps. HDR input is rejected. Cache entries in `Cache/Textures/` are keyed by source contents, encoder
+version and color-space setting; changed sources/settings recompress, and unreadable cache entries are
+rebuilt. Outputs live under `Assets/` and export normally; caches are excluded. Re-run compression after
+editing a source. Imports reject symlink sources/output ancestors. Compression is explicit rather than
+an implicit mutation during loading.
+
+The headless loader accepts 2D KTX2 with native BC7, Basis ETC1S, or LDR UASTC (including Zstandard).
+Basis textures transcode to BC7 once on the asset worker; the renderer uploads supplied block mip levels
+without decoding to RGBA. GPUs without sampled BC7 support use an RGBA8 fallback. CPU thumbnails decode
+level zero. Arrays, cubemaps, 3D textures, HDR Basis, non-default orientation/swizzle and other native
+formats are rejected explicitly. Dimensions are limited to 16384 per side and compressed payloads to
+256 MiB. KTX2 texture color/data interpretation follows its material slot, like other textures.
+
+The glTF importer supports `KHR_texture_basisu`, `KHR_mesh_quantization`, `KHR_texture_transform`,
+`KHR_materials_emissive_strength`, `KHR_materials_clearcoat` and `KHR_materials_transmission`. Unknown
+required extensions fail with the extension name. Optional unknown extensions retain core fallbacks.
+Basis image sources work as external files, data URIs or GLB buffer views. Quantized accessors unpack
+through the same vertex path as floats. Texture transforms apply scale, rotation, then offset,
+independently for every map; UV0 and UV1 are supported (other coordinate sets fail import). Transformed
+alpha sampling is shared by lighting, depth, picking and masked shadows.
+
+Clearcoat has independent factor (R), roughness (G) and normal maps, over direct and image-based lighting.
+Transmission uses its factor times the transmission map's R channel, with metallic surfaces retaining
+reflection. It routes through stable back-to-front transparency, preserves reflected specular, and
+reduces diffuse coverage to reveal the destination. This is a thin-surface approximation: no refraction,
+volume absorption or roughness-dependent background blur. Transmissive meshes do not cast shadows and
+retain their full-detail, unreordered topology.
+
+Authored `Material` overrides expose `Clearcoat`, `ClearcoatRoughness`, `Transmission` in [0,1], the four
+extension map paths, and shared `UVOffset`, `UVScale`, `UVRotation` (radians). Their maps use UV0. All
+fields use the component registry for Lua, automation, disk persistence, inspector editing and undo.

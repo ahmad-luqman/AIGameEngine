@@ -53,10 +53,6 @@ The features most games need, roughly in order of impact.
   vectors from the depth prepass, history reprojection with neighbourhood clamping), which also
   stabilizes SSAO and specular shimmer. Builds on the post-process stack’s FXAA. MSAA is an option for
   the forward pass but complicates the SSAO prepass.
-- **glTF extensions — M.** `KHR_texture_transform`, `KHR_materials_emissive_strength`,
-  `KHR_materials_clearcoat`, `KHR_materials_transmission` (via the transparent pass),
-  `KHR_mesh_quantization`, `KHR_texture_basisu`. Unknown required extensions should fail the import with
-  a clear message.
 - **Reflection probes and SSR — L.** Local box-projected cubemap probes captured in the editor, then
   screen-space reflections for contact detail.
 - **Decals and text in 3D — L each.**
@@ -113,8 +109,7 @@ with a smoke test have shipped. Follow-ups:
 
 ### Asset pipeline
 
-- **Texture compression — M.** Import textures to KTX2 with BC7 (desktop) and keep the source; cuts VRAM
-  use and load time roughly 4x. Use `basisu` or `bc7enc` at import time, and cache the results.
+KTX2/BC7 texture compression and the session-8 glTF extensions have shipped; see `Docs/AssetPipeline.md`.
 
 ---
 

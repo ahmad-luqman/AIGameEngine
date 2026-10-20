@@ -390,6 +390,16 @@ namespace Basalt {
 		std::string MetallicRoughnessMap;
 		std::string OcclusionMap;
 		std::string EmissiveMap;
+		float Clearcoat = 0.0f;
+		float ClearcoatRoughness = 0.0f;
+		float Transmission = 0.0f;
+		std::string ClearcoatMap;
+		std::string ClearcoatRoughnessMap;
+		std::string ClearcoatNormalMap;
+		std::string TransmissionMap;
+		glm::vec2 UVOffset = glm::vec2(0);
+		glm::vec2 UVScale = glm::vec2(1);
+		float UVRotation = 0.0f; // Radians; shared by this override's textures.
 	};
 
 	// Light shining along the entity's forward axis (-Z). A scene may have several; only the primary one

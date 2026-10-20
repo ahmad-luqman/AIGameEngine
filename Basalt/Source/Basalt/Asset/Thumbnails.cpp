@@ -204,6 +204,17 @@ namespace Basalt {
 		uint32_t width = 0, height = 0;
 		if (source.Width == 0 || source.Height == 0 || maxSize == 0)
 			return {};
+		if (source.Format == TextureFormat::BC7)
+		{
+			std::string error;
+			auto decoded = source.DecodeRGBA8(error);
+			if (!decoded)
+			{
+				BS_CORE_WARN("BC7 thumbnail: {}", error);
+				return {};
+			}
+			return MakeImageThumbnail(*decoded, maxSize);
+		}
 		FitSize(source.Width, source.Height, maxSize, width, height);
 		if (source.Format == TextureFormat::RGBA8)
 			return DownsampleImage(source.Pixels, source.Width, source.Height, width, height);

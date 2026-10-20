@@ -35,7 +35,7 @@ namespace Basalt::MeshOptimizer {
 		auto& submesh = source.Submeshes[submeshIndex];
 		if (!submesh.LODs.empty() || !submesh.JointBounds.empty() || submesh.IndexCount < 12 || submesh.VertexCount == 0)
 			return;
-		if (submesh.MaterialIndex < source.Materials.size() && source.Materials[submesh.MaterialIndex].Alpha == AlphaMode::Blend)
+		if (submesh.MaterialIndex < source.Materials.size() && (source.Materials[submesh.MaterialIndex].Alpha == AlphaMode::Blend || source.Materials[submesh.MaterialIndex].Transmission > 0))
 			return;
 		std::vector<uint32_t> base(source.Indices.begin() + submesh.BaseIndex, source.Indices.begin() + submesh.BaseIndex + submesh.IndexCount);
 		const auto* positions = &source.Vertices[submesh.BaseVertex].Position.x;

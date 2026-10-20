@@ -672,6 +672,18 @@ namespace Basalt {
 			r.AssetField("MetallicRoughnessMap", c.MetallicRoughnessMap);
 			r.AssetField("OcclusionMap", c.OcclusionMap);
 			r.AssetField("EmissiveMap", c.EmissiveMap);
+			r.Field("Clearcoat", c.Clearcoat);
+			r.Field("ClearcoatRoughness", c.ClearcoatRoughness);
+			r.Field("Transmission", c.Transmission);
+			r.AssetField("ClearcoatMap", c.ClearcoatMap);
+			r.AssetField("ClearcoatRoughnessMap", c.ClearcoatRoughnessMap);
+			r.AssetField("ClearcoatNormalMap", c.ClearcoatNormalMap);
+			r.AssetField("TransmissionMap", c.TransmissionMap);
+			r.Field("UVOffset", c.UVOffset);
+			r.Field("UVScale", c.UVScale);
+			r.Field("UVRotation", c.UVRotation);
+			if (c.Clearcoat < 0 || c.Clearcoat > 1 || c.ClearcoatRoughness < 0 || c.ClearcoatRoughness > 1 || c.Transmission < 0 || c.Transmission > 1)
+				throw std::runtime_error("Material Clearcoat, ClearcoatRoughness and Transmission must be in [0,1]");
 		}
 
 		void Fields(FieldReader& r, DirectionalLightComponent& c)
@@ -1235,6 +1247,17 @@ namespace Basalt {
 				{ "MetallicRoughnessMap", c.MetallicRoughnessMap },
 				{ "OcclusionMap", c.OcclusionMap },
 				{ "EmissiveMap", c.EmissiveMap },
+				{ "Clearcoat", c.Clearcoat },
+				{ "ClearcoatRoughness", c.ClearcoatRoughness },
+				{ "Transmission", c.Transmission },
+				{ "ClearcoatMap", c.ClearcoatMap },
+				{ "ClearcoatRoughnessMap", c.ClearcoatRoughnessMap },
+				{ "ClearcoatNormalMap", c.ClearcoatNormalMap },
+				{ "TransmissionMap", c.TransmissionMap },
+				{ "UVOffset", ToJson(c.UVOffset) },
+				{ "UVScale", ToJson(c.UVScale) },
+				{ "UVRotation", c.UVRotation },
+
 			};
 		}
 

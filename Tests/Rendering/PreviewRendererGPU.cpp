@@ -2,6 +2,8 @@
 #include "GPUFixture.h"
 
 #include <Basalt/Asset/AssetManager.h>
+#include <Basalt/Asset/TextureCompression.h>
+#include "../Source/TestUtils.h"
 #include <Basalt/Asset/ImageUtils.h>
 #include <Basalt/Core/FileSystem.h>
 #include <Basalt/Project/Project.h>
@@ -135,5 +137,82 @@ TEST_CASE("Previews frame models, prefabs and materials under the studio lightin
 	DebugDraw::Clear();
 	AssetManager::Clear();
 	Project::SetActive(nullptr);
+	CHECK(graphics->GetValidationErrorCount() == 0);
+}
+
+TEST_CASE("BC7 mip upload and material extensions render with validation")
+{
+	auto graphics = CreateTestGraphics();
+	BasaltTest::TempDirectory temp("MaterialExtensionsGPU");
+	std::string error;
+	TextureSource source;
+	source.Width = 16;
+	source.Height = 16;
+	source.Pixels.resize(16 * 16 * 4);
+	for (size_t i = 0; i < source.Pixels.size(); i += 4)
+	{
+		source.Pixels[i] = 190;
+		source.Pixels[i + 1] = 30;
+		source.Pixels[i + 2] = 50;
+		source.Pixels[i + 3] = 255;
+	}
+	const auto png = temp.GetPath() / "color.png", ktx = temp.GetPath() / "color.ktx2";
+	REQUIRE(WritePng(png, source.Pixels, source.Width, source.Height, error));
+	bool hit = false;
+	REQUIRE(TextureCompression::Import(png, ktx, temp.GetPath() / "Cache", true, hit, error));
+	PreviewRenderer previews(graphics->GetDevice());
+	REQUIRE(previews.Initialize());
+	MaterialComponent material;
+	material.Roughness = 0.45f;
+	material.AlbedoMap = FileSystem::PathToUtf8(png);
+	const auto original = Made(previews.RenderMaterial(material, error), error);
+	material.AlbedoMap = FileSystem::PathToUtf8(ktx);
+	const auto compressed = Made(previews.RenderMaterial(material, error), error);
+	CHECK(Difference(At(original, 64, 64), At(compressed, 64, 64)) < 12);
+	material.Clearcoat = 1;
+	material.ClearcoatRoughness = 0.05f;
+	const auto coat = Made(previews.RenderMaterial(material, error), error);
+	Save(coat, "Clearcoat.png");
+	size_t different = 0;
+	for (size_t i = 0; i < coat.Pixels.size(); i++)
+		if (std::abs(int(coat.Pixels[i]) - int(compressed.Pixels[i])) > 3)
+			different++;
+	CHECK(different > 100);
+	material.Transmission = 1;
+	material.Metallic = 0;
+	const auto glass = Made(previews.RenderMaterial(material, error), error);
+	Save(glass, "Transmission.png");
+	CHECK(Difference(At(coat, 64, 64), At(glass, 64, 64)) > 20);
+	// A red-channel-zero transmission map restores the opaque coated result.
+	material.TransmissionMap = FileSystem::PathToUtf8(temp.GetPath() / "zero.png");
+	std::fill(source.Pixels.begin(), source.Pixels.end(), uint8_t(0));
+	REQUIRE(WritePng(temp.GetPath() / "zero.png", source.Pixels, source.Width, source.Height, error));
+	const auto zeroTransmission = Made(previews.RenderMaterial(material, error), error);
+	material.Transmission = 0.01f;
+	CHECK(bool(Made(previews.RenderMaterial(material, error), error).Pixels == zeroTransmission.Pixels));
+	CHECK(Difference(At(zeroTransmission, 64, 64), At(coat, 64, 64)) < 8);
+	// Constant UV transforms select opposite halves of an emissive image.
+	for (size_t i = 0; i < source.Pixels.size(); i += 4)
+	{
+		const bool left = (i / 4) % 16 < 8;
+		source.Pixels[i] = left ? 255 : 0;
+		source.Pixels[i + 1] = left ? 0 : 255;
+		source.Pixels[i + 2] = 0;
+		source.Pixels[i + 3] = 255;
+	}
+	REQUIRE(WritePng(temp.GetPath() / "split.png", source.Pixels, source.Width, source.Height, error));
+	material = MaterialComponent{};
+	material.AlbedoColor = { 0, 0, 0, 1 };
+	material.EmissiveColor = { 1, 1, 1 };
+	material.EmissiveIntensity = 0.5f;
+	material.EmissiveMap = FileSystem::PathToUtf8(temp.GetPath() / "split.png");
+	material.UVScale = glm::vec2(0);
+	material.UVOffset = { .25f, .5f };
+	const auto left = Made(previews.RenderMaterial(material, error), error);
+	material.UVOffset.x = .75f;
+	const auto right = Made(previews.RenderMaterial(material, error), error);
+	CHECK(At(left, 64, 64).R > At(left, 64, 64).G + 80);
+	CHECK(At(right, 64, 64).G > At(right, 64, 64).R + 80);
+	AssetManager::Clear();
 	CHECK(graphics->GetValidationErrorCount() == 0);
 }

@@ -7,12 +7,13 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include <array>
 #include <string>
 #include <vector>
 
 namespace Basalt {
 
-	// Interleaved vertex layout shared by all meshes and the renderer (80 bytes).
+	// Interleaved vertex layout shared by all meshes and the renderer (88 bytes).
 	struct Vertex
 	{
 		glm::vec3 Position = { 0.0f, 0.0f, 0.0f };
@@ -22,14 +23,24 @@ namespace Basalt {
 		glm::vec2 TexCoord = { 0.0f, 0.0f };
 		glm::uvec4 Joints = glm::uvec4(0);
 		glm::vec4 Weights = glm::vec4(0.0f);
+		glm::vec2 TexCoord1 = { 0.0f, 0.0f };
 	};
-	static_assert(sizeof(Vertex) == 80);
+	static_assert(sizeof(Vertex) == 88);
 
 	enum class AlphaMode
 	{
 		Opaque = 0,
 		Mask,
 		Blend
+	};
+
+	// Per-texture affine UV transform and source coordinate set (glTF KHR_texture_transform).
+	struct TextureTransform
+	{
+		glm::vec2 Offset = glm::vec2(0);
+		glm::vec2 Scale = glm::vec2(1);
+		float Rotation = 0;
+		uint32_t TexCoord = 0;
 	};
 
 	// Material imported with a mesh (glTF metallic-roughness). Texture fields are texture asset keys
@@ -50,6 +61,18 @@ namespace Basalt {
 		std::string MetallicRoughnessMap;
 		std::string OcclusionMap;
 		std::string EmissiveMap;
+		float Clearcoat = 0.0f;
+		float ClearcoatRoughness = 0.0f;
+		float Transmission = 0.0f;
+		float NormalScale = 1.0f;
+		float OcclusionStrength = 1.0f;
+		float ClearcoatNormalScale = 1.0f;
+		std::string ClearcoatMap;
+		std::string ClearcoatRoughnessMap;
+		std::string ClearcoatNormalMap;
+		std::string TransmissionMap;
+		// Albedo, normal, metallic/roughness, occlusion, emissive, coat, coat roughness, coat normal, transmission.
+		std::array<TextureTransform, 9> TextureTransforms;
 	};
 
 	// Bind-space influence bounds. Homogeneous weight sums retain conservative bounds even when

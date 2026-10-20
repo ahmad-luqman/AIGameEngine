@@ -119,6 +119,36 @@ namespace Basalt {
 
 	nvrhi::TextureHandle RenderResources::CreateTexture(const TextureSource& source, bool srgb, const char* debugName, nvrhi::ICommandList* commandList)
 	{
+		if (source.Format == TextureFormat::BC7)
+		{
+			const auto format = srgb ? nvrhi::Format::BC7_UNORM_SRGB : nvrhi::Format::BC7_UNORM;
+			const auto required = nvrhi::FormatSupport::Texture | nvrhi::FormatSupport::ShaderSample;
+			if ((m_Device->queryFormatSupport(format) & required) != required)
+			{
+				std::string error;
+				auto decoded = source.DecodeRGBA8(error);
+				if (!decoded)
+				{
+					BS_CORE_ERROR("BC7 fallback '{}': {}", debugName, error);
+					return nullptr;
+				}
+				return CreateTexture(*decoded, srgb, debugName, commandList);
+			}
+			nvrhi::TextureDesc compressed;
+			compressed.width = source.Width;
+			compressed.height = source.Height;
+			compressed.mipLevels = static_cast<uint32_t>(source.MipOffsets.size());
+			compressed.format = format;
+			compressed.debugName = debugName;
+			compressed.initialState = nvrhi::ResourceStates::ShaderResource;
+			compressed.keepInitialState = true;
+			auto texture = m_Device->createTexture(compressed);
+			if (!texture)
+				return nullptr;
+			for (uint32_t mip = 0; mip < compressed.mipLevels; mip++)
+				commandList->writeTexture(texture, 0, mip, source.Pixels.data() + source.MipOffsets[mip], size_t((std::max(1u, source.Width >> mip) + 3) / 4) * 16);
+			return texture;
+		}
 		// HDR images are stored as half floats: RGBA32F is not filterable on every GPU, and half precision
 		// covers the dynamic range of environment maps.
 		const bool isFloat = source.Format == TextureFormat::RGBA32F;

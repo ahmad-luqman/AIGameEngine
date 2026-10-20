@@ -1446,6 +1446,16 @@ function BasaltScript:StopAllCoroutines() end
 ---@field MetallicRoughnessMap string
 ---@field OcclusionMap string
 ---@field EmissiveMap string
+---@field Clearcoat number
+---@field ClearcoatRoughness number
+---@field Transmission number
+---@field ClearcoatMap string
+---@field ClearcoatRoughnessMap string
+---@field ClearcoatNormalMap string
+---@field TransmissionMap string
+---@field UVOffset number[]
+---@field UVScale number[]
+---@field UVRotation number
 
 ---DirectionalLight data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
 ---@class DirectionalLightComponent

@@ -15,10 +15,12 @@ layout(location = 1) out uint o_EntityId;
 // View-space normal for SSAO.
 layout(location = 0) out vec4 o_Normal;
 
+layout(location = 5) in vec2 v_TexCoord1;
+
 void main()
 {
 	MaterialData material = u_Materials.Materials[v_InstanceIndices.x];
-	Surface surface = EvaluateSurface(material, v_Normal, v_Tangent, v_TexCoord, gl_FrontFacing);
+	Surface surface = EvaluateSurface(material, v_Normal, v_Tangent, v_TexCoord, v_TexCoord1, v_WorldPosition, gl_FrontFacing);
 	if (material.Params.z > 0.0 && surface.Alpha < material.Params.z)
 		discard;
 #ifdef BASALT_PICKING

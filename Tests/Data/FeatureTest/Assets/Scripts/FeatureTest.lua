@@ -160,6 +160,16 @@ local function TestEntities(self)
 		holder:Destroy()
 	end
 
+	local coated = Scene.CreateEntity("MaterialExtensionsProbe")
+	coated:AddComponent("Material", { Clearcoat = 0.8, ClearcoatRoughness = 0.2, Transmission = 0.6,
+		UVOffset = { 0.1, 0.2 }, UVScale = { 2, 3 }, UVRotation = 0.5,
+		ClearcoatMap = "Assets/Textures/Checker.png", ClearcoatRoughnessMap = "Assets/Textures/Checker.png",
+		ClearcoatNormalMap = "Assets/Textures/Checker.png", TransmissionMap = "Assets/Textures/Checker.png" })
+	local coat = coated:GetComponent("Material")
+	Check("Material extensions round trip", Near(coat.Clearcoat, 0.8, 1e-6) and Near(coat.ClearcoatRoughness, 0.2, 1e-6) and Near(coat.Transmission, 0.6, 1e-6) and coat.UVRotation == 0.5 and coat.UVScale[1] == 2 and coat.UVOffset[2] > 0.19 and coat.TransmissionMap == "Assets/Textures/Checker.png")
+	ExpectError("Material transmission range", function() coated:SetComponent("Material", { Transmission = 2 }) end, "[0,1]")
+	coated:Destroy()
+
 	local rig = Scene.FindEntityByName("AnimationRig")
 	Check("GetAnimationClips", #rig:GetAnimationClips() == 3)
 	Check("GetAnimationDuration", rig:GetAnimationDuration() == 2)

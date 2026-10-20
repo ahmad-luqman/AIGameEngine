@@ -14,10 +14,11 @@ namespace Basalt {
 	{
 		RGBA8 = 0,
 		// 32-bit float RGBA, used for HDR environment maps.
-		RGBA32F
+		RGBA32F,
+		BC7
 	};
 
-	// Decoded pixels of an image asset (top row first). GPU textures are created by the renderer.
+	// CPU image pixels (top row first) or BC7 mip blocks. The renderer creates GPU textures.
 	class TextureSource
 	{
 	public:
@@ -26,6 +27,9 @@ namespace Basalt {
 		TextureFormat Format = TextureFormat::RGBA8;
 		std::vector<uint8_t> Pixels;
 		std::string Key;
+		// BC7 levels are concatenated in Pixels; offsets include the base level.
+		std::vector<size_t> MipOffsets;
+		bool SRGB = false;
 
 		// Refresh after mutating payload vectors; asset loads do this before publishing.
 		void UpdateMemoryUsage();
@@ -34,11 +38,13 @@ namespace Basalt {
 		MemoryAllocation m_Memory;
 
 	public:
-		size_t GetBytesPerPixel() const { return Format == TextureFormat::RGBA8 ? 4 : 16; }
+		size_t GetBytesPerPixel() const { return Format == TextureFormat::BC7 ? 0 : (Format == TextureFormat::RGBA8 ? 4 : 16); }
 
-		// PNG, JPEG, TGA, BMP (RGBA8) and Radiance .hdr (RGBA32F). Returns nullptr and sets outError on failure.
+		// PNG/JPEG/TGA/BMP (RGBA8), Radiance HDR (RGBA32F), KTX2 (BC7). Reports failures through outError.
 		static Ref<TextureSource> LoadFromFile(const std::filesystem::path& path, std::string& outError);
 		static Ref<TextureSource> LoadFromMemory(const uint8_t* data, size_t size, std::string& outError);
+		// Returns an RGBA8 copy of BC7 level zero for CPU consumers and GPU fallback.
+		Ref<TextureSource> DecodeRGBA8(std::string& outError) const;
 		static Ref<TextureSource> CreateSolid(uint32_t rgba, const std::string& key);
 	};
 

@@ -1,7 +1,8 @@
-// Image decoding (PNG, JPEG, TGA, BMP, HDR) from memory, as used for textures and embedded glTF images.
+// Image decoding (PNG, JPEG, TGA, BMP, HDR, KTX2) from memory, as used for textures and embedded glTF images.
 #include "FuzzCommon.h"
 
 #include <Basalt/Asset/TextureSource.h>
+#include <Basalt/Asset/TextureCompression.h>
 
 #include <stb_image.h>
 
@@ -20,6 +21,13 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 	int channels = 0;
 	if (stbi_info_from_memory(data, static_cast<int>(size), &width, &height, &channels) && int64_t{ width } * height > MaxFuzzPixels)
 		return 0;
+
+	if (Basalt::TextureCompression::IsKTX2(data, size) && size >= 28)
+	{
+		auto read = [](const uint8_t* p) { return uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24); };
+		if (uint64_t(read(data + 20)) * read(data + 24) > MaxFuzzPixels)
+			return 0;
+	}
 
 	std::string error;
 	Basalt::TextureSource::LoadFromMemory(data, size, error);

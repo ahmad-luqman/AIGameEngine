@@ -1,6 +1,7 @@
 #include "Basalt/Asset/TextureSource.h"
 
 #include "Basalt/Core/FileSystem.h"
+#include "Basalt/Asset/TextureCompression.h"
 
 #include <stb_image.h>
 
@@ -10,7 +11,7 @@ namespace Basalt {
 
 	void TextureSource::UpdateMemoryUsage()
 	{
-		m_Memory.Resize(sizeof(TextureSource) + Pixels.capacity());
+		m_Memory.Resize(sizeof(TextureSource) + Pixels.capacity() + MipOffsets.capacity() * sizeof(size_t));
 	}
 
 	namespace {
@@ -37,6 +38,9 @@ namespace Basalt {
 			outError = "empty or oversized image data";
 			return nullptr;
 		}
+
+		if (TextureCompression::IsKTX2(data, size))
+			return TextureCompression::LoadKTX2(data, size, outError);
 
 		if (HasInvalidBmpHeight(data, size))
 		{
