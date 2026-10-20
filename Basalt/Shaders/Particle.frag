@@ -1,7 +1,11 @@
 #version 450
 #include "Common.glsl"
+#include "PBR.glsl"
+#include "LightClusters.glsl"
+layout(set = 0, binding = 5) uniform textureCube u_IrradianceMap;
+layout(set = 0, binding = 9) uniform sampler u_LinearSampler;
 
-// Unlit: the color is linear HDR radiance; exposure and tonemapping follow in the tonemap pass.
+// Unlit color is linear HDR radiance; optional two-sided diffuse lighting scales it; exposure and tonemapping follow in the tonemap pass.
 
 layout(set = 1, binding = 1) uniform texture2D u_ParticleTexture;
 layout(set = 1, binding = 2) uniform sampler u_ParticleSampler;
@@ -29,18 +33,25 @@ void main()
 	{
 		// Two-sided diffuse billboards: smoke receives light from either side, without a specular lobe.
 		vec3 normal = normalize(u_View.InverseView[2].xyz);
-		vec3 lighting = u_View.AmbientColor.rgb;
-		if (u_View.Sun.Direction.w > 0.5) lighting += u_View.Sun.Color.rgb * abs(dot(normal, -u_View.Sun.Direction.xyz));
-		for (uint i = 0u; i < uint(u_View.EnvironmentParams.w); ++i)
+		vec3 lighting = u_View.AmbientColor.rgb + texture(samplerCube(u_IrradianceMap, u_LinearSampler), RotateY(normal, -u_View.EnvironmentParams.x)).rgb * u_View.AmbientColor.w;
+		if (u_View.Sun.Direction.w > 0.5) lighting += u_View.Sun.Color.rgb / PI * abs(dot(normal, -normalize(u_View.Sun.Direction.xyz)));
+		bool clustered = u_View.ClusterGrid.w != 0u;
+		uint count = uint(u_View.EnvironmentParams.w), offset = 0u;
+		if (clustered) {
+			uvec2 tile = min(uvec2(gl_FragCoord.xy / u_View.ViewportSize.xy * vec2(u_View.ClusterGrid.xy)), u_View.ClusterGrid.xy-1u);
+			uint slice = ClusterSlice(u_View.ClusterDepths, -(u_View.View * vec4(v_Position,1)).z, u_View.ClusterGrid.z);
+			offset = ClusterListOffset(ClusterIndex(uvec3(tile,slice),u_View.ClusterGrid.xyz)); count = u_Lights.ClusterWords[offset];
+		}
+		for (uint i = 0u; i < count; ++i)
 		{
-			LightData light = u_Lights.Lights[i];
+			LightData light = u_Lights.Lights[clustered ? u_Lights.ClusterWords[offset+1u+i] : i];
 			vec3 delta = light.Position.xyz - v_Position;
 			float distance = length(delta);
 			vec3 direction = delta / max(distance, 0.0001);
-			float attenuation = pow(clamp(1.0 - pow(distance / max(light.Position.w, 0.0001), 4.0), 0.0, 1.0), 2.0) / max(distance * distance, 0.01);
-			if (light.Color.w == LIGHT_TYPE_DIRECTIONAL) { direction = -light.Direction.xyz; attenuation = 1.0; }
-			else if (light.Color.w == LIGHT_TYPE_SPOT) attenuation *= smoothstep(light.Direction.w, max(light.Direction.w + 0.0001, light.Params.x), dot(-direction, light.Direction.xyz));
-			lighting += light.Color.rgb * attenuation * abs(dot(normal, direction));
+			float attenuation = RangeAttenuation(distance, light.Position.w);
+			if (light.Color.w == LIGHT_TYPE_DIRECTIONAL) { direction = -normalize(light.Direction.xyz); attenuation = 1.0; }
+			else if (light.Color.w == LIGHT_TYPE_SPOT) attenuation *= smoothstep(light.Direction.w, max(light.Direction.w + 0.0001, light.Params.x), dot(-direction, normalize(light.Direction.xyz)));
+			lighting += light.Color.rgb * attenuation / PI * abs(dot(normal, direction));
 		}
 		o_Color.rgb *= lighting;
 	}

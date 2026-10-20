@@ -36,7 +36,8 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   automation commands and the editor inspector. Adding a component = one registry entry (see the
   `basalt-add-component` skill).
 - **Runtime state lives in systems.** `PhysicsWorld`, `ScriptEngine`, `AudioSystem`, `AnimationSystem` and `ParticleSystem` exist
-  only while a scene plays (physics, animation and particles also while it simulates) and key their state by entity
+  only while a scene plays (physics, animation and particles also while it simulates; particles additionally
+  have an isolated edit-mode Preview system) and key their state by entity
   UUID; they react to EnTT component signals. `UIInteraction` (widget hover, hold and focus) exists only in Play
   and re-reads the widgets every frame. Gameplay random streams (Lua's random numbers, particle
   emitters and runtime entity UUIDs) are seeded from the session's seed, `Scene::GetRandomSeed` (the project's `RandomSeed`).

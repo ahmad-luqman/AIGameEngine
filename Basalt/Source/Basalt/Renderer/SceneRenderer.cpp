@@ -124,6 +124,7 @@ namespace Basalt {
 		constexpr uint32_t ParticleBufferSlot = 0;
 		constexpr uint32_t ParticleTextureSlot = 1;
 		constexpr uint32_t ParticleSamplerSlot = 2;
+		constexpr uint32_t ParticleDepthSlot = 3;
 
 		// GPU profiler passes (debug markers too), in recording order. Unscoped so the values index the
 		// profiler's pass list directly; the names below must match the order.
@@ -717,7 +718,7 @@ namespace Basalt {
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(ParticleBufferSlot),
 			nvrhi::BindingLayoutItem::Texture_SRV(ParticleTextureSlot),
 			nvrhi::BindingLayoutItem::Sampler(ParticleSamplerSlot),
-			nvrhi::BindingLayoutItem::Texture_SRV(3),
+			nvrhi::BindingLayoutItem::Texture_SRV(ParticleDepthSlot),
 		};
 		impl.ParticleLayout = device->createBindingLayout(particleDesc);
 
@@ -1851,7 +1852,7 @@ namespace Basalt {
 		}
 
 		// --- Particles ----------------------------------------------------------------------------
-		// Only a running scene has a particle system. Batches outside the view frustum are not drawn.
+		// A running scene or the editor's isolated preview supplies particles. Batches outside the view frustum are not drawn.
 		std::vector<ParticleDraw>& particleDraws = impl.ParticleDraws;
 		particleDraws.clear();
 		impl.ParticleData.Clear();
@@ -1901,7 +1902,7 @@ namespace Basalt {
 														   .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(ParticleBufferSlot, impl.ParticleBuffer))
 														   .addItem(nvrhi::BindingSetItem::Texture_SRV(ParticleTextureSlot, particleTexture))
 														   .addItem(nvrhi::BindingSetItem::Sampler(ParticleSamplerSlot, impl.LinearClamp))
-														   .addItem(nvrhi::BindingSetItem::Texture_SRV(3, impl.ParticleDepth)),
+														   .addItem(nvrhi::BindingSetItem::Texture_SRV(ParticleDepthSlot, impl.ParticleDepth)),
 													   impl.ParticleLayout);
 				// Reported once per failure episode: a later failure (after a set was created) reports again.
 				if (!entry.Set && !impl.ReportedParticleSetFailure)
@@ -2141,7 +2142,8 @@ namespace Basalt {
 			}
 		}
 
-		if (!particleDraws.empty())
+		// Lighting keeps the scene depth attached, so soft particles sample a separate copy.
+		if (std::any_of(impl.ParticleData.Particles.begin(), impl.ParticleData.Particles.end(), [](const GpuParticle& p) { return p.Effects.y > 0.0f; }))
 			commandList->copyTexture(impl.ParticleDepth, nvrhi::TextureSlice(), m_DepthTexture, nvrhi::TextureSlice());
 
 		// --- Lighting (opaque), skybox, transparent -----------------------------------------------

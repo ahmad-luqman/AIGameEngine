@@ -356,6 +356,7 @@ namespace Basalt {
 				schema->EnumOptions = collector.GetEnumOptions();
 				schema->Default = Write(element);
 				BS_CORE_ASSERT(schema->UniqueField.empty() || (schema->FieldTypes.contains(schema->UniqueField) && schema->FieldTypes.at(schema->UniqueField).Kind == ComponentFieldKind::String), "UniqueField must name a string field");
+				BS_CORE_ASSERT(schema->NormalizedTimeField.empty() || (schema->FieldTypes.contains(schema->NormalizedTimeField) && schema->FieldTypes.at(schema->NormalizedTimeField).Kind == ComponentFieldKind::Number && schema->FieldTypes.at(schema->NormalizedTimeField).Count == 0), "NormalizedTimeField must name a scalar number field");
 				return schema;
 			}();
 			return s_Schema;
@@ -920,8 +921,8 @@ namespace Basalt {
 			r.Field("SoftDistance", c.SoftDistance);
 			r.Field("Lit", c.Lit);
 			r.Field("Preview", c.Preview);
-			r.ListField("SizeCurve", c.SizeCurve, 16);
-			r.ListField("ColorCurve", c.ColorCurve, 16);
+			r.ListField("SizeCurve", c.SizeCurve, ParticleEmitterComponent::MaxCurveKeys);
+			r.ListField("ColorCurve", c.ColorCurve, ParticleEmitterComponent::MaxCurveKeys);
 			r.EnumField("Blend", c.Blend, s_ParticleBlendNames);
 			r.Field("Texture", c.Texture);
 		}
@@ -1371,7 +1372,6 @@ namespace Basalt {
 				{ "HighPass", c.HighPass },
 				{ "Echo", c.Echo },
 				{ "Distortion", c.Distortion },
-
 			};
 		}
 
@@ -1420,8 +1420,8 @@ namespace Basalt {
 				{ "SoftDistance", c.SoftDistance },
 				{ "Lit", c.Lit },
 				{ "Preview", c.Preview },
-				{ "SizeCurve", [&] { json a = json::array(); for (const auto& k : c.SizeCurve) a.push_back(Write(k)); return a; }() },
-				{ "ColorCurve", [&] { json a = json::array(); for (const auto& k : c.ColorCurve) a.push_back(Write(k)); return a; }() },
+				{ "SizeCurve", ListToJson(c.SizeCurve) },
+				{ "ColorCurve", ListToJson(c.ColorCurve) },
 				{ "Blend", EnumName(s_ParticleBlendNames, c.Blend) },
 				{ "Texture", c.Texture },
 			};
@@ -1640,11 +1640,7 @@ namespace Basalt {
 
 		std::string Validate(const AudioReverbZoneComponent& c)
 		{
-			if (!IsFiniteInRange(c.Radius, 0.001f, 1e6f))
-				return "Radius must be in [0.001,1000000]";
-			if (!IsFiniteInRange(c.BlendDistance, 0.0f, c.Radius))
-				return "BlendDistance must be in [0,Radius]";
-			return ValidateAudioReverb({ c.RoomSize, c.Damping, c.Width });
+			return ValidateAudioReverbZone(c);
 		}
 		std::string Validate(const AudioSourceComponent& source)
 		{

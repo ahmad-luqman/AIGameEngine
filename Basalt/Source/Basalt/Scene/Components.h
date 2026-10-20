@@ -714,7 +714,8 @@ namespace Basalt {
 	};
 
 	// Spherical room centered at the entity's world position. Radius and BlendDistance are world units,
-	// unaffected by scale. The highest priority containing zone wins (lowest UUID breaks ties).
+	// unaffected by scale. Zones blend inward from their boundary over lower priorities; lowest UUID
+	// blends last on ties. Room settings are each 0..1 and containment follows the listener.
 	struct AudioReverbZoneComponent
 	{
 		bool Enabled = true;
@@ -783,6 +784,7 @@ namespace Basalt {
 	{
 		// Largest MaxParticles and BurstCount.
 		static constexpr uint32_t MaxParticlesLimit = 10000;
+		static constexpr uint32_t MaxCurveKeys = 16;
 		// Shortest and longest Duration and lifetime (s). The longest keeps a particle's age advancing at
 		// small time steps (float precision) and its motion far from overflow.
 		static constexpr float MinTime = 1e-3f;
@@ -837,12 +839,12 @@ namespace Basalt {
 		// Billboard width and height (m) at birth and at death.
 		float StartSize = 0.2f;
 		float EndSize = 0.2f;
-		// Random multipliers sampled once at birth; defaults preserve existing emitters.
+		// Multipliers sampled once at birth; 1 means no variation. Color channels 0..1 only darken or fade.
 		float StartSizeMin = 1.0f;
 		float StartSizeMax = 1.0f;
 		glm::vec4 StartColorMin{ 1.0f };
 		glm::vec4 StartColorMax{ 1.0f };
-		// Radians in C++, degrees in JSON/Lua.
+		// Roll about the view axis: radians and radians/s in C++, degrees and degrees/s in JSON/Lua.
 		float RotationMin = 0.0f;
 		float RotationMax = 0.0f;
 		float AngularVelocityMin = 0.0f;
@@ -850,8 +852,11 @@ namespace Basalt {
 		// Nonempty curves replace Start/End interpolation; random birth multipliers still apply.
 		std::vector<ParticleSizeKey> SizeCurve;
 		std::vector<ParticleColorKey> ColorCurve;
+		// Fade distance against opaque depth in world units; 0 disables soft intersections.
 		float SoftDistance = 0.0f;
+		// Two-sided diffuse ambient/IBL and direct lighting, without shadows or specular highlights.
 		bool Lit = false;
+		// Editor-only playback independent of PlayOnStart; toggle off/on to restart a completed cycle.
 		bool Preview = false;
 		ParticleBlendMode Blend = ParticleBlendMode::Alpha;
 		// Project-relative texture (sRGB color, alpha = coverage); empty uses a built-in soft disc.

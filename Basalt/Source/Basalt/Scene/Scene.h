@@ -227,6 +227,7 @@ namespace Basalt {
 		AudioSystem* GetAudioSystem() const { return m_AudioSystem.get(); }
 		// Null in Edit mode; owned by the current Play/Simulate session.
 		AnimationSystem* GetAnimationSystem() const { return m_AnimationSystem.get(); }
+		// Session particles, or the isolated edit preview created by UpdateParticlePreview.
 		ParticleSystem* GetParticleSystem() const { return m_ParticleSystem ? m_ParticleSystem.get() : m_ParticlePreview.get(); }
 		// Advances only particles marked Preview, without running scripts, audio or physics.
 		void UpdateParticlePreview(Timestep ts);

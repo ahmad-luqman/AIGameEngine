@@ -599,3 +599,52 @@ TEST_CASE("Soft lit particles sample copied depth across projection and target c
 	graphics->WaitIdle();
 	CHECK(graphics->GetValidationErrorCount() == 0);
 }
+
+TEST_CASE("Lit particle diffuse uses bounded light attenuation and receives skylight irradiance")
+{
+	auto graphics = CreateTestGraphics();
+	Scene scene;
+	scene.GetRendererSettings().SSAOEnabled = false;
+	scene.GetRendererSettings().ShadowsEnabled = false;
+	scene.GetRendererSettings().AmbientColor = glm::vec3(0);
+	scene.GetRendererSettings().Tonemap = Tonemapper::None;
+	auto sky = scene.CreateEntity("Sky");
+	auto& skyLight = sky.AddComponent<SkyLightComponent>();
+	skyLight.Intensity = 0;
+	skyLight.ShowBackground = false;
+	auto light = scene.CreateEntity("Point");
+	light.GetTransform().Translation.z = 0.1f;
+	light.AddComponent<PointLightComponent>().Intensity = 0.1f;
+	auto emitter = scene.CreateEntity("Diffuse particle");
+	auto& c = emitter.AddComponent<ParticleEmitterComponent>();
+	c.PlayOnStart = false;
+	c.Rate = 0;
+	c.SpeedMin = c.SpeedMax = 0;
+	c.StartSize = c.EndSize = 2;
+	c.StartColor = c.EndColor = glm::vec4(1);
+	c.Lit = true;
+	scene.OnRuntimeStart();
+	REQUIRE(scene.GetParticleSystem()->Emit(emitter, 1) == 1);
+	RenderCamera camera;
+	camera.Position = { 0, 0, 5 };
+	camera.View = glm::lookAtRH(camera.Position, glm::vec3(0), glm::vec3(0, 1, 0));
+	camera.Projection = glm::orthoRH_ZO(-2.0f, 2.0f, -2.0f, 2.0f, 0.1f, 20.0f);
+	camera.Far = 20;
+	SceneRenderer renderer(graphics->GetDevice());
+	REQUIRE(renderer.Initialize());
+	renderer.SetViewportSize(64, 64);
+	const auto near = Capture(renderer, scene, camera);
+	const size_t center = (32 * 64 + 32) * 4;
+	// 0.1 radiance / PI with the shared near-unity attenuation is about 48 in display sRGB.
+	CHECK(near[center] > 25);
+	CHECK(near[center] < 75);
+	light.GetComponent<PointLightComponent>().Intensity = 0;
+	const auto dark = Capture(renderer, scene, camera);
+	CHECK(dark[center] < 3);
+	skyLight.Intensity = 1;
+	const auto ambient = Capture(renderer, scene, camera);
+	CHECK(ambient[center] > dark[center] + 10);
+	scene.OnRuntimeStop();
+	graphics->WaitIdle();
+	CHECK(graphics->GetValidationErrorCount() == 0);
+}

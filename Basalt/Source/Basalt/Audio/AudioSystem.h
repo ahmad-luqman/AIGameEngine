@@ -80,7 +80,7 @@ namespace Basalt {
 		bool IsStreaming(Entity entity) const;
 		// Fire-and-forget sound at a world position (non-spatial when position is null). Always decoded whole.
 		// False without an audio engine, and false, logging why, when the clip cannot load, volume is not a
-		// finite number >= 0 or bus is outside the enum.
+		// finite number >= 0, bus is outside the enum, or an effect option is invalid.
 		bool PlayOneShot(const std::string& clip, const glm::vec3* position, float volume = 1.0f, AudioBus bus = AudioBus::SFX, const AudioOneShotOptions& options = {});
 
 		// Linear gain of a bus (0 = silent, 1 = unchanged, above 1 amplifies). A sound's level is its own volume
@@ -90,10 +90,12 @@ namespace Basalt {
 		// 0 (logged) for a bus outside the enum.
 		float GetBusVolume(AudioBus bus) const;
 
-		// The room every bus's reverb simulates. Returns false, logging why and changing nothing, when a setting is
+		// Sets the session baseline over which listener-position zones blend. Returns false, logging why and changing nothing, when a setting is
 		// outside 0..1 or not finite.
 		bool SetReverb(const AudioReverbSettings& reverb);
+		// Effective room after zone blending; SetReverb patches use the separate session baseline.
 		const AudioReverbSettings& GetReverb() const { return m_Reverb; }
+		const AudioReverbSettings& GetBaseReverb() const { return m_BaseReverb; }
 
 		// The Doppler pitch factor of the entity's sound, from the positions, velocities and factor the last update gave
 		// miniaudio (the shift its next mix applies): 1 = unshifted, also while it is not playing (never played,
@@ -168,7 +170,9 @@ namespace Basalt {
 		// they turn on or off.
 		void ApplyEffects(Voice& voice, Entity entity, const AudioSourceComponent& source);
 		void ConfigureEffects(Voice& voice, const AudioSourceComponent& source, std::string_view name);
+		// Fold containing zones over the session baseline in deterministic priority order.
 		void UpdateReverbZones();
+		// Publish the effective room to each bus, without changing the session baseline.
 		void ApplyReverb(const AudioReverbSettings& settings);
 		// The reverb of a bus, created on first use; null when it cannot be created (logged once per bus), and
 		// without a log when the bus itself failed or there is no engine.
@@ -189,6 +193,7 @@ namespace Basalt {
 		std::array<bool, AudioBusCount> m_ReverbFailed = {};
 		AudioReverbSettings m_Reverb;
 		AudioReverbSettings m_BaseReverb;
+		std::unordered_map<UUID, std::string> m_ReportedZoneProblems;
 		std::unordered_map<UUID, std::unique_ptr<Voice>> m_Sources;
 		// Sources loaded by Start that BeginPlayback has not started yet (see BeginPlayback).
 		std::unordered_set<UUID> m_PendingStarts;

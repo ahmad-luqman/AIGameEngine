@@ -12,7 +12,11 @@ namespace Basalt {
 	struct SourceEffectsNode
 	{
 		ma_node_base Base;
+		// Owned after successful Init; Uninit releases it after the graph stops using the node.
 		SourceEffectsState* State = nullptr;
+		SourceEffectsNode() = default;
+		SourceEffectsNode(const SourceEffectsNode&) = delete;
+		SourceEffectsNode& operator=(const SourceEffectsNode&) = delete;
 	};
 	ma_result SourceEffectsNodeInit(ma_node_graph* graph, uint32_t channels, uint32_t sampleRate, SourceEffectsNode* node);
 	void SourceEffectsNodeUninit(SourceEffectsNode* node, const ma_allocation_callbacks* callbacks);

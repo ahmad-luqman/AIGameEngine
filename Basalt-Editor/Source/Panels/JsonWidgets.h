@@ -37,8 +37,9 @@ namespace Basalt {
 
 	// Applies one edit to a JSON array of `type`'s elements; false (array unchanged) when it does not apply: an
 	// index out of range, a move past either end, or growing past type.MaxCount. An added or duplicated element
-	// gets a fresh value of the schema's UniqueField ("Walk 2").
-	bool EditJsonList(nlohmann::json& array, JsonListEdit edit, size_t index, const ComponentFieldType& type);
+	// gets a fresh value of the schema's UniqueField ("Walk 2"). Timed lists insert into a free interval;
+	// insertedIndex receives the actual new slot so tree state follows it. Moves retain the ordered times.
+	bool EditJsonList(nlohmann::json& array, JsonListEdit edit, size_t index, const ComponentFieldType& type, size_t* insertedIndex = nullptr);
 
 	// Draws a List field as a tree: one node per element (labelled by its Name or Clip) holding the element's fields,
 	// with move and remove buttons per element (duplicate and the rest in its context menu) and an Add button.

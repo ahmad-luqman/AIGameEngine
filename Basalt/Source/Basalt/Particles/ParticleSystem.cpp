@@ -363,7 +363,7 @@ namespace Basalt {
 			particle.Position = world ? glm::vec3(emitterTransform * glm::vec4(position, 1.0f)) : position;
 			particle.Velocity = velocityToStored * (direction * speed + component.Velocity);
 			particle.Lifetime = lifetime;
-			// Preserve the old random stream when the new ranges are constant.
+			// Constant ranges draw no random numbers, so emitters without variation retain their sequence.
 			auto sample = [&](float a, float b) { return a == b ? a : emitter.Rng.Range(a, b); };
 			particle.SizeScale = sample(component.StartSizeMin, component.StartSizeMax);
 			for (int c = 0; c < 4; ++c)
@@ -557,7 +557,7 @@ namespace Basalt {
 				};
 				const float size = evaluate(component.SizeCurve, glm::mix(component.StartSize, component.EndSize, t)) * particle.SizeScale;
 				largestSize = std::max(largestSize, size);
-				out.Particles.push_back({ glm::vec4(position, size), evaluate(component.ColorCurve, glm::mix(component.StartColor, component.EndColor, t)) * particle.ColorScale, glm::vec4(particle.Rotation + particle.AngularVelocity * particle.Age, component.SoftDistance, component.Lit ? 1.0f : 0.0f, 0.0f) });
+				out.Particles.push_back({ glm::vec4(position, size), evaluate(component.ColorCurve, glm::mix(component.StartColor, component.EndColor, t)) * particle.ColorScale, glm::vec4(static_cast<float>(std::remainder(static_cast<double>(particle.Rotation) + static_cast<double>(particle.AngularVelocity) * particle.Age, glm::two_pi<double>())), component.SoftDistance, component.Lit ? 1.0f : 0.0f, 0.0f) });
 				batch.Bounds.Expand(position);
 			}
 			batch.Bounds.Min -= glm::vec3(largestSize * HalfDiagonal);

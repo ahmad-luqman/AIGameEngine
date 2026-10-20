@@ -29,7 +29,7 @@ namespace Basalt {
 		glm::vec4 Effects;      // rotation (radians), soft distance, lit, unused
 	};
 	static_assert(std::is_standard_layout_v<GpuParticle>, "offsetof needs a standard-layout type");
-	static_assert(sizeof(GpuParticle) == 48 && offsetof(GpuParticle, PositionSize) == 0 && offsetof(GpuParticle, Color) == 16, "GpuParticle must match the std430 ParticleData struct");
+	static_assert(sizeof(GpuParticle) == 48 && offsetof(GpuParticle, PositionSize) == 0 && offsetof(GpuParticle, Color) == 16 && offsetof(GpuParticle, Effects) == 32, "GpuParticle must match the std430 ParticleData struct");
 
 	// The live particles of one emitter, sorted back to front, as a range of ParticleRenderData::Particles.
 	struct ParticleBatch
@@ -72,7 +72,8 @@ namespace Basalt {
 	};
 
 	// Simulates the ParticleEmitterComponents of a running scene on the CPU. Exists while the scene plays or
-	// simulates; particles are runtime state, keyed by entity UUID, and never written back to the scene.
+	// simulates, or in an isolated edit preview of Preview emitters. Particles are keyed by entity UUID
+	// and never written back to the scene.
 	//
 	// Determinism: each emitter draws from its own Random, seeded from the session's seed
 	// (Scene::GetRandomSeed, the project's RandomSeed) and the emitter's registration order: scene emitters
@@ -90,7 +91,8 @@ namespace Basalt {
 		ParticleSystem& operator=(const ParticleSystem&) = delete;
 
 		// Registers the scene's emitters and starts the ones with PlayOnStart. Emitters added later register
-		// themselves (EnTT signals), as removed or destroyed ones unregister.
+		// themselves (EnTT signals), as removed or destroyed ones unregister. Preview mode uses Preview instead
+		// of PlayOnStart.
 		void Start();
 		// Ages and moves particles, then emits (bursts and rate) from playing emitters.
 		void Update(Timestep ts);

@@ -83,6 +83,7 @@ namespace Basalt {
 			float Doppler = 0.0f;
 			float LowPass = 0.0f;
 			float ReverbSend = 0.0f;
+			float HighPass = 0.0f, Echo = 0.0f, Distortion = 0.0f;
 		};
 
 		EffectValues SanitizeEffects(const AudioSourceComponent& source, float sampleRate)
@@ -96,6 +97,12 @@ namespace Basalt {
 				values.LowPass = std::min(source.LowPass, MaxAudioLowPassRateFraction * sampleRate);
 			if (IsValidAudioReverbSend(source.ReverbSend))
 				values.ReverbSend = source.ReverbSend;
+			if (IsValidAudioLowPass(source.HighPass))
+				values.HighPass = std::min(source.HighPass, MaxAudioLowPassRateFraction * sampleRate);
+			if (IsFiniteInRange(source.Echo, 0, 1))
+				values.Echo = source.Echo;
+			if (IsFiniteInRange(source.Distortion, 0, 1))
+				values.Distortion = source.Distortion;
 			return values;
 		}
 
@@ -297,7 +304,7 @@ namespace Basalt {
 			return true;
 		}
 
-		// Routes the sound through the low-pass and, with a reverb, the send to it. The chain is built from the bus
+		// Routes the sound through the combined effects stage, low-pass and reverb send. The chain is built from the bus
 		// backwards, and only connections that change are made: re-attaching an output briefly unlinks it in
 		// miniaudio, which could cost the voice a block. Attaching replaces an output's previous connection, so the
 		// old path plays until the new one exists; stages that drop out are detached afterwards so the graph stops
@@ -584,7 +591,7 @@ namespace Basalt {
 		source.Distortion = options.Distortion;
 		if (const auto problem = ValidateAudioEffects(source); !problem.empty())
 		{
-			BS_CORE_ERROR("Audio: cannot play one-shot: {}", problem);
+			BS_CORE_ERROR("Audio: cannot play one-shot '{}': {}", clip, problem);
 			return false;
 		}
 		if (!IsValidAudioVolume(volume))
@@ -608,7 +615,7 @@ namespace Basalt {
 		ConfigureEffects(*voice, source, clip);
 		if (const auto result = ma_sound_start(voice->Sound.get()); result != MA_SUCCESS)
 		{
-			BS_CORE_ERROR("Audio: cannot start one-shot ({})", ma_result_description(result));
+			BS_CORE_ERROR("Audio: cannot start one-shot '{}' ({})", clip, ma_result_description(result));
 			return false;
 		}
 		m_OneShots.push_back(std::move(voice));
@@ -639,9 +646,9 @@ namespace Basalt {
 		const EffectValues effects = SanitizeEffects(source, static_cast<float>(ma_engine_get_sample_rate(engine)));
 		voice.SetDopplerFactor(effects.Doppler);
 
-		const float highPass = IsValidAudioLowPass(source.HighPass) ? std::min(source.HighPass, MaxAudioLowPassRateFraction * static_cast<float>(ma_engine_get_sample_rate(engine))) : 0.0f;
-		const float echo = IsFiniteInRange(source.Echo, 0.0f, 1.0f) ? source.Echo : 0.0f;
-		const float distortion = IsFiniteInRange(source.Distortion, 0.0f, 1.0f) ? source.Distortion : 0.0f;
+		const float highPass = effects.HighPass;
+		const float echo = effects.Echo;
+		const float distortion = effects.Distortion;
 		if (!voice.Effects.Node && !voice.Effects.Failed && (highPass > 0.0f || echo > 0.0f || distortion > 0.0f))
 		{
 			voice.Effects.Node = CreateNode<SourceEffectsHandle>([&](SourceEffectsNode* node) { return SourceEffectsNodeInit(ma_engine_get_node_graph(engine), ma_node_get_output_channels(voice.Sound.get(), 0), ma_engine_get_sample_rate(engine), node); }, fmt::format("source effects for '{}'", name), "the sound plays dry");
@@ -649,7 +656,7 @@ namespace Basalt {
 		}
 		if (voice.Effects.Node)
 			SourceEffectsNodeSet(voice.Effects.Node.get(), highPass, echo, distortion);
-		voice.EchoTail = echo > 0.0f;
+		voice.EchoTail = echo > 0.0f && voice.Effects.Node;
 		const bool lowPass = effects.LowPass > 0.0f && voice.UpdateLowPass(engine, effects.LowPass, name);
 		// A failed send never creates its bus's reverb.
 		Reverb* reverb = effects.ReverbSend > 0.0f && !voice.Send.Failed && voice.Out.Bus ? GetReverbNode(*voice.Out.Bus) : nullptr;
@@ -690,31 +697,49 @@ namespace Basalt {
 
 	void AudioSystem::UpdateReverbZones()
 	{
-		AudioReverbSettings result = m_BaseReverb;
-		const AudioReverbZoneComponent* best = nullptr;
-		uint64_t bestID = 0;
-		float weight = 0.0f;
+		struct ZoneBlend
+		{
+			const AudioReverbZoneComponent* Zone;
+			uint64_t ID;
+			float Weight;
+		};
+		std::vector<ZoneBlend> blends;
+		std::unordered_set<UUID> seen;
 		auto zones = m_Scene->GetAllEntitiesWith<AudioReverbZoneComponent, IDComponent>();
 		for (auto handle : zones)
 		{
-			const auto& z = zones.get<AudioReverbZoneComponent>(handle);
-			if (!z.Enabled || !IsFiniteInRange(z.Radius, 0.001f, 1e6f) || !IsFiniteInRange(z.BlendDistance, 0.0f, z.Radius) || !ValidateAudioReverb({ z.RoomSize, z.Damping, z.Width }).empty())
+			const auto& zone = zones.get<AudioReverbZoneComponent>(handle);
+			const UUID id = zones.get<IDComponent>(handle).ID;
+			if (!zone.Enabled)
 				continue;
-			const float distance = glm::length(glm::vec3(m_Scene->GetWorldTransform(Entity(handle, m_Scene))[3]) - m_ListenerPosition);
-			if (!std::isfinite(distance) || distance >= z.Radius)
+			seen.insert(id);
+			const glm::vec3 center(m_Scene->GetWorldTransform(Entity(handle, m_Scene))[3]);
+			std::string problem = ValidateAudioReverbZone(zone);
+			if (problem.empty() && !IsUsablePosition(center))
+				problem = "world position is not finite or exceeds the audio coordinate limit";
+			if (!problem.empty())
+			{
+				if (m_ReportedZoneProblems[id] != problem)
+					BS_CORE_ERROR("Audio: the AudioReverbZone of '{}' is ignored: {}", Entity(handle, m_Scene).GetName(), problem);
+				m_ReportedZoneProblems[id] = std::move(problem);
 				continue;
-			const uint64_t id = zones.get<IDComponent>(handle).ID;
-			if (best && (z.Priority < best->Priority || (z.Priority == best->Priority && id >= bestID)))
+			}
+			m_ReportedZoneProblems.erase(id);
+			const float distance = glm::length(center - m_ListenerPosition);
+			if (distance >= zone.Radius)
 				continue;
-			best = &z;
-			bestID = id;
-			weight = z.BlendDistance > 0.0f ? std::clamp((z.Radius - distance) / z.BlendDistance, 0.0f, 1.0f) : 1.0f;
+			const float weight = zone.BlendDistance > 0.0f ? std::clamp((zone.Radius - distance) / zone.BlendDistance, 0.0f, 1.0f) : 1.0f;
+			blends.push_back({ &zone, static_cast<uint64_t>(id), weight });
 		}
-		if (best)
+		std::erase_if(m_ReportedZoneProblems, [&](const auto& entry) { return !seen.contains(entry.first); });
+		// Higher priorities fade over the room below them, so entering their outer edge cannot jump to the baseline.
+		std::sort(blends.begin(), blends.end(), [](const ZoneBlend& a, const ZoneBlend& b) { return a.Zone->Priority != b.Zone->Priority ? a.Zone->Priority < b.Zone->Priority : a.ID > b.ID; });
+		AudioReverbSettings result = m_BaseReverb;
+		for (const auto& blend : blends)
 		{
-			result.RoomSize = glm::mix(result.RoomSize, best->RoomSize, weight);
-			result.Damping = glm::mix(result.Damping, best->Damping, weight);
-			result.Width = glm::mix(result.Width, best->Width, weight);
+			result.RoomSize = glm::mix(result.RoomSize, blend.Zone->RoomSize, blend.Weight);
+			result.Damping = glm::mix(result.Damping, blend.Zone->Damping, blend.Weight);
+			result.Width = glm::mix(result.Width, blend.Zone->Width, blend.Weight);
 		}
 		if (result != m_Reverb)
 			ApplyReverb(result);
@@ -813,7 +838,8 @@ namespace Basalt {
 
 		AudioEngine::AdvanceDeviceless(seconds);
 
-		// Release finished one-shots. Sources stay registered (and report !IsPlaying) until stopped.
+		// Echo one-shots retain a three-second tail: 12 repeats at 0.35 feedback fall below -100 dB.
+		// Sources stay registered (and report !IsPlaying) until stopped.
 		std::erase_if(m_OneShots, [seconds](const std::unique_ptr<Voice>& voice) {
 			if (!ma_sound_at_end(voice->Sound.get()))
 				return false;

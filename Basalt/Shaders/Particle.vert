@@ -3,7 +3,7 @@
 
 // Camera-facing particle billboards, pulled from a storage buffer: six vertices (two triangles) per
 // particle, no vertex buffer. Set 1 (see SceneRenderer.cpp, keep in sync): 0 particles (SSBO),
-// 1 texture, 2 sampler. u_Push.DrawIndex holds the batch's first particle.
+// 1 texture, 2 sampler, 3 opaque depth copy. u_Push.DrawIndex holds the batch's first particle.
 
 struct ParticleData
 {
@@ -35,7 +35,7 @@ void main()
 	vec3 up = u_View.InverseView[1].xyz;
 	vec3 position = particle.PositionSize.xyz + (right * corner.x + up * corner.y) * particle.PositionSize.w;
 	gl_Position = u_View.ViewProjection * vec4(position, 1.0);
-	// Texture (0, 0) is the top-left texel, so the billboard's top edge (corner.y = 0.5) maps to v = 0.
+	// Texture (0, 0) is the top-left texel, so the billboard's top edge (uvCorner.y = 0.5) maps to v = 0.
 	v_TexCoord = vec2(uvCorner.x + 0.5, 0.5 - uvCorner.y);
 	v_Color = particle.Color;
 	v_Position = position;

@@ -700,7 +700,7 @@ namespace Basalt {
 		m_StepFrames = 0;
 		m_PhysicsWorld = CreateScope<PhysicsWorld>(this);
 		m_PhysicsWorld->Start();
-		// Particles preview in simulation too (PlayOnStart emitters); nothing else can play them there.
+		// Simulate plays PlayOnStart emitters and replaces the isolated edit preview.
 		m_ParticlePreview.reset();
 		m_ParticleSystem = CreateScope<ParticleSystem>(this);
 		m_AnimationSystem = CreateScope<AnimationSystem>(*this);

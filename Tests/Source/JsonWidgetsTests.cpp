@@ -190,26 +190,43 @@ TEST_SUITE("Editor")
 	}
 }
 
-TEST_CASE("Curve list edits preserve existing times and keep inserted keys strictly ordered")
+TEST_SUITE("Editor")
 {
-	const auto& type = ComponentRegistry::Find("ParticleEmitter")->FieldTypes.at("SizeCurve");
-	json list = json::array();
-	REQUIRE(EditJsonList(list, JsonListEdit::Add, 0, type));
-	REQUIRE(EditJsonList(list, JsonListEdit::Add, 0, type));
-	CHECK(list[0]["Time"] == 0);
-	CHECK(list[1]["Time"] == 1);
-	list[0]["Value"] = 2;
-	list[1]["Value"] = 4;
-	REQUIRE(EditJsonList(list, JsonListEdit::Duplicate, 0, type));
-	CHECK(list[1]["Time"] == 0.5);
-	CHECK(list[1]["Value"] == 2);
-	REQUIRE(EditJsonList(list, JsonListEdit::MoveDown, 1, type));
-	CHECK(list[1]["Time"] == 0.5);
-	CHECK(list[1]["Value"] == 4);
-	CHECK(list[2]["Value"] == 2);
-	while (list.size() < type.MaxCount)
+	TEST_CASE("Curve list edits preserve existing times and keep inserted keys strictly ordered")
+	{
+		const auto& type = ComponentRegistry::Find("ParticleEmitter")->FieldTypes.at("SizeCurve");
+		json list = json::array();
 		REQUIRE(EditJsonList(list, JsonListEdit::Add, 0, type));
-	CHECK_FALSE(EditJsonList(list, JsonListEdit::Add, 0, type));
-	for (size_t i = 1; i < list.size(); ++i)
-		CHECK(list[i]["Time"].get<float>() > list[i - 1]["Time"].get<float>());
+		REQUIRE(EditJsonList(list, JsonListEdit::Add, 0, type));
+		CHECK(list[0]["Time"] == 0);
+		CHECK(list[1]["Time"] == 1);
+		list[0]["Value"] = 2;
+		list[1]["Value"] = 4;
+		REQUIRE(EditJsonList(list, JsonListEdit::Duplicate, 0, type));
+		CHECK(list[1]["Time"] == 0.5);
+		CHECK(list[1]["Value"] == 2);
+		REQUIRE(EditJsonList(list, JsonListEdit::MoveDown, 1, type));
+		CHECK(list[1]["Time"] == 0.5);
+		CHECK(list[1]["Value"] == 4);
+		CHECK(list[2]["Value"] == 2);
+		while (list.size() < type.MaxCount)
+			REQUIRE(EditJsonList(list, JsonListEdit::Add, 0, type));
+		CHECK_FALSE(EditJsonList(list, JsonListEdit::Add, 0, type));
+		for (size_t i = 1; i < list.size(); ++i)
+			CHECK(list[i]["Time"].get<float>() > list[i - 1]["Time"].get<float>());
+	}
+
+	TEST_CASE("Duplicating a middle curve key prefers its following interval and reports its actual slot")
+	{
+		const auto& type = ComponentRegistry::Find("ParticleEmitter")->FieldTypes.at("SizeCurve");
+		json list = { { { "Time", 0 }, { "Value", 1 } }, { { "Time", 0.5 }, { "Value", 2 } }, { { "Time", 0.6 }, { "Value", 3 } }, { { "Time", 1 }, { "Value", 4 } } };
+		size_t inserted = 99;
+		REQUIRE(EditJsonList(list, JsonListEdit::Duplicate, 2, type, &inserted));
+		CHECK(inserted == 3);
+		CHECK(list[3]["Time"] == doctest::Approx(0.8));
+		CHECK(list[3]["Value"] == 3);
+		REQUIRE(EditJsonList(list, JsonListEdit::Add, 0, type, &inserted));
+		CHECK(inserted == 1);
+		CHECK(list[1]["Time"] == doctest::Approx(0.25));
+	}
 }

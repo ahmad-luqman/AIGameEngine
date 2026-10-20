@@ -255,7 +255,7 @@ namespace Basalt {
 		return result;
 	}
 
-	bool EditJsonList(nlohmann::json& array, JsonListEdit edit, size_t index, const ComponentFieldType& type)
+	bool EditJsonList(nlohmann::json& array, JsonListEdit edit, size_t index, const ComponentFieldType& type, size_t* insertedIndex)
 	{
 		if (!array.is_array() || !type.Element)
 			return false;
@@ -266,6 +266,7 @@ namespace Basalt {
 		nlohmann::json original = array;
 		if (!ApplyListEdit(array, edit, index, type.Element->Default))
 			return false;
+		size_t actualAdded = grows ? AddedIndex(array, edit, index) : 0;
 		if (!timeField.empty())
 		{
 			if (grows)
@@ -292,7 +293,7 @@ namespace Basalt {
 							const float left = i ? array[i - 1].at(timeField).get<float>() : 0.0f;
 							const float right = i < array.size() ? array[i].at(timeField).get<float>() : 1.0f;
 							const float middle = (left + right) * 0.5f;
-							if (middle > left && middle < right && right - left > gap)
+							if (middle > left && middle < right && (right - left > gap || (edit == JsonListEdit::Duplicate && i == index + 1)))
 							{
 								gap = right - left;
 								insert = i;
@@ -308,6 +309,7 @@ namespace Basalt {
 						}
 					}
 				}
+				actualAdded = insert;
 				key[timeField] = time;
 				array.insert(array.begin() + static_cast<nlohmann::json::difference_type>(insert), std::move(key));
 			}
@@ -316,7 +318,9 @@ namespace Basalt {
 					array[i][timeField] = original[i][timeField];
 		}
 		if (grows && !type.Element->UniqueField.empty())
-			MakeUnique(array, AddedIndex(array, edit, index), type.Element->UniqueField);
+			MakeUnique(array, actualAdded, type.Element->UniqueField);
+		if (insertedIndex && grows)
+			*insertedIndex = actualAdded;
 		return true;
 	}
 
@@ -412,9 +416,16 @@ namespace Basalt {
 				nlohmann::json open = nlohmann::json::array();
 				for (size_t i = 0; i < before; i++)
 					open.push_back(storage->GetInt(ElementNodeID(i), 0));
-				if (EditJsonList(array, pending->first, pending->second, type))
+				size_t inserted = 0;
+				if (EditJsonList(array, pending->first, pending->second, type, &inserted))
 				{
-					[[maybe_unused]] const bool moved = ApplyListEdit(open, pending->first, pending->second, 0);
+					const bool grows = pending->first == JsonListEdit::Add || pending->first == JsonListEdit::Duplicate;
+					if (grows)
+					{
+						const nlohmann::json state = pending->first == JsonListEdit::Duplicate ? open[pending->second] : nlohmann::json(0);
+						open.insert(open.begin() + static_cast<std::ptrdiff_t>(inserted), state);
+					}
+					[[maybe_unused]] const bool moved = grows || ApplyListEdit(open, pending->first, pending->second, 0);
 					BS_ASSERT(moved && open.size() == array.size(), "open states follow the edit the list accepted");
 					for (size_t i = 0; i < std::max(before, open.size()); i++)
 						storage->SetInt(ElementNodeID(i), i < open.size() ? open[i].get<int>() : 0);

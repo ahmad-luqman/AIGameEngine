@@ -1090,14 +1090,14 @@ end
 
 - `Audio.PlayOneShot(clip [, position [, volume [, bus [, options]]]]])` — fire and forget, on `bus` (default `"SFX"`);
   3D when a position is given (pass `nil` to skip it). Returns false when the clip cannot be loaded or
-  audio is unavailable. One-shots are never streamed. `options` accepts numeric `LowPass`, `ReverbSend`, `HighPass`, `Echo` and `Distortion` values with the same ranges as AudioSource. Unknown/non-numeric options raise an error; invalid ranges return false with a log. Effects are fixed for that one-shot, and echo voices retain a bounded three-second tail.
+  audio is unavailable. One-shots are never streamed. `options` accepts numeric `LowPass`, `ReverbSend`, `HighPass`, `Echo` and `Distortion` values with the same ranges as AudioSource. Unknown/non-numeric, non-finite, or numbers outside float range raise an error; invalid ranges return false with a log. Effects are fixed for that one-shot, and echo voices retain a bounded three-second tail.
 - `Audio.SetBusVolume(bus, volume)`, `Audio.GetBusVolume(bus)` — `bus` is `"Master"`, `"Music"`, `"SFX"` or
   `"UI"`; `volume` is a linear gain like `Volume`. `SetBusVolume` returns true, or false (logged) if the bus
   could not be created.
 - An unknown bus name or a volume that is negative or not finite raises an error, as does any `Audio.*`
   call outside play ("audio is not running").
 
-`AudioReverbZone` defines a spherical room at its entity's world position (`Radius` 0.001..1e6 world units, independent of transform scale). `BlendDistance` (0..Radius) fades inward from its boundary. The containing enabled zone with highest `Priority` wins; lowest entity UUID wins ties. Its `RoomSize`, `Damping`, `Width` (0..1) blend with the baseline from `Audio.SetReverb`, which is restored outside all zones. Zones change room settings, not source send levels.
+`AudioReverbZone` defines a spherical room at its entity's world position (`Radius` 0.001..1e6 world units, independent of transform scale). `BlendDistance` (0..Radius) fades inward from its boundary. Containing enabled zones blend in increasing `Priority` order (descending UUID on ties), so higher priorities and lower UUIDs fade over the room beneath them. Their `RoomSize`, `Damping`, `Width` (0..1) blend over the baseline from `Audio.SetReverb`, which is restored outside all zones. Partial `SetReverb` patches always read this baseline; `Audio.GetReverb` reports the effective room after zone blending. Zones change room settings, not source send levels.
 
 `HighPass` removes low frequencies (6 dB/octave, 0 disables, otherwise 10..20000 Hz capped below output Nyquist). `Echo` (0..1) mixes a 250 ms delay with 0.35 feedback. `Distortion` (0..1) blends soft clipping with the dry signal. Parameters glide over about 10 ms; the order is high-pass, distortion, echo, low-pass, reverb send.
 
@@ -1114,7 +1114,7 @@ end
   - `Audio.SetReverb({ RoomSize = 0.85, Damping = 0.1, Width = 1 })` patches the given settings (each 0
     to 1: larger rooms ring longer, damping dulls the tail, width spreads it in stereo). Unknown or
     non-string keys, non-numbers and values outside 0..1 raise an error, and nothing changes.
-  - `Audio.GetReverb()` returns the current settings as a table.
+  - `Audio.GetReverb()` returns the effective zone-blended settings as a table. Partial `SetReverb` calls patch the session baseline, including fields untouched by a zone.
   The reverb handles mono and stereo output at 22.05 to 176.4 kHz: on other devices (surround) the sends
   are dropped (logged once per bus) and the sounds play dry.
 - *Doppler* (`Doppler`): pitch rises while a source and the listener approach each other and falls as

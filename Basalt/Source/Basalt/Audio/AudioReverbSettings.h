@@ -5,7 +5,7 @@
 namespace Basalt {
 
 	// The room the reverb simulates (Freeverb's parameters, each 0..1). One setting for the whole play session:
-	// every bus's reverb uses it, so a script changes it as the listener moves between spaces.
+	// every bus's reverb uses the effective blend of the scripted baseline and listener-position zones.
 	struct AudioReverbSettings
 	{
 		// Larger rooms ring longer.

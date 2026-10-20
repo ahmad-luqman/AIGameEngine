@@ -1163,7 +1163,7 @@ namespace Basalt {
 			const glm::vec3 position(world[3]);
 			const bool selected = m_Session.IsSelected(entity.GetUUID());
 
-			if (selected)
+			if (selected && options.AudioGizmos)
 				if (const auto* zone = entity.TryGetComponent<AudioReverbZoneComponent>(); zone && zone->Enabled && std::isfinite(zone->Radius) && zone->Radius > 0.0f)
 				{
 					DebugDraw::Sphere(position, zone->Radius, s_SelectionColor);

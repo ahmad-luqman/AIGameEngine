@@ -1013,10 +1013,13 @@ namespace Basalt {
 				{
 					for (const auto& pair : *options)
 					{
-						if (!pair.first.is<std::string>() || !pair.second.is<float>())
-							throw sol::error("Audio.PlayOneShot: options must contain named numeric effect values");
+						if (!pair.first.is<std::string>() || pair.second.get_type() != sol::type::number)
+							throw std::runtime_error("Audio.PlayOneShot: options must contain named numeric effect values");
 						const std::string name = pair.first.as<std::string>();
-						const float value = pair.second.as<float>();
+						const double number = pair.second.as<double>();
+						if (!std::isfinite(number) || std::abs(number) > static_cast<double>(std::numeric_limits<float>::max()))
+							throw std::runtime_error("Audio.PlayOneShot: effect options must be finite float values");
+						const float value = static_cast<float>(number);
 						if (name == "LowPass")
 							effects.LowPass = value;
 						else if (name == "ReverbSend")
@@ -1028,7 +1031,7 @@ namespace Basalt {
 						else if (name == "Distortion")
 							effects.Distortion = value;
 						else
-							throw sol::error("Audio.PlayOneShot: unknown effect option '" + name + "'");
+							throw std::runtime_error("Audio.PlayOneShot: unknown effect option '" + name + "'");
 					}
 				}
 				return RequireAudio(context).PlayOneShot(clip, positionPointer, gain, target, effects);
@@ -1042,7 +1045,7 @@ namespace Basalt {
 			audio["SetReverb"] = [&context](const sol::table& settings) {
 				AudioSystem& system = RequireAudio(context);
 				// ReadReverbSettings raises an error for anything SetReverb refuses today; this catches a rule it adds later.
-				if (!system.SetReverb(ReadReverbSettings(settings, system.GetReverb())))
+				if (!system.SetReverb(ReadReverbSettings(settings, system.GetBaseReverb())))
 					throw std::runtime_error("Audio.SetReverb: the reverb was not changed (see the log)");
 			};
 			audio["GetReverb"] = [&context](sol::this_state state) {

@@ -4,6 +4,8 @@
 #include <Basalt/Audio/AudioRules.h>
 #include <Basalt/Audio/AudioSystem.h>
 #include <Basalt/Audio/LowPassNode.h>
+#include <Basalt/Audio/SourceEffectsNode.h>
+#include <Basalt/Scripting/ScriptEngine.h>
 #include <Basalt/Core/Log.h>
 #include <Basalt/Physics/PhysicsWorld.h>
 #include <Basalt/Scene/ComponentRegistry.h>
@@ -1927,78 +1929,226 @@ TEST_SUITE("Audio")
 	}
 }
 
-TEST_CASE("Audio polish one-shots filter, distort and retain echo tails")
+TEST_SUITE("Audio")
 {
-	BasaltTest::TempProject project("AudioPolish");
-	project.WriteFile("Assets/Audio/Tone.wav", MakeWav(1.0f, 48000, 100));
-	project.WriteFile("Assets/Audio/Short.wav", MakeWav(0.04f, 48000, 100));
-	HeadlessAudio engine;
-	auto level = [&](AudioOneShotOptions options) {
+	TEST_CASE("Audio polish one-shots filter, distort and retain echo tails")
+	{
+		BasaltTest::TempProject project("AudioPolish");
+		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(1.0f, 48000, 100));
+		project.WriteFile("Assets/Audio/Short.wav", MakeWav(0.04f, 48000, 100));
+		HeadlessAudio engine;
+		auto level = [&](AudioOneShotOptions options) {
+			Scene scene;
+			scene.OnRuntimeStart();
+			REQUIRE(scene.GetAudioSystem()->PlayOneShot("Assets/Audio/Tone.wav", nullptr, 1, AudioBus::SFX, options));
+			Mix(0.2f);
+			const float value = Rms(Mix(0.1f));
+			scene.OnRuntimeStop();
+			return value;
+		};
+		const float dry = level({});
+		CHECK(dry > 0.01f);
+		CHECK(level({ .HighPass = 2000 }) < dry * 0.1f);
+		CHECK(level({ .Distortion = 1 }) > dry * 2);
 		Scene scene;
 		scene.OnRuntimeStart();
-		REQUIRE(scene.GetAudioSystem()->PlayOneShot("Assets/Audio/Tone.wav", nullptr, 1, AudioBus::SFX, options));
-		Mix(0.2f);
-		const float value = Rms(Mix(0.1f));
+		auto* audio = scene.GetAudioSystem();
+		CHECK_FALSE(audio->PlayOneShot("Assets/Audio/Tone.wav", nullptr, 1, AudioBus::SFX, { .Echo = -1 }));
+		CHECK_FALSE(audio->PlayOneShot("Assets/Audio/Tone.wav", nullptr, 1, AudioBus::SFX, { .HighPass = std::numeric_limits<float>::infinity() }));
+		REQUIRE(audio->PlayOneShot("Assets/Audio/Short.wav", nullptr, 1, AudioBus::SFX, { .LowPass = 1000, .Echo = 1 }));
+		CHECK_FALSE(audio->HasReverb(AudioBus::SFX));
+		Mix(0.1f);
+		audio->Update(0.1f);
+		CHECK(audio->GetActiveSoundCount() == 1);
+		Mix(0.05f);
+		CHECK(Rms(Mix(0.04f)) > 0.005f);
+		audio->Update(3.1f);
+		CHECK(audio->GetActiveSoundCount() == 0);
 		scene.OnRuntimeStop();
-		return value;
-	};
-	const float dry = level({});
-	CHECK(dry > 0.01f);
-	CHECK(level({ .HighPass = 2000 }) < dry * 0.1f);
-	CHECK(level({ .Distortion = 1 }) > dry * 2);
-	Scene scene;
-	scene.OnRuntimeStart();
-	auto* audio = scene.GetAudioSystem();
-	CHECK_FALSE(audio->PlayOneShot("Assets/Audio/Tone.wav", nullptr, 1, AudioBus::SFX, { .Echo = -1 }));
-	CHECK_FALSE(audio->PlayOneShot("Assets/Audio/Tone.wav", nullptr, 1, AudioBus::SFX, { .HighPass = std::numeric_limits<float>::infinity() }));
-	REQUIRE(audio->PlayOneShot("Assets/Audio/Short.wav", nullptr, 1, AudioBus::SFX, { .LowPass = 1000, .ReverbSend = 0.2f, .Echo = 1 }));
-	CHECK(audio->HasReverb(AudioBus::SFX));
-	Mix(0.1f);
-	audio->Update(0.1f);
-	CHECK(audio->GetActiveSoundCount() == 1);
-	Mix(0.15f);
-	CHECK(Rms(Mix(0.04f)) > 0.005f);
-	audio->Update(3.1f);
-	CHECK(audio->GetActiveSoundCount() == 0);
-	scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Reverb zones blend, prioritize, restore the baseline and reject bad values")
+	{
+		HeadlessAudio engine;
+		Scene scene;
+		auto listener = scene.CreateEntity("Listener");
+		listener.AddComponent<AudioListenerComponent>();
+		auto zone = scene.CreateEntityWithUUID(UUID(100), "Zone");
+		auto& z = zone.AddComponent<AudioReverbZoneComponent>();
+		z.RoomSize = 1;
+		z.Radius = 10;
+		z.BlendDistance = 2;
+		scene.OnRuntimeStart();
+		auto* audio = scene.GetAudioSystem();
+		audio->Update(0.1f);
+		CHECK(audio->GetReverb().RoomSize == doctest::Approx(1));
+		listener.GetTransform().Translation.x = 9;
+		audio->Update(0.1f);
+		CHECK(audio->GetReverb().RoomSize == doctest::Approx(0.75));
+		REQUIRE(audio->SetReverb({ 0.2f, 0.3f, 0.4f }));
+		CHECK(audio->GetReverb().RoomSize == doctest::Approx(0.6));
+		auto second = scene.CreateEntityWithUUID(UUID(101), "Priority");
+		auto& other = second.AddComponent<AudioReverbZoneComponent>();
+		other.Radius = 20;
+		other.RoomSize = 0.1f;
+		other.Priority = 1;
+		audio->Update(0.1f);
+		CHECK(audio->GetReverb().RoomSize == doctest::Approx(0.1));
+		other.Priority = 0;
+		audio->Update(0.1f);
+		CHECK(audio->GetReverb().RoomSize == doctest::Approx(0.55));
+		z.Enabled = false;
+		other.Enabled = false;
+		audio->Update(0.1f);
+		CHECK(audio->GetReverb().RoomSize == doctest::Approx(0.2));
+		std::string error;
+		CHECK_FALSE(ComponentRegistry::Find("AudioReverbZone")->Deserialize(zone, { { "Radius", -1 } }, error));
+		CHECK_FALSE(ComponentRegistry::Find("AudioReverbZone")->Deserialize(zone, { { "BlendDistance", 11 } }, error));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Lua reverb patches preserve untouched baseline fields inside a zone")
+	{
+		HeadlessAudio engine;
+		Scene scene;
+		auto listener = scene.CreateEntity("Listener");
+		listener.AddComponent<AudioListenerComponent>();
+		auto zone = scene.CreateEntity("Zone");
+		auto& z = zone.AddComponent<AudioReverbZoneComponent>();
+		z.RoomSize = 1;
+		z.Damping = 1;
+		z.Width = 0;
+		scene.OnRuntimeStart();
+		auto* audio = scene.GetAudioSystem();
+		audio->Update(0.1f);
+		std::string result;
+		REQUIRE(scene.GetScriptEngine()->ExecuteString("Audio.SetReverb({RoomSize=0.2})", result));
+		CHECK(audio->GetReverb().Damping == 1);
+		listener.GetTransform().Translation.x = 10;
+		audio->Update(0.1f);
+		CHECK(audio->GetReverb().RoomSize == doctest::Approx(0.2));
+		CHECK(audio->GetReverb().Damping == doctest::Approx(0.25));
+		CHECK(audio->GetReverb().Width == 1);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Nested reverb zones fade over lower priorities and diagnose invalid C++ values once")
+	{
+		HeadlessAudio engine;
+		Scene scene;
+		auto listener = scene.CreateEntity("Listener");
+		listener.AddComponent<AudioListenerComponent>();
+		listener.GetTransform().Translation.x = 5;
+		auto outer = scene.CreateEntity("Hall");
+		auto& hall = outer.AddComponent<AudioReverbZoneComponent>();
+		hall.Radius = 20;
+		hall.RoomSize = 0.9f;
+		auto inner = scene.CreateEntity("Chamber");
+		auto& chamber = inner.AddComponent<AudioReverbZoneComponent>();
+		chamber.Radius = 5;
+		chamber.BlendDistance = 2;
+		chamber.Priority = 1;
+		chamber.RoomSize = 0.1f;
+		scene.OnRuntimeStart();
+		auto* audio = scene.GetAudioSystem();
+		audio->Update(0.1f);
+		CHECK(audio->GetReverb().RoomSize == doctest::Approx(0.9));
+		listener.GetTransform().Translation.x = 4.9f;
+		audio->Update(0.1f);
+		CHECK(audio->GetReverb().RoomSize == doctest::Approx(0.86));
+		listener.GetTransform().Translation.x = 4;
+		audio->Update(0.1f);
+		CHECK(audio->GetReverb().RoomSize == doctest::Approx(0.5));
+		const auto since = Log::GetHistory().GetTotalCount();
+		chamber.Radius = -1;
+		audio->Update(0.1f);
+		audio->Update(0.1f);
+		CHECK(BasaltTest::CountLogMessages(since, "AudioReverbZone of 'Chamber' is ignored") == 1);
+		chamber.Radius = 5;
+		audio->Update(0.1f);
+		chamber.Radius = -1;
+		audio->Update(0.1f);
+		CHECK(BasaltTest::CountLogMessages(since, "AudioReverbZone of 'Chamber' is ignored") == 2);
+		hall.Enabled = false;
+		audio->Update(0.1f);
+		CHECK(audio->GetReverb().RoomSize == doctest::Approx(0.5));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Live source polish effects rewire with low-pass and sends and return to dry")
+	{
+		BasaltTest::TempProject project("LivePolish");
+		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(1, 48000, 100));
+		HeadlessAudio engine;
+		Scene scene;
+		auto e = scene.CreateEntity("Live");
+		auto& c = e.AddComponent<AudioSourceComponent>();
+		c.Clip = "Assets/Audio/Tone.wav";
+		c.Spatial = false;
+		c.Loop = true;
+		c.PlayOnStart = true;
+		scene.OnRuntimeStart();
+		auto* audio = scene.GetAudioSystem();
+		Mix(0.2f);
+		const float dry = Rms(Mix(0.1f));
+		REQUIRE(dry > 0.01f);
+		auto level = [&] { audio->Update(0.1f); Mix(0.3f); auto samples=Mix(0.1f); for(float v:samples) CHECK(std::isfinite(v)); return Rms(samples); };
+		c.HighPass = 2000;
+		CHECK(level() < dry * 0.1f);
+		c.LowPass = 4000;
+		CHECK(level() > 0.0001f);
+		c.ReverbSend = 0.2f;
+		c.Echo = 0.2f;
+		CHECK(level() > 0.0001f);
+		CHECK(audio->HasReverb(AudioBus::SFX));
+		c.LowPass = 0;
+		c.Distortion = 0.5f;
+		CHECK(level() > 0.0001f);
+		c.HighPass = 0;
+		c.Echo = 0;
+		c.Distortion = 0;
+		c.ReverbSend = 0;
+		level();
+		Mix(3.0f);
+		CHECK(Rms(Mix(0.1f)) == doctest::Approx(dry).epsilon(0.02));
+		scene.OnRuntimeStop();
+	}
 }
 
-TEST_CASE("Reverb zones blend, prioritize, restore the baseline and reject bad values")
+TEST_SUITE("Audio")
 {
-	HeadlessAudio engine;
-	Scene scene;
-	auto listener = scene.CreateEntity("Listener");
-	listener.AddComponent<AudioListenerComponent>();
-	auto zone = scene.CreateEntityWithUUID(UUID(100), "Zone");
-	auto& z = zone.AddComponent<AudioReverbZoneComponent>();
-	z.RoomSize = 1;
-	z.Radius = 10;
-	z.BlendDistance = 2;
-	scene.OnRuntimeStart();
-	auto* audio = scene.GetAudioSystem();
-	audio->Update(0.1f);
-	CHECK(audio->GetReverb().RoomSize == doctest::Approx(1));
-	listener.GetTransform().Translation.x = 9;
-	audio->Update(0.1f);
-	CHECK(audio->GetReverb().RoomSize == doctest::Approx(0.75));
-	REQUIRE(audio->SetReverb({ 0.2f, 0.3f, 0.4f }));
-	CHECK(audio->GetReverb().RoomSize == doctest::Approx(0.6));
-	auto second = scene.CreateEntityWithUUID(UUID(101), "Priority");
-	auto& other = second.AddComponent<AudioReverbZoneComponent>();
-	other.Radius = 20;
-	other.RoomSize = 0.1f;
-	other.Priority = 1;
-	audio->Update(0.1f);
-	CHECK(audio->GetReverb().RoomSize == doctest::Approx(0.1));
-	other.Priority = 0;
-	audio->Update(0.1f);
-	CHECK(audio->GetReverb().RoomSize == doctest::Approx(0.6));
-	z.Enabled = false;
-	other.Enabled = false;
-	audio->Update(0.1f);
-	CHECK(audio->GetReverb().RoomSize == doctest::Approx(0.2));
-	std::string error;
-	CHECK_FALSE(ComponentRegistry::Find("AudioReverbZone")->Deserialize(zone, { { "Radius", -1 } }, error));
-	CHECK_FALSE(ComponentRegistry::Find("AudioReverbZone")->Deserialize(zone, { { "BlendDistance", 11 } }, error));
-	scene.OnRuntimeStop();
+	TEST_CASE("Source effects node refuses invalid formats and dry processing is an exact identity")
+	{
+		ma_node_graph_config config = ma_node_graph_config_init(2);
+		ma_node_graph graph;
+		REQUIRE(ma_node_graph_init(&config, nullptr, &graph) == MA_SUCCESS);
+		SourceEffectsNode node;
+		CHECK(SourceEffectsNodeInit(&graph, 0, 48000, &node) == MA_INVALID_ARGS);
+		CHECK(SourceEffectsNodeInit(&graph, 9, 48000, &node) == MA_INVALID_ARGS);
+		CHECK(SourceEffectsNodeInit(&graph, 2, 7999, &node) == MA_INVALID_ARGS);
+		CHECK(SourceEffectsNodeInit(&graph, 2, 192001, &node) == MA_INVALID_ARGS);
+		CHECK(node.State == nullptr);
+		REQUIRE(SourceEffectsNodeInit(&graph, 2, 48000, &node) == MA_SUCCESS);
+		std::vector<float> input(9600);
+		for (size_t i = 0; i < input.size(); ++i)
+			input[i] = std::sin(static_cast<float>(i) * 0.1f) * 0.5f;
+		ma_audio_buffer buffer;
+		const auto bufferConfig = ma_audio_buffer_config_init(ma_format_f32, 2, input.size() / 2, input.data(), nullptr);
+		REQUIRE(ma_audio_buffer_init(&bufferConfig, &buffer) == MA_SUCCESS);
+		ma_data_source_node source;
+		const auto sourceConfig = ma_data_source_node_config_init(&buffer);
+		REQUIRE(ma_data_source_node_init(&graph, &sourceConfig, nullptr, &source) == MA_SUCCESS);
+		REQUIRE(ma_node_attach_output_bus(&source, 0, &node, 0) == MA_SUCCESS);
+		REQUIRE(ma_node_attach_output_bus(&node, 0, ma_node_graph_get_endpoint(&graph), 0) == MA_SUCCESS);
+		SourceEffectsNodeSet(&node, 0, 0, 0);
+		std::vector<float> output(input.size());
+		ma_uint64 read = 0;
+		REQUIRE(ma_node_graph_read_pcm_frames(&graph, output.data(), output.size() / 2, &read) == MA_SUCCESS);
+		CHECK(read == input.size() / 2);
+		CHECK(output == input);
+		ma_node_uninit(&source, nullptr);
+		SourceEffectsNodeUninit(&node, nullptr);
+		ma_audio_buffer_uninit(&buffer);
+		ma_node_graph_uninit(&graph, nullptr);
+	}
 }

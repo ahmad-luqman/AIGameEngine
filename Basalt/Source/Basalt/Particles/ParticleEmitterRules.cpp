@@ -56,7 +56,7 @@ namespace Basalt {
 			{ "Velocity", &Emitter::Velocity, -Emitter::MaxMagnitude, Emitter::MaxMagnitude },
 		};
 
-		// HDR color channels, opacity 0..1.
+		// Channels up to RgbMax and opacity up to AlphaMax; birth tint multipliers only darken.
 		struct ColorRule
 		{
 			const char* Name;
@@ -121,24 +121,29 @@ namespace Basalt {
 					checkFloat((emitter.*rule.Field)[channel], 0.0f, channel == 3 ? rule.AlphaMax : rule.RgbMax, (defaults.*rule.Field)[channel], std::string(rule.Name) + ChannelNames[channel]);
 			}
 			auto curve = [&](auto& keys, const char* name) {
-				bool valid = keys.size() <= 16;
+				bool valid = true;
+				auto problem = [&](const std::string& text) { valid = false; onProblem(text); };
+				if (keys.size() > Emitter::MaxCurveKeys)
+					problem(fmt::format("{} has {} keys (at most {})", name, keys.size(), Emitter::MaxCurveKeys));
 				float previous = -1.0f;
-				for (const auto& key : keys)
+				for (size_t i = 0; i < std::min<size_t>(keys.size(), Emitter::MaxCurveKeys); ++i)
 				{
-					valid = valid && std::isfinite(key.Time) && key.Time >= 0.0f && key.Time <= 1.0f && key.Time > previous;
+					const auto& key = keys[i];
+					if (!std::isfinite(key.Time) || key.Time < 0.0f || key.Time > 1.0f || key.Time <= previous)
+						problem(fmt::format("{}[{}].Time must be finite in [0,1] and greater than previous {} (got {})", name, i, previous, key.Time));
 					previous = key.Time;
 					if constexpr (std::is_same_v<std::decay_t<decltype(key.Value)>, float>)
-						valid = valid && std::isfinite(key.Value) && key.Value >= 0.0f && key.Value <= Emitter::MaxMagnitude;
+					{
+						if (!std::isfinite(key.Value) || key.Value < 0.0f || key.Value > Emitter::MaxMagnitude)
+							problem(fmt::format("{}[{}].Value must be in [0,{}] (got {})", name, i, Emitter::MaxMagnitude, key.Value));
+					}
 					else
 						for (int c = 0; c < 4; ++c)
-							valid = valid && std::isfinite(key.Value[c]) && key.Value[c] >= 0.0f && key.Value[c] <= (c == 3 ? 1.0f : Emitter::MaxMagnitude);
+							if (!std::isfinite(key.Value[c]) || key.Value[c] < 0.0f || key.Value[c] > (c == 3 ? 1.0f : Emitter::MaxMagnitude))
+								problem(fmt::format("{}[{}].Value{} must be in [0,{}] (got {})", name, i, ChannelNames[c], c == 3 ? 1.0f : Emitter::MaxMagnitude, key.Value[c]));
 				}
-				if (!valid)
-				{
-					onProblem(std::string(name) + " requires at most 16 finite, strictly ordered keys in [0,1] with nonnegative bounded values");
-					if (repair)
-						keys.clear();
-				}
+				if (!valid && repair)
+					keys.clear();
 			};
 			curve(emitter.SizeCurve, "SizeCurve");
 			curve(emitter.ColorCurve, "ColorCurve");
