@@ -49,7 +49,7 @@ namespace Basalt {
 		nvrhi::TextureHandle CreateTexture(const TextureSource& source, bool srgb, const char* debugName, nvrhi::ICommandList* commandList);
 
 	private:
-		bool m_ReportedBC7Fallback = false;
+		bool m_ReportedBC7Fallback = false; // Warn once per renderer that BC7 textures are decoded to RGBA8.
 		nvrhi::IDevice* m_Device = nullptr;
 
 		struct MeshEntry

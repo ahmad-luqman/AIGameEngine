@@ -70,6 +70,11 @@ namespace Basalt {
 		component.Roughness = material.Roughness;
 		component.EmissiveColor = material.EmissiveColor;
 		component.EmissiveIntensity = material.EmissiveIntensity;
+		component.AlbedoMap = material.AlbedoMap;
+		component.NormalMap = material.NormalMap;
+		component.MetallicRoughnessMap = material.MetallicRoughnessMap;
+		component.OcclusionMap = material.OcclusionMap;
+		component.EmissiveMap = material.EmissiveMap;
 		component.Clearcoat = material.Clearcoat;
 		component.ClearcoatRoughness = material.ClearcoatRoughness;
 		component.Transmission = material.Transmission;
@@ -77,11 +82,6 @@ namespace Basalt {
 		component.ClearcoatRoughnessMap = material.ClearcoatRoughnessMap;
 		component.ClearcoatNormalMap = material.ClearcoatNormalMap;
 		component.TransmissionMap = material.TransmissionMap;
-		component.AlbedoMap = material.AlbedoMap;
-		component.NormalMap = material.NormalMap;
-		component.MetallicRoughnessMap = material.MetallicRoughnessMap;
-		component.OcclusionMap = material.OcclusionMap;
-		component.EmissiveMap = material.EmissiveMap;
 		return component;
 	}
 

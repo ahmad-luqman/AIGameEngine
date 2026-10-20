@@ -507,11 +507,12 @@ TEST_SUITE("Project")
 			{"ID": 2, "Name": "B", "Components": {"Material": {"AlbedoMap": "Assets/textures/wall.png"}}},
 			{"ID": 3, "Name": "C", "Components": {"Mesh": {"Mesh": "builtin://Teapot"}}},
 			{"ID": 4, "Name": "D", "Components": {"Material": {"NormalMap": "../Outside.png"}}},
-			{"ID": 5, "Name": "E", "Components": {"Script": {"Script": "./Assets/Scripts/NoClass.lua", "Properties": {"Shot": "Assets/Prefabs/Gone.bprefab"}}}},
+			{"ID": 5, "Name": "E", "Components": {"Script": {"Script": "./Assets/Scripts/NoClass.lua", "Properties": {"Shot": "Assets/Prefabs/Gone.bprefab", "Decal": "Assets/Textures/Gone.ktx2"}}}},
 			{"ID": 6, "Name": "F", "Components": {"RigidBody": {"Layer": "Ghost"}}},
 			{"ID": 7, "Name": "G", "Components": {"UIText": {"Text": "See docs/help.png or https://example.com/help.png"}}},
 			{"ID": 8, "Name": "H", "Components": {"Material": {"AlbedoMap": "/Absolute/Wall.png"}}},
-			{"ID": 9, "Name": "I", "Components": {"Mesh": {"Mesh": "Ship.glb"}, "AudioSource": {"Clip": "Assets\\Audio\\Beep.wav"}}}]})");
+			{"ID": 9, "Name": "I", "Components": {"Mesh": {"Mesh": "Ship.glb"}, "AudioSource": {"Clip": "Assets\\Audio\\Beep.wav"}}},
+			{"ID": 10, "Name": "J", "Components": {"Material": {"ClearcoatMap": "Assets/Textures/Coat.ktx2"}}}]})");
 		temp.WriteFile("Assets/Prefabs/Hollow.bprefab", R"({"Format": "BasaltPrefab", "Version": 1, "Entities": [
 			{"ID": 1, "Name": "Root", "Parent": 0, "Components": {"Mesh": {"Mesh": "Assets/Models/Gone.glb"}}}]})");
 		temp.WriteFile("Assets/Scenes/Corrupt.bscene", R"({"Entities": [{"ID": 1, "Components": {"Bogus": {}}}]})");
@@ -539,14 +540,16 @@ TEST_SUITE("Project")
 		CHECK(Contains(errors, "Assets/Prefabs/Bad.bprefab: does not load"));
 		CHECK(Contains(errors, "Assets/Prefabs/Hollow.bprefab: references the missing file 'Assets/Models/Gone.glb'"));
 		CHECK(Contains(errors, "'/Absolute/Wall.png', which is outside Assets/"));
+		CHECK(Contains(errors, "references the missing file 'Assets/Textures/Coat.ktx2'"));
 		CHECK(report.GetErrorCount() == errors.size());
 		const auto warnings = Messages(report, ValidationSeverity::Warning);
 		CHECK(Contains(warnings, "'F' uses the undefined physics layer 'Ghost'"));
 		// A script property naming a missing asset warns (it may be text); plain text is not checked at all.
 		CHECK(Contains(warnings, "has a value naming the missing file 'Assets/Prefabs/Gone.bprefab'"));
+		CHECK(Contains(warnings, "has a value naming the missing file 'Assets/Textures/Gone.ktx2'"));
 		CHECK_FALSE(Contains(errors, "help.png"));
 		CHECK_FALSE(Contains(warnings, "help.png"));
-		CHECK(report.GetWarningCount() == 2);
+		CHECK(report.GetWarningCount() == 3);
 		CHECK(report.GetOmittedCount() == 0);
 	}
 

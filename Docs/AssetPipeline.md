@@ -67,44 +67,55 @@ an earlier location until the next save; UUID resolution remains authoritative.
 ## Compressed textures and extended glTF materials
 
 `asset.compress_texture {"path":"Assets/Textures/Wall.png","output":"Assets/Textures/Wall.ktx2","srgb":true}`
-authors a separate KTX2 asset containing desktop BC7 blocks and a complete mip chain. The source stays
-unchanged; point material/image references at the output to use it. Use `srgb:false` for normal and data
-maps. HDR input is rejected. Cache entries in `Cache/Textures/` are keyed by source contents, encoder
-cache version (bumped when the encoder pin, parameters or mip filter change) and color-space setting; changed sources/settings recompress, and unreadable cache entries are
-rebuilt. Outputs live under `Assets/` and export normally; caches are excluded. Re-run compression after
-editing a source. Imports reject symlink sources/output ancestors. Compression is explicit rather than
-an implicit mutation during loading.
+authors a separate KTX2 asset containing desktop BC7 blocks and a complete mip chain from an 8-bit
+PNG/JPEG/TGA/BMP source. The source stays unchanged; point material/image references at the output to use
+it. Use `srgb:false` for normal and data maps: the setting picks sRGB or linear mip filtering, encoder
+weights and the KTX2 format tag, while sampling still follows the material slot (a mismatch warns). HDR and
+already compressed sources are rejected. Re-run compression after editing a source; compression is explicit
+rather than an implicit mutation during loading.
+
+Cache entries in `Cache/Textures/` are keyed by source contents, encoder cache version (bumped when the
+encoder pin, parameters or mip filter change) and color-space setting, so changed sources or settings
+recompress. The cache only saves re-encoding: an unreadable or invalid entry is rebuilt, a failed cache write
+still produces the output, and a symlinked cache folder is skipped. Each of these is listed in the result's
+`warnings`, as is an output that adopts an orphaned `.meta` (keeping its UUID). The result also reports
+`cacheHit`, `overwrote` and the assets `reloaded` from the output. Output write failures report the OS
+reason. Outputs live under `Assets/` and export normally; caches are excluded. Source and output paths and
+their ancestors must not be symlinks.
 
 The headless loader accepts 2D KTX2 with native BC7, Basis ETC1S, or LDR UASTC (including Zstandard).
 Basis textures transcode to BC7 once in the texture load job; the renderer uploads supplied block mip levels
-without decoding to RGBA. GPUs without sampled BC7 support use an RGBA8 fallback. CPU thumbnails decode
-level zero. Arrays, cubemaps, 3D textures, HDR Basis, non-default orientation/swizzle and other native
-formats are rejected explicitly. Dimensions are limited to 16384 per side and KTX2 files and BC7 mip chains to
-256 MiB. KTX2 texture color/data interpretation follows its material slot, like other textures.
+without decoding to RGBA. GPUs without sampled BC7 support decode every level to an RGBA8 mip chain
+(warned once per renderer). CPU thumbnails decode level zero. Arrays, cubemaps, 3D textures, HDR Basis,
+supercompressed native BC7, non-default orientation/swizzle and other formats are rejected, each with its
+own `KTX2:` message. Dimensions are limited to 16384 per side and KTX2 files and BC7 mip chains to 256 MiB.
+KTX2 texture color/data interpretation follows its material slot, like other textures.
 
 The glTF importer supports `KHR_texture_basisu`, `KHR_mesh_quantization`, `KHR_texture_transform`,
 `KHR_materials_emissive_strength`, `KHR_materials_clearcoat` and `KHR_materials_transmission`. Unknown
 required extensions fail with the extension name. Optional unknown extensions retain core fallbacks.
-Basis image sources work as external files, data URIs or GLB buffer views. Quantized accessors unpack
-through the same vertex path as floats. Texture transforms apply scale, rotation, then offset,
-independently for every map; UV0 and UV1 are supported (other coordinate sets fail import). Transformed
-alpha sampling is shared by lighting, depth, picking and masked shadows.
+Basis image sources work as external files, data URIs or GLB buffer views. The `KHR_texture_basisu` image
+source is authoritative when present: a malformed or unsupported KTX2 reports an asset-load error, and
+Basalt does not silently substitute the optional core PNG/JPEG source. Quantized accessors unpack through
+the same vertex path as floats. Texture transforms apply scale, rotation, then offset, independently for
+every map; UV0 and UV1 are supported (other coordinate sets fail import). Transformed alpha sampling is
+shared by lighting, depth, picking and masked shadows. `normalTexture.scale` and `occlusionTexture.strength`
+are honored. Invalid factors fail import with the material, field and value.
 
 Clearcoat has independent factor (R), roughness (G) and normal maps, over direct and image-based lighting.
 Transmission uses its factor times the transmission map's R channel, with metallic surfaces retaining
 reflection. It routes through stable back-to-front transparency, preserves reflected specular, and
 reduces diffuse coverage to reveal the destination. This is a thin-surface approximation: no refraction,
-volume absorption or roughness-dependent background blur. Transmissive meshes do not cast shadows and
-retain their full-detail, unreordered topology.
+volume absorption or roughness-dependent background blur. Any positive transmission factor selects the
+blended pass: such draws keep their full-detail, unreordered topology, cast no shadows and write no
+prepass normals (they do not contribute to SSAO but still sample the occlusion of what lies behind them).
+Coverage follows the alpha mode: OPAQUE and surviving MASK surfaces stay fully covered.
 
 Authored `Material` overrides expose `Clearcoat`, `ClearcoatRoughness`, `Transmission` in [0,1], the four
-extension map paths, and shared `UVOffset`, `UVScale`, `UVRotation` (radians). Their maps use UV0. All
+extension map paths, and shared `UVOffset`, `UVScale`, `UVRotation` (radians). An override replaces the whole
+imported material: its one UV transform applies to every map on UV0, and normal scale and occlusion strength
+are 1. It blends when `AlbedoColor.a < 1` (alpha is then coverage) or `Transmission > 0` (full coverage). All
 fields use the component registry for Lua, automation, disk persistence, inspector editing and undo.
 
-The `KHR_texture_basisu` image source is authoritative when present. A malformed/unsupported KTX2
-reports an asset-load error; Basalt does not silently substitute the optional core PNG/JPEG source.
-Normal-map scale and occlusion strength are honored on imported materials. Any positive transmission
-factor selects the transparent pass, without prepass normals or SSAO and without shadow casting/LODs.
 The isolated `AssetPipelineFeature` ctest exercises compression and UUID saves on a temporary copy of
 the feature project, so `FeatureTest.batch.json` never writes generated textures into checked-in assets.
-Cache write failures warn and still produce the requested output; output write failures report the OS reason.

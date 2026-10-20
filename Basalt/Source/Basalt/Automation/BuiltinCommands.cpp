@@ -1440,44 +1440,62 @@ namespace Basalt {
 				auto project = RequireProject();
 				const auto path = ProjectRelative(RequireString(params, "path"));
 				const auto output = ProjectRelative(RequireString(params, "output"));
-				auto checkPath = [&](const std::string& name, bool asset = true) {
+				// The symlink that FileSystem::FindSymlink finds in a project-relative path, or an empty string.
+				auto findLink = [&](const std::filesystem::path& relative) -> std::string {
+					std::filesystem::path entry;
+					std::error_code error;
+					if (!FileSystem::FindSymlink(project->GetDirectory(), relative, entry, error))
+						return {};
+					if (error)
+						throw CommandError("cannot inspect " + FileSystem::PathToUtf8(entry) + ": " + error.message());
+					return FileSystem::PathToUtf8(entry);
+				};
+				for (const std::string& name : { path, output })
+				{
 					const auto relative = FileSystem::PathFromUtf8(name).lexically_normal();
 					if (relative.empty() || relative.has_root_path() || name.find(':') != std::string::npos || name.find('\\') != std::string::npos)
 						throw CommandError("invalid project-relative path: " + name);
-					if (asset && *relative.begin() != "Assets")
+					if (*relative.begin() != "Assets")
 						throw CommandError("texture source and output must be under Assets/: " + name);
-					auto absolute = project->GetDirectory();
-					for (const auto& part : relative)
-					{
-						absolute /= part;
-						std::error_code ec;
-						const auto status = std::filesystem::symlink_status(absolute, ec);
-						if (ec && ec != std::errc::no_such_file_or_directory)
-							throw CommandError("cannot inspect " + FileSystem::PathToUtf8(absolute) + ": " + ec.message());
-						if (std::filesystem::is_symlink(status))
-							throw CommandError("symlinks are not allowed in texture import paths: " + FileSystem::PathToUtf8(absolute));
-					}
-				};
-				checkPath(path);
-				checkPath(output);
-				checkPath("Cache/Textures", false);
+					if (const auto link = findLink(relative); !link.empty())
+						throw CommandError("symlinks are not allowed in texture import paths: " + link);
+				}
 				if (FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(output)) != ".ktx2")
 					throw CommandError("compressed output must have a .ktx2 extension: " + output);
-				const bool overwrites = FileSystem::Exists(Project::ResolvePath(output));
+				const auto outputPath = Project::ResolvePath(output);
+				const bool overwrites = FileSystem::Exists(outputPath);
 				const bool adoptsOrphan = !overwrites && FileSystem::Exists(Project::ResolvePath(output + ".meta"));
 
+				json warnings = json::array();
+				// The cache only saves re-encoding, so a linked cache folder (which could redirect writes outside the
+				// project) disables it instead of failing the command.
+				const std::filesystem::path cacheRelative = "Cache/Textures";
+				std::filesystem::path cacheDirectory = project->GetDirectory() / cacheRelative;
+				std::filesystem::path cacheEntry;
+				std::error_code cacheError;
+				if (FileSystem::FindSymlink(project->GetDirectory(), cacheRelative, cacheEntry, cacheError))
+				{
+					const auto entry = FileSystem::PathToUtf8(cacheEntry);
+					warnings.push_back("compressed without the cache: " + (cacheError ? "cannot inspect " + entry + ": " + cacheError.message() : entry + " is a symlink"));
+					BS_CORE_WARN("asset.compress_texture: {}", warnings.back().get<std::string>());
+					cacheDirectory.clear();
+				}
+
 				std::string error;
-				bool cacheHit = false;
-				if (!TextureCompression::Import(Project::ResolvePath(path), Project::ResolvePath(output), project->GetDirectory() / "Cache/Textures", OptionalBool(params, "srgb", true), cacheHit, error))
+				TextureCompression::ImportResult import;
+				if (!TextureCompression::Import(Project::ResolvePath(path), outputPath, cacheDirectory, OptionalBool(params, "srgb", true), import, error))
 					throw CommandError(error);
+				for (const auto& warning : import.Warnings)
+					warnings.push_back(warning);
 				const auto report = session.OnFileWritten(output);
-				json result = { { "path", output }, { "source", path }, { "cacheHit", cacheHit }, { "overwrote", overwrites }, { "reloaded", report.Assets } };
+				json result = { { "path", output }, { "source", path }, { "cacheHit", import.CacheHit }, { "overwrote", overwrites }, { "reloaded", report.Assets } };
 				if (adoptsOrphan)
 				{
-					const auto warning = "restored source next to existing metadata; its previous UUID is retained: " + output;
-					BS_CORE_WARN("{}", warning);
-					result["warnings"] = json::array({ warning });
+					warnings.push_back("output adopted existing orphan metadata; its previous UUID is retained: " + output);
+					BS_CORE_WARN("asset.compress_texture: {}", warnings.back().get<std::string>());
 				}
+				if (!warnings.empty())
+					result["warnings"] = std::move(warnings);
 				return result;
 			});
 

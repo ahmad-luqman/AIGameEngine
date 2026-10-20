@@ -10,8 +10,6 @@ namespace Basalt {
 
 	class TextureSource;
 	struct MaterialComponent;
-	// Unambiguous content key of every authored field that affects a material preview.
-	std::string MaterialPreviewKey(const MaterialComponent& material);
 
 	// What a content-browser preview of a file shows.
 	enum class ThumbnailKind : uint8_t
@@ -54,8 +52,14 @@ namespace Basalt {
 
 	// Fits an image into maxSize x maxSize keeping its aspect ratio (never upscaled). HDR (RGBA32F) sources are
 	// averaged in linear light, then tonemapped (ACES fit) and sRGB-encoded; non-finite texels count as black.
-	// Empty for invalid input.
+	// BC7 sources decode their base level first; when that fails, *outError (if given) gets the reason, otherwise
+	// it is logged. Empty for invalid input.
 	ThumbnailImage MakeImageThumbnail(const TextureSource& source, uint32_t maxSize, std::string* outError = nullptr);
+
+	// Content key of every authored field that affects a material preview. A string rather than operator==, so a
+	// NaN (written as null) still compares equal and is not re-rendered every frame; JSON array boundaries keep
+	// paths containing separators from producing the same key.
+	std::string MaterialPreviewKey(const MaterialComponent& material);
 
 	// A project's previews on disk, under <project>/Cache/Thumbnails: outside Assets/, so never exported. Each
 	// entry is <hash of the project-relative path>.png plus a .key file holding the version key (path, size,

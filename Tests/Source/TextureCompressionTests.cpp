@@ -45,7 +45,7 @@ TEST_CASE("BC7 KTX2 preserves odd dimensions alpha mip payloads and CPU previews
 	CHECK(texture->SRGB);
 	CHECK(texture->MipOffsets == std::vector<size_t>{ 0, 64, 80 });
 	CHECK(texture->Pixels.size() == 96);
-	const auto decoded = texture->DecodeRGBA8(error);
+	const auto decoded = texture->DecodeRGBA8(0, error);
 	REQUIRE(decoded);
 	for (size_t i = 0; i < decoded->Pixels.size(); i++)
 		CHECK(std::abs(int(decoded->Pixels[i]) - int(source.Pixels[i])) <= 4);
@@ -77,6 +77,7 @@ TEST_CASE("KTX2 rejects truncated overflowing unsupported and inconsistent heade
 	auto source = Source();
 	source.Format = TextureFormat::RGBA32F;
 	CHECK_FALSE(TextureCompression::EncodeKTX2(source, false, valid, error));
+	CHECK(error.find("HDR sources") != std::string::npos);
 	source = Source();
 	source.Pixels.pop_back();
 	CHECK_FALSE(TextureCompression::EncodeKTX2(source, false, valid, error));
@@ -88,27 +89,45 @@ TEST_CASE("BC7 imports keep sources reuse content cache and recover corrupt cach
 	const auto& root = temp.GetPath();
 	auto source = Source();
 	std::string error;
-	bool cacheHit = true;
+	TextureCompression::ImportResult result;
 	REQUIRE(WritePng(root / "source.png", source.Pixels, source.Width, source.Height, error));
 	const auto original = FileSystem::ReadBinaryFile(root / "source.png");
-	REQUIRE(TextureCompression::Import(root / "source.png", root / "color.ktx2", root / "Cache", true, cacheHit, error));
-	CHECK_FALSE(cacheHit);
-	REQUIRE(TextureCompression::Import(root / "source.png", root / "color.ktx2", root / "Cache", true, cacheHit, error));
-	CHECK(cacheHit);
-	REQUIRE(TextureCompression::Import(root / "source.png", root / "data.ktx2", root / "Cache", false, cacheHit, error));
-	CHECK_FALSE(cacheHit);
+	REQUIRE(TextureCompression::Import(root / "source.png", root / "color.ktx2", root / "Cache", true, result, error));
+	CHECK_FALSE(result.CacheHit);
+	CHECK(result.Warnings.empty());
+	const auto encoded = FileSystem::ReadBinaryFile(root / "color.ktx2");
+	REQUIRE(encoded);
+	// A hit must rewrite the output from the cache alone.
+	std::filesystem::remove(root / "color.ktx2");
+	REQUIRE(TextureCompression::Import(root / "source.png", root / "color.ktx2", root / "Cache", true, result, error));
+	CHECK(result.CacheHit);
+	CHECK(FileSystem::ReadBinaryFile(root / "color.ktx2") == encoded);
+	REQUIRE(TextureCompression::Import(root / "source.png", root / "data.ktx2", root / "Cache", false, result, error));
+	CHECK_FALSE(result.CacheHit);
 	CHECK_FALSE(TextureSource::LoadFromFile(root / "data.ktx2", error)->SRGB);
-	CHECK_FALSE(TextureCompression::Import(root / "source.png", root / "source.png", root / "Cache", true, cacheHit, error));
+	CHECK_FALSE(TextureCompression::Import(root / "source.png", root / "source.png", root / "Cache", true, result, error));
 	CHECK(FileSystem::ReadBinaryFile(root / "source.png") == original);
 	for (const auto& entry : std::filesystem::directory_iterator(root / "Cache"))
 		REQUIRE(FileSystem::WriteTextFile(entry.path(), "corrupt"));
-	REQUIRE(TextureCompression::Import(root / "source.png", root / "color.ktx2", root / "Cache", true, cacheHit, error));
-	CHECK_FALSE(cacheHit);
+	REQUIRE(TextureCompression::Import(root / "source.png", root / "color.ktx2", root / "Cache", true, result, error));
+	CHECK_FALSE(result.CacheHit);
+	REQUIRE(result.Warnings.size() == 1);
+	CHECK(result.Warnings[0].find("rebuilding invalid cache entry") != std::string::npos);
+	CHECK(FileSystem::ReadBinaryFile(root / "color.ktx2") == encoded);
 	source.Pixels[0] = 0;
 	REQUIRE(WritePng(root / "source.png", source.Pixels, source.Width, source.Height, error));
-	REQUIRE(TextureCompression::Import(root / "source.png", root / "color.ktx2", root / "Cache", true, cacheHit, error));
-	CHECK_FALSE(cacheHit);
-	CHECK_FALSE(TextureCompression::Import(root / "missing.png", root / "color.ktx2", root / "Cache", true, cacheHit, error));
+	REQUIRE(TextureCompression::Import(root / "source.png", root / "color.ktx2", root / "Cache", true, result, error));
+	CHECK_FALSE(result.CacheHit);
+	CHECK(FileSystem::ReadBinaryFile(root / "color.ktx2") != encoded);
+	CHECK_FALSE(TextureCompression::Import(root / "missing.png", root / "color.ktx2", root / "Cache", true, result, error));
+	// No cache directory: always encodes and writes nothing besides the output.
+	REQUIRE(TextureCompression::Import(root / "source.png", root / "uncached.ktx2", {}, true, result, error));
+	CHECK_FALSE(result.CacheHit);
+	CHECK(result.Warnings.empty());
+	// A compressed source is not re-encoded.
+	CHECK_FALSE(TextureCompression::Import(root / "color.ktx2", root / "twice.ktx2", root / "Cache", true, result, error));
+	CHECK(error.find("already a compressed KTX2") != std::string::npos);
+	CHECK(error.find("color.ktx2") != std::string::npos);
 }
 
 TEST_CASE("Material extension fields round trip transactionally through the shared registry")
@@ -126,11 +145,15 @@ TEST_CASE("Material extension fields round trip transactionally through the shar
 	for (const auto* field : { "Clearcoat", "ClearcoatRoughness", "Transmission" })
 	{
 		CHECK_FALSE(info->Deserialize(entity, { { field, 1.1 } }, error));
-		CHECK_FALSE(error.empty());
+		CHECK(error.find(field) != std::string::npos);
 		CHECK(info->Serialize(entity) == saved);
 		CHECK_FALSE(info->Deserialize(entity, { { field, -0.1 } }, error));
 		CHECK(info->Serialize(entity) == saved);
 	}
+	CHECK_FALSE(info->Deserialize(entity, { { "EmissiveIntensity", -1 } }, error));
+	CHECK(error.find("EmissiveIntensity") != std::string::npos);
+	CHECK(info->Serialize(entity) == saved);
+	REQUIRE_MESSAGE(info->Deserialize(entity, { { "EmissiveIntensity", 0 } }, error), error);
 	for (const auto* field : { "ClearcoatMap", "ClearcoatRoughnessMap", "ClearcoatNormalMap", "TransmissionMap" })
 		CHECK(std::find(info->AssetFields.begin(), info->AssetFields.end(), field) != info->AssetFields.end());
 }
@@ -146,12 +169,14 @@ TEST_CASE("Basis ETC1S and Zstd UASTC KTX2 transcode to BC7 with all mip levels"
 		CHECK(texture->Width == 8);
 		CHECK(texture->Height == 8);
 		CHECK(texture->MipOffsets == std::vector<size_t>{ 0, 64, 80, 96 });
-		auto decoded = texture->DecodeRGBA8(error);
+		auto decoded = texture->DecodeRGBA8(0, error);
 		REQUIRE(decoded);
+		CHECK(texture->SRGB); // basisu tags its default (perceptual) encodes as sRGB in the DFD
 		for (size_t pixel = 0; pixel < 64; pixel++)
 		{
 			CHECK(std::abs(int(decoded->Pixels[pixel * 4]) - 180) < 12);
 			CHECK(std::abs(int(decoded->Pixels[pixel * 4 + 1]) - 40) < 12);
+			CHECK(std::abs(int(decoded->Pixels[pixel * 4 + 2]) - 70) < 12);
 			CHECK(std::abs(int(decoded->Pixels[pixel * 4 + 3]) - 110) < 12);
 		}
 	}
@@ -191,7 +216,7 @@ TEST_CASE("BC7 layout rejects mutated offsets and preserves gamma-correct odd mi
 	auto srgb = TextureSource::LoadFromMemory(bytes.data(), bytes.size(), error);
 	REQUIRE(srgb);
 	REQUIRE(srgb->HasValidBC7Layout());
-	const auto mip = srgb->DecodeRGBA8(error, 1);
+	const auto mip = srgb->DecodeRGBA8(1, error);
 	REQUIRE(mip);
 	CHECK(mip->Width == 1);
 	CHECK(mip->Height == 1);
@@ -200,13 +225,150 @@ TEST_CASE("BC7 layout rejects mutated offsets and preserves gamma-correct odd mi
 	REQUIRE(TextureCompression::EncodeKTX2(source, false, bytes, error));
 	auto linear = TextureSource::LoadFromMemory(bytes.data(), bytes.size(), error);
 	REQUIRE(linear);
-	const auto dataMip = linear->DecodeRGBA8(error, 1);
+	const auto dataMip = linear->DecodeRGBA8(1, error);
 	REQUIRE(dataMip);
 	CHECK(dataMip->Pixels[0] > 80);
 	CHECK(dataMip->Pixels[0] < 90);
 	srgb->MipOffsets[1]++;
 	CHECK_FALSE(srgb->HasValidBC7Layout());
-	CHECK_FALSE(srgb->DecodeRGBA8(error));
+	CHECK_FALSE(srgb->DecodeRGBA8(0, error));
+	CHECK(error == "invalid BC7 mip layout");
+}
+
+TEST_CASE("BC7 layout validation rejects every malformed chain")
+{
+	std::string error;
+	std::vector<uint8_t> bytes;
+	REQUIRE(TextureCompression::EncodeKTX2(Source(8, 2), true, bytes, error));
+	const auto valid = TextureSource::LoadFromMemory(bytes.data(), bytes.size(), error);
+	REQUIRE(valid);
+	REQUIRE(valid->HasValidBC7Layout());
+	CHECK(valid->MipOffsets.size() == 4); // 8x2, 4x1, 2x1, 1x1
+	auto mutate = [&](const char* name, auto&& change) {
+		INFO(name);
+		TextureSource copy;
+		copy.Width = valid->Width;
+		copy.Height = valid->Height;
+		copy.Format = valid->Format;
+		copy.Pixels = valid->Pixels;
+		copy.MipOffsets = valid->MipOffsets;
+		change(copy);
+		CHECK_FALSE(copy.HasValidBC7Layout());
+	};
+	mutate("trailing byte", [](TextureSource& t) { t.Pixels.push_back(0); });
+	mutate("truncated pixels", [](TextureSource& t) { t.Pixels.pop_back(); });
+	mutate("level past 1x1", [](TextureSource& t) {
+		t.MipOffsets.push_back(t.Pixels.size());
+		t.Pixels.resize(t.Pixels.size() + 16);
+	});
+	mutate("base offset", [](TextureSource& t) { t.MipOffsets[0] = 16; });
+	mutate("no levels", [](TextureSource& t) {
+		t.MipOffsets.clear();
+		t.Pixels.clear();
+	});
+	mutate("not BC7", [](TextureSource& t) { t.Format = TextureFormat::RGBA8; });
+	mutate("too wide", [](TextureSource& t) { t.Width = TextureSource::MaxDimension + 1; });
+	// A chain may stop before 1x1.
+	TextureSource prefix;
+	prefix.Width = valid->Width;
+	prefix.Height = valid->Height;
+	prefix.Format = TextureFormat::BC7;
+	prefix.MipOffsets = { 0, TextureSource::BC7LevelSize(8, 2, 0) };
+	prefix.Pixels.resize(TextureSource::BC7LevelSize(8, 2, 0) + TextureSource::BC7LevelSize(8, 2, 1));
+	CHECK(prefix.HasValidBC7Layout());
+}
+
+TEST_CASE("BC7 mip decoding uses each level's own block rows")
+{
+	// Four solid quadrants: every mip down to 4x4 keeps them, and the 16x16 level needs several block rows.
+	TextureSource source;
+	source.Width = source.Height = 16;
+	source.Pixels.resize(size_t{ 16 } * 16 * 4);
+	const std::array<std::array<uint8_t, 4>, 4> colors = { { { 255, 0, 0, 255 }, { 0, 255, 0, 255 }, { 0, 0, 255, 255 }, { 255, 255, 255, 255 } } };
+	for (uint32_t y = 0; y < 16; y++)
+		for (uint32_t x = 0; x < 16; x++)
+			std::copy_n(colors[(y / 8) * 2 + x / 8].begin(), 4, source.Pixels.begin() + static_cast<ptrdiff_t>((size_t(y) * 16 + x) * 4));
+	std::string error;
+	std::vector<uint8_t> bytes;
+	REQUIRE(TextureCompression::EncodeKTX2(source, false, bytes, error));
+	const auto texture = TextureSource::LoadFromMemory(bytes.data(), bytes.size(), error);
+	REQUIRE(texture);
+	for (uint32_t mip = 0; mip < 3; mip++)
+	{
+		INFO("mip " << mip);
+		const auto decoded = texture->DecodeRGBA8(mip, error);
+		REQUIRE_MESSAGE(decoded, error);
+		const uint32_t size = 16 >> mip;
+		CHECK(decoded->Width == size);
+		CHECK(decoded->Height == size);
+		for (uint32_t quadrant = 0; quadrant < 4; quadrant++)
+		{
+			const uint32_t x = (quadrant % 2) * size / 2 + size / 4, y = (quadrant / 2) * size / 2 + size / 4;
+			for (uint32_t c = 0; c < 4; c++)
+				CHECK(std::abs(int(decoded->Pixels[(size_t(y) * size + x) * 4 + c]) - int(colors[quadrant][c])) <= 4);
+		}
+	}
+	CHECK_FALSE(texture->DecodeRGBA8(static_cast<uint32_t>(texture->MipOffsets.size()), error));
+	CHECK(error.find("out of range") != std::string::npos);
+}
+
+TEST_CASE("KTX2 rejections name their cause")
+{
+	std::string error;
+	std::vector<uint8_t> valid;
+	REQUIRE(TextureCompression::EncodeKTX2(Source(), true, valid, error));
+	auto expect = [&](const std::vector<uint8_t>& data, const char* cause) {
+		INFO(cause);
+		CHECK_FALSE(TextureSource::LoadFromMemory(data.data(), data.size(), error));
+		CHECK(error.rfind("KTX2: ", 0) == 0);
+		CHECK(error.find(cause) != std::string::npos);
+	};
+	auto put = [](std::vector<uint8_t>& data, size_t offset, uint32_t value) {
+		for (size_t i = 0; i < 4; i++)
+			data[offset + i] = static_cast<uint8_t>(value >> (8 * i));
+	};
+	// Appends one key/value entry and points the metadata range at it.
+	auto withMetadata = [&](const std::string& key, const std::string& value) {
+		auto data = valid;
+		const std::string entry = key + '\0' + value + '\0';
+		const size_t start = data.size();
+		put(data, 56, static_cast<uint32_t>(start));
+		data.resize(start + 4);
+		put(data, start, static_cast<uint32_t>(entry.size()));
+		data.insert(data.end(), entry.begin(), entry.end());
+		data.resize((data.size() + 3) & ~size_t(3));
+		put(data, 60, static_cast<uint32_t>(data.size() - start));
+		return data;
+	};
+	const auto upright = withMetadata("KTXorientation", "rd");
+	CHECK_MESSAGE(TextureSource::LoadFromMemory(upright.data(), upright.size(), error), error);
+	expect(withMetadata("KTXorientation", "ru"), "KTXorientation 'ru' is unsupported");
+	expect(withMetadata("KTXswizzle", "bgra"), "KTXswizzle 'bgra' is unsupported");
+	auto data = valid;
+	put(data, 28, 1);
+	expect(data, "only 2D textures");
+	data = valid;
+	put(data, 44, 2);
+	expect(data, "supercompressed native BC7");
+	data = valid;
+	put(data, 12, 37);
+	expect(data, "unsupported vkFormat 37");
+	data = std::move(valid);
+	put(data, 20, TextureSource::MaxDimension + 1);
+	expect(data, "dimensions 16385x5");
+}
+
+TEST_CASE("BC7 thumbnails report decode failures to the caller")
+{
+	std::string error;
+	std::vector<uint8_t> bytes;
+	REQUIRE(TextureCompression::EncodeKTX2(Source(), true, bytes, error));
+	auto texture = TextureSource::LoadFromMemory(bytes.data(), bytes.size(), error);
+	REQUIRE(texture);
+	texture->MipOffsets[1]++;
+	std::string reason;
+	CHECK_FALSE(MakeImageThumbnail(*texture, 16, &reason).IsValid());
+	CHECK(reason == "invalid BC7 mip layout");
 }
 
 TEST_CASE("Every material registry field participates in the editor preview key")
@@ -242,14 +404,16 @@ TEST_CASE("Compression cache is optional while output errors retain their filesy
 	const auto& root = temp.GetPath();
 	const auto source = Source();
 	std::string error;
-	bool hit = false;
+	TextureCompression::ImportResult result;
 	REQUIRE(WritePng(root / "source.png", source.Pixels, source.Width, source.Height, error));
 	REQUIRE(FileSystem::WriteTextFile(root / "BlockedCache", "file"));
-	REQUIRE_MESSAGE(TextureCompression::Import(root / "source.png", root / "out.ktx2", root / "BlockedCache", true, hit, error), error);
-	CHECK_FALSE(hit);
+	REQUIRE_MESSAGE(TextureCompression::Import(root / "source.png", root / "out.ktx2", root / "BlockedCache", true, result, error), error);
+	CHECK_FALSE(result.CacheHit);
+	REQUIRE(result.Warnings.size() == 1);
+	CHECK(result.Warnings[0].find("cache unavailable") != std::string::npos);
 	CHECK(FileSystem::Exists(root / "out.ktx2"));
 	REQUIRE(FileSystem::WriteTextFile(root / "BlockedOutput", "file"));
-	CHECK_FALSE(TextureCompression::Import(root / "source.png", root / "BlockedOutput/out.ktx2", root / "Cache", true, hit, error));
+	CHECK_FALSE(TextureCompression::Import(root / "source.png", root / "BlockedOutput/out.ktx2", root / "Cache", true, result, error));
 	CHECK(error.find("BlockedOutput") != std::string::npos);
 }
 

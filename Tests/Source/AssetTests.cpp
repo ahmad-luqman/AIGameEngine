@@ -77,7 +77,16 @@ TEST_SUITE("Assets")
 		const auto uv1Offset = binary.size();
 		binary.append(reinterpret_cast<const char*>(uv1), sizeof(uv1));
 		project.WriteFile("Assets/quad.bin", binary);
-		auto gltf = MakeGltfJson({ { "uri", "quad.bin" }, { "byteLength", binary.size() } }, { { { "uri", "color.ktx2" } }, { { "uri", "normal.png" } } });
+		// One image per material slot (slot order), so a permuted slot table is caught.
+		const char* slotImages[] = { "color.ktx2", "normal.png", "mr.png", "ao.png", "emissive.png", "coat.png", "coatrough.png", "coatnormal.png", "glass.png" };
+		nlohmann::json images = nlohmann::json::array(), textures = nlohmann::json::array();
+		for (size_t slot = 0; slot < MaterialTextureSlotCount; slot++)
+		{
+			images.push_back({ { "uri", slotImages[slot] } });
+			textures.push_back({ { "source", slot } });
+		}
+		auto gltf = MakeGltfJson({ { "uri", "quad.bin" }, { "byteLength", binary.size() } }, images);
+		gltf["textures"] = textures;
 		gltf["bufferViews"].push_back({ { "buffer", 0 }, { "byteOffset", uv1Offset }, { "byteLength", sizeof(uv1) } });
 		gltf["accessors"].push_back({ { "bufferView", 3 }, { "componentType", 5126 }, { "count", 4 }, { "type", "VEC2" } });
 		gltf["extensionsRequired"] = { "KHR_texture_transform", "KHR_materials_emissive_strength", "KHR_materials_clearcoat", "KHR_materials_transmission", "KHR_texture_basisu", "KHR_mesh_quantization" };
@@ -85,9 +94,17 @@ TEST_SUITE("Assets")
 		auto& material = gltf["materials"][0];
 		material["extensions"] = {
 			{ "KHR_materials_emissive_strength", { { "emissiveStrength", 3 } } },
-			{ "KHR_materials_clearcoat", { { "clearcoatFactor", 0.8 }, { "clearcoatRoughnessFactor", 0.2 }, { "clearcoatTexture", { { "index", 0 } } }, { "clearcoatRoughnessTexture", { { "index", 1 } } }, { "clearcoatNormalTexture", { { "index", 1 }, { "scale", 0.5 } } } } },
-			{ "KHR_materials_transmission", { { "transmissionFactor", 0.6 }, { "transmissionTexture", { { "index", 1 } } } } }
+			{ "KHR_materials_clearcoat", { { "clearcoatFactor", 0.8 }, { "clearcoatRoughnessFactor", 0.2 }, { "clearcoatTexture", { { "index", 5 } } }, { "clearcoatRoughnessTexture", { { "index", 6 } } }, { "clearcoatNormalTexture", { { "index", 7 }, { "scale", 0.5 } } } } },
+			{ "KHR_materials_transmission", { { "transmissionFactor", 0.6 }, { "transmissionTexture", { { "index", 8 } } } } }
 		};
+		material["normalTexture"] = { { "index", 1 }, { "scale", 0.75 } };
+		material["pbrMetallicRoughness"]["metallicRoughnessTexture"] = { { "index", 2 } };
+		material["occlusionTexture"] = { { "index", 3 }, { "strength", 0.25 } };
+		material["emissiveTexture"] = { { "index", 4 } };
+		// Every slot gets its own offset; slot 0 also exercises the rest of the transform and UV1.
+		nlohmann::json* views[] = { &material["pbrMetallicRoughness"]["baseColorTexture"], &material["normalTexture"], &material["pbrMetallicRoughness"]["metallicRoughnessTexture"], &material["occlusionTexture"], &material["emissiveTexture"], &material["extensions"]["KHR_materials_clearcoat"]["clearcoatTexture"], &material["extensions"]["KHR_materials_clearcoat"]["clearcoatRoughnessTexture"], &material["extensions"]["KHR_materials_clearcoat"]["clearcoatNormalTexture"], &material["extensions"]["KHR_materials_transmission"]["transmissionTexture"] };
+		for (size_t slot = 1; slot < MaterialTextureSlotCount; slot++)
+			(*views[slot])["extensions"]["KHR_texture_transform"] = { { "offset", { 0.5 + 0.0625 * double(slot), 0 } } };
 		material["pbrMetallicRoughness"]["baseColorTexture"]["extensions"]["KHR_texture_transform"] = { { "offset", { 0.2, 0.3 } }, { "scale", { 2, -3 } }, { "rotation", 0.5 }, { "texCoord", 1 } };
 		gltf["meshes"][0]["primitives"][0]["attributes"]["TEXCOORD_1"] = 3;
 		project.WriteFile("Assets/quad.gltf", gltf.dump());
@@ -99,34 +116,57 @@ TEST_SUITE("Assets")
 		CHECK(m.ClearcoatRoughness == doctest::Approx(0.2));
 		CHECK(m.Transmission == doctest::Approx(0.6));
 		CHECK(m.EmissiveIntensity == 3);
-		CHECK(m.AlbedoMap == "Assets/color.ktx2");
-		CHECK(m.ClearcoatMap == "Assets/color.ktx2");
-		CHECK(m.ClearcoatRoughnessMap == "Assets/normal.png");
-		CHECK(m.ClearcoatNormalMap == "Assets/normal.png");
-		CHECK(m.TransmissionMap == "Assets/normal.png");
+		const std::string maps[] = { m.AlbedoMap, m.NormalMap, m.MetallicRoughnessMap, m.OcclusionMap, m.EmissiveMap, m.ClearcoatMap, m.ClearcoatRoughnessMap, m.ClearcoatNormalMap, m.TransmissionMap };
+		for (size_t slot = 0; slot < MaterialTextureSlotCount; slot++)
+		{
+			INFO("slot " << slot);
+			CHECK(maps[slot] == std::string("Assets/") + slotImages[slot]);
+			if (slot > 0)
+			{
+				CHECK(m.TextureTransforms[slot].Offset == glm::vec2(0.5f + 0.0625f * float(slot), 0));
+				CHECK(m.TextureTransforms[slot].Scale == glm::vec2(1));
+				CHECK(m.TextureTransforms[slot].TexCoord == 0);
+			}
+		}
+		CHECK(m.NormalScale == 0.75f);
+		CHECK(m.OcclusionStrength == 0.25f);
 		CHECK(m.ClearcoatNormalScale == 0.5f);
 		CHECK(m.TextureTransforms[0].Offset == glm::vec2(0.2f, 0.3f));
 		CHECK(m.TextureTransforms[0].Scale == glm::vec2(2, -3));
 		CHECK(m.TextureTransforms[0].Rotation == 0.5f);
 		CHECK(m.TextureTransforms[0].TexCoord == 1);
-		CHECK(m.TextureTransforms[1].Scale == glm::vec2(1));
-		CHECK(m.TextureTransforms[1].TexCoord == 0);
+		// Each vertex keeps its own UV1, whatever order the optimizer leaves the vertices in.
+		const glm::vec2 uv0[] = { { 0, 1 }, { 1, 1 }, { 1, 0 }, { 0, 0 } };
+		REQUIRE(mesh->Vertices.size() == 4);
 		for (const auto& vertex : mesh->Vertices)
-			CHECK(vertex.TexCoord1 != vertex.TexCoord);
+		{
+			const auto source = std::find(std::begin(uv0), std::end(uv0), vertex.TexCoord);
+			REQUIRE(source != std::end(uv0));
+			const size_t index = static_cast<size_t>(source - std::begin(uv0));
+			CHECK(vertex.TexCoord1 == glm::vec2(uv1[index * 2], uv1[index * 2 + 1]));
+		}
+		auto rejects = [&](const char* expected) {
+			project.WriteFile("Assets/quad.gltf", gltf.dump());
+			CHECK_FALSE(MeshImporter::LoadGltf(project.GetDirectory() / "Assets/quad.gltf", "Assets/quad.gltf", error));
+			CHECK_MESSAGE(error.find(expected) != std::string::npos, error);
+		};
 		gltf["meshes"][0]["primitives"][0]["attributes"].erase("TEXCOORD_1");
-		project.WriteFile("Assets/quad.gltf", gltf.dump());
-		CHECK_FALSE(MeshImporter::LoadGltf(project.GetDirectory() / "Assets/quad.gltf", "Assets/quad.gltf", error));
-		CHECK(error.find("TEXCOORD_1") != std::string::npos);
+		rejects("material 'Painted' uses TEXCOORD_1 but mesh 'QuadMesh' has no TEXCOORD_1");
 		gltf["meshes"][0]["primitives"][0]["attributes"]["TEXCOORD_1"] = 3;
 		gltf["extensionsRequired"] = { "KHR_not_supported" };
-		project.WriteFile("Assets/quad.gltf", gltf.dump());
-		CHECK_FALSE(MeshImporter::LoadGltf(project.GetDirectory() / "Assets/quad.gltf", "Assets/quad.gltf", error));
-		CHECK(error.find("KHR_not_supported") != std::string::npos);
+		rejects("KHR_not_supported");
 		gltf.erase("extensionsRequired");
 		material["extensions"]["KHR_materials_transmission"]["transmissionFactor"] = 2;
-		project.WriteFile("Assets/quad.gltf", gltf.dump());
-		CHECK_FALSE(MeshImporter::LoadGltf(project.GetDirectory() / "Assets/quad.gltf", "Assets/quad.gltf", error));
-		CHECK(error.find("factor") != std::string::npos);
+		rejects("material 'Painted': transmissionFactor 2 must be in [0, 1]");
+		material["extensions"]["KHR_materials_transmission"]["transmissionFactor"] = 0.6;
+		material["occlusionTexture"]["strength"] = 1.5;
+		rejects("occlusionTexture.strength 1.5 must be in [0, 1]");
+		material["occlusionTexture"]["strength"] = 0.25;
+		material["extensions"]["KHR_materials_emissive_strength"]["emissiveStrength"] = -1;
+		rejects("emissiveStrength -1 must be finite and nonnegative");
+		material["extensions"]["KHR_materials_emissive_strength"]["emissiveStrength"] = 3;
+		material["emissiveTexture"]["texCoord"] = 2;
+		rejects("material 'Painted' emissiveTexture: TEXCOORD_2 is unsupported");
 	}
 
 	TEST_CASE("Quantized glTF positions and UVs decode without changing topology")
@@ -163,6 +203,53 @@ TEST_SUITE("Assets")
 			CHECK(vertex.TexCoord.x == vertex.Position.x);
 			CHECK(vertex.TexCoord.y == 1 - vertex.Position.y);
 		}
+	}
+
+	TEST_CASE("Quantized normals and unnormalized integer positions keep their scale in the node")
+	{
+		// gltfpack's default: integer positions with the dequantizing scale on the node, normalized int8 normals.
+		BasaltTest::TempProject project("GltfQuantizedNormals");
+		const uint16_t positions[] = { 0, 0, 0, 0, 1000, 0, 0, 0, 1000, 1000, 0, 0, 0, 1000, 0, 0 };
+		const uint16_t uv[] = { 0, 65535, 65535, 65535, 65535, 0, 0, 0 };
+		const uint16_t indices[] = { 0, 1, 2, 0, 2, 3 };
+		const int8_t normals[] = { 0, 0, 127, 0, 0, 0, 127, 0, 0, -127, 0, 0, 127, 0, 0, 0 };
+		std::string binary(reinterpret_cast<const char*>(positions), sizeof(positions));
+		binary.append(reinterpret_cast<const char*>(uv), sizeof(uv));
+		binary.append(reinterpret_cast<const char*>(indices), sizeof(indices));
+		const auto normalOffset = binary.size();
+		binary.append(reinterpret_cast<const char*>(normals), sizeof(normals));
+		project.WriteFile("Assets/quant.bin", binary);
+		auto gltf = MakeGltfJson({ { "uri", "quant.bin" }, { "byteLength", binary.size() } }, { { { "uri", "color.png" } }, { { "uri", "normal.png" } } });
+		gltf["extensionsRequired"] = { "KHR_mesh_quantization" };
+		gltf["bufferViews"][0]["byteLength"] = 32;
+		gltf["bufferViews"][0]["byteStride"] = 8;
+		gltf["bufferViews"][1]["byteOffset"] = 32;
+		gltf["bufferViews"][1]["byteLength"] = 16;
+		gltf["bufferViews"][2]["byteOffset"] = 48;
+		gltf["bufferViews"].push_back({ { "buffer", 0 }, { "byteOffset", normalOffset }, { "byteLength", sizeof(normals) }, { "byteStride", 4 } });
+		gltf["accessors"][0]["componentType"] = 5123;
+		gltf["accessors"][0]["max"] = { 1000, 1000, 0 };
+		gltf["accessors"][1]["componentType"] = 5123;
+		gltf["accessors"][1]["normalized"] = true;
+		gltf["accessors"].push_back({ { "bufferView", 3 }, { "componentType", 5120 }, { "normalized", true }, { "count", 4 }, { "type", "VEC3" } });
+		gltf["meshes"][0]["primitives"][0]["attributes"]["NORMAL"] = 3;
+		gltf["nodes"][1]["scale"] = { 0.001, 0.001, 0.001 };
+		project.WriteFile("Assets/quant.gltf", gltf.dump());
+		std::string error;
+		auto mesh = MeshImporter::LoadGltf(project.GetDirectory() / "Assets/quant.gltf", "Assets/quant.gltf", error);
+		REQUIRE_MESSAGE(mesh, error);
+		CHECK(mesh->Bounds.Max == glm::vec3(1000, 1000, 0));
+		const glm::vec3 expected[] = { { 0, 0, 1 }, { 0, 0, 1 }, { 0, -1, 0 }, { 1, 0, 0 } };
+		const glm::vec2 uvs[] = { { 0, 1 }, { 1, 1 }, { 1, 0 }, { 0, 0 } };
+		for (const auto& vertex : mesh->Vertices)
+		{
+			const auto index = static_cast<size_t>(std::find(std::begin(uvs), std::end(uvs), vertex.TexCoord) - std::begin(uvs));
+			REQUIRE(index < 4);
+			CHECK(glm::length(vertex.Normal - expected[index]) < 1e-5f);
+		}
+		const auto node = std::find_if(mesh->Nodes.begin(), mesh->Nodes.end(), [](const MeshNode& n) { return n.Name == "Quad"; });
+		REQUIRE(node != mesh->Nodes.end());
+		CHECK(node->Scale == glm::vec3(0.001f));
 	}
 
 	TEST_CASE("KHR_texture_basisu external and embedded images reach the texture cache")

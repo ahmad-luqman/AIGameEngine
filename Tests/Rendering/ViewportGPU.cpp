@@ -5,7 +5,9 @@
 
 #include <Basalt/Animation/AnimationSystem.h>
 #include <Basalt/Asset/AssetManager.h>
+#include <Basalt/Asset/ImageUtils.h>
 #include <Basalt/Asset/MeshOptimizer.h>
+#include <Basalt/Core/FileSystem.h>
 
 #include "../Source/TestUtils.h"
 #include "../Source/MeshTestUtils.h"
@@ -731,5 +733,94 @@ TEST_CASE("Full thin transmission reveals an emissive destination instead of dar
 	glass.Transmission = 0;
 	const auto blocked = Capture(renderer, scene, camera);
 	CHECK(std::abs(int(blocked[centre + 2]) - int(unobstructed[centre + 2])) > 40);
+
+	// An opaque override (alpha 1) keeps full coverage with transmission: a white albedo map whose alpha is zero
+	// must not punch holes, so half transmission still lets exactly half of the background through.
+	BasaltTest::TempDirectory temp("TransmissionCoverage");
+	std::string error;
+	const std::vector<uint8_t> clear = { 255, 255, 255, 0 };
+	REQUIRE(WritePng(temp.GetPath() / "clear.png", clear, 1, 1, error));
+	glass.Transmission = 0.5f;
+	const auto half = Capture(renderer, scene, camera);
+	glass.AlbedoMap = FileSystem::PathToUtf8(temp.GetPath() / "clear.png");
+	const auto halfWithMap = Capture(renderer, scene, camera);
+	for (size_t channel = 0; channel < 3; channel++)
+		CHECK(std::abs(int(halfWithMap[centre + channel]) - int(half[centre + channel])) <= 1);
+	CHECK(std::abs(int(half[centre + 2]) - int(unobstructed[centre + 2])) > 20);
+	// Translucent overrides still use albedo alpha as coverage.
+	glass.AlbedoColor.a = 0.5f;
+	CHECK(std::abs(int(Capture(renderer, scene, camera)[centre + 2]) - int(halfWithMap[centre + 2])) > 10);
+	AssetManager::Clear();
+	CHECK(graphics->GetValidationErrorCount() == 0);
+}
+
+TEST_CASE("Clearcoat, transmission and UV-transformed maps render through shadows, SSAO and the prepass")
+{
+	auto graphics = CreateTestGraphics();
+	BasaltTest::TempDirectory temp("ExtendedMaterialScene");
+	std::string error;
+	std::vector<uint8_t> checker(size_t{ 8 } * 8 * 4);
+	for (size_t pixel = 0; pixel < 64; pixel++)
+	{
+		const uint8_t value = ((pixel % 8) / 2 + (pixel / 16)) % 2 ? 230 : 40;
+		checker[pixel * 4] = value;
+		checker[pixel * 4 + 1] = 128;
+		checker[pixel * 4 + 2] = 220;
+		checker[pixel * 4 + 3] = 255;
+	}
+	const auto map = FileSystem::PathToUtf8(temp.GetPath() / "checker.png");
+	REQUIRE(WritePng(temp.GetPath() / "checker.png", checker, 8, 8, error));
+
+	Scene scene;
+	scene.GetRendererSettings().SSAOEnabled = true;
+	scene.GetRendererSettings().ShadowsEnabled = true;
+	auto sun = scene.CreateEntity("Sun");
+	sun.AddComponent<DirectionalLightComponent>().CastShadows = true;
+	sun.GetTransform().Rotation = glm::quat(glm::radians(glm::vec3(-50.0f, 30.0f, 0.0f)));
+	auto ground = scene.CreateEntity("Ground");
+	ground.AddComponent<MeshComponent>().Mesh = "builtin://Cube";
+	ground.GetTransform().Translation = { 0, -1.5f, 0 };
+	ground.GetTransform().Scale = { 6, 0.2f, 6 };
+	RenderCamera camera;
+	camera.Position = { 0, 1, 5 };
+	camera.View = glm::lookAtRH(camera.Position, glm::vec3(0), glm::vec3(0, 1, 0));
+	camera.Projection = glm::perspectiveRH_ZO(glm::radians(45.0f), 1.0f, 0.1f, 50.0f);
+	camera.Far = 50;
+	SceneRenderer renderer(graphics->GetDevice());
+	REQUIRE(renderer.Initialize());
+	renderer.SetViewportSize(96, 96);
+	const auto empty = Capture(renderer, scene, camera);
+
+	const glm::vec3 positions[] = { { -1.2f, 0, 0 }, { 1.2f, 0, 0 } };
+	for (size_t i = 0; i < 2; i++)
+	{
+		auto sphere = scene.CreateEntity("Sphere");
+		sphere.AddComponent<MeshComponent>().Mesh = "builtin://Sphere";
+		sphere.GetTransform().Translation = positions[i];
+		auto& material = sphere.AddComponent<MaterialComponent>();
+		material.AlbedoColor = { 0.8f, 0.3f, 0.2f, 1.0f };
+		material.NormalMap = map;
+		material.Clearcoat = 0.9f;
+		material.ClearcoatRoughness = 0.1f;
+		material.ClearcoatMap = material.ClearcoatRoughnessMap = material.ClearcoatNormalMap = map;
+		material.UVScale = { 2, 3 };
+		material.UVOffset = { 0.1f, 0.2f };
+		material.UVRotation = 0.5f;
+		// The right sphere also transmits, so the blended pass shades the same maps.
+		if (i == 1)
+		{
+			material.Transmission = 0.6f;
+			material.TransmissionMap = map;
+		}
+	}
+	const auto shaded = Capture(renderer, scene, camera);
+	REQUIRE(shaded.size() == empty.size());
+	for (const uint32_t x : { 30u, 66u })
+	{
+		const size_t pixel = (size_t(48) * 96 + x) * 4;
+		INFO("x " << x);
+		CHECK(std::abs(int(shaded[pixel]) - int(empty[pixel])) + std::abs(int(shaded[pixel + 1]) - int(empty[pixel + 1])) + std::abs(int(shaded[pixel + 2]) - int(empty[pixel + 2])) > 20);
+	}
+	AssetManager::Clear();
 	CHECK(graphics->GetValidationErrorCount() == 0);
 }

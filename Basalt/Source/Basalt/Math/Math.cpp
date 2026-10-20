@@ -28,6 +28,11 @@ namespace Basalt::Math {
 		return true;
 	}
 
+	bool IsFinite(const glm::vec2& vector)
+	{
+		return std::isfinite(vector.x) && std::isfinite(vector.y);
+	}
+
 	bool IsFinite(const glm::vec3& vector)
 	{
 		return std::isfinite(vector.x) && std::isfinite(vector.y) && std::isfinite(vector.z);

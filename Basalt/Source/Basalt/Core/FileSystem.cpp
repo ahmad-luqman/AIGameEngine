@@ -198,6 +198,26 @@ namespace Basalt {
 		return std::filesystem::exists(path, error);
 	}
 
+	bool FileSystem::FindSymlink(const std::filesystem::path& root, const std::filesystem::path& relative, std::filesystem::path& outEntry, std::error_code& outError)
+	{
+		outError.clear();
+		auto entry = root;
+		for (const auto& component : relative)
+		{
+			entry /= component;
+			std::error_code error;
+			const auto status = std::filesystem::symlink_status(entry, error);
+			if (std::filesystem::is_symlink(status) || (error && error != std::errc::no_such_file_or_directory))
+			{
+				if (!std::filesystem::is_symlink(status))
+					outError = error;
+				outEntry = std::move(entry);
+				return true;
+			}
+		}
+		return false;
+	}
+
 	std::filesystem::path FileSystem::GetExecutableDirectory()
 	{
 #if defined(BS_PLATFORM_WINDOWS)

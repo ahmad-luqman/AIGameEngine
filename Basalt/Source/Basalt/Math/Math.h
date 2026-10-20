@@ -13,6 +13,7 @@ namespace Basalt::Math {
 	// Strict TRS decomposition for imported affine matrices, including zero-scale axes; rejects shear.
 	bool DecomposeAffineTransform(const glm::mat4& transform, glm::vec3& outTranslation, glm::quat& outRotation, glm::vec3& outScale);
 	bool IsFinite(const glm::mat4& matrix);
+	bool IsFinite(const glm::vec2& vector);
 	bool IsFinite(const glm::vec3& vector);
 	bool IsFinite(const glm::quat& rotation);
 

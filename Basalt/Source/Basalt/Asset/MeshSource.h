@@ -34,17 +34,36 @@ namespace Basalt {
 		Blend
 	};
 
+	// Material texture maps in the order of MaterialData::TextureTransforms and GPU UV rows. Common.glsl's
+	// MATERIAL_SLOT_* defines must match; a mismatch samples the wrong map's UVs without any error.
+	enum class MaterialTextureSlot : uint32_t
+	{
+		Albedo = 0,
+		Normal,
+		MetallicRoughness,
+		Occlusion,
+		Emissive,
+		Clearcoat,
+		ClearcoatRoughness,
+		ClearcoatNormal,
+		Transmission,
+		Count
+	};
+	constexpr size_t MaterialTextureSlotCount = static_cast<size_t>(MaterialTextureSlot::Count);
+	static_assert(MaterialTextureSlotCount == 9, "update Common.glsl MATERIAL_SLOT_* and MaterialData::UVRows");
+
 	// Per-texture affine UV transform and source coordinate set (glTF KHR_texture_transform).
 	struct TextureTransform
 	{
 		glm::vec2 Offset = glm::vec2(0);
 		glm::vec2 Scale = glm::vec2(1);
 		float Rotation = 0;
-		uint32_t TexCoord = 0;
+		uint32_t TexCoord = 0; // 0 or 1 (the importer rejects other sets): TEXCOORD_0 or TEXCOORD_1.
 	};
 
-	// Material imported with a mesh (glTF metallic-roughness). Texture fields are texture asset keys
-	// understood by AssetManager::GetTexture (file paths or "<mesh>#image/<index>" for embedded images).
+	// Material imported with a mesh: glTF metallic-roughness plus clearcoat, transmission, normal/occlusion
+	// strengths and per-map KHR_texture_transform/texCoord. Texture fields are texture asset keys understood by
+	// AssetManager::GetTexture (file paths or "<mesh>#image/<index>" for embedded images).
 	struct MaterialData
 	{
 		std::string Name;
@@ -71,8 +90,12 @@ namespace Basalt {
 		std::string ClearcoatRoughnessMap;
 		std::string ClearcoatNormalMap;
 		std::string TransmissionMap;
-		// Albedo, normal, metallic/roughness, occlusion, emissive, coat, coat roughness, coat normal, transmission.
-		std::array<TextureTransform, 9> TextureTransforms;
+		// Indexed by MaterialTextureSlot.
+		std::array<TextureTransform, MaterialTextureSlotCount> TextureTransforms;
+
+		// Drawn in the blended pass: alpha blending, or thin transmission revealing what lies behind. Such
+		// draws keep their triangle order and LOD 0 and cast no shadows.
+		bool IsBlended() const { return Alpha == AlphaMode::Blend || Transmission > 0; }
 	};
 
 	// Bind-space influence bounds. Homogeneous weight sums retain conservative bounds even when

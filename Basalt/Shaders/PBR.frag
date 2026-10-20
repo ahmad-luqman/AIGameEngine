@@ -21,8 +21,7 @@ layout(location = 0) out vec4 o_Color;
 
 layout(location = 5) in vec2 v_TexCoord1;
 
-// The transparent pass approximates thin transmission by passing through the destination;
-// reflected specular stays visible even at full transmission. Refraction/volume are not modeled.
+// Transmission removes the transmitted share of the diffuse base; main() lets the destination through for it.
 vec3 EvaluateSurfaceLight(Surface surface, vec3 V, vec3 L, vec3 radiance, vec3 F0)
 {
 	vec3 base = EvaluateLight(surface.Normal, V, L, radiance, surface.Albedo * (1.0 - surface.Transmission), surface.Metallic, surface.Roughness, F0);
@@ -127,6 +126,9 @@ void main()
 	color += ambient * occlusion;
 	color += surface.Emissive;
 
+	// Premultiplied output (blend One, InvSrcAlpha): coverage scales the color, and thin transmission lowers only
+	// the destination's occlusion, so reflected specular stays visible even at full transmission. Refraction,
+	// volume absorption and background blur are not modeled.
 	float coverage = material.Extensions.w > 0.5 ? surface.Alpha : 1.0;
 	o_Color = vec4(color * coverage, coverage * (1.0 - surface.Transmission));
 }

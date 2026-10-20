@@ -1255,7 +1255,6 @@ namespace Basalt {
 				{ "UVOffset", ToJson(c.UVOffset) },
 				{ "UVScale", ToJson(c.UVScale) },
 				{ "UVRotation", c.UVRotation },
-
 			};
 		}
 
@@ -1671,7 +1670,15 @@ namespace Basalt {
 
 		std::string Validate(const MaterialComponent& c)
 		{
-			return c.Clearcoat < 0 || c.Clearcoat > 1 || c.ClearcoatRoughness < 0 || c.ClearcoatRoughness > 1 || c.Transmission < 0 || c.Transmission > 1 ? "Material Clearcoat, ClearcoatRoughness and Transmission must be in [0,1]" : "";
+			// JSON readers already reject non-finite numbers; isfinite keeps the check complete for any caller.
+			const std::pair<const char*, float> unitFields[] = { { "Clearcoat", c.Clearcoat }, { "ClearcoatRoughness", c.ClearcoatRoughness }, { "Transmission", c.Transmission } };
+			for (const auto& [name, value] : unitFields)
+				if (!std::isfinite(value) || value < 0.0f || value > 1.0f)
+					return fmt::format("{} {} must be in [0, 1]", name, value);
+			// Matches the importer's rule for KHR_materials_emissive_strength.
+			if (!std::isfinite(c.EmissiveIntensity) || c.EmissiveIntensity < 0.0f)
+				return fmt::format("EmissiveIntensity {} must be finite and nonnegative", c.EmissiveIntensity);
+			return {};
 		}
 
 		std::string Validate(const MeshComponent& c)

@@ -1,13 +1,82 @@
 #include "Basalt/Asset/TextureSource.h"
 
-#include "Basalt/Core/FileSystem.h"
 #include "Basalt/Asset/TextureCompression.h"
+#include "Basalt/Core/FileSystem.h"
 
+#include <bc7decomp.h>
+#include <spdlog/fmt/fmt.h>
 #include <stb_image.h>
 
+#include <algorithm>
 #include <cstring>
 
 namespace Basalt {
+
+	uint32_t TextureSource::MipCount(uint32_t width, uint32_t height)
+	{
+		uint32_t count = 1;
+		for (uint32_t size = std::max(width, height); size > 1; size /= 2)
+			count++;
+		return count;
+	}
+
+	size_t TextureSource::BC7LevelSize(uint32_t width, uint32_t height, uint32_t mip)
+	{
+		const uint32_t w = std::max(1u, width >> mip), h = std::max(1u, height >> mip);
+		return size_t((w + 3) / 4) * ((h + 3) / 4) * 16;
+	}
+
+	bool TextureSource::HasValidBC7Layout() const
+	{
+		if (Format != TextureFormat::BC7 || !Width || !Height || Width > MaxDimension || Height > MaxDimension || MipOffsets.empty() || MipOffsets.size() > MipCount(Width, Height))
+			return false;
+		size_t expected = 0;
+		for (size_t mip = 0; mip < MipOffsets.size(); mip++)
+		{
+			if (MipOffsets[mip] != expected)
+				return false;
+			expected += BC7LevelSize(Width, Height, static_cast<uint32_t>(mip));
+		}
+		return expected == Pixels.size();
+	}
+
+	Ref<TextureSource> TextureSource::DecodeRGBA8(uint32_t mip, std::string& outError) const
+	{
+		if (!HasValidBC7Layout())
+		{
+			outError = "invalid BC7 mip layout";
+			return nullptr;
+		}
+		if (mip >= MipOffsets.size())
+		{
+			outError = fmt::format("BC7 mip {} out of range ({} levels)", mip, MipOffsets.size());
+			return nullptr;
+		}
+		const uint32_t width = std::max(1u, Width >> mip), height = std::max(1u, Height >> mip);
+		const uint32_t blocksPerRow = (width + 3) / 4;
+
+		auto result = CreateRef<TextureSource>();
+		result->Width = width;
+		result->Height = height;
+		result->SRGB = SRGB;
+		result->Pixels.resize(size_t(width) * height * 4);
+		for (uint32_t by = 0; by < (height + 3) / 4; by++)
+			for (uint32_t bx = 0; bx < blocksPerRow; bx++)
+			{
+				bc7decomp::color_rgba block[16];
+				if (!bc7decomp::unpack_bc7(Pixels.data() + MipOffsets[mip] + (size_t(by) * blocksPerRow + bx) * 16, block))
+				{
+					outError = fmt::format("invalid BC7 block in mip {}", mip);
+					return nullptr;
+				}
+				for (uint32_t y = 0; y < 4 && by * 4 + y < height; y++)
+					for (uint32_t x = 0; x < 4 && bx * 4 + x < width; x++)
+						std::memcpy(result->Pixels.data() + (size_t(by * 4 + y) * width + size_t(bx) * 4 + x) * 4, block[y * 4 + x].m_comps, 4);
+			}
+		result->UpdateMemoryUsage();
+		outError.clear();
+		return result;
+	}
 
 	void TextureSource::UpdateMemoryUsage()
 	{

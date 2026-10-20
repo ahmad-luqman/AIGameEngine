@@ -61,7 +61,7 @@ struct MaterialData
 	vec4 Params;          // x: metallic, y: roughness, z: alpha cutoff (0 = opaque), w: flags
 	vec4 Extensions;      // clearcoat, coat roughness, transmission, use albedo alpha as coverage
 	vec4 NormalParams;    // normal scale, occlusion strength, coat normal scale
-	vec4 UVRows[18];      // two affine rows per map, first row.w selects UV0/UV1
+	vec4 UVRows[18];      // two affine rows per MATERIAL_SLOT_*, first row.w selects UV0/UV1
 };
 
 layout(std430, set = 0, binding = 2) readonly buffer MaterialBuffer
@@ -106,6 +106,17 @@ mat4 ShadowViewProjection(uint index)
 #define MATERIAL_HAS_CLEARCOAT_ROUGHNESS_MAP 64u
 #define MATERIAL_HAS_CLEARCOAT_NORMAL_MAP 128u
 #define MATERIAL_HAS_TRANSMISSION_MAP 256u
+
+// Texture slots, in the order of MaterialTextureSlot (Asset/MeshSource.h).
+#define MATERIAL_SLOT_ALBEDO 0
+#define MATERIAL_SLOT_NORMAL 1
+#define MATERIAL_SLOT_METALLIC_ROUGHNESS 2
+#define MATERIAL_SLOT_OCCLUSION 3
+#define MATERIAL_SLOT_EMISSIVE 4
+#define MATERIAL_SLOT_CLEARCOAT 5
+#define MATERIAL_SLOT_CLEARCOAT_ROUGHNESS 6
+#define MATERIAL_SLOT_CLEARCOAT_NORMAL 7
+#define MATERIAL_SLOT_TRANSMISSION 8
 
 vec3 RotateY(vec3 v, float angle)
 {
