@@ -136,7 +136,7 @@ FetchContent_Declare(bc7enc SYSTEM
 	SOURCE_SUBDIR _BasaltNoCMake)
 FetchContent_Declare(basisu SYSTEM
 	GIT_REPOSITORY https://github.com/BinomialLLC/basis_universal.git
-	GIT_TAG v1_60
+	GIT_TAG v1_60_snapshot_final # c54f46f8aaa44eff1bc6e1d919e61e18b2b8f7d1; fixes LP64 debug overloads
 	GIT_SHALLOW TRUE
 	SOURCE_SUBDIR _BasaltNoCMake)
 
