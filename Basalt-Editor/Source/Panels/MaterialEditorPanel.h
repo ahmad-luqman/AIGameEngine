@@ -6,6 +6,7 @@
 #include "Basalt/Core/FileWatcher.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -37,6 +38,8 @@ namespace Basalt {
 		bool IsOpen() const { return m_Draft.IsOpen(); }
 		// The problem shown in the window (a failed save, an unreadable change on disk), or empty.
 		const std::string& GetError() const { return m_Error; }
+		// The last save's warnings, joined (empty when it had none).
+		const std::string& GetWarning() const { return m_Warning; }
 		// Files changed on disk: an open clean draft follows its file, a dirty one reports the conflict.
 		void OnFilesChanged(const std::vector<FileChange>& changes);
 		// asset.move/asset.rename moved a file: the draft follows its own file and the maps that name the moved one.
@@ -58,11 +61,11 @@ namespace Basalt {
 		MaterialAssetDraft m_Draft;
 		// The project the draft belongs to; another one closes it.
 		std::weak_ptr<Project> m_Project;
-		// What a discard prompt is for: opening this path, or closing the window when empty.
-		std::string m_PendingOpen;
+		// The discard prompt to open, for opening this path (or closing the window when it has none).
 		bool m_PromptDiscard = false;
+		std::optional<std::string> m_PendingOpen;
 		std::string m_Error;
-		// The last save's texture warnings (missing, unresolved or non-texture maps).
+		// The last save's warnings (the texture problems asset.write reports, an adopted sidecar).
 		std::string m_Warning;
 	};
 

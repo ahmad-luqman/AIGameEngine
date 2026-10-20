@@ -215,7 +215,8 @@ namespace Basalt {
 		// one: it is not the model's, so "<model>#material/<n>" and extraction stop before it (GetImportedMaterialCount).
 		std::vector<MaterialData> Materials;
 		std::vector<MeshNode> Nodes;
-		// Materials without the trailing default one.
+		// Materials without the trailing default one, which is also the default's index. Every MeshSource the importer or
+		// Primitives make has that default; an empty list (a hand-built source) counts as none.
 		size_t GetImportedMaterialCount() const { return Materials.empty() ? 0 : Materials.size() - 1; }
 		std::vector<MeshSkin> Skins;
 		std::vector<AnimationClip> Animations;

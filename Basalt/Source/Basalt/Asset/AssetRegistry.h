@@ -37,8 +37,11 @@ namespace Basalt {
 		bool Decode(const nlohmann::json& value, std::string& path, std::string& outError, bool preserveUnresolved = false) const;
 		static constexpr std::string_view UnresolvedPrefix = "asset-uuid://";
 		static bool IsUnresolvedKey(std::string_view key) { return key.starts_with(UnresolvedPrefix); }
-		// "unresolved asset UUID <id> (was '<path hint>')" for an unresolved key, for messages.
-		static std::string DescribeUnresolved(std::string_view key);
+		// "unresolved asset UUID <id> (hint: <path>)" for an unresolved key (an IsUnresolvedKey one), with why that file has
+		// no identity when this registry knows (a broken sidecar): the message Decode reports, for every consumer.
+		std::string DescribeUnresolved(std::string_view key) const;
+		// An unresolved key's UUID and path hint; nullopt for any other or a malformed key.
+		static std::optional<std::pair<UUID, std::string>> ParseUnresolvedKey(std::string_view key);
 		// Uses the last scan; batch writers refresh once before encoding their references. May create sidecars.
 		bool Encode(const std::string& path, nlohmann::json& value, std::string& outError);
 		// Deletes one source and its identity together; never leaves a reusable orphan on success.
@@ -47,6 +50,7 @@ namespace Basalt {
 		bool Move(const std::string& from, const std::string& to, std::string& outError);
 
 	private:
+		std::string DescribeUnresolved(UUID id, const std::string& hint) const;
 		std::optional<UUID> EnsureIndexed(const std::string& path, std::string& outError);
 		bool CheckPath(const std::string& path, std::filesystem::path& absolute, std::string& outError, bool allowHash = false) const;
 		std::filesystem::path m_Root;

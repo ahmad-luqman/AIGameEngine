@@ -177,7 +177,8 @@ return %s
 				label = "Material name:";
 			ImGui::TextUnformatted(label);
 			ImGui::InputText("##ItemName", &m_NewItemName);
-			const bool valid = !m_NewItemName.empty() && m_NewItemName.find_first_of("/\\.:") == std::string::npos;
+			// A material's name must already be a safe file name on every platform (no device names such as CON).
+			const bool valid = !m_NewItemName.empty() && m_NewItemName.find_first_of("/\\.:") == std::string::npos && (m_NewItem != NewItem::Material || MaterialAsset::MakeFileName(m_NewItemName) == m_NewItemName);
 			ImGui::BeginDisabled(!valid);
 			if (ImGui::Button("Create"))
 			{
@@ -286,11 +287,11 @@ return %s
 				// Next to the model, in a Materials folder (material.extract's default).
 				if (const auto result = m_Context.Execute("material.extract", { { "model", relative } }))
 				{
-					// Missing or unresolved textures render white: say so instead of reporting a plain success.
-					const auto warnings = result->value("warnings", nlohmann::json::array());
-					for (const auto& warning : warnings)
-						BS_WARN("Extract Materials: {}", warning.dump());
-					m_Context.SetStatus(fmt::format("Extracted {} material(s) from {}{}", (*result)["materials"].size(), relative, warnings.empty() ? "" : fmt::format(", with {} warning(s): see Console", warnings.size())), !warnings.empty());
+					// Textures with problems render without that texture: say so instead of reporting a plain success.
+					const std::string warnings = EditorContext::JoinWarnings(*result);
+					if (!warnings.empty())
+						BS_WARN("Extract Materials: {}", warnings);
+					m_Context.SetStatus(fmt::format("Extracted {} material(s) from {}{}", (*result)["materials"].size(), relative, warnings.empty() ? "" : " with warnings: see Console"), !warnings.empty());
 				}
 			}
 			if (ImGui::MenuItem("Delete"))
@@ -330,7 +331,7 @@ return %s
 			ImGui::Separator();
 			for (size_t i = 0; i < std::min(materials.size(), ShownMaterials); i++)
 			{
-				DrawPreviewSquare(*m_Thumbnails->GetMaterial(MakeSubAssetKey(relative, ImportedMaterialMarker, i), materials[i].Values), Sphere);
+				DrawPreviewSquare(*m_Thumbnails->GetMaterial(MakeSubAssetKey(relative, ImportedMaterialMarker, static_cast<uint32_t>(i)), materials[i].Values), Sphere);
 				ImGui::SameLine();
 				ImGui::AlignTextToFramePadding();
 				ImGui::TextUnformatted(materials[i].Name.c_str());

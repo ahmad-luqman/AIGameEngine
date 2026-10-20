@@ -122,7 +122,7 @@ namespace Basalt {
 		StopWorker();
 		m_Root = root;
 		// "Assets/" and "./Assets" are "Assets": watched paths and acknowledgements are compared as text.
-		std::string normal = FileSystem::PathToGenericUtf8(FileSystem::PathFromUtf8(subdirectory).lexically_normal());
+		std::string normal = FileSystem::NormalizeGeneric(subdirectory);
 		while (normal.ends_with('/') || normal == ".")
 			normal.pop_back();
 		m_Subdirectory = std::move(normal);
@@ -172,7 +172,7 @@ namespace Basalt {
 
 	bool FileWatcher::IsKnown(const std::string& relativePath) const
 	{
-		return m_Reported.contains(FileSystem::PathToGenericUtf8(FileSystem::PathFromUtf8(relativePath).lexically_normal()));
+		return m_Reported.contains(FileSystem::NormalizeGeneric(relativePath));
 	}
 
 	void FileWatcher::AssertOwnerThread() const
@@ -188,7 +188,7 @@ namespace Basalt {
 	std::optional<FileChangeType> FileWatcher::Acknowledge(const std::string& relativePath)
 	{
 		AssertOwnerThread();
-		const std::string path = FileSystem::PathToGenericUtf8(FileSystem::PathFromUtf8(relativePath).lexically_normal());
+		const std::string path = FileSystem::NormalizeGeneric(relativePath);
 		// Files outside the watched folder are never scanned: recording them would report them as removed.
 		if (!IsWatching() || !IsWatchedPath(path))
 			return std::nullopt;

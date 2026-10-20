@@ -60,6 +60,8 @@ def check_thumbnails(call, require, output, project):
     require(sky["width"] == 2 * sky["height"] and "HDR" in sky["details"][0], f"the environment keeps its 2:1 aspect: {sky}")
     crate = call("editor.thumbnail", {"path": "Assets/Crate.glb"})
     require(any("triangles" in line for line in crate["details"]), f"model details: {crate}")
+    # The importer's default material for primitives without one is not counted.
+    require(any("1 material(s)" in line for line in crate["details"]), f"model material count: {crate}")
     require(call("editor.thumbnail", {"path": "Assets/Orb.bprefab"})["details"] == ["2 entities"], "prefab details")
     require(call("editor.thumbnail", {"path": "Assets/Tiles.bmaterial"})["details"] == ["Mask, double-sided, 1 map(s)"], "material details")
     # Rewriting the material (or touching its texture) makes its cached preview stale.
@@ -105,11 +107,20 @@ def check_thumbnails(call, require, output, project):
     call("component.set", {"entity": ball, "component": "Material", "data": {"Material": ""}})
 
     # The Material Editor shows a material file and follows writes made while it has no unsaved edits.
-    state = call("editor.material_editor", {"path": "Assets/Tiles.bmaterial"})
+    # Paths are normalized like file events, so the draft follows its file whichever spelling opened it.
+    state = call("editor.material_editor", {"path": "Assets/Sub/../Tiles.bmaterial"})
     require(state["open"] and state["path"] == "Assets/Tiles.bmaterial" and not state["dirty"] and state["valid"] and not state["error"], f"material editor: {state}")
+    for bad in ("Assets/../Project.bproject", "../Outside.bmaterial", "Assets/Checker.png"):
+        call("editor.material_editor", {"path": bad}, error="is not a .bmaterial file under Assets/")
+    # An unreadable change is a conflict the window reports; a valid one is followed (the draft has no edits).
+    Path(project, "Assets/Tiles.bmaterial").write_text("{")
+    call("asset.refresh", {"paths": ["Assets/Tiles.bmaterial"]})
+    broken = call("editor.material_editor", {})
+    require(broken["externalChange"] and "cannot be read" in broken["error"], f"an unreadable change was not reported: {broken}")
     material["Roughness"] = 0.25
     call("asset.write", {"path": "Assets/Tiles.bmaterial", "content": json.dumps(material)})
-    require(not call("editor.material_editor", {})["dirty"], "a clean draft did not follow the file")
+    followed = call("editor.material_editor", {})
+    require(not followed["dirty"] and not followed["externalChange"] and not followed["error"], f"a clean draft did not follow the file: {followed}")
     call("editor.material_editor", {"path": "Assets/Missing.bmaterial"}, error="cannot read")
     require(call("editor.material_editor", {})["path"] == "Assets/Tiles.bmaterial", "a failed open replaced the draft")
 

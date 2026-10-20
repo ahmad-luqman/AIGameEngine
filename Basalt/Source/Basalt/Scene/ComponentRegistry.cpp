@@ -1673,8 +1673,9 @@ namespace Basalt {
 
 		std::string Validate(const MaterialComponent& c)
 		{
-			// The material file and importer rules, so an inline material is valid exactly when it would be as a file.
-			if (auto problem = MaterialAsset::Validate(MaterialAsset::FromComponent(c, false)))
+			// The material file and importer rules, so an inline material is valid exactly when it would be as a file. (Its UV
+			// values are named as TextureTransforms there; JSON readers reject the only invalid ones, non-finite numbers.)
+			if (auto problem = MaterialAsset::Validate(MaterialAsset::ScalarsFromComponent(c)))
 				return *problem;
 			// Unresolved UUID references stay opaque keys so the project validator can report them.
 			if (!c.Material.empty() && !MaterialAsset::IsMaterialKey(c.Material) && !AssetRegistry::IsUnresolvedKey(c.Material))

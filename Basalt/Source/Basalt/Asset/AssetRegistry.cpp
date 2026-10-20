@@ -1,6 +1,7 @@
 #include "Basalt/Asset/AssetRegistry.h"
 
 #include "Basalt/Asset/AssetKey.h"
+#include "Basalt/Core/Assert.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
@@ -305,12 +306,33 @@ namespace Basalt {
 		return CheckPath(std::string(GetAssetSource(key)), asset, ignored) && CheckPath(source, target, ignored) && asset == target;
 	}
 
-	std::string AssetRegistry::DescribeUnresolved(std::string_view key)
+	std::optional<std::pair<UUID, std::string>> AssetRegistry::ParseUnresolvedKey(std::string_view key)
 	{
-		const std::string_view encoded = key.substr(std::min(key.size(), UnresolvedPrefix.size()));
+		if (!IsUnresolvedKey(key))
+			return std::nullopt;
+		const std::string_view encoded = key.substr(UnresolvedPrefix.size());
 		const size_t split = encoded.find('/');
-		const auto hint = split == std::string_view::npos ? std::nullopt : DecodeHint(encoded.substr(split + 1));
-		return "unresolved asset UUID " + std::string(encoded.substr(0, split)) + (hint ? " (was '" + *hint + "')" : std::string());
+		std::string ignored;
+		const auto id = split == std::string_view::npos ? std::nullopt : ParseID(encoded.substr(0, split), ignored);
+		auto hint = split == std::string_view::npos ? std::nullopt : DecodeHint(encoded.substr(split + 1));
+		if (!id || !hint)
+			return std::nullopt;
+		return std::pair{ *id, std::move(*hint) };
+	}
+
+	std::string AssetRegistry::DescribeUnresolved(UUID id, const std::string& hint) const
+	{
+		std::string description = "unresolved asset UUID " + std::to_string(static_cast<uint64_t>(id)) + " (hint: " + hint + ")";
+		if (const auto problem = m_Problems.find(std::string(GetAssetSource(hint))); problem != m_Problems.end())
+			description += ": " + problem->second;
+		return description;
+	}
+
+	std::string AssetRegistry::DescribeUnresolved(std::string_view key) const
+	{
+		BS_CORE_ASSERT(IsUnresolvedKey(key), "DescribeUnresolved takes asset-uuid:// keys");
+		const auto parsed = ParseUnresolvedKey(key);
+		return parsed ? DescribeUnresolved(parsed->first, parsed->second) : "invalid opaque asset UUID reference '" + std::string(key) + "'";
 	}
 
 	bool AssetRegistry::Decode(const nlohmann::json& value, std::string& path, std::string& outError, bool preserveUnresolved) const
@@ -333,10 +355,7 @@ namespace Basalt {
 		if (path.empty())
 		{
 			const auto& hint = value["Path"].get_ref<const std::string&>();
-			outError = "unresolved asset UUID " + std::to_string(*id) + " (hint: " + hint + ")";
-			const std::string source(GetAssetSource(hint));
-			if (const auto problem = m_Problems.find(source); problem != m_Problems.end())
-				outError += ": " + problem->second;
+			outError = DescribeUnresolved(*id, hint);
 			if (!preserveUnresolved)
 				return false;
 			path = "asset-uuid://" + std::to_string(*id) + "/" + EncodeHint(hint);
@@ -352,16 +371,13 @@ namespace Basalt {
 		value = path;
 		if (IsUnresolvedKey(path))
 		{
-			const std::string_view encoded = std::string_view(path).substr(UnresolvedPrefix.size());
-			const auto split = encoded.find('/');
-			const auto id = split == std::string_view::npos ? std::nullopt : ParseID(encoded.substr(0, split), outError);
-			const auto hint = split == std::string_view::npos ? std::nullopt : DecodeHint(encoded.substr(split + 1));
-			if (!id || !hint)
+			const auto parsed = ParseUnresolvedKey(path);
+			if (!parsed)
 			{
 				outError = "invalid opaque asset UUID reference";
 				return false;
 			}
-			value = { { "UUID", std::to_string(*id) }, { "Path", *hint } };
+			value = { { "UUID", std::to_string(static_cast<uint64_t>(parsed->first)) }, { "Path", parsed->second } };
 			return true;
 		}
 		if (path.empty() || path.starts_with("builtin://"))

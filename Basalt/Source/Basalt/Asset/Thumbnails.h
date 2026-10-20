@@ -64,10 +64,13 @@ namespace Basalt {
 	// NaN (written as null) still compares equal and is not re-rendered every frame; JSON array boundaries keep
 	// paths containing separators from producing the same key.
 	std::string MaterialPreviewKey(const MaterialComponent& material);
+	// The same for a material by value (a draft, a model's imported material): every value as a file stores it.
+	std::string MaterialPreviewKey(const MaterialData& material);
 	// The project-relative files a material preview reads, sorted: its inline maps' files, its Material asset's file and
-	// what that reads (a .bmaterial's textures, decoded through the active project; a model's buffers and external
-	// images, for its embedded images and imported materials). A change to any of them stales the preview. Empty
-	// without an active project.
+	// what that reads (a .bmaterial's textures, decoded through the active project, plus the sidecars of its UUID
+	// references, and a UUID that does not decode by its Path hint; a model's buffers and external images, for its
+	// embedded images and imported materials). A change to any of them stales the preview. Empty without an active
+	// project.
 	std::vector<std::string> MaterialPreviewDependencies(const MaterialComponent& material);
 	// The same for a material by value: the files its textures load from (a model with its buffers and images).
 	std::vector<std::string> MaterialPreviewDependencies(const MaterialData& material);

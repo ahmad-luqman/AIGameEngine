@@ -478,7 +478,8 @@ TEST_SUITE("Project")
 		// A module loaded with require may return anything; only Script components need a class table.
 		temp.WriteFile("Assets/Scripts/Helpers.lua", "return function() return 1 end\n");
 		temp.WriteFile("Assets/Textures/Wall.png", "not decoded by validation");
-		temp.WriteFile("Assets/Models/Ship.glb", "not decoded by validation");
+		// Validation reads a model's JSON for its sub-assets (here an embedded image), never its buffers.
+		temp.WriteFile("Assets/Models/Ship.glb", R"({"asset": {"version": "2.0"}, "images": [{"uri": "data:image/png;base64,AAAA"}]})");
 		// Non-ASCII names must match on every platform (UTF-8 in the scene, the file system's encoding on disk).
 		REQUIRE(FileSystem::WriteTextFile(temp.GetDirectory() / std::filesystem::path(u8"Assets/Textures/\u00c4rger.png"), "x"));
 		temp.WriteFile("Assets/Scenes/Main.bscene", "{\"Entities\": [{\"ID\": 1, \"Name\": \"Wall\", \"Components\": {"

@@ -630,21 +630,26 @@ namespace Basalt {
 								 return nlohmann::json{ { "output", params["output"] }, { "width", image->Width }, { "height", image->Height } };
 							 } });
 
-		m_Commands.Register({ "editor.material_editor", "Opens a material file in the Material Editor window (as double-clicking it in the Content Browser does) or, with close, closes the window and discards unsaved edits. Opening fails while another material has unsaved edits. Returns {open, path, dirty, valid, error}: valid says whether the edited values form a material, error is the window's message (a failed save, an unreadable change on disk).", EditorCommandSchemas::MaterialEditor(), [this](AutomationSession&, const nlohmann::json& params) {
+		m_Commands.Register({ "editor.material_editor", "Opens a material file in the Material Editor window (as double-clicking it in the Content Browser does); with close, first closes the window, discarding unsaved edits (both may be given). Opening fails while another material has unsaved edits. Returns {open, path, dirty, valid, problem, externalChange, error, warnings}: valid says whether the edited values form a material (problem says why not), externalChange that the file changed on disk under unsaved edits, error is the window's message (a failed save, an unreadable change on disk) and warnings what loading or the last save reported.", EditorCommandSchemas::MaterialEditor(), [this](AutomationSession&, const nlohmann::json& params) {
 								 std::string error;
 								 if (params.value("close", false))
 									 m_MaterialEditorPanel.Reset();
 								 if (const auto path = params.find("path"); path != params.end())
 								 {
-									 // The normalized form, so file changes (always normalized) match the draft's path.
-									 const std::string normalized = FileSystem::PathToGenericUtf8(FileSystem::PathFromUtf8(path->get<std::string>()).lexically_normal());
-									 if (!normalized.starts_with("Assets/") || !MaterialAsset::IsMaterialFile(normalized))
-										 throw CommandError("'" + path->get<std::string>() + "' is not a .bmaterial file under Assets/");
-									 if (!m_MaterialEditorPanel.TryOpen(normalized, error))
+									 const std::string requested = path->get<std::string>();
+									 // Project-relative like other commands' paths (an absolute path inside the project is accepted).
+									 const std::filesystem::path given = FileSystem::PathFromUtf8(requested);
+									 const std::string relative = FileSystem::NormalizeGeneric(given.is_absolute() ? Project::MakeRelative(given) : requested);
+									 if (!relative.starts_with("Assets/") || !MaterialAsset::IsMaterialFile(relative))
+										 throw CommandError("'" + requested + "' is not a .bmaterial file under Assets/");
+									 if (!m_MaterialEditorPanel.TryOpen(relative, error))
 										 throw CommandError(error);
 								 }
 								 const MaterialAssetDraft& draft = m_MaterialEditorPanel.GetDraft();
-								 return nlohmann::json{ { "open", m_MaterialEditorPanel.IsOpen() }, { "path", draft.GetPath() }, { "dirty", draft.IsDirty() }, { "valid", draft.IsOpen() && draft.Parse(error).has_value() }, { "error", m_MaterialEditorPanel.GetError() } };
+								 std::string problem;
+								 const bool valid = draft.IsOpen() && draft.Parse(problem).has_value();
+								 nlohmann::json warnings = m_MaterialEditorPanel.GetWarning().empty() ? nlohmann::json(draft.GetWarnings()) : nlohmann::json::array({ m_MaterialEditorPanel.GetWarning() });
+								 return nlohmann::json{ { "open", m_MaterialEditorPanel.IsOpen() }, { "path", draft.GetPath() }, { "dirty", draft.IsDirty() }, { "valid", valid }, { "problem", valid ? std::string() : problem }, { "externalChange", draft.HasExternalChange() }, { "error", m_MaterialEditorPanel.GetError() }, { "warnings", warnings } };
 							 } });
 
 		m_Commands.Register({ "editor.panel", "Opens, closes or focuses an editor window (e.g. focus the Game view, open Project Settings) and returns {name, open}.", EditorCommandSchemas::Panel(), [this](AutomationSession&, const nlohmann::json& params) {
@@ -2293,8 +2298,8 @@ namespace Basalt {
 					if (m_Context.Execute("component.set", { { "entity", id }, { "component", "Material" }, { "data", { { "Material", m_SaveMaterialPath } } } }))
 					{
 						m_Context.CommitHistory();
-						if (const auto warnings = created->value("warnings", nlohmann::json::array()); !warnings.empty())
-							m_Context.SetStatus("Saved " + m_SaveMaterialPath + " with warnings: " + warnings.dump(), true);
+						if (const std::string warnings = EditorContext::JoinWarnings(*created); !warnings.empty())
+							m_Context.SetStatus("Saved " + m_SaveMaterialPath + " with warnings: " + warnings, true);
 					}
 					else
 						m_Context.SetStatus("Wrote " + m_SaveMaterialPath + " but could not use it: " + m_Context.StatusMessage, true);

@@ -30,6 +30,19 @@ namespace Basalt {
 		// nullopt for no URI or a data: URI (embedded).
 		static std::optional<std::string> GetExternalFileKey(const std::string& modelKey, const char* uri);
 
+		// What a glTF's sub-asset keys can name, read from its JSON (buffers are not loaded): "#material/<n>" below
+		// Materials, "#image/<n>" an image stored in the file (an empty ImageUris entry: a buffer view or data: URI).
+		struct Contents
+		{
+			// Per image: empty when embedded, else the external file's URI (which loads as its own texture).
+			std::vector<std::string> ImageUris;
+			size_t Materials = 0;
+		};
+		// nullopt with the parser's reason when the file is not a readable glTF.
+		static std::optional<Contents> Inspect(const std::filesystem::path& path, std::string& outError);
+		// The problem with a "<model>#image/<n>" or "<model>#material/<n>" key given its model's contents, or nullopt.
+		static std::optional<std::string> CheckSubAsset(const Contents& contents, std::string_view key);
+
 		// Static models become an editable entity hierarchy; skinned/animated models use one Animator root.
 		// Returns the root entity named after the file.
 		static Entity InstantiateHierarchy(Scene& scene, const MeshSource& source, const std::string& name, Entity parent);

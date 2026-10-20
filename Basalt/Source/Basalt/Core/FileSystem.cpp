@@ -11,6 +11,7 @@
 	#include <unistd.h>
 #endif
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
@@ -190,6 +191,67 @@ namespace Basalt {
 			if (c >= 'A' && c <= 'Z')
 				c = static_cast<char>(c - 'A' + 'a');
 		return text;
+	}
+
+	std::string FileSystem::NormalizeGeneric(const std::string& path)
+	{
+		return PathToGenericUtf8(PathFromUtf8(path).lexically_normal());
+	}
+
+	const std::vector<std::string>* FileSystem::DirectoryListings::Get(const std::filesystem::path& directory, std::string& outError)
+	{
+		auto [it, inserted] = m_Listings.try_emplace(PathToUtf8(directory));
+		if (inserted)
+		{
+			std::error_code error;
+			for (auto entry = std::filesystem::directory_iterator(directory, error); !error && entry != std::filesystem::directory_iterator(); entry.increment(error))
+				it->second.Names.push_back(PathToUtf8(entry->path().filename()));
+			// A missing directory means a missing file, not an unreadable one.
+			if (error && error != std::errc::no_such_file_or_directory && error != std::errc::not_a_directory)
+				it->second.Error = error.message();
+		}
+		outError = it->second.Error;
+		return outError.empty() ? &it->second.Names : nullptr;
+	}
+
+	FileSystem::PathMatch FileSystem::FindExactCase(const std::filesystem::path& root, const std::filesystem::path& relative, std::string& outActual, std::string& outProblem, DirectoryListings* listings)
+	{
+		DirectoryListings local;
+		DirectoryListings& cache = listings ? *listings : local;
+		std::filesystem::path current = root;
+		std::filesystem::path actual;
+		bool caseDiffers = false;
+		for (const auto& component : relative)
+		{
+			std::string error;
+			const std::vector<std::string>* names = cache.Get(current, error);
+			if (!names)
+			{
+				outProblem = "cannot list '" + PathToUtf8(current) + "': " + error;
+				return PathMatch::Unreadable;
+			}
+			const std::string name = PathToUtf8(component);
+			auto found = std::find(names->begin(), names->end(), name);
+			if (found == names->end())
+			{
+				const std::string folded = ToLowerAscii(name);
+				found = std::find_if(names->begin(), names->end(), [&](const std::string& entry) { return ToLowerAscii(entry) == folded; });
+				if (found == names->end())
+					return PathMatch::Missing;
+				caseDiffers = true;
+			}
+			actual /= PathFromUtf8(*found);
+			current /= PathFromUtf8(*found);
+		}
+		std::error_code error;
+		const bool regular = std::filesystem::is_regular_file(current, error);
+		if (error || !regular)
+		{
+			outProblem = error ? error.message() : "it is not a file";
+			return PathMatch::Unreadable;
+		}
+		outActual = PathToGenericUtf8(actual);
+		return caseDiffers ? PathMatch::DifferentCase : PathMatch::Exact;
 	}
 
 	bool FileSystem::Exists(const std::filesystem::path& path)

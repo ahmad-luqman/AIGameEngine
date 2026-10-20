@@ -50,8 +50,9 @@ namespace Basalt {
 		// Drops a cached asset so the next Get or Request reloads it from disk.
 		static void Reload(const std::string& key);
 		// Drops what a change to these project-relative files affects (including animation graphs and materials): the files' own cache entries
-		// (with a model's embedded images and imported materials) and models that read one of them (external buffers and images; also for a model that failed
-		// to load once its glTF parsed, so a buffer that appears retries it). Failed loads count, so a fixed file is tried
+		// (with a model's embedded images and imported materials), models that read one of them (external buffers and images; also for a model that failed
+		// to load once its glTF parsed, so a buffer that appears retries it), and material files whose textures (or their
+		// sidecars) changed or, for a reference that did not resolve, whenever metadata changed. Failed loads count, so a fixed file is tried
 		// again. Returns the keys dropped immediately, sorted; unrequested files drop nothing. A change to a pending mesh
 		// file drops it immediately. Changes to other files are retained until its dependencies are known,
 		// then retry at publication only if affected (with a diagnostic naming the changed dependency).

@@ -229,6 +229,17 @@ namespace Basalt {
 		}
 	}
 
+	std::string EditorContext::JoinWarnings(const nlohmann::json& result)
+	{
+		std::string joined;
+		const auto warnings = result.is_object() ? result.find("warnings") : result.end();
+		if (warnings == result.end() || !warnings->is_array())
+			return joined;
+		for (const auto& warning : *warnings)
+			joined += (joined.empty() ? "" : "; ") + (warning.is_string() ? warning.get<std::string>() : warning.dump());
+		return joined;
+	}
+
 	void EditorContext::SetStatus(const std::string& message, bool isError)
 	{
 		StatusMessage = message;

@@ -25,8 +25,9 @@ not rewritten or assigned IDs by scene persistence.
 
 Use `asset.resolve {"uuid":"123456789"}` to look up the current path. `asset.move` and `asset.rename`
 both take full project-relative `from` and `to` paths, move one file with its sidecar, upgrade legacy
-scene/prefab references to that file, and update the open edit scene and project start scene. Stop Play
-or Simulate first. Destinations must be unoccupied files under Assets/; folders are not supported.
+scene, prefab and material-file references to that file, and update the open edit scene and project start scene. A
+scene or prefab that cannot be read stops the move (it might reference the file); a material file that is not valid
+JSON is skipped and named in `warnings`. Stop Play or Simulate first. Destinations must be unoccupied files under Assets/; folders are not supported.
 Asset registry operations reject symlink files and symlink directory ancestors, so moving or deleting
 an alias cannot mutate its target. Case-only renames on case-insensitive filesystems require an intermediate filename. Metadata is hidden in asset listings and the content browser but included in exports. For external
 moves, move both files and reopen the scene/project. Existing saved UUID references then resolve to
@@ -149,7 +150,8 @@ model streams in) or when it cannot load (the failure is logged once, and the pr
   component's names (`AlbedoMap`, `NormalMap`, `MetallicRoughnessMap`, `OcclusionMap`, `EmissiveMap`, `ClearcoatMap`,
   `ClearcoatRoughnessMap`, `ClearcoatNormalMap`, `TransmissionMap`). `TextureTransforms` is keyed by slot (`Albedo`,
   `Normal`, `MetallicRoughness`, `Occlusion`, `Emissive`, `Clearcoat`, `ClearcoatRoughness`, `ClearcoatNormal`,
-  `Transmission`); rotation is in radians and `TexCoord` picks UV0 or UV1 (primitives use one layout for both).
+  `Transmission`); rotation is in radians and `TexCoord` picks UV0 or UV1 (built-in meshes use one layout for both; a model without `TEXCOORD_1` samples UV1 as
+  (0, 0)).
 - **Strict reading.** Unknown keys, wrong types, non-finite numbers and the importer's range rules (clearcoat,
   clearcoat roughness, transmission and occlusion strength in [0, 1], nonnegative emissive intensity) fail with the
   field's location. The importer applies the same check, so every model material can be written as a file.
@@ -158,14 +160,18 @@ model streams in) or when it cannot load (the failure is logged once, and the pr
   embedded images are `Model.glb#image/N`. Files written by the engine (`material.create`, `material.extract`, the
   editor's Material Editor) use UUIDs. `asset.move`/`asset.rename` migrate material files with scenes and prefabs, so a
   moved texture keeps resolving; a UUID whose file is gone renders without that texture and is reported.
-- **Commands.** `asset.write` validates a `.bmaterial` before replacing it and warns about missing textures.
-  `material.create {path, entity?, overwrite?}` writes the defaults, or what an entity's Material draws.
-  `material.extract {model, folder?, overwrite?}` writes one file per glTF material (named after it, made safe and
-  unique) into `<model folder>/Materials`, checking every output before writing any. `asset.preload` reads a material
-  and preloads its textures.
+- **Commands.** `asset.write` validates a `.bmaterial` before replacing it and warns about its textures the way
+  `project.validate` reports them: missing files, wrong letter case, unresolved UUIDs, keys that are not textures,
+  paths outside `Assets/`, and embedded images the model lacks (or that are external files). `material.create {path,
+  entity?, overwrite?}` writes the defaults, or what an entity's Material draws. `material.extract {model, folder?,
+  overwrite?}` writes one file per glTF material (named after it, made safe on every platform and unique) into
+  `<model folder>/Materials`, checking every output before writing any. `asset.preload` reads a material and preloads
+  its textures.
 - **Loading.** `AssetManager::GetMaterial`/`RequestMaterial` parse a file on the main thread and cache it (material
-  payloads are tiny and are not charged to `memory.stats`); an imported material shares its model's lifetime and
-  waits for it while streaming. A changed file reloads on the next frame (file watcher or `asset.refresh`).
+  payloads are tiny and are not charged to `memory.stats`). An imported material shares its model's lifetime:
+  `GetMaterial` waits for the model, while `RequestMaterial` (the renderer's) returns nothing until the model is
+  published, and the inline values draw meanwhile. A changed file (or texture, or sidecar) is dropped when the file
+  watcher or `asset.refresh` reports it and is read again on its next use.
 - **Editor.** The content browser previews material files on a sphere (`editor.thumbnail` kind `Material`) and a
   model's materials losslessly in its tooltip. Its context menu creates materials ("New Material...") and extracts a
   model's ("Extract Materials", which reports texture warnings). Double-clicking a material opens the Material Editor

@@ -44,6 +44,8 @@ namespace Basalt {
 		// Captures a pending authored GUI edit once, outside transactions; otherwise a no-op.
 		void CommitHistory();
 		void SetStatus(const std::string& message, bool isError);
+		// A command result's "warnings" joined with "; " (empty when it has none), for the status bar and panels.
+		static std::string JoinWarnings(const nlohmann::json& result);
 
 		CommandRegistry& Commands;
 		AutomationSession& Session;

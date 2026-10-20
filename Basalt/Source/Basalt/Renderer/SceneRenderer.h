@@ -154,7 +154,8 @@ namespace Basalt {
 		void SetInstancingEnabled(bool enabled) { m_InstancingEnabled = enabled; }
 
 		// Resolves MaterialComponent::Material keys before AssetManager; a null result falls through to it. The preview
-		// renderer draws unsaved material drafts this way; scene renderers leave it unset.
+		// renderer draws materials by value this way (material-file thumbnails, tooltip swatches, the Material Editor's
+		// draft); scene renderers leave it unset.
 		using MaterialResolver = std::function<Ref<const MaterialData>(const std::string& key)>;
 		void SetMaterialResolver(MaterialResolver resolver) { m_MaterialResolver = std::move(resolver); }
 

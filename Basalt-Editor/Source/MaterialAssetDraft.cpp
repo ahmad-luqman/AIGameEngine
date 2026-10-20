@@ -24,6 +24,19 @@ namespace Basalt {
 					MakeFloats(element, name);
 		}
 
+		// The material's file form without UUIDs, or null when it is invalid: what dirtiness compares.
+		nlohmann::json Canonical(const std::optional<MaterialData>& material)
+		{
+			std::string error;
+			return material ? MaterialAsset::ToJson(*material, false, error).value_or(nlohmann::json()) : nlohmann::json();
+		}
+
+		nlohmann::json Canonical(const nlohmann::json& editable)
+		{
+			std::string error;
+			return Canonical(MaterialAsset::FromJson(editable, error));
+		}
+
 	}
 
 	nlohmann::json MaterialAssetDraft::ToEditable(const MaterialData& material)
@@ -44,19 +57,24 @@ namespace Basalt {
 		return std::move(*data);
 	}
 
-	nlohmann::json MaterialAssetDraft::Canonical(const nlohmann::json& editable) const
-	{
-		std::string error;
-		const auto material = MaterialAsset::FromJson(editable, error);
-		return material ? MaterialAsset::ToJson(*material, false, error).value_or(nlohmann::json()) : nlohmann::json();
-	}
-
 	void MaterialAssetDraft::SetBaseline(nlohmann::json editable)
 	{
 		m_Data = editable;
 		m_SavedCanonical = Canonical(editable);
 		m_Saved = std::move(editable);
 		m_ExternalChange = false;
+	}
+
+	bool MaterialAssetDraft::LoadText(const std::string& path, const std::string& text, std::string& outError)
+	{
+		std::vector<std::string> warnings;
+		const auto material = MaterialAsset::FromText(text, outError, &warnings);
+		if (!material)
+			return false;
+		m_Path = path;
+		m_Warnings = std::move(warnings);
+		SetBaseline(ToEditable(*material));
+		return true;
 	}
 
 	bool MaterialAssetDraft::Load(const std::string& path, std::string& outError)
@@ -67,29 +85,25 @@ namespace Basalt {
 			outError = "cannot read '" + path + "'";
 			return false;
 		}
-		std::vector<std::string> warnings;
-		const auto material = MaterialAsset::FromText(*text, outError, &warnings);
-		if (!material)
-			return false;
-		m_Path = path;
-		m_Warnings = std::move(warnings);
-		SetBaseline(ToEditable(*material));
-		return true;
+		return LoadText(path, *text, outError);
 	}
 
 	void MaterialAssetDraft::Close()
 	{
-		m_Path.clear();
-		m_Data = m_Saved = m_SavedCanonical = nlohmann::json();
-		m_Warnings.clear();
-		m_ExternalChange = false;
+		*this = MaterialAssetDraft();
 	}
 
 	bool MaterialAssetDraft::IsDirty() const
 	{
+		std::string error;
+		return m_Data != m_Saved && IsDirty(Parse(error));
+	}
+
+	bool MaterialAssetDraft::IsDirty(const std::optional<MaterialData>& parsed) const
+	{
 		if (m_Data == m_Saved)
 			return false;
-		const nlohmann::json canonical = Canonical(m_Data);
+		const nlohmann::json canonical = Canonical(parsed);
 		return canonical.is_null() || canonical != m_SavedCanonical;
 	}
 
@@ -111,13 +125,7 @@ namespace Basalt {
 
 	bool MaterialAssetDraft::MarkSaved(const std::string& writtenText, std::string& outError)
 	{
-		std::vector<std::string> warnings;
-		const auto material = MaterialAsset::FromText(writtenText, outError, &warnings);
-		if (!material)
-			return false;
-		m_Warnings = std::move(warnings);
-		SetBaseline(ToEditable(*material));
-		return true;
+		return LoadText(m_Path, writtenText, outError);
 	}
 
 	bool MaterialAssetDraft::Revert(std::string& outError)
