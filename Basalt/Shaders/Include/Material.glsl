@@ -48,11 +48,13 @@ vec3 MapNormal(vec3 N, vec4 tangent, vec3 sampled, vec2 uv, vec3 position, float
 		{
 			T = normalize((dx * ty.y - dy * tx.y) / determinant);
 			T = normalize(T - N * dot(N, T));
-			B = cross(N, T) * (dot(cross(N, T), (dy * tx.x - dx * ty.x) / determinant) < 0.0 ? -1.0 : 1.0);
+			B = cross(N, T) * (dot(cross(N, T), (dy * tx.x - dx * ty.x) / determinant) < 0.0 ? 1.0 : -1.0);
 		}
 	}
-	sampled = sampled * 2.0 - 1.0; sampled.xy *= scale;
-	return normalize(mat3(T, B, N) * sampled);
+	sampled = sampled * 2.0 - 1.0;
+	sampled.xy *= scale;
+	vec3 mapped = mat3(T, B, N) * sampled;
+	return dot(mapped, mapped) > 1e-12 ? normalize(mapped) : N;
 }
 
 float MaterialAlpha(MaterialData material, vec2 uv, vec2 uv1)
@@ -106,16 +108,16 @@ Surface EvaluateSurface(MaterialData material, vec3 normal, vec4 tangent, vec2 u
 	surface.Clearcoat = material.Extensions.x;
 	surface.ClearcoatRoughness = material.Extensions.y;
 	surface.Transmission = material.Extensions.z;
-	if ((flags & 32u) != 0u) surface.Clearcoat *= texture(sampler2D(u_ClearcoatMap, u_MaterialSampler), MaterialUV(material, 5, uv, uv1)).r;
-	if ((flags & 64u) != 0u) surface.ClearcoatRoughness *= texture(sampler2D(u_ClearcoatRoughnessMap, u_MaterialSampler), MaterialUV(material, 6, uv, uv1)).g;
+	if ((flags & MATERIAL_HAS_CLEARCOAT_MAP) != 0u) surface.Clearcoat *= texture(sampler2D(u_ClearcoatMap, u_MaterialSampler), MaterialUV(material, 5, uv, uv1)).r;
+	if ((flags & MATERIAL_HAS_CLEARCOAT_ROUGHNESS_MAP) != 0u) surface.ClearcoatRoughness *= texture(sampler2D(u_ClearcoatRoughnessMap, u_MaterialSampler), MaterialUV(material, 6, uv, uv1)).g;
 	surface.ClearcoatRoughness = clamp(surface.ClearcoatRoughness, 0.045, 1.0);
 	surface.ClearcoatNormal = frontFacing ? normalize(normal) : -normalize(normal);
-	if ((flags & 128u) != 0u)
+	if ((flags & MATERIAL_HAS_CLEARCOAT_NORMAL_MAP) != 0u)
 	{
 		vec2 coatUV = MaterialUV(material, 7, uv, uv1);
 		surface.ClearcoatNormal = MapNormal(surface.ClearcoatNormal, tangent, texture(sampler2D(u_ClearcoatNormalMap, u_MaterialSampler), coatUV).xyz, coatUV, position, material.NormalParams.z, true);
 	}
-	if ((flags & 256u) != 0u) surface.Transmission *= texture(sampler2D(u_TransmissionMap, u_MaterialSampler), MaterialUV(material, 8, uv, uv1)).r;
+	if ((flags & MATERIAL_HAS_TRANSMISSION_MAP) != 0u) surface.Transmission *= texture(sampler2D(u_TransmissionMap, u_MaterialSampler), MaterialUV(material, 8, uv, uv1)).r;
 	surface.Transmission *= 1.0 - surface.Metallic;
 	return surface;
 }

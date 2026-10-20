@@ -47,8 +47,9 @@ namespace Basalt {
 		Scope<SceneRenderer> m_Renderer;
 	};
 
-	// A glTF material as a MaterialComponent, for previews. Alpha mode and double-sidedness have no component
-	// fields: blending follows the albedo alpha, as for any component.
+	// Lossy glTF-to-override conversion for sphere previews: alpha mode, sidedness, per-map UV sets/transforms,
+	// normal scales and occlusion strength are omitted. Overrides blend for alpha or transmission. Model previews
+	// render the original imported materials and retain those properties.
 	MaterialComponent ToMaterialComponent(const MaterialData& material);
 
 }

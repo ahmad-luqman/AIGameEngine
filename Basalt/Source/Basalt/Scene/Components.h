@@ -376,7 +376,7 @@ namespace Basalt {
 		glm::vec3 Wind = { 0.0f, 0.0f, 0.0f };
 	};
 
-	// PBR metallic-roughness material. When present it overrides the material imported with the mesh.
+	// PBR material with clearcoat/transmission. Overrides imported factors, maps and per-map UV transforms.
 	// Texture paths are project-relative; empty means "no texture".
 	struct MaterialComponent
 	{

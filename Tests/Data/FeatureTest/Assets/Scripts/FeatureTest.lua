@@ -166,7 +166,16 @@ local function TestEntities(self)
 		ClearcoatMap = "Assets/Textures/Checker.png", ClearcoatRoughnessMap = "Assets/Textures/Checker.png",
 		ClearcoatNormalMap = "Assets/Textures/Checker.png", TransmissionMap = "Assets/Textures/Checker.png" })
 	local coat = coated:GetComponent("Material")
-	Check("Material extensions round trip", Near(coat.Clearcoat, 0.8, 1e-6) and Near(coat.ClearcoatRoughness, 0.2, 1e-6) and Near(coat.Transmission, 0.6, 1e-6) and coat.UVRotation == 0.5 and coat.UVScale[1] == 2 and coat.UVOffset[2] > 0.19 and coat.TransmissionMap == "Assets/Textures/Checker.png")
+	Check("Material Clearcoat", Near(coat.Clearcoat,0.8,1e-6))
+	Check("Material ClearcoatRoughness", Near(coat.ClearcoatRoughness,0.2,1e-6))
+	Check("Material Transmission", Near(coat.Transmission,0.6,1e-6))
+	Check("Material UVRotation", coat.UVRotation==0.5)
+	Check("Material UVScale", coat.UVScale[1]==2)
+	Check("Material UVOffset", Near(coat.UVOffset[2],0.2,1e-6))
+	Check("Material extension map", coat.TransmissionMap=="Assets/Textures/Checker.png")
+	local persisted = Scene.FindEntityByName("MaterialExtensionData"):GetComponent("Material")
+	Check("Persisted material extensions", Near(persisted.Clearcoat,0.8,1e-6) and persisted.UVRotation==0.5)
+
 	ExpectError("Material transmission range", function() coated:SetComponent("Material", { Transmission = 2 }) end, "[0,1]")
 	coated:Destroy()
 

@@ -24,6 +24,7 @@ namespace Basalt {
 		static bool WriteBinaryFile(const std::filesystem::path& path, const void* data, size_t size);
 		// Returns the reason of a failure instead of logging it.
 		static bool WriteTextFile(const std::filesystem::path& path, std::string_view text, std::string& outError);
+		static bool WriteBinaryFile(const std::filesystem::path& path, const void* data, size_t size, std::string& outError);
 
 		static bool Exists(const std::filesystem::path& path);
 		static std::filesystem::path GetExecutableDirectory();

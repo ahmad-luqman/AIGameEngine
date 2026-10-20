@@ -49,6 +49,7 @@ namespace Basalt {
 		nvrhi::TextureHandle CreateTexture(const TextureSource& source, bool srgb, const char* debugName, nvrhi::ICommandList* commandList);
 
 	private:
+		bool m_ReportedBC7Fallback = false;
 		nvrhi::IDevice* m_Device = nullptr;
 
 		struct MeshEntry

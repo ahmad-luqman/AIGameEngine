@@ -25,7 +25,7 @@ namespace Basalt {
 	namespace {
 
 		// File types components reference by path. A string ending in one of these is treated as an asset path.
-		const std::set<std::string> s_AssetExtensions = { ".gltf", ".glb", ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr", ".wav", ".mp3", ".ogg", ".flac", ".ttf", ".otf", ".lua", ".bscene", ".bprefab", ".banimgraph" };
+		const std::set<std::string> s_AssetExtensions = { ".gltf", ".glb", ".ktx2", ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr", ".wav", ".mp3", ".ogg", ".flac", ".ttf", ".otf", ".lua", ".bscene", ".bprefab", ".banimgraph" };
 
 		// "Assets/Models/Ship.glb#image/0" names an image inside Ship.glb: the file is the part before '#'.
 		std::string StripSubAsset(const std::string& reference)

@@ -174,3 +174,88 @@ TEST_CASE("KTX2 rejects overflowing and truncated Basis global data before third
 		CHECK_FALSE(error.empty());
 	}
 }
+
+TEST_CASE("BC7 layout rejects mutated offsets and preserves gamma-correct odd mip averages")
+{
+	TextureSource source;
+	source.Width = 3;
+	source.Height = 3;
+	source.Pixels.resize(36, 0);
+	for (size_t i = 0; i < 9; i++)
+		source.Pixels[i * 4 + 3] = 255;
+	for (size_t i = 6; i < 9; i++)
+		source.Pixels[i * 4] = source.Pixels[i * 4 + 1] = source.Pixels[i * 4 + 2] = 255;
+	std::string error;
+	std::vector<uint8_t> bytes;
+	REQUIRE(TextureCompression::EncodeKTX2(source, true, bytes, error));
+	auto srgb = TextureSource::LoadFromMemory(bytes.data(), bytes.size(), error);
+	REQUIRE(srgb);
+	REQUIRE(srgb->HasValidBC7Layout());
+	const auto mip = srgb->DecodeRGBA8(error, 1);
+	REQUIRE(mip);
+	CHECK(mip->Width == 1);
+	CHECK(mip->Height == 1);
+	CHECK(mip->Pixels[0] > 150);
+	CHECK(mip->Pixels[0] < 160);
+	REQUIRE(TextureCompression::EncodeKTX2(source, false, bytes, error));
+	auto linear = TextureSource::LoadFromMemory(bytes.data(), bytes.size(), error);
+	REQUIRE(linear);
+	const auto dataMip = linear->DecodeRGBA8(error, 1);
+	REQUIRE(dataMip);
+	CHECK(dataMip->Pixels[0] > 80);
+	CHECK(dataMip->Pixels[0] < 90);
+	srgb->MipOffsets[1]++;
+	CHECK_FALSE(srgb->HasValidBC7Layout());
+	CHECK_FALSE(srgb->DecodeRGBA8(error));
+}
+
+TEST_CASE("Every material registry field participates in the editor preview key")
+{
+	Scene scene;
+	auto entity = scene.CreateEntity("PreviewKey");
+	const auto* info = ComponentRegistry::Find("Material");
+	REQUIRE(info);
+	entity.AddComponent<MaterialComponent>();
+	const auto original = info->Serialize(entity);
+	const auto key = MaterialPreviewKey(entity.GetComponent<MaterialComponent>());
+	std::string error;
+	for (auto it = original.begin(); it != original.end(); ++it)
+	{
+		INFO(it.key());
+		REQUIRE(info->Deserialize(entity, original, error));
+		auto value = it.value();
+		if (value.is_number())
+			value = 0.25f;
+		else if (value.is_string())
+			value = "Assets/changed.ktx2";
+		else if (value.is_array())
+			for (auto& element : value)
+				element = 0.25f;
+		REQUIRE_MESSAGE(info->Deserialize(entity, { { it.key(), value } }, error), error);
+		CHECK(MaterialPreviewKey(entity.GetComponent<MaterialComponent>()) != key);
+	}
+}
+
+TEST_CASE("Compression cache is optional while output errors retain their filesystem cause")
+{
+	BasaltTest::TempDirectory temp("CompressionIO");
+	const auto& root = temp.GetPath();
+	const auto source = Source();
+	std::string error;
+	bool hit = false;
+	REQUIRE(WritePng(root / "source.png", source.Pixels, source.Width, source.Height, error));
+	REQUIRE(FileSystem::WriteTextFile(root / "BlockedCache", "file"));
+	REQUIRE_MESSAGE(TextureCompression::Import(root / "source.png", root / "out.ktx2", root / "BlockedCache", true, hit, error), error);
+	CHECK_FALSE(hit);
+	CHECK(FileSystem::Exists(root / "out.ktx2"));
+	REQUIRE(FileSystem::WriteTextFile(root / "BlockedOutput", "file"));
+	CHECK_FALSE(TextureCompression::Import(root / "source.png", root / "BlockedOutput/out.ktx2", root / "Cache", true, hit, error));
+	CHECK(error.find("BlockedOutput") != std::string::npos);
+}
+
+TEST_CASE("Malformed Zstandard texture fixture reports a decode error")
+{
+	std::string error;
+	CHECK_FALSE(TextureSource::LoadFromFile(std::filesystem::path(BASALT_TEST_DATA_DIR) / "Textures/ZstdRegression.ktx2", error));
+	CHECK(error.find("Basis transcode failed") != std::string::npos);
+}

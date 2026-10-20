@@ -72,9 +72,14 @@ TEST_SUITE("Assets")
 	TEST_CASE("glTF extension materials retain independent texture transforms and UV1")
 	{
 		BasaltTest::TempProject project("GltfExtensions");
-		const auto binary = MakeQuadBuffer();
+		auto binary = MakeQuadBuffer();
+		const float uv1[] = { 0.2f, 0.3f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f, 0.9f };
+		const auto uv1Offset = binary.size();
+		binary.append(reinterpret_cast<const char*>(uv1), sizeof(uv1));
 		project.WriteFile("Assets/quad.bin", binary);
 		auto gltf = MakeGltfJson({ { "uri", "quad.bin" }, { "byteLength", binary.size() } }, { { { "uri", "color.ktx2" } }, { { "uri", "normal.png" } } });
+		gltf["bufferViews"].push_back({ { "buffer", 0 }, { "byteOffset", uv1Offset }, { "byteLength", sizeof(uv1) } });
+		gltf["accessors"].push_back({ { "bufferView", 3 }, { "componentType", 5126 }, { "count", 4 }, { "type", "VEC2" } });
 		gltf["extensionsRequired"] = { "KHR_texture_transform", "KHR_materials_emissive_strength", "KHR_materials_clearcoat", "KHR_materials_transmission", "KHR_texture_basisu", "KHR_mesh_quantization" };
 		gltf["textures"][0] = { { "extensions", { { "KHR_texture_basisu", { { "source", 0 } } } } } };
 		auto& material = gltf["materials"][0];
@@ -84,7 +89,7 @@ TEST_SUITE("Assets")
 			{ "KHR_materials_transmission", { { "transmissionFactor", 0.6 }, { "transmissionTexture", { { "index", 1 } } } } }
 		};
 		material["pbrMetallicRoughness"]["baseColorTexture"]["extensions"]["KHR_texture_transform"] = { { "offset", { 0.2, 0.3 } }, { "scale", { 2, -3 } }, { "rotation", 0.5 }, { "texCoord", 1 } };
-		gltf["meshes"][0]["primitives"][0]["attributes"]["TEXCOORD_1"] = 1;
+		gltf["meshes"][0]["primitives"][0]["attributes"]["TEXCOORD_1"] = 3;
 		project.WriteFile("Assets/quad.gltf", gltf.dump());
 		std::string error;
 		auto mesh = MeshImporter::LoadGltf(project.GetDirectory() / "Assets/quad.gltf", "Assets/quad.gltf", error);
@@ -96,6 +101,8 @@ TEST_SUITE("Assets")
 		CHECK(m.EmissiveIntensity == 3);
 		CHECK(m.AlbedoMap == "Assets/color.ktx2");
 		CHECK(m.ClearcoatMap == "Assets/color.ktx2");
+		CHECK(m.ClearcoatRoughnessMap == "Assets/normal.png");
+		CHECK(m.ClearcoatNormalMap == "Assets/normal.png");
 		CHECK(m.TransmissionMap == "Assets/normal.png");
 		CHECK(m.ClearcoatNormalScale == 0.5f);
 		CHECK(m.TextureTransforms[0].Offset == glm::vec2(0.2f, 0.3f));
@@ -105,12 +112,12 @@ TEST_SUITE("Assets")
 		CHECK(m.TextureTransforms[1].Scale == glm::vec2(1));
 		CHECK(m.TextureTransforms[1].TexCoord == 0);
 		for (const auto& vertex : mesh->Vertices)
-			CHECK(vertex.TexCoord1 == vertex.TexCoord);
+			CHECK(vertex.TexCoord1 != vertex.TexCoord);
 		gltf["meshes"][0]["primitives"][0]["attributes"].erase("TEXCOORD_1");
 		project.WriteFile("Assets/quad.gltf", gltf.dump());
 		CHECK_FALSE(MeshImporter::LoadGltf(project.GetDirectory() / "Assets/quad.gltf", "Assets/quad.gltf", error));
 		CHECK(error.find("TEXCOORD_1") != std::string::npos);
-		gltf["meshes"][0]["primitives"][0]["attributes"]["TEXCOORD_1"] = 1;
+		gltf["meshes"][0]["primitives"][0]["attributes"]["TEXCOORD_1"] = 3;
 		gltf["extensionsRequired"] = { "KHR_not_supported" };
 		project.WriteFile("Assets/quad.gltf", gltf.dump());
 		CHECK_FALSE(MeshImporter::LoadGltf(project.GetDirectory() / "Assets/quad.gltf", "Assets/quad.gltf", error));
@@ -1078,6 +1085,7 @@ TEST_SUITE("Assets")
 	{
 		CHECK(ClassifyThumbnail("Assets/Textures/Wall.PNG") == ThumbnailKind::Image);
 		CHECK(ClassifyThumbnail("a.jpeg") == ThumbnailKind::Image);
+		CHECK(ClassifyThumbnail("Assets/Textures/Wall.KTX2") == ThumbnailKind::Image);
 		CHECK(ClassifyThumbnail("Assets/Sky.hdr") == ThumbnailKind::Environment);
 		CHECK(ClassifyThumbnail("Ship.glb") == ThumbnailKind::Model);
 		CHECK(ClassifyThumbnail("Ship.gltf") == ThumbnailKind::Model);

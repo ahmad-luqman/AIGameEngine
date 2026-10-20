@@ -682,8 +682,6 @@ namespace Basalt {
 			r.Field("UVOffset", c.UVOffset);
 			r.Field("UVScale", c.UVScale);
 			r.Field("UVRotation", c.UVRotation);
-			if (c.Clearcoat < 0 || c.Clearcoat > 1 || c.ClearcoatRoughness < 0 || c.ClearcoatRoughness > 1 || c.Transmission < 0 || c.Transmission > 1)
-				throw std::runtime_error("Material Clearcoat, ClearcoatRoughness and Transmission must be in [0,1]");
 		}
 
 		void Fields(FieldReader& r, DirectionalLightComponent& c)
@@ -1669,6 +1667,11 @@ namespace Basalt {
 		std::string Validate(const T&)
 		{
 			return {};
+		}
+
+		std::string Validate(const MaterialComponent& c)
+		{
+			return c.Clearcoat < 0 || c.Clearcoat > 1 || c.ClearcoatRoughness < 0 || c.ClearcoatRoughness > 1 || c.Transmission < 0 || c.Transmission > 1 ? "Material Clearcoat, ClearcoatRoughness and Transmission must be in [0,1]" : "";
 		}
 
 		std::string Validate(const MeshComponent& c)
