@@ -107,6 +107,25 @@ namespace Basalt {
 			return false;
 		}
 		std::error_code error;
+		// Never turn a requested directory entry into a different asset during move/delete.
+		// Reject linked ancestors too, since a directory alias would have the same effect.
+		auto entry = m_Root;
+		for (const auto& component : relative)
+		{
+			entry /= component;
+			const auto status = std::filesystem::symlink_status(entry, error);
+			if (std::filesystem::is_symlink(status))
+			{
+				outError = "asset path must not contain symlinks: " + path;
+				return false;
+			}
+			if (error && error != std::errc::no_such_file_or_directory)
+			{
+				outError = "cannot inspect asset path '" + path + "': " + error.message();
+				return false;
+			}
+			error.clear();
+		}
 		absolute = std::filesystem::weakly_canonical(m_Root / relative, error);
 		if (!error)
 		{

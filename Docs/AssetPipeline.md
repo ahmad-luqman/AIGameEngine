@@ -27,7 +27,8 @@ Use `asset.resolve {"uuid":"123456789"}` to look up the current path. `asset.mov
 both take full project-relative `from` and `to` paths, move one file with its sidecar, upgrade legacy
 scene/prefab references to that file, and update the open edit scene and project start scene. Stop Play
 or Simulate first. Destinations must be unoccupied files under Assets/; folders are not supported.
-Case-only renames on case-insensitive filesystems require an intermediate filename. Metadata is hidden in asset listings and the content browser but included in exports. For external
+Asset registry operations reject symlink files and symlink directory ancestors, so moving or deleting
+an alias cannot mutate its target. Case-only renames on case-insensitive filesystems require an intermediate filename. Metadata is hidden in asset listings and the content browser but included in exports. For external
 moves, move both files and reopen the scene/project. Existing saved UUID references then resolve to
 the new path. Move any external glTF buffers/images together and preserve their relative URIs.
 
