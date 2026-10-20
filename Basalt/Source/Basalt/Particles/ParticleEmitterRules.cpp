@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <type_traits>
 
 namespace Basalt {
 
@@ -21,6 +22,13 @@ namespace Basalt {
 		};
 
 		constexpr FloatRule FloatRules[] = {
+			{ "StartSizeMin", &Emitter::StartSizeMin, 0.0f, Emitter::MaxMagnitude },
+			{ "StartSizeMax", &Emitter::StartSizeMax, 0.0f, Emitter::MaxMagnitude },
+			{ "RotationMin", &Emitter::RotationMin, -Emitter::MaxMagnitude, Emitter::MaxMagnitude },
+			{ "RotationMax", &Emitter::RotationMax, -Emitter::MaxMagnitude, Emitter::MaxMagnitude },
+			{ "AngularVelocityMin", &Emitter::AngularVelocityMin, -Emitter::MaxMagnitude, Emitter::MaxMagnitude },
+			{ "AngularVelocityMax", &Emitter::AngularVelocityMax, -Emitter::MaxMagnitude, Emitter::MaxMagnitude },
+			{ "SoftDistance", &Emitter::SoftDistance, 0.0f, Emitter::MaxMagnitude },
 			{ "Duration", &Emitter::Duration, Emitter::MinTime, Emitter::MaxTime },
 			{ "Rate", &Emitter::Rate, 0.0f, Emitter::MaxRate },
 			{ "ShapeRadius", &Emitter::ShapeRadius, 0.0f, Emitter::MaxMagnitude },
@@ -58,6 +66,8 @@ namespace Basalt {
 		};
 
 		constexpr ColorRule ColorRules[] = {
+			{ "StartColorMin", &Emitter::StartColorMin, 1.0f, 1.0f },
+			{ "StartColorMax", &Emitter::StartColorMax, 1.0f, 1.0f },
 			{ "StartColor", &Emitter::StartColor, Emitter::MaxMagnitude, 1.0f },
 			{ "EndColor", &Emitter::EndColor, Emitter::MaxMagnitude, 1.0f },
 		};
@@ -110,6 +120,28 @@ namespace Basalt {
 				for (int channel = 0; channel < 4; channel++)
 					checkFloat((emitter.*rule.Field)[channel], 0.0f, channel == 3 ? rule.AlphaMax : rule.RgbMax, (defaults.*rule.Field)[channel], std::string(rule.Name) + ChannelNames[channel]);
 			}
+			auto curve = [&](auto& keys, const char* name) {
+				bool valid = keys.size() <= 16;
+				float previous = -1.0f;
+				for (const auto& key : keys)
+				{
+					valid = valid && std::isfinite(key.Time) && key.Time >= 0.0f && key.Time <= 1.0f && key.Time > previous;
+					previous = key.Time;
+					if constexpr (std::is_same_v<std::decay_t<decltype(key.Value)>, float>)
+						valid = valid && std::isfinite(key.Value) && key.Value >= 0.0f && key.Value <= Emitter::MaxMagnitude;
+					else
+						for (int c = 0; c < 4; ++c)
+							valid = valid && std::isfinite(key.Value[c]) && key.Value[c] >= 0.0f && key.Value[c] <= (c == 3 ? 1.0f : Emitter::MaxMagnitude);
+				}
+				if (!valid)
+				{
+					onProblem(std::string(name) + " requires at most 16 finite, strictly ordered keys in [0,1] with nonnegative bounded values");
+					if (repair)
+						keys.clear();
+				}
+			};
+			curve(emitter.SizeCurve, "SizeCurve");
+			curve(emitter.ColorCurve, "ColorCurve");
 			// Only C++ code can write these out of range; files and Lua go through the enum names.
 			checkEnum(emitter.Shape, ParticleEmitterShapeCount, defaults.Shape, "Shape");
 			checkEnum(emitter.SimulationSpace, ParticleSimulationSpaceCount, defaults.SimulationSpace, "SimulationSpace");

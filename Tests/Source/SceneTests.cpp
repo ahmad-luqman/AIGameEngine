@@ -894,7 +894,7 @@ TEST_SUITE("Serialization")
 			}
 		}
 		// Animator Events, BlendSpaces (Samples), Layers (Mask); InverseKinematics Chains; SpringBone Chains, Colliders.
-		CHECK(lists == 8);
+		CHECK(lists == 10);
 	}
 
 	TEST_CASE("Entity reference fields are collected from the component definitions")

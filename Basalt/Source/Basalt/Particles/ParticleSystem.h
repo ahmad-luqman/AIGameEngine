@@ -26,9 +26,10 @@ namespace Basalt {
 	{
 		glm::vec4 PositionSize; // xyz: world position, w: billboard size (m)
 		glm::vec4 Color;        // linear HDR color, a: opacity
+		glm::vec4 Effects;      // rotation (radians), soft distance, lit, unused
 	};
 	static_assert(std::is_standard_layout_v<GpuParticle>, "offsetof needs a standard-layout type");
-	static_assert(sizeof(GpuParticle) == 32 && offsetof(GpuParticle, PositionSize) == 0 && offsetof(GpuParticle, Color) == 16, "GpuParticle must match the std430 ParticleData struct");
+	static_assert(sizeof(GpuParticle) == 48 && offsetof(GpuParticle, PositionSize) == 0 && offsetof(GpuParticle, Color) == 16, "GpuParticle must match the std430 ParticleData struct");
 
 	// The live particles of one emitter, sorted back to front, as a range of ParticleRenderData::Particles.
 	struct ParticleBatch
@@ -82,7 +83,7 @@ namespace Basalt {
 	class ParticleSystem
 	{
 	public:
-		explicit ParticleSystem(Scene* scene);
+		explicit ParticleSystem(Scene* scene, bool preview = false);
 		~ParticleSystem();
 
 		ParticleSystem(const ParticleSystem&) = delete;
@@ -123,6 +124,10 @@ namespace Basalt {
 			// drawing through the scaled transform restores m/s; rescaling the emitter rescales live ones.
 			glm::vec3 Velocity{ 0.0f };
 			float Lifetime = 1.0f;
+			float SizeScale = 1.0f;
+			glm::vec4 ColorScale{ 1.0f };
+			float Rotation = 0.0f;
+			float AngularVelocity = 0.0f;
 		};
 
 		enum class EmitterState
@@ -139,6 +144,7 @@ namespace Basalt {
 			Random Rng;
 			std::vector<Particle> Particles;
 			EmitterState State = EmitterState::Stopped;
+			bool PreviewEnabled = false;
 			// The space the particles are stored in. A SimulationSpace change converts them (at the next Update or
 			// Emit); until then they are drawn in this space, so they never jump.
 			ParticleSimulationSpace Space = ParticleSimulationSpace::World;
@@ -173,6 +179,7 @@ namespace Basalt {
 
 	private:
 		Scene* m_Scene = nullptr;
+		bool m_Preview = false;
 		// Never reused, so removing an emitter does not change the seeds of emitters registered later.
 		uint32_t m_NextOrdinal = 0;
 		std::unordered_map<UUID, Emitter> m_Emitters;

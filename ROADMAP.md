@@ -48,12 +48,7 @@ The features most games need, roughly in order of impact.
 
 ### Rendering
 
-- **Particle follow-ups — M.** `ParticleEmitterComponent` (Particles/ParticleSystem) covers CPU simulation,
-  bursts, shapes, start-to-end color and size, alpha/additive billboards and Lua control. Missing: soft
-  particles (fade against scene depth; needs a depth copy, since the transparent pass has depth attached),
-  per-particle rotation and random start size/color, color/size curves with several keys (a list
-  field of key objects: `FieldReader::ListField` and the inspector's list widget already exist), lit particles, an edit-mode preview, and simulation in a compute
-  pass if particle counts demand it.
+- **GPU particle simulation — M.** Move CPU particle simulation to a compute pass if particle counts demand it.
 - **Temporal anti-aliasing — M.** TAA (jittered projection, motion
   vectors from the depth prepass, history reprojection with neighbourhood clamping), which also
   stabilizes SSAO and specular shimmer. Builds on the post-process stack’s FXAA. MSAA is an option for
@@ -95,12 +90,6 @@ below extend character movement, in order of impact.
 - **Later: motion matching and procedural creatures — L each.** Motion matching (search a mocap database
   every few frames for the pose and future trajectory that best match the desired movement); procedural
   leg stepping for multi-legged creatures built on IK.
-
-### Audio
-
-- **Effect follow-ups — S.** Effects on one-shots (`Audio.PlayOneShot` options for `LowPass`/`ReverbSend`), reverb
-  zones as a component (blend the room settings by the listener's position instead of scripting it), and more
-  effect types (high-pass, echo, distortion) on the same per-source chain.
 
 ---
 

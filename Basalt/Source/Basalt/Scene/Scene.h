@@ -227,7 +227,10 @@ namespace Basalt {
 		AudioSystem* GetAudioSystem() const { return m_AudioSystem.get(); }
 		// Null in Edit mode; owned by the current Play/Simulate session.
 		AnimationSystem* GetAnimationSystem() const { return m_AnimationSystem.get(); }
-		ParticleSystem* GetParticleSystem() const { return m_ParticleSystem.get(); }
+		ParticleSystem* GetParticleSystem() const { return m_ParticleSystem ? m_ParticleSystem.get() : m_ParticlePreview.get(); }
+		// Advances only particles marked Preview, without running scripts, audio or physics.
+		void UpdateParticlePreview(Timestep ts);
+		void ResetParticlePreview();
 		// The widgets' pointer, keyboard and gamepad state; only while playing.
 		UIInteraction* GetUIInteraction() const { return m_UIInteraction.get(); }
 
@@ -349,6 +352,7 @@ namespace Basalt {
 		Scope<ScriptEngine> m_ScriptEngine;
 		Scope<AudioSystem> m_AudioSystem;
 		Scope<ParticleSystem> m_ParticleSystem;
+		Scope<ParticleSystem> m_ParticlePreview;
 		Scope<AnimationSystem> m_AnimationSystem;
 		Scope<UIInteraction> m_UIInteraction;
 

@@ -707,6 +707,23 @@ namespace Basalt {
 		float LowPass = 0.0f;
 		// Share of the sound fed to its bus's reverb, 0..1; the dry sound is unchanged.
 		float ReverbSend = 0.0f;
+		// High-pass cutoff in Hz, 0 = off. Echo wet gain and soft distortion drive: 0..1.
+		float HighPass = 0.0f;
+		float Echo = 0.0f;
+		float Distortion = 0.0f;
+	};
+
+	// Spherical room centered at the entity's world position. Radius and BlendDistance are world units,
+	// unaffected by scale. The highest priority containing zone wins (lowest UUID breaks ties).
+	struct AudioReverbZoneComponent
+	{
+		bool Enabled = true;
+		uint32_t Priority = 0;
+		float Radius = 5.0f;
+		float BlendDistance = 1.0f;
+		float RoomSize = 0.5f;
+		float Damping = 0.25f;
+		float Width = 1.0f;
 	};
 
 	struct AudioListenerComponent
@@ -739,8 +756,26 @@ namespace Basalt {
 	};
 	constexpr size_t ParticleBlendModeCount = 2;
 
+	// A normalized lifetime key. Curves interpolate linearly and clamp outside their key range.
+	struct ParticleSizeKey
+	{
+		static constexpr const char* TypeName = "ParticleSizeKey";
+		static constexpr const char* NormalizedTimeField = "Time";
+		float Time = 0.0f;
+		float Value = 1.0f;
+		bool operator==(const ParticleSizeKey&) const = default;
+	};
+	struct ParticleColorKey
+	{
+		static constexpr const char* TypeName = "ParticleColorKey";
+		static constexpr const char* NormalizedTimeField = "Time";
+		float Time = 0.0f;
+		glm::vec4 Value{ 1.0f };
+		bool operator==(const ParticleColorKey&) const = default;
+	};
+
 	// Emits camera-facing particles while the scene plays or simulates (ParticleSystem simulates them on the
-	// CPU, the renderer draws them unlit in the transparent pass). Shapes and Velocity are in the emitter's
+	// CPU, the renderer draws them in the transparent pass). Shapes and Velocity are in the emitter's
 	// local space; Box and Cone emit along local +Y, Point and Sphere in every direction. Each emission cycle
 	// lasts Duration seconds and starts with BurstCount particles; Rate emits continuously in between.
 	// Limit constants are below; the full per-field rules are in Particles/ParticleEmitterRules.cpp.
@@ -802,6 +837,22 @@ namespace Basalt {
 		// Billboard width and height (m) at birth and at death.
 		float StartSize = 0.2f;
 		float EndSize = 0.2f;
+		// Random multipliers sampled once at birth; defaults preserve existing emitters.
+		float StartSizeMin = 1.0f;
+		float StartSizeMax = 1.0f;
+		glm::vec4 StartColorMin{ 1.0f };
+		glm::vec4 StartColorMax{ 1.0f };
+		// Radians in C++, degrees in JSON/Lua.
+		float RotationMin = 0.0f;
+		float RotationMax = 0.0f;
+		float AngularVelocityMin = 0.0f;
+		float AngularVelocityMax = 0.0f;
+		// Nonempty curves replace Start/End interpolation; random birth multipliers still apply.
+		std::vector<ParticleSizeKey> SizeCurve;
+		std::vector<ParticleColorKey> ColorCurve;
+		float SoftDistance = 0.0f;
+		bool Lit = false;
+		bool Preview = false;
 		ParticleBlendMode Blend = ParticleBlendMode::Alpha;
 		// Project-relative texture (sRGB color, alpha = coverage); empty uses a built-in soft disc.
 		std::string Texture;
@@ -1092,6 +1143,7 @@ namespace Basalt {
 		ScriptComponent,
 		AudioSourceComponent,
 		AudioListenerComponent,
+		AudioReverbZoneComponent,
 		ParticleEmitterComponent,
 		UIRectComponent,
 		UIImageComponent,

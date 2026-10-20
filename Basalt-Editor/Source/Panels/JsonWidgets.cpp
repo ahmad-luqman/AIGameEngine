@@ -262,8 +262,59 @@ namespace Basalt {
 		const bool grows = edit == JsonListEdit::Add || edit == JsonListEdit::Duplicate;
 		if (grows && array.size() >= type.MaxCount)
 			return false;
+		const std::string& timeField = type.Element->NormalizedTimeField;
+		nlohmann::json original = array;
 		if (!ApplyListEdit(array, edit, index, type.Element->Default))
 			return false;
+		if (!timeField.empty())
+		{
+			if (grows)
+			{
+				const size_t added = AddedIndex(array, edit, index);
+				auto key = array[added];
+				array.erase(added);
+				size_t insert = 0;
+				float time = 0.0f;
+				if (!array.empty())
+				{
+					const float last = array.back().at(timeField).get<float>();
+					if (edit == JsonListEdit::Add && last < 1.0f)
+					{
+						insert = array.size();
+						time = 1.0f;
+					}
+					else
+					{
+						// Prefer splitting the selected key's interval, then the widest available interval.
+						float gap = 0.0f;
+						for (size_t i = 0; i <= array.size(); ++i)
+						{
+							const float left = i ? array[i - 1].at(timeField).get<float>() : 0.0f;
+							const float right = i < array.size() ? array[i].at(timeField).get<float>() : 1.0f;
+							const float middle = (left + right) * 0.5f;
+							if (middle > left && middle < right && right - left > gap)
+							{
+								gap = right - left;
+								insert = i;
+								time = middle;
+							}
+							if (edit == JsonListEdit::Duplicate && i == index + 1 && gap > 0.0f)
+								break;
+						}
+						if (gap == 0.0f)
+						{
+							array = std::move(original);
+							return false;
+						}
+					}
+				}
+				key[timeField] = time;
+				array.insert(array.begin() + static_cast<nlohmann::json::difference_type>(insert), std::move(key));
+			}
+			else if (edit == JsonListEdit::MoveUp || edit == JsonListEdit::MoveDown)
+				for (size_t i = 0; i < array.size(); ++i)
+					array[i][timeField] = original[i][timeField];
+		}
 		if (grows && !type.Element->UniqueField.empty())
 			MakeUnique(array, AddedIndex(array, edit, index), type.Element->UniqueField);
 		return true;

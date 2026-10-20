@@ -4,6 +4,7 @@
 #include "Basalt/Audio/AudioRules.h"
 #include "Basalt/Audio/LowPassNode.h"
 #include "Basalt/Audio/ReverbNode.h"
+#include "Basalt/Audio/SourceEffectsNode.h"
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Physics/PhysicsWorld.h"
@@ -50,6 +51,7 @@ namespace Basalt {
 			}
 		};
 
+		using SourceEffectsHandle = std::unique_ptr<SourceEffectsNode, NodeDeleter<SourceEffectsNode, SourceEffectsNodeUninit>>;
 		using LowPassHandle = std::unique_ptr<LowPassNode, NodeDeleter<LowPassNode, LowPassNodeUninit>>;
 		using SplitterHandle = std::unique_ptr<ma_splitter_node, NodeDeleter<ma_splitter_node, ma_splitter_node_uninit>>;
 		using ReverbHandle = std::unique_ptr<ReverbNode, NodeDeleter<ReverbNode, ReverbNodeUninit>>;
@@ -218,6 +220,9 @@ namespace Basalt {
 		// Declared before the sound so the sound (upstream) is destroyed first (do not reorder).
 		EffectStage<SplitterHandle> Send;
 		EffectStage<LowPassHandle> LowPass;
+		EffectStage<SourceEffectsHandle> Effects;
+		float TailTime = 0.0f;
+		bool EchoTail = false;
 		SoundHandle Sound;
 		// Fixed for the voice's life, which Route's early return relies on.
 		const Output Out;
@@ -301,51 +306,47 @@ namespace Basalt {
 		void Route(bool lowPass, ma_node* reverb, std::string_view name)
 		{
 			const bool send = reverb != nullptr;
-			BS_CORE_ASSERT(!lowPass || LowPass.Node, "a routed low-pass exists");
-			BS_CORE_ASSERT(!send || Send.Node, "a routed send exists");
-			if (lowPass == LowPass.Routed && send == Send.Routed)
+			if (lowPass == LowPass.Routed && send == Send.Routed && Effects.Routed == bool(Effects.Node))
 				return;
-			// Where each output goes now, from the stages routed so far (the send's two outputs never move: its bus and
-			// that bus's reverb are fixed for the voice).
-			ma_node* const sendNode = Send.Node.get();
-			ma_node* const lowPassNode = LowPass.Node.get();
-			ma_node* const lowPassWas = LowPass.Routed ? (Send.Routed ? sendNode : Out.Node) : nullptr;
-			ma_node* const soundWas = LowPass.Routed ? lowPassNode : (Send.Routed ? sendNode : Out.Node);
-
 			ma_result result = MA_SUCCESS;
-			auto attach = [&result](ma_node* from, ma_uint32 output, ma_node* to, ma_node* was) {
-				if (result == MA_SUCCESS && to != was)
-					result = ma_node_attach_output_bus(from, output, to, 0);
-			};
+			const auto previousFilter = LowPass.Routed ? static_cast<ma_node*>(LowPass.Node.get()) : (Send.Routed ? static_cast<ma_node*>(Send.Node.get()) : Out.Node);
+			const auto previousSound = Effects.Routed ? static_cast<ma_node*>(Effects.Node.get()) : previousFilter;
+			auto attach = [&](ma_node* from, ma_uint32 output, ma_node* to, ma_node* was) { if (result == MA_SUCCESS && to != was) result = ma_node_attach_output_bus(from, output, to, 0); };
 			ma_node* next = Out.Node;
 			if (send)
 			{
-				attach(sendNode, 0, next, Send.Routed ? Out.Node : nullptr);
-				attach(sendNode, 1, reverb, Send.Routed ? reverb : nullptr);
-				next = sendNode;
+				attach(Send.Node.get(), 0, next, Send.Routed ? Out.Node : nullptr);
+				attach(Send.Node.get(), 1, reverb, Send.Routed ? reverb : nullptr);
+				next = Send.Node.get();
 			}
 			if (lowPass)
 			{
-				attach(lowPassNode, 0, next, lowPassWas);
-				next = lowPassNode;
+				attach(LowPass.Node.get(), 0, next, LowPass.Routed ? (Send.Routed ? static_cast<ma_node*>(Send.Node.get()) : Out.Node) : nullptr);
+				next = LowPass.Node.get();
 			}
-			attach(Sound.get(), 0, next, soundWas);
+			if (Effects.Node)
+			{
+				attach(Effects.Node.get(), 0, next, Effects.Routed ? previousFilter : nullptr);
+				next = Effects.Node.get();
+			}
+			attach(Sound.get(), 0, next, previousSound);
 			if (result != MA_SUCCESS)
 			{
-				BS_CORE_ERROR("Audio: cannot route '{}' through its effects ({}); it plays without them", name, ma_result_description(result));
+				BS_CORE_ERROR("Audio: cannot route '{}' through effects ({}); playing dry", name, ma_result_description(result));
+				if (const ma_result direct = ma_node_attach_output_bus(Sound.get(), 0, Out.Node, 0); direct != MA_SUCCESS)
+					BS_CORE_ERROR("Audio: cannot reconnect '{}' to its bus ({})", name, ma_result_description(direct));
+				Effects.Disable();
 				LowPass.Disable();
 				Send.Disable();
-				if (const ma_result direct = ma_node_attach_output_bus(Sound.get(), 0, Out.Node, 0); direct != MA_SUCCESS)
-					BS_CORE_ERROR("Audio: cannot reconnect '{}' to its bus ({}); it is silent", name, ma_result_description(direct));
 				return;
 			}
-			// Only now drop the stages left out: the sound already bypasses them, so the bus never misses a block.
 			if (!send && Send.Node)
 				ma_node_detach_all_output_buses(Send.Node.get());
 			if (!lowPass && LowPass.Node)
 				ma_node_detach_all_output_buses(LowPass.Node.get());
 			LowPass.Routed = lowPass;
 			Send.Routed = send;
+			Effects.Routed = bool(Effects.Node);
 		}
 	};
 
@@ -573,8 +574,19 @@ namespace Basalt {
 		return DopplerPitch(m_ListenerPosition, voice.Position, voice.Velocity, m_ListenerVelocity, voice.DopplerFactor);
 	}
 
-	bool AudioSystem::PlayOneShot(const std::string& clip, const glm::vec3* position, float volume, AudioBus bus)
+	bool AudioSystem::PlayOneShot(const std::string& clip, const glm::vec3* position, float volume, AudioBus bus, const AudioOneShotOptions& options)
 	{
+		AudioSourceComponent source;
+		source.LowPass = options.LowPass;
+		source.ReverbSend = options.ReverbSend;
+		source.HighPass = options.HighPass;
+		source.Echo = options.Echo;
+		source.Distortion = options.Distortion;
+		if (const auto problem = ValidateAudioEffects(source); !problem.empty())
+		{
+			BS_CORE_ERROR("Audio: cannot play one-shot: {}", problem);
+			return false;
+		}
 		if (!IsValidAudioVolume(volume))
 		{
 			BS_CORE_ERROR("Audio: cannot play '{}' at volume {}: it must be a finite number >= 0", clip, volume);
@@ -592,8 +604,14 @@ namespace Basalt {
 		ma_sound_set_volume(sound.get(), volume);
 		if (position)
 			ma_sound_set_position(sound.get(), position->x, position->y, position->z);
-		ma_sound_start(sound.get());
-		m_OneShots.push_back(std::move(sound));
+		auto voice = std::make_unique<Voice>(std::move(sound), GetOutput(bus));
+		ConfigureEffects(*voice, source, clip);
+		if (const auto result = ma_sound_start(voice->Sound.get()); result != MA_SUCCESS)
+		{
+			BS_CORE_ERROR("Audio: cannot start one-shot ({})", ma_result_description(result));
+			return false;
+		}
+		m_OneShots.push_back(std::move(voice));
 		return true;
 	}
 
@@ -612,12 +630,26 @@ namespace Basalt {
 				BS_CORE_ERROR("Audio: an effect of the AudioSource of '{}' is off: {}", entity.GetName(), problem);
 			voice.ReportedEffectsProblem = std::move(problem);
 		}
-		const std::string& name = entity.GetName();
+		ConfigureEffects(voice, source, entity.GetName());
+	}
 
+	void AudioSystem::ConfigureEffects(Voice& voice, const AudioSourceComponent& source, std::string_view name)
+	{
 		ma_engine* engine = AudioEngine::GetEngine();
 		const EffectValues effects = SanitizeEffects(source, static_cast<float>(ma_engine_get_sample_rate(engine)));
 		voice.SetDopplerFactor(effects.Doppler);
 
+		const float highPass = IsValidAudioLowPass(source.HighPass) ? std::min(source.HighPass, MaxAudioLowPassRateFraction * static_cast<float>(ma_engine_get_sample_rate(engine))) : 0.0f;
+		const float echo = IsFiniteInRange(source.Echo, 0.0f, 1.0f) ? source.Echo : 0.0f;
+		const float distortion = IsFiniteInRange(source.Distortion, 0.0f, 1.0f) ? source.Distortion : 0.0f;
+		if (!voice.Effects.Node && !voice.Effects.Failed && (highPass > 0.0f || echo > 0.0f || distortion > 0.0f))
+		{
+			voice.Effects.Node = CreateNode<SourceEffectsHandle>([&](SourceEffectsNode* node) { return SourceEffectsNodeInit(ma_engine_get_node_graph(engine), ma_node_get_output_channels(voice.Sound.get(), 0), ma_engine_get_sample_rate(engine), node); }, fmt::format("source effects for '{}'", name), "the sound plays dry");
+			voice.Effects.Failed = !voice.Effects.Node;
+		}
+		if (voice.Effects.Node)
+			SourceEffectsNodeSet(voice.Effects.Node.get(), highPass, echo, distortion);
+		voice.EchoTail = echo > 0.0f;
 		const bool lowPass = effects.LowPass > 0.0f && voice.UpdateLowPass(engine, effects.LowPass, name);
 		// A failed send never creates its bus's reverb.
 		Reverb* reverb = effects.ReverbSend > 0.0f && !voice.Send.Failed && voice.Out.Bus ? GetReverbNode(*voice.Out.Bus) : nullptr;
@@ -654,6 +686,38 @@ namespace Basalt {
 		}
 		m_Reverbs[bus] = std::make_unique<Reverb>(Reverb{ std::move(node) });
 		return m_Reverbs[bus].get();
+	}
+
+	void AudioSystem::UpdateReverbZones()
+	{
+		AudioReverbSettings result = m_BaseReverb;
+		const AudioReverbZoneComponent* best = nullptr;
+		uint64_t bestID = 0;
+		float weight = 0.0f;
+		auto zones = m_Scene->GetAllEntitiesWith<AudioReverbZoneComponent, IDComponent>();
+		for (auto handle : zones)
+		{
+			const auto& z = zones.get<AudioReverbZoneComponent>(handle);
+			if (!z.Enabled || !IsFiniteInRange(z.Radius, 0.001f, 1e6f) || !IsFiniteInRange(z.BlendDistance, 0.0f, z.Radius) || !ValidateAudioReverb({ z.RoomSize, z.Damping, z.Width }).empty())
+				continue;
+			const float distance = glm::length(glm::vec3(m_Scene->GetWorldTransform(Entity(handle, m_Scene))[3]) - m_ListenerPosition);
+			if (!std::isfinite(distance) || distance >= z.Radius)
+				continue;
+			const uint64_t id = zones.get<IDComponent>(handle).ID;
+			if (best && (z.Priority < best->Priority || (z.Priority == best->Priority && id >= bestID)))
+				continue;
+			best = &z;
+			bestID = id;
+			weight = z.BlendDistance > 0.0f ? std::clamp((z.Radius - distance) / z.BlendDistance, 0.0f, 1.0f) : 1.0f;
+		}
+		if (best)
+		{
+			result.RoomSize = glm::mix(result.RoomSize, best->RoomSize, weight);
+			result.Damping = glm::mix(result.Damping, best->Damping, weight);
+			result.Width = glm::mix(result.Width, best->Width, weight);
+		}
+		if (result != m_Reverb)
+			ApplyReverb(result);
 	}
 
 	void AudioSystem::PlaceListener(const glm::vec3& position, const glm::vec3& forward, const glm::vec3& up, const glm::vec3& velocity)
@@ -719,6 +783,8 @@ namespace Basalt {
 		if (!listener || m_Listener.ReportedInvalidTransform)
 			PlaceListener(m_ListenerPosition, m_ListenerForward, m_ListenerUp, glm::vec3(0.0f));
 
+		UpdateReverbZones();
+
 		for (auto& [uuid, voice] : m_Sources)
 		{
 			Entity entity = m_Scene->GetEntityByUUID(uuid);
@@ -748,7 +814,13 @@ namespace Basalt {
 		AudioEngine::AdvanceDeviceless(seconds);
 
 		// Release finished one-shots. Sources stay registered (and report !IsPlaying) until stopped.
-		std::erase_if(m_OneShots, [](const SoundHandle& sound) { return ma_sound_at_end(sound.get()); });
+		std::erase_if(m_OneShots, [seconds](const std::unique_ptr<Voice>& voice) {
+			if (!ma_sound_at_end(voice->Sound.get()))
+				return false;
+			if (std::isfinite(seconds) && seconds > 0.0f)
+				voice->TailTime += seconds;
+			return !voice->EchoTail || voice->TailTime >= 3.0f;
+		});
 	}
 
 	bool AudioSystem::SetBusVolume(AudioBus bus, float volume)
@@ -781,13 +853,19 @@ namespace Basalt {
 			BS_CORE_ERROR("Audio: cannot set the reverb: {}", problem);
 			return false;
 		}
+		m_BaseReverb = reverb;
+		UpdateReverbZones();
+		return true;
+	}
+
+	void AudioSystem::ApplyReverb(const AudioReverbSettings& reverb)
+	{
 		m_Reverb = reverb;
 		for (const std::unique_ptr<Reverb>& node : m_Reverbs)
 		{
 			if (node)
 				ReverbNodeSetSettings(node->Node.get(), m_Reverb);
 		}
-		return true;
 	}
 
 	bool AudioSystem::HasReverb(AudioBus bus) const

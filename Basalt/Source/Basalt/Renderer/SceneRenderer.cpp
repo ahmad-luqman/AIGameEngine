@@ -420,6 +420,7 @@ namespace Basalt {
 		nvrhi::TextureHandle BrdfLut;
 		bool BrdfLutReady = false;
 		nvrhi::BufferHandle ParticleBuffer;
+		nvrhi::TextureHandle ParticleDepth;
 		nvrhi::TextureHandle ParticleTexture; // built-in soft disc
 		GpuSSAOConstants SsaoConstants{};
 
@@ -716,6 +717,7 @@ namespace Basalt {
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(ParticleBufferSlot),
 			nvrhi::BindingLayoutItem::Texture_SRV(ParticleTextureSlot),
 			nvrhi::BindingLayoutItem::Sampler(ParticleSamplerSlot),
+			nvrhi::BindingLayoutItem::Texture_SRV(3),
 		};
 		impl.ParticleLayout = device->createBindingLayout(particleDesc);
 
@@ -1040,6 +1042,8 @@ namespace Basalt {
 		};
 
 		m_DepthTexture = makeTarget(nvrhi::Format::D32, "SceneDepth", true);
+		impl.ParticleDepth = makeTarget(nvrhi::Format::D32, "ParticleDepth", true);
+		impl.ParticleSets.clear();
 		impl.NormalTexture = makeTarget(nvrhi::Format::RGBA16_FLOAT, "SceneNormals");
 		impl.HdrTexture = makeTarget(nvrhi::Format::RGBA16_FLOAT, "SceneHDR");
 		impl.SsaoTexture = makeTarget(nvrhi::Format::R8_UNORM, "SSAO");
@@ -1213,7 +1217,7 @@ namespace Basalt {
 		InvalidatePicking();
 		Impl& impl = *m_Impl;
 		ResizeTargets(m_Width, m_Height);
-		if (!m_OutputTexture)
+		if (!m_OutputTexture || !impl.ParticleDepth)
 		{
 			m_Statistics.Failed = true;
 			return;
@@ -1896,7 +1900,8 @@ namespace Basalt {
 				entry.Set = m_Device->createBindingSet(nvrhi::BindingSetDesc()
 														   .addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(ParticleBufferSlot, impl.ParticleBuffer))
 														   .addItem(nvrhi::BindingSetItem::Texture_SRV(ParticleTextureSlot, particleTexture))
-														   .addItem(nvrhi::BindingSetItem::Sampler(ParticleSamplerSlot, impl.LinearClamp)),
+														   .addItem(nvrhi::BindingSetItem::Sampler(ParticleSamplerSlot, impl.LinearClamp))
+														   .addItem(nvrhi::BindingSetItem::Texture_SRV(3, impl.ParticleDepth)),
 													   impl.ParticleLayout);
 				// Reported once per failure episode: a later failure (after a set was created) reports again.
 				if (!entry.Set && !impl.ReportedParticleSetFailure)
@@ -2135,6 +2140,9 @@ namespace Basalt {
 				return;
 			}
 		}
+
+		if (!particleDraws.empty())
+			commandList->copyTexture(impl.ParticleDepth, nvrhi::TextureSlice(), m_DepthTexture, nvrhi::TextureSlice());
 
 		// --- Lighting (opaque), skybox, transparent -----------------------------------------------
 		{

@@ -697,7 +697,7 @@ end
 ## Particles
 
 A `ParticleEmitter` component emits camera-facing billboards while the scene plays (and while the editor
-simulates). Particles are simulated on the CPU and drawn unlit, sorted with transparent meshes; their
+simulates). Particles are simulated on the CPU and drawn unlit by default, sorted with transparent meshes; their
 colors are linear HDR, so values above 1 stay bright after exposure and tonemapping (and contribute to bloom when the active PostProcess component enables it).
 Use `Blend = "Additive"` for sparks and fire, `"Alpha"` for smoke. `Texture` is a project-relative image
 (its alpha is coverage); without one particles are soft discs.
@@ -721,6 +721,11 @@ Use `Blend = "Additive"` for sparks and fire, `"Alpha"` for smoke. `Texture` is 
   carries (and turns) them along.
 - Color and size go from `StartColor`/`StartSize` to `EndColor`/`EndSize` over each particle's life (picked
   between `LifetimeMin` and `LifetimeMax` seconds). Min/max pairs may be in either order.
+- `StartSizeMin/Max` are birth size multipliers (0..1e4); `StartColorMin/Max` are per-channel birth tint multipliers (0..1). Each is sampled once and retained for the particle's life. Defaults are 1.
+- `RotationMin/Max` and `AngularVelocityMin/Max` choose birth angle and angular speed in degrees and degrees/s (C++ radians, bounded to +/-1e4 radians).
+- `SizeCurve` and `ColorCurve` are lists of up to 16 `{ Time, Value }` keys. Times are strictly increasing in [0,1], values are nonnegative sizes or HDR colors (alpha 0..1). Nonempty curves replace the corresponding Start/End interpolation, interpolate linearly, and clamp outside the first/last key. Birth multipliers still apply.
+- `SoftDistance` (world units, 0 disables) fades opacity where billboards meet opaque depth. `Lit` enables two-sided diffuse ambient, directional, point and spot lighting, without particle shadows or specular highlights.
+- `Preview` enables an isolated edit-mode particle preview in the editor. Toggle it off/on to restart a nonlooping effect. Preview starts independently of `PlayOnStart`. Curve list Add/Duplicate inserts a key into a free time interval; Move swaps values while retaining times. Preview never runs scripts, physics or audio and never writes live particles to the scene.
 - Limits: `Duration` and lifetimes 0.001..1e5 s, `MaxParticles` 1..10000, `BurstCount` 0..10000, `Rate`
   0..1e6 per second, `ConeAngle` 0..180, opacity 0..1; speeds, `Velocity` and `GravityScale` between -1e4
   and 1e4; `Drag`, sizes, `ShapeRadius`, `BoxExtents` and color channels 0..1e4. Scene and prefab files,
@@ -1041,7 +1046,7 @@ whose data could crash the font rasterizer draw blank, with a warning (also show
 
 An `AudioSource` component plays a project-relative clip (WAV, FLAC or MP3) while the scene plays: from
 the start with `PlayOnStart`, or when a script calls `e:PlayAudio()` (which restarts it from the beginning).
-Every field except the effects (`Doppler`, `LowPass`, `ReverbSend`) is read when the clip is loaded; changes
+Every field except the effects (`Doppler`, `LowPass`, `ReverbSend`, `HighPass`, `Echo`, `Distortion`) is read when the clip is loaded; changes
 apply on the next `e:PlayAudio()`, which stops the current sound first even when the new one cannot play. The
 effects apply while the sound plays: set them with `SetComponent` at any time. `PlayOnStart` sources (on play start, and those a
 `Scene.Load` adds) are loaded before the scripts' `OnCreate`, where they already report
@@ -1083,14 +1088,18 @@ function Menu:OnMusicVolumeChanged(slider, value) -- a UISlider's OnValueChanged
 end
 ```
 
-- `Audio.PlayOneShot(clip [, position [, volume [, bus]]])` — fire and forget, on `bus` (default `"SFX"`);
+- `Audio.PlayOneShot(clip [, position [, volume [, bus [, options]]]]])` — fire and forget, on `bus` (default `"SFX"`);
   3D when a position is given (pass `nil` to skip it). Returns false when the clip cannot be loaded or
-  audio is unavailable. One-shots are never streamed.
+  audio is unavailable. One-shots are never streamed. `options` accepts numeric `LowPass`, `ReverbSend`, `HighPass`, `Echo` and `Distortion` values with the same ranges as AudioSource. Unknown/non-numeric options raise an error; invalid ranges return false with a log. Effects are fixed for that one-shot, and echo voices retain a bounded three-second tail.
 - `Audio.SetBusVolume(bus, volume)`, `Audio.GetBusVolume(bus)` — `bus` is `"Master"`, `"Music"`, `"SFX"` or
   `"UI"`; `volume` is a linear gain like `Volume`. `SetBusVolume` returns true, or false (logged) if the bus
   could not be created.
 - An unknown bus name or a volume that is negative or not finite raises an error, as does any `Audio.*`
   call outside play ("audio is not running").
+
+`AudioReverbZone` defines a spherical room at its entity's world position (`Radius` 0.001..1e6 world units, independent of transform scale). `BlendDistance` (0..Radius) fades inward from its boundary. The containing enabled zone with highest `Priority` wins; lowest entity UUID wins ties. Its `RoomSize`, `Damping`, `Width` (0..1) blend with the baseline from `Audio.SetReverb`, which is restored outside all zones. Zones change room settings, not source send levels.
+
+`HighPass` removes low frequencies (6 dB/octave, 0 disables, otherwise 10..20000 Hz capped below output Nyquist). `Echo` (0..1) mixes a 250 ms delay with 0.35 feedback. `Distortion` (0..1) blends soft clipping with the dry signal. Parameters glide over about 10 ms; the order is high-pass, distortion, echo, low-pass, reverb send.
 
 **Effects.** A source's effects follow its component while it plays, so scripts can drive them every frame:
 

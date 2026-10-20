@@ -189,3 +189,27 @@ TEST_SUITE("Editor")
 		});
 	}
 }
+
+TEST_CASE("Curve list edits preserve existing times and keep inserted keys strictly ordered")
+{
+	const auto& type = ComponentRegistry::Find("ParticleEmitter")->FieldTypes.at("SizeCurve");
+	json list = json::array();
+	REQUIRE(EditJsonList(list, JsonListEdit::Add, 0, type));
+	REQUIRE(EditJsonList(list, JsonListEdit::Add, 0, type));
+	CHECK(list[0]["Time"] == 0);
+	CHECK(list[1]["Time"] == 1);
+	list[0]["Value"] = 2;
+	list[1]["Value"] = 4;
+	REQUIRE(EditJsonList(list, JsonListEdit::Duplicate, 0, type));
+	CHECK(list[1]["Time"] == 0.5);
+	CHECK(list[1]["Value"] == 2);
+	REQUIRE(EditJsonList(list, JsonListEdit::MoveDown, 1, type));
+	CHECK(list[1]["Time"] == 0.5);
+	CHECK(list[1]["Value"] == 4);
+	CHECK(list[2]["Value"] == 2);
+	while (list.size() < type.MaxCount)
+		REQUIRE(EditJsonList(list, JsonListEdit::Add, 0, type));
+	CHECK_FALSE(EditJsonList(list, JsonListEdit::Add, 0, type));
+	for (size_t i = 1; i < list.size(); ++i)
+		CHECK(list[i]["Time"].get<float>() > list[i - 1]["Time"].get<float>());
+}

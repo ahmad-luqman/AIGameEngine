@@ -1926,3 +1926,79 @@ TEST_SUITE("Audio")
 		CHECK(AllFinite(Mix(0.1f)));
 	}
 }
+
+TEST_CASE("Audio polish one-shots filter, distort and retain echo tails")
+{
+	BasaltTest::TempProject project("AudioPolish");
+	project.WriteFile("Assets/Audio/Tone.wav", MakeWav(1.0f, 48000, 100));
+	project.WriteFile("Assets/Audio/Short.wav", MakeWav(0.04f, 48000, 100));
+	HeadlessAudio engine;
+	auto level = [&](AudioOneShotOptions options) {
+		Scene scene;
+		scene.OnRuntimeStart();
+		REQUIRE(scene.GetAudioSystem()->PlayOneShot("Assets/Audio/Tone.wav", nullptr, 1, AudioBus::SFX, options));
+		Mix(0.2f);
+		const float value = Rms(Mix(0.1f));
+		scene.OnRuntimeStop();
+		return value;
+	};
+	const float dry = level({});
+	CHECK(dry > 0.01f);
+	CHECK(level({ .HighPass = 2000 }) < dry * 0.1f);
+	CHECK(level({ .Distortion = 1 }) > dry * 2);
+	Scene scene;
+	scene.OnRuntimeStart();
+	auto* audio = scene.GetAudioSystem();
+	CHECK_FALSE(audio->PlayOneShot("Assets/Audio/Tone.wav", nullptr, 1, AudioBus::SFX, { .Echo = -1 }));
+	CHECK_FALSE(audio->PlayOneShot("Assets/Audio/Tone.wav", nullptr, 1, AudioBus::SFX, { .HighPass = std::numeric_limits<float>::infinity() }));
+	REQUIRE(audio->PlayOneShot("Assets/Audio/Short.wav", nullptr, 1, AudioBus::SFX, { .LowPass = 1000, .ReverbSend = 0.2f, .Echo = 1 }));
+	CHECK(audio->HasReverb(AudioBus::SFX));
+	Mix(0.1f);
+	audio->Update(0.1f);
+	CHECK(audio->GetActiveSoundCount() == 1);
+	Mix(0.15f);
+	CHECK(Rms(Mix(0.04f)) > 0.005f);
+	audio->Update(3.1f);
+	CHECK(audio->GetActiveSoundCount() == 0);
+	scene.OnRuntimeStop();
+}
+
+TEST_CASE("Reverb zones blend, prioritize, restore the baseline and reject bad values")
+{
+	HeadlessAudio engine;
+	Scene scene;
+	auto listener = scene.CreateEntity("Listener");
+	listener.AddComponent<AudioListenerComponent>();
+	auto zone = scene.CreateEntityWithUUID(UUID(100), "Zone");
+	auto& z = zone.AddComponent<AudioReverbZoneComponent>();
+	z.RoomSize = 1;
+	z.Radius = 10;
+	z.BlendDistance = 2;
+	scene.OnRuntimeStart();
+	auto* audio = scene.GetAudioSystem();
+	audio->Update(0.1f);
+	CHECK(audio->GetReverb().RoomSize == doctest::Approx(1));
+	listener.GetTransform().Translation.x = 9;
+	audio->Update(0.1f);
+	CHECK(audio->GetReverb().RoomSize == doctest::Approx(0.75));
+	REQUIRE(audio->SetReverb({ 0.2f, 0.3f, 0.4f }));
+	CHECK(audio->GetReverb().RoomSize == doctest::Approx(0.6));
+	auto second = scene.CreateEntityWithUUID(UUID(101), "Priority");
+	auto& other = second.AddComponent<AudioReverbZoneComponent>();
+	other.Radius = 20;
+	other.RoomSize = 0.1f;
+	other.Priority = 1;
+	audio->Update(0.1f);
+	CHECK(audio->GetReverb().RoomSize == doctest::Approx(0.1));
+	other.Priority = 0;
+	audio->Update(0.1f);
+	CHECK(audio->GetReverb().RoomSize == doctest::Approx(0.6));
+	z.Enabled = false;
+	other.Enabled = false;
+	audio->Update(0.1f);
+	CHECK(audio->GetReverb().RoomSize == doctest::Approx(0.2));
+	std::string error;
+	CHECK_FALSE(ComponentRegistry::Find("AudioReverbZone")->Deserialize(zone, { { "Radius", -1 } }, error));
+	CHECK_FALSE(ComponentRegistry::Find("AudioReverbZone")->Deserialize(zone, { { "BlendDistance", 11 } }, error));
+	scene.OnRuntimeStop();
+}

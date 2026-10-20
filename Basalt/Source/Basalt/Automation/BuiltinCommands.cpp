@@ -120,6 +120,8 @@ namespace Basalt {
 				list["maxCount"] = type.MaxCount;
 				if (!element.UniqueField.empty())
 					list["uniqueField"] = element.UniqueField;
+				if (!element.NormalizedTimeField.empty())
+					list["normalizedTimeField"] = element.NormalizedTimeField;
 				list["default"] = element.Default;
 				lists[field] = std::move(list);
 			}

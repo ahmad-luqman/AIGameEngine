@@ -1134,6 +1134,8 @@ namespace Basalt {
 				m_Context.SetStatus("The game requested to quit; play mode stopped", false);
 			}
 		}
+		if (!m_Session.IsPlaying())
+			m_Session.GetScene()->UpdateParticlePreview(ts);
 		UpdateWindowTitle();
 	}
 
@@ -1161,6 +1163,13 @@ namespace Basalt {
 			const glm::vec3 position(world[3]);
 			const bool selected = m_Session.IsSelected(entity.GetUUID());
 
+			if (selected)
+				if (const auto* zone = entity.TryGetComponent<AudioReverbZoneComponent>(); zone && zone->Enabled && std::isfinite(zone->Radius) && zone->Radius > 0.0f)
+				{
+					DebugDraw::Sphere(position, zone->Radius, s_SelectionColor);
+					if (std::isfinite(zone->BlendDistance) && zone->BlendDistance > 0.0f && zone->BlendDistance < zone->Radius)
+						DebugDraw::Sphere(position, zone->Radius - zone->BlendDistance, glm::vec4(0.3f, 0.7f, 1.0f, 0.5f));
+				}
 			if (options.LightGizmos)
 			{
 				if (entity.HasComponent<DirectionalLightComponent>())

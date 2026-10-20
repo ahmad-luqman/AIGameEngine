@@ -1269,3 +1269,79 @@ TEST_SUITE("Particles")
 		scene.OnRuntimeStop();
 	}
 }
+
+TEST_CASE("Particle polish evaluates keys, birth multipliers and rotation independently")
+{
+	Scene scene;
+	auto c = QuietEmitter();
+	c.LifetimeMin = c.LifetimeMax = 2.0f;
+	c.StartSizeMin = c.StartSizeMax = 2.0f;
+	c.StartColorMin = c.StartColorMax = glm::vec4(0.5f);
+	c.RotationMin = c.RotationMax = 0.25f;
+	c.AngularVelocityMin = c.AngularVelocityMax = 1.0f;
+	c.SizeCurve = { { 0, 1 }, { 0.5f, 3 }, { 1, 0 } };
+	c.ColorCurve = { { 0, glm::vec4(1) }, { 0.5f, glm::vec4(0.4f) }, { 1, glm::vec4(0) } };
+	c.SoftDistance = 0.75f;
+	c.Lit = true;
+	auto entity = AddEmitter(scene, "Curve", c);
+	scene.OnRuntimeStart();
+	REQUIRE(scene.GetParticleSystem()->Emit(entity, 1) == 1);
+	scene.OnUpdate(0.0f);
+	auto data = RenderData(scene);
+	REQUIRE(data.Particles.size() == 1);
+	CHECK(data.Particles[0].PositionSize.w == doctest::Approx(2));
+	CHECK(data.Particles[0].Color.a == doctest::Approx(0.5));
+	scene.OnUpdate(0.1f); // first update retains explicitly emitted particles at age zero
+	scene.OnUpdate(1.0f);
+	data = RenderData(scene);
+	REQUIRE(data.Particles.size() == 1);
+	CHECK(data.Particles[0].PositionSize.w == doctest::Approx(6));
+	CHECK(data.Particles[0].Color.a == doctest::Approx(0.2));
+	CHECK(data.Particles[0].Effects.x == doctest::Approx(1.25));
+	CHECK(data.Particles[0].Effects.y == doctest::Approx(0.75));
+	CHECK(data.Particles[0].Effects.z == 1);
+	scene.OnRuntimeStop();
+}
+
+TEST_CASE("Particle curves reject unordered keys and repair direct C++ corruption")
+{
+	Scene scene;
+	auto entity = AddEmitter(scene, "Validation", QuietEmitter());
+	std::string error;
+	CHECK_FALSE(Deserialize(entity, { { "SizeCurve", { { { "Time", 0.5 }, { "Value", 1 } }, { { "Time", 0.5 }, { "Value", 2 } } } } }, error));
+	CHECK(error.find("SizeCurve") != std::string::npos);
+	auto c = QuietEmitter();
+	c.ColorCurve = { { 0, glm::vec4(1) }, { 1, glm::vec4(-1) } };
+	CHECK_FALSE(ValidateParticleEmitter(c).empty());
+	CHECK(SanitizeParticleEmitter(c).ColorCurve.empty());
+	c = QuietEmitter();
+	c.SizeCurve.resize(17);
+	CHECK_FALSE(ValidateParticleEmitter(c).empty());
+}
+
+TEST_CASE("Edit particle preview isolates runtime and responds to toggles and deletion")
+{
+	Scene scene;
+	auto c = QuietEmitter();
+	c.Preview = true;
+	c.PlayOnStart = false;
+	c.BurstCount = 3;
+	c.Looping = false;
+	auto entity = AddEmitter(scene, "Preview", c);
+	AddEmitter(scene, "Hidden", QuietEmitter());
+	scene.UpdateParticlePreview(0.1f);
+	CHECK_FALSE(scene.IsRunning());
+	CHECK(scene.GetScriptEngine() == nullptr);
+	REQUIRE(scene.GetParticleSystem());
+	CHECK(scene.GetParticleSystem()->GetTotalParticleCount() == 3);
+	entity.GetComponent<ParticleEmitterComponent>().Preview = false;
+	scene.UpdateParticlePreview(0.1f);
+	CHECK(scene.GetParticleSystem()->GetTotalParticleCount() == 0);
+	entity.GetComponent<ParticleEmitterComponent>().Preview = true;
+	scene.UpdateParticlePreview(0.1f);
+	CHECK(scene.GetParticleSystem()->GetTotalParticleCount() == 3);
+	scene.DestroyEntity(entity);
+	CHECK(scene.GetParticleSystem()->GetTotalParticleCount() == 0);
+	scene.ResetParticlePreview();
+	CHECK(scene.GetParticleSystem() == nullptr);
+}

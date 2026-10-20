@@ -542,3 +542,60 @@ TEST_CASE("Interleaved coplanar material keys use documented batch-group order")
 	CHECK(renderer.GetStatistics().Instances == 3);
 	CHECK(graphics->GetValidationErrorCount() == 0);
 }
+
+TEST_CASE("Soft lit particles sample copied depth across projection and target changes")
+{
+	auto graphics = CreateTestGraphics();
+	Scene scene;
+	scene.GetRendererSettings().SSAOEnabled = false;
+	scene.GetRendererSettings().ShadowsEnabled = false;
+	auto surface = scene.CreateEntity("Surface");
+	surface.AddComponent<MeshComponent>().Mesh = "builtin://Cube";
+	surface.GetTransform().Translation.z = -0.5f;
+	auto emitter = scene.CreateEntity("Soft particles");
+	emitter.GetTransform().Translation.z = 0.05f;
+	auto& c = emitter.AddComponent<ParticleEmitterComponent>();
+	c.PlayOnStart = false;
+	c.Rate = 0;
+	c.SpeedMin = c.SpeedMax = 0;
+	c.StartSize = c.EndSize = 1;
+	c.StartColor = c.EndColor = { 4, 0, 0, 1 };
+	scene.OnRuntimeStart();
+	SceneRenderer renderer(graphics->GetDevice());
+	REQUIRE(renderer.Initialize());
+	RenderCamera camera;
+	camera.Position = { 0, 0, 5 };
+	camera.View = glm::lookAtRH(camera.Position, glm::vec3(0), glm::vec3(0, 1, 0));
+	camera.Far = 20;
+	for (bool perspective : { false, true })
+	{
+		camera.Projection = perspective ? glm::perspectiveRH_ZO(glm::radians(45.0f), 1.0f, 0.1f, 20.0f) : glm::orthoRH_ZO(-2.0f, 2.0f, -2.0f, 2.0f, 0.1f, 20.0f);
+		for (float scale : { 1.0f, 0.5f, 1.5f })
+		{
+			renderer.SetRenderScale(scale);
+			renderer.SetViewportSize(64, 64);
+			scene.GetParticleSystem()->Stop(emitter, true);
+			const auto baseline = Capture(renderer, scene, camera);
+			REQUIRE(scene.GetParticleSystem()->Emit(emitter, 1) == 1);
+			c.SoftDistance = 0;
+			c.Lit = false;
+			const auto hard = Capture(renderer, scene, camera);
+			c.SoftDistance = 1;
+			const auto soft = Capture(renderer, scene, camera);
+			auto difference = [&](const auto& image) {
+				uint64_t sum = 0;
+				for (size_t i = 0; i < image.size(); ++i)
+					sum += static_cast<uint64_t>(std::abs(int(image[i]) - int(baseline[i])));
+				return sum;
+			};
+			CHECK(difference(hard) > 1000);
+			CHECK(difference(soft) < difference(hard) / 2);
+			c.SoftDistance = 0;
+			c.Lit = true;
+			CHECK(Capture(renderer, scene, camera) != hard);
+		}
+	}
+	scene.OnRuntimeStop();
+	graphics->WaitIdle();
+	CHECK(graphics->GetValidationErrorCount() == 0);
+}

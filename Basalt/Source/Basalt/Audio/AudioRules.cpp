@@ -49,6 +49,12 @@ namespace Basalt {
 			return fmt::format("Doppler must be a number from 0 to {} (got {})", MaxAudioDoppler, source.Doppler);
 		if (!IsValidAudioLowPass(source.LowPass))
 			return fmt::format("LowPass must be 0 (off) or a cutoff from {} to {} Hz (got {})", MinAudioLowPass, MaxAudioLowPass, source.LowPass);
+		if (!IsValidAudioLowPass(source.HighPass))
+			return "HighPass must be 0 or a cutoff from 10 to 20000 Hz";
+		if (!IsFiniteInRange(source.Echo, 0.0f, 1.0f))
+			return "Echo must be in [0,1]";
+		if (!IsFiniteInRange(source.Distortion, 0.0f, 1.0f))
+			return "Distortion must be in [0,1]";
 		if (!IsValidAudioReverbSend(source.ReverbSend))
 			return fmt::format("ReverbSend must be a number from 0 to 1 (got {})", source.ReverbSend);
 		return {};
