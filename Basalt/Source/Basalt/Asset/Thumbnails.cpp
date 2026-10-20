@@ -1,6 +1,8 @@
 #include "Basalt/Asset/AssetRegistry.h"
 
+#include "Basalt/Asset/AssetKey.h"
 #include "Basalt/Asset/ImageUtils.h"
+#include "Basalt/Asset/MaterialAsset.h"
 #include "Basalt/Asset/MeshImporter.h"
 #include "Basalt/Asset/TextureSource.h"
 #include "Basalt/Asset/Thumbnails.h"
@@ -27,16 +29,71 @@ namespace Basalt {
 	std::string MaterialPreviewKey(const MaterialComponent& m)
 	{
 		// Grouped like MaterialComponent; Tests check that every serialized field changes the key.
-		const nlohmann::json key = nlohmann::json::array({ m.AlbedoColor.r, m.AlbedoColor.g, m.AlbedoColor.b, m.AlbedoColor.a, m.Metallic, m.Roughness, m.EmissiveColor.r, m.EmissiveColor.g, m.EmissiveColor.b, m.EmissiveIntensity,
+		const nlohmann::json key = nlohmann::json::array({ m.Material, m.AlbedoColor.r, m.AlbedoColor.g, m.AlbedoColor.b, m.AlbedoColor.a, m.Metallic, m.Roughness, m.EmissiveColor.r, m.EmissiveColor.g, m.EmissiveColor.b, m.EmissiveIntensity,
 														   m.AlbedoMap, m.NormalMap, m.MetallicRoughnessMap, m.OcclusionMap, m.EmissiveMap,
 														   m.Clearcoat, m.ClearcoatRoughness, m.Transmission, m.ClearcoatMap, m.ClearcoatRoughnessMap, m.ClearcoatNormalMap, m.TransmissionMap,
 														   m.UVOffset.x, m.UVOffset.y, m.UVScale.x, m.UVScale.y, m.UVRotation });
 		return key.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 	}
 
-	std::array<const std::string*, 9> MaterialPreviewMaps(const MaterialComponent& m)
+	namespace {
+
+		// The registry that decodes a project's UUID references: the active project's when it is this one, else a fresh
+		// scan of `local` (a registry of projectDirectory; null, with a warning, when that fails).
+		const AssetRegistry* RegistryFor(const std::filesystem::path& projectDirectory, AssetRegistry& local)
+		{
+			std::error_code pathError;
+			if (const auto& active = Project::GetActive(); active && std::filesystem::equivalent(active->GetDirectory(), projectDirectory, pathError))
+				return &active->GetAssets();
+			std::string error;
+			if (local.Refresh(error))
+				return &local;
+			BS_CORE_WARN("Thumbnail dependencies: {}", error);
+			return nullptr;
+		}
+
+		// The path an asset reference names: a string as is, a {UUID, Path} object through the registry (empty when it
+		// does not resolve; the preview loader reports that, dependency polling must not log every frame).
+		std::string DecodeReference(const nlohmann::json& value, const AssetRegistry* assets)
+		{
+			std::string key, error;
+			if (value.is_string())
+				key = value.get<std::string>();
+			else if (assets && !assets->Decode(value, key, error))
+				key.clear();
+			return key;
+		}
+
+		void AddModelDependencies(const std::filesystem::path& projectDirectory, const std::string& model, std::set<std::string>& outDependencies);
+
+		// The files a material file's textures load from (a model for its embedded images, with that model's files).
+		void AddMaterialDependencies(const std::filesystem::path& projectDirectory, const AssetRegistry* assets, const std::string& material, std::set<std::string>& outDependencies)
+		{
+			const auto text = FileSystem::ReadTextFile(projectDirectory / FileSystem::PathFromUtf8(material));
+			const nlohmann::json data = text ? ParseJson(*text) : nlohmann::json();
+			if (!data.is_object())
+				return;
+			for (const char* field : MaterialAsset::MapFields)
+				if (const auto value = data.find(field); value != data.end())
+					if (const std::string source(GetAssetSource(DecodeReference(*value, assets))); source.starts_with("Assets/"))
+					{
+						outDependencies.insert(source);
+						if (ClassifyThumbnail(source) == ThumbnailKind::Model)
+							AddModelDependencies(projectDirectory, source, outDependencies);
+					}
+		}
+
+	}
+
+	std::vector<std::string> MaterialPreviewDependencies(const MaterialComponent& m)
 	{
-		return { &m.AlbedoMap, &m.NormalMap, &m.MetallicRoughnessMap, &m.OcclusionMap, &m.EmissiveMap, &m.ClearcoatMap, &m.ClearcoatRoughnessMap, &m.ClearcoatNormalMap, &m.TransmissionMap };
+		std::set<std::string> dependencies;
+		for (const std::string* map : { &m.AlbedoMap, &m.NormalMap, &m.MetallicRoughnessMap, &m.OcclusionMap, &m.EmissiveMap, &m.ClearcoatMap, &m.ClearcoatRoughnessMap, &m.ClearcoatNormalMap, &m.TransmissionMap, &m.Material })
+			if (!map->empty())
+				dependencies.insert(std::string(GetAssetSource(*map)));
+		if (const auto& project = Project::GetActive(); project && MaterialAsset::IsMaterialFile(m.Material))
+			AddMaterialDependencies(project->GetDirectory(), &project->GetAssets(), m.Material, dependencies);
+		return { dependencies.begin(), dependencies.end() };
 	}
 
 	namespace {
@@ -165,6 +222,8 @@ namespace Basalt {
 			return ThumbnailKind::Model;
 		if (extension == ".bprefab")
 			return ThumbnailKind::Prefab;
+		if (extension == MaterialAsset::Extension)
+			return ThumbnailKind::Material;
 		return ThumbnailKind::None;
 	}
 
@@ -180,6 +239,8 @@ namespace Basalt {
 				return "Model";
 			case ThumbnailKind::Prefab:
 				return "Prefab";
+			case ThumbnailKind::Material:
+				return "Material";
 			case ThumbnailKind::None:
 				break;
 		}
@@ -319,18 +380,7 @@ namespace Basalt {
 				if (entities == data.end() || !entities->is_array())
 					break;
 				AssetRegistry local(m_ProjectDirectory);
-				const AssetRegistry* assets = nullptr;
-				std::error_code pathError;
-				if (const auto& active = Project::GetActive(); active && std::filesystem::equivalent(active->GetDirectory(), m_ProjectDirectory, pathError))
-					assets = &active->GetAssets();
-				else
-				{
-					std::string error;
-					if (local.Refresh(error))
-						assets = &local;
-					else
-						BS_CORE_WARN("Thumbnail dependencies: {}", error);
-				}
+				const AssetRegistry* assets = RegistryFor(m_ProjectDirectory, local);
 				for (const auto& entity : *entities)
 				{
 					const auto components = entity.is_object() ? entity.find("Components") : entity.end();
@@ -343,23 +393,25 @@ namespace Basalt {
 								std::string key;
 								if (value.is_string())
 									key = value.get<std::string>();
-								else if (assets)
-								{
-									const auto* info = ComponentRegistry::Find(component);
-									std::string error;
-									// The preview loader reports unresolved identities; dependency polling must not log every frame.
-									if (info && std::find(info->AssetFields.begin(), info->AssetFields.end(), field) != info->AssetFields.end())
-										assets->Decode(value, key, error);
-								}
+								else if (const auto* info = ComponentRegistry::Find(component); info && std::find(info->AssetFields.begin(), info->AssetFields.end(), field) != info->AssetFields.end())
+									key = DecodeReference(value, assets);
 								if (key.starts_with("Assets/"))
 								{
-									const auto file = key.substr(0, key.find('#'));
+									const std::string file(GetAssetSource(key));
 									dependencies.insert(file);
 									if (ClassifyThumbnail(file) == ThumbnailKind::Model)
 										AddModelDependencies(m_ProjectDirectory, file, dependencies);
+									else if (ClassifyThumbnail(file) == ThumbnailKind::Material)
+										AddMaterialDependencies(m_ProjectDirectory, assets, file, dependencies);
 								}
 							}
 				}
+				break;
+			}
+			case ThumbnailKind::Material:
+			{
+				AssetRegistry local(m_ProjectDirectory);
+				AddMaterialDependencies(m_ProjectDirectory, RegistryFor(m_ProjectDirectory, local), relativePath, dependencies);
 				break;
 			}
 			case ThumbnailKind::Image:

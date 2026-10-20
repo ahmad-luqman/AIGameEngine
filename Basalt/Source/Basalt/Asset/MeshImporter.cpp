@@ -1,5 +1,7 @@
 #include "Basalt/Asset/MeshImporter.h"
 
+#include "Basalt/Asset/MaterialAsset.h"
+
 #include "Basalt/Animation/AnimationPose.h"
 #include "Basalt/Asset/AnimationImporter.h"
 #include "Basalt/Asset/MeshOptimizer.h"
@@ -385,6 +387,13 @@ namespace Basalt {
 			result.Alpha = material.alpha_mode == cgltf_alpha_mode_mask ? AlphaMode::Mask : (material.alpha_mode == cgltf_alpha_mode_blend ? AlphaMode::Blend : AlphaMode::Opaque);
 			result.AlphaCutoff = material.alpha_cutoff;
 			result.DoubleSided = material.double_sided;
+			// The glTF-named checks above explain most problems; this catches the rest (non-finite factors) so an
+			// imported material can always be extracted to a material file and previewed.
+			if (auto problem = MaterialAsset::Validate(result))
+			{
+				outError = where + ": " + *problem;
+				return nullptr;
+			}
 			source->Materials.push_back(std::move(result));
 		}
 		const uint32_t defaultMaterial = static_cast<uint32_t>(source->Materials.size());

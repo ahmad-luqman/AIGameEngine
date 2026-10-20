@@ -114,8 +114,58 @@ Coverage follows the alpha mode: OPAQUE and surviving MASK surfaces stay fully c
 Authored `Material` overrides expose `Clearcoat`, `ClearcoatRoughness`, `Transmission` in [0,1], the four
 extension map paths, and shared `UVOffset`, `UVScale`, `UVRotation` (radians). An override replaces the whole
 imported material: its one UV transform applies to every map on UV0, and normal scale and occlusion strength
-are 1. It blends when `AlbedoColor.a < 1` (alpha is then coverage) or `Transmission > 0` (full coverage). All
+are 1 (a material asset, below, keeps all of these per map). It blends when `AlbedoColor.a < 1` (alpha is then coverage) or `Transmission > 0` (full coverage). All
 fields use the component registry for Lua, automation, disk persistence, inspector editing and undo.
 
 The isolated `AssetPipelineFeature` ctest exercises compression and UUID saves on a temporary copy of
 the feature project, so `FeatureTest.batch.json` never writes generated textures into checked-in assets.
+
+## Material assets
+
+A material file (`.bmaterial`) holds the full imported material model, so an authored material keeps everything a
+glTF material can say. A `Material` component uses one through its `Material` field, which also accepts a model's
+imported material directly (`Assets/Models/Ship.glb#material/0`, counted from 0 in glTF order; the importer's
+default material for primitives without one is not addressable). While `Material` is set, the asset replaces the
+component's inline values for every submesh; they apply only when the asset cannot load (the failure is logged once,
+and the project validator reports a broken file).
+
+```json
+{
+	"Version": 1,
+	"AlbedoColor": [1, 0.85, 0.7, 1], "Metallic": 0, "Roughness": 0.6,
+	"EmissiveColor": [0, 0, 0], "EmissiveIntensity": 1,
+	"AlphaMode": "Mask", "AlphaCutoff": 0.3, "DoubleSided": true,
+	"NormalScale": 0.5, "OcclusionStrength": 1,
+	"Clearcoat": 0, "ClearcoatRoughness": 0, "ClearcoatNormalScale": 1, "Transmission": 0,
+	"AlbedoMap": { "UUID": "9688068201958151311", "Path": "Assets/Textures/Checker.png" },
+	"NormalMap": "Assets/Textures/FlatNormal.png",
+	"TextureTransforms": { "Albedo": { "Offset": [0.25, 0], "Scale": [3, 3], "Rotation": 0.5, "TexCoord": 1 } }
+}
+```
+
+- **Fields.** Only `Version` (1) is required; other keys default to an imported material's defaults. The maps have the
+  component's names (`AlbedoMap`, `NormalMap`, `MetallicRoughnessMap`, `OcclusionMap`, `EmissiveMap`, `ClearcoatMap`,
+  `ClearcoatRoughnessMap`, `ClearcoatNormalMap`, `TransmissionMap`). `TextureTransforms` is keyed by slot (`Albedo`,
+  `Normal`, `MetallicRoughness`, `Occlusion`, `Emissive`, `Clearcoat`, `ClearcoatRoughness`, `ClearcoatNormal`,
+  `Transmission`); rotation is in radians and `TexCoord` picks UV0 or UV1 (primitives use one layout for both).
+- **Strict reading.** Unknown keys, wrong types, non-finite numbers and the importer's range rules (clearcoat,
+  clearcoat roughness, transmission and occlusion strength in [0, 1], nonnegative emissive intensity) fail with the
+  field's location. The importer applies the same check, so every model material can be written as a file.
+  `Tests/Fuzz/FuzzMaterialAsset` fuzzes the reader and checks that whatever it accepts writes and reads back.
+- **References.** Textures are path strings or `{UUID, Path}` objects, like component asset fields; a model's
+  embedded images are `Model.glb#image/N`. Files written by the engine (`material.create`, `material.extract`, the
+  editor's Material Editor) use UUIDs. `asset.move`/`asset.rename` migrate material files with scenes and prefabs, so a
+  moved texture keeps resolving; a UUID whose file is gone renders without that texture and is reported.
+- **Commands.** `asset.write` validates a `.bmaterial` before replacing it and warns about missing textures.
+  `material.create {path, entity?, overwrite?}` writes the defaults, or what an entity's Material draws.
+  `material.extract {model, folder?, overwrite?}` writes one file per glTF material (named after it, made safe and
+  unique) into `<model folder>/Materials`, checking every output before writing any. `asset.preload` reads a material
+  and preloads its textures.
+- **Loading.** `AssetManager::GetMaterial`/`RequestMaterial` parse a file on the main thread and cache it (material
+  payloads are tiny and are not charged to `memory.stats`); an imported material shares its model's lifetime and
+  waits for it while streaming. A changed file reloads on the next frame (file watcher or `asset.refresh`).
+- **Editor.** The content browser previews material files on a sphere (`editor.thumbnail` kind `Material`) and a
+  model's materials losslessly in its tooltip. Its context menu creates materials ("New Material...") and extracts a
+  model's ("Extract Materials"). Double-clicking a material opens the Material Editor (every field, a live preview of
+  unsaved edits, Save through `asset.write`, Revert); dropping one on the viewport gives it to the selected entity. The
+  inspector's Material section can save what an entity draws as a new material file and use it.

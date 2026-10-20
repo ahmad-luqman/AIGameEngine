@@ -175,7 +175,8 @@ its skeletons, inverse binds, and immutable animation clips; `AnimationSystem` o
 per-entity clocks, local poses and composed node transforms while a scene plays or simulates. The
 component registry exposes setup through scene files, prefabs, the inspector, Lua and automation.
 `asset.import_model` creates an Animator root for animated/skinned assets; static assets retain their
-editable entity hierarchy. A Material on the root overrides imported materials. Editor picking,
+editable entity hierarchy. A Material on the root overrides imported materials (with its inline values or a material
+asset; see [AssetPipeline.md](AssetPipeline.md#material-assets)). Editor picking,
 focus and selection outlines use the current animated model bounds. The inspector and `scene.info`
 report missing clips/assets and Mesh/Animator combinations that can draw unexpected geometry.
 
@@ -282,17 +283,21 @@ GPU copies of the assets it draws.
   helpers only in the scene view. `editor.game_view` captures go through the capture renderer.
 - **Capture renderer** (picking, created on first use): screenshots and picking.
 - **Preview renderer** (`PreviewRenderer`, no timers or picking, created on first preview): content-browser
-  thumbnails of models and prefabs and material spheres. It renders a fresh studio scene (procedural sky,
+  thumbnails of models, prefabs and material files, and material spheres. Spheres render the full material model:
+  material files, a model's imported materials (the content-browser tooltip's swatches, by value) and the Material
+  Editor's unsaved draft (through `SceneRenderer::SetMaterialResolver`, which only the preview renderer sets). It renders a fresh studio scene (procedural sky,
   one key light) at 256x256 and averages it down to 128x128, then releases the GPU copies of what it drew.
   At most one preview is rendered per frame; each waits for the GPU (readback). Images and `.hdr`
   environments are previewed on the CPU (an HDR is tonemapped with the ACES fit). Previews are cached in
   `<project>/Cache/Thumbnails` (outside `Assets/`, so never exported; new projects ignore `Cache/` in git) and
   remade when the size or modification time changes of the source file or of a file its preview reads: a
-  glTF's external buffers and images, a prefab's models (and theirs). Only then are the model and those files
+  glTF's external buffers and images, a material file's textures (and their models' files), a prefab's models and
+materials (and theirs). Only then are the model and those files
   read into `AssetManager` again (the open scene then shows the new version too), as with `editor.thumbnail` `refresh`; a
   preview the cache still matches reuses what `AssetManager` holds. A file that disappears and comes back is
   previewed again. Shown previews check their files every 2 seconds, and at once whenever changed files are reloaded
-  (the file watcher, `asset.refresh` or `asset.write`); a material sphere is made again when a texture it uses changes.
+  (the file watcher, `asset.refresh` or `asset.write`); a material sphere is made again when a texture, material file or
+model it uses changes.
   Models and textures a preview loads only for itself are released from `AssetManager` afterwards (what was loaded
   before stays; a model's material list is kept with its preview for the tooltip). Only rows on
   screen ask for previews, and at most 512 textures are kept. Material spheres
@@ -300,7 +305,9 @@ GPU copies of the assets it draws.
   cached files but does not reload models already in `AssetManager`.
 
 `PreviewRendererGPU` checks framing, determinism, material colour and emission, failures and that pending
-debug lines survive a preview, with Vulkan validation required.
+debug lines survive a preview, with Vulkan validation required. It also checks that a material file, a Material
+component referencing it and the imported material it came from render identically (per-map transform included),
+that MASK coverage applies on spheres, and that scenes fall back to the inline values when a material file is missing.
 
 ## CPU jobs, streaming and memory
 

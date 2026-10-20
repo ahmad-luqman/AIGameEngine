@@ -2,12 +2,16 @@
 #include "GPUFixture.h"
 
 #include <Basalt/Asset/AssetManager.h>
+#include <Basalt/Asset/MaterialAsset.h>
 #include <Basalt/Asset/TextureCompression.h>
 #include <Basalt/Asset/ImageUtils.h>
 #include <Basalt/Core/FileSystem.h>
 #include <Basalt/Project/Project.h>
 #include <Basalt/Renderer/DebugDraw.h>
 #include <Basalt/Renderer/PreviewRenderer.h>
+#include <Basalt/Scene/Entity.h>
+#include <Basalt/Scene/Scene.h>
+#include <Basalt/Scene/SceneSerializer.h>
 
 #include "../Source/TestUtils.h"
 #include "../Source/MeshTestUtils.h"
@@ -331,6 +335,103 @@ TEST_CASE("Imported UV1 and texture rotation preserve normal orientation and alp
 	CHECK(At(secondUV, 64, 64).G > At(secondUV, 64, 64).R + 60);
 	model["materials"][0]["emissiveTexture"]["texCoord"] = 0;
 	CHECK(bool(render().Pixels != secondUV.Pixels));
+	AssetManager::Clear();
+	CHECK(graphics->GetValidationErrorCount() == 0);
+}
+
+TEST_CASE("Material files and imported materials preview losslessly on spheres")
+{
+	auto graphics = CreateTestGraphics();
+	BasaltTest::TempProject project("MaterialPreviewsGPU");
+	std::string error;
+	// Left half red, right half green: a UV offset of half the texture swaps them.
+	std::vector<uint8_t> split(size_t{ 16 } * 16 * 4, 255);
+	for (size_t pixel = 0; pixel < 256; pixel++)
+	{
+		split[pixel * 4] = (pixel % 16 < 8) ? 255 : 0;
+		split[pixel * 4 + 1] = (pixel % 16 < 8) ? 0 : 255;
+		split[pixel * 4 + 2] = 0;
+	}
+	std::filesystem::create_directories(project.GetDirectory() / "Assets" / "Models");
+	REQUIRE(WritePng(project.GetDirectory() / "Assets" / "Models" / "split.png", split, 16, 16, error));
+	BasaltTest::WriteSphereGltf(project.GetDirectory() / "Assets" / "Models");
+	const std::string model = "Assets/Models/Sphere.gltf";
+	auto gltf = nlohmann::json::parse(FileSystem::ReadTextFile(Project::ResolvePath(model)).value_or("{}"));
+	gltf["extensionsUsed"] = { "KHR_texture_transform" };
+	gltf["meshes"][0]["primitives"][0]["attributes"]["TEXCOORD_1"] = 3;
+	gltf["images"] = { { { "uri", "split.png" } } };
+	gltf["textures"] = { { { "source", 0 } } };
+	gltf["materials"][0] = { { "name", "Emissive" }, { "pbrMetallicRoughness", { { "baseColorFactor", { 0, 0, 0, 1 } }, { "metallicFactor", 0 } } }, { "emissiveFactor", { 1, 1, 1 } }, { "emissiveTexture", { { "index", 0 }, { "texCoord", 1 }, { "extensions", { { "KHR_texture_transform", { { "offset", { 0.5, 0 } } } } } } } } };
+	REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath(model), gltf.dump()));
+
+	PreviewRenderer previews(graphics->GetDevice());
+	REQUIRE(previews.Initialize());
+	const auto imported = AssetManager::GetMaterial(model + "#material/0");
+	REQUIRE(imported);
+	const auto byValue = Made(previews.RenderMaterial(*imported, error), error);
+	Save(byValue, "MaterialImported.png");
+	CheckFramed(byValue, "imported material");
+	MaterialComponent reference;
+	reference.Material = model + "#material/0";
+	CHECK(bool(Made(previews.RenderMaterial(reference, error), error).Pixels == byValue.Pixels));
+
+	// The same material as a file renders identically, through a Material component like a scene's.
+	const auto text = MaterialAsset::ToJson(*imported, true, error);
+	REQUIRE_MESSAGE(text, error);
+	REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Emissive.bmaterial"), text.value_or(nlohmann::json()).dump()));
+	MaterialComponent file;
+	file.Material = "Assets/Emissive.bmaterial";
+	const auto fromFile = Made(previews.RenderMaterial(file, error), error);
+	CHECK(bool(fromFile.Pixels == byValue.Pixels));
+
+	// What the old swatches drew (the maps through an inline override, losing the offset) shows the other half.
+	MaterialComponent lossy;
+	lossy.AlbedoColor = { 0, 0, 0, 1 };
+	// glTF's default roughness.
+	lossy.Roughness = 1.0f;
+	lossy.EmissiveColor = { 1, 1, 1 };
+	lossy.EmissiveMap = imported->EmissiveMap;
+	const auto lossyImage = Made(previews.RenderMaterial(lossy, error), error);
+	const Rgb centre = At(byValue, 64, 64);
+	const Rgb lossyCentre = At(lossyImage, 64, 64);
+	CHECK(Difference(centre, lossyCentre) > 60);
+	CHECK((centre.R > centre.G) != (lossyCentre.R > lossyCentre.G));
+	// With the offset removed, the full material matches the inline one again.
+	MaterialData plain = *imported;
+	plain.TextureTransforms[static_cast<size_t>(MaterialTextureSlot::Emissive)].Offset = glm::vec2(0);
+	CHECK(Difference(At(Made(previews.RenderMaterial(plain, error), error), 64, 64), lossyCentre) < 6);
+
+	// MASK below the cutoff discards the whole sphere: only sky remains.
+	MaterialData masked = *imported;
+	masked.Alpha = AlphaMode::Mask;
+	masked.AlbedoColor.a = 0.25f;
+	masked.AlphaCutoff = 0.5f;
+	const auto discarded = Made(previews.RenderMaterial(masked, error), error);
+	// The sky's gradient is vertical: compare with the sky beside the sphere at the same height.
+	CHECK(Difference(At(discarded, 64, 64), At(discarded, 2, 64)) < 12);
+	CHECK(Difference(At(byValue, 64, 64), At(byValue, 2, 64)) > 60);
+	masked.AlphaCutoff = 0.2f;
+	CHECK(Difference(At(Made(previews.RenderMaterial(masked, error), error), 64, 64), centre) < 6);
+
+	// Invalid materials and assets that do not load fail with their reason instead of drawing a fallback.
+	masked.Clearcoat = 4.0f;
+	CHECK_FALSE(previews.RenderMaterial(masked, error));
+	CHECK(error.find("Clearcoat") != std::string::npos);
+	MaterialComponent missing;
+	missing.Material = "Assets/Missing.bmaterial";
+	missing.AlbedoColor = { 1, 0, 0, 1 };
+	CHECK_FALSE(previews.RenderMaterial(missing, error));
+	CHECK(error.find("Assets/Missing.bmaterial") != std::string::npos);
+	// Scenes draw the inline values instead (a prefab renders through the scene path).
+	Scene scene;
+	Entity sphere = scene.CreateEntity("Fallback");
+	sphere.AddComponent<MeshComponent>().Mesh = "builtin://Sphere";
+	sphere.AddComponent<MaterialComponent>() = missing;
+	REQUIRE_MESSAGE(SceneSerializer::SavePrefab(sphere, Project::ResolvePath("Assets/Fallback.bprefab"), error), error);
+	const auto fallback = Made(previews.RenderPrefab("Assets/Fallback.bprefab", error), error);
+	const Rgb red = At(fallback, 64, 64);
+	CHECK(red.R > red.G + 40);
+	CHECK(red.R > red.B + 40);
 	AssetManager::Clear();
 	CHECK(graphics->GetValidationErrorCount() == 0);
 }

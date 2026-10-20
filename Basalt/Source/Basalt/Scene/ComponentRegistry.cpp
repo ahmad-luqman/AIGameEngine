@@ -1,5 +1,7 @@
 #include "Basalt/Scene/ComponentRegistry.h"
 
+#include "Basalt/Asset/AssetKey.h"
+#include "Basalt/Asset/MaterialAsset.h"
 #include "Basalt/Audio/AudioRules.h"
 #include "Basalt/Core/EnumNames.h"
 #include "Basalt/Core/JsonUtils.h"
@@ -662,6 +664,7 @@ namespace Basalt {
 
 		void Fields(FieldReader& r, MaterialComponent& c)
 		{
+			r.AssetField("Material", c.Material);
 			r.Field("AlbedoColor", c.AlbedoColor);
 			r.Field("Metallic", c.Metallic);
 			r.Field("Roughness", c.Roughness);
@@ -1235,6 +1238,7 @@ namespace Basalt {
 		json Write(const MaterialComponent& c)
 		{
 			return {
+				{ "Material", c.Material },
 				{ "AlbedoColor", ToJson(c.AlbedoColor) },
 				{ "Metallic", c.Metallic },
 				{ "Roughness", c.Roughness },
@@ -1678,6 +1682,9 @@ namespace Basalt {
 			// Matches the importer's rule for KHR_materials_emissive_strength.
 			if (!std::isfinite(c.EmissiveIntensity) || c.EmissiveIntensity < 0.0f)
 				return fmt::format("EmissiveIntensity {} must be finite and nonnegative", c.EmissiveIntensity);
+			// Unresolved UUID references stay opaque keys so the project validator can report them.
+			if (!c.Material.empty() && !MaterialAsset::IsMaterialFile(c.Material) && !ParseSubAssetIndex(c.Material, ImportedMaterialMarker) && !AssetRegistry::IsUnresolvedKey(c.Material))
+				return fmt::format("Material '{}' must be a .bmaterial file or <model>#material/<n>", c.Material);
 			return {};
 		}
 

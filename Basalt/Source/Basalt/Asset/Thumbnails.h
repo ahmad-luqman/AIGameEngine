@@ -24,16 +24,18 @@ namespace Basalt {
 		// A glTF model rendered in a studio setup (needs a GPU).
 		Model,
 		// A prefab rendered in a studio setup (needs a GPU).
-		Prefab
+		Prefab,
+		// A material file on a sphere in the studio setup (needs a GPU).
+		Material
 	};
 
 	ThumbnailKind ClassifyThumbnail(const std::string& path);
-	// "None", "Image", "Environment", "Model" or "Prefab".
+	// "None", "Image", "Environment", "Model", "Prefab" or "Material".
 	const char* ThumbnailKindName(ThumbnailKind kind);
 	// Image and Environment previews are made on the CPU (headless); the others are rendered.
 	inline bool IsRenderedThumbnail(ThumbnailKind kind)
 	{
-		return kind == ThumbnailKind::Model || kind == ThumbnailKind::Prefab;
+		return kind == ThumbnailKind::Model || kind == ThumbnailKind::Prefab || kind == ThumbnailKind::Material;
 	}
 
 	// An RGBA8 preview image, top row first.
@@ -61,8 +63,10 @@ namespace Basalt {
 	// NaN (written as null) still compares equal and is not re-rendered every frame; JSON array boundaries keep
 	// paths containing separators from producing the same key.
 	std::string MaterialPreviewKey(const MaterialComponent& material);
-	// Every texture a material preview samples (empty entries included): a change to any of them stales it.
-	std::array<const std::string*, 9> MaterialPreviewMaps(const MaterialComponent& material);
+	// The project-relative files a material preview reads, sorted: its inline maps' files, its Material asset's file and,
+	// for a .bmaterial, the files its textures load from (decoded through the active project). A change to any of them
+	// stales the preview. A model stands for its embedded images and imported materials.
+	std::vector<std::string> MaterialPreviewDependencies(const MaterialComponent& material);
 
 	// A project's previews on disk, under <project>/Cache/Thumbnails: outside Assets/, so never exported. Each
 	// entry is <hash of the project-relative path>.png plus a .key file holding the version key (path, size,
@@ -71,8 +75,9 @@ namespace Basalt {
 	class ThumbnailCache
 	{
 	public:
-		// Bumped when previews change their look, so old caches are rebuilt (2: clearcoat, transmission, KTX2).
-		static constexpr uint32_t Version = 2;
+		// Bumped when previews change their look, so old caches are rebuilt (2: clearcoat, transmission, KTX2; 3: material
+		// files, and primitives' TEXCOORD_1 in prefabs).
+		static constexpr uint32_t Version = 3;
 
 		struct Entry
 		{
@@ -87,8 +92,8 @@ namespace Basalt {
 		// The version key of a project-relative source file, or nullopt (with the reason) when it cannot be read. It
 		// covers the files the preview also reads (GetDependencies), so changing one of those makes it again.
 		std::optional<std::string> MakeKey(const std::string& relativePath, std::string& outError) const;
-		// The other files a preview reads: a glTF's external buffers and images; a prefab's models (and theirs),
-		// textures and fonts. Project-relative, sorted.
+		// The other files a preview reads: a glTF's external buffers and images; a material file's textures (and their
+		// models' files); a prefab's models, materials (and theirs), textures and fonts. Project-relative, sorted.
 		std::vector<std::string> GetDependencies(const std::string& relativePath) const;
 
 		// The cached preview when it was made from the same version of the source (key).

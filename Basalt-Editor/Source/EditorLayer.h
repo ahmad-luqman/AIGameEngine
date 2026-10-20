@@ -7,6 +7,7 @@
 #include "Panels/ConsolePanel.h"
 #include "Panels/ContentBrowserPanel.h"
 #include "Panels/InspectorPanel.h"
+#include "Panels/MaterialEditorPanel.h"
 #include "Panels/ProjectSettingsPanel.h"
 #include "Panels/SceneHierarchyPanel.h"
 
@@ -180,6 +181,9 @@ namespace Basalt {
 		SceneHierarchyPanel m_HierarchyPanel;
 		InspectorPanel m_InspectorPanel;
 		ContentBrowserPanel m_ContentBrowserPanel;
+		MaterialEditorPanel m_MaterialEditorPanel;
+		// The path typed into the inspector's "Save as Material Asset" prompt.
+		std::string m_SaveMaterialPath;
 		ConsolePanel m_ConsolePanel;
 		ProjectSettingsPanel m_ProjectSettingsPanel;
 		bool m_ProjectSettingsOpen = false;

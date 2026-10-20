@@ -178,6 +178,9 @@ namespace Basalt {
 			Ref<MeshSource> MakeSingleMesh(const std::string& key, const std::string& name, std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices)
 			{
 				MeshSource::GenerateTangents(vertices, indices);
+				// Primitives have one UV layout; materials whose maps read TEXCOORD_1 sample it too.
+				for (Vertex& vertex : vertices)
+					vertex.TexCoord1 = vertex.TexCoord;
 				Ref<MeshSource> source = CreateRef<MeshSource>();
 				source->Key = key;
 				source->Materials.push_back(MaterialData{ .Name = "Default" });

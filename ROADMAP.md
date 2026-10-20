@@ -93,13 +93,8 @@ below extend character movement, in order of impact.
 
 ### Editor feel and visual quality
 
-The Game view, asset thumbnails and material previews, the project settings panel and export validation
-with a smoke test have shipped. Follow-ups:
-
-- **Material assets — L.** A `.bmaterial` file type that MaterialComponent can reference, with
-  content-browser thumbnails (previews cover MaterialComponent and glTF materials today). glTF material swatches
-  convert through MaterialComponent and so drop per-map texture transforms, UV1 and normal/occlusion strengths
-  (model previews keep them); the new thumbnails should render the full imported material.
+The Game view, asset thumbnails and material previews, the project settings panel, export validation with a
+smoke test and material assets (`.bmaterial` files with lossless thumbnails and a Material Editor) have shipped.
 
 ### Editor workflow
 

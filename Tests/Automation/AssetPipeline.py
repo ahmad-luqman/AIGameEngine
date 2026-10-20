@@ -108,6 +108,11 @@ with tempfile.TemporaryDirectory(prefix="BasaltAssetPipeline-") as temp:
     extended = next(e["Components"]["Material"] for e in saved["Entities"] if e["Name"] == "MaterialExtensionData")
     for field in ("ClearcoatMap", "ClearcoatRoughnessMap", "ClearcoatNormalMap", "TransmissionMap"):
         require(extended[field]["UUID"] == meta["UUID"], field + " did not encode moved texture identity")
+    # Material files reference textures too: the move rewrote the feature material's path as the texture's UUID.
+    checker_material = json.loads((project / "Assets/Materials/Checker.bmaterial").read_text())
+    # Like scenes, the migration records the identity with the path it had; the UUID is what resolves.
+    require(checker_material["AlbedoMap"].get("UUID") == meta["UUID"], "material file did not encode moved texture identity: " + json.dumps(checker_material))
+    require(checker_material["NormalMap"] == "Assets/Textures/FlatNormal.png", "material references to other files changed")
     # Load while still renamed, then prove that moving back invalidates the path hint rather than the UUID.
     commands = [
         {"command": "scene.open", "params": {"path": "Assets/Scenes/FeatureTest.bscene"}},
@@ -118,6 +123,27 @@ with tempfile.TemporaryDirectory(prefix="BasaltAssetPipeline-") as temp:
     if result.returncode:
         raise AssertionError(result.stdout + result.stderr)
     require(json.loads((project / (original + ".meta")).read_text())["UUID"] == meta["UUID"], "rename changed the asset UUID")
+    # A model's materials extract losslessly to files whose embedded images keep the model's identity; renaming a
+    # material file migrates the scene references to it.
+    extracted = command("material.extract", {"model": "Assets/Models/TexturedCube.glb"})
+    require([m["path"] for m in extracted["materials"]] == ["Assets/Models/Materials/Checker.bmaterial"], "extract: " + json.dumps(extracted))
+    extracted_file = json.loads((project / "Assets/Models/Materials/Checker.bmaterial").read_text())
+    model_meta = json.loads((project / "Assets/Models/TexturedCube.glb.meta").read_text())
+    require(extracted_file["AlbedoMap"] == {"UUID": model_meta["UUID"], "Path": "Assets/Models/TexturedCube.glb#image/0"}, "extracted embedded image reference: " + json.dumps(extracted_file))
+    require(extracted_file["Roughness"] == 0.6 and extracted_file["Metallic"] == 0, "extracted factors: " + json.dumps(extracted_file))
+    renamed = batch_results([
+        {"command": "scene.open", "params": {"path": "Assets/Scenes/FeatureTest.bscene"}},
+        {"command": "asset.rename", "params": {"from": "Assets/Materials/Checker.bmaterial", "to": "Assets/Materials/Tiles.bmaterial"}},
+        {"command": "scene.save"},
+        {"command": "asset.preload", "params": {"paths": ["Assets/Materials/Tiles.bmaterial", "Assets/Models/Materials/Checker.bmaterial"], "wait": True}},
+        {"command": "project.validate", "params": {"assertValid": True}},
+    ])
+    require(all(entry["status"] == "ready" for entry in renamed[3]), "moved or extracted materials did not load: " + json.dumps(renamed[3]))
+    saved = json.loads((project / "Assets/Scenes/FeatureTest.bscene").read_text())
+    material_meta = json.loads((project / "Assets/Materials/Tiles.bmaterial.meta").read_text())
+    pillars = [e["Components"]["Material"]["Material"] for e in saved["Entities"] if e["Name"] == "Pillar"]
+    require({"UUID": material_meta["UUID"], "Path": "Assets/Materials/Tiles.bmaterial"} in pillars, "scene did not persist the renamed material: " + json.dumps(pillars))
+    require({"UUID": model_meta["UUID"], "Path": "Assets/Models/TexturedCube.glb#material/0"} in pillars, "scene did not persist the imported material reference: " + json.dumps(pillars))
     delete_batch = [
         {"command": "asset.write", "params": {"path": "Assets/DeleteProbe.lua", "content": "return {}"}},
         {"command": "asset.id", "params": {"path": "Assets/DeleteProbe.lua"}},

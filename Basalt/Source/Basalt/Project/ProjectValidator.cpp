@@ -1,5 +1,7 @@
 #include "Basalt/Animation/AnimationGraph.h"
 
+#include "Basalt/Asset/AssetKey.h"
+#include "Basalt/Asset/MaterialAsset.h"
 #include "Basalt/Asset/MeshSource.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/JsonUtils.h"
@@ -25,12 +27,12 @@ namespace Basalt {
 	namespace {
 
 		// File types components reference by path. A string ending in one of these is treated as an asset path.
-		const std::set<std::string> s_AssetExtensions = { ".gltf", ".glb", ".ktx2", ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr", ".wav", ".mp3", ".ogg", ".flac", ".ttf", ".otf", ".lua", ".bscene", ".bprefab", ".banimgraph" };
+		const std::set<std::string> s_AssetExtensions = { ".gltf", ".glb", ".ktx2", ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr", ".wav", ".mp3", ".ogg", ".flac", ".ttf", ".otf", ".lua", ".bscene", ".bprefab", ".banimgraph", ".bmaterial" };
 
-		// "Assets/Models/Ship.glb#image/0" names an image inside Ship.glb: the file is the part before '#'.
+		// "Assets/Models/Ship.glb#image/0" names an image inside Ship.glb (and "#material/0" one of its materials).
 		std::string StripSubAsset(const std::string& reference)
 		{
-			return reference.substr(0, reference.find('#'));
+			return std::string(GetAssetSource(reference));
 		}
 
 		bool HasAssetExtension(const std::string& value)
@@ -85,8 +87,8 @@ namespace Basalt {
 				CheckProjectFile();
 				CheckInputFile();
 				CheckStartScene();
-				std::vector<std::filesystem::path> scenes, prefabs, scripts, graphs;
-				ListAssets(scenes, prefabs, scripts, graphs);
+				std::vector<std::filesystem::path> scenes, prefabs, scripts, graphs, materials;
+				ListAssets(scenes, prefabs, scripts, graphs, materials);
 				for (const auto& path : scenes)
 					CheckScene(path);
 				for (const auto& path : prefabs)
@@ -95,6 +97,8 @@ namespace Basalt {
 					CheckScriptSyntax(path);
 				for (const auto& path : graphs)
 					CheckAnimationGraph(path);
+				for (const auto& path : materials)
+					CheckMaterial(path);
 				for (const auto& [script, file] : m_ReferencedScripts)
 					CheckScriptClass(script, file);
 				return std::move(m_Report);
@@ -191,7 +195,7 @@ namespace Basalt {
 					CheckReference(start, Project::FileName, "the StartScene names");
 			}
 
-			void ListAssets(std::vector<std::filesystem::path>& scenes, std::vector<std::filesystem::path>& prefabs, std::vector<std::filesystem::path>& scripts, std::vector<std::filesystem::path>& graphs)
+			void ListAssets(std::vector<std::filesystem::path>& scenes, std::vector<std::filesystem::path>& prefabs, std::vector<std::filesystem::path>& scripts, std::vector<std::filesystem::path>& graphs, std::vector<std::filesystem::path>& materials)
 			{
 				std::error_code error;
 				const std::filesystem::path assets = m_Project.GetAssetDirectory();
@@ -219,13 +223,15 @@ namespace Basalt {
 						prefabs.push_back(it->path());
 					else if (extension == ".banimgraph")
 						graphs.push_back(it->path());
+					else if (extension == MaterialAsset::Extension)
+						materials.push_back(it->path());
 					else if (extension == ".lua")
 						scripts.push_back(it->path());
 				}
 				if (error)
 					m_Report.Add(ValidationSeverity::Error, Project::AssetDirectoryName, "cannot list all the assets (the walk stopped with: " + error.message() + "); the remaining files were not checked");
 				// Directory order differs between platforms; reports should not.
-				for (auto* list : { &scenes, &prefabs, &scripts, &graphs })
+				for (auto* list : { &scenes, &prefabs, &scripts, &graphs, &materials })
 					std::sort(list->begin(), list->end());
 			}
 
@@ -402,6 +408,24 @@ namespace Basalt {
 				const auto graph = text ? ParseJson(*text, error) : nlohmann::json();
 				if (!text || graph.is_discarded() || !AnimationGraph::FromJson(graph, error))
 					m_Report.Add(ValidationSeverity::Error, Relative(path), "invalid animation graph: " + (text ? error : "cannot read file"));
+			}
+
+			// A material must parse, and every texture it names must exist like a scene's references (unresolved UUIDs
+			// included: the parser keeps them as opaque keys).
+			void CheckMaterial(const std::filesystem::path& path)
+			{
+				std::string error;
+				const auto text = FileSystem::ReadTextFile(path);
+				const auto data = text ? ParseJson(*text, error) : nlohmann::json();
+				const auto material = text && !data.is_discarded() ? MaterialAsset::FromJson(data, error) : std::nullopt;
+				if (!material)
+				{
+					m_Report.Add(ValidationSeverity::Error, Relative(path), "invalid material: " + (text ? error : "cannot read file"));
+					return;
+				}
+				for (size_t slot = 0; slot < MaterialTextureSlotCount; slot++)
+					if (const std::string& map = MaterialAsset::GetMap(*material, static_cast<MaterialTextureSlot>(slot)); !map.empty())
+						CheckReference(map, Relative(path), (std::string(MaterialAsset::MapFields[slot]) + " references").c_str());
 			}
 
 			void CheckScriptSyntax(const std::filesystem::path& path)

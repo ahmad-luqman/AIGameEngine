@@ -16,7 +16,7 @@ from EditorUndoSelection import check_undo_selection
 from EditorPostProcess import check_post_process
 from EditorProjectSettings import check_project_settings
 from EditorGameView import check_game_view
-from EditorThumbnails import check_thumbnails
+from EditorThumbnails import EXPECTED_ERRORS, check_thumbnails
 from EditorUI import check_ui
 
 
@@ -247,7 +247,8 @@ def main():
                     check_project_settings(call, require, output)
                     check_ui(call, require, output)
                     errors = call("log.get", {"errorsOnly": True})
-                    require(not errors["messages"], f"Editor logged errors: {errors}")
+                    unexpected = [m for m in errors["messages"] if not m["text"].startswith(EXPECTED_ERRORS)]
+                    require(not unexpected, f"Editor logged errors: {errors}")
             finally:
                 process.terminate()
                 try:

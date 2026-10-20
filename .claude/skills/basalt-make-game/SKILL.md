@@ -40,6 +40,9 @@ broken version leaves the old one running). Typical patterns:
   switch `Audio.SetReverb` and sends in trigger zones, set `Doppler = 1` on fast movers (Samples/FirstPerson).
 - Grid games (Tetris, Snake, Minesweeper): keep the logical state in Lua tables and mirror it with
   entities (cubes with `Mesh builtin://Cube` + `Material AlbedoColor`). Do not use physics for them.
+- Shared looks: write a material file once (`material.create`, or `asset.write` of a `.bmaterial`; see
+  Docs/AssetPipeline.md) and point every entity's `Material.Material` at it instead of repeating inline values;
+  `material.extract` turns a model's materials into files, and `Model.glb#material/N` reuses one directly.
 - Physics games: `RigidBody` (`Dynamic`/`Static`/`Kinematic`, `IsTrigger`) + a collider; react in
   `OnCollisionBegin`/`OnTriggerEnter`. Give walking characters (platformers, first-person) a
   `CapsuleCollider` + `CharacterController` (no RigidBody) and call `self.Entity:Move(velocity)` every

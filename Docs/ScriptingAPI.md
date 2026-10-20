@@ -193,6 +193,12 @@ Material overrides support `Clearcoat`, `ClearcoatRoughness`, `Transmission` (al
 fields. Transmission reveals the existing background through the transparent pass while retaining
 reflection; refraction and volume absorption are not modeled. See [AssetPipeline.md](AssetPipeline.md).
 
+`Material` names a material asset instead: a `.bmaterial` file or a model's imported material
+(`e:SetComponent("Material", { Material = "Assets/Materials/Brick.bmaterial" })`, or
+`"Assets/Models/Ship.glb#material/0"`). It replaces the inline fields while set (they remain the fallback when the
+asset cannot load); `""` returns to the inline fields. Other paths are rejected. See
+[AssetPipeline.md](AssetPipeline.md#material-assets).
+
 Component names and fields are listed by `basalt component.types` (and in Docs/Components.md).
 Vectors in component tables are arrays (`{1, 2, 3}`); rotations are Euler degrees.
 

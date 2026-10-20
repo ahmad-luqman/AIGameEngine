@@ -1436,6 +1436,7 @@ function BasaltScript:StopAllCoroutines() end
 
 ---Material data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
 ---@class MaterialComponent
+---@field Material string
 ---@field AlbedoColor number[]
 ---@field Metallic number
 ---@field Roughness number

@@ -14,7 +14,8 @@ namespace Basalt {
 	struct AnimationGraph;
 
 	// Loads and caches CPU-side assets by key. Keys are project-relative paths ("Assets/Models/Ship.glb"),
-	// built-in meshes ("builtin://Cube"), or embedded glTF images ("Assets/Models/Ship.glb#image/0").
+	// built-in meshes ("builtin://Cube"), embedded glTF images ("Assets/Models/Ship.glb#image/0") or imported glTF
+	// materials ("Assets/Models/Ship.glb#material/0").
 	//
 	// Failed loads are cached too, so a missing file is reported once rather than every frame; call
 	// Reload() (or Clear()) after fixing the file. Cache APIs are main thread only; workers own isolated results.
@@ -22,6 +23,12 @@ namespace Basalt {
 	{
 	public:
 		static Ref<const AnimationGraph> GetAnimationGraph(const std::string& key);
+		// A material file (.bmaterial, parsed on the main thread) or a model's imported material ("<model>#material/<n>",
+		// n below the model's glTF material count; it shares the model's lifetime). GetMaterial loads the model if needed;
+		// RequestMaterial returns null while the model streams in and caches nothing until it is published. Failures are
+		// cached and logged once. Texture keys inside are loaded separately (GetTexture/RequestTexture).
+		static Ref<const MaterialData> GetMaterial(const std::string& key);
+		static Ref<const MaterialData> RequestMaterial(const std::string& key);
 		// Starts a deduplicated worker load and returns only already-published assets. Call PublishCompleted each frame before polling.
 		// GetMesh/GetTexture join and publish only the requested key and its mesh dependency, including retries.
 		static Ref<MeshSource> RequestMesh(const std::string& key);
@@ -42,16 +49,16 @@ namespace Basalt {
 
 		// Drops a cached asset so the next Get or Request reloads it from disk.
 		static void Reload(const std::string& key);
-		// Drops what a change to these project-relative files affects (including animation graphs): the files' own cache entries (with a model's
-		// embedded images) and models that read one of them (external buffers and images; also for a model that failed
+		// Drops what a change to these project-relative files affects (including animation graphs and materials): the files' own cache entries
+		// (with a model's embedded images and imported materials) and models that read one of them (external buffers and images; also for a model that failed
 		// to load once its glTF parsed, so a buffer that appears retries it). Failed loads count, so a fixed file is tried
 		// again. Returns the keys dropped immediately, sorted; unrequested files drop nothing. A change to a pending mesh
 		// file drops it immediately. Changes to other files are retained until its dependencies are known,
 		// then retry at publication only if affected (with a diagnostic naming the changed dependency).
 		// Built-in meshes are independent of file changes.
 		static std::vector<std::string> ReloadChanged(const std::vector<std::string>& paths);
-		// The file an asset key loads from: the model of an embedded image ("Ship.glb#image/0" -> "Ship.glb"), the
-		// key itself otherwise.
+		// The file an asset key loads from: the model of an embedded image or imported material ("Ship.glb#image/0" ->
+		// "Ship.glb"), the key itself otherwise.
 		static std::string GetSourceFile(const std::string& key);
 		static void Clear();
 		// Keys of every cache entry, failed loads included, sorted.
@@ -73,6 +80,7 @@ namespace Basalt {
 			std::vector<std::string> m_Meshes;
 			std::vector<std::string> m_Textures;
 			std::vector<std::string> m_Graphs;
+			std::vector<std::string> m_Materials;
 		};
 
 		// Imports a static entity hierarchy or a single Animator root for a skinned/animated model.

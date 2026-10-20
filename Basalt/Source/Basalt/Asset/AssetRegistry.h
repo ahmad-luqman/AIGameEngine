@@ -30,7 +30,7 @@ namespace Basalt {
 		std::string Find(UUID id) const;
 		// Newly created project-relative sidecar paths, drained by hosts to acknowledge their own writes.
 		std::vector<std::string> TakeWrittenPaths();
-		// Matches canonical source paths, including legacy ./ paths and embedded image references.
+		// Matches canonical source paths, including legacy ./ paths and sub-asset (embedded image, imported material) references.
 		bool ReferencesSource(const std::string& key, const std::string& source) const;
 		// Converts a legacy path or UUID/path object to a path. Unknown IDs fail even if the hint exists.
 		// preserveUnresolved retains a valid missing identity as an opaque asset-uuid:// key, never its hint.

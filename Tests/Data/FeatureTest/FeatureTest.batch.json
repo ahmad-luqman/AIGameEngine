@@ -8,6 +8,8 @@
 	{ "id": "open", "command": "scene.open", "params": { "path": "Assets/Scenes/FeatureTest.bscene" } },
 	{ "id": "asset-preload-start", "command": "asset.preload", "params": { "paths": ["Assets/Models/TexturedCube.glb", "Assets/Models/TexturedCube.glb#image/0", "Assets/Textures/Checker.png"] } },
 	{ "id": "asset-preload-wait", "command": "asset.preload", "params": { "paths": ["Assets/Models/TexturedCube.glb", "Assets/Models/TexturedCube.glb#image/0", "Assets/Textures/Checker.png"], "wait": true } },
+	{ "id": "material-preload", "command": "asset.preload", "params": { "paths": ["Assets/Materials/Checker.bmaterial"], "wait": true } },
+	{ "id": "material-preload-imported", "command": "asset.preload", "params": { "paths": ["Assets/Models/TexturedCube.glb#material/0"] }, "expectError": "unsupported preload asset" },
 	{ "id": "asset-preload-invalid", "command": "asset.preload", "params": { "paths": ["Assets/unsupported.lua"] }, "expectError": "unsupported preload asset" },
 	{ "id": "memory-stats", "command": "memory.stats" },
 	{ "id": "events-subscribe", "command": "events.subscribe", "params": { "types": ["playState", "collision", "scriptError", "animation"] } },

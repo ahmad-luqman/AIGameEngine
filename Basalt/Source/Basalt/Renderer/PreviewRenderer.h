@@ -36,20 +36,21 @@ namespace Basalt {
 		std::optional<ThumbnailImage> RenderModel(const std::string& meshKey, std::string& outError);
 		// prefabPath: project-relative .bprefab.
 		std::optional<ThumbnailImage> RenderPrefab(const std::string& prefabPath, std::string& outError);
+		// A material component on a sphere. A Material asset that does not load fails with its error rather than showing
+		// the inline fallback. Material files and models' materials ("<model>#material/<n>") preview this way losslessly.
 		std::optional<ThumbnailImage> RenderMaterial(const MaterialComponent& material, std::string& outError);
+		// A material by value (an editor draft, a model's imported material) on the same sphere, losslessly; fails when
+		// MaterialAsset::Validate rejects it.
+		std::optional<ThumbnailImage> RenderMaterial(const MaterialData& material, std::string& outError);
 
 	private:
 		bool IsReady(std::string& outError) const;
 		std::optional<ThumbnailImage> RenderFramed(Scene& scene, std::string& outError);
+		std::optional<ThumbnailImage> RenderSphere(const MaterialComponent& material, std::string& outError);
 		std::optional<ThumbnailImage> Capture(Scene& scene, const glm::vec3& target, float radius, std::string& outError);
 
 		nvrhi::IDevice* m_Device = nullptr;
 		Scope<SceneRenderer> m_Renderer;
 	};
-
-	// Lossy glTF-to-override conversion for sphere previews: alpha mode, sidedness, per-map UV sets/transforms,
-	// normal scales and occlusion strength are omitted. Overrides blend for alpha or transmission. Model previews
-	// render the original imported materials and retain those properties.
-	MaterialComponent ToMaterialComponent(const MaterialData& material);
 
 }

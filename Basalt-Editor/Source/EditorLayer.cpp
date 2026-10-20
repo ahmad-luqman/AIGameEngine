@@ -8,6 +8,7 @@
 #include "Basalt/Animation/AnimatedModel.h"
 #include "Basalt/Animation/AnimationPose.h"
 #include "Basalt/Asset/AssetManager.h"
+#include "Basalt/Asset/MaterialAsset.h"
 #include "Basalt/Automation/EditorCommandSchemas.h"
 #include "Basalt/Automation/EditorSelection.h"
 #include "Basalt/Core/Application.h"
@@ -45,6 +46,8 @@
 // ImGuizmo.h relies on imgui.h being included first.
 #include <ImGuizmo.h>
 
+#include <algorithm>
+#include <cctype>
 #include <future>
 #include <limits>
 #include <ranges>
@@ -302,6 +305,7 @@ namespace Basalt {
 		, m_HierarchyPanel(m_Context)
 		, m_InspectorPanel(m_Context)
 		, m_ContentBrowserPanel(m_Context)
+		, m_MaterialEditorPanel(m_Context)
 		, m_ConsolePanel(m_Context)
 		, m_ProjectSettingsPanel(m_Context)
 	{
@@ -328,6 +332,7 @@ namespace Basalt {
 		m_Session.OnAssetsReloaded = [this](const AssetReloadReport& report) {
 			if (m_Thumbnails)
 				m_Thumbnails->OnFilesChanged(report.Changed);
+			m_MaterialEditorPanel.OnFilesChanged(report.Changed);
 			if (!report.Scripts.Failed.empty())
 				m_Context.SetStatus("Hot reload of " + report.Scripts.Failed.front().Path + " failed: see Console", true);
 			else if (!report.Scripts.InstanceErrors.empty())
@@ -357,6 +362,7 @@ namespace Basalt {
 		m_ContentBrowserPanel.OnOpenAsset = [this](const std::string& path) { OpenAsset(path); };
 		m_Thumbnails = CreateScope<ThumbnailManager>(device->GetDevice());
 		m_ContentBrowserPanel.SetThumbnails(m_Thumbnails.get());
+		m_MaterialEditorPanel.SetThumbnails(m_Thumbnails.get());
 		m_InspectorPanel.DrawComponentPreview = [this](Entity entity, const std::string& component) {
 			if (component == "Material")
 				DrawMaterialPreview(entity);
@@ -396,6 +402,7 @@ namespace Basalt {
 		m_UIFrame.Clear();
 		m_GameUIFrame.Clear();
 		m_ContentBrowserPanel.SetThumbnails(nullptr);
+		m_MaterialEditorPanel.SetThumbnails(nullptr);
 		m_InspectorPanel.DrawComponentPreview = nullptr;
 		m_Thumbnails.reset();
 		m_GameRenderer.reset();
@@ -619,6 +626,16 @@ namespace Basalt {
 								 if (!WritePng(params["output"].get<std::string>(), image->Pixels, image->Width, image->Height, error))
 									 throw CommandError(error);
 								 return nlohmann::json{ { "output", params["output"] }, { "width", image->Width }, { "height", image->Height } };
+							 } });
+
+		m_Commands.Register({ "editor.material_editor", "Opens a material file in the Material Editor window (as double-clicking it in the Content Browser does) or, with close, closes the window and discards unsaved edits. Opening fails while another material has unsaved edits. Returns {open, path, dirty, valid, error}: valid says whether the edited values form a material, error is the window's message (a failed save, an unreadable change on disk).", EditorCommandSchemas::MaterialEditor(), [this](AutomationSession&, const nlohmann::json& params) {
+								 std::string error;
+								 if (params.value("close", false))
+									 m_MaterialEditorPanel.Reset();
+								 if (const auto path = params.find("path"); path != params.end() && !m_MaterialEditorPanel.TryOpen(path->get<std::string>(), error))
+									 throw CommandError(error);
+								 const MaterialAssetDraft& draft = m_MaterialEditorPanel.GetDraft();
+								 return nlohmann::json{ { "open", m_MaterialEditorPanel.IsOpen() }, { "path", draft.GetPath() }, { "dirty", draft.IsDirty() }, { "valid", draft.IsOpen() && draft.Parse(error).has_value() }, { "error", m_MaterialEditorPanel.GetError() } };
 							 } });
 
 		m_Commands.Register({ "editor.panel", "Opens, closes or focuses an editor window (e.g. focus the Game view, open Project Settings) and returns {name, open}.", EditorCommandSchemas::Panel(), [this](AutomationSession&, const nlohmann::json& params) {
@@ -1058,6 +1075,8 @@ namespace Basalt {
 			Stop();
 			m_Context.Execute("scene.open", { { "path", path } });
 		}
+		else if (MaterialAsset::IsMaterialFile(path))
+			m_MaterialEditorPanel.Open(path);
 		else
 		{
 			HandleAssetDrop(path);
@@ -1082,6 +1101,15 @@ namespace Basalt {
 			result = m_Context.Execute("component.set", { { "entity", static_cast<uint64_t>(m_Session.GetSelection()) }, { "component", "Script" }, { "data", { { "Script", path } } } });
 		else if (extension == ".hdr")
 			result = m_Context.Execute("entity.create", { { "name", "Sky" }, { "components", { { "SkyLight", { { "EnvironmentMap", path } } } } } });
+		else if (MaterialAsset::IsMaterialFile(path))
+		{
+			if (!m_Session.GetSelection().IsValid())
+			{
+				m_Context.SetStatus("Select an entity to give it the material '" + path + "'", true);
+				return;
+			}
+			result = m_Context.Execute("component.set", { { "entity", static_cast<uint64_t>(m_Session.GetSelection()) }, { "component", "Material" }, { "data", { { "Material", path } } } });
+		}
 		else
 			m_Context.SetStatus("Don't know how to place '" + path + "' in the scene", true);
 
@@ -1501,6 +1529,7 @@ namespace Basalt {
 		m_HierarchyPanel.OnImGuiRender();
 		m_InspectorPanel.OnImGuiRender();
 		m_ContentBrowserPanel.OnImGuiRender();
+		m_MaterialEditorPanel.OnImGuiRender();
 		m_ConsolePanel.OnImGuiRender();
 		DrawSceneSettingsPanel();
 		DockNextToOnFirstUse(EditorCommandSchemas::ProjectSettingsTitle, EditorCommandSchemas::InspectorTitle);
@@ -2222,7 +2251,44 @@ namespace Basalt {
 	void EditorLayer::DrawMaterialPreview(Entity entity)
 	{
 		static constexpr float Size = 96.0f;
-		DrawPreviewSquare(*m_Thumbnails->GetMaterial(std::to_string(static_cast<uint64_t>(entity.GetUUID())), entity.GetComponent<MaterialComponent>()), Size);
+		const auto& material = entity.GetComponent<MaterialComponent>();
+		DrawPreviewSquare(*m_Thumbnails->GetMaterial(std::to_string(static_cast<uint64_t>(entity.GetUUID())), material), Size);
+		if (!material.Material.empty())
+		{
+			ImGui::TextDisabled("Material replaces the values below (they apply only if it fails to load).");
+			if (MaterialAsset::IsMaterialFile(material.Material) && ImGui::SmallButton("Edit Material"))
+				m_MaterialEditorPanel.Open(material.Material);
+			if (MaterialAsset::IsMaterialFile(material.Material))
+				ImGui::SameLine();
+		}
+		if (ImGui::SmallButton("Save as Material Asset..."))
+		{
+			// The entity's name, made a file name.
+			std::string name = entity.GetName();
+			std::replace_if(name.begin(), name.end(), [](unsigned char c) { return !std::isalnum(c) && c != '_' && c != '-' && c != ' '; }, '_');
+			m_SaveMaterialPath = "Assets/Materials/" + (name.empty() ? std::string("Material") : name) + std::string(MaterialAsset::Extension);
+			ImGui::OpenPopup("Save Material Asset");
+		}
+		if (ImGui::BeginPopupModal("Save Material Asset", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+		{
+			ImGui::TextUnformatted("Writes what this entity draws to a material file and uses it.");
+			ImGui::SetNextItemWidth(360.0f);
+			ImGui::InputText("Path", &m_SaveMaterialPath);
+			if (ImGui::Button("Save"))
+			{
+				// The file is written first; only the component change is a scene edit (and undoable).
+				const uint64_t id = static_cast<uint64_t>(entity.GetUUID());
+				if (m_Context.Execute("material.create", { { "path", m_SaveMaterialPath }, { "entity", id } }) && m_Context.Execute("component.set", { { "entity", id }, { "component", "Material" }, { "data", { { "Material", m_SaveMaterialPath } } } }))
+				{
+					m_Context.CommitHistory();
+					ImGui::CloseCurrentPopup();
+				}
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Cancel"))
+				ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+		}
 	}
 
 	const char* EditorLayer::GameViewStatusName(GameViewStatus status)

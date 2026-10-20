@@ -1,6 +1,8 @@
 #include "Basalt/Asset/AssetManager.h"
 
 #include "Basalt/Animation/AnimationGraph.h"
+#include "Basalt/Asset/AssetKey.h"
+#include "Basalt/Asset/MaterialAsset.h"
 #include "Basalt/Asset/MeshImporter.h"
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/FileSystem.h"
@@ -13,7 +15,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <charconv>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
@@ -49,6 +50,8 @@ namespace Basalt {
 		std::unordered_map<std::string, CacheEntry<MeshSource>> s_Meshes;
 		std::unordered_map<std::string, CacheEntry<TextureSource>> s_Textures;
 		std::unordered_map<std::string, CacheEntry<const AnimationGraph>> s_Graphs;
+		// Material files and imported "<model>#material/<n>" materials (the latter alias their published model).
+		std::unordered_map<std::string, CacheEntry<const MaterialData>> s_Materials;
 
 		std::string Extension(const std::string& path)
 		{
@@ -74,18 +77,16 @@ namespace Basalt {
 
 		Ref<TextureSource> LoadTexture(const std::string& key, const std::filesystem::path& path, const Ref<MeshSource>& mesh, const std::string& meshError, std::string& outError)
 		{
-			const size_t marker = key.find("#image/");
-			if (marker != std::string::npos)
+			if (key.find(EmbeddedImageMarker) != std::string::npos)
 			{
-				const std::string meshKey = key.substr(0, marker);
-				const std::string indexText = key.substr(marker + 7);
-				uint32_t index = 0;
-				const auto [end, parseError] = std::from_chars(indexText.data(), indexText.data() + indexText.size(), index);
-				if (indexText.empty() || parseError != std::errc() || end != indexText.data() + indexText.size())
+				const std::string meshKey(GetAssetSource(key));
+				const auto parsed = ParseSubAssetIndex(key, EmbeddedImageMarker);
+				if (!parsed)
 				{
 					outError = "invalid embedded image key '" + key + "'";
 					return nullptr;
 				}
+				const uint32_t index = *parsed;
 				if (!mesh)
 				{
 					outError = "cannot load '" + meshKey + "' for embedded image: " + (meshError.empty() ? "mesh unavailable" : meshError);
@@ -93,7 +94,7 @@ namespace Basalt {
 				}
 				if (index >= mesh->EmbeddedImages.size() || mesh->EmbeddedImages[index].empty())
 				{
-					outError = "'" + meshKey + "' has no embedded image " + indexText;
+					outError = "'" + meshKey + "' has no embedded image " + std::to_string(index);
 					return nullptr;
 				}
 				Ref<TextureSource> texture = TextureSource::LoadFromMemory(mesh->EmbeddedImages[index].data(), mesh->EmbeddedImages[index].size(), outError);
@@ -102,6 +103,32 @@ namespace Basalt {
 				return texture;
 			}
 			return TextureSource::LoadFromFile(path, outError);
+		}
+
+		Ref<const MaterialData> LoadMaterialFile(const std::string& key, std::string& outError)
+		{
+			if (!MaterialAsset::IsMaterialFile(key))
+			{
+				outError = "'" + key + "' is not a material (.bmaterial, or <model>#material/<n>)";
+				return nullptr;
+			}
+			const auto text = FileSystem::ReadTextFile(Project::ResolvePath(key));
+			if (!text)
+			{
+				outError = "cannot read material '" + key + "'";
+				return nullptr;
+			}
+			const auto data = ParseJson(*text, outError);
+			if (data.is_discarded())
+				return nullptr;
+			std::vector<std::string> warnings;
+			auto material = MaterialAsset::FromJson(data, outError, &warnings);
+			if (!material)
+				return nullptr;
+			for (const auto& warning : warnings)
+				BS_CORE_WARN("Material '{}': {}", key, warning);
+			material->Name = FileSystem::PathFromUtf8(key).stem().string();
+			return CreateRef<const MaterialData>(std::move(*material));
 		}
 
 		Ref<const AnimationGraph> LoadAnimationGraph(const std::string& key, std::string& outError)
@@ -133,6 +160,51 @@ namespace Basalt {
 		if (!entry.Asset)
 			BS_CORE_ERROR("Animation graph '{}': {}", key, entry.Error);
 		return s_Graphs.emplace(key, std::move(entry)).first->second.Asset;
+	}
+
+	namespace {
+		Ref<const MaterialData> ResolveMaterial(const std::string& key, bool wait)
+		{
+			CheckProject();
+			if (key.empty())
+				return nullptr;
+			if (auto it = s_Materials.find(key); it != s_Materials.end())
+				return it->second.Asset;
+			CacheEntry<const MaterialData> entry;
+			if (key.find(ImportedMaterialMarker) != std::string::npos)
+			{
+				const std::string meshKey(GetAssetSource(key));
+				const auto index = ParseSubAssetIndex(key, ImportedMaterialMarker);
+				Ref<MeshSource> mesh = index ? (wait ? AssetManager::GetMesh(meshKey) : AssetManager::RequestMesh(meshKey)) : nullptr;
+				// Nothing is cached while the model streams in: the published model resolves the next request.
+				if (index && !mesh && AssetManager::IsLoading(meshKey))
+					return nullptr;
+				if (!index)
+					entry.Error = "invalid imported material key '" + key + "'";
+				else if (!mesh)
+					entry.Error = "cannot load '" + meshKey + "' for its material: " + AssetManager::GetError(meshKey);
+				// The importer appends a default material for primitives without one; it is not the model's.
+				else if (*index + 1 >= mesh->Materials.size())
+					entry.Error = fmt::format("'{}' has no material {} (it has {})", meshKey, *index, mesh->Materials.size() - 1);
+				else
+					entry.Asset = Ref<const MaterialData>(mesh, &mesh->Materials[*index]);
+			}
+			else
+				entry.Asset = LoadMaterialFile(key, entry.Error);
+			if (!entry.Asset)
+				BS_CORE_ERROR("Material '{}': {}", key, entry.Error);
+			return s_Materials.emplace(key, std::move(entry)).first->second.Asset;
+		}
+	}
+
+	Ref<const MaterialData> AssetManager::RequestMaterial(const std::string& key)
+	{
+		return ResolveMaterial(key, false);
+	}
+
+	Ref<const MaterialData> AssetManager::GetMaterial(const std::string& key)
+	{
+		return ResolveMaterial(key, true);
 	}
 
 	namespace {
@@ -287,6 +359,7 @@ namespace Basalt {
 				std::erase_if(s_Meshes, [](const auto& entry) { return entry.second.Pending || !Primitives::IsBuiltinKey(entry.first); });
 				s_Textures.clear();
 				s_Graphs.clear();
+				s_Materials.clear();
 				s_Project = project;
 				s_Root = root;
 			}
@@ -352,10 +425,9 @@ namespace Basalt {
 		Ref<const LoadResult<MeshSource>> parentResult;
 		JobHandle parentJob;
 		std::string parentError;
-		const size_t marker = key.find("#image/");
-		if (marker != std::string::npos)
+		if (key.find(EmbeddedImageMarker) != std::string::npos)
 		{
-			const auto meshKey = key.substr(0, marker);
+			const std::string meshKey(GetAssetSource(key));
 			mesh = RequestMesh(meshKey);
 			if (auto parent = s_Meshes.find(meshKey); parent != s_Meshes.end())
 			{
@@ -383,7 +455,7 @@ namespace Basalt {
 	Ref<TextureSource> AssetManager::GetTexture(const std::string& key)
 	{
 		// Joining the parent can retry it and recreate this image entry; do so before looking it up.
-		if (key.find("#image/") != std::string::npos)
+		if (key.find(EmbeddedImageMarker) != std::string::npos)
 			GetMesh(GetSourceFile(key));
 		RequestTexture(key);
 		auto it = s_Textures.find(key);
@@ -457,6 +529,8 @@ namespace Basalt {
 			return it->second.Error;
 		if (auto it = s_Graphs.find(key); it != s_Graphs.end())
 			return it->second.Error;
+		if (auto it = s_Materials.find(key); it != s_Materials.end())
+			return it->second.Error;
 		return {};
 	}
 
@@ -466,15 +540,12 @@ namespace Basalt {
 		s_Graphs.erase(key);
 		s_Meshes.erase(key);
 		s_Textures.erase(key);
-		// Embedded images belong to their mesh file.
-		const std::string prefix = key + "#image/";
-		for (auto it = s_Textures.begin(); it != s_Textures.end();)
-		{
-			if (it->first.rfind(prefix, 0) == 0)
-				it = s_Textures.erase(it);
-			else
-				++it;
-		}
+		s_Materials.erase(key);
+		// Embedded images and imported materials belong to their mesh file.
+		const std::string images = key + std::string(EmbeddedImageMarker);
+		const std::string materials = key + std::string(ImportedMaterialMarker);
+		std::erase_if(s_Textures, [&](const auto& entry) { return entry.first.starts_with(images); });
+		std::erase_if(s_Materials, [&](const auto& entry) { return entry.first.starts_with(materials); });
 	}
 
 	std::vector<std::string> AssetManager::ReloadChanged(const std::vector<std::string>& paths)
@@ -504,6 +575,10 @@ namespace Basalt {
 		for (const auto& [key, entry] : s_Graphs)
 			if (changed.contains(key))
 				keys.insert(key);
+		// Material files are read once; imported materials go with their model.
+		for (const auto& [key, entry] : s_Materials)
+			if (const std::string source = GetSourceFile(key); changed.contains(source) || keys.contains(source))
+				keys.insert(key);
 		for (const std::string& key : keys)
 			Reload(key);
 		return { keys.begin(), keys.end() };
@@ -511,8 +586,7 @@ namespace Basalt {
 
 	std::string AssetManager::GetSourceFile(const std::string& key)
 	{
-		const size_t marker = key.find("#image/");
-		return marker != std::string::npos ? key.substr(0, marker) : key;
+		return std::string(GetAssetSource(key));
 	}
 
 	void AssetManager::Clear()
@@ -520,18 +594,21 @@ namespace Basalt {
 		s_Graphs.clear();
 		s_Meshes.clear();
 		s_Textures.clear();
+		s_Materials.clear();
 	}
 
 	std::vector<std::string> AssetManager::GetLoadedKeys()
 	{
 		CheckProject();
 		std::vector<std::string> keys;
-		keys.reserve(s_Meshes.size() + s_Textures.size() + s_Graphs.size());
+		keys.reserve(s_Meshes.size() + s_Textures.size() + s_Graphs.size() + s_Materials.size());
 		for (const auto& [key, entry] : s_Meshes)
 			keys.push_back(key);
 		for (const auto& [key, entry] : s_Textures)
 			keys.push_back(key);
 		for (const auto& [key, entry] : s_Graphs)
+			keys.push_back(key);
+		for (const auto& [key, entry] : s_Materials)
 			keys.push_back(key);
 		std::sort(keys.begin(), keys.end());
 		keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
@@ -567,6 +644,7 @@ namespace Basalt {
 		m_Meshes = SortedKeys(s_Meshes);
 		m_Textures = SortedKeys(s_Textures);
 		m_Graphs = SortedKeys(s_Graphs);
+		m_Materials = SortedKeys(s_Materials);
 	}
 
 	AssetManager::TemporaryLoads::~TemporaryLoads()
@@ -574,6 +652,7 @@ namespace Basalt {
 		EraseAddedSince(s_Meshes, m_Meshes);
 		EraseAddedSince(s_Textures, m_Textures);
 		EraseAddedSince(s_Graphs, m_Graphs);
+		EraseAddedSince(s_Materials, m_Materials);
 	}
 
 	Entity AssetManager::ImportModel(Scene& scene, const std::string& key, Entity parent, std::string& outError)
