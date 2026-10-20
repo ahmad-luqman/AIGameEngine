@@ -17,8 +17,11 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 	const auto material = Basalt::MaterialAsset::FromJson(parsed, error);
 	if (!material)
 		return 0;
+	// Writing is idempotent: what was written reads back as the same material, so it writes the same file again.
 	const auto written = Basalt::MaterialAsset::ToJson(*material, false, error);
-	if (!written || !Basalt::MaterialAsset::FromJson(*written, error))
+	const auto reread = written ? Basalt::MaterialAsset::FromJson(*written, error) : std::nullopt;
+	const auto rewritten = reread ? Basalt::MaterialAsset::ToJson(*reread, false, error) : std::nullopt;
+	if (!rewritten || *rewritten != *written)
 		std::abort();
 	return 0;
 }

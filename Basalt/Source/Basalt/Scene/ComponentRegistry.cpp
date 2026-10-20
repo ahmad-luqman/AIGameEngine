@@ -1,6 +1,5 @@
 #include "Basalt/Scene/ComponentRegistry.h"
 
-#include "Basalt/Asset/AssetKey.h"
 #include "Basalt/Asset/MaterialAsset.h"
 #include "Basalt/Audio/AudioRules.h"
 #include "Basalt/Core/EnumNames.h"
@@ -1674,17 +1673,12 @@ namespace Basalt {
 
 		std::string Validate(const MaterialComponent& c)
 		{
-			// JSON readers already reject non-finite numbers; isfinite keeps the check complete for any caller.
-			const std::pair<const char*, float> unitFields[] = { { "Clearcoat", c.Clearcoat }, { "ClearcoatRoughness", c.ClearcoatRoughness }, { "Transmission", c.Transmission } };
-			for (const auto& [name, value] : unitFields)
-				if (!std::isfinite(value) || value < 0.0f || value > 1.0f)
-					return fmt::format("{} {} must be in [0, 1]", name, value);
-			// Matches the importer's rule for KHR_materials_emissive_strength.
-			if (!std::isfinite(c.EmissiveIntensity) || c.EmissiveIntensity < 0.0f)
-				return fmt::format("EmissiveIntensity {} must be finite and nonnegative", c.EmissiveIntensity);
+			// The material file and importer rules, so an inline material is valid exactly when it would be as a file.
+			if (auto problem = MaterialAsset::Validate(MaterialAsset::FromComponent(c, false)))
+				return *problem;
 			// Unresolved UUID references stay opaque keys so the project validator can report them.
-			if (!c.Material.empty() && !MaterialAsset::IsMaterialFile(c.Material) && !ParseSubAssetIndex(c.Material, ImportedMaterialMarker) && !AssetRegistry::IsUnresolvedKey(c.Material))
-				return fmt::format("Material '{}' must be a .bmaterial file or <model>#material/<n>", c.Material);
+			if (!c.Material.empty() && !MaterialAsset::IsMaterialKey(c.Material) && !AssetRegistry::IsUnresolvedKey(c.Material))
+				return fmt::format("Material '{}' must be a .bmaterial file or <.gltf/.glb model>#material/<n>", c.Material);
 			return {};
 		}
 

@@ -5,6 +5,7 @@
 #include <charconv>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <string_view>
 
 namespace Basalt {
@@ -35,6 +36,14 @@ namespace Basalt {
 	{
 		const size_t marker = FindSubAssetMarker(key);
 		return marker == std::string_view::npos ? std::string_view{} : key.substr(marker);
+	}
+
+	// "<source><marker><index>", e.g. MakeSubAssetKey("Assets/Ship.glb", ImportedMaterialMarker, 0).
+	inline std::string MakeSubAssetKey(std::string_view source, std::string_view marker, size_t index)
+	{
+		std::string key(source);
+		key.append(marker).append(std::to_string(index));
+		return key;
 	}
 
 	// The index after `marker` when key is "<source><marker><decimal index>"; nullopt otherwise (no marker, another

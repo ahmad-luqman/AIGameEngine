@@ -9,23 +9,22 @@
 #include "Basalt/Project/Project.h"
 
 #include <imgui.h>
+#include <spdlog/fmt/fmt.h>
+#include <spdlog/fmt/ranges.h>
 
 #include <algorithm>
-#include <array>
+#include <iterator>
 
 namespace Basalt {
 
-	namespace {
-
-		// The scalar fields, in the order the file lists them.
-		constexpr std::array<const char*, 14> ScalarFields = { "AlbedoColor", "Metallic", "Roughness", "EmissiveColor", "EmissiveIntensity", "AlphaMode", "AlphaCutoff", "DoubleSided", "NormalScale", "OcclusionStrength", "Clearcoat", "ClearcoatRoughness", "ClearcoatNormalScale", "Transmission" };
-		constexpr std::array<const char*, 4> TransformFields = { "Offset", "Scale", "Rotation", "TexCoord" };
-
+	bool MaterialEditorPanel::HasOtherUnsavedDraft(const std::string& path) const
+	{
+		return IsOpen() && m_Draft.IsDirty() && m_Draft.GetPath() != path;
 	}
 
 	void MaterialEditorPanel::Open(const std::string& path)
 	{
-		if (m_Open && m_Draft.IsDirty() && m_Draft.GetPath() != path)
+		if (HasOtherUnsavedDraft(path))
 		{
 			m_PendingOpen = path;
 			m_PromptDiscard = true;
@@ -42,37 +41,44 @@ namespace Basalt {
 
 	bool MaterialEditorPanel::TryOpen(const std::string& path, std::string& outError)
 	{
-		if (m_Open && m_Draft.IsDirty() && m_Draft.GetPath() != path)
+		if (HasOtherUnsavedDraft(path))
 		{
 			outError = "'" + m_Draft.GetPath() + "' has unsaved edits (close the Material Editor first to discard them)";
 			return false;
 		}
-		if (m_Open && m_Draft.GetPath() == path)
+		if (IsOpen() && m_Draft.GetPath() == path)
 			return true;
 		if (!m_Draft.Load(path, outError))
 			return false;
-		m_Open = true;
 		m_Project = Project::GetActive();
 		m_Error.clear();
+		m_Warning.clear();
 		return true;
 	}
 
 	void MaterialEditorPanel::OnFilesChanged(const std::vector<FileChange>& changes)
 	{
-		if (!m_Open || std::none_of(changes.begin(), changes.end(), [&](const FileChange& change) { return change.Path == m_Draft.GetPath(); }))
+		if (!IsOpen() || std::none_of(changes.begin(), changes.end(), [&](const FileChange& change) { return change.Path == m_Draft.GetPath(); }))
 			return;
 		std::string error;
-		if (!m_Draft.OnFileChanged(error) && !error.empty())
+		if (m_Draft.OnFileChanged(error))
+			m_Error.clear();
+		else if (!error.empty())
 			m_Error = "The file changed on disk and cannot be read: " + error;
+	}
+
+	void MaterialEditorPanel::OnAssetMoved(const std::string& from, const std::string& to)
+	{
+		m_Draft.OnAssetMoved(from, to);
 	}
 
 	void MaterialEditorPanel::Reset()
 	{
 		m_Draft.Close();
-		m_Open = false;
 		m_PromptDiscard = false;
 		m_PendingOpen.clear();
 		m_Error.clear();
+		m_Warning.clear();
 	}
 
 	bool MaterialEditorPanel::Save()
@@ -85,13 +91,22 @@ namespace Basalt {
 			return false;
 		}
 		// asset.write validates it again, reloads it everywhere it is used and acknowledges the write to the watcher.
-		if (!m_Context.Execute("asset.write", { { "path", m_Draft.GetPath() }, { "content", *text } }))
+		const auto result = m_Context.Execute("asset.write", { { "path", m_Draft.GetPath() }, { "content", *text } });
+		if (!result)
 		{
-			m_Error = "Not saved: see the Console";
+			// Execute reported the command's error in the status bar.
+			m_Error = "Not saved: " + m_Context.StatusMessage;
 			return false;
 		}
-		m_Draft.MarkSaved();
-		m_Error.clear();
+		if (!m_Draft.MarkSaved(*text, error))
+			m_Error = "Saved, but the written file does not read back: " + error;
+		else
+			m_Error.clear();
+		// Textures that are missing, unresolved or not textures render white: say which.
+		std::vector<std::string> warnings;
+		for (const auto& warning : result->value("warnings", nlohmann::json::array()))
+			warnings.push_back(warning.is_string() ? warning.get<std::string>() : warning.dump());
+		m_Warning = warnings.empty() ? std::string() : fmt::format("Saved with warnings: {}", fmt::join(warnings, "; "));
 		m_Context.SetStatus("Saved " + m_Draft.GetPath(), false);
 		return true;
 	}
@@ -100,23 +115,27 @@ namespace Basalt {
 	{
 		std::string error;
 		if (m_Draft.Revert(error))
+		{
 			m_Error.clear();
+			m_Warning.clear();
+		}
 		else
 			m_Error = "Cannot read the file: " + error;
 	}
 
 	void MaterialEditorPanel::OnImGuiRender()
 	{
-		if (m_Open && m_Project.lock() != Project::GetActive())
+		if (IsOpen() && m_Project.lock() != Project::GetActive())
 			Reset();
-		if (!m_Open)
+		if (!IsOpen())
 			return;
 		ImGui::SetNextWindowSize(ImVec2(420.0f, 640.0f), ImGuiCond_FirstUseEver);
 		bool keepOpen = true;
-		if (ImGui::Begin(Title, &keepOpen, m_Draft.IsDirty() ? ImGuiWindowFlags_UnsavedDocument : ImGuiWindowFlags_None))
+		const bool dirty = m_Draft.IsDirty();
+		if (ImGui::Begin(Title, &keepOpen, dirty ? ImGuiWindowFlags_UnsavedDocument : ImGuiWindowFlags_None))
 		{
 			ImGui::TextUnformatted(m_Draft.GetPath().c_str());
-			const bool canSave = m_Draft.IsDirty() || m_Draft.HasExternalChange();
+			const bool canSave = dirty || m_Draft.HasExternalChange();
 			ImGui::BeginDisabled(!canSave);
 			if (ImGui::Button("Save"))
 				Save();
@@ -134,6 +153,10 @@ namespace Basalt {
 				ImGui::TextColored(EditorColors::Warning(), "The file changed on disk: Save replaces it, Revert loads it.");
 			if (!m_Error.empty())
 				ImGui::TextColored(EditorColors::Error(), "%s", m_Error.c_str());
+			if (!m_Warning.empty())
+				ImGui::TextColored(EditorColors::Warning(), "%s", m_Warning.c_str());
+			for (const std::string& warning : m_Draft.GetWarnings())
+				ImGui::TextColored(EditorColors::Warning(), "%s", warning.c_str());
 
 			std::string problem;
 			if (const auto material = m_Draft.Parse(problem))
@@ -164,22 +187,21 @@ namespace Basalt {
 	{
 		static const std::vector<std::string> AlphaModes(std::begin(MaterialAsset::AlphaModeNames), std::end(MaterialAsset::AlphaModeNames));
 		nlohmann::json& data = m_Draft.GetData();
-		for (const char* field : ScalarFields)
+		for (const char* field : MaterialAsset::ScalarFields)
 			if (data.contains(field))
 				DrawJsonField(field, data[field], std::string_view(field) == "AlphaMode" ? &AlphaModes : nullptr);
 		ImGui::SeparatorText("Maps");
 		ImGui::TextDisabled("Drop textures from the Content Browser onto a map.");
 		auto& transforms = data["TextureTransforms"];
-		for (size_t slot = 0; slot < MaterialTextureSlotCount; slot++)
+		for (const MaterialAsset::SlotInfo& slot : MaterialAsset::Slots)
 		{
-			const char* field = MaterialAsset::MapFields[slot];
-			ImGui::PushID(field);
-			if (data.contains(field))
-				DrawJsonField(field, data[field]);
-			if (transforms.is_object() && transforms.contains(MaterialAsset::SlotNames[slot]) && ImGui::TreeNode("UV transform"))
+			ImGui::PushID(slot.MapField);
+			if (data.contains(slot.MapField))
+				DrawJsonField(slot.MapField, data[slot.MapField]);
+			if (transforms.is_object() && transforms.contains(slot.Name) && ImGui::TreeNode("UV transform"))
 			{
-				auto& transform = transforms[MaterialAsset::SlotNames[slot]];
-				for (const char* key : TransformFields)
+				auto& transform = transforms[slot.Name];
+				for (const char* key : MaterialAsset::TransformFields)
 					if (transform.contains(key))
 						DrawJsonField(key, transform[key]);
 				ImGui::TreePop();

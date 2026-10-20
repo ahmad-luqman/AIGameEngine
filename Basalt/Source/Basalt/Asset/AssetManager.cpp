@@ -2,6 +2,7 @@
 
 #include "Basalt/Animation/AnimationGraph.h"
 #include "Basalt/Asset/AssetKey.h"
+#include "Basalt/Asset/AssetRegistry.h"
 #include "Basalt/Asset/MaterialAsset.h"
 #include "Basalt/Asset/MeshImporter.h"
 #include "Basalt/Core/Assert.h"
@@ -118,17 +119,47 @@ namespace Basalt {
 				outError = "cannot read material '" + key + "'";
 				return nullptr;
 			}
-			const auto data = ParseJson(*text, outError);
-			if (data.is_discarded())
-				return nullptr;
 			std::vector<std::string> warnings;
-			auto material = MaterialAsset::FromJson(data, outError, &warnings);
+			auto material = MaterialAsset::FromText(*text, outError, &warnings);
 			if (!material)
 				return nullptr;
 			for (const auto& warning : warnings)
 				BS_CORE_WARN("Material '{}': {}", key, warning);
-			material->Name = FileSystem::PathFromUtf8(key).stem().string();
+			material->Name = FileSystem::PathToUtf8(FileSystem::PathFromUtf8(key).stem());
 			return CreateRef<const MaterialData>(std::move(*material));
+		}
+
+		Ref<const MaterialData> ResolveMaterial(const std::string& key, bool wait)
+		{
+			CheckProject();
+			if (key.empty())
+				return nullptr;
+			if (auto it = s_Materials.find(key); it != s_Materials.end())
+				return it->second.Asset;
+			CacheEntry<const MaterialData> entry;
+			if (AssetRegistry::IsUnresolvedKey(key))
+				entry.Error = AssetRegistry::DescribeUnresolved(key);
+			else if (key.find(ImportedMaterialMarker) == std::string::npos)
+				entry.Asset = LoadMaterialFile(key, entry.Error);
+			else if (const auto index = ParseSubAssetIndex(key, ImportedMaterialMarker); !index)
+				entry.Error = "invalid imported material key '" + key + "'";
+			else
+			{
+				const std::string meshKey(GetAssetSource(key));
+				const Ref<MeshSource> mesh = wait ? AssetManager::GetMesh(meshKey) : AssetManager::RequestMesh(meshKey);
+				// Nothing is cached while the model streams in: the published model resolves the next request.
+				if (!mesh && AssetManager::IsLoading(meshKey))
+					return nullptr;
+				if (!mesh)
+					entry.Error = "cannot load '" + meshKey + "' for its material: " + AssetManager::GetError(meshKey);
+				else if (*index >= mesh->GetImportedMaterialCount())
+					entry.Error = fmt::format("'{}' has no material {} (it has {})", meshKey, *index, mesh->GetImportedMaterialCount());
+				else
+					entry.Asset = Ref<const MaterialData>(mesh, &mesh->Materials[*index]);
+			}
+			if (!entry.Asset)
+				BS_CORE_ERROR("Material '{}': {}", key, entry.Error);
+			return s_Materials.emplace(key, std::move(entry)).first->second.Asset;
 		}
 
 		Ref<const AnimationGraph> LoadAnimationGraph(const std::string& key, std::string& outError)
@@ -160,41 +191,6 @@ namespace Basalt {
 		if (!entry.Asset)
 			BS_CORE_ERROR("Animation graph '{}': {}", key, entry.Error);
 		return s_Graphs.emplace(key, std::move(entry)).first->second.Asset;
-	}
-
-	namespace {
-		Ref<const MaterialData> ResolveMaterial(const std::string& key, bool wait)
-		{
-			CheckProject();
-			if (key.empty())
-				return nullptr;
-			if (auto it = s_Materials.find(key); it != s_Materials.end())
-				return it->second.Asset;
-			CacheEntry<const MaterialData> entry;
-			if (key.find(ImportedMaterialMarker) != std::string::npos)
-			{
-				const std::string meshKey(GetAssetSource(key));
-				const auto index = ParseSubAssetIndex(key, ImportedMaterialMarker);
-				Ref<MeshSource> mesh = index ? (wait ? AssetManager::GetMesh(meshKey) : AssetManager::RequestMesh(meshKey)) : nullptr;
-				// Nothing is cached while the model streams in: the published model resolves the next request.
-				if (index && !mesh && AssetManager::IsLoading(meshKey))
-					return nullptr;
-				if (!index)
-					entry.Error = "invalid imported material key '" + key + "'";
-				else if (!mesh)
-					entry.Error = "cannot load '" + meshKey + "' for its material: " + AssetManager::GetError(meshKey);
-				// The importer appends a default material for primitives without one; it is not the model's.
-				else if (*index + 1 >= mesh->Materials.size())
-					entry.Error = fmt::format("'{}' has no material {} (it has {})", meshKey, *index, mesh->Materials.size() - 1);
-				else
-					entry.Asset = Ref<const MaterialData>(mesh, &mesh->Materials[*index]);
-			}
-			else
-				entry.Asset = LoadMaterialFile(key, entry.Error);
-			if (!entry.Asset)
-				BS_CORE_ERROR("Material '{}': {}", key, entry.Error);
-			return s_Materials.emplace(key, std::move(entry)).first->second.Asset;
-		}
 	}
 
 	Ref<const MaterialData> AssetManager::RequestMaterial(const std::string& key)
@@ -575,10 +571,19 @@ namespace Basalt {
 		for (const auto& [key, entry] : s_Graphs)
 			if (changed.contains(key))
 				keys.insert(key);
-		// Material files are read once; imported materials go with their model.
+		// A material file's entry holds decoded texture paths: it drops when the file, a texture it names or (for a reference
+		// that did not resolve) any file changes, since a moved or restored texture changes what it decodes to. Imported
+		// materials drop with their model.
 		for (const auto& [key, entry] : s_Materials)
-			if (const std::string source = GetSourceFile(key); changed.contains(source) || keys.contains(source))
+		{
+			const std::string source = GetSourceFile(key);
+			bool stale = changed.contains(source) || keys.contains(source);
+			if (entry.Asset && key == source)
+				for (const std::string& texture : MaterialAsset::GetTextures(*entry.Asset))
+					stale = stale || AssetRegistry::IsUnresolvedKey(texture) || changed.contains(GetSourceFile(texture));
+			if (stale)
 				keys.insert(key);
+		}
 		for (const std::string& key : keys)
 			Reload(key);
 		return { keys.begin(), keys.end() };
@@ -663,7 +668,7 @@ namespace Basalt {
 			outError = GetError(key);
 			return {};
 		}
-		const std::string name = Primitives::IsBuiltinKey(key) ? key.substr(10) : std::filesystem::path(key).stem().string();
+		const std::string name = Primitives::IsBuiltinKey(key) ? key.substr(10) : FileSystem::PathToUtf8(FileSystem::PathFromUtf8(key).stem());
 		return MeshImporter::InstantiateHierarchy(scene, *mesh, name, parent);
 	}
 

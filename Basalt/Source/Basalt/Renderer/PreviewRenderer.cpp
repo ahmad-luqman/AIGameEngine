@@ -128,13 +128,15 @@ namespace Basalt {
 		}
 		// A key no file or model can have; only this renderer resolves it, and only during this render.
 		static const std::string DraftKey = "preview://material";
-		const auto draft = CreateRef<const MaterialData>(material);
-		m_Renderer->SetMaterialResolver([&](const std::string& key) { return key == DraftKey ? draft : nullptr; });
+		struct ResolverScope
+		{
+			SceneRenderer& Renderer;
+			~ResolverScope() { Renderer.SetMaterialResolver({}); }
+		} scope{ *m_Renderer };
+		m_Renderer->SetMaterialResolver([draft = CreateRef<const MaterialData>(material)](const std::string& key) { return key == DraftKey ? draft : nullptr; });
 		MaterialComponent component;
 		component.Material = DraftKey;
-		auto image = RenderSphere(component, outError);
-		m_Renderer->SetMaterialResolver({});
-		return image;
+		return RenderSphere(component, outError);
 	}
 
 	std::optional<ThumbnailImage> PreviewRenderer::RenderSphere(const MaterialComponent& material, std::string& outError)

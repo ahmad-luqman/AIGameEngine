@@ -38,66 +38,6 @@ namespace Basalt {
 
 	namespace {
 
-		// The registry that decodes a project's UUID references: the active project's when it is this one, else a fresh
-		// scan of `local` (a registry of projectDirectory; null, with a warning, when that fails).
-		const AssetRegistry* RegistryFor(const std::filesystem::path& projectDirectory, AssetRegistry& local)
-		{
-			std::error_code pathError;
-			if (const auto& active = Project::GetActive(); active && std::filesystem::equivalent(active->GetDirectory(), projectDirectory, pathError))
-				return &active->GetAssets();
-			std::string error;
-			if (local.Refresh(error))
-				return &local;
-			BS_CORE_WARN("Thumbnail dependencies: {}", error);
-			return nullptr;
-		}
-
-		// The path an asset reference names: a string as is, a {UUID, Path} object through the registry (empty when it
-		// does not resolve; the preview loader reports that, dependency polling must not log every frame).
-		std::string DecodeReference(const nlohmann::json& value, const AssetRegistry* assets)
-		{
-			std::string key, error;
-			if (value.is_string())
-				key = value.get<std::string>();
-			else if (assets && !assets->Decode(value, key, error))
-				key.clear();
-			return key;
-		}
-
-		void AddModelDependencies(const std::filesystem::path& projectDirectory, const std::string& model, std::set<std::string>& outDependencies);
-
-		// The files a material file's textures load from (a model for its embedded images, with that model's files).
-		void AddMaterialDependencies(const std::filesystem::path& projectDirectory, const AssetRegistry* assets, const std::string& material, std::set<std::string>& outDependencies)
-		{
-			const auto text = FileSystem::ReadTextFile(projectDirectory / FileSystem::PathFromUtf8(material));
-			const nlohmann::json data = text ? ParseJson(*text) : nlohmann::json();
-			if (!data.is_object())
-				return;
-			for (const char* field : MaterialAsset::MapFields)
-				if (const auto value = data.find(field); value != data.end())
-					if (const std::string source(GetAssetSource(DecodeReference(*value, assets))); source.starts_with("Assets/"))
-					{
-						outDependencies.insert(source);
-						if (ClassifyThumbnail(source) == ThumbnailKind::Model)
-							AddModelDependencies(projectDirectory, source, outDependencies);
-					}
-		}
-
-	}
-
-	std::vector<std::string> MaterialPreviewDependencies(const MaterialComponent& m)
-	{
-		std::set<std::string> dependencies;
-		for (const std::string* map : { &m.AlbedoMap, &m.NormalMap, &m.MetallicRoughnessMap, &m.OcclusionMap, &m.EmissiveMap, &m.ClearcoatMap, &m.ClearcoatRoughnessMap, &m.ClearcoatNormalMap, &m.TransmissionMap, &m.Material })
-			if (!map->empty())
-				dependencies.insert(std::string(GetAssetSource(*map)));
-		if (const auto& project = Project::GetActive(); project && MaterialAsset::IsMaterialFile(m.Material))
-			AddMaterialDependencies(project->GetDirectory(), &project->GetAssets(), m.Material, dependencies);
-		return { dependencies.begin(), dependencies.end() };
-	}
-
-	namespace {
-
 		// Fits width x height into maxSize x maxSize, keeping the aspect ratio and at least one pixel per side.
 		void FitSize(uint32_t width, uint32_t height, uint32_t maxSize, uint32_t& outWidth, uint32_t& outHeight)
 		{
@@ -209,6 +149,88 @@ namespace Basalt {
 			cgltf_free(data);
 		}
 
+	}
+
+	namespace {
+
+		// The registry that decodes a project's UUID references: the active project's when it is this one, else a fresh
+		// scan of `local` (a registry of projectDirectory; null, with a warning, when that fails).
+		const AssetRegistry* RegistryFor(const std::filesystem::path& projectDirectory, AssetRegistry& local)
+		{
+			std::error_code pathError;
+			if (const auto& active = Project::GetActive(); active && std::filesystem::equivalent(active->GetDirectory(), projectDirectory, pathError))
+				return &active->GetAssets();
+			std::string error;
+			if (local.Refresh(error))
+				return &local;
+			BS_CORE_WARN("Thumbnail dependencies: {}", error);
+			return nullptr;
+		}
+
+		// The path an asset reference names: a string as is, a {UUID, Path} object through the registry. When it does
+		// not decode (no registry, or an unresolved UUID: the preview loader reports that, dependency polling must not
+		// log every frame), its Path hint, so the file it last named is still watched.
+		std::string DecodeReference(const nlohmann::json& value, const AssetRegistry* assets)
+		{
+			std::string key, error;
+			if (value.is_string())
+				return value.get<std::string>();
+			if (assets && assets->Decode(value, key, error))
+				return key;
+			const auto hint = value.is_object() ? value.find("Path") : value.end();
+			return hint != value.end() && hint->is_string() ? hint->get<std::string>() : std::string();
+		}
+
+		void AddMaterialDependencies(const std::filesystem::path& projectDirectory, const AssetRegistry* assets, const std::string& material, std::set<std::string>& outDependencies);
+
+		// The file an asset key loads from and, for a model or material file, the files that one reads.
+		void AddSourceDependencies(const std::filesystem::path& projectDirectory, const AssetRegistry* assets, std::string_view key, std::set<std::string>& outDependencies)
+		{
+			const std::string source(GetAssetSource(key));
+			if (!source.starts_with("Assets/") || !outDependencies.insert(source).second)
+				return;
+			const ThumbnailKind kind = ClassifyThumbnail(source);
+			if (kind == ThumbnailKind::Model)
+				AddModelDependencies(projectDirectory, source, outDependencies);
+			else if (kind == ThumbnailKind::Material)
+				AddMaterialDependencies(projectDirectory, assets, source, outDependencies);
+		}
+
+		// The files a material file's textures load from (a model for its embedded images, with that model's files).
+		void AddMaterialDependencies(const std::filesystem::path& projectDirectory, const AssetRegistry* assets, const std::string& material, std::set<std::string>& outDependencies)
+		{
+			const auto text = FileSystem::ReadTextFile(projectDirectory / FileSystem::PathFromUtf8(material));
+			const nlohmann::json data = text ? ParseJson(*text) : nlohmann::json();
+			if (!data.is_object())
+				return;
+			for (const MaterialAsset::SlotInfo& slot : MaterialAsset::Slots)
+				if (const auto value = data.find(slot.MapField); value != data.end())
+					AddSourceDependencies(projectDirectory, assets, DecodeReference(*value, assets), outDependencies);
+		}
+
+	}
+
+	std::vector<std::string> MaterialPreviewDependencies(const MaterialComponent& m)
+	{
+		const auto& project = Project::GetActive();
+		if (!project)
+			return {};
+		std::set<std::string> dependencies;
+		for (const std::string* map : MaterialAsset::GetMaps(m))
+			AddSourceDependencies(project->GetDirectory(), &project->GetAssets(), *map, dependencies);
+		AddSourceDependencies(project->GetDirectory(), &project->GetAssets(), m.Material, dependencies);
+		return { dependencies.begin(), dependencies.end() };
+	}
+
+	std::vector<std::string> MaterialPreviewDependencies(const MaterialData& material)
+	{
+		const auto& project = Project::GetActive();
+		if (!project)
+			return {};
+		std::set<std::string> dependencies;
+		for (const std::string* map : MaterialAsset::GetMaps(material))
+			AddSourceDependencies(project->GetDirectory(), &project->GetAssets(), *map, dependencies);
+		return { dependencies.begin(), dependencies.end() };
 	}
 
 	ThumbnailKind ClassifyThumbnail(const std::string& path)
@@ -395,15 +417,7 @@ namespace Basalt {
 									key = value.get<std::string>();
 								else if (const auto* info = ComponentRegistry::Find(component); info && std::find(info->AssetFields.begin(), info->AssetFields.end(), field) != info->AssetFields.end())
 									key = DecodeReference(value, assets);
-								if (key.starts_with("Assets/"))
-								{
-									const std::string file(GetAssetSource(key));
-									dependencies.insert(file);
-									if (ClassifyThumbnail(file) == ThumbnailKind::Model)
-										AddModelDependencies(m_ProjectDirectory, file, dependencies);
-									else if (ClassifyThumbnail(file) == ThumbnailKind::Material)
-										AddMaterialDependencies(m_ProjectDirectory, assets, file, dependencies);
-								}
+								AddSourceDependencies(m_ProjectDirectory, assets, key, dependencies);
 							}
 				}
 				break;

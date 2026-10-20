@@ -54,12 +54,15 @@ namespace Basalt {
 
 	// Checks that a project would export and start: project settings, the start scene, every scene and prefab
 	// (they load, and every asset path they reference exists inside Assets/ with the exact letter case, which
-	// case-sensitive file systems need), and every Lua script under Assets/ (it compiles; a script a Script
+	// case-sensitive file systems need), every animation graph and material file (they parse; a material's maps are
+	// textures that exist the same way), and every Lua script under Assets/ (it compiles; a script a Script
 	// component uses must also run its top level and return a class table). The component fields that hold asset
-	// paths (Mesh, Script, material maps, EnvironmentMap, Texture, Font, an AudioSource's Clip) must name a file
-	// inside Assets/ (or a builtin:// mesh), with / separators: an error otherwise. Other strings that look like
-	// asset paths ("Assets/Prefabs/Shot.bprefab" in a script property) are checked too but only warn, since they
-	// may be text. Files are checked for existence, not decoded. Headless; reads files but changes nothing.
+	// paths (Mesh, Script, Material and the material maps, EnvironmentMap, Texture, Font, an AudioSource's Clip) must
+	// name a file inside Assets/ (or a builtin:// mesh), with / separators: an error otherwise. A model's sub-asset
+	// ("#image/<n>", "#material/<n>") must exist in its glTF (when that parses; models are not decoded). Other strings that look like asset paths
+	// ("Assets/Prefabs/Shot.bprefab" in a script property) are checked too but only warn, since they may be text.
+	// Referenced files are checked for existence (glTF files' JSON is read for sub-assets); material files and
+	// animation graphs are also parsed. Headless; reads files but changes nothing.
 	[[nodiscard]] ValidationReport ValidateProject(const Project& project);
 
 	// A RigidBody or CharacterController that names a layer the project does not define (it plays on Default).

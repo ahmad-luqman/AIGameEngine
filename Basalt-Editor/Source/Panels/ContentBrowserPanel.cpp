@@ -5,10 +5,12 @@
 #include "ThumbnailManager.h"
 
 #include "Basalt/Automation/EditorCommandSchemas.h"
+#include "Basalt/Asset/AssetKey.h"
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Asset/MaterialAsset.h"
 #include "Basalt/Asset/MeshSource.h"
 #include "Basalt/Core/FileSystem.h"
+#include "Basalt/Core/Log.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/PreviewRenderer.h"
 
@@ -141,17 +143,17 @@ return %s
 		{
 			if (ImGui::MenuItem("New Script..."))
 			{
-				m_CreatingScript = true;
+				m_NewItem = NewItem::Script;
 				m_NewItemName = "NewScript";
 			}
 			if (ImGui::MenuItem("New Material..."))
 			{
-				m_CreatingMaterial = true;
+				m_NewItem = NewItem::Material;
 				m_NewItemName = "NewMaterial";
 			}
 			if (ImGui::MenuItem("New Folder..."))
 			{
-				m_CreatingFolder = true;
+				m_NewItem = NewItem::Folder;
 				m_NewItemName = "NewFolder";
 			}
 			ImGui::Separator();
@@ -164,39 +166,47 @@ return %s
 			ImGui::EndPopup();
 		}
 
-		if (m_CreatingScript || m_CreatingMaterial || m_CreatingFolder)
+		if (m_NewItem != NewItem::None)
 			ImGui::OpenPopup("NewItem");
 		if (ImGui::BeginPopupModal("NewItem", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
 		{
-			ImGui::TextUnformatted(m_CreatingScript ? "Script name:" : (m_CreatingMaterial ? "Material name:" : "Folder name:"));
+			const char* label = "Folder name:";
+			if (m_NewItem == NewItem::Script)
+				label = "Script name:";
+			else if (m_NewItem == NewItem::Material)
+				label = "Material name:";
+			ImGui::TextUnformatted(label);
 			ImGui::InputText("##ItemName", &m_NewItemName);
 			const bool valid = !m_NewItemName.empty() && m_NewItemName.find_first_of("/\\.:") == std::string::npos;
 			ImGui::BeginDisabled(!valid);
 			if (ImGui::Button("Create"))
 			{
-				if (m_CreatingScript)
+				switch (m_NewItem)
 				{
-					const std::string path = Project::MakeRelative(m_CurrentDirectory / (m_NewItemName + ".lua"));
-					m_Context.Execute("asset.write", { { "path", path }, { "content", MakeScript(m_NewItemName) } });
+					case NewItem::Script:
+						m_Context.Execute("asset.write", { { "path", Project::MakeRelative(m_CurrentDirectory / (m_NewItemName + ".lua")) }, { "content", MakeScript(m_NewItemName) } });
+						break;
+					case NewItem::Material:
+					{
+						const std::string path = Project::MakeRelative(m_CurrentDirectory / FileSystem::PathFromUtf8(m_NewItemName + std::string(MaterialAsset::Extension)));
+						if (m_Context.Execute("material.create", { { "path", path } }) && OnOpenAsset)
+							OnOpenAsset(path);
+						break;
+					}
+					case NewItem::Folder:
+						std::filesystem::create_directories(m_CurrentDirectory / m_NewItemName, error);
+						break;
+					case NewItem::None:
+						break;
 				}
-				else if (m_CreatingMaterial)
-				{
-					const std::string path = Project::MakeRelative(m_CurrentDirectory / FileSystem::PathFromUtf8(m_NewItemName + std::string(MaterialAsset::Extension)));
-					if (m_Context.Execute("material.create", { { "path", path } }) && OnOpenAsset)
-						OnOpenAsset(path);
-				}
-				else
-				{
-					std::filesystem::create_directories(m_CurrentDirectory / m_NewItemName, error);
-				}
-				m_CreatingScript = m_CreatingMaterial = m_CreatingFolder = false;
+				m_NewItem = NewItem::None;
 				ImGui::CloseCurrentPopup();
 			}
 			ImGui::EndDisabled();
 			ImGui::SameLine();
 			if (ImGui::Button("Cancel"))
 			{
-				m_CreatingScript = m_CreatingMaterial = m_CreatingFolder = false;
+				m_NewItem = NewItem::None;
 				ImGui::CloseCurrentPopup();
 			}
 			ImGui::EndPopup();
@@ -275,7 +285,13 @@ return %s
 			{
 				// Next to the model, in a Materials folder (material.extract's default).
 				if (const auto result = m_Context.Execute("material.extract", { { "model", relative } }))
-					m_Context.SetStatus(fmt::format("Extracted {} material(s) from {}", (*result)["materials"].size(), relative), false);
+				{
+					// Missing or unresolved textures render white: say so instead of reporting a plain success.
+					const auto warnings = result->value("warnings", nlohmann::json::array());
+					for (const auto& warning : warnings)
+						BS_WARN("Extract Materials: {}", warning.dump());
+					m_Context.SetStatus(fmt::format("Extracted {} material(s) from {}{}", (*result)["materials"].size(), relative, warnings.empty() ? "" : fmt::format(", with {} warning(s): see Console", warnings.size())), !warnings.empty());
+				}
 			}
 			if (ImGui::MenuItem("Delete"))
 				m_PendingDelete = entry.path();
@@ -314,7 +330,7 @@ return %s
 			ImGui::Separator();
 			for (size_t i = 0; i < std::min(materials.size(), ShownMaterials); i++)
 			{
-				DrawPreviewSquare(*m_Thumbnails->GetMaterial(relative + "#material/" + std::to_string(i), materials[i].Values), Sphere);
+				DrawPreviewSquare(*m_Thumbnails->GetMaterial(MakeSubAssetKey(relative, ImportedMaterialMarker, i), materials[i].Values), Sphere);
 				ImGui::SameLine();
 				ImGui::AlignTextToFramePadding();
 				ImGui::TextUnformatted(materials[i].Name.c_str());

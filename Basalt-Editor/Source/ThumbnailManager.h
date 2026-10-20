@@ -10,11 +10,11 @@
 
 #include <deque>
 #include <filesystem>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 namespace Basalt {
@@ -24,8 +24,8 @@ namespace Basalt {
 	// Content-browser and inspector previews. Panels ask for a preview every frame they show it; missing or
 	// outdated ones are queued and made by Update (the editor calls it once per frame, before the ImGui pass)
 	// within a frame budget: at most one GPU render, and new CPU work only until about 8 ms have passed (one large
-	// image can take longer). File previews are cached on disk (ThumbnailCache); material previews only in GPU
-	// textures. Previews not shown recently are dropped beyond MaxTextures / MaxSlots. Assets a preview loads only for
+	// image can take longer). File previews (material files included) are cached on disk (ThumbnailCache); material
+	// spheres (the inspector's, tooltip swatches, the Material Editor's draft) only in GPU textures. Previews not shown recently are dropped beyond MaxTextures / MaxSlots. Assets a preview loads only for
 	// itself are released from AssetManager when it is made (AssetManager::TemporaryLoads).
 	class ThumbnailManager
 	{
@@ -83,7 +83,7 @@ namespace Basalt {
 		// The preview of a project-relative asset ("Assets/..."), queued when missing or outdated; nullptr for files
 		// without one, or without an open project. The pointer is valid until the next Update().
 		const Preview* Get(const std::string& relativePath);
-		// A material on a sphere. `id` names the preview slot (an entity, a model's material); it is made again once
+		// A material on a sphere. `id` names the preview slot (an entity); it is made again once
 		// the material's values have stopped changing for a frame (not on every frame of a drag). The pointer is
 		// valid until the next Update().
 		const Preview* GetMaterial(const std::string& id, const MaterialComponent& material);
@@ -118,10 +118,10 @@ namespace Basalt {
 			Preview Data;
 			// The source version (ThumbnailCache key) or material values the preview shows or is queued for.
 			std::string Key;
-			MaterialComponent Material;
-			// Set for a by-value preview (a draft, an imported material), which renders this instead of Material.
-			std::optional<MaterialData> Draft;
-			bool IsMaterial = false;
+			// What a material slot renders: a component (the inspector) or a material by value (a draft, a model's
+			// imported material); monostate for a file preview.
+			std::variant<std::monostate, MaterialComponent, MaterialData> Material;
+			bool IsMaterial() const { return !std::holds_alternative<std::monostate>(Material); }
 			bool Queued = false;
 			uint64_t LastUsed = 0;
 			// When the material values last changed (previews wait until they settle).
@@ -140,7 +140,8 @@ namespace Basalt {
 
 		Slot& Touch(const std::string& id);
 		// Queues a material slot when its key (the values it shows) changed.
-		const Preview* UpdateMaterial(const std::string& id, std::string key, const std::function<void(Slot&)>& assign);
+		template<typename M>
+		const Preview* UpdateMaterial(const std::string& id, std::string key, const M& material);
 		void Enqueue(const std::string& id, Slot& slot);
 		static void Fail(Slot& slot, std::string error);
 		bool EnsureRenderer(std::string& outError);
@@ -148,7 +149,7 @@ namespace Basalt {
 		// Makes one queued preview; true for a GPU-rendered kind, which ends the frame's budget even when the render
 		// failed.
 		bool Process(const std::string& id, Slot& slot);
-		// With `reread`, the model or prefab and the files it uses are read again first (their file changed).
+		// With `reread`, the model, prefab or material file and the files it uses are read again first (their file changed).
 		// outMaterials (optional) receives a model's materials.
 		std::optional<ThumbnailCache::Entry> Make(const ThumbnailCache& cache, const std::string& relativePath, ThumbnailKind kind, bool reread, std::vector<Preview::Material>* outMaterials, std::string& outError);
 		void Upload(Slot& slot, const ThumbnailImage& image);

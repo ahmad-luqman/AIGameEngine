@@ -181,7 +181,7 @@ local function TestEntities(self)
 	Check("Material asset reference", coated:GetComponent("Material").Material == "Assets/Materials/Checker.bmaterial")
 	coated:SetComponent("Material", { Material = "Assets/Models/TexturedCube.glb#material/0" })
 	Check("Imported material reference", coated:GetComponent("Material").Material == "Assets/Models/TexturedCube.glb#material/0")
-	ExpectError("Material asset type", function() coated:SetComponent("Material", { Material = "Assets/Textures/Checker.png" }) end, "must be a .bmaterial file or <model>#material/<n>")
+	ExpectError("Material asset type", function() coated:SetComponent("Material", { Material = "Assets/Textures/Checker.png" }) end, "must be a .bmaterial file or <.gltf/.glb model>#material/<n>")
 	local pillarMaterials = {}
 	for _, pillar in ipairs(Scene.FindEntitiesByName("Pillar")) do
 		pillarMaterials[pillar:GetComponent("Material").Material] = true

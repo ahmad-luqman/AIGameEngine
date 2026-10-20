@@ -379,7 +379,8 @@ namespace Basalt {
 	// Replaces the whole imported material of every submesh. Material names a material asset: a .bmaterial file or a
 	// model's imported material ("<model>#material/<n>"), which carry the full model (alpha mode and cutoff, sidedness,
 	// normal/occlusion strengths, per-map UV transforms and sets). While Material is set the inline values below are
-	// unused, except as the fallback when the asset cannot load (logged once).
+	// unused, except as the fallback while the asset has not loaded (a model's material while the model streams in) or
+	// when it cannot load (logged once).
 	// The inline values are a PBR material with clearcoat/transmission, single-sided with strengths of 1: the one UV
 	// transform applies to every map on UV0. They blend when AlbedoColor.a < 1 (alpha is then coverage) or
 	// Transmission > 0 (full coverage, see-through). Texture paths are project-relative; empty means "no texture".

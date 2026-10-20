@@ -13,7 +13,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <type_traits>
 #include <unordered_set>
+#include <variant>
 
 namespace Basalt {
 
@@ -31,20 +33,17 @@ namespace Basalt {
 			return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 		}
 
-		// The material file's mode and maps, from the copy the preview just loaded.
-		std::vector<std::string> MaterialDetails(const std::string& path)
+		// A material file's mode and maps.
+		std::vector<std::string> MaterialDetails(const MaterialData& material)
 		{
-			const auto material = AssetManager::GetMaterial(path);
-			if (!material)
-				return {};
-			const size_t maps = MaterialAsset::GetTextures(*material).size();
-			return { fmt::format("{}{}, {} map(s)", MaterialAsset::AlphaModeNames[static_cast<size_t>(material->Alpha)], material->DoubleSided ? ", double-sided" : "", maps) };
+			const size_t maps = MaterialAsset::GetTextures(material).size();
+			return { fmt::format("{}{}, {} map(s)", MaterialAsset::AlphaModeNames[static_cast<size_t>(material.Alpha)], material.DoubleSided ? ", double-sided" : "", maps) };
 		}
 
 		std::vector<std::string> ModelDetails(const MeshSource& mesh)
 		{
 			const size_t triangles = mesh.Indices.size() / 3;
-			std::vector<std::string> details = { fmt::format("{} mesh(es), {} material(s)", mesh.Meshes.size(), mesh.Materials.size()), fmt::format("{} vertices, {} triangles", mesh.Vertices.size(), triangles) };
+			std::vector<std::string> details = { fmt::format("{} mesh(es), {} material(s)", mesh.Meshes.size(), mesh.GetImportedMaterialCount()), fmt::format("{} vertices, {} triangles", mesh.Vertices.size(), triangles) };
 			if (!mesh.Skins.empty() || !mesh.Animations.empty())
 				details.push_back(fmt::format("{} skin(s), {} animation(s)", mesh.Skins.size(), mesh.Animations.size()));
 			return details;
@@ -130,15 +129,15 @@ namespace Basalt {
 		return &slot.Data;
 	}
 
-	const ThumbnailManager::Preview* ThumbnailManager::UpdateMaterial(const std::string& id, std::string key, const std::function<void(Slot&)>& assign)
+	template<typename M>
+	const ThumbnailManager::Preview* ThumbnailManager::UpdateMaterial(const std::string& id, std::string key, const M& material)
 	{
 		const std::string slotId = s_MaterialPrefix + id;
 		Slot& slot = Touch(slotId);
-		slot.IsMaterial = true;
-		if (key != slot.Key)
+		if (key != slot.Key || !slot.IsMaterial())
 		{
 			slot.Key = std::move(key);
-			assign(slot);
+			slot.Material = material;
 			slot.ChangedFrame = m_Frame;
 			slot.Data.Status = State::Pending;
 			Enqueue(slotId, slot);
@@ -148,10 +147,7 @@ namespace Basalt {
 
 	const ThumbnailManager::Preview* ThumbnailManager::GetMaterial(const std::string& id, const MaterialComponent& material)
 	{
-		return UpdateMaterial(id, MaterialPreviewKey(material), [&](Slot& slot) {
-			slot.Material = material;
-			slot.Draft.reset();
-		});
+		return UpdateMaterial(id, MaterialPreviewKey(material), material);
 	}
 
 	const ThumbnailManager::Preview* ThumbnailManager::GetMaterial(const std::string& id, const MaterialData& material)
@@ -160,7 +156,7 @@ namespace Basalt {
 		std::string error;
 		const auto data = MaterialAsset::ToJson(material, false, error);
 		std::string key = "data\n" + (data ? data->dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) : "invalid: " + error);
-		return UpdateMaterial(id, std::move(key), [&](Slot& slot) { slot.Draft = material; });
+		return UpdateMaterial(id, std::move(key), material);
 	}
 
 	void ThumbnailManager::OnFilesChanged(const std::vector<FileChange>& changes)
@@ -170,18 +166,18 @@ namespace Basalt {
 			changed.insert(change.Path);
 		for (auto& [id, slot] : m_Slots)
 		{
-			if (!slot.IsMaterial)
+			if (!slot.IsMaterial())
 			{
 				slot.LastChecked = -1.0;
 				continue;
 			}
-			// An embedded image or imported material key ("Model.glb#image/0") changes with its model file.
-			std::vector<std::string> files;
-			if (slot.Draft)
-				for (const std::string& texture : MaterialAsset::GetTextures(*slot.Draft))
-					files.push_back(AssetManager::GetSourceFile(texture));
-			else
-				files = MaterialPreviewDependencies(slot.Material);
+			const auto files = std::visit([](const auto& material) -> std::vector<std::string> {
+				if constexpr (std::is_same_v<std::decay_t<decltype(material)>, std::monostate>)
+					return {};
+				else
+					return MaterialPreviewDependencies(material);
+			},
+										  slot.Material);
 			// A cleared key no longer matches the material's, so its next GetMaterial queues it.
 			if (std::any_of(files.begin(), files.end(), [&](const std::string& file) { return changed.contains(file); }))
 				slot.Key.clear();
@@ -225,7 +221,7 @@ namespace Basalt {
 			if (it == m_Slots.end() || !it->second.Queued)
 				continue;
 			// A material still being edited (it changed during the last ImGui pass) waits for its values to settle.
-			if (it->second.IsMaterial && it->second.ChangedFrame >= m_Frame)
+			if (it->second.IsMaterial() && it->second.ChangedFrame >= m_Frame)
 			{
 				waiting.push_back(id);
 				continue;
@@ -242,9 +238,16 @@ namespace Basalt {
 	bool ThumbnailManager::Process(const std::string& id, Slot& slot)
 	{
 		std::string error;
-		if (slot.IsMaterial)
+		if (slot.IsMaterial())
 		{
-			if (const auto image = slot.Draft ? RenderMaterial(*slot.Draft, error) : RenderMaterial(slot.Material, error))
+			const auto image = std::visit([&](const auto& material) -> std::optional<ThumbnailImage> {
+				if constexpr (std::is_same_v<std::decay_t<decltype(material)>, std::monostate>)
+					return std::nullopt;
+				else
+					return RenderMaterial(material, error);
+			},
+										  slot.Material);
+			if (image)
 				Upload(slot, *image);
 			else
 				Fail(slot, error);
@@ -379,12 +382,16 @@ namespace Basalt {
 			{
 				if (!EnsureRenderer(outError))
 					return std::nullopt;
-				MaterialComponent component;
-				component.Material = relativePath;
-				auto image = m_Renderer->RenderMaterial(component, outError);
+				const auto material = AssetManager::GetMaterial(relativePath);
+				if (!material)
+				{
+					outError = AssetManager::GetError(relativePath);
+					return std::nullopt;
+				}
+				auto image = m_Renderer->RenderMaterial(*material, outError);
 				if (!image)
 					return std::nullopt;
-				return ThumbnailCache::Entry{ std::move(*image), MaterialDetails(relativePath) };
+				return ThumbnailCache::Entry{ std::move(*image), MaterialDetails(*material) };
 			}
 			case ThumbnailKind::None:
 				break;

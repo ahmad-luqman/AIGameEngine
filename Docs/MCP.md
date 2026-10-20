@@ -264,7 +264,7 @@ costs one view.
   the cache) the content-browser preview of an image, `.hdr` environment, `.gltf`/`.glb` model, `.bprefab` or
   `.bmaterial` and returns `kind` (`Image`, `Environment`, `Model`, `Prefab`, `Material`), `width`/`height` (at most 128), `cached`,
   `cachePath` and `details` (the tooltip's lines), plus `warnings` when the preview was made but could not be
-  stored in the cache. `refresh: true` makes it again, first re-reading the model and the files it uses. Other
+  stored in the cache. `refresh: true` makes it again, first re-reading the model, prefab or material file and the files it uses. Other
   files report that they have no preview.
 - `editor.material_preview {"entity":"Ball","output":"ball.png"}` renders an entity's Material on a sphere,
   as the inspector shows it (128x128). A `Material` asset that does not load is an error.

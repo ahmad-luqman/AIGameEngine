@@ -3,6 +3,7 @@
 #include "EditorContext.h"
 #include "ThumbnailManager.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <string>
@@ -38,9 +39,15 @@ namespace Basalt {
 		float m_IconSize = 32.0f;
 		std::filesystem::path m_CurrentDirectory;
 		std::string m_NewItemName;
-		bool m_CreatingScript = false;
-		bool m_CreatingMaterial = false;
-		bool m_CreatingFolder = false;
+		// What the New... prompt creates.
+		enum class NewItem : uint8_t
+		{
+			None,
+			Script,
+			Material,
+			Folder
+		};
+		NewItem m_NewItem = NewItem::None;
 		std::filesystem::path m_PendingDelete;
 	};
 

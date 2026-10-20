@@ -1,5 +1,8 @@
 #include "Basalt/Asset/MaterialAsset.h"
 
+#include "Basalt/Asset/AssetKey.h"
+#include "Basalt/Asset/AssetManager.h"
+#include "Basalt/Asset/AssetRegistry.h"
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/EnumNames.h"
 #include "Basalt/Core/FileSystem.h"
@@ -12,34 +15,49 @@
 #include <spdlog/fmt/ranges.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <iterator>
 #include <stdexcept>
 
 namespace Basalt::MaterialAsset {
 
 	using json = nlohmann::json;
 
-	const std::array<const char*, MaterialTextureSlotCount> SlotNames = { "Albedo", "Normal", "MetallicRoughness", "Occlusion", "Emissive", "Clearcoat", "ClearcoatRoughness", "ClearcoatNormal", "Transmission" };
-	const std::array<const char*, MaterialTextureSlotCount> MapFields = { "AlbedoMap", "NormalMap", "MetallicRoughnessMap", "OcclusionMap", "EmissiveMap", "ClearcoatMap", "ClearcoatRoughnessMap", "ClearcoatNormalMap", "TransmissionMap" };
-
 	namespace {
 
-		// Every top-level key, in the order ToJson writes them.
-		constexpr std::initializer_list<std::string_view> TopLevelKeys = { "Version", "AlbedoColor", "Metallic", "Roughness", "EmissiveColor", "EmissiveIntensity", "AlphaMode", "AlphaCutoff", "DoubleSided", "NormalScale", "OcclusionStrength", "Clearcoat", "ClearcoatRoughness", "ClearcoatNormalScale", "Transmission", "AlbedoMap", "NormalMap", "MetallicRoughnessMap", "OcclusionMap", "EmissiveMap", "ClearcoatMap", "ClearcoatRoughnessMap", "ClearcoatNormalMap", "TransmissionMap", "TextureTransforms" };
-		constexpr std::initializer_list<std::string_view> TransformKeys = { "Offset", "Scale", "Rotation", "TexCoord" };
+		// The component's maps, in MaterialTextureSlot order (the component's field names are Slots' MapField names).
+		constexpr std::string MaterialComponent::* ComponentMaps[] = { &MaterialComponent::AlbedoMap, &MaterialComponent::NormalMap, &MaterialComponent::MetallicRoughnessMap, &MaterialComponent::OcclusionMap, &MaterialComponent::EmissiveMap, &MaterialComponent::ClearcoatMap, &MaterialComponent::ClearcoatRoughnessMap, &MaterialComponent::ClearcoatNormalMap, &MaterialComponent::TransmissionMap };
+		static_assert(std::size(ComponentMaps) == MaterialTextureSlotCount);
+
+		template<size_t N>
+		bool Contains(const char* const (&names)[N], std::string_view key)
+		{
+			return std::find(std::begin(names), std::end(names), key) != std::end(names);
+		}
+
+		bool IsTopLevelKey(std::string_view key)
+		{
+			return key == "Version" || key == "TextureTransforms" || Contains(ScalarFields, key) || std::any_of(std::begin(Slots), std::end(Slots), [&](const SlotInfo& slot) { return key == slot.MapField; });
+		}
 
 		// Reads fields while tracking the location a failure reports, like the animation graph parser.
 		class MaterialParser
 		{
 		public:
-			explicit MaterialParser(std::vector<std::string>* warnings)
+			MaterialParser(std::vector<std::string>* warnings, const AssetRegistry* registry)
 				: m_Warnings(warnings)
+				, m_Registry(registry)
 			{
 			}
 
 			MaterialData Parse(const json& data)
 			{
-				Object(data, TopLevelKeys);
+				if (!data.is_object())
+					throw std::runtime_error("expected an object");
+				for (const auto& [key, value] : data.items())
+					if (!IsTopLevelKey(key))
+						throw std::runtime_error("material: unknown key '" + key + "'");
 				m_Location = "Version";
 				uint32_t version = 0;
 				if (!data.contains("Version") || !JsonToUInt32(data["Version"], version))
@@ -73,25 +91,35 @@ namespace Basalt::MaterialAsset {
 				Number(data, "ClearcoatRoughness", material.ClearcoatRoughness);
 				Number(data, "ClearcoatNormalScale", material.ClearcoatNormalScale);
 				Number(data, "Transmission", material.Transmission);
-				for (size_t slot = 0; slot < MaterialTextureSlotCount; slot++)
-					if (const auto* reference = Find(data, MapFields[slot]))
-						GetMap(material, static_cast<MaterialTextureSlot>(slot)) = Reference(*reference);
+				for (const SlotInfo& slot : Slots)
+					if (const auto* reference = Find(data, slot.MapField))
+						material.*slot.Map = Reference(*reference);
 				if (const auto* transforms = Find(data, "TextureTransforms"))
 				{
 					if (!transforms->is_object())
 						throw std::runtime_error("expected an object");
 					for (const auto& [key, value] : transforms->items())
-						if (std::find_if(SlotNames.begin(), SlotNames.end(), [&](const char* name) { return key == name; }) == SlotNames.end())
+						if (std::none_of(std::begin(Slots), std::end(Slots), [&](const SlotInfo& slot) { return key == slot.Name; }))
 						{
 							m_Location.clear();
-							throw std::runtime_error("TextureTransforms: unknown slot '" + key + "' (expected " + fmt::format("{}", fmt::join(SlotNames, ", ")) + ")");
+							std::vector<std::string_view> names;
+							for (const SlotInfo& slot : Slots)
+								names.emplace_back(slot.Name);
+							throw std::runtime_error(fmt::format("TextureTransforms: unknown slot '{}' (expected {})", key, fmt::join(names, ", ")));
 						}
 					for (size_t slot = 0; slot < MaterialTextureSlotCount; slot++)
-						if (const auto* transform = Find(*transforms, SlotNames[slot]))
+						if (const auto* transform = Find(*transforms, Slots[slot].Name))
 						{
-							const std::string location = "TextureTransforms." + std::string(SlotNames[slot]);
+							const std::string location = "TextureTransforms." + std::string(Slots[slot].Name);
 							m_Location = location;
-							Object(*transform, TransformKeys);
+							if (!transform->is_object())
+								throw std::runtime_error("expected an object");
+							for (const auto& [key, value] : transform->items())
+								if (!Contains(TransformFields, key))
+								{
+									m_Location.clear();
+									throw std::runtime_error(fmt::format("{}: unknown key '{}'", location, key));
+								}
 							auto& value = material.TextureTransforms[slot];
 							Vector(*transform, "Offset", value.Offset, location + ".");
 							Vector(*transform, "Scale", value.Scale, location + ".");
@@ -109,19 +137,6 @@ namespace Basalt::MaterialAsset {
 			const std::string& GetLocation() const { return m_Location; }
 
 		private:
-			void Object(const json& value, std::initializer_list<std::string_view> keys)
-			{
-				std::string error;
-				if (!value.is_object())
-					throw std::runtime_error("expected an object");
-				if (!RejectUnknownKeys(value, keys, m_Location.empty() ? "material" : m_Location, error))
-				{
-					// The key names the problem; the location is already part of the message.
-					m_Location.clear();
-					throw std::runtime_error(error);
-				}
-			}
-
 			const json* Find(const json& object, const char* key, const std::string& prefix = {})
 			{
 				const auto it = object.find(key);
@@ -156,11 +171,13 @@ namespace Basalt::MaterialAsset {
 					return value.get<std::string>();
 				if (!value.is_object())
 					throw std::runtime_error("asset reference must be a path string or {UUID, Path} strings");
-				const auto& project = Project::GetActive();
-				if (!project)
+				const AssetRegistry* registry = m_Registry;
+				if (!registry && Project::GetActive())
+					registry = &Project::GetActive()->GetAssets();
+				if (!registry)
 					throw std::runtime_error("UUID asset references require an active project");
 				std::string path, error;
-				if (!project->GetAssets().Decode(value, path, error, true))
+				if (!registry->Decode(value, path, error, true))
 					throw std::runtime_error(error);
 				if (!error.empty() && m_Warnings)
 					m_Warnings->push_back(m_Location + ": " + error);
@@ -168,6 +185,7 @@ namespace Basalt::MaterialAsset {
 			}
 
 			std::vector<std::string>* m_Warnings = nullptr;
+			const AssetRegistry* m_Registry = nullptr;
 			std::string m_Location;
 		};
 
@@ -206,38 +224,30 @@ namespace Basalt::MaterialAsset {
 		return FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(std::string(path))) == Extension;
 	}
 
+	bool IsMaterialKey(std::string_view key)
+	{
+		if (ParseSubAssetIndex(key, ImportedMaterialMarker))
+			return AssetManager::IsMeshFile(std::string(GetAssetSource(key)));
+		return GetSubAssetFragment(key).empty() && IsMaterialFile(key);
+	}
+
+	bool IsTextureKey(std::string_view key)
+	{
+		if (ParseSubAssetIndex(key, EmbeddedImageMarker))
+			return AssetManager::IsMeshFile(std::string(GetAssetSource(key)));
+		return GetSubAssetFragment(key).empty() && AssetManager::IsTextureFile(std::string(key));
+	}
+
 	std::string& GetMap(MaterialData& material, MaterialTextureSlot slot)
 	{
-		return const_cast<std::string&>(GetMap(std::as_const(material), slot));
+		BS_CORE_ASSERT(slot < MaterialTextureSlot::Count, "invalid material texture slot");
+		return material.*Slots[static_cast<size_t>(slot)].Map;
 	}
 
 	const std::string& GetMap(const MaterialData& material, MaterialTextureSlot slot)
 	{
-		switch (slot)
-		{
-			case MaterialTextureSlot::Albedo:
-				return material.AlbedoMap;
-			case MaterialTextureSlot::Normal:
-				return material.NormalMap;
-			case MaterialTextureSlot::MetallicRoughness:
-				return material.MetallicRoughnessMap;
-			case MaterialTextureSlot::Occlusion:
-				return material.OcclusionMap;
-			case MaterialTextureSlot::Emissive:
-				return material.EmissiveMap;
-			case MaterialTextureSlot::Clearcoat:
-				return material.ClearcoatMap;
-			case MaterialTextureSlot::ClearcoatRoughness:
-				return material.ClearcoatRoughnessMap;
-			case MaterialTextureSlot::ClearcoatNormal:
-				return material.ClearcoatNormalMap;
-			case MaterialTextureSlot::Transmission:
-				return material.TransmissionMap;
-			case MaterialTextureSlot::Count:
-				break;
-		}
-		BS_CORE_ASSERT(false, "invalid material texture slot");
-		return material.AlbedoMap;
+		BS_CORE_ASSERT(slot < MaterialTextureSlot::Count, "invalid material texture slot");
+		return material.*Slots[static_cast<size_t>(slot)].Map;
 	}
 
 	std::optional<std::string> Validate(const MaterialData& material)
@@ -266,16 +276,16 @@ namespace Basalt::MaterialAsset {
 		{
 			const auto& transform = material.TextureTransforms[slot];
 			if (!Math::IsFinite(transform.Offset) || !Math::IsFinite(transform.Scale) || !std::isfinite(transform.Rotation))
-				return fmt::format("TextureTransforms.{} must be finite", SlotNames[slot]);
+				return fmt::format("TextureTransforms.{} must be finite", Slots[slot].Name);
 			if (transform.TexCoord > 1)
-				return fmt::format("TextureTransforms.{}.TexCoord {} must be 0 or 1", SlotNames[slot], transform.TexCoord);
+				return fmt::format("TextureTransforms.{}.TexCoord {} must be 0 or 1", Slots[slot].Name, transform.TexCoord);
 		}
 		return std::nullopt;
 	}
 
-	std::optional<MaterialData> FromJson(const json& data, std::string& outError, std::vector<std::string>* outWarnings)
+	std::optional<MaterialData> FromJson(const json& data, std::string& outError, std::vector<std::string>* outWarnings, const AssetRegistry* registry)
 	{
-		MaterialParser parser(outWarnings);
+		MaterialParser parser(outWarnings, registry);
 		try
 		{
 			return parser.Parse(data);
@@ -287,6 +297,14 @@ namespace Basalt::MaterialAsset {
 		return std::nullopt;
 	}
 
+	std::optional<MaterialData> FromText(std::string_view text, std::string& outError, std::vector<std::string>* outWarnings, const AssetRegistry* registry)
+	{
+		const json data = ParseJson(text, outError);
+		if (data.is_discarded())
+			return std::nullopt;
+		return FromJson(data, outError, outWarnings, registry);
+	}
+
 	std::optional<json> ToJson(const MaterialData& material, bool encodeReferences, std::string& outError)
 	{
 		if (auto problem = Validate(material))
@@ -294,8 +312,7 @@ namespace Basalt::MaterialAsset {
 			outError = *problem;
 			return std::nullopt;
 		}
-		const auto& project = Project::GetActive();
-		if (encodeReferences && !project)
+		if (encodeReferences && !Project::GetActive())
 		{
 			outError = "encoding material references requires an active project";
 			return std::nullopt;
@@ -317,23 +334,16 @@ namespace Basalt::MaterialAsset {
 			{ "ClearcoatNormalScale", Shortest(material.ClearcoatNormalScale) },
 			{ "Transmission", Shortest(material.Transmission) },
 		};
-		for (size_t slot = 0; slot < MaterialTextureSlotCount; slot++)
-		{
-			const std::string& path = GetMap(material, static_cast<MaterialTextureSlot>(slot));
-			json reference = path;
-			if (encodeReferences && !project->GetAssets().Encode(path, reference, outError))
-			{
-				outError.insert(0, std::string(MapFields[slot]) + ": ");
-				return std::nullopt;
-			}
-			data[MapFields[slot]] = std::move(reference);
-		}
+		for (const SlotInfo& slot : Slots)
+			data[slot.MapField] = material.*slot.Map;
+		if (encodeReferences && !EncodeReferences(data, outError))
+			return std::nullopt;
 		json transforms = json::object();
 		for (size_t slot = 0; slot < MaterialTextureSlotCount; slot++)
 		{
 			const auto& transform = material.TextureTransforms[slot];
 			if (!IsIdentity(transform))
-				transforms[SlotNames[slot]] = { { "Offset", ToJson(transform.Offset) }, { "Scale", ToJson(transform.Scale) }, { "Rotation", Shortest(transform.Rotation) }, { "TexCoord", transform.TexCoord } };
+				transforms[Slots[slot].Name] = { { "Offset", ToJson(transform.Offset) }, { "Scale", ToJson(transform.Scale) }, { "Rotation", Shortest(transform.Rotation) }, { "TexCoord", transform.TexCoord } };
 		}
 		if (!transforms.empty())
 			data["TextureTransforms"] = std::move(transforms);
@@ -345,8 +355,9 @@ namespace Basalt::MaterialAsset {
 		const auto& project = Project::GetActive();
 		if (!project || !data.is_object())
 			return true;
-		for (const char* field : MapFields)
+		for (const SlotInfo& slot : Slots)
 		{
+			const char* field = slot.MapField;
 			auto value = data.find(field);
 			if (value == data.end() || !value->is_string())
 				continue;
@@ -364,7 +375,7 @@ namespace Basalt::MaterialAsset {
 		return true;
 	}
 
-	MaterialData FromComponent(const MaterialComponent& component)
+	MaterialData FromComponent(const MaterialComponent& component, bool includeTextures)
 	{
 		MaterialData material;
 		material.AlbedoColor = component.AlbedoColor;
@@ -372,31 +383,58 @@ namespace Basalt::MaterialAsset {
 		material.Roughness = component.Roughness;
 		material.EmissiveColor = component.EmissiveColor;
 		material.EmissiveIntensity = component.EmissiveIntensity;
-		material.AlbedoMap = component.AlbedoMap;
-		material.NormalMap = component.NormalMap;
-		material.MetallicRoughnessMap = component.MetallicRoughnessMap;
-		material.OcclusionMap = component.OcclusionMap;
-		material.EmissiveMap = component.EmissiveMap;
 		material.Clearcoat = component.Clearcoat;
 		material.ClearcoatRoughness = component.ClearcoatRoughness;
 		material.Transmission = component.Transmission;
-		material.ClearcoatMap = component.ClearcoatMap;
-		material.ClearcoatRoughnessMap = component.ClearcoatRoughnessMap;
-		material.ClearcoatNormalMap = component.ClearcoatNormalMap;
-		material.TransmissionMap = component.TransmissionMap;
+		if (includeTextures)
+			for (size_t slot = 0; slot < MaterialTextureSlotCount; slot++)
+				material.*Slots[slot].Map = component.*ComponentMaps[slot];
 		// Overrides have no alpha mode: alpha below one blends and is coverage.
 		material.Alpha = component.AlbedoColor.a < 0.999f ? AlphaMode::Blend : AlphaMode::Opaque;
 		material.TextureTransforms.fill({ component.UVOffset, component.UVScale, component.UVRotation, 0 });
 		return material;
 	}
 
+	std::array<const std::string*, MaterialTextureSlotCount> GetMaps(const MaterialData& material)
+	{
+		std::array<const std::string*, MaterialTextureSlotCount> maps{};
+		for (size_t slot = 0; slot < MaterialTextureSlotCount; slot++)
+			maps[slot] = &(material.*Slots[slot].Map);
+		return maps;
+	}
+
+	std::array<const std::string*, MaterialTextureSlotCount> GetMaps(const MaterialComponent& component)
+	{
+		std::array<const std::string*, MaterialTextureSlotCount> maps{};
+		for (size_t slot = 0; slot < MaterialTextureSlotCount; slot++)
+			maps[slot] = &(component.*ComponentMaps[slot]);
+		return maps;
+	}
+
 	std::vector<std::string> GetTextures(const MaterialData& material)
 	{
 		std::vector<std::string> textures;
-		for (size_t slot = 0; slot < MaterialTextureSlotCount; slot++)
-			if (const auto& map = GetMap(material, static_cast<MaterialTextureSlot>(slot)); !map.empty())
+		for (const SlotInfo& slot : Slots)
+			if (const std::string& map = material.*slot.Map; !map.empty())
 				textures.push_back(map);
 		return textures;
+	}
+
+	std::string MakeFileName(std::string_view name)
+	{
+		std::string result;
+		for (const char c : name.substr(0, 64))
+			result += std::isalnum(static_cast<unsigned char>(c)) || c == ' ' || c == '.' || c == '_' || c == '-' ? c : '_';
+		const size_t first = result.find_first_not_of(". ");
+		if (first == std::string::npos)
+			return {};
+		result = result.substr(first, result.find_last_not_of(". ") - first + 1);
+		// Windows reserves these device names, with any extension: "CON.bmaterial" cannot be created there.
+		static constexpr const char* Reserved[] = { "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9" };
+		const std::string stem = FileSystem::ToLowerAscii(result.substr(0, result.find('.')));
+		if (std::any_of(std::begin(Reserved), std::end(Reserved), [&](const char* reserved) { return stem == FileSystem::ToLowerAscii(reserved); }))
+			result += '_';
+		return result;
 	}
 
 }

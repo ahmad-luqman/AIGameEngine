@@ -144,6 +144,11 @@ with tempfile.TemporaryDirectory(prefix="BasaltAssetPipeline-") as temp:
     pillars = [e["Components"]["Material"]["Material"] for e in saved["Entities"] if e["Name"] == "Pillar"]
     require({"UUID": material_meta["UUID"], "Path": "Assets/Materials/Tiles.bmaterial"} in pillars, "scene did not persist the renamed material: " + json.dumps(pillars))
     require({"UUID": model_meta["UUID"], "Path": "Assets/Models/TexturedCube.glb#material/0"} in pillars, "scene did not persist the imported material reference: " + json.dumps(pillars))
+    # The feature scene's imported-material Pillar resolves: material.create copies what it draws.
+    copied = command("material.create", {"path": "Assets/Materials/PillarCopy.bmaterial", "entity": 16})
+    require("warnings" not in copied, "copy of the imported material: " + json.dumps(copied))
+    copy_file = json.loads((project / "Assets/Materials/PillarCopy.bmaterial").read_text())
+    require(copy_file["AlbedoMap"] == {"UUID": model_meta["UUID"], "Path": "Assets/Models/TexturedCube.glb#image/0"} and copy_file["Roughness"] == 0.6, "copied imported material: " + json.dumps(copy_file))
     delete_batch = [
         {"command": "asset.write", "params": {"path": "Assets/DeleteProbe.lua", "content": "return {}"}},
         {"command": "asset.id", "params": {"path": "Assets/DeleteProbe.lua"}},

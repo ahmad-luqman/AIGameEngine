@@ -61,9 +61,11 @@ namespace Basalt {
 		uint32_t TexCoord = 0; // 0 or 1 (the importer rejects other sets): TEXCOORD_0 or TEXCOORD_1.
 	};
 
-	// Material imported with a mesh: glTF metallic-roughness plus clearcoat, transmission, normal/occlusion
+	// The full material model, shared by imported glTF materials, material files (.bmaterial) and inline Material
+	// overrides (MaterialAsset::FromComponent): glTF metallic-roughness plus clearcoat, transmission, normal/occlusion
 	// strengths and per-map KHR_texture_transform/texCoord. Texture fields are texture asset keys understood by
-	// AssetManager::GetTexture (file paths or "<mesh>#image/<index>" for embedded images).
+	// AssetManager::GetTexture (file paths, "<mesh>#image/<index>" for embedded images, or asset-uuid:// keys for
+	// material-file references whose UUID no longer resolves).
 	struct MaterialData
 	{
 		std::string Name;
@@ -209,8 +211,12 @@ namespace Basalt {
 		std::vector<uint32_t> Indices;
 		std::vector<Submesh> Submeshes;
 		std::vector<MeshData> Meshes;
+		// The model's materials, then the default material the importer (and built-in meshes) add for primitives without
+		// one: it is not the model's, so "<model>#material/<n>" and extraction stop before it (GetImportedMaterialCount).
 		std::vector<MaterialData> Materials;
 		std::vector<MeshNode> Nodes;
+		// Materials without the trailing default one.
+		size_t GetImportedMaterialCount() const { return Materials.empty() ? 0 : Materials.size() - 1; }
 		std::vector<MeshSkin> Skins;
 		std::vector<AnimationClip> Animations;
 		// Unsupported influence sets retain geometry for static MeshComponents, but cannot be animated.

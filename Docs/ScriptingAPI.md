@@ -195,8 +195,8 @@ reflection; refraction and volume absorption are not modeled. See [AssetPipeline
 
 `Material` names a material asset instead: a `.bmaterial` file or a model's imported material
 (`e:SetComponent("Material", { Material = "Assets/Materials/Brick.bmaterial" })`, or
-`"Assets/Models/Ship.glb#material/0"`). It replaces the inline fields while set (they remain the fallback when the
-asset cannot load); `""` returns to the inline fields. Other paths are rejected. See
+`"Assets/Models/Ship.glb#material/0"`). It replaces the inline fields while set (they remain the fallback while the
+asset has not loaded or when it cannot); `""` returns to the inline fields. Other paths are rejected. See
 [AssetPipeline.md](AssetPipeline.md#material-assets).
 
 Component names and fields are listed by `basalt component.types` (and in Docs/Components.md).
