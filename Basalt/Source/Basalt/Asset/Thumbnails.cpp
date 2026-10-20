@@ -26,8 +26,12 @@ namespace Basalt {
 
 	std::string MaterialPreviewKey(const MaterialComponent& m)
 	{
-		// JSON array boundaries keep path strings with separators from producing ambiguous keys.
-		return nlohmann::json::array({ m.AlbedoColor.r, m.AlbedoColor.g, m.AlbedoColor.b, m.AlbedoColor.a, m.Metallic, m.Roughness, m.EmissiveColor.r, m.EmissiveColor.g, m.EmissiveColor.b, m.EmissiveIntensity, m.AlbedoMap, m.NormalMap, m.MetallicRoughnessMap, m.OcclusionMap, m.EmissiveMap, m.Clearcoat, m.ClearcoatRoughness, m.Transmission, m.ClearcoatMap, m.ClearcoatRoughnessMap, m.ClearcoatNormalMap, m.TransmissionMap, m.UVOffset.x, m.UVOffset.y, m.UVScale.x, m.UVScale.y, m.UVRotation }).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+		// Grouped like MaterialComponent; Tests check that every serialized field changes the key.
+		const nlohmann::json key = nlohmann::json::array({ m.AlbedoColor.r, m.AlbedoColor.g, m.AlbedoColor.b, m.AlbedoColor.a, m.Metallic, m.Roughness, m.EmissiveColor.r, m.EmissiveColor.g, m.EmissiveColor.b, m.EmissiveIntensity,
+														   m.AlbedoMap, m.NormalMap, m.MetallicRoughnessMap, m.OcclusionMap, m.EmissiveMap,
+														   m.Clearcoat, m.ClearcoatRoughness, m.Transmission, m.ClearcoatMap, m.ClearcoatRoughnessMap, m.ClearcoatNormalMap, m.TransmissionMap,
+														   m.UVOffset.x, m.UVOffset.y, m.UVScale.x, m.UVScale.y, m.UVRotation });
+		return key.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 	}
 
 	namespace {
@@ -214,12 +218,14 @@ namespace Basalt {
 		if (source.Format == TextureFormat::BC7)
 		{
 			std::string error;
-			auto decoded = source.DecodeRGBA8(error);
+			auto decoded = source.DecodeRGBA8(0, error);
 			if (!decoded)
 			{
+				// A caller that takes the reason reports it with its own context.
 				if (outError)
 					*outError = error;
-				BS_CORE_ERROR("BC7 thumbnail: {}", error);
+				else
+					BS_CORE_ERROR("BC7 thumbnail '{}': {}", source.Key, error);
 				return {};
 			}
 			return MakeImageThumbnail(*decoded, maxSize, outError);

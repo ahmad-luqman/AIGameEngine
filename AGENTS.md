@@ -33,7 +33,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
 
 - **Asset identity.** Project-owned `AssetRegistry` reads `.meta` UUIDs. Scene/prefab disk saves encode declared
   `ComponentInfo::AssetFields` as UUID/path objects; runtime snapshots keep paths. `asset.move`/`asset.rename`
-  migrate legacy references and carry sidecars; loading never writes metadata. KTX2/BC7 imports use `asset.compress_texture` (separate output, content cache in `Cache/Textures`, originals retained). Basis ETC1S/UASTC transcode on workers; renderer uploads block mips. See `Docs/AssetPipeline.md`.
+  migrate legacy references and carry sidecars; loading never writes metadata. KTX2/BC7 imports use `asset.compress_texture` (separate output, content cache in `Cache/Textures`, originals retained). Basis ETC1S/UASTC transcode in the texture load job; renderer uploads block mips. See `Docs/AssetPipeline.md`.
 - **One data path.** Components are plain structs. `ComponentRegistry` gives each a strict JSON reader/
   writer that every consumer shares: scene and prefab files, Lua `GetComponent/SetComponent`, the
   automation commands and the editor inspector. Adding a component = one registry entry (see the

@@ -27,6 +27,10 @@ namespace Basalt {
 		static bool WriteBinaryFile(const std::filesystem::path& path, const void* data, size_t size, std::string& outError);
 
 		static bool Exists(const std::filesystem::path& path);
+		// Inspects root/relative one component at a time, so a linked ancestor directory counts too. Returns true and
+		// sets outEntry at the first symlink, or at the first entry that cannot be inspected (outError set; a
+		// missing entry is not an error). False when the whole path is free of links.
+		static bool FindSymlink(const std::filesystem::path& root, const std::filesystem::path& relative, std::filesystem::path& outEntry, std::error_code& outError);
 		static std::filesystem::path GetExecutableDirectory();
 		// The path as UTF-8 text, for messages (path::string() throws on Windows for names outside the ANSI code page).
 		static std::string PathToUtf8(const std::filesystem::path& path);

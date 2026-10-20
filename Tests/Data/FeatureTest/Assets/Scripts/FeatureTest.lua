@@ -176,7 +176,8 @@ local function TestEntities(self)
 	local persisted = Scene.FindEntityByName("MaterialExtensionData"):GetComponent("Material")
 	Check("Persisted material extensions", Near(persisted.Clearcoat,0.8,1e-6) and persisted.UVRotation==0.5)
 
-	ExpectError("Material transmission range", function() coated:SetComponent("Material", { Transmission = 2 }) end, "[0,1]")
+	ExpectError("Material transmission range", function() coated:SetComponent("Material", { Transmission = 2 }) end, "Transmission 2 must be in [0, 1]")
+	ExpectError("Material emissive intensity range", function() coated:SetComponent("Material", { EmissiveIntensity = -1 }) end, "EmissiveIntensity -1 must be finite and nonnegative")
 	coated:Destroy()
 
 	local rig = Scene.FindEntityByName("AnimationRig")

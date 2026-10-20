@@ -129,19 +129,25 @@ FetchContent_Declare(cgltf
 	GIT_SHALLOW TRUE
 	SOURCE_SUBDIR _BasaltNoCMake)
 
-# Basis bundles Zstd 1.4.9; use a current pinned decoder rather than that copy.
+# Basis bundles Zstd 1.4.9, which mishandles Tests/Data/Textures/ZstdRegression.ktx2 (a fuzz find), so the
+# transcoder links this pinned libzstd instead. It still compiles against Basis's bundled zstd.h, which is fine:
+# only the stable ZSTD_decompress/ZSTD_isError are called. KTX2 is untrusted input, so build the decoder alone,
+# without the legacy (v0.5-v0.7) frame decoders that Basis's copy also left out.
 FetchContent_Declare(zstd SYSTEM
- GIT_REPOSITORY https://github.com/facebook/zstd.git
- GIT_TAG v1.5.7
- GIT_SHALLOW TRUE
- SOURCE_SUBDIR build/cmake)
+	GIT_REPOSITORY https://github.com/facebook/zstd.git
+	GIT_TAG v1.5.7
+	GIT_SHALLOW TRUE
+	SOURCE_SUBDIR build/cmake)
 set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
 set(ZSTD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(ZSTD_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 set(ZSTD_BUILD_STATIC ON CACHE BOOL "" FORCE)
 set(ZSTD_MULTITHREAD_SUPPORT OFF CACHE BOOL "" FORCE)
+set(ZSTD_LEGACY_SUPPORT OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_COMPRESSION OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_DICTBUILDER OFF CACHE BOOL "" FORCE)
 
-# Portable BC7 encoder/decoder and Basis Universal KTX2 transcoder (ETC1S/UASTC + Zstd).
+# Portable BC7 encoder/decoder and Basis Universal KTX2 transcoder (ETC1S/UASTC; Zstd from the pin above).
 FetchContent_Declare(bc7enc SYSTEM
 	GIT_REPOSITORY https://github.com/richgel999/bc7enc_rdo.git
 	GIT_TAG b9438627eef73a1157e84201b6fa6eb2ffd6d9f0

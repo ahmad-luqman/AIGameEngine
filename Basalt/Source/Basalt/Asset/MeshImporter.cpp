@@ -7,10 +7,13 @@
 #include "Basalt/Core/Log.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Core/Profiler.h"
+#include "Basalt/Math/Math.h"
 #include "Basalt/Scene/Scene.h"
 
 #include <cgltf.h>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -121,9 +124,9 @@ namespace Basalt {
 				return nullptr;
 			}
 
-			const std::set<std::string_view> supported = { "KHR_texture_transform", "KHR_materials_emissive_strength", "KHR_materials_clearcoat", "KHR_materials_transmission", "KHR_mesh_quantization", "KHR_texture_basisu" };
+			static constexpr std::array<std::string_view, 6> Supported = { "KHR_texture_transform", "KHR_materials_emissive_strength", "KHR_materials_clearcoat", "KHR_materials_transmission", "KHR_mesh_quantization", "KHR_texture_basisu" };
 			for (cgltf_size i = 0; i < data->extensions_required_count; i++)
-				if (!supported.contains(data->extensions_required[i]))
+				if (std::find(Supported.begin(), Supported.end(), std::string_view(data->extensions_required[i])) == Supported.end())
 				{
 					outError = key + ": unsupported required extension '" + data->extensions_required[i] + "'";
 					return nullptr;
@@ -325,7 +328,10 @@ namespace Basalt {
 			result.NormalScale = material.normal_texture.texture ? material.normal_texture.scale : 1.0f;
 			result.OcclusionStrength = material.occlusion_texture.texture ? material.occlusion_texture.scale : 1.0f;
 			result.ClearcoatNormalScale = material.clearcoat.clearcoat_normal_texture.texture ? material.clearcoat.clearcoat_normal_texture.scale : 1.0f;
-			const cgltf_texture_view* views[] = { &material.pbr_metallic_roughness.base_color_texture, &material.normal_texture, &material.pbr_metallic_roughness.metallic_roughness_texture, &material.occlusion_texture, &material.emissive_texture, &material.clearcoat.clearcoat_texture, &material.clearcoat.clearcoat_roughness_texture, &material.clearcoat.clearcoat_normal_texture, &material.transmission.transmission_texture };
+			const std::string where = key + ": material '" + result.Name + "'";
+			// In MaterialTextureSlot order.
+			static constexpr std::array<const char*, MaterialTextureSlotCount> SlotNames = { "baseColorTexture", "normalTexture", "metallicRoughnessTexture", "occlusionTexture", "emissiveTexture", "clearcoatTexture", "clearcoatRoughnessTexture", "clearcoatNormalTexture", "transmissionTexture" };
+			const std::array<const cgltf_texture_view*, MaterialTextureSlotCount> views = { &material.pbr_metallic_roughness.base_color_texture, &material.normal_texture, &material.pbr_metallic_roughness.metallic_roughness_texture, &material.occlusion_texture, &material.emissive_texture, &material.clearcoat.clearcoat_texture, &material.clearcoat.clearcoat_roughness_texture, &material.clearcoat.clearcoat_normal_texture, &material.transmission.transmission_texture };
 			for (size_t slot = 0; slot < result.TextureTransforms.size(); slot++)
 			{
 				const auto& v = *views[slot];
@@ -335,7 +341,7 @@ namespace Basalt {
 				const int coordinate = v.has_transform && v.transform.has_texcoord ? v.transform.texcoord : v.texcoord;
 				if (coordinate < 0 || coordinate > 1)
 				{
-					outError = key + ": only TEXCOORD_0 and TEXCOORD_1 are supported";
+					outError = fmt::format("{} {}: TEXCOORD_{} is unsupported (only TEXCOORD_0 and TEXCOORD_1)", where, SlotNames[slot], coordinate);
 					return nullptr;
 				}
 				transform.TexCoord = static_cast<uint32_t>(coordinate);
@@ -345,23 +351,37 @@ namespace Basalt {
 					transform.Scale = { v.transform.scale[0], v.transform.scale[1] };
 					transform.Rotation = v.transform.rotation;
 				}
-				if (!std::isfinite(transform.Offset.x) || !std::isfinite(transform.Offset.y) || !std::isfinite(transform.Scale.x) || !std::isfinite(transform.Scale.y) || !std::isfinite(transform.Rotation))
+				if (!Math::IsFinite(transform.Offset) || !Math::IsFinite(transform.Scale) || !std::isfinite(transform.Rotation))
 				{
-					outError = key + ": non-finite texture transform";
+					outError = fmt::format("{} {}: non-finite KHR_texture_transform", where, SlotNames[slot]);
 					return nullptr;
 				}
 				if (v.texture->has_basisu && !v.texture->basisu_image)
 				{
-					outError = key + ": KHR_texture_basisu has no source image";
+					outError = fmt::format("{} {}: KHR_texture_basisu has no source image", where, SlotNames[slot]);
 					return nullptr;
 				}
 			}
 			const auto unit = [](float value) { return std::isfinite(value) && value >= 0 && value <= 1; };
-			if (!unit(result.Clearcoat) || !unit(result.ClearcoatRoughness) || !unit(result.Transmission) || !std::isfinite(result.EmissiveIntensity) || result.EmissiveIntensity < 0 || !std::isfinite(result.NormalScale) || !std::isfinite(result.ClearcoatNormalScale) || !unit(result.OcclusionStrength))
+			const std::pair<const char*, float> unitFactors[] = { { "clearcoatFactor", result.Clearcoat }, { "clearcoatRoughnessFactor", result.ClearcoatRoughness }, { "transmissionFactor", result.Transmission }, { "occlusionTexture.strength", result.OcclusionStrength } };
+			for (const auto& [name, value] : unitFactors)
+				if (!unit(value))
+				{
+					outError = fmt::format("{}: {} {} must be in [0, 1]", where, name, value);
+					return nullptr;
+				}
+			if (!std::isfinite(result.EmissiveIntensity) || result.EmissiveIntensity < 0)
 			{
-				outError = key + ": invalid material extension factor";
+				outError = fmt::format("{}: emissiveStrength {} must be finite and nonnegative", where, result.EmissiveIntensity);
 				return nullptr;
 			}
+			const std::pair<const char*, float> scales[] = { { "normalTexture.scale", result.NormalScale }, { "clearcoatNormalTexture.scale", result.ClearcoatNormalScale } };
+			for (const auto& [name, value] : scales)
+				if (!std::isfinite(value))
+				{
+					outError = fmt::format("{}: {} {} must be finite", where, name, value);
+					return nullptr;
+				}
 			result.Alpha = material.alpha_mode == cgltf_alpha_mode_mask ? AlphaMode::Mask : (material.alpha_mode == cgltf_alpha_mode_blend ? AlphaMode::Blend : AlphaMode::Opaque);
 			result.AlphaCutoff = material.alpha_cutoff;
 			result.DoubleSided = material.double_sided;
@@ -488,7 +508,8 @@ namespace Basalt {
 					for (const auto& transform : source->Materials[static_cast<size_t>(primitive.material - data->materials)].TextureTransforms)
 						if (transform.TexCoord == 1)
 						{
-							outError = key + ": material references missing or unreadable TEXCOORD_1";
+							const char* problem = !texCoords1 ? "has no TEXCOORD_1" : (texCoords1->count != positions->count ? "has a TEXCOORD_1 whose count differs from POSITION" : "has an unreadable TEXCOORD_1");
+							outError = fmt::format("{}: material '{}' uses TEXCOORD_1 but mesh '{}' {}", key, source->Materials[static_cast<size_t>(primitive.material - data->materials)].Name, meshData.Name, problem);
 							return nullptr;
 						}
 
@@ -531,7 +552,7 @@ namespace Basalt {
 				}
 
 				const uint32_t materialIndex = primitive.material ? static_cast<uint32_t>(primitive.material - data->materials) : defaultMaterial;
-				const bool reorder = source->Materials[materialIndex].Alpha != AlphaMode::Blend && source->Materials[materialIndex].Transmission == 0;
+				const bool reorder = !source->Materials[materialIndex].IsBlended();
 				const bool optimized = MeshOptimizer::Optimize(vertices, indices, reorder);
 				if (!optimized)
 				{

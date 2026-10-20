@@ -86,18 +86,6 @@ namespace Basalt {
 			}
 		}
 
-		uint32_t MipCount(uint32_t width, uint32_t height)
-		{
-			uint32_t count = 1;
-			uint32_t size = std::max(width, height);
-			while (size > 1)
-			{
-				size /= 2;
-				count++;
-			}
-			return count;
-		}
-
 	}
 
 	RenderResources::RenderResources(nvrhi::IDevice* device)
@@ -126,13 +114,15 @@ namespace Basalt {
 				BS_CORE_ERROR("Texture '{}': invalid BC7 mip layout", debugName);
 				return nullptr;
 			}
-			const auto format = srgb ? nvrhi::Format::BC7_UNORM_SRGB : nvrhi::Format::BC7_UNORM;
+			nvrhi::Format format = srgb ? nvrhi::Format::BC7_UNORM_SRGB : nvrhi::Format::BC7_UNORM;
 			const auto required = nvrhi::FormatSupport::Texture | nvrhi::FormatSupport::ShaderSample;
 			const bool supported = (m_Device->queryFormatSupport(format) & required) == required;
-			if (!supported && !m_ReportedBC7Fallback)
+			if (!supported)
 			{
-				BS_CORE_WARN("BC7 sampling unavailable; textures use decoded RGBA8 mip chains");
+				if (!m_ReportedBC7Fallback)
+					BS_CORE_WARN("BC7 sampling unavailable; textures use decoded RGBA8 mip chains (4x the memory)");
 				m_ReportedBC7Fallback = true;
+				format = srgb ? nvrhi::Format::SRGBA8_UNORM : nvrhi::Format::RGBA8_UNORM;
 			}
 			if (source.SRGB != srgb)
 				BS_CORE_WARN("Texture '{}': authored {} but used as {}; recompress with the matching srgb setting for correct mip filtering", debugName, source.SRGB ? "sRGB" : "linear", srgb ? "sRGB" : "linear");
@@ -140,7 +130,7 @@ namespace Basalt {
 			desc.width = source.Width;
 			desc.height = source.Height;
 			desc.mipLevels = static_cast<uint32_t>(source.MipOffsets.size());
-			desc.format = supported ? format : (srgb ? nvrhi::Format::SRGBA8_UNORM : nvrhi::Format::RGBA8_UNORM);
+			desc.format = format;
 			desc.debugName = debugName;
 			desc.initialState = nvrhi::ResourceStates::ShaderResource;
 			desc.keepInitialState = true;
@@ -150,18 +140,19 @@ namespace Basalt {
 			for (uint32_t mip = 0; mip < desc.mipLevels; mip++)
 			{
 				if (supported)
-					commandList->writeTexture(texture, 0, mip, source.Pixels.data() + source.MipOffsets[mip], size_t((std::max(1u, source.Width >> mip) + 3) / 4) * 16);
-				else
 				{
-					std::string error;
-					const auto decoded = source.DecodeRGBA8(error, mip);
-					if (!decoded)
-					{
-						BS_CORE_ERROR("BC7 fallback '{}': {}", debugName, error);
-						return nullptr;
-					}
-					commandList->writeTexture(texture, 0, mip, decoded->Pixels.data(), size_t(decoded->Width) * 4);
+					const size_t rowPitch = size_t((std::max(1u, source.Width >> mip) + 3) / 4) * 16; // one row of 4x4 blocks
+					commandList->writeTexture(texture, 0, mip, source.Pixels.data() + source.MipOffsets[mip], rowPitch);
+					continue;
 				}
+				std::string error;
+				const auto decoded = source.DecodeRGBA8(mip, error);
+				if (!decoded)
+				{
+					BS_CORE_ERROR("BC7 fallback '{}': {}", debugName, error);
+					return nullptr;
+				}
+				commandList->writeTexture(texture, 0, mip, decoded->Pixels.data(), size_t(decoded->Width) * 4);
 			}
 			return texture;
 		}
@@ -171,7 +162,7 @@ namespace Basalt {
 		nvrhi::TextureDesc desc;
 		desc.width = source.Width;
 		desc.height = source.Height;
-		desc.mipLevels = isFloat ? 1 : MipCount(source.Width, source.Height);
+		desc.mipLevels = isFloat ? 1 : TextureSource::MipCount(source.Width, source.Height);
 		desc.format = isFloat ? nvrhi::Format::RGBA16_FLOAT : (srgb ? nvrhi::Format::SRGBA8_UNORM : nvrhi::Format::RGBA8_UNORM);
 		desc.debugName = debugName;
 		desc.initialState = nvrhi::ResourceStates::ShaderResource;

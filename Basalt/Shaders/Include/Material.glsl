@@ -28,6 +28,7 @@ struct Surface
 	float Transmission;
 };
 
+// UV of a MATERIAL_SLOT_* map: its affine transform applied to UV0, or to UV1 when the first row's w is set.
 vec2 MaterialUV(MaterialData material, int slot, vec2 uv, vec2 uv1)
 {
 	vec4 row = material.UVRows[slot * 2];
@@ -35,6 +36,20 @@ vec2 MaterialUV(MaterialData material, int slot, vec2 uv, vec2 uv1)
 	return vec2(dot(row.xyz, p), dot(material.UVRows[slot * 2 + 1].xyz, p));
 }
 
+// True when a map reads different UVs than the vertex tangents were built for (UV1 or a non-identity transform).
+// The identity rows also have w = 0, so UV1 counts as transformed.
+bool HasUVTransform(MaterialData material, int slot)
+{
+	return material.UVRows[slot * 2] != vec4(1, 0, 0, 0) || material.UVRows[slot * 2 + 1] != vec4(0, 1, 0, 0);
+}
+
+vec4 SampleMap(texture2D map, MaterialData material, int slot, vec2 uv, vec2 uv1)
+{
+	return texture(sampler2D(map, u_MaterialSampler), MaterialUV(material, slot, uv, uv1));
+}
+
+// transformed: the map's UVs differ from those the vertex tangent was built for, so the tangent frame is derived
+// from screen-space derivatives of uv and position instead.
 vec3 MapNormal(vec3 N, vec4 tangent, vec3 sampled, vec2 uv, vec3 position, float scale, bool transformed)
 {
 	vec3 T = normalize(tangent.xyz - N * dot(N, tangent.xyz));
@@ -48,6 +63,8 @@ vec3 MapNormal(vec3 N, vec4 tangent, vec3 sampled, vec2 uv, vec3 position, float
 		{
 			T = normalize((dx * ty.y - dy * tx.y) / determinant);
 			T = normalize(T - N * dot(N, T));
+			// The second solution is dP/dv. glTF UVs grow downward, so the map's +Y (image up) is -dP/dv: keep
+			// cross(N, T) when it already points against dP/dv, as MeshSource's tangent.w does.
 			B = cross(N, T) * (dot(cross(N, T), (dy * tx.x - dx * ty.x) / determinant) < 0.0 ? 1.0 : -1.0);
 		}
 	}
@@ -61,7 +78,7 @@ float MaterialAlpha(MaterialData material, vec2 uv, vec2 uv1)
 {
 	float alpha = material.AlbedoColor.a;
 	if ((uint(material.Params.w) & MATERIAL_HAS_ALBEDO_MAP) != 0u)
-		alpha *= texture(sampler2D(u_AlbedoMap, u_MaterialSampler), MaterialUV(material, 0, uv, uv1)).a;
+		alpha *= SampleMap(u_AlbedoMap, material, MATERIAL_SLOT_ALBEDO, uv, uv1).a;
 	return alpha;
 }
 
@@ -72,18 +89,17 @@ Surface EvaluateSurface(MaterialData material, vec3 normal, vec4 tangent, vec2 u
 
 	vec4 albedo = material.AlbedoColor;
 	if ((flags & MATERIAL_HAS_ALBEDO_MAP) != 0u)
-		albedo *= texture(sampler2D(u_AlbedoMap, u_MaterialSampler), MaterialUV(material, 0, uv, uv1));
+		albedo *= SampleMap(u_AlbedoMap, material, MATERIAL_SLOT_ALBEDO, uv, uv1);
 	surface.Albedo = albedo.rgb;
 	surface.Alpha = albedo.a;
 
-	vec3 N = normalize(normal);
-	if (!frontFacing)
-		N = -N;
+	vec3 geometricNormal = frontFacing ? normalize(normal) : -normalize(normal);
+	vec3 N = geometricNormal;
 	if ((flags & MATERIAL_HAS_NORMAL_MAP) != 0u)
 	{
-		vec2 normalUV = MaterialUV(material, 1, uv, uv1);
-		bool transformed = material.UVRows[2] != vec4(1,0,0,0) || material.UVRows[3] != vec4(0,1,0,0);
-		N = MapNormal(N, tangent, texture(sampler2D(u_NormalMap, u_MaterialSampler), normalUV).xyz, normalUV, position, material.NormalParams.x, transformed);
+		vec2 normalUV = MaterialUV(material, MATERIAL_SLOT_NORMAL, uv, uv1);
+		vec3 sampled = texture(sampler2D(u_NormalMap, u_MaterialSampler), normalUV).xyz;
+		N = MapNormal(N, tangent, sampled, normalUV, position, material.NormalParams.x, HasUVTransform(material, MATERIAL_SLOT_NORMAL));
 	}
 	surface.Normal = N;
 
@@ -91,7 +107,7 @@ Surface EvaluateSurface(MaterialData material, vec3 normal, vec4 tangent, vec2 u
 	surface.Roughness = material.Params.y;
 	if ((flags & MATERIAL_HAS_MR_MAP) != 0u)
 	{
-		vec4 mr = texture(sampler2D(u_MetallicRoughnessMap, u_MaterialSampler), MaterialUV(material, 2, uv, uv1));
+		vec4 mr = SampleMap(u_MetallicRoughnessMap, material, MATERIAL_SLOT_METALLIC_ROUGHNESS, uv, uv1);
 		surface.Roughness *= mr.g;
 		surface.Metallic *= mr.b;
 	}
@@ -100,24 +116,30 @@ Surface EvaluateSurface(MaterialData material, vec3 normal, vec4 tangent, vec2 u
 
 	surface.Occlusion = 1.0;
 	if ((flags & MATERIAL_HAS_OCCLUSION_MAP) != 0u)
-		surface.Occlusion = mix(1.0, texture(sampler2D(u_OcclusionMap, u_MaterialSampler), MaterialUV(material, 3, uv, uv1)).r, material.NormalParams.y);
+		surface.Occlusion = mix(1.0, SampleMap(u_OcclusionMap, material, MATERIAL_SLOT_OCCLUSION, uv, uv1).r, material.NormalParams.y);
 
 	surface.Emissive = material.Emissive.rgb;
 	if ((flags & MATERIAL_HAS_EMISSIVE_MAP) != 0u)
-		surface.Emissive *= texture(sampler2D(u_EmissiveMap, u_MaterialSampler), MaterialUV(material, 4, uv, uv1)).rgb;
+		surface.Emissive *= SampleMap(u_EmissiveMap, material, MATERIAL_SLOT_EMISSIVE, uv, uv1).rgb;
+
 	surface.Clearcoat = material.Extensions.x;
+	if ((flags & MATERIAL_HAS_CLEARCOAT_MAP) != 0u)
+		surface.Clearcoat *= SampleMap(u_ClearcoatMap, material, MATERIAL_SLOT_CLEARCOAT, uv, uv1).r;
 	surface.ClearcoatRoughness = material.Extensions.y;
-	surface.Transmission = material.Extensions.z;
-	if ((flags & MATERIAL_HAS_CLEARCOAT_MAP) != 0u) surface.Clearcoat *= texture(sampler2D(u_ClearcoatMap, u_MaterialSampler), MaterialUV(material, 5, uv, uv1)).r;
-	if ((flags & MATERIAL_HAS_CLEARCOAT_ROUGHNESS_MAP) != 0u) surface.ClearcoatRoughness *= texture(sampler2D(u_ClearcoatRoughnessMap, u_MaterialSampler), MaterialUV(material, 6, uv, uv1)).g;
+	if ((flags & MATERIAL_HAS_CLEARCOAT_ROUGHNESS_MAP) != 0u)
+		surface.ClearcoatRoughness *= SampleMap(u_ClearcoatRoughnessMap, material, MATERIAL_SLOT_CLEARCOAT_ROUGHNESS, uv, uv1).g;
 	surface.ClearcoatRoughness = clamp(surface.ClearcoatRoughness, 0.045, 1.0);
-	surface.ClearcoatNormal = frontFacing ? normalize(normal) : -normalize(normal);
+	surface.ClearcoatNormal = geometricNormal;
 	if ((flags & MATERIAL_HAS_CLEARCOAT_NORMAL_MAP) != 0u)
 	{
-		vec2 coatUV = MaterialUV(material, 7, uv, uv1);
-		surface.ClearcoatNormal = MapNormal(surface.ClearcoatNormal, tangent, texture(sampler2D(u_ClearcoatNormalMap, u_MaterialSampler), coatUV).xyz, coatUV, position, material.NormalParams.z, true);
+		vec2 coatUV = MaterialUV(material, MATERIAL_SLOT_CLEARCOAT_NORMAL, uv, uv1);
+		vec3 sampled = texture(sampler2D(u_ClearcoatNormalMap, u_MaterialSampler), coatUV).xyz;
+		surface.ClearcoatNormal = MapNormal(geometricNormal, tangent, sampled, coatUV, position, material.NormalParams.z, HasUVTransform(material, MATERIAL_SLOT_CLEARCOAT_NORMAL));
 	}
-	if ((flags & MATERIAL_HAS_TRANSMISSION_MAP) != 0u) surface.Transmission *= texture(sampler2D(u_TransmissionMap, u_MaterialSampler), MaterialUV(material, 8, uv, uv1)).r;
+
+	surface.Transmission = material.Extensions.z;
+	if ((flags & MATERIAL_HAS_TRANSMISSION_MAP) != 0u)
+		surface.Transmission *= SampleMap(u_TransmissionMap, material, MATERIAL_SLOT_TRANSMISSION, uv, uv1).r;
 	surface.Transmission *= 1.0 - surface.Metallic;
 	return surface;
 }

@@ -152,7 +152,7 @@ TEST_CASE("BC7 mip upload and material extensions render with validation")
 	TextureSource source;
 	source.Width = 16;
 	source.Height = 16;
-	source.Pixels.resize(16 * 16 * 4);
+	source.Pixels.resize(size_t{ 16 } * 16 * 4);
 	for (size_t i = 0; i < source.Pixels.size(); i += 4)
 	{
 		source.Pixels[i] = 190;
@@ -162,8 +162,8 @@ TEST_CASE("BC7 mip upload and material extensions render with validation")
 	}
 	const auto png = temp.GetPath() / "color.png", ktx = temp.GetPath() / "color.ktx2";
 	REQUIRE(WritePng(png, source.Pixels, source.Width, source.Height, error));
-	bool hit = false;
-	REQUIRE(TextureCompression::Import(png, ktx, temp.GetPath() / "Cache", true, hit, error));
+	TextureCompression::ImportResult imported;
+	REQUIRE(TextureCompression::Import(png, ktx, temp.GetPath() / "Cache", true, imported, error));
 	PreviewRenderer previews(graphics->GetDevice());
 	REQUIRE(previews.Initialize());
 	MaterialComponent material;
@@ -241,7 +241,7 @@ TEST_CASE("Imported UV1 and texture rotation preserve normal orientation and alp
 	const auto path = BasaltTest::WriteSphereGltf(root, false, plane);
 	const auto text = FileSystem::ReadTextFile(path);
 	REQUIRE(text);
-	auto model = nlohmann::json::parse(*text);
+	auto model = nlohmann::json::parse(text.value_or("{}"));
 	TextureSource normal;
 	normal.Width = 2;
 	normal.Height = 2;
@@ -259,10 +259,41 @@ TEST_CASE("Imported UV1 and texture rotation preserve normal orientation and alp
 	model["materials"][0]["normalTexture"]["texCoord"] = 1;
 	const auto uv1 = render();
 	CHECK(Difference(At(base, 64, 64), At(uv1, 64, 64)) < 5);
+	// The same along the tangent (red), so a flipped derived T is caught as well as a flipped B.
+	normal.Pixels = { 200, 128, 230, 255, 200, 128, 230, 255, 200, 128, 230, 255, 200, 128, 230, 255 };
+	REQUIRE(WritePng(root / "normal.png", normal.Pixels, 2, 2, error));
+	const auto tiltedUV1 = render();
+	model["materials"][0]["normalTexture"]["texCoord"] = 0;
+	const auto tiltedBase = render();
+	CHECK(Difference(At(tiltedBase, 64, 64), At(tiltedUV1, 64, 64)) < 5);
+	CHECK(Difference(At(tiltedBase, 64, 64), At(base, 64, 64)) > 10);
+	normal.Pixels = { 128, 200, 230, 255, 128, 200, 230, 255, 128, 200, 230, 255, 128, 200, 230, 255 };
+	REQUIRE(WritePng(root / "normal.png", normal.Pixels, 2, 2, error));
+	// Clearcoat normals: no map and a flat map agree; a tilted map changes the coat, identically through the vertex
+	// frame (texCoord 0) and the derived frame (texCoord 1 holding the same UVs).
 	model["materials"][0].erase("normalTexture");
-	model["materials"][0]["extensions"]["KHR_materials_clearcoat"] = { { "clearcoatFactor", 1 }, { "clearcoatRoughnessFactor", 0.4 }, { "clearcoatNormalTexture", { { "index", 0 } } } };
+	model["materials"][0]["extensions"]["KHR_materials_clearcoat"] = { { "clearcoatFactor", 1 }, { "clearcoatRoughnessFactor", 0.2 } };
+	const auto smoothCoat = render();
+	TextureSource flat;
+	flat.Width = flat.Height = 1;
+	flat.Pixels = { 128, 128, 255, 255 };
+	REQUIRE(WritePng(root / "flat.png", flat.Pixels, 1, 1, error));
+	model["images"].push_back({ { "uri", "flat.png" } });
+	model["textures"].push_back({ { "source", 1 } });
+	model["materials"][0]["extensions"]["KHR_materials_clearcoat"]["clearcoatNormalTexture"] = { { "index", 1 } };
+	CHECK(Difference(At(render(), 64, 64), At(smoothCoat, 64, 64)) < 4);
+	model["materials"][0]["extensions"]["KHR_materials_clearcoat"]["clearcoatNormalTexture"] = { { "index", 0 } };
 	const auto coat = render();
-	CHECK(Difference(At(base, 64, 64), At(coat, 64, 64)) > 2);
+	size_t coatChanged = 0;
+	for (size_t i = 0; i < coat.Pixels.size(); i++)
+		if (std::abs(int(coat.Pixels[i]) - int(smoothCoat.Pixels[i])) > 3)
+			coatChanged++;
+	CHECK(coatChanged > 100);
+	model["materials"][0]["extensions"]["KHR_materials_clearcoat"]["clearcoatNormalTexture"]["texCoord"] = 1;
+	const auto coatUV1 = render();
+	CHECK(Difference(At(coat, 64, 64), At(coatUV1, 64, 64)) < 5);
+	model["images"].erase(1);
+	model["textures"].erase(1);
 	// OPAQUE and surviving MASK coverage ignore base-color alpha even in the transmission pass.
 	model["materials"][0].erase("extensions");
 	model["materials"][0]["extensions"]["KHR_materials_transmission"] = { { "transmissionFactor", 0.8 } };
@@ -273,10 +304,18 @@ TEST_CASE("Imported UV1 and texture rotation preserve normal orientation and alp
 	model["materials"][0]["alphaMode"] = "MASK";
 	model["materials"][0]["alphaCutoff"] = 0.2;
 	CHECK(bool(render().Pixels == opaque.Pixels));
+	// Below the cutoff, MASK discards the surface even though transmission sends it to the blended pass.
+	model["materials"][0]["alphaCutoff"] = 0.6;
+	const auto masked = render();
+	CHECK(bool(masked.Pixels != opaque.Pixels));
+	model["materials"][0]["pbrMetallicRoughness"]["baseColorFactor"][3] = 0.0;
+	CHECK(bool(render().Pixels == masked.Pixels));
+	model["materials"][0]["pbrMetallicRoughness"]["baseColorFactor"][3] = 0.5;
+	model["materials"][0]["alphaCutoff"] = 0.2;
 	model["materials"][0]["alphaMode"] = "BLEND";
 	CHECK(bool(render().Pixels != opaque.Pixels));
 	// A distinct second UV set reaches the seventh vertex attribute and the fragment selector.
-	std::vector<uint8_t> split(16 * 16 * 4, 255);
+	std::vector<uint8_t> split(size_t{ 16 } * 16 * 4, 255);
 	for (size_t pixel = 0; pixel < 256; pixel++)
 	{
 		split[pixel * 4] = (pixel % 16 < 8) ? 255 : 0;

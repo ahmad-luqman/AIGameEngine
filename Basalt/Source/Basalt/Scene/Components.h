@@ -376,7 +376,9 @@ namespace Basalt {
 		glm::vec3 Wind = { 0.0f, 0.0f, 0.0f };
 	};
 
-	// PBR material with clearcoat/transmission. Overrides imported factors, maps and per-map UV transforms.
+	// PBR material with clearcoat/transmission. Replaces the whole imported material, including its alpha mode,
+	// sidedness, normal/occlusion strengths (1) and UV sets: the one UV transform applies to every map on UV0.
+	// Blends when AlbedoColor.a < 1 (alpha is then coverage) or Transmission > 0 (full coverage, see-through).
 	// Texture paths are project-relative; empty means "no texture".
 	struct MaterialComponent
 	{

@@ -394,6 +394,17 @@ TEST_SUITE("AssetPipeline")
 		const auto original = Primitives::CreateSphere(32, 16);
 		for (size_t i = 0; i < original->Indices.size(); ++i)
 			CHECK(blended->Vertices[blended->Indices[i]].Position == original->Vertices[original->Indices[i]].Position);
+		// Transmission draws in the blended pass too, so it also keeps its triangle order and full detail.
+		const auto transmissivePath = BasaltTest::WriteSphereGltf(directory.GetPath() / "Transmissive");
+		auto json = nlohmann::json::parse(*FileSystem::ReadTextFile(transmissivePath));
+		json["materials"][0]["extensions"]["KHR_materials_transmission"] = { { "transmissionFactor", 0.5 } };
+		REQUIRE(FileSystem::WriteTextFile(transmissivePath, json.dump()));
+		auto transmissive = MeshImporter::LoadGltf(transmissivePath, "Transmissive.gltf", error);
+		REQUIRE_MESSAGE(transmissive, error);
+		REQUIRE(transmissive->Materials[0].IsBlended());
+		CHECK(transmissive->Submeshes[0].LODs.empty());
+		for (size_t i = 0; i < original->Indices.size(); ++i)
+			CHECK(transmissive->Vertices[transmissive->Indices[i]].Position == original->Vertices[original->Indices[i]].Position);
 		auto skinned = MeshImporter::LoadGltf(std::filesystem::path(BASALT_TEST_DATA_DIR) / "Animation/TwoJoint.gltf", "TwoJoint.gltf", error);
 		REQUIRE_MESSAGE(skinned, error);
 		for (const auto& submesh : skinned->Submeshes)

@@ -21,9 +21,35 @@ with tempfile.TemporaryDirectory(prefix="BasaltAssetPipeline-") as temp:
         result = subprocess.run([str(cli), "--project", str(project), name, json.dumps(params)], capture_output=True, text=True, timeout=60)
         require(result.returncode == 0, result.stdout + result.stderr)
         return json.loads(result.stdout)["result"]
+    def batch_results(commands):
+        path = pathlib.Path(temp) / "Steps.json"
+        path.write_text(json.dumps(commands))
+        result = subprocess.run([str(cli), "--project", str(project), "--no-save", "batch", str(path)], capture_output=True, text=True, timeout=120)
+        require(result.returncode == 0, result.stdout + result.stderr)
+        return [step["result"] for step in json.loads(result.stdout)]
     source_bytes = (project / compression["path"]).read_bytes()
-    require(command("asset.compress_texture", compression)["cacheHit"] is False, "first compression unexpectedly cached")
-    require(command("asset.compress_texture", compression)["cacheHit"] is True, "repeat compression missed cache")
+    first = command("asset.compress_texture", compression)
+    require(first["cacheHit"] is False and first["overwrote"] is False and "warnings" not in first, "first compression: " + json.dumps(first))
+    repeat = command("asset.compress_texture", compression)
+    require(repeat["cacheHit"] is True and repeat["overwrote"] is True, "repeat compression: " + json.dumps(repeat))
+    # Recompressing a different source over a texture the session holds reloads it, so the new pixels are served.
+    held = batch_results([
+        {"command": "asset.preload", "params": {"paths": [compression["output"]], "wait": True}},
+        {"command": "memory.stats"},
+        {"command": "asset.compress_texture", "params": dict(compression, path="Assets/Textures/UIPanel.png")},
+        {"command": "asset.preload", "params": {"paths": [compression["output"]], "wait": True}},
+        {"command": "memory.stats"},
+    ])
+    require(held[2]["reloaded"] == [compression["output"]], "held texture was not reloaded: " + json.dumps(held[2]))
+    require(held[3][0]["status"] == "ready" and held[4]["assets"]["bytes"] < held[1]["assets"]["bytes"], "recompressed 32x32 texture was not served: " + json.dumps(held))
+    command("asset.compress_texture", compression)
+    # A new output next to an orphaned .meta adopts its UUID, and says so.
+    command("asset.id", {"path": compression["output"]})
+    orphan_meta = (project / (compression["output"] + ".meta")).read_text()
+    (project / compression["output"]).unlink()
+    adopted = command("asset.compress_texture", compression)
+    require(adopted["overwrote"] is False and any("orphan metadata" in w for w in adopted.get("warnings", [])), "orphan adoption not reported: " + json.dumps(adopted))
+    require((project / (compression["output"] + ".meta")).read_text() == orphan_meta, "adoption changed the output UUID")
     require((project / compression["path"]).read_bytes() == source_bytes, "compression changed source")
     require(command("asset.preload", {"paths": [compression["output"]], "wait": True})[0]["status"] == "ready", "KTX2 did not load")
     for invalid in [dict(compression, output="../escape.ktx2"), dict(compression, output="Assets/wrong.png"), dict(compression, srgb="true")]:
@@ -49,9 +75,11 @@ with tempfile.TemporaryDirectory(prefix="BasaltAssetPipeline-") as temp:
         leaf.symlink_to(outside / "untouched.ktx2")
         reject(dict(compression, output="Assets/Alias.ktx2"), "symlinks")
         leaf.unlink()
+        # The cache is optional: a linked cache folder is skipped with a warning instead of written through.
         shutil.rmtree(project / "Cache/Textures")
         (project / "Cache/Textures").symlink_to(outside, target_is_directory=True)
-        reject(compression, "Cache/Textures")
+        uncached = command("asset.compress_texture", compression)
+        require(uncached["cacheHit"] is False and any("without the cache" in w and "symlink" in w for w in uncached.get("warnings", [])), "linked cache not reported: " + json.dumps(uncached))
         (project / "Cache/Textures").unlink()
         require(not list(outside.iterdir()), "invalid path request wrote outside project")
     original = "Assets/Textures/Checker.png"

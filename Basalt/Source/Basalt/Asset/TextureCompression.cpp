@@ -6,7 +6,7 @@
 
 #include <basisu_transcoder.h>
 #include <bc7enc.h>
-#include <bc7decomp.h>
+#include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
 #include <array>
@@ -19,6 +19,14 @@ namespace Basalt {
 	namespace {
 		constexpr std::array<uint8_t, 12> Identifier = { 0xAB, 'K', 'T', 'X', ' ', '2', '0', 0xBB, 13, 10, 26, 10 };
 		constexpr size_t MaxPayload = size_t{ 256 } * 1024 * 1024;
+		// Khronos vkFormat and data format descriptor (DFD) values for BC7.
+		constexpr uint32_t VkFormatBC7Unorm = 145;
+		constexpr uint32_t VkFormatBC7Srgb = 146;
+		constexpr uint8_t KhrDfModelBC7 = 134;
+		constexpr uint8_t KhrDfTransferLinear = 1;
+		constexpr uint8_t KhrDfTransferSrgb = 2;
+		constexpr uint8_t BC7SampleBitLength = 127; // 128-bit block, stored minus one
+		constexpr uint32_t BC7DfdSize = 44;
 		uint32_t Read32(const uint8_t* p)
 		{
 			return uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
@@ -31,10 +39,6 @@ namespace Basalt {
 		{
 			for (size_t i = 0; i < count; i++)
 				out[offset + i] = static_cast<uint8_t>(value >> (8 * i));
-		}
-		size_t LevelSize(uint32_t w, uint32_t h)
-		{
-			return size_t((w + 3) / 4) * ((h + 3) / 4) * 16;
 		}
 		void Initialize()
 		{
@@ -50,23 +54,23 @@ namespace Basalt {
 
 	Ref<TextureSource> TextureCompression::LoadKTX2(const uint8_t* data, size_t size, std::string& outError)
 	{
-		auto fail = [&](std::string reason) -> Ref<TextureSource> { outError = "KTX2: " + std::move(reason); return nullptr; };
+		auto fail = [&](const std::string& reason) -> Ref<TextureSource> {
+			outError = "KTX2: " + reason;
+			return nullptr;
+		};
 		if (!IsKTX2(data, size) || size < 104)
 			return fail("invalid identifier or truncated header");
 		if (size > MaxPayload)
 			return fail("file exceeds 256 MiB");
 		const uint32_t format = Read32(data + 12), width = Read32(data + 20), height = Read32(data + 24), levels = Read32(data + 40);
-		if (!width || !height || width > 16384 || height > 16384)
-			return fail("dimensions must be 1..16384");
+		if (!width || !height || width > TextureSource::MaxDimension || height > TextureSource::MaxDimension)
+			return fail(fmt::format("dimensions {}x{} must be 1..{}", width, height, TextureSource::MaxDimension));
 		if (Read32(data + 28) || Read32(data + 32) || Read32(data + 36) != 1)
 			return fail("only 2D textures are supported (no arrays, cubemaps or volumes)");
-		if (!levels || levels > 15 || 80 + size_t(levels) * 24 > size)
+		if (!levels || levels > TextureSource::MaxMipLevels || 80 + size_t(levels) * 24 > size)
 			return fail("invalid or truncated mip index");
-		uint32_t maxLevels = 1;
-		for (uint32_t n = std::max(width, height); n > 1; n /= 2)
-			maxLevels++;
-		if (levels > maxLevels)
-			return fail("too many mip levels for dimensions");
+		if (levels > TextureSource::MipCount(width, height))
+			return fail(fmt::format("{} mip levels exceed the full chain of a {}x{} texture", levels, width, height));
 		const uint32_t dfd = Read32(data + 48), dfdSize = Read32(data + 52);
 		if (dfd < 80 + levels * 24 || dfdSize < 28 || dfd > size || dfdSize > size - dfd || Read32(data + dfd) != dfdSize)
 			return fail("invalid data format descriptor range or size");
@@ -82,8 +86,8 @@ namespace Basalt {
 			const auto* index = data + 80 + size_t(mip) * 24;
 			const uint64_t start = Read64(index), length = Read64(index + 8), expanded = Read64(index + 16);
 			if (start > size || length > size - start || expanded > MaxPayload)
-				return fail("mip " + std::to_string(mip) + " has an invalid range or expansion size");
-			totalBytes += LevelSize(std::max(1u, width >> mip), std::max(1u, height >> mip));
+				return fail(fmt::format("mip {} has an invalid range or expansion size", mip));
+			totalBytes += TextureSource::BC7LevelSize(width, height, mip);
 			if (totalBytes > MaxPayload)
 				return fail("BC7 mip chain exceeds 256 MiB");
 		}
@@ -105,25 +109,25 @@ namespace Basalt {
 			const std::string_view key(reinterpret_cast<const char*>(data + pos), static_cast<size_t>(zero - (data + pos)));
 			const std::string_view value(reinterpret_cast<const char*>(zero + 1), length - static_cast<size_t>(zero + 1 - (data + pos)));
 			if ((key == "KTXorientation" && value != "rd" && value != std::string_view("rd\0", 3)) || (key == "KTXswizzle" && value != "rgba" && value != std::string_view("rgba\0", 5)))
-				return fail(std::string(key) + " is unsupported (expected rd / rgba)");
+				return fail(fmt::format("{} '{}' is unsupported (expected rd / rgba)", key, std::string(value.substr(0, value.find('\0')))));
 			pos += (length + 3u) & ~size_t(3);
 			if (pos > end)
 				return fail("truncated metadata padding");
 		}
 		Initialize();
 		basist::ktx2_transcoder transcoder;
-		const bool native = format == 145 || format == 146;
+		const bool native = format == VkFormatBC7Unorm || format == VkFormatBC7Srgb;
 		if (native)
 		{
 			if (Read32(data + 44) != 0)
 				return fail("supercompressed native BC7 is unsupported; use uncompressed BC7 or Basis KTX2");
-			if (dfdSize != 44 || data[dfd + 12] != 134 || data[dfd + 14] != (format == 146 ? 2 : 1) || Read32(data + 16) != 1)
+			if (dfdSize != BC7DfdSize || data[dfd + 12] != KhrDfModelBC7 || data[dfd + 14] != (format == VkFormatBC7Srgb ? KhrDfTransferSrgb : KhrDfTransferLinear) || Read32(data + 16) != 1)
 				return fail("native BC7 data format descriptor does not match its format");
 		}
 		else
 		{
 			if (format != 0)
-				return fail("unsupported vkFormat " + std::to_string(format));
+				return fail(fmt::format("unsupported vkFormat {} (expected BC7 or Basis)", format));
 			if (!transcoder.init(data, static_cast<uint32_t>(size)))
 				return fail("Basis header or descriptors are invalid");
 			if (!transcoder.is_ldr())
@@ -136,25 +140,23 @@ namespace Basalt {
 		texture->Width = width;
 		texture->Height = height;
 		texture->Format = TextureFormat::BC7;
-		texture->SRGB = native ? format == 146 : data[dfd + 14] == 2;
-		uint32_t w = width, h = height;
+		texture->SRGB = native ? format == VkFormatBC7Srgb : data[dfd + 14] == KhrDfTransferSrgb;
 		for (uint32_t mip = 0; mip < levels; mip++)
 		{
-			const size_t bytes = LevelSize(w, h), offset = texture->Pixels.size();
+			const size_t bytes = TextureSource::BC7LevelSize(width, height, mip), offset = texture->Pixels.size();
 			if (bytes > MaxPayload - offset)
 				return fail("decoded mip payload exceeds 256 MiB");
+			// The index loop above already bounded start/length within the file.
 			const uint8_t* index = data + 80 + size_t(mip) * 24;
 			const uint64_t start = Read64(index), length = Read64(index + 8);
-			if (start > size || length > size - start || (native && (length != bytes || Read64(index + 16) != bytes || start % 16 || start < dfd + dfdSize)))
-				return fail("invalid native BC7 mip layout at level " + std::to_string(mip));
+			if (native && (length != bytes || Read64(index + 16) != bytes || start % 16 || start < dfd + dfdSize))
+				return fail(fmt::format("invalid native BC7 mip layout at level {}", mip));
 			texture->MipOffsets.push_back(offset);
 			texture->Pixels.resize(offset + bytes);
 			if (native)
 				std::memcpy(texture->Pixels.data() + offset, data + start, bytes);
 			else if (!transcoder.transcode_image_level(mip, 0, 0, texture->Pixels.data() + offset, static_cast<uint32_t>(bytes / 16), basist::transcoder_texture_format::cTFBC7_RGBA))
-				return fail("Basis transcode failed at mip " + std::to_string(mip));
-			w = std::max(1u, w / 2);
-			h = std::max(1u, h / 2);
+				return fail(fmt::format("Basis transcode failed at mip {}", mip));
 		}
 		texture->UpdateMemoryUsage();
 		outError.clear();
@@ -164,43 +166,51 @@ namespace Basalt {
 	bool TextureCompression::EncodeKTX2(const TextureSource& source, bool srgb, std::vector<uint8_t>& out, std::string& outError)
 	{
 		out.clear();
-		if (source.Format != TextureFormat::RGBA8 || !source.Width || !source.Height || source.Width > 16384 || source.Height > 16384 || source.Pixels.size() != size_t(source.Width) * source.Height * 4)
+		if (source.Format == TextureFormat::RGBA32F)
 		{
-			outError = source.Format == TextureFormat::RGBA32F ? "HDR sources cannot be compressed to BC7" : "BC7 compression requires valid RGBA8 pixels (at most 16384 per side)";
+			outError = "HDR sources cannot be compressed to BC7";
+			return false;
+		}
+		if (source.Format == TextureFormat::BC7)
+		{
+			outError = "source is already a compressed KTX2; compress the original PNG/JPEG/TGA/BMP";
+			return false;
+		}
+		if (!source.Width || !source.Height || source.Width > TextureSource::MaxDimension || source.Height > TextureSource::MaxDimension || source.Pixels.size() != size_t(source.Width) * source.Height * 4)
+		{
+			outError = fmt::format("BC7 compression requires valid RGBA8 pixels (at most {} per side)", TextureSource::MaxDimension);
 			return false;
 		}
 		Initialize();
-		uint32_t levels = 1;
-		for (uint32_t n = std::max(source.Width, source.Height); n > 1; n /= 2)
-			levels++;
+		const uint32_t levels = TextureSource::MipCount(source.Width, source.Height);
 		size_t payload = 0;
 		for (uint32_t mip = 0; mip < levels; mip++)
-			payload += LevelSize(std::max(1u, source.Width >> mip), std::max(1u, source.Height >> mip));
+			payload += TextureSource::BC7LevelSize(source.Width, source.Height, mip);
 		if (payload > MaxPayload - 512)
 		{
 			outError = "BC7 mip chain exceeds the 256 MiB KTX2 limit";
 			return false;
 		}
 		const size_t dfd = 80 + levels * 24;
-		out.resize((dfd + 44 + 15) & ~size_t(15));
+		out.resize((dfd + BC7DfdSize + 15) & ~size_t(15));
 		std::copy(Identifier.begin(), Identifier.end(), out.begin());
-		Put(out, 12, srgb ? 146 : 145);
+		Put(out, 12, srgb ? VkFormatBC7Srgb : VkFormatBC7Unorm);
 		Put(out, 16, 1);
 		Put(out, 20, source.Width);
 		Put(out, 24, source.Height);
 		Put(out, 36, 1);
 		Put(out, 40, levels);
 		Put(out, 48, dfd);
-		Put(out, 52, 44);
-		Put(out, dfd, 44);
-		Put(out, dfd + 8, 2 | (40u << 16));
-		out[dfd + 12] = 134;
-		out[dfd + 13] = 1;
-		out[dfd + 14] = srgb ? 2 : 1;
+		Put(out, 52, BC7DfdSize);
+		Put(out, dfd, BC7DfdSize);
+		Put(out, dfd + 8, 2 | (40u << 16)); // descriptor version 2, block size 40
+		out[dfd + 12] = KhrDfModelBC7;
+		out[dfd + 13] = 1; // BT.709 primaries
+		out[dfd + 14] = srgb ? KhrDfTransferSrgb : KhrDfTransferLinear;
 		out[dfd + 16] = 3;
 		out[dfd + 17] = 3;
 		out[dfd + 20] = 16;
-		out[dfd + 30] = 127;
+		out[dfd + 30] = BC7SampleBitLength;
 		Put(out, dfd + 40, 0xFFFFFFFFu);
 		bc7enc_compress_block_params params;
 		bc7enc_compress_block_params_init(&params);
@@ -211,7 +221,7 @@ namespace Basalt {
 		uint32_t w = source.Width, h = source.Height;
 		for (uint32_t mip = 0; mip < levels; mip++)
 		{
-			encoded[mip].resize(LevelSize(w, h));
+			encoded[mip].resize(TextureSource::BC7LevelSize(source.Width, source.Height, mip));
 			for (uint32_t by = 0; by < (h + 3) / 4; by++)
 				for (uint32_t bx = 0; bx < (w + 3) / 4; bx++)
 				{
@@ -262,9 +272,9 @@ namespace Basalt {
 		return true;
 	}
 
-	bool TextureCompression::Import(const std::filesystem::path& source, const std::filesystem::path& output, const std::filesystem::path& cacheDirectory, bool srgb, bool& cacheHit, std::string& outError)
+	bool TextureCompression::Import(const std::filesystem::path& source, const std::filesystem::path& output, const std::filesystem::path& cacheDirectory, bool srgb, ImportResult& result, std::string& outError)
 	{
-		cacheHit = false;
+		result = {};
 		// A missing output is expected; equivalent() only adds detection for existing aliases.
 		std::error_code pathError;
 		if (source.lexically_normal() == output.lexically_normal() || std::filesystem::equivalent(source, output, pathError))
@@ -272,89 +282,60 @@ namespace Basalt {
 			outError = "compressed output must be a separate file from the source";
 			return false;
 		}
+		const std::string sourceName = FileSystem::PathToUtf8(source);
 		const auto bytes = FileSystem::ReadBinaryFile(source);
 		if (!bytes || bytes->empty())
 		{
-			outError = "cannot read texture source: " + FileSystem::PathToUtf8(source);
+			outError = "cannot read texture source: " + sourceName;
 			return false;
 		}
-		std::string key(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+		auto warn = [&](std::string message) {
+			BS_CORE_WARN("Texture compression: {}", message);
+			result.Warnings.push_back(std::move(message));
+		};
 		// Bump bc7-v1 whenever the encoder pin, parameters or mip filter change.
-		key += srgb ? "bc7-v1-srgb" : "bc7-v1-linear";
-		const auto cache = cacheDirectory / (ToHex64(HashFnv1a64(key)) + ".ktx2");
+		const std::string_view mode = srgb ? "bc7-v1-srgb" : "bc7-v1-linear";
+		std::string key(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+		key += mode;
+		const std::filesystem::path cache = cacheDirectory.empty() ? std::filesystem::path() : cacheDirectory / (ToHex64(HashFnv1a64(key)) + ".ktx2");
 		std::vector<uint8_t> encoded;
-		auto cached = FileSystem::ReadBinaryFile(cache);
-		if (cached && LoadKTX2(cached->data(), cached->size(), outError))
+		if (!cache.empty())
 		{
-			encoded = std::move(*cached);
-			cacheHit = true;
-		}
-		else
-		{
-			if (cached)
-				BS_CORE_WARN("Rebuilding invalid compressed cache {}: {}", FileSystem::PathToUtf8(cache), outError);
-			const auto texture = TextureSource::LoadFromMemory(bytes->data(), bytes->size(), outError);
-			if (!texture || !EncodeKTX2(*texture, srgb, encoded, outError))
-				return false;
+			const std::string cacheName = FileSystem::PathToUtf8(cache);
 			std::string cacheError;
-			if (!FileSystem::WriteBinaryFile(cache, encoded.data(), encoded.size(), cacheError))
+			if (auto cached = FileSystem::ReadBinaryFile(cache))
 			{
-				BS_CORE_WARN("Compressed texture cache unavailable: {}; output will still be written", cacheError);
+				if (LoadKTX2(cached->data(), cached->size(), cacheError))
+				{
+					encoded = std::move(*cached);
+					result.CacheHit = true;
+				}
+				else
+					warn(fmt::format("rebuilding invalid cache entry {}: {}", cacheName, cacheError));
 			}
+			else if (FileSystem::Exists(cache))
+				warn("cannot read cache entry " + cacheName + "; re-encoding");
+		}
+		if (!result.CacheHit)
+		{
+			const auto texture = TextureSource::LoadFromMemory(bytes->data(), bytes->size(), outError);
+			if (!texture)
+			{
+				outError = sourceName + ": " + outError;
+				return false;
+			}
+			if (!EncodeKTX2(*texture, srgb, encoded, outError))
+			{
+				outError = sourceName + ": " + outError;
+				return false;
+			}
+			std::string cacheError;
+			if (!cache.empty() && !FileSystem::WriteBinaryFile(cache, encoded.data(), encoded.size(), cacheError))
+				warn("cache unavailable (" + cacheError + "); the output is still written");
 		}
 		if (!FileSystem::WriteBinaryFile(output, encoded.data(), encoded.size(), outError))
-		{
 			return false;
-		}
 		outError.clear();
 		return true;
-	}
-
-	bool TextureSource::HasValidBC7Layout() const
-	{
-		if (Format != TextureFormat::BC7 || !Width || !Height || Width > 16384 || Height > 16384 || MipOffsets.empty() || MipOffsets.size() > 15)
-			return false;
-		size_t expected = 0;
-		for (size_t mip = 0; mip < MipOffsets.size(); mip++)
-		{
-			if ((mip && (Width >> (mip - 1)) <= 1 && (Height >> (mip - 1)) <= 1) || MipOffsets[mip] != expected)
-				return false;
-			expected += LevelSize(std::max(1u, Width >> mip), std::max(1u, Height >> mip));
-			if (expected > Pixels.size())
-				return false;
-		}
-		return expected == Pixels.size();
-	}
-
-	Ref<TextureSource> TextureSource::DecodeRGBA8(std::string& outError, uint32_t mip) const
-	{
-		if (!HasValidBC7Layout() || mip >= MipOffsets.size())
-		{
-			outError = "invalid BC7 mip layout or level";
-			return nullptr;
-		}
-		const uint32_t width = std::max(1u, Width >> mip), height = std::max(1u, Height >> mip);
-
-		auto result = CreateRef<TextureSource>();
-		result->Width = width;
-		result->Height = height;
-		result->SRGB = SRGB;
-		result->Pixels.resize(size_t(width) * height * 4);
-		for (uint32_t by = 0; by < (height + 3) / 4; by++)
-			for (uint32_t bx = 0; bx < (width + 3) / 4; bx++)
-			{
-				bc7decomp::color_rgba block[16];
-				if (!bc7decomp::unpack_bc7(Pixels.data() + MipOffsets[mip] + (size_t(by) * ((width + 3) / 4) + bx) * 16, block))
-				{
-					outError = "invalid BC7 block";
-					return nullptr;
-				}
-				for (uint32_t y = 0; y < 4 && by * 4 + y < height; y++)
-					for (uint32_t x = 0; x < 4 && bx * 4 + x < width; x++)
-						std::memcpy(result->Pixels.data() + (size_t(by * 4 + y) * width + size_t(bx) * 4 + x) * 4, block[y * 4 + x].m_comps, 4);
-			}
-		result->UpdateMemoryUsage();
-		outError.clear();
-		return result;
 	}
 }
