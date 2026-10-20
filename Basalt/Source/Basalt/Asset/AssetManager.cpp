@@ -588,22 +588,33 @@ namespace Basalt {
 		return MeshImporter::InstantiateHierarchy(scene, *mesh, name, parent);
 	}
 
-	std::vector<std::string> AssetManager::ListAssets(const std::vector<std::string>& extensions)
+	std::vector<std::string> AssetManager::ListAssets(const std::vector<std::string>& extensions, std::string* outError)
 	{
+		if (outError)
+			outError->clear();
 		std::vector<std::string> result;
 		const std::filesystem::path root = Project::ResolvePath(Project::AssetDirectoryName);
 		std::error_code error;
 		if (!std::filesystem::is_directory(root, error))
+		{
+			if (outError)
+				*outError = "cannot scan Assets/: " + (error ? error.message() : "not a directory");
 			return result;
+		}
 
 		for (auto it = std::filesystem::recursive_directory_iterator(root, error); !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error))
 		{
-			if (!it->is_regular_file(error))
+			const bool regular = it->is_regular_file(error);
+			if (error)
+				break;
+			if (!regular || FileSystem::GetLowercaseExtension(it->path()) == ".meta")
 				continue;
 			const std::string path = Project::MakeRelative(it->path());
 			if (extensions.empty() || std::find(extensions.begin(), extensions.end(), Extension(path)) != extensions.end())
 				result.push_back(path);
 		}
+		if (error && outError)
+			*outError = "cannot scan all asset files: " + error.message();
 		std::sort(result.begin(), result.end());
 		return result;
 	}

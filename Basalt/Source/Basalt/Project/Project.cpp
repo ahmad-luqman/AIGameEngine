@@ -81,6 +81,7 @@ namespace Basalt {
 
 		Ref<Project> project = CreateRef<Project>();
 		project->m_Directory = absolute;
+		project->m_Assets = AssetRegistry(absolute);
 		project->m_Config.Name = name;
 		if (!project->Save(outError))
 			return nullptr;
@@ -110,11 +111,29 @@ namespace Basalt {
 
 		Ref<Project> project = CreateRef<Project>();
 		project->m_Directory = filePath.parent_path();
+		project->m_Assets = AssetRegistry(project->m_Directory);
+		if (!project->m_Assets.Refresh(outError))
+		{
+			BS_CORE_ERROR("Project metadata: {}", outError);
+			outError.clear();
+		}
+		for (const auto& [asset, problem] : project->m_Assets.GetProblems())
+			BS_CORE_ERROR("Asset metadata {}.meta: {}", asset, problem);
 		ProjectConfig& config = project->m_Config;
 		try
 		{
 			config.Name = data.value("Name", config.Name);
-			config.StartScene = data.value("StartScene", config.StartScene);
+			if (data.contains("StartScene") && !project->m_Assets.Decode(data["StartScene"], config.StartScene, outError))
+			{
+				const auto& reference = data["StartScene"];
+				if (!reference.is_object() || reference.size() != 2 || !reference.contains("Path") || !reference["Path"].is_string() || !reference.contains("UUID") || !reference["UUID"].is_string() || !AssetRegistry::ParseID(reference["UUID"].get_ref<const std::string&>(), outError))
+					return nullptr;
+				project->m_UnresolvedStartScene = reference;
+				project->m_StartSceneError = outError;
+				BS_CORE_ERROR("Project: {}", outError);
+				config.StartScene.clear();
+				outError.clear();
+			}
 			config.Fullscreen = data.value("Fullscreen", config.Fullscreen);
 		}
 		catch (const nlohmann::json::exception& e)
@@ -199,8 +218,21 @@ namespace Basalt {
 		return actions;
 	}
 
-	bool Project::Save(std::string& outError)
+	void Project::SetStartScene(std::string path)
 	{
+		m_Config.StartScene = std::move(path);
+		m_UnresolvedStartScene = nullptr;
+		m_StartSceneError.clear();
+	}
+
+	bool Project::Save(std::string& outError, bool replaceUnresolvedStartScene)
+	{
+		nlohmann::json startScene;
+		if (m_Config.StartScene.empty() && !m_UnresolvedStartScene.is_null() && !replaceUnresolvedStartScene)
+			startScene = m_UnresolvedStartScene;
+		else if ((!m_Config.StartScene.empty() && !m_Assets.Refresh(outError)) || !m_Assets.Encode(m_Config.StartScene, startScene, outError))
+			return false;
+
 		const bool writeInput = m_Config.InputActions != m_SavedInputActions;
 		const bool inputExisted = FileSystem::Exists(GetInputFilePath());
 		// The file as it is now (it may have been edited by hand since it was loaded), to put back exactly. Plain values
@@ -220,7 +252,7 @@ namespace Basalt {
 		const nlohmann::json data = {
 			{ "Format", "BasaltProject" },
 			{ "Name", m_Config.Name },
-			{ "StartScene", m_Config.StartScene },
+			{ "StartScene", startScene },
 			{ "WindowWidth", m_Config.WindowWidth },
 			{ "WindowHeight", m_Config.WindowHeight },
 			{ "Fullscreen", m_Config.Fullscreen },
@@ -252,11 +284,19 @@ namespace Basalt {
 		}
 		if (writeInput)
 			m_SavedInputActions = m_Config.InputActions;
+		if (replaceUnresolvedStartScene || !m_Config.StartScene.empty())
+		{
+			m_UnresolvedStartScene = nullptr;
+			m_StartSceneError.clear();
+		}
 		return true;
 	}
 
 	std::filesystem::path Project::ResolvePath(const std::filesystem::path& relativePath)
 	{
+		// Unresolved identity keys must never be interpreted as ordinary files, even if one mimics the key.
+		if (FileSystem::PathToGenericUtf8(relativePath).starts_with("asset-uuid:"))
+			return {};
 		if (relativePath.is_absolute())
 			return relativePath;
 		if (s_ActiveProject)

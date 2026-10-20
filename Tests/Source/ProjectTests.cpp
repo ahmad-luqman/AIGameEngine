@@ -435,7 +435,7 @@ TEST_SUITE("Project")
 		CHECK_FALSE(SceneSerializer::SerializeScene(scene)["Physics"].contains("FixedTimestep"));
 		REQUIRE(SceneSerializer::DeserializeScene(scene, { { "Physics", { { "FixedTimestep", 1.0 / 60.0 } } } }, error));
 		CHECK(scene.GetPhysicsSettings().FixedTimestep == DefaultFixedTimestep);
-		CHECK(SceneSerializer::FormatVersion == 2);
+		CHECK(SceneSerializer::FormatVersion == 3);
 	}
 
 	TEST_CASE("Fixed timestep commands: project.set and project.info, scene.settings and scene.info")

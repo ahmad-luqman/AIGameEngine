@@ -23,12 +23,12 @@ fi
 cmake -S . -B "$buildDir" -G Ninja -DCMAKE_BUILD_TYPE=Debug "${compiler[@]}" \
 	-DBASALT_FUZZ=ON -DBASALT_SANITIZE="address;undefined" \
 	-DBASALT_BUILD_EDITOR=OFF -DBASALT_BUILD_RUNTIME=OFF -DBASALT_BUILD_TESTS=OFF > /dev/null
-cmake --build "$buildDir" --target FuzzScene FuzzTexture FuzzGltf FuzzCommand FuzzMcp FuzzLuaJson FuzzSaveData FuzzFont FuzzInputActions FuzzAnimationGraph
+cmake --build "$buildDir" --target FuzzScene FuzzTexture FuzzGltf FuzzCommand FuzzMcp FuzzLuaJson FuzzSaveData FuzzFont FuzzInputActions FuzzAnimationGraph FuzzAssetMeta
 
 export ASAN_OPTIONS="detect_leaks=0:allocator_may_return_null=1"
 export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1"
 status=0
-for target in FuzzScene FuzzTexture FuzzGltf FuzzCommand FuzzMcp FuzzLuaJson FuzzSaveData FuzzFont FuzzInputActions FuzzAnimationGraph; do
+for target in FuzzScene FuzzTexture FuzzGltf FuzzCommand FuzzMcp FuzzLuaJson FuzzSaveData FuzzFont FuzzInputActions FuzzAnimationGraph FuzzAssetMeta; do
 	[[ -n "$filter" && "$target" != *"$filter"* ]] && continue
 	corpus="$buildDir/corpus/$target"
 	crashes="$buildDir/crashes/$target"

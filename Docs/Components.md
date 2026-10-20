@@ -24,7 +24,7 @@ Fields: `Projection` (enum: Perspective, Orthographic), `FOV` (number), `Near` (
 
 ## Mesh
 
-Fields: `Mesh` (string), `MeshIndex` (integer), `CastShadows` (boolean)
+Fields: `Mesh` (string), `MeshIndex` (integer), `CastShadows` (boolean), `LODDistance` (number)
 
 ## Animator
 

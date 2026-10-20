@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Basalt/Asset/AssetRegistry.h"
 #include "Basalt/Core/Base.h"
 #include "Basalt/Core/InputActions.h"
 #include "Basalt/Math/Random.h"
@@ -64,7 +65,9 @@ namespace Basalt {
 		// of the file is never overwritten by an unrelated change), then the project file. A failure is reported (with
 		// the system's reason) and leaves both files as they were: the actions are put back when only the project file
 		// could not be written.
-		bool Save(std::string& outError);
+		// May create the start scene's sidecar. A full metadata scan is required only for a nonempty start path.
+		// Unresolved start references survive unrelated saves; the flag explicitly repairs or clears them.
+		bool Save(std::string& outError, bool replaceUnresolvedStartScene = false);
 
 		static void SetActive(const Ref<Project>& project) { s_ActiveProject = project; }
 		static const Ref<Project>& GetActive() { return s_ActiveProject; }
@@ -86,6 +89,12 @@ namespace Basalt {
 		// Converts an absolute path inside the active project into a project-relative generic path.
 		static std::string MakeRelative(const std::filesystem::path& absolutePath);
 
+		AssetRegistry& GetAssets() { return m_Assets; }
+		const AssetRegistry& GetAssets() const { return m_Assets; }
+		// An unresolved start UUID leaves the project open for repair, without selecting its hint's file.
+		const std::string& GetStartSceneError() const { return m_StartSceneError; }
+		void SetStartScene(std::string path);
+
 		ProjectConfig& GetConfig() { return m_Config; }
 		const ProjectConfig& GetConfig() const { return m_Config; }
 		const std::filesystem::path& GetDirectory() const { return m_Directory; }
@@ -94,6 +103,9 @@ namespace Basalt {
 		std::filesystem::path GetInputFilePath() const { return m_Directory / InputFileName; }
 
 	private:
+		AssetRegistry m_Assets;
+		nlohmann::json m_UnresolvedStartScene;
+		std::string m_StartSceneError;
 		ProjectConfig m_Config;
 		// The actions as Input.binput holds them (Load, Save): Save writes the file only when they differ.
 		InputActionMap m_SavedInputActions;

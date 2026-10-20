@@ -262,6 +262,12 @@ namespace Basalt {
 		AssetReloadReport report;
 		if (changes.empty())
 			return report;
+		if (const auto& project = Project::GetActive())
+		{
+			std::string error;
+			if (!project->GetAssets().Refresh(error))
+				BS_CORE_ERROR("Asset metadata refresh: {}", error);
+		}
 		std::vector<std::string> paths;
 		std::vector<std::string> scripts;
 		for (const FileChange& change : changes)
@@ -301,8 +307,17 @@ namespace Basalt {
 		return report;
 	}
 
+	void AutomationSession::AcknowledgeAssetMetadata()
+	{
+		// Metadata encoded by a save belongs to the same host write, not the next external refresh.
+		if (Project::GetActive())
+			for (const auto& written : Project::GetActive()->GetAssets().TakeWrittenPaths())
+				AcknowledgeFile(written);
+	}
+
 	AssetReloadReport AutomationSession::OnFileWritten(const std::string& relativePath)
 	{
+		AcknowledgeAssetMetadata();
 		const std::optional<FileChangeType> change = AcknowledgeFile(relativePath);
 		return ReloadAssets({ { relativePath, change.value_or(FileChangeType::Modified) } });
 	}

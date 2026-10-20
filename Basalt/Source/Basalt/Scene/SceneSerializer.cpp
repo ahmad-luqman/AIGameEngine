@@ -466,9 +466,53 @@ namespace Basalt {
 		return CreateEntities(scene, *entities, false, {}, created, outError);
 	}
 
+	bool SceneSerializer::EncodeAssetReferences(json& data, std::string& outError, const std::string& onlyPath)
+	{
+		if (!Project::GetActive())
+			return true;
+		auto entities = data.find("Entities");
+		if (entities == data.end() || !entities->is_array())
+			return true;
+		for (auto& entity : *entities)
+		{
+			auto components = entity.find("Components");
+			if (components == entity.end() || !components->is_object())
+				continue;
+			for (auto& [name, component] : components->items())
+			{
+				const auto* info = ComponentRegistry::Find(name);
+				if (!info || !component.is_object())
+					continue;
+				for (const auto& field : info->AssetFields)
+				{
+					auto value = component.find(field);
+					if (value != component.end() && value->is_string())
+					{
+						const auto path = value->get<std::string>();
+						if (!onlyPath.empty() && !Project::GetActive()->GetAssets().ReferencesSource(path, onlyPath))
+							continue;
+						json reference;
+						if (!Project::GetActive()->GetAssets().Encode(path, reference, outError))
+						{
+							outError = fmt::format("entity {}: {}.{}: {}", entity.value("Name", std::string("<unnamed>")), name, field, outError);
+							return false;
+						}
+						*value = std::move(reference);
+					}
+				}
+			}
+		}
+		return true;
+	}
+
 	bool SceneSerializer::SaveScene(Scene& scene, const std::filesystem::path& path, std::string& outError)
 	{
-		const std::string text = SerializeScene(scene).dump(1, '\t');
+		if (Project::GetActive() && !Project::GetActive()->GetAssets().Refresh(outError))
+			return false;
+		json data = SerializeScene(scene);
+		if (!EncodeAssetReferences(data, outError))
+			return false;
+		const std::string text = data.dump(1, '\t');
 		if (!FileSystem::WriteTextFile(path, text))
 		{
 			outError = "cannot write '" + path.string() + "'";
@@ -480,6 +524,11 @@ namespace Basalt {
 
 	std::optional<json> SceneSerializer::ReadSceneFile(const std::filesystem::path& path, const std::string& displayName, std::string& outError)
 	{
+		if (Project::GetActive() && !Project::GetActive()->GetAssets().Refresh(outError))
+		{
+			BS_CORE_ERROR("Scene metadata refresh: {}", outError);
+			outError.clear();
+		}
 		const auto text = FileSystem::ReadTextFile(path);
 		if (!text)
 		{
@@ -562,6 +611,10 @@ namespace Basalt {
 		data["Entities"] = SerializeEntityTree(root);
 		// An instance's own prefab link is not part of the prefab.
 		data["Entities"][0]["Components"].erase("Prefab");
+		if (Project::GetActive() && !Project::GetActive()->GetAssets().Refresh(outError))
+			return false;
+		if (!EncodeAssetReferences(data, outError))
+			return false;
 
 		if (!FileSystem::WriteTextFile(path, data.dump(1, '\t')))
 		{

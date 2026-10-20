@@ -57,7 +57,8 @@ target_link_libraries(Basalt
 		nvrhi_vk
 		BasaltMiniaudio
 		BasaltCgltf
-		BasaltStb)
+		BasaltStb
+		meshoptimizer)
 
 if(WIN32)
 	target_link_libraries(Basalt PRIVATE ws2_32)

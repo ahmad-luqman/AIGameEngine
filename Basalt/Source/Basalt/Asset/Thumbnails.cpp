@@ -1,12 +1,15 @@
-#include "Basalt/Asset/Thumbnails.h"
+#include "Basalt/Asset/AssetRegistry.h"
 
 #include "Basalt/Asset/ImageUtils.h"
 #include "Basalt/Asset/MeshImporter.h"
 #include "Basalt/Asset/TextureSource.h"
+#include "Basalt/Asset/Thumbnails.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Hash.h"
 #include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
+#include "Basalt/Project/Project.h"
+#include "Basalt/Scene/ComponentRegistry.h"
 
 #include <cgltf.h>
 
@@ -284,6 +287,19 @@ namespace Basalt {
 				const auto entities = data.is_object() ? data.find("Entities") : data.end();
 				if (entities == data.end() || !entities->is_array())
 					break;
+				AssetRegistry local(m_ProjectDirectory);
+				const AssetRegistry* assets = nullptr;
+				std::error_code pathError;
+				if (const auto& active = Project::GetActive(); active && std::filesystem::equivalent(active->GetDirectory(), m_ProjectDirectory, pathError))
+					assets = &active->GetAssets();
+				else
+				{
+					std::string error;
+					if (local.Refresh(error))
+						assets = &local;
+					else
+						BS_CORE_WARN("Thumbnail dependencies: {}", error);
+				}
 				for (const auto& entity : *entities)
 				{
 					const auto components = entity.is_object() ? entity.find("Components") : entity.end();
@@ -292,13 +308,26 @@ namespace Basalt {
 					for (const auto& [component, fields] : components->items())
 						if (fields.is_object())
 							for (const auto& [field, value] : fields.items())
-								if (value.is_string() && value.get_ref<const std::string&>().rfind("Assets/", 0) == 0)
+							{
+								std::string key;
+								if (value.is_string())
+									key = value.get<std::string>();
+								else if (assets)
 								{
-									const std::string file = value.get<std::string>().substr(0, value.get_ref<const std::string&>().find('#'));
+									const auto* info = ComponentRegistry::Find(component);
+									std::string error;
+									// The preview loader reports unresolved identities; dependency polling must not log every frame.
+									if (info && std::find(info->AssetFields.begin(), info->AssetFields.end(), field) != info->AssetFields.end())
+										assets->Decode(value, key, error);
+								}
+								if (key.starts_with("Assets/"))
+								{
+									const auto file = key.substr(0, key.find('#'));
 									dependencies.insert(file);
 									if (ClassifyThumbnail(file) == ThumbnailKind::Model)
 										AddModelDependencies(m_ProjectDirectory, file, dependencies);
 								}
+							}
 				}
 				break;
 			}

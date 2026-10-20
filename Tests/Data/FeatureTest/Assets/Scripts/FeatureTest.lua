@@ -775,7 +775,8 @@ function Driver:OnUpdate(dt)
 		dynamic:AddComponent("RigidBody", { Type = "Dynamic" })
 		-- Its collider's own material: grippier than the body's 0.5 and a little bouncy.
 		dynamic:AddComponent("BoxCollider", { HalfExtents = { 0.25, 0.25, 0.25 }, OverrideMaterial = true, Friction = 0.8, Restitution = 0.25 })
-		dynamic:AddComponent("Mesh", { Mesh = "builtin://Cube" })
+		dynamic:AddComponent("Mesh", { Mesh = "builtin://Cube", LODDistance = 25 })
+		Check("Mesh LOD distance roundtrip", dynamic:GetComponent("Mesh").LODDistance == 25)
 		local runtimeCollider = dynamic:GetComponent("BoxCollider")
 		Check("Collider material override", runtimeCollider.OverrideMaterial and Near(runtimeCollider.Friction, 0.8, 1e-6) and runtimeCollider.Restitution == 0.25)
 		self.RuntimeBox = dynamic

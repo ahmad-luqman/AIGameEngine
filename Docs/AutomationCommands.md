@@ -160,6 +160,64 @@ Fails unless the current scene (the play copy while playing) has the entity: by 
 
 ## asset
 
+### `asset.delete`
+
+Deletes one asset file and its .meta identity. Existing UUID references become unresolved. Stop Play or Simulate first.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `path` | asset path |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "description": "asset path",
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
+### `asset.id`
+
+Creates or reads the stable UUID sidecar of an existing asset under Assets/.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `path` | asset path |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "description": "asset path",
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
 ### `asset.import_model`
 
 Imports a static model as an entity hierarchy, or a skinned/animated model as one Animator root.
@@ -238,6 +296,42 @@ Lists project asset files, optionally filtered by extensions (e.g. ['.lua']).
     }
   },
   "required": [],
+  "type": "object"
+}
+```
+
+</details>
+
+### `asset.move`
+
+Moves one asset file and its .meta sidecar within Assets/. 'to' is the complete destination path. Creates metadata if needed, migrates scene/prefab references to this asset to UUIDs and updates the open edit scene and project start scene. Does not rewrite paths inside scripts or glTF files. Stop Play or Simulate first.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `from` | source path |
+| `to` | destination path |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "from": {
+      "description": "source path",
+      "minLength": 1,
+      "type": "string"
+    },
+    "to": {
+      "description": "destination path",
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "from",
+    "to"
+  ],
   "type": "object"
 }
 ```
@@ -336,6 +430,71 @@ Reloads the asset files changed on disk since changes were last reported (by an 
     }
   },
   "required": [],
+  "type": "object"
+}
+```
+
+</details>
+
+### `asset.rename`
+
+Moves one asset file and its .meta sidecar within Assets/. 'to' is the complete destination path. Creates metadata if needed, migrates scene/prefab references to this asset to UUIDs and updates the open edit scene and project start scene. Does not rewrite paths inside scripts or glTF files. Stop Play or Simulate first.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `from` | source path |
+| `to` | destination path |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "from": {
+      "description": "source path",
+      "minLength": 1,
+      "type": "string"
+    },
+    "to": {
+      "description": "destination path",
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "from",
+    "to"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
+### `asset.resolve`
+
+Resolves an asset UUID (decimal string) to its current project-relative path. Reads metadata without creating files.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `uuid` | nonzero decimal UUID |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "uuid": {
+      "description": "nonzero decimal UUID",
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "uuid"
+  ],
   "type": "object"
 }
 ```
@@ -2749,7 +2908,7 @@ Compares two scene states: 'from' and 'to' each name a snapshot (scene.snapshot)
 
 ### `scene.get`
 
-Returns the whole open scene as JSON (same format as .bscene files).
+Returns the whole open scene as JSON with resolved asset paths (disk files persist UUID references).
 
 <details><summary>Parameter JSON Schema</summary>
 

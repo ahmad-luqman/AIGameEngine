@@ -1,10 +1,11 @@
-#include "Basalt/Project/ProjectValidator.h"
-
 #include "Basalt/Animation/AnimationGraph.h"
+
 #include "Basalt/Asset/MeshSource.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Project/Project.h"
+#include "Basalt/Project/ProjectValidator.h"
+#include "Basalt/Scene/ComponentRegistry.h"
 #include "Basalt/Scene/Components.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
@@ -41,8 +42,8 @@ namespace Basalt {
 		// Mesh means the entity's own mesh; an Animator's Clip names an animation, an AudioSource's is a file.
 		bool IsPathField(const std::string& component, const std::string& field)
 		{
-			static const std::set<std::string> s_Fields = { "Mesh", "Script", "AlbedoMap", "NormalMap", "MetallicRoughnessMap", "OcclusionMap", "EmissiveMap", "EnvironmentMap", "Texture", "Font", "StateMachine" };
-			return s_Fields.contains(field) || (component == "AudioSource" && field == "Clip");
+			const auto* info = ComponentRegistry::Find(component);
+			return info && std::find(info->AssetFields.begin(), info->AssetFields.end(), field) != info->AssetFields.end();
 		}
 
 		// Other strings (script properties, text) that name a file under Assets/: likely a path the game uses, but
@@ -73,6 +74,14 @@ namespace Basalt {
 
 			ValidationReport Run()
 			{
+				AssetRegistry assets(m_Directory);
+				std::string metadataError;
+				if (!assets.Refresh(metadataError))
+					m_Report.Add(ValidationSeverity::Error, "Assets", metadataError);
+				for (const auto& [path, problem] : assets.GetProblems())
+					m_Report.Add(ValidationSeverity::Error, path + ".meta", problem);
+				for (const auto& path : assets.GetOrphans())
+					m_Report.Add(ValidationSeverity::Warning, path + ".meta", "orphan metadata: restoring the source at this path reuses its identity; delete both files when removing an asset");
 				CheckProjectFile();
 				CheckInputFile();
 				CheckStartScene();
@@ -172,7 +181,9 @@ namespace Basalt {
 			void CheckStartScene()
 			{
 				const std::string& start = m_Project.GetConfig().StartScene;
-				if (start.empty())
+				if (!m_Project.GetStartSceneError().empty())
+					m_Report.Add(ValidationSeverity::Error, Project::FileName, m_Project.GetStartSceneError());
+				else if (start.empty())
 					m_Report.Add(ValidationSeverity::Error, Project::FileName, "no StartScene is set (project.set startScene)");
 				else if (FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(start)) != ".bscene")
 					m_Report.Add(ValidationSeverity::Error, Project::FileName, "the StartScene '" + start + "' is not a .bscene file");
@@ -287,6 +298,12 @@ namespace Basalt {
 			// with the file's exact letter case (the game may run on a case-sensitive file system).
 			void CheckReference(const std::string& reference, const std::string& file, const char* role, ValidationSeverity severity = ValidationSeverity::Error)
 			{
+				if (AssetRegistry::IsUnresolvedKey(reference))
+				{
+					m_Report.Add(ValidationSeverity::Error, file, "unresolved asset UUID reference: " + reference.substr(0, reference.find('/', AssetRegistry::UnresolvedPrefix.size())));
+					return;
+				}
+
 				if (Primitives::IsBuiltinKey(reference))
 				{
 					// Created, not looked up: AssetManager would log the failure and cache it, and validation changes nothing.

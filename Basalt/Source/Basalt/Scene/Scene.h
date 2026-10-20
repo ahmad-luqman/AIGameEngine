@@ -206,6 +206,8 @@ namespace Basalt {
 		// project-relative inside the project, otherwise absolute); empty for a scene never loaded from or saved
 		// to a file. Scene loads update it.
 		const std::string& GetPath() const { return m_Path; }
+		// Updates the source location after moving the scene file.
+		void SetPath(const std::string& path) { m_Path = path; }
 
 		// Set by gameplay code (Lua Game.Quit) to ask the host application to stop the game.
 		void RequestQuit() { m_QuitRequested = true; }

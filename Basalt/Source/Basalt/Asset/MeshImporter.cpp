@@ -2,6 +2,7 @@
 
 #include "Basalt/Animation/AnimationPose.h"
 #include "Basalt/Asset/AnimationImporter.h"
+#include "Basalt/Asset/MeshOptimizer.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Project/Project.h"
@@ -456,7 +457,16 @@ namespace Basalt {
 				}
 
 				const uint32_t materialIndex = primitive.material ? static_cast<uint32_t>(primitive.material - data->materials) : defaultMaterial;
-				meshData.Submeshes.push_back(source->AddSubmesh(vertices, indices, materialIndex));
+				const bool reorder = source->Materials[materialIndex].Alpha != AlphaMode::Blend;
+				const bool optimized = MeshOptimizer::Optimize(vertices, indices, reorder);
+				if (!optimized)
+				{
+					BS_CORE_WARN("MeshImporter: {}: optimization and LODs skipped for empty, malformed or non-finite geometry in mesh '{}'", path.filename().string(), meshData.Name);
+				}
+				const auto submesh = source->AddSubmesh(vertices, indices, materialIndex);
+				if (optimized)
+					MeshOptimizer::GenerateLODs(*source, submesh);
+				meshData.Submeshes.push_back(submesh);
 			}
 			source->Meshes.push_back(std::move(meshData));
 		}

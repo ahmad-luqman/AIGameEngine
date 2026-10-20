@@ -113,13 +113,8 @@ with a smoke test have shipped. Follow-ups:
 
 ### Asset pipeline
 
-- **Stable asset IDs — M.** Assets are referenced by path, so renaming or moving a file breaks scenes.
-  Add `.meta` sidecar files with a UUID, resolve references by UUID with the path as a hint, and make
-  `asset.move`/`asset.rename` update both.
 - **Texture compression — M.** Import textures to KTX2 with BC7 (desktop) and keep the source; cuts VRAM
   use and load time roughly 4x. Use `basisu` or `bc7enc` at import time, and cache the results.
-- **Mesh optimization — S.** Run meshoptimizer (vertex cache, overdraw, vertex fetch) at import time and
-  generate LODs with its simplifier.
 
 ---
 

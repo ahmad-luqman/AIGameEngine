@@ -114,7 +114,8 @@ return %s
 
 		std::vector<std::filesystem::directory_entry> entries;
 		for (auto it = std::filesystem::directory_iterator(m_CurrentDirectory, error); !error && it != std::filesystem::directory_iterator(); it.increment(error))
-			entries.push_back(*it);
+			if (FileSystem::GetLowercaseExtension(it->path()) != ".meta")
+				entries.push_back(*it);
 		std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
 			if (a.is_directory() != b.is_directory())
 				return a.is_directory();
@@ -191,7 +192,10 @@ return %s
 			ImGui::Text("Delete '%s'? This cannot be undone.", Project::MakeRelative(m_PendingDelete).c_str());
 			if (ImGui::Button("Delete"))
 			{
-				std::filesystem::remove_all(m_PendingDelete, error);
+				if (std::filesystem::is_directory(m_PendingDelete, error))
+					std::filesystem::remove_all(m_PendingDelete, error);
+				else if (!error)
+					m_Context.Execute("asset.delete", { { "path", Project::MakeRelative(m_PendingDelete) } });
 				if (error)
 					m_Context.SetStatus("Delete failed: " + error.message(), true);
 				m_PendingDelete.clear();

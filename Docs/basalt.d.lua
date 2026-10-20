@@ -1392,6 +1392,7 @@ function BasaltScript:StopAllCoroutines() end
 ---@field Mesh string
 ---@field MeshIndex integer
 ---@field CastShadows boolean
+---@field LODDistance number
 
 ---Animator data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
 ---@class AnimatorComponent

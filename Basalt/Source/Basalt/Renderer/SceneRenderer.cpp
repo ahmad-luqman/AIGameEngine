@@ -4,6 +4,7 @@
 #include "Basalt/Animation/AnimationPose.h"
 #include "Basalt/Animation/AnimationSystem.h"
 #include "Basalt/Asset/AssetManager.h"
+#include "Basalt/Asset/MeshOptimizer.h"
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Core/Profiler.h"
@@ -1683,7 +1684,7 @@ namespace Basalt {
 		};
 
 		const glm::vec3 cameraForward = -glm::vec3(view.InverseView[2]);
-		auto addMesh = [&](Entity entity, const Ref<MeshSource>& source, uint32_t meshIndex, const glm::mat4& model, bool castShadows, const std::vector<glm::mat4>& palette, uint32_t& paletteOffset) {
+		auto addMesh = [&](Entity entity, const Ref<MeshSource>& source, uint32_t meshIndex, const glm::mat4& model, bool castShadows, float lodDistance, const std::vector<glm::mat4>& palette, uint32_t& paletteOffset) {
 			if (!source || meshIndex >= source->Meshes.size())
 				return;
 			const GpuMesh* gpuMesh = m_Resources->GetMesh(source, commandList);
@@ -1783,6 +1784,15 @@ namespace Basalt {
 				item.Mesh = gpuMesh;
 				item.IndexCount = submesh.IndexCount;
 				item.BaseIndex = submesh.BaseIndex;
+				if (!blend && palette.empty() && lodDistance > 0)
+				{
+					const auto level = MeshOptimizer::SelectLOD(submesh, glm::length(worldBounds.GetCenter() - camera.Position), lodDistance);
+					if (level > 0)
+					{
+						item.BaseIndex = submesh.LODs[level - 1].BaseIndex;
+						item.IndexCount = submesh.LODs[level - 1].IndexCount;
+					}
+				}
 				item.BaseVertex = submesh.BaseVertex;
 				item.DrawIndex = drawIndex;
 				item.MaterialSet = set;
@@ -1818,7 +1828,7 @@ namespace Basalt {
 					entry->second.Source = m_PlaceholderMesh;
 			}
 			const auto& resolved = entry->second;
-			addMesh(entity, resolved.Source, resolved.Placeholder ? 0 : component.MeshIndex, scene.GetWorldTransform(entity), component.CastShadows, {}, unusedPaletteOffset);
+			addMesh(entity, resolved.Source, resolved.Placeholder ? 0 : component.MeshIndex, scene.GetWorldTransform(entity), component.CastShadows, component.LODDistance, {}, unusedPaletteOffset);
 		}
 		for (auto handle : scene.GetAllEntitiesWith<AnimatorComponent>())
 		{
@@ -1827,7 +1837,7 @@ namespace Basalt {
 			std::unordered_map<int32_t, uint32_t> paletteOffsets;
 			ForEachAnimatedMesh(entity, [&](const Ref<MeshSource>& source, const MeshNode& node, const glm::mat4& model, const std::vector<glm::mat4>& palette) {
 				uint32_t& offset = node.SkinIndex < 0 ? unusedPaletteOffset : paletteOffsets.try_emplace(node.SkinIndex, UINT32_MAX).first->second;
-				addMesh(entity, source, static_cast<uint32_t>(node.MeshIndex), model, component.CastShadows, palette, offset);
+				addMesh(entity, source, static_cast<uint32_t>(node.MeshIndex), model, component.CastShadows, 0, palette, offset);
 			});
 		}
 		if (materialSetFailed)

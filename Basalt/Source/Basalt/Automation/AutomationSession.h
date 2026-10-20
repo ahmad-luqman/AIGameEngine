@@ -142,6 +142,8 @@ namespace Basalt {
 		// the game runs (Play, not Simulate) added or modified scripts are hot reloaded. Logs what it did and calls
 		// OnAssetsReloaded.
 		AssetReloadReport ReloadAssets(const std::vector<FileChange>& changes);
+		// Drains sidecars created by this host before the watcher can report them as external changes.
+		void AcknowledgeAssetMetadata();
 		// A file the session wrote itself (asset.write, scene.save, ...): the watcher records it, so it is not reported
 		// as a change later, and it is reloaded now.
 		AssetReloadReport OnFileWritten(const std::string& relativePath);
