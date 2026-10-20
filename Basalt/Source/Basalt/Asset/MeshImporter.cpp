@@ -1,9 +1,9 @@
 #include "Basalt/Asset/MeshImporter.h"
 
-#include "Basalt/Asset/MaterialAsset.h"
-
 #include "Basalt/Animation/AnimationPose.h"
 #include "Basalt/Asset/AnimationImporter.h"
+#include "Basalt/Asset/AssetKey.h"
+#include "Basalt/Asset/MaterialAsset.h"
 #include "Basalt/Asset/MeshOptimizer.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Log.h"
@@ -184,7 +184,7 @@ namespace Basalt {
 				return {};
 			if (auto external = MeshImporter::GetExternalFileKey(meshKey, image->uri))
 				return *external;
-			return meshKey + "#image/" + std::to_string(image - data->images);
+			return MakeSubAssetKey(meshKey, EmbeddedImageMarker, static_cast<size_t>(image - data->images));
 		}
 
 		// Reads a float accessor (including sparse accessors) into a fresh vector. False if the accessor's

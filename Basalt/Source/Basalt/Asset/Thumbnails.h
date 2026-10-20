@@ -11,6 +11,7 @@ namespace Basalt {
 
 	class TextureSource;
 	struct MaterialComponent;
+	struct MaterialData;
 
 	// What a content-browser preview of a file shows.
 	enum class ThumbnailKind : uint8_t
@@ -63,10 +64,13 @@ namespace Basalt {
 	// NaN (written as null) still compares equal and is not re-rendered every frame; JSON array boundaries keep
 	// paths containing separators from producing the same key.
 	std::string MaterialPreviewKey(const MaterialComponent& material);
-	// The project-relative files a material preview reads, sorted: its inline maps' files, its Material asset's file and,
-	// for a .bmaterial, the files its textures load from (decoded through the active project). A change to any of them
-	// stales the preview. A model stands for its embedded images and imported materials.
+	// The project-relative files a material preview reads, sorted: its inline maps' files, its Material asset's file and
+	// what that reads (a .bmaterial's textures, decoded through the active project; a model's buffers and external
+	// images, for its embedded images and imported materials). A change to any of them stales the preview. Empty
+	// without an active project.
 	std::vector<std::string> MaterialPreviewDependencies(const MaterialComponent& material);
+	// The same for a material by value: the files its textures load from (a model with its buffers and images).
+	std::vector<std::string> MaterialPreviewDependencies(const MaterialData& material);
 
 	// A project's previews on disk, under <project>/Cache/Thumbnails: outside Assets/, so never exported. Each
 	// entry is <hash of the project-relative path>.png plus a .key file holding the version key (path, size,

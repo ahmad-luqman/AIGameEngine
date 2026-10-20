@@ -381,7 +381,7 @@ Moves one asset file and its .meta sidecar within Assets/. 'to' is the complete 
 
 ### `asset.preload`
 
-Requests mesh/texture CPU loads on the shared worker pool. A .bmaterial is read at once and its textures are requested too (each reported as its own path after the requested ones). Returns a status (pending, ready or failed) and error for each path. Poll by repeating in a persistent serve/mcp/editor session; use wait=true for one-shot CLI calls. wait=true joins these requests, including embedded image dependencies. Reload/refresh retries failed loads. GPU upload happens in the renderer.
+Requests mesh/texture CPU loads on the shared worker pool. A .bmaterial is read at once and its textures are requested too (each reported as its own path after the requested ones; one whose UUID does not resolve is failed). Returns a status (pending, ready or failed) and error for each path. Poll by repeating in a persistent serve/mcp/editor session; use wait=true for one-shot CLI calls. wait=true joins these requests, including embedded image dependencies. Reload/refresh retries failed loads. GPU upload happens in the renderer.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -448,7 +448,7 @@ Reads a text asset.
 
 ### `asset.refresh`
 
-Reloads the asset files changed on disk since changes were last reported (by an earlier refresh, by the editor's automatic reload, or since the project was opened in this process): models, textures and animation graphs load again on their next use (graphs restart from their initial state and parameter defaults), and while the game runs (Play, not Simulate) changed scripts are hot reloaded (instances keep their fields; OnReload is called). With 'paths', reloads those files instead, changed or not (a path that does not exist and was not known is an error, and nothing is reloaded then). Files the session wrote itself (asset.write, scene.save, ...) are not reported again. Without 'paths', fails when Assets/ cannot be read.
+Reloads the asset files changed on disk since changes were last reported (by an earlier refresh, by the editor's automatic reload, or since the project was opened in this process): models, textures, animation graphs and material files load again on their next use (graphs restart from their initial state and parameter defaults), and while the game runs (Play, not Simulate) changed scripts are hot reloaded (instances keep their fields; OnReload is called). With 'paths', reloads those files instead, changed or not (a path that does not exist and was not known is an error, and nothing is reloaded then). Files the session wrote itself (asset.write, scene.save, ...) are not reported again. Without 'paths', fails when Assets/ cannot be read.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -1790,7 +1790,7 @@ Runs Lua in the playing scene's script state; returns the value of the expressio
 
 ### `material.create`
 
-Writes a material file (.bmaterial under Assets/) with UUID texture references: with 'entity', the material that entity's Material component draws (its Material asset, or else its inline values), otherwise the defaults. Refuses to replace an existing file unless overwrite=true. Reference the file from Material.Material.
+Writes a material file (.bmaterial under Assets/) with UUID texture references: with 'entity', the material that entity's Material component draws (its Material asset when set, failing if that does not load, otherwise its inline values), otherwise the defaults. Returns {path, warnings?} (missing, unresolved or non-texture maps). Refuses to replace an existing file unless overwrite=true. Reference the file from Material.Material.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2617,7 +2617,7 @@ Runs an exported game headless (no GPU needed) for up to N frames at the runtime
 
 ### `project.validate`
 
-Checks that the project would export and start: settings, start scene, every scene and prefab (loads; referenced asset files exist inside Assets/ with the exact letter case; path fields must name files inside Assets/ with forward slashes; other component text naming a missing Assets/ file is a warning), every Lua script (compiles) and the scripts Script components use (load as script classes). Returns {valid, errors, warnings, omitted, issues: [{severity, file, message}]}.
+Checks that the project would export and start: settings, start scene, every scene and prefab (loads; referenced asset files exist inside Assets/ with the exact letter case; a model's #image/N or #material/N exists in its glTF; path fields must name files inside Assets/ with forward slashes; other component text naming a missing Assets/ file is a warning), every animation graph and material file (parses; a material's maps are textures that exist), every Lua script (compiles) and the scripts Script components use (load as script classes). Returns {valid, errors, warnings, omitted, issues: [{severity, file, message}]}.
 
 | Parameter | Type / description |
 |-----------|--------------------|

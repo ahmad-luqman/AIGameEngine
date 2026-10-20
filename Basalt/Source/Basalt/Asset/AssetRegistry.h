@@ -37,6 +37,8 @@ namespace Basalt {
 		bool Decode(const nlohmann::json& value, std::string& path, std::string& outError, bool preserveUnresolved = false) const;
 		static constexpr std::string_view UnresolvedPrefix = "asset-uuid://";
 		static bool IsUnresolvedKey(std::string_view key) { return key.starts_with(UnresolvedPrefix); }
+		// "unresolved asset UUID <id> (was '<path hint>')" for an unresolved key, for messages.
+		static std::string DescribeUnresolved(std::string_view key);
 		// Uses the last scan; batch writers refresh once before encoding their references. May create sidecars.
 		bool Encode(const std::string& path, nlohmann::json& value, std::string& outError);
 		// Deletes one source and its identity together; never leaves a reusable orphan on success.

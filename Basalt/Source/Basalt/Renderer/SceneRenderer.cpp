@@ -1739,16 +1739,23 @@ namespace Basalt {
 			}
 			const glm::mat4 normalMatrix = glm::transpose(glm::inverse(model));
 			// A MaterialComponent replaces every submesh's material: its asset, or its inline values (also while the
-			// asset streams in or when it failed, which AssetManager logs once).
+			// asset streams in or when it failed, which AssetManager logs once). Inline maps bind from the component
+			// itself rather than copying nine paths per mesh every frame.
 			const MaterialData* materialOverride = nullptr;
+			std::array<const std::string*, MaterialTextureSlotCount> overrideMaps{};
 			Ref<const MaterialData> overrideAsset;
 			MaterialData inlineMaterial;
 			if (const auto* component = entity.TryGetComponent<MaterialComponent>())
 			{
 				if (!component->Material.empty())
 					overrideAsset = resolveMaterial(component->Material);
-				if (!overrideAsset)
-					inlineMaterial = MaterialAsset::FromComponent(*component);
+				if (overrideAsset)
+					overrideMaps = MaterialAsset::GetMaps(*overrideAsset);
+				else
+				{
+					inlineMaterial = MaterialAsset::FromComponent(*component, false);
+					overrideMaps = MaterialAsset::GetMaps(*component);
+				}
 				materialOverride = overrideAsset ? overrideAsset.get() : &inlineMaterial;
 			}
 
@@ -1768,19 +1775,22 @@ namespace Basalt {
 					continue;
 				}
 
+				// The trailing default material is the clamp for out-of-range indices.
 				const MaterialData& m = materialOverride ? *materialOverride : source->Materials[std::min<size_t>(submesh.MaterialIndex, source->Materials.size() - 1)];
+				const auto maps = materialOverride ? overrideMaps : MaterialAsset::GetMaps(m);
+				auto map = [&](MaterialTextureSlot slot) -> const std::string& { return *maps[static_cast<size_t>(slot)]; };
 				uint32_t flags = 0;
 				nvrhi::ITexture* white = m_Resources->GetWhiteTexture();
 				nvrhi::ITexture* flatNormal = m_Resources->GetFlatNormalTexture();
-				nvrhi::IBindingSet* set = materialSet({ texture(m.AlbedoMap, true, white, MaterialHasAlbedoMap, flags),
-														texture(m.NormalMap, false, flatNormal, MaterialHasNormalMap, flags),
-														texture(m.MetallicRoughnessMap, false, white, MaterialHasMetallicRoughnessMap, flags),
-														texture(m.OcclusionMap, false, white, MaterialHasOcclusionMap, flags),
-														texture(m.EmissiveMap, true, white, MaterialHasEmissiveMap, flags),
-														texture(m.ClearcoatMap, false, white, MaterialHasClearcoatMap, flags),
-														texture(m.ClearcoatRoughnessMap, false, white, MaterialHasClearcoatRoughnessMap, flags),
-														texture(m.ClearcoatNormalMap, false, flatNormal, MaterialHasClearcoatNormalMap, flags),
-														texture(m.TransmissionMap, false, white, MaterialHasTransmissionMap, flags) });
+				nvrhi::IBindingSet* set = materialSet({ texture(map(MaterialTextureSlot::Albedo), true, white, MaterialHasAlbedoMap, flags),
+														texture(map(MaterialTextureSlot::Normal), false, flatNormal, MaterialHasNormalMap, flags),
+														texture(map(MaterialTextureSlot::MetallicRoughness), false, white, MaterialHasMetallicRoughnessMap, flags),
+														texture(map(MaterialTextureSlot::Occlusion), false, white, MaterialHasOcclusionMap, flags),
+														texture(map(MaterialTextureSlot::Emissive), true, white, MaterialHasEmissiveMap, flags),
+														texture(map(MaterialTextureSlot::Clearcoat), false, white, MaterialHasClearcoatMap, flags),
+														texture(map(MaterialTextureSlot::ClearcoatRoughness), false, white, MaterialHasClearcoatRoughnessMap, flags),
+														texture(map(MaterialTextureSlot::ClearcoatNormal), false, flatNormal, MaterialHasClearcoatNormalMap, flags),
+														texture(map(MaterialTextureSlot::Transmission), false, white, MaterialHasTransmissionMap, flags) });
 
 				GpuMaterialData material{};
 				material.AlbedoColor = m.AlbedoColor;

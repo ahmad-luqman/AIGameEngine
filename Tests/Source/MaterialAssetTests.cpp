@@ -1,4 +1,5 @@
 #include <doctest/doctest.h>
+#include <spdlog/fmt/fmt.h>
 
 #include <Basalt/Asset/AssetKey.h>
 #include <Basalt/Asset/AssetManager.h>
@@ -7,6 +8,7 @@
 #include <Basalt/Asset/MaterialAsset.h>
 #include <Basalt/Asset/Thumbnails.h>
 #include <Basalt/Automation/CommandRegistry.h>
+#include <Basalt/Core/JobSystem.h>
 #include <Basalt/Core/JsonUtils.h>
 #include <Basalt/Core/Log.h>
 #include <Basalt/Project/ProjectValidator.h>
@@ -26,6 +28,7 @@
 using namespace Basalt;
 using json = nlohmann::json;
 using AnimationTest::ClearAssetCache;
+using BasaltTest::Contains;
 using BasaltTest::Run;
 using BasaltTest::RunError;
 using BasaltTest::TempProject;
@@ -52,7 +55,7 @@ namespace {
 		m.Transmission = 0.125f;
 		for (size_t slot = 0; slot < MaterialTextureSlotCount; slot++)
 		{
-			MaterialAsset::GetMap(m, static_cast<MaterialTextureSlot>(slot)) = "Assets/Textures/" + std::string(MaterialAsset::SlotNames[slot]) + ".png";
+			MaterialAsset::GetMap(m, static_cast<MaterialTextureSlot>(slot)) = "Assets/Textures/" + std::string(MaterialAsset::Slots[slot].Name) + ".png";
 			m.TextureTransforms[slot] = { { 0.125f * static_cast<float>(slot), 0.25f }, { 2.0f, 0.5f }, 0.5f, static_cast<uint32_t>(slot % 2) };
 		}
 		return m;
@@ -76,7 +79,7 @@ namespace {
 		CHECK(a.Transmission == b.Transmission);
 		for (size_t slot = 0; slot < MaterialTextureSlotCount; slot++)
 		{
-			INFO(MaterialAsset::SlotNames[slot]);
+			INFO(MaterialAsset::Slots[slot].Name);
 			CHECK(MaterialAsset::GetMap(a, static_cast<MaterialTextureSlot>(slot)) == MaterialAsset::GetMap(b, static_cast<MaterialTextureSlot>(slot)));
 			CHECK(a.TextureTransforms[slot].Offset == b.TextureTransforms[slot].Offset);
 			CHECK(a.TextureTransforms[slot].Scale == b.TextureTransforms[slot].Scale);
@@ -146,15 +149,58 @@ TEST_SUITE("MaterialAsset")
 		decimal.AlbedoColor = { 0.1f, 0.2f, 0.3f, 1.0f };
 		CHECK(FileJson(decimal)["Roughness"].dump() == "0.6");
 		CHECK(FileJson(decimal)["AlbedoColor"].dump() == "[0.1,0.2,0.3,1]");
-		CHECK(MaterialAsset::FromJson(FileJson(decimal), error)->Roughness == 0.6f);
+		const auto readBack = MaterialAsset::FromJson(FileJson(decimal), error);
+		REQUIRE(readBack);
+		CHECK(readBack->Roughness == 0.6f);
 		decimal.NormalScale = std::numeric_limits<float>::max();
 		decimal.ClearcoatNormalScale = -std::numeric_limits<float>::max();
-		CHECK(MaterialAsset::FromJson(FileJson(decimal), error)->NormalScale == std::numeric_limits<float>::max());
-		CHECK(MaterialAsset::FromJson(FileJson(decimal), error)->ClearcoatNormalScale == -std::numeric_limits<float>::max());
+		const auto extreme = MaterialAsset::FromJson(FileJson(decimal), error);
+		REQUIRE_MESSAGE(extreme, error);
+		CHECK(extreme->NormalScale == std::numeric_limits<float>::max());
+		CHECK(extreme->ClearcoatNormalScale == -std::numeric_limits<float>::max());
 		MaterialData one;
 		one.TextureTransforms[static_cast<size_t>(MaterialTextureSlot::Emissive)].TexCoord = 1;
 		CHECK(FileJson(one)["TextureTransforms"].size() == 1);
 		CHECK(FileJson(one)["TextureTransforms"].contains("Emissive"));
+	}
+
+	TEST_CASE("Each map key of the file format sets exactly its own slot")
+	{
+		// Literal keys: a swapped name in the slot table would still round trip, but change the format.
+		const std::pair<const char*, MaterialTextureSlot> keys[] = { { "AlbedoMap", MaterialTextureSlot::Albedo }, { "NormalMap", MaterialTextureSlot::Normal }, { "MetallicRoughnessMap", MaterialTextureSlot::MetallicRoughness }, { "OcclusionMap", MaterialTextureSlot::Occlusion }, { "EmissiveMap", MaterialTextureSlot::Emissive }, { "ClearcoatMap", MaterialTextureSlot::Clearcoat }, { "ClearcoatRoughnessMap", MaterialTextureSlot::ClearcoatRoughness }, { "ClearcoatNormalMap", MaterialTextureSlot::ClearcoatNormal }, { "TransmissionMap", MaterialTextureSlot::Transmission } };
+		const std::pair<const char*, MaterialTextureSlot> transforms[] = { { "Albedo", MaterialTextureSlot::Albedo }, { "Normal", MaterialTextureSlot::Normal }, { "MetallicRoughness", MaterialTextureSlot::MetallicRoughness }, { "Occlusion", MaterialTextureSlot::Occlusion }, { "Emissive", MaterialTextureSlot::Emissive }, { "Clearcoat", MaterialTextureSlot::Clearcoat }, { "ClearcoatRoughness", MaterialTextureSlot::ClearcoatRoughness }, { "ClearcoatNormal", MaterialTextureSlot::ClearcoatNormal }, { "Transmission", MaterialTextureSlot::Transmission } };
+		for (const auto& [key, slot] : keys)
+		{
+			INFO(key);
+			std::string error;
+			const auto material = MaterialAsset::FromJson({ { "Version", 1 }, { key, "x" } }, error);
+			REQUIRE_MESSAGE(material, error);
+			for (size_t other = 0; other < MaterialTextureSlotCount; other++)
+				CHECK(MaterialAsset::GetMap(*material, static_cast<MaterialTextureSlot>(other)) == (static_cast<MaterialTextureSlot>(other) == slot ? "x" : ""));
+		}
+		for (const auto& [key, slot] : transforms)
+		{
+			INFO(key);
+			std::string error;
+			const auto material = MaterialAsset::FromJson({ { "Version", 1 }, { "TextureTransforms", { { key, { { "TexCoord", 1 } } } } } }, error);
+			REQUIRE_MESSAGE(material, error);
+			for (size_t other = 0; other < MaterialTextureSlotCount; other++)
+				CHECK(material->TextureTransforms[other].TexCoord == (static_cast<MaterialTextureSlot>(other) == slot ? 1u : 0u));
+		}
+	}
+
+	TEST_CASE("Material file names are safe on every platform")
+	{
+		CHECK(MaterialAsset::MakeFileName("Red/Paint") == "Red_Paint");
+		CHECK(MaterialAsset::MakeFileName("  .hidden. ") == "hidden");
+		CHECK(MaterialAsset::MakeFileName("...").empty());
+		CHECK(MaterialAsset::MakeFileName("").empty());
+		CHECK(MaterialAsset::MakeFileName(std::string(100, 'a')).size() == 64);
+		CHECK(MaterialAsset::MakeFileName("Ölfarbe") == "__lfarbe");
+		CHECK(MaterialAsset::MakeFileName("CON") == "CON_");
+		CHECK(MaterialAsset::MakeFileName("nul.001") == "nul.001_");
+		CHECK(MaterialAsset::MakeFileName("Console") == "Console");
+		CHECK(MaterialAsset::MakeFileName("com1") == "com1_");
 	}
 
 	TEST_CASE("Material files reject malformed values with the field's location")
@@ -277,6 +323,22 @@ TEST_SUITE("MaterialAsset")
 			INFO(bad);
 			CHECK_FALSE(ParseSubAssetIndex(bad, ImportedMaterialMarker));
 		}
+		CHECK(MakeSubAssetKey("Assets/a.glb", ImportedMaterialMarker, 3) == "Assets/a.glb#material/3");
+		// Material and texture keys name the right kind of file.
+		CHECK(MaterialAsset::IsMaterialKey("Assets/a.bmaterial"));
+		CHECK(MaterialAsset::IsMaterialKey("Assets/a.GLTF#material/0"));
+		for (const char* bad : { "Assets/a.png#material/0", "Assets/a.bmaterial#material/0", "Assets/a.glb", "Assets/a.glb#image/0", "Assets/a.bmaterial#image/0", "" })
+		{
+			INFO(bad);
+			CHECK_FALSE(MaterialAsset::IsMaterialKey(bad));
+		}
+		CHECK(MaterialAsset::IsTextureKey("Assets/a.png"));
+		CHECK(MaterialAsset::IsTextureKey("Assets/a.glb#image/2"));
+		for (const char* bad : { "Assets/a.wav", "builtin://Cube", "Assets/a.glb", "Assets/a.png#image/0", "Assets/a.glb#material/0" })
+		{
+			INFO(bad);
+			CHECK_FALSE(MaterialAsset::IsTextureKey(bad));
+		}
 	}
 
 	TEST_CASE("Material references use UUIDs, survive moves and keep sub-asset fragments")
@@ -301,9 +363,13 @@ TEST_SUITE("MaterialAsset")
 		// A legacy path-only file migrates on move like scenes and prefabs do.
 		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Materials/Legacy.bmaterial"), json{ { "Version", 1 }, { "AlbedoMap", "Assets/Textures/Rock.png" }, { "NormalMap", "Assets/Textures/Other.png" } }.dump()));
 
+		// Loaded before the moves: the move commands drop what they invalidate.
+		REQUIRE(AssetManager::GetMaterial("Assets/Materials/Rock.bmaterial"));
+		std::vector<std::pair<std::string, std::string>> notified;
+		session.OnAssetMoved = [&](const std::string& from, const std::string& to) { notified.emplace_back(from, to); };
 		Run(registry, session, "asset.move", { { "from", "Assets/Textures/Rock.png" }, { "to", "Assets/Textures/Moved/Rock.png" } });
 		Run(registry, session, "asset.move", { { "from", model }, { "to", "Assets/Models/Moved.gltf" } });
-		AssetManager::Clear();
+		CHECK(notified == std::vector<std::pair<std::string, std::string>>{ { "Assets/Textures/Rock.png", "Assets/Textures/Moved/Rock.png" }, { model, "Assets/Models/Moved.gltf" } });
 		const auto moved = AssetManager::GetMaterial("Assets/Materials/Rock.bmaterial");
 		REQUIRE(moved);
 		CHECK(moved->AlbedoMap == "Assets/Textures/Moved/Rock.png");
@@ -313,20 +379,34 @@ TEST_SUITE("MaterialAsset")
 		REQUIRE(legacy["AlbedoMap"].is_object());
 		// Only references to the moved file are rewritten.
 		CHECK(legacy["NormalMap"] == "Assets/Textures/Other.png");
-		CHECK(AssetManager::GetMaterial("Assets/Materials/Legacy.bmaterial")->AlbedoMap == "Assets/Textures/Moved/Rock.png");
+		const auto legacyMaterial = AssetManager::GetMaterial("Assets/Materials/Legacy.bmaterial");
+		REQUIRE(legacyMaterial);
+		CHECK(legacyMaterial->AlbedoMap == "Assets/Textures/Moved/Rock.png");
 
-		// A texture whose identity is gone renders without it and says so once.
-		std::filesystem::remove(Project::ResolvePath("Assets/Textures/Moved/Rock.png"));
-		std::filesystem::remove(Project::ResolvePath("Assets/Textures/Moved/Rock.png.meta"));
+		// A texture whose identity goes away outside the session: the cached material drops with it (its decoded path is
+		// stale), renders without it and says so once; when it comes back, the next change resolves it again.
+		const std::string texture = "Assets/Textures/Moved/Rock.png";
+		const std::string meta = *FileSystem::ReadTextFile(Project::ResolvePath(texture + ".meta"));
+		std::filesystem::remove(Project::ResolvePath(texture));
+		std::filesystem::remove(Project::ResolvePath(texture + ".meta"));
 		REQUIRE(Project::GetActive()->GetAssets().Refresh(error));
-		AssetManager::Clear();
+		const auto dropped = AssetManager::ReloadChanged({ texture });
+		CHECK(std::find(dropped.begin(), dropped.end(), "Assets/Materials/Rock.bmaterial") != dropped.end());
 		const auto since = Log::GetHistory().GetTotalCount();
 		const auto unresolved = AssetManager::GetMaterial("Assets/Materials/Rock.bmaterial");
 		REQUIRE(unresolved);
 		CHECK(AssetRegistry::IsUnresolvedKey(unresolved->AlbedoMap));
 		CHECK(BasaltTest::CountLogMessages(since, "unresolved asset UUID") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "(hint: Assets/Textures/Rock.png)") == 1);
 		const auto report = ValidateProject(*Project::GetActive());
 		CHECK(std::any_of(report.GetIssues().begin(), report.GetIssues().end(), [](const ValidationIssue& issue) { return issue.File == "Assets/Materials/Rock.bmaterial" && issue.Message.find("unresolved asset UUID") != std::string::npos; }));
+		WritePixel(texture);
+		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath(texture + ".meta"), meta));
+		REQUIRE(Project::GetActive()->GetAssets().Refresh(error));
+		AssetManager::ReloadChanged({ texture + ".meta" });
+		const auto restored = AssetManager::GetMaterial("Assets/Materials/Rock.bmaterial");
+		REQUIRE(restored);
+		CHECK(restored->AlbedoMap == texture);
 	}
 
 	TEST_CASE("A failed material-file migration restores every document")
@@ -370,7 +450,9 @@ TEST_SUITE("MaterialAsset")
 		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath(path), R"({"Version": 1, "Metallic": 1})"));
 		AssetManager::ReloadChanged({ path });
 		REQUIRE(AssetManager::GetMaterial(path));
-		CHECK(AssetManager::GetMaterial(path)->Metallic == 1.0f);
+		const auto recovered = AssetManager::GetMaterial(path);
+		REQUIRE(recovered);
+		CHECK(recovered->Metallic == 1.0f);
 
 		// Imported materials alias their model and keep everything the importer read.
 		const auto imported = AssetManager::GetMaterial(model + "#material/0");
@@ -383,17 +465,31 @@ TEST_SUITE("MaterialAsset")
 		CHECK(imported->TextureTransforms[0].TexCoord == 1);
 		CHECK(imported->TextureTransforms[0].Rotation == doctest::Approx(0.75f));
 		CHECK(imported->AlbedoMap == "Assets/Models/Paint.png");
-		CHECK(AssetManager::GetMaterial(model + "#material/1")->Metallic == doctest::Approx(0.25f));
+		const auto second = AssetManager::GetMaterial(model + "#material/1");
+		REQUIRE(second);
+		CHECK(second->Metallic == doctest::Approx(0.25f));
 		// The importer's default material for primitives without one is not addressable.
 		CHECK_FALSE(AssetManager::GetMaterial(model + "#material/2"));
 		CHECK(AssetManager::GetError(model + "#material/2").find("has no material 2 (it has 2)") != std::string::npos);
+		// The largest index must not wrap the bounds check around.
+		CHECK_FALSE(AssetManager::GetMaterial(model + "#material/4294967295"));
+		CHECK(AssetManager::GetError(model + "#material/4294967295").find("has no material 4294967295") != std::string::npos);
 		CHECK_FALSE(AssetManager::GetMaterial(model + "#material/x"));
 		CHECK(AssetManager::GetError(model + "#material/x").find("invalid imported material key") != std::string::npos);
 		CHECK_FALSE(AssetManager::GetMaterial("builtin://Sphere#material/0"));
+		CHECK(AssetManager::GetError("builtin://Sphere#material/0").find("'builtin://Sphere' has no material 0 (it has 0)") != std::string::npos);
+		CHECK_FALSE(AssetManager::GetMaterial("asset-uuid://42/416e"));
+		CHECK(AssetManager::GetError("asset-uuid://42/416e") == "unresolved asset UUID 42 (was 'An')");
 		CHECK_FALSE(AssetManager::GetMaterial("Assets/Models/Paint.png"));
 		CHECK(AssetManager::GetError("Assets/Models/Paint.png").find("is not a material") != std::string::npos);
 
-		// A model change drops its imported materials with it.
+		// A change to a file the model reads drops its imported materials with it.
+		REQUIRE(AssetManager::GetMaterial(model + "#material/0"));
+		const auto byBuffer = AssetManager::ReloadChanged({ "Assets/Models/Sphere.bin" });
+		CHECK(std::find(byBuffer.begin(), byBuffer.end(), model + "#material/0") != byBuffer.end());
+		REQUIRE(AssetManager::GetMaterial(model + "#material/0"));
+		CHECK_FALSE(AssetManager::GetMaterial(model + "#material/2"));
+		// So does a change to the model itself.
 		auto keys = AssetManager::ReloadChanged({ model });
 		CHECK(std::find(keys.begin(), keys.end(), model + "#material/0") != keys.end());
 		CHECK(std::find(keys.begin(), keys.end(), model + "#material/2") != keys.end());
@@ -438,13 +534,18 @@ TEST_SUITE("MaterialAsset")
 			INFO(valid);
 			CHECK_MESSAGE(ComponentRegistry::AddOrPatch(entity, "Material", { { "Material", valid } }, error), error);
 		}
-		for (const char* invalid : { "Assets/a.png", "Assets/Ship.glb", "Assets/Ship.glb#image/0", "Assets/Ship.glb#material/x" })
+		for (const char* invalid : { "Assets/a.png", "Assets/Ship.glb", "Assets/Ship.glb#image/0", "Assets/Ship.glb#material/x", "Assets/a.png#material/0", "Assets/M.bmaterial#material/0" })
 		{
 			INFO(invalid);
 			CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, "Material", { { "Material", invalid } }, error));
-			CHECK(error.find("must be a .bmaterial file or <model>#material/<n>") != std::string::npos);
+			CHECK(error.find("must be a .bmaterial file or <.gltf/.glb model>#material/<n>") != std::string::npos);
 		}
 		CHECK(entity.GetComponent<MaterialComponent>().Material == "Assets/Ship.glb#material/0");
+		// The numeric rules are the material file's, so the inline values are always a valid material.
+		CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, "Material", { { "Clearcoat", 1.5 } }, error));
+		CHECK(error.find("Clearcoat 1.5 must be in [0, 1]") != std::string::npos);
+		CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, "Material", { { "EmissiveIntensity", -1 } }, error));
+		CHECK(error.find("EmissiveIntensity -1 must be finite and nonnegative") != std::string::npos);
 	}
 
 	TEST_CASE("Material commands write validated files from defaults, entities and models")
@@ -465,10 +566,27 @@ TEST_SUITE("MaterialAsset")
 		CHECK(RunError(registry, session, "asset.write", { { "path", path }, { "content", R"({"Version": 1, "Transmission": 2})" } }).find("invalid material: Transmission 2 must be in [0, 1]") != std::string::npos);
 		CHECK(RunError(registry, session, "asset.write", { { "path", path }, { "content", "{" } }).find("invalid material") != std::string::npos);
 		CHECK(Run(registry, session, "asset.read", { { "path", path } })["content"] == valid);
+		// Wrong kinds of maps, letter case and unresolved UUIDs are reported too.
+		std::filesystem::create_directories(Project::ResolvePath("Assets/Audio"));
+		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Audio/Beep.wav"), "RIFF"));
+		const json problems = { { "Version", 1 }, { "NormalMap", "Assets/Audio/Beep.wav" }, { "EmissiveMap", "Assets/Textures/rock.png" }, { "TransmissionMap", { { "UUID", "77" }, { "Path", "Assets/Textures/Gone.png" } } } };
+		const auto warned = Run(registry, session, "asset.write", { { "path", "Assets/Materials/Problems.bmaterial" }, { "content", problems.dump() } });
+		const std::string warnings = warned.value("warnings", json::array()).dump();
+		CHECK_MESSAGE(Contains(warnings, "NormalMap: 'Assets/Audio/Beep.wav' is not a texture"), warnings);
+		CHECK_MESSAGE(Contains(warnings, "EmissiveMap: 'Assets/Textures/rock.png' differs from the file on disk in letter case"), warnings);
+		CHECK_MESSAGE(Contains(warnings, "TransmissionMap: unresolved asset UUID 77 (was 'Assets/Textures/Gone.png')"), warnings);
+		// Writing a material that is already loaded replaces it everywhere it is used.
+		REQUIRE(AssetManager::GetMaterial(path));
+		Run(registry, session, "asset.write", { { "path", path }, { "content", R"({"Version": 1, "Metallic": 0.75})" } });
+		const auto rewritten = AssetManager::GetMaterial(path);
+		REQUIRE(rewritten);
+		CHECK(rewritten->Metallic == 0.75f);
 
 		// material.create: defaults, then from an entity's inline values or its asset.
 		CHECK(Run(registry, session, "material.create", { { "path", "Assets/Materials/Default.bmaterial" } })["path"] == "Assets/Materials/Default.bmaterial");
-		CheckSame(*AssetManager::GetMaterial("Assets/Materials/Default.bmaterial"), MaterialData{});
+		const auto defaults = AssetManager::GetMaterial("Assets/Materials/Default.bmaterial");
+		REQUIRE(defaults);
+		CheckSame(*defaults, MaterialData{});
 		CHECK(RunError(registry, session, "material.create", { { "path", "Assets/Materials/Default.bmaterial" } }).find("already exists") != std::string::npos);
 		CHECK(RunError(registry, session, "material.create", { { "path", "Assets/Materials/Wrong.json" } }).find(".bmaterial extension") != std::string::npos);
 		CHECK(RunError(registry, session, "material.create", { { "path", "Materials/Outside.bmaterial" } }).find("must be under Assets/") != std::string::npos);
@@ -482,8 +600,17 @@ TEST_SUITE("MaterialAsset")
 		CHECK(plain["AlbedoMap"].is_object());
 		CHECK(plain["TextureTransforms"].size() == MaterialTextureSlotCount);
 		Run(registry, session, "component.set", { { "entity", "Plain" }, { "component", "Material" }, { "data", { { "Material", model + "#material/0" } } } });
+		Run(registry, session, "material.create", { { "path", "Assets/Materials/FromAsset.bmaterial" }, { "entity", "Plain" } });
+		const auto fromAsset = AssetManager::GetMaterial("Assets/Materials/FromAsset.bmaterial");
+		REQUIRE(fromAsset);
+		CHECK(fromAsset->Alpha == AlphaMode::Mask);
+		// Overwriting replaces the cached copy as well.
+		Run(registry, session, "component.set", { { "entity", "Plain" }, { "component", "Material" }, { "data", { { "Material", model + "#material/1" } } } });
 		Run(registry, session, "material.create", { { "path", "Assets/Materials/FromAsset.bmaterial" }, { "entity", "Plain" }, { "overwrite", true } });
-		CHECK(AssetManager::GetMaterial("Assets/Materials/FromAsset.bmaterial")->Alpha == AlphaMode::Mask);
+		const auto overwritten = AssetManager::GetMaterial("Assets/Materials/FromAsset.bmaterial");
+		REQUIRE(overwritten);
+		CHECK(overwritten->Alpha == AlphaMode::Opaque);
+		CHECK(overwritten->Metallic == 0.25f);
 		Run(registry, session, "component.set", { { "entity", "Plain" }, { "component", "Material" }, { "data", { { "Material", "Assets/Materials/Gone.bmaterial" } } } });
 		CHECK(RunError(registry, session, "material.create", { { "path", "Assets/Materials/Gone2.bmaterial" }, { "entity", "Plain" } }).find("cannot read Material") != std::string::npos);
 
@@ -503,14 +630,26 @@ TEST_SUITE("MaterialAsset")
 		CHECK(Run(registry, session, "material.extract", { { "model", model }, { "folder", "Assets/Other" }, { "overwrite", true } })["materials"][1]["path"] == "Assets/Other/red_paint_2.bmaterial");
 		CHECK(RunError(registry, session, "material.extract", { { "model", "Assets/Textures/Rock.png" } }).find("is not a glTF model") != std::string::npos);
 		CHECK(RunError(registry, session, "material.extract", { { "model", model }, { "folder", "Outside" } }).find("must be under Assets/") != std::string::npos);
+		// A write that fails part way says how many files were written (they are kept).
+		std::filesystem::create_directories(Project::ResolvePath("Assets/Partial/red_paint_2.bmaterial"));
+		const std::string partial = RunError(registry, session, "material.extract", { { "model", model }, { "folder", "Assets/Partial" }, { "overwrite", true } });
+		CHECK_MESSAGE(Contains(partial, "(1 of 2 files were written before it)"), partial);
+		CHECK(FileSystem::Exists(Project::ResolvePath("Assets/Partial/Red_Paint.bmaterial")));
 
 		// asset.preload reads a material and requests its textures.
 		const auto preload = Run(registry, session, "asset.preload", { { "paths", { "Assets/Materials/Plain.bmaterial", "Assets/Materials/Gone.bmaterial" } }, { "wait", true } });
 		REQUIRE(preload.size() == 3);
 		CHECK(preload[0]["status"] == "ready");
 		CHECK(preload[1]["status"] == "failed");
+		CHECK(Contains(preload[1]["error"].get<std::string>(), "cannot read material 'Assets/Materials/Gone.bmaterial'"));
 		CHECK(preload[2]["path"] == "Assets/Textures/Rock.png");
 		CHECK(preload[2]["status"] == "ready");
+		// A texture whose UUID does not resolve is a failed entry, not silently skipped.
+		const auto unresolved = Run(registry, session, "asset.preload", { { "paths", { "Assets/Materials/Problems.bmaterial" } }, { "wait", true } });
+		const auto entry = std::find_if(unresolved.begin(), unresolved.end(), [](const json& e) { return e["path"].get<std::string>().starts_with("asset-uuid://77/"); });
+		REQUIRE(entry != unresolved.end());
+		CHECK((*entry)["status"] == "failed");
+		CHECK((*entry)["error"] == "unresolved asset UUID 77 (was 'Assets/Textures/Gone.png')");
 	}
 
 	TEST_CASE("Project validation checks material files and their textures")
@@ -522,6 +661,18 @@ TEST_SUITE("MaterialAsset")
 		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Missing.bmaterial"), json{ { "Version", 1 }, { "NormalMap", "Assets/missing.png" } }.dump()));
 		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Bad.bmaterial"), R"({"Version": 1, "Clearcoat": 3})"));
 		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Case.bmaterial"), json{ { "Version", 1 }, { "AlbedoMap", "Assets/rock.png" } }.dump()));
+		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Sound.wav"), "RIFF"));
+		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Kind.bmaterial"), json{ { "Version", 1 }, { "AlbedoMap", "Assets/Sound.wav" }, { "NormalMap", "builtin://Cube" } }.dump()));
+		// Sub-assets must exist in their model: the sphere model has 2 materials and 1 image.
+		const std::string model = WriteMaterialModel(project);
+		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Images.bmaterial"), json{ { "Version", 1 }, { "AlbedoMap", model + "#image/0" }, { "EmissiveMap", model + "#image/5" } }.dump()));
+		Scene scene("SubAssets");
+		Entity good = scene.CreateEntity("Good");
+		good.AddComponent<MaterialComponent>().Material = model + "#material/1";
+		Entity bad = scene.CreateEntity("Bad");
+		bad.AddComponent<MaterialComponent>().Material = model + "#material/9";
+		std::string error;
+		REQUIRE_MESSAGE(SceneSerializer::SaveScene(scene, Project::ResolvePath("Assets/SubAssets.bscene"), error), error);
 		const auto report = ValidateProject(*Project::GetActive());
 		auto has = [&](const std::string& file, const std::string& text) {
 			return std::any_of(report.GetIssues().begin(), report.GetIssues().end(), [&](const ValidationIssue& issue) { return issue.File == file && issue.Message.find(text) != std::string::npos; });
@@ -529,6 +680,12 @@ TEST_SUITE("MaterialAsset")
 		CHECK(has("Assets/Bad.bmaterial", "invalid material: Clearcoat 3 must be in [0, 1]"));
 		CHECK(has("Assets/Missing.bmaterial", "NormalMap references the missing file 'Assets/missing.png'"));
 		CHECK(has("Assets/Case.bmaterial", "letter case matters"));
+		CHECK(has("Assets/Kind.bmaterial", "AlbedoMap references 'Assets/Sound.wav', which is not a texture"));
+		CHECK(has("Assets/Kind.bmaterial", "NormalMap references 'builtin://Cube', which is not a texture"));
+		CHECK(has("Assets/Images.bmaterial", fmt::format("EmissiveMap references '{0}#image/5', but '{0}' has 1 image(s)", model)));
+		CHECK_FALSE(has("Assets/Images.bmaterial", "#image/0"));
+		CHECK(has("Assets/SubAssets.bscene", "#material/9', but '" + model + "' has 2 material(s)"));
+		CHECK_FALSE(has("Assets/SubAssets.bscene", "#material/1"));
 		CHECK(std::none_of(report.GetIssues().begin(), report.GetIssues().end(), [](const ValidationIssue& issue) { return issue.File == "Assets/Good.bmaterial"; }));
 	}
 
@@ -545,7 +702,9 @@ TEST_SUITE("MaterialAsset")
 		material.AlbedoMap = "Assets/Rock.png";
 		material.EmissiveMap = model + "#image/0";
 		std::string error;
-		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/A.bmaterial"), MaterialAsset::ToJson(material, true, error)->dump()));
+		const auto text = MaterialAsset::ToJson(material, true, error);
+		REQUIRE_MESSAGE(text, error);
+		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/A.bmaterial"), text->dump()));
 		const ThumbnailCache cache(project.GetDirectory());
 		const auto dependencies = cache.GetDependencies("Assets/A.bmaterial");
 		CHECK(dependencies == std::vector<std::string>{ "Assets/Models/Paint.png", "Assets/Models/Sphere.bin", "Assets/Models/Sphere.gltf", "Assets/Rock.png" });
@@ -574,6 +733,19 @@ TEST_SUITE("MaterialAsset")
 		const auto tracked = MaterialPreviewDependencies(component);
 		CHECK(std::find(tracked.begin(), tracked.end(), "Assets/Rock.png") != tracked.end());
 		CHECK(std::find(tracked.begin(), tracked.end(), "Assets/A.bmaterial") != tracked.end());
+		// A model's imported material follows the model's buffers and external images.
+		component.Material = model + "#material/0";
+		const auto imported = MaterialPreviewDependencies(component);
+		CHECK(imported == std::vector<std::string>{ "Assets/Models/Paint.png", "Assets/Models/Sphere.bin", "Assets/Models/Sphere.gltf" });
+		// So do by-value previews (tooltip swatches, drafts).
+		MaterialData swatch;
+		swatch.EmissiveMap = model + "#image/0";
+		CHECK(MaterialPreviewDependencies(swatch) == imported);
+		// Without a registry to decode a UUID, the Path hint is still watched.
+		const json unknown = { { "Version", 1 }, { "AlbedoMap", { { "UUID", "123" }, { "Path", "Assets/Rock.png" } } } };
+		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Unknown.bmaterial"), unknown.dump()));
+		const auto hinted = cache.GetDependencies("Assets/Unknown.bmaterial");
+		CHECK(std::find(hinted.begin(), hinted.end(), "Assets/Rock.png") != hinted.end());
 	}
 
 	TEST_CASE("The material editor's draft tracks edits, saves canonically and follows external changes")
@@ -606,7 +778,20 @@ TEST_SUITE("MaterialAsset")
 		CHECK(saved["AlbedoMap"].is_object());
 		CHECK(saved["TextureTransforms"].size() == 1);
 		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath(path), *text));
-		draft.MarkSaved();
+		REQUIRE_MESSAGE(draft.MarkSaved(*text, error), error);
+		CHECK_FALSE(draft.IsDirty());
+		CHECK(draft.GetData()["Metallic"] == 0.5);
+		CHECK(draft.GetData()["Roughness"] == 0.5);
+		// A value changed and changed back to a float that reads the same (a widget writes 0.6f back as
+		// 0.60000002384...) is not an edit.
+		draft.GetData()["Metallic"] = 0.6;
+		const auto edited = draft.MakeFileText(error);
+		REQUIRE_MESSAGE(edited, error);
+		REQUIRE_MESSAGE(draft.MarkSaved(*edited, error), error);
+		REQUIRE(draft.GetData()["Metallic"] == 0.6);
+		draft.GetData()["Metallic"] = 0.25;
+		CHECK(draft.IsDirty());
+		draft.GetData()["Metallic"] = static_cast<double>(0.6f);
 		CHECK_FALSE(draft.IsDirty());
 
 		// Invalid edits are reported and never saved.
@@ -628,12 +813,103 @@ TEST_SUITE("MaterialAsset")
 		CHECK(draft.OnFileChanged(error));
 		CHECK(draft.GetData()["Roughness"] == 0.75);
 		CHECK_FALSE(draft.IsDirty());
-		// An unreadable new version leaves the draft as it was and says why.
+		// An unreadable new version leaves the draft as it was, says why and marks the conflict (a save would replace it).
 		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath(path), "{"));
 		CHECK_FALSE(draft.OnFileChanged(error));
 		CHECK_FALSE(error.empty());
+		CHECK(draft.HasExternalChange());
 		CHECK(draft.GetData()["Roughness"] == 0.75);
 		draft.Close();
 		CHECK_FALSE(draft.IsOpen());
+	}
+
+	TEST_CASE("The material editor's draft keeps unresolved references and follows moves")
+	{
+		ClearAssetCache clear;
+		TempProject project("MaterialDraftMoves");
+		CommandRegistry registry;
+		AutomationSession session;
+		WritePixel("Assets/Rock.png");
+		std::string error;
+		// An unresolved UUID round trips through an edit and a save, keeping its identity.
+		const json unresolved = { { "UUID", "4242" }, { "Path", "Assets/Gone.png" } };
+		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Lost.bmaterial"), json{ { "Version", 1 }, { "AlbedoMap", unresolved } }.dump()));
+		MaterialAssetDraft lost;
+		REQUIRE_MESSAGE(lost.Load("Assets/Lost.bmaterial", error), error);
+		REQUIRE(lost.GetWarnings().size() == 1);
+		CHECK(Contains(lost.GetWarnings()[0], "unresolved asset UUID 4242"));
+		lost.GetData()["Metallic"] = 0.5;
+		const auto lostText = lost.MakeFileText(error);
+		REQUIRE_MESSAGE(lostText, error);
+		CHECK(ParseJson(*lostText)["AlbedoMap"] == unresolved);
+
+		// A move of the draft's texture or of its own file is followed, edits and all.
+		Run(registry, session, "asset.write", { { "path", "Assets/Wall.bmaterial" }, { "content", json{ { "Version", 1 }, { "AlbedoMap", "Assets/Rock.png" } }.dump() } });
+		MaterialAssetDraft draft;
+		REQUIRE_MESSAGE(draft.Load("Assets/Wall.bmaterial", error), error);
+		draft.GetData()["Metallic"] = 0.5;
+		session.OnAssetMoved = [&](const std::string& from, const std::string& to) { draft.OnAssetMoved(from, to); };
+		Run(registry, session, "asset.move", { { "from", "Assets/Rock.png" }, { "to", "Assets/Stone/Rock.png" } });
+		Run(registry, session, "asset.rename", { { "from", "Assets/Wall.bmaterial" }, { "to", "Assets/Walls.bmaterial" } });
+		CHECK(draft.GetPath() == "Assets/Walls.bmaterial");
+		CHECK(draft.GetData()["AlbedoMap"] == "Assets/Stone/Rock.png");
+		CHECK(draft.GetData()["Metallic"] == 0.5);
+		CHECK(draft.IsDirty());
+		const auto text = draft.MakeFileText(error);
+		REQUIRE_MESSAGE(text, error);
+		const json saved = ParseJson(*text);
+		REQUIRE(saved["AlbedoMap"].is_object());
+		CHECK(saved["AlbedoMap"]["Path"] == "Assets/Stone/Rock.png");
+	}
+
+	TEST_CASE("Imported materials resolve without caching while their model streams in")
+	{
+		ClearAssetCache clear;
+		TempProject project("MaterialStreaming");
+		const std::string model = WriteMaterialModel(project);
+		const std::string key = model + "#material/0";
+		AssetManager::PublishCompleted();
+		CHECK_FALSE(AssetManager::RequestMaterial(key));
+		CHECK(AssetManager::IsLoading(model));
+		CHECK(AssetManager::GetError(key).empty());
+		const auto loading = AssetManager::GetLoadedKeys();
+		CHECK(std::find(loading.begin(), loading.end(), key) == loading.end());
+		JobSystem::Get().WaitIdle();
+		// Finished workers publish only at the frame fence.
+		CHECK_FALSE(AssetManager::RequestMaterial(key));
+		AssetManager::PublishCompleted();
+		const auto published = AssetManager::RequestMaterial(key);
+		REQUIRE(published);
+		CHECK(published->Name == "Red/Paint");
+		CHECK(AssetManager::RequestMaterial(key) == published);
+
+		// A model that fails is a cached failure until it changes.
+		const std::string missing = "Assets/Models/Missing.gltf";
+		CHECK_FALSE(AssetManager::RequestMaterial(missing + "#material/0"));
+		JobSystem::Get().WaitIdle();
+		AssetManager::PublishCompleted();
+		CHECK_FALSE(AssetManager::RequestMaterial(missing + "#material/0"));
+		CHECK(Contains(AssetManager::GetError(missing + "#material/0"), "cannot load 'Assets/Models/Missing.gltf' for its material"));
+		std::filesystem::copy_file(Project::ResolvePath(model), Project::ResolvePath(missing));
+		AssetManager::ReloadChanged({ missing });
+		CHECK(AssetManager::GetMaterial(missing + "#material/0"));
+	}
+
+	TEST_CASE("Switching projects drops their material files")
+	{
+		ClearAssetCache clear;
+		Ref<const MaterialData> first;
+		{
+			TempProject project("MaterialProjectA");
+			REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/M.bmaterial"), R"({"Version": 1, "Metallic": 0.25})"));
+			first = AssetManager::GetMaterial("Assets/M.bmaterial");
+			REQUIRE(first);
+		}
+		TempProject project("MaterialProjectB");
+		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/M.bmaterial"), R"({"Version": 1, "Metallic": 0.75})"));
+		const auto second = AssetManager::GetMaterial("Assets/M.bmaterial");
+		REQUIRE(second);
+		CHECK(second->Metallic == 0.75f);
+		CHECK(first->Metallic == 0.25f);
 	}
 }

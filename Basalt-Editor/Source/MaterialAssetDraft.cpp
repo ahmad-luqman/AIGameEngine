@@ -1,9 +1,9 @@
 #include "MaterialAssetDraft.h"
 
+#include "Basalt/Asset/AssetKey.h"
 #include "Basalt/Asset/MaterialAsset.h"
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/FileSystem.h"
-#include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Project/Project.h"
 
 namespace Basalt {
@@ -24,23 +24,6 @@ namespace Basalt {
 					MakeFloats(element, name);
 		}
 
-		std::optional<nlohmann::json> ReadEditable(const std::string& path, std::string& outError)
-		{
-			const auto text = FileSystem::ReadTextFile(Project::ResolvePath(path));
-			if (!text)
-			{
-				outError = "cannot read '" + path + "'";
-				return std::nullopt;
-			}
-			const auto data = ParseJson(*text, outError);
-			if (data.is_discarded())
-				return std::nullopt;
-			const auto material = MaterialAsset::FromJson(data, outError);
-			if (!material)
-				return std::nullopt;
-			return MaterialAssetDraft::ToEditable(*material);
-		}
-
 	}
 
 	nlohmann::json MaterialAssetDraft::ToEditable(const MaterialData& material)
@@ -54,30 +37,60 @@ namespace Basalt {
 		auto& transforms = (*data)["TextureTransforms"];
 		if (!transforms.is_object())
 			transforms = nlohmann::json::object();
-		for (const char* slot : MaterialAsset::SlotNames)
-			if (!transforms.contains(slot))
-				transforms[slot] = { { "Offset", { 0.0f, 0.0f } }, { "Scale", { 1.0f, 1.0f } }, { "Rotation", 0.0f }, { "TexCoord", 0 } };
+		for (const MaterialAsset::SlotInfo& slot : MaterialAsset::Slots)
+			if (!transforms.contains(slot.Name))
+				transforms[slot.Name] = { { "Offset", { 0.0f, 0.0f } }, { "Scale", { 1.0f, 1.0f } }, { "Rotation", 0.0f }, { "TexCoord", 0 } };
 		MakeFloats(*data);
 		return std::move(*data);
 	}
 
+	nlohmann::json MaterialAssetDraft::Canonical(const nlohmann::json& editable) const
+	{
+		std::string error;
+		const auto material = MaterialAsset::FromJson(editable, error);
+		return material ? MaterialAsset::ToJson(*material, false, error).value_or(nlohmann::json()) : nlohmann::json();
+	}
+
+	void MaterialAssetDraft::SetBaseline(nlohmann::json editable)
+	{
+		m_Data = editable;
+		m_SavedCanonical = Canonical(editable);
+		m_Saved = std::move(editable);
+		m_ExternalChange = false;
+	}
+
 	bool MaterialAssetDraft::Load(const std::string& path, std::string& outError)
 	{
-		auto data = ReadEditable(path, outError);
-		if (!data)
+		const auto text = FileSystem::ReadTextFile(Project::ResolvePath(path));
+		if (!text)
+		{
+			outError = "cannot read '" + path + "'";
+			return false;
+		}
+		std::vector<std::string> warnings;
+		const auto material = MaterialAsset::FromText(*text, outError, &warnings);
+		if (!material)
 			return false;
 		m_Path = path;
-		m_Data = *data;
-		m_Saved = std::move(*data);
-		m_ExternalChange = false;
+		m_Warnings = std::move(warnings);
+		SetBaseline(ToEditable(*material));
 		return true;
 	}
 
 	void MaterialAssetDraft::Close()
 	{
 		m_Path.clear();
-		m_Data = m_Saved = nlohmann::json();
+		m_Data = m_Saved = m_SavedCanonical = nlohmann::json();
+		m_Warnings.clear();
 		m_ExternalChange = false;
+	}
+
+	bool MaterialAssetDraft::IsDirty() const
+	{
+		if (m_Data == m_Saved)
+			return false;
+		const nlohmann::json canonical = Canonical(m_Data);
+		return canonical.is_null() || canonical != m_SavedCanonical;
 	}
 
 	std::optional<MaterialData> MaterialAssetDraft::Parse(std::string& outError) const
@@ -96,10 +109,15 @@ namespace Basalt {
 		return data->dump(1, '\t');
 	}
 
-	void MaterialAssetDraft::MarkSaved()
+	bool MaterialAssetDraft::MarkSaved(const std::string& writtenText, std::string& outError)
 	{
-		m_Saved = m_Data;
-		m_ExternalChange = false;
+		std::vector<std::string> warnings;
+		const auto material = MaterialAsset::FromText(writtenText, outError, &warnings);
+		if (!material)
+			return false;
+		m_Warnings = std::move(warnings);
+		SetBaseline(ToEditable(*material));
+		return true;
 	}
 
 	bool MaterialAssetDraft::Revert(std::string& outError)
@@ -116,7 +134,38 @@ namespace Basalt {
 			m_ExternalChange = true;
 			return false;
 		}
-		return Load(m_Path, outError);
+		if (Load(m_Path, outError))
+			return true;
+		// The draft no longer matches the file: saving it would replace what was written meanwhile.
+		m_ExternalChange = true;
+		return false;
+	}
+
+	void MaterialAssetDraft::OnAssetMoved(const std::string& from, const std::string& to)
+	{
+		const auto& project = Project::GetActive();
+		if (!IsOpen() || !project)
+			return;
+		const AssetRegistry& assets = project->GetAssets();
+		if (assets.ReferencesSource(m_Path, from))
+			m_Path = to;
+		for (nlohmann::json* data : { &m_Data, &m_Saved })
+		{
+			if (!data->is_object())
+				continue;
+			for (const MaterialAsset::SlotInfo& slot : MaterialAsset::Slots)
+			{
+				if (!data->contains(slot.MapField))
+					continue;
+				nlohmann::json& value = (*data)[slot.MapField];
+				if (!value.is_string())
+					continue;
+				const std::string key = value.get<std::string>();
+				if (assets.ReferencesSource(key, from))
+					value = to + std::string(GetSubAssetFragment(key));
+			}
+		}
+		m_SavedCanonical = Canonical(m_Saved);
 	}
 
 }

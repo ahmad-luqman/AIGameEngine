@@ -1,6 +1,7 @@
 #include "Basalt/Animation/AnimationGraph.h"
 
 #include "Basalt/Asset/AssetKey.h"
+#include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Asset/MaterialAsset.h"
 #include "Basalt/Asset/MeshSource.h"
 #include "Basalt/Core/FileSystem.h"
@@ -14,11 +15,13 @@
 #include "Basalt/Scene/SceneSerializer.h"
 #include "Basalt/Scripting/ScriptEngine.h"
 
+#include <cgltf.h>
 #include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
 #include <iterator>
 #include <map>
+#include <optional>
 #include <set>
 #include <system_error>
 
@@ -29,15 +32,9 @@ namespace Basalt {
 		// File types components reference by path. A string ending in one of these is treated as an asset path.
 		const std::set<std::string> s_AssetExtensions = { ".gltf", ".glb", ".ktx2", ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr", ".wav", ".mp3", ".ogg", ".flac", ".ttf", ".otf", ".lua", ".bscene", ".bprefab", ".banimgraph", ".bmaterial" };
 
-		// "Assets/Models/Ship.glb#image/0" names an image inside Ship.glb (and "#material/0" one of its materials).
-		std::string StripSubAsset(const std::string& reference)
-		{
-			return std::string(GetAssetSource(reference));
-		}
-
 		bool HasAssetExtension(const std::string& value)
 		{
-			return s_AssetExtensions.contains(FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(StripSubAsset(value))));
+			return s_AssetExtensions.contains(FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(std::string(GetAssetSource(value)))));
 		}
 
 		// Component fields that hold an asset path the game loads: a broken one is an error. A MeshCollider's empty
@@ -71,12 +68,13 @@ namespace Basalt {
 			explicit Validator(const Project& project)
 				: m_Project(project)
 				, m_Directory(project.GetDirectory())
+				, m_Assets(project.GetDirectory())
 			{
 			}
 
 			ValidationReport Run()
 			{
-				AssetRegistry assets(m_Directory);
+				AssetRegistry& assets = m_Assets;
 				std::string metadataError;
 				if (!assets.Refresh(metadataError))
 					m_Report.Add(ValidationSeverity::Error, "Assets", metadataError);
@@ -323,7 +321,7 @@ namespace Basalt {
 					m_Report.Add(severity, file, fmt::format("{} '{}', which uses backslashes; separate folders with / so it loads on every platform", role, reference));
 					return;
 				}
-				const std::filesystem::path path = FileSystem::PathFromUtf8(StripSubAsset(reference)).lexically_normal();
+				const std::filesystem::path path = FileSystem::PathFromUtf8(std::string(GetAssetSource(reference))).lexically_normal();
 				const auto first = path.begin();
 				if (path.is_absolute() || path.has_root_name() || first == path.end() || *first != Project::AssetDirectoryName)
 				{
@@ -334,6 +332,7 @@ namespace Basalt {
 				switch (FindExactFile(path, actual, problem))
 				{
 					case Match::Exact:
+						CheckSubAsset(reference, file, role, severity);
 						break;
 					case Match::DifferentCase:
 						m_Report.Add(severity, file, fmt::format("{} '{}', but the file on disk is '{}' (letter case matters on Linux)", role, reference, actual));
@@ -345,6 +344,41 @@ namespace Basalt {
 						m_Report.Add(severity, file, fmt::format("{} '{}', which cannot be checked: {}", role, reference, problem));
 						break;
 				}
+			}
+
+			// A "#image/<n>" or "#material/<n>" reference names a model's embedded image or imported material: the model must
+			// be a glTF that has it. The JSON is parsed (cached per model), the buffers are not loaded; a model that does not
+			// parse is left to the loader (the validator does not decode models).
+			void CheckSubAsset(const std::string& reference, const std::string& file, const char* role, ValidationSeverity severity)
+			{
+				const std::string_view fragment = GetSubAssetFragment(reference);
+				if (fragment.empty())
+					return;
+				const bool material = fragment.starts_with(ImportedMaterialMarker);
+				const auto index = ParseSubAssetIndex(reference, material ? ImportedMaterialMarker : EmbeddedImageMarker);
+				const std::string model(GetAssetSource(reference));
+				if (!index || !AssetManager::IsMeshFile(model))
+				{
+					m_Report.Add(severity, file, fmt::format("{} '{}', which is not a model's embedded image or material (<model>#image/<n>, <model>#material/<n>)", role, reference));
+					return;
+				}
+				auto [counts, inserted] = m_ModelContents.try_emplace(model);
+				if (inserted)
+				{
+					cgltf_options options = {};
+					cgltf_data* data = nullptr;
+					const std::string modelPath = FileSystem::PathToUtf8(m_Directory / FileSystem::PathFromUtf8(model));
+					if (cgltf_parse_file(&options, modelPath.c_str(), &data) == cgltf_result_success)
+					{
+						counts->second = { data->images_count, data->materials_count };
+						cgltf_free(data);
+					}
+				}
+				if (!counts->second)
+					return;
+				const size_t available = material ? counts->second->second : counts->second->first;
+				if (*index >= available)
+					m_Report.Add(severity, file, fmt::format("{} '{}', but '{}' has {} {}", role, reference, model, available, material ? "material(s)" : "image(s)"));
 			}
 
 			// Walks the path one component at a time, comparing UTF-8 names exactly, so a case-insensitive file system
@@ -410,22 +444,29 @@ namespace Basalt {
 					m_Report.Add(ValidationSeverity::Error, Relative(path), "invalid animation graph: " + (text ? error : "cannot read file"));
 			}
 
-			// A material must parse, and every texture it names must exist like a scene's references (unresolved UUIDs
-			// included: the parser keeps them as opaque keys).
+			// A material must parse (its UUIDs through this project's registry), and every texture it names must be a texture
+			// that exists like a scene's references (unresolved UUIDs included: the parser keeps them as opaque keys).
 			void CheckMaterial(const std::filesystem::path& path)
 			{
 				std::string error;
 				const auto text = FileSystem::ReadTextFile(path);
-				const auto data = text ? ParseJson(*text, error) : nlohmann::json();
-				const auto material = text && !data.is_discarded() ? MaterialAsset::FromJson(data, error) : std::nullopt;
+				const auto material = text ? MaterialAsset::FromText(*text, error, nullptr, &m_Assets) : std::nullopt;
 				if (!material)
 				{
 					m_Report.Add(ValidationSeverity::Error, Relative(path), "invalid material: " + (text ? error : "cannot read file"));
 					return;
 				}
-				for (size_t slot = 0; slot < MaterialTextureSlotCount; slot++)
-					if (const std::string& map = MaterialAsset::GetMap(*material, static_cast<MaterialTextureSlot>(slot)); !map.empty())
-						CheckReference(map, Relative(path), (std::string(MaterialAsset::MapFields[slot]) + " references").c_str());
+				for (const MaterialAsset::SlotInfo& slot : MaterialAsset::Slots)
+				{
+					const std::string& map = *material.*slot.Map;
+					const std::string role = std::string(slot.MapField) + " references";
+					if (map.empty())
+						continue;
+					if (!AssetRegistry::IsUnresolvedKey(map) && !MaterialAsset::IsTextureKey(map))
+						m_Report.Add(ValidationSeverity::Error, Relative(path), fmt::format("{} '{}', which is not a texture (an image file or <model>#image/<n>)", role, map));
+					else
+						CheckReference(map, Relative(path), role.c_str());
+				}
 			}
 
 			void CheckScriptSyntax(const std::filesystem::path& path)
@@ -451,6 +492,10 @@ namespace Basalt {
 			std::filesystem::path m_Directory;
 			ValidationReport m_Report;
 			std::map<std::string, Listing> m_Listings;
+			// Decodes material files' UUIDs: this project's, whichever project is active.
+			AssetRegistry m_Assets;
+			// A model's (image count, material count), or nullopt when it does not parse.
+			std::map<std::string, std::optional<std::pair<size_t, size_t>>> m_ModelContents;
 			// Normalized script path -> the first scene or prefab using it.
 			std::map<std::string, std::string> m_ReferencedScripts;
 			std::set<std::string> m_CompiledScripts;

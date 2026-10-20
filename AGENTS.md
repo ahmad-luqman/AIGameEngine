@@ -20,8 +20,8 @@ changing code. Task-specific procedures live in `.claude/skills/*/SKILL.md`.
 
 Engine modules (`Basalt/Source/Basalt/<Module>/`): `Core` (application, window, input incl. gamepads, log, file
 system and file watching, command line), `Events`, `Math`, `Renderer` (device, scene renderer, IBL, debug lines), `ImGui`, `Scene`
-(EnTT scene, components, component registry, serialization), `Asset` (glTF, images, primitives, asset
-cache), `Physics` (Jolt), `Audio` (miniaudio: buses, per-source low-pass and Doppler, reverb sends into per-bus reverbs), `Particles` (CPU particle simulation), `Animation` (glTF TRS sampling, blends, crossfades, 1D/2D blend spaces with phase sync and velocity matching, animation events, bone transforms and attachments, data-driven state machines and per-state root motion, layers with joint masks and additive clips, two-bone/look-at IK and foot placement, spring bones, per-entity playback), `UI` (game UI: UI
+(EnTT scene, components, component registry, serialization), `Asset` (glTF, images, primitives, material
+files, asset cache), `Physics` (Jolt), `Audio` (miniaudio: buses, per-source low-pass and Doppler, reverb sends into per-bus reverbs), `Particles` (CPU particle simulation), `Animation` (glTF TRS sampling, blends, crossfades, 1D/2D blend spaces with phase sync and velocity matching, animation events, bone transforms and attachments, data-driven state machines and per-state root motion, layers with joint masks and additive clips, two-bone/look-at IK and foot placement, spring bones, per-entity playback), `UI` (game UI: UI
 component layout, widgets and their mouse/keyboard/gamepad interaction, immediate-mode `UI.*`, TrueType fonts;
 drawn through ImGui after the scene), `Scripting` (Lua 5.4 + sol2; timers, coroutines, events), `Project`
 (project files, exporter, save data), `Automation` (command API, session, TCP server, editor history and selection).
@@ -33,7 +33,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
 
 - **Asset identity.** Project-owned `AssetRegistry` reads `.meta` UUIDs. Scene/prefab disk saves encode declared
   `ComponentInfo::AssetFields` as UUID/path objects; runtime snapshots keep paths. `asset.move`/`asset.rename`
-  migrate legacy references and carry sidecars; loading never writes metadata. KTX2/BC7 imports use `asset.compress_texture` (separate output, content cache in `Cache/Textures`, originals retained). Basis ETC1S/UASTC transcode in the texture load job; renderer uploads block mips. Material files (`.bmaterial`, `Asset/MaterialAsset`) hold the full `MaterialData` with UUID texture references and migrate with moves; `Material.Material` names one or a model's `#material/N`, replacing the inline values, and inline overrides render through the same `MaterialData` path (`MaterialAsset::FromComponent`). Sub-asset keys split in `Asset/AssetKey.h`. See `Docs/AssetPipeline.md`.
+  migrate legacy references and carry sidecars; loading never writes metadata. KTX2/BC7 imports use `asset.compress_texture` (separate output, content cache in `Cache/Textures`, originals retained). Basis ETC1S/UASTC transcode in the texture load job; renderer uploads block mips. Material files (`.bmaterial`, `Asset/MaterialAsset`) hold the full `MaterialData` with texture references as UUID/path objects (engine-written) or paths, and migrate with moves; `Material.Material` names one or a model's `#material/N`, replacing the inline values, and inline overrides render through the same `MaterialData` path (`MaterialAsset::FromComponent`). Sub-asset keys split in `Asset/AssetKey.h`. See `Docs/AssetPipeline.md`.
 - **One data path.** Components are plain structs. `ComponentRegistry` gives each a strict JSON reader/
   writer that every consumer shares: scene and prefab files, Lua `GetComponent/SetComponent`, the
   automation commands and the editor inspector. Adding a component = one registry entry (see the

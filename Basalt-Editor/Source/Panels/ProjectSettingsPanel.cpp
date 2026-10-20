@@ -563,7 +563,7 @@ namespace Basalt {
 			return;
 		if (ImGui::Button("Validate Project"))
 			m_Validation = m_Context.Execute("project.validate");
-		HelpMarker("Checks what would break the exported game: missing or wrongly cased asset paths, scenes and prefabs that do not load, scripts that do not compile (or, used by a Script component, do not return a class). Export runs the same check.");
+		HelpMarker("Checks what would break the exported game: missing or wrongly cased asset paths, scenes and prefabs that do not load, animation graphs and material files that do not parse, scripts that do not compile (or, used by a Script component, do not return a class). Export runs the same check.");
 		if (!m_Validation)
 			return;
 		const nlohmann::json& report = *m_Validation;

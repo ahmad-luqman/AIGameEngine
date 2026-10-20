@@ -342,6 +342,7 @@ namespace Basalt {
 			else if (!report.Assets.empty())
 				m_Context.SetStatus(fmt::format("Reloading {} changed asset(s)", report.Assets.size()), false);
 		};
+		m_Session.OnAssetMoved = [this](const std::string& from, const std::string& to) { m_MaterialEditorPanel.OnAssetMoved(from, to); };
 		m_Session.OnSceneChanged = [this]() { OnSceneChanged(); };
 		// Scripts' OnCreate reads the Game view (its resolution even before the tab is first drawn), not the scene
 		// view's layout or the headless default.
@@ -396,6 +397,7 @@ namespace Basalt {
 		m_Session.StopPlay();
 		m_Session.StopFileWatchPolling();
 		m_Session.OnAssetsReloaded = nullptr;
+		m_Session.OnAssetMoved = nullptr;
 		SavePreferences(true);
 		if (Application::Get().GetGraphicsDevice())
 			Application::Get().GetGraphicsDevice()->WaitIdle();
@@ -596,7 +598,7 @@ namespace Basalt {
 								 return result;
 							 } });
 
-		m_Commands.Register({ "editor.thumbnail", "Makes (or reads from the cache) the content-browser preview of an image, .hdr environment, model or prefab and returns {kind, width, height, cached, cachePath, details, warnings when it could not be cached}; output also writes it to a PNG, refresh makes it again (reading a model file anew).", EditorCommandSchemas::Thumbnail(), [this](AutomationSession&, const nlohmann::json& params) {
+		m_Commands.Register({ "editor.thumbnail", "Makes (or reads from the cache) the content-browser preview of an image, .hdr environment, model, prefab or material file and returns {kind, width, height, cached, cachePath, details, warnings when it could not be cached}; output also writes it to a PNG, refresh makes it again (re-reading the file and the files it uses).", EditorCommandSchemas::Thumbnail(), [this](AutomationSession&, const nlohmann::json& params) {
 								 const std::string path = params["path"].get<std::string>();
 								 std::string error;
 								 const auto generated = m_Thumbnails->Generate(path, params.value("refresh", false), error);
@@ -632,8 +634,15 @@ namespace Basalt {
 								 std::string error;
 								 if (params.value("close", false))
 									 m_MaterialEditorPanel.Reset();
-								 if (const auto path = params.find("path"); path != params.end() && !m_MaterialEditorPanel.TryOpen(path->get<std::string>(), error))
-									 throw CommandError(error);
+								 if (const auto path = params.find("path"); path != params.end())
+								 {
+									 // The normalized form, so file changes (always normalized) match the draft's path.
+									 const std::string normalized = FileSystem::PathToGenericUtf8(FileSystem::PathFromUtf8(path->get<std::string>()).lexically_normal());
+									 if (!normalized.starts_with("Assets/") || !MaterialAsset::IsMaterialFile(normalized))
+										 throw CommandError("'" + path->get<std::string>() + "' is not a .bmaterial file under Assets/");
+									 if (!m_MaterialEditorPanel.TryOpen(normalized, error))
+										 throw CommandError(error);
+								 }
 								 const MaterialAssetDraft& draft = m_MaterialEditorPanel.GetDraft();
 								 return nlohmann::json{ { "open", m_MaterialEditorPanel.IsOpen() }, { "path", draft.GetPath() }, { "dirty", draft.IsDirty() }, { "valid", draft.IsOpen() && draft.Parse(error).has_value() }, { "error", m_MaterialEditorPanel.GetError() } };
 							 } });
@@ -2255,17 +2264,17 @@ namespace Basalt {
 		DrawPreviewSquare(*m_Thumbnails->GetMaterial(std::to_string(static_cast<uint64_t>(entity.GetUUID())), material), Size);
 		if (!material.Material.empty())
 		{
-			ImGui::TextDisabled("Material replaces the values below (they apply only if it fails to load).");
-			if (MaterialAsset::IsMaterialFile(material.Material) && ImGui::SmallButton("Edit Material"))
-				m_MaterialEditorPanel.Open(material.Material);
+			ImGui::TextDisabled("Material replaces the values below (they apply while it loads or if it cannot).");
 			if (MaterialAsset::IsMaterialFile(material.Material))
+			{
+				if (ImGui::SmallButton("Edit Material"))
+					m_MaterialEditorPanel.Open(material.Material);
 				ImGui::SameLine();
+			}
 		}
 		if (ImGui::SmallButton("Save as Material Asset..."))
 		{
-			// The entity's name, made a file name.
-			std::string name = entity.GetName();
-			std::replace_if(name.begin(), name.end(), [](unsigned char c) { return !std::isalnum(c) && c != '_' && c != '-' && c != ' '; }, '_');
+			const std::string name = MaterialAsset::MakeFileName(entity.GetName());
 			m_SaveMaterialPath = "Assets/Materials/" + (name.empty() ? std::string("Material") : name) + std::string(MaterialAsset::Extension);
 			ImGui::OpenPopup("Save Material Asset");
 		}
@@ -2278,9 +2287,17 @@ namespace Basalt {
 			{
 				// The file is written first; only the component change is a scene edit (and undoable).
 				const uint64_t id = static_cast<uint64_t>(entity.GetUUID());
-				if (m_Context.Execute("material.create", { { "path", m_SaveMaterialPath }, { "entity", id } }) && m_Context.Execute("component.set", { { "entity", id }, { "component", "Material" }, { "data", { { "Material", m_SaveMaterialPath } } } }))
+				if (const auto created = m_Context.Execute("material.create", { { "path", m_SaveMaterialPath }, { "entity", id } }))
 				{
-					m_Context.CommitHistory();
+					// The file exists now: a retry would fail with "already exists", so the prompt closes either way.
+					if (m_Context.Execute("component.set", { { "entity", id }, { "component", "Material" }, { "data", { { "Material", m_SaveMaterialPath } } } }))
+					{
+						m_Context.CommitHistory();
+						if (const auto warnings = created->value("warnings", nlohmann::json::array()); !warnings.empty())
+							m_Context.SetStatus("Saved " + m_SaveMaterialPath + " with warnings: " + warnings.dump(), true);
+					}
+					else
+						m_Context.SetStatus("Wrote " + m_SaveMaterialPath + " but could not use it: " + m_Context.StatusMessage, true);
 					ImGui::CloseCurrentPopup();
 				}
 			}

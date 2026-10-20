@@ -305,6 +305,14 @@ namespace Basalt {
 		return CheckPath(std::string(GetAssetSource(key)), asset, ignored) && CheckPath(source, target, ignored) && asset == target;
 	}
 
+	std::string AssetRegistry::DescribeUnresolved(std::string_view key)
+	{
+		const std::string_view encoded = key.substr(std::min(key.size(), UnresolvedPrefix.size()));
+		const size_t split = encoded.find('/');
+		const auto hint = split == std::string_view::npos ? std::nullopt : DecodeHint(encoded.substr(split + 1));
+		return "unresolved asset UUID " + std::string(encoded.substr(0, split)) + (hint ? " (was '" + *hint + "')" : std::string());
+	}
+
 	bool AssetRegistry::Decode(const nlohmann::json& value, std::string& path, std::string& outError, bool preserveUnresolved) const
 	{
 		outError.clear();

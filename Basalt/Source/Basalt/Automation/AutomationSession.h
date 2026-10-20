@@ -221,6 +221,9 @@ namespace Basalt {
 		std::function<void()> BeforeRuntimeStart;
 		// Called after ReloadAssets applied changes (the editor refreshes previews).
 		std::function<void(const AssetReloadReport&)> OnAssetsReloaded;
+		// Called after asset.move/asset.rename moved a file (its old and new project-relative paths). The move rewrites
+		// references on disk and in the open scene; hosts holding paths elsewhere (the editor's Material Editor) follow it.
+		std::function<void(const std::string& from, const std::string& to)> OnAssetMoved;
 		// Name of the host for diagnostics ("cli", "editor").
 		std::string HostName = "cli";
 		// Only the attached owner may detach itself; attaching a second observer is rejected.

@@ -284,25 +284,25 @@ GPU copies of the assets it draws.
 - **Capture renderer** (picking, created on first use): screenshots and picking.
 - **Preview renderer** (`PreviewRenderer`, no timers or picking, created on first preview): content-browser
   thumbnails of models, prefabs and material files, and material spheres. Spheres render the full material model:
-  material files, a model's imported materials (the content-browser tooltip's swatches, by value) and the Material
-  Editor's unsaved draft (through `SceneRenderer::SetMaterialResolver`, which only the preview renderer sets). It renders a fresh studio scene (procedural sky,
-  one key light) at 256x256 and averages it down to 128x128, then releases the GPU copies of what it drew.
-  At most one preview is rendered per frame; each waits for the GPU (readback). Images and `.hdr`
-  environments are previewed on the CPU (an HDR is tonemapped with the ACES fit). Previews are cached in
-  `<project>/Cache/Thumbnails` (outside `Assets/`, so never exported; new projects ignore `Cache/` in git) and
-  remade when the size or modification time changes of the source file or of a file its preview reads: a
-  glTF's external buffers and images, a material file's textures (and their models' files), a prefab's models and
-materials (and theirs). Only then are the model and those files
-  read into `AssetManager` again (the open scene then shows the new version too), as with `editor.thumbnail` `refresh`; a
-  preview the cache still matches reuses what `AssetManager` holds. A file that disappears and comes back is
-  previewed again. Shown previews check their files every 2 seconds, and at once whenever changed files are reloaded
-  (the file watcher, `asset.refresh` or `asset.write`); a material sphere is made again when a texture, material file or
-model it uses changes.
-  Models and textures a preview loads only for itself are released from `AssetManager` afterwards (what was loaded
-  before stays; a model's material list is kept with its preview for the tooltip). Only rows on
-  screen ask for previews, and at most 512 textures are kept. Material spheres
-  update once a material stops changing for a frame. Clear Thumbnail Cache forgets every preview and deletes the
-  cached files but does not reload models already in `AssetManager`.
+  Material components (the inspector's), material files, and materials by value (the content-browser tooltip's
+  swatches of a model's imported materials, the Material Editor's unsaved draft). By-value materials go through
+  `SceneRenderer::SetMaterialResolver`, which only the preview renderer sets. It renders a fresh studio scene
+  (procedural sky, one key light) at 256x256 and averages it down to 128x128, then releases the GPU copies of what it
+  drew. At most one preview is rendered per frame; each waits for the GPU (readback). Images and `.hdr` environments
+  are previewed on the CPU (an HDR is tonemapped with the ACES fit). Previews are cached in `<project>/Cache/Thumbnails`
+  (outside `Assets/`, so never exported; new projects ignore `Cache/` in git) and remade when the size or modification
+  time changes of the source file or of a file its preview reads: a glTF's external buffers and images, a material
+  file's textures (and their models' files), a prefab's models and materials (and theirs). Only then are the model,
+  prefab or material file and those files read into `AssetManager` again (the open scene then shows the new version
+  too), as with `editor.thumbnail` `refresh`; a preview the cache still matches reuses what `AssetManager` holds. A file
+  that disappears and comes back is previewed again. Shown previews check their files every 2 seconds, and at once
+  whenever changed files are reloaded (the file watcher, `asset.refresh` or `asset.write`); a material sphere is made
+  again when a file it reads changes (a texture, a material file, a model with its buffers and images). Models,
+  textures and materials a preview loads only for itself are released from `AssetManager` afterwards (what was loaded
+  before stays; a model's material list is kept with its preview for the tooltip). Only rows on screen ask for
+  previews, and at most 512 textures are kept. Material spheres update once a material stops changing for a frame.
+  Clear Thumbnail Cache forgets every preview and deletes the cached files but does not reload models already in
+  `AssetManager`.
 
 `PreviewRendererGPU` checks framing, determinism, material colour and emission, failures and that pending
 debug lines survive a preview, with Vulkan validation required. It also checks that a material file, a Material

@@ -401,6 +401,7 @@ TEST_CASE("Every material registry field participates in the editor preview key"
 TEST_CASE("Material previews track every asset field")
 {
 	// The editor re-renders a material preview when one of these files changes, so none may be missing.
+	BasaltTest::TempProject project("PreviewDependencies");
 	const auto* info = ComponentRegistry::Find("Material");
 	REQUIRE(info);
 	CHECK(MaterialPreviewDependencies(MaterialComponent{}).empty());

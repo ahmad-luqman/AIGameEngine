@@ -9,8 +9,8 @@ unrelated assets remain usable. Neither copy wins an ambiguous identity. Repair 
 explicitly rather than silently assigning new identities. Copying an asset as a new independent asset requires a new sidecar.
 
 Scene format 3 and prefab files store declared asset fields as `{"UUID":"123456789","Path":"Assets/Models/Ship.glb"}`.
-The UUID is authoritative; the path is a diagnostic hint. Embedded images retain `#image/N` in the hint
-and share the model's UUID. A missing or ambiguous component UUID becomes an opaque `asset-uuid://` key in memory, so the scene
+The UUID is authoritative; the path is a diagnostic hint. Sub-assets (`#image/N` embedded images, `#material/N`
+imported materials) retain their fragment in the hint and share the model's UUID. A missing or ambiguous component UUID becomes an opaque `asset-uuid://` key in memory, so the scene
 or prefab stays editable and renders missing assets with its normal fallback. Saving preserves the exact
 UUID and hint; a different file at the hint never substitutes for it. Validation reports unresolved
 identities. Reopen after restoring metadata to resolve the identity, or replace the field explicitly.
@@ -114,7 +114,7 @@ Coverage follows the alpha mode: OPAQUE and surviving MASK surfaces stay fully c
 Authored `Material` overrides expose `Clearcoat`, `ClearcoatRoughness`, `Transmission` in [0,1], the four
 extension map paths, and shared `UVOffset`, `UVScale`, `UVRotation` (radians). An override replaces the whole
 imported material: its one UV transform applies to every map on UV0, and normal scale and occlusion strength
-are 1 (a material asset, below, keeps all of these per map). It blends when `AlbedoColor.a < 1` (alpha is then coverage) or `Transmission > 0` (full coverage). All
+are 1 (a material asset, below, has a UV transform and set per map and its own normal and occlusion strengths). It blends when `AlbedoColor.a < 1` (alpha is then coverage) or `Transmission > 0` (full coverage). All
 fields use the component registry for Lua, automation, disk persistence, inspector editing and undo.
 
 The isolated `AssetPipelineFeature` ctest exercises compression and UUID saves on a temporary copy of
@@ -126,8 +126,8 @@ A material file (`.bmaterial`) holds the full imported material model, so an aut
 glTF material can say. A `Material` component uses one through its `Material` field, which also accepts a model's
 imported material directly (`Assets/Models/Ship.glb#material/0`, counted from 0 in glTF order; the importer's
 default material for primitives without one is not addressable). While `Material` is set, the asset replaces the
-component's inline values for every submesh; they apply only when the asset cannot load (the failure is logged once,
-and the project validator reports a broken file).
+component's inline values for every submesh; they apply only while it has not loaded (a model's material while the
+model streams in) or when it cannot load (the failure is logged once, and the project validator reports a broken file).
 
 ```json
 {
@@ -143,7 +143,9 @@ and the project validator reports a broken file).
 }
 ```
 
-- **Fields.** Only `Version` (1) is required; other keys default to an imported material's defaults. The maps have the
+- **Fields.** Only `Version` (1) is required; other keys keep the engine's material defaults (white albedo, Metallic 0,
+  Roughness 0.5, Opaque, AlphaCutoff 0.5, single-sided, strengths 1, identity UV0 transforms), which is what
+  `material.create` without an entity writes. These are not glTF's metallic/roughness defaults of 1. The maps have the
   component's names (`AlbedoMap`, `NormalMap`, `MetallicRoughnessMap`, `OcclusionMap`, `EmissiveMap`, `ClearcoatMap`,
   `ClearcoatRoughnessMap`, `ClearcoatNormalMap`, `TransmissionMap`). `TextureTransforms` is keyed by slot (`Albedo`,
   `Normal`, `MetallicRoughness`, `Occlusion`, `Emissive`, `Clearcoat`, `ClearcoatRoughness`, `ClearcoatNormal`,
@@ -166,6 +168,12 @@ and the project validator reports a broken file).
   waits for it while streaming. A changed file reloads on the next frame (file watcher or `asset.refresh`).
 - **Editor.** The content browser previews material files on a sphere (`editor.thumbnail` kind `Material`) and a
   model's materials losslessly in its tooltip. Its context menu creates materials ("New Material...") and extracts a
-  model's ("Extract Materials"). Double-clicking a material opens the Material Editor (every field, a live preview of
-  unsaved edits, Save through `asset.write`, Revert); dropping one on the viewport gives it to the selected entity. The
-  inspector's Material section can save what an entity draws as a new material file and use it.
+  model's ("Extract Materials", which reports texture warnings). Double-clicking a material opens the Material Editor
+  (`editor.material_editor` for agents): every field, textures dropped from the Content Browser onto map fields, a live
+  preview of unsaved edits, Save through `asset.write` (its texture warnings shown), Revert, and Apply to Selection. It
+  follows external writes and moves (`asset.move`/`asset.rename` of the material or its textures) and asks before
+  discarding edits. Dropping a material on the viewport gives it to the selected entity. The inspector's Material
+  section has Edit Material (for a `.bmaterial`) and Save as Material Asset (writes what the entity draws and uses it).
+- **Validation.** `project.validate` parses every material file and checks its maps: textures (an image file or
+  `Model.glb#image/N`) that exist with the exact letter case. A `Model.glb#material/N` or `#image/N` reference must
+  exist in its glTF (checked from the glTF's JSON when it parses).
