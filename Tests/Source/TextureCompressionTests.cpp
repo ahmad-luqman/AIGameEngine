@@ -156,3 +156,21 @@ TEST_CASE("Basis ETC1S and Zstd UASTC KTX2 transcode to BC7 with all mip levels"
 		}
 	}
 }
+
+TEST_CASE("KTX2 rejects overflowing and truncated Basis global data before third-party decoding")
+{
+	const auto original = FileSystem::ReadBinaryFile(std::filesystem::path(BASALT_TEST_DATA_DIR) / "Textures/ETC1S.ktx2");
+	REQUIRE(original);
+	for (const auto& range : { std::pair<uint64_t, uint64_t>{ UINT64_MAX - 15, 256 }, { UINT64_MAX, UINT64_MAX }, { original->size() - 1, 1 }, { 80, 1 } })
+	{
+		auto data = *original;
+		for (size_t i = 0; i < 8; i++)
+		{
+			data[64 + i] = static_cast<uint8_t>(range.first >> (i * 8));
+			data[72 + i] = static_cast<uint8_t>(range.second >> (i * 8));
+		}
+		std::string error;
+		CHECK_FALSE(TextureSource::LoadFromMemory(data.data(), data.size(), error));
+		CHECK_FALSE(error.empty());
+	}
+}

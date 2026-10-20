@@ -64,6 +64,11 @@ namespace Basalt {
 		const uint32_t dfd = Read32(data + 48), dfdSize = Read32(data + 52);
 		if (dfd < 80 + levels * 24 || dfdSize < 28 || dfd > size || dfdSize > size - dfd || Read32(data + dfd) != dfdSize)
 			return nullptr;
+		const uint64_t globalOffset = Read64(data + 64), globalSize = Read64(data + 72);
+		// Basis v1.60 adds these uint64 fields before checking them. Subtraction prevents wraparound,
+		// and the minimum size protects its initial ETC1S header copy before it validates the codebooks.
+		if (globalOffset > size || globalSize > size - globalOffset || (Read32(data + 44) == 1 && globalSize < 20 + uint64_t(levels) * 20))
+			return nullptr;
 		// Validate budgets and every referenced range before the transcoder can allocate/decompress.
 		uint64_t totalBytes = 0;
 		for (uint32_t mip = 0; mip < levels; mip++)
