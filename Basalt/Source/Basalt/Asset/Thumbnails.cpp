@@ -34,6 +34,11 @@ namespace Basalt {
 		return key.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 	}
 
+	std::array<const std::string*, 9> MaterialPreviewMaps(const MaterialComponent& m)
+	{
+		return { &m.AlbedoMap, &m.NormalMap, &m.MetallicRoughnessMap, &m.OcclusionMap, &m.EmissiveMap, &m.ClearcoatMap, &m.ClearcoatRoughnessMap, &m.ClearcoatNormalMap, &m.TransmissionMap };
+	}
+
 	namespace {
 
 		// Fits width x height into maxSize x maxSize, keeping the aspect ratio and at least one pixel per side.

@@ -398,6 +398,27 @@ TEST_CASE("Every material registry field participates in the editor preview key"
 	}
 }
 
+TEST_CASE("Material previews track every texture asset field")
+{
+	// The editor re-renders a material preview when one of these files changes, so none may be missing.
+	const auto* info = ComponentRegistry::Find("Material");
+	REQUIRE(info);
+	MaterialComponent material;
+	const auto maps = MaterialPreviewMaps(material);
+	CHECK(maps.size() == info->AssetFields.size());
+	Scene scene;
+	auto entity = scene.CreateEntity("Maps");
+	entity.AddComponent<MaterialComponent>();
+	std::string error;
+	for (const auto& field : info->AssetFields)
+	{
+		INFO(field);
+		REQUIRE(info->Deserialize(entity, { { field, "Assets/" + field + ".png" } }, error));
+		const auto tracked = MaterialPreviewMaps(entity.GetComponent<MaterialComponent>());
+		CHECK(std::any_of(tracked.begin(), tracked.end(), [&](const std::string* map) { return *map == "Assets/" + field + ".png"; }));
+	}
+}
+
 TEST_CASE("Compression cache is optional while output errors retain their filesystem cause")
 {
 	BasaltTest::TempDirectory temp("CompressionIO");

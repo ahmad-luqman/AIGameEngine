@@ -150,7 +150,8 @@ namespace Basalt {
 			}
 			const MaterialComponent& material = slot.Material;
 			// A cleared key no longer matches the material's, so its next GetMaterial queues it.
-			if (uses(material.AlbedoMap) || uses(material.NormalMap) || uses(material.MetallicRoughnessMap) || uses(material.OcclusionMap) || uses(material.EmissiveMap))
+			const auto maps = MaterialPreviewMaps(material);
+			if (std::any_of(maps.begin(), maps.end(), [&](const std::string* map) { return uses(*map); }))
 				slot.Key.clear();
 		}
 	}
