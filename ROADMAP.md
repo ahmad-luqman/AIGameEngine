@@ -97,7 +97,9 @@ The Game view, asset thumbnails and material previews, the project settings pane
 with a smoke test have shipped. Follow-ups:
 
 - **Material assets — L.** A `.bmaterial` file type that MaterialComponent can reference, with
-  content-browser thumbnails (previews cover MaterialComponent and glTF materials today).
+  content-browser thumbnails (previews cover MaterialComponent and glTF materials today). glTF material swatches
+  convert through MaterialComponent and so drop per-map texture transforms, UV1 and normal/occlusion strengths
+  (model previews keep them); the new thumbnails should render the full imported material.
 
 ### Editor workflow
 
