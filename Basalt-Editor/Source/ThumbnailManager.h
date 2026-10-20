@@ -119,9 +119,9 @@ namespace Basalt {
 			// The source version (ThumbnailCache key) or material values the preview shows or is queued for.
 			std::string Key;
 			// What a material slot renders: a component (the inspector) or a material by value (a draft, a model's
-			// imported material); monostate for a file preview.
-			std::variant<std::monostate, MaterialComponent, MaterialData> Material;
-			bool IsMaterial() const { return !std::holds_alternative<std::monostate>(Material); }
+			// imported material); empty for a file preview.
+			std::optional<std::variant<MaterialComponent, MaterialData>> Material;
+			bool IsMaterial() const { return Material.has_value(); }
 			bool Queued = false;
 			uint64_t LastUsed = 0;
 			// When the material values last changed (previews wait until they settle).
@@ -145,6 +145,8 @@ namespace Basalt {
 		void Enqueue(const std::string& id, Slot& slot);
 		static void Fail(Slot& slot, std::string error);
 		bool EnsureRenderer(std::string& outError);
+		template<typename M>
+		std::optional<ThumbnailImage> RenderMaterialPreview(const M& material, std::string& outError);
 		std::optional<ThumbnailCache> GetCache() const;
 		// Makes one queued preview; true for a GPU-rendered kind, which ends the frame's budget even when the render
 		// failed.

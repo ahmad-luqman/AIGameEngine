@@ -27,8 +27,9 @@ namespace Basalt {
 		inline constexpr uint32_t FormatVersion = 1;
 		inline constexpr std::string_view Extension = ".bmaterial";
 
-		// One texture slot as files name it. Indexed by MaterialTextureSlot: the one table the file format, GetMap and
-		// the editor share, so a slot's names and field cannot drift apart.
+		// One texture slot as files name it. Indexed by MaterialTextureSlot: the one table the file format, the renderer's
+		// bindings and the editor share, so a slot's names and field cannot drift apart. (MaterialComponent's maps, in
+		// the .cpp, follow the same order; a test pins every slot of both.)
 		struct SlotInfo
 		{
 			// Key in TextureTransforms ("Albedo").
@@ -49,7 +50,8 @@ namespace Basalt {
 			{ "Transmission", "TransmissionMap", &MaterialData::TransmissionMap },
 		};
 		static_assert(std::size(Slots) == MaterialTextureSlotCount, "one SlotInfo per MaterialTextureSlot");
-		// The other top-level fields after "Version", in the order files list them; then the maps and TextureTransforms.
+		// The other top-level fields after "Version", in the order the Material Editor shows them (written files sort their
+		// keys); then the maps and TextureTransforms. A test keeps this list equal to what ToJson writes.
 		inline constexpr const char* ScalarFields[] = { "AlbedoColor", "Metallic", "Roughness", "EmissiveColor", "EmissiveIntensity", "AlphaMode", "AlphaCutoff", "DoubleSided", "NormalScale", "OcclusionStrength", "Clearcoat", "ClearcoatRoughness", "ClearcoatNormalScale", "Transmission" };
 		// The keys of one TextureTransforms entry.
 		inline constexpr const char* TransformFields[] = { "Offset", "Scale", "Rotation", "TexCoord" };
@@ -65,10 +67,6 @@ namespace Basalt {
 		// A key a material's map can load: an image file (AssetManager::IsTextureFile) or a model's embedded image
 		// ("<.gltf/.glb>#image/<n>").
 		bool IsTextureKey(std::string_view key);
-
-		// The texture key of a slot.
-		std::string& GetMap(MaterialData& material, MaterialTextureSlot slot);
-		const std::string& GetMap(const MaterialData& material, MaterialTextureSlot slot);
 
 		// The problem with a material's values (the field and value), or nullopt when the renderer can use them: the glTF
 		// importer's rules (which also applies this), so a material is valid as a file exactly when it is as a model's:
@@ -96,14 +94,19 @@ namespace Basalt {
 		bool EncodeReferences(nlohmann::json& data, std::string& outError, const std::string& onlyPath = {});
 
 		// The inline MaterialComponent override in the full model: its single UV transform applies to every map on UV0,
-		// strengths are 1, it is single-sided, and alpha below one blends (alpha is coverage). It ignores the component's
-		// Material field (callers resolve that first). Without textures, the maps stay empty: the renderer binds the
-		// component's own (GetMaps) instead of copying nine paths per mesh every frame.
-		MaterialData FromComponent(const MaterialComponent& component, bool includeTextures = true);
+		// strengths are 1, it is single-sided, and alpha below 0.999 blends (alpha is coverage). It ignores the
+		// component's Material field (callers resolve that first).
+		MaterialData FromComponent(const MaterialComponent& component);
+		// The same without the nine texture paths (maps left empty): for the renderer, which binds the component's own
+		// maps (GetMaps) every frame, and for validation, which reads only the values.
+		MaterialData ScalarsFromComponent(const MaterialComponent& component);
 
-		// Every slot's texture key, in slot order (empty strings included).
+		// Pointers to every slot's texture key, in slot order (empty strings included), into the argument: it must outlive
+		// them (temporaries are rejected).
 		std::array<const std::string*, MaterialTextureSlotCount> GetMaps(const MaterialData& material);
 		std::array<const std::string*, MaterialTextureSlotCount> GetMaps(const MaterialComponent& component);
+		std::array<const std::string*, MaterialTextureSlotCount> GetMaps(MaterialData&&) = delete;
+		std::array<const std::string*, MaterialTextureSlotCount> GetMaps(MaterialComponent&&) = delete;
 		// The non-empty texture keys of a material, in slot order.
 		std::vector<std::string> GetTextures(const MaterialData& material);
 

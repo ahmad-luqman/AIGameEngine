@@ -39,8 +39,8 @@ namespace Basalt {
 		// A material component on a sphere. A Material asset that does not load fails with its error rather than showing
 		// the inline fallback. Material files and models' materials ("<model>#material/<n>") preview this way losslessly.
 		std::optional<ThumbnailImage> RenderMaterial(const MaterialComponent& material, std::string& outError);
-		// A material by value (an editor draft, a model's imported material) on the same sphere, losslessly; fails when
-		// MaterialAsset::Validate rejects it.
+		// A material by value (a material file's thumbnail, a model's imported material, an editor draft) on the same
+		// sphere, losslessly; fails when MaterialAsset::Validate rejects it.
 		std::optional<ThumbnailImage> RenderMaterial(const MaterialData& material, std::string& outError);
 
 	private:

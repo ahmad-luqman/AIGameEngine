@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -44,6 +45,38 @@ namespace Basalt {
 		// A-Z folded to a-z, other bytes (UTF-8 included) unchanged, whatever the C locale: for case-insensitive file
 		// name and extension matches.
 		static std::string ToLowerAscii(std::string text);
+		// Normalized, '/'-separated UTF-8 form of a relative path ("Assets/./A/../B.png" -> "Assets/B.png"): the form of
+		// asset keys and FileWatcher paths.
+		static std::string NormalizeGeneric(const std::string& path);
+
+		// How a relative path matches the files on disk, compared one component at a time with exact UTF-8 names, so a
+		// case-insensitive file system (Windows, macOS) cannot hide a misspelling that breaks a game on Linux.
+		enum class PathMatch
+		{
+			Exact,
+			DifferentCase,
+			Missing,
+			// A folder could not be listed or the path is not a file (outProblem says which).
+			Unreadable
+		};
+		// Directory listings FindExactCase reads, kept across lookups (a validator checks many paths in a folder).
+		class DirectoryListings
+		{
+		public:
+			// The entries of a folder (empty for a missing one), or nullptr with the error.
+			const std::vector<std::string>* Get(const std::filesystem::path& directory, std::string& outError);
+
+		private:
+			struct Listing
+			{
+				std::vector<std::string> Names;
+				std::string Error;
+			};
+			std::map<std::string, Listing> m_Listings;
+		};
+		// root/relative against the disk; outActual receives the path as spelled on disk ('/'-separated) for Exact and
+		// DifferentCase.
+		static PathMatch FindExactCase(const std::filesystem::path& root, const std::filesystem::path& relative, std::string& outActual, std::string& outProblem, DirectoryListings* listings = nullptr);
 
 	private:
 		static bool WriteAtomically(const std::filesystem::path& path, const void* data, size_t size, std::string& outError);

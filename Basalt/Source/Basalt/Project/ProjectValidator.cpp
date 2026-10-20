@@ -3,6 +3,7 @@
 #include "Basalt/Asset/AssetKey.h"
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Asset/MaterialAsset.h"
+#include "Basalt/Asset/MeshImporter.h"
 #include "Basalt/Asset/MeshSource.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/JsonUtils.h"
@@ -15,7 +16,6 @@
 #include "Basalt/Scene/SceneSerializer.h"
 #include "Basalt/Scripting/ScriptEngine.h"
 
-#include <cgltf.h>
 #include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
@@ -103,20 +103,6 @@ namespace Basalt {
 			}
 
 		private:
-			enum class Match
-			{
-				Exact,
-				DifferentCase,
-				Missing,
-				Unreadable
-			};
-
-			struct Listing
-			{
-				std::vector<std::string> Names;
-				std::string Error;
-			};
-
 			std::string Relative(const std::filesystem::path& path) const
 			{
 				return FileSystem::PathToUtf8(path.lexically_relative(m_Directory).generic_u8string());
@@ -304,7 +290,7 @@ namespace Basalt {
 			{
 				if (AssetRegistry::IsUnresolvedKey(reference))
 				{
-					m_Report.Add(ValidationSeverity::Error, file, "unresolved asset UUID reference: " + reference.substr(0, reference.find('/', AssetRegistry::UnresolvedPrefix.size())));
+					m_Report.Add(ValidationSeverity::Error, file, fmt::format("{} an {}", role, m_Assets.DescribeUnresolved(reference)));
 					return;
 				}
 
@@ -329,110 +315,46 @@ namespace Basalt {
 					return;
 				}
 				std::string actual, problem;
-				switch (FindExactFile(path, actual, problem))
+				switch (FileSystem::FindExactCase(m_Directory, path, actual, problem, &m_Listings))
 				{
-					case Match::Exact:
+					case FileSystem::PathMatch::Exact:
 						CheckSubAsset(reference, file, role, severity);
 						break;
-					case Match::DifferentCase:
+					case FileSystem::PathMatch::DifferentCase:
 						m_Report.Add(severity, file, fmt::format("{} '{}', but the file on disk is '{}' (letter case matters on Linux)", role, reference, actual));
 						break;
-					case Match::Missing:
+					case FileSystem::PathMatch::Missing:
 						m_Report.Add(severity, file, fmt::format("{} the missing file '{}'", role, reference));
 						break;
-					case Match::Unreadable:
+					case FileSystem::PathMatch::Unreadable:
 						m_Report.Add(severity, file, fmt::format("{} '{}', which cannot be checked: {}", role, reference, problem));
 						break;
 				}
 			}
 
 			// A "#image/<n>" or "#material/<n>" reference names a model's embedded image or imported material: the model must
-			// be a glTF that has it. The JSON is parsed (cached per model), the buffers are not loaded; a model that does not
-			// parse is left to the loader (the validator does not decode models).
+			// be a readable glTF that has it (an embedded image, not an external file). The JSON is read once per model;
+			// the buffers are not loaded.
 			void CheckSubAsset(const std::string& reference, const std::string& file, const char* role, ValidationSeverity severity)
 			{
-				const std::string_view fragment = GetSubAssetFragment(reference);
-				if (fragment.empty())
+				if (GetSubAssetFragment(reference).empty())
 					return;
-				const bool material = fragment.starts_with(ImportedMaterialMarker);
-				const auto index = ParseSubAssetIndex(reference, material ? ImportedMaterialMarker : EmbeddedImageMarker);
 				const std::string model(GetAssetSource(reference));
-				if (!index || !AssetManager::IsMeshFile(model))
+				if (!AssetManager::IsMeshFile(model))
 				{
 					m_Report.Add(severity, file, fmt::format("{} '{}', which is not a model's embedded image or material (<model>#image/<n>, <model>#material/<n>)", role, reference));
 					return;
 				}
-				auto [counts, inserted] = m_ModelContents.try_emplace(model);
+				auto [entry, inserted] = m_ModelContents.try_emplace(model);
 				if (inserted)
+					entry->second.Contents = MeshImporter::Inspect(m_Directory / FileSystem::PathFromUtf8(model), entry->second.Error);
+				if (!entry->second.Contents)
 				{
-					cgltf_options options = {};
-					cgltf_data* data = nullptr;
-					const std::string modelPath = FileSystem::PathToUtf8(m_Directory / FileSystem::PathFromUtf8(model));
-					if (cgltf_parse_file(&options, modelPath.c_str(), &data) == cgltf_result_success)
-					{
-						counts->second = { data->images_count, data->materials_count };
-						cgltf_free(data);
-					}
-				}
-				if (!counts->second)
+					m_Report.Add(severity, file, fmt::format("{} '{}', but '{}' is {}", role, reference, model, entry->second.Error));
 					return;
-				const size_t available = material ? counts->second->second : counts->second->first;
-				if (*index >= available)
-					m_Report.Add(severity, file, fmt::format("{} '{}', but '{}' has {} {}", role, reference, model, available, material ? "material(s)" : "image(s)"));
-			}
-
-			// Walks the path one component at a time, comparing UTF-8 names exactly, so a case-insensitive file system
-			// (Windows, macOS) cannot hide a misspelling that breaks the game on Linux.
-			Match FindExactFile(const std::filesystem::path& relative, std::string& outActual, std::string& outProblem)
-			{
-				std::filesystem::path current = m_Directory;
-				std::filesystem::path actual;
-				bool caseDiffers = false;
-				for (const auto& component : relative)
-				{
-					const Listing& listing = ListDirectory(current);
-					if (!listing.Error.empty())
-					{
-						outProblem = "cannot list '" + FileSystem::PathToUtf8(current) + "': " + listing.Error;
-						return Match::Unreadable;
-					}
-					const std::string name = FileSystem::PathToUtf8(component);
-					auto found = std::find(listing.Names.begin(), listing.Names.end(), name);
-					if (found == listing.Names.end())
-					{
-						const std::string folded = FileSystem::ToLowerAscii(name);
-						found = std::find_if(listing.Names.begin(), listing.Names.end(), [&](const std::string& entry) { return FileSystem::ToLowerAscii(entry) == folded; });
-						if (found == listing.Names.end())
-							return Match::Missing;
-						caseDiffers = true;
-					}
-					actual /= FileSystem::PathFromUtf8(*found);
-					current /= FileSystem::PathFromUtf8(*found);
 				}
-				std::error_code error;
-				const bool regular = std::filesystem::is_regular_file(current, error);
-				if (error || !regular)
-				{
-					outProblem = error ? error.message() : "it is not a file";
-					return Match::Unreadable;
-				}
-				outActual = FileSystem::PathToUtf8(actual.generic_u8string());
-				return caseDiffers ? Match::DifferentCase : Match::Exact;
-			}
-
-			const Listing& ListDirectory(const std::filesystem::path& directory)
-			{
-				auto [it, inserted] = m_Listings.try_emplace(FileSystem::PathToUtf8(directory));
-				if (inserted)
-				{
-					std::error_code error;
-					for (auto entry = std::filesystem::directory_iterator(directory, error); !error && entry != std::filesystem::directory_iterator(); entry.increment(error))
-						it->second.Names.push_back(FileSystem::PathToUtf8(entry->path().filename()));
-					// A missing directory means a missing file, not an unreadable one.
-					if (error && error != std::errc::no_such_file_or_directory && error != std::errc::not_a_directory)
-						it->second.Error = error.message();
-				}
-				return it->second;
+				if (const auto problem = MeshImporter::CheckSubAsset(*entry->second.Contents, reference))
+					m_Report.Add(severity, file, fmt::format("{} '{}', but {}", role, reference, *problem));
 			}
 
 			void CheckAnimationGraph(const std::filesystem::path& path)
@@ -459,9 +381,9 @@ namespace Basalt {
 				for (const MaterialAsset::SlotInfo& slot : MaterialAsset::Slots)
 				{
 					const std::string& map = *material.*slot.Map;
-					const std::string role = std::string(slot.MapField) + " references";
 					if (map.empty())
 						continue;
+					const std::string role = std::string(slot.MapField) + " references";
 					if (!AssetRegistry::IsUnresolvedKey(map) && !MaterialAsset::IsTextureKey(map))
 						m_Report.Add(ValidationSeverity::Error, Relative(path), fmt::format("{} '{}', which is not a texture (an image file or <model>#image/<n>)", role, map));
 					else
@@ -491,11 +413,16 @@ namespace Basalt {
 			const Project& m_Project;
 			std::filesystem::path m_Directory;
 			ValidationReport m_Report;
-			std::map<std::string, Listing> m_Listings;
+			FileSystem::DirectoryListings m_Listings;
 			// Decodes material files' UUIDs: this project's, whichever project is active.
 			AssetRegistry m_Assets;
-			// A model's (image count, material count), or nullopt when it does not parse.
-			std::map<std::string, std::optional<std::pair<size_t, size_t>>> m_ModelContents;
+			// What each model referenced through a sub-asset key contains (or why it could not be read).
+			struct ModelContents
+			{
+				std::optional<MeshImporter::Contents> Contents;
+				std::string Error;
+			};
+			std::map<std::string, ModelContents> m_ModelContents;
 			// Normalized script path -> the first scene or prefab using it.
 			std::map<std::string, std::string> m_ReferencedScripts;
 			std::set<std::string> m_CompiledScripts;

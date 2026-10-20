@@ -374,9 +374,9 @@ TEST_SUITE("AssetPipeline")
 		std::string error;
 		REQUIRE(SceneSerializer::SavePrefab(entity, Project::ResolvePath("Assets/Prefabs/Preview.bprefab"), error));
 		ThumbnailCache cache(Project::GetActive()->GetDirectory());
-		CHECK(cache.GetDependencies("Assets/Prefabs/Preview.bprefab") == std::vector<std::string>{ "Assets/image.png" });
+		CHECK(cache.GetDependencies("Assets/Prefabs/Preview.bprefab") == std::vector<std::string>{ "Assets/image.png", "Assets/image.png.meta" });
 		REQUIRE(Project::GetActive()->GetAssets().Move("Assets/image.png", "Assets/moved.png", error));
-		CHECK(cache.GetDependencies("Assets/Prefabs/Preview.bprefab") == std::vector<std::string>{ "Assets/moved.png" });
+		CHECK(cache.GetDependencies("Assets/Prefabs/Preview.bprefab") == std::vector<std::string>{ "Assets/moved.png", "Assets/moved.png.meta" });
 	}
 
 	TEST_CASE("Imported opaque meshes generate LODs while blended and skinned meshes retain full detail")

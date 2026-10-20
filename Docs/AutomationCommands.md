@@ -345,7 +345,7 @@ Lists project asset files, optionally filtered by extensions (e.g. ['.lua']).
 
 ### `asset.move`
 
-Moves one asset file and its .meta sidecar within Assets/. 'to' is the complete destination path. Creates metadata if needed, migrates scene/prefab references to this asset to UUIDs and updates the open edit scene and project start scene. Does not rewrite paths inside scripts or glTF files. Stop Play or Simulate first.
+Moves one asset file and its .meta sidecar within Assets/. 'to' is the complete destination path. Creates metadata if needed, migrates scene, prefab and material-file references to this asset to UUIDs and updates the open edit scene and project start scene. A scene or prefab that cannot be read stops the move (it might reference the asset); a material file that is not valid JSON is skipped with a warning. Does not rewrite paths inside scripts or glTF files. Stop Play or Simulate first.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -479,7 +479,7 @@ Reloads the asset files changed on disk since changes were last reported (by an 
 
 ### `asset.rename`
 
-Moves one asset file and its .meta sidecar within Assets/. 'to' is the complete destination path. Creates metadata if needed, migrates scene/prefab references to this asset to UUIDs and updates the open edit scene and project start scene. Does not rewrite paths inside scripts or glTF files. Stop Play or Simulate first.
+Moves one asset file and its .meta sidecar within Assets/. 'to' is the complete destination path. Creates metadata if needed, migrates scene, prefab and material-file references to this asset to UUIDs and updates the open edit scene and project start scene. A scene or prefab that cannot be read stops the move (it might reference the asset); a material file that is not valid JSON is skipped with a warning. Does not rewrite paths inside scripts or glTF files. Stop Play or Simulate first.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -544,7 +544,7 @@ Resolves an asset UUID (decimal string) to its current project-relative path. Re
 
 ### `asset.write`
 
-Writes a text asset (script, prefab, scene, animation graph, material...) to a project-relative path and reloads it. A .banimgraph or .bmaterial is validated before replacing the file; a material's unresolved or missing textures are reported in 'warnings'. A script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts').
+Writes a text asset (script, prefab, scene, animation graph, material...) to a project-relative path and reloads it. A .banimgraph or .bmaterial is validated before replacing the file; a material's texture problems (missing, wrong letter case, unresolved, not a texture, outside Assets/, an embedded image the model lacks) are reported in 'warnings', as project.validate reports them. A script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts').
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -1790,7 +1790,7 @@ Runs Lua in the playing scene's script state; returns the value of the expressio
 
 ### `material.create`
 
-Writes a material file (.bmaterial under Assets/) with UUID texture references: with 'entity', the material that entity's Material component draws (its Material asset when set, failing if that does not load, otherwise its inline values), otherwise the defaults. Returns {path, warnings?} (missing, unresolved or non-texture maps). Refuses to replace an existing file unless overwrite=true. Reference the file from Material.Material.
+Writes a material file (.bmaterial under Assets/) with UUID texture references: with 'entity', the material that entity's Material component draws (its Material asset when set, failing if that does not load, otherwise its inline values), otherwise the defaults. Returns {path, warnings?} (the texture problems asset.write reports). Refuses to replace an existing file unless overwrite=true. Reference the file from Material.Material.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -1849,7 +1849,7 @@ Writes a material file (.bmaterial under Assets/) with UUID texture references: 
 
 ### `material.extract`
 
-Writes one material file per material a glTF model imports, keeping every imported value (alpha mode, sidedness, strengths, per-map UV transforms and sets): <folder>/<material name>.bmaterial, folder defaulting to a Materials folder next to the model. Textures reference the model's image files and embedded images (Model.glb#image/N) by UUID. Checks every output before writing: an existing file fails unless overwrite=true. The model's own materials stay addressable as Model.glb#material/N.
+Writes one material file per material a glTF model imports, keeping every imported value (alpha mode, sidedness, strengths, per-map UV transforms and sets): <folder>/<material name>.bmaterial (made a safe, unique file name; Material_N when unnamed), folder defaulting to a Materials folder next to the model. Returns {model, materials: [{index, name, path, key}], warnings?} (texture problems per file). Textures reference the model's image files and embedded images (Model.glb#image/N) by UUID. Checks every output before writing: an existing file fails unless overwrite=true. The model's own materials stay addressable as Model.glb#material/N.
 
 | Parameter | Type / description |
 |-----------|--------------------|

@@ -39,7 +39,7 @@ namespace Basalt {
 	}
 
 	// "<source><marker><index>", e.g. MakeSubAssetKey("Assets/Ship.glb", ImportedMaterialMarker, 0).
-	inline std::string MakeSubAssetKey(std::string_view source, std::string_view marker, size_t index)
+	inline std::string MakeSubAssetKey(std::string_view source, std::string_view marker, uint32_t index)
 	{
 		std::string key(source);
 		key.append(marker).append(std::to_string(index));

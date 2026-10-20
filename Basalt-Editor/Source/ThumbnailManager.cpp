@@ -13,7 +13,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <type_traits>
 #include <unordered_set>
 #include <variant>
 
@@ -84,9 +83,8 @@ namespace Basalt {
 	std::vector<ThumbnailManager::Preview::Material> ThumbnailManager::ListMaterials(const MeshSource& mesh)
 	{
 		std::vector<Preview::Material> materials;
-		materials.reserve(mesh.Materials.size());
-		// The importer appends a default material for primitives without one; it is not the model's.
-		for (size_t i = 0; i + 1 < mesh.Materials.size(); i++)
+		materials.reserve(mesh.GetImportedMaterialCount());
+		for (size_t i = 0; i < mesh.GetImportedMaterialCount(); i++)
 			materials.push_back({ mesh.Materials[i].Name.empty() ? "Material " + std::to_string(i) : mesh.Materials[i].Name, mesh.Materials[i] });
 		return materials;
 	}
@@ -152,11 +150,7 @@ namespace Basalt {
 
 	const ThumbnailManager::Preview* ThumbnailManager::GetMaterial(const std::string& id, const MaterialData& material)
 	{
-		// Every value the renderer reads, as a file would store it; an invalid material keys on its problem instead.
-		std::string error;
-		const auto data = MaterialAsset::ToJson(material, false, error);
-		std::string key = "data\n" + (data ? data->dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) : "invalid: " + error);
-		return UpdateMaterial(id, std::move(key), material);
+		return UpdateMaterial(id, MaterialPreviewKey(material), material);
 	}
 
 	void ThumbnailManager::OnFilesChanged(const std::vector<FileChange>& changes)
@@ -166,18 +160,12 @@ namespace Basalt {
 			changed.insert(change.Path);
 		for (auto& [id, slot] : m_Slots)
 		{
-			if (!slot.IsMaterial())
+			if (!slot.Material)
 			{
 				slot.LastChecked = -1.0;
 				continue;
 			}
-			const auto files = std::visit([](const auto& material) -> std::vector<std::string> {
-				if constexpr (std::is_same_v<std::decay_t<decltype(material)>, std::monostate>)
-					return {};
-				else
-					return MaterialPreviewDependencies(material);
-			},
-										  slot.Material);
+			const auto files = std::visit([](const auto& material) { return MaterialPreviewDependencies(material); }, *slot.Material);
 			// A cleared key no longer matches the material's, so its next GetMaterial queues it.
 			if (std::any_of(files.begin(), files.end(), [&](const std::string& file) { return changed.contains(file); }))
 				slot.Key.clear();
@@ -238,15 +226,9 @@ namespace Basalt {
 	bool ThumbnailManager::Process(const std::string& id, Slot& slot)
 	{
 		std::string error;
-		if (slot.IsMaterial())
+		if (slot.Material)
 		{
-			const auto image = std::visit([&](const auto& material) -> std::optional<ThumbnailImage> {
-				if constexpr (std::is_same_v<std::decay_t<decltype(material)>, std::monostate>)
-					return std::nullopt;
-				else
-					return RenderMaterial(material, error);
-			},
-										  slot.Material);
+			const auto image = std::visit([&](const auto& material) { return RenderMaterial(material, error); }, *slot.Material);
 			if (image)
 				Upload(slot, *image);
 			else
@@ -400,7 +382,8 @@ namespace Basalt {
 		return std::nullopt;
 	}
 
-	std::optional<ThumbnailImage> ThumbnailManager::RenderMaterial(const MaterialComponent& material, std::string& outError)
+	template<typename M>
+	std::optional<ThumbnailImage> ThumbnailManager::RenderMaterialPreview(const M& material, std::string& outError)
 	{
 		if (!EnsureRenderer(outError))
 			return std::nullopt;
@@ -408,12 +391,14 @@ namespace Basalt {
 		return m_Renderer->RenderMaterial(material, outError);
 	}
 
+	std::optional<ThumbnailImage> ThumbnailManager::RenderMaterial(const MaterialComponent& material, std::string& outError)
+	{
+		return RenderMaterialPreview(material, outError);
+	}
+
 	std::optional<ThumbnailImage> ThumbnailManager::RenderMaterial(const MaterialData& material, std::string& outError)
 	{
-		if (!EnsureRenderer(outError))
-			return std::nullopt;
-		AssetManager::TemporaryLoads previewOnly;
-		return m_Renderer->RenderMaterial(material, outError);
+		return RenderMaterialPreview(material, outError);
 	}
 
 	std::optional<ThumbnailManager::Generated> ThumbnailManager::Generate(const std::string& relativePath, bool refresh, std::string& outError)

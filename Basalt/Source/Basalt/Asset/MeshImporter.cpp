@@ -184,7 +184,7 @@ namespace Basalt {
 				return {};
 			if (auto external = MeshImporter::GetExternalFileKey(meshKey, image->uri))
 				return *external;
-			return MakeSubAssetKey(meshKey, EmbeddedImageMarker, static_cast<size_t>(image - data->images));
+			return MakeSubAssetKey(meshKey, EmbeddedImageMarker, static_cast<uint32_t>(image - data->images));
 		}
 
 		// Reads a float accessor (including sparse accessors) into a fresh vector. False if the accessor's
@@ -267,6 +267,46 @@ namespace Basalt {
 		cgltf_decode_uri(decoded.data());
 		decoded.resize(std::strlen(decoded.c_str()));
 		return FileSystem::PathToGenericUtf8((FileSystem::PathFromUtf8(modelKey).parent_path() / FileSystem::PathFromUtf8(decoded)).lexically_normal());
+	}
+
+	std::optional<MeshImporter::Contents> MeshImporter::Inspect(const std::filesystem::path& path, std::string& outError)
+	{
+		cgltf_options options = {};
+		cgltf_data* data = nullptr;
+		const std::string file = FileSystem::PathToUtf8(path);
+		if (const cgltf_result result = cgltf_parse_file(&options, file.c_str(), &data); result != cgltf_result_success)
+		{
+			outError = fmt::format("not a readable glTF ({})", ResultToString(result));
+			return std::nullopt;
+		}
+		Contents contents;
+		contents.Materials = data->materials_count;
+		for (cgltf_size i = 0; i < data->images_count; i++)
+		{
+			const cgltf_image& image = data->images[i];
+			contents.ImageUris.push_back(image.buffer_view || !image.uri || IsDataUri(image.uri) ? std::string() : std::string(image.uri));
+		}
+		cgltf_free(data);
+		return contents;
+	}
+
+	std::optional<std::string> MeshImporter::CheckSubAsset(const Contents& contents, std::string_view key)
+	{
+		const std::string model(GetAssetSource(key));
+		if (const auto material = ParseSubAssetIndex(key, ImportedMaterialMarker))
+		{
+			if (*material >= contents.Materials)
+				return fmt::format("'{}' has {} material(s)", model, contents.Materials);
+			return std::nullopt;
+		}
+		const auto image = ParseSubAssetIndex(key, EmbeddedImageMarker);
+		if (!image)
+			return fmt::format("'{}' is not a model's embedded image or material (<model>#image/<n>, <model>#material/<n>)", key);
+		if (*image >= contents.ImageUris.size())
+			return fmt::format("'{}' has {} image(s)", model, contents.ImageUris.size());
+		if (!contents.ImageUris[*image].empty())
+			return fmt::format("image {} of '{}' is the external file '{}'; reference that file instead", *image, model, contents.ImageUris[*image]);
+		return std::nullopt;
 	}
 
 	Ref<MeshSource> MeshImporter::LoadGltf(const std::filesystem::path& path, const std::string& key, std::string& outError)

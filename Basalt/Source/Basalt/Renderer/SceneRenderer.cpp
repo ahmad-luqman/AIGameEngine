@@ -1753,7 +1753,7 @@ namespace Basalt {
 					overrideMaps = MaterialAsset::GetMaps(*overrideAsset);
 				else
 				{
-					inlineMaterial = MaterialAsset::FromComponent(*component, false);
+					inlineMaterial = MaterialAsset::ScalarsFromComponent(*component);
 					overrideMaps = MaterialAsset::GetMaps(*component);
 				}
 				materialOverride = overrideAsset ? overrideAsset.get() : &inlineMaterial;
@@ -1775,8 +1775,8 @@ namespace Basalt {
 					continue;
 				}
 
-				// The trailing default material is the clamp for out-of-range indices.
-				const MaterialData& m = materialOverride ? *materialOverride : source->Materials[std::min<size_t>(submesh.MaterialIndex, source->Materials.size() - 1)];
+				// Out-of-range indices draw the trailing default material, which sits at GetImportedMaterialCount().
+				const MaterialData& m = materialOverride ? *materialOverride : source->Materials[std::min<size_t>(submesh.MaterialIndex, source->GetImportedMaterialCount())];
 				const auto maps = materialOverride ? overrideMaps : MaterialAsset::GetMaps(m);
 				auto map = [&](MaterialTextureSlot slot) -> const std::string& { return *maps[static_cast<size_t>(slot)]; };
 				uint32_t flags = 0;

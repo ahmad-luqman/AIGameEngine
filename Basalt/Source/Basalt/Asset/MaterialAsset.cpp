@@ -238,18 +238,6 @@ namespace Basalt::MaterialAsset {
 		return GetSubAssetFragment(key).empty() && AssetManager::IsTextureFile(std::string(key));
 	}
 
-	std::string& GetMap(MaterialData& material, MaterialTextureSlot slot)
-	{
-		BS_CORE_ASSERT(slot < MaterialTextureSlot::Count, "invalid material texture slot");
-		return material.*Slots[static_cast<size_t>(slot)].Map;
-	}
-
-	const std::string& GetMap(const MaterialData& material, MaterialTextureSlot slot)
-	{
-		BS_CORE_ASSERT(slot < MaterialTextureSlot::Count, "invalid material texture slot");
-		return material.*Slots[static_cast<size_t>(slot)].Map;
-	}
-
 	std::optional<std::string> Validate(const MaterialData& material)
 	{
 		// The glTF importer's rules (and the Material component's), plus finiteness everywhere: materials from files,
@@ -375,7 +363,15 @@ namespace Basalt::MaterialAsset {
 		return true;
 	}
 
-	MaterialData FromComponent(const MaterialComponent& component, bool includeTextures)
+	MaterialData FromComponent(const MaterialComponent& component)
+	{
+		MaterialData material = ScalarsFromComponent(component);
+		for (size_t slot = 0; slot < MaterialTextureSlotCount; slot++)
+			material.*Slots[slot].Map = component.*ComponentMaps[slot];
+		return material;
+	}
+
+	MaterialData ScalarsFromComponent(const MaterialComponent& component)
 	{
 		MaterialData material;
 		material.AlbedoColor = component.AlbedoColor;
@@ -386,9 +382,6 @@ namespace Basalt::MaterialAsset {
 		material.Clearcoat = component.Clearcoat;
 		material.ClearcoatRoughness = component.ClearcoatRoughness;
 		material.Transmission = component.Transmission;
-		if (includeTextures)
-			for (size_t slot = 0; slot < MaterialTextureSlotCount; slot++)
-				material.*Slots[slot].Map = component.*ComponentMaps[slot];
 		// Overrides have no alpha mode: alpha below one blends and is coverage.
 		material.Alpha = component.AlbedoColor.a < 0.999f ? AlphaMode::Blend : AlphaMode::Opaque;
 		material.TextureTransforms.fill({ component.UVOffset, component.UVScale, component.UVRotation, 0 });
@@ -422,18 +415,24 @@ namespace Basalt::MaterialAsset {
 
 	std::string MakeFileName(std::string_view name)
 	{
+		constexpr size_t MaxLength = 64;
 		std::string result;
-		for (const char c : name.substr(0, 64))
+		for (const char c : name.substr(0, MaxLength))
 			result += std::isalnum(static_cast<unsigned char>(c)) || c == ' ' || c == '.' || c == '_' || c == '-' ? c : '_';
 		const size_t first = result.find_first_not_of(". ");
 		if (first == std::string::npos)
 			return {};
 		result = result.substr(first, result.find_last_not_of(". ") - first + 1);
-		// Windows reserves these device names, with any extension: "CON.bmaterial" cannot be created there.
-		static constexpr const char* Reserved[] = { "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9" };
-		const std::string stem = FileSystem::ToLowerAscii(result.substr(0, result.find('.')));
-		if (std::any_of(std::begin(Reserved), std::end(Reserved), [&](const char* reserved) { return stem == FileSystem::ToLowerAscii(reserved); }))
-			result += '_';
+		// Windows reserves these device names with any extension ("NUL.001.bmaterial" is NUL): the part before the first
+		// dot must not be one, so a suffix goes right after it.
+		static constexpr std::string_view Reserved[] = { "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9" };
+		const size_t stem = std::min(result.find('.'), result.size());
+		if (std::find(std::begin(Reserved), std::end(Reserved), FileSystem::ToLowerAscii(result.substr(0, stem))) != std::end(Reserved))
+		{
+			result.insert(stem, "_");
+			if (result.size() > MaxLength)
+				result.resize(MaxLength);
+		}
 		return result;
 	}
 

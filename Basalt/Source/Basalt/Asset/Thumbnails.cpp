@@ -183,6 +183,19 @@ namespace Basalt {
 
 		void AddMaterialDependencies(const std::filesystem::path& projectDirectory, const AssetRegistry* assets, const std::string& material, std::set<std::string>& outDependencies);
 
+		void AddSourceDependencies(const std::filesystem::path& projectDirectory, const AssetRegistry* assets, std::string_view key, std::set<std::string>& outDependencies);
+
+		// What an asset reference (a path, or a {UUID, Path} object) makes a preview read. A UUID reference also depends
+		// on its file's sidecar: a preview made while the UUID did not resolve must be made again when it does, even though
+		// the file itself is unchanged.
+		void AddReferenceDependencies(const std::filesystem::path& projectDirectory, const AssetRegistry* assets, const nlohmann::json& value, std::set<std::string>& outDependencies)
+		{
+			const std::string key = DecodeReference(value, assets);
+			AddSourceDependencies(projectDirectory, assets, key, outDependencies);
+			if (const std::string source(GetAssetSource(key)); value.is_object() && source.starts_with("Assets/"))
+				outDependencies.insert(source + ".meta");
+		}
+
 		// The file an asset key loads from and, for a model or material file, the files that one reads.
 		void AddSourceDependencies(const std::filesystem::path& projectDirectory, const AssetRegistry* assets, std::string_view key, std::set<std::string>& outDependencies)
 		{
@@ -205,32 +218,39 @@ namespace Basalt {
 				return;
 			for (const MaterialAsset::SlotInfo& slot : MaterialAsset::Slots)
 				if (const auto value = data.find(slot.MapField); value != data.end())
-					AddSourceDependencies(projectDirectory, assets, DecodeReference(*value, assets), outDependencies);
+					AddReferenceDependencies(projectDirectory, assets, *value, outDependencies);
+		}
+
+		std::vector<std::string> MapDependencies(const std::array<const std::string*, MaterialTextureSlotCount>& maps, std::string_view material = {})
+		{
+			const auto& project = Project::GetActive();
+			if (!project)
+				return {};
+			std::set<std::string> dependencies;
+			for (const std::string* map : maps)
+				AddSourceDependencies(project->GetDirectory(), &project->GetAssets(), *map, dependencies);
+			AddSourceDependencies(project->GetDirectory(), &project->GetAssets(), material, dependencies);
+			return { dependencies.begin(), dependencies.end() };
 		}
 
 	}
 
 	std::vector<std::string> MaterialPreviewDependencies(const MaterialComponent& m)
 	{
-		const auto& project = Project::GetActive();
-		if (!project)
-			return {};
-		std::set<std::string> dependencies;
-		for (const std::string* map : MaterialAsset::GetMaps(m))
-			AddSourceDependencies(project->GetDirectory(), &project->GetAssets(), *map, dependencies);
-		AddSourceDependencies(project->GetDirectory(), &project->GetAssets(), m.Material, dependencies);
-		return { dependencies.begin(), dependencies.end() };
+		return MapDependencies(MaterialAsset::GetMaps(m), m.Material);
 	}
 
 	std::vector<std::string> MaterialPreviewDependencies(const MaterialData& material)
 	{
-		const auto& project = Project::GetActive();
-		if (!project)
-			return {};
-		std::set<std::string> dependencies;
-		for (const std::string* map : MaterialAsset::GetMaps(material))
-			AddSourceDependencies(project->GetDirectory(), &project->GetAssets(), *map, dependencies);
-		return { dependencies.begin(), dependencies.end() };
+		return MapDependencies(MaterialAsset::GetMaps(material));
+	}
+
+	std::string MaterialPreviewKey(const MaterialData& material)
+	{
+		// Every value the renderer reads, as a file would store it; an invalid material keys on its problem instead.
+		std::string error;
+		const auto data = MaterialAsset::ToJson(material, false, error);
+		return "data\n" + (data ? data->dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) : "invalid: " + error);
 	}
 
 	ThumbnailKind ClassifyThumbnail(const std::string& path)
@@ -381,7 +401,8 @@ namespace Basalt {
 		for (const std::string& dependency : GetDependencies(relativePath))
 		{
 			std::error_code dependencyError;
-			key += "\n" + dependency + " " + FileStamp(m_ProjectDirectory / FileSystem::PathFromUtf8(dependency), dependencyError).value_or("missing");
+			const auto dependencyStamp = FileStamp(m_ProjectDirectory / FileSystem::PathFromUtf8(dependency), dependencyError);
+			key += "\n" + dependency + " " + (dependencyStamp ? *dependencyStamp : (dependencyError == std::errc::no_such_file_or_directory ? std::string("missing") : "unreadable: " + dependencyError.message()));
 		}
 		return key;
 	}
@@ -412,12 +433,9 @@ namespace Basalt {
 						if (fields.is_object())
 							for (const auto& [field, value] : fields.items())
 							{
-								std::string key;
-								if (value.is_string())
-									key = value.get<std::string>();
-								else if (const auto* info = ComponentRegistry::Find(component); info && std::find(info->AssetFields.begin(), info->AssetFields.end(), field) != info->AssetFields.end())
-									key = DecodeReference(value, assets);
-								AddSourceDependencies(m_ProjectDirectory, assets, key, dependencies);
+								const auto* info = ComponentRegistry::Find(component);
+								if (value.is_string() || (info && std::find(info->AssetFields.begin(), info->AssetFields.end(), field) != info->AssetFields.end()))
+									AddReferenceDependencies(m_ProjectDirectory, assets, value, dependencies);
 							}
 				}
 				break;

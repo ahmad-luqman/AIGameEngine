@@ -108,11 +108,6 @@ namespace Basalt {
 
 		Ref<const MaterialData> LoadMaterialFile(const std::string& key, std::string& outError)
 		{
-			if (!MaterialAsset::IsMaterialFile(key))
-			{
-				outError = "'" + key + "' is not a material (.bmaterial, or <model>#material/<n>)";
-				return nullptr;
-			}
 			const auto text = FileSystem::ReadTextFile(Project::ResolvePath(key));
 			if (!text)
 			{
@@ -138,11 +133,11 @@ namespace Basalt {
 				return it->second.Asset;
 			CacheEntry<const MaterialData> entry;
 			if (AssetRegistry::IsUnresolvedKey(key))
-				entry.Error = AssetRegistry::DescribeUnresolved(key);
-			else if (key.find(ImportedMaterialMarker) == std::string::npos)
-				entry.Asset = LoadMaterialFile(key, entry.Error);
+				entry.Error = Project::GetActive()->GetAssets().DescribeUnresolved(key);
+			else if (!MaterialAsset::IsMaterialKey(key))
+				entry.Error = "'" + key + "' is not a material (a .bmaterial file or <.gltf/.glb model>#material/<n>)";
 			else if (const auto index = ParseSubAssetIndex(key, ImportedMaterialMarker); !index)
-				entry.Error = "invalid imported material key '" + key + "'";
+				entry.Asset = LoadMaterialFile(key, entry.Error);
 			else
 			{
 				const std::string meshKey(GetAssetSource(key));
@@ -571,17 +566,25 @@ namespace Basalt {
 		for (const auto& [key, entry] : s_Graphs)
 			if (changed.contains(key))
 				keys.insert(key);
-		// A material file's entry holds decoded texture paths: it drops when the file, a texture it names or (for a reference
-		// that did not resolve) any file changes, since a moved or restored texture changes what it decodes to. Imported
-		// materials drop with their model.
+		// A material file's entry holds decoded texture paths: it drops when the file or a texture it names (or that texture's
+		// sidecar: a reassigned UUID) changes. A reference that did not resolve can only resolve through metadata, so such an
+		// entry drops when any sidecar changes or a file returns next to its sidecar. Imported materials drop with their model.
+		const bool metadataChanged = std::any_of(paths.begin(), paths.end(), [](const std::string& path) {
+			return path.ends_with(".meta") || FileSystem::Exists(Project::ResolvePath(path + ".meta"));
+		});
 		for (const auto& [key, entry] : s_Materials)
 		{
 			const std::string source = GetSourceFile(key);
-			bool stale = changed.contains(source) || keys.contains(source);
-			if (entry.Asset && key == source)
-				for (const std::string& texture : MaterialAsset::GetTextures(*entry.Asset))
-					stale = stale || AssetRegistry::IsUnresolvedKey(texture) || changed.contains(GetSourceFile(texture));
-			if (stale)
+			const auto reads = [&](const std::string* texture) {
+				if (texture->empty())
+					return false;
+				if (AssetRegistry::IsUnresolvedKey(*texture))
+					return metadataChanged;
+				const std::string file = GetSourceFile(*texture);
+				return changed.contains(file) || changed.contains(file + ".meta");
+			};
+			const bool texturesChanged = entry.Asset && key == source && std::ranges::any_of(MaterialAsset::GetMaps(*entry.Asset), reads);
+			if (changed.contains(source) || keys.contains(source) || texturesChanged)
 				keys.insert(key);
 		}
 		for (const std::string& key : keys)

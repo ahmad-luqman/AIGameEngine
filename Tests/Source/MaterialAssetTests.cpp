@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <chrono>
 #include <limits>
+#include <set>
 
 using namespace Basalt;
 using json = nlohmann::json;
@@ -55,7 +56,7 @@ namespace {
 		m.Transmission = 0.125f;
 		for (size_t slot = 0; slot < MaterialTextureSlotCount; slot++)
 		{
-			MaterialAsset::GetMap(m, static_cast<MaterialTextureSlot>(slot)) = "Assets/Textures/" + std::string(MaterialAsset::Slots[slot].Name) + ".png";
+			m.*MaterialAsset::Slots[slot].Map = "Assets/Textures/" + std::string(MaterialAsset::Slots[slot].Name) + ".png";
 			m.TextureTransforms[slot] = { { 0.125f * static_cast<float>(slot), 0.25f }, { 2.0f, 0.5f }, 0.5f, static_cast<uint32_t>(slot % 2) };
 		}
 		return m;
@@ -80,7 +81,7 @@ namespace {
 		for (size_t slot = 0; slot < MaterialTextureSlotCount; slot++)
 		{
 			INFO(MaterialAsset::Slots[slot].Name);
-			CHECK(MaterialAsset::GetMap(a, static_cast<MaterialTextureSlot>(slot)) == MaterialAsset::GetMap(b, static_cast<MaterialTextureSlot>(slot)));
+			CHECK(a.*MaterialAsset::Slots[slot].Map == b.*MaterialAsset::Slots[slot].Map);
 			CHECK(a.TextureTransforms[slot].Offset == b.TextureTransforms[slot].Offset);
 			CHECK(a.TextureTransforms[slot].Scale == b.TextureTransforms[slot].Scale);
 			CHECK(a.TextureTransforms[slot].Rotation == b.TextureTransforms[slot].Rotation);
@@ -176,7 +177,7 @@ TEST_SUITE("MaterialAsset")
 			const auto material = MaterialAsset::FromJson({ { "Version", 1 }, { key, "x" } }, error);
 			REQUIRE_MESSAGE(material, error);
 			for (size_t other = 0; other < MaterialTextureSlotCount; other++)
-				CHECK(MaterialAsset::GetMap(*material, static_cast<MaterialTextureSlot>(other)) == (static_cast<MaterialTextureSlot>(other) == slot ? "x" : ""));
+				CHECK((*material).*MaterialAsset::Slots[other].Map == (static_cast<MaterialTextureSlot>(other) == slot ? "x" : ""));
 		}
 		for (const auto& [key, slot] : transforms)
 		{
@@ -198,7 +199,19 @@ TEST_SUITE("MaterialAsset")
 		CHECK(MaterialAsset::MakeFileName(std::string(100, 'a')).size() == 64);
 		CHECK(MaterialAsset::MakeFileName("Ölfarbe") == "__lfarbe");
 		CHECK(MaterialAsset::MakeFileName("CON") == "CON_");
-		CHECK(MaterialAsset::MakeFileName("nul.001") == "nul.001_");
+		// Windows reserves a device name with any extension: the suffix goes on the part before the first dot.
+		CHECK(MaterialAsset::MakeFileName("nul.001") == "nul_.001");
+		CHECK(MaterialAsset::MakeFileName("Con.Metal") == "Con_.Metal");
+		const std::string longReserved = MaterialAsset::MakeFileName("CON." + std::string(70, 'a'));
+		CHECK(longReserved.size() == 64);
+		CHECK(longReserved.starts_with("CON_."));
+		for (const char* name : { "aux", "LPT9.x.y", "prn.", "Nul" })
+		{
+			INFO(name);
+			const std::string safe = MaterialAsset::MakeFileName(name);
+			const std::string stem = FileSystem::ToLowerAscii(safe.substr(0, safe.find('.')));
+			CHECK(std::string_view(stem).ends_with('_'));
+		}
 		CHECK(MaterialAsset::MakeFileName("Console") == "Console");
 		CHECK(MaterialAsset::MakeFileName("com1") == "com1_");
 	}
@@ -475,11 +488,14 @@ TEST_SUITE("MaterialAsset")
 		CHECK_FALSE(AssetManager::GetMaterial(model + "#material/4294967295"));
 		CHECK(AssetManager::GetError(model + "#material/4294967295").find("has no material 4294967295") != std::string::npos);
 		CHECK_FALSE(AssetManager::GetMaterial(model + "#material/x"));
-		CHECK(AssetManager::GetError(model + "#material/x").find("invalid imported material key") != std::string::npos);
+		CHECK(AssetManager::GetError(model + "#material/x").find("is not a material") != std::string::npos);
 		CHECK_FALSE(AssetManager::GetMaterial("builtin://Sphere#material/0"));
-		CHECK(AssetManager::GetError("builtin://Sphere#material/0").find("'builtin://Sphere' has no material 0 (it has 0)") != std::string::npos);
+		CHECK(AssetManager::GetError("builtin://Sphere#material/0").find("is not a material") != std::string::npos);
 		CHECK_FALSE(AssetManager::GetMaterial("asset-uuid://42/416e"));
-		CHECK(AssetManager::GetError("asset-uuid://42/416e") == "unresolved asset UUID 42 (was 'An')");
+		CHECK(AssetManager::GetError("asset-uuid://42/416e") == "unresolved asset UUID 42 (hint: An)");
+		// Keys whose source is not a model never try to load one.
+		CHECK_FALSE(AssetManager::GetMaterial("Assets/Models/Paint.png#material/0"));
+		CHECK(AssetManager::GetError("Assets/Models/Paint.png#material/0").find("is not a material") != std::string::npos);
 		CHECK_FALSE(AssetManager::GetMaterial("Assets/Models/Paint.png"));
 		CHECK(AssetManager::GetError("Assets/Models/Paint.png").find("is not a material") != std::string::npos);
 
@@ -500,6 +516,9 @@ TEST_SUITE("MaterialAsset")
 		AssetManager::Reload(model);
 		const auto reloaded = AssetManager::GetLoadedKeys();
 		CHECK(std::none_of(reloaded.begin(), reloaded.end(), [&](const std::string& key) { return key.starts_with(model + "#material/"); }));
+		// A material handed out before stays valid: it shares its model's lifetime.
+		CHECK(imported->Name == "Red/Paint");
+		CHECK(imported->Alpha == AlphaMode::Mask);
 		{
 			AssetManager::TemporaryLoads temporary;
 			REQUIRE(AssetManager::GetMaterial(model + "#material/1"));
@@ -529,7 +548,7 @@ TEST_SUITE("MaterialAsset")
 		Scene scene;
 		Entity entity = scene.CreateEntity("E");
 		std::string error;
-		for (const char* valid : { "", "Assets/M.bmaterial", "Assets/M.BMATERIAL", "Assets/Ship.glb#material/0" })
+		for (const char* valid : { "", "Assets/M.bmaterial", "Assets/M.BMATERIAL", "Assets/Ship.glb#material/0", "asset-uuid://7/416e" })
 		{
 			INFO(valid);
 			CHECK_MESSAGE(ComponentRegistry::AddOrPatch(entity, "Material", { { "Material", valid } }, error), error);
@@ -540,7 +559,7 @@ TEST_SUITE("MaterialAsset")
 			CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, "Material", { { "Material", invalid } }, error));
 			CHECK(error.find("must be a .bmaterial file or <.gltf/.glb model>#material/<n>") != std::string::npos);
 		}
-		CHECK(entity.GetComponent<MaterialComponent>().Material == "Assets/Ship.glb#material/0");
+		CHECK(entity.GetComponent<MaterialComponent>().Material == "asset-uuid://7/416e");
 		// The numeric rules are the material file's, so the inline values are always a valid material.
 		CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, "Material", { { "Clearcoat", 1.5 } }, error));
 		CHECK(error.find("Clearcoat 1.5 must be in [0, 1]") != std::string::npos);
@@ -573,8 +592,16 @@ TEST_SUITE("MaterialAsset")
 		const auto warned = Run(registry, session, "asset.write", { { "path", "Assets/Materials/Problems.bmaterial" }, { "content", problems.dump() } });
 		const std::string warnings = warned.value("warnings", json::array()).dump();
 		CHECK_MESSAGE(Contains(warnings, "NormalMap: 'Assets/Audio/Beep.wav' is not a texture"), warnings);
-		CHECK_MESSAGE(Contains(warnings, "EmissiveMap: 'Assets/Textures/rock.png' differs from the file on disk in letter case"), warnings);
-		CHECK_MESSAGE(Contains(warnings, "TransmissionMap: unresolved asset UUID 77 (was 'Assets/Textures/Gone.png')"), warnings);
+		CHECK_MESSAGE(Contains(warnings, "EmissiveMap: 'Assets/Textures/rock.png', but the file on disk is 'Assets/Textures/Rock.png'"), warnings);
+		CHECK_MESSAGE(Contains(warnings, "TransmissionMap: unresolved asset UUID 77 (hint: Assets/Textures/Gone.png)"), warnings);
+		// Every folder's letter case counts, as do paths outside Assets/, backslashes and external "embedded" images.
+		const json paths = { { "Version", 1 }, { "AlbedoMap", "Assets/textures/Rock.png" }, { "NormalMap", "Textures/Rock.png" }, { "MetallicRoughnessMap", "Assets\\Textures\\Rock.png" }, { "EmissiveMap", model + "#image/0" }, { "OcclusionMap", model + "#image/3" } };
+		const std::string pathWarnings = Run(registry, session, "asset.write", { { "path", "Assets/Materials/Paths.bmaterial" }, { "content", paths.dump() } }).value("warnings", json::array()).dump();
+		CHECK_MESSAGE(Contains(pathWarnings, "AlbedoMap: 'Assets/textures/Rock.png', but the file on disk is 'Assets/Textures/Rock.png'"), pathWarnings);
+		CHECK_MESSAGE(Contains(pathWarnings, "NormalMap: 'Textures/Rock.png' is outside Assets/"), pathWarnings);
+		CHECK_MESSAGE(Contains(pathWarnings, "MetallicRoughnessMap: 'Assets\\\\Textures\\\\Rock.png' uses backslashes"), pathWarnings);
+		CHECK_MESSAGE(Contains(pathWarnings, "EmissiveMap: image 0 of '" + model + "' is the external file 'Paint.png'"), pathWarnings);
+		CHECK_MESSAGE(Contains(pathWarnings, "OcclusionMap: '" + model + "' has 1 image(s)"), pathWarnings);
 		// Writing a material that is already loaded replaces it everywhere it is used.
 		REQUIRE(AssetManager::GetMaterial(path));
 		Run(registry, session, "asset.write", { { "path", path }, { "content", R"({"Version": 1, "Metallic": 0.75})" } });
@@ -649,7 +676,7 @@ TEST_SUITE("MaterialAsset")
 		const auto entry = std::find_if(unresolved.begin(), unresolved.end(), [](const json& e) { return e["path"].get<std::string>().starts_with("asset-uuid://77/"); });
 		REQUIRE(entry != unresolved.end());
 		CHECK((*entry)["status"] == "failed");
-		CHECK((*entry)["error"] == "unresolved asset UUID 77 (was 'Assets/Textures/Gone.png')");
+		CHECK((*entry)["error"] == "unresolved asset UUID 77 (hint: Assets/Textures/Gone.png)");
 	}
 
 	TEST_CASE("Project validation checks material files and their textures")
@@ -663,14 +690,24 @@ TEST_SUITE("MaterialAsset")
 		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Case.bmaterial"), json{ { "Version", 1 }, { "AlbedoMap", "Assets/rock.png" } }.dump()));
 		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Sound.wav"), "RIFF"));
 		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Kind.bmaterial"), json{ { "Version", 1 }, { "AlbedoMap", "Assets/Sound.wav" }, { "NormalMap", "builtin://Cube" } }.dump()));
-		// Sub-assets must exist in their model: the sphere model has 2 materials and 1 image.
+		// Sub-assets must exist in their model: the sphere model has 2 materials, an external image 0 (a file of its own,
+		// which "#image/0" cannot load) and here an embedded image 1.
 		const std::string model = WriteMaterialModel(project);
-		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Images.bmaterial"), json{ { "Version", 1 }, { "AlbedoMap", model + "#image/0" }, { "EmissiveMap", model + "#image/5" } }.dump()));
+		json gltf = ParseJson(*FileSystem::ReadTextFile(Project::ResolvePath(model)));
+		gltf["images"].push_back({ { "uri", "data:image/png;base64,AAAA" } });
+		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath(model), gltf.dump()));
+		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Images.bmaterial"), json{ { "Version", 1 }, { "AlbedoMap", model + "#image/0" }, { "NormalMap", model + "#image/1" }, { "EmissiveMap", model + "#image/5" } }.dump()));
+		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Broken.glb"), "not a model"));
 		Scene scene("SubAssets");
 		Entity good = scene.CreateEntity("Good");
 		good.AddComponent<MaterialComponent>().Material = model + "#material/1";
 		Entity bad = scene.CreateEntity("Bad");
 		bad.AddComponent<MaterialComponent>().Material = model + "#material/9";
+		Entity broken = scene.CreateEntity("Broken");
+		broken.AddComponent<MaterialComponent>().Material = "Assets/Broken.glb#material/0";
+		// A component whose material file lost its identity still loads (the scene stays editable) and is reported.
+		Entity lost = scene.CreateEntity("Lost");
+		lost.AddComponent<MaterialComponent>().Material = "asset-uuid://999/4173736574732f476f6e652e626d6174657269616c";
 		std::string error;
 		REQUIRE_MESSAGE(SceneSerializer::SaveScene(scene, Project::ResolvePath("Assets/SubAssets.bscene"), error), error);
 		const auto report = ValidateProject(*Project::GetActive());
@@ -682,8 +719,11 @@ TEST_SUITE("MaterialAsset")
 		CHECK(has("Assets/Case.bmaterial", "letter case matters"));
 		CHECK(has("Assets/Kind.bmaterial", "AlbedoMap references 'Assets/Sound.wav', which is not a texture"));
 		CHECK(has("Assets/Kind.bmaterial", "NormalMap references 'builtin://Cube', which is not a texture"));
-		CHECK(has("Assets/Images.bmaterial", fmt::format("EmissiveMap references '{0}#image/5', but '{0}' has 1 image(s)", model)));
-		CHECK_FALSE(has("Assets/Images.bmaterial", "#image/0"));
+		CHECK(has("Assets/Images.bmaterial", fmt::format("EmissiveMap references '{0}#image/5', but '{0}' has 2 image(s)", model)));
+		CHECK(has("Assets/Images.bmaterial", fmt::format("AlbedoMap references '{0}#image/0', but image 0 of '{0}' is the external file 'Paint.png'", model)));
+		CHECK_FALSE(has("Assets/Images.bmaterial", "#image/1"));
+		CHECK(has("Assets/SubAssets.bscene", "'Assets/Broken.glb#material/0', but 'Assets/Broken.glb' is not a readable glTF"));
+		CHECK(has("Assets/SubAssets.bscene", "references an unresolved asset UUID 999 (hint: Assets/Gone.bmaterial)"));
 		CHECK(has("Assets/SubAssets.bscene", "#material/9', but '" + model + "' has 2 material(s)"));
 		CHECK_FALSE(has("Assets/SubAssets.bscene", "#material/1"));
 		CHECK(std::none_of(report.GetIssues().begin(), report.GetIssues().end(), [](const ValidationIssue& issue) { return issue.File == "Assets/Good.bmaterial"; }));
@@ -707,7 +747,8 @@ TEST_SUITE("MaterialAsset")
 		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/A.bmaterial"), text->dump()));
 		const ThumbnailCache cache(project.GetDirectory());
 		const auto dependencies = cache.GetDependencies("Assets/A.bmaterial");
-		CHECK(dependencies == std::vector<std::string>{ "Assets/Models/Paint.png", "Assets/Models/Sphere.bin", "Assets/Models/Sphere.gltf", "Assets/Rock.png" });
+		// UUID references also depend on their file's sidecar: a preview made while one did not resolve is remade when it does.
+		CHECK(dependencies == std::vector<std::string>{ "Assets/Models/Paint.png", "Assets/Models/Sphere.bin", "Assets/Models/Sphere.gltf", "Assets/Models/Sphere.gltf.meta", "Assets/Rock.png", "Assets/Rock.png.meta" });
 		const auto key = cache.MakeKey("Assets/A.bmaterial", error);
 		REQUIRE(key);
 		WritePixel("Assets/Rock.png");
@@ -741,7 +782,7 @@ TEST_SUITE("MaterialAsset")
 		MaterialData swatch;
 		swatch.EmissiveMap = model + "#image/0";
 		CHECK(MaterialPreviewDependencies(swatch) == imported);
-		// Without a registry to decode a UUID, the Path hint is still watched.
+		// A UUID that does not decode is still watched through its Path hint (and that file's sidecar).
 		const json unknown = { { "Version", 1 }, { "AlbedoMap", { { "UUID", "123" }, { "Path", "Assets/Rock.png" } } } };
 		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Unknown.bmaterial"), unknown.dump()));
 		const auto hinted = cache.GetDependencies("Assets/Unknown.bmaterial");
@@ -911,5 +952,189 @@ TEST_SUITE("MaterialAsset")
 		REQUIRE(second);
 		CHECK(second->Metallic == 0.75f);
 		CHECK(first->Metallic == 0.25f);
+	}
+
+	TEST_CASE("Inline Material components bind every map in its own slot")
+	{
+		Scene scene;
+		Entity entity = scene.CreateEntity("Maps");
+		std::string error;
+		json data = json::object();
+		for (size_t slot = 0; slot < MaterialTextureSlotCount; slot++)
+			data[MaterialAsset::Slots[slot].MapField] = "Assets/slot" + std::to_string(slot) + ".png";
+		REQUIRE_MESSAGE(ComponentRegistry::AddOrPatch(entity, "Material", data, error), error);
+		const auto& component = entity.GetComponent<MaterialComponent>();
+		const auto maps = MaterialAsset::GetMaps(component);
+		const MaterialData full = MaterialAsset::FromComponent(component);
+		for (size_t slot = 0; slot < MaterialTextureSlotCount; slot++)
+		{
+			INFO(MaterialAsset::Slots[slot].MapField);
+			const std::string expected = "Assets/slot" + std::to_string(slot) + ".png";
+			CHECK(*maps[slot] == expected);
+			CHECK(full.*MaterialAsset::Slots[slot].Map == expected);
+		}
+		// The renderer's textures-free conversion copies no paths but every value.
+		const MaterialData scalars = MaterialAsset::ScalarsFromComponent(component);
+		CHECK(MaterialAsset::GetTextures(scalars).empty());
+		for (size_t slot = 0; slot < MaterialTextureSlotCount; slot++)
+		{
+			CHECK(scalars.TextureTransforms[slot].Scale == full.TextureTransforms[slot].Scale);
+			CHECK(scalars.TextureTransforms[slot].TexCoord == full.TextureTransforms[slot].TexCoord);
+		}
+	}
+
+	TEST_CASE("The editor's field list matches what material files hold")
+	{
+		MaterialData material;
+		material.TextureTransforms[0].TexCoord = 1;
+		std::string error;
+		const auto data = MaterialAsset::ToJson(material, false, error);
+		REQUIRE_MESSAGE(data, error);
+		std::set<std::string> expected = { "Version", "TextureTransforms" };
+		for (const char* field : MaterialAsset::ScalarFields)
+			expected.insert(field);
+		for (const auto& slot : MaterialAsset::Slots)
+			expected.insert(slot.MapField);
+		std::set<std::string> written;
+		for (const auto& [key, value] : data->items())
+			written.insert(key);
+		CHECK(written == expected);
+		std::set<std::string> transformKeys;
+		for (const auto& [key, value] : (*data)["TextureTransforms"]["Albedo"].items())
+			transformKeys.insert(key);
+		CHECK(transformKeys == std::set<std::string>(std::begin(MaterialAsset::TransformFields), std::end(MaterialAsset::TransformFields)));
+	}
+
+	TEST_CASE("Built-in meshes give UV1 maps the same coordinates as UV0")
+	{
+		ClearAssetCache clear;
+		const auto sphere = AssetManager::GetMesh("builtin://Sphere");
+		REQUIRE(sphere);
+		REQUIRE_FALSE(sphere->Vertices.empty());
+		CHECK(std::all_of(sphere->Vertices.begin(), sphere->Vertices.end(), [](const Vertex& vertex) { return vertex.TexCoord1 == vertex.TexCoord; }));
+		CHECK(std::any_of(sphere->Vertices.begin(), sphere->Vertices.end(), [](const Vertex& vertex) { return vertex.TexCoord1 != glm::vec2(0.0f); }));
+	}
+
+	TEST_CASE("Moves skip broken material files, follow open-scene imported materials and notify only on success")
+	{
+		ClearAssetCache clear;
+		TempProject project("MaterialMoves");
+		CommandRegistry registry;
+		AutomationSession session;
+		WritePixel("Assets/Rock.png");
+		const std::string model = WriteMaterialModel(project);
+		std::vector<std::pair<std::string, std::string>> notified;
+		session.OnAssetMoved = [&](const std::string& from, const std::string& to) { notified.emplace_back(from, to); };
+
+		// A material file that is not JSON cannot reference anything: it is skipped with a warning, not a failed move.
+		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Broken.bmaterial"), "{"));
+		const auto moved = Run(registry, session, "asset.move", { { "from", "Assets/Rock.png" }, { "to", "Assets/Stone.png" } });
+		CHECK(Contains(moved.value("warnings", json::array()).dump(), "cannot migrate 'Assets/Broken.bmaterial'"));
+		CHECK(notified.size() == 1);
+		// A broken scene still stops a move: it might reference the asset.
+		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Broken.bscene"), "{"));
+		CHECK(Contains(RunError(registry, session, "asset.move", { { "from", "Assets/Stone.png" }, { "to", "Assets/Rock.png" } }), "cannot migrate 'Assets/Broken.bscene'"));
+		CHECK(notified.size() == 1);
+		std::filesystem::remove(Project::ResolvePath("Assets/Broken.bscene"));
+
+		// The open scene's imported-material reference follows its model, fragment and all, and saves by UUID.
+		Run(registry, session, "scene.new", { { "name", "Moves" }, { "empty", true } });
+		Run(registry, session, "entity.create", { { "name", "Painted" } });
+		Run(registry, session, "component.set", { { "entity", "Painted" }, { "component", "Material" }, { "data", { { "Material", model + "#material/0" } } } });
+		Run(registry, session, "asset.move", { { "from", model }, { "to", "Assets/Models/Moved.gltf" } });
+		CHECK(Run(registry, session, "component.get", { { "entity", "Painted" }, { "component", "Material" } })["Material"] == "Assets/Models/Moved.gltf#material/0");
+		Run(registry, session, "scene.save", { { "path", "Assets/Moves.bscene" } });
+		const json saved = ParseJson(*FileSystem::ReadTextFile(Project::ResolvePath("Assets/Moves.bscene")));
+		const json reference = saved["Entities"][0]["Components"]["Material"]["Material"];
+		REQUIRE(reference.is_object());
+		CHECK(reference["Path"] == "Assets/Models/Moved.gltf#material/0");
+		CHECK(reference["UUID"] == Run(registry, session, "asset.id", { { "path", "Assets/Models/Moved.gltf" } })["uuid"]);
+	}
+
+	TEST_CASE("A clean draft stays clean when its texture moves")
+	{
+		ClearAssetCache clear;
+		TempProject project("MaterialCleanMove");
+		CommandRegistry registry;
+		AutomationSession session;
+		WritePixel("Assets/Rock.png");
+		Run(registry, session, "asset.write", { { "path", "Assets/Wall.bmaterial" }, { "content", json{ { "Version", 1 }, { "AlbedoMap", "Assets/Rock.png" } }.dump() } });
+		MaterialAssetDraft draft;
+		std::string error;
+		REQUIRE_MESSAGE(draft.Load("Assets/Wall.bmaterial", error), error);
+		session.OnAssetMoved = [&](const std::string& from, const std::string& to) { draft.OnAssetMoved(from, to); };
+		Run(registry, session, "asset.move", { { "from", "Assets/Rock.png" }, { "to", "Assets/Stone.png" } });
+		CHECK(draft.GetData()["AlbedoMap"] == "Assets/Stone.png");
+		CHECK_FALSE(draft.IsDirty());
+		CHECK_FALSE(draft.HasExternalChange());
+	}
+
+	TEST_CASE("Materials with unresolved textures reload only when metadata changes")
+	{
+		ClearAssetCache clear;
+		TempProject project("MaterialUnresolvedReload");
+		const std::string path = "Assets/Lost.bmaterial";
+		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath(path), json{ { "Version", 1 }, { "AlbedoMap", { { "UUID", "4242" }, { "Path", "Assets/Gone.png" } } } }.dump()));
+		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Note.lua"), "return {}"));
+		REQUIRE(AssetManager::GetMaterial(path));
+		// An unrelated file cannot make the UUID resolve: no reload, no repeated warning.
+		CHECK(AssetManager::ReloadChanged({ "Assets/Note.lua" }).empty());
+		// A sidecar can.
+		const auto dropped = AssetManager::ReloadChanged({ "Assets/Other.png.meta" });
+		CHECK(std::find(dropped.begin(), dropped.end(), path) != dropped.end());
+
+		// A resolved texture's sidecar changing (a reassigned UUID) drops the material too.
+		WritePixel("Assets/Rock.png");
+		MaterialData material;
+		material.AlbedoMap = "Assets/Rock.png";
+		std::string error;
+		const auto text = MaterialAsset::ToJson(material, true, error);
+		REQUIRE_MESSAGE(text, error);
+		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Rock.bmaterial"), text->dump()));
+		REQUIRE(AssetManager::GetMaterial("Assets/Rock.bmaterial"));
+		const auto byMeta = AssetManager::ReloadChanged({ "Assets/Rock.png.meta" });
+		CHECK(std::find(byMeta.begin(), byMeta.end(), "Assets/Rock.bmaterial") != byMeta.end());
+	}
+
+	TEST_CASE("material.extract names unnamed materials and reports texture problems")
+	{
+		ClearAssetCache clear;
+		TempProject project("MaterialExtractNames");
+		CommandRegistry registry;
+		AutomationSession session;
+		const std::string model = WriteMaterialModel(project);
+		json gltf = ParseJson(*FileSystem::ReadTextFile(Project::ResolvePath(model)));
+		gltf["materials"][0]["name"] = "...";
+		gltf["materials"][1]["name"] = "CON";
+		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath(model), gltf.dump()));
+		std::filesystem::remove(Project::ResolvePath("Assets/Models/Paint.png"));
+		const auto extracted = Run(registry, session, "material.extract", { { "model", model } });
+		REQUIRE(extracted["materials"].size() == 2);
+		CHECK(extracted["materials"][0]["path"] == "Assets/Models/Materials/Material_0.bmaterial");
+		CHECK(extracted["materials"][1]["path"] == "Assets/Models/Materials/CON_.bmaterial");
+		const std::string warnings = extracted.value("warnings", json::array()).dump();
+		CHECK_MESSAGE(Contains(warnings, "Assets/Models/Materials/Material_0.bmaterial: AlbedoMap: 'Assets/Models/Paint.png' does not exist"), warnings);
+	}
+
+	TEST_CASE("Validation decodes a material file's UUIDs with that project's registry")
+	{
+		ClearAssetCache clear;
+		Ref<Project> validated;
+		{
+			TempProject first("MaterialValidatedProject");
+			validated = Project::GetActive();
+			WritePixel("Assets/Rock.png");
+			MaterialData material;
+			material.AlbedoMap = "Assets/Rock.png";
+			std::string error;
+			const auto text = MaterialAsset::ToJson(material, true, error);
+			REQUIRE_MESSAGE(text, error);
+			REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Rock.bmaterial"), text->dump()));
+			// Another project is active while the first is validated.
+			TempProject other("MaterialOtherProject");
+			const auto report = ValidateProject(*validated);
+			INFO(json(report.GetIssues().size()).dump());
+			CHECK(std::none_of(report.GetIssues().begin(), report.GetIssues().end(), [](const ValidationIssue& issue) { return issue.File == "Assets/Rock.bmaterial"; }));
+		}
 	}
 }
