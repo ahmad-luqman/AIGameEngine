@@ -41,7 +41,7 @@ can alter exact coplanar depth ties. Built-in primitives keep their existing top
 
 Static opaque/masked primitives generate up to three LOD index ranges (targets 50%, 25%, 12.5%, maximum
 relative geometric error 1%, locked borders). Material boundaries and vertex seams are retained. A level
-that cannot reduce triangles within the error bound is omitted. Skinned and blended primitives retain
+that cannot reduce triangles within the error bound is omitted. Skinned, morphed and blended primitives retain
 full-detail topology. LODs share the original vertices; physics always uses the full-detail range.
 `Mesh.LODDistance` opts static rendering into LOD selection: 0 disables it, positive values select the
 first reduced level at that world-space distance from the camera to the submesh bounds center, then

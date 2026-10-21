@@ -11,6 +11,7 @@
 #include <cctype>
 #include <cmath>
 #include <map>
+#include <optional>
 #include <set>
 
 namespace Basalt {
@@ -139,35 +140,39 @@ namespace Basalt {
 			return token == "j" || token == "c" || token == "def" || token == "org";
 		}
 
-		// Model-space rest positions and rotations; false for a non-finite rest pose. Degenerate (zero-scale) joints get
-		// the identity rotation and are listed in outDegenerate.
-		bool Rest(const MeshSource& source, std::vector<glm::vec3>& outPositions, std::vector<glm::quat>& outRotations, std::vector<uint32_t>& outDegenerate)
-		{
-			std::vector<glm::mat4> globals;
-			if (!EvaluateAnimation(source, nullptr, 0, globals))
-				return false;
-			outPositions.resize(globals.size());
-			outRotations.resize(globals.size());
-			for (size_t i = 0; i < globals.size(); i++)
-			{
-				glm::vec3 translation, scale;
-				glm::quat rotation;
-				outPositions[i] = glm::vec3(globals[i][3]);
-				const bool decomposed = Math::DecomposeAffineTransform(globals[i], translation, rotation, scale);
-				outRotations[i] = decomposed ? glm::normalize(rotation) : glm::quat(1, 0, 0, 0);
-				if (!decomposed)
-					outDegenerate.push_back(static_cast<uint32_t>(i));
-			}
-			return true;
-		}
-
-		glm::quat WorldRotation(const glm::mat4& global)
+		// A global transform's rotation, or nothing for a degenerate (zero-scale) one.
+		std::optional<glm::quat> DecomposedRotation(const glm::mat4& global)
 		{
 			glm::vec3 translation, scale;
 			glm::quat rotation;
 			if (!Math::DecomposeAffineTransform(global, translation, rotation, scale))
-				return glm::quat(1, 0, 0, 0);
+				return std::nullopt;
 			return glm::normalize(rotation);
+		}
+
+		glm::quat WorldRotation(const glm::mat4& global)
+		{
+			return DecomposedRotation(global).value_or(glm::quat(1, 0, 0, 0));
+		}
+
+		// Model-space rest positions and rotations; false for a non-finite rest pose. Degenerate (zero-scale) joints get
+		// the identity rotation and are listed in outDegenerate.
+		bool Rest(const MeshSource& source, RestPose& out, std::vector<uint32_t>& outDegenerate)
+		{
+			std::vector<glm::mat4> globals;
+			if (!EvaluateAnimation(source, nullptr, 0, globals))
+				return false;
+			out.Positions.resize(globals.size());
+			out.Rotations.resize(globals.size());
+			for (size_t i = 0; i < globals.size(); i++)
+			{
+				out.Positions[i] = glm::vec3(globals[i][3]);
+				const auto rotation = DecomposedRotation(globals[i]);
+				out.Rotations[i] = rotation.value_or(glm::quat(1, 0, 0, 0));
+				if (!rotation)
+					outDegenerate.push_back(static_cast<uint32_t>(i));
+			}
+			return true;
 		}
 
 		// The root's rest height above the lowest of `mapped`, in model space (glTF is Y-up).
@@ -179,31 +184,37 @@ namespace Basalt {
 			return positions[root].y - lowest;
 		}
 
-		constexpr size_t MaxBakedFloats = size_t{ 16 } * 1024 * 1024;
 		// Per mapped joint and key: up to three tracks (translation, rotation, scale), each a vec4 value and a time.
 		constexpr size_t BakedFloatsPerMappedKey = size_t{ 3 } * (4 + 1);
-		constexpr float CubicSampleRate = 30.0f;
+		constexpr double CubicSampleRate = 30.0;
 		constexpr const char* BudgetError = "the baked clip exceeds the decoded animation budget";
 
-		// The bake's sample times: every source key, 0 and the duration, plus a steady rate where cubic curves bend
-		// between keys. False when the cubic grid alone is past the budget.
-		bool SampleTimes(const AnimationClip& clip, std::set<float>& outTimes)
+		// The bake's sample times: every source key, 0 and the duration, plus a 30 Hz grid over the whole clip when any
+		// track is cubic. False, without allocating, when they cannot fit in `limit` keys; outTimes is filled only when
+		// asked for or when the cheap bound is not enough.
+		bool SampleTimes(const AnimationClip& clip, size_t limit, std::set<float>* outTimes)
 		{
-			outTimes = { 0.0f, clip.Duration };
+			double bound = 2;
 			bool cubic = false;
 			for (const AnimationTrack& track : clip.Tracks)
 			{
-				outTimes.insert(track.Times.begin(), track.Times.end());
+				bound += static_cast<double>(track.Times.size());
 				cubic = cubic || track.Interpolation == AnimationInterpolation::CubicSpline;
 			}
-			if (!cubic)
-				return true;
-			const double steps = std::ceil(static_cast<double>(clip.Duration) * CubicSampleRate);
-			if (!(steps <= static_cast<double>(MaxBakedFloats)))
+			const double steps = cubic ? std::ceil(static_cast<double>(clip.Duration) * CubicSampleRate) : 0.0;
+			// The grid's times are distinct, so a grid alone past the limit cannot fit.
+			if (!(steps <= static_cast<double>(limit)))
 				return false;
+			if (!outTimes && bound + steps <= static_cast<double>(limit))
+				return true;
+			std::set<float> local;
+			std::set<float>& times = outTimes ? *outTimes : local;
+			times = { 0.0f, clip.Duration };
+			for (const AnimationTrack& track : clip.Tracks)
+				times.insert(track.Times.begin(), track.Times.end());
 			for (size_t i = 1; i < static_cast<size_t>(steps); i++)
-				outTimes.insert(clip.Duration * static_cast<float>(i) / static_cast<float>(steps));
-			return true;
+				times.insert(clip.Duration * static_cast<float>(i) / static_cast<float>(steps));
+			return times.size() <= limit;
 		}
 
 		// Per target morph target of `node`: the source track's index for the same target name, or -1.
@@ -217,10 +228,13 @@ namespace Basalt {
 			return from;
 		}
 
-		// The target nodes a source weights track moves: same name, at least one morph target name in common.
+		// The target nodes a source weights track moves: same name (ignoring namespaces), at least one morph target name
+		// in common.
 		template<typename Visit>
 		void ForEachWeightsTarget(const MeshSource& target, const MeshSource& source, const AnimationTrack& track, Visit&& visit)
 		{
+			if (track.Node >= source.Nodes.size() || source.Nodes[track.Node].MeshIndex < 0)
+				return;
 			const MeshNode& sourceNode = source.Nodes[track.Node];
 			const auto& sourceTargets = source.Meshes[sourceNode.MeshIndex].MorphTargets;
 			for (size_t node = 0; node < target.Nodes.size(); node++)
@@ -232,6 +246,34 @@ namespace Basalt {
 				if (std::ranges::any_of(from, [](int32_t index) { return index >= 0; }))
 					visit(static_cast<uint32_t>(node), from);
 			}
+		}
+	}
+
+	namespace {
+		// CheckBakeBudget, also returning the sample times when outTimes is given.
+		bool CheckBudget(const MeshSource& target, const MeshSource& source, const RetargetMap& map, const AnimationClip& clip, std::set<float>* outTimes, std::string& outError)
+		{
+			const size_t mapped = map.MappedCount();
+			const size_t limit = Retargeting::MaxClipBakedFloats / std::max<size_t>(1, mapped * BakedFloatsPerMappedKey);
+			if (!SampleTimes(clip, limit, outTimes))
+			{
+				outError = BudgetError;
+				return false;
+			}
+			// Keys bound the joint tracks' floats; weights tracks expand to their target nodes' widths.
+			size_t floats = 0;
+			for (const AnimationTrack& track : clip.Tracks)
+				if (track.Path == AnimationPath::Weights && track.Width > 0)
+				{
+					const size_t values = track.Weights.size() / track.Width;
+					ForEachWeightsTarget(target, source, track, [&](uint32_t, const std::vector<int32_t>& from) { floats += values * from.size() + track.Times.size(); });
+				}
+			if (floats > Retargeting::MaxClipBakedFloats - std::min(Retargeting::MaxClipBakedFloats, limit * mapped * BakedFloatsPerMappedKey))
+			{
+				outError = BudgetError;
+				return false;
+			}
+			return true;
 		}
 	}
 
@@ -314,9 +356,15 @@ namespace Basalt {
 			for (size_t i = 0; i < target.Nodes.size(); i++)
 				if (const auto found = sourceNames.find(StripNamespace(target.Nodes[i].Name)); found != sourceNames.end())
 					pair(i, found->second, RetargetMatch::Name);
+			std::vector<std::string> targetBones(target.Nodes.size());
 			for (size_t i = 0; i < target.Nodes.size(); i++)
-				if (const auto found = sourceBones.find(HumanoidBone(target.Nodes[i].Name)); found != sourceBones.end())
-					pair(i, found->second, RetargetMatch::Humanoid);
+				if (targetBones[i] = HumanoidBone(target.Nodes[i].Name); !targetBones[i].empty())
+					if (const auto found = sourceBones.find(targetBones[i]); found != sourceBones.end())
+						pair(i, found->second, RetargetMatch::Humanoid);
+			// glTF cannot animate a node given as a matrix, so such a pair never moves.
+			for (size_t i = 0; i < target.Nodes.size(); i++)
+				if (map.SourceOf[i] >= 0 && target.Nodes[i].HasMatrix)
+					outWarnings.push_back(fmt::format("joint '{}' of '{}' is given as a matrix, which cannot be animated, so it keeps its rest pose", target.Nodes[i].Name, target.Key));
 
 			const auto firstMapped = [&](auto&& accept) -> int32_t {
 				for (uint32_t node : target.NodeOrder)
@@ -324,20 +372,19 @@ namespace Basalt {
 						return static_cast<int32_t>(node);
 				return -1;
 			};
-			map.TargetRoot = firstMapped([&](uint32_t node) { return HumanoidBone(target.Nodes[node].Name) == "Hips"; });
+			map.TargetRoot = firstMapped([&](uint32_t node) { return targetBones[node] == "Hips"; });
 			if (map.TargetRoot < 0)
 				map.TargetRoot = firstMapped([](uint32_t) { return true; });
 			if (map.TargetRoot >= 0)
 				map.SourceRoot = map.SourceOf[map.TargetRoot];
 
 			std::vector<uint32_t> targetDegenerate, sourceDegenerate;
-			if (!Rest(target, map.TargetRestPositions, map.TargetRestRotations, targetDegenerate) || !Rest(source, map.SourceRestPositions, map.SourceRestRotations, sourceDegenerate))
+			const bool targetFinite = Rest(target, map.TargetRest, targetDegenerate);
+			if (!targetFinite || !Rest(source, map.SourceRest, sourceDegenerate))
 			{
-				outWarnings.push_back(fmt::format("the rest pose of '{}' is not finite, so no clip can be retargeted", map.TargetRestPositions.empty() ? target.Key : source.Key));
-				map.TargetRestPositions.clear();
-				map.SourceRestPositions.clear();
-				map.TargetRestRotations.clear();
-				map.SourceRestRotations.clear();
+				outWarnings.push_back(fmt::format("the rest pose of '{}' is not finite, so no clip can be retargeted", targetFinite ? source.Key : target.Key));
+				map.TargetRest = {};
+				map.SourceRest = {};
 				return map;
 			}
 			// A zero-scale joint has no orientation to correct from; its children still pose, but it turns from identity.
@@ -356,40 +403,19 @@ namespace Basalt {
 					targetMapped.push_back(static_cast<int32_t>(i));
 					sourceMapped.push_back(map.SourceOf[i]);
 				}
-			const float targetLeg = LegLength(map.TargetRestPositions, map.TargetRoot, targetMapped);
-			const float sourceLeg = LegLength(map.SourceRestPositions, map.SourceRoot, sourceMapped);
+			const float targetLeg = LegLength(map.TargetRest.Positions, map.TargetRoot, targetMapped);
+			const float sourceLeg = LegLength(map.SourceRest.Positions, map.SourceRoot, sourceMapped);
 			if (targetLeg > 1e-6f && sourceLeg > 1e-6f && std::isfinite(targetLeg / sourceLeg))
 				map.RootScale = targetLeg / sourceLeg;
 			// Only a humanoid's hips are expected to stand above its feet; other roots (tails, props) move unscaled.
-			else if (HumanoidBone(target.Nodes[map.TargetRoot].Name) == "Hips")
+			else if (targetBones[map.TargetRoot] == "Hips")
 				outWarnings.push_back(fmt::format("the root '{}' is not above any other paired joint in both skeletons, so its movement is not scaled to the model's size", target.Nodes[map.TargetRoot].Name));
 			return map;
 		}
 
 		bool CheckBakeBudget(const MeshSource& target, const MeshSource& source, const RetargetMap& map, const AnimationClip& clip, std::string& outError)
 		{
-			std::set<float> times;
-			if (!SampleTimes(clip, times) || times.size() > MaxBakedFloats / std::max<size_t>(1, map.MappedCount() * BakedFloatsPerMappedKey))
-			{
-				outError = BudgetError;
-				return false;
-			}
-			size_t floats = times.size() * map.MappedCount() * BakedFloatsPerMappedKey;
-			for (const AnimationTrack& track : clip.Tracks)
-			{
-				if (track.Path != AnimationPath::Weights || track.Width == 0 || track.Node >= source.Nodes.size() || source.Nodes[track.Node].MeshIndex < 0)
-					continue;
-				const size_t values = track.Weights.size() / track.Width;
-				ForEachWeightsTarget(target, source, track, [&](uint32_t, const std::vector<int32_t>& from) {
-					floats += values * from.size() + track.Times.size();
-				});
-				if (floats > MaxBakedFloats)
-				{
-					outError = BudgetError;
-					return false;
-				}
-			}
-			return true;
+			return CheckBudget(target, source, map, clip, nullptr, outError);
 		}
 
 		bool BakeClip(const MeshSource& target, const MeshSource& source, const RetargetMap& map, const AnimationClip& clip, AnimationClip& outClip, std::vector<std::string>& outWarnings, std::string& outError)
@@ -401,22 +427,28 @@ namespace Basalt {
 				outError = "the joint map was built for other skeletons";
 				return false;
 			}
-			if (map.TargetRestRotations.size() != target.Nodes.size() || map.SourceRestRotations.size() != source.Nodes.size())
+			if (map.TargetRest.Rotations.size() != target.Nodes.size() || map.TargetRest.Positions.size() != target.Nodes.size() ||
+				map.SourceRest.Rotations.size() != source.Nodes.size() || map.SourceRest.Positions.size() != source.Nodes.size())
 			{
 				outError = "non-finite rest pose";
 				return false;
 			}
 			for (const AnimationTrack& track : clip.Tracks)
-				if (track.Node >= source.Nodes.size() || (track.Path == AnimationPath::Weights && (track.Width == 0 || track.Width != source.Nodes[track.Node].MorphWeights.size())))
+			{
+				const size_t stride = track.Interpolation == AnimationInterpolation::CubicSpline ? 3 : 1;
+				const bool weights = track.Path == AnimationPath::Weights;
+				if (track.Node >= source.Nodes.size() || track.Times.empty() ||
+					(weights ? (track.Width == 0 || track.Width != source.Nodes[track.Node].MorphWeights.size() || track.Weights.size() != track.Times.size() * stride * track.Width)
+							 : track.Values.size() != track.Times.size() * stride))
 				{
 					outError = "a track does not fit the library's nodes";
 					return false;
 				}
-			if (!CheckBakeBudget(target, source, map, clip, outError))
+			}
+			std::set<float> times;
+			if (!CheckBudget(target, source, map, clip, &times, outError))
 				return false;
 
-			std::set<float> times;
-			SampleTimes(clip, times);
 			const bool stepped = !clip.Tracks.empty() && std::ranges::all_of(clip.Tracks, [](const AnimationTrack& track) { return track.Interpolation == AnimationInterpolation::Step; });
 			// Which source channels the clip moves, per source node.
 			const std::vector<uint8_t> channels = AnimatedChannels(source, clip);
@@ -438,7 +470,7 @@ namespace Basalt {
 					if (const int32_t sourceNode = map.SourceOf[node]; sourceNode >= 0 && !targetNode.HasMatrix)
 					{
 						// Turn the target's rest orientation by the source's turn away from its own rest, in model space.
-						const glm::quat world = WorldRotation(sourceGlobals[sourceNode]) * glm::inverse(map.SourceRestRotations[sourceNode]) * map.TargetRestRotations[node];
+						const glm::quat world = WorldRotation(sourceGlobals[sourceNode]) * glm::inverse(map.SourceRest.Rotations[sourceNode]) * map.TargetRest.Rotations[node];
 						local.Rotation = glm::normalize(glm::inverse(WorldRotation(parent)) * world);
 						std::vector<glm::vec4>& rotation = rotations[node];
 						glm::vec4 value(local.Rotation.x, local.Rotation.y, local.Rotation.z, local.Rotation.w);
@@ -448,8 +480,8 @@ namespace Basalt {
 						rotation.push_back(value);
 						if (static_cast<int32_t>(node) == map.TargetRoot)
 						{
-							const glm::vec3 displacement = (glm::vec3(sourceGlobals[sourceNode][3]) - map.SourceRestPositions[sourceNode]) * map.RootScale;
-							const glm::vec3 position = map.TargetRestPositions[node] + displacement;
+							const glm::vec3 displacement = (glm::vec3(sourceGlobals[sourceNode][3]) - map.SourceRest.Positions[sourceNode]) * map.RootScale;
+							const glm::vec3 position = map.TargetRest.Positions[node] + displacement;
 							local.Translation = glm::vec3(glm::inverse(parent) * glm::vec4(position, 1));
 							translations[node].emplace_back(local.Translation, 0.0f);
 						}
@@ -491,8 +523,9 @@ namespace Basalt {
 			{
 				if (track.Path != AnimationPath::Weights)
 					continue;
-				bool moved = false;
+				bool matched = false, moved = false;
 				ForEachWeightsTarget(target, source, track, [&](uint32_t node, const std::vector<int32_t>& from) {
+					matched = true;
 					if (std::ranges::any_of(outClip.Tracks, [&](const AnimationTrack& baked) { return baked.Path == AnimationPath::Weights && baked.Node == node; }))
 						return;
 					moved = true;
@@ -510,8 +543,10 @@ namespace Basalt {
 						}
 					outClip.Tracks.push_back(std::move(weights));
 				});
-				if (!moved)
+				if (!matched)
 					outWarnings.push_back(fmt::format("clip '{}': the morph weights of '{}' match no node and morph target name of '{}'", clip.Name, source.Nodes[track.Node].Name, target.Key));
+				else if (!moved)
+					outWarnings.push_back(fmt::format("clip '{}': the morph weights of '{}' drive nodes an earlier weights track of the clip already drives, so they are skipped", clip.Name, source.Nodes[track.Node].Name));
 			}
 			return true;
 		}

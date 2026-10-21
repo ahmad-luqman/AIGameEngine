@@ -113,8 +113,8 @@ namespace Basalt {
 	};
 
 	// Import limits for morph targets: targets per glTF mesh, and deltas (targets x vertices) per model. The renderer
-	// keeps each model's deltas in one texture up to 4096 texels wide, two texels per delta; 2048 rows keep it within the
-	// portable 4096 x 4096 image limit.
+	// keeps each model's deltas in one texture up to 4096 texels wide, two texels per delta, at most 2048 rows (128 MiB),
+	// well within the portable 4096 x 4096 image limit.
 	inline constexpr uint32_t MaxMorphTargets = 256;
 	inline constexpr uint32_t MorphTextureWidth = 4096;
 	inline constexpr uint32_t MaxMorphTextureRows = 2048;
@@ -284,7 +284,8 @@ namespace Basalt {
 	public:
 		// Rebuilds NodeOrder and lays out the nodes' morph weights (call after Submeshes, Meshes and Nodes are set). False,
 		// with the reason in outError and nothing changed, for an invalid parent or cycle, or morph data that does not fit
-		// together (names, defaults, submesh target counts and delta ranges per mesh, node weights per node).
+		// together (per mesh: default weight count, submesh target counts, morph bounds and delta ranges; per node: weight
+		// count).
 		bool FinalizeHierarchy(std::string* outError = nullptr);
 
 		// Adds a submesh from raw geometry, updating bounds. Returns the submesh index. `morphDeltas` holds
@@ -307,7 +308,8 @@ namespace Basalt {
 	// Exact bounds of a submesh's vertices morphed at `weights` (its Bounds without morph targets): editor framing and
 	// selection.
 	AABB MorphedBounds(const MeshSource& source, const Submesh& submesh, std::span<const float> weights);
-	// A mesh's bounds as a MeshComponent draws it (its submeshes morphed at the mesh's default weights).
+	// A mesh's bounds as a MeshComponent draws it: its submeshes widened by their morph targets at the mesh's default
+	// weights (conservative and cheap, for per-frame selection boxes).
 	AABB MorphedMeshBounds(const MeshSource& source, uint32_t mesh);
 
 	// Built-in primitives, sized to match the default collider shapes (unit cube, radius 0.5, ...).

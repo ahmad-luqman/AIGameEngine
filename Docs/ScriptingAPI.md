@@ -1232,6 +1232,7 @@ deformed triangles.
 downloaded without skins, retargeted onto the Animator's own skeleton:
 
 ```lua
+-- Each library's clip renamed "Run" and "Jump" before export (see below).
 hero:SetComponent("Animator", { ClipLibraries = { { Mesh = "Assets/Animations/Mixamo/Run.glb" }, { Mesh = "Assets/Animations/Mixamo/Jump.glb" } } })
 hero:CrossFadeAnimation("Run", 0.2)
 ```
@@ -1243,28 +1244,32 @@ hidden (the inspector and `scene.info` say which). Mixamo downloads name every t
 before export (in Blender, the action name) or only the first library's plays.
 
 Joints pair up by the library entry's `Joints` (`{ Mesh = "...", Joints = { { Source = "mixamorig:Spine2", Target =
-"spine_05" } } }`; each source and each target appears once), then by equal names ignoring `namespace:` and
+"spine_05" } } }`; each source and each target appears once, and an entry that names a missing joint, lacks a name or
+reuses a paired joint is warned about), then by equal names ignoring `namespace:` and
 `Armature|` prefixes (so `mixamorig:Hips` matches `Hips`), then as the same humanoid bone across Mixamo, Unreal,
 Unity, Blender (Rigify deform bones, numbered spine included), VRM and 3ds Max biped naming (hips, spine, chest, upper
 chest, neck, head, and per side shoulder, upper and lower arm, hand, upper and lower leg, foot, toes). Every node takes
-part, not only skin joints. Unpaired joints keep their rest pose.
+part, not only skin joints; a paired joint given as a glTF matrix cannot be animated and is warned about. Unpaired
+joints keep their rest pose.
 
 Each paired joint turns in model space by its source joint's turn away from the source rest pose, so skeletons whose
 joints have different axes and rest orientations still pose alike; both models must stand in the same rest pose style
 (both T-pose or both A-pose). Paired joints keep the target's rest translation, so limbs keep their length. The hips (or
-the topmost paired node) also move by the source hips' displacement scaled by the ratio of the skeletons' leg lengths
+the topmost paired node) also move by their source joint's displacement scaled by the ratio of the skeletons' leg lengths
 (hips height above the lowest paired joint), so root motion matches the character's stride; a warning says when the hips
 have nothing paired below them and move unscaled. Morph weight tracks keep their keys and move to target nodes of the
-same name, matched by target name (a track that matches nothing is warned about). Joint tracks are resampled at the
+same name (ignoring namespace prefixes), matched by target name (a track that matches nothing is warned about). Joint tracks are resampled at the
 source's key times (plus a 30 Hz grid when any track is cubic) and interpolate linearly (stepped when every source track
 steps).
 
 Clips are retargeted when an Animator first needs them (again after the model or a library reloads) and shared by
-Animators with the same model and libraries; a clip past the decoded animation budget, or an Animator's retargeted clips
-past 256 MiB, are left out with a warning. A library that cannot load or pairs no joint is logged as an error and
-adds no clips; clip-not-found errors then name the model and its libraries. `animator.retarget` (automation) lists each
-library's joint pairs and how they matched, the model's humanoid bones left unpaired, the root's scale, the clips it adds
-or hides, and its warnings, resolved exactly as playback resolves them.
+Animators with the same model and libraries. A clip past the decoded animation budget, one that moves no paired joint or
+fails to bake, and an Animator's retargeted clips past 256 MiB are left out with a warning, and a later library may then
+supply the name. A library that cannot load, has no clips, pairs no joint or has no finite rest pose is logged as an
+error and adds no clips. Clip-not-found errors name the model and how many clip libraries were searched.
+`animator.retarget` (automation) lists each library's joint pairs and how they matched, the model's humanoid bones left
+unpaired, the root's scale, the clips it adds or hides, and its warnings, resolved as playback resolves them but without
+baking: a listed clip can still be left out when it fails to bake or passes the 256 MiB budget, which the log reports.
 
 ### Animation events
 
@@ -1378,7 +1383,8 @@ actor:SetAnimationLayerWeight("Wave", 0, 0.3) -- fade the wave out over 0.3 s
 | `ReferenceClip`, `ReferenceTime` | Additive only: the pose the clip is a difference from, `ReferenceClip` (empty: the layer's own clip) at `ReferenceTime` seconds (clamped to the clip) |
 | `Mask` | `{ Joint, Weight }` entries (each joint at most once): each joint and its subtree take `Weight` (0..1) unless a deeper entry names one of its descendants; joints under no entry take 0; entries without a `Joint` are ignored. Empty (or only entries without a `Joint`): the whole model at 1 |
 
-A layer changes only the channels (translation, rotation, scale) its clip animates, on joints its mask weights.
+A layer changes only the channels (translation, rotation, scale, and morph weights of the mesh nodes it masks) its clip
+animates, on joints its mask weights.
 Additive deltas are taken in each joint's parent space: translation offsets, scale ratios, and rotation deltas
 (the clip's rotation times the inverse of the reference's) applied on the parent's side of the pose's rotation. While
 root motion applies (the Animator's `RootMotion` and, with a state machine, the current state's or, during a fade, the
@@ -1497,16 +1503,18 @@ for _, name in ipairs(face:GetMorphTargets()) do print(name) end
 
 The functions raise errors on an entity without an Animator and for wrongly typed arguments. An unknown target (for
 `SetMorphWeight`, `GetMorphWeight` and `ClearMorphWeight`, where `""` is a target name; only nil clears every target)
-returns false or nil and is logged once per entity and function until that function finds a target again; an invalid
-value is logged once per target. A new script weight starts its fade from the weight shown (clamped to 0..1, from the
-first mesh node with the target). Script weights survive playback resets (changes to `Mesh`, `Clip` or `StateMachine`,
-asset reload); a model without the target logs it once and the weight applies again when a model with it returns. They
-fade while the Animator is paused or stopped. Non-finite weights (an overshooting cubic curve) show as 0 with a warning.
+returns false or nil and is logged when it differs from the last unknown target that function reported for the entity
+(so a call repeated every frame logs once), until that function finds a target again; an invalid value is logged once
+per target. A new script weight starts its fade from the weight shown (clamped to 0..1, from the first mesh node with
+the target). Script weights survive playback resets (changes to `Mesh`, `Clip` or `StateMachine`, asset reload, a
+model that briefly fails to load); a model without the target warns once and the weight waits, still changeable and
+clearable by name, until a model with it returns. They fade while the Animator is paused or stopped. Non-finite weights
+(an overshooting cubic curve) show as 0 with a warning naming the first such target and the clip.
 
 Position and normal deltas blend in the vertex shader before skinning; tangents are re-orthogonalized against the
 morphed normal (TANGENT deltas are not imported), and a target without NORMAL deltas takes the change in the generated
-normals of its fully morphed shape. A draw blends its 32 strongest nonzero weights (a warning names the mesh and entity
-once each time more become active; `render.stats.morphWeightsDropped` counts the rest). A mesh with more than 256
+normals of its fully morphed shape. A draw blends its 32 strongest nonzero weights (a warning names the entity and mesh
+node once until a frame is back within the limit; `render.stats.morphWeightsDropped` counts the rest). A mesh with more than 256
 targets, or whose deltas (targets times vertices) would take the model past 4,194,304, is imported without its morph
 targets, with a warning. Models with morph targets import with an Animator on their root, so node weights, clips and
 scripts drive them; a MeshComponent draws its mesh's default weights.

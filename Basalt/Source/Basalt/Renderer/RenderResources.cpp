@@ -259,7 +259,7 @@ namespace Basalt {
 		commandList->writeBuffer(mesh.VertexBuffer, source->Vertices.data(), vertexDesc.byteSize);
 		commandList->writeBuffer(mesh.IndexBuffer, source->Indices.data(), indexDesc.byteSize);
 
-		// Two texels per delta (Morphing.glsl), in rows of MorphTextureWidth; the importer bounds the row count.
+		// Two texels per delta (Morphing.glsl), in rows of MorphTextureWidth.
 		size_t morphBytes = 0;
 		if (!source->MorphDeltas.empty())
 		{
@@ -269,8 +269,12 @@ namespace Basalt {
 			// The importer keeps MorphDeltas within MaxMorphDeltas; a hand-built source may not.
 			if (height > MaxMorphTextureRows)
 				BS_CORE_ERROR("RenderResources: '{}' has {} morph deltas, past the limit of {}; it draws without morph targets", source->Key, source->MorphDeltas.size(), MaxMorphDeltas);
-			else if (mesh.MorphDeltas = CreateMorphTexture(width, height, source->Key + " (morph targets)"); !mesh.MorphDeltas)
-				BS_CORE_ERROR("RenderResources: failed to create the morph target texture for '{}'; it draws without morph targets", source->Key);
+			else
+			{
+				mesh.MorphDeltas = CreateMorphTexture(width, height, source->Key + " (morph targets)");
+				if (!mesh.MorphDeltas)
+					BS_CORE_ERROR("RenderResources: failed to create the morph target texture for '{}'; it draws without morph targets", source->Key);
+			}
 			if (mesh.MorphDeltas)
 			{
 				std::vector<glm::vec4> data(static_cast<size_t>(width) * height, glm::vec4(0));

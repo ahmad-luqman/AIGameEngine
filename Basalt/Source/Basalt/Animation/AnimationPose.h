@@ -66,7 +66,7 @@ namespace Basalt {
 	// Samples a clip into model-space node transforms. A null clip evaluates the authored rest pose.
 	bool EvaluateAnimation(const MeshSource& source, const AnimationClip* clip, float time, std::vector<glm::mat4>& globals);
 	// Returns empty for a non-finite result. Palette maps bind vertices directly into model space (the skinned mesh node transform is ignored).
-	std::vector<glm::mat4> BuildSkinPalette(const MeshSkin& skin, const std::vector<glm::mat4>& globals);
+	std::vector<glm::mat4> BuildSkinPalette(const MeshSkin& skin, std::span<const glm::mat4> globals);
 	// Whether every skin's palette is finite for these globals (the shader cannot draw anything else).
 	bool SkinPalettesFinite(const MeshSource& source, const std::vector<glm::mat4>& globals);
 	// Conservative posed bounds in O(influencing joints), using AddSubmesh caches; exact fallback without influences.

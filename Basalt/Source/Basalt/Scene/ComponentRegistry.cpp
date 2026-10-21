@@ -1771,14 +1771,16 @@ namespace Basalt {
 				if (joints.size() > AnimationClipLibrary::MaxJoints)
 					return fmt::format("ClipLibraries[{}] holds at most {} joints", i, AnimationClipLibrary::MaxJoints);
 				// One source drives one target. Empty names are the inspector's unnamed additions.
+				std::unordered_map<std::string_view, size_t> targets, sources;
 				for (size_t j = 0; j < joints.size(); j++)
-					for (size_t k = 0; k < j; k++)
-					{
-						if (!joints[j].Target.empty() && joints[k].Target == joints[j].Target)
-							return fmt::format("ClipLibraries[{}].Joints[{}].Target '{}' is already used by Joints[{}]", i, j, joints[j].Target, k);
-						if (!joints[j].Source.empty() && joints[k].Source == joints[j].Source)
-							return fmt::format("ClipLibraries[{}].Joints[{}].Source '{}' is already used by Joints[{}]", i, j, joints[j].Source, k);
-					}
+				{
+					if (!joints[j].Target.empty())
+						if (const auto [entry, added] = targets.try_emplace(joints[j].Target, j); !added)
+							return fmt::format("ClipLibraries[{}].Joints[{}].Target '{}' is already used by Joints[{}]", i, j, joints[j].Target, entry->second);
+					if (!joints[j].Source.empty())
+						if (const auto [entry, added] = sources.try_emplace(joints[j].Source, j); !added)
+							return fmt::format("ClipLibraries[{}].Joints[{}].Source '{}' is already used by Joints[{}]", i, j, joints[j].Source, entry->second);
+				}
 			}
 			for (size_t i = 0; i < c.Events.size(); i++)
 			{

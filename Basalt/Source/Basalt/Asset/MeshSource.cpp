@@ -182,11 +182,17 @@ namespace Basalt {
 	AABB MorphedMeshBounds(const MeshSource& source, uint32_t mesh)
 	{
 		const MeshData& data = source.Meshes[mesh];
-		if (std::ranges::all_of(data.MorphWeights, [](float weight) { return weight == 0.0f; }))
-			return data.Bounds;
 		AABB bounds;
-		for (uint32_t submesh : data.Submeshes)
-			bounds.Expand(MorphedBounds(source, source.Submeshes[submesh], data.MorphWeights));
+		for (uint32_t index : data.Submeshes)
+		{
+			AABB submesh = source.Submeshes[index].Bounds;
+			if (const AABB morph = MorphDisplacementBounds(source.Submeshes[index], data.MorphWeights); morph.IsValid() && submesh.IsValid())
+			{
+				submesh.Min += morph.Min;
+				submesh.Max += morph.Max;
+			}
+			bounds.Expand(submesh);
+		}
 		return bounds;
 	}
 

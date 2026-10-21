@@ -20,6 +20,7 @@ using AnimationTest::ClearAssetCache;
 using AnimationTest::Clip;
 using AnimationTest::FixturePath;
 using AnimationTest::GlobalRotation;
+using AnimationTest::MutableClip;
 using AnimationTest::NearRotation;
 using AnimationTest::Node;
 
@@ -69,12 +70,6 @@ namespace {
 		return animator;
 	}
 
-	AnimationClip& MutableClip(MeshSource& source, const char* name)
-	{
-		const auto clip = std::ranges::find(source.Animations, name, &AnimationClip::Name);
-		REQUIRE(clip != source.Animations.end());
-		return *clip;
-	}
 }
 
 TEST_SUITE("Retargeting")
@@ -163,8 +158,8 @@ TEST_SUITE("Retargeting")
 		CHECK(map.RootScale == doctest::Approx(1.4f));
 		CHECK(map.Matches[Node(target, "pelvis")] == RetargetMatch::Humanoid);
 		CHECK(map.Matches[Node(target, "root")] == RetargetMatch::None);
-		CHECK(map.TargetRestRotations.size() == target.Nodes.size());
-		CHECK(map.SourceRestPositions.size() == source.Nodes.size());
+		CHECK(map.TargetRest.Rotations.size() == target.Nodes.size());
+		CHECK(map.SourceRest.Positions.size() == source.Nodes.size());
 
 		// Explicit pairs come first and take both joints. Problems with the others are reported, each its own way.
 		map = Retargeting::BuildMap(target, source, { { "mixamorig:Spine1", "clavicle_l" }, { "mixamorig:Nope", "nada" }, { "mixamorig:Spine1", "clavicle_r" }, { "mixamorig:Neck", "" }, {} }, warnings);
@@ -326,7 +321,7 @@ TEST_SUITE("Retargeting")
 		CHECK(set->Find("Nod") < 0);
 		CHECK(set->Find("Wave") >= 0);
 		REQUIRE(set->GetLibraries().size() == 1);
-		CHECK(HasText(set->GetLibraries()[0].Warnings, "clip 'Nod': the baked clip exceeds"));
+		CHECK(HasText(set->GetLibraries()[0].Warnings, "clip 'Nod' cannot be retargeted: the baked clip exceeds"));
 	}
 
 	TEST_CASE("Morph weight tracks retarget by node and target name, cubic tangents included")
@@ -603,5 +598,70 @@ TEST_SUITE("Retargeting")
 
 		animator.ClipLibraries = { { FixturePath("TwoJoint.gltf").string() } };
 		CHECK(has("no joint matches the model's skeleton"));
+	}
+
+	TEST_CASE("A library clip that cannot be retargeted leaves its name to a later library's")
+	{
+		const Rigs rigs;
+		// Library A's Wave turns only the unpaired Body node: nothing of the model moves.
+		auto data = AnimationTest::ReadJson(FixturePath("MixamoRig.gltf"));
+		for (auto& channel : data["animations"][0]["channels"])
+			channel["target"]["node"] = Node(*rigs.Source, "Body");
+		data["animations"][0]["channels"].erase(1);
+		data["animations"][0]["samplers"].erase(1);
+		TempDirectory directory("RetargetShadowing");
+		const auto stray = AnimationTest::LoadModified(data, directory.GetPath(), "Stray.gltf");
+		std::vector<AnimationClipSet::Library> libraries = { { .Index = 0, .Entry = { .Mesh = "Stray.gltf" }, .Source = stray }, { .Index = 1, .Entry = { .Mesh = "Mixamo.gltf" }, .Source = rigs.Source } };
+		// Plan and Build agree: A leaves Wave out with a warning and B supplies it.
+		AnimationClipSet::Plan(*rigs.Target, libraries);
+		CHECK(HasText(libraries[0].Warnings, "clip 'Wave' moves no joint paired with the model"));
+		CHECK(std::ranges::find(libraries[1].Clips, std::string("Wave")) != libraries[1].Clips.end());
+		// Planning again starts over rather than piling up.
+		const size_t warnings = libraries[0].Warnings.size();
+		AnimationClipSet::Plan(*rigs.Target, libraries);
+		CHECK(libraries[0].Warnings.size() == warnings);
+		const auto set = AnimationClipSet::Build(rigs.Target, libraries);
+		CHECK(set->Find("Wave") >= 0);
+		CHECK(set->GetLibraries()[0].Shadowed.empty() == false); // Its Walk and Nod come first in A.
+		CHECK(std::ranges::find(set->GetLibraries()[1].Clips, std::string("Wave")) != set->GetLibraries()[1].Clips.end());
+		CHECK(std::ranges::find(set->GetLibraries()[1].Shadowed, std::string("Wave")) == set->GetLibraries()[1].Shadowed.end());
+	}
+
+	TEST_CASE("Libraries without clips, rest poses or animatable joints are reported")
+	{
+		const Rigs rigs;
+		auto empty = CreateRef<MeshSource>(*rigs.Source);
+		empty->Animations.clear();
+		std::vector<AnimationClipSet::Library> libraries = { { .Entry = { .Mesh = "Empty.gltf" }, .Source = empty } };
+		AnimationClipSet::Plan(*rigs.Target, libraries);
+		CHECK(libraries[0].Error.find("has no animation clips") != std::string::npos);
+
+		// A paired joint given as a matrix cannot be animated.
+		auto data = AnimationTest::ReadJson(FixturePath("UnrealRig.gltf"));
+		auto& arm = data["nodes"][Node(*rigs.Target, "upperarm_l")];
+		const auto translation = arm["translation"];
+		arm.erase("translation");
+		arm["matrix"] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, translation[0], translation[1], translation[2], 1 };
+		TempDirectory directory("RetargetMatrix");
+		const auto target = AnimationTest::LoadModified(data, directory.GetPath(), "Matrix.gltf");
+		std::vector<std::string> warnings;
+		Retargeting::BuildMap(*target, *rigs.Source, {}, warnings);
+		CHECK(HasText(warnings, "joint 'upperarm_l' of '"));
+		CHECK(HasText(warnings, "is given as a matrix, which cannot be animated"));
+	}
+
+	TEST_CASE("The bake budget rejects long cubic clips before sampling them")
+	{
+		const Rigs rigs;
+		std::vector<std::string> warnings;
+		const RetargetMap map = Retargeting::BuildMap(*rigs.Target, *rigs.Source, {}, warnings);
+		// 5e5 s at 30 Hz is 15M samples: under the clip budget on its own, far past it for 19 paired joints.
+		AnimationClip lengthy = Clip(*rigs.Source, "Nod");
+		lengthy.Tracks[0].Times.back() = lengthy.Duration = 5e5f;
+		std::string error;
+		CHECK_FALSE(Retargeting::CheckBakeBudget(*rigs.Target, *rigs.Source, map, lengthy, error));
+		CHECK(error.find("budget") != std::string::npos);
+		// Ordinary clips pass without building their sample set.
+		CHECK(Retargeting::CheckBakeBudget(*rigs.Target, *rigs.Source, map, Clip(*rigs.Source, "Walk"), error));
 	}
 }

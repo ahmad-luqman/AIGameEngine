@@ -38,7 +38,12 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 	const auto source = Basalt::MeshImporter::LoadGltf(path, binary ? "Fuzz.glb" : "Fuzz.gltf", error);
 	// Library glTFs are untrusted too: retarget the model's clips onto itself.
 	if (source && !source->AnimationUnsupported)
-		Basalt::AnimationClipSet::Build(source, { Basalt::AnimationClipSet::Library{ .Entry = { .Mesh = "Fuzz.gltf" }, .Source = source } });
+	{
+		// Onto a copy without clips, so the library's clips are not hidden by the model's and really bake.
+		auto target = Basalt::CreateRef<Basalt::MeshSource>(*source);
+		target->Animations.clear();
+		Basalt::AnimationClipSet::Build(target, { Basalt::AnimationClipSet::Library{ .Entry = { .Mesh = "Fuzz.gltf" }, .Source = source } });
+	}
 	if (source)
 		for (const auto& clip : source->Animations)
 		{

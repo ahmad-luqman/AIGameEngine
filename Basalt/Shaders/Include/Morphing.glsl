@@ -1,7 +1,7 @@
 // Morph targets, applied in bind space before skinning. Each model's deltas live in one RGBA32F texture: two texels
 // per (target, vertex), position then normal, row-major in rows of the texture's width. A draw's active weights are
-// (target, weight) pairs packed into draw records alongside the palettes, ahead of the draw records, 16 per record:
-// Model's columns hold pairs 0-7 and Normal's 8-15, two per column (xy, zw).
+// (target, weight) pairs packed 16 to a DrawData-sized record in the draw buffer, like the palettes, ahead of the
+// instance records: Model's columns hold pairs 0-7 and Normal's 8-15, two per column (xy, zw).
 layout(set = 2, binding = 0) uniform texture2D u_MorphDeltas;
 layout(set = 2, binding = 1) uniform sampler u_MorphSampler;
 
@@ -20,9 +20,9 @@ vec2 MorphWeight(uint firstRecord, uint pair)
 
 // The position texel of one pair's target for this vertex. Morph.z already subtracts 2 x BaseVertex texels (unsigned
 // wraparound), which gl_VertexIndex adds back.
-uint MorphTexelIndex(DrawData draw, vec2 weight)
+uint MorphTexelIndex(DrawData draw, vec2 pair)
 {
-	return draw.Morph.z + uint(weight.x) * draw.Morph.w + 2u * uint(gl_VertexIndex);
+	return draw.Morph.z + uint(pair.x) * draw.Morph.w + 2u * uint(gl_VertexIndex);
 }
 
 void ApplyMorphTargets(DrawData draw, inout vec3 position, inout vec3 normal)

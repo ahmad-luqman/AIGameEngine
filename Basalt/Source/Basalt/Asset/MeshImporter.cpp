@@ -222,9 +222,10 @@ namespace Basalt {
 			const size_t targets = mesh.primitives_count > 0 ? mesh.primitives[0].targets_count : 0;
 			if (targets > MaxMorphTargets)
 				return fmt::format("{} morph targets exceed the limit of {} per mesh", targets, MaxMorphTargets);
+			// Only triangle primitives import (the others are skipped with a warning).
 			size_t deltas = 0;
 			for (cgltf_size p = 0; p < mesh.primitives_count; p++)
-				for (cgltf_size a = 0; a < mesh.primitives[p].attributes_count; a++)
+				for (cgltf_size a = 0; a < mesh.primitives[p].attributes_count && mesh.primitives[p].type == cgltf_primitive_type_triangles; a++)
 					if (const cgltf_attribute& attribute = mesh.primitives[p].attributes[a]; attribute.type == cgltf_attribute_type_position && attribute.data)
 						deltas += attribute.data->count * targets;
 			if (deltas > budget)
@@ -307,7 +308,13 @@ namespace Basalt {
 				const auto read = [&](const cgltf_accessor* accessor, const char* name, glm::vec3 MorphDelta::* field) {
 					if (!accessor)
 						return true;
-					const char* problem = accessor->count != vertices.size() ? "has a different count than POSITION" : (!ReadAccessor(accessor, data, 3) ? "is not a readable VEC3 accessor" : (!std::ranges::all_of(data, [](const glm::vec3& v) { return Math::IsFinite(v); }) ? "holds non-finite values" : nullptr));
+					const char* problem = nullptr;
+					if (accessor->count != vertices.size())
+						problem = "has a different count than POSITION";
+					else if (!ReadAccessor(accessor, data, 3))
+						problem = "is not a readable VEC3 accessor";
+					else if (!std::ranges::all_of(data, [](const glm::vec3& v) { return Math::IsFinite(v); }))
+						problem = "holds non-finite values";
 					if (problem)
 					{
 						outError = fmt::format("morph target {} {} accessor {}", t, name, problem);
@@ -578,6 +585,7 @@ namespace Basalt {
 
 		// Geometry.
 		size_t morphBudget = MaxMorphDeltas;
+		std::vector<bool> droppedMorphs;
 		for (cgltf_size meshIndex = 0; meshIndex < data->meshes_count; meshIndex++)
 		{
 			const cgltf_mesh& mesh = data->meshes[meshIndex];
@@ -585,6 +593,7 @@ namespace Basalt {
 			meshData.Name = mesh.name ? mesh.name : "Mesh" + std::to_string(meshIndex);
 			// Morph targets past the import limits are dropped rather than failing the model: its geometry still loads.
 			const std::string morphProblem = MorphLimitProblem(mesh, morphBudget);
+			droppedMorphs.push_back(!morphProblem.empty());
 			if (!morphProblem.empty())
 				BS_CORE_WARN("MeshImporter: {}: mesh '{}': {}; it keeps its base shape without morph targets", key, meshData.Name, morphProblem);
 			else if (!ReadMorphTargetNames(mesh, meshData, key, outError))
@@ -786,7 +795,7 @@ namespace Basalt {
 			{
 				const MeshData& mesh = source->Meshes[result.MeshIndex];
 				// A mesh whose morph targets were dropped (MorphLimitProblem) ignores the node's weights too.
-				const bool dropped = mesh.MorphTargets.empty() && node.mesh->primitives_count > 0 && node.mesh->primitives[0].targets_count > 0;
+				const bool dropped = droppedMorphs[static_cast<size_t>(result.MeshIndex)];
 				if (!dropped && node.weights_count > 0 && node.weights_count != mesh.MorphTargets.size())
 				{
 					outError = fmt::format("{}: node '{}' has {} weights for {} morph targets", key, result.Name, node.weights_count, mesh.MorphTargets.size());
@@ -839,7 +848,13 @@ namespace Basalt {
 		if (!ImportAnimations(*data, *source, outError))
 			return nullptr;
 		if (source->AnimationUnsupported)
+		{
 			BS_CORE_WARN("MeshImporter: {}: more than four skin influences per vertex; retaining static geometry only", key);
+			// Static MeshComponents draw their mesh's default weights, so node weights that differ are lost.
+			for (const MeshNode& node : source->Nodes)
+				if (node.MeshIndex >= 0 && node.MorphWeights != source->Meshes[node.MeshIndex].MorphWeights)
+					BS_CORE_WARN("MeshImporter: {}: node '{}' has its own morph weights, which the static geometry cannot show; it shows mesh '{}''s defaults", key, node.Name, source->Meshes[node.MeshIndex].Name);
+		}
 
 		std::vector<glm::mat4> rest;
 		if (!EvaluateAnimation(*source, nullptr, 0, rest))

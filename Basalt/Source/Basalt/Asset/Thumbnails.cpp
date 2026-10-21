@@ -433,11 +433,12 @@ namespace Basalt {
 						if (fields.is_object())
 						{
 							// Declared asset fields (UUID references included, in lists too), then any other path-like string.
-							if (const auto* info = ComponentRegistry::Find(component))
+							const auto* info = ComponentRegistry::Find(component);
+							if (info)
 								for (const auto& assetField : info->AssetFields)
 									ForEachAssetValue(fields, assetField, [&](const nlohmann::json& value, const std::string&) { AddReferenceDependencies(m_ProjectDirectory, assets, value, dependencies); });
 							for (const auto& [field, value] : fields.items())
-								if (value.is_string())
+								if (value.is_string() && !(info && std::ranges::find(info->AssetFields, field) != info->AssetFields.end()))
 									AddReferenceDependencies(m_ProjectDirectory, assets, value, dependencies);
 						}
 				}

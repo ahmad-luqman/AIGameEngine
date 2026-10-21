@@ -12,7 +12,7 @@ succeeds only if its command fails with an error containing `<text>` (used by te
 
 ### `animator.retarget`
 
-How an Animator's named ClipLibraries map onto its model, resolved as playback resolves them (without baking): per library its index in ClipLibraries, why it adds no clips (error), the joint pairs (target, source, matched by joint map, name or humanoid bone), the model's humanoid bones left unmatched, the root pair with its leg-length scale, the clips it adds, the clips earlier clips hide, and warnings. Read-only; works in edit mode.
+How an Animator's named ClipLibraries map onto its model, resolved as playback resolves them but without baking (a listed clip can still be left out when it fails to bake or passes the 256 MiB per-Animator budget; the log reports it): per library its index in ClipLibraries, why it adds no clips (error), the joint pairs (target, source, matched by joint map, name or humanoid bone), the model's humanoid bones left unmatched, the root pair with its leg-length scale, the clips it adds, the clips earlier clips hide, and warnings. Read-only; works in edit mode.
 
 | Parameter | Type / description |
 |-----------|--------------------|
