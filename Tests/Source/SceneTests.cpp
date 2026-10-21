@@ -893,8 +893,9 @@ TEST_SUITE("Serialization")
 					CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, info.Name, { { field, nlohmann::json::array({ type.Element->Default, type.Element->Default }) } }, error));
 			}
 		}
-		// Animator Events, BlendSpaces (Samples), Layers (Mask); InverseKinematics Chains; SpringBone Chains, Colliders; ParticleEmitter SizeCurve, ColorCurve.
-		CHECK(lists == 10);
+		// Animator Events, BlendSpaces (Samples), Layers (Mask), ClipLibraries, RetargetJoints; InverseKinematics Chains; SpringBone Chains,
+		// Colliders; ParticleEmitter SizeCurve, ColorCurve.
+		CHECK(lists == 12);
 	}
 
 	TEST_CASE("Entity reference fields are collected from the component definitions")

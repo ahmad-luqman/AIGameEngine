@@ -485,20 +485,24 @@ namespace Basalt {
 					continue;
 				for (const auto& field : info->AssetFields)
 				{
-					auto value = component.find(field);
-					if (value != component.end() && value->is_string())
-					{
-						const auto path = value->get<std::string>();
+					bool failed = false;
+					ForEachAssetValue(component, field, [&](json& value, const std::string& label) {
+						if (failed || !value.is_string())
+							return;
+						const auto path = value.get<std::string>();
 						if (!onlyPath.empty() && !Project::GetActive()->GetAssets().ReferencesSource(path, onlyPath))
-							continue;
+							return;
 						json reference;
 						if (!Project::GetActive()->GetAssets().Encode(path, reference, outError))
 						{
-							outError = fmt::format("entity {}: {}.{}: {}", entity.value("Name", std::string("<unnamed>")), name, field, outError);
-							return false;
+							outError = fmt::format("entity {}: {}.{}: {}", entity.value("Name", std::string("<unnamed>")), name, label, outError);
+							failed = true;
+							return;
 						}
-						*value = std::move(reference);
-					}
+						value = std::move(reference);
+					});
+					if (failed)
+						return false;
 				}
 			}
 		}

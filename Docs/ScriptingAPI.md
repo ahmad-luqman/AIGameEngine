@@ -183,6 +183,7 @@ Entity handles store an ID and stay safe to hold: using a destroyed entity raise
 | `e:GetBoneTransform(joint)` | World position (Vec3), rotation (Quat) and scale (Vec3) of a joint of the Animator's current pose, or nil; see Bones |
 | `e:PlayAnimationLayer(layer, [clip])`, `e:SetAnimationLayerWeight(layer, weight, [seconds])`, `e:GetAnimationLayerWeight(layer)` | Animator layers; see Animation layers |
 | `e:SetIKTarget(chain, position, [rotation])`, `e:SetIKTarget(chain, entity, [matchRotation])`, `e:ClearIKTarget(chain)`, `e:SetIKWeight(chain, weight, [seconds])`, `e:GetIKWeight(chain)` | InverseKinematics chains; see Inverse kinematics |
+| `e:SetMorphWeight(target, weight, [seconds])`, `e:GetMorphWeight(target)`, `e:ClearMorphWeight([target])`, `e:GetMorphTargets()` | Animator morph targets (blend shapes); see Morph targets |
 | `e:ResetSpringBones()` | Puts the SpringBone chains back on the animated pose, at rest, on the next update; see Spring bones |
 | `e:GetScript()` | The entity's script instance (call its functions, read its fields) |
 | `e:Destroy()` | Destroy at the end of the frame (with children) |
@@ -1429,6 +1430,38 @@ missing `Pelvis`, and an InverseKinematics whose Animator cannot animate are log
 Animator, `Pole` on a LookAt chain, `ChainLength` on a TwoBone chain, `MaxAngle` 0, a `Pelvis` without Ground chains or
 not above a ground leg, and two chains driving the same joint. Targets and weights are gameplay state: they survive
 playback resets (changes to `Mesh`, `Clip` or `StateMachine`, asset reload) and end with the component.
+
+### Morph targets
+
+glTF morph targets (blend shapes: facial expressions, corrective shapes) import with their names (`extras.targetNames`,
+as Blender writes them; unnamed targets are `Target0`, `Target1`, ...) and default weights (`mesh.weights`, overridden
+per node by `node.weights`). A MeshComponent draws its mesh's default weights. An Animator's clips animate the weights
+through glTF `weights` channels, and fades, blends, blend spaces, graph states and layers mix them like joint channels
+(a layer's mask applies to a mesh node's weights by the node's mask weight; additive layers add the difference from the
+reference). Scripts set weights by target name:
+
+```lua
+face:SetMorphWeight("Smile", 1, 0.2)   -- fade to 1 over 0.2 s, holding it over the clips
+print(face:GetMorphWeight("Blink"))    -- the weight shown now
+face:ClearMorphWeight("Smile")         -- back to the animated weight at once
+for _, name in ipairs(face:GetMorphTargets()) do print(name) end
+```
+
+| Function | Description |
+|----------|-------------|
+| `e:SetMorphWeight(target, weight, [seconds])` | Holds every mesh node's target of that name (a head and its teeth can share `Smile`) at `weight` (0..1), fading linearly over `seconds` (default 0) from the weight shown |
+| `e:GetMorphWeight(target)` | The weight shown (of the first mesh node with the target), or nil for an unknown target |
+| `e:ClearMorphWeight([target])` | Returns the target (without one, every target) to its animated weight; false when no script weight was set |
+| `e:GetMorphTargets()` | The model's unique target names, in node order |
+
+The functions raise errors on an entity without an Animator and for wrongly typed arguments; an unknown target or an
+invalid value returns false, logged once per entity, function and target until the same call succeeds. Script weights
+survive playback resets (changes to `Mesh`, `Clip` or `StateMachine`, asset reload) and fade while the Animator is
+paused. Position and normal deltas blend in the vertex shader before skinning; tangents are re-orthogonalized against
+the morphed normal (TANGENT deltas are not imported), and a target without NORMAL deltas takes the change in the
+generated normals of its fully morphed shape. A draw blends its 32 strongest nonzero weights (a warning names the
+entity once when more are active); a model holds at most 256 targets per mesh and 4,194,304 deltas (targets times
+vertices).
 
 ### Spring bones
 

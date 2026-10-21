@@ -60,6 +60,8 @@ namespace Basalt {
 		std::vector<std::string> Fields;
 		std::map<std::string, ComponentFieldType> FieldTypes;
 		std::map<std::string, std::vector<std::string>> EnumOptions;
+		// Fields naming project assets, which the owning component declares as "List[].Field".
+		std::vector<std::string> AssetFields;
 		// A string field whose value must differ between the list's elements (empty: none). Editors give the
 		// elements they add or duplicate a fresh value; the owning component's Validate must reject duplicates (the
 		// registry does not).
@@ -99,7 +101,8 @@ namespace Basalt {
 		std::map<std::string, ComponentFieldType> FieldTypes;
 		// Valid values of string-enum fields (e.g. RigidBody "Type"), for inspectors and validation messages.
 		std::map<std::string, std::vector<std::string>> EnumOptions;
-		// Fields naming project assets; persistence and move commands share this declaration.
+		// Fields naming project assets; persistence and move commands share this declaration. "List[].Field" names a
+		// field of every element of a list field (see ForEachAssetValue).
 		std::vector<std::string> AssetFields;
 		// Fields that hold an entity UUID (collected from the field list). Tools may let users name entities
 		// there (see component.set), and inspectors show an entity picker.
@@ -108,6 +111,37 @@ namespace Basalt {
 		// references not in the map are kept. Empty for components without EntityFields.
 		std::function<void(Entity, const std::unordered_map<UUID, UUID>&)> RemapEntityReferences;
 	};
+
+	// Visits the values one ComponentInfo::AssetFields entry names in a component's JSON: the top-level field, or for
+	// "List[].Field" that field of every object element of the list, with a label such as "ClipLibraries[2].Mesh" for
+	// messages. Absent fields and non-object elements are skipped; values are passed as they are (paths, UUID
+	// references, or anything malformed).
+	template<typename Json, typename Visit>
+	void ForEachAssetValue(Json& component, const std::string& field, Visit&& visit)
+	{
+		if (!component.is_object())
+			return;
+		const size_t list = field.find("[].");
+		if (list == std::string::npos)
+		{
+			if (auto value = component.find(field); value != component.end())
+				visit(*value, field);
+			return;
+		}
+		const std::string listName = field.substr(0, list);
+		const std::string element = field.substr(list + 3);
+		auto items = component.find(listName);
+		if (items == component.end() || !items->is_array())
+			return;
+		for (size_t i = 0; i < items->size(); i++)
+		{
+			auto& item = (*items)[i];
+			if (!item.is_object())
+				continue;
+			if (auto value = item.find(element); value != item.end())
+				visit(*value, listName + "[" + std::to_string(i) + "]." + element);
+		}
+	}
 
 	class ComponentRegistry
 	{

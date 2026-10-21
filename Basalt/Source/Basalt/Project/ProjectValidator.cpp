@@ -257,16 +257,16 @@ namespace Basalt {
 						{
 							if (!fields.is_object())
 								continue;
+							if (const auto* info = ComponentRegistry::Find(component))
+								for (const auto& assetField : info->AssetFields)
+									ForEachAssetValue(fields, assetField, [&](const nlohmann::json& value, const std::string&) {
+										if (value.is_string() && !value.get_ref<const std::string&>().empty())
+											paths.insert(value.get<std::string>());
+									});
+							// Strings outside the asset fields that look like paths only warn (paths found above are skipped).
 							for (const auto& [field, value] : fields.items())
-							{
-								if (value.is_string() && IsPathField(component, field))
-								{
-									if (!value.get_ref<const std::string&>().empty())
-										paths.insert(value.get<std::string>());
-								}
-								else
+								if (!(value.is_string() && IsPathField(component, field)))
 									CollectAssetLikeStrings(value, assetLike);
-							}
 						}
 					}
 				for (const std::string& path : paths)

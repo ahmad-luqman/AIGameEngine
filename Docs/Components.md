@@ -28,7 +28,7 @@ Fields: `Mesh` (string), `MeshIndex` (integer), `CastShadows` (boolean), `LODDis
 
 ## Animator
 
-Fields: `Mesh` (string), `Clip` (string), `Speed` (number), `Looping` (boolean), `PlayOnStart` (boolean), `CastShadows` (boolean), `MatchVelocity` (boolean), `StateMachine` (string), `RootMotion` (boolean), `RootJoint` (string), `Events` (list of [AnimationEvent](#animationevent), at most 256), `BlendSpaces` (list of [AnimationBlendSpace](#animationblendspace), at most 32, unique `Name`), `Layers` (list of [AnimationLayer](#animationlayer), at most 16, unique `Name`), `LODDistance` (number), `LODInterval` (integer)
+Fields: `Mesh` (string), `Clip` (string), `Speed` (number), `Looping` (boolean), `PlayOnStart` (boolean), `CastShadows` (boolean), `MatchVelocity` (boolean), `StateMachine` (string), `RootMotion` (boolean), `RootJoint` (string), `Events` (list of [AnimationEvent](#animationevent), at most 256), `BlendSpaces` (list of [AnimationBlendSpace](#animationblendspace), at most 32, unique `Name`), `Layers` (list of [AnimationLayer](#animationlayer), at most 16, unique `Name`), `LODDistance` (number), `LODInterval` (integer), `ClipLibraries` (list of [AnimationClipLibrary](#animationcliplibrary), at most 64), `RetargetJoints` (list of [AnimationRetargetJoint](#animationretargetjoint), at most 256)
 
 ## BoneAttachment
 
@@ -187,6 +187,14 @@ Fields: `Name` (string), `Clip` (string), `Blend` (enum: Override, Additive), `W
 ### AnimationMaskJoint
 
 Fields: `Joint` (string), `Weight` (number)
+
+### AnimationClipLibrary
+
+Fields: `Mesh` (string)
+
+### AnimationRetargetJoint
+
+Fields: `Source` (string), `Target` (string)
 
 ### IKChain
 
