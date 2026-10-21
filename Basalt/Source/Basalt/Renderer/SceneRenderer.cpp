@@ -18,6 +18,8 @@
 #include "Basalt/Renderer/LightClusters.h"
 #include "Basalt/Renderer/LocalShadows.h"
 #include "Basalt/Renderer/PostProcessStack.h"
+#include "Basalt/Renderer/TemporalAA.h"
+#include "Basalt/Renderer/TemporalHistory.h"
 #include "Basalt/Renderer/RenderMath.h"
 #include "Basalt/Renderer/SceneLights.h"
 #include "Basalt/Renderer/ShaderUtils.h"
@@ -210,17 +212,19 @@ namespace Basalt {
 			glm::uvec4 ClusterGrid;
 			glm::vec4 ClusterDepths;
 			glm::vec4 Quality;
+			glm::mat4 PreviousViewProjection;
 		};
-		static_assert(sizeof(GpuViewConstants) == 768, "GpuViewConstants must match the std140 ViewConstants block");
+		static_assert(sizeof(GpuViewConstants) == 832, "GpuViewConstants must match the std140 ViewConstants block");
 
 		struct GpuDrawData
 		{
 			glm::mat4 Model;
 			glm::mat4 Normal;
 			glm::uvec4 Indices;
-			glm::uvec4 Morph; // Morphing.glsl: first weight record, active weights, delta texel base, texels per target.
+			glm::uvec4 Morph;   // Morphing.glsl: first weight record, active weights, delta texel base, texels per target.
+			glm::uvec4 History; // x: previous draw record, y: valid.
 		};
-		static_assert(sizeof(GpuDrawData) == 160);
+		static_assert(sizeof(GpuDrawData) == 176);
 		static_assert(MorphPairsPerRecord * sizeof(glm::vec2) == sizeof(GpuDrawData::Model) + sizeof(GpuDrawData::Normal), "a record's matrices hold MorphPairsPerRecord morph pairs");
 
 		struct GpuMaterialData
@@ -477,6 +481,19 @@ namespace Basalt {
 											TonemapLayout);
 		}
 
+		TemporalAA TAA;
+		TemporalHistory History;
+		struct MeshHistory
+		{
+			Ref<MeshSource> Source;
+			uint32_t MeshIndex;
+			glm::mat4 Model;
+			std::vector<glm::mat4> Palette;
+			std::vector<float> Weights;
+		};
+		// Static meshes and animated nodes have separate identities, even on an entity with both components.
+		using MeshHistoryKey = std::tuple<UUID, bool, uint32_t>;
+		std::map<MeshHistoryKey, MeshHistory> PreviousMeshes, CurrentMeshes;
 		PostProcessStack PostProcess;
 		nvrhi::GraphicsPipelineHandle FxaaTonemapPipeline;
 		nvrhi::TextureHandle TonemapSource;
@@ -494,7 +511,7 @@ namespace Basalt {
 
 		// Size-dependent targets. The scene renders into the top-left render size of the targets; the output
 		// (and OverlayDepth) has the viewport size. OverlayDepth exists only when the two can differ.
-		nvrhi::TextureHandle NormalTexture, HdrTexture, SsaoTexture, SsaoBlurTexture, OverlayDepth;
+		nvrhi::TextureHandle MotionTexture, NormalTexture, HdrTexture, SsaoTexture, SsaoBlurTexture, OverlayDepth;
 		nvrhi::FramebufferHandle PrepassFramebuffer, LightingFramebuffer, SsaoFramebuffer, SsaoBlurFramebuffer, OutputFramebuffer, OverlayDepthFramebuffer;
 
 		// Pipelines (created lazily per framebuffer layout where needed)
@@ -1061,6 +1078,9 @@ namespace Basalt {
 		impl.TonemapSetFailed = false;
 		impl.TonemapSource = nullptr;
 		impl.PostProcess.Reset();
+		impl.TAA.Reset();
+		impl.History.Reset();
+		impl.PreviousMeshes.clear();
 		impl.FsrTonemapFailed = false;
 		// The smoothed costs are per frame of the old viewport size; results still in flight carry their pixel
 		// count, so they are converted correctly when they arrive.
@@ -1104,6 +1124,13 @@ namespace Basalt {
 		}
 		impl.ReportedParticleDepthFailure = false;
 		impl.ParticleSets.clear();
+		impl.MotionTexture = makeTarget(nvrhi::Format::RGBA32_FLOAT, "SceneMotion");
+		if (!impl.MotionTexture)
+		{
+			BS_CORE_ERROR("SceneRenderer: failed to allocate motion target");
+			m_OutputTexture = nullptr;
+			return;
+		}
 		impl.NormalTexture = makeTarget(nvrhi::Format::RGBA16_FLOAT, "SceneNormals");
 		impl.HdrTexture = makeTarget(nvrhi::Format::RGBA16_FLOAT, "SceneHDR");
 		impl.SsaoTexture = makeTarget(nvrhi::Format::R8_UNORM, "SSAO");
@@ -1129,6 +1156,7 @@ namespace Basalt {
 			impl.PickFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(impl.EntityIds).setDepthAttachment(impl.PickDepth));
 			impl.OutlineSet = m_Device->createBindingSet(nvrhi::BindingSetDesc().addItem(nvrhi::BindingSetItem::Texture_SRV(0, impl.EntityIds)).addItem(nvrhi::BindingSetItem::PushConstants(PushConstantSlot, sizeof(OutlinePush))), impl.OutlineLayout);
 		}
+		prepassDesc.addColorAttachment(impl.MotionTexture);
 		impl.PrepassFramebuffer = m_Device->createFramebuffer(prepassDesc);
 		if (m_Picking && (!impl.PrepassFramebuffer || !impl.PickFramebuffer || !impl.OutlineSet))
 		{
@@ -1265,8 +1293,20 @@ namespace Basalt {
 		impl.FrameSetDirty = true;
 	}
 
+	void SceneRenderer::ResetTemporalHistory()
+	{
+		m_Impl->History.Reset();
+		m_Impl->PreviousMeshes.clear();
+	}
+
+	nvrhi::ITexture* SceneRenderer::GetMotionTexture() const
+	{
+		return m_Impl->MotionTexture;
+	}
+
 	void SceneRenderer::ResetExposure()
 	{
+		ResetTemporalHistory();
 		m_Impl->ExposureRevision = 0;
 	}
 
@@ -1281,6 +1321,7 @@ namespace Basalt {
 		if (!m_OutputTexture || !impl.ParticleDepth)
 		{
 			m_Statistics.Failed = true;
+			ResetTemporalHistory();
 			return;
 		}
 
@@ -1299,6 +1340,7 @@ namespace Basalt {
 		settings.ShadowsEnabled = settings.ShadowsEnabled && graphics.ShadowQuality != GraphicsQuality::Off;
 		const bool orthographic = IsOrthographic(camera.Projection);
 		auto abortFrame = [&]() {
+			ResetTemporalHistory();
 			m_Statistics.Failed = true;
 			profiler.EndFrame(commandList, 0);
 			commandList->close();
@@ -1316,6 +1358,14 @@ namespace Basalt {
 		}
 
 		impl.InvalidPostProcessError.clear();
+		const bool taa = post.TAAEnabled && settings.DebugView == RendererDebugView::None;
+		impl.History.Begin(taa, scene.GetRenderRevision(), static_cast<uint64_t>(postProcessId),
+						   { m_RenderWidth, m_RenderHeight }, camera.View, camera.Projection);
+		if (!impl.History.IsValid())
+			impl.PreviousMeshes.clear();
+		impl.CurrentMeshes.clear();
+		if (!taa)
+			impl.TAA.Reset();
 
 		// --- Lights -------------------------------------------------------------------------------
 		// The primary directional light (with shadow cascades) goes into the view constants; the other
@@ -1571,10 +1621,11 @@ namespace Basalt {
 		// --- Camera, cascades and view constants --------------------------------------------------
 		GpuViewConstants view{};
 		view.View = camera.View;
-		view.Projection = camera.Projection;
-		view.ViewProjection = camera.Projection * camera.View;
+		view.Projection = taa ? JitterProjection(camera.Projection, TemporalJitter(impl.History.GetFrame()), { m_RenderWidth, m_RenderHeight }) : camera.Projection;
+		view.ViewProjection = view.Projection * camera.View;
+		view.PreviousViewProjection = impl.History.GetPreviousViewProjection();
 		view.InverseView = glm::inverse(camera.View);
-		view.InverseProjection = glm::inverse(camera.Projection);
+		view.InverseProjection = glm::inverse(view.Projection);
 		view.CameraPosition = glm::vec4(camera.Position, 1.0f);
 		view.ViewportSize = glm::vec4(static_cast<float>(m_RenderWidth), static_cast<float>(m_RenderHeight), 1.0f / static_cast<float>(m_TargetWidth), 1.0f / static_cast<float>(m_TargetHeight));
 		// Local biases stay available without a sun. They share scene controls with the sun, but
@@ -1601,7 +1652,7 @@ namespace Basalt {
 			view.CascadeSplits = glm::vec4(splits[0], splits[1], splits[2], splits[3]);
 
 			// Frustum corners at the camera's near and far planes.
-			const glm::mat4 inverseViewProjection = glm::inverse(view.ViewProjection);
+			const glm::mat4 inverseViewProjection = glm::inverse(camera.Projection * camera.View);
 			glm::vec3 nearCorners[4];
 			glm::vec3 farCorners[4];
 			const glm::vec2 ndc[4] = { { -1, -1 }, { 1, -1 }, { 1, 1 }, { -1, 1 } };
@@ -1774,19 +1825,9 @@ namespace Basalt {
 			uint32_t Count = 0;
 		};
 		std::vector<uint32_t> activeMorphs;
-		auto uploadMorphWeights = [&](Entity entity, const char* kind, const std::string& name, uint32_t key, std::span<const float> weights, MorphUpload& upload) {
-			if (upload.Record != UINT32_MAX)
-				return;
+		auto packMorphWeights = [&](std::span<const float> weights, MorphUpload& upload) {
 			upload.Record = static_cast<uint32_t>(draws.size());
-			// The vertex shader loops over the active targets: keep the strongest when there are too many.
 			const size_t dropped = SelectMorphWeights(weights, MaxActiveMorphWeights, activeMorphs);
-			m_Statistics.MorphWeightsDropped += static_cast<uint32_t>(dropped);
-			// Warned once per episode for each entity's mesh node: again after a frame within the limit.
-			const std::pair<UUID, uint32_t> episode{ entity.GetUUID(), key };
-			if (dropped == 0)
-				impl.ReportedMorphTruncation.erase(episode);
-			else if (const auto [entry, inserted] = impl.ReportedMorphTruncation.insert_or_assign(episode, impl.FrameCounter); inserted)
-				BS_CORE_WARN("SceneRenderer: {} '{}' of '{}' has {} active morph targets; drawing the {} strongest", kind, name, entity.GetName(), activeMorphs.size() + dropped, MaxActiveMorphWeights);
 			upload.Count = static_cast<uint32_t>(activeMorphs.size());
 			for (size_t pair = 0; pair < activeMorphs.size(); pair++)
 			{
@@ -1799,6 +1840,21 @@ namespace Basalt {
 				column[lane] = static_cast<float>(activeMorphs[pair]);
 				column[lane + 1] = weights[activeMorphs[pair]];
 			}
+			return dropped;
+		};
+		auto uploadMorphWeights = [&](Entity entity, const char* kind, const std::string& name, uint32_t key, std::span<const float> weights, MorphUpload& upload) {
+			if (upload.Record != UINT32_MAX)
+				return;
+			// The vertex shader loops over the active targets: keep the strongest when there are too many.
+			const size_t dropped = packMorphWeights(weights, upload);
+			m_Statistics.MorphWeightsDropped += static_cast<uint32_t>(dropped);
+			// Warned once per episode for each entity's mesh node: again after a frame within the limit.
+			const std::pair<UUID, uint32_t> episode{ entity.GetUUID(), key };
+			if (dropped == 0)
+				impl.ReportedMorphTruncation.erase(episode);
+			else if (const auto [entry, inserted] = impl.ReportedMorphTruncation.insert_or_assign(episode, impl.FrameCounter); inserted)
+				BS_CORE_WARN("SceneRenderer: {} '{}' of '{}' has {} active morph targets; drawing the {} strongest", kind, name, entity.GetName(), activeMorphs.size() + dropped, MaxActiveMorphWeights);
+
 			m_Statistics.MorphWeights += upload.Count;
 		};
 
@@ -1811,6 +1867,17 @@ namespace Basalt {
 			const GpuMesh* gpuMesh = m_Resources->GetMesh(source, commandList);
 			if (!gpuMesh)
 				return;
+			const Impl::MeshHistoryKey historyKey{ entity.GetUUID(), node != nullptr, morphKey };
+			const Impl::MeshHistory* previous = nullptr;
+			if (taa)
+			{
+				const auto it = impl.PreviousMeshes.find(historyKey);
+				if (it != impl.PreviousMeshes.end() && it->second.Source == source && it->second.MeshIndex == meshIndex && it->second.Palette.size() == palette.size())
+					previous = &it->second;
+			}
+			uint32_t previousPalette = UINT32_MAX;
+			bool capturedHistory = false;
+			MorphUpload previousMorph;
 			MorphUpload morphUpload;
 			nvrhi::IBindingSet* meshMorphSet = morphSet(gpuMesh->MorphDeltas ? gpuMesh->MorphDeltas.Get() : m_Resources->GetEmptyMorphTexture(), source->Key);
 			if (!meshMorphSet)
@@ -1929,8 +1996,37 @@ namespace Basalt {
 					if (morphUpload.Count > 0)
 						morph = glm::uvec4(morphUpload.Record, morphUpload.Count, 2u * submesh.MorphDeltaOffset - 2u * submesh.BaseVertex, 2u * submesh.VertexCount);
 				}
+				glm::uvec4 history(0);
+				if (taa && visible && !blend)
+				{
+					// Capture the inputs actually submitted. Unseen nodes and replaced assets cannot inherit old geometry.
+					if (!capturedHistory)
+					{
+						impl.CurrentMeshes.emplace(historyKey, Impl::MeshHistory{ source, meshIndex, model, palette,
+																				  std::vector<float>(morphWeights.begin(), morphWeights.end()) });
+						capturedHistory = true;
+					}
+					if (previous)
+					{
+						if (previousPalette == UINT32_MAX)
+						{
+							previousPalette = static_cast<uint32_t>(draws.size());
+							for (const auto& joint : previous->Palette)
+								draws.push_back({ joint, glm::mat4(1), glm::uvec4(0) });
+						}
+						glm::uvec4 oldMorph(0);
+						if (submesh.MorphTargetCount > 0 && gpuMesh->MorphDeltas)
+						{
+							if (previousMorph.Record == UINT32_MAX)
+								packMorphWeights(previous->Weights, previousMorph);
+							oldMorph = glm::uvec4(previousMorph.Record, previousMorph.Count, 2u * submesh.MorphDeltaOffset - 2u * submesh.BaseVertex, 2u * submesh.VertexCount);
+						}
+						history = glm::uvec4(static_cast<uint32_t>(draws.size()), 1, 0, 0);
+						draws.push_back({ previous->Model, glm::mat4(1), glm::uvec4(0, 0, previousPalette, static_cast<uint32_t>(previous->Palette.size())), oldMorph });
+					}
+				}
 				const uint32_t drawIndex = static_cast<uint32_t>(instanceRecords.size());
-				instanceRecords.push_back({ model, normalMatrix, glm::uvec4(materialIndex, pickId, paletteOffset, static_cast<uint32_t>(palette.size())), morph });
+				instanceRecords.push_back({ model, normalMatrix, glm::uvec4(materialIndex, pickId, paletteOffset, static_cast<uint32_t>(palette.size())), morph, history });
 
 				DrawItem item;
 				item.Mesh = gpuMesh;
@@ -2270,6 +2366,7 @@ namespace Basalt {
 			if (m_Picking)
 				commandList->clearTextureUInt(impl.EntityIds, nvrhi::AllSubresources, 0);
 			commandList->clearDepthStencilTexture(m_DepthTexture, nvrhi::AllSubresources, true, 1.0f, false, 0);
+			commandList->clearTextureFloat(impl.MotionTexture, nvrhi::AllSubresources, nvrhi::Color(0));
 			commandList->clearTextureFloat(impl.NormalTexture, nvrhi::AllSubresources, nvrhi::Color(0.0f, 0.0f, 1.0f, 0.0f));
 			drawBatches(visibleOpaque, [&](const DrawBatchKey& key) { return impl.PrepassPipeline[key.DoubleSided ? 1 : 0].Get(); }, impl.PrepassFramebuffer, renderViewport, 0, BatchPass::Prepass);
 		}
@@ -2287,7 +2384,7 @@ namespace Basalt {
 		if (settings.SSAOEnabled)
 		{
 			const GpuPassScope pass(profiler, commandList, PassSSAO);
-			impl.SsaoConstants.Projection = camera.Projection;
+			impl.SsaoConstants.Projection = view.Projection;
 			impl.SsaoConstants.InverseProjection = view.InverseProjection;
 			impl.SsaoConstants.Params = glm::vec4(settings.SSAORadius, settings.SSAOBias, settings.SSAOIntensity, graphics.SSAOQuality == GraphicsQuality::Low ? 8.0f : static_cast<float>(SSAOKernelSize));
 			impl.SsaoConstants.ScreenSize = glm::vec4(static_cast<float>(m_RenderWidth), static_cast<float>(m_RenderHeight), static_cast<float>(m_RenderWidth) / 4.0f, static_cast<float>(m_RenderHeight) / 4.0f);
@@ -2314,7 +2411,7 @@ namespace Basalt {
 			bool built = false;
 			{
 				const GpuPassScope pass(profiler, commandList, PassClusters);
-				built = impl.Clusters.Build(commandList, camera.View, camera.Projection, view.ClusterDepths, bufferedLightCount);
+				built = impl.Clusters.Build(commandList, camera.View, view.Projection, view.ClusterDepths, bufferedLightCount);
 			}
 			if (!built)
 			{
@@ -2337,6 +2434,26 @@ namespace Basalt {
 			{
 				const DrawPush push{ 0, 0 };
 				fullscreen(impl.SkyboxPipeline, impl.LightingFramebuffer, impl.FrameSet, renderViewport, &push, sizeof(push));
+			}
+
+			if (taa)
+			{
+				if (!impl.TAA.Prepare(m_Device, impl.HdrTexture, m_DepthTexture, impl.MotionTexture, impl.FullscreenVS, impl.LinearClamp, impl.PointClamp))
+				{
+					abortFrame();
+					return;
+				}
+				glm::mat4 rotationView = camera.View;
+				rotationView[3] = glm::vec4(0, 0, 0, 1);
+				// Previous VP has translation, so remove its camera origin before transforming an infinite direction.
+				glm::mat4 skyPrevious = impl.History.GetPreviousViewProjection();
+				skyPrevious[3] = glm::vec4(0);
+				const glm::mat4 skyReprojection = skyPrevious * glm::inverse(view.Projection * rotationView);
+				const glm::vec2 jitterDelta = (TemporalJitter(impl.History.GetFrame()) - TemporalJitter((impl.History.GetFrame() + 7) % 8)) /
+											  glm::vec2(m_RenderWidth, m_RenderHeight) * glm::vec2(1, -1);
+				impl.TAA.Render(commandList, { m_RenderWidth, m_RenderHeight }, impl.History.IsValid() && !bakeEnvironment, skyReprojection, jitterDelta);
+				m_Statistics.TAAActive = true;
+				m_Statistics.TAAHistoryValid = impl.History.IsValid() && !bakeEnvironment;
 			}
 
 			// Blended meshes and particle batches, back to front. Particles sort as one batch per emitter (by
@@ -2383,8 +2500,8 @@ namespace Basalt {
 			}
 		}
 
-		const bool postActive = settings.DebugView == RendererDebugView::None && (post.BloomEnabled || post.AutoExposure || post.FXAAEnabled);
-		const bool fxaa = postActive && post.FXAAEnabled;
+		const bool postActive = settings.DebugView == RendererDebugView::None && (post.BloomEnabled || post.AutoExposure || (post.FXAAEnabled && !taa));
+		const bool fxaa = postActive && post.FXAAEnabled && !taa;
 		const bool postActivated = postActive && !impl.PostProcessWasActive;
 		impl.PostProcessWasActive = postActive;
 		nvrhi::ITexture* tonemapSource = impl.HdrTexture;
@@ -2523,6 +2640,8 @@ namespace Basalt {
 		commandList->close();
 		m_Device->executeCommandList(commandList);
 
+		impl.History.Commit(view.ViewProjection);
+		impl.PreviousMeshes = std::move(impl.CurrentMeshes);
 		impl.PickReady = m_Picking;
 
 		// Release cached binding sets (and the textures they reference) that are no longer used.

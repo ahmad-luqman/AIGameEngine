@@ -1602,12 +1602,12 @@ local preferences = Graphics.GetSettings()
 Graphics.SetSettings({ VSync = false, RenderScale = 0.75, SSAOQuality = "Low" })
 -- PostProcess is authored scene data, available through the shared component API:
 local post = Scene.FindEntityByName("PostProcessing")
-post:SetComponent("PostProcess", { BloomEnabled = true, FXAAEnabled = true, AutoExposure = true })
+post:SetComponent("PostProcess", { BloomEnabled = true, TAAEnabled = true, AutoExposure = true })
 ```
 
 The highest-priority enabled PostProcess component wins (lowest UUID breaks ties). Its settings include
 `Exposure`, `Tonemapper`, SSAO radius/intensity/bias, auto-exposure limits/compensation/adaptation, and bloom
-threshold/intensity/scatter. See [Components](Components.md) for the field list and [Rendering](Rendering.md)
+threshold/intensity/scatter. `TAAEnabled` enables temporal anti-aliasing and takes precedence over `FXAAEnabled`. See [Components](Components.md) for the field list and [Rendering](Rendering.md)
 for ordering, quality levels, legacy fallback and exposure lifecycle.
 
 Explicit runtime CLI graphics flags remain host overrides above Lua preferences; `Graphics.GetSettings()`

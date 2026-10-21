@@ -76,6 +76,7 @@ namespace Basalt {
 		float SSAOIntensity = 1.0f;
 		float SSAOBias = 0.025f;
 		bool FXAAEnabled = false;
+		bool TAAEnabled = false;
 		bool BloomEnabled = false;
 		float BloomThreshold = 1.0f;
 		float BloomIntensity = 0.1f;

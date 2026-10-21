@@ -1,15 +1,15 @@
 # Post-processing and graphics preferences
 
 Add a `PostProcess` component to an entity through the inspector, `component.set`, or Lua. It controls
-manual exposure, tonemapper (`None`, `Reinhard`, `ACES`, `AgX`), histogram auto exposure, SSAO, bloom and
-FXAA. The enabled component with the highest `Priority` wins globally; ties use the lowest entity UUID.
+manual exposure, tonemapper (`None`, `Reinhard`, `ACES`, `AgX`), histogram auto exposure, SSAO, bloom,
+FXAA and TAA. The enabled component with the highest `Priority` wins globally; ties use the lowest entity UUID.
 `Priority` is a nonnegative integer (default 0); `Enabled` defaults true. There are no spatial volumes or blends. Without an enabled component, legacy `Renderer` exposure,
 tonemapper and SSAO settings remain the fallback, preserving existing scenes and images. The editor
 hides those fallback controls while a component is active. Shadows and FSR remain scene renderer settings.
 
-The order is HDR opaque/sky/transparent/particles → histogram metering and HDR bloom → exposure,
-tonemapping and sRGB encoding → optional FXAA → optional FSR → final dithering → overlays/UI.
-SSAO remains a pre-lighting effect. Debug views bypass bloom, exposure, FXAA and FSR. All filter taps
+The order is HDR opaque/sky → optional TAA resolve → transparency/particles → histogram metering and HDR bloom
+→ exposure, tonemapping and sRGB encoding → optional FXAA → optional FSR → final dithering → overlays/UI.
+SSAO remains a pre-lighting effect. Debug views bypass TAA (including jitter), bloom, exposure, FXAA and FSR. All filter taps
 clamp to the active render area, including odd and one-pixel dimensions; dynamic resolution never samples
 unused target pixels. FXAA works on perceptual color: before FSR when enabled, otherwise its filter taps
 also resample directly to output resolution.
@@ -49,7 +49,7 @@ Component defaults and inclusive ranges:
 | AdaptationSpeed | 3 | 0–100 per second |
 | SSAOEnabled | true | boolean |
 | SSAORadius / SSAOIntensity / SSAOBias | 0.5 / 1 / 0.025 | 0.0001–100 / 0–10 / 0–1 |
-| FXAAEnabled / BloomEnabled | false / false | boolean |
+| FXAAEnabled / TAAEnabled / BloomEnabled | false / false / false | boolean |
 | BloomThreshold / BloomIntensity / BloomScatter | 1 / 0.1 / 0.7 | 0–65504 / 0–10 / 0–1 |
 
 Project defaults include `VSync`, `RenderScale`, `ShadowQuality`, `SSAOQuality` and the existing dynamic
@@ -462,3 +462,27 @@ unshadowed two-sided diffuse lighting (`Lit`). Lit billboards use the surface re
 range attenuation, Lambert normalization, clustered local-light lists and diffuse IBL; they have no
 specular response or shadow reception/casting. Rotation is a roll about the view axis. In Edit mode,
 `Preview` runs only particle simulation, independently of PlayOnStart and without scripts/audio/physics.
+
+### Temporal anti-aliasing
+
+Enable `PostProcess.TAAEnabled` through the component API or inspector. TAA takes precedence over FXAA
+when both are enabled and runs before bloom, exposure, tonemapping and FSR 1. It operates at the current
+render resolution, including supersampling and dynamic resolution. Transparency and particles composite
+with the current jittered sample after the resolve; they do not enter temporal history. Overlays and game UI
+are drawn after post-processing and never accumulate.
+
+Each renderer has an eight-sample Halton projection jitter and its own HDR color and R32F depth histories.
+The opaque/masked depth prepass writes previous-frame UV, depth and validity, using each entity/mesh node's
+previous model transform, joint palette and strongest drawn morph weights. Instancing order does not identify
+history. New or previously invisible geometry and replaced model assets reject history. Sky reprojection uses
+camera rotation. The resolve rejects out-of-bounds and depth-mismatched history, clamps history to the current
+3×3 color neighborhood and reduces history weight for fast motion. This reduces edge shimmer, including
+SSAO and opaque specular highlights; it can soften small moving detail.
+
+History resets on scene/play revision, selected PostProcess changes, projection changes, render dimensions,
+TAA/debug toggles, failed frames, and camera jumps over 10 world units or turns over 60 degrees.
+Hosts should call `SceneRenderer::ResetTemporalHistory` for smaller intentional cuts. `ResetExposure` also
+resets TAA for repeatable captures. Only successful submissions advance the sample sequence.
+`render.stats` reports `taaActive` and `taaHistoryValid`. The optional `TemporalAAGPU` test checks previous
+coordinates against independently moving instanced geometry and CPU-skinned/morphed triangles, with Vulkan
+synchronization validation enabled. Headless `TemporalHistoryTests` cover the jitter and camera lifecycle.

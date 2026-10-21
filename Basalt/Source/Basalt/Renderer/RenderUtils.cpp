@@ -150,6 +150,8 @@ namespace Basalt {
 			{ "localShadowAtlasSize", statistics.LocalShadowAtlasSize },
 			{ "failed", statistics.Failed },
 			{ "fsr1Active", statistics.FSR1Active },
+			{ "taaActive", statistics.TAAActive },
+			{ "taaHistoryValid", statistics.TAAHistoryValid },
 			{ "culledSubmeshes", statistics.CulledSubmeshes },
 			{ "skinMatrices", statistics.SkinMatrices },
 			{ "morphWeights", statistics.MorphWeights },

@@ -755,6 +755,7 @@ namespace Basalt {
 			r.Field("SSAOIntensity", c.SSAOIntensity);
 			r.Field("SSAOBias", c.SSAOBias);
 			r.Field("FXAAEnabled", c.FXAAEnabled);
+			r.Field("TAAEnabled", c.TAAEnabled);
 			r.Field("BloomEnabled", c.BloomEnabled);
 			r.Field("BloomThreshold", c.BloomThreshold);
 			r.Field("BloomIntensity", c.BloomIntensity);
@@ -1329,6 +1330,7 @@ namespace Basalt {
 				{ "SSAOIntensity", c.SSAOIntensity },
 				{ "SSAOBias", c.SSAOBias },
 				{ "FXAAEnabled", c.FXAAEnabled },
+				{ "TAAEnabled", c.TAAEnabled },
 				{ "BloomEnabled", c.BloomEnabled },
 				{ "BloomThreshold", c.BloomThreshold },
 				{ "BloomIntensity", c.BloomIntensity },

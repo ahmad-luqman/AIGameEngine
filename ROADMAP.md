@@ -49,10 +49,6 @@ The features most games need, roughly in order of impact.
 ### Rendering
 
 - **GPU particle simulation — M.** Move CPU particle simulation to a compute pass if particle counts demand it.
-- **Temporal anti-aliasing — M.** TAA (jittered projection, motion
-  vectors from the depth prepass, history reprojection with neighbourhood clamping), which also
-  stabilizes SSAO and specular shimmer. Builds on the post-process stack’s FXAA. MSAA is an option for
-  the forward pass but complicates the SSAO prepass.
 - **Reflection probes and SSR — L.** Local box-projected cubemap probes captured in the editor, then
   screen-space reflections for contact detail.
 - **Decals and text in 3D — L each.**

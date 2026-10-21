@@ -42,6 +42,7 @@ layout(set = 0, binding = 0) uniform ViewConstants
 	uvec4 ClusterGrid;    // xyz dimensions, w: clustered lookup enabled (0 = diagnostic all-lights path)
 	vec4 ClusterDepths;   // near, far, orthographic, visualize visited-light count
 	vec4 Quality;         // x: low-cost shadow filtering
+	mat4 PreviousViewProjection;
 } u_View;
 
 struct DrawData
@@ -50,6 +51,7 @@ struct DrawData
 	mat4 Normal;          // draw records: inverse-transpose of Model; unused for palette records
 	uvec4 Indices;        // x: material index; y: editor picking token; zw: joint palette offset/count (0 count = rigid)
 	uvec4 Morph;          // x: first morph weight record; y: active weight count (0 = unmorphed); z: delta texel base; w: texels per target
+	uvec4 History;        // x: previous draw record, y: valid
 };
 
 layout(std430, set = 0, binding = 1) readonly buffer DrawBuffer

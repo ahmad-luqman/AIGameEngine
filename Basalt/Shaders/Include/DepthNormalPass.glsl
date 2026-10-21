@@ -10,12 +10,16 @@ layout(location = 4) flat in uvec2 v_InstanceIndices;
 
 #ifdef BASALT_PICKING
 layout(location = 1) out uint o_EntityId;
+layout(location = 2) out vec4 o_Motion;
+#else
+layout(location = 1) out vec4 o_Motion;
 #endif
 
 // View-space normal for SSAO.
 layout(location = 0) out vec4 o_Normal;
 
 layout(location = 5) in vec2 v_TexCoord1;
+layout(location = 6) in vec4 v_PreviousClip;
 
 void main()
 {
@@ -26,5 +30,7 @@ void main()
 #ifdef BASALT_PICKING
 	o_EntityId = v_InstanceIndices.y;
 #endif
+	vec3 previous = v_PreviousClip.xyz / v_PreviousClip.w;
+	o_Motion = vec4(previous.xy * vec2(0.5, -0.5) + 0.5, previous.z, v_PreviousClip.w > 0.0 ? 1.0 : 0.0);
 	o_Normal = vec4(normalize(mat3(u_View.View) * surface.Normal), 1.0);
 }

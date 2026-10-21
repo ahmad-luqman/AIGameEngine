@@ -43,8 +43,10 @@ namespace Basalt {
 		uint32_t LocalShadowMaps = 0;
 		uint32_t LocalShadowsSkipped = 0;
 		uint32_t LocalShadowAtlasSize = 1; // One-texel fallback until the first active shadow.
-		bool FSR1Active = false;           // EASU and RCAS actually ran in this frame.
-		bool Failed = false;               // This frame could not be rendered; hosts must not report success.
+		bool TAAActive = false;
+		bool TAAHistoryValid = false;
+		bool FSR1Active = false; // EASU and RCAS actually ran in this frame.
+		bool Failed = false;     // This frame could not be rendered; hosts must not report success.
 		uint32_t Materials = 0;
 		uint32_t SkinMatrices = 0;        // Uploaded once per visible instance/skin, shared by its mesh nodes.
 		uint32_t MorphWeights = 0;        // Active morph weights uploaded, once per visible morphed mesh node.
@@ -85,7 +87,7 @@ namespace Basalt {
 
 	// Renders a Scene from a camera into an internal LDR image:
 	//   directional cascades + point/spot shadow atlas -> depth/normal prepass -> SSAO (+ bilateral blur) ->
-	//   cluster light-list build -> clustered forward PBR with IBL (opaque) -> skybox -> transparent PBR and particle billboards ->
+	//   cluster light-list build -> clustered forward PBR with IBL (opaque) -> skybox -> optional HDR TAA -> transparent PBR and particle billboards ->
 	//   optional histogram auto exposure + HDR bloom -> manual exposure + tonemapping + sRGB encode -> optional FXAA -> optional EASU + RCAS -> dithering -> output-resolution overlays.
 	// The scene renders at the current render scale; tonemap or FXAA resamples directly to the viewport,
 	// or FSR 1 upscales the perceptual-color output. With dynamic resolution the scale follows the GPU time
@@ -150,6 +152,10 @@ namespace Basalt {
 
 		// Starts the next auto-exposure frame at its metered target (deterministic captures).
 		void ResetExposure();
+		// Explicit camera cuts; captures reset this alongside exposure. Failed frames never keep history.
+		void ResetTemporalHistory();
+		// Previous UV, previous depth and validity from the opaque prepass (RGBA32F).
+		nvrhi::ITexture* GetMotionTexture() const;
 
 		// false submits individual draws in original order for validation and throughput comparisons.
 		// Grouping opaque keys can change exact coplanar depth-tie winners; transparent order is preserved.

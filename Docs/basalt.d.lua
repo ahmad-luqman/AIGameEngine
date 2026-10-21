@@ -1530,6 +1530,7 @@ function BasaltScript:StopAllCoroutines() end
 ---@field SSAOIntensity number
 ---@field SSAOBias number
 ---@field FXAAEnabled boolean
+---@field TAAEnabled boolean
 ---@field BloomEnabled boolean
 ---@field BloomThreshold number
 ---@field BloomIntensity number

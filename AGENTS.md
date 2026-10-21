@@ -44,7 +44,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   UUID; they react to EnTT component signals. `UIInteraction` (widget hover, hold and focus) exists only in Play
   and re-reads the widgets every frame. Gameplay random streams (Lua's random numbers, particle
   emitters and runtime entity UUIDs) are seeded from the session's seed, `Scene::GetRandomSeed` (the project's `RandomSeed`).
-- **Post-processing.** The highest-priority enabled `PostProcessComponent` (lowest UUID on ties) overrides legacy scene exposure/tonemapper/SSAO settings. Bloom and histogram exposure precede tonemapping; FXAA precedes FSR and overlays. Exposure history belongs to each renderer; captures reset it. `Graphics` Lua preferences are a session copy of project defaults and survive `Scene.Load` without saving the project.
+- **Post-processing.** The highest-priority enabled `PostProcessComponent` (lowest UUID on ties) overrides legacy scene exposure/tonemapper/SSAO settings. Opaque HDR TAA precedes transparency/particles, bloom and histogram exposure; exposure precedes tonemapping. TAA takes precedence over FXAA; FXAA precedes FSR and overlays. TAA camera and mesh-node histories belong to each renderer and reset with captures, cuts, scene/view changes and failures. Exposure history belongs to each renderer; captures reset it. `Graphics` Lua preferences are a session copy of project defaults and survive `Scene.Load` without saving the project.
 - **Animation graphs and root motion.** `Animator.StateMachine` names a shared `.banimgraph` asset
   (`AnimationGraph`, cached/reloaded by `AssetManager`, authored through `asset.write/read`). Runtime
   parameters and triggers belong to each playback. Transitions use array priority, at most one per update;
