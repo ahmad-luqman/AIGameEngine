@@ -348,12 +348,10 @@ namespace Basalt {
 				auto [entry, inserted] = m_ModelContents.try_emplace(model);
 				if (inserted)
 					entry->second.Contents = MeshImporter::Inspect(m_Directory / FileSystem::PathFromUtf8(model), entry->second.Error);
-				if (!entry->second.Contents)
-				{
+				const std::optional<MeshImporter::Contents>& contents = entry->second.Contents;
+				if (!contents)
 					m_Report.Add(severity, file, fmt::format("{} '{}', but '{}' is {}", role, reference, model, entry->second.Error));
-					return;
-				}
-				if (const auto problem = MeshImporter::CheckSubAsset(*entry->second.Contents, reference))
+				else if (const auto problem = MeshImporter::CheckSubAsset(*contents, reference))
 					m_Report.Add(severity, file, fmt::format("{} '{}', but {}", role, reference, *problem));
 			}
 
