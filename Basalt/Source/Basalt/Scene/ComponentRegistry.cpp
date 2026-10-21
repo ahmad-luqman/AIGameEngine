@@ -400,10 +400,13 @@ namespace Basalt {
 		{
 			const std::shared_ptr<const ComponentObjectSchema> schema = SchemaOf<E>();
 			Describe(name, ComponentFieldType::List(maxCount, schema));
-			// Element asset fields are declared as "List[].Field" (see ForEachAssetValue).
+			// Element asset fields are declared as "List[].Field" (see ForEachAssetValue), one list level deep.
 			if (IsCollecting())
 				for (const std::string& field : schema->AssetFields)
+				{
+					BS_CORE_ASSERT(!IsListAssetField(field), "asset fields of lists inside list elements are not supported");
 					m_AssetFields.push_back(fmt::format("{}[].{}", name, field));
+				}
 			const json* element = Find(name);
 			if (!element)
 				return;
@@ -596,6 +599,7 @@ namespace Basalt {
 		void Fields(FieldReader& r, AnimationClipLibrary& c)
 		{
 			r.AssetField("Mesh", c.Mesh);
+			r.ListField("Joints", c.Joints, AnimationClipLibrary::MaxJoints);
 		}
 
 		void Fields(FieldReader& r, AnimationRetargetJoint& c)
@@ -622,7 +626,6 @@ namespace Basalt {
 			r.Field("LODDistance", c.LODDistance);
 			r.Field("LODInterval", c.LODInterval);
 			r.ListField("ClipLibraries", c.ClipLibraries, AnimatorComponent::MaxClipLibraries);
-			r.ListField("RetargetJoints", c.RetargetJoints, AnimatorComponent::MaxRetargetJoints);
 		}
 
 		void Fields(FieldReader& r, BoneAttachmentComponent& c)
@@ -1185,13 +1188,12 @@ namespace Basalt {
 				{ "LODDistance", c.LODDistance },
 				{ "LODInterval", c.LODInterval },
 				{ "ClipLibraries", ListToJson(c.ClipLibraries) },
-				{ "RetargetJoints", ListToJson(c.RetargetJoints) },
 			};
 		}
 
 		json Write(const AnimationClipLibrary& c)
 		{
-			return { { "Mesh", c.Mesh } };
+			return { { "Mesh", c.Mesh }, { "Joints", ListToJson(c.Joints) } };
 		}
 
 		json Write(const AnimationRetargetJoint& c)
@@ -1761,15 +1763,22 @@ namespace Basalt {
 			// C++ code can grow the lists past what the reader accepts.
 			if (c.Events.size() > AnimatorComponent::MaxEvents || c.BlendSpaces.size() > AnimatorComponent::MaxBlendSpaces || c.Layers.size() > AnimatorComponent::MaxLayers)
 				return fmt::format("Animator holds at most {} events, {} blend spaces and {} layers", AnimatorComponent::MaxEvents, AnimatorComponent::MaxBlendSpaces, AnimatorComponent::MaxLayers);
-			if (c.ClipLibraries.size() > AnimatorComponent::MaxClipLibraries || c.RetargetJoints.size() > AnimatorComponent::MaxRetargetJoints)
-				return fmt::format("Animator holds at most {} clip libraries and {} retarget joints", AnimatorComponent::MaxClipLibraries, AnimatorComponent::MaxRetargetJoints);
-			for (size_t i = 0; i < c.RetargetJoints.size(); i++)
+			if (c.ClipLibraries.size() > AnimatorComponent::MaxClipLibraries)
+				return fmt::format("Animator holds at most {} clip libraries", AnimatorComponent::MaxClipLibraries);
+			for (size_t i = 0; i < c.ClipLibraries.size(); i++)
 			{
-				// Empty entries are the inspector's unnamed additions.
-				const std::string& target = c.RetargetJoints[i].Target;
-				for (size_t j = 0; j < i && !target.empty(); j++)
-					if (c.RetargetJoints[j].Target == target)
-						return fmt::format("RetargetJoints[{}].Target '{}' is already used by RetargetJoints[{}]", i, target, j);
+				const auto& joints = c.ClipLibraries[i].Joints;
+				if (joints.size() > AnimationClipLibrary::MaxJoints)
+					return fmt::format("ClipLibraries[{}] holds at most {} joints", i, AnimationClipLibrary::MaxJoints);
+				// One source drives one target. Empty names are the inspector's unnamed additions.
+				for (size_t j = 0; j < joints.size(); j++)
+					for (size_t k = 0; k < j; k++)
+					{
+						if (!joints[j].Target.empty() && joints[k].Target == joints[j].Target)
+							return fmt::format("ClipLibraries[{}].Joints[{}].Target '{}' is already used by Joints[{}]", i, j, joints[j].Target, k);
+						if (!joints[j].Source.empty() && joints[k].Source == joints[j].Source)
+							return fmt::format("ClipLibraries[{}].Joints[{}].Source '{}' is already used by Joints[{}]", i, j, joints[j].Source, k);
+					}
 			}
 			for (size_t i = 0; i < c.Events.size(); i++)
 			{

@@ -6,14 +6,18 @@
 #include <Basalt/Animation/AnimationSystem.h>
 #include <Basalt/Asset/AssetManager.h>
 #include <Basalt/Asset/MeshImporter.h>
+#include <Basalt/Core/FileSystem.h>
+#include <Basalt/Math/Math.h>
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
 
 #include <glm/gtc/epsilon.hpp>
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 
 // Helpers shared by the layer, IK and spring bone tests, around the generated Biped fixture (Tests/Data/Animation).
 namespace AnimationTest {
@@ -58,6 +62,43 @@ namespace AnimationTest {
 				if (!glm::all(glm::epsilonEqual(a[i][c], b[i][c], epsilon)))
 					return false;
 		return true;
+	}
+
+	// A fixture in Tests/Data/Animation.
+	inline std::filesystem::path FixturePath(const char* name)
+	{
+		return std::filesystem::path(BASALT_TEST_DATA_DIR) / "Animation" / name;
+	}
+
+	inline nlohmann::json ReadJson(const std::filesystem::path& path)
+	{
+		std::ifstream stream(path);
+		return nlohmann::json::parse(stream);
+	}
+
+	// Writes `data` as `name` in `directory` and imports it.
+	inline Basalt::Ref<Basalt::MeshSource> LoadModified(const nlohmann::json& data, const std::filesystem::path& directory, const char* name)
+	{
+		const auto path = directory / name;
+		REQUIRE(Basalt::FileSystem::WriteTextFile(path, data.dump()));
+		return LoadModel(path);
+	}
+
+	// A clip of an imported model by name (const char*, so no temporary outlives the returned reference).
+	inline const Basalt::AnimationClip& Clip(const Basalt::MeshSource& source, const char* name)
+	{
+		const auto clip = std::ranges::find(source.Animations, name, &Basalt::AnimationClip::Name);
+		REQUIRE_MESSAGE(clip != source.Animations.end(), name);
+		return *clip;
+	}
+
+	// A node's model-space rotation in composed globals.
+	inline glm::quat GlobalRotation(const std::vector<glm::mat4>& globals, uint32_t node)
+	{
+		glm::vec3 translation, scale;
+		glm::quat rotation;
+		REQUIRE(Basalt::Math::DecomposeAffineTransform(globals[node], translation, rotation, scale));
+		return glm::normalize(rotation);
 	}
 
 	// The same rotation (q and -q are one rotation).

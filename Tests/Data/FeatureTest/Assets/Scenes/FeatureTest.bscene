@@ -53,8 +53,7 @@
 		{ "ID": 928, "Name": "RetargetHero", "Components": {
 			"Transform": { "Translation": [1000, 0, 50] },
 			"Animator": { "Mesh": "Assets/Models/UnrealRig.gltf", "Clip": "Wave",
-				"ClipLibraries": [ { "Mesh": "Assets/Models/MixamoRig.gltf" } ],
-				"RetargetJoints": [ { "Source": "mixamorig:Spine1", "Target": "spine_02" } ] } } },
+				"ClipLibraries": [ { "Mesh": "Assets/Models/MixamoRig.gltf", "Joints": [ { "Source": "mixamorig:Spine1", "Target": "spine_02" } ] } ] } } },
 		{ "ID": 100, "Name": "FeatureTestDriver", "Components": {
 			"Script": { "Script": "Assets/Scripts/FeatureTest.lua", "Properties": { "Duration": 4.5, "Note": "from scene", "Offset": [1, 2, 3] } } } },
 

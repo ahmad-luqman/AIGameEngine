@@ -1,6 +1,7 @@
 #include "Basalt/Asset/MeshSource.h"
 
 #include "Basalt/Core/Assert.h"
+#include "Basalt/Core/Log.h"
 
 #include <glm/gtc/constants.hpp>
 
@@ -32,32 +33,58 @@ namespace Basalt {
 		m_Memory.Resize(bytes);
 	}
 
-	bool MeshSource::FinalizeHierarchy()
+	bool MeshSource::FinalizeHierarchy(std::string* outError)
 	{
-		NodeOrder.clear();
-		NodeOrder.reserve(Nodes.size());
+		const auto fail = [&](std::string reason) {
+			if (outError)
+				*outError = std::move(reason);
+			return false;
+		};
+		std::vector<uint32_t> order;
+		order.reserve(Nodes.size());
 		std::vector<std::vector<uint32_t>> children(Nodes.size());
 		for (size_t i = 0; i < Nodes.size(); i++)
 			if (Nodes[i].Parent < 0)
-				NodeOrder.push_back(static_cast<uint32_t>(i));
+				order.push_back(static_cast<uint32_t>(i));
 			else if (static_cast<size_t>(Nodes[i].Parent) < Nodes.size())
 				children[Nodes[i].Parent].push_back(static_cast<uint32_t>(i));
 			else
-				return false;
-		for (size_t i = 0; i < NodeOrder.size(); i++)
-			for (uint32_t child : children[NodeOrder[i]])
-				NodeOrder.push_back(child);
-		if (NodeOrder.size() != Nodes.size())
-			return false;
-		MorphWeightCount = 0;
-		for (MeshNode& node : Nodes)
+				return fail(fmt::format("node '{}' has an invalid parent", Nodes[i].Name));
+		for (size_t i = 0; i < order.size(); i++)
+			for (uint32_t child : children[order[i]])
+				order.push_back(child);
+		if (order.size() != Nodes.size())
+			return fail("the node hierarchy has a cycle");
+		for (const MeshData& mesh : Meshes)
 		{
+			if (mesh.MorphWeights.size() != mesh.MorphTargets.size())
+				return fail(fmt::format("mesh '{}' has {} default morph weights for {} targets", mesh.Name, mesh.MorphWeights.size(), mesh.MorphTargets.size()));
+			for (uint32_t index : mesh.Submeshes)
+			{
+				if (index >= Submeshes.size())
+					return fail(fmt::format("mesh '{}' names a missing submesh", mesh.Name));
+				const Submesh& submesh = Submeshes[index];
+				if (submesh.MorphTargetCount != mesh.MorphTargets.size() || submesh.MorphBounds.size() != submesh.MorphTargetCount ||
+					submesh.MorphDeltaOffset + static_cast<size_t>(submesh.MorphTargetCount) * submesh.VertexCount > MorphDeltas.size())
+					return fail(fmt::format("mesh '{}' has a submesh whose morph targets do not match the mesh's {}", mesh.Name, mesh.MorphTargets.size()));
+			}
+		}
+		uint32_t weightCount = 0;
+		std::vector<int32_t> offsets(Nodes.size(), -1);
+		for (size_t i = 0; i < Nodes.size(); i++)
+		{
+			const MeshNode& node = Nodes[i];
 			const size_t targets = node.MeshIndex >= 0 && static_cast<size_t>(node.MeshIndex) < Meshes.size() ? Meshes[node.MeshIndex].MorphTargets.size() : 0;
 			if (node.MorphWeights.size() != targets)
-				return false;
-			node.MorphWeightOffset = targets > 0 ? static_cast<int32_t>(MorphWeightCount) : -1;
-			MorphWeightCount += static_cast<uint32_t>(targets);
+				return fail(fmt::format("node '{}' has {} morph weights for {} morph targets", node.Name, node.MorphWeights.size(), targets));
+			if (targets > 0)
+				offsets[i] = static_cast<int32_t>(weightCount);
+			weightCount += static_cast<uint32_t>(targets);
 		}
+		NodeOrder = std::move(order);
+		MorphWeightCount = weightCount;
+		for (size_t i = 0; i < Nodes.size(); i++)
+			Nodes[i].MorphWeightOffset = offsets[i];
 		return true;
 	}
 
@@ -140,6 +167,27 @@ namespace Basalt {
 			result.Normal += weights[target] * delta.Normal;
 		}
 		return result;
+	}
+
+	AABB MorphedBounds(const MeshSource& source, const Submesh& submesh, std::span<const float> weights)
+	{
+		if (submesh.MorphTargetCount == 0)
+			return submesh.Bounds;
+		AABB bounds;
+		for (uint32_t v = 0; v < submesh.VertexCount; v++)
+			bounds.Expand(MorphVertex(source, submesh, v, weights).Position);
+		return bounds;
+	}
+
+	AABB MorphedMeshBounds(const MeshSource& source, uint32_t mesh)
+	{
+		const MeshData& data = source.Meshes[mesh];
+		if (std::ranges::all_of(data.MorphWeights, [](float weight) { return weight == 0.0f; }))
+			return data.Bounds;
+		AABB bounds;
+		for (uint32_t submesh : data.Submeshes)
+			bounds.Expand(MorphedBounds(source, source.Submeshes[submesh], data.MorphWeights));
+		return bounds;
 	}
 
 	void MeshSource::UpdateBounds()

@@ -8,6 +8,7 @@
 #include <Basalt/Asset/AssetManager.h>
 #include <Basalt/Asset/ImageUtils.h>
 #include <Basalt/Core/FileSystem.h>
+#include <Basalt/Renderer/RenderMath.h>
 #include <Basalt/Renderer/SceneRenderer.h>
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
@@ -371,6 +372,80 @@ TEST_CASE("GPU morph targets match CPU morphed geometry, skinned and static, in 
 				}
 			}
 		}
+	gpuScene.OnSimulationStop();
+	cpuScene.OnSimulationStop();
+	graphics->GetDevice()->waitForIdle();
+	CHECK(graphics->GetValidationErrorCount() == 0);
+	AssetManager::Clear();
+}
+
+TEST_CASE("GPU morph weights past one draw record and past the per-draw limit match the CPU's selection")
+{
+	ClearAssetCache cacheGuard;
+	auto graphics = CreateTestGraphics();
+	const auto fixture = std::filesystem::path(BASALT_ANIMATION_DATA_DIR) / "ManyMorphs.gltf";
+	const auto referencePath = std::filesystem::path(BASALT_ANIMATION_OUTPUT_DIR) / "ManyMorphsReference.gltf";
+	std::filesystem::create_directories(referencePath.parent_path());
+	std::filesystem::copy_file(fixture, referencePath, std::filesystem::copy_options::overwrite_existing);
+	Scene gpuScene, cpuScene;
+	Populate(gpuScene);
+	Populate(cpuScene);
+	gpuScene.CreateEntity("Morphed").AddComponent<AnimatorComponent>().Mesh = fixture.string();
+	cpuScene.CreateEntity("Reference").AddComponent<AnimatorComponent>().Mesh = referencePath.string();
+	const auto source = AssetManager::GetMesh(fixture.string());
+	const auto reference = AssetManager::GetMesh(referencePath.string());
+	REQUIRE(source);
+	REQUIRE(reference);
+	// Bake what the renderer draws: Sparse's 20 weights, and Crowded's 32 strongest of 36.
+	std::vector<uint32_t> selected;
+	for (const MeshNode& node : reference->Nodes)
+	{
+		REQUIRE(node.MeshIndex >= 0);
+		std::vector<float> weights(node.MorphWeights.size(), 0.0f);
+		CHECK(SelectMorphWeights(node.MorphWeights, 32, selected) == (node.Name == "Crowded" ? 4u : 0u));
+		for (uint32_t target : selected)
+			weights[target] = node.MorphWeights[target];
+		for (uint32_t index : reference->Meshes[node.MeshIndex].Submeshes)
+		{
+			Submesh& submesh = reference->Submeshes[index];
+			for (uint32_t v = 0; v < submesh.VertexCount; v++)
+			{
+				Vertex vertex = MorphVertex(*source, source->Submeshes[index], v, weights);
+				vertex.Normal = glm::normalize(vertex.Normal);
+				const glm::vec3 tangent = glm::vec3(vertex.Tangent) - vertex.Normal * glm::dot(vertex.Normal, glm::vec3(vertex.Tangent));
+				vertex.Tangent = glm::vec4(glm::normalize(tangent), vertex.Tangent.w);
+				reference->Vertices[submesh.BaseVertex + v] = vertex;
+			}
+			submesh.MorphTargetCount = 0;
+			submesh.Bounds = MorphedBounds(*source, source->Submeshes[index], weights);
+		}
+	}
+	reference->UpdateBounds();
+	gpuScene.OnSimulationStart();
+	cpuScene.OnSimulationStart();
+
+	SceneRenderer gpuRenderer(graphics->GetDevice()), cpuRenderer(graphics->GetDevice());
+	REQUIRE(gpuRenderer.Initialize());
+	REQUIRE(cpuRenderer.Initialize());
+	gpuRenderer.SetViewportSize(320, 240);
+	cpuRenderer.SetViewportSize(320, 240);
+	RenderCamera camera;
+	camera.Position = { 0, 0.5f, 4 };
+	camera.View = glm::lookAt(camera.Position, glm::vec3(0, 0.5f, 0), glm::vec3(0, 1, 0));
+	camera.Projection = glm::perspective(glm::radians(45.0f), 320.0f / 240.0f, .1f, 30.0f);
+	camera.Near = .1f;
+	camera.Far = 30;
+	for (RendererDebugView view : { RendererDebugView::None, RendererDebugView::Normals, RendererDebugView::Depth })
+	{
+		INFO("view=" << static_cast<int>(view));
+		gpuScene.GetRendererSettings().DebugView = view;
+		cpuScene.GetRendererSettings().DebugView = view;
+		const auto gpu = Capture(gpuRenderer, gpuScene, camera);
+		CHECK(gpuRenderer.GetStatistics().MorphWeights == 20 + 32);
+		CHECK(gpuRenderer.GetStatistics().MorphWeightsDropped == 4);
+		CHECK(gpuRenderer.GetStatistics().ShadowDrawCalls > 0);
+		Compare(gpu, Capture(cpuRenderer, cpuScene, camera));
+	}
 	gpuScene.OnSimulationStop();
 	cpuScene.OnSimulationStop();
 	graphics->GetDevice()->waitForIdle();

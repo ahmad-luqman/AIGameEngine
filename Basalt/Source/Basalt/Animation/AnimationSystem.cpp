@@ -232,30 +232,36 @@ namespace Basalt {
 
 	Ref<const AnimationClipSet> AnimationSystem::ResolveClips(Entity entity, const AnimatorComponent& component, const Ref<MeshSource>& model)
 	{
-		std::vector<std::string> keys;
-		std::vector<Ref<MeshSource>> sources;
-		for (const AnimationClipLibrary& library : component.ClipLibraries)
-		{
-			// Unnamed entries are the inspector's additions.
-			if (library.Mesh.empty())
-				continue;
-			keys.push_back(library.Mesh);
-			sources.push_back(AssetManager::GetMesh(library.Mesh));
-		}
+		// Library sources resolve once per update for crowds (like the models in Update); a reload shows next update.
+		std::vector<AnimationClipSet::Library> libraries = AnimationClipSet::Load(component, [this](const std::string& key) {
+			auto [entry, inserted] = m_LibrarySources.try_emplace(key);
+			if (inserted)
+				entry->second = AssetManager::GetMesh(key);
+			return entry->second;
+		});
 		// A reloaded model or library is a new source, so its set is built again.
-		for (const ClipSetEntry& entry : m_ClipSets)
-			if (entry.Clips->GetModel() == model && entry.Keys == keys && entry.Sources == sources && entry.Joints == component.RetargetJoints)
-				return entry.Clips;
-		std::vector<AnimationClipSet::Library> libraries;
-		libraries.reserve(keys.size());
-		for (size_t i = 0; i < keys.size(); i++)
-			libraries.push_back({ .Mesh = keys[i], .Source = sources[i], .Error = sources[i] ? std::string() : AssetManager::GetError(keys[i]) });
-		auto clips = AnimationClipSet::Build(model, std::move(libraries), component.RetargetJoints);
-		// Logged once per set: Animators sharing the model and libraries share it.
-		for (const std::string& problem : clips->GetProblems())
-			BS_CORE_WARN("Animator '{}': {}", entity.GetName(), problem);
-		m_ClipSets.push_back({ std::move(keys), std::move(sources), component.RetargetJoints, clips });
+		for (const Ref<const AnimationClipSet>& clips : m_ClipSets)
+			if (clips->Matches(model, libraries))
+				return clips;
+		auto clips = AnimationClipSet::Build(model, std::move(libraries));
+		// Logged once per set, under the Animator that first needs it: Animators with the same model and libraries share it.
+		for (const AnimationClipSet::Library& library : clips->GetLibraries())
+		{
+			if (!library.Error.empty())
+				BS_CORE_ERROR("Animator '{}': clip library '{}' adds no clips: {}", entity.GetName(), library.Entry.Mesh, library.Error);
+			for (const std::string& warning : library.Warnings)
+				BS_CORE_WARN("Animator '{}': clip library '{}': {}", entity.GetName(), library.Entry.Mesh, warning);
+			if (!library.Shadowed.empty())
+				BS_CORE_WARN("Animator '{}': clip library '{}': the model or an earlier library already has clip{} {}", entity.GetName(), library.Entry.Mesh, library.Shadowed.size() > 1 ? "s" : "", fmt::join(library.Shadowed, ", "));
+		}
+		m_ClipSets.push_back(clips);
 		return clips;
+	}
+
+	std::string AnimationSystem::DescribeClipSources(const Playback& playback)
+	{
+		const size_t libraries = playback.Clips->GetLibraries().size();
+		return libraries == 0 ? fmt::format("'{}'", playback.Source->Key) : fmt::format("'{}' or its {} clip librar{}", playback.Source->Key, libraries, libraries == 1 ? "y" : "ies");
 	}
 
 	AnimationSystem::Playback* AnimationSystem::Ensure(Entity entity, const ResolvedAssets* assets)
@@ -289,10 +295,14 @@ namespace Basalt {
 								playback.MorphWeights.size() != source->MorphWeightCount;
 		if (inserted || incomplete || playback.Graph != graph || playback.ConfiguredGraph != component->StateMachine || playback.Handle != static_cast<entt::entity>(entity) || playback.Source != source || playback.Clips != clips || playback.ConfiguredClip != component->Clip)
 		{
-			// Script morph weights name targets, so they outlive the model and graph the playback was built for.
+			// Script morph weights name targets, so they outlive the model and graph the playback was built for. One whose
+			// target the new model lacks holds nothing until a model with it returns.
 			auto morphOverrides = std::move(playback.MorphOverrides);
 			for (MorphOverride& entry : morphOverrides)
-				entry.SlotsSource = nullptr;
+			{
+				entry.Slots = FindMorphWeights(*source, entry.Target);
+				ReportCallProblem(m_MorphProblems, entity, "Animator", "SetMorphWeight", entry.Target, entry.Slots.empty() ? fmt::format("morph target '{}' is not in '{}'; its script weight waits for a model with it", entry.Target, source->Key) : std::string());
+			}
 			playback = {};
 			playback.MorphOverrides = std::move(morphOverrides);
 			playback.Handle = entity;
@@ -312,7 +322,7 @@ namespace Basalt {
 					ResolveSpace(playback, playback.Space.emplace(SpaceState{ .Name = component->Clip }), *component);
 				else
 				{
-					BS_CORE_ERROR("Animator '{}': clip '{}' not found in '{}'", entity.GetName(), component->Clip, component->Mesh);
+					BS_CORE_ERROR("Animator '{}': clip '{}' not found in {}", entity.GetName(), component->Clip, DescribeClipSources(playback));
 					playback.PendingStart = component->Clip;
 				}
 			}
@@ -530,6 +540,7 @@ namespace Basalt {
 					animated = animated || (resolved.RootMask.Weights[node] > 0 && resolved.RootMask.Channels[node] != 0);
 					resolved.RootMask.Weights[node] = 0;
 				}
+				MorphMaskWeights(source, resolved.RootMask);
 				resolved.RootMaskNode = rootNode;
 				std::string problem = animated ? fmt::format("clip '{}' animates the root-motion joint '{}' or a node above it, which layers leave to root motion", resolved.Key.Clip, source.Nodes[rootNode].Name) : std::string();
 				if (!problem.empty() && problem != layer.RootProblem)
@@ -581,22 +592,28 @@ namespace Basalt {
 		}
 		playback.InvalidPose = !valid;
 		playback.MorphWeights = playback.Pose.MorphWeights;
-		for (MorphOverride& entry : playback.MorphOverrides)
-		{
-			if (entry.SlotsSource != &source)
+		// Cubic weight curves can overshoot past what floats hold; such a weight would poison the renderer's bounds.
+		bool finite = true;
+		for (float& weight : playback.MorphWeights)
+			if (!std::isfinite(weight))
 			{
-				entry.Slots = FindMorphWeights(source, entry.Target);
-				entry.SlotsSource = &source;
+				weight = 0;
+				finite = false;
 			}
+		if (!finite && !playback.InvalidMorphWeights)
+			BS_CORE_WARN("Animator '{}': non-finite morph weights; showing them as 0", playback.EntityName);
+		playback.InvalidMorphWeights = !finite;
+		for (const MorphOverride& entry : playback.MorphOverrides)
 			for (uint32_t slot : entry.Slots)
 				playback.MorphWeights[slot] = entry.Weight.Get();
-		}
 	}
 
 	void AnimationSystem::RestoreRestPose(Playback& playback)
 	{
 		const MeshSource& source = *playback.Source;
-		BS_CORE_ASSERT(playback.Local.Nodes.size() == source.Nodes.size() && playback.Pose.Nodes.size() == source.Nodes.size() && playback.Globals.size() == source.Nodes.size(), "Playback buffers must be initialized before rest-pose recovery");
+		BS_CORE_ASSERT(playback.Local.Nodes.size() == source.Nodes.size() && playback.Pose.Nodes.size() == source.Nodes.size() && playback.Globals.size() == source.Nodes.size() &&
+						   playback.Local.MorphWeights.size() == source.MorphWeightCount && playback.Pose.MorphWeights.size() == source.MorphWeightCount,
+					   "Playback buffers must be initialized before rest-pose recovery");
 		for (size_t i = 0; i < source.Nodes.size(); ++i)
 		{
 			const auto& node = source.Nodes[i];
@@ -624,8 +641,9 @@ namespace Basalt {
 		}
 
 		m_PoseJobs.clear();
+		m_LibrarySources.clear();
 		// Sets no playback uses any more (their Animators changed or went away).
-		std::erase_if(m_ClipSets, [](const ClipSetEntry& entry) { return entry.Clips.use_count() == 1; });
+		std::erase_if(m_ClipSets, [](const Ref<const AnimationClipSet>& clips) { return clips.use_count() == 1; });
 		std::optional<glm::vec3> cameraPosition;
 		if (Entity camera = m_Scene.GetPrimaryCameraEntity())
 			cameraPosition = m_Scene.GetWorldTransform(camera)[3];
@@ -1461,7 +1479,7 @@ namespace Basalt {
 			if (playback->Clips->Empty())
 				BS_CORE_ERROR("Animator '{}': model '{}' has no animation clips", entity.GetName(), playback->Source->Key);
 			else
-				BS_CORE_ERROR("Animator '{}': clip '{}' not found", entity.GetName(), clip);
+				BS_CORE_ERROR("Animator '{}': clip '{}' not found in {}", entity.GetName(), clip, DescribeClipSources(*playback));
 			return false;
 		}
 		TakeDirectControl(*playback, entity.GetComponent<AnimatorComponent>());
@@ -1483,7 +1501,7 @@ namespace Basalt {
 		const int32_t selected = FindClip(*playback->Clips, clip);
 		if (selected < 0)
 		{
-			BS_CORE_ERROR("Animator '{}': crossfade clip '{}' not found", entity.GetName(), clip);
+			BS_CORE_ERROR("Animator '{}': crossfade clip '{}' not found in {}", entity.GetName(), clip, DescribeClipSources(*playback));
 			return false;
 		}
 		BeginTransition(*playback, seconds);
@@ -1507,7 +1525,7 @@ namespace Basalt {
 		const int32_t b = FindClip(*playback->Clips, second);
 		if (a < 0 || b < 0)
 		{
-			BS_CORE_ERROR("Animator '{}': blend clip '{}' not found", entity.GetName(), a < 0 ? first : second);
+			BS_CORE_ERROR("Animator '{}': blend clip '{}' not found in {}", entity.GetName(), a < 0 ? first : second, DescribeClipSources(*playback));
 			return false;
 		}
 		TakeDirectControl(*playback, entity.GetComponent<AnimatorComponent>());
@@ -1711,10 +1729,19 @@ namespace Basalt {
 		return playback ? &playback->MorphWeights : nullptr;
 	}
 
+	std::optional<AnimationSystem::PoseView> AnimationSystem::GetPoseView(Entity entity)
+	{
+		auto* playback = Ensure(entity);
+		if (!playback)
+			return std::nullopt;
+		BS_CORE_ASSERT(playback->MorphWeights.size() == playback->Source->MorphWeightCount, "Ensure sizes the weights with the pose");
+		return PoseView{ playback->Source, &playback->Globals, &playback->MorphWeights };
+	}
+
 	std::vector<std::string> AnimationSystem::GetMorphTargets(Entity entity)
 	{
 		std::vector<std::string> names;
-		if (auto* playback = Ensure(entity))
+		if (auto* playback = EnsurePlayable(entity))
 			for (const MeshNode& node : playback->Source->Nodes)
 				if (node.MorphWeightOffset >= 0)
 					for (const std::string& name : playback->Source->Meshes[node.MeshIndex].MorphTargets)
@@ -1723,23 +1750,23 @@ namespace Basalt {
 		return names;
 	}
 
+	std::vector<uint32_t> AnimationSystem::FindMorphTarget(Entity entity, const Playback& playback, const std::string& target, const char* operation)
+	{
+		std::vector<uint32_t> slots = FindMorphWeights(*playback.Source, target);
+		// Unknown names share one slot per operation (see ReportCallProblem).
+		ReportCallProblem(m_MorphProblems, entity, "Animator", operation, {}, slots.empty() ? fmt::format("no morph target named '{}' in '{}'", target, playback.Source->Key) : std::string());
+		return slots;
+	}
+
 	bool AnimationSystem::SetMorphWeight(Entity entity, const std::string& target, float weight, float seconds)
 	{
 		constexpr const char* operation = "SetMorphWeight";
-		auto* playback = Ensure(entity);
+		auto* playback = EnsurePlayable(entity);
 		if (!playback)
-		{
-			ReportCallProblem(m_MorphProblems, entity, "Animator", operation, {}, DescribeUnplayable(entity));
 			return false;
-		}
-		const std::vector<uint32_t> slots = FindMorphWeights(*playback->Source, target);
+		std::vector<uint32_t> slots = FindMorphTarget(entity, *playback, target, operation);
 		if (slots.empty())
-		{
-			// Unknown names share one slot per operation (see ReportCallProblem).
-			ReportCallProblem(m_MorphProblems, entity, "Animator", operation, {}, fmt::format("no morph target named '{}' in '{}'", target, playback->Source->Key));
 			return false;
-		}
-		ReportCallProblem(m_MorphProblems, entity, "Animator", operation, {}, {});
 		if (!IsValidFade(weight, seconds))
 		{
 			ReportCallProblem(m_MorphProblems, entity, "Animator", operation, target, fmt::format("morph target '{}': the weight must be between 0 and 1 and the fade time finite and nonnegative", target), fmt::format(" (got {} and {})", weight, seconds));
@@ -1749,9 +1776,9 @@ namespace Basalt {
 		auto entry = std::ranges::find(playback->MorphOverrides, target, &MorphOverride::Target);
 		if (entry == playback->MorphOverrides.end())
 		{
-			// A new fade starts from the weight shown.
-			const float shown = slots.front() < playback->MorphWeights.size() ? playback->MorphWeights[slots.front()] : 0.0f;
-			entry = playback->MorphOverrides.insert(entry, MorphOverride{ .Target = target, .Weight = FadingWeight(shown) });
+			// A new fade starts from the weight shown (Ensure sized MorphWeights for these slots).
+			const float shown = playback->MorphWeights[slots.front()];
+			entry = playback->MorphOverrides.insert(entry, MorphOverride{ .Target = target, .Weight = FadingWeight(shown), .Slots = std::move(slots) });
 		}
 		entry->Weight.FadeTo(weight, seconds);
 		Finish(*playback);
@@ -1760,21 +1787,21 @@ namespace Basalt {
 
 	std::optional<float> AnimationSystem::GetMorphWeight(Entity entity, const std::string& target)
 	{
-		auto* playback = Ensure(entity);
+		auto* playback = EnsurePlayable(entity);
 		if (!playback)
 			return std::nullopt;
-		const std::vector<uint32_t> slots = FindMorphWeights(*playback->Source, target);
-		if (slots.empty() || slots.front() >= playback->MorphWeights.size())
+		const std::vector<uint32_t> slots = FindMorphTarget(entity, *playback, target, "GetMorphWeight");
+		if (slots.empty())
 			return std::nullopt;
 		return playback->MorphWeights[slots.front()];
 	}
 
-	bool AnimationSystem::ClearMorphWeight(Entity entity, const std::string& target)
+	bool AnimationSystem::ClearMorphWeight(Entity entity, const std::optional<std::string>& target)
 	{
-		auto* playback = Ensure(entity);
-		if (!playback)
+		auto* playback = EnsurePlayable(entity);
+		if (!playback || (target && FindMorphTarget(entity, *playback, *target, "ClearMorphWeight").empty()))
 			return false;
-		const size_t erased = target.empty() ? std::exchange(playback->MorphOverrides, {}).size() : std::erase_if(playback->MorphOverrides, [&](const MorphOverride& entry) { return entry.Target == target; });
+		const size_t erased = std::erase_if(playback->MorphOverrides, [&](const MorphOverride& entry) { return !target || entry.Target == *target; });
 		if (erased > 0)
 			Finish(*playback);
 		return erased > 0;
@@ -1862,18 +1889,19 @@ namespace Basalt {
 		// Unlike the base Clip, an empty layer Clip plays nothing.
 		resolved.Clip = clip.empty() ? -1 : FindClip(*playback.Clips, clip);
 		if (!clip.empty() && resolved.Clip < 0)
-			problems.push_back(fmt::format("clip '{}' not found in '{}'", clip, source.Key));
+			problems.push_back(fmt::format("clip '{}' not found in {}", clip, DescribeClipSources(playback)));
 		std::vector<std::string> missing;
 		resolved.Mask.Weights = AnimationMaskWeights(source, config.Mask, missing);
 		if (!missing.empty())
 			problems.push_back(fmt::format("mask joint{} {} not found in '{}'", missing.size() > 1 ? "s" : "", fmt::join(missing, ", "), source.Key));
 		resolved.Mask.Channels = resolved.Clip >= 0 ? AnimatedChannels(source, (*playback.Clips)[resolved.Clip]) : std::vector<uint8_t>(source.Nodes.size(), 0);
+		MorphMaskWeights(source, resolved.Mask);
 		if (config.Blend == AnimationLayerBlend::Additive && resolved.Clip >= 0)
 		{
 			const int32_t reference = config.ReferenceClip.empty() ? resolved.Clip : FindClip(*playback.Clips, config.ReferenceClip);
 			if (reference < 0)
 			{
-				problems.push_back(fmt::format("reference clip '{}' not found in '{}'", config.ReferenceClip, source.Key));
+				problems.push_back(fmt::format("reference clip '{}' not found in {}", config.ReferenceClip, DescribeClipSources(playback)));
 				resolved.Clip = -1;
 			}
 			else
@@ -1972,7 +2000,7 @@ namespace Basalt {
 		}
 		if (clip && FindClip(*playback->Clips, *clip) < 0)
 		{
-			ReportLayerCall(entity, operation, layer, fmt::format("layer '{}': clip '{}' not found in '{}'", layer, *clip, playback->Source->Key));
+			ReportLayerCall(entity, operation, layer, fmt::format("layer '{}': clip '{}' not found in {}", layer, *clip, DescribeClipSources(*playback)));
 			return false;
 		}
 		const auto& component = entity.GetComponent<AnimatorComponent>();

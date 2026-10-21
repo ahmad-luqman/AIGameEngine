@@ -681,6 +681,27 @@ TEST_SUITE("Assets")
 		AssetManager::Clear();
 	}
 
+	// Regression (FuzzGltf, CI): cgltf_validate read a sparse accessor's indices through a buffer view past the end of
+	// its buffer before checking the view's bounds.
+	TEST_CASE("glTF buffer views must lie inside their buffers")
+	{
+		BasaltTest::TempProject project("GltfViewBounds");
+		const std::string buffer = MakeQuadBuffer();
+		nlohmann::json gltf = MakeGltfJson({ { "byteLength", buffer.size() }, { "uri", "data:application/octet-stream;base64," + BasaltTest::Base64(buffer.data(), buffer.size()) } }, nlohmann::json::array());
+		gltf.erase("textures");
+		gltf["materials"][0]["pbrMetallicRoughness"].erase("baseColorTexture");
+		gltf["materials"][0].erase("normalTexture");
+		gltf["images"] = nlohmann::json::array();
+		// A sparse override of the positions whose index view starts past the buffer.
+		gltf["bufferViews"].push_back({ { "buffer", 0 }, { "byteOffset", buffer.size() + 600 }, { "byteLength", 4 } });
+		gltf["accessors"][0]["sparse"] = { { "count", 1 }, { "indices", { { "bufferView", gltf["bufferViews"].size() - 1 }, { "componentType", 5123 } } }, { "values", { { "bufferView", 0 } } } };
+		project.WriteFile("Assets/Models/PastBuffer.gltf", gltf.dump());
+		AssetManager::Clear();
+		CHECK_FALSE(AssetManager::GetMesh("Assets/Models/PastBuffer.gltf"));
+		CHECK(AssetManager::GetError("Assets/Models/PastBuffer.gltf").find("buffer view 3 lies outside its buffer") != std::string::npos);
+		AssetManager::Clear();
+	}
+
 	// Regression: a 4-byte header could claim a gigantic image and make stb_image allocate gigabytes.
 	TEST_CASE("Images larger than the dimension limit are rejected before allocating")
 	{

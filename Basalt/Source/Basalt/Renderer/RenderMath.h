@@ -8,6 +8,8 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <span>
+#include <vector>
 
 namespace Basalt {
 
@@ -20,6 +22,11 @@ namespace Basalt {
 		explicit Frustum(const glm::mat4& viewProjection);
 		bool Intersects(const AABB& box) const;
 	};
+
+	// The morph targets a draw blends: the nonzero finite weights, strongest (by |weight|) first and in target order
+	// among equals, at most `maxActive` of them. Returns how many active weights were dropped. Upload order is the
+	// shader's summation order, so it must not depend on anything but the weights.
+	size_t SelectMorphWeights(std::span<const float> weights, size_t maxActive, std::vector<uint32_t>& outTargets);
 
 	// Avoid a degenerate look-at basis for nearly vertical light directions.
 	inline glm::vec3 ShadowUpVector(const glm::vec3& direction)

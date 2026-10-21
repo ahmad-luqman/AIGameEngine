@@ -117,13 +117,23 @@ namespace Basalt {
 		bool SetMorphWeight(Entity entity, const std::string& target, float weight, float seconds);
 		// The weight shown (of the first node with the target).
 		std::optional<float> GetMorphWeight(Entity entity, const std::string& target);
-		// Returns the target to its animated weight at once; an empty target clears every script weight. False when no
-		// script weight was set.
-		bool ClearMorphWeight(Entity entity, const std::string& target);
-		// Unique target names in node order.
+		// Returns the target (without one, every target) to its animated weight at once. False when no script weight was
+		// set; an unknown target is logged.
+		bool ClearMorphWeight(Entity entity, const std::optional<std::string>& target);
+		// Unique target names in node index (glTF) order, each mesh's in declaration order.
 		std::vector<std::string> GetMorphTargets(Entity entity);
-		// Weights shown, at MeshNode::MorphWeightOffset; the same lifetime as GetPose.
+		// Weights shown, at MeshNode::MorphWeightOffset (Source's MorphWeightCount of them); the same lifetime as GetPose.
 		const std::vector<float>* GetMorphWeights(Entity entity);
+		// The playback's model with its pose and morph weights, resolved once (for drawing); the same lifetime as GetPose.
+		struct PoseView
+		{
+			Ref<MeshSource> Source;
+			const std::vector<glm::mat4>* Globals = nullptr;
+			const std::vector<float>* MorphWeights = nullptr;
+		};
+		std::optional<PoseView> GetPoseView(Entity entity);
+		// Clip sets kept for the Animators (diagnostics and tests): one per model and clip library combination in use.
+		size_t GetClipSetCount() const { return m_ClipSets.size(); }
 		// Restarts every spring chain of the entity on its animated pose, at rest, at the next spring solve (after a
 		// teleport too short for the automatic detection, or a cutscene cut). False without a SpringBone component.
 		bool ResetSpringBones(Entity entity);
@@ -221,12 +231,12 @@ namespace Basalt {
 			uint32_t Node = 0;
 			AnimationNodePose Local;
 		};
-		// A script's morph weight, carried across playback resets. Slots caches the pose weights it names for SlotsSource.
+		// A script's morph weight, carried across playback resets: Slots are the pose weights its target names in the
+		// playback's Source, looked up again whenever the playback is rebuilt.
 		struct MorphOverride
 		{
 			std::string Target;
 			FadingWeight Weight;
-			const MeshSource* SlotsSource = nullptr;
 			std::vector<uint32_t> Slots;
 		};
 		// Runtime playback of one Animator layer, matched to its configuration by name every update. It belongs to
@@ -324,6 +334,7 @@ namespace Basalt {
 			std::string EntityName;
 			std::vector<glm::mat4> Globals;
 			std::vector<MorphOverride> MorphOverrides;
+			bool InvalidMorphWeights = false;
 			// Pose.MorphWeights with the script weights on top (Finish).
 			std::vector<float> MorphWeights;
 		};
@@ -451,8 +462,12 @@ namespace Basalt {
 		// Builds Pose from Local and the layers, then composes Globals from Pose with the IK and spring overlays on top. Layers
 		// leave out the root-motion joint and the nodes above it while root motion applies (also while it fades out).
 		static void Finish(Playback& playback);
-		// The Animator's clip set for `model`, built (and its problems logged) when the model, ClipLibraries, their
-		// loaded sources or RetargetJoints changed.
+		// "'Model.glb'" or "'Model.glb' or its N clip libraries", for clip-not-found messages.
+		static std::string DescribeClipSources(const Playback& playback);
+		// The pose weight slots of a morph target, logging an unknown target for `operation`.
+		std::vector<uint32_t> FindMorphTarget(Entity entity, const Playback& playback, const std::string& target, const char* operation);
+		// The Animator's clip set for `model`, built (and its problems logged) when the model, ClipLibraries or their
+		// loaded sources changed.
 		Ref<const AnimationClipSet> ResolveClips(Entity entity, const AnimatorComponent& component, const Ref<MeshSource>& model);
 		// Requires Local/Pose/Globals sized by Ensure (which retries incomplete initialization) and immutable source topology.
 		// Rewrites those buffers in place, so queued-job recovery needs no pose allocation.
@@ -509,7 +524,7 @@ namespace Basalt {
 		}
 		// The chain named `chain` after syncing, or nulls (reported for `operation`).
 		ChainLookup FindChain(Entity entity, const std::string& chain, const char* operation);
-		// Logs `problem` (plus `detail`, e.g. the offending values) for one entity, operation and layer or chain name
+		// Logs `problem` (plus `detail`, e.g. the offending values) for one entity, operation and layer, chain or target name
 		// when the problem differs from the last one reported there; an empty problem records that operation's success.
 		// A script repeating a failing call every frame, between other calls, logs it once. Unknown names share one
 		// slot per operation, so scripts cannot grow the record without bound.
@@ -557,27 +572,23 @@ namespace Basalt {
 		Scene& m_Scene;
 		std::unordered_map<UUID, Playback> m_Playback;
 		std::unordered_map<entt::entity, bool> m_EmptyMeshes;
-		// Built clip sets by model, library keys and their loaded sources, and joint map (see ResolveClips).
-		struct ClipSetEntry
-		{
-			std::vector<std::string> Keys;
-			std::vector<Ref<MeshSource>> Sources;
-			std::vector<AnimationRetargetJoint> Joints;
-			Ref<const AnimationClipSet> Clips;
-		};
-		std::vector<ClipSetEntry> m_ClipSets;
+		// Built clip sets, found again by model and loaded libraries (see ResolveClips); dropped once no playback uses them.
+		std::vector<Ref<const AnimationClipSet>> m_ClipSets;
+		// Clip library sources by key, resolved once per update.
+		std::unordered_map<std::string, Ref<MeshSource>> m_LibrarySources;
 		std::vector<AnimationEventRecord> m_PendingEvents;
 		// The last problem reported per BoneAttachment entity, so each is logged once.
 		std::unordered_map<UUID, std::string> m_AttachmentProblems;
 		// The last GetBoneTransform problem reported per entity and joint, and the last unplayable reason per entity.
 		std::map<std::pair<UUID, std::string>, std::string> m_BoneProblems;
-		std::map<std::pair<UUID, std::string>, std::string> m_MorphProblems;
 		std::unordered_map<UUID, std::string> m_UnplayableReported;
 		std::unordered_map<UUID, IKState> m_IK;
 		std::unordered_map<UUID, SpringState> m_Springs;
-		// The last failed script call's problem per entity and operation and layer or chain name (see ReportCallProblem).
+		// The last failed script call's problem per entity and operation and layer, chain or morph target name (see
+		// ReportCallProblem).
 		std::map<std::pair<UUID, std::string>, std::string> m_LayerProblems;
 		std::map<std::pair<UUID, std::string>, std::string> m_IKCallProblems;
+		std::map<std::pair<UUID, std::string>, std::string> m_MorphProblems;
 		// Borrowed, disjoint playback outputs; sampling and composition touch only Target.
 		struct PoseJob
 		{

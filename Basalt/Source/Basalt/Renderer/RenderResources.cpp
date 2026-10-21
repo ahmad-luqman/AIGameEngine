@@ -266,7 +266,11 @@ namespace Basalt {
 			const size_t texels = source->MorphDeltas.size() * 2;
 			const auto width = static_cast<uint32_t>(std::min<size_t>(texels, MorphTextureWidth));
 			const auto height = static_cast<uint32_t>((texels + width - 1) / width);
-			mesh.MorphDeltas = height <= MaxMorphDeltas * 2 / MorphTextureWidth ? CreateMorphTexture(width, height, source->Key + " (morph targets)") : nullptr;
+			// The importer keeps MorphDeltas within MaxMorphDeltas; a hand-built source may not.
+			if (height > MaxMorphTextureRows)
+				BS_CORE_ERROR("RenderResources: '{}' has {} morph deltas, past the limit of {}; it draws without morph targets", source->Key, source->MorphDeltas.size(), MaxMorphDeltas);
+			else if (mesh.MorphDeltas = CreateMorphTexture(width, height, source->Key + " (morph targets)"); !mesh.MorphDeltas)
+				BS_CORE_ERROR("RenderResources: failed to create the morph target texture for '{}'; it draws without morph targets", source->Key);
 			if (mesh.MorphDeltas)
 			{
 				std::vector<glm::vec4> data(static_cast<size_t>(width) * height, glm::vec4(0));
@@ -278,8 +282,6 @@ namespace Basalt {
 				commandList->writeTexture(mesh.MorphDeltas, 0, 0, data.data(), static_cast<size_t>(width) * sizeof(glm::vec4));
 				morphBytes = data.size() * sizeof(glm::vec4);
 			}
-			else
-				BS_CORE_ERROR("RenderResources: failed to create the morph target texture for '{}'; it draws without morph targets", source->Key);
 		}
 
 		MeshEntry& entry = m_Meshes[source.get()];

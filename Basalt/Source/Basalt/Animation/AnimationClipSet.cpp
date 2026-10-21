@@ -1,41 +1,57 @@
 #include "Basalt/Animation/AnimationClipSet.h"
 
+#include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Core/Log.h"
-
-#include <spdlog/fmt/ranges.h>
 
 #include <algorithm>
 #include <set>
 
 namespace Basalt {
 
-	Ref<const AnimationClipSet> AnimationClipSet::Build(const Ref<MeshSource>& model, std::vector<Library> libraries, const std::vector<AnimationRetargetJoint>& joints)
-	{
-		auto set = CreateRef<AnimationClipSet>();
-		set->m_Model = model;
-		std::set<std::string> names;
-		set->m_ModelClips = model->Animations.size();
-		for (const AnimationClip& clip : model->Animations)
+	namespace {
+		size_t BakedFloats(const AnimationClip& clip)
 		{
-			set->m_Origins.push_back(-1);
-			names.insert(clip.Name);
+			size_t floats = 0;
+			for (const AnimationTrack& track : clip.Tracks)
+				floats += track.Times.size() + track.Values.size() * 4 + track.Weights.size();
+			return floats;
 		}
-		for (size_t index = 0; index < libraries.size(); index++)
+	}
+
+	std::vector<AnimationClipSet::Library> AnimationClipSet::Load(const AnimatorComponent& animator)
+	{
+		return Load(animator, [](const std::string& key) { return AssetManager::GetMesh(key); });
+	}
+
+	std::vector<AnimationClipSet::Library> AnimationClipSet::Load(const AnimatorComponent& animator, const std::function<Ref<MeshSource>(const std::string&)>& resolve)
+	{
+		std::vector<Library> libraries;
+		for (size_t i = 0; i < animator.ClipLibraries.size(); i++)
 		{
-			Library& library = libraries[index];
-			if (!library.Source)
-			{
-				set->m_Problems.push_back(fmt::format("clip library '{}' cannot load: {}", library.Mesh, library.Error));
+			const AnimationClipLibrary& entry = animator.ClipLibraries[i];
+			// Unnamed entries are the inspector's additions.
+			if (entry.Mesh.empty())
 				continue;
-			}
-			std::vector<std::string> warnings;
-			library.Map = Retargeting::BuildMap(*model, *library.Source, joints, warnings);
-			for (std::string& warning : warnings)
-				set->m_Problems.push_back(fmt::format("clip library '{}': {}", library.Mesh, warning));
+			Library& library = libraries.emplace_back(Library{ .Index = i, .Entry = entry, .Source = resolve(entry.Mesh) });
+			if (!library.Source)
+				library.Error = "cannot load: " + AssetManager::GetError(entry.Mesh);
+		}
+		return libraries;
+	}
+
+	void AnimationClipSet::Plan(const MeshSource& model, std::vector<Library>& libraries)
+	{
+		std::set<std::string> names;
+		for (const AnimationClip& clip : model.Animations)
+			names.insert(clip.Name);
+		for (Library& library : libraries)
+		{
+			if (!library.Source)
+				continue;
+			library.Map = Retargeting::BuildMap(model, *library.Source, library.Entry.Joints, library.Warnings);
 			if (library.Map.MappedCount() == 0)
 			{
-				library.Error = "no joint matches the model's skeleton (name the pairs in RetargetJoints)";
-				set->m_Problems.push_back(fmt::format("clip library '{}': {}", library.Mesh, library.Error));
+				library.Error = "no joint matches the model's skeleton (pair them in the library's Joints)";
 				continue;
 			}
 			for (const AnimationClip& clip : library.Source->Animations)
@@ -45,22 +61,50 @@ namespace Basalt {
 					library.Shadowed.push_back(clip.Name);
 					continue;
 				}
-				AnimationClip baked;
 				std::string error;
-				if (!Retargeting::BakeClip(*model, *library.Source, library.Map, clip, baked, error))
+				if (!Retargeting::CheckBakeBudget(model, *library.Source, library.Map, clip, error))
 				{
-					set->m_Problems.push_back(fmt::format("clip library '{}': clip '{}': {}", library.Mesh, clip.Name, error));
+					library.Warnings.push_back(fmt::format("clip '{}': {}", clip.Name, error));
 					continue;
 				}
 				names.insert(clip.Name);
 				library.Clips.push_back(clip.Name);
-				set->m_Baked.push_back(std::move(baked));
-				set->m_Origins.push_back(static_cast<int32_t>(index));
 			}
-			if (!library.Shadowed.empty())
-				set->m_Problems.push_back(fmt::format("clip library '{}': the model or an earlier library already has clip{} {}", library.Mesh, library.Shadowed.size() > 1 ? "s" : "", fmt::join(library.Shadowed, ", ")));
+		}
+	}
+
+	Ref<const AnimationClipSet> AnimationClipSet::Build(const Ref<MeshSource>& model, std::vector<Library> libraries)
+	{
+		Plan(*model, libraries);
+		auto set = CreateRef<AnimationClipSet>();
+		set->m_Model = model;
+		set->m_ModelClips = model->Animations.size();
+		size_t floats = 0;
+		for (Library& library : libraries)
+		{
+			std::vector<std::string> baked;
+			for (const std::string& name : library.Clips)
+			{
+				const AnimationClip& clip = *std::ranges::find(library.Source->Animations, name, &AnimationClip::Name);
+				AnimationClip result;
+				std::string error;
+				if (!Retargeting::BakeClip(*model, *library.Source, library.Map, clip, result, library.Warnings, error))
+					library.Warnings.push_back(fmt::format("clip '{}' cannot be retargeted: {}", name, error));
+				else if (result.Tracks.empty())
+					library.Warnings.push_back(fmt::format("clip '{}' moves no joint paired with the model, so it is left out", name));
+				else if (const size_t size = BakedFloats(result); size > MaxBakedFloats - floats)
+					library.Warnings.push_back(fmt::format("clip '{}' is left out: the Animator's retargeted clips would exceed {} MiB", name, MaxBakedFloats * sizeof(float) / (size_t{ 1024 } * 1024)));
+				else
+				{
+					floats += size;
+					baked.push_back(name);
+					set->m_Baked.push_back(std::move(result));
+				}
+			}
+			library.Clips = std::move(baked);
 		}
 		set->m_Libraries = std::move(libraries);
+		set->m_Memory.Resize(floats * sizeof(float));
 		return set;
 	}
 
@@ -74,6 +118,11 @@ namespace Basalt {
 			if ((*this)[static_cast<int32_t>(i)].Name == name)
 				return static_cast<int32_t>(i);
 		return -1;
+	}
+
+	bool AnimationClipSet::Matches(const Ref<MeshSource>& model, const std::vector<Library>& loaded) const
+	{
+		return model == m_Model && std::ranges::equal(loaded, m_Libraries, [](const Library& a, const Library& b) { return a.Index == b.Index && a.Entry == b.Entry && a.Source == b.Source; });
 	}
 
 }

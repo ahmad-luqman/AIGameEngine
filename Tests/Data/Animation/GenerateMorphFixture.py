@@ -1,6 +1,6 @@
 """Rebuild the morph target model in Animation, FeatureTest and the FuzzGltf corpus.
 Face is a skinned 3x3 grid facing +Z with two named targets: Smile pushes the middle row toward +Z (with NORMAL
-deltas) and Blink, a sparse target without NORMAL deltas, tilts the top row back. Teeth is a rigid triangle under the Head
+deltas) and Blink, a sparse target without NORMAL deltas, pushes the top row back (-Z), tilting the upper quads. Teeth is a rigid triangle under the Head
 joint whose single target is also named Smile. The Face node overrides the mesh's default weights.
 """
 import base64
@@ -93,3 +93,4 @@ feature = root.parent / 'FeatureTest/Assets/Models/Morph.gltf'
 feature.parent.mkdir(parents=True, exist_ok=True)
 feature.write_text(text)
 (root.parents[1] / 'Fuzz/Corpus/FuzzGltf/Morph.gltf').write_bytes(b'\0' + text.encode())
+

@@ -34,6 +34,7 @@
 #include <cmath>
 #include <map>
 #include <variant>
+#include <set>
 #include <unordered_set>
 
 namespace Basalt {
@@ -118,8 +119,12 @@ namespace Basalt {
 		constexpr uint32_t SSAOKernelSize = 24;
 		constexpr uint32_t MaxLights = MaxSceneLights;
 		constexpr uint64_t MaterialSetRetentionFrames = 120;
-		// Morph targets one draw blends at most (the vertex shader's loop); weaker ones are dropped.
+		// Morph targets one draw blends at most, bounding the vertex shader's per-vertex loop; the weakest (by |weight|)
+		// are dropped.
 		constexpr size_t MaxActiveMorphWeights = 32;
+		// (target, weight) pairs per draw record: Model's and Normal's columns hold two each (Morphing.glsl).
+		constexpr size_t MorphPairsPerRecord = 16;
+		static_assert(MaxMorphTargets < (1u << 24), "morph target indices travel exactly as floats");
 		constexpr uint32_t ParticleTextureSize = 64;
 		// Billboards drawn per frame, at most (a 32 MB upload; the buffer grows to twice that); beyond it whole
 		// emitters are skipped.
@@ -219,6 +224,7 @@ namespace Basalt {
 			glm::uvec4 Morph; // Morphing.glsl: first weight record, active weights, delta texel base, texels per target.
 		};
 		static_assert(sizeof(GpuDrawData) == 160);
+		static_assert(16 * sizeof(glm::vec2) == sizeof(GpuDrawData::Model) + sizeof(GpuDrawData::Normal), "a record's matrices hold 16 morph pairs");
 
 		struct GpuMaterialData
 		{
@@ -313,7 +319,7 @@ namespace Basalt {
 			uint32_t DrawIndex = 0;
 			uint32_t BatchOrder = 0;
 			nvrhi::IBindingSet* MaterialSet = nullptr;
-			// The mesh's morph target set (or the shared empty one), so it follows the Mesh in DrawBatchKey.
+			// The mesh's morph binding set (or the shared empty one). One per Mesh, so DrawBatchKey needs no entry for it.
 			nvrhi::IBindingSet* MorphSet = nullptr;
 			bool Blend = false;
 			bool DoubleSided = false;
@@ -524,8 +530,9 @@ namespace Basalt {
 		std::map<nvrhi::ITexture*, CachedBindingSet> ParticleSets;
 		// Keyed by morph delta texture (the empty one for meshes without morph targets).
 		std::map<nvrhi::ITexture*, CachedBindingSet> MorphSets;
-		// Entities whose active morph weights exceeded MaxActiveMorphWeights, warned once each.
-		std::unordered_set<UUID> ReportedMorphTruncation;
+		// Entity meshes whose active morph weights exceed MaxActiveMorphWeights, warned once until they fit again.
+		std::set<std::pair<UUID, uint32_t>> ReportedMorphTruncation;
+		bool ReportedMorphSetFailure = false;
 
 		// Per-frame scratch, kept to avoid reallocating every frame.
 		std::vector<GpuDrawData> Draws;
@@ -924,7 +931,7 @@ namespace Basalt {
 		impl.CommandList->close();
 		device->executeCommandList(impl.CommandList);
 
-		const bool valid = impl.MorphLayout && impl.ShadowFrameLayout && impl.LocalShadowPipeline && impl.LocalShadowMaskedPipeline && impl.MeshInputLayout && impl.ShadowInputLayout && impl.FrameLayout && impl.MaterialLayout && impl.SsaoLayout && impl.BlurLayout && impl.TextureSamplerLayout && impl.ComputeLayout && impl.ShadowMap && impl.ShadowPipeline && impl.ShadowMaskedPipeline && impl.ShadowMaskedInputLayout && impl.EquirectPipeline && impl.SkyPipeline && impl.IrradiancePipeline && impl.PrefilterPipeline && impl.BrdfPipeline && impl.DownsamplePipeline && impl.ViewConstantsBuffer && impl.ParticleLayout && impl.ParticleTexture;
+		const bool valid = impl.MorphLayout && m_Resources->GetEmptyMorphTexture() && impl.ShadowFrameLayout && impl.LocalShadowPipeline && impl.LocalShadowMaskedPipeline && impl.MeshInputLayout && impl.ShadowInputLayout && impl.FrameLayout && impl.MaterialLayout && impl.SsaoLayout && impl.BlurLayout && impl.TextureSamplerLayout && impl.ComputeLayout && impl.ShadowMap && impl.ShadowPipeline && impl.ShadowMaskedPipeline && impl.ShadowMaskedInputLayout && impl.EquirectPipeline && impl.SkyPipeline && impl.IrradiancePipeline && impl.PrefilterPipeline && impl.BrdfPipeline && impl.DownsamplePipeline && impl.ViewConstantsBuffer && impl.ParticleLayout && impl.ParticleTexture;
 		if (!valid)
 			BS_CORE_ERROR("SceneRenderer: failed to create GPU resources");
 		return valid;
@@ -1738,22 +1745,28 @@ namespace Basalt {
 
 		bool morphSetFailed = false;
 		auto morphSet = [&](nvrhi::ITexture* deltas) -> nvrhi::IBindingSet* {
-			auto [it, inserted] = impl.MorphSets.try_emplace(deltas);
-			if (inserted)
-				it->second.Set = m_Device->createBindingSet(nvrhi::BindingSetDesc()
-																.addItem(nvrhi::BindingSetItem::Texture_SRV(0, deltas))
-																.addItem(nvrhi::BindingSetItem::Sampler(1, impl.PointClamp)),
-															impl.MorphLayout);
-			if (!it->second.Set)
+			if (morphSetFailed)
+				return nullptr;
+			if (auto it = impl.MorphSets.find(deltas); it != impl.MorphSets.end())
 			{
-				impl.MorphSets.erase(it);
-				if (!morphSetFailed)
+				it->second.LastUsed = impl.FrameCounter;
+				return it->second.Set;
+			}
+			nvrhi::BindingSetHandle set = deltas ? m_Device->createBindingSet(nvrhi::BindingSetDesc()
+																				  .addItem(nvrhi::BindingSetItem::Texture_SRV(0, deltas))
+																				  .addItem(nvrhi::BindingSetItem::Sampler(1, impl.PointClamp)),
+																			  impl.MorphLayout)
+												 : nullptr;
+			if (!set)
+			{
+				if (!impl.ReportedMorphSetFailure)
 					BS_CORE_ERROR("SceneRenderer: failed to create a morph target binding set; frame aborted");
+				impl.ReportedMorphSetFailure = true;
 				morphSetFailed = true;
 				return nullptr;
 			}
-			it->second.LastUsed = impl.FrameCounter;
-			return it->second.Set;
+			impl.MorphSets[deltas] = { set, impl.FrameCounter };
+			return set;
 		};
 		// A mesh node's active morph weights, uploaded once per frame like a palette: the first record and pair count.
 		struct MorphUpload
@@ -1761,40 +1774,37 @@ namespace Basalt {
 			uint32_t Record = UINT32_MAX;
 			uint32_t Count = 0;
 		};
-		auto uploadMorphWeights = [&](Entity entity, std::span<const float> weights, MorphUpload& upload) {
+		std::vector<uint32_t> activeMorphs;
+		auto uploadMorphWeights = [&](Entity entity, const MeshData& mesh, uint32_t meshIndex, std::span<const float> weights, MorphUpload& upload) {
 			if (upload.Record != UINT32_MAX)
 				return;
 			upload.Record = static_cast<uint32_t>(draws.size());
-			std::vector<uint32_t> active;
-			for (uint32_t target = 0; target < weights.size(); target++)
-				if (weights[target] != 0.0f && std::isfinite(weights[target]))
-					active.push_back(target);
 			// The vertex shader loops over the active targets: keep the strongest when there are too many.
-			std::stable_sort(active.begin(), active.end(), [&](uint32_t a, uint32_t b) { return std::abs(weights[a]) > std::abs(weights[b]); });
-			if (active.size() > MaxActiveMorphWeights)
+			const size_t dropped = SelectMorphWeights(weights, MaxActiveMorphWeights, activeMorphs);
+			m_Statistics.MorphWeightsDropped += static_cast<uint32_t>(dropped);
+			// Warned once per episode for each entity's mesh: again after a frame within the limit.
+			const std::pair<UUID, uint32_t> key{ entity.GetUUID(), meshIndex };
+			if (dropped == 0)
+				impl.ReportedMorphTruncation.erase(key);
+			else if (impl.ReportedMorphTruncation.insert(key).second)
+				BS_CORE_WARN("SceneRenderer: mesh '{}' of '{}' has {} active morph targets; drawing the {} strongest", mesh.Name, entity.GetName(), activeMorphs.size() + dropped, MaxActiveMorphWeights);
+			upload.Count = static_cast<uint32_t>(activeMorphs.size());
+			for (size_t pair = 0; pair < activeMorphs.size(); pair++)
 			{
-				if (impl.ReportedMorphTruncation.insert(entity.GetUUID()).second)
-					BS_CORE_WARN("SceneRenderer: '{}' has {} active morph targets; drawing the {} strongest", entity.GetName(), active.size(), MaxActiveMorphWeights);
-				active.resize(MaxActiveMorphWeights);
-			}
-			upload.Count = static_cast<uint32_t>(active.size());
-			for (size_t pair = 0; pair < active.size(); pair++)
-			{
-				if (pair % 16 == 0)
+				if (pair % MorphPairsPerRecord == 0)
 					draws.push_back({});
-				glm::mat4& matrix = pair % 16 < 8 ? draws.back().Model : draws.back().Normal;
-				glm::vec4& column = matrix[static_cast<int>(pair % 8 / 2)];
-				const glm::vec2 value(static_cast<float>(active[pair]), weights[active[pair]]);
-				if (pair % 2 == 0)
-					column = glm::vec4(value, column.z, column.w);
-				else
-					column = glm::vec4(column.x, column.y, value);
+				// Morphing.glsl's MorphWeight reads pairs 0-7 from Model's columns and 8-15 from Normal's, two per column.
+				const size_t slot = pair % MorphPairsPerRecord;
+				glm::vec4& column = (slot < 8 ? draws.back().Model : draws.back().Normal)[static_cast<int>(slot % 8 / 2)];
+				const int lane = static_cast<int>(slot % 2) * 2;
+				column[lane] = static_cast<float>(activeMorphs[pair]);
+				column[lane + 1] = weights[activeMorphs[pair]];
 			}
 			m_Statistics.MorphWeights += upload.Count;
 		};
 
 		const glm::vec3 cameraForward = -glm::vec3(view.InverseView[2]);
-		auto addMesh = [&](Entity entity, const Ref<MeshSource>& source, uint32_t meshIndex, const glm::mat4& model, bool castShadows, float lodDistance, const std::vector<glm::mat4>& palette, uint32_t& paletteOffset, std::span<const float> morphWeights, MorphUpload& morphUpload) {
+		auto addMesh = [&](Entity entity, const Ref<MeshSource>& source, uint32_t meshIndex, const glm::mat4& model, bool castShadows, float lodDistance, const std::vector<glm::mat4>& palette, uint32_t& paletteOffset, std::span<const float> morphWeights) {
 			if (!source || meshIndex >= source->Meshes.size())
 				return;
 			const GpuMesh* gpuMesh = m_Resources->GetMesh(source, commandList);
@@ -1803,6 +1813,7 @@ namespace Basalt {
 			// Static meshes draw their mesh's default weights; animated nodes pass the pose's.
 			if (morphWeights.empty())
 				morphWeights = source->Meshes[meshIndex].MorphWeights;
+			MorphUpload morphUpload;
 			nvrhi::IBindingSet* meshMorphSet = morphSet(gpuMesh->MorphDeltas ? gpuMesh->MorphDeltas.Get() : m_Resources->GetEmptyMorphTexture());
 			if (!meshMorphSet)
 				return;
@@ -1845,12 +1856,11 @@ namespace Basalt {
 			{
 				const Submesh& submesh = source->Submeshes[submeshIndex];
 				AABB bounds = palette.empty() ? submesh.Bounds : CachedSkinBounds(*source, submesh, palette, morphWeights);
-				if (palette.empty())
-					if (const AABB morph = MorphDisplacementBounds(submesh, morphWeights); morph.IsValid() && bounds.IsValid())
-					{
-						bounds.Min += morph.Min;
-						bounds.Max += morph.Max;
-					}
+				if (const AABB morph = palette.empty() ? MorphDisplacementBounds(submesh, morphWeights) : AABB(); morph.IsValid() && bounds.IsValid())
+				{
+					bounds.Min += morph.Min;
+					bounds.Max += morph.Max;
+				}
 				const AABB worldBounds = bounds.Transformed(model);
 				const bool visible = frustum.Intersects(worldBounds);
 				auto intersectsAny = [&](const std::vector<Frustum>& frusta) {
@@ -1915,7 +1925,8 @@ namespace Basalt {
 				glm::uvec4 morph(0);
 				if (submesh.MorphTargetCount > 0 && gpuMesh->MorphDeltas)
 				{
-					uploadMorphWeights(entity, morphWeights, morphUpload);
+					BS_CORE_ASSERT(morphWeights.size() == submesh.MorphTargetCount, "FinalizeHierarchy matches mesh, node and submesh target counts");
+					uploadMorphWeights(entity, source->Meshes[meshIndex], meshIndex, morphWeights, morphUpload);
 					// Unsigned wraparound: gl_VertexIndex includes BaseVertex, which the base subtracts again.
 					if (morphUpload.Count > 0)
 						morph = glm::uvec4(morphUpload.Record, morphUpload.Count, 2u * submesh.MorphDeltaOffset - 2u * submesh.BaseVertex, 2u * submesh.VertexCount);
@@ -1972,8 +1983,7 @@ namespace Basalt {
 					entry->second.Source = m_PlaceholderMesh;
 			}
 			const auto& resolved = entry->second;
-			MorphUpload morphUpload;
-			addMesh(entity, resolved.Source, resolved.Placeholder ? 0 : component.MeshIndex, scene.GetWorldTransform(entity), component.CastShadows, component.LODDistance, {}, unusedPaletteOffset, {}, morphUpload);
+			addMesh(entity, resolved.Source, resolved.Placeholder ? 0 : component.MeshIndex, scene.GetWorldTransform(entity), component.CastShadows, component.LODDistance, {}, unusedPaletteOffset, {});
 		}
 		for (auto handle : scene.GetAllEntitiesWith<AnimatorComponent>())
 		{
@@ -1982,8 +1992,7 @@ namespace Basalt {
 			std::unordered_map<int32_t, uint32_t> paletteOffsets;
 			ForEachAnimatedMesh(entity, [&](const Ref<MeshSource>& source, const MeshNode& node, const glm::mat4& model, const std::vector<glm::mat4>& palette, std::span<const float> morphWeights) {
 				uint32_t& offset = node.SkinIndex < 0 ? unusedPaletteOffset : paletteOffsets.try_emplace(node.SkinIndex, UINT32_MAX).first->second;
-				MorphUpload morphUpload;
-				addMesh(entity, source, static_cast<uint32_t>(node.MeshIndex), model, component.CastShadows, 0, palette, offset, morphWeights, morphUpload);
+				addMesh(entity, source, static_cast<uint32_t>(node.MeshIndex), model, component.CastShadows, 0, palette, offset, morphWeights);
 			});
 		}
 		if (materialSetFailed || morphSetFailed)
@@ -1993,6 +2002,7 @@ namespace Basalt {
 			return;
 		}
 		impl.ReportedMaterialSetFailure = false;
+		impl.ReportedMorphSetFailure = false;
 		m_Statistics.Materials = static_cast<uint32_t>(materials.size());
 		if (m_InstancingEnabled)
 		{
@@ -2008,7 +2018,7 @@ namespace Basalt {
 				return !a.Blend && a.BatchOrder < b.BatchOrder;
 			});
 		}
-		// Palettes precede contiguous instance records. Staging the models separately avoids dead
+		// Palettes and morph weight records precede contiguous instance records. Staging the models separately avoids dead
 		// copies in the uploaded buffer; picking, shadows and lighting all read the same records.
 		draws.reserve(draws.size() + items.size());
 		for (DrawItem& item : items)
@@ -2204,6 +2214,7 @@ namespace Basalt {
 				while (m_InstancingEnabled && i < items.size() && accepts(items[i]) &&
 					   CanInstanceDraw(firstKey, first.DrawIndex, count, items[i].Key(), items[i].DrawIndex))
 				{
+					BS_CORE_ASSERT(items[i].MorphSet == first.MorphSet, "a batch shares its mesh's morph set");
 					++count;
 					++i;
 				}

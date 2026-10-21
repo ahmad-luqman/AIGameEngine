@@ -69,12 +69,15 @@ an earlier location until the next save; UUID resolution remains authoritative.
 ## Morph targets
 
 The importer keeps each primitive's morph target POSITION and NORMAL deltas (dense or sparse accessors, float or
-normalized integers), target names from `extras.targetNames` (unnamed: `Target<n>`, duplicates get `_1` suffixes),
-default weights from `mesh.weights` and per-node overrides from `node.weights`. A target without NORMAL deltas gets the
-change in generated normals between the base and fully morphed surface; TANGENT deltas are ignored. Deltas follow their
-vertices through the vertex-fetch optimization. Every primitive of a mesh must have the same number of targets; a mesh
-holds at most 256 and a model 4,194,304 deltas (targets times vertices). glTF `weights` animation channels import as
-clip tracks. Rendering is described in [Rendering.md](Rendering.md#morph-targets).
+normalized integers), target names from `extras.targetNames` (unnamed: `Target<n>`; duplicates get `_1`, `_2`, ...
+suffixes, with a warning), default weights from `mesh.weights` and per-node overrides from `node.weights`. A target
+without NORMAL deltas gets the change in generated normals between the base and fully morphed surface; TANGENT deltas are
+ignored, and other target attributes are dropped with a warning. Deltas follow their vertices through the vertex-fetch
+optimization. Every primitive of a mesh must have the same number of targets, and weight and name counts must match it
+(cgltf's validation rejects the file otherwise). A mesh with more than 256 targets, or whose deltas (targets times
+vertices) would take the model past 4,194,304, imports without its targets (with a warning), keeping its geometry.
+glTF `weights` animation channels import as clip tracks, and `asset.import_model` puts an Animator on the root of a model
+with morph targets. Rendering is described in [Rendering.md](Rendering.md#morph-targets).
 
 ## Compressed textures and extended glTF materials
 

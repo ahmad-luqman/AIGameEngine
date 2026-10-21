@@ -432,15 +432,13 @@ namespace Basalt {
 					for (const auto& [component, fields] : components->items())
 						if (fields.is_object())
 						{
-							const auto* info = ComponentRegistry::Find(component);
-							for (const auto& [field, value] : fields.items())
-								if (value.is_string() || (info && std::find(info->AssetFields.begin(), info->AssetFields.end(), field) != info->AssetFields.end()))
-									AddReferenceDependencies(m_ProjectDirectory, assets, value, dependencies);
-							// UUID references inside lists (e.g. an Animator's clip libraries).
-							if (info)
+							// Declared asset fields (UUID references included, in lists too), then any other path-like string.
+							if (const auto* info = ComponentRegistry::Find(component))
 								for (const auto& assetField : info->AssetFields)
-									if (assetField.find("[].") != std::string::npos)
-										ForEachAssetValue(fields, assetField, [&](const nlohmann::json& value, const std::string&) { AddReferenceDependencies(m_ProjectDirectory, assets, value, dependencies); });
+									ForEachAssetValue(fields, assetField, [&](const nlohmann::json& value, const std::string&) { AddReferenceDependencies(m_ProjectDirectory, assets, value, dependencies); });
+							for (const auto& [field, value] : fields.items())
+								if (value.is_string())
+									AddReferenceDependencies(m_ProjectDirectory, assets, value, dependencies);
 						}
 				}
 				break;

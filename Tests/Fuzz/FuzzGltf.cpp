@@ -2,6 +2,7 @@
 // model), so each input is written to a scratch file inside a scratch project.
 #include "FuzzCommon.h"
 
+#include <Basalt/Animation/AnimationClipSet.h>
 #include <Basalt/Animation/AnimationPose.h>
 #include <Basalt/Asset/MeshImporter.h>
 #include <Basalt/Core/FileSystem.h>
@@ -35,6 +36,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 	Basalt::FileSystem::WriteBinaryFile(path, data + 1, size - 1);
 	std::string error;
 	const auto source = Basalt::MeshImporter::LoadGltf(path, binary ? "Fuzz.glb" : "Fuzz.gltf", error);
+	// Library glTFs are untrusted too: retarget the model's clips onto itself.
+	if (source && !source->AnimationUnsupported)
+		Basalt::AnimationClipSet::Build(source, { Basalt::AnimationClipSet::Library{ .Entry = { .Mesh = "Fuzz.gltf" }, .Source = source } });
 	if (source)
 		for (const auto& clip : source->Animations)
 		{

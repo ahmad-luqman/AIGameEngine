@@ -153,6 +153,7 @@ namespace Basalt {
 			{ "culledSubmeshes", statistics.CulledSubmeshes },
 			{ "skinMatrices", statistics.SkinMatrices },
 			{ "morphWeights", statistics.MorphWeights },
+			{ "morphWeightsDropped", statistics.MorphWeightsDropped },
 			{ "particles", statistics.Particles },
 			{ "particlesSkipped", statistics.ParticlesSkipped },
 			{ "lights", statistics.Lights },

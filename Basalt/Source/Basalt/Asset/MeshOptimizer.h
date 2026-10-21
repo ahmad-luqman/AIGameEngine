@@ -5,9 +5,10 @@
 namespace Basalt {
 
 	// Import-time geometry processing, before publication or GPU upload. Vertex records move together.
-	// Blended primitives retain triangle order; skinned primitives receive no reduced LODs.
+	// Blended primitives retain triangle order; skinned and morphed primitives receive no reduced LODs.
 	namespace MeshOptimizer {
-		// Rejects empty, malformed or non-finite geometry without changing any buffer. Morph deltas (morphTargets *
+		// Rejects empty, malformed or non-finite geometry, or a morph delta buffer of the wrong size, without changing any
+		// buffer. Morph deltas (morphTargets *
 		// vertices.size(), target-major) follow their vertices through the reorder and the removal of unused vertices.
 		bool Optimize(std::vector<Vertex>& vertices, std::vector<uint32_t>& indices, bool reorderTriangles, std::vector<MorphDelta>* morphDeltas = nullptr, uint32_t morphTargets = 0);
 		// Appends reduced ranges for an unpublished static, non-blended submesh, once.
