@@ -230,6 +230,7 @@ namespace Basalt {
 		AudioSystem* GetAudioSystem() const { return m_AudioSystem.get(); }
 		// Null in Edit mode; owned by the current Play/Simulate session.
 		AnimationSystem* GetAnimationSystem() const { return m_AnimationSystem.get(); }
+		// Null in Edit; clocks belong to the current Play/Simulate session.
 		PropertyAnimationSystem* GetPropertyAnimationSystem() const { return m_PropertyAnimationSystem.get(); }
 		// Session particles, or the isolated edit preview created by UpdateParticlePreview.
 		ParticleSystem* GetParticleSystem() const { return m_ParticleSystem ? m_ParticleSystem.get() : m_ParticlePreview.get(); }

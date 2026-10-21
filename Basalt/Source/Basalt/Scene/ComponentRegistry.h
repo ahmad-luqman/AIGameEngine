@@ -43,6 +43,8 @@ namespace Basalt {
 		// List only: the largest accepted length and the shape of every element.
 		uint32_t MaxCount = 0;
 		std::shared_ptr<const ComponentObjectSchema> Element;
+		// A quaternion serialized as three Euler degrees; property tracks interpolate its orientation with slerp.
+		bool QuaternionRotation = false;
 
 		static ComponentFieldType List(uint32_t maxCount, std::shared_ptr<const ComponentObjectSchema> element);
 
@@ -87,6 +89,9 @@ namespace Basalt {
 		std::string Name;
 		// Core components (Tag, Transform) exist on every entity and cannot be added or removed.
 		bool IsCore = false;
+		// False for physics configuration components whose update signals reconstruct bodies/constraints.
+		// Their transforms can still be animated through Transform on kinematic entities.
+		bool SupportsPropertyAnimation = true;
 
 		std::function<bool(Entity)> Has;
 		// Adds a default-constructed component if missing.

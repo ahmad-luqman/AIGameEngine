@@ -1,5 +1,4 @@
 #include "EditorLayer.h"
-#include "Basalt/Automation/CommandSchema.h"
 
 #include "EditorColors.h"
 #include "UIRectHandles.h"
@@ -634,7 +633,7 @@ namespace Basalt {
 								 return nlohmann::json{ { "output", params["output"] }, { "width", image->Width }, { "height", image->Height } };
 							 } });
 
-		m_Commands.Register({ "editor.animation_graph", "Opens a .banimgraph in the Animation Graph panel; close discards its draft. Opening another graph with unsaved edits fails. Returns open, path, dirty, valid and problem. Graph files are authored with asset.write.", EditorCommandSchemas::AnimationGraph(), [this](AutomationSession&, const nlohmann::json& params) {
+		m_Commands.Register({ "editor.animation_graph", "Opens a .banimgraph in the Animation Graph panel; close discards its draft. Opening another graph with unsaved edits fails. Returns open, path, dirty, valid, problem, externalChange and error. Graph files are authored with asset.write.", EditorCommandSchemas::AnimationGraph(), [this](AutomationSession&, const nlohmann::json& params) {
 								 if (params.value("close", false))
 									 m_AnimationGraphPanel.Reset();
 								 std::string error;
@@ -642,7 +641,7 @@ namespace Basalt {
 									 throw CommandError(error);
 								 const auto& draft = m_AnimationGraphPanel.GetDraft();
 								 const bool valid = !draft.Path.empty() && draft.Validate(error);
-								 return nlohmann::json{ { "open", !draft.Path.empty() }, { "path", draft.Path }, { "dirty", draft.IsDirty() }, { "valid", valid }, { "problem", error } };
+								 return nlohmann::json{ { "open", !draft.Path.empty() }, { "path", draft.Path }, { "dirty", m_AnimationGraphPanel.IsDirty() }, { "valid", valid }, { "problem", error }, { "externalChange", draft.ExternalChange }, { "error", m_AnimationGraphPanel.GetError() } };
 							 } });
 
 		m_Commands.Register({ "editor.material_editor", "Opens a material file in the Material Editor window (as double-clicking it in the Content Browser does); with close, first closes the window, discarding unsaved edits (both may be given). Opening fails while another material has unsaved edits. Returns {open, path, dirty, valid, problem, externalChange, error, warnings}: valid says whether the edited values form a material (problem says why not), externalChange that the file changed on disk under unsaved edits, error is the window's message (a failed save, an unreadable change on disk) and warnings what loading or the last save reported.", EditorCommandSchemas::MaterialEditor(), [this](AutomationSession&, const nlohmann::json& params) {
@@ -1136,12 +1135,6 @@ namespace Basalt {
 			result = m_Context.Execute("component.set", { { "entity", static_cast<uint64_t>(m_Session.GetSelection()) }, { "component", "Script" }, { "data", { { "Script", path } } } });
 		else if (extension == ".hdr")
 			result = m_Context.Execute("entity.create", { { "name", "Sky" }, { "components", { { "SkyLight", { { "EnvironmentMap", path } } } } } });
-		else if (FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(path)) == ".banimgraph")
-		{
-			std::string error;
-			if (!m_AnimationGraphPanel.Open(path, error))
-				m_Context.SetStatus(error, true);
-		}
 		else if (MaterialAsset::IsMaterialFile(path))
 		{
 			if (!m_Session.GetSelection().IsValid())
@@ -1571,9 +1564,9 @@ namespace Basalt {
 		m_InspectorPanel.OnImGuiRender();
 		m_ContentBrowserPanel.OnImGuiRender();
 		m_MaterialEditorPanel.OnImGuiRender();
-		DockNextToOnFirstUse("Animation Graph", EditorCommandSchemas::ViewportTitle);
+		DockNextToOnFirstUse(EditorCommandSchemas::AnimationGraphTitle, EditorCommandSchemas::ViewportTitle);
 		m_AnimationGraphPanel.OnImGuiRender();
-		DockNextToOnFirstUse("Property Animation", EditorCommandSchemas::InspectorTitle);
+		DockNextToOnFirstUse(EditorCommandSchemas::PropertyAnimationTitle, EditorCommandSchemas::InspectorTitle);
 		m_PropertyAnimationPanel.OnImGuiRender();
 		m_ConsolePanel.OnImGuiRender();
 		DrawSceneSettingsPanel();

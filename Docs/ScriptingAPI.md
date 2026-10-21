@@ -176,6 +176,7 @@ Entity handles store an ID and stay safe to hold: using a destroyed entity raise
 | `e:GetAudioDopplerPitch()` | The Doppler pitch factor of the AudioSource from the last update (the shift its next mix applies): 1 = unshifted, also while it is not playing or for a non-spatial source |
 | `e:PlayParticles()`, `e:StopParticles([clear])`, `e:EmitParticles(count)` | The entity's ParticleEmitter (see Particles; `clear` is a boolean). Errors without a ParticleEmitter |
 | `e:IsEmittingParticles()`, `e:GetParticleCount()` | Whether the ParticleEmitter is playing, and its live particles (false/0 without one) |
+| `e:ControlPropertyAnimation(action, [time])`, `e:GetPropertyAnimationStatus()` | Numeric property timeline controls and status; see Property animation |
 | `e:PlayAnimation([clip])`, `e:CrossFadeAnimation(clip, seconds)`, `e:BlendAnimations(first, second, weight)` | Animator playback and transitions; see Skeletal animation |
 | `e:PauseAnimation([paused])`, `e:StopAnimation()`, `e:SetAnimationTime(seconds)` | Animator pause, stop and seek |
 | `e:GetAnimationClips()`, `e:GetAnimationTime()`, `e:GetAnimationDuration()`, `e:IsAnimationPlaying()` | Animator queries |
@@ -1172,20 +1173,26 @@ Property Animation editor panel lists existing components and numeric fields fro
 Capture Key records the current serialized value at the normalized timeline cursor; Sample/scrubbing
 applies the timeline to the current scene and supports editor Undo. The inspector exposes the same
 Duration, Speed, Looping, PlayOnStart, Tracks, Stepped and Keys fields. Key Value is a four-lane vector:
-scalars use X and vector fields use the first N lanes. Rotation fields use the registry's degrees.
+scalars use X and vector fields use the first N lanes. Quaternion rotation fields are identified by registry
+metadata (`quaternionRotations` in `component.types`): keys hold Euler degrees, but sampling uses shortest-arc
+quaternion slerp, including rotations beyond 90° and across ±180°. Use intermediate keys for turns exceeding
+180°. Stepped rotation tracks hold the preceding orientation. Scalar angles remain ordinary numeric tracks.
 Empty tracks do nothing; targets must exist when sampling. Integer, boolean, string, entity, asset,
-object and nested list fields are excluded.
+object and nested list fields are excluded. The registry also excludes physics configuration components
+(RigidBody, all colliders, Joint and CharacterController): their update signals reconstruct physics objects
+and reset contacts. Animate Transform on a kinematic rigid body to move a physics platform or door.
 
 Keys use strictly increasing normalized Time in [0,1], with a maximum of 256 keys per track and 64
-tracks per entity. Repeated targets use the last nonempty track; key capture edits that winning track. Sampling holds the first/last value outside the keys'
+tracks per entity. Repeated targets use the last nonempty track. Key capture edits that winning track,
+falling back to the last matching empty track only when all matches are empty. Sampling holds the first/last value outside the keys'
 interval. Linear interpolation is the default; Stepped holds the left key until the next key's time.
-Every patch uses the component's existing validator and update signals. Fields of the same component
+Changed samples use the component's existing validator and update signals; unchanged values emit no update. Fields of the same component
 are applied together; when a component rejects its patch, earlier components may already have changed.
 No missing target component is implicitly added.
 
 Playback runs after script OnUpdate and before skeletal animation and physics in Play/Simulate.
 Consequently a dynamic body, skeletal root motion, IK or a later script can override the sampled transform.
-Clocks belong to the running scene, respect scene pause/stepping, and never serialize. Component patches
+Clocks belong to the running scene, respect scene pause/stepping, and never serialize. PropertyAnimation patches
 restart the clock according to PlayOnStart. Duration is seconds in (0,86400], Speed is [0,1000].
 Nonlooping playback holds its final sample and stops; looping playback wraps to zero at Duration.
 A failed sample logs once and suspends that timeline until its component is edited or a successful
@@ -1194,8 +1201,11 @@ Play/Stop/Seek repairs it. Other entities' timelines continue.
 `e:ControlPropertyAnimation(action, [time])` returns true on success and raises on invalid input or
 sampling failure. Actions are `Play` (restart and sample zero), `Pause`, `Resume`, `Stop` (sample zero
 and stop), and `Seek` (sample normalized time in [0,1] without changing play/pause). Time defaults to
-zero. The entity needs a PropertyAnimation and a running Play/Simulate scene. Automation clients use
-`animation.control` (also supports `Status`, returning normalized time, playing and failed),
+zero. Pause/Resume reject suspended timelines with an error explaining the repair actions.
+`e:GetPropertyAnimationStatus()` returns `{time, playing, failed, error}` without creating a clock;
+`time` is normalized and `error` retains the last failure until a successful repair or component edit.
+The entity needs a PropertyAnimation and a running Play/Simulate scene. Automation clients use
+`animation.control` (also supports `Status`, returning normalized time, playing, failed and error),
 `animation.key` and `animation.sample`. The latter samples without changing the runtime clock.
 
 The Animation Graph panel opens `.banimgraph` files by Content Browser double-click or
@@ -1204,6 +1214,9 @@ or blend-space source, loop and root-motion flags and blend axes. Parameters and
 are edited below, including typed conditions, fade durations and optional exit times. Higher Priority
 and Lower Priority change transition array order. Renames update references; deleting a state deletes
 its edges, and deleting a parameter deletes dependent edges rather than broadening their conditions.
+Names commit when text editing finishes, so intermediate empty or colliding names can be typed; a refused
+rename reports an error and keeps the old name. `editor.animation_graph` reports externalChange and error
+alongside dirty/valid state.
 Undo Graph/Redo Graph navigate the draft history. Save validates through `AnimationGraph::FromJson` and
 `asset.write`; Revert reloads the file. Opening
 another graph with unsaved edits fails until Save/Revert. Clean drafts follow file reloads; dirty drafts
@@ -1698,8 +1711,8 @@ explicit self-transitions are rejected; any-state edges skip their own target. E
 update boundaries against time already played, including completed loops, so a large timestep cannot skip
 the exit. Finished non-looping states still check transitions; paused states do not. Zero-length states
 ignore ExitTime. A missing clip or unplayable blend space is reported and retried without consuming
-triggers. A partially resolved space can play its valid weighted samples, reporting the missing ones. A
-visual graph editor is a future feature.
+triggers. A partially resolved space can play its valid weighted samples, reporting the missing ones.
+The Animation Graph editor described under Property animation authors these files through `asset.write`.
 
 ```json
 {

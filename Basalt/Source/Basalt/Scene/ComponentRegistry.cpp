@@ -1,6 +1,6 @@
 #include "Basalt/Scene/ComponentRegistry.h"
-#include "Basalt/Animation/PropertyAnimation.h"
 
+#include "Basalt/Animation/PropertyAnimation.h"
 #include "Basalt/Asset/MaterialAsset.h"
 #include "Basalt/Audio/AudioRules.h"
 #include "Basalt/Core/EnumNames.h"
@@ -18,7 +18,6 @@
 #include <spdlog/fmt/ranges.h>
 
 #include <algorithm>
-#include <set>
 #include <array>
 #include <cmath>
 #include <iterator>
@@ -105,7 +104,9 @@ namespace Basalt {
 			// Rotation stored as Euler angles in degrees.
 			void RotationField(const char* name, glm::quat& value)
 			{
-				Describe(name, { ComponentFieldKind::Number, 3 });
+				ComponentFieldType type{ ComponentFieldKind::Number, 3 };
+				type.QuaternionRotation = true;
+				Describe(name, type);
 				const json* element = Find(name);
 				if (!element)
 					return;
@@ -571,7 +572,7 @@ namespace Basalt {
 			r.Field("Component", c.Component);
 			r.Field("Field", c.Field);
 			r.Field("Stepped", c.Stepped);
-			r.ListField("Keys", c.Keys, 256);
+			r.ListField("Keys", c.Keys, PropertyAnimationComponent::MaxKeys);
 		}
 		void Fields(FieldReader& r, PropertyAnimationComponent& c)
 		{
@@ -579,7 +580,7 @@ namespace Basalt {
 			r.Field("Speed", c.Speed);
 			r.Field("Looping", c.Looping);
 			r.Field("PlayOnStart", c.PlayOnStart);
-			r.ListField("Tracks", c.Tracks, 64);
+			r.ListField("Tracks", c.Tracks, PropertyAnimationComponent::MaxTracks);
 		}
 		void Fields(FieldReader& r, AnimationEvent& c)
 		{
@@ -2037,11 +2038,12 @@ namespace Basalt {
 		}
 
 		template<typename T>
-		ComponentInfo MakeInfo(const char* name, bool isCore = false)
+		ComponentInfo MakeInfo(const char* name, bool isCore = false, bool supportsPropertyAnimation = true)
 		{
 			ComponentInfo info;
 			info.Name = name;
 			info.IsCore = isCore;
+			info.SupportsPropertyAnimation = supportsPropertyAnimation;
 			CollectFields<T>(info);
 			info.Has = [](Entity entity) { return entity.HasComponent<T>(); };
 			info.Add = [](Entity entity) {
@@ -2152,7 +2154,7 @@ namespace Basalt {
 			infos.push_back(MakeCameraInfo());
 			infos.push_back(MakeInfo<MeshComponent>("Mesh"));
 			infos.push_back(MakeInfo<AnimatorComponent>("Animator"));
-			infos.push_back(MakeInfo<PropertyAnimationComponent>("PropertyAnimation"));
+			infos.push_back(MakeInfo<PropertyAnimationComponent>("PropertyAnimation", false, false));
 			infos.push_back(MakeInfo<BoneAttachmentComponent>("BoneAttachment"));
 			infos.push_back(MakeInfo<InverseKinematicsComponent>("InverseKinematics"));
 			infos.push_back(MakeInfo<SpringBoneComponent>("SpringBone"));
@@ -2162,13 +2164,13 @@ namespace Basalt {
 			infos.push_back(MakeInfo<SpotLightComponent>("SpotLight"));
 			infos.push_back(MakeInfo<SkyLightComponent>("SkyLight"));
 			infos.push_back(MakeInfo<PostProcessComponent>("PostProcess"));
-			infos.push_back(MakeInfo<RigidBodyComponent>("RigidBody"));
-			infos.push_back(MakeInfo<BoxColliderComponent>("BoxCollider"));
-			infos.push_back(MakeInfo<SphereColliderComponent>("SphereCollider"));
-			infos.push_back(MakeInfo<CapsuleColliderComponent>("CapsuleCollider"));
-			infos.push_back(MakeInfo<MeshColliderComponent>("MeshCollider"));
-			infos.push_back(MakeInfo<JointComponent>("Joint"));
-			infos.push_back(MakeInfo<CharacterControllerComponent>("CharacterController"));
+			infos.push_back(MakeInfo<RigidBodyComponent>("RigidBody", false, false));
+			infos.push_back(MakeInfo<BoxColliderComponent>("BoxCollider", false, false));
+			infos.push_back(MakeInfo<SphereColliderComponent>("SphereCollider", false, false));
+			infos.push_back(MakeInfo<CapsuleColliderComponent>("CapsuleCollider", false, false));
+			infos.push_back(MakeInfo<MeshColliderComponent>("MeshCollider", false, false));
+			infos.push_back(MakeInfo<JointComponent>("Joint", false, false));
+			infos.push_back(MakeInfo<CharacterControllerComponent>("CharacterController", false, false));
 			infos.push_back(MakeInfo<ScriptComponent>("Script"));
 			infos.push_back(MakeInfo<AudioSourceComponent>("AudioSource"));
 			infos.push_back(MakeInfo<AudioListenerComponent>("AudioListener"));

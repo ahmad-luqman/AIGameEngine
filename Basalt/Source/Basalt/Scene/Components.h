@@ -228,7 +228,7 @@ namespace Basalt {
 		std::vector<AnimationMaskJoint> Mask;
 	};
 
-	// One normalized-time sample; unused vector lanes are zero for scalar and shorter vector fields.
+	// One normalized-time sample. Capture zeros unused lanes; sampling ignores unused lanes.
 	struct PropertyAnimationKey
 	{
 		static constexpr const char* TypeName = "PropertyAnimationKey";
@@ -248,6 +248,8 @@ namespace Basalt {
 	// Authored property timelines. Playback clocks belong to PropertyAnimationSystem in Play/Simulate.
 	struct PropertyAnimationComponent
 	{
+		static constexpr uint32_t MaxTracks = 64;
+		static constexpr uint32_t MaxKeys = 256;
 		float Duration = 1;
 		float Speed = 1;
 		bool Looping = true;

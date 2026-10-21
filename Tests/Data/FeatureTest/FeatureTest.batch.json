@@ -40,6 +40,7 @@
 	{ "id": "property-check", "command": "assert.component", "params": {"entity": "PropertyProbe", "component": "Transform", "fields": {"Translation": [4,0,0]}} },
 	{ "id": "property-control", "command": "animation.control", "params": {"entity": "PropertyProbe", "action": "Stop"} },
 	{ "id": "property-status", "command": "animation.control", "params": {"entity": "PropertyProbe", "action": "Status"} },
+	{ "id": "property-status-assert", "command": "lua.exec", "params": {"code": "local s=Scene.FindEntityByName('PropertyProbe'):GetPropertyAnimationStatus(); assert(not s.playing and not s.failed and s.time==0 and s.error=='')"} },
 	{ "id": "report", "command": "lua.exec", "params": { "code": "FeatureTest.Report()" } },
 	{ "id": "widget-press", "command": "input.mouse", "params": { "position": [200, 460], "button": "Left", "down": true } },
 	{ "id": "widget-press-frame", "command": "play.step", "params": { "frames": 1, "assertNoErrors": true } },
