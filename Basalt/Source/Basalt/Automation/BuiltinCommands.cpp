@@ -1,4 +1,5 @@
 #include "Basalt/Animation/AnimatedModel.h"
+#include "Basalt/Animation/Retargeting.h"
 #include "Basalt/Asset/AssetKey.h"
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Asset/MaterialAsset.h"
@@ -1144,6 +1145,53 @@ namespace Basalt {
 					// Null when the scene follows the project's FixedTimestep.
 					{ "fixedTimestepOverride", physics.HasFixedTimestepOverride() ? json(physics.FixedTimestep) : json() },
 				};
+			});
+
+			Add(registry, "animator.retarget", "How an Animator's ClipLibraries map onto its model: per library the joint pairs (target, source, matched by joint map, name or humanoid bone), the model's humanoid bones left unmatched, the root pair with its leg-length scale, and the clips it adds or that earlier clips hide. Read-only; works in edit mode.", Schema::Object({ { "entity", Schema::Entity("ID or name of an entity with an Animator") } }, { "entity" }), [](AutomationSession& session, const json& params) {
+				Entity entity = RequireEntity(session, params);
+				const auto* animator = entity.TryGetComponent<AnimatorComponent>();
+				if (!animator)
+					throw CommandError("entity '" + entity.GetName() + "' has no Animator");
+				const auto model = AssetManager::GetMesh(animator->Mesh);
+				if (!model)
+					throw CommandError(fmt::format("Animator Mesh '{}' cannot load: {}", animator->Mesh, AssetManager::GetError(animator->Mesh)));
+				std::set<std::string> names;
+				for (const AnimationClip& clip : model->Animations)
+					names.insert(clip.Name);
+				json libraries = json::array();
+				for (const AnimationClipLibrary& entry : animator->ClipLibraries)
+				{
+					json library = { { "mesh", entry.Mesh } };
+					const auto source = entry.Mesh.empty() ? nullptr : AssetManager::GetMesh(entry.Mesh);
+					if (!source)
+					{
+						library["error"] = entry.Mesh.empty() ? std::string("no Mesh") : AssetManager::GetError(entry.Mesh);
+						libraries.push_back(std::move(library));
+						continue;
+					}
+					std::vector<std::string> warnings;
+					const RetargetMap map = Retargeting::BuildMap(*model, *source, animator->RetargetJoints, warnings);
+					json joints = json::array(), unmatched = json::array();
+					for (size_t node = 0; node < map.SourceOf.size(); node++)
+					{
+						if (map.SourceOf[node] >= 0)
+							joints.push_back({ { "target", model->Nodes[node].Name }, { "source", source->Nodes[map.SourceOf[node]].Name }, { "match", map.Reasons[node] } });
+						else if (!Retargeting::HumanoidBone(model->Nodes[node].Name).empty())
+							unmatched.push_back(model->Nodes[node].Name);
+					}
+					json clips = json::array(), hidden = json::array();
+					if (map.MappedCount() > 0)
+						for (const AnimationClip& clip : source->Animations)
+							(names.insert(clip.Name).second ? clips : hidden).push_back(clip.Name);
+					library["joints"] = std::move(joints);
+					library["unmatchedHumanoidBones"] = std::move(unmatched);
+					library["root"] = map.TargetRoot < 0 ? json() : json{ { "target", model->Nodes[map.TargetRoot].Name }, { "source", source->Nodes[map.SourceRoot].Name }, { "scale", map.RootScale } };
+					library["clips"] = std::move(clips);
+					library["hiddenClips"] = std::move(hidden);
+					library["warnings"] = warnings;
+					libraries.push_back(std::move(library));
+				}
+				return json{ { "entity", static_cast<uint64_t>(entity.GetUUID()) }, { "mesh", animator->Mesh }, { "libraries", std::move(libraries) } };
 			});
 
 			Add(registry, "scene.settings", "Patches scene-level settings: {Renderer: {...}, Physics: {...}, Name}.", Schema::Object({ { "Renderer", json{ { "type", "object" }, { "description", "object, e.g. {Exposure, Tonemapper, FSR1Enabled, FSR1Sharpness, SSAOEnabled, ShadowDistance}; FSR1Sharpness: " + Fsr1SharpnessRange() } } }, { "Physics", json{ { "type", "object" }, { "description", "object, e.g. {Gravity: [0,-9.81,0], MaxStepsPerFrame: 8, FixedTimestep: 0.01}; FixedTimestep overrides the project's step for this scene, null removes the override" } } }, { "Name", Schema::String("string") } }), [](AutomationSession& session, const json& params) {

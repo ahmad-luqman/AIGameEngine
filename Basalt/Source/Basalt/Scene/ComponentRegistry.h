@@ -139,7 +139,11 @@ namespace Basalt {
 			if (!item.is_object())
 				continue;
 			if (auto value = item.find(element); value != item.end())
-				visit(*value, listName + "[" + std::to_string(i) + "]." + element);
+			{
+				std::string label = listName;
+				label.append("[").append(std::to_string(i)).append("].").append(element);
+				visit(*value, label);
+			}
 		}
 	}
 

@@ -8,6 +8,48 @@ See `.claude/skills/basalt-make-game/SKILL.md` for the workflow and [MCP.md](MCP
 Commands reject parameters they do not list. In a batch, a request with `"expectError": "<text>"`
 succeeds only if its command fails with an error containing `<text>` (used by tests).
 
+## animator
+
+### `animator.retarget`
+
+How an Animator's ClipLibraries map onto its model: per library the joint pairs (target, source, matched by joint map, name or humanoid bone), the model's humanoid bones left unmatched, the root pair with its leg-length scale, and the clips it adds or that earlier clips hide. Read-only; works in edit mode.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `entity` | ID or name of an entity with an Animator |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "entity": {
+      "anyOf": [
+        {
+          "description": "",
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "description": "",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        }
+      ],
+      "description": "ID or name of an entity with an Animator"
+    }
+  },
+  "required": [
+    "entity"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
 ## assert
 
 ### `assert.component`

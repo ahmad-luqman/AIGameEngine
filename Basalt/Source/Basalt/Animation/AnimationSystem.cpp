@@ -247,6 +247,7 @@ namespace Basalt {
 			if (entry.Clips->GetModel() == model && entry.Keys == keys && entry.Sources == sources && entry.Joints == component.RetargetJoints)
 				return entry.Clips;
 		std::vector<AnimationClipSet::Library> libraries;
+		libraries.reserve(keys.size());
 		for (size_t i = 0; i < keys.size(); i++)
 			libraries.push_back({ .Mesh = keys[i], .Source = sources[i], .Error = sources[i] ? std::string() : AssetManager::GetError(keys[i]) });
 		auto clips = AnimationClipSet::Build(model, std::move(libraries), component.RetargetJoints);

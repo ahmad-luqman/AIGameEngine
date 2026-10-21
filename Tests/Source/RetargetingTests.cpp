@@ -28,7 +28,7 @@ namespace {
 		return std::filesystem::path(BASALT_TEST_DATA_DIR) / "Animation" / name;
 	}
 
-	const AnimationClip& Clip(const MeshSource& source, const std::string& name)
+	const AnimationClip& Clip(const MeshSource& source, const char* name)
 	{
 		const auto clip = std::ranges::find(source.Animations, name, &AnimationClip::Name);
 		REQUIRE_MESSAGE(clip != source.Animations.end(), name);
@@ -323,6 +323,18 @@ TEST_SUITE("Retargeting")
 		Run(registry, session, "entity.create", { { "name", "Hero" } });
 		const nlohmann::json animator = { { "Mesh", "Assets/Models/UnrealRig.gltf" }, { "ClipLibraries", { { { "Mesh", "Assets/Models/MixamoRig.gltf" } } } }, { "Clip", "Wave" } };
 		Run(registry, session, "component.set", { { "entity", "Hero" }, { "component", "Animator" }, { "data", animator } });
+		// Agents can read the mapping without playing.
+		const auto info = Run(registry, session, "animator.retarget", { { "entity", "Hero" } });
+		REQUIRE(info["libraries"].size() == 1);
+		const auto& mapping = info["libraries"][0];
+		CHECK(mapping["mesh"] == "Assets/Models/MixamoRig.gltf");
+		CHECK(std::ranges::count(mapping["joints"], nlohmann::json{ { "target", "pelvis" }, { "source", "mixamorig:Hips" }, { "match", "humanoid" } }) == 1);
+		CHECK(mapping["unmatchedHumanoidBones"] == nlohmann::json{ "clavicle_l", "clavicle_r" });
+		CHECK(mapping["root"]["target"] == "pelvis");
+		CHECK(mapping["root"]["scale"].get<float>() == doctest::Approx(1.4f));
+		CHECK(mapping["clips"] == nlohmann::json{ "Wave", "Walk", "Nod" });
+		CHECK(mapping["hiddenClips"] == nlohmann::json{ "Idle" });
+		CHECK(BasaltTest::RunError(registry, session, "animator.retarget", { { "entity", "Missing" } }).find("Missing") != std::string::npos);
 		// A path-only copy, as older tools wrote scenes.
 		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Scenes/Legacy.bscene"), SceneSerializer::SerializeScene(*session.GetScene()).dump()));
 		Run(registry, session, "scene.save", { { "path", "Assets/Scenes/Library.bscene" } });

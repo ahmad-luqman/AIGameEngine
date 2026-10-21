@@ -16,6 +16,7 @@
 
 #include <cmath>
 #include <filesystem>
+#include <functional>
 
 using namespace Basalt;
 
@@ -249,6 +250,129 @@ TEST_CASE("Mesh nodes share one palette upload per instance and fully culled ski
 	Capture(renderer, scene, camera);
 	CHECK(renderer.GetStatistics().SkinMatrices == 0);
 	scene.OnSimulationStop();
+	graphics->GetDevice()->waitForIdle();
+	CHECK(graphics->GetValidationErrorCount() == 0);
+	AssetManager::Clear();
+}
+
+TEST_CASE("GPU morph targets match CPU morphed geometry, skinned and static, in every pass")
+{
+	ClearAssetCache cacheGuard;
+	auto graphics = CreateTestGraphics();
+	const auto fixture = std::filesystem::path(BASALT_ANIMATION_DATA_DIR) / "Morph.gltf";
+	// Separate cache keys hold the CPU-morphed copies: one for the Animator, one for the static mesh's defaults.
+	const auto animatedPath = std::filesystem::path(BASALT_ANIMATION_OUTPUT_DIR) / "MorphAnimated.gltf";
+	const auto staticPath = std::filesystem::path(BASALT_ANIMATION_OUTPUT_DIR) / "MorphStatic.gltf";
+	std::filesystem::create_directories(animatedPath.parent_path());
+	for (const auto& path : { animatedPath, staticPath })
+		std::filesystem::copy_file(fixture, path, std::filesystem::copy_options::overwrite_existing);
+	Scene gpuScene, cpuScene;
+	Populate(gpuScene);
+	Populate(cpuScene);
+	const auto addPair = [&](const std::string& gpuMesh, const std::string& cpuMesh, bool animated, float x) {
+		auto gpu = gpuScene.CreateEntity("Morphed");
+		auto cpu = cpuScene.CreateEntity("Reference");
+		if (animated)
+		{
+			gpu.AddComponent<AnimatorComponent>() = { gpuMesh, "Nod" };
+			cpu.AddComponent<AnimatorComponent>() = { cpuMesh, "Nod" };
+		}
+		else
+		{
+			gpu.AddComponent<MeshComponent>().Mesh = gpuMesh;
+			cpu.AddComponent<MeshComponent>().Mesh = cpuMesh;
+		}
+		gpu.GetTransform().Translation.x = cpu.GetTransform().Translation.x = x;
+		gpu.GetTransform().Scale = cpu.GetTransform().Scale = glm::vec3(2);
+		return std::pair{ gpu, cpu };
+	};
+	auto [face, faceReference] = addPair(fixture.string(), animatedPath.string(), true, -1.2f);
+	addPair(fixture.string(), staticPath.string(), false, 1.2f);
+	gpuScene.OnSimulationStart();
+	cpuScene.OnSimulationStart();
+	AnimationSystem& gpuAnimations = *gpuScene.GetAnimationSystem();
+	AnimationSystem& cpuAnimations = *cpuScene.GetAnimationSystem();
+	const auto source = AssetManager::GetMesh(fixture.string());
+	REQUIRE(source);
+
+	// Bakes each submesh's morph at `weightsOf(node)` into the copy and drops its targets.
+	const auto bake = [&](const std::filesystem::path& path, const std::function<std::vector<float>(const MeshNode&, uint32_t mesh)>& weightsOf) {
+		AssetManager::Reload(path.string());
+		const auto copy = AssetManager::GetMesh(path.string());
+		REQUIRE(copy);
+		for (const MeshNode& node : copy->Nodes)
+		{
+			if (node.MeshIndex < 0)
+				continue;
+			const std::vector<float> weights = weightsOf(node, static_cast<uint32_t>(node.MeshIndex));
+			for (uint32_t index : copy->Meshes[node.MeshIndex].Submeshes)
+			{
+				Submesh& submesh = copy->Submeshes[index];
+				std::vector<Vertex> morphed;
+				for (uint32_t v = 0; v < submesh.VertexCount; v++)
+				{
+					Vertex vertex = MorphVertex(*source, source->Submeshes[index], v, weights);
+					vertex.Normal = glm::normalize(vertex.Normal);
+					glm::vec3 tangent = glm::vec3(vertex.Tangent) - vertex.Normal * glm::dot(vertex.Normal, glm::vec3(vertex.Tangent));
+					vertex.Tangent = glm::vec4(glm::normalize(tangent), vertex.Tangent.w);
+					morphed.push_back(vertex);
+				}
+				std::copy(morphed.begin(), morphed.end(), copy->Vertices.begin() + submesh.BaseVertex);
+				submesh.MorphTargetCount = 0;
+				submesh.Bounds = {};
+				for (const Vertex& vertex : morphed)
+					submesh.Bounds.Expand(vertex.Position);
+			}
+		}
+		copy->UpdateBounds();
+	};
+
+	SceneRenderer gpuRenderer(graphics->GetDevice()), cpuRenderer(graphics->GetDevice());
+	REQUIRE(gpuRenderer.Initialize());
+	REQUIRE(cpuRenderer.Initialize());
+	gpuRenderer.SetViewportSize(320, 240);
+	cpuRenderer.SetViewportSize(320, 240);
+	RenderCamera camera;
+	camera.Position = { 0, 1.5f, 5 };
+	camera.View = glm::lookAt(camera.Position, glm::vec3(0, 1, 0), glm::vec3(0, 1, 0));
+	camera.Projection = glm::perspective(glm::radians(45.0f), 320.0f / 240.0f, .1f, 30.0f);
+	camera.Near = .1f;
+	camera.Far = 30;
+
+	bake(staticPath, [&](const MeshNode&, uint32_t mesh) { return source->Meshes[mesh].MorphWeights; });
+	std::vector<uint8_t> unmorphed;
+	for (const auto& [smile, blink] : { std::pair{ 0.0f, 0.0f }, std::pair{ 1.0f, 0.6f }, std::pair{ 0.3f, 1.0f } })
+		for (float time : { 0.0f, .6f })
+		{
+			INFO("smile=" << smile << " blink=" << blink << " time=" << time);
+			REQUIRE(gpuAnimations.SetMorphWeight(face, "Smile", smile, 0));
+			REQUIRE(gpuAnimations.SetMorphWeight(face, "Blink", blink, 0));
+			REQUIRE(gpuAnimations.Seek(face, time));
+			const std::vector<float> weights = *gpuAnimations.GetMorphWeights(face);
+			bake(animatedPath, [&](const MeshNode& node, uint32_t) {
+				return node.MorphWeightOffset < 0 ? std::vector<float>() : std::vector<float>(weights.begin() + node.MorphWeightOffset, weights.begin() + node.MorphWeightOffset + static_cast<ptrdiff_t>(node.MorphWeights.size()));
+			});
+			REQUIRE(cpuAnimations.Seek(faceReference, time));
+			for (RendererDebugView view : { RendererDebugView::None, RendererDebugView::Normals, RendererDebugView::Depth })
+			{
+				gpuScene.GetRendererSettings().DebugView = view;
+				cpuScene.GetRendererSettings().DebugView = view;
+				const auto gpu = Capture(gpuRenderer, gpuScene, camera);
+				CHECK(gpuRenderer.GetStatistics().MorphWeights > 0);
+				const auto cpu = Capture(cpuRenderer, cpuScene, camera);
+				CHECK(cpuRenderer.GetStatistics().MorphWeights == 0);
+				Compare(gpu, cpu);
+				if (view == RendererDebugView::None && time == 0)
+				{
+					if (smile == 0)
+						unmorphed = gpu;
+					else
+						CHECK(gpu != unmorphed);
+				}
+			}
+		}
+	gpuScene.OnSimulationStop();
+	cpuScene.OnSimulationStop();
 	graphics->GetDevice()->waitForIdle();
 	CHECK(graphics->GetValidationErrorCount() == 0);
 	AssetManager::Clear();
