@@ -7,9 +7,11 @@
 
 namespace Basalt::MeshOptimizer {
 
-	bool Optimize(std::vector<Vertex>& vertices, std::vector<uint32_t>& indices, bool reorderTriangles)
+	bool Optimize(std::vector<Vertex>& vertices, std::vector<uint32_t>& indices, bool reorderTriangles, std::vector<MorphDelta>* morphDeltas, uint32_t morphTargets)
 	{
 		if (vertices.empty() || indices.empty() || indices.size() % 3 != 0)
+			return false;
+		if (morphTargets > 0 && (!morphDeltas || morphDeltas->size() != static_cast<size_t>(morphTargets) * vertices.size()))
 			return false;
 		for (const auto index : indices)
 			if (index >= vertices.size())
@@ -23,7 +25,18 @@ namespace Basalt::MeshOptimizer {
 			meshopt_optimizeVertexCache(indices.data(), indices.data(), indices.size(), vertices.size());
 			meshopt_optimizeOverdraw(indices.data(), indices.data(), indices.size(), &vertices[0].Position.x, vertices.size(), sizeof(Vertex), 1.05f);
 		}
-		const auto count = meshopt_optimizeVertexFetch(vertices.data(), indices.data(), indices.size(), vertices.data(), vertices.size(), sizeof(Vertex));
+		// A remap (rather than meshopt_optimizeVertexFetch) so the morph deltas move with their vertices.
+		std::vector<uint32_t> remap(vertices.size());
+		const size_t count = meshopt_optimizeVertexFetchRemap(remap.data(), indices.data(), indices.size(), vertices.size());
+		meshopt_remapIndexBuffer(indices.data(), indices.data(), indices.size(), remap.data());
+		meshopt_remapVertexBuffer(vertices.data(), vertices.data(), vertices.size(), sizeof(Vertex), remap.data());
+		if (morphTargets > 0)
+		{
+			std::vector<MorphDelta> reordered(static_cast<size_t>(morphTargets) * count);
+			for (size_t target = 0; target < morphTargets; target++)
+				meshopt_remapVertexBuffer(reordered.data() + target * count, morphDeltas->data() + target * vertices.size(), vertices.size(), sizeof(MorphDelta), remap.data());
+			*morphDeltas = std::move(reordered);
+		}
 		vertices.resize(count);
 		return true;
 	}

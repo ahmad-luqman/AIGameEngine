@@ -16,6 +16,8 @@ namespace Basalt {
 	{
 		nvrhi::BufferHandle VertexBuffer;
 		nvrhi::BufferHandle IndexBuffer;
+		// Morph target deltas (see Morphing.glsl); null without morph targets or when the texture could not be created.
+		nvrhi::TextureHandle MorphDeltas;
 	};
 
 	// GPU copies of CPU assets, created on first use and keyed by the source object. When an asset is
@@ -37,6 +39,8 @@ namespace Basalt {
 		nvrhi::ITexture* GetWhiteTexture() const { return m_White; }
 		nvrhi::ITexture* GetBlackTexture() const { return m_Black; }
 		nvrhi::ITexture* GetFlatNormalTexture() const { return m_FlatNormal; }
+		// A one-texel zero RGBA32F texture bound in place of morph deltas for meshes without them.
+		nvrhi::ITexture* GetEmptyMorphTexture() const { return m_EmptyMorph; }
 
 		// Releases GPU copies whose source assets no longer exist.
 		void CollectGarbage();
@@ -47,6 +51,7 @@ namespace Basalt {
 
 	private:
 		nvrhi::TextureHandle CreateTexture(const TextureSource& source, bool srgb, const char* debugName, nvrhi::ICommandList* commandList);
+		nvrhi::TextureHandle CreateMorphTexture(uint32_t width, uint32_t height, const std::string& debugName);
 
 	private:
 		bool m_ReportedBC7Fallback = false; // Warn once per renderer that BC7 textures are decoded to RGBA8.
@@ -70,6 +75,7 @@ namespace Basalt {
 		nvrhi::TextureHandle m_White;
 		nvrhi::TextureHandle m_Black;
 		nvrhi::TextureHandle m_FlatNormal;
+		nvrhi::TextureHandle m_EmptyMorph;
 	};
 
 }

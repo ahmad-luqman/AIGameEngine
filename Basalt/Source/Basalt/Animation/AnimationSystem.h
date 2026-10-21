@@ -109,6 +109,20 @@ namespace Basalt {
 		bool ClearIKTarget(Entity entity, const std::string& chain);
 		bool SetIKWeight(Entity entity, const std::string& chain, float weight, float seconds);
 		std::optional<float> GetIKWeight(Entity entity, const std::string& chain);
+		// Morph targets, found by name in every mesh node of the model with that target (a name shared by several meshes,
+		// such as a head and its teeth, sets them all). A script weight (0..1) replaces the animated one, fading over
+		// `seconds` from the weight shown, until ClearMorphWeight; it survives playback resets. False for an unknown
+		// target or an invalid value, logged as ReportCallProblem describes.
+		bool SetMorphWeight(Entity entity, const std::string& target, float weight, float seconds);
+		// The weight shown (of the first node with the target).
+		std::optional<float> GetMorphWeight(Entity entity, const std::string& target);
+		// Returns the target to its animated weight at once; an empty target clears every script weight. False when no
+		// script weight was set.
+		bool ClearMorphWeight(Entity entity, const std::string& target);
+		// Unique target names in node order.
+		std::vector<std::string> GetMorphTargets(Entity entity);
+		// Weights shown, at MeshNode::MorphWeightOffset; the same lifetime as GetPose.
+		const std::vector<float>* GetMorphWeights(Entity entity);
 		// Restarts every spring chain of the entity on its animated pose, at rest, at the next spring solve (after a
 		// teleport too short for the automatic detection, or a cutscene cut). False without a SpringBone component.
 		bool ResetSpringBones(Entity entity);
@@ -206,6 +220,14 @@ namespace Basalt {
 			uint32_t Node = 0;
 			AnimationNodePose Local;
 		};
+		// A script's morph weight, carried across playback resets. Slots caches the pose weights it names for SlotsSource.
+		struct MorphOverride
+		{
+			std::string Target;
+			FadingWeight Weight;
+			const MeshSource* SlotsSource = nullptr;
+			std::vector<uint32_t> Slots;
+		};
 		// Runtime playback of one Animator layer, matched to its configuration by name every update. It belongs to
 		// the playback and resets with it.
 		struct LayerState
@@ -298,6 +320,9 @@ namespace Basalt {
 			std::string PlayProblem;
 			std::string EntityName;
 			std::vector<glm::mat4> Globals;
+			std::vector<MorphOverride> MorphOverrides;
+			// Pose.MorphWeights with the script weights on top (Finish).
+			std::vector<float> MorphWeights;
 		};
 		// Runtime state of one IK chain, matched to its configuration by name every update.
 		struct IKChainState
@@ -531,6 +556,7 @@ namespace Basalt {
 		std::unordered_map<UUID, std::string> m_AttachmentProblems;
 		// The last GetBoneTransform problem reported per entity and joint, and the last unplayable reason per entity.
 		std::map<std::pair<UUID, std::string>, std::string> m_BoneProblems;
+		std::map<std::pair<UUID, std::string>, std::string> m_MorphProblems;
 		std::unordered_map<UUID, std::string> m_UnplayableReported;
 		std::unordered_map<UUID, IKState> m_IK;
 		std::unordered_map<UUID, SpringState> m_Springs;

@@ -16,7 +16,7 @@ namespace Basalt {
 			return std::nullopt;
 		std::optional<ViewportVertex> best;
 		float bestDepth = std::numeric_limits<float>::max();
-		auto visit = [&](const Ref<MeshSource>& source, uint32_t meshIndex, const glm::mat4& model, const std::vector<glm::mat4>& palette) {
+		auto visit = [&](const Ref<MeshSource>& source, uint32_t meshIndex, const glm::mat4& model, const std::vector<glm::mat4>& palette, std::span<const float> morphWeights) {
 			if (!source || meshIndex >= source->Meshes.size())
 				return;
 			for (uint32_t submeshIndex : source->Meshes[meshIndex].Submeshes)
@@ -30,7 +30,7 @@ namespace Basalt {
 					if (index >= submesh.VertexCount || used[index])
 						continue;
 					used[index] = true;
-					const Vertex& vertex = source->Vertices[submesh.BaseVertex + index];
+					const Vertex vertex = MorphVertex(*source, submesh, index, morphWeights.empty() ? std::span<const float>(source->Meshes[meshIndex].MorphWeights) : morphWeights);
 					glm::vec4 local(vertex.Position, 1);
 					if (!palette.empty())
 					{
@@ -64,8 +64,8 @@ namespace Basalt {
 			}
 		};
 		if (const auto* mesh = entity.TryGetComponent<MeshComponent>())
-			visit(AssetManager::GetMesh(mesh->Mesh), mesh->MeshIndex, entity.GetScene()->GetWorldTransform(entity), {});
-		ForEachAnimatedMesh(entity, [&](const Ref<MeshSource>& source, const MeshNode& node, const glm::mat4& model, const std::vector<glm::mat4>& palette) { visit(source, static_cast<uint32_t>(node.MeshIndex), model, palette); });
+			visit(AssetManager::GetMesh(mesh->Mesh), mesh->MeshIndex, entity.GetScene()->GetWorldTransform(entity), {}, {});
+		ForEachAnimatedMesh(entity, [&](const Ref<MeshSource>& source, const MeshNode& node, const glm::mat4& model, const std::vector<glm::mat4>& palette, std::span<const float> morphWeights) { visit(source, static_cast<uint32_t>(node.MeshIndex), model, palette, morphWeights); });
 		return best;
 	}
 

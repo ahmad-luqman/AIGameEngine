@@ -13,7 +13,7 @@
 #include <span>
 
 namespace Basalt {
-	void ForEachAnimatedMesh(Entity entity, const std::function<void(const Ref<MeshSource>&, const MeshNode&, const glm::mat4&, const std::vector<glm::mat4>&)>& visit)
+	void ForEachAnimatedMesh(Entity entity, const std::function<void(const Ref<MeshSource>&, const MeshNode&, const glm::mat4&, const std::vector<glm::mat4>&, std::span<const float>)>& visit)
 	{
 		const auto* animator = entity.TryGetComponent<AnimatorComponent>();
 		const auto source = animator ? AssetManager::GetMesh(animator->Mesh) : nullptr;
@@ -21,7 +21,9 @@ namespace Basalt {
 			return;
 		auto& scene = *entity.GetScene();
 		std::vector<glm::mat4> rest;
-		const auto* globals = scene.GetAnimationSystem() ? scene.GetAnimationSystem()->GetPose(entity) : nullptr;
+		AnimationSystem* system = scene.GetAnimationSystem();
+		const auto* globals = system ? system->GetPose(entity) : nullptr;
+		const auto* morphWeights = globals ? system->GetMorphWeights(entity) : nullptr;
 		if (!globals)
 		{
 			const bool valid = EvaluateAnimation(*source, nullptr, 0, rest);
@@ -37,8 +39,11 @@ namespace Basalt {
 			const auto& node = source->Nodes[i];
 			if (!node.Active || node.MeshIndex < 0)
 				continue;
+			std::span<const float> weights = node.MorphWeights;
+			if (morphWeights && node.MorphWeightOffset >= 0)
+				weights = std::span<const float>(*morphWeights).subspan(node.MorphWeightOffset, node.MorphWeights.size());
 			if (node.SkinIndex < 0)
-				visit(source, node, root * (*globals)[i], {});
+				visit(source, node, root * (*globals)[i], {}, weights);
 			else
 			{
 				auto& palette = palettes[node.SkinIndex];
@@ -46,7 +51,7 @@ namespace Basalt {
 					palette = BuildSkinPalette(source->Skins[node.SkinIndex], *globals);
 				BS_CORE_ASSERT(!palette.empty(), "Validated animation pose must have a finite skin palette");
 				if (!palette.empty())
-					visit(source, node, root, palette);
+					visit(source, node, root, palette, weights);
 			}
 		}
 	}
@@ -54,13 +59,23 @@ namespace Basalt {
 	AABB AnimatedModelBounds(Entity entity)
 	{
 		AABB bounds;
-		ForEachAnimatedMesh(entity, [&](const Ref<MeshSource>& source, const MeshNode& node, const glm::mat4& model, const std::vector<glm::mat4>& palette) {
+		ForEachAnimatedMesh(entity, [&](const Ref<MeshSource>& source, const MeshNode& node, const glm::mat4& model, const std::vector<glm::mat4>& palette, std::span<const float> morphWeights) {
 			const auto& mesh = source->Meshes[node.MeshIndex];
-			if (palette.empty())
-				bounds.Expand(mesh.Bounds.Transformed(model));
-			else
-				for (uint32_t submesh : mesh.Submeshes)
-					bounds.Expand(SkinBounds(*source, source->Submeshes[submesh], palette).Transformed(model));
+			for (uint32_t submesh : mesh.Submeshes)
+			{
+				if (!palette.empty())
+					bounds.Expand(SkinBounds(*source, source->Submeshes[submesh], palette, morphWeights).Transformed(model));
+				else if (source->Submeshes[submesh].MorphTargetCount == 0)
+					bounds.Expand(source->Submeshes[submesh].Bounds.Transformed(model));
+				else
+				{
+					// Exact for framing and selection, like SkinBounds.
+					AABB morphed;
+					for (uint32_t v = 0; v < source->Submeshes[submesh].VertexCount; v++)
+						morphed.Expand(MorphVertex(*source, source->Submeshes[submesh], v, morphWeights).Position);
+					bounds.Expand(morphed.Transformed(model));
+				}
+			}
 		});
 		return bounds;
 	}

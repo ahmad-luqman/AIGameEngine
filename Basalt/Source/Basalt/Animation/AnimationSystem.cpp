@@ -178,6 +178,7 @@ namespace Basalt {
 			EraseProblemsOf(m_LayerProblems, id->ID);
 			EraseProblemsOf(m_IKCallProblems, id->ID);
 			EraseProblemsOf(m_BoneProblems, id->ID);
+			EraseProblemsOf(m_MorphProblems, id->ID);
 		}
 	}
 
@@ -261,10 +262,16 @@ namespace Basalt {
 		// An initialization exception can leave matching asset keys with incomplete buffers.
 		// Retry initialization before publishing a pose or dispatching a job that recovers in place.
 		const size_t nodeCount = source->Nodes.size();
-		const bool incomplete = playback.Local.Nodes.size() != nodeCount || playback.Pose.Nodes.size() != nodeCount || playback.Globals.size() != nodeCount;
+		const bool incomplete = playback.Local.Nodes.size() != nodeCount || playback.Pose.Nodes.size() != nodeCount || playback.Globals.size() != nodeCount ||
+								playback.Local.MorphWeights.size() != source->MorphWeightCount || playback.Pose.MorphWeights.size() != source->MorphWeightCount;
 		if (inserted || incomplete || playback.Graph != graph || playback.ConfiguredGraph != component->StateMachine || playback.Handle != static_cast<entt::entity>(entity) || playback.Source != source || playback.ConfiguredClip != component->Clip)
 		{
+			// Script morph weights name targets, so they outlive the model and graph the playback was built for.
+			auto morphOverrides = std::move(playback.MorphOverrides);
+			for (MorphOverride& entry : morphOverrides)
+				entry.SlotsSource = nullptr;
 			playback = {};
+			playback.MorphOverrides = std::move(morphOverrides);
 			playback.Handle = entity;
 			playback.EntityName = entity.GetName();
 			playback.Source = source;
@@ -549,6 +556,17 @@ namespace Basalt {
 			RestoreRestPose(playback);
 		}
 		playback.InvalidPose = !valid;
+		playback.MorphWeights = playback.Pose.MorphWeights;
+		for (MorphOverride& entry : playback.MorphOverrides)
+		{
+			if (entry.SlotsSource != &source)
+			{
+				entry.Slots = FindMorphWeights(source, entry.Target);
+				entry.SlotsSource = &source;
+			}
+			for (uint32_t slot : entry.Slots)
+				playback.MorphWeights[slot] = entry.Weight.Get();
+		}
 	}
 
 	void AnimationSystem::RestoreRestPose(Playback& playback)
@@ -560,6 +578,11 @@ namespace Basalt {
 			const auto& node = source.Nodes[i];
 			playback.Local.Nodes[i] = { node.Translation, node.Rotation, node.Scale };
 			playback.Pose.Nodes[i] = playback.Local.Nodes[i];
+			if (node.MorphWeightOffset >= 0)
+			{
+				std::ranges::copy(node.MorphWeights, playback.Local.MorphWeights.begin() + node.MorphWeightOffset);
+				std::ranges::copy(node.MorphWeights, playback.Pose.MorphWeights.begin() + node.MorphWeightOffset);
+			}
 		}
 		playback.IKOverlay.clear();
 		playback.SpringOverlay.clear();
@@ -650,12 +673,19 @@ namespace Basalt {
 			const bool layered = !component.Layers.empty() || !playback->Layers.empty();
 			if (layered)
 				AdvanceLayers(*playback, component, playback->Paused ? 0.0 : static_cast<double>(seconds));
+			// Script morph weights fade like IK weights, also while the Animator is paused or stopped.
+			bool morphFading = false;
+			for (MorphOverride& entry : playback->MorphOverrides)
+			{
+				morphFading = morphFading || entry.Weight.IsFading();
+				entry.Weight.Advance(seconds);
+			}
 			// The base holds its pose while stopped or finished, without a clip, and while its blend space cannot play
 			// (it resumes once it can).
 			const bool baseAdvances = playback->Playing && (playback->Space ? ResolveSpace(*playback, *playback->Space, component) : playback->Clip >= 0);
 			if (!baseAdvances)
 			{
-				if (layered && evaluatePose)
+				if ((layered || morphFading) && evaluatePose)
 					m_PoseJobs.push_back({ playback, false });
 				continue;
 			}
@@ -1647,6 +1677,81 @@ namespace Basalt {
 	{
 		auto* playback = Ensure(entity);
 		return playback ? &playback->Globals : nullptr;
+	}
+
+	const std::vector<float>* AnimationSystem::GetMorphWeights(Entity entity)
+	{
+		auto* playback = Ensure(entity);
+		return playback ? &playback->MorphWeights : nullptr;
+	}
+
+	std::vector<std::string> AnimationSystem::GetMorphTargets(Entity entity)
+	{
+		std::vector<std::string> names;
+		if (auto* playback = Ensure(entity))
+			for (const MeshNode& node : playback->Source->Nodes)
+				if (node.MorphWeightOffset >= 0)
+					for (const std::string& name : playback->Source->Meshes[node.MeshIndex].MorphTargets)
+						if (std::ranges::find(names, name) == names.end())
+							names.push_back(name);
+		return names;
+	}
+
+	bool AnimationSystem::SetMorphWeight(Entity entity, const std::string& target, float weight, float seconds)
+	{
+		constexpr const char* operation = "SetMorphWeight";
+		auto* playback = Ensure(entity);
+		if (!playback)
+		{
+			ReportCallProblem(m_MorphProblems, entity, "Animator", operation, {}, DescribeUnplayable(entity));
+			return false;
+		}
+		const std::vector<uint32_t> slots = FindMorphWeights(*playback->Source, target);
+		if (slots.empty())
+		{
+			// Unknown names share one slot per operation (see ReportCallProblem).
+			ReportCallProblem(m_MorphProblems, entity, "Animator", operation, {}, fmt::format("no morph target named '{}' in '{}'", target, playback->Source->Key));
+			return false;
+		}
+		ReportCallProblem(m_MorphProblems, entity, "Animator", operation, {}, {});
+		if (!IsValidFade(weight, seconds))
+		{
+			ReportCallProblem(m_MorphProblems, entity, "Animator", operation, target, fmt::format("morph target '{}': the weight must be between 0 and 1 and the fade time finite and nonnegative", target), fmt::format(" (got {} and {})", weight, seconds));
+			return false;
+		}
+		ReportCallProblem(m_MorphProblems, entity, "Animator", operation, target, {});
+		auto entry = std::ranges::find(playback->MorphOverrides, target, &MorphOverride::Target);
+		if (entry == playback->MorphOverrides.end())
+		{
+			// A new fade starts from the weight shown.
+			const float shown = slots.front() < playback->MorphWeights.size() ? playback->MorphWeights[slots.front()] : 0.0f;
+			entry = playback->MorphOverrides.insert(entry, MorphOverride{ .Target = target, .Weight = FadingWeight(shown) });
+		}
+		entry->Weight.FadeTo(weight, seconds);
+		Finish(*playback);
+		return true;
+	}
+
+	std::optional<float> AnimationSystem::GetMorphWeight(Entity entity, const std::string& target)
+	{
+		auto* playback = Ensure(entity);
+		if (!playback)
+			return std::nullopt;
+		const std::vector<uint32_t> slots = FindMorphWeights(*playback->Source, target);
+		if (slots.empty() || slots.front() >= playback->MorphWeights.size())
+			return std::nullopt;
+		return playback->MorphWeights[slots.front()];
+	}
+
+	bool AnimationSystem::ClearMorphWeight(Entity entity, const std::string& target)
+	{
+		auto* playback = Ensure(entity);
+		if (!playback)
+			return false;
+		const size_t erased = target.empty() ? std::exchange(playback->MorphOverrides, {}).size() : std::erase_if(playback->MorphOverrides, [&](const MorphOverride& entry) { return entry.Target == target; });
+		if (erased > 0)
+			Finish(*playback);
+		return erased > 0;
 	}
 
 	bool AnimationSystem::GetBoneTransform(Entity entity, const std::string& joint, glm::mat4& outTransform, std::string& outError)

@@ -555,12 +555,14 @@ TEST_SUITE("Animation")
 		TempDirectory directory("StaticCompatibility");
 		auto data = FixtureJson();
 		std::string warning;
+		bool morphChannel = false;
 		SUBCASE("morph-weight channel")
 		{
+			// Imported since morph targets are supported: the channel becomes a one-wide Weights track.
 			data["animations"][0]["channels"][0]["target"] = { { "node", 1 }, { "path", "weights" } };
 			data["meshes"][0]["primitives"][0]["targets"] = { { { "POSITION", 0 } } };
 			data["accessors"][8]["type"] = "SCALAR";
-			warning = "skipping unsupported morph-weight";
+			morphChannel = true;
 		}
 		SUBCASE("pointer channel without a node")
 		{
@@ -594,6 +596,16 @@ TEST_SUITE("Animation")
 		CHECK(source->Vertices.size() == 6);
 		if (!warning.empty())
 			CHECK(CountLogMessages(since, warning) > 0);
+		if (morphChannel)
+		{
+			REQUIRE_FALSE(source->Animations.empty());
+			const auto& tracks = source->Animations[0].Tracks;
+			const auto weights = std::ranges::find(tracks, AnimationPath::Weights, &AnimationTrack::Path);
+			REQUIRE(weights != tracks.end());
+			CHECK(weights->Width == 1);
+			CHECK(weights->Weights.size() == weights->Times.size());
+			CHECK(source->Meshes[0].MorphTargets == std::vector<std::string>{ "Target0" });
+		}
 		if (source->AnimationUnsupported)
 		{
 			const auto root = MeshImporter::InstantiateHierarchy(scene, *source, "Imported", {});
