@@ -799,6 +799,8 @@ TEST_SUITE("SceneRenderer")
 		CHECK(stats["localShadowAtlasSize"] == 1);
 		CHECK(stats["failed"] == false);
 		CHECK(stats["fsr1Active"] == false);
+		CHECK(stats["taaActive"] == false);
+		CHECK(stats["taaHistoryValid"] == false);
 		CHECK(stats["dynamicResolution"] == true);
 		CHECK(stats["dynamicResolutionActive"] == false);
 		CHECK(stats["dynamicResolutionState"].get<std::string>().find("GPU timer queries") != std::string::npos);

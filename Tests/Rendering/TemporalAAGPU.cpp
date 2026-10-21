@@ -17,6 +17,7 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <map>
@@ -125,12 +126,17 @@ TEST_CASE("TAA motion follows independently moving batched instances and resets 
 	{
 		post.TAAEnabled = false;
 		Render(renderer, scene);
+		CHECK_FALSE(renderer.GetMotionTexture());
+		CHECK_FALSE(renderer.GetStatistics().TAAActive);
+		CHECK_FALSE(renderer.GetStatistics().TAAHistoryValid);
 		post.TAAEnabled = true;
 	}
 	SUBCASE("Debug bypass")
 	{
 		scene.GetRendererSettings().DebugView = RendererDebugView::Depth;
 		Render(renderer, scene);
+		CHECK_FALSE(renderer.GetMotionTexture());
+		CHECK_FALSE(renderer.GetStatistics().TAAActive);
 		scene.GetRendererSettings().DebugView = RendererDebugView::None;
 	}
 	SUBCASE("Failure")
@@ -311,12 +317,37 @@ TEST_CASE("TAA resolve blends history, clips color, rejects depth and clamps to 
 				colors[pixel * 4 + c] = glm::packHalf1x16(x < 4 && y < 4 ? .8f : 100.0f);
 			motions[pixel] = glm::vec4((static_cast<float>(x) + .5f) / 4, (static_cast<float>(y) + .5f) / 4, .5f, 1);
 		}
+	glm::vec2 jitterDelta(0);
+	glm::mat4 skyReprojection(1);
+	bool gradient = false, sky = false, skyDisocclusion = false;
+	SUBCASE("Jitter correction samples a two-dimensional gradient")
+	{
+		gradient = true;
+		jitterDelta = { .125f, -.125f };
+	}
+	SUBCASE("Sky reprojects with camera rotation")
+	{
+		sky = true;
+		skyReprojection = glm::rotate(glm::mat4(1), .1f, glm::vec3(0, 0, 1));
+	}
+	SUBCASE("Sky rejects geometry history")
+	{
+		sky = true;
+		skyDisocclusion = true;
+	}
+	if (gradient)
+		for (uint32_t y = 0; y < 4; y++)
+			for (uint32_t x = 0; x < 4; x++)
+				for (size_t c = 0; c < 3; c++)
+					colors[(y * 8 + x) * 4 + c] = glm::packHalf1x16(.1f * x + .05f * y);
+	if (sky && !skyDisocclusion)
+		std::fill(depths.begin(), depths.end(), 1.0f);
 	auto resolve = [&](bool valid) {
 		commands->open();
 		commands->writeTexture(color, 0, 0, colors.data(), 8 * 8);
 		commands->writeTexture(depth, 0, 0, depths.data(), 8 * sizeof(float));
 		commands->writeTexture(motion, 0, 0, motions.data(), 8 * sizeof(glm::vec4));
-		taa.Render(commands, area, valid, glm::mat4(1));
+		taa.Render(commands, area, valid, skyReprojection, jitterDelta);
 		commands->close();
 		device->executeCommandList(commands);
 		device->waitForIdle();
@@ -333,6 +364,19 @@ TEST_CASE("TAA resolve blends history, clips color, rejects depth and clamps to 
 		colors[(1 * 8 + 2) * 4 + c] = glm::packHalf1x16(1);
 	}
 	float expected = .74f;
+	if (gradient)
+	{
+		const float weight = .9f - .4f * std::sqrt(.5f) / 16;
+		expected = .2f + (.325f - .2f) * weight;
+	}
+	if (sky)
+	{
+		std::fill(depths.begin(), depths.end(), 1.0f);
+		std::fill(motions.begin(), motions.end(), glm::vec4(0));
+		const glm::vec4 previous = skyReprojection * glm::vec4(.25f, -.25f, 1, 1);
+		const glm::vec2 shift = (glm::vec2(previous) * glm::vec2(.5f, -.5f) + .5f - glm::vec2(.625f)) * 4.0f;
+		expected = skyDisocclusion ? .2f : .2f + .6f * (.9f - .4f * glm::length(shift) / 16);
+	}
 	SUBCASE("Accepted history") {}
 	SUBCASE("Disocclusion")
 	{
@@ -412,6 +456,7 @@ TEST_CASE("TAA reduces static silhouette shimmer across the jitter cycle")
 	{
 		post.TAAEnabled = true;
 		const auto filtered = capture(temporal, camera);
+		CHECK(temporal.GetStatistics().TAAHistoryValid == (frame > 0));
 		post.TAAEnabled = false;
 		RenderCamera jittered = camera;
 		jittered.Projection = JitterProjection(camera.Projection, TemporalJitter(frame), { 64, 64 });
@@ -427,6 +472,97 @@ TEST_CASE("TAA reduces static silhouette shimmer across the jitter cycle")
 	}
 	INFO("temporal variation=" << temporalVariation << ", raw variation=" << rawVariation);
 	CHECK(rawVariation > 10000);
-	CHECK(static_cast<double>(temporalVariation) < static_cast<double>(rawVariation) * .9);
+	CHECK(static_cast<double>(temporalVariation) < static_cast<double>(rawVariation) * .4);
+	CHECK(graphics->GetValidationErrorCount() == 0);
+}
+
+TEST_CASE("TAA rejects replaced and newly visible entity geometry")
+{
+	auto graphics = CreateTestGraphics();
+	Scene scene;
+	Populate(scene);
+	auto cube = scene.CreateEntity("History identity");
+	cube.AddComponent<MeshComponent>().Mesh = "builtin://Cube";
+	cube.GetTransform().Scale = glm::vec3(.5f);
+	cube.GetTransform().Translation.z = .5f;
+	SceneRenderer renderer(graphics->GetDevice());
+	REQUIRE(renderer.Initialize());
+	renderer.SetViewportSize(32, 32);
+	Render(renderer, scene);
+	Render(renderer, scene);
+	auto validPixels = [&]() {
+		const auto values = ReadMotion(graphics->GetDevice(), renderer);
+		return std::count_if(values.begin(), values.end(), [](glm::vec4 value) { return value.w > .5f; });
+	};
+	CHECK(validPixels() > 20);
+	SUBCASE("Replacement model")
+	{
+		cube.GetComponent<MeshComponent>().Mesh = "builtin://Sphere";
+	}
+	SUBCASE("New entity")
+	{
+		scene.DestroyEntity(cube);
+		cube = scene.CreateEntity("Replacement entity");
+		cube.AddComponent<MeshComponent>().Mesh = "builtin://Cube";
+		cube.GetTransform().Scale = glm::vec3(.5f);
+		cube.GetTransform().Translation.z = .5f;
+	}
+	SUBCASE("Culled for a frame")
+	{
+		cube.GetTransform().Translation.x = 100;
+		Render(renderer, scene);
+		cube.GetTransform().Translation.x = 0;
+	}
+	Render(renderer, scene);
+	CHECK(renderer.GetStatistics().TAAHistoryValid);
+	CHECK(validPixels() == 0);
+	Render(renderer, scene);
+	CHECK(validPixels() > 20);
+	CHECK(graphics->GetValidationErrorCount() == 0);
+}
+
+TEST_CASE("TAA supplies spatial AA on reset and takes precedence over FXAA with valid history")
+{
+	auto graphics = CreateTestGraphics();
+	Scene scene;
+	auto& post = Populate(scene);
+	auto cube = scene.CreateEntity("AA edge");
+	cube.AddComponent<MeshComponent>().Mesh = "builtin://Cube";
+	cube.GetTransform().Scale = glm::vec3(.7f);
+	cube.GetTransform().Translation.z = .5f;
+	cube.GetTransform().Rotation = glm::quat(glm::vec3(0, 0, .3f));
+	cube.AddComponent<MaterialComponent>().EmissiveColor = glm::vec3(1);
+	SceneRenderer temporal(graphics->GetDevice()), reference(graphics->GetDevice());
+	REQUIRE(temporal.Initialize());
+	REQUIRE(reference.Initialize());
+	temporal.SetViewportSize(32, 32);
+	reference.SetViewportSize(32, 32);
+	auto pixels = [&](SceneRenderer& renderer) {
+		std::vector<uint8_t> result;
+		uint32_t width = 0, height = 0;
+		REQUIRE(renderer.ReadOutputPixels(result, width, height));
+		return result;
+	};
+	Render(temporal, scene);
+	const auto first = pixels(temporal);
+	post.TAAEnabled = false;
+	post.FXAAEnabled = true;
+	RenderCamera jittered;
+	jittered.Projection = JitterProjection(jittered.Projection, TemporalJitter(0), { 32, 32 });
+	Render(reference, scene, jittered);
+	CHECK(first == pixels(reference));
+	// Build identical histories with opposite authored FXAA settings.
+	post.TAAEnabled = true;
+	reference.ResetTemporalHistory();
+	temporal.ResetTemporalHistory();
+	for (int frame = 0; frame < 3; frame++)
+	{
+		post.FXAAEnabled = false;
+		Render(temporal, scene);
+		post.FXAAEnabled = true;
+		Render(reference, scene);
+		CHECK(pixels(temporal) == pixels(reference));
+		CHECK(temporal.GetStatistics().TAAHistoryValid == (frame > 0));
+	}
 	CHECK(graphics->GetValidationErrorCount() == 0);
 }

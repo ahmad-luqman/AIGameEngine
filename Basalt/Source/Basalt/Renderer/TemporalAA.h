@@ -6,7 +6,8 @@
 #include <array>
 
 namespace Basalt {
-	// Per-renderer HDR color/depth ping-pong resolve. Transparency is composited after this pass.
+	// Per-renderer HDR color/depth ping-pong resolve, copied back into the source HDR texture.
+	// Invalid history clears both targets; Prepare failures remain latched until Reset.
 	class TemporalAA
 	{
 	public:
@@ -19,7 +20,7 @@ namespace Basalt {
 	private:
 		bool m_Failed = false;
 		uint32_t m_Index = 0;
-		nvrhi::TextureHandle m_Source;
+		nvrhi::TextureHandle m_Source, m_SourceDepth, m_Motion;
 		std::array<nvrhi::TextureHandle, 2> m_Color, m_Depth;
 		std::array<nvrhi::FramebufferHandle, 2> m_Framebuffers;
 		std::array<nvrhi::BindingSetHandle, 2> m_Sets;

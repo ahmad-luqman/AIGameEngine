@@ -150,11 +150,11 @@ namespace Basalt {
 		// Call when replacing a scene; mappings otherwise describe the last successful Render.
 		void InvalidatePicking();
 
-		// Starts the next auto-exposure frame at its metered target (deterministic captures).
+		// Resets temporal AA and starts auto exposure at its metered target (deterministic captures).
 		void ResetExposure();
 		// Explicit camera cuts; captures reset this alongside exposure. Failed frames never keep history.
 		void ResetTemporalHistory();
-		// Previous UV, previous depth and validity from the opaque prepass (RGBA32F).
+		// Previous UV, previous depth and validity from the opaque prepass (RGBA32F); null when TAA is off.
 		nvrhi::ITexture* GetMotionTexture() const;
 
 		// false submits individual draws in original order for validation and throughput comparisons.

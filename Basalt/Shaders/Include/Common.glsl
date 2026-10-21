@@ -51,7 +51,7 @@ struct DrawData
 	mat4 Normal;          // draw records: inverse-transpose of Model; unused for palette records
 	uvec4 Indices;        // x: material index; y: editor picking token; zw: joint palette offset/count (0 count = rigid)
 	uvec4 Morph;          // x: first morph weight record; y: active weight count (0 = unmorphed); z: delta texel base; w: texels per target
-	uvec4 History;        // x: previous draw record, y: valid
+	uvec4 History;        // x: previous-state record in this frame's buffer, y: valid
 };
 
 layout(std430, set = 0, binding = 1) readonly buffer DrawBuffer

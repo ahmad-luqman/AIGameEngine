@@ -53,9 +53,20 @@ namespace Basalt {
 	void TemporalHistory::Commit(const glm::mat4& viewProjection)
 	{
 		m_PreviousViewProjection = viewProjection;
+		m_PreviousProjection = m_Enabled ? JitterProjection(m_Projection, TemporalJitter(m_Frame), m_Size) : m_Projection;
 		m_Valid = m_Enabled;
 		if (m_Enabled)
 			m_Frame = (m_Frame + 1) % 8;
+	}
+
+	glm::mat4 TemporalHistory::GetSkyReprojection(const glm::mat4& jitteredProjection) const
+	{
+		glm::mat4 rotationView = m_View;
+		rotationView[3] = glm::vec4(0, 0, 0, 1);
+		glm::mat4 previousRotationVP = m_PreviousViewProjection;
+		// P * rotation-only V keeps P's fourth column. Zeroing it loses W for orthographic skies.
+		previousRotationVP[3] = m_PreviousProjection[3];
+		return previousRotationVP * glm::inverse(jitteredProjection * rotationView);
 	}
 
 	void TemporalHistory::Reset()

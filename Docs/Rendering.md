@@ -73,6 +73,39 @@ Offscreen/headless sessions retain the same preference values even though VSync 
 resize, tiny targets and dynamic allocations with/without FSR, with Vulkan synchronization validation.
 Headless tests cover selection, serialization, atomic validation and Lua session lifetime.
 
+### Temporal anti-aliasing
+
+Enable `PostProcess.TAAEnabled` through the component API or inspector. TAA takes precedence over FXAA
+once history is valid and runs before bloom, exposure, tonemapping and FSR 1. It operates at the current
+render resolution, including supersampling and dynamic resolution. Transparency and particles composite
+with the current jittered sample after the resolve; they do not enter temporal history. Overlays and game UI
+are drawn after post-processing and never accumulate. Debug lines use the unjittered camera; selection
+outlines follow the current jittered picking silhouette. Reset frames (including captures) automatically
+use FXAA until temporal samples become available, even when `FXAAEnabled` is false.
+
+Each renderer has an eight-sample Halton projection jitter and its own HDR color and R32F depth histories.
+The opaque/masked depth prepass writes previous-frame UV, depth and validity, using each entity/mesh node's
+previous model transform, joint palette and strongest drawn morph weights. Instancing order does not identify
+history. New or previously invisible geometry and replaced model assets reject history. Sky reprojection uses
+camera rotation. The resolve rejects out-of-bounds and depth-mismatched history, clamps history to the current
+3×3 color neighborhood and reduces history weight for fast motion. This reduces edge shimmer, including
+SSAO and opaque specular highlights; it can soften small moving detail.
+
+History resets on scene/play revision, selected PostProcess entity identity changes, any projection matrix
+change (including animated FOV), and active render dimension changes (including dynamic resolution),
+TAA/debug toggles, failed frames, and camera jumps over 10 world units or turns over 60 degrees.
+An environment rebake rejects that frame's accumulated color because lighting has changed. Editing other
+fields on the selected PostProcess does not reset history.
+Hosts should call `SceneRenderer::ResetTemporalHistory` for smaller intentional cuts. `ResetExposure` also
+resets TAA for repeatable captures. Hosts must explicitly signal smaller cuts; normal camera input
+does not infer them. Only successful submissions advance the sample sequence.
+Disabling TAA releases its color/depth histories and motion target. Previous-pose vertex work runs only
+in the TAA prepass; shared skins retain one palette snapshot and upload per entity. TAA resolve cost
+is included in the `Lighting` GPU timing.
+`render.stats` reports `taaActive` and `taaHistoryValid`. The optional `TemporalAAGPU` test checks previous
+coordinates against independently moving instanced geometry and CPU-skinned/morphed triangles, with Vulkan
+synchronization validation enabled. Headless `TemporalHistoryTests` cover the jitter and camera lifecycle.
+
 # Clustered forward lighting
 
 The PBR pass uses a 16×9×24 camera-frustum grid. Perspective cameras have logarithmic depth slices;
@@ -136,7 +169,7 @@ UI, text, debug lines and gizmos are drawn afterward at output resolution. FSR 1
 it does not provide temporal antialiasing.
 
 The complete FSR path is shadows → depth/normals → SSAO → clustered lighting/sky/transparency → optional
-HDR bloom/auto exposure → tonemapping/sRGB → optional FXAA → EASU → RCAS → 8-bit dither → overlays.
+HDR opaque/sky → optional TAA → transparency/particles → HDR bloom/auto exposure → tonemapping/sRGB → optional FXAA → EASU → RCAS → 8-bit dither → overlays.
 Intermediate color is stored in RGBA16_FLOAT without sRGB decoding; FSR expects normalized perceptual
 color. The extra targets allocate on first use and remain cached while FSR is off and across dynamic
 render-area changes. Viewport, configured render-scale and active dynamic-mode changes release them.
@@ -462,27 +495,3 @@ unshadowed two-sided diffuse lighting (`Lit`). Lit billboards use the surface re
 range attenuation, Lambert normalization, clustered local-light lists and diffuse IBL; they have no
 specular response or shadow reception/casting. Rotation is a roll about the view axis. In Edit mode,
 `Preview` runs only particle simulation, independently of PlayOnStart and without scripts/audio/physics.
-
-### Temporal anti-aliasing
-
-Enable `PostProcess.TAAEnabled` through the component API or inspector. TAA takes precedence over FXAA
-when both are enabled and runs before bloom, exposure, tonemapping and FSR 1. It operates at the current
-render resolution, including supersampling and dynamic resolution. Transparency and particles composite
-with the current jittered sample after the resolve; they do not enter temporal history. Overlays and game UI
-are drawn after post-processing and never accumulate.
-
-Each renderer has an eight-sample Halton projection jitter and its own HDR color and R32F depth histories.
-The opaque/masked depth prepass writes previous-frame UV, depth and validity, using each entity/mesh node's
-previous model transform, joint palette and strongest drawn morph weights. Instancing order does not identify
-history. New or previously invisible geometry and replaced model assets reject history. Sky reprojection uses
-camera rotation. The resolve rejects out-of-bounds and depth-mismatched history, clamps history to the current
-3×3 color neighborhood and reduces history weight for fast motion. This reduces edge shimmer, including
-SSAO and opaque specular highlights; it can soften small moving detail.
-
-History resets on scene/play revision, selected PostProcess changes, projection changes, render dimensions,
-TAA/debug toggles, failed frames, and camera jumps over 10 world units or turns over 60 degrees.
-Hosts should call `SceneRenderer::ResetTemporalHistory` for smaller intentional cuts. `ResetExposure` also
-resets TAA for repeatable captures. Only successful submissions advance the sample sequence.
-`render.stats` reports `taaActive` and `taaHistoryValid`. The optional `TemporalAAGPU` test checks previous
-coordinates against independently moving instanced geometry and CPU-skinned/morphed triangles, with Vulkan
-synchronization validation enabled. Headless `TemporalHistoryTests` cover the jitter and camera lifecycle.

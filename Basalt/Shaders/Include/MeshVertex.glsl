@@ -1,0 +1,73 @@
+#include "Common.glsl"
+#include "Skinning.glsl"
+#include "Morphing.glsl"
+
+layout(location = 0) in vec3 a_Position;
+layout(location = 1) in vec3 a_Normal;
+layout(location = 2) in vec4 a_Tangent;
+layout(location = 3) in vec2 a_TexCoord;
+layout(location = 4) in uvec4 a_Joints;
+layout(location = 5) in vec4 a_Weights;
+layout(location = 6) in vec2 a_TexCoord1;
+
+layout(location = 0) out vec3 v_WorldPosition;
+layout(location = 1) out vec3 v_Normal;
+layout(location = 2) out vec4 v_Tangent;
+layout(location = 3) out vec2 v_TexCoord;
+// x: material index, y: pick token. Fragment shaders cannot use gl_InstanceIndex to fetch their record.
+layout(location = 4) flat out uvec2 v_InstanceIndices;
+layout(location = 5) out vec2 v_TexCoord1;
+#ifdef BASALT_MOTION
+layout(location = 6) out vec4 v_PreviousClip;
+#endif
+
+// The depth prepass and the lighting pass must produce bit-identical depth.
+invariant gl_Position;
+
+void main()
+{
+	DrawData draw = u_Draws.Draws[u_Push.DrawIndex + gl_InstanceIndex];
+	vec3 position = a_Position;
+	vec3 bindNormal = a_Normal;
+	vec3 bindTangent = a_Tangent.xyz;
+	if (draw.Morph.y > 0u)
+	{
+		ApplyMorphTargets(draw, position, bindNormal);
+		// Tangent deltas are not imported: keep the tangent perpendicular to the morphed normal.
+		float lengthSquared = dot(bindNormal, bindNormal);
+		if (lengthSquared > 0.0)
+			bindTangent -= bindNormal * (dot(bindNormal, bindTangent) / lengthSquared);
+	}
+	mat4 skin = SkinMatrix(draw, a_Joints, a_Weights);
+	vec4 world = draw.Model * skin * vec4(position, 1.0);
+	v_WorldPosition = world.xyz;
+	mat3 linear = mat3(skin);
+	// Cofactors give the inverse-transpose direction without division by a tiny determinant.
+	// Normalize first to prevent squared/cubed scale underflow in cofactors and determinant.
+	vec3 largest = max(max(abs(linear[0]), abs(linear[1])), abs(linear[2]));
+	float scale = max(largest.x, max(largest.y, largest.z));
+	mat3 stable = scale > 0.0 ? linear / scale : mat3(0.0);
+	float orientation = determinant(stable);
+	mat3 cofactors = mat3(cross(stable[1], stable[2]), cross(stable[2], stable[0]), cross(stable[0], stable[1]));
+	vec3 normal = mat3(draw.Normal) * cofactors * bindNormal * (orientation < 0.0 ? -1.0 : 1.0);
+	v_Normal = StableNormalize(normal, vec3(0.0, 1.0, 0.0));
+	vec3 tangent = mat3(draw.Model) * linear * bindTangent;
+	tangent = StableNormalize(tangent, cross(v_Normal, abs(v_Normal.x) < 0.9 ? vec3(1,0,0) : vec3(0,1,0)));
+	v_Tangent = vec4(tangent, a_Tangent.w * (orientation < 0.0 ? -1.0 : 1.0));
+	v_TexCoord = a_TexCoord;
+	v_TexCoord1 = a_TexCoord1;
+	v_InstanceIndices = draw.Indices.xy;
+#ifdef BASALT_MOTION
+	// Negative W rejects new, culled, or replaced geometry without dividing by zero.
+	v_PreviousClip = vec4(0.0, 0.0, 0.0, -1.0);
+	if (draw.History.y != 0u)
+	{
+		DrawData previous = u_Draws.Draws[draw.History.x];
+		vec3 previousPosition = a_Position;
+		if (previous.Morph.y > 0u)
+			ApplyMorphPosition(previous, previousPosition);
+		v_PreviousClip = u_View.PreviousViewProjection * previous.Model * SkinMatrix(previous, a_Joints, a_Weights) * vec4(previousPosition, 1.0);
+	}
+#endif
+	gl_Position = u_View.ViewProjection * world;
+}

@@ -34,3 +34,6 @@ description: Diagnose rendering problems in Basalt (black/inside-out/flipped ima
 4. **Inside-out or missing geometry**: winding/culling. **Mirrored passes**: a UV/NDC Y convention mix-up.
    **Black frame, no errors**: binding slot mismatch or a missing barrier/state.
 5. Fix, rerun the screenshot, then `scripts/test.sh` (includes the GPU FeatureTestRender test locally).
+
+For temporal artifacts, inspect `render.stats` (`taaActive`, `taaHistoryValid`) and toggle
+`PostProcess.TAAEnabled`. Debug views disable jitter and TAA; captures reset history and use first-frame FXAA.
