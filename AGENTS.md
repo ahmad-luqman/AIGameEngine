@@ -21,7 +21,7 @@ changing code. Task-specific procedures live in `.claude/skills/*/SKILL.md`.
 Engine modules (`Basalt/Source/Basalt/<Module>/`): `Core` (application, window, input incl. gamepads, log, file
 system and file watching, command line), `Events`, `Math`, `Renderer` (device, scene renderer, IBL, debug lines), `ImGui`, `Scene`
 (EnTT scene, components, component registry, serialization), `Asset` (glTF, images, primitives, material
-files, asset cache), `Physics` (Jolt), `Audio` (miniaudio: buses, per-source low-pass and Doppler, reverb sends into per-bus reverbs), `Particles` (CPU particle simulation), `Animation` (glTF TRS sampling, blends, crossfades, 1D/2D blend spaces with phase sync and velocity matching, animation events, bone transforms and attachments, data-driven state machines and per-state root motion, layers with joint masks and additive clips, two-bone/look-at IK and foot placement, spring bones, per-entity playback), `UI` (game UI: UI
+files, asset cache), `Physics` (Jolt), `Audio` (miniaudio: buses, per-source low-pass and Doppler, reverb sends into per-bus reverbs), `Particles` (CPU particle simulation), `Animation` (glTF TRS sampling, blends, crossfades, 1D/2D blend spaces with phase sync and velocity matching, animation events, bone transforms and attachments, data-driven state machines and per-state root motion, layers with joint masks and additive clips, two-bone/look-at IK and foot placement, spring bones, morph targets, retargeted clip libraries, per-entity playback), `UI` (game UI: UI
 component layout, widgets and their mouse/keyboard/gamepad interaction, immediate-mode `UI.*`, TrueType fonts;
 drawn through ImGui after the scene), `Scripting` (Lua 5.4 + sol2; timers, coroutines, events), `Project`
 (project files, exporter, save data), `Automation` (command API, session, TCP server, editor history and selection).
@@ -67,6 +67,15 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   after IK, from `Pose` plus the IK overlay (never their own last solution), as world-space points
   (`Animation/SpringBones.h`, substeps of at most 1/120 s) kept in the system by entity; their joints go into a second overlay
   that `Finish` applies after the IK one.
+- **Morph targets and retargeting.** Morph deltas are imported per submesh (`MeshSource::MorphDeltas`, following vertex
+  reordering) and drawn in the vertex shader from a per-model delta texture (set 2, vertex stage) with each draw's
+  nonzero weights packed into draw records after the palettes. Weights live in the pose (`AnimationLocalPose::
+  MorphWeights`, per node at `MeshNode::MorphWeightOffset`), so clips, fades, blends and layers mix them; script weights
+  are a per-playback overlay matched by target name. `Animator.ClipLibraries` clips are baked onto the model's nodes
+  (`Animation/Retargeting`: world-space rest-relative rotations, root displacement scaled by leg length) into an
+  immutable `AnimationClipSet` the `AnimationSystem` caches by model, libraries and joint map; every playback clip index
+  refers to that set, never to `MeshSource::Animations` directly. List elements declare asset fields as `List[].Field`
+  (`ForEachAssetValue`), which persistence, moves, validation and thumbnails share.
 - **Game UI geometry.** `UILayout` is shared by drawing, hit testing, `ui.layout` and viewport handles.
   Rects remain in untransformed canvas units; affine transforms compose through descendants. Clips intersect
   as canvas-aligned scissors (rotated clipping parents use their transformed bounds). Scroll views clip

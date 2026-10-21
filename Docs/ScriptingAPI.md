@@ -1221,9 +1221,40 @@ asset resolution, graph control and event collection remain on the main thread.
 Playback also runs in Simulate, respects scene pause/step, and advances after `OnUpdate` and before physics;
 attachments update after `OnLateUpdate`.
 State belongs to the play scene and is not serialized or included in `scene.hash`; copies start fresh.
-Persistent entities retain playback across `Scene.Load`. Retargeting is not supported. Animated node motion
+Persistent entities retain playback across `Scene.Load`. Clips authored on other skeletons play through
+`ClipLibraries` (see Clip libraries and retargeting). Animated node motion
 is relative to the entity; physics uses the entity's colliders, not
 deformed triangles.
+
+### Clip libraries and retargeting
+
+`Animator.ClipLibraries` lists models whose clips the Animator also plays, such as a shared library of Mixamo clips
+downloaded without skins, retargeted onto the Animator's own skeleton:
+
+```lua
+hero:SetComponent("Animator", { ClipLibraries = { { Mesh = "Assets/Animations/Mixamo/Run.glb" }, { Mesh = "Assets/Animations/Mixamo/Jump.glb" } } })
+hero:CrossFadeAnimation("Run", 0.2)
+```
+
+Library clips join the model's clips under their own names everywhere a clip is named: `Clip`, `PlayAnimation` and the
+other playback functions, blend space samples, layers, events and state machine states. The model's own clips come
+first, then each library's in order; a library clip whose name is already taken is hidden (the inspector and `scene.info`
+say which). Joints pair up by `RetargetJoints` entries (`{ Source = "mixamorig:Spine2", Target = "spine_03" }`), then
+by equal names ignoring `namespace:` and `Armature|` prefixes (so `mixamorig:Hips` matches `Hips`), then as the same
+humanoid bone across Mixamo, Unreal, Unity, Blender (Rigify), VRM and 3ds Max naming (hips, spine, chest, upper chest,
+neck, head, and per side shoulder, upper and lower arm, hand, upper and lower leg, foot, toes). Unpaired joints keep
+their rest pose.
+
+Each paired joint turns in model space by its source joint's turn away from the source rest pose, so skeletons whose
+joints have different axes and rest orientations still pose alike; both models must stand in the same rest pose style
+(both T-pose or both A-pose). Paired joints keep the target's rest translation, so limbs keep their length. The hips (or
+the topmost paired joint) also move by the source hips' displacement scaled by the ratio of the skeletons' leg lengths
+(hips height above the lowest paired joint), so root motion matches the character's stride. Morph weight tracks move to
+target nodes of the same name, matched by target name. Clips are retargeted once when an Animator first needs them and
+shared by Animators with the same model, libraries and joint map; they are resampled at the source's key times (30 Hz for
+cubic clips) with linear interpolation. `animator.retarget` (automation) lists each library's joint pairs and how they
+matched, the model's humanoid bones left unpaired, the root's scale and the clips it adds or hides. A library that cannot
+load or pairs no joint is reported and skipped.
 
 ### Animation events
 

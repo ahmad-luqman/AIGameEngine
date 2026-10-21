@@ -265,6 +265,22 @@ local function TestEntities(self)
 	ExpectError("Spring chain validation", function() springRig:SetComponent("SpringBone", { Chains = { { Name = "A", Stiffness = -1 } } }) end, "Stiffness -1 must be between 0 and 10000")
 	Check("SpringBone lists", springRig:GetComponent("SpringBone").Chains[1].Joint == "RightUpperArm" and springRig:GetComponent("SpringBone").Colliders[1].Joint == "Chest")
 
+	-- Morph targets and retargeted clip libraries.
+	local face = Scene.FindEntityByName("MorphFace")
+	local morphTargets = face:GetMorphTargets()
+	Check("GetMorphTargets", #morphTargets == 2 and morphTargets[1] == "Smile" and morphTargets[2] == "Blink")
+	Check("SetMorphWeight", face:SetMorphWeight("Smile", 1) and face:GetMorphWeight("Smile") == 1)
+	Check("SetMorphWeight fade", face:SetMorphWeight("Blink", 0, 0.5) and not face:SetMorphWeight("Missing", 1) and not face:SetMorphWeight("Blink", 2))
+	Check("GetMorphWeight", face:GetMorphWeight("Smile") == 1 and face:GetMorphWeight("Missing") == nil)
+	Check("ClearMorphWeight", face:ClearMorphWeight("Smile") and face:ClearMorphWeight() and not face:ClearMorphWeight())
+	ExpectError("SetMorphWeight without Animator", function() Scene.FindEntityByName("MorphStatic"):SetMorphWeight("Smile", 1) end, "needs the Animator component")
+	ExpectError("ClearMorphWeight target type", function() face:ClearMorphWeight(1) end, "target must be a string or nil")
+	local hero = Scene.FindEntityByName("RetargetHero")
+	local heroClips = hero:GetAnimationClips()
+	Check("Animator ClipLibraries", #heroClips == 4 and heroClips[1] == "Idle" and heroClips[2] == "Wave" and hero:PlayAnimation("Walk"))
+	Check("Animator retarget lists", hero:GetComponent("Animator").ClipLibraries[1].Mesh == "Assets/Models/MixamoRig.gltf" and hero:GetComponent("Animator").RetargetJoints[1].Target == "spine_02")
+	ExpectError("Retarget joint validation", function() hero:SetComponent("Animator", { RetargetJoints = { { Target = "pelvis" }, { Target = "pelvis" } } }) end, "is already used by RetargetJoints[0]")
+
 	-- Other scripts.
 	local spinner = Scene.FindEntityByName("Turntable"):GetScript()
 	Check("GetScript", spinner ~= nil and spinner.Label == "turntable" and spinner.Speed == 2.0)

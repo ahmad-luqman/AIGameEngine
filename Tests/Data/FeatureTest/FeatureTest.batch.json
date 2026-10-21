@@ -20,6 +20,7 @@
 	{ "id": "assert-absent", "command": "assert.entity_exists", "params": { "entity": "NoSuchEntity" }, "expectError": "assertion failed: no entity named 'NoSuchEntity'" },
 	{ "id": "key", "command": "input.key", "params": { "key": "Space", "down": true } },
 	{ "id": "mouse", "command": "input.mouse", "params": { "position": [320, 240], "button": "Left", "down": true } },
+	{ "id": "animator-retarget", "command": "animator.retarget", "params": { "entity": "RetargetHero" } },
 	{ "id": "play", "command": "play.start" },
 	{ "id": "press-frame", "command": "play.step", "params": { "frames": 1, "assertNoErrors": true } },
 	{ "id": "key-up", "command": "input.key", "params": { "key": "Space", "down": false } },

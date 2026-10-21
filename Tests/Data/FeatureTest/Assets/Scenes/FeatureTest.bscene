@@ -44,6 +44,17 @@
 			"Animator": { "Mesh": "Assets/Models/Biped.gltf", "Clip": "Lean", "PlayOnStart": false },
 			"SpringBone": { "Chains": [ { "Name": "RightArm", "Joint": "RightUpperArm", "Stiffness": 5 } ],
 				"Colliders": [ { "Joint": "Chest", "Offset": [-0.3026, -0.1319, 0], "Radius": 0.1 } ] } } },
+		{ "ID": 926, "Name": "MorphFace", "Components": {
+			"Transform": { "Translation": [1000, 0, 40] },
+			"Animator": { "Mesh": "Assets/Models/Morph.gltf", "Clip": "Talk" } } },
+		{ "ID": 927, "Name": "MorphStatic", "Components": {
+			"Transform": { "Translation": [1000, 0, 45] },
+			"Mesh": { "Mesh": "Assets/Models/Morph.gltf" } } },
+		{ "ID": 928, "Name": "RetargetHero", "Components": {
+			"Transform": { "Translation": [1000, 0, 50] },
+			"Animator": { "Mesh": "Assets/Models/UnrealRig.gltf", "Clip": "Wave",
+				"ClipLibraries": [ { "Mesh": "Assets/Models/MixamoRig.gltf" } ],
+				"RetargetJoints": [ { "Source": "mixamorig:Spine1", "Target": "spine_02" } ] } } },
 		{ "ID": 100, "Name": "FeatureTestDriver", "Components": {
 			"Script": { "Script": "Assets/Scripts/FeatureTest.lua", "Properties": { "Duration": 4.5, "Note": "from scene", "Offset": [1, 2, 3] } } } },
 

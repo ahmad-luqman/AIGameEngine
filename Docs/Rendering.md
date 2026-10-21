@@ -197,15 +197,32 @@ but retain the renderer's no-transparent-shadow policy.
 Palettes occupy records in the existing draw SSBO, with per-draw offset/count metadata. This keeps
 the frame at four storage-buffer bindings and supports independent instances without mutable GPU
 asset data. Mesh nodes sharing a skin reuse one palette per instance, uploaded only if a camera or shadow
-pass needs it; `render.stats.skinMatrices` reports the uploaded matrix count. Vertex stride is 80 bytes for both rigid and skinned geometry. Palette upload storage grows
+pass needs it; `render.stats.skinMatrices` reports the uploaded matrix count. Vertex stride is 88 bytes for both rigid and skinned geometry. Palette upload storage grows
 with demand and uses nvrhi resource lifetime tracking; allocation failure fails the frame explicitly.
 Camera and shadow culling transform cached joint influence bounds in O(influencing joints); see
 Draw throughput below. Exact per-vertex posed bounds remain for editor framing/selection and as
 the reference/fallback for geometry without cached influences.
 
+## Morph targets
+
+glTF morph targets blend in the vertex shader (`Include/Morphing.glsl`) before skinning, in every mesh pass (PBR,
+depth/normal prepass and picking, opaque and masked shadows). Each model's position and normal deltas live in one
+RGBA32F texture (two texels per target and vertex, rows of 4,096 texels) bound as set 2 with a point sampler, visible to
+the vertex stage only: a fifth storage buffer would exceed the portable four per stage. Meshes without targets bind a
+one-texel empty texture, so every mesh pipeline has the same layout; the opaque shadow pipelines leave set 1 empty
+(nvrhi fills the hole). A draw's nonzero weights are `(target, weight)` pairs packed 16 to a record into the draw SSBO
+after the palettes, uploaded once per visible mesh node like a palette; `DrawData.Morph` holds the first record, the
+pair count, the delta base (minus the submesh's base vertex, which `gl_VertexIndex` includes) and the texels per
+target, so instanced draws of one mesh still batch with different weights. A draw blends its 32 strongest weights
+(warning once per entity beyond that); `render.stats.morphWeights` counts the uploaded pairs. Tangents are
+re-orthogonalized against the morphed normal. Culling widens each submesh's bounds (or, for skinned meshes, each joint
+influence box) by the weighted per-target delta ranges cached at import, so morphed geometry never pops; editor framing
+morphs vertices exactly. A MeshComponent draws its mesh's default weights; Animators draw their pose's (see the
+Lua API's Morph targets). The delta texture counts toward `memory.stats` GPU buffers.
+
 Import rejects malformed weights/joints, invalid track shapes/times/quaternions, cyclic hierarchies,
-animated matrix nodes and duplicate node/path targets. Unsupported morph-weight and pointer channels
-are warned about and skipped; extra influence sets retain static geometry with a warning and disable
+animated matrix nodes and duplicate node/path targets. Morph weight channels import as weights tracks (their
+widths match the node's target count); pointer channels are warned about and skipped; extra influence sets retain static geometry with a warning and disable
 Animator playback for that asset. Sparse accessors, normalized unsigned byte/short weights and
 normalized signed/unsigned byte/short rotation keys are supported. Animated/skinned models are limited
 to 65,536 nodes per model; each skin is limited to 65,536 joints. Other limits are 4,096 skins

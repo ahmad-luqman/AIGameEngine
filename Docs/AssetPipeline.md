@@ -19,7 +19,8 @@ strings on save. All component readers accept both strings and UUID/path objects
 Components, Lua, automation snapshots and replay hashes continue to expose paths. An unresolved
 start-scene UUID opens the project with no start scene and a diagnostic, preserving its reference across
 unrelated saves until `project.set startScene` explicitly repairs or clears it. Asset fields are
-marked once in ComponentRegistry and shared by persistence and rename. Paths inside arbitrary script
+marked once in ComponentRegistry and shared by persistence and rename; a list element's asset field (an Animator's
+`ClipLibraries[].Mesh`) is declared as `List[].Field` and handled the same way in every element. Paths inside arbitrary script
 properties, script source, module imports, animation clip names and external glTF resource URIs are
 not rewritten or assigned IDs by scene persistence.
 
@@ -64,6 +65,16 @@ the document to version 3. Move preparation may create a source sidecar; failed 
 while restoring any scene, prefab and project documents they changed. Diagnostic path hints may name
 an earlier location until the next save; UUID resolution remains authoritative.
 
+
+## Morph targets
+
+The importer keeps each primitive's morph target POSITION and NORMAL deltas (dense or sparse accessors, float or
+normalized integers), target names from `extras.targetNames` (unnamed: `Target<n>`, duplicates get `_1` suffixes),
+default weights from `mesh.weights` and per-node overrides from `node.weights`. A target without NORMAL deltas gets the
+change in generated normals between the base and fully morphed surface; TANGENT deltas are ignored. Deltas follow their
+vertices through the vertex-fetch optimization. Every primitive of a mesh must have the same number of targets; a mesh
+holds at most 256 and a model 4,194,304 deltas (targets times vertices). glTF `weights` animation channels import as
+clip tracks. Rendering is described in [Rendering.md](Rendering.md#morph-targets).
 
 ## Compressed textures and extended glTF materials
 

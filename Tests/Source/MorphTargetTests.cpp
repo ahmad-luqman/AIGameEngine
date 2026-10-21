@@ -43,7 +43,7 @@ namespace {
 		return source.MorphDeltas[submesh.MorphDeltaOffset + target * submesh.VertexCount + vertex];
 	}
 
-	const AnimationClip& Clip(const MeshSource& source, const std::string& name)
+	const AnimationClip& Clip(const MeshSource& source, const char* name)
 	{
 		const auto clip = std::ranges::find(source.Animations, name, &AnimationClip::Name);
 		REQUIRE_MESSAGE(clip != source.Animations.end(), name);

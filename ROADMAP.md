@@ -61,7 +61,8 @@ The features most games need, roughly in order of impact.
 
 Skeletal playback, crossfades, two-clip blends, 1D/2D blend spaces with phase sync and velocity matching,
 animation events, bone attachments, data-driven state machines and per-state root motion, layers with joint masks and
-additive clips, inverse kinematics (two-bone, look-at chains, foot placement) and spring bones (`AnimationSystem`) are implemented;
+additive clips, inverse kinematics (two-bone, look-at chains, foot placement), spring bones, morph targets and retargeted
+clip libraries (`AnimationSystem`) are implemented;
 physics provides character controllers (`MoveCharacter`, `IsCharacterGrounded`, ground normal) and raycasts. The items
 below extend character movement, in order of impact.
 
@@ -75,11 +76,8 @@ below extend character movement, in order of impact.
   a big hit, and blend back to animation with a get-up clip. Follow-up: powered (active) ragdolls that
   track the animated pose with motors (`Ragdoll::DriveToPoseUsingMotors`) for stumbles and hit reactions.
   Add a ragdoll to the determinism batch.
-- **Morph targets — M.** glTF morph targets (facial expressions, corrective shapes): blend position and
-  normal deltas in the skinning shader, animate weights from glTF `weights` channels and from Lua.
-- **Retargeting — M.** Play clips authored for one skeleton on another with different proportions: a
-  humanoid joint map (name mapping plus rest-pose rotation correction) and translation scaled by limb
-  length, so a shared clip library (e.g. Mixamo) can drive any character.
+- **Retargeting follow-ups — S.** Rest-pose matching for libraries authored in a different rest style (an A-pose clip
+  on a T-pose character) through a reference pose, and a reusable joint map asset shared by Animators.
 - **Property animation — M.** Keyframe tracks for any component field through the `ComponentRegistry`
   JSON path (doors, platforms, light flicker, UI transitions, cutscene cameras) with the same playback
   controls as skeletal clips, so non-character motion does not need per-frame Lua.
