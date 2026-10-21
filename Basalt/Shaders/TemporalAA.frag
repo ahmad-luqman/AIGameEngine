@@ -88,7 +88,7 @@ void main()
 					high = max(high, sampleColor);
 				}
 			vec2 targetUV = motion.xy * vec2(u_Push.Size) / vec2(textureSize(sampler2D(u_History, u_Linear), 0));
-			vec3 history = clamp(texture(sampler2D(u_History, u_Linear), targetUV).rgb, low, high);
+			vec3 history = clamp(textureLod(sampler2D(u_History, u_Linear), targetUV, 0.0).rgb, low, high);
 			float speed = length((uv - motion.xy) * vec2(u_Push.Size));
 			result = mix(current, history, mix(0.9, 0.5, clamp(speed / 16.0, 0.0, 1.0)));
 		}

@@ -18,11 +18,11 @@
 #include "Basalt/Renderer/LightClusters.h"
 #include "Basalt/Renderer/LocalShadows.h"
 #include "Basalt/Renderer/PostProcessStack.h"
-#include "Basalt/Renderer/TemporalAA.h"
-#include "Basalt/Renderer/TemporalHistory.h"
 #include "Basalt/Renderer/RenderMath.h"
 #include "Basalt/Renderer/SceneLights.h"
 #include "Basalt/Renderer/ShaderUtils.h"
+#include "Basalt/Renderer/TemporalAA.h"
+#include "Basalt/Renderer/TemporalHistory.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
 
@@ -32,11 +32,11 @@
 
 #include <algorithm>
 #include <array>
-#include <cstring>
 #include <cmath>
+#include <cstring>
 #include <map>
-#include <variant>
 #include <set>
+#include <variant>
 #include <unordered_set>
 
 namespace Basalt {
@@ -214,6 +214,7 @@ namespace Basalt {
 			glm::vec4 Quality;
 			glm::mat4 PreviousViewProjection;
 		};
+		static_assert(offsetof(GpuViewConstants, PreviousViewProjection) == 768);
 		static_assert(sizeof(GpuViewConstants) == 832, "GpuViewConstants must match the std140 ViewConstants block");
 
 		struct GpuDrawData
@@ -222,9 +223,10 @@ namespace Basalt {
 			glm::mat4 Normal;
 			glm::uvec4 Indices;
 			glm::uvec4 Morph;   // Morphing.glsl: first weight record, active weights, delta texel base, texels per target.
-			glm::uvec4 History; // x: previous draw record, y: valid.
+			glm::uvec4 History; // x: previous-state record in this frame's buffer, y: valid.
 		};
 		static_assert(sizeof(GpuDrawData) == 176);
+		static_assert(offsetof(GpuDrawData, History) == 160);
 		static_assert(MorphPairsPerRecord * sizeof(glm::vec2) == sizeof(GpuDrawData::Model) + sizeof(GpuDrawData::Normal), "a record's matrices hold MorphPairsPerRecord morph pairs");
 
 		struct GpuMaterialData
@@ -409,7 +411,7 @@ namespace Basalt {
 
 		// Shaders
 		nvrhi::ShaderHandle ShadowMaskedVS, ShadowMaskedPS;
-		nvrhi::ShaderHandle MeshVS, DepthNormalPS, PbrPS, ShadowVS, FullscreenVS, SsaoPS, SsaoBlurPS, SkyboxVS, SkyboxPS, TonemapPS, BlitPS, DepthUpsamplePS;
+		nvrhi::ShaderHandle MeshVS, MeshMotionVS, DepthNormalMotionPS, DepthNormalPickMotionPS, DepthNormalPS, PbrPS, ShadowVS, FullscreenVS, SsaoPS, SsaoBlurPS, SkyboxVS, SkyboxPS, TonemapPS, BlitPS, DepthUpsamplePS;
 		nvrhi::ShaderHandle EquirectCS, SkyCS, IrradianceCS, PrefilterCS, BrdfCS, DownsampleCS;
 		nvrhi::ShaderHandle ParticleVS, ParticlePS;
 
@@ -481,14 +483,15 @@ namespace Basalt {
 											TonemapLayout);
 		}
 
+		bool WantsTAA = false, TargetsTAA = false, ReportedMotionFailure = false;
 		TemporalAA TAA;
 		TemporalHistory History;
 		struct MeshHistory
 		{
 			Ref<MeshSource> Source;
-			uint32_t MeshIndex;
-			glm::mat4 Model;
-			std::vector<glm::mat4> Palette;
+			uint32_t MeshIndex = 0;
+			glm::mat4 Model{ 1 };
+			Ref<const std::vector<glm::mat4>> Palette;
 			std::vector<float> Weights;
 		};
 		// Static meshes and animated nodes have separate identities, even on an entity with both components.
@@ -605,6 +608,9 @@ namespace Basalt {
 
 		// --- Shaders ------------------------------------------------------------------------------
 		impl.MeshVS = CreateEmbeddedShader(device, "Mesh.vert", nvrhi::ShaderType::Vertex);
+		impl.MeshMotionVS = CreateEmbeddedShader(device, "MeshMotion.vert", nvrhi::ShaderType::Vertex);
+		impl.DepthNormalMotionPS = CreateEmbeddedShader(device, "DepthNormalMotion.frag", nvrhi::ShaderType::Pixel);
+		impl.DepthNormalPickMotionPS = CreateEmbeddedShader(device, "DepthNormalPickMotion.frag", nvrhi::ShaderType::Pixel);
 		impl.DepthNormalPS = CreateEmbeddedShader(device, "DepthNormal.frag", nvrhi::ShaderType::Pixel);
 		impl.PbrPS = CreateEmbeddedShader(device, "PBR.frag", nvrhi::ShaderType::Pixel);
 		impl.ShadowVS = CreateEmbeddedShader(device, "Shadow.vert", nvrhi::ShaderType::Vertex);
@@ -626,7 +632,7 @@ namespace Basalt {
 		impl.DownsampleCS = CreateEmbeddedShader(device, "CubeDownsample.comp", nvrhi::ShaderType::Compute);
 		impl.ParticleVS = CreateEmbeddedShader(device, "Particle.vert", nvrhi::ShaderType::Vertex);
 		impl.ParticlePS = CreateEmbeddedShader(device, "Particle.frag", nvrhi::ShaderType::Pixel);
-		for (const nvrhi::ShaderHandle& shader : { impl.MeshVS, impl.DepthNormalPS, impl.PbrPS, impl.ShadowVS, impl.FullscreenVS, impl.SsaoPS, impl.SsaoBlurPS, impl.SkyboxVS, impl.SkyboxPS, impl.TonemapPS, impl.BlitPS, impl.DepthUpsamplePS, impl.EquirectCS, impl.SkyCS, impl.IrradianceCS, impl.PrefilterCS, impl.BrdfCS, impl.DownsampleCS, impl.ParticleVS, impl.ParticlePS })
+		for (const nvrhi::ShaderHandle& shader : { impl.MeshVS, impl.MeshMotionVS, impl.DepthNormalMotionPS, impl.DepthNormalPickMotionPS, impl.DepthNormalPS, impl.PbrPS, impl.ShadowVS, impl.FullscreenVS, impl.SsaoPS, impl.SsaoBlurPS, impl.SkyboxVS, impl.SkyboxPS, impl.TonemapPS, impl.BlitPS, impl.DepthUpsamplePS, impl.EquirectCS, impl.SkyCS, impl.IrradianceCS, impl.PrefilterCS, impl.BrdfCS, impl.DownsampleCS, impl.ParticleVS, impl.ParticlePS })
 		{
 			if (!shader)
 				return false;
@@ -1065,7 +1071,7 @@ namespace Basalt {
 		height = std::max(height, 1u);
 		const glm::uvec2 targetSize = ComputeRenderSize(width, height, m_RenderScale);
 		const bool dynamic = IsDynamicResolutionActive();
-		if (width == m_Width && height == m_Height && targetSize.x == m_TargetWidth && targetSize.y == m_TargetHeight && dynamic == m_TargetsDynamic && m_OutputTexture)
+		if (width == m_Width && height == m_Height && targetSize.x == m_TargetWidth && targetSize.y == m_TargetHeight && dynamic == m_TargetsDynamic && m_Impl->WantsTAA == m_Impl->TargetsTAA && m_OutputTexture)
 			return;
 
 		Impl& impl = *m_Impl;
@@ -1091,6 +1097,7 @@ namespace Basalt {
 		m_TargetWidth = targetSize.x;
 		m_TargetHeight = targetSize.y;
 		m_TargetsDynamic = dynamic;
+		impl.TargetsTAA = impl.WantsTAA;
 		m_RenderWidth = m_TargetWidth;
 		m_RenderHeight = m_TargetHeight;
 		m_CurrentRenderScale = m_RenderScale;
@@ -1124,13 +1131,16 @@ namespace Basalt {
 		}
 		impl.ReportedParticleDepthFailure = false;
 		impl.ParticleSets.clear();
-		impl.MotionTexture = makeTarget(nvrhi::Format::RGBA32_FLOAT, "SceneMotion");
-		if (!impl.MotionTexture)
+		impl.MotionTexture = impl.TargetsTAA ? makeTarget(nvrhi::Format::RGBA32_FLOAT, "SceneMotion") : nullptr;
+		if (impl.TargetsTAA && !impl.MotionTexture)
 		{
-			BS_CORE_ERROR("SceneRenderer: failed to allocate motion target");
+			if (!impl.ReportedMotionFailure)
+				BS_CORE_ERROR("SceneRenderer: cannot allocate the {}x{} motion target; retrying next frame", m_TargetWidth, m_TargetHeight);
+			impl.ReportedMotionFailure = true;
 			m_OutputTexture = nullptr;
 			return;
 		}
+		impl.ReportedMotionFailure = false;
 		impl.NormalTexture = makeTarget(nvrhi::Format::RGBA16_FLOAT, "SceneNormals");
 		impl.HdrTexture = makeTarget(nvrhi::Format::RGBA16_FLOAT, "SceneHDR");
 		impl.SsaoTexture = makeTarget(nvrhi::Format::R8_UNORM, "SSAO");
@@ -1156,7 +1166,8 @@ namespace Basalt {
 			impl.PickFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(impl.EntityIds).setDepthAttachment(impl.PickDepth));
 			impl.OutlineSet = m_Device->createBindingSet(nvrhi::BindingSetDesc().addItem(nvrhi::BindingSetItem::Texture_SRV(0, impl.EntityIds)).addItem(nvrhi::BindingSetItem::PushConstants(PushConstantSlot, sizeof(OutlinePush))), impl.OutlineLayout);
 		}
-		prepassDesc.addColorAttachment(impl.MotionTexture);
+		if (impl.TargetsTAA)
+			prepassDesc.addColorAttachment(impl.MotionTexture);
 		impl.PrepassFramebuffer = m_Device->createFramebuffer(prepassDesc);
 		if (m_Picking && (!impl.PrepassFramebuffer || !impl.PickFramebuffer || !impl.OutlineSet))
 		{
@@ -1175,7 +1186,7 @@ namespace Basalt {
 		auto meshPipeline = [&](nvrhi::IShader* pixelShader, nvrhi::IFramebuffer* framebuffer, bool doubleSided, bool depthWrite, bool blend) {
 			nvrhi::GraphicsPipelineDesc desc;
 			desc.inputLayout = impl.MeshInputLayout;
-			desc.VS = impl.MeshVS;
+			desc.VS = impl.TargetsTAA && framebuffer == impl.PrepassFramebuffer ? impl.MeshMotionVS : impl.MeshVS;
 			desc.PS = pixelShader;
 			// Meshes wind counter-clockwise (glTF convention).
 			desc.renderState.rasterState.setFrontCounterClockwise(true);
@@ -1199,7 +1210,7 @@ namespace Basalt {
 		};
 		for (int doubleSided = 0; doubleSided < 2; doubleSided++)
 		{
-			impl.PrepassPipeline[doubleSided] = meshPipeline(m_Picking ? impl.DepthNormalPickPS : impl.DepthNormalPS, impl.PrepassFramebuffer, doubleSided, true, false);
+			impl.PrepassPipeline[doubleSided] = meshPipeline(impl.TargetsTAA ? (m_Picking ? impl.DepthNormalPickMotionPS : impl.DepthNormalMotionPS) : (m_Picking ? impl.DepthNormalPickPS : impl.DepthNormalPS), impl.PrepassFramebuffer, doubleSided, true, false);
 			if (m_Picking && impl.PickFramebuffer)
 				impl.PickPipeline[doubleSided] = meshPipeline(impl.PickPS, impl.PickFramebuffer, doubleSided, true, false);
 			impl.OpaquePipeline[doubleSided] = meshPipeline(impl.PbrPS, impl.LightingFramebuffer, doubleSided, false, false);
@@ -1317,6 +1328,13 @@ namespace Basalt {
 		AssetManager::PublishCompleted();
 		InvalidatePicking();
 		Impl& impl = *m_Impl;
+		m_Statistics = {};
+		RendererSettings settings = scene.GetRendererSettings();
+		UUID postProcessId = 0;
+		const PostProcessComponent post = ResolvePostProcess(scene, &postProcessId);
+		CopyPostProcessSettings(post, settings);
+		const bool taa = post.TAAEnabled && settings.DebugView == RendererDebugView::None;
+		impl.WantsTAA = taa;
 		ResizeTargets(m_Width, m_Height);
 		if (!m_OutputTexture || !impl.ParticleDepth)
 		{
@@ -1331,16 +1349,15 @@ namespace Basalt {
 		UpdateRenderSize(profiler.BeginFrame(commandList));
 		impl.FrameCounter++;
 		m_Statistics = {};
-		RendererSettings settings = scene.GetRendererSettings();
-		UUID postProcessId = 0;
-		const PostProcessComponent post = ResolvePostProcess(scene, &postProcessId);
-		CopyPostProcessSettings(post, settings);
+
 		const auto graphics = scene.GetEffectiveGraphicsSettings();
 		settings.SSAOEnabled = settings.SSAOEnabled && graphics.SSAOQuality != GraphicsQuality::Off;
 		settings.ShadowsEnabled = settings.ShadowsEnabled && graphics.ShadowQuality != GraphicsQuality::Off;
 		const bool orthographic = IsOrthographic(camera.Projection);
 		auto abortFrame = [&]() {
 			ResetTemporalHistory();
+			m_Statistics.TAAActive = false;
+			m_Statistics.TAAHistoryValid = false;
 			m_Statistics.Failed = true;
 			profiler.EndFrame(commandList, 0);
 			commandList->close();
@@ -1358,7 +1375,6 @@ namespace Basalt {
 		}
 
 		impl.InvalidPostProcessError.clear();
-		const bool taa = post.TAAEnabled && settings.DebugView == RendererDebugView::None;
 		impl.History.Begin(taa, scene.GetRenderRevision(), static_cast<uint64_t>(postProcessId),
 						   { m_RenderWidth, m_RenderHeight }, camera.View, camera.Projection);
 		if (!impl.History.IsValid())
@@ -1858,6 +1874,9 @@ namespace Basalt {
 			m_Statistics.MorphWeights += upload.Count;
 		};
 
+		// Nodes sharing a skin also share its immutable history and GPU upload.
+		std::map<std::pair<UUID, int32_t>, Ref<const std::vector<glm::mat4>>> currentPalettes;
+		std::map<const std::vector<glm::mat4>*, uint32_t> previousPaletteOffsets;
 		const glm::vec3 cameraForward = -glm::vec3(view.InverseView[2]);
 		// `morphWeights` are the weights shown (one per target of the mesh); `morphKey` and the node's name (an Animator's)
 		// or the mesh's (a MeshComponent's) identify it in the truncation warning.
@@ -1872,7 +1891,7 @@ namespace Basalt {
 			if (taa)
 			{
 				const auto it = impl.PreviousMeshes.find(historyKey);
-				if (it != impl.PreviousMeshes.end() && it->second.Source == source && it->second.MeshIndex == meshIndex && it->second.Palette.size() == palette.size())
+				if (it != impl.PreviousMeshes.end() && it->second.Source == source && it->second.MeshIndex == meshIndex && it->second.Palette->size() == palette.size())
 					previous = &it->second;
 			}
 			uint32_t previousPalette = UINT32_MAX;
@@ -2002,7 +2021,10 @@ namespace Basalt {
 					// Capture the inputs actually submitted. Unseen nodes and replaced assets cannot inherit old geometry.
 					if (!capturedHistory)
 					{
-						impl.CurrentMeshes.emplace(historyKey, Impl::MeshHistory{ source, meshIndex, model, palette,
+						auto& snapshot = currentPalettes[{ entity.GetUUID(), node ? node->SkinIndex : -1 }];
+						if (!snapshot)
+							snapshot = CreateRef<const std::vector<glm::mat4>>(palette);
+						impl.CurrentMeshes.emplace(historyKey, Impl::MeshHistory{ source, meshIndex, model, snapshot,
 																				  std::vector<float>(morphWeights.begin(), morphWeights.end()) });
 						capturedHistory = true;
 					}
@@ -2010,9 +2032,11 @@ namespace Basalt {
 					{
 						if (previousPalette == UINT32_MAX)
 						{
-							previousPalette = static_cast<uint32_t>(draws.size());
-							for (const auto& joint : previous->Palette)
-								draws.push_back({ joint, glm::mat4(1), glm::uvec4(0) });
+							const auto [entry, first] = previousPaletteOffsets.try_emplace(previous->Palette.get(), static_cast<uint32_t>(draws.size()));
+							previousPalette = entry->second;
+							if (first)
+								for (const auto& joint : *previous->Palette)
+									draws.push_back({ joint, glm::mat4(1), glm::uvec4(0) });
 						}
 						glm::uvec4 oldMorph(0);
 						if (submesh.MorphTargetCount > 0 && gpuMesh->MorphDeltas)
@@ -2022,7 +2046,7 @@ namespace Basalt {
 							oldMorph = glm::uvec4(previousMorph.Record, previousMorph.Count, 2u * submesh.MorphDeltaOffset - 2u * submesh.BaseVertex, 2u * submesh.VertexCount);
 						}
 						history = glm::uvec4(static_cast<uint32_t>(draws.size()), 1, 0, 0);
-						draws.push_back({ previous->Model, glm::mat4(1), glm::uvec4(0, 0, previousPalette, static_cast<uint32_t>(previous->Palette.size())), oldMorph });
+						draws.push_back({ previous->Model, glm::mat4(1), glm::uvec4(0, 0, previousPalette, static_cast<uint32_t>(previous->Palette->size())), oldMorph });
 					}
 				}
 				const uint32_t drawIndex = static_cast<uint32_t>(instanceRecords.size());
@@ -2366,7 +2390,8 @@ namespace Basalt {
 			if (m_Picking)
 				commandList->clearTextureUInt(impl.EntityIds, nvrhi::AllSubresources, 0);
 			commandList->clearDepthStencilTexture(m_DepthTexture, nvrhi::AllSubresources, true, 1.0f, false, 0);
-			commandList->clearTextureFloat(impl.MotionTexture, nvrhi::AllSubresources, nvrhi::Color(0));
+			if (taa)
+				commandList->clearTextureFloat(impl.MotionTexture, nvrhi::AllSubresources, nvrhi::Color(0));
 			commandList->clearTextureFloat(impl.NormalTexture, nvrhi::AllSubresources, nvrhi::Color(0.0f, 0.0f, 1.0f, 0.0f));
 			drawBatches(visibleOpaque, [&](const DrawBatchKey& key) { return impl.PrepassPipeline[key.DoubleSided ? 1 : 0].Get(); }, impl.PrepassFramebuffer, renderViewport, 0, BatchPass::Prepass);
 		}
@@ -2424,6 +2449,13 @@ namespace Basalt {
 		if (std::any_of(impl.ParticleData.Particles.begin(), impl.ParticleData.Particles.end(), [](const GpuParticle& p) { return p.Effects.y > 0.0f; }))
 			commandList->copyTexture(impl.ParticleDepth, nvrhi::TextureSlice(), m_DepthTexture, nvrhi::TextureSlice());
 
+		// Resource failure must close the frame outside every GPU timing scope.
+		if (taa && !impl.TAA.Prepare(m_Device, impl.HdrTexture, m_DepthTexture, impl.MotionTexture, impl.FullscreenVS, impl.LinearClamp, impl.PointClamp))
+		{
+			abortFrame();
+			return;
+		}
+
 		// --- Lighting (opaque), skybox, transparent -----------------------------------------------
 		{
 			const GpuPassScope pass(profiler, commandList, PassLighting);
@@ -2438,17 +2470,7 @@ namespace Basalt {
 
 			if (taa)
 			{
-				if (!impl.TAA.Prepare(m_Device, impl.HdrTexture, m_DepthTexture, impl.MotionTexture, impl.FullscreenVS, impl.LinearClamp, impl.PointClamp))
-				{
-					abortFrame();
-					return;
-				}
-				glm::mat4 rotationView = camera.View;
-				rotationView[3] = glm::vec4(0, 0, 0, 1);
-				// Previous VP has translation, so remove its camera origin before transforming an infinite direction.
-				glm::mat4 skyPrevious = impl.History.GetPreviousViewProjection();
-				skyPrevious[3] = glm::vec4(0);
-				const glm::mat4 skyReprojection = skyPrevious * glm::inverse(view.Projection * rotationView);
+				const glm::mat4 skyReprojection = impl.History.GetSkyReprojection(view.Projection);
 				const glm::vec2 jitterDelta = (TemporalJitter(impl.History.GetFrame()) - TemporalJitter((impl.History.GetFrame() + 7) % 8)) /
 											  glm::vec2(m_RenderWidth, m_RenderHeight) * glm::vec2(1, -1);
 				impl.TAA.Render(commandList, { m_RenderWidth, m_RenderHeight }, impl.History.IsValid() && !bakeEnvironment, skyReprojection, jitterDelta);
@@ -2500,8 +2522,9 @@ namespace Basalt {
 			}
 		}
 
-		const bool postActive = settings.DebugView == RendererDebugView::None && (post.BloomEnabled || post.AutoExposure || (post.FXAAEnabled && !taa));
-		const bool fxaa = postActive && post.FXAAEnabled && !taa;
+		// A reset frame has no temporal samples yet; FXAA supplies spatial AA until history is available.
+		const bool fxaa = settings.DebugView == RendererDebugView::None && (taa ? !m_Statistics.TAAHistoryValid : post.FXAAEnabled);
+		const bool postActive = settings.DebugView == RendererDebugView::None && (post.BloomEnabled || post.AutoExposure || fxaa);
 		const bool postActivated = postActive && !impl.PostProcessWasActive;
 		impl.PostProcessWasActive = postActive;
 		nvrhi::ITexture* tonemapSource = impl.HdrTexture;
@@ -2626,7 +2649,7 @@ namespace Basalt {
 		if (!lines.empty())
 		{
 			const GpuPassScope pass(profiler, commandList, PassDebugLines);
-			impl.Lines.Render(commandList, m_OverlayFramebuffer, view.ViewProjection, lines);
+			impl.Lines.Render(commandList, m_OverlayFramebuffer, camera.Projection * camera.View, lines);
 		}
 
 		// One outline pass for the union of selected surfaces, independent of selection size.

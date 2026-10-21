@@ -103,3 +103,36 @@ TEST_CASE("Temporal history keeps ordinary camera motion")
 	CHECK(history.IsValid());
 	CHECK(history.GetPreviousViewProjection() == glm::mat4(1));
 }
+
+TEST_CASE("Sky reprojection preserves perspective and orthographic history through translation and rotation")
+{
+	const glm::uvec2 size(96, 64);
+	for (const auto& projection : std::array{ glm::perspective(.9f, 1.5f, .1f, 100.0f), glm::ortho(-3.0f, 3.0f, -2.0f, 2.0f, .1f, 100.0f) })
+	{
+		TemporalHistory history;
+		const glm::mat4 previousView = glm::lookAt(glm::vec3(2, 1, 3), glm::vec3(2, 1, 2), glm::vec3(0, 1, 0));
+		const glm::mat4 previousProjection = JitterProjection(projection, TemporalJitter(0), size);
+		history.Begin(true, 1, 2, size, previousView, projection);
+		history.Commit(previousProjection * previousView);
+		for (float angle : { 0.0f, .2f })
+		{
+			const glm::vec3 position(3, 2, 4);
+			const glm::vec3 forward(std::sin(angle), 0, -std::cos(angle));
+			const glm::mat4 view = glm::lookAt(position, position + forward, glm::vec3(0, 1, 0));
+			history.Begin(true, 1, 2, size, view, projection);
+			REQUIRE(history.IsValid());
+			const glm::mat4 currentProjection = JitterProjection(projection, TemporalJitter(1), size);
+			for (glm::vec2 ndc : { glm::vec2(0), glm::vec2(.4f, -.3f), glm::vec2(-.7f, .5f) })
+			{
+				const glm::vec4 currentClip(ndc, 1, 1);
+				const glm::vec4 viewPoint = glm::inverse(currentProjection) * currentClip;
+				const glm::vec3 worldPoint = glm::inverse(glm::mat3(view)) * (glm::vec3(viewPoint) / viewPoint.w);
+				const glm::vec4 expected = previousProjection * glm::vec4(glm::mat3(previousView) * worldPoint, 1);
+				const glm::vec4 actual = history.GetSkyReprojection(currentProjection) * currentClip;
+				REQUIRE(actual.w > 0);
+				CHECK(actual.x / actual.w == doctest::Approx(expected.x / expected.w).epsilon(.0001));
+				CHECK(actual.y / actual.w == doctest::Approx(expected.y / expected.w).epsilon(.0001));
+			}
+		}
+	}
+}

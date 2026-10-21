@@ -5,7 +5,7 @@
 #include <cstdint>
 
 namespace Basalt {
-	// Deterministic pixel-space Halton jitter, repeated every eight successfully submitted frames.
+	// Deterministic pixel-space Halton jitter, repeated every eight samples.
 	glm::vec2 TemporalJitter(uint32_t frame);
 	// Offsets clip XY by clip W; works for both perspective and orthographic cameras (+Y up).
 	glm::mat4 JitterProjection(const glm::mat4& projection, glm::vec2 pixels, glm::uvec2 size);
@@ -18,6 +18,8 @@ namespace Basalt {
 				   const glm::mat4& view, const glm::mat4& projection);
 		void Commit(const glm::mat4& viewProjection);
 		void Reset();
+		// Reprojects the sky without camera translation, retaining orthographic homogeneous coordinates.
+		glm::mat4 GetSkyReprojection(const glm::mat4& jitteredProjection) const;
 		bool IsValid() const { return m_Valid; }
 		uint32_t GetFrame() const { return m_Frame; }
 		const glm::mat4& GetPreviousViewProjection() const { return m_PreviousViewProjection; }
@@ -28,6 +30,6 @@ namespace Basalt {
 		uint32_t m_Frame = 0;
 		uint64_t m_Revision = 0, m_Component = 0;
 		glm::uvec2 m_Size{ 0 };
-		glm::mat4 m_View{ 1 }, m_Projection{ 1 }, m_PreviousViewProjection{ 1 };
+		glm::mat4 m_View{ 1 }, m_Projection{ 1 }, m_PreviousViewProjection{ 1 }, m_PreviousProjection{ 1 };
 	};
 }

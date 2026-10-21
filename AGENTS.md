@@ -135,7 +135,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   streaming; captures keep blocking loads. `BASALT_PROFILE` enables Tracy outside Dist. `memory.stats`
   reports logical asset payload, GPU buffer and Lua heap charges (see Docs/Rendering.md).
 - **Throughput.** Opaque/masked geometry batches by shared mesh/range, texture bindings and pipeline flags.
-  Draw records keep each instance's transforms, material index, pick token and skin offset/count; vertex
+  Draw records keep each instance's transforms, material index, pick token, skin offset/count and previous-state record index; vertex
   shaders address `DrawIndex + gl_InstanceIndex` with `startInstanceLocation = 0`. Batch discovery order is
   deterministic; grouping can change exact coplanar opaque depth-tie winners. Blended draws keep their
   stable back-to-front order. Camera and each shadow frustum filter batches independently. Skin culling

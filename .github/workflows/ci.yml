@@ -223,7 +223,7 @@ jobs:
       - name: Verify editor integration is registered
         run: |
           ctest --test-dir build -N --show-only=json-v1 > /tmp/basalt-tests.json
-          python3 -c 'import json; tests = json.load(open("/tmp/basalt-tests.json"))["tests"]; names = {t["name"] for t in tests}; missing = {"EditorViewport", "ViewportGPU", "PostProcessGPU", "PreviewRendererGPU", "Benchmark_gpu"} - names; missing and exit(f"Missing GPU regressions: {missing}")'
+          python3 -c 'import json; tests = json.load(open("/tmp/basalt-tests.json"))["tests"]; names = {t["name"] for t in tests}; missing = {"EditorViewport", "ViewportGPU", "PostProcessGPU", "TemporalAAGPU", "PreviewRendererGPU", "Benchmark_gpu"} - names; missing and exit(f"Missing GPU regressions: {missing}")'
 
       - name: GPU tests
         run: ctest --test-dir build --output-on-failure -L gpu

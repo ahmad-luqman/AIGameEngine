@@ -3,7 +3,7 @@
 The `ROADMAP.md` items grouped into single-session milestones, sorted in order of implementation, with completed
 sessions retained for reference. The order follows the roadmap's priorities (P1 → P2 → P3) and is adjusted so that
 work a later session depends on comes first.
-Updated in October 2026 through Animation content (session 10).
+Updated in October 2026 through TAA (session 11).
 
 Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or more.
 
@@ -19,7 +19,7 @@ Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or mor
 | 8 | **Asset pipeline II** ✅ | Texture compression to KTX2/BC7 (M); glTF extensions (M) | Shipped in [PR #44](https://github.com/ahmad-luqman/AIGameEngine/pull/44): KTX2/BC7 imports and the six planned glTF extensions. |
 | 9 | **Material assets** ✅ | `.bmaterial` files with thumbnails (L) | Shipped in [PR #45](https://github.com/ahmad-luqman/AIGameEngine/pull/45): `.bmaterial` files with the full material model and UUID references, `Model.glb#material/N` references, `material.create`/`material.extract`, lossless sphere thumbnails and swatches, and a Material Editor. |
 | 10 | **Animation content** ✅ | Morph targets (M); retargeting, e.g. sharing a Mixamo library across characters (M) | Shipped in [PR #46](https://github.com/ahmad-luqman/AIGameEngine/pull/46): glTF morph targets blended in the vertex shader and animated by clips, layers and Lua, and `Animator.ClipLibraries` retargeted onto humanoid skeletons with recognised joint names (or explicit joint pairs). |
-| 11 | **TAA** (shipped) | Temporal anti-aliasing (M) | Needs previous-frame data for instanced draws (session 4) and for skinned and morphed meshes (session 10). |
+| 11 | **TAA** ✅ ([PR #47](https://github.com/ahmad-luqman/AIGameEngine/pull/47)) | Temporal anti-aliasing (M) | Needs previous-frame data for instanced draws (session 4) and for skinned and morphed meshes (session 10). |
 | 12 | **Animation authoring** | Animation graph editor for `.banimgraph` (M); property animation through the `ComponentRegistry` (M) | Both are authoring tools built on the automation and registry paths. |
 | 13 | **Ragdolls** | Ragdolls from the skeleton, with a powered-ragdoll follow-up (M) | Physics-heavy: it moves the `PhysicsDeterminism` hashes, so it's best kept in its own PR. |
 | 14 | **Prefabs** | Prefab editing and per-instance overrides (L); native file dialogs (S) | The large P2 editor item. The dialogs fit its open and save flows. |
