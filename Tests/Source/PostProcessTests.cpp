@@ -100,7 +100,7 @@ TEST_SUITE("PostProcess")
 		const auto* info = ComponentRegistry::Find("PostProcess");
 		REQUIRE(info);
 		const nlohmann::json values = {
-			{ "Enabled", false }, { "Priority", 42 }, { "Tonemapper", "AgX" }, { "Exposure", 2.0 }, { "AutoExposure", true }, { "MinExposure", 0.5 }, { "MaxExposure", 8.0 }, { "ExposureCompensation", -2.0 }, { "AdaptationSpeed", 5.0 }, { "SSAOEnabled", false }, { "SSAORadius", 0.8 }, { "SSAOIntensity", 1.5 }, { "SSAOBias", 0.1 }, { "FXAAEnabled", true }, { "BloomEnabled", false }, { "BloomThreshold", 3.0 }, { "BloomIntensity", 0.25 }, { "BloomScatter", 0.4 }
+			{ "Enabled", false }, { "Priority", 42 }, { "Tonemapper", "AgX" }, { "Exposure", 2.0 }, { "AutoExposure", true }, { "MinExposure", 0.5 }, { "MaxExposure", 8.0 }, { "ExposureCompensation", -2.0 }, { "AdaptationSpeed", 5.0 }, { "SSAOEnabled", false }, { "SSAORadius", 0.8 }, { "SSAOIntensity", 1.5 }, { "SSAOBias", 0.1 }, { "FXAAEnabled", true }, { "TAAEnabled", true }, { "BloomEnabled", false }, { "BloomThreshold", 3.0 }, { "BloomIntensity", 0.25 }, { "BloomScatter", 0.4 }
 		};
 		std::string error;
 		REQUIRE(info->Deserialize(entity, values, error));

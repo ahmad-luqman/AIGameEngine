@@ -18,6 +18,7 @@ layout(location = 3) out vec2 v_TexCoord;
 // x: material index, y: pick token. Fragment shaders cannot use gl_InstanceIndex to fetch their record.
 layout(location = 4) flat out uvec2 v_InstanceIndices;
 layout(location = 5) out vec2 v_TexCoord1;
+layout(location = 6) out vec4 v_PreviousClip;
 
 // The depth prepass and the lighting pass must produce bit-identical depth.
 invariant gl_Position;
@@ -55,5 +56,14 @@ void main()
 	v_TexCoord = a_TexCoord;
 	v_TexCoord1 = a_TexCoord1;
 	v_InstanceIndices = draw.Indices.xy;
+	v_PreviousClip = vec4(0.0, 0.0, 0.0, -1.0);
+	if (draw.History.y != 0u)
+	{
+		DrawData previous = u_Draws.Draws[draw.History.x];
+		vec3 previousPosition = a_Position;
+		if (previous.Morph.y > 0u)
+			ApplyMorphPosition(previous, previousPosition);
+		v_PreviousClip = u_View.PreviousViewProjection * previous.Model * SkinMatrix(previous, a_Joints, a_Weights) * vec4(previousPosition, 1.0);
+	}
 	gl_Position = u_View.ViewProjection * world;
 }

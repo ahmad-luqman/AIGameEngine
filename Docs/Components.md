@@ -64,7 +64,7 @@ Fields: `EnvironmentMap` (string), `Intensity` (number), `Rotation` (number), `S
 
 ## PostProcess
 
-Fields: `Enabled` (boolean), `Priority` (integer), `Tonemapper` (enum: None, Reinhard, ACES, AgX), `Exposure` (number), `AutoExposure` (boolean), `MinExposure` (number), `MaxExposure` (number), `ExposureCompensation` (number), `AdaptationSpeed` (number), `SSAOEnabled` (boolean), `SSAORadius` (number), `SSAOIntensity` (number), `SSAOBias` (number), `FXAAEnabled` (boolean), `BloomEnabled` (boolean), `BloomThreshold` (number), `BloomIntensity` (number), `BloomScatter` (number)
+Fields: `Enabled` (boolean), `Priority` (integer), `Tonemapper` (enum: None, Reinhard, ACES, AgX), `Exposure` (number), `AutoExposure` (boolean), `MinExposure` (number), `MaxExposure` (number), `ExposureCompensation` (number), `AdaptationSpeed` (number), `SSAOEnabled` (boolean), `SSAORadius` (number), `SSAOIntensity` (number), `SSAOBias` (number), `FXAAEnabled` (boolean), `TAAEnabled` (boolean), `BloomEnabled` (boolean), `BloomThreshold` (number), `BloomIntensity` (number), `BloomScatter` (number)
 
 ## RigidBody
 

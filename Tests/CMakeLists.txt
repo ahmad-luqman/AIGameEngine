@@ -80,6 +80,8 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	basalt_add_gpu_test(FSR1GPU Rendering/FSR1GPU.cpp 60)
 	basalt_add_gpu_test(PostProcessGPU Rendering/PostProcessGPU.cpp 120)
 	target_compile_definitions(BasaltPostProcessGPU PRIVATE BASALT_POSTPROCESS_OUTPUT_DIR="${CMAKE_CURRENT_BINARY_DIR}/PostProcess")
+	basalt_add_gpu_test(TemporalAAGPU Rendering/TemporalAAGPU.cpp 120)
+	target_compile_definitions(BasaltTemporalAAGPU PRIVATE BASALT_ANIMATION_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Data/Animation")
 	basalt_add_gpu_test(AnimationGPU Rendering/AnimationGPU.cpp 120)
 	target_compile_definitions(BasaltAnimationGPU PRIVATE BASALT_ANIMATION_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Data/Animation" BASALT_ANIMATION_OUTPUT_DIR="${CMAKE_CURRENT_BINARY_DIR}/Animation")
 	set(basaltRenderArgs --project "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest" --frames 90 --width 1280 --height 720 --require-validation)
@@ -96,7 +98,7 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	set(basaltGoldenOutput "${CMAKE_CURRENT_BINARY_DIR}/Golden")
 	file(MAKE_DIRECTORY "${basaltGoldenOutput}")
 
-	set(basaltGpuTests PostProcessGPU ViewportGPU FSR1GPU LightClustersGPU AnimationGPU PreviewRendererGPU)
+	set(basaltGpuTests TemporalAAGPU PostProcessGPU ViewportGPU FSR1GPU LightClustersGPU AnimationGPU PreviewRendererGPU)
 	# "Scaled" is the lit image rendered at half resolution and upsampled by the tonemap pass (render scale).
 	# "Dynamic" reaches the same image through dynamic resolution: an unreachable frame-rate target drops the
 	# scale to its 0.5 minimum (once GPU timer results arrive), and the scene renders into the top-left of
@@ -220,7 +222,7 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	endif()
 	set_tests_properties(${basaltGpuTests} PROPERTIES LABELS gpu)
 	# Explicitly enable synchronization validation for the compute-write -> fragment-read path.
-	set_property(TEST PostProcessGPU LightClustersGPU ViewportGPU PreviewRendererGPU APPEND PROPERTY ENVIRONMENT "VK_LAYER_ENABLES=VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT")
+	set_property(TEST TemporalAAGPU PostProcessGPU LightClustersGPU ViewportGPU PreviewRendererGPU APPEND PROPERTY ENVIRONMENT "VK_LAYER_ENABLES=VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT")
 endif()
 
 # Runtime option validation: bad values must stop the run before a window or GPU is needed (an ignored
