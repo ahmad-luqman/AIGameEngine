@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -189,16 +190,29 @@ namespace Basalt {
 		constexpr double CubicSampleRate = 30.0;
 		constexpr const char* BudgetError = "the baked clip exceeds the decoded animation budget";
 
-		// The bake's sample times: every source key, 0 and the duration, plus a 30 Hz grid over the whole clip when any
-		// track is cubic. False, without allocating, when they cannot fit in `limit` keys; outTimes is filled only when
-		// asked for or when the cheap bound is not enough.
+		// Whether every track steps, so the baked joint tracks step too (otherwise they interpolate linearly).
+		bool AllStepped(const AnimationClip& clip)
+		{
+			return !clip.Tracks.empty() && std::ranges::all_of(clip.Tracks, [](const AnimationTrack& track) { return track.Interpolation == AnimationInterpolation::Step; });
+		}
+
+		// Stepped joint tracks of a clip baked linearly also sample just before each key, so the baked track holds the
+		// previous value up to the jump instead of blending into it.
+		bool HoldsSteps(const AnimationClip& clip, const AnimationTrack& track)
+		{
+			return track.Interpolation == AnimationInterpolation::Step && track.Path != AnimationPath::Weights && !AllStepped(clip);
+		}
+
+		// The bake's sample times: every source key (and the float before each key of HoldsSteps tracks), 0 and the
+		// duration, plus a 30 Hz grid over the whole clip when any track is cubic. False, without allocating, when they
+		// cannot fit in `limit` keys; outTimes is filled only when asked for or when the cheap bound is not enough.
 		bool SampleTimes(const AnimationClip& clip, size_t limit, std::set<float>* outTimes)
 		{
 			double bound = 2;
 			bool cubic = false;
 			for (const AnimationTrack& track : clip.Tracks)
 			{
-				bound += static_cast<double>(track.Times.size());
+				bound += static_cast<double>(track.Times.size()) * (HoldsSteps(clip, track) ? 2 : 1);
 				cubic = cubic || track.Interpolation == AnimationInterpolation::CubicSpline;
 			}
 			const double steps = cubic ? std::ceil(static_cast<double>(clip.Duration) * CubicSampleRate) : 0.0;
@@ -211,7 +225,13 @@ namespace Basalt {
 			std::set<float>& times = outTimes ? *outTimes : local;
 			times = { 0.0f, clip.Duration };
 			for (const AnimationTrack& track : clip.Tracks)
+			{
 				times.insert(track.Times.begin(), track.Times.end());
+				if (HoldsSteps(clip, track))
+					for (float time : track.Times)
+						if (time > 0)
+							times.insert(std::nextafter(time, -std::numeric_limits<float>::infinity()));
+			}
 			for (size_t i = 1; i < static_cast<size_t>(steps); i++)
 				times.insert(clip.Duration * static_cast<float>(i) / static_cast<float>(steps));
 			return times.size() <= limit;
@@ -446,7 +466,7 @@ namespace Basalt {
 			if (!CheckBudget(target, source, map, clip, &times, outError))
 				return false;
 
-			const bool stepped = !clip.Tracks.empty() && std::ranges::all_of(clip.Tracks, [](const AnimationTrack& track) { return track.Interpolation == AnimationInterpolation::Step; });
+			const bool stepped = AllStepped(clip);
 			// Which source channels the clip moves, per source node.
 			const std::vector<uint8_t> channels = AnimatedChannels(source, clip);
 			std::vector<std::vector<glm::vec4>> rotations(target.Nodes.size()), translations(target.Nodes.size()), scales(target.Nodes.size());

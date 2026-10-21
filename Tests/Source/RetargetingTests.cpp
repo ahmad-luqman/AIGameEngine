@@ -269,6 +269,34 @@ TEST_SUITE("Retargeting")
 		CHECK(nod.Tracks[0].Interpolation == AnimationInterpolation::Linear);
 	}
 
+	TEST_CASE("Stepped channels of mixed clips keep their jumps once baked")
+	{
+		const Rigs rigs;
+		// Wave's arm steps while its forearm interpolates, so the baked clip is linear.
+		AnimationClip clip = Clip(*rigs.Source, "Wave");
+		const uint32_t arm = Node(*rigs.Source, "mixamorig:LeftArm");
+		const auto track = std::ranges::find(clip.Tracks, arm, &AnimationTrack::Node);
+		REQUIRE(track != clip.Tracks.end());
+		track->Interpolation = AnimationInterpolation::Step;
+		const AnimationClip baked = Bake(*rigs.Target, *rigs.Source, clip);
+		CHECK(std::ranges::all_of(baked.Tracks, [](const AnimationTrack& bakedTrack) { return bakedTrack.Interpolation == AnimationInterpolation::Linear; }));
+		std::vector<glm::mat4> targetRest, sourceRest;
+		REQUIRE(EvaluateAnimation(*rigs.Target, nullptr, 0, targetRest));
+		REQUIRE(EvaluateAnimation(*rigs.Source, nullptr, 0, sourceRest));
+		const uint32_t upperArm = Node(*rigs.Target, "upperarm_l");
+		// Between keys and just before them, the arm holds its previous key's turn.
+		for (float time : { 0.25f, 0.49f, 0.4999f, 0.5f, 0.75f, 0.9999f })
+		{
+			CAPTURE(time);
+			std::vector<glm::mat4> targetPose, sourcePose;
+			REQUIRE(EvaluateAnimation(*rigs.Target, &baked, time, targetPose));
+			REQUIRE(EvaluateAnimation(*rigs.Source, &clip, time, sourcePose));
+			const glm::quat turn = GlobalRotation(targetPose, upperArm) * glm::inverse(GlobalRotation(targetRest, upperArm));
+			const glm::quat expected = GlobalRotation(sourcePose, arm) * glm::inverse(GlobalRotation(sourceRest, arm));
+			CHECK(NearRotation(turn, expected, 2e-4f));
+		}
+	}
+
 	TEST_CASE("Stepped clips stay stepped and scale tracks carry the ratio to the source's rest scale")
 	{
 		const Rigs rigs;
