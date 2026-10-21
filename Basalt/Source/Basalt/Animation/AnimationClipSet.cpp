@@ -104,7 +104,7 @@ namespace Basalt {
 		}
 	}
 
-	Ref<const AnimationClipSet> AnimationClipSet::Build(const Ref<MeshSource>& model, std::vector<Library> libraries)
+	Ref<const AnimationClipSet> AnimationClipSet::Build(const Ref<MeshSource>& model, std::vector<Library> libraries, size_t maxBakedFloats)
 	{
 		BS_CORE_ASSERT(model, "a clip set needs a model");
 		auto set = CreateRef<AnimationClipSet>();
@@ -133,8 +133,8 @@ namespace Basalt {
 					library.Warnings.push_back(fmt::format("clip '{}' cannot be retargeted: {}", clip.Name, error));
 				else if (result.Tracks.empty())
 					library.Warnings.push_back(fmt::format("clip '{}' moves no joint paired with the model, so it is left out", clip.Name));
-				else if (const size_t size = BakedFloats(result); size > MaxSetBakedFloats - floats)
-					library.Warnings.push_back(fmt::format("clip '{}' is left out: the Animator's retargeted clips would exceed {} MiB", clip.Name, MaxSetBakedFloats * sizeof(float) / (size_t{ 1024 } * 1024)));
+				else if (const size_t size = BakedFloats(result); size > maxBakedFloats - floats)
+					library.Warnings.push_back(fmt::format("clip '{}' is left out: the Animator's retargeted clips would exceed {:.1f} MiB", clip.Name, static_cast<double>(maxBakedFloats * sizeof(float)) / (1024.0 * 1024.0)));
 				else
 				{
 					floats += size;

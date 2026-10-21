@@ -50,8 +50,8 @@ namespace Basalt {
 		// Matches each loaded library to the model and lists the clips it would add, without baking (and so without
 		// Build's bake failures and its set budget, which can still leave a listed clip out). Planning again starts over.
 		static void Plan(const MeshSource& model, std::vector<Library>& libraries);
-		// Matches and bakes `libraries` (from Load) onto the model.
-		static Ref<const AnimationClipSet> Build(const Ref<MeshSource>& model, std::vector<Library> libraries);
+		// Matches and bakes `libraries` (from Load) onto the model, leaving out clips past `maxBakedFloats` in all.
+		static Ref<const AnimationClipSet> Build(const Ref<MeshSource>& model, std::vector<Library> libraries, size_t maxBakedFloats = MaxSetBakedFloats);
 
 		// The clip named `name`, or the first clip for an empty name; -1 when there is none.
 		int32_t Find(const std::string& name) const;

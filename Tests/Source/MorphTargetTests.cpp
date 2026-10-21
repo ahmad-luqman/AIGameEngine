@@ -370,6 +370,8 @@ TEST_SUITE("MorphTargets")
 	{
 		auto data = MorphJson();
 		std::string expected;
+		// The mesh that loses its targets, and the one that keeps them.
+		std::string dropped = "Teeth", kept = "Face";
 		SUBCASE("too many targets")
 		{
 			auto& targets = data["meshes"][1]["primitives"][0]["targets"];
@@ -392,15 +394,34 @@ TEST_SUITE("MorphTargets")
 			data["animations"][0]["channels"].erase(1);
 			expected = "its morph targets need 4194312 deltas, past the 4194286 left of the limit of 4194304 per model";
 		}
+		SUBCASE("too many targets on a node with weights")
+		{
+			// Face's node has its own weights, which a mesh without targets cannot take.
+			auto& targets = data["meshes"][0]["primitives"][0]["targets"];
+			while (targets.size() <= MaxMorphTargets)
+				targets.push_back(targets[0]);
+			data["meshes"][0]["extras"].erase("targetNames");
+			data["meshes"][0].erase("weights");
+			data["nodes"][2]["weights"] = std::vector<float>(targets.size(), 0.1f);
+			// Talk's and CubicSmile's Face channels would need 257 values per key.
+			data["animations"][0]["channels"].erase(0);
+			data["animations"].erase(1);
+			expected = "257 morph targets exceed the limit of 256 per mesh";
+			dropped = "Face";
+			kept = "Teeth";
+		}
 		ClearAssetCache cacheGuard;
 		TempDirectory directory("MorphLimits");
 		const auto since = Log::GetHistory().GetTotalCount();
 		const auto source = AnimationTest::LoadModified(data, directory.GetPath(), "Limits.gltf");
 		CHECK(CountLogMessages(since, expected) == 1);
-		// Teeth keeps its base shape; Face keeps its targets.
-		CHECK(source->Meshes[1].MorphTargets.empty());
-		CHECK(source->Nodes[Node(*source, "Teeth")].MorphWeightOffset == -1);
-		CHECK(source->Meshes[0].MorphTargets.size() == 2);
+		// The dropped mesh keeps its base shape, and its node no weights; the other mesh keeps its targets.
+		const auto mesh = [&](const std::string& name) -> const MeshData& { return source->Meshes[static_cast<size_t>(source->Nodes[Node(*source, name)].MeshIndex)]; };
+		CHECK(mesh(dropped).MorphTargets.empty());
+		CHECK(source->Nodes[Node(*source, dropped)].MorphWeightOffset == -1);
+		CHECK(source->Nodes[Node(*source, dropped)].MorphWeights.empty());
+		CHECK(mesh(kept).MorphTargets.size() == (kept == "Face" ? 2 : 1));
+		CHECK(source->MorphWeightCount == mesh(kept).MorphTargets.size());
 	}
 
 	TEST_CASE("Weights channels of meshes whose targets were dropped are skipped with a warning")
@@ -426,25 +447,95 @@ TEST_SUITE("MorphTargets")
 	TEST_CASE("FinalizeHierarchy names what does not fit and changes nothing then")
 	{
 		auto source = CreateRef<MeshSource>(*AnimationTest::LoadModel(MorphPath()));
-		const auto offsets = source->Nodes[Node(*source, "Teeth")].MorphWeightOffset;
+		const auto order = source->NodeOrder;
+		const auto offset = source->Nodes[Node(*source, "Teeth")].MorphWeightOffset;
+		Submesh& teeth = source->Submeshes[source->Meshes[1].Submeshes[0]];
+		std::string expected;
+		SUBCASE("node weights")
+		{
+			source->Nodes[Node(*source, "Teeth")].MorphWeights.push_back(1.0f);
+			expected = "node 'Teeth' has 2 morph weights for 1 morph targets";
+		}
+		SUBCASE("mesh default weights")
+		{
+			source->Meshes[1].MorphWeights.clear();
+			expected = "mesh 'Teeth' has 0 default morph weights for 1 targets";
+		}
+		SUBCASE("submesh target count")
+		{
+			teeth.MorphTargetCount = 2;
+			expected = "mesh 'Teeth' has a submesh whose morph targets do not match the mesh's 1";
+		}
+		SUBCASE("submesh target bounds")
+		{
+			teeth.MorphBounds.pop_back();
+			expected = "mesh 'Teeth' has a submesh whose morph targets do not match the mesh's 1";
+		}
+		SUBCASE("deltas past the model's")
+		{
+			REQUIRE(teeth.MorphDeltaOffset + teeth.VertexCount == source->MorphDeltas.size());
+			source->MorphDeltas.pop_back();
+			expected = "mesh 'Teeth' has a submesh whose morph targets do not match the mesh's 1";
+		}
+		SUBCASE("a missing submesh")
+		{
+			source->Meshes[1].Submeshes.push_back(static_cast<uint32_t>(source->Submeshes.size()));
+			expected = "mesh 'Teeth' names a missing submesh";
+		}
+		SUBCASE("an invalid parent")
+		{
+			source->Nodes[Node(*source, "Teeth")].Parent = 99;
+			expected = "node 'Teeth' has an invalid parent";
+		}
+		SUBCASE("a cycle")
+		{
+			source->Nodes[0].Parent = 3;
+			expected = "the node hierarchy has a cycle";
+		}
 		std::string error;
-		source->Nodes[Node(*source, "Teeth")].MorphWeights.push_back(1.0f);
 		CHECK_FALSE(source->FinalizeHierarchy(&error));
-		CHECK(error == "node 'Teeth' has 2 morph weights for 1 morph targets");
-		CHECK(source->Nodes[Node(*source, "Teeth")].MorphWeightOffset == offsets);
+		CHECK(error == expected);
+		CHECK(source->NodeOrder == order);
+		CHECK(source->Nodes[Node(*source, "Teeth")].MorphWeightOffset == offset);
 		CHECK(source->MorphWeightCount == 3);
-		source->Nodes[Node(*source, "Teeth")].MorphWeights.pop_back();
-		source->Meshes[1].MorphWeights.clear();
-		CHECK_FALSE(source->FinalizeHierarchy(&error));
-		CHECK(error == "mesh 'Teeth' has 0 default morph weights for 1 targets");
-		source->Meshes[1].MorphWeights = { 0.0f };
-		source->Submeshes[source->Meshes[1].Submeshes[0]].MorphTargetCount = 2;
-		CHECK_FALSE(source->FinalizeHierarchy(&error));
-		CHECK(error.find("mesh 'Teeth' has a submesh whose morph targets do not match") == 0);
-		source->Submeshes[source->Meshes[1].Submeshes[0]].MorphTargetCount = 1;
-		source->Nodes[0].Parent = 0;
-		CHECK_FALSE(source->FinalizeHierarchy(&error));
-		CHECK(error == "the node hierarchy has a cycle");
+	}
+
+	TEST_CASE("Morphed submeshes get no LODs, which would drop the vertices their deltas follow")
+	{
+		auto data = MorphJson();
+		// Unskinned, so only the morph targets keep the simplifier away from Face.
+		data.erase("animations");
+		data.erase("skins");
+		data["nodes"][2].erase("skin");
+		data["meshes"][0]["primitives"][0]["attributes"].erase("JOINTS_0");
+		data["meshes"][0]["primitives"][0]["attributes"].erase("WEIGHTS_0");
+		ClearAssetCache cacheGuard;
+		TempDirectory directory("MorphLODs");
+		const auto source = AnimationTest::LoadModified(data, directory.GetPath(), "Static.gltf");
+		const uint32_t face = source->Meshes[0].Submeshes[0];
+		REQUIRE(source->Submeshes[face].JointBounds.empty());
+		CHECK(source->Submeshes[face].LODs.empty());
+		// The same submesh without targets is reduced.
+		MeshSource copy(*source);
+		copy.Submeshes[face].MorphTargetCount = 0;
+		MeshOptimizer::GenerateLODs(copy, face);
+		CHECK_FALSE(copy.Submeshes[face].LODs.empty());
+	}
+
+	TEST_CASE("Import warns once per mesh about target attributes it ignores")
+	{
+		auto data = MorphJson();
+		// A target attribute past POSITION and NORMAL (TANGENT is not one: tangents follow the morphed normals). The vertex
+		// positions serve as any VEC3 accessor, in both targets for one warning.
+		for (auto& target : data["meshes"][0]["primitives"][0]["targets"])
+			target["COLOR_0"] = data["meshes"][0]["primitives"][0]["attributes"]["POSITION"];
+		ClearAssetCache cacheGuard;
+		TempDirectory directory("MorphWarnings");
+		const auto since = Log::GetHistory().GetTotalCount();
+		const auto source = AnimationTest::LoadModified(data, directory.GetPath(), "Warnings.gltf");
+		CHECK(CountLogMessages(since, "mesh 'Face': morph targets keep only POSITION and NORMAL deltas; their other attributes are ignored") == 1);
+		CHECK(CountLogMessages(since, "their other attributes are ignored") == 1);
+		CHECK(source->Meshes[0].MorphTargets.size() == 2);
 	}
 
 	TEST_CASE("Models with morph targets import as an Animator root, keeping node weights")
@@ -475,6 +566,8 @@ TEST_SUITE("MorphTargets")
 		AnimationLayer layer;
 		layer.Name = "Talk";
 		layer.Clip = "Talk";
+		// Talk at 1 s: Face (1, 0.5), Teeth 0.8 (stepped). The base (Nod) shows the node defaults (0.5, 0.25) and 0.
+		glm::vec3 expected{ 1.0f, 0.5f, 0.8f };
 		SUBCASE("override")
 		{
 			animator.Layers = { layer };
@@ -483,26 +576,43 @@ TEST_SUITE("MorphTargets")
 		{
 			layer.Mask = { AnimationMaskJoint{ .Joint = "Face" } };
 			animator.Layers = { layer };
+			expected = { 1.0f, 0.5f, 0.0f };
+		}
+		SUBCASE("masked to the head, which holds the teeth")
+		{
+			layer.Mask = { AnimationMaskJoint{ .Joint = "Head" } };
+			animator.Layers = { layer };
+			expected = { 0.5f, 0.25f, 0.8f };
 		}
 		SUBCASE("additive")
 		{
+			// Adds Talk's change from its first frame (Face 0 and 0, Teeth 0.2).
 			layer.Blend = AnimationLayerBlend::Additive;
 			animator.Layers = { layer };
+			expected = { 0.5f + 1.0f, 0.25f + 0.5f, 0.8f - 0.2f };
 		}
-		const bool masked = !animator.Layers[0].Mask.empty();
-		const bool additive = animator.Layers[0].Blend == AnimationLayerBlend::Additive;
+		SUBCASE("under root motion from the head")
+		{
+			animator.RootMotion = true;
+			animator.RootJoint = "Head";
+			animator.Layers = { layer };
+		}
+		SUBCASE("under root motion from the face, whose weights stay with the layer")
+		{
+			animator.RootMotion = true;
+			animator.RootJoint = "Face";
+			animator.Layers = { layer };
+		}
 		scene.OnRuntimeStart();
 		auto& system = *scene.GetAnimationSystem();
-		system.Update(1.5f);
+		system.Update(1.0f);
 		const auto source = AssetManager::GetMesh(animator.Mesh);
 		const auto& weights = *system.GetMorphWeights(entity);
 		const auto face = static_cast<size_t>(source->Nodes[Node(*source, "Face")].MorphWeightOffset);
 		const auto teeth = static_cast<size_t>(source->Nodes[Node(*source, "Teeth")].MorphWeightOffset);
-		// Talk at 1.5 s: Face (0.5, 0.25), Teeth 0.8 (stepped). The base (Nod) shows the node defaults (0.5, 0.25) and 0.
-		// Additive adds Talk's change from its first frame (Face 0 and 0, Teeth 0.2).
-		CHECK(weights[face] == doctest::Approx(additive ? 0.5f + 0.5f : 0.5f));
-		CHECK(weights[face + 1] == doctest::Approx(additive ? 0.25f + 0.25f : 0.25f));
-		CHECK(weights[teeth] == doctest::Approx(masked ? 0.0f : (additive ? 0.8f - 0.2f : 0.8f)));
+		CHECK(weights[face] == doctest::Approx(expected.x));
+		CHECK(weights[face + 1] == doctest::Approx(expected.y));
+		CHECK(weights[teeth] == doctest::Approx(expected.z));
 		scene.OnRuntimeStop();
 	}
 
