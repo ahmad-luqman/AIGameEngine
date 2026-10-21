@@ -524,6 +524,28 @@ function Entity:SetIKWeight(chain, weight, seconds) end
 ---@return number?
 function Entity:GetIKWeight(chain) end
 
+---Holds every mesh node's morph target of this name at weight (0..1), fading linearly over seconds (default 0) from the
+---weight shown, until ClearMorphWeight. False for an unknown target or an invalid weight or time.
+---@param target string
+---@param weight number
+---@param seconds? number
+---@return boolean
+function Entity:SetMorphWeight(target, weight, seconds) end
+
+---The morph target's weight shown (of the first mesh node with it); nil for an unknown target.
+---@param target string
+---@return number?
+function Entity:GetMorphWeight(target) end
+
+---Returns the target (without one, every target) to its animated weight. False when no script weight was set.
+---@param target? string
+---@return boolean
+function Entity:ClearMorphWeight(target) end
+
+---The model's unique morph target names, in node order.
+---@return string[]
+function Entity:GetMorphTargets() end
+
 ---Restarts every SpringBone chain on the animated pose, at rest, on the next update (after a cut the automatic teleport
 ---detection misses). Errors without a SpringBone component.
 function Entity:ResetSpringBones() end
@@ -1411,6 +1433,8 @@ function BasaltScript:StopAllCoroutines() end
 ---@field Layers AnimationLayer[]
 ---@field LODDistance number
 ---@field LODInterval integer
+---@field ClipLibraries AnimationClipLibrary[]
+---@field RetargetJoints AnimationRetargetJoint[]
 
 ---BoneAttachment data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
 ---@class BoneAttachmentComponent
@@ -1848,6 +1872,15 @@ function BasaltScript:StopAllCoroutines() end
 ---@class AnimationMaskJoint
 ---@field Joint string
 ---@field Weight number
+
+---An element of a component list field.
+---@class AnimationClipLibrary
+---@field Mesh string
+
+---An element of a component list field.
+---@class AnimationRetargetJoint
+---@field Source string
+---@field Target string
 
 ---An element of a component list field.
 ---@class IKChain

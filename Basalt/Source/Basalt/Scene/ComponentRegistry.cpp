@@ -349,6 +349,10 @@ namespace Basalt {
 		void Fields(FieldReader& r, AnimationEvent& c);
 		void Fields(FieldReader& r, AnimationBlendSample& c);
 		void Fields(FieldReader& r, AnimationBlendSpace& c);
+		void Fields(FieldReader& r, AnimationClipLibrary& c);
+		void Fields(FieldReader& r, AnimationRetargetJoint& c);
+		json Write(const AnimationClipLibrary& c);
+		json Write(const AnimationRetargetJoint& c);
 		json Write(const AnimationEvent& c);
 		json Write(const AnimationBlendSample& c);
 		json Write(const AnimationBlendSpace& c);
@@ -382,6 +386,7 @@ namespace Basalt {
 				schema->Fields = collector.GetFieldNames();
 				schema->FieldTypes = collector.GetFieldTypes();
 				schema->EnumOptions = collector.GetEnumOptions();
+				schema->AssetFields = collector.GetAssetFields();
 				schema->Default = Write(element);
 				BS_CORE_ASSERT(schema->UniqueField.empty() || (schema->FieldTypes.contains(schema->UniqueField) && schema->FieldTypes.at(schema->UniqueField).Kind == ComponentFieldKind::String), "UniqueField must name a string field");
 				BS_CORE_ASSERT(schema->NormalizedTimeField.empty() || (schema->FieldTypes.contains(schema->NormalizedTimeField) && schema->FieldTypes.at(schema->NormalizedTimeField).Kind == ComponentFieldKind::Number && schema->FieldTypes.at(schema->NormalizedTimeField).Count == 0), "NormalizedTimeField must name a scalar number field");
@@ -395,6 +400,10 @@ namespace Basalt {
 		{
 			const std::shared_ptr<const ComponentObjectSchema> schema = SchemaOf<E>();
 			Describe(name, ComponentFieldType::List(maxCount, schema));
+			// Element asset fields are declared as "List[].Field" (see ForEachAssetValue).
+			if (IsCollecting())
+				for (const std::string& field : schema->AssetFields)
+					m_AssetFields.push_back(fmt::format("{}[].{}", name, field));
 			const json* element = Find(name);
 			if (!element)
 				return;
@@ -584,6 +593,17 @@ namespace Basalt {
 			r.ListField("Mask", c.Mask, AnimationLayer::MaxMaskJoints);
 		}
 
+		void Fields(FieldReader& r, AnimationClipLibrary& c)
+		{
+			r.AssetField("Mesh", c.Mesh);
+		}
+
+		void Fields(FieldReader& r, AnimationRetargetJoint& c)
+		{
+			r.Field("Source", c.Source);
+			r.Field("Target", c.Target);
+		}
+
 		void Fields(FieldReader& r, AnimatorComponent& c)
 		{
 			r.AssetField("Mesh", c.Mesh);
@@ -601,6 +621,8 @@ namespace Basalt {
 			r.ListField("Layers", c.Layers, AnimatorComponent::MaxLayers);
 			r.Field("LODDistance", c.LODDistance);
 			r.Field("LODInterval", c.LODInterval);
+			r.ListField("ClipLibraries", c.ClipLibraries, AnimatorComponent::MaxClipLibraries);
+			r.ListField("RetargetJoints", c.RetargetJoints, AnimatorComponent::MaxRetargetJoints);
 		}
 
 		void Fields(FieldReader& r, BoneAttachmentComponent& c)
@@ -1162,7 +1184,19 @@ namespace Basalt {
 				{ "Layers", ListToJson(c.Layers) },
 				{ "LODDistance", c.LODDistance },
 				{ "LODInterval", c.LODInterval },
+				{ "ClipLibraries", ListToJson(c.ClipLibraries) },
+				{ "RetargetJoints", ListToJson(c.RetargetJoints) },
 			};
+		}
+
+		json Write(const AnimationClipLibrary& c)
+		{
+			return { { "Mesh", c.Mesh } };
+		}
+
+		json Write(const AnimationRetargetJoint& c)
+		{
+			return { { "Source", c.Source }, { "Target", c.Target } };
 		}
 
 		json Write(const AnimationMaskJoint& c)
@@ -1727,6 +1761,16 @@ namespace Basalt {
 			// C++ code can grow the lists past what the reader accepts.
 			if (c.Events.size() > AnimatorComponent::MaxEvents || c.BlendSpaces.size() > AnimatorComponent::MaxBlendSpaces || c.Layers.size() > AnimatorComponent::MaxLayers)
 				return fmt::format("Animator holds at most {} events, {} blend spaces and {} layers", AnimatorComponent::MaxEvents, AnimatorComponent::MaxBlendSpaces, AnimatorComponent::MaxLayers);
+			if (c.ClipLibraries.size() > AnimatorComponent::MaxClipLibraries || c.RetargetJoints.size() > AnimatorComponent::MaxRetargetJoints)
+				return fmt::format("Animator holds at most {} clip libraries and {} retarget joints", AnimatorComponent::MaxClipLibraries, AnimatorComponent::MaxRetargetJoints);
+			for (size_t i = 0; i < c.RetargetJoints.size(); i++)
+			{
+				// Empty entries are the inspector's unnamed additions.
+				const std::string& target = c.RetargetJoints[i].Target;
+				for (size_t j = 0; j < i && !target.empty(); j++)
+					if (c.RetargetJoints[j].Target == target)
+						return fmt::format("RetargetJoints[{}].Target '{}' is already used by RetargetJoints[{}]", i, target, j);
+			}
 			for (size_t i = 0; i < c.Events.size(); i++)
 			{
 				const AnimationEvent& event = c.Events[i];

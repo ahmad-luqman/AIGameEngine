@@ -1360,15 +1360,18 @@ namespace Basalt {
 						bool changed = false;
 						for (const auto& field : info.AssetFields)
 						{
-							auto value = data.find(field);
-							if (value == data.end() || !value->is_string())
+							if (field.find("[].") == std::string::npos && !data.contains(field))
 								throw CommandError("asset field did not serialize as a path: " + info.Name + "." + field);
-							const auto& key = value->get_ref<const std::string&>();
-							if (project->GetAssets().ReferencesSource(key, from))
-							{
-								*value = to + std::string(GetSubAssetFragment(key));
-								changed = true;
-							}
+							ForEachAssetValue(data, field, [&](json& value, const std::string& label) {
+								if (!value.is_string())
+									throw CommandError("asset field did not serialize as a path: " + info.Name + "." + label);
+								const auto& key = value.get_ref<const std::string&>();
+								if (project->GetAssets().ReferencesSource(key, from))
+								{
+									value = to + std::string(GetSubAssetFragment(key));
+									changed = true;
+								}
+							});
 						}
 						if (changed)
 						{

@@ -2,6 +2,7 @@
 
 #include "Basalt/Animation/AnimationSystem.h"
 #include "Basalt/Animation/InverseKinematics.h"
+#include "Basalt/Animation/Retargeting.h"
 #include "Basalt/Animation/SpringBones.h"
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Core/Assert.h"
@@ -102,10 +103,45 @@ namespace Basalt {
 			}
 			if (source->AnimationUnsupported)
 				warnings.emplace_back("Animator cannot animate this model's extra influence sets; static geometry is available through Mesh");
+			// The model's clips, then the clip libraries' (the source clips stand in for their retargeted copies, which
+			// keep names and durations).
+			std::vector<const AnimationClip*> clips;
+			for (const AnimationClip& clip : source->Animations)
+				clips.push_back(&clip);
 			const auto findClip = [&](const std::string& name) -> const AnimationClip* {
-				auto it = std::ranges::find(source->Animations, name, &AnimationClip::Name);
-				return it != source->Animations.end() ? &*it : nullptr;
+				auto it = std::ranges::find(clips, name, &AnimationClip::Name);
+				return it != clips.end() ? *it : nullptr;
 			};
+			for (size_t i = 0; i < animator.ClipLibraries.size(); i++)
+			{
+				const std::string& key = animator.ClipLibraries[i].Mesh;
+				if (key.empty())
+					continue;
+				const auto library = AssetManager::GetMesh(key);
+				if (!library)
+				{
+					warnings.push_back(fmt::format("Animator clip library '{}' could not be loaded: {}", key, AssetManager::GetError(key)));
+					continue;
+				}
+				std::vector<std::string> mapWarnings;
+				const RetargetMap map = Retargeting::BuildMap(*source, *library, animator.RetargetJoints, mapWarnings);
+				for (const std::string& warning : mapWarnings)
+					warnings.push_back(fmt::format("Animator clip library '{}': {}", key, warning));
+				if (map.MappedCount() == 0)
+				{
+					warnings.push_back(fmt::format("Animator clip library '{}': no joint matches the model's skeleton (name the pairs in RetargetJoints)", key));
+					continue;
+				}
+				for (const AnimationClip& clip : library->Animations)
+				{
+					if (findClip(clip.Name))
+						warnings.push_back(fmt::format("Animator clip library '{}': clip '{}' is hidden by an earlier clip of that name", key, clip.Name));
+					else
+						clips.push_back(&clip);
+				}
+			}
+			if (animator.ClipLibraries.empty() && std::ranges::any_of(animator.RetargetJoints, [](const AnimationRetargetJoint& joint) { return !joint.Source.empty(); }))
+				warnings.emplace_back("Animator RetargetJoints has no effect without ClipLibraries");
 			if (animator.RootMotion && (animator.RootJoint.empty() || FindNode(*source, animator.RootJoint) < 0))
 				warnings.emplace_back("Animator RootJoint must name a model node for root motion");
 			if (!animator.StateMachine.empty())
@@ -118,7 +154,7 @@ namespace Basalt {
 					{
 						if (state.BlendSpace.empty())
 						{
-							if (state.Clip.empty() ? source->Animations.empty() : !findClip(state.Clip))
+							if (state.Clip.empty() ? clips.empty() : !findClip(state.Clip))
 								warnings.push_back(fmt::format("Animator state '{}': clip '{}' not found", state.Name, state.Clip));
 						}
 						else if (std::ranges::find(animator.BlendSpaces, state.BlendSpace, &AnimationBlendSpace::Name) == animator.BlendSpaces.end())
@@ -128,16 +164,16 @@ namespace Basalt {
 			const bool namesSpace = std::ranges::find(animator.BlendSpaces, animator.Clip, &AnimationBlendSpace::Name) != animator.BlendSpaces.end();
 			if (!animator.Clip.empty() && !findClip(animator.Clip) && !namesSpace)
 				warnings.push_back(fmt::format("Animator clip '{}' not found in '{}'", animator.Clip, animator.Mesh));
-			if (source->Animations.empty() && (!animator.Events.empty() || !animator.BlendSpaces.empty()))
+			if (clips.empty() && (!animator.Events.empty() || !animator.BlendSpaces.empty()))
 				warnings.push_back(fmt::format("Animator model '{}' has no animation clips, so its events and blend spaces never play", animator.Mesh));
 			float longest = 0;
-			for (const AnimationClip& clip : source->Animations)
-				longest = std::max(longest, clip.Duration);
+			for (const AnimationClip* clip : clips)
+				longest = std::max(longest, clip->Duration);
 			for (const AnimationEvent& event : animator.Events)
 			{
 				if (event.Clip.empty())
 				{
-					if (!source->Animations.empty() && event.Time > longest)
+					if (!clips.empty() && event.Time > longest)
 						warnings.push_back(fmt::format("Animator event '{}' at {}s is past the end of every clip and never fires", event.Name, event.Time));
 				}
 				else if (const AnimationClip* clip = findClip(event.Clip); !clip)

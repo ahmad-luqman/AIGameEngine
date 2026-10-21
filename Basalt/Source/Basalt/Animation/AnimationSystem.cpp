@@ -100,16 +100,9 @@ namespace Basalt {
 			return from + std::remainder(to - from, glm::two_pi<float>()) * weight;
 		}
 
-		int32_t FindClip(const MeshSource& source, const std::string& name)
+		int32_t FindClip(const AnimationClipSet& clips, const std::string& name)
 		{
-			if (source.Animations.empty())
-				return -1;
-			if (name.empty())
-				return 0;
-			for (size_t i = 0; i < source.Animations.size(); i++)
-				if (source.Animations[i].Name == name)
-					return static_cast<int32_t>(i);
-			return -1;
+			return clips.Find(name);
 		}
 
 		const AnimationBlendSpace* FindSpace(const AnimatorComponent& component, const std::string& name)
@@ -237,6 +230,33 @@ namespace Basalt {
 		return fmt::format("{}", fmt::join(problems, "; "));
 	}
 
+	Ref<const AnimationClipSet> AnimationSystem::ResolveClips(Entity entity, const AnimatorComponent& component, const Ref<MeshSource>& model)
+	{
+		std::vector<std::string> keys;
+		std::vector<Ref<MeshSource>> sources;
+		for (const AnimationClipLibrary& library : component.ClipLibraries)
+		{
+			// Unnamed entries are the inspector's additions.
+			if (library.Mesh.empty())
+				continue;
+			keys.push_back(library.Mesh);
+			sources.push_back(AssetManager::GetMesh(library.Mesh));
+		}
+		// A reloaded model or library is a new source, so its set is built again.
+		for (const ClipSetEntry& entry : m_ClipSets)
+			if (entry.Clips->GetModel() == model && entry.Keys == keys && entry.Sources == sources && entry.Joints == component.RetargetJoints)
+				return entry.Clips;
+		std::vector<AnimationClipSet::Library> libraries;
+		for (size_t i = 0; i < keys.size(); i++)
+			libraries.push_back({ .Mesh = keys[i], .Source = sources[i], .Error = sources[i] ? std::string() : AssetManager::GetError(keys[i]) });
+		auto clips = AnimationClipSet::Build(model, std::move(libraries), component.RetargetJoints);
+		// Logged once per set: Animators sharing the model and libraries share it.
+		for (const std::string& problem : clips->GetProblems())
+			BS_CORE_WARN("Animator '{}': {}", entity.GetName(), problem);
+		m_ClipSets.push_back({ std::move(keys), std::move(sources), component.RetargetJoints, clips });
+		return clips;
+	}
+
 	AnimationSystem::Playback* AnimationSystem::Ensure(Entity entity, const ResolvedAssets* assets)
 	{
 		const auto* component = entity ? entity.TryGetComponent<AnimatorComponent>() : nullptr;
@@ -262,9 +282,10 @@ namespace Basalt {
 		// An initialization exception can leave matching asset keys with incomplete buffers.
 		// Retry initialization before publishing a pose or dispatching a job that recovers in place.
 		const size_t nodeCount = source->Nodes.size();
+		const Ref<const AnimationClipSet> clips = ResolveClips(entity, *component, source);
 		const bool incomplete = playback.Local.Nodes.size() != nodeCount || playback.Pose.Nodes.size() != nodeCount || playback.Globals.size() != nodeCount ||
 								playback.Local.MorphWeights.size() != source->MorphWeightCount || playback.Pose.MorphWeights.size() != source->MorphWeightCount;
-		if (inserted || incomplete || playback.Graph != graph || playback.ConfiguredGraph != component->StateMachine || playback.Handle != static_cast<entt::entity>(entity) || playback.Source != source || playback.ConfiguredClip != component->Clip)
+		if (inserted || incomplete || playback.Graph != graph || playback.ConfiguredGraph != component->StateMachine || playback.Handle != static_cast<entt::entity>(entity) || playback.Source != source || playback.Clips != clips || playback.ConfiguredClip != component->Clip)
 		{
 			// Script morph weights name targets, so they outlive the model and graph the playback was built for.
 			auto morphOverrides = std::move(playback.MorphOverrides);
@@ -275,11 +296,12 @@ namespace Basalt {
 			playback.Handle = entity;
 			playback.EntityName = entity.GetName();
 			playback.Source = source;
+			playback.Clips = clips;
 			playback.ConfiguredClip = component->Clip;
 			playback.ConfiguredGraph = component->StateMachine;
 			playback.Graph = graph;
 			playback.Looping = component->Looping;
-			playback.Clip = FindClip(*source, component->Clip);
+			playback.Clip = FindClip(*clips, component->Clip);
 			if (playback.Clip < 0 && !component->Clip.empty())
 			{
 				// Clip may name a blend space, played at parameter (0, 0); one that cannot play yet is retried every
@@ -362,7 +384,7 @@ namespace Basalt {
 		return fmt::format("model '{}' has extra influence sets the Animator cannot animate", component->Mesh);
 	}
 
-	int32_t AnimationSystem::ResolveSpaceState(const MeshSource& source, const AnimatorComponent& component, SpaceState& state, std::string& outProblem)
+	int32_t AnimationSystem::ResolveSpaceState(const AnimationClipSet& clips, const AnimatorComponent& component, SpaceState& state, std::string& outProblem)
 	{
 		outProblem.clear();
 		state.Resolved = false;
@@ -386,7 +408,7 @@ namespace Basalt {
 			const AnimationBlendSample& sample = space->Samples[i];
 			SpaceSample& resolved = state.Samples[i];
 			// C++ can write a non-finite Speed (the registry rejects it); it counts as unknown.
-			resolved = { FindClip(source, sample.Clip), m_Weights[i], std::isfinite(sample.Speed) && sample.Speed > 0 ? sample.Speed : 0.0f };
+			resolved = { FindClip(clips, sample.Clip), m_Weights[i], std::isfinite(sample.Speed) && sample.Speed > 0 ? sample.Speed : 0.0f };
 			if (resolved.Clip < 0)
 			{
 				const std::string name = sample.Clip.empty() ? "(first clip: the model has none)" : fmt::format("'{}'", sample.Clip);
@@ -412,7 +434,7 @@ namespace Basalt {
 			sample.Weight /= total;
 			if (sample.Clip < 0)
 				continue;
-			state.Duration += static_cast<double>(sample.Weight) * source.Animations[sample.Clip].Duration;
+			state.Duration += static_cast<double>(sample.Weight) * clips[sample.Clip].Duration;
 			if (sample.Weight > heaviest)
 			{
 				heaviest = sample.Weight;
@@ -426,7 +448,7 @@ namespace Basalt {
 	bool AnimationSystem::ResolveSpace(Playback& playback, SpaceState& state, const AnimatorComponent& component)
 	{
 		std::string problem;
-		const int32_t dominant = ResolveSpaceState(*playback.Source, component, state, problem);
+		const int32_t dominant = ResolveSpaceState(*playback.Clips, component, state, problem);
 		if (problem != state.Problem)
 		{
 			if (!problem.empty())
@@ -453,7 +475,7 @@ namespace Basalt {
 				{
 					if (sample.Clip < 0 || sample.Weight <= 0)
 						continue;
-					const AnimationClip& clip = playback.Source->Animations[sample.Clip];
+					const AnimationClip& clip = (*playback.Clips)[sample.Clip];
 					AnimationLocalPose pose = SampleAnimation(*playback.Source, &clip, static_cast<float>(state.Phase * clip.Duration));
 					if (playback.RootMotion)
 						StripRoot(playback, pose, sample.Clip);
@@ -467,12 +489,12 @@ namespace Basalt {
 				playback.Local = SampleAnimation(*playback.Source, nullptr, 0);
 		}
 		else
-			playback.Local = SampleAnimation(*playback.Source, playback.Rest || playback.Clip < 0 ? nullptr : &playback.Source->Animations[playback.Clip], static_cast<float>(playback.Time));
+			playback.Local = SampleAnimation(*playback.Source, playback.Rest || playback.Clip < 0 ? nullptr : &(*playback.Clips)[playback.Clip], static_cast<float>(playback.Time));
 		if (playback.RootMotion && !playback.Rest && !playback.Space)
 			StripRoot(playback, playback.Local, playback.Clip);
 		if (playback.BlendWeight < 1 && !playback.Rest)
 		{
-			auto from = playback.Outgoing.Clip >= 0 ? SampleAnimation(*playback.Source, &playback.Source->Animations[playback.Outgoing.Clip], static_cast<float>(playback.Outgoing.Time)) : playback.Snapshot;
+			auto from = playback.Outgoing.Clip >= 0 ? SampleAnimation(*playback.Source, &(*playback.Clips)[playback.Outgoing.Clip], static_cast<float>(playback.Outgoing.Time)) : playback.Snapshot;
 			if (playback.Outgoing.Clip >= 0)
 			{
 				if (playback.Outgoing.RootMotion)
@@ -513,7 +535,7 @@ namespace Basalt {
 				layer.RootProblem = std::move(problem);
 			}
 			const AnimationLayerMask& mask = rootNode >= 0 ? resolved.RootMask : resolved.Mask;
-			const AnimationLocalPose sample = SampleAnimation(source, &source.Animations[resolved.Clip], static_cast<float>(layer.Time));
+			const AnimationLocalPose sample = SampleAnimation(source, &(*playback.Clips)[resolved.Clip], static_cast<float>(layer.Time));
 			if (resolved.Key.Blend == AnimationLayerBlend::Additive)
 				AddAnimationPose(playback.Pose, sample, resolved.Reference, mask, weight);
 			else
@@ -600,6 +622,8 @@ namespace Basalt {
 		}
 
 		m_PoseJobs.clear();
+		// Sets no playback uses any more (their Animators changed or went away).
+		std::erase_if(m_ClipSets, [](const ClipSetEntry& entry) { return entry.Clips.use_count() == 1; });
 		std::optional<glm::vec3> cameraPosition;
 		if (Entity camera = m_Scene.GetPrimaryCameraEntity())
 			cameraPosition = m_Scene.GetWorldTransform(camera)[3];
@@ -729,7 +753,7 @@ namespace Basalt {
 				// first frame.
 				if (playback->BlendWeight > 0 || playback->FadeDuration > 0)
 					CollectEvents(*playback, component, playback->Clip, playback->Time, advance, id, budget, playback->Looping);
-				playback->Time = WrapClock(playback->Time + advance, playback->Source->Animations[playback->Clip].Duration, playback->Looping);
+				playback->Time = WrapClock(playback->Time + advance, (*playback->Clips)[playback->Clip].Duration, playback->Looping);
 			}
 			if (playback->Outgoing.Clip >= 0)
 			{
@@ -740,7 +764,7 @@ namespace Basalt {
 				const double visibleAdvance = shown * outgoingRate;
 				if (playback->BlendWeight < 1)
 					CollectEvents(*playback, component, playback->Outgoing.Clip, playback->Outgoing.Time, visibleAdvance, id, budget, playback->Outgoing.Looping);
-				playback->Outgoing.Time = WrapClock(playback->Outgoing.Time + outgoingAdvance, playback->Source->Animations[playback->Outgoing.Clip].Duration, playback->Outgoing.Looping);
+				playback->Outgoing.Time = WrapClock(playback->Outgoing.Time + outgoingAdvance, (*playback->Clips)[playback->Outgoing.Clip].Duration, playback->Outgoing.Looping);
 			}
 			if (playback->Outgoing.Space)
 			{
@@ -760,12 +784,12 @@ namespace Basalt {
 				playback->StatePhase += advance / cycleDuration;
 			if (motion)
 				ApplyRootMotion(entity, *playback, *motion, seconds);
-			const bool finished = playback->Space ? playback->Space->Phase >= 1 : playback->Time >= playback->Source->Animations[playback->Clip].Duration;
+			const bool finished = playback->Space ? playback->Space->Phase >= 1 : playback->Time >= (*playback->Clips)[playback->Clip].Duration;
 			// Time clamps exactly to Duration; summed phase fractions can finish just below 1.
 			if (!playback->Looping && finished && cycleDuration > 0)
 				playback->StatePhase = std::max(playback->StatePhase, 1.0);
 			if (!playback->Looping && finished && playback->FadeDuration == 0 &&
-				(playback->Outgoing.Clip < 0 || playback->Outgoing.Time >= playback->Source->Animations[playback->Outgoing.Clip].Duration))
+				(playback->Outgoing.Clip < 0 || playback->Outgoing.Time >= (*playback->Clips)[playback->Outgoing.Clip].Duration))
 				playback->Playing = false;
 			if (evaluatePose || !playback->Playing)
 				m_PoseJobs.push_back({ playback, true });
@@ -837,7 +861,7 @@ namespace Basalt {
 		}
 		// The heaviest sample alone fires events: the clips are in step, so each would fire its own copy.
 		const double phaseAdvance = advance / state.Duration;
-		const double dominantDuration = playback.Source->Animations[playback.Clip].Duration;
+		const double dominantDuration = (*playback.Clips)[playback.Clip].Duration;
 		CollectEvents(playback, component, playback.Clip, state.Phase * dominantDuration, phaseAdvance * dominantDuration, id, budget, playback.Looping);
 		state.Phase = WrapClock(state.Phase + phaseAdvance, 1.0, playback.Looping);
 		playback.Time = state.Phase * state.Duration;
@@ -847,7 +871,7 @@ namespace Basalt {
 	{
 		if (advance <= 0 || component.Events.empty())
 			return;
-		const AnimationClip& animation = playback.Source->Animations[clip];
+		const AnimationClip& animation = (*playback.Clips)[clip];
 		const double duration = animation.Duration;
 		m_Markers.clear();
 		for (const AnimationEvent& event : component.Events)
@@ -999,7 +1023,7 @@ namespace Basalt {
 		auto& reported = playback.RootClips[clip].Problem;
 		if (reported != problem && !problem.empty())
 			BS_CORE_ERROR("Animator '{}': root motion undefined for clip '{}' at node '{}': {}; preserving the authored pose", playback.EntityName,
-						  playback.Source->Animations[clip].Name, playback.Source->Nodes[playback.RootNode].Name, problem);
+						  (*playback.Clips)[clip].Name, playback.Source->Nodes[playback.RootNode].Name, problem);
 		reported = problem;
 	}
 	bool AnimationSystem::CanExtractRoot(Playback& playback, int32_t clipIndex)
@@ -1011,7 +1035,7 @@ namespace Basalt {
 		auto& frames = it->second;
 		if (inserted)
 		{
-			const auto& clip = playback.Source->Animations[clipIndex];
+			const auto& clip = (*playback.Clips)[clipIndex];
 			glm::mat4 zero, end;
 			frames.Valid = HorizontalTransform(*playback.Source, &clip, 0, playback.RootNode, zero, &reference) &&
 						   HorizontalTransform(*playback.Source, &clip, clip.Duration, playback.RootNode, end, &reference);
@@ -1053,7 +1077,7 @@ namespace Basalt {
 	}
 	double AnimationSystem::CycleDuration(const Playback& playback)
 	{
-		return playback.Space ? playback.Space->Duration : (playback.Clip >= 0 ? playback.Source->Animations[playback.Clip].Duration : 0);
+		return playback.Space ? playback.Space->Duration : (playback.Clip >= 0 ? (*playback.Clips)[playback.Clip].Duration : 0);
 	}
 
 	bool AnimationSystem::ResolveRootNode(Playback& playback, const AnimatorComponent& component)
@@ -1142,7 +1166,7 @@ namespace Basalt {
 		for (const auto& sample : space.Samples)
 			if (sample.Weight > 0 && sample.Clip >= 0)
 			{
-				const double duration = playback.Source->Animations[sample.Clip].Duration;
+				const double duration = (*playback.Clips)[sample.Clip].Duration;
 				const auto delta = RootDelta(playback, sample.Clip, space.Phase * duration, space.Duration > 0 ? advance / space.Duration * duration : 0, looping);
 				// Unsupported samples retain their authored motion and contribute no entity displacement.
 				const auto frame = delta.value_or(glm::mat4(1));
@@ -1158,7 +1182,7 @@ namespace Basalt {
 		if (!CanExtractRoot(playback, clipIndex) || !playback.RootReference)
 			return std::nullopt;
 		const glm::mat4 reference = *playback.RootReference;
-		const auto& clip = playback.Source->Animations[clipIndex];
+		const auto& clip = (*playback.Clips)[clipIndex];
 		auto& frames = playback.RootClips.at(clipIndex);
 		if (!frames.IntervalValid)
 			return std::nullopt;
@@ -1253,7 +1277,7 @@ namespace Basalt {
 		SpaceState space{ .Name = state.BlendSpace };
 		ApplyStateAxes(playback, state, space);
 		std::string problem;
-		const int32_t clip = state.BlendSpace.empty() ? FindClip(*playback.Source, state.Clip) : ResolveSpaceState(*playback.Source, component, space, problem);
+		const int32_t clip = state.BlendSpace.empty() ? FindClip(*playback.Clips, state.Clip) : ResolveSpaceState(*playback.Clips, component, space, problem);
 		if (clip < 0)
 		{
 			const std::string message = "state '" + state.Name + "' cannot play: " + (problem.empty() ? "clip '" + state.Clip + "' not found" : problem);
@@ -1429,10 +1453,10 @@ namespace Basalt {
 		auto* playback = EnsurePlayable(entity);
 		if (!playback)
 			return false;
-		const int32_t selected = FindClip(*playback->Source, clip);
+		const int32_t selected = FindClip(*playback->Clips, clip);
 		if (selected < 0)
 		{
-			if (playback->Source->Animations.empty())
+			if (playback->Clips->Empty())
 				BS_CORE_ERROR("Animator '{}': model '{}' has no animation clips", entity.GetName(), playback->Source->Key);
 			else
 				BS_CORE_ERROR("Animator '{}': clip '{}' not found", entity.GetName(), clip);
@@ -1454,7 +1478,7 @@ namespace Basalt {
 		auto* playback = EnsurePlayable(entity);
 		if (!playback)
 			return false;
-		const int32_t selected = FindClip(*playback->Source, clip);
+		const int32_t selected = FindClip(*playback->Clips, clip);
 		if (selected < 0)
 		{
 			BS_CORE_ERROR("Animator '{}': crossfade clip '{}' not found", entity.GetName(), clip);
@@ -1477,8 +1501,8 @@ namespace Basalt {
 		auto* playback = EnsurePlayable(entity);
 		if (!playback)
 			return false;
-		const int32_t a = FindClip(*playback->Source, first);
-		const int32_t b = FindClip(*playback->Source, second);
+		const int32_t a = FindClip(*playback->Clips, first);
+		const int32_t b = FindClip(*playback->Clips, second);
 		if (a < 0 || b < 0)
 		{
 			BS_CORE_ERROR("Animator '{}': blend clip '{}' not found", entity.GetName(), a < 0 ? first : second);
@@ -1521,7 +1545,7 @@ namespace Basalt {
 			return SetBlendSpaceParameter(entity, parameter);
 		}
 		SpaceState state{ .Name = space, .Parameter = parameter };
-		const int32_t dominant = ResolveSpaceState(*playback->Source, component, state, state.Problem);
+		const int32_t dominant = ResolveSpaceState(*playback->Clips, component, state, state.Problem);
 		// Scripts often call this every frame; a problem is logged when it appears or changes.
 		if (state.Problem != playback->PlayProblem && !state.Problem.empty())
 			BS_CORE_ERROR("Animator '{}': {}", entity.GetName(), state.Problem);
@@ -1575,7 +1599,7 @@ namespace Basalt {
 		{
 			if (sample.Clip < 0)
 				continue;
-			const std::string& name = playback->Source->Animations[sample.Clip].Name;
+			const std::string& name = (*playback->Clips)[sample.Clip].Name;
 			auto it = std::ranges::find(weights, name, &std::pair<std::string, float>::first);
 			if (it == weights.end())
 				weights.emplace_back(name, sample.Weight);
@@ -1633,9 +1657,9 @@ namespace Basalt {
 			playback->Time = state.Phase * state.Duration;
 		}
 		else
-			playback->Time = std::min(seconds, playback->Source->Animations[playback->Clip].Duration);
+			playback->Time = std::min(seconds, (*playback->Clips)[playback->Clip].Duration);
 		if (playback->Outgoing.Clip >= 0)
-			playback->Outgoing.Time = std::min(seconds, playback->Source->Animations[playback->Outgoing.Clip].Duration);
+			playback->Outgoing.Time = std::min(seconds, (*playback->Clips)[playback->Outgoing.Clip].Duration);
 		playback->Rest = false;
 		const double duration = CycleDuration(*playback);
 		playback->StatePhase = duration > 0 ? playback->Time / duration : 0;
@@ -1668,8 +1692,8 @@ namespace Basalt {
 	{
 		std::vector<std::string> names;
 		if (auto* playback = Ensure(entity))
-			for (const auto& clip : playback->Source->Animations)
-				names.push_back(clip.Name);
+			for (size_t i = 0; i < playback->Clips->Size(); i++)
+				names.push_back((*playback->Clips)[static_cast<int32_t>(i)].Name);
 		return names;
 	}
 
@@ -1834,17 +1858,17 @@ namespace Basalt {
 		if (static_cast<size_t>(config.Blend) >= AnimationLayerBlendCount)
 			problems.push_back(fmt::format("Blend {} is not a blend mode; using Override", static_cast<int>(config.Blend)));
 		// Unlike the base Clip, an empty layer Clip plays nothing.
-		resolved.Clip = clip.empty() ? -1 : FindClip(source, clip);
+		resolved.Clip = clip.empty() ? -1 : FindClip(*playback.Clips, clip);
 		if (!clip.empty() && resolved.Clip < 0)
 			problems.push_back(fmt::format("clip '{}' not found in '{}'", clip, source.Key));
 		std::vector<std::string> missing;
 		resolved.Mask.Weights = AnimationMaskWeights(source, config.Mask, missing);
 		if (!missing.empty())
 			problems.push_back(fmt::format("mask joint{} {} not found in '{}'", missing.size() > 1 ? "s" : "", fmt::join(missing, ", "), source.Key));
-		resolved.Mask.Channels = resolved.Clip >= 0 ? AnimatedChannels(source, source.Animations[resolved.Clip]) : std::vector<uint8_t>(source.Nodes.size(), 0);
+		resolved.Mask.Channels = resolved.Clip >= 0 ? AnimatedChannels(source, (*playback.Clips)[resolved.Clip]) : std::vector<uint8_t>(source.Nodes.size(), 0);
 		if (config.Blend == AnimationLayerBlend::Additive && resolved.Clip >= 0)
 		{
-			const int32_t reference = config.ReferenceClip.empty() ? resolved.Clip : FindClip(source, config.ReferenceClip);
+			const int32_t reference = config.ReferenceClip.empty() ? resolved.Clip : FindClip(*playback.Clips, config.ReferenceClip);
 			if (reference < 0)
 			{
 				problems.push_back(fmt::format("reference clip '{}' not found in '{}'", config.ReferenceClip, source.Key));
@@ -1852,7 +1876,7 @@ namespace Basalt {
 			}
 			else
 			{
-				const AnimationClip& referenceClip = source.Animations[reference];
+				const AnimationClip& referenceClip = (*playback.Clips)[reference];
 				float time = config.ReferenceTime;
 				if (!std::isfinite(time) || time < 0)
 				{
@@ -1913,7 +1937,7 @@ namespace Basalt {
 			}
 			const int32_t clip = ResolveLayer(playback, config, state).Clip;
 			if (clip >= 0 && seconds > 0)
-				state.Time = WrapClock(state.Time + seconds * speed, playback.Source->Animations[clip].Duration, config.Looping);
+				state.Time = WrapClock(state.Time + seconds * speed, (*playback.Clips)[clip].Duration, config.Looping);
 			state.Weight.Advance(static_cast<float>(seconds));
 			layers.push_back(std::move(state));
 		}
@@ -1944,7 +1968,7 @@ namespace Basalt {
 			ReportLayerCall(entity, operation, layer, fmt::format("layer '{}': the clip name must not be empty", layer));
 			return false;
 		}
-		if (clip && FindClip(*playback->Source, *clip) < 0)
+		if (clip && FindClip(*playback->Clips, *clip) < 0)
 		{
 			ReportLayerCall(entity, operation, layer, fmt::format("layer '{}': clip '{}' not found in '{}'", layer, *clip, playback->Source->Key));
 			return false;

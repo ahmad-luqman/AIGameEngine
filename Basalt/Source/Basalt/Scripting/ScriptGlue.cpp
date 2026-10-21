@@ -755,6 +755,20 @@ namespace Basalt {
 			entityType["GetIKWeight"] = [&context](const ScriptEntity& self, const std::string& chain) {
 				return RequireAnimations(context).GetIKWeight(RequireInverseKinematics(self, "GetIKWeight"), chain);
 			};
+			entityType["SetMorphWeight"] = [&context](const ScriptEntity& self, const std::string& target, float weight, const sol::object& seconds) {
+				Entity entity = RequireAnimator(self, "SetMorphWeight");
+				return RequireAnimations(context).SetMorphWeight(entity, target, weight, OptionalNumber(seconds, "SetMorphWeight: seconds", 0.0f));
+			};
+			entityType["GetMorphWeight"] = [&context](const ScriptEntity& self, const std::string& target) {
+				return RequireAnimations(context).GetMorphWeight(RequireAnimator(self, "GetMorphWeight"), target);
+			};
+			entityType["ClearMorphWeight"] = [&context](const ScriptEntity& self, const sol::object& target) {
+				Entity entity = RequireAnimator(self, "ClearMorphWeight");
+				return RequireAnimations(context).ClearMorphWeight(entity, OptionalString(target, "ClearMorphWeight: target").value_or(std::string()));
+			};
+			entityType["GetMorphTargets"] = [&context](const ScriptEntity& self) {
+				return sol::as_table(RequireAnimations(context).GetMorphTargets(RequireAnimator(self, "GetMorphTargets")));
+			};
 			entityType["ResetSpringBones"] = [&context](const ScriptEntity& self) {
 				[[maybe_unused]] const bool reset = RequireAnimations(context).ResetSpringBones(RequireSpringBone(self, "ResetSpringBones"));
 				BS_CORE_ASSERT(reset, "RequireSpringBone checked the component");

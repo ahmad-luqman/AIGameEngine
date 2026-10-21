@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Basalt/Animation/AnimationClipSet.h"
 #include "Basalt/Animation/AnimationPose.h"
 #include "Basalt/Animation/AnimationGraph.h"
 #include "Basalt/Animation/FadingWeight.h"
@@ -251,6 +252,8 @@ namespace Basalt {
 		{
 			entt::entity Handle = entt::null;
 			Ref<MeshSource> Source;
+			// Source's clips and the Animator's retargeted library clips; every clip index refers to it.
+			Ref<const AnimationClipSet> Clips;
 			std::string ConfiguredClip;
 			std::string ConfiguredGraph;
 			Ref<const AnimationGraph> Graph;
@@ -441,13 +444,16 @@ namespace Basalt {
 		// Fills the state's samples, duration and Resolved from the component and returns the dominant clip; -1
 		// (Resolved false) when the space cannot play (see SpaceState::Resolved). `outProblem` also names missing
 		// sample clips when the others can play.
-		int32_t ResolveSpaceState(const MeshSource& source, const AnimatorComponent& component, SpaceState& state, std::string& outProblem);
+		int32_t ResolveSpaceState(const AnimationClipSet& clips, const AnimatorComponent& component, SpaceState& state, std::string& outProblem);
 		// Re-resolves the running space and logs a new problem; false when it cannot play.
 		bool ResolveSpace(Playback& playback, SpaceState& state, const AnimatorComponent& component);
 		static void Evaluate(Playback& playback);
 		// Builds Pose from Local and the layers, then composes Globals from Pose with the IK and spring overlays on top. Layers
 		// leave out the root-motion joint and the nodes above it while root motion applies (also while it fades out).
 		static void Finish(Playback& playback);
+		// The Animator's clip set for `model`, built (and its problems logged) when the model, ClipLibraries, their
+		// loaded sources or RetargetJoints changed.
+		Ref<const AnimationClipSet> ResolveClips(Entity entity, const AnimatorComponent& component, const Ref<MeshSource>& model);
 		// Requires Local/Pose/Globals sized by Ensure (which retries incomplete initialization) and immutable source topology.
 		// Rewrites those buffers in place, so queued-job recovery needs no pose allocation.
 		static void RestoreRestPose(Playback& playback);
@@ -551,6 +557,15 @@ namespace Basalt {
 		Scene& m_Scene;
 		std::unordered_map<UUID, Playback> m_Playback;
 		std::unordered_map<entt::entity, bool> m_EmptyMeshes;
+		// Built clip sets by model, library keys and their loaded sources, and joint map (see ResolveClips).
+		struct ClipSetEntry
+		{
+			std::vector<std::string> Keys;
+			std::vector<Ref<MeshSource>> Sources;
+			std::vector<AnimationRetargetJoint> Joints;
+			Ref<const AnimationClipSet> Clips;
+		};
+		std::vector<ClipSetEntry> m_ClipSets;
 		std::vector<AnimationEventRecord> m_PendingEvents;
 		// The last problem reported per BoneAttachment entity, so each is logged once.
 		std::unordered_map<UUID, std::string> m_AttachmentProblems;

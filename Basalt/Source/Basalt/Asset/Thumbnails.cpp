@@ -431,12 +431,17 @@ namespace Basalt {
 						continue;
 					for (const auto& [component, fields] : components->items())
 						if (fields.is_object())
+						{
+							const auto* info = ComponentRegistry::Find(component);
 							for (const auto& [field, value] : fields.items())
-							{
-								const auto* info = ComponentRegistry::Find(component);
 								if (value.is_string() || (info && std::find(info->AssetFields.begin(), info->AssetFields.end(), field) != info->AssetFields.end()))
 									AddReferenceDependencies(m_ProjectDirectory, assets, value, dependencies);
-							}
+							// UUID references inside lists (e.g. an Animator's clip libraries).
+							if (info)
+								for (const auto& assetField : info->AssetFields)
+									if (assetField.find("[].") != std::string::npos)
+										ForEachAssetValue(fields, assetField, [&](const nlohmann::json& value, const std::string&) { AddReferenceDependencies(m_ProjectDirectory, assets, value, dependencies); });
+						}
 				}
 				break;
 			}
