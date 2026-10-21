@@ -798,6 +798,25 @@ TEST_SUITE("MorphTargets")
 		CHECK(drawn[5] == 0.0f);
 	}
 
+	TEST_CASE("Animated bounds hold the weights the renderer draws")
+	{
+		ClearAssetCache cacheGuard;
+		const auto key = AnimationTest::FixturePath("ManyMorphs.gltf").string();
+		const auto source = AssetManager::GetMesh(key);
+		REQUIRE(source);
+		// Crowded: 32 full weights push vertices 8-39 forward; four weaker negative ones (dropped) would pull 4-7 back.
+		MeshNode& crowded = source->Nodes[Node(*source, "Crowded")];
+		std::ranges::fill(crowded.MorphWeights, 0.0f);
+		for (size_t target = 0; target < 36; target++)
+			crowded.MorphWeights[target] = target < 4 ? -0.5f : 1.0f;
+		Scene scene;
+		auto entity = scene.CreateEntity("Many");
+		entity.AddComponent<AnimatorComponent>().Mesh = key;
+		const AABB bounds = AnimatedModelBounds(entity);
+		CHECK(bounds.Min.z == doctest::Approx(0.0f));
+		CHECK(bounds.Max.z == doctest::Approx(0.15f));
+	}
+
 	TEST_CASE("Draws keep their strongest morph weights, in a stable order")
 	{
 		std::vector<uint32_t> targets;

@@ -6,6 +6,7 @@
 #include "Basalt/Animation/SpringBones.h"
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Core/Assert.h"
+#include "Basalt/Renderer/RenderMath.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
 
@@ -64,10 +65,12 @@ namespace Basalt {
 	{
 		AABB bounds;
 		ForEachAnimatedMesh(entity, [&](const Ref<MeshSource>& source, const MeshNode& node, const glm::mat4& model, const std::vector<glm::mat4>& palette, std::span<const float> morphWeights) {
+			// Exact bounds of what is drawn: dropped weights could move them away from drawn vertices.
+			const std::vector<float> drawn = DrawnMorphWeights(morphWeights);
 			for (uint32_t index : source->Meshes[node.MeshIndex].Submeshes)
 			{
 				const Submesh& submesh = source->Submeshes[index];
-				bounds.Expand((palette.empty() ? MorphedBounds(*source, submesh, morphWeights) : SkinBounds(*source, submesh, palette, morphWeights)).Transformed(model));
+				bounds.Expand((palette.empty() ? MorphedBounds(*source, submesh, drawn) : SkinBounds(*source, submesh, palette, drawn)).Transformed(model));
 			}
 		});
 		return bounds;

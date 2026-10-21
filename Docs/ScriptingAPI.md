@@ -1260,7 +1260,7 @@ the topmost paired node) also move by their source joint's displacement scaled b
 have nothing paired below them and move unscaled. Morph weight tracks keep their keys and move to target nodes of the
 same name (ignoring namespace prefixes), matched by target name (a track that matches nothing is warned about). Joint tracks are resampled at the
 source's key times (plus a 30 Hz grid when any track is cubic) and interpolate linearly (stepped when every source track
-steps).
+steps; in a mixed clip, stepped channels are also sampled just before each key, so they still jump instead of blending).
 
 Clips are retargeted when an Animator first needs them (again after the model or a library reloads) and shared by
 Animators with the same model and libraries. A clip past the decoded animation budget, one that moves no paired joint or

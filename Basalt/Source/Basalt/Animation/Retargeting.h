@@ -75,7 +75,7 @@ namespace Basalt {
 		// source root's displacement times RootScale, and every other joint keeps the target's rest translation (its limb
 		// length). Scale tracks carry the ratio to the source's rest scale. Joint tracks are sampled at the source's key
 		// times (plus a 30 Hz grid when any track is cubic) and interpolate linearly (stepped when every source track
-		// steps). Weights tracks keep their keys and interpolation and move to the target nodes of the same name
+		// steps; otherwise stepped tracks also sample the float before each key, keeping their jumps). Weights tracks keep their keys and interpolation and move to the target nodes of the same name
 		// (ignoring namespaces), matched by morph target name; ones that match nothing, or only nodes an earlier track
 		// drives, are named in outWarnings. False with outError for a map built for other skeletons, a track that does not
 		// fit the source's nodes, a non-finite rest or sampled source pose, or a result past the budget.

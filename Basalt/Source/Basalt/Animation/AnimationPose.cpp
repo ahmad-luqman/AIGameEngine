@@ -2,6 +2,7 @@
 
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Math/Math.h"
+#include "Basalt/Renderer/RenderMath.h"
 #include "Basalt/Scene/Components.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -341,8 +342,10 @@ namespace Basalt {
 
 	AABB CachedSkinBounds(const MeshSource& source, const Submesh& submesh, const std::vector<glm::mat4>& palette, std::span<const float> morphWeights)
 	{
+		// The exact fallback morphs with the drawn weights; widening by every weight stays conservative (each target's
+		// range includes zero).
 		if (submesh.JointBounds.empty())
-			return SkinBounds(source, submesh, palette, morphWeights);
+			return SkinBounds(source, submesh, palette, DrawnMorphWeights(morphWeights));
 		const AABB morph = MorphDisplacementBounds(submesh, morphWeights);
 		const glm::vec3 morphMin = morph.IsValid() ? morph.Min : glm::vec3(0);
 		const glm::vec3 morphMax = morph.IsValid() ? morph.Max : glm::vec3(0);
