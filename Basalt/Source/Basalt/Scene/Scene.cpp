@@ -751,7 +751,8 @@ namespace Basalt {
 			m_UIInteraction->Update(*this, ts.GetSeconds());
 			m_ScriptEngine->Update(ts, m_UIInteraction->TakeEvents());
 		}
-		// Property tracks can drive Animator parameters; sample them after scripts and before skeletal animation.
+		// Property tracks can write Transform, BoneAttachment and Animator playback fields such as Speed.
+		// Sample after scripts and before skeletal animation consumes those fields.
 		// Both animation systems precede physics so this step sees kinematic transforms and root displacement.
 		m_PropertyAnimationSystem->Update(ts.GetSeconds());
 		m_AnimationSystem->Update(ts, false);

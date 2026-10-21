@@ -385,8 +385,8 @@ function Entity:GetAudioDopplerPitch() end
 function Entity:PlayAnimation(clip) end
 
 ---Controls this entity's PropertyAnimation in Play/Simulate. Play restarts, Pause/Resume preserve time,
----Stop samples zero and Seek samples normalized time without changing pause state. Invalid input raises.
----Pause/Resume reject suspended timelines; Play/Stop/Seek repairs only after a successful sample.
+---Stop samples zero and Seek samples normalized time without changing pause state. Invalid input, sampling failure and calls outside Play/Simulate raise.
+---Pause/Resume reject suspended timelines; repair requires a successful sample. Seek repair stays stopped; Play restarts.
 ---@param action 'Play'|'Pause'|'Resume'|'Stop'|'Seek'
 ---@param time? number Normalized time in [0,1], default 0
 ---@return boolean
@@ -401,7 +401,6 @@ function Entity:ControlPropertyAnimation(action, time) end
 ---Read-only status of this entity's PropertyAnimation in Play/Simulate.
 ---@return PropertyAnimationStatus
 function Entity:GetPropertyAnimationStatus() end
-
 
 ---Crossfades to clip over seconds; returns success.
 ---@param clip string

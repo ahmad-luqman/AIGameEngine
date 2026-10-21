@@ -640,7 +640,7 @@ namespace Basalt {
 								 if (params.contains("path") && !m_AnimationGraphPanel.Open(params.at("path").get<std::string>(), error))
 									 throw CommandError(error);
 								 const auto& draft = m_AnimationGraphPanel.GetDraft();
-								 const bool valid = !draft.Path.empty() && draft.Validate(error);
+								 const bool valid = !draft.Path.empty() && m_AnimationGraphPanel.Validate(error);
 								 return nlohmann::json{ { "open", !draft.Path.empty() }, { "path", draft.Path }, { "dirty", m_AnimationGraphPanel.IsDirty() }, { "valid", valid }, { "problem", error }, { "externalChange", draft.ExternalChange }, { "error", m_AnimationGraphPanel.GetError() } };
 							 } });
 
@@ -1103,12 +1103,7 @@ namespace Basalt {
 			Stop();
 			m_Context.Execute("scene.open", { { "path", path } });
 		}
-		else if (FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(path)) == ".banimgraph")
-		{
-			std::string error;
-			if (!m_AnimationGraphPanel.Open(path, error))
-				m_Context.SetStatus(error, true);
-		}
+
 		else if (MaterialAsset::IsMaterialFile(path))
 			m_MaterialEditorPanel.Open(path);
 		else
@@ -1125,6 +1120,13 @@ namespace Basalt {
 		{
 			Stop();
 			m_Context.Execute("scene.open", { { "path", path } });
+			return;
+		}
+		if (FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(path)) == ".banimgraph")
+		{
+			std::string error;
+			if (!m_AnimationGraphPanel.Open(path, error))
+				m_Context.SetStatus(error, true);
 			return;
 		}
 		if (AssetManager::IsMeshFile(path))

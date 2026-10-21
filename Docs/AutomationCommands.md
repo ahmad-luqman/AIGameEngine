@@ -936,7 +936,7 @@ Adds the component if missing and sets the given fields (others keep their value
 
 ### `component.types`
 
-Lists every component type with its fields (for component.set): their names in order, each field's JSON type ('number', 'integer', 'boolean', 'string', 'object', 'entity', 'enum', an array such as 'number[3]', or 'object[]' for a list of objects), the values of enum fields, the fields that reference entities, and for each list field its element type under 'lists' ({name, fields, types, enums, maxCount, default, lists, and uniqueField when one string field must differ between elements}; a set replaces the whole list).
+Lists every component type with its fields (for component.set): their names in order, each field's JSON type ('number', 'integer', 'boolean', 'string', 'object', 'entity', 'enum', an array such as 'number[3]', or 'object[]' for a list of objects), the values of enum fields, the fields that reference entities, and for each list field its element type under 'lists' ({name, fields, types, enums, maxCount, default, lists, and uniqueField when one string field must differ between elements}; a set replaces the whole list). Includes quaternionRotations (Euler-degree fields sampled as quaternion orientations) and supportsPropertyAnimation (false for physics configuration components and PropertyAnimation itself).
 
 <details><summary>Parameter JSON Schema</summary>
 

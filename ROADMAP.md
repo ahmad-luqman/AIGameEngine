@@ -75,7 +75,7 @@ below extend character movement, in order of impact.
 - **Retargeting follow-ups — S.** Rest-pose matching for libraries authored in a different rest style (an A-pose clip
   on a T-pose character) through a reference pose, and a reusable joint map asset shared by Animators.
 - **Property animation follow-ups — S.** Stepped boolean/integer/string/enum tracks and nested registry
-  field paths, and physics configuration tracks that preserve contacts; current authoring supports scalar/vector numeric fields on the same entity.
+  field paths, stable Euler serialization at exact gimbal lock, and physics configuration tracks that preserve contacts; current authoring supports scalar/vector numeric fields on the same entity.
 - **Later: motion matching and procedural creatures — L each.** Motion matching (search a mocap database
   every few frames for the pose and future trajectory that best match the desired movement); procedural
   leg stepping for multi-legged creatures built on IK.

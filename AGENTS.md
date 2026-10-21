@@ -59,7 +59,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   numeric registry-field tracks with normalized keys (registry-tagged quaternion rotations use slerp; physics configuration components are excluded). `PropertyAnimationSystem` owns runtime clocks in Play/Simulate,
   samples after scripts and before skeletal animation/physics through grouped `ComponentRegistry` patches, and
   logs/suspends failed timelines until edited or explicitly repaired. `animation.key/sample/control` share these paths;
-  Lua uses `ControlPropertyAnimation`. See `Docs/ScriptingAPI.md`.
+  Lua uses `ControlPropertyAnimation` and `GetPropertyAnimationStatus`. See `Docs/ScriptingAPI.md`.
 - **Layers, IK and spring bones.** A pose is built in stages: the base playback (`Playback::Local`, which fades, snapshots and root
   stripping use), then `Animator.Layers` in order (`Pose`; each layer's clip, mask and reference pose are resolved again
   only when its clip, blend, reference or mask changes, and the root-motion exclusion when the root-motion joint

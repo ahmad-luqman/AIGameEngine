@@ -12,7 +12,7 @@ namespace Basalt {
 	class Scene;
 	class Entity;
 	struct PropertyAnimationComponent;
-	// Empty on valid declarations; otherwise the indexed field/key problem. Does not require target components.
+	// Empty on valid declarations; otherwise the component-level or indexed track/key problem. Does not require target components.
 	std::string ValidatePropertyAnimation(const PropertyAnimationComponent& animation);
 
 	// Resolves numeric timeline targets and applies samples through the registry's validated patch path.
@@ -21,9 +21,10 @@ namespace Basalt {
 	public:
 		// Null for unsupported fields, including physics configuration components.
 		static const ComponentFieldType* FindField(const std::string& component, const std::string& field);
-		// Samples normalized time in [0,1]. Missing targets fail; already-applied components remain changed.
+		// Samples normalized time in [0,1]. Missing targets fail; components already applied in name order remain changed.
 		static bool Sample(Entity entity, const PropertyAnimationComponent& animation, float time, std::string& outError);
-		// Captures a field's current serialized value, inserting or replacing a key on its timeline.
+		// Captures a field, adding PropertyAnimation if needed. Inserts/replaces in the last nonempty matching
+		// track, or the last empty match when all are empty.
 		static bool Key(Entity entity, const std::string& component, const std::string& field, float time, std::string& outError);
 	};
 
@@ -34,7 +35,8 @@ namespace Basalt {
 		explicit PropertyAnimationSystem(Scene& scene);
 		~PropertyAnimationSystem();
 		void Update(float deltaTime);
-		// Play restarts, Stop samples zero, Seek samples normalized time. Pause/Resume reject failed clocks.
+		// Play restarts, Stop samples zero and stops, Seek preserves playing/stopped state. Failures stop
+		// the clock; successful Play/Stop/Seek repairs it. Pause/Resume reject failed clocks.
 		bool Control(Entity entity, const std::string& action, float time, std::string& outError);
 		// Read-only status (normalized time, playing, failed, error), or null for a foreign/missing entity.
 		nlohmann::json Status(Entity entity) const;

@@ -96,17 +96,21 @@ TEST_SUITE("Animation authoring")
 			if (component == "BoneAttachment")
 				entity.AddComponent<BoneAttachmentComponent>();
 			REQUIRE(PropertyAnimation::FindField(component, "Rotation")->QuaternionRotation);
-			for (const auto endpoints : std::vector<glm::vec2>{ { 0, 120 }, { 170, -170 } })
+			struct RotationCase
+			{
+				glm::vec3 From, To, Midpoint;
+			};
+			for (const auto& angles : std::vector<RotationCase>{ { { 0, 0, 0 }, { 0, 120, 0 }, { 0, 60, 0 } }, { { 170, 0, 0 }, { -170, 0, 0 }, { 180, 0, 0 } } })
 			{
 				if (entity.HasComponent<PropertyAnimationComponent>())
 					entity.RemoveComponent<PropertyAnimationComponent>();
-				REQUIRE(ComponentRegistry::AddOrPatch(entity, component, { { "Rotation", { 0, endpoints.x, 0 } } }, error));
+				REQUIRE(ComponentRegistry::AddOrPatch(entity, component, { { "Rotation", { angles.From.x, angles.From.y, angles.From.z } } }, error));
 				REQUIRE(PropertyAnimation::Key(entity, component, "Rotation", 0, error));
-				REQUIRE(ComponentRegistry::AddOrPatch(entity, component, { { "Rotation", { 0, endpoints.y, 0 } } }, error));
+				REQUIRE(ComponentRegistry::AddOrPatch(entity, component, { { "Rotation", { angles.To.x, angles.To.y, angles.To.z } } }, error));
 				REQUIRE(PropertyAnimation::Key(entity, component, "Rotation", 1, error));
 				REQUIRE(PropertyAnimation::Sample(entity, entity.GetComponent<PropertyAnimationComponent>(), .5f, error));
 				const auto actual = component == "Transform" ? entity.GetTransform().Rotation : entity.GetComponent<BoneAttachmentComponent>().Rotation;
-				const auto expected = Math::QuatFromEuler(glm::radians(glm::vec3(0, endpoints.x == 0 ? 60.0f : 180.0f, 0)));
+				const auto expected = Math::QuatFromEuler(glm::radians(angles.Midpoint));
 				CHECK(std::abs(glm::dot(actual, expected)) == doctest::Approx(1).epsilon(.0001));
 			}
 		}
@@ -124,6 +128,9 @@ TEST_SUITE("Animation authoring")
 		REQUIRE(PropertyAnimation::Key(entity, "Transform", "Translation", .1f, error));
 		const auto& animation = entity.GetComponent<PropertyAnimationComponent>();
 		CHECK(animation.Tracks[0].Keys.size() == 3);
+		entity.GetTransform().Translation.x = 4;
+		REQUIRE(PropertyAnimation::Key(entity, "Transform", "Translation", .1f, error));
+		CHECK(entity.GetComponent<PropertyAnimationComponent>().Tracks[0].Keys.size() == 3);
 		CHECK(animation.Tracks[1].Keys.empty());
 		REQUIRE(PropertyAnimation::Sample(entity, animation, 0, error));
 		CHECK(entity.GetTransform().Translation.x == 0);
@@ -168,6 +175,13 @@ TEST_SUITE("Animation authoring")
 		for (const std::string action : { "Play", "Stop", "Seek" })
 		{
 			REQUIRE(system->Control(entity, action, .5f, error));
+			CHECK(system->Status(entity)["playing"] == (action == "Play"));
+			const auto repairedTime = system->Status(entity)["time"];
+			if (action == "Seek")
+			{
+				scene.OnUpdate(Timestep(.1f));
+				CHECK(system->Status(entity)["time"] == repairedTime);
+			}
 			CHECK(system->Status(entity)["failed"] == false);
 			CHECK(system->Status(entity)["error"] == "");
 			REQUIRE(system->Control(entity, "Play", 0, error));
@@ -263,7 +277,9 @@ TEST_SUITE("Animation authoring")
 		invalid.push_back({ { "Tracks", json::array({ badValue }) } });
 		invalid.push_back({ { "Tracks", std::vector<json>(65, track) } });
 		auto tooMany = track;
-		tooMany["Keys"] = std::vector<json>(257, json::object());
+		tooMany["Keys"] = json::array();
+		for (int i = 0; i < 257; i++)
+			tooMany["Keys"].push_back({ { "Time", static_cast<float>(i) / 256 } });
 		invalid.push_back({ { "Tracks", json::array({ tooMany }) } });
 		for (const auto& bad : invalid)
 		{
@@ -315,6 +331,108 @@ TEST_SUITE("Animation authoring")
 		CHECK(entity.GetTransform().Translation.x == 0);
 		CHECK(error.starts_with("PointLight:"));
 		CHECK(error.find("PointLight: PointLight:") == std::string::npos);
+	}
+	TEST_CASE("Graph name buffers keep rejections across frames and commit the old selection")
+	{
+		AnimationGraphDraft draft;
+		std::string error;
+		auto data = AnimationGraphDraft::Default();
+		data["States"].push_back({ { "Name", "Walk" }, { "Clip", "Walk" } });
+		data["Transitions"] = json::array({ { { "From", "Idle" }, { "To", "Walk" } } });
+		REQUIRE(draft.SetData(data, error));
+		draft.MarkSaved();
+		AnimationGraphNameEdit edit;
+		edit.Sync("Idle");
+		edit.Text = "Walk";
+		edit.Pending = true;
+		auto renameOld = [&](const auto& name) { return draft.RenameState(0, name); };
+		CHECK_FALSE(edit.Commit(renameOld));
+		for (int frame = 0; frame < 3; frame++)
+		{
+			edit.Sync("Idle");
+			CHECK(edit.Pending);
+			CHECK(edit.Text == "Walk");
+			CHECK_FALSE(edit.Problem.empty());
+			// Save checks Pending, independently of mouse press/release timing.
+			CHECK_FALSE(edit.Commit(renameOld));
+			CHECK(draft.Data["States"][0]["Name"] == "Idle");
+		}
+		edit.Text = "";
+		CHECK_FALSE(edit.Commit(renameOld));
+		CHECK(edit.Pending);
+		edit.Text = "Rest";
+		REQUIRE(edit.Commit(renameOld));
+		CHECK_FALSE(edit.Pending);
+		CHECK(edit.Problem.empty());
+		CHECK(draft.Data["States"][0]["Name"] == "Rest");
+		CHECK(draft.Data["Transitions"][0]["From"] == "Rest");
+		edit.Sync("Walk");
+		CHECK(edit.Text == "Walk"); // Detail field follows the new selection only after commit.
+		edit.Text = "Unsaved";
+		edit.Pending = true;
+		edit.Cancel("Walk");
+		CHECK_FALSE(edit.Pending);
+		CHECK(edit.Text == "Walk");
+		CHECK(draft.Data["States"][1]["Name"] == "Walk");
+	}
+	TEST_CASE("The exact physics configuration set stays excluded from property animation")
+	{
+		for (const char* name : { "RigidBody", "BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "PropertyAnimation" })
+		{
+			const auto* info = ComponentRegistry::Find(name);
+			REQUIRE(info);
+			CHECK_FALSE(info->SupportsPropertyAnimation);
+			for (const auto& field : info->Fields)
+				CHECK(PropertyAnimation::FindField(name, field) == nullptr);
+		}
+		CHECK(PropertyAnimation::FindField("Transform", "Translation"));
+		CHECK(PropertyAnimation::FindField("PointLight", "Intensity"));
+		CHECK(PropertyAnimation::FindField("Camera", "FOV"));
+	}
+	TEST_CASE("Clocks reset when ID destruction precedes timeline destruction")
+	{
+		Scene scene;
+		auto entity = scene.CreateEntity("Lifetime");
+		const auto id = entity.GetUUID();
+		std::string error;
+		REQUIRE(PropertyAnimation::Key(entity, "Transform", "Translation", 0, error));
+		entity.GetTransform().Translation.x = 8;
+		REQUIRE(PropertyAnimation::Key(entity, "Transform", "Translation", 1, error));
+		const auto authored = entity.GetComponent<PropertyAnimationComponent>(); // NOLINT(performance-unnecessary-copy-initialization) -- Preserve values across component removal.
+		PropertyAnimationSystem system(scene);
+		system.Update(.5f);
+		auto& registry = scene.GetRegistry();
+		const auto handle = static_cast<entt::entity>(entity);
+		// Force the pool order that the on_destroy<IDComponent> connection must handle.
+		registry.remove<IDComponent>(handle);
+		registry.remove<PropertyAnimationComponent>(handle);
+		registry.emplace<IDComponent>(handle, id);
+		entity.AddComponent<PropertyAnimationComponent>(authored);
+		CHECK(system.Status(entity)["time"] == 0);
+		system.Update(.25f);
+		CHECK(entity.GetTransform().Translation.x == 2);
+	}
+	TEST_CASE("Held quaternion samples do not emit duplicate updates or mask later script changes")
+	{
+		Scene scene;
+		auto entity = scene.CreateEntity();
+		std::string error;
+		REQUIRE(ComponentRegistry::AddOrPatch(entity, "Transform", { { "Rotation", { 23.25f, 41.5f, -17.75f } } }, error));
+		REQUIRE(PropertyAnimation::Key(entity, "Transform", "Rotation", 0, error));
+		REQUIRE(ComponentRegistry::AddOrPatch(entity, "Transform", { { "Rotation", { 0, 0, 0 } } }, error));
+		struct Updates
+		{
+			int Count = 0;
+			void OnUpdate(entt::registry&, entt::entity) { Count++; }
+		} updates;
+		scene.GetRegistry().on_update<TransformComponent>().connect<&Updates::OnUpdate>(updates);
+		for (int i = 0; i < 4; i++)
+			REQUIRE(PropertyAnimation::Sample(entity, entity.GetComponent<PropertyAnimationComponent>(), 0, error));
+		CHECK(updates.Count == 1);
+		entity.GetTransform().Rotation = Math::QuatFromEuler({ 0, 0, 0 });
+		REQUIRE(PropertyAnimation::Sample(entity, entity.GetComponent<PropertyAnimationComponent>(), 0, error));
+		CHECK(updates.Count == 2);
+		scene.GetRegistry().on_update<TransformComponent>().disconnect(&updates);
 	}
 	TEST_CASE("Property patches group constrained fields and duplicate tracks use their last sample")
 	{
@@ -480,6 +598,14 @@ TEST_SUITE("Animation authoring")
 		TempProject project("AnimationAuthoring");
 		AutomationSession session;
 		CommandRegistry commands;
+		const auto types = Run(commands, session, "component.types")["components"];
+		for (const auto& info : types)
+		{
+			if (info["name"] == "Transform")
+				CHECK(info["quaternionRotations"] == json::array({ "Rotation" }));
+			if (info["name"] == "RigidBody")
+				CHECK(info["supportsPropertyAnimation"] == false);
+		}
 		Run(commands, session, "scene.new");
 		Run(commands, session, "entity.create", { { "name", "Door" } });
 		Run(commands, session, "animation.key", { { "entity", "Door" }, { "component", "Transform" }, { "field", "Translation" }, { "time", 0 } });
