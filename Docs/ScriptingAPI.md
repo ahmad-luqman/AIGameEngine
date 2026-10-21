@@ -1165,6 +1165,51 @@ end
   `warn("@off")` disables them (the Lua default); fragments in a multi-argument warning are joined.
 - `Game.Quit()` — ends the game (the runtime exits, the editor leaves play mode)
 
+## Property animation
+
+`PropertyAnimation` stores timelines for scalar and 2–4 lane numeric fields on the same entity. The
+Property Animation editor panel lists existing components and numeric fields from `ComponentRegistry`.
+Capture Key records the current serialized value at the normalized timeline cursor; Sample/scrubbing
+applies the timeline to the current scene and supports editor Undo. The inspector exposes the same
+Duration, Speed, Looping, PlayOnStart, Tracks, Stepped and Keys fields. Key Value is a four-lane vector:
+scalars use X and vector fields use the first N lanes. Rotation fields use the registry's degrees.
+Empty tracks do nothing; targets must exist when sampling. Integer, boolean, string, entity, asset,
+object and nested list fields are excluded.
+
+Keys use strictly increasing normalized Time in [0,1], with a maximum of 256 keys per track and 64
+tracks per entity. Repeated targets use the last nonempty track; key capture edits that winning track. Sampling holds the first/last value outside the keys'
+interval. Linear interpolation is the default; Stepped holds the left key until the next key's time.
+Every patch uses the component's existing validator and update signals. Fields of the same component
+are applied together; when a component rejects its patch, earlier components may already have changed.
+No missing target component is implicitly added.
+
+Playback runs after script OnUpdate and before skeletal animation and physics in Play/Simulate.
+Consequently a dynamic body, skeletal root motion, IK or a later script can override the sampled transform.
+Clocks belong to the running scene, respect scene pause/stepping, and never serialize. Component patches
+restart the clock according to PlayOnStart. Duration is seconds in (0,86400], Speed is [0,1000].
+Nonlooping playback holds its final sample and stops; looping playback wraps to zero at Duration.
+A failed sample logs once and suspends that timeline until its component is edited or a successful
+Play/Stop/Seek repairs it. Other entities' timelines continue.
+
+`e:ControlPropertyAnimation(action, [time])` returns true on success and raises on invalid input or
+sampling failure. Actions are `Play` (restart and sample zero), `Pause`, `Resume`, `Stop` (sample zero
+and stop), and `Seek` (sample normalized time in [0,1] without changing play/pause). Time defaults to
+zero. The entity needs a PropertyAnimation and a running Play/Simulate scene. Automation clients use
+`animation.control` (also supports `Status`, returning normalized time, playing and failed),
+`animation.key` and `animation.sample`. The latter samples without changing the runtime clock.
+
+The Animation Graph panel opens `.banimgraph` files by Content Browser double-click or
+`editor.animation_graph`. Its state diagram marks the initial state; clicking a state edits its clip
+or blend-space source, loop and root-motion flags and blend axes. Parameters and ordered transitions
+are edited below, including typed conditions, fade durations and optional exit times. Higher Priority
+and Lower Priority change transition array order. Renames update references; deleting a state deletes
+its edges, and deleting a parameter deletes dependent edges rather than broadening their conditions.
+Undo Graph/Redo Graph navigate the draft history. Save validates through `AnimationGraph::FromJson` and
+`asset.write`; Revert reloads the file. Opening
+another graph with unsaved edits fails until Save/Revert. Clean drafts follow file reloads; dirty drafts
+report conflicts, with Save explicitly replacing the disk version. Project changes discard the old draft.
+Applying a graph to the selection sets Animator.StateMachine; Play previews the saved graph.
+
 ## Skeletal animation
 
 An `Animator` component draws a whole glTF model under one entity. `Mesh` is the asset path;

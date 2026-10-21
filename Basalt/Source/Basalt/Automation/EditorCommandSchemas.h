@@ -23,6 +23,7 @@ namespace Basalt::EditorCommandSchemas {
 	nlohmann::json Thumbnail();
 	nlohmann::json MaterialPreview();
 	nlohmann::json MaterialEditor();
+	nlohmann::json AnimationGraph();
 
 	// Editor window titles (ImGui window names; editor.panel takes them).
 	inline constexpr const char* ViewportTitle = "Viewport";
@@ -41,7 +42,7 @@ namespace Basalt::EditorCommandSchemas {
 		// Only these can be closed; the others are always open.
 		bool Closable;
 	};
-	inline constexpr PanelInfo Panels[] = { { ViewportTitle, false }, { GameTitle, false }, { HierarchyTitle, false }, { InspectorTitle, false }, { SceneTitle, false }, { ContentBrowserTitle, false }, { ConsoleTitle, false }, { ProjectSettingsTitle, true } };
+	inline constexpr PanelInfo Panels[] = { { "Animation Graph", false }, { "Property Animation", false }, { ViewportTitle, false }, { GameTitle, false }, { HierarchyTitle, false }, { InspectorTitle, false }, { SceneTitle, false }, { ContentBrowserTitle, false }, { ConsoleTitle, false }, { ProjectSettingsTitle, true } };
 
 	bool IsClosablePanel(const std::string& title);
 

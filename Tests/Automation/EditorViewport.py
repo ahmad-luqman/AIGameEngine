@@ -18,6 +18,7 @@ from EditorProjectSettings import check_project_settings
 from EditorGameView import check_game_view
 from EditorThumbnails import EXPECTED_ERRORS, check_thumbnails
 from EditorUI import check_ui
+from EditorAnimationAuthoring import check_animation_authoring
 
 
 def require(value, message):
@@ -246,6 +247,7 @@ def main():
                     check_thumbnails(call, require, output, temp)
                     check_project_settings(call, require, output)
                     check_ui(call, require, output)
+                    check_animation_authoring(call, require, output)
                     errors = call("log.get", {"errorsOnly": True})
                     unexpected = [m for m in errors["messages"] if not m["text"].startswith(EXPECTED_ERRORS)]
                     require(not unexpected, f"Editor logged errors: {errors}")

@@ -1,4 +1,5 @@
 #include "EditorLayer.h"
+#include "Basalt/Automation/CommandSchema.h"
 
 #include "EditorColors.h"
 #include "UIRectHandles.h"
@@ -306,6 +307,8 @@ namespace Basalt {
 		, m_InspectorPanel(m_Context)
 		, m_ContentBrowserPanel(m_Context)
 		, m_MaterialEditorPanel(m_Context)
+		, m_AnimationGraphPanel(m_Context)
+		, m_PropertyAnimationPanel(m_Context)
 		, m_ConsolePanel(m_Context)
 		, m_ProjectSettingsPanel(m_Context)
 	{
@@ -333,6 +336,7 @@ namespace Basalt {
 			if (m_Thumbnails)
 				m_Thumbnails->OnFilesChanged(report.Changed);
 			m_MaterialEditorPanel.OnFilesChanged(report.Changed);
+			m_AnimationGraphPanel.OnFilesChanged(report.Changed);
 			if (!report.Scripts.Failed.empty())
 				m_Context.SetStatus("Hot reload of " + report.Scripts.Failed.front().Path + " failed: see Console", true);
 			else if (!report.Scripts.InstanceErrors.empty())
@@ -342,7 +346,7 @@ namespace Basalt {
 			else if (!report.Assets.empty())
 				m_Context.SetStatus(fmt::format("Reloading {} changed asset(s)", report.Assets.size()), false);
 		};
-		m_Session.OnAssetMoved = [this](const std::string& from, const std::string& to) { m_MaterialEditorPanel.OnAssetMoved(from, to); };
+		m_Session.OnAssetMoved = [this](const std::string& from, const std::string& to) { m_MaterialEditorPanel.OnAssetMoved(from, to); m_AnimationGraphPanel.OnAssetMoved(from, to); };
 		m_Session.OnSceneChanged = [this]() { OnSceneChanged(); };
 		// Scripts' OnCreate reads the Game view (its resolution even before the tab is first drawn), not the scene
 		// view's layout or the headless default.
@@ -628,6 +632,17 @@ namespace Basalt {
 								 if (!WritePng(params["output"].get<std::string>(), image->Pixels, image->Width, image->Height, error))
 									 throw CommandError(error);
 								 return nlohmann::json{ { "output", params["output"] }, { "width", image->Width }, { "height", image->Height } };
+							 } });
+
+		m_Commands.Register({ "editor.animation_graph", "Opens a .banimgraph in the Animation Graph panel; close discards its draft. Opening another graph with unsaved edits fails. Returns open, path, dirty, valid and problem. Graph files are authored with asset.write.", EditorCommandSchemas::AnimationGraph(), [this](AutomationSession&, const nlohmann::json& params) {
+								 if (params.value("close", false))
+									 m_AnimationGraphPanel.Reset();
+								 std::string error;
+								 if (params.contains("path") && !m_AnimationGraphPanel.Open(params.at("path").get<std::string>(), error))
+									 throw CommandError(error);
+								 const auto& draft = m_AnimationGraphPanel.GetDraft();
+								 const bool valid = !draft.Path.empty() && draft.Validate(error);
+								 return nlohmann::json{ { "open", !draft.Path.empty() }, { "path", draft.Path }, { "dirty", draft.IsDirty() }, { "valid", valid }, { "problem", error } };
 							 } });
 
 		m_Commands.Register({ "editor.material_editor", "Opens a material file in the Material Editor window (as double-clicking it in the Content Browser does); with close, first closes the window, discarding unsaved edits (both may be given). Opening fails while another material has unsaved edits. Returns {open, path, dirty, valid, problem, externalChange, error, warnings}: valid says whether the edited values form a material (problem says why not), externalChange that the file changed on disk under unsaved edits, error is the window's message (a failed save, an unreadable change on disk) and warnings what loading or the last save reported.", EditorCommandSchemas::MaterialEditor(), [this](AutomationSession&, const nlohmann::json& params) {
@@ -1089,6 +1104,12 @@ namespace Basalt {
 			Stop();
 			m_Context.Execute("scene.open", { { "path", path } });
 		}
+		else if (FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(path)) == ".banimgraph")
+		{
+			std::string error;
+			if (!m_AnimationGraphPanel.Open(path, error))
+				m_Context.SetStatus(error, true);
+		}
 		else if (MaterialAsset::IsMaterialFile(path))
 			m_MaterialEditorPanel.Open(path);
 		else
@@ -1115,6 +1136,12 @@ namespace Basalt {
 			result = m_Context.Execute("component.set", { { "entity", static_cast<uint64_t>(m_Session.GetSelection()) }, { "component", "Script" }, { "data", { { "Script", path } } } });
 		else if (extension == ".hdr")
 			result = m_Context.Execute("entity.create", { { "name", "Sky" }, { "components", { { "SkyLight", { { "EnvironmentMap", path } } } } } });
+		else if (FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(path)) == ".banimgraph")
+		{
+			std::string error;
+			if (!m_AnimationGraphPanel.Open(path, error))
+				m_Context.SetStatus(error, true);
+		}
 		else if (MaterialAsset::IsMaterialFile(path))
 		{
 			if (!m_Session.GetSelection().IsValid())
@@ -1544,6 +1571,10 @@ namespace Basalt {
 		m_InspectorPanel.OnImGuiRender();
 		m_ContentBrowserPanel.OnImGuiRender();
 		m_MaterialEditorPanel.OnImGuiRender();
+		DockNextToOnFirstUse("Animation Graph", EditorCommandSchemas::ViewportTitle);
+		m_AnimationGraphPanel.OnImGuiRender();
+		DockNextToOnFirstUse("Property Animation", EditorCommandSchemas::InspectorTitle);
+		m_PropertyAnimationPanel.OnImGuiRender();
 		m_ConsolePanel.OnImGuiRender();
 		DrawSceneSettingsPanel();
 		DockNextToOnFirstUse(EditorCommandSchemas::ProjectSettingsTitle, EditorCommandSchemas::InspectorTitle);

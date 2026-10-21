@@ -151,7 +151,7 @@ local function TestEntities(self)
 	ExpectError("SetComponent on missing component", function() probe:SetComponent("Camera", {}) end, "no Camera")
 
 	-- Every component type round-trips through Lua.
-	for _, name in ipairs({ "Camera", "Mesh", "Animator", "Material", "DirectionalLight", "PointLight", "SpotLight", "SkyLight", "PostProcess", "RigidBody",
+	for _, name in ipairs({ "Camera", "Mesh", "Animator", "PropertyAnimation", "Material", "DirectionalLight", "PointLight", "SpotLight", "SkyLight", "PostProcess", "RigidBody",
 		"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "AudioSource", "AudioListener", "AudioReverbZone", "ParticleEmitter", "UIRect", "UIImage", "UIText", "UIButton", "UISlider", "UICheckbox", "UITextInput", "UIDropdown", "UIScrollView", "UIPanel", "UINavigation", "UIFocusRing", "Prefab", "BoneAttachment", "InverseKinematics", "SpringBone" }) do
 		local holder = Scene.CreateEntity("Holder" .. name)
 		Expect("AddComponent " .. name, function() holder:AddComponent(name) end)
@@ -728,6 +728,15 @@ local function TestGraphics()
 end
 
 function Driver:OnCreate()
+	local probe = Scene.FindEntityByName("PropertyProbe")
+	Check("Property timeline registry", #probe:GetComponent("PropertyAnimation").Tracks == 1)
+	Check("Property Play", probe:ControlPropertyAnimation("Play"))
+	Check("Property Seek", probe:ControlPropertyAnimation("Seek", 0.5) and Near(probe:GetComponent("Transform").Translation[1], 4))
+	Check("Property Pause", probe:ControlPropertyAnimation("Pause"))
+	Check("Property Resume", probe:ControlPropertyAnimation("Resume"))
+	Check("Property Stop", probe:ControlPropertyAnimation("Stop") and Near(probe:GetComponent("Transform").Translation[1], 0))
+	ExpectError("Property bad action", function() probe:ControlPropertyAnimation("Bad") end, "action must be")
+	ExpectError("Property bad seek", function() probe:ControlPropertyAnimation("Seek", 2) end, "time must be")
 	self.Frame = 0
 	self.Late = 0
 	TestGraphics()

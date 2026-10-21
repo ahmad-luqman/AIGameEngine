@@ -1,4 +1,5 @@
 #include "Basalt/Scene/ComponentRegistry.h"
+#include "Basalt/Animation/PropertyAnimation.h"
 
 #include "Basalt/Asset/MaterialAsset.h"
 #include "Basalt/Audio/AudioRules.h"
@@ -17,6 +18,7 @@
 #include <spdlog/fmt/ranges.h>
 
 #include <algorithm>
+#include <set>
 #include <array>
 #include <cmath>
 #include <iterator>
@@ -346,6 +348,10 @@ namespace Basalt {
 		void Fields(FieldReader& r, ParticleColorKey& c);
 		json Write(const ParticleSizeKey& c);
 		json Write(const ParticleColorKey& c);
+		void Fields(FieldReader& r, PropertyAnimationKey& c);
+		void Fields(FieldReader& r, PropertyAnimationTrack& c);
+		json Write(const PropertyAnimationKey& c);
+		json Write(const PropertyAnimationTrack& c);
 		void Fields(FieldReader& r, AnimationEvent& c);
 		void Fields(FieldReader& r, AnimationBlendSample& c);
 		void Fields(FieldReader& r, AnimationBlendSpace& c);
@@ -555,6 +561,26 @@ namespace Basalt {
 			r.Field("LODDistance", c.LODDistance);
 		}
 
+		void Fields(FieldReader& r, PropertyAnimationKey& c)
+		{
+			r.Field("Time", c.Time);
+			r.Field("Value", c.Value);
+		}
+		void Fields(FieldReader& r, PropertyAnimationTrack& c)
+		{
+			r.Field("Component", c.Component);
+			r.Field("Field", c.Field);
+			r.Field("Stepped", c.Stepped);
+			r.ListField("Keys", c.Keys, 256);
+		}
+		void Fields(FieldReader& r, PropertyAnimationComponent& c)
+		{
+			r.Field("Duration", c.Duration);
+			r.Field("Speed", c.Speed);
+			r.Field("Looping", c.Looping);
+			r.Field("PlayOnStart", c.PlayOnStart);
+			r.ListField("Tracks", c.Tracks, 64);
+		}
 		void Fields(FieldReader& r, AnimationEvent& c)
 		{
 			r.Field("Clip", c.Clip);
@@ -1155,6 +1181,18 @@ namespace Basalt {
 			return { { "Mesh", c.Mesh }, { "MeshIndex", c.MeshIndex }, { "CastShadows", c.CastShadows }, { "LODDistance", c.LODDistance } };
 		}
 
+		json Write(const PropertyAnimationKey& c)
+		{
+			return { { "Time", c.Time }, { "Value", { c.Value.x, c.Value.y, c.Value.z, c.Value.w } } };
+		}
+		json Write(const PropertyAnimationTrack& c)
+		{
+			return { { "Component", c.Component }, { "Field", c.Field }, { "Stepped", c.Stepped }, { "Keys", ListToJson(c.Keys) } };
+		}
+		json Write(const PropertyAnimationComponent& c)
+		{
+			return { { "Duration", c.Duration }, { "Speed", c.Speed }, { "Looping", c.Looping }, { "PlayOnStart", c.PlayOnStart }, { "Tracks", ListToJson(c.Tracks) } };
+		}
 		json Write(const AnimationEvent& c)
 		{
 			return { { "Clip", c.Clip }, { "Time", c.Time }, { "Name", c.Name } };
@@ -1754,6 +1792,10 @@ namespace Basalt {
 			return ValidateAudioSource(source);
 		}
 
+		std::string Validate(const PropertyAnimationComponent& c)
+		{
+			return ValidatePropertyAnimation(c);
+		}
 		std::string Validate(const AnimatorComponent& c)
 		{
 			if (!std::isfinite(c.LODDistance) || c.LODDistance < 0)
@@ -2110,6 +2152,7 @@ namespace Basalt {
 			infos.push_back(MakeCameraInfo());
 			infos.push_back(MakeInfo<MeshComponent>("Mesh"));
 			infos.push_back(MakeInfo<AnimatorComponent>("Animator"));
+			infos.push_back(MakeInfo<PropertyAnimationComponent>("PropertyAnimation"));
 			infos.push_back(MakeInfo<BoneAttachmentComponent>("BoneAttachment"));
 			infos.push_back(MakeInfo<InverseKinematicsComponent>("InverseKinematics"));
 			infos.push_back(MakeInfo<SpringBoneComponent>("SpringBone"));
