@@ -3,16 +3,15 @@
 #include "EditorColors.h"
 #include "Panels/JsonWidgets.h"
 
-#include "Basalt/Animation/PropertyAnimation.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Project/Project.h"
-#include "Basalt/Scene/Entity.h"
 
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 
 namespace Basalt {
 	namespace {
@@ -24,6 +23,32 @@ namespace Basalt {
 				const auto name = prefix + " " + std::to_string(i);
 				if (std::none_of(list.begin(), list.end(), [&](const auto& item) { return item.at("Name") == name; }))
 					return name;
+			}
+		}
+		template<typename Edits>
+		void RenameInput(const char* label, const std::string& current, Edits& edits, const std::function<bool(const std::string&)>& rename, std::string& error, bool& rejected)
+		{
+			auto& edit = edits.try_emplace(ImGui::GetID(label)).first->second;
+			if (!edit.Pending)
+				edit.Text = current;
+			if (ImGui::InputText(label, &edit.Text))
+				edit.Pending = true;
+			if (ImGui::IsItemDeactivated())
+			{
+				if (edit.Pending && ImGui::IsItemDeactivatedAfterEdit())
+				{
+					if (!rename(edit.Text))
+					{
+						error = "Name must be nonempty and unique; the previous name was kept";
+						rejected = true;
+						edit.Text = current;
+					}
+					else
+						error.clear();
+				}
+				else
+					edit.Text = current;
+				edit.Pending = false;
 			}
 		}
 		void Choice(const char* label, json& value, const std::vector<std::string>& choices)
@@ -38,6 +63,29 @@ namespace Basalt {
 			}
 		}
 	}
+	bool AnimationGraphPanel::CommitStateRename()
+	{
+		const auto it = m_NameEdits.find(m_StateNameInputId);
+		if (it == m_NameEdits.end() || !it->second.Pending)
+			return true;
+		it->second.Pending = false;
+		if (!m_Draft.RenameState(static_cast<size_t>(m_SelectedState), it->second.Text))
+		{
+			m_Error = "Name must be nonempty and unique; the previous name was kept";
+			m_RenameRejected = true;
+			return false;
+		}
+		m_Error.clear();
+		return true;
+	}
+	bool AnimationGraphPanel::HasPendingRename() const
+	{
+		return std::ranges::any_of(m_NameEdits, [](const auto& entry) { return entry.second.Pending; });
+	}
+	bool AnimationGraphPanel::IsDirty() const
+	{
+		return m_Draft.IsDirty() || HasPendingRename();
+	}
 	bool AnimationGraphPanel::Open(const std::string& requested, std::string& error)
 	{
 		const auto path = FileSystem::NormalizeGeneric(requested);
@@ -48,7 +96,7 @@ namespace Basalt {
 		}
 		if (m_Draft.Path == path)
 			return true;
-		if (m_Draft.IsDirty())
+		if (IsDirty())
 		{
 			error = "Save or Revert the current graph before opening another";
 			return false;
@@ -58,6 +106,8 @@ namespace Basalt {
 		m_Project = Project::GetActive();
 		m_Error.clear();
 		m_SelectedState = 0;
+		m_NameEdits.clear();
+		m_PathInput = path;
 		return true;
 	}
 	void AnimationGraphPanel::Reset()
@@ -66,22 +116,37 @@ namespace Basalt {
 		m_Project.reset();
 		m_Error.clear();
 		m_SelectedState = 0;
+		m_NameEdits.clear();
 	}
 	void AnimationGraphPanel::OnFilesChanged(const std::vector<FileChange>& changes)
 	{
 		for (const auto& change : changes)
 			if (!m_Draft.Path.empty() && change.Path == m_Draft.Path)
 			{
-				m_Draft.OnFileChanged(m_Error);
+				if (HasPendingRename())
+					m_Draft.ExternalChange = true;
+				else if (m_Draft.OnFileChanged(m_Error))
+				{
+					m_Error.clear();
+					m_NameEdits.clear();
+				}
 			}
 	}
 	void AnimationGraphPanel::OnAssetMoved(const std::string& from, const std::string& to)
 	{
 		if (m_Draft.Path == from)
+		{
 			m_Draft.Path = to;
+			m_PathInput = to;
+		}
 	}
 	bool AnimationGraphPanel::Save()
 	{
+		if (HasPendingRename())
+		{
+			m_Error = "Finish the name edit before saving";
+			return false;
+		}
 		if (!m_Draft.Validate(m_Error))
 			return false;
 		if (!m_Context.Execute("asset.write", { { "path", m_Draft.Path }, { "content", m_Draft.Data.dump(2) } }))
@@ -124,7 +189,8 @@ namespace Basalt {
 			ImGui::SetCursorScreenPos(ImVec2(c.x - 75, c.y - 22));
 			const auto name = states[i]["Name"].get<std::string>();
 			const auto label = (states[i]["Name"] == m_Draft.Data["InitialState"] ? "> " : "") + name;
-			if (ImGui::Selectable(label.c_str(), m_SelectedState == static_cast<int>(i), 0, ImVec2(150, 44)))
+			// The detail widget keeps one ID across selections; finish its old state before switching targets.
+			if (ImGui::Selectable(label.c_str(), m_SelectedState == static_cast<int>(i), 0, ImVec2(150, 44)) && CommitStateRename())
 				m_SelectedState = static_cast<int>(i);
 			ImGui::PopID();
 		}
@@ -147,16 +213,15 @@ namespace Basalt {
 				axes.push_back(p["Name"]);
 		}
 		Choice("Initial State", data["InitialState"], names);
-		if (ImGui::Button("Add State") && states.size() < 128)
+		if (ImGui::Button("Add State") && states.size() < 128 && CommitStateRename())
 		{
 			states.push_back({ { "Name", UniqueName(states, "State") }, { "Clip", "" }, { "Looping", true }, { "RootMotion", false } });
 			m_SelectedState = static_cast<int>(states.size() - 1);
 		}
 		m_SelectedState = std::clamp(m_SelectedState, 0, static_cast<int>(states.size()) - 1);
 		auto& state = states[static_cast<size_t>(m_SelectedState)];
-		std::string stateName = state["Name"];
-		if (ImGui::InputText("State Name", &stateName))
-			m_Draft.RenameState(static_cast<size_t>(m_SelectedState), stateName);
+		m_StateNameInputId = ImGui::GetID("State Name");
+		RenameInput("State Name", state["Name"], m_NameEdits, [&](const auto& name) { return m_Draft.RenameState(static_cast<size_t>(m_SelectedState), name); }, m_Error, m_RenameRejected);
 		bool blend = state.contains("BlendSpace");
 		if (ImGui::Checkbox("Blend Space State", &blend))
 		{
@@ -194,9 +259,7 @@ namespace Basalt {
 		{
 			ImGui::PushID(static_cast<int>(i));
 			auto& p = parameters[i];
-			std::string name = p["Name"];
-			if (ImGui::InputText("Name", &name))
-				m_Draft.RenameParameter(i, name);
+			RenameInput("Name", p["Name"], m_NameEdits, [&](const auto& name) { return m_Draft.RenameParameter(i, name); }, m_Error, m_RenameRejected);
 			const auto oldType = p["Type"];
 			Choice("Type", p["Type"], { "Float", "Bool", "Trigger" });
 			if (oldType != p["Type"])
@@ -286,50 +349,30 @@ namespace Basalt {
 	}
 	void AnimationGraphPanel::OnImGuiRender()
 	{
+		m_RenameRejected = false;
 		if (!m_Draft.Path.empty() && m_Project.lock() != Project::GetActive())
 			Reset();
 		ImGui::SetNextWindowSize(ImVec2(600, 650), ImGuiCond_FirstUseEver);
-		if (ImGui::Begin(Title, nullptr, m_Draft.IsDirty() ? ImGuiWindowFlags_UnsavedDocument : 0))
+		if (ImGui::Begin(Title, nullptr, IsDirty() ? ImGuiWindowFlags_UnsavedDocument : 0))
 		{
-			static std::string s_Path = "Assets/Animations/New.banimgraph";
-			ImGui::InputText("Graph Path", &s_Path);
-			if (ImGui::Button("Open"))
-			{
-				if (!Open(s_Path, m_Error))
-					m_Context.SetStatus(m_Error, true);
-			}
+			ImGui::InputText("Graph Path", &m_PathInput);
+			const bool open = ImGui::Button("Open");
 			ImGui::SameLine();
-			if (ImGui::Button("Create") && Project::GetActive())
-			{
-				if (m_Draft.IsDirty())
-					m_Error = "Save or Revert the current graph first";
-				else if (!s_Path.starts_with("Assets/") || s_Path.find("..") != std::string::npos || FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(s_Path)) != ".banimgraph")
-					m_Error = "Choose a .banimgraph path under Assets/";
-				else if (FileSystem::Exists(Project::ResolvePath(s_Path)))
-					m_Error = "The file already exists; Open it instead";
-				else if (m_Context.Execute("asset.write", { { "path", s_Path }, { "content", AnimationGraphDraft::Default().dump(2) } }))
-					Open(s_Path, m_Error);
-			}
+			const bool create = ImGui::Button("Create") && Project::GetActive();
+			bool save = false, revert = false, undo = false, redo = false;
 			if (!m_Draft.Path.empty())
 			{
 				ImGui::TextUnformatted(m_Draft.Path.c_str());
-				if (ImGui::Button("Undo Graph"))
-					m_Draft.Undo();
+				undo = ImGui::Button("Undo Graph");
 				ImGui::SameLine();
-				if (ImGui::Button("Redo Graph"))
-					m_Draft.Redo();
-
-				if (ImGui::Button("Save"))
-					Save();
+				redo = ImGui::Button("Redo Graph");
+				save = ImGui::Button("Save");
 				ImGui::SameLine();
-				if (ImGui::Button("Revert"))
-					m_Draft.Load(m_Draft.Path, m_Error);
+				revert = ImGui::Button("Revert");
 				ImGui::SameLine();
 				if (ImGui::Button("Apply to Selection"))
-				{
 					if (m_Context.Execute("component.set", { { "entity", static_cast<uint64_t>(m_Context.Session.GetSelection()) }, { "component", "Animator" }, { "data", { { "StateMachine", m_Draft.Path } } } }))
 						m_Context.CommitHistory();
-				}
 				if (m_Draft.ExternalChange)
 					ImGui::TextColored(EditorColors::Warning(), "Changed on disk: Save replaces it; Revert loads it.");
 				std::string problem;
@@ -341,6 +384,37 @@ namespace Basalt {
 				DrawFields();
 				if (!ImGui::IsAnyItemActive())
 					m_Draft.Record();
+			}
+			// Render name inputs before toolbar actions so clicking Save includes their deactivation commits.
+			if (save && !m_RenameRejected)
+				Save();
+			if (revert && m_Draft.Load(m_Draft.Path, m_Error))
+			{
+				m_Error.clear();
+				m_NameEdits.clear();
+			}
+			if (undo)
+			{
+				m_Draft.Undo();
+				m_NameEdits.clear();
+			}
+			if (redo)
+			{
+				m_Draft.Redo();
+				m_NameEdits.clear();
+			}
+			if (open && !m_RenameRejected && !Open(m_PathInput, m_Error))
+				m_Context.SetStatus(m_Error, true);
+			if (create && !m_RenameRejected)
+			{
+				if (IsDirty())
+					m_Error = "Save or Revert the current graph first";
+				else if (!m_PathInput.starts_with("Assets/") || m_PathInput.find("..") != std::string::npos || FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(m_PathInput)) != ".banimgraph")
+					m_Error = "Choose a .banimgraph path under Assets/";
+				else if (FileSystem::Exists(Project::ResolvePath(m_PathInput)))
+					m_Error = "The file already exists; Open it instead";
+				else if (m_Context.Execute("asset.write", { { "path", m_PathInput }, { "content", AnimationGraphDraft::Default().dump(2) } }))
+					Open(m_PathInput, m_Error);
 			}
 			if (!m_Error.empty())
 				ImGui::TextColored(EditorColors::Error(), "%s", m_Error.c_str());

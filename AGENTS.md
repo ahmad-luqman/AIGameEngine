@@ -54,9 +54,9 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   gameplay vertical input (and, during fades to or from states without root motion, the faded share of gameplay
   horizontal input), or updates the world transform. Attachments and events run after physics and
   LateUpdate, before particles.
-- **Animation authoring.** The editor's Animation Graph draft saves through `asset.write`; it preserves graph
+- **Animation authoring.** The editor's Animation Graph draft saves through `asset.write`; it preserves graph state/parameter
   references on rename and prunes dependent edges on deletion. `PropertyAnimationComponent` stores same-entity
-  numeric registry-field tracks with normalized keys. `PropertyAnimationSystem` owns runtime clocks in Play/Simulate,
+  numeric registry-field tracks with normalized keys (registry-tagged quaternion rotations use slerp; physics configuration components are excluded). `PropertyAnimationSystem` owns runtime clocks in Play/Simulate,
   samples after scripts and before skeletal animation/physics through grouped `ComponentRegistry` patches, and
   logs/suspends failed timelines until edited or explicitly repaired. `animation.key/sample/control` share these paths;
   Lua uses `ControlPropertyAnimation`. See `Docs/ScriptingAPI.md`.

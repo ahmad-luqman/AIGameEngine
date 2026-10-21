@@ -118,9 +118,12 @@ namespace Basalt {
 		{
 			json types = json::object();
 			json lists = json::object();
+			json rotations = json::array();
 			for (const auto& [field, type] : fieldTypes)
 			{
 				types[field] = type.ToString();
+				if (type.QuaternionRotation)
+					rotations.push_back(field);
 				if (type.Kind != ComponentFieldKind::List)
 					continue;
 				const ComponentObjectSchema& element = *type.Element;
@@ -134,7 +137,7 @@ namespace Basalt {
 				list["default"] = element.Default;
 				lists[field] = std::move(list);
 			}
-			return { { "fields", fields }, { "types", types }, { "enums", enumOptions }, { "lists", lists } };
+			return { { "fields", fields }, { "types", types }, { "enums", enumOptions }, { "lists", lists }, { "quaternionRotations", rotations } };
 		}
 
 		bool OptionalBool(const json& params, const char* name, bool fallback)
@@ -691,6 +694,7 @@ namespace Basalt {
 					description["name"] = info.Name;
 					description["entityFields"] = info.EntityFields;
 					description["core"] = info.IsCore;
+					description["supportsPropertyAnimation"] = info.SupportsPropertyAnimation;
 					types.push_back(std::move(description));
 				}
 				return json{ { "components", types } };
@@ -1983,23 +1987,30 @@ namespace Basalt {
 			return response;
 		}
 
+		float NormalizedAnimationTime(const json& params)
+		{
+			float time = 0;
+			if (params.contains("time") && (!JsonToFloat(params.at("time"), time) || time < 0 || time > 1))
+				throw CommandError("time must be normalized in [0, 1]");
+			return time;
+		}
 		void RegisterAnimationAuthoring(CommandRegistry& registry)
 		{
-			Add(registry, "animation.control", "Controls a PropertyAnimation in Play or Simulate. action is Play (restart at zero), Pause, Resume, Stop (sample zero), Seek (sample normalized time), or Status. Returns {time, playing, failed}; time is normalized. Component edits restart clocks using PlayOnStart. A failed sample may have applied earlier components.", Schema::Object({ { "entity", Schema::Entity("ID or name") }, { "action", Schema::String("Play/Pause/Resume/Stop/Seek/Status", true) }, { "time", Schema::Number("normalized time for Seek, default 0", 0, 1) } }, { "entity", "action" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "animation.control", "Controls a PropertyAnimation in Play or Simulate. action is Play (restart at zero), Pause, Resume, Stop (sample zero), Seek (sample normalized time), or Status. Returns {time, playing, failed, error}; time is normalized. Pause/Resume on a failed timeline fail until Play/Stop/Seek succeeds or its component is edited. Component edits restart clocks using PlayOnStart. A failed sample may have applied earlier components.", Schema::Object({ { "entity", Schema::Entity("ID or name") }, { "action", Schema::String("Play/Pause/Resume/Stop/Seek/Status", true) }, { "time", Schema::Number("normalized time for Seek, default 0", 0, 1) } }, { "entity", "action" }), [](AutomationSession& session, const json& params) {
 				Entity entity = RequireEntity(session, params);
 				auto* system = entity.GetScene()->GetPropertyAnimationSystem();
 				if (!system || !entity.HasComponent<PropertyAnimationComponent>())
 					throw CommandError("requires PropertyAnimation in Play or Simulate");
 				const auto action = RequireString(params, "action");
 				std::string error;
-				if (action != "Status" && !system->Control(entity, action, params.value("time", 0.0f), error))
+				if (action != "Status" && !system->Control(entity, action, NormalizedAnimationTime(params), error))
 					throw CommandError(error);
 				return system->Status(entity);
 			});
 			Add(registry, "animation.key", "Captures an existing scalar/vector numeric component field into this entity's PropertyAnimation timeline at normalized time [0,1]. Creates the component/track as needed, inserts sorted keys and replaces an exact-time key. Unused Value lanes are zero. All writes use ComponentRegistry.", Schema::Object({ { "entity", Schema::Entity("ID or name") }, { "component", Schema::String("component name", true) }, { "field", Schema::String("numeric field", true) }, { "time", Schema::Number("normalized time", 0, 1) } }, { "entity", "component", "field", "time" }), [](AutomationSession& session, const json& params) {
 				Entity entity = RequireEntity(session, params);
 				std::string error;
-				if (!PropertyAnimation::Key(entity, RequireString(params, "component"), RequireString(params, "field"), params.at("time").get<float>(), error))
+				if (!PropertyAnimation::Key(entity, RequireString(params, "component"), RequireString(params, "field"), NormalizedAnimationTime(params), error))
 					throw CommandError(error);
 				MarkEdited(session);
 				return ComponentRegistry::Find("PropertyAnimation")->Serialize(entity);
@@ -2010,7 +2021,7 @@ namespace Basalt {
 					throw CommandError("entity has no PropertyAnimation");
 				std::string error;
 				MarkEdited(session);
-				if (!PropertyAnimation::Sample(entity, entity.GetComponent<PropertyAnimationComponent>(), params.at("time").get<float>(), error))
+				if (!PropertyAnimation::Sample(entity, entity.GetComponent<PropertyAnimationComponent>(), NormalizedAnimationTime(params), error))
 					throw CommandError(error);
 				return json::object();
 			});

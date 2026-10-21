@@ -751,7 +751,8 @@ namespace Basalt {
 			m_UIInteraction->Update(*this, ts.GetSeconds());
 			m_ScriptEngine->Update(ts, m_UIInteraction->TakeEvents());
 		}
-		// Sample after gameplay chooses states and before physics consumes this frame's root displacement.
+		// Property tracks can drive Animator parameters; sample them after scripts and before skeletal animation.
+		// Both animation systems precede physics so this step sees kinematic transforms and root displacement.
 		m_PropertyAnimationSystem->Update(ts.GetSeconds());
 		m_AnimationSystem->Update(ts, false);
 		m_PhysicsWorld->Step(ts);

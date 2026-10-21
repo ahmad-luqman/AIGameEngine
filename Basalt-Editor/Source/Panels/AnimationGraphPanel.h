@@ -4,8 +4,11 @@
 #include "EditorContext.h"
 
 #include "Basalt/Core/FileWatcher.h"
+#include "Basalt/Automation/EditorCommandSchemas.h"
 
 #include <memory>
+#include <map>
+#include <cstdint>
 
 namespace Basalt {
 	class Project;
@@ -22,7 +25,9 @@ namespace Basalt {
 		void OnFilesChanged(const std::vector<FileChange>& changes);
 		void OnAssetMoved(const std::string& from, const std::string& to);
 		const AnimationGraphDraft& GetDraft() const { return m_Draft; }
-		static constexpr const char* Title = "Animation Graph";
+		bool IsDirty() const;
+		const std::string& GetError() const { return m_Error; }
+		static constexpr const char* Title = EditorCommandSchemas::AnimationGraphTitle;
 
 	private:
 		void DrawGraph();
@@ -33,5 +38,16 @@ namespace Basalt {
 		std::weak_ptr<Project> m_Project;
 		std::string m_Error;
 		int m_SelectedState = 0;
+		struct NameEdit
+		{
+			std::string Text;
+			bool Pending = false;
+		};
+		std::map<uint32_t, NameEdit> m_NameEdits;
+		bool HasPendingRename() const;
+		bool m_RenameRejected = false;
+		uint32_t m_StateNameInputId = 0;
+		bool CommitStateRename();
+		std::string m_PathInput = "Assets/Animations/New.banimgraph";
 	};
 }

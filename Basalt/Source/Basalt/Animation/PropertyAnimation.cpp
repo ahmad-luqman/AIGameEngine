@@ -1,11 +1,15 @@
 #include "Basalt/Animation/PropertyAnimation.h"
 
 #include "Basalt/Core/Log.h"
+#include "Basalt/Math/Math.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
 
+#include <spdlog/fmt/fmt.h>
+
 #include <algorithm>
 #include <cmath>
+#include <map>
 
 namespace Basalt {
 	std::string ValidatePropertyAnimation(const PropertyAnimationComponent& c)
@@ -14,23 +18,27 @@ namespace Basalt {
 			return "Duration must be in (0, 86400]";
 		if (!std::isfinite(c.Speed) || c.Speed < 0 || c.Speed > 1000)
 			return "Speed must be in [0, 1000]";
-		if (c.Tracks.size() > 64)
+		if (c.Tracks.size() > PropertyAnimationComponent::MaxTracks)
 			return "Tracks holds at most 64 tracks";
-		for (const auto& track : c.Tracks)
+		for (size_t i = 0; i < c.Tracks.size(); i++)
 		{
+			const auto& track = c.Tracks[i];
+			const auto location = fmt::format("Tracks[{}] ({}.{})", i, track.Component, track.Field);
 			if (!PropertyAnimation::FindField(track.Component, track.Field))
-				return "Tracks require a registered numeric field outside PropertyAnimation";
-			if (track.Keys.size() > 256)
-				return "Keys holds at most 256 keys";
+				return location + ": requires a supported registered numeric field (physics configuration and PropertyAnimation are excluded)";
+			if (track.Keys.size() > PropertyAnimationComponent::MaxKeys)
+				return location + ": Keys holds at most 256 keys";
 			float previous = -1;
-			for (const auto& key : track.Keys)
+			for (size_t j = 0; j < track.Keys.size(); j++)
 			{
+				const auto& key = track.Keys[j];
+				const auto keyLocation = fmt::format("{}.Keys[{}]", location, j);
 				if (!std::isfinite(key.Time) || key.Time < 0 || key.Time > 1 || key.Time <= previous)
-					return "Keys.Time must be strictly increasing in [0, 1]";
+					return keyLocation + ": Time must be strictly increasing in [0, 1]";
 				previous = key.Time;
 				for (int lane = 0; lane < 4; lane++)
 					if (!std::isfinite(key.Value[lane]))
-						return "Keys.Value must be finite";
+						return keyLocation + ": Value must be finite";
 			}
 		}
 		return {};
@@ -41,7 +49,7 @@ namespace Basalt {
 		if (component == "PropertyAnimation")
 			return nullptr;
 		const auto* info = ComponentRegistry::Find(component);
-		if (!info)
+		if (!info || !info->SupportsPropertyAnimation)
 			return nullptr;
 		const auto it = info->FieldTypes.find(field);
 		return it != info->FieldTypes.end() && it->second.Kind == ComponentFieldKind::Number && it->second.Count <= 4 ? &it->second : nullptr;
@@ -76,21 +84,31 @@ namespace Basalt {
 			nlohmann::json value;
 			for (int lane = 0; lane < std::max(1, static_cast<int>(type->Count)); lane++)
 			{
-				const double sample = std::lerp(static_cast<double>(left.Value[lane]), static_cast<double>(right.Value[lane]), blend);
+				const float sample = static_cast<float>(std::lerp(static_cast<double>(left.Value[lane]), static_cast<double>(right.Value[lane]), blend));
 				if (type->Count == 0)
 					value = sample;
 				else
 					value.push_back(sample);
 			}
+			if (type->QuaternionRotation && !track.Stepped)
+			{
+				const auto first = Math::QuatFromEuler(glm::radians(glm::vec3(left.Value)));
+				const auto second = Math::QuatFromEuler(glm::radians(glm::vec3(right.Value)));
+				const auto degrees = glm::degrees(Math::EulerFromQuat(glm::normalize(glm::slerp(first, second, static_cast<float>(blend)))));
+				value = { degrees.x, degrees.y, degrees.z };
+			}
 			patches[track.Component][track.Field] = std::move(value);
 		}
 		for (const auto& [component, patch] : patches)
-			if (!ComponentRegistry::AddOrPatch(entity, component, patch, outError))
-			{
-				outError.insert(0, ": ");
-				outError.insert(0, component);
+		{
+			// Held keys and zero-speed timelines must not emit redundant system update signals.
+			const auto current = ComponentRegistry::Find(component)->Serialize(entity);
+			bool changed = false;
+			for (const auto& [field, value] : patch.items())
+				changed = changed || current.at(field) != value;
+			if (changed && !ComponentRegistry::AddOrPatch(entity, component, patch, outError))
 				return false;
-			}
+		}
 		return true;
 	}
 
@@ -106,10 +124,16 @@ namespace Basalt {
 		const auto* animationInfo = ComponentRegistry::Find("PropertyAnimation");
 		auto data = animationInfo->Has(entity) ? animationInfo->Serialize(entity) : nlohmann::json{ { "Tracks", nlohmann::json::array() } };
 		auto& tracks = data["Tracks"];
-		auto track = tracks.end();
+		auto track = tracks.end(), fallback = tracks.end();
 		for (auto it = tracks.begin(); it != tracks.end(); ++it)
 			if (it->at("Component") == component && it->at("Field") == field)
-				track = it;
+			{
+				fallback = it;
+				if (!it->at("Keys").empty())
+					track = it;
+			}
+		if (track == tracks.end())
+			track = fallback;
 		if (track == tracks.end())
 		{
 			tracks.push_back({ { "Component", component }, { "Field", field }, { "Keys", nlohmann::json::array() } });
@@ -153,15 +177,23 @@ namespace Basalt {
 		if (const auto* id = registry.try_get<IDComponent>(entity))
 			m_Clocks.erase(id->ID);
 	}
-	nlohmann::json PropertyAnimationSystem::Status(Entity entity)
+	PropertyAnimationSystem::Clock& PropertyAnimationSystem::ClockFor(Entity entity)
+	{
+		auto [it, inserted] = m_Clocks.try_emplace(entity.GetUUID());
+		if (inserted)
+			it->second.Playing = entity.GetComponent<PropertyAnimationComponent>().PlayOnStart;
+		return it->second;
+	}
+	nlohmann::json PropertyAnimationSystem::Status(Entity entity) const
 	{
 		if (!entity || entity.GetScene() != &m_Scene || !entity.HasComponent<PropertyAnimationComponent>())
 			return nullptr;
 		const auto& animation = entity.GetComponent<PropertyAnimationComponent>();
-		auto [it, inserted] = m_Clocks.try_emplace(entity.GetUUID());
-		if (inserted)
-			it->second.Playing = animation.PlayOnStart;
-		return { { "time", animation.Duration > 0 ? it->second.Time / animation.Duration : 0 }, { "playing", it->second.Playing && !it->second.Failed }, { "failed", it->second.Failed } };
+		const auto it = m_Clocks.find(entity.GetUUID());
+		if (it == m_Clocks.end())
+			return { { "time", 0.0f }, { "playing", animation.PlayOnStart }, { "failed", false }, { "error", "" } };
+		const auto& clock = it->second;
+		return { { "time", animation.Duration > 0 ? clock.Time / animation.Duration : 0 }, { "playing", clock.Playing && !clock.Failed }, { "failed", clock.Failed }, { "error", clock.Error } };
 	}
 	bool PropertyAnimationSystem::Control(Entity entity, const std::string& action, float time, std::string& outError)
 	{
@@ -180,7 +212,12 @@ namespace Basalt {
 			outError = "time must be normalized in [0, 1]";
 			return false;
 		}
-		auto& clock = m_Clocks.at(entity.GetUUID());
+		auto& clock = ClockFor(entity);
+		if (clock.Failed && (action == "Pause" || action == "Resume"))
+		{
+			outError = "timeline suspended after a failed sample; Play/Stop/Seek or edit PropertyAnimation to repair: " + clock.Error;
+			return false;
+		}
 		const auto& animation = entity.GetComponent<PropertyAnimationComponent>();
 		if (action == "Pause")
 		{
@@ -197,6 +234,7 @@ namespace Basalt {
 			return false;
 		clock.Time = static_cast<double>(target) * animation.Duration;
 		clock.Failed = false;
+		clock.Error.clear();
 		if (action != "Seek")
 			clock.Playing = action == "Play";
 		return true;
@@ -209,17 +247,15 @@ namespace Basalt {
 		{
 			Entity entity(handle, &m_Scene);
 			const auto& animation = entity.GetComponent<PropertyAnimationComponent>();
-			auto [it, inserted] = m_Clocks.try_emplace(entity.GetUUID());
-			if (inserted)
-				it->second.Playing = animation.PlayOnStart;
-			auto& clock = it->second;
+			auto& clock = ClockFor(entity);
 			if (clock.Failed || !clock.Playing)
 				continue;
 			clock.Time += static_cast<double>(deltaTime) * animation.Speed;
 			if (!(animation.Duration > 0) || !std::isfinite(animation.Duration) || !std::isfinite(clock.Time))
 			{
 				clock.Failed = true;
-				BS_CORE_ERROR("Property animation '{}': invalid duration or clock", entity.GetName());
+				clock.Error = "invalid duration or clock";
+				BS_CORE_ERROR("Property animation '{}' ({}): {}", entity.GetName(), static_cast<uint64_t>(entity.GetUUID()), clock.Error);
 				continue;
 			}
 			if (animation.Looping)
@@ -234,7 +270,8 @@ namespace Basalt {
 			if (!PropertyAnimation::Sample(entity, animation, static_cast<float>(clock.Time / animation.Duration), error))
 			{
 				clock.Failed = true;
-				BS_CORE_ERROR("Property animation '{}': {} (edit the PropertyAnimation component to restart)", entity.GetName(), error);
+				clock.Error = error;
+				BS_CORE_ERROR("Property animation '{}' ({}): {} (Play/Stop/Seek or edit PropertyAnimation to repair)", entity.GetName(), static_cast<uint64_t>(entity.GetUUID()), error);
 			}
 		}
 	}

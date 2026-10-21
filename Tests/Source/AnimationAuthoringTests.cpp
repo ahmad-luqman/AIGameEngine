@@ -11,6 +11,8 @@
 #include <Basalt/Scene/ComponentRegistry.h>
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/SceneSerializer.h>
+#include <Basalt/Math/Math.h>
+#include <Basalt/Physics/PhysicsWorld.h>
 
 #include <limits>
 
@@ -83,6 +85,236 @@ TEST_SUITE("Animation authoring")
 		entity.RemoveComponent<PointLightComponent>();
 		CHECK_FALSE(PropertyAnimation::Sample(entity, animation, .5f, error));
 		CHECK_FALSE(entity.HasComponent<PointLightComponent>());
+	}
+	TEST_CASE("Captured quaternion rotation fields take the shortest orientation path")
+	{
+		for (const std::string component : { "Transform", "BoneAttachment" })
+		{
+			Scene scene;
+			auto entity = scene.CreateEntity("Door");
+			std::string error;
+			if (component == "BoneAttachment")
+				entity.AddComponent<BoneAttachmentComponent>();
+			REQUIRE(PropertyAnimation::FindField(component, "Rotation")->QuaternionRotation);
+			for (const auto endpoints : std::vector<glm::vec2>{ { 0, 120 }, { 170, -170 } })
+			{
+				if (entity.HasComponent<PropertyAnimationComponent>())
+					entity.RemoveComponent<PropertyAnimationComponent>();
+				REQUIRE(ComponentRegistry::AddOrPatch(entity, component, { { "Rotation", { 0, endpoints.x, 0 } } }, error));
+				REQUIRE(PropertyAnimation::Key(entity, component, "Rotation", 0, error));
+				REQUIRE(ComponentRegistry::AddOrPatch(entity, component, { { "Rotation", { 0, endpoints.y, 0 } } }, error));
+				REQUIRE(PropertyAnimation::Key(entity, component, "Rotation", 1, error));
+				REQUIRE(PropertyAnimation::Sample(entity, entity.GetComponent<PropertyAnimationComponent>(), .5f, error));
+				const auto actual = component == "Transform" ? entity.GetTransform().Rotation : entity.GetComponent<BoneAttachmentComponent>().Rotation;
+				const auto expected = Math::QuatFromEuler(glm::radians(glm::vec3(0, endpoints.x == 0 ? 60.0f : 180.0f, 0)));
+				CHECK(std::abs(glm::dot(actual, expected)) == doctest::Approx(1).epsilon(.0001));
+			}
+		}
+	}
+	TEST_CASE("Capture ignores empty duplicate tracks and physics configuration is not animatable")
+	{
+		Scene scene;
+		auto entity = scene.CreateEntity();
+		std::string error;
+		REQUIRE(PropertyAnimation::Key(entity, "Transform", "Translation", 0, error));
+		entity.GetTransform().Translation.x = 8;
+		REQUIRE(PropertyAnimation::Key(entity, "Transform", "Translation", 1, error));
+		entity.GetComponent<PropertyAnimationComponent>().Tracks.push_back({});
+		entity.GetTransform().Translation.x = 3;
+		REQUIRE(PropertyAnimation::Key(entity, "Transform", "Translation", .1f, error));
+		const auto& animation = entity.GetComponent<PropertyAnimationComponent>();
+		CHECK(animation.Tracks[0].Keys.size() == 3);
+		CHECK(animation.Tracks[1].Keys.empty());
+		REQUIRE(PropertyAnimation::Sample(entity, animation, 0, error));
+		CHECK(entity.GetTransform().Translation.x == 0);
+		for (const auto& info : ComponentRegistry::GetAll())
+			if (!info.SupportsPropertyAnimation)
+				for (const auto& field : info.Fields)
+					CHECK(PropertyAnimation::FindField(info.Name, field) == nullptr);
+		entity.AddComponent<BoxColliderComponent>();
+		CHECK_FALSE(PropertyAnimation::Key(entity, "BoxCollider", "HalfExtents", 0, error));
+		CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, "PropertyAnimation", { { "Tracks", json::array({ { { "Component", "RigidBody" }, { "Field", "Mass" } } }) } }, error));
+	}
+	TEST_CASE("Failed timelines log once suspend and require a successful repair")
+	{
+		Scene scene;
+		auto entity = scene.CreateEntity("FailureProbe");
+		std::string error;
+		entity.AddComponent<PointLightComponent>();
+		REQUIRE(PropertyAnimation::Key(entity, "PointLight", "Intensity", 0, error));
+		REQUIRE(PropertyAnimation::Key(entity, "Transform", "Translation", 0, error));
+		entity.GetTransform().Translation.x = 8;
+		REQUIRE(PropertyAnimation::Key(entity, "Transform", "Translation", 1, error));
+		scene.OnSimulationStart();
+		auto* system = scene.GetPropertyAnimationSystem();
+		scene.OnUpdate(Timestep(.1f));
+		entity.RemoveComponent<PointLightComponent>();
+		const auto since = Log::GetHistory().GetTotalCount();
+		for (int i = 0; i < 4; i++)
+			scene.OnUpdate(Timestep(.1f));
+		CHECK(CountLogMessages(since, "Property animation 'FailureProbe'") == 1);
+		CHECK(system->Status(entity)["failed"] == true);
+		CHECK(system->Status(entity)["playing"] == false);
+		CHECK_FALSE(system->Status(entity)["error"].get<std::string>().empty());
+		CHECK_FALSE(system->Control(entity, "Pause", 0, error));
+		CHECK_FALSE(system->Control(entity, "Resume", 0, error));
+		for (const std::string action : { "Play", "Stop", "Seek" })
+			CHECK_FALSE(system->Control(entity, action, .5f, error));
+		CHECK(system->Status(entity)["failed"] == true);
+		entity.AddComponent<PointLightComponent>();
+		const auto position = entity.GetTransform().Translation;
+		scene.OnUpdate(Timestep(.1f));
+		CHECK(entity.GetTransform().Translation == position);
+		for (const std::string action : { "Play", "Stop", "Seek" })
+		{
+			REQUIRE(system->Control(entity, action, .5f, error));
+			CHECK(system->Status(entity)["failed"] == false);
+			CHECK(system->Status(entity)["error"] == "");
+			REQUIRE(system->Control(entity, "Play", 0, error));
+			entity.RemoveComponent<PointLightComponent>();
+			scene.OnUpdate(Timestep(.1f));
+			entity.AddComponent<PointLightComponent>();
+		}
+		REQUIRE(ComponentRegistry::AddOrPatch(entity, "PropertyAnimation", { { "Speed", 2 } }, error));
+		CHECK(system->Status(entity)["failed"] == false);
+		scene.OnUpdate(Timestep(.1f));
+		CHECK(entity.GetTransform().Translation.x == doctest::Approx(1.6f));
+		scene.OnSimulationStop();
+	}
+	TEST_CASE("Reusing a destroyed entity UUID starts a fresh property clock")
+	{
+		Scene scene;
+		auto entity = scene.CreateEntity("Old");
+		const auto id = entity.GetUUID();
+		std::string error;
+		REQUIRE(PropertyAnimation::Key(entity, "Transform", "Translation", 0, error));
+		entity.GetTransform().Translation.x = 8;
+		REQUIRE(PropertyAnimation::Key(entity, "Transform", "Translation", 1, error));
+		const auto authored = entity.GetComponent<PropertyAnimationComponent>(); // NOLINT(performance-unnecessary-copy-initialization) -- Own the tracks across DestroyEntity below.
+		scene.OnSimulationStart();
+		scene.OnUpdate(Timestep(.5f));
+		scene.DestroyEntity(entity);
+		auto replacement = scene.CreateEntityWithUUID(id, "New");
+		replacement.AddComponent<PropertyAnimationComponent>(authored);
+		scene.OnUpdate(Timestep(.25f));
+		CHECK(replacement.GetTransform().Translation.x == 2);
+		scene.OnSimulationStop();
+	}
+	TEST_CASE("Play property sampling follows Lua Update and precedes the kinematic physics step")
+	{
+		TempProject project("PropertyOrdering");
+		const auto script = project.WriteFile("Assets/Ordering.lua", R"(
+			return {OnUpdate=function(self) self.Entity:SetComponent("Transform",{Translation={99,0,0}}) end}
+		)");
+		Scene scene;
+		auto entity = scene.CreateEntity("Mover");
+		std::string error;
+		entity.AddComponent<ScriptComponent>().Script = script;
+		entity.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
+		entity.AddComponent<BoxColliderComponent>();
+		REQUIRE(PropertyAnimation::Key(entity, "Transform", "Translation", 0, error));
+		entity.GetTransform().Translation.x = 8;
+		REQUIRE(PropertyAnimation::Key(entity, "Transform", "Translation", 1, error));
+		entity.GetTransform().Translation.x = 0;
+		scene.OnRuntimeStart();
+		scene.OnUpdate(Timestep(.25f));
+		CHECK(entity.GetTransform().Translation.x == 2);
+		const auto hit = scene.GetPhysicsWorld()->Raycast({ 2, 3, 0 }, { 0, -1, 0 }, 5);
+		REQUIRE(hit);
+		CHECK(hit->EntityID == entity.GetUUID());
+		CHECK(scene.GetScriptEngine()->GetErrors().empty());
+		scene.OnRuntimeStop();
+	}
+	TEST_CASE("State deletion prunes incoming outgoing and any-state target edges")
+	{
+		AnimationGraphDraft draft;
+		std::string error;
+		auto data = AnimationGraphDraft::Default();
+		data["States"].push_back({ { "Name", "Walk" }, { "Clip", "Walk" } });
+		data["States"].push_back({ { "Name", "Run" }, { "Clip", "Run" } });
+		data["Transitions"] = json::array({ { { "From", "Idle" }, { "To", "Walk" } }, { { "From", "Walk" }, { "To", "Run" } }, { { "To", "Walk" } }, { { "From", "Idle" }, { "To", "Run" } } });
+		REQUIRE(draft.SetData(data, error));
+		REQUIRE(draft.RenameState(1, "Move"));
+		CHECK(draft.Data["Transitions"][0]["To"] == "Move");
+		draft.RemoveState(1);
+		REQUIRE(draft.Data["Transitions"].size() == 1);
+		CHECK(draft.Data["Transitions"][0]["From"] == "Idle");
+		CHECK(draft.Data["Transitions"][0]["To"] == "Run");
+		REQUIRE(draft.Validate(error));
+	}
+	TEST_CASE("Property validation rejects malformed bounded tracks without changing authored data")
+	{
+		Scene scene;
+		auto entity = scene.CreateEntity();
+		std::string error;
+		REQUIRE(PropertyAnimation::Key(entity, "Transform", "Translation", 0, error));
+		const auto* info = ComponentRegistry::Find("PropertyAnimation");
+		const auto baseline = info->Serialize(entity);
+		const json track = { { "Component", "Transform" }, { "Field", "Translation" } };
+		std::vector<json> invalid = { { { "Duration", 86401 } }, { { "Speed", 1001 } }, { { "Tracks", json::array({ { { "Component", "PropertyAnimation" }, { "Field", "Duration" } } }) } }, { { "Tracks", json::array({ { { "Component", "Mesh" }, { "Field", "MeshIndex" } } }) } }, { { "Tracks", json::array({ { { "Component", "Mesh" }, { "Field", "CastShadows" } } }) } }, { { "Tracks", json::array({ { { "Component", "Material" }, { "Field", "AlphaMode" } } }) } } };
+		for (const auto times : std::vector<glm::vec2>{ { .8f, .2f }, { -.1f, .2f }, { 0, 1.1f } })
+		{
+			auto bad = track;
+			bad["Keys"] = json::array({ { { "Time", times.x } }, { { "Time", times.y } } });
+			invalid.push_back({ { "Tracks", json::array({ bad }) } });
+		}
+		auto badValue = track;
+		badValue["Keys"] = json::array({ { { "Value", { 1, 2, 3 } } } });
+		invalid.push_back({ { "Tracks", json::array({ badValue }) } });
+		invalid.push_back({ { "Tracks", std::vector<json>(65, track) } });
+		auto tooMany = track;
+		tooMany["Keys"] = std::vector<json>(257, json::object());
+		invalid.push_back({ { "Tracks", json::array({ tooMany }) } });
+		for (const auto& bad : invalid)
+		{
+			CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, "PropertyAnimation", bad, error));
+			CHECK(info->Serialize(entity) == baseline);
+		}
+	}
+	TEST_CASE("Numeric vector samples retain sibling data and held values emit no repeated updates")
+	{
+		Scene scene;
+		auto entity = scene.CreateEntity();
+		std::string error;
+		auto& rect = entity.AddComponent<UIRectComponent>();
+		rect.Position = { 2, 4 };
+		rect.Size = { 7, 9 };
+		entity.AddComponent<MaterialComponent>().AlbedoColor = { 0, .2f, .4f, .6f };
+		for (const auto& target : std::vector<std::pair<std::string, std::string>>{ { "UIRect", "Position" }, { "Material", "AlbedoColor" } })
+			REQUIRE(PropertyAnimation::Key(entity, target.first, target.second, 0, error));
+		rect.Position = { 8, 10 };
+		entity.GetComponent<MaterialComponent>().AlbedoColor = { 1, .4f, .6f, .8f };
+		for (const auto& target : std::vector<std::pair<std::string, std::string>>{ { "UIRect", "Position" }, { "Material", "AlbedoColor" } })
+			REQUIRE(PropertyAnimation::Key(entity, target.first, target.second, 1, error));
+		struct Updates
+		{
+			int Count = 0;
+			void OnUpdate(entt::registry&, entt::entity) { Count++; }
+		} updates;
+		scene.GetRegistry().on_update<UIRectComponent>().connect<&Updates::OnUpdate>(updates);
+		REQUIRE(PropertyAnimation::Sample(entity, entity.GetComponent<PropertyAnimationComponent>(), .1f, error));
+		const auto value = entity.GetComponent<UIRectComponent>();
+		REQUIRE(PropertyAnimation::Sample(entity, entity.GetComponent<PropertyAnimationComponent>(), .1f, error));
+		CHECK(updates.Count == 1);
+		CHECK(entity.GetComponent<UIRectComponent>().Position == value.Position);
+		CHECK(value.Size == glm::vec2(7, 9));
+		CHECK(entity.GetComponent<MaterialComponent>().AlbedoColor.x == doctest::Approx(.1f));
+		scene.GetRegistry().on_update<UIRectComponent>().disconnect(&updates);
+	}
+	TEST_CASE("Sampling reports partial failure with one component prefix and keeps later fields unchanged")
+	{
+		Scene scene;
+		auto entity = scene.CreateEntity();
+		entity.AddComponent<MaterialComponent>();
+		entity.AddComponent<PointLightComponent>();
+		PropertyAnimationComponent animation;
+		animation.Tracks = { { "Material", "Roughness", false, { { 0, { .3f, 0, 0, 0 } } } }, { "PointLight", "Radius", false, { { 0, { -1, 0, 0, 0 } } } }, { "Transform", "Translation", false, { { 0, { 8, 0, 0, 0 } } } } };
+		std::string error;
+		CHECK_FALSE(PropertyAnimation::Sample(entity, animation, 0, error));
+		CHECK(entity.GetComponent<MaterialComponent>().Roughness == doctest::Approx(.3f));
+		CHECK(entity.GetTransform().Translation.x == 0);
+		CHECK(error.starts_with("PointLight:"));
+		CHECK(error.find("PointLight: PointLight:") == std::string::npos);
 	}
 	TEST_CASE("Property patches group constrained fields and duplicate tracks use their last sample")
 	{

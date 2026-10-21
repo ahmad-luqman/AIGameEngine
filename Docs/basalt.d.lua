@@ -386,10 +386,21 @@ function Entity:PlayAnimation(clip) end
 
 ---Controls this entity's PropertyAnimation in Play/Simulate. Play restarts, Pause/Resume preserve time,
 ---Stop samples zero and Seek samples normalized time without changing pause state. Invalid input raises.
+---Pause/Resume reject suspended timelines; Play/Stop/Seek repairs only after a successful sample.
 ---@param action 'Play'|'Pause'|'Resume'|'Stop'|'Seek'
 ---@param time? number Normalized time in [0,1], default 0
 ---@return boolean
 function Entity:ControlPropertyAnimation(action, time) end
+
+---@class PropertyAnimationStatus
+---@field time number Normalized timeline time
+---@field playing boolean
+---@field failed boolean Whether playback is suspended after a sample failure
+---@field error string Last failure, empty when healthy
+
+---Read-only status of this entity's PropertyAnimation in Play/Simulate.
+---@return PropertyAnimationStatus
+function Entity:GetPropertyAnimationStatus() end
 
 
 ---Crossfades to clip over seconds; returns success.

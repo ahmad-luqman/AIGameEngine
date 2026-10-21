@@ -693,6 +693,13 @@ namespace Basalt {
 					return animations.SetParameter(entity, name, value.as<bool>());
 				return animations.SetParameter(entity, name, OptionalNumber(value, "SetAnimationParameter: value", 0.0f));
 			};
+			entityType["GetPropertyAnimationStatus"] = [](const ScriptEntity& self, sol::this_state state) {
+				Entity entity = RequireEntityWith<PropertyAnimationComponent>(self, "GetPropertyAnimationStatus", "PropertyAnimation");
+				auto* system = entity.GetScene()->GetPropertyAnimationSystem();
+				if (!system)
+					throw std::runtime_error("GetPropertyAnimationStatus requires Play or Simulate");
+				return JsonToLua(state, system->Status(entity));
+			};
 			entityType["ControlPropertyAnimation"] = [](const ScriptEntity& self, const std::string& action, const sol::object& time) {
 				Entity entity = RequireEntityWith<PropertyAnimationComponent>(self, "ControlPropertyAnimation", "PropertyAnimation");
 				auto* system = entity.GetScene()->GetPropertyAnimationSystem();

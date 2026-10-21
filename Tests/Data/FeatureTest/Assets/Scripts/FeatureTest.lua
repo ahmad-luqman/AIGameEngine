@@ -735,6 +735,8 @@ function Driver:OnCreate()
 	Check("Property Pause", probe:ControlPropertyAnimation("Pause"))
 	Check("Property Resume", probe:ControlPropertyAnimation("Resume"))
 	Check("Property Stop", probe:ControlPropertyAnimation("Stop") and Near(probe:GetComponent("Transform").Translation[1], 0))
+	local status = probe:GetPropertyAnimationStatus()
+	Check("Property status query", not status.playing and not status.failed and status.time == 0 and status.error == "")
 	ExpectError("Property bad action", function() probe:ControlPropertyAnimation("Bad") end, "action must be")
 	ExpectError("Property bad seek", function() probe:ControlPropertyAnimation("Seek", 2) end, "time must be")
 	self.Frame = 0

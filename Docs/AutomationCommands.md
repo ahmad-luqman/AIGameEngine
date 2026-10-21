@@ -12,7 +12,7 @@ succeeds only if its command fails with an error containing `<text>` (used by te
 
 ### `animation.control`
 
-Controls a PropertyAnimation in Play or Simulate. action is Play (restart at zero), Pause, Resume, Stop (sample zero), Seek (sample normalized time), or Status. Returns {time, playing, failed}; time is normalized. Component edits restart clocks using PlayOnStart. A failed sample may have applied earlier components.
+Controls a PropertyAnimation in Play or Simulate. action is Play (restart at zero), Pause, Resume, Stop (sample zero), Seek (sample normalized time), or Status. Returns {time, playing, failed, error}; time is normalized. Pause/Resume on a failed timeline fail until Play/Stop/Seek succeeds or its component is edited. Component edits restart clocks using PlayOnStart. A failed sample may have applied earlier components.
 
 | Parameter | Type / description |
 |-----------|--------------------|

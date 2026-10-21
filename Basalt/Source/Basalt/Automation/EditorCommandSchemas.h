@@ -42,7 +42,9 @@ namespace Basalt::EditorCommandSchemas {
 		// Only these can be closed; the others are always open.
 		bool Closable;
 	};
-	inline constexpr PanelInfo Panels[] = { { "Animation Graph", false }, { "Property Animation", false }, { ViewportTitle, false }, { GameTitle, false }, { HierarchyTitle, false }, { InspectorTitle, false }, { SceneTitle, false }, { ContentBrowserTitle, false }, { ConsoleTitle, false }, { ProjectSettingsTitle, true } };
+	inline constexpr const char* AnimationGraphTitle = "Animation Graph";
+	inline constexpr const char* PropertyAnimationTitle = "Property Animation";
+	inline constexpr PanelInfo Panels[] = { { AnimationGraphTitle, false }, { PropertyAnimationTitle, false }, { ViewportTitle, false }, { GameTitle, false }, { HierarchyTitle, false }, { InspectorTitle, false }, { SceneTitle, false }, { ContentBrowserTitle, false }, { ConsoleTitle, false }, { ProjectSettingsTitle, true } };
 
 	bool IsClosablePanel(const std::string& title);
 
