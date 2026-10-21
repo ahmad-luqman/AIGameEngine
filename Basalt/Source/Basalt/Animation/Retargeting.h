@@ -63,7 +63,7 @@ namespace Basalt {
 		// Matches the skeletons over all their nodes: the explicit pairs first, then equal names after StripNamespace,
 		// then equal humanoid bones; each source and target node is used once. outWarnings gets explicit pairs that name
 		// a missing joint, are half filled or reuse a paired joint, paired joints given as matrices, rest poses that are
-		// not finite or have degenerate joints, and humanoid hips whose leg length cannot be measured.
+		// not finite or have joints whose rest transform is not affine, and humanoid hips whose leg length cannot be measured.
 		RetargetMap BuildMap(const MeshSource& target, const MeshSource& source, const std::vector<AnimationRetargetJoint>& joints, std::vector<std::string>& outWarnings);
 
 		// Whether baking `clip` fits MaxClipBakedFloats; the reason otherwise. Cheap (no allocation) for clips well inside

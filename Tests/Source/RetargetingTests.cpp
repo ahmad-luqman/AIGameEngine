@@ -14,6 +14,8 @@
 #include <Basalt/Scene/ComponentRegistry.h>
 #include <Basalt/Scene/SceneSerializer.h>
 
+#include <limits>
+
 using namespace Basalt;
 using namespace BasaltTest;
 using AnimationTest::ClearAssetCache;
@@ -578,6 +580,15 @@ TEST_SUITE("Retargeting")
 		CHECK(error.find("Joints[1].Source 'A' is already used") != std::string::npos);
 		// Unnamed entries are the inspector's additions.
 		CHECK(set({ nlohmann::json::object(), nlohmann::json::object() }));
+		// Each library pairs its own joints: two may map the same target, and errors name the library.
+		const nlohmann::json pelvis = { { { "Source", "A" }, { "Target", "pelvis" } } };
+		const nlohmann::json twice = { { { "Source", "A" }, { "Target", "pelvis" } }, { { "Source", "B" }, { "Target", "pelvis" } } };
+		const auto setTwo = [&](const nlohmann::json& first, const nlohmann::json& second) {
+			return ComponentRegistry::AddOrPatch(entity, "Animator", { { "ClipLibraries", { { { "Mesh", "a.glb" }, { "Joints", first } }, { { "Mesh", "b.glb" }, { "Joints", second } } } } }, error);
+		};
+		CHECK(setTwo(pelvis, pelvis));
+		CHECK_FALSE(setTwo(pelvis, twice));
+		CHECK(error.find("ClipLibraries[1].Joints[1].Target 'pelvis' is already used by Joints[0]") != std::string::npos);
 	}
 
 	TEST_CASE("Animator warnings resolve clip names in libraries and report unmatched skeletons")
@@ -663,5 +674,263 @@ TEST_SUITE("Retargeting")
 		CHECK(error.find("budget") != std::string::npos);
 		// Ordinary clips pass without building their sample set.
 		CHECK(Retargeting::CheckBakeBudget(*rigs.Target, *rigs.Source, map, Clip(*rigs.Source, "Walk"), error));
+	}
+
+	TEST_CASE("The bake budget counts weights tracks at their target widths, leaving the rest to joint keys")
+	{
+		const auto source = AnimationTest::LoadModel(FixturePath("Morph.gltf"));
+		// 70000 keys of Face's two weights.
+		AnimationClip clip{ .Name = "Long", .Duration = 70000 };
+		AnimationTrack track{ .Node = Node(*source, "Face"), .Path = AnimationPath::Weights, .Width = 2 };
+		for (int i = 0; i < 70000; i++)
+		{
+			track.Times.push_back(static_cast<float>(i));
+			track.Weights.insert(track.Weights.end(), { 0.0f, 0.0f });
+		}
+		clip.Tracks.push_back(track);
+		// A target whose Face has `targets` morph targets, Smile and Blink among them.
+		const auto fits = [&](size_t targets) {
+			auto target = CreateRef<MeshSource>(*source);
+			auto& names = target->Meshes[0].MorphTargets;
+			while (names.size() < targets)
+				names.push_back("Extra" + std::to_string(names.size()));
+			std::vector<std::string> warnings;
+			const RetargetMap map = Retargeting::BuildMap(*target, *source, {}, warnings);
+			REQUIRE(map.MappedCount() == 4);
+			std::string error;
+			const bool fit = Retargeting::CheckBakeBudget(*target, *source, map, clip, error);
+			CHECK(error == (fit ? "" : "the baked clip exceeds the decoded animation budget"));
+			return fit;
+		};
+		CHECK(fits(2));
+		// 70000 x 100 weights leave room for the joints' 70001 sample times (4 joints x 15 floats each).
+		CHECK(fits(100));
+		// 70000 x 200 weights fit on their own, but not with the joints' samples.
+		CHECK_FALSE(fits(200));
+		// 70000 x 256 weights alone exceed the budget.
+		CHECK_FALSE(fits(256));
+	}
+
+	TEST_CASE("The bake budget allows joint keys for each mapped joint")
+	{
+		const Rigs rigs;
+		std::vector<std::string> warnings;
+		const RetargetMap map = Retargeting::BuildMap(*rigs.Target, *rigs.Source, {}, warnings);
+		const size_t allowed = Retargeting::MaxClipBakedFloats / (map.MappedCount() * 15);
+		// A linear rotation track on the left arm, with `keys` distinct times including 0 and the end.
+		const auto clip = [&](size_t keys) {
+			AnimationClip result{ .Name = "Dense", .Duration = 1.0f };
+			AnimationTrack track{ .Node = Node(*rigs.Source, "mixamorig:LeftArm"), .Path = AnimationPath::Rotation };
+			for (size_t i = 0; i < keys; i++)
+			{
+				track.Times.push_back(static_cast<float>(static_cast<double>(i) / static_cast<double>(keys - 1)));
+				track.Values.emplace_back(0.0f, 0.0f, 0.0f, 1.0f);
+			}
+			result.Tracks.push_back(std::move(track));
+			return result;
+		};
+		std::string error;
+		CHECK(Retargeting::CheckBakeBudget(*rigs.Target, *rigs.Source, map, clip(1000), error));
+		CHECK(Retargeting::CheckBakeBudget(*rigs.Target, *rigs.Source, map, clip(allowed), error));
+		CHECK_FALSE(Retargeting::CheckBakeBudget(*rigs.Target, *rigs.Source, map, clip(allowed + 1), error));
+		CHECK(error == "the baked clip exceeds the decoded animation budget");
+	}
+
+	TEST_CASE("Scale tracks carry the ratio to the source's own rest scale")
+	{
+		const Rigs rigs;
+		auto source = CreateRef<MeshSource>(*rigs.Source);
+		const uint32_t arm = Node(*source, "mixamorig:LeftArm");
+		source->Nodes[arm].Scale = glm::vec3(2.0f);
+		// Twice the arm's rest scale throughout.
+		AnimationClip clip{ .Name = "Grow", .Duration = 1.0f };
+		clip.Tracks.push_back(AnimationTrack{ .Node = arm, .Path = AnimationPath::Scale, .Times = { 0.0f, 1.0f }, .Values = { glm::vec4(4.0f), glm::vec4(4.0f) } });
+		const AnimationClip baked = Bake(*rigs.Target, *source, clip);
+		const uint32_t upperArm = Node(*rigs.Target, "upperarm_l");
+		const AnimationLocalPose pose = SampleAnimation(*rigs.Target, &baked, 0.5f);
+		CHECK(AnimationTest::Near(pose.Nodes[upperArm].Scale, 2.0f * rigs.Target->Nodes[upperArm].Scale));
+	}
+
+	TEST_CASE("BakeClip refuses tracks, rest poses and maps that do not fit its skeletons")
+	{
+		const Rigs rigs;
+		std::vector<std::string> warnings;
+		const RetargetMap map = Retargeting::BuildMap(*rigs.Target, *rigs.Source, {}, warnings);
+		AnimationClip clip = Clip(*rigs.Source, "Wave");
+		RetargetMap used = map;
+		std::string expected;
+		SUBCASE("a track past the source's nodes")
+		{
+			clip.Tracks[0].Node = static_cast<uint32_t>(rigs.Source->Nodes.size());
+			expected = "a track does not fit the library's nodes";
+		}
+		SUBCASE("a track whose values do not match its keys")
+		{
+			clip.Tracks[0].Values.pop_back();
+			expected = "a track does not fit the library's nodes";
+		}
+		SUBCASE("a weights track wider than its node's targets")
+		{
+			clip.Tracks.push_back(AnimationTrack{ .Node = Node(*rigs.Source, "Body"), .Path = AnimationPath::Weights, .Times = { 0.0f }, .Weights = { 1.0f }, .Width = 1 });
+			expected = "a track does not fit the library's nodes";
+		}
+		SUBCASE("a map without rest poses")
+		{
+			used.SourceRest = {};
+			expected = "non-finite rest pose";
+		}
+		SUBCASE("a map source past the source's nodes")
+		{
+			used.SourceOf[Node(*rigs.Target, "pelvis")] = static_cast<int32_t>(rigs.Source->Nodes.size());
+			expected = "the joint map was built for other skeletons";
+		}
+		AnimationClip baked;
+		std::string error;
+		CHECK_FALSE(Retargeting::BakeClip(*rigs.Target, *rigs.Source, used, clip, baked, warnings, error));
+		CHECK(error == expected);
+	}
+
+	TEST_CASE("Rest poses that are degenerate or not finite are reported by the joint map")
+	{
+		const Rigs rigs;
+		auto source = CreateRef<MeshSource>(*rigs.Source);
+		const uint32_t arm = Node(*source, "mixamorig:LeftArm");
+		std::vector<std::string> warnings;
+		SUBCASE("a joint without a rest rotation")
+		{
+			// A projective matrix (zero-scale joints still have a rotation and pass quietly).
+			source->Nodes[arm].HasMatrix = true;
+			source->Nodes[arm].Matrix[0].w = 0.5f;
+			const RetargetMap map = Retargeting::BuildMap(*rigs.Target, *source, {}, warnings);
+			CHECK(HasText(warnings, "joint 'mixamorig:LeftArm' of '" + source->Key + "' has a rest transform that is not affine; its rest orientation counts as identity"));
+			CHECK(map.SourceRest.Rotations[arm] == glm::quat(1, 0, 0, 0));
+			CHECK(map.MappedCount() > 0);
+		}
+		SUBCASE("a zero-scale joint")
+		{
+			source->Nodes[arm].Scale = glm::vec3(0.0f);
+			const RetargetMap map = Retargeting::BuildMap(*rigs.Target, *source, {}, warnings);
+			CHECK_FALSE(HasText(warnings, "not affine"));
+			CHECK_FALSE(map.SourceRest.Rotations.empty());
+		}
+		SUBCASE("a non-finite joint")
+		{
+			source->Nodes[arm].Translation.x = std::numeric_limits<float>::quiet_NaN();
+			const RetargetMap map = Retargeting::BuildMap(*rigs.Target, *source, {}, warnings);
+			CHECK(HasText(warnings, "the rest pose of '" + source->Key + "' is not finite, so no clip can be retargeted"));
+			CHECK(map.TargetRest.Rotations.empty());
+			CHECK(map.SourceRest.Rotations.empty());
+			// A set reports the library instead of baking from it.
+			const auto set = AnimationClipSet::Build(rigs.Target, { AnimationClipSet::Library{ .Entry = { .Mesh = "NaN.gltf" }, .Source = source } });
+			CHECK(set->GetLibraries()[0].Error == "a rest pose is not finite");
+			CHECK(set->Size() == rigs.Target->Animations.size());
+		}
+	}
+
+	TEST_CASE("Sets leave out library clips that fail to bake, bake to nothing or pass the set budget")
+	{
+		const Rigs rigs;
+		SUBCASE("a non-finite source pose")
+		{
+			auto library = CreateRef<MeshSource>(*rigs.Source);
+			AnimationClip& wave = MutableClip(*library, "Wave");
+			wave.Tracks[0].Values[1].x = std::numeric_limits<float>::quiet_NaN();
+			const auto set = AnimationClipSet::Build(rigs.Target, { AnimationClipSet::Library{ .Entry = { .Mesh = "NaN.gltf" }, .Source = library } });
+			CHECK(set->Find("Wave") < 0);
+			CHECK(set->Find("Walk") >= 0);
+			CHECK(HasText(set->GetLibraries()[0].Warnings, "clip 'Wave' cannot be retargeted: non-finite source pose at"));
+		}
+		SUBCASE("weights matching no morph target of the model")
+		{
+			// Planned (weights tracks may move the model), but no target is named Smile or Blink once baked.
+			const auto library = AnimationTest::LoadModel(FixturePath("Morph.gltf"));
+			auto model = CreateRef<MeshSource>(*library);
+			model->Animations.clear();
+			model->Meshes[0].MorphTargets = { "Frown", "Wink" };
+			std::vector<AnimationClipSet::Library> libraries = { { .Entry = { .Mesh = "Morph.gltf" }, .Source = library } };
+			AnimationClipSet::Plan(*model, libraries);
+			CHECK(std::ranges::find(libraries[0].Clips, std::string("CubicSmile")) != libraries[0].Clips.end());
+			const auto set = AnimationClipSet::Build(model, libraries);
+			CHECK(set->Find("CubicSmile") < 0);
+			CHECK(HasText(set->GetLibraries()[0].Warnings, "clip 'CubicSmile' moves no joint paired with the model, so it is left out"));
+			CHECK(HasText(set->GetLibraries()[0].Warnings, "clip 'CubicSmile': the morph weights of 'Face' match no node and morph target name"));
+			// Nod turns the head, which is paired.
+			CHECK(set->Find("Nod") >= 0);
+		}
+		SUBCASE("the set budget")
+		{
+			const std::vector<AnimationClipSet::Library> libraries = { { .Entry = { .Mesh = "Mixamo.gltf" }, .Source = rigs.Source } };
+			const auto full = AnimationClipSet::Build(rigs.Target, libraries);
+			const auto floats = [&](const std::string& name) {
+				size_t count = 0;
+				for (const AnimationTrack& track : (*full)[full->Find(name)].Tracks)
+					count += track.Times.size() + track.Values.size() * 4 + track.Weights.size();
+				return count;
+			};
+			REQUIRE(full->GetLibraries()[0].Clips == std::vector<std::string>{ "Wave", "Walk", "Nod" });
+			// Room for Wave and Walk but not Nod, the largest.
+			REQUIRE(floats("Nod") > floats("Walk"));
+			const auto set = AnimationClipSet::Build(rigs.Target, libraries, floats("Wave") + floats("Walk"));
+			CHECK(set->GetLibraries()[0].Clips == std::vector<std::string>{ "Wave", "Walk" });
+			CHECK(HasText(set->GetLibraries()[0].Warnings, "clip 'Nod' is left out: the Animator's retargeted clips would exceed"));
+			CHECK(set->Find("Nod") < 0);
+		}
+	}
+
+	TEST_CASE("Baked clips are charged to asset memory while their set lives")
+	{
+		const Rigs rigs;
+		const uint64_t before = MemoryTracker::Get(MemoryCategory::Assets).Bytes;
+		auto set = AnimationClipSet::Build(rigs.Target, { AnimationClipSet::Library{ .Entry = { .Mesh = "Mixamo.gltf" }, .Source = rigs.Source } });
+		size_t floats = 0;
+		for (size_t i = rigs.Target->Animations.size(); i < set->Size(); i++)
+			for (const AnimationTrack& track : (*set)[static_cast<int32_t>(i)].Tracks)
+				floats += track.Times.size() + track.Values.size() * 4 + track.Weights.size();
+		REQUIRE(floats > 0);
+		CHECK(MemoryTracker::Get(MemoryCategory::Assets).Bytes - before == floats * sizeof(float));
+		set.reset();
+		CHECK(MemoryTracker::Get(MemoryCategory::Assets).Bytes == before);
+	}
+
+	TEST_CASE("Each clip library pairs joints with its own map")
+	{
+		const Rigs rigs;
+		// The same rig twice, its clips renamed in the second.
+		auto copy = CreateRef<MeshSource>(*rigs.Source);
+		for (AnimationClip& clip : copy->Animations)
+			clip.Name = "Copy" + clip.Name;
+		const auto set = AnimationClipSet::Build(rigs.Target, { AnimationClipSet::Library{ .Index = 0, .Entry = { .Mesh = "Mixamo.gltf", .Joints = { { "mixamorig:LeftArm", "clavicle_l" } } }, .Source = rigs.Source },
+																AnimationClipSet::Library{ .Index = 1, .Entry = { .Mesh = "Copy.gltf" }, .Source = copy } });
+		const uint32_t clavicle = Node(*rigs.Target, "clavicle_l");
+		const auto& libraries = set->GetLibraries();
+		REQUIRE(libraries.size() == 2);
+		CHECK(libraries[0].Map.SourceOf[clavicle] == static_cast<int32_t>(Node(*rigs.Source, "mixamorig:LeftArm")));
+		CHECK(libraries[1].Map.SourceOf[clavicle] != static_cast<int32_t>(Node(*rigs.Source, "mixamorig:LeftArm")));
+		// Only the first library's Wave turns the clavicle like the left arm.
+		std::vector<glm::mat4> first, second;
+		REQUIRE(EvaluateAnimation(*rigs.Target, &(*set)[set->Find("Wave")], 0.5f, first));
+		REQUIRE(EvaluateAnimation(*rigs.Target, &(*set)[set->Find("CopyWave")], 0.5f, second));
+		CHECK_FALSE(AnimationTest::NearPose({ first[clavicle] }, { second[clavicle] }));
+	}
+
+	TEST_CASE("Clip libraries that fail to load are logged as errors")
+	{
+		ClearAssetCache cacheGuard;
+		Scene scene;
+		auto entity = scene.CreateEntity("Hero");
+		AddHero(entity).ClipLibraries = { { "Missing/Library.gltf" } };
+		const auto since = Log::GetHistory().GetTotalCount();
+		scene.OnRuntimeStart();
+		scene.GetAnimationSystem()->Update(0);
+		uint64_t next = 0;
+		int errors = 0;
+		for (const LogMessage& message : Log::GetHistory().GetMessagesSince(since, next))
+			if (message.Text.find("clip library 'Missing/Library.gltf' adds no clips: cannot load") != std::string::npos)
+			{
+				CHECK(message.Level == LogLevel::Error);
+				errors++;
+			}
+		CHECK(errors == 1);
+		scene.OnRuntimeStop();
 	}
 }

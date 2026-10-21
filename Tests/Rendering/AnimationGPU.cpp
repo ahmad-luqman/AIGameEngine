@@ -27,6 +27,15 @@ namespace {
 	{
 		~ClearAssetCache() { AssetManager::Clear(); }
 	};
+
+	size_t CountLogMessages(uint64_t since, const std::string& text)
+	{
+		uint64_t next = 0;
+		size_t count = 0;
+		for (const LogMessage& message : Log::GetHistory().GetMessagesSince(since, next))
+			count += message.Text.find(text) != std::string::npos ? 1 : 0;
+		return count;
+	}
 	std::vector<uint8_t> Capture(SceneRenderer& renderer, Scene& scene, const RenderCamera& camera)
 	{
 		renderer.Render(scene, camera, 0.0f);
@@ -471,7 +480,8 @@ TEST_CASE("Morph truncation warns once per mesh node, also when nodes share a me
 	REQUIRE_MESSAGE(source->FinalizeHierarchy(&error), error);
 	Scene scene;
 	Populate(scene);
-	scene.CreateEntity("Morphed").AddComponent<AnimatorComponent>().Mesh = fixture.string();
+	auto entity = scene.CreateEntity("Morphed");
+	entity.AddComponent<AnimatorComponent>().Mesh = fixture.string();
 	scene.OnSimulationStart();
 	SceneRenderer renderer(graphics->GetDevice());
 	REQUIRE(renderer.Initialize());
@@ -489,11 +499,28 @@ TEST_CASE("Morph truncation warns once per mesh node, also when nodes share a me
 		REQUIRE_FALSE(renderer.GetStatistics().Failed);
 		CHECK(renderer.GetStatistics().MorphWeightsDropped == 4);
 	}
-	uint64_t next = 0;
-	size_t warnings = 0;
-	for (const LogMessage& message : Log::GetHistory().GetMessagesSince(since, next))
-		warnings += message.Text.find("node 'Crowded' of 'Morphed' has 36 active morph targets") != std::string::npos ? 1 : 0;
-	CHECK(warnings == 1);
+	const std::string warning = "node 'Crowded' of 'Morphed' has 36 active morph targets";
+	CHECK(CountLogMessages(since, warning) == 1);
+
+	// A frame within the limit ends the episode: going past it again warns again.
+	auto& animations = *scene.GetAnimationSystem();
+	const MeshNode& crowded = source->Nodes[1];
+	REQUIRE(crowded.Name == "Crowded");
+	size_t silenced = 0;
+	for (size_t target = 0; target < crowded.MorphWeights.size() && silenced < 4; target++)
+		if (crowded.MorphWeights[target] != 0.0f)
+		{
+			REQUIRE(animations.SetMorphWeight(entity, source->Meshes[crowded.MeshIndex].MorphTargets[target], 0.0f, 0.0f));
+			silenced++;
+		}
+	animations.Update(0.0f);
+	renderer.Render(scene, camera, 0.0f);
+	CHECK(renderer.GetStatistics().MorphWeightsDropped == 0);
+	REQUIRE(animations.ClearMorphWeight(entity, std::nullopt));
+	animations.Update(0.0f);
+	renderer.Render(scene, camera, 0.0f);
+	CHECK(renderer.GetStatistics().MorphWeightsDropped == 4);
+	CHECK(CountLogMessages(since, warning) == 2);
 	scene.OnSimulationStop();
 	graphics->GetDevice()->waitForIdle();
 	CHECK(graphics->GetValidationErrorCount() == 0);

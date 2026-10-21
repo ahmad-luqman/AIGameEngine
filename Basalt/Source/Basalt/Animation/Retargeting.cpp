@@ -140,7 +140,7 @@ namespace Basalt {
 			return token == "j" || token == "c" || token == "def" || token == "org";
 		}
 
-		// A global transform's rotation, or nothing for a degenerate (zero-scale) one.
+		// A global transform's rotation, or nothing when it is not affine (zero-scale axes still have one).
 		std::optional<glm::quat> DecomposedRotation(const glm::mat4& global)
 		{
 			glm::vec3 translation, scale;
@@ -155,7 +155,7 @@ namespace Basalt {
 			return DecomposedRotation(global).value_or(glm::quat(1, 0, 0, 0));
 		}
 
-		// Model-space rest positions and rotations; false for a non-finite rest pose. Degenerate (zero-scale) joints get
+		// Model-space rest positions and rotations; false for a non-finite rest pose. Joints whose rest transform is not affine get
 		// the identity rotation and are listed in outDegenerate.
 		bool Rest(const MeshSource& source, RestPose& out, std::vector<uint32_t>& outDegenerate)
 		{
@@ -253,22 +253,18 @@ namespace Basalt {
 		// CheckBakeBudget, also returning the sample times when outTimes is given.
 		bool CheckBudget(const MeshSource& target, const MeshSource& source, const RetargetMap& map, const AnimationClip& clip, std::set<float>* outTimes, std::string& outError)
 		{
-			const size_t mapped = map.MappedCount();
-			const size_t limit = Retargeting::MaxClipBakedFloats / std::max<size_t>(1, mapped * BakedFloatsPerMappedKey);
-			if (!SampleTimes(clip, limit, outTimes))
-			{
-				outError = BudgetError;
-				return false;
-			}
-			// Keys bound the joint tracks' floats; weights tracks expand to their target nodes' widths.
-			size_t floats = 0;
+			// Weights tracks keep their keys, expanded to their target nodes' widths; the joint tracks take what is left, at
+			// BakedFloatsPerMappedKey per mapped joint and sample time.
+			size_t weightFloats = 0;
 			for (const AnimationTrack& track : clip.Tracks)
 				if (track.Path == AnimationPath::Weights && track.Width > 0)
 				{
 					const size_t values = track.Weights.size() / track.Width;
-					ForEachWeightsTarget(target, source, track, [&](uint32_t, const std::vector<int32_t>& from) { floats += values * from.size() + track.Times.size(); });
+					ForEachWeightsTarget(target, source, track, [&](uint32_t, const std::vector<int32_t>& from) { weightFloats += values * from.size() + track.Times.size(); });
 				}
-			if (floats > Retargeting::MaxClipBakedFloats - std::min(Retargeting::MaxClipBakedFloats, limit * mapped * BakedFloatsPerMappedKey))
+			const size_t mapped = map.MappedCount();
+			if (weightFloats > Retargeting::MaxClipBakedFloats ||
+				!SampleTimes(clip, (Retargeting::MaxClipBakedFloats - weightFloats) / std::max<size_t>(1, mapped * BakedFloatsPerMappedKey), outTimes))
 			{
 				outError = BudgetError;
 				return false;
@@ -387,13 +383,14 @@ namespace Basalt {
 				map.SourceRest = {};
 				return map;
 			}
-			// A zero-scale joint has no orientation to correct from; its children still pose, but it turns from identity.
+			// A joint without a rest rotation has no orientation to correct from; its children still pose, but it turns from
+			// identity.
 			for (uint32_t node : targetDegenerate)
 				if (map.SourceOf[node] >= 0)
-					outWarnings.push_back(fmt::format("joint '{}' of '{}' has a degenerate (zero-scale) rest transform; its rest orientation counts as identity", target.Nodes[node].Name, target.Key));
+					outWarnings.push_back(fmt::format("joint '{}' of '{}' has a rest transform that is not affine; its rest orientation counts as identity", target.Nodes[node].Name, target.Key));
 			for (uint32_t node : sourceDegenerate)
 				if (used[node])
-					outWarnings.push_back(fmt::format("joint '{}' of '{}' has a degenerate (zero-scale) rest transform; its rest orientation counts as identity", source.Nodes[node].Name, source.Key));
+					outWarnings.push_back(fmt::format("joint '{}' of '{}' has a rest transform that is not affine; its rest orientation counts as identity", source.Nodes[node].Name, source.Key));
 			if (map.TargetRoot < 0)
 				return map;
 			std::vector<int32_t> targetMapped, sourceMapped;
