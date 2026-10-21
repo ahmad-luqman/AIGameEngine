@@ -54,7 +54,7 @@ namespace Basalt {
 
 	bool PostProcessStack::Fail(const char* stage)
 	{
-		BS_CORE_ERROR("PostProcessStack: failed to create {}", stage);
+		BS_CORE_ERROR("PostProcessStack: failed to create {}; resize or disable/re-enable post-processing (including TAA) to retry", stage);
 		m_Failed = true;
 		return false;
 	}

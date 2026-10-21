@@ -29,11 +29,12 @@ levels, then combines normalized tent upsampling with `BloomScatter` (0 keeps fi
 broad glow). `BloomIntensity` scales its contribution before tonemapping. Bloom and FXAA default off;
 auto exposure defaults off. New component values are strictly validated atomically; malformed values
 written directly by C++ fail the frame with a diagnostic. Legacy fallback values retain their old ranges.
-Enabling any of bloom, auto exposure or FXAA allocates the shared HDR/exposure/bloom resources; FXAA
+Enabling bloom, auto exposure, FXAA, or a TAA reset-frame FXAA pass allocates the shared HDR/exposure/bloom resources; FXAA
 adds its own input and caches pipelines for both final and FSR output formats. Resources remain cached
 until targets change. Allocation failure fails the frame/capture in every build, including Dist, instead
-of silently changing the authored look. Failed resource paths log once until all three effects are disabled
-and one re-enabled, or the targets change. Invalid component diagnostics name the entity and repeat only
+of silently changing the authored look. Failed resource paths log once until post-processing is disabled
+and re-enabled, or the targets change. TAA reset-frame FXAA follows the same failure policy: toggle TAA
+off/on or resize to retry after an allocation failure; it never silently removes AA. Invalid component diagnostics name the entity and repeat only
 when the validation error or selected entity changes. Disabling that component recovers the legacy path. HDR work has a `PostProcess` GPU timing; FXAA is in `Tonemap`.
 
 Component defaults and inclusive ranges:
@@ -73,14 +74,14 @@ Offscreen/headless sessions retain the same preference values even though VSync 
 resize, tiny targets and dynamic allocations with/without FSR, with Vulkan synchronization validation.
 Headless tests cover selection, serialization, atomic validation and Lua session lifetime.
 
-### Temporal anti-aliasing
+## Temporal anti-aliasing
 
 Enable `PostProcess.TAAEnabled` through the component API or inspector. TAA takes precedence over FXAA
 once history is valid and runs before bloom, exposure, tonemapping and FSR 1. It operates at the current
 render resolution, including supersampling and dynamic resolution. Transparency and particles composite
 with the current jittered sample after the resolve; they do not enter temporal history. Overlays and game UI
 are drawn after post-processing and never accumulate. Debug lines use the unjittered camera; selection
-outlines follow the current jittered picking silhouette. Reset frames (including captures) automatically
+outlines follow the current jittered picking silhouette. Reset or environment-rebake frames (including captures) automatically
 use FXAA until temporal samples become available, even when `FXAAEnabled` is false.
 
 Each renderer has an eight-sample Halton projection jitter and its own HDR color and R32F depth histories.
@@ -91,20 +92,23 @@ camera rotation. The resolve rejects out-of-bounds and depth-mismatched history,
 3×3 color neighborhood and reduces history weight for fast motion. This reduces edge shimmer, including
 SSAO and opaque specular highlights; it can soften small moving detail.
 
-History resets on scene/play revision, selected PostProcess entity identity changes, any projection matrix
+History resets on scene/play revision, primary camera identity changes, selected PostProcess entity identity changes, any projection matrix
 change (including animated FOV), and active render dimension changes (including dynamic resolution),
 TAA/debug toggles, failed frames, and camera jumps over 10 world units or turns over 60 degrees.
 An environment rebake rejects that frame's accumulated color because lighting has changed. Editing other
 fields on the selected PostProcess does not reset history.
-Hosts should call `SceneRenderer::ResetTemporalHistory` for smaller intentional cuts. `ResetExposure` also
-resets TAA for repeatable captures. Hosts must explicitly signal smaller cuts; normal camera input
-does not infer them. Only successful submissions advance the sample sequence.
-Disabling TAA releases its color/depth histories and motion target. Previous-pose vertex work runs only
-in the TAA prepass; shared skins retain one palette snapshot and upload per entity. TAA resolve cost
+Hosts should call `SceneRenderer::ResetTemporalHistory` for smaller intentional cuts within the same
+camera; no Lua cut hook is provided. Primary scene-camera switches reset automatically. `ResetExposure`
+also resets TAA for repeatable captures. Only successful submissions advance the sample sequence.
+Changing TAA or its debug-view bypass rebuilds the scene targets and pipelines, waits for the device,
+and resets exposure, picking and FSR resources. Disabling TAA releases its color/depth histories and motion target. Previous-pose vertex work runs only
+in the TAA prepass; shared skins retain one palette snapshot and upload per entity skin. TAA resolve cost
 is included in the `Lighting` GPU timing.
 `render.stats` reports `taaActive` and `taaHistoryValid`. The optional `TemporalAAGPU` test checks previous
-coordinates against independently moving instanced geometry and CPU-skinned/morphed triangles, with Vulkan
-synchronization validation enabled. Headless `TemporalHistoryTests` cover the jitter and camera lifecycle.
+coordinates against independently moving instanced geometry and CPU-skinned/morphed triangles, numeric
+resolve and rejection, gradient reprojection, history replacement, spatial AA fallback and shimmer reduction.
+It also injects allocation failures through a test-only device proxy and verifies clean abort/recovery,
+with Vulkan synchronization validation enabled. Headless `TemporalHistoryTests` cover the jitter and camera lifecycle.
 
 # Clustered forward lighting
 
@@ -166,13 +170,13 @@ resolution controls. The **current render area** determines whether FSR runs: na
 and SSAO/Normals/Depth debug views bypass it. A dynamic run with `RenderScale: 1.5` can activate FSR
 when its current scale drops below 1.
 UI, text, debug lines and gizmos are drawn afterward at output resolution. FSR 1 is a spatial upscaler;
-it does not provide temporal antialiasing.
+it does not provide temporal antialiasing (enable `PostProcess.TAAEnabled` for TAA).
 
-The complete FSR path is shadows → depth/normals → SSAO → clustered lighting/sky/transparency → optional
-HDR opaque/sky → optional TAA → transparency/particles → HDR bloom/auto exposure → tonemapping/sRGB → optional FXAA → EASU → RCAS → 8-bit dither → overlays.
+The complete FSR path is shadows → depth/normals → SSAO → clustered lighting/sky → optional TAA → transparency/particles → optional
+HDR bloom/auto exposure → tonemapping/sRGB → optional FXAA → EASU → RCAS → 8-bit dither → overlays.
 Intermediate color is stored in RGBA16_FLOAT without sRGB decoding; FSR expects normalized perceptual
 color. The extra targets allocate on first use and remain cached while FSR is off and across dynamic
-render-area changes. Viewport, configured render-scale and active dynamic-mode changes release them.
+render-area changes. Viewport, configured render-scale, active dynamic-mode, and TAA/debug-bypass changes release them.
 The FSR input allocation is capped at output size even with a supersampled dynamic ceiling, since
 FSR never reads a larger render area. The upscaler also checks its full configuration and rebuilds
 automatically when dimensions, output format, device, vertex shader or sampler change. The tonemap pipeline belongs to `SceneRenderer`.

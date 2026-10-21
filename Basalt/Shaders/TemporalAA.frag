@@ -62,6 +62,7 @@ void main()
 	vec2 halfPixel = 0.5 / vec2(u_Push.Size);
 	bool valid = u_Push.Valid != 0u && motion.w > 0.5 && motion.z >= 0.0 && motion.z <= 1.0 &&
 		all(greaterThanEqual(motion.xy, halfPixel)) && all(lessThanEqual(motion.xy, 1.0 - halfPixel));
+	// Derivatives must stay outside divergent validity branches. Cap tolerance to reject disocclusion edges.
 	float tolerance = clamp(2.0 * (abs(dFdx(motion.z)) + abs(dFdy(motion.z))), 0.00002, 0.001);
 	vec3 result = current;
 	if (valid)

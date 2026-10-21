@@ -6,21 +6,23 @@
 #include <Basalt/Animation/AnimatedModel.h>
 #include <Basalt/Animation/AnimationSystem.h>
 #include <Basalt/Asset/AssetManager.h>
+#include <Basalt/Renderer/DebugDraw.h>
 #include <Basalt/Renderer/RenderMath.h>
 #include <Basalt/Renderer/SceneRenderer.h>
-#include <Basalt/Renderer/TemporalHistory.h>
-#include <Basalt/Renderer/TemporalAA.h>
 #include <Basalt/Renderer/ShaderUtils.h>
-#include <glm/gtc/packing.hpp>
+#include <Basalt/Renderer/TemporalAA.h>
+#include <Basalt/Renderer/TemporalHistory.h>
 #include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
 
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/packing.hpp>
 
 #include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <map>
+#include <tuple>
 
 using namespace Basalt;
 
@@ -158,6 +160,8 @@ TEST_CASE("TAA motion follows independently moving batched instances and resets 
 	CHECK_FALSE(renderer.GetStatistics().TAAHistoryValid);
 	Render(renderer, scene);
 	CHECK(renderer.GetStatistics().TAAHistoryValid);
+	const auto restoredMotion = ReadMotion(graphics->GetDevice(), renderer);
+	CHECK(std::count_if(restoredMotion.begin(), restoredMotion.end(), [](glm::vec4 value) { return value.w > .5f; }) > 20);
 	CHECK(graphics->GetValidationErrorCount() == 0);
 }
 
@@ -166,7 +170,8 @@ namespace {
 	{
 		glm::vec4 Position[3];
 	};
-	using PosedTriangles = std::map<std::pair<uint32_t, uint32_t>, std::vector<Triangle>>;
+	using PosedTriangleKey = std::tuple<uint64_t, uint32_t, uint32_t>;
+	using PosedTriangles = std::map<PosedTriangleKey, std::vector<Triangle>>;
 	PosedTriangles PoseTriangles(Entity entity, const glm::mat4& viewProjection)
 	{
 		PosedTriangles result;
@@ -175,7 +180,7 @@ namespace {
 			for (uint32_t submeshIndex : source->Meshes[node.MeshIndex].Submeshes)
 			{
 				const auto& submesh = source->Submeshes[submeshIndex];
-				auto& triangles = result[{ static_cast<uint32_t>(&node - source->Nodes.data()), submeshIndex }];
+				auto& triangles = result[{ static_cast<uint64_t>(entity.GetUUID()), static_cast<uint32_t>(&node - source->Nodes.data()), submeshIndex }];
 				const auto drawn = DrawnMorphWeights(weights);
 				for (uint32_t i = 0; i < submesh.IndexCount; i += 3)
 				{
@@ -202,33 +207,73 @@ namespace {
 
 TEST_CASE("TAA previous clip coordinates match CPU skinning and morphing for every node")
 {
+	bool sharedSkin = false, twoEntities = false;
+	SUBCASE("Original skin and rigid attachment") {}
+	SUBCASE("Two visible nodes sharing one skin")
+	{
+		sharedSkin = true;
+	}
+	SUBCASE("Two entities with different skin poses")
+	{
+		twoEntities = true;
+	}
 	auto graphics = CreateTestGraphics();
 	Scene scene;
 	Populate(scene);
+	std::vector<Entity> rigs;
 	auto rig = scene.CreateEntity("Face and Teeth");
-	rig.AddComponent<AnimatorComponent>().Mesh = (std::filesystem::path(BASALT_ANIMATION_DATA_DIR) / "Morph.gltf").string();
+	rig.AddComponent<AnimatorComponent>().Mesh = (std::filesystem::path(BASALT_ANIMATION_DATA_DIR) / (sharedSkin ? "MorphSharedSkin.gltf" : "Morph.gltf")).string();
+	rigs.push_back(rig);
+	if (twoEntities)
+	{
+		rig.GetTransform().Translation.x = -.65f;
+		auto other = scene.CreateEntity("Independent Face and Teeth");
+		other.AddComponent<AnimatorComponent>().Mesh = rig.GetComponent<AnimatorComponent>().Mesh;
+		other.GetTransform().Translation.x = .65f;
+		rigs.push_back(other);
+	}
 	scene.OnSimulationStart();
 	auto& animation = *scene.GetAnimationSystem();
-	REQUIRE(animation.Play(rig, "Nod"));
-	REQUIRE(animation.Seek(rig, .1f));
-	REQUIRE(animation.SetMorphWeight(rig, "Smile", .2f, 0));
+	for (size_t i = 0; i < rigs.size(); i++)
+	{
+		REQUIRE(animation.Play(rigs[i], "Nod"));
+		REQUIRE(animation.Seek(rigs[i], i == 0 ? .1f : .8f));
+		REQUIRE(animation.SetMorphWeight(rigs[i], "Smile", i == 0 ? .2f : .7f, 0));
+	}
 	RenderCamera camera;
-	camera.Position = { 0, .5f, 3 };
-	camera.View = glm::lookAt(camera.Position, glm::vec3(0, .5f, 0), glm::vec3(0, 1, 0));
+	const float center = sharedSkin ? .6f : 0;
+	camera.Position = { center, .5f, sharedSkin || twoEntities ? 4.0f : 3.0f };
+	camera.View = glm::lookAt(camera.Position, glm::vec3(center, .5f, 0), glm::vec3(0, 1, 0));
 	camera.Projection = glm::perspective(glm::radians(40.0f), 1.0f, .1f, 10.0f);
 	camera.Near = .1f;
 	camera.Far = 10;
 	SceneRenderer renderer(graphics->GetDevice());
 	REQUIRE(renderer.Initialize());
 	renderer.SetViewportSize(64, 64);
-	const auto previous = PoseTriangles(rig, JitterProjection(camera.Projection, TemporalJitter(0), { 64, 64 }) * camera.View);
+	auto pose = [&](uint32_t frame) {
+		PosedTriangles triangles;
+		for (auto entity : rigs)
+			triangles.merge(PoseTriangles(entity, JitterProjection(camera.Projection, TemporalJitter(frame), { 64, 64 }) * camera.View));
+		return triangles;
+	};
+	const auto previous = pose(0);
 	Render(renderer, scene, camera);
-	REQUIRE(animation.Seek(rig, .65f));
-	REQUIRE(animation.SetMorphWeight(rig, "Smile", .9f, 0));
-	rig.GetTransform().Translation.x = .1f;
-	const auto current = PoseTriangles(rig, JitterProjection(camera.Projection, TemporalJitter(1), { 64, 64 }) * camera.View);
+	for (size_t i = 0; i < rigs.size(); i++)
+	{
+		REQUIRE(animation.Seek(rigs[i], i == 0 ? .65f : .25f));
+		REQUIRE(animation.SetMorphWeight(rigs[i], "Smile", i == 0 ? .9f : .1f, 0));
+		rigs[i].GetTransform().Translation.x += i == 0 ? .1f : -.08f;
+	}
+	const auto current = pose(1);
 	Render(renderer, scene, camera);
 	REQUIRE(renderer.GetStatistics().TAAHistoryValid);
+	std::map<std::pair<uint64_t, uint32_t>, size_t> skinnedCoverage;
+	for (auto entity : rigs)
+		ForEachAnimatedMesh(entity, [&](const Ref<MeshSource>& source, const MeshNode& node, const glm::mat4&,
+										const std::vector<glm::mat4>& palette, std::span<const float>) {
+			if (!palette.empty())
+				skinnedCoverage[{ static_cast<uint64_t>(entity.GetUUID()), static_cast<uint32_t>(&node - source->Nodes.data()) }] = 0;
+		});
 	const auto motion = ReadMotion(graphics->GetDevice(), renderer);
 	size_t checked = 0;
 	for (uint32_t y = 0; y < 64; y++)
@@ -237,6 +282,8 @@ TEST_CASE("TAA previous clip coordinates match CPU skinning and morphing for eve
 			const glm::vec2 pixel((static_cast<float>(x) + .5f) / 32 - 1, 1 - (static_cast<float>(y) + .5f) / 32);
 			float nearest = 1;
 			glm::vec4 expected(0);
+			PosedTriangleKey expectedKey{};
+			bool reliable = false;
 			for (const auto& [key, triangles] : current)
 				for (size_t i = 0; i < triangles.size(); i++)
 				{
@@ -252,25 +299,39 @@ TEST_CASE("TAA previous clip coordinates match CPU skinning and morphing for eve
 					barycentric.x = ((b.y - c.y) * (pixel.x - c.x) + (c.x - b.x) * (pixel.y - c.y)) / determinant;
 					barycentric.y = ((c.y - a.y) * (pixel.x - c.x) + (a.x - c.x) * (pixel.y - c.y)) / determinant;
 					barycentric.z = 1 - barycentric.x - barycentric.y;
-					// Ignore rasterization-edge conventions and overlapping triangle edges.
-					if (glm::any(glm::lessThan(barycentric, glm::vec3(.02f))))
+					// Choose the visible surface before excluding rasterization-sensitive edge pixels.
+					// Otherwise an excluded foreground edge can expose a different, deeper triangle to the oracle.
+					if (glm::any(glm::lessThan(barycentric, glm::vec3(0))))
 						continue;
 					const float depth = glm::dot(barycentric, glm::vec3(ndc[0].z, ndc[1].z, ndc[2].z));
 					if (depth >= nearest)
 						continue;
 					nearest = depth;
+					reliable = glm::all(glm::greaterThanEqual(barycentric, glm::vec3(.02f)));
 					glm::vec4 clip(0);
 					for (int v = 0; v < 3; v++)
 						clip += barycentric[v] / triangle.Position[v].w * previous.at(key)[i].Position[v];
 					expected = glm::vec4(clip.x / clip.w * .5f + .5f, .5f - clip.y / clip.w * .5f, clip.z / clip.w, 1);
+					expectedKey = key;
 				}
-			if (expected.w == 0 || motion[y * 64 + x].w == 0)
+			if (expected.w == 0 || !reliable)
 				continue;
+			INFO("pixel=" << x << "," << y << ", entity=" << std::get<0>(expectedKey) << ", node=" << std::get<1>(expectedKey));
+			REQUIRE(motion[y * 64 + x].w > .5f);
 			checked++;
+			const auto coverage = skinnedCoverage.find({ std::get<0>(expectedKey), std::get<1>(expectedKey) });
+			if (coverage != skinnedCoverage.end())
+				coverage->second++;
 			for (int c = 0; c < 3; c++)
 				CHECK(motion[y * 64 + x][c] == doctest::Approx(expected[c]).epsilon(.0002));
 		}
 	CHECK(checked > 200);
+	CHECK(skinnedCoverage.size() == (sharedSkin || twoEntities ? 2u : 1u));
+	for (const auto& [key, count] : skinnedCoverage)
+	{
+		INFO("entity=" << key.first << ", skinned node=" << key.second << ", checked pixels=" << count);
+		CHECK(count > 50);
+	}
 	scene.OnSimulationStop();
 	CHECK(graphics->GetValidationErrorCount() == 0);
 	AssetManager::Clear();
@@ -328,7 +389,8 @@ TEST_CASE("TAA resolve blends history, clips color, rejects depth and clamps to 
 	SUBCASE("Sky reprojects with camera rotation")
 	{
 		sky = true;
-		skyReprojection = glm::rotate(glm::mat4(1), .1f, glm::vec3(0, 0, 1));
+		gradient = true;
+		skyReprojection = glm::rotate(glm::mat4(1), glm::half_pi<float>(), glm::vec3(0, 0, 1));
 	}
 	SUBCASE("Sky rejects geometry history")
 	{
@@ -340,8 +402,8 @@ TEST_CASE("TAA resolve blends history, clips color, rejects depth and clamps to 
 			for (uint32_t x = 0; x < 4; x++)
 				for (size_t c = 0; c < 3; c++)
 					colors[(y * 8 + x) * 4 + c] = glm::packHalf1x16(.1f * x + .05f * y);
-	if (sky && !skyDisocclusion)
-		std::fill(depths.begin(), depths.end(), 1.0f);
+	if (sky)
+		std::fill(depths.begin(), depths.end(), skyDisocclusion ? .99999f : 1.0f);
 	auto resolve = [&](bool valid) {
 		commands->open();
 		commands->writeTexture(color, 0, 0, colors.data(), 8 * 8);
@@ -375,7 +437,9 @@ TEST_CASE("TAA resolve blends history, clips color, rejects depth and clamps to 
 		std::fill(motions.begin(), motions.end(), glm::vec4(0));
 		const glm::vec4 previous = skyReprojection * glm::vec4(.25f, -.25f, 1, 1);
 		const glm::vec2 shift = (glm::vec2(previous) * glm::vec2(.5f, -.5f) + .5f - glm::vec2(.625f)) * 4.0f;
-		expected = skyDisocclusion ? .2f : .2f + .6f * (.9f - .4f * glm::length(shift) / 16);
+		const glm::vec2 previousPixel = (glm::vec2(previous) * glm::vec2(.5f, -.5f) + .5f) * 4.0f - .5f;
+		const float historyColor = .1f * previousPixel.x + .05f * previousPixel.y;
+		expected = skyDisocclusion ? .2f : .2f + (historyColor - .2f) * (.9f - .4f * glm::length(shift) / 16);
 	}
 	SUBCASE("Accepted history") {}
 	SUBCASE("Disocclusion")
@@ -563,6 +627,63 @@ TEST_CASE("TAA supplies spatial AA on reset and takes precedence over FXAA with 
 		Render(reference, scene);
 		CHECK(pixels(temporal) == pixels(reference));
 		CHECK(temporal.GetStatistics().TAAHistoryValid == (frame > 0));
+	}
+	CHECK(graphics->GetValidationErrorCount() == 0);
+}
+
+TEST_CASE("TAA debug lines stay fixed across the complete jitter sequence")
+{
+	auto graphics = CreateTestGraphics();
+	Scene scene;
+	Populate(scene);
+	SceneRenderer renderer(graphics->GetDevice());
+	REQUIRE(renderer.Initialize());
+	renderer.SetViewportSize(32, 32);
+	DebugDraw::Clear();
+	std::vector<uint8_t> first;
+	for (uint32_t frame = 0; frame < TemporalJitterPeriod; frame++)
+	{
+		DebugDraw::Line({ -.7f, -.3f, .5f }, { .7f, .5f, .5f }, { 1, 0, 0, 1 });
+		Render(renderer, scene);
+		std::vector<uint8_t> pixels;
+		uint32_t width = 0, height = 0;
+		REQUIRE(renderer.ReadOutputPixels(pixels, width, height));
+		if (frame == 0)
+			first = pixels;
+		else
+			CHECK(pixels == first);
+	}
+	CHECK(std::count(first.begin(), first.end(), uint8_t(255)) > 32 * 32);
+	CHECK(graphics->GetValidationErrorCount() == 0);
+}
+
+TEST_CASE("Temporal camera identity changes preserve the local shadow budget")
+{
+	auto graphics = CreateTestGraphics();
+	Scene scene;
+	Populate(scene);
+	scene.CreateEntity("Cube").AddComponent<MeshComponent>().Mesh = "builtin://Cube";
+	auto point = scene.CreateEntity("Point");
+	point.AddComponent<PointLightComponent>().CastShadows = true;
+	point.GetTransform().Translation = { 2, 3, 2 };
+	RenderCamera camera;
+	camera.Position = { 3, 3, 5 };
+	camera.View = glm::lookAt(camera.Position, glm::vec3(0), glm::vec3(0, 1, 0));
+	camera.Projection = glm::perspective(glm::radians(60.0f), 1.0f, .1f, 100.0f);
+	camera.Far = 100;
+	SceneRenderer renderer(graphics->GetDevice());
+	REQUIRE(renderer.Initialize());
+	renderer.SetViewportSize(32, 32);
+	for (uint64_t identity : { uint64_t(0), uint64_t(1), UINT64_MAX })
+	{
+		camera.Identity = identity;
+		Render(renderer, scene, camera);
+		CHECK_FALSE(renderer.GetStatistics().TAAHistoryValid);
+		CHECK(renderer.GetStatistics().LocalShadowMaps == 6);
+		CHECK(renderer.GetStatistics().LocalShadowsSkipped == 0);
+		CHECK(renderer.GetStatistics().ShadowDrawCalls > 0);
+		Render(renderer, scene, camera);
+		CHECK(renderer.GetStatistics().TAAHistoryValid);
 	}
 	CHECK(graphics->GetValidationErrorCount() == 0);
 }

@@ -23,7 +23,7 @@ namespace Basalt {
 		nvrhi::IFramebuffer* GetFXAAInput() const { return m_FxaaInput; }
 		void RenderFXAA(nvrhi::ICommandList* commands, nvrhi::IFramebuffer* output, glm::uvec2 size, bool finalOutput);
 		void Reset() { *this = PostProcessStack{}; }
-		// Failed allocations stay failed until all effects are disabled and re-enabled, or targets change.
+		// Failed allocations stay failed until post-processing (including TAA fallback) is disabled/re-enabled, or targets change.
 		void Retry()
 		{
 			if (m_Failed)

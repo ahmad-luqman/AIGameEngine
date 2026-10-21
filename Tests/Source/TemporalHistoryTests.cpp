@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cmath>
+#include <limits>
 
 using namespace Basalt;
 
@@ -45,7 +46,7 @@ TEST_CASE("Temporal history advances only on commit and resets at each view boun
 	CHECK_FALSE(history.IsValid());
 	CHECK(history.GetFrame() == 0);
 	const auto previous = JitterProjection(projection, TemporalJitter(0), size) * view;
-	history.Commit(previous);
+	history.Commit();
 	begin();
 	CHECK(history.IsValid());
 	CHECK(history.GetFrame() == 1);
@@ -87,7 +88,7 @@ TEST_CASE("Temporal history advances only on commit and resets at each view boun
 	begin();
 	CHECK_FALSE(history.IsValid());
 	CHECK(history.GetFrame() == 0);
-	history.Commit(projection * view);
+	history.Commit();
 	begin();
 	CHECK(history.IsValid());
 }
@@ -97,11 +98,11 @@ TEST_CASE("Temporal history keeps ordinary camera motion")
 	TemporalHistory history;
 	glm::mat4 view(1);
 	history.Begin(true, 1, 2, { 64, 64 }, view, glm::mat4(1));
-	history.Commit(view);
+	history.Commit();
 	view[3][0] = .2f;
 	history.Begin(true, 1, 2, { 64, 64 }, view, glm::mat4(1));
 	CHECK(history.IsValid());
-	CHECK(history.GetPreviousViewProjection() == glm::mat4(1));
+	CHECK(history.GetPreviousViewProjection() == JitterProjection(glm::mat4(1), TemporalJitter(0), { 64, 64 }));
 }
 
 TEST_CASE("Sky reprojection preserves perspective and orthographic history through translation and rotation")
@@ -113,7 +114,7 @@ TEST_CASE("Sky reprojection preserves perspective and orthographic history throu
 		const glm::mat4 previousView = glm::lookAt(glm::vec3(2, 1, 3), glm::vec3(2, 1, 2), glm::vec3(0, 1, 0));
 		const glm::mat4 previousProjection = JitterProjection(projection, TemporalJitter(0), size);
 		history.Begin(true, 1, 2, size, previousView, projection);
-		history.Commit(previousProjection * previousView);
+		history.Commit();
 		for (float angle : { 0.0f, .2f })
 		{
 			const glm::vec3 position(3, 2, 4);
@@ -128,11 +129,63 @@ TEST_CASE("Sky reprojection preserves perspective and orthographic history throu
 				const glm::vec4 viewPoint = glm::inverse(currentProjection) * currentClip;
 				const glm::vec3 worldPoint = glm::inverse(glm::mat3(view)) * (glm::vec3(viewPoint) / viewPoint.w);
 				const glm::vec4 expected = previousProjection * glm::vec4(glm::mat3(previousView) * worldPoint, 1);
-				const glm::vec4 actual = history.GetSkyReprojection(currentProjection) * currentClip;
+				const glm::vec4 actual = history.GetSkyReprojection() * currentClip;
 				REQUIRE(actual.w > 0);
 				CHECK(actual.x / actual.w == doctest::Approx(expected.x / expected.w).epsilon(.0001));
 				CHECK(actual.y / actual.w == doctest::Approx(expected.y / expected.w).epsilon(.0001));
 			}
 		}
+	}
+}
+
+TEST_CASE("Temporal camera identity and invalid views reset recoverable history")
+{
+	TemporalHistory history;
+	auto begin = [&](const glm::mat4& view, uint64_t identity = 1) { history.Begin(true, 1, 2, { 64, 64 }, view, glm::mat4(1), identity); };
+	begin(glm::mat4(1));
+	history.Commit();
+	SUBCASE("Nearby camera switch")
+	{
+		begin(glm::mat4(1), 2);
+		CHECK_FALSE(history.IsValid());
+	}
+	SUBCASE("Nonfinite view")
+	{
+		glm::mat4 invalid(1);
+		invalid[0][0] = std::numeric_limits<float>::quiet_NaN();
+		begin(invalid);
+		CHECK_FALSE(history.IsValid());
+		history.Commit();
+		begin(glm::mat4(1));
+		CHECK_FALSE(history.IsValid());
+	}
+	SUBCASE("Singular view")
+	{
+		begin(glm::mat4(0));
+		CHECK_FALSE(history.IsValid());
+		history.Commit();
+		begin(glm::mat4(1));
+		CHECK_FALSE(history.IsValid());
+	}
+}
+
+TEST_CASE("Temporal color-grid correction cancels raster jitter in both UV axes")
+{
+	TemporalHistory history;
+	const glm::uvec2 size(96, 64);
+	const glm::vec4 point(.2f, -.3f, .5f, 1);
+	auto uv = [](glm::vec4 clip) { return glm::vec2(clip) / clip.w * glm::vec2(.5f, -.5f) + .5f; };
+	history.Begin(true, 1, 2, size, glm::mat4(1), glm::mat4(1));
+	auto previous = uv(history.GetJitteredProjection() * point);
+	history.Commit();
+	for (uint32_t frame = 1; frame <= TemporalJitterPeriod * 2; frame++)
+	{
+		history.Begin(true, 1, 2, size, glm::mat4(1), glm::mat4(1));
+		auto current = uv(history.GetJitteredProjection() * point);
+		auto corrected = previous + history.GetJitterDelta();
+		CHECK(corrected.x == doctest::Approx(current.x));
+		CHECK(corrected.y == doctest::Approx(current.y));
+		previous = current;
+		history.Commit();
 	}
 }

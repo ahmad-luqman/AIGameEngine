@@ -1075,3 +1075,23 @@ TEST_SUITE("DrawBatching")
 		}
 	}
 }
+
+TEST_CASE("Primary render cameras carry identity across nearby camera switches")
+{
+	Scene scene;
+	auto first = scene.CreateEntity("First camera");
+	first.AddComponent<CameraComponent>();
+	auto second = scene.CreateEntity("Second camera");
+	second.AddComponent<CameraComponent>().Primary = false;
+	second.GetTransform().Translation.x = .1f;
+	const auto before = GetPrimaryRenderCamera(scene, 64, 64);
+	REQUIRE(before);
+	CHECK(before->Identity == static_cast<uint64_t>(first.GetUUID()));
+	first.GetComponent<CameraComponent>().Primary = false;
+	second.GetComponent<CameraComponent>().Primary = true;
+	const auto after = GetPrimaryRenderCamera(scene, 64, 64);
+	REQUIRE(after);
+	CHECK(after->Identity == static_cast<uint64_t>(second.GetUUID()));
+	CHECK(before->Identity != after->Identity);
+	CHECK(before->Projection == after->Projection);
+}
