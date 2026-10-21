@@ -9,8 +9,9 @@ namespace Basalt {
 			if (weights[target] != 0.0f && std::isfinite(weights[target]))
 				outTargets.push_back(target);
 		std::stable_sort(outTargets.begin(), outTargets.end(), [&](uint32_t a, uint32_t b) { return std::abs(weights[a]) > std::abs(weights[b]); });
-		const size_t dropped = outTargets.size() > maxActive ? outTargets.size() - maxActive : 0;
-		outTargets.resize(outTargets.size() - dropped);
+		const size_t kept = std::min(outTargets.size(), maxActive);
+		const size_t dropped = outTargets.size() - kept;
+		outTargets.resize(kept);
 		return dropped;
 	}
 
