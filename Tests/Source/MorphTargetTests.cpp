@@ -16,18 +16,19 @@
 using namespace Basalt;
 using namespace BasaltTest;
 using AnimationTest::ClearAssetCache;
+using AnimationTest::Clip;
+using AnimationTest::MutableClip;
 using AnimationTest::Node;
 
 namespace {
 	std::filesystem::path MorphPath()
 	{
-		return std::filesystem::path(BASALT_TEST_DATA_DIR) / "Animation/Morph.gltf";
+		return AnimationTest::FixturePath("Morph.gltf");
 	}
 
 	nlohmann::json MorphJson()
 	{
-		std::ifstream stream(MorphPath());
-		return nlohmann::json::parse(stream);
+		return AnimationTest::ReadJson(MorphPath());
 	}
 
 	// The importer reorders vertices: find one of a submesh by its bind position.
@@ -43,13 +44,6 @@ namespace {
 	const MorphDelta& Delta(const MeshSource& source, const Submesh& submesh, uint32_t target, uint32_t vertex)
 	{
 		return source.MorphDeltas[submesh.MorphDeltaOffset + target * submesh.VertexCount + vertex];
-	}
-
-	const AnimationClip& Clip(const MeshSource& source, const char* name)
-	{
-		const auto clip = std::ranges::find(source.Animations, name, &AnimationClip::Name);
-		REQUIRE_MESSAGE(clip != source.Animations.end(), name);
-		return *clip;
 	}
 
 	float Slot(const MeshSource& source, const AnimationLocalPose& pose, const std::string& node, uint32_t target)
@@ -99,9 +93,9 @@ TEST_SUITE("MorphTargets")
 			data["meshes"][0]["extras"]["targetNames"] = { "Same", "Same" };
 			data["meshes"][1]["extras"].erase("targetNames");
 			TempDirectory directory("MorphNames");
-			const auto path = directory.GetPath() / "Names.gltf";
-			REQUIRE(FileSystem::WriteTextFile(path, data.dump()));
-			const auto renamed = AnimationTest::LoadModel(path);
+			const auto since = Log::GetHistory().GetTotalCount();
+			const auto renamed = AnimationTest::LoadModified(data, directory.GetPath(), "Names.gltf");
+			CHECK(CountLogMessages(since, "morph target 1 is named 'Same' like an earlier one; it is 'Same_1'") == 1);
 			CHECK(renamed->Meshes[0].MorphTargets == std::vector<std::string>{ "Same", "Same_1" });
 			CHECK(renamed->Meshes[1].MorphTargets == std::vector<std::string>{ "Target0" });
 		}
@@ -425,7 +419,7 @@ TEST_SUITE("MorphTargets")
 		TempDirectory directory("MorphDroppedChannel");
 		const auto since = Log::GetHistory().GetTotalCount();
 		const auto source = AnimationTest::LoadModified(data, directory.GetPath(), "Dropped.gltf");
-		CHECK(CountLogMessages(since, "skipping the morph weights of node 'Teeth', whose morph targets were dropped") == 1);
+		CHECK(CountLogMessages(since, "skipping the morph weights of node 'Teeth', which has no morph targets (dropped or none)") == 1);
 		CHECK(std::ranges::none_of(Clip(*source, "Talk").Tracks, [&](const AnimationTrack& track) { return track.Node == Node(*source, "Teeth"); }));
 	}
 
@@ -620,7 +614,7 @@ TEST_SUITE("MorphTargets")
 		animator.Clip = "Talk";
 		const auto source = AssetManager::GetMesh(animator.Mesh);
 		REQUIRE(source);
-		auto& talk = *std::ranges::find(source->Animations, std::string("Talk"), &AnimationClip::Name);
+		auto& talk = MutableClip(*source, "Talk");
 		const auto face = static_cast<size_t>(source->Nodes[Node(*source, "Face")].MorphWeightOffset);
 		SUBCASE("non-finite pose")
 		{
@@ -639,7 +633,7 @@ TEST_SUITE("MorphTargets")
 			scene.OnRuntimeStart();
 			scene.GetAnimationSystem()->Update(0.5f);
 			CHECK((*scene.GetAnimationSystem()->GetMorphWeights(entity))[face] == 0.0f);
-			CHECK(CountLogMessages(since, "non-finite morph weights; showing them as 0") == 1);
+			CHECK(CountLogMessages(since, "non-finite morph weights (first 'Smile' of node 'Face') from clip 'Talk'; showing them as 0") == 1);
 		}
 		scene.OnRuntimeStop();
 	}
@@ -675,5 +669,94 @@ TEST_SUITE("MorphTargets")
 		CHECK(targets == std::vector<uint32_t>{ 2, 4, 0 });
 		CHECK(SelectMorphWeights({}, 3, targets) == 0);
 		CHECK(targets.empty());
+	}
+
+	TEST_CASE("Script weights waiting for their target can be changed and cleared by name")
+	{
+		ClearAssetCache cacheGuard;
+		Scene scene;
+		auto entity = scene.CreateEntity("Face");
+		auto& animator = entity.AddComponent<AnimatorComponent>();
+		animator.Mesh = MorphPath().string();
+		animator.Clip = "Nod"; // Leaves the weights at the node's defaults (Smile 0.5).
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		REQUIRE(system.SetMorphWeight(entity, "Smile", 0.9f, 0));
+		animator.Mesh = AnimationTest::FixturePath("TwoJoint.gltf").string();
+		animator.Clip.clear();
+		system.Update(0);
+		// The waiting weight can change, and clears by name although the model lacks the target.
+		CHECK(system.SetMorphWeight(entity, "Smile", 0.4f, 0));
+		CHECK(system.ClearMorphWeight(entity, "Smile"));
+		CHECK_FALSE(system.ClearMorphWeight(entity, "Smile"));
+		animator.Mesh = MorphPath().string();
+		animator.Clip = "Nod";
+		system.Update(0);
+		const auto source = AssetManager::GetMesh(animator.Mesh);
+		CHECK((*system.GetMorphWeights(entity))[static_cast<size_t>(source->Nodes[Node(*source, "Face")].MorphWeightOffset)] == 0.5f);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Script weights survive a model that briefly fails to load")
+	{
+		ClearAssetCache cacheGuard;
+		TempDirectory directory("MorphBrokenReload");
+		const auto data = MorphJson();
+		const auto path = directory.GetPath() / "Face.gltf";
+		REQUIRE(FileSystem::WriteTextFile(path, data.dump()));
+		Scene scene;
+		auto entity = scene.CreateEntity("Face");
+		entity.AddComponent<AnimatorComponent>().Mesh = path.string();
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		REQUIRE(system.SetMorphWeight(entity, "Blink", 0.8f, 0));
+		// A half-written file: the playback goes away with the model.
+		REQUIRE(FileSystem::WriteTextFile(path, "{ \"asset\": "));
+		AssetManager::Reload(path.string());
+		system.Update(0);
+		CHECK(system.GetMorphWeights(entity) == nullptr);
+		REQUIRE(FileSystem::WriteTextFile(path, data.dump()));
+		AssetManager::Reload(path.string());
+		system.Update(0);
+		const auto source = AssetManager::GetMesh(path.string());
+		REQUIRE(source);
+		CHECK((*system.GetMorphWeights(entity))[static_cast<size_t>(source->Nodes[Node(*source, "Face")].MorphWeightOffset) + 1] == doctest::Approx(0.8f));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Import warns about clips emptied by dropped targets and node weights static geometry cannot show")
+	{
+		SUBCASE("a clip whose only channel moved dropped targets")
+		{
+			auto data = MorphJson();
+			auto& targets = data["meshes"][1]["primitives"][0]["targets"];
+			while (targets.size() <= MaxMorphTargets)
+				targets.push_back(targets[0]);
+			data["meshes"][1]["extras"].erase("targetNames");
+			// A clip with only Teeth's weights, sized for the 257 targets cgltf sees.
+			std::vector<float> values(2 * targets.size(), 0.5f);
+			data["buffers"].push_back({ { "byteLength", values.size() * 4 }, { "uri", "data:application/octet-stream;base64," + Base64(values.data(), values.size() * 4) } });
+			data["bufferViews"].push_back({ { "buffer", data["buffers"].size() - 1 }, { "byteLength", values.size() * 4 } });
+			data["accessors"].push_back({ { "bufferView", data["bufferViews"].size() - 1 }, { "componentType", 5126 }, { "count", values.size() }, { "type", "SCALAR" } });
+			data["animations"] = { { { "name", "Chatter" }, { "samplers", { { { "input", data["animations"][0]["samplers"][1]["input"] }, { "output", data["accessors"].size() - 1 } } } }, { "channels", { { { "sampler", 0 }, { "target", { { "node", 3 }, { "path", "weights" } } } } } } } };
+			TempDirectory directory("MorphEmptiedClip");
+			const auto since = Log::GetHistory().GetTotalCount();
+			const auto source = AnimationTest::LoadModified(data, directory.GetPath(), "Emptied.gltf");
+			CHECK(CountLogMessages(since, "clip 'Chatter' has no tracks left after skipping its morph weights, so it is dropped") == 1);
+			CHECK(source->Animations.empty());
+		}
+		SUBCASE("node weights on a model with unsupported influence sets")
+		{
+			auto data = MorphJson();
+			auto& attributes = data["meshes"][0]["primitives"][0]["attributes"];
+			attributes["JOINTS_1"] = attributes["JOINTS_0"];
+			attributes["WEIGHTS_1"] = attributes["WEIGHTS_0"];
+			TempDirectory directory("MorphUnsupported");
+			const auto since = Log::GetHistory().GetTotalCount();
+			const auto source = AnimationTest::LoadModified(data, directory.GetPath(), "Unsupported.gltf");
+			CHECK(source->AnimationUnsupported);
+			CHECK(CountLogMessages(since, "node 'Face' has its own morph weights, which the static geometry cannot show") == 1);
+			CHECK(CountLogMessages(since, "node 'Teeth' has its own morph weights") == 0);
+		}
 	}
 }

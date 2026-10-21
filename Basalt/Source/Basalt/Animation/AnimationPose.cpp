@@ -86,10 +86,17 @@ namespace Basalt {
 			}
 			const float duration = track.Times[right] - track.Times[left];
 			const float t = (time - track.Times[left]) / duration;
+			if (!cubic)
+			{
+				for (size_t i = 0; i < width; i++)
+					out[i] = a[i] + (b[i] - a[i]) * t;
+				return;
+			}
 			const float t2 = t * t, t3 = t2 * t;
+			const float* outTangent = value(left, 2);
+			const float* inTangent = value(right, 0);
 			for (size_t i = 0; i < width; i++)
-				out[i] = cubic ? (2 * t3 - 3 * t2 + 1) * a[i] + (t3 - 2 * t2 + t) * duration * value(left, 2)[i] + (-2 * t3 + 3 * t2) * b[i] + (t3 - t2) * duration * value(right, 0)[i]
-							   : a[i] + (b[i] - a[i]) * t;
+				out[i] = (2 * t3 - 3 * t2 + 1) * a[i] + (t3 - 2 * t2 + t) * duration * outTangent[i] + (-2 * t3 + 3 * t2) * b[i] + (t3 - t2) * duration * inTangent[i];
 		}
 	}
 
@@ -237,6 +244,8 @@ namespace Basalt {
 				node.Scale = glm::mix(node.Scale, source.Scale, amount);
 		}
 		BS_CORE_ASSERT(mask.MorphWeights.empty() || (mask.MorphWeights.size() == target.MorphWeights.size() && layer.MorphWeights.size() == target.MorphWeights.size()));
+		// A mask built without MorphMaskWeights would silently drop the clip's weights.
+		BS_CORE_ASSERT(!mask.MorphWeights.empty() || target.MorphWeights.empty() || std::ranges::none_of(mask.Channels, [](uint8_t channels) { return (channels & AnimatedChannel::Weights) != 0; }), "derive the mask's MorphWeights with MorphMaskWeights");
 		for (size_t i = 0; i < mask.MorphWeights.size(); i++)
 			if (const float amount = weight * mask.MorphWeights[i]; amount > 0.0f)
 				target.MorphWeights[i] += (layer.MorphWeights[i] - target.MorphWeights[i]) * amount;
@@ -272,6 +281,7 @@ namespace Basalt {
 			}
 		}
 		BS_CORE_ASSERT(mask.MorphWeights.empty() || (mask.MorphWeights.size() == target.MorphWeights.size() && layer.MorphWeights.size() == target.MorphWeights.size() && reference.MorphWeights.size() == target.MorphWeights.size()));
+		BS_CORE_ASSERT(!mask.MorphWeights.empty() || target.MorphWeights.empty() || std::ranges::none_of(mask.Channels, [](uint8_t channels) { return (channels & AnimatedChannel::Weights) != 0; }), "derive the mask's MorphWeights with MorphMaskWeights");
 		for (size_t i = 0; i < mask.MorphWeights.size(); i++)
 			if (const float amount = weight * mask.MorphWeights[i]; amount > 0.0f)
 				target.MorphWeights[i] += amount * (layer.MorphWeights[i] - reference.MorphWeights[i]);
@@ -315,7 +325,7 @@ namespace Basalt {
 		return ComposeAnimationPose(source, SampleAnimation(source, clip, time), globals);
 	}
 
-	std::vector<glm::mat4> BuildSkinPalette(const MeshSkin& skin, const std::vector<glm::mat4>& globals)
+	std::vector<glm::mat4> BuildSkinPalette(const MeshSkin& skin, std::span<const glm::mat4> globals)
 	{
 		std::vector<glm::mat4> result;
 		result.reserve(skin.Joints.size());

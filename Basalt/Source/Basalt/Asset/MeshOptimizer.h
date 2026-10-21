@@ -8,10 +8,10 @@ namespace Basalt {
 	// Blended primitives retain triangle order; skinned and morphed primitives receive no reduced LODs.
 	namespace MeshOptimizer {
 		// Rejects empty, malformed or non-finite geometry, or a morph delta buffer of the wrong size, without changing any
-		// buffer. Morph deltas (morphTargets *
-		// vertices.size(), target-major) follow their vertices through the reorder and the removal of unused vertices.
+		// buffer. Morph deltas (morphTargets * vertices.size(), target-major) follow their vertices through the reorder
+		// and the removal of unused vertices.
 		bool Optimize(std::vector<Vertex>& vertices, std::vector<uint32_t>& indices, bool reorderTriangles, std::vector<MorphDelta>* morphDeltas = nullptr, uint32_t morphTargets = 0);
-		// Appends reduced ranges for an unpublished static, non-blended submesh, once.
+		// Appends reduced ranges for an unpublished unskinned, unmorphed, non-blended submesh, once.
 		void GenerateLODs(MeshSource& source, uint32_t submeshIndex);
 		// 0 means full detail; N selects LODs[N-1]. Non-finite inputs or lodDistance <= 0 disable it.
 		// Thresholds double for each stored level, capped at LODs.size().

@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <set>
 #include <map>
 #include <optional>
 #include <span>
@@ -128,8 +129,8 @@ namespace Basalt {
 		struct PoseView
 		{
 			Ref<MeshSource> Source;
-			const std::vector<glm::mat4>* Globals = nullptr;
-			const std::vector<float>* MorphWeights = nullptr;
+			std::span<const glm::mat4> Globals;
+			std::span<const float> MorphWeights;
 		};
 		std::optional<PoseView> GetPoseView(Entity entity);
 		// Clip sets kept for the Animators (diagnostics and tests): one per model and clip library combination in use.
@@ -464,6 +465,8 @@ namespace Basalt {
 		static void Finish(Playback& playback);
 		// "'Model.glb'" or "'Model.glb' or its N clip libraries", for clip-not-found messages.
 		static std::string DescribeClipSources(const Playback& playback);
+		// Erases a playback, keeping its script morph weights for the next one.
+		void DropPlayback(UUID id);
 		// The pose weight slots of a morph target, logging an unknown target for `operation`.
 		std::vector<uint32_t> FindMorphTarget(Entity entity, const Playback& playback, const std::string& target, const char* operation);
 		// The Animator's clip set for `model`, built (and its problems logged) when the model, ClipLibraries or their
@@ -574,6 +577,10 @@ namespace Basalt {
 		std::unordered_map<entt::entity, bool> m_EmptyMeshes;
 		// Built clip sets, found again by model and loaded libraries (see ResolveClips); dropped once no playback uses them.
 		std::vector<Ref<const AnimationClipSet>> m_ClipSets;
+		// Script morph weights of playbacks dropped while their model cannot load, restored when it can again.
+		std::unordered_map<UUID, std::vector<MorphOverride>> m_DetachedMorphOverrides;
+		// Script morph weights waiting for a model with their target, warned once each.
+		std::set<std::pair<UUID, std::string>> m_WaitingMorphOverrides;
 		// Clip library sources by key, resolved once per update.
 		std::unordered_map<std::string, Ref<MeshSource>> m_LibrarySources;
 		std::vector<AnimationEventRecord> m_PendingEvents;

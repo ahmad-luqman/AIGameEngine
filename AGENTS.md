@@ -69,14 +69,15 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   that `Finish` applies after the IK one.
 - **Morph targets and retargeting.** Morph deltas are imported per submesh (`MeshSource::MorphDeltas`, following vertex
   reordering) and drawn in the vertex shader from a per-model delta texture (set 2, vertex stage) with each draw's
-  nonzero weights packed into draw records alongside the palettes. Weights live in the pose (`AnimationLocalPose::
-  MorphWeights`, per node at `MeshNode::MorphWeightOffset`), so clips, fades, blends and layers mix them; script weights
-  are a per-playback overlay matched by target name. `Animator.ClipLibraries` clips are baked onto the model's nodes
-  (`Animation/Retargeting`: model-space rest-relative rotations, root displacement scaled by the leg-length ratio) into an
-  immutable `AnimationClipSet` (`Load`, `Plan` and `Build`, shared with the inspector warnings and `animator.retarget`)
-  that the `AnimationSystem` caches by model and loaded libraries, resolving library sources once per update; every
-  playback clip index refers to that set, never to `MeshSource::Animations` directly. List elements declare asset fields
-  as `List[].Field` (`ForEachAssetValue`), which persistence, moves, validation and thumbnails share.
+  nonzero weights packed into draw records alongside the palettes. Weights live in the pose
+  (`AnimationLocalPose::MorphWeights`, per node at `MeshNode::MorphWeightOffset`), so clips, fades, blends and layers mix
+  them; script weights are a per-playback overlay matched by target name, kept by the system while a model cannot load.
+  `Animator.ClipLibraries` clips are baked onto the model's nodes (`Animation/Retargeting`: model-space rest-relative
+  rotations, root displacement scaled by the leg-length ratio) into an immutable `AnimationClipSet` (`Load` and `Plan` are
+  shared with the inspector warnings and `animator.retarget`; `Build` bakes) that the `AnimationSystem` caches by model
+  and loaded libraries, resolving library sources once per update; every playback clip index refers to that set, never
+  to `MeshSource::Animations` directly. List elements declare asset fields as `List[].Field` (`ForEachAssetValue`), which
+  persistence, moves, validation and thumbnails share.
 - **Game UI geometry.** `UILayout` is shared by drawing, hit testing, `ui.layout` and viewport handles.
   Rects remain in untransformed canvas units; affine transforms compose through descendants. Clips intersect
   as canvas-aligned scissors (rotated clipping parents use their transformed bounds). Scroll views clip

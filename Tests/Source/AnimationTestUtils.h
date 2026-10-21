@@ -92,6 +92,13 @@ namespace AnimationTest {
 		return *clip;
 	}
 
+	inline Basalt::AnimationClip& MutableClip(Basalt::MeshSource& source, const char* name)
+	{
+		const auto clip = std::ranges::find(source.Animations, name, &Basalt::AnimationClip::Name);
+		REQUIRE_MESSAGE(clip != source.Animations.end(), name);
+		return *clip;
+	}
+
 	// A node's model-space rotation in composed globals.
 	inline glm::quat GlobalRotation(const std::vector<glm::mat4>& globals, uint32_t node)
 	{

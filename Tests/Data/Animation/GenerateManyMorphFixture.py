@@ -32,7 +32,7 @@ quads = [(y * columns + x, y * columns + x + 1, (y + 1) * columns + x + 1, (y + 
 indices = accessor([i for a, b, c, d in quads for i in (a, b, c, a, c, d)], 1, 'H')
 deltas = []
 for t in range(targets):
-    vertex = 4 + t  # Skip the bottom-left corner so every target moves an interior or edge vertex.
+    vertex = 4 + t  # Each target moves its own vertex (4..43), so every target's effect is distinct.
     values = [c for v in range(len(grid)) for c in ((0, 0, 0.15) if v == vertex else (0, 0, 0))]
     deltas.append(accessor(values, 3, min=[0, 0, 0], max=[0, 0, 0.15]))
 primitive = dict(attributes=dict(POSITION=positions, NORMAL=normals), indices=indices, material=0, targets=[dict(POSITION=d) for d in deltas])

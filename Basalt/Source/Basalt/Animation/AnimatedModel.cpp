@@ -27,15 +27,14 @@ namespace Basalt {
 		if (!source || source->AnimationUnsupported)
 			return;
 		std::vector<glm::mat4> rest;
-		const auto* globals = view ? view->Globals : nullptr;
-		const auto* morphWeights = view ? view->MorphWeights : nullptr;
-		if (!globals)
+		std::span<const glm::mat4> globals = view ? view->Globals : std::span<const glm::mat4>();
+		if (!view)
 		{
 			const bool valid = EvaluateAnimation(*source, nullptr, 0, rest);
 			BS_CORE_ASSERT(valid, "Imported rest pose must be finite");
 			if (!valid)
 				return;
-			globals = &rest;
+			globals = rest;
 		}
 		const glm::mat4 root = scene.GetWorldTransform(entity);
 		std::vector<std::vector<glm::mat4>> palettes(source->Skins.size());
@@ -45,15 +44,15 @@ namespace Basalt {
 			if (!node.Active || node.MeshIndex < 0)
 				continue;
 			std::span<const float> weights = node.MorphWeights;
-			if (morphWeights && node.MorphWeightOffset >= 0)
-				weights = std::span<const float>(*morphWeights).subspan(node.MorphWeightOffset, node.MorphWeights.size());
+			if (view && node.MorphWeightOffset >= 0)
+				weights = view->MorphWeights.subspan(node.MorphWeightOffset, node.MorphWeights.size());
 			if (node.SkinIndex < 0)
-				visit(source, node, root * (*globals)[i], {}, weights);
+				visit(source, node, root * globals[i], {}, weights);
 			else
 			{
 				auto& palette = palettes[node.SkinIndex];
 				if (palette.empty())
-					palette = BuildSkinPalette(source->Skins[node.SkinIndex], *globals);
+					palette = BuildSkinPalette(source->Skins[node.SkinIndex], globals);
 				BS_CORE_ASSERT(!palette.empty(), "Validated animation pose must have a finite skin palette");
 				if (!palette.empty())
 					visit(source, node, root, palette, weights);
@@ -118,7 +117,7 @@ namespace Basalt {
 				for (const std::string& name : library.Shadowed)
 					warnings.push_back(fmt::format("Animator clip library '{}': clip '{}' is hidden by an earlier clip of that name", key, name));
 				for (const std::string& name : library.Clips)
-					clips.push_back(&*std::ranges::find(library.Source->Animations, name, &AnimationClip::Name));
+					clips.push_back(&library.SourceClip(name));
 			}
 			if (animator.RootMotion && (animator.RootJoint.empty() || FindNode(*source, animator.RootJoint) < 0))
 				warnings.emplace_back("Animator RootJoint must name a model node for root motion");
@@ -141,7 +140,7 @@ namespace Basalt {
 			}
 			const bool namesSpace = std::ranges::find(animator.BlendSpaces, animator.Clip, &AnimationBlendSpace::Name) != animator.BlendSpaces.end();
 			if (!animator.Clip.empty() && !findClip(animator.Clip) && !namesSpace)
-				warnings.push_back(fmt::format("Animator clip '{}' not found in '{}'", animator.Clip, animator.Mesh));
+				warnings.push_back(fmt::format("Animator clip '{}' not found in '{}'{}", animator.Clip, animator.Mesh, libraries.empty() ? std::string() : fmt::format(" or its {} clip librar{}", libraries.size(), libraries.size() == 1 ? "y" : "ies")));
 			if (clips.empty() && (!animator.Events.empty() || !animator.BlendSpaces.empty()))
 				warnings.push_back(fmt::format("Animator model '{}' has no animation clips, so its events and blend spaces never play", animator.Mesh));
 			float longest = 0;

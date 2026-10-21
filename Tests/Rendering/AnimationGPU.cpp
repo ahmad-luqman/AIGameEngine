@@ -8,6 +8,7 @@
 #include <Basalt/Asset/AssetManager.h>
 #include <Basalt/Asset/ImageUtils.h>
 #include <Basalt/Core/FileSystem.h>
+#include <Basalt/Core/Log.h>
 #include <Basalt/Renderer/RenderMath.h>
 #include <Basalt/Renderer/SceneRenderer.h>
 #include <Basalt/Scene/Entity.h>
@@ -448,6 +449,52 @@ TEST_CASE("GPU morph weights past one draw record and past the per-draw limit ma
 	}
 	gpuScene.OnSimulationStop();
 	cpuScene.OnSimulationStop();
+	graphics->GetDevice()->waitForIdle();
+	CHECK(graphics->GetValidationErrorCount() == 0);
+	AssetManager::Clear();
+}
+
+TEST_CASE("Morph truncation warns once per mesh node, also when nodes share a mesh")
+{
+	ClearAssetCache cacheGuard;
+	auto graphics = CreateTestGraphics();
+	const auto fixture = std::filesystem::path(BASALT_ANIMATION_DATA_DIR) / "ManyMorphs.gltf";
+	const auto source = AssetManager::GetMesh(fixture.string());
+	REQUIRE(source);
+	// A second node on Crowded's mesh, within the limit: the two must not reset each other's episode.
+	MeshNode twin = source->Nodes[1];
+	twin.Name = "CrowdedTwin";
+	std::ranges::fill(twin.MorphWeights, 0.0f);
+	twin.MorphWeights[0] = 0.5f;
+	source->Nodes.push_back(twin);
+	std::string error;
+	REQUIRE_MESSAGE(source->FinalizeHierarchy(&error), error);
+	Scene scene;
+	Populate(scene);
+	scene.CreateEntity("Morphed").AddComponent<AnimatorComponent>().Mesh = fixture.string();
+	scene.OnSimulationStart();
+	SceneRenderer renderer(graphics->GetDevice());
+	REQUIRE(renderer.Initialize());
+	renderer.SetViewportSize(160, 120);
+	RenderCamera camera;
+	camera.Position = { 0, 0.5f, 4 };
+	camera.View = glm::lookAt(camera.Position, glm::vec3(0, 0.5f, 0), glm::vec3(0, 1, 0));
+	camera.Projection = glm::perspective(glm::radians(45.0f), 160.0f / 120.0f, .1f, 30.0f);
+	camera.Near = .1f;
+	camera.Far = 30;
+	const auto since = Log::GetHistory().GetTotalCount();
+	for (int frame = 0; frame < 3; frame++)
+	{
+		renderer.Render(scene, camera, 0.0f);
+		REQUIRE_FALSE(renderer.GetStatistics().Failed);
+		CHECK(renderer.GetStatistics().MorphWeightsDropped == 4);
+	}
+	uint64_t next = 0;
+	size_t warnings = 0;
+	for (const LogMessage& message : Log::GetHistory().GetMessagesSince(since, next))
+		warnings += message.Text.find("node 'Crowded' of 'Morphed' has 36 active morph targets") != std::string::npos ? 1 : 0;
+	CHECK(warnings == 1);
+	scene.OnSimulationStop();
 	graphics->GetDevice()->waitForIdle();
 	CHECK(graphics->GetValidationErrorCount() == 0);
 	AssetManager::Clear();

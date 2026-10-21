@@ -172,6 +172,7 @@ namespace Basalt {
 					for (size_t suffix = 1; !clipNames.insert(clip.Name).second; suffix++)
 						clip.Name = baseName + "_" + std::to_string(suffix);
 					std::set<std::pair<uint32_t, AnimationPath>> targets;
+					bool skippedWeights = false;
 					for (size_t c = 0; c < input.channels_count; c++)
 					{
 						const auto& channel = input.channels[c];
@@ -201,11 +202,12 @@ namespace Basalt {
 							case cgltf_animation_path_type_weights:
 								track.Path = AnimationPath::Weights;
 								track.Width = static_cast<uint32_t>(m_Source.Nodes[track.Node].MorphWeights.size());
-								// cgltf_validate requires the node's mesh to have the channel's targets, so only meshes whose
-								// targets the importer dropped (past its limits) get here.
+								// cgltf_validate sizes the channel by the mesh's targets, so a node without weights here normally
+								// lost its targets to the importer's limits; an empty channel on a target-less mesh lands here too.
 								if (track.Width == 0)
 								{
-									BS_CORE_WARN("MeshImporter: {}: clip '{}' channel {}: skipping the morph weights of node '{}', whose morph targets were dropped", m_Source.Key, clip.Name, c, m_Source.Nodes[track.Node].Name);
+									BS_CORE_WARN("MeshImporter: {}: clip '{}' channel {}: skipping the morph weights of node '{}', which has no morph targets (dropped or none)", m_Source.Key, clip.Name, c, m_Source.Nodes[track.Node].Name);
+									skippedWeights = true;
 									continue;
 								}
 								break;
@@ -277,6 +279,8 @@ namespace Basalt {
 					}
 					if (!clip.Tracks.empty())
 						m_Source.Animations.push_back(std::move(clip));
+					else if (skippedWeights)
+						BS_CORE_WARN("MeshImporter: {}: clip '{}' has no tracks left after skipping its morph weights, so it is dropped", m_Source.Key, clip.Name);
 				}
 				return true;
 			}

@@ -1147,7 +1147,7 @@ namespace Basalt {
 				};
 			});
 
-			Add(registry, "animator.retarget", "How an Animator's named ClipLibraries map onto its model, resolved as playback resolves them (without baking): per library its index in ClipLibraries, why it adds no clips (error), the joint pairs (target, source, matched by joint map, name or humanoid bone), the model's humanoid bones left unmatched, the root pair with its leg-length scale, the clips it adds, the clips earlier clips hide, and warnings. Read-only; works in edit mode.", Schema::Object({ { "entity", Schema::Entity("ID or name of an entity with an Animator") } }, { "entity" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "animator.retarget", "How an Animator's named ClipLibraries map onto its model, resolved as playback resolves them but without baking (a listed clip can still be left out when it fails to bake or passes the 256 MiB per-Animator budget; the log reports it): per library its index in ClipLibraries, why it adds no clips (error), the joint pairs (target, source, matched by joint map, name or humanoid bone), the model's humanoid bones left unmatched, the root pair with its leg-length scale, the clips it adds, the clips earlier clips hide, and warnings. Read-only; works in edit mode.", Schema::Object({ { "entity", Schema::Entity("ID or name of an entity with an Animator") } }, { "entity" }), [](AutomationSession& session, const json& params) {
 				Entity entity = RequireEntity(session, params);
 				const auto* animator = entity.TryGetComponent<AnimatorComponent>();
 				if (!animator)
@@ -1168,7 +1168,7 @@ namespace Basalt {
 						else if (!Retargeting::HumanoidBone(model->Nodes[node].Name).empty())
 							unmatched.push_back(model->Nodes[node].Name);
 					}
-					const bool rooted = library.Source && library.Map.TargetRoot >= 0;
+					const bool rooted = library.Map.TargetRoot >= 0;
 					libraries.push_back({
 						{ "index", library.Index },
 						{ "mesh", library.Entry.Mesh },

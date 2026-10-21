@@ -214,8 +214,8 @@ layout; the opaque shadow pipelines leave set 1 empty (nvrhi fills the hole). A 
 `(target, weight)` pairs packed 16 to a record into the draw SSBO alongside the palettes, ahead of the draw records,
 uploaded once per visible mesh node like a palette; `DrawData.Morph` holds the first record, the pair count, the delta
 base (minus 2 x the submesh's base vertex in texels, which `gl_VertexIndex` adds back) and the texels per target, so
-instanced draws of one mesh still batch with different weights. A draw blends its 32 strongest weights, warning once per
-mesh and entity each time more become active; `render.stats.morphWeights` counts the uploaded pairs and
+instanced draws of one mesh still batch with different weights. A draw blends its 32 strongest weights, warning once
+per entity and mesh node until a frame is back within the limit; `render.stats.morphWeights` counts the uploaded pairs and
 `morphWeightsDropped` the rest. Tangents are re-orthogonalized against the morphed normal. Culling widens each submesh's
 bounds (or, for skinned meshes, each joint influence box) by the weighted per-target delta ranges cached at import, so
 morphed geometry never pops; editor framing, selection boxes and vertex snapping morph vertices exactly (a MeshComponent
