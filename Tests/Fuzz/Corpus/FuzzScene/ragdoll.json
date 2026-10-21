@@ -1,0 +1,1 @@
+{"Format":"BasaltScene","Version":1,"Entities":[{"ID":1,"Name":"Rig","Components":{"Animator":{"Mesh":"fixture.gltf"},"Ragdoll":{"Enabled":true,"RootJoint":"Hips","Bones":[{"Joint":"Head","Radius":0.1,"Length":0.3,"SwingAngle":35,"TwistMin":-20,"TwistMax":20}]}}}]}

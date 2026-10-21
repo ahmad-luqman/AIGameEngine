@@ -152,7 +152,7 @@ local function TestEntities(self)
 
 	-- Every component type round-trips through Lua.
 	for _, name in ipairs({ "Camera", "Mesh", "Animator", "PropertyAnimation", "Material", "DirectionalLight", "PointLight", "SpotLight", "SkyLight", "PostProcess", "RigidBody",
-		"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "AudioSource", "AudioListener", "AudioReverbZone", "ParticleEmitter", "UIRect", "UIImage", "UIText", "UIButton", "UISlider", "UICheckbox", "UITextInput", "UIDropdown", "UIScrollView", "UIPanel", "UINavigation", "UIFocusRing", "Prefab", "BoneAttachment", "InverseKinematics", "SpringBone" }) do
+		"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "AudioSource", "AudioListener", "AudioReverbZone", "ParticleEmitter", "UIRect", "UIImage", "UIText", "UIButton", "UISlider", "UICheckbox", "UITextInput", "UIDropdown", "UIScrollView", "UIPanel", "UINavigation", "UIFocusRing", "Prefab", "BoneAttachment", "InverseKinematics", "SpringBone", "Ragdoll" }) do
 		local holder = Scene.CreateEntity("Holder" .. name)
 		Expect("AddComponent " .. name, function() holder:AddComponent(name) end)
 		local data = holder:GetComponent(name)
@@ -264,6 +264,14 @@ local function TestEntities(self)
 	ExpectError("ResetSpringBones without component", function() rig:ResetSpringBones() end, "needs the SpringBone component")
 	ExpectError("Spring chain validation", function() springRig:SetComponent("SpringBone", { Chains = { { Name = "A", Stiffness = -1 } } }) end, "Stiffness -1 must be between 0 and 10000")
 	Check("SpringBone lists", springRig:GetComponent("SpringBone").Chains[1].Joint == "RightUpperArm" and springRig:GetComponent("SpringBone").Colliders[1].Joint == "Chest")
+
+	-- Passive skeleton physics and get-up recovery.
+	local ragdoll = Scene.FindEntityByName("RagdollRig")
+	Check("IsRagdollActive initially", not ragdoll:IsRagdollActive())
+	Check("ActivateRagdoll", ragdoll:ActivateRagdoll(Vec3(1, 0, 0)) and ragdoll:IsRagdollActive())
+	Check("ActivateRagdoll repeated", ragdoll:ActivateRagdoll())
+	Check("RecoverRagdoll", ragdoll:RecoverRagdoll("Bend", 0.1) and not ragdoll:IsRagdollActive())
+	Check("Ragdoll lists", ragdoll:GetComponent("Ragdoll").Bones[1].SwingAngle == 35)
 
 	-- Morph targets and retargeted clip libraries.
 	local face = Scene.FindEntityByName("MorphFace")

@@ -138,6 +138,8 @@ namespace Basalt {
 		// Restarts every spring chain of the entity on its animated pose, at rest, at the next spring solve (after a
 		// teleport too short for the automatic detection, or a cutscene cut). False without a SpringBone component.
 		bool ResetSpringBones(Entity entity);
+		// Physics invalidated a rig (component removal/rebuild/reload); discard its cached overlay immediately.
+		void ClearRagdollPose(Entity entity);
 		// The events crossed since the last call, per Animator in update order: each clip's in the order playback
 		// crossed them, the current clip's before the outgoing one's (for a two-clip blend, the second clip's first).
 		std::vector<AnimationEventRecord> TakeEvents();
@@ -316,6 +318,8 @@ namespace Basalt {
 			// The last spring bone solution's local transforms of the nodes it turned, applied after IKOverlay the same
 			// way. Spring bones solve from Pose with IKOverlay, never from this.
 			std::vector<OverlayEntry> SpringOverlay;
+			// Physical pose, applied last so callbacks that resample animation keep the ragdoll.
+			std::vector<OverlayEntry> RagdollOverlay;
 			// The overlays did not compose on a finite pose and were dropped; warned once until an overlay composes again.
 			bool OverlayDropped = false;
 			// 0 evaluates next update; otherwise the number of updates since the last evaluation.
@@ -483,6 +487,7 @@ namespace Basalt {
 		LayerState* FindLayer(Entity entity, Playback& playback, const std::string& layer, const char* operation);
 		// Moves BoneAttachment entities to their joints once the rigs are placed (part of LateUpdate).
 		void UpdateAttachments();
+		void ApplyRagdolls();
 		void SolveIK(float seconds);
 		void SolveEntityIK(Entity entity, Playback& playback, const InverseKinematicsComponent& component, IKState& state, float seconds);
 		IKState& SyncIK(Entity entity, const InverseKinematicsComponent& component);

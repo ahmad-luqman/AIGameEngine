@@ -9,6 +9,7 @@
 #include "Basalt/Math/Math.h"
 #include "Basalt/Particles/ParticleEmitterRules.h"
 #include "Basalt/Physics/PhysicsLayers.h"
+#include "Basalt/Physics/Ragdoll.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/LocalShadows.h"
 #include "Basalt/Scene/Entity.h"
@@ -369,6 +370,8 @@ namespace Basalt {
 		json Write(const AnimationMaskJoint& c);
 		json Write(const AnimationLayer& c);
 		json Write(const IKChain& c);
+		void Fields(FieldReader& r, RagdollBone& c);
+		json Write(const RagdollBone& c);
 		void Fields(FieldReader& r, SpringChain& c);
 		void Fields(FieldReader& r, SpringCollider& c);
 		json Write(const SpringChain& c);
@@ -711,6 +714,27 @@ namespace Basalt {
 			r.ListField("Chains", c.Chains, SpringBoneComponent::MaxChains);
 			r.ListField("Colliders", c.Colliders, SpringBoneComponent::MaxColliders);
 			r.Field("Wind", c.Wind);
+		}
+
+		void Fields(FieldReader& r, RagdollBone& c)
+		{
+			r.Field("Joint", c.Joint);
+			r.Field("Radius", c.Radius);
+			r.Field("Length", c.Length);
+			r.Field("Mass", c.Mass);
+			r.Field("SwingAngle", c.SwingAngle);
+			r.Field("TwistMin", c.TwistMin);
+			r.Field("TwistMax", c.TwistMax);
+		}
+		void Fields(FieldReader& r, RagdollComponent& c)
+		{
+			r.Field("Enabled", c.Enabled);
+			r.Field("RootJoint", c.RootJoint);
+			r.Field("Mass", c.Mass);
+			r.Field("RadiusRatio", c.RadiusRatio);
+			r.Field("Layer", c.Layer);
+			r.Field("RecoveryTime", c.RecoveryTime);
+			r.ListField("Bones", c.Bones, RagdollComponent::MaxBones);
 		}
 
 		void Fields(FieldReader& r, MaterialComponent& c)
@@ -1308,6 +1332,15 @@ namespace Basalt {
 		json Write(const BoneAttachmentComponent& c)
 		{
 			return { { "Target", static_cast<uint64_t>(c.Target) }, { "Joint", c.Joint }, { "Translation", ToJson(c.Translation) }, { "Rotation", RotationToJson(c.Rotation) }, { "Scale", ToJson(c.Scale) } };
+		}
+
+		json Write(const RagdollBone& c)
+		{
+			return { { "Joint", c.Joint }, { "Radius", c.Radius }, { "Length", c.Length }, { "Mass", c.Mass }, { "SwingAngle", c.SwingAngle }, { "TwistMin", c.TwistMin }, { "TwistMax", c.TwistMax } };
+		}
+		json Write(const RagdollComponent& c)
+		{
+			return { { "Enabled", c.Enabled }, { "RootJoint", c.RootJoint }, { "Mass", c.Mass }, { "RadiusRatio", c.RadiusRatio }, { "Layer", c.Layer }, { "RecoveryTime", c.RecoveryTime }, { "Bones", ListToJson(c.Bones) } };
 		}
 
 		json Write(const MaterialComponent& c)
@@ -2037,6 +2070,11 @@ namespace Basalt {
 			return ValidateUIFocusRing(c);
 		}
 
+		std::string Validate(const RagdollComponent& c)
+		{
+			return ValidateRagdoll(c);
+		}
+
 		template<typename T>
 		ComponentInfo MakeInfo(const char* name, bool isCore = false, bool supportsPropertyAnimation = true)
 		{
@@ -2158,6 +2196,7 @@ namespace Basalt {
 			infos.push_back(MakeInfo<BoneAttachmentComponent>("BoneAttachment"));
 			infos.push_back(MakeInfo<InverseKinematicsComponent>("InverseKinematics"));
 			infos.push_back(MakeInfo<SpringBoneComponent>("SpringBone"));
+			infos.push_back(MakeInfo<RagdollComponent>("Ragdoll", false, false));
 			infos.push_back(MakeInfo<MaterialComponent>("Material"));
 			infos.push_back(MakeInfo<DirectionalLightComponent>("DirectionalLight"));
 			infos.push_back(MakeInfo<PointLightComponent>("PointLight"));

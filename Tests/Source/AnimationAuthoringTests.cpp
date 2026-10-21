@@ -377,7 +377,7 @@ TEST_SUITE("Animation authoring")
 	}
 	TEST_CASE("The exact physics configuration set stays excluded from property animation")
 	{
-		for (const char* name : { "RigidBody", "BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "PropertyAnimation" })
+		for (const char* name : { "RigidBody", "BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "Ragdoll", "PropertyAnimation" })
 		{
 			const auto* info = ComponentRegistry::Find(name);
 			REQUIRE(info);

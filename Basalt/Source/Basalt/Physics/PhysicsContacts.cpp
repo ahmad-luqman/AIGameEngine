@@ -19,8 +19,9 @@ namespace Basalt {
 	// suspended contacts until both bodies wake and Jolt can confirm whether they still touch.
 	struct PhysicsWorld::Impl::ContactState
 	{
-		// Lower entity UUID, its sub-shape, higher entity UUID, its sub-shape.
-		using ContactKey = std::tuple<uint64_t, uint32_t, uint64_t, uint32_t>;
+		// Lower entity UUID, its body/sub-shape token, higher entity UUID, its token.
+		// A ragdoll has several bodies for one entity: sub-shape IDs alone would alias its limbs.
+		using ContactKey = std::tuple<uint64_t, uint64_t, uint64_t, uint64_t>;
 		std::set<ContactKey> ActiveContacts;
 		// Number of active sub-shape keys for each entity pair.
 		std::map<EntityPair, int> PairCounts;
@@ -111,29 +112,33 @@ namespace Basalt {
 	std::optional<ContactInfo> PhysicsWorld::Impl::SeparationContact(UUID first, UUID second, float fixedStep) const
 	{
 		const JPH::BodyInterface& bodies = System->GetBodyInterface();
-		// A character's inner body is teleported, so it reports no velocity: use the character's own.
-		auto bodyOf = [&](UUID uuid) -> std::pair<JPH::BodyID, JPH::Vec3> {
+		// Characters expose their gameplay velocity; ragdolls expose every part so separation data comes
+		// from the closest pair of limbs, rather than an arbitrary root body.
+		using MovingBody = std::pair<JPH::BodyID, JPH::Vec3>;
+		auto bodiesOf = [&](UUID uuid) -> std::vector<MovingBody> {
 			if (auto* body = FindBody(uuid); body != nullptr)
-				return { body->ID, bodies.GetLinearVelocity(body->ID) };
+				return { { body->ID, bodies.GetLinearVelocity(body->ID) } };
 			if (auto character = Characters.find(uuid); character != Characters.end())
-				return { character->second.Character->GetInnerBodyID(), ToJolt(character->second.ActualVelocity) };
-			return { JPH::BodyID(), JPH::Vec3::sZero() };
+				return { { character->second.Character->GetInnerBodyID(), ToJolt(character->second.ActualVelocity) } };
+			std::vector<MovingBody> parts;
+			if (auto ragdoll = Ragdolls.find(uuid); ragdoll != Ragdolls.end() && ragdoll->second.Doll)
+				for (auto id : ragdoll->second.Doll->GetBodyIDs())
+					parts.emplace_back(id, bodies.GetLinearVelocity(id));
+			return parts;
 		};
-		const auto [bodyA, velocityA] = bodyOf(first);
-		const auto [bodyB, velocityB] = bodyOf(second);
-		if (bodyA.IsInvalid() || bodyB.IsInvalid())
-			return std::nullopt;
-
-		const JPH::TransformedShape shapeA = bodies.GetTransformedShape(bodyA);
-		const JPH::TransformedShape shapeB = bodies.GetTransformedShape(bodyB);
-		// They parted during the last step: at most one step of relative motion apart, plus Jolt's 0.02 m
-		// speculative contact distance. Twice that, plus a margin for rotation, finds them.
-		const float relativeSpeed = (velocityA - velocityB).Length();
-		JPH::CollideShapeSettings settings;
-		settings.mMaxSeparationDistance = 0.25f + 2.0f * relativeSpeed * fixedStep;
-		// The least separated pair of parts.
+		const auto firstBodies = bodiesOf(first);
+		const auto secondBodies = bodiesOf(second);
 		JPH::ClosestHitCollisionCollector<JPH::CollideShapeCollector> collector;
-		shapeB.CollideShape(shapeA.mShape, shapeA.GetShapeScale(), shapeA.GetCenterOfMassTransform(), settings, JPH::RVec3::sZero(), collector);
+		for (const auto& [bodyA, velocityA] : firstBodies)
+			for (const auto& [bodyB, velocityB] : secondBodies)
+			{
+				const JPH::TransformedShape shapeA = bodies.GetTransformedShape(bodyA);
+				const JPH::TransformedShape shapeB = bodies.GetTransformedShape(bodyB);
+				// Twice a step's relative move plus a margin for rotation/speculative contacts.
+				JPH::CollideShapeSettings settings;
+				settings.mMaxSeparationDistance = 0.25f + 2.0f * (velocityA - velocityB).Length() * fixedStep;
+				shapeB.CollideShape(shapeA.mShape, shapeA.GetShapeScale(), shapeA.GetCenterOfMassTransform(), settings, JPH::RVec3::sZero(), collector);
+			}
 		if (!collector.HadHit())
 			return std::nullopt;
 		// Shape 1 is A's: the penetration axis points from A toward B, and the normal from B toward A. Shapes
@@ -164,6 +169,11 @@ namespace Basalt {
 			// active through an Added event, so begin and enter events always have one.
 			std::optional<ContactInfo> Begin;
 		};
+		const auto& bodies = System->GetBodyInterface();
+		auto sleeping = [&](uint64_t token) {
+			const JPH::BodyID id(static_cast<uint32_t>(token >> 32));
+			return BodyToEntity.contains(id.GetIndexAndSequenceNumber()) && bodies.GetMotionType(id) == JPH::EMotionType::Dynamic && !bodies.IsActive(id);
+		};
 		std::map<Impl::EntityPair, PairChange> touched;
 		for (const RawContactEvent& event : events)
 		{
@@ -174,8 +184,10 @@ namespace Basalt {
 
 			uint64_t a = static_cast<uint64_t>(first->second);
 			uint64_t b = static_cast<uint64_t>(second->second);
-			uint32_t subA = event.SubShape1;
-			uint32_t subB = event.SubShape2;
+			if (a == b)
+				continue;
+			uint64_t subA = (static_cast<uint64_t>(event.Body1) << 32) | event.SubShape1;
+			uint64_t subB = (static_cast<uint64_t>(event.Body2) << 32) | event.SubShape2;
 			// The event's normal points from body 1 toward body 2; ContactInfo's from the second entity
 			// toward the first.
 			ContactInfo contact = event.Contact.Flipped();
@@ -189,7 +201,7 @@ namespace Basalt {
 			const Impl::EntityPair pair(a, b);
 
 			// A body that falls asleep reports its contacts as removed; it is still touching, so keep them.
-			if (!event.Added && (IsSleeping(FindBody(first->second)) || IsSleeping(FindBody(second->second))))
+			if (!event.Added && (sleeping(subA) || sleeping(subB)))
 			{
 				if (Contacts->ActiveContacts.contains(key))
 					Contacts->SuspendedContacts.insert(key);
@@ -212,7 +224,7 @@ namespace Basalt {
 		// Suspended contacts whose bodies are awake again and were not re-reported this step have ended.
 		for (auto key = Contacts->SuspendedContacts.begin(); key != Contacts->SuspendedContacts.end();)
 		{
-			if (IsSleeping(FindBody(std::get<0>(*key))) || IsSleeping(FindBody(std::get<2>(*key))))
+			if (sleeping(std::get<1>(*key)) || sleeping(std::get<3>(*key)))
 			{
 				++key;
 				continue;

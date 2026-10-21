@@ -67,11 +67,9 @@ below extend character movement, in order of impact.
   upper-body graph); foot locking during stance phases so planted feet do not slide.
 - **Spring bone follow-ups — S.** Collide chains with physics bodies (a cape against walls, hair on the ground),
   colliders per chain instead of per component, angle limits for stiff appendages, and an edit-mode preview.
-- **Ragdolls — M.** Build a Jolt `Ragdoll` from the skeleton (a capsule per bone with swing-twist limits,
-  generated from the joint hierarchy with editable sizes and limits), switch an Animator to it on death or
-  a big hit, and blend back to animation with a get-up clip. Follow-up: powered (active) ragdolls that
-  track the animated pose with motors (`Ragdoll::DriveToPoseUsingMotors`) for stumbles and hit reactions.
-  Add a ragdoll to the determinism batch.
+- **Powered ragdolls — M.** Passive skeleton-derived ragdolls, per-joint sizes/limits, scripted activation and
+  get-up recovery are implemented (`Ragdoll`, `ActivateRagdoll`, `RecoverRagdoll`). Follow-up: active ragdolls
+  that track the animated pose with motors (`Ragdoll::DriveToPoseUsingMotors`) for stumbles and hit reactions.
 - **Retargeting follow-ups — S.** Rest-pose matching for libraries authored in a different rest style (an A-pose clip
   on a T-pose character) through a reference pose, and a reusable joint map asset shared by Animators.
 - **Property animation follow-ups — S.** Stepped boolean/integer/string/enum tracks and nested registry
