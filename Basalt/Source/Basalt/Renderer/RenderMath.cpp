@@ -15,6 +15,16 @@ namespace Basalt {
 		return dropped;
 	}
 
+	std::vector<float> DrawnMorphWeights(std::span<const float> weights)
+	{
+		std::vector<uint32_t> targets;
+		SelectMorphWeights(weights, MaxActiveMorphWeights, targets);
+		std::vector<float> drawn(weights.size(), 0.0f);
+		for (uint32_t target : targets)
+			drawn[target] = weights[target];
+		return drawn;
+	}
+
 	Frustum::Frustum(const glm::mat4& m)
 	{
 		const glm::mat4 t = glm::transpose(m);

@@ -29,7 +29,9 @@ namespace Basalt::MeshOptimizer {
 		std::vector<uint32_t> remap(vertices.size());
 		const size_t count = meshopt_optimizeVertexFetchRemap(remap.data(), indices.data(), indices.size(), vertices.size());
 		meshopt_remapIndexBuffer(indices.data(), indices.data(), indices.size(), remap.data());
-		meshopt_remapVertexBuffer(vertices.data(), vertices.data(), vertices.size(), sizeof(Vertex), remap.data());
+		// Into a separate buffer: meshoptimizer's API does not promise in-place vertex remaps (index remaps are per element).
+		std::vector<Vertex> remapped(count);
+		meshopt_remapVertexBuffer(remapped.data(), vertices.data(), vertices.size(), sizeof(Vertex), remap.data());
 		if (morphTargets > 0)
 		{
 			std::vector<MorphDelta> reordered(static_cast<size_t>(morphTargets) * count);
@@ -37,7 +39,7 @@ namespace Basalt::MeshOptimizer {
 				meshopt_remapVertexBuffer(reordered.data() + target * count, morphDeltas->data() + target * vertices.size(), vertices.size(), sizeof(MorphDelta), remap.data());
 			*morphDeltas = std::move(reordered);
 		}
-		vertices.resize(count);
+		vertices = std::move(remapped);
 		return true;
 	}
 

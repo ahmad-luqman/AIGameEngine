@@ -27,6 +27,12 @@ namespace Basalt {
 	// among equals, at most `maxActive` of them. Returns how many active weights were dropped. Upload order is the
 	// shader's summation order, so it must not depend on anything but the weights.
 	size_t SelectMorphWeights(std::span<const float> weights, size_t maxActive, std::vector<uint32_t>& outTargets);
+	// Morph targets one draw blends at most, bounding the vertex shader's per-vertex loop; the weakest (by |weight|) are
+	// dropped.
+	inline constexpr size_t MaxActiveMorphWeights = 32;
+	// The weights a draw shows: the ones SelectMorphWeights keeps under MaxActiveMorphWeights, every other one 0. CPU
+	// morphing that must match the image (vertex snapping) uses these.
+	std::vector<float> DrawnMorphWeights(std::span<const float> weights);
 
 	// Avoid a degenerate look-at basis for nearly vertical light directions.
 	inline glm::vec3 ShadowUpVector(const glm::vec3& direction)

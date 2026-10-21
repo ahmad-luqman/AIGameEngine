@@ -2,6 +2,7 @@
 
 #include "Basalt/Animation/AnimatedModel.h"
 #include "Basalt/Asset/AssetManager.h"
+#include "Basalt/Renderer/RenderMath.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
 
@@ -19,9 +20,10 @@ namespace Basalt {
 		auto visit = [&](const Ref<MeshSource>& source, uint32_t meshIndex, const glm::mat4& model, const std::vector<glm::mat4>& palette, std::span<const float> morphWeights) {
 			if (!source || meshIndex >= source->Meshes.size())
 				return;
-			// Static meshes show their mesh's default weights.
+			// Static meshes show their mesh's default weights; snap points follow the weights the renderer draws.
 			if (morphWeights.empty())
 				morphWeights = source->Meshes[meshIndex].MorphWeights;
+			const std::vector<float> drawnWeights = DrawnMorphWeights(morphWeights);
 			for (uint32_t submeshIndex : source->Meshes[meshIndex].Submeshes)
 			{
 				const Submesh& submesh = source->Submeshes[submeshIndex];
@@ -33,7 +35,7 @@ namespace Basalt {
 					if (index >= submesh.VertexCount || used[index])
 						continue;
 					used[index] = true;
-					const Vertex vertex = MorphVertex(*source, submesh, index, morphWeights);
+					const Vertex vertex = MorphVertex(*source, submesh, index, drawnWeights);
 					glm::vec4 local(vertex.Position, 1);
 					if (!palette.empty())
 					{
