@@ -1782,13 +1782,14 @@ character:RecoverRagdoll("GetUp", 0.5)
 - `ActivateRagdoll([impulse]) -> boolean` constructs immediately, inherits the entity's rigid-body/controller
   linear velocity and rigid-body angular velocity (including each part's tangential motion), and applies a total world-space impulse in N*s, divided equally among the parts. Repeated activation
   adds the impulse to the existing parts. Missing/unloadable rigs, invalid settings and non-finite impulses return
-  false with a diagnostic; the original controller/body is retained on construction failure. Missing components
-  and a wrongly typed Lua impulse raise an error. Finite impulses that would overflow physics are also rejected.
+  false with a diagnostic; the original controller/body is retained on construction failure. A missing Ragdoll component
+  and a wrongly typed Lua impulse raise an error (a missing Animator returns false). Finite impulses that would overflow physics are also rejected.
 - `IsRagdollActive() -> boolean` stays true even when the bodies sleep. It is false during recovery.
 - `RecoverRagdoll(clip, seconds) -> boolean` removes the bodies and blends the frozen physical pose back to animation
   over 0..60 seconds. Empty `clip` keeps the current playback. A missing clip, invalid duration or inactive ragdoll
   returns false; a rejected request leaves the ragdoll active. The entity moves horizontally with its fallen root;
-  gameplay sets its height when the ground level changes. Zero seconds returns to animation on the next pose update.
+  gameplay sets its height when the ground level changes. Zero seconds returns to animation immediately.
+  A missing Ragdoll component raises an error. Activation and recovery require Play/Simulate.
 
 `RootJoint` selects a skin joint and its skin descendants; empty uses every skin joint. The selection must have a
 single free root and at most 128 bodies (a selected subtree is not anchored to its animated parent). Non-skin spacer nodes are retained in the visual hierarchy; their nearest skin
@@ -1809,8 +1810,9 @@ remaps it by joint name. Incompatible/unloadable recovery models end the blend w
 component/Animator or destroying the entity removes its bodies immediately. Settings written directly from C++
 receive the same checks as JSON. Warnings for failed automatic activation are deduplicated. Structural failures
 wait for a component edit or
-model reload; asset-availability, pose and capacity failures can retry. Invalid physical output disables the rig
-without writing it to the entity.
+model reload (including unknown layers); asset-availability, animated-pose, generated-size, stabilization and capacity
+failures can retry. Unsupported live world transforms or physical poses that cannot be expressed by the animated
+hierarchy disable the rig with a diagnostic, as does invalid physical output.
 
 Active physics replaces the entity's controller/body until recovery; the authored components remain. Animation clocks
 and events continue, while root motion, IK and springs yield to the physical pose during simulation and recovery.
@@ -1824,4 +1826,5 @@ returns at the aligned entity transform on the next physics update. `AddImpulse`
 continue to address ordinary bodies; use repeated `ActivateRagdoll(impulse)` to impulse a live ragdoll. Contact-end
 callbacks can cancel an activation by recovering, removing the rig or destroying the actor; that activation returns
 false without overriding the callback's final state. Stopping Play/Simulate tears down contacts without gameplay
-exit events, consistently with ordinary bodies.
+exit events, consistently with ordinary bodies. Component removal cleans up bodies immediately and queues its
+contact-exit callbacks for the next physics dispatch, after component destruction has finished.

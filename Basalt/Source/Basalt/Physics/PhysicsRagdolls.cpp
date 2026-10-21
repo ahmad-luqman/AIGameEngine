@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <set>
 
 namespace Basalt {
@@ -126,7 +127,13 @@ namespace Basalt {
 			settings->mSkeleton->AddJoint(source.Nodes[node].Name, parentIndex);
 			glm::vec3 restPosition, restScale;
 			glm::quat restRotation;
-			if (!UniformTransform(world * rest[node], restPosition, restRotation, restScale) || !UniformTransform(world * view->Globals[node], position, rotation, scale) || std::abs(scale.x - restScale.x) > 1e-4f * restScale.x)
+			if (!UniformTransform(rest[node], restPosition, restRotation, restScale))
+			{
+				error = "joint '" + source.Nodes[node].Name + "' requires positive uniform rest scale without shear";
+				return false;
+			}
+			if (!UniformTransform(world * rest[node], restPosition, restRotation, restScale) ||
+				!UniformTransform(world * view->Globals[node], position, rotation, scale) || std::abs(scale.x - restScale.x) > 1e-4f * restScale.x)
 			{
 				cacheFailure = false;
 				error = "joint '" + source.Nodes[node].Name + "' requires constant positive uniform scale without shear";
@@ -219,7 +226,6 @@ namespace Basalt {
 			return false;
 		}
 		record.World = world;
-		record.Source = view->Source;
 		record.Settings = component;
 		record.Doll->SetPose(JPH::RVec3::sZero(), initial.data());
 		return true;
@@ -322,7 +328,7 @@ namespace Basalt {
 		record.Doll->SetPose(JPH::RVec3::sZero(), matrices.data());
 	}
 
-	void PhysicsWorld::Impl::StopRagdollBodies(UUID uuid, RagdollRecord& record)
+	void PhysicsWorld::Impl::StopRagdollBodies(UUID uuid, RagdollRecord& record, bool deferContacts)
 	{
 		if (!record.Doll)
 			return;
@@ -336,11 +342,12 @@ namespace Basalt {
 		if (!ShuttingDown)
 		{
 			DirtyEntities.Insert(uuid);
-			EndContacts(uuid, false);
+			EndContacts(uuid, false, deferContacts);
+			// Contact callbacks may erase record. Do not access it after dispatch.
 		}
 	}
 
-	void PhysicsWorld::Impl::RemoveRagdoll(UUID uuid)
+	void PhysicsWorld::Impl::RemoveRagdoll(UUID uuid, bool deferContacts)
 	{
 		auto it = Ragdolls.find(uuid);
 		if (it == Ragdolls.end())
@@ -350,7 +357,7 @@ namespace Basalt {
 		Ragdolls.erase(it);
 		if (auto* animations = ScenePtr->GetAnimationSystem())
 			animations->ClearRagdollPose(ScenePtr->GetEntityByUUID(uuid));
-		StopRagdollBodies(uuid, record);
+		StopRagdollBodies(uuid, record, deferContacts);
 	}
 
 	void PhysicsWorld::Impl::OnRagdollDestroyed(entt::registry& registry, entt::entity handle)
@@ -359,7 +366,7 @@ namespace Basalt {
 		{
 			const UUID uuid = id->ID;
 			const bool blocked = UnavailableRagdolls.insert(uuid).second;
-			RemoveRagdoll(uuid);
+			RemoveRagdoll(uuid, true);
 			RagdollFailures.erase(uuid);
 			RagdollWarnings.Forget(uuid);
 			if (blocked)
@@ -479,6 +486,8 @@ namespace Basalt {
 			}
 			velocities.emplace_back(v, w);
 		}
+		// An existing record here is recovery-only: removing it cannot dispatch contact callbacks.
+		BS_CORE_ASSERT(!Ragdolls.contains(uuid) || !Ragdolls.at(uuid).Doll, "Active ragdoll already handled");
 		RemoveRagdoll(uuid);
 		created->AddToPhysicsSystem(JPH::EActivation::Activate);
 		for (size_t i = 0; i < velocities.size(); i++)
@@ -489,7 +498,9 @@ namespace Basalt {
 		}
 		created->AddImpulse(ToJolt(impulse / static_cast<float>(record.Nodes.size())));
 		entity.GetComponent<RagdollComponent>().Enabled = true;
-		Ragdolls.emplace(uuid, std::move(record));
+		const bool inserted = Ragdolls.emplace(uuid, std::move(record)).second;
+		BS_CORE_ASSERT(inserted, "Activation must replace only an erased recovery");
+		(void)inserted;
 		RemoveBody(uuid);
 		RemoveCharacter(uuid);
 		RootMotion.erase(uuid);
@@ -536,26 +547,37 @@ namespace Basalt {
 			impl.DisableRagdoll(uuid, "non-finite physics output during recovery");
 			return false;
 		}
-		if (!clip.empty() && !animations->Play(entity, clip))
-			return false;
 		std::vector<glm::mat4> target;
-		if (!animations->GetAnimatedPose(entity, *record.Source, target))
-			return reject("get-up animation has no finite pose");
+		if (!animations->GetAnimatedPose(entity, *record.Source, target, clip))
+			return reject("get-up clip is missing or has no finite pose");
 		// Match the incoming clip's root, including authored rest offsets and animated root displacement.
 		// Gameplay supplies height for a different ground level; the blend keeps the physical pose at t=0.
 		const glm::vec3 targetRoot = glm::vec3(world * target[record.Nodes.front()] * glm::vec4(0, 0, 0, 1));
+		if (!Math::IsFinite(targetRoot))
+			return reject("get-up root is non-finite in world space");
 		const glm::vec3 delta = glm::vec3(frozen.front()[3]) - targetRoot;
 		world[3] += glm::vec4(delta.x, 0, delta.z, 0);
 		if (!Math::IsFinite(world))
 			return reject("get-up placement is non-finite");
+		if (!clip.empty() && !animations->Play(entity, clip))
+			return false;
+		const JPH::Ref<JPH::Ragdoll> retiring = record.Doll;
 		impl.ScenePtr->SetWorldTransform(entity, world);
 		record.World = impl.ScenePtr->GetWorldTransform(entity);
 		record.FrozenWorld = std::move(frozen);
 		entity.GetComponent<RagdollComponent>().Enabled = false;
 		record.RecoveryLeft = record.RecoveryDuration = seconds;
-		impl.StopRagdollBodies(uuid, record);
-		if (seconds == 0 && entity && !IsRagdollActive(entity))
-			impl.RemoveRagdoll(uuid);
+		if (seconds == 0)
+			impl.RemoveRagdoll(uuid); // Erase before callbacks; never erase a replacement recovery they create.
+		else
+		{
+			// Relocation changes model-space physical transforms. Refresh before callbacks can sample or reactivate.
+			animations->RefreshRagdollPoses();
+			const auto current = impl.Ragdolls.find(uuid);
+			if (entity && current != impl.Ragdolls.end() && current->second.Doll == retiring &&
+				entity.HasComponent<RagdollComponent>() && !entity.GetComponent<RagdollComponent>().Enabled)
+				impl.StopRagdollBodies(uuid, current->second);
+		}
 		animations->RefreshRagdollPoses();
 		return true;
 	}
@@ -564,6 +586,7 @@ namespace Basalt {
 	{
 		std::vector<UUID> remove;
 		std::vector<UUID> invalid;
+		std::vector<UUID> unsupported;
 		std::map<UUID, std::vector<RagdollMotion>> rebuilds;
 		for (auto& [id, record] : Ragdolls)
 		{
@@ -585,7 +608,7 @@ namespace Basalt {
 			const glm::mat4 currentWorld = ScenePtr->GetWorldTransform(entity);
 			if (!UniformTransform(currentWorld, position, rotation, scale) || !UniformTransform(record.World, previousPosition, previousRotation, previousScale))
 			{
-				remove.push_back(id);
+				unsupported.push_back(id);
 				continue;
 			}
 			const bool resized = std::abs(scale.x - previousScale.x) > 1e-4f * previousScale.x;
@@ -630,7 +653,7 @@ namespace Basalt {
 			auto* animations = ScenePtr->GetAnimationSystem();
 			const auto view = animations ? animations->GetPoseView(entity) : std::nullopt;
 			const bool sourceChanged = !view || view->Source != record.Source;
-			if (record.Doll && (resized || settings != record.Settings || sourceChanged))
+			if (record.Doll && (sourceChanged || (component->Enabled && (resized || settings != record.Settings))))
 			{
 				rebuilds[id] = CaptureRagdollMotion(record);
 				remove.push_back(id);
@@ -669,10 +692,13 @@ namespace Basalt {
 					remove.push_back(id);
 			}
 		}
+		for (UUID id : unsupported)
+			DisableRagdoll(id, "running rig requires a positive uniform world transform without shear");
 		for (UUID id : invalid)
 			DisableRagdoll(id, "non-finite physical pose or teleport result");
+		// Rebuilds publish their replacement and inherited motion before ended-contact callbacks can reactivate.
 		for (UUID id : remove)
-			RemoveRagdoll(id);
+			RemoveRagdoll(id, rebuilds.contains(id));
 		// Snapshot registry order: callbacks may remove/add components. Stable allocation order pins Jolt body
 		// IDs and collision groups across replays, independent of callback-induced pool reallocations.
 		std::vector<UUID> order;
@@ -684,10 +710,11 @@ namespace Basalt {
 			const auto* component = entity ? entity.TryGetComponent<RagdollComponent>() : nullptr;
 			if (!component)
 				continue;
-			if (component->Enabled && !world.IsRagdollActive(entity))
+			if ((component->Enabled || rebuilds.contains(uuid)) && !world.IsRagdollActive(entity))
 			{
 				if (auto failure = RagdollFailures.find(uuid); failure != RagdollFailures.end())
 				{
+					// RecoveryTime is validated too: editing an invalid duration must permit a new attempt.
 					auto settings = *component;
 					settings.Enabled = failure->second.Settings.Enabled;
 					if (settings == failure->second.Settings)
@@ -701,11 +728,26 @@ namespace Basalt {
 					}
 				}
 				const auto seed = rebuilds.find(uuid);
-				ActivateRagdoll(world, entity, glm::vec3(0), seed == rebuilds.end() ? nullptr : &seed->second);
+				const bool recover = !component->Enabled;
+				const float duration = component->RecoveryTime;
+				if (ActivateRagdoll(world, entity, glm::vec3(0), seed == rebuilds.end() ? nullptr : &seed->second) && recover)
+				{
+					if (!world.RecoverRagdoll(entity, {}, duration) && world.IsRagdollActive(entity))
+						entity.GetComponent<RagdollComponent>().Enabled = true;
+				}
 			}
 			else if (!component->Enabled && world.IsRagdollActive(entity))
-				world.RecoverRagdoll(entity, {}, component->RecoveryTime);
+			{
+				if (!world.RecoverRagdoll(entity, {}, component->RecoveryTime) && world.IsRagdollActive(entity))
+					entity.GetComponent<RagdollComponent>().Enabled = true;
+			}
 		}
+	}
+
+	void PhysicsWorld::RejectRagdollPose(Entity entity)
+	{
+		if (m_Impl->Owns(entity))
+			m_Impl->DisableRagdoll(entity.GetUUID(), "physical pose cannot be expressed in the animated hierarchy");
 	}
 
 	bool PhysicsWorld::IsRagdollActive(Entity entity) const

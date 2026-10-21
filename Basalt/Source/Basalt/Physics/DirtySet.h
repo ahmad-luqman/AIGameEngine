@@ -24,7 +24,7 @@ namespace Basalt::PhysicsInternal {
 			m_Order.push_back(uuid);
 			m_Members.insert(uuid);
 		}
-		bool Empty() const { return m_Members.empty(); }
+		bool Empty() const { return m_Order.empty(); }
 		void Clear()
 		{
 			m_Members.clear();

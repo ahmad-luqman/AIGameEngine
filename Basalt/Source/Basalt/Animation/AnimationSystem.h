@@ -140,8 +140,8 @@ namespace Basalt {
 		bool ResetSpringBones(Entity entity);
 		// Physics removed/rebuilt a rig or finished recovery; discard its cached overlay immediately.
 		void ClearRagdollPose(Entity entity);
-		// The sampled/layered animation before physics, IK or springs; recovery aligns its root to the fall.
-		bool GetAnimatedPose(Entity entity, const MeshSource& source, std::vector<glm::mat4>& globals);
+		// Sampled/layered animation before overlays; an optional clip previews a direct Play at time zero without mutation.
+		bool GetAnimatedPose(Entity entity, const MeshSource& source, std::vector<glm::mat4>& globals, const std::string& clip = {});
 		// Refresh physical overlays after an immediate control call, without advancing clocks or attachments.
 		void RefreshRagdollPoses();
 		// The events crossed since the last call, per Animator in update order: each clip's in the order playback
@@ -502,12 +502,12 @@ namespace Basalt {
 		// Fills `out` with the colliders in world space from the pose's globals, resolving their joints when needed.
 		static void ResolveSpringColliders(const Ref<MeshSource>& source, const SpringBoneComponent& component, SpringState& state, const glm::mat4& world, const std::vector<glm::mat4>& globals, std::vector<SpringCollisionShape>& out, std::vector<std::string>& problems);
 		void OnSpringDestroy(entt::registry& registry, entt::entity handle);
-		// A pass's overlay in a playback: &Playback::IKOverlay or &Playback::SpringOverlay.
+		// A pass's overlay: &Playback::IKOverlay, &Playback::SpringOverlay or &Playback::RagdollOverlay.
 		using Overlay = std::vector<OverlayEntry> Playback::*;
 		// Drops a pass's overlay and composes the pose again from what the other passes left.
 		static void DropOverlay(Playback& playback, Overlay overlay);
 		// Keeps the local transforms of `nodes` (sorted and deduplicated here) as a pass's overlay and its composed globals
-		// as the pose: Pose with the overlays of this pass and the passes before it. A later pass (springs after IK) then
+		// as the pose: Pose with the overlays of this pass and the passes before it (IK, springs, then ragdoll). A later pass then
 		// stores or drops its own.
 		static void StoreOverlay(Playback& playback, Overlay overlay, std::vector<uint32_t>& nodes, const AnimationLocalPose& pose, const std::vector<glm::mat4>& globals);
 		// Logs `problem` for `owner` (a component name) when it changed since `reported`, naming `chain` when given.

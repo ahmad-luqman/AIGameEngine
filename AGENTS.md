@@ -75,7 +75,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   that `Finish` applies after the IK one.
 - **Ragdolls.** `RagdollComponent` holds authored settings; `PhysicsWorld` owns the Jolt ragdoll, its selected skin
   joints and frozen recovery pose. Capsules and swing-twist frames derive from the rest skeleton, and activation starts
-  on the current pose. Active ragdolls suspend the entity's body/controller and inherit its linear/angular motion; live rebuilds preserve
+  on the current pose. Active ragdolls suspend the entity's body/controller and inherit the body's linear/angular motion (a controller's linear motion); live rebuilds preserve
   physical placement and joint motion. Animation keeps
   ticking, but root motion, IK and springs yield to the physical overlay, applied last before attachments. Recovery
   removes the bodies, optionally starts a get-up clip, and blends local transforms from the frozen pose; gameplay

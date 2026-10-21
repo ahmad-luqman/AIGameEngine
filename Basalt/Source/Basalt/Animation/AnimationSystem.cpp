@@ -1501,6 +1501,25 @@ namespace Basalt {
 		ResolveRootNode(playback, component);
 	}
 
+	bool AnimationSystem::GetAnimatedPose(Entity entity, const MeshSource& source, std::vector<glm::mat4>& globals, const std::string& clip)
+	{
+		auto* playback = Ensure(entity);
+		if (!playback || playback->Source.get() != &source)
+			return false;
+		if (clip.empty())
+			return ComposeAnimationPose(source, playback->Pose, globals);
+		const int32_t selected = FindClip(*playback->Clips, clip);
+		if (selected < 0)
+			return false;
+		// Preflight recovery without taking graph control or changing the visible playback on rejection.
+		Playback preview = *playback;
+		TakeDirectControl(preview, entity.GetComponent<AnimatorComponent>());
+		ClearTransition(preview);
+		preview.Space.reset();
+		Start(preview, selected);
+		return ComposeAnimationPose(source, preview.Pose, globals);
+	}
+
 	bool AnimationSystem::Play(Entity entity, const std::string& clip)
 	{
 		auto* playback = EnsurePlayable(entity);

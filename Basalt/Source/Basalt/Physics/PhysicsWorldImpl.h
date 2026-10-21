@@ -117,6 +117,7 @@ namespace Basalt {
 			glm::vec3 Linear = glm::vec3(0);
 			glm::vec3 Angular = glm::vec3(0);
 		};
+		// Structural failures wait for changed settings or source identity before automatic retries.
 		struct RagdollFailure
 		{
 			RagdollComponent Settings;
@@ -127,8 +128,8 @@ namespace Basalt {
 		void SyncRagdolls(PhysicsWorld& world, float seconds);
 		bool BuildRagdoll(Entity entity, RagdollRecord& record, std::string& error, bool& cacheFailure);
 		bool ActivateRagdoll(PhysicsWorld& world, Entity entity, const glm::vec3& impulse, const std::vector<RagdollMotion>* motion = nullptr);
-		void RemoveRagdoll(UUID uuid);
-		void StopRagdollBodies(UUID uuid, RagdollRecord& record);
+		void RemoveRagdoll(UUID uuid, bool deferContacts = false);
+		void StopRagdollBodies(UUID uuid, RagdollRecord& record, bool deferContacts = false);
 		bool ReadRagdollWorld(const RagdollRecord& record, std::vector<glm::mat4>& matrices) const;
 		std::vector<RagdollMotion> CaptureRagdollMotion(const RagdollRecord& record) const;
 		void SeedRagdoll(RagdollRecord& record, const std::vector<RagdollMotion>& motion);
@@ -191,10 +192,13 @@ namespace Basalt {
 		// Declared after System so records cannot outlive it, even during exceptional construction cleanup.
 		std::map<UUID, RagdollRecord> Ragdolls;
 		std::unordered_map<UUID, RagdollFailure> RagdollFailures;
+		// Blocks reactivation while a callback tears down the entity or an unsupported rig.
 		std::unordered_set<UUID> UnavailableRagdolls;
+		// Scene shutdown must not dispatch gameplay contact exits.
 		bool ShuttingDown = false;
 		// Body/group allocation order is observable in deterministic replays.
 		uint32_t NextRagdollGroup = 1;
+		// Counts attempts, including rejected construction, for retry diagnostics.
 		uint64_t RagdollBuilds = 0;
 
 		// Applies the collision matrix between characters, which CharacterCollision does not know about.
@@ -378,7 +382,7 @@ namespace Basalt {
 		void RemoveCharacter(UUID uuid);
 
 		// Ends every contact of an entity whose body is gone and notifies the surviving entities.
-		void EndContacts(UUID uuid, bool trigger);
+		void EndContacts(UUID uuid, bool trigger, bool defer = false);
 		// Reports one contact transition to the scene's event listener, then to the scripts.
 		void DispatchContact(ContactEventType type, Entity first, Entity second, const std::optional<ContactInfo>& contact);
 

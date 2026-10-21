@@ -1,6 +1,5 @@
 #include "Basalt/Animation/AnimationSystem.h"
 
-#include "Basalt/Core/Log.h"
 #include "Basalt/Math/Math.h"
 #include "Basalt/Physics/PhysicsWorld.h"
 #include "Basalt/Physics/RagdollRules.h"
@@ -19,12 +18,6 @@ namespace Basalt {
 			DropOverlay(it->second, &Playback::RagdollOverlay);
 	}
 
-	bool AnimationSystem::GetAnimatedPose(Entity entity, const MeshSource& source, std::vector<glm::mat4>& globals)
-	{
-		auto* playback = Ensure(entity);
-		return playback && playback->Source.get() == &source && ComposeAnimationPose(source, playback->Pose, globals);
-	}
-
 	void AnimationSystem::RefreshRagdollPoses()
 	{
 		ApplyRagdolls();
@@ -33,8 +26,18 @@ namespace Basalt {
 	void AnimationSystem::ApplyRagdolls()
 	{
 		auto* physics = m_Scene.GetPhysicsWorld();
-		for (auto& [id, playback] : m_Playback)
+		// Rejecting an unsupported hierarchy ends contacts, whose callbacks can erase any playback.
+		// Snapshot only rigs needing this pass, keeping ordinary animation-only crowds out of the work list.
+		std::vector<UUID> order;
+		for (const auto& [id, playback] : m_Playback)
+			if (!playback.RagdollOverlay.empty() || (physics && physics->HasRagdollPose(m_Scene.GetEntityByUUID(id))))
+				order.push_back(id);
+		for (UUID id : order)
 		{
+			auto found = m_Playback.find(id);
+			if (found == m_Playback.end())
+				continue;
+			auto& playback = found->second;
 			const bool hadOverlay = !playback.RagdollOverlay.empty();
 			playback.RagdollOverlay.clear();
 			Entity entity = m_Scene.GetEntityByUUID(id);
@@ -51,9 +54,8 @@ namespace Basalt {
 			ResetSpringBones(entity);
 			auto rejectPose = [&] {
 				Finish(playback);
-				if (!playback.OverlayDropped)
-					BS_CORE_WARN("Animator '{}': ragdoll pose cannot be expressed in the animated hierarchy; showing animation until it recovers", entity.GetName());
-				playback.OverlayDropped = true;
+				// Do not read playback after this: contact callbacks may remove its Animator or entity.
+				physics->RejectRagdollPose(entity);
 			};
 			AnimationLocalPose physical = playback.Pose;
 			std::vector<glm::mat4> globals;
