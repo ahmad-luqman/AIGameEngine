@@ -4,6 +4,7 @@ deltas) and Blink, a sparse target without NORMAL deltas, pushes the top row bac
 Teeth is a rigid triangle under the Head joint whose single target is also named Smile. The Face node overrides the mesh's default weights.
 """
 import base64
+import copy
 import json
 from pathlib import Path
 import struct
@@ -93,3 +94,19 @@ feature = root.parent / 'FeatureTest/Assets/Models/Morph.gltf'
 feature.parent.mkdir(parents=True, exist_ok=True)
 feature.write_text(text)
 (root.parents[1] / 'Fuzz/Corpus/FuzzGltf/Morph.gltf').write_bytes(b'\0' + text.encode())
+
+# A second, separately visible mesh node shares Face's skin. Shift vertex positions rather than the
+# node transform: skinned glTF nodes are drawn from their common skin palette.
+shared = copy.deepcopy(model)
+shifted = [(x + 1.2, y, z) for x, y, z in grid]
+shifted_positions = accessor([c for p in shifted for c in p], 3, min=[0.7, 0, 0], max=[1.7, 1, 0])
+second_face = copy.deepcopy(model['meshes'][0])
+second_face['name'] = 'SecondFace'
+second_face['primitives'][0]['attributes']['POSITION'] = shifted_positions
+shared['meshes'].append(second_face)
+shared['nodes'].append(dict(name='SecondFace', mesh=2, skin=0, weights=[0.1, 0.6]))
+shared['nodes'][0]['children'].append(4)
+shared['accessors'] = accessors
+shared['bufferViews'] = views
+shared['buffers'] = [dict(byteLength=len(blob), uri='data:application/octet-stream;base64,' + base64.b64encode(blob).decode())]
+(root / 'MorphSharedSkin.gltf').write_text(json.dumps(shared, indent=2) + '\n')

@@ -28,6 +28,7 @@ namespace Basalt {
 		glm::vec3 Position = { 0.0f, 0.0f, 0.0f };
 		float Near = 0.1f;
 		float Far = 1000.0f;
+		uint64_t Identity = 0; // Scene camera UUID; a switch invalidates temporal history even for nearby cameras.
 	};
 
 	struct SceneRendererStatistics
@@ -43,10 +44,10 @@ namespace Basalt {
 		uint32_t LocalShadowMaps = 0;
 		uint32_t LocalShadowsSkipped = 0;
 		uint32_t LocalShadowAtlasSize = 1; // One-texel fallback until the first active shadow.
-		bool TAAActive = false;
-		bool TAAHistoryValid = false;
-		bool FSR1Active = false; // EASU and RCAS actually ran in this frame.
-		bool Failed = false;     // This frame could not be rendered; hosts must not report success.
+		bool TAAActive = false;            // The temporal resolve ran successfully.
+		bool TAAHistoryValid = false;      // History was eligible for blending; reset/rebake frames use FXAA.
+		bool FSR1Active = false;           // EASU and RCAS actually ran in this frame.
+		bool Failed = false;               // This frame could not be rendered; hosts must not report success.
 		uint32_t Materials = 0;
 		uint32_t SkinMatrices = 0;        // Uploaded once per visible instance/skin, shared by its mesh nodes.
 		uint32_t MorphWeights = 0;        // Active morph weights uploaded, once per visible morphed mesh node.

@@ -14,7 +14,7 @@ namespace Basalt {
 		bool Prepare(nvrhi::IDevice* device, nvrhi::ITexture* color, nvrhi::ITexture* depth,
 					 nvrhi::ITexture* motion, nvrhi::IShader* fullscreen, nvrhi::ISampler* linear, nvrhi::ISampler* point);
 		void Render(nvrhi::ICommandList* commands, glm::uvec2 size, bool valid,
-					const glm::mat4& skyReprojection, glm::vec2 jitterDelta = glm::vec2(0));
+					const glm::mat4& skyReprojection, glm::vec2 jitterDelta);
 		void Reset() { *this = TemporalAA{}; }
 
 	private:

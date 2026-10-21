@@ -70,6 +70,7 @@ namespace Basalt {
 		camera.View = glm::inverse(Math::ComposeTransform(position, rotation, glm::vec3(1.0f)));
 		camera.Projection = component.Camera.GetProjection();
 		camera.Position = position;
+		camera.Identity = static_cast<uint64_t>(cameraEntity.GetUUID());
 		const bool perspective = component.Camera.GetProjectionType() == SceneCamera::ProjectionType::Perspective;
 		camera.Near = perspective ? component.Camera.GetPerspectiveNearClip() : component.Camera.GetOrthographicNearClip();
 		camera.Far = perspective ? component.Camera.GetPerspectiveFarClip() : component.Camera.GetOrthographicFarClip();

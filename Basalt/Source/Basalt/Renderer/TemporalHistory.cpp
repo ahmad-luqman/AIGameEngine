@@ -15,7 +15,7 @@ namespace Basalt {
 			}
 			return value;
 		};
-		const uint32_t sample = frame % 8 + 1;
+		const uint32_t sample = frame % TemporalJitterPeriod + 1;
 		return { halton(sample, 2) - 0.5f, halton(sample, 3) - 0.5f };
 	}
 
@@ -34,39 +34,54 @@ namespace Basalt {
 	}
 
 	void TemporalHistory::Begin(bool enabled, uint64_t revision, uint64_t component, glm::uvec2 size,
-								const glm::mat4& view, const glm::mat4& projection)
+								const glm::mat4& view, const glm::mat4& projection, uint64_t cameraIdentity)
 	{
 		const glm::mat4 oldCamera = glm::inverse(m_View), camera = glm::inverse(view);
+		// Negated finite comparisons also reject singular/nonfinite camera history when the camera recovers.
 		// Abrupt moves are cuts. Hosts can explicitly reset smaller cuts (including deterministic captures).
-		const bool cut = glm::length(glm::vec3(camera[3] - oldCamera[3])) > 10.0f ||
-						 glm::dot(glm::normalize(glm::vec3(camera[2])), glm::normalize(glm::vec3(oldCamera[2]))) < 0.5f;
-		if (!enabled || !m_Enabled || revision != m_Revision || component != m_Component || size != m_Size || projection != m_Projection || cut)
+		const bool cut = !(glm::length(glm::vec3(camera[3] - oldCamera[3])) <= 10.0f) ||
+						 !(glm::dot(glm::normalize(glm::vec3(camera[2])), glm::normalize(glm::vec3(oldCamera[2]))) >= 0.5f);
+		if (!enabled || !m_Enabled || revision != m_Revision || component != m_Component || cameraIdentity != m_CameraIdentity || size != m_Size || projection != m_Projection || cut)
 			Reset();
 		m_Enabled = enabled;
 		m_Revision = revision;
 		m_Component = component;
+		m_CameraIdentity = cameraIdentity;
 		m_Size = size;
 		m_View = view;
 		m_Projection = projection;
 	}
 
-	void TemporalHistory::Commit(const glm::mat4& viewProjection)
+	glm::mat4 TemporalHistory::GetJitteredProjection() const
 	{
-		m_PreviousViewProjection = viewProjection;
-		m_PreviousProjection = m_Enabled ? JitterProjection(m_Projection, TemporalJitter(m_Frame), m_Size) : m_Projection;
-		m_Valid = m_Enabled;
-		if (m_Enabled)
-			m_Frame = (m_Frame + 1) % 8;
+		return m_Enabled ? JitterProjection(m_Projection, TemporalJitter(m_Frame), m_Size) : m_Projection;
 	}
 
-	glm::mat4 TemporalHistory::GetSkyReprojection(const glm::mat4& jitteredProjection) const
+	glm::vec2 TemporalHistory::GetJitterDelta() const
+	{
+		if (!m_Enabled || m_Size.x == 0 || m_Size.y == 0)
+			return glm::vec2(0);
+		// Undo the change in raster jitter on the stable color grid; texture Y runs opposite clip Y.
+		return (TemporalJitter(m_Frame) - TemporalJitter((m_Frame + TemporalJitterPeriod - 1) % TemporalJitterPeriod)) / glm::vec2(m_Size) * glm::vec2(1, -1);
+	}
+
+	void TemporalHistory::Commit()
+	{
+		m_PreviousProjection = GetJitteredProjection();
+		m_PreviousViewProjection = m_PreviousProjection * m_View;
+		m_Valid = m_Enabled;
+		if (m_Enabled)
+			m_Frame = (m_Frame + 1) % TemporalJitterPeriod;
+	}
+
+	glm::mat4 TemporalHistory::GetSkyReprojection() const
 	{
 		glm::mat4 rotationView = m_View;
 		rotationView[3] = glm::vec4(0, 0, 0, 1);
 		glm::mat4 previousRotationVP = m_PreviousViewProjection;
 		// P * rotation-only V keeps P's fourth column. Zeroing it loses W for orthographic skies.
 		previousRotationVP[3] = m_PreviousProjection[3];
-		return previousRotationVP * glm::inverse(jitteredProjection * rotationView);
+		return previousRotationVP * glm::inverse(GetJitteredProjection() * rotationView);
 	}
 
 	void TemporalHistory::Reset()

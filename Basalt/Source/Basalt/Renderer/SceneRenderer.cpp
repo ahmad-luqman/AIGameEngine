@@ -36,8 +36,8 @@
 #include <cstring>
 #include <map>
 #include <set>
-#include <variant>
 #include <unordered_set>
+#include <variant>
 
 namespace Basalt {
 
@@ -1085,8 +1085,7 @@ namespace Basalt {
 		impl.TonemapSource = nullptr;
 		impl.PostProcess.Reset();
 		impl.TAA.Reset();
-		impl.History.Reset();
-		impl.PreviousMeshes.clear();
+		ResetTemporalHistory();
 		impl.FsrTonemapFailed = false;
 		// The smoothed costs are per frame of the old viewport size; results still in flight carry their pixel
 		// count, so they are converted correctly when they arrive.
@@ -1169,9 +1168,9 @@ namespace Basalt {
 		if (impl.TargetsTAA)
 			prepassDesc.addColorAttachment(impl.MotionTexture);
 		impl.PrepassFramebuffer = m_Device->createFramebuffer(prepassDesc);
-		if (m_Picking && (!impl.PrepassFramebuffer || !impl.PickFramebuffer || !impl.OutlineSet))
+		if (!impl.PrepassFramebuffer || (m_Picking && (!impl.PickFramebuffer || !impl.OutlineSet)))
 		{
-			BS_CORE_ERROR("SceneRenderer: failed to create picking framebuffer/bindings");
+			BS_CORE_ERROR("SceneRenderer: failed to create prepass/picking framebuffer/bindings");
 			m_OutputTexture = nullptr;
 			return;
 		}
@@ -1208,9 +1207,12 @@ namespace Basalt {
 			desc.bindingLayouts = { impl.FrameLayout, impl.MaterialLayout, impl.MorphLayout };
 			return m_Device->createGraphicsPipeline(desc, framebuffer->getFramebufferInfo());
 		};
+		nvrhi::IShader* prepassPS = m_Picking ? impl.DepthNormalPickPS : impl.DepthNormalPS;
+		if (impl.TargetsTAA)
+			prepassPS = m_Picking ? impl.DepthNormalPickMotionPS : impl.DepthNormalMotionPS;
 		for (int doubleSided = 0; doubleSided < 2; doubleSided++)
 		{
-			impl.PrepassPipeline[doubleSided] = meshPipeline(impl.TargetsTAA ? (m_Picking ? impl.DepthNormalPickMotionPS : impl.DepthNormalMotionPS) : (m_Picking ? impl.DepthNormalPickPS : impl.DepthNormalPS), impl.PrepassFramebuffer, doubleSided, true, false);
+			impl.PrepassPipeline[doubleSided] = meshPipeline(prepassPS, impl.PrepassFramebuffer, doubleSided, true, false);
 			if (m_Picking && impl.PickFramebuffer)
 				impl.PickPipeline[doubleSided] = meshPipeline(impl.PickPS, impl.PickFramebuffer, doubleSided, true, false);
 			impl.OpaquePipeline[doubleSided] = meshPipeline(impl.PbrPS, impl.LightingFramebuffer, doubleSided, false, false);
@@ -1348,7 +1350,6 @@ namespace Basalt {
 		GpuProfiler& profiler = m_Profiler;
 		UpdateRenderSize(profiler.BeginFrame(commandList));
 		impl.FrameCounter++;
-		m_Statistics = {};
 
 		const auto graphics = scene.GetEffectiveGraphicsSettings();
 		settings.SSAOEnabled = settings.SSAOEnabled && graphics.SSAOQuality != GraphicsQuality::Off;
@@ -1376,7 +1377,7 @@ namespace Basalt {
 
 		impl.InvalidPostProcessError.clear();
 		impl.History.Begin(taa, scene.GetRenderRevision(), static_cast<uint64_t>(postProcessId),
-						   { m_RenderWidth, m_RenderHeight }, camera.View, camera.Projection);
+						   { m_RenderWidth, m_RenderHeight }, camera.View, camera.Projection, camera.Identity);
 		if (!impl.History.IsValid())
 			impl.PreviousMeshes.clear();
 		impl.CurrentMeshes.clear();
@@ -1637,7 +1638,7 @@ namespace Basalt {
 		// --- Camera, cascades and view constants --------------------------------------------------
 		GpuViewConstants view{};
 		view.View = camera.View;
-		view.Projection = taa ? JitterProjection(camera.Projection, TemporalJitter(impl.History.GetFrame()), { m_RenderWidth, m_RenderHeight }) : camera.Projection;
+		view.Projection = impl.History.GetJitteredProjection();
 		view.ViewProjection = view.Projection * camera.View;
 		view.PreviousViewProjection = impl.History.GetPreviousViewProjection();
 		view.InverseView = glm::inverse(camera.View);
@@ -1874,7 +1875,9 @@ namespace Basalt {
 			m_Statistics.MorphWeights += upload.Count;
 		};
 
-		// Nodes sharing a skin also share its immutable history and GPU upload.
+		// Nodes sharing a skin also share its immutable history and GPU upload. PreviousMeshes owns
+		// the palette pointers until all records are uploaded. Empty palettes never enter either map.
+		static const auto s_EmptyPalette = CreateRef<const std::vector<glm::mat4>>();
 		std::map<std::pair<UUID, int32_t>, Ref<const std::vector<glm::mat4>>> currentPalettes;
 		std::map<const std::vector<glm::mat4>*, uint32_t> previousPaletteOffsets;
 		const glm::vec3 cameraForward = -glm::vec3(view.InverseView[2]);
@@ -2021,15 +2024,22 @@ namespace Basalt {
 					// Capture the inputs actually submitted. Unseen nodes and replaced assets cannot inherit old geometry.
 					if (!capturedHistory)
 					{
-						auto& snapshot = currentPalettes[{ entity.GetUUID(), node ? node->SkinIndex : -1 }];
-						if (!snapshot)
-							snapshot = CreateRef<const std::vector<glm::mat4>>(palette);
+						Ref<const std::vector<glm::mat4>> snapshot = s_EmptyPalette;
+						if (!palette.empty())
+						{
+							auto& shared = currentPalettes[{ entity.GetUUID(), node->SkinIndex }];
+							if (!shared)
+								shared = CreateRef<const std::vector<glm::mat4>>(palette);
+							snapshot = shared;
+						}
 						impl.CurrentMeshes.emplace(historyKey, Impl::MeshHistory{ source, meshIndex, model, snapshot,
 																				  std::vector<float>(morphWeights.begin(), morphWeights.end()) });
 						capturedHistory = true;
 					}
 					if (previous)
 					{
+						if (previous->Palette->empty())
+							previousPalette = 0;
 						if (previousPalette == UINT32_MAX)
 						{
 							const auto [entry, first] = previousPaletteOffsets.try_emplace(previous->Palette.get(), static_cast<uint32_t>(draws.size()));
@@ -2449,6 +2459,8 @@ namespace Basalt {
 		if (std::any_of(impl.ParticleData.Particles.begin(), impl.ParticleData.Particles.end(), [](const GpuParticle& p) { return p.Effects.y > 0.0f; }))
 			commandList->copyTexture(impl.ParticleDepth, nvrhi::TextureSlice(), m_DepthTexture, nvrhi::TextureSlice());
 
+		// Rebaked lighting cannot reuse color accumulated under the old environment.
+		const bool historyValid = taa && impl.History.IsValid() && !bakeEnvironment;
 		// Resource failure must close the frame outside every GPU timing scope.
 		if (taa && !impl.TAA.Prepare(m_Device, impl.HdrTexture, m_DepthTexture, impl.MotionTexture, impl.FullscreenVS, impl.LinearClamp, impl.PointClamp))
 		{
@@ -2470,12 +2482,11 @@ namespace Basalt {
 
 			if (taa)
 			{
-				const glm::mat4 skyReprojection = impl.History.GetSkyReprojection(view.Projection);
-				const glm::vec2 jitterDelta = (TemporalJitter(impl.History.GetFrame()) - TemporalJitter((impl.History.GetFrame() + 7) % 8)) /
-											  glm::vec2(m_RenderWidth, m_RenderHeight) * glm::vec2(1, -1);
-				impl.TAA.Render(commandList, { m_RenderWidth, m_RenderHeight }, impl.History.IsValid() && !bakeEnvironment, skyReprojection, jitterDelta);
+				const glm::mat4 skyReprojection = impl.History.GetSkyReprojection();
+
+				impl.TAA.Render(commandList, { m_RenderWidth, m_RenderHeight }, historyValid, skyReprojection, impl.History.GetJitterDelta());
 				m_Statistics.TAAActive = true;
-				m_Statistics.TAAHistoryValid = impl.History.IsValid() && !bakeEnvironment;
+				m_Statistics.TAAHistoryValid = historyValid;
 			}
 
 			// Blended meshes and particle batches, back to front. Particles sort as one batch per emitter (by
@@ -2523,7 +2534,7 @@ namespace Basalt {
 		}
 
 		// A reset frame has no temporal samples yet; FXAA supplies spatial AA until history is available.
-		const bool fxaa = settings.DebugView == RendererDebugView::None && (taa ? !m_Statistics.TAAHistoryValid : post.FXAAEnabled);
+		const bool fxaa = settings.DebugView == RendererDebugView::None && (taa ? !historyValid : post.FXAAEnabled);
 		const bool postActive = settings.DebugView == RendererDebugView::None && (post.BloomEnabled || post.AutoExposure || fxaa);
 		const bool postActivated = postActive && !impl.PostProcessWasActive;
 		impl.PostProcessWasActive = postActive;
@@ -2663,7 +2674,7 @@ namespace Basalt {
 		commandList->close();
 		m_Device->executeCommandList(commandList);
 
-		impl.History.Commit(view.ViewProjection);
+		impl.History.Commit();
 		impl.PreviousMeshes = std::move(impl.CurrentMeshes);
 		impl.PickReady = m_Picking;
 

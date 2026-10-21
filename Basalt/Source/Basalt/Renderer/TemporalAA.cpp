@@ -31,7 +31,7 @@ namespace Basalt {
 		auto fail = [&](const char* stage) {
 			Reset();
 			m_Failed = true;
-			BS_CORE_ERROR("SceneRenderer: failed to create TAA {} at {}x{}", stage, desc.width, desc.height);
+			BS_CORE_ERROR("SceneRenderer: failed to create TAA {} at {}x{}; toggle TAA or resize to retry", stage, desc.width, desc.height);
 			return false;
 		};
 		m_Source = color;

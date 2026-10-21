@@ -42,7 +42,7 @@ layout(set = 0, binding = 0) uniform ViewConstants
 	uvec4 ClusterGrid;    // xyz dimensions, w: clustered lookup enabled (0 = diagnostic all-lights path)
 	vec4 ClusterDepths;   // near, far, orthographic, visualize visited-light count
 	vec4 Quality;         // x: low-cost shadow filtering
-	mat4 PreviousViewProjection;
+	mat4 PreviousViewProjection; // Previous submitted jittered camera matrix.
 } u_View;
 
 struct DrawData

@@ -1,4 +1,4 @@
-// Both prepass variants share skin/material coverage; the editor variant additionally writes IDs.
+// All prepass variants share skin/material coverage; the editor variant additionally writes IDs.
 #include "Common.glsl"
 #include "Material.glsl"
 
@@ -17,7 +17,6 @@ layout(location = 2) out vec4 o_Motion;
 #else
 layout(location = 1) out vec4 o_Motion;
 #endif
-
 #endif
 
 // View-space normal for SSAO.
