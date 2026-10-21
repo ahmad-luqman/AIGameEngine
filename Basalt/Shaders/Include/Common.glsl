@@ -8,6 +8,8 @@
 //   set 1 (material): 0 albedo, 1 normal, 2 metallic-roughness, 3 occlusion, 4 emissive, 5 material sampler,
 //                     6 clearcoat, 7 coat roughness, 8 coat normal, 9 transmission
 //   (the particle pipelines bind their own set 1; see Particle.vert)
+//   set 2 (morph, vertex stage): 0 morph target deltas, 1 point sampler (see Morphing.glsl); every mesh pipeline,
+//                     shadows included (their set 1 may be a hole)
 
 #ifndef BASALT_COMMON_GLSL
 #define BASALT_COMMON_GLSL
@@ -47,6 +49,7 @@ struct DrawData
 	mat4 Model;
 	mat4 Normal;          // draw records: inverse-transpose of Model; unused for palette records
 	uvec4 Indices;        // x: material index; y: editor picking token; zw: joint palette offset/count (0 count = rigid)
+	uvec4 Morph;          // x: first morph weight record; y: active weight count (0 = unmorphed); z: delta texel base; w: texels per target
 };
 
 layout(std430, set = 0, binding = 1) readonly buffer DrawBuffer

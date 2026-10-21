@@ -474,7 +474,7 @@ namespace Basalt {
 								 if (const auto* mesh = entity.TryGetComponent<MeshComponent>())
 									 if (const auto asset = AssetManager::GetMesh(mesh->Mesh))
 										 hasGeometry = mesh->MeshIndex < asset->Meshes.size();
-								 ForEachAnimatedMesh(entity, [&](const Ref<MeshSource>&, const MeshNode&, const glm::mat4&, const std::vector<glm::mat4>&) { hasGeometry = true; });
+								 ForEachAnimatedMesh(entity, [&](const Ref<MeshSource>&, const MeshNode&, const glm::mat4&, const std::vector<glm::mat4>&, std::span<const float>) { hasGeometry = true; });
 								 if (!hasGeometry)
 									 throw CommandError("selected mesh asset is unavailable or its mesh index is invalid");
 								 const auto source = FindViewportVertex(entity, viewProjection, m_ViewportSize, from);

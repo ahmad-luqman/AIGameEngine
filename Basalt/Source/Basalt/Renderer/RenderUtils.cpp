@@ -152,6 +152,7 @@ namespace Basalt {
 			{ "fsr1Active", statistics.FSR1Active },
 			{ "culledSubmeshes", statistics.CulledSubmeshes },
 			{ "skinMatrices", statistics.SkinMatrices },
+			{ "morphWeights", statistics.MorphWeights },
 			{ "particles", statistics.Particles },
 			{ "particlesSkipped", statistics.ParticlesSkipped },
 			{ "lights", statistics.Lights },

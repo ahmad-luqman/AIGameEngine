@@ -58,16 +58,63 @@ namespace Basalt {
 			}
 			return value;
 		}
+
+		// Weights tracks interpolate each weight independently; cubic values hold Width-wide tangent/value/tangent.
+		void SampleWeights(const AnimationTrack& track, float time, std::span<float> out)
+		{
+			const bool cubic = track.Interpolation == AnimationInterpolation::CubicSpline;
+			const size_t stride = cubic ? 3 : 1;
+			const size_t width = track.Width;
+			BS_CORE_ASSERT(!track.Times.empty() && out.size() == width && track.Weights.size() == track.Times.size() * stride * width);
+			auto value = [&](size_t key, size_t part) { return track.Weights.data() + (key * stride + part) * width; };
+			const size_t offset = cubic ? 1 : 0;
+			const auto upper = std::upper_bound(track.Times.begin(), track.Times.end(), time);
+			if (upper == track.Times.begin() || upper == track.Times.end())
+			{
+				const float* edge = value(upper == track.Times.begin() ? 0 : track.Times.size() - 1, offset);
+				std::copy(edge, edge + width, out.begin());
+				return;
+			}
+			const size_t right = static_cast<size_t>(upper - track.Times.begin());
+			const size_t left = right - 1;
+			const float* a = value(left, offset);
+			const float* b = value(right, offset);
+			const float duration = track.Times[right] - track.Times[left];
+			const float t = (time - track.Times[left]) / duration;
+			const float t2 = t * t, t3 = t2 * t;
+			for (size_t i = 0; i < width; i++)
+			{
+				if (track.Interpolation == AnimationInterpolation::Step)
+					out[i] = a[i];
+				else if (cubic)
+					out[i] = (2 * t3 - 3 * t2 + 1) * a[i] + (t3 - 2 * t2 + t) * duration * value(left, 2)[i] + (-2 * t3 + 3 * t2) * b[i] + (t3 - t2) * duration * value(right, 0)[i];
+				else
+					out[i] = a[i] + (b[i] - a[i]) * t;
+			}
+		}
 	}
 
 	AnimationLocalPose SampleAnimation(const MeshSource& source, const AnimationClip* clip, float time)
 	{
 		AnimationLocalPose pose;
+		pose.Nodes.reserve(source.Nodes.size());
+		pose.MorphWeights.resize(source.MorphWeightCount);
 		for (const auto& node : source.Nodes)
+		{
 			pose.Nodes.push_back({ node.Translation, node.Rotation, node.Scale });
+			if (node.MorphWeightOffset >= 0)
+				std::ranges::copy(node.MorphWeights, pose.MorphWeights.begin() + node.MorphWeightOffset);
+		}
 		if (clip)
 			for (const auto& track : clip->Tracks)
 			{
+				if (track.Path == AnimationPath::Weights)
+				{
+					const MeshNode& node = source.Nodes[track.Node];
+					BS_CORE_ASSERT(node.MorphWeightOffset >= 0 && node.MorphWeights.size() == track.Width, "imported weights tracks match their node's targets");
+					SampleWeights(track, time, std::span<float>(pose.MorphWeights).subspan(node.MorphWeightOffset, track.Width));
+					continue;
+				}
 				const glm::vec4 value = Sample(track, time);
 				switch (track.Path)
 				{
@@ -79,6 +126,8 @@ namespace Basalt {
 						break;
 					case AnimationPath::Scale:
 						pose.Nodes[track.Node].Scale = glm::vec3(value);
+						break;
+					case AnimationPath::Weights:
 						break;
 				}
 			}
@@ -94,6 +143,9 @@ namespace Basalt {
 			target.Nodes[i].Rotation = glm::normalize(glm::slerp(from.Nodes[i].Rotation, target.Nodes[i].Rotation, weight));
 			target.Nodes[i].Scale = glm::mix(from.Nodes[i].Scale, target.Nodes[i].Scale, weight);
 		}
+		BS_CORE_ASSERT(target.MorphWeights.size() == from.MorphWeights.size());
+		for (size_t i = 0; i < target.MorphWeights.size(); i++)
+			target.MorphWeights[i] = from.MorphWeights[i] + (target.MorphWeights[i] - from.MorphWeights[i]) * weight;
 	}
 
 	bool ComposeAnimationPose(const MeshSource& source, const AnimationLocalPose& pose, std::vector<glm::mat4>& globals)
@@ -127,9 +179,21 @@ namespace Basalt {
 				case AnimationPath::Scale:
 					channels[track.Node] |= AnimatedChannel::Scale;
 					break;
+				case AnimationPath::Weights:
+					channels[track.Node] |= AnimatedChannel::Weights;
+					break;
 			}
 		}
 		return channels;
+	}
+
+	void MorphMaskWeights(const MeshSource& source, AnimationLayerMask& mask)
+	{
+		BS_CORE_ASSERT(mask.Weights.size() == source.Nodes.size() && mask.Channels.size() == source.Nodes.size());
+		mask.MorphWeights.assign(source.MorphWeightCount, 0.0f);
+		for (size_t i = 0; i < source.Nodes.size(); i++)
+			if (const MeshNode& node = source.Nodes[i]; node.MorphWeightOffset >= 0 && (mask.Channels[i] & AnimatedChannel::Weights))
+				std::fill_n(mask.MorphWeights.begin() + node.MorphWeightOffset, node.MorphWeights.size(), mask.Weights[i]);
 	}
 
 	std::vector<float> AnimationMaskWeights(const MeshSource& source, const std::vector<AnimationMaskJoint>& mask, std::vector<std::string>& outMissing)
@@ -178,6 +242,10 @@ namespace Basalt {
 			if (channels & AnimatedChannel::Scale)
 				node.Scale = glm::mix(node.Scale, source.Scale, amount);
 		}
+		BS_CORE_ASSERT(mask.MorphWeights.empty() || (mask.MorphWeights.size() == target.MorphWeights.size() && layer.MorphWeights.size() == target.MorphWeights.size()));
+		for (size_t i = 0; i < mask.MorphWeights.size(); i++)
+			if (const float amount = weight * mask.MorphWeights[i]; amount > 0.0f)
+				target.MorphWeights[i] += (layer.MorphWeights[i] - target.MorphWeights[i]) * amount;
 	}
 
 	void AddAnimationPose(AnimationLocalPose& target, const AnimationLocalPose& layer, const AnimationLocalPose& reference, const AnimationLayerMask& mask, float weight)
@@ -209,6 +277,24 @@ namespace Basalt {
 				node.Scale *= glm::mix(glm::vec3(1.0f), ratio, amount);
 			}
 		}
+		BS_CORE_ASSERT(mask.MorphWeights.empty() || (mask.MorphWeights.size() == target.MorphWeights.size() && layer.MorphWeights.size() == target.MorphWeights.size() && reference.MorphWeights.size() == target.MorphWeights.size()));
+		for (size_t i = 0; i < mask.MorphWeights.size(); i++)
+			if (const float amount = weight * mask.MorphWeights[i]; amount > 0.0f)
+				target.MorphWeights[i] += amount * (layer.MorphWeights[i] - reference.MorphWeights[i]);
+	}
+
+	std::vector<uint32_t> FindMorphWeights(const MeshSource& source, const std::string& target)
+	{
+		std::vector<uint32_t> slots;
+		for (const MeshNode& node : source.Nodes)
+		{
+			if (node.MorphWeightOffset < 0)
+				continue;
+			const auto& names = source.Meshes[node.MeshIndex].MorphTargets;
+			if (const auto it = std::ranges::find(names, target); it != names.end())
+				slots.push_back(static_cast<uint32_t>(node.MorphWeightOffset) + static_cast<uint32_t>(it - names.begin()));
+		}
+		return slots;
 	}
 
 	int32_t FindNode(const MeshSource& source, const std::string& name)
@@ -249,10 +335,11 @@ namespace Basalt {
 		return result;
 	}
 
-	AABB CachedSkinBounds(const MeshSource& source, const Submesh& submesh, const std::vector<glm::mat4>& palette)
+	AABB CachedSkinBounds(const MeshSource& source, const Submesh& submesh, const std::vector<glm::mat4>& palette, std::span<const float> morphWeights)
 	{
 		if (submesh.JointBounds.empty())
-			return SkinBounds(source, submesh, palette);
+			return SkinBounds(source, submesh, palette, morphWeights);
+		const AABB morph = MorphDisplacementBounds(submesh, morphWeights);
 		AABB bounds;
 		if (submesh.HasUnweightedVertices)
 			bounds.Expand(glm::vec3(0));
@@ -269,8 +356,12 @@ namespace Basalt {
 				bounds.Expand(glm::vec3(0));
 				continue;
 			}
-			const glm::vec4 low(influence.Positions.Min, influence.MinWeightSum);
-			const glm::vec4 high(influence.Positions.Max, influence.MaxWeightSum);
+			// Positions holds bind positions both as is and times the weight sum (at most MaxWeightSum, and at least 1):
+			// the displacement range, which contains zero, widens both by at most MaxWeightSum times itself.
+			const glm::vec3 widenMin = morph.IsValid() ? morph.Min * influence.MaxWeightSum : glm::vec3(0);
+			const glm::vec3 widenMax = morph.IsValid() ? morph.Max * influence.MaxWeightSum : glm::vec3(0);
+			const glm::vec4 low(influence.Positions.Min + widenMin, influence.MinWeightSum);
+			const glm::vec4 high(influence.Positions.Max + widenMax, influence.MaxWeightSum);
 			glm::vec3 minimum(0), maximum(0);
 			for (int column = 0; column < 4; ++column)
 			{
@@ -292,12 +383,12 @@ namespace Basalt {
 		return bounds;
 	}
 
-	AABB SkinBounds(const MeshSource& source, const Submesh& submesh, const std::vector<glm::mat4>& palette)
+	AABB SkinBounds(const MeshSource& source, const Submesh& submesh, const std::vector<glm::mat4>& palette, std::span<const float> morphWeights)
 	{
 		AABB bounds;
-		for (size_t i = submesh.BaseVertex; i < static_cast<size_t>(submesh.BaseVertex) + submesh.VertexCount; i++)
+		for (uint32_t i = 0; i < submesh.VertexCount; i++)
 		{
-			const auto& vertex = source.Vertices[i];
+			const Vertex vertex = MorphVertex(source, submesh, i, morphWeights);
 			glm::vec4 position(0);
 			for (int j = 0; j < 4; j++)
 				if (vertex.Joints[j] < palette.size())

@@ -1,6 +1,7 @@
 #version 450
 #include "Common.glsl"
 #include "Skinning.glsl"
+#include "Morphing.glsl"
 
 layout(location = 0) in vec3 a_Position;
 layout(location = 1) in vec3 a_Normal;
@@ -24,8 +25,19 @@ invariant gl_Position;
 void main()
 {
 	DrawData draw = u_Draws.Draws[u_Push.DrawIndex + gl_InstanceIndex];
+	vec3 position = a_Position;
+	vec3 bindNormal = a_Normal;
+	vec3 bindTangent = a_Tangent.xyz;
+	if (draw.Morph.y > 0u)
+	{
+		ApplyMorphTargets(draw, position, bindNormal);
+		// Tangent deltas are not imported: keep the tangent perpendicular to the morphed normal.
+		float lengthSquared = dot(bindNormal, bindNormal);
+		if (lengthSquared > 0.0)
+			bindTangent -= bindNormal * (dot(bindNormal, bindTangent) / lengthSquared);
+	}
 	mat4 skin = SkinMatrix(draw, a_Joints, a_Weights);
-	vec4 world = draw.Model * skin * vec4(a_Position, 1.0);
+	vec4 world = draw.Model * skin * vec4(position, 1.0);
 	v_WorldPosition = world.xyz;
 	mat3 linear = mat3(skin);
 	// Cofactors give the inverse-transpose direction without division by a tiny determinant.
@@ -35,9 +47,9 @@ void main()
 	mat3 stable = scale > 0.0 ? linear / scale : mat3(0.0);
 	float orientation = determinant(stable);
 	mat3 cofactors = mat3(cross(stable[1], stable[2]), cross(stable[2], stable[0]), cross(stable[0], stable[1]));
-	vec3 normal = mat3(draw.Normal) * cofactors * a_Normal * (orientation < 0.0 ? -1.0 : 1.0);
+	vec3 normal = mat3(draw.Normal) * cofactors * bindNormal * (orientation < 0.0 ? -1.0 : 1.0);
 	v_Normal = StableNormalize(normal, vec3(0.0, 1.0, 0.0));
-	vec3 tangent = mat3(draw.Model) * linear * a_Tangent.xyz;
+	vec3 tangent = mat3(draw.Model) * linear * bindTangent;
 	tangent = StableNormalize(tangent, cross(v_Normal, abs(v_Normal.x) < 0.9 ? vec3(1,0,0) : vec3(0,1,0)));
 	v_Tangent = vec4(tangent, a_Tangent.w * (orientation < 0.0 ? -1.0 : 1.0));
 	v_TexCoord = a_TexCoord;

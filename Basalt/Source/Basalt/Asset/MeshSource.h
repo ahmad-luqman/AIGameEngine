@@ -8,6 +8,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <array>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -111,6 +112,20 @@ namespace Basalt {
 		float MaxWeightSum = 0;
 	};
 
+	// Import limits for morph targets: targets per glTF mesh, and deltas (targets x vertices) per model. The renderer
+	// keeps each model's deltas in one 4096-texel-wide texture of two texels per delta, 2048 rows at most.
+	inline constexpr uint32_t MaxMorphTargets = 256;
+	inline constexpr uint32_t MorphTextureWidth = 4096;
+	inline constexpr uint32_t MaxMorphDeltas = MorphTextureWidth * 2048u / 2u;
+
+	// One vertex's displacement in one morph target (glTF POSITION/NORMAL target attributes, bind space). TANGENT
+	// deltas are not kept: the vertex shader re-orthogonalizes the tangent against the morphed normal.
+	struct MorphDelta
+	{
+		glm::vec3 Position = glm::vec3(0);
+		glm::vec3 Normal = glm::vec3(0);
+	};
+
 	// Reduced triangle range in the same index buffer, sharing the submesh's base vertex.
 	struct MeshLOD
 	{
@@ -134,6 +149,12 @@ namespace Basalt {
 		std::vector<MeshLOD> LODs;
 		// Defensive for procedural meshes: zero-weight vertices collapse (w = 0); include the model origin.
 		bool HasUnweightedVertices = false;
+		// Morph targets of the owning glTF mesh (every primitive of a mesh has the same count). The deltas are
+		// MeshSource::MorphDeltas[MorphDeltaOffset + target * VertexCount + vertex].
+		uint32_t MorphTargetCount = 0;
+		uint32_t MorphDeltaOffset = 0;
+		// Per target: the range of its position deltas, which widens Bounds (and JointBounds) by weight.
+		std::vector<AABB> MorphBounds;
 	};
 
 	// One drawable mesh (a glTF mesh): a set of submeshes. MeshComponent::MeshIndex selects one.
@@ -142,6 +163,10 @@ namespace Basalt {
 		std::string Name;
 		std::vector<uint32_t> Submeshes;
 		AABB Bounds;
+		// Morph target names (glTF extras.targetNames, else "Target<n>"; unique within the mesh) and the default
+		// weights (mesh.weights, else 0), one per target.
+		std::vector<std::string> MorphTargets;
+		std::vector<float> MorphWeights;
 	};
 
 	// Imported node, instantiated for static assets or sampled internally by Animator.
@@ -157,6 +182,10 @@ namespace Basalt {
 		glm::vec3 Translation = { 0.0f, 0.0f, 0.0f };
 		glm::quat Rotation = { 1.0f, 0.0f, 0.0f, 0.0f };
 		glm::vec3 Scale = { 1.0f, 1.0f, 1.0f };
+		// Default morph weights of the node's mesh (node.weights, else the mesh's); empty without morph targets.
+		std::vector<float> MorphWeights;
+		// First of this node's weights in a pose's MorphWeights (FinalizeHierarchy); -1 without morph targets.
+		int32_t MorphWeightOffset = -1;
 	};
 
 	// One skin joint and the matching bind-vertex-to-joint transform.
@@ -175,7 +204,9 @@ namespace Basalt {
 	{
 		Translation,
 		Rotation,
-		Scale
+		Scale,
+		// Morph target weights of the node's mesh: Width values per key (see AnimationTrack::Weights).
+		Weights
 	};
 	enum class AnimationInterpolation
 	{
@@ -191,7 +222,11 @@ namespace Basalt {
 		AnimationPath Path = AnimationPath::Translation;
 		AnimationInterpolation Interpolation = AnimationInterpolation::Linear;
 		std::vector<float> Times;
+		// Translation, rotation (x, y, z, w) and scale keys; empty for Weights tracks.
 		std::vector<glm::vec4> Values;
+		// Weights tracks: Width (the node's morph target count) floats per value, in Values' key/tangent order.
+		std::vector<float> Weights;
+		uint32_t Width = 0;
 	};
 
 	// Named glTF clip. Duration is the last key time, in seconds.
@@ -215,6 +250,10 @@ namespace Basalt {
 		// one: it is not the model's, so "<model>#material/<n>" and extraction stop before it (GetImportedMaterialCount).
 		std::vector<MaterialData> Materials;
 		std::vector<MeshNode> Nodes;
+		// Morph target deltas of every submesh (see Submesh::MorphDeltaOffset).
+		std::vector<MorphDelta> MorphDeltas;
+		// Total morph weights of the nodes with morph targets: the size of a pose's MorphWeights (FinalizeHierarchy).
+		uint32_t MorphWeightCount = 0;
 		// Materials without the trailing default one, which is also the default's index. Every MeshSource the importer or
 		// Primitives make has that default; an empty list (a hand-built source) counts as none.
 		size_t GetImportedMaterialCount() const { return Materials.empty() ? 0 : Materials.size() - 1; }
@@ -241,11 +280,13 @@ namespace Basalt {
 		MemoryAllocation m_Memory;
 
 	public:
-		// Rebuilds NodeOrder; returns false for an invalid parent or cycle.
+		// Rebuilds NodeOrder and lays out the nodes' morph weights (call after Meshes and Nodes are set); returns false
+		// for an invalid parent or cycle, or a node whose MorphWeights do not match its mesh's morph targets.
 		bool FinalizeHierarchy();
 
-		// Adds a submesh from raw geometry, updating bounds. Returns the submesh index.
-		uint32_t AddSubmesh(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, uint32_t materialIndex);
+		// Adds a submesh from raw geometry, updating bounds. Returns the submesh index. `morphDeltas` holds
+		// morphTargetCount * vertices.size() deltas, target-major (empty without morph targets).
+		uint32_t AddSubmesh(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, uint32_t materialIndex, const std::vector<MorphDelta>& morphDeltas = {}, uint32_t morphTargetCount = 0);
 		// Recomputes MeshData and global bounds from submesh bounds.
 		void UpdateBounds();
 
@@ -254,6 +295,12 @@ namespace Basalt {
 		// Generates smooth normals (for meshes without authored normals).
 		static void GenerateNormals(std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices);
 	};
+
+	// The range of the displacement a submesh's morph targets apply at `weights` (one per target; missing ones count
+	// as 0): sum over targets of weight * MorphBounds. Contains zero; an empty (invalid) box without morph targets.
+	AABB MorphDisplacementBounds(const Submesh& submesh, std::span<const float> weights);
+	// A submesh vertex (index relative to BaseVertex) with its morph deltas applied at `weights`.
+	Vertex MorphVertex(const MeshSource& source, const Submesh& submesh, uint32_t vertex, std::span<const float> weights);
 
 	// Built-in primitives, sized to match the default collider shapes (unit cube, radius 0.5, ...).
 	namespace Primitives {

@@ -103,6 +103,26 @@ namespace Basalt {
 		m_White = CreateTexture(*TextureSource::CreateSolid(0xFFFFFFFF, "White"), false, "White", commandList);
 		m_Black = CreateTexture(*TextureSource::CreateSolid(0x000000FF, "Black"), false, "Black", commandList);
 		m_FlatNormal = CreateTexture(*TextureSource::CreateSolid(0x8080FFFF, "FlatNormal"), false, "FlatNormal", commandList);
+		m_EmptyMorph = CreateMorphTexture(1, 1, "EmptyMorphDeltas");
+		if (m_EmptyMorph)
+		{
+			const glm::vec4 zero(0);
+			commandList->writeTexture(m_EmptyMorph, 0, 0, &zero, sizeof(zero));
+		}
+		else
+			BS_CORE_ERROR("RenderResources: failed to create the empty morph texture");
+	}
+
+	nvrhi::TextureHandle RenderResources::CreateMorphTexture(uint32_t width, uint32_t height, const std::string& debugName)
+	{
+		nvrhi::TextureDesc desc;
+		desc.width = width;
+		desc.height = height;
+		desc.format = nvrhi::Format::RGBA32_FLOAT;
+		desc.debugName = debugName;
+		desc.initialState = nvrhi::ResourceStates::ShaderResource;
+		desc.keepInitialState = true;
+		return m_Device->createTexture(desc);
 	}
 
 	nvrhi::TextureHandle RenderResources::CreateTexture(const TextureSource& source, bool srgb, const char* debugName, nvrhi::ICommandList* commandList)
@@ -239,10 +259,33 @@ namespace Basalt {
 		commandList->writeBuffer(mesh.VertexBuffer, source->Vertices.data(), vertexDesc.byteSize);
 		commandList->writeBuffer(mesh.IndexBuffer, source->Indices.data(), indexDesc.byteSize);
 
+		// Two texels per delta (Morphing.glsl), in rows of MorphTextureWidth; the importer bounds the row count.
+		size_t morphBytes = 0;
+		if (!source->MorphDeltas.empty())
+		{
+			const size_t texels = source->MorphDeltas.size() * 2;
+			const auto width = static_cast<uint32_t>(std::min<size_t>(texels, MorphTextureWidth));
+			const auto height = static_cast<uint32_t>((texels + width - 1) / width);
+			mesh.MorphDeltas = height <= MaxMorphDeltas * 2 / MorphTextureWidth ? CreateMorphTexture(width, height, source->Key + " (morph targets)") : nullptr;
+			if (mesh.MorphDeltas)
+			{
+				std::vector<glm::vec4> data(static_cast<size_t>(width) * height, glm::vec4(0));
+				for (size_t i = 0; i < source->MorphDeltas.size(); i++)
+				{
+					data[i * 2] = glm::vec4(source->MorphDeltas[i].Position, 0);
+					data[i * 2 + 1] = glm::vec4(source->MorphDeltas[i].Normal, 0);
+				}
+				commandList->writeTexture(mesh.MorphDeltas, 0, 0, data.data(), static_cast<size_t>(width) * sizeof(glm::vec4));
+				morphBytes = data.size() * sizeof(glm::vec4);
+			}
+			else
+				BS_CORE_ERROR("RenderResources: failed to create the morph target texture for '{}'; it draws without morph targets", source->Key);
+		}
+
 		MeshEntry& entry = m_Meshes[source.get()];
 		entry.Source = source;
 		entry.Mesh = std::move(mesh);
-		entry.Memory.Resize(static_cast<size_t>(vertexDesc.byteSize + indexDesc.byteSize));
+		entry.Memory.Resize(static_cast<size_t>(vertexDesc.byteSize + indexDesc.byteSize) + morphBytes);
 		return &entry.Mesh;
 	}
 

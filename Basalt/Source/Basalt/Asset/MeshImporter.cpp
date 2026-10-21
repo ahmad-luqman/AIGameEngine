@@ -199,6 +199,105 @@ namespace Basalt {
 			return cgltf_accessor_unpack_floats(accessor, reinterpret_cast<float*>(out.data()), floatCount) == floatCount;
 		}
 
+		// Morph target names (extras.targetNames, unique within the mesh) and default weights.
+		bool ReadMorphTargetNames(const cgltf_mesh& mesh, MeshData& meshData, std::string& outError)
+		{
+			const size_t targets = mesh.primitives_count > 0 ? mesh.primitives[0].targets_count : 0;
+			for (cgltf_size p = 1; p < mesh.primitives_count; p++)
+				if (mesh.primitives[p].targets_count != targets)
+				{
+					outError = fmt::format("primitive {} has {} morph targets, primitive 0 has {}", p, mesh.primitives[p].targets_count, targets);
+					return false;
+				}
+			if (targets > MaxMorphTargets)
+			{
+				outError = fmt::format("{} morph targets exceed the limit of {}", targets, MaxMorphTargets);
+				return false;
+			}
+			if ((mesh.weights_count > 0 && mesh.weights_count != targets) || (mesh.target_names_count > 0 && mesh.target_names_count != targets))
+			{
+				outError = fmt::format("{} default weights and {} target names for {} morph targets", mesh.weights_count, mesh.target_names_count, targets);
+				return false;
+			}
+			std::set<std::string> used;
+			for (size_t t = 0; t < targets; t++)
+			{
+				const char* authored = t < mesh.target_names_count ? mesh.target_names[t] : nullptr;
+				const std::string base = authored && authored[0] ? authored : "Target" + std::to_string(t);
+				std::string name = base;
+				for (size_t suffix = 1; !used.insert(name).second; suffix++)
+					name = base + "_" + std::to_string(suffix);
+				meshData.MorphTargets.push_back(std::move(name));
+				const float weight = t < mesh.weights_count ? mesh.weights[t] : 0.0f;
+				if (!std::isfinite(weight))
+				{
+					outError = "non-finite default morph weight";
+					return false;
+				}
+				meshData.MorphWeights.push_back(weight);
+			}
+			return true;
+		}
+
+		// Reads a primitive's morph targets into target-major deltas. A target without NORMAL deltas takes the change in
+		// generated normals between the base and the fully morphed shape, so lighting follows the new surface.
+		bool ReadMorphTargets(const cgltf_primitive& primitive, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, std::vector<MorphDelta>& outDeltas, size_t& budget, std::string& outError)
+		{
+			const size_t targets = primitive.targets_count;
+			if (targets == 0)
+				return true;
+			if (vertices.size() > budget / targets)
+			{
+				outError = fmt::format("morph targets exceed the limit of {} deltas per model", MaxMorphDeltas);
+				return false;
+			}
+			budget -= vertices.size() * targets;
+			outDeltas.assign(targets * vertices.size(), MorphDelta{});
+			std::vector<Vertex> generatedBase;
+			for (size_t t = 0; t < targets; t++)
+			{
+				const cgltf_morph_target& target = primitive.targets[t];
+				const cgltf_accessor* positions = nullptr;
+				const cgltf_accessor* normals = nullptr;
+				for (cgltf_size a = 0; a < target.attributes_count; a++)
+				{
+					const cgltf_attribute& attribute = target.attributes[a];
+					if (attribute.type == cgltf_attribute_type_position && attribute.index == 0)
+						positions = attribute.data;
+					else if (attribute.type == cgltf_attribute_type_normal && attribute.index == 0)
+						normals = attribute.data;
+				}
+				MorphDelta* deltas = outDeltas.data() + t * vertices.size();
+				std::vector<glm::vec3> data;
+				for (const auto& [accessor, name] : { std::pair{ positions, "POSITION" }, std::pair{ normals, "NORMAL" } })
+				{
+					if (!accessor)
+						continue;
+					if (accessor->count != vertices.size() || !ReadAccessor(accessor, data, 3) || !std::ranges::all_of(data, [](const glm::vec3& v) { return Math::IsFinite(v); }))
+					{
+						outError = fmt::format("morph target {} has an invalid {} accessor", t, name);
+						return false;
+					}
+					for (size_t v = 0; v < vertices.size(); v++)
+						(accessor == positions ? deltas[v].Position : deltas[v].Normal) = data[v];
+				}
+				if (!positions || normals)
+					continue;
+				if (generatedBase.empty())
+				{
+					generatedBase = vertices;
+					MeshSource::GenerateNormals(generatedBase, indices);
+				}
+				std::vector<Vertex> morphed = vertices;
+				for (size_t v = 0; v < vertices.size(); v++)
+					morphed[v].Position += deltas[v].Position;
+				MeshSource::GenerateNormals(morphed, indices);
+				for (size_t v = 0; v < vertices.size(); v++)
+					deltas[v].Normal = morphed[v].Normal - generatedBase[v].Normal;
+			}
+			return true;
+		}
+
 		bool ReadIndices(const cgltf_accessor* accessor, std::vector<uint32_t>& out)
 		{
 			out.assign(accessor->count, 0u);
@@ -440,11 +539,17 @@ namespace Basalt {
 		source->Materials.push_back(MaterialData{ .Name = "Default" });
 
 		// Geometry.
+		size_t morphBudget = MaxMorphDeltas;
 		for (cgltf_size meshIndex = 0; meshIndex < data->meshes_count; meshIndex++)
 		{
 			const cgltf_mesh& mesh = data->meshes[meshIndex];
 			MeshData meshData;
 			meshData.Name = mesh.name ? mesh.name : "Mesh" + std::to_string(meshIndex);
+			if (!ReadMorphTargetNames(mesh, meshData, outError))
+			{
+				outError = fmt::format("{}: mesh '{}': {}", key, meshData.Name, outError);
+				return nullptr;
+			}
 
 			for (cgltf_size primitiveIndex = 0; primitiveIndex < mesh.primitives_count; primitiveIndex++)
 			{
@@ -600,14 +705,22 @@ namespace Basalt {
 					MeshSource::GenerateTangents(vertices, indices);
 				}
 
+				const uint32_t targets = static_cast<uint32_t>(primitive.targets_count);
+				std::vector<MorphDelta> morphDeltas;
+				if (!ReadMorphTargets(primitive, vertices, indices, morphDeltas, morphBudget, outError))
+				{
+					outError = fmt::format("{}: mesh '{}' primitive {}: {}", key, meshData.Name, primitiveIndex, outError);
+					return nullptr;
+				}
+
 				const uint32_t materialIndex = primitive.material ? static_cast<uint32_t>(primitive.material - data->materials) : defaultMaterial;
 				const bool reorder = !source->Materials[materialIndex].IsBlended();
-				const bool optimized = MeshOptimizer::Optimize(vertices, indices, reorder);
+				const bool optimized = MeshOptimizer::Optimize(vertices, indices, reorder, &morphDeltas, targets);
 				if (!optimized)
 				{
 					BS_CORE_WARN("MeshImporter: {}: optimization and LODs skipped for empty, malformed or non-finite geometry in mesh '{}'", path.filename().string(), meshData.Name);
 				}
-				const auto submesh = source->AddSubmesh(vertices, indices, materialIndex);
+				const auto submesh = source->AddSubmesh(vertices, indices, materialIndex, morphDeltas, targets);
 				if (optimized)
 					MeshOptimizer::GenerateLODs(*source, submesh);
 				meshData.Submeshes.push_back(submesh);
@@ -624,6 +737,21 @@ namespace Basalt {
 			result.Parent = node.parent ? static_cast<int32_t>(node.parent - data->nodes) : -1;
 			result.MeshIndex = node.mesh ? static_cast<int32_t>(node.mesh - data->meshes) : -1;
 			result.SkinIndex = node.skin ? static_cast<int32_t>(node.skin - data->skins) : -1;
+			if (result.MeshIndex >= 0)
+			{
+				const MeshData& mesh = source->Meshes[result.MeshIndex];
+				if (node.weights_count > 0 && node.weights_count != mesh.MorphTargets.size())
+				{
+					outError = fmt::format("{}: node '{}' has {} weights for {} morph targets", key, result.Name, node.weights_count, mesh.MorphTargets.size());
+					return nullptr;
+				}
+				result.MorphWeights = node.weights_count > 0 ? std::vector<float>(node.weights, node.weights + node.weights_count) : mesh.MorphWeights;
+				if (!std::ranges::all_of(result.MorphWeights, [](float w) { return std::isfinite(w); }))
+				{
+					outError = fmt::format("{}: node '{}' has non-finite morph weights", key, result.Name);
+					return nullptr;
+				}
+			}
 			if (node.has_matrix)
 			{
 				glm::mat4 matrix;
@@ -658,7 +786,7 @@ namespace Basalt {
 		if (source->Nodes.empty())
 		{
 			for (size_t m = 0; m < source->Meshes.size(); m++)
-				source->Nodes.push_back(MeshNode{ .Name = source->Meshes[m].Name, .MeshIndex = static_cast<int32_t>(m) });
+				source->Nodes.push_back(MeshNode{ .Name = source->Meshes[m].Name, .MeshIndex = static_cast<int32_t>(m), .MorphWeights = source->Meshes[m].MorphWeights });
 		}
 
 		if (!ImportAnimations(*data, *source, outError))

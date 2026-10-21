@@ -1,5 +1,7 @@
 #include "Basalt/Asset/MeshSource.h"
 
+#include "Basalt/Core/Assert.h"
+
 #include <glm/gtc/constants.hpp>
 
 #include <algorithm>
@@ -10,18 +12,20 @@ namespace Basalt {
 	void MeshSource::UpdateMemoryUsage()
 	{
 		// Track retained CPU payload capacity, including animation and embedded image storage.
-		size_t bytes = sizeof(MeshSource) + Vertices.capacity() * sizeof(Vertex) + Indices.capacity() * sizeof(uint32_t) + Submeshes.capacity() * sizeof(Submesh) + Meshes.capacity() * sizeof(MeshData) + Materials.capacity() * sizeof(MaterialData) + Nodes.capacity() * sizeof(MeshNode) + Skins.capacity() * sizeof(MeshSkin) + Animations.capacity() * sizeof(AnimationClip) + NodeOrder.capacity() * sizeof(uint32_t) + EmbeddedImages.capacity() * sizeof(std::vector<uint8_t>) + ExternalFiles.capacity() * sizeof(std::string);
+		size_t bytes = sizeof(MeshSource) + Vertices.capacity() * sizeof(Vertex) + Indices.capacity() * sizeof(uint32_t) + Submeshes.capacity() * sizeof(Submesh) + Meshes.capacity() * sizeof(MeshData) + Materials.capacity() * sizeof(MaterialData) + Nodes.capacity() * sizeof(MeshNode) + Skins.capacity() * sizeof(MeshSkin) + Animations.capacity() * sizeof(AnimationClip) + NodeOrder.capacity() * sizeof(uint32_t) + EmbeddedImages.capacity() * sizeof(std::vector<uint8_t>) + ExternalFiles.capacity() * sizeof(std::string) + MorphDeltas.capacity() * sizeof(MorphDelta);
 		for (const auto& submesh : Submeshes)
-			bytes += submesh.JointBounds.capacity() * sizeof(JointInfluenceBounds) + submesh.LODs.capacity() * sizeof(MeshLOD);
+			bytes += submesh.JointBounds.capacity() * sizeof(JointInfluenceBounds) + submesh.LODs.capacity() * sizeof(MeshLOD) + submesh.MorphBounds.capacity() * sizeof(AABB);
 		for (const auto& mesh : Meshes)
-			bytes += mesh.Submeshes.capacity() * sizeof(uint32_t);
+			bytes += mesh.Submeshes.capacity() * sizeof(uint32_t) + mesh.MorphTargets.capacity() * sizeof(std::string) + mesh.MorphWeights.capacity() * sizeof(float);
+		for (const auto& node : Nodes)
+			bytes += node.MorphWeights.capacity() * sizeof(float);
 		for (const auto& skin : Skins)
 			bytes += skin.Joints.capacity() * sizeof(SkinJoint);
 		for (const auto& clip : Animations)
 		{
 			bytes += clip.Tracks.capacity() * sizeof(AnimationTrack);
 			for (const auto& track : clip.Tracks)
-				bytes += track.Times.capacity() * sizeof(float) + track.Values.capacity() * sizeof(glm::vec4);
+				bytes += track.Times.capacity() * sizeof(float) + track.Values.capacity() * sizeof(glm::vec4) + track.Weights.capacity() * sizeof(float);
 		}
 		for (const auto& image : EmbeddedImages)
 			bytes += image.capacity();
@@ -43,11 +47,23 @@ namespace Basalt {
 		for (size_t i = 0; i < NodeOrder.size(); i++)
 			for (uint32_t child : children[NodeOrder[i]])
 				NodeOrder.push_back(child);
-		return NodeOrder.size() == Nodes.size();
+		if (NodeOrder.size() != Nodes.size())
+			return false;
+		MorphWeightCount = 0;
+		for (MeshNode& node : Nodes)
+		{
+			const size_t targets = node.MeshIndex >= 0 && static_cast<size_t>(node.MeshIndex) < Meshes.size() ? Meshes[node.MeshIndex].MorphTargets.size() : 0;
+			if (node.MorphWeights.size() != targets)
+				return false;
+			node.MorphWeightOffset = targets > 0 ? static_cast<int32_t>(MorphWeightCount) : -1;
+			MorphWeightCount += static_cast<uint32_t>(targets);
+		}
+		return true;
 	}
 
-	uint32_t MeshSource::AddSubmesh(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, uint32_t materialIndex)
+	uint32_t MeshSource::AddSubmesh(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, uint32_t materialIndex, const std::vector<MorphDelta>& morphDeltas, uint32_t morphTargetCount)
 	{
+		BS_CORE_ASSERT(morphDeltas.size() == static_cast<size_t>(morphTargetCount) * vertices.size(), "one delta per target and vertex");
 		Submesh submesh;
 		submesh.BaseVertex = static_cast<uint32_t>(Vertices.size());
 		submesh.BaseIndex = static_cast<uint32_t>(Indices.size());
@@ -77,11 +93,53 @@ namespace Basalt {
 		}
 		for (const auto& [joint, bounds] : influences)
 			submesh.JointBounds.push_back(bounds);
+		submesh.MorphTargetCount = morphTargetCount;
+		submesh.MorphDeltaOffset = static_cast<uint32_t>(MorphDeltas.size());
+		submesh.MorphBounds.resize(morphTargetCount);
+		for (uint32_t target = 0; target < morphTargetCount; target++)
+		{
+			// Include zero so a target that moves only some vertices widens the others' bounds correctly.
+			AABB& range = submesh.MorphBounds[target];
+			range.Expand(glm::vec3(0));
+			for (size_t v = 0; v < vertices.size(); v++)
+				range.Expand(morphDeltas[target * vertices.size() + v].Position);
+		}
+		MorphDeltas.insert(MorphDeltas.end(), morphDeltas.begin(), morphDeltas.end());
 
 		Vertices.insert(Vertices.end(), vertices.begin(), vertices.end());
 		Indices.insert(Indices.end(), indices.begin(), indices.end());
 		Submeshes.push_back(submesh);
 		return static_cast<uint32_t>(Submeshes.size() - 1);
+	}
+
+	AABB MorphDisplacementBounds(const Submesh& submesh, std::span<const float> weights)
+	{
+		AABB range;
+		if (submesh.MorphTargetCount == 0)
+			return range;
+		range.Min = range.Max = glm::vec3(0);
+		for (size_t target = 0; target < std::min<size_t>(weights.size(), submesh.MorphBounds.size()); target++)
+		{
+			const glm::vec3 a = weights[target] * submesh.MorphBounds[target].Min;
+			const glm::vec3 b = weights[target] * submesh.MorphBounds[target].Max;
+			range.Min += glm::min(a, b);
+			range.Max += glm::max(a, b);
+		}
+		return range;
+	}
+
+	Vertex MorphVertex(const MeshSource& source, const Submesh& submesh, uint32_t vertex, std::span<const float> weights)
+	{
+		Vertex result = source.Vertices[submesh.BaseVertex + vertex];
+		for (size_t target = 0; target < std::min<size_t>(weights.size(), submesh.MorphTargetCount); target++)
+		{
+			if (weights[target] == 0.0f)
+				continue;
+			const MorphDelta& delta = source.MorphDeltas[submesh.MorphDeltaOffset + target * submesh.VertexCount + vertex];
+			result.Position += weights[target] * delta.Position;
+			result.Normal += weights[target] * delta.Normal;
+		}
+		return result;
 	}
 
 	void MeshSource::UpdateBounds()

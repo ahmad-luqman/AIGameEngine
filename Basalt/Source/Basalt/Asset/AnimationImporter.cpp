@@ -175,14 +175,14 @@ namespace Basalt {
 					{
 						const auto& channel = input.channels[c];
 						m_Context = "clip '" + clip.Name + "' channel " + std::to_string(c) + ": ";
-						if (!channel.target_node || channel.target_path == cgltf_animation_path_type_weights)
+						if (!channel.target_node)
 						{
-							BS_CORE_WARN("MeshImporter: {}: clip '{}' channel {}: skipping unsupported {} animation", m_Source.Key, clip.Name, c, !channel.target_node ? "pointer" : "morph-weight");
+							BS_CORE_WARN("MeshImporter: {}: clip '{}' channel {}: skipping unsupported pointer animation", m_Source.Key, clip.Name, c);
 							continue;
 						}
 						if (!channel.sampler)
 							return Fail("animation channel needs a target and sampler");
-						if (channel.target_node->has_matrix)
+						if (channel.target_node->has_matrix && channel.target_path != cgltf_animation_path_type_weights)
 							return Fail("animated node must use TRS, not matrix");
 						AnimationTrack track;
 						track.Node = static_cast<uint32_t>(channel.target_node - m_Data.nodes);
@@ -197,8 +197,14 @@ namespace Basalt {
 							case cgltf_animation_path_type_scale:
 								track.Path = AnimationPath::Scale;
 								break;
+							case cgltf_animation_path_type_weights:
+								track.Path = AnimationPath::Weights;
+								track.Width = static_cast<uint32_t>(m_Source.Nodes[track.Node].MorphWeights.size());
+								if (track.Width == 0)
+									return Fail("morph-weight animation targets a node without morph targets");
+								break;
 							default:
-								return Fail("morph-weight animation is not supported");
+								return Fail("unsupported animation path");
 						}
 						if (!targets.emplace(track.Node, track.Path).second)
 							return Fail("duplicate animation target");
@@ -227,6 +233,14 @@ namespace Basalt {
 							previous = time;
 						}
 						clip.Duration = std::max(clip.Duration, track.Times.back());
+						if (track.Path == AnimationPath::Weights)
+						{
+							const size_t values = track.Times.size() * (track.Interpolation == AnimationInterpolation::CubicSpline ? 3 : 1);
+							if (sampler.output->count != values * track.Width || !Read(sampler.output, cgltf_type_scalar, track.Weights, m_Budget, true))
+								return Fail("invalid morph weight values");
+							clip.Tracks.push_back(std::move(track));
+							continue;
+						}
 						const bool rotation = track.Path == AnimationPath::Rotation;
 						const bool cubic = track.Interpolation == AnimationInterpolation::CubicSpline;
 						std::vector<float> values;
