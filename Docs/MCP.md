@@ -258,7 +258,7 @@ costs one view.
   diagnostics; `editor.window_screenshot` includes them.
 - `editor.panel {"name":"Project Settings","open":true,"focus":true}` opens, closes or focuses an editor
   window (`Viewport`, `Game`, `Hierarchy`, `Inspector`, `Scene`, `Content Browser`, `Console`,
-  `Project Settings`; only Project Settings can be closed) and returns `{name, open}`.
+  `Project Settings`, `Animation Graph`, `Property Animation`; only Project Settings can be closed) and returns `{name, open}`.
 
 - `editor.thumbnail {"path":"Assets/Models/Ship.glb","output":"ship.png","refresh":false}` makes (or reads from
   the cache) the content-browser preview of an image, `.hdr` environment, `.gltf`/`.glb` model, `.bprefab` or
@@ -268,6 +268,12 @@ costs one view.
   files report that they have no preview.
 - `editor.material_preview {"entity":"Ball","output":"ball.png"}` renders an entity's Material on a sphere,
   as the inspector shows it (128x128). A `Material` asset that does not load is an error.
+- `editor.animation_graph {"path":"Assets/Animations/Hero.banimgraph"}` opens a graph draft. It returns
+  `{open, path, dirty, valid, problem, externalChange, error}`. Pending or refused names count as dirty and
+  block saving/opening another graph until corrected or cancelled. `{"close":true}` explicitly discards
+  the draft. Agents edit graph data with `asset.read`/`asset.write`; clean drafts follow reloads and moves.
+  The Property Animation panel uses `animation.key`, `animation.sample`, `animation.control` and the
+  component registry, so the same authoring operations work headlessly.
 - `editor.material_editor {"path":"Assets/Materials/Brick.bmaterial"}` opens a material file in the Material Editor
   window (`{"close":true}` closes it, discarding unsaved edits) and returns `{open, path, dirty, valid, error}`. Opening
   fails while another material has unsaved edits. Agents edit material files with `asset.write`; an open editor without

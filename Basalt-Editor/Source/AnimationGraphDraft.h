@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 
 #include <string>
+#include <functional>
 #include <vector>
 
 namespace Basalt {
@@ -39,4 +40,15 @@ namespace Basalt {
 		nlohmann::json m_Saved;
 		std::vector<nlohmann::json> m_Undo, m_Redo;
 	};
+	// A name text buffer independent of ImGui frames. Rejected text stays pending until corrected or cancelled.
+	struct AnimationGraphNameEdit
+	{
+		std::string Text;
+		bool Pending = false;
+		std::string Problem;
+		void Sync(const std::string& current);
+		void Cancel(const std::string& current);
+		bool Commit(const std::function<bool(const std::string&)>& rename);
+	};
+
 }

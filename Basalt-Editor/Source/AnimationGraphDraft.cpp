@@ -217,4 +217,29 @@ namespace Basalt {
 			return std::any_of(t.at("Conditions").begin(), t.at("Conditions").end(), [&](const auto& c) { return c.at("Parameter") == name; });
 		});
 	}
+	void AnimationGraphNameEdit::Sync(const std::string& current)
+	{
+		if (!Pending)
+			Text = current;
+	}
+	void AnimationGraphNameEdit::Cancel(const std::string& current)
+	{
+		Text = current;
+		Pending = false;
+		Problem.clear();
+	}
+	bool AnimationGraphNameEdit::Commit(const std::function<bool(const std::string&)>& rename)
+	{
+		if (!Pending)
+			return true;
+		if (!rename(Text))
+		{
+			Problem = "Name must be nonempty and unique; correct it or press Escape to cancel";
+			return false;
+		}
+		Pending = false;
+		Problem.clear();
+		return true;
+	}
+
 }

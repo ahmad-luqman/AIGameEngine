@@ -1177,7 +1177,8 @@ scalars use X and vector fields use the first N lanes. Quaternion rotation field
 metadata (`quaternionRotations` in `component.types`): keys hold Euler degrees, but sampling uses shortest-arc
 quaternion slerp, including rotations beyond 90° and across ±180°. Use intermediate keys for turns exceeding
 180°. Stepped rotation tracks hold the preceding orientation. Scalar angles remain ordinary numeric tracks.
-Empty tracks do nothing; targets must exist when sampling. Integer, boolean, string, entity, asset,
+Quaternion keys retain the registry's Euler serialization, including its existing limitations at exact gimbal lock (tracked in ROADMAP.md).
+Empty tracks do nothing; targets must exist when sampling. Integer, boolean, string, enum, entity, asset,
 object and nested list fields are excluded. The registry also excludes physics configuration components
 (RigidBody, all colliders, Joint and CharacterController): their update signals reconstruct physics objects
 and reset contacts. Animate Transform on a kinematic rigid body to move a physics platform or door.
@@ -1186,8 +1187,8 @@ Keys use strictly increasing normalized Time in [0,1], with a maximum of 256 key
 tracks per entity. Repeated targets use the last nonempty track. Key capture edits that winning track,
 falling back to the last matching empty track only when all matches are empty. Sampling holds the first/last value outside the keys'
 interval. Linear interpolation is the default; Stepped holds the left key until the next key's time.
-Changed samples use the component's existing validator and update signals; unchanged values emit no update. Fields of the same component
-are applied together; when a component rejects its patch, earlier components may already have changed.
+Changed samples use the component's existing validator and update signals. Patches matching serialized values are skipped; quaternion orientation comparisons allow float roundoff. Fields of the same component
+are applied together; when a component rejects its patch, earlier components in component-name order may already have changed.
 No missing target component is implicitly added.
 
 Playback runs after script OnUpdate and before skeletal animation and physics in Play/Simulate.
@@ -1196,7 +1197,7 @@ Clocks belong to the running scene, respect scene pause/stepping, and never seri
 restart the clock according to PlayOnStart. Duration is seconds in (0,86400], Speed is [0,1000].
 Nonlooping playback holds its final sample and stops; looping playback wraps to zero at Duration.
 A failed sample logs once and suspends that timeline until its component is edited or a successful
-Play/Stop/Seek repairs it. Other entities' timelines continue.
+Play/Stop/Seek repairs it. Failure also stops the clock: a successful Seek repair stays stopped, Stop repairs at zero and stays stopped, and Play repairs and restarts. Other entities' timelines continue.
 
 `e:ControlPropertyAnimation(action, [time])` returns true on success and raises on invalid input or
 sampling failure. Actions are `Play` (restart and sample zero), `Pause`, `Resume`, `Stop` (sample zero
@@ -1208,6 +1209,8 @@ The entity needs a PropertyAnimation and a running Play/Simulate scene. Automati
 `animation.control` (also supports `Status`, returning normalized time, playing, failed and error),
 `animation.key` and `animation.sample`. The latter samples without changing the runtime clock.
 
+### Animation graph authoring
+
 The Animation Graph panel opens `.banimgraph` files by Content Browser double-click or
 `editor.animation_graph`. Its state diagram marks the initial state; clicking a state edits its clip
 or blend-space source, loop and root-motion flags and blend axes. Parameters and ordered transitions
@@ -1215,9 +1218,9 @@ are edited below, including typed conditions, fade durations and optional exit t
 and Lower Priority change transition array order. Renames update references; deleting a state deletes
 its edges, and deleting a parameter deletes dependent edges rather than broadening their conditions.
 Names commit when text editing finishes, so intermediate empty or colliding names can be typed; a refused
-rename reports an error and keeps the old name. `editor.animation_graph` reports externalChange and error
+rename keeps the refused text pending, reports an error and leaves the committed graph unchanged. Correct the text or press Escape to cancel; Save remains blocked. `editor.animation_graph` reports externalChange and error
 alongside dirty/valid state.
-Undo Graph/Redo Graph navigate the draft history. Save validates through `AnimationGraph::FromJson` and
+Undo Graph/Redo Graph first cancel pending name text; otherwise they navigate the draft history. Save validates through `AnimationGraph::FromJson` and
 `asset.write`; Revert reloads the file. Opening
 another graph with unsaved edits fails until Save/Revert. Clean drafts follow file reloads; dirty drafts
 report conflicts, with Save explicitly replacing the disk version. Project changes discard the old draft.
