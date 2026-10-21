@@ -27,6 +27,8 @@ namespace Basalt {
 		std::map<EntityPair, int> PairCounts;
 		// A subset of ActiveContacts: Jolt removes sleeping contacts without physical separation.
 		std::set<ContactKey> SuspendedContacts;
+		// EnTT destruction signals must finish popping components before user callbacks can remove them again.
+		std::vector<std::pair<EntityPair, ContactEventType>> DeferredEnds;
 
 		void Acquire(const ContactKey& key)
 		{
@@ -73,7 +75,7 @@ namespace Basalt {
 		return body != nullptr && body->IsTrigger;
 	}
 
-	void PhysicsWorld::Impl::EndContacts(UUID uuid, bool trigger)
+	void PhysicsWorld::Impl::EndContacts(UUID uuid, bool trigger, bool defer)
 	{
 		const uint64_t id = static_cast<uint64_t>(uuid);
 		std::set<EntityPair> ended;
@@ -94,6 +96,11 @@ namespace Basalt {
 		{
 			const UUID other = pair.first == id ? UUID(pair.second) : UUID(pair.first);
 			const bool isTrigger = trigger || IsTrigger(other);
+			if (defer)
+			{
+				Contacts->DeferredEnds.emplace_back(pair, isTrigger ? ContactEventType::TriggerExit : ContactEventType::CollisionEnd);
+				continue;
+			}
 			Entity a = ScenePtr->GetEntityByUUID(pair.first);
 			Entity b = ScenePtr->GetEntityByUUID(pair.second);
 			if (a && b)
@@ -105,7 +112,7 @@ namespace Basalt {
 	{
 		if (SceneEventListener* listener = ScenePtr->GetEventListener())
 			listener->OnContact(*ScenePtr, type, first, second, contact);
-		if (ScriptEngine* scriptEngine = ScenePtr->GetScriptEngine())
+		if (ScriptEngine* scriptEngine = ScenePtr->GetScriptEngine(); scriptEngine && first && second)
 			scriptEngine->OnContactEvent(type, first, second, contact);
 	}
 
@@ -113,8 +120,7 @@ namespace Basalt {
 	{
 		const JPH::BodyInterface& bodies = System->GetBodyInterface();
 		// Character inner bodies are teleported and report no velocity: use gameplay velocity. Ragdolls expose
-		// every part so separation data comes
-		// from the closest pair of limbs, rather than an arbitrary root body.
+		// every part so separation data comes from the closest pair of limbs, rather than an arbitrary root body.
 		using MovingBody = std::pair<JPH::BodyID, JPH::Vec3>;
 		auto bodiesOf = [&](UUID uuid) -> std::vector<MovingBody> {
 			if (auto* body = FindBody(uuid); body != nullptr)
@@ -159,6 +165,15 @@ namespace Basalt {
 
 	void PhysicsWorld::Impl::DispatchContacts(float fixedStep)
 	{
+		auto deferred = std::move(Contacts->DeferredEnds);
+		Contacts->DeferredEnds.clear();
+		for (const auto& [pair, type] : deferred)
+		{
+			Entity a = ScenePtr->GetEntityByUUID(pair.first);
+			Entity b = ScenePtr->GetEntityByUUID(pair.second);
+			if (a && b)
+				DispatchContact(type, a, b, std::nullopt);
+		}
 		std::vector<RawContactEvent> events;
 		{
 			std::scoped_lock lock(ContactListener.Mutex);
@@ -177,7 +192,13 @@ namespace Basalt {
 		const auto& bodies = System->GetBodyInterface();
 		auto sleeping = [&](uint64_t token) {
 			const JPH::BodyID id(static_cast<uint32_t>(token >> 32));
-			return BodyToEntity.contains(id.GetIndexAndSequenceNumber()) && bodies.GetMotionType(id) == JPH::EMotionType::Dynamic && !bodies.IsActive(id);
+			const auto owner = BodyToEntity.find(id.GetIndexAndSequenceNumber());
+			if (owner == BodyToEntity.end() || bodies.IsActive(id))
+				return false;
+			if (const auto* body = FindBody(owner->second); body && body->ID == id)
+				return body->Type != RigidBodyType::Static;
+			const auto rig = Ragdolls.find(owner->second);
+			return rig != Ragdolls.end() && rig->second.Doll != nullptr;
 		};
 		std::map<Impl::EntityPair, PairChange> touched;
 		for (const RawContactEvent& event : events)

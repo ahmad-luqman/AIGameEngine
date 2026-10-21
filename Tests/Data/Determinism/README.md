@@ -18,7 +18,8 @@ spawn additional scripted, jointed bodies. Further checkpoints enable collisions
 remove connected bodies and move the trigger away while waking the survivors. Thus hashes check both
 physics state and callback order, with assertions that the callbacks actually ran.
 
-Final checkpoints freeze the corpse, recover halfway and finish the blend. Ragdoll decomposition uses basic
+Final checkpoints freeze the corpse, move its entity from its authored Y = 3 to the Y = 0 ground, recover halfway
+and finish the blend. Ragdoll decomposition uses basic
 arithmetic/sqrt and recovery uses Jolt's portable quaternion interpolation, so markers and blend weights agree
 across platforms as well as the authoritative Jolt pose.
 

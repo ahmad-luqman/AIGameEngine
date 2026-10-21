@@ -711,11 +711,12 @@ namespace Basalt {
 			for (auto& serialized : data["Entities"])
 			{
 				Entity entity = scene.GetEntityByUUID(UUID(serialized["ID"].get<uint64_t>()));
-				const auto physical = physics->GetRagdollPose(entity);
-				if (!physical)
+				const auto snapshot = physics->GetRagdollPose(entity);
+				if (!snapshot)
 					continue;
+				const auto& physical = *snapshot;
 				json pose = json::array();
-				for (const auto& [node, matrix] : physical->Joints)
+				for (const auto& [node, matrix] : physical.Joints)
 				{
 					json values = json::array();
 					for (int column = 0; column < 4; column++)
@@ -723,7 +724,7 @@ namespace Basalt {
 							values.push_back(matrix[column][row]);
 					pose.push_back({ { "Node", node }, { "Transform", std::move(values) } });
 				}
-				serialized["Components"]["Ragdoll"]["Runtime"] = { { "Active", physical->Active }, { "Weight", physical->Weight }, { "Pose", std::move(pose) } };
+				serialized["Components"]["Ragdoll"]["Runtime"] = { { "Active", physical.Active }, { "Weight", physical.Weight }, { "Pose", std::move(pose) } };
 			}
 		std::unordered_map<uint64_t, uint64_t> indices;
 		for (const nlohmann::json& entity : data["Entities"])

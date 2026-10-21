@@ -186,11 +186,12 @@ namespace Basalt {
 		std::optional<glm::vec3> GetCharacterGroundNormal(Entity entity) const;
 		uint32_t GetCharacterCount() const;
 
-		// Enables passive skeleton physics, inheriting body/controller velocity and distributing a total world impulse.
-		// Returns false with a diagnostic when the rig/settings cannot be built. Repeated activation adds the impulse.
+		// Enables passive skeleton physics, inheriting body linear/angular and tangential motion (controller: linear),
+		// and distributing a total world impulse. Returns false with a diagnostic for invalid rigs/settings,
+		// overflowing impulses or cancellation by contact callbacks. Repeated activation adds the impulse.
 		bool ActivateRagdoll(Entity entity, const glm::vec3& impulse = glm::vec3(0));
 		// Freezes the physical pose, removes its bodies, optionally starts a get-up clip, and blends over seconds.
-		// Moves the entity horizontally with the fallen root; callers place its height for a different ground level.
+		// Aligns the incoming animation root horizontally with the fall; callers place height for a different ground level.
 		bool RecoverRagdoll(Entity entity, const std::string& clip, float seconds);
 		bool IsRagdollActive(Entity entity) const;
 		uint32_t GetRagdollBodyCount(Entity entity) const;
@@ -199,7 +200,7 @@ namespace Basalt {
 		std::vector<RagdollCapsule> GetRagdollCapsules(Entity entity) const;
 		// True during simulation or recovery; animation leaves root motion to the ragdoll during either.
 		bool HasRagdollPose(Entity entity) const;
-		// Model-space joint transforms and physical weight. Source identity prevents stale poses after asset reload.
+		// Model-space joint transforms and physical weight, with their owning source for identity checks after reload.
 		std::optional<RagdollPose> GetRagdollPose(Entity entity) const;
 		bool GetRagdollPose(Entity entity, const MeshSource& source, std::vector<std::pair<uint32_t, glm::mat4>>& joints, float& weight) const;
 
@@ -234,6 +235,8 @@ namespace Basalt {
 		static void ClearMeshShapeCache();
 
 	private:
+		friend class AnimationSystem;
+		void RejectRagdollPose(Entity entity);
 		struct Impl;
 		Scope<Impl> m_Impl;
 		float m_Accumulator = 0.0f;

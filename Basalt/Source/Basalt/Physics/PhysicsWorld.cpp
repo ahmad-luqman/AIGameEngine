@@ -519,7 +519,7 @@ namespace Basalt {
 
 		impl.ApplyPendingChanges();
 		impl.SyncRagdolls(*this, ts.GetSeconds());
-		// Restore a component-driven recovery for this frame's steps, without scanning every body twice
+		// Restore bodies after ragdoll removal or recovery for this frame's steps, without scanning every body twice
 		// on frames where ragdoll control changed nothing.
 		if (!impl.DirtyEntities.Empty())
 			impl.ApplyPendingChanges();
