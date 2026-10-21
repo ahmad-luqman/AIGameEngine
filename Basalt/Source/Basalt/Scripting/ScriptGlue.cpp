@@ -787,11 +787,14 @@ namespace Basalt {
 			entityType["GetMorphTargets"] = [&context](const ScriptEntity& self) {
 				return sol::as_table(RequireAnimations(context).GetMorphTargets(RequireAnimator(self, "GetMorphTargets")));
 			};
-			entityType["ActivateRagdoll"] = [&context](const ScriptEntity& self, sol::optional<glm::vec3> impulse) {
-				return RequirePhysics(context).ActivateRagdoll(self.ResolveOrThrow(), impulse.value_or(glm::vec3(0)));
+			entityType["ActivateRagdoll"] = [&context](const ScriptEntity& self, const sol::object& impulse) {
+				const Entity entity = RequireEntityWith<RagdollComponent>(self, "ActivateRagdoll", "Ragdoll");
+				if (!IsNil(impulse) && !impulse.is<glm::vec3>())
+					throw std::runtime_error("ActivateRagdoll: impulse must be a Vec3 or nil");
+				return RequirePhysics(context).ActivateRagdoll(entity, IsNil(impulse) ? glm::vec3(0) : impulse.as<glm::vec3>());
 			};
 			entityType["RecoverRagdoll"] = [&context](const ScriptEntity& self, const std::string& clip, float seconds) {
-				return RequirePhysics(context).RecoverRagdoll(self.ResolveOrThrow(), clip, seconds);
+				return RequirePhysics(context).RecoverRagdoll(RequireEntityWith<RagdollComponent>(self, "RecoverRagdoll", "Ragdoll"), clip, seconds);
 			};
 			entityType["IsRagdollActive"] = [&context](const ScriptEntity& self) {
 				return RequirePhysics(context).IsRagdollActive(self.ResolveOrThrow());

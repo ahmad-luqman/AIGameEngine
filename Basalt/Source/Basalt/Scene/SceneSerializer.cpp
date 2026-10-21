@@ -1,6 +1,5 @@
 #include "Basalt/Scene/SceneSerializer.h"
 
-#include "Basalt/Animation/AnimationSystem.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Hash.h"
 #include "Basalt/Core/JsonUtils.h"
@@ -708,19 +707,15 @@ namespace Basalt {
 		ReplaceEulerRotations(data, scene);
 		// A ragdoll moves its joints rather than its entity. Include that runtime pose only in hashes,
 		// never disk saves or play-copy configuration, so replay checks see a skeleton that diverges.
-		if (auto* physics = scene.GetPhysicsWorld(); physics && scene.GetAnimationSystem())
+		if (auto* physics = scene.GetPhysicsWorld())
 			for (auto& serialized : data["Entities"])
 			{
 				Entity entity = scene.GetEntityByUUID(UUID(serialized["ID"].get<uint64_t>()));
-				if (!physics->HasRagdollPose(entity))
-					continue;
-				const auto view = scene.GetAnimationSystem()->GetPoseView(entity);
-				std::vector<std::pair<uint32_t, glm::mat4>> joints;
-				float weight = 0;
-				if (!view || !physics->GetRagdollPose(entity, *view->Source, joints, weight))
+				const auto physical = physics->GetRagdollPose(entity);
+				if (!physical)
 					continue;
 				json pose = json::array();
-				for (const auto& [node, matrix] : joints)
+				for (const auto& [node, matrix] : physical->Joints)
 				{
 					json values = json::array();
 					for (int column = 0; column < 4; column++)
@@ -728,7 +723,7 @@ namespace Basalt {
 							values.push_back(matrix[column][row]);
 					pose.push_back({ { "Node", node }, { "Transform", std::move(values) } });
 				}
-				serialized["Components"]["Ragdoll"]["Runtime"] = { { "Active", physics->IsRagdollActive(entity) }, { "Weight", weight }, { "Pose", std::move(pose) } };
+				serialized["Components"]["Ragdoll"]["Runtime"] = { { "Active", physical->Active }, { "Weight", physical->Weight }, { "Pose", std::move(pose) } };
 			}
 		std::unordered_map<uint64_t, uint64_t> indices;
 		for (const nlohmann::json& entity : data["Entities"])

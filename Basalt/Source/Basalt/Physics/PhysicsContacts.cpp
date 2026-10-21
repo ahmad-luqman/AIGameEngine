@@ -15,7 +15,7 @@ namespace Basalt {
 
 	using namespace PhysicsInternal;
 
-	// Tracks sub-shape contacts while exposing one begin/end per entity pair. Sleeping bodies retain
+	// Tracks body/sub-shape contacts while exposing one begin/end per entity pair. Sleeping bodies retain
 	// suspended contacts until both bodies wake and Jolt can confirm whether they still touch.
 	struct PhysicsWorld::Impl::ContactState
 	{
@@ -23,7 +23,7 @@ namespace Basalt {
 		// A ragdoll has several bodies for one entity: sub-shape IDs alone would alias its limbs.
 		using ContactKey = std::tuple<uint64_t, uint64_t, uint64_t, uint64_t>;
 		std::set<ContactKey> ActiveContacts;
-		// Number of active sub-shape keys for each entity pair.
+		// Number of active body/sub-shape tokens for each entity pair.
 		std::map<EntityPair, int> PairCounts;
 		// A subset of ActiveContacts: Jolt removes sleeping contacts without physical separation.
 		std::set<ContactKey> SuspendedContacts;
@@ -35,7 +35,7 @@ namespace Basalt {
 				PairCounts[EntityPair(std::get<0>(key), std::get<2>(key))]++;
 		}
 
-		// Returns true only when the last sub-shape contact of a pair was released.
+		// Returns true only when the last body/sub-shape contact of a pair was released.
 		bool Release(const ContactKey& key)
 		{
 			SuspendedContacts.erase(key);
@@ -112,7 +112,8 @@ namespace Basalt {
 	std::optional<ContactInfo> PhysicsWorld::Impl::SeparationContact(UUID first, UUID second, float fixedStep) const
 	{
 		const JPH::BodyInterface& bodies = System->GetBodyInterface();
-		// Characters expose their gameplay velocity; ragdolls expose every part so separation data comes
+		// Character inner bodies are teleported and report no velocity: use gameplay velocity. Ragdolls expose
+		// every part so separation data comes
 		// from the closest pair of limbs, rather than an arbitrary root body.
 		using MovingBody = std::pair<JPH::BodyID, JPH::Vec3>;
 		auto bodiesOf = [&](UUID uuid) -> std::vector<MovingBody> {
@@ -128,17 +129,21 @@ namespace Basalt {
 		};
 		const auto firstBodies = bodiesOf(first);
 		const auto secondBodies = bodiesOf(second);
+		// One collector keeps the least-separated pair across every combination of limbs.
 		JPH::ClosestHitCollisionCollector<JPH::CollideShapeCollector> collector;
 		for (const auto& [bodyA, velocityA] : firstBodies)
+		{
+			const JPH::TransformedShape shapeA = bodies.GetTransformedShape(bodyA);
 			for (const auto& [bodyB, velocityB] : secondBodies)
 			{
-				const JPH::TransformedShape shapeA = bodies.GetTransformedShape(bodyA);
 				const JPH::TransformedShape shapeB = bodies.GetTransformedShape(bodyB);
-				// Twice a step's relative move plus a margin for rotation/speculative contacts.
+				// They can separate by one step of relative motion plus Jolt's 0.02 m speculative distance.
+				// Twice that distance, with a rotation margin, covers the closest remaining body pair.
 				JPH::CollideShapeSettings settings;
 				settings.mMaxSeparationDistance = 0.25f + 2.0f * (velocityA - velocityB).Length() * fixedStep;
 				shapeB.CollideShape(shapeA.mShape, shapeA.GetShapeScale(), shapeA.GetCenterOfMassTransform(), settings, JPH::RVec3::sZero(), collector);
 			}
+		}
 		if (!collector.HadHit())
 			return std::nullopt;
 		// Shape 1 is A's: the penetration axis points from A toward B, and the normal from B toward A. Shapes

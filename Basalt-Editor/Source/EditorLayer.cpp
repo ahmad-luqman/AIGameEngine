@@ -1273,7 +1273,7 @@ namespace Basalt {
 					DebugDraw::Sphere(center + up * halfHeight, radius, color, 16);
 					DebugDraw::Sphere(center - up * halfHeight, radius, color, 16);
 				}
-				if (auto* physics = scene.GetPhysicsWorld(); physics && physics->IsRagdollActive(entity))
+				if (auto* physics = scene.GetPhysicsWorld())
 					for (const auto& capsule : physics->GetRagdollCapsules(entity))
 					{
 						DebugDraw::Sphere(capsule.Start, capsule.Radius, color, 16);

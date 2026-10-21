@@ -3,6 +3,7 @@
 #include "Basalt/Core/Log.h"
 #include "Basalt/Math/Math.h"
 #include "Basalt/Physics/PhysicsWorld.h"
+#include "Basalt/Physics/RagdollRules.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
 
@@ -16,6 +17,17 @@ namespace Basalt {
 			return;
 		if (auto it = m_Playback.find(entity.GetUUID()); it != m_Playback.end())
 			DropOverlay(it->second, &Playback::RagdollOverlay);
+	}
+
+	bool AnimationSystem::GetAnimatedPose(Entity entity, const MeshSource& source, std::vector<glm::mat4>& globals)
+	{
+		auto* playback = Ensure(entity);
+		return playback && playback->Source.get() == &source && ComposeAnimationPose(source, playback->Pose, globals);
+	}
+
+	void AnimationSystem::RefreshRagdollPoses()
+	{
+		ApplyRagdolls();
 	}
 
 	void AnimationSystem::ApplyRagdolls()
@@ -38,8 +50,7 @@ namespace Basalt {
 			playback.SpringOverlay.clear();
 			ResetSpringBones(entity);
 			auto rejectPose = [&] {
-				if (hadOverlay)
-					Finish(playback);
+				Finish(playback);
 				if (!playback.OverlayDropped)
 					BS_CORE_WARN("Animator '{}': ragdoll pose cannot be expressed in the animated hierarchy; showing animation until it recovers", entity.GetName());
 				playback.OverlayDropped = true;
@@ -61,7 +72,7 @@ namespace Basalt {
 				{
 					globals[node] = it->second;
 					auto& local = physical.Nodes[node];
-					valid = Math::DecomposeAffineTransform(glm::inverse(parentWorld) * globals[node], local.Translation, local.Rotation, local.Scale) && valid;
+					valid = DecomposeRagdollTransform(glm::inverse(parentWorld) * globals[node], local.Translation, local.Rotation, local.Scale) && valid;
 				}
 				else
 				{
@@ -76,7 +87,14 @@ namespace Basalt {
 			}
 			// Blend local transforms, preserving the skeleton's hierarchy during the get-up transition.
 			if (weight < 1.0f)
-				BlendAnimationPose(physical, playback.Pose, weight);
+				for (const auto& [node, matrix] : joints)
+				{
+					auto& pose = physical.Nodes[node];
+					const auto& animated = playback.Pose.Nodes[node];
+					pose.Translation = glm::mix(animated.Translation, pose.Translation, weight);
+					pose.Scale = glm::mix(animated.Scale, pose.Scale, weight);
+					pose.Rotation = BlendRagdollRotation(animated.Rotation, pose.Rotation, weight);
+				}
 			for (const auto& [node, matrix] : joints)
 				playback.RagdollOverlay.push_back({ node, physical.Nodes[node] });
 			Finish(playback);

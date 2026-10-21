@@ -9,7 +9,7 @@
 #include "Basalt/Math/Math.h"
 #include "Basalt/Particles/ParticleEmitterRules.h"
 #include "Basalt/Physics/PhysicsLayers.h"
-#include "Basalt/Physics/Ragdoll.h"
+#include "Basalt/Physics/RagdollRules.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/LocalShadows.h"
 #include "Basalt/Scene/Entity.h"
