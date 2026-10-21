@@ -206,23 +206,27 @@ the reference/fallback for geometry without cached influences.
 ## Morph targets
 
 glTF morph targets blend in the vertex shader (`Include/Morphing.glsl`) before skinning, in every mesh pass (PBR,
-depth/normal prepass and picking, opaque and masked shadows). Each model's position and normal deltas live in one
-RGBA32F texture (two texels per target and vertex, rows of 4,096 texels) bound as set 2 with a point sampler, visible to
-the vertex stage only: a fifth storage buffer would exceed the portable four per stage. Meshes without targets bind a
-one-texel empty texture, so every mesh pipeline has the same layout; the opaque shadow pipelines leave set 1 empty
-(nvrhi fills the hole). A draw's nonzero weights are `(target, weight)` pairs packed 16 to a record into the draw SSBO
-after the palettes, uploaded once per visible mesh node like a palette; `DrawData.Morph` holds the first record, the
-pair count, the delta base (minus the submesh's base vertex, which `gl_VertexIndex` includes) and the texels per
-target, so instanced draws of one mesh still batch with different weights. A draw blends its 32 strongest weights
-(warning once per entity beyond that); `render.stats.morphWeights` counts the uploaded pairs. Tangents are
-re-orthogonalized against the morphed normal. Culling widens each submesh's bounds (or, for skinned meshes, each joint
-influence box) by the weighted per-target delta ranges cached at import, so morphed geometry never pops; editor framing
-morphs vertices exactly. A MeshComponent draws its mesh's default weights; Animators draw their pose's (see the
-Lua API's Morph targets). The delta texture counts toward `memory.stats` GPU buffers.
+depth/normal prepass and picking, opaque and masked shadows, which read positions only). Each model's position and
+normal deltas live in one RGBA32F texture (two texels per target and vertex, rows up to 4,096 texels wide, at most 2,048
+rows) bound as set 2 with a point sampler, visible to the vertex stage only: a fifth storage buffer would exceed the
+portable four per stage. Meshes without targets bind a one-texel empty texture, so every mesh pipeline has the same
+layout; the opaque shadow pipelines leave set 1 empty (nvrhi fills the hole). A draw's nonzero weights are
+`(target, weight)` pairs packed 16 to a record into the draw SSBO alongside the palettes, ahead of the draw records,
+uploaded once per visible mesh node like a palette; `DrawData.Morph` holds the first record, the pair count, the delta
+base (minus 2 x the submesh's base vertex in texels, which `gl_VertexIndex` adds back) and the texels per target, so
+instanced draws of one mesh still batch with different weights. A draw blends its 32 strongest weights, warning once per
+mesh and entity each time more become active; `render.stats.morphWeights` counts the uploaded pairs and
+`morphWeightsDropped` the rest. Tangents are re-orthogonalized against the morphed normal. Culling widens each submesh's
+bounds (or, for skinned meshes, each joint influence box) by the weighted per-target delta ranges cached at import, so
+morphed geometry never pops; editor framing, selection boxes and vertex snapping morph vertices exactly (a MeshComponent
+at its mesh's default weights). Morphed submeshes get no reduced LODs. Animators draw their pose's weights (see the Lua
+API's Morph targets). The delta texture counts toward `memory.stats` GPU buffers, and retargeted clip sets toward its
+assets.
 
 Import rejects malformed weights/joints, invalid track shapes/times/quaternions, cyclic hierarchies,
-animated matrix nodes and duplicate node/path targets. Morph weight channels import as weights tracks (their
-widths match the node's target count); pointer channels are warned about and skipped; extra influence sets retain static geometry with a warning and disable
+TRS-animated matrix nodes and duplicate node/path targets. Morph weight channels import as weights tracks (their
+widths match the node's target count; channels of meshes whose targets were dropped are skipped with a warning); pointer
+channels are warned about and skipped; extra influence sets retain static geometry with a warning and disable
 Animator playback for that asset. Sparse accessors, normalized unsigned byte/short weights and
 normalized signed/unsigned byte/short rotation keys are supported. Animated/skinned models are limited
 to 65,536 nodes per model; each skin is limited to 65,536 joints. Other limits are 4,096 skins
@@ -231,8 +235,8 @@ floats (repeated sampler references count separately). The combined joint-refere
 work for assets that reuse a large skin across many nodes.
 Non-finite evaluated hierarchies or palettes log once per failure episode and display the validated rest pose.
 A skin may use the first N matrices of a larger inverse-bind accessor; absent inverse binds are
-identity. Duplicate clip names get deterministic suffixes. There is no morph-target deformation
-or retargeting. State machines, per-state root motion, bone attachments, animation events and
+identity. Duplicate clip names get deterministic suffixes. Morph targets are described above; clip-library
+retargeting is in Docs/ScriptingAPI.md ("Clip libraries and retargeting"). State machines, per-state root motion, bone attachments, animation events and
 blend spaces are described in Docs/ScriptingAPI.md ("Skeletal animation").
 
 `AnimationTests` covers import, interpolation, space conventions, playback, blending, blend spaces, animation
@@ -240,7 +244,10 @@ events, bone attachments, component/Lua
 validation and lifecycle; the Khronos Fox fixture verifies Survey/Walk/Run from a real exported rig.
 The feature-test driver exercises every Lua operation on an off-camera rig. `AnimationGPU` compares
 GPU skinning with independently deformed CPU geometry for opaque/masked/blended materials, lit/
-normal/depth outputs and directional/point/spot shadows, with Vulkan validation required.
+normal/depth outputs and directional/point/spot shadows, with Vulkan validation required. `MorphTargetTests` covers
+morph import, limits, sampling, layers, script weights and bounds; `RetargetingTests` covers joint matching, baking,
+clip sets, persistence and diagnostics. `AnimationGPU` also compares GPU morphing (skinned and static, past one weight
+record and past the per-draw limit) with CPU-morphed geometry.
 
 ## Editor picking and selection
 

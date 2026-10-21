@@ -19,6 +19,9 @@ namespace Basalt {
 		auto visit = [&](const Ref<MeshSource>& source, uint32_t meshIndex, const glm::mat4& model, const std::vector<glm::mat4>& palette, std::span<const float> morphWeights) {
 			if (!source || meshIndex >= source->Meshes.size())
 				return;
+			// Static meshes show their mesh's default weights.
+			if (morphWeights.empty())
+				morphWeights = source->Meshes[meshIndex].MorphWeights;
 			for (uint32_t submeshIndex : source->Meshes[meshIndex].Submeshes)
 			{
 				const Submesh& submesh = source->Submeshes[submeshIndex];
@@ -30,7 +33,7 @@ namespace Basalt {
 					if (index >= submesh.VertexCount || used[index])
 						continue;
 					used[index] = true;
-					const Vertex vertex = MorphVertex(*source, submesh, index, morphWeights.empty() ? std::span<const float>(source->Meshes[meshIndex].MorphWeights) : morphWeights);
+					const Vertex vertex = MorphVertex(*source, submesh, index, morphWeights);
 					glm::vec4 local(vertex.Position, 1);
 					if (!palette.empty())
 					{

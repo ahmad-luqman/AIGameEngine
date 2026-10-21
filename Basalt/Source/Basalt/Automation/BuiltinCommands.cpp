@@ -1,5 +1,5 @@
 #include "Basalt/Animation/AnimatedModel.h"
-#include "Basalt/Animation/Retargeting.h"
+#include "Basalt/Animation/AnimationClipSet.h"
 #include "Basalt/Asset/AssetKey.h"
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Asset/MaterialAsset.h"
@@ -1147,7 +1147,7 @@ namespace Basalt {
 				};
 			});
 
-			Add(registry, "animator.retarget", "How an Animator's ClipLibraries map onto its model: per library the joint pairs (target, source, matched by joint map, name or humanoid bone), the model's humanoid bones left unmatched, the root pair with its leg-length scale, and the clips it adds or that earlier clips hide. Read-only; works in edit mode.", Schema::Object({ { "entity", Schema::Entity("ID or name of an entity with an Animator") } }, { "entity" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "animator.retarget", "How an Animator's named ClipLibraries map onto its model, resolved as playback resolves them (without baking): per library its index in ClipLibraries, why it adds no clips (error), the joint pairs (target, source, matched by joint map, name or humanoid bone), the model's humanoid bones left unmatched, the root pair with its leg-length scale, the clips it adds, the clips earlier clips hide, and warnings. Read-only; works in edit mode.", Schema::Object({ { "entity", Schema::Entity("ID or name of an entity with an Animator") } }, { "entity" }), [](AutomationSession& session, const json& params) {
 				Entity entity = RequireEntity(session, params);
 				const auto* animator = entity.TryGetComponent<AnimatorComponent>();
 				if (!animator)
@@ -1155,41 +1155,31 @@ namespace Basalt {
 				const auto model = AssetManager::GetMesh(animator->Mesh);
 				if (!model)
 					throw CommandError(fmt::format("Animator Mesh '{}' cannot load: {}", animator->Mesh, AssetManager::GetError(animator->Mesh)));
-				std::set<std::string> names;
-				for (const AnimationClip& clip : model->Animations)
-					names.insert(clip.Name);
+				std::vector<AnimationClipSet::Library> resolved = AnimationClipSet::Load(*animator);
+				AnimationClipSet::Plan(*model, resolved);
 				json libraries = json::array();
-				for (const AnimationClipLibrary& entry : animator->ClipLibraries)
+				for (const AnimationClipSet::Library& library : resolved)
 				{
-					json library = { { "mesh", entry.Mesh } };
-					const auto source = entry.Mesh.empty() ? nullptr : AssetManager::GetMesh(entry.Mesh);
-					if (!source)
-					{
-						library["error"] = entry.Mesh.empty() ? std::string("no Mesh") : AssetManager::GetError(entry.Mesh);
-						libraries.push_back(std::move(library));
-						continue;
-					}
-					std::vector<std::string> warnings;
-					const RetargetMap map = Retargeting::BuildMap(*model, *source, animator->RetargetJoints, warnings);
 					json joints = json::array(), unmatched = json::array();
-					for (size_t node = 0; node < map.SourceOf.size(); node++)
+					for (size_t node = 0; node < library.Map.SourceOf.size(); node++)
 					{
-						if (map.SourceOf[node] >= 0)
-							joints.push_back({ { "target", model->Nodes[node].Name }, { "source", source->Nodes[map.SourceOf[node]].Name }, { "match", map.Reasons[node] } });
+						if (library.Map.SourceOf[node] >= 0)
+							joints.push_back({ { "target", model->Nodes[node].Name }, { "source", library.Source->Nodes[library.Map.SourceOf[node]].Name }, { "match", ToString(library.Map.Matches[node]) } });
 						else if (!Retargeting::HumanoidBone(model->Nodes[node].Name).empty())
 							unmatched.push_back(model->Nodes[node].Name);
 					}
-					json clips = json::array(), hidden = json::array();
-					if (map.MappedCount() > 0)
-						for (const AnimationClip& clip : source->Animations)
-							(names.insert(clip.Name).second ? clips : hidden).push_back(clip.Name);
-					library["joints"] = std::move(joints);
-					library["unmatchedHumanoidBones"] = std::move(unmatched);
-					library["root"] = map.TargetRoot < 0 ? json() : json{ { "target", model->Nodes[map.TargetRoot].Name }, { "source", source->Nodes[map.SourceRoot].Name }, { "scale", map.RootScale } };
-					library["clips"] = std::move(clips);
-					library["hiddenClips"] = std::move(hidden);
-					library["warnings"] = warnings;
-					libraries.push_back(std::move(library));
+					const bool rooted = library.Source && library.Map.TargetRoot >= 0;
+					libraries.push_back({
+						{ "index", library.Index },
+						{ "mesh", library.Entry.Mesh },
+						{ "error", library.Error.empty() ? json() : json(library.Error) },
+						{ "joints", std::move(joints) },
+						{ "unmatchedHumanoidBones", std::move(unmatched) },
+						{ "root", rooted ? json{ { "target", model->Nodes[library.Map.TargetRoot].Name }, { "source", library.Source->Nodes[library.Map.SourceRoot].Name }, { "scale", library.Map.RootScale } } : json() },
+						{ "clips", library.Clips },
+						{ "hiddenClips", library.Shadowed },
+						{ "warnings", library.Warnings },
+					});
 				}
 				return json{ { "entity", static_cast<uint64_t>(entity.GetUUID()) }, { "mesh", animator->Mesh }, { "libraries", std::move(libraries) } };
 			});
@@ -1408,9 +1398,7 @@ namespace Basalt {
 						bool changed = false;
 						for (const auto& field : info.AssetFields)
 						{
-							if (field.find("[].") == std::string::npos && !data.contains(field))
-								throw CommandError("asset field did not serialize as a path: " + info.Name + "." + field);
-							ForEachAssetValue(data, field, [&](json& value, const std::string& label) {
+							const bool present = ForEachAssetValue(data, field, [&](json& value, const std::string& label) {
 								if (!value.is_string())
 									throw CommandError("asset field did not serialize as a path: " + info.Name + "." + label);
 								const auto& key = value.get_ref<const std::string&>();
@@ -1420,6 +1408,8 @@ namespace Basalt {
 									changed = true;
 								}
 							});
+							if (!present)
+								throw CommandError("asset field did not serialize: " + info.Name + "." + field);
 						}
 						if (changed)
 						{

@@ -74,8 +74,9 @@ namespace Basalt {
 			}
 			bool Hierarchy()
 			{
-				if (!m_Source.FinalizeHierarchy())
-					return Fail("invalid or cyclic node hierarchy");
+				std::string problem;
+				if (!m_Source.FinalizeHierarchy(&problem))
+					return Fail(problem);
 				if (m_Data.scene)
 				{
 					for (auto& node : m_Source.Nodes)
@@ -200,8 +201,13 @@ namespace Basalt {
 							case cgltf_animation_path_type_weights:
 								track.Path = AnimationPath::Weights;
 								track.Width = static_cast<uint32_t>(m_Source.Nodes[track.Node].MorphWeights.size());
+								// cgltf_validate requires the node's mesh to have the channel's targets, so only meshes whose
+								// targets the importer dropped (past its limits) get here.
 								if (track.Width == 0)
-									return Fail("morph-weight animation targets a node without morph targets");
+								{
+									BS_CORE_WARN("MeshImporter: {}: clip '{}' channel {}: skipping the morph weights of node '{}', whose morph targets were dropped", m_Source.Key, clip.Name, c, m_Source.Nodes[track.Node].Name);
+									continue;
+								}
 								break;
 							default:
 								return Fail("unsupported animation path");
@@ -236,8 +242,10 @@ namespace Basalt {
 						if (track.Path == AnimationPath::Weights)
 						{
 							const size_t values = track.Times.size() * (track.Interpolation == AnimationInterpolation::CubicSpline ? 3 : 1);
-							if (sampler.output->count != values * track.Width || !Read(sampler.output, cgltf_type_scalar, track.Weights, m_Budget, true))
-								return Fail("invalid morph weight values");
+							if (sampler.output->count != values * track.Width)
+								return Fail(fmt::format("{} morph weight values for {} keys of {} targets (expected {})", sampler.output->count, track.Times.size(), track.Width, values * track.Width));
+							if (!Read(sampler.output, cgltf_type_scalar, track.Weights, m_Budget, true))
+								return Fail("morph weight values must be finite scalar floats or normalized integers");
 							clip.Tracks.push_back(std::move(track));
 							continue;
 						}

@@ -46,7 +46,8 @@ namespace Basalt::MeshOptimizer {
 		if (submeshIndex >= source.Submeshes.size())
 			return;
 		auto& submesh = source.Submeshes[submeshIndex];
-		if (!submesh.LODs.empty() || !submesh.JointBounds.empty() || submesh.IndexCount < 12 || submesh.VertexCount == 0)
+		// Morphed shapes differ from the base the simplifier would see; skinned ones are never reduced either.
+		if (!submesh.LODs.empty() || !submesh.JointBounds.empty() || submesh.MorphTargetCount > 0 || submesh.IndexCount < 12 || submesh.VertexCount == 0)
 			return;
 		if (submesh.MaterialIndex < source.Materials.size() && source.Materials[submesh.MaterialIndex].IsBlended())
 			return;

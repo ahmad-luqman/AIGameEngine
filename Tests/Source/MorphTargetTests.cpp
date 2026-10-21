@@ -6,6 +6,8 @@
 #include <Basalt/Animation/AnimatedModel.h>
 #include <Basalt/Asset/MeshOptimizer.h>
 #include <Basalt/Core/Log.h>
+#include <Basalt/Renderer/RenderMath.h>
+#include <Basalt/Scene/VertexSnap.h>
 
 #include <nlohmann/json.hpp>
 
@@ -206,28 +208,7 @@ TEST_SUITE("MorphTargets")
 			accessor["count"] = 2;
 			data["accessors"].push_back(accessor);
 			data["meshes"][1]["primitives"][0]["targets"][0]["POSITION"] = data["accessors"].size() - 1;
-			expected = "invalid";
-		}
-		SUBCASE("too many targets")
-		{
-			auto& targets = data["meshes"][1]["primitives"][0]["targets"];
-			while (targets.size() <= MaxMorphTargets)
-				targets.push_back(targets[0]);
-			data["meshes"][1]["extras"].erase("targetNames");
-			data.erase("animations");
-			expected = "morph targets exceed the limit of 256";
-		}
-		SUBCASE("more deltas than a model may hold")
-		{
-			// Zero-filled sparse-less accessors keep the file small: 4 targets x 1048578 vertices pass MaxMorphDeltas.
-			const nlohmann::json zeros = { { "componentType", 5126 }, { "count", 1048578 }, { "type", "VEC3" }, { "min", { 0, 0, 0 } }, { "max", { 0, 0, 0 } } };
-			data["accessors"].push_back(zeros);
-			const size_t index = data["accessors"].size() - 1;
-			data["meshes"][1]["primitives"][0] = { { "attributes", { { "POSITION", index } } }, { "targets", { { { "POSITION", index } }, { { "POSITION", index } }, { { "POSITION", index } }, { { "POSITION", index } } } } };
-			data["meshes"][1]["extras"].erase("targetNames");
-			data["nodes"][3].erase("mesh");
-			data.erase("animations");
-			expected = "morph targets exceed the limit of 4194304 deltas per model";
+			expected = "validation failed";
 		}
 		const std::string error = ImportError(data);
 		CHECK_MESSAGE(error.find(expected) != std::string::npos, error);
@@ -340,16 +321,20 @@ TEST_SUITE("MorphTargets")
 		CHECK(system.ClearMorphWeight(entity, "Smile"));
 		CHECK_FALSE(system.ClearMorphWeight(entity, "Smile"));
 		CHECK((*system.GetMorphWeights(entity))[faceSmile] != 1.0f);
-		CHECK(system.ClearMorphWeight(entity, ""));
+		// Only nil clears every target; an empty name is an unknown target.
+		const auto since = Log::GetHistory().GetTotalCount();
+		CHECK_FALSE(system.ClearMorphWeight(entity, ""));
+		CHECK(CountLogMessages(since, "no morph target named ''") == 1);
+		CHECK(system.ClearMorphWeight(entity, std::nullopt));
 		CHECK((*system.GetMorphWeights(entity))[faceBlink] != 1.0f);
 
-		const auto since = Log::GetHistory().GetTotalCount();
 		CHECK_FALSE(system.SetMorphWeight(entity, "Frown", 1.0f, 0.0f));
 		CHECK_FALSE(system.SetMorphWeight(entity, "Frown", 1.0f, 0.0f));
 		CHECK(CountLogMessages(since, "no morph target named 'Frown'") == 1);
 		CHECK_FALSE(system.SetMorphWeight(entity, "Smile", 1.5f, 0.0f));
 		CHECK_FALSE(system.SetMorphWeight(entity, "Smile", 0.5f, -1.0f));
 		CHECK_FALSE(system.GetMorphWeight(entity, "Frown").has_value());
+		CHECK(CountLogMessages(since, "Animator 'Face': no morph target named 'Frown'") == 2); // SetMorphWeight's, then GetMorphWeight's.
 		scene.OnRuntimeStop();
 	}
 
@@ -385,5 +370,310 @@ TEST_SUITE("MorphTargets")
 		entity.AddComponent<AnimatorComponent>().Mesh = MorphPath().string();
 		// Edit mode draws the node's weights (Smile 0.5): the middle row is 0.15 in front.
 		CHECK(AnimatedModelBounds(entity).Max.z == doctest::Approx(0.15f));
+	}
+
+	TEST_CASE("Morph targets past the import limits are dropped with a warning; the geometry still loads")
+	{
+		auto data = MorphJson();
+		std::string expected;
+		SUBCASE("too many targets")
+		{
+			auto& targets = data["meshes"][1]["primitives"][0]["targets"];
+			while (targets.size() <= MaxMorphTargets)
+				targets.push_back(targets[0]);
+			data["meshes"][1]["extras"].erase("targetNames");
+			// Teeth's animated weights would need 257 values per key.
+			data["animations"][0]["channels"].erase(1);
+			expected = "257 morph targets exceed the limit of 256 per mesh";
+		}
+		SUBCASE("more deltas than a model may hold")
+		{
+			// Zero-filled accessors without a bufferView keep the file small: 4 targets x 1048578 vertices pass MaxMorphDeltas.
+			const nlohmann::json zeros = { { "componentType", 5126 }, { "count", 1048578 }, { "type", "VEC3" }, { "min", { 0, 0, 0 } }, { "max", { 0, 0, 0 } } };
+			data["accessors"].push_back(zeros);
+			const size_t index = data["accessors"].size() - 1;
+			data["meshes"][1]["primitives"][0] = { { "attributes", { { "POSITION", index } } }, { "targets", { { { "POSITION", index } }, { { "POSITION", index } }, { { "POSITION", index } }, { { "POSITION", index } } } } };
+			data["meshes"][1]["extras"].erase("targetNames");
+			// Teeth's animated weights are now four wide.
+			data["animations"][0]["channels"].erase(1);
+			expected = "its morph targets need 4194312 deltas, past the 4194286 left of the limit of 4194304 per model";
+		}
+		ClearAssetCache cacheGuard;
+		TempDirectory directory("MorphLimits");
+		const auto since = Log::GetHistory().GetTotalCount();
+		const auto source = AnimationTest::LoadModified(data, directory.GetPath(), "Limits.gltf");
+		CHECK(CountLogMessages(since, expected) == 1);
+		// Teeth keeps its base shape; Face keeps its targets.
+		CHECK(source->Meshes[1].MorphTargets.empty());
+		CHECK(source->Nodes[Node(*source, "Teeth")].MorphWeightOffset == -1);
+		CHECK(source->Meshes[0].MorphTargets.size() == 2);
+	}
+
+	TEST_CASE("Weights channels of meshes whose targets were dropped are skipped with a warning")
+	{
+		auto data = MorphJson();
+		auto& targets = data["meshes"][1]["primitives"][0]["targets"];
+		while (targets.size() <= MaxMorphTargets)
+			targets.push_back(targets[0]);
+		data["meshes"][1]["extras"].erase("targetNames");
+		// The Talk clip's Teeth channel now has 257 values per key, which cgltf accepts for 257 targets.
+		const auto output = data["animations"][0]["samplers"][1]["output"].get<size_t>();
+		std::vector<float> values(2 * targets.size(), 0.5f);
+		data["buffers"].push_back({ { "byteLength", values.size() * 4 }, { "uri", "data:application/octet-stream;base64," + Base64(values.data(), values.size() * 4) } });
+		data["bufferViews"].push_back({ { "buffer", data["buffers"].size() - 1 }, { "byteLength", values.size() * 4 } });
+		data["accessors"][output] = { { "bufferView", data["bufferViews"].size() - 1 }, { "componentType", 5126 }, { "count", values.size() }, { "type", "SCALAR" } };
+		TempDirectory directory("MorphDroppedChannel");
+		const auto since = Log::GetHistory().GetTotalCount();
+		const auto source = AnimationTest::LoadModified(data, directory.GetPath(), "Dropped.gltf");
+		CHECK(CountLogMessages(since, "skipping the morph weights of node 'Teeth', whose morph targets were dropped") == 1);
+		CHECK(std::ranges::none_of(Clip(*source, "Talk").Tracks, [&](const AnimationTrack& track) { return track.Node == Node(*source, "Teeth"); }));
+	}
+
+	TEST_CASE("FinalizeHierarchy names what does not fit and changes nothing then")
+	{
+		auto source = CreateRef<MeshSource>(*AnimationTest::LoadModel(MorphPath()));
+		const auto offsets = source->Nodes[Node(*source, "Teeth")].MorphWeightOffset;
+		std::string error;
+		source->Nodes[Node(*source, "Teeth")].MorphWeights.push_back(1.0f);
+		CHECK_FALSE(source->FinalizeHierarchy(&error));
+		CHECK(error == "node 'Teeth' has 2 morph weights for 1 morph targets");
+		CHECK(source->Nodes[Node(*source, "Teeth")].MorphWeightOffset == offsets);
+		CHECK(source->MorphWeightCount == 3);
+		source->Nodes[Node(*source, "Teeth")].MorphWeights.pop_back();
+		source->Meshes[1].MorphWeights.clear();
+		CHECK_FALSE(source->FinalizeHierarchy(&error));
+		CHECK(error == "mesh 'Teeth' has 0 default morph weights for 1 targets");
+		source->Meshes[1].MorphWeights = { 0.0f };
+		source->Submeshes[source->Meshes[1].Submeshes[0]].MorphTargetCount = 2;
+		CHECK_FALSE(source->FinalizeHierarchy(&error));
+		CHECK(error.find("mesh 'Teeth' has a submesh whose morph targets do not match") == 0);
+		source->Submeshes[source->Meshes[1].Submeshes[0]].MorphTargetCount = 1;
+		source->Nodes[0].Parent = 0;
+		CHECK_FALSE(source->FinalizeHierarchy(&error));
+		CHECK(error == "the node hierarchy has a cycle");
+	}
+
+	TEST_CASE("Models with morph targets import as an Animator root, keeping node weights")
+	{
+		auto data = MorphJson();
+		// A static, unskinned morph model: no skin, joints or clips.
+		data.erase("animations");
+		data.erase("skins");
+		data["nodes"][2].erase("skin");
+		data["meshes"][0]["primitives"][0]["attributes"].erase("JOINTS_0");
+		data["meshes"][0]["primitives"][0]["attributes"].erase("WEIGHTS_0");
+		TempDirectory directory("MorphImportHierarchy");
+		const auto source = AnimationTest::LoadModified(data, directory.GetPath(), "Static.gltf");
+		REQUIRE(source->MorphWeightCount == 3);
+		Scene scene;
+		const Entity root = MeshImporter::InstantiateHierarchy(scene, *source, "Face", {});
+		CHECK(root.HasComponent<AnimatorComponent>());
+	}
+
+	TEST_CASE("Layers move morph weights by the node mask at runtime, override and additive")
+	{
+		ClearAssetCache cacheGuard;
+		Scene scene;
+		auto entity = scene.CreateEntity("Face");
+		auto& animator = entity.AddComponent<AnimatorComponent>();
+		animator.Mesh = MorphPath().string();
+		animator.Clip = "Nod";
+		AnimationLayer layer;
+		layer.Name = "Talk";
+		layer.Clip = "Talk";
+		SUBCASE("override")
+		{
+			animator.Layers = { layer };
+		}
+		SUBCASE("masked to the face")
+		{
+			layer.Mask = { AnimationMaskJoint{ .Joint = "Face" } };
+			animator.Layers = { layer };
+		}
+		SUBCASE("additive")
+		{
+			layer.Blend = AnimationLayerBlend::Additive;
+			animator.Layers = { layer };
+		}
+		const bool masked = !animator.Layers[0].Mask.empty();
+		const bool additive = animator.Layers[0].Blend == AnimationLayerBlend::Additive;
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		system.Update(1.5f);
+		const auto source = AssetManager::GetMesh(animator.Mesh);
+		const auto& weights = *system.GetMorphWeights(entity);
+		const auto face = static_cast<size_t>(source->Nodes[Node(*source, "Face")].MorphWeightOffset);
+		const auto teeth = static_cast<size_t>(source->Nodes[Node(*source, "Teeth")].MorphWeightOffset);
+		// Talk at 1.5 s: Face (0.5, 0.25), Teeth 0.8 (stepped). The base (Nod) shows the node defaults (0.5, 0.25) and 0.
+		// Additive adds Talk's change from its first frame (Face 0 and 0, Teeth 0.2).
+		CHECK(weights[face] == doctest::Approx(additive ? 0.5f + 0.5f : 0.5f));
+		CHECK(weights[face + 1] == doctest::Approx(additive ? 0.25f + 0.25f : 0.25f));
+		CHECK(weights[teeth] == doctest::Approx(masked ? 0.0f : (additive ? 0.8f - 0.2f : 0.8f)));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Script morph weights fade while the Animator is stopped or paused")
+	{
+		ClearAssetCache cacheGuard;
+		Scene scene;
+		auto entity = scene.CreateEntity("Face");
+		auto& animator = entity.AddComponent<AnimatorComponent>();
+		animator.Mesh = MorphPath().string();
+		animator.Clip = "Nod";
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		SUBCASE("stopped")
+		{
+			system.Stop(entity);
+		}
+		SUBCASE("paused")
+		{
+			system.Pause(entity, true);
+		}
+		system.Update(0.1f);
+		REQUIRE(system.SetMorphWeight(entity, "Blink", 1.0f, 1.0f));
+		system.Update(0.5f);
+		const auto source = AssetManager::GetMesh(animator.Mesh);
+		const auto blink = static_cast<size_t>(source->Nodes[Node(*source, "Face")].MorphWeightOffset) + 1;
+		CHECK((*system.GetMorphWeights(entity))[blink] == doctest::Approx(0.25f + 0.75f * 0.5f));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Script morph weights follow their target name to another model, and wait while it lacks the name")
+	{
+		ClearAssetCache cacheGuard;
+		TempDirectory directory("MorphOverrideModels");
+		auto data = MorphJson();
+		data["meshes"][0]["extras"]["targetNames"] = { "Blink", "Smile" };
+		const auto reordered = directory.GetPath() / "Reordered.gltf";
+		REQUIRE(FileSystem::WriteTextFile(reordered, data.dump()));
+		Scene scene;
+		auto entity = scene.CreateEntity("Face");
+		auto& animator = entity.AddComponent<AnimatorComponent>();
+		animator.Mesh = MorphPath().string();
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		REQUIRE(system.SetMorphWeight(entity, "Smile", 0.9f, 0));
+		animator.Mesh = reordered.string();
+		system.Update(0);
+		auto source = AssetManager::GetMesh(animator.Mesh);
+		// Smile is the second Face target now.
+		CHECK((*system.GetMorphWeights(entity))[static_cast<size_t>(source->Nodes[Node(*source, "Face")].MorphWeightOffset) + 1] == doctest::Approx(0.9f));
+		CHECK(system.GetMorphWeight(entity, "Smile").value_or(-1.0f) == doctest::Approx(0.9f));
+
+		// A model without the target logs once; the weight applies again when a model with it returns.
+		const auto since = Log::GetHistory().GetTotalCount();
+		animator.Mesh = (std::filesystem::path(BASALT_TEST_DATA_DIR) / "Animation/TwoJoint.gltf").string();
+		system.Update(0);
+		system.Update(0);
+		CHECK(CountLogMessages(since, "morph target 'Smile' is not in") == 1);
+		animator.Mesh = MorphPath().string();
+		system.Update(0);
+		source = AssetManager::GetMesh(animator.Mesh);
+		CHECK((*system.GetMorphWeights(entity))[static_cast<size_t>(source->Nodes[Node(*source, "Face")].MorphWeightOffset)] == doctest::Approx(0.9f));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("A reload that changes a model's morph targets keeps drawing within its weights")
+	{
+		ClearAssetCache cacheGuard;
+		TempDirectory directory("MorphReload");
+		auto data = MorphJson();
+		const auto path = directory.GetPath() / "Face.gltf";
+		REQUIRE(FileSystem::WriteTextFile(path, data.dump()));
+		Scene scene;
+		auto entity = scene.CreateEntity("Face");
+		auto& animator = entity.AddComponent<AnimatorComponent>();
+		animator.Mesh = path.string();
+		animator.Clip = "Talk";
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		system.Update(0.5f);
+		CHECK(system.GetMorphWeights(entity)->size() == 3);
+		// Face loses Blink: the weights shrink with the reloaded model before anything reads them.
+		data["meshes"][0]["primitives"][0]["targets"].erase(1);
+		data["meshes"][0]["weights"] = { 0 };
+		data["meshes"][0]["extras"]["targetNames"] = { "Smile" };
+		data["nodes"][2]["weights"] = { 0.5 };
+		data.erase("animations");
+		REQUIRE(FileSystem::WriteTextFile(path, data.dump()));
+		AssetManager::Reload(path.string());
+		size_t visited = 0;
+		ForEachAnimatedMesh(entity, [&](const Ref<MeshSource>& source, const MeshNode& node, const glm::mat4&, const std::vector<glm::mat4>&, std::span<const float> weights) {
+			CHECK(weights.size() == node.MorphWeights.size());
+			CHECK(source->MorphWeightCount == 2);
+			visited++;
+		});
+		CHECK(visited == 2);
+		CHECK(system.GetMorphWeights(entity)->size() == 2);
+		CHECK(AnimatedModelBounds(entity).IsValid());
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("A non-finite pose shows the nodes' morph weights; non-finite weights show as 0")
+	{
+		ClearAssetCache cacheGuard;
+		Scene scene;
+		auto entity = scene.CreateEntity("Face");
+		auto& animator = entity.AddComponent<AnimatorComponent>();
+		animator.Mesh = MorphPath().string();
+		animator.Clip = "Talk";
+		const auto source = AssetManager::GetMesh(animator.Mesh);
+		REQUIRE(source);
+		auto& talk = *std::ranges::find(source->Animations, std::string("Talk"), &AnimationClip::Name);
+		const auto face = static_cast<size_t>(source->Nodes[Node(*source, "Face")].MorphWeightOffset);
+		SUBCASE("non-finite pose")
+		{
+			const float nan = std::numeric_limits<float>::quiet_NaN();
+			talk.Tracks.push_back({ .Node = Node(*source, "Head"), .Path = AnimationPath::Translation, .Times = { 0, 2 }, .Values = { glm::vec4(nan), glm::vec4(nan) } });
+			scene.OnRuntimeStart();
+			scene.GetAnimationSystem()->Update(0.5f);
+			// RestoreRestPose shows the rest pose's weights, not Talk's (0.5 at 0.5 s would be the same for Smile; Blink is 0).
+			CHECK((*scene.GetAnimationSystem()->GetMorphWeights(entity))[face + 1] == 0.25f);
+		}
+		SUBCASE("overflowing weights")
+		{
+			auto& weights = std::ranges::find(talk.Tracks, AnimationPath::Weights, &AnimationTrack::Path)->Weights;
+			std::ranges::fill(weights, std::numeric_limits<float>::infinity());
+			const auto since = Log::GetHistory().GetTotalCount();
+			scene.OnRuntimeStart();
+			scene.GetAnimationSystem()->Update(0.5f);
+			CHECK((*scene.GetAnimationSystem()->GetMorphWeights(entity))[face] == 0.0f);
+			CHECK(CountLogMessages(since, "non-finite morph weights; showing them as 0") == 1);
+		}
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Static and edit-mode morph bounds and vertex snapping see the shown weights")
+	{
+		const auto source = AnimationTest::LoadModel(MorphPath());
+		const Submesh& teeth = source->Submeshes[source->Meshes[1].Submeshes[0]];
+		CHECK(MorphedBounds(*source, teeth, std::vector<float>{ 1.0f }).Max.x == doctest::Approx(0.2f));
+		CHECK(MorphedBounds(*source, teeth, std::vector<float>{ 0.0f }).Max.x == doctest::Approx(0.1f));
+		// A MeshComponent shows the mesh defaults: Blink 0.25 pushes the top row back by 0.0625.
+		CHECK(MorphedMeshBounds(*source, 0).Min.z == doctest::Approx(-0.0625f));
+		CHECK(MorphedMeshBounds(*source, 1).Max.x == doctest::Approx(0.1f));
+
+		// Edit mode snaps to the node weights' surface: the centre vertex sits 0.15 in front (Smile 0.5).
+		ClearAssetCache cacheGuard;
+		Scene scene;
+		auto entity = scene.CreateEntity("Face");
+		entity.AddComponent<AnimatorComponent>().Mesh = MorphPath().string();
+		const glm::mat4 viewProjection = glm::ortho(-1.0f, 1.0f, -1.0f, 1.0f, 0.1f, 10.0f) * glm::lookAt(glm::vec3(0, 0.5f, 5), glm::vec3(0, 0.5f, 0), glm::vec3(0, 1, 0));
+		const auto vertex = FindViewportVertex(entity, viewProjection, { 200, 200 }, { 100, 100 }, 4);
+		REQUIRE(vertex);
+		CHECK(vertex->World.z == doctest::Approx(0.15f));
+	}
+
+	TEST_CASE("Draws keep their strongest morph weights, in a stable order")
+	{
+		std::vector<uint32_t> targets;
+		const float weights[] = { 0.1f, 0.0f, -0.5f, std::numeric_limits<float>::quiet_NaN(), 0.3f, 0.1f, -0.1f };
+		CHECK(SelectMorphWeights(weights, 8, targets) == 0);
+		CHECK(targets == std::vector<uint32_t>{ 2, 4, 0, 5, 6 });
+		CHECK(SelectMorphWeights(weights, 3, targets) == 2);
+		CHECK(targets == std::vector<uint32_t>{ 2, 4, 0 });
+		CHECK(SelectMorphWeights({}, 3, targets) == 0);
+		CHECK(targets.empty());
 	}
 }

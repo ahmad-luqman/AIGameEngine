@@ -20,15 +20,9 @@ using json = nlohmann::json;
 using namespace AnimationTest;
 
 namespace {
-	const AnimationClip& Clip(const MeshSource& source, const std::string& name)
-	{
-		const auto clip = std::ranges::find(source.Animations, name, &AnimationClip::Name);
-		REQUIRE(clip != source.Animations.end());
-		return *clip;
-	}
 	AnimationLocalPose Sample(const MeshSource& source, const std::string& clip, float time)
 	{
-		return SampleAnimation(source, clip.empty() ? nullptr : &Clip(source, clip), time);
+		return SampleAnimation(source, clip.empty() ? nullptr : &Clip(source, clip.c_str()), time);
 	}
 	std::vector<glm::mat4> Compose(const MeshSource& source, const AnimationLocalPose& pose)
 	{

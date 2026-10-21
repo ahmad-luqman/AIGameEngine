@@ -112,6 +112,22 @@ namespace Basalt {
 			return true;
 		}
 
+		// cgltf_validate also reads sparse accessors' index data before it checks that buffer views fit their buffers
+		// (found by FuzzGltf), so a view past its buffer's loaded bytes is rejected first.
+		bool CheckBufferViewBounds(const cgltf_data* data, const std::filesystem::path& path, std::string& outError)
+		{
+			for (cgltf_size i = 0; i < data->buffer_views_count; i++)
+			{
+				const cgltf_buffer_view& view = data->buffer_views[i];
+				if (!view.buffer || view.offset > view.buffer->size || view.size > view.buffer->size - view.offset)
+				{
+					outError = path.filename().string() + ": buffer view " + std::to_string(i) + " lies outside its buffer";
+					return false;
+				}
+			}
+			return true;
+		}
+
 		// The external files are listed as soon as the file parses, even when loading fails later (a missing buffer).
 		GltfData LoadGltfData(const std::filesystem::path& path, const std::string& key, const std::filesystem::path& projectRoot, std::vector<std::string>& outExternalFiles, std::string& outError)
 		{
@@ -159,7 +175,7 @@ namespace Basalt {
 				outError = path.filename().string() + ": cannot load buffers (" + ResultToString(result) + ")";
 				return nullptr;
 			}
-			if (!CheckAccessorAlignment(data.get(), path, outError))
+			if (!CheckAccessorAlignment(data.get(), path, outError) || !CheckBufferViewBounds(data.get(), path, outError))
 				return nullptr;
 			result = cgltf_validate(data.get());
 			if (result != cgltf_result_success)
@@ -199,8 +215,26 @@ namespace Basalt {
 			return cgltf_accessor_unpack_floats(accessor, reinterpret_cast<float*>(out.data()), floatCount) == floatCount;
 		}
 
-		// Morph target names (extras.targetNames, unique within the mesh) and default weights.
-		bool ReadMorphTargetNames(const cgltf_mesh& mesh, MeshData& meshData, std::string& outError)
+		// Why a mesh's morph targets cannot be kept within the import limits (empty when they can), given the deltas left
+		// in the model's budget.
+		std::string MorphLimitProblem(const cgltf_mesh& mesh, size_t budget)
+		{
+			const size_t targets = mesh.primitives_count > 0 ? mesh.primitives[0].targets_count : 0;
+			if (targets > MaxMorphTargets)
+				return fmt::format("{} morph targets exceed the limit of {} per mesh", targets, MaxMorphTargets);
+			size_t deltas = 0;
+			for (cgltf_size p = 0; p < mesh.primitives_count; p++)
+				for (cgltf_size a = 0; a < mesh.primitives[p].attributes_count; a++)
+					if (const cgltf_attribute& attribute = mesh.primitives[p].attributes[a]; attribute.type == cgltf_attribute_type_position && attribute.data)
+						deltas += attribute.data->count * targets;
+			if (deltas > budget)
+				return fmt::format("its morph targets need {} deltas, past the {} left of the limit of {} per model", deltas, budget, MaxMorphDeltas);
+			return {};
+		}
+
+		// Morph target names (extras.targetNames, unique within the mesh) and default weights. cgltf_validate already
+		// rejects the count mismatches; these checks keep the importer safe on its own.
+		bool ReadMorphTargetNames(const cgltf_mesh& mesh, MeshData& meshData, const std::string& key, std::string& outError)
 		{
 			const size_t targets = mesh.primitives_count > 0 ? mesh.primitives[0].targets_count : 0;
 			for (cgltf_size p = 1; p < mesh.primitives_count; p++)
@@ -209,11 +243,6 @@ namespace Basalt {
 					outError = fmt::format("primitive {} has {} morph targets, primitive 0 has {}", p, mesh.primitives[p].targets_count, targets);
 					return false;
 				}
-			if (targets > MaxMorphTargets)
-			{
-				outError = fmt::format("{} morph targets exceed the limit of {}", targets, MaxMorphTargets);
-				return false;
-			}
 			if ((mesh.weights_count > 0 && mesh.weights_count != targets) || (mesh.target_names_count > 0 && mesh.target_names_count != targets))
 			{
 				outError = fmt::format("{} default weights and {} target names for {} morph targets", mesh.weights_count, mesh.target_names_count, targets);
@@ -227,11 +256,14 @@ namespace Basalt {
 				std::string name = base;
 				for (size_t suffix = 1; !used.insert(name).second; suffix++)
 					name = base + "_" + std::to_string(suffix);
+				// Scripts address targets by name, so a renamed one is worth knowing about.
+				if (name != base)
+					BS_CORE_WARN("MeshImporter: {}: mesh '{}': morph target {} is named '{}' like an earlier one; it is '{}'", key, meshData.Name, t, base, name);
 				meshData.MorphTargets.push_back(std::move(name));
 				const float weight = t < mesh.weights_count ? mesh.weights[t] : 0.0f;
 				if (!std::isfinite(weight))
 				{
-					outError = "non-finite default morph weight";
+					outError = fmt::format("default weight {} of morph target '{}' is not finite", t, meshData.MorphTargets.back());
 					return false;
 				}
 				meshData.MorphWeights.push_back(weight);
@@ -239,13 +271,14 @@ namespace Basalt {
 			return true;
 		}
 
-		// Reads a primitive's morph targets into target-major deltas. A target without NORMAL deltas takes the change in
-		// generated normals between the base and the fully morphed shape, so lighting follows the new surface.
-		bool ReadMorphTargets(const cgltf_primitive& primitive, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, std::vector<MorphDelta>& outDeltas, size_t& budget, std::string& outError)
+		// Reads `targets` morph targets of a primitive into target-major deltas. A target without NORMAL deltas takes the
+		// change in generated normals between the base and the fully morphed shape, so lighting follows the new surface.
+		// outIgnored is set when a target carries attributes other than POSITION, NORMAL and TANGENT, which are dropped.
+		bool ReadMorphTargets(const cgltf_primitive& primitive, size_t targets, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, std::vector<MorphDelta>& outDeltas, size_t& budget, bool& outIgnored, std::string& outError)
 		{
-			const size_t targets = primitive.targets_count;
 			if (targets == 0)
 				return true;
+			// MorphLimitProblem checked the whole mesh first; this keeps the budget honest on its own.
 			if (vertices.size() > budget / targets)
 			{
 				outError = fmt::format("morph targets exceed the limit of {} deltas per model", MaxMorphDeltas);
@@ -254,6 +287,7 @@ namespace Basalt {
 			budget -= vertices.size() * targets;
 			outDeltas.assign(targets * vertices.size(), MorphDelta{});
 			std::vector<Vertex> generatedBase;
+			std::vector<glm::vec3> data;
 			for (size_t t = 0; t < targets; t++)
 			{
 				const cgltf_morph_target& target = primitive.targets[t];
@@ -266,21 +300,25 @@ namespace Basalt {
 						positions = attribute.data;
 					else if (attribute.type == cgltf_attribute_type_normal && attribute.index == 0)
 						normals = attribute.data;
+					else if (attribute.type != cgltf_attribute_type_tangent)
+						outIgnored = true;
 				}
 				MorphDelta* deltas = outDeltas.data() + t * vertices.size();
-				std::vector<glm::vec3> data;
-				for (const auto& [accessor, name] : { std::pair{ positions, "POSITION" }, std::pair{ normals, "NORMAL" } })
-				{
+				const auto read = [&](const cgltf_accessor* accessor, const char* name, glm::vec3 MorphDelta::* field) {
 					if (!accessor)
-						continue;
-					if (accessor->count != vertices.size() || !ReadAccessor(accessor, data, 3) || !std::ranges::all_of(data, [](const glm::vec3& v) { return Math::IsFinite(v); }))
+						return true;
+					const char* problem = accessor->count != vertices.size() ? "has a different count than POSITION" : (!ReadAccessor(accessor, data, 3) ? "is not a readable VEC3 accessor" : (!std::ranges::all_of(data, [](const glm::vec3& v) { return Math::IsFinite(v); }) ? "holds non-finite values" : nullptr));
+					if (problem)
 					{
-						outError = fmt::format("morph target {} has an invalid {} accessor", t, name);
+						outError = fmt::format("morph target {} {} accessor {}", t, name, problem);
 						return false;
 					}
 					for (size_t v = 0; v < vertices.size(); v++)
-						(accessor == positions ? deltas[v].Position : deltas[v].Normal) = data[v];
-				}
+						deltas[v].*field = data[v];
+					return true;
+				};
+				if (!read(positions, "POSITION", &MorphDelta::Position) || !read(normals, "NORMAL", &MorphDelta::Normal))
+					return false;
 				if (!positions || normals)
 					continue;
 				if (generatedBase.empty())
@@ -545,11 +583,16 @@ namespace Basalt {
 			const cgltf_mesh& mesh = data->meshes[meshIndex];
 			MeshData meshData;
 			meshData.Name = mesh.name ? mesh.name : "Mesh" + std::to_string(meshIndex);
-			if (!ReadMorphTargetNames(mesh, meshData, outError))
+			// Morph targets past the import limits are dropped rather than failing the model: its geometry still loads.
+			const std::string morphProblem = MorphLimitProblem(mesh, morphBudget);
+			if (!morphProblem.empty())
+				BS_CORE_WARN("MeshImporter: {}: mesh '{}': {}; it keeps its base shape without morph targets", key, meshData.Name, morphProblem);
+			else if (!ReadMorphTargetNames(mesh, meshData, key, outError))
 			{
 				outError = fmt::format("{}: mesh '{}': {}", key, meshData.Name, outError);
 				return nullptr;
 			}
+			bool ignoredMorphAttributes = false;
 
 			for (cgltf_size primitiveIndex = 0; primitiveIndex < mesh.primitives_count; primitiveIndex++)
 			{
@@ -705,9 +748,9 @@ namespace Basalt {
 					MeshSource::GenerateTangents(vertices, indices);
 				}
 
-				const uint32_t targets = static_cast<uint32_t>(primitive.targets_count);
+				const uint32_t targets = static_cast<uint32_t>(meshData.MorphTargets.size());
 				std::vector<MorphDelta> morphDeltas;
-				if (!ReadMorphTargets(primitive, vertices, indices, morphDeltas, morphBudget, outError))
+				if (!ReadMorphTargets(primitive, targets, vertices, indices, morphDeltas, morphBudget, ignoredMorphAttributes, outError))
 				{
 					outError = fmt::format("{}: mesh '{}' primitive {}: {}", key, meshData.Name, primitiveIndex, outError);
 					return nullptr;
@@ -725,6 +768,8 @@ namespace Basalt {
 					MeshOptimizer::GenerateLODs(*source, submesh);
 				meshData.Submeshes.push_back(submesh);
 			}
+			if (ignoredMorphAttributes)
+				BS_CORE_WARN("MeshImporter: {}: mesh '{}': morph targets keep only POSITION and NORMAL deltas; their other attributes are ignored", key, meshData.Name);
 			source->Meshes.push_back(std::move(meshData));
 		}
 
@@ -740,12 +785,14 @@ namespace Basalt {
 			if (result.MeshIndex >= 0)
 			{
 				const MeshData& mesh = source->Meshes[result.MeshIndex];
-				if (node.weights_count > 0 && node.weights_count != mesh.MorphTargets.size())
+				// A mesh whose morph targets were dropped (MorphLimitProblem) ignores the node's weights too.
+				const bool dropped = mesh.MorphTargets.empty() && node.mesh->primitives_count > 0 && node.mesh->primitives[0].targets_count > 0;
+				if (!dropped && node.weights_count > 0 && node.weights_count != mesh.MorphTargets.size())
 				{
 					outError = fmt::format("{}: node '{}' has {} weights for {} morph targets", key, result.Name, node.weights_count, mesh.MorphTargets.size());
 					return nullptr;
 				}
-				result.MorphWeights = node.weights_count > 0 ? std::vector<float>(node.weights, node.weights + node.weights_count) : mesh.MorphWeights;
+				result.MorphWeights = node.weights_count > 0 && !dropped ? std::vector<float>(node.weights, node.weights + node.weights_count) : mesh.MorphWeights;
 				if (!std::ranges::all_of(result.MorphWeights, [](float w) { return std::isfinite(w); }))
 				{
 					outError = fmt::format("{}: node '{}' has non-finite morph weights", key, result.Name);
@@ -828,7 +875,8 @@ namespace Basalt {
 		if (parent)
 			scene.SetParent(root, parent, false);
 
-		if (!source.AnimationUnsupported && (!source.Skins.empty() || !source.Animations.empty()))
+		// Morph targets need an Animator too: node weights, weight clips and script weights live in its pose.
+		if (!source.AnimationUnsupported && (!source.Skins.empty() || !source.Animations.empty() || source.MorphWeightCount > 0))
 		{
 			root.AddComponent<AnimatorComponent>().Mesh = source.Key;
 			return root;

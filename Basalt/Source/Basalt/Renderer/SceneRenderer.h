@@ -46,8 +46,9 @@ namespace Basalt {
 		bool FSR1Active = false;           // EASU and RCAS actually ran in this frame.
 		bool Failed = false;               // This frame could not be rendered; hosts must not report success.
 		uint32_t Materials = 0;
-		uint32_t SkinMatrices = 0; // Uploaded once per visible instance/skin, shared by its mesh nodes.
-		uint32_t MorphWeights = 0; // Active morph weights uploaded, once per visible morphed mesh node.
+		uint32_t SkinMatrices = 0;        // Uploaded once per visible instance/skin, shared by its mesh nodes.
+		uint32_t MorphWeights = 0;        // Active morph weights uploaded, once per visible morphed mesh node.
+		uint32_t MorphWeightsDropped = 0; // Active weights past the per-draw limit, not drawn.
 		// Particle billboards drawn (after frustum culling of whole emitters), and the ones skipped because
 		// the frame's particle budget (or particle buffer) was exhausted.
 		uint32_t Particles = 0;

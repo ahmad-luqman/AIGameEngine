@@ -537,12 +537,13 @@ function Entity:SetMorphWeight(target, weight, seconds) end
 ---@return number?
 function Entity:GetMorphWeight(target) end
 
----Returns the target (without one, every target) to its animated weight. False when no script weight was set.
+---Returns the target (with nil, every target) to its animated weight. False when no script weight was set or for an
+---unknown target ("" is a target name).
 ---@param target? string
 ---@return boolean
 function Entity:ClearMorphWeight(target) end
 
----The model's unique morph target names, in node order.
+---The model's unique morph target names, in node index (glTF) order.
 ---@return string[]
 function Entity:GetMorphTargets() end
 
@@ -1434,7 +1435,6 @@ function BasaltScript:StopAllCoroutines() end
 ---@field LODDistance number
 ---@field LODInterval integer
 ---@field ClipLibraries AnimationClipLibrary[]
----@field RetargetJoints AnimationRetargetJoint[]
 
 ---BoneAttachment data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
 ---@class BoneAttachmentComponent
@@ -1876,6 +1876,7 @@ function BasaltScript:StopAllCoroutines() end
 ---An element of a component list field.
 ---@class AnimationClipLibrary
 ---@field Mesh string
+---@field Joints AnimationRetargetJoint[]
 
 ---An element of a component list field.
 ---@class AnimationRetargetJoint

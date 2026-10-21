@@ -1073,7 +1073,7 @@ namespace Basalt {
 		if (const auto* mesh = entity.TryGetComponent<MeshComponent>())
 		{
 			if (Ref<MeshSource> source = AssetManager::GetMesh(mesh->Mesh); source && mesh->MeshIndex < source->Meshes.size())
-				bounds.Expand(source->Meshes[mesh->MeshIndex].Bounds.Transformed(world));
+				bounds.Expand(MorphedMeshBounds(*source, mesh->MeshIndex).Transformed(world));
 		}
 		if (bounds.IsValid())
 			m_Camera.Focus(bounds.GetCenter(), glm::length(bounds.GetExtents()));
@@ -1275,7 +1275,7 @@ namespace Basalt {
 			{
 				if (const auto* mesh = entity.TryGetComponent<MeshComponent>())
 					if (const auto source = AssetManager::GetMesh(mesh->Mesh); source && mesh->MeshIndex < source->Meshes.size())
-						DebugDraw::Box(source->Meshes[mesh->MeshIndex].Bounds.Transformed(world), s_SelectionColor);
+						DebugDraw::Box(MorphedMeshBounds(*source, mesh->MeshIndex).Transformed(world), s_SelectionColor);
 				const auto bounds = AnimatedModelBounds(entity);
 				if (bounds.IsValid())
 					DebugDraw::Box(bounds, s_SelectionColor);

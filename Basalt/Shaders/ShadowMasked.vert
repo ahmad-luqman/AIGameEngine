@@ -18,8 +18,7 @@ void main()
 {
 	DrawData draw = u_Draws.Draws[u_Push.DrawIndex + gl_InstanceIndex];
 	vec3 position = a_Position;
-	vec3 normal = vec3(0.0);
-	ApplyMorphTargets(draw, position, normal);
+	ApplyMorphPosition(draw, position);
 	v_TexCoord = a_TexCoord;
 	v_TexCoord1 = a_TexCoord1;
 	v_MaterialIndex = draw.Indices.x;

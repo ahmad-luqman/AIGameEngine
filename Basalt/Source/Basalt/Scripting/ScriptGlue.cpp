@@ -764,7 +764,7 @@ namespace Basalt {
 			};
 			entityType["ClearMorphWeight"] = [&context](const ScriptEntity& self, const sol::object& target) {
 				Entity entity = RequireAnimator(self, "ClearMorphWeight");
-				return RequireAnimations(context).ClearMorphWeight(entity, OptionalString(target, "ClearMorphWeight: target").value_or(std::string()));
+				return RequireAnimations(context).ClearMorphWeight(entity, OptionalString(target, "ClearMorphWeight: target"));
 			};
 			entityType["GetMorphTargets"] = [&context](const ScriptEntity& self) {
 				return sol::as_table(RequireAnimations(context).GetMorphTargets(RequireAnimator(self, "GetMorphTargets")));

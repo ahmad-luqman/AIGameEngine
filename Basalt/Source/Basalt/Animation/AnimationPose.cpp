@@ -79,18 +79,17 @@ namespace Basalt {
 			const size_t left = right - 1;
 			const float* a = value(left, offset);
 			const float* b = value(right, offset);
+			if (track.Interpolation == AnimationInterpolation::Step)
+			{
+				std::copy(a, a + width, out.begin());
+				return;
+			}
 			const float duration = track.Times[right] - track.Times[left];
 			const float t = (time - track.Times[left]) / duration;
 			const float t2 = t * t, t3 = t2 * t;
 			for (size_t i = 0; i < width; i++)
-			{
-				if (track.Interpolation == AnimationInterpolation::Step)
-					out[i] = a[i];
-				else if (cubic)
-					out[i] = (2 * t3 - 3 * t2 + 1) * a[i] + (t3 - 2 * t2 + t) * duration * value(left, 2)[i] + (-2 * t3 + 3 * t2) * b[i] + (t3 - t2) * duration * value(right, 0)[i];
-				else
-					out[i] = a[i] + (b[i] - a[i]) * t;
-			}
+				out[i] = cubic ? (2 * t3 - 3 * t2 + 1) * a[i] + (t3 - 2 * t2 + t) * duration * value(left, 2)[i] + (-2 * t3 + 3 * t2) * b[i] + (t3 - t2) * duration * value(right, 0)[i]
+							   : a[i] + (b[i] - a[i]) * t;
 		}
 	}
 
@@ -107,30 +106,25 @@ namespace Basalt {
 		}
 		if (clip)
 			for (const auto& track : clip->Tracks)
-			{
-				if (track.Path == AnimationPath::Weights)
-				{
-					const MeshNode& node = source.Nodes[track.Node];
-					BS_CORE_ASSERT(node.MorphWeightOffset >= 0 && node.MorphWeights.size() == track.Width, "imported weights tracks match their node's targets");
-					SampleWeights(track, time, std::span<float>(pose.MorphWeights).subspan(node.MorphWeightOffset, track.Width));
-					continue;
-				}
-				const glm::vec4 value = Sample(track, time);
 				switch (track.Path)
 				{
 					case AnimationPath::Translation:
-						pose.Nodes[track.Node].Translation = glm::vec3(value);
+						pose.Nodes[track.Node].Translation = glm::vec3(Sample(track, time));
 						break;
 					case AnimationPath::Rotation:
-						pose.Nodes[track.Node].Rotation = Quaternion(value);
+						pose.Nodes[track.Node].Rotation = Quaternion(Sample(track, time));
 						break;
 					case AnimationPath::Scale:
-						pose.Nodes[track.Node].Scale = glm::vec3(value);
+						pose.Nodes[track.Node].Scale = glm::vec3(Sample(track, time));
 						break;
 					case AnimationPath::Weights:
+					{
+						const MeshNode& node = source.Nodes[track.Node];
+						BS_CORE_ASSERT(node.MorphWeightOffset >= 0 && node.MorphWeights.size() == track.Width, "imported weights tracks match their node's targets");
+						SampleWeights(track, time, std::span<float>(pose.MorphWeights).subspan(node.MorphWeightOffset, track.Width));
 						break;
+					}
 				}
-			}
 		return pose;
 	}
 
@@ -340,6 +334,8 @@ namespace Basalt {
 		if (submesh.JointBounds.empty())
 			return SkinBounds(source, submesh, palette, morphWeights);
 		const AABB morph = MorphDisplacementBounds(submesh, morphWeights);
+		const glm::vec3 morphMin = morph.IsValid() ? morph.Min : glm::vec3(0);
+		const glm::vec3 morphMax = morph.IsValid() ? morph.Max : glm::vec3(0);
 		AABB bounds;
 		if (submesh.HasUnweightedVertices)
 			bounds.Expand(glm::vec3(0));
@@ -356,12 +352,10 @@ namespace Basalt {
 				bounds.Expand(glm::vec3(0));
 				continue;
 			}
-			// Positions holds bind positions both as is and times the weight sum (at most MaxWeightSum, and at least 1):
-			// the displacement range, which contains zero, widens both by at most MaxWeightSum times itself.
-			const glm::vec3 widenMin = morph.IsValid() ? morph.Min * influence.MaxWeightSum : glm::vec3(0);
-			const glm::vec3 widenMax = morph.IsValid() ? morph.Max * influence.MaxWeightSum : glm::vec3(0);
-			const glm::vec4 low(influence.Positions.Min + widenMin, influence.MinWeightSum);
-			const glm::vec4 high(influence.Positions.Max + widenMax, influence.MaxWeightSum);
+			// Positions holds bind positions as is and times the vertex's weight sum (at most MaxWeightSum, itself >= 1), so
+			// widening both corners by MaxWeightSum times the displacement range (which contains zero) covers either.
+			const glm::vec4 low(influence.Positions.Min + morphMin * influence.MaxWeightSum, influence.MinWeightSum);
+			const glm::vec4 high(influence.Positions.Max + morphMax * influence.MaxWeightSum, influence.MaxWeightSum);
 			glm::vec3 minimum(0), maximum(0);
 			for (int column = 0; column < 4; ++column)
 			{

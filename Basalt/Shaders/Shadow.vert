@@ -11,7 +11,6 @@ void main()
 {
 	DrawData draw = u_Draws.Draws[u_Push.DrawIndex + gl_InstanceIndex];
 	vec3 position = a_Position;
-	vec3 normal = vec3(0.0);
-	ApplyMorphTargets(draw, position, normal);
+	ApplyMorphPosition(draw, position);
 	gl_Position = ShadowViewProjection(u_Push.ShadowViewIndex) * draw.Model * SkinMatrix(draw, a_Joints, a_Weights) * vec4(position, 1.0);
 }

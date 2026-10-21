@@ -2,7 +2,7 @@
 
 #include "Basalt/Animation/AnimationSystem.h"
 #include "Basalt/Animation/InverseKinematics.h"
-#include "Basalt/Animation/Retargeting.h"
+#include "Basalt/Animation/AnimationClipSet.h"
 #include "Basalt/Animation/SpringBones.h"
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Core/Assert.h"
@@ -17,17 +17,18 @@ namespace Basalt {
 	void ForEachAnimatedMesh(Entity entity, const std::function<void(const Ref<MeshSource>&, const MeshNode&, const glm::mat4&, const std::vector<glm::mat4>&, std::span<const float>)>& visit)
 	{
 		const auto* animator = entity.TryGetComponent<AnimatorComponent>();
-		const auto source = animator ? AssetManager::GetMesh(animator->Mesh) : nullptr;
-		if (!source || source->AnimationUnsupported)
+		if (!animator)
 			return;
 		auto& scene = *entity.GetScene();
-		std::vector<glm::mat4> rest;
+		// A running scene draws the playback's own model, so the pose and weights always fit it.
 		AnimationSystem* system = scene.GetAnimationSystem();
-		const auto* globals = system ? system->GetPose(entity) : nullptr;
-		const auto* morphWeights = globals ? system->GetMorphWeights(entity) : nullptr;
-		// The playback sizes its weights with its pose; anything else falls back to the nodes' own weights.
-		if (morphWeights && morphWeights->size() != source->MorphWeightCount)
-			morphWeights = nullptr;
+		const auto view = system ? system->GetPoseView(entity) : std::nullopt;
+		const auto source = view ? view->Source : AssetManager::GetMesh(animator->Mesh);
+		if (!source || source->AnimationUnsupported)
+			return;
+		std::vector<glm::mat4> rest;
+		const auto* globals = view ? view->Globals : nullptr;
+		const auto* morphWeights = view ? view->MorphWeights : nullptr;
 		if (!globals)
 		{
 			const bool valid = EvaluateAnimation(*source, nullptr, 0, rest);
@@ -64,21 +65,10 @@ namespace Basalt {
 	{
 		AABB bounds;
 		ForEachAnimatedMesh(entity, [&](const Ref<MeshSource>& source, const MeshNode& node, const glm::mat4& model, const std::vector<glm::mat4>& palette, std::span<const float> morphWeights) {
-			const auto& mesh = source->Meshes[node.MeshIndex];
-			for (uint32_t submesh : mesh.Submeshes)
+			for (uint32_t index : source->Meshes[node.MeshIndex].Submeshes)
 			{
-				if (!palette.empty())
-					bounds.Expand(SkinBounds(*source, source->Submeshes[submesh], palette, morphWeights).Transformed(model));
-				else if (source->Submeshes[submesh].MorphTargetCount == 0)
-					bounds.Expand(source->Submeshes[submesh].Bounds.Transformed(model));
-				else
-				{
-					// Exact for framing and selection, like SkinBounds.
-					AABB morphed;
-					for (uint32_t v = 0; v < source->Submeshes[submesh].VertexCount; v++)
-						morphed.Expand(MorphVertex(*source, source->Submeshes[submesh], v, morphWeights).Position);
-					bounds.Expand(morphed.Transformed(model));
-				}
+				const Submesh& submesh = source->Submeshes[index];
+				bounds.Expand((palette.empty() ? MorphedBounds(*source, submesh, morphWeights) : SkinBounds(*source, submesh, palette, morphWeights)).Transformed(model));
 			}
 		});
 		return bounds;
@@ -115,36 +105,21 @@ namespace Basalt {
 				auto it = std::ranges::find(clips, name, &AnimationClip::Name);
 				return it != clips.end() ? *it : nullptr;
 			};
-			for (size_t i = 0; i < animator.ClipLibraries.size(); i++)
+			// The same resolution as playback (AnimationClipSet), without baking.
+			std::vector<AnimationClipSet::Library> libraries = AnimationClipSet::Load(animator);
+			AnimationClipSet::Plan(*source, libraries);
+			for (const AnimationClipSet::Library& library : libraries)
 			{
-				const std::string& key = animator.ClipLibraries[i].Mesh;
-				if (key.empty())
-					continue;
-				const auto library = AssetManager::GetMesh(key);
-				if (!library)
-				{
-					warnings.push_back(fmt::format("Animator clip library '{}' could not be loaded: {}", key, AssetManager::GetError(key)));
-					continue;
-				}
-				std::vector<std::string> mapWarnings;
-				const RetargetMap map = Retargeting::BuildMap(*source, *library, animator.RetargetJoints, mapWarnings);
-				for (const std::string& warning : mapWarnings)
+				const std::string& key = library.Entry.Mesh;
+				if (!library.Error.empty())
+					warnings.push_back(fmt::format("Animator clip library '{}' adds no clips: {}", key, library.Error));
+				for (const std::string& warning : library.Warnings)
 					warnings.push_back(fmt::format("Animator clip library '{}': {}", key, warning));
-				if (map.MappedCount() == 0)
-				{
-					warnings.push_back(fmt::format("Animator clip library '{}': no joint matches the model's skeleton (name the pairs in RetargetJoints)", key));
-					continue;
-				}
-				for (const AnimationClip& clip : library->Animations)
-				{
-					if (findClip(clip.Name))
-						warnings.push_back(fmt::format("Animator clip library '{}': clip '{}' is hidden by an earlier clip of that name", key, clip.Name));
-					else
-						clips.push_back(&clip);
-				}
+				for (const std::string& name : library.Shadowed)
+					warnings.push_back(fmt::format("Animator clip library '{}': clip '{}' is hidden by an earlier clip of that name", key, name));
+				for (const std::string& name : library.Clips)
+					clips.push_back(&*std::ranges::find(library.Source->Animations, name, &AnimationClip::Name));
 			}
-			if (animator.ClipLibraries.empty() && std::ranges::any_of(animator.RetargetJoints, [](const AnimationRetargetJoint& joint) { return !joint.Source.empty(); }))
-				warnings.emplace_back("Animator RetargetJoints has no effect without ClipLibraries");
 			if (animator.RootMotion && (animator.RootJoint.empty() || FindNode(*source, animator.RootJoint) < 0))
 				warnings.emplace_back("Animator RootJoint must name a model node for root motion");
 			if (!animator.StateMachine.empty())

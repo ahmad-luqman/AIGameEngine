@@ -175,18 +175,8 @@ namespace Basalt {
 		bool operator==(const AnimationMaskJoint&) const = default;
 	};
 
-	// A model whose clips an Animator also plays, retargeted onto the Animator's own skeleton.
-	struct AnimationClipLibrary
-	{
-		static constexpr const char* TypeName = "AnimationClipLibrary";
-
-		std::string Mesh;
-
-		bool operator==(const AnimationClipLibrary&) const = default;
-	};
-
-	// Pairs a joint of the clip libraries' skeletons with a joint of the Animator's model, ahead of the automatic
-	// name and humanoid matching.
+	// Pairs a joint of a clip library's skeleton with a joint of the Animator's model, ahead of the automatic name and
+	// humanoid matching.
 	struct AnimationRetargetJoint
 	{
 		static constexpr const char* TypeName = "AnimationRetargetJoint";
@@ -195,6 +185,20 @@ namespace Basalt {
 		std::string Target;
 
 		bool operator==(const AnimationRetargetJoint&) const = default;
+	};
+
+	// A model whose clips an Animator also plays, retargeted onto the Animator's own skeleton. Joints (at most MaxJoints)
+	// pairs joints the automatic matching misses or gets wrong; each source and each target joint appears once, which
+	// Validate enforces.
+	struct AnimationClipLibrary
+	{
+		static constexpr const char* TypeName = "AnimationClipLibrary";
+		static constexpr uint32_t MaxJoints = 256;
+
+		std::string Mesh;
+		std::vector<AnimationRetargetJoint> Joints;
+
+		bool operator==(const AnimationClipLibrary&) const = default;
 	};
 
 	// A clip played on top of the Animator's base playback (clip, blend, blend space or state machine), in list
@@ -232,7 +236,6 @@ namespace Basalt {
 		static constexpr uint32_t MaxLayers = 16;
 		static constexpr uint32_t MaxLODInterval = 60;
 		static constexpr uint32_t MaxClipLibraries = 64;
-		static constexpr uint32_t MaxRetargetJoints = 256;
 
 		std::string Mesh;
 		// Empty selects the first clip. May name a blend space (a clip of the same name wins).
@@ -257,12 +260,12 @@ namespace Basalt {
 		// updates. Zero distance disables LOD. Clocks, events and root motion still advance each update.
 		float LODDistance = 0.0f;
 		uint32_t LODInterval = 1;
-		// Models whose clips this Animator also plays, such as a shared Mixamo library, retargeted onto Mesh's skeleton.
-		// Clip names (Clip, blend space samples, layers, events, graph states) resolve in Mesh first, then in each
-		// library in order. Joints match by RetargetJoints, then by name (ignoring "prefix:" and "prefix|"), then as
-		// humanoid bones; both skeletons must share a rest pose style (both T-pose or both A-pose).
+		// Models whose clips this Animator also plays (at most MaxClipLibraries), such as a shared Mixamo library,
+		// retargeted onto Mesh's skeleton. Clip names (Clip, blend space samples, layers, events, graph states) resolve in
+		// Mesh first, then in each library in order. Joints match by the library's Joints, then by name (ignoring
+		// "prefix:" and "prefix|"), then as humanoid bones; both skeletons must share a rest pose style (both T-pose or
+		// both A-pose).
 		std::vector<AnimationClipLibrary> ClipLibraries;
-		std::vector<AnimationRetargetJoint> RetargetJoints;
 	};
 
 	// Keeps the entity at a joint (any node) of an Animator's model while the scene plays or simulates: its

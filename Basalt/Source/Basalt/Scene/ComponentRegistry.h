@@ -112,27 +112,35 @@ namespace Basalt {
 		std::function<void(Entity, const std::unordered_map<UUID, UUID>&)> RemapEntityReferences;
 	};
 
+	// Whether a ComponentInfo::AssetFields entry names a field of a list's elements ("List[].Field").
+	inline bool IsListAssetField(std::string_view field)
+	{
+		return field.find("[].") != std::string_view::npos;
+	}
+
 	// Visits the values one ComponentInfo::AssetFields entry names in a component's JSON: the top-level field, or for
-	// "List[].Field" that field of every object element of the list, with a label such as "ClipLibraries[2].Mesh" for
-	// messages. Absent fields and non-object elements are skipped; values are passed as they are (paths, UUID
-	// references, or anything malformed).
+	// "List[].Field" that field of every object element of the list (one list level only), with a label such as
+	// "ClipLibraries[2].Mesh" for messages. Returns whether the field (or the list) is present; absent element fields and
+	// non-object elements are skipped. Values are passed as they are (paths, UUID references, or anything malformed).
 	template<typename Json, typename Visit>
-	void ForEachAssetValue(Json& component, const std::string& field, Visit&& visit)
+	bool ForEachAssetValue(Json& component, const std::string& field, Visit&& visit)
 	{
 		if (!component.is_object())
-			return;
+			return false;
 		const size_t list = field.find("[].");
 		if (list == std::string::npos)
 		{
-			if (auto value = component.find(field); value != component.end())
-				visit(*value, field);
-			return;
+			auto value = component.find(field);
+			if (value == component.end())
+				return false;
+			visit(*value, field);
+			return true;
 		}
 		const std::string listName = field.substr(0, list);
 		const std::string element = field.substr(list + 3);
 		auto items = component.find(listName);
 		if (items == component.end() || !items->is_array())
-			return;
+			return false;
 		for (size_t i = 0; i < items->size(); i++)
 		{
 			auto& item = (*items)[i];
@@ -145,6 +153,7 @@ namespace Basalt {
 				visit(*value, label);
 			}
 		}
+		return true;
 	}
 
 	class ComponentRegistry
