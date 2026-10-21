@@ -1,0 +1,397 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "Basalt test fixture"
+  },
+  "buffers": [
+    {
+      "byteLength": 102,
+      "uri": "data:application/octet-stream;base64,AAAAAAAAgD8AAABAAAAAAAAAAAAAAAAAAACAPz6qMj0AAAAAAAAAAKDBfz8AAAAAAAAAAAAAAAAAAIA/CtejvQAAAAAAAAAACtejPQAAAAAAAAAAAAAAAArXoz0AAAAAAAABAAIA"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 12
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 12,
+      "byteLength": 48
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 60,
+      "byteLength": 36
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 96,
+      "byteLength": 6
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 3,
+      "type": "SCALAR",
+      "min": [
+        0
+      ],
+      "max": [
+        2
+      ]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 3,
+      "type": "VEC4"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5126,
+      "count": 3,
+      "type": "VEC3",
+      "min": [
+        -0.08,
+        0,
+        0
+      ],
+      "max": [
+        0.08,
+        0.08,
+        0
+      ]
+    },
+    {
+      "bufferView": 3,
+      "componentType": 5123,
+      "count": 3,
+      "type": "SCALAR"
+    }
+  ],
+  "materials": [
+    {
+      "name": "Marker",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.2,
+          0.6,
+          0.9,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.5
+      },
+      "doubleSided": true
+    }
+  ],
+  "meshes": [
+    {
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 2
+          },
+          "indices": 3,
+          "material": 0
+        }
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "root",
+      "translation": [
+        0,
+        0,
+        0
+      ],
+      "children": [
+        1
+      ]
+    },
+    {
+      "name": "pelvis",
+      "translation": [
+        0,
+        1.4,
+        0
+      ],
+      "children": [
+        2,
+        14,
+        18
+      ]
+    },
+    {
+      "name": "spine_01",
+      "translation": [
+        0,
+        0.10000000000000009,
+        0
+      ],
+      "children": [
+        3
+      ]
+    },
+    {
+      "name": "spine_02",
+      "translation": [
+        0,
+        0.1499999999999999,
+        0
+      ],
+      "children": [
+        4,
+        6,
+        10,
+        24
+      ]
+    },
+    {
+      "name": "neck_01",
+      "translation": [
+        0,
+        0.20000000000000018,
+        0
+      ],
+      "children": [
+        5
+      ]
+    },
+    {
+      "name": "head",
+      "translation": [
+        0,
+        0.09999999999999987,
+        0
+      ]
+    },
+    {
+      "name": "clavicle_l",
+      "translation": [
+        0.05,
+        0.15000000000000013,
+        0
+      ],
+      "children": [
+        7
+      ]
+    },
+    {
+      "name": "upperarm_l",
+      "translation": [
+        0.16999999999999998,
+        0.0,
+        0
+      ],
+      "children": [
+        8
+      ]
+    },
+    {
+      "name": "lowerarm_l",
+      "translation": [
+        0.28,
+        0.0,
+        0
+      ],
+      "children": [
+        9,
+        22
+      ]
+    },
+    {
+      "name": "hand_l",
+      "translation": [
+        0.28,
+        0.0,
+        0
+      ]
+    },
+    {
+      "name": "clavicle_r",
+      "translation": [
+        -0.05,
+        0.15000000000000013,
+        0
+      ],
+      "children": [
+        11
+      ]
+    },
+    {
+      "name": "upperarm_r",
+      "translation": [
+        -0.16999999999999998,
+        0.0,
+        0
+      ],
+      "children": [
+        12
+      ]
+    },
+    {
+      "name": "lowerarm_r",
+      "translation": [
+        -0.28,
+        0.0,
+        0
+      ],
+      "children": [
+        13
+      ]
+    },
+    {
+      "name": "hand_r",
+      "translation": [
+        -0.28,
+        0.0,
+        0
+      ]
+    },
+    {
+      "name": "thigh_l",
+      "translation": [
+        0.12,
+        -0.04999999999999982,
+        0
+      ],
+      "children": [
+        15
+      ]
+    },
+    {
+      "name": "calf_l",
+      "translation": [
+        0.0,
+        -0.6500000000000001,
+        0
+      ],
+      "children": [
+        16,
+        23
+      ]
+    },
+    {
+      "name": "foot_l",
+      "translation": [
+        0.0,
+        -0.6,
+        0
+      ],
+      "children": [
+        17
+      ]
+    },
+    {
+      "name": "ball_l",
+      "translation": [
+        0.0,
+        -0.1,
+        0.15
+      ]
+    },
+    {
+      "name": "thigh_r",
+      "translation": [
+        -0.12,
+        -0.04999999999999982,
+        0
+      ],
+      "children": [
+        19
+      ]
+    },
+    {
+      "name": "calf_r",
+      "translation": [
+        0.0,
+        -0.6500000000000001,
+        0
+      ],
+      "children": [
+        20
+      ]
+    },
+    {
+      "name": "foot_r",
+      "translation": [
+        0.0,
+        -0.6,
+        0
+      ],
+      "children": [
+        21
+      ]
+    },
+    {
+      "name": "ball_r",
+      "translation": [
+        0.0,
+        -0.1,
+        0.15
+      ]
+    },
+    {
+      "name": "ForearmMarker",
+      "mesh": 0,
+      "translation": [
+        0,
+        0,
+        0.05
+      ]
+    },
+    {
+      "name": "ShinMarker",
+      "mesh": 0,
+      "translation": [
+        0,
+        0,
+        0.05
+      ]
+    },
+    {
+      "name": "ChestMarker",
+      "mesh": 0,
+      "translation": [
+        0,
+        0,
+        0.05
+      ]
+    }
+  ],
+  "animations": [
+    {
+      "name": "Idle",
+      "samplers": [
+        {
+          "input": 0,
+          "output": 1,
+          "interpolation": "LINEAR"
+        }
+      ],
+      "channels": [
+        {
+          "sampler": 0,
+          "target": {
+            "node": 2,
+            "path": "rotation"
+          }
+        }
+      ]
+    }
+  ],
+  "scenes": [
+    {
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "scene": 0
+}
