@@ -54,6 +54,12 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   gameplay vertical input (and, during fades to or from states without root motion, the faded share of gameplay
   horizontal input), or updates the world transform. Attachments and events run after physics and
   LateUpdate, before particles.
+- **Animation authoring.** The editor's Animation Graph draft saves through `asset.write`; it preserves graph
+  references on rename and prunes dependent edges on deletion. `PropertyAnimationComponent` stores same-entity
+  numeric registry-field tracks with normalized keys. `PropertyAnimationSystem` owns runtime clocks in Play/Simulate,
+  samples after scripts and before skeletal animation/physics through grouped `ComponentRegistry` patches, and
+  logs/suspends failed timelines until edited or explicitly repaired. `animation.key/sample/control` share these paths;
+  Lua uses `ControlPropertyAnimation`. See `Docs/ScriptingAPI.md`.
 - **Layers, IK and spring bones.** A pose is built in stages: the base playback (`Playback::Local`, which fades, snapshots and root
   stripping use), then `Animator.Layers` in order (`Pose`; each layer's clip, mask and reference pose are resolved again
   only when its clip, blend, reference or mask changes, and the root-motion exclusion when the root-motion joint

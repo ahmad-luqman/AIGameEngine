@@ -290,7 +290,7 @@ TEST_CASE("Schema registration failures are reported without throwing or replaci
 {
 	CommandRegistry registry;
 	const auto count = registry.GetCommands().size();
-	CHECK(count == 71);
+	CHECK(count == 74);
 	const auto handler = [](AutomationSession&, const json& params) { return params; };
 	for (const auto& name : { std::string(), std::string(129, 'a'), std::string("bad/name") })
 		CHECK_FALSE(registry.Register({ name, "", CommandSchema::Object(), handler }));
@@ -318,13 +318,13 @@ TEST_CASE("All editor tool schemas reject invalid values before the host handler
 	bool called = false;
 	const auto handler = [&](AutomationSession&, const json& params) { called = true; return params; };
 	const std::vector<std::pair<std::string, json>> schemas = {
-		{ "editor.history", EditorCommandSchemas::Undo() }, { "editor.transaction", EditorCommandSchemas::Transaction() }, { "editor.transform", EditorCommandSchemas::Transform() }, { "editor.component_set", EditorCommandSchemas::ComponentSet() }, { "editor.box_select", EditorCommandSchemas::BoxSelect() }, { "editor.delete", EditorCommandSchemas::Undo() }, { "editor.duplicate", EditorCommandSchemas::Undo() }, { "editor.viewport", ViewportSettings::Schema() }, { "editor.pick", EditorCommandSchemas::Pick() }, { "editor.vertex_snap", EditorCommandSchemas::VertexSnap() }, { "editor.select", EditorCommandSchemas::Select() }, { "editor.camera", EditorCommandSchemas::Camera() }, { "editor.undo", EditorCommandSchemas::Undo() }, { "editor.redo", EditorCommandSchemas::Redo() }, { "editor.screenshot", EditorCommandSchemas::Screenshot() }, { "editor.window_screenshot", EditorCommandSchemas::WindowScreenshot() }, { "editor.panel", EditorCommandSchemas::Panel() }, { "editor.game_view", GameViewSettings::Schema() }, { "editor.thumbnail", EditorCommandSchemas::Thumbnail() }, { "editor.material_preview", EditorCommandSchemas::MaterialPreview() }, { "editor.material_editor", EditorCommandSchemas::MaterialEditor() }, { "editor.preferences", EditorPreferences::Schema() }
+		{ "editor.history", EditorCommandSchemas::Undo() }, { "editor.transaction", EditorCommandSchemas::Transaction() }, { "editor.transform", EditorCommandSchemas::Transform() }, { "editor.component_set", EditorCommandSchemas::ComponentSet() }, { "editor.box_select", EditorCommandSchemas::BoxSelect() }, { "editor.delete", EditorCommandSchemas::Undo() }, { "editor.duplicate", EditorCommandSchemas::Undo() }, { "editor.viewport", ViewportSettings::Schema() }, { "editor.pick", EditorCommandSchemas::Pick() }, { "editor.vertex_snap", EditorCommandSchemas::VertexSnap() }, { "editor.select", EditorCommandSchemas::Select() }, { "editor.camera", EditorCommandSchemas::Camera() }, { "editor.undo", EditorCommandSchemas::Undo() }, { "editor.redo", EditorCommandSchemas::Redo() }, { "editor.screenshot", EditorCommandSchemas::Screenshot() }, { "editor.window_screenshot", EditorCommandSchemas::WindowScreenshot() }, { "editor.panel", EditorCommandSchemas::Panel() }, { "editor.game_view", GameViewSettings::Schema() }, { "editor.thumbnail", EditorCommandSchemas::Thumbnail() }, { "editor.material_preview", EditorCommandSchemas::MaterialPreview() }, { "editor.material_editor", EditorCommandSchemas::MaterialEditor() }, { "editor.animation_graph", EditorCommandSchemas::AnimationGraph() }, { "editor.preferences", EditorPreferences::Schema() }
 	};
 	McpServer server;
 	for (const auto& [name, schema] : schemas)
 		REQUIRE(registry.Register({ name, "Editor host", schema, handler }));
 	Start(server, registry, session);
-	CHECK(Reply(server, registry, session, Request("tools/list"))["result"]["tools"].size() == 93);
+	CHECK(Reply(server, registry, session, Request("tools/list"))["result"]["tools"].size() == 97);
 	for (const auto& [name, schema] : schemas)
 	{
 		INFO(name);

@@ -106,6 +106,10 @@ namespace Basalt::EditorCommandSchemas {
 		return Schema::Object({ { "entity", Schema::Entity("ID or name of an entity with a Material component") }, { "output", Schema::String(".png to write", true) } }, { "entity", "output" });
 	}
 
+	nlohmann::json AnimationGraph()
+	{
+		return Schema::Object({ { "path", Schema::String("Assets/...banimgraph", true) }, { "close", Schema::Boolean("discard the draft") } });
+	}
 	nlohmann::json MaterialEditor()
 	{
 		return Schema::Object({ { "path", Schema::String("Project-relative .bmaterial to open, optional", true) }, { "close", Schema::Boolean("Close the window, discarding unsaved edits") } });

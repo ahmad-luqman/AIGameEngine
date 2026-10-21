@@ -384,6 +384,14 @@ function Entity:GetAudioDopplerPitch() end
 ---@return boolean
 function Entity:PlayAnimation(clip) end
 
+---Controls this entity's PropertyAnimation in Play/Simulate. Play restarts, Pause/Resume preserve time,
+---Stop samples zero and Seek samples normalized time without changing pause state. Invalid input raises.
+---@param action 'Play'|'Pause'|'Resume'|'Stop'|'Seek'
+---@param time? number Normalized time in [0,1], default 0
+---@return boolean
+function Entity:ControlPropertyAnimation(action, time) end
+
+
 ---Crossfades to clip over seconds; returns success.
 ---@param clip string
 ---@param seconds number
@@ -1353,6 +1361,7 @@ function BasaltScript:StopAllCoroutines() end
 ---| "Camera"
 ---| "Mesh"
 ---| "Animator"
+---| "PropertyAnimation"
 ---| "BoneAttachment"
 ---| "InverseKinematics"
 ---| "SpringBone"
@@ -1435,6 +1444,14 @@ function BasaltScript:StopAllCoroutines() end
 ---@field LODDistance number
 ---@field LODInterval integer
 ---@field ClipLibraries AnimationClipLibrary[]
+
+---PropertyAnimation data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
+---@class PropertyAnimationComponent
+---@field Duration number
+---@field Speed number
+---@field Looping boolean
+---@field PlayOnStart boolean
+---@field Tracks PropertyAnimationTrack[]
 
 ---BoneAttachment data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
 ---@class BoneAttachmentComponent
@@ -1885,6 +1902,18 @@ function BasaltScript:StopAllCoroutines() end
 ---@field Target string
 
 ---An element of a component list field.
+---@class PropertyAnimationTrack
+---@field Component string
+---@field Field string
+---@field Stepped boolean
+---@field Keys PropertyAnimationKey[]
+
+---An element of a component list field.
+---@class PropertyAnimationKey
+---@field Time number
+---@field Value number[]
+
+---An element of a component list field.
 ---@class IKChain
 ---@field Name string
 ---@field Type "TwoBone"|"LookAt"
@@ -1933,6 +1962,7 @@ function BasaltScript:StopAllCoroutines() end
 ---@overload fun(self: Entity, name: "Camera"): CameraComponent?
 ---@overload fun(self: Entity, name: "Mesh"): MeshComponent?
 ---@overload fun(self: Entity, name: "Animator"): AnimatorComponent?
+---@overload fun(self: Entity, name: "PropertyAnimation"): PropertyAnimationComponent?
 ---@overload fun(self: Entity, name: "BoneAttachment"): BoneAttachmentComponent?
 ---@overload fun(self: Entity, name: "InverseKinematics"): InverseKinematicsComponent?
 ---@overload fun(self: Entity, name: "SpringBone"): SpringBoneComponent?

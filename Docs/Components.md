@@ -30,6 +30,10 @@ Fields: `Mesh` (string), `MeshIndex` (integer), `CastShadows` (boolean), `LODDis
 
 Fields: `Mesh` (string), `Clip` (string), `Speed` (number), `Looping` (boolean), `PlayOnStart` (boolean), `CastShadows` (boolean), `MatchVelocity` (boolean), `StateMachine` (string), `RootMotion` (boolean), `RootJoint` (string), `Events` (list of [AnimationEvent](#animationevent), at most 256), `BlendSpaces` (list of [AnimationBlendSpace](#animationblendspace), at most 32, unique `Name`), `Layers` (list of [AnimationLayer](#animationlayer), at most 16, unique `Name`), `LODDistance` (number), `LODInterval` (integer), `ClipLibraries` (list of [AnimationClipLibrary](#animationcliplibrary), at most 64)
 
+## PropertyAnimation
+
+Fields: `Duration` (number), `Speed` (number), `Looping` (boolean), `PlayOnStart` (boolean), `Tracks` (list of [PropertyAnimationTrack](#propertyanimationtrack), at most 64)
+
 ## BoneAttachment
 
 Fields: `Target` (entity), `Joint` (string), `Translation` (number[3]), `Rotation` (number[3]), `Scale` (number[3])
@@ -195,6 +199,14 @@ Fields: `Mesh` (string), `Joints` (list of [AnimationRetargetJoint](#animationre
 ### AnimationRetargetJoint
 
 Fields: `Source` (string), `Target` (string)
+
+### PropertyAnimationTrack
+
+Fields: `Component` (string), `Field` (string), `Stepped` (boolean), `Keys` (list of [PropertyAnimationKey](#propertyanimationkey), at most 256)
+
+### PropertyAnimationKey
+
+Fields: `Time` (number), `Value` (number[4])
 
 ### IKChain
 

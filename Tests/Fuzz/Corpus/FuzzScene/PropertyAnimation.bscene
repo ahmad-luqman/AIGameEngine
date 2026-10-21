@@ -1,0 +1,43 @@
+{
+  "Format": "BasaltScene",
+  "Version": 1,
+  "Name": "PropertyAnimation",
+  "Entities": [
+    {
+      "ID": 935,
+      "Name": "PropertyProbe",
+      "Components": {
+        "PropertyAnimation": {
+          "Looping": false,
+          "PlayOnStart": false,
+          "Tracks": [
+            {
+              "Component": "Transform",
+              "Field": "Translation",
+              "Keys": [
+                {
+                  "Time": 0,
+                  "Value": [
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "Time": 1,
+                  "Value": [
+                    8,
+                    0,
+                    0,
+                    0
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

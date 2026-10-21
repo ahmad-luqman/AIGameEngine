@@ -31,6 +31,7 @@ namespace Basalt {
 	class AudioSystem;
 	class ParticleSystem;
 	class AnimationSystem;
+	class PropertyAnimationSystem;
 	class UIInteraction;
 	class SceneEventListener;
 
@@ -229,6 +230,7 @@ namespace Basalt {
 		AudioSystem* GetAudioSystem() const { return m_AudioSystem.get(); }
 		// Null in Edit mode; owned by the current Play/Simulate session.
 		AnimationSystem* GetAnimationSystem() const { return m_AnimationSystem.get(); }
+		PropertyAnimationSystem* GetPropertyAnimationSystem() const { return m_PropertyAnimationSystem.get(); }
 		// Session particles, or the isolated edit preview created by UpdateParticlePreview.
 		ParticleSystem* GetParticleSystem() const { return m_ParticleSystem ? m_ParticleSystem.get() : m_ParticlePreview.get(); }
 		// Advances only particles marked Preview, without running scripts, audio or physics.
@@ -358,6 +360,7 @@ namespace Basalt {
 		Scope<ParticleSystem> m_ParticleSystem;
 		Scope<ParticleSystem> m_ParticlePreview;
 		Scope<AnimationSystem> m_AnimationSystem;
+		Scope<PropertyAnimationSystem> m_PropertyAnimationSystem;
 		Scope<UIInteraction> m_UIInteraction;
 
 		friend class Entity;

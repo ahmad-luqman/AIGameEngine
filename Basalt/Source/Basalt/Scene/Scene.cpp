@@ -1,6 +1,7 @@
 #include "Basalt/Scene/Scene.h"
 
 #include "Basalt/Animation/AnimationSystem.h"
+#include "Basalt/Animation/PropertyAnimation.h"
 #include "Basalt/Audio/AudioSystem.h"
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Input.h"
@@ -640,6 +641,7 @@ namespace Basalt {
 		m_ParticlePreview.reset();
 		m_ParticleSystem = CreateScope<ParticleSystem>(this);
 		m_AnimationSystem = CreateScope<AnimationSystem>(*this);
+		m_PropertyAnimationSystem = CreateScope<PropertyAnimationSystem>(*this);
 		m_ScriptEngine = CreateScope<ScriptEngine>(this);
 		m_UIInteraction = CreateScope<UIInteraction>();
 
@@ -673,6 +675,7 @@ namespace Basalt {
 		m_ScriptEngine.reset();
 		m_UIInteraction.reset();
 		m_ParticleSystem.reset();
+		m_PropertyAnimationSystem.reset();
 		m_AnimationSystem.reset();
 		m_AudioSystem.reset();
 		m_PhysicsWorld.reset();
@@ -704,6 +707,7 @@ namespace Basalt {
 		m_ParticlePreview.reset();
 		m_ParticleSystem = CreateScope<ParticleSystem>(this);
 		m_AnimationSystem = CreateScope<AnimationSystem>(*this);
+		m_PropertyAnimationSystem = CreateScope<PropertyAnimationSystem>(*this);
 		m_ParticleSystem->Start();
 	}
 
@@ -713,6 +717,7 @@ namespace Basalt {
 			return;
 
 		m_ParticleSystem.reset();
+		m_PropertyAnimationSystem.reset();
 		m_AnimationSystem.reset();
 		m_PhysicsWorld.reset();
 		m_PendingDestruction.clear();
@@ -747,6 +752,7 @@ namespace Basalt {
 			m_ScriptEngine->Update(ts, m_UIInteraction->TakeEvents());
 		}
 		// Sample after gameplay chooses states and before physics consumes this frame's root displacement.
+		m_PropertyAnimationSystem->Update(ts.GetSeconds());
 		m_AnimationSystem->Update(ts, false);
 		m_PhysicsWorld->Step(ts);
 		if (m_State == SceneState::Play)

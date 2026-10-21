@@ -8,6 +8,172 @@ See `.claude/skills/basalt-make-game/SKILL.md` for the workflow and [MCP.md](MCP
 Commands reject parameters they do not list. In a batch, a request with `"expectError": "<text>"`
 succeeds only if its command fails with an error containing `<text>` (used by tests).
 
+## animation
+
+### `animation.control`
+
+Controls a PropertyAnimation in Play or Simulate. action is Play (restart at zero), Pause, Resume, Stop (sample zero), Seek (sample normalized time), or Status. Returns {time, playing, failed}; time is normalized. Component edits restart clocks using PlayOnStart. A failed sample may have applied earlier components.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `action` | Play/Pause/Resume/Stop/Seek/Status |
+| `entity` | ID or name |
+| `time` | normalized time for Seek, default 0 |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "description": "Play/Pause/Resume/Stop/Seek/Status",
+      "minLength": 1,
+      "type": "string"
+    },
+    "entity": {
+      "anyOf": [
+        {
+          "description": "",
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "description": "",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        }
+      ],
+      "description": "ID or name"
+    },
+    "time": {
+      "description": "normalized time for Seek, default 0",
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "type": "number"
+    }
+  },
+  "required": [
+    "entity",
+    "action"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
+### `animation.key`
+
+Captures an existing scalar/vector numeric component field into this entity's PropertyAnimation timeline at normalized time [0,1]. Creates the component/track as needed, inserts sorted keys and replaces an exact-time key. Unused Value lanes are zero. All writes use ComponentRegistry.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `component` | component name |
+| `entity` | ID or name |
+| `field` | numeric field |
+| `time` | normalized time |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "component": {
+      "description": "component name",
+      "minLength": 1,
+      "type": "string"
+    },
+    "entity": {
+      "anyOf": [
+        {
+          "description": "",
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "description": "",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        }
+      ],
+      "description": "ID or name"
+    },
+    "field": {
+      "description": "numeric field",
+      "minLength": 1,
+      "type": "string"
+    },
+    "time": {
+      "description": "normalized time",
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "type": "number"
+    }
+  },
+  "required": [
+    "entity",
+    "component",
+    "field",
+    "time"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
+### `animation.sample`
+
+Scrubs this entity's PropertyAnimation at normalized time [0,1] through the component registry. Modifies the current scene; edit-mode samples are undoable. Missing targets or invalid sampled values fail; components applied before a failure stay changed. Does not move the runtime clock.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `entity` | ID or name |
+| `time` | normalized time |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "entity": {
+      "anyOf": [
+        {
+          "description": "",
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "description": "",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        }
+      ],
+      "description": "ID or name"
+    },
+    "time": {
+      "description": "normalized time",
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "type": "number"
+    }
+  },
+  "required": [
+    "entity",
+    "time"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
 ## animator
 
 ### `animator.retarget`

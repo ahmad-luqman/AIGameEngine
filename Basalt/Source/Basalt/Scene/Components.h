@@ -228,6 +228,33 @@ namespace Basalt {
 		std::vector<AnimationMaskJoint> Mask;
 	};
 
+	// One normalized-time sample; unused vector lanes are zero for scalar and shorter vector fields.
+	struct PropertyAnimationKey
+	{
+		static constexpr const char* TypeName = "PropertyAnimationKey";
+		static constexpr const char* NormalizedTimeField = "Time";
+		float Time = 0;
+		glm::vec4 Value{ 0.0f };
+	};
+	// A numeric field on this entity, addressed through ComponentRegistry rather than a memory offset.
+	struct PropertyAnimationTrack
+	{
+		static constexpr const char* TypeName = "PropertyAnimationTrack";
+		std::string Component = "Transform";
+		std::string Field = "Translation";
+		bool Stepped = false;
+		std::vector<PropertyAnimationKey> Keys;
+	};
+	// Authored property timelines. Playback clocks belong to PropertyAnimationSystem in Play/Simulate.
+	struct PropertyAnimationComponent
+	{
+		float Duration = 1;
+		float Speed = 1;
+		bool Looping = true;
+		bool PlayOnStart = true;
+		std::vector<PropertyAnimationTrack> Tracks;
+	};
+
 	// Draws an entire glTF model with independent skeletal/TRS animation playback.
 	struct AnimatorComponent
 	{
@@ -1185,6 +1212,7 @@ namespace Basalt {
 		CameraComponent,
 		MeshComponent,
 		AnimatorComponent,
+		PropertyAnimationComponent,
 		BoneAttachmentComponent,
 		InverseKinematicsComponent,
 		SpringBoneComponent,

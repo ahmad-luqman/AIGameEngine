@@ -1,6 +1,7 @@
 #include "Basalt/Scripting/ScriptGlue.h"
 
 #include "Basalt/Animation/AnimationSystem.h"
+#include "Basalt/Animation/PropertyAnimation.h"
 #include "Basalt/Audio/AudioRules.h"
 #include "Basalt/Audio/AudioSystem.h"
 #include "Basalt/Core/Assert.h"
@@ -691,6 +692,16 @@ namespace Basalt {
 				if (value.is<bool>())
 					return animations.SetParameter(entity, name, value.as<bool>());
 				return animations.SetParameter(entity, name, OptionalNumber(value, "SetAnimationParameter: value", 0.0f));
+			};
+			entityType["ControlPropertyAnimation"] = [](const ScriptEntity& self, const std::string& action, const sol::object& time) {
+				Entity entity = RequireEntityWith<PropertyAnimationComponent>(self, "ControlPropertyAnimation", "PropertyAnimation");
+				auto* system = entity.GetScene()->GetPropertyAnimationSystem();
+				if (!system)
+					throw std::runtime_error("ControlPropertyAnimation requires Play or Simulate");
+				std::string error;
+				if (!system->Control(entity, action, OptionalNumber(time, "ControlPropertyAnimation: time", 0.0f), error))
+					throw std::runtime_error(error);
+				return true;
 			};
 			entityType["SetAnimationTrigger"] = [&context](const ScriptEntity& self, const std::string& name) {
 				return RequireAnimations(context).SetTrigger(RequireAnimator(self, "SetAnimationTrigger"), name);

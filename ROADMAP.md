@@ -74,9 +74,8 @@ below extend character movement, in order of impact.
   Add a ragdoll to the determinism batch.
 - **Retargeting follow-ups — S.** Rest-pose matching for libraries authored in a different rest style (an A-pose clip
   on a T-pose character) through a reference pose, and a reusable joint map asset shared by Animators.
-- **Property animation — M.** Keyframe tracks for any component field through the `ComponentRegistry`
-  JSON path (doors, platforms, light flicker, UI transitions, cutscene cameras) with the same playback
-  controls as skeletal clips, so non-character motion does not need per-frame Lua.
+- **Property animation follow-ups — S.** Stepped boolean/integer/string/enum tracks and nested registry
+  field paths; current authoring supports scalar/vector numeric fields on the same entity.
 - **Later: motion matching and procedural creatures — L each.** Motion matching (search a mocap database
   every few frames for the pose and future trajectory that best match the desired movement); procedural
   leg stepping for multi-legged creatures built on IK.
@@ -92,7 +91,6 @@ smoke test and material assets (`.bmaterial` files with lossless thumbnails and 
 
 ### Editor workflow
 
-- **Animation graph editor — M.** A visual editor for existing `.banimgraph` states, parameters and transitions, using the automation asset commands.
 - **Native file dialogs — S.** Add nativefiledialog-extended (pinned) for Open/Save/Import, keeping the
   text-box fallback for headless and Linux systems without a portal.
 - **Prefab editing and overrides — L.** Open a prefab in an isolated scene, save, and propagate changes

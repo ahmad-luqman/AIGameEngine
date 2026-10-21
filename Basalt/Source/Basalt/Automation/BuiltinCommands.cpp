@@ -10,6 +10,7 @@
 #include "Basalt/Automation/AutomationEvents.h"
 #include "Basalt/Automation/AutomationSession.h"
 #include "Basalt/Animation/AnimationGraph.h"
+#include "Basalt/Animation/PropertyAnimation.h"
 #include "Basalt/Automation/CommandRegistry.h"
 #include "Basalt/Automation/CommandSchema.h"
 #include "Basalt/Core/Assert.h"
@@ -1982,6 +1983,39 @@ namespace Basalt {
 			return response;
 		}
 
+		void RegisterAnimationAuthoring(CommandRegistry& registry)
+		{
+			Add(registry, "animation.control", "Controls a PropertyAnimation in Play or Simulate. action is Play (restart at zero), Pause, Resume, Stop (sample zero), Seek (sample normalized time), or Status. Returns {time, playing, failed}; time is normalized. Component edits restart clocks using PlayOnStart. A failed sample may have applied earlier components.", Schema::Object({ { "entity", Schema::Entity("ID or name") }, { "action", Schema::String("Play/Pause/Resume/Stop/Seek/Status", true) }, { "time", Schema::Number("normalized time for Seek, default 0", 0, 1) } }, { "entity", "action" }), [](AutomationSession& session, const json& params) {
+				Entity entity = RequireEntity(session, params);
+				auto* system = entity.GetScene()->GetPropertyAnimationSystem();
+				if (!system || !entity.HasComponent<PropertyAnimationComponent>())
+					throw CommandError("requires PropertyAnimation in Play or Simulate");
+				const auto action = RequireString(params, "action");
+				std::string error;
+				if (action != "Status" && !system->Control(entity, action, params.value("time", 0.0f), error))
+					throw CommandError(error);
+				return system->Status(entity);
+			});
+			Add(registry, "animation.key", "Captures an existing scalar/vector numeric component field into this entity's PropertyAnimation timeline at normalized time [0,1]. Creates the component/track as needed, inserts sorted keys and replaces an exact-time key. Unused Value lanes are zero. All writes use ComponentRegistry.", Schema::Object({ { "entity", Schema::Entity("ID or name") }, { "component", Schema::String("component name", true) }, { "field", Schema::String("numeric field", true) }, { "time", Schema::Number("normalized time", 0, 1) } }, { "entity", "component", "field", "time" }), [](AutomationSession& session, const json& params) {
+				Entity entity = RequireEntity(session, params);
+				std::string error;
+				if (!PropertyAnimation::Key(entity, RequireString(params, "component"), RequireString(params, "field"), params.at("time").get<float>(), error))
+					throw CommandError(error);
+				MarkEdited(session);
+				return ComponentRegistry::Find("PropertyAnimation")->Serialize(entity);
+			});
+			Add(registry, "animation.sample", "Scrubs this entity's PropertyAnimation at normalized time [0,1] through the component registry. Modifies the current scene; edit-mode samples are undoable. Missing targets or invalid sampled values fail; components applied before a failure stay changed. Does not move the runtime clock.", Schema::Object({ { "entity", Schema::Entity("ID or name") }, { "time", Schema::Number("normalized time", 0, 1) } }, { "entity", "time" }), [](AutomationSession& session, const json& params) {
+				Entity entity = RequireEntity(session, params);
+				if (!entity.HasComponent<PropertyAnimationComponent>())
+					throw CommandError("entity has no PropertyAnimation");
+				std::string error;
+				MarkEdited(session);
+				if (!PropertyAnimation::Sample(entity, entity.GetComponent<PropertyAnimationComponent>(), params.at("time").get<float>(), error))
+					throw CommandError(error);
+				return json::object();
+			});
+		}
+
 		void RegisterMaterials(CommandRegistry& registry)
 		{
 			Add(registry, "material.create", "Writes a material file (.bmaterial under Assets/) with UUID texture references: with 'entity', the material that entity's Material component draws (its Material asset when set, failing if that does not load, otherwise its inline values), otherwise the defaults. Returns {path, warnings?} (the texture problems asset.write reports). Refuses to replace an existing file unless overwrite=true. Reference the file from Material.Material.", Schema::Object({ { "path", Schema::String("Assets/...bmaterial", true) }, { "entity", Schema::Nullable(Schema::Entity("ID or name, optional")) }, { "overwrite", Schema::Boolean("replace an existing file, default false") } }, { "path" }), [](AutomationSession& session, const json& params) {
@@ -2789,6 +2823,7 @@ namespace Basalt {
 		RegisterComponents(registry);
 		RegisterAssets(registry);
 		RegisterMaterials(registry);
+		RegisterAnimationAuthoring(registry);
 		RegisterPlay(registry);
 		RegisterAssertions(registry);
 		RegisterEvents(registry);
