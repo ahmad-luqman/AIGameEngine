@@ -75,11 +75,13 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   that `Finish` applies after the IK one.
 - **Ragdolls.** `RagdollComponent` holds authored settings; `PhysicsWorld` owns the Jolt ragdoll, its selected skin
   joints and frozen recovery pose. Capsules and swing-twist frames derive from the rest skeleton, and activation starts
-  on the current pose. Active ragdolls suspend the entity's body/controller and inherit its velocity. Animation keeps
+  on the current pose. Active ragdolls suspend the entity's body/controller and inherit its linear/angular motion; live rebuilds preserve
+  physical placement and joint motion. Animation keeps
   ticking, but root motion, IK and springs yield to the physical overlay, applied last before attachments. Recovery
   removes the bodies, optionally starts a get-up clip, and blends local transforms from the frozen pose; gameplay
   supplies the height when recovering onto a different ground level. Positive uniform transforms are required.
-  `scene.hash` includes physical joints and recovery weight; saves/copies contain configuration only.
+  `scene.hash` includes physical joints and recovery weight; saves/copies contain configuration only. Ragdoll TRS
+  decomposition avoids platform libm rounding, and recovery rotations use Jolt's portable interpolation.
 - **Morph targets and retargeting.** Morph deltas are imported per submesh (`MeshSource::MorphDeltas`, following vertex
   reordering) and drawn in the vertex shader from a per-model delta texture (set 2, vertex stage) with each draw's
   nonzero weights packed into draw records alongside the palettes. Weights live in the pose

@@ -20,5 +20,10 @@
 	{"id": "spawn-exit-zone", "command": "lua.exec", "params": {"code": "Scene.FindEntityByName('ReplayZone').Translation = Vec3(100, 3, 0) for _, i in ipairs({1, 2, 4}) do Scene.FindEntityByName('ReplayBody' .. i):SetLinearVelocity(Vec3(0, 0.1, 0)) end"}},
 	{"id": "spawn-ended", "command": "play.step", "params": {"frames": 2, "assertNoErrors": true, "expectHash": "6c2834854ec987c5"}},
 	{"id": "check-spawn-ends", "command": "lua.exec", "params": {"code": "assert(ReplayExits == 5, 'rebuilt and destroyed contacts must end')"}},
+	{ "id": "ragdoll-recover", "command": "lua.exec", "params": { "code": "local e = Scene.FindEntityByName('Ragdoll') assert(e:IsRagdollActive()) e.Translation = Vec3(e.Translation.x, 0, e.Translation.z) assert(e:RecoverRagdoll('', 0.5)) assert(not e:IsRagdollActive())" } },
+	{ "id": "ragdoll-frozen", "command": "scene.hash", "params": { "expectHash": "af29f0a596e84cc5" } },
+	{ "id": "ragdoll-mid-recovery", "command": "play.step", "params": { "frames": 15, "assertNoErrors": true, "expectHash": "9177312e9a3161fc" } },
+	{ "id": "ragdoll-recovered", "command": "play.step", "params": { "frames": 30, "assertNoErrors": true, "expectHash": "b4efc84411ddf81b" } },
+
 	{ "id": "stop", "command": "play.stop" }
 ]

@@ -7,8 +7,8 @@ the same on every platform and CI configuration; a mismatch fails with the actua
 The scene is busy on purpose: towers of boxes, falling spheres and capsules, a convex hull, a hinge chain,
 a velocity-driven six-DOF limb held back by its own torque cap, a slider piston, kinematic pushers, a dynamic body
 parented to another, a sled whose runner collider has its own friction, and a walking character that pushes
-another one. A passive two-joint ragdoll falls into the pile; bone-attachment markers expose both of its physical
-joint transforms to the scene hashes (the Animator stays on its rest pose). Between checkpoints the batch teleports and moves bodies, rebuilds colliders, rescales a body,
+another one. A passive two-joint ragdoll falls into the pile; the hashes include its physical joints directly,
+and bone-attachment markers additionally check the displayed pose (the Animator stays on its rest pose). Between checkpoints the batch teleports and moves bodies, rebuilds colliders, rescales a body,
 destroys bodies and spawns new ones (whose physics is added in a different order than they were created, so
 the rebuild order shows in the hash), changes a joint's axis and a character's collider.
 
@@ -17,6 +17,10 @@ Its script creations (`OnCreate`) and trigger enter/exit callbacks fold their or
 spawn additional scripted, jointed bodies. Further checkpoints enable collisions, rebuild colliders,
 remove connected bodies and move the trigger away while waking the survivors. Thus hashes check both
 physics state and callback order, with assertions that the callbacks actually ran.
+
+Final checkpoints freeze the corpse, recover halfway and finish the blend. Ragdoll decomposition uses basic
+arithmetic/sqrt and recovery uses Jolt's portable quaternion interpolation, so markers and blend weights agree
+across platforms as well as the authoritative Jolt pose.
 
 It avoids what is not portable: no platform-dependent Lua math, no rotations in the file or the batch
 (Euler angles go through each platform's `sin`/`cos`), no six-DOF Position motors on rotation axes (their target is an Euler

@@ -106,6 +106,16 @@ namespace Basalt {
 		// Adding or removing a controller swaps a body for a character, so it rebuilds like a collider change.
 		Wire<CharacterControllerComponent, Changed, &Impl::OnCharacterChanged, Changed>(registry, connect);
 		Wire<JointComponent, &Impl::OnJointChanged, &Impl::OnJointChanged, &Impl::OnJointDestroyed>(registry, connect);
+		if (connect)
+		{
+			registry.on_destroy<RagdollComponent>().connect<&Impl::OnRagdollDestroyed>(*this);
+			registry.on_destroy<AnimatorComponent>().connect<&Impl::OnRagdollDestroyed>(*this);
+		}
+		else
+		{
+			registry.on_destroy<RagdollComponent>().disconnect<&Impl::OnRagdollDestroyed>(*this);
+			registry.on_destroy<AnimatorComponent>().disconnect<&Impl::OnRagdollDestroyed>(*this);
+		}
 	}
 
 	PhysicsWorld::PhysicsWorld(Scene* scene)
@@ -156,6 +166,7 @@ namespace Basalt {
 		entt::registry& registry = m_Impl->ScenePtr->GetRegistry();
 		m_Impl->WireSignals(registry, false);
 
+		m_Impl->ShuttingDown = true;
 		while (!m_Impl->Ragdolls.empty())
 			m_Impl->RemoveRagdoll(m_Impl->Ragdolls.begin()->first);
 
@@ -440,7 +451,9 @@ namespace Basalt {
 	{
 		if (!m_Impl->Owns(entity))
 			return;
+		const bool blocked = m_Impl->UnavailableRagdolls.insert(entity.GetUUID()).second;
 		m_Impl->RemoveRagdoll(entity.GetUUID());
+		m_Impl->RagdollFailures.erase(entity.GetUUID());
 		m_Impl->RagdollWarnings.Forget(entity.GetUUID());
 		m_Impl->RemoveBody(entity.GetUUID());
 		m_Impl->RemoveCharacter(entity.GetUUID());
@@ -451,6 +464,8 @@ namespace Basalt {
 		m_Impl->BodyWarnings.Forget(entity.GetUUID());
 		m_Impl->ResizeWarnings.Forget(entity.GetUUID());
 		m_Impl->Unbuilt.erase(entity.GetUUID());
+		if (blocked)
+			m_Impl->UnavailableRagdolls.erase(entity.GetUUID());
 	}
 
 	bool PhysicsWorld::HasBody(Entity entity) const
@@ -504,6 +519,10 @@ namespace Basalt {
 
 		impl.ApplyPendingChanges();
 		impl.SyncRagdolls(*this, ts.GetSeconds());
+		// Restore a component-driven recovery for this frame's steps, without scanning every body twice
+		// on frames where ragdoll control changed nothing.
+		if (!impl.DirtyEntities.Empty())
+			impl.ApplyPendingChanges();
 
 		m_Accumulator += ts.GetSeconds();
 		// A frame that queued no root motion while earlier displacement waits for a step owns its part of that step for
@@ -594,6 +613,7 @@ namespace Basalt {
 			impl.UpdateCharacters(fixedStep);
 
 			impl.System->Update(fixedStep, 1, impl.TempAllocator.get(), impl.JobSystem);
+			impl.ValidateRagdollOutput();
 			m_Accumulator -= fixedStep;
 			m_StepCount++;
 			steps++;

@@ -85,28 +85,56 @@ namespace Basalt {
 			JPH::Quat RestRotation = JPH::Quat::sIdentity();
 		};
 
+		// Absent from Ragdolls: animation owns the rig. A live Doll owns simulation; a null Doll with
+		// RecoveryLeft > 0 owns a frozen recovery pose. No Jolt handles are stored in authored components.
 		struct RagdollRecord
 		{
 			JPH::Ref<JPH::Ragdoll> Doll;
 			Ref<MeshSource> Source;
+			// Structural settings, compared with Enabled and RecoveryTime masked out.
 			RagdollComponent Settings;
+			// Parallel arrays in Jolt part order; part 0 is the selected skeleton root. Scales are world scales,
+			// Capsules are BODY-local hemisphere centers/radii, and Nodes index Source's immutable hierarchy.
 			std::vector<uint32_t> Nodes;
 			std::vector<float> Scales;
 			std::vector<RagdollCapsule> Capsules;
+			// Authoritative world transforms only during recovery, including each joint's built uniform scale.
 			std::vector<glm::mat4> FrozenWorld;
-			glm::vec3 InitialRoot = glm::vec3(0);
+			// Last entity world transform, for moving a live or frozen rig when gameplay teleports its entity.
 			glm::mat4 World = glm::mat4(1);
 			float RecoveryLeft = 0;
 			float RecoveryDuration = 0;
+			float Weight() const { return Doll ? 1.0f : (RecoveryDuration > 0 ? RecoveryLeft / RecoveryDuration : 0.0f); }
 		};
-		std::map<UUID, RagdollRecord> Ragdolls;
-		uint32_t NextRagdollGroup = 1;
+		// A rebuild carries physical orientation and COM velocities by joint name; new joints follow their
+		// parent's physical orientation with the new model's bone offsets. Root position never snaps to animation.
+		struct RagdollMotion
+		{
+			std::string Joint;
+			glm::vec3 Position = glm::vec3(0);
+			glm::vec3 Center = glm::vec3(0);
+			glm::quat Rotation = glm::quat(1, 0, 0, 0);
+			glm::vec3 Linear = glm::vec3(0);
+			glm::vec3 Angular = glm::vec3(0);
+		};
+		struct RagdollFailure
+		{
+			RagdollComponent Settings;
+			std::weak_ptr<MeshSource> Source;
+			bool DependsOnSource = false;
+		};
 		PhysicsInternal::WarningLog RagdollWarnings{ "ragdoll on", false };
 		void SyncRagdolls(PhysicsWorld& world, float seconds);
-		bool BuildRagdoll(Entity entity, RagdollRecord& record, std::string& error);
+		bool BuildRagdoll(Entity entity, RagdollRecord& record, std::string& error, bool& cacheFailure);
+		bool ActivateRagdoll(PhysicsWorld& world, Entity entity, const glm::vec3& impulse, const std::vector<RagdollMotion>* motion = nullptr);
 		void RemoveRagdoll(UUID uuid);
 		void StopRagdollBodies(UUID uuid, RagdollRecord& record);
-		void FreezeRagdoll(RagdollRecord& record);
+		bool ReadRagdollWorld(const RagdollRecord& record, std::vector<glm::mat4>& matrices) const;
+		std::vector<RagdollMotion> CaptureRagdollMotion(const RagdollRecord& record) const;
+		void SeedRagdoll(RagdollRecord& record, const std::vector<RagdollMotion>& motion);
+		void DisableRagdoll(UUID uuid, const char* reason);
+		void ValidateRagdollOutput();
+		void OnRagdollDestroyed(entt::registry& registry, entt::entity handle);
 
 		struct CharacterRecord
 		{
@@ -160,6 +188,14 @@ namespace Basalt {
 		PhysicsInternal::ObjectLayerPairFilterImpl ObjectLayerPairFilter;
 		PhysicsInternal::ContactListenerImpl ContactListener;
 		Scope<JPH::PhysicsSystem> System;
+		// Declared after System so records cannot outlive it, even during exceptional construction cleanup.
+		std::map<UUID, RagdollRecord> Ragdolls;
+		std::unordered_map<UUID, RagdollFailure> RagdollFailures;
+		std::unordered_set<UUID> UnavailableRagdolls;
+		bool ShuttingDown = false;
+		// Body/group allocation order is observable in deterministic replays.
+		uint32_t NextRagdollGroup = 1;
+		uint64_t RagdollBuilds = 0;
 
 		// Applies the collision matrix between characters, which CharacterCollision does not know about.
 		class CharacterLayerFilter final : public JPH::CharacterContactListener

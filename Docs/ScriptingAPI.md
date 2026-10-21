@@ -171,6 +171,7 @@ Entity handles store an ID and stay safe to hold: using a destroyed entity raise
 | `e:GetGroundNormal()` | Normal of the ground the character touches (walkable or too steep); nil in the air or without a character |
 | `e:GetJointPosition()` | Hinge angle (degrees) or slider offset (meters) of the Joint this entity holds, from its rest pose; nil otherwise |
 | `e:GetJointRotation()` | Rotation (Euler degrees, like `Rotation`) of a cone or six-DOF Joint this entity holds, in the joint frame from its rest pose; nil otherwise |
+| `e:ActivateRagdoll([impulse])`, `e:RecoverRagdoll(clip, seconds)`, `e:IsRagdollActive()` | Passive skeleton physics and get-up recovery; see Ragdolls |
 | `e:HasJoint()` | Whether the Joint this entity holds is a live constraint (false before both bodies exist, when it is invalid, and after it broke) |
 | `e:PlayAudio()`, `e:StopAudio()`, `e:IsAudioPlaying()` | The entity's AudioSource |
 | `e:GetAudioDopplerPitch()` | The Doppler pitch factor of the AudioSource from the last update (the shift its next mix applies): 1 = unshifted, also while it is not playing or for a non-spatial source |
@@ -578,7 +579,7 @@ translation axes outright, with or without `UseLimits` (their linear limits are 
 `UseLimits`, translation is locked and rotation free. A limit spring softens only limited translation axes;
 locked and free axes and rotation limits stay rigid (Jolt has no soft rotation limits).
 
-**Powered ragdolls.** Six-DOF joints have a motor per axis of the joint frame: `LinearMotorMode` and
+**Manually authored motor rigs.** These Joint motors are independent of the passive `Ragdoll` component; automatic powered ragdolls remain a follow-up. Six-DOF joints have a motor per axis of the joint frame: `LinearMotorMode` and
 `AngularMotorMode` are `{ x, y, z }` lists of `"Off"`, `"Velocity"` or `"Position"`, and each axis reads
 its component of `LinearMotorTarget` (m/s, or meters from the rest pose) or `AngularMotorTarget` (degrees/s
 around the axis; a velocity axis turns with the joint's own body, so it drifts from the connected body's
@@ -1407,8 +1408,8 @@ function Player:OnUpdate(dt) self.Entity:SetBlendSpaceParameter(self.Speed) end
 `e:GetBoneTransform(joint)` returns the world position, rotation and scale of the first node named `joint` in
 the Animator's current pose (any glTF node, not only skin joints), or nil when there is none or the Animator's model
 cannot animate (logged when the problem appears or changes, per joint). Animation advances between `OnUpdate` and physics, so `OnUpdate` sees the previous
-frame's pose; `OnLateUpdate` and `OnAnimationEvent` see this frame's (inverse kinematics runs after `OnLateUpdate`, so
-`OnLateUpdate` sees it with the previous frame's IK solution). Like the other Animator functions it raises an error on an
+frame's pose. `OnLateUpdate` sees this frame's sampled animation with the previous late overlays (IK, spring bones
+and ragdoll physics); those overlays refresh afterward. `OnAnimationEvent` sees the final pose for this frame. Like the other Animator functions it raises an error on an
 entity without an Animator.
 
 A `BoneAttachment` component keeps an entity on a joint of another entity's Animator while the scene plays or
@@ -1779,9 +1780,10 @@ character:RecoverRagdoll("GetUp", 0.5)
 ```
 
 - `ActivateRagdoll([impulse]) -> boolean` constructs immediately, inherits the entity's rigid-body/controller
-  velocity and applies a total world-space impulse in N*s, divided equally among the parts. Repeated activation
+  linear velocity and rigid-body angular velocity (including each part's tangential motion), and applies a total world-space impulse in N*s, divided equally among the parts. Repeated activation
   adds the impulse to the existing parts. Missing/unloadable rigs, invalid settings and non-finite impulses return
-  false with a diagnostic; the original controller/body is retained on construction failure.
+  false with a diagnostic; the original controller/body is retained on construction failure. Missing components
+  and a wrongly typed Lua impulse raise an error. Finite impulses that would overflow physics are also rejected.
 - `IsRagdollActive() -> boolean` stays true even when the bodies sleep. It is false during recovery.
 - `RecoverRagdoll(clip, seconds) -> boolean` removes the bodies and blends the frozen physical pose back to animation
   over 0..60 seconds. Empty `clip` keeps the current playback. A missing clip, invalid duration or inactive ragdoll
@@ -1801,11 +1803,25 @@ collide; other parts can collide. `Layer` must name an existing physics layer.
 
 The entity and joint transforms require constant positive uniform scale without shear; matrix-authored skin joints
 are rejected. Entity teleports move the whole ragdoll, rotating its velocities. Component/model or world-scale changes
-rebuild it; removing the component/Animator or destroying the entity removes its bodies. Settings written directly
-from C++ receive the same checks as JSON. Warnings for failed automatic activation are deduplicated.
+rebuild it from the current physical root/orientations, retaining matching joints' world motion and resizing bone
+offsets for the new skeleton. Recovery edits preserve the frozen pose and remaining blend time; a model reload
+remaps it by joint name. Incompatible/unloadable recovery models end the blend with a diagnostic. Removing the
+component/Animator or destroying the entity removes its bodies immediately. Settings written directly from C++
+receive the same checks as JSON. Warnings for failed automatic activation are deduplicated. Structural failures
+wait for a component edit or
+model reload; asset-availability, pose and capacity failures can retry. Invalid physical output disables the rig
+without writing it to the entity.
 
 Active physics replaces the entity's controller/body until recovery; the authored components remain. Animation clocks
 and events continue, while root motion, IK and springs yield to the physical pose during simulation and recovery.
 Attachments and skinning follow that pose, including animation re-evaluation in callbacks. Play and Simulate both
 support ragdolls. Runtime handles and frozen poses stay outside saves and scene copies; `scene.hash` includes the
 physical joints and recovery weight. Powered pose-following motors remain a follow-up.
+
+`ActivateRagdoll` writes `Ragdoll.Enabled = true`; recovery writes it back to false. A stale component table with
+`Enabled = false` therefore starts recovery when passed to `SetComponent`. The original rigid body or character
+returns at the aligned entity transform on the next physics update. `AddImpulse` and the rigid-body velocity calls
+continue to address ordinary bodies; use repeated `ActivateRagdoll(impulse)` to impulse a live ragdoll. Contact-end
+callbacks can cancel an activation by recovering, removing the rig or destroying the actor; that activation returns
+false without overriding the callback's final state. Stopping Play/Simulate tears down contacts without gameplay
+exit events, consistently with ordinary bodies.

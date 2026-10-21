@@ -27,6 +27,16 @@ namespace Basalt {
 		float Radius = 0;
 	};
 
+	// An owned, read-only snapshot of physical joints in the entity's model space.
+	struct RagdollPose
+	{
+		Ref<MeshSource> Source;
+		std::vector<std::pair<uint32_t, glm::mat4>> Joints;
+		float Weight = 0;
+		bool Active = false;
+		bool Sleeping = false;
+	};
+
 	struct RaycastHit
 	{
 		UUID EntityID = 0;
@@ -184,10 +194,13 @@ namespace Basalt {
 		bool RecoverRagdoll(Entity entity, const std::string& clip, float seconds);
 		bool IsRagdollActive(Entity entity) const;
 		uint32_t GetRagdollBodyCount(Entity entity) const;
+		// Construction attempts, including rejections; useful for diagnosing automatic activation retries.
+		uint64_t GetRagdollBuildCount() const;
 		std::vector<RagdollCapsule> GetRagdollCapsules(Entity entity) const;
 		// True during simulation or recovery; animation leaves root motion to the ragdoll during either.
 		bool HasRagdollPose(Entity entity) const;
 		// Model-space joint transforms and physical weight. Source identity prevents stale poses after asset reload.
+		std::optional<RagdollPose> GetRagdollPose(Entity entity) const;
 		bool GetRagdollPose(Entity entity, const MeshSource& source, std::vector<std::pair<uint32_t, glm::mat4>>& joints, float& weight) const;
 
 		// Scene queries. Casts sweep along `direction` (any length) for up to maxDistance and report the

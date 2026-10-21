@@ -272,6 +272,8 @@ local function TestEntities(self)
 	Check("ActivateRagdoll repeated", ragdoll:ActivateRagdoll())
 	Check("RecoverRagdoll", ragdoll:RecoverRagdoll("Bend", 0.1) and not ragdoll:IsRagdollActive())
 	Check("Ragdoll lists", ragdoll:GetComponent("Ragdoll").Bones[1].SwingAngle == 35)
+	ExpectError("Ragdoll impulse type", function() ragdoll:ActivateRagdoll("bad") end, "impulse must be a Vec3")
+	ExpectError("Ragdoll component required", function() rig:ActivateRagdoll() end, "needs the Ragdoll component")
 
 	-- Morph targets and retargeted clip libraries.
 	local face = Scene.FindEntityByName("MorphFace")

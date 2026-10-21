@@ -565,8 +565,8 @@ function Entity:ClearMorphWeight(target) end
 ---@return string[]
 function Entity:GetMorphTargets() end
 
----Activates passive skeleton physics. Inherits body/controller velocity; impulse is total world impulse in N*s.
----Returns false and logs invalid rigs/settings/values. Requires Play/Simulate and a Ragdoll component.
+---Activates passive skeleton physics. Inherits linear and rigid-body angular motion; impulse is total world impulse in N*s.
+---Returns false and logs invalid rigs/settings/values or callback cancellation. Missing Ragdoll or a wrong impulse type raises.
 ---@param impulse? Vec3
 ---@return boolean
 function Entity:ActivateRagdoll(impulse) end

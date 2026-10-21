@@ -40,7 +40,7 @@ namespace Basalt {
 
 	// Per-entity playback and poses for a playing/simulating scene. Asset data stays shared and immutable.
 	// Each Update advances every Animator, samples due poses (optionally distance-throttled), and collects the events
-	// playback crossed (TakeEvents). The scene runs LateUpdate (inverse kinematics, spring bones, then attachments) after
+	// playback crossed (TakeEvents). The scene runs LateUpdate (inverse kinematics, spring bones, ragdoll physics, then attachments) after
 	// physics and OnLateUpdate; standalone callers get it at the end of Update by default.
 	class AnimationSystem
 	{
@@ -52,8 +52,8 @@ namespace Basalt {
 		~AnimationSystem();
 		// runLateUpdate: also run LateUpdate at the end; the scene passes false and calls LateUpdate after physics.
 		void Update(Timestep timestep, bool runLateUpdate = true);
-		// Solves inverse kinematics, then spring bones, and refreshes attachments once physics and OnLateUpdate have
-		// placed the rigs. An invalid (negative or non-finite) step, which Update reports, skips IK and spring bones.
+		// Solves IK and spring bones, applies physical ragdoll poses, then refreshes attachments after physics and
+		// OnLateUpdate. Invalid steps (reported by Update) skip IK/springs; physical overlays and attachments still refresh.
 		void LateUpdate(Timestep timestep);
 		// Set a declared Float/Bool parameter on an active graph; false with a deduplicated diagnostic on failure.
 		bool SetParameter(Entity entity, const std::string& name, float value);
@@ -138,8 +138,12 @@ namespace Basalt {
 		// Restarts every spring chain of the entity on its animated pose, at rest, at the next spring solve (after a
 		// teleport too short for the automatic detection, or a cutscene cut). False without a SpringBone component.
 		bool ResetSpringBones(Entity entity);
-		// Physics invalidated a rig (component removal/rebuild/reload); discard its cached overlay immediately.
+		// Physics removed/rebuilt a rig or finished recovery; discard its cached overlay immediately.
 		void ClearRagdollPose(Entity entity);
+		// The sampled/layered animation before physics, IK or springs; recovery aligns its root to the fall.
+		bool GetAnimatedPose(Entity entity, const MeshSource& source, std::vector<glm::mat4>& globals);
+		// Refresh physical overlays after an immediate control call, without advancing clocks or attachments.
+		void RefreshRagdollPoses();
 		// The events crossed since the last call, per Animator in update order: each clip's in the order playback
 		// crossed them, the current clip's before the outgoing one's (for a two-clip blend, the second clip's first).
 		std::vector<AnimationEventRecord> TakeEvents();
@@ -228,7 +232,7 @@ namespace Basalt {
 			AnimationLayerMask RootMask;
 			int32_t RootMaskNode = -1;
 		};
-		// One node's local transform as an IK or spring bone pass left it.
+		// One node's local transform as an IK, spring bone or ragdoll pass left it.
 		struct OverlayEntry
 		{
 			uint32_t Node = 0;
@@ -464,7 +468,7 @@ namespace Basalt {
 		// Re-resolves the running space and logs a new problem; false when it cannot play.
 		bool ResolveSpace(Playback& playback, SpaceState& state, const AnimatorComponent& component);
 		static void Evaluate(Playback& playback);
-		// Builds Pose from Local and the layers, then composes Globals from Pose with the IK and spring overlays on top. Layers
+		// Builds Pose from Local and the layers, then composes Globals from Pose with IK, spring and ragdoll overlays on top. Layers
 		// leave out the root-motion joint and the nodes above it while root motion applies (also while it fades out).
 		static void Finish(Playback& playback);
 		// "'Model.glb'" or "'Model.glb' or its N clip libraries", for clip-not-found messages.
@@ -487,6 +491,7 @@ namespace Basalt {
 		LayerState* FindLayer(Entity entity, Playback& playback, const std::string& layer, const char* operation);
 		// Moves BoneAttachment entities to their joints once the rigs are placed (part of LateUpdate).
 		void UpdateAttachments();
+		// Reconstructs physical local transforms from world-space bodies and blends them over the layered animation.
 		void ApplyRagdolls();
 		void SolveIK(float seconds);
 		void SolveEntityIK(Entity entity, Playback& playback, const InverseKinematicsComponent& component, IKState& state, float seconds);

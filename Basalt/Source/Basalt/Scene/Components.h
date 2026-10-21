@@ -445,7 +445,8 @@ namespace Basalt {
 		static constexpr const char* TypeName = "RagdollBone";
 		static constexpr const char* UniqueField = "Joint";
 		std::string Joint = "Joint";
-		// Model units; zero derives the size from the rest skeleton. Length includes the round ends.
+		// Joint-local units, including the joint/armature world scale; zero derives size from the rest skeleton.
+		// Length includes the round ends.
 		float Radius = 0.0f;
 		float Length = 0.0f;
 		// Requested kilograms; zero uses Mass / body count. Stabilization redistributes extreme mass ratios.
@@ -461,6 +462,7 @@ namespace Basalt {
 	struct RagdollComponent
 	{
 		static constexpr uint32_t MaxBones = 128;
+		static constexpr float MaxRecoveryTime = 60.0f;
 		bool Enabled = false;
 		// Empty selects all skin joints; otherwise selects this skin joint and its descendants.
 		std::string RootJoint;

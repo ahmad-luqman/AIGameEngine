@@ -4,7 +4,7 @@
 #include "TestUtils.h"
 
 #include <Basalt/Physics/PhysicsWorld.h>
-#include <Basalt/Physics/Ragdoll.h>
+#include <Basalt/Physics/RagdollRules.h>
 #include <Basalt/Scene/ComponentRegistry.h>
 #include <Basalt/Scene/SceneSerializer.h>
 #include <Basalt/Scene/SceneEventListener.h>
@@ -39,10 +39,16 @@ namespace {
 	{
 		int Begin = 0;
 		int End = 0;
+		int CollisionBegin = 0;
+		int CollisionEnd = 0;
 		bool SelfContact = false;
 		void OnContact(Scene&, ContactEventType type, Entity first, Entity second, const std::optional<ContactInfo>&) override
 		{
 			SelfContact = SelfContact || first == second;
+			if (type == ContactEventType::CollisionBegin)
+				CollisionBegin++;
+			if (type == ContactEventType::CollisionEnd)
+				CollisionEnd++;
 			if (type == ContactEventType::TriggerEnter)
 				Begin++;
 			if (type == ContactEventType::TriggerExit)
@@ -183,6 +189,7 @@ TEST_SUITE("Ragdolls")
 	{
 		ClearAssetCache clear;
 		Scene scene;
+		scene.GetPhysicsSettings().Gravity = glm::vec3(0);
 		Entity rig = Rig(scene, true);
 		rig.AddComponent<CharacterControllerComponent>();
 		rig.AddComponent<CapsuleColliderComponent>();
@@ -191,14 +198,21 @@ TEST_SUITE("Ragdolls")
 		Simulate(scene, 1);
 		REQUIRE(physics.IsRagdollActive(rig));
 		CHECK_FALSE(physics.HasCharacter(rig));
+		REQUIRE(physics.ActivateRagdoll(rig, { 70, 0, 0 }));
+		Simulate(scene, 30);
+		const glm::vec3 fallenRoot = BoneWorld(scene, rig, "RootJoint");
+		CHECK(fallenRoot.x > 0.4f);
 		rig.GetComponent<RagdollComponent>().RecoveryTime = 0.25f;
 		rig.GetComponent<RagdollComponent>().Enabled = false;
 		Simulate(scene, 2);
 		CHECK(physics.HasRagdollPose(rig));
 		CHECK_FALSE(physics.IsRagdollActive(rig));
 		CHECK(physics.HasCharacter(rig));
+		CHECK(rig.GetTransform().Translation.x == doctest::Approx(fallenRoot.x).epsilon(0.001));
 		REQUIRE(physics.ActivateRagdoll(rig));
 		rig.RemoveComponent<RagdollComponent>();
+		CHECK_FALSE(physics.HasRagdollPose(rig));
+		CHECK(physics.GetRagdollBodyCount(rig) == 0);
 		Simulate(scene, 2);
 		CHECK_FALSE(physics.HasRagdollPose(rig));
 		CHECK(physics.HasCharacter(rig));
@@ -305,8 +319,12 @@ TEST_SUITE("Ragdolls")
 		Simulate(scene, 1);
 		CHECK(physics.GetRagdollBodyCount(rig) == 2);
 		CHECK(glm::length(BoneWorld(scene, rig, "Tip") - BoneWorld(scene, rig, "RootJoint")) == doctest::Approx(2));
+		const auto oldSource = scene.GetAnimationSystem()->GetPoseView(rig)->Source;
 		AssetManager::Clear();
 		Simulate(scene, 1);
+		std::vector<std::pair<uint32_t, glm::mat4>> stale;
+		float oldWeight = 0;
+		CHECK_FALSE(physics.GetRagdollPose(rig, *oldSource, stale, oldWeight));
 		CHECK(physics.GetBodyCount() == 2);
 		for (int i = 0; i < 10; i++)
 		{
@@ -403,6 +421,299 @@ TEST_SUITE("Ragdolls")
 		scene.OnSimulationStop();
 	}
 
+	TEST_CASE("Contact exit callbacks can recover remove or destroy an activating ragdoll")
+	{
+		ClearAssetCache clear;
+		TempDirectory directory("RagdollCallbacks");
+		const auto script = directory.GetPath() / "Cancel.lua";
+		REQUIRE(FileSystem::WriteTextFile(script, R"(
+			return { OnTriggerExit = function(self, other)
+				if self.Entity:IsRagdollActive() then
+					if CancelAction == 0 then Recovered = self.Entity:RecoverRagdoll("", 0.5)
+					elseif CancelAction == 1 then self.Entity:RemoveComponent("Ragdoll")
+					elseif CancelAction == 2 then self.Entity:RemoveComponent("Animator")
+					else self.Entity:Destroy() end
+				end
+			end }
+		)"));
+		for (int action = 0; action < 4; action++)
+		{
+			INFO(action);
+			Scene scene;
+			scene.GetPhysicsSettings().Gravity = glm::vec3(0);
+			Entity rig = Rig(scene);
+			rig.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+			rig.AddComponent<SphereColliderComponent>();
+			rig.AddComponent<ScriptComponent>().Script = script.string();
+			Entity zone = scene.CreateEntity("Zone");
+			zone.GetTransform().Translation = { 0, 4, 0 };
+			zone.AddComponent<RigidBodyComponent>().IsTrigger = true;
+			zone.AddComponent<BoxColliderComponent>();
+			scene.OnRuntimeStart();
+			Eval(scene, "CancelAction = " + std::to_string(action));
+			scene.OnUpdate(Step);
+			auto& physics = *scene.GetPhysicsWorld();
+			CHECK_FALSE(physics.ActivateRagdoll(rig));
+			CHECK_FALSE(physics.IsRagdollActive(rig));
+			if (action == 0)
+			{
+				CHECK(Eval(scene, "return Recovered") == "true");
+				CHECK_FALSE(rig.GetComponent<RagdollComponent>().Enabled);
+			}
+			else
+				CHECK_FALSE(physics.HasRagdollPose(rig));
+			scene.OnRuntimeStop();
+		}
+	}
+
+	TEST_CASE("Get-up matches the incoming clip root and keeps the frozen pose continuous")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		scene.GetPhysicsSettings().Gravity = glm::vec3(0);
+		Entity parent = scene.CreateEntity("Parent");
+		parent.GetTransform().Rotation = AxisAngle({ 0, 1, 0 }, 35);
+		parent.GetTransform().Scale = glm::vec3(2);
+		Entity rig = Rig(scene);
+		REQUIRE(scene.SetParent(rig, parent, false));
+		scene.OnSimulationStart();
+		auto& animation = *scene.GetAnimationSystem();
+		auto& physics = *scene.GetPhysicsWorld();
+		REQUIRE(animation.Play(rig, "Step"));
+		REQUIRE(animation.Seek(rig, 1));
+		animation.Pause(rig, true);
+		const glm::vec3 animated = BoneWorld(scene, rig, "RootJoint");
+		REQUIRE(physics.ActivateRagdoll(rig));
+		Simulate(scene, 1);
+		const glm::vec3 fallen = BoneWorld(scene, rig, "RootJoint");
+		CHECK(Near(fallen, animated));
+		REQUIRE(physics.RecoverRagdoll(rig, "Bend", 0.5f));
+		CHECK(Near(BoneWorld(scene, rig, "RootJoint"), fallen));
+		Simulate(scene, 15);
+		const auto pose = physics.GetRagdollPose(rig);
+		REQUIRE(pose);
+		CHECK(pose->Weight == doctest::Approx(0.5f).epsilon(0.001));
+		// A caller adjusting the ground height moves the entire frozen pose along with its animation.
+		rig.GetTransform().Translation.y += 2;
+		Simulate(scene, 1);
+		CHECK(BoneWorld(scene, rig, "RootJoint").y == doctest::Approx(fallen.y + 4).epsilon(0.002));
+		Simulate(scene, 30);
+		CHECK_FALSE(physics.HasRagdollPose(rig));
+		const glm::vec3 recovered = BoneWorld(scene, rig, "RootJoint");
+		CHECK(recovered.x == doctest::Approx(fallen.x).epsilon(0.001));
+		CHECK(recovered.z == doctest::Approx(fallen.z).epsilon(0.001));
+		REQUIRE(physics.ActivateRagdoll(rig));
+		REQUIRE(physics.RecoverRagdoll(rig, {}, 0));
+		CHECK_FALSE(physics.HasRagdollPose(rig));
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Activation transfers angular motion and rebuilds preserve physical position and spin")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		scene.GetPhysicsSettings().Gravity = glm::vec3(0);
+		Entity rig = Rig(scene);
+		rig.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+		rig.AddComponent<SphereColliderComponent>();
+		scene.OnSimulationStart();
+		auto& physics = *scene.GetPhysicsWorld();
+		physics.SetLinearVelocity(rig, { 3, 0, 0 });
+		physics.SetAngularVelocity(rig, { 0, 0, 1 });
+		REQUIRE(physics.ActivateRagdoll(rig));
+		Simulate(scene, 10);
+		const glm::mat4 before = BoneWorldTransform(scene, rig, "RootJoint");
+		CHECK(std::abs(before[0][1]) > 0.1f);
+		CHECK(glm::vec3(before[3]).x > 0.3f);
+		for (int change = 0; change < 3; change++)
+		{
+			const glm::mat4 old = BoneWorldTransform(scene, rig, "RootJoint");
+			if (change == 0)
+				rig.GetComponent<RagdollComponent>().Mass = 90;
+			else if (change == 1)
+				rig.GetTransform().Scale = glm::vec3(2);
+			else
+				AssetManager::Clear();
+			Simulate(scene, 1);
+			const glm::mat4 after = BoneWorldTransform(scene, rig, "RootJoint");
+			CHECK(after[3].x > old[3].x + 0.01f);
+			CHECK(glm::length(glm::vec3(after[3] - old[3])) < 0.2f);
+			CHECK(std::abs(after[0][1] / glm::length(glm::vec3(after[0]))) > 0.1f);
+		}
+		const glm::vec3 fall = BoneWorld(scene, rig, "RootJoint");
+		REQUIRE(physics.RecoverRagdoll(rig, "Bend", 0));
+		Simulate(scene, 1);
+		CHECK(physics.HasBody(rig));
+		CHECK(rig.GetTransform().Translation.x == doctest::Approx(fall.x).epsilon(0.001));
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Invalid structural rigs wait for edits or reload instead of rebuilding every frame")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		Entity rig = Rig(scene, true);
+		rig.GetComponent<RagdollComponent>().RootJoint = "Missing";
+		scene.OnSimulationStart();
+		auto& physics = *scene.GetPhysicsWorld();
+		const uint64_t attempts = physics.GetRagdollBuildCount();
+		Simulate(scene, 30);
+		CHECK(physics.GetRagdollBuildCount() == attempts);
+		AssetManager::Clear();
+		Simulate(scene, 1);
+		CHECK(physics.GetRagdollBuildCount() == attempts + 1);
+		rig.GetComponent<RagdollComponent>().RootJoint.clear();
+		Simulate(scene, 1);
+		REQUIRE(physics.IsRagdollActive(rig));
+		rig.RemoveComponent<AnimatorComponent>();
+		CHECK(physics.GetBodyCount() == 0);
+		CHECK_FALSE(physics.GetRagdollPose(rig));
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Sleeping ragdoll contacts survive until separation and stop emits no contact exits")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		Contacts contacts;
+		scene.SetEventListener(&contacts);
+		Floor(scene);
+		Entity rig = Rig(scene, true);
+		scene.OnSimulationStart();
+		Simulate(scene, 600);
+		const auto pose = scene.GetPhysicsWorld()->GetRagdollPose(rig);
+		REQUIRE(pose);
+		REQUIRE(pose->Sleeping);
+		CHECK(contacts.CollisionBegin - contacts.CollisionEnd == 1);
+		const int begins = contacts.CollisionBegin, ends = contacts.CollisionEnd;
+		Simulate(scene, 120);
+		CHECK(contacts.CollisionBegin == begins);
+		CHECK(contacts.CollisionEnd == ends);
+		scene.OnSimulationStop();
+		CHECK(contacts.CollisionEnd == ends);
+		scene.SetEventListener(nullptr);
+	}
+
+	TEST_CASE("Recovery edits and model reload keep their weight and pose instead of snapping to animation")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		Entity rig = Rig(scene, true);
+		scene.OnSimulationStart();
+		Simulate(scene, 30);
+		auto& physics = *scene.GetPhysicsWorld();
+		REQUIRE(physics.RecoverRagdoll(rig, {}, 1));
+		Simulate(scene, 10);
+		const glm::vec3 position = BoneWorld(scene, rig, "RootJoint");
+		rig.GetComponent<RagdollComponent>().Mass = 100;
+		AssetManager::Clear();
+		Simulate(scene, 1);
+		const auto pose = physics.GetRagdollPose(rig);
+		REQUIRE(pose);
+		CHECK(pose->Weight == doctest::Approx(1 - 11 * Step));
+		CHECK(glm::length(BoneWorld(scene, rig, "RootJoint") - position) < 0.1f);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Ragdoll rejects overflowing impulses and invalid recovery transforms without losing the body")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		Entity rig = Rig(scene);
+		rig.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+		rig.AddComponent<SphereColliderComponent>();
+		scene.OnSimulationStart();
+		auto& physics = *scene.GetPhysicsWorld();
+		CHECK_FALSE(physics.ActivateRagdoll(rig, glm::vec3(std::numeric_limits<float>::max())));
+		CHECK(physics.HasBody(rig));
+		REQUIRE(physics.ActivateRagdoll(rig));
+		const glm::vec3 original = rig.GetTransform().Translation;
+		rig.GetTransform().Scale = glm::vec3(0);
+		CHECK_FALSE(physics.RecoverRagdoll(rig, {}, 0.5f));
+		CHECK(physics.IsRagdollActive(rig));
+		CHECK(rig.GetTransform().Translation == original);
+		rig.GetTransform().Scale = glm::vec3(1);
+		CHECK_FALSE(physics.ActivateRagdoll(rig, glm::vec3(std::numeric_limits<float>::max())));
+		CHECK(physics.IsRagdollActive(rig));
+		CHECK(Math::IsFinite(BoneWorldTransform(scene, rig, "RootJoint")));
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Non-adjacent overlapping ragdoll parts never emit entity self contacts")
+	{
+		ClearAssetCache clear;
+		TempDirectory directory("RagdollSelfContacts");
+		auto model = ReadJson(FixturePath("TwoJoint.gltf"));
+		model["nodes"][0]["children"] = { 3 };
+		model["nodes"].push_back({ { "name", "Grandchild" }, { "translation", { 0, 1, 0 } } });
+		model["skins"][0]["joints"].push_back(3);
+		model["skins"][0].erase("inverseBindMatrices");
+		const float values[] = { 0, -0.8f, 0, 0, -0.8f, 0, 0, -0.8f, 0 };
+		model["buffers"].push_back({ { "uri", "data:application/octet-stream;base64," + Base64(values, sizeof(values)) }, { "byteLength", sizeof(values) } });
+		model["bufferViews"].push_back({ { "buffer", model["buffers"].size() - 1 }, { "byteLength", sizeof(values) } });
+		model["accessors"].push_back({ { "bufferView", model["bufferViews"].size() - 1 }, { "componentType", 5126 }, { "count", 3 }, { "type", "VEC3" } });
+		json clip;
+		clip["name"] = "Fold";
+		clip["samplers"] = json::array({ { { "input", 7 }, { "output", model["accessors"].size() - 1 }, { "interpolation", "STEP" } } });
+		clip["channels"] = json::array({ { { "sampler", 0 }, { "target", { { "node", 3 }, { "path", "translation" } } } } });
+		model["animations"].push_back(std::move(clip));
+		const auto file = directory.GetPath() / "Fold.gltf";
+		REQUIRE(FileSystem::WriteTextFile(file, model.dump()));
+		Scene scene;
+		Contacts contacts;
+		scene.SetEventListener(&contacts);
+		scene.GetPhysicsSettings().Gravity = glm::vec3(0);
+		Entity rig = Rig(scene);
+		rig.GetComponent<AnimatorComponent>().Mesh = file.string();
+		scene.OnSimulationStart();
+		REQUIRE(scene.GetAnimationSystem()->Play(rig, "Fold"));
+		scene.GetAnimationSystem()->Pause(rig, true);
+		REQUIRE(scene.GetPhysicsWorld()->ActivateRagdoll(rig));
+		CHECK(scene.GetPhysicsWorld()->GetRagdollBodyCount(rig) == 3);
+		Simulate(scene, 5);
+		CHECK_FALSE(contacts.SelfContact);
+		CHECK(contacts.CollisionBegin == 0);
+		scene.OnSimulationStop();
+		scene.SetEventListener(nullptr);
+	}
+
+	TEST_CASE("Ragdoll rejects disconnected and matrix skeletons plus oversized generated capsules")
+	{
+		ClearAssetCache clear;
+		TempDirectory directory("RagdollUnsupportedSkeletons");
+		for (int mode = 0; mode < 3; mode++)
+		{
+			INFO(mode);
+			auto model = ReadJson(FixturePath("TwoJoint.gltf"));
+			if (mode == 0)
+			{
+				model["nodes"].push_back({ { "name", "OtherRoot" }, { "translation", { 5, 0, 0 } } });
+				model["skins"][0]["joints"].push_back(3);
+				model["skins"][0].erase("inverseBindMatrices");
+			}
+			else if (mode == 1)
+			{
+				model["nodes"][0].erase("translation");
+				model["animations"].erase(size_t(0));
+				model["nodes"][0]["matrix"] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1 };
+			}
+			const auto file = directory.GetPath() / (std::to_string(mode) + ".gltf");
+			REQUIRE(FileSystem::WriteTextFile(file, model.dump()));
+			Scene scene;
+			Entity rig = Rig(scene);
+			rig.GetComponent<AnimatorComponent>().Mesh = file.string();
+			if (mode == 2)
+			{
+				rig.GetTransform().Scale = glm::vec3(1000);
+				rig.GetComponent<RagdollComponent>().Bones = { { .Joint = "Tip", .Radius = 100 } };
+			}
+			scene.OnSimulationStart();
+			CHECK_FALSE(scene.GetPhysicsWorld()->ActivateRagdoll(rig));
+			CHECK(scene.GetPhysicsWorld()->GetBodyCount() == 0);
+			scene.OnSimulationStop();
+		}
+	}
+
 	TEST_CASE("Ragdoll Lua calls work without exposing runtime bodies in serialized data")
 	{
 		ClearAssetCache clear;
@@ -416,6 +727,9 @@ TEST_SUITE("Ragdolls")
 		const auto* info = ComponentRegistry::Find("Ragdoll");
 		REQUIRE(info);
 		CHECK(info->Serialize(rig).size() == 7);
+		CHECK(Eval(scene, "return pcall(function() Scene.FindEntityByName('Ragdoll'):ActivateRagdoll('bad') end)").starts_with("false"));
+		scene.CreateEntity("Plain");
+		CHECK(Eval(scene, "return pcall(function() Scene.FindEntityByName('Plain'):ActivateRagdoll() end)").starts_with("false"));
 		scene.OnRuntimeStop();
 		CHECK(rig.GetComponent<RagdollComponent>().Enabled == false);
 	}
