@@ -285,7 +285,8 @@ namespace Basalt {
 		const size_t nodeCount = source->Nodes.size();
 		const Ref<const AnimationClipSet> clips = ResolveClips(entity, *component, source);
 		const bool incomplete = playback.Local.Nodes.size() != nodeCount || playback.Pose.Nodes.size() != nodeCount || playback.Globals.size() != nodeCount ||
-								playback.Local.MorphWeights.size() != source->MorphWeightCount || playback.Pose.MorphWeights.size() != source->MorphWeightCount;
+								playback.Local.MorphWeights.size() != source->MorphWeightCount || playback.Pose.MorphWeights.size() != source->MorphWeightCount ||
+								playback.MorphWeights.size() != source->MorphWeightCount;
 		if (inserted || incomplete || playback.Graph != graph || playback.ConfiguredGraph != component->StateMachine || playback.Handle != static_cast<entt::entity>(entity) || playback.Source != source || playback.Clips != clips || playback.ConfiguredClip != component->Clip)
 		{
 			// Script morph weights name targets, so they outlive the model and graph the playback was built for.

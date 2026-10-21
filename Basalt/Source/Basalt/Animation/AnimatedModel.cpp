@@ -25,6 +25,9 @@ namespace Basalt {
 		AnimationSystem* system = scene.GetAnimationSystem();
 		const auto* globals = system ? system->GetPose(entity) : nullptr;
 		const auto* morphWeights = globals ? system->GetMorphWeights(entity) : nullptr;
+		// The playback sizes its weights with its pose; anything else falls back to the nodes' own weights.
+		if (morphWeights && morphWeights->size() != source->MorphWeightCount)
+			morphWeights = nullptr;
 		if (!globals)
 		{
 			const bool valid = EvaluateAnimation(*source, nullptr, 0, rest);
