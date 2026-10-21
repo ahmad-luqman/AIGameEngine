@@ -129,7 +129,7 @@ namespace Basalt {
 				RemoveCharacter(entity.GetUUID());
 			}
 		}
-		if (!entity || !entity.HasComponent<CharacterControllerComponent>())
+		if (!entity || !entity.HasComponent<CharacterControllerComponent>() || (Ragdolls.contains(entity.GetUUID()) && Ragdolls.at(entity.GetUUID()).Doll))
 			return;
 
 		const auto& controller = entity.GetComponent<CharacterControllerComponent>();

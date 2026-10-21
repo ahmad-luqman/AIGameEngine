@@ -21,12 +21,14 @@
 #include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/Constraints/TwoBodyConstraint.h>
 #include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/Physics/Ragdoll/Ragdoll.h>
 
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
 #include <limits>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -82,6 +84,29 @@ namespace Basalt {
 			// by a twist; GetJointRotation measures from this.
 			JPH::Quat RestRotation = JPH::Quat::sIdentity();
 		};
+
+		struct RagdollRecord
+		{
+			JPH::Ref<JPH::Ragdoll> Doll;
+			Ref<MeshSource> Source;
+			RagdollComponent Settings;
+			std::vector<uint32_t> Nodes;
+			std::vector<float> Scales;
+			std::vector<RagdollCapsule> Capsules;
+			std::vector<glm::mat4> FrozenWorld;
+			glm::vec3 InitialRoot = glm::vec3(0);
+			glm::mat4 World = glm::mat4(1);
+			float RecoveryLeft = 0;
+			float RecoveryDuration = 0;
+		};
+		std::map<UUID, RagdollRecord> Ragdolls;
+		uint32_t NextRagdollGroup = 1;
+		PhysicsInternal::WarningLog RagdollWarnings{ "ragdoll on", false };
+		void SyncRagdolls(PhysicsWorld& world, float seconds);
+		bool BuildRagdoll(Entity entity, RagdollRecord& record, std::string& error);
+		void RemoveRagdoll(UUID uuid);
+		void StopRagdollBodies(UUID uuid, RagdollRecord& record);
+		void FreezeRagdoll(RagdollRecord& record);
 
 		struct CharacterRecord
 		{

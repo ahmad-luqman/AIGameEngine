@@ -11,11 +11,21 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <utility>
 
 namespace Basalt {
 
 	class Entity;
 	class Scene;
+	class MeshSource;
+
+	// World-space capsule hemispheres for the live ragdoll collider overlay. Equal endpoints form a sphere.
+	struct RagdollCapsule
+	{
+		glm::vec3 Start = glm::vec3(0);
+		glm::vec3 End = glm::vec3(0);
+		float Radius = 0;
+	};
 
 	struct RaycastHit
 	{
@@ -165,6 +175,20 @@ namespace Basalt {
 		// character.
 		std::optional<glm::vec3> GetCharacterGroundNormal(Entity entity) const;
 		uint32_t GetCharacterCount() const;
+
+		// Enables passive skeleton physics, inheriting body/controller velocity and distributing a total world impulse.
+		// Returns false with a diagnostic when the rig/settings cannot be built. Repeated activation adds the impulse.
+		bool ActivateRagdoll(Entity entity, const glm::vec3& impulse = glm::vec3(0));
+		// Freezes the physical pose, removes its bodies, optionally starts a get-up clip, and blends over seconds.
+		// Moves the entity horizontally with the fallen root; callers place its height for a different ground level.
+		bool RecoverRagdoll(Entity entity, const std::string& clip, float seconds);
+		bool IsRagdollActive(Entity entity) const;
+		uint32_t GetRagdollBodyCount(Entity entity) const;
+		std::vector<RagdollCapsule> GetRagdollCapsules(Entity entity) const;
+		// True during simulation or recovery; animation leaves root motion to the ragdoll during either.
+		bool HasRagdollPose(Entity entity) const;
+		// Model-space joint transforms and physical weight. Source identity prevents stale poses after asset reload.
+		bool GetRagdollPose(Entity entity, const MeshSource& source, std::vector<std::pair<uint32_t, glm::mat4>>& joints, float& weight) const;
 
 		// Scene queries. Casts sweep along `direction` (any length) for up to maxDistance and report the
 		// closest hit, or with the *All variants every entity hit, once each at its closest point, sorted by

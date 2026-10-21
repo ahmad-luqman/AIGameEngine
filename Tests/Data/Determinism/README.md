@@ -7,7 +7,8 @@ the same on every platform and CI configuration; a mismatch fails with the actua
 The scene is busy on purpose: towers of boxes, falling spheres and capsules, a convex hull, a hinge chain,
 a velocity-driven six-DOF limb held back by its own torque cap, a slider piston, kinematic pushers, a dynamic body
 parented to another, a sled whose runner collider has its own friction, and a walking character that pushes
-another one. Between checkpoints the batch teleports and moves bodies, rebuilds colliders, rescales a body,
+another one. A passive two-joint ragdoll falls into the pile; bone-attachment markers expose both of its physical
+joint transforms to the scene hashes (the Animator stays on its rest pose). Between checkpoints the batch teleports and moves bodies, rebuilds colliders, rescales a body,
 destroys bodies and spawns new ones (whose physics is added in a different order than they were created, so
 the rebuild order shows in the hash), changes a joint's axis and a character's collider.
 

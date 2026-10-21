@@ -1273,6 +1273,13 @@ namespace Basalt {
 					DebugDraw::Sphere(center + up * halfHeight, radius, color, 16);
 					DebugDraw::Sphere(center - up * halfHeight, radius, color, 16);
 				}
+				if (auto* physics = scene.GetPhysicsWorld(); physics && physics->IsRagdollActive(entity))
+					for (const auto& capsule : physics->GetRagdollCapsules(entity))
+					{
+						DebugDraw::Sphere(capsule.Start, capsule.Radius, color, 16);
+						DebugDraw::Sphere(capsule.End, capsule.Radius, color, 16);
+						DebugDraw::Line(capsule.Start, capsule.End, color);
+					}
 				// Mesh colliders: the bounds of the mesh they collide by (drawing every triangle would bury the scene).
 				if (const auto* meshCollider = entity.TryGetComponent<MeshColliderComponent>())
 				{

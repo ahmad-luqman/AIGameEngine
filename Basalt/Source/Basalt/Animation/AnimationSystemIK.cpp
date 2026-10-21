@@ -76,6 +76,8 @@ namespace Basalt {
 		for (auto handle : m_Scene.GetAllEntitiesWith<InverseKinematicsComponent>())
 		{
 			Entity entity(handle, &m_Scene);
+			if (m_Scene.GetPhysicsWorld() && m_Scene.GetPhysicsWorld()->HasRagdollPose(entity))
+				continue;
 			const auto& component = entity.GetComponent<InverseKinematicsComponent>();
 			IKState& state = SyncIK(entity, component);
 			for (IKChainState& chain : state.Chains)

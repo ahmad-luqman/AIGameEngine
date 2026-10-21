@@ -1196,6 +1196,9 @@
 					"Restitution": 0.2
 				}
 			}
-		}
+		},
+		{"ID": 10001, "Name": "Ragdoll", "Components": {"Transform": {"Translation": [0, 5, 0]}, "Animator": {"Mesh": "Assets/Models/TwoJoint.gltf", "PlayOnStart": false}, "Ragdoll": {"Enabled": true}}},
+		{"ID": 10002, "Name": "RagdollRootMarker", "Components": {"BoneAttachment": {"Target": 10001, "Joint": "RootJoint"}}},
+		{"ID": 10003, "Name": "RagdollTipMarker", "Components": {"BoneAttachment": {"Target": 10001, "Joint": "Tip"}}}
 	]
 }

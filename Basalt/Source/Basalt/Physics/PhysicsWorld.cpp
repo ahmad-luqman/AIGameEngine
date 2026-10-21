@@ -156,6 +156,9 @@ namespace Basalt {
 		entt::registry& registry = m_Impl->ScenePtr->GetRegistry();
 		m_Impl->WireSignals(registry, false);
 
+		while (!m_Impl->Ragdolls.empty())
+			m_Impl->RemoveRagdoll(m_Impl->Ragdolls.begin()->first);
+
 		for (auto& [uuid, joint] : m_Impl->Joints)
 			m_Impl->System->RemoveConstraint(joint.Constraint);
 		m_Impl->Joints.clear();
@@ -193,6 +196,8 @@ namespace Basalt {
 		for (entt::entity handle : impl.ScenePtr->GetAllEntitiesWith<JointComponent>())
 			impl.DirtyJoints.insert(Entity(handle, impl.ScenePtr).GetUUID());
 		impl.RebuildDirtyJoints();
+		if (impl.ScenePtr->GetAnimationSystem())
+			impl.SyncRagdolls(*this, 0);
 		impl.System->OptimizeBroadPhase();
 	}
 
@@ -223,7 +228,7 @@ namespace Basalt {
 
 		// Removing a body dispatches contact exits, whose scripts can destroy the entity.
 		// A character controller replaces the body (RecreateCharacter reports the ignored RigidBody).
-		if (!entity || !entity.HasComponent<RigidBodyComponent>() || entity.HasComponent<CharacterControllerComponent>())
+		if (!entity || !entity.HasComponent<RigidBodyComponent>() || entity.HasComponent<CharacterControllerComponent>() || (Ragdolls.contains(entity.GetUUID()) && Ragdolls.at(entity.GetUUID()).Doll))
 			return;
 
 		const auto& rigidBody = entity.GetComponent<RigidBodyComponent>();
@@ -435,6 +440,8 @@ namespace Basalt {
 	{
 		if (!m_Impl->Owns(entity))
 			return;
+		m_Impl->RemoveRagdoll(entity.GetUUID());
+		m_Impl->RagdollWarnings.Forget(entity.GetUUID());
 		m_Impl->RemoveBody(entity.GetUUID());
 		m_Impl->RemoveCharacter(entity.GetUUID());
 		m_Impl->RemoveJoint(entity.GetUUID());
@@ -454,6 +461,8 @@ namespace Basalt {
 	void PhysicsWorld::OnSceneLoaded()
 	{
 		m_Impl->ApplyPendingChanges();
+		if (m_Impl->ScenePtr->GetAnimationSystem())
+			m_Impl->SyncRagdolls(*this, 0);
 		// Like Start: many bodies were just added.
 		m_Impl->System->OptimizeBroadPhase();
 	}
@@ -494,6 +503,7 @@ namespace Basalt {
 		const float fixedStep = impl.ScenePtr->GetFixedTimestep();
 
 		impl.ApplyPendingChanges();
+		impl.SyncRagdolls(*this, ts.GetSeconds());
 
 		m_Accumulator += ts.GetSeconds();
 		// A frame that queued no root motion while earlier displacement waits for a step owns its part of that step for
@@ -724,7 +734,11 @@ namespace Basalt {
 
 	uint32_t PhysicsWorld::GetBodyCount() const
 	{
-		return static_cast<uint32_t>(m_Impl->ScenePtr->GetRegistry().view<Impl::BodyRecord>().size());
+		uint32_t count = static_cast<uint32_t>(m_Impl->ScenePtr->GetRegistry().view<Impl::BodyRecord>().size());
+		for (const auto& [id, record] : m_Impl->Ragdolls)
+			if (record.Doll)
+				count += static_cast<uint32_t>(record.Doll->GetBodyCount());
+		return count;
 	}
 
 }

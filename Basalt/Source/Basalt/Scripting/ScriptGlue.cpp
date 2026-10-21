@@ -787,6 +787,16 @@ namespace Basalt {
 			entityType["GetMorphTargets"] = [&context](const ScriptEntity& self) {
 				return sol::as_table(RequireAnimations(context).GetMorphTargets(RequireAnimator(self, "GetMorphTargets")));
 			};
+			entityType["ActivateRagdoll"] = [&context](const ScriptEntity& self, sol::optional<glm::vec3> impulse) {
+				return RequirePhysics(context).ActivateRagdoll(self.ResolveOrThrow(), impulse.value_or(glm::vec3(0)));
+			};
+			entityType["RecoverRagdoll"] = [&context](const ScriptEntity& self, const std::string& clip, float seconds) {
+				return RequirePhysics(context).RecoverRagdoll(self.ResolveOrThrow(), clip, seconds);
+			};
+			entityType["IsRagdollActive"] = [&context](const ScriptEntity& self) {
+				return RequirePhysics(context).IsRagdollActive(self.ResolveOrThrow());
+			};
+
 			entityType["ResetSpringBones"] = [&context](const ScriptEntity& self) {
 				[[maybe_unused]] const bool reset = RequireAnimations(context).ResetSpringBones(RequireSpringBone(self, "ResetSpringBones"));
 				BS_CORE_ASSERT(reset, "RequireSpringBone checked the component");

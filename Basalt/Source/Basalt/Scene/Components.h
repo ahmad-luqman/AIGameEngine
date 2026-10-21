@@ -439,6 +439,41 @@ namespace Basalt {
 		glm::vec3 Wind = { 0.0f, 0.0f, 0.0f };
 	};
 
+	// Optional override for a skin joint's generated ragdoll body and its constraint to its parent.
+	struct RagdollBone
+	{
+		static constexpr const char* TypeName = "RagdollBone";
+		static constexpr const char* UniqueField = "Joint";
+		std::string Joint = "Joint";
+		// Model units; zero derives the size from the rest skeleton. Length includes the round ends.
+		float Radius = 0.0f;
+		float Length = 0.0f;
+		// Requested kilograms; zero uses Mass / body count. Stabilization redistributes extreme mass ratios.
+		float Mass = 0.0f;
+		// Degrees from the rest pose; twist is around the bone's length axis.
+		float SwingAngle = 45.0f;
+		float TwistMin = -30.0f;
+		float TwistMax = 30.0f;
+		bool operator==(const RagdollBone&) const = default;
+	};
+
+	// Passive skeleton physics for the Animator on this entity. Runtime bodies/poses belong to PhysicsWorld.
+	struct RagdollComponent
+	{
+		static constexpr uint32_t MaxBones = 128;
+		bool Enabled = false;
+		// Empty selects all skin joints; otherwise selects this skin joint and its descendants.
+		std::string RootJoint;
+		float Mass = 70.0f;
+		// Generated radius as a fraction of the rest bone length (0.01..0.5).
+		float RadiusRatio = 0.15f;
+		std::string Layer = "Default";
+		// Seconds to blend the last physical pose back to animation when Enabled becomes false.
+		float RecoveryTime = 0.5f;
+		std::vector<RagdollBone> Bones;
+		bool operator==(const RagdollComponent&) const = default;
+	};
+
 	// Replaces the whole imported material of every submesh. Material names a material asset: a .bmaterial file or a
 	// model's imported material ("<model>#material/<n>"), which carry the full model (alpha mode and cutoff, sidedness,
 	// normal/occlusion strengths, per-map UV transforms and sets). While Material is set the inline values below are
@@ -1218,6 +1253,7 @@ namespace Basalt {
 		BoneAttachmentComponent,
 		InverseKinematicsComponent,
 		SpringBoneComponent,
+		RagdollComponent,
 		MaterialComponent,
 		DirectionalLightComponent,
 		PointLightComponent,

@@ -1761,3 +1761,51 @@ Without a character, root motion updates the world transform, respecting its rot
 Bone attachments update after physics and `OnLateUpdate`. Playback and parameters changed in
 `OnLateUpdate` advance on the following update; direct play, blend and seek calls resample the visible
 pose immediately.
+
+## Ragdolls
+
+Add `Ragdoll` to an entity with an `Animator` whose model has a skin. `Enabled = true` starts passive physics on
+its shown pose at the next physics update. The inspector and `component.set` use the same validated fields as Lua:
+
+```lua
+local character = Scene.FindEntityByName("Enemy")
+character:AddComponent("Ragdoll", {
+    Mass = 70, RadiusRatio = 0.15, RecoveryTime = 0.5,
+    Bones = { { Joint = "Head", Radius = 0.12, Length = 0.3, SwingAngle = 30, TwistMin = -20, TwistMax = 20 } }
+})
+character:ActivateRagdoll(Vec3(0, 0, 120))
+-- Later, after gameplay chooses a suitable get-up clip:
+character:RecoverRagdoll("GetUp", 0.5)
+```
+
+- `ActivateRagdoll([impulse]) -> boolean` constructs immediately, inherits the entity's rigid-body/controller
+  velocity and applies a total world-space impulse in N*s, divided equally among the parts. Repeated activation
+  adds the impulse to the existing parts. Missing/unloadable rigs, invalid settings and non-finite impulses return
+  false with a diagnostic; the original controller/body is retained on construction failure.
+- `IsRagdollActive() -> boolean` stays true even when the bodies sleep. It is false during recovery.
+- `RecoverRagdoll(clip, seconds) -> boolean` removes the bodies and blends the frozen physical pose back to animation
+  over 0..60 seconds. Empty `clip` keeps the current playback. A missing clip, invalid duration or inactive ragdoll
+  returns false; a rejected request leaves the ragdoll active. The entity moves horizontally with its fallen root;
+  gameplay sets its height when the ground level changes. Zero seconds returns to animation on the next pose update.
+
+`RootJoint` selects a skin joint and its skin descendants; empty uses every skin joint. The selection must have a
+single free root and at most 128 bodies (a selected subtree is not anchored to its animated parent). Non-skin spacer nodes are retained in the visual hierarchy; their nearest skin
+ancestors connect the physical parts. Each body extends toward the first non-coincident descendant in topological
+order; leaves continue the incoming bone at half length. Isolated/coincident bones use a 0.1-unit length. Capsules
+include their hemispheres; a capsule with no cylinder becomes a sphere. `Bones` overrides selected joints by unique
+name. Zero size derives it from the rest skeleton, and zero mass uses `Mass / body count`; explicit per-bone masses
+can change the resulting total. Jolt stabilization redistributes extreme parent/child mass ratios and increases
+inertia while preserving total mass. Generated length expands to fit the radius. Swing and twist limits are in degrees
+relative to rest, with twist around the outgoing bone axis. Intersecting rest parts and parent/child parts do not
+collide; other parts can collide. `Layer` must name an existing physics layer.
+
+The entity and joint transforms require constant positive uniform scale without shear; matrix-authored skin joints
+are rejected. Entity teleports move the whole ragdoll, rotating its velocities. Component/model or world-scale changes
+rebuild it; removing the component/Animator or destroying the entity removes its bodies. Settings written directly
+from C++ receive the same checks as JSON. Warnings for failed automatic activation are deduplicated.
+
+Active physics replaces the entity's controller/body until recovery; the authored components remain. Animation clocks
+and events continue, while root motion, IK and springs yield to the physical pose during simulation and recovery.
+Attachments and skinning follow that pose, including animation re-evaluation in callbacks. Play and Simulate both
+support ragdolls. Runtime handles and frozen poses stay outside saves and scene copies; `scene.hash` includes the
+physical joints and recovery weight. Powered pose-following motors remain a follow-up.

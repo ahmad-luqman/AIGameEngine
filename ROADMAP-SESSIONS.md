@@ -3,7 +3,7 @@
 The `ROADMAP.md` items grouped into single-session milestones, sorted in order of implementation, with completed
 sessions retained for reference. The order follows the roadmap's priorities (P1 → P2 → P3) and is adjusted so that
 work a later session depends on comes first.
-Updated in October 2026 through animation authoring (session 12).
+Updated in October 2026 through passive ragdolls (session 13).
 
 Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or more.
 
@@ -21,7 +21,7 @@ Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or mor
 | 10 | **Animation content** ✅ | Morph targets (M); retargeting, e.g. sharing a Mixamo library across characters (M) | Shipped in [PR #46](https://github.com/ahmad-luqman/AIGameEngine/pull/46): glTF morph targets blended in the vertex shader and animated by clips, layers and Lua, and `Animator.ClipLibraries` retargeted onto humanoid skeletons with recognised joint names (or explicit joint pairs). |
 | 11 | **TAA** ✅ ([PR #47](https://github.com/ahmad-luqman/AIGameEngine/pull/47)) | Temporal anti-aliasing (M) | Needs previous-frame data for instanced draws (session 4) and for skinned and morphed meshes (session 10). |
 | 12 | **Animation authoring** ✅ | Animation graph editor for `.banimgraph` (M); property animation through the `ComponentRegistry` (M) | Shipped in [PR #48](https://github.com/ahmad-luqman/AIGameEngine/pull/48): graph state/edge authoring through asset.write; numeric property timelines, key capture, scrubbing and runtime controls through ComponentRegistry. |
-| 13 | **Ragdolls** | Ragdolls from the skeleton, with a powered-ragdoll follow-up (M) | Physics-heavy: it moves the `PhysicsDeterminism` hashes, so it's best kept in its own PR. |
+| 13 | **Ragdolls (complete)** | Passive skeleton ragdolls, joint overrides, scripted activation and get-up recovery. Powered ragdolls remain a follow-up. | Separate physics PR with ragdoll determinism coverage. |
 | 14 | **Prefabs** | Prefab editing and per-instance overrides (L); native file dialogs (S) | The large P2 editor item. The dialogs fit its open and save flows. |
 | 15 | **Shipping I** | Project icon, version and company (S); platform packaging for `.app`, `.exe` and AppImage (M); tag-triggered release pipeline (S) | Packaging uses the icon and version, and the pipeline uses the packaging. |
 | 16 | **Shipping II** | Packed `.bpak` archive (M); crash reporting (M) | The archive indexes compressed textures by UUID, which needs sessions 7 and 8. |

@@ -565,6 +565,23 @@ function Entity:ClearMorphWeight(target) end
 ---@return string[]
 function Entity:GetMorphTargets() end
 
+---Activates passive skeleton physics. Inherits body/controller velocity; impulse is total world impulse in N*s.
+---Returns false and logs invalid rigs/settings/values. Requires Play/Simulate and a Ragdoll component.
+---@param impulse? Vec3
+---@return boolean
+function Entity:ActivateRagdoll(impulse) end
+
+---Removes the physical bodies and blends the frozen pose back to animation. Empty clip keeps current playback.
+---Moves the entity horizontally with the fall; gameplay places its height for a different ground level.
+---@param clip string
+---@param seconds number # 0..60
+---@return boolean
+function Entity:RecoverRagdoll(clip, seconds) end
+
+---True while physical bodies drive this entity, including sleeping bodies; false during recovery.
+---@return boolean
+function Entity:IsRagdollActive() end
+
 ---Restarts every SpringBone chain on the animated pose, at rest, on the next update (after a cut the automatic teleport
 ---detection misses). Errors without a SpringBone component.
 function Entity:ResetSpringBones() end
@@ -1375,6 +1392,7 @@ function BasaltScript:StopAllCoroutines() end
 ---| "BoneAttachment"
 ---| "InverseKinematics"
 ---| "SpringBone"
+---| "Ragdoll"
 ---| "Material"
 ---| "DirectionalLight"
 ---| "PointLight"
@@ -1484,6 +1502,16 @@ function BasaltScript:StopAllCoroutines() end
 ---@field Chains SpringChain[]
 ---@field Colliders SpringCollider[]
 ---@field Wind number[]
+
+---Ragdoll data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
+---@class RagdollComponent
+---@field Enabled boolean
+---@field RootJoint string
+---@field Mass number
+---@field RadiusRatio number
+---@field Layer string
+---@field RecoveryTime number
+---@field Bones RagdollBone[]
 
 ---Material data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
 ---@class MaterialComponent
@@ -1954,6 +1982,16 @@ function BasaltScript:StopAllCoroutines() end
 ---@field HalfHeight number
 
 ---An element of a component list field.
+---@class RagdollBone
+---@field Joint string
+---@field Radius number
+---@field Length number
+---@field Mass number
+---@field SwingAngle number
+---@field TwistMin number
+---@field TwistMax number
+
+---An element of a component list field.
 ---@class ParticleSizeKey
 ---@field Time number
 ---@field Value number
@@ -1976,6 +2014,7 @@ function BasaltScript:StopAllCoroutines() end
 ---@overload fun(self: Entity, name: "BoneAttachment"): BoneAttachmentComponent?
 ---@overload fun(self: Entity, name: "InverseKinematics"): InverseKinematicsComponent?
 ---@overload fun(self: Entity, name: "SpringBone"): SpringBoneComponent?
+---@overload fun(self: Entity, name: "Ragdoll"): RagdollComponent?
 ---@overload fun(self: Entity, name: "Material"): MaterialComponent?
 ---@overload fun(self: Entity, name: "DirectionalLight"): DirectionalLightComponent?
 ---@overload fun(self: Entity, name: "PointLight"): PointLightComponent?

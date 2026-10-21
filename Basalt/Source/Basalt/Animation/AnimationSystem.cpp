@@ -584,13 +584,13 @@ namespace Basalt {
 		}
 		const auto composes = [&](const AnimationLocalPose& pose) { return ComposeAnimationPose(source, pose, playback.Globals) && SkinPalettesFinite(source, playback.Globals); };
 		bool valid;
-		if (playback.IKOverlay.empty() && playback.SpringOverlay.empty())
+		if (playback.IKOverlay.empty() && playback.SpringOverlay.empty() && playback.RagdollOverlay.empty())
 			valid = composes(playback.Pose);
 		else
 		{
 			AnimationLocalPose pose = playback.Pose;
-			// Spring bones solved on top of IK, so their entries (which include IK's changes to the same nodes) go last.
-			for (const auto* overlay : { &playback.IKOverlay, &playback.SpringOverlay })
+			// Spring bones include IK on their nodes; ragdoll physics replaces both. Apply in that order.
+			for (const auto* overlay : { &playback.IKOverlay, &playback.SpringOverlay, &playback.RagdollOverlay })
 				for (const auto& [node, transform] : *overlay)
 				{
 					// The overlays are cleared with the playback whenever Source changes.
@@ -600,15 +600,16 @@ namespace Basalt {
 			valid = composes(pose);
 			if (valid)
 				playback.OverlayDropped = false;
-			// The IK and spring passes check their own results, so the overlays fail on a pose that changed under them. A
+			// Each overlay pass checks its own result, so failure here means the pose changed underneath it. A
 			// pose that fails without them too is reported below, not as an IK problem.
 			else if (composes(playback.Pose))
 			{
 				if (!playback.OverlayDropped)
-					BS_CORE_WARN("Animator '{}': the IK and spring bone solution does not fit the newly evaluated pose; showing the pose without them until they solve again", playback.EntityName);
+					BS_CORE_WARN("Animator '{}': the pose overlays do not fit the newly evaluated pose; showing the animation until they solve again", playback.EntityName);
 				playback.OverlayDropped = true;
 				playback.IKOverlay.clear();
 				playback.SpringOverlay.clear();
+				playback.RagdollOverlay.clear();
 				valid = true;
 			}
 		}
@@ -657,6 +658,7 @@ namespace Basalt {
 		}
 		playback.IKOverlay.clear();
 		playback.SpringOverlay.clear();
+		playback.RagdollOverlay.clear();
 		ComposeAnimationPose(source, playback.Local, playback.Globals);
 	}
 
@@ -897,6 +899,7 @@ namespace Basalt {
 			SolveIK(seconds);
 			SolveSprings(seconds);
 		}
+		ApplyRagdolls();
 		UpdateAttachments();
 	}
 
@@ -1271,7 +1274,7 @@ namespace Basalt {
 
 	void AnimationSystem::ApplyRootMotion(Entity entity, Playback& playback, const RootMotionFrame& motion, float seconds)
 	{
-		if (seconds <= 0 || playback.RootNode < 0)
+		if (seconds <= 0 || playback.RootNode < 0 || (m_Scene.GetPhysicsWorld() && m_Scene.GetPhysicsWorld()->HasRagdollPose(entity)))
 			return;
 		auto report = [&](const std::string& problem) {
 			if (problem != playback.RootApplyProblem && !problem.empty())

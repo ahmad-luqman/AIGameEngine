@@ -55,6 +55,8 @@ namespace Basalt {
 		for (auto handle : m_Scene.GetAllEntitiesWith<SpringBoneComponent>())
 		{
 			Entity entity(handle, &m_Scene);
+			if (m_Scene.GetPhysicsWorld() && m_Scene.GetPhysicsWorld()->HasRagdollPose(entity))
+				continue;
 			const auto& component = entity.GetComponent<SpringBoneComponent>();
 			SpringState& state = SyncSprings(entity, component);
 			if (auto* playback = Ensure(entity))
