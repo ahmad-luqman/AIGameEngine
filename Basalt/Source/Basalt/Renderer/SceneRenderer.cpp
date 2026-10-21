@@ -119,9 +119,6 @@ namespace Basalt {
 		constexpr uint32_t SSAOKernelSize = 24;
 		constexpr uint32_t MaxLights = MaxSceneLights;
 		constexpr uint64_t MaterialSetRetentionFrames = 120;
-		// Morph targets one draw blends at most, bounding the vertex shader's per-vertex loop; the weakest (by |weight|)
-		// are dropped.
-		constexpr size_t MaxActiveMorphWeights = 32;
 		// (target, weight) pairs per draw record: Model's and Normal's columns hold two each (Morphing.glsl).
 		constexpr size_t MorphPairsPerRecord = 16;
 		static_assert(MaxMorphTargets < (1u << 24), "morph target indices travel exactly as floats");

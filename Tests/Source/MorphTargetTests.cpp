@@ -769,6 +769,35 @@ TEST_SUITE("MorphTargets")
 		CHECK(vertex->World.z == doctest::Approx(0.15f));
 	}
 
+	TEST_CASE("Vertex snapping morphs with the weights the renderer draws")
+	{
+		ClearAssetCache cacheGuard;
+		Scene scene;
+		auto entity = scene.CreateEntity("Crowded");
+		entity.AddComponent<AnimatorComponent>().Mesh = AnimationTest::FixturePath("ManyMorphs.gltf").string();
+		// Crowded's 36 node weights each push one vertex 0.15 forward; the four weakest (targets 0-3, from 0.2) are not
+		// drawn. Target t moves grid vertex 4 + t, 0.2 apart, and the node sits at x = 0.2.
+		const auto snap = [&](const glm::vec2& grid) {
+			const glm::vec3 at(grid.x + 0.2f, grid.y, 0.0f);
+			const glm::mat4 viewProjection = glm::ortho(-1.0f, 1.0f, -1.0f, 1.0f, 0.1f, 10.0f) * glm::lookAt(at + glm::vec3(0, 0, 5), at, glm::vec3(0, 1, 0));
+			const auto vertex = FindViewportVertex(entity, viewProjection, { 200, 200 }, { 100, 100 }, 4);
+			REQUIRE(vertex);
+			return vertex->World.z;
+		};
+		// Target 0 (dropped) moves vertex 4; target 4 (0.28, drawn) moves vertex 8, the second row's first.
+		CHECK(snap({ 0.8f, 0.0f }) == doctest::Approx(0.0f));
+		CHECK(snap({ 0.0f, 0.2f }) == doctest::Approx(0.28f * 0.15f));
+		const std::vector<float> weights = { 0.5f, 0.0f, std::numeric_limits<float>::quiet_NaN(), -0.25f };
+		std::vector<float> drawn = DrawnMorphWeights(weights);
+		CHECK(drawn == std::vector<float>{ 0.5f, 0.0f, 0.0f, -0.25f });
+		std::vector<float> many(MaxActiveMorphWeights + 2, 1.0f);
+		many[0] = many[5] = 0.5f;
+		drawn = DrawnMorphWeights(many);
+		CHECK(std::ranges::count(drawn, 0.0f) == 2);
+		CHECK(drawn[0] == 0.0f);
+		CHECK(drawn[5] == 0.0f);
+	}
+
 	TEST_CASE("Draws keep their strongest morph weights, in a stable order")
 	{
 		std::vector<uint32_t> targets;
