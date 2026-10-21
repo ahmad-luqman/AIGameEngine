@@ -321,7 +321,7 @@ TEST_SUITE("MorphTargets")
 		REQUIRE(system.SetMorphWeight(entity, "Smile", 1.0f, 0.0f));
 		CHECK((*system.GetMorphWeights(entity))[faceSmile] == 1.0f);
 		CHECK((*system.GetMorphWeights(entity))[teethSmile] == 1.0f);
-		CHECK(system.GetMorphWeight(entity, "Smile") == 1.0f);
+		CHECK(system.GetMorphWeight(entity, "Smile").value_or(-1.0f) == 1.0f);
 
 		// A fade starts from the weight shown and continues while the clip plays.
 		const float blink = (*system.GetMorphWeights(entity))[faceBlink];
@@ -349,7 +349,7 @@ TEST_SUITE("MorphTargets")
 		CHECK(CountLogMessages(since, "no morph target named 'Frown'") == 1);
 		CHECK_FALSE(system.SetMorphWeight(entity, "Smile", 1.5f, 0.0f));
 		CHECK_FALSE(system.SetMorphWeight(entity, "Smile", 0.5f, -1.0f));
-		CHECK_FALSE(system.GetMorphWeight(entity, "Frown"));
+		CHECK_FALSE(system.GetMorphWeight(entity, "Frown").has_value());
 		scene.OnRuntimeStop();
 	}
 
