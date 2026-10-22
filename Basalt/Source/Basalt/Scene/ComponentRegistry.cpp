@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cmath>
 #include <iterator>
 #include <optional>
@@ -52,6 +53,8 @@ namespace Basalt {
 			std::vector<std::string>& GetAssetFields() { return m_AssetFields; }
 			std::vector<std::string>& GetEntityFields() { return m_EntityFields; }
 			std::map<std::string, ComponentFieldType>& GetFieldTypes() { return m_FieldTypes; }
+			// Whether the data names a field, without consuming it.
+			bool Contains(const char* name) const { return m_Data && m_Data->contains(name); }
 
 			template<typename T>
 			void Field(const char* name, T& value)
@@ -1172,11 +1175,19 @@ namespace Basalt {
 
 		void Fields(FieldReader& r, PrefabComponent& c)
 		{
+			const std::string previous = c.Prefab;
 			r.AssetField("Prefab", c.Prefab);
 			r.Field("Members", c.Members);
 			r.Field("Baseline", c.Baseline);
-			r.Field("Overrides", c.Overrides);
-			Prefab::ResolveBaselineAssets(c);
+			if (std::string error; !Prefab::NormalizeTracking(c, error))
+				throw std::runtime_error(error);
+			// Tracking describes one prefab file. Naming another file without new tracking restarts it (adopted on the
+			// next merge) instead of merging against the old file's baseline.
+			if (!previous.empty() && c.Prefab != previous && !r.Contains("Members") && !r.Contains("Baseline"))
+			{
+				c.Members = json::object();
+				c.Baseline = json::object();
+			}
 		}
 
 		// --- Writers -----------------------------------------------------------------------------
@@ -1714,7 +1725,7 @@ namespace Basalt {
 
 		json Write(const PrefabComponent& c)
 		{
-			return { { "Prefab", c.Prefab }, { "Members", c.Members }, { "Baseline", c.Baseline }, { "Overrides", c.Overrides } };
+			return { { "Prefab", c.Prefab }, { "Members", c.Members }, { "Baseline", c.Baseline } };
 		}
 
 		// --- Camera adapter: SceneCamera keeps its state behind setters ---------------------------
@@ -2082,18 +2093,30 @@ namespace Basalt {
 
 		std::string Validate(const PrefabComponent& c)
 		{
+			if (!c.Members.is_object() || !c.Baseline.is_object())
+				return "Members and Baseline must be objects";
+			// A canonical decimal nonzero UUID: what std::to_string writes for the ID.
+			const auto isKey = [](const std::string& key) {
+				uint64_t id = 0;
+				const auto result = std::from_chars(key.data(), key.data() + key.size(), id);
+				return result.ec == std::errc() && result.ptr == key.data() + key.size() && id != 0 && std::to_string(id) == key;
+			};
 			std::set<uint64_t> instances;
 			for (const auto& [source, instance] : c.Members.items())
 			{
-				if (source.empty() || source.front() == '0' || source.size() > 20 || !std::ranges::all_of(source, [](char ch) { return ch >= '0' && ch <= '9'; }) || (source.size() == 20 && source > "18446744073709551615"))
-					return "Members keys must be nonzero source UUIDs";
+				if (!isKey(source))
+					return "Members keys must be nonzero source entity IDs, got '" + source + "'";
 				if (!instance.is_number_unsigned() || instance.get<uint64_t>() == 0 || !instances.insert(instance.get<uint64_t>()).second)
-					return "Members values must be unique nonzero instance UUIDs";
+					return "Members values must be unique nonzero instance entity IDs";
 			}
 			for (const auto& [key, record] : c.Baseline.items())
 			{
-				if (!c.Members.contains(key) || !record.is_object() || !record.contains("ID") || !record["ID"].is_number_unsigned() || std::to_string(record["ID"].get<uint64_t>()) != key || !record.contains("Name") || !record["Name"].is_string() || !record.contains("Parent") || !record["Parent"].is_number_unsigned() || !record.contains("Components") || !record["Components"].is_object() || record["Components"].contains("Prefab"))
-					return "Baseline must contain source entity records matching Members";
+				const auto isId = [&](const char* name) { return record.contains(name) && record[name].is_number_unsigned(); };
+				const bool shaped = record.is_object() && isId("ID") && isId("Parent") && record.contains("Name") && record["Name"].is_string() && record.contains("Components") && record["Components"].is_object();
+				if (!c.Members.contains(key) || !shaped || std::to_string(record["ID"].get<uint64_t>()) != key || record["Components"].contains("Prefab"))
+					return "Baseline record '" + key + "' must be a source entity record (ID, Name, Parent, Components) listed in Members";
+				if (const uint64_t parent = record["Parent"].get<uint64_t>(); parent != 0 && !c.Baseline.contains(std::to_string(parent)))
+					return "Baseline record '" + key + "' names a parent that is not in Baseline";
 			}
 			return {};
 		}
@@ -2251,12 +2274,6 @@ namespace Basalt {
 			infos.push_back(MakeInfo<UINavigationComponent>("UINavigation"));
 			infos.push_back(MakeInfo<UIFocusRingComponent>("UIFocusRing"));
 			infos.push_back(MakeInfo<PrefabComponent>("Prefab"));
-			// Overrides are derived from the instance: refresh them whenever the component is written, so files, Lua,
-			// the inspector and agents never read stale ones.
-			infos.back().Serialize = [](Entity entity) {
-				Prefab::CaptureOverrides(entity);
-				return Write(entity.GetComponent<PrefabComponent>());
-			};
 			// A copied instance (duplicate, paste, nested tree) tracks its own entities. Members that were not copied
 			// (deleted by the instance, or moved out of its tree) get fresh IDs, so the copy never claims the
 			// original's entities: to the copy they are deleted, and Revert recreates its own.

@@ -309,8 +309,8 @@ else()
 	target_compile_options(BasaltTextureCodecs PRIVATE -fno-strict-aliasing "$<$<COMPILE_LANGUAGE:CXX>:-include>" "$<$<COMPILE_LANGUAGE:CXX>:exception>")
 endif()
 
-# File pickers belong only to the editor. Linux uses the portal backend; systems without D-Bus
-# development headers still build the editor with its existing text-path prompts.
+# File pickers belong only to the editor. Linux uses the portal backend; systems without D-Bus development files
+# (found through pkg-config) still build the editor, with typed-path prompts only.
 if(BASALT_BUILD_EDITOR)
 	set(BASALT_NATIVE_DIALOGS_AVAILABLE ON)
 	if(UNIX AND NOT APPLE)

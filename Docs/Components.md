@@ -172,7 +172,7 @@ Fields: `Color` (number[4]), `Thickness` (number)
 
 ## Prefab
 
-Fields: `Prefab` (string), `Members` (object), `Baseline` (object), `Overrides` (object)
+Fields: `Prefab` (string), `Members` (object), `Baseline` (object)
 
 ## List element types
 

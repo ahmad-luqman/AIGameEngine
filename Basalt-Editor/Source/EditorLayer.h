@@ -112,6 +112,8 @@ namespace Basalt {
 		void DrawMaterialPreview(Entity entity);
 		// The inspector section of a prefab instance root: its actions and overrides.
 		void DrawPrefabInstance(Entity entity);
+		// Runs a GUI command and shows its result's warnings in the status bar.
+		std::optional<nlohmann::json> ExecuteAndWarn(const std::string& command, const nlohmann::json& params = nlohmann::json::object());
 		void DrawToolbar();
 		void DrawViewportOptions();
 		void DrawOverlayMenu();
@@ -290,6 +292,16 @@ namespace Basalt {
 		bool m_ExportSmokeTest = true;
 		int m_ExportSmokeFrames = 120;
 		std::string m_WindowTitle;
+		// prefab.overrides of the inspected instance, recomputed when the scene changes rather than every frame.
+		struct PrefabOverridesCache
+		{
+			UUID Instance;
+			uint64_t Revision = 0;
+			nlohmann::json Overrides;
+		};
+		std::optional<PrefabOverridesCache> m_PrefabOverrides;
+		// The waiting scene's undo history while a prefab is open, restored when it closes.
+		std::optional<EditorHistory> m_WaitingHistory;
 
 		EditorPreferences m_Preferences;
 		// Empty when the user data directory is unavailable: preferences then last for this session only.

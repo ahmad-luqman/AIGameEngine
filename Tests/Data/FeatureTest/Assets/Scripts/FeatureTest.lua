@@ -824,7 +824,14 @@ function Driver:OnUpdate(dt)
 		Check("Prefab children", projectile:FindChild("Trail") ~= nil)
 		local prefab = projectile:GetComponent("Prefab")
 		-- Play instances track their entities but keep no baseline: play copies never merge prefab edits.
-		Check("Prefab instance metadata", type(prefab.Members) == "table" and next(prefab.Members) ~= nil and next(prefab.Baseline) == nil and type(prefab.Overrides) == "table")
+		local trailID = projectile:FindChild("Trail").ID
+		local tracksTrail = false
+		for _, id in pairs(prefab.Members) do
+			tracksTrail = tracksTrail or id == trailID
+		end
+		Check("Prefab instance metadata", tracksTrail and next(prefab.Baseline) == nil)
+		-- IDs come back to Lua as signed integers; the component accepts them again.
+		Expect("Prefab component round trip", function() projectile:SetComponent("Prefab", prefab) end)
 		Check("Prefab script started immediately", FeatureTestEvents.ProjectilesCreated == 1)
 		projectile:SetLinearVelocity(Vec3(0, -5, 0))
 		Check("Prefab script properties", projectile:GetScript().Lifetime == 1.0)

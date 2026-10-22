@@ -1895,7 +1895,6 @@ function BasaltScript:StopAllCoroutines() end
 ---@field Prefab string
 ---@field Members table
 ---@field Baseline table
----@field Overrides table
 
 ---An element of a component list field.
 ---@class AnimationEvent

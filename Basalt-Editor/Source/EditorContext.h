@@ -44,7 +44,8 @@ namespace Basalt {
 		// Captures a pending authored GUI edit once, outside transactions; otherwise a no-op.
 		void CommitHistory();
 		// Records a scene edit made outside any command (a prefab merge after a file change) as its own undo step,
-		// so undoing the next command does not also undo it.
+		// so undoing the next command does not also undo it. An unfinished GUI field edit is already in the scene, so
+		// it lands in the same step, under its own name.
 		void RecordExternalEdit(const std::string& name);
 		void SetStatus(const std::string& message, bool isError);
 		// A command result's "warnings" joined with "; " (empty when it has none), for the status bar and panels.

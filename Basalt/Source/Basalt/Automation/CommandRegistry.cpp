@@ -44,10 +44,12 @@ namespace Basalt {
 		const CommandInfo* info = Find(command);
 		if (!info)
 			throw CommandError("unknown command '" + command + "' (run 'help' to list commands)");
-		// While a prefab is open, the scene waiting for it must stay as it was: boundaries would replace or save the
-		// wrong scene, and moves would migrate references in the prefab only.
-		const bool prefabCommand = command == "prefab.save" || command == "prefab.close";
-		if (session.IsEditingPrefab() && ((info->Policy == CommandPolicy::EditBoundary && !prefabCommand) || command == "asset.move" || command == "asset.rename"))
+		// While a prefab is open, the waiting scene must not be replaced or saved, and asset moves would migrate only the
+		// prefab's scene while the waiting scene's references go stale. Every such command is an edit boundary; export
+		// would read the waiting scene's file while its edits are unsaved.
+		const bool leavesPrefab = command == "prefab.save" || command == "prefab.close";
+		const bool replacesEditState = info->Policy == CommandPolicy::EditBoundary && !leavesPrefab;
+		if (session.IsEditingPrefab() && (replacesEditState || command == "project.export"))
 			throw CommandError(command + " is unavailable while '" + session.GetPrefabPath() + "' is open: prefab.save or prefab.close first");
 		if (!params.is_object())
 			throw CommandError("'params' must be a JSON object");

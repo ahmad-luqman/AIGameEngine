@@ -1,5 +1,6 @@
 #include "FileDialogs.h"
 
+#include "Basalt/Core/Assert.h"
 #include "Basalt/Core/FileSystem.h"
 
 #ifdef BS_NATIVE_DIALOGS
@@ -7,6 +8,18 @@
 #endif
 
 namespace Basalt {
+
+#ifdef BS_NATIVE_DIALOGS
+	namespace {
+		// nfd's last error (or fallback), cleared so the next dialog starts clean.
+		std::string TakeError(const char* fallback)
+		{
+			std::string error = NFD_GetError() ? NFD_GetError() : fallback;
+			NFD_ClearError();
+			return error;
+		}
+	}
+#endif
 
 	bool FileDialogs::IsAvailable()
 	{
@@ -17,32 +30,39 @@ namespace Basalt {
 #endif
 	}
 
-	std::optional<std::filesystem::path> FileDialogs::Browse(Kind kind, const std::filesystem::path& initial, const std::vector<Filter>& filters, std::string& outError)
+	std::optional<std::filesystem::path> FileDialogs::Browse([[maybe_unused]] Kind kind, [[maybe_unused]] const std::filesystem::path& initial, [[maybe_unused]] const std::vector<Filter>& filters, std::string& outError)
 	{
 		outError.clear();
 #ifdef BS_NATIVE_DIALOGS
-		// Per call: on Linux the portal connection, on Windows COM, belong to the calling (main) thread only while
-		// a dialog is open.
+		// Initialized per call, so the portal's D-Bus connection (Linux) and the COM apartment (Windows) are held only
+		// while a dialog is open, never across frames.
 		if (NFD_Init() != NFD_OKAY)
 		{
-			outError = std::string("cannot open a file dialog: ") + (NFD_GetError() ? NFD_GetError() : "initialization failed");
-			NFD_ClearError();
+			outError = "cannot open a file dialog: " + TakeError("initialization failed");
 			return std::nullopt;
 		}
+		// Windows parses the start directory as a shell path: native separators and no trailing one.
+		std::filesystem::path start = initial.lexically_normal().make_preferred();
+		if (!start.empty() && !start.has_filename())
+			start = start.parent_path();
 		std::error_code error;
-		const bool isDirectory = std::filesystem::is_directory(initial, error);
-		std::filesystem::path directory = kind == Kind::Folder || isDirectory ? initial : initial.parent_path();
+		const bool isDirectory = std::filesystem::is_directory(start, error);
+		const bool startsInDirectory = kind == Kind::Folder || isDirectory;
+		std::filesystem::path directory = startsInDirectory ? start : start.parent_path();
 		// Dialogs reject (Windows) or ignore start directories that do not exist; start from the nearest one.
 		while (!directory.empty() && !std::filesystem::is_directory(directory, error) && directory != directory.parent_path())
 			directory = directory.parent_path();
-		const std::string start = FileSystem::PathToUtf8(directory);
-		const std::string name = isDirectory || kind == Kind::Folder ? std::string() : FileSystem::PathToUtf8(initial.filename());
+		const std::string startDirectory = FileSystem::PathToUtf8(directory);
+		const std::string name = startsInDirectory ? std::string() : FileSystem::PathToUtf8(start.filename());
 		std::vector<nfdu8filteritem_t> items;
 		items.reserve(filters.size());
 		for (const Filter& filter : filters)
+		{
+			BS_CORE_ASSERT(filter.Extensions.find('.') == std::string::npos, "filter extensions are written without dots");
 			items.push_back({ filter.Name.c_str(), filter.Extensions.c_str() });
+		}
 		const auto count = static_cast<nfdfiltersize_t>(items.size());
-		const nfdu8char_t* startPath = start.empty() ? nullptr : start.c_str();
+		const nfdu8char_t* startPath = startDirectory.empty() ? nullptr : startDirectory.c_str();
 
 		nfdu8char_t* chosen = nullptr;
 		nfdresult_t result = NFD_CANCEL;
@@ -66,15 +86,11 @@ namespace Basalt {
 		}
 		else if (result == NFD_ERROR)
 		{
-			outError = std::string("file dialog failed: ") + (NFD_GetError() ? NFD_GetError() : "unknown error");
-			NFD_ClearError();
+			outError = "file dialog failed: " + TakeError("unknown error");
 		}
 		NFD_Quit();
 		return path;
 #else
-		(void)kind;
-		(void)initial;
-		(void)filters;
 		outError = "native file dialogs are not available in this build";
 		return std::nullopt;
 #endif

@@ -200,7 +200,8 @@ namespace Basalt {
 				auto data = values.back();
 				for (const auto& field : info.Fields)
 				{
-					if (info.Name == "Prefab" && field != "Prefab")
+					// Prefab tracking is edited through the prefab commands only (the preview section shows the path).
+					if (info.Name == "Prefab")
 						continue;
 					if (!data.contains(field))
 						continue;
@@ -291,7 +292,8 @@ namespace Basalt {
 					DrawComponentPreview(entity, info.Name);
 				for (const std::string& field : info.Fields)
 				{
-					if (info.Name == "Prefab" && field != "Prefab")
+					// Prefab tracking is edited through the prefab commands only (the preview section shows the path).
+					if (info.Name == "Prefab")
 						continue;
 					if (!data.contains(field))
 						continue;
