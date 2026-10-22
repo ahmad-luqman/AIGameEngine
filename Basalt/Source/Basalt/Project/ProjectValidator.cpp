@@ -242,15 +242,16 @@ namespace Basalt {
 				{
 					if (link.Prefab.empty())
 						continue;
-					auto source = m_PrefabSources.find(link.Prefab);
-					if (source == m_PrefabSources.end())
+					const std::string path = Prefab::NormalizePath(link.Prefab);
+					// A prefab that does not load is reported by its own check; its instances are not outdated then.
+					auto [source, inserted] = m_PrefabSources.try_emplace(path);
+					if (nlohmann::json entities; inserted)
 					{
-						nlohmann::json entities;
-						std::string error;
-						source = m_PrefabSources.emplace(link.Prefab, Prefab::ReadSource(Project::ResolvePath(link.Prefab), entities, error) ? std::optional(entities) : std::nullopt).first;
+						if (std::string error; Prefab::ReadSource(Project::ResolvePath(path), entities, error))
+							source->second = std::move(entities);
 					}
 					if (source->second && Prefab::IsOutdated(link, *source->second))
-						++outdated[link.Prefab];
+						++outdated[path];
 				}
 				for (const auto& [prefab, count] : outdated)
 					m_Report.Add(ValidationSeverity::Warning, file, fmt::format("{} instance(s) of '{}' predate its last save; open the scene (scene.open merges them, keeping overrides) and save it", count, prefab));

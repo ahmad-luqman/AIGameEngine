@@ -15,7 +15,8 @@ namespace Basalt {
 	// overrides back (Apply). Merges are three-way: PrefabComponent::Baseline (the source as last merged), the
 	// instance's current state and the new source, compared field by field through the component registry, so local
 	// edits survive as overrides. Records are keyed by source entity ID and hold source-space entity references, which
-	// keeps them comparable across instances. Every function that takes an instance root requires its PrefabComponent.
+	// keeps them comparable across instances. Functions that take an instance root require its PrefabComponent
+	// (AssignSourceIds and EnclosingInstance excepted), and sourceEntities is always ReadSource output.
 	class Prefab
 	{
 	public:
@@ -36,9 +37,13 @@ namespace Basalt {
 			// Refused before changing the scene (invalid merged data, a hierarchy cycle, a replaced root); outError
 			// says why.
 			Rejected,
-			// Failed after changing the scene: an internal error, logged. The instance is partly merged.
+			// Failed after changing the scene: an internal error, logged. The instance is partly merged and keeps its old
+			// baseline, so merging again finishes the merge.
 			Partial
 		};
+
+		static bool ChangedScene(RefreshResult result) { return result == RefreshResult::Merged || result == RefreshResult::Partial; }
+		static bool Failed(RefreshResult result) { return result == RefreshResult::Rejected || result == RefreshResult::Partial; }
 
 		// Checks a prefab file's structure only, not its component data: the format and version, unique nonzero IDs,
 		// numeric parents and exactly one root, listed first. Nested prefab links are dropped: a prefab's entities are
@@ -49,16 +54,21 @@ namespace Basalt {
 		static bool ReadSource(const std::filesystem::path& path, nlohmann::json& outEntities, std::string& outError);
 
 		// Gives a tree that is about to be saved as prefabPath (entities as SerializeEntityTree wrote them) its source
-		// IDs, so the instances of an existing file keep merging: members of an instance of that file keep theirs,
-		// other entities reuse the file's IDs where they match it by name (as adoption matches), and the rest get fresh
-		// IDs that no scene entity has. Entity references inside the tree follow.
-		static void AssignSourceIds(Entity root, const std::string& prefabPath, nlohmann::json& entities);
+		// IDs, so the instances of an existing file keep merging. If the tree is an instance of that file, its members
+		// keep their source IDs; the other entities reuse the file's IDs where they match it by name (as adoption
+		// matches); the rest get fresh IDs that no scene entity has. Entity references inside the tree follow.
+		// outWarnings says when an existing file could not be read, so its IDs are lost.
+		static void AssignSourceIds(Entity root, const std::string& prefabPath, nlohmann::json& entities, std::vector<std::string>& outWarnings);
+		// The instance root that tracks entity as one of its members, if any.
+		static Entity EnclosingInstance(Entity entity);
 
-		// Links a newly created instance; instances[i] was created from sourceEntities[i] and instances[0] is the root.
-		// Instances created while the scene runs record membership only: play copies are discarded and never merge.
+		// Links an instance: a freshly instantiated tree, or the tree prefab.create just saved. instances[i] corresponds
+		// to sourceEntities[i] and instances[0] is the root. Instances created while the scene runs record membership
+		// only: play copies are discarded and never merge.
 		static void Link(const std::vector<Entity>& instances, const nlohmann::json& sourceEntities, const std::string& prefabPath);
 		// Brings tracking read from outside to its in-memory form: Lua hands IDs back as signed integers and saved
-		// baselines hold UUID asset references. False when an asset reference does not resolve.
+		// baselines hold UUID asset references. False when an asset reference is malformed or no project is active; a
+		// UUID of a missing asset becomes the same opaque asset-uuid:// key component readers keep.
 		static bool NormalizeTracking(PrefabComponent& link, std::string& outError);
 		// Visits every asset value that a baseline's records declare (label: "<component>.<field>"), until visit
 		// returns false; returns whether it ran to the end.
@@ -70,6 +80,10 @@ namespace Basalt {
 		static nlohmann::json ComputeOverrides(Entity root);
 		// Splits an override path into its unescaped tokens.
 		static std::vector<std::string> SplitOverridePath(const std::string& path);
+		// Whether the instance has tracking (Members and Baseline); without it the next merge adopts it.
+		static bool IsTracked(const PrefabComponent& link);
+		// The normalized form PrefabComponent::Prefab holds (unresolved asset keys stay as they are).
+		static std::string NormalizePath(const std::string& path);
 		// Whether a tracked instance's baseline differs from the source: the source changed since its last merge.
 		static bool IsOutdated(const PrefabComponent& link, const nlohmann::json& sourceEntities);
 

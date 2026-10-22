@@ -1177,6 +1177,8 @@ namespace Basalt {
 		{
 			const std::string previous = c.Prefab;
 			r.AssetField("Prefab", c.Prefab);
+			// One spelling per file, so merges and the comparison below find every instance of it.
+			c.Prefab = Prefab::NormalizePath(c.Prefab);
 			r.Field("Members", c.Members);
 			r.Field("Baseline", c.Baseline);
 			if (std::string error; !Prefab::NormalizeTracking(c, error))
@@ -2109,6 +2111,7 @@ namespace Basalt {
 				if (!instance.is_number_unsigned() || instance.get<uint64_t>() == 0 || !instances.insert(instance.get<uint64_t>()).second)
 					return "Members values must be unique nonzero instance entity IDs";
 			}
+			size_t roots = 0;
 			for (const auto& [key, record] : c.Baseline.items())
 			{
 				const auto isId = [&](const char* name) { return record.contains(name) && record[name].is_number_unsigned(); };
@@ -2117,7 +2120,11 @@ namespace Basalt {
 					return "Baseline record '" + key + "' must be a source entity record (ID, Name, Parent, Components) listed in Members";
 				if (const uint64_t parent = record["Parent"].get<uint64_t>(); parent != 0 && !c.Baseline.contains(std::to_string(parent)))
 					return "Baseline record '" + key + "' names a parent that is not in Baseline";
+				if (record["Parent"] == 0)
+					++roots;
 			}
+			if (!c.Baseline.empty() && roots != 1)
+				return "Baseline must have exactly one root record, found " + std::to_string(roots);
 			return {};
 		}
 

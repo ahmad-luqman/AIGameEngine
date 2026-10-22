@@ -40,8 +40,14 @@ def check_prefabs(call, require, output=None):
         call("editor.undo")
         call("assert.component", {"entity": instance, "component": "PointLight", "fields": {"Intensity": 7}})
         require(call("component.get", {"entity": instance, "component": "PointLight"})["Radius"] != 20, "Undo kept the merge")
+        # The steps from before prefab.open are still there.
+        history = call("editor.history")
+        require(history["undo"] == "Set PointLight Intensity", f"Undo history before prefab editing was lost: {history}")
+        call("editor.undo")
+        call("assert.component", {"entity": instance, "component": "PointLight", "fields": {"Intensity": 2}})
         call("editor.redo")
-        call("assert.component", {"entity": instance, "component": "PointLight", "fields": {"Radius": 20}})
+        call("editor.redo")
+        call("assert.component", {"entity": instance, "component": "PointLight", "fields": {"Radius": 20, "Intensity": 7}})
     call("prefab.revert", {"entity": instance, "field": field})
     call("assert.component", {"entity": instance, "component": "PointLight", "fields": {"Intensity": 2}})
     if output:
@@ -100,6 +106,9 @@ def main():
         require(saved.returncode == 0, f"Could not prepare the scene: {saved.stdout} {saved.stderr}")
         result = batch("open-prefab.json", [{"command": "entity.create", "params": {"name": "Unsaved"}}, {"command": "prefab.open", "params": {"path": "Assets/Prefabs/Authoring.bprefab"}}], "--scene", "Assets/Scenes/OpenPrefab.bscene")
         require(result.returncode != 0 and "is still open" in result.stderr, f"Exit with an open prefab did not fail: {result.returncode} {result.stderr}")
+        # Nothing unsaved: leaving the prefab open is harmless.
+        clean = batch("open-clean.json", [{"command": "prefab.open", "params": {"path": "Assets/Prefabs/Authoring.bprefab"}}], "--scene", "Assets/Scenes/OpenPrefab.bscene")
+        require(clean.returncode == 0, f"Exit with a clean open prefab failed: {clean.returncode} {clean.stderr}")
     print("Prefab feature integration passed")
 
 

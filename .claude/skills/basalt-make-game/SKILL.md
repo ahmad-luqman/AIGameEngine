@@ -27,8 +27,9 @@ broken version leaves the old one running). Typical patterns:
   reads input, and spawns/moves/destroys entities (`Scene.CreateEntity` + `AddComponent`,
   or `Scene.Instantiate("Assets/Prefabs/Block.bprefab", pos)`).
 - Change placed copies of a prefab by editing the prefab: `prefab.open`, ordinary entity/component commands,
-  `prefab.save` (its `warnings` list instances that could not merge), `prefab.close`. Saving merges into the open
-  scene's instances; other scenes merge when opened (`scene.open`), so open and save each scene that places the prefab
+  `prefab.save` (its `warnings` list instances that could not merge), `prefab.close`. Saving merges into the instances
+  of the scene you opened the prefab from; other scenes merge when opened (`scene.open`), so open and save each scene
+  that places the prefab
   before exporting (`project.validate` warns about outdated ones). Instances keep their own edits as overrides:
   `prefab.overrides` lists them, `prefab.revert` drops one or all, and `prefab.apply` writes an instance's overrides
   into the prefab. `prefab.create` links the saved tree as an instance, so deleting it afterwards is optional. Close a

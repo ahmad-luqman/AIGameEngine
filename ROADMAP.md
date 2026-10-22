@@ -84,10 +84,11 @@ below extend character movement, in order of impact.
 ### Editor feel and visual quality
 
 The Game view, asset thumbnails and material previews, the project settings panel, export validation with a
-smoke test, material assets (`.bmaterial` files with lossless thumbnails and a Material Editor), native file
-dialogs and prefab editing with per-instance overrides have shipped.
+smoke test and material assets (`.bmaterial` files with lossless thumbnails and a Material Editor) have shipped.
 
 ### Editor workflow
+
+Native file dialogs and prefab editing with per-instance overrides have shipped.
 
 - **Nested prefabs and variants — M.** Prefabs whose entities are instances of other prefabs (today they are saved
   unpacked), and variants that inherit a base prefab and store only their differences, merging through the same

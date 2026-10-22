@@ -100,21 +100,24 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   Protected script callbacks restore their caller's clip stack on return, error or coroutine yield. Text cursors, dropdown popup/highlight and keyboard focus-ring
   visibility belong to `UIInteraction`, while authored text, dropdown `Selected` indices and scroll offsets
   stay in components.
-- **Prefab instances.** `PrefabComponent` on an instance root names its `.bprefab` and tracks `Members` (source
-  entity ID → instance UUID, keeping IDs of entities the instance deleted) and `Baseline` (the source records as last
-  merged, with source-space references; asset fields are UUID/path objects on disk). Overrides are derived, never stored
-  (`Prefab::ComputeOverrides`, `prefab.overrides`). `Scene/Prefab` merges three ways field by field (objects by key, other
-  values whole, float and Euler round trips tolerated); the root's Translation/Rotation are placement, never overrides.
-  A merge touches only its own instance and validates data and hierarchy before mutating; references to removed members
-  fall back to the root or none, and outside references that collide with source IDs are tagged `External`. Prefab
-  writes (`prefab.create/apply/save`, `asset.write`, file-watcher changes) merge into the instances of the edit scene and
-  of the scene waiting for prefab editing (also during Play, never into the play copy); `scene.open` merges instances of
-  prefabs saved since, and `project.validate` warns about scenes still holding outdated ones. Instances created during
-  Play keep no baseline. `prefab.create` gives files fresh source IDs (kept on rewrites through the instance link or
-  name matching) and links the saved tree as an instance. Copies get fresh IDs for members they did not copy. Untracked
-  instances are adopted (children matched by name) by their first merge, revert or apply. `prefab.open` swaps in an
-  isolated scene; the waiting scene keeps its path, dirty state, selection and (editor) undo history, and edit
-  boundaries other than `prefab.save/close`, plus `project.export`, are rejected until `prefab.close`.
+- **Prefab instances.** `PrefabComponent` on an instance root names its `.bprefab` (normalized) and tracks `Members`
+  (source entity ID → instance UUID, keeping IDs of entities the instance deleted; only entities inside the root's tree
+  count, so moving one out deletes it from the instance) and `Baseline` (the source records as last merged, with
+  source-space references; asset fields are UUID/path objects on disk). Overrides are derived, never stored
+  (`Prefab::ComputeOverrides`, `prefab.overrides`). `Scene/Prefab` merges three ways field by field (objects by key,
+  other values whole, float and Euler round trips tolerated); the root's Translation/Rotation are placement, never
+  overrides. A merge touches only its own instance and validates data and hierarchy before mutating; references to
+  deleted members keep their reserved IDs, other missing source references fall back to the root or none, and outside
+  references that collide with source IDs are tagged `External`. Prefab writes (`prefab.create/apply/save`,
+  `asset.write`, `asset.refresh`, editor file-watcher reloads) merge into the instances of the edit scene and of the
+  scene waiting for prefab editing (also during Play, never into the play copy); `scene.open`/`project.open` merge
+  outdated tracked instances, and `project.validate` warns about scenes still holding outdated ones. Instances created
+  during Play keep no baseline. `prefab.create` gives files fresh source IDs (kept on rewrites through the instance link,
+  then name matching) and links the saved tree as an instance, unless it belongs to another instance or prefab.
+  Untracked instances are adopted (children matched by name) by `prefab.refresh/revert/apply` or the merge after a
+  prefab write (`scene.open` skips them). `prefab.open` swaps in an isolated scene; the waiting scene keeps its path,
+  dirty state, selection and (editor) undo history, and edit boundaries other than `prefab.save/close`, plus
+  `project.export`, are rejected until `prefab.close`.
 - **Editor file dialogs.** Path prompts add native pickers (`Basalt-Editor/Source/FileDialogs`, nativefiledialog-extended,
   editor only). Linux uses the XDG portal and needs D-Bus development files at build time; without them the editor
   builds with typed paths only, and a picker that fails at runtime leaves the typed path usable.

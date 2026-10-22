@@ -46,8 +46,7 @@ namespace Basalt {
 		if (!start.empty() && !start.has_filename())
 			start = start.parent_path();
 		std::error_code error;
-		const bool isDirectory = std::filesystem::is_directory(start, error);
-		const bool startsInDirectory = kind == Kind::Folder || isDirectory;
+		const bool startsInDirectory = kind == Kind::Folder || std::filesystem::is_directory(start, error);
 		std::filesystem::path directory = startsInDirectory ? start : start.parent_path();
 		// Dialogs reject (Windows) or ignore start directories that do not exist; start from the nearest one.
 		while (!directory.empty() && !std::filesystem::is_directory(directory, error) && directory != directory.parent_path())
