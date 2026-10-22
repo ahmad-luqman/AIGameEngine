@@ -2228,7 +2228,7 @@ Stops play mode and restores the edit scene.
 
 ### `prefab.apply`
 
-Writes an instance's overrides into its prefab file, then merges the file into every instance of the scene. The root's position and rotation and entities the instance added stay local. Edit mode only.
+Writes an instance's overrides into its prefab file, then merges the file into the instances of the open scene ('instances'). The root's position and rotation, entities the instance added and references to entities outside the prefab stay local ('warnings' names such references). An untracked instance is adopted first, so all its differences are applied. Edit mode only.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2268,7 +2268,7 @@ Writes an instance's overrides into its prefab file, then merges the file into e
 
 ### `prefab.close`
 
-Returns to the scene that waited during prefab editing, with its selection and unsaved state. Unsaved prefab edits require discard=true.
+Returns to the scene that waited during prefab editing, with its path, unsaved state and selection. Unsaved prefab edits require discard=true.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2294,12 +2294,12 @@ Returns to the scene that waited during prefab editing, with its selection and u
 
 ### `prefab.create`
 
-Saves an entity tree as a prefab file and merges it into existing instances of that file. Prefab links inside the tree are not saved.
+Saves an entity tree as a prefab file and makes the tree an instance of it ('linked'; not during Play, while a prefab is open, or when the tree contains prefab instances, which are saved unpacked). Then merges the file into the open scene's other instances ('instances'). Overwriting a prefab keeps its entity IDs (through the tree's instance link, or by matching names), so existing instances keep merging.
 
 | Parameter | Type / description |
 |-----------|--------------------|
 | `entity` | ID or name |
-| `path` | string, e.g. 'Assets/Prefabs/Enemy.bprefab' |
+| `path` | .bprefab path under Assets/, e.g. 'Assets/Prefabs/Enemy.bprefab' |
 
 <details><summary>Parameter JSON Schema</summary>
 
@@ -2324,7 +2324,7 @@ Saves an entity tree as a prefab file and merges it into existing instances of t
       "description": "ID or name"
     },
     "path": {
-      "description": "string, e.g. 'Assets/Prefabs/Enemy.bprefab'",
+      "description": ".bprefab path under Assets/, e.g. 'Assets/Prefabs/Enemy.bprefab'",
       "minLength": 1,
       "type": "string"
     }
@@ -2408,7 +2408,7 @@ Instantiates a prefab into the scene.
 
 ### `prefab.open`
 
-Opens a prefab for editing in an isolated scene; the current scene, its unsaved edits and selection wait until prefab.close. While it is open, commands that change scenes, projects or asset paths, and Play, are rejected. Nested prefab instances must be unpacked before saving.
+Opens a prefab for editing in its own scene. The current scene, with its unsaved edits, selection and undo history (in the editor), waits until prefab.close. While the prefab is open, edit-boundary commands are rejected (scene.new/open/save, project.create/open/export, asset.move/rename/delete/resolve, play.start, replay.run, prefab.open/apply): prefab.save and prefab.close are the way back.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2437,7 +2437,7 @@ Opens a prefab for editing in an isolated scene; the current scene, its unsaved 
 
 ### `prefab.overrides`
 
-Lists an instance's overrides as JSON-pointer paths into its source records, '/<source entity ID>/Components/<component>/<field>' (null: removed), with 'members' mapping source entity IDs to the instance's entity IDs. Values are whole fields: lists and vectors are not merged element-wise. The root's position and rotation are placement, not overrides.
+Lists an instance's overrides: JSON-pointer paths into its source records ('/<source ID>' for a deleted entity, '/<source ID>/Name', '/<source ID>/Parent', '/<source ID>/Components/<component>[/<field>...]') with the instance's value, null where it removed something. Fields are whole values (vectors and lists are not merged element by element); the root's position and rotation are placement, not overrides. 'members' maps source entity IDs to instance entity IDs (including reserved IDs of entities the instance deleted); 'tracked' is false for an instance saved before tracking (it has no overrides until adopted).
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2477,7 +2477,7 @@ Lists an instance's overrides as JSON-pointer paths into its source records, '/<
 
 ### `prefab.refresh`
 
-Merges the prefab file into an instance, keeping its overrides, the entity IDs and local added entities. Saving or applying a prefab refreshes instances automatically; this also adopts instances saved before override tracking. Edit mode only.
+Merges the prefab file into an instance, keeping its overrides, entity IDs and the entities it added. Prefab writes and scene.open merge instances automatically; this also catches up an instance by hand. Instances saved before override tracking are adopted first (here and by revert, apply and automatic merges): their differences from the current file become overrides, so that file's changes are not taken. Edit mode only.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2517,7 +2517,7 @@ Merges the prefab file into an instance, keeping its overrides, the entity IDs a
 
 ### `prefab.revert`
 
-Discards an instance's overrides: every one, or the one JSON-pointer 'field' that prefab.overrides lists. The root's position and rotation and local added entities stay. Edit mode only.
+Discards an instance's overrides: all of them, or the one override path 'field' from prefab.overrides. The root's position, rotation and parent and the entities the instance added stay. An untracked instance is adopted first, so reverting all discards its differences from the prefab. Edit mode only.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2562,14 +2562,23 @@ Discards an instance's overrides: every one, or the one JSON-pointer 'field' tha
 
 ### `prefab.save`
 
-Saves the open prefab and merges it into the instances of the waiting scene, keeping their overrides. Rejects the save when the file changed on disk since prefab.open. Instances that cannot merge keep their previous state and are reported in 'warnings'.
+Saves the open prefab and merges it into the instances of the waiting scene, keeping their overrides ('instances' counts those that merged). Instances that cannot merge keep their previous state and are listed in 'warnings'. Rejected when the file changed on disk since it was opened or last saved (unless force), when the scene does not have exactly one root, or when it contains prefab instances (unpack them).
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `force` | overwrite the file even if it changed on disk (default false) |
 
 <details><summary>Parameter JSON Schema</summary>
 
 ```json
 {
   "additionalProperties": false,
-  "properties": {},
+  "properties": {
+    "force": {
+      "description": "overwrite the file even if it changed on disk (default false)",
+      "type": "boolean"
+    }
+  },
   "required": [],
   "type": "object"
 }
@@ -3659,7 +3668,7 @@ Replaces the open scene with an empty one (with a camera, sun and sky unless emp
 
 ### `scene.open`
 
-Opens a scene file (project-relative path).
+Opens a scene file (project-relative path). Instances of prefabs saved since the scene was merge their prefab, keeping overrides ('prefabInstances'; instances that cannot merge are 'warnings').
 
 | Parameter | Type / description |
 |-----------|--------------------|

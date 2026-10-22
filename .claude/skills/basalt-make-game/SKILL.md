@@ -26,10 +26,13 @@ broken version leaves the old one running). Typical patterns:
 - One "Game" controller script on an empty entity owns the rules and state (grid arrays, score, timers),
   reads input, and spawns/moves/destroys entities (`Scene.CreateEntity` + `AddComponent`,
   or `Scene.Instantiate("Assets/Prefabs/Block.bprefab", pos)`).
-- Change every placed copy of a prefab by editing the prefab: `prefab.open`, ordinary entity/component commands,
-  `prefab.save` (its `warnings` list instances that could not merge), `prefab.close`. Instances keep their own edits
-  as overrides: `prefab.overrides` lists them, `prefab.revert` drops one or all, and `prefab.apply` writes an
-  instance's overrides into the prefab. Saving the scene keeps each instance's link.
+- Change placed copies of a prefab by editing the prefab: `prefab.open`, ordinary entity/component commands,
+  `prefab.save` (its `warnings` list instances that could not merge), `prefab.close`. Saving merges into the open
+  scene's instances; other scenes merge when opened (`scene.open`), so open and save each scene that places the prefab
+  before exporting (`project.validate` warns about outdated ones). Instances keep their own edits as overrides:
+  `prefab.overrides` lists them, `prefab.revert` drops one or all, and `prefab.apply` writes an instance's overrides
+  into the prefab. `prefab.create` links the saved tree as an instance, so deleting it afterwards is optional. Close a
+  prefab before the session ends: the CLI refuses to drop unsaved edits behind an open prefab.
 - Prefer input actions over raw keys: declare them with `project.set {"inputActions": {"Actions": [{"Name":
   "MoveX", "Type": "Axis", "Bindings": [{"Key": "D"}, {"Key": "A", "Scale": -1}, {"GamepadAxis": "LeftX"}]}]}}`
   and read `Input.GetAction("MoveX")` / `Input.IsActionPressed("Jump")`, so keys, gamepads and the mouse work

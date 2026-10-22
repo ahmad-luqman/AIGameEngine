@@ -12,6 +12,7 @@
 #include "Basalt/Scene/ComponentRegistry.h"
 #include "Basalt/Scene/Components.h"
 #include "Basalt/Scene/Entity.h"
+#include "Basalt/Scene/Prefab.h"
 #include "Basalt/Scene/Scene.h"
 #include "Basalt/Scene/SceneSerializer.h"
 #include "Basalt/Scripting/ScriptEngine.h"
@@ -229,6 +230,30 @@ namespace Basalt {
 					return;
 				}
 				CheckEntities(*scene, Relative(path));
+				CheckPrefabInstances(*scene, Relative(path));
+			}
+
+			// A scene stores its instances' data, so instances of a prefab saved since the scene was stay as they were
+			// until the scene is opened (which merges them) and saved.
+			void CheckPrefabInstances(Scene& scene, const std::string& file)
+			{
+				std::map<std::string, size_t> outdated;
+				for (auto [handle, link] : scene.GetAllEntitiesWith<PrefabComponent>().each())
+				{
+					if (link.Prefab.empty())
+						continue;
+					auto source = m_PrefabSources.find(link.Prefab);
+					if (source == m_PrefabSources.end())
+					{
+						nlohmann::json entities;
+						std::string error;
+						source = m_PrefabSources.emplace(link.Prefab, Prefab::ReadSource(Project::ResolvePath(link.Prefab), entities, error) ? std::optional(entities) : std::nullopt).first;
+					}
+					if (source->second && Prefab::IsOutdated(link, *source->second))
+						++outdated[link.Prefab];
+				}
+				for (const auto& [prefab, count] : outdated)
+					m_Report.Add(ValidationSeverity::Warning, file, fmt::format("{} instance(s) of '{}' predate its last save; open the scene (scene.open merges them, keeping overrides) and save it", count, prefab));
 			}
 
 			void CheckPrefab(const std::filesystem::path& path)
@@ -423,6 +448,8 @@ namespace Basalt {
 			std::map<std::string, ModelContents> m_ModelContents;
 			// Normalized script path -> the first scene or prefab using it.
 			std::map<std::string, std::string> m_ReferencedScripts;
+			// Each prefab's validated source, read once per validation (nothing when it does not load).
+			std::map<std::string, std::optional<nlohmann::json>> m_PrefabSources;
 			std::set<std::string> m_CompiledScripts;
 		};
 

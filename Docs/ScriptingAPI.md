@@ -215,8 +215,10 @@ it was loaded from or last saved to: project-relative inside the project, otherw
 scene never loaded from or saved to a file).
 
 An instance's root carries the `Prefab` component. `Prefab.Members` maps the prefab's entity IDs to the instance's
-entities. `Baseline` and `Overrides` belong to edit-time prefab editing (the `prefab.*` automation commands and the
-editor), so instances created during Play have an empty `Baseline`; prefab edits never reach a running game.
+entities (IDs arrive as integers, negative for UUIDs of 2^63 and above; `SetComponent` accepts them back). `Baseline`
+belongs to edit-time prefab merging (the `prefab.*` automation commands and the editor), so instances created during
+Play have an empty one: existing instances in a running game never merge prefab edits, while instances created later
+read the file as it is then. Prefab files need unique nonzero entity IDs and a single root listed first.
 
 ### Switching scenes
 

@@ -485,22 +485,29 @@ namespace Basalt {
 				const auto* info = ComponentRegistry::Find(name);
 				if (!info || !component.is_object())
 					continue;
+				// Baseline records have the shape of prefab entity records: encoding them through the same path makes saved
+				// baselines carry UUIDs and lets moves (onlyPath) migrate them, so a move never reads as an override.
 				if (name == "Prefab" && component.contains("Baseline") && component["Baseline"].is_object())
 				{
 					json baseline = { { "Entities", json::array() } };
-					for (auto record : component["Baseline"])
+					std::vector<std::string> keys;
+					for (const auto& [key, record] : component["Baseline"].items())
 					{
-						if (!record.is_object() || !record.contains("Components") || !record["Components"].is_object() || record["Components"].contains("Prefab"))
+						if (!record.is_object() || !record.contains("Components") || !record["Components"].is_object())
 						{
-							outError = "invalid prefab baseline";
+							outError = fmt::format("entity {}: Prefab.Baseline record '{}' is not an entity record", entity.value("Name", std::string("<unnamed>")), key);
 							return false;
 						}
-						baseline["Entities"].push_back(std::move(record));
+						keys.push_back(key);
+						baseline["Entities"].push_back(record);
 					}
 					if (!EncodeAssetReferences(baseline, outError, onlyPath))
+					{
+						outError = fmt::format("entity {}: Prefab.Baseline: {}", entity.value("Name", std::string("<unnamed>")), outError);
 						return false;
-					for (const auto& record : baseline["Entities"])
-						component["Baseline"][std::to_string(record["ID"].get<uint64_t>())] = record;
+					}
+					for (size_t i = 0; i < keys.size(); ++i)
+						component["Baseline"][keys[i]] = std::move(baseline["Entities"][i]);
 				}
 				for (const auto& field : info->AssetFields)
 				{
@@ -628,10 +635,15 @@ namespace Basalt {
 
 	bool SceneSerializer::SavePrefab(Entity root, const std::filesystem::path& path, std::string& outError)
 	{
+		return SavePrefabEntities(SerializeEntityTree(root), path, outError);
+	}
+
+	bool SceneSerializer::SavePrefabEntities(json entities, const std::filesystem::path& path, std::string& outError)
+	{
 		json data;
 		data["Format"] = "BasaltPrefab";
 		data["Version"] = FormatVersion;
-		data["Entities"] = SerializeEntityTree(root);
+		data["Entities"] = std::move(entities);
 		// Prefab links are not part of a prefab: neither the instance's own nor those of nested instances, which
 		// are saved unpacked (instances track only their own prefab).
 		for (auto& entity : data["Entities"])
@@ -663,9 +675,8 @@ namespace Basalt {
 			outError = "prefab '" + prefabPath + "': " + outError;
 			return {};
 		}
-		Entity root = created.front();
-		Prefab::Link(root, entities, created, prefabPath);
-		return root;
+		Prefab::Link(created, entities, prefabPath);
+		return created.front();
 	}
 
 	namespace {
@@ -719,9 +730,11 @@ namespace Basalt {
 		// the project's step (outside a session) moves the hash too.
 		data["Physics"]["FixedTimestep"] = scene.GetFixedTimestep();
 		ReplaceEulerRotations(data, scene);
+		// Prefab tracking is edit metadata, not simulation state, and copies draw its fresh IDs outside the seeded runtime
+		// stream: hashing it would move pinned hashes for no behavioural change.
 		for (auto& record : data["Entities"])
 			if (record["Components"].contains("Prefab"))
-				for (const char* field : { "Members", "Baseline", "Overrides" })
+				for (const char* field : { "Members", "Baseline" })
 					record["Components"]["Prefab"].erase(field);
 		// A ragdoll moves its joints rather than its entity. Include that runtime pose only in hashes,
 		// never disk saves or play-copy configuration, so replay checks see a skeleton that diverges.

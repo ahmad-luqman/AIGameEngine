@@ -1,0 +1,340 @@
+{
+	"Entities": [
+		{
+			"Components": {
+				"Material": {
+					"AlbedoColor": [
+						1.0,
+						0.30000001192092896,
+						0.10000000149011612,
+						1.0
+					],
+					"AlbedoMap": "",
+					"Clearcoat": 0.0,
+					"ClearcoatMap": "",
+					"ClearcoatNormalMap": "",
+					"ClearcoatRoughness": 0.0,
+					"ClearcoatRoughnessMap": "",
+					"EmissiveColor": [
+						1.0,
+						0.30000001192092896,
+						0.10000000149011612
+					],
+					"EmissiveIntensity": 4.0,
+					"EmissiveMap": "",
+					"Material": "",
+					"Metallic": 0.0,
+					"MetallicRoughnessMap": "",
+					"NormalMap": "",
+					"OcclusionMap": "",
+					"Roughness": 0.5,
+					"Transmission": 0.0,
+					"TransmissionMap": "",
+					"UVOffset": [
+						0.0,
+						0.0
+					],
+					"UVRotation": 0.0,
+					"UVScale": [
+						1.0,
+						1.0
+					]
+				},
+				"Mesh": {
+					"CastShadows": true,
+					"LODDistance": 0.0,
+					"Mesh": "builtin://Sphere",
+					"MeshIndex": 0
+				},
+				"Prefab": {
+					"Baseline": {
+						"1": {
+							"Components": {
+								"Material": {
+									"AlbedoColor": [
+										1.0,
+										0.30000001192092896,
+										0.10000000149011612,
+										1.0
+									],
+									"AlbedoMap": "",
+									"Clearcoat": 0.0,
+									"ClearcoatMap": "",
+									"ClearcoatNormalMap": "",
+									"ClearcoatRoughness": 0.0,
+									"ClearcoatRoughnessMap": "",
+									"EmissiveColor": [
+										1.0,
+										0.30000001192092896,
+										0.10000000149011612
+									],
+									"EmissiveIntensity": 4.0,
+									"EmissiveMap": "",
+									"Material": "",
+									"Metallic": 0.0,
+									"MetallicRoughnessMap": "",
+									"NormalMap": "",
+									"OcclusionMap": "",
+									"Roughness": 0.5,
+									"Transmission": 0.0,
+									"TransmissionMap": "",
+									"UVOffset": [
+										0.0,
+										0.0
+									],
+									"UVRotation": 0.0,
+									"UVScale": [
+										1.0,
+										1.0
+									]
+								},
+								"Mesh": {
+									"CastShadows": true,
+									"LODDistance": 0.0,
+									"Mesh": "builtin://Sphere",
+									"MeshIndex": 0
+								},
+								"RigidBody": {
+									"AllowSleeping": true,
+									"AngularDamping": 0.05000000074505806,
+									"Continuous": false,
+									"FixedRotation": false,
+									"Friction": 0.5,
+									"FrictionCombine": "Default",
+									"GravityFactor": 1.0,
+									"IsTrigger": false,
+									"Layer": "Default",
+									"LinearDamping": 0.05000000074505806,
+									"Mass": 0.5,
+									"Restitution": 0.0,
+									"RestitutionCombine": "Default",
+									"Type": "Dynamic"
+								},
+								"Script": {
+									"Properties": {
+										"Lifetime": 1.0
+									},
+									"Script": "Assets/Scripts/Projectile.lua"
+								},
+								"SphereCollider": {
+									"Friction": 0.5,
+									"Offset": [
+										0.0,
+										0.0,
+										0.0
+									],
+									"OverrideMaterial": false,
+									"Radius": 0.5,
+									"Restitution": 0.0
+								},
+								"Transform": {
+									"Rotation": [
+										0.0,
+										-0.0,
+										0.0
+									],
+									"Scale": [
+										0.30000001192092896,
+										0.30000001192092896,
+										0.30000001192092896
+									],
+									"Translation": [
+										0.0,
+										0.0,
+										0.0
+									]
+								}
+							},
+							"ID": 1,
+							"Name": "Projectile",
+							"Parent": 0
+						},
+						"2": {
+							"Components": {
+								"PointLight": {
+									"CastShadows": false,
+									"Color": [
+										1.0,
+										0.4000000059604645,
+										0.10000000149011612
+									],
+									"Intensity": 3.0,
+									"Radius": 3.0,
+									"ShadowSoftness": 1.0
+								},
+								"Transform": {
+									"Rotation": [
+										0.0,
+										-0.0,
+										0.0
+									],
+									"Scale": [
+										1.0,
+										1.0,
+										1.0
+									],
+									"Translation": [
+										0.0,
+										0.0,
+										0.0
+									]
+								}
+							},
+							"ID": 2,
+							"Name": "Trail",
+							"Parent": 1
+						}
+					},
+					"Members": {
+						"1": 204386022199232259,
+						"2": 266788986450733151
+					},
+					"Prefab": "Assets/Prefabs/Projectile.bprefab"
+				},
+				"RigidBody": {
+					"AllowSleeping": true,
+					"AngularDamping": 0.05000000074505806,
+					"Continuous": false,
+					"FixedRotation": false,
+					"Friction": 0.5,
+					"FrictionCombine": "Default",
+					"GravityFactor": 1.0,
+					"IsTrigger": false,
+					"Layer": "Default",
+					"LinearDamping": 0.05000000074505806,
+					"Mass": 0.5,
+					"Restitution": 0.0,
+					"RestitutionCombine": "Default",
+					"Type": "Dynamic"
+				},
+				"Script": {
+					"Properties": {
+						"Lifetime": 1.0
+					},
+					"Script": "Assets/Scripts/Projectile.lua"
+				},
+				"SphereCollider": {
+					"Friction": 0.5,
+					"Offset": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"OverrideMaterial": false,
+					"Radius": 0.5,
+					"Restitution": 0.0
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						2.0,
+						2.0,
+						2.0
+					],
+					"Translation": [
+						1.0,
+						2.0,
+						3.0
+					]
+				}
+			},
+			"ID": 204386022199232259,
+			"Name": "Projectile",
+			"Parent": 0
+		},
+		{
+			"Components": {
+				"PointLight": {
+					"CastShadows": false,
+					"Color": [
+						1.0,
+						0.4000000059604645,
+						0.10000000149011612
+					],
+					"Intensity": 3.0,
+					"Radius": 3.0,
+					"ShadowSoftness": 1.0
+				},
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						0.0,
+						0.0
+					]
+				}
+			},
+			"ID": 266788986450733151,
+			"Name": "Trail",
+			"Parent": 204386022199232259
+		},
+		{
+			"Components": {
+				"Transform": {
+					"Rotation": [
+						0.0,
+						-0.0,
+						0.0
+					],
+					"Scale": [
+						1.0,
+						1.0,
+						1.0
+					],
+					"Translation": [
+						0.0,
+						0.0,
+						0.0
+					]
+				}
+			},
+			"ID": 10694348247612899575,
+			"Name": "Local",
+			"Parent": 204386022199232259
+		}
+	],
+	"Format": "BasaltScene",
+	"Name": "Untitled",
+	"Physics": {
+		"Gravity": [
+			0.0,
+			-9.8100004196167,
+			0.0
+		],
+		"MaxStepsPerFrame": 8
+	},
+	"Renderer": {
+		"AmbientColor": [
+			0.029999999329447746,
+			0.029999999329447746,
+			0.03500000014901161
+		],
+		"CascadeSplitLambda": 0.8500000238418579,
+		"Exposure": 1.0,
+		"FSR1Enabled": false,
+		"FSR1Sharpness": 0.20000000298023224,
+		"SSAOBias": 0.02500000037252903,
+		"SSAOEnabled": true,
+		"SSAOIntensity": 1.0,
+		"SSAORadius": 0.5,
+		"ShadowBias": 0.001500000013038516,
+		"ShadowDistance": 60.0,
+		"ShadowNormalBias": 0.019999999552965164,
+		"ShadowsEnabled": true,
+		"Tonemapper": "ACES"
+	},
+	"Version": 3
+}

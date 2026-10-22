@@ -1232,15 +1232,18 @@ namespace Basalt {
 		bool operator==(const UIFocusRingComponent&) const = default;
 	};
 
-	// Marks the root entity of a prefab instance and remembers the prefab it came from.
+	// Marks a prefab instance root: the prefab it came from, which entities belong to the instance, and the source as
+	// last merged, so later prefab edits merge without losing the instance's own edits (Scene/Prefab). Overrides are
+	// derived from these (Prefab::ComputeOverrides, prefab.overrides), never stored.
 	struct PrefabComponent
 	{
 		std::string Prefab;
-		// Source entity ID -> instance UUID. Baseline is keyed by source ID, with source-space references.
+		// Source entity ID (decimal key) -> instance UUID, keeping the IDs of entities the instance deleted so Revert
+		// recreates them with the same IDs. Empty for instances saved before tracking existed (adopted on merge).
 		nlohmann::json Members = nlohmann::json::object();
+		// The source's entity records as last merged: keyed by source ID, with source-space entity references and asset
+		// paths (UUID/path objects on disk). Empty for instances created during Play.
 		nlohmann::json Baseline = nlohmann::json::object();
-		// JSON-pointer paths to changed values, including removed components and entities.
-		nlohmann::json Overrides = nlohmann::json::object();
 	};
 
 	template<typename... Component>

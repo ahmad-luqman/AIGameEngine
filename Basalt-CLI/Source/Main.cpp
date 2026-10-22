@@ -62,6 +62,12 @@ namespace {
 	// Saves the scene opened with --scene after changes, so one-shot invocations persist their work.
 	bool AutoSave(const CommandRegistry& registry, AutomationSession& session, bool enabled)
 	{
+		// The scene to save waits behind the open prefab, and saving it would need prefab.close first.
+		if (enabled && session.IsEditingPrefab() && (session.IsDirty() || session.IsWaitingSceneDirty()))
+		{
+			std::cerr << "basalt: '" << session.GetPrefabPath() << "' is still open, so its unsaved edits and the scene's were not saved (prefab.save and prefab.close it first)\n";
+			return false;
+		}
 		if (!enabled || !session.IsDirty() || session.GetScenePath().empty())
 			return true;
 		const nlohmann::json response = registry.HandleRequest(session, { { "command", "scene.save" } });

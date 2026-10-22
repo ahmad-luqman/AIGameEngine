@@ -102,8 +102,10 @@ reported as removed then), and when `Assets/` could not be read until now its `w
 not seen. `asset.refresh {"paths": [...]}` reloads the files named, changed or not; a path that does not exist and was
 not known, or a folder, rejects the whole request (nothing is reloaded or recorded). Files the session writes itself
 (`asset.write`, `scene.save`, `prefab.create`, `prefab.save`, `prefab.apply`, `replay.record_stop`) are never reported as
-changes. A changed `.bprefab` merges into the open scene's instances: results report `prefabInstances`, and instances
-that could not merge are `warnings`. In the editor,
+changes. A changed `.bprefab` merges into the instances of the edit scene and of a scene waiting for prefab editing
+(during Play too, never into the play copy): `asset.write`/`asset.refresh` results report `prefabInstances`,
+`prefab.create/save/apply` report `instances`, and instances that could not merge are `warnings`. `scene.open` merges the
+instances of prefabs saved since the scene was. In the editor,
 View > Reload Changed Files Automatically (`autoReload`) reloads files once two scans 500 ms apart see them unchanged,
 so a plain file write is enough; such a file is then usually reloaded before your next command and not reported by
 `asset.refresh` (pass `paths` to force it). A replay recorded across a hot reload gets a warning from
