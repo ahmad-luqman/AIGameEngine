@@ -200,6 +200,8 @@ namespace Basalt {
 				auto data = values.back();
 				for (const auto& field : info.Fields)
 				{
+					if (info.Name == "Prefab" && field != "Prefab")
+						continue;
 					if (!data.contains(field))
 						continue;
 					const bool mixed = std::any_of(values.begin(), values.end(), [&](const auto& value) { return value[field] != data[field]; });
@@ -289,6 +291,8 @@ namespace Basalt {
 					DrawComponentPreview(entity, info.Name);
 				for (const std::string& field : info.Fields)
 				{
+					if (info.Name == "Prefab" && field != "Prefab")
+						continue;
 					if (!data.contains(field))
 						continue;
 					if (info.Name == "Script" && field == "Properties")

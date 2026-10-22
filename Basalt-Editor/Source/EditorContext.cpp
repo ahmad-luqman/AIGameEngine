@@ -229,6 +229,18 @@ namespace Basalt {
 		}
 	}
 
+	void EditorContext::RecordExternalEdit(const std::string& name)
+	{
+		if (Session.IsExecutingCommand() || Session.GetEditRevision() == m_CommandRevision)
+			return;
+		// An unfinished GUI edit is captured together with the merge: the scene holds both by now.
+		FinishFieldEdit();
+		if (m_PendingName.empty())
+			m_PendingName = name;
+		CommitHistory();
+		m_CommandRevision = Session.GetEditRevision();
+	}
+
 	std::string EditorContext::JoinWarnings(const nlohmann::json& result)
 	{
 		std::string joined;

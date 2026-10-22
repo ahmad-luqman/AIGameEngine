@@ -101,7 +101,9 @@ type: Added|Modified|Removed}], reloaded, scripts}`. Without `paths` it fails wh
 reported as removed then), and when `Assets/` could not be read until now its `warnings` say that earlier changes were
 not seen. `asset.refresh {"paths": [...]}` reloads the files named, changed or not; a path that does not exist and was
 not known, or a folder, rejects the whole request (nothing is reloaded or recorded). Files the session writes itself
-(`asset.write`, `scene.save`, `prefab.create`, `replay.record_stop`) are never reported as changes. In the editor,
+(`asset.write`, `scene.save`, `prefab.create`, `prefab.save`, `prefab.apply`, `replay.record_stop`) are never reported as
+changes. A changed `.bprefab` merges into the open scene's instances: results report `prefabInstances`, and instances
+that could not merge are `warnings`. In the editor,
 View > Reload Changed Files Automatically (`autoReload`) reloads files once two scans 500 ms apart see them unchanged,
 so a plain file write is enough; such a file is then usually reloaded before your next command and not reported by
 `asset.refresh` (pass `paths` to force it). A replay recorded across a hot reload gets a warning from

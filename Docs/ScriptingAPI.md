@@ -214,6 +214,10 @@ Vectors in component tables are arrays (`{1, 2, 3}`); rotations are Euler degree
 it was loaded from or last saved to: project-relative inside the project, otherwise absolute; nil for a
 scene never loaded from or saved to a file).
 
+An instance's root carries the `Prefab` component. `Prefab.Members` maps the prefab's entity IDs to the instance's
+entities. `Baseline` and `Overrides` belong to edit-time prefab editing (the `prefab.*` automation commands and the
+editor), so instances created during Play have an empty `Baseline`; prefab edits never reach a running game.
+
 ### Switching scenes
 
 `Scene.Load(path)` replaces the playing scene with the scene file `path` (a project-relative `.bscene`

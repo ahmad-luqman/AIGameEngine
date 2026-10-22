@@ -1,6 +1,7 @@
 #include "EditorLayer.h"
 
 #include "EditorColors.h"
+#include "FileDialogs.h"
 #include "UIRectHandles.h"
 #include "Panels/JsonWidgets.h"
 #include "Panels/PreviewImage.h"
@@ -55,6 +56,15 @@
 namespace Basalt {
 
 	namespace {
+		// A file name from an entity name, for suggested save paths.
+		std::string SafeFileName(Entity entity)
+		{
+			std::string name = entity ? entity.GetName() : std::string();
+			for (char& c : name)
+				if (!std::isalnum(static_cast<unsigned char>(c)) && c != '-' && c != '_')
+					c = '_';
+			return name.empty() ? "Prefab" : name;
+		}
 
 		const char* SelectionModeFromModifiers()
 		{
@@ -336,7 +346,11 @@ namespace Basalt {
 				m_Thumbnails->OnFilesChanged(report.Changed);
 			m_MaterialEditorPanel.OnFilesChanged(report.Changed);
 			m_AnimationGraphPanel.OnFilesChanged(report.Changed);
-			if (!report.Scripts.Failed.empty())
+			if (report.PrefabInstances > 0)
+				m_Context.RecordExternalEdit("Merge Prefab Changes");
+			if (!report.PrefabErrors.empty())
+				m_Context.SetStatus(fmt::format("{} prefab instance(s) could not merge the changed prefab: see Console", report.PrefabErrors.size()), true);
+			else if (!report.Scripts.Failed.empty())
 				m_Context.SetStatus("Hot reload of " + report.Scripts.Failed.front().Path + " failed: see Console", true);
 			else if (!report.Scripts.InstanceErrors.empty())
 				m_Context.SetStatus("Hot reloaded, but a script raised an error: see Console", true);
@@ -370,6 +384,8 @@ namespace Basalt {
 		m_InspectorPanel.DrawComponentPreview = [this](Entity entity, const std::string& component) {
 			if (component == "Material")
 				DrawMaterialPreview(entity);
+			if (component == "Prefab")
+				DrawPrefabInstance(entity);
 		};
 
 		if (!m_Options.ProjectPath.empty())
@@ -1066,6 +1082,11 @@ namespace Basalt {
 
 	void EditorLayer::SaveScene()
 	{
+		if (!m_Session.GetPrefabPath().empty())
+		{
+			m_Context.Execute("prefab.save");
+			return;
+		}
 		if (m_Session.GetScenePath().empty())
 		{
 			m_Prompt = PromptKind::SaveSceneAs;
@@ -1097,6 +1118,11 @@ namespace Basalt {
 
 	void EditorLayer::OpenAsset(const std::string& path)
 	{
+		if (FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(path)) == ".bprefab")
+		{
+			m_Context.Execute("prefab.open", { { "path", path } });
+			return;
+		}
 		const std::string extension = std::filesystem::path(path).extension().string();
 		if (extension == ".bscene")
 		{
@@ -1638,24 +1664,41 @@ namespace Basalt {
 
 		if (ImGui::BeginMenu("File"))
 		{
+			// While a prefab is open, the waiting scene stays as it was: scene and project items wait for Close.
+			const bool editingPrefab = m_Session.IsEditingPrefab();
+			if (editingPrefab)
+			{
+				ImGui::TextDisabled("Editing prefab %s", m_Session.GetPrefabPath().c_str());
+				if (ImGui::MenuItem("Save Prefab", "Ctrl+S", false, !m_Session.IsPlaying()))
+					SaveScene();
+				if (ImGui::MenuItem("Close Prefab", nullptr, false, !m_Session.IsDirty()))
+					m_Context.Execute("prefab.close");
+				if (ImGui::MenuItem("Discard Prefab Edits and Close", nullptr, false, m_Session.IsDirty()))
+					m_Context.Execute("prefab.close", { { "discard", true } });
+				ImGui::Separator();
+			}
+			ImGui::BeginDisabled(editingPrefab);
 			if (ImGui::MenuItem("New Scene"))
 			{
 				Stop();
 				m_Context.Execute("scene.new", { { "name", "Untitled" } });
 			}
 			if (ImGui::MenuItem("Open Scene..."))
-			{
-				m_Prompt = PromptKind::OpenScene;
-				m_PromptPath = "Assets/Scenes/";
-			}
+				OpenPrompt(PromptKind::OpenScene, "Assets/Scenes/");
 			if (ImGui::MenuItem("Save Scene", "Ctrl+S"))
 				SaveScene();
 			if (ImGui::MenuItem("Save Scene As..."))
-			{
-				m_Prompt = PromptKind::SaveSceneAs;
-				m_PromptPath = m_Session.GetScenePath().empty() ? "Assets/Scenes/Untitled.bscene" : m_Session.GetScenePath();
-			}
+				OpenPrompt(PromptKind::SaveSceneAs, m_Session.GetScenePath().empty() ? "Assets/Scenes/Untitled.bscene" : m_Session.GetScenePath());
 			ImGui::Separator();
+			if (ImGui::MenuItem("Open Prefab...", nullptr, false, static_cast<bool>(Project::GetActive()) && !m_Session.IsPlaying()))
+				OpenPrompt(PromptKind::OpenPrefab, "Assets/Prefabs/");
+			ImGui::EndDisabled();
+			if (ImGui::MenuItem("Create Prefab from Selection...", nullptr, false, static_cast<bool>(Project::GetActive()) && m_Session.GetSelection().IsValid() && !m_Session.IsPlaying()))
+				OpenPrompt(PromptKind::SavePrefabAs, "Assets/Prefabs/" + SafeFileName(m_Session.GetScene()->GetEntityByUUID(m_Session.GetSelection())) + ".bprefab");
+			if (ImGui::MenuItem("Import Model...", nullptr, false, static_cast<bool>(Project::GetActive())))
+				OpenPrompt(PromptKind::ImportModel, "Assets/Models/");
+			ImGui::Separator();
+			ImGui::BeginDisabled(editingPrefab);
 			if (ImGui::MenuItem("New Project..."))
 				m_Prompt = PromptKind::NewProject;
 			if (ImGui::MenuItem("Open Project..."))
@@ -1669,6 +1712,7 @@ namespace Basalt {
 				m_Context.Execute("project.set", { { "startScene", m_Session.GetScenePath() } });
 			if (ImGui::MenuItem("Export Game...", nullptr, false, static_cast<bool>(Project::GetActive())))
 				m_Prompt = PromptKind::Export;
+			ImGui::EndDisabled();
 			ImGui::Separator();
 			if (ImGui::MenuItem("Exit"))
 				Application::Get().Close();
@@ -1789,11 +1833,14 @@ namespace Basalt {
 		ImGui::SetCursorPosX(std::max(0.0f, (ImGui::GetContentRegionAvail().x - total) * 0.5f));
 		if (!playing)
 		{
+			// A prefab plays in the scenes that instantiate it.
+			ImGui::BeginDisabled(m_Session.IsEditingPrefab());
 			if (ImGui::Button("Play", ImVec2(buttonWidth, 0.0f)))
 				Play(false);
 			ImGui::SameLine();
 			if (ImGui::Button("Simulate", ImVec2(buttonWidth, 0.0f)))
 				Play(true);
+			ImGui::EndDisabled();
 		}
 		else
 		{
@@ -2295,6 +2342,148 @@ namespace Basalt {
 		}
 	}
 
+	void EditorLayer::BrowseForPromptPath()
+	{
+		FileDialogs::Kind kind = FileDialogs::Kind::Open;
+		std::vector<FileDialogs::Filter> filters;
+		switch (m_Prompt)
+		{
+			case PromptKind::OpenScene:
+				filters = { { "Scenes", "bscene" } };
+				break;
+			case PromptKind::SaveSceneAs:
+				kind = FileDialogs::Kind::Save;
+				filters = { { "Scenes", "bscene" } };
+				break;
+			case PromptKind::OpenPrefab:
+				filters = { { "Prefabs", "bprefab" } };
+				break;
+			case PromptKind::SavePrefabAs:
+				kind = FileDialogs::Kind::Save;
+				filters = { { "Prefabs", "bprefab" } };
+				break;
+			case PromptKind::ImportModel:
+				filters = { { "glTF models", "gltf,glb" } };
+				break;
+			case PromptKind::OpenProject:
+				filters = { { "Basalt projects", "bproject" } };
+				break;
+			case PromptKind::NewProject:
+			case PromptKind::Export:
+				kind = FileDialogs::Kind::Folder;
+				break;
+			case PromptKind::None:
+				return;
+		}
+		// Project-relative prompts start in (and return paths relative to) the project directory.
+		const bool projectRelative = kind != FileDialogs::Kind::Folder && m_Prompt != PromptKind::OpenProject && Project::GetActive();
+		const std::filesystem::path base = projectRelative ? Project::GetActive()->GetDirectory() : std::filesystem::path();
+		std::filesystem::path path = FileSystem::PathFromUtf8(m_PromptPath);
+		if (!base.empty() && path.is_relative())
+			path = base / path;
+		std::string error;
+		const auto chosen = FileDialogs::Browse(kind, path, filters, error);
+		// The dialog took the mouse release ImGui still waits for.
+		ImGui::GetIO().ClearInputMouse();
+		if (!chosen)
+		{
+			if (!error.empty())
+				m_Context.SetStatus(error + "; enter the path instead", true);
+			return;
+		}
+		std::error_code relativeError;
+		const auto relative = base.empty() ? std::filesystem::path() : std::filesystem::relative(*chosen, base, relativeError);
+		const bool inside = !relative.empty() && !relativeError && *relative.begin() != "..";
+		m_PromptPath = FileSystem::PathToGenericUtf8(inside ? relative : *chosen);
+	}
+
+	void EditorLayer::OpenPrompt(PromptKind kind, std::string path)
+	{
+		m_Prompt = kind;
+		m_PromptPath = std::move(path);
+	}
+
+	void EditorLayer::DrawPrefabInstance(Entity entity)
+	{
+		const auto id = static_cast<uint64_t>(entity.GetUUID());
+		const std::string path = entity.GetComponent<PrefabComponent>().Prefab;
+		ImGui::BeginDisabled(m_Session.IsPlaying());
+		ImGui::BeginDisabled(m_Session.IsEditingPrefab());
+		if (ImGui::Button("Open Prefab"))
+			m_Context.Execute("prefab.open", { { "path", path } });
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+			ImGui::SetTooltip("Edit the prefab in its own scene; saving it updates every instance and keeps their overrides");
+		ImGui::SameLine();
+		if (ImGui::Button("Apply All"))
+			m_Context.Execute("prefab.apply", { { "entity", id } });
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+			ImGui::SetTooltip("Write this instance's overrides into the prefab (its position, rotation and added entities stay local)");
+		ImGui::EndDisabled();
+		// Two rows, so the actions fit the default inspector width.
+		if (ImGui::Button("Revert All"))
+			m_Context.Execute("prefab.revert", { { "entity", id } });
+		ImGui::SameLine();
+		if (ImGui::Button("Refresh"))
+			m_Context.Execute("prefab.refresh", { { "entity", id } });
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+			ImGui::SetTooltip("Merge the prefab file into this instance now (saves and applies do this automatically)");
+		ImGui::SameLine();
+		if (ImGui::Button("Unpack"))
+			m_Context.Execute("prefab.unpack", { { "entity", id } });
+		ImGui::EndDisabled();
+		// A button may have unlinked or replaced the instance.
+		if (!entity.IsValid() || !entity.HasComponent<PrefabComponent>())
+			return;
+		// The inspector serialized the component this frame, which recaptured its overrides.
+		const auto& link = entity.GetComponent<PrefabComponent>();
+		if (link.Members.empty())
+		{
+			ImGui::TextDisabled("Overrides are not tracked yet (saved before tracking existed); Refresh starts tracking.");
+			return;
+		}
+		if (link.Overrides.empty())
+		{
+			ImGui::TextDisabled("No overrides");
+			return;
+		}
+		ImGui::TextDisabled("Overrides:");
+		std::string reverted;
+		for (const auto& [field, value] : link.Overrides.items())
+		{
+			// "/<source ID>/Components/<component>/<field>": shown as "<entity>  component.field".
+			std::vector<std::string> tokens;
+			for (size_t start = 1; start <= field.size();)
+			{
+				const size_t end = std::min(field.find('/', start), field.size());
+				std::string token = field.substr(start, end - start);
+				for (size_t at = token.find('~'); at != std::string::npos && at + 1 < token.size(); at = token.find('~', at + 1))
+					token.replace(at, 2, token[at + 1] == '1' ? "/" : "~");
+				tokens.push_back(std::move(token));
+				start = end + 1;
+			}
+			const auto record = tokens.empty() ? link.Baseline.end() : link.Baseline.find(tokens.front());
+			std::string label = record != link.Baseline.end() ? record->value("Name", tokens.front()) : tokens.front();
+			for (size_t i = 1; i < tokens.size(); ++i)
+				if (!(i == 1 && tokens[i] == "Components"))
+					label += (i <= 2 ? "  " : ".") + tokens[i];
+			if (value.is_null())
+				label += tokens.size() <= 1 ? "  (deleted)" : "  (removed)";
+			ImGui::PushID(field.c_str());
+			ImGui::BeginDisabled(m_Session.IsPlaying());
+			if (ImGui::SmallButton("Revert"))
+				reverted = field;
+			ImGui::EndDisabled();
+			ImGui::SameLine();
+			ImGui::TextUnformatted(label.c_str());
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("%s", field.c_str());
+			ImGui::PopID();
+		}
+		// After the loop, which iterates the overrides the revert replaces.
+		if (!reverted.empty())
+			m_Context.Execute("prefab.revert", { { "entity", id }, { "field", reverted } });
+	}
+
 	void EditorLayer::DrawMaterialPreview(Entity entity)
 	{
 		static constexpr float Size = 96.0f;
@@ -2644,7 +2833,7 @@ namespace Basalt {
 
 	void EditorLayer::DrawModals()
 	{
-		static const char* s_Titles[] = { "", "Open Scene", "Save Scene As", "Open Project", "New Project", "Export Game" };
+		static const char* s_Titles[] = { "", "Open Scene", "Save Scene As", "Open Prefab", "Create Prefab", "Import Model", "Open Project", "New Project", "Export Game" };
 		if (m_Prompt == PromptKind::None)
 			return;
 		const char* title = s_Titles[static_cast<int>(m_Prompt)];
@@ -2662,6 +2851,13 @@ namespace Basalt {
 				case PromptKind::OpenScene:
 				case PromptKind::SaveSceneAs:
 					ImGui::TextUnformatted("Project-relative scene path:");
+					break;
+				case PromptKind::OpenPrefab:
+				case PromptKind::SavePrefabAs:
+					ImGui::TextUnformatted("Project-relative prefab path (.bprefab under Assets/):");
+					break;
+				case PromptKind::ImportModel:
+					ImGui::TextUnformatted("Project-relative model path (.gltf or .glb under Assets/):");
 					break;
 				case PromptKind::OpenProject:
 					ImGui::TextUnformatted("Project directory (or .bproject file):");
@@ -2681,6 +2877,10 @@ namespace Basalt {
 				DrawRecentProjectsList();
 				ImGui::Separator();
 			}
+			// The native picker fills the path field; without one (headless builds, Linux without a portal) the
+			// field is the prompt.
+			if (FileDialogs::IsAvailable() && ImGui::Button("Browse..."))
+				BrowseForPromptPath();
 			ImGui::SetNextItemWidth(520.0f);
 			ImGui::InputText("##Path", &m_PromptPath);
 			if (m_Prompt == PromptKind::NewProject)
@@ -2709,6 +2909,15 @@ namespace Basalt {
 					case PromptKind::OpenScene:
 						Stop();
 						ok = m_Context.Execute("scene.open", { { "path", m_PromptPath } }).has_value();
+						break;
+					case PromptKind::OpenPrefab:
+						ok = m_Context.Execute("prefab.open", { { "path", m_PromptPath } }).has_value();
+						break;
+					case PromptKind::SavePrefabAs:
+						ok = m_Context.Execute("prefab.create", { { "entity", static_cast<uint64_t>(m_Session.GetSelection()) }, { "path", m_PromptPath } }).has_value();
+						break;
+					case PromptKind::ImportModel:
+						ok = m_Context.Execute("asset.import_model", { { "path", m_PromptPath } }).has_value();
 						break;
 					case PromptKind::SaveSceneAs:
 						ok = m_Context.Execute("scene.save", { { "path", m_PromptPath } }).has_value();
@@ -2776,9 +2985,19 @@ namespace Basalt {
 		std::string title = "Basalt Editor";
 		if (project)
 			title += " - " + project->GetConfig().Name;
-		title += " - " + (m_Session.GetScenePath().empty() ? std::string("Untitled") : m_Session.GetScenePath());
-		if (m_Session.IsDirty())
-			title += " *";
+		if (m_Session.IsEditingPrefab())
+		{
+			title += " - Prefab " + m_Session.GetPrefabPath() + (m_Session.IsDirty() ? " *" : "");
+			// The waiting scene keeps its unsaved edits until the prefab closes; say so.
+			if (m_Session.IsWaitingSceneDirty())
+				title += " (scene has unsaved changes)";
+		}
+		else
+		{
+			title += " - " + (m_Session.GetScenePath().empty() ? std::string("Untitled") : m_Session.GetScenePath());
+			if (m_Session.IsDirty())
+				title += " *";
+		}
 		if (title != m_WindowTitle)
 		{
 			m_WindowTitle = title;

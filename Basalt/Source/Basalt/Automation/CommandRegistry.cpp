@@ -44,6 +44,11 @@ namespace Basalt {
 		const CommandInfo* info = Find(command);
 		if (!info)
 			throw CommandError("unknown command '" + command + "' (run 'help' to list commands)");
+		// While a prefab is open, the scene waiting for it must stay as it was: boundaries would replace or save the
+		// wrong scene, and moves would migrate references in the prefab only.
+		const bool prefabCommand = command == "prefab.save" || command == "prefab.close";
+		if (session.IsEditingPrefab() && ((info->Policy == CommandPolicy::EditBoundary && !prefabCommand) || command == "asset.move" || command == "asset.rename"))
+			throw CommandError(command + " is unavailable while '" + session.GetPrefabPath() + "' is open: prefab.save or prefab.close first");
 		if (!params.is_object())
 			throw CommandError("'params' must be a JSON object");
 		// Keep the legacy diagnostic listing available parameters before the general schema validator.

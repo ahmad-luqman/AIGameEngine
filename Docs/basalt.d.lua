@@ -1893,6 +1893,9 @@ function BasaltScript:StopAllCoroutines() end
 ---Prefab data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
 ---@class PrefabComponent
 ---@field Prefab string
+---@field Members table
+---@field Baseline table
+---@field Overrides table
 
 ---An element of a component list field.
 ---@class AnimationEvent

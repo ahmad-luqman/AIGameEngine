@@ -6,3 +6,8 @@ add_executable(BasaltEditor ${EDITOR_SOURCES})
 basalt_set_warnings(BasaltEditor)
 target_include_directories(BasaltEditor PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source")
 target_link_libraries(BasaltEditor PRIVATE Basalt)
+
+if(TARGET nfd)
+	target_link_libraries(BasaltEditor PRIVATE nfd)
+	target_compile_definitions(BasaltEditor PRIVATE BS_NATIVE_DIALOGS)
+endif()

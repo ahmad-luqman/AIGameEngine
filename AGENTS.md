@@ -20,7 +20,7 @@ changing code. Task-specific procedures live in `.claude/skills/*/SKILL.md`.
 
 Engine modules (`Basalt/Source/Basalt/<Module>/`): `Core` (application, window, input incl. gamepads, log, file
 system and file watching, command line), `Events`, `Math`, `Renderer` (device, scene renderer, IBL, debug lines), `ImGui`, `Scene`
-(EnTT scene, components, component registry, serialization), `Asset` (glTF, images, primitives, material
+(EnTT scene, components, component registry, serialization, prefab instances and overrides), `Asset` (glTF, images, primitives, material
 files, asset cache), `Physics` (Jolt), `Audio` (miniaudio: buses, per-source low-pass and Doppler, reverb sends into per-bus reverbs), `Particles` (CPU particle simulation), `Animation` (glTF TRS sampling, blends, crossfades, 1D/2D blend spaces with phase sync and velocity matching, animation events, bone transforms and attachments, data-driven state machines and per-state root motion, layers with joint masks and additive clips, two-bone/look-at IK and foot placement, spring bones, morph targets, retargeted clip libraries, per-entity playback), `UI` (game UI: UI
 component layout, widgets and their mouse/keyboard/gamepad interaction, immediate-mode `UI.*`, TrueType fonts;
 drawn through ImGui after the scene), `Scripting` (Lua 5.4 + sol2; timers, coroutines, events), `Project`
@@ -100,6 +100,18 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   Protected script callbacks restore their caller's clip stack on return, error or coroutine yield. Text cursors, dropdown popup/highlight and keyboard focus-ring
   visibility belong to `UIInteraction`, while authored text, dropdown `Selected` indices and scroll offsets
   stay in components.
+- **Prefab instances.** `PrefabComponent` on an instance root names its `.bprefab` and tracks `Members` (source
+  entity ID → instance UUID, keeping IDs of entities the instance deleted), `Baseline` (the source records as last
+  merged, with source-space references; asset fields are UUID/path objects on disk) and `Overrides` (JSON-pointer paths,
+  recaptured whenever the component serializes). `Scene/Prefab` merges three ways field by field (objects by key, other
+  values whole); the root's Translation/Rotation are placement, never overrides. A merge touches only its own instance and
+  validates data and hierarchy before mutating. Writing a prefab (`prefab.create/apply/save`, `asset.write`) and file
+  watcher changes merge it into the instances of the edit scene and of the scene waiting for prefab editing; Play never
+  merges, and instances created during Play keep no baseline. Copies get fresh IDs for members they did not copy.
+  Instances saved before tracking are adopted (children matched by name) on their first merge. `prefab.open` swaps in an
+  isolated scene while the waiting scene keeps its path, dirty state and selection; boundary commands (except
+  `prefab.save/close`), asset moves and Play are rejected until `prefab.close`. The editor's path prompts add native
+  pickers (nativefiledialog-extended, editor only; Linux needs D-Bus headers for the portal, else typed paths only).
 - **Play mode runs a copy.** `Scene::Copy` duplicates the edit scene (same UUIDs) for play/simulate;
   stopping discards it. In the editor the game runs in the Game tab (primary camera at the project's window
   size, letterboxed; the game UI takes the pointer while the Game image is hovered and navigation while the Game

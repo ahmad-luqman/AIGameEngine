@@ -43,6 +43,9 @@ namespace Basalt {
 		std::optional<nlohmann::json> Execute(const std::string& command, const nlohmann::json& params = nlohmann::json::object());
 		// Captures a pending authored GUI edit once, outside transactions; otherwise a no-op.
 		void CommitHistory();
+		// Records a scene edit made outside any command (a prefab merge after a file change) as its own undo step,
+		// so undoing the next command does not also undo it.
+		void RecordExternalEdit(const std::string& name);
 		void SetStatus(const std::string& message, bool isError);
 		// A command result's "warnings" joined with "; " (empty when it has none), for the status bar and panels.
 		static std::string JoinWarnings(const nlohmann::json& result);

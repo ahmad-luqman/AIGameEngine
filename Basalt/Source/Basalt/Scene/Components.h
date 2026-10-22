@@ -1236,6 +1236,11 @@ namespace Basalt {
 	struct PrefabComponent
 	{
 		std::string Prefab;
+		// Source entity ID -> instance UUID. Baseline is keyed by source ID, with source-space references.
+		nlohmann::json Members = nlohmann::json::object();
+		nlohmann::json Baseline = nlohmann::json::object();
+		// JSON-pointer paths to changed values, including removed components and entities.
+		nlohmann::json Overrides = nlohmann::json::object();
 	};
 
 	template<typename... Component>

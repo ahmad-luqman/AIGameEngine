@@ -13,6 +13,7 @@
 #include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/LocalShadows.h"
 #include "Basalt/Scene/Entity.h"
+#include "Basalt/Scene/Prefab.h"
 #include "Basalt/UI/UIRules.h"
 
 #include <glm/gtc/type_ptr.hpp>
@@ -1172,6 +1173,10 @@ namespace Basalt {
 		void Fields(FieldReader& r, PrefabComponent& c)
 		{
 			r.AssetField("Prefab", c.Prefab);
+			r.Field("Members", c.Members);
+			r.Field("Baseline", c.Baseline);
+			r.Field("Overrides", c.Overrides);
+			Prefab::ResolveBaselineAssets(c);
 		}
 
 		// --- Writers -----------------------------------------------------------------------------
@@ -1709,7 +1714,7 @@ namespace Basalt {
 
 		json Write(const PrefabComponent& c)
 		{
-			return { { "Prefab", c.Prefab } };
+			return { { "Prefab", c.Prefab }, { "Members", c.Members }, { "Baseline", c.Baseline }, { "Overrides", c.Overrides } };
 		}
 
 		// --- Camera adapter: SceneCamera keeps its state behind setters ---------------------------
@@ -2075,6 +2080,24 @@ namespace Basalt {
 			return ValidateRagdoll(c);
 		}
 
+		std::string Validate(const PrefabComponent& c)
+		{
+			std::set<uint64_t> instances;
+			for (const auto& [source, instance] : c.Members.items())
+			{
+				if (source.empty() || source.front() == '0' || source.size() > 20 || !std::ranges::all_of(source, [](char ch) { return ch >= '0' && ch <= '9'; }) || (source.size() == 20 && source > "18446744073709551615"))
+					return "Members keys must be nonzero source UUIDs";
+				if (!instance.is_number_unsigned() || instance.get<uint64_t>() == 0 || !instances.insert(instance.get<uint64_t>()).second)
+					return "Members values must be unique nonzero instance UUIDs";
+			}
+			for (const auto& [key, record] : c.Baseline.items())
+			{
+				if (!c.Members.contains(key) || !record.is_object() || !record.contains("ID") || !record["ID"].is_number_unsigned() || std::to_string(record["ID"].get<uint64_t>()) != key || !record.contains("Name") || !record["Name"].is_string() || !record.contains("Parent") || !record["Parent"].is_number_unsigned() || !record.contains("Components") || !record["Components"].is_object() || record["Components"].contains("Prefab"))
+					return "Baseline must contain source entity records matching Members";
+			}
+			return {};
+		}
+
 		template<typename T>
 		ComponentInfo MakeInfo(const char* name, bool isCore = false, bool supportsPropertyAnimation = true)
 		{
@@ -2228,6 +2251,33 @@ namespace Basalt {
 			infos.push_back(MakeInfo<UINavigationComponent>("UINavigation"));
 			infos.push_back(MakeInfo<UIFocusRingComponent>("UIFocusRing"));
 			infos.push_back(MakeInfo<PrefabComponent>("Prefab"));
+			// Overrides are derived from the instance: refresh them whenever the component is written, so files, Lua,
+			// the inspector and agents never read stale ones.
+			infos.back().Serialize = [](Entity entity) {
+				Prefab::CaptureOverrides(entity);
+				return Write(entity.GetComponent<PrefabComponent>());
+			};
+			// A copied instance (duplicate, paste, nested tree) tracks its own entities. Members that were not copied
+			// (deleted by the instance, or moved out of its tree) get fresh IDs, so the copy never claims the
+			// original's entities: to the copy they are deleted, and Revert recreates its own.
+			infos.back().RemapEntityReferences = [](Entity entity, const std::unordered_map<UUID, UUID>& ids) {
+				if (!entity.HasComponent<PrefabComponent>())
+					return;
+				for (auto& value : entity.GetComponent<PrefabComponent>().Members)
+				{
+					if (!value.is_number_unsigned())
+						continue;
+					if (auto it = ids.find(UUID(value.get<uint64_t>())); it != ids.end())
+						value = static_cast<uint64_t>(it->second);
+					else
+					{
+						UUID fresh;
+						while (!fresh.IsValid() || entity.GetScene()->GetEntityByUUID(fresh))
+							fresh = UUID();
+						value = static_cast<uint64_t>(fresh);
+					}
+				}
+			};
 			return infos;
 		}
 
