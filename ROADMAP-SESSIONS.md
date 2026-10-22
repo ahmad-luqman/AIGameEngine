@@ -3,7 +3,7 @@
 The `ROADMAP.md` items grouped into single-session milestones, sorted in order of implementation, with completed
 sessions retained for reference. The order follows the roadmap's priorities (P1 → P2 → P3) and is adjusted so that
 work a later session depends on comes first.
-Updated in October 2026 through passive ragdolls (session 13).
+Updated in October 2026 through prefab editing (session 14).
 
 Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or more.
 
@@ -22,7 +22,7 @@ Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or mor
 | 11 | **TAA** ✅ ([PR #47](https://github.com/ahmad-luqman/AIGameEngine/pull/47)) | Temporal anti-aliasing (M) | Needs previous-frame data for instanced draws (session 4) and for skinned and morphed meshes (session 10). |
 | 12 | **Animation authoring** ✅ | Animation graph editor for `.banimgraph` (M); property animation through the `ComponentRegistry` (M) | Shipped in [PR #48](https://github.com/ahmad-luqman/AIGameEngine/pull/48): graph state/edge authoring through asset.write; numeric property timelines, key capture, scrubbing and runtime controls through ComponentRegistry. |
 | 13 | **Ragdolls** ✅ | Passive skeleton ragdolls, joint overrides, scripted activation and get-up recovery (M). Powered ragdolls remain a follow-up. | Shipped in [PR #49](https://github.com/ahmad-luqman/AIGameEngine/pull/49), with physics determinism and recovery coverage. |
-| 14 | **Prefabs** | Prefab editing and per-instance overrides (L); native file dialogs (S) | The large P2 editor item. The dialogs fit its open and save flows. |
+| 14 | **Prefabs** ✅ | Prefab editing and per-instance overrides (L); native file dialogs (S) | Shipped in [PR #50](https://github.com/ahmad-luqman/AIGameEngine/pull/50): isolated prefab editing, three-way merges that keep per-instance overrides (`prefab.overrides/apply/revert/refresh`), merges on prefab writes and scene open, and nativefiledialog-extended pickers. Nested prefabs and variants remain a follow-up. |
 | 15 | **Shipping I** | Project icon, version and company (S); platform packaging for `.app`, `.exe` and AppImage (M); tag-triggered release pipeline (S) | Packaging uses the icon and version, and the pipeline uses the packaging. |
 | 16 | **Shipping II** | Packed `.bpak` archive (M); crash reporting (M) | The archive indexes compressed textures by UUID, which needs sessions 7 and 8. |
 
