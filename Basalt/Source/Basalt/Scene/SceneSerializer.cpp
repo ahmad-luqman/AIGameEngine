@@ -633,6 +633,11 @@ namespace Basalt {
 		return created.front();
 	}
 
+	json SceneSerializer::SceneDocument(json entities)
+	{
+		return { { "Format", "BasaltScene" }, { "Version", FormatVersion }, { "Entities", std::move(entities) } };
+	}
+
 	bool SceneSerializer::SavePrefab(Entity root, const std::filesystem::path& path, std::string& outError)
 	{
 		return SavePrefabEntities(SerializeEntityTree(root), path, outError);

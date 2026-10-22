@@ -15,8 +15,9 @@ or prefab stays editable and renders missing assets with its normal fallback. Sa
 UUID and hint; a different file at the hint never substitutes for it. Validation reports unresolved
 identities. Reopen after restoring metadata to resolve the identity, or replace the field explicitly.
 Prefab instance baselines (`Prefab.Baseline`, the source as last merged) store their asset fields the same way and
-migrate with moves, so a move never reads as an instance override; a baseline reference that does not resolve fails
-the load with its record and field named.
+migrate with moves, so a move never reads as an instance override. A missing baseline identity becomes the same opaque
+`asset-uuid://` key as the component's, so it never reads as an override either; a malformed reference, or a UUID
+reference while no project is open, fails the load with its record and field named.
 Legacy string paths remain readable; missing references and paths outside Assets/ remain editable
 strings on save. All component readers accept both strings and UUID/path objects.
 Components, Lua, automation snapshots and replay hashes continue to expose paths. An unresolved

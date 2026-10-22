@@ -8,6 +8,7 @@
 #include <Basalt/Scene/ComponentRegistry.h>
 #include <Basalt/Scene/Prefab.h>
 #include <Basalt/Scene/SceneSerializer.h>
+#include <Basalt/Scripting/LuaJson.h>
 
 #include <glm/gtc/quaternion.hpp>
 
@@ -275,10 +276,19 @@ TEST_SUITE("PrefabEditing")
 		f.SaveSource();
 		CHECK(scene->GetRootEntities().size() == roots);
 		CHECK(f.Child.GetChildren().size() == 2);
+		// The instance root itself took Late.
 		CHECK(PrefabFixture::ChildNamed(instance, "Late"));
-		CHECK(PrefabFixture::ChildNamed(instance, "Pointer").GetComponent<BoneAttachmentComponent>().Target == UUID(0));
+		// A reference to the deleted Child keeps its reserved ID, so reverting the deletion restores it.
+		const uint64_t reserved = instance.GetComponent<PrefabComponent>().Members[std::to_string(f.SourceId("Child"))].get<uint64_t>();
+		Entity pointerInstance = PrefabFixture::ChildNamed(instance, "Pointer");
+		CHECK(pointerInstance.GetComponent<BoneAttachmentComponent>().Target == UUID(reserved));
+		CHECK_FALSE(f.Overrides(instance).contains(f.FieldPath("Pointer", "BoneAttachment", "Target")));
+		f.Run("prefab.revert", { { "entity", IdOf(instance) }, { "field", f.EntityPath("Child") } });
+		CHECK(pointerInstance.GetComponent<BoneAttachmentComponent>().Target == UUID(reserved));
+		CHECK(PrefabFixture::ChildNamed(instance, "Child").GetUUID() == UUID(reserved));
 
 		// An overridden member whose source parent is deleted stays under the instance root.
+		scene->DestroyEntity(PrefabFixture::ChildNamed(instance, "Child"));
 		Entity second = f.Instantiate();
 		Entity kept = PrefabFixture::ChildNamed(PrefabFixture::ChildNamed(second, "Child"), "Grandchild");
 		REQUIRE(kept);
@@ -300,14 +310,17 @@ TEST_SUITE("PrefabEditing")
 		Entity child = PrefabFixture::ChildNamed(instance, "Child");
 		child.AddComponent<BoneAttachmentComponent>().Target = f.Source.GetUUID();
 		Entity moved = f.Instantiate();
-		scene->SetParent(PrefabFixture::ChildNamed(moved, "Child"), f.Source, false);
+		Entity movedChild = PrefabFixture::ChildNamed(moved, "Child");
+		scene->SetParent(movedChild, f.Source, false);
 		const std::string childPath = "/" + std::to_string(IdOf(f.Child));
 		CHECK(f.Overrides(instance)[childPath + "/Components/BoneAttachment"]["Target"] == json{ { "External", IdOf(f.Source) } });
-		CHECK(f.Overrides(moved).contains(childPath + "/Parent"));
+		// A member moved out of its instance's tree leaves the instance: it counts as deleted, and stays where it is.
+		CHECK(f.Overrides(moved)[childPath].is_null());
 		f.WriteExternally([](json& file) { file["Entities"][0]["Components"]["PointLight"]["Radius"] = 21; });
 		CHECK(instance.GetComponent<PointLightComponent>().Radius == 21);
 		CHECK(child.GetComponent<BoneAttachmentComponent>().Target == f.Source.GetUUID());
 		CHECK(f.Child.GetParent() == f.Source);
+		CHECK(movedChild.GetParent() == f.Source);
 		CHECK(f.Source.GetChildren().size() == 2);
 	}
 
@@ -427,7 +440,8 @@ TEST_SUITE("PrefabEditing")
 				boundaries.push_back(name);
 		boundaries.emplace_back("project.export");
 		CHECK(std::find(boundaries.begin(), boundaries.end(), "asset.move") != boundaries.end());
-		CHECK(std::find(boundaries.begin(), boundaries.end(), "play.start") != boundaries.end());
+		for (const char* pinned : { "play.start", "scene.save", "scene.open", "project.open", "asset.delete" })
+			CHECK(std::find(boundaries.begin(), boundaries.end(), pinned) != boundaries.end());
 		for (const std::string& name : boundaries)
 		{
 			INFO(name);
@@ -569,18 +583,25 @@ TEST_SUITE("PrefabEditing")
 		CHECK(first.GetComponent<BoneAttachmentComponent>().Target == added.GetUUID());
 	}
 
-	TEST_CASE("Apply puts a member moved out of its tree back under its source parent")
+	TEST_CASE("Apply puts a member under an added entity back under its source parent; moving one out deletes it")
 	{
 		PrefabFixture f;
 		auto scene = f.Session.GetScene();
 		Entity first = f.Instantiate();
-		Entity outside = scene->CreateEntity("Outside");
+		Entity added = scene->CreateEntity("Added");
+		scene->SetParent(added, first, false);
 		Entity child = PrefabFixture::ChildNamed(first, "Child");
-		scene->SetParent(child, outside, false);
+		scene->SetParent(child, added, false);
 		f.Run("prefab.apply", { { "entity", IdOf(first) } });
-		const json source = f.ReadSource();
+		json source = f.ReadSource();
 		REQUIRE(source.size() == 2);
 		CHECK(source[1]["Parent"] == source[0]["ID"]);
+		CHECK(child.GetParent() == added);
+
+		Entity outside = scene->CreateEntity("Outside");
+		scene->SetParent(child, outside, false);
+		f.Run("prefab.apply", { { "entity", IdOf(first) } });
+		CHECK(f.ReadSource().size() == 1);
 		CHECK(child.GetParent() == outside);
 	}
 
@@ -596,7 +617,10 @@ TEST_SUITE("PrefabEditing")
 		f.Run("asset.move", { { "from", "Assets/Script.lua" }, { "to", "Assets/Moved.lua" } });
 		CHECK(instance.GetComponent<ScriptComponent>().Script == "Assets/Moved.lua");
 		CHECK(f.Overrides(instance).empty());
-		f.Run("scene.open", { { "path", "Assets/Main.bscene" } });
+		const json opened = f.Run("scene.open", { { "path", "Assets/Main.bscene" } });
+		// Up to date, with asset references in its baseline: reopening merges nothing and leaves the scene clean.
+		CHECK_FALSE(opened.contains("prefabInstances"));
+		CHECK_FALSE(f.Session.IsDirty());
 		Entity loaded = f.Session.GetScene()->GetEntityByUUID(UUID(id));
 		CHECK(loaded.GetComponent<ScriptComponent>().Script == "Assets/Moved.lua");
 		CHECK(f.Overrides(loaded).empty());
@@ -748,6 +772,18 @@ TEST_SUITE("PrefabEditing")
 		f.Run("scene.save");
 		CHECK_FALSE(f.Run("scene.open", { { "path", "Assets/Main.bscene" } }).contains("prefabInstances"));
 		CHECK_FALSE(f.Session.IsDirty());
+		const json current = f.Run("project.validate");
+		for (const json& issue : current["issues"])
+			CHECK_FALSE(Contains(issue["message"].get<std::string>(), "predate its last save"));
+
+		// A deleted prefab: opening reports each instance, changes nothing and validation adds no outdated warning.
+		std::filesystem::remove(Basalt::Project::ResolvePath(f.Path));
+		const json missing = f.Run("scene.open", { { "path", "Assets/Main.bscene" } });
+		CHECK(missing["warnings"].size() == 2);
+		CHECK_FALSE(f.Session.IsDirty());
+		const json afterDelete = f.Run("project.validate");
+		for (const json& issue : afterDelete["issues"])
+			CHECK_FALSE(Contains(issue["message"].get<std::string>(), "predate its last save"));
 	}
 
 	TEST_CASE("Instances created during Play track membership only; prefab writes during Play merge into the edit scene")
@@ -814,6 +850,8 @@ TEST_SUITE("PrefabEditing")
 		const json result = f.Run("prefab.create", { { "entity", IdOf(holder) }, { "path", "Assets/Prefabs/Holder.bprefab" } });
 		REQUIRE(result["warnings"].size() == 1);
 		CHECK(Contains(result["warnings"][0].get<std::string>(), "unpacked"));
+		CHECK(result["linked"] == false);
+		CHECK_FALSE(holder.HasComponent<PrefabComponent>());
 		const auto text = FileSystem::ReadTextFile(Basalt::Project::ResolvePath("Assets/Prefabs/Holder.bprefab"));
 		REQUIRE(text);
 		CHECK_FALSE(Contains(*text, "\"Prefab\""));
@@ -912,11 +950,9 @@ TEST_SUITE("PrefabEditing")
 		REQUIRE_MESSAGE(ComponentRegistry::AddOrPatch(instance, "Prefab", data, error), error);
 		CHECK(instance.GetComponent<PrefabComponent>().Members == ComponentRegistry::Find("Prefab")->Serialize(instance)["Members"]);
 		CHECK(f.Overrides(instance).empty());
-		json negative = data;
-		negative["Members"]["18446744073709551615"] = -1;
-		negative["Baseline"]["18446744073709551615"] = { { "ID", -1 }, { "Name", "Big" }, { "Parent", 0 }, { "Components", json::object() } };
+		const json bigRecord = { { "ID", -1 }, { "Name", "Big" }, { "Parent", 0 }, { "Components", json::object() } };
 		Entity big = f.Session.GetScene()->CreateEntity("Big");
-		REQUIRE_MESSAGE(ComponentRegistry::AddOrPatch(big, "Prefab", { { "Prefab", f.Path }, { "Members", { { "18446744073709551615", -1 } } }, { "Baseline", { { "18446744073709551615", negative["Baseline"]["18446744073709551615"] } } } }, error), error);
+		REQUIRE_MESSAGE(ComponentRegistry::AddOrPatch(big, "Prefab", { { "Prefab", f.Path }, { "Members", { { "18446744073709551615", -1 } } }, { "Baseline", { { "18446744073709551615", bigRecord } } } }, error), error);
 		CHECK(big.GetComponent<PrefabComponent>().Members["18446744073709551615"] == UINT64_MAX);
 
 		Entity probe = f.Session.GetScene()->CreateEntity("Probe");
@@ -941,8 +977,12 @@ TEST_SUITE("PrefabEditing")
 		CHECK(rejected({ { "5", 7 } }, { { "5", with({ { "Components", { { "Prefab", json::object() } } } }) } }));
 		CHECK(rejected({ { "5", 7 } }, { { "5", with({ { "Parent", 9 } }) } }));
 		CHECK(rejected(json::array({ 1 }), json::object()));
+		CHECK(rejected({ { "5", 7 }, { "6", 8 } }, { { "5", record }, { "6", with({ { "ID", 6 } }) } }));
 
-		// Naming another prefab without new tracking restarts the tracking.
+		// Another spelling of the same path keeps the tracking; naming another prefab without new tracking restarts it.
+		REQUIRE(ComponentRegistry::AddOrPatch(instance, "Prefab", { { "Prefab", "Assets/Prefabs/./Test.bprefab" } }, error));
+		CHECK(instance.GetComponent<PrefabComponent>().Prefab == f.Path);
+		CHECK_FALSE(instance.GetComponent<PrefabComponent>().Members.empty());
 		REQUIRE(ComponentRegistry::AddOrPatch(instance, "Prefab", { { "Prefab", "Assets/Prefabs/Other.bprefab" } }, error));
 		CHECK(instance.GetComponent<PrefabComponent>().Members.empty());
 		CHECK(instance.GetComponent<PrefabComponent>().Baseline.empty());
@@ -1010,7 +1050,7 @@ TEST_SUITE("PrefabEditing")
 		CHECK(child.GetParent() == outside);
 	}
 
-	TEST_CASE("Revert All keeps the instance's additions and parent, and puts moved members back")
+	TEST_CASE("Revert All keeps the instance's additions and parent, and moved members leave the instance")
 	{
 		PrefabFixture f;
 		auto scene = f.Session.GetScene();
@@ -1023,12 +1063,19 @@ TEST_SUITE("PrefabEditing")
 		Entity underRoot = scene->CreateEntity("UnderRoot");
 		scene->SetParent(underRoot, instance, false);
 		Entity outside = scene->CreateEntity("Outside");
-		scene->SetParent(child, outside, false);
+		Entity second = f.Instantiate();
+		Entity secondChild = PrefabFixture::ChildNamed(second, "Child");
+		scene->SetParent(secondChild, outside, false);
 		f.Run("prefab.revert", { { "entity", IdOf(instance) } });
 		CHECK(child.GetParent() == instance);
 		CHECK(underChild.GetParent() == child);
 		CHECK(underRoot.GetParent() == instance);
 		CHECK(instance.GetParent() == holder);
+		// A member moved out of the tree is not the instance's any more: Revert recreates its own, the moved one stays.
+		f.Run("prefab.revert", { { "entity", IdOf(second) } });
+		CHECK(secondChild.GetParent() == outside);
+		REQUIRE(PrefabFixture::ChildNamed(second, "Child"));
+		CHECK(PrefabFixture::ChildNamed(second, "Child") != secondChild);
 	}
 
 	TEST_CASE("Reverting single overrides restores removed components, drops added ones and recreates deleted entities")
@@ -1062,5 +1109,284 @@ TEST_SUITE("PrefabEditing")
 		CHECK(f.SaveSource()["instances"] == Count);
 		for (int i = 0; i < Count; ++i)
 			CHECK(instances[static_cast<size_t>(i)].GetComponent<PointLightComponent>().Intensity == (i == 7 ? 3 : 6));
+	}
+
+	TEST_CASE("prefab.create keeps a tree that belongs to another instance or prefab as it is")
+	{
+		PrefabFixture f;
+		auto scene = f.Session.GetScene();
+		Entity instance = f.Instantiate();
+		Entity child = PrefabFixture::ChildNamed(instance, "Child");
+		const json part = f.Run("prefab.create", { { "entity", IdOf(child) }, { "path", "Assets/Prefabs/Part.bprefab" } });
+		CHECK(part["linked"] == false);
+		REQUIRE(part["warnings"].size() == 1);
+		CHECK(Contains(part["warnings"][0].get<std::string>(), "stays part of the prefab instance"));
+		CHECK_FALSE(child.HasComponent<PrefabComponent>());
+		CHECK(f.Overrides(instance).empty());
+
+		// An instance of Test written over Other stays an instance of Test; Other keeps its IDs by name.
+		Entity other = scene->CreateEntity("Source");
+		Entity otherChild = scene->CreateEntity("Child");
+		scene->SetParent(otherChild, other, false);
+		f.Run("prefab.create", { { "entity", IdOf(other) }, { "path", "Assets/Prefabs/Other.bprefab" } });
+		Entity otherInstance = f.EntityFrom(f.Run("prefab.instantiate", { { "path", "Assets/Prefabs/Other.bprefab" } }));
+		json otherSource;
+		std::string error;
+		REQUIRE(Prefab::ReadSource(Basalt::Project::ResolvePath("Assets/Prefabs/Other.bprefab"), otherSource, error));
+		instance.GetComponent<PointLightComponent>().Radius = 23;
+		const json result = f.Run("prefab.create", { { "entity", IdOf(instance) }, { "path", "Assets/Prefabs/Other.bprefab" } });
+		CHECK(result["linked"] == false);
+		REQUIRE(result["warnings"].size() == 1);
+		CHECK(Contains(result["warnings"][0].get<std::string>(), "stays an instance of Assets/Prefabs/Test.bprefab"));
+		CHECK(instance.GetComponent<PrefabComponent>().Prefab == f.Path);
+		json rewritten;
+		REQUIRE(Prefab::ReadSource(Basalt::Project::ResolvePath("Assets/Prefabs/Other.bprefab"), rewritten, error));
+		CHECK(rewritten[0]["ID"] == otherSource[0]["ID"]);
+		CHECK(otherInstance.GetComponent<PointLightComponent>().Radius == 23);
+	}
+
+	TEST_CASE("Overwriting a prefab from an untracked instance of it keeps the file's IDs")
+	{
+		PrefabFixture f;
+		auto scene = f.Session.GetScene();
+		Entity tracked = f.Instantiate();
+		Entity legacy = scene->CreateEntity("Source");
+		legacy.AddComponent<PointLightComponent>().Radius = 27;
+		Entity child = scene->CreateEntity("Child");
+		scene->SetParent(child, legacy, false);
+		legacy.AddComponent<PrefabComponent>().Prefab = f.Path;
+		const json before = f.ReadSource();
+		const json result = f.Run("prefab.create", { { "entity", IdOf(legacy) }, { "path", f.Path } });
+		CHECK(result["warnings"].empty());
+		CHECK(result["linked"] == true);
+		const json after = f.ReadSource();
+		CHECK(after[0]["ID"] == before[0]["ID"]);
+		CHECK(after[1]["ID"] == before[1]["ID"]);
+		CHECK(tracked.GetComponent<PointLightComponent>().Radius == 27);
+	}
+
+	TEST_CASE("Hand-edited members never claim an ordinary entity outside the instance")
+	{
+		PrefabFixture f;
+		auto scene = f.Session.GetScene();
+		Entity instance = f.Instantiate();
+		Entity holder = scene->CreateEntity("Holder");
+		Entity outsider = scene->CreateEntity("Outsider");
+		outsider.AddComponent<AudioListenerComponent>();
+		scene->SetParent(outsider, holder, false);
+		instance.GetComponent<PrefabComponent>().Members[std::to_string(f.SourceId("Child"))] = IdOf(outsider);
+		f.Run("prefab.revert", { { "entity", IdOf(instance) } });
+		CHECK(outsider.GetName() == "Outsider");
+		CHECK(outsider.GetParent() == holder);
+		CHECK(outsider.HasComponent<AudioListenerComponent>());
+		CHECK(instance.GetComponent<PrefabComponent>().Members[std::to_string(f.SourceId("Child"))] != IdOf(outsider));
+	}
+
+	TEST_CASE("Entities added under removed members move to the root in tree order")
+	{
+		PrefabFixture f;
+		auto scene = f.Session.GetScene();
+		Entity second = scene->CreateEntity("Second");
+		scene->SetParent(second, f.Source, false);
+		f.SaveSource();
+		Entity instance = f.Instantiate();
+		std::vector<Entity> locals;
+		for (const std::string name : { "Child", "Second" })
+			for (int i = 0; i < 3; ++i)
+			{
+				Entity local = scene->CreateEntity(name + "Local" + std::to_string(i));
+				scene->SetParent(local, PrefabFixture::ChildNamed(instance, name), false);
+				locals.push_back(local);
+			}
+		scene->DestroyEntity(f.Child);
+		scene->DestroyEntity(second);
+		f.SaveSource();
+		const auto children = instance.GetChildren();
+		REQUIRE(children.size() == locals.size());
+		for (size_t i = 0; i < locals.size(); ++i)
+			CHECK(children[i] == locals[i]);
+	}
+
+	TEST_CASE("Small real edits are overrides; Euler triples naming the same rotation are not")
+	{
+		PrefabFixture f;
+		Entity instance = f.Instantiate();
+		Entity child = PrefabFixture::ChildNamed(instance, "Child");
+		child.GetTransform().Rotation = glm::angleAxis(glm::radians(0.5f), glm::vec3(0, 1, 0));
+		instance.GetComponent<PointLightComponent>().Intensity *= 1.0001f;
+		const json overrides = f.Overrides(instance);
+		CHECK(overrides.contains(f.FieldPath("Child", "Transform", "Rotation")));
+		CHECK(overrides.contains(f.FieldPath("Source", "PointLight", "Intensity")));
+		f.Child.GetTransform().Rotation = glm::angleAxis(glm::radians(30.0f), glm::vec3(1, 0, 0));
+		f.SaveSource();
+		CHECK(child.GetTransform().Rotation.y == doctest::Approx(std::sin(glm::radians(0.25f))));
+
+		Entity other = f.Instantiate();
+		json& rotation = other.GetComponent<PrefabComponent>().Baseline[std::to_string(f.SourceId("Child"))]["Components"]["Transform"]["Rotation"];
+		rotation[0] = rotation[0].get<double>() + 360.0;
+		CHECK(f.Overrides(other).empty());
+		std::string error;
+		CHECK(Prefab::Refresh(other, f.ReadSource(), Prefab::RefreshMode::Merge, error) == Prefab::RefreshResult::Unchanged);
+	}
+
+	TEST_CASE("A merge that would exceed the hierarchy depth limit is rejected unchanged")
+	{
+		PrefabFixture f;
+		auto scene = f.Session.GetScene();
+		Entity parent;
+		for (uint32_t i = 0; i + 1 < Scene::MaxHierarchyDepth; ++i)
+		{
+			Entity level = scene->CreateEntity("Level");
+			if (parent)
+				REQUIRE(scene->SetParent(level, parent, false));
+			parent = level;
+		}
+		Entity instance = f.Instantiate();
+		REQUIRE(scene->SetParent(instance, parent, false));
+		json source = f.ReadSource();
+		source.push_back({ { "ID", 4242 }, { "Name", "Deep" }, { "Parent", source[1]["ID"] }, { "Components", json::object() } });
+		const json before = SceneSerializer::SerializeScene(*scene);
+		std::string error;
+		CHECK(Prefab::Refresh(instance, source, Prefab::RefreshMode::Merge, error) == Prefab::RefreshResult::Rejected);
+		CHECK(Contains(error, std::to_string(Scene::MaxHierarchyDepth) + " levels"));
+		CHECK(SceneSerializer::SerializeScene(*scene) == before);
+	}
+
+	TEST_CASE("Tracking round-trips through Lua, signed IDs and entity references included")
+	{
+		PrefabFixture f;
+		f.Source.AddComponent<BoneAttachmentComponent>().Target = f.Child.GetUUID();
+		f.SaveSource();
+		Entity instance = f.Instantiate();
+		sol::state lua;
+		const json original = ComponentRegistry::Find("Prefab")->Serialize(instance);
+		const json back = LuaToJson(JsonToLua(lua, original));
+		std::string error;
+		REQUIRE_MESSAGE(ComponentRegistry::AddOrPatch(instance, "Prefab", back, error), error);
+		CHECK(instance.GetComponent<PrefabComponent>().Members == original["Members"]);
+		CHECK(f.Overrides(instance).empty());
+		std::string refreshError;
+		CHECK(Prefab::Refresh(instance, f.ReadSource(), Prefab::RefreshMode::Merge, refreshError) == Prefab::RefreshResult::Unchanged);
+	}
+
+	TEST_CASE("scene.open leaves untracked instances for an explicit merge")
+	{
+		PrefabFixture f;
+		auto scene = f.Session.GetScene();
+		scene->DestroyEntity(f.Source);
+		Entity legacy = scene->CreateEntity("Legacy");
+		legacy.AddComponent<PrefabComponent>().Prefab = f.Path;
+		const UUID id = legacy.GetUUID();
+		f.Run("scene.save", { { "path", "Assets/Main.bscene" } });
+		f.Run("scene.new");
+		f.Source = f.Session.GetScene()->CreateEntity("Source");
+		f.Source.AddComponent<PointLightComponent>().Radius = 3;
+		f.SaveSource();
+		const json opened = f.Run("scene.open", { { "path", "Assets/Main.bscene" } });
+		CHECK_FALSE(opened.contains("prefabInstances"));
+		CHECK_FALSE(f.Session.IsDirty());
+		CHECK(f.Run("prefab.overrides", { { "entity", static_cast<uint64_t>(id) } })["tracked"] == false);
+	}
+
+	TEST_CASE("asset.move over a scene file with a malformed baseline migrates it or fails cleanly")
+	{
+		PrefabFixture f;
+		f.Directory.WriteFile("Assets/Script.lua", "return {}");
+		const json record = { { "Name", "NoID" }, { "Parent", 0 }, { "Components", { { "Script", { { "Script", "Assets/Script.lua" } } } } } };
+		json file = { { "Format", "BasaltScene" }, { "Version", 3 }, { "Entities", json::array({ { { "ID", 5 }, { "Name", "Holder" }, { "Parent", 0 }, { "Components", { { "Prefab", { { "Prefab", f.Path }, { "Members", { { "9", 5 } } }, { "Baseline", { { "9", record } } } } } } } } }) } };
+		f.Directory.WriteFile("Assets/Broken.bscene", file.dump());
+		// The record has no ID, which the migration never reads.
+		f.Run("asset.move", { { "from", "Assets/Script.lua" }, { "to", "Assets/Moved.lua" } });
+		CHECK(Contains(*FileSystem::ReadTextFile(Basalt::Project::ResolvePath("Assets/Broken.bscene")), "\"UUID\""));
+		file["Entities"][0]["Components"]["Prefab"]["Baseline"]["9"] = 7;
+		f.Directory.WriteFile("Assets/Broken.bscene", file.dump());
+		CHECK(Contains(f.RunError("asset.move", { { "from", "Assets/Moved.lua" }, { "to", "Assets/Again.lua" } }), "is not an entity record"));
+		CHECK(std::filesystem::exists(Basalt::Project::ResolvePath("Assets/Moved.lua")));
+	}
+
+	TEST_CASE("prefab.create leaves trees unlinked while a prefab is open or the game runs")
+	{
+		PrefabFixture f;
+		f.Run("prefab.open", { { "path", f.Path } });
+		CHECK(f.Run("prefab.create", { { "entity", "Child" }, { "path", "Assets/Prefabs/Part.bprefab" } })["linked"] == false);
+		f.Run("prefab.save");
+		f.Run("prefab.close");
+		std::string error;
+		REQUIRE_MESSAGE(f.Session.StartPlay(error), error);
+		const json played = f.Run("entity.create", { { "name", "Played" } });
+		CHECK(f.Run("prefab.create", { { "entity", played["id"] }, { "path", "Assets/Prefabs/Played.bprefab" } })["linked"] == false);
+		f.Session.StopPlay();
+	}
+
+	TEST_CASE("Apply on an untracked instance applies its differences and keeps source entities it lacks")
+	{
+		PrefabFixture f;
+		auto scene = f.Session.GetScene();
+		Entity legacy = scene->CreateEntity("Source");
+		legacy.AddComponent<PointLightComponent>().Intensity = 9;
+		Entity renamed = scene->CreateEntity("Renamed");
+		scene->SetParent(renamed, legacy, false);
+		legacy.AddComponent<PrefabComponent>().Prefab = f.Path;
+		const json result = f.Run("prefab.apply", { { "entity", IdOf(legacy) } });
+		REQUIRE(result["warnings"].size() == 1);
+		CHECK(Contains(result["warnings"][0].get<std::string>(), "the prefab keeps it"));
+		const json source = f.ReadSource();
+		REQUIRE(source.size() == 2);
+		CHECK(source[0]["Components"]["PointLight"]["Intensity"] == 9);
+		CHECK(source[1]["Name"] == "Child");
+		CHECK(f.Run("prefab.overrides", { { "entity", IdOf(legacy) } })["tracked"] == true);
+	}
+
+	TEST_CASE("Apply writes references to the prefab's own entities as source IDs")
+	{
+		PrefabFixture f;
+		Entity first = f.Instantiate();
+		Entity second = f.Instantiate();
+		PrefabFixture::ChildNamed(first, "Child").AddComponent<BoneAttachmentComponent>().Target = first.GetUUID();
+		CHECK(f.Run("prefab.apply", { { "entity", IdOf(first) } })["warnings"].empty());
+		CHECK(f.ReadSource()[1]["Components"]["BoneAttachment"]["Target"] == f.SourceId("Source"));
+		CHECK(PrefabFixture::ChildNamed(second, "Child").GetComponent<BoneAttachmentComponent>().Target == second.GetUUID());
+	}
+
+	TEST_CASE("project.open merges outdated instances of its start scene")
+	{
+		PrefabFixture f;
+		Entity instance = f.Instantiate();
+		const UUID id = instance.GetUUID();
+		f.Run("scene.save", { { "path", "Assets/Main.bscene" } });
+		f.Run("project.set", { { "startScene", "Assets/Main.bscene" } });
+		f.Run("scene.new");
+		f.Source = f.Session.GetScene()->CreateEntity("Source");
+		f.Source.AddComponent<PointLightComponent>().Radius = 14;
+		Entity child = f.Session.GetScene()->CreateEntity("Child");
+		f.Session.GetScene()->SetParent(child, f.Source, false);
+		f.SaveSource();
+		const json opened = f.Run("project.open", { { "path", FileSystem::PathToUtf8(f.Directory.GetDirectory()) } });
+		CHECK(opened["prefabInstances"].get<size_t>() >= 1);
+		CHECK(f.Session.GetScene()->GetEntityByUUID(id).GetComponent<PointLightComponent>().Radius == 14);
+		CHECK(f.Session.IsDirty());
+	}
+
+	TEST_CASE("scene.hash ignores prefab tracking")
+	{
+		PrefabFixture f;
+		Entity instance = f.Instantiate();
+		const json hash = f.Run("scene.hash")["hash"];
+		auto& link = instance.GetComponent<PrefabComponent>();
+		link.Baseline = json::object();
+		link.Members = { { "1", 99 } };
+		CHECK(f.Run("scene.hash")["hash"] == hash);
+		instance.GetComponent<PointLightComponent>().Radius = 99;
+		CHECK(f.Run("scene.hash")["hash"] != hash);
+	}
+
+	TEST_CASE("Reloads report edit-scene changes, and asset.delete reports instances of the deleted prefab")
+	{
+		PrefabFixture f;
+		f.Instantiate();
+		const auto report = f.WriteExternally([](json& file) { file["Entities"][0]["Components"]["PointLight"]["Radius"] = 8; });
+		// The instance and the authoring tree.
+		CHECK(report.PrefabEditSceneChanges == 2);
+		CHECK(f.Run("asset.delete", { { "path", f.Path } })["warnings"].size() == 2);
 	}
 }

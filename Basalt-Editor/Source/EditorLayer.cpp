@@ -347,16 +347,20 @@ namespace Basalt {
 				m_Thumbnails->OnFilesChanged(report.Changed);
 			m_MaterialEditorPanel.OnFilesChanged(report.Changed);
 			m_AnimationGraphPanel.OnFilesChanged(report.Changed);
-			if (report.PrefabInstances > 0)
+			if (report.PrefabEditSceneChanges > 0)
 				m_Context.RecordExternalEdit("Merge Prefab Changes");
+			const bool openPrefabChanged = m_Session.IsEditingPrefab() && std::any_of(report.Changed.begin(), report.Changed.end(), [this](const FileChange& change) { return change.Path == m_Session.GetPrefabPath(); });
+			// Failures first, so a success in the same reload never hides one.
 			if (!report.Scripts.Failed.empty())
 				m_Context.SetStatus("Hot reload of " + report.Scripts.Failed.front().Path + " failed: see Console", true);
 			else if (!report.Scripts.InstanceErrors.empty())
 				m_Context.SetStatus("Hot reloaded, but a script raised an error: see Console", true);
-			else if (!report.Scripts.Reloaded.empty())
-				m_Context.SetStatus(fmt::format("Hot reloaded {} script(s) ({} instance(s))", report.Scripts.Reloaded.size(), report.Scripts.Instances), false);
 			else if (!report.PrefabErrors.empty())
 				m_Context.SetStatus(fmt::format("{} prefab instance(s) could not merge the changed prefab: see Console", report.PrefabErrors.size()), true);
+			else if (openPrefabChanged)
+				m_Context.SetStatus("The open prefab changed on disk: saving needs File > Overwrite Prefab File", true);
+			else if (!report.Scripts.Reloaded.empty())
+				m_Context.SetStatus(fmt::format("Hot reloaded {} script(s) ({} instance(s))", report.Scripts.Reloaded.size(), report.Scripts.Instances), false);
 			else if (!report.Assets.empty())
 				m_Context.SetStatus(fmt::format("Reloading {} changed asset(s)", report.Assets.size()), false);
 		};
@@ -390,7 +394,7 @@ namespace Basalt {
 		};
 
 		if (!m_Options.ProjectPath.empty())
-			m_Context.Execute("project.open", { { "path", m_Options.ProjectPath } });
+			ExecuteAndWarn("project.open", { { "path", m_Options.ProjectPath } });
 		if (!Project::GetActive())
 			m_Prompt = PromptKind::OpenProject;
 		m_History.Reset(SceneSerializer::SerializeScene(*m_Session.GetEditScene()));
@@ -879,7 +883,7 @@ namespace Basalt {
 	bool EditorLayer::OpenRecentProject(const std::string& directory)
 	{
 		Stop();
-		return m_Context.Execute("project.open", { { "path", directory } }).has_value();
+		return ExecuteAndWarn("project.open", { { "path", directory } }).has_value();
 	}
 
 	namespace {
@@ -943,15 +947,11 @@ namespace Basalt {
 		m_GizmoCancelled = m_GizmoWasUsing;
 		m_UIRectDrag.reset();
 		m_PrefabOverrides.reset();
-		// Prefab editing sets the waiting scene's undo history aside. Returning restores it, and what saving the prefab
-		// merged into the waiting scene becomes one more step.
+		// Prefab editing sets the waiting scene's undo history aside. Returning restores it, and what merged into the
+		// waiting scene meanwhile (prefab saves and other prefab writes) becomes one more step.
 		nlohmann::json state = SceneSerializer::SerializeScene(*m_Session.GetEditScene());
-		if (m_Session.IsEditingPrefab() && !m_WaitingHistory)
-		{
-			m_WaitingHistory = m_History;
-			m_History.Reset(std::move(state));
-		}
-		else if (!m_Session.IsEditingPrefab() && m_WaitingHistory)
+		const bool editingPrefab = m_Session.IsEditingPrefab();
+		if (!editingPrefab && m_WaitingHistory)
 		{
 			m_History = std::move(*m_WaitingHistory);
 			m_WaitingHistory.reset();
@@ -959,7 +959,11 @@ namespace Basalt {
 				m_Context.SetStatus("Undo history lost the prefab merge: " + m_History.GetError(), true);
 		}
 		else
+		{
+			if (editingPrefab && !m_WaitingHistory)
+				m_WaitingHistory = m_History;
 			m_History.Reset(std::move(state));
+		}
 		m_Paused = false;
 	}
 
@@ -1102,7 +1106,8 @@ namespace Basalt {
 	{
 		if (m_Session.IsEditingPrefab())
 		{
-			if (ExecuteAndWarn("prefab.save"))
+			// Warnings (instances that could not merge) stay in the status bar instead of "Saved".
+			if (const auto result = ExecuteAndWarn("prefab.save"); result && EditorContext::JoinWarnings(*result).empty())
 				m_Context.SetStatus("Saved " + m_Session.GetPrefabPath(), false);
 			return;
 		}
@@ -1681,11 +1686,16 @@ namespace Basalt {
 		{
 			// While a prefab is open, the waiting scene stays as it was: scene and project items wait for Close.
 			const bool editingPrefab = m_Session.IsEditingPrefab();
+			const bool hasProject = static_cast<bool>(Project::GetActive());
 			if (editingPrefab)
 			{
 				ImGui::TextDisabled("Editing prefab %s", m_Session.GetPrefabPath().c_str());
 				if (ImGui::MenuItem("Save Prefab", "Ctrl+S", false, !m_Session.IsPlaying()))
 					SaveScene();
+				if (ImGui::MenuItem("Overwrite Prefab File", nullptr, false, !m_Session.IsPlaying()))
+					ExecuteAndWarn("prefab.save", { { "force", true } });
+				if (ImGui::IsItemHovered())
+					ImGui::SetTooltip("Save even though the file changed on disk since it was opened (its other changes are lost)");
 				if (ImGui::MenuItem("Close Prefab", nullptr, false, !m_Session.IsDirty()))
 					m_Context.Execute("prefab.close");
 				if (ImGui::MenuItem("Discard Prefab Edits and Close", nullptr, false, m_Session.IsDirty()))
@@ -1705,12 +1715,12 @@ namespace Basalt {
 			if (ImGui::MenuItem("Save Scene As..."))
 				OpenPrompt(PromptKind::SaveSceneAs, m_Session.GetScenePath().empty() ? "Assets/Scenes/Untitled.bscene" : m_Session.GetScenePath());
 			ImGui::Separator();
-			if (ImGui::MenuItem("Open Prefab...", nullptr, false, static_cast<bool>(Project::GetActive()) && !m_Session.IsPlaying()))
+			if (ImGui::MenuItem("Open Prefab...", nullptr, false, hasProject && !m_Session.IsPlaying()))
 				OpenPrompt(PromptKind::OpenPrefab, "Assets/Prefabs/");
 			ImGui::EndDisabled();
-			if (ImGui::MenuItem("Create Prefab from Selection...", nullptr, false, static_cast<bool>(Project::GetActive()) && m_Session.GetSelection().IsValid() && !m_Session.IsPlaying()))
+			if (ImGui::MenuItem("Create Prefab from Selection...", nullptr, false, hasProject && m_Session.GetSelection().IsValid() && !m_Session.IsPlaying()))
 				OpenPrompt(PromptKind::SavePrefabAs, "Assets/Prefabs/" + SafeFileName(m_Session.GetScene()->GetEntityByUUID(m_Session.GetSelection())) + ".bprefab");
-			if (ImGui::MenuItem("Import Model...", nullptr, false, static_cast<bool>(Project::GetActive())))
+			if (ImGui::MenuItem("Import Model...", nullptr, false, hasProject))
 				OpenPrompt(PromptKind::ImportModel, "Assets/Models/");
 			ImGui::Separator();
 			ImGui::BeginDisabled(editingPrefab);
@@ -1726,7 +1736,7 @@ namespace Basalt {
 			}
 			if (ImGui::MenuItem("Set Current Scene as Start Scene", nullptr, false, !m_Session.GetScenePath().empty()))
 				m_Context.Execute("project.set", { { "startScene", m_Session.GetScenePath() } });
-			if (ImGui::MenuItem("Export Game...", nullptr, false, static_cast<bool>(Project::GetActive())))
+			if (ImGui::MenuItem("Export Game...", nullptr, false, hasProject))
 				OpenPrompt(PromptKind::Export, "");
 			ImGui::EndDisabled();
 			ImGui::Separator();
@@ -2432,7 +2442,7 @@ namespace Basalt {
 	{
 		const auto id = static_cast<uint64_t>(entity.GetUUID());
 		const std::string path = entity.GetComponent<PrefabComponent>().Prefab;
-		// The path is managed by asset moves and the prefab commands; editing it here would desync the tracking.
+		// The path is managed by asset moves and the prefab commands; editing it here would drop the instance's tracking.
 		ImGui::TextDisabled("Prefab");
 		ImGui::SameLine();
 		ImGui::TextUnformatted(path.c_str());
@@ -2464,13 +2474,24 @@ namespace Basalt {
 		if (!entity.IsValid() || !entity.HasComponent<PrefabComponent>())
 			return;
 		const auto& link = entity.GetComponent<PrefabComponent>();
-		if (link.Members.empty() || link.Baseline.empty())
+		if (link.Members.empty())
 		{
-			ImGui::TextDisabled(m_Session.IsPlaying() ? "Instances created during Play do not track overrides." : "Overrides are not tracked yet (saved before tracking existed); Refresh starts tracking.");
+			ImGui::TextDisabled("Overrides are not tracked yet (saved before tracking existed); Refresh starts tracking.");
+			return;
+		}
+		if (link.Baseline.empty())
+		{
+			ImGui::TextDisabled("Instances created during Play do not track overrides.");
+			return;
+		}
+		// Play edits do not advance the edit revision, and overrides are edited in Edit mode anyway.
+		if (m_Session.IsPlaying())
+		{
+			ImGui::TextDisabled("Overrides are listed in Edit mode.");
 			return;
 		}
 		// Computing overrides serializes every member: once per scene edit, not every frame.
-		if (!m_PrefabOverrides || m_PrefabOverrides->Instance != entity.GetUUID() || m_PrefabOverrides->Revision != m_Session.GetEditRevision() || m_Session.IsPlaying())
+		if (!m_PrefabOverrides || m_PrefabOverrides->Instance != entity.GetUUID() || m_PrefabOverrides->Revision != m_Session.GetEditRevision())
 			m_PrefabOverrides = PrefabOverridesCache{ entity.GetUUID(), m_Session.GetEditRevision(), Prefab::ComputeOverrides(entity) };
 		const nlohmann::json& overrides = m_PrefabOverrides->Overrides;
 		if (overrides.empty())
@@ -2485,7 +2506,9 @@ namespace Basalt {
 			// "/<source ID>/Components/<component>/<field>" reads as "<entity>  component.field".
 			const std::vector<std::string> tokens = Prefab::SplitOverridePath(field);
 			const auto record = tokens.empty() ? link.Baseline.end() : link.Baseline.find(tokens.front());
-			std::string label = record != link.Baseline.end() && record->is_object() ? record->value("Name", tokens.front()) : (tokens.empty() ? field : tokens.front());
+			std::string label = tokens.empty() ? field : tokens.front();
+			if (record != link.Baseline.end() && record->is_object() && record->contains("Name") && (*record)["Name"].is_string())
+				label = (*record)["Name"].get<std::string>();
 			for (size_t i = 1; i < tokens.size(); ++i)
 				if (!(i == 1 && tokens[i] == "Components"))
 					label += (i <= 2 ? "  " : ".") + tokens[i];
@@ -2948,7 +2971,7 @@ namespace Basalt {
 						break;
 					case PromptKind::OpenProject:
 						Stop();
-						ok = m_Context.Execute("project.open", { { "path", m_PromptPath } }).has_value();
+						ok = ExecuteAndWarn("project.open", { { "path", m_PromptPath } }).has_value();
 						break;
 					case PromptKind::NewProject:
 						Stop();

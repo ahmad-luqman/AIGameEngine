@@ -183,8 +183,9 @@ namespace Basalt {
 		return m_PrefabEditing ? m_PrefabEditing->Path : s_None;
 	}
 
-	bool AutomationSession::OpenPrefab(const std::string& path, std::string& outError)
+	bool AutomationSession::OpenPrefab(const std::string& prefabPath, std::string& outError)
 	{
+		const std::string path = Prefab::NormalizePath(prefabPath);
 		if (IsPlaying())
 		{
 			outError = "stop Play or Simulate before editing a prefab";
@@ -207,9 +208,9 @@ namespace Basalt {
 		if (!Prefab::ReadSource(absolute, entities, outError))
 			return false;
 		auto scene = CreateRef<Scene>(FileSystem::PathToUtf8(FileSystem::PathFromUtf8(path).stem()));
-		if (!SceneSerializer::DeserializeScene(*scene, { { "Format", "BasaltScene" }, { "Version", SceneSerializer::FormatVersion }, { "Entities", entities } }, outError))
+		if (!SceneSerializer::DeserializeScene(*scene, SceneSerializer::SceneDocument(std::move(entities)), outError))
 			return false;
-		m_PrefabEditing = PrefabEditing{ path, *text, m_EditScene, m_ScenePath, m_Selection, m_Dirty };
+		m_PrefabEditing = PrefabEditing{ path, text, m_EditScene, m_ScenePath, m_Selection, m_Dirty };
 		SetEditScene(scene, "");
 		return true;
 	}
@@ -228,9 +229,10 @@ namespace Basalt {
 			return false;
 		}
 		const auto absolute = Project::ResolvePath(editing.Path);
-		if (const auto onDisk = FileSystem::ReadTextFile(absolute); !force && (!onDisk || *onDisk != editing.FileText))
+		if (const auto onDisk = FileSystem::ReadTextFile(absolute); !force && (!onDisk || !editing.FileText || *onDisk != *editing.FileText))
 		{
-			outError = "'" + editing.Path + "' changed on disk since it was opened or last saved; save with force=true to overwrite it, or close with discard=true and open it again";
+			const char* what = !onDisk ? "was deleted or cannot be read" : "changed on disk since it was opened or last saved";
+			outError = fmt::format("'{}' {}; save with force=true (Overwrite Prefab File in the editor) to write it anyway, or close with discard=true and open it again", editing.Path, what);
 			return false;
 		}
 		const auto roots = m_EditScene->GetRootEntities();
@@ -248,13 +250,13 @@ namespace Basalt {
 		if (!SceneSerializer::SavePrefab(roots.front(), absolute, outError))
 			return false;
 		ClearDirty();
-		if (const auto written = FileSystem::ReadTextFile(absolute))
-			editing.FileText = *written;
-		else
+		// The file is written; failing to read it back only loses the conflict check's reference, so the next save needs
+		// force.
+		editing.FileText = FileSystem::ReadTextFile(absolute);
+		if (!editing.FileText)
 		{
-			// The file is written; only the conflict check lost its reference, so the next save needs force.
-			editing.FileText.clear();
 			outWarnings.push_back("'" + editing.Path + "' was saved but could not be read back; the next save needs force=true");
+			BS_CORE_WARN("Prefab: {}", outWarnings.back());
 		}
 		outReport = OnFileWritten(editing.Path);
 		return true;
@@ -287,8 +289,9 @@ namespace Basalt {
 		return true;
 	}
 
-	void AutomationSession::MergePrefabInstances(const std::string& path, bool outdatedOnly, AssetReloadReport& report)
+	void AutomationSession::MergePrefabInstances(const std::string& prefabPath, bool outdatedOnly, AssetReloadReport& report)
 	{
+		const std::string path = Prefab::NormalizePath(prefabPath);
 		nlohmann::json source;
 		std::string sourceError;
 		const bool readable = Prefab::ReadSource(Project::ResolvePath(path), source, sourceError);
@@ -301,13 +304,14 @@ namespace Basalt {
 			std::vector<UUID> roots;
 			for (auto [handle, link] : scene->GetAllEntitiesWith<PrefabComponent>().each())
 			{
-				if (FileSystem::PathToGenericUtf8(FileSystem::PathFromUtf8(link.Prefab).lexically_normal()) != path)
+				if (Prefab::NormalizePath(link.Prefab) != path)
 					continue;
-				if (outdatedOnly && (link.Members.empty() || (readable && !Prefab::IsOutdated(link, source))))
+				// Opening a scene leaves untracked instances alone: adopting them would change scenes nobody edited.
+				if (outdatedOnly && (!Prefab::IsTracked(link) || (readable && !Prefab::IsOutdated(link, source))))
 					continue;
 				roots.push_back(Entity(handle, scene.get()).GetUUID());
 			}
-			bool changed = false;
+			size_t changed = 0;
 			for (UUID id : roots)
 			{
 				Entity root = scene->GetEntityByUUID(id);
@@ -317,18 +321,23 @@ namespace Basalt {
 				const auto result = readable ? Prefab::Refresh(root, source, Prefab::RefreshMode::Merge, error) : Prefab::RefreshResult::Rejected;
 				if (result == Prefab::RefreshResult::Merged)
 					++report.PrefabInstances;
-				if (result == Prefab::RefreshResult::Merged || result == Prefab::RefreshResult::Partial)
-					changed = true;
-				if (result == Prefab::RefreshResult::Rejected || result == Prefab::RefreshResult::Partial)
+				if (Prefab::ChangedScene(result))
+					++changed;
+				if (Prefab::Failed(result))
 				{
-					const char* outcome = result == Prefab::RefreshResult::Partial ? "was only partly merged" : "kept its previous state";
+					const char* outcome = result == Prefab::RefreshResult::Partial ? "was only partly merged (merge it again with prefab.refresh)" : "kept its previous state";
 					report.PrefabErrors.push_back(fmt::format("instance '{}' ({}) of {} {}: {}", root.GetName(), static_cast<uint64_t>(id), path, outcome, error));
 					BS_CORE_WARN("Prefab: {}", report.PrefabErrors.back());
 				}
 			}
-			if (changed && scene == m_EditScene)
+			if (changed == 0)
+				continue;
+			if (scene == m_EditScene)
+			{
+				report.PrefabEditSceneChanges += changed;
 				MarkDirty();
-			else if (changed && m_PrefabEditing)
+			}
+			else if (m_PrefabEditing)
 				m_PrefabEditing->WaitingDirty = true;
 		}
 	}
@@ -339,7 +348,7 @@ namespace Basalt {
 		std::set<std::string> paths;
 		for (auto [handle, link] : m_EditScene->GetAllEntitiesWith<PrefabComponent>().each())
 			if (!link.Prefab.empty())
-				paths.insert(FileSystem::PathToGenericUtf8(FileSystem::PathFromUtf8(link.Prefab).lexically_normal()));
+				paths.insert(Prefab::NormalizePath(link.Prefab));
 		for (const std::string& path : paths)
 			MergePrefabInstances(path, true, report);
 		return report;
@@ -441,6 +450,7 @@ namespace Basalt {
 		}
 		std::vector<std::string> paths;
 		std::vector<std::string> scripts;
+		std::vector<std::string> prefabs;
 		for (const FileChange& change : changes)
 		{
 			// AssetManager keys and script paths are normalized project-relative paths.
@@ -448,14 +458,17 @@ namespace Basalt {
 			const std::string path = FileSystem::PathToGenericUtf8(normal);
 			report.Changed.emplace_back(path, change.Type);
 			paths.push_back(path);
+			const std::string extension = FileSystem::GetLowercaseExtension(normal);
 			// A removed script has nothing to load: the running version stays until play stops.
-			if (change.Type != FileChangeType::Removed && FileSystem::GetLowercaseExtension(normal) == ".lua")
+			if (change.Type != FileChangeType::Removed && extension == ".lua")
 				scripts.push_back(path);
+			// A removed prefab is reported per instance (they keep their state).
+			if (extension == ".bprefab")
+				prefabs.push_back(path);
 		}
 		report.Assets = AssetManager::ReloadChanged(paths);
-		for (const FileChange& change : report.Changed)
-			if (FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(change.Path)) == ".bprefab")
-				MergePrefabInstances(change.Path, false, report);
+		for (const std::string& path : prefabs)
+			MergePrefabInstances(path, false, report);
 		if (!scripts.empty())
 		{
 			ScriptEngine* engine = IsPlaying() && !IsSimulating() ? m_Scene->GetScriptEngine() : nullptr;

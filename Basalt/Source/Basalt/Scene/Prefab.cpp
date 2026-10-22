@@ -1,5 +1,6 @@
 #include "Basalt/Scene/Prefab.h"
 
+#include "Basalt/Asset/AssetRegistry.h"
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/JsonUtils.h"
@@ -12,6 +13,7 @@
 
 #include <glm/gtc/quaternion.hpp>
 #include <spdlog/fmt/fmt.h>
+#include <spdlog/fmt/ranges.h>
 
 #include <algorithm>
 #include <charconv>
@@ -68,11 +70,6 @@ namespace Basalt {
 			return record.at("ID").get<uint64_t>();
 		}
 
-		std::string NormalPath(const std::string& path)
-		{
-			return FileSystem::PathToGenericUtf8(FileSystem::PathFromUtf8(path).lexically_normal());
-		}
-
 		std::string PointerToken(const std::string& key)
 		{
 			std::string token;
@@ -86,6 +83,13 @@ namespace Basalt {
 					token += c;
 			}
 			return token;
+		}
+
+		// A record's name for messages; records read from outside may not have a string one.
+		std::string NameOf(const json& record)
+		{
+			const auto name = record.is_object() ? record.find("Name") : record.end();
+			return name != record.end() && name->is_string() ? name->get<std::string>() : std::string("<unnamed>");
 		}
 
 		bool IsExternal(const json& value)
@@ -127,9 +131,11 @@ namespace Basalt {
 			});
 		}
 
-		// Source space to instance space. A reference to a source entity the instance does not have becomes the root
-		// (for a parent) or no reference: it must never resolve to an unrelated entity that shares the source ID.
-		void ToInstanceSpace(json& record, const IdMap& toInstance, const IdSet& sourceKeys, uint64_t rootId)
+		// Source space to instance space. A reference to an entity the instance deleted keeps its reserved ID (reverting
+		// the deletion restores the reference, and no reserved ID is ever reused); a parent among them, or any other source
+		// entity the instance does not have, becomes the root or no reference. Never an unrelated entity that happens to
+		// share the source ID.
+		void ToInstanceSpace(json& record, const IdMap& toInstance, const IdMap& reserved, const IdSet& sourceKeys, uint64_t rootId)
 		{
 			record["ID"] = toInstance.at(RecordId(record));
 			ForEachReference(record, [&](json& value, bool isParent) {
@@ -143,6 +149,8 @@ namespace Basalt {
 				const uint64_t id = value.get<uint64_t>();
 				if (const auto it = toInstance.find(id); it != toInstance.end())
 					value = it->second;
+				else if (const auto kept = reserved.find(id); kept != reserved.end() && !isParent)
+					value = kept->second;
 				else if (sourceKeys.contains(id))
 					value = isParent ? rootId : 0;
 			});
@@ -161,8 +169,17 @@ namespace Basalt {
 			return record;
 		}
 
-		// A Members value belongs to this instance unless the entity is another instance's root or another instance
-		// lists it as its own (a hand-edited scene): a merge never overwrites or destroys another instance's entities.
+		bool ListsMember(const PrefabComponent& link, Entity entity)
+		{
+			for (const auto& value : link.Members)
+				if (IsId(value) && value.get<uint64_t>() == IdOf(entity))
+					return true;
+			return false;
+		}
+
+		// A Members value belongs to this instance only when the entity is inside the instance's tree and no instance in
+		// between claims it: a merge never touches an entity outside its instance (a hand-edited Members value, or a
+		// member moved out of the tree, which then counts as deleted by the instance) or another instance's entity.
 		bool IsOwnMember(Entity root, Entity entity)
 		{
 			if (!entity)
@@ -175,12 +192,10 @@ namespace Basalt {
 			{
 				if (ancestor == root)
 					return true;
-				if (const auto* other = ancestor.TryGetComponent<PrefabComponent>())
-					for (const auto& value : other->Members)
-						if (IsId(value) && value.get<uint64_t>() == IdOf(entity))
-							return false;
+				if (const auto* other = ancestor.TryGetComponent<PrefabComponent>(); other && ListsMember(*other, entity))
+					return false;
 			}
-			return true;
+			return false;
 		}
 
 		std::string RootKey(const PrefabComponent& link, Entity root)
@@ -192,7 +207,7 @@ namespace Basalt {
 		}
 
 		// Records keyed by source ID. Order is a sibling-order hint: the source's order, or depth first from the root
-		// for an instance. It may omit records (members moved out of the instance's tree), which then come last.
+		// for an instance. Records it omits (kept by a merge from the other side) come last.
 		struct Records
 		{
 			json ByKey = json::object();
@@ -258,11 +273,6 @@ namespace Basalt {
 					visit(child);
 			};
 			visit(root);
-			// Members moved out of the instance's tree still belong to it.
-			for (const auto& [instance, source] : toSource)
-				if (!records.ByKey.contains(KeyOf(source)))
-					if (Entity entity = EntityOf(*root.GetScene(), instance); IsOwnMember(root, entity))
-						records.ByKey[KeyOf(source)] = SerializeMember(entity, root, toSource, sourceKeys);
 			return records;
 		}
 
@@ -294,6 +304,9 @@ namespace Basalt {
 				const double dot = std::min(1.0, std::abs(glm::dot(toQuat(a), toQuat(b))));
 				return 2.0 * std::acos(dot) < 1e-4;
 			}
+			// Lua cannot tell an empty list from an empty table.
+			if (a.empty() && b.empty() && (a.is_array() || a.is_object()) && (b.is_array() || b.is_object()))
+				return true;
 			if (a.type() != b.type() || a.size() != b.size())
 				return false;
 			if (a.is_array())
@@ -465,11 +478,6 @@ namespace Basalt {
 			return depth;
 		}
 
-		json SceneDocument(json entities)
-		{
-			return { { "Format", "BasaltScene" }, { "Version", SceneSerializer::FormatVersion }, { "Entities", std::move(entities) } };
-		}
-
 		// What every merge starts from: the instance's tracking (adopted when missing), the new source and the
 		// instance's current state, in source space.
 		struct MergeInputs
@@ -485,7 +493,7 @@ namespace Basalt {
 		std::optional<MergeInputs> PrepareMerge(Entity root, const json& sourceEntities, std::string& outError)
 		{
 			MergeInputs in{ root.GetComponent<PrefabComponent>() };
-			if (in.Link.Members.empty() || in.Link.Baseline.empty())
+			if (!Prefab::IsTracked(in.Link))
 			{
 				Adopt(root, sourceEntities, in.Link);
 				in.Adopted = true;
@@ -510,39 +518,55 @@ namespace Basalt {
 			RevertField
 		};
 
+		// The instance's records with one override undone: the baseline restored at its path, so the merge then takes the
+		// source's value there. Nothing when the path is not an override.
+		std::optional<json> WithoutOverride(const MergeInputs& in, const std::string& field, std::string& outError)
+		{
+			if (!OverridesOf(in.Link, in.Current.ByKey, in.RootKey).contains(field))
+			{
+				outError = "'" + field + "' is not an override of this instance (prefab.overrides lists them)";
+				return std::nullopt;
+			}
+			// The path came from CollectOverrides, so it parses and its parent exists.
+			json current = in.Current.ByKey;
+			const json::json_pointer pointer(field);
+			if (in.Link.Baseline.contains(pointer))
+				current[pointer] = in.Link.Baseline[pointer];
+			else
+				current[pointer.parent_pointer()].erase(pointer.back());
+			return current;
+		}
+
 		// The merged records in source space, or nothing when the field to revert is not an override.
-		std::optional<json> MergedRecords(MergeInputs& in, MergeKind kind, const std::string& field, std::string& outError)
+		std::optional<json> MergedRecords(const MergeInputs& in, MergeKind kind, const std::string& field, std::string& outError)
 		{
 			json merged;
 			if (kind == MergeKind::RevertAll)
 				merged = in.Next.ByKey;
-			else
+			else if (kind == MergeKind::RevertField)
 			{
-				if (kind == MergeKind::RevertField)
-				{
-					if (!OverridesOf(in.Link, in.Current.ByKey, in.RootKey).contains(field))
-					{
-						outError = "'" + field + "' is not an override of this instance (prefab.overrides lists them)";
-						return std::nullopt;
-					}
-					// The path came from CollectOverrides, so it parses and its parent exists. Reverting restores the
-					// baseline there; the merge then takes the source's value.
-					const json::json_pointer pointer(field);
-					if (in.Link.Baseline.contains(pointer))
-						in.Current.ByKey[pointer] = in.Link.Baseline[pointer];
-					else
-						in.Current.ByKey[pointer.parent_pointer()].erase(pointer.back());
-				}
-				merged = Merge(in.Link.Baseline, in.Current.ByKey, in.Next.ByKey);
+				const auto current = WithoutOverride(in, field, outError);
+				if (!current)
+					return std::nullopt;
+				merged = Merge(in.Link.Baseline, *current, in.Next.ByKey);
 			}
+			else
+				merged = Merge(in.Link.Baseline, in.Current.ByKey, in.Next.ByKey);
 			KeepPlacement(merged, in.Current.ByKey, in.RootKey);
 			return merged;
 		}
 
+		// Instance IDs of the merged records, and the reserved IDs of entities the instance deleted, by source ID.
+		struct InstanceIds
+		{
+			IdMap Merged;
+			IdMap Reserved;
+		};
+
 		// Members keep their instance IDs, including IDs of entities the instance deleted, so Revert recreates them
 		// with the same IDs. Entities new to the instance get fresh ones. Keys that left both the source and the
 		// instance stop being tracked.
-		IdMap AssignInstanceIds(Scene& scene, Entity root, const json& merged, const Records& next, PrefabComponent& link)
+		InstanceIds AssignInstanceIds(Scene& scene, Entity root, const json& merged, const Records& next, PrefabComponent& link)
 		{
 			IdSet taken;
 			for (const auto& value : link.Members)
@@ -562,14 +586,19 @@ namespace Basalt {
 				}
 				toInstance[ParseKey(key)] = id;
 			}
+			IdMap reserved;
 			for (auto it = link.Members.begin(); it != link.Members.end();)
 			{
 				if (!merged.contains(it.key()) && !next.ByKey.contains(it.key()))
 					it = link.Members.erase(it);
 				else
+				{
+					if (!merged.contains(it.key()) && IsId(*it))
+						reserved[ParseKey(it.key())] = it->get<uint64_t>();
 					++it;
+				}
 			}
-			return toInstance;
+			return { std::move(toInstance), std::move(reserved) };
 		}
 
 		// The instance-space result of a merge, checked against the scene before anything changes.
@@ -578,30 +607,31 @@ namespace Basalt {
 			// Merged member records in sibling order, in instance space; the root's parent is its scene parent.
 			std::vector<json> Records;
 			IdSet Members;
-			// Members before the merge that still exist.
-			IdSet Previous;
+			// Members before the merge that still exist, depth first from the root (a stable order for orphans).
+			std::vector<uint64_t> Previous;
 			// The final parent of every member and of each orphan.
 			IdMap Parents;
 			// Entities the instance added under a kept member, by member, in their order.
 			std::unordered_map<uint64_t, std::vector<Entity>> Locals;
 			// Entities the instance added under a member the merge removes; they move to the root.
 			std::vector<Entity> Orphans;
-			// Members the merge removes inside the instance: destroyed (members moved elsewhere stay, untracked).
+			// Members the merge removes: destroyed.
 			std::vector<Entity> Destroyed;
 			// Members whose parent changes, parents before children.
 			std::vector<uint64_t> Reparented;
 		};
 
-		bool PlanMerge(Scene& scene, Entity root, const json& merged, const MergeInputs& in, const IdMap& toInstance, MergePlan& plan, std::string& outError)
+		bool PlanMerge(Scene& scene, Entity root, const json& merged, const MergeInputs& in, const InstanceIds& ids, MergePlan& plan, std::string& outError)
 		{
 			const uint64_t rootId = IdOf(root);
-			for (const auto& [key, value] : in.Link.Members.items())
-				if (IsId(value) && IsOwnMember(root, EntityOf(scene, value.get<uint64_t>())))
-					plan.Previous.insert(value.get<uint64_t>());
+			// Current holds exactly the own members that exist, in tree order.
+			for (const std::string& key : in.Current.Order)
+				plan.Previous.push_back(in.Link.Members[key].get<uint64_t>());
+			const IdSet previous(plan.Previous.begin(), plan.Previous.end());
 			plan.Records = InOrder(merged, { &in.Next.Order, &in.Current.Order });
 			for (json& record : plan.Records)
 			{
-				ToInstanceSpace(record, toInstance, in.SourceKeys, rootId);
+				ToInstanceSpace(record, ids.Merged, ids.Reserved, in.SourceKeys, rootId);
 				plan.Members.insert(RecordId(record));
 			}
 
@@ -619,7 +649,7 @@ namespace Basalt {
 				isolated.push_back(std::move(copy));
 			}
 			Scene scratch("Prefab merge validation");
-			if (!SceneSerializer::DeserializeScene(scratch, SceneDocument(std::move(isolated)), outError))
+			if (!SceneSerializer::DeserializeScene(scratch, SceneSerializer::SceneDocument(std::move(isolated)), outError))
 				return false;
 
 			std::unordered_map<uint64_t, uint32_t> heights;
@@ -627,19 +657,18 @@ namespace Basalt {
 			{
 				const Entity member = EntityOf(scene, id);
 				const bool kept = plan.Members.contains(id);
-				const bool inside = scene.IsDescendantOf(member, root);
-				if (!kept && inside)
+				if (!kept)
 					plan.Destroyed.push_back(member);
 				for (Entity child : member.GetChildren())
 				{
-					if (plan.Previous.contains(IdOf(child)) || plan.Members.contains(IdOf(child)))
+					if (previous.contains(IdOf(child)) || plan.Members.contains(IdOf(child)))
 						continue;
 					if (kept)
 					{
 						plan.Locals[id].push_back(child);
 						heights[id] = std::max(heights[id], scene.GetSubtreeHeight(child) + 1);
 					}
-					else if (inside)
+					else
 					{
 						plan.Orphans.push_back(child);
 						plan.Parents[IdOf(child)] = rootId;
@@ -671,19 +700,17 @@ namespace Basalt {
 			return true;
 		}
 
-		// Applies a validated plan. Only internal errors fail here, and the scene is then partly merged.
+		// Applies a validated plan. Only internal errors fail here (all of them are returned), and the scene is then
+		// partly merged.
 		bool ApplyPlan(Scene& scene, Entity root, const MergePlan& plan, std::string& outError)
 		{
 			const uint64_t rootId = IdOf(root);
-			bool complete = true;
+			std::vector<std::string> errors;
 			auto parent = [&](Entity child, Entity newParent) {
 				if (!scene.SetParent(child, newParent, false))
-				{
-					outError = "could not parent '" + child.GetName() + "' to '" + (newParent ? newParent.GetName() : std::string("the scene root")) + "'";
-					complete = false;
-				}
+					errors.push_back(fmt::format("could not parent '{}' to '{}'", child.GetName(), newParent ? newParent.GetName() : std::string("the scene root")));
 			};
-			// Detach first so destroying a removed member keeps the children it had.
+			// Detach first, so destroying a removed member does not destroy its children (kept members and additions).
 			for (Entity removed : plan.Destroyed)
 				for (Entity child : removed.GetChildren())
 					parent(child, {});
@@ -703,18 +730,15 @@ namespace Basalt {
 				for (const auto& info : ComponentRegistry::GetAll())
 					if (!info.IsCore && info.Name != "Prefab" && info.Has(entity) && !record["Components"].contains(info.Name))
 						info.Remove(entity);
-				if (!SceneSerializer::DeserializeEntityComponents(entity, record, outError))
-				{
-					outError = fmt::format("'{}': {}", entity.GetName(), outError);
-					complete = false;
-				}
+				if (std::string error; !SceneSerializer::DeserializeEntityComponents(entity, record, error))
+					errors.push_back(fmt::format("'{}': {}", entity.GetName(), error));
 			}
 			for (uint64_t id : plan.Reparented)
 				parent(EntityOf(scene, id), EntityOf(scene, plan.Parents.at(id)));
 			// Parenting to the same parent again appends, which settles sibling order: members in source order, then the
 			// entities the instance added, in theirs. The hierarchy does not change, so this cannot fail.
 			for (const json& record : plan.Records)
-				if (const uint64_t id = RecordId(record); id != rootId)
+				if (const uint64_t id = RecordId(record); id != rootId && plan.Members.contains(plan.Parents.at(id)))
 					parent(EntityOf(scene, id), EntityOf(scene, plan.Parents.at(id)));
 			for (const json& record : plan.Records)
 				if (const auto locals = plan.Locals.find(RecordId(record)); locals != plan.Locals.end())
@@ -722,7 +746,8 @@ namespace Basalt {
 						parent(local, EntityOf(scene, RecordId(record)));
 			for (Entity orphan : plan.Orphans)
 				parent(orphan, root);
-			return complete;
+			outError = fmt::format("{}", fmt::join(errors, "; "));
+			return errors.empty();
 		}
 
 		Prefab::RefreshResult MergeInto(Entity root, const json& sourceEntities, MergeKind kind, const std::string& field, std::string& outError)
@@ -744,13 +769,16 @@ namespace Basalt {
 			if (!mergedRecords)
 				return Prefab::RefreshResult::Rejected;
 			const json& merged = *mergedRecords;
+			// A copy: PlanMerge reads the members as they were before AssignInstanceIds.
 			PrefabComponent link = in.Link;
-			const IdMap toInstance = AssignInstanceIds(scene, root, merged, in.Next, link);
+			const InstanceIds ids = AssignInstanceIds(scene, root, merged, in.Next, link);
 			MergePlan plan;
-			if (!PlanMerge(scene, root, merged, in, toInstance, plan, outError))
+			if (!PlanMerge(scene, root, merged, in, ids, plan, outError))
 				return Prefab::RefreshResult::Rejected;
 			const bool complete = ApplyPlan(scene, root, plan, outError);
-			link.Baseline = in.Next.ByKey;
+			// A partial merge keeps the old baseline (with the members it created), so merging again finishes it: what
+			// applied now equals the source, and what did not still equals the baseline and takes the source's value.
+			link.Baseline = complete ? in.Next.ByKey : in.Link.Baseline;
 			root.AddOrReplaceComponent<PrefabComponent>(std::move(link));
 			if (!complete)
 			{
@@ -829,7 +857,7 @@ namespace Basalt {
 			return false;
 		// Deserializing keeps the source IDs, so writing the scratch entities back yields normalized source records.
 		Scene scratch("Prefab source");
-		if (!SceneSerializer::DeserializeScene(scratch, SceneDocument(entities), outError))
+		if (!SceneSerializer::DeserializeScene(scratch, SceneSerializer::SceneDocument(entities), outError))
 		{
 			outError = "prefab '" + FileSystem::PathToGenericUtf8(path) + "': " + outError;
 			return false;
@@ -844,27 +872,36 @@ namespace Basalt {
 		return true;
 	}
 
-	void Prefab::AssignSourceIds(Entity root, const std::string& prefabPath, json& entities)
+	void Prefab::AssignSourceIds(Entity root, const std::string& prefabPath, json& entities, std::vector<std::string>& outWarnings)
 	{
 		Scene& scene = *root.GetScene();
 		IdMap sourceOf;
-		json existing;
-		std::string error;
-		const auto* link = root.TryGetComponent<PrefabComponent>();
-		if (link && NormalPath(link->Prefab) == NormalPath(prefabPath))
-		{
+		IdSet taken;
+		// An instance of this very file keeps its members' source IDs.
+		if (const auto* link = root.TryGetComponent<PrefabComponent>(); link && NormalizePath(link->Prefab) == NormalizePath(prefabPath))
 			for (const auto& [key, value] : link->Members.items())
 				if (IsId(value) && IsOwnMember(root, EntityOf(scene, value.get<uint64_t>())))
+				{
 					sourceOf[value.get<uint64_t>()] = ParseKey(key);
-		}
-		else if (ReadFile(Project::ResolvePath(prefabPath), existing, error))
+					taken.insert(ParseKey(key));
+				}
+		// The rest match the existing file by name (untracked instances and unrelated trees entirely).
+		const auto absolute = Project::ResolvePath(prefabPath);
+		std::error_code exists;
+		if (json existing; std::filesystem::exists(absolute, exists))
 		{
-			for (const auto& [source, entity] : MatchByName(existing, root))
-				sourceOf[entity] = source;
+			if (std::string error; ReadFile(absolute, existing, error))
+			{
+				for (const auto& [source, entity] : MatchByName(existing, root))
+					if (!sourceOf.contains(entity) && !taken.contains(source))
+					{
+						sourceOf[entity] = source;
+						taken.insert(source);
+					}
+			}
+			else
+				outWarnings.push_back("the existing prefab's entity IDs could not be kept (" + error + "); its instances will need to be instantiated again");
 		}
-		IdSet taken;
-		for (const auto& [entity, source] : sourceOf)
-			taken.insert(source);
 		for (const json& record : entities)
 			if (!sourceOf.contains(RecordId(record)))
 				sourceOf[RecordId(record)] = ClaimNewId(scene, taken);
@@ -879,12 +916,33 @@ namespace Basalt {
 		}
 	}
 
+	Entity Prefab::EnclosingInstance(Entity entity)
+	{
+		for (Entity ancestor = entity.GetParent(); ancestor; ancestor = ancestor.GetParent())
+			if (const auto* link = ancestor.TryGetComponent<PrefabComponent>(); link && ListsMember(*link, entity) && IsOwnMember(ancestor, entity))
+				return ancestor;
+		return {};
+	}
+
+	bool Prefab::IsTracked(const PrefabComponent& link)
+	{
+		return !link.Members.empty() && !link.Baseline.empty();
+	}
+
+	std::string Prefab::NormalizePath(const std::string& path)
+	{
+		// Unresolved asset keys ("asset-uuid://...") are opaque: normalizing would fold their "//".
+		if (path.empty() || AssetRegistry::IsUnresolvedKey(path))
+			return path;
+		return FileSystem::NormalizeGeneric(path);
+	}
+
 	void Prefab::Link(const std::vector<Entity>& instances, const json& sourceEntities, const std::string& prefabPath)
 	{
 		BS_CORE_ASSERT(!instances.empty() && instances.size() == sourceEntities.size(), "every source entity needs its instance");
 		Entity root = instances.front();
 		PrefabComponent link;
-		link.Prefab = NormalPath(prefabPath);
+		link.Prefab = NormalizePath(prefabPath);
 		IdMap toSource;
 		IdSet sourceKeys;
 		for (size_t i = 0; i < instances.size(); ++i)
@@ -915,6 +973,7 @@ namespace Basalt {
 				continue;
 			if (record.contains("ID"))
 				unsign(record["ID"]);
+			// ForEachReference would insert a missing Parent; malformed records are left for Validate to reject.
 			if (record.contains("Parent"))
 				ForEachReference(record, [&](json& value, bool) { unsign(value); });
 		}
@@ -931,7 +990,7 @@ namespace Basalt {
 				value = path;
 				return true;
 			}
-			outError = "Baseline '" + record.value("Name", std::string("<unnamed>")) + "' " + label + ": " + error;
+			outError = "Baseline '" + NameOf(record) + "' " + label + ": " + error;
 			return false;
 		});
 	}
@@ -989,7 +1048,7 @@ namespace Basalt {
 
 	bool Prefab::IsOutdated(const PrefabComponent& link, const json& sourceEntities)
 	{
-		return !link.Members.empty() && !link.Baseline.empty() && !Equivalent(link.Baseline, ToRecords(sourceEntities).ByKey);
+		return IsTracked(link) && !Equivalent(link.Baseline, ToRecords(sourceEntities).ByKey);
 	}
 
 	Prefab::RefreshResult Prefab::Refresh(Entity root, const json& sourceEntities, RefreshMode mode, std::string& outError)
@@ -1018,14 +1077,24 @@ namespace Basalt {
 		MergeInputs& in = *prepared;
 		json merged = Merge(in.Link.Baseline, in.Current.ByKey, in.Next.ByKey);
 		KeepPlacement(merged, in.Next.ByKey, in.RootKey);
+		// Adoption matches by name, so a source entity it could not match was renamed or never there, not deleted: the
+		// prefab keeps it.
+		if (in.Adopted)
+			for (const std::string& key : in.Next.Order)
+				if (!in.Current.ByKey.contains(key) && !merged.contains(key))
+				{
+					merged[key] = in.Next.ByKey[key];
+					outWarnings.push_back(fmt::format("'{}' has no entity of that name in this instance (it was not tracked before); the prefab keeps it", NameOf(in.Next.ByKey[key])));
+				}
+		const auto inPrefab = [&](const json& id) { return IsId(id) && merged.contains(KeyOf(id.get<uint64_t>())); };
 		for (auto& [key, record] : merged.items())
 		{
-			// Members the instance moved outside its tree go back under their source parent, or the root.
-			const json& parentValue = record["Parent"];
-			if (key != in.RootKey && !(IsId(parentValue) && merged.contains(KeyOf(parentValue.get<uint64_t>()))))
+			// Members whose parent will not be in the prefab (under an entity the instance added) go back under their
+			// source parent, or the root.
+			if (key != in.RootKey && !inPrefab(record["Parent"]))
 			{
 				const auto sourceRecord = in.Next.ByKey.find(key);
-				const bool sourceParentKept = sourceRecord != in.Next.ByKey.end() && merged.contains(KeyOf((*sourceRecord)["Parent"].get<uint64_t>()));
+				const bool sourceParentKept = sourceRecord != in.Next.ByKey.end() && inPrefab((*sourceRecord)["Parent"]);
 				record["Parent"] = sourceParentKept ? (*sourceRecord)["Parent"] : json(ParseKey(in.RootKey));
 			}
 			// A reference to an entity outside the prefab (one the instance added, or a scene entity) means nothing in
@@ -1038,19 +1107,19 @@ namespace Basalt {
 				for (const auto& field : info->EntityFields)
 				{
 					const auto value = fields.find(field);
-					if (value == fields.end() || (IsId(*value) && (*value == 0 || merged.contains(KeyOf(value->get<uint64_t>())))))
+					if (value == fields.end() || *value == 0 || inPrefab(*value))
 						continue;
 					const json::json_pointer at("/" + PointerToken(key) + "/Components/" + PointerToken(component) + "/" + PointerToken(field));
 					const json previous = in.Next.ByKey.contains(at) ? in.Next.ByKey[at] : json(0);
 					if (*value == previous)
 						continue;
-					outWarnings.push_back(fmt::format("'{}' {}.{} references an entity outside the prefab; the prefab keeps its value", record.value("Name", key), component, field));
+					outWarnings.push_back(fmt::format("'{}' {}.{} references an entity outside the prefab; the prefab keeps its value", NameOf(record), component, field));
 					*value = previous;
 				}
 			}
 		}
 		Scene scratch("Apply prefab overrides");
-		if (!SceneSerializer::DeserializeScene(scratch, SceneDocument(InOrder(merged, { &in.Next.Order, &in.Current.Order })), outError))
+		if (!SceneSerializer::DeserializeScene(scratch, SceneSerializer::SceneDocument(InOrder(merged, { &in.Next.Order, &in.Current.Order })), outError))
 			return false;
 		return SceneSerializer::SavePrefab(EntityOf(scratch, ParseKey(in.RootKey)), path, outError);
 	}

@@ -1242,7 +1242,8 @@ namespace Basalt {
 		// recreates them with the same IDs. Empty for instances saved before tracking existed (adopted on merge).
 		nlohmann::json Members = nlohmann::json::object();
 		// The source's entity records as last merged: keyed by source ID, with source-space entity references and asset
-		// paths (UUID/path objects on disk). Empty for instances created during Play.
+		// paths (UUID/path objects on disk). Empty for instances saved before tracking existed, created during Play, or
+		// pointed at another prefab without new tracking.
 		nlohmann::json Baseline = nlohmann::json::object();
 	};
 

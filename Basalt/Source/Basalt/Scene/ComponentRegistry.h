@@ -114,7 +114,7 @@ namespace Basalt {
 		std::vector<std::string> EntityFields;
 		// Rewrites the component's entity references (e.g. Joint "ConnectedEntity") through the map;
 		// references not in the map are kept, except that a copied prefab instance gives members it did not copy
-		// fresh IDs. Empty for components without EntityFields.
+		// fresh IDs. Empty for components without EntityFields, except Prefab, which remaps its Members.
 		std::function<void(Entity, const std::unordered_map<UUID, UUID>&)> RemapEntityReferences;
 	};
 

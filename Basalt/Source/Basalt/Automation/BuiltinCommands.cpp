@@ -491,6 +491,16 @@ namespace Basalt {
 				warnings.push_back(error);
 		}
 
+		// scene.open and project.open merge instances of prefabs saved since the scene was.
+		json WithOutdatedPrefabMerges(AutomationSession& session, json result)
+		{
+			json warnings = json::array();
+			AddPrefabMerges(result, warnings, session.MergeOutdatedPrefabInstances());
+			if (!warnings.empty())
+				result["warnings"] = std::move(warnings);
+			return result;
+		}
+
 		void Add(CommandRegistry& registry, std::string name, std::string description, json inputSchema, std::function<json(AutomationSession&, const json&)> handler, CommandPolicy policy = CommandPolicy::Normal)
 		{
 			registry.Register({ std::move(name), std::move(description), std::move(inputSchema), std::move(handler), policy });
@@ -770,7 +780,7 @@ namespace Basalt {
 				session.SetEditScene(CreateRef<Scene>("Untitled"), "");
 				return json{ { "directory", project->GetDirectory().string() } }; }, CommandPolicy::EditBoundary);
 
-			Add(registry, "project.open", "Opens a project (directory or .bproject file) and its start scene.", Schema::Object({ { "path", Schema::String("string", true) } }, { "path" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "project.open", "Opens a project (directory or .bproject file) and its start scene. Instances of prefabs saved since the start scene was merge their prefab, keeping overrides ('prefabInstances'; instances that cannot merge are 'warnings').", Schema::Object({ { "path", Schema::String("string", true) } }, { "path" }), [](AutomationSession& session, const json& params) {
 				std::string error;
 				Ref<Project> project = Project::Load(RequireString(params, "path"), error);
 				if (!project)
@@ -788,12 +798,7 @@ namespace Basalt {
 				{
 					session.SetEditScene(CreateRef<Scene>("Untitled"), "");
 				}
-				json result = { { "name", project->GetConfig().Name }, { "scene", startScene } };
-				json warnings = json::array();
-				AddPrefabMerges(result, warnings, session.MergeOutdatedPrefabInstances());
-				if (!warnings.empty())
-					result["warnings"] = std::move(warnings);
-				return result; }, CommandPolicy::EditBoundary);
+				return WithOutdatedPrefabMerges(session, { { "name", project->GetConfig().Name }, { "scene", startScene } }); }, CommandPolicy::EditBoundary);
 
 			Add(registry, "project.info", "Returns the active project's settings.", Schema::Object(), [](AutomationSession&, const json&) {
 				Ref<Project> project = RequireProject();
@@ -995,20 +1000,15 @@ namespace Basalt {
 				session.MarkDirty();
 				return json{ { "entities", scene->GetEntityCount() } }; }, CommandPolicy::EditBoundary);
 
-			Add(registry, "scene.open", "Opens a scene file (project-relative path). Instances of prefabs saved since the scene was merge their prefab, keeping overrides ('prefabInstances'; instances that cannot merge are 'warnings').", Schema::Object({ { "path", Schema::String("string", true) } }, { "path" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "scene.open", "Opens a scene file (project-relative path). Tracked instances of prefabs saved since the scene was merge their prefab, keeping overrides ('prefabInstances'; instances that cannot merge are 'warnings'); untracked ones are left for prefab.refresh.", Schema::Object({ { "path", Schema::String("string", true) } }, { "path" }), [](AutomationSession& session, const json& params) {
 				const std::string path = ProjectRelative(RequireString(params, "path"));
 				std::string error;
 				Ref<Scene> scene = SceneSerializer::LoadScene(Project::ResolvePath(path), error);
 				if (!scene)
 					throw CommandError(error);
 				session.SetEditScene(scene, path);
-				// Prefabs saved since this scene was keep their instances' overrides and merge now (the scene is then dirty).
-				json result = { { "name", scene->GetName() }, { "entities", scene->GetEntityCount() } };
-				json warnings = json::array();
-				AddPrefabMerges(result, warnings, session.MergeOutdatedPrefabInstances());
-				if (!warnings.empty())
-					result["warnings"] = std::move(warnings);
-				return result; }, CommandPolicy::EditBoundary);
+				// Prefabs saved since this scene was merge into their instances now, keeping overrides (the scene is then dirty).
+				return WithOutdatedPrefabMerges(session, { { "name", scene->GetName() }, { "entities", scene->GetEntityCount() } }); }, CommandPolicy::EditBoundary);
 
 			Add(registry, "scene.save", "Saves the edit scene (to 'path', or the path it was opened from).", Schema::Object({ { "path", Schema::Nullable(Schema::String("string, project-relative, optional")) } }), [](AutomationSession& session, const json& params) {
 				std::string path = OptionalString(params, "path", session.GetScenePath());
@@ -1581,7 +1581,7 @@ namespace Basalt {
 
 		std::string RequirePrefabPath(const json& params)
 		{
-			const auto path = FileSystem::PathToGenericUtf8(FileSystem::PathFromUtf8(ProjectRelative(RequireString(params, "path"))).lexically_normal());
+			const auto path = FileSystem::NormalizeGeneric(ProjectRelative(RequireString(params, "path")));
 			RequireAssetsPath(*RequireProject(), path, "prefab");
 			if (FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(path)) != ".bprefab")
 				throw CommandError("expected a .bprefab file: " + path);
@@ -1605,26 +1605,24 @@ namespace Basalt {
 			return root;
 		}
 
-		// Reads the instance's prefab file and merges it (or reverts field). A partial merge still changed the scene,
-		// so it is marked edited (and captured by history) before the error is reported.
-		void MergeFromSourceFile(AutomationSession& session, Entity root, Prefab::RefreshMode mode, const std::string& field = {})
+		// Reads the instance's prefab file and runs merge (a Prefab::Refresh or RevertOverride) with it. A partial merge
+		// still changed the scene, so it is marked edited (and captured by history) before the error is reported.
+		void MergeFromSourceFile(AutomationSession& session, Entity root, const std::function<Prefab::RefreshResult(const json& source, std::string& error)>& merge)
 		{
 			const std::string path = root.GetComponent<PrefabComponent>().Prefab;
 			json source;
 			std::string error;
-			auto result = Prefab::RefreshResult::Rejected;
-			if (Prefab::ReadSource(Project::ResolvePath(path), source, error))
-				result = field.empty() ? Prefab::Refresh(root, source, mode, error) : Prefab::RevertOverride(root, source, field, error);
-			if (result == Prefab::RefreshResult::Merged || result == Prefab::RefreshResult::Partial)
+			const auto result = Prefab::ReadSource(Project::ResolvePath(path), source, error) ? merge(source, error) : Prefab::RefreshResult::Rejected;
+			if (Prefab::ChangedScene(result))
 				MarkEdited(session);
-			if (result == Prefab::RefreshResult::Rejected || result == Prefab::RefreshResult::Partial)
-				throw CommandError(fmt::format("instance '{}' of {}{}: {}", root.GetName(), path, result == Prefab::RefreshResult::Partial ? " was only partly merged" : "", error));
+			if (Prefab::Failed(result))
+				throw CommandError(fmt::format("instance '{}' of {}{}: {}", root.GetName(), path, result == Prefab::RefreshResult::Partial ? " was only partly merged (merge it again with prefab.refresh)" : "", error));
 		}
 
 		json PrefabOverridesResult(Entity root)
 		{
 			const auto& link = root.GetComponent<PrefabComponent>();
-			return { { "prefab", link.Prefab }, { "tracked", !link.Members.empty() && !link.Baseline.empty() }, { "overrides", Prefab::ComputeOverrides(root) }, { "members", link.Members } };
+			return { { "prefab", link.Prefab }, { "tracked", Prefab::IsTracked(link) }, { "overrides", Prefab::ComputeOverrides(root) }, { "members", link.Members } };
 		}
 
 		// Writing a prefab merges it into the scene's instances. Those that could not merge are warnings, not errors,
@@ -1641,14 +1639,6 @@ namespace Basalt {
 			out.push_back(entity);
 			for (Entity child : entity.GetChildren())
 				CollectTree(child, out);
-		}
-
-		bool HasNestedPrefabInstance(Entity root)
-		{
-			for (Entity child : root.GetChildren())
-				if (child.HasComponent<PrefabComponent>() || HasNestedPrefabInstance(child))
-					return true;
-			return false;
 		}
 
 		void RegisterAssets(CommandRegistry& registry)
@@ -1701,8 +1691,13 @@ namespace Basalt {
 				if (!project->GetAssets().Remove(path, error))
 					throw CommandError(error);
 				session.AcknowledgeFile(path + ".meta");
-				session.OnFileWritten(path);
-				return json{ { "path", path } }; }, CommandPolicy::EditBoundary);
+				json result = { { "path", path } };
+				json warnings = json::array();
+				// Instances of a deleted prefab keep their state; each one is reported.
+				AddPrefabMerges(result, warnings, session.OnFileWritten(path));
+				if (!warnings.empty())
+					result["warnings"] = std::move(warnings);
+				return result; }, CommandPolicy::EditBoundary);
 
 			Add(registry, "asset.list", "Lists project asset files, optionally filtered by extensions (e.g. ['.lua']).", Schema::Object({ { "extensions", Schema::Array("array of strings", Schema::String()) } }), [](AutomationSession&, const json& params) {
 				RequireProject();
@@ -1758,7 +1753,7 @@ namespace Basalt {
 				return result;
 			});
 
-			Add(registry, "asset.write", "Writes a text asset (script, prefab, scene, animation graph, material...) to a project-relative path and reloads it. A .banimgraph or .bmaterial is validated before replacing the file; a material's texture problems (missing, wrong letter case, unresolved, not a texture, outside Assets/, an embedded image the model lacks) are reported in 'warnings', as project.validate reports them. A script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts').", Schema::Object({ { "path", Schema::String("string", true) }, { "content", Schema::String("string") } }, { "path", "content" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "asset.write", "Writes a text asset (script, prefab, scene, animation graph, material...) to a project-relative path and reloads it. A .banimgraph or .bmaterial is validated before replacing the file; a material's texture problems (missing, wrong letter case, unresolved, not a texture, outside Assets/, an embedded image the model lacks) are reported in 'warnings', as project.validate reports them. A script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts'). A .bprefab merges into the edit scene's instances ('prefabInstances'; instances that cannot merge are 'warnings').", Schema::Object({ { "path", Schema::String("string", true) }, { "content", Schema::String("string") } }, { "path", "content" }), [](AutomationSession& session, const json& params) {
 				RequireProject();
 				const std::string path = ProjectRelative(RequireString(params, "path"));
 				const json& content = Require(params, "content");
@@ -1798,7 +1793,7 @@ namespace Basalt {
 				return result;
 			});
 
-			Add(registry, "asset.refresh", "Reloads the asset files changed on disk since changes were last reported (by an earlier refresh, by the editor's automatic reload, or since the project was opened in this process): models, textures, animation graphs and material files load again on their next use (graphs restart from their initial state and parameter defaults), and while the game runs (Play, not Simulate) changed scripts are hot reloaded (instances keep their fields; OnReload is called). With 'paths', reloads those files instead, changed or not (a path that does not exist and was not known is an error, and nothing is reloaded then). Files the session wrote itself (asset.write, scene.save, ...) are not reported again. Without 'paths', fails when Assets/ cannot be read.", Schema::Object({ { "paths", Schema::Array("array of project-relative file paths, optional", Schema::String("string", true)) } }), [](AutomationSession& session, const json& params) {
+			Add(registry, "asset.refresh", "Reloads the asset files changed on disk since changes were last reported (by an earlier refresh, by the editor's automatic reload, or since the project was opened in this process): models, textures, animation graphs and material files load again on their next use (graphs restart from their initial state and parameter defaults), and while the game runs (Play, not Simulate) changed scripts are hot reloaded (instances keep their fields; OnReload is called). With 'paths', reloads those files instead, changed or not (a path that does not exist and was not known is an error, and nothing is reloaded then). Files the session wrote itself (asset.write, scene.save, ...) are not reported again. Changed .bprefab files merge into the edit scene's instances ('prefabInstances'; instances that cannot merge are 'warnings'). Without 'paths', fails when Assets/ cannot be read.", Schema::Object({ { "paths", Schema::Array("array of project-relative file paths, optional", Schema::String("string", true)) } }), [](AutomationSession& session, const json& params) {
 				RequireProject();
 				std::vector<FileChange> changes;
 				json warnings = json::array();
@@ -1960,13 +1955,13 @@ namespace Basalt {
 				return EntitySummary(root);
 			});
 
-			Add(registry, "prefab.open", "Opens a prefab for editing in its own scene. The current scene, with its unsaved edits, selection and undo history (in the editor), waits until prefab.close. While the prefab is open, edit-boundary commands are rejected (scene.new/open/save, project.create/open/export, asset.move/rename/delete/resolve, play.start, replay.run, prefab.open/apply): prefab.save and prefab.close are the way back.", Schema::Object({ { "path", Schema::String(".bprefab path under Assets/", true) } }, { "path" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "prefab.open", "Opens a prefab for editing in its own scene. The current scene, with its unsaved edits, selection and undo history (in the editor), waits until prefab.close. While the prefab is open, every edit-boundary command except prefab.save and prefab.close is rejected, and so is project.export (today: scene.new/open/save, project.create/open, asset.move/rename/delete/resolve, play.start, replay.run, prefab.open/apply)", Schema::Object({ { "path", Schema::String(".bprefab path under Assets/", true) } }, { "path" }), [](AutomationSession& session, const json& params) {
 				const auto path = RequirePrefabPath(params);
 				std::string error;
 				if (!session.OpenPrefab(path, error))
 					throw CommandError(error);
 				return json{ { "path", path }, { "entities", session.GetEditScene()->GetEntityCount() } }; }, CommandPolicy::EditBoundary);
-			Add(registry, "prefab.save", "Saves the open prefab and merges it into the instances of the waiting scene, keeping their overrides ('instances' counts those that merged). Instances that cannot merge keep their previous state and are listed in 'warnings'. Rejected when the file changed on disk since it was opened or last saved (unless force), when the scene does not have exactly one root, or when it contains prefab instances (unpack them).", Schema::Object({ { "force", Schema::Boolean("overwrite the file even if it changed on disk (default false)") } }), [](AutomationSession& session, const json& params) {
+			Add(registry, "prefab.save", "Saves the open prefab and merges it into the instances of the waiting scene, keeping their overrides ('instances' counts those that merged). Instances that cannot merge are listed in 'warnings' (a rejected one keeps its previous state; a partly merged one merges fully on prefab.refresh). Rejected when the file changed on disk since it was opened or last saved (unless force), when the scene does not have exactly one root, or when it contains prefab instances (unpack them).", Schema::Object({ { "force", Schema::Boolean("overwrite the file even if it changed on disk (default false)") } }), [](AutomationSession& session, const json& params) {
 				std::string error;
 				AssetReloadReport report;
 				std::vector<std::string> warnings;
@@ -1989,40 +1984,51 @@ namespace Basalt {
 					throw CommandError(fmt::format("instance '{}' of {}: {}", root.GetName(), path, error));
 				MarkEdited(session);
 				return PrefabWriteResult(path, session.OnFileWritten(path), std::move(warnings)); }, CommandPolicy::EditBoundary);
-			Add(registry, "prefab.refresh", "Merges the prefab file into an instance, keeping its overrides, entity IDs and the entities it added. Prefab writes and scene.open merge instances automatically; this also catches up an instance by hand. Instances saved before override tracking are adopted first (here and by revert, apply and automatic merges): their differences from the current file become overrides, so that file's changes are not taken. Edit mode only.", entityOnly, [](AutomationSession& session, const json& params) {
+			Add(registry, "prefab.refresh", "Merges the prefab file into an instance, keeping its overrides, entity IDs and the entities it added. Prefab writes and scene.open merge tracked instances automatically; this catches up an instance by hand. Instances saved before override tracking are adopted first (here, by revert and apply, and by the merge after a prefab write; scene.open and project.open leave them untracked): their differences from the current file become overrides, so that file's changes are not taken. Edit mode only.", entityOnly, [](AutomationSession& session, const json& params) {
 				Entity root = RequirePrefabInstance(session, params);
-				MergeFromSourceFile(session, root, Prefab::RefreshMode::Merge);
+				MergeFromSourceFile(session, root, [&](const json& source, std::string& error) { return Prefab::Refresh(root, source, Prefab::RefreshMode::Merge, error); });
 				return PrefabOverridesResult(root); });
 			Add(registry, "prefab.revert", "Discards an instance's overrides: all of them, or the one override path 'field' from prefab.overrides. The root's position, rotation and parent and the entities the instance added stay. An untracked instance is adopted first, so reverting all discards its differences from the prefab. Edit mode only.", Schema::Object({ { "entity", Schema::Entity("prefab instance root") }, { "field", Schema::String("one override path from prefab.overrides, optional") } }, { "entity" }), [](AutomationSession& session, const json& params) {
 				Entity root = RequirePrefabInstance(session, params);
-				MergeFromSourceFile(session, root, Prefab::RefreshMode::RevertAll, OptionalString(params, "field"));
+				const std::string field = OptionalString(params, "field");
+				MergeFromSourceFile(session, root, [&](const json& source, std::string& error) {
+					return field.empty() ? Prefab::Refresh(root, source, Prefab::RefreshMode::RevertAll, error) : Prefab::RevertOverride(root, source, field, error);
+				});
 				return PrefabOverridesResult(root); });
 			Add(registry, "prefab.unpack", "Removes an instance's prefab link and keeps its entities as ordinary scene entities. Edit mode only.", entityOnly, [](AutomationSession& session, const json& params) {
 				Entity root = RequirePrefabInstance(session, params);
 				root.RemoveComponent<PrefabComponent>();
 				MarkEdited(session);
 				return EntitySummary(root); });
-			Add(registry, "prefab.overrides", "Lists an instance's overrides: JSON-pointer paths into its source records ('/<source ID>' for a deleted entity, '/<source ID>/Name', '/<source ID>/Parent', '/<source ID>/Components/<component>[/<field>...]') with the instance's value, null where it removed something. Fields are whole values (vectors and lists are not merged element by element); the root's position and rotation are placement, not overrides. 'members' maps source entity IDs to instance entity IDs (including reserved IDs of entities the instance deleted); 'tracked' is false for an instance saved before tracking (it has no overrides until adopted).", entityOnly, [](AutomationSession& session, const json& params) { return PrefabOverridesResult(RequirePrefabRoot(session, params)); });
+			Add(registry, "prefab.overrides", "Lists an instance's overrides: JSON-pointer paths into its source records ('/<source ID>' for a whole entity: null when the instance deleted it, its record when the instance kept an entity the prefab no longer has; '/<source ID>/Name', '/<source ID>/Parent', '/<source ID>/Components/<component>[/<field>...]') with the instance's value, null where it removed something. Entity references are source IDs for the instance's entities, scene UUIDs otherwise, and {\"External\": <UUID>} where a scene UUID equals a source ID. Fields are whole values (vectors and lists are not merged element by element); the root's position and rotation are placement, not overrides. 'members' maps source entity IDs to instance entity IDs (including reserved IDs of entities the instance deleted); 'tracked' is false for an instance saved before tracking (it has no overrides until adopted).", entityOnly, [](AutomationSession& session, const json& params) { return PrefabOverridesResult(RequirePrefabRoot(session, params)); });
 
-			Add(registry, "prefab.create", "Saves an entity tree as a prefab file and makes the tree an instance of it ('linked'; not during Play, while a prefab is open, or when the tree contains prefab instances, which are saved unpacked). Then merges the file into the open scene's other instances ('instances'). Overwriting a prefab keeps its entity IDs (through the tree's instance link, or by matching names), so existing instances keep merging.", Schema::Object({ { "entity", Schema::Entity("ID or name") }, { "path", Schema::String(".bprefab path under Assets/, e.g. 'Assets/Prefabs/Enemy.bprefab'", true) } }, { "entity", "path" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "prefab.create", "Saves an entity tree as a prefab file and makes the tree an instance of it ('linked'; not during Play, while a prefab is open, when the tree contains prefab instances, which are saved unpacked, or when it belongs to another instance or prefab, kept with a warning). Then merges the file into the open scene's other instances ('instances'). Overwriting a prefab keeps its entity IDs (through the tree's instance link, or by matching names), so existing instances keep merging.", Schema::Object({ { "entity", Schema::Entity("ID or name") }, { "path", Schema::String(".bprefab path under Assets/, e.g. 'Assets/Prefabs/Enemy.bprefab'", true) } }, { "entity", "path" }), [](AutomationSession& session, const json& params) {
 				Entity entity = RequireEntity(session, params);
 				const std::string path = RequirePrefabPath(params);
+				std::vector<Entity> tree;
+				CollectTree(entity, tree);
 				std::vector<std::string> warnings;
-				const bool nested = HasNestedPrefabInstance(entity);
+				const bool nested = std::any_of(tree.begin() + 1, tree.end(), [](Entity e) { return e.HasComponent<PrefabComponent>(); });
 				if (nested)
 					warnings.emplace_back("nested prefab instances were saved unpacked and the tree stays unlinked: a prefab's entities cannot be instances themselves");
+				// Linking would take the tree away from an instance it belongs to, or replace its link to another prefab.
+				const Entity enclosing = Prefab::EnclosingInstance(entity);
+				if (enclosing)
+					warnings.push_back(fmt::format("'{}' stays part of the prefab instance '{}' (not linked to {})", entity.GetName(), enclosing.GetName(), path));
+				const auto* existingLink = entity.TryGetComponent<PrefabComponent>();
+				const bool otherPrefab = existingLink && Prefab::NormalizePath(existingLink->Prefab) != path;
+				if (otherPrefab)
+					warnings.push_back(fmt::format("'{}' stays an instance of {} (not linked to {})", entity.GetName(), existingLink->Prefab, path));
 				json entities = SceneSerializer::SerializeEntityTree(entity);
-				Prefab::AssignSourceIds(entity, path, entities);
+				Prefab::AssignSourceIds(entity, path, entities, warnings);
 				std::string error;
 				if (!SceneSerializer::SavePrefabEntities(entities, Project::ResolvePath(path), error))
 					throw CommandError(error);
 				// The saved tree becomes an instance of its prefab, so saving it again keeps every entity's ID even after
 				// renames and moves. Linked before the write merges, so the tree itself has nothing to merge.
-				const bool link = !nested && !session.IsPlaying() && !session.IsEditingPrefab();
+				const bool link = !nested && !enclosing && !otherPrefab && !session.IsPlaying() && !session.IsEditingPrefab();
 				if (link)
 				{
-					std::vector<Entity> tree;
-					CollectTree(entity, tree);
 					Prefab::Link(tree, entities, path);
 					MarkEdited(session);
 				}
@@ -2031,7 +2037,7 @@ namespace Basalt {
 				return result;
 			});
 
-			Add(registry, "prefab.instantiate", "Instantiates a prefab into the scene.", Schema::Object({ { "path", Schema::String("string", true) }, { "parent", Schema::Nullable(Schema::Entity("ID or name, optional")) }, { "position", Schema::Vector("[x, y, z], optional", 3) } }, { "path" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "prefab.instantiate", "Instantiates a prefab into the scene. The prefab file needs unique nonzero entity IDs and one root listed first. The root's Prefab component tracks the instance (with a baseline in edit mode), so prefab saves merge into it.", Schema::Object({ { "path", Schema::String(".bprefab path, e.g. 'Assets/Prefabs/Enemy.bprefab'", true) }, { "parent", Schema::Nullable(Schema::Entity("ID or name, optional")) }, { "position", Schema::Vector("[x, y, z], optional", 3) } }, { "path" }), [](AutomationSession& session, const json& params) {
 				Scene& scene = RequireScene(session);
 				const std::string path = ProjectRelative(RequireString(params, "path"));
 				Entity parent = params.contains("parent") && !params["parent"].is_null() ? ResolveEntity(scene, params["parent"], "parent") : Entity{};

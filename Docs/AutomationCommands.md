@@ -656,7 +656,7 @@ Reads a text asset.
 
 ### `asset.refresh`
 
-Reloads the asset files changed on disk since changes were last reported (by an earlier refresh, by the editor's automatic reload, or since the project was opened in this process): models, textures, animation graphs and material files load again on their next use (graphs restart from their initial state and parameter defaults), and while the game runs (Play, not Simulate) changed scripts are hot reloaded (instances keep their fields; OnReload is called). With 'paths', reloads those files instead, changed or not (a path that does not exist and was not known is an error, and nothing is reloaded then). Files the session wrote itself (asset.write, scene.save, ...) are not reported again. Without 'paths', fails when Assets/ cannot be read.
+Reloads the asset files changed on disk since changes were last reported (by an earlier refresh, by the editor's automatic reload, or since the project was opened in this process): models, textures, animation graphs and material files load again on their next use (graphs restart from their initial state and parameter defaults), and while the game runs (Play, not Simulate) changed scripts are hot reloaded (instances keep their fields; OnReload is called). With 'paths', reloads those files instead, changed or not (a path that does not exist and was not known is an error, and nothing is reloaded then). Files the session wrote itself (asset.write, scene.save, ...) are not reported again. Changed .bprefab files merge into the edit scene's instances ('prefabInstances'; instances that cannot merge are 'warnings'). Without 'paths', fails when Assets/ cannot be read.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -752,7 +752,7 @@ Resolves an asset UUID (decimal string) to its current project-relative path. Re
 
 ### `asset.write`
 
-Writes a text asset (script, prefab, scene, animation graph, material...) to a project-relative path and reloads it. A .banimgraph or .bmaterial is validated before replacing the file; a material's texture problems (missing, wrong letter case, unresolved, not a texture, outside Assets/, an embedded image the model lacks) are reported in 'warnings', as project.validate reports them. A script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts').
+Writes a text asset (script, prefab, scene, animation graph, material...) to a project-relative path and reloads it. A .banimgraph or .bmaterial is validated before replacing the file; a material's texture problems (missing, wrong letter case, unresolved, not a texture, outside Assets/, an embedded image the model lacks) are reported in 'warnings', as project.validate reports them. A script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts'). A .bprefab merges into the edit scene's instances ('prefabInstances'; instances that cannot merge are 'warnings').
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2294,7 +2294,7 @@ Returns to the scene that waited during prefab editing, with its path, unsaved s
 
 ### `prefab.create`
 
-Saves an entity tree as a prefab file and makes the tree an instance of it ('linked'; not during Play, while a prefab is open, or when the tree contains prefab instances, which are saved unpacked). Then merges the file into the open scene's other instances ('instances'). Overwriting a prefab keeps its entity IDs (through the tree's instance link, or by matching names), so existing instances keep merging.
+Saves an entity tree as a prefab file and makes the tree an instance of it ('linked'; not during Play, while a prefab is open, when the tree contains prefab instances, which are saved unpacked, or when it belongs to another instance or prefab, kept with a warning). Then merges the file into the open scene's other instances ('instances'). Overwriting a prefab keeps its entity IDs (through the tree's instance link, or by matching names), so existing instances keep merging.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2341,12 +2341,12 @@ Saves an entity tree as a prefab file and makes the tree an instance of it ('lin
 
 ### `prefab.instantiate`
 
-Instantiates a prefab into the scene.
+Instantiates a prefab into the scene. The prefab file needs unique nonzero entity IDs and one root listed first. The root's Prefab component tracks the instance (with a baseline in edit mode), so prefab saves merge into it.
 
 | Parameter | Type / description |
 |-----------|--------------------|
 | `parent` | ID or name, optional |
-| `path` | string |
+| `path` | .bprefab path, e.g. 'Assets/Prefabs/Enemy.bprefab' |
 | `position` | [x, y, z], optional |
 
 <details><summary>Parameter JSON Schema</summary>
@@ -2380,7 +2380,7 @@ Instantiates a prefab into the scene.
       "description": "ID or name, optional"
     },
     "path": {
-      "description": "string",
+      "description": ".bprefab path, e.g. 'Assets/Prefabs/Enemy.bprefab'",
       "minLength": 1,
       "type": "string"
     },
@@ -2408,7 +2408,7 @@ Instantiates a prefab into the scene.
 
 ### `prefab.open`
 
-Opens a prefab for editing in its own scene. The current scene, with its unsaved edits, selection and undo history (in the editor), waits until prefab.close. While the prefab is open, edit-boundary commands are rejected (scene.new/open/save, project.create/open/export, asset.move/rename/delete/resolve, play.start, replay.run, prefab.open/apply): prefab.save and prefab.close are the way back.
+Opens a prefab for editing in its own scene. The current scene, with its unsaved edits, selection and undo history (in the editor), waits until prefab.close. While the prefab is open, every edit-boundary command except prefab.save and prefab.close is rejected, and so is project.export (today: scene.new/open/save, project.create/open, asset.move/rename/delete/resolve, play.start, replay.run, prefab.open/apply)
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2437,7 +2437,7 @@ Opens a prefab for editing in its own scene. The current scene, with its unsaved
 
 ### `prefab.overrides`
 
-Lists an instance's overrides: JSON-pointer paths into its source records ('/<source ID>' for a deleted entity, '/<source ID>/Name', '/<source ID>/Parent', '/<source ID>/Components/<component>[/<field>...]') with the instance's value, null where it removed something. Fields are whole values (vectors and lists are not merged element by element); the root's position and rotation are placement, not overrides. 'members' maps source entity IDs to instance entity IDs (including reserved IDs of entities the instance deleted); 'tracked' is false for an instance saved before tracking (it has no overrides until adopted).
+Lists an instance's overrides: JSON-pointer paths into its source records ('/<source ID>' for a whole entity: null when the instance deleted it, its record when the instance kept an entity the prefab no longer has; '/<source ID>/Name', '/<source ID>/Parent', '/<source ID>/Components/<component>[/<field>...]') with the instance's value, null where it removed something. Entity references are source IDs for the instance's entities, scene UUIDs otherwise, and {"External": <UUID>} where a scene UUID equals a source ID. Fields are whole values (vectors and lists are not merged element by element); the root's position and rotation are placement, not overrides. 'members' maps source entity IDs to instance entity IDs (including reserved IDs of entities the instance deleted); 'tracked' is false for an instance saved before tracking (it has no overrides until adopted).
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2477,7 +2477,7 @@ Lists an instance's overrides: JSON-pointer paths into its source records ('/<so
 
 ### `prefab.refresh`
 
-Merges the prefab file into an instance, keeping its overrides, entity IDs and the entities it added. Prefab writes and scene.open merge instances automatically; this also catches up an instance by hand. Instances saved before override tracking are adopted first (here and by revert, apply and automatic merges): their differences from the current file become overrides, so that file's changes are not taken. Edit mode only.
+Merges the prefab file into an instance, keeping its overrides, entity IDs and the entities it added. Prefab writes and scene.open merge tracked instances automatically; this catches up an instance by hand. Instances saved before override tracking are adopted first (here, by revert and apply, and by the merge after a prefab write; scene.open and project.open leave them untracked): their differences from the current file become overrides, so that file's changes are not taken. Edit mode only.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2562,7 +2562,7 @@ Discards an instance's overrides: all of them, or the one override path 'field' 
 
 ### `prefab.save`
 
-Saves the open prefab and merges it into the instances of the waiting scene, keeping their overrides ('instances' counts those that merged). Instances that cannot merge keep their previous state and are listed in 'warnings'. Rejected when the file changed on disk since it was opened or last saved (unless force), when the scene does not have exactly one root, or when it contains prefab instances (unpack them).
+Saves the open prefab and merges it into the instances of the waiting scene, keeping their overrides ('instances' counts those that merged). Instances that cannot merge are listed in 'warnings' (a rejected one keeps its previous state; a partly merged one merges fully on prefab.refresh). Rejected when the file changed on disk since it was opened or last saved (unless force), when the scene does not have exactly one root, or when it contains prefab instances (unpack them).
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2761,7 +2761,7 @@ Returns the active project's settings.
 
 ### `project.open`
 
-Opens a project (directory or .bproject file) and its start scene.
+Opens a project (directory or .bproject file) and its start scene. Instances of prefabs saved since the start scene was merge their prefab, keeping overrides ('prefabInstances'; instances that cannot merge are 'warnings').
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -3668,7 +3668,7 @@ Replaces the open scene with an empty one (with a camera, sun and sky unless emp
 
 ### `scene.open`
 
-Opens a scene file (project-relative path). Instances of prefabs saved since the scene was merge their prefab, keeping overrides ('prefabInstances'; instances that cannot merge are 'warnings').
+Opens a scene file (project-relative path). Tracked instances of prefabs saved since the scene was merge their prefab, keeping overrides ('prefabInstances'; instances that cannot merge are 'warnings'); untracked ones are left for prefab.refresh.
 
 | Parameter | Type / description |
 |-----------|--------------------|

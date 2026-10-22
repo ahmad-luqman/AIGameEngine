@@ -56,9 +56,13 @@ namespace Basalt {
 		static Entity DeserializeEntityTree(Scene& scene, const nlohmann::json& entities, Entity parent, std::string& outError);
 
 		static bool SavePrefab(Entity root, const std::filesystem::path& path, std::string& outError);
+		// A current-format scene document holding entity records, for DeserializeScene into a scratch scene.
+		static nlohmann::json SceneDocument(nlohmann::json entities);
 		// Saves entity records (as SerializeEntityTree writes them, the root first) as a prefab file.
 		static bool SavePrefabEntities(nlohmann::json entities, const std::filesystem::path& path, std::string& outError);
-		// Instantiates a prefab file into the scene. The new root gets a PrefabComponent naming prefabPath.
+		// Instantiates a prefab file into the scene after checking its structure (Prefab::ReadFile); on failure nothing is
+		// left in the scene. The new root's PrefabComponent names prefabPath (normalized) and tracks its entities
+		// (Prefab::Link).
 		static Entity InstantiatePrefab(Scene& scene, const std::filesystem::path& absolutePath, const std::string& prefabPath, Entity parent, std::string& outError);
 
 		static nlohmann::json SerializeEntity(Entity entity);

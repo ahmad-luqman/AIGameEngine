@@ -62,13 +62,15 @@ namespace {
 	// Saves the scene opened with --scene after changes, so one-shot invocations persist their work.
 	bool AutoSave(const CommandRegistry& registry, AutomationSession& session, bool enabled)
 	{
+		if (!enabled)
+			return true;
 		// The scene to save waits behind the open prefab, and saving it would need prefab.close first.
-		if (enabled && session.IsEditingPrefab() && (session.IsDirty() || session.IsWaitingSceneDirty()))
+		if (session.IsEditingPrefab() && (session.IsDirty() || session.IsWaitingSceneDirty()))
 		{
-			std::cerr << "basalt: '" << session.GetPrefabPath() << "' is still open, so its unsaved edits and the scene's were not saved (prefab.save and prefab.close it first)\n";
+			std::cerr << "basalt: '" << session.GetPrefabPath() << "' is still open, so unsaved edits (in the prefab or in the scene waiting behind it) were not saved: prefab.save and prefab.close it first\n";
 			return false;
 		}
-		if (!enabled || !session.IsDirty() || session.GetScenePath().empty())
+		if (!session.IsDirty() || session.GetScenePath().empty())
 			return true;
 		const nlohmann::json response = registry.HandleRequest(session, { { "command", "scene.save" } });
 		if (!response.value("ok", false))
@@ -125,6 +127,15 @@ int main(int argc, char** argv)
 			(mode == "mcp" ? std::cerr : std::cout) << Dump(response, 2) << std::endl;
 			return 1;
 		}
+		// Opening merges instances of prefabs saved since the scene was. That alone must not make a read-only
+		// invocation rewrite the scene: it is saved with the session's own edits, if any.
+		const nlohmann::json& result = response["result"];
+		if (result.value("prefabInstances", 0) > 0)
+			std::cerr << "basalt: merged " << result["prefabInstances"].get<size_t>() << " prefab instance(s) saved since the scene was\n";
+		if (const auto warnings = result.find("warnings"); warnings != result.end())
+			for (const auto& warning : *warnings)
+				std::cerr << "basalt: " << warning.get<std::string>() << "\n";
+		session.ClearDirty();
 	}
 	const bool autoSave = commandLine.GetValue("scene").has_value() && !commandLine.HasFlag("no-save");
 
