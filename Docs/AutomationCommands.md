@@ -2226,9 +2226,75 @@ Stops play mode and restores the edit scene.
 
 ## prefab
 
+### `prefab.apply`
+
+Writes an instance's overrides into its prefab file, then merges the file into every instance of the scene. The root's position and rotation and entities the instance added stay local. Edit mode only.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `entity` | prefab instance root |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "entity": {
+      "anyOf": [
+        {
+          "description": "",
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "description": "",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        }
+      ],
+      "description": "prefab instance root"
+    }
+  },
+  "required": [
+    "entity"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
+### `prefab.close`
+
+Returns to the scene that waited during prefab editing, with its selection and unsaved state. Unsaved prefab edits require discard=true.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `discard` | discard unsaved prefab edits (default false) |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "discard": {
+      "description": "discard unsaved prefab edits (default false)",
+      "type": "boolean"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+</details>
+
 ### `prefab.create`
 
-Saves an entity tree as a prefab file.
+Saves an entity tree as a prefab file and merges it into existing instances of that file. Prefab links inside the tree are not saved.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2333,6 +2399,217 @@ Instantiates a prefab into the scene.
   },
   "required": [
     "path"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
+### `prefab.open`
+
+Opens a prefab for editing in an isolated scene; the current scene, its unsaved edits and selection wait until prefab.close. While it is open, commands that change scenes, projects or asset paths, and Play, are rejected. Nested prefab instances must be unpacked before saving.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `path` | .bprefab path under Assets/ |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "description": ".bprefab path under Assets/",
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
+### `prefab.overrides`
+
+Lists an instance's overrides as JSON-pointer paths into its source records, '/<source entity ID>/Components/<component>/<field>' (null: removed), with 'members' mapping source entity IDs to the instance's entity IDs. Values are whole fields: lists and vectors are not merged element-wise. The root's position and rotation are placement, not overrides.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `entity` | prefab instance root |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "entity": {
+      "anyOf": [
+        {
+          "description": "",
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "description": "",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        }
+      ],
+      "description": "prefab instance root"
+    }
+  },
+  "required": [
+    "entity"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
+### `prefab.refresh`
+
+Merges the prefab file into an instance, keeping its overrides, the entity IDs and local added entities. Saving or applying a prefab refreshes instances automatically; this also adopts instances saved before override tracking. Edit mode only.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `entity` | prefab instance root |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "entity": {
+      "anyOf": [
+        {
+          "description": "",
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "description": "",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        }
+      ],
+      "description": "prefab instance root"
+    }
+  },
+  "required": [
+    "entity"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
+### `prefab.revert`
+
+Discards an instance's overrides: every one, or the one JSON-pointer 'field' that prefab.overrides lists. The root's position and rotation and local added entities stay. Edit mode only.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `entity` | prefab instance root |
+| `field` | one override path from prefab.overrides, optional |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "entity": {
+      "anyOf": [
+        {
+          "description": "",
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "description": "",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        }
+      ],
+      "description": "prefab instance root"
+    },
+    "field": {
+      "description": "one override path from prefab.overrides, optional",
+      "type": "string"
+    }
+  },
+  "required": [
+    "entity"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
+### `prefab.save`
+
+Saves the open prefab and merges it into the instances of the waiting scene, keeping their overrides. Rejects the save when the file changed on disk since prefab.open. Instances that cannot merge keep their previous state and are reported in 'warnings'.
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "required": [],
+  "type": "object"
+}
+```
+
+</details>
+
+### `prefab.unpack`
+
+Removes an instance's prefab link and keeps its entities as ordinary scene entities. Edit mode only.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `entity` | prefab instance root |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "entity": {
+      "anyOf": [
+        {
+          "description": "",
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "description": "",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        }
+      ],
+      "description": "prefab instance root"
+    }
+  },
+  "required": [
+    "entity"
   ],
   "type": "object"
 }

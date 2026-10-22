@@ -28,7 +28,7 @@ jobs:
         timeout-minutes: 20
         if: runner.os == 'Linux'
         run: |
-          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
+          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 libdbus-1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
       - name: Install dependencies (macOS)
         timeout-minutes: 10
@@ -93,7 +93,7 @@ jobs:
       - name: Install dependencies
         timeout-minutes: 20
         run: |
-          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 clang libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
+          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 clang libdbus-1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
       - name: Cache dependencies
         uses: actions/cache@v4
@@ -124,7 +124,7 @@ jobs:
       - name: Install dependencies
         timeout-minutes: 20
         run: |
-          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 clang clang-tidy libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
+          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 clang clang-tidy libdbus-1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
       - name: Cache dependencies
         uses: actions/cache@v4
@@ -152,7 +152,7 @@ jobs:
       - name: Install dependencies
         timeout-minutes: 20
         run: |
-          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 clang llvm libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
+          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 clang llvm libdbus-1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
       - name: Cache dependencies
         uses: actions/cache@v4
@@ -192,7 +192,7 @@ jobs:
       - name: Install dependencies
         timeout-minutes: 20
         run: |
-          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 mesa-vulkan-drivers vulkan-validationlayers vulkan-tools xvfb xauth libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
+          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 mesa-vulkan-drivers vulkan-validationlayers vulkan-tools xvfb xauth libdbus-1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
       # Load only lavapipe, so the run never depends on what else the runner image installs. The manifest's
       # file name differs between Mesa packages, so find it instead of hard-coding it.
@@ -254,7 +254,7 @@ jobs:
       - name: Install dependencies
         timeout-minutes: 20
         run: |
-          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 clang libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
+          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 clang libdbus-1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
       - name: Cache dependencies
         uses: actions/cache@v4

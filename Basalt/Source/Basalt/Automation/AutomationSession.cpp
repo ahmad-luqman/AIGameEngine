@@ -8,6 +8,8 @@
 #include "Basalt/Project/Project.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
+#include "Basalt/Scene/Prefab.h"
+#include "Basalt/Scene/SceneSerializer.h"
 #include "Basalt/Scene/SceneEventListener.h"
 #include "Basalt/Scripting/ScriptEngine.h"
 
@@ -174,6 +176,140 @@ namespace Basalt {
 			OnSceneChanged();
 	}
 
+	bool AutomationSession::OpenPrefab(const std::string& path, std::string& outError)
+	{
+		if (IsPlaying() || IsEditingPrefab())
+		{
+			outError = IsPlaying() ? "stop Play or Simulate before editing a prefab" : "close '" + m_PrefabPath + "' (prefab.close) before opening another prefab";
+			return false;
+		}
+		const auto absolute = Project::ResolvePath(path);
+		const auto text = FileSystem::ReadTextFile(absolute);
+		nlohmann::json entities;
+		if (!text || !Prefab::ReadSource(absolute, entities, outError))
+		{
+			if (!text)
+				outError = "cannot read prefab '" + path + "'";
+			return false;
+		}
+		auto scene = CreateRef<Scene>(FileSystem::PathToUtf8(FileSystem::PathFromUtf8(path).stem()));
+		if (!SceneSerializer::DeserializeScene(*scene, { { "Format", "BasaltScene" }, { "Version", SceneSerializer::FormatVersion }, { "Entities", entities } }, outError))
+			return false;
+		m_PrefabReturnScene = m_EditScene;
+		m_PrefabReturnPath = m_ScenePath;
+		m_PrefabReturnDirty = m_Dirty;
+		m_PrefabReturnSelection = m_Selection;
+		m_PrefabPath = path;
+		m_PrefabFileText = *text;
+		SetEditScene(scene, "");
+		return true;
+	}
+
+	bool AutomationSession::SavePrefab(std::string& outError, AssetReloadReport& outReport)
+	{
+		if (!IsEditingPrefab() || IsPlaying())
+		{
+			outError = IsPlaying() ? "stop Play or Simulate before saving the prefab" : "no prefab is open (prefab.open)";
+			return false;
+		}
+		const auto absolute = Project::ResolvePath(m_PrefabPath);
+		const auto onDisk = FileSystem::ReadTextFile(absolute);
+		if (!onDisk || *onDisk != m_PrefabFileText)
+		{
+			outError = "'" + m_PrefabPath + "' changed on disk since it was opened; close it with discard=true and open it again";
+			return false;
+		}
+		const auto roots = m_EditScene->GetRootEntities();
+		if (roots.size() != 1)
+		{
+			outError = "a prefab needs exactly one root entity, found " + std::to_string(roots.size());
+			return false;
+		}
+		for (Entity entity : m_EditScene->GetAllEntitiesOrdered())
+			if (entity.HasComponent<PrefabComponent>())
+			{
+				outError = "unpack the nested prefab instance '" + entity.GetName() + "' before saving: a prefab's entities cannot be instances";
+				return false;
+			}
+		if (!SceneSerializer::SavePrefab(roots.front(), absolute, outError))
+			return false;
+		const auto written = FileSystem::ReadTextFile(absolute);
+		if (!written)
+		{
+			outError = "'" + m_PrefabPath + "' was written but could not be read back";
+			return false;
+		}
+		m_PrefabFileText = *written;
+		ClearDirty();
+		outReport = OnFileWritten(m_PrefabPath);
+		return true;
+	}
+
+	bool AutomationSession::ClosePrefab(bool discard, std::string& outError)
+	{
+		if (!IsEditingPrefab() || IsPlaying() || (IsDirty() && !discard))
+		{
+			outError = !IsEditingPrefab() ? "no prefab is open" : IsPlaying() ? "stop Play or Simulate before closing the prefab"
+																			  : "'" + m_PrefabPath + "' has unsaved edits: prefab.save, or close with discard=true";
+			return false;
+		}
+		const Ref<Scene> scene = std::move(m_PrefabReturnScene);
+		const std::vector<UUID> selection = std::move(m_PrefabReturnSelection);
+		const bool dirty = m_PrefabReturnDirty;
+		m_PrefabReturnScene.reset();
+		m_PrefabReturnSelection.clear();
+		m_PrefabReturnDirty = false;
+		m_PrefabPath.clear();
+		m_PrefabFileText.clear();
+		SetEditScene(scene, m_PrefabReturnPath);
+		m_PrefabReturnPath.clear();
+		SetSelections(selection);
+		m_Dirty = dirty;
+		return true;
+	}
+
+	void AutomationSession::RefreshPrefabInstances(const std::vector<FileChange>& changes, AssetReloadReport& report)
+	{
+		for (const FileChange& change : changes)
+		{
+			if (FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(change.Path)) != ".bprefab")
+				continue;
+			const std::string path = FileSystem::PathToGenericUtf8(FileSystem::PathFromUtf8(change.Path).lexically_normal());
+			nlohmann::json source;
+			std::string sourceError;
+			const bool readable = Prefab::ReadSource(Project::ResolvePath(path), source, sourceError);
+			for (const Ref<Scene>& scene : { m_EditScene, m_PrefabReturnScene })
+			{
+				if (!scene)
+					continue;
+				std::vector<UUID> roots;
+				for (auto [handle, link] : scene->GetAllEntitiesWith<PrefabComponent>().each())
+					if (link.Prefab == path)
+						roots.push_back(Entity(handle, scene.get()).GetUUID());
+				size_t merged = 0;
+				for (UUID id : roots)
+				{
+					Entity root = scene->GetEntityByUUID(id);
+					if (!root || !root.HasComponent<PrefabComponent>())
+						continue;
+					std::string error = sourceError;
+					if (readable && Prefab::Refresh(root, source, Prefab::RefreshMode::Merge, error))
+						++merged;
+					else
+					{
+						report.PrefabErrors.push_back(fmt::format("instance '{}' ({}) of {} kept its previous state: {}", root.GetName(), static_cast<uint64_t>(id), path, error));
+						BS_CORE_WARN("Prefab: {}", report.PrefabErrors.back());
+					}
+				}
+				report.PrefabInstances += merged;
+				if (merged && scene == m_EditScene)
+					MarkDirty();
+				else if (merged)
+					m_PrefabReturnDirty = true;
+			}
+		}
+	}
+
 	void AutomationSession::SetSelection(UUID selection)
 	{
 		SetSelections(selection.IsValid() ? std::vector<UUID>{ selection } : std::vector<UUID>{});
@@ -282,6 +418,9 @@ namespace Basalt {
 				scripts.push_back(path);
 		}
 		report.Assets = AssetManager::ReloadChanged(paths);
+		// Play copies never merge: stopping restores the edit scene, which merges on the next change.
+		if (!IsPlaying())
+			RefreshPrefabInstances(changes, report);
 		if (!scripts.empty())
 		{
 			ScriptEngine* engine = IsPlaying() && !IsSimulating() ? m_Scene->GetScriptEngine() : nullptr;
@@ -329,6 +468,11 @@ namespace Basalt {
 		if (IsPlaying())
 		{
 			outError = "already playing";
+			return false;
+		}
+		if (IsEditingPrefab())
+		{
+			outError = "close the open prefab (prefab.close) before Play or Simulate";
 			return false;
 		}
 		m_EditScene->ResetParticlePreview();

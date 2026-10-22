@@ -54,6 +54,9 @@ namespace Basalt {
 		ScriptHotReload HotReload = ScriptHotReload::None;
 		// The hot reload of changed scripts (empty unless HotReload is Applied).
 		ScriptReloadResult Scripts;
+		// Prefab instances that merged changed prefab files (edit mode), and those that could not.
+		size_t PrefabInstances = 0;
+		std::vector<std::string> PrefabErrors;
 	};
 
 	// One host owns command observation. Rejected BeforeCommand calls never reach the handler;
@@ -86,6 +89,19 @@ namespace Basalt {
 		void SetEditScene(const Ref<Scene>& scene, const std::string& scenePath);
 		const std::string& GetScenePath() const { return m_ScenePath; }
 		void SetScenePath(const std::string& path) { m_ScenePath = path; }
+
+		// Prefab editing swaps in an isolated scene. The scene that waits keeps its path, unsaved state and
+		// selection, and saving the prefab merges it into the waiting scene's instances.
+		bool OpenPrefab(const std::string& path, std::string& outError);
+		bool SavePrefab(std::string& outError, AssetReloadReport& outReport);
+		bool ClosePrefab(bool discard, std::string& outError);
+		// The open prefab's project-relative path; empty unless a prefab is being edited.
+		const std::string& GetPrefabPath() const { return m_PrefabPath; }
+		bool IsEditingPrefab() const { return !m_PrefabPath.empty(); }
+		// Whether the scene waiting for prefab editing to end has unsaved edits.
+		bool IsWaitingSceneDirty() const { return m_PrefabReturnDirty; }
+		// True while a command handler runs; hosts use it to tell command edits from file-watcher edits.
+		bool IsExecutingCommand() const { return m_CommandDepth > 0; }
 
 		bool IsDirty() const { return m_Dirty; }
 		void MarkDirty()
@@ -231,6 +247,18 @@ namespace Basalt {
 		void DetachCommandObserver(CommandObserver& observer);
 
 	private:
+		// Prefab editing: the open prefab, its file contents when opened or last saved (to detect external edits),
+		// and the scene waiting for it to close.
+		std::string m_PrefabPath;
+		std::string m_PrefabFileText;
+		Ref<Scene> m_PrefabReturnScene;
+		std::string m_PrefabReturnPath;
+		std::vector<UUID> m_PrefabReturnSelection;
+		bool m_PrefabReturnDirty = false;
+
+		// Merges changed prefab files into the instances of the edit scene and of the scene waiting for prefab editing.
+		void RefreshPrefabInstances(const std::vector<FileChange>& changes, AssetReloadReport& report);
+
 		class SceneEvents;
 		void PublishPlayState(PlayStateChange change);
 

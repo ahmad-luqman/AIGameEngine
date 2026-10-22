@@ -9,6 +9,7 @@
 #include "Basalt/Project/Project.h"
 #include "Basalt/Scene/ComponentRegistry.h"
 #include "Basalt/Scene/Scene.h"
+#include "Basalt/Scene/Prefab.h"
 
 #include <cmath>
 #include <ranges>
@@ -484,6 +485,23 @@ namespace Basalt {
 				const auto* info = ComponentRegistry::Find(name);
 				if (!info || !component.is_object())
 					continue;
+				if (name == "Prefab" && component.contains("Baseline") && component["Baseline"].is_object())
+				{
+					json baseline = { { "Entities", json::array() } };
+					for (auto record : component["Baseline"])
+					{
+						if (!record.is_object() || !record.contains("Components") || !record["Components"].is_object() || record["Components"].contains("Prefab"))
+						{
+							outError = "invalid prefab baseline";
+							return false;
+						}
+						baseline["Entities"].push_back(std::move(record));
+					}
+					if (!EncodeAssetReferences(baseline, outError, onlyPath))
+						return false;
+					for (const auto& record : baseline["Entities"])
+						component["Baseline"][std::to_string(record["ID"].get<uint64_t>())] = record;
+				}
 				for (const auto& field : info->AssetFields)
 				{
 					bool failed = false;
@@ -614,8 +632,10 @@ namespace Basalt {
 		data["Format"] = "BasaltPrefab";
 		data["Version"] = FormatVersion;
 		data["Entities"] = SerializeEntityTree(root);
-		// An instance's own prefab link is not part of the prefab.
-		data["Entities"][0]["Components"].erase("Prefab");
+		// Prefab links are not part of a prefab: neither the instance's own nor those of nested instances, which
+		// are saved unpacked (instances track only their own prefab).
+		for (auto& entity : data["Entities"])
+			entity["Components"].erase("Prefab");
 		if (Project::GetActive() && !Project::GetActive()->GetAssets().Refresh(outError))
 			return false;
 		if (!EncodeAssetReferences(data, outError))
@@ -631,26 +651,20 @@ namespace Basalt {
 
 	Entity SceneSerializer::InstantiatePrefab(Scene& scene, const std::filesystem::path& absolutePath, const std::string& prefabPath, Entity parent, std::string& outError)
 	{
-		const auto text = FileSystem::ReadTextFile(absolutePath);
-		if (!text)
-		{
-			outError = "cannot read prefab '" + prefabPath + "'";
+		json entities;
+		if (!Prefab::ReadFile(absolutePath, entities, outError))
 			return {};
-		}
-		json data = ParseJson(*text);
-		if (data.is_discarded() || !data.is_object() || !data.contains("Entities"))
+		std::vector<Entity> created;
+		if (!CreateEntities(scene, entities, true, parent, created, outError))
 		{
-			outError = "prefab '" + prefabPath + "' is not a valid prefab file";
-			return {};
-		}
-
-		Entity root = DeserializeEntityTree(scene, data["Entities"], parent, outError);
-		if (!root)
-		{
+			for (Entity entity : std::views::reverse(created))
+				if (entity.IsValid())
+					scene.DestroyEntity(entity);
 			outError = "prefab '" + prefabPath + "': " + outError;
 			return {};
 		}
-		root.AddOrReplaceComponent<PrefabComponent>(PrefabComponent{ prefabPath });
+		Entity root = created.front();
+		Prefab::Link(root, entities, created, prefabPath);
 		return root;
 	}
 
@@ -705,6 +719,10 @@ namespace Basalt {
 		// the project's step (outside a session) moves the hash too.
 		data["Physics"]["FixedTimestep"] = scene.GetFixedTimestep();
 		ReplaceEulerRotations(data, scene);
+		for (auto& record : data["Entities"])
+			if (record["Components"].contains("Prefab"))
+				for (const char* field : { "Members", "Baseline", "Overrides" })
+					record["Components"]["Prefab"].erase(field);
 		// A ragdoll moves its joints rather than its entity. Include that runtime pose only in hashes,
 		// never disk saves or play-copy configuration, so replay checks see a skeleton that diverges.
 		if (auto* physics = scene.GetPhysicsWorld())

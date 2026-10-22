@@ -84,14 +84,8 @@ below extend character movement, in order of impact.
 ### Editor feel and visual quality
 
 The Game view, asset thumbnails and material previews, the project settings panel, export validation with a
-smoke test and material assets (`.bmaterial` files with lossless thumbnails and a Material Editor) have shipped.
-
-### Editor workflow
-
-- **Native file dialogs — S.** Add nativefiledialog-extended (pinned) for Open/Save/Import, keeping the
-  text-box fallback for headless and Linux systems without a portal.
-- **Prefab editing and overrides — L.** Open a prefab in an isolated scene, save, and propagate changes
-  to instances while keeping per-instance overrides (track overridden fields in `PrefabComponent`).
+smoke test, material assets (`.bmaterial` files with lossless thumbnails and a Material Editor), native file
+dialogs and prefab editing with per-instance overrides have shipped.
 
 
 ---

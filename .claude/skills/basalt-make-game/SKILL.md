@@ -26,6 +26,10 @@ broken version leaves the old one running). Typical patterns:
 - One "Game" controller script on an empty entity owns the rules and state (grid arrays, score, timers),
   reads input, and spawns/moves/destroys entities (`Scene.CreateEntity` + `AddComponent`,
   or `Scene.Instantiate("Assets/Prefabs/Block.bprefab", pos)`).
+- Change every placed copy of a prefab by editing the prefab: `prefab.open`, ordinary entity/component commands,
+  `prefab.save` (its `warnings` list instances that could not merge), `prefab.close`. Instances keep their own edits
+  as overrides: `prefab.overrides` lists them, `prefab.revert` drops one or all, and `prefab.apply` writes an
+  instance's overrides into the prefab. Saving the scene keeps each instance's link.
 - Prefer input actions over raw keys: declare them with `project.set {"inputActions": {"Actions": [{"Name":
   "MoveX", "Type": "Axis", "Bindings": [{"Key": "D"}, {"Key": "A", "Scale": -1}, {"GamepadAxis": "LeftX"}]}]}}`
   and read `Input.GetAction("MoveX")` / `Input.IsActionPressed("Jump")`, so keys, gamepads and the mouse work

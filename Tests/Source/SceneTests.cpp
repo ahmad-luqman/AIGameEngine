@@ -921,7 +921,8 @@ TEST_SUITE("Serialization")
 			else
 			{
 				CHECK(info.EntityFields.empty());
-				CHECK_FALSE(info.RemapEntityReferences);
+				if (info.Name != "Prefab")
+					CHECK_FALSE(info.RemapEntityReferences);
 			}
 		}
 	}

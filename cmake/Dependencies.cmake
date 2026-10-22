@@ -308,3 +308,29 @@ if(MSVC)
 else()
 	target_compile_options(BasaltTextureCodecs PRIVATE -fno-strict-aliasing "$<$<COMPILE_LANGUAGE:CXX>:-include>" "$<$<COMPILE_LANGUAGE:CXX>:exception>")
 endif()
+
+# File pickers belong only to the editor. Linux uses the portal backend; systems without D-Bus
+# development headers still build the editor with its existing text-path prompts.
+if(BASALT_BUILD_EDITOR)
+	set(BASALT_NATIVE_DIALOGS_AVAILABLE ON)
+	if(UNIX AND NOT APPLE)
+		find_package(PkgConfig QUIET)
+		if(PkgConfig_FOUND)
+			pkg_check_modules(BASALT_DBUS QUIET dbus-1)
+		endif()
+		if(NOT BASALT_DBUS_FOUND)
+			set(BASALT_NATIVE_DIALOGS_AVAILABLE OFF)
+			message(STATUS "D-Bus development files unavailable; using text-path file prompts")
+		endif()
+		set(NFD_PORTAL ON CACHE BOOL "Use XDG portal dialogs" FORCE)
+	endif()
+	if(BASALT_NATIVE_DIALOGS_AVAILABLE)
+		set(NFD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+		set(NFD_INSTALL OFF CACHE BOOL "" FORCE)
+		FetchContent_Declare(nativefiledialog SYSTEM
+			GIT_REPOSITORY https://github.com/btzy/nativefiledialog-extended.git
+			GIT_TAG v1.2.1
+			GIT_SHALLOW TRUE)
+		FetchContent_MakeAvailable(nativefiledialog)
+	endif()
+endif()

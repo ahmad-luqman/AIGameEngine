@@ -290,7 +290,7 @@ TEST_CASE("Schema registration failures are reported without throwing or replaci
 {
 	CommandRegistry registry;
 	const auto count = registry.GetCommands().size();
-	CHECK(count == 74);
+	CHECK(count == 82);
 	const auto handler = [](AutomationSession&, const json& params) { return params; };
 	for (const auto& name : { std::string(), std::string(129, 'a'), std::string("bad/name") })
 		CHECK_FALSE(registry.Register({ name, "", CommandSchema::Object(), handler }));
@@ -324,7 +324,7 @@ TEST_CASE("All editor tool schemas reject invalid values before the host handler
 	for (const auto& [name, schema] : schemas)
 		REQUIRE(registry.Register({ name, "Editor host", schema, handler }));
 	Start(server, registry, session);
-	CHECK(Reply(server, registry, session, Request("tools/list"))["result"]["tools"].size() == 97);
+	CHECK(Reply(server, registry, session, Request("tools/list"))["result"]["tools"].size() == 105);
 	for (const auto& [name, schema] : schemas)
 	{
 		INFO(name);

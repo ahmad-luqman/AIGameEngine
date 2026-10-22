@@ -110,6 +110,8 @@ namespace Basalt {
 		void ApplyGameView();
 		// The selected entity's material on a sphere, at the top of the inspector's Material section.
 		void DrawMaterialPreview(Entity entity);
+		// The inspector section of a prefab instance root: its actions and overrides.
+		void DrawPrefabInstance(Entity entity);
 		void DrawToolbar();
 		void DrawViewportOptions();
 		void DrawOverlayMenu();
@@ -271,10 +273,15 @@ namespace Basalt {
 			None,
 			OpenScene,
 			SaveSceneAs,
+			OpenPrefab,
+			SavePrefabAs,
+			ImportModel,
 			OpenProject,
 			NewProject,
 			Export
 		};
+		void OpenPrompt(PromptKind kind, std::string path);
+		void BrowseForPromptPath();
 		PromptKind m_Prompt = PromptKind::None;
 		bool m_PromptOpened = false;
 		std::string m_PromptPath;
