@@ -1214,9 +1214,14 @@ TEST_SUITE("PrefabEditing")
 		Entity child = PrefabFixture::ChildNamed(instance, "Child");
 		child.GetTransform().Rotation = glm::angleAxis(glm::radians(0.5f), glm::vec3(0, 1, 0));
 		instance.GetComponent<PointLightComponent>().Intensity *= 1.0001f;
+		// Large values keep their small edits too.
+		f.Source.GetComponent<PointLightComponent>().Radius = 1000000.0f;
+		f.SaveSource();
+		instance.GetComponent<PointLightComponent>().Radius = 1000000.5f;
 		const json overrides = f.Overrides(instance);
 		CHECK(overrides.contains(f.FieldPath("Child", "Transform", "Rotation")));
 		CHECK(overrides.contains(f.FieldPath("Source", "PointLight", "Intensity")));
+		CHECK(overrides.contains(f.FieldPath("Source", "PointLight", "Radius")));
 		f.Child.GetTransform().Rotation = glm::angleAxis(glm::radians(30.0f), glm::vec3(1, 0, 0));
 		f.SaveSource();
 		CHECK(child.GetTransform().Rotation.y == doctest::Approx(std::sin(glm::radians(0.25f))));
