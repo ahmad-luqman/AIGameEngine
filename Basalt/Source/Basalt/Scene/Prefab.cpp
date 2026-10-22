@@ -19,6 +19,7 @@
 #include <charconv>
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -291,9 +292,12 @@ namespace Basalt {
 			{
 				if (!a.is_number_float() && !b.is_number_float())
 					return false;
+				// Component values are floats: a round trip (degrees and radians, float to double) moves them by a few
+				// float ULPs at most, so anything larger is an edit, however large the value.
 				const double x = a.get<double>();
 				const double y = b.get<double>();
-				return std::abs(x - y) <= 1e-6 * std::max({ 1.0, std::abs(x), std::abs(y) });
+				constexpr double Ulps = 4.0 * std::numeric_limits<float>::epsilon();
+				return std::abs(x - y) <= std::max(Ulps * std::max(std::abs(x), std::abs(y)), 1e-7);
 			}
 			if (rotation && IsEulerTriple(a) && IsEulerTriple(b))
 			{
