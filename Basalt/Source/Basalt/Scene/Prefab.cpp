@@ -178,9 +178,10 @@ namespace Basalt {
 			return false;
 		}
 
-		// A Members value belongs to this instance only when the entity is inside the instance's tree and no instance in
-		// between claims it: a merge never touches an entity outside its instance (a hand-edited Members value, or a
-		// member moved out of the tree, which then counts as deleted by the instance) or another instance's entity.
+		// A Members value belongs to this instance only when the entity is inside the instance's tree and no other
+		// instance root lies in between: a merge never touches an entity outside its instance (a hand-edited Members
+		// value, or a member moved out of the tree, which then counts as deleted by the instance) or anything inside a
+		// nested instance (its members, and its local additions, which it never lists).
 		bool IsOwnMember(Entity root, Entity entity)
 		{
 			if (!entity)
@@ -193,7 +194,7 @@ namespace Basalt {
 			{
 				if (ancestor == root)
 					return true;
-				if (const auto* other = ancestor.TryGetComponent<PrefabComponent>(); other && ListsMember(*other, entity))
+				if (ancestor.HasComponent<PrefabComponent>())
 					return false;
 			}
 			return false;

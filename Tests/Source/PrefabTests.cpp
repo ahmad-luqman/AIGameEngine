@@ -1182,6 +1182,27 @@ TEST_SUITE("PrefabEditing")
 		CHECK(instance.GetComponent<PrefabComponent>().Members[std::to_string(f.SourceId("Child"))] != IdOf(outsider));
 	}
 
+	TEST_CASE("Hand-edited members never claim an entity inside a nested instance")
+	{
+		PrefabFixture f;
+		auto scene = f.Session.GetScene();
+		Entity instance = f.Instantiate();
+		Entity nested = scene->CreateEntity("Nested");
+		f.Run("prefab.create", { { "entity", IdOf(nested) }, { "path", "Assets/Prefabs/Nested.bprefab" } });
+		REQUIRE(nested.HasComponent<PrefabComponent>());
+		scene->SetParent(nested, instance, false);
+		// A local addition of the nested instance, which the nested instance never lists as a member.
+		Entity local = scene->CreateEntity("Local");
+		local.AddComponent<AudioListenerComponent>();
+		scene->SetParent(local, nested, false);
+		instance.GetComponent<PrefabComponent>().Members[std::to_string(f.SourceId("Child"))] = IdOf(local);
+		f.Run("prefab.revert", { { "entity", IdOf(instance) } });
+		CHECK(local.GetName() == "Local");
+		CHECK(local.GetParent() == nested);
+		CHECK(local.HasComponent<AudioListenerComponent>());
+		CHECK(instance.GetComponent<PrefabComponent>().Members[std::to_string(f.SourceId("Child"))] != IdOf(local));
+	}
+
 	TEST_CASE("Entities added under removed members move to the root in tree order")
 	{
 		PrefabFixture f;
