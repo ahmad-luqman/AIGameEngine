@@ -250,7 +250,7 @@ namespace Basalt {
 						if (std::string error; Prefab::ReadSource(Project::ResolvePath(path), entities, error))
 							source->second = std::move(entities);
 					}
-					if (source->second && Prefab::IsOutdated(link, *source->second))
+					if (const std::optional<nlohmann::json>& sourceEntities = source->second; sourceEntities && Prefab::IsOutdated(link, *sourceEntities))
 						++outdated[path];
 				}
 				for (const auto& [prefab, count] : outdated)
