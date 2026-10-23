@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the libFuzzer targets (Clang + ASan + UBSan) into build-fuzz/ and runs each one.
+# Builds the selected libFuzzer targets (all by default; Clang + ASan + UBSan) into build-fuzz/ and runs each one.
 # Usage: scripts/fuzz.sh [seconds per target, default 60] [target name filter]
 #        scripts/fuzz.sh --list   (prints the target names as a JSON array, for the nightly CI matrix)
 # Seeds come from Tests/Fuzz/Corpus/<Target>/; new interesting inputs collect in build-fuzz/corpus/ and
@@ -8,11 +8,15 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Every Tests/Fuzz/Fuzz*.cpp is a target (Tests/Fuzz/CMakeLists.txt builds the same list).
+# Every Tests/Fuzz/Fuzz*.cpp is a target; Tests/Fuzz/CMakeLists.txt globs the same files.
 targets=()
 for source in Tests/Fuzz/Fuzz*.cpp; do
-	targets+=("$(basename "$source" .cpp)")
+	[[ -f "$source" ]] && targets+=("$(basename "$source" .cpp)")
 done
+if [[ ${#targets[@]} -eq 0 ]]; then
+	echo "No fuzz targets in Tests/Fuzz/" >&2
+	exit 1
+fi
 if [[ "${1:-}" == "--list" ]]; then
 	list="$(printf '"%s",' "${targets[@]}")"
 	echo "[${list%,}]"
@@ -21,6 +25,11 @@ fi
 
 seconds="${1:-60}"
 filter="${2:-}"
+# libFuzzer reads anything else as 0, which means no time limit.
+if ! [[ "$seconds" =~ ^[1-9][0-9]*$ ]]; then
+	echo "Seconds per target must be a positive integer, not '$seconds'" >&2
+	exit 1
+fi
 buildDir="build-fuzz"
 # An exact target name selects only that target (the nightly matrix passes one); otherwise the filter is a substring.
 selected=()
@@ -58,15 +67,22 @@ status=0
 for target in "${selected[@]}"; do
 	corpus="$buildDir/corpus/$target"
 	crashes="$buildDir/crashes/$target"
-	mkdir -p "$corpus" "$crashes"
+	log="$buildDir/logs/$target.log"
+	mkdir -p "$corpus" "$crashes" "$buildDir/logs"
+	# The seed directory is read-only input; new findings go into the build-local corpus. A new target may have no
+	# seeds yet, and libFuzzer exits on a missing directory.
+	seeds=()
+	[[ -d "Tests/Fuzz/Corpus/$target" ]] && seeds=("Tests/Fuzz/Corpus/$target")
 	echo "=== $target (${seconds}s)"
-	# The seed directory is read-only input; new findings go into the build-local corpus.
-	if ! "$buildDir/bin/$target" "$corpus" "Tests/Fuzz/Corpus/$target" -max_total_time="$seconds" -timeout=10 -rss_limit_mb=4096 \
-		-artifact_prefix="$crashes/" -print_final_stats=1 2>&1 | grep -E "^(#[0-9]+ +DONE|stat::number_of_executed_units|==[0-9]+==ERROR|SUMMARY|artifact_prefix|Test unit written)|runtime error|^ +#[0-9] "; then
-		:
-	fi
-	if compgen -G "$crashes/*" > /dev/null; then
-		echo "$target: crash inputs in $crashes" >&2
+	result=0
+	"$buildDir/bin/$target" "$corpus" ${seeds[@]+"${seeds[@]}"} -max_total_time="$seconds" -timeout=10 -rss_limit_mb=4096 \
+		-artifact_prefix="$crashes/" -print_final_stats=1 > "$log" 2>&1 || result=$?
+	grep -E "^(#[0-9]+ +DONE|stat::number_of_executed_units|==[0-9]+== ?ERROR|SUMMARY|artifact_prefix|Test unit written)|runtime error|^ +#[0-9] " "$log" || true
+	# libFuzzer exits non-zero for every finding and for failures that write no crash input (a target that cannot
+	# start, a bad flag), so both the exit status and the crash directory count.
+	if [[ $result -ne 0 ]] || compgen -G "$crashes/*" > /dev/null; then
+		echo "$target: exited with $result; crash inputs (if any) in $crashes, full log in $log" >&2
+		[[ $result -ne 0 ]] && tail -n 20 "$log" >&2
 		status=1
 	fi
 done

@@ -27,12 +27,13 @@ Extra checks (each one is also a CI job; run locally when touching memory handli
   reports go into `cmake/sanitizers/*.supp`.
 - clang-tidy: configure with `-DBASALT_CLANG_TIDY=ON` (checks in `.clang-tidy`); findings fail the build.
   Fix them, or `NOLINT(check-name)` with a reason when the check is wrong.
-- Fuzzing: `scripts/fuzz.sh [seconds] [target]` builds the libFuzzer targets in `Tests/Fuzz/` (Clang;
-  on macOS Homebrew LLVM) and runs each one. Run it after touching a parser or loader. A crash input lands
+- Fuzzing: `scripts/fuzz.sh [seconds] [target]` builds and runs the libFuzzer targets in `Tests/Fuzz/` matching
+  `[target]` (all by default; Clang, on macOS Homebrew LLVM). Run it after touching a parser or loader. A crash input lands
   in `build-fuzz/crashes/<Target>/`: reproduce with `build-fuzz/bin/<Target> <file>`, turn it into a
-  regression test, then fix. New file formats or entry points get a target (`Tests/Fuzz/Fuzz<Name>.cpp`, listed
-  in `Tests/Fuzz/CMakeLists.txt`) and seed files in `Tests/Fuzz/Corpus/`. The nightly workflow runs one job per
-  target (`scripts/fuzz.sh --list`) and uploads `fuzz-crashes-<Target>` when a job crashes or times out.
+  regression test, then fix. New file formats or entry points get a target (`Tests/Fuzz/Fuzz<Name>.cpp`; CMake and
+  the nightly workflow pick it up) and seed files in `Tests/Fuzz/Corpus/`. The nightly workflow runs one job per
+  target (`scripts/fuzz.sh --list`) and uploads `fuzz-crashes-<Target>` when libFuzzer writes crash, timeout or
+  out-of-memory inputs.
 - Coverage: `scripts/coverage.sh` (Clang) prints a per-file summary and writes
   `build-coverage/coverage/html/index.html`. Use it to find untested code; it is not a gate.
 
