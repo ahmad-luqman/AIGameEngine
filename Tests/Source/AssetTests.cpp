@@ -815,13 +815,16 @@ TEST_SUITE("Assets")
 			CHECK_FALSE(load("TooManyRereads.gltf", shared));
 			CHECK(has("TooManyRereads.gltf", "buffers read files they share more than once, 1 bytes past the limit of 67108864"));
 
-			// Buffers splitting a file never reread it.
-			nlohmann::json split = MakeUntexturedGltfJson({ { "byteLength", buffer.size() }, { "uri", "Quad.bin" } });
-			split["buffers"].push_back({ { "byteLength", 16ull << 20 }, { "uri", "Big.bin" } });
-			split["buffers"].push_back({ { "byteLength", 16ull << 20 }, { "uri", "Big.bin" } });
-			split["buffers"].push_back({ { "byteLength", 4 }, { "uri", "Missing.bin" } });
-			CHECK_FALSE(load("Split.gltf", split));
-			CHECK(has("Split.gltf", "buffer 3 file 'Missing.bin' is not a readable file"));
+			// Every buffer reads from the start of its file, so a small first read leaves nothing for later ones: after a
+			// 1-byte buffer, two 32 MiB reads and a 1-byte read are all rereads (Codex review).
+			nlohmann::json prefix = MakeUntexturedGltfJson(EmbeddedBufferJson(buffer));
+			prefix["buffers"].push_back({ { "byteLength", 1 }, { "uri", "Big.bin" } });
+			prefix["buffers"].push_back({ { "byteLength", 32ull << 20 }, { "uri", "Big.bin" } });
+			prefix["buffers"].push_back({ { "byteLength", 32ull << 20 }, { "uri", "Big.bin" } });
+			prefix["buffers"].push_back({ { "byteLength", 1 }, { "uri", "Big.bin" } });
+			prefix["buffers"].push_back({ { "byteLength", 4 }, { "uri", "Missing.bin" } });
+			CHECK_FALSE(load("Prefixes.gltf", prefix));
+			CHECK(has("Prefixes.gltf", "buffers read files they share more than once, 1 bytes past the limit of 67108864"));
 		}
 
 		SUBCASE("The bytes all buffers declare are capped")
