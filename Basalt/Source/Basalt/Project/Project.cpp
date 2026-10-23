@@ -7,12 +7,40 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
+#include <charconv>
+#include <cstdint>
 #include <sstream>
 #include <system_error>
 
 namespace Basalt {
 
 	Ref<Project> Project::s_ActiveProject;
+
+	std::optional<std::array<uint16_t, 4>> ParseProjectVersion(std::string_view version)
+	{
+		std::array<uint16_t, 4> numbers{};
+		size_t count = 0;
+		size_t start = 0;
+		while (true)
+		{
+			const size_t end = std::min(version.find('.', start), version.size());
+			const std::string_view part = version.substr(start, end - start);
+			// from_chars alone would accept a digit prefix ("1x"); every character must be a digit.
+			if (count == numbers.size() || part.empty() || part.size() > 5 || part.find_first_not_of("0123456789") != std::string_view::npos)
+				return std::nullopt;
+			uint32_t value = 0;
+			if (std::from_chars(part.data(), part.data() + part.size(), value).ec != std::errc() || value > UINT16_MAX)
+				return std::nullopt;
+			numbers[count++] = static_cast<uint16_t>(value);
+			if (end == version.size())
+				break;
+			start = end + 1;
+		}
+		if (count < 3)
+			return std::nullopt;
+		return numbers;
+	}
 
 	GraphicsSettings Project::GetActiveGraphicsSettings()
 	{
@@ -135,10 +163,29 @@ namespace Basalt {
 				outError.clear();
 			}
 			config.Fullscreen = data.value("Fullscreen", config.Fullscreen);
+			config.Company = data.value("Company", config.Company);
+			config.Version = data.value("Version", config.Version);
+			// An icon whose file is gone keeps its identity (an asset-uuid key): validation and export report it, and
+			// saving writes the reference back unchanged.
+			if (data.contains("Icon") && !project->m_Assets.Decode(data["Icon"], config.Icon, outError, true))
+			{
+				outError = "invalid project file '" + filePath.string() + "': Icon: " + outError;
+				return nullptr;
+			}
+			if (!outError.empty())
+			{
+				BS_CORE_ERROR("Project icon: {}", outError);
+				outError.clear();
+			}
 		}
 		catch (const nlohmann::json::exception& e)
 		{
 			outError = "invalid project file '" + filePath.string() + "': " + e.what();
+			return nullptr;
+		}
+		if (!ParseProjectVersion(config.Version))
+		{
+			outError = fmt::format("invalid project file '{}': Version '{}' must be MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH.BUILD, each 0-65535", filePath.string(), config.Version);
 			return nullptr;
 		}
 		nlohmann::json graphicsPatch = nlohmann::json::object();
@@ -232,6 +279,9 @@ namespace Basalt {
 			startScene = m_UnresolvedStartScene;
 		else if ((!m_Config.StartScene.empty() && !m_Assets.Refresh(outError)) || !m_Assets.Encode(m_Config.StartScene, startScene, outError))
 			return false;
+		nlohmann::json icon;
+		if (!m_Assets.Encode(m_Config.Icon, icon, outError))
+			return false;
 
 		const bool writeInput = m_Config.InputActions != m_SavedInputActions;
 		const bool inputExisted = FileSystem::Exists(GetInputFilePath());
@@ -252,6 +302,9 @@ namespace Basalt {
 		const nlohmann::json data = {
 			{ "Format", "BasaltProject" },
 			{ "Name", m_Config.Name },
+			{ "Version", m_Config.Version },
+			{ "Company", m_Config.Company },
+			{ "Icon", icon },
 			{ "StartScene", startScene },
 			{ "WindowWidth", m_Config.WindowWidth },
 			{ "WindowHeight", m_Config.WindowHeight },

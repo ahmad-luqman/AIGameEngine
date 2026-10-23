@@ -2676,7 +2676,9 @@ Validates the project (unless validate is false), exports a standalone, distribu
 
 | Parameter | Type / description |
 |-----------|--------------------|
+| `appImageTool` | string, path of appimagetool for Linux packages (default: $APPIMAGETOOL, then PATH) |
 | `output` | string, output directory |
+| `package` | bool (default false): package for this platform with the project's icon, version and company: <Name>.app on macOS, an executable with icon and version resources on Windows, <Name>.AppDir plus <Name>-<version>-<arch>.AppImage on Linux (the AppImage needs appimagetool: appImageTool, $APPIMAGETOOL or PATH) |
 | `smokeTestFrames` | integer (default 0: no smoke test), frames the exported game runs headless |
 | `smokeTestTimeout` | number of seconds (default 60) before the smoke test is stopped and fails |
 | `validate` | bool (default true): refuse to export when project.validate finds an error |
@@ -2687,10 +2689,34 @@ Validates the project (unless validate is false), exports a standalone, distribu
 {
   "additionalProperties": false,
   "properties": {
+    "appImageTool": {
+      "anyOf": [
+        {
+          "description": "string, path of appimagetool for Linux packages (default: $APPIMAGETOOL, then PATH)",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "string, path of appimagetool for Linux packages (default: $APPIMAGETOOL, then PATH)"
+    },
     "output": {
       "description": "string, output directory",
       "minLength": 1,
       "type": "string"
+    },
+    "package": {
+      "anyOf": [
+        {
+          "description": "bool (default false): package for this platform with the project's icon, version and company: <Name>.app on macOS, an executable with icon and version resources on Windows, <Name>.AppDir plus <Name>-<version>-<arch>.AppImage on Linux (the AppImage needs appimagetool: appImageTool, $APPIMAGETOOL or PATH)",
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "bool (default false): package for this platform with the project's icon, version and company: <Name>.app on macOS, an executable with icon and version resources on Windows, <Name>.AppDir plus <Name>-<version>-<arch>.AppImage on Linux (the AppImage needs appimagetool: appImageTool, $APPIMAGETOOL or PATH)"
     },
     "smokeTestFrames": {
       "anyOf": [
@@ -2794,10 +2820,12 @@ Changes project settings and saves the project file.
 
 | Parameter | Type / description |
 |-----------|--------------------|
+| `company` | string, the publisher: Windows version resource, macOS copyright and bundle identifier |
 | `dynamicResolution` | bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries) |
 | `fixedTimestep` | number of seconds in (0, 0.25], the physics step of every scene that does not override it (scene.settings Physics.FixedTimestep); applies from the next play |
 | `fullscreen` | bool |
 | `graphics` | Project graphics defaults; applies to the next Play session. Do not repeat a setting through its top-level alias. |
+| `icon` | string, project-relative PNG under Assets/ (at most 4096 px; 512 px or more recommended), the window and package icon; "" removes it |
 | `inputActions` | object {Actions: [{Name, Type: "Button" | "Axis", Bindings: [{Key | MouseButton | GamepadButton | GamepadAxis: name, Scale?, DeadZone?, Gamepad?}]}]}, replaces every input action and saves Input.binput (written only when the actions change); applies from the next play |
 | `minRenderScale` | number in [0.25, 2], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning) |
 | `name` | string |
@@ -2806,6 +2834,7 @@ Changes project settings and saves the project file.
 | `renderScale` | number in [0.25, 2], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution) |
 | `startScene` | string, project-relative scene |
 | `targetFrameRate` | number in [10, 1000]; dynamic resolution keeps the scene's GPU time within this frame rate's frame time |
+| `version` | string, MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH.BUILD (each 0-65535): the version packaged exports carry |
 | `windowHeight` | integer |
 | `windowWidth` | integer |
 
@@ -2815,6 +2844,18 @@ Changes project settings and saves the project file.
 {
   "additionalProperties": false,
   "properties": {
+    "company": {
+      "anyOf": [
+        {
+          "description": "string, the publisher: Windows version resource, macOS copyright and bundle identifier",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "string, the publisher: Windows version resource, macOS copyright and bundle identifier"
+    },
     "dynamicResolution": {
       "anyOf": [
         {
@@ -2913,6 +2954,18 @@ Changes project settings and saves the project file.
       ],
       "description": "Project graphics defaults; applies to the next Play session. Do not repeat a setting through its top-level alias."
     },
+    "icon": {
+      "anyOf": [
+        {
+          "description": "string, project-relative PNG under Assets/ (at most 4096 px; 512 px or more recommended), the window and package icon; \"\" removes it",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "string, project-relative PNG under Assets/ (at most 4096 px; 512 px or more recommended), the window and package icon; \"\" removes it"
+    },
     "inputActions": {
       "description": "object {Actions: [{Name, Type: \"Button\" | \"Axis\", Bindings: [{Key | MouseButton | GamepadButton | GamepadAxis: name, Scale?, DeadZone?, Gamepad?}]}]}, replaces every input action and saves Input.binput (written only when the actions change); applies from the next play",
       "type": "object"
@@ -3000,6 +3053,18 @@ Changes project settings and saves the project file.
         }
       ],
       "description": "number in [10, 1000]; dynamic resolution keeps the scene's GPU time within this frame rate's frame time"
+    },
+    "version": {
+      "anyOf": [
+        {
+          "description": "string, MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH.BUILD (each 0-65535): the version packaged exports carry",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "string, MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH.BUILD (each 0-65535): the version packaged exports carry"
     },
     "windowHeight": {
       "anyOf": [

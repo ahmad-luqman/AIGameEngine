@@ -8,9 +8,11 @@
 #include "Basalt/Physics/PhysicsLayers.h"
 #include "Basalt/Renderer/GraphicsSettings.h"
 
+#include <array>
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace Basalt {
 
@@ -21,7 +23,17 @@ namespace Basalt {
 		static constexpr uint32_t MinWindowSize = 64;
 		static constexpr uint32_t MaxWindowSize = 16384;
 
+		static constexpr const char* DefaultVersion = "1.0.0";
+
 		std::string Name = "Untitled";
+		// MAJOR.MINOR.PATCH with an optional fourth BUILD number, each 0-65535 (ParseProjectVersion): Windows version
+		// resources hold four 16-bit numbers and macOS bundle versions dotted integers.
+		std::string Version = DefaultVersion;
+		// Publisher shown in the Windows version resource and the macOS copyright, and part of the bundle identifier.
+		std::string Company;
+		// Project-relative PNG under Assets/ (an asset reference, like StartScene): the window icon and the icon of
+		// packaged exports. Empty for none.
+		std::string Icon;
 		// Scene opened by the editor and played first by the runtime (project-relative path).
 		std::string StartScene;
 		// Window settings used by the exported game.
@@ -43,6 +55,10 @@ namespace Basalt {
 		// it changes the gameplay of scripts that use randomness.
 		uint32_t RandomSeed = Random::DefaultSeed;
 	};
+
+	// The numbers of a ProjectConfig::Version (a missing BUILD is 0), or nullopt when it is not 3 or 4 dot-separated
+	// decimal integers in [0, 65535].
+	std::optional<std::array<uint16_t, 4>> ParseProjectVersion(std::string_view version);
 
 	// A game project: a directory containing Project.bproject and an Assets/ folder. Asset references in
 	// components are project-relative paths ("Assets/Models/Ship.gltf"). One project is active at a time.

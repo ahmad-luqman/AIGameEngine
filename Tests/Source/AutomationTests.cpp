@@ -834,17 +834,17 @@ TEST_SUITE("Automation")
 
 		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities":[]})");
 		project->GetConfig().StartScene = "Assets/Scenes/Main.bscene";
-		result = Basalt::Exporter::Export(*project, temp.GetDirectory().parent_path() / "ExportOut", temp.GetDirectory() / "NoSuchRuntime");
+		result = Basalt::Exporter::Export(*project, temp.GetDirectory().parent_path() / "ExportOut", { .RuntimeExecutable = temp.GetDirectory() / "NoSuchRuntime" });
 		CHECK(result.Error.find("runtime executable not found") != std::string::npos);
 
 		temp.WriteFile("FakeRuntime", "binary");
-		result = Basalt::Exporter::Export(*project, temp.GetDirectory() / "Inside", temp.GetDirectory() / "FakeRuntime");
+		result = Basalt::Exporter::Export(*project, temp.GetDirectory() / "Inside", { .RuntimeExecutable = temp.GetDirectory() / "FakeRuntime" });
 		CHECK(result.Error.find("outside the project") != std::string::npos);
 
 		const auto occupied = temp.GetDirectory().parent_path() / "ExporterOccupied";
 		std::filesystem::create_directories(occupied);
 		Basalt::FileSystem::WriteTextFile(occupied / "precious.txt", "do not delete");
-		result = Basalt::Exporter::Export(*project, occupied, temp.GetDirectory() / "FakeRuntime");
+		result = Basalt::Exporter::Export(*project, occupied, { .RuntimeExecutable = temp.GetDirectory() / "FakeRuntime" });
 		CHECK(result.Error.find("not empty") != std::string::npos);
 		CHECK(Basalt::FileSystem::Exists(occupied / "precious.txt"));
 		std::filesystem::remove_all(occupied);

@@ -101,15 +101,11 @@ Native file dialogs and prefab editing with per-instance overrides have shipped.
 
 - **Packed asset archive — M.** Export into a single `.bpak` file (index + compressed blobs, for example
   zstd) instead of loose files. Faster loading and simpler distribution.
-- **Platform packaging — M.** macOS `.app` bundle with `Info.plist`, icon, codesigning and notarization
-  (a script that takes a Developer ID); Windows `.exe` icon and version resource; Linux AppImage.
-- **Project icon and version — S.** `ProjectConfig.Icon`, `Version` and `Company`, used by the exporter
-  and the window title.
+- **Windows code signing — S.** Sign the exported executable and the tools with `signtool` when a certificate is
+  configured (the release pipeline has secrets for macOS notarization only), so SmartScreen does not warn.
 - **Crash reporting — M.** Install crash handlers (minidumps on Windows, signal handlers with a stack
   trace on macOS/Linux), write the last log lines and a crash file next to the executable, and show a
   message box in the runtime.
-- **Release pipeline — S.** A GitHub Actions workflow on tags that builds Dist on all three platforms,
-  exports the samples, and attaches editor, runtime and CLI archives to a GitHub release.
 
 ---
 

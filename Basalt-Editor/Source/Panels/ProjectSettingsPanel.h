@@ -100,11 +100,21 @@ namespace Basalt {
 			std::string Buffer;
 		};
 
+		// A text setting being typed: the field shows Buffer while it is active, the saved value otherwise.
+		struct TextEdit
+		{
+			std::string Buffer;
+			bool Active = false;
+		};
+		// Saves the setting through project.set (key) when the field loses focus after an edit, not on every keystroke.
+		void DrawTextSetting(const char* label, const char* key, const std::string& value, TextEdit& edit);
+
 		EditorContext& m_Context;
 		// The project shown (weak, so a new project at the same address still counts as another).
 		std::weak_ptr<Project> m_Project;
-		std::string m_NameBuffer;
-		bool m_EditingName = false;
+		TextEdit m_NameEdit;
+		TextEdit m_VersionEdit;
+		TextEdit m_CompanyEdit;
 		FieldEdit m_Edit;
 		std::string m_NewLayerName;
 		std::string m_NewActionName;

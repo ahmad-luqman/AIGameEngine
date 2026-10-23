@@ -2946,6 +2946,13 @@ namespace Basalt {
 				m_ExportSmokeFrames = std::clamp(m_ExportSmokeFrames, 1, 100000);
 				ImGui::EndDisabled();
 				ImGui::TextDisabled("The editor waits for the smoke test (at most 60 s).");
+#if defined(BS_PLATFORM_MACOS)
+				ImGui::Checkbox("Package as an app bundle (<Name>.app)", &m_ExportPackage);
+#elif defined(BS_PLATFORM_WINDOWS)
+				ImGui::Checkbox("Package: give the executable the project's icon and version", &m_ExportPackage);
+#else
+				ImGui::Checkbox("Package as an AppImage (needs appimagetool on PATH; else an AppDir)", &m_ExportPackage);
+#endif
 			}
 
 			if (ImGui::Button("OK", ImVec2(120.0f, 0.0f)) || ImGui::IsKeyPressed(ImGuiKey_Enter))
@@ -2980,10 +2987,14 @@ namespace Basalt {
 							m_Context.Execute("scene.new", { { "name", "Main" } });
 						break;
 					case PromptKind::Export:
-						if (auto result = m_Context.Execute("project.export", { { "output", m_PromptPath }, { "smokeTestFrames", m_ExportSmokeTest ? m_ExportSmokeFrames : 0 } }))
+						if (auto result = m_Context.Execute("project.export", { { "output", m_PromptPath }, { "smokeTestFrames", m_ExportSmokeTest ? m_ExportSmokeFrames : 0 }, { "package", m_ExportPackage } }))
 						{
-							const std::string executable = (*result)["executable"].get<std::string>();
-							m_Context.SetStatus(m_ExportSmokeTest ? "Exported to " + executable + "; the smoke test passed" : "Exported to " + executable, false);
+							const std::string package = (*result)["package"].get<std::string>();
+							std::string status = m_ExportSmokeTest ? "Exported to " + package + "; the smoke test passed" : "Exported to " + package;
+							// Warnings say what the package lacks (an AppDir without its AppImage).
+							for (const auto& warning : result->value("warnings", nlohmann::json::array()))
+								status += "; " + warning.get<std::string>();
+							m_Context.SetStatus(status, result->contains("warnings"));
 							ok = true;
 						}
 						break;

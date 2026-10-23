@@ -1110,6 +1110,8 @@ function Driver:OnUpdate(dt)
 		-- It left the ground upward, just above where it rested.
 		local parted = FeatureTestEvents.CollisionEndContact
 		Check("OnCollisionEnd contact", parted ~= nil and math.abs(parted.Normal.y) > 0.99 and parted.Impulse == 0 and Near(parted.Point.y, 0, 0.3))
+		local info = Game.GetInfo()
+		Check("Game.GetInfo", info.Name == "FeatureTest" and info.Version == "1.2.3" and info.Company == "Basalt Tests")
 		Expect("Game.Quit", function() Game.Quit() end)
 		FeatureTest.Quit = true
 		FeatureTest.Phase = "done"

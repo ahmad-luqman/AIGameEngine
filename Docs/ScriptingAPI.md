@@ -1173,6 +1173,8 @@ end
 - Lua `warn(...)` sends enabled warnings to the same log. `warn("@on")` enables them and
   `warn("@off")` disables them (the Lua default); fragments in a multi-argument warning are joined.
 - `Game.Quit()` — ends the game (the runtime exits, the editor leaves play mode)
+- `Game.GetInfo()` — `{Name, Version, Company}` from the project settings (`project.set name/version/company`),
+  for title screens and credits
 
 ## Property animation
 

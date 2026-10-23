@@ -118,6 +118,13 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   prefab write (`scene.open` skips them). `prefab.open` swaps in an isolated scene; the waiting scene keeps its path,
   dirty state, selection and (editor) undo history, and edit boundaries other than `prefab.save/close`, plus
   `project.export`, are rejected until `prefab.close`.
+- **Shipping.** `ProjectConfig` holds `Version` (3 or 4 16-bit numbers, `ParseProjectVersion`), `Company` and `Icon` (a
+  PNG asset reference, encoded and moved like `StartScene`). `project.export {"package": true}` packages for the host:
+  a `.app` (`Contents/Resources` holds the project, `Frameworks` the Vulkan loader and MoltenVK), a Windows executable
+  with icon and version resources, or an AppDir plus AppImage (appimagetool optional). `Project/Packaging` builds the
+  icon and metadata files as pure byte builders; only `WriteWindowsResources` is platform-specific. The runtime finds
+  its project with `Exporter::GetExportedProjectDirectory` and sets the window icon where windows have one. Tags run
+  `.github/workflows/release.yml` (`scripts/package_release.py`, `scripts/sign-macos.sh`). See `Docs/Shipping.md`.
 - **Editor file dialogs.** Path prompts add native pickers (`Basalt-Editor/Source/FileDialogs`, nativefiledialog-extended,
   editor only). Linux uses the XDG portal and needs D-Bus development files at build time; without them the editor
   builds with typed paths only, and a picker that fails at runtime leaves the typed path usable.
@@ -302,6 +309,7 @@ Other rules:
 
 ## Documentation
 
+- Shipping: `Docs/Shipping.md` (project identity, export and platform packages, signing, the release pipeline).
 - Rendering: `Docs/Rendering.md` (clustered lighting, FSR 1 settings, diagnostics and GPU tests).
 - Lua API: `Docs/ScriptingAPI.md` and the LuaLS definitions `Docs/basalt.d.lua` (update both with every binding change;
   the `LuaTypeDefinitions` test checks declared names and component fields and types; signatures are kept by hand).

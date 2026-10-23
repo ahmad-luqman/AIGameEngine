@@ -62,6 +62,9 @@ if(Python3_Interpreter_FOUND)
 			COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/Automation/ExportSmoke.py" $<TARGET_FILE:BasaltCLI>
 				"${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest/Assets/Models/TexturedCube.glb")
 		set_tests_properties(ExportSmoke PROPERTIES LABELS integration TIMEOUT 300)
+		# scripts/package_release.py as the release workflow runs it (one sample, no tools archive).
+		add_test(NAME ReleasePackaging COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/Automation/ReleasePackaging.py" $<TARGET_FILE:BasaltCLI>)
+		set_tests_properties(ReleasePackaging PROPERTIES LABELS integration TIMEOUT 300 ENVIRONMENT "BASALT_USER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/ReleaseUserData")
 	endif()
 	# Docs/AutomationCommands.md, Docs/Components.md and basalt.d.lua's component section must match the engine.
 	add_test(NAME GeneratedDocs

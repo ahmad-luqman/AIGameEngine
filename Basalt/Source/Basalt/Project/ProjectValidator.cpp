@@ -7,6 +7,7 @@
 #include "Basalt/Asset/MeshSource.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/JsonUtils.h"
+#include "Basalt/Project/Packaging.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Project/ProjectValidator.h"
 #include "Basalt/Scene/ComponentRegistry.h"
@@ -86,6 +87,7 @@ namespace Basalt {
 				CheckProjectFile();
 				CheckInputFile();
 				CheckStartScene();
+				CheckIcon();
 				std::vector<std::filesystem::path> scenes, prefabs, scripts, graphs, materials;
 				ListAssets(scenes, prefabs, scripts, graphs, materials);
 				for (const auto& path : scenes)
@@ -178,6 +180,24 @@ namespace Basalt {
 					m_Report.Add(ValidationSeverity::Error, Project::FileName, "the StartScene '" + start + "' is not a .bscene file");
 				else
 					CheckReference(start, Project::FileName, "the StartScene names");
+			}
+
+			// The icon is optional; one that is set must be a PNG under Assets/ that packaging can decode.
+			void CheckIcon()
+			{
+				const std::string& icon = m_Project.GetConfig().Icon;
+				if (icon.empty())
+					return;
+				const size_t before = m_Report.GetErrorCount() + m_Report.GetWarningCount();
+				CheckReference(icon, Project::FileName, "the Icon names");
+				if (m_Report.GetErrorCount() + m_Report.GetWarningCount() != before)
+					return;
+				std::string error;
+				const auto image = LoadIconImage(m_Directory / FileSystem::PathFromUtf8(icon), error);
+				if (!image)
+					m_Report.Add(ValidationSeverity::Error, Project::FileName, "the Icon: " + error);
+				else if (std::max(image->Width, image->Height) < RecommendedIconSize)
+					m_Report.Add(ValidationSeverity::Warning, Project::FileName, fmt::format("the Icon '{}' is {} x {} pixels; packaged icons look blurry below {} pixels (512 or more is best)", icon, image->Width, image->Height, RecommendedIconSize));
 			}
 
 			void ListAssets(std::vector<std::filesystem::path>& scenes, std::vector<std::filesystem::path>& prefabs, std::vector<std::filesystem::path>& scripts, std::vector<std::filesystem::path>& graphs, std::vector<std::filesystem::path>& materials)
