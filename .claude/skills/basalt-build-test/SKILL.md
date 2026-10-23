@@ -30,8 +30,9 @@ Extra checks (each one is also a CI job; run locally when touching memory handli
 - Fuzzing: `scripts/fuzz.sh [seconds] [target]` builds the libFuzzer targets in `Tests/Fuzz/` (Clang;
   on macOS Homebrew LLVM) and runs each one. Run it after touching a parser or loader. A crash input lands
   in `build-fuzz/crashes/<Target>/`: reproduce with `build-fuzz/bin/<Target> <file>`, turn it into a
-  regression test, then fix. New file formats or entry points get a target and seed files in
-  `Tests/Fuzz/Corpus/`.
+  regression test, then fix. New file formats or entry points get a target (`Tests/Fuzz/Fuzz<Name>.cpp`, listed
+  in `Tests/Fuzz/CMakeLists.txt`) and seed files in `Tests/Fuzz/Corpus/`. The nightly workflow runs one job per
+  target (`scripts/fuzz.sh --list`) and uploads `fuzz-crashes-<Target>` when a job crashes or times out.
 - Coverage: `scripts/coverage.sh` (Clang) prints a per-file summary and writes
   `build-coverage/coverage/html/index.html`. Use it to find untested code; it is not a gate.
 

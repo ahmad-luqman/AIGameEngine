@@ -62,6 +62,14 @@ namespace Basalt {
 
 		bool IsDataUri(const char* uri);
 
+		std::string DecodeUri(const char* uri)
+		{
+			std::string decoded = uri;
+			cgltf_decode_uri(decoded.data());
+			decoded.resize(std::strlen(decoded.c_str()));
+			return decoded;
+		}
+
 		// glTF files are untrusted: an external buffer or image URI may only name a file inside the active
 		// project (or, without one, inside the glTF's own folder). Absolute paths, URI schemes and '..'
 		// escapes are rejected, so a model cannot make the engine read arbitrary files.
@@ -69,9 +77,7 @@ namespace Basalt {
 		{
 			if (!uri || IsDataUri(uri))
 				return true;
-			std::string decoded = uri;
-			cgltf_decode_uri(decoded.data());
-			decoded.resize(std::strlen(decoded.c_str()));
+			const std::string decoded = DecodeUri(uri);
 
 			const std::filesystem::path relative(decoded);
 			const bool hasScheme = decoded.find(':') != std::string::npos;
@@ -82,6 +88,43 @@ namespace Basalt {
 			{
 				outError = gltfPath.filename().string() + ": external file '" + decoded + "' is outside the project";
 				return false;
+			}
+			return true;
+		}
+
+		// cgltf allocates a buffer's declared byteLength before decoding its data URI or reading its file, so a few
+		// bytes of JSON could request gigabytes (found by FuzzGltf). A buffer may not claim more bytes than its data
+		// holds. Unreadable files and malformed data URIs are left to cgltf_load_buffers, which reports them.
+		bool CheckBufferSizes(const cgltf_data* data, const std::filesystem::path& path, std::string& outError)
+		{
+			for (cgltf_size i = 0; i < data->buffers_count; i++)
+			{
+				const cgltf_buffer& buffer = data->buffers[i];
+				// Without a URI the buffer is a GLB's binary chunk, which cgltf checks against the chunk's length.
+				if (!buffer.uri)
+					continue;
+				uint64_t available = 0;
+				if (IsDataUri(buffer.uri))
+				{
+					const char* comma = std::strchr(buffer.uri, ',');
+					if (!comma)
+						continue;
+					// Each base64 character carries 6 bits.
+					available = std::strlen(comma + 1) * 3 / 4;
+				}
+				else
+				{
+					std::error_code error;
+					available = std::filesystem::file_size(path.parent_path() / DecodeUri(buffer.uri), error);
+					if (error)
+						continue;
+				}
+				if (buffer.size > available)
+				{
+					outError = path.filename().string() + ": buffer " + std::to_string(i) + " declares " + std::to_string(buffer.size) + " bytes but its data holds only " +
+							   std::to_string(available);
+					return false;
+				}
 			}
 			return true;
 		}
@@ -169,6 +212,8 @@ namespace Basalt {
 				if (!CheckExternalUri(data->images[i].uri, path, projectRoot, outError))
 					return nullptr;
 			}
+			if (!CheckBufferSizes(data.get(), path, outError))
+				return nullptr;
 			result = cgltf_load_buffers(&options, data.get(), pathString.c_str());
 			if (result != cgltf_result_success)
 			{

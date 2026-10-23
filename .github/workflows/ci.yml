@@ -266,7 +266,7 @@ jobs:
         run: scripts/fuzz.sh 60
 
       - name: Upload crash inputs
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
           name: fuzz-crashes

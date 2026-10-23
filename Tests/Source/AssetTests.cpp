@@ -702,6 +702,39 @@ TEST_SUITE("Assets")
 		AssetManager::Clear();
 	}
 
+	// Regression (FuzzGltf, nightly): cgltf allocates a buffer's declared byteLength before decoding its data URI or
+	// reading its file, so a 134-byte glTF claiming 10 GB made the importer request 10 GB.
+	TEST_CASE("glTF buffers may not declare more bytes than their data holds")
+	{
+		BasaltTest::TempProject project("GltfBufferLength");
+		const std::string buffer = MakeQuadBuffer();
+		project.WriteFile("Assets/Models/Quad.bin", buffer);
+		const std::string dataUri = "data:application/octet-stream;base64," + BasaltTest::Base64(buffer.data(), buffer.size());
+		auto write = [&](const std::string& name, const nlohmann::json& bufferJson) {
+			nlohmann::json gltf = MakeGltfJson(bufferJson, nlohmann::json::array());
+			gltf.erase("textures");
+			gltf["materials"][0]["pbrMetallicRoughness"].erase("baseColorTexture");
+			gltf["materials"][0].erase("normalTexture");
+			gltf["images"] = nlohmann::json::array();
+			project.WriteFile("Assets/Models/" + name, gltf.dump());
+		};
+		constexpr uint64_t Huge = 9999999999;
+		write("Embedded.gltf", { { "byteLength", buffer.size() }, { "uri", dataUri } });
+		write("EmbeddedHuge.gltf", { { "byteLength", Huge }, { "uri", dataUri } });
+		write("External.gltf", { { "byteLength", buffer.size() }, { "uri", "Quad.bin" } });
+		write("ExternalHuge.gltf", { { "byteLength", Huge }, { "uri", "Quad.bin" } });
+
+		AssetManager::Clear();
+		CHECK_MESSAGE(AssetManager::GetMesh("Assets/Models/Embedded.gltf"), AssetManager::GetError("Assets/Models/Embedded.gltf"));
+		CHECK_MESSAGE(AssetManager::GetMesh("Assets/Models/External.gltf"), AssetManager::GetError("Assets/Models/External.gltf"));
+		CHECK_FALSE(AssetManager::GetMesh("Assets/Models/EmbeddedHuge.gltf"));
+		CHECK(AssetManager::GetError("Assets/Models/EmbeddedHuge.gltf").find("buffer 0 declares 9999999999 bytes but its data holds only") != std::string::npos);
+		CHECK_FALSE(AssetManager::GetMesh("Assets/Models/ExternalHuge.gltf"));
+		CHECK(AssetManager::GetError("Assets/Models/ExternalHuge.gltf").find("buffer 0 declares 9999999999 bytes but its data holds only " + std::to_string(buffer.size())) !=
+			  std::string::npos);
+		AssetManager::Clear();
+	}
+
 	// Regression: a 4-byte header could claim a gigantic image and make stb_image allocate gigabytes.
 	TEST_CASE("Images larger than the dimension limit are rejected before allocating")
 	{
