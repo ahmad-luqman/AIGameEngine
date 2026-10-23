@@ -835,7 +835,7 @@ namespace Basalt {
 												   { "TargetFrameRate", Schema::Number("target FPS", MinTargetFrameRate, MaxTargetFrameRate) },
 												   { "MinRenderScale", Schema::Number("minimum scale", MinRenderScale, MaxRenderScale) } });
 			graphicsSchema["description"] = "Project graphics defaults; applies to the next Play session. Do not repeat a setting through its top-level alias.";
-			Add(registry, "project.set", "Changes project settings and saves the project file.", Schema::Object({ { "graphics", Schema::Nullable(graphicsSchema) }, { "name", Schema::Nullable(Schema::String("string")) }, { "version", Schema::Nullable(Schema::String("string, MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH.BUILD (each 0-65535): the version packaged exports carry")) }, { "company", Schema::Nullable(Schema::String("string, the publisher: Windows version resource, macOS copyright and bundle identifier")) }, { "icon", Schema::Nullable(Schema::String("string, project-relative PNG under Assets/ (at most 4096 px; 512 px or more recommended), the window and package icon; \"\" removes it")) }, { "startScene", Schema::Nullable(Schema::String("string, project-relative scene")) }, { "windowWidth", Schema::Nullable(Schema::Integer("integer", ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize)) }, { "windowHeight", Schema::Nullable(Schema::Integer("integer", ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize)) }, { "fullscreen", Schema::Nullable(Schema::Boolean("bool")) }, { "renderScale", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution)", MinRenderScale, MaxRenderScale), MinRenderScale, MaxRenderScale)) }, { "dynamicResolution", Schema::Nullable(Schema::Boolean("bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries)")) }, { "targetFrameRate", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}]; dynamic resolution keeps the scene's GPU time within this frame rate's frame time", MinTargetFrameRate, MaxTargetFrameRate), MinTargetFrameRate, MaxTargetFrameRate)) }, { "minRenderScale", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning)", MinRenderScale, MaxRenderScale), MinRenderScale, MaxRenderScale)) }, { "physicsLayers", json{ { "type", "object" }, { "description", "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play" } } }, { "randomSeed", Schema::Nullable(Schema::Integer("integer in [0, 4294967295], seeds Lua's random numbers, particle emitters and runtime entity UUIDs; applies from the next play", 0, UINT32_MAX)) }, { "fixedTimestep", Schema::Nullable(json{ { "type", "number" }, { "description", fmt::format("number of seconds in (0, {}], the physics step of every scene that does not override it (scene.settings Physics.FixedTimestep); applies from the next play", MaxFixedTimestep) }, { "exclusiveMinimum", 0.0 }, { "maximum", MaxFixedTimestep } }) }, { "inputActions", json{ { "type", "object" }, { "description", "object {Actions: [{Name, Type: \"Button\" | \"Axis\", Bindings: [{Key | MouseButton | GamepadButton | GamepadAxis: name, Scale?, DeadZone?, Gamepad?}]}]}, replaces every input action and saves Input.binput (written only when the actions change); applies from the next play" } } } }), [](AutomationSession& session, const json& params) {
+			Add(registry, "project.set", "Changes project settings and saves the project file.", Schema::Object({ { "graphics", Schema::Nullable(graphicsSchema) }, { "name", Schema::Nullable(Schema::String("string of at most 256 bytes")) }, { "version", Schema::Nullable(Schema::String("string, MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH.BUILD (each 0-65535, no leading zeros): the version packaged exports carry")) }, { "company", Schema::Nullable(Schema::String("string of at most 256 bytes, the publisher: Windows version resource, macOS copyright and bundle identifier")) }, { "icon", Schema::Nullable(Schema::String("string, project-relative PNG under Assets/ (at most 4096 px; 512 px or more recommended), the window and package icon; \"\" removes it")) }, { "startScene", Schema::Nullable(Schema::String("string, project-relative scene")) }, { "windowWidth", Schema::Nullable(Schema::Integer("integer", ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize)) }, { "windowHeight", Schema::Nullable(Schema::Integer("integer", ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize)) }, { "fullscreen", Schema::Nullable(Schema::Boolean("bool")) }, { "renderScale", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution)", MinRenderScale, MaxRenderScale), MinRenderScale, MaxRenderScale)) }, { "dynamicResolution", Schema::Nullable(Schema::Boolean("bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries)")) }, { "targetFrameRate", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}]; dynamic resolution keeps the scene's GPU time within this frame rate's frame time", MinTargetFrameRate, MaxTargetFrameRate), MinTargetFrameRate, MaxTargetFrameRate)) }, { "minRenderScale", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning)", MinRenderScale, MaxRenderScale), MinRenderScale, MaxRenderScale)) }, { "physicsLayers", json{ { "type", "object" }, { "description", "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play" } } }, { "randomSeed", Schema::Nullable(Schema::Integer("integer in [0, 4294967295], seeds Lua's random numbers, particle emitters and runtime entity UUIDs; applies from the next play", 0, UINT32_MAX)) }, { "fixedTimestep", Schema::Nullable(json{ { "type", "number" }, { "description", fmt::format("number of seconds in (0, {}], the physics step of every scene that does not override it (scene.settings Physics.FixedTimestep); applies from the next play", MaxFixedTimestep) }, { "exclusiveMinimum", 0.0 }, { "maximum", MaxFixedTimestep } }) }, { "inputActions", json{ { "type", "object" }, { "description", "object {Actions: [{Name, Type: \"Button\" | \"Axis\", Bindings: [{Key | MouseButton | GamepadButton | GamepadAxis: name, Scale?, DeadZone?, Gamepad?}]}]}, replaces every input action and saves Input.binput (written only when the actions change); applies from the next play" } } } }), [](AutomationSession& session, const json& params) {
 				Ref<Project> project = RequireProject();
 				// Every value is read and validated before any is assigned, so a bad parameter leaves the
 				// project untouched.
@@ -843,8 +843,12 @@ namespace Basalt {
 				config.Name = OptionalString(params, "name", config.Name);
 				config.Version = OptionalString(params, "version", config.Version);
 				if (!ParseProjectVersion(config.Version))
-					throw CommandError("parameter 'version' must be MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH.BUILD, each 0-65535 (got '" + config.Version + "')");
+					throw CommandError(fmt::format("parameter 'version' must be {} (got '{}')", VersionFormat, config.Version));
 				config.Company = OptionalString(params, "company", config.Company);
+				for (const auto& [key, value] : { std::pair{ "name", &config.Name }, std::pair{ "company", &config.Company } })
+					if (value->size() > ProjectConfig::MaxTextLength)
+						throw CommandError(fmt::format("parameter '{}' must be at most {} bytes", key, ProjectConfig::MaxTextLength));
+				// Checked only when it changes, so the other settings stay editable while the icon file is missing.
 				if (const std::string icon = OptionalString(params, "icon", config.Icon); icon != config.Icon)
 				{
 					if (!icon.empty())
@@ -938,7 +942,7 @@ namespace Basalt {
 				return ValidationReportJson(report);
 			});
 
-			Add(registry, "project.export", "Validates the project (unless validate is false), exports a standalone, distributable build of the game (runtime + assets) and optionally smoke-tests it: runs the exported game headless for smokeTestFrames frames and fails unless it exits cleanly without script errors.", Schema::Object({ { "output", Schema::String("string, output directory", true) }, { "validate", Schema::Nullable(Schema::Boolean("bool (default true): refuse to export when project.validate finds an error")) }, { "smokeTestFrames", Schema::Nullable(Schema::Integer("integer (default 0: no smoke test), frames the exported game runs headless", 0, MaxSmokeTestFrames)) }, { "smokeTestTimeout", Schema::Nullable(Schema::Number("number of seconds (default 60) before the smoke test is stopped and fails", 1, MaxSmokeTestSeconds)) }, { "package", Schema::Nullable(Schema::Boolean("bool (default false): package for this platform with the project's icon, version and company: <Name>.app on macOS, an executable with icon and version resources on Windows, <Name>.AppDir plus <Name>-<version>-<arch>.AppImage on Linux (the AppImage needs appimagetool: appImageTool, $APPIMAGETOOL or PATH)")) }, { "appImageTool", Schema::Nullable(Schema::String("string, path of appimagetool for Linux packages (default: $APPIMAGETOOL, then PATH)")) } }, { "output" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "project.export", "Validates the project (unless validate is false), exports a standalone, distributable build of the game (runtime + assets; with package: true a platform package, see Docs/Shipping.md) and optionally smoke-tests it: runs the exported game headless for smokeTestFrames frames and fails unless it exits cleanly without script errors. Returns {executable (what the smoke test runs), package (what to distribute), files, validation, warnings?, smokeTest?}.", Schema::Object({ { "output", Schema::String("string, output directory", true) }, { "validate", Schema::Nullable(Schema::Boolean("bool (default true): refuse to export when project.validate finds an error")) }, { "smokeTestFrames", Schema::Nullable(Schema::Integer("integer (default 0: no smoke test), frames the exported game runs headless", 0, MaxSmokeTestFrames)) }, { "smokeTestTimeout", Schema::Nullable(Schema::Number("number of seconds (default 60) before the smoke test is stopped and fails", 1, MaxSmokeTestSeconds)) }, { "package", Schema::Nullable(Schema::Boolean("bool (default false): package for this platform with the project's icon, version and company: <Name>.app on macOS, an executable with icon and version resources on Windows, <Name>.AppDir plus <Name>-<version>-<arch>.AppImage on Linux (the AppImage needs appimagetool: appImageTool, $APPIMAGETOOL or PATH); <Name> is the executable's name: the project name with spaces as _ and other characters other than letters, digits, - and _ dropped")) }, { "appImageTool", Schema::Nullable(Schema::String("string, path of appimagetool for Linux packages (default: $APPIMAGETOOL, then PATH); requires package: true")) } }, { "output" }), [](AutomationSession& session, const json& params) {
 				Ref<Project> project = RequireProject();
 				ExportOptions options;
 				options.Package = OptionalBool(params, "package", false);
@@ -1546,11 +1550,12 @@ namespace Basalt {
 				// The identity of the moved file (its UUID survives the move), so the project follows it.
 				for (const auto& [key, moves] : { std::pair{ "StartScene", movesStartScene }, std::pair{ "Icon", movesIcon } })
 				{
+					if (!moves)
+						continue;
 					json reference;
-					if (moves && !project->GetAssets().Encode(from, reference, error))
+					if (!project->GetAssets().Encode(from, reference, error))
 						throw CommandError(error);
-					if (moves)
-						data[key] = std::move(reference);
+					data[key] = std::move(reference);
 				}
 				migrations.push_back({ Project::FileName, *text, data.dump(1, '\t') });
 			}
@@ -1713,19 +1718,27 @@ namespace Basalt {
 				}
 			};
 			for (const auto* command : { "asset.move", "asset.rename" })
-				Add(registry, command, "Moves one asset file and its .meta sidecar within Assets/. 'to' is the complete destination path. Creates metadata if needed, migrates scene, prefab and material-file references to this asset to UUIDs and updates the open edit scene and project start scene. A scene or prefab that cannot be read stops the move (it might reference the asset); a material file that is not valid JSON is skipped with a warning. Does not rewrite paths inside scripts or glTF files. Stop Play or Simulate first.", Schema::Object({ { "from", Schema::String("source path", true) }, { "to", Schema::String("destination path", true) } }, { "from", "to" }), move, CommandPolicy::EditBoundary);
+				Add(registry, command, "Moves one asset file and its .meta sidecar within Assets/. 'to' is the complete destination path. Creates metadata if needed, migrates scene, prefab and material-file references to this asset to UUIDs and updates the open edit scene and the project's start scene and icon. A scene or prefab that cannot be read stops the move (it might reference the asset); a material file that is not valid JSON is skipped with a warning. Does not rewrite paths inside scripts or glTF files. Stop Play or Simulate first.", Schema::Object({ { "from", Schema::String("source path", true) }, { "to", Schema::String("destination path", true) } }, { "from", "to" }), move, CommandPolicy::EditBoundary);
 
-			Add(registry, "asset.delete", "Deletes one asset file and its .meta identity. Existing UUID references become unresolved. Stop Play or Simulate first.", Schema::Object({ { "path", Schema::String("asset path", true) } }, { "path" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "asset.delete", "Deletes one asset file and its .meta identity. Existing UUID references become unresolved; deleting the project's start scene or icon is reported in warnings. Stop Play or Simulate first.", Schema::Object({ { "path", Schema::String("asset path", true) } }, { "path" }), [](AutomationSession& session, const json& params) {
 				auto project = RequireProject();
 				if (session.IsPlaying() || session.IsSimulating())
 					throw CommandError("stop Play or Simulate before deleting assets");
 				const auto path = ProjectRelative(RequireString(params, "path"));
+				const ProjectConfig& config = project->GetConfig();
+				const bool removesStartScene = project->GetAssets().ReferencesSource(config.StartScene, path);
+				const bool removesIcon = project->GetAssets().ReferencesSource(config.Icon, path);
 				std::string error;
 				if (!project->GetAssets().Remove(path, error))
 					throw CommandError(error);
 				session.AcknowledgeFile(path + ".meta");
 				json result = { { "path", path } };
 				json warnings = json::array();
+				// The project keeps naming it (validation and export report it) until another is set.
+				if (removesStartScene)
+					warnings.push_back("this was the project's start scene; set another with project.set startScene");
+				if (removesIcon)
+					warnings.push_back("this was the project's icon; set another with project.set icon (\"\" for none)");
 				// Instances of a deleted prefab keep their state; each one is reported.
 				AddPrefabMerges(result, warnings, session.OnFileWritten(path));
 				if (!warnings.empty())

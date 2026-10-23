@@ -193,7 +193,7 @@ namespace Basalt {
 				if (m_Report.GetErrorCount() + m_Report.GetWarningCount() != before)
 					return;
 				std::string error;
-				const auto image = LoadIconImage(m_Directory / FileSystem::PathFromUtf8(icon), error);
+				const auto image = LoadIconImage(m_Project.GetIconPath(), error);
 				if (!image)
 					m_Report.Add(ValidationSeverity::Error, Project::FileName, "the Icon: " + error);
 				else if (std::max(image->Width, image->Height) < RecommendedIconSize)

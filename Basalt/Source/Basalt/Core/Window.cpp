@@ -284,8 +284,10 @@ namespace Basalt {
 
 	bool Window::SupportsIcon() const
 	{
+		if (!m_Window)
+			return false;
 		const int platform = glfwGetPlatform();
-		return m_Window && (platform == GLFW_PLATFORM_WIN32 || platform == GLFW_PLATFORM_X11);
+		return platform == GLFW_PLATFORM_WIN32 || platform == GLFW_PLATFORM_X11;
 	}
 
 	void Window::SetIcon(std::span<const WindowIcon> images)
@@ -293,9 +295,13 @@ namespace Basalt {
 		if (!SupportsIcon())
 			return;
 		std::vector<GLFWimage> glfwImages;
+		glfwImages.reserve(images.size());
 		for (const WindowIcon& image : images)
+		{
+			BS_CORE_ASSERT(image.Width > 0 && image.Height > 0 && image.Pixels.size() == static_cast<size_t>(image.Width) * image.Height * 4, "window icon pixels do not match its size");
 			// GLFW copies the pixels and never writes them; its struct is simply not const-qualified.
-			glfwImages.push_back({ static_cast<int>(image.Width), static_cast<int>(image.Height), const_cast<unsigned char*>(image.Pixels) });
+			glfwImages.push_back({ static_cast<int>(image.Width), static_cast<int>(image.Height), const_cast<unsigned char*>(image.Pixels.data()) });
+		}
 		glfwSetWindowIcon(m_Window, static_cast<int>(glfwImages.size()), glfwImages.data());
 	}
 

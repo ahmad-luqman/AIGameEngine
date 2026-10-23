@@ -49,28 +49,21 @@ namespace Basalt {
 			return count;
 		}
 
-		// Where a package keeps the project (relative to its own directory), by the package directory's extension.
-		std::optional<std::filesystem::path> PackagedProjectDirectory(const std::filesystem::path& package)
+		// Where a package keeps the project: Contents/Resources of a macOS bundle, the AppDir itself on Linux.
+		std::filesystem::path PackagedProjectDirectory(const std::filesystem::path& package)
 		{
-			if (package.extension() == ".app")
-				return std::filesystem::path("Contents") / "Resources";
-			if (package.extension() == ".AppDir")
-				return std::filesystem::path(".");
-			return std::nullopt;
+			return package.extension() == ".app" ? package / "Contents" / "Resources" : package;
 		}
 
-		// A folder export holds the project file itself; a package export holds a package that does.
-		bool IsPreviousExport(const std::filesystem::path& output)
+		// A folder export holds the project file itself; a package export holds this game's package, which does. Other
+		// games' packages do not count: a folder of downloaded games is not a previous export of this one.
+		bool IsPreviousExport(const std::filesystem::path& output, const std::string& executableName)
 		{
 			if (FileSystem::Exists(output / Project::FileName))
 				return true;
-			std::error_code error;
-			for (auto it = std::filesystem::directory_iterator(output, error); !error && it != std::filesystem::directory_iterator(); it.increment(error))
-			{
-				const auto projectDirectory = PackagedProjectDirectory(it->path());
-				if (projectDirectory && FileSystem::Exists(it->path() / *projectDirectory / Project::FileName))
+			for (const char* extension : { ".app", ".AppDir" })
+				if (FileSystem::Exists(PackagedProjectDirectory(output / (executableName + extension)) / Project::FileName))
 					return true;
-			}
 			return false;
 		}
 
@@ -78,7 +71,13 @@ namespace Basalt {
 		bool CopyProjectFiles(const Project& project, const std::filesystem::path& directory, std::string& outError)
 		{
 			std::error_code error;
+			// Assets the project no longer has must not survive from the previous export.
 			std::filesystem::remove_all(directory / Project::AssetDirectoryName, error);
+			if (error)
+			{
+				outError = "cannot remove the previous export's Assets in '" + FileSystem::PathToUtf8(directory) + "': " + error.message();
+				return false;
+			}
 			std::filesystem::create_directories(directory, error);
 			if (error)
 			{
@@ -111,39 +110,21 @@ namespace Basalt {
 			return true;
 		}
 
-#if !defined(BS_PLATFORM_WINDOWS)
-		bool WriteBytes(const std::filesystem::path& path, const std::vector<uint8_t>& bytes, std::string& outError)
-		{
-			return FileSystem::WriteBinaryFile(path, bytes.data(), bytes.size(), outError);
-		}
-#endif
-
-		// The project icon, or nullopt (and no error) when the project has none.
-		bool LoadProjectIcon(const Project& project, std::optional<IconImage>& outIcon, std::string& outError)
-		{
-			const std::string& icon = project.GetConfig().Icon;
-			if (icon.empty())
-				return true;
-			if (AssetRegistry::IsUnresolvedKey(icon))
-			{
-				outError = "the project icon no longer exists (set it again with project.set icon)";
-				return false;
-			}
-			outIcon = LoadIconImage(project.GetDirectory() / FileSystem::PathFromUtf8(icon), outError);
-			return outIcon.has_value();
-		}
-
 #if defined(BS_PLATFORM_MACOS)
-		// Copies the Vulkan loader and MoltenVK so the game runs on Macs without the Vulkan SDK. The ICD manifest names
-		// MoltenVK relative to the manifest file itself (libraryFromManifest).
-		bool BundleMoltenVK(const std::filesystem::path& libraryDirectory, const std::filesystem::path& manifestDirectory, const std::string& libraryFromManifest, std::string& outError)
+		struct VulkanLibraries
+		{
+			std::filesystem::path Loader;
+			std::filesystem::path MoltenVK;
+		};
+
+		// The Vulkan loader and MoltenVK to ship. scripts/package_release.py searches the same places for the tools archive.
+		bool FindVulkanLibraries(VulkanLibraries& outLibraries, std::string& outError)
 		{
 			std::vector<std::filesystem::path> searchDirectories;
 			if (const auto sdk = Platform::GetEnvVar("VULKAN_SDK"))
 				searchDirectories.emplace_back(std::filesystem::path(*sdk) / "lib");
 			searchDirectories.emplace_back("/opt/homebrew/lib");
 			searchDirectories.emplace_back("/usr/local/lib");
-
 			auto find = [&](const char* fileName) -> std::filesystem::path {
 				for (const auto& directory : searchDirectories)
 				{
@@ -152,34 +133,42 @@ namespace Basalt {
 				}
 				return {};
 			};
-
-			const std::filesystem::path loader = find("libvulkan.1.dylib");
-			const std::filesystem::path moltenVK = find("libMoltenVK.dylib");
-			if (loader.empty() || moltenVK.empty())
+			outLibraries = { find("libvulkan.1.dylib"), find("libMoltenVK.dylib") };
+			if (outLibraries.Loader.empty() || outLibraries.MoltenVK.empty())
 			{
 				outError = "cannot find libvulkan.1.dylib and libMoltenVK.dylib (install the Vulkan SDK or Homebrew vulkan-loader + molten-vk)";
 				return false;
 			}
+			return true;
+		}
 
+		// Copies the Vulkan loader and MoltenVK into libraryDirectory, and writes the ICD manifest that names MoltenVK into
+		// <manifestBase>/vulkan/icd.d, where VulkanLoader looks for it, so the game runs on Macs without the Vulkan SDK.
+		bool BundleMoltenVK(const VulkanLibraries& libraries, const std::filesystem::path& libraryDirectory, const std::filesystem::path& manifestBase, std::string& outError)
+		{
 			std::error_code error;
 			std::filesystem::create_directories(libraryDirectory, error);
 			if (!error)
-				std::filesystem::copy_file(std::filesystem::canonical(loader, error), libraryDirectory / "libvulkan.1.dylib", std::filesystem::copy_options::overwrite_existing, error);
+				std::filesystem::copy_file(std::filesystem::canonical(libraries.Loader, error), libraryDirectory / "libvulkan.1.dylib", std::filesystem::copy_options::overwrite_existing, error);
 			if (!error)
-				std::filesystem::copy_file(std::filesystem::canonical(moltenVK, error), libraryDirectory / "libMoltenVK.dylib", std::filesystem::copy_options::overwrite_existing, error);
+				std::filesystem::copy_file(std::filesystem::canonical(libraries.MoltenVK, error), libraryDirectory / "libMoltenVK.dylib", std::filesystem::copy_options::overwrite_existing, error);
+			// Package-manager files are often read-only; keep exports overwritable by later exports.
+			for (const char* library : { "libvulkan.1.dylib", "libMoltenVK.dylib" })
+				if (!error)
+					std::filesystem::permissions(libraryDirectory / library, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write | std::filesystem::perms::group_read | std::filesystem::perms::others_read, std::filesystem::perm_options::replace, error);
 			if (error)
 			{
 				outError = "cannot copy Vulkan libraries: " + error.message();
 				return false;
 			}
-			// Package-manager files are often read-only; keep exports overwritable by later exports.
-			for (const char* library : { "libvulkan.1.dylib", "libMoltenVK.dylib" })
-				std::filesystem::permissions(libraryDirectory / library, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write | std::filesystem::perms::group_read | std::filesystem::perms::others_read, std::filesystem::perm_options::replace, error);
 
-			const std::string manifest = R"({ "file_format_version": "1.0.0", "ICD": { "library_path": ")" + libraryFromManifest + R"(", "api_version": "1.3.0", "is_portability_driver": true } })";
-			if (!FileSystem::WriteTextFile(manifestDirectory / "MoltenVK_icd.json", manifest))
+			// The manifest names the library relative to the manifest file itself.
+			const std::filesystem::path manifestDirectory = manifestBase / "vulkan" / "icd.d";
+			const std::string library = FileSystem::PathToUtf8((libraryDirectory / "libMoltenVK.dylib").lexically_relative(manifestDirectory).generic_u8string());
+			const std::string manifest = R"({ "file_format_version": "1.0.0", "ICD": { "library_path": ")" + library + R"(", "api_version": "1.3.0", "is_portability_driver": true } })";
+			if (!FileSystem::WriteTextFile(manifestDirectory / "MoltenVK_icd.json", manifest, outError))
 			{
-				outError = "cannot write the MoltenVK ICD manifest";
+				outError = "cannot write the MoltenVK ICD manifest: " + outError;
 				return false;
 			}
 			return true;
@@ -191,8 +180,14 @@ namespace Basalt {
 			const std::filesystem::path contents = bundle / "Contents";
 			if (icon)
 			{
+				const auto icns = BuildIcns(*icon);
+				if (!icns)
+				{
+					outError = "cannot encode the icon as .icns";
+					return false;
+				}
 				info.IconFileName = info.ExecutableName + ".icns";
-				if (!WriteBytes(contents / "Resources" / info.IconFileName, BuildIcns(*icon), outError))
+				if (!FileSystem::WriteBinaryFile(contents / "Resources" / info.IconFileName, icns->data(), icns->size(), outError))
 					return false;
 			}
 			return FileSystem::WriteTextFile(contents / "Info.plist", BuildInfoPlist(info), outError) && FileSystem::WriteTextFile(contents / "PkgInfo", "APPL????", outError);
@@ -219,18 +214,57 @@ namespace Basalt {
 			return {};
 		}
 
+		// AppImages an earlier export of this game wrote (<Name>-<version>-<arch>.AppImage, any version), so a new export
+		// never leaves an outdated one beside its package.
+		bool RemoveOldAppImages(const std::filesystem::path& output, const std::string& executableName, std::string& outError)
+		{
+			const std::string prefix = executableName + "-";
+			std::error_code error;
+			std::vector<std::filesystem::path> old;
+			for (auto it = std::filesystem::directory_iterator(output, error); !error && it != std::filesystem::directory_iterator(); it.increment(error))
+			{
+				const std::string name = FileSystem::PathToUtf8(it->path().filename());
+				if (!name.starts_with(prefix) || !name.ends_with(".AppImage"))
+					continue;
+				// What follows the name is "<version>-<arch>": another game's name ("<Name>-Demo") has letters first.
+				const std::string rest = name.substr(prefix.size());
+				const size_t dash = rest.find('-');
+				if (dash != std::string::npos && dash > 0 && rest.find_first_not_of("0123456789.") == dash)
+					old.push_back(it->path());
+			}
+			for (const auto& path : old)
+				if (!error)
+					std::filesystem::remove(path, error);
+			if (error)
+			{
+				outError = "cannot remove the previous AppImage in '" + FileSystem::PathToUtf8(output) + "': " + error.message();
+				return false;
+			}
+			return true;
+		}
+
 		// The AppDir's desktop entry, icon and AppRun around an executable and project already in place, then the
 		// .AppImage file when appimagetool is available.
 		bool FinishAppImage(const std::filesystem::path& appDir, const std::filesystem::path& output, const PackageInfo& info, const std::optional<IconImage>& icon, const std::filesystem::path& configuredTool, ExportResult& result)
 		{
 			const std::string iconFile = info.ExecutableName + ".png";
-			const IconImage image = icon ? ResizeIcon(*icon, std::min<uint32_t>(512, std::max(icon->Width, icon->Height))) : MakeDefaultIcon(256);
-			if (!WriteBytes(appDir / iconFile, EncodeIconPng(image), result.Error) || !FileSystem::WriteTextFile(appDir / (info.ExecutableName + ".desktop"), BuildDesktopEntry(info), result.Error))
+			if (!icon)
+				result.Warnings.push_back("the project has no icon: the AppImage uses Basalt's default icon (set one with project.set icon)");
+			const std::vector<uint8_t> png = EncodeIconPng(icon ? ResizeIcon(*icon, std::min<uint32_t>(512, std::max(icon->Width, icon->Height))) : MakeDefaultIcon(256));
+			if (png.empty())
+			{
+				result.Error = "cannot encode the AppImage icon";
 				return false;
-			for (const auto& [link, target] : { std::pair{ std::string("AppRun"), info.ExecutableName }, std::pair{ std::string(".DirIcon"), iconFile } })
+			}
+			if (!FileSystem::WriteBinaryFile(appDir / iconFile, png.data(), png.size(), result.Error) || !FileSystem::WriteTextFile(appDir / (info.ExecutableName + ".desktop"), BuildDesktopEntry(info), result.Error))
+				return false;
+			std::vector<std::pair<std::string, std::string>> links = { { ".DirIcon", iconFile } };
+			// A game named AppRun already is the entry point; a link would replace it with a link to itself.
+			if (info.ExecutableName != "AppRun")
+				links.emplace_back("AppRun", info.ExecutableName);
+			for (const auto& [link, target] : links)
 			{
 				std::error_code error;
-				std::filesystem::remove(appDir / link, error);
 				std::filesystem::create_symlink(target, appDir / link, error);
 				if (error)
 				{
@@ -239,6 +273,8 @@ namespace Basalt {
 				}
 			}
 
+			if (!RemoveOldAppImages(output, info.ExecutableName, result.Error))
+				return false;
 			const std::filesystem::path tool = FindAppImageTool(configuredTool);
 			if (tool.empty())
 			{
@@ -331,15 +367,16 @@ namespace Basalt {
 			result.Error = "the output directory must be outside the project directory";
 			return result;
 		}
+		const std::string executableName = SanitizeFileName(config.Name);
 		// Only ever replace a previous export, never an arbitrary non-empty directory.
-		if (std::filesystem::exists(output, error) && !std::filesystem::is_empty(output, error) && !IsPreviousExport(output))
+		if (std::filesystem::exists(output, error) && !std::filesystem::is_empty(output, error) && !IsPreviousExport(output, executableName))
 		{
-			result.Error = "the output directory is not empty and is not a previous export";
+			result.Error = "the output directory is not empty and is not a previous export of this game";
 			return result;
 		}
 
-		const std::string executableName = SanitizeFileName(config.Name);
-		// Read before anything is written, so a bad version or icon leaves a previous export untouched.
+		// Everything that can be checked is read before anything is written, so a bad version, icon or missing library
+		// leaves a previous export untouched.
 		std::optional<PackageInfo> info;
 		std::optional<IconImage> icon;
 		if (options.Package)
@@ -348,27 +385,30 @@ namespace Basalt {
 			if (!info || !LoadProjectIcon(project, icon, result.Error))
 				return result;
 		}
+#if defined(BS_PLATFORM_MACOS)
+		VulkanLibraries vulkan;
+		if (!FindVulkanLibraries(vulkan, result.Error))
+			return result;
+#endif
 
 		// Folder exports (and Windows packages) keep everything in the output directory; macOS and Linux packages are a
-		// directory of their own inside it, replaced whole on every export.
+		// directory of their own inside it, replaced whole on every export (a Linux AppImage file sits beside its AppDir).
 		std::filesystem::path executableDirectory = output;
-		std::filesystem::path projectDirectory = output;
 		std::filesystem::path package;
 #if defined(BS_PLATFORM_MACOS)
 		if (options.Package)
 		{
 			package = output / (executableName + ".app");
 			executableDirectory = package / "Contents" / "MacOS";
-			projectDirectory = package / "Contents" / "Resources";
 		}
 #elif defined(BS_PLATFORM_LINUX)
 		if (options.Package)
 		{
 			package = output / (executableName + ".AppDir");
 			executableDirectory = package;
-			projectDirectory = package;
 		}
 #endif
+		const std::filesystem::path projectDirectory = package.empty() ? output : PackagedProjectDirectory(package);
 		if (!package.empty())
 		{
 			std::filesystem::remove_all(package, error);
@@ -379,8 +419,14 @@ namespace Basalt {
 			}
 		}
 
-		if (!CopyProjectFiles(project, projectDirectory, result.Error))
+		// From here on a failure leaves a partial package (the previous one is gone): say so.
+		const auto fail = [&]() {
+			if (!package.empty())
+				result.Error += " (the incomplete package '" + FileSystem::PathToUtf8(package) + "' remains; export again once this is fixed)";
 			return result;
+		};
+		if (!CopyProjectFiles(project, projectDirectory, result.Error))
+			return fail();
 
 		std::filesystem::path executable = executableDirectory / executableName;
 #if defined(BS_PLATFORM_WINDOWS)
@@ -389,32 +435,38 @@ namespace Basalt {
 		std::filesystem::create_directories(executableDirectory, error);
 		if (!error)
 			std::filesystem::copy_file(runtime, executable, std::filesystem::copy_options::overwrite_existing, error);
+		if (!error)
+			std::filesystem::permissions(executable, std::filesystem::perms::owner_exec | std::filesystem::perms::group_exec | std::filesystem::perms::others_exec, std::filesystem::perm_options::add, error);
 		if (error)
 		{
 			result.Error = "cannot copy the runtime: " + error.message();
-			return result;
+			return fail();
 		}
-		std::filesystem::permissions(executable, std::filesystem::perms::owner_exec | std::filesystem::perms::group_exec | std::filesystem::perms::others_exec, std::filesystem::perm_options::add, error);
 
-		result.PackagePath = output;
+		std::filesystem::path packagePath = output;
 #if defined(BS_PLATFORM_MACOS)
 		if (options.Package)
 		{
-			if (!BundleMoltenVK(package / "Contents" / "Frameworks", projectDirectory / "vulkan" / "icd.d", "../../../Frameworks/libMoltenVK.dylib", result.Error) || !FinishAppBundle(package, *info, icon, result.Error))
-				return result;
-			result.PackagePath = package;
+			if (!BundleMoltenVK(vulkan, package / "Contents" / "Frameworks", projectDirectory, result.Error) || !FinishAppBundle(package, *info, icon, result.Error))
+				return fail();
+			packagePath = package;
 		}
-		else if (!BundleMoltenVK(output, output / "vulkan" / "icd.d", "../../libMoltenVK.dylib", result.Error))
-			return result;
+		else if (!BundleMoltenVK(vulkan, output, output, result.Error))
+			return fail();
 #elif defined(BS_PLATFORM_WINDOWS)
 		if (options.Package && !WriteWindowsResources(executable, *info, icon ? &*icon : nullptr, result.Error))
-			return result;
+			return fail();
 #elif defined(BS_PLATFORM_LINUX)
-		if (options.Package && !FinishAppImage(package, output, *info, icon, options.AppImageTool, result))
-			return result;
+		if (options.Package)
+		{
+			if (!FinishAppImage(package, output, *info, icon, options.AppImageTool, result))
+				return fail();
+			packagePath = result.PackagePath;
+		}
 #endif
 
 		result.Success = true;
+		result.PackagePath = std::move(packagePath);
 		result.ExecutablePath = std::move(executable);
 		result.FileCount = CountFiles(output);
 		BS_CORE_INFO("Exporter: exported '{}' to '{}' ({} files)", config.Name, FileSystem::PathToUtf8(result.PackagePath), result.FileCount);

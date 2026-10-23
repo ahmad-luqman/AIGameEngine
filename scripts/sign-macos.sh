@@ -3,7 +3,7 @@
 #
 # Usage: scripts/sign-macos.sh <Game.app> [--identity "Developer ID Application: Name (TEAMID)"] [--notarize <profile>]
 #
-# Without --identity the bundle is signed ad hoc: it runs on this Mac, but Gatekeeper refuses it elsewhere. A Developer
+# Without --identity the bundle is signed ad hoc: it runs here, but Gatekeeper blocks it once downloaded. A Developer
 # ID signs it with the hardened runtime and a secure timestamp, which notarization requires. --notarize submits it to
 # Apple's notary service with credentials stored once in the keychain:
 #   xcrun notarytool store-credentials <profile> --apple-id <id> --team-id <TEAMID> --password <app-specific password>
@@ -55,7 +55,18 @@ if [[ -n "$profile" ]]; then
 	trap 'rm -rf "$workspace"' EXIT
 	archive="$workspace/$(basename "$app" .app).zip"
 	ditto -c -k --keepParent "$app" "$archive"
-	xcrun notarytool submit "$archive" --keychain-profile "$profile" --wait
+	# The verdict is read from the result rather than the exit status (which does not reflect a rejection on every Xcode),
+	# and a rejection prints Apple's log, which says what to fix.
+	result="$(xcrun notarytool submit "$archive" --keychain-profile "$profile" --wait --output-format plist)" || true
+	status="$(plutil -extract status raw -o - - <<< "$result" || true)"
+	if [[ "$status" != "Accepted" ]]; then
+		echo "notarization ${status:-failed}" >&2
+		echo "$result" >&2
+		if submission="$(plutil -extract id raw -o - - <<< "$result")"; then
+			xcrun notarytool log "$submission" --keychain-profile "$profile" >&2 || true
+		fi
+		exit 1
+	fi
 	xcrun stapler staple "$app"
 	spctl --assess --type execute --verbose=2 "$app"
 fi

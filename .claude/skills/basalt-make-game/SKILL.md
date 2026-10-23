@@ -170,7 +170,8 @@ standalone folder (runtime renamed after the game + assets + MoltenVK on macOS) 
 headless for 120 frames: the command fails, with the game's log, if it does not exit cleanly or a script
 reported an error (`project.smoke_test` re-runs that check on any export). For release builds export with a `Dist` build of the runtime
 (`scripts/build.sh Dist`, then run that build's `basalt`).
-Give the game its identity first: `project.set {"version": "1.0.0", "company": "...", "icon": "Assets/Textures/Icon.png"}`
-(a PNG, square, 512 px or more). `"package": true` then makes a platform package carrying them: `<Name>.app` on macOS
-(sign it with `scripts/sign-macos.sh`), an executable with icon and version resources on Windows, an AppImage on Linux
-(needs `appimagetool`). See `Docs/Shipping.md`.
+Give the game its identity first: `$B --project P project.set '{"version": "1.0.0", "company": "Studio"}'`, plus
+`"icon": "Assets/Textures/Icon.png"` when the project has an icon PNG under Assets/ (square, 512 px or more).
+`"package": true` then makes a platform package carrying them: `<Name>.app` on macOS (sign it with
+`scripts/sign-macos.sh`), an executable with icon and version resources on Windows, an AppImage on Linux (without
+`appimagetool` the export still succeeds, with an AppDir and a warning). See `Docs/Shipping.md`.

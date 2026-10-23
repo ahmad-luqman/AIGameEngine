@@ -8,6 +8,7 @@ namespace Basalt {
 
 	class Project;
 
+	// How Exporter::Export builds the game.
 	struct ExportOptions
 	{
 		// Defaults to BasaltRuntime next to the current executable. For distribution, export with a runtime built in
@@ -29,14 +30,15 @@ namespace Basalt {
 		// What to distribute: the .app bundle, the .AppImage file (the AppDir when appimagetool was not found), or the
 		// output directory (folder exports and Windows packages).
 		std::filesystem::path PackagePath;
-		// Problems that did not stop the export (no appimagetool).
+		// Problems that did not stop the export (no appimagetool, an AppImage with the default icon).
 		std::vector<std::string> Warnings;
 		uint32_t FileCount = 0;
 	};
 
-	// Produces a standalone game: the runtime executable (renamed after the project), the project file and its
-	// Assets, plus on macOS the Vulkan loader and MoltenVK with a relative ICD manifest. The runtime started from the
-	// export finds the project (GetExportedProjectDirectory) and plays its start scene.
+	// Produces a standalone game: the runtime executable (named after the project, sanitized), the project file, its input
+	// actions and Assets, plus on macOS the Vulkan loader and MoltenVK with a relative ICD manifest; with
+	// ExportOptions::Package, a platform package around them. The runtime started from the export finds the project
+	// (GetExportedProjectDirectory) and plays its start scene.
 	class Exporter
 	{
 	public:

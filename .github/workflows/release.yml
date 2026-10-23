@@ -1,8 +1,9 @@
 name: Release
 
 # A v<version> tag builds Dist on every platform, packages the tools and the samples (scripts/package_release.py) and
-# publishes them as a GitHub release. Pull requests that change the release tooling, and manual runs, do everything
-# except publishing, so the pipeline is tested before a tag needs it.
+# publishes them as a GitHub release. Pull requests that change what the packages are made of (the workflow, the
+# packaging scripts, the Project module, the runtime, the samples), and manual runs, do everything except publishing,
+# so the pipeline is tested before a tag needs it.
 on:
   push:
     tags: [ 'v*' ]
@@ -11,8 +12,12 @@ on:
       - .github/workflows/release.yml
       - scripts/package_release.py
       - scripts/sign-macos.sh
-      - Basalt/Source/Basalt/Project/Exporter.*
-      - Basalt/Source/Basalt/Project/Packaging.*
+      - Basalt/Source/Basalt/Project/**
+      - Basalt/Source/Basalt/Core/Process.*
+      - Basalt/Source/Basalt/Core/Window.*
+      - Basalt/Source/Basalt/Renderer/VulkanLoader.*
+      - Basalt-Runtime/**
+      - Samples/**
   workflow_dispatch:
 
 concurrency:
@@ -103,7 +108,8 @@ jobs:
         run: cmake --build build -- -k 0
 
       # With a Developer ID in the repository secrets, the macOS samples are signed and notarized; otherwise they are
-      # signed ad hoc. MACOS_CERTIFICATE is a base64 .p12 of the "Developer ID Application" certificate.
+      # signed ad hoc (and a tag release says so). MACOS_CERTIFICATE is a base64 .p12 of the "Developer ID
+      # Application" certificate; the other five secrets (Docs/Shipping.md) must be set with it.
       - name: Import the signing certificate (macOS)
         if: runner.os == 'macOS'
         shell: bash
@@ -116,9 +122,19 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
           if [[ -z "$MACOS_CERTIFICATE" ]]; then
-            echo "No MACOS_CERTIFICATE secret: the samples are signed ad hoc."
+            if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+              echo "::warning::No MACOS_CERTIFICATE secret: the macOS samples are signed ad hoc, and Gatekeeper blocks them on other Macs."
+            else
+              echo "No MACOS_CERTIFICATE secret: the samples are signed ad hoc."
+            fi
             exit 0
           fi
+          for secret in MACOS_CERTIFICATE_PASSWORD MACOS_SIGNING_IDENTITY APPLE_ID APPLE_TEAM_ID APPLE_APP_PASSWORD; do
+            if [[ -z "${!secret}" ]]; then
+              echo "::error::MACOS_CERTIFICATE is set but the $secret secret is not (Docs/Shipping.md lists all six)."
+              exit 1
+            fi
+          done
           keychain="$RUNNER_TEMP/signing.keychain-db"
           password="$(uuidgen)"
           echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
@@ -130,17 +146,14 @@ jobs:
           security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
           rm "$RUNNER_TEMP/certificate.p12"
           xcrun notarytool store-credentials basalt-notary --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --keychain "$keychain"
-          echo "SIGNING_ARGS=--sign-identity|$MACOS_SIGNING_IDENTITY|--notarize|basalt-notary" >> "$GITHUB_ENV"
+          echo "SIGN_IDENTITY=$MACOS_SIGNING_IDENTITY" >> "$GITHUB_ENV"
 
       - name: Package
         shell: bash
         run: |
           arguments=(--build build --output dist)
           [[ "$RUNNER_OS" == "Linux" ]] && arguments+=(--require-appimage)
-          if [[ -n "${SIGNING_ARGS:-}" ]]; then
-            IFS='|' read -ra signing <<< "$SIGNING_ARGS"
-            arguments+=("${signing[@]}")
-          fi
+          [[ -n "${SIGN_IDENTITY:-}" ]] && arguments+=(--sign-identity "$SIGN_IDENTITY" --notarize basalt-notary)
           python scripts/package_release.py "${arguments[@]}"
           ls -l dist
 

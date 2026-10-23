@@ -149,15 +149,29 @@ namespace Basalt {
 		DrawTextSetting("Name", "name", config.Name, m_NameEdit);
 		HelpMarker("Also names the exported executable and the game's save data directory.");
 		DrawTextSetting("Version", "version", config.Version, m_VersionEdit);
-		HelpMarker("MAJOR.MINOR.PATCH, or MAJOR.MINOR.PATCH.BUILD, each 0-65535. Packaged exports carry it (Windows file\nversion, macOS bundle version, AppImage file name); scripts read it with Game.GetInfo().");
+		HelpMarker("MAJOR.MINOR.PATCH, or MAJOR.MINOR.PATCH.BUILD, each 0-65535 without leading zeros. Packaged exports carry it\n(Windows file version, macOS bundle version without BUILD, AppImage file name); scripts read it with Game.GetInfo().");
 		DrawTextSetting("Company", "company", config.Company, m_CompanyEdit);
 		HelpMarker("The publisher: the Windows version resource, the macOS copyright and the macOS bundle identifier\n(com.<company>.<name>).");
 
-		if (ImGui::BeginCombo("Icon", config.Icon.empty() ? "(none)" : config.Icon.c_str()))
+		// The asset list for a combo, or a line saying why there is none.
+		const auto listAssets = [](const std::vector<std::string>& extensions) {
+			std::string error;
+			std::vector<std::string> assets = AssetManager::ListAssets(extensions, &error);
+			if (!error.empty())
+				ImGui::TextColored(EditorColors::Warning(), "%s", error.c_str());
+			return assets;
+		};
+		// An icon whose file is gone is an asset-uuid: key, which means nothing to read.
+		std::string iconLabel = config.Icon;
+		if (iconLabel.empty())
+			iconLabel = "(none)";
+		else if (AssetRegistry::IsUnresolvedKey(iconLabel))
+			iconLabel = "(missing file)";
+		if (ImGui::BeginCombo("Icon", iconLabel.c_str()))
 		{
 			if (ImGui::Selectable("(none)", config.Icon.empty()) && !config.Icon.empty())
 				Set({ { "icon", "" } });
-			for (const std::string& image : AssetManager::ListAssets({ ".png" }))
+			for (const std::string& image : listAssets({ ".png" }))
 				if (ImGui::Selectable(image.c_str(), image == config.Icon) && image != config.Icon)
 					Set({ { "icon", image } });
 			ImGui::EndCombo();
@@ -166,7 +180,7 @@ namespace Basalt {
 
 		if (ImGui::BeginCombo("Start Scene", config.StartScene.empty() ? "(none)" : config.StartScene.c_str()))
 		{
-			for (const std::string& scene : AssetManager::ListAssets({ ".bscene" }))
+			for (const std::string& scene : listAssets({ ".bscene" }))
 				if (ImGui::Selectable(scene.c_str(), scene == config.StartScene) && scene != config.StartScene)
 					Set({ { "startScene", scene } });
 			ImGui::EndCombo();

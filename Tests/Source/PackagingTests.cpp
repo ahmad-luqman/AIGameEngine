@@ -160,8 +160,9 @@ TEST_SUITE("Packaging")
 		CHECK(ParseProjectVersion("1.0.0") == std::array<uint16_t, 4>{ 1, 0, 0, 0 });
 		CHECK(ParseProjectVersion("2.10.300.4") == std::array<uint16_t, 4>{ 2, 10, 300, 4 });
 		CHECK(ParseProjectVersion("65535.0.65535") == std::array<uint16_t, 4>{ 65535, 0, 65535, 0 });
-		CHECK(ParseProjectVersion("01.002.3") == std::array<uint16_t, 4>{ 1, 2, 3, 0 });
-		for (const char* invalid : { "", "1", "1.2", "1.2.3.4.5", "1..3", "1.2.3.", ".1.2.3", "a.b.c", "1.2.-3", "+1.2.3", "1.2.3 ", " 1.2.3", "65536.0.0", "1.2.999999", "1.2.3-beta", "1.2.3x" })
+		CHECK(ParseProjectVersion("0.10.100") == std::array<uint16_t, 4>{ 0, 10, 100, 0 });
+		// Leading zeros would make the text ("01.002.3") disagree with the numbers packages carry (1.2.3).
+		for (const char* invalid : { "", "1", "1.2", "1.2.3.4.5", "1..3", "1.2.3.", ".1.2.3", "a.b.c", "1.2.-3", "+1.2.3", "1.2.3 ", " 1.2.3", "65536.0.0", "1.2.999999", "1.2.3-beta", "1.2.3x", "01.2.3", "1.02.3", "1.2.3.00" })
 			CHECK_MESSAGE(!ParseProjectVersion(invalid), invalid);
 	}
 
@@ -210,6 +211,16 @@ TEST_SUITE("Packaging")
 		FileSystem::WriteTextFile(project->GetProjectFilePath(), broken.dump());
 		CHECK_FALSE(Project::Load(temp.GetDirectory(), error));
 		broken = saved;
+		broken["Company"] = std::string(ProjectConfig::MaxTextLength + 1, 'c');
+		FileSystem::WriteTextFile(project->GetProjectFilePath(), broken.dump());
+		CHECK_FALSE(Project::Load(temp.GetDirectory(), error));
+		CHECK(error.find("Company must be at most 256 bytes") != std::string::npos);
+		broken = saved;
+		broken["Name"] = std::string(ProjectConfig::MaxTextLength + 1, 'n');
+		FileSystem::WriteTextFile(project->GetProjectFilePath(), broken.dump());
+		CHECK_FALSE(Project::Load(temp.GetDirectory(), error));
+		CHECK(error.find("Name must be at most 256 bytes") != std::string::npos);
+		broken = saved;
 		broken["Icon"] = 5;
 		FileSystem::WriteTextFile(project->GetProjectFilePath(), broken.dump());
 		CHECK_FALSE(Project::Load(temp.GetDirectory(), error));
@@ -241,6 +252,11 @@ TEST_SUITE("Packaging")
 		CHECK(BasaltTest::Contains(RunError(registry, session, "project.set", { { "icon", "Assets/Textures/Missing.png" } }), "cannot read icon"));
 		CHECK(BasaltTest::Contains(RunError(registry, session, "project.set", { { "icon", "../Icon.png" } }), "'..' is not allowed"));
 		CHECK(BasaltTest::Contains(RunError(registry, session, "project.set", { { "company", "Other" }, { "version", "x" } }), "version"));
+		// Name and company end up in fixed-size package metadata.
+		CHECK(BasaltTest::Contains(RunError(registry, session, "project.set", { { "company", std::string(ProjectConfig::MaxTextLength + 1, 'c') } }), "'company' must be at most 256 bytes"));
+		CHECK(BasaltTest::Contains(RunError(registry, session, "project.set", { { "name", std::string(ProjectConfig::MaxTextLength + 1, 'n') } }), "'name' must be at most 256 bytes"));
+		Run(registry, session, "project.set", { { "company", std::string(ProjectConfig::MaxTextLength, 'c') } });
+		Run(registry, session, "project.set", { { "company", "Acme" } });
 		info = Run(registry, session, "project.info");
 		CHECK(info["version"] == "1.4.2");
 		CHECK(info["company"] == "Acme");
@@ -269,8 +285,31 @@ TEST_SUITE("Packaging")
 		CHECK(reloaded->GetConfig().Icon == "Assets/Icon.png");
 		Project::SetActive(reloaded);
 
+		// With the icon file gone, other settings stay editable and the icon keeps its identity.
+		std::filesystem::remove(temp.GetDirectory() / "Assets/Icon.png");
+		reloaded = Project::Load(temp.GetDirectory(), error);
+		REQUIRE_MESSAGE(reloaded, error);
+		Project::SetActive(reloaded);
+		const std::string missing = reloaded->GetConfig().Icon;
+		CHECK(AssetRegistry::IsUnresolvedKey(missing));
+		Run(registry, session, "project.set", { { "company", "Beta" } });
+		CHECK(reloaded->GetConfig().Icon == missing);
+		std::optional<IconImage> loadedIcon;
+		CHECK_FALSE(LoadProjectIcon(*reloaded, loadedIcon, error));
+		CHECK(BasaltTest::Contains(error, "the project icon is an unresolved asset UUID"));
+
 		Run(registry, session, "project.set", { { "icon", "" } });
 		CHECK(Run(registry, session, "project.info")["icon"] == "");
+		CHECK(LoadProjectIcon(*reloaded, loadedIcon, error));
+		CHECK_FALSE(loadedIcon);
+
+		// Deleting the icon says so; the project keeps naming it until another is set.
+		WriteIcon(temp.GetDirectory() / "Assets/Textures/Icon.png", SolidIcon(256, 256));
+		Run(registry, session, "project.set", { { "icon", "Assets/Textures/Icon.png" } });
+		const json deleted = Run(registry, session, "asset.delete", { { "path", "Assets/Textures/Icon.png" } });
+		REQUIRE(deleted.contains("warnings"));
+		CHECK(BasaltTest::Contains(deleted["warnings"][0].get<std::string>(), "this was the project's icon"));
+		CHECK_FALSE(Run(registry, session, "asset.delete", { { "path", "Assets/Textures/NotAnImage.png" } }).contains("warnings"));
 	}
 
 	TEST_CASE("Validation checks the icon")
@@ -287,7 +326,7 @@ TEST_SUITE("Packaging")
 			return result;
 		};
 		const auto contains = [](const std::vector<std::string>& list, const std::string& text) {
-			return std::any_of(list.begin(), list.end(), [&](const std::string& message) { return message.find(text) != std::string::npos; });
+			return std::any_of(list.begin(), list.end(), [&](const std::string& message) { return BasaltTest::Contains(message, text); });
 		};
 
 		WriteIcon(temp.GetDirectory() / "Assets/Textures/Small.png", SolidIcon(64, 32));
@@ -303,8 +342,27 @@ TEST_SUITE("Packaging")
 		project->GetConfig().Icon = "Assets/Textures/Fake.png";
 		CHECK(contains(messages(ValidationSeverity::Error), "the Icon: icon"));
 
+		// The larger side counts, whichever it is.
+		WriteIcon(temp.GetDirectory() / "Assets/Textures/Tall.png", SolidIcon(32, 300));
+		project->GetConfig().Icon = "Assets/Textures/Tall.png";
+		CHECK_FALSE(contains(messages(ValidationSeverity::Warning), "Icon"));
+
 		project->GetConfig().Icon = "Assets/Textures/Missing.png";
 		CHECK(contains(messages(ValidationSeverity::Error), "the Icon names the missing file"));
+
+		// What a reload leaves when the icon's file is gone: its identity, reported as unresolved.
+		project->GetConfig().Icon = "Assets/Textures/Tall.png";
+		std::string error;
+		REQUIRE_MESSAGE(project->Save(error), error);
+		std::filesystem::remove(temp.GetDirectory() / "Assets/Textures/Tall.png");
+		const Ref<Project> reloaded = Project::Load(temp.GetDirectory(), error);
+		REQUIRE_MESSAGE(reloaded, error);
+		std::vector<std::string> unresolved;
+		const ValidationReport report = ValidateProject(*reloaded);
+		for (const ValidationIssue& issue : report.GetIssues())
+			if (issue.Severity == ValidationSeverity::Error)
+				unresolved.push_back(issue.Message);
+		CHECK(contains(unresolved, "the Icon names an unresolved asset UUID"));
 	}
 
 	TEST_CASE("Icons load from PNG only and resize onto a transparent square")
@@ -320,6 +378,13 @@ TEST_SUITE("Packaging")
 		WriteIcon(directory.GetPath() / "wide.png", SolidIcon(MaxIconSize + 1, 1));
 		CHECK_FALSE(LoadIconImage(directory.GetPath() / "wide.png", error));
 		CHECK(error.find("at most 4096 pixels") != std::string::npos);
+		WriteIcon(directory.GetPath() / "widest.png", SolidIcon(MaxIconSize, 1));
+		CHECK(LoadIconImage(directory.GetPath() / "widest.png", error));
+		// A PNG signature followed by garbage does not decode.
+		const std::string truncated = std::string("\x89PNG\r\n\x1a\n") + "garbage";
+		FileSystem::WriteTextFile(directory.GetPath() / "truncated.png", truncated);
+		CHECK_FALSE(LoadIconImage(directory.GetPath() / "truncated.png", error));
+		CHECK(error.find("cannot decode icon") != std::string::npos);
 
 		WriteIcon(directory.GetPath() / "red.png", SolidIcon(4, 2));
 		const auto icon = LoadIconImage(directory.GetPath() / "red.png", error);
@@ -336,6 +401,30 @@ TEST_SUITE("Packaging")
 		CHECK(square.Pixels[(1 * 4 + 1) * 4 + 3] == 255);
 		CHECK(square.Pixels[(3 * 4 + 3) * 4 + 3] == 0);
 
+		// A tall icon is centered too: columns left and right are transparent.
+		const IconImage tall = ResizeIcon(SolidIcon(2, 4), 4);
+		for (size_t y = 0; y < 4; ++y)
+		{
+			CHECK(tall.Pixels[(y * 4 + 0) * 4 + 3] == 0);
+			CHECK(tall.Pixels[(y * 4 + 1) * 4 + 3] == 255);
+			CHECK(tall.Pixels[(y * 4 + 2) * 4 + 3] == 255);
+			CHECK(tall.Pixels[(y * 4 + 3) * 4 + 3] == 0);
+		}
+
+		// Downscaling a padded icon blends its edge rows with the transparent padding: alpha drops, but the color stays
+		// the icon's own (an unweighted filter would darken it toward the padding's black).
+		const IconImage padded = ResizeIcon(SolidIcon(64, 32), 16);
+		REQUIRE(padded.IsValid());
+		bool sawEdge = false;
+		for (size_t y = 0; y < 16; ++y)
+		{
+			const uint8_t* pixel = &padded.Pixels[(y * 16 + 8) * 4];
+			if (pixel[3] > 8)
+				CHECK_MESSAGE(std::abs(pixel[0] - 200) <= 6, "row ", y, " red ", int(pixel[0]), " alpha ", int(pixel[3]));
+			sawEdge = sawEdge || (pixel[3] > 8 && pixel[3] < 247);
+		}
+		CHECK(sawEdge);
+
 		const IconImage scaled = ResizeIcon(SolidIcon(64, 64), 16);
 		CHECK(scaled.Width == 16);
 		CHECK(scaled.Height == 16);
@@ -348,6 +437,15 @@ TEST_SUITE("Packaging")
 		CHECK(fallback.Width == 64);
 		CHECK(fallback.Pixels[3] == 0);                        // a transparent corner
 		CHECK(fallback.Pixels[(32 * 64 + 32) * 4 + 3] == 255); // an opaque center
+
+		// Invalid images (a failed resize) encode to nothing rather than to a broken file.
+		CHECK(EncodeIconPng(IconImage{}).empty());
+		IconImage short_;
+		short_.Width = 4;
+		short_.Height = 4;
+		short_.Pixels.resize(8);
+		CHECK_FALSE(short_.IsValid());
+		CHECK(EncodeIconPng(short_).empty());
 	}
 
 	TEST_CASE("Bundle identifiers are reverse-DNS from company and name")
@@ -365,7 +463,9 @@ TEST_SUITE("Packaging")
 		CHECK(plist.find("<string>Rock &amp; Roll</string>") != std::string::npos);
 		CHECK(plist.find("<key>CFBundleExecutable</key>\n\t<string>Rock_Roll</string>") != std::string::npos);
 		CHECK(plist.find("<key>CFBundleShortVersionString</key>\n\t<string>2.10.300</string>") != std::string::npos);
-		CHECK(plist.find("<key>CFBundleVersion</key>\n\t<string>2.10.300.4</string>") != std::string::npos);
+		// Apple documents both version keys as at most three numbers.
+		CHECK(plist.find("<key>CFBundleVersion</key>\n\t<string>2.10.300</string>") != std::string::npos);
+		CHECK(plist.find("2.10.300.4") == std::string::npos);
 		CHECK(plist.find("<key>CFBundleIdentifier</key>\n\t<string>com.Stone-Works.Rock-Roll</string>") != std::string::npos);
 		CHECK(plist.find("Copyright \xC2\xA9 Stone &lt;Works&gt;") != std::string::npos);
 		CHECK(plist.find("CFBundleIconFile") == std::string::npos);
@@ -414,15 +514,17 @@ TEST_SUITE("Packaging")
 			return found;
 		};
 		using Elements = std::vector<std::pair<std::string, int>>;
-		CHECK(elements(BuildIcns(SolidIcon(1024, 600))) == Elements{ { "icp4", 16 }, { "icp5", 32 }, { "ic11", 32 }, { "ic12", 64 }, { "ic07", 128 }, { "ic08", 256 }, { "ic13", 256 }, { "ic09", 512 }, { "ic14", 512 }, { "ic10", 1024 } });
-		CHECK(elements(BuildIcns(SolidIcon(100, 100))) == Elements{ { "icp4", 16 }, { "icp5", 32 }, { "ic11", 32 }, { "ic12", 64 } });
+		CHECK(elements(*BuildIcns(SolidIcon(1024, 600))) == Elements{ { "icp4", 16 }, { "icp5", 32 }, { "ic11", 32 }, { "ic12", 64 }, { "ic07", 128 }, { "ic08", 256 }, { "ic13", 256 }, { "ic09", 512 }, { "ic14", 512 }, { "ic10", 1024 } });
+		CHECK(elements(*BuildIcns(SolidIcon(100, 100))) == Elements{ { "icp4", 16 }, { "icp5", 32 }, { "ic11", 32 }, { "ic12", 64 } });
 		// Never empty, even for a tiny source.
-		CHECK(elements(BuildIcns(SolidIcon(8, 8))) == Elements{ { "icp4", 16 } });
+		CHECK(elements(*BuildIcns(SolidIcon(8, 8))) == Elements{ { "icp4", 16 } });
 	}
 
 	TEST_CASE("Windows icon resources list one PNG image per size")
 	{
-		const WindowsIconResources resources = BuildWindowsIcon(SolidIcon(300, 300));
+		const auto built = BuildWindowsIcon(SolidIcon(300, 300));
+		REQUIRE(built);
+		const WindowsIconResources& resources = *built;
 		const std::vector<uint8_t>& directory = resources.GroupDirectory;
 		const std::vector<int> sizes = { 16, 24, 32, 48, 64, 128, 256 };
 		REQUIRE(resources.Images.size() == sizes.size());
@@ -442,7 +544,7 @@ TEST_SUITE("Packaging")
 			CHECK(Word(directory, entry + 12) == WindowsIconResources::FirstIconID + i);
 			CHECK(PngSize(resources.Images[i].data(), resources.Images[i].size()) == std::pair{ sizes[i], sizes[i] });
 		}
-		CHECK(BuildWindowsIcon(SolidIcon(40, 40)).Images.size() == 3);
+		CHECK(BuildWindowsIcon(SolidIcon(40, 40))->Images.size() == 3);
 	}
 
 	TEST_CASE("Version resources hold the fixed versions and the string table")
@@ -476,13 +578,23 @@ TEST_SUITE("Packaging")
 		REQUIRE(translation);
 		CHECK(translation->Value == std::vector<uint8_t>{ 0x09, 0x04, 0xB0, 0x04 });
 
-		// Text beyond the Basic Multilingual Plane becomes a surrogate pair; malformed UTF-8 a replacement character.
+		// Text beyond the Basic Multilingual Plane becomes a surrogate pair; malformed UTF-8 replacement characters.
 		PackageInfo info = TestPackageInfo();
 		info.Company = "Rocket \xF0\x9F\x9A\x80 \xC3";
 		info.Name = "Caf\xC3\xA9";
 		const auto unicode = VersionStrings(ParseVersionBlock(BuildVersionInfo(info), 0));
 		CHECK(unicode.at(u"CompanyName") == u"Rocket \U0001F680 �");
 		CHECK(unicode.at(u"ProductName") == u"Café");
+		// Each byte that starts no valid sequence becomes U+FFFD, and what follows it decodes normally: an overlong NUL, an
+		// encoded surrogate, a value past U+10FFFF, a lone continuation byte and a truncated sequence.
+		info.Company = "A\xC0\x80"
+					   "B\xED\xA0\x80"
+					   "C\xF4\x90\x80\x80"
+					   "D\x80"
+					   "E\xE6\x97"
+					   "F";
+		const auto malformed = VersionStrings(ParseVersionBlock(BuildVersionInfo(info), 0));
+		CHECK(malformed.at(u"CompanyName") == u"A\uFFFD\uFFFDB\uFFFD\uFFFD\uFFFDC\uFFFD\uFFFD\uFFFD\uFFFDD\uFFFDE\uFFFD\uFFFDF");
 		// Without a company there is no company or copyright string.
 		info.Company.clear();
 		const auto anonymous = VersionStrings(ParseVersionBlock(BuildVersionInfo(info), 0));
@@ -500,6 +612,18 @@ TEST_SUITE("Packaging")
 		const std::filesystem::path output = temp.GetDirectory().parent_path() / "PackagingExportOut";
 		std::error_code error;
 		std::filesystem::remove_all(output, error);
+		// A previous package export of this game (either platform's layout), which a refused export must leave alone.
+		const std::filesystem::path app = output / "PackagingExportChecks.app";
+		const std::filesystem::path appDir = output / "PackagingExportChecks.AppDir";
+		for (const std::filesystem::path& projectDirectory : { app / "Contents" / "Resources", appDir })
+		{
+			std::filesystem::create_directories(projectDirectory);
+			REQUIRE(FileSystem::WriteTextFile(projectDirectory / Project::FileName, "{}"));
+			REQUIRE(FileSystem::WriteTextFile(projectDirectory / "Sentinel.txt", "previous export"));
+		}
+		const auto untouched = [&]() {
+			return FileSystem::Exists(app / "Contents" / "Resources" / "Sentinel.txt") && FileSystem::Exists(appDir / "Sentinel.txt");
+		};
 
 		ExportOptions options;
 		options.RuntimeExecutable = temp.GetDirectory() / "FakeRuntime";
@@ -508,30 +632,128 @@ TEST_SUITE("Packaging")
 		ExportResult result = Exporter::Export(*project, output, options);
 		CHECK_FALSE(result.Success);
 		CHECK(result.Error.find("Version '1' must be") != std::string::npos);
-		CHECK_FALSE(std::filesystem::exists(output));
+		CHECK(result.PackagePath.empty());
+		CHECK(untouched());
 
 		project->GetConfig().Version = "1.0.0";
 		temp.WriteFile("Assets/Textures/Broken.png", "not a png");
 		project->GetConfig().Icon = "Assets/Textures/Broken.png";
 		result = Exporter::Export(*project, output, options);
 		CHECK(result.Error.find("is not a PNG file") != std::string::npos);
-		CHECK_FALSE(std::filesystem::exists(output));
+		CHECK(untouched());
 
 		project->GetConfig().Icon = "asset-uuid://123/Assets/Textures/Gone.png";
 		result = Exporter::Export(*project, output, options);
-		CHECK(result.Error.find("icon no longer exists") != std::string::npos);
-		CHECK_FALSE(std::filesystem::exists(output));
+		CHECK(result.Error.find("the project icon is an") != std::string::npos);
+		CHECK(untouched());
 
 		// A folder export never reads them.
 		options.Package = false;
 		project->GetConfig().Version = "1";
-		result = Exporter::Export(*project, output, options);
-#if !defined(__APPLE__)
+		const std::filesystem::path folder = temp.GetDirectory().parent_path() / "PackagingExportFolder";
+		std::filesystem::remove_all(folder, error);
+		result = Exporter::Export(*project, folder, options);
+#if defined(__APPLE__)
+		// macOS exports also need the Vulkan libraries, which a test machine may lack; nothing else may fail.
+		if (!result.Success)
+			CHECK_MESSAGE(BasaltTest::Contains(result.Error, "libMoltenVK"), result.Error);
+#else
 		CHECK_MESSAGE(result.Success, result.Error);
-		CHECK(result.PackagePath == output);
+		CHECK(result.PackagePath == folder);
 #endif
+		std::filesystem::remove_all(folder, error);
 		std::filesystem::remove_all(output, error);
 	}
+
+	TEST_CASE("Only an earlier export of the same game may be replaced")
+	{
+		BasaltTest::TempProject temp("PackagingPrevious");
+		const Ref<Project>& project = Project::GetActive();
+		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities":[]})");
+		temp.WriteFile("FakeRuntime", "binary");
+		project->GetConfig().StartScene = "Assets/Scenes/Main.bscene";
+		const std::filesystem::path output = temp.GetDirectory().parent_path() / "PackagingPreviousOut";
+		std::error_code error;
+		std::filesystem::remove_all(output, error);
+		ExportOptions options;
+		options.RuntimeExecutable = temp.GetDirectory() / "FakeRuntime";
+
+		// Another game's package (a folder of downloaded games) is not an export of this one: its Assets survive.
+		std::filesystem::create_directories(output / "Other.app" / "Contents" / "Resources");
+		REQUIRE(FileSystem::WriteTextFile(output / "Other.app" / "Contents" / "Resources" / Project::FileName, "{}"));
+		REQUIRE(FileSystem::WriteTextFile(output / "Assets" / "Precious.txt", "keep"));
+		ExportResult result = Exporter::Export(*project, output, options);
+		CHECK(BasaltTest::Contains(result.Error, "not a previous export of this game"));
+		CHECK(FileSystem::Exists(output / "Assets" / "Precious.txt"));
+
+		// This game's own package is.
+		std::filesystem::create_directories(output / "PackagingPrevious.AppDir");
+		REQUIRE(FileSystem::WriteTextFile(output / "PackagingPrevious.AppDir" / Project::FileName, "{}"));
+		result = Exporter::Export(*project, output, options);
+		CHECK_FALSE(BasaltTest::Contains(result.Error, "not a previous export"));
+		std::filesystem::remove_all(output, error);
+	}
+
+#if defined(__linux__)
+	TEST_CASE("Linux packages become AppImages through appimagetool")
+	{
+		BasaltTest::TempProject temp("AppRun");
+		const Ref<Project>& project = Project::GetActive();
+		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities":[]})");
+		temp.WriteFile("FakeRuntime", "binary");
+		project->GetConfig().StartScene = "Assets/Scenes/Main.bscene";
+		project->GetConfig().Version = "2.1.0";
+		const std::filesystem::path output = temp.GetDirectory().parent_path() / "PackagingAppImageOut";
+		std::error_code error;
+		std::filesystem::remove_all(output, error);
+		std::filesystem::create_directories(output);
+		// An older version's AppImage of this game goes; another game's ("AppRun-Demo") stays.
+		REQUIRE(FileSystem::WriteTextFile(output / "AppRun-1.9.0-x86_64.AppImage", "old"));
+		REQUIRE(FileSystem::WriteTextFile(output / "AppRun-Demo-1.0.0-x86_64.AppImage", "other game"));
+		REQUIRE(FileSystem::WriteTextFile(output / "AppRun.AppDir" / Project::FileName, "{}"));
+
+		// Records its arguments and environment, then writes the AppImage it was asked for.
+		const std::filesystem::path tool = temp.GetDirectory().parent_path() / "fake-appimagetool";
+		const std::filesystem::path record = temp.GetDirectory().parent_path() / "fake-appimagetool.log";
+		REQUIRE(FileSystem::WriteTextFile(tool, "#!/bin/sh\necho \"$ARCH $APPIMAGE_EXTRACT_AND_RUN $*\" > \"" + record.string() + "\"\nfor last; do :; done\necho image > \"$last\"\n"));
+		std::filesystem::permissions(tool, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace);
+		ExportOptions options;
+		options.RuntimeExecutable = temp.GetDirectory() / "FakeRuntime";
+		options.Package = true;
+		options.AppImageTool = tool;
+		ExportResult result = Exporter::Export(*project, output, options);
+		REQUIRE_MESSAGE(result.Success, result.Error);
+		const std::filesystem::path appDir = output / "AppRun.AppDir";
+	#if defined(__aarch64__)
+		const std::string architecture = "aarch64";
+	#else
+		const std::string architecture = "x86_64";
+	#endif
+		CHECK(result.PackagePath == output / ("AppRun-2.1.0-" + architecture + ".AppImage"));
+		CHECK(FileSystem::ReadTextFile(result.PackagePath) == "image\n");
+		CHECK(FileSystem::ReadTextFile(record) == architecture + " 1 --no-appstream " + appDir.string() + " " + result.PackagePath.string() + "\n");
+		CHECK_FALSE(std::filesystem::exists(output / "AppRun-1.9.0-x86_64.AppImage"));
+		CHECK(std::filesystem::exists(output / "AppRun-Demo-1.0.0-x86_64.AppImage"));
+		// A game named AppRun is its own entry point: the executable, not a link to itself.
+		CHECK(std::filesystem::is_regular_file(std::filesystem::symlink_status(appDir / "AppRun")));
+		CHECK(std::filesystem::read_symlink(appDir / ".DirIcon") == "AppRun.png");
+		// Without a project icon the AppImage gets Basalt's, and says so.
+		REQUIRE(result.Warnings.size() == 1);
+		CHECK(BasaltTest::Contains(result.Warnings[0], "uses Basalt's default icon"));
+		int width = 0;
+		int height = 0;
+		int channels = 0;
+		CHECK(stbi_info((appDir / "AppRun.png").string().c_str(), &width, &height, &channels));
+		CHECK(width == 256);
+
+		// A failing appimagetool fails the export with its output.
+		REQUIRE(FileSystem::WriteTextFile(tool, "#!/bin/sh\necho broken runtime\nexit 3\n"));
+		result = Exporter::Export(*project, output, options);
+		CHECK_FALSE(result.Success);
+		CHECK(BasaltTest::Contains(result.Error, "appimagetool failed (exit code 3): broken runtime"));
+		std::filesystem::remove_all(output, error);
+	}
+#endif
 
 	TEST_CASE("Exported runtimes find the project next to them or in their bundle's resources")
 	{
@@ -564,6 +786,14 @@ TEST_SUITE("Packaging")
 		CHECK(BasaltTest::Eval(scene, "local info = Game.GetInfo() return info.Name .. '|' .. info.Version .. '|' .. info.Company") == "PackagingLua|4.5.6|Studio");
 	}
 
+	TEST_CASE("Game.GetInfo returns the defaults without a project")
+	{
+		Project::SetActive(nullptr);
+		Scene scene;
+		scene.OnRuntimeStart();
+		CHECK(BasaltTest::Eval(scene, "local info = Game.GetInfo() return info.Name .. '|' .. info.Version .. '|' .. info.Company") == "Untitled|1.0.0|");
+	}
+
 	TEST_CASE("Windows resources are written only on Windows")
 	{
 		const PackageInfo info = TestPackageInfo();
@@ -586,10 +816,13 @@ TEST_SUITE("Packaging")
 			const auto* data = static_cast<const uint8_t*>(LockResource(LoadResource(module, found)));
 			return std::vector<uint8_t>(data, data + SizeofResource(module, found));
 		};
-		CHECK(resource(RT_VERSION, MAKEINTRESOURCEW(1)) == BuildVersionInfo(info));
-		const WindowsIconResources expected = BuildWindowsIcon(icon);
-		CHECK(resource(RT_GROUP_ICON, L"GLFW_ICON") == expected.GroupDirectory);
-		CHECK(resource(RT_ICON, MAKEINTRESOURCEW(WindowsIconResources::FirstIconID)) == expected.Images[0]);
+		// Wide resource types: the RT_* macros are narrow strings without UNICODE.
+		CHECK(resource(MAKEINTRESOURCEW(16), MAKEINTRESOURCEW(1)) == BuildVersionInfo(info));
+		const auto expected = BuildWindowsIcon(icon);
+		REQUIRE(expected);
+		CHECK(resource(MAKEINTRESOURCEW(14), L"GLFW_ICON") == expected->GroupDirectory);
+		for (size_t i = 0; i < expected->Images.size(); ++i)
+			CHECK(resource(MAKEINTRESOURCEW(3), MAKEINTRESOURCEW(WindowsIconResources::FirstIconID + i)) == expected->Images[i]);
 		FreeLibrary(module);
 #else
 		CHECK_FALSE(WriteWindowsResources(directory.GetPath() / "Game.exe", info, nullptr, error));

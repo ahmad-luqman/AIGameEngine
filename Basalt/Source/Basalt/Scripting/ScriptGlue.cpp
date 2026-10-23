@@ -1129,8 +1129,9 @@ namespace Basalt {
 			game["Quit"] = [&context]() { RequireScene(context).RequestQuit(); };
 			// Read-only facts about the game, for title screens and credits; project defaults without an active project.
 			game["GetInfo"] = [](sol::this_state state) {
+				static const ProjectConfig Defaults;
 				const ProjectConfig* active = Project::GetActiveConfig();
-				const ProjectConfig config = active ? *active : ProjectConfig{};
+				const ProjectConfig& config = active ? *active : Defaults;
 				sol::state_view view(state);
 				return view.create_table_with("Name", config.Name, "Version", config.Version, "Company", config.Company);
 			};

@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-"""Runs scripts/package_release.py the way the release workflow does, on one sample and without the tools archive."""
+"""Runs scripts/package_release.py the way the release workflow does, on one sample.
+
+Usage: ReleasePackaging.py <basalt CLI> [--with-engine]   (--with-engine: also the tools archive; needs BasaltEditor)
+"""
+import hashlib
+import importlib.util
 import os
 from pathlib import Path
-import re
 import subprocess
 import sys
+import tarfile
 import tempfile
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "package_release.py"
@@ -17,12 +23,28 @@ def require(condition, message):
 
 
 def run(arguments, env=None):
-    return subprocess.run([sys.executable, "-B", str(SCRIPT)] + arguments, capture_output=True, text=True, env=env, timeout=600)
+    return subprocess.run([sys.executable, "-B", str(SCRIPT)] + arguments, capture_output=True, text=True, env=env, timeout=900)
+
+
+def members(archive):
+    """Member names of a zip or tar.gz archive, with which ones are symbolic links."""
+    if archive.suffix == ".zip":
+        with zipfile.ZipFile(archive) as file:
+            return {info.filename.rstrip("/"): False for info in file.infolist()}
+    if archive.name.endswith(".tar.gz"):
+        with tarfile.open(archive) as file:
+            return {info.name: info.issym() for info in file.getmembers()}
+    return {}
 
 
 def main():
     build = Path(sys.argv[1]).resolve().parent.parent
-    version = re.search(r"project\(Basalt\s+VERSION\s+([0-9.]+)", (ROOT / "CMakeLists.txt").read_text()).group(1)
+    with_engine = "--with-engine" in sys.argv[2:]
+    spec = importlib.util.spec_from_file_location("package_release", SCRIPT)
+    package_release = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(package_release)
+    version, platform = package_release.engine_version(), package_release.platform_name()
+    exe = ".exe" if sys.platform == "win32" else ""
 
     # A tag must name the engine version.
     require(run(["--check-tag", f"v{version}"]).returncode == 0, "the matching tag was refused")
@@ -42,16 +64,42 @@ def main():
                 (sdk / name).write_text("stand-in")
             env["VULKAN_SDK"] = str(sdk.parent)
         output = Path(temp, "dist")
-        packaged = run(["--build", str(build), "--output", str(output), "--samples", "Tetris", "--skip-engine"], env)
+        arguments = ["--build", str(build), "--output", str(output), "--samples", "Tetris"] + ([] if with_engine else ["--skip-engine"])
+        packaged = run(arguments, env)
         require(packaged.returncode == 0, f"package_release.py failed: {packaged.stdout}{packaged.stderr}")
         files = sorted(path.name for path in output.iterdir())
-        platform = next(name for name in files if name.startswith("SHA256SUMS-"))[len("SHA256SUMS-"):-len(".txt")]
-        archive = next((name for name in files if name.startswith(f"Basalt-{version}-Tetris-{platform}")), None)
-        require(archive and len(files) == 2, f"unexpected release files {files}")
-        checksums = Path(output, f"SHA256SUMS-{platform}.txt").read_text()
-        require(re.fullmatch(rf"[0-9a-f]{{64}}  {re.escape(archive)}\n", checksums), f"checksums: {checksums!r}")
+        checksums_name = f"SHA256SUMS-{platform}.txt"
+        sample = next((name for name in files if name.startswith(f"Basalt-{version}-Tetris-{platform}")), None)
+        engine = next((name for name in files if name.startswith(f"Basalt-{version}-{platform}.")), None)
+        require(sample and checksums_name in files and bool(engine) == with_engine and len(files) == 2 + with_engine, f"unexpected release files {files}")
+
+        # Each archive's digest, computed here.
+        expected = "".join(f"{hashlib.sha256(Path(output, name).read_bytes()).hexdigest()}  {name}\n" for name in sorted(filter(None, [sample, engine])))
+        checksums = Path(output, checksums_name).read_text()
+        require(checksums == expected, f"checksums: {checksums!r}, expected {expected!r}")
+
+        # The sample archive holds the platform package.
+        contents = members(output / sample)
+        if sys.platform == "darwin":
+            require({"Tetris.app/Contents/Info.plist", "Tetris.app/Contents/MacOS/Tetris"} <= contents.keys(), f"sample archive: {sorted(contents)[:20]}")
+        elif sys.platform == "win32":
+            require({"Tetris/Tetris.exe", "Tetris/Project.bproject"} <= contents.keys(), f"sample archive: {sorted(contents)[:20]}")
+        elif sample.endswith(".tar.gz"):
+            require(contents.get("Tetris.AppDir/AppRun") is True and "Tetris.AppDir/Tetris" in contents, f"sample archive: {sorted(contents)[:20]}")
+        else:
+            require(sample.endswith(".AppImage"), f"sample: {sample}")
+
+        if with_engine:
+            folder = f"Basalt-{version}-{platform}"
+            contents = members(output / engine)
+            wanted = {f"{folder}/bin/{tool}{exe}" for tool in ("BasaltEditor", "BasaltRuntime", "basalt")}
+            wanted |= {f"{folder}/Samples/Tetris/Project.bproject", f"{folder}/Docs/Shipping.md", f"{folder}/LICENSE"}
+            if sys.platform == "darwin":
+                wanted |= {f"{folder}/bin/libvulkan.1.dylib", f"{folder}/bin/libMoltenVK.dylib", f"{folder}/bin/vulkan/icd.d/MoltenVK_icd.json"}
+            require(wanted <= contents.keys(), f"tools archive lacks {sorted(wanted - contents.keys())}")
+
         # The output must be empty: archives are never mixed with an earlier run's.
-        again = run(["--build", str(build), "--output", str(output), "--samples", "Tetris", "--skip-engine"], env)
+        again = run(arguments, env)
         require(again.returncode == 1 and "is not empty" in again.stderr, f"a second run into the same output: {again.stderr}")
     print("ReleasePackaging: OK")
 

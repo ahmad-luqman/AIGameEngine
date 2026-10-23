@@ -27,7 +27,7 @@ namespace Basalt {
 			const size_t end = std::min(version.find('.', start), version.size());
 			const std::string_view part = version.substr(start, end - start);
 			// from_chars alone would accept a digit prefix ("1x"); every character must be a digit.
-			if (count == numbers.size() || part.empty() || part.size() > 5 || part.find_first_not_of("0123456789") != std::string_view::npos)
+			if (count == numbers.size() || part.empty() || part.size() > 5 || part.find_first_not_of("0123456789") != std::string_view::npos || (part.size() > 1 && part[0] == '0'))
 				return std::nullopt;
 			uint32_t value = 0;
 			if (std::from_chars(part.data(), part.data() + part.size(), value).ec != std::errc() || value > UINT16_MAX)
@@ -185,8 +185,16 @@ namespace Basalt {
 		}
 		if (!ParseProjectVersion(config.Version))
 		{
-			outError = fmt::format("invalid project file '{}': Version '{}' must be MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH.BUILD, each 0-65535", filePath.string(), config.Version);
+			outError = fmt::format("invalid project file '{}': Version '{}' must be {}", filePath.string(), config.Version, VersionFormat);
 			return nullptr;
+		}
+		for (const auto& [key, value] : { std::pair{ "Name", &config.Name }, std::pair{ "Company", &config.Company } })
+		{
+			if (value->size() > ProjectConfig::MaxTextLength)
+			{
+				outError = fmt::format("invalid project file '{}': {} must be at most {} bytes", filePath.string(), key, ProjectConfig::MaxTextLength);
+				return nullptr;
+			}
 		}
 		nlohmann::json graphicsPatch = nlohmann::json::object();
 		for (const char* key : { "VSync", "ShadowQuality", "SSAOQuality", "RenderScale", "DynamicResolution", "TargetFrameRate", "MinRenderScale" })
