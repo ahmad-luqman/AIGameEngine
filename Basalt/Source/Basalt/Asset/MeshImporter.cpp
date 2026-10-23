@@ -20,7 +20,6 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
-#include <map>
 #include <memory>
 #include <optional>
 #include <set>
@@ -113,8 +112,8 @@ namespace Basalt {
 			const std::string name = path.filename().string();
 			uint64_t declaredTotal = 0;
 			uint64_t rereadTotal = 0;
-			// Bytes claimed so far from each file, by normalized path.
-			std::map<std::filesystem::path, uint64_t> claimed;
+			// Files a buffer already read, by normalized path.
+			std::set<std::filesystem::path> files;
 			for (cgltf_size i = 0; i < data->buffers_count; i++)
 			{
 				const cgltf_buffer& buffer = data->buffers[i];
@@ -158,14 +157,10 @@ namespace Basalt {
 					// cgltf reads the whole file when no byteLength is declared.
 					if (declared == 0)
 						declared = available;
-					if (declared <= available)
-					{
-						// Only the part of this claim past the file's size counts as a reread.
-						uint64_t& previous = claimed[target.lexically_normal()];
-						const uint64_t fresh = available - std::min(previous, available);
-						rereadTotal += declared - std::min(declared, fresh);
-						previous += declared;
-					}
+					// cgltf reads every buffer from the start of its file (byte ranges belong to buffer views), so each
+					// buffer after the first to name a file reads it again in full.
+					if (!files.insert(target.lexically_normal()).second)
+						rereadTotal += declared;
 				}
 				if (declared > available)
 				{
