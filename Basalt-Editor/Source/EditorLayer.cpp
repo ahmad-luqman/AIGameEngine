@@ -2993,7 +2993,7 @@ namespace Basalt {
 							std::string status = "Exported to " + package;
 							if (m_ExportSmokeTest)
 								status += "; the smoke test passed";
-							// Warnings say what the package lacks (an AppDir without its AppImage).
+							// Warnings are problems that did not stop the export (no project icon, no appimagetool).
 							for (const auto& warning : result->value("warnings", nlohmann::json::array()))
 								status += "; " + warning.get<std::string>();
 							m_Context.SetStatus(status, result->contains("warnings"));

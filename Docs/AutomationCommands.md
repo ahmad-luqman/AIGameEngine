@@ -2634,7 +2634,7 @@ Creates a new project directory (Project.bproject + Assets/) and opens it.
 
 | Parameter | Type / description |
 |-----------|--------------------|
-| `name` | string |
+| `name` | string of at most 256 bytes |
 | `path` | string, project directory |
 
 <details><summary>Parameter JSON Schema</summary>
@@ -2646,14 +2646,14 @@ Creates a new project directory (Project.bproject + Assets/) and opens it.
     "name": {
       "anyOf": [
         {
-          "description": "string",
+          "description": "string of at most 256 bytes",
           "type": "string"
         },
         {
           "type": "null"
         }
       ],
-      "description": "string"
+      "description": "string of at most 256 bytes"
     },
     "path": {
       "description": "string, project directory",

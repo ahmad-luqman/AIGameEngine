@@ -34,7 +34,8 @@ basalt --project MyGame project.info     # also shows the derived bundleIdentifi
 
 `project.export` validates the project, copies the runtime (renamed after the game) with the project file, its input
 actions and `Assets/`, and optionally runs the result headless (`smokeTestFrames`). The output directory must be outside
-the project, and empty or a previous export of the same game (its project file, or its `<Name>.app` or `<Name>.AppDir`).
+the project, and empty or a previous export of the same game (its project file and executable, or its `<Name>.app` or
+`<Name>.AppDir`).
 Export with a `Dist` build of the tools for distribution.
 
 ```bash
@@ -42,7 +43,8 @@ basalt --project MyGame project.export '{"output": "Dist/MyGame", "smokeTestFram
 basalt --project MyGame project.export '{"output": "Dist/MyGame", "package": true, "smokeTestFrames": 120}'  # a package
 ```
 
-The result names the `executable` (what the smoke test ran), the `package` (what to distribute) and any `warnings`.
+The result names the `executable` (what the smoke test ran), the `package` (what to distribute) and any `warnings`
+(a package without a project icon, an AppDir without appimagetool).
 The editor's File > Export Game... dialog offers the smoke test and the package option.
 
 ### Packages (`"package": true`)
@@ -80,9 +82,9 @@ loads as the window class icon) with PNG images from 16 to 256 px. Zip the folde
 <Name>-<version>-<arch>.AppImage
 ```
 
-`<Name>.png` is the project icon (at most 512 px), or Basalt's own icon at 256 px with a warning when the project has
-none (an AppImage must have one). The AppDir is replaced on every export, and AppImages of earlier versions of the game
-are removed. The AppDir always gets built. The `.AppImage` file needs [appimagetool](https://github.com/AppImage/appimagetool):
+`<Name>.png` is the project icon (at most 512 px), or Basalt's own icon at 256 px when the project has none (an AppImage
+must have one). The AppDir is replaced on every export, and an export that builds an AppImage removes the game's
+earlier ones (other games' AppImages in the folder stay). The AppDir always gets built. The `.AppImage` file needs [appimagetool](https://github.com/AppImage/appimagetool):
 `appImageTool` in the command, else `$APPIMAGETOOL`, else `appimagetool` on `PATH`. Without it, the export succeeds
 with a warning, and the AppDir is the package. Exports run appimagetool with `APPIMAGE_EXTRACT_AND_RUN=1`, so it
 needs no FUSE. Players need a Vulkan driver (their distribution's `libvulkan1` and Mesa or a GPU vendor driver) and a
@@ -123,8 +125,9 @@ runs `scripts/package_release.py`, which writes:
 - `SHA256SUMS.txt`, built from each platform's `SHA256SUMS-<platform>.txt`.
 
 A final job publishes them as a GitHub release with generated notes. Each platform has one architecture: Apple
-Silicon on macOS (`macos-15`) and x86-64 on Windows and Linux. Pull requests that change what the packages are made of
-(the workflow, the packaging scripts, the Project module, the runtime, `VulkanLoader`, the samples), and manual runs
+Silicon on macOS (`macos-15`) and x86-64 on Windows and Linux. Pull requests that change the main inputs of the packages
+(the workflow, the packaging scripts, the Project module, the runtime, the Process, Window and VulkanLoader sources, the
+samples), and manual runs
 (`workflow_dispatch`), run everything except publishing. Locally:
 
 ```bash
@@ -133,8 +136,9 @@ python3 scripts/package_release.py --build build-dist --output release      # --
 ```
 
 **macOS signing in CI.** Without secrets, the samples are signed ad hoc, and a tag release shows a warning. To sign and
-notarize them, add all of these repository secrets (with only some of them set, the job fails and names the missing
-one). Only the samples are signed: the tools archive is not, so macOS quarantines downloaded tools until you allow
+notarize them, add all of these repository secrets. Once `MACOS_CERTIFICATE` is set, the job fails and names any other
+one that is missing; without it, the rest are ignored, and a tag release also says in its notes that the macOS samples
+are signed ad hoc. Only the samples are signed: the tools archive is not, so macOS quarantines downloaded tools until you allow
 them.
 
 | Secret | Value |

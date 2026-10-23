@@ -48,8 +48,6 @@ namespace Basalt {
 			constexpr std::array<uint32_t, 4> Sizes = { 16, 32, 48, 256 };
 			std::vector<IconImage> resized;
 			resized.reserve(Sizes.size());
-			std::vector<WindowIcon> images;
-			images.reserve(Sizes.size());
 			for (uint32_t size : Sizes)
 			{
 				resized.push_back(ResizeIcon(*icon, size));
@@ -59,6 +57,9 @@ namespace Basalt {
 					return;
 				}
 			}
+			// Views into resized, which outlives them.
+			std::vector<WindowIcon> images;
+			images.reserve(resized.size());
 			for (const IconImage& image : resized)
 				images.push_back({ image.Width, image.Height, image.Pixels });
 			window->SetIcon(images);

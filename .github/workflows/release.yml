@@ -1,9 +1,9 @@
 name: Release
 
 # A v<version> tag builds Dist on every platform, packages the tools and the samples (scripts/package_release.py) and
-# publishes them as a GitHub release. Pull requests that change what the packages are made of (the workflow, the
-# packaging scripts, the Project module, the runtime, the samples), and manual runs, do everything except publishing,
-# so the pipeline is tested before a tag needs it.
+# publishes them as a GitHub release. Pull requests that change the main inputs of the packages (the workflow, the
+# packaging scripts, the Project module, the runtime, the Process, Window and VulkanLoader sources, the samples), and
+# manual runs, do everything except publishing, so the pipeline is tested before a tag needs it.
 on:
   push:
     tags: [ 'v*' ]
@@ -155,6 +155,10 @@ jobs:
           [[ "$RUNNER_OS" == "Linux" ]] && arguments+=(--require-appimage)
           [[ -n "${SIGN_IDENTITY:-}" ]] && arguments+=(--sign-identity "$SIGN_IDENTITY" --notarize basalt-notary)
           python scripts/package_release.py "${arguments[@]}"
+          # The publish job adds these notes to the release.
+          if [[ "$RUNNER_OS" == "macOS" && -z "${SIGN_IDENTITY:-}" ]]; then
+            echo "The macOS samples are signed ad hoc, not with a Developer ID: macOS blocks them until you allow them in System Settings > Privacy & Security." > dist/NOTES-macos.md
+          fi
           ls -l dist
 
       - uses: actions/upload-artifact@v4
@@ -184,4 +188,7 @@ jobs:
         run: |
           cat dist/SHA256SUMS-*.txt > dist/SHA256SUMS.txt
           rm dist/SHA256SUMS-*.txt
-          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "Basalt ${GITHUB_REF_NAME#v}" --generate-notes --verify-tag
+          # Platform notes (unsigned macOS samples) come before the generated notes.
+          cat dist/NOTES-*.md > "$RUNNER_TEMP/notes.md" 2>/dev/null || true
+          rm -f dist/NOTES-*.md
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "Basalt ${GITHUB_REF_NAME#v}" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes --verify-tag

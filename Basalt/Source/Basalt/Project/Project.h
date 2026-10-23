@@ -25,7 +25,7 @@ namespace Basalt {
 		static constexpr uint32_t MaxWindowSize = 16384;
 
 		static constexpr const char* DefaultVersion = "1.0.0";
-		// Longest Name and Company in bytes: both go into fixed-size package metadata (a Windows version resource's
+		// Longest Name and Company in bytes: both go into length-limited package metadata (a Windows version resource's
 		// lengths are 16-bit), and no title needs more.
 		static constexpr size_t MaxTextLength = 256;
 
@@ -66,6 +66,10 @@ namespace Basalt {
 	// The numbers of a ProjectConfig::Version (a missing BUILD is 0), or nullopt when it is not VersionFormat. Leading
 	// zeros are refused so the text and the numbers packages derive from it always agree.
 	std::optional<std::array<uint16_t, 4>> ParseProjectVersion(std::string_view version);
+	// False, with "<Name|Company> must be at most N bytes", when Name or Company is longer than MaxTextLength. Every path
+	// that sets them checks (Project::Create, Project::Load, project.set), and so does MakePackageInfo, whatever built the
+	// config.
+	bool ValidateProjectText(const ProjectConfig& config, std::string& outError);
 
 	// A game project: a directory containing Project.bproject and an Assets/ folder. Asset references in
 	// components are project-relative paths ("Assets/Models/Ship.gltf"). One project is active at a time.
@@ -124,8 +128,13 @@ namespace Basalt {
 		std::filesystem::path GetAssetDirectory() const { return m_Directory / AssetDirectoryName; }
 		std::filesystem::path GetProjectFilePath() const { return m_Directory / FileName; }
 		std::filesystem::path GetInputFilePath() const { return m_Directory / InputFileName; }
-		// The icon file (ProjectConfig::Icon), or an empty path without an icon.
-		std::filesystem::path GetIconPath() const { return m_Config.Icon.empty() ? std::filesystem::path() : m_Directory / FileSystem::PathFromUtf8(m_Config.Icon); }
+		// The icon file (ProjectConfig::Icon), or an empty path without an icon or when its file is gone (an unresolved key).
+		std::filesystem::path GetIconPath() const
+		{
+			if (m_Config.Icon.empty() || AssetRegistry::IsUnresolvedKey(m_Config.Icon))
+				return {};
+			return m_Directory / FileSystem::PathFromUtf8(m_Config.Icon);
+		}
 
 	private:
 		AssetRegistry m_Assets;

@@ -57,12 +57,13 @@ if [[ -n "$profile" ]]; then
 	ditto -c -k --keepParent "$app" "$archive"
 	# The verdict is read from the result rather than the exit status (which does not reflect a rejection on every Xcode),
 	# and a rejection prints Apple's log, which says what to fix.
-	result="$(xcrun notarytool submit "$archive" --keychain-profile "$profile" --wait --output-format plist)" || true
-	status="$(plutil -extract status raw -o - - <<< "$result" || true)"
+	submitted=0
+	result="$(xcrun notarytool submit "$archive" --keychain-profile "$profile" --wait --output-format plist)" || submitted=$?
+	status="$(plutil -extract status raw -o - - <<< "$result" 2>/dev/null || true)"
 	if [[ "$status" != "Accepted" ]]; then
-		echo "notarization ${status:-failed}" >&2
+		echo "notarization ${status:-failed (notarytool exited with $submitted)}" >&2
 		echo "$result" >&2
-		if submission="$(plutil -extract id raw -o - - <<< "$result")"; then
+		if submission="$(plutil -extract id raw -o - - <<< "$result" 2>/dev/null)"; then
 			xcrun notarytool log "$submission" --keychain-profile "$profile" >&2 || true
 		fi
 		exit 1

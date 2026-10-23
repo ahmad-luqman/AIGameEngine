@@ -202,7 +202,7 @@ namespace Basalt {
 				String(key);
 				AlignToDWord();
 				writeBody();
-				// Callers bound the text (ProjectConfig::MaxTextLength), so no block outgrows its 16-bit length.
+				// MakePackageInfo bounds the text (ValidateProjectText), so no block outgrows its 16-bit length.
 				BS_CORE_ASSERT(Size() - start <= UINT16_MAX, "version resource block too long");
 				PatchWord(start, static_cast<uint16_t>(Size() - start));
 			}
@@ -378,9 +378,12 @@ namespace Basalt {
 		const auto numbers = ParseProjectVersion(config.Version);
 		if (!numbers)
 		{
-			outError = "the project Version '" + config.Version + "' must be MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH.BUILD, each 0-65535";
+			outError = fmt::format("the project Version '{}' must be {}", config.Version, VersionFormat);
 			return std::nullopt;
 		}
+		// The version resource's 16-bit lengths depend on it.
+		if (!ValidateProjectText(config, outError))
+			return std::nullopt;
 		PackageInfo info;
 		info.Name = config.Name;
 		info.ExecutableName = executableName;

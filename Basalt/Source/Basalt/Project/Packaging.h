@@ -59,7 +59,8 @@ namespace Basalt {
 		std::string IconFileName;
 	};
 
-	// nullopt, with the reason, when the project's Version does not parse (ParseProjectVersion).
+	// nullopt, with the reason, when the project's Version does not parse (ParseProjectVersion) or its Name or Company is
+	// longer than ProjectConfig::MaxTextLength (ValidateProjectText).
 	std::optional<PackageInfo> MakePackageInfo(const ProjectConfig& config, const std::string& executableName, std::string& outError);
 	// "com.<company>.<name>": each part keeps its ASCII letters and digits, with one hyphen for each inner run of anything
 	// else ("basalt" for a company without any, "game" for such a name).
