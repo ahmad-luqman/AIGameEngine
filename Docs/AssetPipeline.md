@@ -70,6 +70,20 @@ while restoring any scene, prefab and project documents they changed. Diagnostic
 an earlier location until the next save; UUID resolution remains authoritative.
 
 
+## glTF import limits
+
+glTF files are untrusted, and a few bytes of JSON can declare gigabytes, so the importer checks sizes before it
+allocates and reports the reason instead:
+
+- A buffer may not declare more bytes than its base64 data URI or its file holds (only regular files inside the
+  project are read), and data URIs must be base64. Buffers may share a file, but each one reads it again; a model may
+  reread at most 64 MiB, and its buffers may declare at most 4 GiB in total.
+- Accessors must fit their buffer views (and sparse accessors their index and value views), and a view may not point
+  into a buffer without data (a buffer without a URI outside a GLB's binary chunk).
+- A model's triangle primitives may have at most 16,777,216 vertices and 67,108,864 indices, counted once per
+  primitive that uses an accessor. At most 4,194,304 of those vertices and indices may come from accessors without a
+  buffer view (zero-filled); real files use those for sparse morph targets.
+
 ## Morph targets
 
 The importer keeps each primitive's morph target POSITION and NORMAL deltas (dense or sparse accessors, float or

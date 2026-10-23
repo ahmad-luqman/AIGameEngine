@@ -22,6 +22,13 @@ if(BASALT_CHECK_FORMAT AND BASALT_CLANG_FORMAT)
 	add_test(NAME CodeFormat COMMAND "${CMAKE_COMMAND}" -DCLANG_FORMAT=${BASALT_CLANG_FORMAT} -DSOURCE_DIR=${PROJECT_SOURCE_DIR} -P "${PROJECT_SOURCE_DIR}/cmake/CheckFormat.cmake")
 endif()
 
+# scripts/fuzz.sh's argument handling (the nightly fuzz workflow's target list and input checks). Bash is not part of
+# the Windows toolchain.
+if(NOT WIN32)
+	add_test(NAME FuzzScript COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/Fuzz/CheckFuzzScript.sh" "${PROJECT_SOURCE_DIR}")
+	set_tests_properties(FuzzScript PROPERTIES LABELS unit TIMEOUT 30)
+endif()
+
 # Feature test: plays Tests/Data/FeatureTest headlessly through the basalt CLI. The scene uses every
 # component and its Lua driver exercises the entire scripting API (see FeatureTest.lua).
 add_test(NAME FeatureTest

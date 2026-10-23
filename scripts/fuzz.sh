@@ -25,7 +25,7 @@ fi
 
 seconds="${1:-60}"
 filter="${2:-}"
-# libFuzzer reads anything else as 0, which means no time limit.
+# libFuzzer keeps only a value's leading digits (so 'abc' reads as 0) and runs without a time limit for 0.
 if ! [[ "$seconds" =~ ^[1-9][0-9]*$ ]]; then
 	echo "Seconds per target must be a positive integer, not '$seconds'" >&2
 	exit 1
@@ -78,8 +78,9 @@ for target in "${selected[@]}"; do
 	"$buildDir/bin/$target" "$corpus" ${seeds[@]+"${seeds[@]}"} -max_total_time="$seconds" -timeout=10 -rss_limit_mb=4096 \
 		-artifact_prefix="$crashes/" -print_final_stats=1 > "$log" 2>&1 || result=$?
 	grep -E "^(#[0-9]+ +DONE|stat::number_of_executed_units|==[0-9]+== ?ERROR|SUMMARY|artifact_prefix|Test unit written)|runtime error|^ +#[0-9] " "$log" || true
-	# libFuzzer exits non-zero for every finding and for failures that write no crash input (a target that cannot
-	# start, a bad flag), so both the exit status and the crash directory count.
+	# libFuzzer exits non-zero for every finding and for failures that write no input (a target that cannot start, a
+	# missing corpus directory). The crash directory also counts, so inputs left by an earlier run keep failing until
+	# they are turned into tests and removed.
 	if [[ $result -ne 0 ]] || compgen -G "$crashes/*" > /dev/null; then
 		echo "$target: exited with $result; crash inputs (if any) in $crashes, full log in $log" >&2
 		[[ $result -ne 0 ]] && tail -n 20 "$log" >&2
