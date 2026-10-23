@@ -53,9 +53,22 @@ def platform_name():
     return f"{system}-{architecture}"
 
 
+def warn(message):
+    """A problem that does not stop the release, shown as an annotation on GitHub Actions."""
+    print(f"{'::warning::' if os.environ.get('GITHUB_ACTIONS') else 'package_release: warning: '}{message}")
+
+
+def run(arguments, what, **kwargs):
+    """subprocess.run that fails with a message (and the output so far) when the program does not finish in time."""
+    try:
+        return subprocess.run(arguments, capture_output=True, text=True, **kwargs)
+    except subprocess.TimeoutExpired as error:
+        fail(f"{what} did not finish within {error.timeout} s: {error.stdout or ''}{error.stderr or ''}")
+
+
 def run_cli(cli, project, command, params, env):
     """Runs one basalt command and returns its result; fails with the command's error otherwise."""
-    completed = subprocess.run([str(cli), "--project", str(project), command, json.dumps(params)], capture_output=True, text=True, env=env, timeout=1800)
+    completed = run([str(cli), "--project", str(project), command, json.dumps(params)], f"{project.name}: {command}", env=env, timeout=1800)
     # Log lines come first; the response is the last JSON object.
     start = completed.stdout.rfind("\n{")
     start = start + 1 if start >= 0 else completed.stdout.find("{")
@@ -63,7 +76,7 @@ def run_cli(cli, project, command, params, env):
         response = json.loads(completed.stdout[start:]) if start >= 0 else {}
     except json.JSONDecodeError:
         response = {}
-    if completed.returncode != 0 or not response.get("ok"):
+    if completed.returncode != 0 or not response.get("ok") or "result" not in response:
         fail(f"{project.name}: {command} failed (exit code {completed.returncode}): {response.get('error') or completed.stdout + completed.stderr}")
     return response["result"]
 
@@ -120,6 +133,8 @@ def package_sample(cli, sample, stage, output, prefix, options, env):
     export = stage / "exports" / sample.name
     result = run_cli(cli, sample, "project.export", {"output": str(export), "package": True, "smokeTestFrames": SMOKE_TEST_FRAMES}, env)
     package = Path(result["package"])
+    for message in result.get("warnings", []):
+        warn(f"{sample.name}: {message}")
     name = f"{prefix}-{sample.name}-{platform_name()}"
     if sys.platform == "darwin":
         sign = ["bash", str(ROOT / "scripts" / "sign-macos.sh"), str(package)]
@@ -130,8 +145,8 @@ def package_sample(cli, sample, stage, output, prefix, options, env):
         run_cli(cli, sample, "project.smoke_test", {"executable": result["executable"], "frames": SMOKE_TEST_FRAMES, "assertPassed": True}, env)
     elif package.suffix == ".AppImage":
         # The AppImage itself must start (extracted, so the check needs no FUSE).
-        smoke = subprocess.run([str(package), "--headless", "--frames", "30", "--fail-on-script-errors"], capture_output=True, text=True,
-                               env=dict(env, APPIMAGE_EXTRACT_AND_RUN="1"), timeout=300)
+        smoke = run([str(package), "--headless", "--frames", str(SMOKE_TEST_FRAMES), "--fail-on-script-errors"], f"{sample.name}: the AppImage",
+                    env=dict(env, APPIMAGE_EXTRACT_AND_RUN="1"), timeout=300)
         if smoke.returncode != 0:
             fail(f"{sample.name}: the AppImage exited with code {smoke.returncode} (7: script errors): {smoke.stdout}{smoke.stderr}")
         target = output / f"{name}.AppImage"

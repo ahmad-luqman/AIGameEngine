@@ -5,7 +5,9 @@ Usage: ReleasePackaging.py <basalt CLI> [--with-engine]   (--with-engine: also t
 """
 import hashlib
 import importlib.util
+import json
 import os
+import posixpath
 from pathlib import Path
 import subprocess
 import sys
@@ -44,7 +46,7 @@ def main():
     package_release = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(package_release)
     version, platform = package_release.engine_version(), package_release.platform_name()
-    exe = ".exe" if sys.platform == "win32" else ""
+    exe = package_release.EXE
 
     # A tag must name the engine version.
     require(run(["--check-tag", f"v{version}"]).returncode == 0, "the matching tag was refused")
@@ -97,6 +99,11 @@ def main():
             if sys.platform == "darwin":
                 wanted |= {f"{folder}/bin/libvulkan.1.dylib", f"{folder}/bin/libMoltenVK.dylib", f"{folder}/bin/vulkan/icd.d/MoltenVK_icd.json"}
             require(wanted <= contents.keys(), f"tools archive lacks {sorted(wanted - contents.keys())}")
+            if sys.platform == "darwin":
+                # The manifest must reach the MoltenVK next to the tools.
+                with zipfile.ZipFile(output / engine) as archive:
+                    library = json.loads(archive.read(f"{folder}/bin/vulkan/icd.d/MoltenVK_icd.json"))["ICD"]["library_path"]
+                require(posixpath.normpath(f"{folder}/bin/vulkan/icd.d/{library}") == f"{folder}/bin/libMoltenVK.dylib", f"the tools' manifest names {library}")
 
         # The output must be empty: archives are never mixed with an earlier run's.
         again = run(arguments, env)

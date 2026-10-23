@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import platform
 import plistlib
 import shutil
 import struct
@@ -102,6 +103,8 @@ def check_package(exported, output, has_icon=True):
     """The host platform's package layout around the exported executable."""
     executable, package = Path(exported["executable"]), Path(exported["package"])
     warnings = exported.get("warnings", [])
+    # Every platform says when the package has no project icon.
+    require(has_icon != any("the project has no icon" in warning for warning in warnings), f"no-icon warning: {warnings}")
     if sys.platform == "darwin":
         require(package == output / "Smoke_Game.app" and executable == package / "Contents" / "MacOS" / "Smoke_Game", f"unexpected bundle {exported}")
         contents = package / "Contents"
@@ -109,12 +112,11 @@ def check_package(exported, output, has_icon=True):
         expected = {"CFBundleExecutable": "Smoke_Game", "CFBundleIdentifier": "com.Smoke-Studio.Smoke-Game", "CFBundleShortVersionString": "2.5.0",
                     "CFBundleVersion": "2.5.0", "CFBundlePackageType": "APPL", "CFBundleIconFile": "Smoke_Game.icns" if has_icon else None}
         require(all(info.get(key) == value for key, value in expected.items()), f"Info.plist: {info}")
-        require((contents / "Resources" / "Smoke_Game.icns").is_file() == has_icon and not warnings, f"icon file or warnings: {exported}")
+        require((contents / "Resources" / "Smoke_Game.icns").is_file() == has_icon and len(warnings) == (0 if has_icon else 1), f"icon file or warnings: {exported}")
         for relative in ("Resources/Project.bproject", "Resources/Assets/Scenes/Main.bscene", "Resources/vulkan/icd.d/MoltenVK_icd.json",
                          "Frameworks/libvulkan.1.dylib", "Frameworks/libMoltenVK.dylib", "PkgInfo"):
             require((contents / relative).is_file(), f"the bundle has no Contents/{relative}")
-        # VulkanLoader looks in ../Frameworks for the loader and the manifest must reach MoltenVK from Resources.
-        require((executable.parent / ".." / "Frameworks" / "libvulkan.1.dylib").resolve().is_file(), "no loader in ../Frameworks")
+        # The manifest must reach MoltenVK in Frameworks from Resources (VulkanLoader finds the loader in ../Frameworks).
         check_manifest(contents / "Resources" / "vulkan" / "icd.d" / "MoltenVK_icd.json", contents / "Frameworks" / "libMoltenVK.dylib")
         if not has_icon:
             return
@@ -130,7 +132,7 @@ def check_package(exported, output, has_icon=True):
         refused = subprocess.run(["bash", str(sign), str(package), "--notarize", "profile"], capture_output=True, text=True)
         require(refused.returncode == 2 and "--notarize needs --identity" in refused.stderr, f"sign-macos.sh --notarize without identity: {refused.stderr}")
     elif sys.platform == "win32":
-        require(package == output and executable == output / "Smoke_Game.exe" and not warnings, f"unexpected package {exported}")
+        require(package == output and executable == output / "Smoke_Game.exe" and len(warnings) == (0 if has_icon else 1), f"unexpected package {exported}")
         check_windows_resources(executable, has_icon)
     else:
         app_dir = output / "Smoke_Game.AppDir"
@@ -141,12 +143,13 @@ def check_package(exported, output, has_icon=True):
         require((app_dir / "Project.bproject").is_file(), "AppDir contents")
         # The project icon padded to a square, or Basalt's default icon (with a warning).
         require(png_size(app_dir / "Smoke_Game.png") == ((300, 300) if has_icon else (256, 256)), f"AppDir icon size {png_size(app_dir / 'Smoke_Game.png')}")
-        require(has_icon != any("uses Basalt's default icon" in warning for warning in warnings), f"default icon warning: {warnings}")
+        require(has_icon or any("uses Basalt's default icon" in warning for warning in warnings), f"default icon warning: {warnings}")
         missing_tool = any("appimagetool was not found" in warning for warning in warnings)
         if missing_tool:
             require(package == app_dir and not os.environ.get("APPIMAGETOOL"), f"no AppImage although APPIMAGETOOL is set: {exported}")
         else:
-            require(package == output / "Smoke_Game-2.5.0.7-x86_64.AppImage" and package.is_file(), f"no AppImage: {exported}")
+            architecture = "aarch64" if platform.machine().lower() in ("aarch64", "arm64") else "x86_64"
+            require(package == output / f"Smoke_Game-2.5.0.7-{architecture}.AppImage" and package.is_file(), f"no AppImage: {exported}")
 
 
 def main():

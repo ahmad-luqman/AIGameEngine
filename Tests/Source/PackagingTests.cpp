@@ -40,6 +40,18 @@ namespace {
 		return icon;
 	}
 
+#if !defined(__APPLE__)
+	// An exported game's executable file name on this platform.
+	std::string ExecutableName(const std::string& name)
+	{
+	#if defined(_WIN32)
+		return name + ".exe";
+	#else
+		return name;
+	#endif
+	}
+#endif
+
 	void WriteIcon(const std::filesystem::path& path, const IconImage& icon)
 	{
 		const std::vector<uint8_t> png = EncodeIconPng(icon);
@@ -227,6 +239,35 @@ TEST_SUITE("Packaging")
 		CHECK(error.find("Icon:") != std::string::npos);
 	}
 
+	TEST_CASE("Every way of setting the name or company enforces its length")
+	{
+		BasaltTest::TempDirectory directory("PackagingTextLimits");
+		const std::string longText(ProjectConfig::MaxTextLength + 1, 'x');
+		// Create would otherwise write a project that Load refuses.
+		std::string error;
+		CHECK_FALSE(Project::Create(directory.GetPath() / "Direct", longText, error));
+		CHECK(BasaltTest::Contains(error, "Name must be at most 256 bytes"));
+		CHECK_FALSE(FileSystem::Exists(directory.GetPath() / "Direct" / Project::FileName));
+		CHECK(Project::Create(directory.GetPath() / "Direct", std::string(ProjectConfig::MaxTextLength, 'x'), error));
+
+		CommandRegistry registry;
+		AutomationSession session;
+		CHECK(BasaltTest::Contains(BasaltTest::RunError(registry, session, "project.create", { { "path", FileSystem::PathToUtf8(directory.GetPath() / "Command") }, { "name", longText } }), "Name must be at most 256 bytes"));
+		Project::SetActive(nullptr);
+
+		// The package metadata (16-bit Windows resource lengths) refuses it too, whatever built the config.
+		ProjectConfig config;
+		config.Company = longText;
+		CHECK_FALSE(MakePackageInfo(config, "Game", error));
+		CHECK(BasaltTest::Contains(error, "Company must be at most 256 bytes"));
+		config.Company = std::string(ProjectConfig::MaxTextLength, 'c');
+		config.Name = std::string(ProjectConfig::MaxTextLength, 'n');
+		const auto info = MakePackageInfo(config, "Game", error);
+		REQUIRE_MESSAGE(info, error);
+		// The longest allowed text still fits the version resource.
+		CHECK(VersionStrings(ParseVersionBlock(BuildVersionInfo(*info), 0)).at(u"CompanyName").size() == ProjectConfig::MaxTextLength);
+	}
+
 	TEST_CASE("project.set and project.info carry version, company and icon")
 	{
 		BasaltTest::TempProject temp("PackagingCommands");
@@ -252,9 +293,9 @@ TEST_SUITE("Packaging")
 		CHECK(BasaltTest::Contains(RunError(registry, session, "project.set", { { "icon", "Assets/Textures/Missing.png" } }), "cannot read icon"));
 		CHECK(BasaltTest::Contains(RunError(registry, session, "project.set", { { "icon", "../Icon.png" } }), "'..' is not allowed"));
 		CHECK(BasaltTest::Contains(RunError(registry, session, "project.set", { { "company", "Other" }, { "version", "x" } }), "version"));
-		// Name and company end up in fixed-size package metadata.
-		CHECK(BasaltTest::Contains(RunError(registry, session, "project.set", { { "company", std::string(ProjectConfig::MaxTextLength + 1, 'c') } }), "'company' must be at most 256 bytes"));
-		CHECK(BasaltTest::Contains(RunError(registry, session, "project.set", { { "name", std::string(ProjectConfig::MaxTextLength + 1, 'n') } }), "'name' must be at most 256 bytes"));
+		// Name and company end up in length-limited package metadata.
+		CHECK(BasaltTest::Contains(RunError(registry, session, "project.set", { { "company", std::string(ProjectConfig::MaxTextLength + 1, 'c') } }), "parameter Company must be at most 256 bytes"));
+		CHECK(BasaltTest::Contains(RunError(registry, session, "project.set", { { "name", std::string(ProjectConfig::MaxTextLength + 1, 'n') } }), "Name must be at most 256 bytes"));
 		Run(registry, session, "project.set", { { "company", std::string(ProjectConfig::MaxTextLength, 'c') } });
 		Run(registry, session, "project.set", { { "company", "Acme" } });
 		info = Run(registry, session, "project.info");
@@ -262,13 +303,17 @@ TEST_SUITE("Packaging")
 		CHECK(info["company"] == "Acme");
 		CHECK(info["icon"] == "Assets/Textures/Icon.png");
 
-		// Moving the icon keeps the project pointing at it, in memory and on disk.
+		// Moving the icon keeps the project pointing at it, in memory and on disk, and leaves the start scene alone.
+		temp.WriteFile("Assets/Scenes/Start.bscene", R"({"Entities":[]})");
+		Run(registry, session, "project.set", { { "startScene", "Assets/Scenes/Start.bscene" } });
 		Run(registry, session, "asset.move", { { "from", "Assets/Textures/Icon.png" }, { "to", "Assets/Branding/GameIcon.png" } });
 		CHECK(Project::GetActive()->GetConfig().Icon == "Assets/Branding/GameIcon.png");
+		CHECK(Project::GetActive()->GetConfig().StartScene == "Assets/Scenes/Start.bscene");
 		std::string error;
 		Ref<Project> reloaded = Project::Load(temp.GetDirectory(), error);
 		REQUIRE_MESSAGE(reloaded, error);
 		CHECK(reloaded->GetConfig().Icon == "Assets/Branding/GameIcon.png");
+		CHECK(reloaded->GetConfig().StartScene == "Assets/Scenes/Start.bscene");
 
 		// A legacy path string (a hand-written project file) is rewritten as the moved file's identity.
 		json file = ParseJson(*FileSystem::ReadTextFile(reloaded->GetProjectFilePath()));
@@ -310,16 +355,22 @@ TEST_SUITE("Packaging")
 		REQUIRE(deleted.contains("warnings"));
 		CHECK(BasaltTest::Contains(deleted["warnings"][0].get<std::string>(), "this was the project's icon"));
 		CHECK_FALSE(Run(registry, session, "asset.delete", { { "path", "Assets/Textures/NotAnImage.png" } }).contains("warnings"));
+		// So does deleting the start scene; another scene is just deleted.
+		temp.WriteFile("Assets/Scenes/Other.bscene", R"({"Entities":[]})");
+		CHECK_FALSE(Run(registry, session, "asset.delete", { { "path", "Assets/Scenes/Other.bscene" } }).contains("warnings"));
+		const json startDeleted = Run(registry, session, "asset.delete", { { "path", "Assets/Scenes/Start.bscene" } });
+		REQUIRE(startDeleted.contains("warnings"));
+		CHECK(BasaltTest::Contains(startDeleted["warnings"][0].get<std::string>(), "this was the project's start scene"));
 	}
 
 	TEST_CASE("Validation checks the icon")
 	{
 		BasaltTest::TempProject temp("PackagingValidation");
 		const Ref<Project>& project = Project::GetActive();
-		const auto messages = [&](ValidationSeverity severity) {
+		const auto messages = [](const Project& subject, ValidationSeverity severity) {
 			std::vector<std::string> result;
 			// Kept in a variable: a range-for over a temporary's member would read it after it is destroyed.
-			const ValidationReport report = ValidateProject(*project);
+			const ValidationReport report = ValidateProject(subject);
 			for (const ValidationIssue& issue : report.GetIssues())
 				if (issue.Severity == severity && issue.File == Project::FileName)
 					result.push_back(issue.Message);
@@ -331,24 +382,24 @@ TEST_SUITE("Packaging")
 
 		WriteIcon(temp.GetDirectory() / "Assets/Textures/Small.png", SolidIcon(64, 32));
 		project->GetConfig().Icon = "Assets/Textures/Small.png";
-		CHECK(contains(messages(ValidationSeverity::Warning), "is 64 x 32 pixels; packaged icons look blurry"));
+		CHECK(contains(messages(*project, ValidationSeverity::Warning), "is 64 x 32 pixels; packaged icons look blurry"));
 
 		WriteIcon(temp.GetDirectory() / "Assets/Textures/Large.png", SolidIcon(300, 256));
 		project->GetConfig().Icon = "Assets/Textures/Large.png";
-		CHECK_FALSE(contains(messages(ValidationSeverity::Warning), "Icon"));
-		CHECK_FALSE(contains(messages(ValidationSeverity::Error), "Icon"));
+		CHECK_FALSE(contains(messages(*project, ValidationSeverity::Warning), "Icon"));
+		CHECK_FALSE(contains(messages(*project, ValidationSeverity::Error), "Icon"));
 
 		temp.WriteFile("Assets/Textures/Fake.png", "not a png");
 		project->GetConfig().Icon = "Assets/Textures/Fake.png";
-		CHECK(contains(messages(ValidationSeverity::Error), "the Icon: icon"));
+		CHECK(contains(messages(*project, ValidationSeverity::Error), "the Icon: icon"));
 
 		// The larger side counts, whichever it is.
 		WriteIcon(temp.GetDirectory() / "Assets/Textures/Tall.png", SolidIcon(32, 300));
 		project->GetConfig().Icon = "Assets/Textures/Tall.png";
-		CHECK_FALSE(contains(messages(ValidationSeverity::Warning), "Icon"));
+		CHECK_FALSE(contains(messages(*project, ValidationSeverity::Warning), "Icon"));
 
 		project->GetConfig().Icon = "Assets/Textures/Missing.png";
-		CHECK(contains(messages(ValidationSeverity::Error), "the Icon names the missing file"));
+		CHECK(contains(messages(*project, ValidationSeverity::Error), "the Icon names the missing file"));
 
 		// What a reload leaves when the icon's file is gone: its identity, reported as unresolved.
 		project->GetConfig().Icon = "Assets/Textures/Tall.png";
@@ -357,12 +408,7 @@ TEST_SUITE("Packaging")
 		std::filesystem::remove(temp.GetDirectory() / "Assets/Textures/Tall.png");
 		const Ref<Project> reloaded = Project::Load(temp.GetDirectory(), error);
 		REQUIRE_MESSAGE(reloaded, error);
-		std::vector<std::string> unresolved;
-		const ValidationReport report = ValidateProject(*reloaded);
-		for (const ValidationIssue& issue : report.GetIssues())
-			if (issue.Severity == ValidationSeverity::Error)
-				unresolved.push_back(issue.Message);
-		CHECK(contains(unresolved, "the Icon names an unresolved asset UUID"));
+		CHECK(contains(messages(*reloaded, ValidationSeverity::Error), "the Icon names an unresolved asset UUID"));
 	}
 
 	TEST_CASE("Icons load from PNG only and resize onto a transparent square")
@@ -440,12 +486,12 @@ TEST_SUITE("Packaging")
 
 		// Invalid images (a failed resize) encode to nothing rather than to a broken file.
 		CHECK(EncodeIconPng(IconImage{}).empty());
-		IconImage short_;
-		short_.Width = 4;
-		short_.Height = 4;
-		short_.Pixels.resize(8);
-		CHECK_FALSE(short_.IsValid());
-		CHECK(EncodeIconPng(short_).empty());
+		IconImage mismatched;
+		mismatched.Width = 4;
+		mismatched.Height = 4;
+		mismatched.Pixels.resize(8);
+		CHECK_FALSE(mismatched.IsValid());
+		CHECK(EncodeIconPng(mismatched).empty());
 	}
 
 	TEST_CASE("Bundle identifiers are reverse-DNS from company and name")
@@ -578,7 +624,7 @@ TEST_SUITE("Packaging")
 		REQUIRE(translation);
 		CHECK(translation->Value == std::vector<uint8_t>{ 0x09, 0x04, 0xB0, 0x04 });
 
-		// Text beyond the Basic Multilingual Plane becomes a surrogate pair; malformed UTF-8 replacement characters.
+		// Text beyond the Basic Multilingual Plane becomes a surrogate pair; malformed UTF-8 becomes replacement characters.
 		PackageInfo info = TestPackageInfo();
 		info.Company = "Rocket \xF0\x9F\x9A\x80 \xC3";
 		info.Name = "Caf\xC3\xA9";
@@ -686,7 +732,28 @@ TEST_SUITE("Packaging")
 		CHECK(BasaltTest::Contains(result.Error, "not a previous export of this game"));
 		CHECK(FileSystem::Exists(output / "Assets" / "Precious.txt"));
 
+		// So is another game's folder export: a project file without this game's executable.
+		std::filesystem::remove_all(output / "Other.app");
+		REQUIRE(FileSystem::WriteTextFile(output / Project::FileName, "{}"));
+		REQUIRE(FileSystem::WriteTextFile(output / "Other", "another game"));
+		result = Exporter::Export(*project, output, options);
+		CHECK(BasaltTest::Contains(result.Error, "not a previous export of this game"));
+		CHECK(FileSystem::Exists(output / "Assets" / "Precious.txt"));
+
+#if !defined(__APPLE__)
+		// This game's folder export is; a failure part way says the folder is no longer a complete export. (macOS needs the
+		// Vulkan libraries before it gets this far.)
+		std::filesystem::create_directories(output / ExecutableName("PackagingPrevious"));
+		result = Exporter::Export(*project, output, options);
+		CHECK_FALSE(result.Success);
+		CHECK(BasaltTest::Contains(result.Error, "cannot copy the runtime"));
+		CHECK(BasaltTest::Contains(result.Error, "is incomplete; export again"));
+		CHECK(result.PackagePath.empty());
+		std::filesystem::remove_all(output / ExecutableName("PackagingPrevious"));
+#endif
+
 		// This game's own package is.
+		std::filesystem::remove(output / Project::FileName);
 		std::filesystem::create_directories(output / "PackagingPrevious.AppDir");
 		REQUIRE(FileSystem::WriteTextFile(output / "PackagingPrevious.AppDir" / Project::FileName, "{}"));
 		result = Exporter::Export(*project, output, options);
@@ -710,6 +777,7 @@ TEST_SUITE("Packaging")
 		// An older version's AppImage of this game goes; another game's ("AppRun-Demo") stays.
 		REQUIRE(FileSystem::WriteTextFile(output / "AppRun-1.9.0-x86_64.AppImage", "old"));
 		REQUIRE(FileSystem::WriteTextFile(output / "AppRun-Demo-1.0.0-x86_64.AppImage", "other game"));
+		REQUIRE(FileSystem::WriteTextFile(output / "AppRun-2-1.0.0-x86_64.AppImage", "a game named AppRun-2"));
 		REQUIRE(FileSystem::WriteTextFile(output / "AppRun.AppDir" / Project::FileName, "{}"));
 
 		// Records its arguments and environment, then writes the AppImage it was asked for.
@@ -734,23 +802,37 @@ TEST_SUITE("Packaging")
 		CHECK(FileSystem::ReadTextFile(record) == architecture + " 1 --no-appstream " + appDir.string() + " " + result.PackagePath.string() + "\n");
 		CHECK_FALSE(std::filesystem::exists(output / "AppRun-1.9.0-x86_64.AppImage"));
 		CHECK(std::filesystem::exists(output / "AppRun-Demo-1.0.0-x86_64.AppImage"));
+		CHECK(std::filesystem::exists(output / "AppRun-2-1.0.0-x86_64.AppImage"));
 		// A game named AppRun is its own entry point: the executable, not a link to itself.
 		CHECK(std::filesystem::is_regular_file(std::filesystem::symlink_status(appDir / "AppRun")));
 		CHECK(std::filesystem::read_symlink(appDir / ".DirIcon") == "AppRun.png");
 		// Without a project icon the AppImage gets Basalt's, and says so.
 		REQUIRE(result.Warnings.size() == 1);
 		CHECK(BasaltTest::Contains(result.Warnings[0], "uses Basalt's default icon"));
-		int width = 0;
-		int height = 0;
-		int channels = 0;
-		CHECK(stbi_info((appDir / "AppRun.png").string().c_str(), &width, &height, &channels));
-		CHECK(width == 256);
+		const auto png = FileSystem::ReadBinaryFile(appDir / "AppRun.png");
+		REQUIRE(png);
+		CHECK(PngSize(png->data(), png->size()) == std::pair{ 256, 256 });
 
 		// A failing appimagetool fails the export with its output.
+		// Written atomically (a new file), so it needs its execute permission again.
 		REQUIRE(FileSystem::WriteTextFile(tool, "#!/bin/sh\necho broken runtime\nexit 3\n"));
+		std::filesystem::permissions(tool, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace);
 		result = Exporter::Export(*project, output, options);
 		CHECK_FALSE(result.Success);
 		CHECK(BasaltTest::Contains(result.Error, "appimagetool failed (exit code 3): broken runtime"));
+		CHECK(BasaltTest::Contains(result.Error, "the incomplete package"));
+		CHECK(result.PackagePath.empty());
+
+		// Without appimagetool the AppDir is the package, and the last AppImage stays: it is still the last working one.
+		REQUIRE(FileSystem::WriteTextFile(output / "AppRun-1.9.0-x86_64.AppImage", "old"));
+		BasaltTest::ScopedEnvVar noTool("APPIMAGETOOL", std::nullopt);
+		BasaltTest::ScopedEnvVar noPath("PATH", std::string("/nonexistent"));
+		options.AppImageTool.clear();
+		result = Exporter::Export(*project, output, options);
+		REQUIRE_MESSAGE(result.Success, result.Error);
+		CHECK(result.PackagePath == appDir);
+		CHECK(std::filesystem::exists(output / "AppRun-1.9.0-x86_64.AppImage"));
+		CHECK(std::any_of(result.Warnings.begin(), result.Warnings.end(), [](const std::string& warning) { return BasaltTest::Contains(warning, "appimagetool was not found"); }));
 		std::filesystem::remove_all(output, error);
 	}
 #endif

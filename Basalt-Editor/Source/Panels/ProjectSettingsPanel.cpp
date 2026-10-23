@@ -193,7 +193,8 @@ namespace Basalt {
 			edit.Buffer = value;
 		ImGui::InputText(label, &edit.Buffer);
 		edit.Active = ImGui::IsItemActive();
-		// A rejected value (an invalid version) is reported by Set, and the field shows the saved one again.
+		// A rejected value (an invalid version, a name or company over 256 bytes) is reported by Set, and the field shows the
+		// saved one again.
 		if (ImGui::IsItemDeactivatedAfterEdit() && edit.Buffer != value)
 			Set({ { key, edit.Buffer } });
 	}

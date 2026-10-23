@@ -42,6 +42,19 @@ namespace Basalt {
 		return numbers;
 	}
 
+	bool ValidateProjectText(const ProjectConfig& config, std::string& outError)
+	{
+		for (const auto& [key, value] : { std::pair{ "Name", &config.Name }, std::pair{ "Company", &config.Company } })
+		{
+			if (value->size() > ProjectConfig::MaxTextLength)
+			{
+				outError = fmt::format("{} must be at most {} bytes", key, ProjectConfig::MaxTextLength);
+				return false;
+			}
+		}
+		return true;
+	}
+
 	GraphicsSettings Project::GetActiveGraphicsSettings()
 	{
 		return s_ActiveProject ? s_ActiveProject->m_Config.Graphics : GraphicsSettings{};
@@ -111,7 +124,8 @@ namespace Basalt {
 		project->m_Directory = absolute;
 		project->m_Assets = AssetRegistry(absolute);
 		project->m_Config.Name = name;
-		if (!project->Save(outError))
+		// A project Load would refuse must not be written in the first place.
+		if (!ValidateProjectText(project->m_Config, outError) || !project->Save(outError))
 			return nullptr;
 		return project;
 	}
@@ -188,13 +202,10 @@ namespace Basalt {
 			outError = fmt::format("invalid project file '{}': Version '{}' must be {}", filePath.string(), config.Version, VersionFormat);
 			return nullptr;
 		}
-		for (const auto& [key, value] : { std::pair{ "Name", &config.Name }, std::pair{ "Company", &config.Company } })
+		if (!ValidateProjectText(config, outError))
 		{
-			if (value->size() > ProjectConfig::MaxTextLength)
-			{
-				outError = fmt::format("invalid project file '{}': {} must be at most {} bytes", filePath.string(), key, ProjectConfig::MaxTextLength);
-				return nullptr;
-			}
+			outError = fmt::format("invalid project file '{}': {}", filePath.string(), outError);
+			return nullptr;
 		}
 		nlohmann::json graphicsPatch = nlohmann::json::object();
 		for (const char* key : { "VSync", "ShadowQuality", "SSAOQuality", "RenderScale", "DynamicResolution", "TargetFrameRate", "MinRenderScale" })

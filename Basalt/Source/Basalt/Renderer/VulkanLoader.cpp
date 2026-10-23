@@ -80,8 +80,8 @@ namespace Basalt {
 		}
 
 		// Shipped macOS builds carry a MoltenVK ICD manifest (vulkan/icd.d/MoltenVK_icd.json): next to the executable in
-		// folder exports, in Contents/Resources of .app bundles (naming the library in Contents/Frameworks). Point the
-		// loader at it.
+		// folder exports and the release's tools archive, in Contents/Resources of .app bundles (naming the library in
+		// Contents/Frameworks). Point the loader at it.
 		void RegisterBundledDrivers()
 		{
 			const std::filesystem::path executableDirectory = FileSystem::GetExecutableDirectory();
