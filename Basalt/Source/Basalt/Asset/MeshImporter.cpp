@@ -5,6 +5,7 @@
 #include "Basalt/Asset/AssetKey.h"
 #include "Basalt/Asset/MaterialAsset.h"
 #include "Basalt/Asset/MeshOptimizer.h"
+#include "Basalt/Core/Assert.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Project/Project.h"
@@ -62,6 +63,8 @@ namespace Basalt {
 
 		bool IsDataUri(const char* uri);
 
+		// Percent-decodes a URI the way cgltf_load_buffer_file does, so checks inspect the file cgltf opens. uri must not
+		// be null.
 		std::string DecodeUri(const char* uri)
 		{
 			std::string decoded = uri;
@@ -92,45 +95,84 @@ namespace Basalt {
 			return true;
 		}
 
+		// Upper bound on the bytes one model's buffers may declare in total. Distinct files are counted once below, but
+		// one file can be named through aliases (letter case, symbolic links), so the total is capped as well.
+		constexpr uint64_t MaxBufferBytes = uint64_t{ 4 } << 30;
+
 		// cgltf allocates a buffer's declared byteLength before decoding its data URI or reading its file, so a few
 		// bytes of JSON could request gigabytes (found by FuzzGltf). A buffer may not claim more bytes than its data
-		// holds. Data URIs without a comma are left to cgltf_load_buffers, which rejects them before allocating.
+		// holds, and buffers that name the same file may not together claim it more than once (each one is read
+		// separately). Runs after CheckExternalUri (so it only sizes files inside the project) and before
+		// cgltf_load_buffers.
 		bool CheckBufferSizes(const cgltf_data* data, const std::filesystem::path& path, std::string& outError)
 		{
+			uint64_t declaredTotal = 0;
+			uint64_t availableTotal = 0;
+			std::set<std::filesystem::path> files;
 			for (cgltf_size i = 0; i < data->buffers_count; i++)
 			{
 				const cgltf_buffer& buffer = data->buffers[i];
-				// Without a URI the buffer is a GLB's binary chunk, which cgltf checks against the chunk's length.
+				BS_CORE_ASSERT(!buffer.data, "CheckBufferSizes must run before cgltf_load_buffers");
+				// A buffer without a URI is either a GLB's binary chunk (buffer 0, which cgltf checks against the chunk's
+				// length) or has no data; cgltf allocates nothing for either.
 				if (!buffer.uri)
 					continue;
+				const std::string name = path.filename().string();
 				uint64_t available = 0;
+				// cgltf reads a whole file when no byteLength is declared.
+				uint64_t declared = buffer.size;
 				if (IsDataUri(buffer.uri))
 				{
+					// The same test cgltf_load_buffers makes; it rejects other data URIs without explaining why.
 					const char* comma = std::strchr(buffer.uri, ',');
-					if (!comma)
-						continue;
-					// Each base64 character carries 6 bits.
+					if (!comma || comma - buffer.uri < 7 || std::strncmp(comma - 7, ";base64", 7) != 0)
+					{
+						outError = fmt::format("{}: buffer {} data URI is not base64 (expected ';base64,')", name, i);
+						return false;
+					}
+					// Each base64 character carries 6 bits, so the payload holds at most length * 3 / 4 bytes (an upper
+					// bound: padding and invalid characters count too, and cgltf rejects those while decoding). Data URIs
+					// live in the JSON already in memory, so each one counts as its own data.
 					available = std::strlen(comma + 1) * 3 / 4;
+					availableTotal += available;
 				}
 				else
 				{
-					// A file that cannot be sized is rejected here: cgltf would still open some of them (a directory on
-					// Linux) and allocate the declared size before failing to read.
+					// Only regular files are sized: on Linux and macOS cgltf opens a directory (only the read fails) and
+					// would block on a FIFO, after allocating the declared size, and file_size is unspecified for them.
 					const std::string file = DecodeUri(buffer.uri);
+					const std::filesystem::path target = path.parent_path() / file;
 					std::error_code error;
-					available = std::filesystem::file_size(path.parent_path() / file, error);
-					if (error)
+					const bool regular = std::filesystem::is_regular_file(target, error);
+					if (regular)
+						available = std::filesystem::file_size(target, error);
+					if (!regular || error)
 					{
-						outError = path.filename().string() + ": buffer " + std::to_string(i) + " file '" + file + "' cannot be read (" + error.message() + ")";
+						outError = fmt::format("{}: buffer {} file '{}' is not a readable file", name, i, file);
 						return false;
 					}
+					if (declared == 0)
+						declared = available;
+					if (files.insert(target.lexically_normal()).second)
+						availableTotal += available;
 				}
-				if (buffer.size > available)
+				if (declared > available)
 				{
-					outError = path.filename().string() + ": buffer " + std::to_string(i) + " declares " + std::to_string(buffer.size) + " bytes but its data holds only " +
-							   std::to_string(available);
+					outError = fmt::format("{}: buffer {} declares {} bytes but its data holds only {}", name, i, declared, available);
 					return false;
 				}
+				declaredTotal += declared;
+				if (declaredTotal > MaxBufferBytes)
+				{
+					outError = fmt::format("{}: buffers declare more than {} bytes in total", name, MaxBufferBytes);
+					return false;
+				}
+			}
+			if (declaredTotal > availableTotal)
+			{
+				outError = fmt::format("{}: buffers declare {} bytes in total but the data they name holds only {} (several buffers read the same file)", path.filename().string(), declaredTotal,
+									   availableTotal);
+				return false;
 			}
 			return true;
 		}
@@ -268,6 +310,44 @@ namespace Basalt {
 
 		// Why a mesh's morph targets cannot be kept within the import limits (empty when they can), given the deltas left
 		// in the model's budget.
+		// The importer allocates per vertex and index before reading any data, so a small glTF repeating one accessor in
+		// many primitives, or declaring a huge accessor without a buffer view, could ask for gigabytes (found by
+		// FuzzGltf). Counts the primitives the geometry loop reads, before it allocates.
+		std::string GeometryLimitProblem(const cgltf_data* data)
+		{
+			uint64_t vertices = 0;
+			uint64_t indices = 0;
+			uint64_t zeroFilled = 0;
+			// Counts come from the file (each below 2^63, and JSON lets a primitive repeat an attribute), so the sums
+			// saturate instead of wrapping.
+			const auto add = [](uint64_t& total, uint64_t value) { total = value > UINT64_MAX - total ? UINT64_MAX : total + value; };
+			const auto count = [&](const cgltf_accessor* accessor, uint64_t& total) {
+				if (!accessor)
+					return;
+				add(total, accessor->count);
+				if (!accessor->buffer_view)
+					add(zeroFilled, accessor->count);
+			};
+			for (cgltf_size m = 0; m < data->meshes_count; m++)
+				for (cgltf_size p = 0; p < data->meshes[m].primitives_count; p++)
+				{
+					const cgltf_primitive& primitive = data->meshes[m].primitives[p];
+					if (primitive.type != cgltf_primitive_type_triangles)
+						continue;
+					for (cgltf_size a = 0; a < primitive.attributes_count; a++)
+						if (primitive.attributes[a].type == cgltf_attribute_type_position)
+							count(primitive.attributes[a].data, vertices);
+					count(primitive.indices, indices);
+					if (zeroFilled > MaxZeroFilledElements)
+						return fmt::format("its meshes have more than {} vertices and indices in accessors without a buffer view", MaxZeroFilledElements);
+					if (vertices > MaxModelVertices)
+						return fmt::format("its meshes have more than {} vertices", MaxModelVertices);
+					if (indices > MaxModelIndices)
+						return fmt::format("its meshes have more than {} indices", MaxModelIndices);
+				}
+			return {};
+		}
+
 		std::string MorphLimitProblem(const cgltf_mesh& mesh, size_t budget)
 		{
 			const size_t targets = mesh.primitives_count > 0 ? mesh.primitives[0].targets_count : 0;
@@ -458,9 +538,7 @@ namespace Basalt {
 	{
 		if (!uri || IsDataUri(uri))
 			return std::nullopt;
-		std::string decoded = uri;
-		cgltf_decode_uri(decoded.data());
-		decoded.resize(std::strlen(decoded.c_str()));
+		const std::string decoded = DecodeUri(uri);
 		return FileSystem::PathToGenericUtf8((FileSystem::PathFromUtf8(modelKey).parent_path() / FileSystem::PathFromUtf8(decoded)).lexically_normal());
 	}
 
@@ -635,6 +713,11 @@ namespace Basalt {
 		source->Materials.push_back(MaterialData{ .Name = "Default" });
 
 		// Geometry.
+		if (const std::string problem = GeometryLimitProblem(data.get()); !problem.empty())
+		{
+			outError = fmt::format("{}: {}", key, problem);
+			return nullptr;
+		}
 		size_t morphBudget = MaxMorphDeltas;
 		std::vector<bool> droppedMorphs;
 		for (cgltf_size meshIndex = 0; meshIndex < data->meshes_count; meshIndex++)

@@ -1,15 +1,15 @@
 name: Fuzz (nightly)
 
-# Longer fuzzing than the per-push CI job, one job per target so the run time does not grow with the number of
-# targets (twelve targets at 20 minutes each outlasted a single job's timeout). Each target's grown corpus is
-# cached between nights so each run starts from everything found before.
+# Longer fuzzing than the per-push CI job, one job per target so the wall-clock time does not grow with the number
+# of targets (twelve targets at 20 minutes each outlasted the old single job's 150-minute timeout). Each target's
+# grown corpus is cached between nights so each run starts from everything found before.
 on:
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
     inputs:
       seconds:
-        description: Seconds per fuzz target (at most 2400, the Fuzz step's timeout includes the build)
+        description: Seconds per fuzz target (at most 2400; the Fuzz step's 80-minute timeout also covers the build)
         default: "1200"
 
 jobs:
@@ -22,7 +22,9 @@ jobs:
 
       - name: List fuzz targets
         id: list
-        run: echo "targets=$(scripts/fuzz.sh --list)" >> "$GITHUB_OUTPUT"
+        run: |
+          targets="$(scripts/fuzz.sh --list)"
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
 
   fuzz:
     needs: targets
@@ -47,26 +49,34 @@ jobs:
           path: build-fuzz/_deps
           key: deps-fuzz-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
 
-      # Restored and saved separately so the corpus grown before a crash or a timeout is kept too
-      # (actions/cache saves only after a successful job).
+      # Restored and saved separately so the corpus grown before a crash or a Fuzz step timeout is kept too
+      # (actions/cache's own save is a post step that runs only when every earlier step succeeded).
       - name: Restore corpus
         uses: actions/cache/restore@v4
         with:
           path: build-fuzz/corpus/${{ matrix.target }}
-          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: fuzz-corpus-${{ matrix.target }}-
 
       # A step timeout fails the step instead of cancelling the job, so the corpus and crash steps below still run.
       - name: Fuzz
         timeout-minutes: 80
-        run: scripts/fuzz.sh "${{ github.event.inputs.seconds || '1200' }}" "${{ matrix.target }}"
+        env:
+          SECONDS_PER_TARGET: ${{ github.event.inputs.seconds || '1200' }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          if [[ ! "$SECONDS_PER_TARGET" =~ ^[0-9]+$ ]] || [[ "$SECONDS_PER_TARGET" -gt 2400 ]]; then
+            echo "seconds must be a whole number of at most 2400 to fit the step timeout" >&2
+            exit 1
+          fi
+          scripts/fuzz.sh "$SECONDS_PER_TARGET" "$TARGET"
 
       - name: Save corpus
         if: always()
         uses: actions/cache/save@v4
         with:
           path: build-fuzz/corpus/${{ matrix.target }}
-          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Upload crash inputs
         if: failure() || cancelled()

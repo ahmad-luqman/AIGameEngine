@@ -65,6 +65,16 @@ namespace {
 		};
 	}
 
+	// The quad without textures, for tests that only exercise buffers and accessors.
+	nlohmann::json MakeUntexturedGltfJson(const nlohmann::json& buffer)
+	{
+		nlohmann::json gltf = MakeGltfJson(buffer, nlohmann::json::array());
+		gltf.erase("textures");
+		gltf["materials"][0]["pbrMetallicRoughness"].erase("baseColorTexture");
+		gltf["materials"][0].erase("normalTexture");
+		return gltf;
+	}
+
 }
 
 TEST_SUITE("Assets")
@@ -655,7 +665,10 @@ TEST_SUITE("Assets")
 		CHECK_FALSE(load("F.gltf", embedded, "file:///etc/hosts"));
 		CHECK_FALSE(load("G.gltf", embedded, "C:/Windows/win.ini"));
 		CHECK_FALSE(load("H.gltf", embedded, "..%2F..%2F..%2F..%2F..%2F..%2Fetc%2Fhosts"));
-		CHECK_FALSE(load("I.gltf", { { "byteLength", buffer.size() }, { "uri", "../../../../../../../../etc/hosts" } }, "sub/ok.png"));
+		// The sandbox check runs before buffers are sized, so the error says nothing about the outside file.
+		CHECK_FALSE(load("I.gltf", { { "byteLength", 9999999999ull }, { "uri", "../../../../../../../../etc/hosts" } }, "sub/ok.png"));
+		CHECK(AssetManager::GetError("Assets/Models/I.gltf").find("outside the project") != std::string::npos);
+		CHECK(AssetManager::GetError("Assets/Models/I.gltf").find("declares") == std::string::npos);
 		AssetManager::Clear();
 	}
 
@@ -665,11 +678,7 @@ TEST_SUITE("Assets")
 	{
 		BasaltTest::TempProject project("GltfAlignment");
 		const std::string buffer = MakeQuadBuffer() + std::string(4, '\0');
-		nlohmann::json gltf = MakeGltfJson({ { "byteLength", buffer.size() }, { "uri", "data:application/octet-stream;base64," + BasaltTest::Base64(buffer.data(), buffer.size()) } }, nlohmann::json::array());
-		gltf.erase("textures");
-		gltf["materials"][0]["pbrMetallicRoughness"].erase("baseColorTexture");
-		gltf["materials"][0].erase("normalTexture");
-		gltf["images"] = nlohmann::json::array();
+		nlohmann::json gltf = MakeUntexturedGltfJson({ { "byteLength", buffer.size() }, { "uri", "data:application/octet-stream;base64," + BasaltTest::Base64(buffer.data(), buffer.size()) } });
 		project.WriteFile("Assets/Models/Aligned.gltf", gltf.dump());
 		gltf["accessors"][2]["byteOffset"] = 1; // uint16 indices starting at an odd address
 		project.WriteFile("Assets/Models/Misaligned.gltf", gltf.dump());
@@ -687,11 +696,7 @@ TEST_SUITE("Assets")
 	{
 		BasaltTest::TempProject project("GltfViewBounds");
 		const std::string buffer = MakeQuadBuffer();
-		nlohmann::json gltf = MakeGltfJson({ { "byteLength", buffer.size() }, { "uri", "data:application/octet-stream;base64," + BasaltTest::Base64(buffer.data(), buffer.size()) } }, nlohmann::json::array());
-		gltf.erase("textures");
-		gltf["materials"][0]["pbrMetallicRoughness"].erase("baseColorTexture");
-		gltf["materials"][0].erase("normalTexture");
-		gltf["images"] = nlohmann::json::array();
+		nlohmann::json gltf = MakeUntexturedGltfJson({ { "byteLength", buffer.size() }, { "uri", "data:application/octet-stream;base64," + BasaltTest::Base64(buffer.data(), buffer.size()) } });
 		// A sparse override of the positions whose index view starts past the buffer.
 		gltf["bufferViews"].push_back({ { "buffer", 0 }, { "byteOffset", buffer.size() + 600 }, { "byteLength", 4 } });
 		gltf["accessors"][0]["sparse"] = { { "count", 1 }, { "indices", { { "bufferView", gltf["bufferViews"].size() - 1 }, { "componentType", 5123 } } }, { "values", { { "bufferView", 0 } } } };
@@ -709,36 +714,183 @@ TEST_SUITE("Assets")
 		BasaltTest::TempProject project("GltfBufferLength");
 		const std::string buffer = MakeQuadBuffer();
 		project.WriteFile("Assets/Models/Quad.bin", buffer);
-		const std::string dataUri = "data:application/octet-stream;base64," + BasaltTest::Base64(buffer.data(), buffer.size());
-		auto write = [&](const std::string& name, const nlohmann::json& bufferJson) {
-			nlohmann::json gltf = MakeGltfJson(bufferJson, nlohmann::json::array());
-			gltf.erase("textures");
-			gltf["materials"][0]["pbrMetallicRoughness"].erase("baseColorTexture");
-			gltf["materials"][0].erase("normalTexture");
-			gltf["images"] = nlohmann::json::array();
-			project.WriteFile("Assets/Models/" + name, gltf.dump());
-		};
+		const std::string base64Prefix = "data:application/octet-stream;base64,";
+		const std::string dataUri = base64Prefix + BasaltTest::Base64(buffer.data(), buffer.size());
 		constexpr uint64_t Huge = 9999999999;
-		write("Embedded.gltf", { { "byteLength", buffer.size() }, { "uri", dataUri } });
-		write("EmbeddedHuge.gltf", { { "byteLength", Huge }, { "uri", dataUri } });
-		write("External.gltf", { { "byteLength", buffer.size() }, { "uri", "Quad.bin" } });
-		write("ExternalHuge.gltf", { { "byteLength", Huge }, { "uri", "Quad.bin" } });
-		// A directory inside the project passes the sandbox check, and cgltf can open one on Linux.
-		write("DirectoryHuge.gltf", { { "byteLength", Huge }, { "uri", "." } });
-		write("Missing.gltf", { { "byteLength", buffer.size() }, { "uri", "Missing.bin" } });
+		auto load = [&](const std::string& name, const nlohmann::json& gltf) {
+			project.WriteFile("Assets/Models/" + name, gltf.dump());
+			AssetManager::Clear();
+			return AssetManager::GetMesh("Assets/Models/" + name) != nullptr;
+		};
+		auto error = [](const std::string& name) { return AssetManager::GetError("Assets/Models/" + name); };
+		auto has = [&](const std::string& name, const std::string& text) { return error(name).find(text) != std::string::npos; };
 
+		SUBCASE("Data URIs")
+		{
+			CHECK_MESSAGE(load("Embedded.gltf", MakeUntexturedGltfJson({ { "byteLength", buffer.size() }, { "uri", dataUri } })), error("Embedded.gltf"));
+			CHECK_FALSE(load("EmbeddedHuge.gltf", MakeUntexturedGltfJson({ { "byteLength", Huge }, { "uri", dataUri } })));
+			CHECK(has("EmbeddedHuge.gltf", "buffer 0 declares 9999999999 bytes but its data holds only"));
+
+			// 93 bytes encode to 124 characters without padding, so the bound is exact: 93 loads, 94 is rejected here
+			// rather than by cgltf's decoder.
+			const std::string padded = buffer + '\0';
+			const std::string unpaddedUri = base64Prefix + BasaltTest::Base64(padded.data(), padded.size());
+			REQUIRE(unpaddedUri.back() != '=');
+			CHECK_MESSAGE(load("Exact.gltf", MakeUntexturedGltfJson({ { "byteLength", padded.size() }, { "uri", unpaddedUri } })), error("Exact.gltf"));
+			CHECK_FALSE(load("OneMore.gltf", MakeUntexturedGltfJson({ { "byteLength", padded.size() + 1 }, { "uri", unpaddedUri } })));
+			CHECK(has("OneMore.gltf", "buffer 0 declares 94 bytes but its data holds only 93"));
+
+			// cgltf only decodes base64 data URIs and would report anything else as an unknown format.
+			CHECK_FALSE(load("NoComma.gltf", MakeUntexturedGltfJson({ { "byteLength", Huge }, { "uri", "data:application/octet-stream;base64AAAA" } })));
+			CHECK(has("NoComma.gltf", "buffer 0 data URI is not base64"));
+			CHECK_FALSE(load("Text.gltf", MakeUntexturedGltfJson({ { "byteLength", 2 }, { "uri", "data:text/plain,hi" } })));
+			CHECK(has("Text.gltf", "buffer 0 data URI is not base64"));
+		}
+
+		SUBCASE("External files")
+		{
+			CHECK_MESSAGE(load("External.gltf", MakeUntexturedGltfJson({ { "byteLength", buffer.size() }, { "uri", "Quad.bin" } })), error("External.gltf"));
+			CHECK_FALSE(load("ExternalHuge.gltf", MakeUntexturedGltfJson({ { "byteLength", Huge }, { "uri", "Quad.bin" } })));
+			CHECK(has("ExternalHuge.gltf", "buffer 0 declares 9999999999 bytes but its data holds only " + std::to_string(buffer.size())));
+
+			// A buffer may be a prefix of its file.
+			project.WriteFile("Assets/Models/Padded.bin", buffer + std::string(16, '\0'));
+			CHECK_MESSAGE(load("Prefix.gltf", MakeUntexturedGltfJson({ { "byteLength", buffer.size() }, { "uri", "Padded.bin" } })), error("Prefix.gltf"));
+
+			// The URI is percent-decoded before sizing, as cgltf decodes it before reading.
+			project.WriteFile("Assets/Models/Quad Data.bin", buffer);
+			CHECK_MESSAGE(load("Encoded.gltf", MakeUntexturedGltfJson({ { "byteLength", buffer.size() }, { "uri", "Quad%20Data.bin" } })), error("Encoded.gltf"));
+			CHECK_FALSE(load("EncodedHuge.gltf", MakeUntexturedGltfJson({ { "byteLength", Huge }, { "uri", "Quad%20Data.bin" } })));
+			CHECK(has("EncodedHuge.gltf", "holds only " + std::to_string(buffer.size())));
+		}
+
+		SUBCASE("Files that cannot be sized")
+		{
+			// A directory inside the project passes the sandbox check, and cgltf opens one on Linux and macOS.
+			CHECK_FALSE(load("Directory.gltf", MakeUntexturedGltfJson({ { "byteLength", Huge }, { "uri", "." } })));
+			CHECK(has("Directory.gltf", "buffer 0 file '.' is not a readable file"));
+			CHECK_FALSE(load("Missing.gltf", MakeUntexturedGltfJson({ { "byteLength", buffer.size() }, { "uri", "Missing.bin" } })));
+			CHECK(has("Missing.gltf", "buffer 0 file 'Missing.bin' is not a readable file"));
+		}
+
+		SUBCASE("Every buffer is checked, past ones without a URI")
+		{
+			nlohmann::json gltf = MakeUntexturedGltfJson({ { "byteLength", buffer.size() }, { "uri", dataUri } });
+			gltf["buffers"].push_back({ { "byteLength", 4 } });
+			gltf["buffers"].push_back({ { "byteLength", Huge }, { "uri", "Quad.bin" } });
+			CHECK_FALSE(load("Later.gltf", gltf));
+			CHECK(has("Later.gltf", "buffer 2 declares 9999999999 bytes but its data holds only " + std::to_string(buffer.size())));
+		}
+
+		SUBCASE("Buffers naming the same file may not claim it twice")
+		{
+			// cgltf reads the file once per buffer, so a small glTF repeating one URI multiplied its size.
+			nlohmann::json gltf = MakeUntexturedGltfJson({ { "byteLength", buffer.size() }, { "uri", "Quad.bin" } });
+			gltf["buffers"].push_back({ { "byteLength", buffer.size() }, { "uri", "Quad.bin" } });
+			CHECK_FALSE(load("Twice.gltf", gltf));
+			CHECK(has("Twice.gltf", "buffers declare " + std::to_string(2 * buffer.size()) + " bytes in total but the data they name holds only " + std::to_string(buffer.size())));
+
+			// Spellings of the same path count as one file, and a buffer without a byteLength reads the whole file.
+			gltf["buffers"][1] = { { "uri", "./Quad.bin" } };
+			CHECK_FALSE(load("Alias.gltf", gltf));
+			CHECK(has("Alias.gltf", "several buffers read the same file"));
+
+			// Distinct files are fine.
+			project.WriteFile("Assets/Models/Other.bin", buffer);
+			gltf["buffers"][1] = { { "byteLength", buffer.size() }, { "uri", "Other.bin" } };
+			CHECK_MESSAGE(load("Distinct.gltf", gltf), error("Distinct.gltf"));
+		}
+
+		SUBCASE("A GLB's binary chunk is checked by cgltf")
+		{
+			std::string json = MakeUntexturedGltfJson({ { "byteLength", buffer.size() + 4 } }).dump();
+			while (json.size() % 4 != 0)
+				json += ' ';
+			auto put32 = [](std::string& out, uint32_t value) { out.append(reinterpret_cast<const char*>(&value), 4); };
+			std::string glb = "glTF";
+			put32(glb, 2);
+			put32(glb, static_cast<uint32_t>(12 + 8 + json.size() + 8 + buffer.size()));
+			put32(glb, static_cast<uint32_t>(json.size()));
+			glb += "JSON";
+			glb += json;
+			put32(glb, static_cast<uint32_t>(buffer.size()));
+			glb.append("BIN\0", 4);
+			glb += buffer;
+			project.WriteFile("Assets/Models/Short.glb", glb);
+			AssetManager::Clear();
+			CHECK_FALSE(AssetManager::GetMesh("Assets/Models/Short.glb"));
+			CHECK(AssetManager::GetError("Assets/Models/Short.glb").find("cannot load buffers (data too short)") != std::string::npos);
+		}
 		AssetManager::Clear();
-		CHECK_MESSAGE(AssetManager::GetMesh("Assets/Models/Embedded.gltf"), AssetManager::GetError("Assets/Models/Embedded.gltf"));
-		CHECK_MESSAGE(AssetManager::GetMesh("Assets/Models/External.gltf"), AssetManager::GetError("Assets/Models/External.gltf"));
-		CHECK_FALSE(AssetManager::GetMesh("Assets/Models/EmbeddedHuge.gltf"));
-		CHECK(AssetManager::GetError("Assets/Models/EmbeddedHuge.gltf").find("buffer 0 declares 9999999999 bytes but its data holds only") != std::string::npos);
-		CHECK_FALSE(AssetManager::GetMesh("Assets/Models/ExternalHuge.gltf"));
-		CHECK(AssetManager::GetError("Assets/Models/ExternalHuge.gltf").find("buffer 0 declares 9999999999 bytes but its data holds only " + std::to_string(buffer.size())) !=
-			  std::string::npos);
-		CHECK_FALSE(AssetManager::GetMesh("Assets/Models/DirectoryHuge.gltf"));
-		CHECK(AssetManager::GetError("Assets/Models/DirectoryHuge.gltf").find("buffer 0 file '.' cannot be read") != std::string::npos);
-		CHECK_FALSE(AssetManager::GetMesh("Assets/Models/Missing.gltf"));
-		CHECK(AssetManager::GetError("Assets/Models/Missing.gltf").find("buffer 0 file 'Missing.bin' cannot be read") != std::string::npos);
+	}
+
+	// Regression (FuzzGltf, review of PR #51): the importer allocates per vertex and index before reading data, so a
+	// 200-byte glTF declaring 400 million zero-filled positions asked for 35 GB, and primitives sharing one accessor
+	// multiply it. The limits are checked over the whole model before anything is allocated.
+	TEST_CASE("glTF geometry past the import limits is rejected before allocating")
+	{
+		BasaltTest::TempProject project("GltfGeometryLimits");
+		const std::string buffer = MakeQuadBuffer();
+		nlohmann::json gltf = MakeUntexturedGltfJson({ { "byteLength", buffer.size() }, { "uri", "data:application/octet-stream;base64," + BasaltTest::Base64(buffer.data(), buffer.size()) } });
+		auto load = [&](const std::string& name, const nlohmann::json& json) {
+			project.WriteFile("Assets/Models/" + name, json.dump());
+			AssetManager::Clear();
+			return AssetManager::GetMesh("Assets/Models/" + name) != nullptr;
+		};
+		auto has = [](const std::string& name, const std::string& text) { return AssetManager::GetError("Assets/Models/" + name).find(text) != std::string::npos; };
+		// Appends a buffer of the given size (in its own file), a view and an accessor over all of it, and n primitives
+		// that use the accessor as their positions or indices.
+		auto share = [&](nlohmann::json json, const std::string& file, size_t bytes, const nlohmann::json& accessor, bool indices, size_t primitives) {
+			project.WriteFile("Assets/Models/" + file, std::string(bytes, '\0'));
+			json["buffers"].push_back({ { "byteLength", bytes }, { "uri", file } });
+			json["bufferViews"].push_back({ { "buffer", json["buffers"].size() - 1 }, { "byteLength", bytes } });
+			nlohmann::json shared = accessor;
+			shared["bufferView"] = json["bufferViews"].size() - 1;
+			json["accessors"].push_back(shared);
+			const size_t index = json["accessors"].size() - 1;
+			const nlohmann::json primitive = indices ? nlohmann::json{ { "attributes", { { "POSITION", 0 } } }, { "indices", index } } : nlohmann::json{ { "attributes", { { "POSITION", index } } } };
+			json["meshes"][0]["primitives"] = nlohmann::json::array();
+			for (size_t i = 0; i < primitives; i++)
+				json["meshes"][0]["primitives"].push_back(primitive);
+			return json;
+		};
+
+		SUBCASE("Accessors without a buffer view")
+		{
+			// Zero-filled positions (what sparse morph targets build on) are valid. cgltf requires every attribute of a
+			// primitive to have the same count, so the UVs go.
+			gltf["accessors"][0].erase("bufferView");
+			gltf["meshes"][0]["primitives"][0]["attributes"].erase("TEXCOORD_0");
+			CHECK_MESSAGE(load("ZeroFilled.gltf", gltf), AssetManager::GetError("Assets/Models/ZeroFilled.gltf"));
+			gltf["accessors"][0]["count"] = 400000000;
+			CHECK_FALSE(load("ZeroFilledHuge.gltf", gltf));
+			CHECK(has("ZeroFilledHuge.gltf", "more than " + std::to_string(MaxZeroFilledElements) + " vertices and indices in accessors without a buffer view"));
+			// The totals must not wrap. cgltf parses counts as long long, and the limits are checked after each primitive,
+			// but JSON allows duplicate keys: one primitive naming four positions of 2^62 + 1 adds up to 2^64 + 4.
+			nlohmann::json wrapping = gltf;
+			wrapping["accessors"][0]["count"] = 4611686018427387905ull;
+			std::string json = wrapping.dump();
+			const std::string position = "\"POSITION\":0";
+			const size_t at = json.find(position);
+			REQUIRE(at != std::string::npos);
+			json.replace(at, position.size(), position + "," + position + "," + position + "," + position);
+			project.WriteFile("Assets/Models/Wrapping.gltf", json);
+			AssetManager::Clear();
+			CHECK_FALSE(AssetManager::GetMesh("Assets/Models/Wrapping.gltf"));
+			CHECK(has("Wrapping.gltf", "more than " + std::to_string(MaxZeroFilledElements) + " vertices and indices in accessors without a buffer view"));
+		}
+
+		SUBCASE("Primitives sharing one accessor")
+		{
+			// 257 primitives x 65536 positions pass the vertex limit by 65536; the file is only 768 KiB.
+			const nlohmann::json positions = { { "componentType", 5126 }, { "count", 65536 }, { "type", "VEC3" }, { "min", { 0, 0, 0 } }, { "max", { 0, 0, 0 } } };
+			CHECK_FALSE(load("Vertices.gltf", share(gltf, "Positions.bin", 65536 * 12, positions, false, MaxModelVertices / 65536 + 1)));
+			CHECK(has("Vertices.gltf", "its meshes have more than " + std::to_string(MaxModelVertices) + " vertices"));
+			// 65 primitives x 2^20 byte indices pass the index limit.
+			const nlohmann::json indices = { { "componentType", 5121 }, { "count", 1 << 20 }, { "type", "SCALAR" } };
+			CHECK_FALSE(load("Indices.gltf", share(gltf, "Indices.bin", 1 << 20, indices, true, MaxModelIndices / (1 << 20) + 1)));
+			CHECK(has("Indices.gltf", "its meshes have more than " + std::to_string(MaxModelIndices) + " indices"));
+		}
 		AssetManager::Clear();
 	}
 
