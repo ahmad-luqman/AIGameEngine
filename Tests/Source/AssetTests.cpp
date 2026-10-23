@@ -723,6 +723,9 @@ TEST_SUITE("Assets")
 		write("EmbeddedHuge.gltf", { { "byteLength", Huge }, { "uri", dataUri } });
 		write("External.gltf", { { "byteLength", buffer.size() }, { "uri", "Quad.bin" } });
 		write("ExternalHuge.gltf", { { "byteLength", Huge }, { "uri", "Quad.bin" } });
+		// A directory inside the project passes the sandbox check, and cgltf can open one on Linux.
+		write("DirectoryHuge.gltf", { { "byteLength", Huge }, { "uri", "." } });
+		write("Missing.gltf", { { "byteLength", buffer.size() }, { "uri", "Missing.bin" } });
 
 		AssetManager::Clear();
 		CHECK_MESSAGE(AssetManager::GetMesh("Assets/Models/Embedded.gltf"), AssetManager::GetError("Assets/Models/Embedded.gltf"));
@@ -732,6 +735,10 @@ TEST_SUITE("Assets")
 		CHECK_FALSE(AssetManager::GetMesh("Assets/Models/ExternalHuge.gltf"));
 		CHECK(AssetManager::GetError("Assets/Models/ExternalHuge.gltf").find("buffer 0 declares 9999999999 bytes but its data holds only " + std::to_string(buffer.size())) !=
 			  std::string::npos);
+		CHECK_FALSE(AssetManager::GetMesh("Assets/Models/DirectoryHuge.gltf"));
+		CHECK(AssetManager::GetError("Assets/Models/DirectoryHuge.gltf").find("buffer 0 file '.' cannot be read") != std::string::npos);
+		CHECK_FALSE(AssetManager::GetMesh("Assets/Models/Missing.gltf"));
+		CHECK(AssetManager::GetError("Assets/Models/Missing.gltf").find("buffer 0 file 'Missing.bin' cannot be read") != std::string::npos);
 		AssetManager::Clear();
 	}
 

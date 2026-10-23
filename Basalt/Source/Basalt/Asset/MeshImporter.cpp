@@ -94,7 +94,7 @@ namespace Basalt {
 
 		// cgltf allocates a buffer's declared byteLength before decoding its data URI or reading its file, so a few
 		// bytes of JSON could request gigabytes (found by FuzzGltf). A buffer may not claim more bytes than its data
-		// holds. Unreadable files and malformed data URIs are left to cgltf_load_buffers, which reports them.
+		// holds. Data URIs without a comma are left to cgltf_load_buffers, which rejects them before allocating.
 		bool CheckBufferSizes(const cgltf_data* data, const std::filesystem::path& path, std::string& outError)
 		{
 			for (cgltf_size i = 0; i < data->buffers_count; i++)
@@ -114,10 +114,16 @@ namespace Basalt {
 				}
 				else
 				{
+					// A file that cannot be sized is rejected here: cgltf would still open some of them (a directory on
+					// Linux) and allocate the declared size before failing to read.
+					const std::string file = DecodeUri(buffer.uri);
 					std::error_code error;
-					available = std::filesystem::file_size(path.parent_path() / DecodeUri(buffer.uri), error);
+					available = std::filesystem::file_size(path.parent_path() / file, error);
 					if (error)
-						continue;
+					{
+						outError = path.filename().string() + ": buffer " + std::to_string(i) + " file '" + file + "' cannot be read (" + error.message() + ")";
+						return false;
+					}
 				}
 				if (buffer.size > available)
 				{
