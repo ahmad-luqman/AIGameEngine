@@ -971,7 +971,7 @@ TEST_SUITE("Assets")
 		{
 			// 257 primitives x 65536 positions pass the vertex limit by 65536; Positions.bin is only 768 KiB.
 			const nlohmann::json positions = { { "componentType", 5126 }, { "count", 65536 }, { "type", "VEC3" }, { "min", { 0, 0, 0 } }, { "max", { 0, 0, 0 } } };
-			const nlohmann::json vertices = share(gltf, "Positions.bin", 65536 * 12, positions, false, MaxModelVertices / 65536 + 1);
+			const nlohmann::json vertices = share(gltf, "Positions.bin", size_t{ 65536 } * 12, positions, false, MaxModelVertices / 65536 + 1);
 			CHECK_FALSE(load("Vertices.gltf", vertices));
 			CHECK(has("Vertices.gltf", "its meshes have more than " + std::to_string(MaxModelVertices) + " vertices"));
 
