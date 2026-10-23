@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 namespace Basalt {
 
@@ -279,6 +280,23 @@ namespace Basalt {
 	{
 		m_Data.Title = title;
 		glfwSetWindowTitle(m_Window, title.c_str());
+	}
+
+	bool Window::SupportsIcon() const
+	{
+		const int platform = glfwGetPlatform();
+		return m_Window && (platform == GLFW_PLATFORM_WIN32 || platform == GLFW_PLATFORM_X11);
+	}
+
+	void Window::SetIcon(std::span<const WindowIcon> images)
+	{
+		if (!SupportsIcon())
+			return;
+		std::vector<GLFWimage> glfwImages;
+		for (const WindowIcon& image : images)
+			// GLFW copies the pixels and never writes them; its struct is simply not const-qualified.
+			glfwImages.push_back({ static_cast<int>(image.Width), static_cast<int>(image.Height), const_cast<unsigned char*>(image.Pixels) });
+		glfwSetWindowIcon(m_Window, static_cast<int>(glfwImages.size()), glfwImages.data());
 	}
 
 	void Window::SetCursorMode(CursorMode mode)

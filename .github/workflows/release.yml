@@ -1,0 +1,174 @@
+name: Release
+
+# A v<version> tag builds Dist on every platform, packages the tools and the samples (scripts/package_release.py) and
+# publishes them as a GitHub release. Pull requests that change the release tooling, and manual runs, do everything
+# except publishing, so the pipeline is tested before a tag needs it.
+on:
+  push:
+    tags: [ 'v*' ]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/package_release.py
+      - scripts/sign-macos.sh
+      - Basalt/Source/Basalt/Project/Exporter.*
+      - Basalt/Source/Basalt/Project/Packaging.*
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: ${{ matrix.os }} / package
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-24.04, windows-latest, macos-15 ]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Check the tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: python scripts/package_release.py --check-tag "$GITHUB_REF_NAME"
+
+      - name: Install dependencies (Linux)
+        timeout-minutes: 20
+        if: runner.os == 'Linux'
+        run: |
+          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 libdbus-1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
+
+      # Pinned and checksummed. The type2 runtime is passed explicitly; appimagetool would otherwise download the
+      # latest one while it builds each AppImage.
+      - name: Install appimagetool (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          tools="$RUNNER_TEMP/appimage"
+          mkdir -p "$tools"
+          curl -fsSL --retry 3 -o "$tools/appimagetool" https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          curl -fsSL --retry 3 -o "$tools/runtime" https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+          echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  $tools/appimagetool" | sha256sum -c -
+          echo "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d  $tools/runtime" | sha256sum -c -
+          chmod +x "$tools/appimagetool"
+          printf '#!/bin/sh\nexec "%s/appimagetool" --runtime-file "%s/runtime" "$@"\n' "$tools" "$tools" > "$tools/appimagetool-pinned"
+          chmod +x "$tools/appimagetool-pinned"
+          echo "APPIMAGETOOL=$tools/appimagetool-pinned" >> "$GITHUB_ENV"
+
+      # The exported .app bundles the Vulkan loader and MoltenVK, and so does the macOS tools archive.
+      - name: Install dependencies (macOS)
+        timeout-minutes: 10
+        if: runner.os == 'macOS'
+        run: brew install ninja shaderc vulkan-loader molten-vk
+
+      - name: Install Vulkan SDK (Windows)
+        if: runner.os == 'Windows'
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          vulkan_version: latest
+          install_runtime: true
+          cache: true
+          stripdown: true
+
+      - name: Set up MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Ninja (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ninja -y
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-dist-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+
+      # Dist: optimized, no asserts. The tests run in CI on every push; here the samples' smoke tests check the build.
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Dist -DBASALT_BUILD_TESTS=OFF -DBASALT_CHECK_FORMAT=OFF
+
+      - name: Build
+        run: cmake --build build -- -k 0
+
+      # With a Developer ID in the repository secrets, the macOS samples are signed and notarized; otherwise they are
+      # signed ad hoc. MACOS_CERTIFICATE is a base64 .p12 of the "Developer ID Application" certificate.
+      - name: Import the signing certificate (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          if [[ -z "$MACOS_CERTIFICATE" ]]; then
+            echo "No MACOS_CERTIFICATE secret: the samples are signed ad hoc."
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(uuidgen)"
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -k "$password" "$keychain"
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/certificate.p12"
+          xcrun notarytool store-credentials basalt-notary --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --keychain "$keychain"
+          echo "SIGNING_ARGS=--sign-identity|$MACOS_SIGNING_IDENTITY|--notarize|basalt-notary" >> "$GITHUB_ENV"
+
+      - name: Package
+        shell: bash
+        run: |
+          arguments=(--build build --output dist)
+          [[ "$RUNNER_OS" == "Linux" ]] && arguments+=(--require-appimage)
+          if [[ -n "${SIGNING_ARGS:-}" ]]; then
+            IFS='|' read -ra signing <<< "$SIGNING_ARGS"
+            arguments+=("${signing[@]}")
+          fi
+          python scripts/package_release.py "${arguments[@]}"
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ runner.os }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: publish
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat dist/SHA256SUMS-*.txt > dist/SHA256SUMS.txt
+          rm dist/SHA256SUMS-*.txt
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "Basalt ${GITHUB_REF_NAME#v}" --generate-notes --verify-tag

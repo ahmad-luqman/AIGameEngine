@@ -1,6 +1,9 @@
 {
 	"Format": "BasaltProject",
 	"Name": "FeatureTest",
+	"Version": "1.2.3",
+	"Company": "Basalt Tests",
+	"Icon": "Assets/Textures/Icon.png",
 	"StartScene": "Assets/Scenes/FeatureTest.bscene",
 	"WindowWidth": 1280,
 	"WindowHeight": 720,

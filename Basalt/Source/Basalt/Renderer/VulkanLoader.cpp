@@ -79,12 +79,20 @@ namespace Basalt {
 			return candidates;
 		}
 
-		// Shipped macOS builds carry MoltenVK next to the executable; point the loader at it.
+		// Shipped macOS builds carry MoltenVK: folder exports next to the executable, .app bundles in Contents/Resources.
+		// Point the loader at it.
 		void RegisterBundledDrivers()
 		{
-			const std::filesystem::path icdDirectory = FileSystem::GetExecutableDirectory() / "vulkan" / "icd.d";
-			if (FileSystem::Exists(icdDirectory / "MoltenVK_icd.json"))
-				Platform::SetEnvVarIfUnset("VK_DRIVER_FILES", (icdDirectory / "MoltenVK_icd.json").string());
+			const std::filesystem::path executableDirectory = FileSystem::GetExecutableDirectory();
+			for (const std::filesystem::path& base : { executableDirectory, executableDirectory.parent_path() / "Resources" })
+			{
+				const std::filesystem::path manifest = base / "vulkan" / "icd.d" / "MoltenVK_icd.json";
+				if (FileSystem::Exists(manifest))
+				{
+					Platform::SetEnvVarIfUnset("VK_DRIVER_FILES", manifest.string());
+					return;
+				}
+			}
 		}
 
 	}

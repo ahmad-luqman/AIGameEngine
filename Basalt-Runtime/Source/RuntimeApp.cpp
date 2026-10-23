@@ -1,10 +1,15 @@
 #include "Basalt/Core/CommandLine.h"
 #include "Basalt/Core/EntryPoint.h"
 #include "Basalt/Core/FileSystem.h"
+#include "Basalt/Project/Exporter.h"
+#include "Basalt/Project/Packaging.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/RenderMath.h"
 
 #include "RuntimeLayer.h"
+
+#include <array>
+#include <vector>
 
 namespace Basalt {
 
@@ -14,8 +19,39 @@ namespace Basalt {
 		RuntimeApplication(const ApplicationSpecification& specification, const RuntimeOptions& options)
 			: Application(specification)
 		{
-			if (IsInitialized())
-				PushLayer(new RuntimeLayer(options));
+			if (!IsInitialized())
+				return;
+			SetWindowIcon();
+			PushLayer(new RuntimeLayer(options));
+		}
+
+	private:
+		// The project icon as the window icon where the window has one (Windows, X11). A bad icon is reported, not fatal:
+		// the game still plays.
+		void SetWindowIcon()
+		{
+			const ProjectConfig* config = Project::GetActiveConfig();
+			Window* window = GetWindow();
+			if (!config || config->Icon.empty() || !window || !window->SupportsIcon())
+				return;
+			std::string error;
+			const auto icon = LoadIconImage(Project::ResolvePath(FileSystem::PathFromUtf8(config->Icon)), error);
+			if (!icon)
+			{
+				BS_CORE_WARN("Window icon: {}", error);
+				return;
+			}
+			// The sizes title bars, task switchers and taskbars use; the window system picks the closest.
+			constexpr std::array<uint32_t, 4> Sizes = { 16, 32, 48, 256 };
+			std::vector<IconImage> sizes;
+			sizes.reserve(Sizes.size());
+			for (uint32_t size : Sizes)
+				sizes.push_back(ResizeIcon(*icon, size));
+			std::vector<WindowIcon> images;
+			images.reserve(sizes.size());
+			for (const IconImage& image : sizes)
+				images.push_back({ image.Width, image.Height, image.Pixels.data() });
+			window->SetIcon(images);
 		}
 	};
 
@@ -49,8 +85,8 @@ namespace Basalt {
 			return nullptr;
 
 		RuntimeOptions options;
-		// An exported game ships its project file next to the executable.
-		std::filesystem::path projectPath = commandLine.GetValue("project").value_or(FileSystem::GetExecutableDirectory().string());
+		// An exported game ships its project file next to the executable (in Contents/Resources of a macOS bundle).
+		std::filesystem::path projectPath = commandLine.GetValue("project").value_or(Exporter::GetExportedProjectDirectory(FileSystem::GetExecutableDirectory()).string());
 		std::string error;
 		Ref<Project> project = Project::Load(projectPath, error);
 		if (!project)

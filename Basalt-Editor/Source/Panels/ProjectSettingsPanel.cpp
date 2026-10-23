@@ -98,8 +98,9 @@ namespace Basalt {
 			m_Warnings.clear();
 			m_Rename.reset();
 			m_Edit = {};
-			m_EditingName = false;
-			m_NameBuffer.clear();
+			m_NameEdit = {};
+			m_VersionEdit = {};
+			m_CompanyEdit = {};
 			m_NewLayerName.clear();
 			m_NewActionName.clear();
 		}
@@ -145,13 +146,23 @@ namespace Basalt {
 	{
 		if (!ImGui::CollapsingHeader("General", ImGuiTreeNodeFlags_DefaultOpen))
 			return;
-		if (!m_EditingName)
-			m_NameBuffer = config.Name;
-		ImGui::InputText("Name", &m_NameBuffer);
-		m_EditingName = ImGui::IsItemActive();
-		if (ImGui::IsItemDeactivatedAfterEdit() && m_NameBuffer != config.Name)
-			Set({ { "name", m_NameBuffer } });
+		DrawTextSetting("Name", "name", config.Name, m_NameEdit);
 		HelpMarker("Also names the exported executable and the game's save data directory.");
+		DrawTextSetting("Version", "version", config.Version, m_VersionEdit);
+		HelpMarker("MAJOR.MINOR.PATCH, or MAJOR.MINOR.PATCH.BUILD, each 0-65535. Packaged exports carry it (Windows file\nversion, macOS bundle version, AppImage file name); scripts read it with Game.GetInfo().");
+		DrawTextSetting("Company", "company", config.Company, m_CompanyEdit);
+		HelpMarker("The publisher: the Windows version resource, the macOS copyright and the macOS bundle identifier\n(com.<company>.<name>).");
+
+		if (ImGui::BeginCombo("Icon", config.Icon.empty() ? "(none)" : config.Icon.c_str()))
+		{
+			if (ImGui::Selectable("(none)", config.Icon.empty()) && !config.Icon.empty())
+				Set({ { "icon", "" } });
+			for (const std::string& image : AssetManager::ListAssets({ ".png" }))
+				if (ImGui::Selectable(image.c_str(), image == config.Icon) && image != config.Icon)
+					Set({ { "icon", image } });
+			ImGui::EndCombo();
+		}
+		HelpMarker("A PNG under Assets/, square and 512 px or more for the sharpest result: the game window's icon\n(Windows, Linux X11) and the icon of packaged exports (.app, .exe, AppImage).");
 
 		if (ImGui::BeginCombo("Start Scene", config.StartScene.empty() ? "(none)" : config.StartScene.c_str()))
 		{
@@ -160,6 +171,17 @@ namespace Basalt {
 					Set({ { "startScene", scene } });
 			ImGui::EndCombo();
 		}
+	}
+
+	void ProjectSettingsPanel::DrawTextSetting(const char* label, const char* key, const std::string& value, TextEdit& edit)
+	{
+		if (!edit.Active)
+			edit.Buffer = value;
+		ImGui::InputText(label, &edit.Buffer);
+		edit.Active = ImGui::IsItemActive();
+		// A rejected value (an invalid version) is reported by Set, and the field shows the saved one again.
+		if (ImGui::IsItemDeactivatedAfterEdit() && edit.Buffer != value)
+			Set({ { key, edit.Buffer } });
 	}
 
 	void ProjectSettingsPanel::DrawDisplay(const ProjectConfig& config)

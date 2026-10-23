@@ -1047,6 +1047,10 @@ Game = {}
 ---Ends the game (the runtime exits, the editor leaves play mode).
 function Game.Quit() end
 
+---The project's name, version and company (project settings), for title screens and credits.
+---@return { Name: string, Version: string, Company: string }
+function Game.GetInfo() end
+
 -- Screen UI --------------------------------------------------------------------------------------------------------
 
 ---Options of UI.MeasureText.
