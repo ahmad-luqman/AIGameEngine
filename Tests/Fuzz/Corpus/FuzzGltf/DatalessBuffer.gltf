@@ -1,0 +1,1 @@
+x{"asset":{"version":"2.0"},"buffers":[{"byteLength":201326592}],"bufferViews":[{"buffer":0,"byteLength":201326592}],"accessors":[{"bufferView":0,"componentType":5126,"type":"VEC3","count":16777216}],"meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}],"nodes":[{"mesh":0}],"scenes":[{"nodes":[0]}],"scene":0}

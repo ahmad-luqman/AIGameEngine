@@ -65,7 +65,7 @@ jobs:
           SECONDS_PER_TARGET: ${{ github.event.inputs.seconds || '1200' }}
           TARGET: ${{ matrix.target }}
         run: |
-          if [[ ! "$SECONDS_PER_TARGET" =~ ^[0-9]+$ ]] || [[ "$SECONDS_PER_TARGET" -gt 2400 ]]; then
+          if [[ ! "$SECONDS_PER_TARGET" =~ ^[0-9]{1,4}$ ]] || [[ "$SECONDS_PER_TARGET" -gt 2400 ]]; then
             echo "seconds must be a whole number of at most 2400 to fit the step timeout" >&2
             exit 1
           fi
@@ -78,10 +78,13 @@ jobs:
           path: build-fuzz/corpus/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
 
+      # Crash inputs and the full fuzzer log (a target can fail without writing a crash input).
       - name: Upload crash inputs
         if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
           name: fuzz-crashes-${{ matrix.target }}
-          path: build-fuzz/crashes
+          path: |
+            build-fuzz/crashes
+            build-fuzz/logs
           if-no-files-found: ignore
