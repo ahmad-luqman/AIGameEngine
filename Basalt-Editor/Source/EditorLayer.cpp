@@ -2951,7 +2951,7 @@ namespace Basalt {
 #elif defined(BS_PLATFORM_WINDOWS)
 				ImGui::Checkbox("Package: give the executable the project's icon and version", &m_ExportPackage);
 #else
-				ImGui::Checkbox("Package as an AppImage (needs appimagetool on PATH; else an AppDir)", &m_ExportPackage);
+				ImGui::Checkbox("Package as an AppImage (needs appimagetool: $APPIMAGETOOL or PATH; else an AppDir)", &m_ExportPackage);
 #endif
 			}
 
@@ -2990,7 +2990,9 @@ namespace Basalt {
 						if (auto result = m_Context.Execute("project.export", { { "output", m_PromptPath }, { "smokeTestFrames", m_ExportSmokeTest ? m_ExportSmokeFrames : 0 }, { "package", m_ExportPackage } }))
 						{
 							const std::string package = (*result)["package"].get<std::string>();
-							std::string status = m_ExportSmokeTest ? "Exported to " + package + "; the smoke test passed" : "Exported to " + package;
+							std::string status = "Exported to " + package;
+							if (m_ExportSmokeTest)
+								status += "; the smoke test passed";
 							// Warnings say what the package lacks (an AppDir without its AppImage).
 							for (const auto& warning : result->value("warnings", nlohmann::json::array()))
 								status += "; " + warning.get<std::string>();

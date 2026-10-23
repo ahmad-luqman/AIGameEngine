@@ -71,7 +71,8 @@ def run_cli(cli, project, command, params, env):
 def archive(source, destination):
     """Zips (Windows, macOS) or tars (Linux, keeping permissions and links) a file or directory, named after it."""
     if sys.platform == "darwin":
-        # ditto keeps code signatures, extended attributes and bundle structure intact.
+        # ditto keeps the bundle structure and its code signature (in the binaries and _CodeSignature/, not in extended
+        # attributes); resource forks, extended attributes and ACLs are left out, so no Finder metadata ships.
         subprocess.run(["ditto", "-c", "-k", "--norsrc", "--noextattr", "--noacl", "--keepParent", str(source), f"{destination}.zip"], check=True)
         return Path(f"{destination}.zip")
     kind = "zip" if sys.platform == "win32" else "gztar"
@@ -79,7 +80,8 @@ def archive(source, destination):
 
 
 def find_vulkan_libraries():
-    """libvulkan.1.dylib and libMoltenVK.dylib, where the exporter looks for them."""
+    """libvulkan.1.dylib and libMoltenVK.dylib, searched where the exporter looks for them (FindVulkanLibraries in
+    Basalt/Source/Basalt/Project/Exporter.cpp): change both together."""
     directories = ([Path(os.environ["VULKAN_SDK"], "lib")] if os.environ.get("VULKAN_SDK") else []) + [Path("/opt/homebrew/lib"), Path("/usr/local/lib")]
     found = []
     for name in ("libvulkan.1.dylib", "libMoltenVK.dylib"):
@@ -124,20 +126,20 @@ def package_sample(cli, sample, stage, output, prefix, options, env):
         if options.sign_identity:
             sign += ["--identity", options.sign_identity] + (["--notarize", options.notarize] if options.notarize else [])
         subprocess.run(sign, check=True)
-        return archive(package, output / name)
-    if sys.platform == "win32":
-        return archive(package, output / name)
-    if package.suffix != ".AppImage":
-        if options.require_appimage:
-            fail(f"{sample.name}: no AppImage was built: {'; '.join(result.get('warnings', []))}")
-        return archive(package, output / name)
-    # The AppImage itself must start (extracted, so the check needs no FUSE).
-    smoke = subprocess.run([str(package), "--headless", "--frames", "30"], capture_output=True, text=True, env=dict(env, APPIMAGE_EXTRACT_AND_RUN="1"), timeout=300)
-    if smoke.returncode != 0:
-        fail(f"{sample.name}: the AppImage exited with code {smoke.returncode}: {smoke.stdout}{smoke.stderr}")
-    target = output / f"{name}.AppImage"
-    shutil.copy2(package, target)
-    return target
+        # What ships is the signed bundle (hardened runtime with a Developer ID): it must still start.
+        run_cli(cli, sample, "project.smoke_test", {"executable": result["executable"], "frames": SMOKE_TEST_FRAMES, "assertPassed": True}, env)
+    elif package.suffix == ".AppImage":
+        # The AppImage itself must start (extracted, so the check needs no FUSE).
+        smoke = subprocess.run([str(package), "--headless", "--frames", "30", "--fail-on-script-errors"], capture_output=True, text=True,
+                               env=dict(env, APPIMAGE_EXTRACT_AND_RUN="1"), timeout=300)
+        if smoke.returncode != 0:
+            fail(f"{sample.name}: the AppImage exited with code {smoke.returncode} (7: script errors): {smoke.stdout}{smoke.stderr}")
+        target = output / f"{name}.AppImage"
+        shutil.copy2(package, target)
+        return target
+    elif sys.platform.startswith("linux") and options.require_appimage:
+        fail(f"{sample.name}: no AppImage was built: {'; '.join(result.get('warnings', []))}")
+    return archive(package, output / name)
 
 
 def write_checksums(files, destination):

@@ -9,6 +9,7 @@
 #include "RuntimeLayer.h"
 
 #include <array>
+#include <optional>
 #include <vector>
 
 namespace Basalt {
@@ -30,27 +31,36 @@ namespace Basalt {
 		// the game still plays.
 		void SetWindowIcon()
 		{
-			const ProjectConfig* config = Project::GetActiveConfig();
+			const Ref<Project>& project = Project::GetActive();
 			Window* window = GetWindow();
-			if (!config || config->Icon.empty() || !window || !window->SupportsIcon())
+			if (!project || !window || !window->SupportsIcon())
 				return;
 			std::string error;
-			const auto icon = LoadIconImage(Project::ResolvePath(FileSystem::PathFromUtf8(config->Icon)), error);
-			if (!icon)
+			std::optional<IconImage> icon;
+			if (!LoadProjectIcon(*project, icon, error))
 			{
-				BS_CORE_WARN("Window icon: {}", error);
+				BS_CORE_ERROR("Window icon: {}", error);
 				return;
 			}
+			if (!icon)
+				return;
 			// The sizes title bars, task switchers and taskbars use; the window system picks the closest.
 			constexpr std::array<uint32_t, 4> Sizes = { 16, 32, 48, 256 };
-			std::vector<IconImage> sizes;
-			sizes.reserve(Sizes.size());
-			for (uint32_t size : Sizes)
-				sizes.push_back(ResizeIcon(*icon, size));
+			std::vector<IconImage> resized;
+			resized.reserve(Sizes.size());
 			std::vector<WindowIcon> images;
-			images.reserve(sizes.size());
-			for (const IconImage& image : sizes)
-				images.push_back({ image.Width, image.Height, image.Pixels.data() });
+			images.reserve(Sizes.size());
+			for (uint32_t size : Sizes)
+			{
+				resized.push_back(ResizeIcon(*icon, size));
+				if (!resized.back().IsValid())
+				{
+					BS_CORE_ERROR("Window icon: cannot scale the icon to {} pixels", size);
+					return;
+				}
+			}
+			for (const IconImage& image : resized)
+				images.push_back({ image.Width, image.Height, image.Pixels });
 			window->SetIcon(images);
 		}
 	};

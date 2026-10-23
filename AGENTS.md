@@ -16,7 +16,7 @@ changing code. Task-specific procedures live in `.claude/skills/*/SKILL.md`.
 | `Tests/` | doctest unit tests (`BasaltTests`, headless), the feature-test project, and an optional GPU render test. |
 | `Samples/` | Example games built through the automation API (e.g. `Samples/Tetris`), tested by ctest. |
 | `cmake/` | Dependency pins (`Dependencies.cmake`), warnings, shader embedding, format check. |
-| `scripts/` | `build.sh`, `test.sh`, `format.sh`. |
+| `scripts/` | `build.sh`, `test.sh`, `format.sh`; release tooling `package_release.py`, `sign-macos.sh`. |
 
 Engine modules (`Basalt/Source/Basalt/<Module>/`): `Core` (application, window, input incl. gamepads, log, file
 system and file watching, command line), `Events`, `Math`, `Renderer` (device, scene renderer, IBL, debug lines), `ImGui`, `Scene`
@@ -24,7 +24,7 @@ system and file watching, command line), `Events`, `Math`, `Renderer` (device, s
 files, asset cache), `Physics` (Jolt), `Audio` (miniaudio: buses, per-source low-pass and Doppler, reverb sends into per-bus reverbs), `Particles` (CPU particle simulation), `Animation` (glTF TRS sampling, blends, crossfades, 1D/2D blend spaces with phase sync and velocity matching, animation events, bone transforms and attachments, data-driven state machines and per-state root motion, layers with joint masks and additive clips, two-bone/look-at IK and foot placement, spring bones, morph targets, retargeted clip libraries, per-entity playback), `UI` (game UI: UI
 component layout, widgets and their mouse/keyboard/gamepad interaction, immediate-mode `UI.*`, TrueType fonts;
 drawn through ImGui after the scene), `Scripting` (Lua 5.4 + sol2; timers, coroutines, events), `Project`
-(project files, exporter, save data), `Automation` (command API, session, TCP server, editor history and selection).
+(project files, exporter and platform packages, save data), `Automation` (command API, session, TCP server, editor history and selection).
 
 Other directories: `Docs/` (scripting API, rendering guide, generated command/component references), `Tests/Data/FeatureTest`
 (the project that exercises every feature).
@@ -118,13 +118,16 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   prefab write (`scene.open` skips them). `prefab.open` swaps in an isolated scene; the waiting scene keeps its path,
   dirty state, selection and (editor) undo history, and edit boundaries other than `prefab.save/close`, plus
   `project.export`, are rejected until `prefab.close`.
-- **Shipping.** `ProjectConfig` holds `Version` (3 or 4 16-bit numbers, `ParseProjectVersion`), `Company` and `Icon` (a
-  PNG asset reference, encoded and moved like `StartScene`). `project.export {"package": true}` packages for the host:
-  a `.app` (`Contents/Resources` holds the project, `Frameworks` the Vulkan loader and MoltenVK), a Windows executable
-  with icon and version resources, or an AppDir plus AppImage (appimagetool optional). `Project/Packaging` builds the
-  icon and metadata files as pure byte builders; only `WriteWindowsResources` is platform-specific. The runtime finds
-  its project with `Exporter::GetExportedProjectDirectory` and sets the window icon where windows have one. Tags run
-  `.github/workflows/release.yml` (`scripts/package_release.py`, `scripts/sign-macos.sh`). See `Docs/Shipping.md`.
+- **Shipping.** `ProjectConfig` holds `Version` (3 or 4 16-bit numbers, `ParseProjectVersion`), `Company` (Name and
+  Company are capped at `MaxTextLength`) and `Icon` (a PNG asset reference, encoded and moved like `StartScene`; an
+  unresolved one stays an `asset-uuid:` key). `project.export {"package": true}` packages for the host: a `.app`
+  (`Contents/Resources` holds the project, `Frameworks` the Vulkan loader and MoltenVK), a Windows executable with icon
+  and version resources, or an AppDir plus AppImage (appimagetool optional). `Project/Packaging`'s `Build*`, `Encode` and
+  `Resize` functions are pure byte builders; `LoadIconImage`/`LoadProjectIcon` read the PNG and only
+  `WriteWindowsResources` is platform-specific. The runtime finds its project with
+  `Exporter::GetExportedProjectDirectory` and sets the window icon on Windows and X11 (macOS and Wayland show the
+  package's). Tags run `.github/workflows/release.yml` (`scripts/package_release.py`, `scripts/sign-macos.sh`). See
+  `Docs/Shipping.md`.
 - **Editor file dialogs.** Path prompts add native pickers (`Basalt-Editor/Source/FileDialogs`, nativefiledialog-extended,
   editor only). Linux uses the XDG portal and needs D-Bus development files at build time; without them the editor
   builds with typed paths only, and a picker that fails at runtime leaves the typed path usable.

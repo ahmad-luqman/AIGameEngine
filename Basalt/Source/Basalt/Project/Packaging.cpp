@@ -100,20 +100,32 @@ namespace Basalt {
 			return result;
 		}
 
-		// UTF-16 code units of UTF-8 text; malformed sequences become U+FFFD.
+		// Length of the UTF-8 sequence a lead byte starts; 0 for a continuation or invalid byte.
+		size_t Utf8SequenceLength(unsigned char lead)
+		{
+			if (lead < 0x80)
+				return 1;
+			if ((lead >> 5) == 0x6)
+				return 2;
+			if ((lead >> 4) == 0xE)
+				return 3;
+			if ((lead >> 3) == 0x1E)
+				return 4;
+			return 0;
+		}
+
+		// UTF-16 code units of UTF-8 text; each byte that starts no valid sequence becomes U+FFFD.
 		std::u16string Utf8ToUtf16(std::string_view text)
 		{
+			// The payload bits of a lead byte and the smallest code point of each sequence length (anything below is overlong).
+			constexpr std::array<uint32_t, 5> LeadMask = { 0, 0x7F, 0x1F, 0x0F, 0x07 };
+			constexpr std::array<uint32_t, 5> Minimum = { 0, 0, 0x80, 0x800, 0x10000 };
 			std::u16string result;
 			for (size_t i = 0; i < text.size();)
 			{
 				const auto byte = static_cast<unsigned char>(text[i]);
-				const size_t length = byte < 0x80 ? 1 : (byte >> 5) == 0x6 ? 2
-													: (byte >> 4) == 0xE   ? 3
-													: (byte >> 3) == 0x1E  ? 4
-																		   : 0;
-				uint32_t code = length == 1 ? byte : length == 2 ? byte & 0x1Fu
-												 : length == 3   ? byte & 0x0Fu
-																 : byte & 0x07u;
+				const size_t length = Utf8SequenceLength(byte);
+				uint32_t code = byte & LeadMask[length];
 				bool valid = length != 0 && i + length <= text.size();
 				for (size_t j = 1; valid && j < length; ++j)
 				{
@@ -122,7 +134,6 @@ namespace Basalt {
 					code = (code << 6) | (next & 0x3Fu);
 				}
 				// Overlong forms, surrogates and values past U+10FFFF are not characters.
-				constexpr std::array<uint32_t, 5> Minimum = { 0, 0, 0x80, 0x800, 0x10000 };
 				valid = valid && code >= Minimum[length] && code <= 0x10FFFF && (code < 0xD800 || code > 0xDFFF);
 				if (!valid)
 				{
@@ -191,12 +202,19 @@ namespace Basalt {
 				String(key);
 				AlignToDWord();
 				writeBody();
+				// Callers bound the text (ProjectConfig::MaxTextLength), so no block outgrows its 16-bit length.
+				BS_CORE_ASSERT(Size() - start <= UINT16_MAX, "version resource block too long");
 				PatchWord(start, static_cast<uint16_t>(Size() - start));
 			}
 
 		private:
 			std::vector<uint8_t> m_Bytes;
 		};
+
+		std::string CopyrightNotice(const std::string& company)
+		{
+			return "Copyright \xC2\xA9 " + company;
+		}
 
 		void BigEndian32(std::vector<uint8_t>& bytes, uint32_t value)
 		{
@@ -208,36 +226,36 @@ namespace Basalt {
 
 	std::optional<IconImage> LoadIconImage(const std::filesystem::path& path, std::string& outError)
 	{
+		const std::string name = FileSystem::PathToUtf8(path);
 		const auto bytes = FileSystem::ReadBinaryFile(path);
 		if (!bytes)
 		{
-			outError = "cannot read icon '" + FileSystem::PathToUtf8(path) + "'";
+			outError = "cannot read icon '" + name + "'";
 			return std::nullopt;
 		}
 		if (bytes->size() < PngSignature.size() || !std::equal(PngSignature.begin(), PngSignature.end(), bytes->begin()))
 		{
-			outError = "icon '" + FileSystem::PathToUtf8(path) + "' is not a PNG file";
+			outError = "icon '" + name + "' is not a PNG file";
 			return std::nullopt;
 		}
 		int width = 0;
 		int height = 0;
 		int channels = 0;
 		const int size = static_cast<int>(std::min<size_t>(bytes->size(), INT32_MAX));
-		// Checked before decoding, so a huge image is never allocated.
-		if (!stbi_info_from_memory(bytes->data(), size, &width, &height, &channels))
+		stbi_uc* pixels = nullptr;
+		// The size is checked before decoding, so a huge image is never allocated.
+		if (stbi_info_from_memory(bytes->data(), size, &width, &height, &channels))
 		{
-			outError = fmt::format("cannot decode icon '{}': {}", FileSystem::PathToUtf8(path), stbi_failure_reason());
-			return std::nullopt;
+			if (width > static_cast<int>(MaxIconSize) || height > static_cast<int>(MaxIconSize))
+			{
+				outError = fmt::format("icon '{}' is {} x {} pixels; icons may be at most {} pixels on a side", name, width, height, MaxIconSize);
+				return std::nullopt;
+			}
+			pixels = stbi_load_from_memory(bytes->data(), size, &width, &height, &channels, 4);
 		}
-		if (width > static_cast<int>(MaxIconSize) || height > static_cast<int>(MaxIconSize))
-		{
-			outError = fmt::format("icon '{}' is {} x {} pixels; icons may be at most {} pixels on a side", FileSystem::PathToUtf8(path), width, height, MaxIconSize);
-			return std::nullopt;
-		}
-		stbi_uc* pixels = stbi_load_from_memory(bytes->data(), size, &width, &height, &channels, 4);
 		if (!pixels)
 		{
-			outError = fmt::format("cannot decode icon '{}': {}", FileSystem::PathToUtf8(path), stbi_failure_reason());
+			outError = fmt::format("cannot decode icon '{}': {}", name, stbi_failure_reason());
 			return std::nullopt;
 		}
 		IconImage icon;
@@ -248,9 +266,24 @@ namespace Basalt {
 		return icon;
 	}
 
+	bool LoadProjectIcon(const Project& project, std::optional<IconImage>& outIcon, std::string& outError)
+	{
+		outIcon.reset();
+		const std::string& icon = project.GetConfig().Icon;
+		if (icon.empty())
+			return true;
+		if (AssetRegistry::IsUnresolvedKey(icon))
+		{
+			outError = "the project icon is an " + project.GetAssets().DescribeUnresolved(icon) + " (set it again with project.set icon)";
+			return false;
+		}
+		outIcon = LoadIconImage(project.GetIconPath(), outError);
+		return outIcon.has_value();
+	}
+
 	IconImage ResizeIcon(const IconImage& icon, uint32_t size)
 	{
-		BS_CORE_ASSERT(icon.Width > 0 && icon.Height > 0 && icon.Pixels.size() == static_cast<size_t>(icon.Width) * icon.Height * 4, "invalid icon image");
+		BS_CORE_ASSERT(icon.IsValid(), "invalid icon image");
 		BS_CORE_ASSERT(size > 0, "icon size must be positive");
 		const uint32_t side = std::max(icon.Width, icon.Height);
 		IconImage square;
@@ -269,25 +302,30 @@ namespace Basalt {
 		result.Height = size;
 		result.Pixels.resize(static_cast<size_t>(size) * size * 4);
 		// sRGB and alpha-weighted, so transparent pixels never bleed their (arbitrary) color into the edges.
-		stbir_resize_uint8_srgb(square.Pixels.data(), static_cast<int>(side), static_cast<int>(side), 0, result.Pixels.data(), static_cast<int>(size), static_cast<int>(size), 0, STBIR_RGBA);
+		if (!stbir_resize_uint8_srgb(square.Pixels.data(), static_cast<int>(side), static_cast<int>(side), 0, result.Pixels.data(), static_cast<int>(size), static_cast<int>(size), 0, STBIR_RGBA))
+			return {};
 		return result;
 	}
 
 	std::vector<uint8_t> EncodeIconPng(const IconImage& icon)
 	{
 		std::vector<uint8_t> png;
-		stbi_write_png_to_func([](void* context, void* data, int size) {
-			auto& bytes = *static_cast<std::vector<uint8_t>*>(context);
-			const auto* begin = static_cast<const uint8_t*>(data);
-			bytes.insert(bytes.end(), begin, begin + size);
-		},
-							   &png, static_cast<int>(icon.Width), static_cast<int>(icon.Height), 4, icon.Pixels.data(), static_cast<int>(icon.Width * 4));
+		if (!icon.IsValid())
+			return png;
+		if (!stbi_write_png_to_func([](void* context, void* data, int size) {
+				auto& bytes = *static_cast<std::vector<uint8_t>*>(context);
+				const auto* begin = static_cast<const uint8_t*>(data);
+				bytes.insert(bytes.end(), begin, begin + size);
+			},
+									&png, static_cast<int>(icon.Width), static_cast<int>(icon.Height), 4, icon.Pixels.data(), static_cast<int>(icon.Width * 4)))
+			png.clear();
 		return png;
 	}
 
 	IconImage MakeDefaultIcon(uint32_t size)
 	{
 		// The top of a basalt column: a dark hexagon with a lighter inner face, 4x4 supersampled for smooth edges.
+		BS_CORE_ASSERT(size > 0, "icon size must be positive");
 		IconImage icon;
 		icon.Width = size;
 		icon.Height = size;
@@ -355,7 +393,7 @@ namespace Basalt {
 
 	std::string BuildInfoPlist(const PackageInfo& info)
 	{
-		// CFBundleShortVersionString is at most three integers; CFBundleVersion keeps a BUILD number too.
+		// Both version keys are documented as at most three integers, so a BUILD number stays out of them.
 		const std::string shortVersion = fmt::format("{}.{}.{}", info.VersionNumbers[0], info.VersionNumbers[1], info.VersionNumbers[2]);
 		std::string plist = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
 							"<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
@@ -371,16 +409,16 @@ namespace Basalt {
 		add("CFBundleName", info.Name);
 		add("CFBundlePackageType", "APPL");
 		add("CFBundleShortVersionString", shortVersion);
-		add("CFBundleVersion", info.Version);
+		add("CFBundleVersion", shortVersion);
 		add("LSApplicationCategoryType", "public.app-category.games");
 		if (!info.Company.empty())
-			add("NSHumanReadableCopyright", "Copyright \xC2\xA9 " + info.Company);
+			add("NSHumanReadableCopyright", CopyrightNotice(info.Company));
 		plist += "\t<key>NSHighResolutionCapable</key>\n\t<true/>\n";
 		plist += "</dict>\n</plist>\n";
 		return plist;
 	}
 
-	std::vector<uint8_t> BuildIcns(const IconImage& icon)
+	std::optional<std::vector<uint8_t>> BuildIcns(const IconImage& icon)
 	{
 		// PNG element types, smallest pixel size first; @2x types repeat a size. The set iconutil writes: icp6 is left out
 		// because its size is documented inconsistently (iconutil reads it as 48 px).
@@ -403,6 +441,8 @@ namespace Basalt {
 			{
 				png = EncodeIconPng(ResizeIcon(icon, element.Size));
 				encodedSize = element.Size;
+				if (png.empty())
+					return std::nullopt;
 			}
 			body.insert(body.end(), element.Type, element.Type + 4);
 			BigEndian32(body, static_cast<uint32_t>(png.size() + 8));
@@ -419,7 +459,7 @@ namespace Basalt {
 		return fmt::format("[Desktop Entry]\nType=Application\nName={}\nExec={}\nIcon={}\nCategories=Game;\nTerminal=false\nX-AppImage-Version={}\n", DesktopEscape(info.Name), info.ExecutableName, info.ExecutableName, DesktopEscape(info.Version));
 	}
 
-	WindowsIconResources BuildWindowsIcon(const IconImage& icon)
+	std::optional<WindowsIconResources> BuildWindowsIcon(const IconImage& icon)
 	{
 		WindowsIconResources resources;
 		const std::vector<uint32_t> sizes = IconSizes(icon, { 16, 24, 32, 48, 64, 128, 256 });
@@ -432,6 +472,8 @@ namespace Basalt {
 		{
 			// Windows Vista and later read PNG-compressed icon images at every size.
 			resources.Images.push_back(EncodeIconPng(ResizeIcon(icon, sizes[i])));
+			if (resources.Images.back().empty())
+				return std::nullopt;
 			const auto dimension = static_cast<uint8_t>(sizes[i] >= 256 ? 0 : sizes[i]);
 			directory.Byte(dimension);
 			directory.Byte(dimension);
@@ -458,7 +500,7 @@ namespace Basalt {
 		strings.emplace_back(u"FileVersion", Utf8ToUtf16(info.Version));
 		strings.emplace_back(u"InternalName", Utf8ToUtf16(info.ExecutableName));
 		if (!info.Company.empty())
-			strings.emplace_back(u"LegalCopyright", Utf8ToUtf16("Copyright \xC2\xA9 " + info.Company));
+			strings.emplace_back(u"LegalCopyright", Utf8ToUtf16(CopyrightNotice(info.Company)));
 		strings.emplace_back(u"OriginalFilename", Utf8ToUtf16(info.ExecutableName + ".exe"));
 		strings.emplace_back(u"ProductName", Utf8ToUtf16(info.Name));
 		strings.emplace_back(u"ProductVersion", Utf8ToUtf16(info.Version));
@@ -500,9 +542,20 @@ namespace Basalt {
 	bool WriteWindowsResources(const std::filesystem::path& executable, const PackageInfo& info, const IconImage* icon, std::string& outError)
 	{
 #if defined(BS_PLATFORM_WINDOWS)
-		WindowsIconResources iconResources = icon ? BuildWindowsIcon(*icon) : WindowsIconResources{};
+		std::optional<WindowsIconResources> built = icon ? BuildWindowsIcon(*icon) : WindowsIconResources{};
+		if (!built)
+		{
+			outError = "cannot encode the icon for '" + FileSystem::PathToUtf8(executable) + "'";
+			return false;
+		}
+		WindowsIconResources& iconResources = *built;
 		std::vector<uint8_t> version = BuildVersionInfo(info);
 		const WORD language = MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US);
+		// RT_ICON, RT_GROUP_ICON and RT_VERSION expand to narrow strings unless UNICODE is defined (Basalt does not
+		// define it); the wide functions need wide integer resources.
+		const LPCWSTR iconType = MAKEINTRESOURCEW(3);
+		const LPCWSTR groupIconType = MAKEINTRESOURCEW(14);
+		const LPCWSTR versionType = MAKEINTRESOURCEW(16);
 		const auto describe = [](const char* step) {
 			const DWORD code = GetLastError();
 			char* message = nullptr;
@@ -529,14 +582,12 @@ namespace Basalt {
 			for (size_t i = 0; ok && i < iconResources.Images.size(); ++i)
 			{
 				std::vector<uint8_t>& image = iconResources.Images[i];
-				ok = UpdateResourceW(update, RT_ICON, MAKEINTRESOURCEW(WindowsIconResources::FirstIconID + i), language, image.data(), static_cast<DWORD>(image.size()));
+				ok = UpdateResourceW(update, iconType, MAKEINTRESOURCEW(WindowsIconResources::FirstIconID + i), language, image.data(), static_cast<DWORD>(image.size()));
 			}
 			if (ok && icon)
-			{
-				ok = UpdateResourceW(update, RT_GROUP_ICON, L"GLFW_ICON", language, iconResources.GroupDirectory.data(), static_cast<DWORD>(iconResources.GroupDirectory.size()));
-			}
+				ok = UpdateResourceW(update, groupIconType, L"GLFW_ICON", language, iconResources.GroupDirectory.data(), static_cast<DWORD>(iconResources.GroupDirectory.size()));
 			if (ok)
-				ok = UpdateResourceW(update, RT_VERSION, MAKEINTRESOURCEW(1), language, version.data(), static_cast<DWORD>(version.size()));
+				ok = UpdateResourceW(update, versionType, MAKEINTRESOURCEW(1), language, version.data(), static_cast<DWORD>(version.size()));
 			if (!ok)
 			{
 				reason = describe("UpdateResource");

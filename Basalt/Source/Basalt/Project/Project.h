@@ -2,6 +2,7 @@
 
 #include "Basalt/Asset/AssetRegistry.h"
 #include "Basalt/Core/Base.h"
+#include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/InputActions.h"
 #include "Basalt/Math/Random.h"
 #include "Basalt/Physics/FixedTimestep.h"
@@ -24,15 +25,19 @@ namespace Basalt {
 		static constexpr uint32_t MaxWindowSize = 16384;
 
 		static constexpr const char* DefaultVersion = "1.0.0";
+		// Longest Name and Company in bytes: both go into fixed-size package metadata (a Windows version resource's
+		// lengths are 16-bit), and no title needs more.
+		static constexpr size_t MaxTextLength = 256;
 
 		std::string Name = "Untitled";
-		// MAJOR.MINOR.PATCH with an optional fourth BUILD number, each 0-65535 (ParseProjectVersion): Windows version
-		// resources hold four 16-bit numbers and macOS bundle versions dotted integers.
+		// VersionFormat (ParseProjectVersion): Windows version resources hold four 16-bit numbers and macOS bundle versions
+		// dotted integers.
 		std::string Version = DefaultVersion;
 		// Publisher shown in the Windows version resource and the macOS copyright, and part of the bundle identifier.
 		std::string Company;
-		// Project-relative PNG under Assets/ (an asset reference, like StartScene): the window icon and the icon of
-		// packaged exports. Empty for none.
+		// Project-relative PNG under Assets/: the window icon and the icon of packaged exports. Empty for none. An asset
+		// reference like StartScene (the project file stores its UUID and path), but one whose file is gone stays here as
+		// an unresolved asset-uuid: key (AssetRegistry::IsUnresolvedKey) for validation and export to report.
 		std::string Icon;
 		// Scene opened by the editor and played first by the runtime (project-relative path).
 		std::string StartScene;
@@ -56,8 +61,10 @@ namespace Basalt {
 		uint32_t RandomSeed = Random::DefaultSeed;
 	};
 
-	// The numbers of a ProjectConfig::Version (a missing BUILD is 0), or nullopt when it is not 3 or 4 dot-separated
-	// decimal integers in [0, 65535].
+	// The form of ProjectConfig::Version, for messages.
+	constexpr const char* VersionFormat = "MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH.BUILD, each 0-65535 without leading zeros";
+	// The numbers of a ProjectConfig::Version (a missing BUILD is 0), or nullopt when it is not VersionFormat. Leading
+	// zeros are refused so the text and the numbers packages derive from it always agree.
 	std::optional<std::array<uint16_t, 4>> ParseProjectVersion(std::string_view version);
 
 	// A game project: a directory containing Project.bproject and an Assets/ folder. Asset references in
@@ -117,6 +124,8 @@ namespace Basalt {
 		std::filesystem::path GetAssetDirectory() const { return m_Directory / AssetDirectoryName; }
 		std::filesystem::path GetProjectFilePath() const { return m_Directory / FileName; }
 		std::filesystem::path GetInputFilePath() const { return m_Directory / InputFileName; }
+		// The icon file (ProjectConfig::Icon), or an empty path without an icon.
+		std::filesystem::path GetIconPath() const { return m_Config.Icon.empty() ? std::filesystem::path() : m_Directory / FileSystem::PathFromUtf8(m_Config.Icon); }
 
 	private:
 		AssetRegistry m_Assets;

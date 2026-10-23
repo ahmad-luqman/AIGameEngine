@@ -411,7 +411,7 @@ Compresses an 8-bit PNG/JPEG/TGA/BMP source to a separate KTX2/BC7 asset with mi
 
 ### `asset.delete`
 
-Deletes one asset file and its .meta identity. Existing UUID references become unresolved. Stop Play or Simulate first.
+Deletes one asset file and its .meta identity. Existing UUID references become unresolved; deleting the project's start scene or icon is reported in warnings. Stop Play or Simulate first.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -553,7 +553,7 @@ Lists project asset files, optionally filtered by extensions (e.g. ['.lua']).
 
 ### `asset.move`
 
-Moves one asset file and its .meta sidecar within Assets/. 'to' is the complete destination path. Creates metadata if needed, migrates scene, prefab and material-file references to this asset to UUIDs and updates the open edit scene and project start scene. A scene or prefab that cannot be read stops the move (it might reference the asset); a material file that is not valid JSON is skipped with a warning. Does not rewrite paths inside scripts or glTF files. Stop Play or Simulate first.
+Moves one asset file and its .meta sidecar within Assets/. 'to' is the complete destination path. Creates metadata if needed, migrates scene, prefab and material-file references to this asset to UUIDs and updates the open edit scene and the project's start scene and icon. A scene or prefab that cannot be read stops the move (it might reference the asset); a material file that is not valid JSON is skipped with a warning. Does not rewrite paths inside scripts or glTF files. Stop Play or Simulate first.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -687,7 +687,7 @@ Reloads the asset files changed on disk since changes were last reported (by an 
 
 ### `asset.rename`
 
-Moves one asset file and its .meta sidecar within Assets/. 'to' is the complete destination path. Creates metadata if needed, migrates scene, prefab and material-file references to this asset to UUIDs and updates the open edit scene and project start scene. A scene or prefab that cannot be read stops the move (it might reference the asset); a material file that is not valid JSON is skipped with a warning. Does not rewrite paths inside scripts or glTF files. Stop Play or Simulate first.
+Moves one asset file and its .meta sidecar within Assets/. 'to' is the complete destination path. Creates metadata if needed, migrates scene, prefab and material-file references to this asset to UUIDs and updates the open edit scene and the project's start scene and icon. A scene or prefab that cannot be read stops the move (it might reference the asset); a material file that is not valid JSON is skipped with a warning. Does not rewrite paths inside scripts or glTF files. Stop Play or Simulate first.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2672,13 +2672,13 @@ Creates a new project directory (Project.bproject + Assets/) and opens it.
 
 ### `project.export`
 
-Validates the project (unless validate is false), exports a standalone, distributable build of the game (runtime + assets) and optionally smoke-tests it: runs the exported game headless for smokeTestFrames frames and fails unless it exits cleanly without script errors.
+Validates the project (unless validate is false), exports a standalone, distributable build of the game (runtime + assets; with package: true a platform package, see Docs/Shipping.md) and optionally smoke-tests it: runs the exported game headless for smokeTestFrames frames and fails unless it exits cleanly without script errors. Returns {executable (what the smoke test runs), package (what to distribute), files, validation, warnings?, smokeTest?}.
 
 | Parameter | Type / description |
 |-----------|--------------------|
-| `appImageTool` | string, path of appimagetool for Linux packages (default: $APPIMAGETOOL, then PATH) |
+| `appImageTool` | string, path of appimagetool for Linux packages (default: $APPIMAGETOOL, then PATH); requires package: true |
 | `output` | string, output directory |
-| `package` | bool (default false): package for this platform with the project's icon, version and company: <Name>.app on macOS, an executable with icon and version resources on Windows, <Name>.AppDir plus <Name>-<version>-<arch>.AppImage on Linux (the AppImage needs appimagetool: appImageTool, $APPIMAGETOOL or PATH) |
+| `package` | bool (default false): package for this platform with the project's icon, version and company: <Name>.app on macOS, an executable with icon and version resources on Windows, <Name>.AppDir plus <Name>-<version>-<arch>.AppImage on Linux (the AppImage needs appimagetool: appImageTool, $APPIMAGETOOL or PATH); <Name> is the executable's name: the project name with spaces as _ and other characters other than letters, digits, - and _ dropped |
 | `smokeTestFrames` | integer (default 0: no smoke test), frames the exported game runs headless |
 | `smokeTestTimeout` | number of seconds (default 60) before the smoke test is stopped and fails |
 | `validate` | bool (default true): refuse to export when project.validate finds an error |
@@ -2692,14 +2692,14 @@ Validates the project (unless validate is false), exports a standalone, distribu
     "appImageTool": {
       "anyOf": [
         {
-          "description": "string, path of appimagetool for Linux packages (default: $APPIMAGETOOL, then PATH)",
+          "description": "string, path of appimagetool for Linux packages (default: $APPIMAGETOOL, then PATH); requires package: true",
           "type": "string"
         },
         {
           "type": "null"
         }
       ],
-      "description": "string, path of appimagetool for Linux packages (default: $APPIMAGETOOL, then PATH)"
+      "description": "string, path of appimagetool for Linux packages (default: $APPIMAGETOOL, then PATH); requires package: true"
     },
     "output": {
       "description": "string, output directory",
@@ -2709,14 +2709,14 @@ Validates the project (unless validate is false), exports a standalone, distribu
     "package": {
       "anyOf": [
         {
-          "description": "bool (default false): package for this platform with the project's icon, version and company: <Name>.app on macOS, an executable with icon and version resources on Windows, <Name>.AppDir plus <Name>-<version>-<arch>.AppImage on Linux (the AppImage needs appimagetool: appImageTool, $APPIMAGETOOL or PATH)",
+          "description": "bool (default false): package for this platform with the project's icon, version and company: <Name>.app on macOS, an executable with icon and version resources on Windows, <Name>.AppDir plus <Name>-<version>-<arch>.AppImage on Linux (the AppImage needs appimagetool: appImageTool, $APPIMAGETOOL or PATH); <Name> is the executable's name: the project name with spaces as _ and other characters other than letters, digits, - and _ dropped",
           "type": "boolean"
         },
         {
           "type": "null"
         }
       ],
-      "description": "bool (default false): package for this platform with the project's icon, version and company: <Name>.app on macOS, an executable with icon and version resources on Windows, <Name>.AppDir plus <Name>-<version>-<arch>.AppImage on Linux (the AppImage needs appimagetool: appImageTool, $APPIMAGETOOL or PATH)"
+      "description": "bool (default false): package for this platform with the project's icon, version and company: <Name>.app on macOS, an executable with icon and version resources on Windows, <Name>.AppDir plus <Name>-<version>-<arch>.AppImage on Linux (the AppImage needs appimagetool: appImageTool, $APPIMAGETOOL or PATH); <Name> is the executable's name: the project name with spaces as _ and other characters other than letters, digits, - and _ dropped"
     },
     "smokeTestFrames": {
       "anyOf": [
@@ -2820,7 +2820,7 @@ Changes project settings and saves the project file.
 
 | Parameter | Type / description |
 |-----------|--------------------|
-| `company` | string, the publisher: Windows version resource, macOS copyright and bundle identifier |
+| `company` | string of at most 256 bytes, the publisher: Windows version resource, macOS copyright and bundle identifier |
 | `dynamicResolution` | bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries) |
 | `fixedTimestep` | number of seconds in (0, 0.25], the physics step of every scene that does not override it (scene.settings Physics.FixedTimestep); applies from the next play |
 | `fullscreen` | bool |
@@ -2828,13 +2828,13 @@ Changes project settings and saves the project file.
 | `icon` | string, project-relative PNG under Assets/ (at most 4096 px; 512 px or more recommended), the window and package icon; "" removes it |
 | `inputActions` | object {Actions: [{Name, Type: "Button" | "Axis", Bindings: [{Key | MouseButton | GamepadButton | GamepadAxis: name, Scale?, DeadZone?, Gamepad?}]}]}, replaces every input action and saves Input.binput (written only when the actions change); applies from the next play |
 | `minRenderScale` | number in [0.25, 2], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning) |
-| `name` | string |
+| `name` | string of at most 256 bytes |
 | `physicsLayers` | object {Names: ["Default", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play |
 | `randomSeed` | integer in [0, 4294967295], seeds Lua's random numbers, particle emitters and runtime entity UUIDs; applies from the next play |
 | `renderScale` | number in [0.25, 2], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution) |
 | `startScene` | string, project-relative scene |
 | `targetFrameRate` | number in [10, 1000]; dynamic resolution keeps the scene's GPU time within this frame rate's frame time |
-| `version` | string, MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH.BUILD (each 0-65535): the version packaged exports carry |
+| `version` | string, MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH.BUILD (each 0-65535, no leading zeros): the version packaged exports carry |
 | `windowHeight` | integer |
 | `windowWidth` | integer |
 
@@ -2847,14 +2847,14 @@ Changes project settings and saves the project file.
     "company": {
       "anyOf": [
         {
-          "description": "string, the publisher: Windows version resource, macOS copyright and bundle identifier",
+          "description": "string of at most 256 bytes, the publisher: Windows version resource, macOS copyright and bundle identifier",
           "type": "string"
         },
         {
           "type": "null"
         }
       ],
-      "description": "string, the publisher: Windows version resource, macOS copyright and bundle identifier"
+      "description": "string of at most 256 bytes, the publisher: Windows version resource, macOS copyright and bundle identifier"
     },
     "dynamicResolution": {
       "anyOf": [
@@ -2987,14 +2987,14 @@ Changes project settings and saves the project file.
     "name": {
       "anyOf": [
         {
-          "description": "string",
+          "description": "string of at most 256 bytes",
           "type": "string"
         },
         {
           "type": "null"
         }
       ],
-      "description": "string"
+      "description": "string of at most 256 bytes"
     },
     "physicsLayers": {
       "description": "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play",
@@ -3057,14 +3057,14 @@ Changes project settings and saves the project file.
     "version": {
       "anyOf": [
         {
-          "description": "string, MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH.BUILD (each 0-65535): the version packaged exports carry",
+          "description": "string, MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH.BUILD (each 0-65535, no leading zeros): the version packaged exports carry",
           "type": "string"
         },
         {
           "type": "null"
         }
       ],
-      "description": "string, MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH.BUILD (each 0-65535): the version packaged exports carry"
+      "description": "string, MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH.BUILD (each 0-65535, no leading zeros): the version packaged exports carry"
     },
     "windowHeight": {
       "anyOf": [

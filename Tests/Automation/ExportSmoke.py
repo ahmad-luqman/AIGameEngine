@@ -43,8 +43,21 @@ def write_png(path, width, height):
                      + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
 
 
-def check_windows_resources(executable):
-    """The exported executable's version resource, read by Windows itself, and its icon group."""
+def png_size(path):
+    """Width and height from a PNG file's IHDR chunk."""
+    data = Path(path).read_bytes()
+    require(data.startswith(b"\x89PNG\r\n\x1a\n") and data[12:16] == b"IHDR", f"{path} is not a PNG")
+    return struct.unpack(">II", data[16:24])
+
+
+def check_manifest(manifest, library):
+    """A MoltenVK ICD manifest whose library path, relative to the manifest, reaches the bundled library."""
+    path = json.loads(Path(manifest).read_text())["ICD"]["library_path"]
+    require((Path(manifest).parent / path).resolve() == Path(library).resolve(), f"{manifest} names {path}, not {library}")
+
+
+def check_windows_resources(executable, has_icon):
+    """The exported executable's version resource, read by Windows itself, and its icon group (if any)."""
     import ctypes
     from ctypes import wintypes
     version = ctypes.WinDLL("version")
@@ -79,24 +92,32 @@ def check_windows_resources(executable):
     module = kernel32.LoadLibraryExW(str(executable), None, 0x2 | 0x20)  # as a data file and image resource
     require(module, f"cannot open {executable} as a data file")
     try:
-        require(kernel32.FindResourceW(module, "GLFW_ICON", 14), "no GLFW_ICON icon group (RT_GROUP_ICON)")
+        found = bool(kernel32.FindResourceW(module, "GLFW_ICON", 14))
+        require(found == has_icon, f"GLFW_ICON icon group (RT_GROUP_ICON) present: {found}, expected {has_icon}")
     finally:
         kernel32.FreeLibrary(module)
 
 
-def check_package(exported, output):
+def check_package(exported, output, has_icon=True):
     """The host platform's package layout around the exported executable."""
     executable, package = Path(exported["executable"]), Path(exported["package"])
+    warnings = exported.get("warnings", [])
     if sys.platform == "darwin":
         require(package == output / "Smoke_Game.app" and executable == package / "Contents" / "MacOS" / "Smoke_Game", f"unexpected bundle {exported}")
         contents = package / "Contents"
         info = plistlib.loads((contents / "Info.plist").read_bytes())
         expected = {"CFBundleExecutable": "Smoke_Game", "CFBundleIdentifier": "com.Smoke-Studio.Smoke-Game", "CFBundleShortVersionString": "2.5.0",
-                    "CFBundleVersion": "2.5.0.7", "CFBundleIconFile": "Smoke_Game.icns", "CFBundlePackageType": "APPL"}
+                    "CFBundleVersion": "2.5.0", "CFBundlePackageType": "APPL", "CFBundleIconFile": "Smoke_Game.icns" if has_icon else None}
         require(all(info.get(key) == value for key, value in expected.items()), f"Info.plist: {info}")
-        for relative in ("Resources/Project.bproject", "Resources/Assets/Scenes/Main.bscene", "Resources/Smoke_Game.icns",
-                         "Resources/vulkan/icd.d/MoltenVK_icd.json", "Frameworks/libvulkan.1.dylib", "Frameworks/libMoltenVK.dylib", "PkgInfo"):
+        require((contents / "Resources" / "Smoke_Game.icns").is_file() == has_icon and not warnings, f"icon file or warnings: {exported}")
+        for relative in ("Resources/Project.bproject", "Resources/Assets/Scenes/Main.bscene", "Resources/vulkan/icd.d/MoltenVK_icd.json",
+                         "Frameworks/libvulkan.1.dylib", "Frameworks/libMoltenVK.dylib", "PkgInfo"):
             require((contents / relative).is_file(), f"the bundle has no Contents/{relative}")
+        # VulkanLoader looks in ../Frameworks for the loader and the manifest must reach MoltenVK from Resources.
+        require((executable.parent / ".." / "Frameworks" / "libvulkan.1.dylib").resolve().is_file(), "no loader in ../Frameworks")
+        check_manifest(contents / "Resources" / "vulkan" / "icd.d" / "MoltenVK_icd.json", contents / "Frameworks" / "libMoltenVK.dylib")
+        if not has_icon:
+            return
         if shutil.which("iconutil"):
             with tempfile.TemporaryDirectory() as iconset:
                 converted = subprocess.run(["iconutil", "-c", "iconset", str(contents / "Resources" / "Smoke_Game.icns"), "-o", str(Path(iconset, "x.iconset"))], capture_output=True, text=True)
@@ -109,19 +130,23 @@ def check_package(exported, output):
         refused = subprocess.run(["bash", str(sign), str(package), "--notarize", "profile"], capture_output=True, text=True)
         require(refused.returncode == 2 and "--notarize needs --identity" in refused.stderr, f"sign-macos.sh --notarize without identity: {refused.stderr}")
     elif sys.platform == "win32":
-        require(package == output and executable == output / "Smoke_Game.exe", f"unexpected package {exported}")
-        check_windows_resources(executable)
+        require(package == output and executable == output / "Smoke_Game.exe" and not warnings, f"unexpected package {exported}")
+        check_windows_resources(executable, has_icon)
     else:
         app_dir = output / "Smoke_Game.AppDir"
         require(executable == app_dir / "Smoke_Game", f"unexpected AppDir {exported}")
         require(os.readlink(app_dir / "AppRun") == "Smoke_Game" and os.readlink(app_dir / ".DirIcon") == "Smoke_Game.png", "AppRun/.DirIcon links")
         desktop = (app_dir / "Smoke_Game.desktop").read_text()
         require("Name=Smoke Game\n" in desktop and "Exec=Smoke_Game\n" in desktop and "X-AppImage-Version=2.5.0.7\n" in desktop, f"desktop entry: {desktop}")
-        require((app_dir / "Smoke_Game.png").read_bytes().startswith(b"\x89PNG") and (app_dir / "Project.bproject").is_file(), "AppDir contents")
-        if exported.get("warnings"):
-            require(package == app_dir and "appimagetool was not found" in exported["warnings"][0], f"unexpected warnings {exported}")
+        require((app_dir / "Project.bproject").is_file(), "AppDir contents")
+        # The project icon padded to a square, or Basalt's default icon (with a warning).
+        require(png_size(app_dir / "Smoke_Game.png") == ((300, 300) if has_icon else (256, 256)), f"AppDir icon size {png_size(app_dir / 'Smoke_Game.png')}")
+        require(has_icon != any("uses Basalt's default icon" in warning for warning in warnings), f"default icon warning: {warnings}")
+        missing_tool = any("appimagetool was not found" in warning for warning in warnings)
+        if missing_tool:
+            require(package == app_dir and not os.environ.get("APPIMAGETOOL"), f"no AppImage although APPIMAGETOOL is set: {exported}")
         else:
-            require(package.suffix == ".AppImage" and package.is_file(), f"no AppImage: {exported}")
+            require(package == output / "Smoke_Game-2.5.0.7-x86_64.AppImage" and package.is_file(), f"no AppImage: {exported}")
 
 
 def main():
@@ -192,6 +217,9 @@ def main():
         # A game that hangs is stopped at the timeout and reported as such.
         (project / "Assets" / "Scripts" / "Spin.lua").write_text(HANGING_SCRIPT)
         ok("project.export", {"output": str(output)})
+        if sys.platform == "darwin":
+            # A folder export's manifest reaches the MoltenVK next to the executable.
+            check_manifest(output / "vulkan" / "icd.d" / "MoltenVK_icd.json", output / "libMoltenVK.dylib")
         hung = ok("project.smoke_test", {"executable": str(executable), "frames": 10, "timeout": 1})
         require(not hung["passed"] and hung["outcome"] == "timedOut" and hung["exitCode"] is None and "was stopped" in hung["summary"], f"a hanging game: {hung}")
 
@@ -201,16 +229,32 @@ def main():
         write_png(project / "Assets" / "Textures" / "Icon.png", 300, 200)
         ok("project.set", {"version": "2.5.0.7", "company": "Smoke Studio", "icon": "Assets/Textures/Icon.png"})
         require(ok("project.validate")["warnings"] == 0, "a 300 x 200 icon is large enough")
-        package_output = Path(temp, "Packaged Build")
+        # Non-ASCII where the platform's CLI arguments can carry it (the Windows CLI reads narrow arguments).
+        package_output = Path(temp, "Packaged Build" if sys.platform == "win32" else "Packaged Build \u00e9")
         packaged = ok("project.export", {"output": str(package_output), "package": True, "smokeTestFrames": 10})
         require(packaged["smokeTest"]["passed"], f"packaged smoke test: {packaged['smokeTest']}")
         check_package(packaged, package_output)
         rerun = ok("project.smoke_test", {"executable": packaged["executable"], "frames": 5, "assertPassed": True})
         require(rerun["passed"], f"the package does not run after checking it: {rerun}")
-        # Exporting again replaces the package (the output is recognized as a previous export).
+        # Exporting again replaces the package (the output is recognized as a previous export), leaving nothing stale.
+        project_file = Path(packaged["executable"]).parent / "Project.bproject"
+        if sys.platform == "darwin":
+            project_file = Path(packaged["package"]) / "Contents" / "Resources" / "Project.bproject"
+        stale = project_file.parent / "Assets" / "Stale.txt"
+        stale.write_text("from an earlier export")
         again = ok("project.export", {"output": str(package_output), "package": True})
-        require(again["package"] == packaged["package"], f"re-export moved the package: {again}")
+        require(again["package"] == packaged["package"] and not stale.exists(), f"re-export moved the package or kept a stale file: {again}")
         fails("project.export", {"output": str(package_output), "appImageTool": "appimagetool"}, "appImageTool needs package: true")
+        # An icon that no longer decodes stops the export before it touches the previous package.
+        icon_bytes = (project / "Assets" / "Textures" / "Icon.png").read_bytes()
+        (project / "Assets" / "Textures" / "Icon.png").write_bytes(b"\x89PNG\r\n\x1a\nbroken")
+        fails("project.export", {"output": str(package_output), "package": True, "validate": False}, "cannot decode icon")
+        require(project_file.is_file(), "a refused export removed the previous package")
+        (project / "Assets" / "Textures" / "Icon.png").write_bytes(icon_bytes)
+        # Without an icon: no icon file or resource, and Basalt's icon in an AppImage.
+        ok("project.set", {"icon": ""})
+        plain = ok("project.export", {"output": str(package_output), "package": True, "smokeTestFrames": 5})
+        check_package(plain, package_output, has_icon=False)
 
         # A missing asset is caught before anything is exported.
         (project / "Assets" / "Scripts" / "Spin.lua").write_text(GOOD_SCRIPT)

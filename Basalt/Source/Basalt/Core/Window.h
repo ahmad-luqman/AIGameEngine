@@ -22,12 +22,12 @@ namespace Basalt {
 		bool Visible = true;
 	};
 
-	// One size of a window icon: RGBA8 pixels, top row first, owned by the caller.
+	// One size of a window icon: Width x Height RGBA8 pixels, top row first, owned by the caller.
 	struct WindowIcon
 	{
 		uint32_t Width = 0;
 		uint32_t Height = 0;
-		const uint8_t* Pixels = nullptr;
+		std::span<const uint8_t> Pixels;
 	};
 
 	// GLFW window without a client API; the swapchain is owned by the GraphicsDevice.
@@ -57,7 +57,8 @@ namespace Basalt {
 		// False where windows have no icon of their own: macOS shows the app bundle's icon and Wayland the desktop
 		// entry's (GLFW reports an error there).
 		bool SupportsIcon() const;
-		// Several sizes of one icon; the window system picks the closest to each use. Ignored where !SupportsIcon().
+		// Several sizes of one icon; the window system picks the closest to each use (none restores the default icon).
+		// Ignored where !SupportsIcon().
 		void SetIcon(std::span<const WindowIcon> images);
 		const std::string& GetTitle() const { return m_Data.Title; }
 		void SetEventCallback(const EventCallbackFn& callback) { m_Data.EventCallback = callback; }
