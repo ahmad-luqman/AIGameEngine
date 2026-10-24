@@ -247,6 +247,14 @@ namespace Basalt {
 			outError = normalized + ".meta: " + problem->second;
 			return std::nullopt;
 		}
+		// A mounted archive's files exist only in it, with the UUIDs its index holds; no sidecar is ever written for them.
+		if (FileSystem::GetMountedArchive(m_Root))
+		{
+			if (const auto it = m_IDs.find(normalized); it != m_IDs.end())
+				return UUID(it->second);
+			outError = FileSystem::FindMounted(absolute) ? "asset has no UUID in the mounted archive: " + path : "asset does not exist: " + path;
+			return std::nullopt;
+		}
 		std::error_code error;
 		if (!std::filesystem::is_regular_file(absolute, error))
 		{
@@ -405,6 +413,16 @@ namespace Basalt {
 		// Legacy references outside the registry's domain remain editable strings, including literal '#' names.
 		if (!CheckPath(source, absolute, ignored))
 			return true;
+		// An archived file is referenced by its index UUID when it has one, else by path (Encode never writes sidecars there).
+		if (FileSystem::GetMountedArchive(m_Root))
+		{
+			if (!m_Indexed && !Refresh(outError))
+				return false;
+			const auto it = m_IDs.find(FileSystem::PathToGenericUtf8(absolute.lexically_relative(m_Root)));
+			if (it != m_IDs.end())
+				value = { { "UUID", std::to_string(it->second) }, { "Path", path } };
+			return true;
+		}
 		std::error_code error;
 		if (!std::filesystem::is_regular_file(absolute, error))
 		{

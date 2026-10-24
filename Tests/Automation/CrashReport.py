@@ -1,8 +1,9 @@
 """Crashes a process on purpose and checks its crash report (ctest CrashReport).
 
 Runs `BasaltTests --basalt-child crash-report <kind>` (Tests/Source/TestMain.cpp), which installs the crash reporter,
-logs a sentinel line and crashes: an invalid memory access, abort(), an uncaught C++ exception, a trap, a stack overflow
-and an invalid memory access on a worker thread. Each run must die by its signal on macOS and Linux (the reporter
+logs a sentinel line and crashes: an invalid memory access, abort(), an uncaught C++ exception (a std::exception and an
+int), a pure virtual call, an invalid C runtime parameter (Windows), a trap, a stack overflow and invalid memory accesses
+on worker threads. The child installs the reporter twice, from two threads at once, and fails if the calls disagree. Each run must die by its signal on macOS and Linux (the reporter
 re-raises it), or with the exception code or the C runtime's abort code 3 on Windows, and leave exactly one report in
 <user data>/CrashChild/Crashes naming the reason, with a stack trace, the context line and the last log lines; Windows
 reports add a minidump. More runs check the report folders: a user data directory whose ancestors do not exist yet (they
@@ -24,11 +25,17 @@ REASONS = {
     "segv": ["EXCEPTION_ACCESS_VIOLATION"] if WINDOWS else ["SIGSEGV", "SIGBUS"],
     "abort": ["SIGABRT"],
     "terminate": ["SIGABRT"],
+    "throw-int": ["SIGABRT"],
+    "purecall": ["a pure virtual function call"] if WINDOWS else ["SIGABRT"],
     "trap": ["EXCEPTION_BREAKPOINT"] if WINDOWS else ["SIGTRAP", "SIGILL"],
     "stackoverflow": ["EXCEPTION_STACK_OVERFLOW"] if WINDOWS else ["SIGSEGV", "SIGBUS"],
     "thread-segv": ["EXCEPTION_ACCESS_VIOLATION"] if WINDOWS else ["SIGSEGV", "SIGBUS"],
     "two-thread-segv": ["EXCEPTION_ACCESS_VIOLATION"] if WINDOWS else ["SIGSEGV", "SIGBUS"],
 }
+if WINDOWS:
+    REASONS["invalid-parameter"] = ["an invalid parameter passed to a C runtime function"]
+# Kinds that end through abort() or a C runtime failure: exit code 3 on Windows.
+ABORTING = ("abort", "terminate", "throw-int", "purecall", "invalid-parameter")
 
 
 def fail(message):
@@ -47,8 +54,8 @@ def crash(tests, kind, user_data):
         fail(f"{kind}: the child exited cleanly")
     if not WINDOWS and run.returncode > 0:
         fail(f"{kind}: exit code {run.returncode}, not death by a signal (the reporter must re-raise it); stderr: {run.stderr}")
-    if WINDOWS and kind in ("abort", "terminate") and run.returncode != 3:
-        fail(f"{kind}: exit code {run.returncode}, not abort's 3")
+    if WINDOWS and kind in ABORTING and run.returncode != 3:
+        fail(f"{kind}: exit code {run.returncode}, not abort's 3; stderr: {run.stderr}")
     return run
 
 
@@ -69,6 +76,8 @@ def check_report(kind, run, folder):
         fail(f"{kind}: stack trace has {len(frames)} frames:\n{trace}")
     if kind == "terminate" and "Uncaught exception: crash-test exception" not in report:
         fail(f"{kind}: the uncaught exception's message is missing:\n{report}")
+    if kind == "throw-int" and "Uncaught exception: an exception that is not a std::exception" not in report:
+        fail(f"{kind}: the uncaught exception is not named:\n{report}")
     if "CrashChild crashed" not in run.stderr or reports[0].name not in run.stderr or "incomplete" in run.stderr:
         fail(f"{kind}: stderr does not point at a complete report: {run.stderr}")
     if WINDOWS:

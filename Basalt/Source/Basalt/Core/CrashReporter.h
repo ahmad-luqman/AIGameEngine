@@ -10,9 +10,26 @@
 
 namespace Basalt {
 
+	namespace CrashTextDetail {
+		// How much of kept, the part of a cut text before its first dropped byte next, to keep so it does not end inside a
+		// UTF-8 sequence (which a report viewer would show as a broken character).
+		inline size_t TrimPartialUtf8(std::string_view kept, char next)
+		{
+			const auto continuation = [](char c) { return (static_cast<unsigned char>(c) & 0xC0) == 0x80; };
+			size_t length = kept.size();
+			if (!continuation(next))
+				return length;
+			while (length > 0 && continuation(kept[length - 1]))
+				length--;
+			// The sequence's lead byte goes too.
+			return length > 0 && (static_cast<unsigned char>(kept[length - 1]) & 0xC0) == 0xC0 ? length - 1 : length;
+		}
+	}
+
 	// Text built without allocating, for the crash handler: a crashed process may have a corrupt heap, or have crashed
-	// while another thread held the allocator's lock. Text past the capacity is dropped. Small capacities fit on a
-	// crashed thread's stack; the 32 KiB CrashText lives in static storage.
+	// while another thread held the allocator's lock. Text past the capacity is dropped, cut on a UTF-8 character
+	// boundary, and Truncated says so. Small capacities fit on a crashed thread's stack; the 32 KiB CrashText lives in
+	// static storage.
 	template<size_t CapacityValue>
 	class BasicCrashText
 	{
@@ -25,7 +42,12 @@ namespace Basalt {
 
 		void Append(std::string_view text)
 		{
-			const size_t length = std::min(text.size(), Capacity - m_Size);
+			size_t length = std::min(text.size(), Capacity - m_Size);
+			if (length < text.size())
+			{
+				m_Truncated = true;
+				length = CrashTextDetail::TrimPartialUtf8(text.substr(0, length), text[length]);
+			}
 			std::copy_n(text.begin(), length, m_Data + m_Size);
 			m_Size += length;
 			m_Data[m_Size] = '\0';
@@ -51,17 +73,21 @@ namespace Basalt {
 			Append(std::string_view(text, sizeof(text)));
 		}
 		std::string_view View() const { return { m_Data, m_Size }; }
+		// Whether some appended text was dropped since construction or the last Clear.
+		bool Truncated() const { return m_Truncated; }
 		// The text NUL-terminated, for C APIs (open, exec).
 		const char* CStr() const { return m_Data; }
 		void Clear()
 		{
 			m_Size = 0;
 			m_Data[0] = '\0';
+			m_Truncated = false;
 		}
 
 	private:
 		char m_Data[Capacity + 1] = {};
 		size_t m_Size = 0;
+		bool m_Truncated = false;
 	};
 	using CrashText = BasicCrashText<size_t{ 32 } * 1024>;
 
@@ -96,7 +122,8 @@ namespace Basalt {
 		// installed so far are then removed).
 		static bool Install(const CrashReporterOptions& options);
 		static bool IsInstalled();
-		// A line naming what was running, in every report from now on ("Project: Platformer 1.2.0"). Cut at 255 bytes.
+		// A line naming what was running, in every report from now on ("Project: Platformer 1.2.0"). Cut at 255 bytes, on
+		// a UTF-8 character boundary.
 		static void SetContext(std::string_view context);
 		// Shows a message box with the report's path after writing it: the windowed runtime enables it; tools, headless
 		// and automated runs never show one (nobody would close it).
@@ -116,8 +143,8 @@ namespace Basalt {
 		static void FormatHeader(CrashText& out, std::string_view reason, std::optional<uint64_t> address, uint64_t unixTime, uint64_t processId);
 		// The last MaxLogLines log lines, oldest first, one per line.
 		static void FormatLogLines(CrashText& out);
-		// Keeps a log line for reports ("[level] logger: text", cut at MaxLogLineLength bytes, line breaks as spaces).
-		// Install routes every log message here.
+		// Keeps a log line for reports ("[level] logger: text", cut at MaxLogLineLength bytes on a UTF-8 character boundary,
+		// line breaks as spaces). Install routes every log message here.
 		static void RecordLogLine(std::string_view level, std::string_view logger, std::string_view text);
 	};
 

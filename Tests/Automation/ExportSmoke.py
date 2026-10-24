@@ -284,6 +284,9 @@ def main():
         require(ok("archive.inspect", {"path": str(output / "Assets.bpak")}, None)["files"] == len(entries), "damaged data must not stop listing")
         fails("archive.inspect", {"path": str(output / "Assets.bpak"), "verify": True}, "damaged in the archive")
         (output / "Assets.bpak").write_bytes(intact)
+        # --project naming the project file (not its folder) mounts the archive beside it too, from any working folder.
+        by_file = subprocess.run([str(executable), "--project", str(output / "Project.bproject"), "--headless", "--frames", "5"], capture_output=True, text=True, errors="replace", timeout=300, env=env, cwd=temp)
+        require(by_file.returncode == 0 and "reading assets from" in by_file.stdout + by_file.stderr, f"--project <file> with an archive: {by_file.returncode} {by_file.stdout}{by_file.stderr}")
         # A damaged archive stops the game at start, saying why.
         damaged = bytearray(intact)
         damaged[-3] ^= 0xFF

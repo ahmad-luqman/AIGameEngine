@@ -95,6 +95,14 @@ namespace {
 			bytes[offset + i] = static_cast<uint8_t>(value >> (8 * i));
 	}
 
+	uint32_t ReadU32(const std::vector<uint8_t>& bytes, size_t offset)
+	{
+		uint32_t value = 0;
+		for (int i = 0; i < 4; i++)
+			value |= static_cast<uint32_t>(bytes[offset + i]) << (8 * i);
+		return value;
+	}
+
 	void WriteU32(std::vector<uint8_t>& bytes, size_t offset, uint32_t value)
 	{
 		for (int i = 0; i < 4; i++)
@@ -117,8 +125,7 @@ namespace {
 	size_t FirstEntryField(const std::vector<uint8_t>& bytes, size_t fieldOffset)
 	{
 		const size_t index = IndexOffset(bytes);
-		const uint32_t pathLength = static_cast<uint32_t>(bytes[index]) | (static_cast<uint32_t>(bytes[index + 1]) << 8);
-		return index + 4 + pathLength + fieldOffset;
+		return index + 4 + ReadU32(bytes, index) + fieldOffset;
 	}
 
 	// Asset ID, offset, stored size, size, method, hash: offsets after an entry's path.
@@ -145,28 +152,6 @@ namespace {
 		ScopedMount(const ScopedMount&) = delete;
 		ScopedMount& operator=(const ScopedMount&) = delete;
 	};
-
-	// 16-bit mono PCM WAV with a quiet square wave.
-	std::string MakeWav(uint32_t samples)
-	{
-		auto put32 = [](std::string& out, uint32_t value) { out.append(reinterpret_cast<const char*>(&value), 4); };
-		auto put16 = [](std::string& out, uint16_t value) { out.append(reinterpret_cast<const char*>(&value), 2); };
-		std::string wav = "RIFF";
-		put32(wav, 36 + samples * 2);
-		wav += "WAVEfmt ";
-		put32(wav, 16);
-		put16(wav, 1);
-		put16(wav, 1);
-		put32(wav, 22050);
-		put32(wav, 44100);
-		put16(wav, 2);
-		put16(wav, 16);
-		wav += "data";
-		put32(wav, samples * 2);
-		for (uint32_t i = 0; i < samples; i++)
-			put16(wav, static_cast<uint16_t>((i / 25) % 2 ? 4000 : -4000));
-		return wav;
-	}
 
 }
 
@@ -389,6 +374,25 @@ TEST_SUITE("Archive")
 		REQUIRE_MESSAGE(archive, error);
 		CHECK_FALSE(archive->Read(RequireEntry(*archive, "Assets/A.txt"), error));
 		CHECK(error.find("does not match the index") != std::string::npos);
+		// A compressed entry whose stored bytes run on into a second complete frame (the next entry's): the first frame
+		// alone declares the right size, so only the whole-frame check refuses it.
+		{
+			const std::vector<uint8_t> twoFrames = BuildArchive({ { "Assets/A.txt", Repetitive(5000), 0 }, { "Assets/C.txt", Repetitive(3000), 0 } }, directory.GetPath() / "TwoFrames.bpak");
+			const Ref<PackArchive> original = PackArchive::OpenMemory(twoFrames, error);
+			REQUIRE_MESSAGE(original, error);
+			const PackArchive::Entry& first = RequireEntry(*original, "Assets/A.txt");
+			const PackArchive::Entry& second = RequireEntry(*original, "Assets/C.txt");
+			REQUIRE((first.Compression == PackArchive::Method::Zstd && second.Compression == PackArchive::Method::Zstd));
+			REQUIRE(second.Offset == first.Offset + first.StoredSize);
+			bytes = twoFrames;
+			WriteU64(bytes, FirstEntryField(bytes, StoredSizeField), first.StoredSize + second.StoredSize);
+			RehashIndex(bytes);
+			archive = PackArchive::OpenMemory(bytes, error);
+			REQUIRE_MESSAGE(archive, error);
+			CHECK_FALSE(archive->Read(RequireEntry(*archive, "Assets/A.txt"), error));
+			CHECK(error.find("does not match the index") != std::string::npos);
+			CHECK(archive->Read(RequireEntry(*archive, "Assets/C.txt"), error));
+		}
 
 		// Read only accepts this archive's own entries, whose sizes Parse bounded.
 		const Ref<PackArchive> other = PackArchive::OpenMemory(valid, error);
@@ -505,6 +509,32 @@ TEST_SUITE("Archive")
 		CHECK(error.find("no such file") == std::string::npos);
 	}
 
+	TEST_CASE("Prefix reads return exactly the asked bytes, from disk and from a mounted archive")
+	{
+		BasaltTest::TempDirectory directory("ArchivePrefix");
+		const std::filesystem::path root = directory.GetPath() / "Game";
+		REQUIRE(FileSystem::WriteTextFile(root / "Assets" / "Disk.txt", "0123456789"));
+		BuildArchive({ { "Assets/Packed.txt", Repetitive(5000), 0 } }, directory.GetPath() / "Assets.bpak");
+		std::string error;
+		const Ref<PackArchive> archive = PackArchive::Open(directory.GetPath() / "Assets.bpak", error);
+		REQUIRE_MESSAGE(archive, error);
+		ScopedMount mount(root, archive);
+
+		CHECK(FileSystem::ReadBinaryFilePrefix(root / "Assets" / "Disk.txt", 4) == Bytes("0123"));
+		CHECK(FileSystem::ReadBinaryFilePrefix(root / "Assets" / "Disk.txt", 10) == Bytes("0123456789"));
+		CHECK(FileSystem::ReadBinaryFilePrefix(root / "Assets" / "Disk.txt", 0) == Bytes("0123456789"));
+		CHECK_FALSE(FileSystem::ReadBinaryFilePrefix(root / "Assets" / "Disk.txt", 11, &error));
+		CHECK(error == "shorter than the 11 bytes to read");
+		CHECK_FALSE(FileSystem::ReadBinaryFilePrefix(root / "Assets" / "Missing.txt", 1, &error));
+		CHECK(error == "no such file");
+
+		const std::vector<uint8_t> packed = Repetitive(5000);
+		CHECK(FileSystem::ReadBinaryFilePrefix(root / "Assets" / "Packed.txt", 100) == std::vector<uint8_t>(packed.begin(), packed.begin() + 100));
+		CHECK(FileSystem::ReadBinaryFilePrefix(root / "Assets" / "Packed.txt", 0) == packed);
+		CHECK_FALSE(FileSystem::ReadBinaryFilePrefix(root / "Assets" / "Packed.txt", 5001, &error));
+		CHECK(error == "shorter than the 5001 bytes to read");
+	}
+
 	TEST_CASE("An archived export loads its scenes, models, textures, fonts, scripts and audio from the archive")
 	{
 		BasaltTest::TempProject temp("ArchiveExport");
@@ -543,7 +573,7 @@ TEST_SUITE("Archive")
 		std::filesystem::copy_file(std::filesystem::path(BASALT_TEST_DATA_DIR) / "Textures" / "UASTC.ktx2", assets / "Textures" / "UASTC.ktx2", copyError);
 		std::filesystem::copy_file(std::filesystem::path(BASALT_TEST_DATA_DIR) / "FeatureTest" / "Assets" / "Fonts" / "Karla-Regular.ttf", assets / "Fonts" / "Karla.ttf", copyError);
 		REQUIRE_FALSE(copyError);
-		temp.WriteFile("Assets/Audio/Beep.wav", MakeWav(11025));
+		temp.WriteFile("Assets/Audio/Beep.wav", BasaltTest::MakeWav(0.5f));
 		temp.WriteFile("Assets/Scripts/Lib/Util.lua", "return { Triple = function(x) return 3 * x end }");
 		temp.WriteFile("Assets/Scripts/Pkg/init.lua", "return { Name = 'package' }");
 		temp.WriteFile("Assets/Scripts/Lib/Bad.lua", "return {");
@@ -596,6 +626,12 @@ TEST_SUITE("Archive")
 			const Ref<PackArchive> archive = PackArchive::Open(output / Project::ArchiveFileName, error);
 			REQUIRE_MESSAGE(archive, error);
 			CHECK(result.ArchiveStatistics->Entries == archive->GetEntries().size());
+			// The opened archive's totals match what the writer reported.
+			const PackArchiveStatistics opened = archive->GetStatistics();
+			CHECK(opened.Entries == result.ArchiveStatistics->Entries);
+			CHECK(opened.CompressedEntries == result.ArchiveStatistics->CompressedEntries);
+			CHECK(opened.UncompressedSize == result.ArchiveStatistics->UncompressedSize);
+			CHECK(opened.ArchiveSize == result.ArchiveStatistics->ArchiveSize);
 			for (const PackArchive::Entry& entry : archive->GetEntries())
 			{
 				CHECK_MESSAGE(entry.Path.starts_with("Assets/"), entry.Path);
@@ -647,6 +683,20 @@ TEST_SUITE("Archive")
 		// The start scene was stored by UUID; only the archive's index can resolve it (there are no .meta files).
 		CHECK(exported->GetConfig().StartScene == "Assets/Scenes/Main.bscene");
 		CHECK(exported->GetAssets().Find(*clipID) == "Assets/Audio/Beep.wav");
+		// Ensure and Encode answer from the index too, and never write a sidecar beside the archive.
+		const auto ensured = exported->GetAssets().Ensure("Assets/Audio/Beep.wav", error);
+		REQUIRE_MESSAGE(ensured, error);
+		CHECK(static_cast<uint64_t>(*ensured) == static_cast<uint64_t>(*clipID));
+		CHECK_FALSE(exported->GetAssets().Ensure("Assets/Textures/Icon.png", error));
+		CHECK(error.find("no UUID in the mounted archive") != std::string::npos);
+		CHECK_FALSE(exported->GetAssets().Ensure("Assets/Textures/Missing.png", error));
+		CHECK(error.find("asset does not exist") != std::string::npos);
+		CHECK_FALSE(FileSystem::Exists(output / "Assets" / "Textures" / "Icon.png.meta"));
+		nlohmann::json encoded;
+		REQUIRE_MESSAGE(exported->GetAssets().Encode("Assets/Audio/Beep.wav", encoded, error), error);
+		CHECK(encoded == nlohmann::json{ { "UUID", std::to_string(static_cast<uint64_t>(*clipID)) }, { "Path", "Assets/Audio/Beep.wav" } });
+		REQUIRE_MESSAGE(exported->GetAssets().Encode("Assets/Textures/Icon.png", encoded, error), error);
+		CHECK(encoded == "Assets/Textures/Icon.png");
 
 		const Ref<Scene> scene = SceneSerializer::LoadScene(Project::ResolvePath(exported->GetConfig().StartScene), error);
 		REQUIRE_MESSAGE(scene, error);
@@ -670,11 +720,7 @@ TEST_SUITE("Archive")
 		CHECK_FALSE(FileSystem::ReadBinaryFile(output / "Assets" / "textures" / "Icon.png"));
 
 		{
-			struct HeadlessAudio
-			{
-				HeadlessAudio() { REQUIRE(AudioEngine::Init(true, {})); }
-				~HeadlessAudio() { AudioEngine::Shutdown(); }
-			} audio;
+			const BasaltTest::HeadlessAudio audio;
 			scene->OnRuntimeStart();
 			REQUIRE(scene->GetAudioSystem());
 			CHECK(scene->GetAudioSystem()->IsPlaying(speaker));

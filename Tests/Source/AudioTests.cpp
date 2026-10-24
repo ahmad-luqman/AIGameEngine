@@ -32,43 +32,8 @@ using namespace Basalt;
 
 namespace {
 
-	// 16-bit mono PCM WAV containing a sine tone.
-	std::string MakeWav(float seconds, uint32_t sampleRate = 22050, double frequency = 440.0)
-	{
-		const uint32_t samples = static_cast<uint32_t>(seconds * static_cast<float>(sampleRate));
-		std::vector<int16_t> pcm(samples);
-		for (uint32_t i = 0; i < samples; i++)
-			pcm[i] = static_cast<int16_t>(8000.0 * std::sin(2.0 * 3.14159265 * frequency * i / sampleRate));
-
-		auto put32 = [](std::string& out, uint32_t value) { out.append(reinterpret_cast<const char*>(&value), 4); };
-		auto put16 = [](std::string& out, uint16_t value) { out.append(reinterpret_cast<const char*>(&value), 2); };
-		const uint32_t dataBytes = samples * 2;
-		std::string wav = "RIFF";
-		put32(wav, 36 + dataBytes);
-		wav += "WAVEfmt ";
-		put32(wav, 16);
-		put16(wav, 1);
-		put16(wav, 1);
-		put32(wav, sampleRate);
-		put32(wav, sampleRate * 2);
-		put16(wav, 2);
-		put16(wav, 16);
-		wav += "data";
-		put32(wav, dataBytes);
-		wav.append(reinterpret_cast<const char*>(pcm.data()), dataBytes);
-		return wav;
-	}
-
-	// The device-less engine for one test case, shut down even when a REQUIRE ends the case early. Declare it
-	// before the scene so the scene's sounds are released first.
-	struct HeadlessAudio
-	{
-		explicit HeadlessAudio(const AudioDevicelessFormat& format = {}) { REQUIRE(AudioEngine::Init(true, format)); }
-		~HeadlessAudio() { AudioEngine::Shutdown(); }
-
-		HeadlessAudio(const HeadlessAudio&) = delete;
-		HeadlessAudio& operator=(const HeadlessAudio&) = delete;
-	};
+	using BasaltTest::HeadlessAudio;
+	using BasaltTest::MakeWav;
 
 	// The device-less engine's default format: 48 kHz, interleaved stereo (two samples per frame).
 	constexpr size_t FramesPerSecond = 48000;

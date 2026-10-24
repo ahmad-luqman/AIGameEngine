@@ -305,7 +305,21 @@ namespace Basalt {
 		}
 		m_Entries = std::move(entries);
 		m_ByAsset = std::move(byAsset);
+		m_ArchiveSize = fileSize;
 		return true;
+	}
+
+	PackArchiveStatistics PackArchive::GetStatistics() const
+	{
+		PackArchiveStatistics statistics;
+		statistics.Entries = static_cast<uint32_t>(m_Entries.size());
+		for (const Entry& entry : m_Entries)
+		{
+			statistics.CompressedEntries += entry.Compression == Method::Zstd ? 1 : 0;
+			statistics.UncompressedSize += entry.Size;
+		}
+		statistics.ArchiveSize = m_ArchiveSize;
+		return statistics;
 	}
 
 	const PackArchive::Entry* PackArchive::Find(std::string_view path) const

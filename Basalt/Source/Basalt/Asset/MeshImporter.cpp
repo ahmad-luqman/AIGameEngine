@@ -75,33 +75,9 @@ namespace Basalt {
 			std::string Error;
 		};
 
-		// Reads exactly size bytes from the start of a file on disk (all of it for size 0), as cgltf's own reader does, so
-		// CheckBufferSizes' bounds on the declared sizes are the bounds on what is read.
-		std::optional<std::vector<uint8_t>> ReadFilePrefix(const std::filesystem::path& file, cgltf_size size, std::string& outError)
-		{
-			if (size == 0)
-				return FileSystem::ReadBinaryFile(file, &outError);
-			std::error_code error;
-			const std::optional<uint64_t> available = FileSystem::GetRegularFileSize(file, error);
-			if (!available || *available < size)
-			{
-				outError = error ? error.message() : !available ? std::string("no such file")
-																: "shorter than the " + std::to_string(size) + " bytes its buffer declares";
-				return std::nullopt;
-			}
-			std::ifstream stream(file, std::ios::in | std::ios::binary);
-			std::vector<uint8_t> bytes(size);
-			if (!stream.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size)))
-			{
-				outError = "reading it failed";
-				return std::nullopt;
-			}
-			return bytes;
-		}
-
-		// cgltf reads the glTF and its external buffers through this callback: a file in a mounted archive comes from
-		// FileSystem::ReadMounted (buffers' files once per load), any other from disk, so a model in an archive loads like one
-		// on disk. Paths are UTF-8: LoadGltfData and Inspect pass PathToUtf8, and cgltf joins the URIs to them byte-wise.
+		// cgltf reads the glTF and its external buffers through this callback: a buffer's file in a mounted archive comes from
+		// FileSystem::ReadMounted (once per load), anything else through FileSystem::ReadBinaryFilePrefix (from disk, only the
+		// declared bytes), so a model in an archive loads like one on disk. Paths are UTF-8: LoadGltfData and Inspect pass PathToUtf8, and cgltf joins the URIs to them byte-wise.
 		// size is the buffer's declared byteLength (0: the whole file), and only that much is kept. Called from cgltf (C):
 		// no exception may leave it.
 		cgltf_result ReadGltfFile(const cgltf_memory_options*, const cgltf_file_options* options, const char* path, cgltf_size* size, void** data)
@@ -130,7 +106,7 @@ namespace Basalt {
 				}
 				else
 				{
-					readBytes = mounted ? FileSystem::ReadMounted(mounted, &cache.Error) : ReadFilePrefix(file, *size, cache.Error);
+					readBytes = FileSystem::ReadBinaryFilePrefix(file, *size, &cache.Error);
 					if (!readBytes)
 						return mounted || FileSystem::Exists(file) ? cgltf_result_io_error : cgltf_result_file_not_found;
 					bytes = &*readBytes;
