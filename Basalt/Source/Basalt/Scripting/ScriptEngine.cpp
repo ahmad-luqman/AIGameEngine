@@ -121,25 +121,29 @@ namespace Basalt {
 					if (!file)
 					{
 						// require puts "\n\t" before each searcher's message; the lines within one are joined the same way.
-						outText += (outText.empty() ? "" : "\n\t") + std::string("no file '") + candidate + "'";
+						if (!outText.empty())
+							outText += "\n\t";
+						outText += "no file '";
+						outText += candidate;
+						outText += '\'';
 						continue;
 					}
+					const auto failed = [&](std::string_view reason) {
+						outText = "error loading module '" + std::string(name) + "' from file '" + candidate + "':\n\t" + std::string(reason);
+						return ModuleOutcome::LoadFailed;
+					};
 					std::string readError;
 					const auto source = FileSystem::ReadMounted(file, &readError);
-					const std::string prefix = "error loading module '" + std::string(name) + "' from file '" + candidate + "':\n\t";
 					if (!source)
-					{
-						outText = prefix + readError;
-						return ModuleOutcome::LoadFailed;
-					}
+						return failed(readError);
 					const std::string_view chunk = SkipFilePrefix(std::string_view(reinterpret_cast<const char*>(source->data()), source->size()));
 					const std::string chunkName = "@" + candidate;
 					if (luaL_loadbuffer(state, chunk.data(), chunk.size(), chunkName.c_str()) != LUA_OK)
 					{
 						const char* message = lua_tostring(state, -1);
-						outText = prefix + (message ? message : "?");
+						const std::string reason = message ? message : "?";
 						lua_pop(state, 1);
-						return ModuleOutcome::LoadFailed;
+						return failed(reason);
 					}
 					outText = candidate;
 					return ModuleOutcome::Loaded;
@@ -151,6 +155,14 @@ namespace Basalt {
 				outText = std::string("error loading module '") + name + "': " + exception.what();
 				return ModuleOutcome::LoadFailed;
 			}
+		}
+
+		// Pushes the std::string its light userdata argument points to (called protected, see SearchMountedModules).
+		int PushText(lua_State* state)
+		{
+			const auto* text = static_cast<const std::string*>(lua_touserdata(state, 1));
+			lua_pushlstring(state, text->data(), text->size());
+			return 1;
 		}
 
 		// A package.searchers entry ahead of Lua's file searcher, which only sees the disk: modules inside a mounted
@@ -169,13 +181,9 @@ namespace Basalt {
 				std::string text;
 				outcome = FindMountedModule(state, name, path, text);
 				// Copied onto the Lua stack inside a protected call, so a memory error there cannot skip text's destructor.
-				lua_pushcfunction(state, [](lua_State* inner) {
-					lua_pushlstring(inner, static_cast<const char*>(lua_touserdata(inner, 1)), static_cast<size_t>(lua_tointeger(inner, 2)));
-					return 1;
-				});
-				lua_pushlightuserdata(state, text.data());
-				lua_pushinteger(state, static_cast<lua_Integer>(text.size()));
-				if (lua_pcall(state, 2, 1, 0) != LUA_OK)
+				lua_pushcfunction(state, &PushText);
+				lua_pushlightuserdata(state, &text);
+				if (lua_pcall(state, 1, 1, 0) != LUA_OK)
 				{
 					// The pcall left its error message; with text gone, report that instead.
 					outcome = ModuleOutcome::LoadFailed;
@@ -220,10 +228,11 @@ namespace Basalt {
 		// Loads a script file and returns its class table.
 		std::optional<sol::table> LoadScriptClass(sol::state& lua, const std::string& scriptPath, std::string& outError)
 		{
-			const auto source = FileSystem::ReadTextFile(Project::ResolvePath(scriptPath));
+			std::string readError;
+			const auto source = FileSystem::ReadTextFile(Project::ResolvePath(scriptPath), &readError);
 			if (!source)
 			{
-				outError = "cannot read script '" + scriptPath + "'";
+				outError = "cannot read script '" + scriptPath + "' (" + readError + ")";
 				return std::nullopt;
 			}
 
@@ -1397,10 +1406,11 @@ namespace Basalt {
 
 	bool ScriptEngine::CheckSyntax(const std::string& scriptPath, std::string& outError)
 	{
-		const auto source = FileSystem::ReadTextFile(Project::ResolvePath(scriptPath));
+		std::string readError;
+		const auto source = FileSystem::ReadTextFile(Project::ResolvePath(scriptPath), &readError);
 		if (!source)
 		{
-			outError = "cannot read script '" + scriptPath + "'";
+			outError = "cannot read script '" + scriptPath + "' (" + readError + ")";
 			return false;
 		}
 		sol::state lua{ sol::default_at_panic, &MemoryTracker::LuaAllocator };

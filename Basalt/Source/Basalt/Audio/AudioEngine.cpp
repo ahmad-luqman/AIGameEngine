@@ -90,6 +90,7 @@ namespace Basalt {
 				const FileSystem::MountedFile mounted = (openMode & MA_OPEN_MODE_WRITE) == 0 ? FileSystem::FindMounted(std::filesystem::path(pathText)) : FileSystem::MountedFile{};
 				if (mounted)
 				{
+					// No reason can travel through miniaudio's result code: the log gets it (ReadMounted without outError).
 					auto data = FileSystem::ReadMounted(mounted);
 					if (!data)
 						return MA_IO_ERROR;
@@ -100,10 +101,26 @@ namespace Basalt {
 				*outFile = file.release();
 				return MA_SUCCESS;
 			}
+			catch (const std::bad_alloc&)
+			{
+				return MA_OUT_OF_MEMORY;
+			}
 			catch (const std::exception& exception)
 			{
-				BS_CORE_ERROR("AudioEngine: cannot open an audio file: {}", exception.what());
-				return MA_OUT_OF_MEMORY;
+				// Naming the file converts its path again, which may be what threw.
+				try
+				{
+					BS_CORE_ERROR("AudioEngine: cannot open '{}': {}", FileSystem::PathToUtf8(std::filesystem::path(pathText)), exception.what());
+				}
+				catch (...)
+				{
+					BS_CORE_ERROR("AudioEngine: cannot open an audio file: {}", exception.what());
+				}
+				return MA_IO_ERROR;
+			}
+			catch (...)
+			{
+				return MA_IO_ERROR;
 			}
 		}
 

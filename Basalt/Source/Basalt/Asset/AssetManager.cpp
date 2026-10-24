@@ -112,7 +112,7 @@ namespace Basalt {
 			const auto text = FileSystem::ReadTextFile(Project::ResolvePath(key), &readError);
 			if (!text)
 			{
-				outError = "cannot read material '" + key + "'" + (readError.empty() ? std::string() : " (" + readError + ")");
+				outError = "cannot read material '" + key + "' (" + readError + ")";
 				return nullptr;
 			}
 			std::vector<std::string> warnings;
@@ -160,9 +160,10 @@ namespace Basalt {
 
 		Ref<const AnimationGraph> LoadAnimationGraph(const std::string& key, std::string& outError)
 		{
-			const auto text = FileSystem::ReadTextFile(Project::ResolvePath(key));
+			std::string readError;
+			const auto text = FileSystem::ReadTextFile(Project::ResolvePath(key), &readError);
 			if (!text)
-				outError = "cannot read animation graph '" + key + "'";
+				outError = "cannot read animation graph '" + key + "' (" + readError + ")";
 			else
 			{
 				const auto data = ParseJson(*text, outError);

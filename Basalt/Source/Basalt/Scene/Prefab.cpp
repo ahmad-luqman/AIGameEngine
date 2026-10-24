@@ -797,10 +797,11 @@ namespace Basalt {
 	bool Prefab::ReadFile(const std::filesystem::path& path, json& outEntities, std::string& outError)
 	{
 		const std::string name = FileSystem::PathToGenericUtf8(path);
-		const auto text = FileSystem::ReadTextFile(path);
+		std::string readError;
+		const auto text = FileSystem::ReadTextFile(path, &readError);
 		if (!text)
 		{
-			outError = "cannot read prefab '" + name + "'";
+			outError = "cannot read prefab '" + name + "' (" + readError + ")";
 			return false;
 		}
 		json data = ParseJson(*text);

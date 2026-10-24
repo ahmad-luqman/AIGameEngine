@@ -28,6 +28,7 @@ namespace Basalt {
 			const size_t length = std::min(text.size(), Capacity - m_Size);
 			std::copy_n(text.begin(), length, m_Data + m_Size);
 			m_Size += length;
+			m_Data[m_Size] = '\0';
 		}
 		void AppendDecimal(uint64_t value)
 		{
@@ -51,12 +52,12 @@ namespace Basalt {
 		}
 		std::string_view View() const { return { m_Data, m_Size }; }
 		// The text NUL-terminated, for C APIs (open, exec).
-		const char* CStr()
+		const char* CStr() const { return m_Data; }
+		void Clear()
 		{
-			m_Data[m_Size] = '\0';
-			return m_Data;
+			m_Size = 0;
+			m_Data[0] = '\0';
 		}
-		void Clear() { m_Size = 0; }
 
 	private:
 		char m_Data[Capacity + 1] = {};
@@ -66,8 +67,9 @@ namespace Basalt {
 
 	struct CrashReporterOptions
 	{
-		// Names the report folder (<user data>/<name>/Crashes) and appears in reports. Characters that would leave that
-		// folder ('/', '\', ':') are dropped and the name is cut at 127 bytes; "Basalt" when nothing usable is left.
+		// Names the report folder (<user data>/<name>/Crashes) and appears in reports. Control characters and characters
+		// that would leave that folder or that Windows refuses (/ \ : < > " | ? *) are dropped, trailing dots and spaces
+		// too, and the name is cut at 127 bytes on a UTF-8 character boundary; "Basalt" when nothing is left.
 		std::string ApplicationName;
 	};
 
@@ -78,9 +80,10 @@ namespace Basalt {
 	// so a signed app bundle or a read-only install is normally left alone); only when there is no user data directory, or
 	// the report cannot be created there, are they tried in CrashReports next to the executable. Everything the handler
 	// uses is prepared beforehand: it formats into fixed buffers and, on macOS and Linux, allocates nothing and never forks
-	// (backtrace's unwinder is loaded at Install), on an alternate stack for the thread that installed it. Then the process
-	// dies as it would have without the reporter: the same signal or exception code, or exit code 3 after abort, an invalid
-	// C runtime parameter or a pure virtual call on Windows.
+	// (the dialog starts through posix_spawn, and backtrace's unwinder is loaded at Install), on an alternate stack for the
+	// thread that installed it. Then the process ends: by the same signal or exception code, or with the C runtime's abort
+	// code 3 after abort, an invalid C runtime parameter or a pure virtual call on Windows (where it would otherwise fail
+	// fast with 0xC0000409).
 	class CrashReporter
 	{
 	public:
@@ -89,7 +92,8 @@ namespace Basalt {
 
 		// Installs the handlers (once per process; later and concurrent calls return the first call's result). False when
 		// crash reports are unavailable: under AddressSanitizer, which reports these crashes itself and needs the signals
-		// for that, or when a signal handler cannot be installed (everything installed so far is then undone).
+		// for that, or when a signal handler cannot be installed (the signal handlers, terminate handler and log listener
+		// installed so far are then removed).
 		static bool Install(const CrashReporterOptions& options);
 		static bool IsInstalled();
 		// A line naming what was running, in every report from now on ("Project: Platformer 1.2.0"). Cut at 255 bytes.
@@ -97,10 +101,12 @@ namespace Basalt {
 		// Shows a message box with the report's path after writing it: the windowed runtime enables it; tools, headless
 		// and automated runs never show one (nobody would close it).
 		static void SetDialogEnabled(bool enabled);
-		// The folder reports go to; empty before Install.
+		// The folder reports go to; empty before Install, under AddressSanitizer and after a failed Install.
 		static std::filesystem::path GetReportDirectory();
 
 		// The parts of a report, shared by the handler and the tests.
+		// The folder name Install makes of CrashReporterOptions::ApplicationName (the rules are there).
+		static std::string SanitizeApplicationName(std::string_view name);
 		// "SIGSEGV (invalid memory access)" and the like; nullptr for a signal the reporter does not handle.
 		static const char* DescribeSignal(int signal);
 		// "EXCEPTION_ACCESS_VIOLATION (invalid memory access)" and the like, for Windows exception codes.

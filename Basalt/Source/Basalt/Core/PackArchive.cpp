@@ -10,7 +10,10 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
+#include <fstream>
 #include <functional>
+#include <new>
+#include <numeric>
 #include <system_error>
 
 namespace Basalt {
@@ -77,6 +80,33 @@ namespace Basalt {
 			PutU64(header, indexHash);
 			BS_CORE_ASSERT(header.size() == PackArchive::HeaderSize, "the header layout must match HeaderSize");
 			return header;
+		}
+
+		// A source file for the writer, from disk: its size is checked against MaxEntrySize before anything is allocated, and
+		// at most that many bytes are read (a file growing meanwhile cannot make the read larger).
+		std::optional<std::vector<uint8_t>> ReadSource(const std::filesystem::path& source, std::string& outError)
+		{
+			std::error_code error;
+			const bool regular = std::filesystem::is_regular_file(source, error);
+			const uint64_t size = regular && !error ? std::filesystem::file_size(source, error) : 0;
+			if (error || !regular)
+			{
+				outError = error ? error.message() : "not a file";
+				return std::nullopt;
+			}
+			if (size > PackArchive::MaxEntrySize)
+			{
+				outError = "larger than an archive entry may be (" + std::to_string(PackArchive::MaxEntrySize) + " bytes)";
+				return std::nullopt;
+			}
+			std::ifstream stream(source, std::ios::in | std::ios::binary);
+			std::vector<uint8_t> data(static_cast<size_t>(size));
+			if (!stream || !stream.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(size)))
+			{
+				outError = "reading it failed";
+				return std::nullopt;
+			}
+			return data;
 		}
 
 		std::string DescribeErrno()
@@ -310,6 +340,19 @@ namespace Basalt {
 			outError = "'" + entry.Path + "' is not an entry of this archive";
 			return std::nullopt;
 		}
+		try
+		{
+			return ReadChecked(entry, outError);
+		}
+		catch (const std::bad_alloc&)
+		{
+			outError = "'" + entry.Path + "' needs " + std::to_string(entry.Size) + " bytes, which cannot be allocated";
+			return std::nullopt;
+		}
+	}
+
+	std::optional<std::vector<uint8_t>> PackArchive::ReadChecked(const Entry& entry, std::string& outError) const
+	{
 		// A stored entry's StoredSize equals its Size (Parse checks it), so this reads the whole file either way.
 		std::vector<uint8_t> stored(static_cast<size_t>(entry.StoredSize));
 		if (!ReadRange(entry.Offset, entry.StoredSize, stored.data()))
@@ -402,6 +445,11 @@ namespace Basalt {
 
 	bool PackArchiveWriter::AddData(std::string path, std::vector<uint8_t> data, uint64_t assetID, std::string& outError)
 	{
+		if (data.size() > PackArchive::MaxEntrySize)
+		{
+			outError = "'" + path + "' is larger than an archive entry may be (" + std::to_string(PackArchive::MaxEntrySize) + " bytes)";
+			return false;
+		}
 		return AddPending({ std::move(path), {}, std::move(data), assetID }, outError);
 	}
 
@@ -409,8 +457,7 @@ namespace Basalt {
 	{
 		// Sorted indices rather than sorting m_Pending: Write leaves the writer as it was.
 		std::vector<size_t> order(m_Pending.size());
-		for (size_t i = 0; i < order.size(); i++)
-			order[i] = i;
+		std::iota(order.begin(), order.end(), size_t{ 0 });
 		std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return m_Pending[a].Path < m_Pending[b].Path; });
 
 		std::error_code error;
@@ -438,8 +485,8 @@ namespace Basalt {
 			return std::nullopt;
 		};
 
-		const std::vector<uint8_t> placeholder(PackArchive::HeaderSize, 0);
-		stream.write(reinterpret_cast<const char*>(placeholder.data()), static_cast<std::streamsize>(placeholder.size()));
+		const char placeholder[PackArchive::HeaderSize] = {};
+		stream.write(placeholder, sizeof(placeholder));
 		const int level = std::clamp(compressionLevel, 1, ZSTD_maxCLevel());
 		Statistics statistics;
 		uint64_t offset = PackArchive::HeaderSize;
@@ -447,31 +494,31 @@ namespace Basalt {
 		std::vector<uint8_t> compressed;
 		for (const size_t pendingIndex : order)
 		{
-			const Pending* pending = &m_Pending[pendingIndex];
+			const Pending& pending = m_Pending[pendingIndex];
 			std::optional<std::vector<uint8_t>> read;
-			if (!pending->Source.empty())
+			if (!pending.Source.empty())
 			{
-				errno = 0;
-				read = FileSystem::ReadBinaryFile(pending->Source);
+				std::string readError;
+				read = ReadSource(pending.Source, readError);
 				if (!read)
-					return fail("cannot read '" + FileSystem::PathToUtf8(pending->Source) + "'" + DescribeErrno());
+					return fail("cannot read '" + FileSystem::PathToUtf8(pending.Source) + "' (" + readError + ")");
 			}
-			const std::vector<uint8_t>& data = read ? *read : pending->Data;
+			const std::vector<uint8_t>& data = read ? *read : pending.Data;
 			if (data.size() > PackArchive::MaxEntrySize)
-				return fail("'" + pending->Path + "' is larger than an archive entry may be (" + std::to_string(PackArchive::MaxEntrySize) + " bytes)");
+				return fail("'" + pending.Path + "' is larger than an archive entry may be (" + std::to_string(PackArchive::MaxEntrySize) + " bytes)");
 			compressed.resize(ZSTD_compressBound(data.size()));
 			const size_t compressedSize = ZSTD_compress(compressed.data(), compressed.size(), data.data(), data.size(), level);
 			// Still a valid archive (the file is stored), but a failing compressor is worth knowing about.
 			if (ZSTD_isError(compressedSize))
-				BS_CORE_WARN("Archive: cannot compress '{}' ({}); storing it uncompressed", pending->Path, ZSTD_getErrorName(compressedSize));
+				BS_CORE_WARN("Archive: cannot compress '{}' ({}); storing it uncompressed", pending.Path, ZSTD_getErrorName(compressedSize));
 			const bool useZstd = !ZSTD_isError(compressedSize) && compressedSize < data.size();
 			const uint8_t* stored = useZstd ? compressed.data() : data.data();
 			const size_t storedSize = useZstd ? compressedSize : data.size();
 			stream.write(reinterpret_cast<const char*>(stored), static_cast<std::streamsize>(storedSize));
 
-			PutU32(index, static_cast<uint32_t>(pending->Path.size()));
-			index.insert(index.end(), pending->Path.begin(), pending->Path.end());
-			PutU64(index, pending->AssetID);
+			PutU32(index, static_cast<uint32_t>(pending.Path.size()));
+			index.insert(index.end(), pending.Path.begin(), pending.Path.end());
+			PutU64(index, pending.AssetID);
 			PutU64(index, offset);
 			PutU64(index, storedSize);
 			PutU64(index, data.size());

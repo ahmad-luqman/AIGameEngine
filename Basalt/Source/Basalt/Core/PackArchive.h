@@ -34,7 +34,8 @@ namespace Basalt {
 			Zstd = 1
 		};
 
-		// One file, as the index lists it. Only meaningful with the archive it came from: Read refuses any other.
+		// One file, as the index lists it. Pass Read the reference GetEntries, Find or FindAsset gave, never a copy: Read
+		// refuses anything else (another archive's entry, an edited copy).
 		struct Entry
 		{
 			// Relative, normalized and '/'-separated ("Assets/Models/Ship.glb"); entries are sorted by it (byte order).
@@ -58,6 +59,8 @@ namespace Basalt {
 		static constexpr uint64_t MaxEntrySize = uint64_t{ 4 } << 30;
 
 		explicit PackArchive(Token) {}
+		PackArchive(const PackArchive&) = delete;
+		PackArchive& operator=(const PackArchive&) = delete;
 
 		static Ref<PackArchive> Open(const std::filesystem::path& file, std::string& outError);
 		// An archive held in memory (tests, fuzzing).
@@ -81,6 +84,8 @@ namespace Basalt {
 
 	private:
 		bool ReadRange(uint64_t offset, uint64_t size, uint8_t* destination) const;
+		// Read after the ownership check; may throw std::bad_alloc, which Read turns into an error.
+		std::optional<std::vector<uint8_t>> ReadChecked(const Entry& entry, std::string& outError) const;
 		bool Parse(uint64_t fileSize, std::string& outError);
 
 		// Open's file; empty for an archive in memory (m_Memory), which needs no stream.
@@ -112,7 +117,8 @@ namespace Basalt {
 		};
 
 		// AddFile reads source when Write runs; AddData takes the bytes now. Both return false (outError set) for an
-		// invalid or duplicate path, a duplicate nonzero asset UUID, more than MaxEntries files, or (AddFile) no source.
+		// invalid or duplicate path, a duplicate nonzero asset UUID, more than MaxEntries files, (AddData) more than
+		// MaxEntrySize bytes, or (AddFile) an empty source path (a missing file fails Write).
 		bool AddFile(std::string path, std::filesystem::path source, uint64_t assetID, std::string& outError);
 		bool AddData(std::string path, std::vector<uint8_t> data, uint64_t assetID, std::string& outError);
 		// Writes the archive atomically (a temporary sibling renamed over the target), at a zstd level clamped to

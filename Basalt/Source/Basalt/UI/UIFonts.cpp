@@ -109,9 +109,10 @@ namespace Basalt {
 				outError = fmt::format("'{}' is larger than {} MB", name, MaxTrueTypeFontSize / (size_t{ 1024 } * 1024));
 				return std::nullopt;
 			}
-			std::optional<std::vector<uint8_t>> data = FileSystem::ReadBinaryFile(file);
+			std::string readError;
+			std::optional<std::vector<uint8_t>> data = FileSystem::ReadBinaryFile(file, &readError);
 			if (!data)
-				outError = fmt::format("'{}' could not be read", name);
+				outError = fmt::format("'{}' could not be read ({})", name, readError);
 			return data;
 		}
 

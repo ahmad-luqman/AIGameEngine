@@ -2,11 +2,13 @@
 
 Runs `BasaltTests --basalt-child crash-report <kind>` (Tests/Source/TestMain.cpp), which installs the crash reporter,
 logs a sentinel line and crashes: an invalid memory access, abort(), an uncaught C++ exception, a trap, a stack overflow
-and an invalid memory access on a worker thread. Each run must die as it would have without the reporter (a signal on
-macOS and Linux, the exception code or abort's exit code 3 on Windows) and leave exactly one report in
+and an invalid memory access on a worker thread. Each run must die by its signal on macOS and Linux (the reporter
+re-raises it), or with the exception code or the C runtime's abort code 3 on Windows, and leave exactly one report in
 <user data>/CrashChild/Crashes naming the reason, with a stack trace, the context line and the last log lines; Windows
-reports add a minidump. Two more runs check the report folders: a user data directory whose ancestors do not exist yet
-(they are created), and one that cannot hold folders at all (the report goes to CrashReports next to the executable).
+reports add a minidump. More runs check the report folders: a user data directory whose ancestors do not exist yet (they
+are created, up to eight missing levels), one that cannot hold folders at all, and (macOS, Linux) one whose report folder
+path is too long for the handler's buffers while its parent fits; the last two put the report in CrashReports next to
+the executable.
 Exits 77 (skipped) when crash reports are unavailable (AddressSanitizer builds).
 """
 import os
@@ -25,6 +27,7 @@ REASONS = {
     "trap": ["EXCEPTION_BREAKPOINT"] if WINDOWS else ["SIGTRAP", "SIGILL"],
     "stackoverflow": ["EXCEPTION_STACK_OVERFLOW"] if WINDOWS else ["SIGSEGV", "SIGBUS"],
     "thread-segv": ["EXCEPTION_ACCESS_VIOLATION"] if WINDOWS else ["SIGSEGV", "SIGBUS"],
+    "two-thread-segv": ["EXCEPTION_ACCESS_VIOLATION"] if WINDOWS else ["SIGSEGV", "SIGBUS"],
 }
 
 
@@ -78,11 +81,13 @@ def check_report(kind, run, folder):
 def main():
     tests = pathlib.Path(sys.argv[1]).resolve()
     for kind in REASONS:
-        with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
-            run = crash(tests, kind, pathlib.Path(directory))
-            check_report(kind, run, pathlib.Path(directory, "CrashChild", "Crashes"))
+        # Two threads crashing at once race; a few runs make their overlap likely.
+        for _ in range(4 if kind == "two-thread-segv" else 1):
+            with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+                run = crash(tests, kind, pathlib.Path(directory))
+                check_report(kind, run, pathlib.Path(directory, "CrashChild", "Crashes"))
 
-    # Folders are created only when something crashes, however many are missing (a fresh account without ~/.local, a
+    # Folders are created only when something crashes, several levels if need be (a fresh account without ~/.local, a
     # nested BASALT_USER_DATA_DIR).
     with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
         nested = pathlib.Path(directory, "not", "yet", "there")
@@ -93,22 +98,43 @@ def main():
     with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
         blocked = pathlib.Path(directory, "UserDataIsAFile")
         blocked.write_text("not a folder")
-        fallback = tests.parent / "CrashReports"
-        before = set(fallback.glob("crash-*")) if fallback.is_dir() else set()
-        run = crash(tests, "segv", blocked)
-        created = sorted(set(fallback.glob("crash-*")) - before)
-        try:
-            text_reports = [path for path in created if path.suffix == ".txt"]
-            if len(text_reports) != 1:
-                fail(f"fallback: expected one new report in {fallback}, found {created}; stderr: {run.stderr}")
-            report = text_reports[0].read_text(encoding="utf-8", errors="replace")
-            if "Application: CrashChild" not in report or text_reports[0].name not in run.stderr:
-                fail(f"fallback: unexpected report or stderr: {run.stderr}\n{report}")
-            print(f"fallback: {text_reports[0]}")
-        finally:
-            for path in created:
-                path.unlink()
+        check_fallback(tests, "fallback (user data is a file)", blocked)
+
+    # A report folder too long for the handler's 1024-byte buffers while its parents fit: the report must not land in a
+    # parent folder, but next to the executable (the user data folder itself stays short enough to create).
+    if not WINDOWS:
+        with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+            target = 1010 - len(str(pathlib.Path(directory)))
+            long_folder = pathlib.Path(directory)
+            while target > 1:
+                part = "d" * min(200, target - 1)
+                long_folder /= part
+                target -= len(part) + 1
+            long_folder.mkdir(parents=True)
+            if len(str(long_folder / "CrashChild" / "Crashes")) <= 1024 or len(str(long_folder / "CrashChild")) > 1024:
+                fail(f"long path setup: {len(str(long_folder))} characters")
+            check_fallback(tests, "fallback (report folder too long)", long_folder)
+            if any(long_folder.rglob("crash-*")):
+                fail("long path: a report landed under the user data folder")
     print("crash reports passed")
+
+
+def check_fallback(tests, label, user_data):
+    fallback = tests.parent / "CrashReports"
+    before = set(fallback.glob("crash-*")) if fallback.is_dir() else set()
+    run = crash(tests, "segv", user_data)
+    created = sorted(set(fallback.glob("crash-*")) - before)
+    try:
+        text_reports = [path for path in created if path.suffix == ".txt"]
+        if len(text_reports) != 1:
+            fail(f"{label}: expected one new report in {fallback}, found {created}; stderr: {run.stderr}")
+        report = text_reports[0].read_text(encoding="utf-8", errors="replace")
+        if "Application: CrashChild" not in report or text_reports[0].name not in run.stderr:
+            fail(f"{label}: unexpected report or stderr: {run.stderr}\n{report}")
+        print(f"{label}: {text_reports[0]}")
+    finally:
+        for path in created:
+            path.unlink()
 
 
 if __name__ == "__main__":

@@ -93,6 +93,25 @@ TEST_SUITE("CrashReporter")
 		CHECK(std::string(text->View()).find("\n\n") == std::string::npos);
 	}
 
+	TEST_CASE("Application names become one safe folder name")
+	{
+		CHECK(CrashReporter::SanitizeApplicationName("FeatureTest") == "FeatureTest");
+		CHECK(CrashReporter::SanitizeApplicationName("../x") == "..x");
+		CHECK(CrashReporter::SanitizeApplicationName("a/b:c\\d<e>f\"g|h?i*j") == "abcdefghij");
+		CHECK(CrashReporter::SanitizeApplicationName("tab\there") == "tabhere");
+		for (const char* name : { "", ".", "..", "/", " . ", "???" })
+			CHECK_MESSAGE(CrashReporter::SanitizeApplicationName(name) == "Basalt", name);
+		CHECK(CrashReporter::SanitizeApplicationName("Game. ") == "Game");
+		// Cut at 127 bytes, never inside a UTF-8 character: 63 two-byte characters fit, the 64th would end at byte 128.
+		std::string wide;
+		for (int i = 0; i < 70; i++)
+			wide += "\xC3\xA9";
+		const std::string cut = CrashReporter::SanitizeApplicationName("x" + wide);
+		CHECK(cut.size() == 127);
+		CHECK(cut == "x" + wide.substr(0, 126));
+		CHECK(CrashReporter::SanitizeApplicationName(std::string(200, 'a')).size() == 127);
+	}
+
 	TEST_CASE("Small crash texts hold what fits")
 	{
 		BasicCrashText<8> text;

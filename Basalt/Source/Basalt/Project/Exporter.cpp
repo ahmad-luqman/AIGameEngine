@@ -99,19 +99,34 @@ namespace Basalt {
 			for (auto it = std::filesystem::recursive_directory_iterator(assets, error); !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error))
 			{
 				const std::string key = FileSystem::PathToGenericUtf8(it->path().lexically_relative(project.GetDirectory()));
-				// The iterator does not enter linked folders (a folder export's copy does): refuse rather than ship a game
-				// that silently lacks their files. Linked files are read through, as the folder export copies them.
-				const bool linkedFolder = it->is_symlink(error) && !error && it->is_directory(error);
-				if (error)
-					break;
-				if (linkedFolder)
-				{
-					outError = "'" + key + "' is a linked folder, which an archive cannot hold (replace the link with the folder)";
+				const auto inspectFailed = [&]() {
+					outError = "cannot inspect '" + key + "': " + error.message();
 					return std::nullopt;
+				};
+				// The iterator does not enter linked folders (a folder export's copy does): refuse rather than ship a game
+				// that silently lacks their files. Linked files are read through, as the folder export copies them, and a
+				// link to nothing is refused rather than left out.
+				const bool link = it->is_symlink(error);
+				if (error)
+					return inspectFailed();
+				if (link)
+				{
+					std::error_code targetError;
+					const std::filesystem::file_status target = std::filesystem::status(it->path(), targetError);
+					if (target.type() == std::filesystem::file_type::directory)
+					{
+						outError = "'" + key + "' is a linked folder, which an archive cannot hold (replace the link with the folder)";
+						return std::nullopt;
+					}
+					if (target.type() != std::filesystem::file_type::regular)
+					{
+						outError = "'" + key + "' is a broken link (it names no file)";
+						return std::nullopt;
+					}
 				}
 				const bool regular = it->is_regular_file(error);
 				if (error)
-					break;
+					return inspectFailed();
 				if (!regular || FileSystem::GetLowercaseExtension(it->path()) == ".meta")
 					continue;
 				if (!PackArchive::IsValidPath(key))

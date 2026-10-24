@@ -966,7 +966,13 @@ namespace Basalt {
 				}
 				ExportResult result = Exporter::Export(*project, FileSystem::PathFromUtf8(RequireString(params, "output")), options);
 				if (!result.Success)
-					throw CommandError(result.Error);
+				{
+					// Warnings gathered before the failure (assets without UUIDs) still matter to whoever fixes it.
+					std::string message = result.Error;
+					for (const std::string& warning : result.Warnings)
+						message += "\nwarning: " + warning;
+					throw CommandError(message);
+				}
 				json response{ { "executable", FileSystem::PathToUtf8(result.ExecutablePath) }, { "package", FileSystem::PathToUtf8(result.PackagePath) }, { "files", result.FileCount }, { "validation", validation } };
 				if (const auto& archive = result.ArchiveStatistics)
 					response["archive"] = { { "files", archive->Entries }, { "compressed", archive->CompressedEntries }, { "size", archive->UncompressedSize }, { "archiveSize", archive->ArchiveSize } };
