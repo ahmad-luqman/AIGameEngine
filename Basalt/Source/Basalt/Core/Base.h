@@ -23,6 +23,12 @@
 	#define BS_DEBUGBREAK() __builtin_trap()
 #endif
 
+#if defined(_MSC_VER)
+	#define BS_NOINLINE __declspec(noinline)
+#else
+	#define BS_NOINLINE __attribute__((noinline))
+#endif
+
 #define BS_EXPAND_MACRO(x) x
 #define BS_STRINGIFY_MACRO(x) #x
 

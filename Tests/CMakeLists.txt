@@ -12,11 +12,6 @@ endif()
 target_compile_definitions(BasaltTests PRIVATE BASALT_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Data" BASALT_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
 add_test(NAME BasaltTests COMMAND BasaltTests --reporters=console --no-intro=true WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
-# TEMPORARY (PR #53): locate a Windows Release heap corruption; prints every passing assertion of the archive tests.
-if(WIN32)
-	add_test(NAME ArchiveTrace COMMAND ${CMAKE_COMMAND} -DTESTS=$<TARGET_FILE:BasaltTests> -P "${CMAKE_CURRENT_SOURCE_DIR}/ArchiveTrace.cmake" WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
-	set_tests_properties(ArchiveTrace PROPERTIES TIMEOUT 5400)
-endif()
 
 set_tests_properties(BasaltTests PROPERTIES TIMEOUT 600)
 
