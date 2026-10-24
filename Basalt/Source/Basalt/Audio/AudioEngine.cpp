@@ -1,6 +1,7 @@
 #include "Basalt/Audio/AudioEngine.h"
 
 #include "Basalt/Core/Assert.h"
+#include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Log.h"
 
 #include <miniaudio.h>
@@ -9,6 +10,8 @@
 #include <atomic>
 #include <cmath>
 #include <cstddef>
+#include <cstring>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string_view>
@@ -49,6 +52,128 @@ namespace Basalt {
 		// Report a persistent problem once until it clears, instead of every mix step.
 		std::atomic<bool> s_JobBoundReported = false;
 		std::atomic<bool> s_MixFailureReported = false;
+
+		// The resource managers open clips through this VFS: a file in a mounted archive (FileSystem::Mount, an exported
+		// game's Assets.bpak) is read whole and served from memory, anything else goes to miniaudio's default VFS.
+		struct ArchiveVfs
+		{
+			// First: miniaudio reads the callbacks through the ma_vfs pointer.
+			ma_vfs_callbacks Callbacks;
+			ma_default_vfs Disk;
+		};
+
+		struct VfsFile
+		{
+			std::vector<uint8_t> Data;
+			size_t Cursor = 0;
+			// Set for a file on disk, which the default VFS serves instead.
+			ma_vfs_file Disk = nullptr;
+		};
+
+		ma_vfs* GetDisk(ma_vfs* vfs)
+		{
+			return &reinterpret_cast<ArchiveVfs*>(vfs)->Disk;
+		}
+
+		ma_result OpenVfsFile(ma_vfs* vfs, const std::filesystem::path& path, ma_uint32 openMode, ma_vfs_file* outFile, const auto& openDisk)
+		{
+			auto file = std::make_unique<VfsFile>();
+			const FileSystem::MountedFile mounted = (openMode & MA_OPEN_MODE_WRITE) == 0 ? FileSystem::FindMounted(path) : FileSystem::MountedFile{};
+			if (mounted)
+			{
+				auto data = FileSystem::ReadMounted(mounted);
+				if (!data)
+					return MA_IO_ERROR;
+				file->Data = std::move(*data);
+			}
+			else if (const ma_result result = openDisk(GetDisk(vfs), &file->Disk); result != MA_SUCCESS)
+				return result;
+			*outFile = file.release();
+			return MA_SUCCESS;
+		}
+
+		// Clip paths are native narrow text (AudioSystem passes path::string()), so they convert back the same way.
+		ma_result VfsOpen(ma_vfs* vfs, const char* path, ma_uint32 openMode, ma_vfs_file* outFile)
+		{
+			return OpenVfsFile(vfs, std::filesystem::path(path), openMode, outFile, [&](ma_vfs* disk, ma_vfs_file* diskFile) { return ma_vfs_open(disk, path, openMode, diskFile); });
+		}
+
+		ma_result VfsOpenW(ma_vfs* vfs, const wchar_t* path, ma_uint32 openMode, ma_vfs_file* outFile)
+		{
+			return OpenVfsFile(vfs, std::filesystem::path(path), openMode, outFile, [&](ma_vfs* disk, ma_vfs_file* diskFile) { return ma_vfs_open_w(disk, path, openMode, diskFile); });
+		}
+
+		ma_result VfsClose(ma_vfs* vfs, ma_vfs_file handle)
+		{
+			std::unique_ptr<VfsFile> file(static_cast<VfsFile*>(handle));
+			return file->Disk ? ma_vfs_close(GetDisk(vfs), file->Disk) : MA_SUCCESS;
+		}
+
+		ma_result VfsRead(ma_vfs* vfs, ma_vfs_file handle, void* destination, size_t size, size_t* outRead)
+		{
+			auto* file = static_cast<VfsFile*>(handle);
+			if (file->Disk)
+				return ma_vfs_read(GetDisk(vfs), file->Disk, destination, size, outRead);
+			const size_t count = std::min(size, file->Data.size() - file->Cursor);
+			if (count > 0)
+				std::memcpy(destination, file->Data.data() + file->Cursor, count);
+			file->Cursor += count;
+			if (outRead)
+				*outRead = count;
+			// As the default VFS reports it: a short read succeeds, an empty one at the end is MA_AT_END.
+			return count == 0 && size > 0 ? MA_AT_END : MA_SUCCESS;
+		}
+
+		ma_result VfsWrite(ma_vfs* vfs, ma_vfs_file handle, const void* source, size_t size, size_t* outWritten)
+		{
+			auto* file = static_cast<VfsFile*>(handle);
+			return file->Disk ? ma_vfs_write(GetDisk(vfs), file->Disk, source, size, outWritten) : MA_ACCESS_DENIED;
+		}
+
+		ma_result VfsSeek(ma_vfs* vfs, ma_vfs_file handle, ma_int64 offset, ma_seek_origin origin)
+		{
+			auto* file = static_cast<VfsFile*>(handle);
+			if (file->Disk)
+				return ma_vfs_seek(GetDisk(vfs), file->Disk, offset, origin);
+			const auto size = static_cast<ma_int64>(file->Data.size());
+			const ma_int64 base = origin == ma_seek_origin_start ? 0 : origin == ma_seek_origin_current ? static_cast<ma_int64>(file->Cursor)
+																										: size;
+			// Both within [0, size]: no overflow.
+			if (offset < -base || offset > size - base)
+				return MA_BAD_SEEK;
+			file->Cursor = static_cast<size_t>(base + offset);
+			return MA_SUCCESS;
+		}
+
+		ma_result VfsTell(ma_vfs* vfs, ma_vfs_file handle, ma_int64* outCursor)
+		{
+			auto* file = static_cast<VfsFile*>(handle);
+			if (file->Disk)
+				return ma_vfs_tell(GetDisk(vfs), file->Disk, outCursor);
+			*outCursor = static_cast<ma_int64>(file->Cursor);
+			return MA_SUCCESS;
+		}
+
+		ma_result VfsInfo(ma_vfs* vfs, ma_vfs_file handle, ma_file_info* outInfo)
+		{
+			auto* file = static_cast<VfsFile*>(handle);
+			if (file->Disk)
+				return ma_vfs_info(GetDisk(vfs), file->Disk, outInfo);
+			outInfo->sizeInBytes = file->Data.size();
+			return MA_SUCCESS;
+		}
+
+		// Created on first use and never destroyed: every engine's resource manager keeps a pointer to it.
+		ma_vfs* GetArchiveVfs()
+		{
+			static ArchiveVfs* s_Vfs = [] {
+				auto* vfs = new ArchiveVfs{};
+				vfs->Callbacks = { &VfsOpen, &VfsOpenW, &VfsClose, &VfsRead, &VfsWrite, &VfsSeek, &VfsTell, &VfsInfo };
+				ma_default_vfs_init(&vfs->Disk, nullptr);
+				return vfs;
+			}();
+			return s_Vfs;
+		}
 
 		void ForwardMiniaudioLog(void* /*userData*/, ma_uint32 level, const char* message)
 		{
@@ -181,6 +306,7 @@ namespace Basalt {
 		{
 			ma_engine_config config = ma_engine_config_init();
 			config.pLog = log.get();
+			config.pResourceManagerVFS = GetArchiveVfs();
 			const ma_result result = ma_engine_init(&config, engine.get());
 			if (result == MA_SUCCESS)
 			{
@@ -199,6 +325,7 @@ namespace Basalt {
 		auto resourceManager = std::make_unique<ma_resource_manager>();
 		ma_resource_manager_config resourceConfig = ma_resource_manager_config_init();
 		resourceConfig.pLog = log.get();
+		resourceConfig.pVFS = GetArchiveVfs();
 		resourceConfig.decodedFormat = ma_format_f32;
 		resourceConfig.decodedChannels = 0;
 		resourceConfig.decodedSampleRate = format.SampleRate;

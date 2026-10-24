@@ -259,8 +259,32 @@ def main():
         plain = ok("project.export", {"output": str(package_output), "package": True, "smokeTestFrames": 5})
         check_package(plain, package_output, has_icon=False)
 
-        # A missing asset is caught before anything is exported.
+        # Assets packed into one archive: the game plays from it, with no Assets folder or sidecars beside it.
         (project / "Assets" / "Scripts" / "Spin.lua").write_text(GOOD_SCRIPT)
+        archived = ok("project.export", {"output": str(output), "archive": True, "smokeTestFrames": 10})
+        require(archived["smokeTest"]["passed"] and "reading assets from" in archived["smokeTest"]["log"], f"archived smoke test: {archived['smokeTest']}")
+        require((output / "Assets.bpak").is_file() and not (output / "Assets").exists(), "an archived export kept an Assets folder")
+        listing = ok("archive.inspect", {"path": str(output / "Assets.bpak"), "verify": True}, None)
+        entries = {entry["path"]: entry for entry in listing["entries"]}
+        require({"Assets/Models/Crate.glb", "Assets/Scripts/Spin.lua", "Assets/Scenes/Main.bscene"} <= entries.keys(), f"archive entries: {sorted(entries)}")
+        require(not any(path.endswith(".meta") for path in entries) and entries["Assets/Scenes/Main.bscene"]["uuid"], "sidecars must become index UUIDs")
+        require(listing["verified"] and listing["files"] == archived["archive"]["files"] == len(entries), f"archive listing: {listing['files']} vs {archived['archive']}")
+        require(entries["Assets/Scripts/Spin.lua"]["compression"] == "zstd", "a script should compress")
+        packed = ok("project.export", {"output": str(package_output), "package": True, "archive": True, "smokeTestFrames": 5})
+        require(packed["smokeTest"]["passed"], f"archived package smoke test: {packed['smokeTest']}")
+        require((project_file.parent / "Assets.bpak").is_file() and not (project_file.parent / "Assets").exists(), "the package holds no archive")
+        # A damaged archive stops the game at start, saying why.
+        damaged = bytearray((output / "Assets.bpak").read_bytes())
+        damaged[-3] ^= 0xFF
+        (output / "Assets.bpak").write_bytes(bytes(damaged))
+        broken = ok("project.smoke_test", {"executable": str(executable), "frames": 5})
+        require(not broken["passed"] and broken["exitCode"] == 1 and "Cannot open the game's assets" in broken["log"] and "index is damaged" in broken["log"], f"a damaged archive: {broken}")
+        fails("archive.inspect", {"path": str(output / "Assets.bpak")}, "index is damaged")
+        # A folder export replaces the archive.
+        ok("project.export", {"output": str(output)})
+        require((output / "Assets").is_dir() and not (output / "Assets.bpak").exists(), "a folder export kept the archive")
+
+        # A missing asset is caught before anything is exported.
         (project / "Assets" / "Models" / "Crate.glb").unlink()
         report = ok("project.validate")
         require(not report["valid"] and any("Assets/Models/Crate.glb" in issue["message"] for issue in report["issues"]), f"missing model: {report}")

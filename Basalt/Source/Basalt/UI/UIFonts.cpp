@@ -79,6 +79,9 @@ namespace Basalt {
 
 		std::optional<std::filesystem::file_time_type> GetStamp(const std::filesystem::path& file)
 		{
+			// Archive files never change.
+			if (FileSystem::FindMounted(file))
+				return std::filesystem::file_time_type{};
 			std::error_code error;
 			const std::filesystem::file_time_type time = std::filesystem::last_write_time(file, error);
 			return error ? std::nullopt : std::optional(time);
@@ -90,24 +93,18 @@ namespace Basalt {
 		{
 			const std::string name = FileSystem::PathToUtf8(file);
 			std::error_code error;
-			const bool regular = std::filesystem::is_regular_file(file, error);
-			if (error && error != std::errc::no_such_file_or_directory)
-			{
-				outError = fmt::format("'{}' could not be read: {}", name, error.message());
-				return std::nullopt;
-			}
-			if (!regular)
-			{
-				outError = fmt::format("'{}' does not exist or is not a file", name);
-				return std::nullopt;
-			}
-			const uintmax_t size = std::filesystem::file_size(file, error);
+			const std::optional<uint64_t> size = FileSystem::GetRegularFileSize(file, error);
 			if (error)
 			{
 				outError = fmt::format("'{}' could not be read: {}", name, error.message());
 				return std::nullopt;
 			}
-			if (size > MaxTrueTypeFontSize)
+			if (!size)
+			{
+				outError = fmt::format("'{}' does not exist or is not a file", name);
+				return std::nullopt;
+			}
+			if (*size > MaxTrueTypeFontSize)
 			{
 				outError = fmt::format("'{}' is larger than {} MB", name, MaxTrueTypeFontSize / (size_t{ 1024 } * 1024));
 				return std::nullopt;

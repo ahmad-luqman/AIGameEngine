@@ -27,6 +27,7 @@ build/bin/basalt help                                    # automation API from t
 build/bin/basalt --project Samples/Tetris project.validate     # missing assets, broken scenes/scripts
 build/bin/basalt --project Samples/Tetris project.export '{"output": "Dist/Tetris", "smokeTestFrames": 120}'
 build/bin/basalt --project Samples/Tetris project.export '{"output": "Dist/Tetris", "package": true}'  # .app / .exe / AppImage
+build/bin/basalt --project Samples/Tetris project.export '{"output": "Dist/Tetris", "archive": true}'  # Assets in one .bpak
 ```
 
 ## Documentation
@@ -34,7 +35,7 @@ build/bin/basalt --project Samples/Tetris project.export '{"output": "Dist/Tetri
 - [AGENTS.md](AGENTS.md) — architecture, conventions and development workflow
 - [Docs/Rendering.md](Docs/Rendering.md) — FSR 1 settings, render-area handling and GPU tests
 - [Docs/ScriptingAPI.md](Docs/ScriptingAPI.md) — Lua API
-- [Docs/Shipping.md](Docs/Shipping.md) — icon, version and company, platform packages, signing, the release pipeline
+- [Docs/Shipping.md](Docs/Shipping.md) — icon, version and company, platform packages, the asset archive, signing, crash reports, the release pipeline
 - [Docs/MCP.md](Docs/MCP.md) — schema-driven agent tools over stdio or the running editor
 - [Docs/AutomationCommands.md](Docs/AutomationCommands.md), [Docs/Components.md](Docs/Components.md) — generated references
 - [ROADMAP.md](ROADMAP.md) — planned work and known gaps

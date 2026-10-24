@@ -2953,6 +2953,7 @@ namespace Basalt {
 #else
 				ImGui::Checkbox("Package as an AppImage (needs appimagetool: $APPIMAGETOOL or PATH; else an AppDir)", &m_ExportPackage);
 #endif
+				ImGui::Checkbox("Pack Assets into one archive (Assets.bpak)", &m_ExportArchive);
 			}
 
 			if (ImGui::Button("OK", ImVec2(120.0f, 0.0f)) || ImGui::IsKeyPressed(ImGuiKey_Enter))
@@ -2987,7 +2988,7 @@ namespace Basalt {
 							m_Context.Execute("scene.new", { { "name", "Main" } });
 						break;
 					case PromptKind::Export:
-						if (auto result = m_Context.Execute("project.export", { { "output", m_PromptPath }, { "smokeTestFrames", m_ExportSmokeTest ? m_ExportSmokeFrames : 0 }, { "package", m_ExportPackage } }))
+						if (auto result = m_Context.Execute("project.export", { { "output", m_PromptPath }, { "smokeTestFrames", m_ExportSmokeTest ? m_ExportSmokeFrames : 0 }, { "package", m_ExportPackage }, { "archive", m_ExportArchive } }))
 						{
 							const std::string package = (*result)["package"].get<std::string>();
 							std::string status = "Exported to " + package;

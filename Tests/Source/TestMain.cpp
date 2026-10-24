@@ -2,6 +2,7 @@
 #include <doctest/doctest.h>
 
 #include <Basalt/Core/Base.h>
+#include <Basalt/Core/CrashReporter.h>
 #include <Basalt/Core/Log.h>
 #include <Basalt/Core/Platform.h>
 
@@ -12,6 +13,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -37,7 +39,32 @@ namespace {
 	// print <text> (stdout), error <text> (stderr), env <name>, cwd, sleep <ms>, spam <bytes>, utf8 <count>
 	// (prints "é" count times), invalid (prints bytes that are not UTF-8), fd <descriptor> (POSIX: whether it is
 	// open), crash (a real access violation on Windows, SIGABRT elsewhere), trap (BS_DEBUGBREAK), args (prints
-	// every remaining argument on its own line), exit <code>.
+	// every remaining argument on its own line), exit <code>, crash-report <kind> (installs the crash reporter as
+	// "CrashChild", logs "crash-test sentinel 42", then crashes: kind is segv, abort, terminate or trap; exits 77 when
+	// crash reports are unavailable, as under AddressSanitizer; Tests/Automation/CrashReport.py checks the report).
+	// A real crash of the requested kind (crash-report).
+	void CrashNow(std::string_view kind)
+	{
+		if (kind == "segv")
+		{
+			// volatile: the store happens; the address comes from a parse so the compiler cannot see it is null.
+			auto* volatile target = reinterpret_cast<volatile int*>(static_cast<uintptr_t>(std::strtoull("0", nullptr, 10)));
+			*target = 1;
+		}
+		else if (kind == "abort")
+			std::abort();
+		else if (kind == "terminate")
+		{
+			const auto throwing = []() noexcept(false) { throw std::runtime_error("crash-test exception"); };
+			// A noexcept caller turns the exception into std::terminate.
+			[&]() noexcept { throwing(); }();
+		}
+		else if (kind == "trap")
+			BS_DEBUGBREAK();
+		std::fprintf(stderr, "crash kind '%.*s' is unknown or did not crash\n", static_cast<int>(kind.size()), kind.data());
+		std::exit(2);
+	}
+
 	int RunChild(const std::vector<std::string>& actions)
 	{
 		for (size_t i = 0; i < actions.size(); i++)
@@ -116,6 +143,19 @@ namespace {
 			{
 				std::fflush(stdout);
 				BS_DEBUGBREAK();
+			}
+			else if (action == "crash-report")
+			{
+				Basalt::Log::Init();
+				if (!Basalt::CrashReporter::Install({ "CrashChild" }))
+				{
+					std::printf("crash reports unavailable\n");
+					return 77;
+				}
+				Basalt::CrashReporter::SetContext("Project: Crash Test 1.2.3");
+				BS_CORE_ERROR("crash-test sentinel {}", 42);
+				std::fflush(stdout);
+				CrashNow(value);
 			}
 			else if (action == "exit")
 			{

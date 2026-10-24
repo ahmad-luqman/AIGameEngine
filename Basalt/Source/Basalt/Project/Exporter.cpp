@@ -1,5 +1,6 @@
 #include "Basalt/Project/Exporter.h"
 
+#include "Basalt/Asset/AssetRegistry.h"
 #include "Basalt/Core/Base.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Log.h"
@@ -77,12 +78,54 @@ namespace Basalt {
 			return false;
 		}
 
-		// Copies the project file, its Assets and its input actions into directory (replacing a previous export's).
-		bool CopyProjectFiles(const Project& project, const std::filesystem::path& directory, std::string& outError)
+		// Packs the project's Assets into archive: every file except the .meta sidecars, whose UUIDs go into the index.
+		bool WriteAssetArchive(const Project& project, const std::filesystem::path& archive, PackArchiveWriter::Statistics& outStatistics, std::string& outError)
+		{
+			// A fresh scan: the project's own registry may predate files written since it loaded.
+			AssetRegistry registry(project.GetDirectory());
+			if (!registry.Refresh(outError))
+				return false;
+			PackArchiveWriter writer;
+			const std::filesystem::path assets = project.GetDirectory() / Project::AssetDirectoryName;
+			std::error_code error;
+			for (auto it = std::filesystem::recursive_directory_iterator(assets, error); !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error))
+			{
+				const bool regular = it->is_regular_file(error);
+				if (error)
+					break;
+				if (!regular || FileSystem::GetLowercaseExtension(it->path()) == ".meta")
+					continue;
+				const std::string key = FileSystem::PathToGenericUtf8(it->path().lexically_relative(project.GetDirectory()));
+				if (!PackArchiveWriter::IsValidPath(key))
+				{
+					outError = "'" + key + "' cannot be stored in an archive (a name with ':' or '\\', or a path over " + std::to_string(PackArchive::MaxPathLength) + " bytes)";
+					return false;
+				}
+				const std::optional<UUID> id = registry.FindID(key);
+				if (!writer.AddFile(key, it->path(), id ? static_cast<uint64_t>(*id) : 0, outError))
+					return false;
+			}
+			if (error)
+			{
+				outError = "cannot list '" + FileSystem::PathToUtf8(assets) + "': " + error.message();
+				return false;
+			}
+			if (!writer.Write(archive, outError))
+				return false;
+			outStatistics = writer.GetStatistics();
+			return true;
+		}
+
+		// Copies the project file and its input actions into directory with its Assets (a folder, or an archive with
+		// archiveStatistics set), replacing a previous export's.
+		bool CopyProjectFiles(const Project& project, const std::filesystem::path& directory, std::optional<PackArchiveWriter::Statistics>* archiveStatistics, std::string& outError)
 		{
 			std::error_code error;
-			// Assets the project no longer has must not survive from the previous export.
+			// Assets the project no longer has must not survive from the previous export, in either form: the runtime would
+			// read an archive left beside a new Assets folder.
 			std::filesystem::remove_all(directory / Project::AssetDirectoryName, error);
+			if (!error)
+				std::filesystem::remove(directory / Project::ArchiveFileName, error);
 			if (error)
 			{
 				outError = "cannot remove the previous export's Assets in '" + FileSystem::PathToUtf8(directory) + "': " + error.message();
@@ -94,7 +137,18 @@ namespace Basalt {
 				outError = "cannot create '" + FileSystem::PathToUtf8(directory) + "': " + error.message();
 				return false;
 			}
-			std::filesystem::copy(project.GetDirectory() / Project::AssetDirectoryName, directory / Project::AssetDirectoryName, std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, error);
+			if (archiveStatistics)
+			{
+				PackArchiveWriter::Statistics statistics;
+				if (!WriteAssetArchive(project, directory / Project::ArchiveFileName, statistics, outError))
+				{
+					outError = "cannot write " + std::string(Project::ArchiveFileName) + ": " + outError;
+					return false;
+				}
+				*archiveStatistics = statistics;
+			}
+			else
+				std::filesystem::copy(project.GetDirectory() / Project::AssetDirectoryName, directory / Project::AssetDirectoryName, std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, error);
 			if (!error)
 				std::filesystem::copy_file(project.GetProjectFilePath(), directory / Project::FileName, std::filesystem::copy_options::overwrite_existing, error);
 			if (error)
@@ -350,6 +404,24 @@ namespace Basalt {
 		return executableDirectory;
 	}
 
+	bool Exporter::MountExportedArchive(const std::filesystem::path& projectDirectory, std::string& outError)
+	{
+		const std::filesystem::path file = projectDirectory / Project::ArchiveFileName;
+		std::error_code error;
+		const bool exists = std::filesystem::exists(file, error);
+		if (!exists && !error)
+			return true;
+		const Ref<PackArchive> archive = PackArchive::Open(file, outError);
+		if (!archive)
+			return false;
+		// Exports never leave both forms; a folder copied in later is shadowed wherever the archive has the same file.
+		if (FileSystem::Exists(projectDirectory / Project::AssetDirectoryName))
+			BS_CORE_WARN("Exporter: both {} and an Assets folder are in '{}'; files in the archive take precedence", Project::ArchiveFileName, FileSystem::PathToUtf8(projectDirectory));
+		FileSystem::Mount(projectDirectory, archive);
+		BS_CORE_INFO("Exporter: reading assets from '{}' ({} files)", FileSystem::PathToUtf8(file), archive->GetEntries().size());
+		return true;
+	}
+
 	ExportResult Exporter::Export(const Project& project, const std::filesystem::path& outputDirectory, const ExportOptions& options)
 	{
 		ExportResult result;
@@ -468,7 +540,7 @@ namespace Basalt {
 				result.Error += " (the export in '" + FileSystem::PathToUtf8(output) + "' is incomplete; export again once this is fixed)";
 			return result;
 		};
-		if (!CopyProjectFiles(project, projectDirectory, result.Error))
+		if (!CopyProjectFiles(project, projectDirectory, options.Archive ? &result.Archive : nullptr, result.Error))
 			return fail();
 
 		std::filesystem::path executable = executableDirectory / ExecutableFileName(executableName);

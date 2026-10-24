@@ -19,7 +19,7 @@ changing code. Task-specific procedures live in `.claude/skills/*/SKILL.md`.
 | `scripts/` | `build.sh`, `test.sh`, `format.sh`; release tooling `package_release.py`, `sign-macos.sh`. |
 
 Engine modules (`Basalt/Source/Basalt/<Module>/`): `Core` (application, window, input incl. gamepads, log, file
-system and file watching, command line), `Events`, `Math`, `Renderer` (device, scene renderer, IBL, debug lines), `ImGui`, `Scene`
+system, `.bpak` archives and file watching, command line, crash reports), `Events`, `Math`, `Renderer` (device, scene renderer, IBL, debug lines), `ImGui`, `Scene`
 (EnTT scene, components, component registry, serialization, prefab instances and overrides), `Asset` (glTF, images, primitives, material
 files, asset cache), `Physics` (Jolt), `Audio` (miniaudio: buses, per-source low-pass and Doppler, reverb sends into per-bus reverbs), `Particles` (CPU particle simulation), `Animation` (glTF TRS sampling, blends, crossfades, 1D/2D blend spaces with phase sync and velocity matching, animation events, bone transforms and attachments, data-driven state machines and per-state root motion, layers with joint masks and additive clips, two-bone/look-at IK and foot placement, spring bones, morph targets, retargeted clip libraries, per-entity playback), `UI` (game UI: UI
 component layout, widgets and their mouse/keyboard/gamepad interaction, immediate-mode `UI.*`, TrueType fonts;
@@ -126,7 +126,15 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   `Resize` functions are pure byte builders; `LoadIconImage`/`LoadProjectIcon` read the PNG and only
   `WriteWindowsResources` is platform-specific. The runtime finds its project with
   `Exporter::GetExportedProjectDirectory` and sets the window icon on Windows and X11 (macOS and Wayland show the
-  package's). Tags run `.github/workflows/release.yml` (`scripts/package_release.py`, `scripts/sign-macos.sh`). See
+  package's). `project.export {"archive": true}` writes `Assets.bpak` (`Core/PackArchive`: a sorted index carrying the
+  asset UUIDs instead of `.meta` files, zstd only where it shrinks, every count/offset/size checked before allocating).
+  The runtime mounts it (`Exporter::MountExportedArchive`, before `Project::Load`); `FileSystem::Mount` serves
+  `ReadTextFile`/`ReadBinaryFile`/`Exists`/`GetRegularFileSize` from it, and cgltf (file callbacks), miniaudio (a VFS),
+  Lua `require` (a searcher), font stamps and `AssetRegistry::Refresh` (UUIDs from the index) ask
+  `FileSystem::FindMounted`: a new reader that bypasses `FileSystem` must too. `Core/CrashReporter` (installed in
+  `EntryPoint.h` and the CLI's `main`, off under ASan) writes reports with stack traces and the last log lines to
+  `<user data>/<app>/Crashes`, formatting only into fixed buffers (async-signal-safe on POSIX), then re-raises.
+  Tags run `.github/workflows/release.yml` (`scripts/package_release.py`, `scripts/sign-macos.sh`). See
   `Docs/Shipping.md`.
 - **Editor file dialogs.** Path prompts add native pickers (`Basalt-Editor/Source/FileDialogs`, nativefiledialog-extended,
   editor only). Linux uses the XDG portal and needs D-Bus development files at build time; without them the editor

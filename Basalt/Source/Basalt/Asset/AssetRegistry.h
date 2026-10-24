@@ -28,6 +28,8 @@ namespace Basalt {
 		const std::vector<std::string>& GetOrphans() const { return m_Orphans; }
 		std::optional<UUID> Ensure(const std::string& path, std::string& outError);
 		std::string Find(UUID id) const;
+		// The UUID of an asset path in the last scan (never creates metadata); nullopt for an asset without one.
+		std::optional<UUID> FindID(const std::string& path) const;
 		// Newly created project-relative sidecar paths, drained by hosts to acknowledge their own writes.
 		std::vector<std::string> TakeWrittenPaths();
 		// Matches canonical source paths, including legacy ./ paths and sub-asset (embedded image, imported material) references.

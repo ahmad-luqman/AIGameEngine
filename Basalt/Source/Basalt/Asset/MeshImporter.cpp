@@ -63,6 +63,38 @@ namespace Basalt {
 
 		bool IsDataUri(const char* uri);
 
+		// cgltf reads the glTF and its external buffers through FileSystem, so a model in a mounted archive loads like one
+		// on disk. Paths are UTF-8: LoadGltfData and Inspect pass PathToUtf8, and cgltf joins the URIs to them byte-wise.
+		cgltf_result ReadGltfFile(const cgltf_memory_options*, const cgltf_file_options*, const char* path, cgltf_size* size, void** data)
+		{
+			const std::filesystem::path file = FileSystem::PathFromUtf8(path);
+			auto bytes = FileSystem::ReadBinaryFile(file);
+			if (!bytes)
+				return FileSystem::Exists(file) ? cgltf_result_io_error : cgltf_result_file_not_found;
+			// malloc(0) may return null, which cgltf would take for a failure.
+			void* copy = std::malloc(std::max<size_t>(bytes->size(), 1));
+			if (!copy)
+				return cgltf_result_out_of_memory;
+			if (!bytes->empty())
+				std::memcpy(copy, bytes->data(), bytes->size());
+			*size = bytes->size();
+			*data = copy;
+			return cgltf_result_success;
+		}
+
+		void ReleaseGltfFile(const cgltf_memory_options*, const cgltf_file_options*, void* data)
+		{
+			std::free(data);
+		}
+
+		cgltf_options MakeGltfOptions()
+		{
+			cgltf_options options = {};
+			options.file.read = &ReadGltfFile;
+			options.file.release = &ReleaseGltfFile;
+			return options;
+		}
+
 		// Percent-decodes a URI the way cgltf_load_buffer_file does, so checks inspect the file cgltf opens. uri must not
 		// be null.
 		std::string DecodeUri(const char* uri)
@@ -144,12 +176,11 @@ namespace Basalt {
 					// and only then fails to read, and fopen blocks on a FIFO. file_size is implementation-defined for
 					// other files (MSVC reports a directory as 0 bytes without an error).
 					const std::string file = DecodeUri(buffer.uri);
-					const std::filesystem::path target = path.parent_path() / file;
+					const std::filesystem::path target = path.parent_path() / FileSystem::PathFromUtf8(file);
 					std::error_code error;
-					const bool regular = std::filesystem::is_regular_file(target, error);
-					if (regular)
-						available = std::filesystem::file_size(target, error);
-					if (!regular || error)
+					const std::optional<uint64_t> fileSize = FileSystem::GetRegularFileSize(target, error);
+					available = fileSize.value_or(0);
+					if (!fileSize)
 					{
 						outError = fmt::format("{}: buffer {} file '{}' is not a readable file{}", name, i, file, error ? " (" + error.message() + ")" : "");
 						return false;
@@ -267,8 +298,8 @@ namespace Basalt {
 		// The external files are listed as soon as the file parses, even when loading fails later (a missing buffer).
 		GltfData LoadGltfData(const std::filesystem::path& path, const std::string& key, const std::filesystem::path& projectRoot, std::vector<std::string>& outExternalFiles, std::string& outError)
 		{
-			const std::string pathString = path.string();
-			cgltf_options options = {};
+			const std::string pathString = FileSystem::PathToUtf8(path);
+			cgltf_options options = MakeGltfOptions();
 			cgltf_data* raw = nullptr;
 			cgltf_result result = cgltf_parse_file(&options, pathString.c_str(), &raw);
 			GltfData data(raw);
@@ -592,7 +623,7 @@ namespace Basalt {
 
 	std::optional<MeshImporter::Contents> MeshImporter::Inspect(const std::filesystem::path& path, std::string& outError)
 	{
-		cgltf_options options = {};
+		cgltf_options options = MakeGltfOptions();
 		cgltf_data* data = nullptr;
 		const std::string file = FileSystem::PathToUtf8(path);
 		if (const cgltf_result result = cgltf_parse_file(&options, file.c_str(), &data); result != cgltf_result_success)

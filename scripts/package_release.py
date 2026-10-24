@@ -8,7 +8,8 @@
 The first form writes, for the host platform:
   Basalt-<version>-<platform>.zip|.tar.gz   editor, runtime and CLI (bin/), Docs/, Samples/, README.md, LICENSE; on macOS
                                             also the Vulkan loader and MoltenVK, so the tools run without the Vulkan SDK
-  Basalt-<version>-<Sample>-<platform>.*    each sample exported with project.export {"package": true} and smoke-tested:
+  Basalt-<version>-<Sample>-<platform>.*    each sample exported with project.export {"package": true, "archive": true}
+                                            (its Assets in one Assets.bpak) and smoke-tested:
                                             a zipped .app (signed, ad hoc without --sign-identity), a zipped folder whose
                                             executable has icon and version resources, or an AppImage (an AppDir tarball
                                             when appimagetool is missing, unless --require-appimage)
@@ -131,7 +132,7 @@ def package_engine(build, stage, output, name):
 
 def package_sample(cli, sample, stage, output, prefix, options, env):
     export = stage / "exports" / sample.name
-    result = run_cli(cli, sample, "project.export", {"output": str(export), "package": True, "smokeTestFrames": SMOKE_TEST_FRAMES}, env)
+    result = run_cli(cli, sample, "project.export", {"output": str(export), "package": True, "archive": True, "smokeTestFrames": SMOKE_TEST_FRAMES}, env)
     package = Path(result["package"])
     for message in result.get("warnings", []):
         warn(f"{sample.name}: {message}")

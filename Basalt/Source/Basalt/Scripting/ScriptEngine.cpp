@@ -76,6 +76,79 @@ namespace Basalt {
 			}
 		};
 
+		// What SearchMountedModules found for a module name: its loaded chunk (pushed on the stack) or why not.
+		struct MountedModule
+		{
+			bool Found = false;
+			bool LoadFailed = false;
+			std::string File;
+			std::string Message;
+		};
+
+		// The C++ half of SearchMountedModules, kept apart so no C++ object is alive when Lua raises an error (Lua is
+		// built as C: lua_error unwinds with longjmp).
+		MountedModule FindMountedModule(lua_State* state, const char* name, const char* path)
+		{
+			MountedModule result;
+			std::string module = name;
+			std::replace(module.begin(), module.end(), '.', '/');
+			const std::string templates = path;
+			for (size_t start = 0; start <= templates.size();)
+			{
+				const size_t end = std::min(templates.find(';', start), templates.size());
+				std::string candidate = templates.substr(start, end - start);
+				start = end + 1;
+				if (candidate.empty())
+					continue;
+				for (size_t mark = candidate.find('?'); mark != std::string::npos; mark = candidate.find('?', mark + module.size()))
+					candidate.replace(mark, 1, module);
+				// package.path holds native narrow text (OpenSafeLibraries).
+				const FileSystem::MountedFile file = FileSystem::FindMounted(std::filesystem::path(candidate));
+				if (!file)
+				{
+					result.Message += "\n\tno file '" + candidate + "'";
+					continue;
+				}
+				result.Found = true;
+				result.File = candidate;
+				const auto source = FileSystem::ReadMounted(file);
+				const std::string chunkName = "@" + candidate;
+				if (!source || luaL_loadbuffer(state, reinterpret_cast<const char*>(source->data()), source->size(), chunkName.c_str()) != LUA_OK)
+				{
+					result.LoadFailed = true;
+					result.Message = "error loading module '" + std::string(name) + "' from file '" + candidate + "':\n\t" + (source ? std::string(lua_tostring(state, -1) ? lua_tostring(state, -1) : "?") : std::string("cannot read it from the archive"));
+					if (source)
+						lua_pop(state, 1);
+				}
+				return result;
+			}
+			return result;
+		}
+
+		// A package.searchers entry ahead of Lua's file searcher, which only sees the disk: modules inside a mounted
+		// archive (an exported game's Assets.bpak), found through the same package.path templates. Upvalue 1 is the
+		// package table.
+		int SearchMountedModules(lua_State* state)
+		{
+			const char* name = luaL_checkstring(state, 1);
+			lua_getfield(state, lua_upvalueindex(1), "path");
+			const char* path = lua_tostring(state, -1);
+			if (!path)
+				return luaL_error(state, "'package.path' must be a string");
+			bool found = false;
+			bool failed = false;
+			{
+				MountedModule module = FindMountedModule(state, name, path);
+				found = module.Found && !module.LoadFailed;
+				failed = module.LoadFailed;
+				// Below the chunk when one was loaded: the file name require passes to it, or the message.
+				lua_pushlstring(state, found ? module.File.data() : module.Message.data(), found ? module.File.size() : module.Message.size());
+			}
+			if (failed)
+				return lua_error(state);
+			return found ? 2 : 1;
+		}
+
 		void OpenSafeLibraries(sol::state& lua, LuaWarnings& warnings)
 		{
 			lua_setwarnf(lua.lua_state(), &LuaWarnings::Receive, &warnings);
@@ -89,6 +162,21 @@ namespace Basalt {
 			const std::string base = root.lexically_normal().generic_string();
 			lua["package"]["path"] = base + "/?.lua;" + base + "/?/init.lua";
 			lua["package"]["cpath"] = "";
+			if (FileSystem::GetMountedArchive(root))
+			{
+				lua_State* state = lua.lua_state();
+				lua_getglobal(state, "table");
+				lua_getfield(state, -1, "insert");
+				lua_getglobal(state, "package");
+				lua_getfield(state, -1, "searchers");
+				lua_remove(state, -2);
+				lua_pushinteger(state, 2);
+				lua_getglobal(state, "package");
+				lua_pushcclosure(state, &SearchMountedModules, 1);
+				// table.insert(package.searchers, 2, searcher): after the preload searcher, before the file searcher.
+				lua_call(state, 3, 0);
+				lua_pop(state, 1);
+			}
 		}
 
 		// Loads a script file and returns its class table.
