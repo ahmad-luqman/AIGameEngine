@@ -65,6 +65,10 @@ if(Python3_Interpreter_FOUND)
 			COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/Automation/ExportSmoke.py" $<TARGET_FILE:BasaltCLI>
 				"${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest/Assets/Models/TexturedCube.glb")
 		set_tests_properties(ExportSmoke PROPERTIES LABELS integration TIMEOUT 300)
+		# The feature project exported as a folder and as Assets.bpak must play the same (Core/PackArchive).
+		add_test(NAME ArchiveExport
+			COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/Automation/ArchiveExport.py" $<TARGET_FILE:BasaltCLI> "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest")
+		set_tests_properties(ArchiveExport PROPERTIES LABELS integration TIMEOUT 600)
 		# scripts/package_release.py as the release workflow runs it (one sample; the tools archive when the editor is built).
 		set(releasePackagingArgs "")
 		if(TARGET BasaltEditor)

@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include <Basalt/Asset/AssetManager.h>
+#include <Basalt/Asset/AssetRegistry.h>
 #include <Basalt/Audio/AudioEngine.h>
 #include <Basalt/Audio/AudioSystem.h>
 #include <Basalt/Core/FileSystem.h>
@@ -18,9 +19,12 @@
 #include "MeshTestUtils.h"
 #include "TestUtils.h"
 
+#include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <random>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace Basalt;
@@ -51,6 +55,14 @@ namespace {
 		return data;
 	}
 
+	// An entry the archive must hold (a missing one ends the test case instead of crashing the run).
+	const PackArchive::Entry& RequireEntry(const PackArchive& archive, std::string_view path)
+	{
+		const PackArchive::Entry* entry = archive.Find(path);
+		REQUIRE_MESSAGE(entry, path);
+		return *entry;
+	}
+
 	// The bytes of an archive built from (path, data, asset ID) entries.
 	std::vector<uint8_t> BuildArchive(const std::vector<std::tuple<std::string, std::vector<uint8_t>, uint64_t>>& entries, const std::filesystem::path& file)
 	{
@@ -58,7 +70,7 @@ namespace {
 		std::string error;
 		for (const auto& [path, data, id] : entries)
 			REQUIRE_MESSAGE(writer.AddData(path, data, id, error), error);
-		REQUIRE_MESSAGE(writer.Write(file, error), error);
+		REQUIRE_MESSAGE(writer.Write(file, error).has_value(), error);
 		auto bytes = FileSystem::ReadBinaryFile(file);
 		REQUIRE(bytes);
 		return *bytes;
@@ -123,7 +135,7 @@ namespace {
 	{
 	public:
 		ScopedMount(const std::filesystem::path& root, Ref<PackArchive> archive) { FileSystem::Mount(root, std::move(archive)); }
-		~ScopedMount() { FileSystem::Mount({}, nullptr); }
+		~ScopedMount() { FileSystem::Unmount(); }
 
 		ScopedMount(const ScopedMount&) = delete;
 		ScopedMount& operator=(const ScopedMount&) = delete;
@@ -195,10 +207,10 @@ TEST_SUITE("Archive")
 			if (id != 0)
 				CHECK(archive->FindAsset(id) == entry);
 		}
-		CHECK(archive->Find("Assets/Scripts/Main.lua")->Compression == PackArchive::Method::Zstd);
-		CHECK(archive->Find("Assets/Scripts/Main.lua")->StoredSize < text.size() / 10);
-		CHECK(archive->Find("Assets/Textures/Noise.ktx2")->Compression == PackArchive::Method::Store);
-		CHECK(archive->Find("Assets/Empty.txt")->Compression == PackArchive::Method::Store);
+		CHECK(RequireEntry(*archive, "Assets/Scripts/Main.lua").Compression == PackArchive::Method::Zstd);
+		CHECK(RequireEntry(*archive, "Assets/Scripts/Main.lua").StoredSize < text.size() / 10);
+		CHECK(RequireEntry(*archive, "Assets/Textures/Noise.ktx2").Compression == PackArchive::Method::Store);
+		CHECK(RequireEntry(*archive, "Assets/Empty.txt").Compression == PackArchive::Method::Store);
 		// Exact matches only: letter case counts, as on Linux.
 		CHECK_FALSE(archive->Find("assets/scripts/main.lua"));
 		CHECK_FALSE(archive->Find("Assets/Scripts"));
@@ -214,8 +226,8 @@ TEST_SUITE("Archive")
 		const Ref<PackArchive> memory = PackArchive::OpenMemory(bytes, error);
 		REQUIRE_MESSAGE(memory, error);
 		CHECK(memory->GetFile().empty());
-		CHECK(memory->Read(*memory->Find("Assets/Scripts/Main.lua"), error) == text);
-		const auto empty = memory->Read(*memory->Find("Assets/Empty.txt"), error);
+		CHECK(memory->Read(RequireEntry(*memory, "Assets/Scripts/Main.lua"), error) == text);
+		const auto empty = memory->Read(RequireEntry(*memory, "Assets/Empty.txt"), error);
 		REQUIRE_MESSAGE(empty, error);
 		CHECK(empty->empty());
 	}
@@ -231,10 +243,10 @@ TEST_SUITE("Archive")
 		{
 			CHECK_FALSE_MESSAGE(writer.AddData(path, {}, 0, error), path);
 			CHECK(error.find("invalid archive path") != std::string::npos);
-			CHECK_FALSE(PackArchiveWriter::IsValidPath(path));
+			CHECK_FALSE(PackArchive::IsValidPath(path));
 		}
 		CHECK_FALSE(writer.AddData(std::string(PackArchive::MaxPathLength + 1, 'a'), {}, 0, error));
-		CHECK(PackArchiveWriter::IsValidPath(std::string(PackArchive::MaxPathLength, 'a')));
+		CHECK(PackArchive::IsValidPath(std::string(PackArchive::MaxPathLength, 'a')));
 		CHECK_FALSE(writer.AddData("Assets/A.txt", {}, 0, error));
 		CHECK(error.find("already in the archive") != std::string::npos);
 		CHECK_FALSE(writer.AddData("Assets/C.txt", {}, 2, error));
@@ -242,22 +254,28 @@ TEST_SUITE("Archive")
 		// A source that is gone by the time Write runs fails the write and leaves no file behind.
 		PackArchiveWriter missing;
 		CHECK(missing.AddFile("Assets/Gone.txt", directory.GetPath() / "Gone.txt", 0, error));
-		CHECK_FALSE(missing.Write(directory.GetPath() / "Missing.bpak", error));
+		CHECK_FALSE(missing.Write(directory.GetPath() / "Missing.bpak", error).has_value());
 		CHECK(error.find("cannot read") != std::string::npos);
 		CHECK_FALSE(FileSystem::Exists(directory.GetPath() / "Missing.bpak"));
 		CHECK_FALSE(BasaltTest::HasTempFiles(directory.GetPath()));
 
 		const std::filesystem::path file = directory.GetPath() / "Stats.bpak";
-		REQUIRE_MESSAGE(writer.Write(file, error), error);
-		const PackArchiveWriter::Statistics& statistics = writer.GetStatistics();
-		CHECK(statistics.Entries == 2);
-		CHECK(statistics.Compressed == 1);
-		CHECK(statistics.Size == 11000);
-		CHECK(statistics.ArchiveSize == std::filesystem::file_size(file));
+		const auto statistics = writer.Write(file, error);
+		REQUIRE_MESSAGE(statistics, error);
+		CHECK(statistics->Entries == 2);
+		CHECK(statistics->CompressedEntries == 1);
+		CHECK(statistics->UncompressedSize == 11000);
+		CHECK(statistics->ArchiveSize == std::filesystem::file_size(file));
+		// The writer keeps its entries: writing again (a retry) gives the same bytes, in-memory data included.
+		const std::filesystem::path again = directory.GetPath() / "Again.bpak";
+		REQUIRE(writer.Write(again, error).has_value());
+		CHECK(FileSystem::ReadBinaryFile(again) == FileSystem::ReadBinaryFile(file));
+		CHECK_FALSE(writer.AddFile("Assets/NoSource.txt", {}, 0, error));
+		CHECK(error.find("no source file") != std::string::npos);
 
 		// An empty archive is valid.
 		PackArchiveWriter empty;
-		REQUIRE(empty.Write(directory.GetPath() / "Empty.bpak", error));
+		REQUIRE(empty.Write(directory.GetPath() / "Empty.bpak", error).has_value());
 		const Ref<PackArchive> archive = PackArchive::Open(directory.GetPath() / "Empty.bpak", error);
 		REQUIRE_MESSAGE(archive, error);
 		CHECK(archive->GetEntries().empty());
@@ -345,15 +363,15 @@ TEST_SUITE("Archive")
 		bytes[compressed] ^= 0xFF;
 		Ref<PackArchive> archive = PackArchive::OpenMemory(bytes, error);
 		REQUIRE_MESSAGE(archive, error);
-		CHECK_FALSE(archive->Read(*archive->Find("Assets/A.txt"), error));
+		CHECK_FALSE(archive->Read(RequireEntry(*archive, "Assets/A.txt"), error));
 		CHECK(error.find("'Assets/A.txt' is damaged in the archive") != std::string::npos);
-		CHECK(archive->Read(*archive->Find("Assets/B.bin"), error));
+		CHECK(archive->Read(RequireEntry(*archive, "Assets/B.bin"), error));
 		const size_t stored = static_cast<size_t>(ReadU64(valid, FirstEntryField(valid, OffsetField)) + ReadU64(valid, FirstEntryField(valid, StoredSizeField)));
 		bytes = valid;
 		bytes[stored + 100] ^= 1;
 		archive = PackArchive::OpenMemory(bytes, error);
 		REQUIRE(archive);
-		CHECK_FALSE(archive->Read(*archive->Find("Assets/B.bin"), error));
+		CHECK_FALSE(archive->Read(RequireEntry(*archive, "Assets/B.bin"), error));
 		CHECK(error == "'Assets/B.bin' is damaged in the archive (hash mismatch)");
 		// A compressed entry whose frame declares another size than the index.
 		bytes = valid;
@@ -361,8 +379,29 @@ TEST_SUITE("Archive")
 		RehashIndex(bytes);
 		archive = PackArchive::OpenMemory(bytes, error);
 		REQUIRE_MESSAGE(archive, error);
-		CHECK_FALSE(archive->Read(*archive->Find("Assets/A.txt"), error));
+		CHECK_FALSE(archive->Read(RequireEntry(*archive, "Assets/A.txt"), error));
 		CHECK(error.find("does not match the index") != std::string::npos);
+
+		// Read only accepts this archive's own entries, whose sizes Parse bounded.
+		const Ref<PackArchive> other = PackArchive::OpenMemory(valid, error);
+		archive = PackArchive::OpenMemory(valid, error);
+		REQUIRE((other && archive));
+		CHECK_FALSE(archive->Read(RequireEntry(*other, "Assets/A.txt"), error));
+		CHECK(error.find("is not an entry of this archive") != std::string::npos);
+		PackArchive::Entry forged = RequireEntry(*archive, "Assets/A.txt");
+		forged.Size = uint64_t{ 1 } << 62;
+		CHECK_FALSE(archive->Read(forged, error));
+		CHECK(error.find("is not an entry of this archive") != std::string::npos);
+
+		// One entry where the index holds two: the second becomes trailing bytes.
+		bytes = valid;
+		WriteU32(bytes, 12, 1);
+		RehashIndex(bytes);
+		CHECK(OpenError(bytes).find("unexpected trailing bytes") != std::string::npos);
+		// A compressed entry with no stored bytes.
+		CHECK(entryError(StoredSizeField, 0).find("inconsistent sizes") != std::string::npos);
+		// A few compressed bytes claiming gigabytes (a forged zstd frame would make Read allocate them all).
+		CHECK(entryError(SizeField, PackArchive::MaxEntrySize).find("claims more data than its compressed bytes can hold") != std::string::npos);
 
 		CHECK_FALSE(PackArchive::Open(directory.GetPath() / "Missing.bpak", error));
 		CHECK(error.find("cannot read the archive") != std::string::npos);
@@ -412,7 +451,8 @@ TEST_SUITE("Archive")
 			CHECK_FALSE(sizeError);
 			const FileSystem::MountedFile mounted = FileSystem::FindMounted(root / "Assets" / "Packed.txt");
 			REQUIRE(mounted);
-			CHECK(mounted.Entry->AssetID == 9);
+			CHECK(mounted.GetEntry().AssetID == 9);
+			CHECK(mounted.GetArchive() == archive);
 			CHECK_FALSE(FileSystem::FindMounted(root / "Assets" / "Loose.txt"));
 			CHECK_FALSE(FileSystem::FindMounted(root));
 			CHECK_FALSE(FileSystem::FindMounted(directory.GetPath() / "Assets" / "Packed.txt"));
@@ -435,8 +475,14 @@ TEST_SUITE("Archive")
 		REQUIRE(damaged);
 		ScopedMount mount(root, damaged);
 		const uint64_t since = Log::GetHistory().GetTotalCount();
-		CHECK_FALSE(FileSystem::ReadTextFile(root / "Assets" / "Shadowed.txt"));
+		std::string readError;
+		CHECK_FALSE(FileSystem::ReadTextFile(root / "Assets" / "Shadowed.txt", &readError));
 		CHECK(BasaltTest::CountLogMessages(since, "'Assets/Shadowed.txt' is damaged in the archive") == 1);
+		CHECK(readError == "'Assets/Shadowed.txt' is damaged in the archive (hash mismatch)");
+		// Loaders pass the archive's reason on rather than calling the file missing.
+		CHECK_FALSE(SceneSerializer::ReadSceneFile(root / "Assets" / "Shadowed.txt", "Shadowed.txt", error));
+		CHECK_MESSAGE(error.find("damaged in the archive") != std::string::npos, error);
+		CHECK(error.find("no such file") == std::string::npos);
 	}
 
 	TEST_CASE("An archived export loads its scenes, models, textures, fonts, scripts and audio from the archive")
@@ -455,7 +501,19 @@ TEST_SUITE("Archive")
 			REQUIRE(FileSystem::WriteTextFile(gltf, model.dump()));
 			const std::vector<uint8_t> albedo = EncodeIconPng(MakeDefaultIcon(16));
 			REQUIRE(FileSystem::WriteBinaryFile(assets / "Models" / "Sphere Albedo.png", albedo.data(), albedo.size()));
+			// Two buffers sharing Sphere.bin, the first declaring only its vertex prefix: each read keeps exactly the declared
+			// bytes, from disk and from the archive.
+			const uint64_t vertexBytes = model["bufferViews"][0]["byteLength"].get<uint64_t>();
+			model["buffers"] = { { { "uri", "Sphere.bin" }, { "byteLength", vertexBytes } }, model["buffers"][0] };
+			model["bufferViews"][1]["buffer"] = 1;
+			REQUIRE(FileSystem::WriteTextFile(assets / "Models" / "Shared.gltf", model.dump()));
+			CHECK_MESSAGE(AssetManager::GetMesh("Assets/Models/Shared.gltf"), AssetManager::GetError("Assets/Models/Shared.gltf"));
+			AssetManager::Clear();
 		}
+		const std::vector<uint8_t> unicodePng = EncodeIconPng(MakeDefaultIcon(8));
+		REQUIRE(FileSystem::WriteBinaryFile(assets / "Textures" / FileSystem::PathFromUtf8("\xC3\x9Cn\xC3\xAF"
+																						   "code.png"),
+											unicodePng.data(), unicodePng.size()));
 		const std::vector<uint8_t> png = EncodeIconPng(MakeDefaultIcon(64));
 		REQUIRE(FileSystem::WriteBinaryFile(assets / "Textures" / "Icon.png", png.data(), png.size()));
 		std::error_code copyError;
@@ -465,6 +523,11 @@ TEST_SUITE("Archive")
 		REQUIRE_FALSE(copyError);
 		temp.WriteFile("Assets/Audio/Beep.wav", MakeWav(11025));
 		temp.WriteFile("Assets/Scripts/Lib/Util.lua", "return { Triple = function(x) return 3 * x end }");
+		temp.WriteFile("Assets/Scripts/Pkg/init.lua", "return { Name = 'package' }");
+		temp.WriteFile("Assets/Scripts/Lib/Bad.lua", "return {");
+		temp.WriteFile("Assets/Scripts/Lib/Priority.lua", "return 'archive'");
+		// A byte order mark and a shebang line, which Lua's file loader skips (line numbers stay right).
+		temp.WriteFile("Assets/Scripts/Lib/Shebang.lua", "\xEF\xBB\xBF#!/usr/bin/env lua\nlocal value = 7\nreturn { Value = value, Fail = function() error('boom') end }");
 		temp.WriteFile("Assets/Notes.txt", std::string(20000, 'n'));
 		temp.WriteFile("FakeRuntime", "binary");
 #if defined(__APPLE__)
@@ -481,6 +544,12 @@ TEST_SUITE("Archive")
 			auto& source = speaker.AddComponent<AudioSourceComponent>();
 			source.Clip = "Assets/Audio/Beep.wav";
 			source.PlayOnStart = true;
+			// Streamed clips read the archive copy page by page, seeking back to the start as they loop.
+			auto& music = scene.CreateEntity("Music").AddComponent<AudioSourceComponent>();
+			music.Clip = "Assets/Audio/Beep.wav";
+			music.Stream = true;
+			music.Loop = true;
+			music.PlayOnStart = true;
 			scene.CreateEntity("Listener").AddComponent<AudioListenerComponent>();
 			// Saving gives the clip and the scene sidecars: the scene refers to the clip by UUID.
 			REQUIRE_MESSAGE(SceneSerializer::SaveScene(scene, temp.GetDirectory() / "Assets" / "Scenes" / "Main.bscene", error), error);
@@ -500,33 +569,33 @@ TEST_SUITE("Archive")
 		options.Archive = true;
 		ExportResult result = Exporter::Export(*project, output, options);
 		REQUIRE_MESSAGE(result.Success, result.Error);
-		REQUIRE(result.Archive);
+		REQUIRE(result.ArchiveStatistics);
 		CHECK(FileSystem::Exists(output / Project::ArchiveFileName));
 		CHECK_FALSE(FileSystem::Exists(output / Project::AssetDirectoryName));
 		CHECK(FileSystem::Exists(output / Project::FileName));
-		CHECK(result.Archive->ArchiveSize == std::filesystem::file_size(output / Project::ArchiveFileName));
+		CHECK(result.ArchiveStatistics->ArchiveSize == std::filesystem::file_size(output / Project::ArchiveFileName));
 
 		{
 			const Ref<PackArchive> archive = PackArchive::Open(output / Project::ArchiveFileName, error);
 			REQUIRE_MESSAGE(archive, error);
-			CHECK(result.Archive->Entries == archive->GetEntries().size());
+			CHECK(result.ArchiveStatistics->Entries == archive->GetEntries().size());
 			for (const PackArchive::Entry& entry : archive->GetEntries())
 			{
 				CHECK_MESSAGE(entry.Path.starts_with("Assets/"), entry.Path);
 				CHECK_MESSAGE(!entry.Path.ends_with(".meta"), entry.Path);
 			}
-			CHECK(archive->Find("Assets/Scenes/Main.bscene")->AssetID == static_cast<uint64_t>(*sceneID));
+			CHECK(RequireEntry(*archive, "Assets/Scenes/Main.bscene").AssetID == static_cast<uint64_t>(*sceneID));
 			CHECK(archive->FindAsset(static_cast<uint64_t>(*clipID)) == archive->Find("Assets/Audio/Beep.wav"));
 			CHECK(archive->Find("Assets/Models/Sphere.bin"));
-			CHECK(archive->Find("Assets/Notes.txt")->Compression == PackArchive::Method::Zstd);
-			CHECK(archive->Find("Assets/Textures/Icon.png")->AssetID == 0);
+			CHECK(RequireEntry(*archive, "Assets/Notes.txt").Compression == PackArchive::Method::Zstd);
+			CHECK(RequireEntry(*archive, "Assets/Textures/Icon.png").AssetID == 0);
 		}
 
 		// Switching forms removes the other one, so the runtime never reads a stale copy.
 		options.Archive = false;
 		result = Exporter::Export(*project, output, options);
 		REQUIRE_MESSAGE(result.Success, result.Error);
-		CHECK_FALSE(result.Archive);
+		CHECK_FALSE(result.ArchiveStatistics);
 		CHECK_FALSE(FileSystem::Exists(output / Project::ArchiveFileName));
 		CHECK(FileSystem::Exists(output / "Assets" / "Audio" / "Beep.wav.meta"));
 		options.Archive = true;
@@ -542,14 +611,19 @@ TEST_SUITE("Archive")
 		{
 			~Cleanup()
 			{
-				FileSystem::Mount({}, nullptr);
+				FileSystem::Unmount();
 				Project::SetActive(nullptr);
 				AssetManager::Clear();
 				UIFonts::Clear();
 			}
 		} cleanup;
+		// Loose files beside the archive: the archive's copy wins, other files still come from disk.
+		REQUIRE(FileSystem::WriteTextFile(output / "Assets" / "Scripts" / "Lib" / "Priority.lua", "return 'disk'"));
+		REQUIRE(FileSystem::WriteTextFile(output / "Assets" / "Scripts" / "Lib" / "DiskOnly.lua", "return 'disk only'"));
+		const uint64_t beforeMount = Log::GetHistory().GetTotalCount();
 		REQUIRE_MESSAGE(Exporter::MountExportedArchive(output, error), error);
 		REQUIRE(FileSystem::GetMountedArchive(output));
+		CHECK(BasaltTest::CountLogMessages(beforeMount, "both Assets.bpak and an Assets folder") == 1);
 		const Ref<Project> exported = Project::Load(output, error);
 		REQUIRE_MESSAGE(exported, error);
 		Project::SetActive(exported);
@@ -571,6 +645,13 @@ TEST_SUITE("Archive")
 		CHECK_MESSAGE(AssetManager::GetTexture("Assets/Textures/Icon.png"), AssetManager::GetError("Assets/Textures/Icon.png"));
 		CHECK_MESSAGE(AssetManager::GetTexture("Assets/Textures/UASTC.ktx2"), AssetManager::GetError("Assets/Textures/UASTC.ktx2"));
 		CHECK(UIFonts::CheckFile("Assets/Fonts/Karla.ttf").empty());
+		CHECK_MESSAGE(AssetManager::GetMesh("Assets/Models/Shared.gltf"), AssetManager::GetError("Assets/Models/Shared.gltf"));
+		CHECK_MESSAGE(AssetManager::GetTexture("Assets/Textures/\xC3\x9Cn\xC3\xAF"
+											   "code.png"),
+					  AssetManager::GetError("Assets/Textures/\xC3\x9Cn\xC3\xAF"
+											 "code.png"));
+		// Archive paths match letter case exactly on every platform, as on Linux.
+		CHECK_FALSE(FileSystem::ReadBinaryFile(output / "Assets" / "textures" / "Icon.png"));
 
 		{
 			struct HeadlessAudio
@@ -581,12 +662,82 @@ TEST_SUITE("Archive")
 			scene->OnRuntimeStart();
 			REQUIRE(scene->GetAudioSystem());
 			CHECK(scene->GetAudioSystem()->IsPlaying(speaker));
-			// Modules come from the archive too.
+			Entity music = scene->FindEntityByName("Music");
+			REQUIRE(music);
+			CHECK(scene->GetAudioSystem()->IsPlaying(music));
+			std::vector<float> mix;
+			// Twice the clip's length: the stream wraps around.
+			REQUIRE(AudioEngine::ReadDeviceless(1.0f, mix));
+			CHECK(scene->GetAudioSystem()->IsPlaying(music));
+			// Modules come from the archive too, found through both package.path templates.
 			CHECK(BasaltTest::Eval(*scene, "return require('Assets.Scripts.Lib.Util').Triple(3)") == "9");
+			CHECK(BasaltTest::Eval(*scene, "return require('Assets.Scripts.Pkg').Name") == "package");
+			CHECK(BasaltTest::Eval(*scene, "return require('Assets.Scripts.Lib.Priority')") == "archive");
+			CHECK(BasaltTest::Eval(*scene, "return require('Assets.Scripts.Lib.DiskOnly')") == "disk only");
+			CHECK(BasaltTest::Eval(*scene, "return require('Assets.Scripts.Lib.Shebang').Value") == "7");
+			const std::string failure = BasaltTest::Eval(*scene, "local ok, message = pcall(require('Assets.Scripts.Lib.Shebang').Fail) return message");
+			CHECK_MESSAGE(failure.find("Shebang.lua:3: boom") != std::string::npos, failure);
+			const std::string bad = BasaltTest::Eval(*scene, "return require('Assets.Scripts.Lib.Bad')");
+			CHECK_MESSAGE(bad.find("error loading module 'Assets.Scripts.Lib.Bad' from file") != std::string::npos, bad);
+			CHECK(bad.find("no file '") == std::string::npos);
 			const std::string missing = BasaltTest::Eval(*scene, "return require('Assets.Scripts.Missing')");
 			CHECK_MESSAGE(missing.find("no file '") != std::string::npos, missing);
+			// require puts "\n\t" before each searcher's lines; the archive searcher must not add another (no empty line).
+			CHECK_MESSAGE(missing.find("\n\t\n") == std::string::npos, missing);
 			scene->OnRuntimeStop();
 		}
+	}
+
+	TEST_CASE("Archived exports refuse what an archive cannot hold and report assets without UUIDs")
+	{
+		BasaltTest::TempProject temp("ArchiveExportProblems");
+		REQUIRE(temp.IsValid());
+		const Ref<Project>& project = Project::GetActive();
+		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities":[]})");
+		temp.WriteFile("FakeRuntime", "binary");
+#if defined(__APPLE__)
+		temp.WriteFile("FakeVulkanSDK/lib/libvulkan.1.dylib", "stand-in");
+		temp.WriteFile("FakeVulkanSDK/lib/libMoltenVK.dylib", "stand-in");
+		const BasaltTest::ScopedEnvVar sdk("VULKAN_SDK", (temp.GetDirectory() / "FakeVulkanSDK").string());
+#endif
+		project->GetConfig().StartScene = "Assets/Scenes/Main.bscene";
+		const std::filesystem::path output = temp.GetDirectory().parent_path() / "ArchiveExportProblemsOut";
+		std::error_code error;
+		std::filesystem::remove_all(output, error);
+		ExportOptions options;
+		options.RuntimeExecutable = temp.GetDirectory() / "FakeRuntime";
+		options.Archive = true;
+
+		// Two sidecars with one UUID (a copied .meta): both assets go in without it, and the export says so.
+		std::string registryError;
+		REQUIRE(project->GetAssets().Ensure("Assets/Scenes/Main.bscene", registryError));
+		temp.WriteFile("Assets/Scenes/Copy.bscene", R"({"Entities":[]})");
+		std::filesystem::copy_file(temp.GetDirectory() / "Assets/Scenes/Main.bscene.meta", temp.GetDirectory() / "Assets/Scenes/Copy.bscene.meta", error);
+		REQUIRE_FALSE(error);
+		ExportResult result = Exporter::Export(*project, output, options);
+		REQUIRE_MESSAGE(result.Success, result.Error);
+		const auto warning = std::find_if(result.Warnings.begin(), result.Warnings.end(), [](const std::string& text) { return text.find("'Assets/Scenes/Copy.bscene' is archived without its UUID") != std::string::npos; });
+		CHECK_MESSAGE(warning != result.Warnings.end(), "warnings: ", result.Warnings.size());
+		std::filesystem::remove(temp.GetDirectory() / "Assets/Scenes/Copy.bscene.meta", error);
+
+#if !defined(_WIN32)
+		// A linked folder: the folder export copies it, so the archive must not silently leave it out.
+		BasaltTest::TempDirectory linked("ArchiveExportLinkedFolder");
+		temp.WriteFile("../ArchiveExportLinkedFolder/Inside.txt", "linked");
+		std::filesystem::create_directory_symlink(linked.GetPath(), temp.GetDirectory() / "Assets" / "Linked");
+		result = Exporter::Export(*project, output, options);
+		CHECK_FALSE(result.Success);
+		CHECK_MESSAGE(result.Error.find("'Assets/Linked' is a linked folder") != std::string::npos, result.Error);
+		std::filesystem::remove(temp.GetDirectory() / "Assets" / "Linked", error);
+
+		// A name with a colon is a valid file name here but not an archive path.
+		temp.WriteFile("Assets/Bad:Name.txt", "colon");
+		result = Exporter::Export(*project, output, options);
+		CHECK_FALSE(result.Success);
+		CHECK_MESSAGE(result.Error.find("'Assets/Bad:Name.txt' cannot be stored in an archive") != std::string::npos, result.Error);
+		CHECK_FALSE(result.ArchiveStatistics);
+#endif
+		std::filesystem::remove_all(output, error);
 	}
 
 	TEST_CASE("The runtime refuses an archive that does not open")
@@ -601,6 +752,63 @@ TEST_SUITE("Archive")
 		CHECK(error.find("not a .bpak archive") != std::string::npos);
 		CHECK_FALSE(FileSystem::GetMountedArchive(directory.GetPath()));
 	}
+
+	TEST_CASE("File archives read in parallel")
+	{
+		BasaltTest::TempDirectory directory("ArchiveParallel");
+		std::vector<std::tuple<std::string, std::vector<uint8_t>, uint64_t>> entries;
+		entries.reserve(32);
+		for (uint32_t i = 0; i < 32; i++)
+			entries.emplace_back("Assets/File" + std::to_string(i) + ".bin", i % 2 ? Noise(3000 + i * 97, i) : Repetitive(5000 + i * 131), 0);
+		BuildArchive(entries, directory.GetPath() / "Parallel.bpak");
+		std::string error;
+		// From the file: the reads share one stream, so they must not interleave.
+		const Ref<PackArchive> archive = PackArchive::Open(directory.GetPath() / "Parallel.bpak", error);
+		REQUIRE_MESSAGE(archive, error);
+		std::atomic<int> mismatches = 0;
+		std::vector<std::thread> threads;
+		threads.reserve(8);
+		for (uint32_t t = 0; t < 8; t++)
+		{
+			threads.emplace_back([&, t]() {
+				std::string threadError;
+				for (uint32_t i = 0; i < 50; i++)
+				{
+					const auto& [path, data, id] = entries[(t * 7 + i * 5) % entries.size()];
+					const PackArchive::Entry* entry = archive->Find(path);
+					if (!entry || archive->Read(*entry, threadError) != data)
+						mismatches++;
+				}
+			});
+		}
+		for (std::thread& thread : threads)
+			thread.join();
+		CHECK(mismatches == 0);
+	}
+
+#if !defined(_WIN32)
+	TEST_CASE("A mount answers through the root's linked and resolved spellings")
+	{
+		BasaltTest::TempDirectory directory("ArchiveLinkedRoot");
+		const std::filesystem::path game = directory.GetPath() / "Game";
+		const std::filesystem::path link = directory.GetPath() / "Link";
+		std::filesystem::create_directories(game);
+		std::filesystem::create_directory_symlink(game, link);
+		BuildArchive({ { "Assets/Packed.txt", Bytes("packed"), 3 } }, directory.GetPath() / "Assets.bpak");
+		std::string error;
+		const Ref<PackArchive> archive = PackArchive::Open(directory.GetPath() / "Assets.bpak", error);
+		REQUIRE_MESSAGE(archive, error);
+		// Mounted through the link: the asset registry resolves its root, so the resolved spelling must answer too.
+		ScopedMount mount(link, archive);
+		CHECK(FileSystem::ReadTextFile(link / "Assets" / "Packed.txt") == "packed");
+		CHECK(FileSystem::ReadTextFile(std::filesystem::canonical(game) / "Assets" / "Packed.txt") == "packed");
+		CHECK(FileSystem::GetMountedArchive(link) == archive);
+		CHECK(FileSystem::GetMountedArchive(std::filesystem::canonical(game)) == archive);
+		AssetRegistry registry(link);
+		REQUIRE(registry.Refresh(error));
+		CHECK(registry.Find(UUID(3)) == "Assets/Packed.txt");
+	}
+#endif
 
 	TEST_CASE("HashBytes64 is stable and sees every byte")
 	{

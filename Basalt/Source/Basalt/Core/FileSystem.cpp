@@ -1,5 +1,6 @@
 #include "Basalt/Core/FileSystem.h"
 
+#include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Base.h"
 #include "Basalt/Core/Log.h"
 
@@ -35,7 +36,7 @@ namespace Basalt {
 		struct Mounted
 		{
 			// The root as given and with links resolved (/var vs /private/var on macOS): callers hold either spelling (the
-			// asset registry resolves its root), and comparing both keeps lookups free of file system calls.
+			// asset registry resolves its root), and comparing both keeps lookups free of link resolution.
 			std::filesystem::path Root;
 			std::filesystem::path CanonicalRoot;
 			Ref<PackArchive> Archive;
@@ -57,19 +58,16 @@ namespace Basalt {
 		// The mounted archive and the '/'-separated key of path inside it; a null archive when path is not under the root.
 		std::pair<Ref<PackArchive>, std::string> FindMountKey(const std::filesystem::path& path)
 		{
-			Mounted mounted;
-			{
-				std::shared_lock lock(s_MountMutex);
-				if (!s_Mounted.Archive)
-					return {};
-				mounted = s_Mounted;
-			}
+			// Readers share the lock and Mount runs once at startup, so holding it here costs nothing and copies nothing.
+			std::shared_lock lock(s_MountMutex);
+			if (!s_Mounted.Archive)
+				return {};
 			const std::filesystem::path normal = NormalizeAbsolute(path);
-			for (const std::filesystem::path* root : { &mounted.Root, &mounted.CanonicalRoot })
+			for (const std::filesystem::path* root : { &s_Mounted.Root, &s_Mounted.CanonicalRoot })
 			{
 				const std::filesystem::path relative = normal.lexically_relative(*root);
 				if (!relative.empty() && *relative.begin() != ".." && relative != ".")
-					return { std::move(mounted.Archive), FileSystem::PathToGenericUtf8(relative) };
+					return { s_Mounted.Archive, FileSystem::PathToGenericUtf8(relative) };
 			}
 			return {};
 		}
@@ -85,11 +83,17 @@ namespace Basalt {
 
 	void FileSystem::Mount(const std::filesystem::path& root, Ref<PackArchive> archive)
 	{
-		Mounted mounted;
-		if (archive)
-			mounted = { NormalizeAbsolute(root), Canonical(NormalizeAbsolute(root)), std::move(archive) };
+		BS_CORE_ASSERT(archive, "Unmount removes the mount");
+		const std::filesystem::path normal = NormalizeAbsolute(root);
+		Mounted mounted{ normal, Canonical(normal), std::move(archive) };
 		std::unique_lock lock(s_MountMutex);
 		s_Mounted = std::move(mounted);
+	}
+
+	void FileSystem::Unmount()
+	{
+		std::unique_lock lock(s_MountMutex);
+		s_Mounted = {};
 	}
 
 	FileSystem::MountedFile FileSystem::FindMounted(const std::filesystem::path& path)
@@ -108,12 +112,20 @@ namespace Basalt {
 		return s_Mounted.Archive && (s_Mounted.Root == normal || s_Mounted.CanonicalRoot == normal) ? s_Mounted.Archive : nullptr;
 	}
 
-	std::optional<std::vector<uint8_t>> FileSystem::ReadMounted(const MountedFile& file)
+	std::optional<std::vector<uint8_t>> FileSystem::ReadMounted(const MountedFile& file, std::string* outError)
 	{
 		std::string error;
-		auto data = file.Archive->Read(*file.Entry, error);
+		std::optional<std::vector<uint8_t>> data;
+		if (!file)
+			error = "no such file in the mounted archive";
+		else
+			data = file.m_Archive->Read(*file.m_Entry, error);
 		if (!data)
-			BS_CORE_ERROR("Archive{}: {}", file.Archive->GetFile().empty() ? std::string() : " '" + PathToUtf8(file.Archive->GetFile()) + "'", error);
+		{
+			BS_CORE_ERROR("Archive{}: {}", file && !file.m_Archive->GetFile().empty() ? " '" + PathToUtf8(file.m_Archive->GetFile()) + "'" : std::string(), error);
+			if (outError)
+				*outError = std::move(error);
+		}
 		return data;
 	}
 
@@ -121,7 +133,7 @@ namespace Basalt {
 	{
 		outError.clear();
 		if (const MountedFile mounted = FindMounted(path))
-			return mounted.Entry->Size;
+			return mounted.m_Entry->Size;
 		const bool regular = std::filesystem::is_regular_file(path, outError);
 		if (outError == std::errc::no_such_file_or_directory)
 			outError.clear();
@@ -131,11 +143,11 @@ namespace Basalt {
 		return outError ? std::nullopt : std::optional<uint64_t>(size);
 	}
 
-	std::optional<std::string> FileSystem::ReadTextFile(const std::filesystem::path& path)
+	std::optional<std::string> FileSystem::ReadTextFile(const std::filesystem::path& path, std::string* outError)
 	{
 		if (const MountedFile mounted = FindMounted(path))
 		{
-			auto data = ReadMounted(mounted);
+			auto data = ReadMounted(mounted, outError);
 			return data ? std::optional<std::string>(std::in_place, data->begin(), data->end()) : std::nullopt;
 		}
 		// A directory opens as a stream on Linux, with a meaningless size (reading it would allocate that much).
@@ -159,10 +171,10 @@ namespace Basalt {
 		return result;
 	}
 
-	std::optional<std::vector<uint8_t>> FileSystem::ReadBinaryFile(const std::filesystem::path& path)
+	std::optional<std::vector<uint8_t>> FileSystem::ReadBinaryFile(const std::filesystem::path& path, std::string* outError)
 	{
 		if (const MountedFile mounted = FindMounted(path))
-			return ReadMounted(mounted);
+			return ReadMounted(mounted, outError);
 		std::error_code error;
 		if (!std::filesystem::is_regular_file(path, error))
 			return std::nullopt;
@@ -277,7 +289,7 @@ namespace Basalt {
 #endif
 		if (error)
 		{
-			outError = "cannot replace '" + target.string() + "': " + error.message();
+			outError = "cannot replace '" + PathToUtf8(target) + "': " + error.message();
 			std::filesystem::remove(source, error);
 			return false;
 		}
@@ -405,25 +417,31 @@ namespace Basalt {
 
 	std::filesystem::path FileSystem::GetExecutablePath()
 	{
+		// Callers name things after it (crash report folders); say so rather than silently naming them "Unknown".
+		const auto unknown = []() {
+			BS_CORE_WARN("FileSystem: cannot find the running executable's path");
+			std::error_code error;
+			return std::filesystem::current_path(error) / "Unknown";
+		};
 #if defined(BS_PLATFORM_WINDOWS)
 		wchar_t buffer[MAX_PATH] = {};
 		const DWORD length = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
 		if (length == 0 || length == MAX_PATH)
-			return std::filesystem::current_path() / "Unknown";
+			return unknown();
 		return std::filesystem::path(buffer);
 #elif defined(BS_PLATFORM_MACOS)
 		uint32_t size = 0;
 		_NSGetExecutablePath(nullptr, &size);
 		std::string buffer(size, '\0');
 		if (_NSGetExecutablePath(buffer.data(), &size) != 0)
-			return std::filesystem::current_path() / "Unknown";
+			return unknown();
 		std::error_code error;
 		auto canonical = std::filesystem::canonical(buffer.c_str(), error);
 		return error ? std::filesystem::path(buffer.c_str()) : canonical;
 #else
 		std::error_code error;
 		auto path = std::filesystem::read_symlink("/proc/self/exe", error);
-		return error ? std::filesystem::current_path() / "Unknown" : path;
+		return error ? unknown() : path;
 #endif
 	}
 

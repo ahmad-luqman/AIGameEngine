@@ -130,10 +130,10 @@ FetchContent_Declare(cgltf
 	SOURCE_SUBDIR _BasaltNoCMake)
 
 # Basis bundles Zstd 1.4.9, which mishandles Tests/Data/Textures/ZstdRegression.ktx2 (a fuzz find), so the
-# transcoder links this pinned libzstd instead. It still compiles against Basis's bundled zstd.h, which is fine:
-# only the stable ZSTD_decompress/ZSTD_isError are called. The engine links it too for .bpak archives
-# (Core/PackArchive), whose exporter compresses: untrusted input (KTX2 files, archives) still only reaches the
-# decoder. Built without the legacy (v0.5-v0.7) frame decoders that Basis's copy also left out.
+# transcoder links this pinned libzstd instead. It still compiles against Basis's bundled zstd.h, which is fine: the
+# transcoder calls only the stable ZSTD_decompress/ZSTD_isError. The engine also links it, against this pin's own
+# zstd.h, for .bpak archives (Core/PackArchive), whose exporter compresses: untrusted input (KTX2 files, archives) still
+# only reaches the decoder. Built without the legacy (v0.5-v0.7) frame decoders that Basis's copy also left out.
 FetchContent_Declare(zstd SYSTEM
 	GIT_REPOSITORY https://github.com/facebook/zstd.git
 	GIT_TAG v1.5.7

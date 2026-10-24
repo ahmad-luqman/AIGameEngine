@@ -12,9 +12,10 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 	const Basalt::Ref<Basalt::PackArchive> archive = Basalt::PackArchive::OpenMemory(std::vector<uint8_t>(data, data + size), error);
 	if (!archive)
 		return 0;
-	// A forged size may legitimately ask for up to MaxEntrySize bytes; reading such entries tests nothing more and would
-	// exceed libFuzzer's memory limit, so the fuzzer reads only small ones.
-	constexpr uint64_t MaxFuzzEntrySize = uint64_t{ 16 } << 20;
+	// Parse bounds a compressed entry's size by its stored bytes (128 KiB per 3 bytes), so a fuzz input of a few KiB can
+	// still claim hundreds of megabytes, all legitimately allocated; reading those tests nothing more and only slows the
+	// run, so the fuzzer skips entries past 256 MiB (well within libFuzzer's 2 GiB memory limit).
+	constexpr uint64_t MaxFuzzEntrySize = uint64_t{ 256 } << 20;
 	for (const Basalt::PackArchive::Entry& entry : archive->GetEntries())
 	{
 		(void)archive->Find(entry.Path);

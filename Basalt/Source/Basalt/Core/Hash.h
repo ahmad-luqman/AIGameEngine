@@ -19,9 +19,10 @@ namespace Basalt {
 		return hash;
 	}
 
-	// FNV-1a's step over 8-byte little-endian words, then over the remaining bytes, with a final avalanche: about eight
-	// times faster than HashFnv1a64 on large blobs (archive integrity checks). Each step is a bijection of the state, so
-	// any change to a single word always changes the hash. Stable across platforms; not for security.
+	// Seeded with the size, then per 8-byte little-endian word an FNV-1a step and a xor-shift, then FNV-1a over the
+	// remaining bytes, with a final avalanche: several times faster than HashFnv1a64 on large blobs (one multiply per 8
+	// bytes). Each step is a bijection of the state, so any change to a single word always changes the hash. Part of the
+	// .bpak format (entry and index hashes): changing it requires a PackArchive::FormatVersion bump. Not for security.
 	inline uint64_t HashBytes64(const void* data, size_t size)
 	{
 		const auto* bytes = static_cast<const unsigned char*>(data);

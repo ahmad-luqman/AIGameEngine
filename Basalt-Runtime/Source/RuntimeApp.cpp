@@ -102,7 +102,13 @@ namespace Basalt {
 		std::string error;
 		// An archived export reads its Assets from Assets.bpak, mounted before anything (the project's asset UUIDs) loads.
 		std::error_code directoryError;
-		const std::filesystem::path projectDirectory = std::filesystem::is_directory(projectPath, directoryError) ? projectPath : projectPath.parent_path();
+		const bool isDirectory = std::filesystem::is_directory(projectPath, directoryError);
+		if (directoryError && directoryError != std::errc::no_such_file_or_directory)
+		{
+			BS_CORE_CRITICAL("Cannot inspect '{}': {}", FileSystem::PathToUtf8(projectPath), directoryError.message());
+			return nullptr;
+		}
+		const std::filesystem::path projectDirectory = isDirectory ? projectPath : projectPath.parent_path();
 		if (!Exporter::MountExportedArchive(projectDirectory, error))
 		{
 			BS_CORE_CRITICAL("Cannot open the game's assets: {}", error);
@@ -112,6 +118,13 @@ namespace Basalt {
 		if (!project)
 		{
 			BS_CORE_CRITICAL("Cannot load project: {}", error);
+			return nullptr;
+		}
+		// The asset registry only reads UUIDs from an archive mounted at its project's folder; a mismatch (another spelling
+		// of the path) would leave every UUID reference unresolved without saying why.
+		if (FileSystem::Exists(projectDirectory / Project::ArchiveFileName) && !FileSystem::GetMountedArchive(project->GetDirectory()))
+		{
+			BS_CORE_CRITICAL("The game's {} is not mounted at its project folder '{}'", Project::ArchiveFileName, FileSystem::PathToUtf8(project->GetDirectory()));
 			return nullptr;
 		}
 		Project::SetActive(project);

@@ -176,4 +176,4 @@ Give the game its identity first: `$B --project P project.set '{"version": "1.0.
 `scripts/sign-macos.sh`), an executable with icon and version resources on Windows, an AppImage on Linux (without
 `appimagetool` the export still succeeds, with an AppDir and a warning). Add `"archive": true` to ship `Assets/` as one
 `Assets.bpak` (zstd where it helps, UUIDs in its index; `archive.inspect` lists it). A crashed game leaves a report in
-`<user data>/<game>/Crashes/` (reason, stack, last log lines). See `Docs/Shipping.md`.
+`<user data>/<executable name>/Crashes/` (the project name with spaces as `_`; reason, stack, last log lines). See `Docs/Shipping.md`.

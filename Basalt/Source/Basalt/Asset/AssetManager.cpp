@@ -108,10 +108,11 @@ namespace Basalt {
 
 		Ref<const MaterialData> LoadMaterialFile(const std::string& key, std::string& outError)
 		{
-			const auto text = FileSystem::ReadTextFile(Project::ResolvePath(key));
+			std::string readError;
+			const auto text = FileSystem::ReadTextFile(Project::ResolvePath(key), &readError);
 			if (!text)
 			{
-				outError = "cannot read material '" + key + "'";
+				outError = "cannot read material '" + key + "'" + (readError.empty() ? std::string() : " (" + readError + ")");
 				return nullptr;
 			}
 			std::vector<std::string> warnings;

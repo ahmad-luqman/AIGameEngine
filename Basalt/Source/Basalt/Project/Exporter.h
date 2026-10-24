@@ -36,11 +36,11 @@ namespace Basalt {
 		// What to distribute: the .app bundle, the .AppImage file (the AppDir when appimagetool was not found), or the
 		// output directory (folder exports and Windows packages).
 		std::filesystem::path PackagePath;
-		// Problems that did not stop the export (no project icon, no appimagetool).
+		// Problems that did not stop the export (no project icon, no appimagetool, assets archived without their UUID).
 		std::vector<std::string> Warnings;
 		uint32_t FileCount = 0;
-		// What ExportOptions::Archive packed.
-		std::optional<PackArchiveWriter::Statistics> Archive;
+		// What ExportOptions::Archive packed; set only on success.
+		std::optional<PackArchiveWriter::Statistics> ArchiveStatistics;
 	};
 
 	// Produces a standalone game: the runtime executable (named after the project, sanitized), the project file, its input

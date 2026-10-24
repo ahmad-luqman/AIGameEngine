@@ -21,9 +21,11 @@
 #include <algorithm>
 #include <array>
 #include <cstdio>
+#include <exception>
 #include <optional>
 #include <set>
 #include <stdexcept>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -76,58 +78,85 @@ namespace Basalt {
 			}
 		};
 
-		// What SearchMountedModules found for a module name: its loaded chunk (pushed on the stack) or why not.
-		struct MountedModule
+		// What SearchMountedModules found for a module name. Loaded means its chunk was pushed on the Lua stack.
+		enum class ModuleOutcome
 		{
-			bool Found = false;
-			bool LoadFailed = false;
-			std::string File;
-			std::string Message;
+			NotFound,
+			Loaded,
+			LoadFailed
 		};
 
-		// The C++ half of SearchMountedModules, kept apart so no C++ object is alive when Lua raises an error (Lua is
-		// built as C: lua_error unwinds with longjmp).
-		MountedModule FindMountedModule(lua_State* state, const char* name, const char* path)
+		// The chunk of a module's source, prepared as luaL_loadfile prepares a file: a UTF-8 byte order mark is skipped and a
+		// first line starting with '#' (a shebang) becomes an empty line, so line numbers stay right.
+		std::string_view SkipFilePrefix(std::string_view source)
 		{
-			MountedModule result;
-			std::string module = name;
-			std::replace(module.begin(), module.end(), '.', '/');
-			const std::string templates = path;
-			for (size_t start = 0; start <= templates.size();)
+			if (source.starts_with("\xEF\xBB\xBF"))
+				source.remove_prefix(3);
+			if (source.starts_with('#'))
+				source.remove_prefix(std::min(source.find('\n'), source.size()));
+			return source;
+		}
+
+		// The C++ half of SearchMountedModules, kept apart so no C++ object is alive when the searcher raises its error (Lua
+		// is built as C: lua_error unwinds with longjmp). outText receives the file name (Loaded), the "no file" lines
+		// (NotFound) or the error (LoadFailed).
+		ModuleOutcome FindMountedModule(lua_State* state, const char* name, const char* path, std::string& outText)
+		{
+			try
 			{
-				const size_t end = std::min(templates.find(';', start), templates.size());
-				std::string candidate = templates.substr(start, end - start);
-				start = end + 1;
-				if (candidate.empty())
-					continue;
-				for (size_t mark = candidate.find('?'); mark != std::string::npos; mark = candidate.find('?', mark + module.size()))
-					candidate.replace(mark, 1, module);
-				// package.path holds native narrow text (OpenSafeLibraries).
-				const FileSystem::MountedFile file = FileSystem::FindMounted(std::filesystem::path(candidate));
-				if (!file)
+				std::string module = name;
+				std::replace(module.begin(), module.end(), '.', '/');
+				const std::string templates = path;
+				for (size_t start = 0; start <= templates.size();)
 				{
-					result.Message += "\n\tno file '" + candidate + "'";
-					continue;
-				}
-				result.Found = true;
-				result.File = candidate;
-				const auto source = FileSystem::ReadMounted(file);
-				const std::string chunkName = "@" + candidate;
-				if (!source || luaL_loadbuffer(state, reinterpret_cast<const char*>(source->data()), source->size(), chunkName.c_str()) != LUA_OK)
-				{
-					result.LoadFailed = true;
-					result.Message = "error loading module '" + std::string(name) + "' from file '" + candidate + "':\n\t" + (source ? std::string(lua_tostring(state, -1) ? lua_tostring(state, -1) : "?") : std::string("cannot read it from the archive"));
-					if (source)
+					const size_t end = std::min(templates.find(';', start), templates.size());
+					std::string candidate = templates.substr(start, end - start);
+					start = end + 1;
+					if (candidate.empty())
+						continue;
+					for (size_t mark = candidate.find('?'); mark != std::string::npos; mark = candidate.find('?', mark + module.size()))
+						candidate.replace(mark, 1, module);
+					// package.path holds native narrow text (OpenSafeLibraries).
+					const FileSystem::MountedFile file = FileSystem::FindMounted(std::filesystem::path(candidate));
+					if (!file)
+					{
+						// require puts "\n\t" before each searcher's message; the lines within one are joined the same way.
+						outText += (outText.empty() ? "" : "\n\t") + std::string("no file '") + candidate + "'";
+						continue;
+					}
+					std::string readError;
+					const auto source = FileSystem::ReadMounted(file, &readError);
+					const std::string prefix = "error loading module '" + std::string(name) + "' from file '" + candidate + "':\n\t";
+					if (!source)
+					{
+						outText = prefix + readError;
+						return ModuleOutcome::LoadFailed;
+					}
+					const std::string_view chunk = SkipFilePrefix(std::string_view(reinterpret_cast<const char*>(source->data()), source->size()));
+					const std::string chunkName = "@" + candidate;
+					if (luaL_loadbuffer(state, chunk.data(), chunk.size(), chunkName.c_str()) != LUA_OK)
+					{
+						const char* message = lua_tostring(state, -1);
+						outText = prefix + (message ? message : "?");
 						lua_pop(state, 1);
+						return ModuleOutcome::LoadFailed;
+					}
+					outText = candidate;
+					return ModuleOutcome::Loaded;
 				}
-				return result;
+				return ModuleOutcome::NotFound;
 			}
-			return result;
+			catch (const std::exception& exception)
+			{
+				outText = std::string("error loading module '") + name + "': " + exception.what();
+				return ModuleOutcome::LoadFailed;
+			}
 		}
 
 		// A package.searchers entry ahead of Lua's file searcher, which only sees the disk: modules inside a mounted
 		// archive (an exported game's Assets.bpak), found through the same package.path templates. Upvalue 1 is the
-		// package table.
+		// package table. OpenSafeLibraries installs it only when the archive is mounted before the scripts start, as the
+		// runtime does.
 		int SearchMountedModules(lua_State* state)
 		{
 			const char* name = luaL_checkstring(state, 1);
@@ -135,18 +164,27 @@ namespace Basalt {
 			const char* path = lua_tostring(state, -1);
 			if (!path)
 				return luaL_error(state, "'package.path' must be a string");
-			bool found = false;
-			bool failed = false;
+			ModuleOutcome outcome = ModuleOutcome::NotFound;
 			{
-				MountedModule module = FindMountedModule(state, name, path);
-				found = module.Found && !module.LoadFailed;
-				failed = module.LoadFailed;
-				// Below the chunk when one was loaded: the file name require passes to it, or the message.
-				lua_pushlstring(state, found ? module.File.data() : module.Message.data(), found ? module.File.size() : module.Message.size());
+				std::string text;
+				outcome = FindMountedModule(state, name, path, text);
+				// Copied onto the Lua stack inside a protected call, so a memory error there cannot skip text's destructor.
+				lua_pushcfunction(state, [](lua_State* inner) {
+					lua_pushlstring(inner, static_cast<const char*>(lua_touserdata(inner, 1)), static_cast<size_t>(lua_tointeger(inner, 2)));
+					return 1;
+				});
+				lua_pushlightuserdata(state, text.data());
+				lua_pushinteger(state, static_cast<lua_Integer>(text.size()));
+				if (lua_pcall(state, 2, 1, 0) != LUA_OK)
+				{
+					// The pcall left its error message; with text gone, report that instead.
+					outcome = ModuleOutcome::LoadFailed;
+				}
 			}
-			if (failed)
+			// The stack ends with the chunk (when loaded) and then the file name or message.
+			if (outcome == ModuleOutcome::LoadFailed)
 				return lua_error(state);
-			return found ? 2 : 1;
+			return outcome == ModuleOutcome::Loaded ? 2 : 1;
 		}
 
 		void OpenSafeLibraries(sol::state& lua, LuaWarnings& warnings)

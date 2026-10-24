@@ -1,12 +1,16 @@
 #include "Basalt/Core/PackArchive.h"
 
+#include "Basalt/Core/Assert.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Hash.h"
+#include "Basalt/Core/Log.h"
 
 #include <zstd.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cstring>
+#include <functional>
 #include <system_error>
 
 namespace Basalt {
@@ -15,6 +19,8 @@ namespace Basalt {
 
 		// Path length, asset ID, offset, stored size, size, method, hash.
 		constexpr size_t EntryFixedSize = 4 + 8 + 8 + 8 + 8 + 1 + 8;
+		// ZSTD_BLOCKSIZE_MAX, which zstd.h only defines with ZSTD_STATIC_LINKING_ONLY.
+		constexpr uint64_t MaxZstdBlockSize = uint64_t{ 128 } * 1024;
 
 		void PutU32(std::vector<uint8_t>& out, uint32_t value)
 		{
@@ -28,33 +34,55 @@ namespace Basalt {
 				out.push_back(static_cast<uint8_t>(value >> (8 * i)));
 		}
 
-		// Little-endian reads from a buffer whose remaining length the caller has checked.
-		uint32_t GetU32(const uint8_t* data)
+		// Little-endian reads that advance through a buffer whose remaining length the caller has checked.
+		class ByteReader
 		{
-			uint32_t value = 0;
-			for (int i = 0; i < 4; i++)
-				value |= static_cast<uint32_t>(data[i]) << (8 * i);
-			return value;
-		}
+		public:
+			explicit ByteReader(const uint8_t* data)
+				: m_Data(data)
+			{
+			}
 
-		uint64_t GetU64(const uint8_t* data)
-		{
-			uint64_t value = 0;
-			for (int i = 0; i < 8; i++)
-				value |= static_cast<uint64_t>(data[i]) << (8 * i);
-			return value;
-		}
+			uint8_t U8() { return *m_Data++; }
+			uint32_t U32() { return static_cast<uint32_t>(Read(4)); }
+			uint64_t U64() { return Read(8); }
+			std::string Text(size_t length)
+			{
+				std::string text(reinterpret_cast<const char*>(m_Data), length);
+				m_Data += length;
+				return text;
+			}
+
+		private:
+			uint64_t Read(int bytes)
+			{
+				uint64_t value = 0;
+				for (int i = 0; i < bytes; i++)
+					value |= static_cast<uint64_t>(m_Data[i]) << (8 * i);
+				m_Data += bytes;
+				return value;
+			}
+
+			const uint8_t* m_Data;
+		};
 
 		std::vector<uint8_t> BuildHeader(uint32_t entryCount, uint64_t indexOffset, uint64_t indexSize, uint64_t indexHash)
 		{
-			std::vector<uint8_t> header(PackArchive::Magic, PackArchive::Magic + 4);
+			std::vector<uint8_t> header(std::begin(PackArchive::Magic), std::end(PackArchive::Magic));
 			PutU32(header, PackArchive::FormatVersion);
 			PutU32(header, 0);
 			PutU32(header, entryCount);
 			PutU64(header, indexOffset);
 			PutU64(header, indexSize);
 			PutU64(header, indexHash);
+			BS_CORE_ASSERT(header.size() == PackArchive::HeaderSize, "the header layout must match HeaderSize");
 			return header;
+		}
+
+		std::string DescribeErrno()
+		{
+			const int reason = errno;
+			return reason != 0 ? ": " + std::generic_category().message(reason) : std::string();
 		}
 
 	}
@@ -71,12 +99,13 @@ namespace Basalt {
 			outError = "cannot read the archive '" + name + "'" + (error ? ": " + error.message() : std::string(": not a file"));
 			return nullptr;
 		}
-		auto archive = CreateRef<PackArchive>();
+		auto archive = CreateRef<PackArchive>(Token{});
 		archive->m_File = file;
+		errno = 0;
 		archive->m_Stream.open(file, std::ios::in | std::ios::binary);
 		if (!archive->m_Stream)
 		{
-			outError = "cannot open the archive '" + name + "'";
+			outError = "cannot open the archive '" + name + "'" + DescribeErrno();
 			return nullptr;
 		}
 		if (!archive->Parse(size, outError))
@@ -89,7 +118,7 @@ namespace Basalt {
 
 	Ref<PackArchive> PackArchive::OpenMemory(std::vector<uint8_t> bytes, std::string& outError)
 	{
-		auto archive = CreateRef<PackArchive>();
+		auto archive = CreateRef<PackArchive>(Token{});
 		archive->m_Memory = std::move(bytes);
 		if (!archive->Parse(archive->m_Memory.size(), outError))
 			return nullptr;
@@ -133,26 +162,30 @@ namespace Basalt {
 			outError = "not a .bpak archive";
 			return false;
 		}
-		if (const uint32_t version = GetU32(header + 4); version != FormatVersion)
+		ByteReader fields(header + sizeof(Magic));
+		const uint32_t version = fields.U32();
+		const uint32_t flags = fields.U32();
+		const uint32_t count = fields.U32();
+		const uint64_t indexOffset = fields.U64();
+		const uint64_t indexSize = fields.U64();
+		const uint64_t indexHash = fields.U64();
+		if (version != FormatVersion)
 		{
 			outError = "archive format version " + std::to_string(version) + " is not supported (this Basalt reads version " + std::to_string(FormatVersion) + ")";
 			return false;
 		}
-		if (GetU32(header + 8) != 0)
+		if (flags != 0)
 		{
 			outError = "the archive uses features this Basalt does not know (nonzero header flags)";
 			return false;
 		}
-		const uint32_t count = GetU32(header + 12);
-		const uint64_t indexOffset = GetU64(header + 16);
-		const uint64_t indexSize = GetU64(header + 24);
-		const uint64_t indexHash = GetU64(header + 32);
 		if (count > MaxEntries)
 		{
 			outError = "the archive lists " + std::to_string(count) + " entries (at most " + std::to_string(MaxEntries) + ")";
 			return false;
 		}
-		// The index ends the file, and each entry takes between EntryFixedSize and EntryFixedSize + MaxPathLength bytes.
+		// The index ends the file, and each entry takes between EntryFixedSize + 1 (a one-byte path) and
+		// EntryFixedSize + MaxPathLength bytes.
 		if (indexOffset < HeaderSize || indexOffset > fileSize || indexSize != fileSize - indexOffset)
 		{
 			outError = "the archive's index does not end the file (truncated or damaged)";
@@ -186,22 +219,21 @@ namespace Basalt {
 			};
 			if (index.size() - cursor < EntryFixedSize)
 				return fail("the index ends inside it");
-			const uint32_t pathLength = GetU32(index.data() + cursor);
-			cursor += 4;
-			if (pathLength == 0 || pathLength > MaxPathLength || index.size() - cursor < pathLength + (EntryFixedSize - 4))
+			ByteReader reader(index.data() + cursor);
+			const uint32_t pathLength = reader.U32();
+			if (pathLength == 0 || pathLength > MaxPathLength || index.size() - cursor < EntryFixedSize + pathLength)
 				return fail("invalid path length " + std::to_string(pathLength));
+			cursor += EntryFixedSize + pathLength;
 			Entry entry;
-			entry.Path.assign(reinterpret_cast<const char*>(index.data() + cursor), pathLength);
-			cursor += pathLength;
-			entry.AssetID = GetU64(index.data() + cursor);
-			entry.Offset = GetU64(index.data() + cursor + 8);
-			entry.StoredSize = GetU64(index.data() + cursor + 16);
-			entry.Size = GetU64(index.data() + cursor + 24);
-			const uint8_t method = index[cursor + 32];
-			entry.Hash = GetU64(index.data() + cursor + 33);
-			cursor += EntryFixedSize - 4;
+			entry.Path = reader.Text(pathLength);
+			entry.AssetID = reader.U64();
+			entry.Offset = reader.U64();
+			entry.StoredSize = reader.U64();
+			entry.Size = reader.U64();
+			const uint8_t method = reader.U8();
+			entry.Hash = reader.U64();
 
-			if (!PackArchiveWriter::IsValidPath(entry.Path))
+			if (!IsValidPath(entry.Path))
 				return fail("invalid path '" + entry.Path + "'");
 			// Sorted and unique, so lookups can binary search and a path never names two files.
 			if (!entries.empty() && !(entries.back().Path < entry.Path))
@@ -216,6 +248,10 @@ namespace Basalt {
 			const bool sizeMatches = entry.Compression == Method::Store ? entry.StoredSize == entry.Size : entry.StoredSize > 0 && entry.StoredSize <= ZSTD_compressBound(static_cast<size_t>(entry.Size));
 			if (!sizeMatches)
 				return fail("'" + entry.Path + "' has inconsistent sizes");
+			// Every zstd block takes at least a 3-byte header and yields at most 128 KiB, so a few stored bytes cannot claim
+			// gigabytes: Read allocates Size bytes before decompressing.
+			if (entry.Compression == Method::Zstd && entry.Size > (entry.StoredSize / 3 + 1) * MaxZstdBlockSize)
+				return fail("'" + entry.Path + "' claims more data than its compressed bytes can hold");
 			entries.push_back(std::move(entry));
 		}
 		if (cursor != index.size())
@@ -250,9 +286,11 @@ namespace Basalt {
 
 	bool PackArchive::HasFolder(std::string_view path) const
 	{
+		if (path.empty())
+			return false;
 		const std::string prefix = std::string(path) + "/";
 		const auto it = std::lower_bound(m_Entries.begin(), m_Entries.end(), prefix, [](const Entry& entry, const std::string& value) { return entry.Path < value; });
-		return !path.empty() && it != m_Entries.end() && it->Path.starts_with(prefix);
+		return it != m_Entries.end() && it->Path.starts_with(prefix);
 	}
 
 	const PackArchive::Entry* PackArchive::FindAsset(uint64_t assetID) const
@@ -265,24 +303,25 @@ namespace Basalt {
 
 	std::optional<std::vector<uint8_t>> PackArchive::Read(const Entry& entry, std::string& outError) const
 	{
+		// Only entries Parse checked: the sizes of any other Entry were never bounded, so allocating for them is unsafe.
+		const Entry* first = m_Entries.data();
+		if (std::less<const Entry*>()(&entry, first) || !std::less<const Entry*>()(&entry, first + m_Entries.size()))
+		{
+			outError = "'" + entry.Path + "' is not an entry of this archive";
+			return std::nullopt;
+		}
+		// A stored entry's StoredSize equals its Size (Parse checks it), so this reads the whole file either way.
+		std::vector<uint8_t> stored(static_cast<size_t>(entry.StoredSize));
+		if (!ReadRange(entry.Offset, entry.StoredSize, stored.data()))
+		{
+			outError = "cannot read '" + entry.Path + "' from the archive";
+			return std::nullopt;
+		}
 		std::vector<uint8_t> data;
 		if (entry.Compression == Method::Store)
-		{
-			data.resize(static_cast<size_t>(entry.Size));
-			if (!ReadRange(entry.Offset, entry.Size, data.data()))
-			{
-				outError = "cannot read '" + entry.Path + "' from the archive";
-				return std::nullopt;
-			}
-		}
+			data = std::move(stored);
 		else
 		{
-			std::vector<uint8_t> stored(static_cast<size_t>(entry.StoredSize));
-			if (!ReadRange(entry.Offset, entry.StoredSize, stored.data()))
-			{
-				outError = "cannot read '" + entry.Path + "' from the archive";
-				return std::nullopt;
-			}
 			// One complete frame that declares exactly the indexed size, checked before allocating for it.
 			const unsigned long long declared = ZSTD_getFrameContentSize(stored.data(), stored.size());
 			if (declared != entry.Size || ZSTD_findFrameCompressedSize(stored.data(), stored.size()) != stored.size())
@@ -306,12 +345,10 @@ namespace Basalt {
 		return data;
 	}
 
-	bool PackArchiveWriter::IsValidPath(std::string_view path)
+	bool PackArchive::IsValidPath(std::string_view path)
 	{
-		if (path.empty() || path.size() > PackArchive::MaxPathLength)
+		if (path.empty() || path.size() > MaxPathLength)
 			return false;
-		// Components separated by single '/', none empty, "." or "..": the normalized relative form of asset keys. No
-		// NUL, backslash or colon, which would name another file (or a drive) on some platform.
 		size_t start = 0;
 		while (start <= path.size())
 		{
@@ -326,16 +363,19 @@ namespace Basalt {
 
 	bool PackArchiveWriter::AddPending(Pending pending, std::string& outError)
 	{
-		if (!IsValidPath(pending.Path))
+		if (!PackArchive::IsValidPath(pending.Path))
 		{
 			outError = "invalid archive path '" + pending.Path + "'";
 			return false;
 		}
-		const bool duplicate = std::any_of(m_Pending.begin(), m_Pending.end(), [&](const Pending& other) { return other.Path == pending.Path; });
-		const bool duplicateID = pending.AssetID != 0 && std::any_of(m_Pending.begin(), m_Pending.end(), [&](const Pending& other) { return other.AssetID == pending.AssetID; });
-		if (duplicate || duplicateID)
+		if (m_Paths.contains(pending.Path))
 		{
-			outError = duplicate ? "'" + pending.Path + "' is already in the archive" : "asset UUID " + std::to_string(pending.AssetID) + " is already in the archive";
+			outError = "'" + pending.Path + "' is already in the archive";
+			return false;
+		}
+		if (pending.AssetID != 0 && m_AssetIDs.contains(pending.AssetID))
+		{
+			outError = "asset UUID " + std::to_string(pending.AssetID) + " is already in the archive";
 			return false;
 		}
 		if (m_Pending.size() >= PackArchive::MaxEntries)
@@ -343,12 +383,20 @@ namespace Basalt {
 			outError = "an archive holds at most " + std::to_string(PackArchive::MaxEntries) + " files";
 			return false;
 		}
+		m_Paths.insert(pending.Path);
+		if (pending.AssetID != 0)
+			m_AssetIDs.insert(pending.AssetID);
 		m_Pending.push_back(std::move(pending));
 		return true;
 	}
 
 	bool PackArchiveWriter::AddFile(std::string path, std::filesystem::path source, uint64_t assetID, std::string& outError)
 	{
+		if (source.empty())
+		{
+			outError = "no source file for '" + path + "'";
+			return false;
+		}
 		return AddPending({ std::move(path), std::move(source), {}, assetID }, outError);
 	}
 
@@ -357,10 +405,14 @@ namespace Basalt {
 		return AddPending({ std::move(path), {}, std::move(data), assetID }, outError);
 	}
 
-	bool PackArchiveWriter::Write(const std::filesystem::path& file, std::string& outError, int compressionLevel)
+	std::optional<PackArchiveWriter::Statistics> PackArchiveWriter::Write(const std::filesystem::path& file, std::string& outError, int compressionLevel) const
 	{
-		m_Statistics = {};
-		std::sort(m_Pending.begin(), m_Pending.end(), [](const Pending& a, const Pending& b) { return a.Path < b.Path; });
+		// Sorted indices rather than sorting m_Pending: Write leaves the writer as it was.
+		std::vector<size_t> order(m_Pending.size());
+		for (size_t i = 0; i < order.size(); i++)
+			order[i] = i;
+		std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return m_Pending[a].Path < m_Pending[b].Path; });
+
 		std::error_code error;
 		if (file.has_parent_path())
 		{
@@ -368,74 +420,81 @@ namespace Basalt {
 			if (error)
 			{
 				outError = "cannot create the folder '" + FileSystem::PathToUtf8(file.parent_path()) + "': " + error.message();
-				return false;
+				return std::nullopt;
 			}
 		}
 		const std::filesystem::path temporary = FileSystem::MakeTemporaryPath(file);
+		errno = 0;
 		std::ofstream stream(temporary, std::ios::out | std::ios::binary | std::ios::trunc);
 		if (!stream)
 		{
-			outError = "cannot open '" + FileSystem::PathToUtf8(temporary) + "' for writing";
-			return false;
+			outError = "cannot open '" + FileSystem::PathToUtf8(temporary) + "' for writing" + DescribeErrno();
+			return std::nullopt;
 		}
-		const auto fail = [&](const std::string& problem) {
+		const auto fail = [&](const std::string& problem) -> std::optional<Statistics> {
 			outError = problem;
 			stream.close();
 			std::filesystem::remove(temporary, error);
-			return false;
+			return std::nullopt;
 		};
 
 		const std::vector<uint8_t> placeholder(PackArchive::HeaderSize, 0);
 		stream.write(reinterpret_cast<const char*>(placeholder.data()), static_cast<std::streamsize>(placeholder.size()));
 		const int level = std::clamp(compressionLevel, 1, ZSTD_maxCLevel());
+		Statistics statistics;
 		uint64_t offset = PackArchive::HeaderSize;
 		std::vector<uint8_t> index;
 		std::vector<uint8_t> compressed;
-		for (Pending& pending : m_Pending)
+		for (const size_t pendingIndex : order)
 		{
-			std::vector<uint8_t> data = std::move(pending.Data);
-			if (!pending.Source.empty())
+			const Pending* pending = &m_Pending[pendingIndex];
+			std::optional<std::vector<uint8_t>> read;
+			if (!pending->Source.empty())
 			{
-				auto read = FileSystem::ReadBinaryFile(pending.Source);
+				errno = 0;
+				read = FileSystem::ReadBinaryFile(pending->Source);
 				if (!read)
-					return fail("cannot read '" + FileSystem::PathToUtf8(pending.Source) + "'");
-				data = std::move(*read);
+					return fail("cannot read '" + FileSystem::PathToUtf8(pending->Source) + "'" + DescribeErrno());
 			}
+			const std::vector<uint8_t>& data = read ? *read : pending->Data;
 			if (data.size() > PackArchive::MaxEntrySize)
-				return fail("'" + pending.Path + "' is larger than an archive entry may be (" + std::to_string(PackArchive::MaxEntrySize) + " bytes)");
+				return fail("'" + pending->Path + "' is larger than an archive entry may be (" + std::to_string(PackArchive::MaxEntrySize) + " bytes)");
 			compressed.resize(ZSTD_compressBound(data.size()));
 			const size_t compressedSize = ZSTD_compress(compressed.data(), compressed.size(), data.data(), data.size(), level);
+			// Still a valid archive (the file is stored), but a failing compressor is worth knowing about.
+			if (ZSTD_isError(compressedSize))
+				BS_CORE_WARN("Archive: cannot compress '{}' ({}); storing it uncompressed", pending->Path, ZSTD_getErrorName(compressedSize));
 			const bool useZstd = !ZSTD_isError(compressedSize) && compressedSize < data.size();
 			const uint8_t* stored = useZstd ? compressed.data() : data.data();
 			const size_t storedSize = useZstd ? compressedSize : data.size();
 			stream.write(reinterpret_cast<const char*>(stored), static_cast<std::streamsize>(storedSize));
 
-			PutU32(index, static_cast<uint32_t>(pending.Path.size()));
-			index.insert(index.end(), pending.Path.begin(), pending.Path.end());
-			PutU64(index, pending.AssetID);
+			PutU32(index, static_cast<uint32_t>(pending->Path.size()));
+			index.insert(index.end(), pending->Path.begin(), pending->Path.end());
+			PutU64(index, pending->AssetID);
 			PutU64(index, offset);
 			PutU64(index, storedSize);
 			PutU64(index, data.size());
 			index.push_back(static_cast<uint8_t>(useZstd ? PackArchive::Method::Zstd : PackArchive::Method::Store));
 			PutU64(index, HashBytes64(data.data(), data.size()));
 			offset += storedSize;
-			m_Statistics.Entries++;
-			m_Statistics.Compressed += useZstd ? 1 : 0;
-			m_Statistics.Size += data.size();
+			statistics.Entries++;
+			statistics.CompressedEntries += useZstd ? 1 : 0;
+			statistics.UncompressedSize += data.size();
 		}
 		stream.write(reinterpret_cast<const char*>(index.data()), static_cast<std::streamsize>(index.size()));
-		const std::vector<uint8_t> header = BuildHeader(static_cast<uint32_t>(m_Pending.size()), offset, index.size(), HashBytes64(index.data(), index.size()));
+		const std::vector<uint8_t> header = BuildHeader(static_cast<uint32_t>(order.size()), offset, index.size(), HashBytes64(index.data(), index.size()));
 		stream.seekp(0);
 		stream.write(reinterpret_cast<const char*>(header.data()), static_cast<std::streamsize>(header.size()));
-		// Buffered data is only known to be on disk after a successful flush and close.
+		// Buffered data is only known to be written (handed to the OS) after a successful flush and close.
 		stream.flush();
 		stream.close();
 		if (stream.fail())
 			return fail("failed writing '" + FileSystem::PathToUtf8(temporary) + "' (disk full?)");
 		if (!FileSystem::RenameReplacing(temporary, file, outError))
-			return false;
-		m_Statistics.ArchiveSize = offset + index.size();
-		return true;
+			return std::nullopt;
+		statistics.ArchiveSize = offset + index.size();
+		return statistics;
 	}
 
 }

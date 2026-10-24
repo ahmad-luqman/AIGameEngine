@@ -12,35 +12,55 @@
 
 namespace Basalt {
 
-	// Whole-file read/write helpers. All functions report failure through their return value.
+	// Whole-file read/write helpers, the read-only archive mount, and executable paths. Fallible functions report failure
+	// through their return value.
 	class FileSystem
 	{
 	public:
-		// Reads go to the mounted archive first (Mount), then to disk.
-		static std::optional<std::string> ReadTextFile(const std::filesystem::path& path);
-		static std::optional<std::vector<uint8_t>> ReadBinaryFile(const std::filesystem::path& path);
+		// A path the mounted archive holds (Mount) is read only from it: a damaged entry fails, with no fallback to disk, and
+		// outError (optional) receives the archive's reason, which is also logged. Other paths are read from disk.
+		static std::optional<std::string> ReadTextFile(const std::filesystem::path& path, std::string* outError = nullptr);
+		static std::optional<std::vector<uint8_t>> ReadBinaryFile(const std::filesystem::path& path, std::string* outError = nullptr);
 		// The size of a regular file (an archive entry's uncompressed size); nullopt for a missing path or anything else
 		// (outError set when the path could not be inspected).
 		static std::optional<uint64_t> GetRegularFileSize(const std::filesystem::path& path, std::error_code& outError);
 
 		// A read-only archive over a directory: the runtime mounts an exported game's Assets.bpak over its project folder.
-		// ReadTextFile, ReadBinaryFile, Exists and GetRegularFileSize then answer for paths under root from the archive
-		// first and from disk otherwise, and readers that bypass them (cgltf, miniaudio, Lua's require, AssetRegistry)
-		// ask FindMounted. One mount at a time: mounting again replaces it, and a null archive unmounts. Thread-safe.
+		// ReadTextFile, ReadBinaryFile, Exists and GetRegularFileSize then answer for the files under root that the archive
+		// holds, and disk answers for the rest; cgltf reaches them through its file callbacks. Readers that bypass them look
+		// the mount up directly: miniaudio's VFS, Lua's require searcher and font stamps through FindMounted, and
+		// AssetRegistry::Refresh through GetMountedArchive (the whole index). Writes are never redirected: a file written
+		// under root that the archive also holds is still read from the archive. One mount at a time (mounting again
+		// replaces it). Thread-safe.
 		static void Mount(const std::filesystem::path& root, Ref<PackArchive> archive);
-		struct MountedFile
+		static void Unmount();
+		// A file of the mounted archive. Holds the archive, so the entry stays valid even if it is unmounted meanwhile.
+		class MountedFile
 		{
-			// Holds the archive, so Entry stays valid even if it is unmounted meanwhile.
-			Ref<PackArchive> Archive;
-			const PackArchive::Entry* Entry = nullptr;
-			explicit operator bool() const { return Entry != nullptr; }
+		public:
+			MountedFile() = default;
+			explicit operator bool() const { return m_Entry != nullptr; }
+			// Only for a found file (operator bool).
+			const PackArchive::Entry& GetEntry() const { return *m_Entry; }
+			const Ref<PackArchive>& GetArchive() const { return m_Archive; }
+
+		private:
+			friend class FileSystem;
+			MountedFile(Ref<PackArchive> archive, const PackArchive::Entry* entry)
+				: m_Archive(std::move(archive))
+				, m_Entry(entry)
+			{
+			}
+
+			Ref<PackArchive> m_Archive;
+			const PackArchive::Entry* m_Entry = nullptr;
 		};
 		// The mounted archive's entry for path, when path lies under the mount root and the archive holds it.
 		static MountedFile FindMounted(const std::filesystem::path& path);
-		// The archive mounted exactly at root, or null.
+		// The archive mounted exactly at root (in either its given or its link-resolved spelling), or null.
 		static Ref<PackArchive> GetMountedArchive(const std::filesystem::path& root);
-		// Reads a mounted file, logging why it cannot be read.
-		static std::optional<std::vector<uint8_t>> ReadMounted(const MountedFile& file);
+		// Reads a found mounted file, logging why it cannot be read (and setting outError when given).
+		static std::optional<std::vector<uint8_t>> ReadMounted(const MountedFile& file, std::string* outError = nullptr);
 
 		// Writes atomically: data goes to a temporary sibling file (<name>.<process>-<count>.tmp, so concurrent writers
 		// never share one) that then replaces the target, so a crash never leaves a half-written scene or project on
@@ -64,6 +84,7 @@ namespace Basalt {
 		// sets outEntry at the first symlink, or at the first entry that cannot be inspected (outError set; a
 		// missing entry is not an error). False when the whole path is free of links.
 		static bool FindSymlink(const std::filesystem::path& root, const std::filesystem::path& relative, std::filesystem::path& outEntry, std::error_code& outError);
+		// The running executable (links resolved on macOS); <current folder>/Unknown, logged, when it cannot be found.
 		static std::filesystem::path GetExecutablePath();
 		static std::filesystem::path GetExecutableDirectory();
 		// The path as UTF-8 text, for messages (path::string() throws on Windows for names outside the ANSI code page).

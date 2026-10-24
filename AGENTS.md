@@ -129,11 +129,13 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   package's). `project.export {"archive": true}` writes `Assets.bpak` (`Core/PackArchive`: a sorted index carrying the
   asset UUIDs instead of `.meta` files, zstd only where it shrinks, every count/offset/size checked before allocating).
   The runtime mounts it (`Exporter::MountExportedArchive`, before `Project::Load`); `FileSystem::Mount` serves
-  `ReadTextFile`/`ReadBinaryFile`/`Exists`/`GetRegularFileSize` from it, and cgltf (file callbacks), miniaudio (a VFS),
-  Lua `require` (a searcher), font stamps and `AssetRegistry::Refresh` (UUIDs from the index) ask
-  `FileSystem::FindMounted`: a new reader that bypasses `FileSystem` must too. `Core/CrashReporter` (installed in
-  `EntryPoint.h` and the CLI's `main`, off under ASan) writes reports with stack traces and the last log lines to
-  `<user data>/<app>/Crashes`, formatting only into fixed buffers (async-signal-safe on POSIX), then re-raises.
+  `ReadTextFile`/`ReadBinaryFile`/`Exists`/`GetRegularFileSize` from it (a damaged entry fails, never falling back to
+  disk). cgltf reaches them through its file callbacks (which keep only each buffer's declared bytes); miniaudio (a VFS),
+  Lua `require` (a searcher) and font stamps ask `FileSystem::FindMounted`, and `AssetRegistry::Refresh` reads the UUIDs
+  from the index (`GetMountedArchive`). A new reader that bypasses `FileSystem` must do one of these. `Core/CrashReporter`
+  (installed in `EntryPoint.h` and the CLI's `main`, off under ASan) writes reports with stack traces and the last log
+  lines to `<user data>/<app>/Crashes`, formatting only into fixed buffers (no allocation or fork on POSIX), then lets the
+  process die as before (re-raising the signal on POSIX; the exception code, or exit code 3 after abort, on Windows).
   Tags run `.github/workflows/release.yml` (`scripts/package_release.py`, `scripts/sign-macos.sh`). See
   `Docs/Shipping.md`.
 - **Editor file dialogs.** Path prompts add native pickers (`Basalt-Editor/Source/FileDialogs`, nativefiledialog-extended,
