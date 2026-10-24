@@ -72,6 +72,6 @@ Run all steps on each GPU. Steps 1–3 are automated; step 4 needs a person at t
 | 2026-10-07 | lavapipe (CPU) | Mesa (Ubuntu 24.04) | Ubuntu 24.04, CI | 0 | match (max 0.04% px) | n/a | Every push, `gpu-lavapipe` job |
 | | NVIDIA GeForce RTX 2080 Ti | | Windows | | | | |
 | | NVIDIA GeForce RTX 2080 Ti | | Linux (native) | | | | |
-| | NVIDIA laptop GPU | | Windows | | | | Optimus: `--gpu nvidia` |
-| | Intel integrated GPU | | Windows | | | | `--gpu intel` |
+| 2026-10-24 | NVIDIA GeForce RTX 4060 Laptop GPU | 617.42 (32.0.16.1742), Vulkan 1.4.351 | Windows 11 Pro (26300) | 0 | match (max 0.108% px) | not recorded | Optimus: `--gpu nvidia`; Lit/SSAO/Scaled differ only on checker-texture texel edges. `FeatureTestDynamic*MatchesScaled` fails: SSAO blur taps land on texel boundaries (see ROADMAP) |
+| 2026-10-24 | Intel UHD Graphics 770 | 32.0.101.6790, Vulkan 1.4.311 | Windows 11 Pro (26300) | 0 | match (max 0.07% px) | not recorded | `--gpu intel`, same laptop; dynamic vs. scaled differ in 2.2% (lit) / 4.9% (SSAO) of pixels, same cause |
 | | AMD Radeon Pro V520 (AWS g4ad) | | Linux | | | | |

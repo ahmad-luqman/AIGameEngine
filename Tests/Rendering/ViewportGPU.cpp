@@ -639,11 +639,11 @@ TEST_CASE("Lit particle diffuse uses bounded light attenuation and receives skyl
 	SceneRenderer renderer(graphics->GetDevice());
 	REQUIRE(renderer.Initialize());
 	renderer.SetViewportSize(64, 64);
-	const auto near = Capture(renderer, scene, camera);
+	const auto lit = Capture(renderer, scene, camera);
 	const size_t center = (32 * 64 + 32) * 4;
 	// 0.1 radiance / PI with the shared near-unity attenuation is about 48 in display sRGB.
-	CHECK(near[center] > 25);
-	CHECK(near[center] < 75);
+	CHECK(lit[center] > 25);
+	CHECK(lit[center] < 75);
 	light.GetComponent<PointLightComponent>().Intensity = 0;
 	const auto dark = Capture(renderer, scene, camera);
 	CHECK(dark[center] < 3);
@@ -686,9 +686,9 @@ TEST_CASE("Static LOD selection draws reduced ranges while picking retains entit
 	CHECK(renderer.GetStatistics().Triangles == source->Submeshes[0].LODs[0].IndexCount / 3);
 	CHECK(renderer.GetStatistics().Triangles < full);
 	ExpectPick(renderer, 32, 32, entity.GetUUID());
-	auto near = scene.CreateEntity("NearLOD");
-	near.AddComponent<MeshComponent>() = { key, 0, true, 4 };
-	near.GetTransform().Translation = { .6f, 0, 2 };
+	auto nearEntity = scene.CreateEntity("NearLOD");
+	nearEntity.AddComponent<MeshComponent>() = { key, 0, true, 4 };
+	nearEntity.GetTransform().Translation = { .6f, 0, 2 };
 	Capture(renderer, scene, camera);
 	CHECK(renderer.GetStatistics().Triangles == full + source->Submeshes[0].LODs[0].IndexCount / 3);
 	entity.AddComponent<MaterialComponent>().AlbedoColor.a = .5f;
@@ -815,7 +815,8 @@ TEST_CASE("Clearcoat, transmission and UV-transformed maps render through shadow
 	}
 	const auto shaded = Capture(renderer, scene, camera);
 	REQUIRE(shaded.size() == empty.size());
-	for (const uint32_t x : { 30u, 66u })
+	// The transmissive sphere's rim shows mostly background (within 20 of empty on NVIDIA), so sample its center.
+	for (const uint32_t x : { 30u, 76u })
 	{
 		const size_t pixel = (size_t(48) * 96 + x) * 4;
 		INFO("x " << x);
