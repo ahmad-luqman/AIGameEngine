@@ -2,14 +2,15 @@
 
 Runs `BasaltTests --basalt-child crash-report <kind>` (Tests/Source/TestMain.cpp), which installs the crash reporter,
 logs a sentinel line and crashes: an invalid memory access, abort(), an uncaught C++ exception (a std::exception and an
-int), a pure virtual call, an invalid C runtime parameter (Windows), a trap, a stack overflow and invalid memory accesses
-on worker threads. The child installs the reporter twice, from two threads at once, and fails if the calls disagree. Each run must die by its signal on macOS and Linux (the reporter
-re-raises it), or with the exception code or the C runtime's abort code 3 on Windows, and leave exactly one report in
+int), a pure virtual call, an invalid C runtime parameter (Windows), a trap, a stack overflow and invalid memory
+accesses on worker threads. The child installs the reporter, then calls Install again from two threads at once, and
+fails if the calls disagree. Each run must die by its signal on macOS and Linux (the reporter re-raises it), or with the
+exception code or the C runtime's abort code 3 on Windows, and leave exactly one report in
 <user data>/CrashChild/Crashes naming the reason, with a stack trace, the context line and the last log lines; Windows
 reports add a minidump. More runs check the report folders: a user data directory whose ancestors do not exist yet (they
-are created, up to eight missing levels), one that cannot hold folders at all, and (macOS, Linux) one whose report folder
-path is too long for the handler's buffers while its parent fits; the last two put the report in CrashReports next to
-the executable.
+are created, up to eight missing levels), one that cannot hold folders at all, and (macOS, Linux) one whose report
+folder path is too long for the handler's buffers while its parent fits; the last two put the report in CrashReports
+next to the executable.
 Exits 77 (skipped) when crash reports are unavailable (AddressSanitizer builds).
 """
 import os

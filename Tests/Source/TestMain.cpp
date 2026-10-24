@@ -22,10 +22,44 @@
 #include <vector>
 
 #if defined(_WIN32)
+	#include <crtdbg.h>
 	#include <windows.h>
 #else
 	#include <fcntl.h>
 #endif
+
+// A pure virtual call for crash-report purecall: the base constructor calls Pure through a function the compiler cannot
+// see into. Outside the anonymous namespace on purpose: GCC devirtualizes calls on a class hierarchy only one file can
+// see (a pure virtual call being undefined, to the only override), and then nothing crashes.
+namespace BasaltCrashTest {
+
+	struct PureBase;
+	void CallPure(PureBase& object);
+
+	struct PureBase
+	{
+		PureBase()
+		{
+			void (*volatile call)(PureBase&) = &CallPure;
+			call(*this);
+		}
+		virtual ~PureBase() = default;
+		PureBase(const PureBase&) = delete;
+		PureBase& operator=(const PureBase&) = delete;
+		virtual void Pure() = 0;
+	};
+
+	struct PureDerived : PureBase
+	{
+		void Pure() override {}
+	};
+
+	void CallPure(PureBase& object)
+	{
+		object.Pure();
+	}
+
+}
 
 namespace {
 
@@ -46,22 +80,6 @@ namespace {
 		return result + frame[0];
 	}
 
-	// Calls a pure virtual function from the base constructor, through a pointer the compiler cannot see through.
-	struct PureBase
-	{
-		PureBase()
-		{
-			PureBase* volatile self = this;
-			self->Pure();
-		}
-		virtual ~PureBase() = default;
-		virtual void Pure() = 0;
-	};
-	struct PureDerived : PureBase
-	{
-		void Pure() override {}
-	};
-
 	// A real crash of the requested kind (crash-report).
 	void CrashNow(std::string_view kind)
 	{
@@ -81,12 +99,15 @@ namespace {
 			throw Number("42"); // NOLINT(bugprone-std-exception-baseclass)
 		else if (kind == "purecall")
 		{
-			const PureDerived derived;
+			const BasaltCrashTest::PureDerived derived;
 		}
 #if defined(_WIN32)
 		else if (kind == "invalid-parameter")
 		{
-			// The C runtime validates its arguments and calls the invalid parameter handler.
+			// The C runtime validates its arguments and calls the invalid parameter handler. A debug C runtime first reports
+			// the failed check, in a dialog unless told to write to stderr.
+			_CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+			_CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
 			const char* volatile format = nullptr;
 			std::printf(format);
 		}
@@ -130,10 +151,10 @@ namespace {
 	// (prints "é" count times), invalid (prints bytes that are not UTF-8), fd <descriptor> (POSIX: whether it is
 	// open), crash (a real access violation on Windows, SIGABRT elsewhere), trap (BS_DEBUGBREAK), args (prints
 	// every remaining argument on its own line), exit <code>, crash-report <kind> (installs the crash reporter as
-	// "CrashChild" twice, from two threads at once, logs "crash-test sentinel 42", then crashes: kind is segv, abort,
-	// terminate, throw-int, purecall, invalid-parameter (Windows), trap, stackoverflow, thread-segv or two-thread-segv;
-	// exits 77 when crash reports are unavailable, as under AddressSanitizer; Tests/Automation/CrashReport.py checks the
-	// report).
+	// "CrashChild", then calls Install again from two threads at once, logs "crash-test sentinel 42", then crashes: kind is
+	// segv, abort, terminate, throw-int, purecall, invalid-parameter (Windows), trap, stackoverflow, thread-segv or
+	// two-thread-segv; exits 77 when crash reports are unavailable, as under AddressSanitizer; Tests/Automation/CrashReport.py
+	// checks the report).
 	int RunChild(const std::vector<std::string>& actions)
 	{
 		for (size_t i = 0; i < actions.size(); i++)
@@ -216,17 +237,18 @@ namespace {
 			else if (action == "crash-report")
 			{
 				Basalt::Log::Init();
-				// Concurrent and repeated calls install once and agree on the result.
-				bool again = false;
-				std::thread other([&again] { again = Basalt::CrashReporter::Install({ "CrashChild" }); });
-				const bool installed = Basalt::CrashReporter::Install({ "CrashChild" });
-				other.join();
-				if (!installed)
+				// This thread installs (it gets the alternate signal stack the stack overflow needs); later calls, two of them at
+				// once, return the first call's result and change nothing.
+				if (!Basalt::CrashReporter::Install({ "CrashChild" }))
 				{
 					std::printf("crash reports unavailable\n");
 					return 77;
 				}
-				if (!again || !Basalt::CrashReporter::Install({ "Other" }) || Basalt::CrashReporter::GetReportDirectory().parent_path().filename() != "CrashChild")
+				bool again = false;
+				std::thread other([&again] { again = Basalt::CrashReporter::Install({ "Other" }); });
+				const bool repeated = Basalt::CrashReporter::Install({ "Other" });
+				other.join();
+				if (!again || !repeated || Basalt::CrashReporter::GetReportDirectory().parent_path().filename() != "CrashChild")
 				{
 					std::fprintf(stderr, "a repeated Install disagreed with the first\n");
 					return 2;
