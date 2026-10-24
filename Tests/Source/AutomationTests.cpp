@@ -23,7 +23,15 @@
 
 #include <spdlog/fmt/fmt.h>
 
+#include <chrono>
 #include <limits>
+#include <thread>
+
+#if defined(BS_PLATFORM_WINDOWS)
+	#include <fcntl.h>
+	#include <io.h>
+	#include <share.h>
+#endif
 
 using namespace Basalt;
 using json = nlohmann::json;
@@ -849,6 +857,36 @@ TEST_SUITE("Automation")
 		CHECK(Basalt::FileSystem::Exists(occupied / "precious.txt"));
 		std::filesystem::remove_all(occupied);
 	}
+
+#if defined(BS_PLATFORM_WINDOWS)
+	// A game that just exited can stay locked for a moment (antivirus scanners), so exporting again right after a
+	// smoke test must wait the lock out instead of failing.
+	TEST_CASE("Exporter waits out a briefly locked previous executable")
+	{
+		BasaltTest::TempProject temp("ExporterLocked");
+		const Basalt::Ref<Basalt::Project>& project = Basalt::Project::GetActive();
+		REQUIRE(project);
+		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities":[]})");
+		project->GetConfig().StartScene = "Assets/Scenes/Main.bscene";
+		temp.WriteFile("FakeRuntime", "binary");
+		const auto output = temp.GetDirectory().parent_path() / "ExporterLockedOut";
+		std::filesystem::remove_all(output);
+		const Basalt::ExportOptions options{ .RuntimeExecutable = temp.GetDirectory() / "FakeRuntime" };
+		Basalt::ExportResult result = Basalt::Exporter::Export(*project, output, options);
+		REQUIRE_MESSAGE(result.Success, result.Error);
+
+		int locked = -1;
+		REQUIRE(_wsopen_s(&locked, result.ExecutablePath.wstring().c_str(), _O_RDONLY | _O_BINARY, _SH_DENYRW, 0) == 0);
+		std::thread release([locked] {
+			std::this_thread::sleep_for(std::chrono::milliseconds(300));
+			_close(locked);
+		});
+		result = Basalt::Exporter::Export(*project, output, options);
+		release.join();
+		CHECK_MESSAGE(result.Success, result.Error);
+		std::filesystem::remove_all(output);
+	}
+#endif
 }
 
 TEST_SUITE("Automation")

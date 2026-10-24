@@ -31,9 +31,19 @@ adding features.
 
 ### Real-GPU smoke tests on Windows and Linux — S (manual) / M (automated)
 Lavapipe does not catch driver-specific bugs. The procedure and results table are in
-`Docs/TestedHardware.md` (`--offscreen`, `--gpu`, golden comparison, interactive checklist). Remaining:
-run it on at least one NVIDIA, one AMD (e.g. AWS g4ad) and one Intel GPU, on Windows and native Linux, and
-fill in the table. Optionally add an on-demand self-hosted GPU runner later.
+`Docs/TestedHardware.md` (`--offscreen`, `--gpu`, golden comparison, interactive checklist). Done for an
+NVIDIA laptop GPU and Intel integrated graphics on Windows (steps 1–3). Remaining: the interactive step on
+that laptop, an AMD GPU (e.g. AWS g4ad), a desktop NVIDIA GPU, and native Linux for all of them. Optionally
+add an on-demand self-hosted GPU runner later.
+
+### SSAO blur taps land on texel boundaries — S
+`SSAOBlur.frag` point-samples at `i * 1.5` texels from the centre (the step is one target texel,
+`SceneRenderer.cpp`), so odd taps sit exactly between two texels and the hardware's rounding picks one.
+Results then depend on the GPU and the target size: on Windows `FeatureTestDynamicMatchesScaled` and
+`FeatureTestDynamicSSAOMatchesScaled` fail (NVIDIA RTX 4060: one row, max delta 5; Intel UHD 770: 2–5% of
+pixels, max delta 17), while MoltenVK and lavapipe happen to round consistently. Fix: take the taps with
+`texelFetch` at whole-texel offsets (or sample linearly where the 1.5 offset is meant to merge two texels),
+then refresh the MoltenVK goldens.
 
 ---
 
