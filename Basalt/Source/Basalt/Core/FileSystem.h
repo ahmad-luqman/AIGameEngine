@@ -89,9 +89,12 @@ namespace Basalt {
 		// target fails a rename); on failure source is removed and outError says why.
 		static bool RenameReplacing(const std::filesystem::path& source, const std::filesystem::path& target, std::string& outError);
 		// Copies source over target. On Windows an executable that just exited stays locked for a moment (antivirus
-		// scanners open what they saw run), so a sharing violation is retried: waitBeforeRetry runs between attempts
-		// (default: sleep 50 ms) and at most maxAttempts copies are made. Other errors fail at once.
-		static bool CopyFileReplacing(const std::filesystem::path& source, const std::filesystem::path& target, std::error_code& outError, const std::function<void()>& waitBeforeRetry = {}, uint32_t maxAttempts = 100);
+		// scanners open what they saw run; about 1 s measured), so sharing and lock violations are retried: up to
+		// CopyRetryAttempts copies, with waitBeforeRetry between them (default: sleep 50 ms, about 5 s in all). Other
+		// errors, and other platforms, fail at once. outError says why on failure and is cleared on success; running
+		// out of attempts is also logged.
+		static constexpr uint32_t CopyRetryAttempts = 100;
+		static bool CopyFileReplacing(const std::filesystem::path& source, const std::filesystem::path& target, std::error_code& outError, const std::function<void()>& waitBeforeRetry = {});
 
 		// Also true for a mounted archive's files and the folders that hold them.
 		static bool Exists(const std::filesystem::path& path);

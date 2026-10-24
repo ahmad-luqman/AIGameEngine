@@ -343,27 +343,28 @@ namespace Basalt {
 		return true;
 	}
 
-	bool FileSystem::CopyFileReplacing(const std::filesystem::path& source, const std::filesystem::path& target, std::error_code& outError, const std::function<void()>& waitBeforeRetry, uint32_t maxAttempts)
+	bool FileSystem::CopyFileReplacing(const std::filesystem::path& source, const std::filesystem::path& target, std::error_code& outError, const std::function<void()>& waitBeforeRetry)
 	{
-		for (uint32_t attempt = 1;; attempt++)
+		std::filesystem::copy_file(source, target, std::filesystem::copy_options::overwrite_existing, outError);
+#if defined(BS_PLATFORM_WINDOWS)
+		const auto locked = [&] {
+			return outError == std::error_code(ERROR_SHARING_VIOLATION, std::system_category()) || outError == std::error_code(ERROR_LOCK_VIOLATION, std::system_category());
+		};
+		uint32_t attempts = 1;
+		for (; locked() && attempts < CopyRetryAttempts; attempts++)
 		{
-			outError.clear();
-			std::filesystem::copy_file(source, target, std::filesystem::copy_options::overwrite_existing, outError);
-			if (!outError)
-				return true;
-#if defined(_WIN32)
-			constexpr int SharingViolation = 32; // ERROR_SHARING_VIOLATION
-			const bool locked = outError.category() == std::system_category() && outError.value() == SharingViolation;
-#else
-			const bool locked = false;
-#endif
-			if (!locked || attempt >= maxAttempts)
-				return false;
 			if (waitBeforeRetry)
 				waitBeforeRetry();
 			else
 				std::this_thread::sleep_for(std::chrono::milliseconds(50));
+			std::filesystem::copy_file(source, target, std::filesystem::copy_options::overwrite_existing, outError);
 		}
+		if (locked())
+			BS_CORE_WARN("FileSystem: '{}' stayed locked through {} copy attempts: {}", PathToUtf8(target), attempts, outError.message());
+#else
+		(void)waitBeforeRetry;
+#endif
+		return !outError;
 	}
 
 	std::string FileSystem::PathToUtf8(const std::filesystem::path& path)
