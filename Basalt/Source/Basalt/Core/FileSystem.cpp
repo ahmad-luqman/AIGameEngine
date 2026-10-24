@@ -348,7 +348,8 @@ namespace Basalt {
 		std::filesystem::copy_file(source, target, std::filesystem::copy_options::overwrite_existing, outError);
 #if defined(BS_PLATFORM_WINDOWS)
 		const auto locked = [&] {
-			return outError == std::error_code(ERROR_SHARING_VIOLATION, std::system_category()) || outError == std::error_code(ERROR_LOCK_VIOLATION, std::system_category());
+			return outError == std::error_code(ERROR_SHARING_VIOLATION, std::system_category()) || outError == std::error_code(ERROR_LOCK_VIOLATION, std::system_category()) ||
+				   outError == std::error_code(ERROR_USER_MAPPED_FILE, std::system_category());
 		};
 		uint32_t attempts = 1;
 		for (; locked() && attempts < CopyRetryAttempts; attempts++)
